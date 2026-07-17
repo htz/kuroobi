@@ -1,0 +1,261 @@
+//! Head-to-head arena: play two weight files against each other and report
+//! the win rate with a 95% confidence interval.
+//!
+//! Both engines pick 1-ply greedy moves with their own evaluator; the
+//! endgame is played out the same way (no solver) so only the evaluators
+//! differ. Opening diversity comes from playing k random plies before the
+//! engines take over; each opening is played twice with colors swapped to
+//! cancel first-mover bias.
+//!
+//! Usage:
+//!   arena --a <weights-A> --b <weights-B> [OPTIONS]
+//!
+//! Options:
+//!   --games <n>        Total games (default 1000; rounded up to even)
+//!   --random-plies <n> Random opening plies (default 6)
+//!   --patterns <set>   egaroucid | edax (default egaroucid)
+//!   --seed <n>         RNG seed (default 7)
+
+use std::path::PathBuf;
+use std::process::ExitCode;
+
+use kuroobi::evaluator::Evaluator;
+use kuroobi::pattern::{EDAX_PATTERNS, EGAROUCID_PATTERNS};
+use kuroobi::{Board, Color, Position};
+
+struct Args {
+    weights_a: PathBuf,
+    weights_b: PathBuf,
+    games: usize,
+    random_plies: usize,
+    patterns: &'static str,
+    seed: u64,
+}
+
+const USAGE: &str = "\
+Usage: arena --a <weights-A> --b <weights-B> [OPTIONS]
+
+Play two weight files head-to-head (1-ply greedy both sides) and report
+A's win rate with a 95% confidence interval. Each random opening is played
+twice with colors swapped.
+
+Options:
+  --games <n>        Total games (default 1000, rounded up to even)
+  --random-plies <n> Random opening plies for diversity (default 6)
+  --patterns <set>   egaroucid | edax (default egaroucid)
+  --seed <n>         RNG seed (default 7)
+  -h, --help         Show this help";
+
+fn parse_args() -> Result<Args, String> {
+    let mut weights_a = None;
+    let mut weights_b = None;
+    let mut args = Args {
+        weights_a: PathBuf::new(),
+        weights_b: PathBuf::new(),
+        games: 1000,
+        random_plies: 6,
+        patterns: "egaroucid",
+        seed: 7,
+    };
+
+    let mut it = std::env::args().skip(1);
+    while let Some(arg) = it.next() {
+        let mut value = |name: &str| {
+            it.next().ok_or_else(|| format!("{name} requires a value"))
+        };
+        match arg.as_str() {
+            "--a" => weights_a = Some(PathBuf::from(value("--a")?)),
+            "--b" => weights_b = Some(PathBuf::from(value("--b")?)),
+            "--games" => args.games = value("--games")?.parse().map_err(|e| format!("--games: {e}"))?,
+            "--random-plies" => args.random_plies = value("--random-plies")?.parse().map_err(|e| format!("--random-plies: {e}"))?,
+            "--patterns" => {
+                let v = value("--patterns")?;
+                match v.as_str() {
+                    "egaroucid" => args.patterns = "egaroucid",
+                    "edax" => args.patterns = "edax",
+                    other => return Err(format!("unknown pattern set: {other}")),
+                }
+            }
+            "--seed" => args.seed = value("--seed")?.parse().map_err(|e| format!("--seed: {e}"))?,
+            "-h" | "--help" => return Err(USAGE.to_string()),
+            other => return Err(format!("unknown option: {other}\n\n{USAGE}")),
+        }
+    }
+
+    args.weights_a = weights_a.ok_or(format!("--a is required\n\n{USAGE}"))?;
+    args.weights_b = weights_b.ok_or(format!("--b is required\n\n{USAGE}"))?;
+    args.games = args.games.div_ceil(2) * 2;
+    Ok(args)
+}
+
+struct Rng(u64);
+
+impl Rng {
+    fn new(seed: u64) -> Rng {
+        Rng(seed.max(1))
+    }
+
+    fn next_u64(&mut self) -> u64 {
+        let mut x = self.0;
+        x ^= x >> 12;
+        x ^= x << 25;
+        x ^= x >> 27;
+        self.0 = x;
+        x.wrapping_mul(0x2545F4914F6CDD1D)
+    }
+
+    fn below(&mut self, n: u32) -> u32 {
+        (self.next_u64() % n as u64) as u32
+    }
+}
+
+fn nth_move(mut mask: u64, mut n: u32) -> Position {
+    while n > 0 {
+        mask &= mask - 1;
+        n -= 1;
+    }
+    Position::from_index(mask.trailing_zeros()).unwrap()
+}
+
+fn greedy_move(board: &Board, evaluator: &Evaluator) -> Position {
+    let moves = board.movable();
+    let mut best_pos = None;
+    let mut best_val = f32::NEG_INFINITY;
+    let mut m = moves;
+    while m != 0 {
+        let pos = Position::from_index(m.trailing_zeros()).unwrap();
+        m &= m - 1;
+        let mut child = *board;
+        child.make_move_bits(pos);
+        let val = -evaluator.eval(&child);
+        if val > best_val {
+            best_val = val;
+            best_pos = Some(pos);
+        }
+    }
+    best_pos.expect("at least one legal move")
+}
+
+/// Generate a random opening position with `plies` random moves.
+fn random_opening(rng: &mut Rng, plies: usize) -> Board {
+    let mut board = Board::new();
+    for _ in 0..plies {
+        let moves = board.movable();
+        if moves == 0 {
+            break;
+        }
+        board.make_move_bits(nth_move(moves, rng.below(moves.count_ones())));
+    }
+    board
+}
+
+/// Play out one game from `start`; `black_engine`/`white_engine` choose
+/// moves for their color. Returns final score from Black's view.
+fn play(start: &Board, black_engine: &Evaluator, white_engine: &Evaluator) -> i32 {
+    let mut board = *start;
+    loop {
+        if board.movable() == 0 {
+            let mut passed = board;
+            passed.pass();
+            if passed.movable() == 0 {
+                let s = board.score();
+                return if board.player() == Color::Black { s } else { -s };
+            }
+            board = passed;
+            continue;
+        }
+        let engine = if board.player() == Color::Black {
+            black_engine
+        } else {
+            white_engine
+        };
+        let pos = greedy_move(&board, engine);
+        board.make_move_bits(pos);
+    }
+}
+
+fn main() -> ExitCode {
+    let args = match parse_args() {
+        Ok(a) => a,
+        Err(msg) => {
+            eprintln!("{msg}");
+            return ExitCode::FAILURE;
+        }
+    };
+
+    let patterns = match args.patterns {
+        "edax" => EDAX_PATTERNS,
+        _ => EGAROUCID_PATTERNS,
+    };
+
+    let mut eval_a = Evaluator::new(patterns);
+    if let Err(e) = eval_a.load_weights(&args.weights_a) {
+        eprintln!("failed to load {}: {e}", args.weights_a.display());
+        return ExitCode::FAILURE;
+    }
+    let mut eval_b = Evaluator::new(patterns);
+    if let Err(e) = eval_b.load_weights(&args.weights_b) {
+        eprintln!("failed to load {}: {e}", args.weights_b.display());
+        return ExitCode::FAILURE;
+    }
+
+    println!(
+        "arena: A={} vs B={}  ({} games, {} random plies)",
+        args.weights_a.display(),
+        args.weights_b.display(),
+        args.games,
+        args.random_plies
+    );
+
+    let mut rng = Rng::new(args.seed);
+    let mut a_wins = 0usize;
+    let mut b_wins = 0usize;
+    let mut draws = 0usize;
+    let mut a_disc_sum = 0i64;
+
+    for _pair in 0..args.games / 2 {
+        let opening = random_opening(&mut rng, args.random_plies);
+
+        // Game 1: A plays Black
+        let s1 = play(&opening, &eval_a, &eval_b);
+        a_disc_sum += s1 as i64;
+        match s1.cmp(&0) {
+            std::cmp::Ordering::Greater => a_wins += 1,
+            std::cmp::Ordering::Less => b_wins += 1,
+            std::cmp::Ordering::Equal => draws += 1,
+        }
+
+        // Game 2: colors swapped
+        let s2 = play(&opening, &eval_b, &eval_a);
+        a_disc_sum -= s2 as i64;
+        match s2.cmp(&0) {
+            std::cmp::Ordering::Greater => b_wins += 1,
+            std::cmp::Ordering::Less => a_wins += 1,
+            std::cmp::Ordering::Equal => draws += 1,
+        }
+    }
+
+    let n = (a_wins + b_wins + draws) as f64;
+    // Win rate counting draws as half
+    let p = (a_wins as f64 + draws as f64 / 2.0) / n;
+    // 95% CI via normal approximation
+    let se = (p * (1.0 - p) / n).sqrt();
+    let (lo, hi) = (p - 1.96 * se, p + 1.96 * se);
+
+    println!("A wins {a_wins}, B wins {b_wins}, draws {draws}");
+    println!(
+        "A score {:.1}%  (95% CI {:.1}%..{:.1}%)  mean disc diff {:+.2}",
+        p * 100.0,
+        lo * 100.0,
+        hi * 100.0,
+        a_disc_sum as f64 / n
+    );
+    if lo > 0.5 {
+        println!("=> A is significantly stronger");
+    } else if hi < 0.5 {
+        println!("=> B is significantly stronger");
+    } else {
+        println!("=> no significant difference");
+    }
+    ExitCode::SUCCESS
+}

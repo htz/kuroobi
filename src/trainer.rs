@@ -19,7 +19,7 @@ use std::path::Path;
 use crate::bitboard;
 use crate::board::Board;
 use crate::color::Color;
-use crate::evaluator::{AdamOptimizer, Evaluator, STAGE_COUNT};
+use crate::evaluator::{AdamOptimizer, Evaluator, Optimizer, STAGE_COUNT};
 
 /// One labeled training position: bitboards plus the final-score label.
 /// Bit layout in memory is this crate's file-major; converters translate.
@@ -175,23 +175,39 @@ impl EpochStats {
     }
 }
 
-/// Epoch trainer over labeled examples (kifu-derived positions).
-pub struct Trainer {
+/// Epoch trainer over labeled examples (kifu-derived positions),
+/// generic over the optimizer (SgdOptimizer or AdamOptimizer).
+pub struct Trainer<O: Optimizer = AdamOptimizer> {
     pub evaluator: Evaluator,
-    pub optimizer: AdamOptimizer,
+    pub optimizer: O,
 }
 
-impl Trainer {
-    pub fn new(evaluator: Evaluator, optimizer: AdamOptimizer) -> Trainer {
+impl<O: Optimizer> Trainer<O> {
+    pub fn new(evaluator: Evaluator, optimizer: O) -> Trainer<O> {
         Trainer { evaluator, optimizer }
     }
 
     /// Train one epoch over the examples (single pass, in order — shuffle
     /// upstream if desired). Uses 8-fold symmetry augmentation per example.
-    /// Returns per-stage loss statistics.
+    /// Advances the optimizer's epoch schedule (e.g. SGD lr decay) at the
+    /// end. Returns per-stage loss statistics.
     pub fn train_epoch(&mut self, examples: &[Example]) -> EpochStats {
+        self.train_epoch_with_progress(examples, |_, _| {})
+    }
+
+    /// Like `train_epoch`, invoking `progress(done, total)` roughly every
+    /// 64k examples (and once at the end) for progress reporting.
+    pub fn train_epoch_with_progress(
+        &mut self,
+        examples: &[Example],
+        mut progress: impl FnMut(usize, usize),
+    ) -> EpochStats {
+        // Power-of-two interval lets the hot loop use a cheap mask test.
+        const PROGRESS_INTERVAL: usize = 1 << 16;
+
+        let total = examples.len();
         let mut stats = EpochStats::default();
-        for ex in examples {
+        for (i, ex) in examples.iter().enumerate() {
             let board = ex.board();
             let stage = Evaluator::stage(&board);
             let err = self
@@ -199,7 +215,13 @@ impl Trainer {
                 .train(&board, ex.score as f32, &mut self.optimizer);
             stats.loss_sum[stage] += (err * err) as f64;
             stats.samples[stage] += 1;
+
+            if (i + 1) & (PROGRESS_INTERVAL - 1) == 0 {
+                progress(i + 1, total);
+            }
         }
+        progress(total, total);
+        self.optimizer.next_epoch();
         stats
     }
 

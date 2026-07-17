@@ -7,6 +7,7 @@ description = "Ultra-fast Reversi (Othello) bitboard library using 2x uint64"
 
 [dependencies]
 rand = { version = "0.8", optional = true }
+libc = "0.2"
 
 [dev-dependencies]
 rand = "0.8"

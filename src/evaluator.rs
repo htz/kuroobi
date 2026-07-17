@@ -11,7 +11,6 @@
 //!   trains all rotations/mirrors, an 8x effective sample multiplier
 //! - TD(λ)-style whole-game credit assignment (`train_game`)
 
-use std::collections::HashMap;
 use std::fs::File;
 use std::io::{self, BufReader, BufWriter, Read, Write};
 use std::path::Path;
@@ -32,16 +31,59 @@ pub struct Evaluator {
     weights: Vec<Vec<Vec<f32>>>,
 }
 
+/// Per-cell weight update rule used by the training entry points.
+pub trait Optimizer {
+    /// Weight delta for one active cell. `grad` is the (positive-direction)
+    /// error `target - prediction`; `table_size` is the pattern's 3^size
+    /// (for optimizers that allocate per-cell state lazily).
+    fn step(&mut self, stage: usize, pattern: usize, index: usize, table_size: usize, grad: f32)
+        -> f32;
+
+    /// Called once per epoch by trainers that support schedules.
+    fn next_epoch(&mut self) {}
+}
+
+/// Plain SGD with optional per-epoch learning-rate decay. Stateless per
+/// cell, and the step is proportional to the error — on a linear model this
+/// makes early training (large errors) converge much faster than Adam,
+/// whose normalized step is capped near `lr` regardless of error size.
+pub struct SgdOptimizer {
+    pub learning_rate: f32,
+    pub decay: f32,
+}
+
+impl SgdOptimizer {
+    pub fn new(learning_rate: f32, decay: f32) -> SgdOptimizer {
+        SgdOptimizer { learning_rate, decay }
+    }
+}
+
+impl Optimizer for SgdOptimizer {
+    #[inline]
+    fn step(&mut self, _stage: usize, _pattern: usize, _index: usize, _table_size: usize, grad: f32) -> f32 {
+        self.learning_rate * grad
+    }
+
+    fn next_epoch(&mut self) {
+        self.learning_rate *= self.decay;
+    }
+}
+
+/// One Adam moment cell: (first moment m, second moment v, step count t).
+type MomentCell = (f32, f32, u32);
+/// Lazily-allocated moment table for one (stage, pattern) pair.
+type MomentTable = Option<Box<[MomentCell]>>;
+
 /// Adam optimizer state: first/second moment per touched weight cell.
-/// Moments are stored sparsely — pattern tables are huge (3^10 entries) but
-/// games only ever touch a tiny fraction of them.
 pub struct AdamOptimizer {
     pub learning_rate: f32,
     pub beta1: f32,
     pub beta2: f32,
     pub epsilon: f32,
-    /// (stage, pattern, index) -> (m, v, t)
-    moments: HashMap<(u16, u16, u32), (f32, f32, u32)>,
+    /// Per-(stage, pattern) moment tables, allocated lazily on first touch.
+    /// Dense storage: full-corpus training touches most cells, where a
+    /// HashMap's hashing and node overhead dominates.
+    moments: Vec<Vec<MomentTable>>,
 }
 
 impl AdamOptimizer {
@@ -51,14 +93,26 @@ impl AdamOptimizer {
             beta1: 0.9,
             beta2: 0.999,
             epsilon: 1e-8,
-            moments: HashMap::new(),
+            moments: Vec::new(),
         }
     }
+}
 
-    /// Bias-corrected Adam step for one cell. Returns the weight delta.
+impl Optimizer for AdamOptimizer {
+    /// Bias-corrected Adam step for one cell.
     #[inline]
-    fn step(&mut self, key: (u16, u16, u32), grad: f32) -> f32 {
-        let (m, v, t) = self.moments.entry(key).or_insert((0.0, 0.0, 0));
+    fn step(&mut self, stage: usize, pattern: usize, index: usize, table_size: usize, grad: f32) -> f32 {
+        if self.moments.len() <= stage {
+            self.moments.resize_with(stage + 1, Vec::new);
+        }
+        let stage_tables = &mut self.moments[stage];
+        if stage_tables.len() <= pattern {
+            stage_tables.resize_with(pattern + 1, || None);
+        }
+        let table = stage_tables[pattern]
+            .get_or_insert_with(|| vec![(0.0f32, 0.0f32, 0u32); table_size].into_boxed_slice());
+
+        let (m, v, t) = &mut table[index];
         *t += 1;
         *m = self.beta1 * *m + (1.0 - self.beta1) * grad;
         *v = self.beta2 * *v + (1.0 - self.beta2) * grad * grad;
@@ -143,27 +197,35 @@ impl Evaluator {
         error
     }
 
-    /// One Adam step toward `target`. Returns the pre-update error.
-    /// Adam's per-cell adaptive scaling converges far faster than plain SGD
-    /// on pattern tables, where cell visit frequencies span orders of
-    /// magnitude (common shapes vs. rare ones).
-    pub fn update_weights_adam(
+    /// One optimizer step toward `target`. Returns the pre-update error.
+    pub fn update_weights_with(
         &mut self,
         board: &Board,
         target: f32,
-        opt: &mut AdamOptimizer,
+        opt: &mut impl Optimizer,
     ) -> f32 {
         let prediction = self.eval(board);
         let error = target - prediction;
         let stage = Self::stage(board);
 
         for (pi, p) in self.patterns.iter().enumerate() {
+            let table_size = p.table_size();
             for idx in p.indices(board.black, board.white, board.player()) {
-                let delta = opt.step((stage as u16, pi as u16, idx as u32), error);
+                let delta = opt.step(stage, pi, idx, table_size, error);
                 self.weights[stage][pi][idx] += delta;
             }
         }
         error
+    }
+
+    /// Backwards-compatible alias for Adam-based single updates.
+    pub fn update_weights_adam(
+        &mut self,
+        board: &Board,
+        target: f32,
+        opt: &mut AdamOptimizer,
+    ) -> f32 {
+        self.update_weights_with(board, target, opt)
     }
 
     /// Train on one labeled position with 8-fold symmetry augmentation:
@@ -171,10 +233,10 @@ impl Evaluator {
     /// sample teaches eight — this is the single biggest convergence win for
     /// pattern-based Othello evaluators. Returns the mean absolute error
     /// over the eight variants (before their respective updates).
-    pub fn train(&mut self, board: &Board, target: f32, opt: &mut AdamOptimizer) -> f32 {
+    pub fn train(&mut self, board: &Board, target: f32, opt: &mut impl Optimizer) -> f32 {
         let mut total_abs_err = 0.0f32;
         for sym in board.symmetries() {
-            total_abs_err += self.update_weights_adam(&sym, target, opt).abs();
+            total_abs_err += self.update_weights_with(&sym, target, opt).abs();
         }
         total_abs_err / 8.0
     }
@@ -195,7 +257,7 @@ impl Evaluator {
         history: &[Board],
         final_score: f32,
         lambda: f32,
-        opt: &mut AdamOptimizer,
+        opt: &mut impl Optimizer,
     ) -> f32 {
         if history.is_empty() {
             return 0.0;
@@ -235,27 +297,34 @@ impl Evaluator {
         total_abs_err / history.len() as f32
     }
 
-    /// Save all stage weights to one binary file.
+    /// Save all stage weights to one binary file, atomically: data is
+    /// written to a sibling temp file and renamed into place, so an
+    /// interruption mid-write can never corrupt an existing weight file.
     ///
     /// Layout (little-endian):
     ///   magic [8] | stage_count u32 | pattern_count u32 |
     ///   table_size u32 per pattern | f32 tables in [stage][pattern] order
     pub fn save_weights(&self, path: &Path) -> io::Result<()> {
-        let mut w = BufWriter::new(File::create(path)?);
-        w.write_all(WEIGHT_MAGIC)?;
-        w.write_all(&(STAGE_COUNT as u32).to_le_bytes())?;
-        w.write_all(&(self.patterns.len() as u32).to_le_bytes())?;
-        for p in self.patterns {
-            w.write_all(&(p.table_size() as u32).to_le_bytes())?;
-        }
-        for stage in &self.weights {
-            for table in stage {
-                for &v in table {
-                    w.write_all(&v.to_le_bytes())?;
+        let tmp_path = path.with_extension("tmp");
+        {
+            let mut w = BufWriter::new(File::create(&tmp_path)?);
+            w.write_all(WEIGHT_MAGIC)?;
+            w.write_all(&(STAGE_COUNT as u32).to_le_bytes())?;
+            w.write_all(&(self.patterns.len() as u32).to_le_bytes())?;
+            for p in self.patterns {
+                w.write_all(&(p.table_size() as u32).to_le_bytes())?;
+            }
+            for stage in &self.weights {
+                for table in stage {
+                    for &v in table {
+                        w.write_all(&v.to_le_bytes())?;
+                    }
                 }
             }
+            w.flush()?;
+            w.get_ref().sync_all()?;
         }
-        w.flush()
+        std::fs::rename(&tmp_path, path)
     }
 
     /// Load weights previously written by `save_weights`. The file must match
