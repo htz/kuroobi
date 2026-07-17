@@ -32,6 +32,11 @@ struct Args {
     random_plies: usize,
     depth: u8,
     solve_empties: u8,
+    /// Per-side overrides; fall back to the shared values above.
+    depth_a: Option<u8>,
+    depth_b: Option<u8>,
+    solve_a: Option<u8>,
+    solve_b: Option<u8>,
     patterns: &'static str,
     seed: u64,
 }
@@ -49,6 +54,10 @@ Options:
   --depth <n>          Search depth for both sides; 1 = greedy (default 1)
   --solve-empties <n>  Both sides play the endgame perfectly from n empties
                        (default 0 = off; matches real play conditions)
+  --depth-a <n>        Search depth for A only (default: --depth)
+  --depth-b <n>        Search depth for B only (default: --depth)
+  --solve-a <n>        A's perfect-endgame threshold (default: --solve-empties)
+  --solve-b <n>        B's perfect-endgame threshold (default: --solve-empties)
   --patterns <set>     egaroucid | edax (default egaroucid)
   --seed <n>           RNG seed (default 7)
   -h, --help           Show this help";
@@ -63,6 +72,10 @@ fn parse_args() -> Result<Args, String> {
         random_plies: 6,
         depth: 1,
         solve_empties: 0,
+        depth_a: None,
+        depth_b: None,
+        solve_a: None,
+        solve_b: None,
         patterns: "egaroucid",
         seed: 7,
     };
@@ -79,6 +92,10 @@ fn parse_args() -> Result<Args, String> {
             "--random-plies" => args.random_plies = value("--random-plies")?.parse().map_err(|e| format!("--random-plies: {e}"))?,
             "--depth" => args.depth = value("--depth")?.parse().map_err(|e| format!("--depth: {e}"))?,
             "--solve-empties" => args.solve_empties = value("--solve-empties")?.parse().map_err(|e| format!("--solve-empties: {e}"))?,
+            "--depth-a" => args.depth_a = Some(value("--depth-a")?.parse().map_err(|e| format!("--depth-a: {e}"))?),
+            "--depth-b" => args.depth_b = Some(value("--depth-b")?.parse().map_err(|e| format!("--depth-b: {e}"))?),
+            "--solve-a" => args.solve_a = Some(value("--solve-a")?.parse().map_err(|e| format!("--solve-a: {e}"))?),
+            "--solve-b" => args.solve_b = Some(value("--solve-b")?.parse().map_err(|e| format!("--solve-b: {e}"))?),
             "--patterns" => {
                 let v = value("--patterns")?;
                 match v.as_str() {
@@ -160,25 +177,33 @@ fn random_opening(rng: &mut Rng, plies: usize) -> Board {
     board
 }
 
-/// Play out one game from `start`; `black_engine`/`white_engine` choose
-/// moves for their color at the given search depth (1 = greedy). From
-/// `solve_empties` empties both sides play perfect endgame moves via the
-/// solver (0 disables). Returns final score from Black's view.
+/// One side's playing strength: evaluator, search depth (1 = greedy) and
+/// the empties threshold from which it plays perfect endgame moves (0 = off).
+struct EngineConfig<'a> {
+    evaluator: &'a Evaluator,
+    depth: u8,
+    solve_empties: u8,
+}
+
+/// Play out one game from `start`; each side picks moves per its own
+/// [`EngineConfig`]. Returns final score from Black's view.
 ///
 /// Each engine uses its OWN searcher: transposition-table entries embed
 /// evaluator-specific values, so sharing one table across engines would
 /// let one engine consume the other's evaluations and silently blend them.
-#[allow(clippy::too_many_arguments)]
+/// The solver IS shared: exact endgame values are evaluator-independent.
 fn play(
     start: &Board,
-    black_engine: &Evaluator,
-    white_engine: &Evaluator,
+    black: &EngineConfig,
+    white: &EngineConfig,
     black_searcher: &mut Searcher,
     white_searcher: &mut Searcher,
     solver: &mut Solver,
-    depth: u8,
-    solve_empties: u8,
 ) -> i32 {
+    // Once BOTH sides are inside their perfect-play windows the outcome
+    // is fixed; resolve it with one solver call instead of playing on.
+    let both_perfect_from = black.solve_empties.min(white.solve_empties);
+
     let mut board = *start;
     loop {
         if board.movable() == 0 {
@@ -192,22 +217,25 @@ fn play(
             continue;
         }
 
-        // Perfect endgame: both sides are identical from here, so the
-        // exact final score is decided now. Resolve it once and return.
-        if solve_empties > 0 && board.empty_count() <= solve_empties {
+        if both_perfect_from > 0 && board.empty_count() <= both_perfect_from {
             let result = solver.solve(EndSolverMode::Perfect, &board);
             let s = result.value;
             return if board.player() == Color::Black { s } else { -s };
         }
 
         let is_black = board.player() == Color::Black;
-        let engine = if is_black { black_engine } else { white_engine };
-        let pos = if depth <= 1 {
-            greedy_move(&board, engine)
+        let cfg = if is_black { black } else { white };
+        let pos = if cfg.solve_empties > 0 && board.empty_count() <= cfg.solve_empties {
+            solver
+                .solve(EndSolverMode::Perfect, &board)
+                .best_move
+                .expect("legal move exists")
+        } else if cfg.depth <= 1 {
+            greedy_move(&board, cfg.evaluator)
         } else {
             let searcher = if is_black { &mut *black_searcher } else { &mut *white_searcher };
             searcher
-                .search(&board, engine, depth)
+                .search(&board, cfg.evaluator, cfg.depth)
                 .best_move
                 .expect("legal move exists")
         };
@@ -240,14 +268,27 @@ fn main() -> ExitCode {
         return ExitCode::FAILURE;
     }
 
+    let cfg_a = EngineConfig {
+        evaluator: &eval_a,
+        depth: args.depth_a.unwrap_or(args.depth),
+        solve_empties: args.solve_a.unwrap_or(args.solve_empties),
+    };
+    let cfg_b = EngineConfig {
+        evaluator: &eval_b,
+        depth: args.depth_b.unwrap_or(args.depth),
+        solve_empties: args.solve_b.unwrap_or(args.solve_empties),
+    };
+
     println!(
-        "arena: A={} vs B={}  ({} games, {} random plies, depth {}, solve at {})",
+        "arena: A={} (depth {}, solve {}) vs B={} (depth {}, solve {})  ({} games, {} random plies)",
         args.weights_a.display(),
+        cfg_a.depth,
+        cfg_a.solve_empties,
         args.weights_b.display(),
+        cfg_b.depth,
+        cfg_b.solve_empties,
         args.games,
         args.random_plies,
-        args.depth,
-        args.solve_empties
     );
 
     let mut rng = Rng::new(args.seed);
@@ -265,8 +306,7 @@ fn main() -> ExitCode {
 
         // Game 1: A plays Black
         let s1 = play(
-            &opening, &eval_a, &eval_b, &mut searcher_a, &mut searcher_b,
-            &mut solver, args.depth, args.solve_empties,
+            &opening, &cfg_a, &cfg_b, &mut searcher_a, &mut searcher_b, &mut solver,
         );
         a_disc_sum += s1 as i64;
         match s1.cmp(&0) {
@@ -277,8 +317,7 @@ fn main() -> ExitCode {
 
         // Game 2: colors swapped (searcher stays with its evaluator)
         let s2 = play(
-            &opening, &eval_b, &eval_a, &mut searcher_b, &mut searcher_a,
-            &mut solver, args.depth, args.solve_empties,
+            &opening, &cfg_b, &cfg_a, &mut searcher_b, &mut searcher_a, &mut solver,
         );
         a_disc_sum -= s2 as i64;
         match s2.cmp(&0) {
