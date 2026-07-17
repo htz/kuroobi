@@ -17,6 +17,7 @@ use std::path::Path;
 
 use crate::board::Board;
 use crate::pattern::Pattern;
+use crate::pattern_index::{PatternIndexer, PatternIndices};
 
 /// Number of game stages (moves played: 0..=60).
 pub const STAGE_COUNT: usize = 61;
@@ -29,6 +30,8 @@ pub struct Evaluator {
     patterns: &'static [Pattern],
     /// weights[stage][pattern][ternary_index]
     weights: Vec<Vec<Vec<f32>>>,
+    /// Lookup tables for incremental index maintenance during search.
+    indexer: PatternIndexer,
 }
 
 /// Per-cell weight update rule used by the training entry points.
@@ -132,11 +135,17 @@ impl Evaluator {
         Evaluator {
             patterns,
             weights: vec![stage_weights; STAGE_COUNT],
+            indexer: PatternIndexer::new(patterns),
         }
     }
 
     pub fn patterns(&self) -> &'static [Pattern] {
         self.patterns
+    }
+
+    /// Lookup tables for incremental pattern-index maintenance.
+    pub fn indexer(&self) -> &PatternIndexer {
+        &self.indexer
     }
 
     /// Game stage for a board: moves played so far, clamped to [0, 60].
@@ -160,6 +169,17 @@ impl Evaluator {
             }
         }
         score
+    }
+
+    /// Evaluate from incrementally-maintained pattern indices (see
+    /// [`PatternIndexer`]). `board` supplies only stage and side to move;
+    /// `indices` must correspond to `board`'s discs. Bit-exact with
+    /// [`eval`](Self::eval): same weights are summed in the same order.
+    #[inline]
+    pub fn eval_indices(&self, board: &Board, indices: &PatternIndices) -> f32 {
+        let stage = Self::stage(board);
+        self.indexer
+            .eval_sum(indices, board.player(), &self.weights[stage])
     }
 
     /// Direct access to one weight entry (for training).
@@ -672,6 +692,71 @@ mod tests {
             "TD(0) must propagate the win backward, got {}",
             e.eval(first)
         );
+    }
+
+    #[test]
+    fn test_eval_indices_bit_exact_with_eval() {
+        // The incremental path must return the *bit-identical* f32 as the
+        // recomputing path (same weights summed in the same order), for both
+        // sides to move, at every position of a random game.
+        let mut e = Evaluator::new(EGAROUCID_PATTERNS);
+        let mut state = 0x2545f4914f6cdd1du64;
+        for stage in 0..STAGE_COUNT {
+            for (pi, p) in EGAROUCID_PATTERNS.iter().enumerate() {
+                for idx in 0..p.table_size() {
+                    state = state
+                        .wrapping_mul(6364136223846793005)
+                        .wrapping_add(1442695040888963407);
+                    e.set_weight(stage, pi, idx, ((state >> 40) as i32 % 256) as f32 / 32.0);
+                }
+            }
+        }
+
+        let indexer = e.indexer();
+        let mut board = Board::new();
+        let mut indices = indexer.init(board.black, board.white);
+        let mut rng = 7u64;
+        loop {
+            let moves = board.movable();
+            if moves == 0 {
+                let mut p = board;
+                p.pass();
+                if p.movable() == 0 {
+                    break;
+                }
+                board = p;
+                continue;
+            }
+            rng = rng
+                .wrapping_mul(6364136223846793005)
+                .wrapping_add(1442695040888963407);
+            let mut nth = (rng >> 33) % moves.count_ones() as u64;
+            let mut m = moves;
+            while nth > 0 {
+                m &= m - 1;
+                nth -= 1;
+            }
+            let pos = Position::from_index(m.trailing_zeros()).unwrap();
+            let mover = board.player();
+            let mut next = board;
+            let flipped = next.make_move_bits(pos);
+            indexer.apply(&mut indices, pos, flipped, mover);
+            board = next;
+
+            assert_eq!(
+                e.eval_indices(&board, &indices),
+                e.eval(&board),
+                "incremental eval diverged at stage {}",
+                Evaluator::stage(&board)
+            );
+            let mut swapped = board;
+            swapped.pass();
+            assert_eq!(
+                e.eval_indices(&swapped, &indices),
+                e.eval(&swapped),
+                "incremental eval diverged for the passing side"
+            );
+        }
     }
 
     #[test]

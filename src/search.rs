@@ -8,6 +8,7 @@
 
 use crate::board::Board;
 use crate::evaluator::Evaluator;
+use crate::pattern_index::PatternIndices;
 use crate::position::Position;
 use crate::zobrist;
 
@@ -105,9 +106,14 @@ impl Searcher {
         let mut value = 0.0f32;
         let mut completed = 0u8;
 
+        // Pattern indices are maintained incrementally (apply/undo around
+        // each recursion) instead of recomputed per eval — the dominant
+        // cost of the previous implementation.
+        let mut indices = evaluator.indexer().init(board.black, board.white);
+
         for d in 1..=depth {
             let hash = zobrist::compute_hash(board.black, board.white, board.player());
-            let v = self.alpha_beta(board, evaluator, hash, d, -INF, INF, false);
+            let v = self.alpha_beta(board, evaluator, &mut indices, hash, d, -INF, INF, false);
             // Root best move comes from the TT entry just stored
             if let Some(entry) = self.tt_probe(board, hash) {
                 if entry.best.is_some() {
@@ -163,6 +169,7 @@ impl Searcher {
         &mut self,
         board: &Board,
         evaluator: &Evaluator,
+        indices: &mut PatternIndices,
         hash: u64,
         depth: u8,
         mut alpha: f32,
@@ -198,18 +205,20 @@ impl Searcher {
             let mut child = *board;
             child.pass();
             let child_hash = zobrist::update_hash_on_pass(hash);
-            return -self.alpha_beta(&child, evaluator, child_hash, depth, -beta, -alpha, true);
+            // A pass changes no discs, so `indices` carries over unchanged.
+            return -self.alpha_beta(&child, evaluator, indices, child_hash, depth, -beta, -alpha, true);
         }
 
         if depth == 0 {
-            return evaluator.eval(board);
+            return evaluator.eval_indices(board, indices);
         }
 
         // Move ordering: TT move first, then by shallow child evaluation
         // (cheap 0-ply eval; skipped at depth 1 where children are leaves
         // anyway and ordering cannot cut).
+        let indexer = evaluator.indexer();
         let mover = board.player();
-        let mut children: Vec<(Position, Board, u64, f32)> =
+        let mut children: Vec<(Position, Board, u64, u64, f32)> =
             Vec::with_capacity(moves.count_ones() as usize);
         let mut m = moves;
         while m != 0 {
@@ -221,21 +230,28 @@ impl Searcher {
             let order_key = if Some(pos) == tt_move {
                 -INF // TT move first
             } else if depth >= 3 {
-                evaluator.eval(&child) // opponent's view: lower = better for us
+                // opponent's view: lower = better for us
+                indexer.apply(indices, pos, flipped, mover);
+                let v = evaluator.eval_indices(&child, indices);
+                indexer.undo(indices, pos, flipped, mover);
+                v
             } else {
                 0.0
             };
-            children.push((pos, child, child_hash, order_key));
+            children.push((pos, child, child_hash, flipped, order_key));
         }
         if depth >= 3 || tt_move.is_some() {
-            children.sort_by(|a, b| a.3.partial_cmp(&b.3).unwrap_or(std::cmp::Ordering::Equal));
+            children.sort_by(|a, b| a.4.partial_cmp(&b.4).unwrap_or(std::cmp::Ordering::Equal));
         }
 
         let mut best_val = -INF;
         let mut best_move = None;
 
-        for (pos, child, child_hash, _) in &children {
-            let v = -self.alpha_beta(child, evaluator, *child_hash, depth - 1, -beta, -alpha, false);
+        for (pos, child, child_hash, flipped, _) in &children {
+            indexer.apply(indices, *pos, *flipped, mover);
+            let v =
+                -self.alpha_beta(child, evaluator, indices, *child_hash, depth - 1, -beta, -alpha, false);
+            indexer.undo(indices, *pos, *flipped, mover);
             if v > best_val {
                 best_val = v;
                 best_move = Some(*pos);
