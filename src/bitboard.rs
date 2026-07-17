@@ -140,8 +140,11 @@ pub fn empty_bb(black: u64, white: u64) -> u64 {
 /// Transpose along the a1-h8 diagonal: bit (file, rank) -> (rank, file).
 /// Classic delta-swap transpose; index math is symmetric so it works for
 /// file-major exactly like the well-known rank-major version.
+///
+/// Also converts between rank-major (rank*8+file) and file-major
+/// (file*8+rank) bit layouts of the same position, in either direction.
 #[inline]
-fn transpose(mut x: u64) -> u64 {
+pub fn transpose(mut x: u64) -> u64 {
     let t = (x ^ (x >> 7)) & 0x00AA00AA00AA00AA;
     x ^= t ^ (t << 7);
     let t = (x ^ (x >> 14)) & 0x0000CCCC0000CCCC;

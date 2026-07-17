@@ -32,6 +32,7 @@ pub mod pattern;
 pub mod game;
 pub mod evaluator;
 pub mod solver;
+pub mod trainer;
 
 pub use color::Color;
 pub use position::Position;
@@ -46,3 +47,4 @@ pub use zobrist::ZobristTable;
 pub use pattern::{Pattern, PatternSet, PatternWeights, EDAX_PATTERNS, EGAROUCID_PATTERNS};
 pub use evaluator::{AdamOptimizer, Evaluator, STAGE_COUNT};
 pub use solver::{EndSolverMode, EndSolverResult, Solver};
+pub use trainer::{Example, Trainer};
