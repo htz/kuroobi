@@ -21,6 +21,7 @@ use std::process::ExitCode;
 
 use kuroobi::evaluator::Evaluator;
 use kuroobi::pattern::{EDAX_PATTERNS, EGAROUCID_PATTERNS};
+use kuroobi::search::Searcher;
 use kuroobi::{Board, Color, Position};
 
 struct Args {
@@ -28,6 +29,7 @@ struct Args {
     weights_b: PathBuf,
     games: usize,
     random_plies: usize,
+    depth: u8,
     patterns: &'static str,
     seed: u64,
 }
@@ -42,6 +44,7 @@ twice with colors swapped.
 Options:
   --games <n>        Total games (default 1000, rounded up to even)
   --random-plies <n> Random opening plies for diversity (default 6)
+  --depth <n>        Search depth for both sides; 1 = greedy (default 1)
   --patterns <set>   egaroucid | edax (default egaroucid)
   --seed <n>         RNG seed (default 7)
   -h, --help         Show this help";
@@ -54,6 +57,7 @@ fn parse_args() -> Result<Args, String> {
         weights_b: PathBuf::new(),
         games: 1000,
         random_plies: 6,
+        depth: 1,
         patterns: "egaroucid",
         seed: 7,
     };
@@ -68,6 +72,7 @@ fn parse_args() -> Result<Args, String> {
             "--b" => weights_b = Some(PathBuf::from(value("--b")?)),
             "--games" => args.games = value("--games")?.parse().map_err(|e| format!("--games: {e}"))?,
             "--random-plies" => args.random_plies = value("--random-plies")?.parse().map_err(|e| format!("--random-plies: {e}"))?,
+            "--depth" => args.depth = value("--depth")?.parse().map_err(|e| format!("--depth: {e}"))?,
             "--patterns" => {
                 let v = value("--patterns")?;
                 match v.as_str() {
@@ -150,8 +155,15 @@ fn random_opening(rng: &mut Rng, plies: usize) -> Board {
 }
 
 /// Play out one game from `start`; `black_engine`/`white_engine` choose
-/// moves for their color. Returns final score from Black's view.
-fn play(start: &Board, black_engine: &Evaluator, white_engine: &Evaluator) -> i32 {
+/// moves for their color at the given search depth (1 = greedy).
+/// Returns final score from Black's view.
+fn play(
+    start: &Board,
+    black_engine: &Evaluator,
+    white_engine: &Evaluator,
+    searcher: &mut Searcher,
+    depth: u8,
+) -> i32 {
     let mut board = *start;
     loop {
         if board.movable() == 0 {
@@ -169,7 +181,14 @@ fn play(start: &Board, black_engine: &Evaluator, white_engine: &Evaluator) -> i3
         } else {
             white_engine
         };
-        let pos = greedy_move(&board, engine);
+        let pos = if depth <= 1 {
+            greedy_move(&board, engine)
+        } else {
+            searcher
+                .search(&board, engine, depth)
+                .best_move
+                .expect("legal move exists")
+        };
         board.make_move_bits(pos);
     }
 }
@@ -200,14 +219,16 @@ fn main() -> ExitCode {
     }
 
     println!(
-        "arena: A={} vs B={}  ({} games, {} random plies)",
+        "arena: A={} vs B={}  ({} games, {} random plies, depth {})",
         args.weights_a.display(),
         args.weights_b.display(),
         args.games,
-        args.random_plies
+        args.random_plies,
+        args.depth
     );
 
     let mut rng = Rng::new(args.seed);
+    let mut searcher = Searcher::new(18);
     let mut a_wins = 0usize;
     let mut b_wins = 0usize;
     let mut draws = 0usize;
@@ -217,7 +238,7 @@ fn main() -> ExitCode {
         let opening = random_opening(&mut rng, args.random_plies);
 
         // Game 1: A plays Black
-        let s1 = play(&opening, &eval_a, &eval_b);
+        let s1 = play(&opening, &eval_a, &eval_b, &mut searcher, args.depth);
         a_disc_sum += s1 as i64;
         match s1.cmp(&0) {
             std::cmp::Ordering::Greater => a_wins += 1,
@@ -226,7 +247,7 @@ fn main() -> ExitCode {
         }
 
         // Game 2: colors swapped
-        let s2 = play(&opening, &eval_b, &eval_a);
+        let s2 = play(&opening, &eval_b, &eval_a, &mut searcher, args.depth);
         a_disc_sum -= s2 as i64;
         match s2.cmp(&0) {
             std::cmp::Ordering::Greater => b_wins += 1,

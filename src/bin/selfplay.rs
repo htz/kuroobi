@@ -31,6 +31,7 @@ use std::time::Instant;
 
 use kuroobi::evaluator::{Evaluator, SgdOptimizer};
 use kuroobi::pattern::{EDAX_PATTERNS, EGAROUCID_PATTERNS};
+use kuroobi::search::Searcher;
 use kuroobi::solver::{EndSolverMode, Solver};
 use kuroobi::{Board, Color, Position};
 
@@ -41,22 +42,28 @@ struct Args {
     decay: f32,
     lambda: f32,
     epsilon: f32,
+    depth: u8,
     solve_empties: u8,
     patterns: &'static str,
     save_every: usize,
     seed: u64,
     log_path: Option<PathBuf>,
+    opponents: Vec<PathBuf>,
 }
 
 const USAGE: &str = "\
 Usage: selfplay [OPTIONS]
 
-Reinforce the evaluator through self-play: ε-greedy 1-ply move selection,
-exact endgame resolution, TD(λ) weight updates per game.
+Reinforce the evaluator through self-play: ε-greedy move selection with
+midgame alpha-beta search, exact endgame resolution, TD(λ) updates per
+game. With --opponents, the learner plays a league against frozen past
+weights (colors alternate) instead of pure self-play.
 
 Options:
   --games <n>          Self-play games to run (default 10000)
   --weights <path>     Weight file to load and update (default weights.bin)
+  --depth <n>          Midgame search depth in plies; 1 = greedy (default 4)
+  --opponents <paths>  Comma-separated frozen opponent weight files
   --lr <f>             SGD learning rate (default 0.0005)
   --decay <f>          lr decay per save window (default 1.0 = none)
   --lambda <f>         TD(λ): 1.0=Monte-Carlo .. 0.0=TD(0) (default 0.7)
@@ -76,11 +83,13 @@ fn parse_args() -> Result<Args, String> {
         decay: 1.0,
         lambda: 0.7,
         epsilon: 0.10,
+        depth: 4,
         solve_empties: 12,
         patterns: "egaroucid",
         save_every: 500,
         seed: 42,
         log_path: None,
+        opponents: Vec::new(),
     };
 
     let mut it = std::env::args().skip(1);
@@ -95,6 +104,13 @@ fn parse_args() -> Result<Args, String> {
             "--decay" => args.decay = value("--decay")?.parse().map_err(|e| format!("--decay: {e}"))?,
             "--lambda" => args.lambda = value("--lambda")?.parse().map_err(|e| format!("--lambda: {e}"))?,
             "--epsilon" => args.epsilon = value("--epsilon")?.parse().map_err(|e| format!("--epsilon: {e}"))?,
+            "--depth" => args.depth = value("--depth")?.parse().map_err(|e| format!("--depth: {e}"))?,
+            "--opponents" => {
+                args.opponents = value("--opponents")?
+                    .split(',')
+                    .map(PathBuf::from)
+                    .collect();
+            }
             "--solve-empties" => args.solve_empties = value("--solve-empties")?.parse().map_err(|e| format!("--solve-empties: {e}"))?,
             "--patterns" => {
                 let v = value("--patterns")?;
@@ -173,22 +189,53 @@ fn greedy_move(board: &Board, evaluator: &Evaluator) -> Position {
     best_pos.expect("greedy_move called with at least one legal move")
 }
 
+/// Pick a move for the side to move: ε-random, else depth-limited search
+/// (depth <= 1 falls back to the cheap greedy path).
+#[allow(clippy::too_many_arguments)]
+fn choose_move(
+    board: &Board,
+    evaluator: &Evaluator,
+    searcher: &mut Searcher,
+    rng: &mut Rng,
+    epsilon: f32,
+    depth: u8,
+) -> Position {
+    let moves = board.movable();
+    if rng.next_f32() < epsilon {
+        nth_move(moves, rng.below(moves.count_ones()))
+    } else if depth <= 1 {
+        greedy_move(board, evaluator)
+    } else {
+        searcher
+            .search(board, evaluator, depth)
+            .best_move
+            .expect("side to move has legal moves")
+    }
+}
+
 struct GameOutcome {
     history: Vec<Board>,
     /// Final disc difference from Black's perspective.
     score: f32,
 }
 
-/// Play one self-play game. Every position where the side to move had a
-/// choice is recorded for training. When the board reaches
-/// `solve_empties`, the endgame is resolved exactly by the solver and the
-/// exact score is used as the game outcome (stronger label than playing
-/// the endgame out greedily).
+/// Play one training game. The learner plays `learner_color` with the
+/// learning evaluator; the opponent evaluator plays the other side (for
+/// pure self-play both are the same evaluator). Only the learner's
+/// positions... actually ALL positions are recorded: TD targets are
+/// perspective-corrected, so both sides' positions are valid samples.
+/// When the board reaches `solve_empties`, the endgame is resolved exactly
+/// by the solver and the exact score becomes the game outcome.
+#[allow(clippy::too_many_arguments)]
 fn play_game(
-    evaluator: &Evaluator,
+    learner: &Evaluator,
+    opponent: &Evaluator,
+    learner_is_black: bool,
+    searcher: &mut Searcher,
     solver: &mut Solver,
     rng: &mut Rng,
     epsilon: f32,
+    depth: u8,
     solve_empties: u8,
 ) -> GameOutcome {
     let mut board = Board::new();
@@ -228,11 +275,9 @@ fn play_game(
 
         history.push(board);
 
-        let pos = if rng.next_f32() < epsilon {
-            nth_move(moves, rng.below(moves.count_ones()))
-        } else {
-            greedy_move(&board, evaluator)
-        };
+        let mover_is_learner = (board.player() == Color::Black) == learner_is_black;
+        let eval = if mover_is_learner { learner } else { opponent };
+        let pos = choose_move(&board, eval, searcher, rng, epsilon, depth);
         board.make_move_bits(pos);
     }
 }
@@ -282,9 +327,36 @@ fn main() -> ExitCode {
         println!("warning: {} not found, starting from zero weights", args.weights_path.display());
     }
 
+    // Frozen league opponents (empty = pure self-play)
+    let mut opponents: Vec<Evaluator> = Vec::new();
+    for path in &args.opponents {
+        let mut opp = Evaluator::new(patterns);
+        match opp.load_weights(path) {
+            Ok(()) => {
+                println!("league opponent: {}", path.display());
+                opponents.push(opp);
+            }
+            Err(e) => {
+                eprintln!("failed to load opponent {}: {e}", path.display());
+                return ExitCode::FAILURE;
+            }
+        }
+    }
+
     println!(
-        "selfplay: {} games, lr {}, λ {}, ε {}, solve at {} empties, save every {}",
-        args.games, args.learning_rate, args.lambda, args.epsilon, args.solve_empties, args.save_every
+        "selfplay: {} games, depth {}, lr {}, λ {}, ε {}, solve at {} empties, save every {}{}",
+        args.games,
+        args.depth,
+        args.learning_rate,
+        args.lambda,
+        args.epsilon,
+        args.solve_empties,
+        args.save_every,
+        if opponents.is_empty() {
+            String::new()
+        } else {
+            format!(", league of {}", opponents.len())
+        }
     );
 
     let interrupted = Arc::new(AtomicBool::new(false));
@@ -303,6 +375,7 @@ fn main() -> ExitCode {
 
     let mut opt = SgdOptimizer::new(args.learning_rate, 1.0);
     let mut solver = Solver::new(18);
+    let mut searcher = Searcher::new(18);
     let mut rng = Rng::new(args.seed);
 
     let started = Instant::now();
@@ -313,7 +386,23 @@ fn main() -> ExitCode {
     let mut draws = 0usize;
 
     for game_no in 1..=args.games {
-        let outcome = play_game(&evaluator, &mut solver, &mut rng, args.epsilon, args.solve_empties);
+        // League mode: rotate opponents; learner alternates colors.
+        // Pure self-play when no opponents are given.
+        let learner_is_black = game_no % 2 == 1;
+        let outcome = if opponents.is_empty() {
+            play_game(
+                &evaluator, &evaluator, learner_is_black,
+                &mut searcher, &mut solver, &mut rng,
+                args.epsilon, args.depth, args.solve_empties,
+            )
+        } else {
+            let opp = &opponents[(game_no / 2) % opponents.len()];
+            play_game(
+                &evaluator, opp, learner_is_black,
+                &mut searcher, &mut solver, &mut rng,
+                args.epsilon, args.depth, args.solve_empties,
+            )
+        };
 
         match outcome.score.partial_cmp(&0.0) {
             Some(std::cmp::Ordering::Greater) => black_wins += 1,
