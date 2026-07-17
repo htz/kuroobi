@@ -158,6 +158,29 @@ pub fn rotate_90(board: u64) -> u64 {
     transpose(board.swap_bytes())
 }
 
+/// Horizontal mirror: (file, rank) -> (7-file, rank).
+/// In file-major layout each byte is one file, so this is a byte reversal.
+#[inline]
+pub fn mirror_horizontal(board: u64) -> u64 {
+    board.swap_bytes()
+}
+
+/// All 8 symmetries of a bitboard (identity, 3 rotations, mirror, 3 mirrored
+/// rotations). The same index order applied to two bitboards yields
+/// position-consistent pairs.
+#[inline]
+pub fn symmetries(board: u64) -> [u64; 8] {
+    let r0 = board;
+    let r1 = rotate_90(r0);
+    let r2 = rotate_90(r1);
+    let r3 = rotate_90(r2);
+    let m0 = mirror_horizontal(board);
+    let m1 = rotate_90(m0);
+    let m2 = rotate_90(m1);
+    let m3 = rotate_90(m2);
+    [r0, r1, r2, r3, m0, m1, m2, m3]
+}
+
 /// Count set bits (popcount).
 #[inline]
 pub fn count_bits(bb: u64) -> u32 {

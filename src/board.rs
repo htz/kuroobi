@@ -263,6 +263,19 @@ impl Board {
         self.player = self.player.opponent();
     }
 
+    /// All 8 symmetric variants of this position (rotations and mirrors).
+    /// Player and empty count are invariant under board symmetry.
+    pub fn symmetries(&self) -> [Board; 8] {
+        let blacks = bitboard::symmetries(self.black);
+        let whites = bitboard::symmetries(self.white);
+        std::array::from_fn(|i| Board {
+            black: blacks[i],
+            white: whites[i],
+            player: self.player,
+            empty_count: self.empty_count,
+        })
+    }
+
     /// Returns a bitboard of all playable positions for the current player.
     pub fn movable(&self) -> u64 {
         bitboard::mobility(self.player_bb(), self.opponent_bb(), self.empty())

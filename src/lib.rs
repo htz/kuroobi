@@ -44,5 +44,5 @@ pub use game::Reversi;
 pub use game::MoveRecord;
 pub use zobrist::ZobristTable;
 pub use pattern::{Pattern, PatternSet, PatternWeights, EDAX_PATTERNS, EGAROUCID_PATTERNS};
-pub use evaluator::{Evaluator, STAGE_COUNT};
+pub use evaluator::{AdamOptimizer, Evaluator, STAGE_COUNT};
 pub use solver::{EndSolverMode, EndSolverResult, Solver};

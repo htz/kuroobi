@@ -1,10 +1,17 @@
-//! Stage-based pattern evaluator.
+//! Stage-based pattern evaluator with training support.
 //!
 //! Weights are indexed `[stage][pattern][ternary_index]` where
 //! stage = 64 - empty - 4 (0..=60): the number of moves played so far.
 //! Weight files use a simple little-endian binary format (magic, stage count,
 //! per-pattern table sizes, then f32 tables) — portable and dependency-free.
+//!
+//! Training features for fast reinforcement-learning convergence:
+//! - Adam optimizer (per-cell adaptive step) alongside plain SGD
+//! - 8-fold symmetry data augmentation (`train`) — one labeled position
+//!   trains all rotations/mirrors, an 8x effective sample multiplier
+//! - TD(λ)-style whole-game credit assignment (`train_game`)
 
+use std::collections::HashMap;
 use std::fs::File;
 use std::io::{self, BufReader, BufWriter, Read, Write};
 use std::path::Path;
@@ -25,6 +32,42 @@ pub struct Evaluator {
     weights: Vec<Vec<Vec<f32>>>,
 }
 
+/// Adam optimizer state: first/second moment per touched weight cell.
+/// Moments are stored sparsely — pattern tables are huge (3^10 entries) but
+/// games only ever touch a tiny fraction of them.
+pub struct AdamOptimizer {
+    pub learning_rate: f32,
+    pub beta1: f32,
+    pub beta2: f32,
+    pub epsilon: f32,
+    /// (stage, pattern, index) -> (m, v, t)
+    moments: HashMap<(u16, u16, u32), (f32, f32, u32)>,
+}
+
+impl AdamOptimizer {
+    pub fn new(learning_rate: f32) -> AdamOptimizer {
+        AdamOptimizer {
+            learning_rate,
+            beta1: 0.9,
+            beta2: 0.999,
+            epsilon: 1e-8,
+            moments: HashMap::new(),
+        }
+    }
+
+    /// Bias-corrected Adam step for one cell. Returns the weight delta.
+    #[inline]
+    fn step(&mut self, key: (u16, u16, u32), grad: f32) -> f32 {
+        let (m, v, t) = self.moments.entry(key).or_insert((0.0, 0.0, 0));
+        *t += 1;
+        *m = self.beta1 * *m + (1.0 - self.beta1) * grad;
+        *v = self.beta2 * *v + (1.0 - self.beta2) * grad * grad;
+        let m_hat = *m / (1.0 - self.beta1.powi(*t as i32));
+        let v_hat = *v / (1.0 - self.beta2.powi(*t as i32));
+        self.learning_rate * m_hat / (v_hat.sqrt() + self.epsilon)
+    }
+}
+
 impl Evaluator {
     /// Create an evaluator with zero-initialized weights.
     pub fn new(patterns: &'static [Pattern]) -> Evaluator {
@@ -43,8 +86,12 @@ impl Evaluator {
     }
 
     /// Game stage for a board: moves played so far, clamped to [0, 60].
+    /// saturating_sub guards artificial positions with more than 60 empties
+    /// (fewer than 4 discs).
     pub fn stage(board: &Board) -> usize {
-        (60 - board.empty_count() as usize).min(STAGE_COUNT - 1)
+        60usize
+            .saturating_sub(board.empty_count() as usize)
+            .min(STAGE_COUNT - 1)
     }
 
     /// Evaluate the board from the current player's perspective.
@@ -70,16 +117,23 @@ impl Evaluator {
         self.weights[stage][pattern][index] = value;
     }
 
-    /// One SGD step toward `target` for the position's active pattern cells.
-    /// Returns the prediction error (target - prediction).
+    /// One SGD step toward `target`. Returns the prediction error
+    /// (target - prediction) BEFORE the update.
+    ///
+    /// The model is linear: prediction = Σ w[active cell]. For squared loss
+    /// L = ½(target - pred)², the gradient wrt each active weight is -error,
+    /// so the update is `w += lr * error` per active cell (a cell hit by k
+    /// orientations receives the update k times = its true gradient). With
+    /// N active cells
+    /// the prediction moves by ≥ N*lr*error per step, so lr must be < 2/N
+    /// for convergence (the 16-pattern set has N = 64 → lr ≲ 0.03; training
+    /// here uses lr = 0.01).
     pub fn update_weights(&mut self, board: &Board, target: f32, learning_rate: f32) -> f32 {
         let prediction = self.eval(board);
         let error = target - prediction;
 
         let stage = Self::stage(board);
-        // Every orientation of every pattern contributed once
-        let active_cells: usize = self.patterns.iter().map(|p| p.masks.len()).sum();
-        let delta = learning_rate * error / active_cells as f32;
+        let delta = learning_rate * error;
 
         for (pi, p) in self.patterns.iter().enumerate() {
             for idx in p.indices(board.black, board.white, board.player()) {
@@ -87,6 +141,98 @@ impl Evaluator {
             }
         }
         error
+    }
+
+    /// One Adam step toward `target`. Returns the pre-update error.
+    /// Adam's per-cell adaptive scaling converges far faster than plain SGD
+    /// on pattern tables, where cell visit frequencies span orders of
+    /// magnitude (common shapes vs. rare ones).
+    pub fn update_weights_adam(
+        &mut self,
+        board: &Board,
+        target: f32,
+        opt: &mut AdamOptimizer,
+    ) -> f32 {
+        let prediction = self.eval(board);
+        let error = target - prediction;
+        let stage = Self::stage(board);
+
+        for (pi, p) in self.patterns.iter().enumerate() {
+            for idx in p.indices(board.black, board.white, board.player()) {
+                let delta = opt.step((stage as u16, pi as u16, idx as u32), error);
+                self.weights[stage][pi][idx] += delta;
+            }
+        }
+        error
+    }
+
+    /// Train on one labeled position with 8-fold symmetry augmentation:
+    /// every rotation/mirror of the position shares the same value, so one
+    /// sample teaches eight — this is the single biggest convergence win for
+    /// pattern-based Othello evaluators. Returns the mean absolute error
+    /// over the eight variants (before their respective updates).
+    pub fn train(&mut self, board: &Board, target: f32, opt: &mut AdamOptimizer) -> f32 {
+        let mut total_abs_err = 0.0f32;
+        for sym in board.symmetries() {
+            total_abs_err += self.update_weights_adam(&sym, target, opt).abs();
+        }
+        total_abs_err / 8.0
+    }
+
+    /// Train from a finished self-play game with TD(λ)-style targets.
+    ///
+    /// `history` is the sequence of positions from the first move to the
+    /// final position; `final_score` is the game outcome from **Black's**
+    /// perspective (disc difference). Each position's target blends the
+    /// final outcome with the (bootstrapped) evaluation of the next
+    /// position, geometrically weighted by `lambda`:
+    ///   λ = 1  -> pure Monte-Carlo (every position labeled with the outcome)
+    ///   λ = 0  -> pure TD(0) (each position pulls toward the next eval)
+    /// Positions are trained late-to-early so bootstrap targets use
+    /// already-updated (fresher) weights. Returns mean |error|.
+    pub fn train_game(
+        &mut self,
+        history: &[Board],
+        final_score: f32,
+        lambda: f32,
+        opt: &mut AdamOptimizer,
+    ) -> f32 {
+        if history.is_empty() {
+            return 0.0;
+        }
+
+        let mut total_abs_err = 0.0f32;
+        // Value seen from the position *after* each board, in that
+        // position's own perspective. Start from the terminal outcome.
+        let mut next_value_black_view = final_score;
+
+        for board in history.iter().rev() {
+            // Convert the successor value into this board's perspective
+            let outcome_here = if board.player() == crate::color::Color::Black {
+                final_score
+            } else {
+                -final_score
+            };
+            let bootstrap_here = if board.player() == crate::color::Color::Black {
+                next_value_black_view
+            } else {
+                -next_value_black_view
+            };
+
+            let target = lambda * outcome_here + (1.0 - lambda) * bootstrap_here;
+            total_abs_err += self.train(board, target, opt);
+
+            // The freshly-trained evaluation of this position becomes the
+            // bootstrap for its predecessor (stored in Black's view).
+            let v = self.eval(board);
+            next_value_black_view = if board.player() == crate::color::Color::Black {
+                v
+            } else {
+                -v
+            };
+        }
+
+        total_abs_err / history.len() as f32
     }
 
     /// Save all stage weights to one binary file.
@@ -176,17 +322,37 @@ mod tests {
         assert_eq!(e.eval(&b), 0.0);
     }
 
+    /// Effective gradient multiplier for one position: Σ k² over distinct
+    /// active cells, where k = number of orientations hitting that cell.
+    /// A cell hit k times is updated k times and read back k times, so the
+    /// prediction moves by lr * error * Σk² per step. On asymmetric
+    /// positions Σk² = 64 (all cells distinct); the color/rotation-symmetric
+    /// initial position collapses many cells (Σk² = 216 there).
+    fn gradient_multiplier(board: &Board) -> f32 {
+        use std::collections::HashMap;
+        let mut counts: HashMap<(usize, usize), u32> = HashMap::new();
+        for (pi, p) in EGAROUCID_PATTERNS.iter().enumerate() {
+            for idx in p.indices(board.black, board.white, board.player()) {
+                *counts.entry((pi, idx)).or_insert(0) += 1;
+            }
+        }
+        counts.values().map(|&k| (k * k) as f32).sum()
+    }
+
+    /// Learning rate safe for repeated single-position training on any
+    /// position: lr * Σk² < 2 with Σk² ≤ 216 → lr < 0.009. The Go trainer's
+    /// lr = 0.01 is safe in its regime (SGD over many mostly-asymmetric
+    /// examples), but not for this stress pattern.
+    const LR: f32 = 0.005;
+
     #[test]
     fn test_update_weights_reduces_error() {
-        // Note: several pattern orientations can hit the same table cell on
-        // symmetric positions, which amplifies the effective step, so a
-        // conservative learning rate is required for convergence.
         let mut e = Evaluator::new(EGAROUCID_PATTERNS);
         let b = Board::new();
 
-        let err0 = e.update_weights(&b, 10.0, 0.1);
+        let err0 = e.update_weights(&b, 10.0, LR);
         assert_eq!(err0, 10.0, "first error is the full target");
-        let err1 = e.update_weights(&b, 10.0, 0.1);
+        let err1 = e.update_weights(&b, 10.0, LR);
         assert!(
             err1.abs() < err0.abs(),
             "SGD must reduce error: {err0} -> {err1}"
@@ -195,13 +361,75 @@ mod tests {
     }
 
     #[test]
+    fn test_update_weights_converges_to_target() {
+        // Repeated steps on one position must converge to the exact target
+        // (the position is always representable by a linear model).
+        let mut e = Evaluator::new(EGAROUCID_PATTERNS);
+        let b = Board::new();
+        for _ in 0..200 {
+            e.update_weights(&b, 8.0, LR);
+        }
+        let final_err = (8.0 - e.eval(&b)).abs();
+        assert!(final_err < 0.05, "must converge to target, residual {final_err}");
+    }
+
+    #[test]
+    fn test_update_gradient_magnitude_matches_linear_model() {
+        // One step from zero weights must move the prediction by exactly
+        // lr * error * Σk² (see gradient_multiplier). Check on both the
+        // symmetric initial position and an asymmetric one.
+        for plies in [0, 1] {
+            let mut b = Board::new();
+            for _ in 0..plies {
+                let pos =
+                    crate::position::Position::from_index(b.movable().trailing_zeros()).unwrap();
+                b.make_move_unchecked(pos);
+            }
+
+            let multiplier = gradient_multiplier(&b);
+            if plies == 0 {
+                // 8-fold symmetry of the start position collapses many cells
+                assert_eq!(multiplier, 216.0, "symmetric start: Σk² = 216");
+            } else {
+                // Any first move retains one diagonal mirror symmetry
+                assert_eq!(multiplier, 192.0, "first move keeps a mirror: Σk² = 192");
+            }
+
+            let mut e = Evaluator::new(EGAROUCID_PATTERNS);
+            let target = 1.0f32;
+            e.update_weights(&b, target, LR);
+            let expected = LR * target * multiplier;
+            let got = e.eval(&b);
+            assert!(
+                (got - expected).abs() < 1e-4,
+                "plies={plies}: one-step prediction {got}, analytic {expected}"
+            );
+        }
+    }
+
+    #[test]
+    fn test_update_only_touches_current_stage() {
+        // Training a stage-0 position must leave every other stage at zero.
+        let mut e = Evaluator::new(EGAROUCID_PATTERNS);
+        let b = Board::new();
+        assert_eq!(Evaluator::stage(&b), 0);
+        e.update_weights(&b, 5.0, LR);
+
+        let mut later = b;
+        let pos = crate::position::Position::from_index(later.movable().trailing_zeros()).unwrap();
+        later.make_move_unchecked(pos); // now stage 1
+        assert_eq!(Evaluator::stage(&later), 1);
+        assert_eq!(e.eval(&later), 0.0, "stage-1 weights must be untouched");
+    }
+
+    #[test]
     fn test_perspective_antisymmetry_after_training() {
         // Weights trained from one side apply to "player", so the same
         // position from the opponent's view uses different table cells.
         let mut e = Evaluator::new(EGAROUCID_PATTERNS);
         let b = Board::new();
-        for _ in 0..200 {
-            e.update_weights(&b, 8.0, 0.1);
+        for _ in 0..300 {
+            e.update_weights(&b, 8.0, LR);
         }
         let mut swapped = b;
         swapped.pass();
@@ -211,6 +439,170 @@ mod tests {
         // The initial position is color-symmetric, so the swapped view hits
         // the *same* ternary indices -> identical score. Verify that.
         assert_eq!(own, other, "color-symmetric position evaluates equally");
+    }
+
+    #[test]
+    fn test_asymmetric_position_perspectives_differ() {
+        // After one real move the position is no longer color-symmetric:
+        // training black's view must not equally train white's view.
+        let mut b = Board::new();
+        let pos = crate::position::Position::from_index(b.movable().trailing_zeros()).unwrap();
+        b.make_move_unchecked(pos);
+
+        let mut e = Evaluator::new(EGAROUCID_PATTERNS);
+        for _ in 0..300 {
+            e.update_weights(&b, 8.0, LR);
+        }
+        let mut swapped = b;
+        swapped.pass();
+        let own = e.eval(&b);
+        let other = e.eval(&swapped);
+        assert!(own > 4.0, "trained perspective converges, got {own}");
+        assert_ne!(own, other, "asymmetric position: views must differ");
+    }
+
+    #[test]
+    fn test_adam_robust_where_sgd_diverges() {
+        // Adam's practical advantage is robustness to the learning rate.
+        // On the symmetric start position Σk² = 216, so SGD with lr = 0.02
+        // has contraction factor |1 - 0.02*216| = 3.3 > 1: it diverges.
+        // Adam with the same lr stays bounded (per-cell steps are capped at
+        // ~lr regardless of gradient scale) and converges.
+        let b = Board::new();
+        let target = 8.0f32;
+        let lr = 0.02f32;
+
+        let mut sgd = Evaluator::new(EGAROUCID_PATTERNS);
+        for _ in 0..30 {
+            sgd.update_weights(&b, target, lr);
+        }
+        let sgd_residual = (target - sgd.eval(&b)).abs();
+        assert!(
+            sgd_residual > 100.0,
+            "SGD at lr=0.02 must diverge on the symmetric position, residual {sgd_residual}"
+        );
+
+        let mut adam_eval = Evaluator::new(EGAROUCID_PATTERNS);
+        let mut opt = AdamOptimizer::new(lr);
+        for _ in 0..100 {
+            adam_eval.update_weights_adam(&b, target, &mut opt);
+        }
+        let adam_residual = (target - adam_eval.eval(&b)).abs();
+        // Adam's steady-state oscillation is bounded by ~(active cells * lr)
+        let band = 64.0 * lr * 2.0;
+        assert!(
+            adam_residual < band,
+            "Adam at the same lr stays convergent, residual {adam_residual} (band {band})"
+        );
+    }
+
+    #[test]
+    fn test_symmetry_augmented_training_generalizes() {
+        // Training with `train` (8 symmetries) must make the evaluator score
+        // a rotated variant identically to the original — without ever
+        // having seen the rotation as a separate sample.
+        let mut b = Board::new();
+        let pos = Position::from_index(b.movable().trailing_zeros()).unwrap();
+        b.make_move_unchecked(pos);
+
+        // Small lr: Adam's steady-state oscillation is ~lr * active cells,
+        // so lr = 0.01 keeps the residual band at ~0.64.
+        let mut e = Evaluator::new(EGAROUCID_PATTERNS);
+        let mut opt = AdamOptimizer::new(0.01);
+        for _ in 0..300 {
+            e.train(&b, 6.0, &mut opt);
+        }
+
+        let syms = b.symmetries();
+        let base = e.eval(&syms[0]);
+        assert!((6.0 - base).abs() < 1.0, "training target reached, got {base}");
+        // The 8 views are updated sequentially inside `train`, so at any
+        // instant they differ by at most Adam's steady-state oscillation.
+        for (i, sym) in syms.iter().enumerate() {
+            let v = e.eval(sym);
+            assert!(
+                (v - base).abs() < 0.5,
+                "symmetry {i} evaluates to {v}, base {base}: all views must
+                 agree within the optimizer's oscillation band"
+            );
+            assert!(
+                (6.0 - v).abs() < 1.0,
+                "symmetry {i} must also be near the target, got {v}"
+            );
+        }
+    }
+
+    #[test]
+    fn test_train_game_monte_carlo_labels_all_stages() {
+        // λ=1 labels every recorded position with the final outcome
+        // (sign-adjusted per side to move). After training, each recorded
+        // position must evaluate toward ±score in its own perspective.
+        let mut board = Board::new();
+        let mut history = vec![board];
+        for _ in 0..6 {
+            let moves = board.movable();
+            if moves == 0 {
+                break;
+            }
+            board.make_move_unchecked(Position::from_index(moves.trailing_zeros()).unwrap());
+            history.push(board);
+        }
+        let final_score = 10.0f32; // pretend Black wins by 10
+
+        let mut e = Evaluator::new(EGAROUCID_PATTERNS);
+        let mut opt = AdamOptimizer::new(0.05);
+        let mut last_err = f32::MAX;
+        for _ in 0..200 {
+            last_err = e.train_game(&history, final_score, 1.0, &mut opt);
+        }
+        assert!(last_err < 2.0, "game training converges, err {last_err}");
+
+        for b in &history {
+            let v = e.eval(b);
+            let expected = if b.player() == crate::color::Color::Black {
+                final_score
+            } else {
+                -final_score
+            };
+            assert!(
+                (v - expected).abs() < 3.0,
+                "position (stage {}) evaluates {v}, expected ~{expected}",
+                Evaluator::stage(b)
+            );
+        }
+    }
+
+    #[test]
+    fn test_train_game_td_bootstrap_direction() {
+        // λ=0 (pure TD): early positions bootstrap from later evaluations.
+        // With a winning outcome, all positions must still drift positive
+        // for Black because credit flows backward through the chain.
+        let mut board = Board::new();
+        let mut history = vec![board];
+        for _ in 0..4 {
+            let moves = board.movable();
+            if moves == 0 {
+                break;
+            }
+            board.make_move_unchecked(Position::from_index(moves.trailing_zeros()).unwrap());
+            history.push(board);
+        }
+
+        let mut e = Evaluator::new(EGAROUCID_PATTERNS);
+        let mut opt = AdamOptimizer::new(0.05);
+        for _ in 0..60 {
+            e.train_game(&history, 12.0, 0.0, &mut opt);
+        }
+
+        // The first position is Black to move; its value must have moved
+        // clearly positive via bootstrap alone.
+        let first = &history[0];
+        assert_eq!(first.player(), crate::color::Color::Black);
+        assert!(
+            e.eval(first) > 1.0,
+            "TD(0) must propagate the win backward, got {}",
+            e.eval(first)
+        );
     }
 
     #[test]
