@@ -226,12 +226,17 @@ struct GameOutcome {
 /// perspective-corrected, so both sides' positions are valid samples.
 /// When the board reaches `solve_empties`, the endgame is resolved exactly
 /// by the solver and the exact score becomes the game outcome.
+///
+/// Each side gets its own searcher because TT entries embed
+/// evaluator-specific values; the learner's TT must additionally be
+/// cleared by the caller after each weight update.
 #[allow(clippy::too_many_arguments)]
 fn play_game(
     learner: &Evaluator,
     opponent: &Evaluator,
     learner_is_black: bool,
-    searcher: &mut Searcher,
+    learner_searcher: &mut Searcher,
+    opponent_searcher: &mut Searcher,
     solver: &mut Solver,
     rng: &mut Rng,
     epsilon: f32,
@@ -276,7 +281,11 @@ fn play_game(
         history.push(board);
 
         let mover_is_learner = (board.player() == Color::Black) == learner_is_black;
-        let eval = if mover_is_learner { learner } else { opponent };
+        let (eval, searcher) = if mover_is_learner {
+            (learner, &mut *learner_searcher)
+        } else {
+            (opponent, &mut *opponent_searcher)
+        };
         let pos = choose_move(&board, eval, searcher, rng, epsilon, depth);
         board.make_move_bits(pos);
     }
@@ -375,7 +384,11 @@ fn main() -> ExitCode {
 
     let mut opt = SgdOptimizer::new(args.learning_rate, 1.0);
     let mut solver = Solver::new(18);
-    let mut searcher = Searcher::new(18);
+    // Separate searchers: the learner's evaluator changes every game, so
+    // its TT is stale after each update and must be cleared; frozen
+    // opponents keep a valid TT for their (never-changing) weights.
+    let mut learner_searcher = Searcher::new(17);
+    let mut opponent_searcher = Searcher::new(17);
     let mut rng = Rng::new(args.seed);
 
     let started = Instant::now();
@@ -392,14 +405,14 @@ fn main() -> ExitCode {
         let outcome = if opponents.is_empty() {
             play_game(
                 &evaluator, &evaluator, learner_is_black,
-                &mut searcher, &mut solver, &mut rng,
+                &mut learner_searcher, &mut opponent_searcher, &mut solver, &mut rng,
                 args.epsilon, args.depth, args.solve_empties,
             )
         } else {
             let opp = &opponents[(game_no / 2) % opponents.len()];
             play_game(
                 &evaluator, opp, learner_is_black,
-                &mut searcher, &mut solver, &mut rng,
+                &mut learner_searcher, &mut opponent_searcher, &mut solver, &mut rng,
                 args.epsilon, args.depth, args.solve_empties,
             )
         };
@@ -412,6 +425,14 @@ fn main() -> ExitCode {
 
         window_err += evaluator.train_game(&outcome.history, outcome.score, args.lambda, &mut opt);
         window_games += 1;
+
+        // Weights changed: the learner's cached search values are stale.
+        // (In pure self-play the "opponent" shares the learner's evaluator,
+        // so its TT is stale too.)
+        learner_searcher.clear();
+        if opponents.is_empty() {
+            opponent_searcher.clear();
+        }
 
         if game_no % args.save_every == 0 || game_no == args.games || interrupted.load(Ordering::SeqCst) {
             let mean_err = window_err / window_games.max(1) as f32;

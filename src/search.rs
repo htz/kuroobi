@@ -78,6 +78,14 @@ impl Searcher {
         }
     }
 
+    /// Invalidate all cached entries. Required whenever the evaluator's
+    /// weights change (stored values embed the old evaluation) or when the
+    /// same Searcher must serve a different evaluator: TT entries are keyed
+    /// by position only, so cross-evaluator reuse silently corrupts search.
+    pub fn clear(&mut self) {
+        self.tt.fill(TtEntry::EMPTY);
+    }
+
     /// Search to `depth` plies with iterative deepening (better move
     /// ordering from shallower passes via the transposition table).
     /// Returns None best_move if the side to move must pass.

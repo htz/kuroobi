@@ -164,11 +164,17 @@ fn random_opening(rng: &mut Rng, plies: usize) -> Board {
 /// moves for their color at the given search depth (1 = greedy). From
 /// `solve_empties` empties both sides play perfect endgame moves via the
 /// solver (0 disables). Returns final score from Black's view.
+///
+/// Each engine uses its OWN searcher: transposition-table entries embed
+/// evaluator-specific values, so sharing one table across engines would
+/// let one engine consume the other's evaluations and silently blend them.
+#[allow(clippy::too_many_arguments)]
 fn play(
     start: &Board,
     black_engine: &Evaluator,
     white_engine: &Evaluator,
-    searcher: &mut Searcher,
+    black_searcher: &mut Searcher,
+    white_searcher: &mut Searcher,
     solver: &mut Solver,
     depth: u8,
     solve_empties: u8,
@@ -194,14 +200,12 @@ fn play(
             return if board.player() == Color::Black { s } else { -s };
         }
 
-        let engine = if board.player() == Color::Black {
-            black_engine
-        } else {
-            white_engine
-        };
+        let is_black = board.player() == Color::Black;
+        let engine = if is_black { black_engine } else { white_engine };
         let pos = if depth <= 1 {
             greedy_move(&board, engine)
         } else {
+            let searcher = if is_black { &mut *black_searcher } else { &mut *white_searcher };
             searcher
                 .search(&board, engine, depth)
                 .best_move
@@ -247,7 +251,9 @@ fn main() -> ExitCode {
     );
 
     let mut rng = Rng::new(args.seed);
-    let mut searcher = Searcher::new(18);
+    // One searcher per evaluator: TT values are evaluator-specific
+    let mut searcher_a = Searcher::new(17);
+    let mut searcher_b = Searcher::new(17);
     let mut solver = Solver::new(18);
     let mut a_wins = 0usize;
     let mut b_wins = 0usize;
@@ -259,8 +265,8 @@ fn main() -> ExitCode {
 
         // Game 1: A plays Black
         let s1 = play(
-            &opening, &eval_a, &eval_b, &mut searcher, &mut solver,
-            args.depth, args.solve_empties,
+            &opening, &eval_a, &eval_b, &mut searcher_a, &mut searcher_b,
+            &mut solver, args.depth, args.solve_empties,
         );
         a_disc_sum += s1 as i64;
         match s1.cmp(&0) {
@@ -269,10 +275,10 @@ fn main() -> ExitCode {
             std::cmp::Ordering::Equal => draws += 1,
         }
 
-        // Game 2: colors swapped
+        // Game 2: colors swapped (searcher stays with its evaluator)
         let s2 = play(
-            &opening, &eval_b, &eval_a, &mut searcher, &mut solver,
-            args.depth, args.solve_empties,
+            &opening, &eval_b, &eval_a, &mut searcher_b, &mut searcher_a,
+            &mut solver, args.depth, args.solve_empties,
         );
         a_disc_sum -= s2 as i64;
         match s2.cmp(&0) {
