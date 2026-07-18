@@ -304,6 +304,15 @@ fn main() -> ExitCode {
     for _pair in 0..args.games / 2 {
         let opening = random_opening(&mut rng, args.random_plies);
 
+        // Fresh TTs per game: with warm tables, cached deeper entries from
+        // earlier games change move choices, so the color-swapped replay of
+        // the same opening is no longer a mirror — measured as A scoring
+        // ~42% in a same-weights self-match. Cold TTs make play a pure
+        // deterministic function of (opening, weights, depth): a
+        // same-weights match is exactly 50% by construction.
+        searcher_a.clear();
+        searcher_b.clear();
+
         // Game 1: A plays Black
         let s1 = play(
             &opening, &cfg_a, &cfg_b, &mut searcher_a, &mut searcher_b, &mut solver,
@@ -316,6 +325,8 @@ fn main() -> ExitCode {
         }
 
         // Game 2: colors swapped (searcher stays with its evaluator)
+        searcher_a.clear();
+        searcher_b.clear();
         let s2 = play(
             &opening, &cfg_b, &cfg_a, &mut searcher_b, &mut searcher_a, &mut solver,
         );

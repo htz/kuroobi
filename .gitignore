@@ -3,3 +3,4 @@
 *.bin
 *.bin.orb
 *.csv
+selfplay_*.out
