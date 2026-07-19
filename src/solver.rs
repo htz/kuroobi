@@ -36,9 +36,17 @@ fn stability_cut(board: &Board, alpha: i32, beta: i32) -> Option<i32> {
             return Some(bound);
         }
     }
-    // (A symmetric fail-high cut via our own stable discs was measured to
-    // cost more in stability computations than it saved — omitted.)
-    let _ = beta;
+    // Lower bound via our own stable discs (fail high). Nearly free on
+    // balanced positions thanks to the popcount gate, and it collapses
+    // one-sided positions (e.g. FFO#59) that otherwise explode.
+    let need = (64 + beta + 1) / 2;
+    if need <= 32 && (board.player_bb().count_ones() as i32) >= need {
+        let bound =
+            2 * crate::stability::stable_count(board.player_bb(), board.opponent_bb()) as i32 - 64;
+        if bound >= beta {
+            return Some(bound);
+        }
+    }
     None
 }
 /// From this many empties upward, ordering uses a two-ply lookahead.
