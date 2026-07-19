@@ -42,6 +42,10 @@ fn stability_cut(board: &Board, alpha: i32, beta: i32) -> Option<i32> {
 }
 /// From this many empties upward, ordering uses a two-ply lookahead.
 const DEEP2_ORDER_EMPTIES: u8 = 21;
+/// Enhanced transposition cutoff: from this many empties upward, probe
+/// every child's hash entry before searching — a proven fail-high there
+/// cuts this node without any search.
+const ETC_EMPTIES: u8 = 8;
 
 /// Squares adjacent to each square (used to skip moves that cannot flip:
 /// a legal move must touch at least one opponent disc).
@@ -446,6 +450,18 @@ impl Solver {
             board.pass();
             self.hash_table.update(board, hash, alpha, beta, val, None);
             return val;
+        }
+
+        // Enhanced transposition cutoff: a child whose stored upper bound
+        // already proves our value >= upper ends this node for free.
+        if board.empty_count() >= ETC_EMPTIES {
+            for m in &moves {
+                if let Some(e) = self.hash_table.get(&m.board, m.hash) {
+                    if -e.upper >= upper {
+                        return -e.upper;
+                    }
+                }
+            }
         }
 
         // First move: full window
