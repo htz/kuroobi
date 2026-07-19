@@ -251,7 +251,7 @@ fn play_game(
         // Exact endgame resolution (skipped when the side to move has no
         // move: fall through to the pass/game-over logic below)
         if solve_empties > 0 && board.empty_count() <= solve_empties && board.check_all() {
-            let result = solver.solve(EndSolverMode::Perfect, &board);
+            let result = solver.solve_with_eval(EndSolverMode::Perfect, &board, Some(learner));
             // result.value is from the current player's view
             let score_black = if board.player() == Color::Black {
                 result.value as f32

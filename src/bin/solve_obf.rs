@@ -36,13 +36,13 @@ fn main() -> ExitCode {
         return ExitCode::FAILURE;
     }
 
+    // Weights serve the midgame search directly and the endgame solver's
+    // eval-based move ordering.
     let mut evaluator = Evaluator::new(EGAROUCID_PATTERNS);
-    if depth.is_some() {
-        let wpath = weights.unwrap_or_else(|| PathBuf::from("weights_full.bin"));
-        if let Err(e) = evaluator.load_weights(&wpath) {
-            eprintln!("failed to load {}: {e}", wpath.display());
-            return ExitCode::FAILURE;
-        }
+    let wpath = weights.unwrap_or_else(|| PathBuf::from("weights_full.bin"));
+    if let Err(e) = evaluator.load_weights(&wpath) {
+        eprintln!("failed to load {}: {e}", wpath.display());
+        return ExitCode::FAILURE;
     }
 
     let mut solver = Solver::new(22);
@@ -81,7 +81,7 @@ fn main() -> ExitCode {
             let (value, nodes, secs) = match depth {
                 None => {
                     let t = Instant::now();
-                    let r = solver.solve(EndSolverMode::Perfect, &board);
+                    let r = solver.solve_with_eval(EndSolverMode::Perfect, &board, Some(&evaluator));
                     (r.value as f32, r.nodes, t.elapsed().as_secs_f64())
                 }
                 Some(d) => {

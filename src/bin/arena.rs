@@ -228,7 +228,8 @@ fn play(
         }
 
         if both_perfect_from > 0 && board.empty_count() <= both_perfect_from {
-            let result = solver.solve(EndSolverMode::Perfect, &board);
+            let result =
+                solver.solve_with_eval(EndSolverMode::Perfect, &board, Some(black.evaluator));
             let s = result.value;
             return if board.player() == Color::Black { s } else { -s };
         }
@@ -237,7 +238,7 @@ fn play(
         let cfg = if is_black { black } else { white };
         let pos = if cfg.solve_empties > 0 && board.empty_count() <= cfg.solve_empties {
             solver
-                .solve(EndSolverMode::Perfect, &board)
+                .solve_with_eval(EndSolverMode::Perfect, &board, Some(cfg.evaluator))
                 .best_move
                 .expect("legal move exists")
         } else if cfg.depth <= 1 {

@@ -7,6 +7,7 @@
 
 use crate::bitboard;
 use crate::board::Board;
+use crate::evaluator::Evaluator;
 use crate::color::Color;
 use crate::position::Position;
 use crate::zobrist;
@@ -14,6 +15,12 @@ use crate::zobrist;
 /// Search depth thresholds (empties remaining) for switching strategies.
 const PVS_LIMIT: u8 = 7;
 const MOVE_ORDERING_LIMIT: u8 = 7;
+/// From this many empties upward, an evaluator (when provided) orders
+/// moves instead of the static heuristic.
+const EVAL_ORDER_EMPTIES: u8 = 16;
+/// From this many empties upward, ordering refines the evaluation with a
+/// one-ply lookahead (max over the opponent's replies).
+const DEEP_ORDER_EMPTIES: u8 = 18;
 
 /// Squares adjacent to each square (used to skip moves that cannot flip:
 /// a legal move must touch at least one opponent disc).
@@ -237,6 +244,18 @@ impl Solver {
 
     /// Solve the endgame for `board` under the given mode.
     pub fn solve(&mut self, mode: EndSolverMode, board: &Board) -> EndSolverResult {
+        self.solve_with_eval(mode, board, None)
+    }
+
+    /// Solve with an optional evaluator used purely for move ordering in
+    /// the upper (many-empties) region of the tree. Ordering never changes
+    /// the exact result — only the node count.
+    pub fn solve_with_eval(
+        &mut self,
+        mode: EndSolverMode,
+        board: &Board,
+        ev: Option<&Evaluator>,
+    ) -> EndSolverResult {
         self.nodes = 0;
         self.best = None;
 
@@ -253,10 +272,10 @@ impl Solver {
         let mut b = *board;
 
         let value = match mode {
-            EndSolverMode::WinLossDraw => self.pvs_root(&mut b, -1, 1),
-            EndSolverMode::WinDraw => self.pvs_root(&mut b, 0, 1),
-            EndSolverMode::DrawLoss => self.pvs_root(&mut b, -1, 0),
-            EndSolverMode::Perfect => self.perfect(&mut b),
+            EndSolverMode::WinLossDraw => self.pvs_root(&mut b, -1, 1, ev),
+            EndSolverMode::WinDraw => self.pvs_root(&mut b, 0, 1, ev),
+            EndSolverMode::DrawLoss => self.pvs_root(&mut b, -1, 0, ev),
+            EndSolverMode::Perfect => self.perfect(&mut b, ev),
         };
 
         EndSolverResult {
@@ -268,26 +287,26 @@ impl Solver {
     }
 
     /// Exact score via iterative window widening (cheap WLD probe first).
-    fn perfect(&mut self, board: &mut Board) -> i32 {
-        let mut val = self.pvs_root(board, -1, 1);
+    fn perfect(&mut self, board: &mut Board, ev: Option<&Evaluator>) -> i32 {
+        let mut val = self.pvs_root(board, -1, 1, ev);
 
         if val > 0 {
             let bound = val + 8;
-            val = self.pvs_root(board, val, bound);
+            val = self.pvs_root(board, val, bound, ev);
             if val >= bound {
-                val = self.pvs_root(board, val, 64);
+                val = self.pvs_root(board, val, 64, ev);
             }
         } else if val < 0 {
             let bound = val - 8;
-            val = self.pvs_root(board, bound, val);
+            val = self.pvs_root(board, bound, val, ev);
             if val <= bound {
-                val = self.pvs_root(board, -64, val);
+                val = self.pvs_root(board, -64, val, ev);
             }
         }
         val
     }
 
-    fn pvs_root(&mut self, board: &mut Board, alpha: i32, beta: i32) -> i32 {
+    fn pvs_root(&mut self, board: &mut Board, alpha: i32, beta: i32, ev: Option<&Evaluator>) -> i32 {
         let mut lower = alpha;
         let upper = beta;
         // Root computes the hash from scratch once; children update it
@@ -296,7 +315,7 @@ impl Solver {
 
         self.nodes += 1;
 
-        let moves = self.sorted_moves(board, hash);
+        let moves = self.sorted_moves(board, hash, ev);
         if moves.is_empty() {
             return board.score();
         }
@@ -307,7 +326,7 @@ impl Solver {
         // First move: full window
         {
             let mut child = moves[0].board;
-            max = -self.pvs(&mut child, moves[0].hash, -upper, -lower, false);
+            max = -self.pvs(&mut child, moves[0].hash, -upper, -lower, false, ev);
             if max > lower {
                 lower = max;
             }
@@ -319,9 +338,9 @@ impl Solver {
                 break;
             }
             let mut child = m.board;
-            let mut val = -self.pvs(&mut child, m.hash, -lower - 1, -lower, false);
+            let mut val = -self.pvs(&mut child, m.hash, -lower - 1, -lower, false, ev);
             if lower < val && val < upper {
-                val = -self.pvs(&mut child, m.hash, -upper, -val, false);
+                val = -self.pvs(&mut child, m.hash, -upper, -val, false, ev);
             }
             if val > max {
                 max = val;
@@ -338,7 +357,8 @@ impl Solver {
         max
     }
 
-    fn pvs(&mut self, board: &mut Board, hash: u64, alpha: i32, beta: i32, passed: bool) -> i32 {
+    #[allow(clippy::too_many_arguments)]
+    fn pvs(&mut self, board: &mut Board, hash: u64, alpha: i32, beta: i32, passed: bool, ev: Option<&Evaluator>) -> i32 {
         let mut lower = alpha;
         let mut upper = beta;
 
@@ -362,14 +382,14 @@ impl Solver {
             }
         }
 
-        let moves = self.sorted_moves(board, hash);
+        let moves = self.sorted_moves(board, hash, ev);
 
         if moves.is_empty() {
             if passed {
                 return board.score();
             }
             board.pass();
-            let val = -self.pvs(board, zobrist::update_hash_on_pass(hash), -upper, -lower, true);
+            let val = -self.pvs(board, zobrist::update_hash_on_pass(hash), -upper, -lower, true, ev);
             board.pass();
             self.hash_table.update(board, hash, alpha, beta, val, None);
             return val;
@@ -378,7 +398,7 @@ impl Solver {
         // First move: full window
         let mut best = Some(moves[0].pos);
         let mut child = moves[0].board;
-        let mut max = self.descend(&mut child, moves[0].hash, -upper, -lower);
+        let mut max = self.descend(&mut child, moves[0].hash, -upper, -lower, ev);
         if max > lower {
             lower = max;
         }
@@ -389,7 +409,7 @@ impl Solver {
                 break;
             }
             let mut child = m.board;
-            let val = self.descend_null_window(&mut child, m.hash, lower, upper);
+            let val = self.descend_null_window(&mut child, m.hash, lower, upper, ev);
             if val > max {
                 max = val;
                 best = Some(m.pos);
@@ -405,11 +425,11 @@ impl Solver {
 
     /// Full-window recursive descent picking the right strategy by depth.
     #[inline]
-    fn descend(&mut self, child: &mut Board, hash: u64, alpha: i32, beta: i32) -> i32 {
+    fn descend(&mut self, child: &mut Board, hash: u64, alpha: i32, beta: i32, ev: Option<&Evaluator>) -> i32 {
         if child.empty_count() >= PVS_LIMIT {
-            -self.pvs(child, hash, alpha, beta, false)
+            -self.pvs(child, hash, alpha, beta, false, ev)
         } else if child.empty_count() >= MOVE_ORDERING_LIMIT {
-            -self.alpha_beta_ordered(child, hash, alpha, beta, false)
+            -self.alpha_beta_ordered(child, hash, alpha, beta, false, ev)
         } else {
             -self.alpha_beta(child, alpha, beta, false)
         }
@@ -417,14 +437,15 @@ impl Solver {
 
     /// Null-window probe then re-search, at the strategy for this depth.
     #[inline]
-    fn descend_null_window(&mut self, child: &mut Board, hash: u64, lower: i32, upper: i32) -> i32 {
-        let mut val = self.descend(child, hash, -lower - 1, -lower);
+    fn descend_null_window(&mut self, child: &mut Board, hash: u64, lower: i32, upper: i32, ev: Option<&Evaluator>) -> i32 {
+        let mut val = self.descend(child, hash, -lower - 1, -lower, ev);
         if lower < val && val < upper {
-            val = self.descend(child, hash, -upper, -val);
+            val = self.descend(child, hash, -upper, -val, ev);
         }
         val
     }
 
+    #[allow(clippy::too_many_arguments)]
     fn alpha_beta_ordered(
         &mut self,
         board: &mut Board,
@@ -432,6 +453,7 @@ impl Solver {
         alpha: i32,
         beta: i32,
         passed: bool,
+        ev: Option<&Evaluator>,
     ) -> i32 {
         let mut alpha = alpha;
         let mut beta = beta;
@@ -457,7 +479,7 @@ impl Solver {
         }
 
         let orig_alpha = alpha;
-        let moves = self.sorted_moves(board, hash);
+        let moves = self.sorted_moves(board, hash, ev);
 
         if moves.is_empty() {
             if passed {
@@ -470,6 +492,7 @@ impl Solver {
                 -beta,
                 -alpha,
                 true,
+                ev,
             );
             board.pass();
             self.hash_table.update(board, hash, orig_alpha, beta, val, None);
@@ -480,7 +503,7 @@ impl Solver {
         for m in &moves {
             let mut child = m.board;
             let val = if child.empty_count() >= MOVE_ORDERING_LIMIT {
-                -self.alpha_beta_ordered(&mut child, m.hash, -beta, -alpha, false)
+                -self.alpha_beta_ordered(&mut child, m.hash, -beta, -alpha, false, ev)
             } else {
                 -self.alpha_beta(&mut child, -beta, -alpha, false)
             };
@@ -765,13 +788,16 @@ impl Solver {
 
     /// Generate children sorted by an endgame move-ordering heuristic
     /// (fastest-first: minimize opponent mobility, corner stability, parity).
+    /// The transposition table's best move, when present, is searched first.
     /// Each child carries its incrementally-updated Zobrist hash.
-    fn sorted_moves(&self, board: &Board, hash: u64) -> Vec<ScoredMove> {
+    fn sorted_moves(&self, board: &Board, hash: u64, ev: Option<&Evaluator>) -> Vec<ScoredMove> {
         let mobility = board.movable();
         if mobility == 0 {
             return Vec::new();
         }
 
+        let tt_best = self.hash_table.get(board, hash).and_then(|e| e.best);
+        let eval_order = board.empty_count() >= EVAL_ORDER_EMPTIES;
         let parity = parity_of(board);
         let mover = board.player();
         let mut moves: Vec<ScoredMove> = Vec::with_capacity(mobility.count_ones() as usize);
@@ -784,7 +810,21 @@ impl Solver {
             let mut child = *board;
             let flipped = child.make_move_bits(pos);
             let child_hash = zobrist::update_hash_on_move(hash, pos, flipped, mover);
-            let value = move_ordering_value(pos, &child, parity);
+            let value = if Some(pos) == tt_best {
+                i32::MIN
+            } else if let (Some(e), true) = (ev, eval_order) {
+                // Pattern evaluation of the child (opponent view: lower =
+                // better for the mover). Far stronger ordering than the
+                // static heuristic in the many-empties region; the topmost
+                // region refines it with a one-ply lookahead.
+                if board.empty_count() >= DEEP_ORDER_EMPTIES {
+                    (shallow_negamax(&child, e) * 8.0) as i32
+                } else {
+                    (e.eval(&child) * 8.0) as i32
+                }
+            } else {
+                move_ordering_value(pos, &child, parity)
+            };
             moves.push(ScoredMove { pos, board: child, hash: child_hash, value });
         }
 
@@ -799,6 +839,30 @@ struct ScoredMove {
     board: Board,
     hash: u64,
     value: i32,
+}
+
+/// One-ply negamax refinement for ordering: the position's value from its
+/// own player's view, looking one reply ahead with the evaluator.
+fn shallow_negamax(board: &Board, ev: &Evaluator) -> f32 {
+    let moves = board.movable();
+    if moves == 0 {
+        let mut p = *board;
+        p.pass();
+        return -ev.eval(&p);
+    }
+    let mut best = f32::NEG_INFINITY;
+    let mut m = moves;
+    while m != 0 {
+        let sq = m.trailing_zeros();
+        m &= m - 1;
+        let mut child = *board;
+        child.make_move_bits(Position(sq as u8));
+        let v = -ev.eval(&child);
+        if v > best {
+            best = v;
+        }
+    }
+    best
 }
 
 /// Move-ordering heuristic (lower = searched earlier): after the move, the

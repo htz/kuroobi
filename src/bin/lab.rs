@@ -234,7 +234,7 @@ fn play(
         let pos = if our_turn {
             if solve_empties > 0 && board.empty_count() <= solve_empties {
                 solver
-                    .solve(EndSolverMode::Perfect, &board)
+                    .solve_with_eval(EndSolverMode::Perfect, &board, Some(evaluator))
                     .best_move
                     .ok_or("solver returned no move")?
             } else {
