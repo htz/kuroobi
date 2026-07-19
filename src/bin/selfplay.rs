@@ -30,7 +30,7 @@ use std::sync::Arc;
 use std::time::Instant;
 
 use kuroobi::evaluator::{Evaluator, SgdOptimizer};
-use kuroobi::pattern::{EDAX_PATTERNS, EGAROUCID_PATTERNS};
+use kuroobi::pattern::{EDAX_PATTERNS, EGAROUCID_PATTERNS, EGAROUCID_PLUS_PATTERNS};
 use kuroobi::search::Searcher;
 use kuroobi::solver::{EndSolverMode, Solver};
 use kuroobi::{Board, Color, Position};
@@ -69,7 +69,7 @@ Options:
   --lambda <f>         TD(λ): 1.0=Monte-Carlo .. 0.0=TD(0) (default 0.7)
   --epsilon <f>        Random-move exploration rate (default 0.10)
   --solve-empties <n>  Exact endgame solve threshold (default 12, 0=off)
-  --patterns <set>     egaroucid | edax (default egaroucid)
+  --patterns <set>     egaroucid | edax | egaroucid-plus (default egaroucid)
   --save-every <n>     Save weights every n games (default 500)
   --seed <n>           RNG seed (default 42)
   --log <path>         Append per-window stats as CSV
@@ -116,6 +116,7 @@ fn parse_args() -> Result<Args, String> {
                 let v = value("--patterns")?;
                 match v.as_str() {
                     "egaroucid" => args.patterns = "egaroucid",
+                    "egaroucid-plus" => args.patterns = "egaroucid-plus",
                     "edax" => args.patterns = "edax",
                     other => return Err(format!("unknown pattern set: {other}")),
                 }
@@ -320,6 +321,7 @@ fn main() -> ExitCode {
 
     let patterns = match args.patterns {
         "edax" => EDAX_PATTERNS,
+        "egaroucid-plus" => EGAROUCID_PLUS_PATTERNS,
         _ => EGAROUCID_PATTERNS,
     };
 

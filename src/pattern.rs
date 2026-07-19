@@ -255,6 +255,43 @@ pub const EDAX_PATTERNS: &[Pattern] = &[
     ]},
 ];
 
+// ---------------------------------------------------------------------------
+// Egaroucid-plus (18): the full Egaroucid set extended with the two Edax
+// patterns it lacks. Motivation (weight statistics of an evaluator trained
+// on the Egaroucid set): opening-stage tables of 10-cell patterns are <6%
+// visited on 25M teacher positions, so small/extra shapes give the early
+// stages dense, fully-trained features while stage-wise weights let later
+// stages keep relying on the big patterns.
+// ---------------------------------------------------------------------------
+
+/// Angle+X (corner region + X square), from the Edax pattern set.
+const ANGLE_X: Pattern = Pattern { name: "Angle+X", size: 10, masks: &[
+    &[A5, A4, A3, A2, A1, B2, B1, C1, D1, E1],
+    &[H5, H4, H3, H2, H1, G2, G1, F1, E1, D1],
+    &[A4, A5, A6, A7, A8, B7, B8, C8, D8, E8],
+    &[H4, H5, H6, H7, H8, G7, G8, F8, E8, D8],
+]};
+
+/// Diagonal4 (3^4 = 81 cells: fully trainable even in the opening), from
+/// the Edax pattern set.
+const DIAGONAL4: Pattern = Pattern { name: "Diagonal4", size: 4, masks: &[
+    &[D1, C2, B3, A4],
+    &[A5, B6, C7, D8],
+    &[E1, F2, G3, H4],
+    &[H5, G6, F7, E8],
+]};
+
+pub const EGAROUCID_PLUS_PATTERNS: &[Pattern] = &[
+    EGAROUCID_PATTERNS[0], EGAROUCID_PATTERNS[1], EGAROUCID_PATTERNS[2],
+    EGAROUCID_PATTERNS[3], EGAROUCID_PATTERNS[4], EGAROUCID_PATTERNS[5],
+    EGAROUCID_PATTERNS[6], EGAROUCID_PATTERNS[7], EGAROUCID_PATTERNS[8],
+    EGAROUCID_PATTERNS[9], EGAROUCID_PATTERNS[10], EGAROUCID_PATTERNS[11],
+    EGAROUCID_PATTERNS[12], EGAROUCID_PATTERNS[13], EGAROUCID_PATTERNS[14],
+    EGAROUCID_PATTERNS[15],
+    ANGLE_X,
+    DIAGONAL4,
+];
+
 /// Convenience holder pairing both pattern libraries.
 #[derive(Debug, Clone, Copy)]
 pub struct PatternSet {

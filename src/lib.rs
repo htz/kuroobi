@@ -46,7 +46,10 @@ pub use board::BOARD_INIT_STRING;
 pub use game::Reversi;
 pub use game::MoveRecord;
 pub use zobrist::ZobristTable;
-pub use pattern::{Pattern, PatternSet, PatternWeights, EDAX_PATTERNS, EGAROUCID_PATTERNS};
+pub use pattern::{
+    Pattern, PatternSet, PatternWeights, EDAX_PATTERNS, EGAROUCID_PATTERNS,
+    EGAROUCID_PLUS_PATTERNS,
+};
 pub use pattern_index::{PatternIndexer, PatternIndices};
 pub use evaluator::{AdamOptimizer, Evaluator, Optimizer, SgdOptimizer, STAGE_COUNT};
 pub use search::{Searcher, SearchResult};

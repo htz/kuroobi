@@ -20,7 +20,7 @@ use std::path::PathBuf;
 use std::process::ExitCode;
 
 use kuroobi::evaluator::Evaluator;
-use kuroobi::pattern::{EDAX_PATTERNS, EGAROUCID_PATTERNS};
+use kuroobi::pattern::{EDAX_PATTERNS, EGAROUCID_PATTERNS, EGAROUCID_PLUS_PATTERNS};
 use kuroobi::search::Searcher;
 use kuroobi::solver::{EndSolverMode, Solver};
 use kuroobi::{Board, Color, Position};
@@ -38,7 +38,18 @@ struct Args {
     solve_a: Option<u8>,
     solve_b: Option<u8>,
     patterns: &'static str,
+    patterns_a: Option<&'static str>,
+    patterns_b: Option<&'static str>,
     seed: u64,
+}
+
+fn parse_patterns(v: &str) -> Result<&'static str, String> {
+    match v {
+        "egaroucid" => Ok("egaroucid"),
+        "egaroucid-plus" => Ok("egaroucid-plus"),
+        "edax" => Ok("edax"),
+        other => Err(format!("unknown pattern set: {other}")),
+    }
 }
 
 const USAGE: &str = "\
@@ -58,7 +69,9 @@ Options:
   --depth-b <n>        Search depth for B only (default: --depth)
   --solve-a <n>        A's perfect-endgame threshold (default: --solve-empties)
   --solve-b <n>        B's perfect-endgame threshold (default: --solve-empties)
-  --patterns <set>     egaroucid | edax (default egaroucid)
+  --patterns <set>     egaroucid | edax | egaroucid-plus (default egaroucid)
+  --patterns-a <set>   A's pattern library (default: --patterns)
+  --patterns-b <set>   B's pattern library (default: --patterns)
   --seed <n>           RNG seed (default 7)
   -h, --help           Show this help";
 
@@ -77,6 +90,8 @@ fn parse_args() -> Result<Args, String> {
         solve_a: None,
         solve_b: None,
         patterns: "egaroucid",
+        patterns_a: None,
+        patterns_b: None,
         seed: 7,
     };
 
@@ -96,14 +111,9 @@ fn parse_args() -> Result<Args, String> {
             "--depth-b" => args.depth_b = Some(value("--depth-b")?.parse().map_err(|e| format!("--depth-b: {e}"))?),
             "--solve-a" => args.solve_a = Some(value("--solve-a")?.parse().map_err(|e| format!("--solve-a: {e}"))?),
             "--solve-b" => args.solve_b = Some(value("--solve-b")?.parse().map_err(|e| format!("--solve-b: {e}"))?),
-            "--patterns" => {
-                let v = value("--patterns")?;
-                match v.as_str() {
-                    "egaroucid" => args.patterns = "egaroucid",
-                    "edax" => args.patterns = "edax",
-                    other => return Err(format!("unknown pattern set: {other}")),
-                }
-            }
+            "--patterns" => args.patterns = parse_patterns(&value("--patterns")?)?,
+            "--patterns-a" => args.patterns_a = Some(parse_patterns(&value("--patterns-a")?)?),
+            "--patterns-b" => args.patterns_b = Some(parse_patterns(&value("--patterns-b")?)?),
             "--seed" => args.seed = value("--seed")?.parse().map_err(|e| format!("--seed: {e}"))?,
             "-h" | "--help" => return Err(USAGE.to_string()),
             other => return Err(format!("unknown option: {other}\n\n{USAGE}")),
@@ -252,17 +262,20 @@ fn main() -> ExitCode {
         }
     };
 
-    let patterns = match args.patterns {
+    let lib = |name: &str| match name {
         "edax" => EDAX_PATTERNS,
+        "egaroucid-plus" => EGAROUCID_PLUS_PATTERNS,
         _ => EGAROUCID_PATTERNS,
     };
+    let patterns_a = lib(args.patterns_a.unwrap_or(args.patterns));
+    let patterns_b = lib(args.patterns_b.unwrap_or(args.patterns));
 
-    let mut eval_a = Evaluator::new(patterns);
+    let mut eval_a = Evaluator::new(patterns_a);
     if let Err(e) = eval_a.load_weights(&args.weights_a) {
         eprintln!("failed to load {}: {e}", args.weights_a.display());
         return ExitCode::FAILURE;
     }
-    let mut eval_b = Evaluator::new(patterns);
+    let mut eval_b = Evaluator::new(patterns_b);
     if let Err(e) = eval_b.load_weights(&args.weights_b) {
         eprintln!("failed to load {}: {e}", args.weights_b.display());
         return ExitCode::FAILURE;

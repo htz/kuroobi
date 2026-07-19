@@ -17,8 +17,8 @@ use crate::pattern::Pattern;
 use crate::position::Position;
 
 /// Upper bound on total orientations across a pattern library
-/// (Egaroucid: 16 patterns x 4 masks = 64; Edax: 46).
-pub const MAX_MASKS: usize = 64;
+/// (Egaroucid: 16 patterns x 4 masks = 64; Edax: 46; Egaroucid-plus: 72).
+pub const MAX_MASKS: usize = 80;
 
 /// One differential update: mask `mask`'s index changes by
 /// `digit_diff * pow3` when the square owning this entry changes color.
@@ -220,7 +220,7 @@ impl PatternIndexer {
 mod tests {
     use super::*;
     use crate::board::Board;
-    use crate::pattern::{EDAX_PATTERNS, EGAROUCID_PATTERNS};
+    use crate::pattern::{EDAX_PATTERNS, EGAROUCID_PATTERNS, EGAROUCID_PLUS_PATTERNS};
 
     /// Expected indices via the existing per-position recomputation, in
     /// `player`'s perspective.
@@ -283,7 +283,7 @@ mod tests {
 
     #[test]
     fn test_init_matches_reference_both_libraries() {
-        for patterns in [EGAROUCID_PATTERNS, EDAX_PATTERNS] {
+        for patterns in [EGAROUCID_PATTERNS, EDAX_PATTERNS, EGAROUCID_PLUS_PATTERNS] {
             let ix = PatternIndexer::new(patterns);
             let b = Board::new();
             let indices = ix.init(b.black, b.white);
@@ -298,7 +298,7 @@ mod tests {
 
     #[test]
     fn test_apply_tracks_full_games() {
-        for patterns in [EGAROUCID_PATTERNS, EDAX_PATTERNS] {
+        for patterns in [EGAROUCID_PATTERNS, EDAX_PATTERNS, EGAROUCID_PLUS_PATTERNS] {
             let ix = PatternIndexer::new(patterns);
             for seed in 1..=5u64 {
                 let game = deterministic_game(seed);
