@@ -248,6 +248,10 @@ pub struct Solver {
     nodes: u64,
     best: Option<Position>,
     hash_table: HashTable,
+    /// Small dedicated table for the shallow region (5-6 empties), where
+    /// transpositions are dense but entries would lose the depth-preferred
+    /// replacement race in the main table.
+    shallow_table: HashTable,
     neighbours: NeighbourTable,
 }
 
@@ -259,6 +263,7 @@ impl Solver {
             nodes: 0,
             best: None,
             hash_table: HashTable::new(bit_size),
+            shallow_table: HashTable::new(16),
             neighbours: NeighbourTable::new(),
         }
     }
@@ -290,6 +295,7 @@ impl Solver {
         }
 
         self.hash_table.clear();
+        self.shallow_table.clear();
         let mut b = *board;
 
         let value = match mode {
@@ -458,7 +464,7 @@ impl Solver {
         } else if child.empty_count() >= MOVE_ORDERING_LIMIT {
             -self.alpha_beta_ordered(child, hash, alpha, beta, false, ev)
         } else {
-            -self.alpha_beta(child, alpha, beta, false)
+            -self.alpha_beta(child, hash, alpha, beta, false)
         }
     }
 
@@ -536,7 +542,7 @@ impl Solver {
             let val = if child.empty_count() >= MOVE_ORDERING_LIMIT {
                 -self.alpha_beta_ordered(&mut child, m.hash, -beta, -alpha, false, ev)
             } else {
-                -self.alpha_beta(&mut child, -beta, -alpha, false)
+                -self.alpha_beta(&mut child, m.hash, -beta, -alpha, false)
             };
             if val > alpha {
                 alpha = val;
@@ -551,8 +557,9 @@ impl Solver {
         alpha
     }
 
-    /// Plain alpha-beta over the empty list, with the last-4 fast path.
-    fn alpha_beta(&mut self, board: &mut Board, alpha: i32, beta: i32, passed: bool) -> i32 {
+    /// Plain alpha-beta over the empty list, with the last-4 fast path and
+    /// a dedicated shallow transposition table (5-6 empties).
+    fn alpha_beta(&mut self, board: &mut Board, hash: u64, alpha: i32, beta: i32, passed: bool) -> i32 {
         self.nodes += 1;
 
         if let Some(bound) = stability_cut(board, alpha, beta) {
@@ -571,9 +578,34 @@ impl Solver {
             return self.last4(board, p1, p2, p3, p4, alpha, beta, passed);
         }
 
-        let mut alpha = alpha;
+        let mut lower = alpha;
+        let mut upper = beta;
+        if let Some(v) = self.shallow_table.get(board, hash) {
+            if v.lower >= v.upper {
+                return v.lower;
+            }
+            if upper > v.upper {
+                upper = v.upper;
+                if upper <= lower {
+                    return upper;
+                }
+            }
+            if lower < v.lower {
+                lower = v.lower;
+                if lower >= upper {
+                    return lower;
+                }
+            }
+        }
+
+        let orig_lower = lower;
+        let mut best = lower;
         let mut any = false;
         let opponent_bb = board.opponent_bb();
+        // Children of a 5-empty node dispatch to last4 and never probe, so
+        // their hashes are only needed one level up.
+        let need_child_hash = board.empty_count() > 5;
+        let mover = board.player();
 
         let mut e = board.empty();
         while e != 0 {
@@ -592,14 +624,19 @@ impl Solver {
 
             any = true;
             let mut child = *board;
-            child.make_move_bits(pos);
-            let val = -self.alpha_beta(&mut child, -beta, -alpha, false);
+            let flipped = child.make_move_bits(pos);
+            let child_hash = if need_child_hash {
+                zobrist::update_hash_on_move(hash, pos, flipped, mover)
+            } else {
+                0
+            };
+            let val = -self.alpha_beta(&mut child, child_hash, -upper, -best.max(orig_lower), false);
 
-            if val > alpha {
-                alpha = val;
+            if val > best {
+                best = val;
             }
-            if alpha >= beta {
-                return alpha;
+            if best >= upper {
+                break;
             }
         }
 
@@ -608,12 +645,13 @@ impl Solver {
                 return board.score();
             }
             board.pass();
-            let val = -self.alpha_beta(board, -beta, -alpha, true);
+            let val = -self.alpha_beta(board, zobrist::update_hash_on_pass(hash), -upper, -orig_lower, true);
             board.pass();
             return val;
         }
 
-        alpha
+        self.shallow_table.update(board, hash, orig_lower, upper, best, None);
+        best
     }
 
     /// Specialized 4-empties search with quadrant-parity move ordering.
