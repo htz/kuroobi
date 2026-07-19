@@ -22,7 +22,7 @@ use std::sync::Arc;
 use std::time::Instant;
 
 use kuroobi::evaluator::{AdamOptimizer, Evaluator, Optimizer, SgdOptimizer, STAGE_COUNT};
-use kuroobi::pattern::{EDAX_PATTERNS, EGAROUCID_PATTERNS};
+use kuroobi::pattern::{EDAX_PATTERNS, EGAROUCID_PATTERNS, EGAROUCID_PLUS_PATTERNS};
 use kuroobi::trainer::{load_examples_binary, load_examples_text, Example, Trainer};
 
 struct Args {
@@ -57,7 +57,7 @@ Options:
   --lr <f>          Learning rate (default: sgd 0.002, adam 0.01)
   --decay <f>       SGD per-epoch lr decay factor (default 0.95)
   --weights <path>  Weight file to load/save (default weights.bin)
-  --patterns <set>  egaroucid | edax (default egaroucid)
+  --patterns <set>  egaroucid | edax | egaroucid-plus (default egaroucid)
   --limit <n>       Max examples per file
   --log <path>      Append per-epoch stage losses as CSV
   -h, --help        Show this help";
@@ -98,6 +98,7 @@ fn parse_args() -> Result<Args, String> {
                 let v = value("--patterns")?;
                 match v.as_str() {
                     "egaroucid" => args.patterns = "egaroucid",
+                    "egaroucid-plus" => args.patterns = "egaroucid-plus",
                     "edax" => args.patterns = "edax",
                     other => return Err(format!("unknown pattern set: {other}")),
                 }
@@ -174,6 +175,7 @@ fn main() -> ExitCode {
 
     let patterns = match args.patterns {
         "edax" => EDAX_PATTERNS,
+        "egaroucid-plus" => EGAROUCID_PLUS_PATTERNS,
         _ => EGAROUCID_PATTERNS,
     };
 
@@ -198,6 +200,22 @@ fn main() -> ExitCode {
         }
     }
     println!("total: {} examples", examples.len());
+
+    // Deterministic Fisher-Yates shuffle: SGD assumes IID sample order, but
+    // concatenated multi-source datasets (e.g. per-opening-depth files) are
+    // grossly ordered — training in file order makes the model drift toward
+    // whichever source came last and the epoch loss creep upward.
+    {
+        let mut state = 0x9E3779B97F4A7C15u64;
+        for i in (1..examples.len()).rev() {
+            state ^= state >> 12;
+            state ^= state << 25;
+            state ^= state >> 27;
+            let j = (state.wrapping_mul(0x2545F4914F6CDD1D) % (i as u64 + 1)) as usize;
+            examples.swap(i, j);
+        }
+        println!("shuffled (deterministic seed)");
+    }
 
     // Evaluator: resume from an existing weight file when present
     let mut evaluator = Evaluator::new(patterns);
