@@ -17,10 +17,10 @@ const PVS_LIMIT: u8 = 7;
 const MOVE_ORDERING_LIMIT: u8 = 7;
 /// From this many empties upward, an evaluator (when provided) orders
 /// moves instead of the static heuristic.
-const EVAL_ORDER_EMPTIES: u8 = 16;
+const EVAL_ORDER_EMPTIES: u8 = 14;
 /// From this many empties upward, ordering refines the evaluation with a
 /// one-ply lookahead (max over the opponent's replies).
-const DEEP_ORDER_EMPTIES: u8 = 18;
+const DEEP_ORDER_EMPTIES: u8 = 14;
 /// Stability cutoff precondition: the bound 64 - 2*S can only cut when the
 /// opponent has at least ceil((64-alpha)/2) stable discs, so their total
 /// disc count (cheap popcount) must reach that first.
