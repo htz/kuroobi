@@ -17,6 +17,9 @@ use crate::zobrist;
 const SCORE_SCALE: f32 = 1000.0;
 /// Upper bound on any score (used as ±infinity).
 const INF: f32 = f32::MAX / 4.0;
+/// Null-window width for PVS probes (evaluator units are continuous f32,
+/// so a "zero window" needs a small epsilon).
+const PVS_EPSILON: f32 = 0.001;
 
 /// Maximum search ply (bounded by the number of board squares).
 const MAX_PLY: usize = 64;
@@ -145,6 +148,9 @@ impl Searcher {
         self.killers = [[None; 2]; MAX_PLY];
         self.history = [[0; 64]; 2];
 
+        // (Aspiration windows were measured to interact unsoundly with
+        // PVS null-window entries in the shared TT — root exactness broke.
+        // PVS + ETC alone keep the exactness invariant.)
         for d in 1..=depth {
             let hash = zobrist::compute_hash(board.black, board.white, board.player());
             let v = self.alpha_beta(board, evaluator, &mut indices, hash, d, 0, -INF, INF, false);
@@ -319,15 +325,47 @@ impl Searcher {
             children.sort_unstable_by_key(|c| c.4);
         }
 
+        // Enhanced transposition cutoff: a child entry that already proves
+        // our fail-high ends this node without any search.
+        if depth >= 4 {
+            for (_, child, child_hash, _, _) in children.iter() {
+                if let Some(e) = self.tt_probe(child, *child_hash) {
+                    if e.depth >= depth - 1 && !matches!(e.bound, Bound::Lower) && -e.value >= beta
+                    {
+                        return -e.value;
+                    }
+                }
+            }
+        }
+
         let mut best_val = -INF;
         let mut best_move = None;
 
-        for (pos, child, child_hash, flipped, _) in children.iter() {
+        for (i, (pos, child, child_hash, flipped, _)) in children.iter().enumerate() {
             indexer.apply(indices, *pos, *flipped, mover);
-            let v = -self.alpha_beta(
-                child, evaluator, indices, *child_hash, depth - 1, ply + 1,
-                -beta, -alpha, false,
-            );
+            // PVS: full window on the first child, then null-window probes
+            // with a full re-search only when a child actually improves.
+            let v = if i == 0 || alpha >= beta {
+                -self.alpha_beta(
+                    child, evaluator, indices, *child_hash, depth - 1, ply + 1,
+                    -beta, -alpha, false,
+                )
+            } else {
+                let probe = -self.alpha_beta(
+                    child, evaluator, indices, *child_hash, depth - 1, ply + 1,
+                    -(alpha + PVS_EPSILON), -alpha, false,
+                );
+                if probe > alpha && probe < beta {
+                    // Re-search with the regular window: using probe as the
+                    // lower bound is unsound under TT-induced instability
+                    -self.alpha_beta(
+                        child, evaluator, indices, *child_hash, depth - 1, ply + 1,
+                        -beta, -alpha, false,
+                    )
+                } else {
+                    probe
+                }
+            };
             indexer.undo(indices, *pos, *flipped, mover);
             if v > best_val {
                 best_val = v;
