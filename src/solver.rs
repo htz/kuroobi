@@ -8,6 +8,7 @@
 use crate::bitboard;
 use crate::board::Board;
 use crate::evaluator::Evaluator;
+use crate::pattern_index::{PatternIndexer, PatternIndices};
 use crate::color::Color;
 use crate::position::Position;
 use crate::zobrist;
@@ -941,6 +942,14 @@ impl Solver {
 
         let tt_best = self.hash_table.get(board, hash).and_then(|e| e.best);
         let eval_order = board.empty_count() >= EVAL_ORDER_EMPTIES;
+        // Incremental pattern indices for ordering evaluation: initialized
+        // once per node, then updated per candidate move — far cheaper than
+        // recomputing every pattern from scratch inside the lookahead.
+        let mut order_ix = if eval_order {
+            ev.map(|e| (e.indexer(), e.indexer().init(board.black, board.white)))
+        } else {
+            None
+        };
         let parity = parity_of(board);
         let mover = board.player();
         let mut moves: Vec<ScoredMove> = Vec::with_capacity(mobility.count_ones() as usize);
@@ -955,18 +964,21 @@ impl Solver {
             let child_hash = zobrist::update_hash_on_move(hash, pos, flipped, mover);
             let value = if Some(pos) == tt_best {
                 i32::MIN
-            } else if let (Some(e), true) = (ev, eval_order) {
+            } else if let (Some(e), Some((ix, indices))) = (ev, order_ix.as_mut()) {
                 // Pattern evaluation of the child (opponent view: lower =
                 // better for the mover). Far stronger ordering than the
                 // static heuristic in the many-empties region; the topmost
-                // region refines it with a one-ply lookahead.
-                if board.empty_count() >= DEEP2_ORDER_EMPTIES {
-                    (shallow_search(&child, e, 4, f32::NEG_INFINITY, f32::INFINITY) * 8.0) as i32
+                // region refines it with a pruned lookahead.
+                ix.apply(indices, pos, flipped, mover);
+                let v = if board.empty_count() >= DEEP2_ORDER_EMPTIES {
+                    shallow_search(&child, e, ix, indices, 4, f32::NEG_INFINITY, f32::INFINITY)
                 } else if board.empty_count() >= DEEP_ORDER_EMPTIES {
-                    (shallow_search(&child, e, 2, f32::NEG_INFINITY, f32::INFINITY) * 8.0) as i32
+                    shallow_search(&child, e, ix, indices, 2, f32::NEG_INFINITY, f32::INFINITY)
                 } else {
-                    (e.eval(&child) * 8.0) as i32
-                }
+                    e.eval_indices(&child, indices)
+                };
+                ix.undo(indices, pos, flipped, mover);
+                (v * 8.0) as i32
             } else {
                 move_ordering_value(pos, &child, parity)
             };
@@ -990,9 +1002,18 @@ struct ScoredMove {
 /// its own player's view, looking `depth` replies ahead with the
 /// evaluator. Pruned — same root value as a full-width lookahead at a
 /// fraction of the cost, which buys deeper (= better-sorted) lookaheads.
-fn shallow_search(board: &Board, ev: &Evaluator, depth: u8, alpha: f32, beta: f32) -> f32 {
+#[allow(clippy::too_many_arguments)]
+fn shallow_search(
+    board: &Board,
+    ev: &Evaluator,
+    ix: &PatternIndexer,
+    indices: &mut PatternIndices,
+    depth: u8,
+    alpha: f32,
+    beta: f32,
+) -> f32 {
     if depth == 0 {
-        return ev.eval(board);
+        return ev.eval_indices(board, indices);
     }
     let moves = board.movable();
     if moves == 0 {
@@ -1001,17 +1022,22 @@ fn shallow_search(board: &Board, ev: &Evaluator, depth: u8, alpha: f32, beta: f3
         if p.movable() == 0 {
             return board.score() as f32 * 1000.0;
         }
-        return -shallow_search(&p, ev, depth, -beta, -alpha);
+        // A pass leaves the discs (and thus the indices) unchanged
+        return -shallow_search(&p, ev, ix, indices, depth, -beta, -alpha);
     }
     let mut alpha = alpha;
     let mut best = f32::NEG_INFINITY;
+    let mover = board.player();
     let mut m = moves;
     while m != 0 {
         let sq = m.trailing_zeros();
         m &= m - 1;
+        let pos = Position(sq as u8);
         let mut child = *board;
-        child.make_move_bits(Position(sq as u8));
-        let v = -shallow_search(&child, ev, depth - 1, -beta, -alpha);
+        let flipped = child.make_move_bits(pos);
+        ix.apply(indices, pos, flipped, mover);
+        let v = -shallow_search(&child, ev, ix, indices, depth - 1, -beta, -alpha);
+        ix.undo(indices, pos, flipped, mover);
         if v > best {
             best = v;
             if v > alpha {
