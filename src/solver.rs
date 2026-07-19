@@ -853,9 +853,9 @@ impl Solver {
                 // static heuristic in the many-empties region; the topmost
                 // region refines it with a one-ply lookahead.
                 if board.empty_count() >= DEEP2_ORDER_EMPTIES {
-                    (shallow_negamax(&child, e, 2) * 8.0) as i32
+                    (shallow_search(&child, e, 4, f32::NEG_INFINITY, f32::INFINITY) * 8.0) as i32
                 } else if board.empty_count() >= DEEP_ORDER_EMPTIES {
-                    (shallow_negamax(&child, e, 1) * 8.0) as i32
+                    (shallow_search(&child, e, 2, f32::NEG_INFINITY, f32::INFINITY) * 8.0) as i32
                 } else {
                     (e.eval(&child) * 8.0) as i32
                 }
@@ -878,9 +878,11 @@ struct ScoredMove {
     value: i32,
 }
 
-/// Shallow negamax refinement for ordering: the position's value from its
-/// own player's view, looking `depth` replies ahead with the evaluator.
-fn shallow_negamax(board: &Board, ev: &Evaluator, depth: u8) -> f32 {
+/// Shallow alpha-beta refinement for ordering: the position's value from
+/// its own player's view, looking `depth` replies ahead with the
+/// evaluator. Pruned — same root value as a full-width lookahead at a
+/// fraction of the cost, which buys deeper (= better-sorted) lookaheads.
+fn shallow_search(board: &Board, ev: &Evaluator, depth: u8, alpha: f32, beta: f32) -> f32 {
     if depth == 0 {
         return ev.eval(board);
     }
@@ -891,8 +893,9 @@ fn shallow_negamax(board: &Board, ev: &Evaluator, depth: u8) -> f32 {
         if p.movable() == 0 {
             return board.score() as f32 * 1000.0;
         }
-        return -shallow_negamax(&p, ev, depth);
+        return -shallow_search(&p, ev, depth, -beta, -alpha);
     }
+    let mut alpha = alpha;
     let mut best = f32::NEG_INFINITY;
     let mut m = moves;
     while m != 0 {
@@ -900,9 +903,15 @@ fn shallow_negamax(board: &Board, ev: &Evaluator, depth: u8) -> f32 {
         m &= m - 1;
         let mut child = *board;
         child.make_move_bits(Position(sq as u8));
-        let v = -shallow_negamax(&child, ev, depth - 1);
+        let v = -shallow_search(&child, ev, depth - 1, -beta, -alpha);
         if v > best {
             best = v;
+            if v > alpha {
+                alpha = v;
+            }
+            if alpha >= beta {
+                break;
+            }
         }
     }
     best
