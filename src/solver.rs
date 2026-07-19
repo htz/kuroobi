@@ -1004,6 +1004,13 @@ fn shallow_search(board: &Board, ev: &Evaluator, depth: u8, alpha: f32, beta: f3
 /// Move-ordering heuristic (lower = searched earlier): after the move, the
 /// board is from the opponent's perspective, so high opponent mobility is
 /// bad for us.
+/// 8-neighbourhood dilation (file-major layout).
+#[inline]
+fn dilate(x: u64) -> u64 {
+    let v = x | ((x & 0x7F7F_7F7F_7F7F_7F7F) << 1) | ((x & 0xFEFE_FEFE_FEFE_FEFE) >> 1);
+    v | (v << 8) | (v >> 8)
+}
+
 fn move_ordering_value(pos: Position, child: &Board, parity: u8) -> i32 {
     use crate::pattern::sq::*;
 
@@ -1014,6 +1021,14 @@ fn move_ordering_value(pos: Position, child: &Board, parity: u8) -> i32 {
     let our_mobility =
         bitboard::mobility_count(child.opponent_bb(), child.player_bb()) as i32;
     point += (opp_mobility - our_mobility) * 5;
+
+    // Potential mobility: frontier discs (adjacent to an empty square) are
+    // attack surface — many of ours after the move is bad for us.
+    let empties_next = crate::bitboard::empty_bb(child.black, child.white);
+    let frontier = dilate(empties_next);
+    let our_frontier = (frontier & child.opponent_bb()).count_ones() as i32;
+    let opp_frontier = (frontier & child.player_bb()).count_ones() as i32;
+    point += (our_frontier - opp_frontier) * 2;
 
     point += (corner_stability(child, child.player())
         - corner_stability(child, child.player().opponent()))
