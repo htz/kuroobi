@@ -21,6 +21,15 @@ const INF: f32 = f32::MAX / 4.0;
 /// so a "zero window" needs a small epsilon).
 const PVS_EPSILON: f32 = 0.001;
 
+/// Leaf evaluations are snapped to a half-disc grid inside the search:
+/// continuous f32 values make almost every second child "slightly better",
+/// which defeats PVS null-window confirmations and value-equal TT hits.
+/// Half a disc is far below the evaluator's own noise floor.
+#[inline]
+fn quantize_leaf(v: f32) -> f32 {
+    (v * 2.0).round() * 0.5
+}
+
 /// Maximum search ply (bounded by the number of board squares).
 const MAX_PLY: usize = 64;
 /// Nodes at this remaining depth or more order children by full evaluation;
@@ -226,7 +235,7 @@ impl Searcher {
         let moves = board.movable();
         if depth == 0 {
             if moves != 0 {
-                return evaluator.eval_indices(board, indices);
+                return quantize_leaf(evaluator.eval_indices(board, indices));
             }
             let mut child = *board;
             child.pass();
@@ -235,7 +244,7 @@ impl Searcher {
                 return board.score() as f32 * SCORE_SCALE;
             }
             self.nodes += 1; // the pass "node", as the recursion counted it
-            return -evaluator.eval_indices(&child, indices);
+            return -quantize_leaf(evaluator.eval_indices(&child, indices));
         }
 
         let orig_alpha = alpha;
@@ -532,7 +541,7 @@ mod tests {
             return -reference_negamax(&child, evaluator, depth, true);
         }
         if depth == 0 {
-            return evaluator.eval(board);
+            return quantize_leaf(evaluator.eval(board));
         }
         let mut best = -INF;
         let mut m = moves;
