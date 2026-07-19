@@ -102,6 +102,26 @@ fn quadrant_id(sq: u8) -> u8 {
     }
 }
 
+/// Board mask of each quadrant (file-major), indexed by quadrant_id bit.
+const QUADRANT_MASKS: [(u8, u64); 4] = [
+    (1, 0x0000_0000_0F0F_0F0F), // files 0-3, ranks 0-3
+    (2, 0x0F0F_0F0F_0000_0000), // files 4-7, ranks 0-3
+    (4, 0x0000_0000_F0F0_F0F0), // files 0-3, ranks 4-7
+    (8, 0xF0F0_F0F0_0000_0000), // files 4-7, ranks 4-7
+];
+
+/// Squares lying in quadrants with an odd number of empties.
+#[inline]
+fn odd_quadrant_mask(parity: u8) -> u64 {
+    let mut m = 0u64;
+    for (id, mask) in QUADRANT_MASKS {
+        if parity & id != 0 {
+            m |= mask;
+        }
+    }
+    m
+}
+
 #[inline]
 fn parity_of(board: &Board) -> u8 {
     let mut parity = 0u8;
@@ -601,44 +621,54 @@ impl Solver {
         let orig_lower = lower;
         let mut best = lower;
         let mut any = false;
+        let mut cut = false;
         let opponent_bb = board.opponent_bb();
         // Children of a 5-empty node dispatch to last4 and never probe, so
         // their hashes are only needed one level up.
         let need_child_hash = board.empty_count() > 5;
         let mover = board.player();
 
-        let mut e = board.empty();
-        while e != 0 {
-            let sq = e.trailing_zeros() as u8;
-            e &= e - 1;
+        // Odd-quadrant moves first (quadrant parity: filling the last
+        // empty of a region tends to keep the tempo).
+        let empties = board.empty();
+        let odd = odd_quadrant_mask(parity_of(board));
+        'passes: for pass_mask in [empties & odd, empties & !odd] {
+            let mut e = pass_mask;
+            while e != 0 {
+                let sq = e.trailing_zeros() as u8;
+                e &= e - 1;
 
-            if self.neighbours.get(sq) & opponent_bb == 0 {
-                continue;
-            }
-            let pos = Position(sq);
-            let pos_bit = pos.to_bit();
-            let flips = bitboard::flippable(board.player_bb(), board.opponent_bb(), pos_bit);
-            if flips == 0 {
-                continue;
-            }
+                if self.neighbours.get(sq) & opponent_bb == 0 {
+                    continue;
+                }
+                let pos = Position(sq);
+                let pos_bit = pos.to_bit();
+                let flips = bitboard::flippable(board.player_bb(), board.opponent_bb(), pos_bit);
+                if flips == 0 {
+                    continue;
+                }
 
-            any = true;
-            let mut child = *board;
-            let flipped = child.make_move_bits(pos);
-            let child_hash = if need_child_hash {
-                zobrist::update_hash_on_move(hash, pos, flipped, mover)
-            } else {
-                0
-            };
-            let val = -self.alpha_beta(&mut child, child_hash, -upper, -best.max(orig_lower), false);
+                any = true;
+                let mut child = *board;
+                let flipped = child.make_move_bits(pos);
+                let child_hash = if need_child_hash {
+                    zobrist::update_hash_on_move(hash, pos, flipped, mover)
+                } else {
+                    0
+                };
+                let val =
+                    -self.alpha_beta(&mut child, child_hash, -upper, -best.max(orig_lower), false);
 
-            if val > best {
-                best = val;
-            }
-            if best >= upper {
-                break;
+                if val > best {
+                    best = val;
+                }
+                if best >= upper {
+                    cut = true;
+                    break 'passes;
+                }
             }
         }
+        let _ = cut;
 
         if !any {
             if passed {
