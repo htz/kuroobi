@@ -145,39 +145,62 @@ fn parity_of(board: &Board) -> u8 {
 
 const VALUE_INF: i32 = i32::MAX / 2;
 
+/// Compact 32-byte entry: two fit in one cache line, so a 2-way bucket
+/// costs a single memory access. `(black, white, player)` fully identifies
+/// the position — no separate hash key is needed (the hash only picks the
+/// bucket). Scores are stored as i8 with MIN/MAX as -/+infinity sentinels.
 #[derive(Clone, Copy)]
 struct HashEntry {
-    key: u64,
     black: u64,
     white: u64,
-    player: Color,
-    lower: i32,
-    upper: i32,
+    lower8: i8,
+    upper8: i8,
     depth: u8,
-    best: Option<Position>,
-    used: bool,
+    /// Square index of the best move; 255 = none.
+    best8: u8,
+    /// Bit 0: used. Bit 1: player is White.
+    flags: u8,
+    _pad: [u8; 3],
 }
 
 impl HashEntry {
     const EMPTY: HashEntry = HashEntry {
-        key: 0,
         black: 0,
         white: 0,
-        player: Color::Black,
-        lower: -VALUE_INF,
-        upper: VALUE_INF,
+        lower8: i8::MIN,
+        upper8: i8::MAX,
         depth: 0,
-        best: None,
-        used: false,
+        best8: 255,
+        flags: 0,
+        _pad: [0; 3],
     };
 
     #[inline]
-    fn matches(&self, board: &Board, hash: u64) -> bool {
-        self.used
-            && self.key == hash
+    fn used(&self) -> bool {
+        self.flags & 1 != 0
+    }
+
+    #[inline]
+    fn lower(&self) -> i32 {
+        if self.lower8 == i8::MIN { -VALUE_INF } else { self.lower8 as i32 }
+    }
+
+    #[inline]
+    fn upper(&self) -> i32 {
+        if self.upper8 == i8::MAX { VALUE_INF } else { self.upper8 as i32 }
+    }
+
+    #[inline]
+    fn best(&self) -> Option<Position> {
+        (self.best8 < 64).then_some(Position(self.best8))
+    }
+
+    #[inline]
+    fn matches(&self, board: &Board) -> bool {
+        self.used()
             && self.black == board.black
             && self.white == board.white
-            && self.player == board.player
+            && (self.flags >> 1) & 1 == board.player as u8
     }
 }
 
@@ -206,10 +229,10 @@ impl HashTable {
     fn get(&self, board: &Board, hash: u64) -> Option<&HashEntry> {
         let base = ((hash & self.mask) as usize) << 1;
         let pair = &self.entries[base..base + 2];
-        if pair[0].matches(board, hash) {
+        if pair[0].matches(board) {
             return Some(&pair[0]);
         }
-        if pair[1].matches(board, hash) {
+        if pair[1].matches(board) {
             return Some(&pair[1]);
         }
         None
@@ -224,10 +247,11 @@ impl HashTable {
         value: i32,
         best: Option<Position>,
     ) {
+        let best8 = best.map_or(255, |p| p.index());
         let base = ((hash & self.mask) as usize) << 1;
-        let slot = if self.entries[base].matches(board, hash) {
+        let slot = if self.entries[base].matches(board) {
             base
-        } else if self.entries[base + 1].matches(board, hash) {
+        } else if self.entries[base + 1].matches(board) {
             base + 1
         } else {
             // Evict the shallower slot of the pair
@@ -237,29 +261,28 @@ impl HashTable {
                 base + 1
             };
             let entry = &mut self.entries[victim];
-            if !entry.used || entry.depth <= board.empty_count() {
+            if !entry.used() || entry.depth <= board.empty_count() {
                 *entry = HashEntry {
-                    key: hash,
                     black: board.black,
                     white: board.white,
-                    player: board.player,
-                    lower: if value > alpha { value } else { -VALUE_INF },
-                    upper: if value < beta { value } else { VALUE_INF },
+                    lower8: if value > alpha { value as i8 } else { i8::MIN },
+                    upper8: if value < beta { value as i8 } else { i8::MAX },
                     depth: board.empty_count(),
-                    best,
-                    used: true,
+                    best8,
+                    flags: 1 | ((board.player as u8) << 1),
+                    _pad: [0; 3],
                 };
             }
             return;
         };
         let entry = &mut self.entries[slot];
-        if value < beta && value < entry.upper {
-            entry.upper = value;
+        if value < beta && (value as i8) < entry.upper8 {
+            entry.upper8 = value as i8;
         }
-        if value > alpha && value > entry.lower {
-            entry.lower = value;
+        if value > alpha && (value as i8) > entry.lower8 {
+            entry.lower8 = value as i8;
         }
-        entry.best = best;
+        entry.best8 = best8;
     }
 }
 
@@ -441,17 +464,17 @@ impl Solver {
         self.nodes += 1;
 
         if let Some(v) = self.hash_table.get(board, hash) {
-            if v.lower >= v.upper {
-                return v.lower;
+            if v.lower() >= v.upper() {
+                return v.lower();
             }
-            if upper > v.upper {
-                upper = v.upper;
+            if upper > v.upper() {
+                upper = v.upper();
                 if upper <= lower {
                     return upper;
                 }
             }
-            if lower < v.lower {
-                lower = v.lower;
+            if lower < v.lower() {
+                lower = v.lower();
                 if lower >= upper {
                     return lower;
                 }
@@ -482,8 +505,8 @@ impl Solver {
         if board.empty_count() >= ETC_EMPTIES {
             for m in &moves {
                 if let Some(e) = self.hash_table.get(&m.board, m.hash) {
-                    if -e.upper >= upper {
-                        return -e.upper;
+                    if -e.upper() >= upper {
+                        return -e.upper();
                     }
                 }
             }
@@ -555,17 +578,17 @@ impl Solver {
         self.nodes += 1;
 
         if let Some(v) = self.hash_table.get(board, hash) {
-            if v.lower >= v.upper {
-                return v.lower;
+            if v.lower() >= v.upper() {
+                return v.lower();
             }
-            if beta > v.upper {
-                beta = v.upper;
+            if beta > v.upper() {
+                beta = v.upper();
                 if beta <= alpha {
                     return beta;
                 }
             }
-            if alpha < v.lower {
-                alpha = v.lower;
+            if alpha < v.lower() {
+                alpha = v.lower();
                 if alpha >= beta {
                     return alpha;
                 }
@@ -642,17 +665,17 @@ impl Solver {
         let mut lower = alpha;
         let mut upper = beta;
         if let Some(v) = self.shallow_table.get(board, hash) {
-            if v.lower >= v.upper {
-                return v.lower;
+            if v.lower() >= v.upper() {
+                return v.lower();
             }
-            if upper > v.upper {
-                upper = v.upper;
+            if upper > v.upper() {
+                upper = v.upper();
                 if upper <= lower {
                     return upper;
                 }
             }
-            if lower < v.lower {
-                lower = v.lower;
+            if lower < v.lower() {
+                lower = v.lower();
                 if lower >= upper {
                     return lower;
                 }
@@ -940,7 +963,7 @@ impl Solver {
             return Vec::new();
         }
 
-        let tt_best = self.hash_table.get(board, hash).and_then(|e| e.best);
+        let tt_best = self.hash_table.get(board, hash).and_then(|e| e.best());
         let eval_order = board.empty_count() >= EVAL_ORDER_EMPTIES;
         // Incremental pattern indices for ordering evaluation: initialized
         // once per node, then updated per candidate move — far cheaper than
