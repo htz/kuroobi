@@ -186,10 +186,13 @@ struct HashTable {
 }
 
 impl HashTable {
+    /// 2-way associative: same total entry count, half as many buckets.
+    /// A deep entry no longer gets evicted just because a shallow position
+    /// happens to share its bucket.
     fn new(bit_size: u32) -> HashTable {
         let size = 1usize << bit_size;
         HashTable {
-            mask: (size - 1) as u64,
+            mask: ((size >> 1) - 1) as u64,
             entries: vec![HashEntry::EMPTY; size],
         }
     }
@@ -200,8 +203,15 @@ impl HashTable {
 
     #[inline]
     fn get(&self, board: &Board, hash: u64) -> Option<&HashEntry> {
-        let entry = &self.entries[(hash & self.mask) as usize];
-        entry.matches(board, hash).then_some(entry)
+        let base = ((hash & self.mask) as usize) << 1;
+        let pair = &self.entries[base..base + 2];
+        if pair[0].matches(board, hash) {
+            return Some(&pair[0]);
+        }
+        if pair[1].matches(board, hash) {
+            return Some(&pair[1]);
+        }
+        None
     }
 
     fn update(
@@ -213,28 +223,42 @@ impl HashTable {
         value: i32,
         best: Option<Position>,
     ) {
-        let entry = &mut self.entries[(hash & self.mask) as usize];
-        if entry.matches(board, hash) {
-            if value < beta && value < entry.upper {
-                entry.upper = value;
-            }
-            if value > alpha && value > entry.lower {
-                entry.lower = value;
-            }
-            entry.best = best;
-        } else if !entry.used || entry.depth <= board.empty_count() {
-            *entry = HashEntry {
-                key: hash,
-                black: board.black,
-                white: board.white,
-                player: board.player,
-                lower: if value > alpha { value } else { -VALUE_INF },
-                upper: if value < beta { value } else { VALUE_INF },
-                depth: board.empty_count(),
-                best,
-                used: true,
+        let base = ((hash & self.mask) as usize) << 1;
+        let slot = if self.entries[base].matches(board, hash) {
+            base
+        } else if self.entries[base + 1].matches(board, hash) {
+            base + 1
+        } else {
+            // Evict the shallower slot of the pair
+            let victim = if self.entries[base].depth <= self.entries[base + 1].depth {
+                base
+            } else {
+                base + 1
             };
+            let entry = &mut self.entries[victim];
+            if !entry.used || entry.depth <= board.empty_count() {
+                *entry = HashEntry {
+                    key: hash,
+                    black: board.black,
+                    white: board.white,
+                    player: board.player,
+                    lower: if value > alpha { value } else { -VALUE_INF },
+                    upper: if value < beta { value } else { VALUE_INF },
+                    depth: board.empty_count(),
+                    best,
+                    used: true,
+                };
+            }
+            return;
+        };
+        let entry = &mut self.entries[slot];
+        if value < beta && value < entry.upper {
+            entry.upper = value;
         }
+        if value > alpha && value > entry.lower {
+            entry.lower = value;
+        }
+        entry.best = best;
     }
 }
 
