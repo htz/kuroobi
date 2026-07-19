@@ -30,6 +30,7 @@ pub mod board;
 pub mod zobrist;
 pub mod pattern;
 pub mod pattern_index;
+pub mod stability;
 pub mod game;
 pub mod evaluator;
 pub mod search;
