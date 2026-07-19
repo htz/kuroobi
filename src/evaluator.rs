@@ -22,14 +22,26 @@ use crate::pattern_index::{PatternIndexer, PatternIndices};
 /// Number of game stages (moves played: 0..=60).
 pub const STAGE_COUNT: usize = 61;
 
-/// Magic bytes identifying a weight file.
-const WEIGHT_MAGIC: &[u8; 8] = b"BBRVWT01";
+/// Magic bytes identifying a weight file (v2: adds disc-count tables).
+const WEIGHT_MAGIC: &[u8; 8] = b"BBRVWT02";
+/// v1 format: pattern tables only. Still loadable (disc-count weights zero).
+const WEIGHT_MAGIC_V1: &[u8; 8] = b"BBRVWT01";
+
+/// Cells in the per-stage disc-count table (player disc count 0..=64).
+const NUM_TABLE_SIZE: usize = 65;
 
 /// Stage-based evaluator over a static pattern library.
+///
+/// Besides the pattern features it carries one extra
+/// feature: a per-stage table indexed by the current player's disc count.
+/// Since the total disc count is fixed within a stage, this is effectively
+/// the disc differential — information the local patterns don't provide.
 pub struct Evaluator {
     patterns: &'static [Pattern],
     /// weights[stage][pattern][ternary_index]
     weights: Vec<Vec<Vec<f32>>>,
+    /// num_weights[stage][player disc count]
+    num_weights: Vec<[f32; NUM_TABLE_SIZE]>,
     /// Lookup tables for incremental index maintenance during search.
     indexer: PatternIndexer,
 }
@@ -135,6 +147,7 @@ impl Evaluator {
         Evaluator {
             patterns,
             weights: vec![stage_weights; STAGE_COUNT],
+            num_weights: vec![[0.0f32; NUM_TABLE_SIZE]; STAGE_COUNT],
             indexer: PatternIndexer::new(patterns),
         }
     }
@@ -168,7 +181,13 @@ impl Evaluator {
                 score += table[idx];
             }
         }
-        score
+        score + self.num_weights[stage][self.num_index(board)]
+    }
+
+    /// Disc-count feature index: the current player's disc count.
+    #[inline]
+    fn num_index(&self, board: &Board) -> usize {
+        board.player_bb().count_ones() as usize
     }
 
     /// Evaluate from incrementally-maintained pattern indices (see
@@ -180,11 +199,17 @@ impl Evaluator {
         let stage = Self::stage(board);
         self.indexer
             .eval_sum(indices, board.player(), &self.weights[stage])
+            + self.num_weights[stage][self.num_index(board)]
     }
 
     /// Direct access to one weight entry (for training).
     pub fn weight(&self, stage: usize, pattern: usize, index: usize) -> f32 {
         self.weights[stage][pattern][index]
+    }
+
+    /// Disc-count feature weight for `count` player discs at `stage`.
+    pub fn num_weight(&self, stage: usize, count: usize) -> f32 {
+        self.num_weights[stage][count]
     }
 
     pub fn set_weight(&mut self, stage: usize, pattern: usize, index: usize, value: f32) {
@@ -214,6 +239,8 @@ impl Evaluator {
                 self.weights[stage][pi][idx] += delta;
             }
         }
+        let num_idx = self.num_index(board);
+        self.num_weights[stage][num_idx] += delta;
         error
     }
 
@@ -235,6 +262,11 @@ impl Evaluator {
                 self.weights[stage][pi][idx] += delta;
             }
         }
+        // Disc-count cell: registered with the optimizer as a virtual
+        // pattern one past the last real one.
+        let num_idx = self.num_index(board);
+        let delta = opt.step(stage, self.patterns.len(), num_idx, NUM_TABLE_SIZE, error);
+        self.num_weights[stage][num_idx] += delta;
         error
     }
 
@@ -323,7 +355,8 @@ impl Evaluator {
     ///
     /// Layout (little-endian):
     ///   magic [8] | stage_count u32 | pattern_count u32 |
-    ///   table_size u32 per pattern | f32 tables in [stage][pattern] order
+    ///   table_size u32 per pattern | f32 tables in [stage][pattern] order |
+    ///   (v2 only) f32 disc-count tables, 65 per stage
     pub fn save_weights(&self, path: &Path) -> io::Result<()> {
         let tmp_path = path.with_extension("tmp");
         {
@@ -341,6 +374,11 @@ impl Evaluator {
                     }
                 }
             }
+            for table in &self.num_weights {
+                for &v in table.iter() {
+                    w.write_all(&v.to_le_bytes())?;
+                }
+            }
             w.flush()?;
             w.get_ref().sync_all()?;
         }
@@ -348,13 +386,15 @@ impl Evaluator {
     }
 
     /// Load weights previously written by `save_weights`. The file must match
-    /// this evaluator's pattern library exactly.
+    /// this evaluator's pattern library exactly. v1 files (pattern tables
+    /// only) load with zeroed disc-count weights.
     pub fn load_weights(&mut self, path: &Path) -> io::Result<()> {
         let mut r = BufReader::new(File::open(path)?);
 
         let mut magic = [0u8; 8];
         r.read_exact(&mut magic)?;
-        if &magic != WEIGHT_MAGIC {
+        let v1 = &magic == WEIGHT_MAGIC_V1;
+        if !v1 && &magic != WEIGHT_MAGIC {
             return Err(io::Error::new(io::ErrorKind::InvalidData, "bad magic"));
         }
 
@@ -377,6 +417,18 @@ impl Evaluator {
         let mut f32buf = [0u8; 4];
         for stage in &mut self.weights {
             for table in stage {
+                for v in table.iter_mut() {
+                    r.read_exact(&mut f32buf)?;
+                    *v = f32::from_le_bytes(f32buf);
+                }
+            }
+        }
+        if v1 {
+            for table in self.num_weights.iter_mut() {
+                table.fill(0.0);
+            }
+        } else {
+            for table in self.num_weights.iter_mut() {
                 for v in table.iter_mut() {
                     r.read_exact(&mut f32buf)?;
                     *v = f32::from_le_bytes(f32buf);
@@ -412,11 +464,12 @@ mod tests {
     }
 
     /// Effective gradient multiplier for one position: Σ k² over distinct
-    /// active cells, where k = number of orientations hitting that cell.
-    /// A cell hit k times is updated k times and read back k times, so the
-    /// prediction moves by lr * error * Σk² per step. On asymmetric
-    /// positions Σk² = 64 (all cells distinct); the color/rotation-symmetric
-    /// initial position collapses many cells (Σk² = 216 there).
+    /// active cells, where k = number of orientations hitting that cell,
+    /// plus 1 for the disc-count cell (hit exactly once). A cell hit k
+    /// times is updated k times and read back k times, so the prediction
+    /// moves by lr * error * (Σk² + 1) per step. On asymmetric positions
+    /// Σk² = 64 (all cells distinct); the color/rotation-symmetric initial
+    /// position collapses many cells (Σk² = 216 there).
     fn gradient_multiplier(board: &Board) -> f32 {
         use std::collections::HashMap;
         let mut counts: HashMap<(usize, usize), u32> = HashMap::new();
@@ -425,13 +478,13 @@ mod tests {
                 *counts.entry((pi, idx)).or_insert(0) += 1;
             }
         }
-        counts.values().map(|&k| (k * k) as f32).sum()
+        counts.values().map(|&k| (k * k) as f32).sum::<f32>() + 1.0
     }
 
     /// Learning rate safe for repeated single-position training on any
-    /// position: lr * Σk² < 2 with Σk² ≤ 216 → lr < 0.009. The Go trainer's
-    /// lr = 0.01 is safe in its regime (SGD over many mostly-asymmetric
-    /// examples), but not for this stress pattern.
+    /// position: lr * (Σk² + 1) < 2 with Σk² ≤ 216 → lr < 0.009. The Go
+    /// trainer's lr = 0.01 is safe in its regime (SGD over many mostly-
+    /// asymmetric examples), but not for this stress pattern.
     const LR: f32 = 0.005;
 
     #[test]
@@ -478,10 +531,10 @@ mod tests {
             let multiplier = gradient_multiplier(&b);
             if plies == 0 {
                 // 8-fold symmetry of the start position collapses many cells
-                assert_eq!(multiplier, 216.0, "symmetric start: Σk² = 216");
+                assert_eq!(multiplier, 217.0, "symmetric start: Σk² + 1 = 217");
             } else {
                 // Any first move retains one diagonal mirror symmetry
-                assert_eq!(multiplier, 192.0, "first move keeps a mirror: Σk² = 192");
+                assert_eq!(multiplier, 193.0, "first move keeps a mirror: Σk² + 1 = 193");
             }
 
             let mut e = Evaluator::new(EGAROUCID_PATTERNS);
@@ -578,7 +631,7 @@ mod tests {
         }
         let adam_residual = (target - adam_eval.eval(&b)).abs();
         // Adam's steady-state oscillation is bounded by ~(active cells * lr)
-        let band = 64.0 * lr * 2.0;
+        let band = 65.0 * lr * 2.0;
         assert!(
             adam_residual < band,
             "Adam at the same lr stays convergent, residual {adam_residual} (band {band})"
@@ -638,8 +691,11 @@ mod tests {
         }
         let final_score = 10.0f32; // pretend Black wins by 10
 
+        // lr sizing: Adam's steady-state swing is ~(active cells + 8 num
+        // steps) * lr = 72 * lr per position; 0.03 keeps it inside the
+        // ±3.0 tolerance below.
         let mut e = Evaluator::new(EGAROUCID_PATTERNS);
-        let mut opt = AdamOptimizer::new(0.05);
+        let mut opt = AdamOptimizer::new(0.03);
         let mut last_err = f32::MAX;
         for _ in 0..200 {
             last_err = e.train_game(&history, final_score, 1.0, &mut opt);
@@ -777,6 +833,49 @@ mod tests {
         assert_eq!(e2.weight(30, 8, 0), 0.0);
 
         std::fs::remove_file(&path).ok();
+    }
+
+    #[test]
+    fn test_num_weights_roundtrip_and_v1_compat() {
+        let dir = std::env::temp_dir().join("bbrv_weight_test_v2");
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("weights_v2.bin");
+
+        // Train one step so the disc-count cell becomes nonzero.
+        let mut e = Evaluator::new(EGAROUCID_PATTERNS);
+        let b = Board::new();
+        e.update_weights(&b, 10.0, 0.005);
+        let expected = e.eval(&b);
+        e.save_weights(&path).unwrap();
+
+        // v2 roundtrip preserves the disc-count contribution exactly.
+        let mut e2 = Evaluator::new(EGAROUCID_PATTERNS);
+        e2.load_weights(&path).unwrap();
+        assert_eq!(e2.eval(&b), expected, "v2 roundtrip must be lossless");
+
+        // A v1 file is the same bytes minus the trailing disc-count tables
+        // and with the old magic; it must load with zeroed num weights.
+        let mut bytes = std::fs::read(&path).unwrap();
+        bytes[..8].copy_from_slice(b"BBRVWT01");
+        bytes.truncate(bytes.len() - STAGE_COUNT * 65 * 4);
+        let v1_path = dir.join("weights_v1.bin");
+        std::fs::write(&v1_path, bytes).unwrap();
+
+        let mut e3 = Evaluator::new(EGAROUCID_PATTERNS);
+        e3.load_weights(&v1_path).unwrap();
+        let delta = expected - e3.eval(&b);
+        // Difference is exactly the (single) trained disc-count cell.
+        assert!(
+            delta.abs() > 0.0,
+            "v1 load must zero the disc-count weights"
+        );
+        assert!(
+            (delta - 0.005 * 10.0).abs() < 1e-4,
+            "missing term is one SGD step on the num cell, got {delta}"
+        );
+
+        std::fs::remove_file(&path).ok();
+        std::fs::remove_file(&v1_path).ok();
     }
 
     #[test]
