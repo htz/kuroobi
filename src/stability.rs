@@ -42,26 +42,22 @@ const DIAGS: ([u64; 15], [u64; 15]) = diag_masks();
 /// Squares whose full line (in one direction) is completely occupied.
 #[inline]
 fn full_lines(occ: u64) -> (u64, u64, u64, u64) {
-    // Horizontal line for rank r = same bit r of every file
-    let mut full_h = 0u64;
-    let mut r = 0;
-    while r < 8 {
-        let m = RANK0 << r;
-        if occ & m == m {
-            full_h |= m;
-        }
-        r += 1;
-    }
-    // Vertical line = one file byte
-    let mut full_v = 0u64;
-    let mut f = 0;
-    while f < 8 {
-        let m = 0xFFu64 << (8 * f);
-        if occ & m == m {
-            full_v |= m;
-        }
-        f += 1;
-    }
+    // Horizontal (rank) lines: AND-reduce the 8 file bytes; bit r of the
+    // result is set iff rank r is occupied in every file. Broadcast back.
+    let mut h = occ;
+    h &= h >> 32;
+    h &= h >> 16;
+    h &= h >> 8;
+    let full_h = (h & 0xFF) * RANK0;
+
+    // Vertical (file) lines: AND-reduce the 8 bits inside each byte down
+    // to bit 0, then broadcast each byte.
+    let mut v = occ & (occ >> 4) & 0x0F0F_0F0F_0F0F_0F0F;
+    v &= v >> 2;
+    v &= v >> 1;
+    let full_v = (v & RANK0) * 0xFF;
+
+    // Diagonals: 15 per direction, via precomputed masks
     let (d9s, d7s) = DIAGS;
     let mut full_d9 = 0u64;
     let mut full_d7 = 0u64;
