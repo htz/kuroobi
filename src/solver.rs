@@ -21,9 +21,25 @@ const EVAL_ORDER_EMPTIES: u8 = 16;
 /// From this many empties upward, ordering refines the evaluation with a
 /// one-ply lookahead (max over the opponent's replies).
 const DEEP_ORDER_EMPTIES: u8 = 18;
-/// Stability cutoff: only probe stable discs when alpha is at least this
-/// high (the bound 64 - 2*opp_stable cannot cut below it otherwise).
-const STABILITY_MIN_ALPHA: i32 = 12;
+/// Stability cutoff precondition: the bound 64 - 2*S can only cut when the
+/// opponent has at least ceil((64-alpha)/2) stable discs, so their total
+/// disc count (cheap popcount) must reach that first.
+#[inline]
+fn stability_cut(board: &Board, alpha: i32, beta: i32) -> Option<i32> {
+    // Upper bound via the opponent's stable discs (fail low)
+    let need = (64 - alpha + 1) / 2;
+    if need <= 32 && (board.opponent_bb().count_ones() as i32) >= need {
+        let bound =
+            64 - 2 * crate::stability::stable_count(board.opponent_bb(), board.player_bb()) as i32;
+        if bound <= alpha {
+            return Some(bound);
+        }
+    }
+    // (A symmetric fail-high cut via our own stable discs was measured to
+    // cost more in stability computations than it saved — omitted.)
+    let _ = beta;
+    None
+}
 /// From this many empties upward, ordering uses a two-ply lookahead.
 const DEEP2_ORDER_EMPTIES: u8 = 21;
 
@@ -389,11 +405,8 @@ impl Solver {
 
         // Stability cutoff: the opponent's stable discs can never be
         // flipped, so our final score is at most 64 - 2*|opp stable|.
-        if lower >= STABILITY_MIN_ALPHA {
-            let bound = 64 - 2 * crate::stability::stable_count(board.opponent_bb(), board.player_bb()) as i32;
-            if bound <= lower {
-                return bound;
-            }
+        if let Some(bound) = stability_cut(board, lower, upper) {
+            return bound;
         }
 
         let moves = self.sorted_moves(board, hash, ev);
@@ -492,11 +505,8 @@ impl Solver {
             }
         }
 
-        if alpha >= STABILITY_MIN_ALPHA {
-            let bound = 64 - 2 * crate::stability::stable_count(board.opponent_bb(), board.player_bb()) as i32;
-            if bound <= alpha {
-                return bound;
-            }
+        if let Some(bound) = stability_cut(board, alpha, beta) {
+            return bound;
         }
 
         let orig_alpha = alpha;
@@ -544,6 +554,10 @@ impl Solver {
     /// Plain alpha-beta over the empty list, with the last-4 fast path.
     fn alpha_beta(&mut self, board: &mut Board, alpha: i32, beta: i32, passed: bool) -> i32 {
         self.nodes += 1;
+
+        if let Some(bound) = stability_cut(board, alpha, beta) {
+            return bound;
+        }
 
         if board.empty_count() == 4 {
             let mut e = board.empty();

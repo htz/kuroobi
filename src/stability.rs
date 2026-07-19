@@ -78,40 +78,156 @@ fn full_lines(occ: u64) -> (u64, u64, u64, u64) {
     (full_h, full_v, full_d9, full_d7)
 }
 
-/// Edge masks (file-major): rank-0 edge, rank-7 edge, file-0 edge, file-7.
-const EDGE_R0: u64 = RANK0;
-const EDGE_R7: u64 = RANK7;
-const EDGE_F0: u64 = 0xFF;
-const EDGE_F7: u64 = 0xFFu64 << 56;
+// ---------------------------------------------------------------------------
+// Exact edge stability: an edge disc can only ever be flipped along its own
+// edge, so each edge is a self-contained 1-D game over 3^8 configurations.
+// A disc is edge-stable iff NO sequence of placements (either color on any
+// empty square — a superset of what 2-D legality allows, hence conservative)
+// can ever flip it. Precomputed by greatest-fixpoint iteration into a
+// 64 KiB table: index = own_byte << 8 | opp_byte, value = stable own mask.
+// ---------------------------------------------------------------------------
 
-/// Stable own discs on one edge: full edge -> every own disc on it;
-/// otherwise own-colored runs anchored at either corner.
-/// `step` advances along the edge from `corner_a` to `corner_b`.
+use std::sync::OnceLock;
+
+/// 1-D placement with mandatory flips: `mover` places at empty square `s`.
+/// Returns (new_mover_bits, new_other_bits).
+fn place_1d(mover: u8, other: u8, s: u8) -> (u8, u8) {
+    let mut flipped = 0u8;
+    // Left of s
+    let mut run = 0u8;
+    let mut i = s;
+    while i > 0 {
+        i -= 1;
+        let b = 1u8 << i;
+        if other & b != 0 {
+            run |= b;
+        } else {
+            if mover & b != 0 {
+                flipped |= run;
+            }
+            break;
+        }
+    }
+    // Right of s
+    run = 0;
+    i = s;
+    while i < 7 {
+        i += 1;
+        let b = 1u8 << i;
+        if other & b != 0 {
+            run |= b;
+        } else {
+            if mover & b != 0 {
+                flipped |= run;
+            }
+            break;
+        }
+    }
+    (mover | (1 << s) | flipped, other & !flipped)
+}
+
+/// Greatest-fixpoint edge-stability table.
+fn build_edge_table() -> Box<[u8; 65536]> {
+    let mut stable = vec![0u8; 65536].into_boxed_slice();
+    // Initialize: every own disc assumed stable (invalid configs stay 0)
+    for own in 0..256usize {
+        for opp in 0..256usize {
+            if own & opp == 0 {
+                stable[(own << 8) | opp] = own as u8;
+            }
+        }
+    }
+    // Iterate: a disc stays stable only if every single placement keeps it
+    // unflipped and stable in the successor configuration.
+    loop {
+        let mut changed = false;
+        for own in 0..256usize {
+            for opp in 0..256usize {
+                if own & opp != 0 {
+                    continue;
+                }
+                let idx = (own << 8) | opp;
+                let mut s_mask = stable[idx];
+                if s_mask == 0 {
+                    continue;
+                }
+                let empty = !(own | opp) as u8;
+                let mut e = empty;
+                while e != 0 {
+                    let sq = e.trailing_zeros() as u8;
+                    e &= e - 1;
+                    // Own places: own discs can't flip, but successor matters
+                    let (no, nx) = place_1d(own as u8, opp as u8, sq);
+                    s_mask &= stable[((no as usize) << 8) | nx as usize];
+                    // Opponent places: flips own discs directly
+                    let (po, px) = place_1d(opp as u8, own as u8, sq);
+                    // px = surviving own discs; own & !px were flipped
+                    s_mask &= px & stable[((px as usize) << 8) | po as usize];
+                    if s_mask == 0 {
+                        break;
+                    }
+                }
+                if s_mask != stable[idx] {
+                    stable[idx] = s_mask;
+                    changed = true;
+                }
+            }
+        }
+        if !changed {
+            break;
+        }
+    }
+    stable.try_into().expect("size 65536")
+}
+
+fn edge_table() -> &'static [u8; 65536] {
+    static TABLE: OnceLock<Box<[u8; 65536]>> = OnceLock::new();
+    TABLE.get_or_init(build_edge_table)
+}
+
+/// Gather the 8 bits of rank `r` (one per file) into a byte, bit = file.
 #[inline]
-fn edge_stable(own: u64, occ: u64, edge: u64, corner_a: u8, step: u8) -> u64 {
-    if occ & edge == edge {
-        return own & edge;
+fn gather_rank(x: u64, r: u32) -> u8 {
+    let mut out = 0u8;
+    let mut f = 0;
+    while f < 8 {
+        if x & (1u64 << (f * 8 + r)) != 0 {
+            out |= 1 << f;
+        }
+        f += 1;
     }
+    out
+}
+
+/// Scatter a byte back onto rank `r` (bit f -> square f*8 + r).
+#[inline]
+fn scatter_rank(mask: u8, r: u32) -> u64 {
+    let mut out = 0u64;
+    let mut f = 0;
+    while f < 8 {
+        if mask & (1 << f) != 0 {
+            out |= 1u64 << (f * 8 + r);
+        }
+        f += 1;
+    }
+    out
+}
+
+/// Exact stable own discs on the four edges.
+fn edge_stable_all(own: u64, opp: u64) -> u64 {
+    let t = edge_table();
     let mut stable = 0u64;
-    // Run from corner_a forward
-    let mut sq = corner_a;
-    for _ in 0..8 {
-        let bit = 1u64 << sq;
-        if own & bit == 0 {
-            break;
-        }
-        stable |= bit;
-        sq = sq.wrapping_add(step);
+    // Rank edges (r = 0 and 7)
+    for r in [0u32, 7] {
+        let o = gather_rank(own, r);
+        let x = gather_rank(opp, r);
+        stable |= scatter_rank(t[((o as usize) << 8) | x as usize], r);
     }
-    // Run from corner_b backward
-    let mut sq = corner_a.wrapping_add(step.wrapping_mul(7));
-    for _ in 0..8 {
-        let bit = 1u64 << sq;
-        if own & bit == 0 {
-            break;
-        }
-        stable |= bit;
-        sq = sq.wrapping_sub(step);
+    // File edges (f = 0 and 7): file bytes are contiguous
+    for f in [0u32, 7] {
+        let o = ((own >> (8 * f)) & 0xFF) as usize;
+        let x = ((opp >> (8 * f)) & 0xFF) as usize;
+        stable |= ((t[(o << 8) | x] as u64) << (8 * f)) & (0xFFu64 << (8 * f));
     }
     stable
 }
@@ -121,11 +237,8 @@ pub fn stable_discs(own: u64, opp: u64) -> u64 {
     let occ = own | opp;
     let (full_h, full_v, full_d9, full_d7) = full_lines(occ);
 
-    // Seed: edge stability + interior discs on four full lines
-    let mut stable = edge_stable(own, occ, EDGE_R0, 0, 8)
-        | edge_stable(own, occ, EDGE_R7, 7, 8)
-        | edge_stable(own, occ, EDGE_F0, 0, 1)
-        | edge_stable(own, occ, EDGE_F7, 56, 1);
+    // Seed: exact edge stability + interior discs on four full lines
+    let mut stable = edge_stable_all(own, opp);
     stable |= own & full_h & full_v & full_d9 & full_d7;
 
     // Propagate: a friendly disc shielded in all four directions is stable
