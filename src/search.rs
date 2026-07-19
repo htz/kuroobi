@@ -18,6 +18,28 @@ const SCORE_SCALE: f32 = 1000.0;
 /// Upper bound on any score (used as ±infinity).
 const INF: f32 = f32::MAX / 4.0;
 
+/// Maximum search ply (bounded by the number of board squares).
+const MAX_PLY: usize = 64;
+/// Nodes at this remaining depth or more order children by full evaluation;
+/// shallower nodes use cheap heuristics (mobility/killer/history). Full
+/// evaluation of every child dominated per-node cost, and near the leaves
+/// its extra cutoff precision cannot pay for itself.
+const EVAL_ORDER_MIN_DEPTH: u8 = 6;
+
+/// Static square bias for cheap ordering (file-major index): corners first,
+/// X-squares last. Scaled to sit between mobility steps.
+#[rustfmt::skip]
+const fn square_bias() -> [i64; 64] {
+    let corner = -(1i64 << 28);
+    let x_sq = 1i64 << 28;
+    let mut t = [0i64; 64];
+    // Corners: A1=0, A8=7, H1=56, H8=63; X-squares: B2=9, B7=14, G2=49, G7=54
+    t[0] = corner; t[7] = corner; t[56] = corner; t[63] = corner;
+    t[9] = x_sq; t[14] = x_sq; t[49] = x_sq; t[54] = x_sq;
+    t
+}
+const SQUARE_BIAS: [i64; 64] = square_bias();
+
 #[derive(Clone, Copy, PartialEq)]
 enum Bound {
     Exact,
@@ -66,6 +88,11 @@ pub struct Searcher {
     tt: Vec<TtEntry>,
     mask: u64,
     nodes: u64,
+    /// Killer moves per ply: moves that recently caused a beta cutoff at
+    /// the same distance from the root.
+    killers: [[Option<Position>; 2]; MAX_PLY],
+    /// History heuristic: cutoff credit per (player, square).
+    history: [[u32; 64]; 2],
 }
 
 impl Searcher {
@@ -76,6 +103,8 @@ impl Searcher {
             tt: vec![TtEntry::EMPTY; size],
             mask: (size - 1) as u64,
             nodes: 0,
+            killers: [[None; 2]; MAX_PLY],
+            history: [[0; 64]; 2],
         }
     }
 
@@ -111,9 +140,14 @@ impl Searcher {
         // cost of the previous implementation.
         let mut indices = evaluator.indexer().init(board.black, board.white);
 
+        // Ordering heuristics are per-decision: fresh for this search call,
+        // shared across the iterative-deepening iterations inside it.
+        self.killers = [[None; 2]; MAX_PLY];
+        self.history = [[0; 64]; 2];
+
         for d in 1..=depth {
             let hash = zobrist::compute_hash(board.black, board.white, board.player());
-            let v = self.alpha_beta(board, evaluator, &mut indices, hash, d, -INF, INF, false);
+            let v = self.alpha_beta(board, evaluator, &mut indices, hash, d, 0, -INF, INF, false);
             // Root best move comes from the TT entry just stored
             if let Some(entry) = self.tt_probe(board, hash) {
                 if entry.best.is_some() {
@@ -172,11 +206,31 @@ impl Searcher {
         indices: &mut PatternIndices,
         hash: u64,
         depth: u8,
+        ply: u8,
         mut alpha: f32,
         mut beta: f32,
         passed: bool,
     ) -> f32 {
         self.nodes += 1;
+
+        // Leaf fast path: a TT probe is a near-certain cache miss and can
+        // only save the (cheaper) eval itself — skip the table entirely.
+        // Handles passes inline so depth-0 nodes never need a hash, which
+        // in turn lets depth-1 nodes skip computing child hashes at all.
+        let moves = board.movable();
+        if depth == 0 {
+            if moves != 0 {
+                return evaluator.eval_indices(board, indices);
+            }
+            let mut child = *board;
+            child.pass();
+            if child.movable() == 0 {
+                // Both sides stuck: exact terminal score
+                return board.score() as f32 * SCORE_SCALE;
+            }
+            self.nodes += 1; // the pass "node", as the recursion counted it
+            return -evaluator.eval_indices(&child, indices);
+        }
 
         let orig_alpha = alpha;
         let mut tt_move: Option<Position> = None;
@@ -195,8 +249,6 @@ impl Searcher {
             }
         }
 
-        let moves = board.movable();
-
         if moves == 0 {
             if passed {
                 // Game over: exact score dominates heuristics
@@ -206,51 +258,76 @@ impl Searcher {
             child.pass();
             let child_hash = zobrist::update_hash_on_pass(hash);
             // A pass changes no discs, so `indices` carries over unchanged.
-            return -self.alpha_beta(&child, evaluator, indices, child_hash, depth, -beta, -alpha, true);
+            return -self.alpha_beta(
+                &child, evaluator, indices, child_hash, depth, ply, -beta, -alpha, true,
+            );
         }
 
         if depth == 0 {
             return evaluator.eval_indices(board, indices);
         }
 
-        // Move ordering: TT move first, then by shallow child evaluation
-        // (cheap 0-ply eval; skipped at depth 1 where children are leaves
-        // anyway and ordering cannot cut).
+        // Move ordering (ascending key = searched first). TT move always
+        // leads. Deep nodes order by full child evaluation (few nodes, big
+        // subtrees: precision pays). Shallow nodes use cheap heuristics:
+        // killers, opponent mobility, history credit and corner/X bias —
+        // evaluating every child there cost more than it cut.
         let indexer = evaluator.indexer();
         let mover = board.player();
-        let mut children: Vec<(Position, Board, u64, u64, f32)> =
-            Vec::with_capacity(moves.count_ones() as usize);
+        let use_eval_order = depth >= EVAL_ORDER_MIN_DEPTH;
+        let [killer0, killer1] = self.killers[ply as usize];
+        // Fixed-size stack buffer: a position has at most 33 legal moves,
+        // and a heap allocation per node showed up as real per-node cost.
+        let mut children = [(Position(0), *board, 0u64, 0u64, 0i64); 34];
+        let mut n_children = 0usize;
         let mut m = moves;
         while m != 0 {
             let pos = Position::from_index(m.trailing_zeros()).unwrap();
             m &= m - 1;
             let mut child = *board;
             let flipped = child.make_move_bits(pos);
-            let child_hash = zobrist::update_hash_on_move(hash, pos, flipped, mover);
-            let order_key = if Some(pos) == tt_move {
-                -INF // TT move first
-            } else if depth >= 3 {
+            // Depth-1 children are leaves and never touch the TT.
+            let child_hash = if depth == 1 {
+                0
+            } else {
+                zobrist::update_hash_on_move(hash, pos, flipped, mover)
+            };
+            let order_key: i64 = if Some(pos) == tt_move {
+                i64::MIN
+            } else if use_eval_order {
                 // opponent's view: lower = better for us
                 indexer.apply(indices, pos, flipped, mover);
                 let v = evaluator.eval_indices(&child, indices);
                 indexer.undo(indices, pos, flipped, mover);
-                v
+                (v * 256.0) as i64
+            } else if Some(pos) == killer0 {
+                i64::MIN + 1
+            } else if Some(pos) == killer1 {
+                i64::MIN + 2
+            } else if depth >= 2 {
+                ((child.movable_count() as i64) << 32)
+                    + SQUARE_BIAS[pos.index() as usize]
+                    - ((self.history[mover.index()][pos.index() as usize] as i64) << 8)
             } else {
-                0.0
+                0
             };
-            children.push((pos, child, child_hash, flipped, order_key));
+            children[n_children] = (pos, child, child_hash, flipped, order_key);
+            n_children += 1;
         }
-        if depth >= 3 || tt_move.is_some() {
-            children.sort_by(|a, b| a.4.partial_cmp(&b.4).unwrap_or(std::cmp::Ordering::Equal));
+        let children = &mut children[..n_children];
+        if depth >= 2 || tt_move.is_some() {
+            children.sort_unstable_by_key(|c| c.4);
         }
 
         let mut best_val = -INF;
         let mut best_move = None;
 
-        for (pos, child, child_hash, flipped, _) in &children {
+        for (pos, child, child_hash, flipped, _) in children.iter() {
             indexer.apply(indices, *pos, *flipped, mover);
-            let v =
-                -self.alpha_beta(child, evaluator, indices, *child_hash, depth - 1, -beta, -alpha, false);
+            let v = -self.alpha_beta(
+                child, evaluator, indices, *child_hash, depth - 1, ply + 1,
+                -beta, -alpha, false,
+            );
             indexer.undo(indices, *pos, *flipped, mover);
             if v > best_val {
                 best_val = v;
@@ -260,6 +337,14 @@ impl Searcher {
                 }
             }
             if alpha >= beta {
+                // Credit the cutoff move for future ordering
+                let ply = ply as usize;
+                if self.killers[ply][0] != Some(*pos) {
+                    self.killers[ply][1] = self.killers[ply][0];
+                    self.killers[ply][0] = Some(*pos);
+                }
+                self.history[mover.index()][pos.index() as usize] +=
+                    (depth as u32) * (depth as u32);
                 break;
             }
         }
@@ -391,6 +476,62 @@ mod tests {
             board.make_move_unchecked(Position::from_index(m.trailing_zeros()).unwrap());
         }
         board
+    }
+
+    /// Plain fixed-depth negamax mirroring alpha_beta's semantics (eval at
+    /// depth 0, pass keeps depth, terminal scaled) with no TT, no ordering,
+    /// no windows. Alpha-beta must return exactly this value at the root
+    /// regardless of move ordering — the invariant that keeps ordering
+    /// changes honest.
+    fn reference_negamax(board: &Board, evaluator: &Evaluator, depth: u8, passed: bool) -> f32 {
+        let moves = board.movable();
+        if moves == 0 {
+            if passed {
+                return board.score() as f32 * SCORE_SCALE;
+            }
+            let mut child = *board;
+            child.pass();
+            return -reference_negamax(&child, evaluator, depth, true);
+        }
+        if depth == 0 {
+            return evaluator.eval(board);
+        }
+        let mut best = -INF;
+        let mut m = moves;
+        while m != 0 {
+            let pos = Position::from_index(m.trailing_zeros()).unwrap();
+            m &= m - 1;
+            let mut child = *board;
+            child.make_move_bits(pos);
+            let v = -reference_negamax(&child, evaluator, depth - 1, false);
+            if v > best {
+                best = v;
+            }
+        }
+        best
+    }
+
+    #[test]
+    fn test_search_value_equals_reference_negamax() {
+        let e = trained_evaluator();
+        let mut s = Searcher::new(14);
+        for seed in 1..=6u64 {
+            for empties in [40u8, 30, 22] {
+                let b = position_with_empties(empties, seed);
+                if b.is_game_over() || b.movable() == 0 {
+                    continue;
+                }
+                for depth in 1..=4u8 {
+                    let searched = s.search(&b, &e, depth);
+                    let reference = reference_negamax(&b, &e, depth, false);
+                    assert_eq!(
+                        searched.value, reference,
+                        "seed {seed} empties {empties} depth {depth}: \
+                         ordering must not change the root value"
+                    );
+                }
+            }
+        }
     }
 
     #[test]
