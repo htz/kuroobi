@@ -86,8 +86,13 @@ const DEEP2_ORDER_EMPTIES: u8 = 21;
 const ETC_EMPTIES: u8 = 8;
 /// Deep solves run an evaluation-guided iterative pre-search that fills
 /// the table with move-ordering seeds.
+/// Ordering weight of one opponent reply, in eighths of a disc (the same
+/// scale the evaluation term uses).
+const MOBILITY_ORDER_WEIGHT: i32 = 12;
+/// Ordering weight of one stable edge disc, in eighths of a disc.
+const EDGE_STABILITY_ORDER_WEIGHT: i32 = 1;
 /// Half-width of the first aspiration window around the warm-up score.
-const ASPIRATION_WIDTH: i32 = 2;
+const ASPIRATION_WIDTH: i32 = 6;
 /// Half-width used by the warm-up passes, whose centre is only an
 /// evaluation estimate rather than a searched score.
 const WARM_ASPIRATION_WIDTH: i32 = 6;
@@ -1475,7 +1480,19 @@ impl Solver {
                     e.eval_indices(&child, indices)
                 };
                 ix.undo(indices, pos, flipped, mover);
-                (v * 8.0) as i32
+                // Weight mobility as heavily as the evaluation itself; the
+                // evaluator alone is blind to how many replies it leaves the
+                // opponent. One reply counts for about one disc.
+                // Also credit the edge discs the move makes stable, at about
+                // a sixteenth of mobility's weight. `child`'s opponent is us,
+                // having just moved.
+                let edge = crate::stability::edge_stable_all(
+                    child.opponent_bb(),
+                    child.player_bb(),
+                )
+                .count_ones() as i32;
+                (v * 8.0) as i32 + (child.movable_count() as i32) * MOBILITY_ORDER_WEIGHT
+                    - edge * EDGE_STABILITY_ORDER_WEIGHT
             } else {
                 move_ordering_value(pos, &child, parity)
             };

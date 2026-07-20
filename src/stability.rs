@@ -210,7 +210,7 @@ fn scatter_rank(mask: u8, r: u32) -> u64 {
 }
 
 /// Exact stable own discs on the four edges.
-fn edge_stable_all(own: u64, opp: u64) -> u64 {
+pub(crate) fn edge_stable_all(own: u64, opp: u64) -> u64 {
     let t = edge_table();
     let mut stable = 0u64;
     // Rank edges (r = 0 and 7)
