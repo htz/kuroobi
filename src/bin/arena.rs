@@ -41,6 +41,9 @@ struct Args {
     patterns_a: Option<&'static str>,
     patterns_b: Option<&'static str>,
     seed: u64,
+    mpc_a: bool,
+    mpc_b: bool,
+    mpc_t: f32,
 }
 
 fn parse_patterns(v: &str) -> Result<&'static str, String> {
@@ -93,6 +96,9 @@ fn parse_args() -> Result<Args, String> {
         patterns_a: None,
         patterns_b: None,
         seed: 7,
+        mpc_a: false,
+        mpc_b: false,
+        mpc_t: 1.1,
     };
 
     let mut it = std::env::args().skip(1);
@@ -115,6 +121,9 @@ fn parse_args() -> Result<Args, String> {
             "--patterns-a" => args.patterns_a = Some(parse_patterns(&value("--patterns-a")?)?),
             "--patterns-b" => args.patterns_b = Some(parse_patterns(&value("--patterns-b")?)?),
             "--seed" => args.seed = value("--seed")?.parse().map_err(|e| format!("--seed: {e}"))?,
+            "--mpc-a" => args.mpc_a = true,
+            "--mpc-b" => args.mpc_b = true,
+            "--mpc-t" => args.mpc_t = value("--mpc-t")?.parse().map_err(|e| format!("--mpc-t: {e}"))?,
             "-h" | "--help" => return Err(USAGE.to_string()),
             other => return Err(format!("unknown option: {other}\n\n{USAGE}")),
         }
@@ -309,6 +318,10 @@ fn main() -> ExitCode {
     // One searcher per evaluator: TT values are evaluator-specific
     let mut searcher_a = Searcher::new(17);
     let mut searcher_b = Searcher::new(17);
+    searcher_a.mpc = args.mpc_a;
+    searcher_b.mpc = args.mpc_b;
+    searcher_a.mpc_t = args.mpc_t;
+    searcher_b.mpc_t = args.mpc_t;
     let mut solver = Solver::new(18);
     let mut a_wins = 0usize;
     let mut b_wins = 0usize;

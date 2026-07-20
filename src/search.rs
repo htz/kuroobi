@@ -45,6 +45,43 @@ fn quantize_leaf(v: f32) -> f32 {
 
 /// Maximum search ply (bounded by the number of board squares).
 const MAX_PLY: usize = 64;
+
+/// ProbCut (multi-prob-cut): at null-window nodes, a reduced-depth search
+/// statistically predicts the full-depth result; when the prediction clears
+/// the window by a confidence margin, the deep search is skipped. Cut
+/// confidence is `MPC_T` standard deviations of the measured prediction
+/// error (fitted on held-out positions with independent per-depth searches).
+const MPC_MIN_DEPTH: u8 = 4;
+/// Default confidence multiplier (a selectivity ladder typically spans
+/// t = 1.1 (73%) .. 3.3 (99%); errors compound over the tree far less than
+/// per-node odds suggest because both cut directions must fail to flip the
+/// root).
+const MPC_T: f32 = 1.1;
+/// Allow probcut inside probcut's own reduced searches up to this depth of
+/// nesting.
+const MPC_MAX_LEVEL: u8 = 2;
+
+/// Reduced probe depth: about a quarter of the remaining depth, keeping
+/// the original parity (tempo parity strongly affects evaluation error).
+#[inline]
+fn mpc_reduced_depth(depth: u8) -> u8 {
+    2 * (depth / 4) + (depth & 1)
+}
+
+/// Standard deviation (in discs) of `search(depth) - search(pc_depth)` as a
+/// function of empties, fitted on positions from the training corpus with
+/// this evaluator family. `pc_depth = 0` gives the static-eval error.
+#[inline]
+fn mpc_sigma(empties: u32, depth: u8, pc_depth: u8) -> f32 {
+    const A: f32 = -0.068941;
+    const B: f32 = 0.368775;
+    const C: f32 = -0.713476;
+    const QA: f32 = 0.010223;
+    const QB: f32 = 0.647219;
+    const QC: f32 = 4.050545;
+    let s = A * empties as f32 + B * depth as f32 + C * pc_depth as f32;
+    QA * s * s + QB * s + QC
+}
 /// Nodes at this remaining depth or more order children by full evaluation;
 /// shallower nodes use cheap heuristics (mobility/killer/history). Full
 /// evaluation of every child dominated per-node cost, and near the leaves
@@ -113,6 +150,13 @@ pub struct Searcher {
     tt: Vec<TtEntry>,
     mask: u64,
     nodes: u64,
+    /// Enable ProbCut selective pruning (off by default: the search is then
+    /// exact for its depth, which the equivalence tests rely on).
+    pub mpc: bool,
+    /// ProbCut confidence multiplier in error standard deviations.
+    pub mpc_t: f32,
+    /// Current probcut nesting depth (bounded by MPC_MAX_LEVEL).
+    probcut_level: u8,
     /// Killer moves per ply: moves that recently caused a beta cutoff at
     /// the same distance from the root.
     killers: [[Option<Position>; 2]; MAX_PLY],
@@ -128,6 +172,9 @@ impl Searcher {
             tt: vec![TtEntry::EMPTY; size],
             mask: (size - 1) as u64,
             nodes: 0,
+            mpc: false,
+            mpc_t: MPC_T,
+            probcut_level: 0,
             killers: [[None; 2]; MAX_PLY],
             history: [[0; 64]; 2],
         }
@@ -146,6 +193,7 @@ impl Searcher {
     /// Returns None best_move if the side to move must pass.
     pub fn search(&mut self, board: &Board, evaluator: &Evaluator, depth: u8) -> SearchResult {
         self.nodes = 0;
+        self.probcut_level = 0;
 
         if board.movable() == 0 {
             return SearchResult {
@@ -227,6 +275,65 @@ impl Searcher {
     }
 
     #[allow(clippy::too_many_arguments)]
+    /// Try a probable cutoff at a null-window node: a reduced-depth search
+    /// around a margin-shifted window. Returns the window bound to fail
+    /// with when the probe clears the margin, None to search normally.
+    /// The result is NOT stored in the TT for this depth — only the probe's
+    /// own (depth-tagged) entries are, so no unproven bound masquerades as
+    /// a full-depth result.
+    #[allow(clippy::too_many_arguments)]
+    fn probcut(
+        &mut self,
+        board: &Board,
+        evaluator: &Evaluator,
+        indices: &mut PatternIndices,
+        hash: u64,
+        depth: u8,
+        ply: u8,
+        alpha: f32,
+        beta: f32,
+    ) -> Option<f32> {
+        let empties = board.empty_count() as u32;
+        let pc_depth = mpc_reduced_depth(depth);
+        let t = self.mpc_t;
+        let pc_error = t * mpc_sigma(empties, depth, pc_depth);
+        // Gate on the static eval first: only probe when depth 0 already
+        // points past the window (average of both prediction errors).
+        let eval_error =
+            t * 0.5 * (mpc_sigma(empties, depth, 0) + mpc_sigma(empties, depth, pc_depth));
+        let eval_score = evaluator.eval_indices(board, indices);
+
+        // Probable fail-high
+        let pc_beta = beta + pc_error;
+        if eval_score >= beta - eval_error && pc_beta < 64.0 {
+            self.probcut_level += 1;
+            let v = self.alpha_beta(
+                board, evaluator, indices, hash, pc_depth, ply,
+                pc_beta - PVS_EPSILON, pc_beta, false,
+            );
+            self.probcut_level -= 1;
+            if v >= pc_beta {
+                return Some(beta);
+            }
+        }
+
+        // Probable fail-low
+        let pc_alpha = alpha - pc_error;
+        if eval_score < alpha + eval_error && pc_alpha > -64.0 {
+            self.probcut_level += 1;
+            let v = self.alpha_beta(
+                board, evaluator, indices, hash, pc_depth, ply,
+                pc_alpha, pc_alpha + PVS_EPSILON, false,
+            );
+            self.probcut_level -= 1;
+            if v <= pc_alpha {
+                return Some(alpha);
+            }
+        }
+
+        None
+    }
+
     fn alpha_beta(
         &mut self,
         board: &Board,
@@ -293,6 +400,20 @@ impl Searcher {
 
         if depth == 0 {
             return evaluator.eval_indices(board, indices);
+        }
+
+        // ProbCut: only at null-window nodes (PVS probes), never on the PV.
+        if self.mpc
+            && depth >= MPC_MIN_DEPTH
+            && self.probcut_level < MPC_MAX_LEVEL
+            && ply > 0
+            && beta - alpha <= PVS_EPSILON * 1.5
+        {
+            if let Some(v) =
+                self.probcut(board, evaluator, indices, hash, depth, ply, alpha, beta)
+            {
+                return v;
+            }
         }
 
         // Move ordering (ascending key = searched first). TT move always

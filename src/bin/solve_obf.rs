@@ -20,6 +20,8 @@ use kuroobi::Board;
 
 fn main() -> ExitCode {
     let mut depth: Option<u8> = None;
+    let mut mpc = false;
+    let mut mpc_t: Option<f32> = None;
     let mut weights: Option<PathBuf> = None;
     let mut files: Vec<PathBuf> = Vec::new();
 
@@ -27,12 +29,14 @@ fn main() -> ExitCode {
     while let Some(arg) = it.next() {
         match arg.as_str() {
             "--depth" => depth = it.next().and_then(|v| v.parse().ok()),
+            "--mpc" => mpc = true,
+            "--mpc-t" => mpc_t = it.next().and_then(|v| v.parse().ok()),
             "--weights" => weights = it.next().map(PathBuf::from),
             other => files.push(PathBuf::from(other)),
         }
     }
     if files.is_empty() {
-        eprintln!("usage: solve_obf [--depth <n>] [--weights <path>] <file.obf>...");
+        eprintln!("usage: solve_obf [--depth <n>] [--mpc] [--weights <path>] <file.obf>...");
         return ExitCode::FAILURE;
     }
 
@@ -47,6 +51,10 @@ fn main() -> ExitCode {
 
     let mut solver = Solver::new(22);
     let mut searcher = Searcher::new(21);
+    searcher.mpc = mpc;
+    if let Some(t) = mpc_t {
+        searcher.mpc_t = t;
+    }
 
     for file in &files {
         let content = match std::fs::read_to_string(file) {
