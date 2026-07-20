@@ -36,6 +36,7 @@ struct Args {
     weights: PathBuf,
     patterns: &'static str,
     depth: u8,
+    mpc: bool,
     solve_empties: u8,
     edax_level: u32,
     games: usize,
@@ -49,6 +50,7 @@ fn parse_args() -> Result<Args, String> {
         weights: PathBuf::from("weights_full.bin"),
         patterns: "egaroucid",
         depth: 6,
+        mpc: false,
         solve_empties: 14,
         edax_level: 5,
         games: 200,
@@ -75,6 +77,7 @@ fn parse_args() -> Result<Args, String> {
                 }
             }
             "--depth" => args.depth = value("--depth")?.parse().map_err(|e| format!("--depth: {e}"))?,
+            "--mpc" => args.mpc = true,
             "--solve-empties" => args.solve_empties = value("--solve-empties")?.parse().map_err(|e| format!("--solve-empties: {e}"))?,
             "--edax-level" => args.edax_level = value("--edax-level")?.parse().map_err(|e| format!("--edax-level: {e}"))?,
             "--games" => args.games = value("--games")?.parse().map_err(|e| format!("--games: {e}"))?,
@@ -307,6 +310,7 @@ fn main() -> ExitCode {
 
     let mut rng = Rng::new(args.seed);
     let mut searcher = Searcher::new(17);
+    searcher.mpc = args.mpc;
     // Deep endgame thresholds (20+ empties) need a much larger table.
     let mut solver = Solver::new(if args.solve_empties >= 18 { 22 } else { 18 });
     let mut wins = 0usize;
