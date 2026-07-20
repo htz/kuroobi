@@ -86,6 +86,16 @@ const DEEP2_ORDER_EMPTIES: u8 = 21;
 const ETC_EMPTIES: u8 = 8;
 /// Deep solves run an evaluation-guided iterative pre-search that fills
 /// the table with move-ordering seeds.
+/// Half-width of the first aspiration window around the warm-up score.
+const ASPIRATION_WIDTH: i32 = 2;
+/// Warm-up passes only prune at this many empties or more.
+const SELECTIVE_MIN_EMPTIES: u8 = 14;
+/// Depth of the evaluation probe used by a warm-up pass.
+const SELECTIVE_PROBE_DEPTH: u8 = 4;
+/// Roots this deep run the warm-up ladder before the exact pass.
+const SELECTIVE_PASS_MIN_EMPTIES: u8 = 27;
+/// Confidence levels (standard deviations) of the warm-up passes.
+const SELECTIVE_LADDER: [f32; 1] = [1.1];
 const SEED_MIN_EMPTIES: u8 = 25;
 const SEED_MAX_DEPTH: u8 = 14;
 
@@ -345,6 +355,16 @@ impl HashTable {
 
     /// Store a seed entry (evaluation-guided pre-search): best move plus
     /// heuristic bounds, flagged so the exact search only uses the move.
+    /// Mark every live entry as a seed: its best move stays usable for
+    /// ordering while its bounds stop being treated as proven.
+    fn demote_to_seed(&mut self) {
+        for e in self.entries.iter_mut() {
+            if e.used() {
+                e.flags |= 4;
+            }
+        }
+    }
+
     fn seed_update(
         &mut self,
         board: &Board,
@@ -420,6 +440,15 @@ pub struct EndSolverResult {
 
 pub struct Solver {
     nodes: u64,
+    /// Score returned by the warm-up pass, used to centre the exact
+    /// search's aspiration window (carrying the score between passes —
+    /// that, not the warmed table, is the main benefit).
+    warm_score: Option<i32>,
+    /// When set, the search is *selective*: probable cutoffs are taken at
+    /// this confidence (standard deviations of the evaluation's prediction
+    /// error). Only the warm-up passes run this way; their table entries
+    /// are demoted so the exact pass trusts their moves but not their bounds.
+    selective_t: Option<f32>,
     best: Option<Position>,
     hash_table: HashTable,
     /// Small dedicated table for the shallow region (5-6 empties), where
@@ -436,6 +465,8 @@ impl Solver {
         Solver {
             nodes: 0,
             best: None,
+            warm_score: None,
+            selective_t: None,
             hash_table: HashTable::new(bit_size),
             shallow_table: HashTable::new(16),
             neighbours: NeighbourTable::new(),
@@ -579,6 +610,7 @@ impl Solver {
 
         self.hash_table.clear();
         self.shallow_table.clear();
+        self.warm_score = None;
         let mut b = *board;
 
         // Iterative evaluation-guided seeding for deep solves
@@ -611,6 +643,22 @@ impl Solver {
             }
         }
 
+        // Warm-up ladder (iterative selectivity): solve the same
+        // full-depth endgame selectively first, leaving real full-depth
+        // best moves in the table for the exact pass that follows.
+        if let Some(e) = ev {
+            if board.empty_count() >= SELECTIVE_PASS_MIN_EMPTIES {
+                for t in SELECTIVE_LADDER {
+                    self.selective_t = Some(t);
+                    let mut sb = *board;
+                    let s = self.pvs_root(&mut sb, -64, 64, Some(e));
+                    self.selective_t = None;
+                    self.warm_score = Some(s - (s & 1));
+                }
+                self.hash_table.demote_to_seed();
+            }
+        }
+
         let value = match mode {
             EndSolverMode::WinLossDraw => self.pvs_root(&mut b, -1, 1, ev),
             EndSolverMode::WinDraw => self.pvs_root(&mut b, 0, 1, ev),
@@ -626,10 +674,16 @@ impl Solver {
         }
     }
 
-    /// Exact score via iterative window widening (cheap WLD probe first).
+    /// Exact score. With a warm-up score available the window is a narrow
+    /// aspiration around it, widened only
+    /// on the side that failed. Without one, fall back to the win/loss
+    /// probe and a +-8 band.
     fn perfect(&mut self, board: &mut Board, ev: Option<&Evaluator>) -> i32 {
-        let mut val = self.pvs_root(board, -1, 1, ev);
+        if let Some(score) = self.warm_score {
+            return self.aspiration(board, score, ev);
+        }
 
+        let mut val = self.pvs_root(board, -1, 1, ev);
         if val > 0 {
             let bound = val + 8;
             val = self.pvs_root(board, val, bound, ev);
@@ -644,6 +698,33 @@ impl Solver {
             }
         }
         val
+    }
+
+    /// Aspiration around a prior score: search a narrow window, and on a
+    /// failure re-centre on the failing bound and double that side only.
+    fn aspiration(&mut self, board: &mut Board, mut score: i32, ev: Option<&Evaluator>) -> i32 {
+        let mut left = ASPIRATION_WIDTH;
+        let mut right = ASPIRATION_WIDTH;
+        for _ in 0..12 {
+            let lo = (score - left).max(-64);
+            let hi = (score + right).min(64);
+            if lo >= hi || (lo <= -64 && hi >= 64) {
+                break;
+            }
+            let val = self.pvs_root(board, lo, hi, ev);
+            if val <= lo && lo > -64 {
+                score = val;
+                left = (left * 2).min(128);
+                right = 0;
+            } else if val >= hi && hi < 64 {
+                score = val;
+                left = 0;
+                right = (right * 2).min(128);
+            } else {
+                return val;
+            }
+        }
+        self.pvs_root(board, -64, 64, ev)
     }
 
     fn pvs_root(&mut self, board: &mut Board, alpha: i32, beta: i32, ev: Option<&Evaluator>) -> i32 {
@@ -732,6 +813,16 @@ impl Solver {
         // flipped, so our final score is at most 64 - 2*|opp stable|.
         if let Some(bound) = stability_cut(board, lower, upper) {
             return bound;
+        }
+
+        // Warm-up (selective) pass: take probable cutoffs from a shallow
+        // evaluation search instead of proving them.
+        if let (Some(t), Some(e)) = (self.selective_t, ev) {
+            if board.empty_count() >= SELECTIVE_MIN_EMPTIES && upper - lower <= 1 {
+                if let Some(v) = self.selective_cut(board, hash, e, t, lower, upper) {
+                    return v;
+                }
+            }
         }
 
         // Children are generated without their (expensive) ordering values:
@@ -1247,6 +1338,44 @@ impl Solver {
         } else {
             0
         }
+    }
+
+    /// Probable cutoff for a warm-up pass: a shallow evaluation search that
+    /// clears the window by a confidence margin stands in for the exact
+    /// result. Never reached by the final (exact) pass.
+    fn selective_cut(
+        &mut self,
+        board: &Board,
+        hash: u64,
+        ev: &Evaluator,
+        t: f32,
+        lower: i32,
+        upper: i32,
+    ) -> Option<i32> {
+        let empties = board.empty_count();
+        let error = t * crate::search::mpc_sigma(empties as u32, empties, SELECTIVE_PROBE_DEPTH);
+        let ix = ev.indexer();
+        let mut indices = ix.init(board.black, board.white);
+
+        let hi = upper as f32 + error;
+        if hi < 64.0 {
+            let v = self.seed_search(
+                board, hash, ev, ix, &mut indices, SELECTIVE_PROBE_DEPTH, hi - 1.0, hi, false,
+            );
+            if v >= hi {
+                return Some(upper);
+            }
+        }
+        let lo = lower as f32 - error;
+        if lo > -64.0 {
+            let v = self.seed_search(
+                board, hash, ev, ix, &mut indices, SELECTIVE_PROBE_DEPTH, lo, lo + 1.0, false,
+            );
+            if v <= lo {
+                return Some(lower);
+            }
+        }
+        None
     }
 
     /// Generate children sorted by an endgame move-ordering heuristic

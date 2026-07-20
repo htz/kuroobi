@@ -72,7 +72,7 @@ fn mpc_reduced_depth(depth: u8) -> u8 {
 /// function of empties, fitted on positions from the training corpus with
 /// this evaluator family. `pc_depth = 0` gives the static-eval error.
 #[inline]
-fn mpc_sigma(empties: u32, depth: u8, pc_depth: u8) -> f32 {
+pub(crate) fn mpc_sigma(empties: u32, depth: u8, pc_depth: u8) -> f32 {
     const A: f32 = -0.068941;
     const B: f32 = 0.368775;
     const C: f32 = -0.713476;
