@@ -734,7 +734,10 @@ impl Solver {
             return bound;
         }
 
-        let moves = self.sorted_moves(board, hash, ev);
+        // Children are generated without their (expensive) ordering values:
+        // a node whose transposition-table move already cuts must not pay
+        // for pattern evaluations and lookaheads it never uses.
+        let mut moves = self.gen_moves(board, hash);
 
         if moves.is_empty() {
             if passed {
@@ -745,6 +748,13 @@ impl Solver {
             board.pass();
             self.hash_table.update(board, hash, alpha, beta, val, None);
             return val;
+        }
+
+        // A move that wipes out the opponent ends the game at exactly +64,
+        // which is the maximum possible score — so it *is* this node's value.
+        if moves.iter().any(|m| m.board.player_bb() == 0) {
+            self.hash_table.update(board, hash, alpha, beta, 64, None);
+            return 64;
         }
 
         // Enhanced transposition cutoff: a child whose stored upper bound
@@ -759,16 +769,45 @@ impl Solver {
             }
         }
 
-        // First move: full window
-        let mut best = Some(moves[0].pos);
-        let mut child = moves[0].board;
-        let mut max = self.descend(&mut child, moves[0].hash, -upper, -lower, ev);
-        if max > lower {
-            lower = max;
+        let mut max = i32::MIN;
+        let mut best = None;
+
+        // Stage 1: the transposition-table move, searched before any
+        // ordering work is done. Most cut nodes end here.
+        let tt_best = self.hash_table.get(board, hash).and_then(|e| e.best());
+        if let Some(bpos) = tt_best {
+            if let Some(idx) = moves.iter().position(|m| m.pos == bpos) {
+                let m = moves.swap_remove(idx);
+                let mut child = m.board;
+                max = self.descend(&mut child, m.hash, -upper, -lower, ev);
+                best = Some(m.pos);
+                if max > lower {
+                    lower = max;
+                }
+                if lower >= upper {
+                    self.hash_table.update(board, hash, alpha, beta, max, best);
+                    return max;
+                }
+            }
+        }
+
+        // Stage 2: the rest, now ordered properly.
+        self.score_and_sort(board, &mut moves, None, ev);
+
+        let mut rest = moves.iter();
+        if max == i32::MIN {
+            // No table move: the best-ordered child takes the full window.
+            let m = rest.next().expect("non-empty move list");
+            let mut child = m.board;
+            max = self.descend(&mut child, m.hash, -upper, -lower, ev);
+            best = Some(m.pos);
+            if max > lower {
+                lower = max;
+            }
         }
 
         // Remaining moves: null-window probe, re-search on fail-high
-        for m in &moves[1..] {
+        for m in rest {
             if lower >= upper {
                 break;
             }
@@ -1215,12 +1254,45 @@ impl Solver {
     /// The transposition table's best move, when present, is searched first.
     /// Each child carries its incrementally-updated Zobrist hash.
     fn sorted_moves(&self, board: &Board, hash: u64, ev: Option<&Evaluator>) -> Vec<ScoredMove> {
+        let tt_best = self.hash_table.get(board, hash).and_then(|e| e.best());
+        let mut moves = self.gen_moves(board, hash);
+        self.score_and_sort(board, &mut moves, tt_best, ev);
+        moves
+    }
+
+    /// Generate children with their incremental hashes but WITHOUT the
+    /// expensive ordering evaluation. Wipeout moves are flagged: they end
+    /// the game at +64, so a node that has one needs no search at all.
+    fn gen_moves(&self, board: &Board, hash: u64) -> Vec<ScoredMove> {
         let mobility = board.movable();
         if mobility == 0 {
             return Vec::new();
         }
+        let mover = board.player();
+        let mut moves: Vec<ScoredMove> = Vec::with_capacity(mobility.count_ones() as usize);
+        let mut m = mobility;
+        while m != 0 {
+            let sq = m.trailing_zeros() as u8;
+            m &= m - 1;
+            let pos = Position(sq);
+            let mut child = *board;
+            let flipped = child.make_move_bits(pos);
+            let child_hash = zobrist::update_hash_on_move(hash, pos, flipped, mover);
+            moves.push(ScoredMove { pos, board: child, hash: child_hash, value: 0 });
+        }
+        moves
+    }
 
-        let tt_best = self.hash_table.get(board, hash).and_then(|e| e.best());
+    /// Fill in ordering values (the expensive part: pattern evaluation and
+    /// pruned lookaheads) and sort. Split from generation so that a node
+    /// whose transposition-table move already cuts never pays for it.
+    fn score_and_sort(
+        &self,
+        board: &Board,
+        moves: &mut [ScoredMove],
+        tt_best: Option<Position>,
+        ev: Option<&Evaluator>,
+    ) {
         let eval_order = board.empty_count() >= EVAL_ORDER_EMPTIES;
         // Incremental pattern indices for ordering evaluation: initialized
         // once per node, then updated per candidate move — far cheaper than
@@ -1232,17 +1304,12 @@ impl Solver {
         };
         let parity = parity_of(board);
         let mover = board.player();
-        let mut moves: Vec<ScoredMove> = Vec::with_capacity(mobility.count_ones() as usize);
 
-        let mut m = mobility;
-        while m != 0 {
-            let sq = m.trailing_zeros() as u8;
-            m &= m - 1;
-            let pos = Position(sq);
-            let mut child = *board;
-            let flipped = child.make_move_bits(pos);
-            let child_hash = zobrist::update_hash_on_move(hash, pos, flipped, mover);
-            let value = if child.player_bb() == 0 {
+        for sm in moves.iter_mut() {
+            let pos = sm.pos;
+            let child = sm.board;
+            let flipped = (board.player_bb() ^ child.opponent_bb()) & !pos.to_bit();
+            sm.value = if child.player_bb() == 0 {
                 // Wiping out the opponent ends the game at +64: try first
                 i32::MIN
             } else if Some(pos) == tt_best {
@@ -1265,12 +1332,10 @@ impl Solver {
             } else {
                 move_ordering_value(pos, &child, parity)
             };
-            moves.push(ScoredMove { pos, board: child, hash: child_hash, value });
         }
 
         // Ascending: "fastest-first" — smaller value = search first
         moves.sort_by_key(|m| m.value);
-        moves
     }
 }
 
