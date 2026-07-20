@@ -84,6 +84,10 @@ const DEEP2_ORDER_EMPTIES: u8 = 21;
 /// every child's hash entry before searching — a proven fail-high there
 /// cuts this node without any search.
 const ETC_EMPTIES: u8 = 8;
+/// Deep solves run an evaluation-guided iterative pre-search that fills
+/// the table with move-ordering seeds.
+const SEED_MIN_EMPTIES: u8 = 25;
+const SEED_MAX_DEPTH: u8 = 14;
 
 /// Squares adjacent to each square (used to skip moves that cannot flip:
 /// a legal move must touch at least one opponent disc).
@@ -217,6 +221,14 @@ impl HashEntry {
         self.flags & 1 != 0
     }
 
+    /// Seed entries come from the evaluation-guided pre-search: their move
+    /// is a good ordering hint but their bounds are heuristic and must
+    /// never cut the exact search.
+    #[inline]
+    fn is_seed(&self) -> bool {
+        self.flags & 4 != 0
+    }
+
     #[inline]
     fn lower(&self) -> i32 {
         if self.lower8 == i8::MIN { -VALUE_INF } else { self.lower8 as i32 }
@@ -313,6 +325,15 @@ impl HashTable {
             return;
         };
         let entry = &mut self.entries[slot];
+        if entry.is_seed() {
+            // Heuristic bounds from the pre-search: replace, don't tighten
+            entry.lower8 = if value > alpha { value as i8 } else { i8::MIN };
+            entry.upper8 = if value < beta { value as i8 } else { i8::MAX };
+            entry.depth = board.empty_count();
+            entry.flags = 1 | ((board.player as u8) << 1);
+            entry.best8 = best8;
+            return;
+        }
         if value < beta && (value as i8) < entry.upper8 {
             entry.upper8 = value as i8;
         }
@@ -320,6 +341,50 @@ impl HashTable {
             entry.lower8 = value as i8;
         }
         entry.best8 = best8;
+    }
+
+    /// Store a seed entry (evaluation-guided pre-search): best move plus
+    /// heuristic bounds, flagged so the exact search only uses the move.
+    fn seed_update(
+        &mut self,
+        board: &Board,
+        hash: u64,
+        depth: u8,
+        lower8: i8,
+        upper8: i8,
+        best: Option<Position>,
+    ) {
+        let base = ((hash & self.mask) as usize) << 1;
+        let slot = if self.entries[base].matches(board) {
+            base
+        } else if self.entries[base + 1].matches(board) {
+            base + 1
+        } else if !self.entries[base].used() {
+            base
+        } else if !self.entries[base + 1].used() {
+            base + 1
+        } else if self.entries[base].is_seed() && self.entries[base].depth <= depth {
+            base
+        } else if self.entries[base + 1].is_seed() && self.entries[base + 1].depth <= depth {
+            base + 1
+        } else {
+            return; // never evict a real entry for a seed
+        };
+        let entry = &mut self.entries[slot];
+        if entry.used() && !entry.is_seed() {
+            // Same position already solved exactly: keep it
+            return;
+        }
+        *entry = HashEntry {
+            black: board.black,
+            white: board.white,
+            lower8,
+            upper8,
+            depth,
+            best8: best.map_or(255, |p| p.index()),
+            flags: 1 | ((board.player as u8) << 1) | 4,
+            _pad: [0; 3],
+        };
     }
 }
 
@@ -382,6 +447,115 @@ impl Solver {
         self.solve_with_eval(mode, board, None)
     }
 
+    /// Evaluation-guided iterative pre-search: before the
+    /// exact passes, run shallow alpha-beta over the evaluator at
+    /// increasing depths, storing best moves as flagged seed entries.
+    /// The exact search then starts with near-complete move ordering.
+    #[allow(clippy::too_many_arguments)]
+    fn seed_search(
+        &mut self,
+        board: &Board,
+        hash: u64,
+        ev: &Evaluator,
+        ix: &PatternIndexer,
+        indices: &mut PatternIndices,
+        depth: u8,
+        alpha: f32,
+        beta: f32,
+        store: bool,
+    ) -> f32 {
+        self.nodes += 1;
+
+        if let Some(v) = wipeout_score(board) {
+            return v as f32;
+        }
+        if depth == 0 {
+            return ev.eval_indices(board, indices);
+        }
+
+        let mut tt_move: Option<Position> = None;
+        if let Some(e) = self.hash_table.get(board, hash) {
+            tt_move = e.best();
+            // Exactly solved already: the true value beats any estimate
+            if !e.is_seed() && e.lower() >= e.upper() {
+                return e.lower() as f32;
+            }
+        }
+
+        let moves = board.movable();
+        if moves == 0 {
+            let mut child = *board;
+            child.pass();
+            if child.movable() == 0 {
+                return final_score(board) as f32;
+            }
+            return -self.seed_search(
+                &child, zobrist::update_hash_on_pass(hash), ev, ix, indices, depth,
+                -beta, -alpha, store,
+            );
+        }
+
+        // Order children: TT/seed move first, then 0-ply evaluation
+        let mover = board.player();
+        let mut children = [(Position(0), *board, 0u64, 0u64, 0i32); 34];
+        let mut n = 0usize;
+        let mut m = moves;
+        while m != 0 {
+            let sq = m.trailing_zeros() as u8;
+            m &= m - 1;
+            let pos = Position(sq);
+            let mut child = *board;
+            let flipped = child.make_move_bits(pos);
+            let child_hash = zobrist::update_hash_on_move(hash, pos, flipped, mover);
+            let key = if child.player_bb() == 0 || Some(pos) == tt_move {
+                i32::MIN
+            } else if depth >= 2 {
+                ix.apply(indices, pos, flipped, mover);
+                let v = (ev.eval_indices(&child, indices) * 8.0) as i32;
+                ix.undo(indices, pos, flipped, mover);
+                v
+            } else {
+                0
+            };
+            children[n] = (pos, child, child_hash, flipped, key);
+            n += 1;
+        }
+        let children = &mut children[..n];
+        if depth >= 2 || tt_move.is_some() {
+            children.sort_unstable_by_key(|c| c.4);
+        }
+
+        let mut alpha = alpha;
+        let mut best_val = f32::NEG_INFINITY;
+        let mut best_move = None;
+        let orig_alpha = alpha;
+        for (pos, child, child_hash, flipped, _) in children.iter() {
+            ix.apply(indices, *pos, *flipped, mover);
+            let v = -self.seed_search(
+                child, *child_hash, ev, ix, indices, depth - 1, -beta, -alpha, store,
+            );
+            ix.undo(indices, *pos, *flipped, mover);
+            if v > best_val {
+                best_val = v;
+                best_move = Some(*pos);
+                if v > alpha {
+                    alpha = v;
+                }
+            }
+            if alpha >= beta {
+                break;
+            }
+        }
+
+        if store {
+            let v8 = best_val.round().clamp(-64.0, 64.0) as i8;
+            let lower8 = if best_val > orig_alpha { v8 } else { i8::MIN };
+            let upper8 = if best_val < beta { v8 } else { i8::MAX };
+            self.hash_table.seed_update(board, hash, depth, lower8, upper8, best_move);
+        }
+        best_val
+    }
+
     /// Solve with an optional evaluator used purely for move ordering in
     /// the upper (many-empties) region of the tree. Ordering never changes
     /// the exact result — only the node count.
@@ -406,6 +580,36 @@ impl Solver {
         self.hash_table.clear();
         self.shallow_table.clear();
         let mut b = *board;
+
+        // Iterative evaluation-guided seeding for deep solves
+        if let Some(e) = ev {
+            let empties = board.empty_count();
+            if empties >= SEED_MIN_EMPTIES {
+                let ix = e.indexer();
+                let mut indices = ix.init(board.black, board.white);
+                let root_hash =
+                    zobrist::compute_hash(board.black, board.white, board.player());
+                let end = (empties - 10).min(SEED_MAX_DEPTH);
+                // Store-free probe first: seeding only pays in lopsided
+                // positions (the pathological blow-up regime); contested
+                // positions already search efficiently and even shallow
+                // seed entries disturb their ordering.
+                let probe = self.seed_search(
+                    board, root_hash, e, ix, &mut indices, 4,
+                    f32::NEG_INFINITY, f32::INFINITY, false,
+                );
+                if probe.abs() >= 40.0 {
+                    let mut d = 4;
+                    while d <= end {
+                        self.seed_search(
+                            board, root_hash, e, ix, &mut indices, d,
+                            f32::NEG_INFINITY, f32::INFINITY, true,
+                        );
+                        d += 2;
+                    }
+                }
+            }
+        }
 
         let value = match mode {
             EndSolverMode::WinLossDraw => self.pvs_root(&mut b, -1, 1, ev),
@@ -505,19 +709,21 @@ impl Solver {
         }
 
         if let Some(v) = self.hash_table.get(board, hash) {
-            if v.lower() >= v.upper() {
-                return v.lower();
-            }
-            if upper > v.upper() {
-                upper = v.upper();
-                if upper <= lower {
-                    return upper;
+            if !v.is_seed() {
+                if v.lower() >= v.upper() {
+                    return v.lower();
                 }
-            }
-            if lower < v.lower() {
-                lower = v.lower();
-                if lower >= upper {
-                    return lower;
+                if upper > v.upper() {
+                    upper = v.upper();
+                    if upper <= lower {
+                        return upper;
+                    }
+                }
+                if lower < v.lower() {
+                    lower = v.lower();
+                    if lower >= upper {
+                        return lower;
+                    }
                 }
             }
         }
@@ -546,7 +752,7 @@ impl Solver {
         if board.empty_count() >= ETC_EMPTIES {
             for m in &moves {
                 if let Some(e) = self.hash_table.get(&m.board, m.hash) {
-                    if -e.upper() >= upper {
+                    if !e.is_seed() && -e.upper() >= upper {
                         return -e.upper();
                     }
                 }
@@ -623,19 +829,21 @@ impl Solver {
         }
 
         if let Some(v) = self.hash_table.get(board, hash) {
-            if v.lower() >= v.upper() {
-                return v.lower();
-            }
-            if beta > v.upper() {
-                beta = v.upper();
-                if beta <= alpha {
-                    return beta;
+            if !v.is_seed() {
+                if v.lower() >= v.upper() {
+                    return v.lower();
                 }
-            }
-            if alpha < v.lower() {
-                alpha = v.lower();
-                if alpha >= beta {
-                    return alpha;
+                if beta > v.upper() {
+                    beta = v.upper();
+                    if beta <= alpha {
+                        return beta;
+                    }
+                }
+                if alpha < v.lower() {
+                    alpha = v.lower();
+                    if alpha >= beta {
+                        return alpha;
+                    }
                 }
             }
         }
