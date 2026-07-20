@@ -88,6 +88,11 @@ const ETC_EMPTIES: u8 = 8;
 /// the table with move-ordering seeds.
 /// Half-width of the first aspiration window around the warm-up score.
 const ASPIRATION_WIDTH: i32 = 2;
+/// Half-width used by the warm-up passes, whose centre is only an
+/// evaluation estimate rather than a searched score.
+const WARM_ASPIRATION_WIDTH: i32 = 6;
+/// Depth of the evaluation search that centres the first warm-up window.
+const ESTIMATE_DEPTH: u8 = 8;
 /// Warm-up passes only prune at this many empties or more.
 const SELECTIVE_MIN_EMPTIES: u8 = 14;
 /// Depth of the evaluation probe used by a warm-up pass.
@@ -97,8 +102,12 @@ const SELECTIVE_PROBE_DEPTH: u8 = 4;
 /// itself (measured on FFO1-19: +6% nodes and +24% time at 16, +14%/+62%
 /// at 14), while from 20 up it pays for itself several times over.
 const SELECTIVE_PASS_MIN_EMPTIES: u8 = 20;
-/// Confidence levels (standard deviations) of the warm-up passes.
-const SELECTIVE_LADDER: [f32; 1] = [1.1];
+/// Confidence levels (standard deviations) of the warm-up passes, from
+/// most selective to least. Each pass is aspirated around the previous
+/// pass's score, so the estimate handed to the exact search converges —
+/// an estimate that is off by even two discs makes the exact search pay
+/// for a failed window, which is the dominant cost on hard positions.
+const SELECTIVE_LADDER: [f32; 1] = [1.8];
 const SEED_MIN_EMPTIES: u8 = 25;
 const SEED_MAX_DEPTH: u8 = 14;
 
@@ -651,12 +660,23 @@ impl Solver {
         // best moves in the table for the exact pass that follows.
         if let Some(e) = ev {
             if board.empty_count() >= SELECTIVE_PASS_MIN_EMPTIES {
+                let mut guess = self.estimate_score(board, Some(e));
                 for t in SELECTIVE_LADDER {
                     self.selective_t = Some(t);
                     let mut sb = *board;
-                    let s = self.pvs_root(&mut sb, -64, 64, Some(e));
+                    let s = self.aspiration_width(&mut sb, guess, WARM_ASPIRATION_WIDTH, Some(e));
                     self.selective_t = None;
+                    guess = s - (s & 1);
+                    // Each rung must re-derive its own bounds: an entry
+                    // stored by a more aggressive (less reliable) pass would
+                    // otherwise be taken at face value, and the ladder would
+                    // just re-confirm the first pass's error instead of
+                    // converging. Best moves survive the demotion.
+                    self.hash_table.demote_to_seed();
                     self.warm_score = Some(s - (s & 1));
+                    if std::env::var("BBR_DIAG").is_ok() {
+                        eprintln!("  warm(t={t}) -> {s} (nodes {})", self.nodes);
+                    }
                 }
                 self.hash_table.demote_to_seed();
             }
@@ -703,11 +723,38 @@ impl Solver {
         val
     }
 
+    /// Cheap evaluation-based guess of the final score, on the even grid
+    /// that terminal scores live on.
+    fn estimate_score(&mut self, board: &Board, ev: Option<&Evaluator>) -> i32 {
+        let Some(e) = ev else { return 0 };
+        let ix = e.indexer();
+        let mut indices = ix.init(board.black, board.white);
+        let hash = zobrist::compute_hash(board.black, board.white, board.player());
+        let depth = ESTIMATE_DEPTH.min(board.empty_count());
+        let v = self.seed_search(
+            board, hash, e, ix, &mut indices, depth, f32::NEG_INFINITY, f32::INFINITY, false,
+        );
+        let rounded = (v / 2.0).round() as i32 * 2;
+        rounded.clamp(-62, 62)
+    }
+
     /// Aspiration around a prior score: search a narrow window, and on a
     /// failure re-centre on the failing bound and double that side only.
-    fn aspiration(&mut self, board: &mut Board, mut score: i32, ev: Option<&Evaluator>) -> i32 {
-        let mut left = ASPIRATION_WIDTH;
-        let mut right = ASPIRATION_WIDTH;
+    fn aspiration(&mut self, board: &mut Board, score: i32, ev: Option<&Evaluator>) -> i32 {
+        self.aspiration_width(board, score, ASPIRATION_WIDTH, ev)
+    }
+
+    /// Aspiration with an explicit starting half-width: the warm-up passes
+    /// start from a rougher estimate than the exact pass does.
+    fn aspiration_width(
+        &mut self,
+        board: &mut Board,
+        mut score: i32,
+        width: i32,
+        ev: Option<&Evaluator>,
+    ) -> i32 {
+        let mut left = width;
+        let mut right = width;
         for _ in 0..12 {
             let lo = (score - left).max(-64);
             let hi = (score + right).min(64);
