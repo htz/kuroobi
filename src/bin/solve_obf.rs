@@ -21,6 +21,9 @@ use kuroobi::Board;
 fn main() -> ExitCode {
     let mut depth: Option<u8> = None;
     let mut mpc = false;
+    // Billion-node endgames oversubscribe the table by orders of magnitude;
+    // measured -14..-16% nodes and -23..-31% time going from 2^22 to 2^26.
+    let mut hash_bits: u32 = 26;
     let mut mpc_t: Option<f32> = None;
     let mut weights: Option<PathBuf> = None;
     let mut files: Vec<PathBuf> = Vec::new();
@@ -30,13 +33,14 @@ fn main() -> ExitCode {
         match arg.as_str() {
             "--depth" => depth = it.next().and_then(|v| v.parse().ok()),
             "--mpc" => mpc = true,
+            "--hash-bits" => hash_bits = it.next().and_then(|v| v.parse().ok()).unwrap_or(hash_bits),
             "--mpc-t" => mpc_t = it.next().and_then(|v| v.parse().ok()),
             "--weights" => weights = it.next().map(PathBuf::from),
             other => files.push(PathBuf::from(other)),
         }
     }
     if files.is_empty() {
-        eprintln!("usage: solve_obf [--depth <n>] [--mpc] [--weights <path>] <file.obf>...");
+        eprintln!("usage: solve_obf [--depth <n>] [--mpc] [--hash-bits <n>] [--weights <path>] <file.obf>...");
         return ExitCode::FAILURE;
     }
 
@@ -49,7 +53,7 @@ fn main() -> ExitCode {
         return ExitCode::FAILURE;
     }
 
-    let mut solver = Solver::new(22);
+    let mut solver = Solver::new(hash_bits);
     let mut searcher = Searcher::new(21);
     searcher.mpc = mpc;
     if let Some(t) = mpc_t {

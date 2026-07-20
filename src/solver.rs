@@ -88,13 +88,6 @@ const ETC_EMPTIES: u8 = 8;
 /// the table with move-ordering seeds.
 const SEED_MIN_EMPTIES: u8 = 25;
 const SEED_MAX_DEPTH: u8 = 14;
-/// Contested roots seed only from this many empties up: the seed search
-/// costs a roughly fixed number of nodes, so it only amortizes when the
-/// exact search is large. Below this the seeding cost dominates (measured:
-/// 25-26 empties got 1.3-2.1x worse, 27+ got 1.1-1.9x better).
-const SEED_CONTESTED_MIN_EMPTIES: u8 = 27;
-/// Contested roots start seeding from this depth (see above).
-const SEED_CONTESTED_MIN_DEPTH: u8 = 12;
 
 /// Squares adjacent to each square (used to skip moves that cannot flip:
 /// a legal move must touch at least one opponent disc).
@@ -605,18 +598,8 @@ impl Solver {
                     board, root_hash, e, ix, &mut indices, 4,
                     f32::NEG_INFINITY, f32::INFINITY, false,
                 );
-                // Lopsided roots seed from the shallowest depth; contested
-                // ones skip the shallow passes (measured to disturb their
-                // already-good ordering) but still benefit from deep seeds.
-                let start = if probe.abs() >= 40.0 {
-                    Some(4)
-                } else if empties >= SEED_CONTESTED_MIN_EMPTIES {
-                    Some(SEED_CONTESTED_MIN_DEPTH)
-                } else {
-                    None
-                };
-                if let Some(start) = start {
-                    let mut d = start;
+                if probe.abs() >= 40.0 {
+                    let mut d = 4;
                     while d <= end {
                         self.seed_search(
                             board, root_hash, e, ix, &mut indices, d,
