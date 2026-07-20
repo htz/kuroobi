@@ -21,6 +21,19 @@ const INF: f32 = f32::MAX / 4.0;
 /// so a "zero window" needs a small epsilon).
 const PVS_EPSILON: f32 = 0.001;
 
+/// Terminal score with empties awarded to the winner (same convention as
+/// the endgame solver and the game pipeline).
+#[inline]
+fn final_score_discs(board: &Board) -> i32 {
+    let diff = board.score();
+    let empties = board.empty_count() as i32;
+    match diff.cmp(&0) {
+        std::cmp::Ordering::Greater => diff + empties,
+        std::cmp::Ordering::Less => diff - empties,
+        std::cmp::Ordering::Equal => 0,
+    }
+}
+
 /// Leaf evaluations are snapped to a half-disc grid inside the search:
 /// continuous f32 values make almost every second child "slightly better",
 /// which defeats PVS null-window confirmations and value-equal TT hits.
@@ -241,7 +254,7 @@ impl Searcher {
             child.pass();
             if child.movable() == 0 {
                 // Both sides stuck: exact terminal score
-                return board.score() as f32 * SCORE_SCALE;
+                return final_score_discs(board) as f32 * SCORE_SCALE;
             }
             self.nodes += 1; // the pass "node", as the recursion counted it
             return -quantize_leaf(evaluator.eval_indices(&child, indices));
@@ -267,7 +280,7 @@ impl Searcher {
         if moves == 0 {
             if passed {
                 // Game over: exact score dominates heuristics
-                return board.score() as f32 * SCORE_SCALE;
+                return final_score_discs(board) as f32 * SCORE_SCALE;
             }
             let mut child = *board;
             child.pass();
@@ -534,7 +547,7 @@ mod tests {
         let moves = board.movable();
         if moves == 0 {
             if passed {
-                return board.score() as f32 * SCORE_SCALE;
+                return final_score_discs(board) as f32 * SCORE_SCALE;
             }
             let mut child = *board;
             child.pass();

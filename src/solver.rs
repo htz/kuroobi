@@ -22,6 +22,35 @@ const EVAL_ORDER_EMPTIES: u8 = 14;
 /// From this many empties upward, ordering refines the evaluation with a
 /// one-ply lookahead (max over the opponent's replies).
 const DEEP_ORDER_EMPTIES: u8 = 16;
+/// Terminal score with the empty-square bonus awarded to the winner
+/// (FFO convention; also what the game pipeline records). The old
+/// plain disc difference disagreed whenever a game ended with empties left
+/// — last1 already awarded its single empty, the general terminals did not.
+#[inline]
+fn final_score(board: &Board) -> i32 {
+    let diff = board.score();
+    let empties = board.empty_count() as i32;
+    match diff.cmp(&0) {
+        std::cmp::Ordering::Greater => diff + empties,
+        std::cmp::Ordering::Less => diff - empties,
+        std::cmp::Ordering::Equal => 0,
+    }
+}
+
+/// Wipeout: a side with no discs can never move again, so the game is
+/// over the moment it happens (worth handling explicitly; without it
+/// the search still terminates but only after mobility churn).
+#[inline]
+fn wipeout_score(board: &Board) -> Option<i32> {
+    if board.opponent_bb() == 0 {
+        return Some(64);
+    }
+    if board.player_bb() == 0 {
+        return Some(-64);
+    }
+    None
+}
+
 /// Stability cutoff precondition: the bound 64 - 2*S can only cut when the
 /// opponent has at least ceil((64-alpha)/2) stable discs, so their total
 /// disc count (cheap popcount) must reach that first.
@@ -424,7 +453,7 @@ impl Solver {
 
         let moves = self.sorted_moves(board, hash, ev);
         if moves.is_empty() {
-            return board.score();
+            return final_score(board);
         }
 
         let mut best = moves[0].pos;
@@ -471,6 +500,10 @@ impl Solver {
 
         self.nodes += 1;
 
+        if let Some(v) = wipeout_score(board) {
+            return v;
+        }
+
         if let Some(v) = self.hash_table.get(board, hash) {
             if v.lower() >= v.upper() {
                 return v.lower();
@@ -499,7 +532,7 @@ impl Solver {
 
         if moves.is_empty() {
             if passed {
-                return board.score();
+                return final_score(board);
             }
             board.pass();
             let val = -self.pvs(board, zobrist::update_hash_on_pass(hash), -upper, -lower, true, ev);
@@ -585,6 +618,10 @@ impl Solver {
 
         self.nodes += 1;
 
+        if let Some(v) = wipeout_score(board) {
+            return v;
+        }
+
         if let Some(v) = self.hash_table.get(board, hash) {
             if v.lower() >= v.upper() {
                 return v.lower();
@@ -612,7 +649,7 @@ impl Solver {
 
         if moves.is_empty() {
             if passed {
-                return board.score();
+                return final_score(board);
             }
             board.pass();
             let val = -self.alpha_beta_ordered(
@@ -653,6 +690,10 @@ impl Solver {
     /// a dedicated shallow transposition table (5-6 empties).
     fn alpha_beta(&mut self, board: &mut Board, hash: u64, alpha: i32, beta: i32, passed: bool) -> i32 {
         self.nodes += 1;
+
+        if let Some(v) = wipeout_score(board) {
+            return v;
+        }
 
         if let Some(bound) = stability_cut(board, alpha, beta) {
             return bound;
@@ -744,7 +785,7 @@ impl Solver {
 
         if !any {
             if passed {
-                return board.score();
+                return final_score(board);
             }
             board.pass();
             let val = -self.alpha_beta(board, zobrist::update_hash_on_pass(hash), -upper, -orig_lower, true);
@@ -811,7 +852,7 @@ impl Solver {
         if !any {
             if passed {
                 // Terminal: score with empty bonus
-                return board.score();
+                return final_score(board);
             }
             board.pass();
             let val = -self.last4(board, p1, p2, p3, p4, -beta, -alpha, true);
@@ -867,7 +908,7 @@ impl Solver {
 
         if !any {
             if passed {
-                return board.score();
+                return final_score(board);
             }
             board.pass();
             let val = -self.last3(board, p1, p2, p3, -beta, -alpha, true);
@@ -915,7 +956,7 @@ impl Solver {
 
         if !any {
             if passed {
-                return board.score();
+                return final_score(board);
             }
             board.pass();
             let val = -self.last2(board, p1, p2, -beta, -alpha, true);
@@ -993,8 +1034,11 @@ impl Solver {
             let mut child = *board;
             let flipped = child.make_move_bits(pos);
             let child_hash = zobrist::update_hash_on_move(hash, pos, flipped, mover);
-            let value = if Some(pos) == tt_best {
+            let value = if child.player_bb() == 0 {
+                // Wiping out the opponent ends the game at +64: try first
                 i32::MIN
+            } else if Some(pos) == tt_best {
+                i32::MIN + 1
             } else if let (Some(e), Some((ix, indices))) = (ev, order_ix.as_mut()) {
                 // Pattern evaluation of the child (opponent view: lower =
                 // better for the mover). Far stronger ordering than the
@@ -1051,7 +1095,7 @@ fn shallow_search(
         let mut p = *board;
         p.pass();
         if p.movable() == 0 {
-            return board.score() as f32 * 1000.0;
+            return final_score(board) as f32 * 1000.0;
         }
         // A pass leaves the discs (and thus the indices) unchanged
         return -shallow_search(&p, ev, ix, indices, depth, -beta, -alpha);
@@ -1167,7 +1211,7 @@ mod tests {
         let moves = board.movable();
         if moves == 0 {
             if passed {
-                return board.score();
+                return final_score(board);
             }
             let mut b = *board;
             b.pass();
