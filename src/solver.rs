@@ -108,8 +108,6 @@ const SELECTIVE_PASS_MIN_EMPTIES: u8 = 20;
 /// an estimate that is off by even two discs makes the exact search pay
 /// for a failed window, which is the dominant cost on hard positions.
 const SELECTIVE_LADDER: [f32; 1] = [1.8];
-const SEED_MIN_EMPTIES: u8 = 25;
-const SEED_MAX_DEPTH: u8 = 14;
 
 /// Squares adjacent to each square (used to skip moves that cannot flip:
 /// a legal move must touch at least one opponent disc).
@@ -624,36 +622,6 @@ impl Solver {
         self.shallow_table.clear();
         self.warm_score = None;
         let mut b = *board;
-
-        // Iterative evaluation-guided seeding for deep solves
-        if let Some(e) = ev {
-            let empties = board.empty_count();
-            if empties >= SEED_MIN_EMPTIES {
-                let ix = e.indexer();
-                let mut indices = ix.init(board.black, board.white);
-                let root_hash =
-                    zobrist::compute_hash(board.black, board.white, board.player());
-                let end = (empties - 10).min(SEED_MAX_DEPTH);
-                // Store-free probe first: seeding only pays in lopsided
-                // positions (the pathological blow-up regime); contested
-                // positions already search efficiently and even shallow
-                // seed entries disturb their ordering.
-                let probe = self.seed_search(
-                    board, root_hash, e, ix, &mut indices, 4,
-                    f32::NEG_INFINITY, f32::INFINITY, false,
-                );
-                if probe.abs() >= 40.0 {
-                    let mut d = 4;
-                    while d <= end {
-                        self.seed_search(
-                            board, root_hash, e, ix, &mut indices, d,
-                            f32::NEG_INFINITY, f32::INFINITY, true,
-                        );
-                        d += 2;
-                    }
-                }
-            }
-        }
 
         // Warm-up ladder (iterative selectivity): solve the same
         // full-depth endgame selectively first, leaving real full-depth
