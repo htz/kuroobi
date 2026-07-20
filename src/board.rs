@@ -216,6 +216,14 @@ impl Board {
         flipped
     }
 
+    /// Apply a move whose flips are already known. Callers that had to
+    /// compute the flip mask anyway (to test legality, say) must use this
+    /// instead of `make_move_bits`, which would recompute it.
+    #[inline]
+    pub fn apply_flips(&mut self, pos: Position, flipped: u64) {
+        self.apply_move(pos.to_bit(), flipped);
+    }
+
     /// Apply a precomputed move: place on `pos_bit`, recolor `flipped`.
     #[inline]
     fn apply_move(&mut self, pos_bit: u64, flipped: u64) {

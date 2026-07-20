@@ -1151,9 +1151,9 @@ impl Solver {
 
                 any = true;
                 let mut child = *board;
-                let flipped = child.make_move_bits(pos);
+                child.apply_flips(pos, flips);
                 let child_hash = if need_child_hash {
-                    zobrist::update_hash_on_move(hash, pos, flipped, mover)
+                    zobrist::update_hash_on_move(hash, pos, flips, mover)
                 } else {
                     0
                 };
@@ -1227,7 +1227,7 @@ impl Solver {
             }
             any = true;
             let mut child = *board;
-            child.make_move_bits(pos);
+            child.apply_flips(pos, flips);
             let val = -self.last3(&mut child, rest[0], rest[1], rest[2], -beta, -alpha, false);
             if val >= beta {
                 return val;
@@ -1284,7 +1284,7 @@ impl Solver {
             }
             any = true;
             let mut child = *board;
-            child.make_move_bits(pos);
+            child.apply_flips(pos, flips);
             let val = -self.last2(&mut child, rest[0], rest[1], -beta, -alpha, false);
             if val >= beta {
                 return val;
@@ -1332,7 +1332,7 @@ impl Solver {
             }
             any = true;
             let mut child = *board;
-            child.make_move_bits(pos);
+            child.apply_flips(pos, flips);
             let val = -self.last1(&mut child, b);
             if val >= beta {
                 return val;
