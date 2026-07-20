@@ -89,6 +89,8 @@ const ETC_EMPTIES: u8 = 8;
 /// Ordering weight of one opponent reply, in eighths of a disc (the same
 /// scale the evaluation term uses).
 const MOBILITY_ORDER_WEIGHT: i32 = 12;
+/// Slack below the node's alpha for the ordering lookahead's window.
+const SORT_ALPHA_DELTA: i32 = 8;
 /// Ordering weight of one stable edge disc, in eighths of a disc.
 const EDGE_STABILITY_ORDER_WEIGHT: i32 = 1;
 /// Half-width of the first aspiration window around the warm-up score.
@@ -906,7 +908,7 @@ impl Solver {
         }
 
         // Stage 2: the rest, now ordered properly.
-        self.score_and_sort(board, &mut moves, None, ev);
+        self.score_and_sort(board, &mut moves, None, ev, lower);
 
         let mut rest = moves.iter();
         if max == i32::MIN {
@@ -1408,7 +1410,7 @@ impl Solver {
     fn sorted_moves(&self, board: &Board, hash: u64, ev: Option<&Evaluator>) -> Vec<ScoredMove> {
         let tt_best = self.hash_table.get(board, hash).and_then(|e| e.best());
         let mut moves = self.gen_moves(board, hash);
-        self.score_and_sort(board, &mut moves, tt_best, ev);
+        self.score_and_sort(board, &mut moves, tt_best, ev, i32::MIN / 2);
         moves
     }
 
@@ -1444,6 +1446,7 @@ impl Solver {
         moves: &mut [ScoredMove],
         tt_best: Option<Position>,
         ev: Option<&Evaluator>,
+        alpha: i32,
     ) {
         let eval_order = board.empty_count() >= EVAL_ORDER_EMPTIES;
         // Incremental pattern indices for ordering evaluation: initialized
@@ -1456,6 +1459,17 @@ impl Solver {
         };
         let parity = parity_of(board);
         let mover = board.player();
+        // The ordering lookahead only has to distinguish moves that could
+        // matter at this node, so it is bounded from below by the node's own
+        // alpha (less a margin); a full window wastes work
+        // proving exact values for moves that are already hopeless.
+        // The lookahead runs from the child's point of view, so the node's
+        // alpha becomes an upper bound there.
+        let sort_hi = if alpha <= i32::MIN / 4 {
+            f32::INFINITY
+        } else {
+            -(alpha - SORT_ALPHA_DELTA) as f32
+        };
 
         for sm in moves.iter_mut() {
             let pos = sm.pos;
@@ -1473,9 +1487,9 @@ impl Solver {
                 // region refines it with a pruned lookahead.
                 ix.apply(indices, pos, flipped, mover);
                 let v = if board.empty_count() >= DEEP2_ORDER_EMPTIES {
-                    shallow_search(&child, e, ix, indices, 4, f32::NEG_INFINITY, f32::INFINITY)
+                    shallow_search(&child, e, ix, indices, 4, f32::NEG_INFINITY, sort_hi)
                 } else if board.empty_count() >= DEEP_ORDER_EMPTIES {
-                    shallow_search(&child, e, ix, indices, 2, f32::NEG_INFINITY, f32::INFINITY)
+                    shallow_search(&child, e, ix, indices, 2, f32::NEG_INFINITY, sort_hi)
                 } else {
                     e.eval_indices(&child, indices)
                 };
