@@ -92,8 +92,11 @@ const ASPIRATION_WIDTH: i32 = 2;
 const SELECTIVE_MIN_EMPTIES: u8 = 14;
 /// Depth of the evaluation probe used by a warm-up pass.
 const SELECTIVE_PROBE_DEPTH: u8 = 4;
-/// Roots this deep run the warm-up ladder before the exact pass.
-const SELECTIVE_PASS_MIN_EMPTIES: u8 = 27;
+/// Roots this deep run the warm-up ladder before the exact pass. Below 20
+/// empties the exact search is cheap enough that the pass cannot pay for
+/// itself (measured on FFO1-19: +6% nodes and +24% time at 16, +14%/+62%
+/// at 14), while from 20 up it pays for itself several times over.
+const SELECTIVE_PASS_MIN_EMPTIES: u8 = 20;
 /// Confidence levels (standard deviations) of the warm-up passes.
 const SELECTIVE_LADDER: [f32; 1] = [1.1];
 const SEED_MIN_EMPTIES: u8 = 25;
