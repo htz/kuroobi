@@ -185,11 +185,18 @@ impl PatternIndexer {
     /// because every true result stays within 0..3^size.
     #[inline]
     fn update_square(&self, indices: &mut PatternIndices, sq: u8, digit_diff: u16) {
-        let start = self.offsets[sq as usize] as usize;
-        let end = self.offsets[sq as usize + 1] as usize;
-        for e in &self.entries[start..end] {
-            let delta = digit_diff.wrapping_mul(e.pow3);
-            indices.idx[e.mask as usize] = indices.idx[e.mask as usize].wrapping_add(delta);
+        // SAFETY: `offsets` has 65 entries and `sq < 64`, so both reads are in
+        // range and `start <= end <= entries.len()` by construction. Every
+        // `e.mask` was assigned in `new` from `0..n_masks`, and `n_masks` is
+        // asserted to be at most `MAX_MASKS`, the length of `indices.idx`.
+        unsafe {
+            let start = *self.offsets.get_unchecked(sq as usize) as usize;
+            let end = *self.offsets.get_unchecked(sq as usize + 1) as usize;
+            for e in self.entries.get_unchecked(start..end) {
+                let delta = digit_diff.wrapping_mul(e.pow3);
+                let slot = indices.idx.get_unchecked_mut(e.mask as usize);
+                *slot = slot.wrapping_add(delta);
+            }
         }
     }
 
@@ -200,16 +207,26 @@ impl PatternIndexer {
     #[inline]
     pub fn eval_sum(&self, indices: &PatternIndices, player: Color, weights: &[Vec<f32>]) -> f32 {
         let mut score = 0.0f32;
-        if player == Color::Black {
-            for m in 0..self.n_masks {
-                let pi = self.mask_pattern[m] as usize;
-                score += weights[pi][indices.idx[m] as usize];
-            }
-        } else {
-            for m in 0..self.n_masks {
-                let pi = self.mask_pattern[m] as usize;
-                let swap = &self.swap_tables[self.patterns[pi].size];
-                score += weights[pi][swap[indices.idx[m] as usize] as usize];
+        // SAFETY: `m < n_masks <= MAX_MASKS` bounds `mask_pattern` and
+        // `indices.idx`; `mask_pattern` holds pattern ids, and `weights` is
+        // checked on load to have one table per pattern sized `3^size`, which
+        // is exactly the range the maintained indices live in. The swap
+        // tables are built with one entry per index of their size.
+        unsafe {
+            if player == Color::Black {
+                for m in 0..self.n_masks {
+                    let pi = *self.mask_pattern.get_unchecked(m) as usize;
+                    let table = weights.get_unchecked(pi);
+                    score += *table.get_unchecked(*indices.idx.get_unchecked(m) as usize);
+                }
+            } else {
+                for m in 0..self.n_masks {
+                    let pi = *self.mask_pattern.get_unchecked(m) as usize;
+                    let table = weights.get_unchecked(pi);
+                    let swap = self.swap_tables.get_unchecked(self.patterns[pi].size);
+                    let idx = *swap.get_unchecked(*indices.idx.get_unchecked(m) as usize);
+                    score += *table.get_unchecked(idx as usize);
+                }
             }
         }
         score
