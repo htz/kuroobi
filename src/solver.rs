@@ -1070,7 +1070,8 @@ impl Worker<'_> {
         self.nodes += 1;
 
         let mut moves = MoveBuf::new();
-        self.sorted_moves(board, hash, ev, &mut moves);
+        let tt_best = self.tt.get(board, hash).and_then(|e| e.best());
+        self.sorted_moves(board, hash, tt_best, ev, &mut moves);
         if moves.is_empty() {
             return final_score(board);
         }
@@ -1249,7 +1250,11 @@ impl Worker<'_> {
             return v;
         }
 
-        if let Some(v) = self.tt.get(board, hash) {
+        // One probe serves both purposes, carried through the node: the
+        // bounds below and the ordering move further
+        // down used to cost two lookups of the same entry.
+        let entry = self.tt.get(board, hash);
+        if let Some(v) = entry {
             if !v.is_seed() {
                 if v.lower() >= v.upper() {
                     return v.lower();
@@ -1333,7 +1338,7 @@ impl Worker<'_> {
 
         // Stage 1: the transposition-table move, searched before any
         // ordering work is done. Most cut nodes end here.
-        let tt_best = self.tt.get(board, hash).and_then(|e| e.best());
+        let tt_best = entry.and_then(|e| e.best());
         if let Some(bpos) = tt_best {
             if let Some(idx) = moves.iter().position(|m| m.pos == bpos) {
                 let m = moves.swap_remove(idx);
@@ -1462,7 +1467,9 @@ impl Worker<'_> {
             return v;
         }
 
-        if let Some(v) = self.tt.get(board, hash) {
+        // Single probe, reused for the ordering move below (see `pvs`).
+        let entry = self.tt.get(board, hash);
+        if let Some(v) = entry {
             if !v.is_seed() {
                 if v.lower() >= v.upper() {
                     return v.lower();
@@ -1488,7 +1495,7 @@ impl Worker<'_> {
 
         let orig_alpha = alpha;
         let mut moves = MoveBuf::new();
-        self.sorted_moves(board, hash, ev, &mut moves);
+        self.sorted_moves(board, hash, entry.and_then(|e| e.best()), ev, &mut moves);
 
         if moves.is_empty() {
             if passed {
@@ -1887,8 +1894,14 @@ impl Worker<'_> {
     /// (fastest-first: minimize opponent mobility, corner stability, parity).
     /// The transposition table's best move, when present, is searched first.
     /// Each child carries its incrementally-updated Zobrist hash.
-    fn sorted_moves(&self, board: &Board, hash: u64, ev: Option<&Evaluator>, out: &mut MoveBuf) {
-        let tt_best = self.tt.get(board, hash).and_then(|e| e.best());
+    fn sorted_moves(
+        &self,
+        board: &Board,
+        hash: u64,
+        tt_best: Option<Position>,
+        ev: Option<&Evaluator>,
+        out: &mut MoveBuf,
+    ) {
         self.gen_moves(board, hash, out);
         self.score_and_sort(board, out, tt_best, ev, i32::MIN / 2);
     }
