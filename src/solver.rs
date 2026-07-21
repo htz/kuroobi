@@ -87,6 +87,8 @@ const ETC_EMPTIES: u8 = 8;
 /// Ordering weight of one opponent reply, in eighths of a disc (the same
 /// scale the evaluation term uses).
 const MOBILITY_ORDER_WEIGHT: i32 = 12;
+/// Root splitting only pays off when each sibling subtree is substantial.
+const PARALLEL_MIN_EMPTIES: u8 = 18;
 /// Slack below the node's alpha for the ordering lookahead's window.
 const SORT_ALPHA_DELTA: i32 = 8;
 /// Ordering weight of one stable edge disc, in eighths of a disc.
@@ -555,6 +557,8 @@ pub struct Solver {
     /// Results of the last solve, copied back from the worker.
     nodes: u64,
     best: Option<Position>,
+    /// Search threads to split the root across (1 = sequential).
+    threads: usize,
 }
 
 /// One search thread's private state plus borrows of the shared tables.
@@ -578,6 +582,8 @@ struct Worker<'a> {
     /// transpositions are dense but entries would lose the depth-preferred
     /// replacement race in the main table. Private to the thread.
     shallow_table: HashTable,
+    /// How many threads the root may split across (1 = sequential).
+    threads: usize,
 }
 
 impl<'a> Worker<'a> {
@@ -590,6 +596,7 @@ impl<'a> Worker<'a> {
             warm_score: None,
             selective_t: None,
             shallow_table: HashTable::new(16),
+            threads: 1,
         }
     }
 }
@@ -603,7 +610,15 @@ impl Solver {
             neighbours: NeighbourTable::new(),
             nodes: 0,
             best: None,
+            threads: 1,
         }
+    }
+
+    /// Set how many threads the root may split its siblings across.
+    /// The transposition table is shared; every other piece of search state
+    /// is per-thread.
+    pub fn set_threads(&mut self, threads: usize) {
+        self.threads = threads.max(1);
     }
 
 
@@ -638,6 +653,7 @@ impl Solver {
 
         let value = {
             let mut w = Worker::new(&self.hash_table, &self.neighbours);
+            w.threads = self.threads;
             let mut b = *board;
 
             // Warm-up ladder (iterative selectivity): solve the same
@@ -901,6 +917,24 @@ impl Worker<'_> {
             }
         }
 
+        // Young Brothers Wait: the eldest child above has proved a bound, so
+        // the remaining siblings are independent enough to share out. Only
+        // worth the hand-off when the subtrees are large.
+        if self.threads > 1
+            && moves.len() > 2
+            && board.empty_count() >= PARALLEL_MIN_EMPTIES
+            && lower < upper
+        {
+            let (val, bpos) = self.split_siblings(&moves[1..], lower, upper, ev);
+            if val > max {
+                max = val;
+                best = bpos;
+            }
+            self.tt.update(board, hash, alpha, beta, max, Some(best));
+            self.best = Some(best);
+            return max;
+        }
+
         // Remaining moves: null-window probe, re-search on fail-high
         for m in &moves[1..] {
             if lower >= upper {
@@ -924,6 +958,95 @@ impl Worker<'_> {
             .update(board, hash, alpha, beta, max, Some(best));
         self.best = Some(best);
         max
+    }
+
+    /// Search `siblings` across `self.threads` threads, all sharing the one
+    /// transposition table. Returns the best (value, move).
+    ///
+    /// The alpha bound is shared and only ever rises, so a thread that reads
+    /// a slightly stale value simply searches a wider window — correct, just
+    /// marginally more work. Each thread keeps its own node counter and
+    /// shallow table; the results are folded back in at the join.
+    fn split_siblings(
+        &mut self,
+        siblings: &[ScoredMove],
+        lower: i32,
+        upper: i32,
+        ev: Option<&Evaluator>,
+    ) -> (i32, Position) {
+        use std::sync::atomic::{AtomicI32, AtomicUsize, Ordering};
+        use std::sync::Mutex;
+
+        let next = AtomicUsize::new(0);
+        let shared_lower = AtomicI32::new(lower);
+        // (best value so far, its move)
+        let best = Mutex::new((i32::MIN, siblings[0].pos));
+        let tt = self.tt;
+        let neighbours = self.neighbours;
+        let selective_t = self.selective_t;
+        let n_threads = self.threads.min(siblings.len());
+        let extra_nodes = AtomicUsize::new(0);
+
+        std::thread::scope(|scope| {
+            for _ in 1..n_threads {
+                scope.spawn(|| {
+                    let mut w = Worker::new(tt, neighbours);
+                    w.selective_t = selective_t;
+                    Worker::run_siblings(
+                        &mut w,
+                        siblings,
+                        upper,
+                        ev,
+                        &next,
+                        &shared_lower,
+                        &best,
+                    );
+                    extra_nodes.fetch_add(w.nodes as usize, Ordering::Relaxed);
+                });
+            }
+            // The spawning thread pulls its share too.
+            Worker::run_siblings(self, siblings, upper, ev, &next, &shared_lower, &best);
+        });
+
+        self.nodes += extra_nodes.load(Ordering::Relaxed) as u64;
+        let (v, p) = *best.lock().unwrap();
+        (v, p)
+    }
+
+    /// Claim siblings one at a time and search each with the current shared
+    /// alpha, mirroring the sequential null-window-then-re-search logic.
+    fn run_siblings(
+        &mut self,
+        siblings: &[ScoredMove],
+        upper: i32,
+        ev: Option<&Evaluator>,
+        next: &std::sync::atomic::AtomicUsize,
+        shared_lower: &std::sync::atomic::AtomicI32,
+        best: &std::sync::Mutex<(i32, Position)>,
+    ) {
+        use std::sync::atomic::Ordering;
+        loop {
+            let i = next.fetch_add(1, Ordering::Relaxed);
+            if i >= siblings.len() {
+                return;
+            }
+            let cur = shared_lower.load(Ordering::Relaxed);
+            if cur >= upper {
+                return; // a sibling already cut this node off
+            }
+            let m = &siblings[i];
+            let mut child = m.board;
+            let mut val = -self.pvs(&mut child, m.hash, -cur - 1, -cur, false, ev);
+            if cur < val && val < upper {
+                val = -self.pvs(&mut child, m.hash, -upper, -val, false, ev);
+            }
+            let mut g = best.lock().unwrap();
+            if val > g.0 {
+                *g = (val, m.pos);
+            }
+            drop(g);
+            shared_lower.fetch_max(val, Ordering::Relaxed);
+        }
     }
 
     #[allow(clippy::too_many_arguments)]
