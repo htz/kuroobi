@@ -1090,10 +1090,11 @@ impl Worker<'_> {
 
         let mut moves = MoveBuf::new();
         let tt_best = self.tt.get(board, hash).and_then(|e| e.best());
-        self.sorted_moves(board, hash, tt_best, ev, &mut moves);
+        self.scored_moves(board, hash, tt_best, ev, &mut moves);
         if moves.is_empty() {
             return final_score(board);
         }
+        moves.sort_by_key(|m| m.value);
 
         let mut best = moves[0].pos;
         let mut max;
@@ -1375,12 +1376,14 @@ impl Worker<'_> {
         }
 
         // Stage 2: the rest, now ordered properly.
-        self.score_and_sort(board, &mut moves, None, ev, lower);
+        self.score_moves(board, &mut moves, None, ev, lower);
 
-        let mut rest = moves.iter();
+        let mut next = 0usize;
         if max == i32::MIN {
             // No table move: the best-ordered child takes the full window.
-            let m = rest.next().expect("non-empty move list");
+            Self::select_next(&mut moves, 0);
+            let m = moves[0];
+            next = 1;
             let mut child = m.child(board);
             max = self.descend(&mut child, m.hash, -upper, -lower, ev);
             if max == ABORTED {
@@ -1396,9 +1399,11 @@ impl Worker<'_> {
         // rest are independent enough to share out. Splitting at any node
         // deep enough, not only at the root, is what
         // keeps every core busy when one subtree dominates.
-        let remaining = rest.as_slice();
-        if remaining.len() > 1 && board.empty_count() >= PARALLEL_MIN_EMPTIES && lower < upper {
-            if let Some((val, bpos)) = self.split_siblings(board, remaining, lower, upper, ev) {
+        if moves.len() - next > 1 && board.empty_count() >= PARALLEL_MIN_EMPTIES && lower < upper {
+            // Helpers take the siblings in order, so this path pays for the
+            // full sort that the sequential path avoids.
+            moves[next..].sort_by_key(|m| m.value);
+            if let Some((val, bpos)) = self.split_siblings(board, &moves[next..], lower, upper, ev) {
                 if val > max {
                     max = val;
                     best = Some(bpos);
@@ -1409,10 +1414,13 @@ impl Worker<'_> {
         }
 
         // Remaining moves: null-window probe, re-search on fail-high
-        for m in rest {
+        while next < moves.len() {
             if lower >= upper {
                 break;
             }
+            Self::select_next(&mut moves, next);
+            let m = moves[next];
+            next += 1;
             let mut child = m.child(board);
             let val = self.descend_null_window(&mut child, m.hash, lower, upper, ev);
             if val == ABORTED {
@@ -1514,7 +1522,7 @@ impl Worker<'_> {
 
         let orig_alpha = alpha;
         let mut moves = MoveBuf::new();
-        self.sorted_moves(board, hash, entry.and_then(|e| e.best()), ev, &mut moves);
+        self.scored_moves(board, hash, entry.and_then(|e| e.best()), ev, &mut moves);
 
         if moves.is_empty() {
             if passed {
@@ -1535,7 +1543,9 @@ impl Worker<'_> {
         }
 
         let mut best = None;
-        for m in moves.iter() {
+        for i in 0..moves.len() {
+            Self::select_next(&mut moves, i);
+            let m = moves[i];
             let mut child = m.child(board);
             let val = if child.empty_count() >= MOVE_ORDERING_LIMIT {
                 -self.alpha_beta_ordered(&mut child, m.hash, -beta, -alpha, false, ev)
@@ -1913,7 +1923,7 @@ impl Worker<'_> {
     /// (fastest-first: minimize opponent mobility, corner stability, parity).
     /// The transposition table's best move, when present, is searched first.
     /// Each child carries its incrementally-updated Zobrist hash.
-    fn sorted_moves(
+    fn scored_moves(
         &self,
         board: &Board,
         hash: u64,
@@ -1922,7 +1932,7 @@ impl Worker<'_> {
         out: &mut MoveBuf,
     ) {
         self.gen_moves(board, hash, out);
-        self.score_and_sort(board, out, tt_best, ev, i32::MIN / 2);
+        self.score_moves(board, out, tt_best, ev, i32::MIN / 2);
     }
 
     /// Generate children with their incremental hashes but WITHOUT the
@@ -1944,9 +1954,10 @@ impl Worker<'_> {
     }
 
     /// Fill in ordering values (the expensive part: pattern evaluation and
-    /// pruned lookaheads) and sort. Split from generation so that a node
-    /// whose transposition-table move already cuts never pays for it.
-    fn score_and_sort(
+    /// pruned lookaheads). Split from generation so that a node whose
+    /// transposition-table move already cuts never pays for it. Callers
+    /// either sort the result or draw from it with `select_next`.
+    fn score_moves(
         &self,
         board: &Board,
         moves: &mut [ScoredMove],
@@ -2019,8 +2030,22 @@ impl Worker<'_> {
             };
         }
 
-        // Ascending: "fastest-first" — smaller value = search first
-        moves.sort_by_key(|m| m.value);
+    }
+
+    /// Swap the best-ordered of `moves[i..]` into `moves[i]`.
+    ///
+    /// Extracting the next best on demand instead of
+    /// sorting the list: at a cut node, where the first move usually suffices,
+    /// one O(n) scan replaces a full sort.
+    #[inline]
+    fn select_next(moves: &mut [ScoredMove], i: usize) {
+        let mut best = i;
+        for j in i + 1..moves.len() {
+            if moves[j].value < moves[best].value {
+                best = j;
+            }
+        }
+        moves.swap(i, best);
     }
 }
 
