@@ -16,6 +16,9 @@ criterion = "0.5"
 [features]
 default = []
 random = ["rand"]
+# Count move-ordering and ETC probes as nodes, the way Edax does, so node
+# totals are comparable with `edax -solve`. Costs a few percent of search time.
+node-accounting = []
 
 [[bench]]
 name = "core"

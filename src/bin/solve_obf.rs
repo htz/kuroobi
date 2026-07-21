@@ -127,6 +127,19 @@ fn main() -> ExitCode {
             total_time,
             total_nodes as f64 / total_time / 1e6
         );
+        if kuroobi::solver::node_accounting::ENABLED {
+            // Edax counts ordering and ETC probes as nodes; add them so the
+            // totals are comparable with `edax -solve`.
+            let (sorted, etc, look) = kuroobi::solver::node_accounting::totals();
+            let ordering = sorted + etc + look;
+            println!(
+                "{}: + ordering {ordering} (sorted {sorted} / etc {etc} / lookahead {look}) \
+                 = {} nodes on Edax's terms ({:.2}M nodes/s)",
+                file.display(),
+                total_nodes + ordering,
+                (total_nodes + ordering) as f64 / total_time / 1e6
+            );
+        }
     }
     ExitCode::SUCCESS
 }

@@ -1293,13 +1293,20 @@ impl Worker<'_> {
         // Enhanced transposition cutoff: a child whose stored upper bound
         // already proves our value >= upper ends this node for free.
         if board.empty_count() >= ETC_EMPTIES {
+            // The comparison accounting counts each ETC probe as a node;
+            // tallied locally so the instrumentation costs one atomic per
+            // node rather than one per probe.
+            let mut probed = 0u64;
             for m in moves.iter() {
+                probed += 1;
                 if let Some(e) = self.tt.get(&m.child(board), m.hash) {
                     if !e.is_seed() && -e.upper() >= upper {
+                        node_accounting::etc(probed);
                         return -e.upper();
                     }
                 }
             }
+            node_accounting::etc(probed);
         }
 
         let mut max = i32::MIN;
@@ -1895,6 +1902,7 @@ impl Worker<'_> {
         ev: Option<&Evaluator>,
         alpha: i32,
     ) {
+        node_accounting::sorted(moves.len() as u64);
         let eval_order = board.empty_count() >= EVAL_ORDER_EMPTIES;
         // Incremental pattern indices for ordering evaluation: initialized
         // once per node, then updated per candidate move — far cheaper than
@@ -2080,6 +2088,7 @@ fn shallow_search(
     alpha: f32,
     beta: f32,
 ) -> f32 {
+    node_accounting::lookahead();
     if depth == 0 {
         return ev.eval_indices(board, indices);
     }
@@ -2204,6 +2213,72 @@ fn corner_stability(board: &Board, color: Color) -> i32 {
         }
     }
     count
+}
+
+/// Node accounting on Edax's terms, so node counts compare fairly.
+///
+/// Our search counter only counts nodes the search itself visits. Edax also
+/// counts every move it scores while ordering, every
+/// enhanced-transposition probe and every node of the
+/// shallow searches ordering launches — which for us adds about 90% on top
+/// of the search count, so node comparisons are meaningless until both
+/// sides count the same things.
+///
+/// Off by default: the counters cost a few percent of search time. Enable
+/// with `--features node-accounting`.
+pub mod node_accounting {
+    #[cfg(feature = "node-accounting")]
+    use std::sync::atomic::{AtomicU64, Ordering::Relaxed};
+
+    #[cfg(feature = "node-accounting")]
+    static SORTED: AtomicU64 = AtomicU64::new(0);
+    #[cfg(feature = "node-accounting")]
+    static ETC: AtomicU64 = AtomicU64::new(0);
+    #[cfg(feature = "node-accounting")]
+    static LOOKAHEAD: AtomicU64 = AtomicU64::new(0);
+
+    /// Moves scored for ordering at one node.
+    #[inline(always)]
+    pub(crate) fn sorted(n: u64) {
+        let _ = n;
+        #[cfg(feature = "node-accounting")]
+        SORTED.fetch_add(n, Relaxed);
+    }
+
+    /// Enhanced-transposition probes made at one node.
+    #[inline(always)]
+    pub(crate) fn etc(n: u64) {
+        let _ = n;
+        #[cfg(feature = "node-accounting")]
+        ETC.fetch_add(n, Relaxed);
+    }
+
+    /// One node of the move-ordering lookahead.
+    #[inline(always)]
+    pub(crate) fn lookahead() {
+        #[cfg(feature = "node-accounting")]
+        LOOKAHEAD.fetch_add(1, Relaxed);
+    }
+
+    /// Ordering nodes counted so far: (moves scored, ETC probes, lookahead).
+    /// All zero unless the `node-accounting` feature is on.
+    pub fn totals() -> (u64, u64, u64) {
+        #[cfg(feature = "node-accounting")]
+        {
+            (
+                SORTED.load(Relaxed),
+                ETC.load(Relaxed),
+                LOOKAHEAD.load(Relaxed),
+            )
+        }
+        #[cfg(not(feature = "node-accounting"))]
+        {
+            (0, 0, 0)
+        }
+    }
+
+    /// Whether the counters are compiled in.
+    pub const ENABLED: bool = cfg!(feature = "node-accounting");
 }
 
 #[cfg(test)]
