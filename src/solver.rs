@@ -188,6 +188,7 @@ impl ThreadBudget {
         self.free
             .fetch_add(n, std::sync::atomic::Ordering::Relaxed);
     }
+
 }
 /// Slack below the node's alpha for the ordering lookahead's window.
 const SORT_ALPHA_DELTA: i32 = 8;
@@ -424,6 +425,9 @@ const HASH_LOCK_STRIPES: usize = 4096;
 
 struct HashTable {
     mask: u64,
+    /// Set while more than one search thread is live. When it is clear the
+    /// table is private to one thread and every access can skip its lock.
+    shared: std::sync::atomic::AtomicBool,
     /// Interior mutability so search threads can share one table. Every
     /// access goes through `stripe()`; see `get`/`update` for the protocol.
     entries: std::cell::UnsafeCell<Vec<HashEntry>>,
@@ -444,9 +448,21 @@ impl HashTable {
         locks.resize_with(HASH_LOCK_STRIPES, SpinLock::new);
         HashTable {
             mask: ((size >> 1) - 1) as u64,
+            shared: std::sync::atomic::AtomicBool::new(false),
             entries: std::cell::UnsafeCell::new(vec![HashEntry::EMPTY; size]),
             locks,
         }
+    }
+
+    /// Declare whether search threads other than the owner are running.
+    fn set_shared(&self, shared: bool) {
+        self.shared
+            .store(shared, std::sync::atomic::Ordering::Relaxed);
+    }
+
+    #[inline]
+    fn is_shared(&self) -> bool {
+        self.shared.load(std::sync::atomic::Ordering::Relaxed)
     }
 
     /// Stripe guarding the bucket this hash maps to.
@@ -477,11 +493,19 @@ impl HashTable {
     #[inline]
     fn get(&self, board: &Board, hash: u64) -> Option<HashEntry> {
         let base = ((hash & self.mask) as usize) << 1;
-        // SAFETY: an unsynchronized read may observe a torn entry, which is
-        // discarded by the re-check below; no reference escapes.
-        let unlocked = unsafe { self.slots() };
-        if !unlocked[base].matches(board) && !unlocked[base + 1].matches(board) {
+        // SAFETY: with helpers running this read may observe a torn entry,
+        // which the locked re-check below discards; no reference escapes.
+        let e = unsafe { self.slots() };
+        let hit = if e[base].matches(board) {
+            base
+        } else if e[base + 1].matches(board) {
+            base + 1
+        } else {
             return None;
+        };
+        if !self.is_shared() {
+            // Sole owner: nothing can be rewriting the slot.
+            return Some(e[hit]);
         }
         let _guard = self.stripe(hash).lock();
         // SAFETY: the stripe lock is held for the duration of the read.
@@ -506,7 +530,7 @@ impl HashTable {
     ) {
         let best8 = best.map_or(255, |p| p.index());
         let base = ((hash & self.mask) as usize) << 1;
-        let _guard = self.stripe(hash).lock();
+        let _guard = self.is_shared().then(|| self.stripe(hash).lock());
         // SAFETY: the stripe lock is held for the whole read-modify-write.
         let entries = unsafe { self.slots() };
         let slot = if entries[base].matches(board) {
@@ -770,6 +794,10 @@ impl Solver {
                 nodes: 0,
             };
         }
+
+        // A single-threaded solve owns the table outright and can skip every
+        // lock; with helpers in play the probes must synchronize.
+        self.hash_table.set_shared(self.threads > 1);
 
         self.hash_table.clear();
 
