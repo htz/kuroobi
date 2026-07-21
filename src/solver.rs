@@ -1578,6 +1578,30 @@ impl std::ops::DerefMut for MoveBuf {
     }
 }
 
+/// Static square-visit priority for the ordering lookahead (file-major):
+/// corners first, C/X squares last. Trying good squares first improves the
+/// lookahead's alpha-beta cutoffs; because it only reorders sibling moves,
+/// the value the lookahead returns is unchanged (and so is the resulting
+/// move order and the main search's node count).
+#[rustfmt::skip]
+const SHALLOW_ORDER: [u8; 64] = {
+    // priority weight per square, rank-major, then transposed to file-major
+    let rm: [u8; 64] = [
+         0,  9,  3,  5,  5,  3,  9,  0,
+         9, 12,  7,  8,  8,  7, 12,  9,
+         3,  7,  1,  4,  4,  1,  7,  3,
+         5,  8,  4,  6,  6,  4,  8,  5,
+         5,  8,  4,  6,  6,  4,  8,  5,
+         3,  7,  1,  4,  4,  1,  7,  3,
+         9, 12,  7,  8,  8,  7, 12,  9,
+         0,  9,  3,  5,  5,  3,  9,  0,
+    ];
+    let mut t = [0u8; 64];
+    let mut f = 0;
+    while f < 8 { let mut r = 0; while r < 8 { t[f*8+r] = rm[r*8+f]; r += 1; } f += 1; }
+    t
+};
+
 /// Shallow alpha-beta refinement for ordering: the position's value from
 /// its own player's view, looking `depth` replies ahead with the
 /// evaluator. Pruned — same root value as a full-width lookahead at a
@@ -1608,11 +1632,23 @@ fn shallow_search(
     let mut alpha = alpha;
     let mut best = f32::NEG_INFINITY;
     let mover = board.player();
+
+    // Collect legal squares and visit them corner-first. Reordering
+    // siblings cannot change the value alpha-beta returns, only how quickly
+    // it prunes.
+    let mut sqs = [0u8; MAX_MOVES];
+    let mut n = 0usize;
     let mut m = moves;
     while m != 0 {
-        let sq = m.trailing_zeros();
+        sqs[n] = m.trailing_zeros() as u8;
+        n += 1;
         m &= m - 1;
-        let pos = Position(sq as u8);
+    }
+    let sqs = &mut sqs[..n];
+    sqs.sort_unstable_by_key(|&sq| SHALLOW_ORDER[sq as usize]);
+
+    for &sq in sqs.iter() {
+        let pos = Position(sq);
         let mut child = *board;
         let flipped = child.make_move_bits(pos);
         ix.apply(indices, pos, flipped, mover);
