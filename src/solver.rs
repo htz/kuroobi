@@ -21,7 +21,7 @@ const MOVE_ORDERING_LIMIT: u8 = 7;
 const EVAL_ORDER_EMPTIES: u8 = 14;
 /// From this many empties upward, ordering refines the evaluation with a
 /// one-ply lookahead (max over the opponent's replies).
-const DEEP_ORDER_EMPTIES: u8 = 16;
+const DEEP_ORDER_EMPTIES: u8 = 18;
 /// Terminal score with the empty-square bonus awarded to the winner
 /// (FFO convention; also what the game pipeline records). The old
 /// plain disc difference disagreed whenever a game ended with empties left
