@@ -498,6 +498,25 @@ impl HashTable {
         &mut *self.entries.get()
     }
 
+    /// Pull an entry's cache line in before it is needed, so the miss
+    /// overlaps the work in between. Ours covers the ETC sweep, which
+    /// touches every child's entry a moment after the moves are generated.
+    #[inline(always)]
+    fn prefetch(&self, hash: u64) {
+        let base = ((hash & self.mask) as usize) << 1;
+        // SAFETY: `base` indexes an allocated slot (mask is len/2 - 1), and
+        // a prefetch has no effect beyond the cache.
+        unsafe {
+            let p = (*self.entries.get()).as_ptr().add(base);
+            // `core::arch::aarch64::_prefetch` is still unstable, so emit the
+            // hint directly. `pldl1keep` = prefetch for read into L1, keep.
+            #[cfg(target_arch = "aarch64")]
+            std::arch::asm!("prfm pldl1keep, [{p}]", p = in(reg) p, options(nostack, preserves_flags));
+            #[cfg(not(target_arch = "aarch64"))]
+            let _ = p;
+        }
+    }
+
     fn clear(&mut self) {
         self.entries.get_mut().fill(HashEntry::EMPTY);
     }
@@ -1919,6 +1938,7 @@ impl Worker<'_> {
             let pos = Position(sq);
             let flipped = bitboard::flippable(board.player_bb(), board.opponent_bb(), pos.to_bit());
             let child_hash = zobrist::update_hash_on_move(hash, pos, flipped, mover);
+            self.tt.prefetch(child_hash);
             out.push(ScoredMove { pos, flipped, hash: child_hash, value: 0 });
         }
     }
