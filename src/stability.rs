@@ -193,32 +193,39 @@ fn edge_table() -> &'static [u8; 65536] {
     TABLE.get_or_init(build_edge_table)
 }
 
+/// Multiplier that folds one bit per byte into the top byte: a bit at
+/// position 8f lands at 56+f, so the whole rank arrives as a single byte.
+const GATHER_MAGIC: u64 = 0x0102_0408_1020_4080;
+/// Its inverse as a table: the multiply that would spread a byte back over
+/// one bit per byte carries across lanes, so a 2 KiB table does it instead.
+const SCATTER_RANK0: [u64; 256] = {
+    let mut t = [0u64; 256];
+    let mut m = 0usize;
+    while m < 256 {
+        let mut out = 0u64;
+        let mut f = 0;
+        while f < 8 {
+            if m & (1 << f) != 0 {
+                out |= 1u64 << (f * 8);
+            }
+            f += 1;
+        }
+        t[m] = out;
+        m += 1;
+    }
+    t
+};
+
 /// Gather the 8 bits of rank `r` (one per file) into a byte, bit = file.
 #[inline]
 fn gather_rank(x: u64, r: u32) -> u8 {
-    let mut out = 0u8;
-    let mut f = 0;
-    while f < 8 {
-        if x & (1u64 << (f * 8 + r)) != 0 {
-            out |= 1 << f;
-        }
-        f += 1;
-    }
-    out
+    (((x >> r) & RANK0).wrapping_mul(GATHER_MAGIC) >> 56) as u8
 }
 
 /// Scatter a byte back onto rank `r` (bit f -> square f*8 + r).
 #[inline]
 fn scatter_rank(mask: u8, r: u32) -> u64 {
-    let mut out = 0u64;
-    let mut f = 0;
-    while f < 8 {
-        if mask & (1 << f) != 0 {
-            out |= 1u64 << (f * 8 + r);
-        }
-        f += 1;
-    }
-    out
+    SCATTER_RANK0[mask as usize] << r
 }
 
 /// Exact stable own discs on the four edges.
@@ -272,6 +279,50 @@ pub fn stable_count(own: u64, opp: u64) -> u32 {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn rank_gather_scatter_match_the_bit_loops() {
+        fn gather_ref(x: u64, r: u32) -> u8 {
+            let mut out = 0u8;
+            for f in 0..8 {
+                if x & (1u64 << (f * 8 + r)) != 0 {
+                    out |= 1 << f;
+                }
+            }
+            out
+        }
+        fn scatter_ref(mask: u8, r: u32) -> u64 {
+            let mut out = 0u64;
+            for f in 0..8 {
+                if mask & (1 << f) != 0 {
+                    out |= 1u64 << (f * 8 + r);
+                }
+            }
+            out
+        }
+        // Scatter is exhaustive over its whole domain.
+        for r in 0..8u32 {
+            for m in 0..=255u8 {
+                assert_eq!(scatter_rank(m, r), scatter_ref(m, r), "m={m} r={r}");
+            }
+        }
+        // Gather: every single-bit board, then random dense ones.
+        for r in 0..8u32 {
+            for b in 0..64 {
+                let x = 1u64 << b;
+                assert_eq!(gather_rank(x, r), gather_ref(x, r), "b={b} r={r}");
+            }
+        }
+        let mut x = 0x9E37_79B9_7F4A_7C15u64;
+        for _ in 0..20_000 {
+            x ^= x << 13;
+            x ^= x >> 7;
+            x ^= x << 17;
+            for r in 0..8u32 {
+                assert_eq!(gather_rank(x, r), gather_ref(x, r), "x={x:#018x} r={r}");
+            }
+        }
+    }
 
     /// Reference: a diagonal is full iff every one of its squares is
     /// occupied. Tests the doubling cascade in `full_lines` against the
