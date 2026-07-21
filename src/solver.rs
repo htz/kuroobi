@@ -89,10 +89,10 @@ const ETC_EMPTIES: u8 = 8;
 const MOBILITY_ORDER_WEIGHT: i32 = 12;
 /// Splitting only pays off when each sibling subtree is substantial: below
 /// this many empties the hand-off costs more than the subtree.
-const PARALLEL_MIN_EMPTIES: u8 = 18;
+const PARALLEL_MIN_EMPTIES: u8 = 16;
 /// Helpers a single node may recruit. Capping it
 /// keeps one wide node from starving the rest of the tree.
-const SPLIT_MAX_SLAVES: usize = 3;
+const SPLIT_MAX_SLAVES: usize = 1;
 
 /// Pool of spare search threads, shared by every node that wants to split.
 /// Nodes reserve helpers before spawning and hand them back afterwards, so
