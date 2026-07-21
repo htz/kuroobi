@@ -211,7 +211,7 @@ fn parity_of(board: &Board) -> u8 {
 
 const VALUE_INF: i32 = i32::MAX / 2;
 
-/// Compact 32-byte entry: two fit in one cache line, so a 2-way bucket
+/// Compact 24-byte entry: a 2-way bucket fits in one cache line, so a probe
 /// costs a single memory access. `(black, white, player)` fully identifies
 /// the position — no separate hash key is needed (the hash only picks the
 /// bucket). Scores are stored as i8 with MIN/MAX as -/+infinity sentinels.
@@ -278,10 +278,59 @@ impl HashEntry {
     }
 }
 
+/// A test-and-set spin lock. The transposition table is shared by every
+/// search thread and its entries (24 bytes) are far too wide for a single
+/// atomic write, so writes are serialized. Locks are *striped*: a small
+/// array of them is indexed by hash bits, so threads working in different
+/// regions of the table almost never collide.
+struct SpinLock(std::sync::atomic::AtomicBool);
+
+impl SpinLock {
+    const fn new() -> SpinLock {
+        SpinLock(std::sync::atomic::AtomicBool::new(false))
+    }
+
+    #[inline]
+    fn lock(&self) -> SpinGuard<'_> {
+        use std::sync::atomic::Ordering;
+        while self
+            .0
+            .compare_exchange_weak(false, true, Ordering::Acquire, Ordering::Relaxed)
+            .is_err()
+        {
+            while self.0.load(Ordering::Relaxed) {
+                std::hint::spin_loop();
+            }
+        }
+        SpinGuard(self)
+    }
+}
+
+/// Releases the lock on drop, so an unwind cannot leave the table wedged.
+struct SpinGuard<'a>(&'a SpinLock);
+
+impl Drop for SpinGuard<'_> {
+    #[inline]
+    fn drop(&mut self) {
+        self.0 .0.store(false, std::sync::atomic::Ordering::Release);
+    }
+}
+
+/// Number of stripes. Generous relative to any core count so that lock
+/// collisions between threads are rare even under heavy write traffic.
+const HASH_LOCK_STRIPES: usize = 4096;
+
 struct HashTable {
     mask: u64,
-    entries: Vec<HashEntry>,
+    /// Interior mutability so search threads can share one table. Every
+    /// access goes through `stripe()`; see `get`/`update` for the protocol.
+    entries: std::cell::UnsafeCell<Vec<HashEntry>>,
+    locks: Vec<SpinLock>,
 }
+
+// SAFETY: all interior mutation happens while holding the entry's stripe
+// lock, and `HashEntry` is a plain `Copy` value with no interior pointers.
+unsafe impl Sync for HashTable {}
 
 impl HashTable {
     /// 2-way associative: same total entry count, half as many buckets.
@@ -289,31 +338,63 @@ impl HashTable {
     /// happens to share its bucket.
     fn new(bit_size: u32) -> HashTable {
         let size = 1usize << bit_size;
+        let mut locks = Vec::with_capacity(HASH_LOCK_STRIPES);
+        locks.resize_with(HASH_LOCK_STRIPES, SpinLock::new);
         HashTable {
             mask: ((size >> 1) - 1) as u64,
-            entries: vec![HashEntry::EMPTY; size],
+            entries: std::cell::UnsafeCell::new(vec![HashEntry::EMPTY; size]),
+            locks,
         }
+    }
+
+    /// Stripe guarding the bucket this hash maps to.
+    #[inline]
+    fn stripe(&self, hash: u64) -> &SpinLock {
+        &self.locks[(hash as usize) & (HASH_LOCK_STRIPES - 1)]
+    }
+
+    /// Exclusive view of the entries. Callers must hold the relevant stripe
+    /// lock, or have exclusive access to the table (`&mut self`).
+    #[inline]
+    #[allow(clippy::mut_from_ref)]
+    unsafe fn slots(&self) -> &mut Vec<HashEntry> {
+        &mut *self.entries.get()
     }
 
     fn clear(&mut self) {
-        self.entries.fill(HashEntry::EMPTY);
+        self.entries.get_mut().fill(HashEntry::EMPTY);
     }
 
+    /// Returns a *copy* of the matching entry. Copying (24 bytes) rather
+    /// than borrowing keeps probes valid once the table is shared between
+    /// search threads, where the slot may be overwritten at any moment.
+    /// Probe. The position test runs without taking the lock — probes miss
+    /// far more often than they hit, and a torn read can only fabricate a
+    /// *mismatch*, never a false hit, because the match is re-checked under
+    /// the lock before the entry is copied out.
     #[inline]
-    fn get(&self, board: &Board, hash: u64) -> Option<&HashEntry> {
+    fn get(&self, board: &Board, hash: u64) -> Option<HashEntry> {
         let base = ((hash & self.mask) as usize) << 1;
-        let pair = &self.entries[base..base + 2];
-        if pair[0].matches(board) {
-            return Some(&pair[0]);
+        // SAFETY: an unsynchronized read may observe a torn entry, which is
+        // discarded by the re-check below; no reference escapes.
+        let unlocked = unsafe { self.slots() };
+        if !unlocked[base].matches(board) && !unlocked[base + 1].matches(board) {
+            return None;
         }
-        if pair[1].matches(board) {
-            return Some(&pair[1]);
+        let _guard = self.stripe(hash).lock();
+        // SAFETY: the stripe lock is held for the duration of the read.
+        let e = unsafe { self.slots() };
+        if e[base].matches(board) {
+            return Some(e[base]);
+        }
+        if e[base + 1].matches(board) {
+            return Some(e[base + 1]);
         }
         None
     }
 
     fn update(
-        &mut self,
+        &self,
         board: &Board,
         hash: u64,
         alpha: i32,
@@ -323,18 +404,21 @@ impl HashTable {
     ) {
         let best8 = best.map_or(255, |p| p.index());
         let base = ((hash & self.mask) as usize) << 1;
-        let slot = if self.entries[base].matches(board) {
+        let _guard = self.stripe(hash).lock();
+        // SAFETY: the stripe lock is held for the whole read-modify-write.
+        let entries = unsafe { self.slots() };
+        let slot = if entries[base].matches(board) {
             base
-        } else if self.entries[base + 1].matches(board) {
+        } else if entries[base + 1].matches(board) {
             base + 1
         } else {
             // Evict the shallower slot of the pair
-            let victim = if self.entries[base].depth <= self.entries[base + 1].depth {
+            let victim = if entries[base].depth <= entries[base + 1].depth {
                 base
             } else {
                 base + 1
             };
-            let entry = &mut self.entries[victim];
+            let entry = &mut entries[victim];
             if !entry.used() || entry.depth <= board.empty_count() {
                 *entry = HashEntry {
                     black: board.black,
@@ -349,7 +433,7 @@ impl HashTable {
             }
             return;
         };
-        let entry = &mut self.entries[slot];
+        let entry = &mut entries[slot];
         if entry.is_seed() {
             // Heuristic bounds from the pre-search: replace, don't tighten
             entry.lower8 = if value > alpha { value as i8 } else { i8::MIN };
@@ -373,7 +457,7 @@ impl HashTable {
     /// Mark every live entry as a seed: its best move stays usable for
     /// ordering while its bounds stop being treated as proven.
     fn demote_to_seed(&mut self) {
-        for e in self.entries.iter_mut() {
+        for e in self.entries.get_mut().iter_mut() {
             if e.used() {
                 e.flags |= 4;
             }
@@ -381,7 +465,7 @@ impl HashTable {
     }
 
     fn seed_update(
-        &mut self,
+        &self,
         board: &Board,
         hash: u64,
         depth: u8,
@@ -390,22 +474,25 @@ impl HashTable {
         best: Option<Position>,
     ) {
         let base = ((hash & self.mask) as usize) << 1;
-        let slot = if self.entries[base].matches(board) {
+        let _guard = self.stripe(hash).lock();
+        // SAFETY: the stripe lock is held for the whole read-modify-write.
+        let entries = unsafe { self.slots() };
+        let slot = if entries[base].matches(board) {
             base
-        } else if self.entries[base + 1].matches(board) {
+        } else if entries[base + 1].matches(board) {
             base + 1
-        } else if !self.entries[base].used() {
+        } else if !entries[base].used() {
             base
-        } else if !self.entries[base + 1].used() {
+        } else if !entries[base + 1].used() {
             base + 1
-        } else if self.entries[base].is_seed() && self.entries[base].depth <= depth {
+        } else if entries[base].is_seed() && entries[base].depth <= depth {
             base
-        } else if self.entries[base + 1].is_seed() && self.entries[base + 1].depth <= depth {
+        } else if entries[base + 1].is_seed() && entries[base + 1].depth <= depth {
             base + 1
         } else {
             return; // never evict a real entry for a seed
         };
-        let entry = &mut self.entries[slot];
+        let entry = &mut entries[slot];
         if entry.used() && !entry.is_seed() {
             // Same position already solved exactly: keep it
             return;
