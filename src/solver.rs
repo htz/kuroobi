@@ -84,8 +84,6 @@ const DEEP2_ORDER_EMPTIES: u8 = 21;
 /// every child's hash entry before searching — a proven fail-high there
 /// cuts this node without any search.
 const ETC_EMPTIES: u8 = 8;
-/// Deep solves run an evaluation-guided iterative pre-search that fills
-/// the table with move-ordering seeds.
 /// Ordering weight of one opponent reply, in eighths of a disc (the same
 /// scale the evaluation term uses).
 const MOBILITY_ORDER_WEIGHT: i32 = 12;
