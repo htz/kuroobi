@@ -761,7 +761,8 @@ impl Solver {
 
         self.nodes += 1;
 
-        let moves = self.sorted_moves(board, hash, ev);
+        let mut moves = MoveBuf::new();
+        self.sorted_moves(board, hash, ev, &mut moves);
         if moves.is_empty() {
             return final_score(board);
         }
@@ -853,7 +854,8 @@ impl Solver {
         // Children are generated without their (expensive) ordering values:
         // a node whose transposition-table move already cuts must not pay
         // for pattern evaluations and lookaheads it never uses.
-        let mut moves = self.gen_moves(board, hash);
+        let mut moves = MoveBuf::new();
+        self.gen_moves(board, hash, &mut moves);
 
         if moves.is_empty() {
             if passed {
@@ -1008,7 +1010,8 @@ impl Solver {
         }
 
         let orig_alpha = alpha;
-        let moves = self.sorted_moves(board, hash, ev);
+        let mut moves = MoveBuf::new();
+        self.sorted_moves(board, hash, ev, &mut moves);
 
         if moves.is_empty() {
             if passed {
@@ -1407,18 +1410,17 @@ impl Solver {
     /// (fastest-first: minimize opponent mobility, corner stability, parity).
     /// The transposition table's best move, when present, is searched first.
     /// Each child carries its incrementally-updated Zobrist hash.
-    fn sorted_moves(&self, board: &Board, hash: u64, ev: Option<&Evaluator>) -> MoveBuf {
+    fn sorted_moves(&self, board: &Board, hash: u64, ev: Option<&Evaluator>, out: &mut MoveBuf) {
         let tt_best = self.hash_table.get(board, hash).and_then(|e| e.best());
-        let mut moves = self.gen_moves(board, hash);
-        self.score_and_sort(board, &mut moves, tt_best, ev, i32::MIN / 2);
-        moves
+        self.gen_moves(board, hash, out);
+        self.score_and_sort(board, out, tt_best, ev, i32::MIN / 2);
     }
 
     /// Generate children with their incremental hashes but WITHOUT the
     /// expensive ordering evaluation. Wipeout moves are flagged: they end
     /// the game at +64, so a node that has one needs no search at all.
-    fn gen_moves(&self, board: &Board, hash: u64) -> MoveBuf {
-        let mut moves = MoveBuf::new();
+    fn gen_moves(&self, board: &Board, hash: u64, out: &mut MoveBuf) {
+        out.len = 0;
         let mover = board.player();
         let mut m = board.movable();
         while m != 0 {
@@ -1428,9 +1430,8 @@ impl Solver {
             let mut child = *board;
             let flipped = child.make_move_bits(pos);
             let child_hash = zobrist::update_hash_on_move(hash, pos, flipped, mover);
-            moves.push(ScoredMove { pos, board: child, hash: child_hash, value: 0 });
+            out.push(ScoredMove { pos, board: child, hash: child_hash, value: 0 });
         }
-        moves
     }
 
     /// Fill in ordering values (the expensive part: pattern evaluation and
