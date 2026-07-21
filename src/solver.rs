@@ -191,7 +191,7 @@ impl ThreadBudget {
 
 }
 /// Slack below the node's alpha for the ordering lookahead's window.
-const SORT_ALPHA_DELTA: i32 = 8;
+const SORT_ALPHA_DELTA: i32 = 12;
 /// Ordering weight of one stable edge disc, in eighths of a disc.
 const EDGE_STABILITY_ORDER_WEIGHT: i32 = 1;
 /// Half-width of the first aspiration window around the warm-up score.
@@ -200,7 +200,7 @@ const ASPIRATION_WIDTH: i32 = 6;
 /// evaluation estimate rather than a searched score.
 const WARM_ASPIRATION_WIDTH: i32 = 6;
 /// Depth of the evaluation search that centres the first warm-up window.
-const ESTIMATE_DEPTH: u8 = 8;
+const ESTIMATE_DEPTH: u8 = 6;
 /// Warm-up passes only prune at this many empties or more.
 const SELECTIVE_MIN_EMPTIES: u8 = 14;
 /// Depth of the evaluation probe used by a warm-up pass.
