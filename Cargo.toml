@@ -21,5 +21,13 @@ random = ["rand"]
 name = "core"
 harness = false
 
+[profile.release]
+# The search is one hot call graph spread across modules, so cross-crate
+# inlining matters: link-time optimization plus a single codegen unit let
+# the optimizer see all of it at once.
+lto = "fat"
+codegen-units = 1
+
 [profile.bench]
 lto = true
+codegen-units = 1
