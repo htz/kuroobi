@@ -103,24 +103,36 @@ pub fn check_all(player_bb: u64, opponent_bb: u64) -> bool {
 
 /// Kogge-Stone style scan in one axis: propagate player pieces through
 /// contiguous (masked) opponent pieces, then step once more past the run.
-#[inline]
-fn some_mobility(player_bb: u64, masked_opp: u64, dir: u32) -> u64 {
-    let mut flip = ((player_bb << dir) | (player_bb >> dir)) & masked_opp;
-    flip |= ((flip << dir) | (flip >> dir)) & masked_opp;
-    flip |= ((flip << dir) | (flip >> dir)) & masked_opp;
-    flip |= ((flip << dir) | (flip >> dir)) & masked_opp;
-    flip |= ((flip << dir) | (flip >> dir)) & masked_opp;
-    flip |= ((flip << dir) | (flip >> dir)) & masked_opp;
-    (flip << dir) | (flip >> dir)
+/// Kogge-Stone smear along one axis, using the same doubling trick as
+/// [`flip_shift`]: pairs of adjacent opponent discs (`opp2`) let one step
+/// advance two squares, so the six-long maximum run needs four dependent
+/// steps instead of six. The two directions are smeared separately, which
+/// keeps each chain independent and lets the out-of-order core overlap them.
+#[inline(always)]
+fn some_mobility<const DIR: u32>(player_bb: u64, masked_opp: u64) -> u64 {
+    let up2 = masked_opp & (masked_opp << DIR);
+    let dn2 = masked_opp & (masked_opp >> DIR);
+
+    let mut u = (player_bb << DIR) & masked_opp;
+    u |= (u << DIR) & masked_opp;
+    u |= (u << (2 * DIR)) & up2;
+    u |= (u << (2 * DIR)) & up2;
+
+    let mut d = (player_bb >> DIR) & masked_opp;
+    d |= (d >> DIR) & masked_opp;
+    d |= (d >> (2 * DIR)) & dn2;
+    d |= (d >> (2 * DIR)) & dn2;
+
+    (u << DIR) | (d >> DIR)
 }
 
 /// Returns a bitboard of all playable positions for the current player.
 #[inline]
 pub fn mobility(player_bb: u64, opponent_bb: u64, empty_bb: u64) -> u64 {
-    (some_mobility(player_bb, opponent_bb & MASK_RANK, 1)
-        | some_mobility(player_bb, opponent_bb & MASK_FILE, 8)
-        | some_mobility(player_bb, opponent_bb & MASK_DIAG, 7)
-        | some_mobility(player_bb, opponent_bb & MASK_DIAG, 9))
+    (some_mobility::<1>(player_bb, opponent_bb & MASK_RANK)
+        | some_mobility::<8>(player_bb, opponent_bb & MASK_FILE)
+        | some_mobility::<7>(player_bb, opponent_bb & MASK_DIAG)
+        | some_mobility::<9>(player_bb, opponent_bb & MASK_DIAG))
         & empty_bb
 }
 
@@ -594,6 +606,44 @@ mod spec_flip_tests {
                 assert_eq!(
                     flippable(player, opponent, pos),
                     flippable_generic(player, opponent, pos),
+                    "sq={sq} player={player:#018x} opponent={opponent:#018x}"
+                );
+            }
+        }
+    }
+}
+
+#[cfg(test)]
+mod mobility_smear_tests {
+    use super::*;
+
+    /// Mobility must agree with "some direction flips something" on random
+    /// positions, including shapes real games never reach.
+    #[test]
+    fn mobility_agrees_with_flippable_random() {
+        let mut state = 0x0123_4567_89AB_CDEFu64;
+        let mut next = || {
+            state ^= state >> 12;
+            state ^= state << 25;
+            state ^= state >> 27;
+            state.wrapping_mul(0x2545_F491_4F6C_DD1D)
+        };
+        for _ in 0..40_000 {
+            let a = next();
+            let b = next();
+            let player = a & !b;
+            let opponent = b & !a;
+            let empty = !(player | opponent);
+            let moves = mobility(player, opponent, empty);
+            let mut e = empty;
+            while e != 0 {
+                let sq = e.trailing_zeros();
+                e &= e - 1;
+                let pos = 1u64 << sq;
+                let flips = flippable(player, opponent, pos);
+                assert_eq!(
+                    flips != 0,
+                    moves & pos != 0,
                     "sq={sq} player={player:#018x} opponent={opponent:#018x}"
                 );
             }
