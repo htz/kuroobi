@@ -1061,7 +1061,7 @@ impl Worker<'_> {
 
         // First move: full window
         {
-            let mut child = moves[0].board;
+            let mut child = moves[0].child(board);
             max = -self.pvs(&mut child, moves[0].hash, -upper, -lower, false, ev);
             if max > lower {
                 lower = max;
@@ -1072,7 +1072,7 @@ impl Worker<'_> {
         // the remaining siblings are independent enough to share out. Only
         // worth the hand-off when the subtrees are large.
         if moves.len() > 2 && board.empty_count() >= PARALLEL_MIN_EMPTIES && lower < upper {
-            if let Some((val, bpos)) = self.split_siblings(&moves[1..], lower, upper, ev) {
+            if let Some((val, bpos)) = self.split_siblings(board, &moves[1..], lower, upper, ev) {
                 if val > max {
                     max = val;
                     best = bpos;
@@ -1088,7 +1088,7 @@ impl Worker<'_> {
             if lower >= upper {
                 break;
             }
-            let mut child = m.board;
+            let mut child = m.child(board);
             let mut val = -self.pvs(&mut child, m.hash, -lower - 1, -lower, false, ev);
             if lower < val && val < upper {
                 val = -self.pvs(&mut child, m.hash, -upper, -val, false, ev);
@@ -1118,6 +1118,7 @@ impl Worker<'_> {
     /// shallow table; results are folded back in at the join.
     fn split_siblings(
         &mut self,
+        parent: &Board,
         siblings: &[ScoredMove],
         lower: i32,
         upper: i32,
@@ -1151,13 +1152,13 @@ impl Worker<'_> {
                 scope.spawn(|| {
                     let mut w = Worker::new(tt, neighbours, budget, group);
                     w.selective_t = selective_t;
-                    w.run_siblings(siblings, upper, ev, &next, &shared_lower, &best, group);
+                    w.run_siblings(parent, siblings, upper, ev, &next, &shared_lower, &best, group);
                     extra_nodes.fetch_add(w.nodes as usize, Ordering::Relaxed);
                 });
             }
             // The splitting thread takes its share too, then joins at the
             // end of the scope.
-            self.run_siblings(siblings, upper, ev, &next, &shared_lower, &best, group);
+            self.run_siblings(parent, siblings, upper, ev, &next, &shared_lower, &best, group);
         });
 
         self.budget.release(helpers);
@@ -1170,6 +1171,7 @@ impl Worker<'_> {
     /// alpha, mirroring the sequential null-window-then-re-search logic.
     fn run_siblings(
         &mut self,
+        parent: &Board,
         siblings: &[ScoredMove],
         upper: i32,
         ev: Option<&Evaluator>,
@@ -1189,7 +1191,7 @@ impl Worker<'_> {
                 return; // this node is already settled
             }
             let m = &siblings[i];
-            let mut child = m.board;
+            let mut child = m.child(parent);
             let mut val = -self.pvs(&mut child, m.hash, -cur - 1, -cur, false, ev);
             if val == -ABORTED {
                 return; // unwound; the value proves nothing
@@ -1283,7 +1285,7 @@ impl Worker<'_> {
 
         // A move that wipes out the opponent ends the game at exactly +64,
         // which is the maximum possible score — so it *is* this node's value.
-        if moves.iter().any(|m| m.board.player_bb() == 0) {
+        if moves.iter().any(|m| m.child(board).player_bb() == 0) {
             self.tt.update(board, hash, alpha, beta, 64, None);
             return 64;
         }
@@ -1292,7 +1294,7 @@ impl Worker<'_> {
         // already proves our value >= upper ends this node for free.
         if board.empty_count() >= ETC_EMPTIES {
             for m in moves.iter() {
-                if let Some(e) = self.tt.get(&m.board, m.hash) {
+                if let Some(e) = self.tt.get(&m.child(board), m.hash) {
                     if !e.is_seed() && -e.upper() >= upper {
                         return -e.upper();
                     }
@@ -1309,7 +1311,7 @@ impl Worker<'_> {
         if let Some(bpos) = tt_best {
             if let Some(idx) = moves.iter().position(|m| m.pos == bpos) {
                 let m = moves.swap_remove(idx);
-                let mut child = m.board;
+                let mut child = m.child(board);
                 max = self.descend(&mut child, m.hash, -upper, -lower, ev);
                 best = Some(m.pos);
                 if max > lower {
@@ -1329,7 +1331,7 @@ impl Worker<'_> {
         if max == i32::MIN {
             // No table move: the best-ordered child takes the full window.
             let m = rest.next().expect("non-empty move list");
-            let mut child = m.board;
+            let mut child = m.child(board);
             max = self.descend(&mut child, m.hash, -upper, -lower, ev);
             if max == ABORTED {
                 return ABORTED;
@@ -1346,7 +1348,7 @@ impl Worker<'_> {
         // keeps every core busy when one subtree dominates.
         let remaining = rest.as_slice();
         if remaining.len() > 1 && board.empty_count() >= PARALLEL_MIN_EMPTIES && lower < upper {
-            if let Some((val, bpos)) = self.split_siblings(remaining, lower, upper, ev) {
+            if let Some((val, bpos)) = self.split_siblings(board, remaining, lower, upper, ev) {
                 if val > max {
                     max = val;
                     best = Some(bpos);
@@ -1361,7 +1363,7 @@ impl Worker<'_> {
             if lower >= upper {
                 break;
             }
-            let mut child = m.board;
+            let mut child = m.child(board);
             let val = self.descend_null_window(&mut child, m.hash, lower, upper, ev);
             if val == ABORTED {
                 return ABORTED;
@@ -1482,7 +1484,7 @@ impl Worker<'_> {
 
         let mut best = None;
         for m in moves.iter() {
-            let mut child = m.board;
+            let mut child = m.child(board);
             let val = if child.empty_count() >= MOVE_ORDERING_LIMIT {
                 -self.alpha_beta_ordered(&mut child, m.hash, -beta, -alpha, false, ev)
             } else {
@@ -1876,10 +1878,9 @@ impl Worker<'_> {
             let sq = m.trailing_zeros() as u8;
             m &= m - 1;
             let pos = Position(sq);
-            let mut child = *board;
-            let flipped = child.make_move_bits(pos);
+            let flipped = bitboard::flippable(board.player_bb(), board.opponent_bb(), pos.to_bit());
             let child_hash = zobrist::update_hash_on_move(hash, pos, flipped, mover);
-            out.push(ScoredMove { pos, board: child, hash: child_hash, value: 0 });
+            out.push(ScoredMove { pos, flipped, hash: child_hash, value: 0 });
         }
     }
 
@@ -1919,8 +1920,8 @@ impl Worker<'_> {
 
         for sm in moves.iter_mut() {
             let pos = sm.pos;
-            let child = sm.board;
-            let flipped = (board.player_bb() ^ child.opponent_bb()) & !pos.to_bit();
+            let flipped = sm.flipped;
+            let child = sm.child(board);
             sm.value = if child.player_bb() == 0 {
                 // Wiping out the opponent ends the game at +64: try first
                 i32::MIN
@@ -1966,9 +1967,22 @@ impl Worker<'_> {
 #[derive(Clone, Copy)]
 struct ScoredMove {
     pos: Position,
-    board: Board,
+    /// Discs this move flips. The child position is the parent with these
+    /// recoloured, so storing the mask instead of a whole `Board` keeps the
+    /// move list — and therefore every `pvs` stack frame — much smaller.
+    flipped: u64,
     hash: u64,
     value: i32,
+}
+
+impl ScoredMove {
+    /// Rebuild the position after this move from its parent.
+    #[inline(always)]
+    fn child(&self, parent: &Board) -> Board {
+        let mut b = *parent;
+        b.apply_flips(self.pos, self.flipped);
+        b
+    }
 }
 
 /// A position has at most 32 legal moves; 34 gives slack. Move lists live
