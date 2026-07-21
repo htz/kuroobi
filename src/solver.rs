@@ -51,14 +51,31 @@ fn wipeout_score(board: &Board) -> Option<i32> {
     None
 }
 
+/// Stability-cut alpha thresholds, indexed by empty count:
+/// the stability bound is only worth computing once the window has come
+/// this far. Below it the fixed point almost never cuts, and the popcount
+/// gate alone lets through eight wasted computations per cut. 99 disables
+/// the test outright (too many empties for any disc to be stable yet).
+const STABILITY_THRESHOLD: [i32; 64] = [
+    99, 99, 99, 99, 6, 8, 10, 12, //
+    14, 16, 20, 22, 24, 26, 28, 30, //
+    32, 34, 36, 38, 40, 42, 44, 46, //
+    48, 48, 50, 50, 52, 52, 54, 54, //
+    56, 56, 58, 58, 60, 60, 62, 62, //
+    64, 64, 64, 64, 64, 64, 64, 64, //
+    99, 99, 99, 99, 99, 99, 99, 99, //
+    99, 99, 99, 99, 99, 99, 99, 99,
+];
+
 /// Stability cutoff precondition: the bound 64 - 2*S can only cut when the
 /// opponent has at least ceil((64-alpha)/2) stable discs, so their total
 /// disc count (cheap popcount) must reach that first.
 #[inline]
 fn stability_cut(board: &Board, alpha: i32, beta: i32) -> Option<i32> {
+    let threshold = STABILITY_THRESHOLD[board.empty_count() as usize];
     // Upper bound via the opponent's stable discs (fail low)
     let need = (64 - alpha + 1) / 2;
-    if need <= 32 && (board.opponent_bb().count_ones() as i32) >= need {
+    if alpha >= threshold && need <= 32 && (board.opponent_bb().count_ones() as i32) >= need {
         let bound =
             64 - 2 * crate::stability::stable_count(board.opponent_bb(), board.player_bb()) as i32;
         if bound <= alpha {
@@ -68,8 +85,10 @@ fn stability_cut(board: &Board, alpha: i32, beta: i32) -> Option<i32> {
     // Lower bound via our own stable discs (fail high). Nearly free on
     // balanced positions thanks to the popcount gate, and it collapses
     // one-sided positions (e.g. FFO#59) that otherwise explode.
+    // Mirror of the guard above, with the threshold test flipped to the
+    // beta side.
     let need = (64 + beta + 1) / 2;
-    if need <= 32 && (board.player_bb().count_ones() as i32) >= need {
+    if beta <= -threshold && need <= 32 && (board.player_bb().count_ones() as i32) >= need {
         let bound =
             2 * crate::stability::stable_count(board.player_bb(), board.opponent_bb()) as i32 - 64;
         if bound >= beta {

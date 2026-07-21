@@ -20,24 +20,23 @@ const RANK7: u64 = 0x8080_8080_8080_8080;
 const NOT_RANK0: u64 = !RANK0;
 const NOT_RANK7: u64 = !RANK7;
 
-/// Masks of the 15 diagonals in each direction, built at compile time.
-/// d9 diagonals run along +9 (file+1, rank+1); d7 along +7 (file+1, rank-1).
-const fn diag_masks() -> ([u64; 15], [u64; 15]) {
-    let mut d9 = [0u64; 15];
-    let mut d7 = [0u64; 15];
-    let mut sq = 0;
-    while sq < 64 {
-        let file = sq / 8;
-        let rank = sq % 8;
-        // d9 diagonal id: rank - file + 7 (constant along +9 steps)
-        d9[(rank + 7 - file) as usize] |= 1u64 << sq;
-        // d7 diagonal id: rank + file (constant along +7 steps)
-        d7[(rank + file) as usize] |= 1u64 << sq;
-        sq += 1;
-    }
-    (d9, d7)
-}
-const DIAGS: ([u64; 15], [u64; 15]) = diag_masks();
+/// Masks for the diagonal full-line cascade, for our file-major layout
+/// (bit = file*8 + rank).
+/// `L<k>` holds the squares with no predecessor k steps back along the
+/// diagonal, `R<k>` the squares with no successor k steps ahead.
+/// d9 runs along +9 (file+1, rank+1); d7 along +7 (file+1, rank-1).
+const D9_L1: u64 = 0x0101_0101_0101_01FF;
+const D9_L2: u64 = 0x0303_0303_0303_FFFF;
+const D9_L4: u64 = 0x0F0F_0F0F_FFFF_FFFF;
+const D9_R1: u64 = 0xFF80_8080_8080_8080;
+const D9_R2: u64 = 0xFFFF_C0C0_C0C0_C0C0;
+const D9_R4: u64 = 0xFFFF_FFFF_F0F0_F0F0;
+const D7_L1: u64 = 0x8080_8080_8080_80FF;
+const D7_L2: u64 = 0xC0C0_C0C0_C0C0_FFFF;
+const D7_L4: u64 = 0xF0F0_F0F0_FFFF_FFFF;
+const D7_R1: u64 = 0xFF01_0101_0101_0101;
+const D7_R2: u64 = 0xFFFF_0303_0303_0303;
+const D7_R4: u64 = 0xFFFF_FFFF_0F0F_0F0F;
 
 /// Squares whose full line (in one direction) is completely occupied.
 #[inline]
@@ -57,20 +56,33 @@ fn full_lines(occ: u64) -> (u64, u64, u64, u64) {
     v &= v >> 1;
     let full_v = (v & RANK0) * 0xFF;
 
-    // Diagonals: 15 per direction, via precomputed masks
-    let (d9s, d7s) = DIAGS;
-    let mut full_d9 = 0u64;
-    let mut full_d7 = 0u64;
-    let mut i = 0;
-    while i < 15 {
-        if occ & d9s[i] == d9s[i] {
-            full_d9 |= d9s[i];
-        }
-        if occ & d7s[i] == d7s[i] {
-            full_d7 |= d7s[i];
-        }
-        i += 1;
-    }
+    // Diagonals: a doubling cascade rather than testing 15 masks per
+    // direction. Each step doubles the
+    // run length proved occupied; the mask covers squares with no
+    // predecessor that far back, where the shifted-in bits are meaningless.
+    // `x >> k` carries each square's *successor* k steps along the diagonal
+    // into it, so the `R` masks (no successor that far ahead) pair with the
+    // right shifts and the `L` masks with the left ones.
+    let mut fwd = occ;
+    fwd &= D9_R1 | (fwd >> 9);
+    fwd &= D9_R2 | (fwd >> 18);
+    fwd &= D9_R4 | (fwd >> 36);
+    let mut back = occ;
+    back &= D9_L1 | (back << 9);
+    back &= D9_L2 | (back << 18);
+    back &= D9_L4 | (back << 36);
+    let full_d9 = fwd & back;
+
+    let mut fwd = occ;
+    fwd &= D7_R1 | (fwd >> 7);
+    fwd &= D7_R2 | (fwd >> 14);
+    fwd &= D7_R4 | (fwd >> 28);
+    let mut back = occ;
+    back &= D7_L1 | (back << 7);
+    back &= D7_L2 | (back << 14);
+    back &= D7_L4 | (back << 28);
+    let full_d7 = fwd & back;
+
     (full_h, full_v, full_d9, full_d7)
 }
 
@@ -260,6 +272,58 @@ pub fn stable_count(own: u64, opp: u64) -> u32 {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Reference: a diagonal is full iff every one of its squares is
+    /// occupied. Tests the doubling cascade in `full_lines` against the
+    /// direct definition.
+    fn full_diags_ref(occ: u64) -> (u64, u64) {
+        let mut d9 = [0u64; 15];
+        let mut d7 = [0u64; 15];
+        for sq in 0..64u32 {
+            let (file, rank) = (sq / 8, sq % 8);
+            d9[(rank + 7 - file) as usize] |= 1u64 << sq;
+            d7[(rank + file) as usize] |= 1u64 << sq;
+        }
+        let (mut f9, mut f7) = (0u64, 0u64);
+        for i in 0..15 {
+            if occ & d9[i] == d9[i] {
+                f9 |= d9[i];
+            }
+            if occ & d7[i] == d7[i] {
+                f7 |= d7[i];
+            }
+        }
+        (f9, f7)
+    }
+
+    #[test]
+    fn full_line_cascade_matches_definition() {
+        // xorshift64 — deterministic, no dev-dependency needed.
+        let mut x = 0x2545_F491_4F6C_DD1Du64;
+        let mut next = move || {
+            x ^= x << 13;
+            x ^= x >> 7;
+            x ^= x << 17;
+            x
+        };
+        for i in 0..200_000 {
+            // Mix densities: sparse, balanced and nearly full boards all
+            // exercise different parts of the cascade.
+            let occ = match i % 4 {
+                0 => next(),
+                1 => next() & next(),
+                2 => next() | next(),
+                _ => !(next() & next() & next()),
+            };
+            let (_, _, d9, d7) = full_lines(occ);
+            assert_eq!((d9, d7), full_diags_ref(occ), "occ = {occ:#018x}");
+        }
+        // Boundary cases the random draws are unlikely to hit.
+        for occ in [0u64, !0u64, RANK0, RANK7, 0xFF, 0xFF00_0000_0000_0000] {
+            let (_, _, d9, d7) = full_lines(occ);
+            assert_eq!((d9, d7), full_diags_ref(occ), "occ = {occ:#018x}");
+        }
+    }
     use crate::board::Board;
     use crate::position::Position;
 
