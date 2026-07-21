@@ -94,6 +94,60 @@ const PARALLEL_MIN_EMPTIES: u8 = 16;
 /// keeps one wide node from starving the rest of the tree.
 const SPLIT_MAX_SLAVES: usize = 1;
 
+/// Cutoff signal for a split node, chained to its enclosing splits.
+///
+/// When one sibling proves a cutoff, every thread still working inside that
+/// node's subtree is doing work that can no longer matter. Setting the flag
+/// lets them unwind instead of running their subtree to completion. The
+/// parent link means an outer cutoff also stops searches started by nested
+/// splits.
+struct AbortFlag<'p> {
+    flag: std::sync::atomic::AtomicBool,
+    parent: Option<&'p AbortFlag<'p>>,
+}
+
+impl<'p> AbortFlag<'p> {
+    const fn root() -> AbortFlag<'static> {
+        AbortFlag {
+            flag: std::sync::atomic::AtomicBool::new(false),
+            parent: None,
+        }
+    }
+
+    fn child(parent: &'p AbortFlag<'p>) -> AbortFlag<'p> {
+        AbortFlag {
+            flag: std::sync::atomic::AtomicBool::new(false),
+            parent: Some(parent),
+        }
+    }
+
+    fn abort(&self) {
+        self.flag
+            .store(true, std::sync::atomic::Ordering::Relaxed);
+    }
+
+    /// True if this split, or any enclosing one, has been cut off. The chain
+    /// is as deep as splits are nested, which is a handful of links.
+    fn aborted(&self) -> bool {
+        let mut cur = Some(self);
+        while let Some(f) = cur {
+            if f.flag.load(std::sync::atomic::Ordering::Relaxed) {
+                return true;
+            }
+            cur = f.parent;
+        }
+        false
+    }
+}
+
+/// Nodes between abort checks. Walking the chain on every node would cost
+/// more than the work it saves; a few hundred nodes is a short enough leash.
+const ABORT_CHECK_INTERVAL: u64 = 512;
+
+/// Sentinel returned by a search that unwound early. It is never stored in
+/// the table and never compared as a real score.
+const ABORTED: i32 = i32::MIN + 1;
+
 /// Pool of spare search threads, shared by every node that wants to split.
 /// Nodes reserve helpers before spawning and hand them back afterwards, so
 /// the total number of live search threads never exceeds the configured
@@ -630,6 +684,10 @@ struct Worker<'a> {
     shallow_table: HashTable,
     /// Spare threads this search may recruit when splitting a node.
     budget: &'a ThreadBudget,
+    /// Cutoff signal for the split this worker is searching under.
+    abort: &'a AbortFlag<'a>,
+    /// Node counter for throttling abort checks.
+    abort_countdown: u64,
 }
 
 impl<'a> Worker<'a> {
@@ -637,6 +695,7 @@ impl<'a> Worker<'a> {
         tt: &'a HashTable,
         neighbours: &'a NeighbourTable,
         budget: &'a ThreadBudget,
+        abort: &'a AbortFlag<'a>,
     ) -> Worker<'a> {
         Worker {
             tt,
@@ -647,7 +706,20 @@ impl<'a> Worker<'a> {
             selective_t: None,
             shallow_table: HashTable::new(16),
             budget,
+            abort,
+            abort_countdown: ABORT_CHECK_INTERVAL,
         }
+    }
+
+    /// Poll the cutoff signal, amortized over many nodes.
+    #[inline]
+    fn should_abort(&mut self) -> bool {
+        self.abort_countdown -= 1;
+        if self.abort_countdown != 0 {
+            return false;
+        }
+        self.abort_countdown = ABORT_CHECK_INTERVAL;
+        self.abort.aborted()
     }
 }
 
@@ -703,7 +775,8 @@ impl Solver {
 
         let value = {
             let budget = ThreadBudget::new(self.threads.saturating_sub(1));
-            let mut w = Worker::new(&self.hash_table, &self.neighbours, &budget);
+            let root_abort = AbortFlag::root();
+            let mut w = Worker::new(&self.hash_table, &self.neighbours, &budget, &root_abort);
             let mut b = *board;
 
             // Warm-up ladder (iterative selectivity): solve the same
@@ -1040,19 +1113,23 @@ impl Worker<'_> {
         let budget = self.budget;
         let selective_t = self.selective_t;
         let extra_nodes = AtomicUsize::new(0);
+        // Cutting off this node must also stop work already under way in the
+        // siblings, so the helpers search under a flag chained to ours.
+        let group = AbortFlag::child(self.abort);
+        let group = &group;
 
         std::thread::scope(|scope| {
             for _ in 0..helpers {
                 scope.spawn(|| {
-                    let mut w = Worker::new(tt, neighbours, budget);
+                    let mut w = Worker::new(tt, neighbours, budget, group);
                     w.selective_t = selective_t;
-                    w.run_siblings(siblings, upper, ev, &next, &shared_lower, &best);
+                    w.run_siblings(siblings, upper, ev, &next, &shared_lower, &best, group);
                     extra_nodes.fetch_add(w.nodes as usize, Ordering::Relaxed);
                 });
             }
             // The splitting thread takes its share too, then joins at the
             // end of the scope.
-            self.run_siblings(siblings, upper, ev, &next, &shared_lower, &best);
+            self.run_siblings(siblings, upper, ev, &next, &shared_lower, &best, group);
         });
 
         self.budget.release(helpers);
@@ -1071,6 +1148,7 @@ impl Worker<'_> {
         next: &std::sync::atomic::AtomicUsize,
         shared_lower: &std::sync::atomic::AtomicI32,
         best: &std::sync::Mutex<(i32, Position)>,
+        group: &AbortFlag<'_>,
     ) {
         use std::sync::atomic::Ordering;
         loop {
@@ -1079,14 +1157,20 @@ impl Worker<'_> {
                 return;
             }
             let cur = shared_lower.load(Ordering::Relaxed);
-            if cur >= upper {
-                return; // a sibling already cut this node off
+            if cur >= upper || group.aborted() {
+                return; // this node is already settled
             }
             let m = &siblings[i];
             let mut child = m.board;
             let mut val = -self.pvs(&mut child, m.hash, -cur - 1, -cur, false, ev);
+            if val == -ABORTED {
+                return; // unwound; the value proves nothing
+            }
             if cur < val && val < upper {
                 val = -self.pvs(&mut child, m.hash, -upper, -val, false, ev);
+                if val == -ABORTED {
+                    return;
+                }
             }
             let mut g = best.lock().unwrap();
             if val > g.0 {
@@ -1094,6 +1178,11 @@ impl Worker<'_> {
             }
             drop(g);
             shared_lower.fetch_max(val, Ordering::Relaxed);
+            if val >= upper {
+                // Proved the cutoff: wake the siblings still searching.
+                group.abort();
+                return;
+            }
         }
     }
 
@@ -1103,6 +1192,9 @@ impl Worker<'_> {
         let mut upper = beta;
 
         self.nodes += 1;
+        if self.should_abort() {
+            return ABORTED;
+        }
 
         if let Some(v) = wipeout_score(board) {
             return v;
@@ -1211,6 +1303,9 @@ impl Worker<'_> {
             let m = rest.next().expect("non-empty move list");
             let mut child = m.board;
             max = self.descend(&mut child, m.hash, -upper, -lower, ev);
+            if max == ABORTED {
+                return ABORTED;
+            }
             best = Some(m.pos);
             if max > lower {
                 lower = max;
@@ -1240,6 +1335,9 @@ impl Worker<'_> {
             }
             let mut child = m.board;
             let val = self.descend_null_window(&mut child, m.hash, lower, upper, ev);
+            if val == ABORTED {
+                return ABORTED;
+            }
             if val > max {
                 max = val;
                 best = Some(m.pos);
@@ -1249,6 +1347,8 @@ impl Worker<'_> {
             }
         }
 
+        // A truncated search proves nothing, so its bound must never reach
+        // the table — a wrong bound there would corrupt later searches.
         self.tt.update(board, hash, alpha, beta, max, best);
         max
     }
@@ -1257,7 +1357,13 @@ impl Worker<'_> {
     #[inline]
     fn descend(&mut self, child: &mut Board, hash: u64, alpha: i32, beta: i32, ev: Option<&Evaluator>) -> i32 {
         if child.empty_count() >= PVS_LIMIT {
-            -self.pvs(child, hash, alpha, beta, false, ev)
+            let v = self.pvs(child, hash, alpha, beta, false, ev);
+            // The child unwound; keep the sentinel recognizable after the
+            // usual negation.
+            if v == ABORTED {
+                return ABORTED;
+            }
+            -v
         } else if child.empty_count() >= MOVE_ORDERING_LIMIT {
             -self.alpha_beta_ordered(child, hash, alpha, beta, false, ev)
         } else {
@@ -1269,8 +1375,14 @@ impl Worker<'_> {
     #[inline]
     fn descend_null_window(&mut self, child: &mut Board, hash: u64, lower: i32, upper: i32, ev: Option<&Evaluator>) -> i32 {
         let mut val = self.descend(child, hash, -lower - 1, -lower, ev);
+        if val == ABORTED {
+            return ABORTED;
+        }
         if lower < val && val < upper {
             val = self.descend(child, hash, -upper, -val, ev);
+            if val == ABORTED {
+                return ABORTED;
+            }
         }
         val
     }
