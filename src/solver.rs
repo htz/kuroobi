@@ -876,7 +876,7 @@ impl Solver {
         // Enhanced transposition cutoff: a child whose stored upper bound
         // already proves our value >= upper ends this node for free.
         if board.empty_count() >= ETC_EMPTIES {
-            for m in &moves {
+            for m in moves.iter() {
                 if let Some(e) = self.hash_table.get(&m.board, m.hash) {
                     if !e.is_seed() && -e.upper() >= upper {
                         return -e.upper();
@@ -1029,7 +1029,7 @@ impl Solver {
         }
 
         let mut best = None;
-        for m in &moves {
+        for m in moves.iter() {
             let mut child = m.board;
             let val = if child.empty_count() >= MOVE_ORDERING_LIMIT {
                 -self.alpha_beta_ordered(&mut child, m.hash, -beta, -alpha, false, ev)
@@ -1407,7 +1407,7 @@ impl Solver {
     /// (fastest-first: minimize opponent mobility, corner stability, parity).
     /// The transposition table's best move, when present, is searched first.
     /// Each child carries its incrementally-updated Zobrist hash.
-    fn sorted_moves(&self, board: &Board, hash: u64, ev: Option<&Evaluator>) -> Vec<ScoredMove> {
+    fn sorted_moves(&self, board: &Board, hash: u64, ev: Option<&Evaluator>) -> MoveBuf {
         let tt_best = self.hash_table.get(board, hash).and_then(|e| e.best());
         let mut moves = self.gen_moves(board, hash);
         self.score_and_sort(board, &mut moves, tt_best, ev, i32::MIN / 2);
@@ -1417,14 +1417,10 @@ impl Solver {
     /// Generate children with their incremental hashes but WITHOUT the
     /// expensive ordering evaluation. Wipeout moves are flagged: they end
     /// the game at +64, so a node that has one needs no search at all.
-    fn gen_moves(&self, board: &Board, hash: u64) -> Vec<ScoredMove> {
-        let mobility = board.movable();
-        if mobility == 0 {
-            return Vec::new();
-        }
+    fn gen_moves(&self, board: &Board, hash: u64) -> MoveBuf {
+        let mut moves = MoveBuf::new();
         let mover = board.player();
-        let mut moves: Vec<ScoredMove> = Vec::with_capacity(mobility.count_ones() as usize);
-        let mut m = mobility;
+        let mut m = board.movable();
         while m != 0 {
             let sq = m.trailing_zeros() as u8;
             m &= m - 1;
@@ -1517,11 +1513,69 @@ impl Solver {
     }
 }
 
+#[derive(Clone, Copy)]
 struct ScoredMove {
     pos: Position,
     board: Board,
     hash: u64,
     value: i32,
+}
+
+/// A position has at most 32 legal moves; 34 gives slack. Move lists live
+/// in this stack buffer instead of a heap `Vec` — allocation showed up as
+/// ~3% of solver time in deep-search profiles, and every node builds one.
+/// The backing store is uninitialized (`MaybeUninit`) so there is no
+/// per-node memset; only slots `0..len` are ever read.
+const MAX_MOVES: usize = 34;
+
+struct MoveBuf {
+    buf: [std::mem::MaybeUninit<ScoredMove>; MAX_MOVES],
+    len: usize,
+}
+
+impl MoveBuf {
+    #[inline]
+    fn new() -> MoveBuf {
+        MoveBuf {
+            // SAFETY: an array of MaybeUninit needs no initialization.
+            buf: unsafe { std::mem::MaybeUninit::uninit().assume_init() },
+            len: 0,
+        }
+    }
+
+    #[inline]
+    fn push(&mut self, m: ScoredMove) {
+        self.buf[self.len].write(m);
+        self.len += 1;
+    }
+
+    /// Remove by index, moving the last element into the hole. `ScoredMove`
+    /// is `Copy`, so nothing needs dropping.
+    #[inline]
+    fn swap_remove(&mut self, i: usize) -> ScoredMove {
+        // SAFETY: callers pass i < len, and 0..len are initialized.
+        let out = unsafe { self.buf[i].assume_init() };
+        self.len -= 1;
+        self.buf[i] = self.buf[self.len];
+        out
+    }
+}
+
+impl std::ops::Deref for MoveBuf {
+    type Target = [ScoredMove];
+    #[inline]
+    fn deref(&self) -> &[ScoredMove] {
+        // SAFETY: slots 0..len were initialized by push.
+        unsafe { std::slice::from_raw_parts(self.buf.as_ptr() as *const ScoredMove, self.len) }
+    }
+}
+
+impl std::ops::DerefMut for MoveBuf {
+    #[inline]
+    fn deref_mut(&mut self) -> &mut [ScoredMove] {
+        // SAFETY: as above.
+        unsafe { std::slice::from_raw_parts_mut(self.buf.as_mut_ptr() as *mut ScoredMove, self.len) }
+    }
 }
 
 /// Shallow alpha-beta refinement for ordering: the position's value from
