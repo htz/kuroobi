@@ -87,8 +87,54 @@ const ETC_EMPTIES: u8 = 8;
 /// Ordering weight of one opponent reply, in eighths of a disc (the same
 /// scale the evaluation term uses).
 const MOBILITY_ORDER_WEIGHT: i32 = 12;
-/// Root splitting only pays off when each sibling subtree is substantial.
+/// Splitting only pays off when each sibling subtree is substantial: below
+/// this many empties the hand-off costs more than the subtree.
 const PARALLEL_MIN_EMPTIES: u8 = 18;
+/// Helpers a single node may recruit. Capping it
+/// keeps one wide node from starving the rest of the tree.
+const SPLIT_MAX_SLAVES: usize = 3;
+
+/// Pool of spare search threads, shared by every node that wants to split.
+/// Nodes reserve helpers before spawning and hand them back afterwards, so
+/// the total number of live search threads never exceeds the configured
+/// budget no matter how deeply splits nest.
+struct ThreadBudget {
+    free: std::sync::atomic::AtomicUsize,
+}
+
+impl ThreadBudget {
+    fn new(extra_threads: usize) -> ThreadBudget {
+        ThreadBudget {
+            free: std::sync::atomic::AtomicUsize::new(extra_threads),
+        }
+    }
+
+    /// Take up to `want` helpers; returns how many were actually granted.
+    fn reserve(&self, want: usize) -> usize {
+        use std::sync::atomic::Ordering;
+        let mut cur = self.free.load(Ordering::Relaxed);
+        loop {
+            let take = cur.min(want);
+            if take == 0 {
+                return 0;
+            }
+            match self.free.compare_exchange_weak(
+                cur,
+                cur - take,
+                Ordering::Relaxed,
+                Ordering::Relaxed,
+            ) {
+                Ok(_) => return take,
+                Err(actual) => cur = actual,
+            }
+        }
+    }
+
+    fn release(&self, n: usize) {
+        self.free
+            .fetch_add(n, std::sync::atomic::Ordering::Relaxed);
+    }
+}
 /// Slack below the node's alpha for the ordering lookahead's window.
 const SORT_ALPHA_DELTA: i32 = 8;
 /// Ordering weight of one stable edge disc, in eighths of a disc.
@@ -582,12 +628,16 @@ struct Worker<'a> {
     /// transpositions are dense but entries would lose the depth-preferred
     /// replacement race in the main table. Private to the thread.
     shallow_table: HashTable,
-    /// How many threads the root may split across (1 = sequential).
-    threads: usize,
+    /// Spare threads this search may recruit when splitting a node.
+    budget: &'a ThreadBudget,
 }
 
 impl<'a> Worker<'a> {
-    fn new(tt: &'a HashTable, neighbours: &'a NeighbourTable) -> Worker<'a> {
+    fn new(
+        tt: &'a HashTable,
+        neighbours: &'a NeighbourTable,
+        budget: &'a ThreadBudget,
+    ) -> Worker<'a> {
         Worker {
             tt,
             neighbours,
@@ -596,7 +646,7 @@ impl<'a> Worker<'a> {
             warm_score: None,
             selective_t: None,
             shallow_table: HashTable::new(16),
-            threads: 1,
+            budget,
         }
     }
 }
@@ -652,8 +702,8 @@ impl Solver {
         self.hash_table.clear();
 
         let value = {
-            let mut w = Worker::new(&self.hash_table, &self.neighbours);
-            w.threads = self.threads;
+            let budget = ThreadBudget::new(self.threads.saturating_sub(1));
+            let mut w = Worker::new(&self.hash_table, &self.neighbours, &budget);
             let mut b = *board;
 
             // Warm-up ladder (iterative selectivity): solve the same
@@ -920,19 +970,16 @@ impl Worker<'_> {
         // Young Brothers Wait: the eldest child above has proved a bound, so
         // the remaining siblings are independent enough to share out. Only
         // worth the hand-off when the subtrees are large.
-        if self.threads > 1
-            && moves.len() > 2
-            && board.empty_count() >= PARALLEL_MIN_EMPTIES
-            && lower < upper
-        {
-            let (val, bpos) = self.split_siblings(&moves[1..], lower, upper, ev);
-            if val > max {
-                max = val;
-                best = bpos;
+        if moves.len() > 2 && board.empty_count() >= PARALLEL_MIN_EMPTIES && lower < upper {
+            if let Some((val, bpos)) = self.split_siblings(&moves[1..], lower, upper, ev) {
+                if val > max {
+                    max = val;
+                    best = bpos;
+                }
+                self.tt.update(board, hash, alpha, beta, max, Some(best));
+                self.best = Some(best);
+                return max;
             }
-            self.tt.update(board, hash, alpha, beta, max, Some(best));
-            self.best = Some(best);
-            return max;
         }
 
         // Remaining moves: null-window probe, re-search on fail-high
@@ -960,57 +1007,58 @@ impl Worker<'_> {
         max
     }
 
-    /// Search `siblings` across `self.threads` threads, all sharing the one
-    /// transposition table. Returns the best (value, move).
+    /// Search `siblings` in parallel, all threads sharing the one
+    /// transposition table. Returns the best (value, move), or `None` if no
+    /// helper threads were available and the caller should search normally.
     ///
     /// The alpha bound is shared and only ever rises, so a thread that reads
     /// a slightly stale value simply searches a wider window — correct, just
-    /// marginally more work. Each thread keeps its own node counter and
-    /// shallow table; the results are folded back in at the join.
+    /// marginally more work. Each helper keeps its own node counter and
+    /// shallow table; results are folded back in at the join.
     fn split_siblings(
         &mut self,
         siblings: &[ScoredMove],
         lower: i32,
         upper: i32,
         ev: Option<&Evaluator>,
-    ) -> (i32, Position) {
+    ) -> Option<(i32, Position)> {
         use std::sync::atomic::{AtomicI32, AtomicUsize, Ordering};
         use std::sync::Mutex;
 
+        let helpers = self
+            .budget
+            .reserve(SPLIT_MAX_SLAVES.min(siblings.len() - 1));
+        if helpers == 0 {
+            return None;
+        }
+
         let next = AtomicUsize::new(0);
         let shared_lower = AtomicI32::new(lower);
-        // (best value so far, its move)
         let best = Mutex::new((i32::MIN, siblings[0].pos));
         let tt = self.tt;
         let neighbours = self.neighbours;
+        let budget = self.budget;
         let selective_t = self.selective_t;
-        let n_threads = self.threads.min(siblings.len());
         let extra_nodes = AtomicUsize::new(0);
 
         std::thread::scope(|scope| {
-            for _ in 1..n_threads {
+            for _ in 0..helpers {
                 scope.spawn(|| {
-                    let mut w = Worker::new(tt, neighbours);
+                    let mut w = Worker::new(tt, neighbours, budget);
                     w.selective_t = selective_t;
-                    Worker::run_siblings(
-                        &mut w,
-                        siblings,
-                        upper,
-                        ev,
-                        &next,
-                        &shared_lower,
-                        &best,
-                    );
+                    w.run_siblings(siblings, upper, ev, &next, &shared_lower, &best);
                     extra_nodes.fetch_add(w.nodes as usize, Ordering::Relaxed);
                 });
             }
-            // The spawning thread pulls its share too.
-            Worker::run_siblings(self, siblings, upper, ev, &next, &shared_lower, &best);
+            // The splitting thread takes its share too, then joins at the
+            // end of the scope.
+            self.run_siblings(siblings, upper, ev, &next, &shared_lower, &best);
         });
 
+        self.budget.release(helpers);
         self.nodes += extra_nodes.load(Ordering::Relaxed) as u64;
-        let (v, p) = *best.lock().unwrap();
-        (v, p)
+        let out = *best.lock().unwrap();
+        Some(out)
     }
 
     /// Claim siblings one at a time and search each with the current shared
@@ -1166,6 +1214,22 @@ impl Worker<'_> {
             best = Some(m.pos);
             if max > lower {
                 lower = max;
+            }
+        }
+
+        // Young Brothers Wait: an elder sibling has proved a bound, so the
+        // rest are independent enough to share out. Splitting at any node
+        // deep enough, not only at the root, is what
+        // keeps every core busy when one subtree dominates.
+        let remaining = rest.as_slice();
+        if remaining.len() > 1 && board.empty_count() >= PARALLEL_MIN_EMPTIES && lower < upper {
+            if let Some((val, bpos)) = self.split_siblings(remaining, lower, upper, ev) {
+                if val > max {
+                    max = val;
+                    best = Some(bpos);
+                }
+                self.tt.update(board, hash, alpha, beta, max, best);
+                return max;
             }
         }
 
