@@ -456,13 +456,19 @@ impl HashTable {
     /// heuristic bounds, flagged so the exact search only uses the move.
     /// Mark every live entry as a seed: its best move stays usable for
     /// ordering while its bounds stop being treated as proven.
-    fn demote_to_seed(&mut self) {
-        for e in self.entries.get_mut().iter_mut() {
+    /// Mark every live entry as a seed: its best move stays usable for
+    /// ordering while its bounds stop being treated as proven. Takes `&self`
+    /// because workers only hold a shared borrow; callers must ensure no
+    /// other thread is searching (warm-up rungs are separated by a join).
+    fn demote_to_seed_shared(&self) {
+        // SAFETY: called between passes, with no concurrent searchers.
+        for e in unsafe { self.slots() }.iter_mut() {
             if e.used() {
                 e.flags |= 4;
             }
         }
     }
+
 
     fn seed_update(
         &self,
@@ -541,7 +547,24 @@ pub struct EndSolverResult {
 }
 
 pub struct Solver {
+    /// Shared between all search threads: the transposition table (its
+    /// entries are guarded by striped locks) and the read-only neighbour
+    /// masks.
+    hash_table: HashTable,
+    neighbours: NeighbourTable,
+    /// Results of the last solve, copied back from the worker.
     nodes: u64,
+    best: Option<Position>,
+}
+
+/// One search thread's private state plus borrows of the shared tables.
+/// Every search routine lives here, so spawning another thread is just
+/// another `Worker` over the same `HashTable`.
+struct Worker<'a> {
+    tt: &'a HashTable,
+    neighbours: &'a NeighbourTable,
+    nodes: u64,
+    best: Option<Position>,
     /// Score returned by the warm-up pass, used to centre the exact
     /// search's aspiration window (carrying the score between passes —
     /// that, not the warmed table, is the main benefit).
@@ -551,13 +574,24 @@ pub struct Solver {
     /// error). Only the warm-up passes run this way; their table entries
     /// are demoted so the exact pass trusts their moves but not their bounds.
     selective_t: Option<f32>,
-    best: Option<Position>,
-    hash_table: HashTable,
     /// Small dedicated table for the shallow region (5-6 empties), where
     /// transpositions are dense but entries would lose the depth-preferred
-    /// replacement race in the main table.
+    /// replacement race in the main table. Private to the thread.
     shallow_table: HashTable,
-    neighbours: NeighbourTable,
+}
+
+impl<'a> Worker<'a> {
+    fn new(tt: &'a HashTable, neighbours: &'a NeighbourTable) -> Worker<'a> {
+        Worker {
+            tt,
+            neighbours,
+            nodes: 0,
+            best: None,
+            warm_score: None,
+            selective_t: None,
+            shallow_table: HashTable::new(16),
+        }
+    }
 }
 
 impl Solver {
@@ -565,21 +599,92 @@ impl Solver {
     /// (each entry is ~48 bytes; 20 -> ~50 MB).
     pub fn new(bit_size: u32) -> Solver {
         Solver {
+            hash_table: HashTable::new(bit_size),
+            neighbours: NeighbourTable::new(),
             nodes: 0,
             best: None,
-            warm_score: None,
-            selective_t: None,
-            hash_table: HashTable::new(bit_size),
-            shallow_table: HashTable::new(16),
-            neighbours: NeighbourTable::new(),
         }
     }
+
 
     /// Solve the endgame for `board` under the given mode.
     pub fn solve(&mut self, mode: EndSolverMode, board: &Board) -> EndSolverResult {
         self.solve_with_eval(mode, board, None)
     }
 
+
+    /// Solve with an optional evaluator used purely for move ordering in
+    /// the upper (many-empties) region of the tree. Ordering never changes
+    /// the exact result — only the node count.
+    pub fn solve_with_eval(
+        &mut self,
+        mode: EndSolverMode,
+        board: &Board,
+        ev: Option<&Evaluator>,
+    ) -> EndSolverResult {
+        self.nodes = 0;
+        self.best = None;
+
+        if !board.check_all() {
+            return EndSolverResult {
+                best_move: None,
+                value: 0,
+                empty: board.empty_count(),
+                nodes: 0,
+            };
+        }
+
+        self.hash_table.clear();
+
+        let value = {
+            let mut w = Worker::new(&self.hash_table, &self.neighbours);
+            let mut b = *board;
+
+            // Warm-up ladder (iterative selectivity): solve the same
+            // full-depth endgame selectively first, leaving real full-depth
+            // best moves in the table for the exact pass that follows.
+            if let Some(e) = ev {
+                if board.empty_count() >= SELECTIVE_PASS_MIN_EMPTIES {
+                    let mut guess = w.estimate_score(board, Some(e));
+                    for t in SELECTIVE_LADDER {
+                        w.selective_t = Some(t);
+                        let mut sb = *board;
+                        let s = w.aspiration_width(&mut sb, guess, WARM_ASPIRATION_WIDTH, Some(e));
+                        w.selective_t = None;
+                        guess = s - (s & 1);
+                        // Each rung must re-derive its own bounds: an entry
+                        // stored by a more aggressive (less reliable) pass
+                        // would otherwise be taken at face value, and the
+                        // ladder would just re-confirm the first pass's error
+                        // instead of converging. Best moves survive demotion.
+                        w.tt.demote_to_seed_shared();
+                        w.warm_score = Some(s - (s & 1));
+                    }
+                    w.tt.demote_to_seed_shared();
+                }
+            }
+
+            let v = match mode {
+                EndSolverMode::WinLossDraw => w.pvs_root(&mut b, -1, 1, ev),
+                EndSolverMode::WinDraw => w.pvs_root(&mut b, 0, 1, ev),
+                EndSolverMode::DrawLoss => w.pvs_root(&mut b, -1, 0, ev),
+                EndSolverMode::Perfect => w.perfect(&mut b, ev),
+            };
+            self.nodes = w.nodes;
+            self.best = w.best;
+            v
+        };
+
+        EndSolverResult {
+            best_move: self.best,
+            value,
+            empty: board.empty_count(),
+            nodes: self.nodes,
+        }
+    }
+}
+
+impl Worker<'_> {
     /// Evaluation-guided iterative pre-search: before the
     /// exact passes, run shallow alpha-beta over the evaluator at
     /// increasing depths, storing best moves as flagged seed entries.
@@ -607,7 +712,7 @@ impl Solver {
         }
 
         let mut tt_move: Option<Position> = None;
-        if let Some(e) = self.hash_table.get(board, hash) {
+        if let Some(e) = self.tt.get(board, hash) {
             tt_move = e.best();
             // Exactly solved already: the true value beats any estimate
             if !e.is_seed() && e.lower() >= e.upper() {
@@ -684,77 +789,9 @@ impl Solver {
             let v8 = best_val.round().clamp(-64.0, 64.0) as i8;
             let lower8 = if best_val > orig_alpha { v8 } else { i8::MIN };
             let upper8 = if best_val < beta { v8 } else { i8::MAX };
-            self.hash_table.seed_update(board, hash, depth, lower8, upper8, best_move);
+            self.tt.seed_update(board, hash, depth, lower8, upper8, best_move);
         }
         best_val
-    }
-
-    /// Solve with an optional evaluator used purely for move ordering in
-    /// the upper (many-empties) region of the tree. Ordering never changes
-    /// the exact result — only the node count.
-    pub fn solve_with_eval(
-        &mut self,
-        mode: EndSolverMode,
-        board: &Board,
-        ev: Option<&Evaluator>,
-    ) -> EndSolverResult {
-        self.nodes = 0;
-        self.best = None;
-
-        if !board.check_all() {
-            return EndSolverResult {
-                best_move: None,
-                value: 0,
-                empty: board.empty_count(),
-                nodes: 0,
-            };
-        }
-
-        self.hash_table.clear();
-        self.shallow_table.clear();
-        self.warm_score = None;
-        let mut b = *board;
-
-        // Warm-up ladder (iterative selectivity): solve the same
-        // full-depth endgame selectively first, leaving real full-depth
-        // best moves in the table for the exact pass that follows.
-        if let Some(e) = ev {
-            if board.empty_count() >= SELECTIVE_PASS_MIN_EMPTIES {
-                let mut guess = self.estimate_score(board, Some(e));
-                for t in SELECTIVE_LADDER {
-                    self.selective_t = Some(t);
-                    let mut sb = *board;
-                    let s = self.aspiration_width(&mut sb, guess, WARM_ASPIRATION_WIDTH, Some(e));
-                    self.selective_t = None;
-                    guess = s - (s & 1);
-                    // Each rung must re-derive its own bounds: an entry
-                    // stored by a more aggressive (less reliable) pass would
-                    // otherwise be taken at face value, and the ladder would
-                    // just re-confirm the first pass's error instead of
-                    // converging. Best moves survive the demotion.
-                    self.hash_table.demote_to_seed();
-                    self.warm_score = Some(s - (s & 1));
-                    if std::env::var("BBR_DIAG").is_ok() {
-                        eprintln!("  warm(t={t}) -> {s} (nodes {})", self.nodes);
-                    }
-                }
-                self.hash_table.demote_to_seed();
-            }
-        }
-
-        let value = match mode {
-            EndSolverMode::WinLossDraw => self.pvs_root(&mut b, -1, 1, ev),
-            EndSolverMode::WinDraw => self.pvs_root(&mut b, 0, 1, ev),
-            EndSolverMode::DrawLoss => self.pvs_root(&mut b, -1, 0, ev),
-            EndSolverMode::Perfect => self.perfect(&mut b, ev),
-        };
-
-        EndSolverResult {
-            best_move: self.best,
-            value,
-            empty: board.empty_count(),
-            nodes: self.nodes,
-        }
     }
 
     /// Exact score. With a warm-up score available the window is a narrow
@@ -883,7 +920,7 @@ impl Solver {
             }
         }
 
-        self.hash_table
+        self.tt
             .update(board, hash, alpha, beta, max, Some(best));
         self.best = Some(best);
         max
@@ -900,7 +937,7 @@ impl Solver {
             return v;
         }
 
-        if let Some(v) = self.hash_table.get(board, hash) {
+        if let Some(v) = self.tt.get(board, hash) {
             if !v.is_seed() {
                 if v.lower() >= v.upper() {
                     return v.lower();
@@ -949,14 +986,14 @@ impl Solver {
             board.pass();
             let val = -self.pvs(board, zobrist::update_hash_on_pass(hash), -upper, -lower, true, ev);
             board.pass();
-            self.hash_table.update(board, hash, alpha, beta, val, None);
+            self.tt.update(board, hash, alpha, beta, val, None);
             return val;
         }
 
         // A move that wipes out the opponent ends the game at exactly +64,
         // which is the maximum possible score — so it *is* this node's value.
         if moves.iter().any(|m| m.board.player_bb() == 0) {
-            self.hash_table.update(board, hash, alpha, beta, 64, None);
+            self.tt.update(board, hash, alpha, beta, 64, None);
             return 64;
         }
 
@@ -964,7 +1001,7 @@ impl Solver {
         // already proves our value >= upper ends this node for free.
         if board.empty_count() >= ETC_EMPTIES {
             for m in moves.iter() {
-                if let Some(e) = self.hash_table.get(&m.board, m.hash) {
+                if let Some(e) = self.tt.get(&m.board, m.hash) {
                     if !e.is_seed() && -e.upper() >= upper {
                         return -e.upper();
                     }
@@ -977,7 +1014,7 @@ impl Solver {
 
         // Stage 1: the transposition-table move, searched before any
         // ordering work is done. Most cut nodes end here.
-        let tt_best = self.hash_table.get(board, hash).and_then(|e| e.best());
+        let tt_best = self.tt.get(board, hash).and_then(|e| e.best());
         if let Some(bpos) = tt_best {
             if let Some(idx) = moves.iter().position(|m| m.pos == bpos) {
                 let m = moves.swap_remove(idx);
@@ -988,7 +1025,7 @@ impl Solver {
                     lower = max;
                 }
                 if lower >= upper {
-                    self.hash_table.update(board, hash, alpha, beta, max, best);
+                    self.tt.update(board, hash, alpha, beta, max, best);
                     return max;
                 }
             }
@@ -1025,7 +1062,7 @@ impl Solver {
             }
         }
 
-        self.hash_table.update(board, hash, alpha, beta, max, best);
+        self.tt.update(board, hash, alpha, beta, max, best);
         max
     }
 
@@ -1070,7 +1107,7 @@ impl Solver {
             return v;
         }
 
-        if let Some(v) = self.hash_table.get(board, hash) {
+        if let Some(v) = self.tt.get(board, hash) {
             if !v.is_seed() {
                 if v.lower() >= v.upper() {
                     return v.lower();
@@ -1112,7 +1149,7 @@ impl Solver {
                 ev,
             );
             board.pass();
-            self.hash_table.update(board, hash, orig_alpha, beta, val, None);
+            self.tt.update(board, hash, orig_alpha, beta, val, None);
             return val;
         }
 
@@ -1133,7 +1170,7 @@ impl Solver {
             }
         }
 
-        self.hash_table.update(board, hash, orig_alpha, beta, alpha, best);
+        self.tt.update(board, hash, orig_alpha, beta, alpha, best);
         alpha
     }
 
@@ -1496,7 +1533,7 @@ impl Solver {
     /// The transposition table's best move, when present, is searched first.
     /// Each child carries its incrementally-updated Zobrist hash.
     fn sorted_moves(&self, board: &Board, hash: u64, ev: Option<&Evaluator>, out: &mut MoveBuf) {
-        let tt_best = self.hash_table.get(board, hash).and_then(|e| e.best());
+        let tt_best = self.tt.get(board, hash).and_then(|e| e.best());
         self.gen_moves(board, hash, out);
         self.score_and_sort(board, out, tt_best, ev, i32::MIN / 2);
     }
