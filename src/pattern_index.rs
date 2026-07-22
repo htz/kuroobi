@@ -205,6 +205,49 @@ impl PatternIndexer {
     /// indexer's pattern library. Summation order (patterns, then masks)
     /// is identical to `Evaluator::eval` so results are bit-exact.
     #[inline]
+    /// Pattern id of each mask instance, in mask order.
+    pub fn mask_patterns(&self) -> &[u8] {
+        &self.mask_pattern[..self.n_masks]
+    }
+
+    /// Number of mask instances.
+    pub fn n_masks(&self) -> usize {
+        self.n_masks
+    }
+
+    /// `eval_sum` over weights laid end to end, with `mask_off[m]` giving the
+    /// start of mask `m`'s pattern table. One dependent load per mask instead
+    /// of the pointer-then-weight pair a `Vec<Vec<f32>>` forces.
+    pub fn eval_sum_flat(
+        &self,
+        indices: &PatternIndices,
+        player: Color,
+        flat: &[f32],
+        mask_off: &[u32],
+    ) -> f32 {
+        let mut score = 0.0f32;
+        // SAFETY: `mask_off` is built with one entry per mask, each pointing
+        // at a table of `3^size` inside `flat`, and the maintained indices
+        // stay inside that range (same invariant `eval_sum` relies on).
+        unsafe {
+            if player == Color::Black {
+                for m in 0..self.n_masks {
+                    let off = *mask_off.get_unchecked(m) as usize;
+                    score += *flat.get_unchecked(off + *indices.idx.get_unchecked(m) as usize);
+                }
+            } else {
+                for m in 0..self.n_masks {
+                    let pi = *self.mask_pattern.get_unchecked(m) as usize;
+                    let swap = self.swap_tables.get_unchecked(self.patterns[pi].size);
+                    let idx = *swap.get_unchecked(*indices.idx.get_unchecked(m) as usize);
+                    let off = *mask_off.get_unchecked(m) as usize;
+                    score += *flat.get_unchecked(off + idx as usize);
+                }
+            }
+        }
+        score
+    }
+
     pub fn eval_sum(&self, indices: &PatternIndices, player: Color, weights: &[Vec<f32>]) -> f32 {
         let mut score = 0.0f32;
         // SAFETY: `m < n_masks <= MAX_MASKS` bounds `mask_pattern` and

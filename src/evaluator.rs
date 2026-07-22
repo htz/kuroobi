@@ -40,6 +40,14 @@ pub struct Evaluator {
     patterns: &'static [Pattern],
     /// weights[stage][pattern][ternary_index]
     weights: Vec<Vec<Vec<f32>>>,
+    /// The same weights, per stage, with the pattern tables laid end to end.
+    /// Evaluation walks one mask at a time, and reading them out of a
+    /// `Vec<Vec<f32>>` costs a pointer load before every weight load; a flat
+    /// array plus a small offset table (see `PatternIndexer::mask_offsets`)
+    /// leaves a single dependent load per mask.
+    flat_weights: Vec<Vec<f32>>,
+    /// Start of each mask instance's table inside a `flat_weights` stage.
+    mask_off: Vec<u32>,
     /// num_weights[stage][player disc count]
     num_weights: Vec<[f32; NUM_TABLE_SIZE]>,
     /// Lookup tables for incremental index maintenance during search.
@@ -147,6 +155,8 @@ impl Evaluator {
         Evaluator {
             patterns,
             weights: vec![stage_weights; STAGE_COUNT],
+            flat_weights: Vec::new(),
+            mask_off: Vec::new(),
             num_weights: vec![[0.0f32; NUM_TABLE_SIZE]; STAGE_COUNT],
             indexer: PatternIndexer::new(patterns),
         }
@@ -197,9 +207,48 @@ impl Evaluator {
     #[inline]
     pub fn eval_indices(&self, board: &Board, indices: &PatternIndices) -> f32 {
         let stage = Self::stage(board);
-        self.indexer
-            .eval_sum(indices, board.player(), &self.weights[stage])
-            + self.num_weights[stage][self.num_index(board)]
+        let patterns = if self.flat_weights.is_empty() {
+            self.indexer
+                .eval_sum(indices, board.player(), &self.weights[stage])
+        } else {
+            self.indexer.eval_sum_flat(
+                indices,
+                board.player(),
+                &self.flat_weights[stage],
+                &self.mask_off,
+            )
+        };
+        patterns + self.num_weights[stage][self.num_index(board)]
+    }
+
+    /// Rebuild the flat evaluation copy of the weights. Every mutation
+    /// invalidates it (see `invalidate_flat`); search paths rebuild once
+    /// after loading and then only read.
+    fn rebuild_flat(&mut self) {
+        let mut pattern_off = Vec::with_capacity(self.patterns.len());
+        let mut off = 0u32;
+        for p in self.patterns {
+            pattern_off.push(off);
+            off += p.table_size() as u32;
+        }
+        self.mask_off = self
+            .indexer
+            .mask_patterns()
+            .iter()
+            .map(|&pi| pattern_off[pi as usize])
+            .collect();
+        self.flat_weights = self
+            .weights
+            .iter()
+            .map(|stage| stage.iter().flat_map(|t| t.iter().copied()).collect())
+            .collect();
+    }
+
+    /// Drop the flat copy; the next evaluation falls back to the nested
+    /// tables until it is rebuilt.
+    fn invalidate_flat(&mut self) {
+        self.flat_weights.clear();
+        self.mask_off.clear();
     }
 
     /// Direct access to one weight entry (for training).
@@ -213,6 +262,7 @@ impl Evaluator {
     }
 
     pub fn set_weight(&mut self, stage: usize, pattern: usize, index: usize, value: f32) {
+        self.invalidate_flat();
         self.weights[stage][pattern][index] = value;
     }
 
@@ -237,6 +287,7 @@ impl Evaluator {
         for (pi, p) in self.patterns.iter().enumerate() {
             for idx in p.indices(board.black, board.white, board.player()) {
                 self.weights[stage][pi][idx] += delta;
+                self.flat_weights.clear();
             }
         }
         let num_idx = self.num_index(board);
@@ -260,6 +311,7 @@ impl Evaluator {
             for idx in p.indices(board.black, board.white, board.player()) {
                 let delta = opt.step(stage, pi, idx, table_size, error);
                 self.weights[stage][pi][idx] += delta;
+                self.flat_weights.clear();
             }
         }
         // Disc-count cell: registered with the optimizer as a virtual
@@ -435,6 +487,7 @@ impl Evaluator {
                 }
             }
         }
+        self.rebuild_flat();
         Ok(())
     }
 }
