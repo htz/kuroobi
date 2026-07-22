@@ -2248,7 +2248,7 @@ fn move_ordering_value(pos: Position, child: &Board, parity: u8) -> i32 {
     // this runs for every move of every node, that was most of the ordering
     // bill.
     let opp_mobility = child.movable_count() as i32;
-    point += opp_mobility * 5;
+    point += opp_mobility * MOBILITY_ORDER_WEIGHT;
 
     // Potential mobility: frontier discs (adjacent to an empty square) are
     // attack surface — many of ours after the move is bad for us.
