@@ -1003,9 +1003,10 @@ impl Worker<'_> {
             let key = if child.player_bb() == 0 || Some(pos) == tt_move {
                 i32::MIN
             } else if depth >= 2 {
+                let saved = *indices;
                 ix.apply(indices, pos, flipped, mover);
                 let v = (ev.eval_indices(&child, indices) * 8.0) as i32;
-                ix.undo(indices, pos, flipped, mover);
+                *indices = saved;
                 v
             } else {
                 0
@@ -1023,11 +1024,12 @@ impl Worker<'_> {
         let mut best_move = None;
         let orig_alpha = alpha;
         for (pos, child, child_hash, flipped, _) in children.iter() {
+            let saved = *indices;
             ix.apply(indices, *pos, *flipped, mover);
             let v = -self.seed_search(
                 child, *child_hash, ev, ix, indices, depth - 1, -beta, -alpha, store,
             );
-            ix.undo(indices, *pos, *flipped, mover);
+            *indices = saved;
             if v > best_val {
                 best_val = v;
                 best_move = Some(*pos);
@@ -2079,13 +2081,18 @@ impl Worker<'_> {
                 // better for the mover). Far stronger ordering than the
                 // static heuristic in the many-empties region; the topmost
                 // region refines it with a pruned lookahead.
+                // Restoring the snapshot beats undoing: `undo` walks the
+                // flipped discs again and scatters an update through the CSR
+                // table for each, while the indices are 160 bytes of
+                // contiguous u16 that copy in a handful of vector moves.
+                let saved = *indices;
                 ix.apply(indices, pos, flipped, mover);
                 let v = if sort_depth > 0 {
                     shallow_search(&child, e, ix, indices, sort_depth, f32::NEG_INFINITY, sort_hi)
                 } else {
                     e.eval_indices(&child, indices)
                 };
-                ix.undo(indices, pos, flipped, mover);
+                *indices = saved;
                 // Weight mobility as heavily as the evaluation itself; the
                 // evaluator alone is blind to how many replies it leaves the
                 // opponent. One reply counts for about one disc.
@@ -2275,9 +2282,10 @@ fn shallow_search(
         let pos = Position(sq);
         let mut child = *board;
         let flipped = child.make_move_bits(pos);
+        let saved = *indices;
         ix.apply(indices, pos, flipped, mover);
         let v = -shallow_search(&child, ev, ix, indices, depth - 1, -beta, -alpha);
-        ix.undo(indices, pos, flipped, mover);
+        *indices = saved;
         if v > best {
             best = v;
             if v > alpha {
