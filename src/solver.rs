@@ -15,7 +15,7 @@ use crate::zobrist;
 
 /// Search depth thresholds (empties remaining) for switching strategies.
 const PVS_LIMIT: u8 = 12;
-const MOVE_ORDERING_LIMIT: u8 = 8;
+const MOVE_ORDERING_LIMIT: u8 = 7;
 /// From this many empties upward, an evaluator (when provided) orders
 /// moves instead of the static heuristic.
 const EVAL_ORDER_EMPTIES: u8 = 14;
