@@ -15,6 +15,14 @@ use crate::zobrist;
 /// Search depth thresholds (empties remaining) for switching strategies.
 const PVS_LIMIT: u8 = 12;
 const MOVE_ORDERING_LIMIT: u8 = 7;
+/// Below this many empties the ordered search goes to a cache-resident
+/// table instead of the main one. The main table holds 2^26 entries of 24
+/// bytes, so a probe there is a guaranteed DRAM round trip; at these
+/// depths the tree is wide enough that the latency, not the hit rate,
+/// decides.
+const MID_TT_EMPTIES: u8 = 10;
+/// Entry count of that table, as a power of two. 2^19 * 24 B = 12.6 MB.
+const MID_TT_BITS: u32 = 19;
 /// From this many empties upward, an evaluator (when provided) orders
 /// moves instead of the static heuristic.
 const EVAL_ORDER_EMPTIES: u8 = 14;
@@ -788,6 +796,11 @@ struct Worker<'a> {
     /// transpositions are dense but entries would lose the depth-preferred
     /// replacement race in the main table. Private to the thread.
     shallow_table: HashTable,
+    /// Same idea one band up, for the ordered search below
+    /// `MID_TT_EMPTIES`. Those layers carry most of the tree, so every
+    /// probe into the multi-gigabyte main table is a cold miss; a table
+    /// that fits in cache trades a little hit rate for a lot of latency.
+    mid_table: HashTable,
     /// Spare threads this search may recruit when splitting a node.
     budget: &'a ThreadBudget,
     /// Cutoff signal for the split this worker is searching under.
@@ -811,9 +824,21 @@ impl<'a> Worker<'a> {
             warm_score: None,
             selective_t: None,
             shallow_table: HashTable::new(16),
+            mid_table: HashTable::new(MID_TT_BITS),
             budget,
             abort,
             abort_countdown: ABORT_CHECK_INTERVAL,
+        }
+    }
+
+    /// Transposition table serving a node with this many empties: the
+    /// cache-resident one below `MID_TT_EMPTIES`, the main one above.
+    #[inline(always)]
+    fn table(&self, empties: u8) -> &HashTable {
+        if empties < MID_TT_EMPTIES {
+            &self.mid_table
+        } else {
+            self.tt
         }
     }
 
@@ -1559,7 +1584,7 @@ impl Worker<'_> {
         // instead of stalling the node. The parent prefetched this line
         // during its own move generation, but for every child except the
         // first that prefetch is long evicted by the sibling subtrees.
-        self.tt.prefetch(hash);
+        self.table(board.empty_count()).prefetch(hash);
 
         {
             let _p = layer_profile::Scope::new(layer_profile::STAB, board.empty_count());
@@ -1571,7 +1596,7 @@ impl Worker<'_> {
         // Single probe, reused for the ordering move below (see `pvs`).
         let entry = {
             let _p = layer_profile::Scope::new(layer_profile::TT, board.empty_count());
-            self.tt.get(board, hash)
+            self.table(board.empty_count()).get(board, hash)
         };
         let mut narrowed = false;
         if let Some(v) = entry {
@@ -1626,7 +1651,8 @@ impl Worker<'_> {
                 ev,
             );
             board.pass();
-            self.tt.update(board, hash, orig_alpha, beta, val, None);
+            self.table(board.empty_count())
+                .update(board, hash, orig_alpha, beta, val, None);
             return val;
         }
 
@@ -1664,7 +1690,8 @@ impl Worker<'_> {
             }
         }
 
-        self.tt.update(board, hash, orig_alpha, beta, alpha, best);
+        self.table(board.empty_count())
+            .update(board, hash, orig_alpha, beta, alpha, best);
         alpha
     }
 
@@ -2073,7 +2100,7 @@ impl Worker<'_> {
                 board.opponent_bb() ^ flipped,
                 board.player_bb() | flipped | pos.to_bit(),
             );
-            self.tt.prefetch(child_hash);
+            self.table(board.empty_count() - 1).prefetch(child_hash);
             out.push(ScoredMove { pos, flipped, hash: child_hash, value: 0 });
         }
     }
