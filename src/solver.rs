@@ -9,7 +9,6 @@ use crate::bitboard;
 use crate::board::Board;
 use crate::evaluator::Evaluator;
 use crate::pattern_index::{PatternIndexer, PatternIndices};
-use crate::color::Color;
 use crate::position::Position;
 use crate::zobrist;
 
@@ -2033,16 +2032,22 @@ impl Worker<'_> {
             -(alpha - SORT_ALPHA_DELTA) as f32
         };
 
+        let player_bb = board.player_bb();
+        let opponent_bb = board.opponent_bb();
         for sm in moves.iter_mut() {
             let pos = sm.pos;
             let flipped = sm.flipped;
-            let child = sm.child(board);
-            sm.value = if child.player_bb() == 0 {
+            // The child as bare bitboards; only the evaluator path below
+            // needs a real `Board`.
+            let cp = opponent_bb ^ flipped;
+            let co = player_bb | flipped | pos.to_bit();
+            sm.value = if cp == 0 {
                 // Wiping out the opponent ends the game at +64: try first
                 i32::MIN
             } else if Some(pos) == tt_best {
                 i32::MIN + 1
             } else if let (Some(e), Some((ix, indices))) = (ev, order_ix.as_mut()) {
+                let child = sm.child(board);
                 // Pattern evaluation of the child (opponent view: lower =
                 // better for the mover). Far stronger ordering than the
                 // static heuristic in the many-empties region; the topmost
@@ -2070,7 +2075,7 @@ impl Worker<'_> {
                 (v * 8.0) as i32 + (child.movable_count() as i32) * MOBILITY_ORDER_WEIGHT
                     - edge * EDGE_STABILITY_ORDER_WEIGHT
             } else {
-                move_ordering_value(pos, &child, parity)
+                move_ordering_value(pos, cp, co, parity)
             };
         }
 
@@ -2271,7 +2276,10 @@ fn dilate(x: u64) -> u64 {
     v | (v << 8) | (v >> 8)
 }
 
-fn move_ordering_value(pos: Position, child: &Board, parity: u8) -> i32 {
+/// Ordering value of a child, given as raw bitboards (side to move, other)
+/// so that no `Board` — and no runtime-indexed `player_bb()` — is built for
+/// a move the search may never reach.
+fn move_ordering_value(pos: Position, cp: u64, co: u64, parity: u8) -> i32 {
     use crate::pattern::sq::*;
 
     let mut point = 0i32;
@@ -2283,16 +2291,16 @@ fn move_ordering_value(pos: Position, child: &Board, parity: u8) -> i32 {
     // information the one-sided terms already carry — at 8-11 empties, where
     // this runs for every move of every node, that was most of the ordering
     // bill.
-    let opp_mobility = child.movable_count() as i32;
+    let opp_mobility = bitboard::mobility_count(cp, co) as i32;
     point += opp_mobility * MOBILITY_ORDER_WEIGHT;
 
     // Potential mobility: frontier discs (adjacent to an empty square) are
     // attack surface — many of ours after the move is bad for us.
-    let empties_next = crate::bitboard::empty_bb(child.black, child.white);
+    let empties_next = !(cp | co);
     let frontier = dilate(empties_next);
-    point += (frontier & child.opponent_bb()).count_ones() as i32 * 2;
+    point += (frontier & co).count_ones() as i32 * 2;
 
-    point -= corner_stability(child, child.player().opponent()) * 5;
+    point -= corner_stability_bb(co) * 5;
 
     let s = pos.index();
     // X-squares (B2, G2, B7, G7): tends to give away a corner — try late? No:
@@ -2312,13 +2320,9 @@ fn move_ordering_value(pos: Position, child: &Board, parity: u8) -> i32 {
 }
 
 /// Corner stability count: corners owned plus adjacent edge discs.
-fn corner_stability(board: &Board, color: Color) -> i32 {
+fn corner_stability_bb(bb: u64) -> i32 {
     use crate::pattern::sq::*;
 
-    let bb = match color {
-        Color::Black => board.black,
-        Color::White => board.white,
-    };
     let has = |s: u8| bb & (1u64 << s) != 0;
 
     let mut count = 0;
