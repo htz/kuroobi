@@ -241,7 +241,7 @@ const SELECTIVE_PASS_MIN_EMPTIES: u8 = 24;
 /// pass's score, so the estimate handed to the exact search converges —
 /// an estimate that is off by even two discs makes the exact search pay
 /// for a failed window, which is the dominant cost on hard positions.
-const SELECTIVE_LADDER: [f32; 1] = [1.8];
+const SELECTIVE_LADDER: [f32; 2] = [1.1, 1.8];
 
 /// Plies of ordering lookahead by empty count, stepped one ply at a time
 /// as the position opens up.
