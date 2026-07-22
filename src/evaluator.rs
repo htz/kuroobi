@@ -17,6 +17,10 @@ use std::path::Path;
 
 /// Fixed-point scale of the ordering-grade 16-bit weights.
 const I16_SCALE: f32 = 256.0;
+/// Fixed-point scale of the 8-bit ordering weights. Measured optimum: coarser
+/// steps beat a tighter range, because clipping the few large weights hurts
+/// the order more than rounding the many small ones.
+const I8_SCALE: f32 = 4.0;
 
 use crate::board::Board;
 use crate::color::Color;
@@ -59,6 +63,9 @@ pub struct Evaluator {
     /// The same, with the White digit swap baked in, so evaluation never
     /// pays for the swap lookup.
     flat_i16_white: Vec<Vec<i16>>,
+    /// The ordering-grade tables, quantized once more to 8 bits.
+    flat_i8: Vec<Vec<i8>>,
+    flat_i8_white: Vec<Vec<i8>>,
     /// num_weights[stage][player disc count]
     num_weights: Vec<[f32; NUM_TABLE_SIZE]>,
     /// Lookup tables for incremental index maintenance during search.
@@ -170,6 +177,8 @@ impl Evaluator {
             mask_off: Vec::new(),
             flat_i16: Vec::new(),
             flat_i16_white: Vec::new(),
+            flat_i8: Vec::new(),
+            flat_i8_white: Vec::new(),
             num_weights: vec![[0.0f32; NUM_TABLE_SIZE]; STAGE_COUNT],
             indexer: PatternIndexer::new(patterns),
         }
@@ -267,8 +276,33 @@ impl Evaluator {
             .collect();
         // White's table: entry m,i holds the weight the swapped index selects.
         let n_masks = self.indexer.n_masks();
+        self.flat_i8 = self
+            .flat_weights
+            .iter()
+            .map(|stage| {
+                stage
+                    .iter()
+                    .map(|&w| (w * I8_SCALE).clamp(-128.0, 127.0) as i8)
+                    .collect()
+            })
+            .collect();
         self.flat_i16_white = self
             .flat_i16
+            .iter()
+            .map(|stage| {
+                let mut out = stage.clone();
+                for m in 0..n_masks {
+                    let off = self.mask_off[m] as usize;
+                    let size = self.patterns[self.indexer.mask_patterns()[m] as usize].table_size();
+                    for i in 0..size {
+                        out[off + i] = stage[off + self.indexer.swapped_index(m, i)];
+                    }
+                }
+                out
+            })
+            .collect();
+        self.flat_i8_white = self
+            .flat_i8
             .iter()
             .map(|stage| {
                 let mut out = stage.clone();
@@ -289,6 +323,8 @@ impl Evaluator {
     fn invalidate_flat(&mut self) {
         self.flat_weights.clear();
         self.flat_i16.clear();
+        self.flat_i8.clear();
+        self.flat_i8_white.clear();
         self.flat_i16_white.clear();
         self.mask_off.clear();
     }
@@ -314,12 +350,12 @@ impl Evaluator {
             return self.eval_indices(&b, indices);
         }
         let table = if matches!(color, Color::Black) {
-            &self.flat_i16[stage]
+            &self.flat_i8[stage]
         } else {
-            &self.flat_i16_white[stage]
+            &self.flat_i8_white[stage]
         };
-        let sum = self.indexer.eval_sum_i16(indices, table, &self.mask_off);
-        sum as f32 / I16_SCALE + self.num_weights[stage][player.count_ones() as usize]
+        let sum = self.indexer.eval_sum_i8(indices, table, &self.mask_off);
+        sum as f32 / I8_SCALE + self.num_weights[stage][player.count_ones() as usize]
     }
 
     /// Direct access to one weight entry (for training).

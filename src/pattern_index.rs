@@ -251,6 +251,20 @@ impl PatternIndexer {
     /// `eval_sum_flat` over 16-bit weights. Halving the table halves the
     /// cache footprint of the one array the ordering touches millions of
     /// times.
+    /// `eval_sum_i16` over 8-bit weights: a stage's table is a quarter of the
+    /// f32 one, which is what the ordering walks millions of times.
+    pub fn eval_sum_i8(&self, indices: &PatternIndices, flat: &[i8], mask_off: &[u32]) -> i32 {
+        let mut score = 0i32;
+        // SAFETY: same invariant as `eval_sum_flat`.
+        unsafe {
+            for m in 0..self.n_masks {
+                let off = *mask_off.get_unchecked(m) as usize;
+                score += *flat.get_unchecked(off + *indices.idx.get_unchecked(m) as usize) as i32;
+            }
+        }
+        score
+    }
+
     pub fn eval_sum_i16(&self, indices: &PatternIndices, flat: &[i16], mask_off: &[u32]) -> i32 {
         let mut score = 0i32;
         // SAFETY: same invariant as `eval_sum_flat`. The White table has the
