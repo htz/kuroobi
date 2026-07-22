@@ -228,7 +228,7 @@ const SELECTIVE_PROBE_DEPTH: u8 = 4;
 /// empties the exact search is cheap enough that the pass cannot pay for
 /// itself (measured on FFO1-19: +6% nodes and +24% time at 16, +14%/+62%
 /// at 14), while from 20 up it pays for itself several times over.
-const SELECTIVE_PASS_MIN_EMPTIES: u8 = 20;
+const SELECTIVE_PASS_MIN_EMPTIES: u8 = 24;
 /// Confidence levels (standard deviations) of the warm-up passes, from
 /// most selective to least. Each pass is aspirated around the previous
 /// pass's score, so the estimate handed to the exact search converges —
