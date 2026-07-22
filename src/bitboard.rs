@@ -126,9 +126,54 @@ fn some_mobility<const DIR: u32>(player_bb: u64, masked_opp: u64) -> u64 {
     (u << DIR) | (d >> DIR)
 }
 
+/// One axis of move generation with both directions in one 128-bit register.
+///
+/// A variable
+/// shift by `(dir, -dir)` shifts left in lane 0 and right in lane 1, so the
+/// smear that the scalar code runs twice costs one pass. Move generation is
+/// re-run for every move the ordering scores, so this is one of the hottest
+/// routines in the search.
+///
+/// # Safety
+/// Requires NEON, which is mandatory on aarch64.
+#[cfg(target_arch = "aarch64")]
+#[target_feature(enable = "neon")]
+unsafe fn some_mobility_neon(player_bb: u64, masked_opp: u64, dir: i64) -> u64 {
+    use core::arch::aarch64::*;
+    let pp = vdupq_n_u64(player_bb);
+    let mut mm = vdupq_n_u64(masked_opp);
+    let dd = vcombine_s64(vcreate_s64(dir as u64), vcreate_s64((-dir) as u64));
+    let ddx2 = vaddq_s64(dd, dd);
+    let mut ff = vandq_u64(mm, vshlq_u64(pp, dd));
+    ff = vorrq_u64(ff, vandq_u64(mm, vshlq_u64(ff, dd)));
+    mm = vandq_u64(mm, vshlq_u64(mm, dd));
+    ff = vorrq_u64(ff, vandq_u64(mm, vshlq_u64(ff, ddx2)));
+    ff = vorrq_u64(ff, vandq_u64(mm, vshlq_u64(ff, ddx2)));
+    ff = vshlq_u64(ff, dd);
+    vgetq_lane_u64(ff, 0) | vgetq_lane_u64(ff, 1)
+}
+
 /// Returns a bitboard of all playable positions for the current player.
 #[inline]
 pub fn mobility(player_bb: u64, opponent_bb: u64, empty_bb: u64) -> u64 {
+    #[cfg(target_arch = "aarch64")]
+    {
+        // SAFETY: NEON is part of the aarch64 baseline.
+        unsafe {
+            return (some_mobility_neon(player_bb, opponent_bb & MASK_RANK, 1)
+                | some_mobility_neon(player_bb, opponent_bb & MASK_FILE, 8)
+                | some_mobility_neon(player_bb, opponent_bb & MASK_DIAG, 7)
+                | some_mobility_neon(player_bb, opponent_bb & MASK_DIAG, 9))
+                & empty_bb;
+        }
+    }
+    #[allow(unreachable_code)]
+    mobility_scalar(player_bb, opponent_bb, empty_bb)
+}
+
+/// Scalar fallback, and the reference the NEON path is tested against.
+#[inline]
+pub fn mobility_scalar(player_bb: u64, opponent_bb: u64, empty_bb: u64) -> u64 {
     (some_mobility::<1>(player_bb, opponent_bb & MASK_RANK)
         | some_mobility::<8>(player_bb, opponent_bb & MASK_FILE)
         | some_mobility::<7>(player_bb, opponent_bb & MASK_DIAG)
@@ -578,6 +623,38 @@ flip_table!(
 #[inline]
 pub fn flippable(player_bb: u64, opponent_bb: u64, pos_bit: u64) -> u64 {
     FLIP_AT[pos_bit.trailing_zeros() as usize](player_bb, opponent_bb)
+}
+
+#[cfg(test)]
+mod neon_mobility_tests {
+    use super::*;
+
+    #[test]
+    fn neon_mobility_matches_scalar() {
+        let mut state = 0x9E37_79B9_7F4A_7C15u64;
+        let mut next = || {
+            state ^= state << 13;
+            state ^= state >> 7;
+            state ^= state << 17;
+            state
+        };
+        for i in 0..300_000 {
+            let a = next();
+            let b = next();
+            // Mix densities so edge and diagonal wrap-around are covered.
+            let (player, opponent) = match i % 3 {
+                0 => (a & !b, b & !a),
+                1 => (a & b, !(a | b)),
+                _ => (a & !b & next(), b & !a),
+            };
+            let empty = !(player | opponent);
+            assert_eq!(
+                mobility(player, opponent, empty),
+                mobility_scalar(player, opponent, empty),
+                "player={player:#018x} opponent={opponent:#018x}"
+            );
+        }
+    }
 }
 
 #[cfg(test)]
