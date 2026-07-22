@@ -933,7 +933,7 @@ impl Worker<'_> {
                 return final_score(board) as f32;
             }
             return -self.seed_search(
-                &child, zobrist::update_hash_on_pass(hash), ev, ix, indices, depth,
+                &child, zobrist::board_hash(board.opponent_bb(), board.player_bb()), ev, ix, indices, depth,
                 -beta, -alpha, store,
             );
         }
@@ -949,7 +949,10 @@ impl Worker<'_> {
             let pos = Position(sq);
             let mut child = *board;
             let flipped = child.make_move_bits(pos);
-            let child_hash = zobrist::update_hash_on_move(hash, pos, flipped, mover);
+            let child_hash = zobrist::board_hash(
+                board.opponent_bb() ^ flipped,
+                board.player_bb() | flipped | pos.to_bit(),
+            );
             let key = if child.player_bb() == 0 || Some(pos) == tt_move {
                 i32::MIN
             } else if depth >= 2 {
@@ -1031,7 +1034,7 @@ impl Worker<'_> {
         let Some(e) = ev else { return 0 };
         let ix = e.indexer();
         let mut indices = ix.init(board.black, board.white);
-        let hash = zobrist::compute_hash(board.black, board.white, board.player());
+        let hash = zobrist::board_hash(board.player_bb(), board.opponent_bb());
         let depth = ESTIMATE_DEPTH.min(board.empty_count());
         let v = self.seed_search(
             board, hash, e, ix, &mut indices, depth, f32::NEG_INFINITY, f32::INFINITY, false,
@@ -1084,13 +1087,13 @@ impl Worker<'_> {
         let upper = beta;
         // Root computes the hash from scratch once; children update it
         // incrementally (flipped discs + placed disc + player swap).
-        let hash = zobrist::compute_hash(board.black, board.white, board.player());
+        let hash = zobrist::board_hash(board.player_bb(), board.opponent_bb());
 
         self.nodes += 1;
 
         let mut moves = MoveBuf::new();
         let tt_best = self.tt.get(board, hash).and_then(|e| e.best());
-        self.scored_moves(board, hash, tt_best, ev, &mut moves);
+        self.scored_moves(board, tt_best, ev, &mut moves);
         if moves.is_empty() {
             return final_score(board);
         }
@@ -1314,14 +1317,14 @@ impl Worker<'_> {
         // a node whose transposition-table move already cuts must not pay
         // for pattern evaluations and lookaheads it never uses.
         let mut moves = MoveBuf::new();
-        self.gen_moves(board, hash, &mut moves);
+        self.gen_moves(board, &mut moves);
 
         if moves.is_empty() {
             if passed {
                 return final_score(board);
             }
             board.pass();
-            let val = -self.pvs(board, zobrist::update_hash_on_pass(hash), -upper, -lower, true, ev);
+            let val = -self.pvs(board, zobrist::board_hash(board.opponent_bb(), board.player_bb()), -upper, -lower, true, ev);
             board.pass();
             self.tt.update(board, hash, alpha, beta, val, None);
             return val;
@@ -1522,7 +1525,7 @@ impl Worker<'_> {
 
         let orig_alpha = alpha;
         let mut moves = MoveBuf::new();
-        self.scored_moves(board, hash, entry.and_then(|e| e.best()), ev, &mut moves);
+        self.scored_moves(board, entry.and_then(|e| e.best()), ev, &mut moves);
 
         if moves.is_empty() {
             if passed {
@@ -1531,7 +1534,7 @@ impl Worker<'_> {
             board.pass();
             let val = -self.alpha_beta_ordered(
                 board,
-                zobrist::update_hash_on_pass(hash),
+                zobrist::board_hash(board.opponent_bb(), board.player_bb()),
                 -beta,
                 -alpha,
                 true,
@@ -1618,7 +1621,6 @@ impl Worker<'_> {
         // Children of a 5-empty node dispatch to last4 and never probe, so
         // their hashes are only needed one level up.
         let need_child_hash = board.empty_count() > 5;
-        let mover = board.player();
 
         // Odd-quadrant moves first (quadrant parity: filling the last
         // empty of a region tends to keep the tempo).
@@ -1644,7 +1646,10 @@ impl Worker<'_> {
                 let mut child = *board;
                 child.apply_flips(pos, flips);
                 let child_hash = if need_child_hash {
-                    zobrist::update_hash_on_move(hash, pos, flips, mover)
+                    zobrist::board_hash(
+                        board.opponent_bb() ^ flips,
+                        board.player_bb() | flips | pos_bit,
+                    )
                 } else {
                     0
                 };
@@ -1667,7 +1672,7 @@ impl Worker<'_> {
                 return final_score(board);
             }
             board.pass();
-            let val = -self.alpha_beta(board, zobrist::update_hash_on_pass(hash), -upper, -orig_lower, true);
+            let val = -self.alpha_beta(board, zobrist::board_hash(board.opponent_bb(), board.player_bb()), -upper, -orig_lower, true);
             board.pass();
             return val;
         }
@@ -1926,28 +1931,31 @@ impl Worker<'_> {
     fn scored_moves(
         &self,
         board: &Board,
-        hash: u64,
         tt_best: Option<Position>,
         ev: Option<&Evaluator>,
         out: &mut MoveBuf,
     ) {
-        self.gen_moves(board, hash, out);
+        self.gen_moves(board, out);
         self.score_moves(board, out, tt_best, ev, i32::MIN / 2);
     }
 
     /// Generate children with their incremental hashes but WITHOUT the
     /// expensive ordering evaluation. Wipeout moves are flagged: they end
     /// the game at +64, so a node that has one needs no search at all.
-    fn gen_moves(&self, board: &Board, hash: u64, out: &mut MoveBuf) {
+    fn gen_moves(&self, board: &Board, out: &mut MoveBuf) {
         out.len = 0;
-        let mover = board.player();
         let mut m = board.movable();
         while m != 0 {
             let sq = m.trailing_zeros() as u8;
             m &= m - 1;
             let pos = Position(sq);
             let flipped = bitboard::flippable(board.player_bb(), board.opponent_bb(), pos.to_bit());
-            let child_hash = zobrist::update_hash_on_move(hash, pos, flipped, mover);
+            // The child's bitboards, without materializing a Board: the
+            // mover gains the flipped discs plus the square it played.
+            let child_hash = zobrist::board_hash(
+                board.opponent_bb() ^ flipped,
+                board.player_bb() | flipped | pos.to_bit(),
+            );
             self.tt.prefetch(child_hash);
             out.push(ScoredMove { pos, flipped, hash: child_hash, value: 0 });
         }

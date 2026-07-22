@@ -111,6 +111,39 @@ pub fn update_hash_on_pass(prev_hash: u64) -> u64 {
     prev_hash ^ zobrist_table().swap_player_zobrist
 }
 
+/// Board hash from the two bitboards: two hardware CRC32C instructions
+/// rather than an incremental Zobrist update.
+///
+/// The incremental form had to XOR a table entry for *every flipped disc* of
+/// *every generated move*, including the many moves a cut node never
+/// searches. Two instructions on the child's bitboards is far less work, and
+/// the table only needs the hash to spread — entries carry the position and
+/// are compared exactly, so the function itself is free to change.
+///
+/// `player` is the side to move, so passing swaps the arguments.
+#[inline]
+pub fn board_hash(player: u64, opponent: u64) -> u64 {
+    #[cfg(target_arch = "aarch64")]
+    {
+        // SAFETY: CRC32 is mandatory on every arm64 Apple platform and on
+        // every ARMv8.1-A part; the fallback below covers anything else.
+        #[target_feature(enable = "crc")]
+        unsafe fn crc(player: u64, opponent: u64) -> u64 {
+            let c = core::arch::aarch64::__crc32cd(0, player);
+            ((c as u64) << 32) | core::arch::aarch64::__crc32cd(c, opponent) as u64
+        }
+        if std::arch::is_aarch64_feature_detected!("crc") {
+            return unsafe { crc(player, opponent) };
+        }
+    }
+    // Portable fallback: a 128-bit multiply-fold mixer.
+    let mut h = player.wrapping_mul(0x9E37_79B9_7F4A_7C15);
+    h ^= h >> 29;
+    h = h.wrapping_add(opponent.wrapping_mul(0xBF58_476D_1CE4_E5B9));
+    h ^= h >> 32;
+    h.wrapping_mul(0x94D0_49BB_1331_11EB)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
