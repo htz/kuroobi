@@ -248,6 +248,38 @@ impl PatternIndexer {
         score
     }
 
+    /// `eval_sum_flat` over 16-bit weights. Halving the table halves the
+    /// cache footprint of the one array the ordering touches millions of
+    /// times.
+    pub fn eval_sum_i16(
+        &self,
+        indices: &PatternIndices,
+        player: Color,
+        flat: &[i16],
+        mask_off: &[u32],
+    ) -> i32 {
+        let mut score = 0i32;
+        // SAFETY: same invariant as `eval_sum_flat`.
+        unsafe {
+            if player == Color::Black {
+                for m in 0..self.n_masks {
+                    let off = *mask_off.get_unchecked(m) as usize;
+                    score += *flat.get_unchecked(off + *indices.idx.get_unchecked(m) as usize)
+                        as i32;
+                }
+            } else {
+                for m in 0..self.n_masks {
+                    let pi = *self.mask_pattern.get_unchecked(m) as usize;
+                    let swap = self.swap_tables.get_unchecked(self.patterns[pi].size);
+                    let idx = *swap.get_unchecked(*indices.idx.get_unchecked(m) as usize);
+                    let off = *mask_off.get_unchecked(m) as usize;
+                    score += *flat.get_unchecked(off + idx as usize) as i32;
+                }
+            }
+        }
+        score
+    }
+
     pub fn eval_sum(&self, indices: &PatternIndices, player: Color, weights: &[Vec<f32>]) -> f32 {
         let mut score = 0.0f32;
         // SAFETY: `m < n_masks <= MAX_MASKS` bounds `mask_pattern` and

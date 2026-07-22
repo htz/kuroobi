@@ -2093,7 +2093,7 @@ impl Worker<'_> {
                 let v = if sort_depth > 0 {
                     shallow_search(&child, e, ix, indices, sort_depth, f32::NEG_INFINITY, sort_hi)
                 } else {
-                    e.eval_indices(&child, indices)
+                    e.eval_order_bb(cp, co, mover.opponent(), indices)
                 };
                 *indices = saved;
                 // Mobility weighs as heavily as the evaluation itself:
@@ -2252,7 +2252,12 @@ fn shallow_search(
 ) -> f32 {
     node_accounting::lookahead();
     if depth == 0 {
-        return ev.eval_indices(board, indices);
+        return ev.eval_order_bb(
+            board.player_bb(),
+            board.opponent_bb(),
+            board.player(),
+            indices,
+        );
     }
     let moves = board.movable();
     if moves == 0 {

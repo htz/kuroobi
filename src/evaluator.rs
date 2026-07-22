@@ -15,7 +15,11 @@ use std::fs::File;
 use std::io::{self, BufReader, BufWriter, Read, Write};
 use std::path::Path;
 
+/// Fixed-point scale of the ordering-grade 16-bit weights.
+const I16_SCALE: f32 = 256.0;
+
 use crate::board::Board;
+use crate::color::Color;
 use crate::pattern::Pattern;
 use crate::pattern_index::{PatternIndexer, PatternIndices};
 
@@ -48,6 +52,10 @@ pub struct Evaluator {
     flat_weights: Vec<Vec<f32>>,
     /// Start of each mask instance's table inside a `flat_weights` stage.
     mask_off: Vec<u32>,
+    /// `flat_weights` quantized to 16 bits, used by the search's ordering
+    /// where a fraction of a disc never changes the order but the halved
+    /// cache footprint shows up in the profile.
+    flat_i16: Vec<Vec<i16>>,
     /// num_weights[stage][player disc count]
     num_weights: Vec<[f32; NUM_TABLE_SIZE]>,
     /// Lookup tables for incremental index maintenance during search.
@@ -157,6 +165,7 @@ impl Evaluator {
             weights: vec![stage_weights; STAGE_COUNT],
             flat_weights: Vec::new(),
             mask_off: Vec::new(),
+            flat_i16: Vec::new(),
             num_weights: vec![[0.0f32; NUM_TABLE_SIZE]; STAGE_COUNT],
             indexer: PatternIndexer::new(patterns),
         }
@@ -242,13 +251,50 @@ impl Evaluator {
             .iter()
             .map(|stage| stage.iter().flat_map(|t| t.iter().copied()).collect())
             .collect();
+        self.flat_i16 = self
+            .flat_weights
+            .iter()
+            .map(|stage| {
+                stage
+                    .iter()
+                    .map(|&w| (w * I16_SCALE).clamp(-32768.0, 32767.0) as i16)
+                    .collect()
+            })
+            .collect();
     }
 
     /// Drop the flat copy; the next evaluation falls back to the nested
     /// tables until it is rebuilt.
     fn invalidate_flat(&mut self) {
         self.flat_weights.clear();
+        self.flat_i16.clear();
         self.mask_off.clear();
+    }
+
+    /// Ordering-grade evaluation from raw bitboards: 16-bit weights, so a
+    /// stage's table is half the size the exact path walks.
+    pub fn eval_order_bb(
+        &self,
+        player: u64,
+        opponent: u64,
+        color: Color,
+        indices: &PatternIndices,
+    ) -> f32 {
+        let empties = 64 - (player | opponent).count_ones() as usize;
+        let stage = 60usize.saturating_sub(empties).min(STAGE_COUNT - 1);
+        if self.flat_i16.is_empty() {
+            // Weights were mutated since the last rebuild; fall back.
+            let mut b = Board::new();
+            b.black = if matches!(color, Color::Black) { player } else { opponent };
+            b.white = if matches!(color, Color::Black) { opponent } else { player };
+            b.player = color;
+            b.empty_count = empties as u8;
+            return self.eval_indices(&b, indices);
+        }
+        let sum = self
+            .indexer
+            .eval_sum_i16(indices, color, &self.flat_i16[stage], &self.mask_off);
+        sum as f32 / I16_SCALE + self.num_weights[stage][player.count_ones() as usize]
     }
 
     /// Direct access to one weight entry (for training).
