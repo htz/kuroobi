@@ -2256,7 +2256,7 @@ fn move_ordering_value(pos: Position, child: &Board, parity: u8) -> i32 {
     let frontier = dilate(empties_next);
     point += (frontier & child.opponent_bb()).count_ones() as i32 * 2;
 
-    point -= corner_stability(child, child.player().opponent()) * 3;
+    point -= corner_stability(child, child.player().opponent()) * 5;
 
     let s = pos.index();
     // X-squares (B2, G2, B7, G7): tends to give away a corner — try late? No:
