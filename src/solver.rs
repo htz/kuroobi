@@ -235,6 +235,26 @@ const SELECTIVE_PASS_MIN_EMPTIES: u8 = 24;
 /// for a failed window, which is the dominant cost on hard positions.
 const SELECTIVE_LADDER: [f32; 1] = [1.8];
 
+/// Plies of ordering lookahead by empty count, stepped one ply at a time
+/// as the position opens up.
+const SORT_DEPTH_LADDER: [u8; 64] = {
+    let mut t = [0u8; 64];
+    let mut e = 0usize;
+    while e < 64 {
+        t[e] = if e >= 24 {
+            3
+        } else if e >= DEEP2_ORDER_EMPTIES as usize {
+            2
+        } else if e >= DEEP_ORDER_EMPTIES as usize {
+            1
+        } else {
+            0
+        };
+        e += 1;
+    }
+    t
+};
+
 /// Squares adjacent to each square (used to skip moves that cannot flip:
 /// a legal move must touch at least one opponent disc).
 /// Index = file-major square; built at first use.
@@ -2032,6 +2052,13 @@ impl Worker<'_> {
             -(alpha - SORT_ALPHA_DELTA) as f32
         };
 
+        // The ladder raises the sort depth one ply at a time as the position
+        // opens up (0 at 15-17 empties, 1 at 18-20, 2 at 21-23, more beyond).
+        // The old one jumped 0 -> 2 -> 4, and since each extra ply of this
+        // pruned search costs several times the previous one, the deep
+        // problems drowned in
+        // ordering work: on FFO56 the lookahead alone was 17% of the solve.
+        let sort_depth = SORT_DEPTH_LADDER[(board.empty_count() as usize).min(63)];
         let player_bb = board.player_bb();
         let opponent_bb = board.opponent_bb();
         for sm in moves.iter_mut() {
@@ -2053,10 +2080,8 @@ impl Worker<'_> {
                 // static heuristic in the many-empties region; the topmost
                 // region refines it with a pruned lookahead.
                 ix.apply(indices, pos, flipped, mover);
-                let v = if board.empty_count() >= DEEP2_ORDER_EMPTIES {
-                    shallow_search(&child, e, ix, indices, 4, f32::NEG_INFINITY, sort_hi)
-                } else if board.empty_count() >= DEEP_ORDER_EMPTIES {
-                    shallow_search(&child, e, ix, indices, 2, f32::NEG_INFINITY, sort_hi)
+                let v = if sort_depth > 0 {
+                    shallow_search(&child, e, ix, indices, sort_depth, f32::NEG_INFINITY, sort_hi)
                 } else {
                     e.eval_indices(&child, indices)
                 };
