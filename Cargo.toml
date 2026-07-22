@@ -19,6 +19,8 @@ random = ["rand"]
 # Count move-ordering and ETC probes as nodes, the way Edax does, so node
 # totals are comparable with `edax -solve`. Costs a few percent of search time.
 node-accounting = []
+# Sample where search time goes, by empty count and phase. Measurement only.
+layer-profile = []
 
 [[bench]]
 name = "core"

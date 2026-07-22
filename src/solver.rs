@@ -14,7 +14,7 @@ use crate::position::Position;
 use crate::zobrist;
 
 /// Search depth thresholds (empties remaining) for switching strategies.
-const PVS_LIMIT: u8 = 7;
+const PVS_LIMIT: u8 = 12;
 const MOVE_ORDERING_LIMIT: u8 = 7;
 /// From this many empties upward, an evaluator (when provided) orders
 /// moves instead of the static heuristic.
@@ -102,7 +102,7 @@ const DEEP2_ORDER_EMPTIES: u8 = 21;
 /// Enhanced transposition cutoff: from this many empties upward, probe
 /// every child's hash entry before searching — a proven fail-high there
 /// cuts this node without any search.
-const ETC_EMPTIES: u8 = 8;
+const ETC_EMPTIES: u8 = 12;
 /// Ordering weight of one opponent reply, in eighths of a disc (the same
 /// scale the evaluation term uses).
 const MOBILITY_ORDER_WEIGHT: i32 = 12;
