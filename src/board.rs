@@ -158,13 +158,22 @@ impl Board {
     /// Returns the opponent's bitboard.
     #[inline]
     pub fn opponent_bb(&self) -> u64 {
-        [self.black, self.white][self.player.opponent().index()]
+        // A select, not a two-element array the compiler may spill.
+        if matches!(self.player, Color::Black) {
+            self.white
+        } else {
+            self.black
+        }
     }
 
     /// Returns the current player's bitboard.
     #[inline]
     pub fn player_bb(&self) -> u64 {
-        [self.black, self.white][self.player.index()]
+        if matches!(self.player, Color::Black) {
+            self.black
+        } else {
+            self.white
+        }
     }
 
     /// Check if a move at `pos` is valid for the current player.
@@ -228,16 +237,18 @@ impl Board {
     #[inline]
     fn apply_move(&mut self, pos_bit: u64, flipped: u64) {
         // Mover gains the placed piece and the flipped pieces; opponent loses the flipped pieces.
-        match self.player {
-            Color::Black => {
-                self.black ^= pos_bit | flipped;
-                self.white ^= flipped;
-            }
-            Color::White => {
-                self.white ^= pos_bit | flipped;
-                self.black ^= flipped;
-            }
-        }
+        // Branchless: the mover's board takes the placed disc plus the flips,
+        // the other only the flips. Selecting the two masks costs a pair of
+        // conditional moves instead of a branch that alternates every ply.
+        let black_is_mover = matches!(self.player, Color::Black);
+        let mover_mask = pos_bit | flipped;
+        let (black_mask, white_mask) = if black_is_mover {
+            (mover_mask, flipped)
+        } else {
+            (flipped, mover_mask)
+        };
+        self.black ^= black_mask;
+        self.white ^= white_mask;
 
         self.player = self.player.opponent();
 
