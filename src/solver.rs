@@ -2040,7 +2040,10 @@ impl Worker<'_> {
         } else {
             None
         };
-        let parity = parity_of(board);
+        // Only the static path consults the parity, and computing it walks
+        // every empty square — pure waste at the deep nodes that use the
+        // evaluator instead.
+        let parity = if eval_order { 0 } else { parity_of(board) };
         let mover = board.player();
         // The ordering lookahead only has to distinguish moves that could
         // matter at this node, so it is bounded from below by the node's own
