@@ -56,6 +56,9 @@ pub struct Evaluator {
     /// where a fraction of a disc never changes the order but the halved
     /// cache footprint shows up in the profile.
     flat_i16: Vec<Vec<i16>>,
+    /// The same, with the White digit swap baked in, so evaluation never
+    /// pays for the swap lookup.
+    flat_i16_white: Vec<Vec<i16>>,
     /// num_weights[stage][player disc count]
     num_weights: Vec<[f32; NUM_TABLE_SIZE]>,
     /// Lookup tables for incremental index maintenance during search.
@@ -166,6 +169,7 @@ impl Evaluator {
             flat_weights: Vec::new(),
             mask_off: Vec::new(),
             flat_i16: Vec::new(),
+            flat_i16_white: Vec::new(),
             num_weights: vec![[0.0f32; NUM_TABLE_SIZE]; STAGE_COUNT],
             indexer: PatternIndexer::new(patterns),
         }
@@ -261,6 +265,23 @@ impl Evaluator {
                     .collect()
             })
             .collect();
+        // White's table: entry m,i holds the weight the swapped index selects.
+        let n_masks = self.indexer.n_masks();
+        self.flat_i16_white = self
+            .flat_i16
+            .iter()
+            .map(|stage| {
+                let mut out = stage.clone();
+                for m in 0..n_masks {
+                    let off = self.mask_off[m] as usize;
+                    let size = self.patterns[self.indexer.mask_patterns()[m] as usize].table_size();
+                    for i in 0..size {
+                        out[off + i] = stage[off + self.indexer.swapped_index(m, i)];
+                    }
+                }
+                out
+            })
+            .collect();
     }
 
     /// Drop the flat copy; the next evaluation falls back to the nested
@@ -268,6 +289,7 @@ impl Evaluator {
     fn invalidate_flat(&mut self) {
         self.flat_weights.clear();
         self.flat_i16.clear();
+        self.flat_i16_white.clear();
         self.mask_off.clear();
     }
 
@@ -291,9 +313,12 @@ impl Evaluator {
             b.empty_count = empties as u8;
             return self.eval_indices(&b, indices);
         }
-        let sum = self
-            .indexer
-            .eval_sum_i16(indices, color, &self.flat_i16[stage], &self.mask_off);
+        let table = if matches!(color, Color::Black) {
+            &self.flat_i16[stage]
+        } else {
+            &self.flat_i16_white[stage]
+        };
+        let sum = self.indexer.eval_sum_i16(indices, table, &self.mask_off);
         sum as f32 / I16_SCALE + self.num_weights[stage][player.count_ones() as usize]
     }
 
