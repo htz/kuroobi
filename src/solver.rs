@@ -283,6 +283,34 @@ impl NeighbourTable {
 // Endgame heuristic: prefer moves in quadrants with an odd number of empties.
 // ---------------------------------------------------------------------------
 
+/// `final_score` on the raw bitboards the leaf routines carry: the side to
+/// move stays implicit in the argument order rather than in a colour field,
+/// so the last plies never touch a `Board` (and never pay for its
+/// runtime-indexed `player_bb()`).
+#[inline]
+fn final_score_bb(player: u64, opponent: u64) -> i32 {
+    let diff = player.count_ones() as i32 - opponent.count_ones() as i32;
+    let empties = 64 - (player | opponent).count_ones() as i32;
+    match diff.cmp(&0) {
+        std::cmp::Ordering::Greater => diff + empties,
+        std::cmp::Ordering::Less => diff - empties,
+        std::cmp::Ordering::Equal => 0,
+    }
+}
+
+/// Quadrant parity of the empty squares, from the occupancy.
+#[inline]
+fn parity_of_bb(occupied: u64) -> u8 {
+    let mut parity = 0u8;
+    let mut e = !occupied;
+    while e != 0 {
+        let sq = e.trailing_zeros() as u8;
+        e &= e - 1;
+        parity ^= quadrant_id(sq);
+    }
+    parity
+}
+
 #[inline]
 fn quadrant_id(sq: u8) -> u8 {
     let file = sq / 8;
@@ -1590,7 +1618,17 @@ impl Worker<'_> {
             let p3 = e.trailing_zeros() as u8;
             e &= e - 1;
             let p4 = e.trailing_zeros() as u8;
-            return self.last4(board, p1, p2, p3, p4, alpha, beta, passed);
+            return self.last4(
+                board.player_bb(),
+                board.opponent_bb(),
+                p1,
+                p2,
+                p3,
+                p4,
+                alpha,
+                beta,
+                passed,
+            );
         }
 
         let mut lower = alpha;
@@ -1685,7 +1723,8 @@ impl Worker<'_> {
     #[allow(clippy::too_many_arguments)]
     fn last4(
         &mut self,
-        board: &mut Board,
+        player: u64,
+        opponent: u64,
         p1: u8,
         p2: u8,
         p3: u8,
@@ -1698,7 +1737,7 @@ impl Worker<'_> {
 
         // Parity ordering: squares in odd quadrants first (odd sorts before
         // even because !odd is false < true)
-        let parity = parity_of(board);
+        let parity = parity_of_bb(player | opponent);
         let odd = |sq: u8| parity & quadrant_id(sq) != 0;
         let mut arr = [p1, p2, p3, p4];
         arr.sort_by_key(|&s| !odd(s));
@@ -1713,18 +1752,25 @@ impl Worker<'_> {
             (p3, [p1, p2, p4]),
             (p4, [p1, p2, p3]),
         ] {
-            if self.neighbours.get(a) & board.opponent_bb() == 0 {
+            if self.neighbours.get(a) & opponent == 0 {
                 continue;
             }
-            let pos = Position(a);
-            let flips = bitboard::flippable(board.player_bb(), board.opponent_bb(), pos.to_bit());
+            let pos_bit = 1u64 << a;
+            let flips = bitboard::flippable(player, opponent, pos_bit);
             if flips == 0 {
                 continue;
             }
             any = true;
-            let mut child = *board;
-            child.apply_flips(pos, flips);
-            let val = -self.last3(&mut child, rest[0], rest[1], rest[2], -beta, -alpha, false);
+            let val = -self.last3(
+                opponent ^ flips,
+                player | flips | pos_bit,
+                rest[0],
+                rest[1],
+                rest[2],
+                -beta,
+                -alpha,
+                false,
+            );
             if val >= beta {
                 return val;
             }
@@ -1735,13 +1781,9 @@ impl Worker<'_> {
 
         if !any {
             if passed {
-                // Terminal: score with empty bonus
-                return final_score(board);
+                return final_score_bb(player, opponent);
             }
-            board.pass();
-            let val = -self.last4(board, p1, p2, p3, p4, -beta, -alpha, true);
-            board.pass();
-            return val;
+            return -self.last4(opponent, player, p1, p2, p3, p4, -beta, -alpha, true);
         }
 
         alpha
@@ -1750,7 +1792,8 @@ impl Worker<'_> {
     #[allow(clippy::too_many_arguments)]
     fn last3(
         &mut self,
-        board: &mut Board,
+        player: u64,
+        opponent: u64,
         p1: u8,
         p2: u8,
         p3: u8,
@@ -1760,7 +1803,7 @@ impl Worker<'_> {
     ) -> i32 {
         self.nodes += 1;
 
-        let parity = parity_of(board);
+        let parity = parity_of_bb(player | opponent);
         let odd = |sq: u8| parity & quadrant_id(sq) != 0;
         let mut arr = [p1, p2, p3];
         arr.sort_by_key(|&s| !odd(s));
@@ -1770,18 +1813,24 @@ impl Worker<'_> {
         let mut any = false;
 
         for (a, rest) in [(p1, [p2, p3]), (p2, [p1, p3]), (p3, [p1, p2])] {
-            if self.neighbours.get(a) & board.opponent_bb() == 0 {
+            if self.neighbours.get(a) & opponent == 0 {
                 continue;
             }
-            let pos = Position(a);
-            let flips = bitboard::flippable(board.player_bb(), board.opponent_bb(), pos.to_bit());
+            let pos_bit = 1u64 << a;
+            let flips = bitboard::flippable(player, opponent, pos_bit);
             if flips == 0 {
                 continue;
             }
             any = true;
-            let mut child = *board;
-            child.apply_flips(pos, flips);
-            let val = -self.last2(&mut child, rest[0], rest[1], -beta, -alpha, false);
+            let val = -self.last2(
+                opponent ^ flips,
+                player | flips | pos_bit,
+                rest[0],
+                rest[1],
+                -beta,
+                -alpha,
+                false,
+            );
             if val >= beta {
                 return val;
             }
@@ -1792,12 +1841,9 @@ impl Worker<'_> {
 
         if !any {
             if passed {
-                return final_score(board);
+                return final_score_bb(player, opponent);
             }
-            board.pass();
-            let val = -self.last3(board, p1, p2, p3, -beta, -alpha, true);
-            board.pass();
-            return val;
+            return -self.last3(opponent, player, p1, p2, p3, -beta, -alpha, true);
         }
 
         alpha
@@ -1805,7 +1851,8 @@ impl Worker<'_> {
 
     fn last2(
         &mut self,
-        board: &mut Board,
+        player: u64,
+        opponent: u64,
         p1: u8,
         p2: u8,
         alpha: i32,
@@ -1818,18 +1865,16 @@ impl Worker<'_> {
         let mut any = false;
 
         for (a, b) in [(p1, p2), (p2, p1)] {
-            if self.neighbours.get(a) & board.opponent_bb() == 0 {
+            if self.neighbours.get(a) & opponent == 0 {
                 continue;
             }
-            let pos = Position(a);
-            let flips = bitboard::flippable(board.player_bb(), board.opponent_bb(), pos.to_bit());
+            let pos_bit = 1u64 << a;
+            let flips = bitboard::flippable(player, opponent, pos_bit);
             if flips == 0 {
                 continue;
             }
             any = true;
-            let mut child = *board;
-            child.apply_flips(pos, flips);
-            let val = -self.last1(&mut child, b);
+            let val = -self.last1(opponent ^ flips, player | flips | pos_bit, b);
             if val >= beta {
                 return val;
             }
@@ -1840,28 +1885,23 @@ impl Worker<'_> {
 
         if !any {
             if passed {
-                return final_score(board);
+                return final_score_bb(player, opponent);
             }
-            board.pass();
-            let val = -self.last2(board, p1, p2, -beta, -alpha, true);
-            board.pass();
-            return val;
+            return -self.last2(opponent, player, p1, p2, -beta, -alpha, true);
         }
 
         alpha
     }
 
     /// Exactly one empty square left: resolve without recursion.
-    fn last1(&mut self, board: &mut Board, p1: u8) -> i32 {
+    fn last1(&mut self, player: u64, opponent: u64, p1: u8) -> i32 {
         let pos_bit = 1u64 << p1;
-        let player_bb = board.player_bb();
-        let opponent_bb = board.opponent_bb();
-        let diff = player_bb.count_ones() as i32 - opponent_bb.count_ones() as i32;
+        let diff = player.count_ones() as i32 - opponent.count_ones() as i32;
 
         self.nodes += 1;
         // Current player fills the last square
-        if self.neighbours.get(p1) & opponent_bb != 0 {
-            let n = bitboard::flippable(player_bb, opponent_bb, pos_bit).count_ones() as i32;
+        if self.neighbours.get(p1) & opponent != 0 {
+            let n = bitboard::flippable(player, opponent, pos_bit).count_ones() as i32;
             if n > 0 {
                 return diff + 2 * n + 1;
             }
@@ -1869,20 +1909,18 @@ impl Worker<'_> {
 
         self.nodes += 1;
         // Current player passes; opponent fills the last square
-        if self.neighbours.get(p1) & player_bb != 0 {
-            let n = bitboard::flippable(opponent_bb, player_bb, pos_bit).count_ones() as i32;
+        if self.neighbours.get(p1) & player != 0 {
+            let n = bitboard::flippable(opponent, player, pos_bit).count_ones() as i32;
             if n > 0 {
                 return diff - 2 * n - 1;
             }
         }
 
         // Nobody can play the last square: empty goes to the winner
-        if diff > 0 {
-            diff + 1
-        } else if diff < 0 {
-            diff - 1
-        } else {
-            0
+        match diff.cmp(&0) {
+            std::cmp::Ordering::Greater => diff + 1,
+            std::cmp::Ordering::Less => diff - 1,
+            std::cmp::Ordering::Equal => 0,
         }
     }
 
