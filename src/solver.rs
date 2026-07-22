@@ -1655,6 +1655,7 @@ impl Worker<'_> {
         let mut best = lower;
         let mut any = false;
         let mut cut = false;
+        let player_bb = board.player_bb();
         let opponent_bb = board.opponent_bb();
         // Children of a 5-empty node dispatch to last4 and never probe, so
         // their hashes are only needed one level up.
@@ -1675,7 +1676,7 @@ impl Worker<'_> {
                 }
                 let pos = Position(sq);
                 let pos_bit = pos.to_bit();
-                let flips = bitboard::flippable(board.player_bb(), board.opponent_bb(), pos_bit);
+                let flips = bitboard::flippable(player_bb, opponent_bb, pos_bit);
                 if flips == 0 {
                     continue;
                 }
@@ -1684,10 +1685,7 @@ impl Worker<'_> {
                 let mut child = *board;
                 child.apply_flips(pos, flips);
                 let child_hash = if need_child_hash {
-                    zobrist::board_hash(
-                        board.opponent_bb() ^ flips,
-                        board.player_bb() | flips | pos_bit,
-                    )
+                    zobrist::board_hash(opponent_bb ^ flips, player_bb | flips | pos_bit)
                 } else {
                     0
                 };
