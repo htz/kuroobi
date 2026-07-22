@@ -320,12 +320,12 @@ fn final_score_bb(player: u64, opponent: u64) -> i32 {
 /// Quadrant parity of the empty squares, from the occupancy.
 #[inline]
 fn parity_of_bb(occupied: u64) -> u8 {
+    let empty = !occupied;
     let mut parity = 0u8;
-    let mut e = !occupied;
-    while e != 0 {
-        let sq = e.trailing_zeros() as u8;
-        e &= e - 1;
-        parity ^= quadrant_id(sq);
+    for (id, mask) in QUADRANT_MASKS {
+        if (empty & mask).count_ones() & 1 != 0 {
+            parity |= id;
+        }
     }
     parity
 }
@@ -350,12 +350,15 @@ const QUADRANT_MASKS: [(u8, u64); 4] = [
     (8, 0xF0F0_F0F0_0000_0000), // files 4-7, ranks 4-7
 ];
 
-/// Squares lying in quadrants with an odd number of empties.
+/// Squares lying in quadrants with an odd number of empties, straight from
+/// the empty squares: a quadrant is odd when its popcount is. Four
+/// popcounts get there without carrying parity down the search
+/// incrementally or the per-square walk this replaces.
 #[inline]
-fn odd_quadrant_mask(parity: u8) -> u64 {
+fn odd_quadrant_mask_of(empty: u64) -> u64 {
     let mut m = 0u64;
-    for (id, mask) in QUADRANT_MASKS {
-        if parity & id != 0 {
+    for (_, mask) in QUADRANT_MASKS {
+        if (empty & mask).count_ones() & 1 != 0 {
             m |= mask;
         }
     }
@@ -364,15 +367,9 @@ fn odd_quadrant_mask(parity: u8) -> u64 {
 
 #[inline]
 fn parity_of(board: &Board) -> u8 {
-    let mut parity = 0u8;
-    let mut e = board.empty();
-    while e != 0 {
-        let sq = e.trailing_zeros() as u8;
-        e &= e - 1;
-        parity ^= quadrant_id(sq);
-    }
-    parity
+    parity_of_bb(board.black | board.white)
 }
+
 
 // ---------------------------------------------------------------------------
 // Transposition table
@@ -1685,7 +1682,7 @@ impl Worker<'_> {
         // Odd-quadrant moves first (quadrant parity: filling the last
         // empty of a region tends to keep the tempo).
         let empties = board.empty();
-        let odd = odd_quadrant_mask(parity_of(board));
+        let odd = odd_quadrant_mask_of(empties);
         'passes: for pass_mask in [empties & odd, empties & !odd] {
             let mut e = pass_mask;
             while e != 0 {
