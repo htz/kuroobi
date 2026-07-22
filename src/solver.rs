@@ -2105,7 +2105,7 @@ impl Worker<'_> {
                 // the extra edge discs it misses are rarely what decides the
                 // order. `co` is our own discs after the move.
                 let edge = corner_stability_bb(co) * 8;
-                (v * 8.0) as i32 + (child.movable_count() as i32) * MOBILITY_ORDER_WEIGHT
+                (v * 8.0) as i32 + weighted_mobility(cp, co) * MOBILITY_ORDER_WEIGHT
                     - edge * EDGE_STABILITY_ORDER_WEIGHT
             } else {
                 move_ordering_value(pos, cp, co, parity)
@@ -2315,48 +2315,63 @@ fn dilate(x: u64) -> u64 {
     v | (v << 8) | (v >> 8)
 }
 
+/// Opponent replies, counting a corner reply twice: a corner is worth far
+/// more than an ordinary reply, and the extra AND and
+/// popcount are free next to the move generation itself.
+#[inline]
+fn weighted_mobility(cp: u64, co: u64) -> i32 {
+    const CORNERS: u64 = 0x8100_0000_0000_0081;
+    let m = bitboard::mobility(cp, co, !(cp | co));
+    (m.count_ones() + (m & CORNERS).count_ones()) as i32
+}
+
 /// Ordering value of a child, given as raw bitboards (side to move, other)
 /// so that no `Board` — and no runtime-indexed `player_bb()` — is built for
 /// a move the search may never reach.
+///
+/// The terms sit on widely separated scales:
+/// real mobility dominates, corner stability is a sixteenth of
+/// it, potential mobility a thousandth, and the square table and parity are
+/// tie-breaks. An earlier version blended the same ingredients on a flat
+/// scale, which
+/// let a corner-stability difference outweigh a reply.
 fn move_ordering_value(pos: Position, cp: u64, co: u64, parity: u8) -> i32 {
-    use crate::pattern::sq::*;
+    const W_MOBILITY: i32 = 1 << 15;
+    const W_CORNER_STABILITY: i32 = 1 << 11;
+    const W_POTENTIAL: i32 = 1 << 5;
+    const W_PARITY: i32 = 1 << 3;
 
-    let mut point = 0i32;
-
-    // Score the child from
-    // one side only: the opponent's mobility, their potential mobility, and
-    // our own corner stability. The differences we used to take cost a
-    // second mobility sweep and a second corner-stability pass per move for
-    // information the one-sided terms already carry — at 8-11 empties, where
-    // this runs for every move of every node, that was most of the ordering
-    // bill.
-    let opp_mobility = bitboard::mobility_count(cp, co) as i32;
-    point += opp_mobility * MOBILITY_ORDER_WEIGHT;
-
-    // Potential mobility: frontier discs (adjacent to an empty square) are
-    // attack surface — many of ours after the move is bad for us.
-    let empties_next = !(cp | co);
-    let frontier = dilate(empties_next);
-    point += (frontier & co).count_ones() as i32 * 2;
-
-    point -= corner_stability_bb(co) * 5;
-
-    let s = pos.index();
-    // X-squares (B2, G2, B7, G7): tends to give away a corner — try late? No:
-    // the Go reference *adds* 10 (sorted ascending = searched first means
-    // fail-fast). Keep identical behaviour.
-    if s == B2 || s == G2 || s == B7 || s == G7 {
-        point += 10;
+    let empty = !(cp | co);
+    // Potential mobility counts the *opponent's* potential moves: the empty
+    // squares next to
+    // our discs. An earlier version counted our own frontier discs, which is
+    // related but not the same quantity.
+    let potential = (dilate(co) & empty).count_ones() as i32;
+    let mut score = SQUARE_VALUE[pos.index() as usize] as i32;
+    if parity & quadrant_id(pos.index()) != 0 {
+        score += W_PARITY;
     }
-    // C-squares
-    if s == B1 || s == G1 || s == A2 || s == H2 || s == A7 || s == H7 || s == B8 || s == G8 {
-        point += 4;
-    }
-    if parity & quadrant_id(s) != 0 {
-        point += 3;
-    }
-    point
+    score += (36 - potential) * W_POTENTIAL;
+    score += corner_stability_bb(co) * W_CORNER_STABILITY;
+    score += (36 - weighted_mobility(cp, co)) * W_MOBILITY;
+    // The score builds ascending-is-better; the solver draws the smallest
+    // value first, hence the negation.
+    -score
 }
+
+/// JCW square values. The table is
+/// symmetric in both axes, so it needs no transposing for our file-major
+/// layout.
+const SQUARE_VALUE: [u8; 64] = [
+    18, 4, 16, 12, 12, 16, 4, 18, //
+    4, 2, 6, 8, 8, 6, 2, 4, //
+    16, 6, 14, 10, 10, 14, 6, 16, //
+    12, 8, 10, 0, 0, 10, 8, 12, //
+    12, 8, 10, 0, 0, 10, 8, 12, //
+    16, 6, 14, 10, 10, 14, 6, 16, //
+    4, 2, 6, 8, 8, 6, 2, 4, //
+    18, 4, 16, 12, 12, 16, 4, 18,
+];
 
 /// Corner stability count: corners owned plus adjacent edge discs.
 fn corner_stability_bb(bb: u64) -> i32 {
