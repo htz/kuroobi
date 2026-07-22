@@ -1553,30 +1553,13 @@ impl Worker<'_> {
             return v;
         }
 
-        // Single probe, reused for the ordering move below (see `pvs`).
-        let entry = {
-            let _p = layer_profile::Scope::new(layer_profile::TT, board.empty_count());
-            self.tt.get(board, hash)
-        };
-        if let Some(v) = entry {
-            if !v.is_seed() {
-                if v.lower() >= v.upper() {
-                    return v.lower();
-                }
-                if beta > v.upper() {
-                    beta = v.upper();
-                    if beta <= alpha {
-                        return beta;
-                    }
-                }
-                if alpha < v.lower() {
-                    alpha = v.lower();
-                    if alpha >= beta {
-                        return alpha;
-                    }
-                }
-            }
-        }
+        // Issue the table read early but do not wait on it: the order is
+        // prefetch -> stability cutoff -> table probe,
+        // so the miss latency is covered by the stability computation
+        // instead of stalling the node. The parent prefetched this line
+        // during its own move generation, but for every child except the
+        // first that prefetch is long evicted by the sibling subtrees.
+        self.tt.prefetch(hash);
 
         {
             let _p = layer_profile::Scope::new(layer_profile::STAB, board.empty_count());
@@ -1585,9 +1568,49 @@ impl Worker<'_> {
             }
         }
 
+        // Single probe, reused for the ordering move below (see `pvs`).
+        let entry = {
+            let _p = layer_profile::Scope::new(layer_profile::TT, board.empty_count());
+            self.tt.get(board, hash)
+        };
+        let mut narrowed = false;
+        if let Some(v) = entry {
+            if !v.is_seed() {
+                if v.lower() >= v.upper() {
+                    return v.lower();
+                }
+                if beta > v.upper() {
+                    beta = v.upper();
+                    narrowed = true;
+                    if beta <= alpha {
+                        return beta;
+                    }
+                }
+                if alpha < v.lower() {
+                    alpha = v.lower();
+                    narrowed = true;
+                    if alpha >= beta {
+                        return alpha;
+                    }
+                }
+            }
+        }
+
+        // The window the table just handed us is tighter than the one the
+        // stability cutoff saw, and its guards are threshold tests on
+        // alpha/beta — so a cut that was out of reach a moment ago may be
+        // available now. Retrying only on an actual narrowing keeps this off
+        // the common path while preserving every cutoff the old ordering had.
+        if narrowed {
+            let _p = layer_profile::Scope::new(layer_profile::STAB, board.empty_count());
+            if let Some(bound) = stability_cut(board, alpha, beta) {
+                return bound;
+            }
+        }
+
         let orig_alpha = alpha;
         let mut moves = MoveBuf::new();
-        self.scored_moves(board, entry.and_then(|e| e.best()), ev, &mut moves);
+        self.gen_moves(board, &mut moves);
 
         if moves.is_empty() {
             if passed {
@@ -1606,6 +1629,21 @@ impl Worker<'_> {
             self.tt.update(board, hash, orig_alpha, beta, val, None);
             return val;
         }
+
+        // A forced move has nothing to order and nothing worth remembering:
+        // re-deriving it costs one move generation, far less than the entry
+        // it would evict, so skip the evaluation and the store.
+        if moves.len() == 1 {
+            let m = moves[0];
+            let mut child = m.child(board);
+            return if child.empty_count() >= MOVE_ORDERING_LIMIT {
+                -self.alpha_beta_ordered(&mut child, m.hash, -beta, -alpha, false, ev)
+            } else {
+                -self.alpha_beta(&mut child, m.hash, -beta, -alpha, false)
+            };
+        }
+
+        self.score_moves(board, &mut moves, entry.and_then(|e| e.best()), ev, i32::MIN / 2);
 
         let mut best = None;
         for i in 0..moves.len() {
