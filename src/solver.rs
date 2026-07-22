@@ -2454,7 +2454,8 @@ pub mod layer_profile {
     pub const ENABLED: bool = cfg!(feature = "layer-profile");
 
     /// Sets the current (phase, empties) and restores the previous on drop.
-    pub struct Scope(u32);
+    /// The saved value is unread when the feature is off, which is the point.
+    pub struct Scope(#[allow(dead_code)] u32);
 
     impl Scope {
         #[inline(always)]
