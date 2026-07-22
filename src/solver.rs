@@ -15,7 +15,7 @@ use crate::zobrist;
 
 /// Search depth thresholds (empties remaining) for switching strategies.
 const PVS_LIMIT: u8 = 12;
-const MOVE_ORDERING_LIMIT: u8 = 7;
+const MOVE_ORDERING_LIMIT: u8 = 8;
 /// From this many empties upward, an evaluator (when provided) orders
 /// moves instead of the static heuristic.
 const EVAL_ORDER_EMPTIES: u8 = 14;
@@ -2232,23 +2232,23 @@ fn move_ordering_value(pos: Position, child: &Board, parity: u8) -> i32 {
 
     let mut point = 0i32;
 
-    // child.player is our opponent now
+    // Score the child from
+    // one side only: the opponent's mobility, their potential mobility, and
+    // our own corner stability. The differences we used to take cost a
+    // second mobility sweep and a second corner-stability pass per move for
+    // information the one-sided terms already carry — at 8-11 empties, where
+    // this runs for every move of every node, that was most of the ordering
+    // bill.
     let opp_mobility = child.movable_count() as i32;
-    let our_mobility =
-        bitboard::mobility_count(child.opponent_bb(), child.player_bb()) as i32;
-    point += (opp_mobility - our_mobility) * 5;
+    point += opp_mobility * 5;
 
     // Potential mobility: frontier discs (adjacent to an empty square) are
     // attack surface — many of ours after the move is bad for us.
     let empties_next = crate::bitboard::empty_bb(child.black, child.white);
     let frontier = dilate(empties_next);
-    let our_frontier = (frontier & child.opponent_bb()).count_ones() as i32;
-    let opp_frontier = (frontier & child.player_bb()).count_ones() as i32;
-    point += (our_frontier - opp_frontier) * 2;
+    point += (frontier & child.opponent_bb()).count_ones() as i32 * 2;
 
-    point += (corner_stability(child, child.player())
-        - corner_stability(child, child.player().opponent()))
-        * 3;
+    point -= corner_stability(child, child.player().opponent()) * 3;
 
     let s = pos.index();
     // X-squares (B2, G2, B7, G7): tends to give away a corner — try late? No:
