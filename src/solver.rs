@@ -951,6 +951,7 @@ impl Worker<'_> {
         beta: f32,
         store: bool,
     ) -> f32 {
+        let _prof = layer_profile::Scope::new(layer_profile::WARMUP, board.empty_count());
         self.nodes += 1;
 
         if let Some(v) = wipeout_score(board) {
@@ -1307,6 +1308,7 @@ impl Worker<'_> {
 
     #[allow(clippy::too_many_arguments)]
     fn pvs(&mut self, board: &mut Board, hash: u64, alpha: i32, beta: i32, passed: bool, ev: Option<&Evaluator>) -> i32 {
+        let _prof = layer_profile::Scope::new(layer_profile::SEARCH, board.empty_count());
         let mut lower = alpha;
         let mut upper = beta;
 
@@ -1322,7 +1324,10 @@ impl Worker<'_> {
         // One probe serves both purposes, carried through the node: the
         // bounds below and the ordering move further
         // down used to cost two lookups of the same entry.
-        let entry = self.tt.get(board, hash);
+        let entry = {
+            let _p = layer_profile::Scope::new(layer_profile::TT, board.empty_count());
+            self.tt.get(board, hash)
+        };
         if let Some(v) = entry {
             if !v.is_seed() {
                 if v.lower() >= v.upper() {
@@ -1345,8 +1350,11 @@ impl Worker<'_> {
 
         // Stability cutoff: the opponent's stable discs can never be
         // flipped, so our final score is at most 64 - 2*|opp stable|.
-        if let Some(bound) = stability_cut(board, lower, upper) {
-            return bound;
+        {
+            let _p = layer_profile::Scope::new(layer_profile::STAB, board.empty_count());
+            if let Some(bound) = stability_cut(board, lower, upper) {
+                return bound;
+            }
         }
 
         // Warm-up (selective) pass: take probable cutoffs from a shallow
@@ -1386,6 +1394,7 @@ impl Worker<'_> {
         // Enhanced transposition cutoff: a child whose stored upper bound
         // already proves our value >= upper ends this node for free.
         if board.empty_count() >= ETC_EMPTIES {
+            let _p = layer_profile::Scope::new(layer_profile::ETC, board.empty_count());
             // The comparison accounting counts each ETC probe as a node;
             // tallied locally so the instrumentation costs one atomic per
             // node rather than one per probe.
@@ -1534,6 +1543,7 @@ impl Worker<'_> {
         passed: bool,
         ev: Option<&Evaluator>,
     ) -> i32 {
+        let _prof = layer_profile::Scope::new(layer_profile::SEARCH, board.empty_count());
         let mut alpha = alpha;
         let mut beta = beta;
 
@@ -1544,7 +1554,10 @@ impl Worker<'_> {
         }
 
         // Single probe, reused for the ordering move below (see `pvs`).
-        let entry = self.tt.get(board, hash);
+        let entry = {
+            let _p = layer_profile::Scope::new(layer_profile::TT, board.empty_count());
+            self.tt.get(board, hash)
+        };
         if let Some(v) = entry {
             if !v.is_seed() {
                 if v.lower() >= v.upper() {
@@ -1565,8 +1578,11 @@ impl Worker<'_> {
             }
         }
 
-        if let Some(bound) = stability_cut(board, alpha, beta) {
-            return bound;
+        {
+            let _p = layer_profile::Scope::new(layer_profile::STAB, board.empty_count());
+            if let Some(bound) = stability_cut(board, alpha, beta) {
+                return bound;
+            }
         }
 
         let orig_alpha = alpha;
@@ -1617,14 +1633,18 @@ impl Worker<'_> {
     /// Plain alpha-beta over the empty list, with the last-4 fast path and
     /// a dedicated shallow transposition table (5-6 empties).
     fn alpha_beta(&mut self, board: &mut Board, hash: u64, alpha: i32, beta: i32, passed: bool) -> i32 {
+        let _prof = layer_profile::Scope::new(layer_profile::SEARCH, board.empty_count());
         self.nodes += 1;
 
         if let Some(v) = wipeout_score(board) {
             return v;
         }
 
-        if let Some(bound) = stability_cut(board, alpha, beta) {
-            return bound;
+        {
+            let _p = layer_profile::Scope::new(layer_profile::STAB, board.empty_count());
+            if let Some(bound) = stability_cut(board, alpha, beta) {
+                return bound;
+            }
         }
 
         if board.empty_count() == 4 {
@@ -1749,6 +1769,7 @@ impl Worker<'_> {
         beta: i32,
         passed: bool,
     ) -> i32 {
+        let _prof = layer_profile::Scope::new(layer_profile::SEARCH, 4);
         self.nodes += 1;
 
         // Parity ordering: squares in odd quadrants first (odd sorts before
@@ -1817,6 +1838,7 @@ impl Worker<'_> {
         beta: i32,
         passed: bool,
     ) -> i32 {
+        let _prof = layer_profile::Scope::new(layer_profile::SEARCH, 3);
         self.nodes += 1;
 
         let parity = parity_of_bb(player | opponent);
@@ -1875,6 +1897,7 @@ impl Worker<'_> {
         beta: i32,
         passed: bool,
     ) -> i32 {
+        let _prof = layer_profile::Scope::new(layer_profile::SEARCH, 2);
         self.nodes += 1;
 
         let mut alpha = alpha;
@@ -1911,6 +1934,7 @@ impl Worker<'_> {
 
     /// Exactly one empty square left: resolve without recursion.
     fn last1(&mut self, player: u64, opponent: u64, p1: u8) -> i32 {
+        let _prof = layer_profile::Scope::new(layer_profile::SEARCH, 1);
         let pos_bit = 1u64 << p1;
         let diff = player.count_ones() as i32 - opponent.count_ones() as i32;
 
@@ -1997,6 +2021,7 @@ impl Worker<'_> {
     /// expensive ordering evaluation. Wipeout moves are flagged: they end
     /// the game at +64, so a node that has one needs no search at all.
     fn gen_moves(&self, board: &Board, out: &mut MoveBuf) {
+        let _prof = layer_profile::Scope::new(layer_profile::GEN, board.empty_count());
         out.len = 0;
         let mut m = board.movable();
         while m != 0 {
@@ -2027,6 +2052,7 @@ impl Worker<'_> {
         ev: Option<&Evaluator>,
         alpha: i32,
     ) {
+        let _prof = layer_profile::Scope::new(layer_profile::ORDER, board.empty_count());
         node_accounting::sorted(moves.len() as u64);
         let eval_order = board.empty_count() >= EVAL_ORDER_EMPTIES;
         // Incremental pattern indices for ordering evaluation: initialized
@@ -2247,6 +2273,7 @@ fn shallow_search(
     alpha: f32,
     beta: f32,
 ) -> f32 {
+    let _prof = layer_profile::Scope::new(layer_profile::LOOKAHEAD, board.empty_count());
     node_accounting::lookahead();
     if depth == 0 {
         return ev.eval_order_bb(
@@ -2392,6 +2419,76 @@ fn corner_stability_bb(bb: u64) -> i32 {
         }
     }
     count
+}
+
+/// Where the search spends its time, split by empty count and by phase.
+///
+/// A node stores its layer and phase into one atomic on entry and restores
+/// the caller's on the way out; a sampling thread reads that word. Unlike a
+/// stack profiler this attributes time to the *logical* phase, which is what
+/// told apart "the leaf routines are slow" from "the ordering is slow" when
+/// comparing against Edax layer by layer.
+///
+/// Enable with `--features layer-profile`; off, every call folds away.
+pub mod layer_profile {
+    use std::sync::atomic::{AtomicU32, AtomicU64, Ordering::Relaxed};
+
+    pub const SEARCH: u32 = 0;
+    pub const ORDER: u32 = 1;
+    pub const LOOKAHEAD: u32 = 2;
+    pub const WARMUP: u32 = 3;
+    pub const GEN: u32 = 4;
+    pub const ETC: u32 = 5;
+    pub const TT: u32 = 6;
+    pub const STAB: u32 = 7;
+    pub const PHASES: usize = 8;
+    pub const PHASE_NAMES: [&str; PHASES] = [
+        "search", "order", "look", "warm", "gen", "etc", "tt", "stab",
+    ];
+
+    pub static STATE: AtomicU32 = AtomicU32::new(0);
+    /// Search nodes entered at each empty count. Note that a node dispatching
+    /// straight to a leaf routine is counted by both, so the leaf layers are
+    /// double-counted; compare totals, not per-layer averages, across them.
+    pub static NODES: [AtomicU64; 64] = [const { AtomicU64::new(0) }; 64];
+    pub const ENABLED: bool = cfg!(feature = "layer-profile");
+
+    /// Sets the current (phase, empties) and restores the previous on drop.
+    pub struct Scope(u32);
+
+    impl Scope {
+        #[inline(always)]
+        pub fn new(phase: u32, empties: u8) -> Self {
+            #[cfg(feature = "layer-profile")]
+            {
+                let prev = STATE.load(Relaxed);
+                STATE.store((phase << 8) | empties as u32, Relaxed);
+                if phase == SEARCH {
+                    NODES[(empties as usize) & 63].fetch_add(1, Relaxed);
+                }
+                return Scope(prev);
+            }
+            #[cfg(not(feature = "layer-profile"))]
+            {
+                let _ = (phase, empties);
+                Scope(0)
+            }
+        }
+    }
+
+    impl Drop for Scope {
+        #[inline(always)]
+        fn drop(&mut self) {
+            #[cfg(feature = "layer-profile")]
+            STATE.store(self.0, Relaxed);
+        }
+    }
+
+    /// The current bucket as (phase, empties).
+    pub fn sample() -> (usize, usize) {
+        let v = STATE.load(Relaxed);
+        (((v >> 8) as usize).min(PHASES - 1), (v & 0xFF) as usize & 63)
+    }
 }
 
 /// Node accounting on Edax's terms, so node counts compare fairly.
