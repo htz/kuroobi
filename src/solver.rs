@@ -2096,17 +2096,18 @@ impl Worker<'_> {
                     e.eval_indices(&child, indices)
                 };
                 *indices = saved;
-                // Weight mobility as heavily as the evaluation itself; the
-                // evaluator alone is blind to how many replies it leaves the
-                // opponent. One reply counts for about one disc.
-                // Also credit the edge discs the move makes stable, at about
-                // a sixteenth of mobility's weight. `child`'s opponent is us,
-                // having just moved.
-                let edge = crate::stability::edge_stable_all(
-                    child.opponent_bb(),
-                    child.player_bb(),
-                )
-                .count_ones() as i32;
+                // Mobility weighs as heavily as the evaluation itself:
+                // the evaluator alone is blind to
+                // how many replies it leaves the opponent. One reply counts
+                // for about one disc.
+                // Stability the move gains is credited too. An exact edge
+                // table would be sharper in this band, but the corner-only
+                // count is
+                // a few bit tests instead of four table lookups plus the rank
+                // gather, and measured better on both node count and time —
+                // the extra edge discs it misses are rarely what decides the
+                // order. `co` is our own discs after the move.
+                let edge = corner_stability_bb(co) * 8;
                 (v * 8.0) as i32 + (child.movable_count() as i32) * MOBILITY_ORDER_WEIGHT
                     - edge * EDGE_STABILITY_ORDER_WEIGHT
             } else {
