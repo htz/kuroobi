@@ -28,7 +28,7 @@ const MID_TT_BITS: u32 = 19;
 const EVAL_ORDER_EMPTIES: u8 = 14;
 /// From this many empties upward, ordering refines the evaluation with a
 /// one-ply lookahead (max over the opponent's replies).
-const DEEP_ORDER_EMPTIES: u8 = 18;
+const DEEP_ORDER_EMPTIES: u8 = 16;
 /// Terminal score with the empty-square bonus awarded to the winner
 /// (FFO convention; also what the game pipeline records). The old
 /// plain disc difference disagreed whenever a game ended with empties left
@@ -105,7 +105,7 @@ fn stability_cut(board: &Board, alpha: i32, beta: i32) -> Option<i32> {
     None
 }
 /// From this many empties upward, ordering uses a two-ply lookahead.
-const DEEP2_ORDER_EMPTIES: u8 = 21;
+const DEEP2_ORDER_EMPTIES: u8 = 19;
 /// Enhanced transposition cutoff: from this many empties upward, probe
 /// every child's hash entry before searching — a proven fail-high there
 /// cuts this node without any search.
@@ -249,7 +249,7 @@ const SORT_DEPTH_LADDER: [u8; 64] = {
     let mut t = [0u8; 64];
     let mut e = 0usize;
     while e < 64 {
-        t[e] = if e >= 24 {
+        t[e] = if e >= 28 {
             3
         } else if e >= DEEP2_ORDER_EMPTIES as usize {
             2
