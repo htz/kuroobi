@@ -73,6 +73,86 @@ pub struct Evaluator {
 }
 
 /// Per-cell weight update rule used by the training entry points.
+/// A view of the weight tables that several threads may update at once.
+///
+/// Training touches only the cells named by the current position — about a
+/// hundred out of millions — so two threads collide vanishingly rarely, and
+/// when they do the loser of the race just misses one small step. That is
+/// the Hogwild! observation: for a sparse linear model, dropping the
+/// synchronisation costs a little convergence and buys the whole machine.
+///
+/// The type is only sound while nothing else holds a mutable borrow of the
+/// evaluator, which `train_epoch_parallel` guarantees by owning it for the
+/// duration of the epoch.
+pub struct WeightView {
+    stages: Vec<Vec<*mut f32>>,
+    num: Vec<*mut f32>,
+}
+
+// SAFETY: the pointers address plain `f32` cells that outlive the view, and
+// the races on them are intended (see the type comment).
+unsafe impl Send for WeightView {}
+unsafe impl Sync for WeightView {}
+
+impl Evaluator {
+    /// Hand out a shared view of the weights for parallel training.
+    ///
+    /// Invalidates the flattened caches: they would be stale after the first
+    /// update, and rebuilding them mid-epoch is neither needed nor safe.
+    pub fn weight_view(&mut self) -> WeightView {
+        self.flat_weights.clear();
+        self.flat_i16.clear();
+        self.flat_i16_white.clear();
+        self.flat_i8.clear();
+        self.flat_i8_white.clear();
+        WeightView {
+            stages: self
+                .weights
+                .iter_mut()
+                .map(|st| st.iter_mut().map(|t| t.as_mut_ptr()).collect())
+                .collect(),
+            num: self.num_weights.iter_mut().map(|t| t.as_mut_ptr()).collect(),
+        }
+    }
+
+    /// One training step against a shared weight view.
+    ///
+    /// Mirrors `update_weights_with` for plain SGD: the step is
+    /// `lr * (target - prediction)` on every active cell, with no per-cell
+    /// optimizer state to keep consistent between threads.
+    ///
+    /// # Safety
+    /// `view` must come from this evaluator and no mutable borrow of the
+    /// weights may be live.
+    pub unsafe fn train_shared(&self, view: &WeightView, board: &Board, target: f32, lr: f32) -> f32 {
+        let mut total = 0.0f32;
+        for sym in board.symmetries() {
+            let stage = Self::stage(&sym);
+            let mut prediction = 0.0f32;
+            for (pi, p) in self.patterns.iter().enumerate() {
+                let table = view.stages[stage][pi];
+                for idx in p.indices(sym.black, sym.white, sym.player()) {
+                    prediction += *table.add(idx);
+                }
+            }
+            let num_idx = self.num_index(&sym);
+            prediction += *view.num[stage].add(num_idx);
+
+            let error = target - prediction;
+            let delta = lr * error;
+            for (pi, p) in self.patterns.iter().enumerate() {
+                let table = view.stages[stage][pi];
+                for idx in p.indices(sym.black, sym.white, sym.player()) {
+                    *table.add(idx) += delta;
+                }
+            }
+            *view.num[stage].add(num_idx) += delta;
+            total += error.abs();
+        }
+        total / 8.0
+    }
+}
+
 pub trait Optimizer {
     /// Weight delta for one active cell. `grad` is the (positive-direction)
     /// error `target - prediction`; `table_size` is the pattern's 3^size

@@ -34,6 +34,7 @@ struct Args {
     patterns: &'static str,
     limit: Option<usize>,
     log_path: Option<PathBuf>,
+    threads: usize,
     data_files: Vec<PathBuf>,
 }
 
@@ -52,6 +53,9 @@ records (kifu-converter output).
 
 Options:
   --epochs <n>      Passes over all examples (default 10)
+  --threads <n>     Parallel workers (default 1). SGD only: the workers
+                    share the weights without locking, which is sound because
+                    each example touches only a handful of cells
   --optimizer <o>   sgd | adam (default sgd; sgd's error-proportional step
                     converges much faster on this linear model)
   --lr <f>          Learning rate (default: sgd 0.002, adam 0.01)
@@ -68,6 +72,7 @@ fn parse_args() -> Result<Args, String> {
         learning_rate: f32::NAN, // resolved after optimizer choice
         decay: 0.95,
         optimizer: OptimizerKind::Sgd,
+        threads: 1,
         weights_path: PathBuf::from("weights.bin"),
         patterns: "egaroucid",
         limit: None,
@@ -85,6 +90,11 @@ fn parse_args() -> Result<Args, String> {
             "--epochs" => args.epochs = value("--epochs")?.parse().map_err(|e| format!("--epochs: {e}"))?,
             "--lr" => args.learning_rate = value("--lr")?.parse().map_err(|e| format!("--lr: {e}"))?,
             "--decay" => args.decay = value("--decay")?.parse().map_err(|e| format!("--decay: {e}"))?,
+            "--threads" => {
+                args.threads = value("--threads")?
+                    .parse()
+                    .map_err(|e| format!("--threads: {e}"))?
+            }
             "--optimizer" => {
                 let v = value("--optimizer")?;
                 args.optimizer = match v.as_str() {
@@ -321,9 +331,18 @@ fn run_epochs<O: Optimizer>(
 ) -> ExitCode {
     for epoch in 1..=args.epochs {
         let t = Instant::now();
-        let stats = trainer.train_epoch_with_progress(examples, |done, total| {
-            draw_progress(epoch, args.epochs, done, total, &t);
-        });
+        let stats = if args.threads > 1 && args.optimizer == OptimizerKind::Sgd {
+            // The decay schedule lives in the optimizer; mirror it here so
+            // the parallel path follows the same curve.
+            let lr = args.learning_rate * args.decay.powi(epoch as i32 - 1);
+            trainer.train_epoch_parallel(examples, lr, args.threads, |done, total| {
+                draw_progress(epoch, args.epochs, done, total, &t);
+            })
+        } else {
+            trainer.train_epoch_with_progress(examples, |done, total| {
+                draw_progress(epoch, args.epochs, done, total, &t);
+            })
+        };
         // Clear the progress line before printing the epoch summary
         eprint!("\r{:width$}\r", "", width = 90);
         let elapsed = t.elapsed().as_secs_f32();

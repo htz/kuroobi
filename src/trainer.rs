@@ -225,6 +225,99 @@ impl<O: Optimizer> Trainer<O> {
         stats
     }
 
+    /// One epoch spread across `threads` workers sharing the weights.
+    ///
+    /// Each worker takes a contiguous slice of the examples and updates the
+    /// shared tables without locking. Updates are sparse — one cell per
+    /// pattern per symmetry — so collisions are rare and a lost update costs
+    /// one small step, not correctness. Only plain SGD is supported: Adam
+    /// keeps per-cell moments that racing threads would corrupt in ways the
+    /// sparsity argument does not cover.
+    pub fn train_epoch_parallel(
+        &mut self,
+        examples: &[Example],
+        lr: f32,
+        threads: usize,
+        mut progress: impl FnMut(usize, usize),
+    ) -> EpochStats {
+        let total = examples.len();
+        if threads <= 1 || total == 0 {
+            let stats = self.train_epoch_seq_lr(examples, lr, &mut progress);
+            return stats;
+        }
+
+        let view = self.evaluator.weight_view();
+        let ev = &self.evaluator;
+        let done = std::sync::atomic::AtomicUsize::new(0);
+        let chunk = total.div_ceil(threads);
+
+        let parts: Vec<EpochStats> = std::thread::scope(|scope| {
+            let mut handles = Vec::new();
+            for part in examples.chunks(chunk) {
+                let view = &view;
+                let done = &done;
+                handles.push(scope.spawn(move || {
+                    let mut st = EpochStats::default();
+                    for (i, ex) in part.iter().enumerate() {
+                        let board = ex.board();
+                        let stage = Evaluator::stage(&board);
+                        // SAFETY: the view came from `ev`, which is borrowed
+                        // immutably for the whole scope, so no other kind of
+                        // access to the weights is live.
+                        let err = unsafe { ev.train_shared(view, &board, ex.score as f32, lr) };
+                        st.loss_sum[stage] += (err * err) as f64;
+                        st.samples[stage] += 1;
+                        if (i + 1) & ((1 << 16) - 1) == 0 {
+                            done.fetch_add(1 << 16, std::sync::atomic::Ordering::Relaxed);
+                        }
+                    }
+                    st
+                }));
+            }
+            let mut out = Vec::new();
+            for h in handles {
+                out.push(h.join().unwrap());
+            }
+            out
+        });
+
+        let mut stats = EpochStats::default();
+        for p in parts {
+            for i in 0..stats.loss_sum.len() {
+                stats.loss_sum[i] += p.loss_sum[i];
+                stats.samples[i] += p.samples[i];
+            }
+        }
+        progress(total, total);
+        stats
+    }
+
+    /// The sequential fallback, at an explicit learning rate.
+    fn train_epoch_seq_lr(
+        &mut self,
+        examples: &[Example],
+        lr: f32,
+        progress: &mut impl FnMut(usize, usize),
+    ) -> EpochStats {
+        let view = self.evaluator.weight_view();
+        let ev = &self.evaluator;
+        let total = examples.len();
+        let mut stats = EpochStats::default();
+        for (i, ex) in examples.iter().enumerate() {
+            let board = ex.board();
+            let stage = Evaluator::stage(&board);
+            // SAFETY: single-threaded here; see `train_epoch_parallel`.
+            let err = unsafe { ev.train_shared(&view, &board, ex.score as f32, lr) };
+            stats.loss_sum[stage] += (err * err) as f64;
+            stats.samples[stage] += 1;
+            if (i + 1) & ((1 << 16) - 1) == 0 {
+                progress(i + 1, total);
+            }
+        }
+        progress(total, total);
+        stats
+    }
+
     /// Run `epochs` passes, returning the stats of each epoch.
     pub fn run(&mut self, epochs: usize, examples: &[Example]) -> Vec<EpochStats> {
         (0..epochs).map(|_| self.train_epoch(examples)).collect()
