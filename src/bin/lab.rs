@@ -17,6 +17,9 @@
 //!   --depth <n>          Our midgame depth (default 6)
 //!   --solve-empties <n>  Our exact-endgame threshold (default 14)
 //!   --edax-level <n>     Edax level (default 5)
+//!   --threads <n>        Threads for both sides (default 1). Ours only
+//!                        parallelises the exact endgame; Edax parallelises
+//!                        its whole search, so this favours Edax.
 //!   --games <n>          Total games, rounded up to even (default 200)
 //!   --random-plies <n>   Random opening plies (default 6)
 //!   --seed <n>           RNG seed (default 7)
@@ -39,6 +42,7 @@ struct Args {
     mpc: bool,
     solve_empties: u8,
     edax_level: u32,
+    threads: usize,
     games: usize,
     random_plies: usize,
     seed: u64,
@@ -53,6 +57,7 @@ fn parse_args() -> Result<Args, String> {
         mpc: false,
         solve_empties: 14,
         edax_level: 5,
+        threads: 1,
         games: 200,
         random_plies: 6,
         seed: 7,
@@ -80,6 +85,7 @@ fn parse_args() -> Result<Args, String> {
             "--mpc" => args.mpc = true,
             "--solve-empties" => args.solve_empties = value("--solve-empties")?.parse().map_err(|e| format!("--solve-empties: {e}"))?,
             "--edax-level" => args.edax_level = value("--edax-level")?.parse().map_err(|e| format!("--edax-level: {e}"))?,
+            "--threads" => args.threads = value("--threads")?.parse().map_err(|e| format!("--threads: {e}"))?,
             "--games" => args.games = value("--games")?.parse().map_err(|e| format!("--games: {e}"))?,
             "--random-plies" => args.random_plies = value("--random-plies")?.parse().map_err(|e| format!("--random-plies: {e}"))?,
             "--seed" => args.seed = value("--seed")?.parse().map_err(|e| format!("--seed: {e}"))?,
@@ -140,11 +146,18 @@ struct Edax {
 }
 
 impl Edax {
-    fn spawn(path: &PathBuf, level: u32) -> std::io::Result<Edax> {
+    fn spawn(path: &PathBuf, level: u32, threads: usize) -> std::io::Result<Edax> {
         // Run from the binary's directory so data/eval.dat resolves.
         let dir = path.parent().unwrap_or_else(|| std::path::Path::new("."));
         let mut child = Command::new(path)
-            .args(["-book-usage", "off", "-l", &level.to_string()])
+            .args([
+                "-book-usage",
+                "off",
+                "-l",
+                &level.to_string(),
+                "-n",
+                &threads.to_string(),
+            ])
             .current_dir(dir)
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
@@ -207,6 +220,16 @@ impl Drop for Edax {
 }
 
 /// Play one game; returns final score from OUR side's perspective
+/// Wall-clock spent thinking, so that a match can be reported at the
+/// time each side actually used rather than at nominal settings.
+#[derive(Default)]
+struct Clock {
+    ours: f64,
+    edax: f64,
+    our_moves: u64,
+    edax_moves: u64,
+}
+
 /// (empties to the winner).
 #[allow(clippy::too_many_arguments)]
 fn play(
@@ -218,6 +241,7 @@ fn play(
     edax: &mut Edax,
     depth: u8,
     solve_empties: u8,
+    clock: &mut Clock,
 ) -> Result<i32, String> {
     let mut board = *start;
     searcher.clear();
@@ -234,6 +258,7 @@ fn play(
         }
 
         let our_turn = (board.player() == Color::Black) == we_are_black;
+        let t0 = std::time::Instant::now();
         let pos = if our_turn {
             if solve_empties > 0 && board.empty_count() <= solve_empties {
                 solver
@@ -253,6 +278,15 @@ fn play(
                 Err(e) => return Err(format!("edax io error: {e}")),
             }
         };
+
+        let dt = t0.elapsed().as_secs_f64();
+        if our_turn {
+            clock.ours += dt;
+            clock.our_moves += 1;
+        } else {
+            clock.edax += dt;
+            clock.edax_moves += 1;
+        }
 
         if board.movable() & pos.to_bit() == 0 {
             return Err(format!("illegal move {pos:?} (our_turn={our_turn})"));
@@ -290,7 +324,7 @@ fn main() -> ExitCode {
         return ExitCode::FAILURE;
     }
 
-    let mut edax = match Edax::spawn(&args.edax_path, args.edax_level) {
+    let mut edax = match Edax::spawn(&args.edax_path, args.edax_level, args.threads) {
         Ok(e) => e,
         Err(e) => {
             eprintln!("failed to start edax: {e}");
@@ -299,13 +333,14 @@ fn main() -> ExitCode {
     };
 
     println!(
-        "lab: us={} (depth {}, solve {}) vs Edax level {}  ({} games, {} random plies)",
+        "lab: us={} (depth {}, solve {}) vs Edax level {}  ({} games, {} random plies, {} threads)",
         args.weights.display(),
         args.depth,
         args.solve_empties,
         args.edax_level,
         args.games,
-        args.random_plies
+        args.random_plies,
+        args.threads
     );
 
     let mut rng = Rng::new(args.seed);
@@ -313,6 +348,8 @@ fn main() -> ExitCode {
     searcher.mpc = args.mpc;
     // Deep endgame thresholds (20+ empties) need a much larger table.
     let mut solver = Solver::new(if args.solve_empties >= 18 { 22 } else { 18 });
+    solver.set_threads(args.threads);
+    let mut clock = Clock::default();
     let mut wins = 0usize;
     let mut losses = 0usize;
     let mut draws = 0usize;
@@ -323,7 +360,7 @@ fn main() -> ExitCode {
         for we_are_black in [true, false] {
             match play(
                 &opening, we_are_black, &evaluator, &mut searcher, &mut solver,
-                &mut edax, args.depth, args.solve_empties,
+                &mut edax, args.depth, args.solve_empties, &mut clock,
             ) {
                 Ok(s) => {
                     disc_sum += s as i64;
@@ -351,6 +388,18 @@ fn main() -> ExitCode {
         (p - 1.96 * se) * 100.0,
         (p + 1.96 * se) * 100.0,
         disc_sum as f64 / n
+    );
+    println!(
+        "thinking time: ours {:.1}s / {} moves = {:.3}s per move; \
+         edax {:.1}s / {} moves = {:.3}s per move  (ratio {:.2}x)",
+        clock.ours,
+        clock.our_moves,
+        clock.ours / clock.our_moves.max(1) as f64,
+        clock.edax,
+        clock.edax_moves,
+        clock.edax / clock.edax_moves.max(1) as f64,
+        (clock.ours / clock.our_moves.max(1) as f64)
+            / (clock.edax / clock.edax_moves.max(1) as f64).max(1e-9)
     );
     ExitCode::SUCCESS
 }

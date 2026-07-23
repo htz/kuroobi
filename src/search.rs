@@ -20,6 +20,14 @@ const INF: f32 = f32::MAX / 4.0;
 /// Null-window width for PVS probes (evaluator units are continuous f32,
 /// so a "zero window" needs a small epsilon).
 const PVS_EPSILON: f32 = 0.001;
+/// Plies from the root at which a node may hand its remaining moves to other
+/// threads. Splitting only at the root leaves the principal variation — the
+/// biggest subtree — on one thread, which caps the speedup near 1.3x however
+/// many cores are available.
+const SPLIT_MAX_PLY: u8 = 8;
+/// A node needs at least this much depth left to be worth splitting; below it
+/// the subtrees are shorter than the hand-off.
+const SPLIT_MIN_DEPTH: u8 = 3;
 
 /// Terminal score with empties awarded to the winner (same convention as
 /// the endgame solver and the game pipeline).
@@ -146,10 +154,60 @@ pub struct SearchResult {
 }
 
 /// Iterative-deepening alpha-beta searcher over an evaluator.
-pub struct Searcher {
-    tt: Vec<TtEntry>,
+/// Transposition table shared by every search thread.
+///
+/// Entries are wider than any atomic, so a concurrent reader can observe a
+/// half-written one. That is safe here because a probe verifies the full
+/// position (`key`, `black`, `white`) and the fields it then uses were
+/// written before the position was: a torn entry fails the check and reads
+/// as a miss. The table is advisory — losing or mis-reading an entry costs
+/// nodes, never correctness — which is what makes lock-free sharing sound.
+struct SharedTt {
+    entries: std::cell::UnsafeCell<Vec<TtEntry>>,
     mask: u64,
+}
+
+// SAFETY: see the type comment — every access verifies the position it
+// belongs to, and entries carry no pointers or ownership.
+unsafe impl Sync for SharedTt {}
+unsafe impl Send for SharedTt {}
+
+impl SharedTt {
+    fn new(bit_size: u32) -> SharedTt {
+        let size = 1usize << bit_size;
+        SharedTt {
+            entries: std::cell::UnsafeCell::new(vec![TtEntry::EMPTY; size]),
+            mask: (size - 1) as u64,
+        }
+    }
+
+    /// SAFETY: callers must not hold two overlapping mutable views; every
+    /// use below is a short read or a single-entry write.
+    #[allow(clippy::mut_from_ref)]
+    unsafe fn slots(&self) -> &mut Vec<TtEntry> {
+        &mut *self.entries.get()
+    }
+
+    fn clear(&self) {
+        // SAFETY: called between searches, with no other thread running.
+        unsafe { self.slots() }.fill(TtEntry::EMPTY);
+    }
+}
+
+pub struct Searcher {
+    tt: std::sync::Arc<SharedTt>,
     nodes: u64,
+    /// Search threads. Above 1 the helpers run the same iterative deepening
+    /// on their own stacks and share only the table — the knowledge one
+    /// thread proves shows up as another thread's cutoff. Splitting the tree
+    /// explicitly would need the whole recursion restructured; this gets a
+    /// useful part of the win from a table that already exists.
+    pub threads: usize,
+    /// Set when the main thread has its answer and the helpers should stop.
+    stop: Option<std::sync::Arc<std::sync::atomic::AtomicBool>>,
+    /// Depth offset for a helper, so the threads do not all walk the same
+    /// iteration in lockstep.
+    depth_skew: u8,
     /// Enable ProbCut selective pruning (off by default: the search is then
     /// exact for its depth, which the equivalence tests rely on).
     pub mpc: bool,
@@ -167,11 +225,12 @@ pub struct Searcher {
 impl Searcher {
     /// `bit_size`: transposition table entries = 2^bit_size (~48 B each).
     pub fn new(bit_size: u32) -> Searcher {
-        let size = 1usize << bit_size;
         Searcher {
-            tt: vec![TtEntry::EMPTY; size],
-            mask: (size - 1) as u64,
+            tt: std::sync::Arc::new(SharedTt::new(bit_size)),
             nodes: 0,
+            threads: 1,
+            stop: None,
+            depth_skew: 0,
             mpc: false,
             mpc_t: MPC_T,
             probcut_level: 0,
@@ -185,7 +244,12 @@ impl Searcher {
     /// same Searcher must serve a different evaluator: TT entries are keyed
     /// by position only, so cross-evaluator reuse silently corrupts search.
     pub fn clear(&mut self) {
-        self.tt.fill(TtEntry::EMPTY);
+        self.tt.clear();
+    }
+
+    #[inline]
+    fn should_stop(&self) -> bool {
+        self.stop.as_ref().is_some_and(|f| f.load(std::sync::atomic::Ordering::Relaxed))
     }
 
     /// Search to `depth` plies with iterative deepening (better move
@@ -204,15 +268,6 @@ impl Searcher {
             };
         }
 
-        let mut best_move = None;
-        let mut value = 0.0f32;
-        let mut completed = 0u8;
-
-        // Pattern indices are maintained incrementally (apply/undo around
-        // each recursion) instead of recomputed per eval — the dominant
-        // cost of the previous implementation.
-        let mut indices = evaluator.indexer().init(board.black, board.white);
-
         // Ordering heuristics are per-decision: fresh for this search call,
         // shared across the iterative-deepening iterations inside it.
         self.killers = [[None; 2]; MAX_PLY];
@@ -221,14 +276,247 @@ impl Searcher {
         // (Aspiration windows were measured to interact unsoundly with
         // PVS null-window entries in the shared TT — root exactness broke.
         // PVS + ETC alone keep the exactness invariant.)
-        for d in 1..=depth {
+        // Helpers run the same deepening on their own stacks, skewed so the
+        // threads are not all proving the same iteration at the same moment.
+        // Everything they learn reaches this thread through the table.
+        self.deepen(board, evaluator, depth)
+    }
+
+    /// One root iteration, split across threads.
+    ///
+    /// The first move is searched alone to establish alpha — that is the
+    /// "young brother" that makes the rest cheap — and the remaining moves
+    /// are then handed out to workers that probe with a null window and
+    /// re-search only when a move actually beats the best so far. Workers
+    /// share the table and nothing else, so each keeps its own killers and
+    /// history and they diverge instead of retracing one another.
+    ///
+    /// A worker reads alpha when it picks up a move, so it may probe against
+    /// a bound another worker has already improved. That costs a little
+    /// search, never correctness: a stale (lower) alpha only makes the
+    /// window wider than it needed to be.
+    fn root_split(
+        &mut self,
+        board: &Board,
+        evaluator: &Evaluator,
+        depth: u8,
+        hash: u64,
+    ) -> (f32, Option<Position>) {
+        let indexer = evaluator.indexer();
+        let mover = board.player();
+        let tt_move = self.tt_probe(board, hash).and_then(|e| e.best);
+
+        let mut kids: Vec<(Position, Board, u64, i64)> = Vec::with_capacity(34);
+        let mut m = board.movable();
+        while m != 0 {
+            let pos = Position::from_index(m.trailing_zeros()).unwrap();
+            m &= m - 1;
+            let mut child = *board;
+            let flipped = child.make_move_bits(pos);
+            let child_hash = zobrist::update_hash_on_move(hash, pos, flipped, mover);
+            let key = if Some(pos) == tt_move {
+                i64::MIN
+            } else {
+                let mut ix = indexer.init(child.black, child.white);
+                (evaluator.eval_indices(&child, &mut ix) * 256.0) as i64
+            };
+            kids.push((pos, child, child_hash, key));
+        }
+        kids.sort_by_key(|k| k.3);
+
+        // First move with the full window, on this thread.
+        let mut ix = indexer.init(kids[0].1.black, kids[0].1.white);
+        let alpha0 = -self.alpha_beta(
+            &kids[0].1, evaluator, &mut ix, kids[0].2, depth - 1, 1, -INF, INF, false,
+        );
+        if kids.len() == 1 || self.should_stop() {
+            return (alpha0, Some(kids[0].0));
+        }
+
+        let best = std::sync::Mutex::new((alpha0, Some(kids[0].0)));
+        let next = std::sync::atomic::AtomicUsize::new(1);
+        let stop = self.stop.clone();
+        let kids_ref = &kids;
+        let nodes = std::sync::atomic::AtomicU64::new(0);
+
+        std::thread::scope(|scope| {
+            for _ in 0..self.threads {
+                let mut w = self.worker();
+                let best = &best;
+                let next = &next;
+                let nodes = &nodes;
+                let stop = stop.clone();
+                scope.spawn(move || {
+                    loop {
+                        if stop.as_ref().is_some_and(|f| {
+                            f.load(std::sync::atomic::Ordering::Relaxed)
+                        }) {
+                            break;
+                        }
+                        let i = next.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                        let Some(k) = kids_ref.get(i) else { break };
+                        let a = best.lock().unwrap().0;
+                        let mut ix = indexer.init(k.1.black, k.1.white);
+                        let probe = -w.alpha_beta(
+                            &k.1, evaluator, &mut ix, k.2, depth - 1, 1,
+                            -(a + PVS_EPSILON), -a, false,
+                        );
+                        let v = if probe > a {
+                            let mut ix = indexer.init(k.1.black, k.1.white);
+                            -w.alpha_beta(
+                                &k.1, evaluator, &mut ix, k.2, depth - 1, 1, -INF, -a, false,
+                            )
+                        } else {
+                            probe
+                        };
+                        let mut g = best.lock().unwrap();
+                        if v > g.0 {
+                            *g = (v, Some(k.0));
+                        }
+                    }
+                    nodes.fetch_add(w.nodes, std::sync::atomic::Ordering::Relaxed);
+                });
+            }
+        });
+
+        self.nodes += nodes.load(std::sync::atomic::Ordering::Relaxed);
+        let g = *best.lock().unwrap();
+        (g.0, g.1)
+    }
+
+    /// The move loop of `alpha_beta`, run across threads.
+    ///
+    /// The first child is searched here with the full window so the others
+    /// have a real bound to probe against; the rest are handed out one at a
+    /// time. Each worker owns its ordering state and re-derives the pattern
+    /// indices for its child, so nothing but the table is shared.
+    #[allow(clippy::too_many_arguments)]
+    fn split_children(
+        &mut self,
+        board: &Board,
+        evaluator: &Evaluator,
+        children: &[(Position, Board, u64, u64, i64)],
+        hash: u64,
+        depth: u8,
+        ply: u8,
+        alpha: f32,
+        beta: f32,
+    ) -> (f32, Option<Position>) {
+        let _ = (board, hash);
+        let indexer = evaluator.indexer();
+        let first = &children[0];
+        let mut ix = indexer.init(first.1.black, first.1.white);
+        let mut best_val = -self.alpha_beta(
+            &first.1, evaluator, &mut ix, first.2, depth - 1, ply + 1, -beta, -alpha, false,
+        );
+        let mut best_move = Some(first.0);
+        if best_val >= beta || self.should_stop() {
+            return (best_val, best_move);
+        }
+
+        let best = std::sync::Mutex::new((best_val, best_move));
+        let next = std::sync::atomic::AtomicUsize::new(1);
+        let nodes = std::sync::atomic::AtomicU64::new(0);
+        let cut = std::sync::atomic::AtomicBool::new(false);
+        let stop = self.stop.clone();
+        let threads = self.threads.min(children.len() - 1);
+
+        std::thread::scope(|scope| {
+            for _ in 0..threads {
+                let mut w = self.worker();
+                let (best, next, nodes, cut) = (&best, &next, &nodes, &cut);
+                let stop = stop.clone();
+                scope.spawn(move || {
+                    loop {
+                        if cut.load(std::sync::atomic::Ordering::Relaxed)
+                            || stop.as_ref().is_some_and(|f| {
+                                f.load(std::sync::atomic::Ordering::Relaxed)
+                            })
+                        {
+                            break;
+                        }
+                        let i = next.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                        let Some(k) = children.get(i) else { break };
+                        let a = best.lock().unwrap().0.max(alpha);
+                        let mut ix = indexer.init(k.1.black, k.1.white);
+                        let probe = -w.alpha_beta(
+                            &k.1, evaluator, &mut ix, k.2, depth - 1, ply + 1,
+                            -(a + PVS_EPSILON), -a, false,
+                        );
+                        let v = if probe > a && probe < beta {
+                            let mut ix = indexer.init(k.1.black, k.1.white);
+                            -w.alpha_beta(
+                                &k.1, evaluator, &mut ix, k.2, depth - 1, ply + 1, -beta, -a, false,
+                            )
+                        } else {
+                            probe
+                        };
+                        let mut g = best.lock().unwrap();
+                        if v > g.0 {
+                            *g = (v, Some(k.0));
+                        }
+                        if g.0 >= beta {
+                            cut.store(true, std::sync::atomic::Ordering::Relaxed);
+                            break;
+                        }
+                    }
+                    nodes.fetch_add(w.nodes, std::sync::atomic::Ordering::Relaxed);
+                });
+            }
+        });
+
+        self.nodes += nodes.load(std::sync::atomic::Ordering::Relaxed);
+        let g = *best.lock().unwrap();
+        best_val = g.0;
+        best_move = g.1;
+        (best_val, best_move)
+    }
+
+    /// A worker for `root_split`: shares the table, keeps its own ordering
+    /// state, and searches sequentially inside its subtree.
+    fn worker(&self) -> Searcher {
+        Searcher {
+            tt: std::sync::Arc::clone(&self.tt),
+            nodes: 0,
+            threads: 1,
+            stop: self.stop.clone(),
+            depth_skew: 0,
+            mpc: self.mpc,
+            mpc_t: self.mpc_t,
+            probcut_level: 0,
+            killers: [[None; 2]; MAX_PLY],
+            history: [[0; 64]; 2],
+        }
+    }
+
+    /// Iterative deepening on one thread.
+    fn deepen(&mut self, board: &Board, evaluator: &Evaluator, depth: u8) -> SearchResult {
+        let mut indices = evaluator.indexer().init(board.black, board.white);
+        let mut best_move = None;
+        let mut value = 0.0f32;
+        let mut completed = 0u8;
+
+        // A helper starts one iteration further in so that the threads
+        // populate different parts of the table first.
+        let start = 1 + self.depth_skew.min(depth.saturating_sub(1));
+        for d in start..=depth {
+            if self.should_stop() {
+                break;
+            }
             let hash = zobrist::compute_hash(board.black, board.white, board.player());
-            let v = self.alpha_beta(board, evaluator, &mut indices, hash, d, 0, -INF, INF, false);
-            // Root best move comes from the TT entry just stored
-            if let Some(entry) = self.tt_probe(board, hash) {
-                if entry.best.is_some() {
-                    best_move = entry.best;
-                }
+            let (v, mv) = if self.threads > 1 && d >= 3 {
+                self.root_split(board, evaluator, d, hash)
+            } else {
+                let v =
+                    self.alpha_beta(board, evaluator, &mut indices, hash, d, 0, -INF, INF, false);
+                // Root best move comes from the TT entry just stored
+                (v, self.tt_probe(board, hash).and_then(|e| e.best))
+            };
+            if self.should_stop() {
+                break;
+            }
+            if mv.is_some() {
+                best_move = mv;
             }
             value = v;
             completed = d;
@@ -242,10 +530,11 @@ impl Searcher {
         }
     }
 
-    fn tt_probe(&self, board: &Board, hash: u64) -> Option<&TtEntry> {
-        let e = &self.tt[(hash & self.mask) as usize];
-        (e.used && e.key == hash && e.black == board.black && e.white == board.white)
-            .then_some(e)
+    fn tt_probe(&self, board: &Board, hash: u64) -> Option<TtEntry> {
+        // SAFETY: a short read; a concurrently written entry fails the
+        // position check below and is discarded.
+        let e = unsafe { self.tt.slots() }[(hash & self.tt.mask) as usize];
+        (e.used && e.key == hash && e.black == board.black && e.white == board.white).then_some(e)
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -258,7 +547,8 @@ impl Searcher {
         bound: Bound,
         best: Option<Position>,
     ) {
-        let e = &mut self.tt[(hash & self.mask) as usize];
+        // SAFETY: a single-entry write; readers verify the position.
+        let e = &mut unsafe { self.tt.slots() }[(hash & self.tt.mask) as usize];
         // Depth-preferred replacement
         if !e.used || e.depth <= depth {
             *e = TtEntry {
@@ -479,6 +769,28 @@ impl Searcher {
                     }
                 }
             }
+        }
+
+        // Young-brothers-wait: prove the first child on this thread, then
+        // let other threads take the rest. Splitting before that would have
+        // every thread searching against an unproven window.
+        if self.threads > 1
+            && ply < SPLIT_MAX_PLY
+            && depth >= SPLIT_MIN_DEPTH
+            && n_children > 2
+        {
+            let (v, mv) = self.split_children(
+                board, evaluator, &children[..n_children], hash, depth, ply, alpha, beta,
+            );
+            let bound = if v <= orig_alpha {
+                Bound::Upper
+            } else if v >= beta {
+                Bound::Lower
+            } else {
+                Bound::Exact
+            };
+            self.tt_store(board, hash, depth, v, bound, mv);
+            return v;
         }
 
         let mut best_val = -INF;
