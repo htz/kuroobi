@@ -410,7 +410,11 @@ struct HashEntry {
     best8: u8,
     /// Bit 0: used. Bit 1: player is White.
     flags: u8,
-    _pad: [u8; 3],
+    /// Which warm-up generation wrote this entry. Anything older than the
+    /// table's current generation counts as a seed, which turns demoting a
+    /// pass's results into a single increment.
+    date: u8,
+    _pad: [u8; 2],
 }
 
 impl HashEntry {
@@ -422,7 +426,8 @@ impl HashEntry {
         depth: 0,
         best8: 255,
         flags: 0,
-        _pad: [0; 3],
+        date: 0,
+        _pad: [0; 2],
     };
 
     #[inline]
@@ -434,8 +439,8 @@ impl HashEntry {
     /// is a good ordering hint but their bounds are heuristic and must
     /// never cut the exact search.
     #[inline]
-    fn is_seed(&self) -> bool {
-        self.flags & 4 != 0
+    fn is_seed(&self, now: u8) -> bool {
+        self.flags & 4 != 0 || self.date != now
     }
 
     #[inline]
@@ -506,6 +511,8 @@ const HASH_LOCK_STRIPES: usize = 4096;
 
 struct HashTable {
     mask: u64,
+    /// Current generation; see `HashEntry::date`.
+    date: std::sync::atomic::AtomicU8,
     /// Set while more than one search thread is live. When it is clear the
     /// table is private to one thread and every access can skip its lock.
     shared: std::sync::atomic::AtomicBool,
@@ -529,10 +536,16 @@ impl HashTable {
         locks.resize_with(HASH_LOCK_STRIPES, SpinLock::new);
         HashTable {
             mask: ((size >> 1) - 1) as u64,
+            date: std::sync::atomic::AtomicU8::new(1),
             shared: std::sync::atomic::AtomicBool::new(false),
             entries: std::cell::UnsafeCell::new(vec![HashEntry::EMPTY; size]),
             locks,
         }
+    }
+
+    #[inline]
+    fn date(&self) -> u8 {
+        self.date.load(std::sync::atomic::Ordering::Relaxed)
     }
 
     /// Declare whether search threads other than the owner are running.
@@ -635,6 +648,7 @@ impl HashTable {
         best: Option<Position>,
     ) {
         let best8 = best.map_or(255, |p| p.index());
+        let now = self.date();
         let base = ((hash & self.mask) as usize) << 1;
         let _guard = self.is_shared().then(|| self.stripe(hash).lock());
         // SAFETY: the stripe lock is held for the whole read-modify-write.
@@ -660,19 +674,21 @@ impl HashTable {
                     depth: board.empty_count(),
                     best8,
                     flags: 1 | ((board.player as u8) << 1),
-                    _pad: [0; 3],
+                    date: self.date(),
+                    _pad: [0; 2],
                 };
             }
             return;
         };
         let entry = &mut entries[slot];
-        if entry.is_seed() {
+        if entry.is_seed(now) {
             // Heuristic bounds from the pre-search: replace, don't tighten
             entry.lower8 = if value > alpha { value as i8 } else { i8::MIN };
             entry.upper8 = if value < beta { value as i8 } else { i8::MAX };
             entry.depth = board.empty_count();
             entry.flags = 1 | ((board.player as u8) << 1);
             entry.best8 = best8;
+            entry.date = now;
             return;
         }
         if value < beta && (value as i8) < entry.upper8 {
@@ -682,6 +698,7 @@ impl HashTable {
             entry.lower8 = value as i8;
         }
         entry.best8 = best8;
+        entry.date = now;
     }
 
     /// Store a seed entry (evaluation-guided pre-search): best move plus
@@ -693,12 +710,12 @@ impl HashTable {
     /// because workers only hold a shared borrow; callers must ensure no
     /// other thread is searching (warm-up rungs are separated by a join).
     fn demote_to_seed_shared(&self) {
-        // SAFETY: called between passes, with no concurrent searchers.
-        for e in unsafe { self.slots() }.iter_mut() {
-            if e.used() {
-                e.flags |= 4;
-            }
-        }
+        // Everything written so far belongs to the previous generation, so
+        // opening a new one demotes all of it at once. The sweep this
+        // replaces walked all 1.6 GB of the table, three times per solve,
+        // evicting every level of cache on the way through.
+        let next = self.date().wrapping_add(1).max(1);
+        self.date.store(next, std::sync::atomic::Ordering::Relaxed);
     }
 
 
@@ -712,6 +729,7 @@ impl HashTable {
         best: Option<Position>,
     ) {
         let base = ((hash & self.mask) as usize) << 1;
+        let now = self.date();
         let _guard = self.stripe(hash).lock();
         // SAFETY: the stripe lock is held for the whole read-modify-write.
         let entries = unsafe { self.slots() };
@@ -723,15 +741,15 @@ impl HashTable {
             base
         } else if !entries[base + 1].used() {
             base + 1
-        } else if entries[base].is_seed() && entries[base].depth <= depth {
+        } else if entries[base].is_seed(now) && entries[base].depth <= depth {
             base
-        } else if entries[base + 1].is_seed() && entries[base + 1].depth <= depth {
+        } else if entries[base + 1].is_seed(now) && entries[base + 1].depth <= depth {
             base + 1
         } else {
             return; // never evict a real entry for a seed
         };
         let entry = &mut entries[slot];
-        if entry.used() && !entry.is_seed() {
+        if entry.used() && !entry.is_seed(now) {
             // Same position already solved exactly: keep it
             return;
         }
@@ -743,7 +761,8 @@ impl HashTable {
             depth,
             best8: best.map_or(255, |p| p.index()),
             flags: 1 | ((board.player as u8) << 1) | 4,
-            _pad: [0; 3],
+            date: self.date(),
+            _pad: [0; 2],
         };
     }
 }
@@ -1006,7 +1025,7 @@ impl Worker<'_> {
         if let Some(e) = self.tt.get(board, hash) {
             tt_move = e.best();
             // Exactly solved already: the true value beats any estimate
-            if !e.is_seed() && e.lower() >= e.upper() {
+            if !e.is_seed(self.tt.date()) && e.lower() >= e.upper() {
                 return e.lower() as f32;
             }
         }
@@ -1370,7 +1389,7 @@ impl Worker<'_> {
             self.tt.get(board, hash)
         };
         if let Some(v) = entry {
-            if !v.is_seed() {
+            if !v.is_seed(self.tt.date()) {
                 if v.lower() >= v.upper() {
                     return v.lower();
                 }
@@ -1443,7 +1462,7 @@ impl Worker<'_> {
             for m in moves.iter() {
                 probed += 1;
                 if let Some(e) = self.tt.get(&m.child(board), m.hash) {
-                    if !e.is_seed() && -e.upper() >= upper {
+                    if !e.is_seed(self.tt.date()) && -e.upper() >= upper {
                         node_accounting::etc(probed);
                         return -e.upper();
                     }
@@ -1617,7 +1636,7 @@ impl Worker<'_> {
         };
         let mut narrowed = false;
         if let Some(v) = entry {
-            if !v.is_seed() {
+            if !v.is_seed(self.table(board.empty_count()).date()) {
                 if v.lower() >= v.upper() {
                     return v.lower();
                 }
