@@ -359,19 +359,29 @@ const QUADRANT_MASKS: [(u8, u64); 4] = [
 ];
 
 /// Squares lying in quadrants with an odd number of empties, straight from
-/// the empty squares: a quadrant is odd when its popcount is. Four
-/// popcounts get there without carrying parity down the search
-/// incrementally or the per-square walk this replaces.
-#[inline]
-fn odd_quadrant_mask_of(empty: u64) -> u64 {
-    let mut m = 0u64;
-    for (_, mask) in QUADRANT_MASKS {
-        if (empty & mask).count_ones() & 1 != 0 {
-            m |= mask;
+/// the empty squares: a quadrant is odd when its popcount is. An alternative
+/// is carrying the parity down the search incrementally (one XOR per move);
+/// four popcounts get there without the per-square walk this replaces, and
+/// with a parity bitmask in hand the union of its quadrant masks is a single
+/// table load.
+const PARITY_ODD_MASK: [u64; 16] = {
+    let mut t = [0u64; 16];
+    let mut p = 0usize;
+    while p < 16 {
+        let mut m = 0u64;
+        let mut i = 0usize;
+        while i < 4 {
+            let (id, mask) = QUADRANT_MASKS[i];
+            if p & id as usize != 0 {
+                m |= mask;
+            }
+            i += 1;
         }
+        t[p] = m;
+        p += 1;
     }
-    m
-}
+    t
+};
 
 #[inline]
 fn parity_of(board: &Board) -> u8 {
@@ -1538,7 +1548,8 @@ impl Worker<'_> {
         } else if child.empty_count() >= MOVE_ORDERING_LIMIT {
             -self.alpha_beta_ordered(child, hash, alpha, beta, false, ev)
         } else {
-            -self.alpha_beta(child, hash, alpha, beta, false)
+            let parity = parity_of(child);
+            -self.alpha_beta(child, hash, alpha, beta, false, parity)
         }
     }
 
@@ -1665,7 +1676,10 @@ impl Worker<'_> {
             return if child.empty_count() >= MOVE_ORDERING_LIMIT {
                 -self.alpha_beta_ordered(&mut child, m.hash, -beta, -alpha, false, ev)
             } else {
-                -self.alpha_beta(&mut child, m.hash, -beta, -alpha, false)
+                {
+                    let cp = parity_of(&child);
+                    -self.alpha_beta(&mut child, m.hash, -beta, -alpha, false, cp)
+                }
             };
         }
 
@@ -1679,7 +1693,10 @@ impl Worker<'_> {
             let val = if child.empty_count() >= MOVE_ORDERING_LIMIT {
                 -self.alpha_beta_ordered(&mut child, m.hash, -beta, -alpha, false, ev)
             } else {
-                -self.alpha_beta(&mut child, m.hash, -beta, -alpha, false)
+                {
+                    let cp = parity_of(&child);
+                    -self.alpha_beta(&mut child, m.hash, -beta, -alpha, false, cp)
+                }
             };
             if val > alpha {
                 alpha = val;
@@ -1697,7 +1714,15 @@ impl Worker<'_> {
 
     /// Plain alpha-beta over the empty list, with the last-4 fast path and
     /// a dedicated shallow transposition table (5-6 empties).
-    fn alpha_beta(&mut self, board: &mut Board, hash: u64, alpha: i32, beta: i32, passed: bool) -> i32 {
+    fn alpha_beta(
+        &mut self,
+        board: &mut Board,
+        hash: u64,
+        alpha: i32,
+        beta: i32,
+        passed: bool,
+        parity: u8,
+    ) -> i32 {
         let _prof = layer_profile::Scope::new(layer_profile::SEARCH, board.empty_count());
         self.nodes += 1;
 
@@ -1731,6 +1756,7 @@ impl Worker<'_> {
                 alpha,
                 beta,
                 passed,
+                parity,
             );
         }
 
@@ -1767,7 +1793,7 @@ impl Worker<'_> {
         // Odd-quadrant moves first (quadrant parity: filling the last
         // empty of a region tends to keep the tempo).
         let empties = board.empty();
-        let odd = odd_quadrant_mask_of(empties);
+        let odd = PARITY_ODD_MASK[parity as usize];
         'passes: for pass_mask in [empties & odd, empties & !odd] {
             let mut e = pass_mask;
             while e != 0 {
@@ -1792,8 +1818,14 @@ impl Worker<'_> {
                 } else {
                     0
                 };
-                let val =
-                    -self.alpha_beta(&mut child, child_hash, -upper, -best.max(orig_lower), false);
+                let val = -self.alpha_beta(
+                    &mut child,
+                    child_hash,
+                    -upper,
+                    -best.max(orig_lower),
+                    false,
+                    parity ^ quadrant_id(sq),
+                );
 
                 if val > best {
                     best = val;
@@ -1811,7 +1843,14 @@ impl Worker<'_> {
                 return final_score(board);
             }
             board.pass();
-            let val = -self.alpha_beta(board, zobrist::board_hash(board.opponent_bb(), board.player_bb()), -upper, -orig_lower, true);
+            let val = -self.alpha_beta(
+                board,
+                zobrist::board_hash(board.opponent_bb(), board.player_bb()),
+                -upper,
+                -orig_lower,
+                true,
+                parity,
+            );
             board.pass();
             return val;
         }
@@ -1833,13 +1872,14 @@ impl Worker<'_> {
         alpha: i32,
         beta: i32,
         passed: bool,
+        parity: u8,
     ) -> i32 {
         let _prof = layer_profile::Scope::new(layer_profile::SEARCH, 4);
         self.nodes += 1;
 
         // Parity ordering: squares in odd quadrants first (odd sorts before
-        // even because !odd is false < true)
-        let parity = parity_of_bb(player | opponent);
+        // even because !odd is false < true). The caller carries the parity
+        // down the tree, so this level does not recompute it.
         let odd = |sq: u8| parity & quadrant_id(sq) != 0;
         let mut arr = [p1, p2, p3, p4];
         arr.sort_by_key(|&s| !odd(s));
@@ -1872,6 +1912,7 @@ impl Worker<'_> {
                 -beta,
                 -alpha,
                 false,
+                parity ^ quadrant_id(a),
             );
             if val >= beta {
                 return val;
@@ -1885,7 +1926,7 @@ impl Worker<'_> {
             if passed {
                 return final_score_bb(player, opponent);
             }
-            return -self.last4(opponent, player, p1, p2, p3, p4, -beta, -alpha, true);
+            return -self.last4(opponent, player, p1, p2, p3, p4, -beta, -alpha, true, parity);
         }
 
         alpha
@@ -1902,11 +1943,11 @@ impl Worker<'_> {
         alpha: i32,
         beta: i32,
         passed: bool,
+        parity: u8,
     ) -> i32 {
         let _prof = layer_profile::Scope::new(layer_profile::SEARCH, 3);
         self.nodes += 1;
 
-        let parity = parity_of_bb(player | opponent);
         let odd = |sq: u8| parity & quadrant_id(sq) != 0;
         let mut arr = [p1, p2, p3];
         arr.sort_by_key(|&s| !odd(s));
@@ -1946,7 +1987,7 @@ impl Worker<'_> {
             if passed {
                 return final_score_bb(player, opponent);
             }
-            return -self.last3(opponent, player, p1, p2, p3, -beta, -alpha, true);
+            return -self.last3(opponent, player, p1, p2, p3, -beta, -alpha, true, parity);
         }
 
         alpha
