@@ -441,7 +441,7 @@ fn main() -> ExitCode {
             let elapsed = started.elapsed().as_secs_f32();
             let gps = game_no as f32 / elapsed;
             println!(
-                "game {:>7}/{}: mean|err| {:.3}  B/W/D {}/{}/{}  lr {:.6}  ({:.1} games/s)",
+                "game {:>7}/{}: mse {:.3}  B/W/D {}/{}/{}  lr {:.6}  ({:.1} games/s)",
                 game_no, args.games, mean_err, black_wins, white_wins, draws, opt.learning_rate, gps
             );
 

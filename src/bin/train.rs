@@ -53,6 +53,7 @@ struct Args {
     max_examples: Option<usize>,
     log_path: Option<PathBuf>,
     threads: usize,
+    val_files: Vec<PathBuf>,
     data_files: Vec<PathBuf>,
 }
 
@@ -86,6 +87,11 @@ Options:
                     Datasets larger than this are split into shards of whole
                     files; every epoch walks all shards, loading one at a time
   --log <path>      Append per-epoch stage losses as CSV
+  --val <path>      Held-out file scored after every epoch (repeatable).
+                    The in-epoch training MSE is measured while the weights
+                    are still moving, so it is a poor stopping signal; the
+                    val MSE is the honest one. When given, the weights with
+                    the best val MSE are also saved to <weights>.best
   -h, --help        Show this help";
 
 fn parse_args() -> Result<Args, String> {
@@ -100,6 +106,7 @@ fn parse_args() -> Result<Args, String> {
         limit: None,
         max_examples: Some(DEFAULT_MAX_EXAMPLES),
         log_path: None,
+        val_files: Vec::new(),
         data_files: Vec::new(),
     };
 
@@ -144,6 +151,7 @@ fn parse_args() -> Result<Args, String> {
                 args.max_examples = (n > 0).then_some(n);
             }
             "--log" => args.log_path = Some(PathBuf::from(value("--log")?)),
+            "--val" => args.val_files.push(PathBuf::from(value("--val")?)),
             "-h" | "--help" => return Err(USAGE.to_string()),
             other if other.starts_with('-') => return Err(format!("unknown option: {other}\n\n{USAGE}")),
             file => args.data_files.push(PathBuf::from(file)),
@@ -366,6 +374,20 @@ fn main() -> ExitCode {
         }
     }
 
+    // Held-out set for an honest per-epoch signal, loaded once and kept
+    // resident (it is small relative to training). The in-epoch training MSE
+    // is measured on moving weights and is a poor stopping signal.
+    let mut val: Vec<Example> = Vec::new();
+    for f in &args.val_files {
+        if let Err(e) = load_file_into(f, None, &mut val) {
+            eprintln!("failed to load val {}: {e}", f.display());
+            return ExitCode::FAILURE;
+        }
+    }
+    if !args.val_files.is_empty() {
+        println!("val: {} held-out examples", fmt_count(val.len()));
+    }
+
     // Evaluator: resume from an existing weight file when present
     let mut evaluator = Evaluator::new(patterns);
     if args.weights_path.exists() {
@@ -403,12 +425,12 @@ fn main() -> ExitCode {
                 evaluator,
                 SgdOptimizer::new(args.learning_rate, args.decay),
             );
-            run_epochs(trainer, &args, &mut plan, &interrupted)
+            run_epochs(trainer, &args, &mut plan, &val, &interrupted)
         }
         OptimizerKind::Adam => {
             println!("optimizer: adam (lr {})", args.learning_rate);
             let trainer = Trainer::new(evaluator, AdamOptimizer::new(args.learning_rate));
-            run_epochs(trainer, &args, &mut plan, &interrupted)
+            run_epochs(trainer, &args, &mut plan, &val, &interrupted)
         }
     }
 }
@@ -473,10 +495,48 @@ fn draw_progress(
     let _ = std::io::Write::flush(&mut std::io::stderr());
 }
 
+/// Mean squared error of `evaluator` over a held-out set, sharded across
+/// `threads`. This scores the frozen weights (no updates), so unlike the
+/// in-epoch training MSE it is a clean early-stopping signal.
+fn val_mse(evaluator: &Evaluator, val: &[Example], threads: usize) -> f64 {
+    if val.is_empty() {
+        return f64::NAN;
+    }
+    let sum: f64 = if threads > 1 {
+        let chunk = val.len().div_ceil(threads);
+        std::thread::scope(|scope| {
+            let handles: Vec<_> = val
+                .chunks(chunk)
+                .map(|part| {
+                    scope.spawn(move || {
+                        part.iter()
+                            .map(|ex| {
+                                let e = ex.score as f64 - evaluator.eval(&ex.board()) as f64;
+                                e * e
+                            })
+                            .sum::<f64>()
+                    })
+                })
+                .collect();
+            handles.into_iter().map(|h| h.join().unwrap()).sum()
+        })
+    } else {
+        val
+            .iter()
+            .map(|ex| {
+                let e = ex.score as f64 - evaluator.eval(&ex.board()) as f64;
+                e * e
+            })
+            .sum()
+    };
+    sum / val.len() as f64
+}
+
 fn run_epochs<O: Optimizer>(
     mut trainer: Trainer<O>,
     args: &Args,
     plan: &mut DataPlan,
+    val: &[Example],
     interrupted: &AtomicBool,
 ) -> ExitCode {
     let parallel = args.threads > 1 && args.optimizer == OptimizerKind::Sgd;
@@ -484,6 +544,13 @@ fn run_epochs<O: Optimizer>(
     // enough capacity, so later shards reuse the allocation instead of
     // handing the allocator a multi-gigabyte free/alloc pair every time.
     let mut examples: Vec<Example> = Vec::new();
+    // Best val MSE seen and where its weights live (<weights>.best).
+    let mut best_val = f64::INFINITY;
+    let best_path = {
+        let mut p = args.weights_path.clone().into_os_string();
+        p.push(".best");
+        PathBuf::from(p)
+    };
 
     for epoch in 1..=args.epochs {
         let t = Instant::now();
@@ -566,11 +633,25 @@ fn run_epochs<O: Optimizer>(
         eprint!("\r{:width$}\r", "", width = 90);
         let elapsed = t.elapsed().as_secs_f32();
         let per_sec = done as f32 / elapsed;
+        // The held-out score, if a val set was given. This is the honest
+        // signal; `stats.mse()` (train MSE) is measured on moving weights.
+        let vm = if val.is_empty() {
+            f64::NAN
+        } else {
+            val_mse(&trainer.evaluator, val, args.threads)
+        };
+        let is_best = vm < best_val; // false when vm is NaN (no val set)
+        let val_line = if val.is_empty() {
+            String::new()
+        } else {
+            format!("  val {vm:.4}{}", if is_best { " *best" } else { "" })
+        };
         println!(
-            "epoch {:>3}/{}: mse {:.4}  ({:.1}s, {:.0} pos/s)",
+            "epoch {:>3}/{}: mse {:.4}{}  ({:.1}s, {:.0} pos/s)",
             epoch,
             args.epochs,
             stats.mse(),
+            val_line,
             elapsed,
             per_sec
         );
@@ -588,6 +669,15 @@ fn run_epochs<O: Optimizer>(
             eprintln!("failed to save {}: {e}", args.weights_path.display());
             return ExitCode::FAILURE;
         }
+        // Keep the best-by-val weights separately: the last epoch is not
+        // necessarily the best, and this run overwrites `weights_path`.
+        if is_best {
+            best_val = vm;
+            if let Err(e) = trainer.evaluator.save_weights(&best_path) {
+                eprintln!("failed to save {}: {e}", best_path.display());
+                return ExitCode::FAILURE;
+            }
+        }
 
         if interrupted.load(Ordering::SeqCst) {
             println!(
@@ -599,6 +689,13 @@ fn run_epochs<O: Optimizer>(
     }
 
     println!("weights saved to {}", args.weights_path.display());
+    if best_val.is_finite() {
+        println!(
+            "best val mse {:.4} saved to {}",
+            best_val,
+            best_path.display()
+        );
+    }
     ExitCode::SUCCESS
 }
 

@@ -119,7 +119,9 @@ impl Evaluator {
     ///
     /// Mirrors `update_weights_with` for plain SGD: the step is
     /// `lr * (target - prediction)` on every active cell, with no per-cell
-    /// optimizer state to keep consistent between threads.
+    /// optimizer state to keep consistent between threads. Returns the mean
+    /// squared error over the eight variants — see `train` for why it must be
+    /// squared error and not mean-abs.
     ///
     /// # Safety
     /// `view` must come from this evaluator and no mutable borrow of the
@@ -147,7 +149,7 @@ impl Evaluator {
                 }
             }
             *view.num[stage].add(num_idx) += delta;
-            total += error.abs();
+            total += error * error;
         }
         total / 8.0
     }
@@ -522,14 +524,22 @@ impl Evaluator {
     /// Train on one labeled position with 8-fold symmetry augmentation:
     /// every rotation/mirror of the position shares the same value, so one
     /// sample teaches eight — this is the single biggest convergence win for
-    /// pattern-based Othello evaluators. Returns the mean absolute error
-    /// over the eight variants (before their respective updates).
+    /// pattern-based Othello evaluators. Returns the mean **squared** error
+    /// over the eight variants (each measured before its own update), so a
+    /// trainer summing the return gets a true MSE, comparable to `valmse`.
+    ///
+    /// (It must be squared error, not mean-abs: with zero weights all eight
+    /// variants predict 0 and the two agree, but as the model fits, the eight
+    /// predictions diverge and mean-abs shrinks faster than the RMS — squaring
+    /// after averaging the abs errors gives a number that can *rise* while the
+    /// real MSE keeps falling.)
     pub fn train(&mut self, board: &Board, target: f32, opt: &mut impl Optimizer) -> f32 {
-        let mut total_abs_err = 0.0f32;
+        let mut total_sq_err = 0.0f32;
         for sym in board.symmetries() {
-            total_abs_err += self.update_weights_with(&sym, target, opt).abs();
+            let e = self.update_weights_with(&sym, target, opt);
+            total_sq_err += e * e;
         }
-        total_abs_err / 8.0
+        total_sq_err / 8.0
     }
 
     /// Train from a finished self-play game with TD(λ)-style targets.
@@ -542,7 +552,8 @@ impl Evaluator {
     ///   λ = 1  -> pure Monte-Carlo (every position labeled with the outcome)
     ///   λ = 0  -> pure TD(0) (each position pulls toward the next eval)
     /// Positions are trained late-to-early so bootstrap targets use
-    /// already-updated (fresher) weights. Returns mean |error|.
+    /// already-updated (fresher) weights. Returns the mean over positions of
+    /// each position's mean squared error (see `train`).
     pub fn train_game(
         &mut self,
         history: &[Board],
@@ -554,7 +565,7 @@ impl Evaluator {
             return 0.0;
         }
 
-        let mut total_abs_err = 0.0f32;
+        let mut total_sq_err = 0.0f32;
         // Value seen from the position *after* each board, in that
         // position's own perspective. Start from the terminal outcome.
         let mut next_value_black_view = final_score;
@@ -573,7 +584,7 @@ impl Evaluator {
             };
 
             let target = lambda * outcome_here + (1.0 - lambda) * bootstrap_here;
-            total_abs_err += self.train(board, target, opt);
+            total_sq_err += self.train(board, target, opt);
 
             // The freshly-trained evaluation of this position becomes the
             // bootstrap for its predecessor (stored in Black's view).
@@ -585,7 +596,7 @@ impl Evaluator {
             };
         }
 
-        total_abs_err / history.len() as f32
+        total_sq_err / history.len() as f32
     }
 
     /// Save all stage weights to one binary file, atomically: data is

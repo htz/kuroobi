@@ -306,10 +306,13 @@ impl<O: Optimizer> Trainer<O> {
         for (i, ex) in examples.iter().enumerate() {
             let board = ex.board();
             let stage = Evaluator::stage(&board);
-            let err = self
+            // `train` already returns the mean squared error over the eight
+            // symmetries, so accumulate it directly — squaring it again gives
+            // (MSE)², which drifts away from the true loss as the model fits.
+            let mse = self
                 .evaluator
                 .train(&board, ex.score as f32, &mut self.optimizer);
-            stats.loss_sum[stage] += (err * err) as f64;
+            stats.loss_sum[stage] += mse as f64;
             stats.samples[stage] += 1;
 
             if (i + 1) & (PROGRESS_INTERVAL - 1) == 0 {
@@ -366,8 +369,9 @@ impl<O: Optimizer> Trainer<O> {
                         // SAFETY: the view came from `ev`, which is borrowed
                         // immutably for the whole scope, so no other kind of
                         // access to the weights is live.
-                        let err = unsafe { ev.train_shared(view, &board, ex.score as f32, lr) };
-                        st.loss_sum[stage] += (err * err) as f64;
+                        // train_shared returns MSE already; see train_pass.
+                        let mse = unsafe { ev.train_shared(view, &board, ex.score as f32, lr) };
+                        st.loss_sum[stage] += mse as f64;
                         st.samples[stage] += 1;
                         if (i + 1) & ((1 << 16) - 1) == 0 {
                             done.fetch_add(1 << 16, Ordering::Relaxed);
@@ -417,8 +421,9 @@ impl<O: Optimizer> Trainer<O> {
             let board = ex.board();
             let stage = Evaluator::stage(&board);
             // SAFETY: single-threaded here; see `train_epoch_parallel`.
-            let err = unsafe { ev.train_shared(&view, &board, ex.score as f32, lr) };
-            stats.loss_sum[stage] += (err * err) as f64;
+            // train_shared returns MSE already; see train_pass.
+            let mse = unsafe { ev.train_shared(&view, &board, ex.score as f32, lr) };
+            stats.loss_sum[stage] += mse as f64;
             stats.samples[stage] += 1;
             if (i + 1) & ((1 << 16) - 1) == 0 {
                 progress(i + 1, total);
