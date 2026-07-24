@@ -13,7 +13,12 @@
 //!                     (default weights.bin, saved after every epoch)
 //!   --patterns <set>  Pattern library: egaroucid | edax (default egaroucid)
 //!   --limit <n>       Use at most n examples per file (default all)
+//!   --max-examples <n> Examples held in RAM at once (default 64M, 0 = all)
 //!   --log <path>      Append per-epoch stage losses as CSV
+//!
+//! Data too large to fit in RAM is trained in **shards**: whole files are
+//! grouped up to `--max-examples`, and each epoch walks every shard, loading
+//! and dropping one at a time.
 
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
@@ -23,7 +28,19 @@ use std::time::Instant;
 
 use kuroobi::evaluator::{AdamOptimizer, Evaluator, Optimizer, SgdOptimizer, STAGE_COUNT};
 use kuroobi::pattern::{EDAX_PATTERNS, EGAROUCID_PATTERNS, EGAROUCID_PLUS_PATTERNS};
-use kuroobi::trainer::{load_examples_binary, load_examples_text, Example, Trainer};
+use kuroobi::trainer::{
+    count_examples_binary, load_examples_binary_into, load_examples_text_into, EpochStats, Example,
+    Trainer,
+};
+
+/// Examples kept in RAM at once when `--max-examples` is not given.
+/// An `Example` is 24 bytes, so this caps the sample buffer at ~1.5 GB —
+/// small enough to leave room for the 150 MB weight tables and the OS, and
+/// large enough that a shard is many minutes of training, not seconds.
+const DEFAULT_MAX_EXAMPLES: usize = 64_000_000;
+
+/// Bytes per `Example` in memory, for the reported budget.
+const EXAMPLE_BYTES: usize = std::mem::size_of::<Example>();
 
 struct Args {
     epochs: usize,
@@ -33,6 +50,7 @@ struct Args {
     weights_path: PathBuf,
     patterns: &'static str,
     limit: Option<usize>,
+    max_examples: Option<usize>,
     log_path: Option<PathBuf>,
     threads: usize,
     data_files: Vec<PathBuf>,
@@ -63,6 +81,10 @@ Options:
   --weights <path>  Weight file to load/save (default weights.bin)
   --patterns <set>  egaroucid | edax | egaroucid-plus (default egaroucid)
   --limit <n>       Max examples per file
+  --max-examples <n>
+                    Examples held in RAM at once (default 64000000, 0 = all).
+                    Datasets larger than this are split into shards of whole
+                    files; every epoch walks all shards, loading one at a time
   --log <path>      Append per-epoch stage losses as CSV
   -h, --help        Show this help";
 
@@ -76,6 +98,7 @@ fn parse_args() -> Result<Args, String> {
         weights_path: PathBuf::from("weights.bin"),
         patterns: "egaroucid",
         limit: None,
+        max_examples: Some(DEFAULT_MAX_EXAMPLES),
         log_path: None,
         data_files: Vec::new(),
     };
@@ -114,6 +137,12 @@ fn parse_args() -> Result<Args, String> {
                 }
             }
             "--limit" => args.limit = Some(value("--limit")?.parse().map_err(|e| format!("--limit: {e}"))?),
+            "--max-examples" => {
+                let n: usize = value("--max-examples")?
+                    .parse()
+                    .map_err(|e| format!("--max-examples: {e}"))?;
+                args.max_examples = (n > 0).then_some(n);
+            }
             "--log" => args.log_path = Some(PathBuf::from(value("--log")?)),
             "-h" | "--help" => return Err(USAGE.to_string()),
             other if other.starts_with('-') => return Err(format!("unknown option: {other}\n\n{USAGE}")),
@@ -139,16 +168,122 @@ fn parse_args() -> Result<Args, String> {
     Ok(args)
 }
 
-fn load_file(path: &Path, limit: Option<usize>) -> std::io::Result<Vec<Example>> {
-    let mut examples = if path.extension().is_some_and(|e| e == "txt") {
-        load_examples_text(path)?
+fn is_text(path: &Path) -> bool {
+    path.extension().is_some_and(|e| e == "txt")
+}
+
+/// Append one file's examples to `out`, returning how many were added.
+fn load_file_into(path: &Path, limit: Option<usize>, out: &mut Vec<Example>) -> std::io::Result<usize> {
+    if is_text(path) {
+        load_examples_text_into(path, out, limit)
     } else {
-        load_examples_binary(path)?
-    };
-    if let Some(n) = limit {
-        examples.truncate(n);
+        load_examples_binary_into(path, out, limit)
     }
-    Ok(examples)
+}
+
+/// The dataset, sized but not loaded.
+///
+/// Counts start as size-derived estimates so shards can be planned without
+/// reading 16 GB first; each file's entry is replaced by the true count once
+/// that file has actually been loaded.
+struct DataPlan {
+    files: Vec<PathBuf>,
+    counts: Vec<usize>,
+}
+
+/// A group of whole files that fit in the memory budget together.
+struct Shard {
+    files: Vec<usize>,
+    examples: usize,
+}
+
+impl DataPlan {
+    fn new(files: Vec<PathBuf>, limit: Option<usize>) -> std::io::Result<DataPlan> {
+        let mut counts = Vec::with_capacity(files.len());
+        for f in &files {
+            // Binary records are fixed-width so the count is exact. A text
+            // line is 64 board chars + separator + score + newline, i.e. at
+            // least 67 bytes, so dividing by 67 over-estimates — the safe
+            // direction for a memory budget.
+            let est = if is_text(f) {
+                std::fs::metadata(f)?.len() as usize / 67
+            } else {
+                count_examples_binary(f)?
+            };
+            counts.push(limit.map_or(est, |l| est.min(l)));
+        }
+        Ok(DataPlan { files, counts })
+    }
+
+    fn total(&self) -> usize {
+        self.counts.iter().sum()
+    }
+
+    /// Group files into shards no larger than `max` examples.
+    ///
+    /// `order` lets the caller vary which files share a shard between epochs,
+    /// so a fixed grouping does not become a fixed correlation in the data.
+    fn shards(&self, order: &[usize], max: Option<usize>) -> Vec<Shard> {
+        let mut shards: Vec<Shard> = Vec::new();
+        let mut cur = Shard { files: Vec::new(), examples: 0 };
+        for &i in order {
+            let n = self.counts[i];
+            if !cur.files.is_empty() && max.is_some_and(|m| cur.examples + n > m) {
+                shards.push(std::mem::replace(&mut cur, Shard { files: Vec::new(), examples: 0 }));
+            }
+            cur.files.push(i);
+            cur.examples += n;
+        }
+        if !cur.files.is_empty() {
+            shards.push(cur);
+        }
+        shards
+    }
+}
+
+/// xorshift64* — a deterministic stream, seeded per epoch and shard so runs
+/// reproduce exactly while the ordering still differs between passes.
+struct Rng(u64);
+
+impl Rng {
+    fn new(seed: u64) -> Rng {
+        // Any nonzero state works; mixing in a constant keeps seed 0 usable.
+        Rng(seed ^ 0x9E37_79B9_7F4A_7C15)
+    }
+
+    fn next(&mut self) -> u64 {
+        self.0 ^= self.0 >> 12;
+        self.0 ^= self.0 << 25;
+        self.0 ^= self.0 >> 27;
+        self.0.wrapping_mul(0x2545_F491_4F6C_DD1D)
+    }
+
+    /// In-place Fisher-Yates.
+    fn shuffle<T>(&mut self, items: &mut [T]) {
+        for i in (1..items.len()).rev() {
+            let j = (self.next() % (i as u64 + 1)) as usize;
+            items.swap(i, j);
+        }
+    }
+}
+
+fn fmt_count(n: usize) -> String {
+    if n >= 1_000_000 {
+        format!("{:.1}M", n as f64 / 1e6)
+    } else if n >= 1_000 {
+        format!("{:.0}k", n as f64 / 1e3)
+    } else {
+        n.to_string()
+    }
+}
+
+fn fmt_bytes(n: usize) -> String {
+    const GB: f64 = 1024.0 * 1024.0 * 1024.0;
+    if n as f64 >= GB {
+        format!("{:.1} GB", n as f64 / GB)
+    } else {
+        format!("{:.0} MB", n as f64 / (1024.0 * 1024.0))
+    }
 }
 
 fn append_log(path: &Path, epoch: usize, stats: &kuroobi::trainer::EpochStats) -> std::io::Result<()> {
@@ -189,42 +324,46 @@ fn main() -> ExitCode {
         _ => EGAROUCID_PATTERNS,
     };
 
-    // Load all examples up front
-    let mut examples: Vec<Example> = Vec::new();
-    for file in &args.data_files {
-        let t = Instant::now();
-        match load_file(file, args.limit) {
-            Ok(mut ex) => {
-                println!(
-                    "loaded {:>9} examples from {} ({:.1}s)",
-                    ex.len(),
-                    file.display(),
-                    t.elapsed().as_secs_f32()
-                );
-                examples.append(&mut ex);
-            }
-            Err(e) => {
-                eprintln!("failed to load {}: {e}", file.display());
-                return ExitCode::FAILURE;
-            }
+    // Size the dataset from file metadata only. Loading it all up front used
+    // to be the "read once, reuse across epochs" optimization, but at 16 GB
+    // on disk (and ~1.4x that in RAM) the machine dies before epoch 1; past
+    // a few GB the re-read is a rounding error next to the training itself.
+    let mut plan = match DataPlan::new(args.data_files.clone(), args.limit) {
+        Ok(p) => p,
+        Err(e) => {
+            eprintln!("failed to size input files: {e}");
+            return ExitCode::FAILURE;
         }
+    };
+    let identity: Vec<usize> = (0..plan.files.len()).collect();
+    let shard_count = plan.shards(&identity, args.max_examples).len();
+    println!(
+        "data: {} files, ~{} examples ({} in RAM if loaded at once)",
+        plan.files.len(),
+        fmt_count(plan.total()),
+        fmt_bytes(plan.total() * EXAMPLE_BYTES),
+    );
+    match args.max_examples {
+        Some(max) if shard_count > 1 => println!(
+            "shards: {shard_count} per epoch, up to {} examples ({}) resident",
+            fmt_count(max),
+            fmt_bytes(max * EXAMPLE_BYTES),
+        ),
+        _ => println!("shards: 1 (whole dataset fits the budget)"),
     }
-    println!("total: {} examples", examples.len());
-
-    // Deterministic Fisher-Yates shuffle: SGD assumes IID sample order, but
-    // concatenated multi-source datasets (e.g. per-opening-depth files) are
-    // grossly ordered — training in file order makes the model drift toward
-    // whichever source came last and the epoch loss creep upward.
-    {
-        let mut state = 0x9E3779B97F4A7C15u64;
-        for i in (1..examples.len()).rev() {
-            state ^= state >> 12;
-            state ^= state << 25;
-            state ^= state >> 27;
-            let j = (state.wrapping_mul(0x2545F4914F6CDD1D) % (i as u64 + 1)) as usize;
-            examples.swap(i, j);
+    // A file bigger than the budget cannot be split — shards are whole files.
+    if let Some(max) = args.max_examples {
+        for (f, &n) in plan.files.iter().zip(&plan.counts) {
+            if n > max {
+                eprintln!(
+                    "warning: {} alone holds ~{} examples, over the {} budget; \
+                     it will be loaded whole",
+                    f.display(),
+                    fmt_count(n),
+                    fmt_count(max),
+                );
+            }
         }
-        println!("shuffled (deterministic seed)");
     }
 
     // Evaluator: resume from an existing weight file when present
@@ -264,22 +403,37 @@ fn main() -> ExitCode {
                 evaluator,
                 SgdOptimizer::new(args.learning_rate, args.decay),
             );
-            run_epochs(trainer, &args, &examples, &interrupted)
+            run_epochs(trainer, &args, &mut plan, &interrupted)
         }
         OptimizerKind::Adam => {
             println!("optimizer: adam (lr {})", args.learning_rate);
             let trainer = Trainer::new(evaluator, AdamOptimizer::new(args.learning_rate));
-            run_epochs(trainer, &args, &examples, &interrupted)
+            run_epochs(trainer, &args, &mut plan, &interrupted)
         }
     }
 }
 
 /// Render an in-place progress bar on stderr:
-/// `epoch 3/100 [=========>          ]  45.2%  12.3M/25.5M  33k pos/s  ETA 6m32s`
-fn draw_progress(epoch: usize, epochs: usize, done: usize, total: usize, started: &Instant) {
+/// `epoch 3/100 shard 2/15 [=====>    ]  45.2%  12.3M/25.5M  33k pos/s  ETA 6m32s`
+///
+/// `done`/`total` count the whole epoch, not the current shard, so the bar
+/// advances monotonically across shard boundaries.
+fn draw_progress(
+    epoch: usize,
+    epochs: usize,
+    shard: (usize, usize),
+    done: usize,
+    total: usize,
+    started: &Instant,
+) {
     const BAR_WIDTH: usize = 24;
 
-    let frac = if total == 0 { 1.0 } else { done as f64 / total as f64 };
+    // Text-file counts are estimates, so `done` can overshoot `total`.
+    let frac = if total == 0 {
+        1.0
+    } else {
+        (done as f64 / total as f64).min(1.0)
+    };
     let filled = (frac * BAR_WIDTH as f64) as usize;
     let mut bar = String::with_capacity(BAR_WIDTH);
     for i in 0..BAR_WIDTH {
@@ -293,7 +447,7 @@ fn draw_progress(epoch: usize, epochs: usize, done: usize, total: usize, started
     let elapsed = started.elapsed().as_secs_f64();
     let per_sec = if elapsed > 0.0 { done as f64 / elapsed } else { 0.0 };
     let eta_secs = if per_sec > 0.0 {
-        ((total - done) as f64 / per_sec) as u64
+        (total.saturating_sub(done) as f64 / per_sec) as u64
     } else {
         0
     };
@@ -303,18 +457,14 @@ fn draw_progress(epoch: usize, epochs: usize, done: usize, total: usize, started
         format!("{eta_secs}s")
     };
 
-    let fmt_count = |n: usize| -> String {
-        if n >= 1_000_000 {
-            format!("{:.1}M", n as f64 / 1e6)
-        } else if n >= 1_000 {
-            format!("{:.0}k", n as f64 / 1e3)
-        } else {
-            n.to_string()
-        }
+    let shard_label = if shard.1 > 1 {
+        format!(" shard {}/{}", shard.0, shard.1)
+    } else {
+        String::new()
     };
 
     eprint!(
-        "\repoch {epoch}/{epochs} [{bar}] {:5.1}%  {}/{}  {:.0}k pos/s  ETA {eta}   ",
+        "\repoch {epoch}/{epochs}{shard_label} [{bar}] {:5.1}%  {}/{}  {:.0}k pos/s  ETA {eta}   ",
         frac * 100.0,
         fmt_count(done),
         fmt_count(total),
@@ -326,27 +476,96 @@ fn draw_progress(epoch: usize, epochs: usize, done: usize, total: usize, started
 fn run_epochs<O: Optimizer>(
     mut trainer: Trainer<O>,
     args: &Args,
-    examples: &[Example],
+    plan: &mut DataPlan,
     interrupted: &AtomicBool,
 ) -> ExitCode {
+    let parallel = args.threads > 1 && args.optimizer == OptimizerKind::Sgd;
+    // One buffer for the whole run: after the first shard it already holds
+    // enough capacity, so later shards reuse the allocation instead of
+    // handing the allocator a multi-gigabyte free/alloc pair every time.
+    let mut examples: Vec<Example> = Vec::new();
+
     for epoch in 1..=args.epochs {
         let t = Instant::now();
-        let stats = if args.threads > 1 && args.optimizer == OptimizerKind::Sgd {
-            // The decay schedule lives in the optimizer; mirror it here so
-            // the parallel path follows the same curve.
-            let lr = args.learning_rate * args.decay.powi(epoch as i32 - 1);
-            trainer.train_epoch_parallel(examples, lr, args.threads, |done, total| {
-                draw_progress(epoch, args.epochs, done, total, &t);
-            })
-        } else {
-            trainer.train_epoch_with_progress(examples, |done, total| {
-                draw_progress(epoch, args.epochs, done, total, &t);
-            })
-        };
+
+        // Vary which files share a shard between epochs: within a shard the
+        // examples are shuffled, but a fixed grouping would still mean two
+        // files never mix, and these sources differ systematically.
+        let mut order: Vec<usize> = (0..plan.files.len()).collect();
+        if epoch > 1 {
+            Rng::new(epoch as u64).shuffle(&mut order);
+        }
+        let shards = plan.shards(&order, args.max_examples);
+        let epoch_total: usize = shards.iter().map(|s| s.examples).sum();
+
+        let mut stats = EpochStats::default();
+        let mut done = 0usize;
+        for (si, shard) in shards.iter().enumerate() {
+            examples.clear();
+            for &fi in &shard.files {
+                let before = examples.len();
+                match load_file_into(&plan.files[fi], args.limit, &mut examples) {
+                    // Replace the size-derived estimate with the true count,
+                    // so the progress bar stops guessing from epoch 2 on.
+                    Ok(_) => plan.counts[fi] = examples.len() - before,
+                    Err(e) => {
+                        eprintln!("\nfailed to load {}: {e}", plan.files[fi].display());
+                        return ExitCode::FAILURE;
+                    }
+                }
+            }
+            // SGD assumes IID sample order, but these datasets are grossly
+            // ordered (per-opening-depth files, per-source directories);
+            // training in file order makes the model drift toward whichever
+            // source came last and the epoch loss creep upward.
+            Rng::new((epoch as u64) << 32 | si as u64).shuffle(&mut examples);
+
+            let progress = |n: usize, _total: usize| {
+                draw_progress(
+                    epoch,
+                    args.epochs,
+                    (si + 1, shards.len()),
+                    done + n,
+                    epoch_total,
+                    &t,
+                );
+            };
+            let shard_stats = if parallel {
+                // The decay schedule lives in the optimizer; mirror it here so
+                // the parallel path follows the same curve.
+                let lr = args.learning_rate * args.decay.powi(epoch as i32 - 1);
+                trainer.train_epoch_parallel(&examples, lr, args.threads, progress)
+            } else {
+                // `train_pass`, not `train_epoch_*`: the lr schedule advances
+                // once per epoch, not once per shard.
+                trainer.train_pass(&examples, progress)
+            };
+            stats.add(&shard_stats);
+            done += examples.len();
+
+            if interrupted.load(Ordering::SeqCst) {
+                eprint!("\r{:width$}\r", "", width = 90);
+                if let Err(e) = trainer.evaluator.save_weights(&args.weights_path) {
+                    eprintln!("failed to save {}: {e}", args.weights_path.display());
+                    return ExitCode::FAILURE;
+                }
+                println!(
+                    "stopped during epoch {epoch} (shard {}/{}); weights saved to {}",
+                    si + 1,
+                    shards.len(),
+                    args.weights_path.display()
+                );
+                return ExitCode::SUCCESS;
+            }
+        }
+        if !parallel {
+            trainer.optimizer.next_epoch();
+        }
+
         // Clear the progress line before printing the epoch summary
         eprint!("\r{:width$}\r", "", width = 90);
         let elapsed = t.elapsed().as_secs_f32();
-        let per_sec = examples.len() as f32 / elapsed;
+        let per_sec = done as f32 / elapsed;
         println!(
             "epoch {:>3}/{}: mse {:.4}  ({:.1}s, {:.0} pos/s)",
             epoch,
