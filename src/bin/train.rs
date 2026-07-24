@@ -53,6 +53,8 @@ struct Args {
     max_examples: Option<usize>,
     log_path: Option<PathBuf>,
     threads: usize,
+    swa: bool,
+    swa_start: usize,
     val_files: Vec<PathBuf>,
     data_files: Vec<PathBuf>,
 }
@@ -92,6 +94,13 @@ Options:
                     are still moving, so it is a poor stopping signal; the
                     val MSE is the honest one. When given, the weights with
                     the best val MSE are also saved to <weights>.best
+  --swa             Stochastic Weight Averaging: keep a running mean of the
+                    per-epoch weights and save it to <weights>.swa. On this
+                    convex (linear-model) loss the SGD iterates bounce around
+                    the true minimum; their average sits closer to it than any
+                    single epoch, so <weights>.swa usually beats <weights>.best
+  --swa-start <n>   First epoch folded into the SWA mean (default 2; earlier
+                    epochs are still settling from the start point)
   -h, --help        Show this help";
 
 fn parse_args() -> Result<Args, String> {
@@ -106,6 +115,8 @@ fn parse_args() -> Result<Args, String> {
         limit: None,
         max_examples: Some(DEFAULT_MAX_EXAMPLES),
         log_path: None,
+        swa: false,
+        swa_start: 2,
         val_files: Vec::new(),
         data_files: Vec::new(),
     };
@@ -152,6 +163,12 @@ fn parse_args() -> Result<Args, String> {
             }
             "--log" => args.log_path = Some(PathBuf::from(value("--log")?)),
             "--val" => args.val_files.push(PathBuf::from(value("--val")?)),
+            "--swa" => args.swa = true,
+            "--swa-start" => {
+                args.swa_start = value("--swa-start")?
+                    .parse()
+                    .map_err(|e| format!("--swa-start: {e}"))?
+            }
             "-h" | "--help" => return Err(USAGE.to_string()),
             other if other.starts_with('-') => return Err(format!("unknown option: {other}\n\n{USAGE}")),
             file => args.data_files.push(PathBuf::from(file)),
@@ -532,6 +549,56 @@ fn val_mse(evaluator: &Evaluator, val: &[Example], threads: usize) -> f64 {
     sum / val.len() as f64
 }
 
+/// Running mean of the per-epoch weight files, for Stochastic Weight
+/// Averaging. Folds each epoch's serialized weights (the `save_weights`
+/// output) so it never has to reach into the evaluator's internals: the
+/// header is captured once and the f32 payload is averaged in f64.
+struct SwaAccumulator {
+    header: Vec<u8>,
+    sum: Vec<f64>,
+    count: u64,
+    out: PathBuf,
+}
+
+impl SwaAccumulator {
+    /// Fold the current `weights_path` file into the mean.
+    fn fold(&mut self, weights_path: &Path) -> std::io::Result<()> {
+        let bytes = std::fs::read(weights_path)?;
+        if self.header.is_empty() {
+            // Header = magic(8) + stage u32 + pattern u32 + table_size u32
+            // each; capture it once and average the f32 payload thereafter.
+            let pattern_count = u32::from_le_bytes(bytes[12..16].try_into().unwrap()) as usize;
+            let header_len = 16 + 4 * pattern_count;
+            self.header = bytes[..header_len].to_vec();
+            self.sum = vec![0.0; (bytes.len() - header_len) / 4];
+        }
+        let payload = &bytes[self.header.len()..];
+        debug_assert_eq!(payload.len() / 4, self.sum.len());
+        for (i, chunk) in payload.chunks_exact(4).enumerate() {
+            self.sum[i] += f32::from_le_bytes(chunk.try_into().unwrap()) as f64;
+        }
+        self.count += 1;
+        Ok(())
+    }
+
+    /// Write the mean to `<weights>.swa`. Returns false if nothing was folded.
+    fn write(&self) -> std::io::Result<bool> {
+        if self.count == 0 {
+            return Ok(false);
+        }
+        let inv = 1.0 / self.count as f64;
+        let mut buf = self.header.clone();
+        buf.reserve(self.sum.len() * 4);
+        for &s in &self.sum {
+            buf.extend_from_slice(&((s * inv) as f32).to_le_bytes());
+        }
+        let tmp = self.out.with_extension("swa.tmp");
+        std::fs::write(&tmp, &buf)?;
+        std::fs::rename(&tmp, &self.out)?;
+        Ok(true)
+    }
+}
+
 fn run_epochs<O: Optimizer>(
     mut trainer: Trainer<O>,
     args: &Args,
@@ -551,6 +618,16 @@ fn run_epochs<O: Optimizer>(
         p.push(".best");
         PathBuf::from(p)
     };
+    let mut swa = args.swa.then(|| {
+        let mut p = args.weights_path.clone().into_os_string();
+        p.push(".swa");
+        SwaAccumulator {
+            header: Vec::new(),
+            sum: Vec::new(),
+            count: 0,
+            out: PathBuf::from(p),
+        }
+    });
 
     for epoch in 1..=args.epochs {
         let t = Instant::now();
@@ -678,8 +755,23 @@ fn run_epochs<O: Optimizer>(
                 return ExitCode::FAILURE;
             }
         }
+        // Fold this epoch into the SWA mean (past the warmup) and refresh the
+        // .swa file so it is available even if the run is interrupted.
+        if let Some(acc) = &mut swa {
+            if epoch >= args.swa_start {
+                if let Err(e) = acc.fold(&args.weights_path).and_then(|_| acc.write().map(|_| ())) {
+                    eprintln!("failed to update SWA: {e}");
+                    return ExitCode::FAILURE;
+                }
+            }
+        }
 
         if interrupted.load(Ordering::SeqCst) {
+            if let Some(acc) = &swa {
+                if acc.count > 0 {
+                    println!("SWA mean of {} epochs saved to {}", acc.count, acc.out.display());
+                }
+            }
             println!(
                 "stopped after epoch {epoch}; weights saved to {}",
                 args.weights_path.display()
@@ -695,6 +787,11 @@ fn run_epochs<O: Optimizer>(
             best_val,
             best_path.display()
         );
+    }
+    if let Some(acc) = &swa {
+        if acc.count > 0 {
+            println!("SWA mean of {} epochs saved to {}", acc.count, acc.out.display());
+        }
     }
     ExitCode::SUCCESS
 }
