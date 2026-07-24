@@ -1,6 +1,7 @@
 /target
 /train_data
 *.bin
+*.bin.best
 *.bin.orb
 *.csv
 selfplay_*.out
