@@ -39,7 +39,8 @@ use std::path::PathBuf;
 use std::process::{Child, ChildStdin, ChildStdout, Command, ExitCode, Stdio};
 
 use kuroobi::evaluator::Evaluator;
-use kuroobi::nnue::{Accumulator, Nnue};
+use kuroobi::nnue::Nnue;
+use kuroobi::pattern_index::PatternIndices;
 use kuroobi::zobrist;
 use kuroobi::pattern::{EDAX_PATTERNS, EGAROUCID_PATTERNS, EGAROUCID_PLUS_PATTERNS};
 use kuroobi::search::Searcher;
@@ -380,6 +381,8 @@ struct NnueSearch<'a> {
     nn: &'a Nnue,
     tt: Vec<TtEntry>,
     mask: u64,
+    /// Nodes visited, to diagnose ordering quality (effective branching).
+    pub nodes: u64,
 }
 
 impl<'a> NnueSearch<'a> {
@@ -391,6 +394,7 @@ impl<'a> NnueSearch<'a> {
                 1usize << bits
             ],
             mask: (1u64 << bits) - 1,
+            nodes: 0,
         }
     }
 
@@ -408,7 +412,7 @@ impl<'a> NnueSearch<'a> {
         if b.movable() == 0 {
             return None;
         }
-        let mut acc = self.nn.accumulator(b);
+        let mut acc = self.nn.indices(b.black, b.white);
         for d in 1..=depth {
             self.negamax(b, &mut acc, d, f32::NEG_INFINITY, f32::INFINITY);
         }
@@ -422,7 +426,7 @@ impl<'a> NnueSearch<'a> {
     }
 
     /// Children with their flip masks, best-first by 1-ply NNUE eval.
-    fn ordered(&self, b: &Board, acc: &mut Accumulator) -> Vec<(Position, u64, f32)> {
+    fn ordered(&self, b: &Board, acc: &mut PatternIndices) -> Vec<(Position, u64, f32)> {
         let mover = b.player();
         let mut kids = Vec::with_capacity(b.movable_count() as usize);
         let mut m = b.movable();
@@ -431,16 +435,17 @@ impl<'a> NnueSearch<'a> {
             m &= m - 1;
             let mut nb = *b;
             let flipped = nb.make_move_bits(pos);
-            self.nn.acc_apply(acc, pos, flipped, mover);
-            let key = -self.nn.eval_acc(acc, &nb);
-            self.nn.acc_undo(acc, pos, flipped, mover);
+            self.nn.ix_apply(acc, pos, flipped, mover);
+            let key = -self.nn.eval_from_indices(acc, &nb);
+            self.nn.ix_undo(acc, pos, flipped, mover);
             kids.push((pos, flipped, key));
         }
         kids.sort_unstable_by(|a, b| b.2.total_cmp(&a.2));
         kids
     }
 
-    fn negamax(&mut self, b: &Board, acc: &mut Accumulator, depth: u32, mut alpha: f32, beta: f32) -> f32 {
+    fn negamax(&mut self, b: &Board, acc: &mut PatternIndices, depth: u32, mut alpha: f32, beta: f32) -> f32 {
+        self.nodes += 1;
         if b.is_game_over() {
             let p = b.player_bb().count_ones() as i32;
             let o = b.opponent_bb().count_ones() as i32;
@@ -449,7 +454,7 @@ impl<'a> NnueSearch<'a> {
             return diff as f32 * 1000.0;
         }
         if depth == 0 {
-            return self.nn.eval_acc(acc, b);
+            return self.nn.eval_from_indices(acc, b);
         }
         if b.movable() == 0 {
             let mut nb = *b;
@@ -506,9 +511,9 @@ impl<'a> NnueSearch<'a> {
         for (pos, flipped, _) in kids {
             let mut nb = *b;
             nb.make_move_bits(pos);
-            self.nn.acc_apply(acc, pos, flipped, mover);
+            self.nn.ix_apply(acc, pos, flipped, mover);
             let v = -self.negamax(&nb, acc, depth - 1, -beta, -alpha);
-            self.nn.acc_undo(acc, pos, flipped, mover);
+            self.nn.ix_undo(acc, pos, flipped, mover);
             if v > best {
                 best = v;
                 best_move = pos.index() as u8;
@@ -737,5 +742,13 @@ fn main() -> ExitCode {
         (clock.ours / clock.our_moves.max(1) as f64)
             / (clock.edax / clock.edax_moves.max(1) as f64).max(1e-9)
     );
+    if let Some(s) = &nnue_search {
+        println!(
+            "nnue search: {} nodes over {} of our moves = {:.0} nodes/move",
+            s.nodes,
+            clock.our_moves,
+            s.nodes as f64 / clock.our_moves.max(1) as f64
+        );
+    }
     ExitCode::SUCCESS
 }

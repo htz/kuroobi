@@ -519,6 +519,20 @@ impl Nnue {
         self.indexer.init(black, white)
     }
 
+    /// Maintain the caller's pattern indices across a move — the cheap 2-byte
+    /// updates the leaf-rebuild path rides on (see
+    /// [`eval_from_indices`](Self::eval_from_indices)).
+    #[inline]
+    pub fn ix_apply(&self, ix: &mut PatternIndices, pos: Position, flipped: u64, mover: Color) {
+        self.indexer.apply(ix, pos, flipped, mover);
+    }
+
+    /// Exact inverse of [`ix_apply`](Self::ix_apply).
+    #[inline]
+    pub fn ix_undo(&self, ix: &mut PatternIndices, pos: Position, flipped: u64, mover: Color) {
+        self.indexer.undo(ix, pos, flipped, mover);
+    }
+
     /// Build a dual-perspective incremental accumulator for `board` (i16).
     ///
     /// The network is trained on Black-to-move absolute features, so a
