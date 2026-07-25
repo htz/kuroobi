@@ -452,7 +452,7 @@ impl<'a> NnueSearch<'a> {
         } else {
             {
                 let mut kids: [Kid; MAX_KIDS] = [(Position(0), 0, 0.0); MAX_KIDS];
-                let n = self.ordered_into(b, &mut acc, 1, &mut kids);
+                let n = self.ordered_into(b, &mut acc, 1, b.movable(), &mut kids);
                 (n > 0).then(|| kids[0].0)
             }
         }
@@ -477,12 +477,13 @@ impl<'a> NnueSearch<'a> {
         b: &Board,
         acc: &mut PatternIndices,
         depth: u32,
+        moves: u64,
         out: &mut [Kid; MAX_KIDS],
     ) -> usize {
         let mover = b.player();
         let eval_order = depth >= EVAL_ORDER_DEPTH;
         let mut n = 0usize;
-        let mut m = b.movable();
+        let mut m = moves;
         while m != 0 {
             let pos = Position::from_index(m.trailing_zeros()).unwrap();
             m &= m - 1;
@@ -507,20 +508,27 @@ impl<'a> NnueSearch<'a> {
 
     fn negamax(&mut self, b: &Board, acc: &mut PatternIndices, depth: u32, mut alpha: f32, beta: f32) -> f32 {
         self.nodes += 1;
-        if b.is_game_over() {
-            let p = b.player_bb().count_ones() as i32;
-            let o = b.opponent_bb().count_ones() as i32;
-            let e = 64 - p - o;
-            let diff = if p > o { p - o + e } else if o > p { p - o - e } else { 0 };
-            return diff as f32 * 1000.0;
+        // One move generation per node. `is_game_over()` generates moves for
+        // both sides internally, and the pass check and child loop each
+        // generated them again — three or four generations where one suffices.
+        let moves = b.movable();
+        if moves == 0 {
+            let mut nb = *b;
+            nb.pass();
+            if nb.movable() == 0 {
+                let p = b.player_bb().count_ones() as i32;
+                let o = b.opponent_bb().count_ones() as i32;
+                let e = 64 - p - o;
+                let diff = if p > o { p - o + e } else if o > p { p - o - e } else { 0 };
+                return diff as f32 * 1000.0;
+            }
+            if depth == 0 {
+                return self.nn.eval_from_indices(acc, b);
+            }
+            return -self.negamax(&nb, acc, depth, -beta, -alpha);
         }
         if depth == 0 {
             return self.nn.eval_from_indices(acc, b);
-        }
-        if b.movable() == 0 {
-            let mut nb = *b;
-            nb.pass();
-            return -self.negamax(&nb, acc, depth, -beta, -alpha);
         }
 
         let h = zobrist::board_hash(b.player_bb(), b.opponent_bb());
@@ -551,10 +559,10 @@ impl<'a> NnueSearch<'a> {
         // per-child eval scan. Only genuinely new deep nodes pay for it.
         let mut kids: [Kid; MAX_KIDS] = [(Position(0), 0, 0.0); MAX_KIDS];
         let n_kids = if tt_move >= 64 && depth >= 2 {
-            self.ordered_into(b, acc, depth, &mut kids)
+            self.ordered_into(b, acc, depth, moves, &mut kids)
         } else {
             let mut n = 0usize;
-            let mut m = b.movable();
+            let mut m = moves;
             while m != 0 {
                 let pos = Position::from_index(m.trailing_zeros()).unwrap();
                 m &= m - 1;
