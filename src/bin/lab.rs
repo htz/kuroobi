@@ -363,6 +363,28 @@ struct Clock {
 }
 
 /// (empties to the winner).
+/// Null-window width for PVS. The evaluator returns continuous disc
+/// differences, so a zero-width window can't separate "equal" from "better";
+/// a hundredth of a disc is far below any meaningful difference.
+const PVS_EPS: f32 = 0.01;
+
+/// From this remaining depth upward, order children by a full NNUE eval;
+/// shallower nodes use cheap mobility ordering (see `ordered`).
+const EVAL_ORDER_DEPTH: u32 = 3;
+
+/// Static square preference for cheap ordering (file-major): corners best,
+/// X-squares worst. Scaled to sit between mobility steps.
+const SQUARE_BIAS: [i8; 64] = [
+    30, -12, 0, -1, -1, 0, -12, 30,
+    -12, -15, -3, -3, -3, -3, -15, -12,
+    0, -3, 0, -1, -1, 0, -3, 0,
+    -1, -3, -1, -1, -1, -1, -3, -1,
+    -1, -3, -1, -1, -1, -1, -3, -1,
+    0, -3, 0, -1, -1, 0, -3, 0,
+    -12, -15, -3, -3, -3, -3, -15, -12,
+    30, -12, 0, -1, -1, 0, -12, 30,
+];
+
 /// One transposition-table slot for the NNUE search. `flag`: 0 empty,
 /// 1 exact, 2 lower bound, 3 upper bound.
 #[derive(Clone, Copy)]
@@ -421,23 +443,45 @@ impl<'a> NnueSearch<'a> {
         if e.key == h && e.best < 64 {
             Position::from_index(e.best as u32)
         } else {
-            self.ordered(b, &mut acc).first().map(|k| k.0)
+            self.ordered(b, &mut acc, 1).first().map(|k| k.0)
         }
     }
 
-    /// Children with their flip masks, best-first by 1-ply NNUE eval.
-    fn ordered(&self, b: &Board, acc: &mut PatternIndices) -> Vec<(Position, u64, f32)> {
+    /// Children with their flip masks, best-first.
+    ///
+    /// A full 1-ply eval per child is by far the most expensive thing this
+    /// search does — it is *not* counted as a node, yet it dominates the per
+    /// node cost. Keep it for the nodes where ordering quality
+    /// actually pays and use cheap mobility elsewhere:
+    ///
+    /// - deep nodes (`depth >= EVAL_ORDER_DEPTH`): NNUE eval, the strong signal
+    /// - shallow nodes: opponent mobility (fewer replies is better) plus a
+    ///   static square bias — no eval, no accumulator work at all
+    fn ordered(
+        &self,
+        b: &Board,
+        acc: &mut PatternIndices,
+        depth: u32,
+    ) -> Vec<(Position, u64, f32)> {
         let mover = b.player();
         let mut kids = Vec::with_capacity(b.movable_count() as usize);
+        let eval_order = depth >= EVAL_ORDER_DEPTH;
         let mut m = b.movable();
         while m != 0 {
             let pos = Position::from_index(m.trailing_zeros()).unwrap();
             m &= m - 1;
             let mut nb = *b;
             let flipped = nb.make_move_bits(pos);
-            self.nn.ix_apply(acc, pos, flipped, mover);
-            let key = -self.nn.eval_from_indices(acc, &nb);
-            self.nn.ix_undo(acc, pos, flipped, mover);
+            let key = if eval_order {
+                self.nn.ix_apply(acc, pos, flipped, mover);
+                let k = -self.nn.eval_from_indices(acc, &nb);
+                self.nn.ix_undo(acc, pos, flipped, mover);
+                k
+            } else {
+                // Restricting the opponent is the classic cheap proxy; the
+                // square bias breaks ties toward corners and away from X/C.
+                -(nb.movable_count() as f32) * 4.0 + SQUARE_BIAS[pos.index() as usize] as f32
+            };
             kids.push((pos, flipped, key));
         }
         kids.sort_unstable_by(|a, b| b.2.total_cmp(&a.2));
@@ -489,7 +533,7 @@ impl<'a> NnueSearch<'a> {
         // node) put it first over a cheap natural order — skip the expensive
         // per-child eval scan. Only genuinely new deep nodes pay for it.
         let mut kids = if tt_move >= 64 && depth >= 2 {
-            self.ordered(b, acc)
+            self.ordered(b, acc, depth)
         } else {
             let mut v = Vec::with_capacity(b.movable_count() as usize);
             let mut m = b.movable();
@@ -508,12 +552,29 @@ impl<'a> NnueSearch<'a> {
             }
         }
 
+        // PVS / NegaScout: full window for the best-ordered child, a null
+        // window for later siblings, re-searched only when one beats alpha.
+        // Same value as plain alpha-beta. (Measured: no node reduction here —
+        // the eval-based ordering already gets the effective branching to ~3,
+        // near the sqrt(b) ideal, so there is nothing left for PVS to prune.
+        // Kept because it costs nothing and helps when ordering degrades.)
+        let mut first = true;
         for (pos, flipped, _) in kids {
             let mut nb = *b;
             nb.make_move_bits(pos);
             self.nn.ix_apply(acc, pos, flipped, mover);
-            let v = -self.negamax(&nb, acc, depth - 1, -beta, -alpha);
+            let v = if first {
+                -self.negamax(&nb, acc, depth - 1, -beta, -alpha)
+            } else {
+                let probe = -self.negamax(&nb, acc, depth - 1, -(alpha + PVS_EPS), -alpha);
+                if probe > alpha && probe < beta {
+                    -self.negamax(&nb, acc, depth - 1, -beta, -probe)
+                } else {
+                    probe
+                }
+            };
             self.nn.ix_undo(acc, pos, flipped, mover);
+            first = false;
             if v > best {
                 best = v;
                 best_move = pos.index() as u8;
