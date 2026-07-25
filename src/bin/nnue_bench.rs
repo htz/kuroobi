@@ -116,6 +116,47 @@ macro_rules! walk_variant {
 walk_variant!(walk_i32, kuroobi::nnue::Accumulator32, accumulator_i32, acc_apply_i32, acc_undo_i32, eval_acc_i32);
 walk_variant!(walk_f32, kuroobi::nnue::AccumulatorF, accumulator_f32, acc_apply_f32, acc_undo_f32, eval_acc_f32);
 
+/// From-scratch-at-leaf variant: the interior nodes only pay the cheap 2-byte
+/// pattern-index update (exactly what the linear search already does), and the
+/// H accumulator is rebuilt at the leaf. Trades per-node accumulator upkeep for
+/// per-leaf accumulation — which wins depends on the leaf fraction and cache
+/// behaviour, so measure rather than guess.
+fn walk_scratch(
+    b: &Board,
+    nn: &Nnue,
+    ixr: &PatternIndexer,
+    ix: &mut PatternIndices,
+    depth: u32,
+    nodes: &mut u64,
+) -> f32 {
+    *nodes += 1;
+    if depth == 0 || b.is_game_over() {
+        return nn.eval_from_indices(ix, b);
+    }
+    let moves = b.movable();
+    if moves == 0 {
+        let mut nb = *b;
+        nb.pass();
+        return -walk_scratch(&nb, nn, ixr, ix, depth, nodes);
+    }
+    let mut best = f32::NEG_INFINITY;
+    let mut m = moves;
+    while m != 0 {
+        let pos = Position::from_index(m.trailing_zeros()).unwrap();
+        m &= m - 1;
+        let mover = b.player();
+        let mut nb = *b;
+        let flipped = nb.make_move_bits(pos);
+        ixr.apply(ix, pos, flipped, mover);
+        let v = -walk_scratch(&nb, nn, ixr, ix, depth - 1, nodes);
+        ixr.undo(ix, pos, flipped, mover);
+        if v > best {
+            best = v;
+        }
+    }
+    best
+}
+
 fn main() {
     let mut nnue_path = PathBuf::from("nnue.bin");
     let mut depth = 8u32;
@@ -229,8 +270,18 @@ fn main() {
         t.elapsed().as_secs_f64()
     };
 
+    // Leaf-rebuild variant (no per-node accumulator upkeep).
+    let sec_s = {
+        let mut ix2 = ixr.init(b.black, b.white);
+        let mut nodes = 0u64;
+        let t = Instant::now();
+        walk_scratch(&b, &nn, &ixr, &mut ix2, depth, &mut nodes);
+        t.elapsed().as_secs_f64()
+    };
+
     let mnps = |s: f64| nodes_l as f64 / s / 1e6;
     println!("linear:  {:.2} Mnps  (1.00x)", mnps(sec_l));
+    println!("nnue leaf-rebuild: {:.2} Mnps  ({:.2}x)", mnps(sec_s), sec_s / sec_l);
     println!("nnue f32: {:.2} Mnps  ({:.2}x)", mnps(sec_f), sec_f / sec_l);
     println!("nnue i32: {:.2} Mnps  ({:.2}x)", mnps(sec_32), sec_32 / sec_l);
     println!("nnue i16: {:.2} Mnps  ({:.2}x)", mnps(sec_n), sec_n / sec_l);

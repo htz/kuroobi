@@ -214,14 +214,22 @@ impl Nnue {
     /// Build the int16 inference copies from the trained f32 weights. Call
     /// after loading/training and before any accumulator use in search.
     ///
-    /// Scales are chosen so a single feature entry maps to at most ~256 (the
-    /// 64-mask accumulator then stays well inside i16) and the read-out
-    /// weights fill the i16 range.
+    /// A feature entry maps to at most ~256, so the ~64-mask accumulator (plus
+    /// bias) stays under ~16.6k — well inside i16.
+    ///
+    /// The read-out scale is then bounded by the **i32** lanes `readout_dot`
+    /// accumulates in on NEON (`vmlal_s16`): `acc_max · w_max · H` must fit in
+    /// i32, i.e. `w_max ≤ 2^31 / (16640 · H)`. Filling the full i16 range here
+    /// silently overflows those lanes and flips the sign of the score, so keep
+    /// the margin — the lost precision is immaterial (see the f32/i16 MSE
+    /// comparison: 0.05 disc² at 8x this resolution).
     pub fn quantize(&mut self) {
+        const ACC_MAX: f32 = 16_640.0; // 64 masks x 256 + bias
         let ft_max = self.ft.iter().fold(1e-6f32, |m, &v| m.max(v.abs()));
         let w_max = self.out_w.iter().fold(1e-6f32, |m, &v| m.max(v.abs()));
         let ft_scale = 256.0 / ft_max;
-        let w_scale = 32000.0 / w_max;
+        let w_limit = (i32::MAX as f32 / (ACC_MAX * H as f32)).min(32_000.0);
+        let w_scale = w_limit / w_max;
         self.out_scale = 1.0 / (ft_scale * w_scale);
 
         let q = |v: f32, s: f32| (v * s).round().clamp(-32768.0, 32767.0) as i16;
@@ -769,3 +777,57 @@ macro_rules! quant_acc {
 }
 quant_acc!(Accumulator32, i32, accumulator_i32, acc_apply_i32, acc_undo_i32, acc_square_i32, ftc_i32, ft_bias_i32);
 quant_acc!(AccumulatorF, f32, accumulator_f32, acc_apply_f32, acc_undo_f32, acc_square_f32, ftc_f32, ft_bias_f32);
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::pattern::EGAROUCID_PATTERNS;
+
+    /// A small deterministic model: every quantized path must agree with the
+    /// f32 forward pass (within quantization error) on a played-out sequence,
+    /// for both colours to move.
+    #[test]
+    fn test_eval_paths_agree() {
+        let mut nn = Nnue::new(EGAROUCID_PATTERNS);
+        nn.init_weights();
+        // Give the transformer some structure so the paths can disagree if the
+        // layouts (interleaving, digit swap) are wrong.
+        let mut s: u64 = 0x1234_5678;
+        for v in nn.ft.iter_mut() {
+            s ^= s >> 12;
+            s ^= s << 25;
+            s ^= s >> 27;
+            *v = ((s >> 40) as i32 as f32) / 8.0e6;
+        }
+        nn.quantize();
+
+        let mut board = Board::new();
+        let mut acc = nn.accumulator(&board);
+        for _ in 0..12 {
+            let scratch = nn.eval(&board);
+            let inc = nn.eval_acc(&acc, &board);
+            let ix = nn.indices(board.black, board.white);
+            let from_ix = nn.eval_from_indices(&ix, &board);
+
+            assert!(
+                (inc - scratch).abs() < 1.0,
+                "incremental {inc} vs scratch {scratch} (player {:?})",
+                board.player()
+            );
+            assert!(
+                (from_ix - inc).abs() < 1e-3,
+                "from_indices {from_ix} vs incremental {inc}: both are the same \
+                 quantized computation and must match exactly"
+            );
+
+            let moves = board.movable();
+            if moves == 0 {
+                break;
+            }
+            let pos = Position::from_index(moves.trailing_zeros()).unwrap();
+            let mover = board.player();
+            let flipped = board.make_move_bits(pos);
+            nn.acc_apply(&mut acc, pos, flipped, mover);
+        }
+    }
+}
