@@ -42,7 +42,7 @@ const H2: usize = 2 * H;
 /// NEON on aarch64 (int16x8, so H2=32 is four vector ops), scalar elsewhere.
 #[inline]
 unsafe fn acc_row_addsub(acc: &mut [i16; H2], new: *const i16, old: *const i16) {
-    #[cfg(target_arch = "aarch64")]
+    #[cfg(all(target_arch = "aarch64", not(feature = "nnue-scalar")))]
     {
         use std::arch::aarch64::*;
         let mut i = 0;
@@ -59,7 +59,7 @@ unsafe fn acc_row_addsub(acc: &mut [i16; H2], new: *const i16, old: *const i16) 
             i += 1;
         }
     }
-    #[cfg(not(target_arch = "aarch64"))]
+    #[cfg(any(not(target_arch = "aarch64"), feature = "nnue-scalar"))]
     {
         for i in 0..H2 {
             acc[i] = acc[i].wrapping_add((*new.add(i)).wrapping_sub(*old.add(i)));
@@ -71,7 +71,7 @@ unsafe fn acc_row_addsub(acc: &mut [i16; H2], new: *const i16, old: *const i16) 
 /// NEON widening multiply on aarch64, scalar elsewhere. Called once per leaf.
 #[inline]
 fn readout_dot(acc: &[i16], w: &[i16]) -> i64 {
-    #[cfg(target_arch = "aarch64")]
+    #[cfg(all(target_arch = "aarch64", not(feature = "nnue-scalar")))]
     unsafe {
         use std::arch::aarch64::*;
         let zero = vdupq_n_s16(0);
@@ -91,7 +91,7 @@ fn readout_dot(acc: &[i16], w: &[i16]) -> i64 {
         }
         acc64
     }
-    #[cfg(not(target_arch = "aarch64"))]
+    #[cfg(any(not(target_arch = "aarch64"), feature = "nnue-scalar"))]
     {
         let mut sum: i64 = 0;
         for h in 0..H {
@@ -157,6 +157,14 @@ pub struct Nnue {
     /// Scale back the i64 read-out accumulation into disc-difference f32:
     /// `1 / (ft_scale * w_scale)`.
     out_scale: f32,
+
+    // Precision-comparison paths (i32 and interleaved f32), built by quantize.
+    ftc_i32: Vec<i32>,
+    ft_bias_i32: [i32; H2],
+    out_w_i32: Vec<i32>,
+    out_scale_i32: f32,
+    ftc_f32: Vec<f32>,
+    ft_bias_f32: [f32; H2],
 }
 
 impl Nnue {
@@ -194,6 +202,12 @@ impl Nnue {
             ft_bias_i16: [0; H2],
             out_w_i16: vec![0; STAGE_COUNT * H],
             out_scale: 0.0,
+            ftc_i32: Vec::new(),
+            ft_bias_i32: [0; H2],
+            out_w_i32: vec![0; STAGE_COUNT * H],
+            out_scale_i32: 0.0,
+            ftc_f32: Vec::new(),
+            ft_bias_f32: [0.0; H2],
         }
     }
 
@@ -226,16 +240,61 @@ impl Nnue {
         }
         self.out_w_i16 = self.out_w.iter().map(|&v| q(v, w_scale)).collect();
 
-        // Fill the White half of each feature from its digit-swapped index.
+        // Fill the White half of each i16 feature from its digit-swapped index.
         // Orientations of one pattern share a table (rewritten identically).
         for m in 0..self.n_masks {
             let base = self.mask_off[m] as usize;
             let size = self.patterns[self.indexer.mask_patterns()[m] as usize].table_size();
             for i in 0..size {
-                let src = (base + self.indexer.swapped_index(m, i)) * H2; // Black row of swapped idx
-                let dst = (base + i) * H2 + H; // White half of this idx
+                let src = (base + self.indexer.swapped_index(m, i)) * H2;
+                let dst = (base + i) * H2 + H;
                 for h in 0..H {
                     self.ftc_i16[dst + h] = self.ftc_i16[src + h];
+                }
+            }
+        }
+    }
+
+    /// Build the i32/f32 comparison tables (78 MB each). Bench only — the
+    /// search uses just the i16 path built by [`quantize`](Self::quantize).
+    pub fn build_precision_variants(&mut self) {
+        let ft_max = self.ft.iter().fold(1e-6f32, |m, &v| m.max(v.abs()));
+        let w_max = self.out_w.iter().fold(1e-6f32, |m, &v| m.max(v.abs()));
+        // i32 path: 8x finer scale than i16 (near-f32 precision).
+        let ft_scale32 = 2048.0 / ft_max;
+        let w_scale32 = 262144.0 / w_max;
+        self.out_scale_i32 = 1.0 / (ft_scale32 * w_scale32);
+        self.ftc_i32 = vec![0; self.n_features * H2];
+        for f in 0..self.n_features {
+            for h in 0..H {
+                self.ftc_i32[f * H2 + h] = (self.ft[f * H + h] * ft_scale32).round() as i32;
+            }
+        }
+        // f32 path: interleaved, no quantization (reference precision).
+        self.ftc_f32 = vec![0.0; self.n_features * H2];
+        for f in 0..self.n_features {
+            for h in 0..H {
+                self.ftc_f32[f * H2 + h] = self.ft[f * H + h];
+            }
+        }
+        for h in 0..H {
+            self.ft_bias_i32[h] = (self.ft_bias[h] * ft_scale32).round() as i32;
+            self.ft_bias_i32[H + h] = self.ft_bias_i32[h];
+            self.ft_bias_f32[h] = self.ft_bias[h];
+            self.ft_bias_f32[H + h] = self.ft_bias[h];
+        }
+        self.out_w_i32 = self.out_w.iter().map(|&v| (v * w_scale32).round() as i32).collect();
+
+        // Fill the White halves from digit-swapped indices (both variants).
+        for m in 0..self.n_masks {
+            let base = self.mask_off[m] as usize;
+            let size = self.patterns[self.indexer.mask_patterns()[m] as usize].table_size();
+            for i in 0..size {
+                let src = (base + self.indexer.swapped_index(m, i)) * H2;
+                let dst = (base + i) * H2 + H;
+                for h in 0..H {
+                    self.ftc_i32[dst + h] = self.ftc_i32[src + h];
+                    self.ftc_f32[dst + h] = self.ftc_f32[src + h];
                 }
             }
         }
@@ -419,6 +478,34 @@ impl Nnue {
         self.out_b[stage] + sum as f32 * self.out_scale
     }
 
+    /// i32-precision read-out (finer quantization than i16).
+    #[inline]
+    pub fn eval_acc_i32(&self, acc: &Accumulator32, board: &Board) -> f32 {
+        let stage = crate::evaluator::Evaluator::stage(board);
+        let v = if board.player() == Color::Black { &acc.acc[0..H] } else { &acc.acc[H..H2] };
+        let ow = &self.out_w_i32[stage * H..stage * H + H];
+        let mut sum: i64 = 0;
+        for h in 0..H {
+            sum += v[h].max(0) as i64 * ow[h] as i64;
+        }
+        self.out_b[stage] + sum as f32 * self.out_scale_i32
+    }
+
+    /// f32-precision read-out (reference, no quantization).
+    #[inline]
+    pub fn eval_acc_f32(&self, acc: &AccumulatorF, board: &Board) -> f32 {
+        let stage = crate::evaluator::Evaluator::stage(board);
+        let v = if board.player() == Color::Black { &acc.acc[0..H] } else { &acc.acc[H..H2] };
+        let ow = &self.out_w[stage * H..stage * H + H];
+        let mut sum = 0.0f32;
+        for h in 0..H {
+            if v[h] > 0.0 {
+                sum += v[h] * ow[h];
+            }
+        }
+        self.out_b[stage] + sum
+    }
+
     /// One SGD step on a Black-to-move example at `stage`. Returns squared error.
     ///
     /// Single hidden layer: `out = b[s] + Σ_h w[s][h]·relu(acc[h])`,
@@ -592,3 +679,64 @@ impl Nnue {
         Ok(())
     }
 }
+
+/// Generate an incremental accumulator + update methods for a non-wrapping
+/// element type (i32 or f32), mirroring the i16 path. Used only to compare
+/// precision/speed; the i16 path stays the production one.
+macro_rules! quant_acc {
+    ($Acc:ident, $T:ty, $build:ident, $apply:ident, $undo:ident, $sq:ident, $ftc:ident, $bias:ident) => {
+        #[derive(Clone)]
+        pub struct $Acc {
+            indices: PatternIndices,
+            acc: [$T; H2],
+        }
+        impl Nnue {
+            pub fn $build(&self, board: &Board) -> $Acc {
+                let indices = self.indexer.init(board.black, board.white);
+                let mut acc = self.$bias;
+                for m in 0..self.n_masks {
+                    let f = (self.mask_off[m] as usize + indices.raw()[m] as usize) * H2;
+                    for i in 0..H2 {
+                        acc[i] += self.$ftc[f + i];
+                    }
+                }
+                $Acc { indices, acc }
+            }
+            pub fn $apply(&self, acc: &mut $Acc, pos: Position, flipped: u64, mover: Color) {
+                let md = mover.index() as u16;
+                self.$sq(acc, pos.index(), md.wrapping_sub(2));
+                let fd = md.wrapping_sub(1 - md);
+                let mut f = flipped;
+                while f != 0 { let s = f.trailing_zeros() as u8; f &= f - 1; self.$sq(acc, s, fd); }
+            }
+            pub fn $undo(&self, acc: &mut $Acc, pos: Position, flipped: u64, mover: Color) {
+                let md = mover.index() as u16;
+                self.$sq(acc, pos.index(), 2u16.wrapping_sub(md));
+                let fd = (1 - md).wrapping_sub(md);
+                let mut f = flipped;
+                while f != 0 { let s = f.trailing_zeros() as u8; f &= f - 1; self.$sq(acc, s, fd); }
+            }
+            #[inline]
+            fn $sq(&self, acc: &mut $Acc, sq: u8, digit_diff: u16) {
+                let ftc = &self.$ftc;
+                let raw = acc.indices.raw_mut();
+                let vec = &mut acc.acc;
+                for e in self.indexer.square_entries(sq) {
+                    let mask = e.mask as usize;
+                    let delta = digit_diff.wrapping_mul(e.pow3);
+                    let old = raw[mask] as usize;
+                    let new = raw[mask].wrapping_add(delta) as usize;
+                    raw[mask] = new as u16;
+                    let base = self.mask_off[mask] as usize;
+                    let no = (base + new) * H2;
+                    let oo = (base + old) * H2;
+                    for i in 0..H2 {
+                        vec[i] += ftc[no + i] - ftc[oo + i];
+                    }
+                }
+            }
+        }
+    };
+}
+quant_acc!(Accumulator32, i32, accumulator_i32, acc_apply_i32, acc_undo_i32, acc_square_i32, ftc_i32, ft_bias_i32);
+quant_acc!(AccumulatorF, f32, accumulator_f32, acc_apply_f32, acc_undo_f32, acc_square_f32, ftc_f32, ft_bias_f32);

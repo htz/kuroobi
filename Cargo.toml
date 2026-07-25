@@ -21,6 +21,9 @@ random = ["rand"]
 node-accounting = []
 # Sample where search time goes, by empty count and phase. Measurement only.
 layer-profile = []
+# Force the scalar NNUE accumulator path even on aarch64 (to measure the
+# NEON speedup). Off by default; NEON is used automatically on aarch64.
+nnue-scalar = []
 
 [[bench]]
 name = "core"
