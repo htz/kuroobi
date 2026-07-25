@@ -23,9 +23,9 @@ pub const MAX_MASKS: usize = 80;
 /// One differential update: mask `mask`'s index changes by
 /// `digit_diff * pow3` when the square owning this entry changes color.
 #[derive(Clone, Copy)]
-struct UpdateEntry {
-    mask: u16,
-    pow3: u16,
+pub struct UpdateEntry {
+    pub mask: u16,
+    pub pow3: u16,
 }
 
 /// The per-mask ternary indices of one position (absolute colors).
@@ -192,6 +192,15 @@ impl PatternIndexer {
             f &= f - 1;
             self.update_square(indices, sq, flip_diff);
         }
+    }
+
+    /// The update entries for square `sq` (mask + pow3), for callers that
+    /// want to drive the loop themselves (NNUE accumulator) without a closure.
+    #[inline]
+    pub fn square_entries(&self, sq: u8) -> &[UpdateEntry] {
+        let start = self.offsets[sq as usize] as usize;
+        let end = self.offsets[sq as usize + 1] as usize;
+        &self.entries[start..end]
     }
 
     /// For each mask containing `sq`, call `f(mask, delta)` where `delta` is

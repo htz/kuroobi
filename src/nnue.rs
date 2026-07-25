@@ -386,21 +386,22 @@ impl Nnue {
     #[inline]
     fn acc_square(&self, acc: &mut Accumulator, sq: u8, digit_diff: u16) {
         let ftc = self.ftc_i16.as_ptr();
-        let mask_off = &self.mask_off;
-        let idx = &mut acc.indices;
+        let raw = acc.indices.raw_mut();
         let vec = &mut acc.acc;
-        self.indexer.for_square_updates(sq, digit_diff, |mask, delta| {
-            let raw = idx.raw_mut();
+        // Direct loop over the affected masks (no closure), so the compiler can
+        // keep the accumulator in registers across the whole square update.
+        for e in self.indexer.square_entries(sq) {
+            let mask = e.mask as usize;
+            let delta = digit_diff.wrapping_mul(e.pow3);
             let old = raw[mask] as usize;
             let new = raw[mask].wrapping_add(delta) as usize;
             raw[mask] = new as u16;
-            let base = mask_off[mask] as usize;
-            // One 2H-wide add/sub maintains both perspectives.
+            let base = self.mask_off[mask] as usize;
             // SAFETY: offsets stay within their pattern tables.
             unsafe {
                 acc_row_addsub(vec, ftc.add((base + new) * H2), ftc.add((base + old) * H2));
             }
-        });
+        }
     }
 
     /// Evaluate from the incremental accumulator (side-to-move perspective).
