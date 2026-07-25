@@ -379,18 +379,42 @@ const MAX_KIDS: usize = 34;
 /// shallower nodes use cheap mobility ordering (see `ordered`).
 const EVAL_ORDER_DEPTH: u32 = 3;
 
-/// ProbCut (Multi-ProbCut's single-probe form): from this remaining depth up,
-/// a shallow search decides whether the node is far enough outside the window
-/// to skip entirely. The head-to-head opponents prune this way at deep
-/// levels, so a fair deep comparison needs it on both sides.
-const MPC_MIN_DEPTH: u32 = 5;
+/// Multi-ProbCut: from this remaining depth up, a shallow search decides
+/// whether the node lies far enough outside the window to skip entirely.
+/// Strong engines prune this way at deep settings, so a fair deep comparison
+/// needs it on both sides.
+const MPC_MIN_DEPTH: u32 = 4;
 
-/// Depth taken off for the probe search.
-const MPC_REDUCTION: u32 = 3;
+/// Confidence in standard deviations of the shallow search's prediction error.
+/// The same knob is often expressed as a selectivity percentage (74% ~ 1.13σ).
+const MPC_T: f32 = 1.1;
 
-/// How far outside the window the probe must land, in discs. Wider = safer and
-/// slower; selectivity ladders express the same knob as a percentage.
-const MPC_MARGIN: f32 = 4.0;
+/// How deeply ProbCut may nest. A single level leaves the deep tree barely
+/// pruned; letting the probe itself prune is what makes MPC "multi".
+const MPC_MAX_LEVEL: u32 = 3;
+
+/// Probe depth for a node at `depth`, mirroring the linear searcher's rule
+/// (keeps the parity of `depth`, which matters because odd and even plies
+/// evaluate from opposite sides).
+fn mpc_reduced_depth(depth: u32) -> u32 {
+    2 * (depth / 4) + (depth & 1)
+}
+
+/// Standard deviation of the error between a `pc_depth` search and a `depth`
+/// search at `empties` empties. Fitted from measurements for this pattern
+/// evaluator (see `search::mpc_sigma`); the NNUE output is in the same
+/// disc-difference units, and it is *more* accurate, so this is a safe
+/// (slightly conservative) model to prune against.
+fn mpc_sigma(empties: u32, depth: u32, pc_depth: u32) -> f32 {
+    const A: f32 = -0.068941;
+    const B: f32 = 0.368775;
+    const C: f32 = -0.713476;
+    const QA: f32 = 0.010223;
+    const QB: f32 = 0.647219;
+    const QC: f32 = 4.050545;
+    let s = A * empties as f32 + B * depth as f32 + C * pc_depth as f32;
+    QA * s * s + QB * s + QC
+}
 
 /// Static square preference for cheap ordering (file-major): corners best,
 /// X-squares worst. Scaled to sit between mobility steps.
@@ -427,6 +451,8 @@ struct NnueSearch<'a> {
     pub nodes: u64,
     /// Enable ProbCut (selective pruning).
     pub mpc: bool,
+    /// How many ProbCut probes are nested above this node.
+    probcut_level: u32,
 }
 
 impl<'a> NnueSearch<'a> {
@@ -440,6 +466,7 @@ impl<'a> NnueSearch<'a> {
             mask: (1u64 << bits) - 1,
             nodes: 0,
             mpc: false,
+            probcut_level: 0,
         }
     }
 
@@ -565,19 +592,40 @@ impl<'a> NnueSearch<'a> {
             }
         }
 
-        // ProbCut: a reduced-depth null-window probe decides whether this node
-        // lies so far outside [alpha, beta] that searching it in full cannot
-        // change the parent's decision. Skipped at the root window (infinite
-        // bounds carry no information to probe against).
-        if self.mpc && depth >= MPC_MIN_DEPTH && alpha.is_finite() && beta.is_finite() {
-            let pd = depth - MPC_REDUCTION;
-            let hi = beta + MPC_MARGIN;
-            if self.negamax(b, acc, pd, hi - PVS_EPS, hi) >= hi {
-                return beta;
-            }
-            let lo = alpha - MPC_MARGIN;
-            if self.negamax(b, acc, pd, lo, lo + PVS_EPS) <= lo {
-                return alpha;
+        // Multi-ProbCut: a reduced-depth null-window probe decides whether this
+        // node lies so far outside [alpha, beta] that a full search cannot
+        // change the parent's decision. The margin is T sigma of the shallow
+        // search's error, so it tightens as the probe gets closer to full
+        // depth — a single fixed margin under-prunes exactly where the tree is
+        // largest. Only at null-window nodes (never on the PV), and the probe
+        // may itself prune up to MPC_MAX_LEVEL deep.
+        if self.mpc
+            && depth >= MPC_MIN_DEPTH
+            && self.probcut_level < MPC_MAX_LEVEL
+            && alpha.is_finite()
+            && beta.is_finite()
+            && beta - alpha <= PVS_EPS * 1.5
+        {
+            let pd = mpc_reduced_depth(depth);
+            if pd >= 1 && pd < depth {
+                let margin = MPC_T * mpc_sigma(b.empty_count() as u32, depth, pd);
+                self.probcut_level += 1;
+                let hi = beta + margin;
+                let high = self.negamax(b, acc, pd, hi - PVS_EPS, hi);
+                let cut = if high >= hi {
+                    Some(beta)
+                } else {
+                    let lo = alpha - margin;
+                    if self.negamax(b, acc, pd, lo, lo + PVS_EPS) <= lo {
+                        Some(alpha)
+                    } else {
+                        None
+                    }
+                };
+                self.probcut_level -= 1;
+                if let Some(v) = cut {
+                    return v;
+                }
             }
         }
 
