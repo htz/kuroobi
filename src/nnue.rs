@@ -152,6 +152,11 @@ pub struct Nnue {
     /// (H) then the pre-swapped White row (H). One contiguous 2H add/sub then
     /// maintains both perspectives, halving the loads in the hot loop.
     ftc_i16: Vec<i16>,
+    /// Split (non-interleaved) copies for the leaf-rebuild path, which reads
+    /// only the side to move: `ft_b_i16[feature*H..]` / `ft_w_i16[feature*H..]`.
+    /// Halves the bytes touched per mask versus striding the interleaved table.
+    ft_b_i16: Vec<i16>,
+    ft_w_i16: Vec<i16>,
     ft_bias_i16: [i16; H2],
     out_w_i16: Vec<i16>,
     /// Scale back the i64 read-out accumulation into disc-difference f32:
@@ -199,6 +204,8 @@ impl Nnue {
             out_w: vec![0.0; STAGE_COUNT * H],
             out_b: vec![0.0; STAGE_COUNT],
             ftc_i16: Vec::new(),
+            ft_b_i16: Vec::new(),
+            ft_w_i16: Vec::new(),
             ft_bias_i16: [0; H2],
             out_w_i16: vec![0; STAGE_COUNT * H],
             out_scale: 0.0,
@@ -260,6 +267,17 @@ impl Nnue {
                     self.ftc_i16[dst + h] = self.ftc_i16[src + h];
                 }
             }
+        }
+
+        // Split copies for the leaf-rebuild path: one stream per perspective,
+        // so a leaf touches H (not 2H) bytes per mask.
+        self.ft_b_i16 = vec![0; self.n_features * H];
+        self.ft_w_i16 = vec![0; self.n_features * H];
+        for f in 0..self.n_features {
+            let src = f * H2;
+            let dst = f * H;
+            self.ft_b_i16[dst..dst + H].copy_from_slice(&self.ftc_i16[src..src + H]);
+            self.ft_w_i16[dst..dst + H].copy_from_slice(&self.ftc_i16[src + H..src + H2]);
         }
     }
 
@@ -369,17 +387,19 @@ impl Nnue {
     #[inline]
     pub fn eval_from_indices(&self, indices: &PatternIndices, board: &Board) -> f32 {
         let stage = crate::evaluator::Evaluator::stage(board);
-        let white = board.player() != Color::Black;
-        let bias_off = if white { H } else { 0 }; // ft_bias halves are equal
-        let row_off = if white { H } else { 0 };
+        let ft = if board.player() == Color::Black {
+            &self.ft_b_i16
+        } else {
+            &self.ft_w_i16
+        };
         let mut acc = [0i16; H];
-        for (h, a) in acc.iter_mut().enumerate() {
-            *a = self.ft_bias_i16[bias_off + h];
-        }
+        acc.copy_from_slice(&self.ft_bias_i16[..H]); // halves are equal
         let raw = indices.raw();
         for m in 0..self.n_masks {
-            let base = (self.mask_off[m] as usize + raw[m] as usize) * H2 + row_off;
-            let row = &self.ftc_i16[base..base + H];
+            let base = (self.mask_off[m] as usize + raw[m] as usize) * H;
+            // SAFETY: indices stay inside their pattern's table (the invariant
+            // the scalar sum relies on), so base + H is in bounds.
+            let row = unsafe { ft.get_unchecked(base..base + H) };
             for h in 0..H {
                 acc[h] = acc[h].wrapping_add(row[h]);
             }
