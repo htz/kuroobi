@@ -67,6 +67,82 @@ unsafe fn acc_row_addsub(acc: &mut [i16; H2], new: *const i16, old: *const i16) 
     }
 }
 
+/// Sum the `n` masks' transformer rows into `acc` (leaf rebuild).
+///
+/// The naive loop adds every row into one accumulator, so 64 dependent adds
+/// serialise behind each other and the random row loads cannot overlap. Four
+/// independent partial accumulators break that chain — integer addition is
+/// associative, so the result is bit-identical — and the rows for later masks
+/// are prefetched while the current ones are being added.
+///
+/// # Safety
+/// Every `mask_off[m] + raw[m]` must index a valid feature, i.e.
+/// `(mask_off[m] + raw[m]) * H + H <= ft_len`.
+#[inline]
+unsafe fn accumulate_rows(
+    acc: &mut [i16; H],
+    ft: *const i16,
+    mask_off: &[u32],
+    raw: &[u16; MAX_MASKS],
+    n: usize,
+) {
+    #[inline(always)]
+    unsafe fn row(ft: *const i16, mask_off: &[u32], raw: &[u16; MAX_MASKS], m: usize) -> *const i16 {
+        ft.add((*mask_off.get_unchecked(m) as usize + *raw.get_unchecked(m) as usize) * H)
+    }
+
+    #[cfg(all(target_arch = "aarch64", not(feature = "nnue-scalar")))]
+    {
+        use std::arch::aarch64::*;
+        // H=16 i16 = two 128-bit vectors; keep four partial sums of each half.
+        let mut p: [[int16x8_t; 2]; 4] = [[vdupq_n_s16(0); 2]; 4];
+        const PREFETCH_AHEAD: usize = 8;
+
+        let mut m = 0;
+        while m + 4 <= n {
+            if m + PREFETCH_AHEAD < n {
+                for k in 0..4 {
+                    let ptr = row(ft, mask_off, raw, m + PREFETCH_AHEAD + k);
+                    std::arch::asm!("prfm pldl1keep, [{p}]", p = in(reg) ptr, options(nostack, readonly));
+                }
+            }
+            for (k, part) in p.iter_mut().enumerate() {
+                let r = row(ft, mask_off, raw, m + k);
+                part[0] = vaddq_s16(part[0], vld1q_s16(r));
+                if H > 8 {
+                    part[1] = vaddq_s16(part[1], vld1q_s16(r.add(8)));
+                }
+            }
+            m += 4;
+        }
+        // Fold the partials, then the tail masks.
+        let lo = vaddq_s16(vaddq_s16(p[0][0], p[1][0]), vaddq_s16(p[2][0], p[3][0]));
+        let hi = vaddq_s16(vaddq_s16(p[0][1], p[1][1]), vaddq_s16(p[2][1], p[3][1]));
+        let a0 = vaddq_s16(vld1q_s16(acc.as_ptr()), lo);
+        vst1q_s16(acc.as_mut_ptr(), a0);
+        if H > 8 {
+            let a1 = vaddq_s16(vld1q_s16(acc.as_ptr().add(8)), hi);
+            vst1q_s16(acc.as_mut_ptr().add(8), a1);
+        }
+        while m < n {
+            let r = row(ft, mask_off, raw, m);
+            for h in 0..H {
+                *acc.get_unchecked_mut(h) = (*acc.get_unchecked(h)).wrapping_add(*r.add(h));
+            }
+            m += 1;
+        }
+    }
+    #[cfg(any(not(target_arch = "aarch64"), feature = "nnue-scalar"))]
+    {
+        for m in 0..n {
+            let r = row(ft, mask_off, raw, m);
+            for h in 0..H {
+                *acc.get_unchecked_mut(h) = (*acc.get_unchecked(h)).wrapping_add(*r.add(h));
+            }
+        }
+    }
+}
+
 /// `Σ_h relu(acc[h]) · w[h]` (i64) over H int16 lanes, ReLU on the fly.
 /// NEON widening multiply on aarch64, scalar elsewhere. Called once per leaf.
 #[inline]
@@ -394,15 +470,10 @@ impl Nnue {
         };
         let mut acc = [0i16; H];
         acc.copy_from_slice(&self.ft_bias_i16[..H]); // halves are equal
-        let raw = indices.raw();
-        for m in 0..self.n_masks {
-            let base = (self.mask_off[m] as usize + raw[m] as usize) * H;
-            // SAFETY: indices stay inside their pattern's table (the invariant
-            // the scalar sum relies on), so base + H is in bounds.
-            let row = unsafe { ft.get_unchecked(base..base + H) };
-            for h in 0..H {
-                acc[h] = acc[h].wrapping_add(row[h]);
-            }
+        // SAFETY: indices stay inside their pattern's table (the invariant the
+        // scalar sum relies on), so every base + H is in bounds.
+        unsafe {
+            accumulate_rows(&mut acc, ft.as_ptr(), &self.mask_off, indices.raw(), self.n_masks);
         }
         let ow = &self.out_w_i16[stage * H..stage * H + H];
         let sum = readout_dot(&acc, ow);
