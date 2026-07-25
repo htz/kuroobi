@@ -34,33 +34,70 @@ use crate::position::Position;
 /// non-linearity survives well below 64.
 pub const H: usize = 16;
 
-/// `acc[h] += new[h] - old[h]` over `H` int16 lanes. NEON on aarch64
-/// (int16x8, so H=16 is two vector ops), scalar elsewhere.
+/// Both perspectives' rows stored/updated together (Black then White), so one
+/// contiguous add/sub maintains the whole accumulator per feature change.
+const H2: usize = 2 * H;
+
+/// `acc[i] += new[i] - old[i]` over `H2` int16 lanes (both perspectives).
+/// NEON on aarch64 (int16x8, so H2=32 is four vector ops), scalar elsewhere.
 #[inline]
-unsafe fn acc_row_addsub(acc: &mut [i16; H], new: *const i16, old: *const i16) {
+unsafe fn acc_row_addsub(acc: &mut [i16; H2], new: *const i16, old: *const i16) {
     #[cfg(target_arch = "aarch64")]
     {
         use std::arch::aarch64::*;
-        let mut h = 0;
-        while h + 8 <= H {
-            let a = vld1q_s16(acc.as_ptr().add(h));
-            let n = vld1q_s16(new.add(h));
-            let o = vld1q_s16(old.add(h));
-            let r = vaddq_s16(a, vsubq_s16(n, o));
-            vst1q_s16(acc.as_mut_ptr().add(h), r);
-            h += 8;
+        let mut i = 0;
+        while i + 8 <= H2 {
+            let a = vld1q_s16(acc.as_ptr().add(i));
+            let n = vld1q_s16(new.add(i));
+            let o = vld1q_s16(old.add(i));
+            vst1q_s16(acc.as_mut_ptr().add(i), vaddq_s16(a, vsubq_s16(n, o)));
+            i += 8;
         }
-        while h < H {
-            let v = (*acc.get_unchecked(h)).wrapping_add((*new.add(h)).wrapping_sub(*old.add(h)));
-            *acc.get_unchecked_mut(h) = v;
-            h += 1;
+        while i < H2 {
+            let v = (*acc.get_unchecked(i)).wrapping_add((*new.add(i)).wrapping_sub(*old.add(i)));
+            *acc.get_unchecked_mut(i) = v;
+            i += 1;
         }
     }
     #[cfg(not(target_arch = "aarch64"))]
     {
-        for h in 0..H {
-            acc[h] = acc[h].wrapping_add((*new.add(h)).wrapping_sub(*old.add(h)));
+        for i in 0..H2 {
+            acc[i] = acc[i].wrapping_add((*new.add(i)).wrapping_sub(*old.add(i)));
         }
+    }
+}
+
+/// `Σ_h relu(acc[h]) · w[h]` (i64) over H int16 lanes, ReLU on the fly.
+/// NEON widening multiply on aarch64, scalar elsewhere. Called once per leaf.
+#[inline]
+fn readout_dot(acc: &[i16], w: &[i16]) -> i64 {
+    #[cfg(target_arch = "aarch64")]
+    unsafe {
+        use std::arch::aarch64::*;
+        let zero = vdupq_n_s16(0);
+        let mut sum = vdupq_n_s32(0);
+        let mut h = 0;
+        while h + 8 <= H {
+            let a = vmaxq_s16(vld1q_s16(acc.as_ptr().add(h)), zero); // ReLU
+            let ww = vld1q_s16(w.as_ptr().add(h));
+            sum = vmlal_s16(sum, vget_low_s16(a), vget_low_s16(ww));
+            sum = vmlal_high_s16(sum, a, ww);
+            h += 8;
+        }
+        let mut acc64 = vaddvq_s32(sum) as i64;
+        while h < H {
+            acc64 += (*acc.get_unchecked(h)).max(0) as i64 * *w.get_unchecked(h) as i64;
+            h += 1;
+        }
+        acc64
+    }
+    #[cfg(not(target_arch = "aarch64"))]
+    {
+        let mut sum: i64 = 0;
+        for h in 0..H {
+            sum += acc[h].max(0) as i64 * w[h] as i64;
+        }
+        sum
     }
 }
 
@@ -74,8 +111,8 @@ unsafe fn acc_row_addsub(acc: &mut [i16; H], new: *const i16, old: *const i16) {
 #[derive(Clone)]
 pub struct Accumulator {
     indices: PatternIndices,
-    black: [i16; H],
-    white: [i16; H],
+    /// `[Black perspective (H) | White perspective (H)]`, maintained together.
+    acc: [i16; H2],
 }
 
 /// Raw pointers into an [`Nnue`]'s trainable arrays for Hogwild SGD.
@@ -111,8 +148,11 @@ pub struct Nnue {
     out_b: Vec<f32>,
 
     // Quantized inference copies (built by `quantize`).
-    ft_i16: Vec<i16>,
-    ft_bias_i16: [i16; H],
+    /// Interleaved transformer: `ftc_i16[feature*H2 ..]` holds the Black row
+    /// (H) then the pre-swapped White row (H). One contiguous 2H add/sub then
+    /// maintains both perspectives, halving the loads in the hot loop.
+    ftc_i16: Vec<i16>,
+    ft_bias_i16: [i16; H2],
     out_w_i16: Vec<i16>,
     /// Scale back the i64 read-out accumulation into disc-difference f32:
     /// `1 / (ft_scale * w_scale)`.
@@ -150,8 +190,8 @@ impl Nnue {
             ft_bias: vec![0.0; H],
             out_w: vec![0.0; STAGE_COUNT * H],
             out_b: vec![0.0; STAGE_COUNT],
-            ft_i16: Vec::new(),
-            ft_bias_i16: [0; H],
+            ftc_i16: Vec::new(),
+            ft_bias_i16: [0; H2],
             out_w_i16: vec![0; STAGE_COUNT * H],
             out_scale: 0.0,
         }
@@ -170,19 +210,35 @@ impl Nnue {
         let w_scale = 32000.0 / w_max;
         self.out_scale = 1.0 / (ft_scale * w_scale);
 
-        self.ft_i16 = self
-            .ft
-            .iter()
-            .map(|&v| (v * ft_scale).round().clamp(-32768.0, 32767.0) as i16)
-            .collect();
-        for h in 0..H {
-            self.ft_bias_i16[h] = (self.ft_bias[h] * ft_scale).round().clamp(-32768.0, 32767.0) as i16;
+        let q = |v: f32, s: f32| (v * s).round().clamp(-32768.0, 32767.0) as i16;
+
+        // Black rows first (interleaved White filled in below).
+        self.ftc_i16 = vec![0; self.n_features * H2];
+        for f in 0..self.n_features {
+            for h in 0..H {
+                self.ftc_i16[f * H2 + h] = q(self.ft[f * H + h], ft_scale);
+            }
         }
-        self.out_w_i16 = self
-            .out_w
-            .iter()
-            .map(|&v| (v * w_scale).round().clamp(-32768.0, 32767.0) as i16)
-            .collect();
+        for h in 0..H {
+            let b = q(self.ft_bias[h], ft_scale);
+            self.ft_bias_i16[h] = b;
+            self.ft_bias_i16[H + h] = b;
+        }
+        self.out_w_i16 = self.out_w.iter().map(|&v| q(v, w_scale)).collect();
+
+        // Fill the White half of each feature from its digit-swapped index.
+        // Orientations of one pattern share a table (rewritten identically).
+        for m in 0..self.n_masks {
+            let base = self.mask_off[m] as usize;
+            let size = self.patterns[self.indexer.mask_patterns()[m] as usize].table_size();
+            for i in 0..size {
+                let src = (base + self.indexer.swapped_index(m, i)) * H2; // Black row of swapped idx
+                let dst = (base + i) * H2 + H; // White half of this idx
+                for h in 0..H {
+                    self.ftc_i16[dst + h] = self.ftc_i16[src + h];
+                }
+            }
+        }
     }
 
     pub fn n_features(&self) -> usize {
@@ -285,19 +341,15 @@ impl Nnue {
     /// leaf eval is O(H). Needs [`quantize`](Self::quantize).
     pub fn accumulator(&self, board: &Board) -> Accumulator {
         let indices = self.indexer.init(board.black, board.white);
-        let mut black = self.ft_bias_i16;
-        let mut white = self.ft_bias_i16;
+        let mut acc = self.ft_bias_i16;
         for m in 0..self.n_masks {
             let raw = indices.raw()[m] as usize;
-            let base = self.mask_off[m] as usize;
-            let bf = (base + raw) * H;
-            let wf = (base + self.indexer.swapped_index(m, raw)) * H;
-            for h in 0..H {
-                black[h] = black[h].wrapping_add(self.ft_i16[bf + h]);
-                white[h] = white[h].wrapping_add(self.ft_i16[wf + h]);
+            let f = (self.mask_off[m] as usize + raw) * H2;
+            for i in 0..H2 {
+                acc[i] = acc[i].wrapping_add(self.ftc_i16[f + i]);
             }
         }
-        Accumulator { indices, black, white }
+        Accumulator { indices, acc }
     }
 
     /// Update `acc` for `mover` playing `pos` and flipping `flipped`. Mirrors
@@ -333,27 +385,20 @@ impl Nnue {
     /// its feature vector into both accumulators (add new row, subtract old).
     #[inline]
     fn acc_square(&self, acc: &mut Accumulator, sq: u8, digit_diff: u16) {
-        let ft = &self.ft_i16;
+        let ftc = self.ftc_i16.as_ptr();
         let mask_off = &self.mask_off;
-        let indexer = &self.indexer;
         let idx = &mut acc.indices;
-        let black = &mut acc.black;
-        let white = &mut acc.white;
-        indexer.for_square_updates(sq, digit_diff, |mask, delta| {
+        let vec = &mut acc.acc;
+        self.indexer.for_square_updates(sq, digit_diff, |mask, delta| {
             let raw = idx.raw_mut();
             let old = raw[mask] as usize;
             let new = raw[mask].wrapping_add(delta) as usize;
             raw[mask] = new as u16;
             let base = mask_off[mask] as usize;
-            let bo = (base + old) * H;
-            let bn = (base + new) * H;
-            let wo = (base + indexer.swapped_index(mask, old)) * H;
-            let wn = (base + indexer.swapped_index(mask, new)) * H;
-            // SAFETY: offsets stay within their pattern tables (same invariant
-            // the scalar sum relies on); slices are exactly H long.
+            // One 2H-wide add/sub maintains both perspectives.
+            // SAFETY: offsets stay within their pattern tables.
             unsafe {
-                acc_row_addsub(black, ft.as_ptr().add(bn), ft.as_ptr().add(bo));
-                acc_row_addsub(white, ft.as_ptr().add(wn), ft.as_ptr().add(wo));
+                acc_row_addsub(vec, ftc.add((base + new) * H2), ftc.add((base + old) * H2));
             }
         });
     }
@@ -362,14 +407,14 @@ impl Nnue {
     #[inline]
     pub fn eval_acc(&self, acc: &Accumulator, board: &Board) -> f32 {
         let stage = crate::evaluator::Evaluator::stage(board);
-        let v = if board.player() == Color::Black { &acc.black } else { &acc.white };
+        let v = if board.player() == Color::Black {
+            &acc.acc[0..H]
+        } else {
+            &acc.acc[H..H2]
+        };
         let ow = &self.out_w_i16[stage * H..stage * H + H];
         // out = bias + scale · Σ relu(acc[h]) · out_w[h]
-        let mut sum: i64 = 0;
-        for h in 0..H {
-            let a = v[h].max(0) as i64; // ReLU
-            sum += a * ow[h] as i64;
-        }
+        let sum = readout_dot(v, ow);
         self.out_b[stage] + sum as f32 * self.out_scale
     }
 
