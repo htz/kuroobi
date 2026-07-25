@@ -42,6 +42,11 @@ impl PatternIndices {
     pub fn raw(&self) -> &[u16; MAX_MASKS] {
         &self.idx
     }
+
+    #[inline]
+    pub fn raw_mut(&mut self) -> &mut [u16; MAX_MASKS] {
+        &mut self.idx
+    }
 }
 
 /// Static lookup tables for one pattern library: square -> affected masks,
@@ -186,6 +191,19 @@ impl PatternIndexer {
             let sq = f.trailing_zeros() as u8;
             f &= f - 1;
             self.update_square(indices, sq, flip_diff);
+        }
+    }
+
+    /// For each mask containing `sq`, call `f(mask, delta)` where `delta` is
+    /// the (wrapping) index change `digit_diff * pow3`. Lets an NNUE
+    /// accumulator update its H-vector alongside the scalar index, sharing the
+    /// same CSR of affected masks that `update_square` walks.
+    #[inline]
+    pub fn for_square_updates(&self, sq: u8, digit_diff: u16, mut f: impl FnMut(usize, u16)) {
+        let start = self.offsets[sq as usize] as usize;
+        let end = self.offsets[sq as usize + 1] as usize;
+        for e in &self.entries[start..end] {
+            f(e.mask as usize, digit_diff.wrapping_mul(e.pow3));
         }
     }
 

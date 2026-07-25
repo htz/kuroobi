@@ -27,9 +27,20 @@ use crate::color::Color;
 use crate::evaluator::STAGE_COUNT;
 use crate::pattern::Pattern;
 use crate::pattern_index::{PatternIndexer, PatternIndices, MAX_MASKS};
+use crate::position::Position;
 
 /// Accumulator width (feature-transformer output dimension).
 pub const H: usize = 64;
+
+/// Incrementally-maintained network input for search: the pattern indices
+/// plus both perspectives' H-dim accumulators. Updated on make/unmake so a
+/// leaf eval is O(H) instead of an O(features·H) rebuild.
+#[derive(Clone)]
+pub struct Accumulator {
+    indices: PatternIndices,
+    black: Vec<f32>,
+    white: Vec<f32>,
+}
 
 /// Raw pointers into an [`Nnue`]'s trainable arrays for Hogwild SGD.
 pub struct NnueView {
@@ -187,6 +198,105 @@ impl Nnue {
     /// Build the pattern indices for a Black-to-move position (training path).
     pub fn indices(&self, black: u64, white: u64) -> PatternIndices {
         self.indexer.init(black, white)
+    }
+
+    /// Build a dual-perspective incremental accumulator for `board`.
+    ///
+    /// The network is trained on Black-to-move absolute features, so a
+    /// White-to-move position must be scored from the colour-swapped view.
+    /// Two accumulators are kept — `black` over absolute features, `white`
+    /// over swap-indexed features — and both are updated incrementally so
+    /// either side's leaf eval is O(H), never a from-scratch rebuild.
+    pub fn accumulator(&self, board: &Board) -> Accumulator {
+        let indices = self.indexer.init(board.black, board.white);
+        let mut black = self.ft_bias.clone();
+        let mut white = self.ft_bias.clone();
+        for m in 0..self.n_masks {
+            let raw = indices.raw()[m] as usize;
+            let base = self.mask_off[m] as usize;
+            let bf = (base + raw) * H;
+            let wf = (base + self.indexer.swapped_index(m, raw)) * H;
+            for h in 0..H {
+                black[h] += self.ft[bf + h];
+                white[h] += self.ft[wf + h];
+            }
+        }
+        Accumulator { indices, black, white }
+    }
+
+    /// Update `acc` for `mover` playing `pos` and flipping `flipped`. Mirrors
+    /// `PatternIndexer::apply` (placed empty→mover, flips opponent→mover).
+    #[inline]
+    pub fn acc_apply(&self, acc: &mut Accumulator, pos: Position, flipped: u64, mover: Color) {
+        let md = mover.index() as u16;
+        self.acc_square(acc, pos.index(), md.wrapping_sub(2));
+        let flip_diff = md.wrapping_sub(1 - md);
+        let mut f = flipped;
+        while f != 0 {
+            let sq = f.trailing_zeros() as u8;
+            f &= f - 1;
+            self.acc_square(acc, sq, flip_diff);
+        }
+    }
+
+    /// Exact inverse of [`acc_apply`](Self::acc_apply).
+    #[inline]
+    pub fn acc_undo(&self, acc: &mut Accumulator, pos: Position, flipped: u64, mover: Color) {
+        let md = mover.index() as u16;
+        self.acc_square(acc, pos.index(), 2u16.wrapping_sub(md));
+        let flip_diff = (1 - md).wrapping_sub(md);
+        let mut f = flipped;
+        while f != 0 {
+            let sq = f.trailing_zeros() as u8;
+            f &= f - 1;
+            self.acc_square(acc, sq, flip_diff);
+        }
+    }
+
+    /// One square's colour change: shift every affected mask's index and swap
+    /// its feature vector into both accumulators.
+    #[inline]
+    fn acc_square(&self, acc: &mut Accumulator, sq: u8, digit_diff: u16) {
+        let ft = &self.ft;
+        let mask_off = &self.mask_off;
+        let indexer = &self.indexer;
+        let idx = &mut acc.indices;
+        let black = &mut acc.black;
+        let white = &mut acc.white;
+        indexer.for_square_updates(sq, digit_diff, |mask, delta| {
+            let raw = idx.raw_mut();
+            let old = raw[mask] as usize;
+            let new = raw[mask].wrapping_add(delta) as usize;
+            raw[mask] = new as u16;
+            let base = mask_off[mask] as usize;
+            let bo = (base + old) * H;
+            let bn = (base + new) * H;
+            let wo = (base + indexer.swapped_index(mask, old)) * H;
+            let wn = (base + indexer.swapped_index(mask, new)) * H;
+            for h in 0..H {
+                black[h] += ft[bn + h] - ft[bo + h];
+                white[h] += ft[wn + h] - ft[wo + h];
+            }
+        });
+    }
+
+    /// Evaluate from the incremental accumulator (side-to-move perspective).
+    #[inline]
+    pub fn eval_acc(&self, acc: &Accumulator, board: &Board) -> f32 {
+        let stage = crate::evaluator::Evaluator::stage(board);
+        let v = if board.player() == Color::Black {
+            &acc.black
+        } else {
+            &acc.white
+        };
+        let ow = &self.out_w[stage * H..stage * H + H];
+        let mut out = self.out_b[stage];
+        for h in 0..H {
+            if v[h] > 0.0 {
+                out += ow[h] * v[h];
+            }
+        }
+        out
     }
 
     /// One SGD step on a Black-to-move example at `stage`. Returns squared error.
