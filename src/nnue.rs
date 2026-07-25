@@ -143,6 +143,72 @@ unsafe fn accumulate_rows(
     }
 }
 
+/// [`accumulate_rows`] over an i8 transformer: each row is half the bytes, so
+/// the random reads that bound the leaf rebuild move half the memory. The i8
+/// lanes are widened to i16 before summing (64 rows of ≤127 stay inside i16).
+///
+/// # Safety
+/// Same bound as [`accumulate_rows`].
+#[inline]
+unsafe fn accumulate_rows_i8(
+    acc: &mut [i16; H],
+    ft: *const i8,
+    mask_off: &[u32],
+    raw: &[u16; MAX_MASKS],
+    n: usize,
+) {
+    #[inline(always)]
+    unsafe fn row(ft: *const i8, mask_off: &[u32], raw: &[u16; MAX_MASKS], m: usize) -> *const i8 {
+        ft.add((*mask_off.get_unchecked(m) as usize + *raw.get_unchecked(m) as usize) * H)
+    }
+
+    #[cfg(all(target_arch = "aarch64", not(feature = "nnue-scalar")))]
+    {
+        use std::arch::aarch64::*;
+        // Four partial sums to break the dependency chain, as in the i16 path.
+        let mut p: [[int16x8_t; 2]; 4] = [[vdupq_n_s16(0); 2]; 4];
+        const PREFETCH_AHEAD: usize = 8;
+        let mut m = 0;
+        while m + 4 <= n {
+            if m + PREFETCH_AHEAD < n {
+                for k in 0..4 {
+                    let ptr = row(ft, mask_off, raw, m + PREFETCH_AHEAD + k);
+                    std::arch::asm!("prfm pldl1keep, [{p}]", p = in(reg) ptr, options(nostack, readonly));
+                }
+            }
+            for (k, part) in p.iter_mut().enumerate() {
+                let r = row(ft, mask_off, raw, m + k);
+                // H=16 i8 = one 128-bit load, widened into two i16 vectors.
+                let v = vld1q_s8(r);
+                part[0] = vaddq_s16(part[0], vmovl_s8(vget_low_s8(v)));
+                part[1] = vaddq_s16(part[1], vmovl_high_s8(v));
+            }
+            m += 4;
+        }
+        let lo = vaddq_s16(vaddq_s16(p[0][0], p[1][0]), vaddq_s16(p[2][0], p[3][0]));
+        let hi = vaddq_s16(vaddq_s16(p[0][1], p[1][1]), vaddq_s16(p[2][1], p[3][1]));
+        vst1q_s16(acc.as_mut_ptr(), vaddq_s16(vld1q_s16(acc.as_ptr()), lo));
+        vst1q_s16(acc.as_mut_ptr().add(8), vaddq_s16(vld1q_s16(acc.as_ptr().add(8)), hi));
+        while m < n {
+            let r = row(ft, mask_off, raw, m);
+            for h in 0..H {
+                *acc.get_unchecked_mut(h) =
+                    (*acc.get_unchecked(h)).wrapping_add(*r.add(h) as i16);
+            }
+            m += 1;
+        }
+    }
+    #[cfg(any(not(target_arch = "aarch64"), feature = "nnue-scalar"))]
+    {
+        for m in 0..n {
+            let r = row(ft, mask_off, raw, m);
+            for h in 0..H {
+                *acc.get_unchecked_mut(h) = (*acc.get_unchecked(h)).wrapping_add(*r.add(h) as i16);
+            }
+        }
+    }
+}
+
 /// `Σ_h relu(acc[h]) · w[h]` (i64) over H int16 lanes, ReLU on the fly.
 /// NEON widening multiply on aarch64, scalar elsewhere. Called once per leaf.
 #[inline]
@@ -233,6 +299,15 @@ pub struct Nnue {
     /// Halves the bytes touched per mask versus striding the interleaved table.
     ft_b_i16: Vec<i16>,
     ft_w_i16: Vec<i16>,
+    /// i8 copies of the split tables, at exactly half the i16 scale. The leaf
+    /// rebuild is bound by random reads over a ~20 MB table, so halving the
+    /// bytes per row is the one lever left that does not shrink H (and so does
+    /// not cost accuracy the way a smaller accumulator does). Because the scale
+    /// is exactly half, the read-out weights are reused unchanged and only the
+    /// output scale doubles.
+    ft_b_i8: Vec<i8>,
+    ft_w_i8: Vec<i8>,
+    ft_bias_i8: [i16; H],
     ft_bias_i16: [i16; H2],
     out_w_i16: Vec<i16>,
     /// Scale back the i64 read-out accumulation into disc-difference f32:
@@ -282,6 +357,9 @@ impl Nnue {
             ftc_i16: Vec::new(),
             ft_b_i16: Vec::new(),
             ft_w_i16: Vec::new(),
+            ft_b_i8: Vec::new(),
+            ft_w_i8: Vec::new(),
+            ft_bias_i8: [0; H],
             ft_bias_i16: [0; H2],
             out_w_i16: vec![0; STAGE_COUNT * H],
             out_scale: 0.0,
@@ -355,6 +433,38 @@ impl Nnue {
             self.ft_b_i16[dst..dst + H].copy_from_slice(&self.ftc_i16[src..src + H]);
             self.ft_w_i16[dst..dst + H].copy_from_slice(&self.ftc_i16[src + H..src + H2]);
         }
+
+        // Half-scale i8 mirrors. Entries live in [-128, 127] and ~64 masks sum
+        // to at most ~8.2k, so the accumulator still fits i16 and the existing
+        // read-out weights stay inside the i32 lanes readout_dot uses.
+        let half = |v: i16| (v / 2).clamp(-128, 127) as i8;
+        self.ft_b_i8 = self.ft_b_i16.iter().map(|&v| half(v)).collect();
+        self.ft_w_i8 = self.ft_w_i16.iter().map(|&v| half(v)).collect();
+        for h in 0..H {
+            self.ft_bias_i8[h] = self.ft_bias_i16[h] / 2;
+        }
+    }
+
+    /// Leaf evaluation over the i8 transformer: half the bytes read per mask.
+    /// Same computation as [`eval_from_indices`](Self::eval_from_indices) at
+    /// half the resolution, so the output scale is doubled.
+    #[inline]
+    pub fn eval_from_indices_i8(&self, indices: &PatternIndices, board: &Board) -> f32 {
+        let stage = crate::evaluator::Evaluator::stage(board);
+        let ft = if board.player() == Color::Black {
+            &self.ft_b_i8
+        } else {
+            &self.ft_w_i8
+        };
+        let mut acc = self.ft_bias_i8;
+        let raw = indices.raw();
+        // SAFETY: indices stay inside their pattern's table.
+        unsafe {
+            accumulate_rows_i8(&mut acc, ft.as_ptr(), &self.mask_off, raw, self.n_masks);
+        }
+        let ow = &self.out_w_i16[stage * H..stage * H + H];
+        let sum = readout_dot(&acc, ow);
+        self.out_b[stage] + sum as f32 * self.out_scale * 2.0
     }
 
     /// Build the i32/f32 comparison tables (78 MB each). Bench only — the
