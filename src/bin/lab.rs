@@ -451,16 +451,6 @@ const SQUARE_BIAS: [i8; 64] = [
 /// searcher's shared table relies on.
 struct SharedTt {
     entries: std::cell::UnsafeCell<Vec<TtEntry>>,
-    /// A *physically separate* table for the Lazy SMP helpers.
-    ///
-    /// Salting the index into the same array is not enough: a helper write
-    /// still lands on a slot some main-thread position maps to, evicting it.
-    /// The main thread then re-searches that node, prunes differently, and can
-    /// return a different move — measured as 2 in 100 positions even with the
-    /// values themselves correctly gated. With separate storage the main
-    /// thread's table evolves exactly as it does in the sequential search, so
-    /// the parallel search returns the identical move.
-    helper_entries: std::cell::UnsafeCell<Vec<TtEntry>>,
     mask: u64,
 }
 // SAFETY: see the note above — entries are self-validating.
@@ -470,10 +460,6 @@ impl SharedTt {
     fn new(bits: u32) -> SharedTt {
         SharedTt {
             entries: std::cell::UnsafeCell::new(vec![
-                TtEntry { key: 0, value: 0.0, best: 64, depth: 0, flag: 0, sharpen: 0 };
-                1usize << bits
-            ]),
-            helper_entries: std::cell::UnsafeCell::new(vec![
                 TtEntry { key: 0, value: 0.0, best: 64, depth: 0, flag: 0, sharpen: 0 };
                 1usize << bits
             ]),
@@ -491,31 +477,6 @@ impl SharedTt {
         }
     }
 
-    /// Lazy SMP helpers write into their own table, so their entries seed each
-    /// other without displacing anything the main thread relies on.
-    #[inline]
-    fn put_helper(&self, hash: u64, e: TtEntry) {
-        // SAFETY: as `get`.
-        unsafe {
-            let v = &mut *self.helper_entries.get();
-            *v.get_unchecked_mut((hash & self.mask) as usize) = e;
-        }
-    }
-
-    /// Read from whichever table this searcher owns.
-    #[inline]
-    fn get_for(&self, hash: u64, helper: bool) -> TtEntry {
-        // SAFETY: as `get`.
-        unsafe {
-            let v = if helper {
-                &*self.helper_entries.get()
-            } else {
-                &*self.entries.get()
-            };
-            *v.get_unchecked((hash & self.mask) as usize)
-        }
-    }
-
     #[inline]
     fn put(&self, hash: u64, e: TtEntry) {
         // SAFETY: as above.
@@ -528,10 +489,8 @@ impl SharedTt {
     fn clear(&self) {
         // SAFETY: called between games, with no workers running.
         unsafe {
-            for cell in [&self.entries, &self.helper_entries] {
-                for e in (*cell.get()).iter_mut() {
-                    e.flag = 0;
-                }
+            for e in (*self.entries.get()).iter_mut() {
+                e.flag = 0;
             }
         }
     }
@@ -581,12 +540,6 @@ struct NnueSearch<'a> {
     /// two helpers at the same depth explore differently instead of re-deriving
     /// the same entries.
     mpc_sharpen: u32,
-    /// True for Lazy SMP helpers, which read and write the helper half of the
-    /// table. Keeping the halves apart is what makes the parallel search return
-    /// the *same move* as the sequential one: with ProbCut enabled, ordering
-    /// decides what gets pruned, so a helper's hint (produced under harder
-    /// pruning) would otherwise change the main thread's answer.
-    is_helper: bool,
 }
 
 impl<'a> NnueSearch<'a> {
@@ -602,7 +555,6 @@ impl<'a> NnueSearch<'a> {
             abort_countdown: ABORT_CHECK_INTERVAL,
             done: None,
             mpc_sharpen: 0,
-            is_helper: false,
         }
     }
 
@@ -619,7 +571,6 @@ impl<'a> NnueSearch<'a> {
             abort_countdown: ABORT_CHECK_INTERVAL,
             done: self.done.clone(),
             mpc_sharpen: self.mpc_sharpen,
-            is_helper: self.is_helper,
         }
     }
 
@@ -691,7 +642,7 @@ impl<'a> NnueSearch<'a> {
     /// The move the table records for `b`, falling back to a 1-ply ordering.
     fn root_best(&self, b: &Board, acc: &mut PatternIndices) -> Option<Position> {
         let h = zobrist::board_hash(b.player_bb(), b.opponent_bb());
-        let e = self.tt.get_for(h, self.is_helper);
+        let e = self.tt.get(h);
         if e.key == h && e.best < 64 {
             return Position::from_index(e.best as u32);
         }
@@ -724,9 +675,10 @@ impl<'a> NnueSearch<'a> {
     fn lazy_smp(&mut self, b: &Board, depth: u32) -> (Option<Position>, f32) {
         use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 
-        /// Above this iteration depth the main search is long enough that the
-        /// helpers' extra table entries no longer pay for the bandwidth.
-        const HELPER_MAX_MAIN_DEPTH: u32 = 12;
+        /// Helpers run on every iteration. A depth gate was considered, but with
+        /// the shared table fully in play (non-determinism accepted) the deep
+        /// iterations are exactly where the helpers' entries pay off most.
+        const HELPER_MAX_MAIN_DEPTH: u32 = u32::MAX;
 
         let nodes = AtomicU64::new(0);
         let mut acc = self.nn.indices(b.black, b.white);
@@ -754,7 +706,6 @@ impl<'a> NnueSearch<'a> {
                     scope.spawn(move || {
                         let mut wacc = w.nn.indices(b.black, b.white);
                         w.mpc_sharpen = sharpen;
-                        w.is_helper = true;
                         w.negamax(b, &mut wacc, d, f32::NEG_INFINITY, f32::INFINITY);
                         nodes.fetch_add(w.nodes, Ordering::Relaxed);
                     });
@@ -849,8 +800,8 @@ impl<'a> NnueSearch<'a> {
         let h = zobrist::board_hash(b.player_bb(), b.opponent_bb());
         let mut tt_move = 64u8;
         {
-            let e = self.tt.get_for(h, self.is_helper);
-            if e.key == h && e.flag != 0 && e.sharpen as u32 <= self.mpc_sharpen {
+            let e = self.tt.get(h);
+            if e.key == h && e.flag != 0 {
                 tt_move = e.best;
                 if e.depth as u32 >= depth {
                     match e.flag {
@@ -991,15 +942,8 @@ impl<'a> NnueSearch<'a> {
         }
 
         let flag = if best <= orig_alpha { 3 } else if best >= beta { 2 } else { 1 };
-        let store = |tt: &SharedTt, e: TtEntry| {
-            if self.is_helper {
-                tt.put_helper(h, e);
-            } else {
-                tt.put(h, e);
-            }
-        };
-        store(
-            self.tt,
+        self.tt.put(
+            h,
             TtEntry {
                 key: h,
                 value: best,
