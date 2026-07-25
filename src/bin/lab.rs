@@ -40,6 +40,7 @@ use std::process::{Child, ChildStdin, ChildStdout, Command, ExitCode, Stdio};
 
 use kuroobi::evaluator::Evaluator;
 use kuroobi::nnue::{Accumulator, Nnue};
+use kuroobi::zobrist;
 use kuroobi::pattern::{EDAX_PATTERNS, EGAROUCID_PATTERNS, EGAROUCID_PLUS_PATTERNS};
 use kuroobi::search::Searcher;
 use kuroobi::solver::{EndSolverMode, Solver};
@@ -361,79 +362,156 @@ struct Clock {
 }
 
 /// (empties to the winner).
-/// Expand and order the legal moves of `b`: apply each, score it by the
-/// child's NNUE eval (from the mover's view, so a lower opponent eval is
-/// better for us), undo, and sort best-first. Good ordering is what makes
-/// alpha-beta prune — without it a fixed-depth search explodes.
-fn ordered_children(b: &Board, nn: &Nnue, acc: &mut Accumulator) -> Vec<(Position, u64, f32)> {
-    let mover = b.player();
-    let mut kids = Vec::with_capacity(b.movable_count() as usize);
-    let mut m = b.movable();
-    while m != 0 {
-        let pos = Position::from_index(m.trailing_zeros()).unwrap();
-        m &= m - 1;
-        let mut nb = *b;
-        let flipped = nb.make_move_bits(pos);
-        nn.acc_apply(acc, pos, flipped, mover);
-        let key = -nn.eval_acc(acc, &nb); // opponent to move; negate to our view
-        nn.acc_undo(acc, pos, flipped, mover);
-        kids.push((pos, flipped, key));
-    }
-    kids.sort_unstable_by(|a, b| b.2.total_cmp(&a.2));
-    kids
+/// One transposition-table slot for the NNUE search. `flag`: 0 empty,
+/// 1 exact, 2 lower bound, 3 upper bound.
+#[derive(Clone, Copy)]
+struct TtEntry {
+    key: u64,
+    value: f32,
+    best: u8,
+    depth: u8,
+    flag: u8,
 }
 
-/// NNUE alpha-beta at fixed `depth`, incremental accumulator maintained
-/// through make/unmake, children searched best-first (see `ordered_children`).
-fn nnue_negamax(b: &Board, nn: &Nnue, acc: &mut Accumulator, depth: u32, mut alpha: f32, beta: f32) -> f32 {
-    if b.is_game_over() {
-        let p = b.player_bb().count_ones() as i32;
-        let o = b.opponent_bb().count_ones() as i32;
-        let e = 64 - p - o;
-        let diff = if p > o { p - o + e } else if o > p { p - o - e } else { 0 };
-        return diff as f32 * 1000.0;
-    }
-    if depth == 0 {
-        return nn.eval_acc(acc, b);
-    }
-    if b.movable() == 0 {
-        let mut nb = *b;
-        nb.pass();
-        return -nnue_negamax(&nb, nn, acc, depth, -beta, -alpha);
-    }
-    // Order only where it pays for itself (the extra 1-ply evals are wasted at
-    // the frontier, where there is nothing left to prune).
-    let mover = b.player();
-    let mut best = f32::NEG_INFINITY;
-    if depth >= 2 {
-        for (pos, flipped, _) in ordered_children(b, nn, acc) {
-            let mut nb = *b;
-            nb.make_move_bits(pos);
-            nn.acc_apply(acc, pos, flipped, mover);
-            let v = -nnue_negamax(&nb, nn, acc, depth - 1, -beta, -alpha);
-            nn.acc_undo(acc, pos, flipped, mover);
-            if v > best {
-                best = v;
-            }
-            if best > alpha {
-                alpha = best;
-            }
-            if alpha >= beta {
-                break;
-            }
+/// Fixed-depth NNUE alpha-beta with a transposition table and NNUE-eval move
+/// ordering — the pieces a real engine has, and what keeps the wall-clock
+/// competitive (a naive search without them explodes).
+struct NnueSearch<'a> {
+    nn: &'a Nnue,
+    tt: Vec<TtEntry>,
+    mask: u64,
+}
+
+impl<'a> NnueSearch<'a> {
+    fn new(nn: &'a Nnue, bits: u32) -> Self {
+        NnueSearch {
+            nn,
+            tt: vec![
+                TtEntry { key: 0, value: 0.0, best: 64, depth: 0, flag: 0 };
+                1usize << bits
+            ],
+            mask: (1u64 << bits) - 1,
         }
-    } else {
+    }
+
+    fn clear(&mut self) {
+        for e in &mut self.tt {
+            e.flag = 0;
+        }
+    }
+
+    /// Best move at `depth`, via iterative deepening: each pass seeds the TT
+    /// so the next pass orders by the prior best move — this is what lets the
+    /// deep pass skip the expensive per-node eval ordering (only new nodes pay
+    /// for it), the way real engines avoid a full 1-ply scan everywhere.
+    fn best_move(&mut self, b: &Board, depth: u32) -> Option<Position> {
+        if b.movable() == 0 {
+            return None;
+        }
+        let mut acc = self.nn.accumulator(b);
+        for d in 1..=depth {
+            self.negamax(b, &mut acc, d, f32::NEG_INFINITY, f32::INFINITY);
+        }
+        let h = zobrist::board_hash(b.player_bb(), b.opponent_bb());
+        let e = self.tt[(h & self.mask) as usize];
+        if e.key == h && e.best < 64 {
+            Position::from_index(e.best as u32)
+        } else {
+            self.ordered(b, &mut acc).first().map(|k| k.0)
+        }
+    }
+
+    /// Children with their flip masks, best-first by 1-ply NNUE eval.
+    fn ordered(&self, b: &Board, acc: &mut Accumulator) -> Vec<(Position, u64, f32)> {
+        let mover = b.player();
+        let mut kids = Vec::with_capacity(b.movable_count() as usize);
         let mut m = b.movable();
         while m != 0 {
             let pos = Position::from_index(m.trailing_zeros()).unwrap();
             m &= m - 1;
             let mut nb = *b;
             let flipped = nb.make_move_bits(pos);
-            nn.acc_apply(acc, pos, flipped, mover);
-            let v = -nnue_negamax(&nb, nn, acc, depth - 1, -beta, -alpha);
-            nn.acc_undo(acc, pos, flipped, mover);
+            self.nn.acc_apply(acc, pos, flipped, mover);
+            let key = -self.nn.eval_acc(acc, &nb);
+            self.nn.acc_undo(acc, pos, flipped, mover);
+            kids.push((pos, flipped, key));
+        }
+        kids.sort_unstable_by(|a, b| b.2.total_cmp(&a.2));
+        kids
+    }
+
+    fn negamax(&mut self, b: &Board, acc: &mut Accumulator, depth: u32, mut alpha: f32, beta: f32) -> f32 {
+        if b.is_game_over() {
+            let p = b.player_bb().count_ones() as i32;
+            let o = b.opponent_bb().count_ones() as i32;
+            let e = 64 - p - o;
+            let diff = if p > o { p - o + e } else if o > p { p - o - e } else { 0 };
+            return diff as f32 * 1000.0;
+        }
+        if depth == 0 {
+            return self.nn.eval_acc(acc, b);
+        }
+        if b.movable() == 0 {
+            let mut nb = *b;
+            nb.pass();
+            return -self.negamax(&nb, acc, depth, -beta, -alpha);
+        }
+
+        let h = zobrist::board_hash(b.player_bb(), b.opponent_bb());
+        let slot = (h & self.mask) as usize;
+        let mut tt_move = 64u8;
+        {
+            let e = self.tt[slot];
+            if e.key == h && e.flag != 0 {
+                tt_move = e.best;
+                if e.depth as u32 >= depth {
+                    match e.flag {
+                        1 => return e.value,
+                        2 if e.value >= beta => return e.value,
+                        3 if e.value <= alpha => return e.value,
+                        _ => {}
+                    }
+                }
+            }
+        }
+
+        let orig_alpha = alpha;
+        let mover = b.player();
+        let mut best = f32::NEG_INFINITY;
+        let mut best_move = 64u8;
+
+        // With a TT move (typical once iterative deepening has seeded this
+        // node) put it first over a cheap natural order — skip the expensive
+        // per-child eval scan. Only genuinely new deep nodes pay for it.
+        let mut kids = if tt_move >= 64 && depth >= 2 {
+            self.ordered(b, acc)
+        } else {
+            let mut v = Vec::with_capacity(b.movable_count() as usize);
+            let mut m = b.movable();
+            while m != 0 {
+                let pos = Position::from_index(m.trailing_zeros()).unwrap();
+                m &= m - 1;
+                let mut nb = *b;
+                let flipped = nb.make_move_bits(pos);
+                v.push((pos, flipped, 0.0));
+            }
+            v
+        };
+        if tt_move < 64 {
+            if let Some(i) = kids.iter().position(|k| k.0.index() == tt_move) {
+                kids.swap(0, i);
+            }
+        }
+
+        for (pos, flipped, _) in kids {
+            let mut nb = *b;
+            nb.make_move_bits(pos);
+            self.nn.acc_apply(acc, pos, flipped, mover);
+            let v = -self.negamax(&nb, acc, depth - 1, -beta, -alpha);
+            self.nn.acc_undo(acc, pos, flipped, mover);
             if v > best {
                 best = v;
+                best_move = pos.index() as u8;
             }
             if best > alpha {
                 alpha = best;
@@ -442,33 +520,11 @@ fn nnue_negamax(b: &Board, nn: &Nnue, acc: &mut Accumulator, depth: u32, mut alp
                 break;
             }
         }
-    }
-    best
-}
 
-/// Best NNUE move at `depth` for the side to move (ordered root).
-fn nnue_best_move(b: &Board, nn: &Nnue, depth: u32) -> Option<Position> {
-    if b.movable() == 0 {
-        return None;
+        let flag = if best <= orig_alpha { 3 } else if best >= beta { 2 } else { 1 };
+        self.tt[slot] = TtEntry { key: h, value: best, best: best_move, depth: depth as u8, flag };
+        best
     }
-    let mut acc = nn.accumulator(b);
-    let mover = b.player();
-    let mut best = f32::NEG_INFINITY;
-    let mut best_pos = None;
-    let mut alpha = f32::NEG_INFINITY;
-    for (pos, flipped, _) in ordered_children(b, nn, &mut acc) {
-        let mut nb = *b;
-        nb.make_move_bits(pos);
-        nn.acc_apply(&mut acc, pos, flipped, mover);
-        let v = -nnue_negamax(&nb, nn, &mut acc, depth - 1, f32::NEG_INFINITY, -alpha);
-        nn.acc_undo(&mut acc, pos, flipped, mover);
-        if v > best {
-            best = v;
-            best_pos = Some(pos);
-            alpha = best;
-        }
-    }
-    best_pos
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -476,7 +532,7 @@ fn play(
     start: &Board,
     we_are_black: bool,
     evaluator: &Evaluator,
-    nnue: Option<&Nnue>,
+    mut nnue: Option<&mut NnueSearch>,
     searcher: &mut Searcher,
     solver: &mut Solver,
     edax: &mut Edax,
@@ -516,8 +572,8 @@ fn play(
                     .solve_with_eval(EndSolverMode::Perfect, &board, Some(evaluator))
                     .best_move
                     .ok_or("solver returned no move")?
-            } else if let Some(nn) = nnue {
-                nnue_best_move(&board, nn, depth as u32).ok_or("nnue returned no move")?
+            } else if let Some(nn) = nnue.as_deref_mut() {
+                nn.best_move(&board, depth as u32).ok_or("nnue returned no move")?
             } else {
                 searcher
                     .search(&board, evaluator, depth)
@@ -597,6 +653,8 @@ fn main() -> ExitCode {
         }
         None => None,
     };
+    // The search borrows the model; TT sized 2^20 (~24 MB), cleared per game.
+    let mut nnue_search = nnue.as_ref().map(|nn| NnueSearch::new(nn, 20));
 
     let mut edax = match Edax::spawn(&args.edax_path, args.edax_level, args.threads, args.protocol) {
         Ok(e) => e,
@@ -633,8 +691,11 @@ fn main() -> ExitCode {
     for pair in 0..args.games / 2 {
         let (opening, opening_moves) = random_opening(&mut rng, args.random_plies);
         for we_are_black in [true, false] {
+            if let Some(s) = &mut nnue_search {
+                s.clear();
+            }
             match play(
-                &opening, we_are_black, &evaluator, nnue.as_ref(), &mut searcher, &mut solver,
+                &opening, we_are_black, &evaluator, nnue_search.as_mut(), &mut searcher, &mut solver,
                 &mut edax, args.depth, args.solve_empties, &mut clock, &opening_moves,
             ) {
                 Ok(s) => {
