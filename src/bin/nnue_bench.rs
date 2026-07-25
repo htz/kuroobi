@@ -96,6 +96,7 @@ fn main() {
 
     let mut nn = Nnue::new(EGAROUCID_PATTERNS);
     nn.load(&nnue_path).expect("load nnue");
+    nn.quantize();
     let mut lin = Evaluator::new(EGAROUCID_PATTERNS);
     lin.load_weights(std::path::Path::new("weights_full.bin")).expect("load linear");
 
@@ -118,8 +119,9 @@ fn main() {
         for _ in 0..6 {
             let inc = nn.eval_acc(&acc, &tb);
             let scratch = nn.eval(&tb);
-            if (inc - scratch).abs() > 1e-2 {
-                println!("MISMATCH: incremental {inc:.4} vs scratch {scratch:.4} (player {:?})", tb.player());
+            // Tolerance covers int16 quantization of the incremental path.
+            if (inc - scratch).abs() > 1.0 {
+                println!("MISMATCH: incremental(i16) {inc:.4} vs scratch(f32) {scratch:.4} (player {:?})", tb.player());
                 ok = false;
             }
             let moves = tb.movable();

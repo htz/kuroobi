@@ -29,17 +29,53 @@ use crate::pattern::Pattern;
 use crate::pattern_index::{PatternIndexer, PatternIndices, MAX_MASKS};
 use crate::position::Position;
 
-/// Accumulator width (feature-transformer output dimension).
-pub const H: usize = 64;
+/// Accumulator width (feature-transformer output dimension). Smaller H means
+/// a proportionally cheaper incremental update (the search hot path); the
+/// non-linearity survives well below 64.
+pub const H: usize = 16;
+
+/// `acc[h] += new[h] - old[h]` over `H` int16 lanes. NEON on aarch64
+/// (int16x8, so H=16 is two vector ops), scalar elsewhere.
+#[inline]
+unsafe fn acc_row_addsub(acc: &mut [i16; H], new: *const i16, old: *const i16) {
+    #[cfg(target_arch = "aarch64")]
+    {
+        use std::arch::aarch64::*;
+        let mut h = 0;
+        while h + 8 <= H {
+            let a = vld1q_s16(acc.as_ptr().add(h));
+            let n = vld1q_s16(new.add(h));
+            let o = vld1q_s16(old.add(h));
+            let r = vaddq_s16(a, vsubq_s16(n, o));
+            vst1q_s16(acc.as_mut_ptr().add(h), r);
+            h += 8;
+        }
+        while h < H {
+            let v = (*acc.get_unchecked(h)).wrapping_add((*new.add(h)).wrapping_sub(*old.add(h)));
+            *acc.get_unchecked_mut(h) = v;
+            h += 1;
+        }
+    }
+    #[cfg(not(target_arch = "aarch64"))]
+    {
+        for h in 0..H {
+            acc[h] = acc[h].wrapping_add((*new.add(h)).wrapping_sub(*old.add(h)));
+        }
+    }
+}
 
 /// Incrementally-maintained network input for search: the pattern indices
 /// plus both perspectives' H-dim accumulators. Updated on make/unmake so a
 /// leaf eval is O(H) instead of an O(features·H) rebuild.
+///
+/// The accumulators are int16 (quantized) so the update is a NEON add: each
+/// feature contributes ≤ ~256 and there are 64 masks, so the sum stays inside
+/// i16. Requires [`Nnue::quantize`] to have been called.
 #[derive(Clone)]
 pub struct Accumulator {
     indices: PatternIndices,
-    black: Vec<f32>,
-    white: Vec<f32>,
+    black: [i16; H],
+    white: [i16; H],
 }
 
 /// Raw pointers into an [`Nnue`]'s trainable arrays for Hogwild SGD.
@@ -73,6 +109,14 @@ pub struct Nnue {
     out_w: Vec<f32>,
     /// Per-stage read-out bias: `[STAGE_COUNT]`.
     out_b: Vec<f32>,
+
+    // Quantized inference copies (built by `quantize`).
+    ft_i16: Vec<i16>,
+    ft_bias_i16: [i16; H],
+    out_w_i16: Vec<i16>,
+    /// Scale back the i64 read-out accumulation into disc-difference f32:
+    /// `1 / (ft_scale * w_scale)`.
+    out_scale: f32,
 }
 
 impl Nnue {
@@ -106,7 +150,39 @@ impl Nnue {
             ft_bias: vec![0.0; H],
             out_w: vec![0.0; STAGE_COUNT * H],
             out_b: vec![0.0; STAGE_COUNT],
+            ft_i16: Vec::new(),
+            ft_bias_i16: [0; H],
+            out_w_i16: vec![0; STAGE_COUNT * H],
+            out_scale: 0.0,
         }
+    }
+
+    /// Build the int16 inference copies from the trained f32 weights. Call
+    /// after loading/training and before any accumulator use in search.
+    ///
+    /// Scales are chosen so a single feature entry maps to at most ~256 (the
+    /// 64-mask accumulator then stays well inside i16) and the read-out
+    /// weights fill the i16 range.
+    pub fn quantize(&mut self) {
+        let ft_max = self.ft.iter().fold(1e-6f32, |m, &v| m.max(v.abs()));
+        let w_max = self.out_w.iter().fold(1e-6f32, |m, &v| m.max(v.abs()));
+        let ft_scale = 256.0 / ft_max;
+        let w_scale = 32000.0 / w_max;
+        self.out_scale = 1.0 / (ft_scale * w_scale);
+
+        self.ft_i16 = self
+            .ft
+            .iter()
+            .map(|&v| (v * ft_scale).round().clamp(-32768.0, 32767.0) as i16)
+            .collect();
+        for h in 0..H {
+            self.ft_bias_i16[h] = (self.ft_bias[h] * ft_scale).round().clamp(-32768.0, 32767.0) as i16;
+        }
+        self.out_w_i16 = self
+            .out_w
+            .iter()
+            .map(|&v| (v * w_scale).round().clamp(-32768.0, 32767.0) as i16)
+            .collect();
     }
 
     pub fn n_features(&self) -> usize {
@@ -200,25 +276,25 @@ impl Nnue {
         self.indexer.init(black, white)
     }
 
-    /// Build a dual-perspective incremental accumulator for `board`.
+    /// Build a dual-perspective incremental accumulator for `board` (i16).
     ///
     /// The network is trained on Black-to-move absolute features, so a
-    /// White-to-move position must be scored from the colour-swapped view.
-    /// Two accumulators are kept — `black` over absolute features, `white`
-    /// over swap-indexed features — and both are updated incrementally so
-    /// either side's leaf eval is O(H), never a from-scratch rebuild.
+    /// White-to-move position is scored from the colour-swapped view. Two
+    /// accumulators are kept — `black` over absolute features, `white` over
+    /// swap-indexed features — both updated incrementally so either side's
+    /// leaf eval is O(H). Needs [`quantize`](Self::quantize).
     pub fn accumulator(&self, board: &Board) -> Accumulator {
         let indices = self.indexer.init(board.black, board.white);
-        let mut black = self.ft_bias.clone();
-        let mut white = self.ft_bias.clone();
+        let mut black = self.ft_bias_i16;
+        let mut white = self.ft_bias_i16;
         for m in 0..self.n_masks {
             let raw = indices.raw()[m] as usize;
             let base = self.mask_off[m] as usize;
             let bf = (base + raw) * H;
             let wf = (base + self.indexer.swapped_index(m, raw)) * H;
             for h in 0..H {
-                black[h] += self.ft[bf + h];
-                white[h] += self.ft[wf + h];
+                black[h] = black[h].wrapping_add(self.ft_i16[bf + h]);
+                white[h] = white[h].wrapping_add(self.ft_i16[wf + h]);
             }
         }
         Accumulator { indices, black, white }
@@ -254,10 +330,10 @@ impl Nnue {
     }
 
     /// One square's colour change: shift every affected mask's index and swap
-    /// its feature vector into both accumulators.
+    /// its feature vector into both accumulators (add new row, subtract old).
     #[inline]
     fn acc_square(&self, acc: &mut Accumulator, sq: u8, digit_diff: u16) {
-        let ft = &self.ft;
+        let ft = &self.ft_i16;
         let mask_off = &self.mask_off;
         let indexer = &self.indexer;
         let idx = &mut acc.indices;
@@ -273,9 +349,11 @@ impl Nnue {
             let bn = (base + new) * H;
             let wo = (base + indexer.swapped_index(mask, old)) * H;
             let wn = (base + indexer.swapped_index(mask, new)) * H;
-            for h in 0..H {
-                black[h] += ft[bn + h] - ft[bo + h];
-                white[h] += ft[wn + h] - ft[wo + h];
+            // SAFETY: offsets stay within their pattern tables (same invariant
+            // the scalar sum relies on); slices are exactly H long.
+            unsafe {
+                acc_row_addsub(black, ft.as_ptr().add(bn), ft.as_ptr().add(bo));
+                acc_row_addsub(white, ft.as_ptr().add(wn), ft.as_ptr().add(wo));
             }
         });
     }
@@ -284,19 +362,15 @@ impl Nnue {
     #[inline]
     pub fn eval_acc(&self, acc: &Accumulator, board: &Board) -> f32 {
         let stage = crate::evaluator::Evaluator::stage(board);
-        let v = if board.player() == Color::Black {
-            &acc.black
-        } else {
-            &acc.white
-        };
-        let ow = &self.out_w[stage * H..stage * H + H];
-        let mut out = self.out_b[stage];
+        let v = if board.player() == Color::Black { &acc.black } else { &acc.white };
+        let ow = &self.out_w_i16[stage * H..stage * H + H];
+        // out = bias + scale · Σ relu(acc[h]) · out_w[h]
+        let mut sum: i64 = 0;
         for h in 0..H {
-            if v[h] > 0.0 {
-                out += ow[h] * v[h];
-            }
+            let a = v[h].max(0) as i64; // ReLU
+            sum += a * ow[h] as i64;
         }
-        out
+        self.out_b[stage] + sum as f32 * self.out_scale
     }
 
     /// One SGD step on a Black-to-move example at `stage`. Returns squared error.
