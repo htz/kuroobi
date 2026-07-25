@@ -674,13 +674,29 @@ impl<'a> NnueSearch<'a> {
                         // alternating between the target depth and one ply
                         // short of it so they diverge instead of racing on the
                         // same iteration.
-                        // One shallow ladder to get this worker's own ordering
-                        // in place, then a single deep pass. Looping the deep
-                        // pass until the main thread finishes was measured as
-                        // strictly worse: the table is already warm after the
-                        // first pass, so the repeats only burn memory bandwidth
-                        // that the main thread needs (37x the nodes for no gain).
-                        let d = if tid % 2 == 1 { depth } else { depth.saturating_sub(1).max(1) };
+                        // Lazy SMP only pays if the helpers explore *differently*
+                        // — identical searches just re-derive the same table
+                        // entries. Two knobs spread them out:
+                        //
+                        // - depth: staggered over the last few plies, so several
+                        //   plies are being filled in at once rather than all
+                        //   threads racing on one.
+                        // - ordering: `order_skew` rotates each helper's root
+                        //   move list, so they descend different branches first
+                        //   and the table gains bounds from several parts of the
+                        //   tree instead of one.
+                        //
+                        // Looping a helper's deep pass was measured as strictly
+                        // worse (37x the nodes for no gain): the table is warm
+                        // after one pass, so repeats only burn the bandwidth the
+                        // main thread needs.
+                        // Rotating each helper's move order was measured as a net
+                        // loss: it cut nodes 25% but cost wall clock, because the
+                        // helpers then filled the table with bounds from branches
+                        // the main thread never visits. Depth stagger alone keeps
+                        // their work on the main line where it is reusable.
+                        let back = (tid as u32 % 3).min(depth.saturating_sub(1));
+                        let d = depth - back;
                         for step in (2..d).step_by(2) {
                             if w.stopped() {
                                 break;
@@ -1055,6 +1071,9 @@ fn main() -> ExitCode {
     };
     // The search borrows the model and the shared table; 2^20 entries (~24 MB),
     // cleared per game. The table outlives the search so workers can share it.
+    // 2^20 entries (~24 MB). Enlarging it to 2^23 was measured as *slower*
+    // (0.050 -> 0.065 s/move) despite the table saturating every move: the
+    // random probes lose cache locality faster than the extra entries help.
     let nnue_tt = nnue.as_ref().map(|_| SharedTt::new(20));
     let mut nnue_search = match (nnue.as_ref(), nnue_tt.as_ref()) {
         (Some(nn), Some(tt)) => {
