@@ -379,6 +379,14 @@ const MAX_KIDS: usize = 34;
 /// shallower nodes use cheap mobility ordering (see `ordered`).
 const EVAL_ORDER_DEPTH: u32 = 3;
 
+/// A worker whose subtree became irrelevant returns this instead of a score,
+/// so the caller knows to discard it rather than treat it as an evaluation.
+const ABORTED: f32 = f32::NEG_INFINITY;
+
+/// Nodes between abort checks: the flag is shared, so reading it every node
+/// would put a contended load in the hot path.
+const ABORT_CHECK_INTERVAL: u64 = 512;
+
 /// Multi-ProbCut: from this remaining depth up, a shallow search decides
 /// whether the node lies far enough outside the window to skip entirely.
 /// Strong engines prune this way at deep settings, so a fair deep comparison
@@ -429,6 +437,60 @@ const SQUARE_BIAS: [i8; 64] = [
     30, -12, 0, -1, -1, 0, -12, 30,
 ];
 
+/// A transposition table shared by the root-split workers.
+///
+/// Writes race, but every entry carries the position key and is compared
+/// exactly, so a torn read can only produce a *mismatch* (recomputed), never a
+/// wrong value for another position. This is the same argument the linear
+/// searcher's shared table relies on.
+struct SharedTt {
+    entries: std::cell::UnsafeCell<Vec<TtEntry>>,
+    mask: u64,
+}
+// SAFETY: see the note above — entries are self-validating.
+unsafe impl Sync for SharedTt {}
+
+impl SharedTt {
+    fn new(bits: u32) -> SharedTt {
+        SharedTt {
+            entries: std::cell::UnsafeCell::new(vec![
+                TtEntry { key: 0, value: 0.0, best: 64, depth: 0, flag: 0 };
+                1usize << bits
+            ]),
+            mask: (1u64 << bits) - 1,
+        }
+    }
+
+    #[inline]
+    fn get(&self, hash: u64) -> TtEntry {
+        // SAFETY: index is masked into range; a racing write can only make the
+        // key mismatch, which the caller treats as a miss.
+        unsafe {
+            let v = &*self.entries.get();
+            *v.get_unchecked((hash & self.mask) as usize)
+        }
+    }
+
+    #[inline]
+    fn put(&self, hash: u64, e: TtEntry) {
+        // SAFETY: as above.
+        unsafe {
+            let v = &mut *self.entries.get();
+            *v.get_unchecked_mut((hash & self.mask) as usize) = e;
+        }
+    }
+
+    fn clear(&self) {
+        // SAFETY: called between games, with no workers running.
+        unsafe {
+            let v = &mut *self.entries.get();
+            for e in v.iter_mut() {
+                e.flag = 0;
+            }
+        }
+    }
+}
+
 /// One transposition-table slot for the NNUE search. `flag`: 0 empty,
 /// 1 exact, 2 lower bound, 3 upper bound.
 #[derive(Clone, Copy)]
@@ -445,35 +507,88 @@ struct TtEntry {
 /// competitive (a naive search without them explodes).
 struct NnueSearch<'a> {
     nn: &'a Nnue,
-    tt: Vec<TtEntry>,
-    mask: u64,
+    tt: &'a SharedTt,
+    /// Workers for the root split (1 = sequential).
+    pub threads: usize,
     /// Nodes visited, to diagnose ordering quality (effective branching).
     pub nodes: u64,
     /// Enable ProbCut (selective pruning).
     pub mpc: bool,
     /// How many ProbCut probes are nested above this node.
     probcut_level: u32,
+    /// Set by the root when a sibling's result makes this worker's subtree
+    /// irrelevant; checked periodically so the worker can stop immediately
+    /// instead of finishing work nobody will use.
+    abort: Option<std::sync::Arc<std::sync::atomic::AtomicBool>>,
+    abort_countdown: u64,
+    /// Set once the main Lazy SMP thread has reached the target depth; helpers
+    /// stop as soon as they notice, since their results are no longer needed.
+    done: Option<std::sync::Arc<std::sync::atomic::AtomicBool>>,
 }
 
 impl<'a> NnueSearch<'a> {
-    fn new(nn: &'a Nnue, bits: u32) -> Self {
+    fn new(nn: &'a Nnue, tt: &'a SharedTt) -> Self {
         NnueSearch {
             nn,
-            tt: vec![
-                TtEntry { key: 0, value: 0.0, best: 64, depth: 0, flag: 0 };
-                1usize << bits
-            ],
-            mask: (1u64 << bits) - 1,
+            tt,
+            threads: 1,
             nodes: 0,
             mpc: false,
             probcut_level: 0,
+            abort: None,
+            abort_countdown: ABORT_CHECK_INTERVAL,
+            done: None,
         }
     }
 
-    fn clear(&mut self) {
-        for e in &mut self.tt {
-            e.flag = 0;
+    /// A worker sharing this search's model and table, with its own counters.
+    fn worker(&self) -> NnueSearch<'a> {
+        NnueSearch {
+            nn: self.nn,
+            tt: self.tt,
+            threads: 1,
+            nodes: 0,
+            mpc: self.mpc,
+            probcut_level: 0,
+            abort: self.abort.clone(),
+            abort_countdown: ABORT_CHECK_INTERVAL,
+            done: self.done.clone(),
         }
+    }
+
+    /// Whether a Lazy SMP helper should stop looping.
+    #[inline]
+    fn stopped(&self) -> bool {
+        self.done
+            .as_ref()
+            .is_some_and(|f| f.load(std::sync::atomic::Ordering::Relaxed))
+    }
+
+    /// Whether this worker has been told to stop. Checked once every
+    /// `ABORT_CHECK_INTERVAL` nodes.
+    #[inline]
+    fn should_stop(&mut self) -> bool {
+        let Some(flag) = &self.abort else { return false };
+        self.abort_countdown -= 1;
+        if self.abort_countdown != 0 {
+            return false;
+        }
+        self.abort_countdown = ABORT_CHECK_INTERVAL;
+        flag.load(std::sync::atomic::Ordering::Relaxed)
+    }
+
+    /// Periodic check that also honours the Lazy SMP done flag, so helpers
+    /// unwind promptly instead of finishing a deep pass nobody will read.
+    #[inline]
+    fn should_stop_or_done(&mut self) -> bool {
+        if self.should_stop() {
+            return true;
+        }
+        self.done.is_some() && self.stopped()
+    }
+
+    fn clear(&mut self) {
+        self.tt.clear();
     }
 
     /// Best move at `depth`, via iterative deepening: each pass seeds the TT
@@ -484,21 +599,108 @@ impl<'a> NnueSearch<'a> {
         if b.movable() == 0 {
             return None;
         }
+        if self.threads > 1 && depth >= 2 {
+            // Lazy SMP runs its own iterative deepening on every worker; doing
+            // the shallow passes here as well would just duplicate them.
+            return self.lazy_smp(b, depth);
+        }
         let mut acc = self.nn.indices(b.black, b.white);
+        // Iterative deepening: each pass seeds the table so the next orders by
+        // the prior best move.
         for d in 1..=depth {
             self.negamax(b, &mut acc, d, f32::NEG_INFINITY, f32::INFINITY);
         }
+        self.root_best(b, &mut acc)
+    }
+
+    /// The move the table records for `b`, falling back to a 1-ply ordering.
+    fn root_best(&self, b: &Board, acc: &mut PatternIndices) -> Option<Position> {
         let h = zobrist::board_hash(b.player_bb(), b.opponent_bb());
-        let e = self.tt[(h & self.mask) as usize];
+        let e = self.tt.get(h);
         if e.key == h && e.best < 64 {
-            Position::from_index(e.best as u32)
-        } else {
-            {
-                let mut kids: [Kid; MAX_KIDS] = [(Position(0), 0, 0.0); MAX_KIDS];
-                let n = self.ordered_into(b, &mut acc, 1, b.movable(), &mut kids);
-                (n > 0).then(|| kids[0].0)
-            }
+            return Position::from_index(e.best as u32);
         }
+        let mut kids: [Kid; MAX_KIDS] = [(Position(0), 0, 0.0); MAX_KIDS];
+        let n = self.ordered_into(b, acc, 1, b.movable(), &mut kids);
+        (n > 0).then(|| kids[0].0)
+    }
+
+    /// Lazy SMP: every worker searches the *whole* position independently and
+    /// they cooperate only through the shared transposition table.
+    ///
+    /// Root splitting was tried first and lost to a single thread (measured:
+    /// 1.7x the nodes for 1.3x the wall clock). The reason is structural — at
+    /// the root the eldest child's subtree *is* nearly the whole search, so
+    /// there is little sibling work to hand out, and what is handed out runs
+    /// before alpha is tight and gets wasted. Lazy SMP sidesteps that: workers
+    /// deepen at staggered depths, so the table fills with useful bounds and
+    /// best moves sooner than one thread could produce them, and every worker's
+    /// ordering improves from every other worker's findings.
+    fn lazy_smp(&mut self, b: &Board, depth: u32) -> Option<Position> {
+        use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+
+        let nodes = AtomicU64::new(0);
+        let threads = self.threads;
+        // Helpers loop until the main thread has finished its target depth.
+        let done = std::sync::Arc::new(AtomicBool::new(false));
+
+        std::thread::scope(|scope| {
+            for tid in 0..threads {
+                let mut w = self.worker();
+                let nodes = &nodes;
+                let done = done.clone();
+                // Only helpers honour the flag: the main thread sets it, and
+                // must never be stopped by it (a stopped main thread returns no
+                // search at all, which loses the game outright).
+                if tid != 0 {
+                    w.done = Some(done.clone());
+                }
+                scope.spawn(move || {
+                    let mut acc = w.nn.indices(b.black, b.white);
+                    if tid == 0 {
+                        // The main thread owns the real iterative deepening and
+                        // finishes at exactly `depth`, so the result can never
+                        // be weaker than the sequential search.
+                        for d in 1..=depth {
+                            w.negamax(b, &mut acc, d, f32::NEG_INFINITY, f32::INFINITY);
+                        }
+                        done.store(true, Ordering::Relaxed);
+                    } else {
+                        // Helpers must not redo the shallow ladder — eight
+                        // threads each walking depths 1..d spend most of their
+                        // time duplicating work that is already in the table.
+                        // Instead they hammer the deep end, where the table is
+                        // still empty and their findings are worth the most,
+                        // alternating between the target depth and one ply
+                        // short of it so they diverge instead of racing on the
+                        // same iteration.
+                        // One shallow ladder to get this worker's own ordering
+                        // in place, then a single deep pass. Looping the deep
+                        // pass until the main thread finishes was measured as
+                        // strictly worse: the table is already warm after the
+                        // first pass, so the repeats only burn memory bandwidth
+                        // that the main thread needs (37x the nodes for no gain).
+                        let d = if tid % 2 == 1 { depth } else { depth.saturating_sub(1).max(1) };
+                        for step in (2..d).step_by(2) {
+                            if w.stopped() {
+                                break;
+                            }
+                            w.negamax(b, &mut acc, step, f32::NEG_INFINITY, f32::INFINITY);
+                        }
+                        if !w.stopped() {
+                            w.negamax(b, &mut acc, d, f32::NEG_INFINITY, f32::INFINITY);
+                        }
+                    }
+                    nodes.fetch_add(w.nodes, Ordering::Relaxed);
+                });
+            }
+        });
+        self.nodes += nodes.load(Ordering::Relaxed);
+
+        // Every worker wrote into the shared table; the deepest entry for the
+        // root carries the move to play.
+        let mut acc = self.nn.indices(b.black, b.white);
+        self.root_best(b, &mut acc)
     }
 
     /// Children with their flip masks, best-first.
@@ -551,6 +753,9 @@ impl<'a> NnueSearch<'a> {
 
     fn negamax(&mut self, b: &Board, acc: &mut PatternIndices, depth: u32, mut alpha: f32, beta: f32) -> f32 {
         self.nodes += 1;
+        if self.should_stop_or_done() {
+            return ABORTED;
+        }
         // One move generation per node. `is_game_over()` generates moves for
         // both sides internally, and the pass check and child loop each
         // generated them again — three or four generations where one suffices.
@@ -568,17 +773,17 @@ impl<'a> NnueSearch<'a> {
             if depth == 0 {
                 return self.nn.eval_from_indices(acc, b);
             }
-            return -self.negamax(&nb, acc, depth, -beta, -alpha);
+            let raw = self.negamax(&nb, acc, depth, -beta, -alpha);
+            return if raw == ABORTED { ABORTED } else { -raw };
         }
         if depth == 0 {
             return self.nn.eval_from_indices(acc, b);
         }
 
         let h = zobrist::board_hash(b.player_bb(), b.opponent_bb());
-        let slot = (h & self.mask) as usize;
         let mut tt_move = 64u8;
         {
-            let e = self.tt[slot];
+            let e = self.tt.get(h);
             if e.key == h && e.flag != 0 {
                 tt_move = e.best;
                 if e.depth as u32 >= depth {
@@ -612,11 +817,21 @@ impl<'a> NnueSearch<'a> {
                 self.probcut_level += 1;
                 let hi = beta + margin;
                 let high = self.negamax(b, acc, pd, hi - PVS_EPS, hi);
-                let cut = if high >= hi {
+                let cut = if high == ABORTED {
+                    // Aborted probe: no information. Bail out of the node
+                    // entirely rather than mistake -inf for "far below alpha".
+                    self.probcut_level -= 1;
+                    return ABORTED;
+                } else if high >= hi {
                     Some(beta)
                 } else {
                     let lo = alpha - margin;
-                    if self.negamax(b, acc, pd, lo, lo + PVS_EPS) <= lo {
+                    let low = self.negamax(b, acc, pd, lo, lo + PVS_EPS);
+                    if low == ABORTED {
+                        self.probcut_level -= 1;
+                        return ABORTED;
+                    }
+                    if low <= lo {
                         Some(alpha)
                     } else {
                         None
@@ -672,17 +887,27 @@ impl<'a> NnueSearch<'a> {
             let mut nb = *b;
             nb.apply_flips(pos, flipped);
             self.nn.ix_apply(acc, pos, flipped, mover);
-            let v = if first {
-                -self.negamax(&nb, acc, depth - 1, -beta, -alpha)
+            // Inspect the child's own return value: negating it would turn the
+            // ABORTED sentinel into +inf and hide the abort.
+            let raw = if first {
+                self.negamax(&nb, acc, depth - 1, -beta, -alpha)
             } else {
-                let probe = -self.negamax(&nb, acc, depth - 1, -(alpha + PVS_EPS), -alpha);
-                if probe > alpha && probe < beta {
-                    -self.negamax(&nb, acc, depth - 1, -beta, -probe)
+                let probe = self.negamax(&nb, acc, depth - 1, -(alpha + PVS_EPS), -alpha);
+                if probe != ABORTED && -probe > alpha && -probe < beta {
+                    self.negamax(&nb, acc, depth - 1, -beta, probe)
                 } else {
                     probe
                 }
             };
             self.nn.ix_undo(acc, pos, flipped, mover);
+            if raw == ABORTED {
+                // A truncated subtree carries no value. Returning here — and
+                // crucially *not* writing the table — keeps the abort from
+                // poisoning entries that other threads will trust. (Storing it
+                // was measured as a total collapse: 0% score, -59 discs.)
+                return ABORTED;
+            }
+            let v = -raw;
             first = false;
             if v > best {
                 best = v;
@@ -697,7 +922,7 @@ impl<'a> NnueSearch<'a> {
         }
 
         let flag = if best <= orig_alpha { 3 } else if best >= beta { 2 } else { 1 };
-        self.tt[slot] = TtEntry { key: h, value: best, best: best_move, depth: depth as u8, flag };
+        self.tt.put(h, TtEntry { key: h, value: best, best: best_move, depth: depth as u8, flag });
         best
     }
 }
@@ -828,12 +1053,18 @@ fn main() -> ExitCode {
         }
         None => None,
     };
-    // The search borrows the model; TT sized 2^20 (~24 MB), cleared per game.
-    let mut nnue_search = nnue.as_ref().map(|nn| {
-        let mut s = NnueSearch::new(nn, 20);
-        s.mpc = args.mpc; // same selectivity switch as the linear searcher
-        s
-    });
+    // The search borrows the model and the shared table; 2^20 entries (~24 MB),
+    // cleared per game. The table outlives the search so workers can share it.
+    let nnue_tt = nnue.as_ref().map(|_| SharedTt::new(20));
+    let mut nnue_search = match (nnue.as_ref(), nnue_tt.as_ref()) {
+        (Some(nn), Some(tt)) => {
+            let mut s = NnueSearch::new(nn, tt);
+            s.mpc = args.mpc; // same selectivity switch as the linear searcher
+            s.threads = args.threads;
+            Some(s)
+        }
+        _ => None,
+    };
 
     let mut edax = match Edax::spawn(&args.edax_path, args.edax_level, args.threads, args.protocol) {
         Ok(e) => e,
