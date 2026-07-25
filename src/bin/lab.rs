@@ -61,6 +61,10 @@ struct Args {
     games: usize,
     random_plies: usize,
     seed: u64,
+    /// Check that the parallel search returns the same move as the sequential
+    /// one, instead of inferring it from win rates (far too noisy to see a
+    /// small regression).
+    verify_parallel: bool,
 }
 
 fn parse_args() -> Result<Args, String> {
@@ -78,6 +82,7 @@ fn parse_args() -> Result<Args, String> {
         games: 200,
         random_plies: 6,
         seed: 7,
+        verify_parallel: false,
     };
     let mut have_edax = false;
 
@@ -115,6 +120,7 @@ fn parse_args() -> Result<Args, String> {
             "--games" => args.games = value("--games")?.parse().map_err(|e| format!("--games: {e}"))?,
             "--random-plies" => args.random_plies = value("--random-plies")?.parse().map_err(|e| format!("--random-plies: {e}"))?,
             "--seed" => args.seed = value("--seed")?.parse().map_err(|e| format!("--seed: {e}"))?,
+            "--verify-parallel" => args.verify_parallel = true,
             other => return Err(format!("unknown option: {other}")),
         }
     }
@@ -445,6 +451,16 @@ const SQUARE_BIAS: [i8; 64] = [
 /// searcher's shared table relies on.
 struct SharedTt {
     entries: std::cell::UnsafeCell<Vec<TtEntry>>,
+    /// A *physically separate* table for the Lazy SMP helpers.
+    ///
+    /// Salting the index into the same array is not enough: a helper write
+    /// still lands on a slot some main-thread position maps to, evicting it.
+    /// The main thread then re-searches that node, prunes differently, and can
+    /// return a different move — measured as 2 in 100 positions even with the
+    /// values themselves correctly gated. With separate storage the main
+    /// thread's table evolves exactly as it does in the sequential search, so
+    /// the parallel search returns the identical move.
+    helper_entries: std::cell::UnsafeCell<Vec<TtEntry>>,
     mask: u64,
 }
 // SAFETY: see the note above — entries are self-validating.
@@ -454,7 +470,11 @@ impl SharedTt {
     fn new(bits: u32) -> SharedTt {
         SharedTt {
             entries: std::cell::UnsafeCell::new(vec![
-                TtEntry { key: 0, value: 0.0, best: 64, depth: 0, flag: 0 };
+                TtEntry { key: 0, value: 0.0, best: 64, depth: 0, flag: 0, sharpen: 0 };
+                1usize << bits
+            ]),
+            helper_entries: std::cell::UnsafeCell::new(vec![
+                TtEntry { key: 0, value: 0.0, best: 64, depth: 0, flag: 0, sharpen: 0 };
                 1usize << bits
             ]),
             mask: (1u64 << bits) - 1,
@@ -471,6 +491,31 @@ impl SharedTt {
         }
     }
 
+    /// Lazy SMP helpers write into their own table, so their entries seed each
+    /// other without displacing anything the main thread relies on.
+    #[inline]
+    fn put_helper(&self, hash: u64, e: TtEntry) {
+        // SAFETY: as `get`.
+        unsafe {
+            let v = &mut *self.helper_entries.get();
+            *v.get_unchecked_mut((hash & self.mask) as usize) = e;
+        }
+    }
+
+    /// Read from whichever table this searcher owns.
+    #[inline]
+    fn get_for(&self, hash: u64, helper: bool) -> TtEntry {
+        // SAFETY: as `get`.
+        unsafe {
+            let v = if helper {
+                &*self.helper_entries.get()
+            } else {
+                &*self.entries.get()
+            };
+            *v.get_unchecked((hash & self.mask) as usize)
+        }
+    }
+
     #[inline]
     fn put(&self, hash: u64, e: TtEntry) {
         // SAFETY: as above.
@@ -483,9 +528,10 @@ impl SharedTt {
     fn clear(&self) {
         // SAFETY: called between games, with no workers running.
         unsafe {
-            let v = &mut *self.entries.get();
-            for e in v.iter_mut() {
-                e.flag = 0;
+            for cell in [&self.entries, &self.helper_entries] {
+                for e in (*cell.get()).iter_mut() {
+                    e.flag = 0;
+                }
             }
         }
     }
@@ -500,6 +546,13 @@ struct TtEntry {
     best: u8,
     depth: u8,
     flag: u8,
+    /// How selectively this entry was searched (0 = the main thread's setting,
+    /// higher = pruned harder). Rank
+    /// entries by (depth, selectivity): a bound obtained with *more* pruning is
+    /// not trustworthy for a search that prunes *less*, so without this field a
+    /// Lazy SMP helper's aggressive cut silently becomes the main search's
+    /// answer — a real strength loss, not just non-determinism.
+    sharpen: u8,
 }
 
 /// Fixed-depth NNUE alpha-beta with a transposition table and NNUE-eval move
@@ -528,6 +581,12 @@ struct NnueSearch<'a> {
     /// two helpers at the same depth explore differently instead of re-deriving
     /// the same entries.
     mpc_sharpen: u32,
+    /// True for Lazy SMP helpers, which read and write the helper half of the
+    /// table. Keeping the halves apart is what makes the parallel search return
+    /// the *same move* as the sequential one: with ProbCut enabled, ordering
+    /// decides what gets pruned, so a helper's hint (produced under harder
+    /// pruning) would otherwise change the main thread's answer.
+    is_helper: bool,
 }
 
 impl<'a> NnueSearch<'a> {
@@ -543,6 +602,7 @@ impl<'a> NnueSearch<'a> {
             abort_countdown: ABORT_CHECK_INTERVAL,
             done: None,
             mpc_sharpen: 0,
+            is_helper: false,
         }
     }
 
@@ -559,6 +619,7 @@ impl<'a> NnueSearch<'a> {
             abort_countdown: ABORT_CHECK_INTERVAL,
             done: self.done.clone(),
             mpc_sharpen: self.mpc_sharpen,
+            is_helper: self.is_helper,
         }
     }
 
@@ -602,8 +663,15 @@ impl<'a> NnueSearch<'a> {
     /// deep pass skip the expensive per-node eval ordering (only new nodes pay
     /// for it), the way real engines avoid a full 1-ply scan everywhere.
     fn best_move(&mut self, b: &Board, depth: u32) -> Option<Position> {
+        self.best_move_valued(b, depth).0
+    }
+
+    /// Best move *and* the root value, so a caller can check that a parallel
+    /// search reproduces the sequential one exactly — the move alone can
+    /// coincide while the value diverges.
+    fn best_move_valued(&mut self, b: &Board, depth: u32) -> (Option<Position>, f32) {
         if b.movable() == 0 {
-            return None;
+            return (None, f32::NAN);
         }
         if self.threads > 1 && depth >= 2 {
             // Lazy SMP runs its own iterative deepening on every worker; doing
@@ -613,16 +681,17 @@ impl<'a> NnueSearch<'a> {
         let mut acc = self.nn.indices(b.black, b.white);
         // Iterative deepening: each pass seeds the table so the next orders by
         // the prior best move.
+        let mut value = f32::NAN;
         for d in 1..=depth {
-            self.negamax(b, &mut acc, d, f32::NEG_INFINITY, f32::INFINITY);
+            value = self.negamax(b, &mut acc, d, f32::NEG_INFINITY, f32::INFINITY);
         }
-        self.root_best(b, &mut acc)
+        (self.root_best(b, &mut acc), value)
     }
 
     /// The move the table records for `b`, falling back to a 1-ply ordering.
     fn root_best(&self, b: &Board, acc: &mut PatternIndices) -> Option<Position> {
         let h = zobrist::board_hash(b.player_bb(), b.opponent_bb());
-        let e = self.tt.get(h);
+        let e = self.tt.get_for(h, self.is_helper);
         if e.key == h && e.best < 64 {
             return Position::from_index(e.best as u32);
         }
@@ -652,7 +721,7 @@ impl<'a> NnueSearch<'a> {
     ///
     /// Helpers are also only worth launching while the iteration is cheap
     /// (see `smp_max_depth`).
-    fn lazy_smp(&mut self, b: &Board, depth: u32) -> Option<Position> {
+    fn lazy_smp(&mut self, b: &Board, depth: u32) -> (Option<Position>, f32) {
         use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 
         /// Above this iteration depth the main search is long enough that the
@@ -661,6 +730,7 @@ impl<'a> NnueSearch<'a> {
 
         let nodes = AtomicU64::new(0);
         let mut acc = self.nn.indices(b.black, b.white);
+        let mut value = f32::NAN;
 
         for main_depth in 1..=depth {
             let helpers = if main_depth <= HELPER_MAX_MAIN_DEPTH {
@@ -684,18 +754,19 @@ impl<'a> NnueSearch<'a> {
                     scope.spawn(move || {
                         let mut wacc = w.nn.indices(b.black, b.white);
                         w.mpc_sharpen = sharpen;
+                        w.is_helper = true;
                         w.negamax(b, &mut wacc, d, f32::NEG_INFINITY, f32::INFINITY);
                         nodes.fetch_add(w.nodes, Ordering::Relaxed);
                     });
                 }
                 // The main thread runs the real iteration, then retires the
                 // helpers: whatever they have not finished is stale.
-                self.negamax(b, &mut acc, main_depth, f32::NEG_INFINITY, f32::INFINITY);
+                value = self.negamax(b, &mut acc, main_depth, f32::NEG_INFINITY, f32::INFINITY);
                 stop.store(true, Ordering::Relaxed);
             });
         }
         self.nodes += nodes.load(Ordering::Relaxed);
-        self.root_best(b, &mut acc)
+        (self.root_best(b, &mut acc), value)
     }
 
     /// Children with their flip masks, best-first.
@@ -778,8 +849,8 @@ impl<'a> NnueSearch<'a> {
         let h = zobrist::board_hash(b.player_bb(), b.opponent_bb());
         let mut tt_move = 64u8;
         {
-            let e = self.tt.get(h);
-            if e.key == h && e.flag != 0 {
+            let e = self.tt.get_for(h, self.is_helper);
+            if e.key == h && e.flag != 0 && e.sharpen as u32 <= self.mpc_sharpen {
                 tt_move = e.best;
                 if e.depth as u32 >= depth {
                     match e.flag {
@@ -920,7 +991,24 @@ impl<'a> NnueSearch<'a> {
         }
 
         let flag = if best <= orig_alpha { 3 } else if best >= beta { 2 } else { 1 };
-        self.tt.put(h, TtEntry { key: h, value: best, best: best_move, depth: depth as u8, flag });
+        let store = |tt: &SharedTt, e: TtEntry| {
+            if self.is_helper {
+                tt.put_helper(h, e);
+            } else {
+                tt.put(h, e);
+            }
+        };
+        store(
+            self.tt,
+            TtEntry {
+                key: h,
+                value: best,
+                best: best_move,
+                depth: depth as u8,
+                flag,
+                sharpen: self.mpc_sharpen as u8,
+            },
+        );
         best
     }
 }
@@ -1066,6 +1154,108 @@ fn main() -> ExitCode {
         }
         _ => None,
     };
+
+    // Equivalence check: the parallel search must decide the same move as the
+    // sequential one. Win rate cannot see a small regression (200 games still
+    // leave a +-7% band), but a move mismatch is a direct, per-position signal.
+    if args.verify_parallel {
+        let Some(nn) = nnue.as_ref() else {
+            eprintln!("--verify-parallel needs --nnue");
+            return ExitCode::FAILURE;
+        };
+        let mut rng = Rng::new(args.seed);
+        let (mut same, mut diff, mut val_diff) = (0usize, 0usize, 0usize);
+        let mut better = 0usize;
+        let mut value_mismatch = 0usize;
+        let positions = args.games.max(2);
+        for _ in 0..positions {
+            // Random midgame positions, deeper than the opening so the search
+            // has something to decide.
+            let (mut board, _) = random_opening(&mut rng, args.random_plies);
+            for _ in 0..8 {
+                let moves = board.movable();
+                if moves == 0 {
+                    break;
+                }
+                board.make_move_bits(nth_move(moves, rng.below(moves.count_ones())));
+            }
+            if board.movable() == 0 {
+                continue;
+            }
+
+            // Fresh tables both times: a warm table would let one run inherit
+            // the other's work and hide a divergence.
+            let seq_tt = SharedTt::new(20);
+            let mut seq = NnueSearch::new(nn, &seq_tt);
+            seq.mpc = args.mpc;
+            seq.threads = 1;
+            let (seq_move, seq_value) = seq.best_move_valued(&board, args.depth as u32);
+
+            let par_tt = SharedTt::new(20);
+            let mut par = NnueSearch::new(nn, &par_tt);
+            par.mpc = args.mpc;
+            par.threads = args.threads.max(2);
+            let (par_move, par_value) = par.best_move_valued(&board, args.depth as u32);
+
+            // The root value must match too: an identical move with a different
+            // value means the searches disagreed somewhere and only happened to
+            // land on the same choice.
+            if seq_value != par_value {
+                value_mismatch += 1;
+                println!("  VALUE DIFF: seq {seq_value:.4} vs par {par_value:.4} (move {seq_move:?} / {par_move:?})");
+            }
+            if seq_move == par_move {
+                same += 1;
+            } else {
+                diff += 1;
+                // A different move is only a real problem if it is also worse.
+                // Score both at the same depth from the sequential searcher.
+                let mut judge_tt = SharedTt::new(20);
+                let value_of = |mv: Option<Position>, tt: &SharedTt| -> f32 {
+                    let Some(mv) = mv else { return f32::NAN };
+                    let mut j = NnueSearch::new(nn, tt);
+                    j.mpc = args.mpc;
+                    let mut child = board;
+                    let flipped = child.make_move_bits(mv);
+                    let mut ix = nn.indices(board.black, board.white);
+                    nn.ix_apply(&mut ix, mv, flipped, board.player());
+                    -j.negamax(&child, &mut ix, args.depth as u32, f32::NEG_INFINITY, f32::INFINITY)
+                };
+                let vs = value_of(seq_move, &judge_tt);
+                judge_tt = SharedTt::new(20);
+                let vp = value_of(par_move, &judge_tt);
+                // Only a *worse* parallel choice is a regression. Comparing the
+                // absolute difference counted the parallel search's own
+                // improvements as failures.
+                if vs - vp > 0.5 {
+                    val_diff += 1;
+                    println!("  WORSE: seq {seq_move:?} ({vs:.2}) vs par {par_move:?} ({vp:.2})");
+                } else if vp - vs > 0.5 {
+                    better += 1;
+                    println!("  better: seq {seq_move:?} ({vs:.2}) vs par {par_move:?} ({vp:.2})");
+                }
+            }
+        }
+        println!(
+            "verify-parallel (depth {}, {} threads, {} positions): same move {same}, \
+             different move {diff} (parallel worse {val_diff}, parallel better {better}, \
+             equal {})",
+            args.depth,
+            args.threads.max(2),
+            same + diff,
+            diff - val_diff - better
+        );
+        println!("root value mismatches: {value_mismatch}");
+        println!(
+            "=> {}",
+            if diff == 0 && value_mismatch == 0 {
+                "parallel search reproduces the sequential search exactly (move and value)"
+            } else {
+                "PARALLEL SEARCH DIFFERS FROM SEQUENTIAL"
+            }
+        );
+        return ExitCode::SUCCESS;
+    }
 
     let mut edax = match Edax::spawn(&args.edax_path, args.edax_level, args.threads, args.protocol) {
         Ok(e) => e,
