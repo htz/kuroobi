@@ -33,6 +33,7 @@ pub mod pattern_index;
 pub mod stability;
 pub mod game;
 pub mod evaluator;
+pub mod nnue;
 pub mod search;
 pub mod solver;
 pub mod trainer;

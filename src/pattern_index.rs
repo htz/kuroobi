@@ -35,6 +35,15 @@ pub struct PatternIndices {
     idx: [u16; MAX_MASKS],
 }
 
+impl PatternIndices {
+    /// The per-mask ternary indices (absolute colors). Used by the NNUE
+    /// feature transformer, which reads the same indices the linear sum does.
+    #[inline]
+    pub fn raw(&self) -> &[u16; MAX_MASKS] {
+        &self.idx
+    }
+}
+
 /// Static lookup tables for one pattern library: square -> affected masks,
 /// plus digit-swap tables for White-perspective evaluation.
 pub struct PatternIndexer {
