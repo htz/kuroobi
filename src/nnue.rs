@@ -352,6 +352,35 @@ impl Nnue {
         f
     }
 
+    /// Evaluate from pattern indices the caller already maintains (the search
+    /// keeps these incrementally). Recomputes the H accumulator from scratch —
+    /// like neural-reversi, which rebuilds its accumulator per eval rather than
+    /// threading it through make/unmake — so integrating into an existing
+    /// incremental-index search needs only this one call swapped in.
+    /// Requires [`quantize`](Self::quantize).
+    #[inline]
+    pub fn eval_from_indices(&self, indices: &PatternIndices, board: &Board) -> f32 {
+        let stage = crate::evaluator::Evaluator::stage(board);
+        let white = board.player() != Color::Black;
+        let bias_off = if white { H } else { 0 }; // ft_bias halves are equal
+        let row_off = if white { H } else { 0 };
+        let mut acc = [0i16; H];
+        for (h, a) in acc.iter_mut().enumerate() {
+            *a = self.ft_bias_i16[bias_off + h];
+        }
+        let raw = indices.raw();
+        for m in 0..self.n_masks {
+            let base = (self.mask_off[m] as usize + raw[m] as usize) * H2 + row_off;
+            let row = &self.ftc_i16[base..base + H];
+            for h in 0..H {
+                acc[h] = acc[h].wrapping_add(row[h]);
+            }
+        }
+        let ow = &self.out_w_i16[stage * H..stage * H + H];
+        let sum = readout_dot(&acc, ow);
+        self.out_b[stage] + sum as f32 * self.out_scale
+    }
+
     /// Evaluate a board from scratch (rebuilds indices). Convenience for
     /// non-incremental callers (arena / validation).
     pub fn eval(&self, board: &Board) -> f32 {

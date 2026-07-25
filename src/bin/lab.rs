@@ -361,8 +361,30 @@ struct Clock {
 }
 
 /// (empties to the winner).
+/// Expand and order the legal moves of `b`: apply each, score it by the
+/// child's NNUE eval (from the mover's view, so a lower opponent eval is
+/// better for us), undo, and sort best-first. Good ordering is what makes
+/// alpha-beta prune — without it a fixed-depth search explodes.
+fn ordered_children(b: &Board, nn: &Nnue, acc: &mut Accumulator) -> Vec<(Position, u64, f32)> {
+    let mover = b.player();
+    let mut kids = Vec::with_capacity(b.movable_count() as usize);
+    let mut m = b.movable();
+    while m != 0 {
+        let pos = Position::from_index(m.trailing_zeros()).unwrap();
+        m &= m - 1;
+        let mut nb = *b;
+        let flipped = nb.make_move_bits(pos);
+        nn.acc_apply(acc, pos, flipped, mover);
+        let key = -nn.eval_acc(acc, &nb); // opponent to move; negate to our view
+        nn.acc_undo(acc, pos, flipped, mover);
+        kids.push((pos, flipped, key));
+    }
+    kids.sort_unstable_by(|a, b| b.2.total_cmp(&a.2));
+    kids
+}
+
 /// NNUE alpha-beta at fixed `depth`, incremental accumulator maintained
-/// through make/unmake. Eval at the horizon; exact terminal value dominates.
+/// through make/unmake, children searched best-first (see `ordered_children`).
 fn nnue_negamax(b: &Board, nn: &Nnue, acc: &mut Accumulator, depth: u32, mut alpha: f32, beta: f32) -> f32 {
     if b.is_game_over() {
         let p = b.player_bb().count_ones() as i32;
@@ -374,58 +396,76 @@ fn nnue_negamax(b: &Board, nn: &Nnue, acc: &mut Accumulator, depth: u32, mut alp
     if depth == 0 {
         return nn.eval_acc(acc, b);
     }
-    let moves = b.movable();
-    if moves == 0 {
+    if b.movable() == 0 {
         let mut nb = *b;
         nb.pass();
         return -nnue_negamax(&nb, nn, acc, depth, -beta, -alpha);
     }
+    // Order only where it pays for itself (the extra 1-ply evals are wasted at
+    // the frontier, where there is nothing left to prune).
+    let mover = b.player();
     let mut best = f32::NEG_INFINITY;
-    let mut m = moves;
-    while m != 0 {
-        let pos = Position::from_index(m.trailing_zeros()).unwrap();
-        m &= m - 1;
-        let mover = b.player();
-        let mut nb = *b;
-        let flipped = nb.make_move_bits(pos);
-        nn.acc_apply(acc, pos, flipped, mover);
-        let v = -nnue_negamax(&nb, nn, acc, depth - 1, -beta, -alpha);
-        nn.acc_undo(acc, pos, flipped, mover);
-        if v > best {
-            best = v;
+    if depth >= 2 {
+        for (pos, flipped, _) in ordered_children(b, nn, acc) {
+            let mut nb = *b;
+            nb.make_move_bits(pos);
+            nn.acc_apply(acc, pos, flipped, mover);
+            let v = -nnue_negamax(&nb, nn, acc, depth - 1, -beta, -alpha);
+            nn.acc_undo(acc, pos, flipped, mover);
+            if v > best {
+                best = v;
+            }
+            if best > alpha {
+                alpha = best;
+            }
+            if alpha >= beta {
+                break;
+            }
         }
-        if best > alpha {
-            alpha = best;
-        }
-        if alpha >= beta {
-            break;
+    } else {
+        let mut m = b.movable();
+        while m != 0 {
+            let pos = Position::from_index(m.trailing_zeros()).unwrap();
+            m &= m - 1;
+            let mut nb = *b;
+            let flipped = nb.make_move_bits(pos);
+            nn.acc_apply(acc, pos, flipped, mover);
+            let v = -nnue_negamax(&nb, nn, acc, depth - 1, -beta, -alpha);
+            nn.acc_undo(acc, pos, flipped, mover);
+            if v > best {
+                best = v;
+            }
+            if best > alpha {
+                alpha = best;
+            }
+            if alpha >= beta {
+                break;
+            }
         }
     }
     best
 }
 
-/// Best NNUE move at `depth` for the side to move.
+/// Best NNUE move at `depth` for the side to move (ordered root).
 fn nnue_best_move(b: &Board, nn: &Nnue, depth: u32) -> Option<Position> {
-    let moves = b.movable();
-    if moves == 0 {
+    if b.movable() == 0 {
         return None;
     }
     let mut acc = nn.accumulator(b);
+    let mover = b.player();
     let mut best = f32::NEG_INFINITY;
     let mut best_pos = None;
-    let mut m = moves;
-    while m != 0 {
-        let pos = Position::from_index(m.trailing_zeros()).unwrap();
-        m &= m - 1;
-        let mover = b.player();
+    let mut alpha = f32::NEG_INFINITY;
+    for (pos, flipped, _) in ordered_children(b, nn, &mut acc) {
         let mut nb = *b;
-        let flipped = nb.make_move_bits(pos);
+        nb.make_move_bits(pos);
         nn.acc_apply(&mut acc, pos, flipped, mover);
-        let v = -nnue_negamax(&nb, nn, &mut acc, depth - 1, f32::NEG_INFINITY, f32::INFINITY);
+        let v = -nnue_negamax(&nb, nn, &mut acc, depth - 1, f32::NEG_INFINITY, -alpha);
         nn.acc_undo(&mut acc, pos, flipped, mover);
         if v > best {
             best = v;
             best_pos = Some(pos);
+            alpha = best;
         }
     }
     best_pos
