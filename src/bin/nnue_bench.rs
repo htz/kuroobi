@@ -157,41 +157,6 @@ fn walk_scratch(
     best
 }
 
-/// Leaf-rebuild over the i8 transformer (half the bytes per mask row).
-fn walk_scratch_i8(
-    b: &Board,
-    nn: &Nnue,
-    ixr: &PatternIndexer,
-    ix: &mut PatternIndices,
-    depth: u32,
-    nodes: &mut u64,
-) -> f32 {
-    *nodes += 1;
-    if depth == 0 || b.is_game_over() {
-        return nn.eval_from_indices_i8(ix, b);
-    }
-    let moves = b.movable();
-    if moves == 0 {
-        let mut nb = *b;
-        nb.pass();
-        return -walk_scratch_i8(&nb, nn, ixr, ix, depth, nodes);
-    }
-    let mut best = f32::NEG_INFINITY;
-    let mut m = moves;
-    while m != 0 {
-        let pos = Position::from_index(m.trailing_zeros()).unwrap();
-        m &= m - 1;
-        let mover = b.player();
-        let mut nb = *b;
-        let flipped = nb.make_move_bits(pos);
-        ixr.apply(ix, pos, flipped, mover);
-        let v = -walk_scratch_i8(&nb, nn, ixr, ix, depth - 1, nodes);
-        ixr.undo(ix, pos, flipped, mover);
-        if v > best { best = v; }
-    }
-    best
-}
-
 fn main() {
     let mut nnue_path = PathBuf::from("nnue.bin");
     let mut depth = 8u32;
@@ -219,7 +184,6 @@ fn main() {
             load_examples_binary_into(f, &mut val, None).expect("load val");
         }
         let (mut sq_f32, mut sq_i16, mut sq_i32) = (0.0f64, 0.0f64, 0.0f64);
-        let mut sq_i8 = 0.0f64;
         for ex in &val {
             let b = ex.board();
             let ef = nn.eval(&b) as f64; // f32 (from-scratch, reference)
@@ -227,19 +191,15 @@ fn main() {
             let a3 = nn.accumulator_i32(&b);
             let ei = nn.eval_acc(&ai, &b) as f64; // i16
             let e3 = nn.eval_acc_i32(&a3, &b) as f64; // i32
-            let ix = nn.indices(ex.black, ex.white);
-            let e8 = nn.eval_from_indices_i8(&ix, &b) as f64; // i8 leaf path
             sq_f32 += (ex.score as f64 - ef).powi(2);
             sq_i16 += (ex.score as f64 - ei).powi(2);
             sq_i32 += (ex.score as f64 - e3).powi(2);
-            sq_i8 += (ex.score as f64 - e8).powi(2);
         }
         let n = val.len() as f64;
         println!("val MSE over {} positions:", val.len());
         println!("  f32: {:.4}", sq_f32 / n);
         println!("  i32: {:.4}", sq_i32 / n);
         println!("  i16: {:.4}", sq_i16 / n);
-        println!("  i8 : {:.4}", sq_i8 / n);
         return;
     }
     let mut lin = Evaluator::new(EGAROUCID_PATTERNS);
@@ -319,18 +279,9 @@ fn main() {
         t.elapsed().as_secs_f64()
     };
 
-    let sec_s8 = {
-        let mut ix2 = ixr.init(b.black, b.white);
-        let mut nodes = 0u64;
-        let t = Instant::now();
-        walk_scratch_i8(&b, &nn, &ixr, &mut ix2, depth, &mut nodes);
-        t.elapsed().as_secs_f64()
-    };
-
     let mnps = |s: f64| nodes_l as f64 / s / 1e6;
     println!("linear:  {:.2} Mnps  (1.00x)", mnps(sec_l));
-    println!("nnue leaf-rebuild:    {:.2} Mnps  ({:.2}x)", mnps(sec_s), sec_s / sec_l);
-    println!("nnue leaf-rebuild i8: {:.2} Mnps  ({:.2}x)", mnps(sec_s8), sec_s8 / sec_l);
+    println!("nnue leaf-rebuild: {:.2} Mnps  ({:.2}x)", mnps(sec_s), sec_s / sec_l);
     println!("nnue f32: {:.2} Mnps  ({:.2}x)", mnps(sec_f), sec_f / sec_l);
     println!("nnue i32: {:.2} Mnps  ({:.2}x)", mnps(sec_32), sec_32 / sec_l);
     println!("nnue i16: {:.2} Mnps  ({:.2}x)", mnps(sec_n), sec_n / sec_l);
