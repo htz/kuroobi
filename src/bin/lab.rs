@@ -379,6 +379,19 @@ const MAX_KIDS: usize = 34;
 /// shallower nodes use cheap mobility ordering (see `ordered`).
 const EVAL_ORDER_DEPTH: u32 = 3;
 
+/// ProbCut (Multi-ProbCut's single-probe form): from this remaining depth up,
+/// a shallow search decides whether the node is far enough outside the window
+/// to skip entirely. The head-to-head opponents prune this way at deep
+/// levels, so a fair deep comparison needs it on both sides.
+const MPC_MIN_DEPTH: u32 = 5;
+
+/// Depth taken off for the probe search.
+const MPC_REDUCTION: u32 = 3;
+
+/// How far outside the window the probe must land, in discs. Wider = safer and
+/// slower; selectivity ladders express the same knob as a percentage.
+const MPC_MARGIN: f32 = 4.0;
+
 /// Static square preference for cheap ordering (file-major): corners best,
 /// X-squares worst. Scaled to sit between mobility steps.
 const SQUARE_BIAS: [i8; 64] = [
@@ -412,6 +425,8 @@ struct NnueSearch<'a> {
     mask: u64,
     /// Nodes visited, to diagnose ordering quality (effective branching).
     pub nodes: u64,
+    /// Enable ProbCut (selective pruning).
+    pub mpc: bool,
 }
 
 impl<'a> NnueSearch<'a> {
@@ -424,6 +439,7 @@ impl<'a> NnueSearch<'a> {
             ],
             mask: (1u64 << bits) - 1,
             nodes: 0,
+            mpc: false,
         }
     }
 
@@ -546,6 +562,22 @@ impl<'a> NnueSearch<'a> {
                         _ => {}
                     }
                 }
+            }
+        }
+
+        // ProbCut: a reduced-depth null-window probe decides whether this node
+        // lies so far outside [alpha, beta] that searching it in full cannot
+        // change the parent's decision. Skipped at the root window (infinite
+        // bounds carry no information to probe against).
+        if self.mpc && depth >= MPC_MIN_DEPTH && alpha.is_finite() && beta.is_finite() {
+            let pd = depth - MPC_REDUCTION;
+            let hi = beta + MPC_MARGIN;
+            if self.negamax(b, acc, pd, hi - PVS_EPS, hi) >= hi {
+                return beta;
+            }
+            let lo = alpha - MPC_MARGIN;
+            if self.negamax(b, acc, pd, lo, lo + PVS_EPS) <= lo {
+                return alpha;
             }
         }
 
@@ -749,7 +781,11 @@ fn main() -> ExitCode {
         None => None,
     };
     // The search borrows the model; TT sized 2^20 (~24 MB), cleared per game.
-    let mut nnue_search = nnue.as_ref().map(|nn| NnueSearch::new(nn, 20));
+    let mut nnue_search = nnue.as_ref().map(|nn| {
+        let mut s = NnueSearch::new(nn, 20);
+        s.mpc = args.mpc; // same selectivity switch as the linear searcher
+        s
+    });
 
     let mut edax = match Edax::spawn(&args.edax_path, args.edax_level, args.threads, args.protocol) {
         Ok(e) => e,
