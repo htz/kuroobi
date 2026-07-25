@@ -39,6 +39,7 @@ use std::path::PathBuf;
 use std::process::{Child, ChildStdin, ChildStdout, Command, ExitCode, Stdio};
 
 use kuroobi::evaluator::Evaluator;
+use kuroobi::nnue::{Accumulator, Nnue};
 use kuroobi::pattern::{EDAX_PATTERNS, EGAROUCID_PATTERNS, EGAROUCID_PLUS_PATTERNS};
 use kuroobi::search::Searcher;
 use kuroobi::solver::{EndSolverMode, Solver};
@@ -47,6 +48,7 @@ use kuroobi::{Board, Color, Position};
 struct Args {
     edax_path: PathBuf,
     weights: PathBuf,
+    nnue: Option<PathBuf>,
     patterns: &'static str,
     depth: u8,
     mpc: bool,
@@ -63,6 +65,7 @@ fn parse_args() -> Result<Args, String> {
     let mut args = Args {
         edax_path: PathBuf::new(),
         weights: PathBuf::from("weights_full.bin"),
+        nnue: None,
         patterns: "egaroucid",
         depth: 6,
         mpc: false,
@@ -85,6 +88,7 @@ fn parse_args() -> Result<Args, String> {
                 have_edax = true;
             }
             "--weights" => args.weights = PathBuf::from(value("--weights")?),
+            "--nnue" => args.nnue = Some(PathBuf::from(value("--nnue")?)),
             "--patterns" => {
                 args.patterns = match value("--patterns")?.as_str() {
                     "egaroucid" => "egaroucid",
@@ -357,11 +361,82 @@ struct Clock {
 }
 
 /// (empties to the winner).
+/// NNUE alpha-beta at fixed `depth`, incremental accumulator maintained
+/// through make/unmake. Eval at the horizon; exact terminal value dominates.
+fn nnue_negamax(b: &Board, nn: &Nnue, acc: &mut Accumulator, depth: u32, mut alpha: f32, beta: f32) -> f32 {
+    if b.is_game_over() {
+        let p = b.player_bb().count_ones() as i32;
+        let o = b.opponent_bb().count_ones() as i32;
+        let e = 64 - p - o;
+        let diff = if p > o { p - o + e } else if o > p { p - o - e } else { 0 };
+        return diff as f32 * 1000.0;
+    }
+    if depth == 0 {
+        return nn.eval_acc(acc, b);
+    }
+    let moves = b.movable();
+    if moves == 0 {
+        let mut nb = *b;
+        nb.pass();
+        return -nnue_negamax(&nb, nn, acc, depth, -beta, -alpha);
+    }
+    let mut best = f32::NEG_INFINITY;
+    let mut m = moves;
+    while m != 0 {
+        let pos = Position::from_index(m.trailing_zeros()).unwrap();
+        m &= m - 1;
+        let mover = b.player();
+        let mut nb = *b;
+        let flipped = nb.make_move_bits(pos);
+        nn.acc_apply(acc, pos, flipped, mover);
+        let v = -nnue_negamax(&nb, nn, acc, depth - 1, -beta, -alpha);
+        nn.acc_undo(acc, pos, flipped, mover);
+        if v > best {
+            best = v;
+        }
+        if best > alpha {
+            alpha = best;
+        }
+        if alpha >= beta {
+            break;
+        }
+    }
+    best
+}
+
+/// Best NNUE move at `depth` for the side to move.
+fn nnue_best_move(b: &Board, nn: &Nnue, depth: u32) -> Option<Position> {
+    let moves = b.movable();
+    if moves == 0 {
+        return None;
+    }
+    let mut acc = nn.accumulator(b);
+    let mut best = f32::NEG_INFINITY;
+    let mut best_pos = None;
+    let mut m = moves;
+    while m != 0 {
+        let pos = Position::from_index(m.trailing_zeros()).unwrap();
+        m &= m - 1;
+        let mover = b.player();
+        let mut nb = *b;
+        let flipped = nb.make_move_bits(pos);
+        nn.acc_apply(&mut acc, pos, flipped, mover);
+        let v = -nnue_negamax(&nb, nn, &mut acc, depth - 1, f32::NEG_INFINITY, f32::INFINITY);
+        nn.acc_undo(&mut acc, pos, flipped, mover);
+        if v > best {
+            best = v;
+            best_pos = Some(pos);
+        }
+    }
+    best_pos
+}
+
 #[allow(clippy::too_many_arguments)]
 fn play(
     start: &Board,
     we_are_black: bool,
     evaluator: &Evaluator,
+    nnue: Option<&Nnue>,
     searcher: &mut Searcher,
     solver: &mut Solver,
     edax: &mut Edax,
@@ -401,6 +476,8 @@ fn play(
                     .solve_with_eval(EndSolverMode::Perfect, &board, Some(evaluator))
                     .best_move
                     .ok_or("solver returned no move")?
+            } else if let Some(nn) = nnue {
+                nnue_best_move(&board, nn, depth as u32).ok_or("nnue returned no move")?
             } else {
                 searcher
                     .search(&board, evaluator, depth)
@@ -467,6 +544,20 @@ fn main() -> ExitCode {
         return ExitCode::FAILURE;
     }
 
+    // Optional NNUE evaluator for our midgame moves (endgame stays exact).
+    let nnue = match &args.nnue {
+        Some(p) => {
+            let mut nn = Nnue::new(patterns);
+            if let Err(e) = nn.load(p) {
+                eprintln!("failed to load nnue {}: {e}", p.display());
+                return ExitCode::FAILURE;
+            }
+            nn.quantize();
+            Some(nn)
+        }
+        None => None,
+    };
+
     let mut edax = match Edax::spawn(&args.edax_path, args.edax_level, args.threads, args.protocol) {
         Ok(e) => e,
         Err(e) => {
@@ -503,7 +594,7 @@ fn main() -> ExitCode {
         let (opening, opening_moves) = random_opening(&mut rng, args.random_plies);
         for we_are_black in [true, false] {
             match play(
-                &opening, we_are_black, &evaluator, &mut searcher, &mut solver,
+                &opening, we_are_black, &evaluator, nnue.as_ref(), &mut searcher, &mut solver,
                 &mut edax, args.depth, args.solve_empties, &mut clock, &opening_moves,
             ) {
                 Ok(s) => {
