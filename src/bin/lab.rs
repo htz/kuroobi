@@ -699,7 +699,7 @@ impl<'a> NnueSearch<'a> {
                     let nodes = &nodes;
                     // ctz(idx+1): half the helpers share the main depth, the
                     // rest scout progressively further ahead.
-                    let ahead = (idx as u32 + 1).trailing_zeros();
+                    let ahead = (idx as u32 + 1).trailing_zeros() * 2;
                     let d = (main_depth + ahead).min(depth);
                     // Same depth => prune harder, so they do not duplicate.
                     let sharpen = (idx as u32 / 2).min(2);
@@ -1085,10 +1085,15 @@ fn main() -> ExitCode {
     };
     // The search borrows the model and the shared table; 2^20 entries (~24 MB),
     // cleared per game. The table outlives the search so workers can share it.
-    // 2^20 entries (~24 MB). Enlarging it to 2^23 was measured as *slower*
-    // (0.050 -> 0.065 s/move) despite the table saturating every move: the
-    // random probes lose cache locality faster than the extra entries help.
-    let nnue_tt = nnue.as_ref().map(|_| SharedTt::new(20));
+    // 2^24 entries (~384 MB), chosen by measurement: 2^20 -> 0.037 s/move,
+    // 2^22 -> 0.036, 2^24 -> 0.032, 2^25/2^26 -> 0.034.
+    //
+    // An earlier sweep found *larger* tables slower, but that was with the
+    // helpers writing to a table of their own — nothing they produced had to
+    // survive. Now 16 threads share one table and the helpers exist precisely
+    // so the main thread reuses their entries, so capacity buys hit rate until
+    // the working set stops fitting the cache hierarchy around 2^24.
+    let nnue_tt = nnue.as_ref().map(|_| SharedTt::new(24));
     let mut nnue_search = match (nnue.as_ref(), nnue_tt.as_ref()) {
         (Some(nn), Some(tt)) => {
             let mut s = NnueSearch::new(nn, tt);
