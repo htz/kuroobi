@@ -368,6 +368,13 @@ struct Clock {
 /// a hundredth of a disc is far below any meaningful difference.
 const PVS_EPS: f32 = 0.01;
 
+/// One ordered child: move, its flip mask (reused so the search never
+/// recomputes the flips), and the ordering key.
+type Kid = (Position, u64, f32);
+
+/// Upper bound on legal moves in a Reversi position.
+const MAX_KIDS: usize = 34;
+
 /// From this remaining depth upward, order children by a full NNUE eval;
 /// shallower nodes use cheap mobility ordering (see `ordered`).
 const EVAL_ORDER_DEPTH: u32 = 3;
@@ -443,7 +450,11 @@ impl<'a> NnueSearch<'a> {
         if e.key == h && e.best < 64 {
             Position::from_index(e.best as u32)
         } else {
-            self.ordered(b, &mut acc, 1).first().map(|k| k.0)
+            {
+                let mut kids: [Kid; MAX_KIDS] = [(Position(0), 0, 0.0); MAX_KIDS];
+                let n = self.ordered_into(b, &mut acc, 1, &mut kids);
+                (n > 0).then(|| kids[0].0)
+            }
         }
     }
 
@@ -457,15 +468,20 @@ impl<'a> NnueSearch<'a> {
     /// - deep nodes (`depth >= EVAL_ORDER_DEPTH`): NNUE eval, the strong signal
     /// - shallow nodes: opponent mobility (fewer replies is better) plus a
     ///   static square bias — no eval, no accumulator work at all
-    fn ordered(
+    /// Fills `out` and returns how many children there are. Writing into a
+    /// caller-owned stack array keeps this off the heap — returning a `Vec`
+    /// meant one allocation per interior node, which at ~60k nodes a move is
+    /// pure overhead.
+    fn ordered_into(
         &self,
         b: &Board,
         acc: &mut PatternIndices,
         depth: u32,
-    ) -> Vec<(Position, u64, f32)> {
+        out: &mut [Kid; MAX_KIDS],
+    ) -> usize {
         let mover = b.player();
-        let mut kids = Vec::with_capacity(b.movable_count() as usize);
         let eval_order = depth >= EVAL_ORDER_DEPTH;
+        let mut n = 0usize;
         let mut m = b.movable();
         while m != 0 {
             let pos = Position::from_index(m.trailing_zeros()).unwrap();
@@ -482,10 +498,11 @@ impl<'a> NnueSearch<'a> {
                 // square bias breaks ties toward corners and away from X/C.
                 -(nb.movable_count() as f32) * 4.0 + SQUARE_BIAS[pos.index() as usize] as f32
             };
-            kids.push((pos, flipped, key));
+            out[n] = (pos, flipped, key);
+            n += 1;
         }
-        kids.sort_unstable_by(|a, b| b.2.total_cmp(&a.2));
-        kids
+        out[..n].sort_unstable_by(|a, b| b.2.total_cmp(&a.2));
+        n
     }
 
     fn negamax(&mut self, b: &Board, acc: &mut PatternIndices, depth: u32, mut alpha: f32, beta: f32) -> f32 {
@@ -532,22 +549,23 @@ impl<'a> NnueSearch<'a> {
         // With a TT move (typical once iterative deepening has seeded this
         // node) put it first over a cheap natural order — skip the expensive
         // per-child eval scan. Only genuinely new deep nodes pay for it.
-        let mut kids = if tt_move >= 64 && depth >= 2 {
-            self.ordered(b, acc, depth)
+        let mut kids: [Kid; MAX_KIDS] = [(Position(0), 0, 0.0); MAX_KIDS];
+        let n_kids = if tt_move >= 64 && depth >= 2 {
+            self.ordered_into(b, acc, depth, &mut kids)
         } else {
-            let mut v = Vec::with_capacity(b.movable_count() as usize);
+            let mut n = 0usize;
             let mut m = b.movable();
             while m != 0 {
                 let pos = Position::from_index(m.trailing_zeros()).unwrap();
                 m &= m - 1;
                 let mut nb = *b;
-                let flipped = nb.make_move_bits(pos);
-                v.push((pos, flipped, 0.0));
+                kids[n] = (pos, nb.make_move_bits(pos), 0.0);
+                n += 1;
             }
-            v
+            n
         };
         if tt_move < 64 {
-            if let Some(i) = kids.iter().position(|k| k.0.index() == tt_move) {
+            if let Some(i) = kids[..n_kids].iter().position(|k| k.0.index() == tt_move) {
                 kids.swap(0, i);
             }
         }
@@ -559,9 +577,12 @@ impl<'a> NnueSearch<'a> {
         // near the sqrt(b) ideal, so there is nothing left for PVS to prune.
         // Kept because it costs nothing and helps when ordering degrades.)
         let mut first = true;
-        for (pos, flipped, _) in kids {
+        for i in 0..n_kids {
+            let (pos, flipped, _) = kids[i];
+            // The flips are already known from the ordering pass; applying them
+            // directly avoids recomputing a full flip per child.
             let mut nb = *b;
-            nb.make_move_bits(pos);
+            nb.apply_flips(pos, flipped);
             self.nn.ix_apply(acc, pos, flipped, mover);
             let v = if first {
                 -self.negamax(&nb, acc, depth - 1, -beta, -alpha)
