@@ -524,6 +524,10 @@ struct NnueSearch<'a> {
     /// Set once the main Lazy SMP thread has reached the target depth; helpers
     /// stop as soon as they notice, since their results are no longer needed.
     done: Option<std::sync::Arc<std::sync::atomic::AtomicBool>>,
+    /// Extra ProbCut aggressiveness for Lazy SMP helpers: shrinks the margin so
+    /// two helpers at the same depth explore differently instead of re-deriving
+    /// the same entries.
+    mpc_sharpen: u32,
 }
 
 impl<'a> NnueSearch<'a> {
@@ -538,6 +542,7 @@ impl<'a> NnueSearch<'a> {
             abort: None,
             abort_countdown: ABORT_CHECK_INTERVAL,
             done: None,
+            mpc_sharpen: 0,
         }
     }
 
@@ -553,6 +558,7 @@ impl<'a> NnueSearch<'a> {
             abort: self.abort.clone(),
             abort_countdown: ABORT_CHECK_INTERVAL,
             done: self.done.clone(),
+            mpc_sharpen: self.mpc_sharpen,
         }
     }
 
@@ -625,97 +631,70 @@ impl<'a> NnueSearch<'a> {
         (n > 0).then(|| kids[0].0)
     }
 
-    /// Lazy SMP: every worker searches the *whole* position independently and
-    /// they cooperate only through the shared transposition table.
+    /// Lazy SMP.
     ///
-    /// Root splitting was tried first and lost to a single thread (measured:
-    /// 1.7x the nodes for 1.3x the wall clock). The reason is structural — at
-    /// the root the eldest child's subtree *is* nearly the whole search, so
-    /// there is little sibling work to hand out, and what is handed out runs
-    /// before alpha is tight and gets wasted. Lazy SMP sidesteps that: workers
-    /// deepen at staggered depths, so the table fills with useful bounds and
-    /// best moves sooner than one thread could produce them, and every worker's
-    /// ordering improves from every other worker's findings.
+    /// The main thread owns the iterative deepening. **Helpers are launched and
+    /// joined inside each iteration**, not once for the whole search: their job
+    /// is to fill the table for the iteration the main thread is about to run,
+    /// and a helper still running a stale iteration is wasted work.
+    ///
+    /// Helpers diverge along two axes:
+    ///
+    /// - **depth** `main_depth + ctz(idx + 1)`: helper 0 shares the main depth,
+    ///   1 goes one deeper, 2 shares again, 3 goes two deeper... so the search
+    ///   effort stays concentrated near the current iteration while a few
+    ///   threads scout ahead. A flat 0..2 spread (what this used to do) puts
+    ///   too much work on plies the main thread will not reach this iteration.
+    /// - **selectivity**: when several helpers land on the same depth, each
+    ///   subsequent one prunes harder (`sub_mpc_level` increments). Two threads
+    ///   searching the same depth with the same selectivity just re-derive the
+    ///   same entries.
+    ///
+    /// Helpers are also only worth launching while the iteration is cheap
+    /// (see `smp_max_depth`).
     fn lazy_smp(&mut self, b: &Board, depth: u32) -> Option<Position> {
         use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 
+        /// Above this iteration depth the main search is long enough that the
+        /// helpers' extra table entries no longer pay for the bandwidth.
+        const HELPER_MAX_MAIN_DEPTH: u32 = 12;
+
         let nodes = AtomicU64::new(0);
-        let threads = self.threads;
-        // Helpers loop until the main thread has finished its target depth.
-        let done = std::sync::Arc::new(AtomicBool::new(false));
-
-        std::thread::scope(|scope| {
-            for tid in 0..threads {
-                let mut w = self.worker();
-                let nodes = &nodes;
-                let done = done.clone();
-                // Only helpers honour the flag: the main thread sets it, and
-                // must never be stopped by it (a stopped main thread returns no
-                // search at all, which loses the game outright).
-                if tid != 0 {
-                    w.done = Some(done.clone());
-                }
-                scope.spawn(move || {
-                    let mut acc = w.nn.indices(b.black, b.white);
-                    if tid == 0 {
-                        // The main thread owns the real iterative deepening and
-                        // finishes at exactly `depth`, so the result can never
-                        // be weaker than the sequential search.
-                        for d in 1..=depth {
-                            w.negamax(b, &mut acc, d, f32::NEG_INFINITY, f32::INFINITY);
-                        }
-                        done.store(true, Ordering::Relaxed);
-                    } else {
-                        // Helpers must not redo the shallow ladder — eight
-                        // threads each walking depths 1..d spend most of their
-                        // time duplicating work that is already in the table.
-                        // Instead they hammer the deep end, where the table is
-                        // still empty and their findings are worth the most,
-                        // alternating between the target depth and one ply
-                        // short of it so they diverge instead of racing on the
-                        // same iteration.
-                        // Lazy SMP only pays if the helpers explore *differently*
-                        // — identical searches just re-derive the same table
-                        // entries. Two knobs spread them out:
-                        //
-                        // - depth: staggered over the last few plies, so several
-                        //   plies are being filled in at once rather than all
-                        //   threads racing on one.
-                        // - ordering: `order_skew` rotates each helper's root
-                        //   move list, so they descend different branches first
-                        //   and the table gains bounds from several parts of the
-                        //   tree instead of one.
-                        //
-                        // Looping a helper's deep pass was measured as strictly
-                        // worse (37x the nodes for no gain): the table is warm
-                        // after one pass, so repeats only burn the bandwidth the
-                        // main thread needs.
-                        // Rotating each helper's move order was measured as a net
-                        // loss: it cut nodes 25% but cost wall clock, because the
-                        // helpers then filled the table with bounds from branches
-                        // the main thread never visits. Depth stagger alone keeps
-                        // their work on the main line where it is reusable.
-                        let back = (tid as u32 % 3).min(depth.saturating_sub(1));
-                        let d = depth - back;
-                        for step in (2..d).step_by(2) {
-                            if w.stopped() {
-                                break;
-                            }
-                            w.negamax(b, &mut acc, step, f32::NEG_INFINITY, f32::INFINITY);
-                        }
-                        if !w.stopped() {
-                            w.negamax(b, &mut acc, d, f32::NEG_INFINITY, f32::INFINITY);
-                        }
-                    }
-                    nodes.fetch_add(w.nodes, Ordering::Relaxed);
-                });
-            }
-        });
-        self.nodes += nodes.load(Ordering::Relaxed);
-
-        // Every worker wrote into the shared table; the deepest entry for the
-        // root carries the move to play.
         let mut acc = self.nn.indices(b.black, b.white);
+
+        for main_depth in 1..=depth {
+            let helpers = if main_depth <= HELPER_MAX_MAIN_DEPTH {
+                self.threads - 1
+            } else {
+                0
+            };
+            let stop = std::sync::Arc::new(AtomicBool::new(false));
+
+            std::thread::scope(|scope| {
+                for idx in 0..helpers {
+                    let mut w = self.worker();
+                    w.done = Some(stop.clone());
+                    let nodes = &nodes;
+                    // ctz(idx+1): half the helpers share the main depth, the
+                    // rest scout progressively further ahead.
+                    let ahead = (idx as u32 + 1).trailing_zeros();
+                    let d = (main_depth + ahead).min(depth);
+                    // Same depth => prune harder, so they do not duplicate.
+                    let sharpen = (idx as u32 / 2).min(2);
+                    scope.spawn(move || {
+                        let mut wacc = w.nn.indices(b.black, b.white);
+                        w.mpc_sharpen = sharpen;
+                        w.negamax(b, &mut wacc, d, f32::NEG_INFINITY, f32::INFINITY);
+                        nodes.fetch_add(w.nodes, Ordering::Relaxed);
+                    });
+                }
+                // The main thread runs the real iteration, then retires the
+                // helpers: whatever they have not finished is stale.
+                self.negamax(b, &mut acc, main_depth, f32::NEG_INFINITY, f32::INFINITY);
+                stop.store(true, Ordering::Relaxed);
+            });
+        }
+        self.nodes += nodes.load(Ordering::Relaxed);
         self.root_best(b, &mut acc)
     }
 
@@ -829,7 +808,10 @@ impl<'a> NnueSearch<'a> {
         {
             let pd = mpc_reduced_depth(depth);
             if pd >= 1 && pd < depth {
-                let margin = MPC_T * mpc_sigma(b.empty_count() as u32, depth, pd);
+                // Helpers tighten the margin (prune more) so same-depth
+                // workers diverge; the main thread always uses MPC_T.
+                let t = MPC_T * 0.85f32.powi(self.mpc_sharpen as i32);
+                let margin = t * mpc_sigma(b.empty_count() as u32, depth, pd);
                 self.probcut_level += 1;
                 let hi = beta + margin;
                 let high = self.negamax(b, acc, pd, hi - PVS_EPS, hi);
