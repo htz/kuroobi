@@ -3,6 +3,9 @@
 *.bin
 *.bin.best
 *.bin.orb
+*.swa
+/ensemble/
+overnight_loop.log
 *.csv
 selfplay_*.out
 *.out
