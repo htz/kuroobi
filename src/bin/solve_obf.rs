@@ -148,7 +148,8 @@ fn main() -> ExitCode {
             use std::sync::atomic::Ordering::Relaxed;
             use kuroobi::solver as s;
             println!(
-                "  warm-up {:.3}s  exact {:.3}s",
+                "  table clear {:.3}s  warm-up {:.3}s  exact {:.3}s",
+                s::CLEAR_NS.load(Relaxed) as f64 / 1e9,
                 s::WARMUP_NS.load(Relaxed) as f64 / 1e9,
                 s::EXACT_NS.load(Relaxed) as f64 / 1e9
             );

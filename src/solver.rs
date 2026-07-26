@@ -147,6 +147,11 @@ pub static HANDED: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::
 /// not fill ten threads — the same law the midgame ran into.
 pub static WARMUP_NS: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
 pub static EXACT_NS: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+/// Wall-nanoseconds spent emptying the table before a solve. Broken out
+/// because it is neither search nor parallel: one thread writes 2^`bit_size`
+/// entries while the rest of the pool has nothing to do, so counting it as
+/// search time understates the speedup and the thread occupancy alike.
+pub static CLEAR_NS: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
 /// A young brother was offered to the pool and refused: no worker was idle.
 pub static REFUSED: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
 /// Thread-nanoseconds spent inside handed-off tasks.
@@ -251,8 +256,8 @@ impl ThreadBudget {
         match popped {
             Some(mut s) => {
                 if s.tag != tag {
-                    s.shallow.clear();
-                    s.mid.clear();
+                    s.shallow.clear(1);
+                    s.mid.clear(1);
                     s.tag = tag;
                 }
                 s
@@ -897,8 +902,24 @@ impl HashTable {
         }
     }
 
-    fn clear(&mut self) {
-        self.entries.get_mut().fill(HashEntry::EMPTY);
+    /// Empty the table, splitting the write across `threads` threads.
+    ///
+    /// At the sizes an endgame needs this is not a bookkeeping detail: 2^26
+    /// entries is 2.1 GB, and writing it on one thread took 41 ms per position
+    /// — 1.9% of a one-thread solve but 8.1% of a ten-thread one, with the
+    /// other nine threads necessarily idle throughout.
+    fn clear(&mut self, threads: usize) {
+        let entries = self.entries.get_mut();
+        if threads <= 1 {
+            entries.fill(HashEntry::EMPTY);
+            return;
+        }
+        let chunk = entries.len().div_ceil(threads);
+        std::thread::scope(|scope| {
+            for slice in entries.chunks_mut(chunk) {
+                scope.spawn(|| slice.fill(HashEntry::EMPTY));
+            }
+        });
     }
 
     /// Returns a *copy* of the matching entry. Copying (24 bytes) rather
@@ -1265,7 +1286,9 @@ impl Solver {
         // lock; with helpers in play the probes must synchronize.
         self.hash_table.set_shared(self.threads > 1);
 
-        self.hash_table.clear();
+        let t_clear = std::time::Instant::now();
+        self.hash_table.clear(self.threads);
+        CLEAR_NS.fetch_add(t_clear.elapsed().as_nanos() as u64, std::sync::atomic::Ordering::Relaxed);
 
         // The pool lives for the whole solve, so a hand-off is a queue push
         // rather than an OS thread creation. A process-wide pool would go
