@@ -116,9 +116,29 @@ const MOBILITY_ORDER_WEIGHT: i32 = 12;
 /// Splitting only pays off when each sibling subtree is substantial: below
 /// this many empties the hand-off costs more than the subtree.
 const PARALLEL_MIN_EMPTIES: u8 = 16;
-/// Helpers a single node may recruit. Capping it
-/// keeps one wide node from starving the rest of the tree.
-const SPLIT_MAX_SLAVES: usize = 1;
+
+/// How many nodes split, and how many OS threads that cost. Diagnostic: the
+/// solver spawns a fresh thread per split (`std::thread::scope`) rather than
+/// handing the task to a process-lifetime pool.
+pub static SPLITS: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+pub static SPAWNED: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+/// Helpers a single node may recruit. Edax caps this at one; Egaroucid has no
+/// per-node cap at all — `ybwc_split_nws` keeps handing young brothers over for
+/// as long as a worker is idle, and the shared budget is the only limit.
+///
+/// Measured on FFO40-49 (474M nodes, deterministic, min of 3), against the
+/// sequential 21.48s:
+///
+/// | cap | 6 threads | 8 threads | 10 threads |
+/// |-----|-----------|-----------|------------|
+/// | 1   | 2.62x     | 2.69x     | 2.67x      |
+/// | 2   | 2.71x     | **3.03x** | **3.16x**  |
+///
+/// Past two it falls off again (FFO40-44: 3 -> 2.00x, 4 -> 2.02x at 6 threads):
+/// one wide node takes the whole budget and starves the rest of the tree, which
+/// is the reason Edax caps it in the first place. Two is the point where a node
+/// can keep three threads busy without monopolising them.
+const SPLIT_MAX_SLAVES: usize = 2;
 
 /// Cutoff signal for a split node, chained to its enclosing splits.
 ///
@@ -1283,6 +1303,8 @@ impl Worker<'_> {
         if helpers == 0 {
             return None;
         }
+        SPLITS.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        SPAWNED.fetch_add(helpers as u64, std::sync::atomic::Ordering::Relaxed);
 
         let next = AtomicUsize::new(0);
         let shared_lower = AtomicI32::new(lower);

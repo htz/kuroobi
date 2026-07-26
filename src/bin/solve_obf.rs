@@ -144,6 +144,17 @@ fn main() -> ExitCode {
             total_time,
             total_nodes as f64 / total_time / 1e6
         );
+        {
+            use std::sync::atomic::Ordering::Relaxed;
+            let sp = kuroobi::solver::SPLITS.load(Relaxed);
+            if sp > 0 {
+                println!(
+                    "  splits {} spawning {} threads",
+                    sp,
+                    kuroobi::solver::SPAWNED.load(Relaxed)
+                );
+            }
+        }
         grand_time += total_time;
         if kuroobi::solver::node_accounting::ENABLED {
             // Edax counts ordering and ETC probes as nodes; add them so the
