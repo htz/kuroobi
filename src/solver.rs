@@ -117,28 +117,16 @@ const MOBILITY_ORDER_WEIGHT: i32 = 12;
 /// this many empties the hand-off costs more than the subtree.
 const PARALLEL_MIN_EMPTIES: u8 = 16;
 
-/// How many nodes split, and how many OS threads that cost. Diagnostic: the
-/// solver spawns a fresh thread per split (`std::thread::scope`) rather than
-/// handing the task to a process-lifetime pool.
+/// How many nodes split, and how many young brothers that handed to the pool.
 pub static SPLITS: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
-pub static SPAWNED: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
-/// Helpers a single node may recruit. Edax caps this at one; Egaroucid has no
-/// per-node cap at all — `ybwc_split_nws` keeps handing young brothers over for
-/// as long as a worker is idle, and the shared budget is the only limit.
-///
-/// Measured on FFO40-49 (474M nodes, deterministic, min of 3), against the
-/// sequential 21.48s:
-///
-/// | cap | 6 threads | 8 threads | 10 threads |
-/// |-----|-----------|-----------|------------|
-/// | 1   | 2.62x     | 2.69x     | 2.67x      |
-/// | 2   | 2.71x     | **3.03x** | **3.16x**  |
-///
-/// Past two it falls off again (FFO40-44: 3 -> 2.00x, 4 -> 2.02x at 6 threads):
-/// one wide node takes the whole budget and starves the rest of the tree, which
-/// is the reason Edax caps it in the first place. Two is the point where a node
-/// can keep three threads busy without monopolising them.
-const SPLIT_MAX_SLAVES: usize = 2;
+pub static HANDED: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+/// A young brother was offered to the pool and refused: no worker was idle.
+pub static REFUSED: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+/// Thread-nanoseconds spent inside handed-off tasks.
+pub static TASK_NS: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+/// Thread-nanoseconds a thread spent waiting for its own fan-out. This is the
+/// "play" in the schedule: the thread is alive but has nothing to do.
+pub static WAIT_NS: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
 
 /// Cutoff signal for a split node, chained to its enclosing splits.
 ///
@@ -186,9 +174,12 @@ impl<'p> AbortFlag<'p> {
     }
 }
 
-/// Nodes between abort checks. Walking the chain on every node would cost
-/// more than the work it saves; a few hundred nodes is a short enough leash.
-const ABORT_CHECK_INTERVAL: u64 = 512;
+// There is deliberately no cap on how many young brothers one node may have
+// outstanding. Capping measured worse here at every setting — FFO40-49,
+// min of 3, 10 threads: cap 1 11.85s, 2 8.44s, 3 6.85s, 5 6.71s, none 4.89s.
+// Cap 1 searches the *fewest* nodes of the lot (550M against 595M) and is still
+// 2.4x slower: holding back the speculation costs more parallelism than it
+// saves work. Edax caps at one, which is why it stops scaling past 6 threads.
 
 /// Sentinel returned by a search that unwound early. It is never stored in
 /// the table and never compared as a real score.
@@ -199,43 +190,303 @@ const ABORTED: i32 = i32::MIN + 1;
 /// the total number of live search threads never exceeds the configured
 /// budget no matter how deeply splits nest.
 struct ThreadBudget {
-    free: std::sync::atomic::AtomicUsize,
+    pool: EndPool,
+    /// Private tables handed back by finished helpers. A helper's two tables
+    /// are 14 MB of `HashEntry`, and allocating them means zero-filling all of
+    /// it: at tens of thousands of splits that moves more memory than the
+    /// search itself. Recycling makes a hand-off cost nothing — the effect a
+    /// persistent pool gets by building per-thread state once at startup.
+    scratch: std::sync::Mutex<Vec<Scratch>>,
+}
+
+/// A helper's two private tables, plus the selectivity they were filled under.
+struct Scratch {
+    shallow: HashTable,
+    mid: HashTable,
+    /// `selective_t` bits (0 = exact). Entries are keyed by the full board, so
+    /// a recycled table can only be hit by a search of the very same position
+    /// — and for those, a selective pass's bounds must not be read as exact.
+    /// Same setting: keep the entries, they are a warm cache.
+    tag: u32,
 }
 
 impl ThreadBudget {
     fn new(extra_threads: usize) -> ThreadBudget {
         ThreadBudget {
-            free: std::sync::atomic::AtomicUsize::new(extra_threads),
+            pool: EndPool::new(extra_threads),
+            scratch: std::sync::Mutex::new(Vec::new()),
         }
     }
 
-    /// Take up to `want` helpers; returns how many were actually granted.
-    fn reserve(&self, want: usize) -> usize {
-        use std::sync::atomic::Ordering;
-        let mut cur = self.free.load(Ordering::Relaxed);
-        loop {
-            let take = cur.min(want);
-            if take == 0 {
-                return 0;
+    /// A recycled table pair if one is free, otherwise a fresh one.
+    fn take_scratch(&self, tag: u32) -> Scratch {
+        let popped = self.scratch.lock().unwrap().pop();
+        match popped {
+            Some(mut s) => {
+                if s.tag != tag {
+                    s.shallow.clear();
+                    s.mid.clear();
+                    s.tag = tag;
+                }
+                s
             }
-            match self.free.compare_exchange_weak(
-                cur,
-                cur - take,
-                Ordering::Relaxed,
-                Ordering::Relaxed,
-            ) {
-                Ok(_) => return take,
-                Err(actual) => cur = actual,
-            }
+            None => Scratch {
+                shallow: HashTable::new(16),
+                mid: HashTable::new(MID_TT_BITS),
+                tag,
+            },
         }
     }
 
-    fn release(&self, n: usize) {
-        self.free
-            .fetch_add(n, std::sync::atomic::Ordering::Relaxed);
+    fn give_scratch(&self, s: Scratch) {
+        self.scratch.lock().unwrap().push(s);
     }
-
 }
+
+/// Search one handed-off young brother and publish the result.
+///
+/// A fresh search state over the shared table, one null-window pass at the
+/// alpha that held when the task was queued, and a re-search on the spot if
+/// it lands inside the window. Re-searching here rather than back in the
+/// parent keeps that work parallel.
+#[allow(clippy::too_many_arguments)]
+fn run_one_sibling(
+    tt: &HashTable,
+    neighbours: &NeighbourTable,
+    budget: &ThreadBudget,
+    group: &AbortFlag<'_>,
+    selective_t: Option<f32>,
+    parent: &Board,
+    m: ScoredMove,
+    upper: i32,
+    shared_lower: &std::sync::atomic::AtomicI32,
+    slot: &TaskSlot,
+    ev: Option<&Evaluator>,
+) {
+    use std::sync::atomic::Ordering;
+    let t_live = std::time::Instant::now();
+    let cur = shared_lower.load(Ordering::Relaxed);
+    if group.aborted() || cur >= upper {
+        slot.finish(ABORTED, 0);
+        return;
+    }
+    let tag = selective_t.map_or(0, f32::to_bits);
+    let s = budget.take_scratch(tag);
+    let mut w = Worker::with_tables(tt, neighbours, budget, group, s.shallow, s.mid);
+    w.selective_t = selective_t;
+
+    let mut child = m.child(parent);
+    let mut val = -w.pvs(&mut child, m.hash, -cur - 1, -cur, false, ev);
+    if val == -ABORTED {
+        val = ABORTED;
+    } else if cur < val && val < upper {
+        let re = -w.pvs(&mut child, m.hash, -upper, -val, false, ev);
+        val = if re == -ABORTED { ABORTED } else { re };
+    }
+    if val != ABORTED {
+        shared_lower.fetch_max(val, Ordering::Relaxed);
+        if val >= upper {
+            // Proved the cutoff: stop the siblings still searching.
+            group.abort();
+        }
+    }
+
+    let nodes = w.nodes;
+    budget.give_scratch(Scratch {
+        shallow: w.shallow_table,
+        mid: w.mid_table,
+        tag,
+    });
+    TASK_NS.fetch_add(t_live.elapsed().as_nanos() as u64, Ordering::Relaxed);
+    slot.finish(val, nodes);
+}
+
+/// One handed-off sibling's result, written by whoever ran it.
+struct TaskSlot {
+    done: std::sync::atomic::AtomicBool,
+    value: std::sync::atomic::AtomicI32,
+    nodes: std::sync::atomic::AtomicU64,
+    /// The thread that will wait for this slot, recorded when the slot is
+    /// built so the task can wake it. Parking beats spinning here: a thread
+    /// waiting on a split with nothing left to steal would otherwise burn a
+    /// core, and measured that way it cost more than the idleness it hid.
+    waiter: std::thread::Thread,
+}
+
+impl TaskSlot {
+    fn new(waiter: std::thread::Thread) -> TaskSlot {
+        TaskSlot {
+            done: std::sync::atomic::AtomicBool::new(false),
+            value: std::sync::atomic::AtomicI32::new(ABORTED),
+            nodes: std::sync::atomic::AtomicU64::new(0),
+            waiter,
+        }
+    }
+
+    /// Publish the result. `done` is released before the wake so a waiter that
+    /// the unpark reaches always sees the value and node count.
+    fn finish(&self, value: i32, nodes: u64) {
+        use std::sync::atomic::Ordering;
+        self.value.store(value, Ordering::Relaxed);
+        self.nodes.store(nodes, Ordering::Relaxed);
+        self.done.store(true, Ordering::Release);
+        self.waiter.unpark();
+    }
+
+    fn result(&self) -> (i32, u64) {
+        use std::sync::atomic::Ordering;
+        (
+            self.value.load(Ordering::Relaxed),
+            self.nodes.load(Ordering::Relaxed),
+        )
+    }
+}
+
+/// Task pool for one solve.
+///
+/// The unit of parallel work is **one young brother**. A splitting node tries
+/// to hand over every child it is about to search; the only gate is whether a
+/// worker is idle *right now* (checked unlocked, then again under the lock),
+/// and the refusal is reported back. On refusal the parent searches that child
+/// itself.
+///
+/// That granularity is what the previous scheme lacked. Reserving helpers up
+/// front and giving them a whole sibling list means a helper stays committed to
+/// one node until the list drains, and a node that cannot reserve searches its
+/// siblings alone even while workers elsewhere go idle. Here a worker rejoins
+/// the idle set after a single subtree and is free to serve any node in the
+/// tree.
+struct EndPool {
+    q: std::sync::Mutex<std::collections::VecDeque<Box<dyn FnOnce() + Send + 'static>>>,
+    cv: std::sync::Condvar,
+    /// Workers blocked waiting for work.
+    idle: std::sync::atomic::AtomicUsize,
+    /// Queue length, readable without the lock. Nearly every hand-off attempt
+    /// is a refusal, and taking the mutex just to discover that funnels every
+    /// searching thread through one lock.
+    queued: std::sync::atomic::AtomicUsize,
+    workers: usize,
+    stop: std::sync::atomic::AtomicBool,
+}
+
+impl EndPool {
+    fn new(workers: usize) -> EndPool {
+        EndPool {
+            q: std::sync::Mutex::new(std::collections::VecDeque::new()),
+            cv: std::sync::Condvar::new(),
+            idle: std::sync::atomic::AtomicUsize::new(0),
+            queued: std::sync::atomic::AtomicUsize::new(0),
+            workers,
+            stop: std::sync::atomic::AtomicBool::new(false),
+        }
+    }
+
+    /// Hand `f` to an idle worker, or refuse and let the caller do the work.
+    ///
+    /// # Safety
+    ///
+    /// `f` may borrow the caller's stack, and the box is erased to `'static` to
+    /// get it into the queue. The caller must not release those borrows until
+    /// the task has run. Every caller here waits on the task's
+    /// [`TaskSlot::done`] before returning, and the workers are joined by the
+    /// `thread::scope` that owns the solve, so a queued task can never outlive
+    /// what it points at.
+    unsafe fn try_push<'t>(&self, f: impl FnOnce() + Send + 't) -> bool {
+        use std::sync::atomic::Ordering;
+        if self.workers == 0 {
+            return false;
+        }
+        // Unlocked first, exactly as `push_task` does.
+        let free = |queued: usize| self.idle.load(Ordering::Relaxed) > queued;
+        if !free(self.queued.load(Ordering::Relaxed)) {
+            return false;
+        }
+        let boxed: Box<dyn FnOnce() + Send + 't> = Box::new(f);
+        // SAFETY: the caller's contract above.
+        let boxed: Box<dyn FnOnce() + Send + 'static> = unsafe { std::mem::transmute(boxed) };
+        let mut q = self.q.lock().unwrap();
+        if !free(q.len()) {
+            return false;
+        }
+        q.push_back(boxed);
+        self.queued.store(q.len(), Ordering::Relaxed);
+        drop(q);
+        self.cv.notify_one();
+        true
+    }
+
+    /// Run one queued task if there is one. Used by a thread that is waiting
+    /// for a task of its own: without it, every worker could end up blocked on
+    /// sub-tasks that only a worker could run.
+    fn try_run_one(&self) -> bool {
+        use std::sync::atomic::Ordering;
+        let task = {
+            let mut q = self.q.lock().unwrap();
+            let t = q.pop_front();
+            self.queued.store(q.len(), Ordering::Relaxed);
+            t
+        };
+        match task {
+            Some(t) => {
+                t();
+                true
+            }
+            None => false,
+        }
+    }
+
+    /// Wait for `done`: first try to run something from the queue, and only
+    /// park once there is nothing left to steal.
+    ///
+    /// Stealing before parking is what keeps nesting deadlock-free — without
+    /// it every worker could end up waiting on sub-tasks that only a worker
+    /// could run. Parking is safe because a task is only ever accepted when a
+    /// worker is idle to take it, so anything queued does get picked up, and
+    /// `unpark` before `park` is remembered rather than lost.
+    fn help_until(&self, done: &std::sync::atomic::AtomicBool) {
+        use std::sync::atomic::Ordering;
+        while !done.load(Ordering::Acquire) {
+            if self.try_run_one() {
+                continue;
+            }
+            if done.load(Ordering::Acquire) {
+                return;
+            }
+            std::thread::park();
+        }
+    }
+
+    fn worker_loop(&self) {
+        use std::sync::atomic::Ordering;
+        let mut q = self.q.lock().unwrap();
+        self.idle.fetch_add(1, Ordering::Relaxed);
+        loop {
+            while q.is_empty() {
+                if self.stop.load(Ordering::Relaxed) {
+                    self.idle.fetch_sub(1, Ordering::Relaxed);
+                    return;
+                }
+                q = self.cv.wait(q).unwrap();
+            }
+            let t = q.pop_front().unwrap();
+            self.queued.store(q.len(), Ordering::Relaxed);
+            self.idle.fetch_sub(1, Ordering::Relaxed);
+            drop(q);
+            t();
+            q = self.q.lock().unwrap();
+            self.idle.fetch_add(1, Ordering::Relaxed);
+        }
+    }
+
+    fn shutdown(&self) {
+        let _q = self.q.lock().unwrap();
+        self.stop
+            .store(true, std::sync::atomic::Ordering::Relaxed);
+        drop(_q);
+        self.cv.notify_all();
+    }
+}
+
 /// Slack below the node's alpha for the ordering lookahead's window.
 const SORT_ALPHA_DELTA: i32 = 12;
 /// Ordering weight of one stable edge disc, in eighths of a disc.
@@ -860,8 +1111,6 @@ struct Worker<'a> {
     budget: &'a ThreadBudget,
     /// Cutoff signal for the split this worker is searching under.
     abort: &'a AbortFlag<'a>,
-    /// Node counter for throttling abort checks.
-    abort_countdown: u64,
 }
 
 impl<'a> Worker<'a> {
@@ -871,6 +1120,26 @@ impl<'a> Worker<'a> {
         budget: &'a ThreadBudget,
         abort: &'a AbortFlag<'a>,
     ) -> Worker<'a> {
+        Worker::with_tables(
+            tt,
+            neighbours,
+            budget,
+            abort,
+            HashTable::new(16),
+            HashTable::new(MID_TT_BITS),
+        )
+    }
+
+    /// Build a worker over tables it does not own the allocation of, so a
+    /// helper thread can adopt a recycled pair instead of zero-filling 14 MB.
+    fn with_tables(
+        tt: &'a HashTable,
+        neighbours: &'a NeighbourTable,
+        budget: &'a ThreadBudget,
+        abort: &'a AbortFlag<'a>,
+        shallow_table: HashTable,
+        mid_table: HashTable,
+    ) -> Worker<'a> {
         Worker {
             tt,
             neighbours,
@@ -878,11 +1147,10 @@ impl<'a> Worker<'a> {
             best: None,
             warm_score: None,
             selective_t: None,
-            shallow_table: HashTable::new(16),
-            mid_table: HashTable::new(MID_TT_BITS),
+            shallow_table,
+            mid_table,
             budget,
             abort,
-            abort_countdown: ABORT_CHECK_INTERVAL,
         }
     }
 
@@ -897,14 +1165,16 @@ impl<'a> Worker<'a> {
         }
     }
 
-    /// Poll the cutoff signal, amortized over many nodes.
+    /// Poll the cutoff signal, at every node.
+    ///
+    /// This used to run on a 512-node leash on the theory that walking the
+    /// ancestor chain per node would cost more than the work it saves. It does
+    /// not: measured on FFO40-49, leashes of 512, 64, 8 and 1 are
+    /// indistinguishable in both throughput and node count (nps stays at 92M
+    /// on 6 threads, 120M on 10). At one thread the chain is a single link, so
+    /// there is nothing to walk.
     #[inline]
     fn should_abort(&mut self) -> bool {
-        self.abort_countdown -= 1;
-        if self.abort_countdown != 0 {
-            return false;
-        }
-        self.abort_countdown = ABORT_CHECK_INTERVAL;
         self.abort.aborted()
     }
 }
@@ -963,10 +1233,21 @@ impl Solver {
 
         self.hash_table.clear();
 
-        let value = {
-            let budget = ThreadBudget::new(self.threads.saturating_sub(1));
+        // The pool lives for the whole solve, so a hand-off is a queue push
+        // rather than an OS thread creation. A process-wide pool would go
+        // further; one per solve is close enough at seconds per move and
+        // keeps the borrows scoped.
+        let extra = self.threads.saturating_sub(1);
+        let budget = ThreadBudget::new(extra);
+        let tt = &self.hash_table;
+        let neighbours = &self.neighbours;
+        let (value, nodes, best) = std::thread::scope(|scope| {
+            for _ in 0..extra {
+                let b = &budget;
+                scope.spawn(move || b.pool.worker_loop());
+            }
             let root_abort = AbortFlag::root();
-            let mut w = Worker::new(&self.hash_table, &self.neighbours, &budget, &root_abort);
+            let mut w = Worker::new(tt, neighbours, &budget, &root_abort);
             let mut b = *board;
 
             // Warm-up ladder (iterative selectivity): solve the same
@@ -999,10 +1280,13 @@ impl Solver {
                 EndSolverMode::DrawLoss => w.pvs_root(&mut b, -1, 0, ev),
                 EndSolverMode::Perfect => w.perfect(&mut b, ev),
             };
-            self.nodes = w.nodes;
-            self.best = w.best;
-            v
-        };
+            // Every task has been waited for by the split that queued it, so
+            // the queue is empty here and the workers only need releasing.
+            budget.pool.shutdown();
+            (v, w.nodes, w.best)
+        });
+        self.nodes = nodes;
+        self.best = best;
 
         EndSolverResult {
             best_move: self.best,
@@ -1243,6 +1527,9 @@ impl Worker<'_> {
         // worth the hand-off when the subtrees are large.
         if moves.len() > 2 && board.empty_count() >= PARALLEL_MIN_EMPTIES && lower < upper {
             if let Some((val, bpos)) = self.split_siblings(board, &moves[1..], lower, upper, ev) {
+                if val == ABORTED {
+                    return ABORTED;
+                }
                 if val > max {
                     max = val;
                     best = bpos;
@@ -1278,14 +1565,36 @@ impl Worker<'_> {
         max
     }
 
-    /// Search `siblings` in parallel, all threads sharing the one
-    /// transposition table. Returns the best (value, move), or `None` if no
-    /// helper threads were available and the caller should search normally.
+    /// Fan the young brothers out over the pool.
     ///
-    /// The alpha bound is shared and only ever rises, so a thread that reads
-    /// a slightly stale value simply searches a wider window — correct, just
-    /// marginally more work. Each helper keeps its own node counter and
-    /// shallow table; results are folded back in at the join.
+    /// One child is one task. Each is offered to the pool as the loop reaches
+    /// it; if the pool refuses — no worker is idle right now — this thread
+    /// searches that child itself and moves on. Nothing is reserved in advance,
+    /// so a node never holds a worker it is not using, and a worker never sits
+    /// committed to a node that has run out of siblings.
+    ///
+    /// Returns the best (value, move), `None` when there are no workers at all
+    /// and the caller should search normally, or `ABORTED` as the value if the
+    /// search unwound — a truncated search proves nothing and its bound must
+    /// not reach the table.
+    ///
+    /// The alpha bound is shared and only ever rises, so a brother that reads a
+    /// slightly stale value simply searches a wider window — correct, just
+    /// marginally more work.
+    ///
+    /// A more aggressive variant does not pay off for us: probe every brother
+    /// at the alpha the round
+    /// started with, stop the whole fan-out the moment *any* of them beats it
+    /// (not only on a proven cutoff), re-search the improvers with the full
+    /// window at the raised alpha, and recurse on whatever the abort
+    /// left unsearched. Measured here, that was slower on FFO40-49: min of
+    /// 3, 10 threads 4.98s -> 6.10s with nodes 599M -> 752M; 6 threads 6.25s ->
+    /// 6.32s. Killing the fan-out throws away nine part-built subtrees, and
+    /// because an unwound `pvs` never reaches its `tt.update` their work is not
+    /// in the table either — the next round pays for all of it again. The two
+    /// schemes are identical at null-window nodes (there `val > lower` *is* the
+    /// cutoff), so the whole difference is the wide-window nodes at the top of
+    /// the tree, which are exactly the expensive ones to redo.
     fn split_siblings(
         &mut self,
         parent: &Board,
@@ -1294,99 +1603,116 @@ impl Worker<'_> {
         upper: i32,
         ev: Option<&Evaluator>,
     ) -> Option<(i32, Position)> {
-        use std::sync::atomic::{AtomicI32, AtomicUsize, Ordering};
-        use std::sync::Mutex;
+        use std::sync::atomic::{AtomicI32, Ordering};
 
-        let helpers = self
-            .budget
-            .reserve(SPLIT_MAX_SLAVES.min(siblings.len() - 1));
-        if helpers == 0 {
+        let pool = &self.budget.pool;
+        if pool.workers == 0 {
             return None;
         }
-        SPLITS.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-        SPAWNED.fetch_add(helpers as u64, std::sync::atomic::Ordering::Relaxed);
+        SPLITS.fetch_add(1, Ordering::Relaxed);
 
-        let next = AtomicUsize::new(0);
         let shared_lower = AtomicI32::new(lower);
-        let best = Mutex::new((i32::MIN, siblings[0].pos));
         let tt = self.tt;
         let neighbours = self.neighbours;
         let budget = self.budget;
         let selective_t = self.selective_t;
-        let extra_nodes = AtomicUsize::new(0);
         // Cutting off this node must also stop work already under way in the
-        // siblings, so the helpers search under a flag chained to ours.
+        // siblings, so the tasks search under a flag chained to ours.
         let group = AbortFlag::child(self.abort);
         let group = &group;
+        let waiter = std::thread::current();
+        let slots: Vec<TaskSlot> = siblings
+            .iter()
+            .map(|_| TaskSlot::new(waiter.clone()))
+            .collect();
+        let board = *parent;
 
-        std::thread::scope(|scope| {
-            for _ in 0..helpers {
-                scope.spawn(|| {
-                    let mut w = Worker::new(tt, neighbours, budget, group);
-                    w.selective_t = selective_t;
-                    w.run_siblings(parent, siblings, upper, ev, &next, &shared_lower, &best, group);
-                    extra_nodes.fetch_add(w.nodes as usize, Ordering::Relaxed);
-                });
-            }
-            // The splitting thread takes its share too, then joins at the
-            // end of the scope.
-            self.run_siblings(parent, siblings, upper, ev, &next, &shared_lower, &best, group);
-        });
+        let mut handed: Vec<usize> = Vec::new();
+        let mut max = i32::MIN;
+        let mut best = siblings[0].pos;
+        let mut unwound = false;
 
-        self.budget.release(helpers);
-        self.nodes += extra_nodes.load(Ordering::Relaxed) as u64;
-        let out = *best.lock().unwrap();
-        Some(out)
-    }
-
-    /// Claim siblings one at a time and search each with the current shared
-    /// alpha, mirroring the sequential null-window-then-re-search logic.
-    fn run_siblings(
-        &mut self,
-        parent: &Board,
-        siblings: &[ScoredMove],
-        upper: i32,
-        ev: Option<&Evaluator>,
-        next: &std::sync::atomic::AtomicUsize,
-        shared_lower: &std::sync::atomic::AtomicI32,
-        best: &std::sync::Mutex<(i32, Position)>,
-        group: &AbortFlag<'_>,
-    ) {
-        use std::sync::atomic::Ordering;
-        loop {
-            let i = next.fetch_add(1, Ordering::Relaxed);
-            if i >= siblings.len() {
-                return;
+        for (i, m) in siblings.iter().enumerate() {
+            if group.aborted() {
+                break;
             }
             let cur = shared_lower.load(Ordering::Relaxed);
-            if cur >= upper || group.aborted() {
-                return; // this node is already settled
+            if cur >= upper {
+                break;
             }
-            let m = &siblings[i];
+            // Never hand off the youngest brother: this thread has to wait
+            // for the fan-out
+            // anyway, so it may as well be the one to search the last child.
+            if i + 1 < siblings.len() {
+                let m = *m;
+                let slot = &slots[i];
+                let shared = &shared_lower;
+                // SAFETY: the task borrows `group`, `shared_lower` and `slot`,
+                // all locals of this frame. The `help_until` loop below waits
+                // for every task in `handed` before this frame returns, so the
+                // borrows outlive the task.
+                let pushed = unsafe {
+                    pool.try_push(move || {
+                        run_one_sibling(
+                            tt, neighbours, budget, group, selective_t, &board, m, upper, shared,
+                            slot, ev,
+                        );
+                    })
+                };
+                if pushed {
+                    handed.push(i);
+                    HANDED.fetch_add(1, Ordering::Relaxed);
+                    continue;
+                }
+                REFUSED.fetch_add(1, Ordering::Relaxed);
+            }
+            // Refused, or the youngest brother: search it here.
             let mut child = m.child(parent);
             let mut val = -self.pvs(&mut child, m.hash, -cur - 1, -cur, false, ev);
             if val == -ABORTED {
-                return; // unwound; the value proves nothing
+                unwound = true;
+                break;
             }
             if cur < val && val < upper {
                 val = -self.pvs(&mut child, m.hash, -upper, -val, false, ev);
                 if val == -ABORTED {
-                    return;
+                    unwound = true;
+                    break;
                 }
             }
-            let mut g = best.lock().unwrap();
-            if val > g.0 {
-                *g = (val, m.pos);
+            if val > max {
+                max = val;
+                best = m.pos;
             }
-            drop(g);
             shared_lower.fetch_max(val, Ordering::Relaxed);
             if val >= upper {
-                // Proved the cutoff: wake the siblings still searching.
                 group.abort();
-                return;
+                break;
             }
         }
+
+        // Everything handed over has to be accounted for before the borrows
+        // above die, aborted or not.
+        let t_wait = std::time::Instant::now();
+        for &i in &handed {
+            pool.help_until(&slots[i].done);
+        }
+        WAIT_NS.fetch_add(t_wait.elapsed().as_nanos() as u64, Ordering::Relaxed);
+        for &i in &handed {
+            let (val, nodes) = slots[i].result();
+            self.nodes += nodes;
+            if val != ABORTED && val > max {
+                max = val;
+                best = siblings[i].pos;
+            }
+        }
+
+        if unwound {
+            return Some((ABORTED, best));
+        }
+        Some((max, best))
     }
+
 
     #[allow(clippy::too_many_arguments)]
     fn pvs(&mut self, board: &mut Board, hash: u64, alpha: i32, beta: i32, passed: bool, ev: Option<&Evaluator>) -> i32 {
@@ -1544,6 +1870,11 @@ impl Worker<'_> {
             // full sort that the sequential path avoids.
             moves[next..].sort_by_key(|m| m.value);
             if let Some((val, bpos)) = self.split_siblings(board, &moves[next..], lower, upper, ev) {
+                // A truncated search proves nothing: its bound must not reach
+                // the table, so unwind instead of storing a partial `max`.
+                if val == ABORTED {
+                    return ABORTED;
+                }
                 if val > max {
                     max = val;
                     best = Some(bpos);

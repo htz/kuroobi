@@ -148,10 +148,25 @@ fn main() -> ExitCode {
             use std::sync::atomic::Ordering::Relaxed;
             let sp = kuroobi::solver::SPLITS.load(Relaxed);
             if sp > 0 {
+                use kuroobi::solver as s;
+                let live = s::TASK_NS.load(Relaxed) as f64 / 1e9;
+                let wait = s::WAIT_NS.load(Relaxed) as f64 / 1e9;
+                // Thread-seconds available vs actually working. Time inside
+                // tasks plus the main thread's wall is what we occupy;
+                // subtracting the waits leaves the work.
+                let cap = threads as f64 * total_time;
+                let busy = live + total_time - wait;
                 println!(
-                    "  splits {} spawning {} threads",
+                    "  splits {} handing off {} siblings (refused {})",
                     sp,
-                    kuroobi::solver::SPAWNED.load(Relaxed)
+                    s::HANDED.load(Relaxed),
+                    s::REFUSED.load(Relaxed)
+                );
+                println!(
+                    "  task time {live:.2}s  split wait {wait:.2}s  \
+                     -> occupancy {:.0}% busy {:.0}% of {cap:.1} thread-s",
+                    (live + total_time) / cap * 100.0,
+                    busy / cap * 100.0
                 );
             }
         }
