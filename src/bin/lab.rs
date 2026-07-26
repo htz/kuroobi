@@ -412,7 +412,15 @@ const MAX_KIDS: usize = 34;
 
 /// From this remaining depth upward, order children by a full NNUE eval;
 /// shallower nodes use cheap mobility ordering (see `ordered`).
-const EVAL_ORDER_DEPTH: u32 = 3;
+/// Tunable so it can be swept: work below `ybwc_min_depth` cannot be split, so
+/// in a parallel search a second of it costs as much wall-clock as six seconds
+/// of splittable work. The sequential optimum is not the parallel optimum.
+fn eval_order_depth() -> u32 {
+    static V: std::sync::OnceLock<u32> = std::sync::OnceLock::new();
+    *V.get_or_init(|| {
+        std::env::var("EVAL_ORDER_DEPTH").ok().and_then(|v| v.parse().ok()).unwrap_or(3)
+    })
+}
 
 /// A worker whose subtree became irrelevant returns this instead of a score,
 /// so the caller knows to discard it rather than treat it as an evaluation.
@@ -473,18 +481,29 @@ fn mpc_sigma(empties: u32, depth: u32, pc_depth: u32) -> f32 {
     QA * s * s + QB * s + QC
 }
 
-/// Static square preference for cheap ordering (file-major): corners best,
-/// X-squares worst. Scaled to sit between mobility steps.
-const SQUARE_BIAS: [i8; 64] = [
-    30, -12, 0, -1, -1, 0, -12, 30,
-    -12, -15, -3, -3, -3, -3, -15, -12,
-    0, -3, 0, -1, -1, 0, -3, 0,
-    -1, -3, -1, -1, -1, -1, -3, -1,
-    -1, -3, -1, -1, -1, -1, -3, -1,
-    0, -3, 0, -1, -1, 0, -3, 0,
-    -12, -15, -3, -3, -3, -3, -15, -12,
-    30, -12, 0, -1, -1, 0, -12, 30,
-];
+/// Corner mask: a legal move into a corner counts one
+/// extra in the weighted mobility.
+const CORNERS: u64 = 0x8100000000000081;
+
+/// Potential mobility: empty squares next to an opponent disc.
+/// A move that leaves the opponent few of those is good even when it does not
+/// reduce their legal moves yet.
+#[inline]
+fn potential_mobility(discs: u64, empties: u64) -> u32 {
+    let hmask = discs & 0x7E7E7E7E7E7E7E7E;
+    let vmask = discs & 0x00FFFFFFFFFFFF00;
+    let hvmask = discs & 0x007E7E7E7E7E7E00;
+    let res = (hmask << 1)
+        | (hmask >> 1)
+        | (vmask << 8)
+        | (vmask >> 8)
+        | (hvmask << 7)
+        | (hvmask >> 7)
+        | (hvmask << 9)
+        | (hvmask >> 9);
+    (res & empties).count_ones()
+}
+
 
 /// How many tasks may be queued beyond the workers that are idle right now.
 /// Measured here (d16, 20 games, min of 3):
@@ -1126,7 +1145,7 @@ impl NnueSearch {
             return Position::from_index(e.best as u32);
         }
         let mut kids: [Kid; MAX_KIDS] = [(Position(0), 0, 0.0); MAX_KIDS];
-        let n = self.ordered_into(b, acc, 1, b.movable(), &mut kids);
+        let n = self.ordered_into(b, acc, 1, b.movable(), &mut kids, false);
         (n > 0).then(|| kids[0].0)
     }
 
@@ -1251,14 +1270,26 @@ impl NnueSearch {
 
     /// Children with their flip masks, best-first.
     ///
-    /// A full 1-ply eval per child is by far the most expensive thing this
-    /// search does — it is *not* counted as a node, yet it dominates the per
-    /// node cost. Keep it for the nodes where ordering quality
-    /// actually pays and use cheap mobility elsewhere:
+    /// The shape matters more than the numbers. *Every* move is scored
+    /// as a weighted sum and the table move wins on a huge constant;
+    /// the ordering is never skipped. And the two
+    /// signals are weighted differently by node type: at a PV node the
+    /// evaluation dominates (269 against 35 for mobility), at a null-window
+    /// node it barely counts (7 against 17). Null-window nodes
+    /// are most of the tree, so most of the tree is ordered by mobility.
     ///
-    /// - deep nodes (`depth >= EVAL_ORDER_DEPTH`): NNUE eval, the strong signal
-    /// - shallow nodes: opponent mobility (fewer replies is better) plus a
-    ///   static square bias — no eval, no accumulator work at all
+    /// That split matters all the more with this evaluator: a full NNUE eval
+    /// per child is by far the most expensive thing this search does — it is
+    /// not even counted as a node — where a pattern evaluator would pay only a
+    /// table lookup. Ordering every null-window node by NNUE eval, which is
+    /// what this used to do from remaining depth 3 upward, spends the budget in
+    /// exactly the wrong place.
+    ///
+    /// Mobility is weighted moves (moves counted double,
+    /// corner moves once more) plus potential mobility (empties adjacent
+    /// to opponent discs) at PV nodes only, matching which weights are non-zero
+    /// in each variant.
+    ///
     /// Fills `out` and returns how many children there are. Writing into a
     /// caller-owned stack array keeps this off the heap — returning a `Vec`
     /// meant one allocation per interior node, which at ~60k nodes a move is
@@ -1270,9 +1301,16 @@ impl NnueSearch {
         depth: u32,
         moves: u64,
         out: &mut [Kid; MAX_KIDS],
+        null_window: bool,
     ) -> usize {
         let mover = b.player();
-        let eval_order = depth >= EVAL_ORDER_DEPTH;
+        // Ordering weights, scaled so the eval term stays in disc units.
+        let (w_mob, w_pm, w_val) = if null_window {
+            (17.0 / 7.0, 0.0, 1.0)
+        } else {
+            (35.0 / 269.0, 17.0 / 269.0, 1.0)
+        };
+        let eval_order = depth >= eval_order_depth();
         let mut n = 0usize;
         let mut m = moves;
         while m != 0 {
@@ -1280,16 +1318,20 @@ impl NnueSearch {
             m &= m - 1;
             let mut nb = *b;
             let flipped = nb.make_move_bits(pos);
-            let key = if eval_order {
+            let legal = nb.movable();
+            // Offset minus weighted moves, so fewer replies scores higher.
+            let mob = 38.0
+                - (legal.count_ones() * 2 + (legal & CORNERS).count_ones()) as f32;
+            let mut key = mob * w_mob;
+            if w_pm != 0.0 {
+                let empties = !(nb.black | nb.white);
+                key += (38.0 - potential_mobility(nb.opponent_bb(), empties) as f32) * w_pm;
+            }
+            if eval_order {
                 self.nn.ix_apply(acc, pos, flipped, mover);
-                let k = -self.nn.eval_from_indices(acc, &nb);
+                key += -self.nn.eval_from_indices(acc, &nb) * w_val;
                 self.nn.ix_undo(acc, pos, flipped, mover);
-                k
-            } else {
-                // Restricting the opponent is the classic cheap proxy; the
-                // square bias breaks ties toward corners and away from X/C.
-                -(nb.movable_count() as f32) * 4.0 + SQUARE_BIAS[pos.index() as usize] as f32
-            };
+            }
             out[n] = (pos, flipped, key);
             n += 1;
         }
@@ -1399,23 +1441,27 @@ impl NnueSearch {
         }
 
         let orig_alpha = alpha;
+        // Which of the two ordering weight sets to use. Null-window nodes
+        // are most of the tree and get the cheap one.
+        let null_window = beta - alpha <= PVS_EPS * 1.5;
         let mover = b.player();
         let mut best = f32::NEG_INFINITY;
         let mut best_move = 64u8;
 
-        // With a TT move (typical once iterative deepening has seeded this
-        // node) put it first over a cheap natural order — skip the expensive
-        // per-child eval scan. Only genuinely new deep nodes pay for it.
+        // Score every move, and let the table
+        // move win on a constant rather than skip the scoring.
+        // Skipping it — which is what this used to do whenever the table had a
+        // move — left every child but the first in bit order, and those are
+        // exactly the young brothers the pool searches. An unordered young
+        // brother that beats alpha stops the fan-out and forces a re-search of
+        // everything behind it.
+        //
+        // The work is also skipped when there is nothing to order
+        // (a single legal move).
         let mut kids: [Kid; MAX_KIDS] = [(Position(0), 0, 0.0); MAX_KIDS];
-        // An alternative is to order the whole move list and *then* split.
-        // Ordering only matters for the children that get searched, and at a
-        // node that is about to hand its young brothers to the pool that is all
-        // of them: an unordered young brother beats alpha, which stops the
-        // fan-out and forces a re-search of everything behind it. Cheap nodes
-        // still take the shortcut of trusting the table move alone.
         let will_split = self.pool.is_some() && depth >= ybwc_min_depth();
-        let n_kids = if tt_move >= 64 && depth >= 2 {
-            self.ordered_into(b, acc, depth, moves, &mut kids)
+        let n_kids = if depth >= 2 && moves.count_ones() > 1 {
+            self.ordered_into(b, acc, depth, moves, &mut kids, null_window)
         } else {
             let mut n = 0usize;
             let mut m = moves;
