@@ -146,9 +146,14 @@ fn main() -> ExitCode {
         );
         {
             use std::sync::atomic::Ordering::Relaxed;
+            use kuroobi::solver as s;
+            println!(
+                "  warm-up {:.3}s  exact {:.3}s",
+                s::WARMUP_NS.load(Relaxed) as f64 / 1e9,
+                s::EXACT_NS.load(Relaxed) as f64 / 1e9
+            );
             let sp = kuroobi::solver::SPLITS.load(Relaxed);
             if sp > 0 {
-                use kuroobi::solver as s;
                 let live = s::TASK_NS.load(Relaxed) as f64 / 1e9;
                 let wait = s::WAIT_NS.load(Relaxed) as f64 / 1e9;
                 // Thread-seconds available vs actually working. Time inside

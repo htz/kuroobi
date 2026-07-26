@@ -120,6 +120,11 @@ const PARALLEL_MIN_EMPTIES: u8 = 16;
 /// How many nodes split, and how many young brothers that handed to the pool.
 pub static SPLITS: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
 pub static HANDED: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+/// Wall-nanoseconds in the selective warm-up ladder, and in the exact pass
+/// that follows. Diagnostic: the two scale differently, and on short problems
+/// the ladder is most of the solve.
+pub static WARMUP_NS: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+pub static EXACT_NS: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
 /// A young brother was offered to the pool and refused: no worker was idle.
 pub static REFUSED: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
 /// Thread-nanoseconds spent inside handed-off tasks.
@@ -512,6 +517,13 @@ const SELECTIVE_PASS_MIN_EMPTIES: u8 = 24;
 /// pass's score, so the estimate handed to the exact search converges —
 /// an estimate that is off by even two discs makes the exact search pay
 /// for a failed window, which is the dominant cost on hard positions.
+/// The two rungs are optimal at every thread count, not just sequentially.
+/// FFO40-49, 2 rounds, min: `[1.1, 1.8]` 21.28s / 4.88s (1 / 10 threads),
+/// `[1.8]` 21.80 / 5.17, `[1.1]` 22.98 / 5.01, `[1.1, 1.5, 1.8]` 21.94 / 5.16,
+/// `[0.8, 1.4, 2.0]` 22.30 / 5.09. Worth re-checking because the ladder
+/// parallelises worse than the exact pass it feeds (3.21x against 5.28x on 10
+/// threads, so its share of the solve grows from 20% to 28%) — but the fix is
+/// not fewer rungs.
 const SELECTIVE_LADDER: [f32; 2] = [1.1, 1.8];
 
 /// Plies of ordering lookahead by empty count, stepped one ply at a time
@@ -1253,6 +1265,7 @@ impl Solver {
             // Warm-up ladder (iterative selectivity): solve the same
             // full-depth endgame selectively first, leaving real full-depth
             // best moves in the table for the exact pass that follows.
+            let t_warm = std::time::Instant::now();
             if let Some(e) = ev {
                 if board.empty_count() >= SELECTIVE_PASS_MIN_EMPTIES {
                     let mut guess = w.estimate_score(board, Some(e));
@@ -1274,12 +1287,21 @@ impl Solver {
                 }
             }
 
+            WARMUP_NS.fetch_add(
+                t_warm.elapsed().as_nanos() as u64,
+                std::sync::atomic::Ordering::Relaxed,
+            );
+            let t_exact = std::time::Instant::now();
             let v = match mode {
                 EndSolverMode::WinLossDraw => w.pvs_root(&mut b, -1, 1, ev),
                 EndSolverMode::WinDraw => w.pvs_root(&mut b, 0, 1, ev),
                 EndSolverMode::DrawLoss => w.pvs_root(&mut b, -1, 0, ev),
                 EndSolverMode::Perfect => w.perfect(&mut b, ev),
             };
+            EXACT_NS.fetch_add(
+                t_exact.elapsed().as_nanos() as u64,
+                std::sync::atomic::Ordering::Relaxed,
+            );
             // Every task has been waited for by the split that queued it, so
             // the queue is empty here and the workers only need releasing.
             budget.pool.shutdown();
