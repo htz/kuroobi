@@ -486,8 +486,30 @@ const SQUARE_BIAS: [i8; 64] = [
     30, -12, 0, -1, -1, 0, -12, 30,
 ];
 
-/// Slots probed per position.
-const TT_WAYS: usize = 3;
+/// How many tasks may be queued beyond the workers that are idle right now.
+/// Measured here (d16, 20 games, min of 3):
+/// 0 -> 2.25x, 2 -> 2.39x, 8 -> 2.43x, 32 -> 2.20x. Two is the robust choice —
+/// it is the best of the four at 8 threads and within noise of the best at 6.
+fn pool_slack() -> usize {
+    static V: std::sync::OnceLock<usize> = std::sync::OnceLock::new();
+    *V.get_or_init(|| {
+        std::env::var("POOL_SLACK").ok().and_then(|v| v.parse().ok()).unwrap_or(2)
+    })
+}
+
+/// How long an idle worker looks for work before parking, in polls of ~1us.
+/// Zero parks immediately.
+fn pool_spin() -> u32 {
+    static V: std::sync::OnceLock<u32> = std::sync::OnceLock::new();
+    *V.get_or_init(|| {
+        std::env::var("POOL_SPIN").ok().and_then(|v| v.parse().ok()).unwrap_or(16)
+    })
+}
+
+/// Slots probed per position. Four
+/// 16-byte entries are exactly one 64-byte cache line, so the whole probe is a
+/// single memory transaction.
+const TT_WAYS: usize = 4;
 
 /// How valuable an entry is: depth first,
 /// accuracy as the tie-break.
@@ -503,41 +525,59 @@ fn tt_level(depth: u8, relax: u8) -> u32 {
 /// wrong value for another position. This is the same argument the linear
 /// searcher's shared table relies on.
 struct SharedTt {
-    entries: std::cell::UnsafeCell<Vec<TtEntry>>,
+    buckets: std::cell::UnsafeCell<Vec<TtBucket>>,
     mask: u64,
 }
 // SAFETY: see the note above — entries are self-validating.
 unsafe impl Sync for SharedTt {}
 
+/// One cache line of the table. Probing *consecutive*
+/// slots from the hash would straddle two lines whenever the
+/// hash lands near a boundary — every probe then costs two memory transactions
+/// instead of one, and every store dirties two lines that other threads may
+/// hold. Aligning the group instead makes the whole probe one line.
+#[repr(C, align(64))]
+#[derive(Clone, Copy)]
+struct TtBucket([TtEntry; TT_WAYS]);
+
 impl SharedTt {
     fn new(bits: u32) -> SharedTt {
+        let n = 1usize << bits.saturating_sub(2);
         SharedTt {
-            entries: std::cell::UnsafeCell::new(vec![
-                TtEntry { key: 0, value: 0.0, best: 64, depth: 0, flag: 0, relax: 0 };
-                1usize << bits
+            buckets: std::cell::UnsafeCell::new(vec![
+                TtBucket(
+                    [TtEntry { key: 0, value: 0.0, best: 64, depth: 0, flag: 0, relax: 0 };
+                        TT_WAYS]
+                );
+                n
             ]),
-            mask: (1u64 << bits) - 1,
+            mask: (n - 1) as u64,
+        }
+    }
+
+    #[inline]
+    fn bucket(&self, hash: u64) -> &mut TtBucket {
+        // SAFETY: index is masked into range; a racing write can only make the
+        // key mismatch, which the caller treats as a miss.
+        unsafe {
+            let v = &mut *self.buckets.get();
+            v.get_unchecked_mut((hash & self.mask) as usize)
         }
     }
 
     #[inline]
     fn slot(&self, hash: u64, i: u64) -> &mut TtEntry {
-        // SAFETY: index is masked into range; a racing write can only make the
-        // key mismatch, which the caller treats as a miss.
-        unsafe {
-            let v = &mut *self.entries.get();
-            v.get_unchecked_mut(((hash.wrapping_add(i)) & self.mask) as usize)
-        }
+        // SAFETY: `i` is always below TT_WAYS.
+        unsafe { self.bucket(hash).0.get_unchecked_mut(i as usize) }
     }
 
-    /// Scan the bucket for this position, probing consecutive slots rather
-    /// than one.
+    /// Scan the bucket for this position.
     #[inline]
     fn get(&self, hash: u64) -> TtEntry {
-        for i in 0..TT_WAYS {
-            let e = *self.slot(hash, i as u64);
+        let b = self.bucket(hash);
+        for e in b.0.iter() {
             if e.key == hash && e.flag != 0 {
-                return e;
+                return *e;
             }
         }
         TtEntry { key: 0, value: 0.0, best: 64, depth: 0, flag: 0, relax: 0 }
@@ -576,8 +616,10 @@ impl SharedTt {
     fn clear(&self) {
         // SAFETY: called between games, with no workers running.
         unsafe {
-            for e in (*self.entries.get()).iter_mut() {
-                e.flag = 0;
+            for b in (*self.buckets.get()).iter_mut() {
+                for e in b.0.iter_mut() {
+                    e.flag = 0;
+                }
             }
         }
     }
@@ -696,6 +738,9 @@ struct Pool {
     /// serialises every worker against the waiters and throughput collapses.
     queued: std::sync::atomic::AtomicUsize,
     workers: usize,
+    /// Set at shutdown; the workers only look at it when woken, so raising it
+    /// has to be followed by `cv.notify_all()`.
+    #[allow(dead_code)]
     stop: std::sync::atomic::AtomicBool,
 }
 
@@ -743,7 +788,20 @@ impl Pool {
         // rejection — the pool is busy — and taking the mutex to discover that
         // funnels every searching thread through one lock several hundred
         // thousand times a second.
-        let free = |queued: usize| self.idle.load(Ordering::Relaxed) > queued;
+        // Handing work over only when a worker is idle *now* (zero slack) was
+        // the rule here once before; queueing beyond it was measured as a loss:
+        // the table said 1.87x the sequential node count, and
+        // parking a task behind a full queue while its parent blocks on it is
+        // exactly how that happens.
+        //
+        // That node blow-up is gone (1.03x now that aborts propagate through
+        // the whole ancestor chain), so the trade is worth re-measuring. The
+        // reason to want a queue: a node with nine young brothers and five idle
+        // workers hands out five and then searches the other four itself, one
+        // after another — and the five tasks finish long before it is done, so
+        // the workers sit idle through the rest of the fan-out.
+        let slack = pool_slack();
+        let free = |queued: usize| self.idle.load(Ordering::Relaxed) + slack > queued;
         if !free(self.queued.load(Ordering::Relaxed)) {
             return false;
         }
@@ -804,16 +862,22 @@ impl Pool {
                 }
                 continue;
             }
-            // Nothing to steal: spin briefly (the task is usually about to
-            // finish), then hand the core back rather than burn it.
+            // Nothing to steal. `run_one` reads `queued`, and that line is
+            // written by every push and every pop — spinning on it in a tight
+            // loop does not just waste this core, it slows down the threads
+            // that are actually searching. Back off geometrically so a waiter
+            // touches the line rarely once it is clear no work is coming.
             if starved.is_none() {
                 starved = Some(std::time::Instant::now());
             }
             idle += 1;
-            if idle < 64 {
+            if idle < 8 {
                 std::hint::spin_loop();
             } else {
                 std::thread::yield_now();
+                if idle > 64 {
+                    std::thread::sleep(std::time::Duration::from_micros(20));
+                }
             }
         }
         if let Some(t0) = starved {
@@ -829,27 +893,52 @@ impl Pool {
     fn worker_loop(&self) {
         use std::sync::atomic::Ordering;
         IS_POOL_WORKER.with(|c| c.set(true));
+        let spin_rounds = pool_spin();
         loop {
-            let task = {
+            // The worker counts as idle for the whole time it is looking for
+            // work, spinning included — the split gate is `idle > queued`, so a
+            // spinning worker that did not count itself would not be offered
+            // anything.
+            self.idle.fetch_add(1, Ordering::Relaxed);
+            let task = 'get: loop {
+                // Our tasks average 20-45us, against a measured 9us from queueing a
+                // task to a woken thread starting it. Look for work without
+                // sleeping first, so a handoff that lands during the window
+                // costs a cache miss instead of a context switch.
+                for _ in 0..spin_rounds {
+                    if self.queued.load(Ordering::Relaxed) > 0 {
+                        let mut q = self.q.lock().unwrap();
+                        if let Some(t) = q.pop_front() {
+                            self.queued.fetch_sub(1, Ordering::Relaxed);
+                            break 'get Some(t);
+                        }
+                    }
+                    // Space the polls out: `queued` is written by every push and
+                    // every pop, so reading it in a tight loop invalidates the
+                    // line under the threads that are actually searching.
+                    for _ in 0..64 {
+                        std::hint::spin_loop();
+                    }
+                }
+                // Nothing came. Sleep
+                // until woken, with no timeout. A 200us poll instead had all the
+                // idle workers waking twenty-five thousand times a second to
+                // take the queue mutex, find nothing, and go back to sleep —
+                // every one of those acquisitions serialises against a thread
+                // trying to hand work over.
                 let mut q = self.q.lock().unwrap();
-                self.idle.fetch_add(1, Ordering::Relaxed);
-                let t = loop {
+                loop {
                     if let Some(t) = q.pop_front() {
                         self.queued.fetch_sub(1, Ordering::Relaxed);
-                        break Some(t);
+                        break 'get Some(t);
                     }
                     if self.stop.load(Ordering::Relaxed) {
-                        break None;
+                        break 'get None;
                     }
-                    let (g, _) = self
-                        .cv
-                        .wait_timeout(q, std::time::Duration::from_micros(200))
-                        .unwrap();
-                    q = g;
-                };
-                self.idle.fetch_sub(1, Ordering::Relaxed);
-                t
+                    q = self.cv.wait(q).unwrap();
+                }
             };
+            self.idle.fetch_sub(1, Ordering::Relaxed);
             match task {
                 Some(t) => {
                     let t0 = std::time::Instant::now();
@@ -1380,7 +1469,11 @@ impl NnueSearch {
         // used to do — leaves every sibling searching against an alpha that is
         // known to be too low, and the extra nodes are what eats the parallel
         // gain (1.87x the sequential node count at 6 threads).
-        let outer = self.abort.clone();
+        // Only split-eligible nodes ever swap `self.abort`, so only they need a
+        // copy of the enclosing chain. Cloning it at *every* interior node put
+        // an atomic increment on one shared refcount in the hot path — and
+        // under six threads that line is being incremented by all of them.
+        let outer = if split_ok { self.abort.clone() } else { None };
         'fanout: loop {
             // The fan-out flag, with the polarity this codebase uses
             // for aborts: raised by whoever beats alpha, which ends this
@@ -1485,16 +1578,22 @@ impl NnueSearch {
                 // the fan-out flag — so a sibling task that beats
                 // alpha cuts this search short too instead of letting the
                 // splitting thread finish a probe against a stale window.
-                self.abort = fan_stop.clone().or_else(|| outer.clone());
+                if split_ok {
+                    self.abort = fan_stop.clone();
+                }
                 self.nn.ix_apply(acc, pos, flipped, mover);
                 let raw = self.negamax(&nb, acc, depth - 1, -(alpha + PVS_EPS), -alpha);
                 self.nn.ix_undo(acc, pos, flipped, mover);
-                self.abort = outer.clone();
+                if split_ok {
+                    self.abort = outer.clone();
+                }
                 if raw == ABORTED {
                     // Told to stop by an ancestor: the node is dead. Told to
                     // stop by *this* fan-out: only the probe is dead, and the
-                    // move stays unsettled for the next round.
-                    if outer.as_ref().is_some_and(|o| o.stopped()) {
+                    // move stays unsettled for the next round. A node that
+                    // cannot split has no fan-out of its own, so any abort
+                    // reaching it came from above.
+                    if !split_ok || outer.as_ref().is_some_and(|o| o.stopped()) {
                         aborted = true;
                     }
                     break;
