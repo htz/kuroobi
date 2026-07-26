@@ -147,6 +147,10 @@ pub static HANDED: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::
 /// not fill ten threads — the same law the midgame ran into.
 pub static WARMUP_NS: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
 pub static EXACT_NS: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+/// Nodes searched in each phase, to tell a phase that is idle apart from a
+/// phase that is doing wasted work: wall time alone cannot separate them.
+pub static WARMUP_NODES: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+pub static EXACT_NODES: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
 /// Wall-nanoseconds spent emptying the table before a solve. Broken out
 /// because it is neither search nor parallel: one thread writes 2^`bit_size`
 /// entries while the rest of the pool has nothing to do, so counting it as
@@ -1336,6 +1340,10 @@ impl Solver {
                 t_warm.elapsed().as_nanos() as u64,
                 std::sync::atomic::Ordering::Relaxed,
             );
+            // Helper nodes are folded into `w.nodes` by the split that waited
+            // for them, so this running total already covers the whole phase.
+            let warm_nodes = w.nodes;
+            WARMUP_NODES.fetch_add(warm_nodes, std::sync::atomic::Ordering::Relaxed);
             let t_exact = std::time::Instant::now();
             let v = match mode {
                 EndSolverMode::WinLossDraw => w.pvs_root(&mut b, -1, 1, ev),
@@ -1347,6 +1355,7 @@ impl Solver {
                 t_exact.elapsed().as_nanos() as u64,
                 std::sync::atomic::Ordering::Relaxed,
             );
+            EXACT_NODES.fetch_add(w.nodes - warm_nodes, std::sync::atomic::Ordering::Relaxed);
             // Every task has been waited for by the split that queued it, so
             // the queue is empty here and the workers only need releasing.
             budget.pool.shutdown();

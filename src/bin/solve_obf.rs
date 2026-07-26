@@ -147,11 +147,15 @@ fn main() -> ExitCode {
         {
             use std::sync::atomic::Ordering::Relaxed;
             use kuroobi::solver as s;
+            let phase = |ns: &std::sync::atomic::AtomicU64, n: &std::sync::atomic::AtomicU64| {
+                let (secs, nodes) = (ns.load(Relaxed) as f64 / 1e9, n.load(Relaxed));
+                format!("{secs:.3}s {nodes} nodes {:.1}M/s", nodes as f64 / secs / 1e6)
+            };
             println!(
-                "  table clear {:.3}s  warm-up {:.3}s  exact {:.3}s",
+                "  table clear {:.3}s\n  warm-up {}\n  exact   {}",
                 s::CLEAR_NS.load(Relaxed) as f64 / 1e9,
-                s::WARMUP_NS.load(Relaxed) as f64 / 1e9,
-                s::EXACT_NS.load(Relaxed) as f64 / 1e9
+                phase(&s::WARMUP_NS, &s::WARMUP_NODES),
+                phase(&s::EXACT_NS, &s::EXACT_NODES)
             );
             let sp = kuroobi::solver::SPLITS.load(Relaxed);
             if sp > 0 {
