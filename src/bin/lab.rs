@@ -497,15 +497,6 @@ fn pool_slack() -> usize {
     })
 }
 
-/// How long an idle worker looks for work before parking, in polls of ~1us.
-/// Zero parks immediately.
-fn pool_spin() -> u32 {
-    static V: std::sync::OnceLock<u32> = std::sync::OnceLock::new();
-    *V.get_or_init(|| {
-        std::env::var("POOL_SPIN").ok().and_then(|v| v.parse().ok()).unwrap_or(16)
-    })
-}
-
 /// Slots probed per position. Four
 /// 16-byte entries are exactly one 64-byte cache line, so the whole probe is a
 /// single memory transaction.
@@ -661,6 +652,17 @@ static SPLIT_DONE: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::
 /// tell "the workers are starved" from "the work is there but redundant".
 static WAIT_IDLE_MAIN_NS: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
 static WAIT_IDLE_WORKER_NS: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+/// How often the pool was seen with k workers busy, sampled on a timer. The
+/// averages cannot tell "steadily half loaded" from "alternately saturated and
+/// empty", and the two call for opposite fixes: the first needs more split
+/// points, the second needs the bursts smoothed out.
+static BUSY_HIST: [std::sync::atomic::AtomicU64; 17] =
+    [const { std::sync::atomic::AtomicU64::new(0) }; 17];
+/// Raised only while the NNUE midgame search is running. Without it the sampler
+/// also counts the opponent's turns and the endgame solver, where the pool idles
+/// by construction — three quarters of the samples, which made the pool look
+/// empty when it was simply not in use.
+static SEARCH_ACTIVE: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
 
 thread_local! {
     static IS_POOL_WORKER: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
@@ -893,7 +895,6 @@ impl Pool {
     fn worker_loop(&self) {
         use std::sync::atomic::Ordering;
         IS_POOL_WORKER.with(|c| c.set(true));
-        let spin_rounds = pool_spin();
         loop {
             // The worker counts as idle for the whole time it is looking for
             // work, spinning included — the split gate is `idle > queued`, so a
@@ -901,31 +902,17 @@ impl Pool {
             // anything.
             self.idle.fetch_add(1, Ordering::Relaxed);
             let task = 'get: loop {
-                // Our tasks average 20-45us, against a measured 9us from queueing a
-                // task to a woken thread starting it. Look for work without
-                // sleeping first, so a handoff that lands during the window
-                // costs a cache miss instead of a context switch.
-                for _ in 0..spin_rounds {
-                    if self.queued.load(Ordering::Relaxed) > 0 {
-                        let mut q = self.q.lock().unwrap();
-                        if let Some(t) = q.pop_front() {
-                            self.queued.fetch_sub(1, Ordering::Relaxed);
-                            break 'get Some(t);
-                        }
-                    }
-                    // Space the polls out: `queued` is written by every push and
-                    // every pop, so reading it in a tight loop invalidates the
-                    // line under the threads that are actually searching.
-                    for _ in 0..64 {
-                        std::hint::spin_loop();
-                    }
-                }
-                // Nothing came. Sleep
-                // until woken, with no timeout. A 200us poll instead had all the
-                // idle workers waking twenty-five thousand times a second to
-                // take the queue mutex, find nothing, and go back to sleep —
-                // every one of those acquisitions serialises against a thread
-                // trying to hand work over.
+                // Sleep until woken,
+                // with no timeout. A 200us poll instead had all the idle workers
+                // waking twenty-five thousand times a second to take the queue
+                // mutex, find nothing, and go back to sleep — every one of those
+                // acquisitions serialises against a thread trying to hand work
+                // over.
+                //
+                // Spinning before parking to hide the measured 9us handoff was
+                // tried and is not here: it only pays when tasks are small
+                // enough for 9us to matter, and splitting that shallow loses
+                // more than the latency costs (see `ybwc_min_depth`).
                 let mut q = self.q.lock().unwrap();
                 loop {
                     if let Some(t) = q.pop_front() {
@@ -1028,6 +1015,16 @@ impl NnueSearch {
             for _ in 0..workers {
                 std::thread::spawn(move || pool.worker_loop());
             }
+            if std::env::var("POOL_SAMPLE").is_ok() {
+                std::thread::spawn(move || loop {
+                    if SEARCH_ACTIVE.load(std::sync::atomic::Ordering::Relaxed) {
+                        let idle = pool.idle.load(std::sync::atomic::Ordering::Relaxed);
+                        let busy = workers.saturating_sub(idle).min(16);
+                        BUSY_HIST[busy].fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                    }
+                    std::thread::sleep(std::time::Duration::from_micros(100));
+                });
+            }
             Some(pool)
         })
     }
@@ -1099,6 +1096,13 @@ impl NnueSearch {
         if b.movable() == 0 {
             return (None, f32::NAN);
         }
+        SEARCH_ACTIVE.store(true, std::sync::atomic::Ordering::Relaxed);
+        let r = self.best_move_valued_inner(b, depth);
+        SEARCH_ACTIVE.store(false, std::sync::atomic::Ordering::Relaxed);
+        r
+    }
+
+    fn best_move_valued_inner(&mut self, b: &Board, depth: u32) -> (Option<Position>, f32) {
         if self.threads > 1 && depth >= 2 {
             // Lazy SMP runs its own iterative deepening on every worker; doing
             // the shallow passes here as well would just duplicate them.
@@ -1551,6 +1555,18 @@ impl NnueSearch {
                     let stop = fan_stop.clone().unwrap();
                     let (task_slot, child, a, d) = (slot.clone(), nb, alpha, depth - 1);
                     let pushed = pool.try_push(move || {
+                        // Check before doing anything. A task that waited in the
+                        // queue may have been made irrelevant while it sat
+                        // there — a brother beat alpha and the fan-out stopped —
+                        // and the periodic check inside the search only fires
+                        // every ABORT_CHECK_INTERVAL nodes, so without this the
+                        // task searches half a thousand nodes of a tree nobody
+                        // will read. That waste is exactly what made a queue
+                        // unprofitable: nodes grew 30% at a queue depth of 32.
+                        if stop.stopped() {
+                            task_slot.set(ABORTED, 0);
+                            return;
+                        }
                         let mut w = NnueSearch::new(nn, tt);
                         w.mpc = mpc;
                         w.mpc_relax = relax;
@@ -1559,6 +1575,9 @@ impl NnueSearch {
                         // once someone has beaten alpha every other subtree is
                         // about to be restarted against a better window.
                         w.abort = Some(stop.clone());
+                        // Look at the flag on the first node too, not only after
+                        // the first full interval.
+                        w.abort_countdown = 1;
                         w.done = gen;
                         w.my_gen = my_gen;
                         let mut cacc = w.nn.indices(child.black, child.white);
@@ -2187,6 +2206,15 @@ fn main() -> ExitCode {
             SPLIT_DONE.load(Relaxed),
             SPLIT_TRIED.load(Relaxed),
         );
+        let hist: Vec<u64> = BUSY_HIST.iter().map(|c| c.load(Relaxed)).collect();
+        let total: u64 = hist.iter().sum();
+        if total > 0 {
+            let w = POOL_WORKERS.load(Relaxed).min(16);
+            let shown: Vec<String> = (0..=w)
+                .map(|k| format!("{k}:{:.0}%", hist[k] as f64 / total as f64 * 100.0))
+                .collect();
+            println!("  busy workers over time: {}", shown.join(" "));
+        }
     }
     println!(
         "thinking time: ours {:.1}s / {} moves = {:.3}s per move; \
