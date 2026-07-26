@@ -556,8 +556,7 @@ impl SharedTt {
         SharedTt {
             buckets: std::cell::UnsafeCell::new(vec![
                 TtBucket(
-                    [TtEntry { key: 0, value: 0.0, best: 64, depth: 0, flag: 0, relax: 0 };
-                        TT_WAYS]
+                    [TtEntry::EMPTY; TT_WAYS]
                 );
                 n
             ]),
@@ -590,7 +589,7 @@ impl SharedTt {
                 return *e;
             }
         }
-        TtEntry { key: 0, value: 0.0, best: 64, depth: 0, flag: 0, relax: 0 }
+        TtEntry::EMPTY
     }
 
     /// Store: walk the bucket and take the first slot that is worth
@@ -602,14 +601,63 @@ impl SharedTt {
     /// iteration above it will ask for. Under six threads the shallow stores
     /// arrive from every worker at once and the deep entries barely survive.
     #[inline]
-    fn put(&self, hash: u64, e: TtEntry) {
-        let level = tt_level(e.depth, e.relax);
+    /// `alpha` / `beta` are the window the node *started* with, not the one the
+    /// table narrowed it to. Registering against the narrowed window would claim
+    /// a bound the search never established.
+    #[allow(clippy::too_many_arguments)]
+    fn put(
+        &self,
+        hash: u64,
+        depth: u8,
+        relax: u8,
+        alpha: f32,
+        beta: f32,
+        value: f32,
+        best_move: u8,
+    ) {
+        let level = tt_level(depth, relax);
+        let upper = if value < beta { value } else { f32::INFINITY };
+        let lower = if value > alpha { value } else { f32::NEG_INFINITY };
         for i in 0..TT_WAYS {
             let slot = self.slot(hash, i as u64);
             if slot.key == hash && slot.flag != 0 {
-                // Same position: keep the deeper of the two.
-                if tt_level(slot.depth, slot.relax) <= level {
-                    *slot = e;
+                let slot_level = tt_level(slot.depth, slot.relax);
+                if slot_level > level {
+                    return;
+                }
+                if slot_level == level {
+                    // Same level: the same node searched again
+                    // through a different window, so the two bounds combine —
+                    // *and each assignment repairs the other end if it would
+                    // cross it*. ProbCut makes every stored value probabilistic
+                    // and two threads at the same level can disagree, so
+                    // `lower > upper` really does happen; leaving those repair
+                    // clauses out cost 20% more nodes than a single tagged
+                    // value, which is what made this look like a bad idea the
+                    // first time it was tried.
+                    if value < beta && value < slot.upper {
+                        slot.upper = value;
+                        if value > alpha && value < slot.lower {
+                            slot.lower = value;
+                        }
+                    }
+                    if value > alpha && slot.lower < value {
+                        slot.lower = value;
+                        if value < beta && slot.upper < value {
+                            slot.upper = value;
+                        }
+                    }
+                } else {
+                    // Deeper result: the old bounds no
+                    // longer apply and are replaced outright.
+                    slot.lower = lower;
+                    slot.upper = upper;
+                    slot.depth = depth;
+                    slot.relax = relax;
+                }
+                if value > alpha && best_move < 64 && slot.best != best_move {
+                    slot.best2 = slot.best;
+                    slot.best = best_move;
                 }
                 return;
             }
@@ -617,7 +665,21 @@ impl SharedTt {
         for i in 0..TT_WAYS {
             let slot = self.slot(hash, i as u64);
             if slot.flag == 0 || tt_level(slot.depth, slot.relax) <= level {
-                *slot = e;
+                *slot = TtEntry {
+                    key: hash,
+                    lower,
+                    upper,
+                    // The move is dropped when the search
+                    // failed low, since nothing was proven about it. That was
+                    // ruinous while the ordering fell back to bit order without
+                    // a table move; with the scored ordering pass in place it
+                    // costs only the head start.
+                    best: best_move,
+                    best2: 64,
+                    depth,
+                    flag: 1,
+                    relax,
+                };
                 return;
             }
         }
@@ -640,8 +702,19 @@ impl SharedTt {
 #[derive(Clone, Copy)]
 struct TtEntry {
     key: u64,
-    value: f32,
+    /// The entry keeps a **pair of bounds** rather than one value
+    /// plus a lower/upper/exact tag. A tagged value answers only half the
+    /// questions asked of it: a node that failed low here leaves an upper bound,
+    /// and the next visit — arriving with a window that needs a lower bound —
+    /// learns nothing and searches again. Both ends accumulate into
+    /// the same entry over successive visits and the table hands out
+    /// whichever end the caller can use.
+    lower: f32,
+    upper: f32,
     best: u8,
+    /// The move the current best displaced, kept as the
+    /// runner-up for ordering.
+    best2: u8,
     depth: u8,
     flag: u8,
     /// How *accurately* this entry was searched: 0 is the main thread's
@@ -652,6 +725,19 @@ struct TtEntry {
     /// the main search's answer — which reads as a speedup (fewer nodes) but is
     /// really a strength loss.
     relax: u8,
+}
+
+impl TtEntry {
+    const EMPTY: TtEntry = TtEntry {
+        key: 0,
+        lower: f32::NEG_INFINITY,
+        upper: f32::INFINITY,
+        best: 64,
+        best2: 64,
+        depth: 0,
+        flag: 0,
+        relax: 0,
+    };
 }
 
 /// How often a split was attempted and how often the pool accepted it. A large
@@ -1145,7 +1231,7 @@ impl NnueSearch {
             return Position::from_index(e.best as u32);
         }
         let mut kids: [Kid; MAX_KIDS] = [(Position(0), 0, 0.0); MAX_KIDS];
-        let n = self.ordered_into(b, acc, 1, b.movable(), &mut kids, false);
+        let n = self.ordered_into(b, acc, 1, b.movable(), &mut kids, false, 64, 64);
         (n > 0).then(|| kids[0].0)
     }
 
@@ -1302,6 +1388,8 @@ impl NnueSearch {
         moves: u64,
         out: &mut [Kid; MAX_KIDS],
         null_window: bool,
+        tt_move: u8,
+        tt_move2: u8,
     ) -> usize {
         let mover = b.player();
         // Ordering weights, scaled so the eval term stays in disc units.
@@ -1318,20 +1406,32 @@ impl NnueSearch {
             m &= m - 1;
             let mut nb = *b;
             let flipped = nb.make_move_bits(pos);
-            let legal = nb.movable();
-            // Offset minus weighted moves, so fewer replies scores higher.
-            let mob = 38.0
-                - (legal.count_ones() * 2 + (legal & CORNERS).count_ones()) as f32;
-            let mut key = mob * w_mob;
-            if w_pm != 0.0 {
-                let empties = !(nb.black | nb.white);
-                key += (38.0 - potential_mobility(nb.opponent_bb(), empties) as f32) * w_pm;
-            }
-            if eval_order {
-                self.nn.ix_apply(acc, pos, flipped, mover);
-                key += -self.nn.eval_from_indices(acc, &nb) * w_val;
-                self.nn.ix_undo(acc, pos, flipped, mover);
-            }
+            // The table's moves are
+            // scored so far above everything else that the sort puts them first
+            // and second. Doing it with the score rather than by swapping them
+            // to the front matters — two swaps do not land the runner-up in
+            // second place, they displace whatever the ordering had chosen.
+            let key = if pos.index() as u8 == tt_move {
+                1.0e9
+            } else if pos.index() as u8 == tt_move2 {
+                1.0e8
+            } else {
+                let legal = nb.movable();
+                // Offset minus weighted moves, so fewer replies scores higher.
+                let mob = 38.0
+                    - (legal.count_ones() * 2 + (legal & CORNERS).count_ones()) as f32;
+                let mut k = mob * w_mob;
+                if w_pm != 0.0 {
+                    let empties = !(nb.black | nb.white);
+                    k += (38.0 - potential_mobility(nb.opponent_bb(), empties) as f32) * w_pm;
+                }
+                if eval_order {
+                    self.nn.ix_apply(acc, pos, flipped, mover);
+                    k += -self.nn.eval_from_indices(acc, &nb) * w_val;
+                    self.nn.ix_undo(acc, pos, flipped, mover);
+                }
+                k
+            };
             out[n] = (pos, flipped, key);
             n += 1;
         }
@@ -1369,20 +1469,38 @@ impl NnueSearch {
         }
 
         let h = zobrist::board_hash(b.player_bb(), b.opponent_bb());
+        // The window this node was *asked* about. The table may narrow the
+        // working window below, but what gets registered has to be measured
+        // against this one.
+        let (first_alpha, first_beta) = (alpha, beta);
+        let mut beta = beta;
         let mut tt_move = 64u8;
+        let mut tt_move2 = 64u8;
         {
             let e = self.tt.get(h);
             if e.key == h && e.flag != 0 {
-                // The stored move is always worth having for ordering; the
-                // stored *value* only if it was searched at least as deep and
-                // at least as accurately as this node needs.
+                // The stored moves are always worth having for ordering; the
+                // stored *bounds* only if the entry was searched at least as
+                // deep and at least as accurately as this node needs.
                 tt_move = e.best;
+                tt_move2 = e.best2;
                 if e.depth as u32 >= depth && e.relax >= self.mpc_relax as u8 {
-                    match e.flag {
-                        1 => return e.value,
-                        2 if e.value >= beta => return e.value,
-                        3 if e.value <= alpha => return e.value,
-                        _ => {}
+                    // Transposition cutoff.
+                    if e.upper <= alpha || e.upper == e.lower {
+                        return e.upper;
+                    }
+                    if beta <= e.lower {
+                        return e.lower;
+                    }
+                    // Narrow the working window to what the table already
+                    // knows. Measured worth having (36.1M nodes against 37.2M
+                    // without) even though ProbCut makes the stored bounds
+                    // probabilistic rather than sound.
+                    if alpha < e.lower {
+                        alpha = e.lower;
+                    }
+                    if e.upper < beta {
+                        beta = e.upper;
                     }
                 }
             }
@@ -1440,7 +1558,6 @@ impl NnueSearch {
             }
         }
 
-        let orig_alpha = alpha;
         // Which of the two ordering weight sets to use. Null-window nodes
         // are most of the tree and get the cheap one.
         let null_window = beta - alpha <= PVS_EPS * 1.5;
@@ -1460,8 +1577,9 @@ impl NnueSearch {
         // (a single legal move).
         let mut kids: [Kid; MAX_KIDS] = [(Position(0), 0, 0.0); MAX_KIDS];
         let will_split = self.pool.is_some() && depth >= ybwc_min_depth();
-        let n_kids = if depth >= 2 && moves.count_ones() > 1 {
-            self.ordered_into(b, acc, depth, moves, &mut kids, null_window)
+        let ordered = depth >= 2 && moves.count_ones() > 1;
+        let n_kids = if ordered {
+            self.ordered_into(b, acc, depth, moves, &mut kids, null_window, tt_move, tt_move2)
         } else {
             let mut n = 0usize;
             let mut m = moves;
@@ -1474,7 +1592,9 @@ impl NnueSearch {
             }
             n
         };
-        if tt_move < 64 {
+        // The scored path already put the table moves first; the
+        // unscored path (one legal move, or depth below 2) still needs the swap.
+        if !ordered && tt_move < 64 {
             if let Some(i) = kids[..n_kids].iter().position(|k| k.0.index() == tt_move) {
                 kids.swap(0, i);
             }
@@ -1764,17 +1884,14 @@ impl NnueSearch {
             return ABORTED;
         }
 
-        let flag = if best <= orig_alpha { 3 } else if best >= beta { 2 } else { 1 };
         self.tt.put(
             h,
-            TtEntry {
-                key: h,
-                value: best,
-                best: best_move,
-                depth: depth as u8,
-                flag,
-                relax: self.mpc_relax as u8,
-            },
+            depth as u8,
+            self.mpc_relax as u8,
+            first_alpha,
+            first_beta,
+            best,
+            best_move,
         );
         best
     }
