@@ -58,6 +58,10 @@ struct Args {
     edax_level: u32,
     protocol: &'static str,
     threads: usize,
+    /// Threads for the opponent. Separate from ours so the opponent's own
+    /// parallel efficiency can be measured with our side held fixed — the
+    /// only honest way to know what speedup this machine actually supports.
+    edax_threads: Option<usize>,
     games: usize,
     random_plies: usize,
     seed: u64,
@@ -88,6 +92,7 @@ fn parse_args() -> Result<Args, String> {
         edax_level: 5,
         protocol: "edax",
         threads: 1,
+        edax_threads: None,
         games: 200,
         random_plies: 6,
         seed: 7,
@@ -128,6 +133,7 @@ fn parse_args() -> Result<Args, String> {
                 }
             }
             "--threads" => args.threads = value("--threads")?.parse().map_err(|e| format!("--threads: {e}"))?,
+            "--edax-threads" => args.edax_threads = Some(value("--edax-threads")?.parse().map_err(|e| format!("--edax-threads: {e}"))?),
             "--games" => args.games = value("--games")?.parse().map_err(|e| format!("--games: {e}"))?,
             "--random-plies" => args.random_plies = value("--random-plies")?.parse().map_err(|e| format!("--random-plies: {e}"))?,
             "--seed" => args.seed = value("--seed")?.parse().map_err(|e| format!("--seed: {e}"))?,
@@ -379,6 +385,10 @@ struct Clock {
     edax: f64,
     our_moves: u64,
     edax_moves: u64,
+    /// Time spent in the NNUE midgame search only. The endgame solver has its
+    /// own threads and leaves the YBWC pool idle, so counting it would make
+    /// worker utilisation look far worse than it is.
+    our_mid: f64,
     /// Nodes our midgame search visited, so parallel *throughput* can be told
     /// apart from parallel *speedup*: if nodes per second scale with the core
     /// count but wall-clock does not, the threads are being fed and the extra
@@ -412,55 +422,6 @@ const ABORTED: f32 = f32::NEG_INFINITY;
 /// would put a contended load in the hot path.
 /// Below `ybwc_min_depth` a subtree is cheaper to
 /// search than to hand off.
-/// Give each pool worker its own transposition table instead of sharing one.
-/// Diagnostic: independent processes reach 5.4x aggregate throughput where six
-/// threads reach 2.2x, and the shared table is the largest thing threads have
-/// that processes do not.
-fn use_private_tt() -> bool {
-    static V: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
-    *V.get_or_init(|| std::env::var("PRIVATE_TT").is_ok_and(|v| v != "0"))
-}
-
-thread_local! {
-    static WORKER_TT: std::cell::Cell<Option<&'static SharedTt>> =
-        const { std::cell::Cell::new(None) };
-}
-
-/// This thread's private table, built on first use.
-fn private_tt() -> Option<&'static SharedTt> {
-    if !use_private_tt() {
-        return None;
-    }
-    WORKER_TT.with(|c| {
-        if c.get().is_none() {
-            c.set(Some(Box::leak(Box::new(SharedTt::new(22)))));
-        }
-        c.get()
-    })
-}
-
-/// How many children are searched sequentially before the rest are handed out.
-/// One (the eldest brother) is the classic choice. Searching a second one
-/// first costs latency but avoids giving away a whole fan of subtrees that
-/// the second child's cutoff was about to make pointless.
-fn ybwc_elder() -> usize {
-    static V: std::sync::OnceLock<usize> = std::sync::OnceLock::new();
-    *V.get_or_init(|| {
-        // Measured (6 threads, 60 self-play games): 1 -> 1.30x, 2 -> 1.66x,
-        // 3 -> 1.63x, all at 50% score. A cheaper per-node evaluation would
-        // favour one; our expensive leaves make two the better trade.
-        std::env::var("YBWC_ELDER").ok().and_then(|v| v.parse().ok()).unwrap_or(2)
-    })
-}
-
-/// Queue depth per worker.
-fn pool_capacity_factor() -> usize {
-    static V: std::sync::OnceLock<usize> = std::sync::OnceLock::new();
-    *V.get_or_init(|| {
-        std::env::var("POOL_CAP").ok().and_then(|v| v.parse().ok()).unwrap_or(4)
-    })
-}
-
 /// How much each step of `mpc_relax` widens the ProbCut margin.
 const MPC_RELAX_STEP: f32 = 1.18;
 
@@ -525,6 +486,16 @@ const SQUARE_BIAS: [i8; 64] = [
     30, -12, 0, -1, -1, 0, -12, 30,
 ];
 
+/// Slots probed per position.
+const TT_WAYS: usize = 3;
+
+/// How valuable an entry is: depth first,
+/// accuracy as the tie-break.
+#[inline]
+fn tt_level(depth: u8, relax: u8) -> u32 {
+    ((depth as u32) << 8) | relax as u32
+}
+
 /// A transposition table shared by the root-split workers.
 ///
 /// Writes race, but every entry carries the position key and is compared
@@ -550,21 +521,55 @@ impl SharedTt {
     }
 
     #[inline]
-    fn get(&self, hash: u64) -> TtEntry {
+    fn slot(&self, hash: u64, i: u64) -> &mut TtEntry {
         // SAFETY: index is masked into range; a racing write can only make the
         // key mismatch, which the caller treats as a miss.
         unsafe {
-            let v = &*self.entries.get();
-            *v.get_unchecked((hash & self.mask) as usize)
+            let v = &mut *self.entries.get();
+            v.get_unchecked_mut(((hash.wrapping_add(i)) & self.mask) as usize)
         }
     }
 
+    /// Scan the bucket for this position, probing consecutive slots rather
+    /// than one.
+    #[inline]
+    fn get(&self, hash: u64) -> TtEntry {
+        for i in 0..TT_WAYS {
+            let e = *self.slot(hash, i as u64);
+            if e.key == hash && e.flag != 0 {
+                return e;
+            }
+        }
+        TtEntry { key: 0, value: 0.0, best: 64, depth: 0, flag: 0, relax: 0 }
+    }
+
+    /// Store: walk the bucket and take the first slot that is worth
+    /// no more than what is being stored, where worth is `(depth, accuracy)`.
+    /// If all three hold deeper or more accurate results, store nothing.
+    ///
+    /// A one-way table cannot express that: every store evicts whatever was
+    /// there, so a shallow probe near a leaf throws away the deep entry the
+    /// iteration above it will ask for. Under six threads the shallow stores
+    /// arrive from every worker at once and the deep entries barely survive.
     #[inline]
     fn put(&self, hash: u64, e: TtEntry) {
-        // SAFETY: as above.
-        unsafe {
-            let v = &mut *self.entries.get();
-            *v.get_unchecked_mut((hash & self.mask) as usize) = e;
+        let level = tt_level(e.depth, e.relax);
+        for i in 0..TT_WAYS {
+            let slot = self.slot(hash, i as u64);
+            if slot.key == hash && slot.flag != 0 {
+                // Same position: keep the deeper of the two.
+                if tt_level(slot.depth, slot.relax) <= level {
+                    *slot = e;
+                }
+                return;
+            }
+        }
+        for i in 0..TT_WAYS {
+            let slot = self.slot(hash, i as u64);
+            if slot.flag == 0 || tt_level(slot.depth, slot.relax) <= level {
+                *slot = e;
+                return;
+            }
         }
     }
 
@@ -601,16 +606,60 @@ struct TtEntry {
 /// gap means the workers are saturated; a small `SPLIT_TRIED` means the search
 /// is not offering them work in the first place.
 static SPLIT_TRIED: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
-/// Nodes searched inside pool tasks. Against the total this is the share of
-/// the tree the workers actually carried: if it is small they are idle, not
-/// slow, and no amount of queue tuning will help.
-static TASK_NODES: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
 /// Nanoseconds pool workers spent inside tasks. Against (workers x our search
 /// time) this is worker utilisation: it separates "the workers are idle" from
 /// "the workers are busy but contending".
 static WORKER_BUSY_NS: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
 static POOL_WORKERS: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
 static SPLIT_DONE: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+/// Nanoseconds a splitting thread spent inside `Pool::wait` with nothing left
+/// to steal, split by who was waiting. This is the part of the machine that
+/// YBWC is *paying* for and not using: the parent is blocked on a child while
+/// the queue is empty. Separating it from real search time is the only way to
+/// tell "the workers are starved" from "the work is there but redundant".
+static WAIT_IDLE_MAIN_NS: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+static WAIT_IDLE_WORKER_NS: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+
+thread_local! {
+    static IS_POOL_WORKER: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+    static SPLIT_TRIED_LOCAL: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
+}
+
+/// A node's own "stop the fan-out"
+/// flag chained to every ancestor's. A task carries the whole chain, so an
+/// abort raised anywhere above it reaches it — `is_searching` walks the vector.
+///
+/// Without the chain a split subtree only ever sees the flag of the node that
+/// created it: when a grandparent cuts off, the grandchild keeps searching a
+/// tree nobody will read, and the parent sits blocked in `wait` for it.
+struct AbortChain {
+    flag: std::sync::atomic::AtomicBool,
+    parent: Option<std::sync::Arc<AbortChain>>,
+}
+
+impl AbortChain {
+    fn child(parent: Option<std::sync::Arc<AbortChain>>) -> std::sync::Arc<AbortChain> {
+        std::sync::Arc::new(AbortChain {
+            flag: std::sync::atomic::AtomicBool::new(false),
+            parent,
+        })
+    }
+    fn raise(&self) {
+        self.flag.store(true, std::sync::atomic::Ordering::Relaxed);
+    }
+    fn stopped(&self) -> bool {
+        let mut n = self;
+        loop {
+            if n.flag.load(std::sync::atomic::Ordering::Relaxed) {
+                return true;
+            }
+            match &n.parent {
+                Some(p) => n = p,
+                None => return false,
+            }
+        }
+    }
+}
 
 /// Where a split-off null-window search leaves its answer.
 struct Slot {
@@ -640,17 +689,13 @@ impl Slot {
 struct Pool {
     q: std::sync::Mutex<std::collections::VecDeque<Box<dyn FnOnce() + Send + 'static>>>,
     cv: std::sync::Condvar,
-    /// Tasks queued or running. Never allowed past `workers`, so a thread
-    /// waiting on a task can always be sure someone is able to run it.
-    outstanding: std::sync::atomic::AtomicUsize,
+    /// Workers currently blocked waiting for work.
+    idle: std::sync::atomic::AtomicUsize,
     /// Queue length, readable without taking the lock. A thread waiting on a
     /// split polls for work; if that poll locks the mutex every iteration it
     /// serialises every worker against the waiters and throughput collapses.
     queued: std::sync::atomic::AtomicUsize,
     workers: usize,
-    /// Cap on queued-or-running tasks. Above `workers` so nodes deeper than the
-    /// first few can still split once the top of the tree is busy.
-    capacity: usize,
     stop: std::sync::atomic::AtomicBool,
 }
 
@@ -660,10 +705,9 @@ impl Pool {
         Pool {
             q: std::sync::Mutex::new(std::collections::VecDeque::new()),
             cv: std::sync::Condvar::new(),
-            outstanding: AtomicUsize::new(0),
+            idle: AtomicUsize::new(0),
             queued: AtomicUsize::new(0),
             workers,
-            capacity: workers * pool_capacity_factor(),
             stop: AtomicBool::new(false),
         }
     }
@@ -676,20 +720,41 @@ impl Pool {
         if self.workers == 0 {
             return false;
         }
-        SPLIT_TRIED.fetch_add(1, Ordering::Relaxed);
-        // Claim a slot first; a lost race just means one fewer split.
-        if self
-            .outstanding
-            .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |n| {
-                (n < self.capacity).then_some(n + 1)
-            })
-            .is_err()
-        {
+        // Counted thread-locally and flushed in batches: a shared atomic
+        // incremented on every split *attempt* is a contended cache line hit
+        // hundreds of thousands of times a second, which would be measurement
+        // that costs what it measures.
+        SPLIT_TRIED_LOCAL.with(|c| {
+            let n = c.get() + 1;
+            if n >= 4096 {
+                c.set(0);
+                SPLIT_TRIED.fetch_add(n, Ordering::Relaxed);
+            } else {
+                c.set(n);
+            }
+        });
+        // Only hand work over when a worker is actually free to start it now,
+        // reporting the failure to the caller, which then searches the child
+        // itself. Queueing beyond that looks like handing work off but really
+        // parks it: the task waits in line while the parent blocks on it.
+        //
+        // The test runs *unlocked* first, and only
+        // then takes the lock to re-check. Nearly every split attempt is a
+        // rejection — the pool is busy — and taking the mutex to discover that
+        // funnels every searching thread through one lock several hundred
+        // thousand times a second.
+        let free = |queued: usize| self.idle.load(Ordering::Relaxed) > queued;
+        if !free(self.queued.load(Ordering::Relaxed)) {
+            return false;
+        }
+        let mut q = self.q.lock().unwrap();
+        if !free(q.len()) {
             return false;
         }
         SPLIT_DONE.fetch_add(1, Ordering::Relaxed);
-        self.q.lock().unwrap().push_back(Box::new(f));
+        q.push_back(Box::new(f));
         self.queued.fetch_add(1, Ordering::Relaxed);
+        drop(q);
         self.cv.notify_one();
         true
     }
@@ -714,7 +779,6 @@ impl Pool {
         match task {
             Some(t) => {
                 t();
-                self.outstanding.fetch_sub(1, Ordering::Relaxed);
                 true
             }
             None => false,
@@ -726,13 +790,25 @@ impl Pool {
     fn wait(&self, slot: &Slot) {
         use std::sync::atomic::Ordering;
         let mut idle = 0u32;
+        let mut starved: Option<std::time::Instant> = None;
         while !slot.done.load(Ordering::Acquire) {
             if self.run_one() {
                 idle = 0;
+                if let Some(t0) = starved.take() {
+                    let ns = t0.elapsed().as_nanos() as u64;
+                    if IS_POOL_WORKER.with(|c| c.get()) {
+                        WAIT_IDLE_WORKER_NS.fetch_add(ns, Ordering::Relaxed);
+                    } else {
+                        WAIT_IDLE_MAIN_NS.fetch_add(ns, Ordering::Relaxed);
+                    }
+                }
                 continue;
             }
             // Nothing to steal: spin briefly (the task is usually about to
             // finish), then hand the core back rather than burn it.
+            if starved.is_none() {
+                starved = Some(std::time::Instant::now());
+            }
             idle += 1;
             if idle < 64 {
                 std::hint::spin_loop();
@@ -740,14 +816,24 @@ impl Pool {
                 std::thread::yield_now();
             }
         }
+        if let Some(t0) = starved {
+            let ns = t0.elapsed().as_nanos() as u64;
+            if IS_POOL_WORKER.with(|c| c.get()) {
+                WAIT_IDLE_WORKER_NS.fetch_add(ns, Ordering::Relaxed);
+            } else {
+                WAIT_IDLE_MAIN_NS.fetch_add(ns, Ordering::Relaxed);
+            }
+        }
     }
 
     fn worker_loop(&self) {
         use std::sync::atomic::Ordering;
+        IS_POOL_WORKER.with(|c| c.set(true));
         loop {
             let task = {
                 let mut q = self.q.lock().unwrap();
-                loop {
+                self.idle.fetch_add(1, Ordering::Relaxed);
+                let t = loop {
                     if let Some(t) = q.pop_front() {
                         self.queued.fetch_sub(1, Ordering::Relaxed);
                         break Some(t);
@@ -760,24 +846,21 @@ impl Pool {
                         .wait_timeout(q, std::time::Duration::from_micros(200))
                         .unwrap();
                     q = g;
-                }
+                };
+                self.idle.fetch_sub(1, Ordering::Relaxed);
+                t
             };
             match task {
                 Some(t) => {
                     let t0 = std::time::Instant::now();
                     t();
                     WORKER_BUSY_NS.fetch_add(t0.elapsed().as_nanos() as u64, Ordering::Relaxed);
-                    self.outstanding.fetch_sub(1, Ordering::Relaxed);
                 }
                 None => return,
             }
         }
     }
 
-    fn shutdown(&self) {
-        self.stop.store(true, std::sync::atomic::Ordering::Relaxed);
-        self.cv.notify_all();
-    }
 }
 
 /// Fixed-depth NNUE alpha-beta with a transposition table and NNUE-eval move
@@ -797,7 +880,7 @@ struct NnueSearch {
     /// Set by the root when a sibling's result makes this worker's subtree
     /// irrelevant; checked periodically so the worker can stop immediately
     /// instead of finishing work nobody will use.
-    abort: Option<std::sync::Arc<std::sync::atomic::AtomicBool>>,
+    abort: Option<std::sync::Arc<AbortChain>>,
     abort_countdown: u64,
     /// Set once the main Lazy SMP thread has reached the target depth; helpers
     /// stop as soon as they notice, since their results are no longer needed.
@@ -895,7 +978,7 @@ impl NnueSearch {
             return false;
         }
         self.abort_countdown = ABORT_CHECK_INTERVAL;
-        flag.load(std::sync::atomic::Ordering::Relaxed)
+        flag.stopped()
     }
 
     /// Periodic check that also honours the Lazy SMP done flag, so helpers
@@ -1231,6 +1314,13 @@ impl NnueSearch {
         // node) put it first over a cheap natural order — skip the expensive
         // per-child eval scan. Only genuinely new deep nodes pay for it.
         let mut kids: [Kid; MAX_KIDS] = [(Position(0), 0, 0.0); MAX_KIDS];
+        // An alternative is to order the whole move list and *then* split.
+        // Ordering only matters for the children that get searched, and at a
+        // node that is about to hand its young brothers to the pool that is all
+        // of them: an unordered young brother beats alpha, which stops the
+        // fan-out and forces a re-search of everything behind it. Cheap nodes
+        // still take the shortcut of trusting the table move alone.
+        let will_split = self.pool.is_some() && depth >= ybwc_min_depth();
         let n_kids = if tt_move >= 64 && depth >= 2 {
             self.ordered_into(b, acc, depth, moves, &mut kids)
         } else {
@@ -1261,178 +1351,244 @@ impl NnueSearch {
         // sequentially to establish the window, and only then are the younger
         // siblings' null-window searches handed to idle workers. Splitting
         // before the window is known would parallelise work that a cutoff was
-        // about to make unnecessary — which is exactly what Lazy SMP does, and
-        // why it stops scaling once every core already holds a copy of the
-        // same tree.
+        // about to make unnecessary.
+        //
+        // Every non-eldest child is searched with a null window whatever kind
+        // of node its parent is, so PV nodes have young brothers to give away
+        // too — and being at the top of the tree, theirs are the largest
+        // subtrees there are. Both kinds split here;
+        // restricting this to null-window *parents*
+        // excluded the whole PV spine and left the workers idle 68% of the
+        // time.
         //
         // Splits start at `ybwc_min_depth`; below that a
         // subtree is cheaper than the handoff.
-        //
-        // Only null-window nodes are split, which is what `ybwc_*_nws` means:
-        // there a child that beats alpha is an immediate cutoff, so the moment
-        // one task fails high every sibling can be dropped. At a PV node the
-        // same result would instead demand a full-window re-search while the
-        // siblings stayed relevant — parallel work that mostly gets thrown
-        // away. (Measured: splitting PV nodes too made 10 threads *slower*
-        // than the old redundant-helper scheme, 0.066 vs 0.024 s per move.)
-        //
-        // The test is on the window handed to the *child*, not the one this
-        // node was given. Every non-eldest child is searched with a null window
-        // whatever kind of node its parent is, so PV nodes have young brothers
-        // to give away too — and being at the top of the tree, theirs are the
-        // largest subtrees there are. Testing the parent's window instead
-        // excluded the whole PV spine and left the workers idle 68% of the
-        // time.
-        let is_nws = beta - alpha <= PVS_EPS * 1.5;
-        let split_ok = self.pool.is_some() && depth >= ybwc_min_depth();
-        // (child, slot, alpha it was split against)
-        let mut pending: Vec<(Position, u64, std::sync::Arc<Slot>, f32)> = Vec::new();
-        // Allocated on the first actual split, not on every eligible node.
-        let mut node_abort: Option<std::sync::Arc<std::sync::atomic::AtomicBool>> = None;
+        let split_ok = will_split;
 
-        let mut first = true;
         let mut aborted = false;
-        for i in 0..n_kids {
-            // Stop as soon as a split-off sibling has already cut this node.
-            // Without this check the loop keeps handing
-            // out subtrees that the cutoff has just made irrelevant, and the
-            // wasted nodes eat the whole parallel gain — 82% extra nodes at 6
-            // threads, against 2.2x the throughput.
-            if let Some(stop) = &node_abort {
-                if stop.load(std::sync::atomic::Ordering::Relaxed) {
+        // Which children already have a final answer.
+        let mut settled = [false; MAX_KIDS];
+        let mut n_settled = 0usize;
+        let mut first = true;
+
+        // Fan the young brothers out
+        // against the alpha in force *now*, and the moment one of them beats
+        // it, stop the fan-out, re-search the winners with the real window, and
+        // fan the rest out again against the improved alpha.
+        //
+        // Letting the fan-out run to completion instead — which is what this
+        // used to do — leaves every sibling searching against an alpha that is
+        // known to be too low, and the extra nodes are what eats the parallel
+        // gain (1.87x the sequential node count at 6 threads).
+        let outer = self.abort.clone();
+        'fanout: loop {
+            // The fan-out flag, with the polarity this codebase uses
+            // for aborts: raised by whoever beats alpha, which ends this
+            // fan-out (not the node). It is handed to the tasks as their abort
+            // flag, so it *must* start clear — initialising it the other way
+            // round made every task stop the instant it started, leaving the
+            // node to be decided by its eldest child alone (28% in self-play).
+            //
+            // Only nodes that can actually split get one. The flag is heap
+            // allocated, and allocating it at every interior node cost 13% of
+            // single-thread throughput for a flag nobody could ever raise.
+            let fan_stop = if split_ok { Some(AbortChain::child(outer.clone())) } else { None };
+            // The loop control is a plain local, never the shared flag: a node
+            // that cannot split has no flag, and gating the break on the flag
+            // meant a fail-high stopped nothing — every remaining brother was
+            // still probed against an alpha already known to be too low. That
+            // is the fan-out flag losing its only job, and it cost 4x
+            // the nodes single-threaded.
+            let mut stop_fanout = false;
+            let mut pending: Vec<(usize, std::sync::Arc<Slot>)> = Vec::new();
+            let mut research: Vec<usize> = Vec::new();
+            let mut next_alpha = alpha;
+
+            for i in 0..n_kids {
+                if settled[i] {
+                    continue;
+                }
+                if stop_fanout || fan_stop.as_ref().is_some_and(|f| f.stopped()) {
                     break;
                 }
-            }
-            let (pos, flipped, _) = kids[i];
-            // The flips are already known from the ordering pass; applying them
-            // directly avoids recomputing a full flip per child.
-            let mut nb = *b;
-            nb.apply_flips(pos, flipped);
+                let (pos, flipped, _) = kids[i];
+                // The flips are already known from the ordering pass; applying
+                // them directly avoids recomputing a full flip per child.
+                let mut nb = *b;
+                nb.apply_flips(pos, flipped);
 
-            if i >= ybwc_elder() && !first && split_ok {
-                let pool = self.pool.unwrap();
-                let slot = std::sync::Arc::new(Slot::new());
-                let stop = node_abort
-                    .get_or_insert_with(|| {
-                        std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false))
-                    })
-                    .clone();
-                let (nn, tt, mpc, sharpen) = (self.nn, self.tt, self.mpc, self.mpc_relax);
-                let (gen, my_gen) = (self.done.clone(), self.my_gen);
-                let (task_slot, child, a, d) = (slot.clone(), nb, alpha, depth - 1);
-                let pushed = pool.try_push(move || {
-                    let mut w = NnueSearch::new(nn, private_tt().unwrap_or(tt));
-                    w.mpc = mpc;
-                    w.mpc_relax = sharpen;
-                    w.pool = Some(pool);
-                    w.abort = Some(stop.clone());
-                    w.done = gen;
-                    w.my_gen = my_gen;
-                    let mut cacc = w.nn.indices(child.black, child.white);
-                    let v = w.negamax(&child, &mut cacc, d, -(a + PVS_EPS), -a);
-                    // Beating alpha cuts the parent only at a null-window
-                    // node; there, retire the siblings at once rather than let
-                    // them run to completion. At a PV node the same result only means this
-                    // child needs a full-window re-search, and the siblings
-                    // still matter.
-                    if is_nws && v != ABORTED && -v > a {
-                        stop.store(true, std::sync::atomic::Ordering::Relaxed);
-                    }
-                    TASK_NODES.fetch_add(w.nodes, std::sync::atomic::Ordering::Relaxed);
-                    task_slot.set(v, w.nodes);
-                });
-                if pushed {
-                    pending.push((pos, flipped, slot, alpha));
-                    continue;
-                }
-            }
-
-            self.nn.ix_apply(acc, pos, flipped, mover);
-            // Inspect the child's own return value: negating it would turn the
-            // ABORTED sentinel into +inf and hide the abort.
-            let raw = if first {
-                self.negamax(&nb, acc, depth - 1, -beta, -alpha)
-            } else {
-                let probe = self.negamax(&nb, acc, depth - 1, -(alpha + PVS_EPS), -alpha);
-                if probe != ABORTED && -probe > alpha && -probe < beta {
-                    self.negamax(&nb, acc, depth - 1, -beta, probe)
-                } else {
-                    probe
-                }
-            };
-            self.nn.ix_undo(acc, pos, flipped, mover);
-            if raw == ABORTED {
-                aborted = true;
-                break;
-            }
-            let v = -raw;
-            first = false;
-            if v > best {
-                best = v;
-                best_move = pos.index() as u8;
-            }
-            if best > alpha {
-                alpha = best;
-            }
-            if alpha >= beta {
-                break;
-            }
-        }
-
-        // Collect the split-off siblings. A cutoff already found here makes the
-        // rest irrelevant, so tell them to stop — but still wait, since their
-        // slots are borrowed by tasks that are already running.
-        if let Some(stop) = &node_abort {
-            let pool = self.pool.unwrap();
-            if aborted || alpha >= beta {
-                stop.store(true, std::sync::atomic::Ordering::Relaxed);
-            }
-            for (pos, flipped, slot, split_alpha) in std::mem::take(&mut pending) {
-                // Wait even for tasks whose answer is already irrelevant: the
-                // slot they write to is still live until they notice the stop.
-                pool.wait(&slot);
-                self.nodes += slot.nodes.load(std::sync::atomic::Ordering::Relaxed);
-                if aborted || alpha >= beta {
-                    continue;
-                }
-                let raw = f32::from_bits(slot.bits.load(std::sync::atomic::Ordering::Relaxed));
-                if raw == ABORTED {
-                    // `stop` is node-local and only ever raised by a sibling
-                    // failing high (or by this node cutting), so an aborted
-                    // task means "a sibling already decided this node" — not
-                    // that the node is unresolved. Marking the node aborted
-                    // here threw away the very fail-high that caused the abort,
-                    // and propagated a bogus ABORTED to the root: worth 13
-                    // points of win rate in self-play.
-                    continue;
-                }
-                let mut v = -raw;
-                // A null-window probe that beat its alpha is only a lower
-                // bound. At a null-window node that is enough (it cuts), but on
-                // the PV an exact value is needed, so re-search with the real
-                // window — the same thing the sequential PVS path does.
-                if !is_nws && v > split_alpha && v < beta {
-                    let mut nb = *b;
-                    nb.apply_flips(pos, flipped);
+                // The eldest brother fixes the window before anything is given
+                // away, and is always searched here with the full window.
+                if first {
                     self.nn.ix_apply(acc, pos, flipped, mover);
-                    let re = self.negamax(&nb, acc, depth - 1, -beta, -alpha.max(split_alpha));
+                    let raw = self.negamax(&nb, acc, depth - 1, -beta, -alpha);
                     self.nn.ix_undo(acc, pos, flipped, mover);
-                    if re == ABORTED {
+                    // Inspect the child's own return value: negating it would
+                    // turn the ABORTED sentinel into +inf and hide the abort.
+                    if raw == ABORTED {
                         aborted = true;
+                        break;
+                    }
+                    first = false;
+                    settled[i] = true;
+                    n_settled += 1;
+                    let v = -raw;
+                    if v > best {
+                        best = v;
+                        best_move = pos.index() as u8;
+                    }
+                    if best > alpha {
+                        alpha = best;
+                        next_alpha = alpha;
+                    }
+                    if alpha >= beta {
+                        break;
+                    }
+                    continue;
+                }
+
+                // The last unsettled young brother is never split, it is what
+                // the splitting thread does while the others run.
+                let is_last = (i + 1..n_kids).all(|j| settled[j]);
+                if split_ok && !is_last {
+                    let pool = self.pool.unwrap();
+                    let slot = std::sync::Arc::new(Slot::new());
+                    let (nn, tt, mpc, relax) = (self.nn, self.tt, self.mpc, self.mpc_relax);
+                    let (gen, my_gen) = (self.done.clone(), self.my_gen);
+                    let stop = fan_stop.clone().unwrap();
+                    let (task_slot, child, a, d) = (slot.clone(), nb, alpha, depth - 1);
+                    let pushed = pool.try_push(move || {
+                        let mut w = NnueSearch::new(nn, tt);
+                        w.mpc = mpc;
+                        w.mpc_relax = relax;
+                        w.pool = Some(pool);
+                        // The fan-out flag doubles as the task's abort signal:
+                        // once someone has beaten alpha every other subtree is
+                        // about to be restarted against a better window.
+                        w.abort = Some(stop.clone());
+                        w.done = gen;
+                        w.my_gen = my_gen;
+                        let mut cacc = w.nn.indices(child.black, child.white);
+                        let v = w.negamax(&child, &mut cacc, d, -(a + PVS_EPS), -a);
+                        if v != ABORTED && -v > a {
+                            stop.raise();
+                        }
+                        task_slot.set(v, w.nodes);
+                    });
+                    if pushed {
+                        pending.push((i, slot));
                         continue;
                     }
-                    v = -re;
                 }
-                if v > best {
-                    best = v;
+
+                // No worker free: search this young brother here. It runs under
+                // the fan-out flag — so a sibling task that beats
+                // alpha cuts this search short too instead of letting the
+                // splitting thread finish a probe against a stale window.
+                self.abort = fan_stop.clone().or_else(|| outer.clone());
+                self.nn.ix_apply(acc, pos, flipped, mover);
+                let raw = self.negamax(&nb, acc, depth - 1, -(alpha + PVS_EPS), -alpha);
+                self.nn.ix_undo(acc, pos, flipped, mover);
+                self.abort = outer.clone();
+                if raw == ABORTED {
+                    // Told to stop by an ancestor: the node is dead. Told to
+                    // stop by *this* fan-out: only the probe is dead, and the
+                    // move stays unsettled for the next round.
+                    if outer.as_ref().is_some_and(|o| o.stopped()) {
+                        aborted = true;
+                    }
+                    break;
+                }
+                let g = -raw;
+                if g > best {
+                    best = g;
+                    best_move = pos.index() as u8;
+                }
+                if g > alpha {
+                    next_alpha = next_alpha.max(g);
+                    stop_fanout = true;
+                    if let Some(f) = &fan_stop {
+                        f.raise();
+                    }
+                    research.push(i);
+                } else {
+                    settled[i] = true;
+                    n_settled += 1;
+                }
+            }
+
+            // Collect this fan-out. Tasks that were stopped stay unsettled and
+            // go into the next round against the improved alpha.
+            for (i, slot) in pending {
+                self.pool.unwrap().wait(&slot);
+                self.nodes += slot.nodes.load(std::sync::atomic::Ordering::Relaxed);
+                let raw = f32::from_bits(slot.bits.load(std::sync::atomic::Ordering::Relaxed));
+                if raw == ABORTED || aborted {
+                    continue;
+                }
+                let g = -raw;
+                if g > best {
+                    best = g;
+                    best_move = kids[i].0.index() as u8;
+                }
+                if g > alpha {
+                    next_alpha = next_alpha.max(g);
+                    research.push(i);
+                } else {
+                    settled[i] = true;
+                    n_settled += 1;
+                }
+            }
+
+            // An ancestor cut off while this fan-out was running: every task
+            // came back ABORTED, so there is nothing to restart and nothing
+            // worth storing.
+            if outer.as_ref().is_some_and(|o| o.stopped()) {
+                aborted = true;
+            }
+            if aborted {
+                break 'fanout;
+            }
+            if research.is_empty() {
+                // Nobody beat alpha: either every child is settled, or the
+                // eldest already produced a cutoff.
+                break 'fanout;
+            }
+            if next_alpha >= beta {
+                break 'fanout;
+            }
+
+            // A null-window probe that beat its alpha is only a lower bound, so
+            // the winners are re-searched with the real window before the rest
+            // are fanned out again.
+            alpha = next_alpha;
+            for &i in &research {
+                let (pos, flipped, _) = kids[i];
+                let mut nb = *b;
+                nb.apply_flips(pos, flipped);
+                self.nn.ix_apply(acc, pos, flipped, mover);
+                let raw = self.negamax(&nb, acc, depth - 1, -beta, -alpha);
+                self.nn.ix_undo(acc, pos, flipped, mover);
+                if raw == ABORTED {
+                    aborted = true;
+                    break 'fanout;
+                }
+                settled[i] = true;
+                n_settled += 1;
+                let g = -raw;
+                if g > best {
+                    best = g;
                     best_move = pos.index() as u8;
                 }
                 if best > alpha {
                     alpha = best;
+                    if alpha >= beta {
+                        break;
+                    }
                 }
-                if alpha >= beta {
-                    stop.store(true, std::sync::atomic::Ordering::Relaxed);
-                }
+            }
+            if alpha >= beta || n_settled == n_kids {
+                break 'fanout;
             }
         }
 
@@ -1526,7 +1682,11 @@ fn play(
             clock.ours += dt;
             clock.our_moves += 1;
             if let Some(nn) = nnue.as_deref_mut() {
-                clock.our_nodes += std::mem::take(&mut nn.nodes);
+                let n = std::mem::take(&mut nn.nodes);
+                if n > 0 {
+                    clock.our_nodes += n;
+                    clock.our_mid += dt;
+                }
             }
         } else {
             clock.edax += dt;
@@ -1829,7 +1989,7 @@ fn main() -> ExitCode {
         return ExitCode::SUCCESS;
     }
 
-    let mut edax = match Edax::spawn(&args.edax_path, args.edax_level, args.threads, args.protocol) {
+    let mut edax = match Edax::spawn(&args.edax_path, args.edax_level, args.edax_threads.unwrap_or(args.threads), args.protocol) {
         Ok(e) => e,
         Err(e) => {
             eprintln!("failed to start edax: {e}");
@@ -1898,15 +2058,37 @@ fn main() -> ExitCode {
         (p + 1.96 * se) * 100.0,
         disc_sum as f64 / n
     );
-    println!(
-        "our search: {} nodes, {:.2} Mnps, worker busy {:.1}%",
-        clock.our_nodes,
-        clock.our_nodes as f64 / clock.ours.max(1e-9) / 1e6,
-        WORKER_BUSY_NS.load(std::sync::atomic::Ordering::Relaxed) as f64
-            / (clock.ours * 1e9
-                * POOL_WORKERS.load(std::sync::atomic::Ordering::Relaxed).max(1) as f64)
-            * 100.0
-    );
+    {
+        use std::sync::atomic::Ordering::Relaxed;
+        let workers = POOL_WORKERS.load(Relaxed).max(1) as f64;
+        let mid_ns = clock.our_mid * 1e9;
+        let busy = WORKER_BUSY_NS.load(Relaxed) as f64;
+        let wmain = WAIT_IDLE_MAIN_NS.load(Relaxed) as f64;
+        let wwork = WAIT_IDLE_WORKER_NS.load(Relaxed) as f64;
+        println!(
+            "our search: {} nodes, {:.2} Mnps, worker busy {:.1}%",
+            clock.our_nodes,
+            clock.our_nodes as f64 / clock.ours.max(1e-9) / 1e6,
+            busy / (mid_ns * workers) * 100.0
+        );
+        // Where the (1 + workers) x midgame-time budget actually goes. Anything
+        // in "starved" is a core the split scheme paid for and left blocked on
+        // a child with an empty queue; "endgame" is time the pool cannot help
+        // with at all because the solver runs on its own.
+        println!(
+            "  midgame {:.1}s of {:.1}s thinking ({:.0}% endgame); \
+             starved: main {:.1}s, workers {:.1}s of {:.1}s worker-time; \
+             splits {}/{} pushed",
+            clock.our_mid,
+            clock.ours,
+            (1.0 - clock.our_mid / clock.ours.max(1e-9)) * 100.0,
+            wmain / 1e9,
+            wwork / 1e9,
+            mid_ns * workers / 1e9,
+            SPLIT_DONE.load(Relaxed),
+            SPLIT_TRIED.load(Relaxed),
+        );
+    }
     println!(
         "thinking time: ours {:.1}s / {} moves = {:.3}s per move; \
          edax {:.1}s / {} moves = {:.3}s per move  (ratio {:.2}x)",
