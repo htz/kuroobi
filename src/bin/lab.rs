@@ -481,6 +481,17 @@ fn mpc_sigma(empties: u32, depth: u32, pc_depth: u32) -> f32 {
     QA * s * s + QB * s + QC
 }
 
+/// Static square priority for cheap ordering: corner, box, block, then
+/// X and C squares. The four centre squares are missing from the union, which is
+/// safe — they are occupied from the opening position on and can never be a
+/// legal move.
+const STATIC_CELL_PRIORITY: [u64; 4] = [
+    0x8100000000000081, // corner
+    0x00003C24243C0000, // box
+    0x3C3CC3C3C3C33C3C, // block
+    0x42C300000000C342, // X, C
+];
+
 /// Corner mask: a legal move into a corner counts one
 /// extra in the weighted mobility.
 const CORNERS: u64 = 0x8100000000000081;
@@ -1439,6 +1450,48 @@ impl NnueSearch {
         n
     }
 
+    /// Depth-1 null-window fast path. No table, no move list, no ordering
+    /// pass — the children are leaves, so their eval *is* the ordering.
+    fn eval1_nws(&mut self, b: &Board, acc: &mut PatternIndices, alpha: f32) -> f32 {
+        self.nodes += 1;
+        let moves = b.movable();
+        if moves == 0 {
+            let mut nb = *b;
+            nb.pass();
+            if nb.movable() == 0 {
+                let p = b.player_bb().count_ones() as i32;
+                let o = b.opponent_bb().count_ones() as i32;
+                let e = 64 - p - o;
+                let diff = if p > o { p - o + e } else if o > p { p - o - e } else { 0 };
+                return diff as f32 * 1000.0;
+            }
+            let raw = self.eval1_nws(&nb, acc, -alpha - PVS_EPS);
+            return -raw;
+        }
+        let mover = b.player();
+        let mut v = f32::NEG_INFINITY;
+        for mask in STATIC_CELL_PRIORITY {
+            let mut l = moves & mask;
+            while l != 0 {
+                let pos = Position::from_index(l.trailing_zeros()).unwrap();
+                l &= l - 1;
+                let mut nb = *b;
+                let flipped = nb.make_move_bits(pos);
+                self.nodes += 1;
+                self.nn.ix_apply(acc, pos, flipped, mover);
+                let g = -self.nn.eval_from_indices(acc, &nb);
+                self.nn.ix_undo(acc, pos, flipped, mover);
+                if g > v {
+                    if g > alpha {
+                        return g;
+                    }
+                    v = g;
+                }
+            }
+        }
+        v
+    }
+
     fn negamax(&mut self, b: &Board, acc: &mut PatternIndices, depth: u32, mut alpha: f32, beta: f32) -> f32 {
         self.nodes += 1;
         if self.should_stop_or_done() {
@@ -1466,6 +1519,19 @@ impl NnueSearch {
         }
         if depth == 0 {
             return self.nn.eval_from_indices(acc, b);
+        }
+
+        // Depth-1 fast path: a null-window node one ply from
+        // the leaves touches no transposition table and builds no move list. It
+        // walks the legal moves in static square-priority order and returns the
+        // moment one beats alpha.
+        //
+        // These are the most numerous interior nodes in the tree, and they sit
+        // below the depth where a subtree can be split — so the two probes into
+        // a 400 MB table that the general path does here are paid entirely out
+        // of the sequential part of the search.
+        if depth == 1 && beta - alpha <= PVS_EPS * 1.5 {
+            return self.eval1_nws(b, acc, alpha);
         }
 
         let h = zobrist::board_hash(b.player_bb(), b.opponent_bb());
@@ -1560,10 +1626,50 @@ impl NnueSearch {
 
         // Which of the two ordering weight sets to use. Null-window nodes
         // are most of the tree and get the cheap one.
-        let null_window = beta - alpha <= PVS_EPS * 1.5;
         let mover = b.player();
         let mut best = f32::NEG_INFINITY;
         let mut best_move = 64u8;
+        let mut moves = moves;
+
+        // Search the table's move on its own *before* the ordering
+        // pass. If it cuts, the pass never
+        // happens — and here that pass costs a full NNUE evaluation per child,
+        // so on a cut node it is the single most expensive thing avoided. About
+        // half the interior nodes of an alpha-beta tree are cut nodes.
+        let mut pre_searched = false;
+        if tt_move < 64 && depth >= 2 && moves.count_ones() > 1 && moves >> tt_move & 1 == 1 {
+            let pos = Position::from_index(tt_move as u32).unwrap();
+            let mut nb = *b;
+            let flipped = nb.make_move_bits(pos);
+            self.nn.ix_apply(acc, pos, flipped, mover);
+            let raw = self.negamax(&nb, acc, depth - 1, -beta, -alpha);
+            self.nn.ix_undo(acc, pos, flipped, mover);
+            if raw == ABORTED {
+                return ABORTED;
+            }
+            best = -raw;
+            best_move = tt_move;
+            if best > alpha {
+                alpha = best;
+            }
+            moves &= !(1u64 << tt_move);
+            if alpha >= beta || moves == 0 {
+                self.tt.put(
+                    h,
+                    depth as u8,
+                    self.mpc_relax as u8,
+                    first_alpha,
+                    first_beta,
+                    best,
+                    best_move,
+                );
+                return best;
+            }
+            pre_searched = true;
+        }
+        // After that search alpha may have moved, and the updated alpha is
+        // what decides the weight set.
+        let null_window = beta - alpha <= PVS_EPS * 1.5;
 
         // Score every move, and let the table
         // move win on a constant rather than skip the scoring.
@@ -1579,7 +1685,7 @@ impl NnueSearch {
         let will_split = self.pool.is_some() && depth >= ybwc_min_depth();
         let ordered = depth >= 2 && moves.count_ones() > 1;
         let n_kids = if ordered {
-            self.ordered_into(b, acc, depth, moves, &mut kids, null_window, tt_move, tt_move2)
+            self.ordered_into(b, acc, depth, moves, &mut kids, null_window, 64, tt_move2)
         } else {
             let mut n = 0usize;
             let mut m = moves;
@@ -1628,7 +1734,9 @@ impl NnueSearch {
         // Which children already have a final answer.
         let mut settled = [false; MAX_KIDS];
         let mut n_settled = 0usize;
-        let mut first = true;
+        // The table move already fixed the window, so the rest are young
+        // brothers even though none of them has been searched here yet.
+        let mut first = !pre_searched;
 
         // Fan the young brothers out
         // against the alpha in force *now*, and the moment one of them beats
