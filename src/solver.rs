@@ -121,8 +121,30 @@ const PARALLEL_MIN_EMPTIES: u8 = 16;
 pub static SPLITS: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
 pub static HANDED: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
 /// Wall-nanoseconds in the selective warm-up ladder, and in the exact pass
-/// that follows. Diagnostic: the two scale differently, and on short problems
-/// the ladder is most of the solve.
+/// that follows. The two scale differently: on FFO40-49 and 10 threads the
+/// ladder gets 3.21x against the exact pass's 5.28x, so its share of the solve
+/// grows from 20% to 28%.
+///
+/// Three candidate causes were measured and ruled out. `estimate_score` — the
+/// sequential depth-6 evaluation search that centres the first window — is
+/// 0.008s of the 4.3s. The ladder does not thrash the aspiration either: the
+/// whole ten-problem run makes 30 root searches against the 20 that two rungs
+/// plus the exact pass need. And it is not the choice of rungs (see
+/// `SELECTIVE_LADDER`).
+///
+/// Nor is it something Lazy SMP can fill. Extra whole-search copies on idle
+/// workers only pay off for searches shallow enough to have no split points
+/// at all, where the workers would otherwise sit idle. Our rungs are full-depth
+/// selective searches at 20-26 empties, which YBWC can and does split, so
+/// copies only compete with it: measured on FFO40-49, min of 3, 10 threads
+/// 4.90s -> 5.25 / 5.43 / 5.53 / 5.69s for 1 / 2 / 3 / 5 copies, and the
+/// warm-up phase itself got *slower* (1.43s -> 1.73s). Node count went
+/// 597M -> 726M while nps went 122M -> 138M: idle time turned into duplicated
+/// work rather than useful work. **Lazy SMP earns its keep in a phase we do
+/// not have.**
+///
+/// What is left is that a selective tree is a smaller tree, and small trees do
+/// not fill ten threads — the same law the midgame ran into.
 pub static WARMUP_NS: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
 pub static EXACT_NS: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
 /// A young brother was offered to the pool and refused: no worker was idle.
