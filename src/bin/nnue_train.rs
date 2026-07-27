@@ -108,10 +108,11 @@ fn main() -> ExitCode {
     let mut decay = 1.0f32;
     let mut threads = 1usize;
     let mut limit: Option<usize> = None;
-    let mut out = PathBuf::from("nnue.bin");
+    let mut out = PathBuf::from("weights/nnue.bin");
     let mut val_files: Vec<PathBuf> = Vec::new();
     let mut data_files: Vec<PathBuf> = Vec::new();
     let mut max_examples = DEFAULT_MAX_EXAMPLES;
+    let mut val_cap: Option<usize> = None;
     let mut init: Option<PathBuf> = None;
 
     let mut it = std::env::args().skip(1);
@@ -125,6 +126,7 @@ fn main() -> ExitCode {
             "--out" => out = PathBuf::from(it.next().unwrap()),
             "--val" => val_files.push(PathBuf::from(it.next().unwrap())),
             "--max-examples" => max_examples = it.next().unwrap().parse().unwrap(),
+            "--val-cap" => val_cap = Some(it.next().unwrap().parse().unwrap()),
             "--init" => init = Some(PathBuf::from(it.next().unwrap())),
             other if other.starts_with('-') => {
                 eprintln!("unknown option {other}");
@@ -162,11 +164,15 @@ fn main() -> ExitCode {
     let total: usize = counts.iter().sum();
     let mut val = load(&val_files).unwrap_or_default();
     // Cap the held-out set: a full-pass val each epoch dominates wall time,
-    // and a few hundred k positions estimate the MSE tightly enough.
-    const VAL_CAP: usize = 400_000;
-    if val.len() > VAL_CAP {
+    // and a few hundred k positions estimate the MSE tightly enough. Raise it
+    // with `--val-cap` when the point is to compare models rather than to
+    // train — a sampled val is fine for picking an epoch but is not the same
+    // number as a full-record MSE, so the two must not be compared to each
+    // other.
+    let val_cap = val_cap.unwrap_or(400_000);
+    if val.len() > val_cap {
         // Stride-sample so all game phases stay represented.
-        let step = val.len() / VAL_CAP;
+        let step = val.len() / val_cap;
         val = val.iter().step_by(step).copied().collect();
     }
     println!(

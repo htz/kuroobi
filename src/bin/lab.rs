@@ -21,7 +21,7 @@
 //!   lab --edax <path-to-edax-binary> [OPTIONS]
 //!
 //! Options:
-//!   --weights <path>     Our weight file (default weights_full.bin)
+//!   --weights <path>     Our weight file (default weights/weights_full.bin)
 //!   --patterns <set>     egaroucid | edax | egaroucid-plus (default egaroucid)
 //!   --depth <n>          Our midgame depth (default 6)
 //!   --solve-empties <n>  Our exact-endgame threshold (default 14)
@@ -83,7 +83,7 @@ struct Args {
 fn parse_args() -> Result<Args, String> {
     let mut args = Args {
         edax_path: PathBuf::new(),
-        weights: PathBuf::from("weights_full.bin"),
+        weights: PathBuf::from("weights/weights_full.bin"),
         nnue: None,
         patterns: "egaroucid",
         depth: 6,
@@ -2043,6 +2043,10 @@ fn play(
         }
 
         let our_turn = (board.player() == Color::Black) == we_are_black;
+        // Which branch took the move, so the clock can split midgame from
+        // endgame. Only the NNUE path used to report this, which made every
+        // pattern-evaluator match read as "100% endgame, 0 nodes".
+        let mut mid_nodes: Option<u64> = None;
         let t0 = std::time::Instant::now();
         let pos = if our_turn {
             if solve_empties > 0 && board.empty_count() <= solve_empties {
@@ -2051,12 +2055,13 @@ fn play(
                     .best_move
                     .ok_or("solver returned no move")?
             } else if let Some(nn) = nnue.as_deref_mut() {
-                nn.best_move(&board, depth as u32).ok_or("nnue returned no move")?
+                let p = nn.best_move(&board, depth as u32).ok_or("nnue returned no move")?;
+                mid_nodes = Some(std::mem::take(&mut nn.nodes));
+                p
             } else {
-                searcher
-                    .search(&board, evaluator, depth)
-                    .best_move
-                    .ok_or("searcher returned no move")?
+                let r = searcher.search(&board, evaluator, depth);
+                mid_nodes = Some(r.nodes);
+                r.best_move.ok_or("searcher returned no move")?
             }
         } else {
             match edax.best_move(&board) {
@@ -2070,12 +2075,9 @@ fn play(
         if our_turn {
             clock.ours += dt;
             clock.our_moves += 1;
-            if let Some(nn) = nnue.as_deref_mut() {
-                let n = std::mem::take(&mut nn.nodes);
-                if n > 0 {
-                    clock.our_nodes += n;
-                    clock.our_mid += dt;
-                }
+            if let Some(n) = mid_nodes {
+                clock.our_nodes += n;
+                clock.our_mid += dt;
             }
         } else {
             clock.edax += dt;
