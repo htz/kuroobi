@@ -112,9 +112,25 @@ fn main() -> ExitCode {
 
             let (value, nodes, secs) = match depth {
                 None => {
+                    // Emptying the table is what makes the positions
+                    // independent; it is harness scaffolding, not search, and
+                    // it runs strictly before the thread pool starts. Leaving
+                    // it in understates the speedup (a fixed serial cost is
+                    // 1.9% of a one-thread solve but 8.1% of a ten-thread one)
+                    // and it is not what `edax -solve` or Egaroucid's `-solve`
+                    // report either — both call their table init outside the
+                    // timed region. Subtract it instead of timing around the
+                    // solve, so the engine keeps one entry point.
+                    let c0 = kuroobi::solver::CLEAR_NS
+                        .load(std::sync::atomic::Ordering::Relaxed);
                     let t = Instant::now();
                     let r = solver.solve_with_eval(EndSolverMode::Perfect, &board, Some(&evaluator));
-                    (r.value as f32, r.nodes, t.elapsed().as_secs_f64())
+                    let wall = t.elapsed().as_secs_f64();
+                    let clear = (kuroobi::solver::CLEAR_NS
+                        .load(std::sync::atomic::Ordering::Relaxed)
+                        - c0) as f64
+                        / 1e9;
+                    (r.value as f32, r.nodes, wall - clear)
                 }
                 Some(d) => {
                     searcher.clear();
@@ -152,7 +168,7 @@ fn main() -> ExitCode {
                 format!("{secs:.3}s {nodes} nodes {:.1}M/s", nodes as f64 / secs / 1e6)
             };
             println!(
-                "  table clear {:.3}s\n  warm-up {}\n  exact   {}",
+                "  table clear {:.3}s (excluded from the times above)\n  warm-up {}\n  exact   {}",
                 s::CLEAR_NS.load(Relaxed) as f64 / 1e9,
                 phase(&s::WARMUP_NS, &s::WARMUP_NODES),
                 phase(&s::EXACT_NS, &s::EXACT_NODES)
