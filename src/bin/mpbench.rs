@@ -7,7 +7,7 @@ use std::time::Instant;
 
 fn main() {
     let mut ev = Evaluator::new(&EGAROUCID_PATTERNS);
-    ev.load_weights(std::path::Path::new("weights_full.bin")).expect("weights");
+    ev.load_weights(std::path::Path::new("weights/weights_full.bin")).expect("weights");
     let depth: u8 = std::env::args().nth(1).and_then(|s| s.parse().ok()).unwrap_or(12);
 
     let mut boards = Vec::new();

@@ -1,12 +1,11 @@
 /target
 /train_data
-*.bin
-*.bin.best
-*.bin.orb
-*.swa
-/ensemble/
-overnight_loop.log
-*.csv
-selfplay_*.out
-*.out
-convert_*.log
+# 生成物はディレクトリ単位で無視する。拡張子では無視しない —
+# ルートに落ちたら git status に出てほしいため。以前は *.bin を無視して
+# いて、そのせいでルートに重み 33 個が溜まっても誰も気づかなかった。
+#
+# weights/ — 学習済みの重み (11 GB)。中身の説明は weights/WEIGHTS.md
+#            (これも追跡しない。git に存在しないファイルの説明だから)
+# logs/    — 学習曲線の csv と実行ログ
+/weights/
+/logs/

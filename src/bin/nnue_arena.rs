@@ -168,8 +168,8 @@ fn main() -> ExitCode {
     let mut games = 400usize;
     let mut plies = 6usize;
     let mut seed = 7u64;
-    let mut a_path = PathBuf::from("nnue.bin"); // A = NNUE
-    let mut b_path = PathBuf::from("weights_full.bin"); // B = linear
+    let mut a_path = PathBuf::from("weights/nnue_champion.bin"); // A = NNUE
+    let mut b_path = PathBuf::from("weights/weights_full.bin"); // B = linear
     let mut it = std::env::args().skip(1);
     while let Some(a) = it.next() {
         match a.as_str() {

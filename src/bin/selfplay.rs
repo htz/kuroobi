@@ -78,7 +78,7 @@ Options:
 fn parse_args() -> Result<Args, String> {
     let mut args = Args {
         games: 10_000,
-        weights_path: PathBuf::from("weights.bin"),
+        weights_path: PathBuf::from("weights/weights.bin"),
         learning_rate: 0.0005,
         decay: 1.0,
         lambda: 0.7,

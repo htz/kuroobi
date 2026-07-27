@@ -50,7 +50,7 @@ fn main() -> ExitCode {
     // Weights serve the midgame search directly and the endgame solver's
     // eval-based move ordering.
     let mut evaluator = Evaluator::new(EGAROUCID_PATTERNS);
-    let wpath = weights.unwrap_or_else(|| PathBuf::from("weights_full.bin"));
+    let wpath = weights.unwrap_or_else(|| PathBuf::from("weights/weights_full.bin"));
     if let Err(e) = evaluator.load_weights(&wpath) {
         eprintln!("failed to load {}: {e}", wpath.display());
         return ExitCode::FAILURE;

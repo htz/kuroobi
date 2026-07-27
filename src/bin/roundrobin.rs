@@ -346,7 +346,7 @@ fn main() -> ExitCode {
     }
 
     let mut evaluator = Evaluator::new(&EGAROUCID_PATTERNS);
-    if let Err(e) = evaluator.load_weights(std::path::Path::new("weights_full.bin")) {
+    if let Err(e) = evaluator.load_weights(std::path::Path::new("weights/weights_full.bin")) {
         eprintln!("failed to load weights: {e}");
         return ExitCode::FAILURE;
     }

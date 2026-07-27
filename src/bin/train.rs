@@ -110,7 +110,7 @@ fn parse_args() -> Result<Args, String> {
         decay: 0.95,
         optimizer: OptimizerKind::Sgd,
         threads: 1,
-        weights_path: PathBuf::from("weights.bin"),
+        weights_path: PathBuf::from("weights/weights.bin"),
         patterns: "egaroucid",
         limit: None,
         max_examples: Some(DEFAULT_MAX_EXAMPLES),
