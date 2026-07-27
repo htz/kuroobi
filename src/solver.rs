@@ -365,8 +365,19 @@ impl TaskSlot {
         use std::sync::atomic::Ordering;
         self.value.store(value, Ordering::Relaxed);
         self.nodes.store(nodes, Ordering::Relaxed);
+        // Take the handle *before* publishing. The slots live in the splitting
+        // thread's stack frame, so the moment `done` becomes visible that
+        // thread may leave `split_siblings` and destroy the whole `Vec` — and
+        // then `self.waiter` is freed memory. Storing first and unparking
+        // second is a use-after-free that segfaults inside `Thread::unpark`
+        // roughly once every few thousand solves; it needs a fan-out finishing
+        // in the same instant the parent stops waiting, which is why the
+        // ten-position FFO runs never showed it and a few hundred games did.
+        // `Thread` is refcounted, so the clone keeps the parked thread
+        // reachable no matter what happens to the slot.
+        let waiter = self.waiter.clone();
         self.done.store(true, Ordering::Release);
-        self.waiter.unpark();
+        waiter.unpark();
     }
 
     fn result(&self) -> (i32, u64) {

@@ -33,6 +33,8 @@
 //!   --games <n>          Total games, rounded up to even (default 200)
 //!   --random-plies <n>   Random opening plies (default 6)
 //!   --seed <n>           RNG seed (default 7)
+//!   --per-game           One line per game (`game <pair> <B|W> <disc-diff>`),
+//!                        so two runs over the same seed can be paired
 
 use std::io::{BufRead, BufReader, Write};
 use std::path::PathBuf;
@@ -62,6 +64,7 @@ struct Args {
     /// parallel efficiency can be measured with our side held fixed — the
     /// only honest way to know what speedup this machine actually supports.
     edax_threads: Option<usize>,
+    per_game: bool,
     games: usize,
     random_plies: usize,
     seed: u64,
@@ -93,6 +96,7 @@ fn parse_args() -> Result<Args, String> {
         protocol: "edax",
         threads: 1,
         edax_threads: None,
+        per_game: false,
         games: 200,
         random_plies: 6,
         seed: 7,
@@ -133,6 +137,7 @@ fn parse_args() -> Result<Args, String> {
                 }
             }
             "--threads" => args.threads = value("--threads")?.parse().map_err(|e| format!("--threads: {e}"))?,
+            "--per-game" => args.per_game = true,
             "--edax-threads" => args.edax_threads = Some(value("--edax-threads")?.parse().map_err(|e| format!("--edax-threads: {e}"))?),
             "--games" => args.games = value("--games")?.parse().map_err(|e| format!("--games: {e}"))?,
             "--random-plies" => args.random_plies = value("--random-plies")?.parse().map_err(|e| format!("--random-plies: {e}"))?,
@@ -2390,7 +2395,9 @@ fn main() -> ExitCode {
 
     println!(
         "lab: us={} (depth {}, solve {}) vs Edax level {}  ({} games, {} random plies, {} threads)",
-        args.weights.display(),
+        // The midgame runs on the NNUE when one is given, so naming the linear
+        // file here mislabelled every NNUE match as a pattern-evaluator one.
+        args.nnue.as_ref().unwrap_or(&args.weights).display(),
         args.depth,
         args.solve_empties,
         args.edax_level,
@@ -2423,6 +2430,14 @@ fn main() -> ExitCode {
                 &mut edax, args.depth, args.solve_empties, &mut clock, &opening_moves,
             ) {
                 Ok(s) => {
+                    // One line per game so two runs over the same seed can be
+                    // compared game by game. Comparing only the two win rates
+                    // throws away the pairing: the openings are identical, so
+                    // the per-game difference has far less variance than two
+                    // independent proportions do.
+                    if args.per_game {
+                        println!("game {pair} {} {s}", if we_are_black { 'B' } else { 'W' });
+                    }
                     disc_sum += s as i64;
                     match s.cmp(&0) {
                         std::cmp::Ordering::Greater => wins += 1,
@@ -2501,13 +2516,8 @@ fn main() -> ExitCode {
         (clock.ours / clock.our_moves.max(1) as f64)
             / (clock.edax / clock.edax_moves.max(1) as f64).max(1e-9)
     );
-    if let Some(s) = &nnue_search {
-        println!(
-            "nnue search: {} nodes over {} of our moves = {:.0} nodes/move",
-            s.nodes,
-            clock.our_moves,
-            s.nodes as f64 / clock.our_moves.max(1) as f64
-        );
-    }
+    // No separate NNUE node line: the move loop drains `nn.nodes` into
+    // `clock.our_nodes` every move, so reading it here always printed 0. The
+    // running total is the `our search:` line above.
     ExitCode::SUCCESS
 }
