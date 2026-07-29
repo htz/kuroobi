@@ -65,6 +65,30 @@ const MPC_MIN_DEPTH: u8 = 4;
 /// per-node odds suggest because both cut directions must fail to flip the
 /// root).
 const MPC_T: f32 = 1.1;
+
+/// Experiment overrides for the strength-decomposition matches: which of
+/// depth vs forward pruning costs us games. `MPC_MIN_DEPTH_ENV` moves the
+/// depth at which probcut starts firing; `MPC_T_ENV` rescales its margin.
+/// Both read once and default to the constants above.
+pub(crate) fn mpc_min_depth() -> u8 {
+    static V: std::sync::OnceLock<u8> = std::sync::OnceLock::new();
+    *V.get_or_init(|| {
+        std::env::var("MPC_MIN_DEPTH")
+            .ok()
+            .and_then(|v| v.parse().ok())
+            .unwrap_or(MPC_MIN_DEPTH)
+    })
+}
+
+pub(crate) fn mpc_t_default() -> f32 {
+    static V: std::sync::OnceLock<f32> = std::sync::OnceLock::new();
+    *V.get_or_init(|| {
+        std::env::var("MPC_T")
+            .ok()
+            .and_then(|v| v.parse().ok())
+            .unwrap_or(MPC_T)
+    })
+}
 /// Allow probcut inside probcut's own reduced searches up to this depth of
 /// nesting.
 const MPC_MAX_LEVEL: u8 = 2;
@@ -232,7 +256,7 @@ impl Searcher {
             stop: None,
             depth_skew: 0,
             mpc: false,
-            mpc_t: MPC_T,
+            mpc_t: mpc_t_default(),
             probcut_level: 0,
             killers: [[None; 2]; MAX_PLY],
             history: [[0; 64]; 2],
@@ -703,7 +727,7 @@ impl Searcher {
 
         // ProbCut: only at null-window nodes (PVS probes), never on the PV.
         if self.mpc
-            && depth >= MPC_MIN_DEPTH
+            && depth >= mpc_min_depth()
             && self.probcut_level < MPC_MAX_LEVEL
             && ply > 0
             && beta - alpha <= PVS_EPSILON * 1.5

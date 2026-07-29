@@ -526,6 +526,22 @@ const MPC_MIN_DEPTH: u32 = 4;
 /// The same knob is often expressed as a selectivity percentage (74% ~ 1.13σ).
 const MPC_T: f32 = 1.1;
 
+/// Experiment overrides (strength decomposition): `MPC_T` rescales the margin,
+/// `MPC_MIN_DEPTH` moves the depth ProbCut starts firing at. Defaults above.
+fn mpc_t() -> f32 {
+    static V: std::sync::OnceLock<f32> = std::sync::OnceLock::new();
+    *V.get_or_init(|| {
+        std::env::var("MPC_T").ok().and_then(|v| v.parse().ok()).unwrap_or(MPC_T)
+    })
+}
+
+fn mpc_min_depth() -> u32 {
+    static V: std::sync::OnceLock<u32> = std::sync::OnceLock::new();
+    *V.get_or_init(|| {
+        std::env::var("MPC_MIN_DEPTH").ok().and_then(|v| v.parse().ok()).unwrap_or(MPC_MIN_DEPTH)
+    })
+}
+
 /// How deeply ProbCut may nest. A single level leaves the deep tree barely
 /// pruned; letting the probe itself prune is what makes MPC "multi".
 const MPC_MAX_LEVEL: u32 = 3;
@@ -1669,7 +1685,7 @@ impl NnueSearch {
         // largest. Only at null-window nodes (never on the PV), and the probe
         // may itself prune up to MPC_MAX_LEVEL deep.
         if self.mpc
-            && depth >= MPC_MIN_DEPTH
+            && depth >= mpc_min_depth()
             && self.probcut_level < MPC_MAX_LEVEL
             && alpha.is_finite()
             && beta.is_finite()
@@ -1681,7 +1697,7 @@ impl NnueSearch {
                 // diverge; the main thread always uses MPC_T. Widening, not
                 // tightening, is what makes a helper's entry safe for the main
                 // thread to reuse.
-                let t = MPC_T * MPC_RELAX_STEP.powi(self.mpc_relax as i32);
+                let t = mpc_t() * MPC_RELAX_STEP.powi(self.mpc_relax as i32);
                 let margin = t * mpc_sigma(b.empty_count() as u32, depth, pd);
                 self.probcut_level += 1;
                 let hi = beta + margin;
