@@ -86,6 +86,7 @@ struct Args {
     gen_obf: Option<PathBuf>,
     solver_hash: Option<u8>,
     sigma_calib: Option<PathBuf>,
+    mid_sigma_calib: Option<PathBuf>,
     obf: Option<PathBuf>,
     selective_band: u8,
     mpc_calib: Option<PathBuf>,
@@ -117,6 +118,7 @@ fn parse_args() -> Result<Args, String> {
         gen_obf: None,
         solver_hash: None,
         sigma_calib: None,
+        mid_sigma_calib: None,
         obf: None,
         selective_band: 0,
         mpc_calib: None,
@@ -169,6 +171,7 @@ fn parse_args() -> Result<Args, String> {
             "--selective-band" => args.selective_band = value("--selective-band")?.parse().map_err(|e| format!("--selective-band: {e}"))?,
             "--self-vs" => args.self_vs = Some(value("--self-vs")?.parse().map_err(|e| format!("--self-vs: {e}"))?),
             "--band-probe" => args.band_probe = Some(value("--band-probe")?.parse().map_err(|e| format!("--band-probe: {e}"))?),
+            "--mid-sigma-calib" => args.mid_sigma_calib = Some(PathBuf::from(value("--mid-sigma-calib")?)),
             "--sigma-calib" => args.sigma_calib = Some(PathBuf::from(value("--sigma-calib")?)),
             "--solver-hash" => args.solver_hash = Some(value("--solver-hash")?.parse().map_err(|e| format!("--solver-hash: {e}"))?),
             "--gen-obf" => args.gen_obf = Some(PathBuf::from(value("--gen-obf")?)),
@@ -540,6 +543,16 @@ fn mpc_min_depth() -> u32 {
     *V.get_or_init(|| {
         std::env::var("MPC_MIN_DEPTH").ok().and_then(|v| v.parse().ok()).unwrap_or(MPC_MIN_DEPTH)
     })
+}
+
+/// Static-eval gate offset, in discs.
+const MPC_D0_OFFSET: f32 = 4.0;
+
+/// `MPC_OLD=1` restores the pre-2026-07-30 ProbCut: pruned probes, no
+/// static-eval gate, both sides probed.
+fn mpc_old() -> bool {
+    static V: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *V.get_or_init(|| std::env::var("MPC_OLD").is_ok_and(|v| v != "0"))
 }
 
 /// How deeply ProbCut may nest. A single level leaves the deep tree barely
@@ -1680,10 +1693,20 @@ impl NnueSearch {
         // Multi-ProbCut: a reduced-depth null-window probe decides whether this
         // node lies so far outside [alpha, beta] that a full search cannot
         // change the parent's decision. The margin is T sigma of the shallow
-        // search's error, so it tightens as the probe gets closer to full
-        // depth — a single fixed margin under-prunes exactly where the tree is
-        // largest. Only at null-window nodes (never on the PV), and the probe
-        // may itself prune up to MPC_MAX_LEVEL deep.
+        // search's error. Only at null-window nodes (never on the PV).
+        //
+        // Two safeguards that the sigma cannot substitute for
+        // (missing them measured ~3pt of win rate even
+        // though the sigma itself calibrates correctly on unpruned probes):
+        // - the *static* eval must already sit outside the window by
+        //   margin - 4 before a probe runs, and it picks which side to try
+        //   (`MPC_D0_OFFSET`) — a cheap second opinion, and half the
+        //   probes never run at all;
+        // - the probe itself searches **unpruned**; this
+        //   used to keep cutting inside the probe up
+        //   to MPC_MAX_LEVEL deep, which recursively degrades the very
+        //   values the margins are calibrated for.
+        // `MPC_OLD=1` restores the old behaviour for A/B runs.
         if self.mpc
             && depth >= mpc_min_depth()
             && self.probcut_level < MPC_MAX_LEVEL
@@ -1699,32 +1722,50 @@ impl NnueSearch {
                 // thread to reuse.
                 let t = mpc_t() * MPC_RELAX_STEP.powi(self.mpc_relax as i32);
                 let margin = t * mpc_sigma(b.empty_count() as u32, depth, pd);
-                self.probcut_level += 1;
-                let hi = beta + margin;
-                let high = self.negamax(b, acc, pd, hi - PVS_EPS, hi);
-                let cut = if high == ABORTED {
-                    // Aborted probe: no information. Bail out of the node
-                    // entirely rather than mistake -inf for "far below alpha".
-                    self.probcut_level -= 1;
-                    return ABORTED;
-                } else if high >= hi {
-                    Some(beta)
+                let old_style = mpc_old();
+                let (try_high, try_low) = if old_style {
+                    (true, true)
                 } else {
-                    let lo = alpha - margin;
-                    let low = self.negamax(b, acc, pd, lo, lo + PVS_EPS);
-                    if low == ABORTED {
-                        self.probcut_level -= 1;
+                    let d0 = self.nn.eval_from_indices(acc, b);
+                    let gate = (margin - MPC_D0_OFFSET).max(1.0);
+                    (d0 >= beta + gate, d0 <= alpha - gate)
+                };
+                if try_high || try_low {
+                    self.probcut_level += 1;
+                    let saved_mpc = self.mpc;
+                    if !old_style {
+                        self.mpc = false;
+                    }
+                    let mut cut = None;
+                    let mut aborted = false;
+                    if try_high {
+                        let hi = beta + margin;
+                        let high = self.negamax(b, acc, pd, hi - PVS_EPS, hi);
+                        if high == ABORTED {
+                            // Aborted probe: no information. Bail out of the
+                            // node rather than mistake -inf for "far below".
+                            aborted = true;
+                        } else if high >= hi {
+                            cut = Some(beta);
+                        }
+                    }
+                    if !aborted && cut.is_none() && try_low {
+                        let lo = alpha - margin;
+                        let low = self.negamax(b, acc, pd, lo, lo + PVS_EPS);
+                        if low == ABORTED {
+                            aborted = true;
+                        } else if low <= lo {
+                            cut = Some(alpha);
+                        }
+                    }
+                    self.mpc = saved_mpc;
+                    self.probcut_level -= 1;
+                    if aborted {
                         return ABORTED;
                     }
-                    if low <= lo {
-                        Some(alpha)
-                    } else {
-                        None
+                    if let Some(v) = cut {
+                        return v;
                     }
-                };
-                self.probcut_level -= 1;
-                if let Some(v) = cut {
-                    return v;
                 }
             }
         }
@@ -2361,6 +2402,80 @@ fn main() -> ExitCode {
     // Positions this engine actually reaches at a chosen empty count, written as
     // 65-character records Egaroucid's `-solve` accepts. Both engines then answer
     // the *same* questions, which is the only way a node count means anything.
+    // Midgame ProbCut sigma, measured instead of assumed: for positions the
+    // NNUE search actually reaches, the error between the reduced-depth probe
+    // and the full-depth search, per (empties, depth). The old model was a fit
+    // for the *linear* evaluator carried over on the assumption that a more
+    // accurate evaluator makes it conservative; the level-10-rig matches
+    // measured that assumption to cost ~3.5 points of win rate.
+    if let Some(path) = &args.mid_sigma_calib {
+        let Some(search) = nnue_search.as_mut() else {
+            eprintln!("--mid-sigma-calib needs --nnue");
+            return ExitCode::FAILURE;
+        };
+        // Sequential and unpruned: the probe/full values must be the search's
+        // own opinions, not MPC's, and parallel values are not reproducible.
+        search.threads = 1;
+        search.mpc = false;
+        const MAX_CAL_DEPTH: u32 = 12;
+        let n_games = args.band_probe.unwrap_or(40);
+        let mut rng = Rng::new(args.seed);
+        let mut out = String::from("empties,depth,pd,v_probe,v_full\n");
+        let mut rows = 0usize;
+        for game in 0..n_games {
+            let (mut board, _) = random_opening(&mut rng, args.random_plies);
+            loop {
+                if board.movable() == 0 {
+                    let mut passed = board;
+                    passed.pass();
+                    if passed.movable() == 0 {
+                        break;
+                    }
+                    board = passed;
+                    continue;
+                }
+                let e = board.empty_count() as u32;
+                if e < 10 {
+                    break;
+                }
+                // Every second ply is plenty of positions and halves the cost.
+                if e <= 50 && e % 2 == 0 {
+                    search.clear();
+                    let mut acc = search.nn.indices(board.black, board.white);
+                    let top = MAX_CAL_DEPTH.min(e.saturating_sub(2));
+                    let mut vals = [f32::NAN; MAX_CAL_DEPTH as usize + 1];
+                    for d in 1..=top {
+                        vals[d as usize] =
+                            search.negamax(&board, &mut acc, d, f32::NEG_INFINITY, f32::INFINITY);
+                    }
+                    for dd in mpc_min_depth()..=top {
+                        let pd = mpc_reduced_depth(dd);
+                        if pd >= 1 && pd < dd {
+                            out.push_str(&format!(
+                                "{e},{dd},{pd},{:.3},{:.3}\n",
+                                vals[pd as usize], vals[dd as usize]
+                            ));
+                            rows += 1;
+                        }
+                    }
+                }
+                match search.best_move(&board, args.depth as u32) {
+                    Some(m) => {
+                        board.make_move_bits(m);
+                    }
+                    None => break,
+                }
+            }
+            eprintln!("game {}/{n_games} ({rows} rows)", game + 1);
+        }
+        if let Err(e) = std::fs::write(path, out) {
+            eprintln!("failed to write {}: {e}", path.display());
+            return ExitCode::FAILURE;
+        }
+        eprintln!("{rows} rows -> {}", path.display());
+        return ExitCode::SUCCESS;
+    }
+
     if let Some(path) = &args.gen_obf {
         let Some(search) = nnue_search.as_mut() else {
             eprintln!("--gen-obf needs --nnue");
