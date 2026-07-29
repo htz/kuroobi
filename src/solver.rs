@@ -552,6 +552,35 @@ const ESTIMATE_DEPTH: u8 = 6;
 /// selective in its top sixteen plies.
 const SELECTIVE_MIN_EMPTIES: u8 = 14;
 
+/// Roots at or above this many empties run the warm-up ladder before the exact
+/// pass. Tuned to 24 under the old sigma; the measured sigma halves the rungs'
+/// margins, so where the ladder starts paying for itself needs re-measuring.
+/// The warm-up rungs, overridable for sweeps (`SEL_LADDER=1.55` or `1.1,1.8`).
+/// Two rungs, tuned on FFO positions deep enough that both pay. Where the
+/// ladder starts and how many rungs it has are the same trade against the
+/// same clock, so they are tuned together.
+fn selective_ladder() -> Vec<f32> {
+    static V: std::sync::OnceLock<Vec<f32>> = std::sync::OnceLock::new();
+    V.get_or_init(|| {
+        std::env::var("SEL_LADDER")
+            .ok()
+            .map(|s| s.split(',').filter_map(|x| x.trim().parse().ok()).collect())
+            .filter(|v: &Vec<f32>| !v.is_empty())
+            .unwrap_or_else(|| SELECTIVE_LADDER.to_vec())
+    })
+    .clone()
+}
+
+fn selective_pass_min_empties() -> u8 {
+    static V: std::sync::OnceLock<u8> = std::sync::OnceLock::new();
+    *V.get_or_init(|| {
+        std::env::var("SEL_PASS_MIN")
+            .ok()
+            .and_then(|v| v.parse().ok())
+            .unwrap_or(SELECTIVE_PASS_MIN_EMPTIES)
+    })
+}
+
 fn selective_min_empties() -> u8 {
     static V: std::sync::OnceLock<u8> = std::sync::OnceLock::new();
     *V.get_or_init(|| {
@@ -652,7 +681,14 @@ fn selective_gate_offset() -> Option<f32> {
 /// empties the exact search is cheap enough that the pass cannot pay for
 /// itself (measured on FFO1-19: +6% nodes and +24% time at 16, +14%/+62%
 /// at 14), while from 20 up it pays for itself several times over.
-const SELECTIVE_PASS_MIN_EMPTIES: u8 = 24;
+///
+/// 22 rather than 24: on game-reached 22-empty positions the ladder cuts the
+/// exact tree from 42M to 24M nodes a position and 14% of the time, and it is
+/// most of why the tree matched Egaroucid's on FFO positions deep enough to
+/// run it (without it, 22-23-empty FFO problems were 3x its node count).
+/// FFO40-49 is unchanged (5.33s vs 5.45s minima over five rounds). Measured
+/// with the fitted `selective_sigma`; the FFO1-19 numbers above predate it.
+const SELECTIVE_PASS_MIN_EMPTIES: u8 = 22;
 /// Confidence levels (standard deviations) of the warm-up passes, from
 /// most selective to least. Each pass is aspirated around the previous
 /// pass's score, so the estimate handed to the exact search converges —
@@ -1491,7 +1527,7 @@ impl Solver {
             // rungs first — they cost little and leave the table ordered for
             // the one that answers ([[warmup-rung-value-is-the-table]]: the
             // value of a rung is the table it leaves, not its score).
-            let mut rungs: Vec<f32> = SELECTIVE_LADDER.to_vec();
+            let mut rungs: Vec<f32> = selective_ladder();
             if let Some(t) = selective {
                 // A selective solve answers with its top rung, so the cheaper
                 // ones below it are pure ordering warm-up — and their bounds
@@ -1505,7 +1541,7 @@ impl Solver {
             }
             let mut last_selective: Option<i32> = None;
             if let Some(e) = ev {
-                if selective.is_some() || board.empty_count() >= SELECTIVE_PASS_MIN_EMPTIES {
+                if selective.is_some() || board.empty_count() >= selective_pass_min_empties() {
                     let mut guess = w.estimate_score(board, Some(e));
                     for t in rungs {
                         w.selective_t = Some(t);

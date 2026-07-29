@@ -84,6 +84,7 @@ struct Args {
     band_probe: Option<usize>,
     band_empties: u8,
     gen_obf: Option<PathBuf>,
+    solver_hash: Option<u8>,
     sigma_calib: Option<PathBuf>,
     obf: Option<PathBuf>,
     selective_band: u8,
@@ -114,6 +115,7 @@ fn parse_args() -> Result<Args, String> {
         band_probe: None,
         band_empties: 27,
         gen_obf: None,
+        solver_hash: None,
         sigma_calib: None,
         obf: None,
         selective_band: 0,
@@ -168,6 +170,7 @@ fn parse_args() -> Result<Args, String> {
             "--self-vs" => args.self_vs = Some(value("--self-vs")?.parse().map_err(|e| format!("--self-vs: {e}"))?),
             "--band-probe" => args.band_probe = Some(value("--band-probe")?.parse().map_err(|e| format!("--band-probe: {e}"))?),
             "--sigma-calib" => args.sigma_calib = Some(PathBuf::from(value("--sigma-calib")?)),
+            "--solver-hash" => args.solver_hash = Some(value("--solver-hash")?.parse().map_err(|e| format!("--solver-hash: {e}"))?),
             "--gen-obf" => args.gen_obf = Some(PathBuf::from(value("--gen-obf")?)),
             "--obf" => args.obf = Some(PathBuf::from(value("--obf")?)),
             "--band-empties" => args.band_empties = value("--band-empties")?.parse().map_err(|e| format!("--band-empties: {e}"))?,
@@ -2451,7 +2454,10 @@ fn main() -> ExitCode {
                 return ExitCode::FAILURE;
             }
         };
-        let mut solver = Solver::new(if args.solve_empties >= 18 { 22 } else { 18 });
+        // The head-to-head opponent runs with a 2^25-entry table; measuring
+        // our endgame through a 2^22 table conflates tree size with table
+        // starvation.
+        let mut solver = Solver::new(args.solver_hash.unwrap_or(if args.solve_empties >= 18 { 22 } else { 18 }) as u32);
         solver.set_threads(args.threads);
         println!("empties,regime,depth,nodes,seconds,nps");
         for line in text.lines() {
