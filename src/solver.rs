@@ -540,6 +540,14 @@ const SORT_ALPHA_DELTA: i32 = 12;
 const EDGE_STABILITY_ORDER_WEIGHT: i32 = 1;
 /// Half-width of the first aspiration window around the warm-up score.
 const ASPIRATION_WIDTH: i32 = 6;
+
+/// `DBG_ASP=1` traces the warm-up rungs and every aspiration window to
+/// stderr — the tool that told apart "warm score wobbles" from "same score,
+/// different tree" when chasing the bimodal FFO49 solve.
+fn dbg_asp() -> bool {
+    static ON: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *ON.get_or_init(|| std::env::var("DBG_ASP").is_ok_and(|v| v != "0"))
+}
 /// Half-width used by the warm-up passes, whose centre is only an
 /// evaluation estimate rather than a searched score.
 const WARM_ASPIRATION_WIDTH: i32 = 6;
@@ -1298,6 +1306,13 @@ struct Worker<'a> {
     /// search's aspiration window (carrying the score between passes —
     /// that, not the warmed table, is the main benefit).
     warm_score: Option<i32>,
+    /// The window the last aspiration converged in. The exact pass reopens
+    /// *this* window rather than re-centring on the warm score: the seed
+    /// ordering the warm-up left describes the proof tree of its own window,
+    /// and a window shifted even 2 discs makes deep nodes fail the other way
+    /// than their seeds prepared for — measured 8x on FFO49 (67M -> 530M)
+    /// whenever the warm rung landed exactly on the true value.
+    warm_window: Option<(i32, i32)>,
     /// When set, the search is *selective*: probable cutoffs are taken at
     /// this confidence (standard deviations of the evaluation's prediction
     /// error). Only the warm-up passes run this way; their table entries
@@ -1351,6 +1366,7 @@ impl<'a> Worker<'a> {
             nodes: 0,
             best: None,
             warm_score: None,
+            warm_window: None,
             selective_t: None,
             shallow_table,
             mid_table,
@@ -1543,10 +1559,21 @@ impl Solver {
             if let Some(e) = ev {
                 if selective.is_some() || board.empty_count() >= selective_pass_min_empties() {
                     let mut guess = w.estimate_score(board, Some(e));
+                    if dbg_asp() {
+                        eprintln!("[warm] estimate {guess}");
+                    }
                     for t in rungs {
                         w.selective_t = Some(t);
                         let mut sb = *board;
+                        let n0 = w.nodes;
                         let s = w.aspiration_width(&mut sb, guess, WARM_ASPIRATION_WIDTH, Some(e));
+                        if dbg_asp() {
+                            eprintln!(
+                                "[warm] rung t={t} -> {s}, best={:?} ({}M nodes)",
+                                w.best,
+                                (w.nodes - n0) / 1_000_000
+                            );
+                        }
                         w.selective_t = None;
                         guess = s - (s & 1);
                         last_selective = Some(s);
@@ -1724,7 +1751,32 @@ impl Worker<'_> {
     /// on the side that failed. Without one, fall back to the win/loss
     /// probe and a +-8 band.
     fn perfect(&mut self, board: &mut Board, ev: Option<&Evaluator>) -> i32 {
+        // Experiment knob: run the exact pass on the full window and let
+        // PVS narrow it from the seeds; no aspiration to mis-centre.
+        if std::env::var("SEL_EXACT_FULLWIN").is_ok_and(|v| v != "0") {
+            if self.warm_score.is_some() {
+                return self.pvs_root(board, -64, 64, ev);
+            }
+        }
         if let Some(score) = self.warm_score {
+            // Reopen the window the last warm rung converged in (see
+            // `warm_window`). Re-centring on the rung's *score* instead moves
+            // the window whenever the rung lands on the true value — and a
+            // shifted window fights the seed ordering instead of using it.
+            // `SEL_ASP_RECENTER=1` restores the old re-centring for A/B runs.
+            let recenter = std::env::var("SEL_ASP_RECENTER").is_ok_and(|v| v != "0");
+            if let Some((lo, hi)) = self.warm_window.filter(|_| !recenter) {
+                if lo < score && score < hi {
+                    if dbg_asp() {
+                        eprintln!("[exact] reopening warm window [{lo},{hi}]");
+                    }
+                    let val = self.pvs_root(board, lo, hi, ev);
+                    if lo < val && val < hi {
+                        return val;
+                    }
+                    return self.aspiration(board, val, ev);
+                }
+            }
             return self.aspiration(board, score, ev);
         }
 
@@ -1783,7 +1835,14 @@ impl Worker<'_> {
             if lo >= hi || (lo <= -64 && hi >= 64) {
                 break;
             }
+            let n0 = self.nodes;
             let val = self.pvs_root(board, lo, hi, ev);
+            if dbg_asp() {
+                eprintln!(
+                    "[asp] window [{lo},{hi}] -> {val} ({}M nodes)",
+                    (self.nodes - n0) / 1_000_000
+                );
+            }
             if val <= lo && lo > -64 {
                 score = val;
                 left = (left * 2).min(128);
@@ -1793,9 +1852,11 @@ impl Worker<'_> {
                 left = 0;
                 right = (right * 2).min(128);
             } else {
+                self.warm_window = Some((lo, hi));
                 return val;
             }
         }
+        self.warm_window = Some((-64, 64));
         self.pvs_root(board, -64, 64, ev)
     }
 
@@ -1821,8 +1882,16 @@ impl Worker<'_> {
 
         // First move: full window
         {
+            let n0 = self.nodes;
             let mut child = moves[0].child(board);
             max = -self.pvs(&mut child, moves[0].hash, -upper, -lower, false, ev);
+            if dbg_asp() {
+                eprintln!(
+                    "[root] eldest {:?} [{lower},{upper}] -> {max} ({}M)",
+                    moves[0].pos,
+                    (self.nodes - n0) / 1_000_000
+                );
+            }
             if max > lower {
                 lower = max;
             }
@@ -1973,6 +2042,7 @@ impl Worker<'_> {
                 REFUSED.fetch_add(1, Ordering::Relaxed);
             }
             // Refused, or the youngest brother: search it here.
+            let n0 = self.nodes;
             let mut child = m.child(parent);
             let mut val = -self.pvs(&mut child, m.hash, -cur - 1, -cur, false, ev);
             if val == -ABORTED {
@@ -1985,6 +2055,13 @@ impl Worker<'_> {
                     unwound = true;
                     break;
                 }
+            }
+            if dbg_asp() && parent.empty_count() >= 26 {
+                eprintln!(
+                    "[split] inline {:?} probe@{cur} -> {val} ({}M)",
+                    m.pos,
+                    (self.nodes - n0) / 1_000_000
+                );
             }
             if val > max {
                 max = val;
@@ -2007,6 +2084,13 @@ impl Worker<'_> {
         for &i in &handed {
             let (val, nodes) = slots[i].result();
             self.nodes += nodes;
+            if dbg_asp() && parent.empty_count() >= 26 {
+                eprintln!(
+                    "[split] handed {:?} -> {val} ({}M)",
+                    siblings[i].pos,
+                    nodes / 1_000_000
+                );
+            }
             if val != ABORTED && val > max {
                 max = val;
                 best = siblings[i].pos;
@@ -2222,7 +2306,17 @@ impl Worker<'_> {
     #[inline]
     fn descend(&mut self, child: &mut Board, hash: u64, alpha: i32, beta: i32, ev: Option<&Evaluator>) -> i32 {
         if child.empty_count() >= PVS_LIMIT {
+            let dbg = dbg_asp() && child.empty_count() >= 23;
+            let n0 = self.nodes;
             let v = self.pvs(child, hash, alpha, beta, false, ev);
+            if dbg {
+                eprintln!(
+                    "[d{}] h{:04x} [{alpha},{beta}] -> {v} ({}M)",
+                    child.empty_count(),
+                    hash & 0xffff,
+                    (self.nodes - n0) / 1_000_000
+                );
+            }
             // The child unwound; keep the sentinel recognizable after the
             // usual negation.
             if v == ABORTED {
