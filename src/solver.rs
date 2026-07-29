@@ -546,9 +546,108 @@ const WARM_ASPIRATION_WIDTH: i32 = 6;
 /// Depth of the evaluation search that centres the first warm-up window.
 const ESTIMATE_DEPTH: u8 = 6;
 /// Warm-up passes only prune at this many empties or more.
+///
+/// Fourteen leaves the whole bottom of the tree — where nearly all the nodes
+/// are — searched exactly, so a "selective" solve at 30 empties is only
+/// selective in its top sixteen plies.
 const SELECTIVE_MIN_EMPTIES: u8 = 14;
+
+fn selective_min_empties() -> u8 {
+    static V: std::sync::OnceLock<u8> = std::sync::OnceLock::new();
+    *V.get_or_init(|| {
+        std::env::var("SEL_MIN_EMPTIES")
+            .ok()
+            .and_then(|v| v.parse().ok())
+            .unwrap_or(SELECTIVE_MIN_EMPTIES)
+    })
+}
 /// Depth of the evaluation probe used by a warm-up pass.
 const SELECTIVE_PROBE_DEPTH: u8 = 4;
+
+/// Standard deviation of `exact - probe` for a warm-up probe of `pc` plies at
+/// `empties` empty squares — *measured*, not extrapolated.
+///
+/// The margin a warm-up pass prunes against is `t * sigma`, so sigma decides
+/// whether a selective solve is selective at all. It used to borrow
+/// `search::mpc_sigma`, which is fitted on midgame searches of a fixed depth
+/// and grows about a quarter of a disc per ply without bound. Extended to an
+/// endgame search, where the depth *is* the empty count, that model is wrong in
+/// both directions: at 30 empties it claimed 8.4 against a measured 4.2, so the
+/// margin was 15 discs and essentially nothing was ever cut (2.8 G nodes for
+/// one position against Egaroucid's 85 M); at 14 empties with a 10-ply probe it
+/// claimed 2.2 against a measured 3.2, and cut things it should not have.
+///
+/// Fitted on 1,550 positions at 14-30 empties, probes of 2-10 plies, each
+/// against an exact solve of the same position (`--sigma-calib`). Worst cell is
+/// 18% high, most are inside 6%. Outside that range the fit is not evidence, so
+/// it is clamped rather than extrapolated.
+fn selective_sigma(empties: u8, pc: u8) -> f32 {
+    if legacy_sigma() {
+        return crate::search::mpc_sigma(empties as u32, empties, pc);
+    }
+    let e = (empties as f32).clamp(14.0, 30.0);
+    let p = (pc as f32).clamp(2.0, 10.0);
+    let s = 7.246577 + 0.020516 * e - 0.438464 * p - 0.004024 * e * e + 0.000167 * p * p
+        + 0.009864 * e * p;
+    // A margin cannot sensibly go below a disc, and the fit is only linear-ish
+    // near its edges.
+    s.max(1.0)
+}
+
+fn legacy_sigma() -> bool {
+    static V: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *V.get_or_init(|| std::env::var("SEL_SIGMA").is_ok_and(|v| v == "old"))
+}
+
+/// Depth of a warm-up pass's probe, optionally scaled with the position.
+///
+/// The scaled shape probes at `depth / 3 + parity`, so a solve at 29 empties
+/// asks a 9-ply question. The flat shape asks a 4-ply one at every depth: the
+/// deeper the position, the more the probe is guessing, and the wider
+/// `t * sigma` has to be to stay honest. That flat 4 was chosen for the exact
+/// solve's ladder, where the rungs exist to fill the table rather than to
+/// answer, so it stays the default until measured.
+fn selective_probe_depth(empties: u8) -> u8 {
+    if selective_probe_scaled() {
+        ((empties / 3) & !1) + (empties & 1)
+    } else {
+        SELECTIVE_PROBE_DEPTH
+    }
+}
+
+/// `u8::MAX` until resolved: the environment supplies the default, and a caller
+/// scoring both probe shapes on one position overrides it between solves.
+static PROBE_SCALED: std::sync::atomic::AtomicU8 = std::sync::atomic::AtomicU8::new(u8::MAX);
+
+fn selective_probe_scaled() -> bool {
+    use std::sync::atomic::Ordering::Relaxed;
+    let mut v = PROBE_SCALED.load(Relaxed);
+    if v == u8::MAX {
+        v = std::env::var("SEL_PROBE_SCALED").is_ok_and(|s| s != "0") as u8;
+        PROBE_SCALED.store(v, Relaxed);
+    }
+    v == 1
+}
+
+/// Choose the probe shape for the solves that follow, overriding the
+/// environment. For measuring both on the same position.
+pub fn set_selective_probe_scaled(on: bool) {
+    PROBE_SCALED.store(on as u8, std::sync::atomic::Ordering::Relaxed);
+}
+
+/// How far outside the window the static evaluation must already be before a
+/// warm-up pass pays for its probe search, as a discount off the probe's own
+/// margin.
+///
+/// Without the gate every node in the band buys up to two probe searches
+/// whether or not one could possibly cut; the static pre-check is the
+/// cheapest half of a ProbCut.
+fn selective_gate_offset() -> Option<f32> {
+    static V: std::sync::OnceLock<Option<f32>> = std::sync::OnceLock::new();
+    *V.get_or_init(|| {
+        std::env::var("SEL_GATE").ok().and_then(|v| v.parse().ok()).filter(|v| *v >= 0.0)
+    })
+}
 /// Roots this deep run the warm-up ladder before the exact pass. Below 20
 /// empties the exact search is cheap enough that the pass cannot pay for
 /// itself (measured on FFO1-19: +6% nodes and +24% time at 16, +14%/+62%
@@ -1285,6 +1384,68 @@ impl Solver {
         board: &Board,
         ev: Option<&Evaluator>,
     ) -> EndSolverResult {
+        self.solve_impl(mode, board, ev, None)
+    }
+
+    /// Solve to the end of the game *selectively*: run the warm-up ladder up to
+    /// `t` standard deviations and answer with that, skipping the exact pass.
+    ///
+    /// This is the band between a midgame search and an exact solve: once
+    /// empties drop far enough, the search depth becomes the empty count —
+    /// the whole rest of the game — answered selectively rather than proved.
+    /// Reading to
+    /// the end beats estimating with any evaluator, and reading to the end
+    /// *selectively* costs a fraction of proving it: measured here, moving the
+    /// exact threshold from 24 to 26 empties bought 0.9 points of win rate for
+    /// 1.6x the time, because an exact solve is the wrong tool for a band
+    /// where a 93% answer is worth nearly as much.
+    pub fn solve_selective(
+        &mut self,
+        board: &Board,
+        ev: Option<&Evaluator>,
+        t: f32,
+    ) -> EndSolverResult {
+        self.solve_impl(EndSolverMode::Perfect, board, ev, Some(t))
+    }
+
+    /// The value a warm-up probe of `depth` plies reports for `board` — the
+    /// left-hand side of the ProbCut inequality, exposed so the margin it is
+    /// compared against can be *measured* rather than extrapolated.
+    ///
+    /// `MPC_T * mpc_sigma(..)` is only honest if sigma is the standard
+    /// deviation of `exact - probe` for the search that actually runs. Ours is
+    /// fitted on midgame searches and grows about a quarter of a disc per ply
+    /// without bound, so by 30 empties it claims an 8-disc error — twice what
+    /// direct measurement shows. Pair this with an exact solve of the same
+    /// position to find out which is true.
+    pub fn probe_value(&mut self, board: &Board, ev: &Evaluator, depth: u8) -> f32 {
+        let tt = &self.hash_table;
+        let budget = ThreadBudget::new(0);
+        let root_abort = AbortFlag::root();
+        let mut w = Worker::new(tt, &self.neighbours, &budget, &root_abort);
+        let ix = ev.indexer();
+        let mut indices = ix.init(board.black, board.white);
+        let hash = zobrist::board_hash(board.player_bb(), board.opponent_bb());
+        w.seed_search(
+            board,
+            hash,
+            ev,
+            ix,
+            &mut indices,
+            depth,
+            f32::NEG_INFINITY,
+            f32::INFINITY,
+            false,
+        )
+    }
+
+    fn solve_impl(
+        &mut self,
+        mode: EndSolverMode,
+        board: &Board,
+        ev: Option<&Evaluator>,
+        selective: Option<f32>,
+    ) -> EndSolverResult {
         self.nodes = 0;
         self.best = None;
 
@@ -1326,15 +1487,33 @@ impl Solver {
             // full-depth endgame selectively first, leaving real full-depth
             // best moves in the table for the exact pass that follows.
             let t_warm = std::time::Instant::now();
+            // The rungs to climb. A selective solve still walks the cheaper
+            // rungs first — they cost little and leave the table ordered for
+            // the one that answers ([[warmup-rung-value-is-the-table]]: the
+            // value of a rung is the table it leaves, not its score).
+            let mut rungs: Vec<f32> = SELECTIVE_LADDER.to_vec();
+            if let Some(t) = selective {
+                // A selective solve answers with its top rung, so the cheaper
+                // ones below it are pure ordering warm-up — and their bounds
+                // are demoted between rungs, so ordering is *all* they leave.
+                if !std::env::var("SEL_ONE_RUNG").is_ok_and(|v| v != "0") {
+                    rungs.retain(|&r| r < t);
+                } else {
+                    rungs.clear();
+                }
+                rungs.push(t);
+            }
+            let mut last_selective: Option<i32> = None;
             if let Some(e) = ev {
-                if board.empty_count() >= SELECTIVE_PASS_MIN_EMPTIES {
+                if selective.is_some() || board.empty_count() >= SELECTIVE_PASS_MIN_EMPTIES {
                     let mut guess = w.estimate_score(board, Some(e));
-                    for t in SELECTIVE_LADDER {
+                    for t in rungs {
                         w.selective_t = Some(t);
                         let mut sb = *board;
                         let s = w.aspiration_width(&mut sb, guess, WARM_ASPIRATION_WIDTH, Some(e));
                         w.selective_t = None;
                         guess = s - (s & 1);
+                        last_selective = Some(s);
                         // Each rung must re-derive its own bounds: an entry
                         // stored by a more aggressive (less reliable) pass
                         // would otherwise be taken at face value, and the
@@ -1355,6 +1534,10 @@ impl Solver {
             // for them, so this running total already covers the whole phase.
             let warm_nodes = w.nodes;
             WARMUP_NODES.fetch_add(warm_nodes, std::sync::atomic::Ordering::Relaxed);
+            if let Some(v) = last_selective.filter(|_| selective.is_some()) {
+                budget.pool.shutdown();
+                return (v, w.nodes, w.best);
+            }
             let t_exact = std::time::Instant::now();
             let v = match mode {
                 EndSolverMode::WinLossDraw => w.pvs_root(&mut b, -1, 1, ev),
@@ -1855,7 +2038,7 @@ impl Worker<'_> {
         // Warm-up (selective) pass: take probable cutoffs from a shallow
         // evaluation search instead of proving them.
         if let (Some(t), Some(e)) = (self.selective_t, ev) {
-            if board.empty_count() >= SELECTIVE_MIN_EMPTIES && upper - lower <= 1 {
+            if board.empty_count() >= selective_min_empties() && upper - lower <= 1 {
                 if let Some(v) = self.selective_cut(board, hash, e, t, lower, upper) {
                     return v;
                 }
@@ -2548,24 +2731,33 @@ impl Worker<'_> {
         upper: i32,
     ) -> Option<i32> {
         let empties = board.empty_count();
-        let error = t * crate::search::mpc_sigma(empties as u32, empties, SELECTIVE_PROBE_DEPTH);
+        let pd = selective_probe_depth(empties);
+        let error = t * selective_sigma(empties, pd);
         let ix = ev.indexer();
         let mut indices = ix.init(board.black, board.white);
 
-        let hi = upper as f32 + error;
-        if hi < 64.0 {
-            let v = self.seed_search(
-                board, hash, ev, ix, &mut indices, SELECTIVE_PROBE_DEPTH, hi - 1.0, hi, false,
+        // Static-eval gate: one static evaluation decides whether either
+        // probe can reach its bound at all. A depth-0 seed search *is* that
+        // evaluation, and it costs a fraction of the probe it guards.
+        let gate = selective_gate_offset().map(|off| {
+            let d0 = self.seed_search(
+                board, hash, ev, ix, &mut indices, 0, f32::NEG_INFINITY, f32::INFINITY, false,
             );
+            (d0, (error - off).max(1.0))
+        });
+
+        let hi = upper as f32 + error;
+        if hi < 64.0 && gate.is_none_or(|(d0, e0)| d0 >= upper as f32 + e0) {
+            let v =
+                self.seed_search(board, hash, ev, ix, &mut indices, pd, hi - 1.0, hi, false);
             if v >= hi {
                 return Some(upper);
             }
         }
         let lo = lower as f32 - error;
-        if lo > -64.0 {
-            let v = self.seed_search(
-                board, hash, ev, ix, &mut indices, SELECTIVE_PROBE_DEPTH, lo, lo + 1.0, false,
-            );
+        if lo > -64.0 && gate.is_none_or(|(d0, e0)| d0 <= lower as f32 - e0) {
+            let v =
+                self.seed_search(board, hash, ev, ix, &mut indices, pd, lo, lo + 1.0, false);
             if v <= lo {
                 return Some(lower);
             }

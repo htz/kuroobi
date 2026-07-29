@@ -81,6 +81,15 @@ struct Args {
     /// equivalence has been given up: measuring it through a third engine
     /// wastes most of the signal, and at 20 games the band is +-20%.
     self_vs: Option<usize>,
+    band_probe: Option<usize>,
+    band_empties: u8,
+    gen_obf: Option<PathBuf>,
+    sigma_calib: Option<PathBuf>,
+    obf: Option<PathBuf>,
+    selective_band: u8,
+    mpc_calib: Option<PathBuf>,
+    calib_stride: usize,
+    calib_max: usize,
 }
 
 fn parse_args() -> Result<Args, String> {
@@ -102,6 +111,15 @@ fn parse_args() -> Result<Args, String> {
         seed: 7,
         verify_parallel: false,
         self_vs: None,
+        band_probe: None,
+        band_empties: 27,
+        gen_obf: None,
+        sigma_calib: None,
+        obf: None,
+        selective_band: 0,
+        mpc_calib: None,
+        calib_stride: 997,
+        calib_max: 3000,
         nnue_b: None,
     };
     let mut have_edax = false;
@@ -143,7 +161,16 @@ fn parse_args() -> Result<Args, String> {
             "--random-plies" => args.random_plies = value("--random-plies")?.parse().map_err(|e| format!("--random-plies: {e}"))?,
             "--seed" => args.seed = value("--seed")?.parse().map_err(|e| format!("--seed: {e}"))?,
             "--verify-parallel" => args.verify_parallel = true,
+            "--mpc-calib" => args.mpc_calib = Some(PathBuf::from(value("--mpc-calib")?)),
+            "--calib-stride" => args.calib_stride = value("--calib-stride")?.parse().map_err(|e| format!("--calib-stride: {e}"))?,
+            "--calib-max" => args.calib_max = value("--calib-max")?.parse().map_err(|e| format!("--calib-max: {e}"))?,
+            "--selective-band" => args.selective_band = value("--selective-band")?.parse().map_err(|e| format!("--selective-band: {e}"))?,
             "--self-vs" => args.self_vs = Some(value("--self-vs")?.parse().map_err(|e| format!("--self-vs: {e}"))?),
+            "--band-probe" => args.band_probe = Some(value("--band-probe")?.parse().map_err(|e| format!("--band-probe: {e}"))?),
+            "--sigma-calib" => args.sigma_calib = Some(PathBuf::from(value("--sigma-calib")?)),
+            "--gen-obf" => args.gen_obf = Some(PathBuf::from(value("--gen-obf")?)),
+            "--obf" => args.obf = Some(PathBuf::from(value("--obf")?)),
+            "--band-empties" => args.band_empties = value("--band-empties")?.parse().map_err(|e| format!("--band-empties: {e}"))?,
             "--nnue-b" => args.nnue_b = Some(PathBuf::from(value("--nnue-b")?)),
             other => return Err(format!("unknown option: {other}")),
         }
@@ -198,6 +225,17 @@ fn random_opening(rng: &mut Rng, plies: usize) -> (Board, Vec<String>) {
         board.make_move_bits(pos);
     }
     (board, moves_played)
+}
+
+/// One `.obf` record: 64 board characters, a space, and the side to move.
+/// Anything after the position (FFO files carry the solution list) is ignored,
+/// as is anything that is not a record.
+fn parse_obf(line: &str) -> Option<Board> {
+    let s = line.trim();
+    if s.len() < 66 {
+        return None;
+    }
+    Board::from_string(&s[..66]).ok()
 }
 
 /// A running Edax console process.
@@ -384,7 +422,6 @@ impl Drop for Edax {
 /// Play one game; returns final score from OUR side's perspective
 /// Wall-clock spent thinking, so that a match can be reported at the
 /// time each side actually used rather than at nominal settings.
-#[derive(Default)]
 struct Clock {
     ours: f64,
     edax: f64,
@@ -400,6 +437,33 @@ struct Clock {
     /// work is simply wasted; if nps saturates too, the cores are starved and
     /// no scheduling change can help.
     our_nodes: u64,
+    /// Seconds and moves by empty count, for both sides. A per-game average
+    /// hides the only thing that matters here: the two engines search the same
+    /// way everywhere except the six plies between 25 and 30 empties, where one
+    /// reads to the end and the other does not. Averaged over a whole game that
+    /// difference is a single number that could come from anywhere.
+    our_by_empties: [f64; 65],
+    edax_by_empties: [f64; 65],
+    our_n_by_empties: [u32; 65],
+    edax_n_by_empties: [u32; 65],
+}
+
+// `derive(Default)` stops at 32-element arrays.
+impl Default for Clock {
+    fn default() -> Clock {
+        Clock {
+            ours: 0.0,
+            edax: 0.0,
+            our_moves: 0,
+            edax_moves: 0,
+            our_mid: 0.0,
+            our_nodes: 0,
+            our_by_empties: [0.0; 65],
+            edax_by_empties: [0.0; 65],
+            our_n_by_empties: [0; 65],
+            edax_n_by_empties: [0; 65],
+        }
+    }
 }
 
 /// (empties to the winner).
@@ -484,6 +548,23 @@ fn mpc_sigma(empties: u32, depth: u32, pc_depth: u32) -> f32 {
     const QC: f32 = 4.050545;
     let s = A * empties as f32 + B * depth as f32 + C * pc_depth as f32;
     QA * s * s + QB * s + QC
+}
+
+/// Confidence to read the rest of the game with, or `None` to search the
+/// midgame instead. The schedule, anchored at an exact solve from 24 empties,
+/// reads to the end at 93% from 30 empties, 98% from 28, 99% from 26
+/// and exactly from 24. The sigma multipliers are the two-sided z-scores for
+/// those percentages, the same scale `MPC_T` uses.
+fn selective_band(empties: u8, solve_empties: u8, width: u8) -> Option<f32> {
+    if empties <= solve_empties || empties > solve_empties + width {
+        return None;
+    }
+    match empties - solve_empties {
+        1..=2 => Some(2.58), // 99%
+        3..=4 => Some(2.33), // 98%
+        5..=6 => Some(1.81), // 93%
+        _ => None,
+    }
 }
 
 /// Static square priority for cheap ordering: corner, box, block, then
@@ -2021,6 +2102,7 @@ fn play(
     edax: &mut Edax,
     depth: u8,
     solve_empties: u8,
+    band_width: u8,
     clock: &mut Clock,
     opening_moves: &[String],
 ) -> Result<i32, String> {
@@ -2048,6 +2130,7 @@ fn play(
         }
 
         let our_turn = (board.player() == Color::Black) == we_are_black;
+        let mut clear_ns: u64 = 0;
         // Which branch took the move, so the clock can split midgame from
         // endgame. Only the NNUE path used to report this, which made every
         // pattern-evaluator match read as "100% endgame, 0 nodes".
@@ -2055,10 +2138,39 @@ fn play(
         let t0 = std::time::Instant::now();
         let pos = if our_turn {
             if solve_empties > 0 && board.empty_count() <= solve_empties {
-                solver
+                // The solver empties its table on entry; that is harness
+                // scaffolding, not thinking, and it is not in what Egaroucid
+                // reports either. Subtract it, the way `solve_obf` does.
+                let c0 = kuroobi::solver::CLEAR_NS
+                    .load(std::sync::atomic::Ordering::Relaxed);
+                let mv = solver
                     .solve_with_eval(EndSolverMode::Perfect, &board, Some(evaluator))
                     .best_move
-                    .ok_or("solver returned no move")?
+                    .ok_or("solver returned no move")?;
+                clear_ns += kuroobi::solver::CLEAR_NS
+                    .load(std::sync::atomic::Ordering::Relaxed)
+                    - c0;
+                mv
+            } else if let Some(t) = selective_band(board.empty_count(), solve_empties, band_width) {
+                // Above the exact threshold but close enough that reading to
+                // the end selectively beats a fixed-depth midgame search: the
+                // selective band, where the search depth becomes the number of
+                // empties rather than a fixed midgame lookahead.
+                //
+                // This clears the table on entry exactly as the exact solve
+                // does, so it has to discount it exactly as the exact solve
+                // does — charging scaffolding to one branch and not the other
+                // is how a comparison between them stops meaning anything.
+                let c0 = kuroobi::solver::CLEAR_NS
+                    .load(std::sync::atomic::Ordering::Relaxed);
+                let mv = solver
+                    .solve_selective(&board, Some(evaluator), t)
+                    .best_move
+                    .ok_or("selective solver returned no move")?;
+                clear_ns += kuroobi::solver::CLEAR_NS
+                    .load(std::sync::atomic::Ordering::Relaxed)
+                    - c0;
+                mv
             } else if let Some(nn) = nnue.as_deref_mut() {
                 let p = nn.best_move(&board, depth as u32).ok_or("nnue returned no move")?;
                 mid_nodes = Some(std::mem::take(&mut nn.nodes));
@@ -2076,10 +2188,15 @@ fn play(
             }
         };
 
-        let dt = t0.elapsed().as_secs_f64();
+        let dt = t0.elapsed().as_secs_f64() - std::mem::take(&mut clear_ns) as f64 / 1e9;
+        // Bucketed by the empties the mover faced, which is what selects the
+        // regime on both sides.
+        let e = board.empty_count() as usize;
         if our_turn {
             clock.ours += dt;
             clock.our_moves += 1;
+            clock.our_by_empties[e] += dt;
+            clock.our_n_by_empties[e] += 1;
             if let Some(n) = mid_nodes {
                 clock.our_nodes += n;
                 clock.our_mid += dt;
@@ -2087,6 +2204,8 @@ fn play(
         } else {
             clock.edax += dt;
             clock.edax_moves += 1;
+            clock.edax_by_empties[e] += dt;
+            clock.edax_n_by_empties[e] += 1;
         }
 
         if board.movable() & pos.to_bit() == 0 {
@@ -2166,6 +2285,397 @@ fn main() -> ExitCode {
         }
         _ => None,
     };
+
+    // ProbCut calibration for the NNUE, the same shape `mpccalib` produces for
+    // the linear evaluator. The margins the search prunes against are
+    // `t * sigma(empties, depth, probe_depth)`, and sigma has to be fitted
+    // against the evaluator actually doing the searching: a model borrowed from
+    // a *less* accurate evaluator overestimates the error, widens every margin
+    // and leaves the tree bigger than it needs to be.
+    if let Some(path) = &args.mpc_calib {
+        let Some(nn) = nnue else {
+            eprintln!("--mpc-calib needs --nnue");
+            return ExitCode::FAILURE;
+        };
+        let tt: &'static SharedTt = Box::leak(Box::new(SharedTt::new(22)));
+        let examples = match kuroobi::trainer::load_examples_binary(path) {
+            Ok(e) => e,
+            Err(e) => {
+                eprintln!("failed to load {}: {e}", path.display());
+                return ExitCode::FAILURE;
+            }
+        };
+        const CAL_DEPTHS: [u32; 7] = [1, 2, 4, 6, 8, 10, 12];
+        print!("empties");
+        for d in CAL_DEPTHS {
+            print!(",d{d}");
+        }
+        println!();
+        let mut n = 0usize;
+        for ex in examples.iter().step_by(args.calib_stride) {
+            let board = ex.board();
+            let empties = board.empty_count() as u32;
+            if !(8..=45).contains(&empties) || board.movable() == 0 {
+                continue;
+            }
+            let mut row = format!("{empties}");
+            for d in CAL_DEPTHS {
+                let mut w = NnueSearch::new(nn, tt);
+                // Calibration measures the *unpruned* error, so MPC stays off:
+                // sigma fitted against an already-pruned search would fold the
+                // pruning error back into the margin that controls it.
+                w.mpc = false;
+                tt.clear();
+                let (_, v) = w.best_move_valued(&board, d);
+                row.push_str(&format!(",{v:.3}"));
+            }
+            println!("{row}");
+            n += 1;
+            if n >= args.calib_max {
+                break;
+            }
+        }
+        eprintln!("{n} positions calibrated");
+        return ExitCode::SUCCESS;
+    }
+
+    // Positions this engine actually reaches at a chosen empty count, written as
+    // 65-character records Egaroucid's `-solve` accepts. Both engines then answer
+    // the *same* questions, which is the only way a node count means anything.
+    if let Some(path) = &args.gen_obf {
+        let Some(search) = nnue_search.as_mut() else {
+            eprintln!("--gen-obf needs --nnue");
+            return ExitCode::FAILURE;
+        };
+        search.threads = 1; // reproducible: see the note in --band-probe
+        let target = args.band_empties;
+        let mut rng = Rng::new(args.seed);
+        let mut out = String::new();
+        let mut done = 0usize;
+        while done < args.band_probe.unwrap_or(20) {
+            let (mut board, _) = random_opening(&mut rng, args.random_plies);
+            let mut usable = true;
+            while board.empty_count() > target {
+                if board.movable() == 0 {
+                    let mut passed = board;
+                    passed.pass();
+                    if passed.movable() == 0 {
+                        usable = false;
+                        break;
+                    }
+                    board = passed;
+                    continue;
+                }
+                match search.best_move(&board, args.depth as u32) {
+                    Some(m) => {
+                        board.make_move_bits(m);
+                    }
+                    None => {
+                        usable = false;
+                        break;
+                    }
+                }
+            }
+            if !usable || board.empty_count() != target || board.movable() == 0 {
+                continue;
+            }
+            // Exactly 65 characters, no trailing punctuation: Egaroucid's
+            // `setboard` rejects anything longer ("expected 65") and then
+            // searches whatever board it still had, which looks like a
+            // successful run that answered a different question.
+            out.push_str(&format!("{board}\n"));
+            done += 1;
+        }
+        if let Err(e) = std::fs::write(path, out) {
+            eprintln!("failed to write {}: {e}", path.display());
+            return ExitCode::FAILURE;
+        }
+        eprintln!("{done} positions at {target} empties -> {}", path.display());
+        return ExitCode::SUCCESS;
+    }
+
+    // Sigma for the *endgame* ProbCut, measured instead of extrapolated: for
+    // each position, the exact value and what a probe of each depth reported.
+    // The spread of `exact - probe` per (empties, probe depth) cell is the
+    // standard deviation the margin should be built from.
+    if let Some(path) = &args.sigma_calib {
+        {
+            let text = match std::fs::read_to_string(path) {
+                Ok(t) => t,
+                Err(e) => {
+                    eprintln!("failed to read {}: {e}", path.display());
+                    return ExitCode::FAILURE;
+                }
+            };
+            let mut solver = Solver::new(26);
+            solver.set_threads(args.threads);
+            const PROBES: [u8; 5] = [2, 4, 6, 8, 10];
+            print!("empties,exact");
+            for d in PROBES {
+                print!(",probe{d}");
+            }
+            println!();
+            for line in text.lines() {
+                let Some(board) = parse_obf(line) else { continue };
+                if board.movable() == 0 {
+                    continue;
+                }
+                // Probes first: an exact solve leaves entries the probe would
+                // read back as truth, which would make it look far better than
+                // it is.
+                let probes: Vec<f32> = PROBES
+                    .iter()
+                    .map(|&d| solver.probe_value(&board, &evaluator, d))
+                    .collect();
+                let exact =
+                    solver.solve_with_eval(EndSolverMode::Perfect, &board, Some(&evaluator)).value;
+                print!("{},{exact}", board.empty_count());
+                for v in probes {
+                    print!(",{v:.2}");
+                }
+                println!();
+            }
+            return ExitCode::SUCCESS;
+        }
+    }
+
+    // Answer each position in a file with whatever the game path would use for
+    // it, and report *only* what the search did: nodes, search seconds, nps.
+    // Table clears are scaffolding and are subtracted; nothing is summed across
+    // a game, and no position is averaged with a position of another regime.
+    if let Some(path) = &args.obf {
+        let text = match std::fs::read_to_string(path) {
+            Ok(t) => t,
+            Err(e) => {
+                eprintln!("failed to read {}: {e}", path.display());
+                return ExitCode::FAILURE;
+            }
+        };
+        let mut solver = Solver::new(if args.solve_empties >= 18 { 22 } else { 18 });
+        solver.set_threads(args.threads);
+        println!("empties,regime,depth,nodes,seconds,nps");
+        for line in text.lines() {
+            let Some(board) = parse_obf(line) else { continue };
+            let e = board.empty_count();
+            if board.movable() == 0 {
+                continue;
+            }
+            // Egaroucid's `-solve` clears its cache between problems unless told
+            // not to, so this does too: a position that inherits the previous
+            // one's table is not answering the same question.
+            if let Some(tt) = nnue_tt {
+                tt.clear();
+            }
+            let c0 = kuroobi::solver::CLEAR_NS
+                .load(std::sync::atomic::Ordering::Relaxed);
+            let t0 = std::time::Instant::now();
+            let (regime, depth, nodes) =
+                if args.solve_empties > 0 && e <= args.solve_empties {
+                    let r = solver.solve_with_eval(EndSolverMode::Perfect, &board, Some(&evaluator));
+                    ("exact", e as u32, r.nodes)
+                } else if let Some(t) = selective_band(e, args.solve_empties, args.selective_band) {
+                    let r = solver.solve_selective(&board, Some(&evaluator), t);
+                    ("selective", e as u32, r.nodes)
+                } else {
+                    let Some(nn) = nnue_search.as_mut() else {
+                        eprintln!("--obf needs --nnue for midgame positions");
+                        return ExitCode::FAILURE;
+                    };
+                    nn.best_move(&board, args.depth as u32);
+                    ("midgame", args.depth as u32, std::mem::take(&mut nn.nodes))
+                };
+            let clear = (kuroobi::solver::CLEAR_NS
+                .load(std::sync::atomic::Ordering::Relaxed)
+                - c0) as f64
+                / 1e9;
+            let secs = t0.elapsed().as_secs_f64() - clear;
+            println!(
+                "{e},{regime},{depth},{nodes},{secs:.4},{:.0}",
+                nodes as f64 / secs.max(1e-9)
+            );
+        }
+        return ExitCode::SUCCESS;
+    }
+
+    // Is the selective band actually worse than the midgame search it replaces?
+    // A 100-game match answered that with a +-10 point interval — wider than any
+    // effect worth keeping, so the earlier rejection proved nothing. Scoring both
+    // candidate moves against an exact solve measures the same question with far
+    // less variance: every position yields a disc-difference loss instead of a
+    // coin flip, and the two branches are scored on the *same* position, so the
+    // opening noise cancels.
+    if let Some(n_pos) = args.band_probe {
+        if nnue_search.is_none() {
+            eprintln!("--band-probe needs --nnue");
+            return ExitCode::FAILURE;
+        }
+        let target = args.band_empties;
+        let Some(t) = selective_band(target, args.solve_empties, 6) else {
+            eprintln!(
+                "--band-empties {target} is not in the band above --solve-empties {}",
+                args.solve_empties
+            );
+            return ExitCode::FAILURE;
+        };
+        let search = nnue_search.as_mut().unwrap();
+        // 2^26 rather than the 2^22 a game uses: this solver is the oracle, not
+        // the engine under test, and at 29 empties a 134 MB table is so far past
+        // saturation that a position takes minutes. The answer is exact either
+        // way — only the time to reach it changes.
+        let mut solver = Solver::new(26);
+        solver.set_threads(args.threads);
+        let mut rng = Rng::new(args.seed);
+
+        /// Exact value of `m` from the point of view of the side playing it.
+        /// The solver always answers for the side to move, so every pass on the
+        /// way back flips the sign.
+        fn exact_after(
+            solver: &mut Solver,
+            ev: &Evaluator,
+            board: &Board,
+            m: Position,
+        ) -> i32 {
+            let mut child = *board;
+            child.make_move_bits(m);
+            let mut sign = -1i32;
+            loop {
+                if child.movable() != 0 {
+                    let r = solver.solve_with_eval(EndSolverMode::Perfect, &child, Some(ev));
+                    return sign * r.value;
+                }
+                let mut passed = child;
+                passed.pass();
+                if passed.movable() == 0 {
+                    let (p, o) = (
+                        child.player_bb().count_ones() as i32,
+                        child.opponent_bb().count_ones() as i32,
+                    );
+                    let empty = 64 - p - o;
+                    let diff = p - o;
+                    let final_score = match diff.cmp(&0) {
+                        std::cmp::Ordering::Greater => diff + empty,
+                        std::cmp::Ordering::Less => diff - empty,
+                        std::cmp::Ordering::Equal => 0,
+                    };
+                    return sign * final_score;
+                }
+                child = passed;
+                sign = -sign;
+            }
+        }
+
+        println!("band probe: {n_pos} positions at {target} empties, t={t}, depth {}", args.depth);
+        // The move a probe shape picks is a coarse instrument: the blow-ups that
+        // decide whether the band is usable are rare enough that a hundred
+        // positions can contain none. The *score* a selective solve returns is
+        // available on every position and says directly how far the probes let
+        // it drift, so it separates the two shapes with far more resolution.
+        println!("pos,exact,flat_loss,scaled_loss,mid_loss,flat_err,scaled_err");
+        let (mut sum_a, mut sum_s, mut sum_b) = (0i64, 0i64, 0i64);
+        let (mut bad_a, mut bad_s, mut bad_b, mut agree) = (0usize, 0usize, 0usize, 0usize);
+        let mut done = 0usize;
+        while done < n_pos {
+            // Play down to the band with the same search that would be making
+            // these moves in a game, so the positions are ones this engine
+            // actually reaches — random play down to 27 empties is a different
+            // distribution and would not answer the question asked.
+            //
+            // Single-threaded, unlike everything measured below it. A parallel
+            // search is not reproducible, and one move decided differently
+            // early puts every later position on a different line: two runs of
+            // this probe then score different position sets and cannot be
+            // compared. Costs a few seconds a position and makes the seed mean
+            // what it says.
+            let played_threads = std::mem::replace(&mut search.threads, 1);
+            let (mut board, _) = random_opening(&mut rng, args.random_plies);
+            let mut usable = true;
+            while board.empty_count() > target {
+                if board.movable() == 0 {
+                    let mut passed = board;
+                    passed.pass();
+                    if passed.movable() == 0 {
+                        usable = false;
+                        break;
+                    }
+                    board = passed;
+                    continue;
+                }
+                match search.best_move(&board, args.depth as u32) {
+                    Some(m) => {
+                        board.make_move_bits(m);
+                    }
+                    None => {
+                        usable = false;
+                        break;
+                    }
+                }
+            }
+            search.threads = played_threads;
+            if !usable || board.empty_count() != target || board.movable() == 0 {
+                continue;
+            }
+
+            let exact = solver.solve_with_eval(EndSolverMode::Perfect, &board, Some(&evaluator));
+            let Some(best) = exact.best_move else { continue };
+            let star = exact.value;
+
+            // Both probe shapes on the same position: the flat depth-4 probe
+            // this ships with, and the depth-scaled `depth/3` probe. What
+            // separates them is not the average — it is how often the probe
+            // blows up.
+            kuroobi::solver::set_selective_probe_scaled(false);
+            let ra = solver.solve_selective(&board, Some(&evaluator), t);
+            kuroobi::solver::set_selective_probe_scaled(true);
+            let rs = solver.solve_selective(&board, Some(&evaluator), t);
+            let (a, s) = (ra.best_move, rs.best_move);
+            let (err_a, err_s) = (ra.value - star, rs.value - star);
+            let b = search.best_move(&board, args.depth as u32);
+
+            let (Some(a), Some(s), Some(b)) = (a, s, b) else { continue };
+            // Each of these solves costs what the oracle did, so a move already
+            // scored is never scored twice.
+            let mut scored: Vec<(Position, i32)> = Vec::new();
+            let mut loss_of = |m: Position, solver: &mut Solver| -> i32 {
+                if m == best {
+                    return 0;
+                }
+                if let Some((_, l)) = scored.iter().find(|(p, _)| *p == m) {
+                    return *l;
+                }
+                let l = star - exact_after(solver, &evaluator, &board, m);
+                scored.push((m, l));
+                l
+            };
+            let loss_a = loss_of(a, &mut solver);
+            let loss_s = loss_of(s, &mut solver);
+            let loss_b = loss_of(b, &mut solver);
+
+            sum_a += loss_a as i64;
+            sum_s += loss_s as i64;
+            sum_b += loss_b as i64;
+            bad_a += (loss_a > 0) as usize;
+            bad_s += (loss_s > 0) as usize;
+            bad_b += (loss_b > 0) as usize;
+            agree += (a == s) as usize;
+            done += 1;
+            println!("{done},{star},{loss_a},{loss_s},{loss_b},{err_a},{err_s}");
+        }
+        let n = done as f64;
+        println!(
+            "band flat  : mean loss {:.3}, wrong move {bad_a}/{done}",
+            sum_a as f64 / n
+        );
+        println!(
+            "band scaled: mean loss {:.3}, wrong move {bad_s}/{done}",
+            sum_s as f64 / n
+        );
+        println!(
+            "midgame    : mean loss {:.3}, wrong move {bad_b}/{done}",
+            sum_b as f64 / n
+        );
+        println!("flat and scaled agree {agree}/{done}");
+        return ExitCode::SUCCESS;
+    }
 
     // Parallel vs sequential, head to head. Same net, same depth, same endgame
     // threshold — only the thread count differs, so anything other than 50%
@@ -2427,7 +2937,7 @@ fn main() -> ExitCode {
             }
             match play(
                 &opening, we_are_black, &evaluator, nnue_search.as_mut(), &mut searcher, &mut solver,
-                &mut edax, args.depth, args.solve_empties, &mut clock, &opening_moves,
+                &mut edax, args.depth, args.solve_empties, args.selective_band, &mut clock, &opening_moves,
             ) {
                 Ok(s) => {
                     // One line per game so two runs over the same seed can be
@@ -2474,7 +2984,13 @@ fn main() -> ExitCode {
         println!(
             "our search: {} nodes, {:.2} Mnps, worker busy {:.1}%",
             clock.our_nodes,
-            clock.our_nodes as f64 / clock.ours.max(1e-9) / 1e6,
+            // Midgame nodes over *midgame* time. Dividing by `clock.ours`
+            // mixed in the endgame solver's seconds, which contribute no nodes
+            // to this counter, and understated the search rate by whatever
+            // share the solver took (15% at depth 10 / solve 20) — enough to
+            // read as a regression against a figure measured on the midgame
+            // alone.
+            clock.our_nodes as f64 / clock.our_mid.max(1e-9) / 1e6,
             busy / (mid_ns * workers) * 100.0
         );
         // Where the (1 + workers) x midgame-time budget actually goes. Anything
@@ -2516,6 +3032,40 @@ fn main() -> ExitCode {
         (clock.ours / clock.our_moves.max(1) as f64)
             / (clock.edax / clock.edax_moves.max(1) as f64).max(1e-9)
     );
+    {
+        // The bands are the regime boundaries, not round numbers: above the
+        // selective band both engines run a fixed-depth midgame search, below
+        // `solve_empties` both prove the result exactly, and in between only
+        // the opponent reads to the end. Comparing anything coarser than this
+        // averages the difference away.
+        let hi = args.solve_empties.max(1) as usize;
+        let bands: [(usize, usize, &str); 5] = [
+            (hi + 7, 60, "midgame"),
+            (hi + 5, hi + 6, "sel 93%"),
+            (hi + 3, hi + 4, "sel 98%"),
+            (hi + 1, hi + 2, "sel 99%"),
+            (1, hi, "exact"),
+        ];
+        println!("time per move by empties (ours / edax):");
+        for (lo, up, name) in bands {
+            let (mut ot, mut on, mut et, mut en) = (0.0, 0u32, 0.0, 0u32);
+            for e in lo..=up.min(64) {
+                ot += clock.our_by_empties[e];
+                on += clock.our_n_by_empties[e];
+                et += clock.edax_by_empties[e];
+                en += clock.edax_n_by_empties[e];
+            }
+            if on == 0 && en == 0 {
+                continue;
+            }
+            let (o, d) = (ot / on.max(1) as f64, et / en.max(1) as f64);
+            println!(
+                "  {name:<8} empties {lo:>2}-{up:<2}  {o:.4}s ({on:>5} moves)  \
+                 {d:.4}s ({en:>5} moves)  ratio {:.2}x",
+                o / d.max(1e-9)
+            );
+        }
+    }
     // No separate NNUE node line: the move loop drains `nn.nodes` into
     // `clock.our_nodes` every move, so reading it here always printed 0. The
     // running total is the `our search:` line above.

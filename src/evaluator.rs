@@ -413,6 +413,7 @@ impl Evaluator {
 
     /// Ordering-grade evaluation from raw bitboards: 16-bit weights, so a
     /// stage's table is half the size the exact path walks.
+    #[inline(never)]
     pub fn eval_order_bb(
         &self,
         player: u64,

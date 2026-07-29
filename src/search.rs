@@ -395,19 +395,27 @@ impl Searcher {
         &mut self,
         board: &Board,
         evaluator: &Evaluator,
-        children: &[(Position, Board, u64, u64, i64)],
+        children: &[(Position, u64, u64, i64)],
         hash: u64,
         depth: u8,
         ply: u8,
         alpha: f32,
         beta: f32,
     ) -> (f32, Option<Position>) {
-        let _ = (board, hash);
+        let _ = hash;
         let indexer = evaluator.indexer();
+        // Children are rebuilt from the flip mask here too; the array the
+        // caller hands over deliberately carries no boards.
+        let kid = |k: &(Position, u64, u64, i64)| {
+            let mut c = *board;
+            c.apply_flips(k.0, k.2);
+            c
+        };
         let first = &children[0];
-        let mut ix = indexer.init(first.1.black, first.1.white);
+        let first_board = kid(first);
+        let mut ix = indexer.init(first_board.black, first_board.white);
         let mut best_val = -self.alpha_beta(
-            &first.1, evaluator, &mut ix, first.2, depth - 1, ply + 1, -beta, -alpha, false,
+            &first_board, evaluator, &mut ix, first.1, depth - 1, ply + 1, -beta, -alpha, false,
         );
         let mut best_move = Some(first.0);
         if best_val >= beta || self.should_stop() {
@@ -438,15 +446,16 @@ impl Searcher {
                         let i = next.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
                         let Some(k) = children.get(i) else { break };
                         let a = best.lock().unwrap().0.max(alpha);
-                        let mut ix = indexer.init(k.1.black, k.1.white);
+                        let kb = kid(k);
+                        let mut ix = indexer.init(kb.black, kb.white);
                         let probe = -w.alpha_beta(
-                            &k.1, evaluator, &mut ix, k.2, depth - 1, ply + 1,
+                            &kb, evaluator, &mut ix, k.1, depth - 1, ply + 1,
                             -(a + PVS_EPSILON), -a, false,
                         );
                         let v = if probe > a && probe < beta {
-                            let mut ix = indexer.init(k.1.black, k.1.white);
+                            let mut ix = indexer.init(kb.black, kb.white);
                             -w.alpha_beta(
-                                &k.1, evaluator, &mut ix, k.2, depth - 1, ply + 1, -beta, -a, false,
+                                &kb, evaluator, &mut ix, k.1, depth - 1, ply + 1, -beta, -a, false,
                             )
                         } else {
                             probe
@@ -717,7 +726,13 @@ impl Searcher {
         let [killer0, killer1] = self.killers[ply as usize];
         // Fixed-size stack buffer: a position has at most 33 legal moves,
         // and a heap allocation per node showed up as real per-node cost.
-        let mut children = [(Position(0), *board, 0u64, 0u64, 0i64); 34];
+        // No child board in here. Materialising one per legal move meant
+        // writing 34 * 48 bytes of stack at every node — including the copies
+        // of `*board` — when a cut node searches one child and throws the rest
+        // away. The flip mask is enough to rebuild a child with `apply_flips`,
+        // which costs nothing next to recomputing the flip, so the array holds
+        // 34 * 32 bytes of plain zeros instead.
+        let mut children = [(Position(0), 0u64, 0u64, 0i64); 34];
         let mut n_children = 0usize;
         let mut m = moves;
         while m != 0 {
@@ -734,10 +749,25 @@ impl Searcher {
             let order_key: i64 = if Some(pos) == tt_move {
                 i64::MIN
             } else if use_eval_order {
-                // opponent's view: lower = better for us
+                // opponent's view: lower = better for us. Restoring the
+                // indices from a saved copy beats calling `undo`: undo walks
+                // the flipped discs and reads the pattern table for each,
+                // while `PatternIndices` is 160 flat bytes. Ordering pays this
+                // for *every* legal move, so it is the hottest undo in the
+                // search (measured 16.7% of node time against 17.9% for the
+                // evaluation itself).
+                let saved = *indices;
                 indexer.apply(indices, pos, flipped, mover);
-                let v = evaluator.eval_indices(&child, indices);
-                indexer.undo(indices, pos, flipped, mover);
+                // The i8 ordering table, not the f32 exact one. Ordering walks
+                // every legal move at every deep node, and each mask is a
+                // random probe into the stage's table — so what it costs is
+                // cache misses, and the i8 table is a quarter the size. The
+                // endgame solver already ordered this way; the midgame was
+                // still paying full precision for a comparison key.
+                let v = evaluator.eval_order_bb(
+                    child.player_bb(), child.opponent_bb(), child.player(), indices,
+                );
+                *indices = saved;
                 (v * 256.0) as i64
             } else if Some(pos) == killer0 {
                 i64::MIN + 1
@@ -750,19 +780,25 @@ impl Searcher {
             } else {
                 0
             };
-            children[n_children] = (pos, child, child_hash, flipped, order_key);
+            children[n_children] = (pos, child_hash, flipped, order_key);
             n_children += 1;
         }
         let children = &mut children[..n_children];
-        if depth >= 2 || tt_move.is_some() {
-            children.sort_unstable_by_key(|c| c.4);
-        }
+        // No full sort. A cut node searches one or two children and throws the
+        // rest away, so ordering all of them is work nobody reads; the loop
+        // below picks the next best on demand
+        // instead. Selection is O(k*n) for the k children
+        // actually searched against O(n log n) plus the element moves a sort
+        // costs, and k is almost always 1.
+        let order_children = depth >= 2 || tt_move.is_some();
 
         // Enhanced transposition cutoff: a child entry that already proves
         // our fail-high ends this node without any search.
         if depth >= 4 {
-            for (_, child, child_hash, _, _) in children.iter() {
-                if let Some(e) = self.tt_probe(child, *child_hash) {
+            for (pos, child_hash, flipped, _) in children.iter() {
+                let mut child = *board;
+                child.apply_flips(*pos, *flipped);
+                if let Some(e) = self.tt_probe(&child, *child_hash) {
                     if e.depth >= depth - 1 && !matches!(e.bound, Bound::Lower) && -e.value >= beta
                     {
                         return -e.value;
@@ -796,7 +832,22 @@ impl Searcher {
         let mut best_val = -INF;
         let mut best_move = None;
 
-        for (i, (pos, child, child_hash, flipped, _)) in children.iter().enumerate() {
+        for i in 0..children.len() {
+            if order_children {
+                // Pull the best remaining child into slot `i`.
+                let mut best_j = i;
+                for j in i + 1..children.len() {
+                    if children[j].3 < children[best_j].3 {
+                        best_j = j;
+                    }
+                }
+                children.swap(i, best_j);
+            }
+            let (pos, child_hash, flipped, _) = &children[i];
+            let mut child = *board;
+            child.apply_flips(*pos, *flipped);
+            let child = &child;
+            let saved = *indices;
             indexer.apply(indices, *pos, *flipped, mover);
             // PVS: full window on the first child, then null-window probes
             // with a full re-search only when a child actually improves.
@@ -821,7 +872,7 @@ impl Searcher {
                     probe
                 }
             };
-            indexer.undo(indices, *pos, *flipped, mover);
+            *indices = saved;
             if v > best_val {
                 best_val = v;
                 best_move = Some(*pos);
