@@ -293,6 +293,7 @@ fn run_one_sibling(
     group: &AbortFlag<'_>,
     selective_t: Option<f32>,
     nnue: Option<NnueProbe>,
+    sigma_scale: f32,
     parent: &Board,
     m: ScoredMove,
     upper: i32,
@@ -312,6 +313,7 @@ fn run_one_sibling(
     let mut w = Worker::with_tables(tt, neighbours, budget, group, s.shallow, s.mid);
     w.selective_t = selective_t;
     w.nnue = nnue;
+    w.sigma_scale = sigma_scale;
 
     let mut child = m.child(parent);
     let mut val = -w.pvs(&mut child, m.hash, -cur - 1, -cur, false, ev);
@@ -629,6 +631,7 @@ fn selective_sigma(empties: u8, pc: u8) -> f32 {
     if legacy_sigma() {
         return crate::search::mpc_sigma(empties as u32, empties, pc);
     }
+
     let e = (empties as f32).clamp(14.0, 30.0);
     let p = (pc as f32).clamp(2.0, 10.0);
     let s = 7.246577 + 0.020516 * e - 0.438464 * p - 0.004024 * e * e + 0.000167 * p * p
@@ -1364,6 +1367,13 @@ struct Worker<'a> {
     mid_table: HashTable,
     /// See [`NnueProbe`]; copied from the solver into every worker.
     nnue: Option<NnueProbe>,
+    /// Margin multiplier for the selective cuts. 1.0 for exact solves; a
+    /// selective *answer* runs at 0.6 — calibrated-sigma margins turned out
+    /// to buy far more certainty than the answer needs (measured on two
+    /// out-of-sample 12-position sets at 29 empties: 0.6 matches
+    /// Egaroucid's 93% answer error at 0.85-0.94x their time, while 1.0 is
+    /// 4x slower for 1-4 discs less error). `SEL_SIGMA_SCALE` overrides.
+    sigma_scale: f32,
     /// Spare threads this search may recruit when splitting a node.
     budget: &'a ThreadBudget,
     /// Cutoff signal for the split this worker is searching under.
@@ -1408,6 +1418,7 @@ impl<'a> Worker<'a> {
             shallow_table,
             mid_table,
             nnue: None,
+            sigma_scale: 1.0,
             budget,
             abort,
         }
@@ -1590,6 +1601,10 @@ impl Solver {
             // warm-up ladder, whose rungs exist for ordering rather than
             // answers (measured on FFO40-49: 4.9-5.2s -> 5.4-5.6s).
             w.nnue = if selective.is_some() { self.nnue } else { None };
+            w.sigma_scale = std::env::var("SEL_SIGMA_SCALE")
+                .ok()
+                .and_then(|v| v.parse().ok())
+                .unwrap_or(if selective.is_some() { 0.6 } else { 1.0 });
             let mut b = *board;
 
             // Warm-up ladder (iterative selectivity): solve the same
@@ -2056,6 +2071,7 @@ impl Worker<'_> {
         let budget = self.budget;
         let selective_t = self.selective_t;
         let nnue = self.nnue;
+        let sigma_scale = self.sigma_scale;
         // Cutting off this node must also stop work already under way in the
         // siblings, so the tasks search under a flag chained to ours.
         let group = AbortFlag::child(self.abort);
@@ -2094,8 +2110,8 @@ impl Worker<'_> {
                 let pushed = unsafe {
                     pool.try_push(move || {
                         run_one_sibling(
-                            tt, neighbours, budget, group, selective_t, nnue, &board, m, upper,
-                            shared, slot, ev,
+                            tt, neighbours, budget, group, selective_t, nnue, sigma_scale, &board,
+                            m, upper, shared, slot, ev,
                         );
                     })
                 };
@@ -2927,7 +2943,7 @@ impl Worker<'_> {
     ) -> Option<i32> {
         let empties = board.empty_count();
         let pd = selective_probe_depth(empties);
-        let error = t * selective_sigma(empties, pd);
+        let error = t * selective_sigma(empties, pd) * self.sigma_scale;
 
         // NNUE probes: same depth and margins, but the probe search runs the
         // (unpruned) midgame NNUE engine instead of the linear seed search.
