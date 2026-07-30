@@ -27,6 +27,7 @@ struct Args {
     pw: Option<String>,
     credentials: PathBuf,
     games: usize,
+    time: String,
     depth: u8,
     solve_empties: u8,
     band: u8,
@@ -45,6 +46,7 @@ fn parse_args() -> Result<Args, String> {
         pw: None,
         credentials: PathBuf::from(".ggs_credentials"),
         games: 1,
+        time: "30:00".into(),
         depth: 10,
         solve_empties: 20,
         band: 0,
@@ -64,6 +66,7 @@ fn parse_args() -> Result<Args, String> {
             "--pw" => args.pw = Some(value("--pw")?),
             "--credentials" => args.credentials = PathBuf::from(value("--credentials")?),
             "--games" => args.games = value("--games")?.parse().map_err(|e| format!("--games: {e}"))?,
+            "--time" => args.time = value("--time")?,
             "--depth" => args.depth = value("--depth")?.parse().map_err(|e| format!("--depth: {e}"))?,
             "--solve-empties" => {
                 args.solve_empties =
@@ -131,22 +134,35 @@ fn main() -> ExitCode {
 
     // 与えられた局面の着手を、対局路と同じ選択則 (中盤探索 / 選択帯 / 完全読み)
     // で決める。
+    // 残り時間 (秒) に応じて絞る: 60 秒で帯オフ + 深さ -2、20 秒で深さ 6、
+    // 8 秒で深さ 4。オセロのソフトタイムアウトは「切れたら勝ちが消える」なので
+    // 保険は厚めに。
     let pick = |board: &Board,
-                    search: &mut NnueSearch,
-                    solver: &mut Solver|
+                search: &mut NnueSearch,
+                solver: &mut Solver,
+                clock_secs: Option<u64>|
      -> Option<Position> {
         if board.movable() == 0 {
             return None;
         }
+        let secs = clock_secs.unwrap_or(u64::MAX);
+        let (depth, band) = if secs < 8 {
+            (4, 0)
+        } else if secs < 20 {
+            (6, 0)
+        } else if secs < 60 {
+            (args.depth.saturating_sub(2).max(6), 0)
+        } else {
+            (args.depth, args.band)
+        };
         if board.empty_count() <= args.solve_empties {
             solver
                 .solve_with_eval(EndSolverMode::Perfect, board, Some(&evaluator))
                 .best_move
-        } else if let Some(t) = selective_band(board.empty_count(), args.solve_empties, args.band)
-        {
+        } else if let Some(t) = selective_band(board.empty_count(), args.solve_empties, band) {
             solver.solve_selective(board, Some(&evaluator), t).best_move
         } else {
-            search.best_move(board, args.depth as u32)
+            search.best_move(board, depth as u32)
         }
     };
 
@@ -163,7 +179,7 @@ fn main() -> ExitCode {
                 println!("= ERR bad board");
                 continue;
             };
-            match pick(&board, &mut search, &mut solver) {
+            match pick(&board, &mut search, &mut solver, None) {
                 Some(p) => println!("= {}", coord(p)),
                 None => println!("= pa"),
             }
@@ -222,6 +238,7 @@ fn main() -> ExitCode {
     let mut in_block = false;
     let mut logged_in = false;
     let mut my_color: Option<char> = None;
+    let mut my_clock_secs: Option<u64> = None;
     let mut games_done = 0usize;
     let mut asked_at: Option<std::time::Instant> = None;
     let mut ready_at: Option<std::time::Instant> = None;
@@ -295,7 +312,7 @@ fn main() -> ExitCode {
                     for l in &block {
                         let b = l.strip_prefix('|').unwrap_or(l);
                         if b.starts_with(&format!("{login} ")) {
-                            // "|name  (1720.0 *) clock"
+                            // "|name  (1720.0 *) 04:53,30:0//02:00,30:0"
                             if let Some(open) = b.find('(') {
                                 if let Some(close) = b[open..].find(')') {
                                     let inner = &b[open + 1..open + close];
@@ -303,6 +320,23 @@ fn main() -> ExitCode {
                                         if c == '*' || c == 'O' {
                                             my_color = Some(c);
                                         }
+                                    }
+                                    // ')' の後の先頭フィールドが残り時間。
+                                    let after = b[open + close..]
+                                        .trim_start_matches(')')
+                                        .trim_start();
+                                    let head: String = after
+                                        .chars()
+                                        .take_while(|c| c.is_ascii_digit() || *c == ':')
+                                        .collect();
+                                    let mut secs = 0u64;
+                                    for part in head.split(':') {
+                                        if let Ok(v) = part.parse::<u64>() {
+                                            secs = secs * 60 + v;
+                                        }
+                                    }
+                                    if !head.is_empty() {
+                                        my_clock_secs = Some(secs);
                                     }
                                 }
                             }
@@ -345,7 +379,7 @@ fn main() -> ExitCode {
                         sboard.push(' ');
                         sboard.push(if my_color == Some('*') { 'X' } else { 'O' });
                         if let Ok(board) = Board::from_string(&sboard) {
-                            let m = match pick(&board, &mut search, &mut solver) {
+                            let m = match pick(&board, &mut search, &mut solver, my_clock_secs) {
                                 Some(p) => coord(p),
                                 None => "pa".to_string(),
                             };
@@ -361,6 +395,7 @@ fn main() -> ExitCode {
                 games_done += 1;
                 println!("### game {games_done}/{} over: {ln}", args.games);
                 my_color = None;
+                my_clock_secs = None;
                 asked_at = None;
                 if games_done >= args.games {
                     send("quit");
@@ -372,7 +407,7 @@ fn main() -> ExitCode {
         if let Some(t0) = ready_at {
             if asked_at.is_none() && t0.elapsed().as_secs() >= 4 {
                 asked_at = Some(std::time::Instant::now());
-                send(&format!("tell /os ask 8 00:05:00 {opponent}"));
+                send(&format!("tell /os ask 8 {} {opponent}", args.time));
             }
         }
     }
