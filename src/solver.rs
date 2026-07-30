@@ -558,7 +558,12 @@ const ESTIMATE_DEPTH: u8 = 6;
 /// Fourteen leaves the whole bottom of the tree — where nearly all the nodes
 /// are — searched exactly, so a "selective" solve at 30 empties is only
 /// selective in its top sixteen plies.
-const SELECTIVE_MIN_EMPTIES: u8 = 14;
+// 14 -> 10 (2026-07-30): with the static-eval gate below, the probes at
+// 10-13 empties are cheap enough that pruning there finally pays — measured
+// on 12 fixed 29-empty positions: 2,798M -> 2,061M nodes, 112.9s -> 95.4s.
+// Without the gate the same setting *loses* time (133.7s), which is why it
+// was rejected before; the two knobs only work together.
+const SELECTIVE_MIN_EMPTIES: u8 = 10;
 
 /// Roots at or above this many empties run the warm-up ladder before the exact
 /// pass. Tuned to 24 under the old sigma; the measured sigma halves the rungs'
@@ -680,9 +685,13 @@ pub fn set_selective_probe_scaled(on: bool) {
 /// whether or not one could possibly cut; the static pre-check is the
 /// cheapest half of a ProbCut.
 fn selective_gate_offset() -> Option<f32> {
+    // On by default at 4 (measured best of 2..6 here); SEL_GATE=off
+    // disables, SEL_GATE=<n> overrides.
     static V: std::sync::OnceLock<Option<f32>> = std::sync::OnceLock::new();
-    *V.get_or_init(|| {
-        std::env::var("SEL_GATE").ok().and_then(|v| v.parse().ok()).filter(|v| *v >= 0.0)
+    *V.get_or_init(|| match std::env::var("SEL_GATE").ok().as_deref() {
+        Some("off") | Some("-") => None,
+        Some(v) => v.parse().ok().filter(|v: &f32| *v >= 0.0).or(Some(4.0)),
+        None => Some(4.0),
     })
 }
 /// Roots this deep run the warm-up ladder before the exact pass. Below 20
