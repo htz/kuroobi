@@ -1607,6 +1607,13 @@ impl Solver {
                 // are demoted between rungs, so ordering is *all* they leave.
                 if !std::env::var("SEL_ONE_RUNG").is_ok_and(|v| v != "0") {
                     rungs.retain(|&r| r < t);
+                    // For a selective *answer* only the cheapest rung earns its
+                    // keep: a second rung near t re-searches nearly the same
+                    // tree (measured at 29 empties: [1.1,1.8]+t 67.8s,
+                    // [1.1]+t 62.3s, [1.4]+t 72.9s, t alone 89.3s). The exact
+                    // solve's warm-up keeps the full ladder — there the rungs
+                    // exist for ordering and the second one pays (2.1x).
+                    rungs.truncate(1);
                 } else {
                     rungs.clear();
                 }
