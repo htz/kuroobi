@@ -87,6 +87,7 @@ struct Args {
     solver_hash: Option<u8>,
     sigma_calib: Option<PathBuf>,
     mid_sigma_calib: Option<PathBuf>,
+    ggs_serve: bool,
     obf: Option<PathBuf>,
     selective_band: u8,
     mpc_calib: Option<PathBuf>,
@@ -119,6 +120,7 @@ fn parse_args() -> Result<Args, String> {
         solver_hash: None,
         sigma_calib: None,
         mid_sigma_calib: None,
+        ggs_serve: false,
         obf: None,
         selective_band: 0,
         mpc_calib: None,
@@ -171,6 +173,7 @@ fn parse_args() -> Result<Args, String> {
             "--selective-band" => args.selective_band = value("--selective-band")?.parse().map_err(|e| format!("--selective-band: {e}"))?,
             "--self-vs" => args.self_vs = Some(value("--self-vs")?.parse().map_err(|e| format!("--self-vs: {e}"))?),
             "--band-probe" => args.band_probe = Some(value("--band-probe")?.parse().map_err(|e| format!("--band-probe: {e}"))?),
+            "--ggs-serve" => args.ggs_serve = true,
             "--mid-sigma-calib" => args.mid_sigma_calib = Some(PathBuf::from(value("--mid-sigma-calib")?)),
             "--sigma-calib" => args.sigma_calib = Some(PathBuf::from(value("--sigma-calib")?)),
             "--solver-hash" => args.solver_hash = Some(value("--solver-hash")?.parse().map_err(|e| format!("--solver-hash: {e}"))?),
@@ -2402,6 +2405,56 @@ fn main() -> ExitCode {
     // Positions this engine actually reaches at a chosen empty count, written as
     // 65-character records Egaroucid's `-solve` accepts. Both engines then answer
     // the *same* questions, which is the only way a node count means anything.
+    // GGS bridge: read "<64 chars> <X|O>" lines on stdin, answer "= <coord>"
+    // with the move the game path would play (midgame search / selective band /
+    // exact solve by empties). One persistent process so the tables stay warm.
+    if args.ggs_serve {
+        use std::io::BufRead;
+        let Some(search) = nnue_search.as_mut() else {
+            eprintln!("--ggs-serve needs --nnue");
+            return ExitCode::FAILURE;
+        };
+        search.threads = args.threads;
+        search.mpc = args.mpc;
+        let mut solver = Solver::new(args.solver_hash.unwrap_or(22) as u32);
+        solver.set_threads(args.threads);
+        let coord = |p: Position| -> String {
+            let i = p.index() as u8;
+            format!("{}{}", (b'A' + i / 8) as char, i % 8 + 1)
+        };
+        let stdin = std::io::stdin();
+        for line in stdin.lock().lines() {
+            let Ok(line) = line else { break };
+            if line.trim() == "quit" {
+                break;
+            }
+            let Some(board) = parse_obf(&line) else {
+                println!("= ERR bad board");
+                continue;
+            };
+            let mv = if board.movable() == 0 {
+                None
+            } else if board.empty_count() <= args.solve_empties {
+                solver
+                    .solve_with_eval(EndSolverMode::Perfect, &board, Some(&evaluator))
+                    .best_move
+            } else if let Some(t) =
+                selective_band(board.empty_count(), args.solve_empties, args.selective_band)
+            {
+                solver.solve_selective(&board, Some(&evaluator), t).best_move
+            } else {
+                search.best_move(&board, args.depth as u32)
+            };
+            match mv {
+                Some(p) => println!("= {}", coord(p)),
+                None => println!("= pa"),
+            }
+            use std::io::Write;
+            std::io::stdout().flush().ok();
+        }
+        return ExitCode::SUCCESS;
+    }
+
     // Midgame ProbCut sigma, measured instead of assumed: for positions the
     // NNUE search actually reaches, the error between the reduced-depth probe
     // and the full-depth search, per (empties, depth). The old model was a fit
