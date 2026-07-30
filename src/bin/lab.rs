@@ -866,11 +866,15 @@ fn main() -> ExitCode {
                 }
             };
             let mut solver = Solver::new(26);
+        if let (Some(nn), Some(mtt)) = (nnue, nnue_tt) { solver.set_nnue(nn, mtt); }
             solver.set_threads(args.threads);
             const PROBES: [u8; 5] = [2, 4, 6, 8, 10];
             print!("empties,exact");
             for d in PROBES {
                 print!(",probe{d}");
+            }
+            for d in PROBES {
+                print!(",nprobe{d}");
             }
             println!();
             for line in text.lines() {
@@ -885,10 +889,17 @@ fn main() -> ExitCode {
                     .iter()
                     .map(|&d| solver.probe_value(&board, &evaluator, d))
                     .collect();
+                let nprobes: Vec<f32> = PROBES
+                    .iter()
+                    .map(|&d| solver.probe_value_nnue(&board, d).unwrap_or(f32::NAN))
+                    .collect();
                 let exact =
                     solver.solve_with_eval(EndSolverMode::Perfect, &board, Some(&evaluator)).value;
                 print!("{},{exact}", board.empty_count());
                 for v in probes {
+                    print!(",{v:.2}");
+                }
+                for v in nprobes {
                     print!(",{v:.2}");
                 }
                 println!();
@@ -913,6 +924,7 @@ fn main() -> ExitCode {
         // our endgame through a 2^22 table conflates tree size with table
         // starvation.
         let mut solver = Solver::new(args.solver_hash.unwrap_or(if args.solve_empties >= 18 { 22 } else { 18 }) as u32);
+        if let (Some(nn), Some(mtt)) = (nnue, nnue_tt) { solver.set_nnue(nn, mtt); }
         solver.set_threads(args.threads);
         println!("empties,regime,depth,nodes,seconds,nps");
         for line in text.lines() {
@@ -984,6 +996,7 @@ fn main() -> ExitCode {
         // saturation that a position takes minutes. The answer is exact either
         // way — only the time to reach it changes.
         let mut solver = Solver::new(26);
+        if let (Some(nn), Some(mtt)) = (nnue, nnue_tt) { solver.set_nnue(nn, mtt); }
         solver.set_threads(args.threads);
         let mut rng = Rng::new(args.seed);
 
@@ -1165,8 +1178,10 @@ fn main() -> ExitCode {
         side_b.mpc = args.mpc;
         side_b.threads = vs_threads;
         let mut solver_a = Solver::new(if args.solve_empties >= 18 { 22 } else { 18 });
+        if let (Some(nn), Some(mtt)) = (nnue, nnue_tt) { solver_a.set_nnue(nn, mtt); }
         solver_a.set_threads(args.threads);
         let mut solver_b = Solver::new(if args.solve_empties >= 18 { 22 } else { 18 });
+        if let (Some(nn), Some(mtt)) = (nnue, nnue_tt) { solver_b.set_nnue(nn, mtt); }
         solver_b.set_threads(vs_threads);
 
         let mut rng = Rng::new(args.seed);
@@ -1383,6 +1398,7 @@ fn main() -> ExitCode {
     searcher.threads = args.threads;
     // Deep endgame thresholds (20+ empties) need a much larger table.
     let mut solver = Solver::new(if args.solve_empties >= 18 { 22 } else { 18 });
+        if let (Some(nn), Some(mtt)) = (nnue, nnue_tt) { solver.set_nnue(nn, mtt); }
     solver.set_threads(args.threads);
     let mut clock = Clock::default();
     let mut wins = 0usize;

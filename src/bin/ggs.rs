@@ -28,6 +28,7 @@ struct Args {
     credentials: PathBuf,
     games: usize,
     time: String,
+    gtype: String,
     depth: u8,
     solve_empties: u8,
     band: u8,
@@ -47,6 +48,7 @@ fn parse_args() -> Result<Args, String> {
         credentials: PathBuf::from(".ggs_credentials"),
         games: 1,
         time: "30:00".into(),
+        gtype: "8".into(),
         depth: 10,
         solve_empties: 20,
         band: 0,
@@ -67,6 +69,7 @@ fn parse_args() -> Result<Args, String> {
             "--credentials" => args.credentials = PathBuf::from(value("--credentials")?),
             "--games" => args.games = value("--games")?.parse().map_err(|e| format!("--games: {e}"))?,
             "--time" => args.time = value("--time")?,
+            "--type" => args.gtype = value("--type")?,
             "--depth" => args.depth = value("--depth")?.parse().map_err(|e| format!("--depth: {e}"))?,
             "--solve-empties" => {
                 args.solve_empties =
@@ -130,6 +133,7 @@ fn main() -> ExitCode {
     search.threads = args.threads;
     search.mpc = args.mpc;
     let mut solver = Solver::new(args.solver_hash);
+    solver.set_nnue(nn, tt);
     solver.set_threads(args.threads);
 
     // 与えられた局面の着手を、対局路と同じ選択則 (中盤探索 / 選択帯 / 完全読み)
@@ -391,6 +395,12 @@ fn main() -> ExitCode {
                 }
                 continue;
             }
+            if ln.starts_with("/os: ERR") {
+                // 申し込み拒否 (フォーミュラ不一致など)。待ち続けても無駄。
+                eprintln!("### request rejected: {ln}");
+                send("quit");
+                break 'outer;
+            }
             if ln.starts_with("/os: - match") {
                 games_done += 1;
                 println!("### game {games_done}/{} over: {ln}", args.games);
@@ -407,7 +417,7 @@ fn main() -> ExitCode {
         if let Some(t0) = ready_at {
             if asked_at.is_none() && t0.elapsed().as_secs() >= 4 {
                 asked_at = Some(std::time::Instant::now());
-                send(&format!("tell /os ask 8 {} {opponent}", args.time));
+                send(&format!("tell /os ask {} {} {opponent}", args.gtype, args.time));
             }
         }
     }

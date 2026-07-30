@@ -27,6 +27,7 @@ fn main() -> ExitCode {
     let mut threads: usize = 1;
     let mut mpc_t: Option<f32> = None;
     let mut weights: Option<PathBuf> = None;
+    let mut nnue_path: Option<PathBuf> = Some(PathBuf::from("weights/nnue_champion.bin"));
     let mut files: Vec<PathBuf> = Vec::new();
 
     let mut grand_time = 0.0f64;
@@ -39,6 +40,7 @@ fn main() -> ExitCode {
             "--threads" => threads = it.next().and_then(|v| v.parse().ok()).unwrap_or(threads),
             "--mpc-t" => mpc_t = it.next().and_then(|v| v.parse().ok()),
             "--weights" => weights = it.next().map(PathBuf::from),
+            "--nnue" => nnue_path = it.next().map(PathBuf::from),
             other => files.push(PathBuf::from(other)),
         }
     }
@@ -58,6 +60,20 @@ fn main() -> ExitCode {
 
     let mut solver = Solver::new(hash_bits);
     solver.set_threads(threads);
+    // The selective probes prefer the NNUE (see solver::sel_nnue_probe);
+    // load it so the benchmark matches the match configuration.
+    if let Some(p) = &nnue_path {
+        let mut nn = kuroobi::nnue::Nnue::new(kuroobi::pattern::EGAROUCID_PATTERNS);
+        if nn.load(p).is_ok() {
+            nn.quantize();
+            let nn: &'static kuroobi::nnue::Nnue = Box::leak(Box::new(nn));
+            let mtt: &'static kuroobi::midgame::SharedTt =
+                Box::leak(Box::new(kuroobi::midgame::SharedTt::new(22)));
+            solver.set_nnue(nn, mtt);
+        } else {
+            eprintln!("note: nnue {} not found, linear probes", p.display());
+        }
+    }
     let mut searcher = Searcher::new(21);
     searcher.mpc = mpc;
     if let Some(t) = mpc_t {

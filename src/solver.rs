@@ -292,6 +292,7 @@ fn run_one_sibling(
     budget: &ThreadBudget,
     group: &AbortFlag<'_>,
     selective_t: Option<f32>,
+    nnue: Option<NnueProbe>,
     parent: &Board,
     m: ScoredMove,
     upper: i32,
@@ -310,6 +311,7 @@ fn run_one_sibling(
     let s = budget.take_scratch(tag);
     let mut w = Worker::with_tables(tt, neighbours, budget, group, s.shallow, s.mid);
     w.selective_t = selective_t;
+    w.nnue = nnue;
 
     let mut child = m.child(parent);
     let mut val = -w.pvs(&mut child, m.hash, -cur - 1, -cur, false, ev);
@@ -650,6 +652,13 @@ fn legacy_sigma() -> bool {
 /// solve's ladder, where the rungs exist to fill the table rather than to
 /// answer, so it stays the default until measured.
 fn selective_probe_depth(empties: u8) -> u8 {
+    // SEL_PROBE_DEPTH=<n> pins a flat probe depth for sweeps.
+    static V: std::sync::OnceLock<Option<u8>> = std::sync::OnceLock::new();
+    if let Some(d) = *V.get_or_init(|| {
+        std::env::var("SEL_PROBE_DEPTH").ok().and_then(|v| v.parse().ok())
+    }) {
+        return d;
+    }
     if selective_probe_scaled() {
         ((empties / 3) & !1) + (empties & 1)
     } else {
@@ -1290,6 +1299,21 @@ pub struct EndSolverResult {
     pub nodes: u64,
 }
 
+/// The NNUE midgame searcher lent to the endgame for its selective probes:
+/// the network and the shared midgame table it searches through.
+pub type NnueProbe = (&'static crate::nnue::Nnue, &'static crate::midgame::SharedTt);
+
+/// The selective probes run an (unpruned) NNUE search instead of the linear
+/// seed search whenever the solver has been lent one (`set_nnue`). Measured
+/// on 12 fixed 29-empty positions (1T): 2,061M -> 1,829M nodes and 95.4s ->
+/// 66.7s — the probe is both a little more accurate (sigma ~0.9x) and much
+/// cheaper per call. Deeper NNUE probes (5/6/8/depth-3) all lose on time.
+/// `SEL_NNUE_PROBE=0` restores the linear probes.
+fn sel_nnue_probe() -> bool {
+    static V: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *V.get_or_init(|| std::env::var("SEL_NNUE_PROBE").map_or(true, |v| v != "0"))
+}
+
 pub struct Solver {
     /// Shared between all search threads: the transposition table (its
     /// entries are guarded by striped locks) and the read-only neighbour
@@ -1301,6 +1325,8 @@ pub struct Solver {
     best: Option<Position>,
     /// Search threads to split the root across (1 = sequential).
     threads: usize,
+    /// See [`NnueProbe`]; `None` keeps the linear probes.
+    nnue: Option<NnueProbe>,
 }
 
 /// One search thread's private state plus borrows of the shared tables.
@@ -1336,6 +1362,8 @@ struct Worker<'a> {
     /// probe into the multi-gigabyte main table is a cold miss; a table
     /// that fits in cache trades a little hit rate for a lot of latency.
     mid_table: HashTable,
+    /// See [`NnueProbe`]; copied from the solver into every worker.
+    nnue: Option<NnueProbe>,
     /// Spare threads this search may recruit when splitting a node.
     budget: &'a ThreadBudget,
     /// Cutoff signal for the split this worker is searching under.
@@ -1379,6 +1407,7 @@ impl<'a> Worker<'a> {
             selective_t: None,
             shallow_table,
             mid_table,
+            nnue: None,
             budget,
             abort,
         }
@@ -1419,7 +1448,13 @@ impl Solver {
             nodes: 0,
             best: None,
             threads: 1,
+            nnue: None,
         }
+    }
+
+    /// Lend the NNUE searcher to the selective probes (see `NnueProbe`).
+    pub fn set_nnue(&mut self, nn: &'static crate::nnue::Nnue, tt: &'static crate::midgame::SharedTt) {
+        self.nnue = Some((nn, tt));
     }
 
     /// Set how many threads the root may split its siblings across.
@@ -1479,6 +1514,14 @@ impl Solver {
     /// without bound, so by 30 empties it claims an 8-disc error — twice what
     /// direct measurement shows. Pair this with an exact solve of the same
     /// position to find out which is true.
+    /// NNUE probe value at `depth`, for sigma calibration (None if no NNUE).
+    pub fn probe_value_nnue(&mut self, board: &Board, depth: u8) -> Option<f32> {
+        let (nn, mtt) = self.nnue?;
+        let mut ms = crate::midgame::NnueSearch::new(nn, mtt);
+        let mut acc = nn.indices(board.black, board.white);
+        Some(ms.negamax(board, &mut acc, depth as u32, f32::NEG_INFINITY, f32::INFINITY))
+    }
+
     pub fn probe_value(&mut self, board: &Board, ev: &Evaluator, depth: u8) -> f32 {
         let tt = &self.hash_table;
         let budget = ThreadBudget::new(0);
@@ -1542,6 +1585,11 @@ impl Solver {
             }
             let root_abort = AbortFlag::root();
             let mut w = Worker::new(tt, neighbours, &budget, &root_abort);
+            // NNUE probes pay off only where the selective pass *is* the
+            // answer (the band): -30% there, but +10% on an exact solve's
+            // warm-up ladder, whose rungs exist for ordering rather than
+            // answers (measured on FFO40-49: 4.9-5.2s -> 5.4-5.6s).
+            w.nnue = if selective.is_some() { self.nnue } else { None };
             let mut b = *board;
 
             // Warm-up ladder (iterative selectivity): solve the same
@@ -2000,6 +2048,7 @@ impl Worker<'_> {
         let neighbours = self.neighbours;
         let budget = self.budget;
         let selective_t = self.selective_t;
+        let nnue = self.nnue;
         // Cutting off this node must also stop work already under way in the
         // siblings, so the tasks search under a flag chained to ours.
         let group = AbortFlag::child(self.abort);
@@ -2038,8 +2087,8 @@ impl Worker<'_> {
                 let pushed = unsafe {
                     pool.try_push(move || {
                         run_one_sibling(
-                            tt, neighbours, budget, group, selective_t, &board, m, upper, shared,
-                            slot, ev,
+                            tt, neighbours, budget, group, selective_t, nnue, &board, m, upper,
+                            shared, slot, ev,
                         );
                     })
                 };
@@ -2872,6 +2921,39 @@ impl Worker<'_> {
         let empties = board.empty_count();
         let pd = selective_probe_depth(empties);
         let error = t * selective_sigma(empties, pd);
+
+        // NNUE probes: same depth and margins, but the probe search runs the
+        // (unpruned) midgame NNUE engine instead of the linear seed search.
+        // Off by default until its own sigma is calibrated.
+        if sel_nnue_probe() {
+            if let Some((nn, mtt)) = self.nnue {
+                const EPS: f32 = 0.01;
+                let mut ms = crate::midgame::NnueSearch::new(nn, mtt);
+                let mut acc = nn.indices(board.black, board.white);
+                let gate = selective_gate_offset().map(|off| {
+                    (nn.eval_from_indices(&acc, board), (error - off).max(1.0))
+                });
+                let hi = upper as f32 + error;
+                if hi < 64.0 && gate.is_none_or(|(d0, e0)| d0 >= upper as f32 + e0) {
+                    let v = ms.negamax(board, &mut acc, pd as u32, hi - EPS, hi);
+                    if v >= hi {
+                        self.nodes += ms.nodes;
+                        return Some(upper);
+                    }
+                }
+                let lo = lower as f32 - error;
+                if lo > -64.0 && gate.is_none_or(|(d0, e0)| d0 <= lower as f32 - e0) {
+                    let v = ms.negamax(board, &mut acc, pd as u32, lo, lo + EPS);
+                    if v <= lo {
+                        self.nodes += ms.nodes;
+                        return Some(lower);
+                    }
+                }
+                self.nodes += ms.nodes;
+                return None;
+            }
+        }
+
         let ix = ev.indexer();
         let mut indices = ix.init(board.black, board.white);
 
