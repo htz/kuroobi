@@ -88,6 +88,10 @@ struct Args {
     sigma_calib: Option<PathBuf>,
     mid_sigma_calib: Option<PathBuf>,
     ggs_serve: bool,
+    ggs_play: Option<String>,
+    ggs_login: Option<String>,
+    ggs_pw: Option<String>,
+    ggs_games: usize,
     obf: Option<PathBuf>,
     selective_band: u8,
     mpc_calib: Option<PathBuf>,
@@ -121,6 +125,10 @@ fn parse_args() -> Result<Args, String> {
         sigma_calib: None,
         mid_sigma_calib: None,
         ggs_serve: false,
+        ggs_play: None,
+        ggs_login: None,
+        ggs_pw: None,
+        ggs_games: 1,
         obf: None,
         selective_band: 0,
         mpc_calib: None,
@@ -174,6 +182,10 @@ fn parse_args() -> Result<Args, String> {
             "--self-vs" => args.self_vs = Some(value("--self-vs")?.parse().map_err(|e| format!("--self-vs: {e}"))?),
             "--band-probe" => args.band_probe = Some(value("--band-probe")?.parse().map_err(|e| format!("--band-probe: {e}"))?),
             "--ggs-serve" => args.ggs_serve = true,
+            "--ggs-play" => args.ggs_play = Some(value("--ggs-play")?),
+            "--ggs-login" => args.ggs_login = Some(value("--ggs-login")?),
+            "--ggs-pw" => args.ggs_pw = Some(value("--ggs-pw")?),
+            "--ggs-games" => args.ggs_games = value("--ggs-games")?.parse().map_err(|e| format!("--ggs-games: {e}"))?,
             "--mid-sigma-calib" => args.mid_sigma_calib = Some(PathBuf::from(value("--mid-sigma-calib")?)),
             "--sigma-calib" => args.sigma_calib = Some(PathBuf::from(value("--sigma-calib")?)),
             "--solver-hash" => args.solver_hash = Some(value("--solver-hash")?.parse().map_err(|e| format!("--solver-hash: {e}"))?),
@@ -2405,6 +2417,232 @@ fn main() -> ExitCode {
     // Positions this engine actually reaches at a chosen empty count, written as
     // 65-character records Egaroucid's `-solve` accepts. Both engines then answer
     // the *same* questions, which is the only way a node count means anything.
+    // Native GGS client: connect to skatgame.net:5000, challenge an opponent
+    // to unrated 8x8 games, and play them with the same move selection as the
+    // match harness (midgame search / selective band / exact solve). Protocol
+    // details were captured with the python probes (see memory
+    // ggs-server-alive-protocol-notes): line-oriented, message groups end with
+    // "READY", the request line spells "/os: +  .id" with two spaces, and the
+    // update block carries players as "|name (rating COLOR) clock", eight
+    // board rows and a "|COLOR to move" line.
+    if let Some(opponent) = args.ggs_play.clone() {
+        use std::io::{Read, Write};
+        let (Some(login), Some(pw)) = (args.ggs_login.clone(), args.ggs_pw.clone()) else {
+            eprintln!("--ggs-play needs --ggs-login and --ggs-pw");
+            return ExitCode::FAILURE;
+        };
+        let Some(search) = nnue_search.as_mut() else {
+            eprintln!("--ggs-play needs --nnue");
+            return ExitCode::FAILURE;
+        };
+        search.threads = args.threads;
+        search.mpc = args.mpc;
+        let mut solver = Solver::new(args.solver_hash.unwrap_or(22) as u32);
+        solver.set_threads(args.threads);
+
+        let mut stream = match std::net::TcpStream::connect(("skatgame.net", 5000)) {
+            Ok(s) => s,
+            Err(e) => {
+                eprintln!("connect failed: {e}");
+                return ExitCode::FAILURE;
+            }
+        };
+        stream
+            .set_read_timeout(Some(std::time::Duration::from_millis(300)))
+            .ok();
+        let mut send = {
+            let mut w = stream.try_clone().expect("clone stream");
+            move |cmd: &str| {
+                println!(">>> {cmd}");
+                let _ = w.write_all(cmd.as_bytes()).and_then(|_| w.write_all(b"\n"));
+            }
+        };
+
+        let coord = |p: Position| -> String {
+            let i = p.index() as u8;
+            format!("{}{}", (b'A' + i / 8) as char, i % 8 + 1)
+        };
+
+        let mut raw = Vec::<u8>::new();
+        let mut lines = std::collections::VecDeque::<String>::new();
+        let mut block = Vec::<String>::new();
+        let mut in_block = false;
+        let mut logged_in = false;
+        let mut my_color: Option<char> = None;
+        let mut games_done = 0usize;
+        let mut asked_at: Option<std::time::Instant> = None;
+        let mut ready_at: Option<std::time::Instant> = None;
+        let started = std::time::Instant::now();
+
+        'outer: while started.elapsed().as_secs() < 3600 {
+            let mut chunk = [0u8; 4096];
+            match stream.read(&mut chunk) {
+                Ok(0) => break,
+                Ok(n) => raw.extend_from_slice(&chunk[..n]),
+                Err(e)
+                    if e.kind() == std::io::ErrorKind::WouldBlock
+                        || e.kind() == std::io::ErrorKind::TimedOut => {}
+                Err(_) => break,
+            }
+            // Complete lines out of the byte stream; the tail may be a prompt
+            // that never gets a newline, so it stays in `raw` for the prompt
+            // check below.
+            while let Some(nl) = raw.iter().position(|&b| b == b'\n') {
+                let mut line: Vec<u8> = raw.drain(..=nl).collect();
+                while line.last() == Some(&b'\n') || line.last() == Some(&b'\r') {
+                    line.pop();
+                }
+                let line = String::from_utf8_lossy(&line).into_owned();
+                println!("{line}");
+                lines.push_back(line);
+            }
+            if !logged_in {
+                let tail = String::from_utf8_lossy(&raw).to_lowercase();
+                let tail2 = lines
+                    .iter()
+                    .rev()
+                    .take(3)
+                    .map(|l| l.to_lowercase())
+                    .collect::<Vec<_>>()
+                    .join(" ");
+                if tail.contains("enter login") || tail2.contains("enter login") {
+                    send(&login);
+                    lines.clear();
+                    raw.clear();
+                } else if tail.contains("password") || tail2.contains("password") {
+                    send(&pw);
+                    lines.clear();
+                    raw.clear();
+                    logged_in = true;
+                    ready_at = Some(std::time::Instant::now());
+                    send("verbose -news -faq -help -ack");
+                    send("tell /os client -");
+                    send("tell /os open 1");
+                }
+                continue;
+            }
+
+            while let Some(ln) = lines.pop_front() {
+                // Update/join blocks run until the READY that closes the group.
+                if ln.starts_with("/os: update") || ln.starts_with("/os: join") {
+                    in_block = true;
+                    block.clear();
+                    block.push(ln);
+                    continue;
+                }
+                if in_block {
+                    if ln == "READY" {
+                        in_block = false;
+                        // Parse the block: my colour, board rows, side to move.
+                        let mut rows = Vec::<Vec<char>>::new();
+                        let mut turn: Option<char> = None;
+                        let mut mid = String::new();
+                        if let Some(id) = block[0].split_whitespace().nth(2) {
+                            mid = id.to_string();
+                        }
+                        for l in &block {
+                            let b = l.strip_prefix('|').unwrap_or(l);
+                            if let Some(pos) = b.find(&format!("{login} ")) {
+                                if pos == 0 {
+                                    // "|name  (1720.0 *) clock"
+                                    if let Some(open) = b.find('(') {
+                                        if let Some(close) = b[open..].find(')') {
+                                            let inner = &b[open + 1..open + close];
+                                            if let Some(c) = inner.trim().chars().last() {
+                                                if c == '*' || c == 'O' {
+                                                    my_color = Some(c);
+                                                }
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                            let t = b.trim_start();
+                            if let Some(rest) = t.strip_prefix(|c: char| c.is_ascii_digit()) {
+                                let cells: Vec<char> = rest
+                                    .split_whitespace()
+                                    .take(8)
+                                    .filter_map(|w| {
+                                        (w.len() == 1
+                                            && matches!(w.as_bytes()[0], b'-' | b'*' | b'O'))
+                                        .then(|| w.chars().next().unwrap())
+                                    })
+                                    .collect();
+                                if cells.len() == 8 {
+                                    rows.push(cells);
+                                }
+                            }
+                            if t.starts_with("* to move") {
+                                turn = Some('*');
+                            } else if t.starts_with("O to move") {
+                                turn = Some('O');
+                            }
+                        }
+                        if rows.len() == 8 && turn.is_some() && turn == my_color {
+                            // rank-major obf string, '*' is black/X.
+                            let mut sboard = String::with_capacity(66);
+                            for r in &rows {
+                                for &c in r {
+                                    sboard.push(if c == '*' { 'X' } else if c == 'O' { 'O' } else { '-' });
+                                }
+                            }
+                            sboard.push(' ');
+                            sboard.push(if my_color == Some('*') { 'X' } else { 'O' });
+                            if let Ok(board) = Board::from_string(&sboard) {
+                                let mv = if board.movable() == 0 {
+                                    None
+                                } else if board.empty_count() <= args.solve_empties {
+                                    solver
+                                        .solve_with_eval(
+                                            EndSolverMode::Perfect,
+                                            &board,
+                                            Some(&evaluator),
+                                        )
+                                        .best_move
+                                } else if let Some(t) = selective_band(
+                                    board.empty_count(),
+                                    args.solve_empties,
+                                    args.selective_band,
+                                ) {
+                                    solver.solve_selective(&board, Some(&evaluator), t).best_move
+                                } else {
+                                    search.best_move(&board, args.depth as u32)
+                                };
+                                let m = match mv {
+                                    Some(p) => coord(p),
+                                    None => "pa".to_string(),
+                                };
+                                send(&format!("tell /os play {mid} {m}"));
+                            }
+                        }
+                    } else {
+                        block.push(ln);
+                    }
+                    continue;
+                }
+                if ln.starts_with("/os: - match") {
+                    games_done += 1;
+                    println!("### game {games_done}/{} over: {ln}", args.ggs_games);
+                    my_color = None;
+                    asked_at = None;
+                    if games_done >= args.ggs_games {
+                        send(&format!("tell .{login} thanks, bye"));
+                        send("quit");
+                        break 'outer;
+                    }
+                }
+            }
+
+            if let Some(t0) = ready_at {
+                if asked_at.is_none() && t0.elapsed().as_secs() >= 4 {
+                    asked_at = Some(std::time::Instant::now());
+                    send(&format!("tell /os ask 8 00:05:00 {opponent}"));
+                }
+            }
+        }
+        return ExitCode::SUCCESS;
+    }
+
     // GGS bridge: read "<64 chars> <X|O>" lines on stdin, answer "= <coord>"
     // with the move the game path would play (midgame search / selective band /
     // exact solve by empties). One persistent process so the tables stay warm.
