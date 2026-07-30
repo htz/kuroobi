@@ -9,3 +9,4 @@
 # logs/    — 学習曲線の csv と実行ログ
 /weights/
 /logs/
+.ggs_credentials

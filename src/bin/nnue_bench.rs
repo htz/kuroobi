@@ -12,7 +12,7 @@ use kuroobi::evaluator::Evaluator;
 use kuroobi::nnue::{Accumulator, Nnue};
 use kuroobi::pattern::EGAROUCID_PATTERNS;
 use kuroobi::pattern_index::{PatternIndexer, PatternIndices};
-use kuroobi::{Board, Color, Position};
+use kuroobi::{Board, Position};
 
 /// Full-width negamax to `depth`, linear eval at the leaves, maintaining
 /// pattern indices incrementally like the real search. Returns (value, nodes).
