@@ -32,6 +32,7 @@ pub mod pattern;
 pub mod pattern_index;
 pub mod stability;
 pub mod game;
+pub mod engine;
 pub mod evaluator;
 pub mod midgame;
 pub mod nnue;

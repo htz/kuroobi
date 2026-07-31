@@ -153,6 +153,17 @@ impl Reversi {
         Ok(())
     }
 
+    /// The whole line of the game, including moves undone (and thus
+    /// redoable): confirmed history first, then the redo tail in play order.
+    /// `None` entries are passes. `history.len()` is the current cursor.
+    pub fn line(&self) -> Vec<Option<Position>> {
+        self.history
+            .iter()
+            .map(|r| r.pos)
+            .chain(self.redo_stack.iter().rev().map(|r| r.pos))
+            .collect()
+    }
+
     /// Returns a bitboard of all playable positions for the current player.
     pub fn movable(&self) -> u64 {
         self.board.movable()
