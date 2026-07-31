@@ -231,230 +231,284 @@ fn main() -> ExitCode {
     let opponent = args.play.clone().unwrap_or_default();
 
     use std::io::{Read, Write};
-    let mut stream = match std::net::TcpStream::connect(("skatgame.net", 5000)) {
-        Ok(s) => s,
-        Err(e) => {
-            eprintln!("connect failed: {e}");
-            return ExitCode::FAILURE;
-        }
-    };
-    stream
-        .set_read_timeout(Some(std::time::Duration::from_millis(300)))
-        .ok();
-    let mut send = {
-        let mut w = stream.try_clone().expect("clone stream");
-        move |cmd: &str| {
-            println!(">>> {cmd}");
-            let _ = w.write_all(cmd.as_bytes()).and_then(|_| w.write_all(b"\n"));
-        }
-    };
 
-    let mut raw = Vec::<u8>::new();
-    let mut lines = std::collections::VecDeque::<String>::new();
-    let mut block = Vec::<String>::new();
-    let mut in_block = false;
-    let mut logged_in = false;
-    let mut my_color: Option<char> = None;
-    let mut my_clock_secs: Option<u64> = None;
+    // ============ 対局セッション ============
+    // 原則: 対局中 (in_match) はいかなる理由でも自発的に離脱しない。
+    // - idle タイムアウトは非対局時のみ
+    // - 致命的 ERR による終了も非対局時のみ
+    // - 接続断は再接続し、stored (中断) ゲームを自動再開する
     let mut games_done = 0usize;
-    let mut asked_at: Option<std::time::Instant> = None;
-    let mut ready_at: Option<std::time::Instant> = None;
-    let started = std::time::Instant::now();
+    let mut first_session = true;
 
-    let mut last_activity = std::time::Instant::now();
-    let _ = started;
-    'outer: loop {
-        // 対局が動いている限り無期限。無活動 (盤面更新なし) が 15 分続いたら退出。
-        if last_activity.elapsed().as_secs() > 900 {
-            eprintln!("### idle timeout");
-            send("quit");
-            break 'outer;
-        }
-        let mut chunk = [0u8; 4096];
-        match stream.read(&mut chunk) {
-            Ok(0) => break,
-            Ok(n) => raw.extend_from_slice(&chunk[..n]),
-            Err(e)
-                if e.kind() == std::io::ErrorKind::WouldBlock
-                    || e.kind() == std::io::ErrorKind::TimedOut => {}
-            Err(_) => break,
-        }
-        // 完全な行だけ取り出す。末尾は改行の来ないプロンプトかもしれないので
-        // raw に残し、下のプロンプト判定に使う。
-        while let Some(nl) = raw.iter().position(|&b| b == b'\n') {
-            let mut line: Vec<u8> = raw.drain(..=nl).collect();
-            while line.last() == Some(&b'\n') || line.last() == Some(&b'\r') {
-                line.pop();
+    'session: loop {
+        let mut stream = loop {
+            match std::net::TcpStream::connect(("skatgame.net", 5000)) {
+                Ok(s) => break s,
+                Err(e) => {
+                    eprintln!("### connect failed: {e}; retry in 15s");
+                    std::thread::sleep(std::time::Duration::from_secs(15));
+                }
             }
-            let line = String::from_utf8_lossy(&line).into_owned();
-            println!("{line}");
-            lines.push_back(line);
-        }
-        if !logged_in {
-            let tail = String::from_utf8_lossy(&raw).to_lowercase();
-            let tail2 = lines
-                .iter()
-                .rev()
-                .take(3)
-                .map(|l| l.to_lowercase())
-                .collect::<Vec<_>>()
-                .join(" ");
-            if tail.contains("enter login") || tail2.contains("enter login") {
-                send(&login);
-                lines.clear();
-                raw.clear();
-            } else if tail.contains("password") || tail2.contains("password") {
-                send(&pw);
-                lines.clear();
-                raw.clear();
-                logged_in = true;
-                ready_at = Some(std::time::Instant::now());
-                send("verbose -news -faq -help -ack");
-                send("tell /os client -");
-                send("tell /os trust +");
-                send("tell /os rated +");
-                send("tell /os open 1");
+        };
+        stream
+            .set_read_timeout(Some(std::time::Duration::from_millis(300)))
+            .ok();
+        let mut send = {
+            let mut w = stream.try_clone().expect("clone stream");
+            move |cmd: &str| {
+                println!(">>> {cmd}");
+                let _ = w.write_all(cmd.as_bytes()).and_then(|_| w.write_all(b"\n"));
             }
-            continue;
-        }
+        };
 
-        while let Some(ln) = lines.pop_front() {
-            // update/join ブロックはグループを閉じる READY まで貯める。
-            if ln.starts_with("/os: update") || ln.starts_with("/os: join") {
-                last_activity = std::time::Instant::now();
-                in_block = true;
-                block.clear();
-                block.push(ln);
+        let mut raw = Vec::<u8>::new();
+        let mut lines = std::collections::VecDeque::<String>::new();
+        let mut block = Vec::<String>::new();
+        let mut in_block = false;
+        let mut logged_in = false;
+        let mut my_color: Option<char> = None;
+        let mut my_clock_secs: Option<u64> = None;
+        let mut in_match = false;
+        let mut asked_at: Option<std::time::Instant> = None;
+        let mut ready_at: Option<std::time::Instant> = None;
+        let mut awaiting_stored = false;
+        let mut stored_ids: Vec<String> = Vec::new();
+        let mut last_activity = std::time::Instant::now();
+        let mut lost = false;
+
+        loop {
+            // 非対局時のみの idle 退出。対局中は無期限に待つ (相手の長考・
+            // 中断復帰待ちを含む)。
+            if !in_match && last_activity.elapsed().as_secs() > 900 {
+                eprintln!("### idle timeout (not in match)");
+                send("quit");
+                break 'session;
+            }
+            let mut chunk = [0u8; 4096];
+            match stream.read(&mut chunk) {
+                Ok(0) => {
+                    lost = true;
+                }
+                Ok(n) => raw.extend_from_slice(&chunk[..n]),
+                Err(e)
+                    if e.kind() == std::io::ErrorKind::WouldBlock
+                        || e.kind() == std::io::ErrorKind::TimedOut => {}
+                Err(_) => {
+                    lost = true;
+                }
+            }
+            if lost {
+                eprintln!("### connection lost (in_match={in_match}); reconnecting");
+                std::thread::sleep(std::time::Duration::from_secs(10));
+                first_session = false;
+                continue 'session;
+            }
+            while let Some(nl) = raw.iter().position(|&b| b == b'\n') {
+                let mut line: Vec<u8> = raw.drain(..=nl).collect();
+                while line.last() == Some(&b'\n') || line.last() == Some(&b'\r') {
+                    line.pop();
+                }
+                let line = String::from_utf8_lossy(&line).into_owned();
+                println!("{line}");
+                lines.push_back(line);
+            }
+            if !logged_in {
+                let tail = String::from_utf8_lossy(&raw).to_lowercase();
+                let tail2 = lines
+                    .iter()
+                    .rev()
+                    .take(3)
+                    .map(|l| l.to_lowercase())
+                    .collect::<Vec<_>>()
+                    .join(" ");
+                if tail.contains("enter login") || tail2.contains("enter login") {
+                    send(&login);
+                    lines.clear();
+                    raw.clear();
+                } else if tail.contains("password") || tail2.contains("password") {
+                    send(&pw);
+                    lines.clear();
+                    raw.clear();
+                    logged_in = true;
+                    ready_at = Some(std::time::Instant::now());
+                    last_activity = std::time::Instant::now();
+                    send("verbose -news -faq -help -ack");
+                    send("tell /os client -");
+                    send("tell /os trust +");
+                    send("tell /os rated +");
+                    send("tell /os open 1");
+                    if !first_session {
+                        // 再接続: 中断ゲームを探して自動再開する。
+                        awaiting_stored = true;
+                        send("tell /os stored");
+                    }
+                }
                 continue;
             }
-            if in_block {
-                if ln == "READY" {
-                    in_block = false;
-                    // ブロックから自色・盤面 8 行・手番を取る。
-                    let mut rows = Vec::<Vec<char>>::new();
-                    let mut turn: Option<char> = None;
-                    let mut mid = String::new();
-                    if let Some(id) = block[0].split_whitespace().nth(2) {
-                        mid = id.to_string();
+
+            while let Some(ln) = lines.pop_front() {
+                if awaiting_stored {
+                    // "|.82726   30 Jul 2026 ... kuroobi  Rhapsody s8r16:l"
+                    if let Some(rest) = ln.strip_prefix('|') {
+                        let id = rest.split_whitespace().next().unwrap_or("");
+                        if id.starts_with('.') && rest.contains(&login) {
+                            stored_ids.push(id.to_string());
+                        }
                     }
-                    for l in &block {
-                        let b = l.strip_prefix('|').unwrap_or(l);
-                        if b.starts_with(&format!("{login} ")) {
-                            // "|name  (1720.0 *) 04:53,30:0//02:00,30:0"
-                            if let Some(open) = b.find('(') {
-                                if let Some(close) = b[open..].find(')') {
-                                    let inner = &b[open + 1..open + close];
-                                    if let Some(c) = inner.trim().chars().last() {
-                                        if c == '*' || c == 'O' {
-                                            my_color = Some(c);
+                    if ln == "READY" {
+                        awaiting_stored = false;
+                        if let Some(id) = stored_ids.first().cloned() {
+                            eprintln!("### resuming stored {id}");
+                            send(&format!("tell /os ask {id}"));
+                            asked_at = Some(std::time::Instant::now());
+                        }
+                    }
+                }
+                if ln.starts_with("/os: update") || ln.starts_with("/os: join") {
+                    last_activity = std::time::Instant::now();
+                    in_block = true;
+                    block.clear();
+                    block.push(ln);
+                    continue;
+                }
+                if in_block {
+                    if ln == "READY" {
+                        in_block = false;
+                        let mut rows = Vec::<Vec<char>>::new();
+                        let mut turn: Option<char> = None;
+                        let mut mid = String::new();
+                        if let Some(id) = block[0].split_whitespace().nth(2) {
+                            mid = id.to_string();
+                        }
+                        for l in &block {
+                            let b = l.strip_prefix('|').unwrap_or(l);
+                            if b.starts_with(&format!("{login} ")) {
+                                if let Some(open) = b.find('(') {
+                                    if let Some(close) = b[open..].find(')') {
+                                        let inner = &b[open + 1..open + close];
+                                        if let Some(c) = inner.trim().chars().last() {
+                                            if c == '*' || c == 'O' {
+                                                my_color = Some(c);
+                                                in_match = true;
+                                            }
                                         }
-                                    }
-                                    // ')' の後の先頭フィールドが残り時間。
-                                    let after = b[open + close..]
-                                        .trim_start_matches(')')
-                                        .trim_start();
-                                    let head: String = after
-                                        .chars()
-                                        .take_while(|c| c.is_ascii_digit() || *c == ':')
-                                        .collect();
-                                    let mut secs = 0u64;
-                                    for part in head.split(':') {
-                                        if let Ok(v) = part.parse::<u64>() {
-                                            secs = secs * 60 + v;
+                                        let after = b[open + close..]
+                                            .trim_start_matches(')')
+                                            .trim_start();
+                                        let head: String = after
+                                            .chars()
+                                            .take_while(|c| c.is_ascii_digit() || *c == ':')
+                                            .collect();
+                                        let mut secs = 0u64;
+                                        for part in head.split(':') {
+                                            if let Ok(v) = part.parse::<u64>() {
+                                                secs = secs * 60 + v;
+                                            }
                                         }
-                                    }
-                                    if !head.is_empty() {
-                                        my_clock_secs = Some(secs);
+                                        if !head.is_empty() {
+                                            my_clock_secs = Some(secs);
+                                        }
                                     }
                                 }
                             }
-                        }
-                        let t = b.trim_start();
-                        if let Some(rest) = t.strip_prefix(|c: char| c.is_ascii_digit()) {
-                            let cells: Vec<char> = rest
-                                .split_whitespace()
-                                .take(8)
-                                .filter_map(|w| {
-                                    (w.len() == 1
-                                        && matches!(w.as_bytes()[0], b'-' | b'*' | b'O'))
-                                    .then(|| w.chars().next().unwrap())
-                                })
-                                .collect();
-                            if cells.len() == 8 {
-                                rows.push(cells);
+                            let t = b.trim_start();
+                            if let Some(rest) = t.strip_prefix(|c: char| c.is_ascii_digit()) {
+                                let cells: Vec<char> = rest
+                                    .split_whitespace()
+                                    .take(8)
+                                    .filter_map(|w| {
+                                        (w.len() == 1
+                                            && matches!(w.as_bytes()[0], b'-' | b'*' | b'O'))
+                                        .then(|| w.chars().next().unwrap())
+                                    })
+                                    .collect();
+                                if cells.len() == 8 {
+                                    rows.push(cells);
+                                }
+                            }
+                            if t.starts_with("* to move") {
+                                turn = Some('*');
+                            } else if t.starts_with("O to move") {
+                                turn = Some('O');
                             }
                         }
-                        if t.starts_with("* to move") {
-                            turn = Some('*');
-                        } else if t.starts_with("O to move") {
-                            turn = Some('O');
-                        }
-                    }
-                    if rows.len() == 8 && turn.is_some() && turn == my_color {
-                        // rank-major の obf 文字列に変換。'*' が黒 = X。
-                        let mut sboard = String::with_capacity(66);
-                        for r in &rows {
-                            for &c in r {
-                                sboard.push(if c == '*' {
-                                    'X'
-                                } else if c == 'O' {
-                                    'O'
-                                } else {
-                                    '-'
-                                });
+                        if rows.len() == 8 && turn.is_some() && turn == my_color {
+                            let mut sboard = String::with_capacity(66);
+                            for r in &rows {
+                                for &c in r {
+                                    sboard.push(if c == '*' {
+                                        'X'
+                                    } else if c == 'O' {
+                                        'O'
+                                    } else {
+                                        '-'
+                                    });
+                                }
+                            }
+                            sboard.push(' ');
+                            sboard.push(if my_color == Some('*') { 'X' } else { 'O' });
+                            if let Ok(board) = Board::from_string(&sboard) {
+                                let m = match pick(&board, &mut search, &mut solver, my_clock_secs)
+                                {
+                                    Some(p) => coord(p),
+                                    None => "pa".to_string(),
+                                };
+                                send(&format!("tell /os play {mid} {m}"));
                             }
                         }
-                        sboard.push(' ');
-                        sboard.push(if my_color == Some('*') { 'X' } else { 'O' });
-                        if let Ok(board) = Board::from_string(&sboard) {
-                            let m = match pick(&board, &mut search, &mut solver, my_clock_secs) {
-                                Some(p) => coord(p),
-                                None => "pa".to_string(),
-                            };
-                            send(&format!("tell /os play {mid} {m}"));
-                        }
+                    } else {
+                        block.push(ln);
                     }
-                } else {
-                    block.push(ln);
+                    continue;
                 }
-                continue;
-            }
-            if ln.starts_with("/os: ERR") {
-                // 致命的なのは申し込みが受からない類だけ。終局直後に残骸の
-                // update へ打った play の "match not found" 等は無視する。
-                let fatal = ln.contains("formula")
-                    || ln.contains("not accepting")
-                    || ln.contains("not registered")
-                    || (ln.contains("not found") && ln.contains(&opponent));
-                if fatal {
-                    eprintln!("### request rejected: {ln}");
-                    send("quit");
-                    break 'outer;
+                if ln.starts_with("/os: ERR") {
+                    // 対局中は何があっても離脱しない。非対局時のみ、申し込みが
+                    // 受からない類の ERR で終了する。
+                    let fatal = !in_match
+                        && (ln.contains("formula")
+                            || ln.contains("not accepting")
+                            || ln.contains("not registered")
+                            || ln.contains("variable mismatch")
+                            || (ln.contains("not found") && !opponent.is_empty() && ln.contains(&opponent)));
+                    if fatal {
+                        eprintln!("### request rejected: {ln}");
+                        send("quit");
+                        break 'session;
+                    }
+                    eprintln!("### ignored: {ln}");
+                    continue;
                 }
-                eprintln!("### ignored: {ln}");
-                continue;
-            }
-            if ln.starts_with("/os: - match") {
-                games_done += 1;
-                println!("### game {games_done}/{} over: {ln}", args.games);
-                my_color = None;
-                my_clock_secs = None;
-                asked_at = None;
-                if games_done >= args.games {
-                    send("quit");
-                    break 'outer;
+                if ln.starts_with("/os: + match") && ln.contains(&login) {
+                    in_match = true;
+                    last_activity = std::time::Instant::now();
+                }
+                if ln.starts_with("/os: - match") && ln.contains(&login) {
+                    in_match = false;
+                    my_color = None;
+                    my_clock_secs = None;
+                    asked_at = None;
+                    games_done += 1;
+                    stored_ids.retain(|_| false);
+                    println!("### game {games_done}/{} over: {ln}", args.games);
+                    if games_done >= args.games {
+                        send("quit");
+                        break 'session;
+                    }
                 }
             }
-        }
 
-        if let Some(t0) = ready_at {
-            if asked_at.is_none() && t0.elapsed().as_secs() >= 4 {
-                asked_at = Some(std::time::Instant::now());
-                if let Some(id) = &args.resume {
-                    // 中断ゲームの再開 (ask <.stored>)。
-                    send(&format!("tell /os ask {id}"));
-                } else {
-                    send(&format!("tell /os ask {} {} {opponent}", args.gtype, args.time));
+            if let Some(t0) = ready_at {
+                if first_session
+                    && !in_match
+                    && asked_at.is_none()
+                    && t0.elapsed().as_secs() >= 4
+                {
+                    asked_at = Some(std::time::Instant::now());
+                    if let Some(id) = &args.resume {
+                        send(&format!("tell /os ask {id}"));
+                    } else {
+                        send(&format!("tell /os ask {} {} {opponent}", args.gtype, args.time));
+                    }
                 }
             }
         }
