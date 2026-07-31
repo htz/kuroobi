@@ -74,6 +74,33 @@ struct HintView {
     exact: bool,
 }
 
+#[derive(Serialize)]
+struct EvalPoint {
+    n: usize,
+    /// 黒視点の石差。
+    value: f32,
+    exact: bool,
+}
+
+/// 手順 (line) 上の n 手目直後の盤面。redo 側 (現在より先) も辿れるよう、
+/// 初期局面から line を再生して作る (GUI の対局は常に標準初期配置)。
+fn board_at_line(game: &Reversi, n: usize) -> Result<Board, String> {
+    let line = game.line();
+    if n > line.len() {
+        return Err("out of range".into());
+    }
+    let mut b = Board::new();
+    for e in &line[..n] {
+        match e {
+            Some(p) => {
+                b.make_move(*p).map_err(|e| format!("{e:?}"))?;
+            }
+            None => b.pass(),
+        }
+    }
+    Ok(b)
+}
+
 fn view(game: &Reversi) -> GameView {
     let b = &game.board;
     let mut cells = vec![0u8; 64];
@@ -255,14 +282,113 @@ async fn analyze(app: State<'_, App>, depth: u32) -> Result<Vec<HintView>, Strin
         .collect())
 }
 
+/// 手順上の n 手目直後の局面を固定深さで評価する (評価値グラフ用)。
+/// 返す値は黒視点。
+#[tauri::command]
+async fn eval_at(app: State<'_, App>, n: usize, depth: u32) -> Result<EvalPoint, String> {
+    ensure_engine(&app)?;
+    let board = board_at_line(&app.game.lock().unwrap(), n)?;
+    let white = board.player() == Color::White;
+    let eng = app.engine.clone();
+    let mv = tauri::async_runtime::spawn_blocking(move || {
+        let mut guard = eng.lock().unwrap();
+        guard.as_mut().unwrap().eval_position(&board, depth)
+    })
+    .await
+    .map_err(|e| e.to_string())?;
+    let value = finite(if white { -mv.value } else { mv.value });
+    Ok(EvalPoint { n, value, exact: mv.exact })
+}
+
+#[tauri::command]
+async fn save_kifu(
+    app: State<'_, App>,
+    handle: tauri::AppHandle,
+) -> Result<Option<String>, String> {
+    use tauri_plugin_dialog::DialogExt;
+    let kifu = app.game.lock().unwrap().to_kifu();
+    if kifu.is_empty() {
+        return Err("棋譜が空です".into());
+    }
+    let Some(path) = handle
+        .dialog()
+        .file()
+        .add_filter("kifu", &["txt", "kifu"])
+        .set_file_name("kuroobi_game.txt")
+        .blocking_save_file()
+    else {
+        return Ok(None);
+    };
+    let p = path.into_path().map_err(|e| e.to_string())?;
+    std::fs::write(&p, format!("{kifu}\n")).map_err(|e| e.to_string())?;
+    Ok(Some(p.display().to_string()))
+}
+
+/// 貼り付け・ファイル内容から f5 形式の着手列だけを抽出する。
+/// 手番号 (`12.`) や空白・区切り文字が混ざっていても「英字 a-h + 数字 1-8」の
+/// ペアだけを拾うので壊れない。
+fn extract_kifu(text: &str) -> String {
+    let chars: Vec<char> = text.to_lowercase().chars().collect();
+    let mut s = String::new();
+    let mut i = 0;
+    while i < chars.len() {
+        if ('a'..='h').contains(&chars[i])
+            && i + 1 < chars.len()
+            && ('1'..='8').contains(&chars[i + 1])
+        {
+            s.push(chars[i]);
+            s.push(chars[i + 1]);
+            i += 2;
+        } else {
+            i += 1;
+        }
+    }
+    s
+}
+
+fn load_kifu_into(app: &State<App>, text: &str) -> Result<GameView, String> {
+    let s = extract_kifu(text);
+    if s.is_empty() {
+        return Err("棋譜が見つかりません".into());
+    }
+    let loaded = Reversi::from_kifu(&s)?;
+    let mut game = app.game.lock().unwrap();
+    *game = loaded;
+    Ok(view(&game))
+}
+
+#[tauri::command]
+async fn load_kifu(app: State<'_, App>, handle: tauri::AppHandle) -> Result<Option<GameView>, String> {
+    use tauri_plugin_dialog::DialogExt;
+    let Some(path) = handle
+        .dialog()
+        .file()
+        .add_filter("kifu", &["txt", "kifu"])
+        .blocking_pick_file()
+    else {
+        return Ok(None);
+    };
+    let p = path.into_path().map_err(|e| e.to_string())?;
+    let s = std::fs::read_to_string(&p).map_err(|e| e.to_string())?;
+    load_kifu_into(&app, &s).map(Some)
+}
+
+/// 貼り付けテキストから棋譜を読み込む。
+#[tauri::command]
+fn load_kifu_text(app: State<App>, text: String) -> Result<GameView, String> {
+    load_kifu_into(&app, &text)
+}
+
 fn main() {
     tauri::Builder::default()
+        .plugin(tauri_plugin_dialog::init())
         .manage(App {
             game: Mutex::new(Reversi::new()),
             engine: Arc::new(Mutex::new(None)),
         })
         .invoke_handler(tauri::generate_handler![
-            state, new_game, play, undo, goto, set_levels, think, apply_move, analyze
+            state, new_game, play, undo, goto, set_levels, think, apply_move, analyze,
+            eval_at, save_kifu, load_kifu, load_kifu_text
         ])
         .run(tauri::generate_context!())
         .expect("tauri run");

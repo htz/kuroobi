@@ -20,9 +20,11 @@
   }
   body { display: flex; }
 
-  /* ---- 盤 ---- */
-  #board-wrap { flex: 1; display: flex; align-items: center; justify-content: center; padding: 20px; }
-  svg { max-width: 100%; max-height: 100%; filter: drop-shadow(0 8px 28px rgba(0,0,0,.45)); }
+  /* ---- 盤 + グラフ (メイン領域) ---- */
+  #main { flex: 1; display: flex; flex-direction: column; padding: 16px; gap: 12px; min-width: 0; }
+  #board-wrap { flex: 1; display: flex; align-items: center; justify-content: center; min-height: 0; }
+  #board { max-width: 100%; max-height: 100%; filter: drop-shadow(0 8px 28px rgba(0,0,0,.45)); }
+  #graph-card { flex: none; }
 
   /* ---- サイドパネル ---- */
   #panel {
@@ -93,6 +95,8 @@
   button.btn:disabled { opacity: .38; cursor: default; transform: none; }
   button.btn.primary { background: var(--accent-dim); border-color: var(--accent-dim); color: #fff; }
   button.btn.primary:hover { background: #366fae; }
+  button.btn.small { padding: 4px 10px; font-size: 11px; flex: none; }
+  #graph { width: 100%; height: auto; display: block; filter: none; }
   .row { display: flex; gap: 8px; }
   .row > * { flex: 1; }
 
@@ -135,10 +139,37 @@
   .mv.pass { color: var(--sub); }
   .mv.nolink { cursor: default; }
   .mv.nolink:hover { border-color: transparent; }
+
+  /* ---- 棋譜貼り付けモーダル ---- */
+  #paste-modal {
+    position: fixed; inset: 0; background: rgba(0,0,0,.55);
+    display: flex; align-items: center; justify-content: center; z-index: 10;
+  }
+  #paste-modal[hidden] { display: none; }
+  #paste-modal .box {
+    width: 420px; background: var(--panel); border: 1px solid var(--border);
+    border-radius: 12px; padding: 16px; display: flex; flex-direction: column; gap: 10px;
+  }
+  #paste-modal textarea {
+    height: 110px; resize: none; border-radius: 8px; border: 1px solid var(--border);
+    background: #1a1f25; color: var(--text); padding: 8px 10px;
+    font-family: ui-monospace, SFMono-Regular, monospace; font-size: 12px;
+    outline: none; -webkit-user-select: text; user-select: text; cursor: text;
+  }
+  #paste-modal textarea:focus { border-color: var(--accent-dim); }
 </style>
 </head>
 <body oncontextmenu="return false">
-  <div id="board-wrap"><svg id="board" viewBox="0 0 880 880"></svg></div>
+  <div id="main">
+    <div id="board-wrap"><svg id="board" viewBox="0 0 880 880"></svg></div>
+    <div class="card" id="graph-card">
+      <div class="row" style="align-items:center">
+        <label class="field" style="flex:1; margin:0">評価値グラフ (黒視点)</label>
+        <button class="btn small" id="btn-graph">更新</button>
+      </div>
+      <svg id="graph" viewBox="0 0 800 190"></svg>
+    </div>
+  </div>
   <div id="panel">
     <h1>KUROOBI</h1>
 
@@ -153,12 +184,18 @@
 
     <div class="card">
       <div>
+        <label class="field">モード</label>
+        <div class="seg" id="app-mode">
+          <button data-v="vs" class="active">対局</button>
+          <button data-v="study">検討</button>
+        </div>
+      </div>
+      <div id="side-row">
         <label class="field">エンジンの担当</label>
         <div class="seg" id="mode">
           <button data-v="black">黒</button>
           <button data-v="white" class="active">白</button>
           <button data-v="both">観戦</button>
-          <button data-v="off">なし</button>
         </div>
       </div>
       <div>
@@ -183,7 +220,7 @@
 
     <div class="card">
       <button class="btn primary" id="btn-start">▶ 対局開始</button>
-      <div class="row">
+      <div class="row" id="game-btns">
         <button class="btn" id="btn-new">新規対局</button>
         <button class="btn" id="btn-undo">待った</button>
       </div>
@@ -199,8 +236,24 @@
     </div>
 
     <div>
-      <label class="field">棋譜</label>
+      <div class="row" style="align-items:center; margin-bottom:4px">
+        <label class="field" style="flex:1; margin:0">棋譜</label>
+        <button class="btn small" id="btn-save">保存</button>
+        <button class="btn small" id="btn-load">読込</button>
+      </div>
       <div id="kifu"></div>
+    </div>
+  </div>
+
+  <div id="paste-modal" hidden>
+    <div class="box">
+      <label class="field" style="margin:0">棋譜の読み込み — f5d6… 形式を貼り付け (手番号・空白入りでも可)</label>
+      <textarea id="paste-text" placeholder="f5d6c3d3c4f4f3e3e2…"></textarea>
+      <div class="row">
+        <button class="btn" id="paste-file">ファイルから…</button>
+        <button class="btn primary" id="paste-ok">読み込む</button>
+        <button class="btn" id="paste-cancel">キャンセル</button>
+      </div>
     </div>
   </div>
 
@@ -218,6 +271,7 @@ let view = null;
 let hints = null;
 let thinking = false;   // エンジンの思考 (think) が進行中
 let playing = false;    // 対局中 (エンジンが自動で応手する状態)
+let appMode = 'vs';     // 'vs' = 対局モード, 'study' = 検討モード
 let autoHint = false;
 let hintSeq = 0;        // 解析要求の世代 (古い結果を捨てる)
 
@@ -325,6 +379,13 @@ function render() {
     } else if (legal.has(sq)) {
       const g = el('g', { cursor: thinking ? 'default' : 'pointer' });
       g.appendChild(el('circle', { cx, cy, r: 46, fill: 'transparent' }));
+      // 棋譜上でこの局面の次に実際に指された手は金色のリングで区別する
+      if (view.moves[view.cursor] === sq) {
+        g.appendChild(el('circle', {
+          cx, cy, r: 38, fill: 'none',
+          stroke: 'var(--gold)', 'stroke-width': 2.5, 'stroke-dasharray': '6 5',
+        }));
+      }
       const h = hints ? hints[sq] : undefined;
       if (h) {
         const isBest = h.value >= bestHint - 1e-6;
@@ -363,6 +424,11 @@ function updatePanel() {
   start.textContent = playing ? '■ 対局停止' : '▶ 対局開始';
   start.classList.toggle('primary', !playing);
   start.disabled = !playing && (view.over || thinking);
+  // モード別の表示: 対局 = 担当 + 開始/停止 + 新規/待った、検討 = 評価グラフ
+  start.style.display = appMode === 'vs' ? '' : 'none';
+  $('side-row').style.display = appMode === 'vs' ? '' : 'none';
+  $('game-btns').style.display = appMode === 'vs' ? 'flex' : 'none';
+  $('graph-card').style.display = appMode === 'study' ? 'flex' : 'none';
 }
 
 function setPlaying(b) {
@@ -371,6 +437,130 @@ function setPlaying(b) {
 }
 
 const sqName = sq => 'abcdefgh'[Math.floor(sq / 8)] + (sq % 8 + 1);
+
+// ---- 評価値グラフ (黒視点の折れ線、1 系列) ----
+let graphVals = null;   // [n] = {value, exact} / undefined。長さ moves.length+1
+let graphKey = '';      // どの手順に対する値か (変わったら無効化)
+let graphSeq = 0;
+let graphBusy = false;
+const lineKey = () => view ? view.moves.map(m => m == null ? 'p' : m).join(',') : '';
+
+async function updateGraph() {
+  if (graphBusy || !view) return;
+  graphBusy = true;
+  const seq = ++graphSeq;
+  const key = lineKey();
+  const len = view.moves.length;
+  if (!graphVals || graphKey !== key) { graphVals = new Array(len + 1); graphKey = key; }
+  await pushLevels();
+  // グラフは全局面を測るので深さは控えめに (レベル深さ、上限 14)
+  const depth = Math.min(currentLevels().depth, 14);
+  for (let n = 0; n <= len; n++) {
+    if (seq !== graphSeq || lineKey() !== key) break;
+    if (graphVals[n]) continue;
+    // 次の手がパス = 打てない手番の局面は測らない (0 が混ざるだけ)
+    if (n < len && view.moves[n] == null) continue;
+    setStatus(`グラフ計算中 ${n}/${len}…`, true);
+    try {
+      const p = await invoke('eval_at', { n, depth });
+      if (seq !== graphSeq || lineKey() !== key) break;
+      if (Number.isFinite(p.value)) graphVals[n] = { value: p.value, exact: p.exact };
+    } catch (e) { setStatus('' + e, false); break; }
+    drawGraph();
+  }
+  if (seq === graphSeq) setStatus('', false);
+  graphBusy = false;
+}
+
+function drawGraph() {
+  const svg = $('graph');
+  svg.innerHTML = '';
+  const W = 800, H = 190, L = 36, R = 16, T = 16, B = 24;
+  svg.appendChild(el('rect', { x: 0, y: 0, width: W, height: H, rx: 8, fill: '#1a1f25' }));
+  if (!view) return;
+  const len = Math.max(1, view.moves.length);
+  const vals = graphVals || [];
+  const defined = vals.filter(Boolean).map(v => Math.abs(v.value));
+  const ymax = Math.max(8, Math.min(64, Math.ceil((defined.length ? Math.max(...defined) : 0) / 8) * 8 || 8));
+  const clampV = v => Math.max(-ymax, Math.min(ymax, v));
+  const x = n => L + (W - L - R) * n / len;
+  const y = v => T + (H - T - B) * (1 - (v + ymax) / (2 * ymax));
+
+  // 目盛 (控えめ): ±ymax とゼロ線
+  const grid = (v, label, strong) => {
+    svg.appendChild(el('line', { x1: L, y1: y(v), x2: W - R, y2: y(v), stroke: strong ? '#3a4450' : '#272e37', 'stroke-width': 1 }));
+    svg.appendChild(el('text', { x: L - 4, y: y(v) + 3, 'text-anchor': 'end', fill: 'var(--sub)', 'font-size': 11 }, label));
+  };
+  grid(ymax, '+' + ymax, false);
+  grid(-ymax, '-' + ymax, false);
+  grid(0, '0', true);
+  svg.appendChild(el('text', { x: W - R, y: T + 7, 'text-anchor': 'end', fill: 'var(--sub)', 'font-size': 11 }, '黒有利'));
+  svg.appendChild(el('text', { x: W - R, y: H - B - 2, 'text-anchor': 'end', fill: 'var(--sub)', 'font-size': 11 }, '白有利'));
+  for (let n = 10; n <= view.moves.length; n += 10)
+    svg.appendChild(el('text', { x: x(n), y: H - 4, 'text-anchor': 'middle', fill: 'var(--sub)', 'font-size': 11 }, String(n)));
+
+  // 現在位置
+  svg.appendChild(el('line', { x1: x(view.cursor), y1: T, x2: x(view.cursor), y2: H - B, stroke: 'var(--accent-dim)', 'stroke-width': 1, 'stroke-dasharray': '3 3' }));
+
+  if (!graphVals || defined.length === 0) {
+    svg.appendChild(el('text', { x: (L + W - R) / 2, y: H / 2 - 8, 'text-anchor': 'middle', fill: 'var(--sub)', 'font-size': 13 },
+      graphBusy ? '計算中…' : '「更新」で全局面を採点します'));
+    return;
+  }
+
+  // 折れ線 (パス・未計算の点は飛ばして繋ぐ)
+  let d = '', pen = false;
+  vals.forEach((v, n) => {
+    if (!v) return;
+    d += (pen ? 'L' : 'M') + x(n).toFixed(1) + ' ' + y(clampV(v.value)).toFixed(1) + ' ';
+    pen = true;
+  });
+  svg.appendChild(el('path', { d, fill: 'none', stroke: 'var(--accent)', 'stroke-width': 2, 'stroke-linejoin': 'round' }));
+  vals.forEach((v, n) => {
+    if (!v) return;
+    svg.appendChild(el('circle', {
+      cx: x(n), cy: y(clampV(v.value)), r: v.exact ? 4 : 3,
+      fill: v.exact ? 'var(--gold)' : 'var(--accent)',
+      stroke: '#1a1f25', 'stroke-width': 1,
+    }));
+  });
+
+  // ホバー: 最寄り点の値を表示、クリックでその局面へ
+  const tipDot = el('circle', { r: 6, fill: 'none', stroke: '#fff', 'stroke-width': 1.5, visibility: 'hidden' });
+  const tipText = el('text', { 'font-size': 12, fill: 'var(--text)', 'text-anchor': 'middle', visibility: 'hidden' });
+  svg.appendChild(tipDot); svg.appendChild(tipText);
+  const hover = el('rect', { x: L, y: 0, width: W - L - R, height: H, fill: 'transparent', cursor: 'pointer' });
+  const nearest = ev => {
+    const r = svg.getBoundingClientRect();
+    const mx = (ev.clientX - r.left) * (W / r.width);
+    let n = Math.round((mx - L) / ((W - L - R) / len));
+    n = Math.max(0, Math.min(view.moves.length, n));
+    return vals[n] ? n : null;
+  };
+  hover.addEventListener('mousemove', ev => {
+    const n = nearest(ev);
+    if (n == null) { tipDot.setAttribute('visibility', 'hidden'); tipText.setAttribute('visibility', 'hidden'); return; }
+    const v = vals[n];
+    tipDot.setAttribute('cx', x(n)); tipDot.setAttribute('cy', y(clampV(v.value)));
+    tipDot.setAttribute('visibility', 'visible');
+    tipText.textContent = `${n}手 ${v.value > 0 ? '+' : ''}${v.exact ? v.value.toFixed(0) : v.value.toFixed(1)}`;
+    tipText.setAttribute('x', Math.max(L + 20, Math.min(W - R - 20, x(n))));
+    tipText.setAttribute('y', y(clampV(v.value)) < H / 2 ? y(clampV(v.value)) + 14 : y(clampV(v.value)) - 8);
+    tipText.setAttribute('visibility', 'visible');
+  });
+  hover.addEventListener('mouseleave', () => {
+    tipDot.setAttribute('visibility', 'hidden');
+    tipText.setAttribute('visibility', 'hidden');
+  });
+  hover.addEventListener('click', ev => {
+    const n0 = nearest(ev);
+    if (n0 == null) return;
+    let n = n0;
+    while (n < view.moves.length && view.moves[n] == null) n++;
+    jumpTo(n);
+  });
+  svg.appendChild(hover);
+}
 
 // 棋譜をチップ列で描く。クリックで**その手を打った直後**の局面へ移動。
 // 先の手は薄く残り、前へも戻れる。
@@ -418,7 +608,11 @@ async function jumpTo(n) {
   } catch (e) { setStatus('' + e, false); }
 }
 
-function setView(v) { view = v; render(); updatePanel(); refreshHints(); }
+function setView(v) {
+  view = v;
+  if (graphKey !== lineKey()) { graphVals = null; graphKey = lineKey(); }
+  render(); updatePanel(); drawGraph(); refreshHints();
+}
 
 // 常時ヒント: 人の手番 (または検討モード) になったら裏で採点する。
 // 盤操作はブロックせず、返ってきた時に局面が進んでいたら捨てる。
@@ -451,8 +645,8 @@ function setStatus(s, spin) {
 }
 
 function engineSide() {
+  if (appMode === 'study') return [];   // 検討モードではエンジンは打たない
   const m = document.querySelector('#mode button.active').dataset.v;
-  if (m === 'off') return [];
   if (m === 'both') return ['black', 'white'];
   return [m];
 }
@@ -525,6 +719,7 @@ $('btn-start').addEventListener('click', async () => {
     return;
   }
   await pushLevels();
+  graphSeq++;               // 進行中のグラフ計算を打ち切る
   setPlaying(true);
   setStatus('', false);
   await maybeEngineTurn();
@@ -546,6 +741,20 @@ $('btn-undo').addEventListener('click', async () => {
     if (engineSide().includes(view.player) && view.move_count > 0)
       setView(await invoke('undo'));
   } catch (e) { setStatus('' + e, false); }
+});
+
+document.querySelectorAll('#app-mode button').forEach(b => {
+  b.addEventListener('click', () => {
+    document.querySelectorAll('#app-mode button').forEach(x => x.classList.remove('active'));
+    b.classList.add('active');
+    appMode = b.dataset.v;
+    if (appMode === 'study' && playing) setPlaying(false);
+    graphSeq++;             // モードをまたぐグラフ計算は打ち切る
+    setStatus(appMode === 'study'
+      ? '検討モード: 両方の手を自由に打てます'
+      : '対局モード: 「▶ 対局開始」でエンジンと対局', false);
+    updatePanel(); drawGraph(); refreshHints();
+  });
 });
 
 document.querySelectorAll('#mode button').forEach(b => {
@@ -573,6 +782,47 @@ document.querySelectorAll('#auto-hint button').forEach(b => {
       render();
     }
   });
+});
+
+$('btn-graph').addEventListener('click', updateGraph);
+
+$('btn-save').addEventListener('click', async () => {
+  try {
+    const p = await invoke('save_kifu');
+    if (p) setStatus('保存しました: ' + p, false);
+  } catch (e) { setStatus('' + e, false); }
+});
+
+function afterKifuLoad(v) {
+  setPlaying(false);
+  hints = null;
+  $('eval').textContent = '';
+  $('paste-modal').hidden = true;
+  setView(v);
+  setStatus('棋譜を読み込みました', false);
+}
+
+$('btn-load').addEventListener('click', () => {
+  $('paste-text').value = '';
+  $('paste-modal').hidden = false;
+  $('paste-text').focus();
+});
+
+$('paste-cancel').addEventListener('click', () => { $('paste-modal').hidden = true; });
+
+$('paste-ok').addEventListener('click', async () => {
+  try {
+    const text = $('paste-text').value;
+    if (!text.trim()) return;
+    afterKifuLoad(await invoke('load_kifu_text', { text }));
+  } catch (e) { setStatus('' + e, false); $('paste-modal').hidden = true; }
+});
+
+$('paste-file').addEventListener('click', async () => {
+  try {
+    const v = await invoke('load_kifu');
+    if (v) afterKifuLoad(v);
+  } catch (e) { setStatus('' + e, false); $('paste-modal').hidden = true; }
 });
 
 $('level').addEventListener('change', () => {
