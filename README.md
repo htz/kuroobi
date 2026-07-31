@@ -17,6 +17,36 @@ Rust 実装、外部依存なし
 
 ---
 
+## リポジトリ構成
+
+```text
+src/
+├── lib.rs             クレートルート (公開 API の再輸出)
+├── board.rs           盤面型 Board (2×u64 + 手番 + 空きマス数)
+├── position.rs        座標型 (A1..H8 ⇄ ビット index)
+├── color.rs           手番 (Black/White)
+├── game.rs            対局進行・履歴・棋譜 (KIFU)
+├── bitboard.rs        石返し・合法手生成のビット演算 (→ §1)
+├── zobrist.rs         局面ハッシュ (CRC32C) (→ §2)
+├── pattern.rs         評価パターン定義 (3 セット) (→ §3)
+├── pattern_index.rs   差分パターンインデックス (→ §4)
+├── evaluator.rs       線形パターン評価 + 教師あり学習 (→ §3, §9)
+├── nnue.rs            NNUE 評価関数 (int16 量子化 + NEON) (→ §13)
+├── search.rs          中盤探索: PVS + ETC + ProbCut (→ §6)
+├── midgame.rs         対局用 NNUE 中盤探索: YBWC + Lazy SMP (→ §13)
+├── solver.rs          終盤完全読みソルバ + 選択読み (帯) (→ §7, §12)
+├── stability.rs       確定石 (→ §5)
+├── trainer.rs         学習データ入出力・TD(λ) (→ §9)
+└── bin/               CLI ツール群 (→ §10 の表)
+tests/                 perft 網羅・ソルバ統合テスト
+benches/               マイクロベンチ (criterion)
+bench/                 σ 較正・帯判定の基準局面 (OBF) と較正データ
+tools/pgo-build.sh     プロファイル誘導最適化ビルド (→ §12)
+weights/ logs/ train_data/   学習済み重み・ログ・教師データ (git 管理外)
+```
+
+---
+
 ## 目次
 
 1. [盤面表現とビット演算](#1-盤面表現とビット演算)
