@@ -204,6 +204,87 @@ pub struct NnueView {
 unsafe impl Send for NnueView {}
 unsafe impl Sync for NnueView {}
 
+/// 変換 i (0..8) を 1 マスに適用する。
+fn sym_square(sq: u8, i: u8) -> u8 {
+    let mut b = 1u64 << sq;
+    if i >= 4 {
+        b = crate::bitboard::mirror_horizontal(b);
+        for _ in 0..(i - 4) {
+            b = crate::bitboard::rotate_90(b);
+        }
+    } else {
+        for _ in 0..i {
+            b = crate::bitboard::rotate_90(b);
+        }
+    }
+    b.trailing_zeros() as u8
+}
+
+/// パターンの重み表に作用するインデックス置換の集合を求める。
+///
+/// マスク m に対称変換 s を適用したセル列が、同じパターンの別マスク k と
+/// **集合として**一致するとき、両者の並びの差が「桁の置換」になる。
+/// 返すのは `perm[j] = j 桁目の移動先` の配列。
+fn symmetry_index_perms(p: &Pattern) -> Vec<Vec<usize>> {
+    let masks: Vec<&[u8]> = p.masks.to_vec();
+    let mut out: Vec<Vec<usize>> = Vec::new();
+    for m in &masks {
+        for s in 0..8u8 {
+            let mapped: Vec<u8> = m.iter().map(|&c| sym_square(c, s)).collect();
+            for k in &masks {
+                if k.len() != mapped.len() {
+                    continue;
+                }
+                let mut sorted_k: Vec<u8> = k.to_vec();
+                sorted_k.sort_unstable();
+                let mut sorted_m = mapped.clone();
+                sorted_m.sort_unstable();
+                if sorted_k != sorted_m {
+                    continue;
+                }
+                // j 桁目 (mask m の j 番目のセル) が mask k の何番目に来るか
+                let mut perm = vec![usize::MAX; mapped.len()];
+                let mut ok = true;
+                for (j, c) in mapped.iter().enumerate() {
+                    match k.iter().position(|x| x == c) {
+                        Some(pos) => perm[j] = pos,
+                        None => {
+                            ok = false;
+                            break;
+                        }
+                    }
+                }
+                if ok && perm.iter().any(|&x| x != usize::MAX) && !out.contains(&perm) {
+                    out.push(perm);
+                }
+                break;
+            }
+        }
+    }
+    // 恒等置換は意味がないので落とす
+    out.retain(|perm| perm.iter().enumerate().any(|(j, &t)| j != t));
+    out
+}
+
+/// インデックスに桁の置換を適用する。桁 j (最上位が 0) の値が perm[j] 桁目へ移る。
+fn apply_index_perm(index: usize, size: usize, perm: &[usize]) -> usize {
+    let mut digits = vec![0usize; size];
+    let mut x = index;
+    for j in (0..size).rev() {
+        digits[j] = x % 3;
+        x /= 3;
+    }
+    let mut out_digits = vec![0usize; size];
+    for j in 0..size {
+        out_digits[perm[j]] = digits[j];
+    }
+    let mut y = 0usize;
+    for j in 0..size {
+        y = y * 3 + out_digits[j];
+    }
+    y
+}
+
 /// One NNUE model over a fixed pattern library.
 pub struct Nnue {
     patterns: &'static [Pattern],
@@ -306,6 +387,73 @@ impl Nnue {
     /// silently overflows those lanes and flips the sign of the score, so keep
     /// the margin — the lost precision is immaterial (see the f32/i16 MSE
     /// comparison: 0.05 disc² at 8x this resolution).
+    /// 重みを 8 対称で平均し、評価を対称不変にする。
+    ///
+    /// パターンのマスクはセル集合としては 8 対称で閉じているが、**並び順が
+    /// 変わる**組み合わせがあるため、同一配置でも別インデックスを引いて評価が
+    /// わずかにずれる (実測 ~0.1 石)。探索はその差を並べ替え順とカット位置の
+    /// 違いに増幅するので、対称局面で答えが変わる。ここでインデックスの軌道
+    /// (対称変換で移り合う集合) ごとに重みを平均して根治する。
+    ///
+    /// 平均なので表現力は落ちず、モデルが本来持つべき対称性を課すだけ。
+    /// `quantize` の前に呼ぶこと (量子化表は f32 から作られるため)。
+    pub fn symmetrize(&mut self) {
+        for (pi, p) in self.patterns.iter().enumerate() {
+            let size = p.size;
+            let table = 3usize.pow(size as u32);
+            let base = self.pattern_offset(pi);
+            let perms = symmetry_index_perms(p);
+            if perms.is_empty() {
+                continue;
+            }
+            let mut seen = vec![false; table];
+            for x in 0..table {
+                if seen[x] {
+                    continue;
+                }
+                // x の軌道を集める
+                let mut orbit = vec![x];
+                seen[x] = true;
+                let mut i = 0;
+                while i < orbit.len() {
+                    let cur = orbit[i];
+                    for perm in &perms {
+                        let y = apply_index_perm(cur, size, perm);
+                        if !seen[y] {
+                            seen[y] = true;
+                            orbit.push(y);
+                        }
+                    }
+                    i += 1;
+                }
+                if orbit.len() < 2 {
+                    continue;
+                }
+                // 軌道内の FT 行 (H 次元) を平均
+                let inv = 1.0 / orbit.len() as f32;
+                for h in 0..H {
+                    let mut sum = 0.0f32;
+                    for &y in &orbit {
+                        sum += self.ft[(base + y) * H + h];
+                    }
+                    let avg = sum * inv;
+                    for &y in &orbit {
+                        self.ft[(base + y) * H + h] = avg;
+                    }
+                }
+            }
+        }
+    }
+
+    /// パターン `pi` の重み表の先頭オフセット (特徴セル単位)。
+    fn pattern_offset(&self, pi: usize) -> usize {
+        let mut off = 0usize;
+        for p in self.patterns.iter().take(pi) {
+            off += 3usize.pow(p.size as u32);
+        }
+        off
+    }
+
     pub fn quantize(&mut self) {
         const ACC_MAX: f32 = 16_640.0; // 64 masks x 256 + bias
         let ft_max = self.ft.iter().fold(1e-6f32, |m, &v| m.max(v.abs()));
