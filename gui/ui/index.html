@@ -1,0 +1,597 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="utf-8">
+<title>Kuroobi</title>
+<style>
+  :root {
+    --bg: #16191d; --panel: #1e2329; --card: #252b33; --border: #313943;
+    --text: #e8ebee; --sub: #8b96a2; --accent: #4d9fff; --accent-dim: #2d5f99;
+    --board: #337a52; --board-dark: #235c3c; --line: #1e5136;
+    --gold: #ffd479;
+  }
+  * { box-sizing: border-box; }
+  html, body {
+    margin: 0; height: 100%; overflow: hidden;
+    background: var(--bg); color: var(--text);
+    font-family: -apple-system, BlinkMacSystemFont, "Hiragino Sans", sans-serif;
+    -webkit-user-select: none; user-select: none;
+    -webkit-user-drag: none; cursor: default;
+  }
+  body { display: flex; }
+
+  /* ---- 盤 ---- */
+  #board-wrap { flex: 1; display: flex; align-items: center; justify-content: center; padding: 20px; }
+  svg { max-width: 100%; max-height: 100%; filter: drop-shadow(0 8px 28px rgba(0,0,0,.45)); }
+
+  /* ---- サイドパネル ---- */
+  #panel {
+    width: 316px; background: var(--panel); border-left: 1px solid var(--border);
+    padding: 18px 16px; display: flex; flex-direction: column; gap: 14px;
+    overflow-y: auto;
+  }
+  h1 { font-size: 17px; margin: 0; letter-spacing: .14em; font-weight: 700; }
+  h1 small { color: var(--sub); font-weight: 400; letter-spacing: .04em; margin-left: 8px; font-size: 11px; }
+
+  .card {
+    background: var(--card); border: 1px solid var(--border); border-radius: 10px;
+    padding: 12px; display: flex; flex-direction: column; gap: 10px;
+  }
+  label.field { font-size: 11px; color: var(--sub); display: block; margin-bottom: 4px; letter-spacing: .05em; }
+
+  /* ---- スコア ---- */
+  .score { display: flex; align-items: center; justify-content: center; gap: 10px; }
+  .side {
+    flex: 1; display: flex; align-items: center; gap: 8px; justify-content: center;
+    padding: 8px 10px; border-radius: 8px; border: 1px solid transparent;
+    font-size: 20px; font-weight: 700; font-variant-numeric: tabular-nums;
+    transition: border-color .15s, background .15s;
+  }
+  .side.turn { border-color: var(--accent); background: rgba(77,159,255,.08); }
+  .disc { width: 18px; height: 18px; border-radius: 50%; flex: none; }
+  .disc.b { background: #101010; border: 1px solid #2e2e2e; }
+  .disc.w { background: #f1f1f1; border: 1px solid #c8c8c8; }
+  .vs { color: var(--sub); font-size: 12px; }
+  #result { text-align: center; font-size: 13px; color: var(--gold); min-height: 0; }
+  #result:empty { display: none; }
+
+  /* ---- セグメント切替 ---- */
+  .seg { display: flex; background: #1a1f25; border: 1px solid var(--border); border-radius: 8px; padding: 3px; gap: 2px; }
+  .seg button {
+    flex: 1; border: none; background: transparent; color: var(--sub);
+    font-size: 12px; padding: 6px 2px; border-radius: 6px; cursor: pointer;
+    font-family: inherit; transition: background .12s, color .12s;
+  }
+  .seg button:hover { color: var(--text); }
+  .seg button.active { background: var(--accent-dim); color: #fff; }
+
+  /* ---- セレクト (ネイティブ矢印を消してカスタム描画) ---- */
+  .selwrap { position: relative; }
+  select {
+    -webkit-appearance: none; appearance: none;
+    width: 100%; padding: 8px 30px 8px 10px; border-radius: 8px;
+    border: 1px solid var(--border); background: #1a1f25; color: var(--text);
+    font-size: 13px; font-family: inherit; cursor: pointer; outline: none;
+    transition: border-color .12s;
+  }
+  select:hover, select:focus { border-color: var(--accent-dim); }
+  .selwrap::after {
+    content: ""; position: absolute; right: 11px; top: 50%;
+    width: 8px; height: 8px; pointer-events: none;
+    border-right: 1.6px solid var(--sub); border-bottom: 1.6px solid var(--sub);
+    transform: translateY(-70%) rotate(45deg);
+  }
+
+  /* ---- ボタン ---- */
+  button.btn {
+    padding: 9px 10px; border-radius: 8px; border: 1px solid var(--border);
+    background: #2a313a; color: var(--text); font-size: 13px; font-family: inherit;
+    cursor: pointer; transition: background .12s, border-color .12s, transform .05s;
+  }
+  button.btn:hover { border-color: var(--accent-dim); background: #313945; }
+  button.btn:active { transform: translateY(1px); }
+  button.btn:disabled { opacity: .38; cursor: default; transform: none; }
+  button.btn.primary { background: var(--accent-dim); border-color: var(--accent-dim); color: #fff; }
+  button.btn.primary:hover { background: #366fae; }
+  .row { display: flex; gap: 8px; }
+  .row > * { flex: 1; }
+
+  /* ---- 情報表示 ---- */
+  #eval { font-size: 13px; min-height: 18px; font-variant-numeric: tabular-nums; }
+  #status { font-size: 12px; color: var(--sub); min-height: 16px; }
+  #status.spin { color: var(--accent); }
+  #status.spin::before {
+    content: ""; display: inline-block; width: 9px; height: 9px; margin-right: 6px;
+    border: 2px solid var(--accent); border-top-color: transparent; border-radius: 50%;
+    animation: rot .8s linear infinite; vertical-align: -1px;
+  }
+  @keyframes rot { to { transform: rotate(360deg); } }
+  #kifu {
+    display: grid; grid-template-columns: repeat(auto-fill, minmax(56px, 1fr));
+    gap: 4px; align-content: flex-start;
+    background: #1a1f25; border: 1px solid var(--border); border-radius: 8px;
+    padding: 8px; min-height: 56px; max-height: 168px; overflow-y: auto;
+  }
+  .mv {
+    display: flex; align-items: baseline; gap: 4px;
+    font-family: ui-monospace, SFMono-Regular, monospace; font-size: 12px;
+    padding: 3px 6px; border-radius: 5px; background: #232932;
+    border: 1px solid transparent; cursor: pointer; color: var(--text);
+    transition: border-color .1s, opacity .1s;
+    font-variant-numeric: tabular-nums;
+  }
+  .mv i {
+    font-style: normal; font-size: 9px; color: var(--sub);
+    width: 16px; text-align: right; flex: none;
+  }
+  .mv .st {
+    width: 9px; height: 9px; border-radius: 50%; flex: none; align-self: center;
+  }
+  .mv .st.b { background: #0d0d0d; box-shadow: inset 0 0 2px #444; }
+  .mv .st.w { background: #ececec; }
+  .mv:hover { border-color: var(--accent-dim); }
+  .mv.future { opacity: .4; }
+  .mv.current { border-color: var(--accent); background: rgba(77,159,255,.12); }
+  .mv.pass { color: var(--sub); }
+  .mv.nolink { cursor: default; }
+  .mv.nolink:hover { border-color: transparent; }
+</style>
+</head>
+<body oncontextmenu="return false">
+  <div id="board-wrap"><svg id="board" viewBox="0 0 880 880"></svg></div>
+  <div id="panel">
+    <h1>KUROOBI</h1>
+
+    <div class="card">
+      <div class="score">
+        <span class="side" id="score-b"><i class="disc b"></i><span id="nb">2</span></span>
+        <span class="vs">—</span>
+        <span class="side" id="score-w"><span id="nw">2</span><i class="disc w"></i></span>
+      </div>
+      <div id="result"></div>
+    </div>
+
+    <div class="card">
+      <div>
+        <label class="field">エンジンの担当</label>
+        <div class="seg" id="mode">
+          <button data-v="black">黒</button>
+          <button data-v="white" class="active">白</button>
+          <button data-v="both">観戦</button>
+          <button data-v="off">なし</button>
+        </div>
+      </div>
+      <div>
+        <label class="field">強さ</label>
+        <div class="selwrap"><select id="level"></select></div>
+      </div>
+      <div class="row" id="custom-row" style="display:none">
+        <div>
+          <label class="field">深さ</label>
+          <div class="selwrap"><select id="depth"></select></div>
+        </div>
+        <div>
+          <label class="field">読切</label>
+          <div class="selwrap"><select id="solve"></select></div>
+        </div>
+        <div>
+          <label class="field">帯</label>
+          <div class="selwrap"><select id="band"></select></div>
+        </div>
+      </div>
+    </div>
+
+    <div class="card">
+      <button class="btn primary" id="btn-start">▶ 対局開始</button>
+      <div class="row">
+        <button class="btn" id="btn-new">新規対局</button>
+        <button class="btn" id="btn-undo">待った</button>
+      </div>
+      <div>
+        <label class="field">評価値を表示 (全合法手を自動採点)</label>
+        <div class="seg" id="auto-hint">
+          <button data-v="off" class="active">オフ</button>
+          <button data-v="on">オン</button>
+        </div>
+      </div>
+      <div id="eval"></div>
+      <div id="status"></div>
+    </div>
+
+    <div>
+      <label class="field">棋譜</label>
+      <div id="kifu"></div>
+    </div>
+  </div>
+
+<script>
+const invoke = (...a) => {
+  if (!window.__TAURI__?.core?.invoke) {
+    document.getElementById('status').textContent = 'Tauri IPC が使えません';
+    return Promise.reject('no ipc');
+  }
+  return window.__TAURI__.core.invoke(...a);
+};
+const SVGNS = 'http://www.w3.org/2000/svg';
+const CELL = 100, PAD = 40;
+let view = null;
+let hints = null;
+let thinking = false;   // エンジンの思考 (think) が進行中
+let playing = false;    // 対局中 (エンジンが自動で応手する状態)
+let autoHint = false;
+let hintSeq = 0;        // 解析要求の世代 (古い結果を捨てる)
+
+const $ = id => document.getElementById(id);
+
+function el(name, attrs, text) {
+  const e = document.createElementNS(SVGNS, name);
+  for (const k in attrs) e.setAttribute(k, attrs[k]);
+  if (text !== undefined) e.textContent = text;
+  return e;
+}
+
+function fillSelect(id, from, to, selected, labelFn) {
+  const s = $(id);
+  for (let v = from; v <= to; v++) {
+    const o = document.createElement('option');
+    o.value = v;
+    o.textContent = labelFn ? labelFn(v) : String(v);
+    if (v === selected) o.selected = true;
+    s.appendChild(o);
+  }
+}
+// 深さ 60 = 初手から終局まで全読み相当。空き 36 超の完全読みや帯なしの
+// 深さ 30 超は現実的な時間では返らないことがある。
+fillSelect('depth', 1, 60, 12);
+fillSelect('solve', 0, 36, 18, v => v === 0 ? 'なし' : String(v));
+fillSelect('band', 0, 12, 0, v => v === 0 ? 'なし' : `+${v}`);
+
+const LEVELS = [
+  { name: 'Lv1 (入門)',  depth: 1,  solve: 2,  band: 0 },
+  { name: 'Lv2',         depth: 2,  solve: 4,  band: 0 },
+  { name: 'Lv3',         depth: 4,  solve: 8,  band: 0 },
+  { name: 'Lv4',         depth: 6,  solve: 10, band: 0 },
+  { name: 'Lv5',         depth: 8,  solve: 12, band: 0 },
+  { name: 'Lv6',         depth: 10, solve: 14, band: 0 },
+  { name: 'Lv7',         depth: 12, solve: 16, band: 0 },
+  { name: 'Lv8',         depth: 14, solve: 18, band: 0 },
+  { name: 'Lv9',         depth: 16, solve: 20, band: 0 },
+  { name: 'Lv10',        depth: 18, solve: 22, band: 6 },
+  { name: 'Lv11',        depth: 20, solve: 24, band: 6 },
+  { name: 'Lv12 (GGS 設定)', depth: 22, solve: 26, band: 6 },
+  { name: 'Lv13 (全力)', depth: 24, solve: 26, band: 8 },
+];
+{
+  const s = $('level');
+  LEVELS.forEach((lv, i) => {
+    const o = document.createElement('option');
+    o.value = i;
+    o.textContent = `${lv.name} — 深さ${lv.depth} / 読切${lv.solve}${lv.band ? ` / 帯+${lv.band}` : ''}`;
+    if (i === 6) o.selected = true;
+    s.appendChild(o);
+  });
+  const o = document.createElement('option');
+  o.value = 'custom';
+  o.textContent = 'カスタム…';
+  s.appendChild(o);
+}
+
+function currentLevels() {
+  const v = $('level').value;
+  if (v === 'custom') {
+    return { depth: +$('depth').value, solve: +$('solve').value, band: +$('band').value };
+  }
+  const lv = LEVELS[+v];
+  return { depth: lv.depth, solve: lv.solve, band: lv.band };
+}
+
+// file-major: sq = file*8 + rank
+function xy(sq) { return [Math.floor(sq / 8), sq % 8]; }
+
+function render() {
+  const svg = $('board');
+  svg.innerHTML = '';
+  svg.appendChild(el('rect', { x: 0, y: 0, width: 880, height: 880, rx: 14, fill: '#20252c' }));
+  svg.appendChild(el('rect', { x: PAD - 6, y: PAD - 6, width: 812, height: 812, rx: 6, fill: 'var(--board-dark)' }));
+  svg.appendChild(el('rect', { x: PAD, y: PAD, width: 800, height: 800, fill: 'var(--board)' }));
+  for (let i = 0; i <= 8; i++) {
+    svg.appendChild(el('line', { x1: PAD + i * CELL, y1: PAD, x2: PAD + i * CELL, y2: PAD + 800, stroke: 'var(--line)', 'stroke-width': 2 }));
+    svg.appendChild(el('line', { x1: PAD, y1: PAD + i * CELL, x2: PAD + 800, y2: PAD + i * CELL, stroke: 'var(--line)', 'stroke-width': 2 }));
+  }
+  for (let i = 0; i < 8; i++) {
+    svg.appendChild(el('text', { x: PAD + i * CELL + 50, y: 27, 'text-anchor': 'middle', fill: 'var(--sub)', 'font-size': 19 }, 'abcdefgh'[i]));
+    svg.appendChild(el('text', { x: 21, y: PAD + i * CELL + 57, 'text-anchor': 'middle', fill: 'var(--sub)', 'font-size': 19 }, String(i + 1)));
+  }
+  for (const [fx, fy] of [[2, 2], [2, 6], [6, 2], [6, 6]])
+    svg.appendChild(el('circle', { cx: PAD + fx * CELL, cy: PAD + fy * CELL, r: 5, fill: 'var(--line)' }));
+
+  if (!view) return;
+  const legal = new Set(view.legal);
+  const bestHint = hints ? Math.max(...Object.values(hints).map(x => x.value)) : null;
+  for (let sq = 0; sq < 64; sq++) {
+    const [f, r] = xy(sq);
+    const cx = PAD + f * CELL + 50, cy = PAD + r * CELL + 50;
+    const v = view.cells[sq];
+    if (v === 1 || v === 2) {
+      // フラットな円盤 (オセロ石)。薄い落ち影 + 細いリムのみ
+      svg.appendChild(el('circle', { cx, cy: cy + 2, r: 40, fill: 'rgba(0,0,0,.25)' }));
+      svg.appendChild(el('circle', {
+        cx, cy, r: 40,
+        fill: v === 1 ? '#111213' : '#f1f1f1',
+        stroke: v === 1 ? '#2c2e30' : '#c9cdd1', 'stroke-width': 2,
+      }));
+      if (view.last === sq)
+        svg.appendChild(el('circle', { cx, cy, r: 9, fill: 'none', stroke: 'var(--accent)', 'stroke-width': 4 }));
+    } else if (legal.has(sq)) {
+      const g = el('g', { cursor: thinking ? 'default' : 'pointer' });
+      g.appendChild(el('circle', { cx, cy, r: 46, fill: 'transparent' }));
+      const h = hints ? hints[sq] : undefined;
+      if (h) {
+        const isBest = h.value >= bestHint - 1e-6;
+        g.appendChild(el('circle', { cx, cy, r: 30, fill: isBest ? 'rgba(255,212,121,.14)' : 'rgba(255,255,255,.06)', stroke: isBest ? 'var(--gold)' : 'rgba(255,255,255,.25)', 'stroke-width': isBest ? 2 : 1 }));
+        g.appendChild(el('text', {
+          x: cx, y: cy + 8, 'text-anchor': 'middle', 'font-size': 24,
+          fill: isBest ? 'var(--gold)' : '#d9e6de', 'font-weight': isBest ? 700 : 400,
+        }, (h.value > 0 ? '+' : '') + h.value.toFixed(h.exact ? 0 : 1)));
+      } else {
+        const dot = el('circle', { cx, cy, r: 7, fill: 'rgba(255,255,255,.30)' });
+        g.appendChild(dot);
+        if (!thinking) {
+          g.addEventListener('mouseenter', () => dot.setAttribute('r', 12));
+          g.addEventListener('mouseleave', () => dot.setAttribute('r', 7));
+        }
+      }
+      if (!thinking) g.addEventListener('click', () => humanPlay(sq));
+      svg.appendChild(g);
+    }
+  }
+}
+
+function updatePanel() {
+  if (!view) return;
+  $('nb').textContent = view.black;
+  $('nw').textContent = view.white;
+  $('score-b').classList.toggle('turn', !view.over && view.player === 'black');
+  $('score-w').classList.toggle('turn', !view.over && view.player === 'white');
+  renderKifu();
+  $('result').textContent = view.over
+    ? (view.black === view.white ? '引き分け' : (view.black > view.white ? '黒の勝ち' : '白の勝ち'))
+    : '';
+  $('btn-undo').disabled = thinking || view.move_count === 0;
+  $('btn-new').disabled = thinking;
+  const start = $('btn-start');
+  start.textContent = playing ? '■ 対局停止' : '▶ 対局開始';
+  start.classList.toggle('primary', !playing);
+  start.disabled = !playing && (view.over || thinking);
+}
+
+function setPlaying(b) {
+  playing = b;
+  updatePanel();
+}
+
+const sqName = sq => 'abcdefgh'[Math.floor(sq / 8)] + (sq % 8 + 1);
+
+// 棋譜をチップ列で描く。クリックで**その手を打った直後**の局面へ移動。
+// 先の手は薄く残り、前へも戻れる。
+function renderKifu() {
+  const box = $('kifu');
+  box.innerHTML = '';
+  view.moves.forEach((m, i) => {
+    const n = i + 1;                         // n 手目
+    const d = document.createElement('span');
+    let cls = 'mv';
+    if (n === view.cursor) cls += ' current';   // 最後に打たれた手
+    if (n > view.cursor) cls += ' future';
+    if (m == null) cls += ' pass';
+    d.className = cls;
+    const num = document.createElement('i');
+    num.textContent = n;
+    d.appendChild(num);
+    // パス込みで 1 手ごとに手番が入れ替わるので、奇数手 = 黒で確定
+    const st = document.createElement('span');
+    st.className = 'st ' + (i % 2 === 0 ? 'b' : 'w');
+    d.appendChild(st);
+    d.appendChild(document.createTextNode(m == null ? 'ps' : sqName(m)));
+    d.addEventListener('click', () => {
+      // 着地先の次の手がパスなら「打てない手番」で止まらないよう、
+      // パスを消化した局面まで進めて着地する
+      let n = i + 1;
+      while (n < view.moves.length && view.moves[n] == null) n++;
+      jumpTo(n);
+    });
+    box.appendChild(d);
+  });
+  const cur = box.querySelector('.current');
+  if (cur) cur.scrollIntoView({ block: 'nearest' });
+}
+
+async function jumpTo(n) {
+  if (thinking) return;
+  if (playing) {
+    setPlaying(false);
+    setStatus('棋譜を移動したため停止しました', false);
+  }
+  try {
+    hints = null;
+    setView(await invoke('goto', { n }));
+  } catch (e) { setStatus('' + e, false); }
+}
+
+function setView(v) { view = v; render(); updatePanel(); refreshHints(); }
+
+// 常時ヒント: 人の手番 (または検討モード) になったら裏で採点する。
+// 盤操作はブロックせず、返ってきた時に局面が進んでいたら捨てる。
+async function refreshHints() {
+  if (!autoHint || !view || view.over || thinking) return;
+  if (playing && engineSide().includes(view.player)) return; // エンジンが打つ局面は不要
+  const seq = ++hintSeq;
+  const kifuAt = view.kifu;
+  setStatus('解析中…', true);
+  try {
+    await pushLevels();
+    const hs = await invoke('analyze', { depth: currentLevels().depth });
+    if (seq !== hintSeq || !view || view.kifu !== kifuAt) return;  // 古い
+    hints = {};
+    for (const h of hs) {
+      if (typeof h.value !== 'number' || !Number.isFinite(h.value)) continue;
+      hints[h.pos] = { value: h.value, exact: h.exact };
+    }
+    if (Object.keys(hints).length === 0) hints = null;
+    render();
+  } catch (e) {
+    if (seq === hintSeq) setStatus('' + e, false);
+    return;
+  }
+  if (seq === hintSeq) setStatus('', false);
+}
+function setStatus(s, spin) {
+  $('status').textContent = s;
+  $('status').className = spin ? 'spin' : '';
+}
+
+function engineSide() {
+  const m = document.querySelector('#mode button.active').dataset.v;
+  if (m === 'off') return [];
+  if (m === 'both') return ['black', 'white'];
+  return [m];
+}
+
+async function pushLevels() {
+  const { depth, solve, band } = currentLevels();
+  await invoke('set_levels', { depth, solveEmpties: solve, band }).catch(() => {});
+}
+
+async function maybeEngineTurn() {
+  while (playing && view && !view.over && engineSide().includes(view.player)) {
+    thinking = true;
+    setStatus('思考中…', true);
+    render(); updatePanel();
+    let r;
+    try {
+      r = await invoke('think');
+    } catch (e) {
+      thinking = false;
+      // 停止済みで局面が変わっていた場合はエラー扱いにしない
+      if (playing) { setStatus('エンジンエラー: ' + e, false); setPlaying(false); }
+      render(); updatePanel();
+      return;
+    }
+    thinking = false;
+    if (!playing) {
+      // 思考中に停止された: 結果は適用せず捨てる
+      setStatus('対局を停止しました', false);
+      render(); updatePanel();
+      refreshHints();
+      return;
+    }
+    try {
+      const v = await invoke('apply_move', { sq: r.pos });
+      hints = null;
+      setView(v);
+      $('eval').textContent = Number.isFinite(r.value)
+        ? `エンジン評価: ${r.value > 0 ? '+' : ''}${r.exact ? r.value.toFixed(0) : r.value.toFixed(1)} 石` +
+          (r.exact ? ' (完全読み)' : '')
+        : '';
+    } catch (e) {
+      setStatus('' + e, false);
+      setPlaying(false);
+      return;
+    }
+    setStatus('', false);
+    updatePanel();
+  }
+  if (view && view.over) setPlaying(false);
+  refreshHints();
+}
+
+async function humanPlay(sq) {
+  if (thinking) return;
+  if (playing && engineSide().includes(view.player)) return;  // エンジンの手番
+  try {
+    const v = await invoke('play', { sq });
+    hints = null;
+    setView(v);
+    if (playing) await maybeEngineTurn();
+  } catch (e) { setStatus('' + e, false); }
+}
+
+$('btn-start').addEventListener('click', async () => {
+  if (playing) {
+    // 停止。進行中の思考は maybeEngineTurn 側が結果を破棄する
+    setPlaying(false);
+    if (thinking) setStatus('停止します (思考の完了を待って破棄)…', true);
+    else setStatus('対局を停止しました', false);
+    return;
+  }
+  await pushLevels();
+  setPlaying(true);
+  setStatus('', false);
+  await maybeEngineTurn();
+});
+
+$('btn-new').addEventListener('click', async () => {
+  await pushLevels();
+  hints = null;
+  $('eval').textContent = '';
+  setPlaying(false);
+  setView(await invoke('new_game'));
+  setStatus('「▶ 対局開始」で対局、そのまま打てば検討モード', false);
+});
+
+$('btn-undo').addEventListener('click', async () => {
+  try {
+    hints = null;
+    setView(await invoke('undo'));
+    if (engineSide().includes(view.player) && view.move_count > 0)
+      setView(await invoke('undo'));
+  } catch (e) { setStatus('' + e, false); }
+});
+
+document.querySelectorAll('#mode button').forEach(b => {
+  b.addEventListener('click', () => {
+    document.querySelectorAll('#mode button').forEach(x => x.classList.remove('active'));
+    b.classList.add('active');
+    // 担当を変えたら停止状態に戻す (再開は「対局開始」で明示的に)
+    if (playing) {
+      setPlaying(false);
+      setStatus('担当を変更したため停止しました', false);
+    }
+  });
+});
+
+document.querySelectorAll('#auto-hint button').forEach(b => {
+  b.addEventListener('click', () => {
+    document.querySelectorAll('#auto-hint button').forEach(x => x.classList.remove('active'));
+    b.classList.add('active');
+    autoHint = b.dataset.v === 'on';
+    if (autoHint) {
+      refreshHints();
+    } else {
+      hintSeq++;          // 進行中の解析結果を無効化
+      hints = null;
+      render();
+    }
+  });
+});
+
+$('level').addEventListener('change', () => {
+  $('custom-row').style.display = $('level').value === 'custom' ? 'flex' : 'none';
+  pushLevels();
+});
+$('depth').addEventListener('change', pushLevels);
+$('solve').addEventListener('change', pushLevels);
+$('band').addEventListener('change', pushLevels);
+
+(async () => {
+  render();
+  try {
+    setView(await invoke('state'));
+    await pushLevels();
+  } catch (e) {
+    setStatus('初期化エラー: ' + e, false);
+  }
+})();
+</script>
+</body>
+</html>
