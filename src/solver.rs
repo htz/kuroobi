@@ -1330,6 +1330,8 @@ pub struct Solver {
     threads: usize,
     /// See [`NnueProbe`]; `None` keeps the linear probes.
     nnue: Option<NnueProbe>,
+    /// 外部 (UI) からの中断ハンドル。立つと探索を諦めて即座に戻る。
+    stop: Option<crate::midgame::StopHandle>,
 }
 
 /// One search thread's private state plus borrows of the shared tables.
@@ -1338,6 +1340,8 @@ pub struct Solver {
 struct Worker<'a> {
     tt: &'a HashTable,
     neighbours: &'a NeighbourTable,
+    /// 外部からの中断 (UI)。ノードごとの abort 判定と併せて見る。
+    stop: Option<&'a crate::midgame::StopHandle>,
     nodes: u64,
     best: Option<Position>,
     /// Score returned by the warm-up pass, used to centre the exact
@@ -1410,6 +1414,7 @@ impl<'a> Worker<'a> {
         Worker {
             tt,
             neighbours,
+            stop: None,
             nodes: 0,
             best: None,
             warm_score: None,
@@ -1445,7 +1450,10 @@ impl<'a> Worker<'a> {
     /// there is nothing to walk.
     #[inline]
     fn should_abort(&mut self) -> bool {
-        self.abort.aborted()
+        if self.abort.aborted() {
+            return true;
+        }
+        self.stop.is_some_and(|s| s.is_stopped())
     }
 }
 
@@ -1460,6 +1468,7 @@ impl Solver {
             best: None,
             threads: 1,
             nnue: None,
+            stop: None,
         }
     }
 
@@ -1471,6 +1480,11 @@ impl Solver {
     /// Set how many threads the root may split its siblings across.
     /// The transposition table is shared; every other piece of search state
     /// is per-thread.
+    /// 外部からの中断ハンドルを設定する (UI の停止ボタン用)。
+    pub fn set_stop(&mut self, stop: Option<crate::midgame::StopHandle>) {
+        self.stop = stop;
+    }
+
     pub fn set_threads(&mut self, threads: usize) {
         self.threads = threads.max(1);
     }
@@ -1589,6 +1603,7 @@ impl Solver {
         let budget = ThreadBudget::new(extra);
         let tt = &self.hash_table;
         let neighbours = &self.neighbours;
+        let stop_ref = self.stop.as_ref();
         let (value, nodes, best) = std::thread::scope(|scope| {
             for _ in 0..extra {
                 let b = &budget;
@@ -1596,6 +1611,7 @@ impl Solver {
             }
             let root_abort = AbortFlag::root();
             let mut w = Worker::new(tt, neighbours, &budget, &root_abort);
+            w.stop = stop_ref;
             // NNUE probes pay off only where the selective pass *is* the
             // answer (the band): -30% there, but +10% on an exact solve's
             // warm-up ladder, whose rungs exist for ordering rather than

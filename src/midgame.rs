@@ -445,6 +445,30 @@ thread_local! {
 /// Without the chain a split subtree only ever sees the flag of the node that
 /// created it: when a grandparent cuts off, the grandchild keeps searching a
 /// tree nobody will read, and the parent sits blocked in `wait` for it.
+/// 外部 (UI 等) から探索を中断させるためのハンドル。
+///
+/// 中盤探索・終盤ソルバはどちらもノードごとに参照する。立てた後は
+/// `reset` するまで新しい探索も即座に諦めるので、次の探索の前に必ず戻す。
+#[derive(Clone, Default)]
+pub struct StopHandle(std::sync::Arc<std::sync::atomic::AtomicBool>);
+
+impl StopHandle {
+    pub fn new() -> StopHandle {
+        StopHandle(std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false)))
+    }
+    /// 進行中の探索を打ち切る。
+    pub fn stop(&self) {
+        self.0.store(true, std::sync::atomic::Ordering::Relaxed);
+    }
+    pub fn reset(&self) {
+        self.0.store(false, std::sync::atomic::Ordering::Relaxed);
+    }
+    #[inline]
+    pub fn is_stopped(&self) -> bool {
+        self.0.load(std::sync::atomic::Ordering::Relaxed)
+    }
+}
+
 struct AbortChain {
     flag: std::sync::atomic::AtomicBool,
     parent: Option<std::sync::Arc<AbortChain>>,
@@ -726,6 +750,8 @@ pub struct NnueSearch {
     /// irrelevant; checked periodically so the worker can stop immediately
     /// instead of finishing work nobody will use.
     abort: Option<std::sync::Arc<AbortChain>>,
+    /// 外部からの中断ハンドル (UI の停止ボタン等)。
+    stop: Option<StopHandle>,
     abort_countdown: u64,
     /// Set once the main Lazy SMP thread has reached the target depth; helpers
     /// stop as soon as they notice, since their results are no longer needed.
@@ -758,6 +784,7 @@ impl NnueSearch {
             mpc: false,
             probcut_level: 0,
             abort: None,
+            stop: None,
             abort_countdown: ABORT_CHECK_INTERVAL,
             done: None,
             my_gen: 0,
@@ -807,6 +834,7 @@ impl NnueSearch {
             mpc: self.mpc,
             probcut_level: 0,
             abort: self.abort.clone(),
+            stop: self.stop.clone(),
             abort_countdown: ABORT_CHECK_INTERVAL,
             done: self.done.clone(),
             my_gen: self.my_gen,
@@ -827,13 +855,23 @@ impl NnueSearch {
     /// `ABORT_CHECK_INTERVAL` nodes.
     #[inline]
     fn should_stop(&mut self) -> bool {
-        let Some(flag) = &self.abort else { return false };
+        if self.abort.is_none() && self.stop.is_none() {
+            return false;
+        }
         self.abort_countdown -= 1;
         if self.abort_countdown != 0 {
             return false;
         }
         self.abort_countdown = ABORT_CHECK_INTERVAL;
-        flag.stopped()
+        if self.stop.as_ref().is_some_and(|s| s.is_stopped()) {
+            return true;
+        }
+        self.abort.as_ref().is_some_and(|f| f.stopped())
+    }
+
+    /// 外部からの中断ハンドルを設定する。
+    pub fn set_stop(&mut self, stop: Option<StopHandle>) {
+        self.stop = stop;
     }
 
     /// Periodic check that also honours the Lazy SMP done flag, so helpers
