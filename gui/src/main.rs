@@ -17,6 +17,8 @@ use kuroobi::{Board, Color, Position};
 struct App {
     game: Mutex<Reversi>,
     engine: Arc<Mutex<Option<Engine>>>,
+    /// 探索中でも触れるよう Engine の Mutex の外に置く停止ハンドル。
+    stop: Arc<Mutex<Option<kuroobi::midgame::StopHandle>>>,
 }
 
 fn same_board(a: &Board, b: &Board) -> bool {
@@ -65,6 +67,8 @@ struct ThinkView {
     /// 手番視点の評価値 (石差)。
     value: f32,
     exact: bool,
+    /// 定石 book から返した手か。
+    from_book: bool,
 }
 
 #[derive(Serialize)]
@@ -165,7 +169,9 @@ fn ensure_engine(app: &State<App>) -> Result<(), String> {
         cfg.threads = std::thread::available_parallelism()
             .map(|n| (n.get() / 2).max(1))
             .unwrap_or(4);
-        *guard = Some(Engine::new(cfg)?);
+        let engine = Engine::new(cfg)?;
+        *app.stop.lock().unwrap() = Some(engine.stop_handle());
+        *guard = Some(engine);
     }
     Ok(())
 }
@@ -221,6 +227,15 @@ fn goto(app: State<App>, n: usize) -> Result<GameView, String> {
     Ok(view(&game))
 }
 
+/// 進行中の探索を中断する (思考・解析の両方)。結果はフロントが捨てる。
+#[tauri::command]
+fn stop_search(app: State<App>) -> Result<(), String> {
+    if let Some(h) = app.stop.lock().unwrap().as_ref() {
+        h.stop();
+    }
+    Ok(())
+}
+
 #[tauri::command]
 fn set_levels(app: State<App>, depth: u32, solve_empties: u8, band: u8) -> Result<(), String> {
     ensure_engine(&app)?;
@@ -247,7 +262,12 @@ async fn think(app: State<'_, App>) -> Result<ThinkView, String> {
     if !same_board(&app.game.lock().unwrap().board, &board) {
         return Err("position changed".into());
     }
-    Ok(ThinkView { pos: mv.pos.map(|p| p.index()), value: finite(mv.value), exact: mv.exact })
+    Ok(ThinkView {
+        pos: mv.pos.map(|p| p.index()),
+        value: finite(mv.value),
+        exact: mv.exact,
+        from_book: mv.from_book,
+    })
 }
 
 /// think の結果 (または任意の手) を現局面に適用する。sq が null ならパス。
@@ -379,15 +399,28 @@ fn load_kifu_text(app: State<App>, text: String) -> Result<GameView, String> {
     load_kifu_into(&app, &text)
 }
 
+/// 外部から渡された棋譜 (あれば読んで削除)。
+fn take_handoff_kifu() -> Option<String> {
+    let path = std::env::temp_dir().join("kuroobi_handoff.txt");
+    let s = std::fs::read_to_string(&path).ok()?;
+    let _ = std::fs::remove_file(&path);
+    let s: String = s.chars().filter(|c| c.is_ascii_alphanumeric()).collect();
+    (!s.is_empty()).then_some(s)
+}
+
 fn main() {
+    let initial = take_handoff_kifu()
+        .and_then(|k| Reversi::from_kifu(&k).ok())
+        .unwrap_or_else(Reversi::new);
     tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
         .manage(App {
-            game: Mutex::new(Reversi::new()),
+            game: Mutex::new(initial),
             engine: Arc::new(Mutex::new(None)),
+            stop: Arc::new(Mutex::new(None)),
         })
         .invoke_handler(tauri::generate_handler![
-            state, new_game, play, undo, goto, set_levels, think, apply_move, analyze,
+            state, new_game, play, undo, goto, set_levels, stop_search, think, apply_move, analyze,
             eval_at, save_kifu, load_kifu, load_kifu_text
         ])
         .run(tauri::generate_context!())

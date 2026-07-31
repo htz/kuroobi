@@ -598,6 +598,8 @@ function renderKifu() {
 
 async function jumpTo(n) {
   if (thinking) return;
+  hintSeq++;
+  invoke('stop_search').catch(() => {});   // 進行中の解析を打ち切る
   if (playing) {
     setPlaying(false);
     setStatus('棋譜を移動したため停止しました', false);
@@ -685,7 +687,7 @@ async function maybeEngineTurn() {
       setView(v);
       $('eval').textContent = Number.isFinite(r.value)
         ? `エンジン評価: ${r.value > 0 ? '+' : ''}${r.exact ? r.value.toFixed(0) : r.value.toFixed(1)} 石` +
-          (r.exact ? ' (完全読み)' : '')
+          (r.exact ? ' (完全読み)' : (r.from_book ? ' (定石)' : ''))
         : '';
     } catch (e) {
       setStatus('' + e, false);
@@ -712,10 +714,10 @@ async function humanPlay(sq) {
 
 $('btn-start').addEventListener('click', async () => {
   if (playing) {
-    // 停止。進行中の思考は maybeEngineTurn 側が結果を破棄する
+    // 停止: エンジンの探索も実際に中断させる (結果は破棄)
     setPlaying(false);
-    if (thinking) setStatus('停止します (思考の完了を待って破棄)…', true);
-    else setStatus('対局を停止しました', false);
+    invoke('stop_search').catch(() => {});
+    setStatus('対局を停止しました', false);
     return;
   }
   await pushLevels();
@@ -778,6 +780,7 @@ document.querySelectorAll('#auto-hint button').forEach(b => {
       refreshHints();
     } else {
       hintSeq++;          // 進行中の解析結果を無効化
+      invoke('stop_search').catch(() => {});
       hints = null;
       render();
     }
