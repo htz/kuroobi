@@ -1824,4 +1824,4 @@ val が 600 台に発散する。`--val` で毎エポック held-out MSE を測�
 
 ## ライセンス
 
-MIT OR Apache-2.0
+MIT ([LICENSE](LICENSE))
