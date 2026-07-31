@@ -22,6 +22,7 @@ use kuroobi::{Board, Position};
 
 struct Args {
     play: Option<String>,
+    resume: Option<String>,
     serve: bool,
     login: Option<String>,
     pw: Option<String>,
@@ -42,6 +43,7 @@ struct Args {
 fn parse_args() -> Result<Args, String> {
     let mut args = Args {
         play: None,
+        resume: None,
         serve: false,
         login: None,
         pw: None,
@@ -63,6 +65,7 @@ fn parse_args() -> Result<Args, String> {
         let mut value = |name: &str| it.next().ok_or_else(|| format!("{name} requires a value"));
         match arg.as_str() {
             "--play" => args.play = Some(value("--play")?),
+            "--resume" => args.resume = Some(value("--resume")?),
             "--serve" => args.serve = true,
             "--login" => args.login = Some(value("--login")?),
             "--pw" => args.pw = Some(value("--pw")?),
@@ -88,8 +91,8 @@ fn parse_args() -> Result<Args, String> {
             other => return Err(format!("unknown option: {other}")),
         }
     }
-    if args.play.is_none() && !args.serve {
-        return Err("--play <opponent> or --serve is required".into());
+    if args.play.is_none() && !args.serve && args.resume.is_none() {
+        return Err("--play <opponent>, --resume <.id> or --serve is required".into());
     }
     Ok(args)
 }
@@ -183,9 +186,19 @@ fn main() -> ExitCode {
                 println!("= ERR bad board");
                 continue;
             };
-            match pick(&board, &mut search, &mut solver, None) {
-                Some(p) => println!("= {}", coord(p)),
-                None => println!("= pa"),
+            // 解析用: 手と評価値 (手番視点) を返す。完全読み域は厳密値。
+            if board.empty_count() <= args.solve_empties {
+                let r = solver.solve_with_eval(EndSolverMode::Perfect, &board, Some(&evaluator));
+                match r.best_move {
+                    Some(p) => println!("= {} {}", coord(p), r.value),
+                    None => println!("= pa {}", r.value),
+                }
+            } else {
+                let (mv, v) = search.best_move_valued(&board, args.depth as u32);
+                match mv {
+                    Some(p) => println!("= {} {:.1}", coord(p), v),
+                    None => println!("= pa {:.1}", v),
+                }
             }
             std::io::stdout().flush().ok();
         }
@@ -215,7 +228,7 @@ fn main() -> ExitCode {
             }
         },
     };
-    let opponent = args.play.clone().unwrap();
+    let opponent = args.play.clone().unwrap_or_default();
 
     use std::io::{Read, Write};
     let mut stream = match std::net::TcpStream::connect(("skatgame.net", 5000)) {
@@ -248,7 +261,15 @@ fn main() -> ExitCode {
     let mut ready_at: Option<std::time::Instant> = None;
     let started = std::time::Instant::now();
 
-    'outer: while started.elapsed().as_secs() < 3600 {
+    let mut last_activity = std::time::Instant::now();
+    let _ = started;
+    'outer: loop {
+        // 対局が動いている限り無期限。無活動 (盤面更新なし) が 15 分続いたら退出。
+        if last_activity.elapsed().as_secs() > 900 {
+            eprintln!("### idle timeout");
+            send("quit");
+            break 'outer;
+        }
         let mut chunk = [0u8; 4096];
         match stream.read(&mut chunk) {
             Ok(0) => break,
@@ -290,6 +311,8 @@ fn main() -> ExitCode {
                 ready_at = Some(std::time::Instant::now());
                 send("verbose -news -faq -help -ack");
                 send("tell /os client -");
+                send("tell /os trust +");
+                send("tell /os rated +");
                 send("tell /os open 1");
             }
             continue;
@@ -298,6 +321,7 @@ fn main() -> ExitCode {
         while let Some(ln) = lines.pop_front() {
             // update/join ブロックはグループを閉じる READY まで貯める。
             if ln.starts_with("/os: update") || ln.starts_with("/os: join") {
+                last_activity = std::time::Instant::now();
                 in_block = true;
                 block.clear();
                 block.push(ln);
@@ -396,10 +420,19 @@ fn main() -> ExitCode {
                 continue;
             }
             if ln.starts_with("/os: ERR") {
-                // 申し込み拒否 (フォーミュラ不一致など)。待ち続けても無駄。
-                eprintln!("### request rejected: {ln}");
-                send("quit");
-                break 'outer;
+                // 致命的なのは申し込みが受からない類だけ。終局直後に残骸の
+                // update へ打った play の "match not found" 等は無視する。
+                let fatal = ln.contains("formula")
+                    || ln.contains("not accepting")
+                    || ln.contains("not registered")
+                    || (ln.contains("not found") && ln.contains(&opponent));
+                if fatal {
+                    eprintln!("### request rejected: {ln}");
+                    send("quit");
+                    break 'outer;
+                }
+                eprintln!("### ignored: {ln}");
+                continue;
             }
             if ln.starts_with("/os: - match") {
                 games_done += 1;
@@ -417,7 +450,12 @@ fn main() -> ExitCode {
         if let Some(t0) = ready_at {
             if asked_at.is_none() && t0.elapsed().as_secs() >= 4 {
                 asked_at = Some(std::time::Instant::now());
-                send(&format!("tell /os ask {} {} {opponent}", args.gtype, args.time));
+                if let Some(id) = &args.resume {
+                    // 中断ゲームの再開 (ask <.stored>)。
+                    send(&format!("tell /os ask {id}"));
+                } else {
+                    send(&format!("tell /os ask {} {} {opponent}", args.gtype, args.time));
+                }
             }
         }
     }
