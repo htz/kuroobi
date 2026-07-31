@@ -10,8 +10,18 @@ use crate::evaluator::Evaluator;
 use crate::midgame::{selective_band, NnueSearch, SharedTt};
 use crate::nnue::Nnue;
 use crate::pattern::EGAROUCID_PATTERNS;
-use crate::solver::{EndSolverMode, Solver};
+use crate::solver::{final_score, EndSolverMode, Solver};
 use crate::{Board, Position};
+
+/// 双方に合法手がない = 終局。
+fn is_game_over(board: &Board) -> bool {
+    if board.movable() != 0 {
+        return false;
+    }
+    let mut b = *board;
+    b.pass();
+    b.movable() == 0
+}
 
 /// エンジンの探索条件と資源。既定値は GUI・ローカル解析向けの軽めの設定
 /// (対局向けの本気設定は呼び出し側で depth / solve_empties を上げる)。
@@ -111,6 +121,11 @@ impl Engine {
     /// (パス)。値は手番視点の石差。
     pub fn choose(&mut self, board: &Board) -> MoveEval {
         let c = &self.config;
+        if is_game_over(board) {
+            // 終局: 探索に聞くと 0 が返る。盤面の石差 (空きマスは勝者へ加算、
+            // FFO 規約) をそのまま厳密値として返す
+            return MoveEval { pos: None, value: final_score(board) as f32, exact: true };
+        }
         if board.empty_count() <= c.solve_empties {
             let r = self
                 .solver
@@ -121,6 +136,23 @@ impl Engine {
             MoveEval { pos: r.best_move, value: r.value as f32, exact: false }
         } else {
             let (pos, value) = self.search.best_move_valued(board, c.depth);
+            MoveEval { pos, value, exact: false }
+        }
+    }
+
+    /// 局面を指定深さで評価する (評価値グラフ・検討用)。完全読み域は厳密値。
+    /// 値は手番視点。
+    pub fn eval_position(&mut self, board: &Board, depth: u32) -> MoveEval {
+        if is_game_over(board) {
+            return MoveEval { pos: None, value: final_score(board) as f32, exact: true };
+        }
+        if board.empty_count() <= self.config.solve_empties {
+            let r = self
+                .solver
+                .solve_with_eval(EndSolverMode::Perfect, board, Some(&self.evaluator));
+            MoveEval { pos: r.best_move, value: r.value as f32, exact: true }
+        } else {
+            let (pos, value) = self.search.best_move_valued(board, depth);
             MoveEval { pos, value, exact: false }
         }
     }
@@ -139,7 +171,9 @@ impl Engine {
         for pos in board.movable_iter() {
             let mut child = *board;
             child.make_move_bits(pos);
-            let ev = if child.empty_count() <= self.config.solve_empties {
+            let ev = if is_game_over(&child) {
+                MoveEval { pos: Some(pos), value: -(final_score(&child) as f32), exact: true }
+            } else if child.empty_count() <= self.config.solve_empties {
                 let r = self
                     .solver
                     .solve_with_eval(EndSolverMode::Perfect, &child, Some(&self.evaluator));

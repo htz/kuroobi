@@ -34,7 +34,7 @@ const DEEP_ORDER_EMPTIES: u8 = 16;
 /// plain disc difference disagreed whenever a game ended with empties left
 /// — last1 already awarded its single empty, the general terminals did not.
 #[inline]
-fn final_score(board: &Board) -> i32 {
+pub fn final_score(board: &Board) -> i32 {
     let diff = board.score();
     let empties = board.empty_count() as i32;
     match diff.cmp(&0) {
