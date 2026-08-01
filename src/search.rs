@@ -6,6 +6,11 @@
 //! terminal (game over) the exact score is used, scaled by SCORE_SCALE to
 //! dominate heuristic values.
 
+// 添字ループは走査順そのものが意味を持つ (連続領域の走査・SIMD 的な
+// 展開) ため、イテレータ化の助言は採らない。引数の多い探索関数も、
+// 構造体に束ねると呼び出しごとの構築が入るので現状の形を保つ。
+#![allow(clippy::too_many_arguments)]
+
 use crate::board::Board;
 use crate::evaluator::Evaluator;
 use crate::pattern_index::PatternIndices;
@@ -273,7 +278,9 @@ impl Searcher {
 
     #[inline]
     fn should_stop(&self) -> bool {
-        self.stop.as_ref().is_some_and(|f| f.load(std::sync::atomic::Ordering::Relaxed))
+        self.stop
+            .as_ref()
+            .is_some_and(|f| f.load(std::sync::atomic::Ordering::Relaxed))
     }
 
     /// Search to `depth` plies with iterative deepening (better move
@@ -341,8 +348,8 @@ impl Searcher {
             let key = if Some(pos) == tt_move {
                 i64::MIN
             } else {
-                let mut ix = indexer.init(child.black, child.white);
-                (evaluator.eval_indices(&child, &mut ix) * 256.0) as i64
+                let ix = indexer.init(child.black, child.white);
+                (evaluator.eval_indices(&child, &ix) * 256.0) as i64
             };
             kids.push((pos, child, child_hash, key));
         }
@@ -351,7 +358,15 @@ impl Searcher {
         // First move with the full window, on this thread.
         let mut ix = indexer.init(kids[0].1.black, kids[0].1.white);
         let alpha0 = -self.alpha_beta(
-            &kids[0].1, evaluator, &mut ix, kids[0].2, depth - 1, 1, -INF, INF, false,
+            &kids[0].1,
+            evaluator,
+            &mut ix,
+            kids[0].2,
+            depth - 1,
+            1,
+            -INF,
+            INF,
+            false,
         );
         if kids.len() == 1 || self.should_stop() {
             return (alpha0, Some(kids[0].0));
@@ -372,9 +387,10 @@ impl Searcher {
                 let stop = stop.clone();
                 scope.spawn(move || {
                     loop {
-                        if stop.as_ref().is_some_and(|f| {
-                            f.load(std::sync::atomic::Ordering::Relaxed)
-                        }) {
+                        if stop
+                            .as_ref()
+                            .is_some_and(|f| f.load(std::sync::atomic::Ordering::Relaxed))
+                        {
                             break;
                         }
                         let i = next.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
@@ -382,13 +398,28 @@ impl Searcher {
                         let a = best.lock().unwrap().0;
                         let mut ix = indexer.init(k.1.black, k.1.white);
                         let probe = -w.alpha_beta(
-                            &k.1, evaluator, &mut ix, k.2, depth - 1, 1,
-                            -(a + PVS_EPSILON), -a, false,
+                            &k.1,
+                            evaluator,
+                            &mut ix,
+                            k.2,
+                            depth - 1,
+                            1,
+                            -(a + PVS_EPSILON),
+                            -a,
+                            false,
                         );
                         let v = if probe > a {
                             let mut ix = indexer.init(k.1.black, k.1.white);
                             -w.alpha_beta(
-                                &k.1, evaluator, &mut ix, k.2, depth - 1, 1, -INF, -a, false,
+                                &k.1,
+                                evaluator,
+                                &mut ix,
+                                k.2,
+                                depth - 1,
+                                1,
+                                -INF,
+                                -a,
+                                false,
                             )
                         } else {
                             probe
@@ -439,7 +470,15 @@ impl Searcher {
         let first_board = kid(first);
         let mut ix = indexer.init(first_board.black, first_board.white);
         let mut best_val = -self.alpha_beta(
-            &first_board, evaluator, &mut ix, first.1, depth - 1, ply + 1, -beta, -alpha, false,
+            &first_board,
+            evaluator,
+            &mut ix,
+            first.1,
+            depth - 1,
+            ply + 1,
+            -beta,
+            -alpha,
+            false,
         );
         let mut best_move = Some(first.0);
         if best_val >= beta || self.should_stop() {
@@ -461,9 +500,9 @@ impl Searcher {
                 scope.spawn(move || {
                     loop {
                         if cut.load(std::sync::atomic::Ordering::Relaxed)
-                            || stop.as_ref().is_some_and(|f| {
-                                f.load(std::sync::atomic::Ordering::Relaxed)
-                            })
+                            || stop
+                                .as_ref()
+                                .is_some_and(|f| f.load(std::sync::atomic::Ordering::Relaxed))
                         {
                             break;
                         }
@@ -473,13 +512,28 @@ impl Searcher {
                         let kb = kid(k);
                         let mut ix = indexer.init(kb.black, kb.white);
                         let probe = -w.alpha_beta(
-                            &kb, evaluator, &mut ix, k.1, depth - 1, ply + 1,
-                            -(a + PVS_EPSILON), -a, false,
+                            &kb,
+                            evaluator,
+                            &mut ix,
+                            k.1,
+                            depth - 1,
+                            ply + 1,
+                            -(a + PVS_EPSILON),
+                            -a,
+                            false,
                         );
                         let v = if probe > a && probe < beta {
                             let mut ix = indexer.init(kb.black, kb.white);
                             -w.alpha_beta(
-                                &kb, evaluator, &mut ix, k.1, depth - 1, ply + 1, -beta, -a, false,
+                                &kb,
+                                evaluator,
+                                &mut ix,
+                                k.1,
+                                depth - 1,
+                                ply + 1,
+                                -beta,
+                                -a,
+                                false,
                             )
                         } else {
                             probe
@@ -631,8 +685,15 @@ impl Searcher {
         if eval_score >= beta - eval_error && pc_beta < 64.0 {
             self.probcut_level += 1;
             let v = self.alpha_beta(
-                board, evaluator, indices, hash, pc_depth, ply,
-                pc_beta - PVS_EPSILON, pc_beta, false,
+                board,
+                evaluator,
+                indices,
+                hash,
+                pc_depth,
+                ply,
+                pc_beta - PVS_EPSILON,
+                pc_beta,
+                false,
             );
             self.probcut_level -= 1;
             if v >= pc_beta {
@@ -645,8 +706,15 @@ impl Searcher {
         if eval_score < alpha + eval_error && pc_alpha > -64.0 {
             self.probcut_level += 1;
             let v = self.alpha_beta(
-                board, evaluator, indices, hash, pc_depth, ply,
-                pc_alpha, pc_alpha + PVS_EPSILON, false,
+                board,
+                evaluator,
+                indices,
+                hash,
+                pc_depth,
+                ply,
+                pc_alpha,
+                pc_alpha + PVS_EPSILON,
+                false,
             );
             self.probcut_level -= 1;
             if v <= pc_alpha {
@@ -732,8 +800,7 @@ impl Searcher {
             && ply > 0
             && beta - alpha <= PVS_EPSILON * 1.5
         {
-            if let Some(v) =
-                self.probcut(board, evaluator, indices, hash, depth, ply, alpha, beta)
+            if let Some(v) = self.probcut(board, evaluator, indices, hash, depth, ply, alpha, beta)
             {
                 return v;
             }
@@ -789,7 +856,10 @@ impl Searcher {
                 // endgame solver already ordered this way; the midgame was
                 // still paying full precision for a comparison key.
                 let v = evaluator.eval_order_bb(
-                    child.player_bb(), child.opponent_bb(), child.player(), indices,
+                    child.player_bb(),
+                    child.opponent_bb(),
+                    child.player(),
+                    indices,
                 );
                 *indices = saved;
                 (v * 256.0) as i64
@@ -798,8 +868,7 @@ impl Searcher {
             } else if Some(pos) == killer1 {
                 i64::MIN + 2
             } else if depth >= 2 {
-                ((child.movable_count() as i64) << 32)
-                    + SQUARE_BIAS[pos.index() as usize]
+                ((child.movable_count() as i64) << 32) + SQUARE_BIAS[pos.index() as usize]
                     - ((self.history[mover.index()][pos.index() as usize] as i64) << 8)
             } else {
                 0
@@ -834,13 +903,16 @@ impl Searcher {
         // Young-brothers-wait: prove the first child on this thread, then
         // let other threads take the rest. Splitting before that would have
         // every thread searching against an unproven window.
-        if self.threads > 1
-            && ply < SPLIT_MAX_PLY
-            && depth >= SPLIT_MIN_DEPTH
-            && n_children > 2
-        {
+        if self.threads > 1 && ply < SPLIT_MAX_PLY && depth >= SPLIT_MIN_DEPTH && n_children > 2 {
             let (v, mv) = self.split_children(
-                board, evaluator, &children[..n_children], hash, depth, ply, alpha, beta,
+                board,
+                evaluator,
+                &children[..n_children],
+                hash,
+                depth,
+                ply,
+                alpha,
+                beta,
             );
             let bound = if v <= orig_alpha {
                 Bound::Upper
@@ -877,20 +949,41 @@ impl Searcher {
             // with a full re-search only when a child actually improves.
             let v = if i == 0 || alpha >= beta {
                 -self.alpha_beta(
-                    child, evaluator, indices, *child_hash, depth - 1, ply + 1,
-                    -beta, -alpha, false,
+                    child,
+                    evaluator,
+                    indices,
+                    *child_hash,
+                    depth - 1,
+                    ply + 1,
+                    -beta,
+                    -alpha,
+                    false,
                 )
             } else {
                 let probe = -self.alpha_beta(
-                    child, evaluator, indices, *child_hash, depth - 1, ply + 1,
-                    -(alpha + PVS_EPSILON), -alpha, false,
+                    child,
+                    evaluator,
+                    indices,
+                    *child_hash,
+                    depth - 1,
+                    ply + 1,
+                    -(alpha + PVS_EPSILON),
+                    -alpha,
+                    false,
                 );
                 if probe > alpha && probe < beta {
                     // Re-search with the regular window: using probe as the
                     // lower bound is unsound under TT-induced instability
                     -self.alpha_beta(
-                        child, evaluator, indices, *child_hash, depth - 1, ply + 1,
-                        -beta, -alpha, false,
+                        child,
+                        evaluator,
+                        indices,
+                        *child_hash,
+                        depth - 1,
+                        ply + 1,
+                        -beta,
+                        -alpha,
+                        false,
                     )
                 } else {
                     probe

@@ -138,7 +138,10 @@ impl Board {
         }
 
         // Last character is the player
-        let player_char = s.chars().filter(|c| !c.is_whitespace()).nth(64)
+        let player_char = s
+            .chars()
+            .filter(|c| !c.is_whitespace())
+            .nth(64)
             .ok_or(ParseError::InvalidString)?;
         match player_char.to_ascii_lowercase() {
             'x' | '*' => self.player = Color::Black,
@@ -479,7 +482,11 @@ mod tests {
         assert!(result.is_ok(), "First move should be valid: {:?}", pos);
 
         // Black places 1 and flips exactly 1 White in the opening
-        assert_eq!(b.black.count_ones(), 4, "Black should have 4 pieces after move");
+        assert_eq!(
+            b.black.count_ones(),
+            4,
+            "Black should have 4 pieces after move"
+        );
         assert_eq!(b.white.count_ones(), 1, "White should have 1 piece left");
         assert_eq!(b.player(), Color::White, "Player should switch to White");
         assert_eq!(b.empty_count(), 59, "One less empty square");
@@ -505,11 +512,19 @@ mod tests {
     fn test_movable() {
         let b = Board::new();
         let movable = b.movable();
-        assert_eq!(movable.count_ones(), 4, "Initial position: 4 moves for Black");
+        assert_eq!(
+            movable.count_ones(),
+            4,
+            "Initial position: 4 moves for Black"
+        );
 
         // All movable positions should be empty
         let empty = b.empty();
-        assert_eq!(movable & empty, movable, "All movable positions must be empty");
+        assert_eq!(
+            movable & empty,
+            movable,
+            "All movable positions must be empty"
+        );
     }
 
     #[test]
@@ -540,7 +555,11 @@ mod tests {
         let first = movable.trailing_zeros();
         b.make_move_unchecked(Position::from_index(first).unwrap());
         // Black 4, White 1; current player is now White, so score = -(4-1)
-        assert_eq!(b.score(), -3, "Score is from White's perspective after Black's move");
+        assert_eq!(
+            b.score(),
+            -3,
+            "Score is from White's perspective after Black's move"
+        );
     }
 
     #[test]
@@ -558,7 +577,10 @@ mod tests {
     #[test]
     fn test_check_all() {
         let b = Board::new();
-        assert!(b.check_all(), "Initial position: current player (Black) can move");
+        assert!(
+            b.check_all(),
+            "Initial position: current player (Black) can move"
+        );
     }
 
     #[test]
@@ -571,7 +593,11 @@ mod tests {
     fn test_movable_iter() {
         let b = Board::new();
         let from_iter: Vec<Position> = b.movable_iter().collect();
-        assert_eq!(from_iter.len(), 4, "Iterator must terminate and yield 4 moves");
+        assert_eq!(
+            from_iter.len(),
+            4,
+            "Iterator must terminate and yield 4 moves"
+        );
         for pos in &from_iter {
             assert!(b.check(*pos), "Every yielded move must be legal");
         }
@@ -612,15 +638,24 @@ mod tests {
         b.white = 0;
         b.empty_count = 62;
         b.player = Color::Black;
-        assert!(b.is_game_over(), "No flips possible for either side -> over");
+        assert!(
+            b.is_game_over(),
+            "No flips possible for either side -> over"
+        );
     }
 
     #[test]
     fn test_from_string_error_cases() {
         // Too short / too long
         assert!(Board::from_string("").is_err());
-        assert!(Board::from_string(&"-".repeat(64)).is_err(), "missing player");
-        assert!(Board::from_string(&format!("{} XX", "-".repeat(64))).is_err(), "too long");
+        assert!(
+            Board::from_string(&"-".repeat(64)).is_err(),
+            "missing player"
+        );
+        assert!(
+            Board::from_string(&format!("{} XX", "-".repeat(64))).is_err(),
+            "too long"
+        );
 
         // Invalid piece character
         let mut s: String = "-".repeat(64);

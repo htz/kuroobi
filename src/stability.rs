@@ -407,7 +407,9 @@ mod tests {
 
     fn random_position(seed: u64, plies: usize) -> Board {
         let mut board = Board::new();
-        let mut state = seed.wrapping_mul(2862933555777941757).wrapping_add(3037000493);
+        let mut state = seed
+            .wrapping_mul(2862933555777941757)
+            .wrapping_add(3037000493);
         for _ in 0..plies {
             let moves = board.movable();
             if moves == 0 {
@@ -462,9 +464,10 @@ mod tests {
     fn test_stable_discs_never_flip_in_playouts() {
         for seed in 1..=30u64 {
             let board = random_position(seed, 20 + (seed as usize % 30));
-            for (own, opp, own_is_black) in
-                [(board.black, board.white, true), (board.white, board.black, false)]
-            {
+            for (own, opp, own_is_black) in [
+                (board.black, board.white, true),
+                (board.white, board.black, false),
+            ] {
                 let stable = stable_discs(own, opp);
                 if stable == 0 {
                     continue;

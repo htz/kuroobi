@@ -114,7 +114,9 @@ pub struct Book {
 
 impl Book {
     pub fn new() -> Book {
-        Book { map: HashMap::new() }
+        Book {
+            map: HashMap::new(),
+        }
     }
 
     pub fn len(&self) -> usize {
@@ -245,8 +247,7 @@ impl Book {
             if t.len() < 4 {
                 continue;
             }
-            let (Ok(p), Ok(o)) =
-                (u64::from_str_radix(t[0], 16), u64::from_str_radix(t[1], 16))
+            let (Ok(p), Ok(o)) = (u64::from_str_radix(t[0], 16), u64::from_str_radix(t[1], 16))
             else {
                 continue;
             };
@@ -260,7 +261,9 @@ impl Book {
                 ) else {
                     continue;
                 };
-                let Some(mv) = Position::from_index(best as u32) else { continue };
+                let Some(mv) = Position::from_index(best as u32) else {
+                    continue;
+                };
                 book.map.insert(
                     (p, o),
                     Entry {
@@ -280,16 +283,28 @@ impl Book {
                 let (Some(m), Some(v), Some(g)) = (it.next(), it.next(), it.next()) else {
                     continue;
                 };
-                let (Ok(m), Ok(v), Ok(g)) =
-                    (m.parse::<u8>(), v.parse::<f32>(), g.parse::<u32>())
+                let (Ok(m), Ok(v), Ok(g)) = (m.parse::<u8>(), v.parse::<f32>(), g.parse::<u32>())
                 else {
                     continue;
                 };
-                let Some(mv) = Position::from_index(m as u32) else { continue };
-                moves.push(Candidate { mv, value: v, games: g });
+                let Some(mv) = Position::from_index(m as u32) else {
+                    continue;
+                };
+                moves.push(Candidate {
+                    mv,
+                    value: v,
+                    games: g,
+                });
             }
             moves.sort_by(|a, b| b.value.total_cmp(&a.value));
-            book.map.insert((p, o), Entry { moves, depth, games });
+            book.map.insert(
+                (p, o),
+                Entry {
+                    moves,
+                    depth,
+                    games,
+                },
+            );
         }
         Ok(book)
     }
@@ -301,7 +316,11 @@ mod tests {
     use crate::Board;
 
     fn entry(mv: Position, value: f32, games: u32) -> Entry {
-        Entry { moves: vec![Candidate { mv, value, games }], depth: 24, games }
+        Entry {
+            moves: vec![Candidate { mv, value, games }],
+            depth: 24,
+            games,
+        }
     }
 
     /// 対称な 4 手はすべて同じキーに畳まれる。
@@ -315,7 +334,11 @@ mod tests {
             let (k, _) = Book::key(&c);
             keys.insert(k);
         }
-        assert_eq!(keys.len(), 1, "初期局面の 4 手は対称なので 1 キーに畳まれる");
+        assert_eq!(
+            keys.len(),
+            1,
+            "初期局面の 4 手は対称なので 1 キーに畳まれる"
+        );
     }
 
     /// 正規化して入れた手が、任意の向きの同型局面で正しい手として返る。
@@ -355,13 +378,33 @@ mod tests {
 
         let legal: Vec<Position> = after.movable_iter().collect();
         assert!(legal.len() >= 3);
-        let mut moves: Vec<Candidate> = Vec::new();
         // 先頭 2 手を互角 (0.0 / -0.5)、3 手目を明確な悪手 (-5.0) にする
-        moves.push(Candidate { mv: Book::map_move(legal[0], i2), value: 0.0, games: 50 });
-        moves.push(Candidate { mv: Book::map_move(legal[1], i2), value: -0.5, games: 30 });
-        moves.push(Candidate { mv: Book::map_move(legal[2], i2), value: -5.0, games: 5 });
+        let moves: Vec<Candidate> = vec![
+            Candidate {
+                mv: Book::map_move(legal[0], i2),
+                value: 0.0,
+                games: 50,
+            },
+            Candidate {
+                mv: Book::map_move(legal[1], i2),
+                value: -0.5,
+                games: 30,
+            },
+            Candidate {
+                mv: Book::map_move(legal[2], i2),
+                value: -5.0,
+                games: 5,
+            },
+        ];
         let mut book = Book::new();
-        book.insert_raw(key2, Entry { moves, depth: 26, games: 85 });
+        book.insert_raw(
+            key2,
+            Entry {
+                moves,
+                depth: 26,
+                games: 85,
+            },
+        );
 
         let mut seen = std::collections::HashSet::new();
         for r in 0..200u64 {
@@ -371,7 +414,11 @@ mod tests {
             seen.insert(mv.index());
         }
         assert!(seen.len() >= 2, "候補が散らばる (実際 {})", seen.len());
-        assert!(seen.len() <= 2, "許容幅外は除外される (実際 {})", seen.len());
+        assert!(
+            seen.len() <= 2,
+            "許容幅外は除外される (実際 {})",
+            seen.len()
+        );
     }
 
     #[test]
@@ -383,8 +430,16 @@ mod tests {
             key,
             Entry {
                 moves: vec![
-                    Candidate { mv: Position::from_kifu("f5").unwrap(), value: -2.0, games: 7 },
-                    Candidate { mv: Position::from_kifu("d3").unwrap(), value: -2.4, games: 3 },
+                    Candidate {
+                        mv: Position::from_kifu("f5").unwrap(),
+                        value: -2.0,
+                        games: 7,
+                    },
+                    Candidate {
+                        mv: Position::from_kifu("d3").unwrap(),
+                        value: -2.4,
+                        games: 3,
+                    },
                 ],
                 depth: 26,
                 games: 10,

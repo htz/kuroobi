@@ -267,7 +267,10 @@ pub struct Trainer<O: Optimizer = AdamOptimizer> {
 
 impl<O: Optimizer> Trainer<O> {
     pub fn new(evaluator: Evaluator, optimizer: O) -> Trainer<O> {
-        Trainer { evaluator, optimizer }
+        Trainer {
+            evaluator,
+            optimizer,
+        }
     }
 
     /// Train one epoch over the examples (single pass, in order — shuffle
@@ -519,7 +522,11 @@ mod tests {
         let raw = std::fs::read(&bin_path).unwrap();
         assert_eq!(raw.len(), 17);
         let disk_black = u64::from_le_bytes(raw[0..8].try_into().unwrap());
-        assert_eq!(disk_black, 1u64 << 1, "B1 must be bit 1 in rank-major on disk");
+        assert_eq!(
+            disk_black,
+            1u64 << 1,
+            "B1 must be bit 1 in rank-major on disk"
+        );
         assert_eq!(raw[16] as i8, 5);
 
         std::fs::remove_file(&bin_path).ok();
@@ -626,13 +633,15 @@ mod tests {
             } else {
                 (b.white, b.black, -score)
             };
-            examples.push(Example { black, white, score });
+            examples.push(Example {
+                black,
+                white,
+                score,
+            });
         }
 
-        let mut trainer = Trainer::new(
-            Evaluator::new(EGAROUCID_PATTERNS),
-            AdamOptimizer::new(0.01),
-        );
+        let mut trainer =
+            Trainer::new(Evaluator::new(EGAROUCID_PATTERNS), AdamOptimizer::new(0.01));
         let stats = trainer.run(60, &examples);
         let first = stats.first().unwrap().mse();
         let last = stats.last().unwrap().mse();
@@ -650,10 +659,8 @@ mod tests {
             white: b.white,
             score: 2,
         }];
-        let mut trainer = Trainer::new(
-            Evaluator::new(EGAROUCID_PATTERNS),
-            AdamOptimizer::new(0.01),
-        );
+        let mut trainer =
+            Trainer::new(Evaluator::new(EGAROUCID_PATTERNS), AdamOptimizer::new(0.01));
         let stats = trainer.train_epoch(&examples);
         assert_eq!(stats.samples[0], 1, "initial position is stage 0");
         assert_eq!(stats.samples[1..].iter().sum::<u64>(), 0);

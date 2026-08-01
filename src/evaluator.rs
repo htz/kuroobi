@@ -111,7 +111,11 @@ impl Evaluator {
                 .iter_mut()
                 .map(|st| st.iter_mut().map(|t| t.as_mut_ptr()).collect())
                 .collect(),
-            num: self.num_weights.iter_mut().map(|t| t.as_mut_ptr()).collect(),
+            num: self
+                .num_weights
+                .iter_mut()
+                .map(|t| t.as_mut_ptr())
+                .collect(),
         }
     }
 
@@ -126,7 +130,13 @@ impl Evaluator {
     /// # Safety
     /// `view` must come from this evaluator and no mutable borrow of the
     /// weights may be live.
-    pub unsafe fn train_shared(&self, view: &WeightView, board: &Board, target: f32, lr: f32) -> f32 {
+    pub unsafe fn train_shared(
+        &self,
+        view: &WeightView,
+        board: &Board,
+        target: f32,
+        lr: f32,
+    ) -> f32 {
         let mut total = 0.0f32;
         for sym in board.symmetries() {
             let stage = Self::stage(&sym);
@@ -159,8 +169,14 @@ pub trait Optimizer {
     /// Weight delta for one active cell. `grad` is the (positive-direction)
     /// error `target - prediction`; `table_size` is the pattern's 3^size
     /// (for optimizers that allocate per-cell state lazily).
-    fn step(&mut self, stage: usize, pattern: usize, index: usize, table_size: usize, grad: f32)
-        -> f32;
+    fn step(
+        &mut self,
+        stage: usize,
+        pattern: usize,
+        index: usize,
+        table_size: usize,
+        grad: f32,
+    ) -> f32;
 
     /// Called once per epoch by trainers that support schedules.
     fn next_epoch(&mut self) {}
@@ -177,13 +193,23 @@ pub struct SgdOptimizer {
 
 impl SgdOptimizer {
     pub fn new(learning_rate: f32, decay: f32) -> SgdOptimizer {
-        SgdOptimizer { learning_rate, decay }
+        SgdOptimizer {
+            learning_rate,
+            decay,
+        }
     }
 }
 
 impl Optimizer for SgdOptimizer {
     #[inline]
-    fn step(&mut self, _stage: usize, _pattern: usize, _index: usize, _table_size: usize, grad: f32) -> f32 {
+    fn step(
+        &mut self,
+        _stage: usize,
+        _pattern: usize,
+        _index: usize,
+        _table_size: usize,
+        grad: f32,
+    ) -> f32 {
         self.learning_rate * grad
     }
 
@@ -224,7 +250,14 @@ impl AdamOptimizer {
 impl Optimizer for AdamOptimizer {
     /// Bias-corrected Adam step for one cell.
     #[inline]
-    fn step(&mut self, stage: usize, pattern: usize, index: usize, table_size: usize, grad: f32) -> f32 {
+    fn step(
+        &mut self,
+        stage: usize,
+        pattern: usize,
+        index: usize,
+        table_size: usize,
+        grad: f32,
+    ) -> f32 {
         if self.moments.len() <= stage {
             self.moments.resize_with(stage + 1, Vec::new);
         }
@@ -426,8 +459,16 @@ impl Evaluator {
         if self.flat_i16.is_empty() {
             // Weights were mutated since the last rebuild; fall back.
             let mut b = Board::new();
-            b.black = if matches!(color, Color::Black) { player } else { opponent };
-            b.white = if matches!(color, Color::Black) { opponent } else { player };
+            b.black = if matches!(color, Color::Black) {
+                player
+            } else {
+                opponent
+            };
+            b.white = if matches!(color, Color::Black) {
+                opponent
+            } else {
+                player
+            };
             b.player = color;
             b.empty_count = empties as u8;
             return self.eval_indices(&b, indices);
@@ -652,16 +693,25 @@ impl Evaluator {
         let mut u32buf = [0u8; 4];
         r.read_exact(&mut u32buf)?;
         if u32::from_le_bytes(u32buf) as usize != STAGE_COUNT {
-            return Err(io::Error::new(io::ErrorKind::InvalidData, "stage count mismatch"));
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidData,
+                "stage count mismatch",
+            ));
         }
         r.read_exact(&mut u32buf)?;
         if u32::from_le_bytes(u32buf) as usize != self.patterns.len() {
-            return Err(io::Error::new(io::ErrorKind::InvalidData, "pattern count mismatch"));
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidData,
+                "pattern count mismatch",
+            ));
         }
         for p in self.patterns {
             r.read_exact(&mut u32buf)?;
             if u32::from_le_bytes(u32buf) as usize != p.table_size() {
-                return Err(io::Error::new(io::ErrorKind::InvalidData, "table size mismatch"));
+                return Err(io::Error::new(
+                    io::ErrorKind::InvalidData,
+                    "table size mismatch",
+                ));
             }
         }
 
@@ -764,7 +814,10 @@ mod tests {
             e.update_weights(&b, 8.0, LR);
         }
         let final_err = (8.0 - e.eval(&b)).abs();
-        assert!(final_err < 0.05, "must converge to target, residual {final_err}");
+        assert!(
+            final_err < 0.05,
+            "must converge to target, residual {final_err}"
+        );
     }
 
     #[test]
@@ -786,7 +839,10 @@ mod tests {
                 assert_eq!(multiplier, 217.0, "symmetric start: Σk² + 1 = 217");
             } else {
                 // Any first move retains one diagonal mirror symmetry
-                assert_eq!(multiplier, 193.0, "first move keeps a mirror: Σk² + 1 = 193");
+                assert_eq!(
+                    multiplier, 193.0,
+                    "first move keeps a mirror: Σk² + 1 = 193"
+                );
             }
 
             let mut e = Evaluator::new(EGAROUCID_PATTERNS);
@@ -909,7 +965,10 @@ mod tests {
 
         let syms = b.symmetries();
         let base = e.eval(&syms[0]);
-        assert!((6.0 - base).abs() < 1.0, "training target reached, got {base}");
+        assert!(
+            (6.0 - base).abs() < 1.0,
+            "training target reached, got {base}"
+        );
         // The 8 views are updated sequentially inside `train`, so at any
         // instant they differ by at most Adam's steady-state oscillation.
         for (i, sym) in syms.iter().enumerate() {

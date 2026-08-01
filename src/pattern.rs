@@ -68,7 +68,12 @@ impl Pattern {
     }
 
     /// Indices for all orientations of this pattern.
-    pub fn indices(&self, black: u64, white: u64, player: Color) -> impl Iterator<Item = usize> + '_ {
+    pub fn indices(
+        &self,
+        black: u64,
+        white: u64,
+        player: Color,
+    ) -> impl Iterator<Item = usize> + '_ {
         self.masks
             .iter()
             .map(move |mask| Self::mask_index(mask, black, white, player))
@@ -80,102 +85,166 @@ impl Pattern {
 // ---------------------------------------------------------------------------
 
 pub const EGAROUCID_PATTERNS: &[Pattern] = &[
-    Pattern { name: "Line2", size: 8, masks: &[
-        &[A2, B2, C2, D2, E2, F2, G2, H2],
-        &[A7, B7, C7, D7, E7, F7, G7, H7],
-        &[B1, B2, B3, B4, B5, B6, B7, B8],
-        &[G1, G2, G3, G4, G5, G6, G7, G8],
-    ]},
-    Pattern { name: "Line3", size: 8, masks: &[
-        &[A3, B3, C3, D3, E3, F3, G3, H3],
-        &[A6, B6, C6, D6, E6, F6, G6, H6],
-        &[C1, C2, C3, C4, C5, C6, C7, C8],
-        &[F1, F2, F3, F4, F5, F6, F7, F8],
-    ]},
-    Pattern { name: "Line4", size: 8, masks: &[
-        &[A4, B4, C4, D4, E4, F4, G4, H4],
-        &[A5, B5, C5, D5, E5, F5, G5, H5],
-        &[D1, D2, D3, D4, D5, D6, D7, D8],
-        &[E1, E2, E3, E4, E5, E6, E7, E8],
-    ]},
-    Pattern { name: "Corner3x3", size: 9, masks: &[
-        &[A1, B1, A2, B2, C1, A3, C2, B3, C3],
-        &[H1, G1, H2, G2, F1, H3, F2, G3, F3],
-        &[A8, A7, B8, B7, A6, C8, B6, C7, C6],
-        &[H8, H7, G8, G7, H6, F8, G6, F7, F6],
-    ]},
-    Pattern { name: "Diagonal5", size: 7, masks: &[
-        &[B2, D1, E2, F3, G4, H5, G7],
-        &[B2, A4, B5, C6, D7, E8, G7],
-        &[G2, E1, D2, C3, B4, A5, B7],
-        &[G2, H4, G5, F6, E7, D8, B7],
-    ]},
-    Pattern { name: "Diagonal6", size: 9, masks: &[
-        &[B1, C1, D2, E3, G2, F4, G5, H6, H7],
-        &[A2, A3, B4, C5, B7, D6, E7, F8, G8],
-        &[G1, F1, E2, D3, B2, C4, B5, A6, A7],
-        &[H2, H3, G4, F5, G7, E6, D7, C8, B8],
-    ]},
-    Pattern { name: "Diagonal7", size: 9, masks: &[
-        &[A1, B1, C2, D3, E4, F5, G6, H7, H8],
-        &[H1, H2, G3, F4, E5, D6, C7, B8, A8],
-        &[A1, A2, B3, C4, D5, E6, F7, G8, H8],
-        &[H1, G1, F2, E3, D4, C5, B6, A7, A8],
-    ]},
-    Pattern { name: "Diagonal8+2C", size: 10, masks: &[
-        &[A1, B2, C3, D4, E5, F6, G7, H8, A2, B1],
-        &[A8, B7, C6, D5, E4, F3, G2, H1, B8, A7],
-        &[H8, G7, F6, E5, D4, C3, B2, A1, H7, G8],
-        &[H1, G2, F3, E4, D5, C6, B7, A8, G1, H2],
-    ]},
-    Pattern { name: "Edge+2x", size: 10, masks: &[
-        &[B2, A1, B1, C1, D1, E1, F1, G1, H1, G2],
-        &[B7, A8, B8, C8, D8, E8, F8, G8, H8, G7],
-        &[B2, A1, A2, A3, A4, A5, A6, A7, A8, B7],
-        &[G2, H1, H2, H3, H4, H5, H6, H7, H8, G7],
-    ]},
-    Pattern { name: "Triangle", size: 10, masks: &[
-        &[A1, A2, B1, A3, B2, C1, A4, B3, C2, D1],
-        &[H1, G1, H2, F1, G2, H3, E1, F2, G3, H4],
-        &[H8, H7, G8, H6, G7, F8, H5, G6, F7, E8],
-        &[A8, B8, A7, C8, B7, A6, D8, C7, B6, A5],
-    ]},
-    Pattern { name: "Corner + Block", size: 10, masks: &[
-        &[A1, C1, D1, C2, D2, E2, F2, E1, F1, H1],
-        &[H1, H3, H4, G3, G4, G5, G6, H5, H6, H8],
-        &[H8, F8, E8, F7, E7, D7, C7, D8, C8, A8],
-        &[A8, A6, A5, B6, B5, B4, B3, A4, A3, A1],
-    ]},
-    Pattern { name: "Cross", size: 10, masks: &[
-        &[A1, B2, C3, D4, B1, C2, D3, A2, B3, C4],
-        &[H1, G2, F3, E4, G1, F2, E3, H2, G3, F4],
-        &[A8, B7, C6, D5, B8, C7, D6, A7, B6, C5],
-        &[H8, G7, F6, E5, G8, F7, E6, H7, G6, F5],
-    ]},
-    Pattern { name: "Edge+Y", size: 10, masks: &[
-        &[C2, A1, B1, C1, D1, E1, F1, G1, H1, F2],
-        &[C7, A8, B8, C8, D8, E8, F8, G8, H8, F7],
-        &[B3, A1, A2, A3, A4, A5, A6, A7, A8, B6],
-        &[G3, H1, H2, H3, H4, H5, H6, H7, H8, G6],
-    ]},
-    Pattern { name: "Narrow Triangle", size: 10, masks: &[
-        &[A1, B1, C1, D1, E1, A2, B2, A3, A4, A5],
-        &[H1, G1, F1, E1, D1, H2, G2, H3, H4, H5],
-        &[A8, B8, C8, D8, E8, A7, B7, A6, A5, A4],
-        &[H8, G8, F8, E8, D8, H7, G7, H6, H5, H4],
-    ]},
-    Pattern { name: "Fish", size: 10, masks: &[
-        &[A1, B1, A2, B2, C2, D2, B3, C3, B4, D4],
-        &[H1, G1, H2, G2, F2, E2, G3, F3, G4, E4],
-        &[A8, B8, A7, B7, C7, D7, B6, C6, B5, D5],
-        &[H8, G8, H7, G7, F7, E7, G6, F6, G5, E5],
-    ]},
-    Pattern { name: "Anvil", size: 10, masks: &[
-        &[C6, D6, D7, D8, C8, F8, E8, E7, E6, F6],
-        &[C3, C4, B4, A4, A3, A6, A5, B5, C5, C6],
-        &[F3, E3, E2, E1, F1, C1, D1, D2, D3, C3],
-        &[F6, F5, G5, H5, H6, H3, H4, G4, F4, F3],
-    ]},
+    Pattern {
+        name: "Line2",
+        size: 8,
+        masks: &[
+            &[A2, B2, C2, D2, E2, F2, G2, H2],
+            &[A7, B7, C7, D7, E7, F7, G7, H7],
+            &[B1, B2, B3, B4, B5, B6, B7, B8],
+            &[G1, G2, G3, G4, G5, G6, G7, G8],
+        ],
+    },
+    Pattern {
+        name: "Line3",
+        size: 8,
+        masks: &[
+            &[A3, B3, C3, D3, E3, F3, G3, H3],
+            &[A6, B6, C6, D6, E6, F6, G6, H6],
+            &[C1, C2, C3, C4, C5, C6, C7, C8],
+            &[F1, F2, F3, F4, F5, F6, F7, F8],
+        ],
+    },
+    Pattern {
+        name: "Line4",
+        size: 8,
+        masks: &[
+            &[A4, B4, C4, D4, E4, F4, G4, H4],
+            &[A5, B5, C5, D5, E5, F5, G5, H5],
+            &[D1, D2, D3, D4, D5, D6, D7, D8],
+            &[E1, E2, E3, E4, E5, E6, E7, E8],
+        ],
+    },
+    Pattern {
+        name: "Corner3x3",
+        size: 9,
+        masks: &[
+            &[A1, B1, A2, B2, C1, A3, C2, B3, C3],
+            &[H1, G1, H2, G2, F1, H3, F2, G3, F3],
+            &[A8, A7, B8, B7, A6, C8, B6, C7, C6],
+            &[H8, H7, G8, G7, H6, F8, G6, F7, F6],
+        ],
+    },
+    Pattern {
+        name: "Diagonal5",
+        size: 7,
+        masks: &[
+            &[B2, D1, E2, F3, G4, H5, G7],
+            &[B2, A4, B5, C6, D7, E8, G7],
+            &[G2, E1, D2, C3, B4, A5, B7],
+            &[G2, H4, G5, F6, E7, D8, B7],
+        ],
+    },
+    Pattern {
+        name: "Diagonal6",
+        size: 9,
+        masks: &[
+            &[B1, C1, D2, E3, G2, F4, G5, H6, H7],
+            &[A2, A3, B4, C5, B7, D6, E7, F8, G8],
+            &[G1, F1, E2, D3, B2, C4, B5, A6, A7],
+            &[H2, H3, G4, F5, G7, E6, D7, C8, B8],
+        ],
+    },
+    Pattern {
+        name: "Diagonal7",
+        size: 9,
+        masks: &[
+            &[A1, B1, C2, D3, E4, F5, G6, H7, H8],
+            &[H1, H2, G3, F4, E5, D6, C7, B8, A8],
+            &[A1, A2, B3, C4, D5, E6, F7, G8, H8],
+            &[H1, G1, F2, E3, D4, C5, B6, A7, A8],
+        ],
+    },
+    Pattern {
+        name: "Diagonal8+2C",
+        size: 10,
+        masks: &[
+            &[A1, B2, C3, D4, E5, F6, G7, H8, A2, B1],
+            &[A8, B7, C6, D5, E4, F3, G2, H1, B8, A7],
+            &[H8, G7, F6, E5, D4, C3, B2, A1, H7, G8],
+            &[H1, G2, F3, E4, D5, C6, B7, A8, G1, H2],
+        ],
+    },
+    Pattern {
+        name: "Edge+2x",
+        size: 10,
+        masks: &[
+            &[B2, A1, B1, C1, D1, E1, F1, G1, H1, G2],
+            &[B7, A8, B8, C8, D8, E8, F8, G8, H8, G7],
+            &[B2, A1, A2, A3, A4, A5, A6, A7, A8, B7],
+            &[G2, H1, H2, H3, H4, H5, H6, H7, H8, G7],
+        ],
+    },
+    Pattern {
+        name: "Triangle",
+        size: 10,
+        masks: &[
+            &[A1, A2, B1, A3, B2, C1, A4, B3, C2, D1],
+            &[H1, G1, H2, F1, G2, H3, E1, F2, G3, H4],
+            &[H8, H7, G8, H6, G7, F8, H5, G6, F7, E8],
+            &[A8, B8, A7, C8, B7, A6, D8, C7, B6, A5],
+        ],
+    },
+    Pattern {
+        name: "Corner + Block",
+        size: 10,
+        masks: &[
+            &[A1, C1, D1, C2, D2, E2, F2, E1, F1, H1],
+            &[H1, H3, H4, G3, G4, G5, G6, H5, H6, H8],
+            &[H8, F8, E8, F7, E7, D7, C7, D8, C8, A8],
+            &[A8, A6, A5, B6, B5, B4, B3, A4, A3, A1],
+        ],
+    },
+    Pattern {
+        name: "Cross",
+        size: 10,
+        masks: &[
+            &[A1, B2, C3, D4, B1, C2, D3, A2, B3, C4],
+            &[H1, G2, F3, E4, G1, F2, E3, H2, G3, F4],
+            &[A8, B7, C6, D5, B8, C7, D6, A7, B6, C5],
+            &[H8, G7, F6, E5, G8, F7, E6, H7, G6, F5],
+        ],
+    },
+    Pattern {
+        name: "Edge+Y",
+        size: 10,
+        masks: &[
+            &[C2, A1, B1, C1, D1, E1, F1, G1, H1, F2],
+            &[C7, A8, B8, C8, D8, E8, F8, G8, H8, F7],
+            &[B3, A1, A2, A3, A4, A5, A6, A7, A8, B6],
+            &[G3, H1, H2, H3, H4, H5, H6, H7, H8, G6],
+        ],
+    },
+    Pattern {
+        name: "Narrow Triangle",
+        size: 10,
+        masks: &[
+            &[A1, B1, C1, D1, E1, A2, B2, A3, A4, A5],
+            &[H1, G1, F1, E1, D1, H2, G2, H3, H4, H5],
+            &[A8, B8, C8, D8, E8, A7, B7, A6, A5, A4],
+            &[H8, G8, F8, E8, D8, H7, G7, H6, H5, H4],
+        ],
+    },
+    Pattern {
+        name: "Fish",
+        size: 10,
+        masks: &[
+            &[A1, B1, A2, B2, C2, D2, B3, C3, B4, D4],
+            &[H1, G1, H2, G2, F2, E2, G3, F3, G4, E4],
+            &[A8, B8, A7, B7, C7, D7, B6, C6, B5, D5],
+            &[H8, G8, H7, G7, F7, E7, G6, F6, G5, E5],
+        ],
+    },
+    Pattern {
+        name: "Anvil",
+        size: 10,
+        masks: &[
+            &[C6, D6, D7, D8, C8, F8, E8, E7, E6, F6],
+            &[C3, C4, B4, A4, A3, A6, A5, B5, C5, C6],
+            &[F3, E3, E2, E1, F1, C1, D1, D2, D3, C3],
+            &[F6, F5, G5, H5, H6, H3, H4, G4, F4, F3],
+        ],
+    },
 ];
 
 // ---------------------------------------------------------------------------
@@ -183,76 +252,124 @@ pub const EGAROUCID_PATTERNS: &[Pattern] = &[
 // ---------------------------------------------------------------------------
 
 pub const EDAX_PATTERNS: &[Pattern] = &[
-    Pattern { name: "Corner3x3", size: 9, masks: &[
-        &[A1, B1, A2, B2, C1, A3, C2, B3, C3],
-        &[H1, G1, H2, G2, F1, H3, F2, G3, F3],
-        &[A8, A7, B8, B7, A6, C8, B6, C7, C6],
-        &[H8, H7, G8, G7, H6, F8, G6, F7, F6],
-    ]},
-    Pattern { name: "Angle+X", size: 10, masks: &[
-        &[A5, A4, A3, A2, A1, B2, B1, C1, D1, E1],
-        &[H5, H4, H3, H2, H1, G2, G1, F1, E1, D1],
-        &[A4, A5, A6, A7, A8, B7, B8, C8, D8, E8],
-        &[H4, H5, H6, H7, H8, G7, G8, F8, E8, D8],
-    ]},
-    Pattern { name: "Edge+2x", size: 10, masks: &[
-        &[B2, A1, B1, C1, D1, E1, F1, G1, H1, G2],
-        &[B7, A8, B8, C8, D8, E8, F8, G8, H8, G7],
-        &[B2, A1, A2, A3, A4, A5, A6, A7, A8, B7],
-        &[G2, H1, H2, H3, H4, H5, H6, H7, H8, G7],
-    ]},
-    Pattern { name: "Corner+Block", size: 10, masks: &[
-        &[A1, C1, D1, C2, D2, E2, F2, E1, F1, H1],
-        &[A8, C8, D8, C7, D7, E7, F7, E8, F8, H8],
-        &[A1, A3, A4, B3, B4, B5, B6, A5, A6, A8],
-        &[H1, H3, H4, G3, G4, G5, G6, H5, H6, H8],
-    ]},
-    Pattern { name: "Line2", size: 8, masks: &[
-        &[A2, B2, C2, D2, E2, F2, G2, H2],
-        &[A7, B7, C7, D7, E7, F7, G7, H7],
-        &[B1, B2, B3, B4, B5, B6, B7, B8],
-        &[G1, G2, G3, G4, G5, G6, G7, G8],
-    ]},
-    Pattern { name: "Line3", size: 8, masks: &[
-        &[A3, B3, C3, D3, E3, F3, G3, H3],
-        &[A6, B6, C6, D6, E6, F6, G6, H6],
-        &[C1, C2, C3, C4, C5, C6, C7, C8],
-        &[F1, F2, F3, F4, F5, F6, F7, F8],
-    ]},
-    Pattern { name: "Line4", size: 8, masks: &[
-        &[A4, B4, C4, D4, E4, F4, G4, H4],
-        &[A5, B5, C5, D5, E5, F5, G5, H5],
-        &[D1, D2, D3, D4, D5, D6, D7, D8],
-        &[E1, E2, E3, E4, E5, E6, E7, E8],
-    ]},
-    Pattern { name: "Diagonal8", size: 8, masks: &[
-        &[A1, B2, C3, D4, E5, F6, G7, H8],
-        &[A8, B7, C6, D5, E4, F3, G2, H1],
-    ]},
-    Pattern { name: "Diagonal7", size: 7, masks: &[
-        &[B1, C2, D3, E4, F5, G6, H7],
-        &[H2, G3, F4, E5, D6, C7, B8],
-        &[A2, B3, C4, D5, E6, F7, G8],
-        &[G1, F2, E3, D4, C5, B6, A7],
-    ]},
-    Pattern { name: "Diagonal6", size: 6, masks: &[
-        &[C1, D2, E3, F4, G5, H6],
-        &[A3, B4, C5, D6, E7, F8],
-        &[F1, E2, D3, C4, B5, A6],
-        &[H3, G4, F5, E6, D7, C8],
-    ]},
-    Pattern { name: "Diagonal5", size: 5, masks: &[
-        &[D1, E2, F3, G4, H5],
-        &[A4, B5, C6, D7, E8],
-        &[E1, D2, C3, B4, A5],
-        &[H4, G5, F6, E7, D8],
-    ]},
-    Pattern { name: "Diagonal4", size: 4, masks: &[
-        &[D1, C2, B3, A4],
-        &[A5, B6, C7, D8],
-        &[E1, F2, G3, H4],
-        &[H5, G6, F7, E8],
-    ]},
+    Pattern {
+        name: "Corner3x3",
+        size: 9,
+        masks: &[
+            &[A1, B1, A2, B2, C1, A3, C2, B3, C3],
+            &[H1, G1, H2, G2, F1, H3, F2, G3, F3],
+            &[A8, A7, B8, B7, A6, C8, B6, C7, C6],
+            &[H8, H7, G8, G7, H6, F8, G6, F7, F6],
+        ],
+    },
+    Pattern {
+        name: "Angle+X",
+        size: 10,
+        masks: &[
+            &[A5, A4, A3, A2, A1, B2, B1, C1, D1, E1],
+            &[H5, H4, H3, H2, H1, G2, G1, F1, E1, D1],
+            &[A4, A5, A6, A7, A8, B7, B8, C8, D8, E8],
+            &[H4, H5, H6, H7, H8, G7, G8, F8, E8, D8],
+        ],
+    },
+    Pattern {
+        name: "Edge+2x",
+        size: 10,
+        masks: &[
+            &[B2, A1, B1, C1, D1, E1, F1, G1, H1, G2],
+            &[B7, A8, B8, C8, D8, E8, F8, G8, H8, G7],
+            &[B2, A1, A2, A3, A4, A5, A6, A7, A8, B7],
+            &[G2, H1, H2, H3, H4, H5, H6, H7, H8, G7],
+        ],
+    },
+    Pattern {
+        name: "Corner+Block",
+        size: 10,
+        masks: &[
+            &[A1, C1, D1, C2, D2, E2, F2, E1, F1, H1],
+            &[A8, C8, D8, C7, D7, E7, F7, E8, F8, H8],
+            &[A1, A3, A4, B3, B4, B5, B6, A5, A6, A8],
+            &[H1, H3, H4, G3, G4, G5, G6, H5, H6, H8],
+        ],
+    },
+    Pattern {
+        name: "Line2",
+        size: 8,
+        masks: &[
+            &[A2, B2, C2, D2, E2, F2, G2, H2],
+            &[A7, B7, C7, D7, E7, F7, G7, H7],
+            &[B1, B2, B3, B4, B5, B6, B7, B8],
+            &[G1, G2, G3, G4, G5, G6, G7, G8],
+        ],
+    },
+    Pattern {
+        name: "Line3",
+        size: 8,
+        masks: &[
+            &[A3, B3, C3, D3, E3, F3, G3, H3],
+            &[A6, B6, C6, D6, E6, F6, G6, H6],
+            &[C1, C2, C3, C4, C5, C6, C7, C8],
+            &[F1, F2, F3, F4, F5, F6, F7, F8],
+        ],
+    },
+    Pattern {
+        name: "Line4",
+        size: 8,
+        masks: &[
+            &[A4, B4, C4, D4, E4, F4, G4, H4],
+            &[A5, B5, C5, D5, E5, F5, G5, H5],
+            &[D1, D2, D3, D4, D5, D6, D7, D8],
+            &[E1, E2, E3, E4, E5, E6, E7, E8],
+        ],
+    },
+    Pattern {
+        name: "Diagonal8",
+        size: 8,
+        masks: &[
+            &[A1, B2, C3, D4, E5, F6, G7, H8],
+            &[A8, B7, C6, D5, E4, F3, G2, H1],
+        ],
+    },
+    Pattern {
+        name: "Diagonal7",
+        size: 7,
+        masks: &[
+            &[B1, C2, D3, E4, F5, G6, H7],
+            &[H2, G3, F4, E5, D6, C7, B8],
+            &[A2, B3, C4, D5, E6, F7, G8],
+            &[G1, F2, E3, D4, C5, B6, A7],
+        ],
+    },
+    Pattern {
+        name: "Diagonal6",
+        size: 6,
+        masks: &[
+            &[C1, D2, E3, F4, G5, H6],
+            &[A3, B4, C5, D6, E7, F8],
+            &[F1, E2, D3, C4, B5, A6],
+            &[H3, G4, F5, E6, D7, C8],
+        ],
+    },
+    Pattern {
+        name: "Diagonal5",
+        size: 5,
+        masks: &[
+            &[D1, E2, F3, G4, H5],
+            &[A4, B5, C6, D7, E8],
+            &[E1, D2, C3, B4, A5],
+            &[H4, G5, F6, E7, D8],
+        ],
+    },
+    Pattern {
+        name: "Diagonal4",
+        size: 4,
+        masks: &[
+            &[D1, C2, B3, A4],
+            &[A5, B6, C7, D8],
+            &[E1, F2, G3, H4],
+            &[H5, G6, F7, E8],
+        ],
+    },
 ];
 
 // ---------------------------------------------------------------------------
@@ -265,28 +382,46 @@ pub const EDAX_PATTERNS: &[Pattern] = &[
 // ---------------------------------------------------------------------------
 
 /// Angle+X (corner region + X square), from the Edax pattern set.
-const ANGLE_X: Pattern = Pattern { name: "Angle+X", size: 10, masks: &[
-    &[A5, A4, A3, A2, A1, B2, B1, C1, D1, E1],
-    &[H5, H4, H3, H2, H1, G2, G1, F1, E1, D1],
-    &[A4, A5, A6, A7, A8, B7, B8, C8, D8, E8],
-    &[H4, H5, H6, H7, H8, G7, G8, F8, E8, D8],
-]};
+const ANGLE_X: Pattern = Pattern {
+    name: "Angle+X",
+    size: 10,
+    masks: &[
+        &[A5, A4, A3, A2, A1, B2, B1, C1, D1, E1],
+        &[H5, H4, H3, H2, H1, G2, G1, F1, E1, D1],
+        &[A4, A5, A6, A7, A8, B7, B8, C8, D8, E8],
+        &[H4, H5, H6, H7, H8, G7, G8, F8, E8, D8],
+    ],
+};
 
 /// Diagonal4 (3^4 = 81 cells: fully trainable even in the opening), from
 /// the Edax pattern set.
-const DIAGONAL4: Pattern = Pattern { name: "Diagonal4", size: 4, masks: &[
-    &[D1, C2, B3, A4],
-    &[A5, B6, C7, D8],
-    &[E1, F2, G3, H4],
-    &[H5, G6, F7, E8],
-]};
+const DIAGONAL4: Pattern = Pattern {
+    name: "Diagonal4",
+    size: 4,
+    masks: &[
+        &[D1, C2, B3, A4],
+        &[A5, B6, C7, D8],
+        &[E1, F2, G3, H4],
+        &[H5, G6, F7, E8],
+    ],
+};
 
 pub const EGAROUCID_PLUS_PATTERNS: &[Pattern] = &[
-    EGAROUCID_PATTERNS[0], EGAROUCID_PATTERNS[1], EGAROUCID_PATTERNS[2],
-    EGAROUCID_PATTERNS[3], EGAROUCID_PATTERNS[4], EGAROUCID_PATTERNS[5],
-    EGAROUCID_PATTERNS[6], EGAROUCID_PATTERNS[7], EGAROUCID_PATTERNS[8],
-    EGAROUCID_PATTERNS[9], EGAROUCID_PATTERNS[10], EGAROUCID_PATTERNS[11],
-    EGAROUCID_PATTERNS[12], EGAROUCID_PATTERNS[13], EGAROUCID_PATTERNS[14],
+    EGAROUCID_PATTERNS[0],
+    EGAROUCID_PATTERNS[1],
+    EGAROUCID_PATTERNS[2],
+    EGAROUCID_PATTERNS[3],
+    EGAROUCID_PATTERNS[4],
+    EGAROUCID_PATTERNS[5],
+    EGAROUCID_PATTERNS[6],
+    EGAROUCID_PATTERNS[7],
+    EGAROUCID_PATTERNS[8],
+    EGAROUCID_PATTERNS[9],
+    EGAROUCID_PATTERNS[10],
+    EGAROUCID_PATTERNS[11],
+    EGAROUCID_PATTERNS[12],
+    EGAROUCID_PATTERNS[13],
+    EGAROUCID_PATTERNS[14],
     EGAROUCID_PATTERNS[15],
     ANGLE_X,
     DIAGONAL4,
@@ -318,7 +453,10 @@ pub struct PatternWeights {
 impl PatternWeights {
     /// Zero-initialized weights sized 3^size per pattern.
     pub fn zeros(patterns: &'static [Pattern]) -> Self {
-        let weights = patterns.iter().map(|p| vec![0i32; p.table_size()]).collect();
+        let weights = patterns
+            .iter()
+            .map(|p| vec![0i32; p.table_size()])
+            .collect();
         PatternWeights { patterns, weights }
     }
 
@@ -367,7 +505,10 @@ mod tests {
                     mask.len(),
                     p.size,
                     "{} mask {} has {} squares, declared size {}",
-                    p.name, i, mask.len(), p.size
+                    p.name,
+                    i,
+                    mask.len(),
+                    p.size
                 );
             }
         }
@@ -381,7 +522,14 @@ mod tests {
                 for &s in mask.iter() {
                     assert!(s < 64, "{} mask {}: square {} out of range", p.name, i, s);
                     let bit = 1u64 << s;
-                    assert_eq!(seen & bit, 0, "{} mask {}: duplicate square {}", p.name, i, s);
+                    assert_eq!(
+                        seen & bit,
+                        0,
+                        "{} mask {}: duplicate square {}",
+                        p.name,
+                        i,
+                        s
+                    );
                     seen |= bit;
                 }
             }
@@ -443,7 +591,11 @@ mod tests {
         }
 
         let b = Board::new();
-        assert_eq!(w.evaluate(b.black, b.white, b.player()), 0, "all-zero weights");
+        assert_eq!(
+            w.evaluate(b.black, b.white, b.player()),
+            0,
+            "all-zero weights"
+        );
 
         // Set the weight for Line2's current (all-empty) index; Line2 has 4
         // orientations, all all-empty on the initial board -> score = 4 * 7.

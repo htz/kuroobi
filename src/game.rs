@@ -206,9 +206,10 @@ impl Reversi {
 
     /// Convert to KIFU notation (e.g., "f5g5h5...").
     pub fn to_kifu(&self) -> String {
-        self.history.iter().filter_map(|r| {
-            r.pos.map(|p| p.to_kifu())
-        }).collect()
+        self.history
+            .iter()
+            .filter_map(|r| r.pos.map(|p| p.to_kifu()))
+            .collect()
     }
 
     /// Parse KIFU string back to a game (for replay).
@@ -462,7 +463,11 @@ mod tests {
         g.undo().unwrap();
 
         assert_eq!(g.hash(), hash_before_pass, "undoing a pass restores hash");
-        assert_eq!(g.player(), player_before_pass, "undoing a pass restores player");
+        assert_eq!(
+            g.player(),
+            player_before_pass,
+            "undoing a pass restores player"
+        );
         assert_eq!(g.move_count(), 1);
     }
 
@@ -513,7 +518,11 @@ mod tests {
 
         assert_eq!(g2.board.black, g.board.black);
         assert_eq!(g2.board.white, g.board.white);
-        assert_eq!(g2.player(), g.player(), "player must be recovered from hash");
+        assert_eq!(
+            g2.player(),
+            g.player(),
+            "player must be recovered from hash"
+        );
         assert_eq!(g2.hash(), g.hash());
 
         // Tampered hash must be rejected
@@ -598,8 +607,7 @@ mod tests {
                 64,
                 "piece conservation"
             );
-            let recomputed =
-                zobrist::compute_hash(g.board.black, g.board.white, g.player());
+            let recomputed = zobrist::compute_hash(g.board.black, g.board.white, g.player());
             assert_eq!(g.hash(), recomputed, "incremental hash must stay in sync");
         }
         assert!(plies >= 20, "a full game plays plenty of moves");

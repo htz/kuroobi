@@ -70,23 +70,40 @@ fn parse_args() -> Result<Args, String> {
             "--login" => args.login = Some(value("--login")?),
             "--pw" => args.pw = Some(value("--pw")?),
             "--credentials" => args.credentials = PathBuf::from(value("--credentials")?),
-            "--games" => args.games = value("--games")?.parse().map_err(|e| format!("--games: {e}"))?,
+            "--games" => {
+                args.games = value("--games")?
+                    .parse()
+                    .map_err(|e| format!("--games: {e}"))?
+            }
             "--time" => args.time = value("--time")?,
             "--type" => args.gtype = value("--type")?,
-            "--depth" => args.depth = value("--depth")?.parse().map_err(|e| format!("--depth: {e}"))?,
+            "--depth" => {
+                args.depth = value("--depth")?
+                    .parse()
+                    .map_err(|e| format!("--depth: {e}"))?
+            }
             "--solve-empties" => {
-                args.solve_empties =
-                    value("--solve-empties")?.parse().map_err(|e| format!("--solve-empties: {e}"))?
+                args.solve_empties = value("--solve-empties")?
+                    .parse()
+                    .map_err(|e| format!("--solve-empties: {e}"))?
             }
             "--selective-band" => {
-                args.band = value("--selective-band")?.parse().map_err(|e| format!("--selective-band: {e}"))?
+                args.band = value("--selective-band")?
+                    .parse()
+                    .map_err(|e| format!("--selective-band: {e}"))?
             }
             "--no-mpc" => args.mpc = false,
-            "--threads" => args.threads = value("--threads")?.parse().map_err(|e| format!("--threads: {e}"))?,
+            "--threads" => {
+                args.threads = value("--threads")?
+                    .parse()
+                    .map_err(|e| format!("--threads: {e}"))?
+            }
             "--weights" => args.weights = PathBuf::from(value("--weights")?),
             "--nnue" => args.nnue = PathBuf::from(value("--nnue")?),
             "--solver-hash" => {
-                args.solver_hash = value("--solver-hash")?.parse().map_err(|e| format!("--solver-hash: {e}"))?
+                args.solver_hash = value("--solver-hash")?
+                    .parse()
+                    .map_err(|e| format!("--solver-hash: {e}"))?
             }
             other => return Err(format!("unknown option: {other}")),
         }
@@ -106,7 +123,7 @@ fn parse_obf(line: &str) -> Option<Board> {
 }
 
 fn coord(p: Position) -> String {
-    let i = p.index() as u8;
+    let i = p.index();
     format!("{}{}", (b'A' + i / 8) as char, i % 8 + 1)
 }
 
@@ -220,10 +237,7 @@ fn main() -> ExitCode {
                 }
             }
             Err(e) => {
-                eprintln!(
-                    "need --login/--pw or {} ({e})",
-                    args.credentials.display()
-                );
+                eprintln!("need --login/--pw or {} ({e})", args.credentials.display());
                 return ExitCode::FAILURE;
             }
         },
@@ -392,9 +406,8 @@ fn main() -> ExitCode {
                                                 in_match = true;
                                             }
                                         }
-                                        let after = b[open + close..]
-                                            .trim_start_matches(')')
-                                            .trim_start();
+                                        let after =
+                                            b[open + close..].trim_start_matches(')').trim_start();
                                         let head: String = after
                                             .chars()
                                             .take_while(|c| c.is_ascii_digit() || *c == ':')
@@ -416,11 +429,11 @@ fn main() -> ExitCode {
                                 let cells: Vec<char> = rest
                                     .split_whitespace()
                                     .take(8)
-                                    .filter_map(|w| {
-                                        (w.len() == 1
-                                            && matches!(w.as_bytes()[0], b'-' | b'*' | b'O'))
-                                        .then(|| w.chars().next().unwrap())
+                                    .filter(|&w| {
+                                        w.len() == 1
+                                            && matches!(w.as_bytes()[0], b'-' | b'*' | b'O')
                                     })
+                                    .map(|w| w.chars().next().unwrap())
                                     .collect();
                                 if cells.len() == 8 {
                                     rows.push(cells);
@@ -469,7 +482,9 @@ fn main() -> ExitCode {
                             || ln.contains("not accepting")
                             || ln.contains("not registered")
                             || ln.contains("variable mismatch")
-                            || (ln.contains("not found") && !opponent.is_empty() && ln.contains(&opponent)));
+                            || (ln.contains("not found")
+                                && !opponent.is_empty()
+                                && ln.contains(&opponent)));
                     if fatal {
                         eprintln!("### request rejected: {ln}");
                         send("quit");
@@ -498,16 +513,15 @@ fn main() -> ExitCode {
             }
 
             if let Some(t0) = ready_at {
-                if first_session
-                    && !in_match
-                    && asked_at.is_none()
-                    && t0.elapsed().as_secs() >= 4
-                {
+                if first_session && !in_match && asked_at.is_none() && t0.elapsed().as_secs() >= 4 {
                     asked_at = Some(std::time::Instant::now());
                     if let Some(id) = &args.resume {
                         send(&format!("tell /os ask {id}"));
                     } else {
-                        send(&format!("tell /os ask {} {} {opponent}", args.gtype, args.time));
+                        send(&format!(
+                            "tell /os ask {} {} {opponent}",
+                            args.gtype, args.time
+                        ));
                     }
                 }
             }

@@ -72,8 +72,7 @@ fn mobility_matches_flippable_exhaustive() {
             let bit = e.trailing_zeros();
             e &= e - 1;
             let pos_bit = 1u64 << bit;
-            let flips =
-                bitboard::flippable(board.player_bb(), board.opponent_bb(), pos_bit);
+            let flips = bitboard::flippable(board.player_bb(), board.opponent_bb(), pos_bit);
             let in_mobility = moves & pos_bit != 0;
             assert_eq!(
                 flips != 0,

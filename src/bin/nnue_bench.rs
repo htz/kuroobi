@@ -107,14 +107,30 @@ macro_rules! walk_variant {
                 nn.$apply(acc, pos, flipped, mover);
                 let v = -$name(&nb, nn, acc, depth - 1, nodes);
                 nn.$undo(acc, pos, flipped, mover);
-                if v > best { best = v; }
+                if v > best {
+                    best = v;
+                }
             }
             best
         }
     };
 }
-walk_variant!(walk_i32, kuroobi::nnue::Accumulator32, accumulator_i32, acc_apply_i32, acc_undo_i32, eval_acc_i32);
-walk_variant!(walk_f32, kuroobi::nnue::AccumulatorF, accumulator_f32, acc_apply_f32, acc_undo_f32, eval_acc_f32);
+walk_variant!(
+    walk_i32,
+    kuroobi::nnue::Accumulator32,
+    accumulator_i32,
+    acc_apply_i32,
+    acc_undo_i32,
+    eval_acc_i32
+);
+walk_variant!(
+    walk_f32,
+    kuroobi::nnue::AccumulatorF,
+    accumulator_f32,
+    acc_apply_f32,
+    acc_undo_f32,
+    eval_acc_f32
+);
 
 /// From-scratch-at-leaf variant: the interior nodes only pay the cheap 2-byte
 /// pattern-index update (exactly what the linear search already does), and the
@@ -203,7 +219,8 @@ fn main() {
         return;
     }
     let mut lin = Evaluator::new(EGAROUCID_PATTERNS);
-    lin.load_weights(std::path::Path::new("weights/weights_full.bin")).expect("load linear");
+    lin.load_weights(std::path::Path::new("weights/weights_full.bin"))
+        .expect("load linear");
 
     // A mid-game start position (a few plies in).
     let mut b = Board::new();
@@ -213,7 +230,10 @@ fn main() {
             b.make_move_unchecked(pos);
         }
     }
-    println!("bench from a {}-empty position, full-width depth {depth}", b.empty_count());
+    println!(
+        "bench from a {}-empty position, full-width depth {depth}",
+        b.empty_count()
+    );
 
     // Correctness: incremental accumulator must match from-scratch eval along
     // a short move sequence (both colours).
@@ -230,13 +250,18 @@ fn main() {
                 ok = false;
             }
             let moves = tb.movable();
-            if moves == 0 { break; }
+            if moves == 0 {
+                break;
+            }
             let pos = Position::from_index(moves.trailing_zeros()).unwrap();
             let mover = tb.player();
             let flipped = tb.make_move_bits(pos);
             nn.acc_apply(&mut acc, pos, flipped, mover);
         }
-        println!("incremental correctness: {}", if ok { "OK" } else { "FAILED" });
+        println!(
+            "incremental correctness: {}",
+            if ok { "OK" } else { "FAILED" }
+        );
     }
 
     // Linear throughput.
@@ -281,8 +306,16 @@ fn main() {
 
     let mnps = |s: f64| nodes_l as f64 / s / 1e6;
     println!("linear:  {:.2} Mnps  (1.00x)", mnps(sec_l));
-    println!("nnue leaf-rebuild: {:.2} Mnps  ({:.2}x)", mnps(sec_s), sec_s / sec_l);
+    println!(
+        "nnue leaf-rebuild: {:.2} Mnps  ({:.2}x)",
+        mnps(sec_s),
+        sec_s / sec_l
+    );
     println!("nnue f32: {:.2} Mnps  ({:.2}x)", mnps(sec_f), sec_f / sec_l);
-    println!("nnue i32: {:.2} Mnps  ({:.2}x)", mnps(sec_32), sec_32 / sec_l);
+    println!(
+        "nnue i32: {:.2} Mnps  ({:.2}x)",
+        mnps(sec_32),
+        sec_32 / sec_l
+    );
     println!("nnue i16: {:.2} Mnps  ({:.2}x)", mnps(sec_n), sec_n / sec_l);
 }

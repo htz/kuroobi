@@ -7,10 +7,12 @@ use kuroobi::Board;
 #[test]
 #[ignore = "weights/ の実ファイルが必要 (git 管理外)"]
 fn choose_and_analyze_on_opening() {
-    let mut cfg = EngineConfig::default();
-    cfg.depth = 8;
-    cfg.solve_empties = 12;
-    cfg.threads = 2;
+    let cfg = EngineConfig {
+        depth: 8,
+        solve_empties: 12,
+        threads: 2,
+        ..Default::default()
+    };
     let mut engine = Engine::new(cfg).expect("engine init");
 
     let board = Board::new();

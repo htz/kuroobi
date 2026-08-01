@@ -15,6 +15,9 @@ use kuroobi::pattern::EGAROUCID_PATTERNS;
 use kuroobi::{Board, Color, Position};
 
 /// An evaluator: score a board from the side-to-move's perspective.
+// 片方の変種が大きいだけで、アリーナでは高々 2 個しか作らないため
+// Box 化する意味がない。
+#[allow(clippy::large_enum_variant)]
 enum Eval {
     Linear(Evaluator),
     Nn(Nnue),
@@ -225,9 +228,7 @@ fn main() -> ExitCode {
     let score = (a_wins as f64 + 0.5 * draws as f64) / n;
     let se = (score * (1.0 - score) / n).sqrt();
     let (lo, hi) = (score - 1.96 * se, score + 1.96 * se);
-    println!(
-        "A wins {a_wins}, B wins {b_wins}, draws {draws}",
-    );
+    println!("A wins {a_wins}, B wins {b_wins}, draws {draws}",);
     println!(
         "A score {:.1}%  (95% CI {:.1}%..{:.1}%)  mean disc diff {:+.2}",
         score * 100.0,

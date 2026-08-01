@@ -94,24 +94,48 @@ fn parse_args() -> Result<Args, String> {
 
     let mut it = std::env::args().skip(1);
     while let Some(arg) = it.next() {
-        let mut value = |name: &str| {
-            it.next().ok_or_else(|| format!("{name} requires a value"))
-        };
+        let mut value = |name: &str| it.next().ok_or_else(|| format!("{name} requires a value"));
         match arg.as_str() {
-            "--games" => args.games = value("--games")?.parse().map_err(|e| format!("--games: {e}"))?,
+            "--games" => {
+                args.games = value("--games")?
+                    .parse()
+                    .map_err(|e| format!("--games: {e}"))?
+            }
             "--weights" => args.weights_path = PathBuf::from(value("--weights")?),
-            "--lr" => args.learning_rate = value("--lr")?.parse().map_err(|e| format!("--lr: {e}"))?,
-            "--decay" => args.decay = value("--decay")?.parse().map_err(|e| format!("--decay: {e}"))?,
-            "--lambda" => args.lambda = value("--lambda")?.parse().map_err(|e| format!("--lambda: {e}"))?,
-            "--epsilon" => args.epsilon = value("--epsilon")?.parse().map_err(|e| format!("--epsilon: {e}"))?,
-            "--depth" => args.depth = value("--depth")?.parse().map_err(|e| format!("--depth: {e}"))?,
+            "--lr" => {
+                args.learning_rate = value("--lr")?.parse().map_err(|e| format!("--lr: {e}"))?
+            }
+            "--decay" => {
+                args.decay = value("--decay")?
+                    .parse()
+                    .map_err(|e| format!("--decay: {e}"))?
+            }
+            "--lambda" => {
+                args.lambda = value("--lambda")?
+                    .parse()
+                    .map_err(|e| format!("--lambda: {e}"))?
+            }
+            "--epsilon" => {
+                args.epsilon = value("--epsilon")?
+                    .parse()
+                    .map_err(|e| format!("--epsilon: {e}"))?
+            }
+            "--depth" => {
+                args.depth = value("--depth")?
+                    .parse()
+                    .map_err(|e| format!("--depth: {e}"))?
+            }
             "--opponents" => {
                 args.opponents = value("--opponents")?
                     .split(',')
                     .map(PathBuf::from)
                     .collect();
             }
-            "--solve-empties" => args.solve_empties = value("--solve-empties")?.parse().map_err(|e| format!("--solve-empties: {e}"))?,
+            "--solve-empties" => {
+                args.solve_empties = value("--solve-empties")?
+                    .parse()
+                    .map_err(|e| format!("--solve-empties: {e}"))?
+            }
             "--patterns" => {
                 let v = value("--patterns")?;
                 match v.as_str() {
@@ -121,8 +145,16 @@ fn parse_args() -> Result<Args, String> {
                     other => return Err(format!("unknown pattern set: {other}")),
                 }
             }
-            "--save-every" => args.save_every = value("--save-every")?.parse().map_err(|e| format!("--save-every: {e}"))?,
-            "--seed" => args.seed = value("--seed")?.parse().map_err(|e| format!("--seed: {e}"))?,
+            "--save-every" => {
+                args.save_every = value("--save-every")?
+                    .parse()
+                    .map_err(|e| format!("--save-every: {e}"))?
+            }
+            "--seed" => {
+                args.seed = value("--seed")?
+                    .parse()
+                    .map_err(|e| format!("--seed: {e}"))?
+            }
             "--log" => args.log_path = Some(PathBuf::from(value("--log")?)),
             "-h" | "--help" => return Err(USAGE.to_string()),
             other => return Err(format!("unknown option: {other}\n\n{USAGE}")),
@@ -258,7 +290,10 @@ fn play_game(
             } else {
                 -(result.value as f32)
             };
-            return GameOutcome { history, score: score_black };
+            return GameOutcome {
+                history,
+                score: score_black,
+            };
         }
 
         let moves = board.movable();
@@ -273,7 +308,10 @@ fn play_game(
                 } else {
                     -score
                 };
-                return GameOutcome { history, score: score_black };
+                return GameOutcome {
+                    history,
+                    score: score_black,
+                };
             }
             board = passed;
             continue;
@@ -303,11 +341,17 @@ fn append_log(
 ) -> std::io::Result<()> {
     use std::io::Write;
     let new_file = !path.exists();
-    let mut f = std::fs::OpenOptions::new().create(true).append(true).open(path)?;
+    let mut f = std::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(path)?;
     if new_file {
         writeln!(f, "games,mean_abs_err,black_wins,white_wins,draws,lr")?;
     }
-    writeln!(f, "{games_done},{window_err:.4},{black_wins},{white_wins},{draws},{lr:.6}")
+    writeln!(
+        f,
+        "{games_done},{window_err:.4},{black_wins},{white_wins},{draws},{lr:.6}"
+    )
 }
 
 fn main() -> ExitCode {
@@ -335,7 +379,10 @@ fn main() -> ExitCode {
             }
         }
     } else {
-        println!("warning: {} not found, starting from zero weights", args.weights_path.display());
+        println!(
+            "warning: {} not found, starting from zero weights",
+            args.weights_path.display()
+        );
     }
 
     // Frozen league opponents (empty = pure self-play)
@@ -406,16 +453,30 @@ fn main() -> ExitCode {
         let learner_is_black = game_no % 2 == 1;
         let outcome = if opponents.is_empty() {
             play_game(
-                &evaluator, &evaluator, learner_is_black,
-                &mut learner_searcher, &mut opponent_searcher, &mut solver, &mut rng,
-                args.epsilon, args.depth, args.solve_empties,
+                &evaluator,
+                &evaluator,
+                learner_is_black,
+                &mut learner_searcher,
+                &mut opponent_searcher,
+                &mut solver,
+                &mut rng,
+                args.epsilon,
+                args.depth,
+                args.solve_empties,
             )
         } else {
             let opp = &opponents[(game_no / 2) % opponents.len()];
             play_game(
-                &evaluator, opp, learner_is_black,
-                &mut learner_searcher, &mut opponent_searcher, &mut solver, &mut rng,
-                args.epsilon, args.depth, args.solve_empties,
+                &evaluator,
+                opp,
+                learner_is_black,
+                &mut learner_searcher,
+                &mut opponent_searcher,
+                &mut solver,
+                &mut rng,
+                args.epsilon,
+                args.depth,
+                args.solve_empties,
             )
         };
 
@@ -436,17 +497,35 @@ fn main() -> ExitCode {
             opponent_searcher.clear();
         }
 
-        if game_no % args.save_every == 0 || game_no == args.games || interrupted.load(Ordering::SeqCst) {
+        if game_no % args.save_every == 0
+            || game_no == args.games
+            || interrupted.load(Ordering::SeqCst)
+        {
             let mean_err = window_err / window_games.max(1) as f32;
             let elapsed = started.elapsed().as_secs_f32();
             let gps = game_no as f32 / elapsed;
             println!(
                 "game {:>7}/{}: mse {:.3}  B/W/D {}/{}/{}  lr {:.6}  ({:.1} games/s)",
-                game_no, args.games, mean_err, black_wins, white_wins, draws, opt.learning_rate, gps
+                game_no,
+                args.games,
+                mean_err,
+                black_wins,
+                white_wins,
+                draws,
+                opt.learning_rate,
+                gps
             );
 
             if let Some(log) = &args.log_path {
-                if let Err(e) = append_log(log, game_no, mean_err, black_wins, white_wins, draws, opt.learning_rate) {
+                if let Err(e) = append_log(
+                    log,
+                    game_no,
+                    mean_err,
+                    black_wins,
+                    white_wins,
+                    draws,
+                    opt.learning_rate,
+                ) {
                     eprintln!("failed to write log {}: {e}", log.display());
                     return ExitCode::FAILURE;
                 }

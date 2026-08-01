@@ -2,9 +2,9 @@
 //!
 //! 2 段階で作る:
 //!   1. `--scan`  WTHOR (公式大会棋譜) を読み、序盤の頻出局面を候補として
-//!                book に積む (深さ 0 = 未評価、出現回数のみ)
+//!      book に積む (深さ 0 = 未評価、出現回数のみ)
 //!   2. `--deepen` 未評価・浅い評価のエントリを**実戦より深い探索**で解く。
-//!                途中で止めても保存済みの分は残るので、何度でも継ぎ足せる。
+//!      途中で止めても保存済みの分は残るので、何度でも継ぎ足せる。
 //!
 //! book の値は「実戦では届かない深さ」でなければ意味がないので、既定は
 //! 深さ 26 / 読切 30 / 帯 8 (実戦の GGS 設定は 22 / 26 / 6)。
@@ -45,7 +45,9 @@ fn parse_args() -> Result<Args, String> {
         depth: 26,
         solve: 30,
         band: 8,
-        threads: std::thread::available_parallelism().map(|n| n.get()).unwrap_or(8),
+        threads: std::thread::available_parallelism()
+            .map(|n| n.get())
+            .unwrap_or(8),
         limit: usize::MAX,
         hash_bits: 19,
         max_cands: 4,
@@ -53,9 +55,11 @@ fn parse_args() -> Result<Args, String> {
     let argv: Vec<String> = std::env::args().skip(1).collect();
     let mut i = 0;
     while i < argv.len() {
-        let mut val = |i: &mut usize| -> Result<String, String> {
+        let val = |i: &mut usize| -> Result<String, String> {
             *i += 1;
-            argv.get(*i).cloned().ok_or_else(|| format!("missing value for {}", argv[*i - 1]))
+            argv.get(*i)
+                .cloned()
+                .ok_or_else(|| format!("missing value for {}", argv[*i - 1]))
         };
         match argv[i].as_str() {
             "--scan" => a.scan = Some(PathBuf::from(val(&mut i)?)),
@@ -130,7 +134,9 @@ fn scan(dir: &Path, max_ply: usize, min_games: u32, book: &mut Book) -> std::io:
                 if ply >= max_ply {
                     break;
                 }
-                let Some(pos) = Position::from_index(sq as u32) else { break };
+                let Some(pos) = Position::from_index(sq as u32) else {
+                    break;
+                };
                 // パスの明示が無い形式なので、指せなければパスを入れて再挑戦
                 if !b.check(pos) {
                     b.pass();
@@ -168,14 +174,24 @@ fn scan(dir: &Path, max_ply: usize, min_games: u32, book: &mut Book) -> std::io:
         let moves: Vec<Candidate> = cands
             .iter()
             .filter_map(|(mv, n)| {
-                Position::from_index(*mv as u32)
-                    .map(|p| Candidate { mv: p, value: 0.0, games: *n })
+                Position::from_index(*mv as u32).map(|p| Candidate {
+                    mv: p,
+                    value: 0.0,
+                    games: *n,
+                })
             })
             .collect();
         if moves.is_empty() {
             continue;
         }
-        book.insert_raw(key, Entry { moves, depth: 0, games: total });
+        book.insert_raw(
+            key,
+            Entry {
+                moves,
+                depth: 0,
+                games: total,
+            },
+        );
         kept += 1;
     }
     eprintln!("局面 {kept} 件を候補として登録 (棋譜 {total_games} 局)");
@@ -207,7 +223,9 @@ fn deepen(book: &mut Book, out: &Path, a: &Args) -> Result<(), String> {
     }
 
     // ワーカー数 × 1 ワーカーあたりのスレッド数 ≒ 物理コア数
-    let cores = std::thread::available_parallelism().map(|n| n.get()).unwrap_or(8);
+    let cores = std::thread::available_parallelism()
+        .map(|n| n.get())
+        .unwrap_or(8);
     let per = a.threads.max(1);
     let workers = (cores / per).max(1).min(total);
     eprintln!(
@@ -228,15 +246,17 @@ fn deepen(book: &mut Book, out: &Path, a: &Args) -> Result<(), String> {
             let done = &done;
             let results = &results;
             handles.push(scope.spawn(move || -> Result<(), String> {
-                let mut cfg = EngineConfig::default();
-                cfg.depth = a.depth;
-                cfg.solve_empties = a.solve;
-                cfg.band = a.band;
-                cfg.threads = per;
-                // 序盤の木は小さいので表も小さくする。ソルバは 1 局面ごとに
-                // 表を全消去するため、大きな表は消去コストがそのまま損になる。
-                cfg.midgame_hash_bits = a.hash_bits;
-                cfg.solver_hash_bits = a.hash_bits;
+                let cfg = EngineConfig {
+                    depth: a.depth,
+                    solve_empties: a.solve,
+                    band: a.band,
+                    threads: per,
+                    // 序盤の木は小さいので表も小さくする。ソルバは 1 局面ごとに
+                    // 表を全消去するため、大きな表は消去コストがそのまま損になる。
+                    midgame_hash_bits: a.hash_bits,
+                    solver_hash_bits: a.hash_bits,
+                    ..Default::default()
+                };
                 let mut engine = Engine::new(cfg)?;
                 loop {
                     let i = next.fetch_add(1, Ordering::Relaxed);
@@ -269,19 +289,29 @@ fn deepen(book: &mut Book, out: &Path, a: &Args) -> Result<(), String> {
                         } else {
                             let mut child = board;
                             child.make_move_bits(p);
-                            -engine.eval_position(&child, a.depth.saturating_sub(1)).value
+                            -engine
+                                .eval_position(&child, a.depth.saturating_sub(1))
+                                .value
                         };
-                        moves.push(Candidate { mv: p, value, games });
+                        moves.push(Candidate {
+                            mv: p,
+                            value,
+                            games,
+                        });
                     }
                     if !moves.is_empty() {
                         moves.sort_by(|x, y| y.value.total_cmp(&x.value));
                         results.lock().unwrap().push((
                             key,
-                            Entry { moves, depth: a.depth as u8, games: old.games },
+                            Entry {
+                                moves,
+                                depth: a.depth as u8,
+                                games: old.games,
+                            },
                         ));
                     }
                     let n = done.fetch_add(1, Ordering::Relaxed) + 1;
-                    if n % 20 == 0 || n == todo_ref.len() {
+                    if n.is_multiple_of(20) || n == todo_ref.len() {
                         let el = t0.elapsed().as_secs_f64();
                         let rate = n as f64 / el.max(0.001);
                         let remain = (todo_ref.len() - n) as f64 / rate.max(1e-9);

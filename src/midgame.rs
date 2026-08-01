@@ -6,6 +6,12 @@
 //! shallow depths, YBWC splits below, Multi-ProbCut with unpruned probes and
 //! a static-eval gate, and a 4-way shared transposition table.
 
+// 添字ループは走査順そのものが意味を持つ (連続領域の走査・SIMD 的な
+// 展開) ため、イテレータ化の助言は採らない。引数の多い探索関数も、
+// 構造体に束ねると呼び出しごとの構築が入るので現状の形を保つ。
+#![allow(clippy::needless_range_loop)]
+#![allow(clippy::too_many_arguments)]
+
 use crate::nnue::Nnue;
 use crate::pattern_index::PatternIndices;
 use crate::zobrist;
@@ -28,7 +34,10 @@ const MAX_KIDS: usize = 34;
 fn eval_order_depth() -> u32 {
     static V: std::sync::OnceLock<u32> = std::sync::OnceLock::new();
     *V.get_or_init(|| {
-        std::env::var("EVAL_ORDER_DEPTH").ok().and_then(|v| v.parse().ok()).unwrap_or(3)
+        std::env::var("EVAL_ORDER_DEPTH")
+            .ok()
+            .and_then(|v| v.parse().ok())
+            .unwrap_or(3)
     })
 }
 
@@ -49,7 +58,10 @@ const MPC_RELAX_STEP: f32 = 1.18;
 fn ybwc_min_depth() -> u32 {
     static V: std::sync::OnceLock<u32> = std::sync::OnceLock::new();
     *V.get_or_init(|| {
-        std::env::var("YBWC_MIN").ok().and_then(|v| v.parse().ok()).unwrap_or(6)
+        std::env::var("YBWC_MIN")
+            .ok()
+            .and_then(|v| v.parse().ok())
+            .unwrap_or(6)
     })
 }
 const ABORT_CHECK_INTERVAL: u64 = 512;
@@ -69,14 +81,20 @@ const MPC_T: f32 = 1.1;
 pub fn mpc_t() -> f32 {
     static V: std::sync::OnceLock<f32> = std::sync::OnceLock::new();
     *V.get_or_init(|| {
-        std::env::var("MPC_T").ok().and_then(|v| v.parse().ok()).unwrap_or(MPC_T)
+        std::env::var("MPC_T")
+            .ok()
+            .and_then(|v| v.parse().ok())
+            .unwrap_or(MPC_T)
     })
 }
 
 pub fn mpc_min_depth() -> u32 {
     static V: std::sync::OnceLock<u32> = std::sync::OnceLock::new();
     *V.get_or_init(|| {
-        std::env::var("MPC_MIN_DEPTH").ok().and_then(|v| v.parse().ok()).unwrap_or(MPC_MIN_DEPTH)
+        std::env::var("MPC_MIN_DEPTH")
+            .ok()
+            .and_then(|v| v.parse().ok())
+            .unwrap_or(MPC_MIN_DEPTH)
     })
 }
 
@@ -168,7 +186,6 @@ fn potential_mobility(discs: u64, empties: u64) -> u32 {
     (res & empties).count_ones()
 }
 
-
 /// How many tasks may be queued beyond the workers that are idle right now.
 /// Measured here (d16, 20 games, min of 3):
 /// 0 -> 2.25x, 2 -> 2.39x, 8 -> 2.43x, 32 -> 2.20x. Two is the robust choice —
@@ -176,7 +193,10 @@ fn potential_mobility(discs: u64, empties: u64) -> u32 {
 fn pool_slack() -> usize {
     static V: std::sync::OnceLock<usize> = std::sync::OnceLock::new();
     *V.get_or_init(|| {
-        std::env::var("POOL_SLACK").ok().and_then(|v| v.parse().ok()).unwrap_or(2)
+        std::env::var("POOL_SLACK")
+            .ok()
+            .and_then(|v| v.parse().ok())
+            .unwrap_or(2)
     })
 }
 
@@ -218,16 +238,14 @@ impl SharedTt {
     pub fn new(bits: u32) -> SharedTt {
         let n = 1usize << bits.saturating_sub(2);
         SharedTt {
-            buckets: std::cell::UnsafeCell::new(vec![
-                TtBucket(
-                    [TtEntry::EMPTY; TT_WAYS]
-                );
-                n
-            ]),
+            buckets: std::cell::UnsafeCell::new(vec![TtBucket([TtEntry::EMPTY; TT_WAYS]); n]),
             mask: (n - 1) as u64,
         }
     }
 
+    // 共有置換表は「&self から可変参照を返す」構造そのものが設計。競合は
+    // キー不一致 (= ミス) にしかならず、ロックの代わりにそれを許容している。
+    #[allow(clippy::mut_from_ref)]
     #[inline]
     fn bucket(&self, hash: u64) -> &mut TtBucket {
         // SAFETY: index is masked into range; a racing write can only make the
@@ -238,6 +256,7 @@ impl SharedTt {
         }
     }
 
+    #[allow(clippy::mut_from_ref)]
     #[inline]
     fn slot(&self, hash: u64, i: u64) -> &mut TtEntry {
         // SAFETY: `i` is always below TT_WAYS.
@@ -281,7 +300,11 @@ impl SharedTt {
     ) {
         let level = tt_level(depth, relax);
         let upper = if value < beta { value } else { f32::INFINITY };
-        let lower = if value > alpha { value } else { f32::NEG_INFINITY };
+        let lower = if value > alpha {
+            value
+        } else {
+            f32::NEG_INFINITY
+        };
         for i in 0..TT_WAYS {
             let slot = self.slot(hash, i as u64);
             if slot.key == hash && slot.flag != 0 {
@@ -454,7 +477,9 @@ pub struct StopHandle(std::sync::Arc<std::sync::atomic::AtomicBool>);
 
 impl StopHandle {
     pub fn new() -> StopHandle {
-        StopHandle(std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false)))
+        StopHandle(std::sync::Arc::new(std::sync::atomic::AtomicBool::new(
+            false,
+        )))
     }
     /// 進行中の探索を打ち切る。
     pub fn stop(&self) {
@@ -508,7 +533,11 @@ struct Slot {
 impl Slot {
     fn new() -> Slot {
         use std::sync::atomic::{AtomicBool, AtomicU32, AtomicU64};
-        Slot { done: AtomicBool::new(false), bits: AtomicU32::new(0), nodes: AtomicU64::new(0) }
+        Slot {
+            done: AtomicBool::new(false),
+            bits: AtomicU32::new(0),
+            nodes: AtomicU64::new(0),
+        }
     }
     fn set(&self, v: f32, nodes: u64) {
         use std::sync::atomic::Ordering;
@@ -694,6 +723,9 @@ impl Pool {
             // spinning worker that did not count itself would not be offered
             // anything.
             self.idle.fetch_add(1, Ordering::Relaxed);
+            // 外側は値を返すためのラベルで、実際には 1 周もしない (内側の
+            // 条件待ちループから `break 'get` で値を持ち出す形)。
+            #[allow(clippy::never_loop)]
             let task = 'get: loop {
                 // Sleep until woken,
                 // with no timeout. A 200us poll instead had all the idle workers
@@ -729,7 +761,6 @@ impl Pool {
             }
         }
     }
-
 }
 
 /// Fixed-depth NNUE alpha-beta with a transposition table and NNUE-eval move
@@ -964,7 +995,10 @@ impl NnueSearch {
         // one build per point (thermal drift makes serial rebuild-and-measure
         // unreliable — see the measurement protocol).
         fn env_u32(key: &'static str, default: u32) -> u32 {
-            std::env::var(key).ok().and_then(|v| v.parse().ok()).unwrap_or(default)
+            std::env::var(key)
+                .ok()
+                .and_then(|v| v.parse().ok())
+                .unwrap_or(default)
         }
         fn smp_min_depth() -> u32 {
             static V: std::sync::OnceLock<u32> = std::sync::OnceLock::new();
@@ -1011,8 +1045,7 @@ impl NnueSearch {
                 // the generation counter doubles as their stop signal.
                 let gen = std::sync::Arc::new(std::sync::atomic::AtomicU32::new(main_depth));
                 let mut slots = Vec::new();
-                if lazy && pool.is_some() {
-                    let pool = pool.unwrap();
+                if let Some(pool) = pool.filter(|_| lazy) {
                     for idx in 0..workers {
                         let slot = std::sync::Arc::new(Slot::new());
                         let mut w = self.worker();
@@ -1113,15 +1146,14 @@ impl NnueSearch {
             // and second. Doing it with the score rather than by swapping them
             // to the front matters — two swaps do not land the runner-up in
             // second place, they displace whatever the ordering had chosen.
-            let key = if pos.index() as u8 == tt_move {
+            let key = if pos.index() == tt_move {
                 1.0e9
-            } else if pos.index() as u8 == tt_move2 {
+            } else if pos.index() == tt_move2 {
                 1.0e8
             } else {
                 let legal = nb.movable();
                 // Offset minus weighted moves, so fewer replies scores higher.
-                let mob = 38.0
-                    - (legal.count_ones() * 2 + (legal & CORNERS).count_ones()) as f32;
+                let mob = 38.0 - (legal.count_ones() * 2 + (legal & CORNERS).count_ones()) as f32;
                 let mut k = mob * w_mob;
                 if w_pm != 0.0 {
                     let empties = !(nb.black | nb.white);
@@ -1153,7 +1185,13 @@ impl NnueSearch {
                 let p = b.player_bb().count_ones() as i32;
                 let o = b.opponent_bb().count_ones() as i32;
                 let e = 64 - p - o;
-                let diff = if p > o { p - o + e } else if o > p { p - o - e } else { 0 };
+                let diff = if p > o {
+                    p - o + e
+                } else if o > p {
+                    p - o - e
+                } else {
+                    0
+                };
                 return diff as f32 * 1000.0;
             }
             let raw = self.eval1_nws(&nb, acc, -alpha - PVS_EPS);
@@ -1183,7 +1221,14 @@ impl NnueSearch {
         v
     }
 
-    pub fn negamax(&mut self, b: &Board, acc: &mut PatternIndices, depth: u32, mut alpha: f32, beta: f32) -> f32 {
+    pub fn negamax(
+        &mut self,
+        b: &Board,
+        acc: &mut PatternIndices,
+        depth: u32,
+        mut alpha: f32,
+        beta: f32,
+    ) -> f32 {
         self.nodes += 1;
         if self.should_stop_or_done() {
             return ABORTED;
@@ -1199,7 +1244,13 @@ impl NnueSearch {
                 let p = b.player_bb().count_ones() as i32;
                 let o = b.opponent_bb().count_ones() as i32;
                 let e = 64 - p - o;
-                let diff = if p > o { p - o + e } else if o > p { p - o - e } else { 0 };
+                let diff = if p > o {
+                    p - o + e
+                } else if o > p {
+                    p - o - e
+                } else {
+                    0
+                };
                 return diff as f32 * 1000.0;
             }
             if depth == 0 {
@@ -1482,7 +1533,11 @@ impl NnueSearch {
             // Only nodes that can actually split get one. The flag is heap
             // allocated, and allocating it at every interior node cost 13% of
             // single-thread throughput for a flag nobody could ever raise.
-            let fan_stop = if split_ok { Some(AbortChain::child(outer.clone())) } else { None };
+            let fan_stop = if split_ok {
+                Some(AbortChain::child(outer.clone()))
+            } else {
+                None
+            };
             // The loop control is a plain local, never the shared flag: a node
             // that cannot split has no flag, and gating the break on the flag
             // meant a fail-high stopped nothing — every remaining brother was
@@ -1525,7 +1580,7 @@ impl NnueSearch {
                     let v = -raw;
                     if v > best {
                         best = v;
-                        best_move = pos.index() as u8;
+                        best_move = pos.index();
                     }
                     if best > alpha {
                         alpha = best;
@@ -1613,7 +1668,7 @@ impl NnueSearch {
                 let g = -raw;
                 if g > best {
                     best = g;
-                    best_move = pos.index() as u8;
+                    best_move = pos.index();
                 }
                 if g > alpha {
                     next_alpha = next_alpha.max(g);
@@ -1640,7 +1695,7 @@ impl NnueSearch {
                 let g = -raw;
                 if g > best {
                     best = g;
-                    best_move = kids[i].0.index() as u8;
+                    best_move = kids[i].0.index();
                 }
                 if g > alpha {
                     next_alpha = next_alpha.max(g);
@@ -1689,7 +1744,7 @@ impl NnueSearch {
                 let g = -raw;
                 if g > best {
                     best = g;
-                    best_move = pos.index() as u8;
+                    best_move = pos.index();
                 }
                 if best > alpha {
                     alpha = best;

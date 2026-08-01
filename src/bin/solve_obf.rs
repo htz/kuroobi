@@ -36,7 +36,9 @@ fn main() -> ExitCode {
         match arg.as_str() {
             "--depth" => depth = it.next().and_then(|v| v.parse().ok()),
             "--mpc" => mpc = true,
-            "--hash-bits" => hash_bits = it.next().and_then(|v| v.parse().ok()).unwrap_or(hash_bits),
+            "--hash-bits" => {
+                hash_bits = it.next().and_then(|v| v.parse().ok()).unwrap_or(hash_bits)
+            }
             "--threads" => threads = it.next().and_then(|v| v.parse().ok()).unwrap_or(threads),
             "--mpc-t" => mpc_t = it.next().and_then(|v| v.parse().ok()),
             "--weights" => weights = it.next().map(PathBuf::from),
@@ -84,7 +86,11 @@ fn main() -> ExitCode {
     // current (phase, empties) marker at a fixed rate, off the search thread.
     let counts: std::sync::Arc<Vec<Vec<std::sync::atomic::AtomicU64>>> = std::sync::Arc::new(
         (0..kuroobi::solver::layer_profile::PHASES)
-            .map(|_| (0..64).map(|_| std::sync::atomic::AtomicU64::new(0)).collect())
+            .map(|_| {
+                (0..64)
+                    .map(|_| std::sync::atomic::AtomicU64::new(0))
+                    .collect()
+            })
             .collect(),
     );
     if kuroobi::solver::layer_profile::ENABLED {
@@ -137,10 +143,10 @@ fn main() -> ExitCode {
                     // report either — both call their table init outside the
                     // timed region. Subtract it instead of timing around the
                     // solve, so the engine keeps one entry point.
-                    let c0 = kuroobi::solver::CLEAR_NS
-                        .load(std::sync::atomic::Ordering::Relaxed);
+                    let c0 = kuroobi::solver::CLEAR_NS.load(std::sync::atomic::Ordering::Relaxed);
                     let t = Instant::now();
-                    let r = solver.solve_with_eval(EndSolverMode::Perfect, &board, Some(&evaluator));
+                    let r =
+                        solver.solve_with_eval(EndSolverMode::Perfect, &board, Some(&evaluator));
                     let wall = t.elapsed().as_secs_f64();
                     let clear = (kuroobi::solver::CLEAR_NS
                         .load(std::sync::atomic::Ordering::Relaxed)
@@ -177,11 +183,14 @@ fn main() -> ExitCode {
             total_nodes as f64 / total_time / 1e6
         );
         {
-            use std::sync::atomic::Ordering::Relaxed;
             use kuroobi::solver as s;
+            use std::sync::atomic::Ordering::Relaxed;
             let phase = |ns: &std::sync::atomic::AtomicU64, n: &std::sync::atomic::AtomicU64| {
                 let (secs, nodes) = (ns.load(Relaxed) as f64 / 1e9, n.load(Relaxed));
-                format!("{secs:.3}s {nodes} nodes {:.1}M/s", nodes as f64 / secs / 1e6)
+                format!(
+                    "{secs:.3}s {nodes} nodes {:.1}M/s",
+                    nodes as f64 / secs / 1e6
+                )
             };
             println!(
                 "  table clear {:.3}s (excluded from the times above)\n  warm-up {}\n  exact   {}",
@@ -230,7 +239,11 @@ fn main() -> ExitCode {
     if kuroobi::solver::layer_profile::ENABLED {
         use kuroobi::solver::layer_profile::{NODES, PHASES, PHASE_NAMES};
         use std::sync::atomic::Ordering::Relaxed;
-        let total: u64 = counts.iter().flat_map(|p| p.iter()).map(|c| c.load(Relaxed)).sum();
+        let total: u64 = counts
+            .iter()
+            .flat_map(|p| p.iter())
+            .map(|c| c.load(Relaxed))
+            .sum();
         println!("\nsamples {total}  (share of wall-clock)");
         print!("empties |");
         for name in PHASE_NAMES {
@@ -244,13 +257,13 @@ fn main() -> ExitCode {
             if rt == 0 {
                 continue;
             }
-            for p in 0..PHASES {
-                sums[p] += row[p];
+            for (sum, v) in sums.iter_mut().zip(row.iter()) {
+                *sum += v;
             }
             let pct = |v: u64| 100.0 * v as f64 / total as f64;
             print!("{e:7} |");
-            for p in 0..PHASES {
-                print!(" {:6.2}% |", pct(row[p]));
+            for v in row.iter() {
+                print!(" {:6.2}% |", pct(*v));
             }
             let nodes = NODES[e].load(Relaxed);
             let ns = if nodes > 0 {
@@ -263,7 +276,11 @@ fn main() -> ExitCode {
         println!(
             "  total | {}",
             (0..PHASES)
-                .map(|p| format!("{} {:.2}%", PHASE_NAMES[p], 100.0 * sums[p] as f64 / total as f64))
+                .map(|p| format!(
+                    "{} {:.2}%",
+                    PHASE_NAMES[p],
+                    100.0 * sums[p] as f64 / total as f64
+                ))
                 .collect::<Vec<_>>()
                 .join(" | ")
         );

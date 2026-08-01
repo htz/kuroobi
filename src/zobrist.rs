@@ -26,7 +26,9 @@ impl ZobristTable {
         // Simple 64-bit LCG (Lehmer RNG)
         let mut seed = 0xdead_beef_cafe_babe;
         let gen = |s: &mut u64| -> u64 {
-            *s = s.wrapping_mul(6364136223846793005).wrapping_add(1442695040888963407);
+            *s = s
+                .wrapping_mul(6364136223846793005)
+                .wrapping_add(1442695040888963407);
             *s
         };
 
@@ -80,12 +82,7 @@ pub fn compute_hash(black: u64, white: u64, player: Color) -> u64 {
 }
 
 /// Incrementally update hash after a move.
-pub fn update_hash_on_move(
-    prev_hash: u64,
-    pos: Position,
-    flipped: u64,
-    player: Color,
-) -> u64 {
+pub fn update_hash_on_move(prev_hash: u64, pos: Position, flipped: u64, player: Color) -> u64 {
     let table = zobrist_table();
     let mut hash = prev_hash;
 
@@ -208,7 +205,10 @@ mod tests {
         // Recompute
         let h3 = compute_hash(b.black, b.white, b.player());
 
-        assert_eq!(h2, h3, "Incremental hash update should match recomputed hash");
+        assert_eq!(
+            h2, h3,
+            "Incremental hash update should match recomputed hash"
+        );
     }
 
     #[test]
@@ -226,6 +226,9 @@ mod tests {
     fn test_global_table() {
         let t1 = zobrist_table();
         let t2 = zobrist_table();
-        assert!(std::ptr::eq(t1, t2), "Global table should be the same instance");
+        assert!(
+            std::ptr::eq(t1, t2),
+            "Global table should be the same instance"
+        );
     }
 }

@@ -137,7 +137,15 @@ impl Engine {
             .map(|d| d.as_nanos() as u64)
             .unwrap_or(0x9e3779b97f4a7c15)
             | 1;
-        Ok(Engine { evaluator, search, solver, config, stop, book, book_rand })
+        Ok(Engine {
+            evaluator,
+            search,
+            solver,
+            config,
+            stop,
+            book,
+            book_rand,
+        })
     }
 
     pub fn config(&self) -> &EngineConfig {
@@ -180,26 +188,51 @@ impl Engine {
                 book.probe(board)
             };
             if let Some((pos, value, _depth)) = hit {
-                return MoveEval { pos: Some(pos), value, exact: false, from_book: true };
+                return MoveEval {
+                    pos: Some(pos),
+                    value,
+                    exact: false,
+                    from_book: true,
+                };
             }
         }
         let c = &self.config;
         if is_game_over(board) {
             // 終局: 探索に聞くと 0 が返る。盤面の石差 (空きマスは勝者へ加算、
             // FFO 規約) をそのまま厳密値として返す
-            return MoveEval { pos: None, value: final_score(board) as f32, exact: true, from_book: false };
+            return MoveEval {
+                pos: None,
+                value: final_score(board) as f32,
+                exact: true,
+                from_book: false,
+            };
         }
         if board.empty_count() <= c.solve_empties {
-            let r = self
-                .solver
-                .solve_with_eval(EndSolverMode::Perfect, board, Some(&self.evaluator));
-            MoveEval { pos: r.best_move, value: r.value as f32, exact: true, from_book: false }
+            let r =
+                self.solver
+                    .solve_with_eval(EndSolverMode::Perfect, board, Some(&self.evaluator));
+            MoveEval {
+                pos: r.best_move,
+                value: r.value as f32,
+                exact: true,
+                from_book: false,
+            }
         } else if let Some(t) = selective_band(board.empty_count(), c.solve_empties, c.band) {
             let r = self.solver.solve_selective(board, Some(&self.evaluator), t);
-            MoveEval { pos: r.best_move, value: r.value as f32, exact: false, from_book: false }
+            MoveEval {
+                pos: r.best_move,
+                value: r.value as f32,
+                exact: false,
+                from_book: false,
+            }
         } else {
             let (pos, value) = self.search.best_move_valued(board, c.depth);
-            MoveEval { pos, value, exact: false, from_book: false }
+            MoveEval {
+                pos,
+                value,
+                exact: false,
+                from_book: false,
+            }
         }
     }
 
@@ -208,16 +241,31 @@ impl Engine {
     pub fn eval_position(&mut self, board: &Board, depth: u32) -> MoveEval {
         self.stop.reset();
         if is_game_over(board) {
-            return MoveEval { pos: None, value: final_score(board) as f32, exact: true, from_book: false };
+            return MoveEval {
+                pos: None,
+                value: final_score(board) as f32,
+                exact: true,
+                from_book: false,
+            };
         }
         if board.empty_count() <= self.config.solve_empties {
-            let r = self
-                .solver
-                .solve_with_eval(EndSolverMode::Perfect, board, Some(&self.evaluator));
-            MoveEval { pos: r.best_move, value: r.value as f32, exact: true, from_book: false }
+            let r =
+                self.solver
+                    .solve_with_eval(EndSolverMode::Perfect, board, Some(&self.evaluator));
+            MoveEval {
+                pos: r.best_move,
+                value: r.value as f32,
+                exact: true,
+                from_book: false,
+            }
         } else {
             let (pos, value) = self.search.best_move_valued(board, depth);
-            MoveEval { pos, value, exact: false, from_book: false }
+            MoveEval {
+                pos,
+                value,
+                exact: false,
+                from_book: false,
+            }
         }
     }
 
@@ -240,17 +288,34 @@ impl Engine {
             let mut child = *board;
             child.make_move_bits(pos);
             let ev = if is_game_over(&child) {
-                MoveEval { pos: Some(pos), value: -(final_score(&child) as f32), exact: true, from_book: false }
+                MoveEval {
+                    pos: Some(pos),
+                    value: -(final_score(&child) as f32),
+                    exact: true,
+                    from_book: false,
+                }
             } else if child.empty_count() <= self.config.solve_empties {
-                let r = self
-                    .solver
-                    .solve_with_eval(EndSolverMode::Perfect, &child, Some(&self.evaluator));
-                MoveEval { pos: Some(pos), value: -(r.value as f32), exact: true, from_book: false }
+                let r = self.solver.solve_with_eval(
+                    EndSolverMode::Perfect,
+                    &child,
+                    Some(&self.evaluator),
+                );
+                MoveEval {
+                    pos: Some(pos),
+                    value: -(r.value as f32),
+                    exact: true,
+                    from_book: false,
+                }
             } else {
                 self.search.clear();
                 let d = depth.saturating_sub(1).max(1);
                 let (_, v) = self.search.best_move_valued(&child, d);
-                MoveEval { pos: Some(pos), value: -v, exact: false, from_book: false }
+                MoveEval {
+                    pos: Some(pos),
+                    value: -v,
+                    exact: false,
+                    from_book: false,
+                }
             };
             out.push((pos, ev));
         }

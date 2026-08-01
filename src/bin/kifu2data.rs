@@ -74,7 +74,10 @@ fn replay(line: &str) -> Option<RecordedGame> {
         std::cmp::Ordering::Equal => 0,
     };
 
-    Some(RecordedGame { positions, score_black })
+    Some(RecordedGame {
+        positions,
+        score_black,
+    })
 }
 
 /// Write one position as a normalized 17-byte record.
@@ -313,8 +316,7 @@ mod tests {
                 "one recorded position per move"
             );
 
-            let diff =
-                final_board.black_count() as i32 - final_board.white_count() as i32;
+            let diff = final_board.black_count() as i32 - final_board.white_count() as i32;
             let empties = final_board.empty_count() as i32;
             let expected = match diff.cmp(&0) {
                 std::cmp::Ordering::Greater => diff + empties,

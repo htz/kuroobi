@@ -43,9 +43,9 @@ fn main() -> ExitCode {
         None
     };
 
-    let mut out = dump.as_ref().map(|p| {
-        std::io::BufWriter::new(std::fs::File::create(p).expect("create dump file"))
-    });
+    let mut out = dump
+        .as_ref()
+        .map(|p| std::io::BufWriter::new(std::fs::File::create(p).expect("create dump file")));
 
     // 4-empties buckets: 0-3, 4-7, ..., 60-63.
     let mut sq = [0.0f64; 16];
@@ -94,7 +94,13 @@ fn main() -> ExitCode {
         println!("empties,mse,samples");
         for b in 0..16 {
             if n[b] > 0 {
-                println!("{}-{},{:.3},{}", b * 4, b * 4 + 3, sq[b] / n[b] as f64, n[b]);
+                println!(
+                    "{}-{},{:.3},{}",
+                    b * 4,
+                    b * 4 + 3,
+                    sq[b] / n[b] as f64,
+                    n[b]
+                );
             }
         }
     }

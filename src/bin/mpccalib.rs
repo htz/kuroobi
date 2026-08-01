@@ -36,7 +36,10 @@ fn main() -> ExitCode {
             },
             "--stride" => stride = it.next().and_then(|v| v.parse().ok()).unwrap_or(stride),
             "--max" => {
-                max_positions = it.next().and_then(|v| v.parse().ok()).unwrap_or(max_positions)
+                max_positions = it
+                    .next()
+                    .and_then(|v| v.parse().ok())
+                    .unwrap_or(max_positions)
             }
             other => paths.push(PathBuf::from(other)),
         }

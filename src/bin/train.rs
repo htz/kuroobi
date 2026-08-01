@@ -123,14 +123,21 @@ fn parse_args() -> Result<Args, String> {
 
     let mut it = std::env::args().skip(1);
     while let Some(arg) = it.next() {
-        let mut value = |name: &str| {
-            it.next()
-                .ok_or_else(|| format!("{name} requires a value"))
-        };
+        let mut value = |name: &str| it.next().ok_or_else(|| format!("{name} requires a value"));
         match arg.as_str() {
-            "--epochs" => args.epochs = value("--epochs")?.parse().map_err(|e| format!("--epochs: {e}"))?,
-            "--lr" => args.learning_rate = value("--lr")?.parse().map_err(|e| format!("--lr: {e}"))?,
-            "--decay" => args.decay = value("--decay")?.parse().map_err(|e| format!("--decay: {e}"))?,
+            "--epochs" => {
+                args.epochs = value("--epochs")?
+                    .parse()
+                    .map_err(|e| format!("--epochs: {e}"))?
+            }
+            "--lr" => {
+                args.learning_rate = value("--lr")?.parse().map_err(|e| format!("--lr: {e}"))?
+            }
+            "--decay" => {
+                args.decay = value("--decay")?
+                    .parse()
+                    .map_err(|e| format!("--decay: {e}"))?
+            }
             "--threads" => {
                 args.threads = value("--threads")?
                     .parse()
@@ -154,7 +161,13 @@ fn parse_args() -> Result<Args, String> {
                     other => return Err(format!("unknown pattern set: {other}")),
                 }
             }
-            "--limit" => args.limit = Some(value("--limit")?.parse().map_err(|e| format!("--limit: {e}"))?),
+            "--limit" => {
+                args.limit = Some(
+                    value("--limit")?
+                        .parse()
+                        .map_err(|e| format!("--limit: {e}"))?,
+                )
+            }
             "--max-examples" => {
                 let n: usize = value("--max-examples")?
                     .parse()
@@ -170,7 +183,9 @@ fn parse_args() -> Result<Args, String> {
                     .map_err(|e| format!("--swa-start: {e}"))?
             }
             "-h" | "--help" => return Err(USAGE.to_string()),
-            other if other.starts_with('-') => return Err(format!("unknown option: {other}\n\n{USAGE}")),
+            other if other.starts_with('-') => {
+                return Err(format!("unknown option: {other}\n\n{USAGE}"))
+            }
             file => args.data_files.push(PathBuf::from(file)),
         }
     }
@@ -198,7 +213,11 @@ fn is_text(path: &Path) -> bool {
 }
 
 /// Append one file's examples to `out`, returning how many were added.
-fn load_file_into(path: &Path, limit: Option<usize>, out: &mut Vec<Example>) -> std::io::Result<usize> {
+fn load_file_into(
+    path: &Path,
+    limit: Option<usize>,
+    out: &mut Vec<Example>,
+) -> std::io::Result<usize> {
     if is_text(path) {
         load_examples_text_into(path, out, limit)
     } else {
@@ -250,11 +269,20 @@ impl DataPlan {
     /// so a fixed grouping does not become a fixed correlation in the data.
     fn shards(&self, order: &[usize], max: Option<usize>) -> Vec<Shard> {
         let mut shards: Vec<Shard> = Vec::new();
-        let mut cur = Shard { files: Vec::new(), examples: 0 };
+        let mut cur = Shard {
+            files: Vec::new(),
+            examples: 0,
+        };
         for &i in order {
             let n = self.counts[i];
             if !cur.files.is_empty() && max.is_some_and(|m| cur.examples + n > m) {
-                shards.push(std::mem::replace(&mut cur, Shard { files: Vec::new(), examples: 0 }));
+                shards.push(std::mem::replace(
+                    &mut cur,
+                    Shard {
+                        files: Vec::new(),
+                        examples: 0,
+                    },
+                ));
             }
             cur.files.push(i);
             cur.examples += n;
@@ -311,10 +339,17 @@ fn fmt_bytes(n: usize) -> String {
     }
 }
 
-fn append_log(path: &Path, epoch: usize, stats: &kuroobi::trainer::EpochStats) -> std::io::Result<()> {
+fn append_log(
+    path: &Path,
+    epoch: usize,
+    stats: &kuroobi::trainer::EpochStats,
+) -> std::io::Result<()> {
     use std::io::Write;
     let new_file = !path.exists();
-    let mut f = std::fs::OpenOptions::new().create(true).append(true).open(path)?;
+    let mut f = std::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(path)?;
     if new_file {
         writeln!(f, "epoch,stage,samples,loss_sum,loss_avg")?;
     }
@@ -437,11 +472,12 @@ fn main() -> ExitCode {
 
     match args.optimizer {
         OptimizerKind::Sgd => {
-            println!("optimizer: sgd (lr {}, decay {})", args.learning_rate, args.decay);
-            let trainer = Trainer::new(
-                evaluator,
-                SgdOptimizer::new(args.learning_rate, args.decay),
+            println!(
+                "optimizer: sgd (lr {}, decay {})",
+                args.learning_rate, args.decay
             );
+            let trainer =
+                Trainer::new(evaluator, SgdOptimizer::new(args.learning_rate, args.decay));
             run_epochs(trainer, &args, &mut plan, &val, &interrupted)
         }
         OptimizerKind::Adam => {
@@ -484,7 +520,11 @@ fn draw_progress(
     }
 
     let elapsed = started.elapsed().as_secs_f64();
-    let per_sec = if elapsed > 0.0 { done as f64 / elapsed } else { 0.0 };
+    let per_sec = if elapsed > 0.0 {
+        done as f64 / elapsed
+    } else {
+        0.0
+    };
     let eta_secs = if per_sec > 0.0 {
         (total.saturating_sub(done) as f64 / per_sec) as u64
     } else {
@@ -538,8 +578,7 @@ fn val_mse(evaluator: &Evaluator, val: &[Example], threads: usize) -> f64 {
             handles.into_iter().map(|h| h.join().unwrap()).sum()
         })
     } else {
-        val
-            .iter()
+        val.iter()
             .map(|ex| {
                 let e = ex.score as f64 - evaluator.eval(&ex.board()) as f64;
                 e * e
@@ -759,7 +798,10 @@ fn run_epochs<O: Optimizer>(
         // .swa file so it is available even if the run is interrupted.
         if let Some(acc) = &mut swa {
             if epoch >= args.swa_start {
-                if let Err(e) = acc.fold(&args.weights_path).and_then(|_| acc.write().map(|_| ())) {
+                if let Err(e) = acc
+                    .fold(&args.weights_path)
+                    .and_then(|_| acc.write().map(|_| ()))
+                {
                     eprintln!("failed to update SWA: {e}");
                     return ExitCode::FAILURE;
                 }
@@ -769,7 +811,11 @@ fn run_epochs<O: Optimizer>(
         if interrupted.load(Ordering::SeqCst) {
             if let Some(acc) = &swa {
                 if acc.count > 0 {
-                    println!("SWA mean of {} epochs saved to {}", acc.count, acc.out.display());
+                    println!(
+                        "SWA mean of {} epochs saved to {}",
+                        acc.count,
+                        acc.out.display()
+                    );
                 }
             }
             println!(
@@ -790,7 +836,11 @@ fn run_epochs<O: Optimizer>(
     }
     if let Some(acc) = &swa {
         if acc.count > 0 {
-            println!("SWA mean of {} epochs saved to {}", acc.count, acc.out.display());
+            println!(
+                "SWA mean of {} epochs saved to {}",
+                acc.count,
+                acc.out.display()
+            );
         }
     }
     ExitCode::SUCCESS

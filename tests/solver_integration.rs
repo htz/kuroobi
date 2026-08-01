@@ -19,7 +19,9 @@ fn position_with_empties(empties: u8, seed: u64) -> Board {
             board = p;
             continue;
         }
-        state = state.wrapping_mul(6364136223846793005).wrapping_add(1442695040888963407);
+        state = state
+            .wrapping_mul(6364136223846793005)
+            .wrapping_add(1442695040888963407);
         let count = moves.count_ones() as u64;
         let mut nth = (state >> 33) % count;
         let mut m = moves;
@@ -67,7 +69,8 @@ fn solver_exact_matches_bruteforce_across_seeds() {
         let mut solver = Solver::new(16);
         let got = solver.solve(EndSolverMode::Perfect, &board);
         assert_eq!(
-            got.value, expected,
+            got.value,
+            expected,
             "seed {seed}: perfect solve mismatch at {} empties",
             board.empty_count()
         );
@@ -113,13 +116,19 @@ fn solver_modes_are_consistent() {
     if perfect.value > 0 {
         assert!(wd.value > 0, "WinDraw must report a win when winning");
     } else {
-        assert!(wd.value <= 0, "WinDraw must not report a win when not winning");
+        assert!(
+            wd.value <= 0,
+            "WinDraw must not report a win when not winning"
+        );
     }
 
     let dl = solver.solve(EndSolverMode::DrawLoss, &board);
     if perfect.value < 0 {
         assert!(dl.value < 0, "DrawLoss must report a loss when losing");
     } else {
-        assert!(dl.value >= 0, "DrawLoss must not report a loss when not losing");
+        assert!(
+            dl.value >= 0,
+            "DrawLoss must not report a loss when not losing"
+        );
     }
 }

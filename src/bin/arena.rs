@@ -103,27 +103,73 @@ fn parse_args() -> Result<Args, String> {
 
     let mut it = std::env::args().skip(1);
     while let Some(arg) = it.next() {
-        let mut value = |name: &str| {
-            it.next().ok_or_else(|| format!("{name} requires a value"))
-        };
+        let mut value = |name: &str| it.next().ok_or_else(|| format!("{name} requires a value"));
         match arg.as_str() {
             "--a" => weights_a = Some(PathBuf::from(value("--a")?)),
             "--b" => weights_b = Some(PathBuf::from(value("--b")?)),
-            "--games" => args.games = value("--games")?.parse().map_err(|e| format!("--games: {e}"))?,
-            "--random-plies" => args.random_plies = value("--random-plies")?.parse().map_err(|e| format!("--random-plies: {e}"))?,
-            "--depth" => args.depth = value("--depth")?.parse().map_err(|e| format!("--depth: {e}"))?,
-            "--solve-empties" => args.solve_empties = value("--solve-empties")?.parse().map_err(|e| format!("--solve-empties: {e}"))?,
-            "--depth-a" => args.depth_a = Some(value("--depth-a")?.parse().map_err(|e| format!("--depth-a: {e}"))?),
-            "--depth-b" => args.depth_b = Some(value("--depth-b")?.parse().map_err(|e| format!("--depth-b: {e}"))?),
-            "--solve-a" => args.solve_a = Some(value("--solve-a")?.parse().map_err(|e| format!("--solve-a: {e}"))?),
-            "--solve-b" => args.solve_b = Some(value("--solve-b")?.parse().map_err(|e| format!("--solve-b: {e}"))?),
+            "--games" => {
+                args.games = value("--games")?
+                    .parse()
+                    .map_err(|e| format!("--games: {e}"))?
+            }
+            "--random-plies" => {
+                args.random_plies = value("--random-plies")?
+                    .parse()
+                    .map_err(|e| format!("--random-plies: {e}"))?
+            }
+            "--depth" => {
+                args.depth = value("--depth")?
+                    .parse()
+                    .map_err(|e| format!("--depth: {e}"))?
+            }
+            "--solve-empties" => {
+                args.solve_empties = value("--solve-empties")?
+                    .parse()
+                    .map_err(|e| format!("--solve-empties: {e}"))?
+            }
+            "--depth-a" => {
+                args.depth_a = Some(
+                    value("--depth-a")?
+                        .parse()
+                        .map_err(|e| format!("--depth-a: {e}"))?,
+                )
+            }
+            "--depth-b" => {
+                args.depth_b = Some(
+                    value("--depth-b")?
+                        .parse()
+                        .map_err(|e| format!("--depth-b: {e}"))?,
+                )
+            }
+            "--solve-a" => {
+                args.solve_a = Some(
+                    value("--solve-a")?
+                        .parse()
+                        .map_err(|e| format!("--solve-a: {e}"))?,
+                )
+            }
+            "--solve-b" => {
+                args.solve_b = Some(
+                    value("--solve-b")?
+                        .parse()
+                        .map_err(|e| format!("--solve-b: {e}"))?,
+                )
+            }
             "--patterns" => args.patterns = parse_patterns(&value("--patterns")?)?,
             "--patterns-a" => args.patterns_a = Some(parse_patterns(&value("--patterns-a")?)?),
             "--patterns-b" => args.patterns_b = Some(parse_patterns(&value("--patterns-b")?)?),
-            "--seed" => args.seed = value("--seed")?.parse().map_err(|e| format!("--seed: {e}"))?,
+            "--seed" => {
+                args.seed = value("--seed")?
+                    .parse()
+                    .map_err(|e| format!("--seed: {e}"))?
+            }
             "--mpc-a" => args.mpc_a = true,
             "--mpc-b" => args.mpc_b = true,
-            "--mpc-t" => args.mpc_t = value("--mpc-t")?.parse().map_err(|e| format!("--mpc-t: {e}"))?,
+            "--mpc-t" => {
+                args.mpc_t = value("--mpc-t")?
+                    .parse()
+                    .map_err(|e| format!("--mpc-t: {e}"))?
+            }
             "-h" | "--help" => return Err(USAGE.to_string()),
             other => return Err(format!("unknown option: {other}\n\n{USAGE}")),
         }
@@ -230,7 +276,11 @@ fn play(
             passed.pass();
             if passed.movable() == 0 {
                 let s = board.score();
-                return if board.player() == Color::Black { s } else { -s };
+                return if board.player() == Color::Black {
+                    s
+                } else {
+                    -s
+                };
             }
             board = passed;
             continue;
@@ -240,7 +290,11 @@ fn play(
             let result =
                 solver.solve_with_eval(EndSolverMode::Perfect, &board, Some(black.evaluator));
             let s = result.value;
-            return if board.player() == Color::Black { s } else { -s };
+            return if board.player() == Color::Black {
+                s
+            } else {
+                -s
+            };
         }
 
         let is_black = board.player() == Color::Black;
@@ -253,7 +307,11 @@ fn play(
         } else if cfg.depth <= 1 {
             greedy_move(&board, cfg.evaluator)
         } else {
-            let searcher = if is_black { &mut *black_searcher } else { &mut *white_searcher };
+            let searcher = if is_black {
+                &mut *black_searcher
+            } else {
+                &mut *white_searcher
+            };
             searcher
                 .search(&board, cfg.evaluator, cfg.depth)
                 .best_move
@@ -342,7 +400,12 @@ fn main() -> ExitCode {
 
         // Game 1: A plays Black
         let s1 = play(
-            &opening, &cfg_a, &cfg_b, &mut searcher_a, &mut searcher_b, &mut solver,
+            &opening,
+            &cfg_a,
+            &cfg_b,
+            &mut searcher_a,
+            &mut searcher_b,
+            &mut solver,
         );
         a_disc_sum += s1 as i64;
         match s1.cmp(&0) {
@@ -355,7 +418,12 @@ fn main() -> ExitCode {
         searcher_a.clear();
         searcher_b.clear();
         let s2 = play(
-            &opening, &cfg_b, &cfg_a, &mut searcher_b, &mut searcher_a, &mut solver,
+            &opening,
+            &cfg_b,
+            &cfg_a,
+            &mut searcher_b,
+            &mut searcher_a,
+            &mut solver,
         );
         a_disc_sum -= s2 as i64;
         match s2.cmp(&0) {

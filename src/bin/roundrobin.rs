@@ -204,12 +204,18 @@ impl Engine {
                 let hist = std::mem::take(&mut self.history);
                 for (i, mv) in hist.iter().enumerate() {
                     let c = if i % 2 == 0 { "B" } else { "W" };
-                    self.send(&format!("play {c} {mv}")).map_err(|e| e.to_string())?;
+                    self.send(&format!("play {c} {mv}"))
+                        .map_err(|e| e.to_string())?;
                     self.read_gtp().map_err(|e| e.to_string())?;
                 }
                 self.history = hist;
-                let c = if board.player() == Color::Black { "B" } else { "W" };
-                self.send(&format!("genmove {c}")).map_err(|e| e.to_string())?;
+                let c = if board.player() == Color::Black {
+                    "B"
+                } else {
+                    "W"
+                };
+                self.send(&format!("genmove {c}"))
+                    .map_err(|e| e.to_string())?;
                 let reply = self.read_gtp().map_err(|e| e.to_string())?;
                 if reply.trim().eq_ignore_ascii_case("pass") {
                     return Ok(None);
@@ -220,11 +226,18 @@ impl Engine {
             }
             proto => {
                 let proto = proto.to_string();
-                self.send(&format!("setboard {board}")).map_err(|e| e.to_string())?;
+                self.send(&format!("setboard {board}"))
+                    .map_err(|e| e.to_string())?;
                 self.send("go").map_err(|e| e.to_string())?;
                 loop {
                     let mut line = String::new();
-                    if self.stdout.as_mut().unwrap().read_line(&mut line).map_err(|e| e.to_string())? == 0
+                    if self
+                        .stdout
+                        .as_mut()
+                        .unwrap()
+                        .read_line(&mut line)
+                        .map_err(|e| e.to_string())?
+                        == 0
                     {
                         return Err(format!("{} exited", self.name));
                     }
@@ -309,7 +322,11 @@ fn play(
         std::cmp::Ordering::Less => diff - empties,
         std::cmp::Ordering::Equal => 0,
     };
-    Ok(if a_is_black { black_score } else { -black_score })
+    Ok(if a_is_black {
+        black_score
+    } else {
+        -black_score
+    })
 }
 
 fn main() -> ExitCode {
@@ -345,7 +362,7 @@ fn main() -> ExitCode {
         return ExitCode::FAILURE;
     }
 
-    let mut evaluator = Evaluator::new(&EGAROUCID_PATTERNS);
+    let mut evaluator = Evaluator::new(EGAROUCID_PATTERNS);
     if let Err(e) = evaluator.load_weights(std::path::Path::new("weights/weights_full.bin")) {
         eprintln!("failed to load weights: {e}");
         return ExitCode::FAILURE;
@@ -425,7 +442,11 @@ fn main() -> ExitCode {
     println!("\n=== standings ===");
     let mut order: Vec<usize> = (0..n).collect();
     order.sort_by(|&a, &b| {
-        score[b].iter().sum::<f64>().partial_cmp(&score[a].iter().sum::<f64>()).unwrap()
+        score[b]
+            .iter()
+            .sum::<f64>()
+            .partial_cmp(&score[a].iter().sum::<f64>())
+            .unwrap()
     });
     for &i in &order {
         let pts: f64 = score[i].iter().sum();

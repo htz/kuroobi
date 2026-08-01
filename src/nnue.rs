@@ -22,6 +22,11 @@
 //! Weights are f32 here for training/validation; a quantized int16/int8 path
 //! for search follows once this beats the linear floor.
 
+// 添字ループは走査順そのものが意味を持つ (連続領域の走査・SIMD 的な
+// 展開) ため、イテレータ化の助言は採らない。引数の多い探索関数も、
+// 構造体に束ねると呼び出しごとの構築が入るので現状の形を保つ。
+#![allow(clippy::needless_range_loop)]
+
 use crate::board::Board;
 use crate::color::Color;
 use crate::evaluator::STAGE_COUNT;
@@ -87,7 +92,12 @@ unsafe fn accumulate_rows(
     n: usize,
 ) {
     #[inline(always)]
-    unsafe fn row(ft: *const i16, mask_off: &[u32], raw: &[u16; MAX_MASKS], m: usize) -> *const i16 {
+    unsafe fn row(
+        ft: *const i16,
+        mask_off: &[u32],
+        raw: &[u16; MAX_MASKS],
+        m: usize,
+    ) -> *const i16 {
         ft.add((*mask_off.get_unchecked(m) as usize + *raw.get_unchecked(m) as usize) * H)
     }
 
@@ -533,7 +543,11 @@ impl Nnue {
             self.ft_bias_f32[h] = self.ft_bias[h];
             self.ft_bias_f32[H + h] = self.ft_bias[h];
         }
-        self.out_w_i32 = self.out_w.iter().map(|&v| (v * w_scale32).round() as i32).collect();
+        self.out_w_i32 = self
+            .out_w
+            .iter()
+            .map(|&v| (v * w_scale32).round() as i32)
+            .collect();
 
         // Fill the White halves from digit-swapped indices (both variants).
         for m in 0..self.n_masks {
@@ -618,10 +632,16 @@ impl Nnue {
         };
         let mut acc = [0i16; H];
         acc.copy_from_slice(&self.ft_bias_i16[..H]); // halves are equal
-        // SAFETY: indices stay inside their pattern's table (the invariant the
-        // scalar sum relies on), so every base + H is in bounds.
+                                                     // SAFETY: indices stay inside their pattern's table (the invariant the
+                                                     // scalar sum relies on), so every base + H is in bounds.
         unsafe {
-            accumulate_rows(&mut acc, ft.as_ptr(), &self.mask_off, indices.raw(), self.n_masks);
+            accumulate_rows(
+                &mut acc,
+                ft.as_ptr(),
+                &self.mask_off,
+                indices.raw(),
+                self.n_masks,
+            );
         }
         let ow = &self.out_w_i16[stage * H..stage * H + H];
         let sum = readout_dot(&acc, ow);
@@ -772,7 +792,11 @@ impl Nnue {
     #[inline]
     pub fn eval_acc_i32(&self, acc: &Accumulator32, board: &Board) -> f32 {
         let stage = crate::evaluator::Evaluator::stage(board);
-        let v = if board.player() == Color::Black { &acc.acc[0..H] } else { &acc.acc[H..H2] };
+        let v = if board.player() == Color::Black {
+            &acc.acc[0..H]
+        } else {
+            &acc.acc[H..H2]
+        };
         let ow = &self.out_w_i32[stage * H..stage * H + H];
         let mut sum: i64 = 0;
         for h in 0..H {
@@ -785,7 +809,11 @@ impl Nnue {
     #[inline]
     pub fn eval_acc_f32(&self, acc: &AccumulatorF, board: &Board) -> f32 {
         let stage = crate::evaluator::Evaluator::stage(board);
-        let v = if board.player() == Color::Black { &acc.acc[0..H] } else { &acc.acc[H..H2] };
+        let v = if board.player() == Color::Black {
+            &acc.acc[0..H]
+        } else {
+            &acc.acc[H..H2]
+        };
         let ow = &self.out_w[stage * H..stage * H + H];
         let mut sum = 0.0f32;
         for h in 0..H {
@@ -802,7 +830,13 @@ impl Nnue {
     /// `acc[h] = ftb[h] + Σ_f FT[f][h]`. MSE loss; the 2 in `d/dout = 2·err`
     /// is folded into `lr`. Gradients into the transformer use the *old*
     /// read-out weights (compute `delta` before mutating `out_w`).
-    pub fn train_black(&mut self, indices: &PatternIndices, stage: usize, target: f32, lr: f32) -> f32 {
+    pub fn train_black(
+        &mut self,
+        indices: &PatternIndices,
+        stage: usize,
+        target: f32,
+        lr: f32,
+    ) -> f32 {
         let feats = self.features_black(indices);
 
         // Forward, keeping the pre-ReLU accumulator.
@@ -927,7 +961,13 @@ impl Nnue {
             w.write_all(&(H as u32).to_le_bytes())?;
             w.write_all(&(self.n_features as u32).to_le_bytes())?;
             w.write_all(&(STAGE_COUNT as u32).to_le_bytes())?;
-            for &v in self.ft.iter().chain(&self.ft_bias).chain(&self.out_w).chain(&self.out_b) {
+            for &v in self
+                .ft
+                .iter()
+                .chain(&self.ft_bias)
+                .chain(&self.out_w)
+                .chain(&self.out_b)
+            {
                 w.write_all(&v.to_le_bytes())?;
             }
             w.flush()?;
@@ -942,16 +982,25 @@ impl Nnue {
         let mut magic = [0u8; 8];
         r.read_exact(&mut magic)?;
         if &magic != b"BBRVNN01" {
-            return Err(std::io::Error::new(std::io::ErrorKind::InvalidData, "bad nnue magic"));
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::InvalidData,
+                "bad nnue magic",
+            ));
         }
         let mut u = [0u8; 4];
         r.read_exact(&mut u)?;
         if u32::from_le_bytes(u) as usize != H {
-            return Err(std::io::Error::new(std::io::ErrorKind::InvalidData, "H mismatch"));
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::InvalidData,
+                "H mismatch",
+            ));
         }
         r.read_exact(&mut u)?;
         if u32::from_le_bytes(u) as usize != self.n_features {
-            return Err(std::io::Error::new(std::io::ErrorKind::InvalidData, "n_features mismatch"));
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::InvalidData,
+                "n_features mismatch",
+            ));
         }
         r.read_exact(&mut u)?;
         let read_into = |r: &mut dyn Read, dst: &mut [f32]| -> std::io::Result<()> {
@@ -997,14 +1046,22 @@ macro_rules! quant_acc {
                 self.$sq(acc, pos.index(), md.wrapping_sub(2));
                 let fd = md.wrapping_sub(1 - md);
                 let mut f = flipped;
-                while f != 0 { let s = f.trailing_zeros() as u8; f &= f - 1; self.$sq(acc, s, fd); }
+                while f != 0 {
+                    let s = f.trailing_zeros() as u8;
+                    f &= f - 1;
+                    self.$sq(acc, s, fd);
+                }
             }
             pub fn $undo(&self, acc: &mut $Acc, pos: Position, flipped: u64, mover: Color) {
                 let md = mover.index() as u16;
                 self.$sq(acc, pos.index(), 2u16.wrapping_sub(md));
                 let fd = (1 - md).wrapping_sub(md);
                 let mut f = flipped;
-                while f != 0 { let s = f.trailing_zeros() as u8; f &= f - 1; self.$sq(acc, s, fd); }
+                while f != 0 {
+                    let s = f.trailing_zeros() as u8;
+                    f &= f - 1;
+                    self.$sq(acc, s, fd);
+                }
             }
             #[inline]
             fn $sq(&self, acc: &mut $Acc, sq: u8, digit_diff: u16) {
@@ -1028,8 +1085,26 @@ macro_rules! quant_acc {
         }
     };
 }
-quant_acc!(Accumulator32, i32, accumulator_i32, acc_apply_i32, acc_undo_i32, acc_square_i32, ftc_i32, ft_bias_i32);
-quant_acc!(AccumulatorF, f32, accumulator_f32, acc_apply_f32, acc_undo_f32, acc_square_f32, ftc_f32, ft_bias_f32);
+quant_acc!(
+    Accumulator32,
+    i32,
+    accumulator_i32,
+    acc_apply_i32,
+    acc_undo_i32,
+    acc_square_i32,
+    ftc_i32,
+    ft_bias_i32
+);
+quant_acc!(
+    AccumulatorF,
+    f32,
+    accumulator_f32,
+    acc_apply_f32,
+    acc_undo_f32,
+    acc_square_f32,
+    ftc_f32,
+    ft_bias_f32
+);
 
 #[cfg(test)]
 mod tests {

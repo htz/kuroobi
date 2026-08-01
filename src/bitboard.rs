@@ -274,9 +274,14 @@ mod tests {
         let (pf, pr) = (sq / 8, sq % 8);
         let mut flipped = 0u64;
         for (df, dr) in [
-            (-1, -1), (-1, 0), (-1, 1),
-            (0, -1), (0, 1),
-            (1, -1), (1, 0), (1, 1),
+            (-1, -1),
+            (-1, 0),
+            (-1, 1),
+            (0, -1),
+            (0, 1),
+            (1, -1),
+            (1, 0),
+            (1, 1),
         ] {
             let mut run = 0u64;
             let (mut f, mut r) = (pf + df, pr + dr);
@@ -342,9 +347,14 @@ mod tests {
         // in each direction with a player anchor beyond it.
         let pos = 1u64 << 35;
         for (df, dr) in [
-            (-1i32, -1i32), (-1, 0), (-1, 1),
-            (0, -1), (0, 1),
-            (1, -1), (1, 0), (1, 1),
+            (-1i32, -1i32),
+            (-1, 0),
+            (-1, 1),
+            (0, -1),
+            (0, 1),
+            (1, -1),
+            (1, 0),
+            (1, 1),
         ] {
             let opp_sq = ((4 + df) * 8 + (3 + dr)) as u64;
             let anchor_sq = ((4 + 2 * df) * 8 + (3 + 2 * dr)) as u64;
@@ -373,7 +383,8 @@ mod tests {
         // Horizontal full-rank flip along rank 0: A1 anchor, B1..G1 opponent,
         // place at H1. Legal and flips all six.
         let player = 1u64 << 0; // A1
-        let opp = (1u64 << 8) | (1u64 << 16) | (1u64 << 24) | (1u64 << 32) | (1u64 << 40) | (1u64 << 48);
+        let opp =
+            (1u64 << 8) | (1u64 << 16) | (1u64 << 24) | (1u64 << 32) | (1u64 << 40) | (1u64 << 48);
         assert_eq!(
             flippable(player, opp, 1u64 << 56), // H1
             opp,
@@ -448,10 +459,7 @@ mod tests {
     fn test_check_all_consistency() {
         for (player, opp) in random_boards(100) {
             let empty = !(player | opp);
-            assert_eq!(
-                check_all(player, opp),
-                mobility(player, opp, empty) != 0
-            );
+            assert_eq!(check_all(player, opp), mobility(player, opp, empty) != 0);
         }
     }
 

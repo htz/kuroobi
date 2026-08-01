@@ -6,9 +6,13 @@ use kuroobi::{Board, Position};
 use std::time::Instant;
 
 fn main() {
-    let mut ev = Evaluator::new(&EGAROUCID_PATTERNS);
-    ev.load_weights(std::path::Path::new("weights/weights_full.bin")).expect("weights");
-    let depth: u8 = std::env::args().nth(1).and_then(|s| s.parse().ok()).unwrap_or(12);
+    let mut ev = Evaluator::new(EGAROUCID_PATTERNS);
+    ev.load_weights(std::path::Path::new("weights/weights_full.bin"))
+        .expect("weights");
+    let depth: u8 = std::env::args()
+        .nth(1)
+        .and_then(|s| s.parse().ok())
+        .unwrap_or(12);
 
     let mut boards = Vec::new();
     let mut s: u64 = 0x1234_5678_9ABC_DEF0;
@@ -56,6 +60,9 @@ fn main() {
         if th == 1 {
             base = el;
         }
-        println!("threads {th}: {el:7.3}s ({:.2}x)  nodes {nodes:>12}  moves {moves:?}", base / el);
+        println!(
+            "threads {th}: {el:7.3}s ({:.2}x)  nodes {nodes:>12}  moves {moves:?}",
+            base / el
+        );
     }
 }

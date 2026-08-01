@@ -4,10 +4,10 @@
 //!
 //! * `edax`      — Edax's console: `setboard <board>` / `go`, replies "Edax plays XX"
 //! * `zebra`     — the engine mode added to Zebra's sources for this driver,
-//!                 which answers `setboard`/`go` with "move xx"
+//!   which answers `setboard`/`go` with "move xx"
 //! * `egaroucid` — GTP, which Egaroucid implements natively: the driver
-//!                 replays the move list rather than setting a board, since
-//!                 GTP has no position command
+//!   replays the move list rather than setting a board, since
+//!   GTP has no position command
 //!
 //! The driver owns the authoritative game state. Our engine moves via the
 //! usual Searcher/Solver stack; for Edax's turns the driver sends
@@ -28,23 +28,23 @@
 //!   --edax-level <n>     Opponent level/depth (default 5)
 //!   --protocol <p>       edax | zebra | egaroucid (default edax)
 //!   --threads <n>        Threads for both sides (default 1). Ours only
-//!                        parallelises the exact endgame; Edax parallelises
-//!                        its whole search, so this favours Edax.
+//!   parallelises the exact endgame; Edax parallelises
+//!   its whole search, so this favours Edax.
 //!   --games <n>          Total games, rounded up to even (default 200)
 //!   --random-plies <n>   Random opening plies (default 6)
 //!   --seed <n>           RNG seed (default 7)
 //!   --per-game           One line per game (`game <pair> <B|W> <disc-diff>`),
-//!                        so two runs over the same seed can be paired
+//!   so two runs over the same seed can be paired
 
 use std::io::{BufRead, BufReader, Write};
 use std::path::PathBuf;
 use std::process::{Child, ChildStdin, ChildStdout, Command, ExitCode, Stdio};
 
 use kuroobi::evaluator::Evaluator;
+use kuroobi::midgame::*;
 use kuroobi::nnue::Nnue;
 use kuroobi::pattern::{EDAX_PATTERNS, EGAROUCID_PATTERNS, EGAROUCID_PLUS_PATTERNS};
 use kuroobi::search::Searcher;
-use kuroobi::midgame::*;
 use kuroobi::solver::{EndSolverMode, Solver};
 use kuroobi::{Board, Color, Position};
 
@@ -145,10 +145,22 @@ fn parse_args() -> Result<Args, String> {
                     other => return Err(format!("unknown pattern set: {other}")),
                 }
             }
-            "--depth" => args.depth = value("--depth")?.parse().map_err(|e| format!("--depth: {e}"))?,
+            "--depth" => {
+                args.depth = value("--depth")?
+                    .parse()
+                    .map_err(|e| format!("--depth: {e}"))?
+            }
             "--mpc" => args.mpc = true,
-            "--solve-empties" => args.solve_empties = value("--solve-empties")?.parse().map_err(|e| format!("--solve-empties: {e}"))?,
-            "--edax-level" => args.edax_level = value("--edax-level")?.parse().map_err(|e| format!("--edax-level: {e}"))?,
+            "--solve-empties" => {
+                args.solve_empties = value("--solve-empties")?
+                    .parse()
+                    .map_err(|e| format!("--solve-empties: {e}"))?
+            }
+            "--edax-level" => {
+                args.edax_level = value("--edax-level")?
+                    .parse()
+                    .map_err(|e| format!("--edax-level: {e}"))?
+            }
             "--protocol" => {
                 args.protocol = match value("--protocol")?.as_str() {
                     "edax" => "edax",
@@ -157,25 +169,83 @@ fn parse_args() -> Result<Args, String> {
                     other => return Err(format!("--protocol: unknown {other}")),
                 }
             }
-            "--threads" => args.threads = value("--threads")?.parse().map_err(|e| format!("--threads: {e}"))?,
+            "--threads" => {
+                args.threads = value("--threads")?
+                    .parse()
+                    .map_err(|e| format!("--threads: {e}"))?
+            }
             "--per-game" => args.per_game = true,
-            "--edax-threads" => args.edax_threads = Some(value("--edax-threads")?.parse().map_err(|e| format!("--edax-threads: {e}"))?),
-            "--games" => args.games = value("--games")?.parse().map_err(|e| format!("--games: {e}"))?,
-            "--random-plies" => args.random_plies = value("--random-plies")?.parse().map_err(|e| format!("--random-plies: {e}"))?,
-            "--seed" => args.seed = value("--seed")?.parse().map_err(|e| format!("--seed: {e}"))?,
+            "--edax-threads" => {
+                args.edax_threads = Some(
+                    value("--edax-threads")?
+                        .parse()
+                        .map_err(|e| format!("--edax-threads: {e}"))?,
+                )
+            }
+            "--games" => {
+                args.games = value("--games")?
+                    .parse()
+                    .map_err(|e| format!("--games: {e}"))?
+            }
+            "--random-plies" => {
+                args.random_plies = value("--random-plies")?
+                    .parse()
+                    .map_err(|e| format!("--random-plies: {e}"))?
+            }
+            "--seed" => {
+                args.seed = value("--seed")?
+                    .parse()
+                    .map_err(|e| format!("--seed: {e}"))?
+            }
             "--verify-parallel" => args.verify_parallel = true,
             "--mpc-calib" => args.mpc_calib = Some(PathBuf::from(value("--mpc-calib")?)),
-            "--calib-stride" => args.calib_stride = value("--calib-stride")?.parse().map_err(|e| format!("--calib-stride: {e}"))?,
-            "--calib-max" => args.calib_max = value("--calib-max")?.parse().map_err(|e| format!("--calib-max: {e}"))?,
-            "--selective-band" => args.selective_band = value("--selective-band")?.parse().map_err(|e| format!("--selective-band: {e}"))?,
-            "--self-vs" => args.self_vs = Some(value("--self-vs")?.parse().map_err(|e| format!("--self-vs: {e}"))?),
-            "--band-probe" => args.band_probe = Some(value("--band-probe")?.parse().map_err(|e| format!("--band-probe: {e}"))?),
-            "--mid-sigma-calib" => args.mid_sigma_calib = Some(PathBuf::from(value("--mid-sigma-calib")?)),
+            "--calib-stride" => {
+                args.calib_stride = value("--calib-stride")?
+                    .parse()
+                    .map_err(|e| format!("--calib-stride: {e}"))?
+            }
+            "--calib-max" => {
+                args.calib_max = value("--calib-max")?
+                    .parse()
+                    .map_err(|e| format!("--calib-max: {e}"))?
+            }
+            "--selective-band" => {
+                args.selective_band = value("--selective-band")?
+                    .parse()
+                    .map_err(|e| format!("--selective-band: {e}"))?
+            }
+            "--self-vs" => {
+                args.self_vs = Some(
+                    value("--self-vs")?
+                        .parse()
+                        .map_err(|e| format!("--self-vs: {e}"))?,
+                )
+            }
+            "--band-probe" => {
+                args.band_probe = Some(
+                    value("--band-probe")?
+                        .parse()
+                        .map_err(|e| format!("--band-probe: {e}"))?,
+                )
+            }
+            "--mid-sigma-calib" => {
+                args.mid_sigma_calib = Some(PathBuf::from(value("--mid-sigma-calib")?))
+            }
             "--sigma-calib" => args.sigma_calib = Some(PathBuf::from(value("--sigma-calib")?)),
-            "--solver-hash" => args.solver_hash = Some(value("--solver-hash")?.parse().map_err(|e| format!("--solver-hash: {e}"))?),
+            "--solver-hash" => {
+                args.solver_hash = Some(
+                    value("--solver-hash")?
+                        .parse()
+                        .map_err(|e| format!("--solver-hash: {e}"))?,
+                )
+            }
             "--gen-obf" => args.gen_obf = Some(PathBuf::from(value("--gen-obf")?)),
             "--obf" => args.obf = Some(PathBuf::from(value("--obf")?)),
-            "--band-empties" => args.band_empties = value("--band-empties")?.parse().map_err(|e| format!("--band-empties: {e}"))?,
+            "--band-empties" => {
+                args.band_empties = value("--band-empties")?
+                    .parse()
+                    .map_err(|e| format!("--band-empties: {e}"))?
+            }
             "--nnue-b" => args.nnue_b = Some(PathBuf::from(value("--nnue-b")?)),
             other => return Err(format!("unknown option: {other}")),
         }
@@ -298,7 +368,13 @@ impl Edax {
             .spawn()?;
         let stdin = child.stdin.take().unwrap();
         let stdout = BufReader::new(child.stdout.take().unwrap());
-        Ok(Edax { child, stdin, stdout, protocol, history: Vec::new() })
+        Ok(Edax {
+            child,
+            stdin,
+            stdout,
+            protocol,
+            history: Vec::new(),
+        })
     }
 
     fn send(&mut self, cmd: &str) -> std::io::Result<()> {
@@ -322,7 +398,11 @@ impl Edax {
             self.drain_gtp()?;
         }
         self.history = hist;
-        let color = if board.player() == Color::Black { "B" } else { "W" };
+        let color = if board.player() == Color::Black {
+            "B"
+        } else {
+            "W"
+        };
         self.send(&format!("genmove {color}"))?;
         let reply = self.read_gtp()?;
         let mv = reply.trim();
@@ -525,15 +605,13 @@ fn play(
                 // The solver empties its table on entry; that is harness
                 // scaffolding, not thinking, and it is not in what Egaroucid
                 // reports either. Subtract it, the way `solve_obf` does.
-                let c0 = kuroobi::solver::CLEAR_NS
-                    .load(std::sync::atomic::Ordering::Relaxed);
+                let c0 = kuroobi::solver::CLEAR_NS.load(std::sync::atomic::Ordering::Relaxed);
                 let mv = solver
                     .solve_with_eval(EndSolverMode::Perfect, &board, Some(evaluator))
                     .best_move
                     .ok_or("solver returned no move")?;
-                clear_ns += kuroobi::solver::CLEAR_NS
-                    .load(std::sync::atomic::Ordering::Relaxed)
-                    - c0;
+                clear_ns +=
+                    kuroobi::solver::CLEAR_NS.load(std::sync::atomic::Ordering::Relaxed) - c0;
                 mv
             } else if let Some(t) = selective_band(board.empty_count(), solve_empties, band_width) {
                 // Above the exact threshold but close enough that reading to
@@ -545,18 +623,18 @@ fn play(
                 // does, so it has to discount it exactly as the exact solve
                 // does — charging scaffolding to one branch and not the other
                 // is how a comparison between them stops meaning anything.
-                let c0 = kuroobi::solver::CLEAR_NS
-                    .load(std::sync::atomic::Ordering::Relaxed);
+                let c0 = kuroobi::solver::CLEAR_NS.load(std::sync::atomic::Ordering::Relaxed);
                 let mv = solver
                     .solve_selective(&board, Some(evaluator), t)
                     .best_move
                     .ok_or("selective solver returned no move")?;
-                clear_ns += kuroobi::solver::CLEAR_NS
-                    .load(std::sync::atomic::Ordering::Relaxed)
-                    - c0;
+                clear_ns +=
+                    kuroobi::solver::CLEAR_NS.load(std::sync::atomic::Ordering::Relaxed) - c0;
                 mv
             } else if let Some(nn) = nnue.as_deref_mut() {
-                let p = nn.best_move(&board, depth as u32).ok_or("nnue returned no move")?;
+                let p = nn
+                    .best_move(&board, depth as u32)
+                    .ok_or("nnue returned no move")?;
                 mid_nodes = Some(std::mem::take(&mut nn.nodes));
                 p
             } else {
@@ -612,7 +690,11 @@ fn play(
         std::cmp::Ordering::Less => diff - empties,
         std::cmp::Ordering::Equal => 0,
     };
-    Ok(if we_are_black { score_black } else { -score_black })
+    Ok(if we_are_black {
+        score_black
+    } else {
+        -score_black
+    })
 }
 
 fn main() -> ExitCode {
@@ -763,7 +845,7 @@ fn main() -> ExitCode {
                     break;
                 }
                 // Every second ply is plenty of positions and halves the cost.
-                if e <= 50 && e % 2 == 0 {
+                if e <= 50 && e.is_multiple_of(2) {
                     search.clear();
                     let mut acc = search.nn.indices(board.black, board.white);
                     let top = MAX_CAL_DEPTH.min(e.saturating_sub(2));
@@ -866,7 +948,9 @@ fn main() -> ExitCode {
                 }
             };
             let mut solver = Solver::new(26);
-        if let (Some(nn), Some(mtt)) = (nnue, nnue_tt) { solver.set_nnue(nn, mtt); }
+            if let (Some(nn), Some(mtt)) = (nnue, nnue_tt) {
+                solver.set_nnue(nn, mtt);
+            }
             solver.set_threads(args.threads);
             const PROBES: [u8; 5] = [2, 4, 6, 8, 10];
             print!("empties,exact");
@@ -878,7 +962,9 @@ fn main() -> ExitCode {
             }
             println!();
             for line in text.lines() {
-                let Some(board) = parse_obf(line) else { continue };
+                let Some(board) = parse_obf(line) else {
+                    continue;
+                };
                 if board.movable() == 0 {
                     continue;
                 }
@@ -893,8 +979,9 @@ fn main() -> ExitCode {
                     .iter()
                     .map(|&d| solver.probe_value_nnue(&board, d).unwrap_or(f32::NAN))
                     .collect();
-                let exact =
-                    solver.solve_with_eval(EndSolverMode::Perfect, &board, Some(&evaluator)).value;
+                let exact = solver
+                    .solve_with_eval(EndSolverMode::Perfect, &board, Some(&evaluator))
+                    .value;
                 print!("{},{exact}", board.empty_count());
                 for v in probes {
                     print!(",{v:.2}");
@@ -923,12 +1010,21 @@ fn main() -> ExitCode {
         // The head-to-head opponent runs with a 2^25-entry table; measuring
         // our endgame through a 2^22 table conflates tree size with table
         // starvation.
-        let mut solver = Solver::new(args.solver_hash.unwrap_or(if args.solve_empties >= 18 { 22 } else { 18 }) as u32);
-        if let (Some(nn), Some(mtt)) = (nnue, nnue_tt) { solver.set_nnue(nn, mtt); }
+        let mut solver =
+            Solver::new(
+                args.solver_hash
+                    .unwrap_or(if args.solve_empties >= 18 { 22 } else { 18 })
+                    as u32,
+            );
+        if let (Some(nn), Some(mtt)) = (nnue, nnue_tt) {
+            solver.set_nnue(nn, mtt);
+        }
         solver.set_threads(args.threads);
         println!("empties,regime,depth,nodes,seconds,nps");
         for line in text.lines() {
-            let Some(board) = parse_obf(line) else { continue };
+            let Some(board) = parse_obf(line) else {
+                continue;
+            };
             let e = board.empty_count();
             if board.movable() == 0 {
                 continue;
@@ -939,27 +1035,24 @@ fn main() -> ExitCode {
             if let Some(tt) = nnue_tt {
                 tt.clear();
             }
-            let c0 = kuroobi::solver::CLEAR_NS
-                .load(std::sync::atomic::Ordering::Relaxed);
+            let c0 = kuroobi::solver::CLEAR_NS.load(std::sync::atomic::Ordering::Relaxed);
             let t0 = std::time::Instant::now();
-            let (regime, depth, nodes) =
-                if args.solve_empties > 0 && e <= args.solve_empties {
-                    let r = solver.solve_with_eval(EndSolverMode::Perfect, &board, Some(&evaluator));
-                    ("exact", e as u32, r.nodes)
-                } else if let Some(t) = selective_band(e, args.solve_empties, args.selective_band) {
-                    let r = solver.solve_selective(&board, Some(&evaluator), t);
-                    ("selective", e as u32, r.nodes)
-                } else {
-                    let Some(nn) = nnue_search.as_mut() else {
-                        eprintln!("--obf needs --nnue for midgame positions");
-                        return ExitCode::FAILURE;
-                    };
-                    nn.best_move(&board, args.depth as u32);
-                    ("midgame", args.depth as u32, std::mem::take(&mut nn.nodes))
+            let (regime, depth, nodes) = if args.solve_empties > 0 && e <= args.solve_empties {
+                let r = solver.solve_with_eval(EndSolverMode::Perfect, &board, Some(&evaluator));
+                ("exact", e as u32, r.nodes)
+            } else if let Some(t) = selective_band(e, args.solve_empties, args.selective_band) {
+                let r = solver.solve_selective(&board, Some(&evaluator), t);
+                ("selective", e as u32, r.nodes)
+            } else {
+                let Some(nn) = nnue_search.as_mut() else {
+                    eprintln!("--obf needs --nnue for midgame positions");
+                    return ExitCode::FAILURE;
                 };
-            let clear = (kuroobi::solver::CLEAR_NS
-                .load(std::sync::atomic::Ordering::Relaxed)
-                - c0) as f64
+                nn.best_move(&board, args.depth as u32);
+                ("midgame", args.depth as u32, std::mem::take(&mut nn.nodes))
+            };
+            let clear = (kuroobi::solver::CLEAR_NS.load(std::sync::atomic::Ordering::Relaxed) - c0)
+                as f64
                 / 1e9;
             let secs = t0.elapsed().as_secs_f64() - clear;
             println!(
@@ -996,19 +1089,16 @@ fn main() -> ExitCode {
         // saturation that a position takes minutes. The answer is exact either
         // way — only the time to reach it changes.
         let mut solver = Solver::new(26);
-        if let (Some(nn), Some(mtt)) = (nnue, nnue_tt) { solver.set_nnue(nn, mtt); }
+        if let (Some(nn), Some(mtt)) = (nnue, nnue_tt) {
+            solver.set_nnue(nn, mtt);
+        }
         solver.set_threads(args.threads);
         let mut rng = Rng::new(args.seed);
 
         /// Exact value of `m` from the point of view of the side playing it.
         /// The solver always answers for the side to move, so every pass on the
         /// way back flips the sign.
-        fn exact_after(
-            solver: &mut Solver,
-            ev: &Evaluator,
-            board: &Board,
-            m: Position,
-        ) -> i32 {
+        fn exact_after(solver: &mut Solver, ev: &Evaluator, board: &Board, m: Position) -> i32 {
             let mut child = *board;
             child.make_move_bits(m);
             let mut sign = -1i32;
@@ -1038,7 +1128,10 @@ fn main() -> ExitCode {
             }
         }
 
-        println!("band probe: {n_pos} positions at {target} empties, t={t}, depth {}", args.depth);
+        println!(
+            "band probe: {n_pos} positions at {target} empties, t={t}, depth {}",
+            args.depth
+        );
         // The move a probe shape picks is a coarse instrument: the blow-ups that
         // decide whether the band is usable are rare enough that a hundred
         // positions can contain none. The *score* a selective solve returns is
@@ -1090,7 +1183,9 @@ fn main() -> ExitCode {
             }
 
             let exact = solver.solve_with_eval(EndSolverMode::Perfect, &board, Some(&evaluator));
-            let Some(best) = exact.best_move else { continue };
+            let Some(best) = exact.best_move else {
+                continue;
+            };
             let star = exact.value;
 
             // Both probe shapes on the same position: the flat depth-4 probe
@@ -1105,7 +1200,9 @@ fn main() -> ExitCode {
             let (err_a, err_s) = (ra.value - star, rs.value - star);
             let b = search.best_move(&board, args.depth as u32);
 
-            let (Some(a), Some(s), Some(b)) = (a, s, b) else { continue };
+            let (Some(a), Some(s), Some(b)) = (a, s, b) else {
+                continue;
+            };
             // Each of these solves costs what the oracle did, so a move already
             // scored is never scored twice.
             let mut scored: Vec<(Position, i32)> = Vec::new();
@@ -1178,10 +1275,14 @@ fn main() -> ExitCode {
         side_b.mpc = args.mpc;
         side_b.threads = vs_threads;
         let mut solver_a = Solver::new(if args.solve_empties >= 18 { 22 } else { 18 });
-        if let (Some(nn), Some(mtt)) = (nnue, nnue_tt) { solver_a.set_nnue(nn, mtt); }
+        if let (Some(nn), Some(mtt)) = (nnue, nnue_tt) {
+            solver_a.set_nnue(nn, mtt);
+        }
         solver_a.set_threads(args.threads);
         let mut solver_b = Solver::new(if args.solve_empties >= 18 { 22 } else { 18 });
-        if let (Some(nn), Some(mtt)) = (nnue, nnue_tt) { solver_b.set_nnue(nn, mtt); }
+        if let (Some(nn), Some(mtt)) = (nnue, nnue_tt) {
+            solver_b.set_nnue(nn, mtt);
+        }
         solver_b.set_threads(vs_threads);
 
         let mut rng = Rng::new(args.seed);
@@ -1236,7 +1337,11 @@ fn main() -> ExitCode {
                 }
                 let black = board.black.count_ones() as i32;
                 let white = board.white.count_ones() as i32;
-                let diff = if a_is_black { black - white } else { white - black };
+                let diff = if a_is_black {
+                    black - white
+                } else {
+                    white - black
+                };
                 disc_sum += diff as i64;
                 match diff.cmp(&0) {
                     std::cmp::Ordering::Greater => wins += 1,
@@ -1260,7 +1365,10 @@ fn main() -> ExitCode {
             draws,
             disc_sum as f64 / n
         );
-        println!("time: A {time_a:.1}s  B {time_b:.1}s  (speedup {:.2}x)", time_b / time_a.max(1e-9));
+        println!(
+            "time: A {time_a:.1}s  B {time_b:.1}s  (speedup {:.2}x)",
+            time_b / time_a.max(1e-9)
+        );
         println!(
             "splits: {} accepted / {} offered",
             SPLIT_DONE.load(std::sync::atomic::Ordering::Relaxed),
@@ -1333,11 +1441,17 @@ fn main() -> ExitCode {
                     let flipped = child.make_move_bits(mv);
                     let mut ix = nn.indices(board.black, board.white);
                     nn.ix_apply(&mut ix, mv, flipped, board.player());
-                    -j.negamax(&child, &mut ix, args.depth as u32, f32::NEG_INFINITY, f32::INFINITY)
+                    -j.negamax(
+                        &child,
+                        &mut ix,
+                        args.depth as u32,
+                        f32::NEG_INFINITY,
+                        f32::INFINITY,
+                    )
                 };
-                let vs = value_of(seq_move, &judge_tt);
+                let vs = value_of(seq_move, judge_tt);
                 judge_tt = Box::leak(Box::new(SharedTt::new(20)));
-                let vp = value_of(par_move, &judge_tt);
+                let vp = value_of(par_move, judge_tt);
                 // Only a *worse* parallel choice is a regression. Comparing the
                 // absolute difference counted the parallel search's own
                 // improvements as failures.
@@ -1371,7 +1485,12 @@ fn main() -> ExitCode {
         return ExitCode::SUCCESS;
     }
 
-    let mut edax = match Edax::spawn(&args.edax_path, args.edax_level, args.edax_threads.unwrap_or(args.threads), args.protocol) {
+    let mut edax = match Edax::spawn(
+        &args.edax_path,
+        args.edax_level,
+        args.edax_threads.unwrap_or(args.threads),
+        args.protocol,
+    ) {
         Ok(e) => e,
         Err(e) => {
             eprintln!("failed to start edax: {e}");
@@ -1398,7 +1517,9 @@ fn main() -> ExitCode {
     searcher.threads = args.threads;
     // Deep endgame thresholds (20+ empties) need a much larger table.
     let mut solver = Solver::new(if args.solve_empties >= 18 { 22 } else { 18 });
-        if let (Some(nn), Some(mtt)) = (nnue, nnue_tt) { solver.set_nnue(nn, mtt); }
+    if let (Some(nn), Some(mtt)) = (nnue, nnue_tt) {
+        solver.set_nnue(nn, mtt);
+    }
     solver.set_threads(args.threads);
     let mut clock = Clock::default();
     let mut wins = 0usize;
@@ -1413,8 +1534,18 @@ fn main() -> ExitCode {
                 s.clear();
             }
             match play(
-                &opening, we_are_black, &evaluator, nnue_search.as_mut(), &mut searcher, &mut solver,
-                &mut edax, args.depth, args.solve_empties, args.selective_band, &mut clock, &opening_moves,
+                &opening,
+                we_are_black,
+                &evaluator,
+                nnue_search.as_mut(),
+                &mut searcher,
+                &mut solver,
+                &mut edax,
+                args.depth,
+                args.solve_empties,
+                args.selective_band,
+                &mut clock,
+                &opening_moves,
             ) {
                 Ok(s) => {
                     // One line per game so two runs over the same seed can be

@@ -51,9 +51,19 @@ fn main() -> ExitCode {
         (45, 60, "end  45-60"),
     ];
 
-    println!("{}: per-pattern RMS(nonzero) x orientations, by stage band", path.display());
-    println!("{:<18} {:>4} {}", "pattern", "ori",
-        bands.iter().map(|b| format!("{:>16}", b.2)).collect::<String>());
+    println!(
+        "{}: per-pattern RMS(nonzero) x orientations, by stage band",
+        path.display()
+    );
+    println!(
+        "{:<18} {:>4} {}",
+        "pattern",
+        "ori",
+        bands
+            .iter()
+            .map(|b| format!("{:>16}", b.2))
+            .collect::<String>()
+    );
 
     for (pi, p) in patterns.iter().enumerate() {
         let mut cols = String::new();
@@ -71,7 +81,11 @@ fn main() -> ExitCode {
                     }
                 }
             }
-            let rms = if nonzero > 0 { (sum_sq / nonzero as f64).sqrt() } else { 0.0 };
+            let rms = if nonzero > 0 {
+                (sum_sq / nonzero as f64).sqrt()
+            } else {
+                0.0
+            };
             let contrib = rms * p.masks.len() as f64;
             let vis = 100.0 * nonzero as f64 / total.max(1) as f64;
             cols.push_str(&format!("  {contrib:>7.2} ({vis:>3.0}%)"));
@@ -93,7 +107,11 @@ fn main() -> ExitCode {
                 }
             }
         }
-        let rms = if nonzero > 0 { (sum_sq / nonzero as f64).sqrt() } else { 0.0 };
+        let rms = if nonzero > 0 {
+            (sum_sq / nonzero as f64).sqrt()
+        } else {
+            0.0
+        };
         cols.push_str(&format!("  {rms:>7.2} (---%)"));
     }
     println!("{:<18} {:>4}{}", "disc-count", 1, cols);

@@ -49,11 +49,20 @@ struct Shard {
 /// fixed correlation in the data.
 fn shards(counts: &[usize], order: &[usize], max: usize) -> Vec<Shard> {
     let mut out: Vec<Shard> = Vec::new();
-    let mut cur = Shard { files: Vec::new(), examples: 0 };
+    let mut cur = Shard {
+        files: Vec::new(),
+        examples: 0,
+    };
     for &i in order {
         let n = counts[i];
         if !cur.files.is_empty() && cur.examples + n > max {
-            out.push(std::mem::replace(&mut cur, Shard { files: Vec::new(), examples: 0 }));
+            out.push(std::mem::replace(
+                &mut cur,
+                Shard {
+                    files: Vec::new(),
+                    examples: 0,
+                },
+            ));
         }
         cur.files.push(i);
         cur.examples += n;
@@ -136,7 +145,9 @@ fn main() -> ExitCode {
         }
     }
     if data_files.is_empty() {
-        eprintln!("usage: nnue_train [--epochs n] [--lr f] [--limit n] [--val f]... [--out p] <data>...");
+        eprintln!(
+            "usage: nnue_train [--epochs n] [--lr f] [--limit n] [--val f]... [--out p] <data>..."
+        );
         return ExitCode::FAILURE;
     }
 
@@ -204,7 +215,11 @@ fn main() -> ExitCode {
         state ^= state >> 27;
         state.wrapping_mul(0x2545F4914F6CDD1D)
     };
-    let mut best = if val.is_empty() { f64::INFINITY } else { val_mse(&nn, &val) };
+    let mut best = if val.is_empty() {
+        f64::INFINITY
+    } else {
+        val_mse(&nn, &val)
+    };
     if best.is_finite() {
         println!("starting val {best:.4}");
     }

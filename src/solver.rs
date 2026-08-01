@@ -5,6 +5,11 @@
 //! Scores are disc differences from the current player's perspective, with
 //! the empty-square bonus applied to the winner (Board::score semantics).
 
+// 添字ループは走査順そのものが意味を持つ (連続領域の走査・SIMD 的な
+// 展開) ため、イテレータ化の助言は採らない。引数の多い探索関数も、
+// 構造体に束ねると呼び出しごとの構築が入るので現状の形を保つ。
+#![allow(clippy::too_many_arguments)]
+
 use crate::bitboard;
 use crate::board::Board;
 use crate::evaluator::Evaluator;
@@ -192,8 +197,7 @@ impl<'p> AbortFlag<'p> {
     }
 
     fn abort(&self) {
-        self.flag
-            .store(true, std::sync::atomic::Ordering::Relaxed);
+        self.flag.store(true, std::sync::atomic::Ordering::Relaxed);
     }
 
     /// True if this split, or any enclosing one, has been cut off. The chain
@@ -531,8 +535,7 @@ impl EndPool {
 
     fn shutdown(&self) {
         let _q = self.q.lock().unwrap();
-        self.stop
-            .store(true, std::sync::atomic::Ordering::Relaxed);
+        self.stop.store(true, std::sync::atomic::Ordering::Relaxed);
         drop(_q);
         self.cv.notify_all();
     }
@@ -634,7 +637,8 @@ fn selective_sigma(empties: u8, pc: u8) -> f32 {
 
     let e = (empties as f32).clamp(14.0, 30.0);
     let p = (pc as f32).clamp(2.0, 10.0);
-    let s = 7.246577 + 0.020516 * e - 0.438464 * p - 0.004024 * e * e + 0.000167 * p * p
+    let s = 7.246577 + 0.020516 * e - 0.438464 * p - 0.004024 * e * e
+        + 0.000167 * p * p
         + 0.009864 * e * p;
     // A margin cannot sensibly go below a disc, and the fit is only linear-ish
     // near its edges.
@@ -658,7 +662,9 @@ fn selective_probe_depth(empties: u8) -> u8 {
     // SEL_PROBE_DEPTH=<n> pins a flat probe depth for sweeps.
     static V: std::sync::OnceLock<Option<u8>> = std::sync::OnceLock::new();
     if let Some(d) = *V.get_or_init(|| {
-        std::env::var("SEL_PROBE_DEPTH").ok().and_then(|v| v.parse().ok())
+        std::env::var("SEL_PROBE_DEPTH")
+            .ok()
+            .and_then(|v| v.parse().ok())
     }) {
         return d;
     }
@@ -877,7 +883,6 @@ fn parity_of(board: &Board) -> u8 {
     parity_of_bb(board.black | board.white)
 }
 
-
 // ---------------------------------------------------------------------------
 // Transposition table
 // ---------------------------------------------------------------------------
@@ -934,12 +939,20 @@ impl HashEntry {
 
     #[inline]
     fn lower(&self) -> i32 {
-        if self.lower8 == i8::MIN { -VALUE_INF } else { self.lower8 as i32 }
+        if self.lower8 == i8::MIN {
+            -VALUE_INF
+        } else {
+            self.lower8 as i32
+        }
     }
 
     #[inline]
     fn upper(&self) -> i32 {
-        if self.upper8 == i8::MAX { VALUE_INF } else { self.upper8 as i32 }
+        if self.upper8 == i8::MAX {
+            VALUE_INF
+        } else {
+            self.upper8 as i32
+        }
     }
 
     #[inline]
@@ -1223,7 +1236,6 @@ impl HashTable {
         self.date.store(next, std::sync::atomic::Ordering::Relaxed);
     }
 
-
     fn seed_update(
         &self,
         board: &Board,
@@ -1304,7 +1316,10 @@ pub struct EndSolverResult {
 
 /// The NNUE midgame searcher lent to the endgame for its selective probes:
 /// the network and the shared midgame table it searches through.
-pub type NnueProbe = (&'static crate::nnue::Nnue, &'static crate::midgame::SharedTt);
+pub type NnueProbe = (
+    &'static crate::nnue::Nnue,
+    &'static crate::midgame::SharedTt,
+);
 
 /// The selective probes run an (unpruned) NNUE search instead of the linear
 /// seed search whenever the solver has been lent one (`set_nnue`). Measured
@@ -1473,7 +1488,11 @@ impl Solver {
     }
 
     /// Lend the NNUE searcher to the selective probes (see `NnueProbe`).
-    pub fn set_nnue(&mut self, nn: &'static crate::nnue::Nnue, tt: &'static crate::midgame::SharedTt) {
+    pub fn set_nnue(
+        &mut self,
+        nn: &'static crate::nnue::Nnue,
+        tt: &'static crate::midgame::SharedTt,
+    ) {
         self.nnue = Some((nn, tt));
     }
 
@@ -1489,12 +1508,10 @@ impl Solver {
         self.threads = threads.max(1);
     }
 
-
     /// Solve the endgame for `board` under the given mode.
     pub fn solve(&mut self, mode: EndSolverMode, board: &Board) -> EndSolverResult {
         self.solve_with_eval(mode, board, None)
     }
-
 
     /// Solve with an optional evaluator used purely for move ordering in
     /// the upper (many-empties) region of the tree. Ordering never changes
@@ -1544,7 +1561,13 @@ impl Solver {
         let (nn, mtt) = self.nnue?;
         let mut ms = crate::midgame::NnueSearch::new(nn, mtt);
         let mut acc = nn.indices(board.black, board.white);
-        Some(ms.negamax(board, &mut acc, depth as u32, f32::NEG_INFINITY, f32::INFINITY))
+        Some(ms.negamax(
+            board,
+            &mut acc,
+            depth as u32,
+            f32::NEG_INFINITY,
+            f32::INFINITY,
+        ))
     }
 
     pub fn probe_value(&mut self, board: &Board, ev: &Evaluator, depth: u8) -> f32 {
@@ -1593,7 +1616,10 @@ impl Solver {
 
         let t_clear = std::time::Instant::now();
         self.hash_table.clear(self.threads);
-        CLEAR_NS.fetch_add(t_clear.elapsed().as_nanos() as u64, std::sync::atomic::Ordering::Relaxed);
+        CLEAR_NS.fetch_add(
+            t_clear.elapsed().as_nanos() as u64,
+            std::sync::atomic::Ordering::Relaxed,
+        );
 
         // The pool lives for the whole solve, so a hand-off is a queue push
         // rather than an OS thread creation. A process-wide pool would go
@@ -1770,8 +1796,15 @@ impl Worker<'_> {
                 return final_score(board) as f32;
             }
             return -self.seed_search(
-                &child, zobrist::board_hash(board.opponent_bb(), board.player_bb()), ev, ix, indices, depth,
-                -beta, -alpha, store,
+                &child,
+                zobrist::board_hash(board.opponent_bb(), board.player_bb()),
+                ev,
+                ix,
+                indices,
+                depth,
+                -beta,
+                -alpha,
+                store,
             );
         }
 
@@ -1817,7 +1850,15 @@ impl Worker<'_> {
             let saved = *indices;
             ix.apply(indices, *pos, *flipped, mover);
             let v = -self.seed_search(
-                child, *child_hash, ev, ix, indices, depth - 1, -beta, -alpha, store,
+                child,
+                *child_hash,
+                ev,
+                ix,
+                indices,
+                depth - 1,
+                -beta,
+                -alpha,
+                store,
             );
             *indices = saved;
             if v > best_val {
@@ -1836,7 +1877,8 @@ impl Worker<'_> {
             let v8 = best_val.round().clamp(-64.0, 64.0) as i8;
             let lower8 = if best_val > orig_alpha { v8 } else { i8::MIN };
             let upper8 = if best_val < beta { v8 } else { i8::MAX };
-            self.tt.seed_update(board, hash, depth, lower8, upper8, best_move);
+            self.tt
+                .seed_update(board, hash, depth, lower8, upper8, best_move);
         }
         best_val
     }
@@ -1848,10 +1890,8 @@ impl Worker<'_> {
     fn perfect(&mut self, board: &mut Board, ev: Option<&Evaluator>) -> i32 {
         // Experiment knob: run the exact pass on the full window and let
         // PVS narrow it from the seeds; no aspiration to mis-centre.
-        if std::env::var("SEL_EXACT_FULLWIN").is_ok_and(|v| v != "0") {
-            if self.warm_score.is_some() {
-                return self.pvs_root(board, -64, 64, ev);
-            }
+        if std::env::var("SEL_EXACT_FULLWIN").is_ok_and(|v| v != "0") && self.warm_score.is_some() {
+            return self.pvs_root(board, -64, 64, ev);
         }
         if let Some(score) = self.warm_score {
             // Reopen the window the last warm rung converged in (see
@@ -1901,7 +1941,15 @@ impl Worker<'_> {
         let hash = zobrist::board_hash(board.player_bb(), board.opponent_bb());
         let depth = ESTIMATE_DEPTH.min(board.empty_count());
         let v = self.seed_search(
-            board, hash, e, ix, &mut indices, depth, f32::NEG_INFINITY, f32::INFINITY, false,
+            board,
+            hash,
+            e,
+            ix,
+            &mut indices,
+            depth,
+            f32::NEG_INFINITY,
+            f32::INFINITY,
+            false,
         );
         let rounded = (v / 2.0).round() as i32 * 2;
         rounded.clamp(-62, 62)
@@ -1955,7 +2003,13 @@ impl Worker<'_> {
         self.pvs_root(board, -64, 64, ev)
     }
 
-    fn pvs_root(&mut self, board: &mut Board, alpha: i32, beta: i32, ev: Option<&Evaluator>) -> i32 {
+    fn pvs_root(
+        &mut self,
+        board: &mut Board,
+        alpha: i32,
+        beta: i32,
+        ev: Option<&Evaluator>,
+    ) -> i32 {
         let mut lower = alpha;
         let upper = beta;
         // Root computes the hash from scratch once; children update it
@@ -2029,8 +2083,7 @@ impl Worker<'_> {
             }
         }
 
-        self.tt
-            .update(board, hash, alpha, beta, max, Some(best));
+        self.tt.update(board, hash, alpha, beta, max, Some(best));
         self.best = Some(best);
         max
     }
@@ -2126,8 +2179,19 @@ impl Worker<'_> {
                 let pushed = unsafe {
                     pool.try_push(move || {
                         run_one_sibling(
-                            tt, neighbours, budget, group, selective_t, nnue, sigma_scale, &board,
-                            m, upper, shared, slot, ev,
+                            tt,
+                            neighbours,
+                            budget,
+                            group,
+                            selective_t,
+                            nnue,
+                            sigma_scale,
+                            &board,
+                            m,
+                            upper,
+                            shared,
+                            slot,
+                            ev,
                         );
                     })
                 };
@@ -2200,9 +2264,16 @@ impl Worker<'_> {
         Some((max, best))
     }
 
-
     #[allow(clippy::too_many_arguments)]
-    fn pvs(&mut self, board: &mut Board, hash: u64, alpha: i32, beta: i32, passed: bool, ev: Option<&Evaluator>) -> i32 {
+    fn pvs(
+        &mut self,
+        board: &mut Board,
+        hash: u64,
+        alpha: i32,
+        beta: i32,
+        passed: bool,
+        ev: Option<&Evaluator>,
+    ) -> i32 {
         let _prof = layer_profile::Scope::new(layer_profile::SEARCH, board.empty_count());
         let mut lower = alpha;
         let mut upper = beta;
@@ -2273,7 +2344,14 @@ impl Worker<'_> {
                 return final_score(board);
             }
             board.pass();
-            let val = -self.pvs(board, zobrist::board_hash(board.opponent_bb(), board.player_bb()), -upper, -lower, true, ev);
+            let val = -self.pvs(
+                board,
+                zobrist::board_hash(board.opponent_bb(), board.player_bb()),
+                -upper,
+                -lower,
+                true,
+                ev,
+            );
             board.pass();
             self.tt.update(board, hash, alpha, beta, val, None);
             return val;
@@ -2356,7 +2434,8 @@ impl Worker<'_> {
             // Helpers take the siblings in order, so this path pays for the
             // full sort that the sequential path avoids.
             moves[next..].sort_by_key(|m| m.value);
-            if let Some((val, bpos)) = self.split_siblings(board, &moves[next..], lower, upper, ev) {
+            if let Some((val, bpos)) = self.split_siblings(board, &moves[next..], lower, upper, ev)
+            {
                 // A truncated search proves nothing: its bound must not reach
                 // the table, so unwind instead of storing a partial `max`.
                 if val == ABORTED {
@@ -2401,7 +2480,14 @@ impl Worker<'_> {
 
     /// Full-window recursive descent picking the right strategy by depth.
     #[inline]
-    fn descend(&mut self, child: &mut Board, hash: u64, alpha: i32, beta: i32, ev: Option<&Evaluator>) -> i32 {
+    fn descend(
+        &mut self,
+        child: &mut Board,
+        hash: u64,
+        alpha: i32,
+        beta: i32,
+        ev: Option<&Evaluator>,
+    ) -> i32 {
         if child.empty_count() >= PVS_LIMIT {
             let dbg = dbg_asp() && child.empty_count() >= 23;
             let n0 = self.nodes;
@@ -2430,7 +2516,14 @@ impl Worker<'_> {
 
     /// Null-window probe then re-search, at the strategy for this depth.
     #[inline]
-    fn descend_null_window(&mut self, child: &mut Board, hash: u64, lower: i32, upper: i32, ev: Option<&Evaluator>) -> i32 {
+    fn descend_null_window(
+        &mut self,
+        child: &mut Board,
+        hash: u64,
+        lower: i32,
+        upper: i32,
+        ev: Option<&Evaluator>,
+    ) -> i32 {
         let mut val = self.descend(child, hash, -lower - 1, -lower, ev);
         if val == ABORTED {
             return ABORTED;
@@ -2558,7 +2651,13 @@ impl Worker<'_> {
             };
         }
 
-        self.score_moves(board, &mut moves, entry.and_then(|e| e.best()), ev, i32::MIN / 2);
+        self.score_moves(
+            board,
+            &mut moves,
+            entry.and_then(|e| e.best()),
+            ev,
+            i32::MIN / 2,
+        );
 
         let mut best = None;
         for i in 0..moves.len() {
@@ -2730,7 +2829,8 @@ impl Worker<'_> {
             return val;
         }
 
-        self.shallow_table.update(board, hash, orig_lower, upper, best, None);
+        self.shallow_table
+            .update(board, hash, orig_lower, upper, best, None);
         best
     }
 
@@ -2801,7 +2901,9 @@ impl Worker<'_> {
             if passed {
                 return final_score_bb(player, opponent);
             }
-            return -self.last4(opponent, player, p1, p2, p3, p4, -beta, -alpha, true, parity);
+            return -self.last4(
+                opponent, player, p1, p2, p3, p4, -beta, -alpha, true, parity,
+            );
         }
 
         alpha
@@ -2969,9 +3071,8 @@ impl Worker<'_> {
                 const EPS: f32 = 0.01;
                 let mut ms = crate::midgame::NnueSearch::new(nn, mtt);
                 let mut acc = nn.indices(board.black, board.white);
-                let gate = selective_gate_offset().map(|off| {
-                    (nn.eval_from_indices(&acc, board), (error - off).max(1.0))
-                });
+                let gate = selective_gate_offset()
+                    .map(|off| (nn.eval_from_indices(&acc, board), (error - off).max(1.0)));
                 let hi = upper as f32 + error;
                 if hi < 64.0 && gate.is_none_or(|(d0, e0)| d0 >= upper as f32 + e0) {
                     let v = ms.negamax(board, &mut acc, pd as u32, hi - EPS, hi);
@@ -3001,23 +3102,29 @@ impl Worker<'_> {
         // evaluation, and it costs a fraction of the probe it guards.
         let gate = selective_gate_offset().map(|off| {
             let d0 = self.seed_search(
-                board, hash, ev, ix, &mut indices, 0, f32::NEG_INFINITY, f32::INFINITY, false,
+                board,
+                hash,
+                ev,
+                ix,
+                &mut indices,
+                0,
+                f32::NEG_INFINITY,
+                f32::INFINITY,
+                false,
             );
             (d0, (error - off).max(1.0))
         });
 
         let hi = upper as f32 + error;
         if hi < 64.0 && gate.is_none_or(|(d0, e0)| d0 >= upper as f32 + e0) {
-            let v =
-                self.seed_search(board, hash, ev, ix, &mut indices, pd, hi - 1.0, hi, false);
+            let v = self.seed_search(board, hash, ev, ix, &mut indices, pd, hi - 1.0, hi, false);
             if v >= hi {
                 return Some(upper);
             }
         }
         let lo = lower as f32 - error;
         if lo > -64.0 && gate.is_none_or(|(d0, e0)| d0 <= lower as f32 - e0) {
-            let v =
-                self.seed_search(board, hash, ev, ix, &mut indices, pd, lo, lo + 1.0, false);
+            let v = self.seed_search(board, hash, ev, ix, &mut indices, pd, lo, lo + 1.0, false);
             if v <= lo {
                 return Some(lower);
             }
@@ -3059,7 +3166,12 @@ impl Worker<'_> {
                 board.player_bb() | flipped | pos.to_bit(),
             );
             self.table(board.empty_count() - 1).prefetch(child_hash);
-            out.push(ScoredMove { pos, flipped, hash: child_hash, value: 0 });
+            out.push(ScoredMove {
+                pos,
+                flipped,
+                hash: child_hash,
+                value: 0,
+            });
         }
     }
 
@@ -3137,7 +3249,15 @@ impl Worker<'_> {
                 let saved = *indices;
                 ix.apply(indices, pos, flipped, mover);
                 let v = if sort_depth > 0 {
-                    shallow_search(&child, e, ix, indices, sort_depth, f32::NEG_INFINITY, sort_hi)
+                    shallow_search(
+                        &child,
+                        e,
+                        ix,
+                        indices,
+                        sort_depth,
+                        f32::NEG_INFINITY,
+                        sort_hi,
+                    )
                 } else {
                     e.eval_order_bb(cp, co, mover.opponent(), indices)
                 };
@@ -3160,7 +3280,6 @@ impl Worker<'_> {
                 move_ordering_value(pos, cp, co, parity)
             };
         }
-
     }
 
     /// Swap the best-ordered of `moves[i..]` into `moves[i]`.
@@ -3254,7 +3373,9 @@ impl std::ops::DerefMut for MoveBuf {
     #[inline]
     fn deref_mut(&mut self) -> &mut [ScoredMove] {
         // SAFETY: as above.
-        unsafe { std::slice::from_raw_parts_mut(self.buf.as_mut_ptr() as *mut ScoredMove, self.len) }
+        unsafe {
+            std::slice::from_raw_parts_mut(self.buf.as_mut_ptr() as *mut ScoredMove, self.len)
+        }
     }
 }
 
@@ -3511,7 +3632,10 @@ pub mod layer_profile {
     /// The current bucket as (phase, empties).
     pub fn sample() -> (usize, usize) {
         let v = STATE.load(Relaxed);
-        (((v >> 8) as usize).min(PHASES - 1), (v & 0xFF) as usize & 63)
+        (
+            ((v >> 8) as usize).min(PHASES - 1),
+            (v & 0xFF) as usize & 63,
+        )
     }
 }
 
@@ -3650,7 +3774,8 @@ mod tests {
             let mut solver = Solver::new(14);
             let result = solver.solve(EndSolverMode::Perfect, &board);
             assert_eq!(
-                result.value, expected,
+                result.value,
+                expected,
                 "perfect solve mismatch at {} empties",
                 board.empty_count()
             );

@@ -58,7 +58,9 @@ fn main() {
         (0..N).fold(0, |a, i| a ^ bitboard::mobility(p[i], o[i], !(p[i] | o[i])))
     });
     acc ^= bench("mobility (scalar)", || {
-        (0..N).fold(0, |a, i| a ^ bitboard::mobility_scalar(p[i], o[i], !(p[i] | o[i])))
+        (0..N).fold(0, |a, i| {
+            a ^ bitboard::mobility_scalar(p[i], o[i], !(p[i] | o[i]))
+        })
     });
     println!("acc={acc}");
 }

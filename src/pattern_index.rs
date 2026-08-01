@@ -93,7 +93,10 @@ impl PatternIndexer {
                 for (j, &sq) in mask.iter().enumerate() {
                     // First square in the mask carries the highest power.
                     let pow3 = 3u16.pow((p.size - 1 - j) as u32);
-                    per_square[sq as usize].push(UpdateEntry { mask: mask_id, pow3 });
+                    per_square[sq as usize].push(UpdateEntry {
+                        mask: mask_id,
+                        pow3,
+                    });
                 }
                 mask_id += 1;
             }
@@ -148,7 +151,9 @@ impl PatternIndexer {
 
     /// Compute all mask indices from scratch (absolute colors).
     pub fn init(&self, black: u64, white: u64) -> PatternIndices {
-        let mut indices = PatternIndices { idx: [0u16; MAX_MASKS] };
+        let mut indices = PatternIndices {
+            idx: [0u16; MAX_MASKS],
+        };
         let mut mask_id = 0usize;
         for p in self.patterns {
             for mask in p.masks {
@@ -168,7 +173,7 @@ impl PatternIndexer {
     #[inline]
     pub fn apply(&self, indices: &mut PatternIndices, pos: Position, flipped: u64, mover: Color) {
         let mover_digit = mover.index() as u16; // Black = 0, White = 1
-        // Placed disc: empty (2) -> mover.
+                                                // Placed disc: empty (2) -> mover.
         self.update_square(indices, pos.index(), mover_digit.wrapping_sub(2));
         // Flipped discs: opponent (1 - mover) -> mover.
         let flip_diff = mover_digit.wrapping_sub(1 - mover_digit);
