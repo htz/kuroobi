@@ -4,15 +4,17 @@
 
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
+mod ggs;
+
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 
 use serde::Serialize;
-use tauri::State;
+use tauri::{Manager, State};
 
-use kuroobi::resources::Resources;
 use kuroobi::engine::{Engine, EngineConfig};
 use kuroobi::game::Reversi;
+use kuroobi::resources::Resources;
 use kuroobi::{Board, Color, Position};
 
 struct App {
@@ -20,6 +22,8 @@ struct App {
     engine: Arc<Mutex<Option<Engine>>>,
     /// 探索中でも触れるよう Engine の Mutex の外に置く停止ハンドル。
     stop: Arc<Mutex<Option<kuroobi::midgame::StopHandle>>>,
+    /// GGS セッション (常駐スレッド)。
+    ggs: Mutex<Option<ggs::Handle>>,
 }
 
 fn same_board(a: &Board, b: &Board) -> bool {
@@ -149,8 +153,8 @@ fn auto_pass(game: &mut Reversi) {
 
 /// 設定ファイルの場所。OS の設定ディレクトリに置く (配布時はここしかない)。
 fn resources_path() -> PathBuf {
-    let base = dirs_config()
-        .unwrap_or_else(|| PathBuf::from(concat!(env!("CARGO_MANIFEST_DIR"), "/..")));
+    let base =
+        dirs_config().unwrap_or_else(|| PathBuf::from(concat!(env!("CARGO_MANIFEST_DIR"), "/..")));
     base.join("kuroobi").join("resources.conf")
 }
 
@@ -651,6 +655,315 @@ fn game_from_text(text: &str) -> Option<Reversi> {
     }
 }
 
+// ============================ GGS ============================
+
+fn ggs_tx(app: &State<App>) -> Result<std::sync::mpsc::Sender<ggs::Cmd>, String> {
+    app.ggs
+        .lock()
+        .unwrap()
+        .as_ref()
+        .map(|h| h.tx.clone())
+        .ok_or_else(|| "GGS セッションが起動していません".into())
+}
+
+/// `.ggs_credentials` (repo 直下、name:pw) を探して読む。
+fn read_credentials() -> Option<(String, String)> {
+    for c in [
+        ".ggs_credentials",
+        "../.ggs_credentials",
+        "../../.ggs_credentials",
+    ] {
+        if let Ok(s) = std::fs::read_to_string(c) {
+            if let Some((l, p)) = s.lines().next().and_then(|l| l.split_once(':')) {
+                return Some((l.trim().to_string(), p.trim().to_string()));
+            }
+        }
+    }
+    None
+}
+
+#[tauri::command]
+fn ggs_connect(
+    app: State<App>,
+    login: String,
+    pw: String,
+    use_credentials: bool,
+) -> Result<String, String> {
+    let (l, p) = if use_credentials {
+        read_credentials().ok_or(".ggs_credentials が見つかりません")?
+    } else {
+        if login.trim().is_empty() || pw.is_empty() {
+            return Err("ログイン名とパスワードを入力してください".into());
+        }
+        (login.trim().to_string(), pw)
+    };
+    ggs_tx(&app)?
+        .send(ggs::Cmd::Connect {
+            login: l.clone(),
+            pw: p,
+        })
+        .map_err(|e| e.to_string())?;
+    Ok(l)
+}
+
+#[tauri::command]
+fn ggs_has_credentials() -> bool {
+    read_credentials().is_some()
+}
+
+/// フロントエンドの例外を拾うための診断コマンド。WebView のコンソールが
+/// 見えない環境でも /tmp のログで追える。
+#[tauri::command]
+fn js_log(msg: String) {
+    use std::io::Write as _;
+    if let Ok(mut f) = std::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open("/tmp/kuroobi_js.log")
+    {
+        let _ = writeln!(f, "[JS] {msg}");
+    }
+}
+
+#[tauri::command]
+fn ggs_disconnect(app: State<App>) -> Result<(), String> {
+    ggs_tx(&app)?
+        .send(ggs::Cmd::Disconnect)
+        .map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+fn ggs_raw(app: State<App>, cmd: String) -> Result<(), String> {
+    ggs_tx(&app)?
+        .send(ggs::Cmd::Raw(cmd))
+        .map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+fn ggs_ask(app: State<App>, gtype: String, time: String, opponent: String) -> Result<(), String> {
+    ggs_tx(&app)?
+        .send(ggs::Cmd::Ask {
+            gtype,
+            time,
+            opponent,
+        })
+        .map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+fn ggs_accept(app: State<App>, id: String) -> Result<(), String> {
+    ggs_tx(&app)?
+        .send(ggs::Cmd::Accept(id))
+        .map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+fn ggs_decline(app: State<App>, id: String) -> Result<(), String> {
+    ggs_tx(&app)?
+        .send(ggs::Cmd::Decline(id))
+        .map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+fn ggs_finger(app: State<App>, name: String) -> Result<(), String> {
+    ggs_tx(&app)?
+        .send(ggs::Cmd::Finger(name))
+        .map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+fn ggs_who(app: State<App>, gtype: String) -> Result<(), String> {
+    ggs_tx(&app)?
+        .send(ggs::Cmd::Who(gtype))
+        .map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+fn ggs_top(app: State<App>, gtype: String, n: u32) -> Result<(), String> {
+    ggs_tx(&app)?
+        .send(ggs::Cmd::Top { gtype, n })
+        .map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+fn ggs_rank(app: State<App>, gtype: String, name: String) -> Result<(), String> {
+    ggs_tx(&app)?
+        .send(ggs::Cmd::Rank { gtype, name })
+        .map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+fn ggs_watch(app: State<App>, id: String, on: bool) -> Result<(), String> {
+    let cmd = if on {
+        ggs::Cmd::Watch(id)
+    } else {
+        ggs::Cmd::Unwatch(id)
+    };
+    ggs_tx(&app)?.send(cmd).map_err(|e| e.to_string())
+}
+
+/// 終わった対局の棋譜 (GGF) を GGS から取り出す。結果は snapshot に載る。
+#[tauri::command]
+fn ggs_look(app: State<App>, id: String) -> Result<(), String> {
+    ggs_tx(&app)?
+        .send(ggs::Cmd::Look(id))
+        .map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+fn ggs_chat(app: State<App>, target: String, text: String) -> Result<(), String> {
+    if target.trim().is_empty() || text.trim().is_empty() {
+        return Err("宛先と本文が必要です".into());
+    }
+    ggs_tx(&app)?
+        .send(ggs::Cmd::Chat {
+            target: target.trim().into(),
+            text: text.trim().into(),
+        })
+        .map_err(|e| e.to_string())
+}
+
+/// 対局操作。verb は undo / abort / resign / tell のいずれか。
+#[tauri::command]
+fn ggs_match_cmd(app: State<App>, id: String, verb: String, arg: String) -> Result<(), String> {
+    const ALLOWED: [&str; 4] = ["undo", "abort", "resign", "tell"];
+    if !ALLOWED.contains(&verb.as_str()) {
+        return Err(format!("unsupported verb: {verb}"));
+    }
+    ggs_tx(&app)?
+        .send(ggs::Cmd::MatchCmd { id, verb, arg })
+        .map_err(|e| e.to_string())
+}
+
+/// aform (自動受諾) / dform (自動拒否) の式をサーバーに設定する。
+#[tauri::command]
+fn ggs_set_formula(app: State<App>, kind: String, expr: String) -> Result<(), String> {
+    if kind != "aform" && kind != "dform" {
+        return Err("kind must be aform or dform".into());
+    }
+    ggs_tx(&app)?
+        .send(ggs::Cmd::SetFormula { kind, expr })
+        .map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+fn ggs_list_stored(app: State<App>) -> Result<(), String> {
+    ggs_tx(&app)?
+        .send(ggs::Cmd::ListStored)
+        .map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+fn ggs_list_matches(app: State<App>) -> Result<(), String> {
+    ggs_tx(&app)?
+        .send(ggs::Cmd::ListMatches)
+        .map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+fn ggs_resume_stored(app: State<App>, id: String) -> Result<(), String> {
+    ggs_tx(&app)?
+        .send(ggs::Cmd::ResumeStored(id))
+        .map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+fn ggs_history(app: State<App>, name: String) -> Result<(), String> {
+    ggs_tx(&app)?
+        .send(ggs::Cmd::History(name))
+        .map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+fn ggs_set_engine(
+    app: State<App>,
+    depth: u32,
+    solve: u8,
+    band: u8,
+    threads: usize,
+) -> Result<(), String> {
+    ggs_tx(&app)?
+        .send(ggs::Cmd::SetEngine {
+            depth,
+            solve,
+            band,
+            threads,
+        })
+        .map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+fn ggs_set_auto_play(app: State<App>, on: bool) -> Result<(), String> {
+    ggs_tx(&app)?
+        .send(ggs::Cmd::SetAutoPlay(on))
+        .map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+fn ggs_set_watch_analysis(app: State<App>, on: bool) -> Result<(), String> {
+    ggs_tx(&app)?
+        .send(ggs::Cmd::SetWatchAnalysis(on))
+        .map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+fn ggs_set_use_book(app: State<App>, on: bool) -> Result<(), String> {
+    ggs_tx(&app)?
+        .send(ggs::Cmd::SetUseBook(on))
+        .map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+fn ggs_set_standby(app: State<App>, cfg: ggs::StandbyCfg) -> Result<(), String> {
+    ggs_tx(&app)?
+        .send(ggs::Cmd::SetStandby(cfg))
+        .map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+fn ggs_snapshot(app: State<App>) -> Result<ggs::Snapshot, String> {
+    let snap = {
+        let guard = app.ggs.lock().unwrap();
+        let h = guard
+            .as_ref()
+            .ok_or_else(|| "GGS セッションが起動していません".to_string())?;
+        h.snapshot.clone()
+    };
+    let s = snap.lock().unwrap().clone();
+    Ok(s)
+}
+
+/// 画面確認用: 起動直後に開く画面 (KUROOBI_GGS_AUTOVIEW)。
+#[tauri::command]
+fn ggs_autoview() -> String {
+    std::env::var("KUROOBI_GGS_AUTOVIEW").unwrap_or_default()
+}
+
+/// GGS の棋譜 (文字列で渡される) をファイルに保存する。
+#[tauri::command]
+async fn ggs_save_kifu(
+    handle: tauri::AppHandle,
+    kifu: String,
+    name: String,
+) -> Result<Option<String>, String> {
+    use tauri_plugin_dialog::DialogExt;
+    if kifu.is_empty() {
+        return Err("棋譜が空です".into());
+    }
+    let Some(path) = handle
+        .dialog()
+        .file()
+        .add_filter("棋譜", &["ggf", "txt", "kifu"])
+        .set_file_name(format!("{name}.txt"))
+        .blocking_save_file()
+    else {
+        return Ok(None);
+    };
+    let p = path.into_path().map_err(|e| e.to_string())?;
+    std::fs::write(&p, format!("{kifu}\n")).map_err(|e| e.to_string())?;
+    Ok(Some(p.display().to_string()))
+}
+
 fn main() {
     let initial = take_handoff_kifu()
         .as_deref()
@@ -658,10 +971,49 @@ fn main() {
         .unwrap_or_default();
     tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
+        .plugin(tauri_plugin_notification::init())
         .manage(App {
             game: Mutex::new(initial),
             engine: Arc::new(Mutex::new(None)),
             stop: Arc::new(Mutex::new(None)),
+            ggs: Mutex::new(None),
+        })
+        .setup(|app| {
+            let handle = ggs::spawn(app.handle().clone());
+            // 診断・自動運転用: KUROOBI_GGS_AUTOCONNECT=1 なら
+            // .ggs_credentials で自動ログインする (UI 操作なしで検証できる)。
+            if std::env::var("KUROOBI_GGS_AUTOCONNECT").is_ok() {
+                if let Some((l, p)) = read_credentials() {
+                    let _ = handle.tx.send(ggs::Cmd::Connect { login: l, pw: p });
+                }
+                // KUROOBI_GGS_AUTOLOOK=<id> なら棋譜取得も試す
+                // (取得経路を UI 操作なしで確かめるため)。
+                if let Ok(id) = std::env::var("KUROOBI_GGS_AUTOLOOK") {
+                    let tx = handle.tx.clone();
+                    std::thread::spawn(move || {
+                        std::thread::sleep(std::time::Duration::from_secs(12));
+                        let _ = tx.send(ggs::Cmd::Look(id));
+                    });
+                }
+                // KUROOBI_GGS_AUTOWATCH=<id>,… / auto なら観戦も始める。
+                if let Ok(ids) = std::env::var("KUROOBI_GGS_AUTOWATCH") {
+                    let tx = handle.tx.clone();
+                    std::thread::spawn(move || {
+                        std::thread::sleep(std::time::Duration::from_secs(12));
+                        if ids.trim() == "auto" {
+                            // 一覧を取り直す。届いた時点でセッション側が
+                            // まとめて観戦する。
+                            let _ = tx.send(ggs::Cmd::ListMatches);
+                        } else {
+                            for id in ids.split(',').filter(|s| !s.trim().is_empty()) {
+                                let _ = tx.send(ggs::Cmd::Watch(id.trim().to_string()));
+                            }
+                        }
+                    });
+                }
+            }
+            *app.state::<App>().ggs.lock().unwrap() = Some(handle);
+            Ok(())
         })
         .invoke_handler(tauri::generate_handler![
             state,
@@ -683,7 +1035,36 @@ fn main() {
             eval_at,
             save_kifu,
             load_kifu,
-            load_kifu_text
+            load_kifu_text,
+            js_log,
+            ggs_connect,
+            ggs_has_credentials,
+            ggs_disconnect,
+            ggs_raw,
+            ggs_ask,
+            ggs_accept,
+            ggs_decline,
+            ggs_finger,
+            ggs_who,
+            ggs_top,
+            ggs_rank,
+            ggs_watch,
+            ggs_look,
+            ggs_chat,
+            ggs_match_cmd,
+            ggs_set_formula,
+            ggs_list_stored,
+            ggs_list_matches,
+            ggs_resume_stored,
+            ggs_history,
+            ggs_set_engine,
+            ggs_set_auto_play,
+            ggs_set_watch_analysis,
+            ggs_set_use_book,
+            ggs_set_standby,
+            ggs_snapshot,
+            ggs_autoview,
+            ggs_save_kifu
         ])
         .run(tauri::generate_context!())
         .expect("tauri run");
