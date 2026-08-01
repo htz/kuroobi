@@ -1,0 +1,323 @@
+// GGS の対局・観戦。左に手合いの一覧 (同期対局は 2 局で 1 組) と対局結果、
+// 右に選んだ手合いの盤。盤はローカル対局と同じ Board 部品で描く。
+import { useState } from 'react';
+import { ggsApi } from '../api';
+import type { GgsSnapshot, MatchView } from '../types';
+import { countDiscs, ggsMoveToIndex, gtypeLabel, kifuText, relTime, useClocks } from '../ggs';
+import type { ClockSide, ClockView } from '../ggs';
+import { Board } from './Board';
+import type { GgsCtx } from './GgsView';
+
+export function GgsPlay({ ctx }: { ctx: GgsCtx }) {
+  const { snap } = ctx;
+  const [sel, setSel] = useState('');
+  const clock = useClocks(snap.matches);
+
+  // 手合い (同期対局は 2 局で 1 組) にまとめる
+  const groups = new Map<string, MatchView[]>();
+  for (const m of snap.matches) {
+    const g = groups.get(m.base) ?? [];
+    g.push(m);
+    groups.set(m.base, g);
+  }
+  // 自分の対局を先に、次に観戦。選択が消えていたら先頭に移る。
+  const keys = [...groups.keys()].sort((a, b) => {
+    const mine = (k: string) => (groups.get(k)!.some((m) => m.my_color) ? 0 : 1);
+    return mine(a) - mine(b) || a.localeCompare(b);
+  });
+  const cur = groups.has(sel) ? sel : keys[0] ?? '';
+  const pair = groups.get(cur);
+
+  if (!groups.size) {
+    return (
+      <div className="split-pane card no-list">
+        <NoMatch online={snap.conn === 'online'} showView={ctx.showView} />
+      </div>
+    );
+  }
+
+  const nameLink = (n: string) => (
+    <span className="pname link" onClick={() => ctx.showUser(n)}>{n}</span>
+  );
+
+  const mine = pair?.some((x) => x.my_color) ?? false;
+  const m0 = pair?.[0];
+
+  return (
+    <div className="split-pane card">
+      <aside className="split-list">
+        <div className="split-list-head">
+          <h2>手合い</h2>
+          <span className="muted">{groups.size ? `${groups.size} 組` : ''}</span>
+        </div>
+        <div className="scroll grow">
+          {keys.map((key) => {
+            const g = groups.get(key)!;
+            const m = g[0];
+            const isMine = g.some((x) => x.my_color);
+            const names = isMine
+              ? `自分 対 ${m.opp_name || '?'}`
+              : (m.players.map((p) => p.name).join(' 対 ') || key);
+            const moves = Math.max(...g.map((x) => x.moves.length));
+            const thinking = g.some((x) => snap.thinking === x.id);
+            return (
+              <div key={key} className={'thread' + (key === cur ? ' active' : '')}
+                   onClick={() => setSel(key)}>
+                <div className="thread-top">
+                  <span className={'tag ' + (isMine ? 'mine' : 'watch')}>
+                    {isMine ? '自分' : '観戦'}
+                  </span>
+                  <span className="thread-name">{names}</span>
+                  {thinking && <span className="thinking-dot" />}
+                </div>
+                <div className="thread-last">
+                  {`${gtypeLabel(m.gtype)}${g.length === 2 ? ' · 2 局' : ''} · ${moves} 手目`}
+                </div>
+              </div>
+            );
+          })}
+        </div>
+        <div className="split-list-foot">
+          <div className="card-head">
+            <h2>対局結果</h2>
+            <span className="muted">{resultsSummary(snap)}</span>
+          </div>
+          <div className="scroll"><Results ctx={ctx} /></div>
+        </div>
+      </aside>
+
+      <div className="split-room">
+        <div className="split-room-head">
+          <h2 className="match-title">
+            {mine
+              ? <>自分 対 {m0?.opp_name ? nameLink(m0.opp_name) : '?'}</>
+              : m0 && m0.players.length >= 2
+                ? <>{nameLink(m0.players[0].name)} 対 {nameLink(m0.players[1].name)}</>
+                : cur}
+          </h2>
+          <span className="muted">{gtypeLabel(m0?.gtype ?? '')}</span>
+          <span className="spacer" />
+          {pair?.length === 2 && (
+            <span className="muted small">同じ開局を先後入れ替えた 2 局。結果は合計で判定</span>
+          )}
+          {!mine && (
+            <button className="btn small danger"
+                    onClick={() => void ggsApi.watch(cur, false)}>観戦をやめる</button>
+          )}
+        </div>
+        <div className="split-body">
+          <div className="ggs-boards">
+            {pair?.map((m) => <MatchCard key={m.id} ctx={ctx} m={m} clock={clock} />)}
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function NoMatch({ online, showView }: { online: boolean; showView: GgsCtx['showView'] }) {
+  return (
+    <div className="no-match">
+      <EmptyBoard />
+      <div className="no-match-text">
+        <div className="no-match-title">
+          {online ? '対局はまだありません' : 'ログインしてください'}
+        </div>
+        <div className="muted">
+          {online
+            ? 'ロビーで申し込むか、進行中の対局を観戦できます。'
+            : '接続すると、対局と観戦がここに表示されます。'}
+        </div>
+        {online && (
+          <div className="row actions" style={{ marginTop: 18 }}>
+            <button className="btn primary" onClick={() => showView('ggs-lobby')}>ロビーへ</button>
+            <button className="btn" onClick={() => showView('ggs-standby')}>
+              待機モードで放置する
+            </button>
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
+/// 対局がないときに置く、石を並べただけの盤。操作はできない。
+function EmptyBoard() {
+  return (
+    <svg viewBox="0 0 8 8" className="empty-board">
+      {Array.from({ length: 64 }, (_, i) => (
+        <rect key={i} x={Math.floor(i / 8)} y={i % 8} width={1} height={1} className="eb-cell" />
+      ))}
+      {([[3, 3, false], [4, 3, true], [3, 4, true], [4, 4, false]] as
+          [number, number, boolean][]).map(([f, r, black]) => (
+        <circle key={`${f}${r}`} cx={f + 0.5} cy={r + 0.5} r={0.38}
+                className={black ? 'eb-black' : 'eb-white'} />
+      ))}
+    </svg>
+  );
+}
+
+/// 対局者のレートを詳しく出す。who の生データに偏差 (`2612.4@180.5`) と
+/// 対局中フラグが入っているので、そこから拾って添える。
+function RateDetail({ snap, name, fallback }: {
+  snap: GgsSnapshot; name: string; fallback: string;
+}) {
+  const u = snap.users.find((x) => x.name === name);
+  const m = /(\d+(?:\.\d+)?)@\s*(\d+(?:\.\d+)?)/.exec(u?.raw || '');
+  const value = m ? m[1] : (fallback || (u?.rating != null ? u.rating.toFixed(1) : ''));
+  if (!value) return null;
+  const dev = m ? Math.round(parseFloat(m[2])) : null;
+  return (
+    <span className="prate">
+      {value}
+      {dev != null && <span className="dev">±{dev}</span>}
+      {/* 偏差が大きいうちはレートが動きやすい。目安を添える。 */}
+      {dev != null && dev >= 100 && <span className="prov">暫定</span>}
+    </span>
+  );
+}
+
+function PlayerRow({ ctx, name, rating, color, clock, extra }: {
+  ctx: GgsCtx; name: string; rating: string; color: string;
+  clock: ClockView; extra?: React.ReactNode;
+}) {
+  const known = !!name && name !== '?';
+  return (
+    <div className="player-row">
+      <span className={'disc-mark ' + (color === 'black' ? 'b' : 'w')} />
+      <span className={'pname' + (known ? ' link' : '')}
+            title={known ? `${name} の詳細を見る` : undefined}
+            onClick={known ? () => ctx.showUser(name) : undefined}>
+        {name || '?'}
+      </span>
+      <RateDetail snap={ctx.snap} name={name} fallback={rating} />
+      {extra}
+      <span className={'clock ' + clock.cls}>{clock.text}</span>
+    </div>
+  );
+}
+
+function MatchCard({ ctx, m, clock }: {
+  ctx: GgsCtx; m: MatchView; clock: (id: string, side: ClockSide) => ClockView;
+}) {
+  const { snap } = ctx;
+  const observer = !m.my_color;
+  const { black, white } = countDiscs(m.cells);
+  // 最後に打たれた石に印を付ける (パスは石を置かないので飛ばす)
+  const last = [...m.moves].reverse().map(ggsMoveToIndex).find((x) => x !== null) ?? null;
+
+  const myEval = m.last_eval != null && (
+    <span className={'eval' + (m.last_from_book ? ' book' : '')}>
+      {(m.last_from_book ? '定石 ' : '') +
+        (m.last_eval > 0 ? '+' : '') +
+        (m.last_eval_exact ? m.last_eval.toFixed(0) : m.last_eval.toFixed(1)) +
+        (m.last_eval_exact ? ' 読切' : '')}
+    </span>
+  );
+
+  // 自分の側もレートを出す。対局中に見たいのは「この 2 人の力量差」。
+  const myRate = snap.my_ranks
+    .find((r) => r.gtype === (m.gtype.includes('r') ? '8r' : '8'))?.rating;
+
+  const actions: [string, 'undo' | 'abort' | 'resign', string][] = [
+    ['待った', 'undo', '相手に待ったを要求しますか?'],
+    ['中止', 'abort', '対局の中止を要求しますか?'],
+    ['投了', 'resign', '投了しますか? (負けになります)'],
+  ];
+
+  return (
+    <div className="card board-card">
+      {observer && m.players.length >= 2 ? (
+        <>
+          <PlayerRow ctx={ctx} name={m.players[0].name} rating={m.players[0].rating}
+                     color={m.players[0].color} clock={clock(m.id, 'p0')} />
+          <Board cells={m.cells} last={last} />
+          <PlayerRow ctx={ctx} name={m.players[1].name} rating={m.players[1].rating}
+                     color={m.players[1].color} clock={clock(m.id, 'p1')} />
+        </>
+      ) : (
+        <>
+          <PlayerRow ctx={ctx} name={m.opp_name} rating={m.opp_rating}
+                     color={m.my_color === 'black' ? 'white' : 'black'}
+                     clock={clock(m.id, 'opp')} />
+          <Board cells={m.cells} last={last} />
+          <PlayerRow ctx={ctx} name={snap.login}
+                     rating={myRate != null ? myRate.toFixed(1) : ''}
+                     color={m.my_color} clock={clock(m.id, 'my')} extra={myEval} />
+        </>
+      )}
+
+      <div className="board-foot">
+        <span className="score">
+          <span className="disc-mark b" /> {black}
+          <span style={{ margin: '0 6px', color: 'var(--sub)' }}>–</span>
+          {white} <span className="disc-mark w" />
+        </span>
+        <span className="muted">{m.moves.length} 手</span>
+        {observer && m.watch_eval != null && (
+          <span className="eval">
+            {`解析 ${m.watch_eval > 0 ? '+' : ''}${m.watch_eval.toFixed(1)}` +
+              (m.watch_best ? ` (${m.watch_best})` : '')}
+          </span>
+        )}
+        {snap.thinking === m.id && <span className="ggs-thinking">思考中</span>}
+      </div>
+
+      <div className="row">
+        <button className="btn small"
+                onClick={() => ctx.showKifu(m.id, kifuText(m.ggf, m.moves))}>棋譜</button>
+        {observer ? (
+          <button className="btn small danger"
+                  onClick={() => void ggsApi.watch(m.id, false)}>観戦をやめる</button>
+        ) : (
+          actions.map(([label, verb, msg]) => (
+            <button key={verb} className={'btn small' + (verb === 'resign' ? ' danger' : '')}
+                    onClick={() => {
+                      if (confirm(`${m.id}: ${msg}`)) void ggsApi.matchCmd(m.id, verb);
+                    }}>{label}</button>
+          ))
+        )}
+      </div>
+    </div>
+  );
+}
+
+/* ---------------- 対局結果 ---------------- */
+
+function resultsSummary(snap: GgsSnapshot): string {
+  const rs = snap.results;
+  if (!rs.length) return '';
+  let w = 0, l = 0, d = 0;
+  for (const r of rs) {
+    if (r.my_diff === null) continue;
+    if (r.my_diff > 0) w++; else if (r.my_diff < 0) l++; else d++;
+  }
+  return `${rs.length} 局  ${w}勝 ${l}敗 ${d}分`;
+}
+
+function Results({ ctx }: { ctx: GgsCtx }) {
+  const rs = ctx.snap.results;
+  if (!rs.length) return <div className="empty">対局結果はまだありません。</div>;
+  return (
+    <>
+      {rs.slice(0, 60).map((r) => {
+        const d0 = r.my_diff ?? 0;
+        const cls = d0 > 0 ? 'win' : d0 < 0 ? 'loss' : 'draw';
+        return (
+          <div key={r.seq + r.id} className="result-item">
+            <span className={'diff ' + cls}>
+              {r.my_diff === null ? '?' : (d0 > 0 ? '+' : '') + d0}
+            </span>
+            <span className="meta">{r.opp || r.id}</span>
+            <span className="muted" style={{ fontSize: 12 }}>{relTime(r.at)}</span>
+            <button className="btn small" disabled={!(r.ggf || r.kifu || r.archive)}
+                    onClick={() => (r.ggf || r.kifu)
+                      ? ctx.showKifu(r.id, r.ggf || r.kifu)
+                      // 手元に無くても、GGS のアーカイブから取り出せる
+                      : ctx.fetchKifu(r.archive, r.opp || r.id)}>棋譜</button>
+          </div>
+        );
+      })}
+    </>
+  );
+}

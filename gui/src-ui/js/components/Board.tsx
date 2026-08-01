@@ -34,7 +34,7 @@ export function Board(props: BoardProps) {
     : null;
 
   return (
-    <svg id="board" viewBox="0 0 880 880">
+    <svg className="board" viewBox="0 0 880 880">
       <rect x={0} y={0} width={880} height={880} rx={14} fill="#20252c" />
       <rect x={PAD - 6} y={PAD - 6} width={812} height={812} rx={6} fill="var(--board-dark)" />
       <rect x={PAD} y={PAD} width={800} height={800} fill="var(--board)" />

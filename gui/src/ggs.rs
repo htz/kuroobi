@@ -714,7 +714,8 @@ impl Ctx {
             return;
         }
         let s = self.snap.lock().unwrap().clone();
-        let r = self.app.emit("ggs", &s);
+        // emit の成否は下の診断ログでだけ見る (リリースでは未使用)
+        let _emit_ok = self.app.emit("ggs", &s).is_ok();
         // 診断: 状態と emit の成否をファイルに残す (UI が更新されない場合の
         // 切り分け用。デバッグビルドのみ)。
         #[cfg(debug_assertions)]
@@ -764,7 +765,7 @@ impl Ctx {
                     s.matches.len(),
                     s.offers.len(),
                     s.log.len(),
-                    if r.is_ok() { "ok" } else { "ERR" },
+                    if _emit_ok { "ok" } else { "ERR" },
                     detail
                 );
             }

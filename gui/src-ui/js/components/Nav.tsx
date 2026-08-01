@@ -1,5 +1,4 @@
 // 左メニュー。ローカルの対局・検討と、GGS の各画面を切り替える。
-// GGS 側は統合の段階 3 以降で中身が入る。
 export type View =
   | 'play' | 'study'
   | 'ggs-play' | 'ggs-lobby' | 'ggs-users' | 'ggs-chat' | 'ggs-standby' | 'ggs-console';
@@ -22,17 +21,24 @@ export interface NavProps {
   onView: (v: View) => void;
   /** GGS に繋がっているか。未接続なら淡く出す。 */
   online: boolean;
+  /** 画面ごとの件数バッジ (申し込み・対局・チャット未読)。 */
+  badges?: Partial<Record<View, number>>;
   onSettings: () => void;
 }
 
-export function Nav({ view, onView, online, onSettings }: NavProps) {
-  const item = ([v, label]: [View, string], ggs = false) => (
-    <button key={v}
-            className={'nav-item' + (ggs ? ' ggs' : '') + (view === v ? ' active' : '')}
-            onClick={() => onView(v)}>
-      {label}
-    </button>
-  );
+export function Nav({ view, onView, online, badges, onSettings }: NavProps) {
+  const item = ([v, label]: [View, string], ggs = false) => {
+    const n = badges?.[v] ?? 0;
+    return (
+      <button key={v}
+              className={'nav-item' + (ggs && !online ? ' ggs' : '')
+                + (view === v ? ' active' : '')}
+              onClick={() => onView(v)}>
+        {label}
+        {n > 0 && <span className="badge-n">{n}</span>}
+      </button>
+    );
+  };
 
   return (
     <nav id="nav">

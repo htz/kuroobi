@@ -1,8 +1,10 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { api } from './api';
+import { api, ggsApi } from './api';
 import { useGame } from './state';
+import { useGgs } from './ggs';
 import type { GameView } from './types';
 import { Board } from './components/Board';
+import { GgsView } from './components/GgsView';
 import { Graph, type GraphPoint } from './components/Graph';
 import { Nav, type View } from './components/Nav';
 import { Panel } from './components/Panel';
@@ -10,6 +12,7 @@ import { SettingsModal } from './components/SettingsModal';
 
 export function App() {
   const g = useGame();
+  const ggs = useGgs();
   const [view, setView] = useState<View>('play');
   // 設定ダイアログ。開くときにファイルの状態を取ってから渡す。
   const [settings, setSettings] = useState<[string, string, boolean][] | null>(null);
@@ -44,6 +47,28 @@ export function App() {
 
   const isGgs = view.startsWith('ggs-');
 
+  // ---- GGS ----
+  const conn = ggs.snap?.conn;
+  // チャットの未読数。開いている間は 0 で、離れるときに既読位置を進める。
+  const chatTotal = ggs.snap?.chat.length ?? 0;
+  const [chatSeen, setChatSeen] = useState(0);
+  const chatUnread = view === 'ggs-chat' ? 0 : Math.max(0, chatTotal - chatSeen);
+
+  // 進行中の対局は定期的に取り直す (他人の対局は開始通知が来ないことがある)
+  useEffect(() => {
+    if (conn !== 'online') return;
+    const t = window.setInterval(() => { ggsApi.listMatches().catch(() => {}); }, 60000);
+    return () => clearInterval(t);
+  }, [conn]);
+
+  // 画面確認用 (KUROOBI_GGS_AUTOVIEW): GGS の画面はそちらを開くまで
+  // マウントされないので、指定があればまず GGS 側へ切り替える。
+  // 個別の画面への移動は GgsView がマウント後に行う。
+  useEffect(() => {
+    void ggsApi.autoview().then((v) => { if (v) setView('ggs-play'); }).catch(() => {});
+  }, []);
+
+
   // 動作確認用: KUROOBI_AUTOPLAY=both:11 のように指定すると自動で対局を始める
   const started = useRef(false);
   const { setPlaying: begin, setSide, setLevel } = g;
@@ -64,7 +89,7 @@ export function App() {
   // 防ぐため、走っている間は ref で塞ぐ。
   const turnRef = useRef(false);
   const { playing, view: gv, engineSides, setThinking, setThinkSecs, setThinkTotal,
-          setMoveSource, setView: applyView, setPlaying, say, setLastEval } = g;
+          setMoveSource, setView: applyView, setPlaying, say, setLastEval, setMode } = g;
   useEffect(() => {
     if (!playing || !gv) return;
     // 終局したら自分で止まる (停止を押させない)
@@ -108,6 +133,21 @@ export function App() {
     return () => clearInterval(timer);
   }, [playing, gv, engineSides, setThinking, setThinkSecs, setThinkTotal,
       setMoveSource, applyView, setPlaying, say, setLastEval]);
+
+  // GGS の棋譜 (GGF か着手列) を検討画面で開く。アプリ内で完結する。
+  const openStudy = useCallback(async (kifu: string) => {
+    try {
+      const v = await api.loadKifuText(kifu);
+      setMoveSource({});
+      setThinkTotal({ black: 0, white: 0 });
+      setLastEval('');
+      setPlaying(false);
+      setMode('study');
+      applyView(v);
+      setView('study');
+      say('棋譜を読み込みました');
+    } catch (e) { say('' + e); }
+  }, [setMoveSource, setThinkTotal, setLastEval, setPlaying, setMode, applyView, say]);
 
   const updateGraph = useCallback(async () => {
     const v = g.view;
@@ -154,24 +194,23 @@ export function App() {
   return (
     <>
       <Nav view={view} onView={(v) => {
+        if (view === 'ggs-chat' && v !== 'ggs-chat') setChatSeen(chatTotal);
         setView(v);
         if (v === 'play' || v === 'study') {
           g.setMode(v === 'study' ? 'study' : 'vs');
           if (v === 'study' && g.playing) g.stop();
         }
-      }} online={false} onSettings={async () => {
+      }} online={conn === 'online'} badges={{
+        'ggs-lobby': ggs.snap?.offers.filter((o) => o.incoming).length ?? 0,
+        'ggs-play': ggs.snap?.matches.length ?? 0,
+        'ggs-chat': chatUnread,
+      }} onSettings={async () => {
         setSettings(await api.resourceStatus().catch(() => []));
       }} />
 
       {isGgs ? (
-        <div className="placeholder">
-          <div className="placeholder-box">
-            <div className="placeholder-title">GGS はまだこのアプリに入っていません</div>
-            <p className="hint">
-              オンライン対局・観戦・ロビー・チャットは、これから実装します。
-            </p>
-          </div>
-        </div>
+        <GgsView view={view} onView={setView} snap={ggs.snap} patch={ggs.patch}
+                 onOpenStudy={(kifu) => void openStudy(kifu)} />
       ) : (
         <>
           <div id="main">
