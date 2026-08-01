@@ -34,14 +34,19 @@ src/
 ├── nnue.rs            NNUE 評価関数 (int16 量子化 + NEON) (→ §13)
 ├── search.rs          中盤探索: PVS + ETC + ProbCut (→ §6)
 ├── midgame.rs         対局用 NNUE 中盤探索: YBWC + Lazy SMP (→ §13)
-├── solver.rs          終盤完全読みソルバ + 選択読み (帯) (→ §7, §12)
+├── solver.rs          終盤完全読みソルバ + 選択読み (→ §7, §12)
 ├── stability.rs       確定石 (→ §5)
+├── book.rs            定石 book (8 対称正規化・許容幅つき乱択)
+├── engine.rs          GUI と CLI が共用するセッション層 (着手選択・解析)
 ├── trainer.rs         学習データ入出力・TD(λ) (→ §9)
 └── bin/               CLI ツール群 (→ §10 の表)
+gui/                   対局・検討 GUI (Tauri + Vite/TypeScript) (→ §14)
 tests/                 perft 網羅・ソルバ統合テスト
 benches/               マイクロベンチ (criterion)
-bench/                 σ 較正・帯判定の基準局面 (OBF) と較正データ
+bench/                 σ 較正・選択読み判定の基準局面 (OBF) と較正データ
 tools/pgo-build.sh     プロファイル誘導最適化ビルド (→ §12)
+tools/book-loop.sh     定石 book の評価付けを止めるまで続けるループ
+.github/workflows/     CI (書式・clippy・テスト・GUI ビルド)
 weights/ logs/ train_data/   学習済み重み・ログ・教師データ (git 管理外)
 ```
 
@@ -62,6 +67,7 @@ weights/ logs/ train_data/   学習済み重み・ログ・教師データ (git 
 11. [測定と検証の方法論](#11-測定と検証の方法論)
 12. [到達水準](#12-到達水準)
 13. [NNUE 評価関数](#13-nnue-評価関数)
+14. [GUI](#14-gui)
 
 ---
 
@@ -1849,6 +1855,50 @@ d16 / 6 スレッド (ワーカー 5 本) の分布:
 **lr は 0.0005 前後**。既定の 0.02 は桁違いに大きく、warm start でもゼロからでも
 val が 600 台に発散する。`--val` で毎エポック held-out MSE を測り、改善した
 エポックだけ保存するので、発散しても既存モデルは壊れない。
+
+---
+
+## 14. GUI
+
+`gui/` は対局・検討用のデスクトップアプリ。画面は Web 技術 (Vite +
+TypeScript)、思考はライブラリを直接呼ぶ Rust 側 (Tauri) で、両者は IPC で
+つながる。エンジンを別プロセスに切り出していないので、探索の途中経過も
+そのまま画面に返せる。
+
+- **対局モード** — 手番ごとに担当 (人間 / エンジン) を切り替えられる。
+- **検討モード** — 全合法手を同一条件で採点し、評価値の推移をグラフにする。
+- **棋譜** — 貼り付けとファイルの両方から読み込み、着手をクリックすると
+  その手番まで戻る。着手の出所 (定石 book / 探索) も表示する。
+
+思考の設定 (深さ・読切・選択読み・スレッド数) はレベル選択かカスタムで指定する。
+
+### ビルドと起動
+
+画面は生成物なので、アプリを組む前にフロントをビルドする:
+
+```sh
+cd gui
+npm ci
+npm run build        # tsc --noEmit のあと Vite が gui/ui/ を作る
+cargo build --release
+```
+
+開発中は `npm run dev` (Vite の HMR) と `cargo run` を併用する。
+
+---
+
+## CI
+
+`.github/workflows/ci.yml` が push と pull request で回る。
+
+| ジョブ | 内容 |
+|---|---|
+| エンジン | `cargo fmt --check` / `cargo clippy -D warnings` / `cargo test --release` / feature 別ビルド |
+| 対局 GUI のフロント | `npm ci` → `tsc --noEmit` → `vite build` |
+| 対局 GUI のアプリ | フロントをビルドしたうえで macOS 上で `cargo build --release` |
+
+学習済みの重み (`weights/`) は容量の都合で git に入れていないため、それを
+要するテストは `#[ignore]` にしてある。棋力の測定はローカルで行う。
 
 ---
 

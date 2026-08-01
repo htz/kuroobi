@@ -1,0 +1,95 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+env:
+  CARGO_TERM_COLOR: always
+  # 依存の取得を速く・安定させる
+  CARGO_INCREMENTAL: 0
+
+jobs:
+  engine:
+    name: エンジン (fmt / clippy / test)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Rust ツールチェイン
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+
+      - uses: Swatinem/rust-cache@v2
+
+      - name: 書式
+        run: cargo fmt --all -- --check
+
+      - name: clippy
+        run: cargo clippy --all-targets -- -D warnings
+
+      # 学習済みの重み (weights/) は容量の都合で git に入れていない。
+      # それを要するテストは #[ignore] 済みなので、ここでは走らない。
+      - name: テスト
+        run: cargo test --release
+
+      - name: feature の組み合わせをビルド
+        run: |
+          cargo build --release --features node-accounting
+          cargo build --release --features layer-profile
+          cargo build --release --features nnue-scalar
+
+  gui-ui:
+    name: 対局 GUI のフロント (型検査 / ビルド)
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: gui
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: gui/package-lock.json
+
+      - name: 依存の取得
+        run: npm ci
+
+      - name: 型検査
+        run: npm run check
+
+      - name: ビルド
+        run: npm run build
+
+  gui-app:
+    name: 対局 GUI のアプリ (ビルド)
+    runs-on: macos-latest
+    needs: gui-ui
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: gui
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: gui/package-lock.json
+
+      - name: フロントをビルド (Tauri が読む ui/ を作る)
+        working-directory: gui
+        run: |
+          npm ci
+          npm run build
+
+      - name: アプリをビルド
+        working-directory: gui
+        run: cargo build --release
