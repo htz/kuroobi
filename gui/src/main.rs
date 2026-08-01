@@ -163,12 +163,14 @@ fn ensure_engine(app: &State<App>) -> Result<(), String> {
     let mut guard = app.engine.lock().unwrap();
     if guard.is_none() {
         let dir = weights_dir();
-        let mut cfg = EngineConfig::default();
-        cfg.weights = dir.join("weights_full.bin");
-        cfg.nnue = dir.join("nnue_champion.bin");
-        cfg.threads = std::thread::available_parallelism()
-            .map(|n| (n.get() / 2).max(1))
-            .unwrap_or(4);
+        let cfg = EngineConfig {
+            weights: dir.join("weights_full.bin"),
+            nnue: dir.join("nnue_champion.bin"),
+            threads: std::thread::available_parallelism()
+                .map(|n| (n.get() / 2).max(1))
+                .unwrap_or(4),
+            ..Default::default()
+        };
         let engine = Engine::new(cfg)?;
         *app.stop.lock().unwrap() = Some(engine.stop_handle());
         *guard = Some(engine);
@@ -240,7 +242,10 @@ fn stop_search(app: State<App>) -> Result<(), String> {
 fn set_levels(app: State<App>, depth: u32, solve_empties: u8, band: u8) -> Result<(), String> {
     ensure_engine(&app)?;
     let mut guard = app.engine.lock().unwrap();
-    guard.as_mut().unwrap().set_levels(depth, solve_empties, band);
+    guard
+        .as_mut()
+        .unwrap()
+        .set_levels(depth, solve_empties, band);
     Ok(())
 }
 
@@ -298,7 +303,11 @@ async fn analyze(app: State<'_, App>, depth: u32) -> Result<Vec<HintView>, Strin
     .map_err(|e| e.to_string())?;
     Ok(hints
         .into_iter()
-        .map(|(p, e)| HintView { pos: p.index(), value: finite(e.value), exact: e.exact })
+        .map(|(p, e)| HintView {
+            pos: p.index(),
+            value: finite(e.value),
+            exact: e.exact,
+        })
         .collect())
 }
 
@@ -317,7 +326,11 @@ async fn eval_at(app: State<'_, App>, n: usize, depth: u32) -> Result<EvalPoint,
     .await
     .map_err(|e| e.to_string())?;
     let value = finite(if white { -mv.value } else { mv.value });
-    Ok(EvalPoint { n, value, exact: mv.exact })
+    Ok(EvalPoint {
+        n,
+        value,
+        exact: mv.exact,
+    })
 }
 
 #[tauri::command]
@@ -347,6 +360,30 @@ async fn save_kifu(
 /// 貼り付け・ファイル内容から f5 形式の着手列だけを抽出する。
 /// 手番号 (`12.`) や空白・区切り文字が混ざっていても「英字 a-h + 数字 1-8」の
 /// ペアだけを拾うので壊れない。
+/// テキストから開始局面を拾う。
+///
+/// 初期局面から始まらない対局 (GGS の抽選オープニング) は、着手列だけでは
+/// 再生できない。盤面 64 マス + 手番の 1 行、または GGF の `BO[8 ...]` を
+/// 開始局面として受け取る。見つからなければ初期局面から始める。
+fn extract_start(text: &str) -> Option<String> {
+    let cell = |c: char| matches!(c.to_ascii_lowercase(), '-' | '.' | 'x' | 'o' | '*');
+    let side = |c: char| matches!(c.to_ascii_lowercase(), 'x' | 'o' | '*');
+    // GGF は BO[8 <64 マス> <手番>] に開始局面を持つ
+    let ggf = text.find("BO[").map(|i| &text[i + 3..]).and_then(|rest| {
+        let end = rest.find(']')?;
+        let inner = rest[..end].trim_start_matches('8').trim();
+        Some(inner.to_string())
+    });
+    for cand in ggf.into_iter().chain(text.lines().map(|l| l.to_string())) {
+        let c: Vec<char> = cand.chars().filter(|c| !c.is_whitespace()).collect();
+        if c.len() == 65 && c[..64].iter().all(|&x| cell(x)) && side(c[64]) {
+            // Board::from_string は 'x'/'*' を黒、'o' を白として読む
+            return Some(c.into_iter().collect());
+        }
+    }
+    None
+}
+
 fn extract_kifu(text: &str) -> String {
     let chars: Vec<char> = text.to_lowercase().chars().collect();
     let mut s = String::new();
@@ -367,18 +404,37 @@ fn extract_kifu(text: &str) -> String {
 }
 
 fn load_kifu_into(app: &State<App>, text: &str) -> Result<GameView, String> {
-    let s = extract_kifu(text);
-    if s.is_empty() {
+    let start = extract_start(text);
+    // 開始局面の行は座標に見える文字を含むので、棋譜を拾う前に取り除く
+    let body = match &start {
+        Some(_) => text
+            .lines()
+            .filter(|l| {
+                let c: Vec<char> = l.chars().filter(|c| !c.is_whitespace()).collect();
+                c.len() != 65 && !l.contains("BO[")
+            })
+            .collect::<Vec<_>>()
+            .join("\n"),
+        None => text.to_string(),
+    };
+    let s = extract_kifu(&body);
+    if s.is_empty() && start.is_none() {
         return Err("棋譜が見つかりません".into());
     }
-    let loaded = Reversi::from_kifu(&s)?;
+    let loaded = match &start {
+        Some(b) => Reversi::from_kifu_with_start(b, &s)?,
+        None => Reversi::from_kifu(&s)?,
+    };
     let mut game = app.game.lock().unwrap();
     *game = loaded;
     Ok(view(&game))
 }
 
 #[tauri::command]
-async fn load_kifu(app: State<'_, App>, handle: tauri::AppHandle) -> Result<Option<GameView>, String> {
+async fn load_kifu(
+    app: State<'_, App>,
+    handle: tauri::AppHandle,
+) -> Result<Option<GameView>, String> {
     use tauri_plugin_dialog::DialogExt;
     let Some(path) = handle
         .dialog()
@@ -404,14 +460,35 @@ fn take_handoff_kifu() -> Option<String> {
     let path = std::env::temp_dir().join("kuroobi_handoff.txt");
     let s = std::fs::read_to_string(&path).ok()?;
     let _ = std::fs::remove_file(&path);
-    let s: String = s.chars().filter(|c| c.is_ascii_alphanumeric()).collect();
-    (!s.is_empty()).then_some(s)
+    (!s.trim().is_empty()).then_some(s)
+}
+
+/// 受け渡しテキスト (開始局面つきのこともある) を対局に起こす。
+fn game_from_text(text: &str) -> Option<Reversi> {
+    let start = extract_start(text);
+    let body: String = match &start {
+        Some(_) => text
+            .lines()
+            .filter(|l| {
+                let c: Vec<char> = l.chars().filter(|c| !c.is_whitespace()).collect();
+                c.len() != 65 && !l.contains("BO[")
+            })
+            .collect::<Vec<_>>()
+            .join("\n"),
+        None => text.to_string(),
+    };
+    let kifu = extract_kifu(&body);
+    match &start {
+        Some(b) => Reversi::from_kifu_with_start(b, &kifu).ok(),
+        None => Reversi::from_kifu(&kifu).ok(),
+    }
 }
 
 fn main() {
     let initial = take_handoff_kifu()
-        .and_then(|k| Reversi::from_kifu(&k).ok())
-        .unwrap_or_else(Reversi::new);
+        .as_deref()
+        .and_then(game_from_text)
+        .unwrap_or_default();
     tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
         .manage(App {
@@ -420,9 +497,79 @@ fn main() {
             stop: Arc::new(Mutex::new(None)),
         })
         .invoke_handler(tauri::generate_handler![
-            state, new_game, play, undo, goto, set_levels, stop_search, think, apply_move, analyze,
-            eval_at, save_kifu, load_kifu, load_kifu_text
+            state,
+            new_game,
+            play,
+            undo,
+            goto,
+            set_levels,
+            stop_search,
+            think,
+            apply_move,
+            analyze,
+            eval_at,
+            save_kifu,
+            load_kifu,
+            load_kifu_text
         ])
         .run(tauri::generate_context!())
         .expect("tauri run");
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// 外部から渡される形: 1 行目が開始局面、2 行目が着手列。
+    #[test]
+    fn reads_start_position_and_kifu() {
+        let start = Board::new().to_string();
+        let text = format!("{start}\nf5d6c3\n");
+        assert_eq!(
+            extract_start(&text).as_deref(),
+            Some(start.replace(' ', "").as_str())
+        );
+        // 開始局面の行を棋譜として拾ってしまわないこと
+        let g = game_from_text(&text).expect("読めること");
+        assert_eq!(g.move_count(), 3);
+    }
+
+    /// 開始局面が無ければ従来どおり初期局面から。
+    #[test]
+    fn plain_kifu_still_works() {
+        assert!(extract_start("f5d6c3").is_none());
+        let g = game_from_text("f5d6c3").expect("読めること");
+        assert_eq!(g.move_count(), 3);
+    }
+
+    /// GGF の BO タグからも開始局面を拾う。
+    #[test]
+    fn reads_start_from_ggf() {
+        let start = Board::new().to_string();
+        let text = format!("(;GM[Othello]PC[GGS/os]BO[8 {start}]B[F5]W[D6];)");
+        assert_eq!(
+            extract_start(&text).as_deref(),
+            Some(start.replace(' ', "").as_str())
+        );
+    }
+
+    /// 開始局面が抽選局面でも、着手列と合わせて元の対局に戻る。
+    #[test]
+    fn drawn_opening_round_trips() {
+        let mut drawn = Reversi::new();
+        for _ in 0..5 {
+            let p = drawn.board.movable_iter().next().unwrap();
+            drawn.make_move(p).unwrap();
+        }
+        let start = drawn.board.to_string();
+        let mut kifu = String::new();
+        for _ in 0..3 {
+            let p = drawn.board.movable_iter().next().unwrap();
+            drawn.make_move(p).unwrap();
+            kifu.push_str(&p.to_kifu().to_lowercase());
+        }
+        let g = game_from_text(&format!("{start}\n{kifu}")).expect("読めること");
+        assert_eq!(g.board.black, drawn.board.black);
+        assert_eq!(g.board.white, drawn.board.white);
+    }
 }

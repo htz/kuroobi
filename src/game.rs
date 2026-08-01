@@ -218,6 +218,23 @@ impl Reversi {
     /// let the opponent play the recorded move.
     pub fn from_kifu(kifu: &str) -> Result<Reversi, String> {
         let mut game = Reversi::new();
+        game.replay_kifu(kifu)?;
+        Ok(game)
+    }
+
+    /// Replay a KIFU from a given start position.
+    ///
+    /// Not every game starts from the standard opening: GGS's randomised
+    /// pairings (`s8r14` and friends) draw a position first and only record
+    /// the moves played after it, so the move list alone replays into a
+    /// different game. `start` is a board string (64 cells + side to move).
+    pub fn from_kifu_with_start(start: &str, kifu: &str) -> Result<Reversi, String> {
+        let mut game = Reversi::from_string(start)?;
+        game.replay_kifu(kifu)?;
+        Ok(game)
+    }
+
+    fn replay_kifu(&mut self, kifu: &str) -> Result<(), String> {
         let chars: Vec<char> = kifu.chars().collect();
 
         if !chars.len().is_multiple_of(2) {
@@ -228,15 +245,15 @@ impl Reversi {
             let s: String = chunk.iter().collect();
             let pos = Position::from_kifu(&s).map_err(|e| format!("KIFU parse error: {}", e))?;
 
-            if !game.board.check(pos) && !game.board.check_all() {
+            if !self.board.check(pos) && !self.board.check_all() {
                 // Implicit pass: current player has no move at all
-                game.pass().map_err(|e| format!("pass error: {}", e))?;
+                self.pass().map_err(|e| format!("pass error: {}", e))?;
             }
-            game.make_move(pos)
+            self.make_move(pos)
                 .map_err(|e| format!("invalid KIFU move {}: {}", s, e))?;
         }
 
-        Ok(game)
+        Ok(())
     }
 
     /// Move count (number of moves + passes).
@@ -634,5 +651,49 @@ mod tests {
             assert!(before & pos.to_bit() != 0, "returned move was legal");
         }
         assert!(g.move_count() > 0);
+    }
+
+    #[test]
+    fn kifu_from_a_drawn_opening() {
+        // GGS の抽選オープニングは初期局面から始まらない。着手列だけでは
+        // 別の対局に再生されてしまうので、開始局面を添えて復元する。
+        // 抽選のかわりに「常に最初の合法手」で 5 手進めた局面を開始局面にする
+        let mut drawn = Reversi::new();
+        for _ in 0..5 {
+            let p = drawn.board.movable_iter().next().unwrap();
+            drawn.make_move(p).unwrap();
+        }
+        let start = drawn.board.to_string();
+        let stones_at_start = (drawn.board.black | drawn.board.white).count_ones();
+
+        // その局面から 3 手進める
+        let mut played = String::new();
+        for _ in 0..3 {
+            let p = drawn.board.movable_iter().next().unwrap();
+            drawn.make_move(p).unwrap();
+            played.push_str(&p.to_kifu().to_lowercase());
+        }
+
+        let replayed = Reversi::from_kifu_with_start(&start, &played).unwrap();
+        assert_eq!(replayed.board.black, drawn.board.black);
+        assert_eq!(replayed.board.white, drawn.board.white);
+        assert_eq!(replayed.board.player(), drawn.board.player());
+
+        // 開始局面を捨てて着手列だけで再生すると、打てないか別物になる
+        match Reversi::from_kifu(&played) {
+            Err(_) => {}
+            Ok(naive) => assert_ne!(naive.board.black, drawn.board.black),
+        }
+        assert_eq!(stones_at_start, 4 + 5);
+    }
+
+    #[test]
+    fn kifu_with_start_defaults_to_standard_opening() {
+        // 標準の初期局面を渡したときは from_kifu と一致する
+        let start = Board::new().to_string();
+        let a = Reversi::from_kifu_with_start(&start, "f5d6c3").unwrap();
+        let b = Reversi::from_kifu("f5d6c3").unwrap();
+        assert_eq!(a.board.black, b.board.black);
+        assert_eq!(a.board.white, b.board.white);
     }
 }
