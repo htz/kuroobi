@@ -346,7 +346,7 @@ async fn save_kifu(
     let Some(path) = handle
         .dialog()
         .file()
-        .add_filter("kifu", &["txt", "kifu"])
+        .add_filter("棋譜", &["ggf", "txt", "kifu"])
         .set_file_name("kuroobi_game.txt")
         .blocking_save_file()
     else {
@@ -435,9 +435,10 @@ fn parse_ggf(text: &str) -> Option<(Option<String>, String)> {
                 }
             }
             "B" | "W" => {
-                // "F5/評価/時間"。パスは PA / PASS
+                // "F5/評価/時間"。パスは PA / PASS で、棋譜には残さない
+                // (再生側が打てない手番を見て自動でパスする)。
                 let mv = value.split('/').next().unwrap_or("").trim().to_lowercase();
-                if mv.len() == 2 {
+                if mv.len() == 2 && mv != "pa" {
                     kifu.push_str(&mv);
                 }
             }
@@ -507,7 +508,7 @@ async fn load_kifu(
     let Some(path) = handle
         .dialog()
         .file()
-        .add_filter("kifu", &["txt", "kifu"])
+        .add_filter("棋譜", &["ggf", "txt", "kifu"])
         .blocking_pick_file()
     else {
         return Ok(None);
@@ -695,5 +696,35 @@ mod tests {
         let g = game_from_text(&ggf).expect("読めること");
         assert_eq!(g.board.black, drawn.board.black);
         assert_eq!(g.board.white, drawn.board.white);
+    }
+
+    /// GGS の `look` が返す実データ (評価値と消費時間つき) を読む。
+    #[test]
+    fn reads_ggf_from_ggs_archive() {
+        let ggf = "(;GM[Othello]PC[GGS/os]DT[2026.07.30_17:36:36.MDT]PB[kuroobi]PW[fly]\
+                   RB[1720]RW[1438.62]TI[15:00//02:00]TY[8]RE[+54.000]\
+                   BO[8 -------- -------- -------- ---O*--- ---*O--- -------- -------- -------- *]\
+                   B[E6]W[f4/-25.99/0.20]B[C3]W[d6/-25.99/0.04]B[F6]W[e7/-25.99/0.02];)";
+        let g = game_from_text(ggf).expect("読めること");
+        assert_eq!(g.move_count(), 6);
+        // 大文字・小文字が混ざり、評価値と時間が付いていても手だけ拾う
+        let plain = Reversi::from_kifu("e6f4c3d6f6e7").unwrap();
+        assert_eq!(g.board.black, plain.board.black);
+        assert_eq!(g.board.white, plain.board.white);
+    }
+
+    /// GGS の `look` が返した実データ (パスを含む 1 局まるごと)。
+    #[test]
+    fn replays_a_whole_archived_game() {
+        let ggf = "(;GM[Othello]PC[GGS/os]DT[2026.07.30_17:36:36.MDT]PB[kuroobi]PW[fly]RB[1720]RW[1438.62]TI[15:00//02:00]TY[8]RE[+54.000]BO[8 -------- -------- -------- ---O*--- ---*O--- -------- -------- -------- *]B[E6]W[f4/-25.99/0.20]B[C3]W[d6/-25.99/0.04]B[F6]W[e7/-25.99/0.02]B[F5]W[g5/-25.99]B[E3]W[g4/-28.23]B[C7]W[d3/24.23]B[F3]W[c4/0.23]B[C6]W[c5/-7.29]B[B4]W[b6/-7.81]B[D7]W[b5/-8.06]B[C2]W[a3/-7.84]B[F8]W[e8/-11.18]B[D8]W[c8/-15.07]B[B8]W[d2/-19.02]B[G3]W[e2/-19.46]B[A6]W[c1/-20.24]B[D1]W[e1/-20.44]B[F2]W[f1/-17.83]B[F7]W[h3/-18.89]B[A5]W[a7/-29.57]B[A8]W[b7/-35.51]B[G2]W[g8/-38.82]B[H8]W[g1/-45.44]B[B3]W[a4/-38.31]B[A2]W[b2]B[A1]W[b1]B[G7]W[g6]B[H6]W[h7]B[H5]W[h4]B[H2]W[pass]B[H1];)";
+        let g = game_from_text(ggf).expect("読めること");
+        assert!(g.board.is_game_over(), "終局まで再生できる");
+        // GGF の RE[+54.000] は黒 (kuroobi) から見た石差
+        let (b, w) = (
+            g.board.black.count_ones() as i32,
+            g.board.white.count_ones() as i32,
+        );
+        assert_eq!(b - w, 54, "結果が RE と一致する");
+        assert!(ggf.contains("W[pass]"), "終盤にパスが入っている局");
     }
 }
