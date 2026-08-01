@@ -35,6 +35,7 @@ pub mod nnue;
 pub mod pattern;
 pub mod pattern_index;
 pub mod position;
+pub mod resources;
 pub mod search;
 pub mod solver;
 pub mod stability;

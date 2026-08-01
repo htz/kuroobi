@@ -124,13 +124,11 @@ impl Engine {
         solver.set_stop(Some(stop.clone()));
         // book は任意 (無くても動く)。深い探索で作った手をそのまま返すので、
         // 実戦の思考時間を序盤で使わずに済む。
-        let book = if config.use_book {
-            match Book::load(&config.book) {
-                Ok(b) if !b.is_empty() => Some(b),
-                _ => None,
-            }
-        } else {
-            None
+        // 読み込みは常に試みる。`use_book` は参照するかどうかの切り替えで、
+        // 対局中に切っても読み直しが要らないようにしてある。
+        let book = match Book::load(&config.book) {
+            Ok(b) if !b.is_empty() => Some(b),
+            _ => None,
         };
         let book_rand = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
@@ -165,6 +163,16 @@ impl Engine {
 
     /// 探索条件 (深さ・完全読み開始・帯) だけを差し替える。置換表と重みは
     /// そのまま。
+    /// 定石 book を参照するかを切り替える。研究中に自力の手を見たいときに切る。
+    pub fn set_use_book(&mut self, on: bool) {
+        self.config.use_book = on;
+    }
+
+    /// book を読み込めているか (画面に「book なし」と出すため)。
+    pub fn has_book(&self) -> bool {
+        self.book.is_some()
+    }
+
     pub fn set_levels(&mut self, depth: u32, solve_empties: u8, band: u8) {
         self.config.depth = depth;
         self.config.solve_empties = solve_empties;
@@ -176,7 +184,7 @@ impl Engine {
     pub fn choose(&mut self, board: &Board) -> MoveEval {
         self.stop.reset();
         // 定石 book: 実戦より深い探索で付けた答えなので、あれば即返す
-        if let Some(book) = &self.book {
+        if let Some(book) = self.book.as_ref().filter(|_| self.config.use_book) {
             let hit = if self.config.book_tolerance > 0.0 {
                 // 同一棋譜の反復を避けるため、互角の候補から選ぶ
                 self.book_rand = self
