@@ -12,10 +12,48 @@
     -webkit-user-select: none; user-select: none;
     -webkit-user-drag: none; cursor: default;
   }
-  body { display: flex; }
+  body { display: block; }
+  /* React の描画先。ここが画面の flex コンテナになる。 */
+  #root { display: flex; height: 100vh; overflow: hidden; }
+
+  /* ---- 左メニュー ---- */
+  #nav {
+    width: 158px; flex: none; background: var(--panel);
+    border-right: 1px solid var(--border);
+    padding: 16px 10px; display: flex; flex-direction: column; gap: 3px;
+    /* 本文側の再描画がナビに残らないよう重ね順を明示する */
+    position: relative; z-index: 2;
+  }
+  .nav-brand { font-size: 13px; letter-spacing: .16em; font-weight: 700;
+               color: var(--text); padding: 4px 11px 14px; }
+  .nav-item {
+    display: block; width: 100%; text-align: left; border: none; background: transparent;
+    color: var(--sub); padding: 9px 12px; border-radius: 8px; font-size: 13.5px;
+    font-family: inherit; cursor: pointer; transition: background .12s, color .12s;
+  }
+  .nav-item:hover { background: var(--panel-2, rgba(255,255,255,.05)); color: var(--text); }
+  .nav-item.active { background: var(--accent); color: #fff; font-weight: 600; }
+  /* GGS はまだこのアプリに入っていない。淡く出して押せることは示す。 */
+  .nav-item.ggs { opacity: .45; }
+  .nav-item.ggs:hover { opacity: .7; }
+  .nav-sep { display: flex; align-items: center; gap: 7px; font-size: 10.5px;
+             color: var(--sub); letter-spacing: .1em; margin: 14px 0 5px; padding-left: 5px; }
+  .nav-sep::after { content: ""; flex: 1; height: 1px; background: var(--border); }
+  .conn-dot { width: 7px; height: 7px; border-radius: 50%; background: var(--ok, #8bc34a); }
+  .conn-dot.off { background: var(--sub); }
+  .nav-spacer { flex: 1; }
+  #nav .btn.icon { align-self: flex-start; }
+
+  /* GGS を選んだときの案内 (段階 3 以降で中身が入る) */
+  .placeholder { flex: 1; display: flex; align-items: center; justify-content: center;
+                 padding: 40px; }
+  .placeholder-box { max-width: 420px; text-align: center; }
+  .placeholder-title { font-size: 18px; font-weight: 600; color: var(--text);
+                       margin-bottom: 10px; }
 
   /* ---- 盤 + グラフ (メイン領域) ---- */
-  #main { flex: 1; display: flex; flex-direction: column; padding: 16px; gap: 12px; min-width: 0; }
+  #main { flex: 1; display: flex; flex-direction: column; padding: 16px; gap: 12px;
+          min-width: 0; position: relative; z-index: 1; overflow: hidden; contain: paint; }
   #board-wrap { flex: 1; display: flex; align-items: center; justify-content: center; min-height: 0; }
   #board { max-width: 100%; max-height: 100%; filter: drop-shadow(0 8px 28px rgba(0,0,0,.45)); }
   #graph-card { flex: none; }

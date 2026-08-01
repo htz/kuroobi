@@ -43,7 +43,7 @@ jobs:
           cargo build --release --features nnue-scalar
 
   gui-ui:
-    name: 対局 GUI のフロント (型検査 / ビルド)
+    name: 対局 GUI のフロント (型検査 / lint / ビルド)
     runs-on: ubuntu-latest
     defaults:
       run:
@@ -60,7 +60,9 @@ jobs:
       - name: 依存の取得
         run: npm ci
 
-      - name: 型検査
+      # 型検査に加えて eslint も走る (npm run check の中身)。
+      # React の hooks 依存や DOM の直接操作は、目で見ても取りこぼす。
+      - name: 型検査と lint
         run: npm run check
 
       - name: ビルド
