@@ -384,6 +384,69 @@ fn extract_start(text: &str) -> Option<String> {
     None
 }
 
+/// GGF (Generic Game Format) を読む。
+///
+/// GGS が使う形式で、`(;` と `;)` で 1 局を囲み、`BO[8 <64 マス> <手番>]` に
+/// 開始局面、`B[F5/評価/時間]` / `W[D6//時間]` に着手を持つ。座標を本文から
+/// 拾うやり方だと `PB[player1]` のような名前から誤って手を作ってしまうので、
+/// 着手タグだけを見る。
+fn parse_ggf(text: &str) -> Option<(Option<String>, String)> {
+    let body = {
+        let start = text.find("(;")?;
+        let rest = &text[start + 2..];
+        let end = rest.find(";)").unwrap_or(rest.len());
+        &rest[..end]
+    };
+    // タグを順に読む: 大文字の名前 + [ ... ]
+    let mut start_pos: Option<String> = None;
+    let mut kifu = String::new();
+    let bytes: Vec<char> = body.chars().collect();
+    let mut i = 0;
+    while i < bytes.len() {
+        if !bytes[i].is_ascii_uppercase() {
+            i += 1;
+            continue;
+        }
+        let name_start = i;
+        while i < bytes.len() && bytes[i].is_ascii_uppercase() {
+            i += 1;
+        }
+        let name: String = bytes[name_start..i].iter().collect();
+        if i >= bytes.len() || bytes[i] != '[' {
+            continue;
+        }
+        i += 1;
+        let val_start = i;
+        while i < bytes.len() && bytes[i] != ']' {
+            i += 1;
+        }
+        let value: String = bytes[val_start..i].iter().collect();
+        i += 1;
+        match name.as_str() {
+            "BO" => {
+                // "8 <64 マス> <手番>" — 盤サイズを落として詰める
+                let c: Vec<char> = value
+                    .trim_start_matches('8')
+                    .chars()
+                    .filter(|c| !c.is_whitespace())
+                    .collect();
+                if c.len() == 65 {
+                    start_pos = Some(c.into_iter().collect());
+                }
+            }
+            "B" | "W" => {
+                // "F5/評価/時間"。パスは PA / PASS
+                let mv = value.split('/').next().unwrap_or("").trim().to_lowercase();
+                if mv.len() == 2 {
+                    kifu.push_str(&mv);
+                }
+            }
+            _ => {}
+        }
+    }
+    (start_pos.is_some() || !kifu.is_empty()).then_some((start_pos, kifu))
+}
+
 fn extract_kifu(text: &str) -> String {
     let chars: Vec<char> = text.to_lowercase().chars().collect();
     let mut s = String::new();
@@ -404,6 +467,11 @@ fn extract_kifu(text: &str) -> String {
 }
 
 fn load_kifu_into(app: &State<App>, text: &str) -> Result<GameView, String> {
+    if let Some(loaded) = game_from_text(text) {
+        let mut game = app.game.lock().unwrap();
+        *game = loaded;
+        return Ok(view(&game));
+    }
     let start = extract_start(text);
     // 開始局面の行は座標に見える文字を含むので、棋譜を拾う前に取り除く
     let body = match &start {
@@ -463,8 +531,14 @@ fn take_handoff_kifu() -> Option<String> {
     (!s.trim().is_empty()).then_some(s)
 }
 
-/// 受け渡しテキスト (開始局面つきのこともある) を対局に起こす。
+/// 受け渡しテキスト (GGF・開始局面つき・素の棋譜) を対局に起こす。
 fn game_from_text(text: &str) -> Option<Reversi> {
+    if let Some((start, kifu)) = parse_ggf(text) {
+        return match &start {
+            Some(b) => Reversi::from_kifu_with_start(b, &kifu).ok(),
+            None => Reversi::from_kifu(&kifu).ok(),
+        };
+    }
     let start = extract_start(text);
     let body: String = match &start {
         Some(_) => text
@@ -569,6 +643,56 @@ mod tests {
             kifu.push_str(&p.to_kifu().to_lowercase());
         }
         let g = game_from_text(&format!("{start}\n{kifu}")).expect("読めること");
+        assert_eq!(g.board.black, drawn.board.black);
+        assert_eq!(g.board.white, drawn.board.white);
+    }
+
+    /// GGS が使う GGF。開始局面を BO タグに持つので往復できる。
+    #[test]
+    fn reads_ggf() {
+        let ggf = "(;GM[Othello]PC[GGS/os]PB[nyanyan]RB[2658.9]PW[egrcd]RW[2585.8]\
+                   BO[8 ---------------------------O*------*O--------------------------- *]\
+                   B[F5]W[D6]B[C3];)";
+        let g = game_from_text(ggf).expect("読めること");
+        assert_eq!(g.move_count(), 3);
+        let plain = Reversi::from_kifu("f5d6c3").unwrap();
+        assert_eq!(g.board.black, plain.board.black);
+        assert_eq!(g.board.white, plain.board.white);
+    }
+
+    /// 対局者名に座標に見える文字が入っていても手として拾わない。
+    #[test]
+    fn ggf_ignores_coordinates_inside_names() {
+        let ggf = "(;GM[Othello]PB[player1]PW[a1ice]\
+                   BO[8 ---------------------------O*------*O--------------------------- *]\
+                   B[F5];)";
+        let g = game_from_text(ggf).expect("読めること");
+        assert_eq!(g.move_count(), 1, "名前の a1 / r1 を手にしない");
+    }
+
+    /// 抽選オープニングの GGF が元の対局に戻る。
+    #[test]
+    fn ggf_round_trips_a_drawn_opening() {
+        let mut drawn = Reversi::new();
+        for _ in 0..5 {
+            let p = drawn.board.movable_iter().next().unwrap();
+            drawn.make_move(p).unwrap();
+        }
+        let bo = drawn.board.to_string().replace('X', "*");
+        let mut tags = String::new();
+        let mut black = bo.ends_with(" *");
+        for _ in 0..3 {
+            let p = drawn.board.movable_iter().next().unwrap();
+            drawn.make_move(p).unwrap();
+            tags.push_str(&format!(
+                "{}[{}]",
+                if black { "B" } else { "W" },
+                p.to_kifu().to_uppercase()
+            ));
+            black = !black;
+        }
+        let ggf = format!("(;GM[Othello]BO[8 {bo}]{tags};)");
+        let g = game_from_text(&ggf).expect("読めること");
         assert_eq!(g.board.black, drawn.board.black);
         assert_eq!(g.board.white, drawn.board.white);
     }
