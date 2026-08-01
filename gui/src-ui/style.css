@@ -256,6 +256,8 @@
               min-width: 280px; max-width: 380px; min-height: 0; }
   .col-side .card { flex: none; }
   .grow { flex: 1; min-height: 0; }
+  /* 中身が「〜はありません」だけのカードは伸ばさない (空白ばかりになる) */
+  .ggs-cols .card.grow:has(.empty) { flex: 0 1 auto; }
   .scroll { overflow-y: auto; min-height: 0; }
   .scroll::-webkit-scrollbar { width: 10px; }
   .scroll::-webkit-scrollbar-thumb {

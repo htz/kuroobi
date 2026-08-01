@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { api, ggsApi } from './api';
+import { api, ggsApi, jsLog } from './api';
 import { useGame } from './state';
 import { useGgs } from './ggs';
 import type { GameView } from './types';
@@ -69,27 +69,37 @@ export function App() {
   }, []);
 
 
-  // 動作確認用: KUROOBI_AUTOPLAY=both:11 のように指定すると自動で対局を始める
+  // 動作確認用: KUROOBI_AUTOPLAY=both:11 のように指定すると自動で対局を始める。
+  // "study" なら適当な棋譜を読み込んで検討画面を開く (見た目の確認用)。
   const started = useRef(false);
-  const { setPlaying: begin, setSide, setLevel } = g;
+  const { setPlaying: begin, setSide, setLevel,
+          playing, view: gv, engineSides, setThinking, setThinkSecs, setThinkTotal,
+          setMoveSource, setView: applyView, setPlaying, say, setLastEval, setMode } = g;
   useEffect(() => {
     if (started.current) return;
     started.current = true;
-    void api.autoplay().then((v) => {
+    void api.autoplay().then(async (v) => {
       if (!v) return;
       const [who, lv] = v.split(':');
+      if (who === 'study') {
+        // 起動時の状態取得と前後すると初期局面で上書きされるので一拍おく
+        await new Promise((r) => setTimeout(r, 500));
+        setView('study');
+        setMode('study');
+        applyView(await api.loadKifuText(
+          'e6f4c3d6f6e7f5g5e3g4c7d3f3c4c6c5b4b6d7b5c2a3f8e8d8c8b8d2g3e2'));
+        return;
+      }
       if (who === 'both') setSide('both');
       if (lv !== undefined && Number.isFinite(+lv)) setLevel(+lv);
       begin(true);
-    }).catch(() => {});
-  }, [begin, setSide, setLevel]);
+    }).catch((e) => jsLog('autoplay: ' + e));
+  }, [begin, setSide, setLevel, setMode, applyView]);
 
   // ---- エンジンの手番 ----
   // 局面が「エンジンが打つ番」になったら 1 度だけ走る。二重起動を
   // 防ぐため、走っている間は ref で塞ぐ。
   const turnRef = useRef(false);
-  const { playing, view: gv, engineSides, setThinking, setThinkSecs, setThinkTotal,
-          setMoveSource, setView: applyView, setPlaying, say, setLastEval, setMode } = g;
   useEffect(() => {
     if (!playing || !gv) return;
     // 終局したら自分で止まる (停止を押させない)
