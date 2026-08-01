@@ -863,7 +863,7 @@ fn ctrlc_handler<F: FnMut() + Send + 'static>(handler: F) -> std::io::Result<()>
 
     *HANDLER.lock().unwrap() = Some(Box::new(handler));
     // SAFETY: installing a signal handler with a valid extern "C" fn.
-    let prev = unsafe { libc::signal(libc::SIGINT, trampoline as libc::sighandler_t) };
+    let prev = unsafe { libc::signal(libc::SIGINT, trampoline as *const () as libc::sighandler_t) };
     if prev == libc::SIG_ERR {
         return Err(std::io::Error::last_os_error());
     }
