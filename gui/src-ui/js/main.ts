@@ -1,294 +1,32 @@
-<!DOCTYPE html>
-<html lang="ja">
-<head>
-<meta charset="utf-8">
-<title>Kuroobi</title>
-<style>
-  :root {
-    --bg: #16191d; --panel: #1e2329; --card: #252b33; --border: #313943;
-    --text: #e8ebee; --sub: #8b96a2; --accent: #4d9fff; --accent-dim: #2d5f99;
-    --board: #337a52; --board-dark: #235c3c; --line: #1e5136;
-    --gold: #ffd479;
-  }
-  * { box-sizing: border-box; }
-  html, body {
-    margin: 0; height: 100%; overflow: hidden;
-    background: var(--bg); color: var(--text);
-    font-family: -apple-system, BlinkMacSystemFont, "Hiragino Sans", sans-serif;
-    -webkit-user-select: none; user-select: none;
-    -webkit-user-drag: none; cursor: default;
-  }
-  body { display: flex; }
+import { api } from './api';
+import type { GameView } from './types';
 
-  /* ---- 盤 + グラフ (メイン領域) ---- */
-  #main { flex: 1; display: flex; flex-direction: column; padding: 16px; gap: 12px; min-width: 0; }
-  #board-wrap { flex: 1; display: flex; align-items: center; justify-content: center; min-height: 0; }
-  #board { max-width: 100%; max-height: 100%; filter: drop-shadow(0 8px 28px rgba(0,0,0,.45)); }
-  #graph-card { flex: none; }
-
-  /* ---- サイドパネル ---- */
-  #panel {
-    width: 316px; background: var(--panel); border-left: 1px solid var(--border);
-    padding: 18px 16px; display: flex; flex-direction: column; gap: 14px;
-    overflow-y: auto;
-  }
-  h1 { font-size: 17px; margin: 0; letter-spacing: .14em; font-weight: 700; }
-  h1 small { color: var(--sub); font-weight: 400; letter-spacing: .04em; margin-left: 8px; font-size: 11px; }
-
-  .card {
-    background: var(--card); border: 1px solid var(--border); border-radius: 10px;
-    padding: 12px; display: flex; flex-direction: column; gap: 10px;
-  }
-  label.field { font-size: 11px; color: var(--sub); display: block; margin-bottom: 4px; letter-spacing: .05em; }
-
-  /* ---- スコア ---- */
-  .score { display: flex; align-items: center; justify-content: center; gap: 10px; }
-  .side {
-    flex: 1; display: flex; align-items: center; gap: 8px; justify-content: center;
-    padding: 8px 10px; border-radius: 8px; border: 1px solid transparent;
-    font-size: 20px; font-weight: 700; font-variant-numeric: tabular-nums;
-    transition: border-color .15s, background .15s;
-  }
-  .side.turn { border-color: var(--accent); background: rgba(77,159,255,.08); }
-  .disc { width: 18px; height: 18px; border-radius: 50%; flex: none; }
-  .disc.b { background: #101010; border: 1px solid #2e2e2e; }
-  .disc.w { background: #f1f1f1; border: 1px solid #c8c8c8; }
-  .vs { color: var(--sub); font-size: 12px; }
-  #result { text-align: center; font-size: 13px; color: var(--gold); min-height: 0; }
-  #result:empty { display: none; }
-
-  /* ---- セグメント切替 ---- */
-  .seg { display: flex; background: #1a1f25; border: 1px solid var(--border); border-radius: 8px; padding: 3px; gap: 2px; }
-  .seg button {
-    flex: 1; border: none; background: transparent; color: var(--sub);
-    font-size: 12px; padding: 6px 2px; border-radius: 6px; cursor: pointer;
-    font-family: inherit; transition: background .12s, color .12s;
-  }
-  .seg button:hover { color: var(--text); }
-  .seg button.active { background: var(--accent-dim); color: #fff; }
-
-  /* ---- セレクト (ネイティブ矢印を消してカスタム描画) ---- */
-  .selwrap { position: relative; }
-  select {
-    -webkit-appearance: none; appearance: none;
-    width: 100%; padding: 8px 30px 8px 10px; border-radius: 8px;
-    border: 1px solid var(--border); background: #1a1f25; color: var(--text);
-    font-size: 13px; font-family: inherit; cursor: pointer; outline: none;
-    transition: border-color .12s;
-  }
-  select:hover, select:focus { border-color: var(--accent-dim); }
-  .selwrap::after {
-    content: ""; position: absolute; right: 11px; top: 50%;
-    width: 8px; height: 8px; pointer-events: none;
-    border-right: 1.6px solid var(--sub); border-bottom: 1.6px solid var(--sub);
-    transform: translateY(-70%) rotate(45deg);
-  }
-
-  /* ---- ボタン ---- */
-  button.btn {
-    padding: 9px 10px; border-radius: 8px; border: 1px solid var(--border);
-    background: #2a313a; color: var(--text); font-size: 13px; font-family: inherit;
-    cursor: pointer; transition: background .12s, border-color .12s, transform .05s;
-  }
-  button.btn:hover { border-color: var(--accent-dim); background: #313945; }
-  button.btn:active { transform: translateY(1px); }
-  button.btn:disabled { opacity: .38; cursor: default; transform: none; }
-  button.btn.primary { background: var(--accent-dim); border-color: var(--accent-dim); color: #fff; }
-  button.btn.primary:hover { background: #366fae; }
-  button.btn.small { padding: 4px 10px; font-size: 11px; flex: none; }
-  #graph { width: 100%; height: auto; display: block; filter: none; }
-  .row { display: flex; gap: 8px; }
-  .row > * { flex: 1; }
-
-  /* ---- 情報表示 ---- */
-  #eval { font-size: 13px; min-height: 18px; font-variant-numeric: tabular-nums; }
-  #status { font-size: 12px; color: var(--sub); min-height: 16px; }
-  #status.spin { color: var(--accent); }
-  #status.spin::before {
-    content: ""; display: inline-block; width: 9px; height: 9px; margin-right: 6px;
-    border: 2px solid var(--accent); border-top-color: transparent; border-radius: 50%;
-    animation: rot .8s linear infinite; vertical-align: -1px;
-  }
-  @keyframes rot { to { transform: rotate(360deg); } }
-  #kifu {
-    display: grid; grid-template-columns: repeat(auto-fill, minmax(56px, 1fr));
-    gap: 4px; align-content: flex-start;
-    background: #1a1f25; border: 1px solid var(--border); border-radius: 8px;
-    padding: 8px; min-height: 56px; max-height: 168px; overflow-y: auto;
-  }
-  .mv {
-    display: flex; align-items: baseline; gap: 4px;
-    font-family: ui-monospace, SFMono-Regular, monospace; font-size: 12px;
-    padding: 3px 6px; border-radius: 5px; background: #232932;
-    border: 1px solid transparent; cursor: pointer; color: var(--text);
-    transition: border-color .1s, opacity .1s;
-    font-variant-numeric: tabular-nums;
-  }
-  .mv i {
-    font-style: normal; font-size: 9px; color: var(--sub);
-    width: 16px; text-align: right; flex: none;
-  }
-  .mv .st {
-    width: 9px; height: 9px; border-radius: 50%; flex: none; align-self: center;
-  }
-  .mv .st.b { background: #0d0d0d; box-shadow: inset 0 0 2px #444; }
-  .mv .st.w { background: #ececec; }
-  .mv:hover { border-color: var(--accent-dim); }
-  .mv.future { opacity: .4; }
-  .mv.current { border-color: var(--accent); background: rgba(77,159,255,.12); }
-  .mv.pass { color: var(--sub); }
-  .mv.nolink { cursor: default; }
-  .mv.nolink:hover { border-color: transparent; }
-
-  /* ---- 棋譜貼り付けモーダル ---- */
-  #paste-modal {
-    position: fixed; inset: 0; background: rgba(0,0,0,.55);
-    display: flex; align-items: center; justify-content: center; z-index: 10;
-  }
-  #paste-modal[hidden] { display: none; }
-  #paste-modal .box {
-    width: 420px; background: var(--panel); border: 1px solid var(--border);
-    border-radius: 12px; padding: 16px; display: flex; flex-direction: column; gap: 10px;
-  }
-  #paste-modal textarea {
-    height: 110px; resize: none; border-radius: 8px; border: 1px solid var(--border);
-    background: #1a1f25; color: var(--text); padding: 8px 10px;
-    font-family: ui-monospace, SFMono-Regular, monospace; font-size: 12px;
-    outline: none; -webkit-user-select: text; user-select: text; cursor: text;
-  }
-  #paste-modal textarea:focus { border-color: var(--accent-dim); }
-</style>
-</head>
-<body oncontextmenu="return false">
-  <div id="main">
-    <div id="board-wrap"><svg id="board" viewBox="0 0 880 880"></svg></div>
-    <div class="card" id="graph-card">
-      <div class="row" style="align-items:center">
-        <label class="field" style="flex:1; margin:0">評価値グラフ (黒視点)</label>
-        <button class="btn small" id="btn-graph">更新</button>
-      </div>
-      <svg id="graph" viewBox="0 0 800 190"></svg>
-    </div>
-  </div>
-  <div id="panel">
-    <h1>KUROOBI</h1>
-
-    <div class="card">
-      <div class="score">
-        <span class="side" id="score-b"><i class="disc b"></i><span id="nb">2</span></span>
-        <span class="vs">—</span>
-        <span class="side" id="score-w"><span id="nw">2</span><i class="disc w"></i></span>
-      </div>
-      <div id="result"></div>
-    </div>
-
-    <div class="card">
-      <div>
-        <label class="field">モード</label>
-        <div class="seg" id="app-mode">
-          <button data-v="vs" class="active">対局</button>
-          <button data-v="study">検討</button>
-        </div>
-      </div>
-      <div id="side-row">
-        <label class="field">エンジンの担当</label>
-        <div class="seg" id="mode">
-          <button data-v="black">黒</button>
-          <button data-v="white" class="active">白</button>
-          <button data-v="both">観戦</button>
-        </div>
-      </div>
-      <div>
-        <label class="field">強さ</label>
-        <div class="selwrap"><select id="level"></select></div>
-      </div>
-      <div class="row" id="custom-row" style="display:none">
-        <div>
-          <label class="field">深さ</label>
-          <div class="selwrap"><select id="depth"></select></div>
-        </div>
-        <div>
-          <label class="field">読切</label>
-          <div class="selwrap"><select id="solve"></select></div>
-        </div>
-        <div>
-          <label class="field">帯</label>
-          <div class="selwrap"><select id="band"></select></div>
-        </div>
-      </div>
-    </div>
-
-    <div class="card">
-      <button class="btn primary" id="btn-start">▶ 対局開始</button>
-      <div class="row" id="game-btns">
-        <button class="btn" id="btn-new">新規対局</button>
-        <button class="btn" id="btn-undo">待った</button>
-      </div>
-      <div>
-        <label class="field">評価値を表示 (全合法手を自動採点)</label>
-        <div class="seg" id="auto-hint">
-          <button data-v="off" class="active">オフ</button>
-          <button data-v="on">オン</button>
-        </div>
-      </div>
-      <div id="eval"></div>
-      <div id="status"></div>
-    </div>
-
-    <div>
-      <div class="row" style="align-items:center; margin-bottom:4px">
-        <label class="field" style="flex:1; margin:0">棋譜</label>
-        <button class="btn small" id="btn-save">保存</button>
-        <button class="btn small" id="btn-load">読込</button>
-      </div>
-      <div id="kifu"></div>
-    </div>
-  </div>
-
-  <div id="paste-modal" hidden>
-    <div class="box">
-      <label class="field" style="margin:0">棋譜の読み込み — f5d6… 形式を貼り付け (手番号・空白入りでも可)</label>
-      <textarea id="paste-text" placeholder="f5d6c3d3c4f4f3e3e2…"></textarea>
-      <div class="row">
-        <button class="btn" id="paste-file">ファイルから…</button>
-        <button class="btn primary" id="paste-ok">読み込む</button>
-        <button class="btn" id="paste-cancel">キャンセル</button>
-      </div>
-    </div>
-  </div>
-
-<script>
-const invoke = (...a) => {
-  if (!window.__TAURI__?.core?.invoke) {
-    document.getElementById('status').textContent = 'Tauri IPC が使えません';
-    return Promise.reject('no ipc');
-  }
-  return window.__TAURI__.core.invoke(...a);
-};
 const SVGNS = 'http://www.w3.org/2000/svg';
 const CELL = 100, PAD = 40;
-let view = null;
-let hints = null;
+let view: GameView | null = null;
+let hints: Record<number, { value: number; exact: boolean }> | null = null;
 let thinking = false;   // エンジンの思考 (think) が進行中
 let playing = false;    // 対局中 (エンジンが自動で応手する状態)
-let appMode = 'vs';     // 'vs' = 対局モード, 'study' = 検討モード
+let appMode: 'vs' | 'study' = 'vs';     // 'vs' = 対局モード, 'study' = 検討モード
 let autoHint = false;
 let hintSeq = 0;        // 解析要求の世代 (古い結果を捨てる)
+// 手数 → その手の由来 ('book' | 'search')。エンジンが指した手だけ記録する。
+let moveSource: Record<number, 'book' | 'search'> = {};
 
-const $ = id => document.getElementById(id);
+const $ = <T extends HTMLElement = HTMLElement>(id: string): T => document.getElementById(id) as T;
 
-function el(name, attrs, text) {
+function el(name: string, attrs: Record<string, string | number>, text?: string | number): SVGElement {
   const e = document.createElementNS(SVGNS, name);
-  for (const k in attrs) e.setAttribute(k, attrs[k]);
-  if (text !== undefined) e.textContent = text;
+  for (const k in attrs) e.setAttribute(k, String(attrs[k]));
+  if (text !== undefined) e.textContent = String(text);
   return e;
 }
 
-function fillSelect(id, from, to, selected, labelFn) {
+function fillSelect(id: string, from: number, to: number, selected: number, labelFn?: (v: number) => string): void {
   const s = $(id);
   for (let v = from; v <= to; v++) {
     const o = document.createElement('option');
-    o.value = v;
+    o.value = String(v);
     o.textContent = labelFn ? labelFn(v) : String(v);
     if (v === selected) o.selected = true;
     s.appendChild(o);
@@ -316,10 +54,10 @@ const LEVELS = [
   { name: 'Lv13 (全力)', depth: 24, solve: 26, band: 8 },
 ];
 {
-  const s = $('level');
+  const s = $<HTMLSelectElement>('level');
   LEVELS.forEach((lv, i) => {
     const o = document.createElement('option');
-    o.value = i;
+    o.value = String(i);
     o.textContent = `${lv.name} — 深さ${lv.depth} / 読切${lv.solve}${lv.band ? ` / 帯+${lv.band}` : ''}`;
     if (i === 6) o.selected = true;
     s.appendChild(o);
@@ -330,17 +68,17 @@ const LEVELS = [
   s.appendChild(o);
 }
 
-function currentLevels() {
-  const v = $('level').value;
+function currentLevels(): { depth: number; solve: number; band: number } {
+  const v = $<HTMLSelectElement>('level').value;
   if (v === 'custom') {
-    return { depth: +$('depth').value, solve: +$('solve').value, band: +$('band').value };
+    return { depth: +$<HTMLSelectElement>('depth').value, solve: +$<HTMLSelectElement>('solve').value, band: +$<HTMLSelectElement>('band').value };
   }
   const lv = LEVELS[+v];
   return { depth: lv.depth, solve: lv.solve, band: lv.band };
 }
 
 // file-major: sq = file*8 + rank
-function xy(sq) { return [Math.floor(sq / 8), sq % 8]; }
+function xy(sq: number): [number, number] { return [Math.floor(sq / 8), sq % 8]; }
 
 function render() {
   const svg = $('board');
@@ -388,7 +126,7 @@ function render() {
       }
       const h = hints ? hints[sq] : undefined;
       if (h) {
-        const isBest = h.value >= bestHint - 1e-6;
+        const isBest = bestHint !== null && h.value >= bestHint - 1e-6;
         g.appendChild(el('circle', { cx, cy, r: 30, fill: isBest ? 'rgba(255,212,121,.14)' : 'rgba(255,255,255,.06)', stroke: isBest ? 'var(--gold)' : 'rgba(255,255,255,.25)', 'stroke-width': isBest ? 2 : 1 }));
         g.appendChild(el('text', {
           x: cx, y: cy + 8, 'text-anchor': 'middle', 'font-size': 24,
@@ -398,8 +136,8 @@ function render() {
         const dot = el('circle', { cx, cy, r: 7, fill: 'rgba(255,255,255,.30)' });
         g.appendChild(dot);
         if (!thinking) {
-          g.addEventListener('mouseenter', () => dot.setAttribute('r', 12));
-          g.addEventListener('mouseleave', () => dot.setAttribute('r', 7));
+          g.addEventListener('mouseenter', () => dot.setAttribute('r', '12'));
+          g.addEventListener('mouseleave', () => dot.setAttribute('r', '7'));
         }
       }
       if (!thinking) g.addEventListener('click', () => humanPlay(sq));
@@ -408,19 +146,19 @@ function render() {
   }
 }
 
-function updatePanel() {
+function updatePanel(): void {
   if (!view) return;
-  $('nb').textContent = view.black;
-  $('nw').textContent = view.white;
+  $('nb').textContent = String(view.black);
+  $('nw').textContent = String(view.white);
   $('score-b').classList.toggle('turn', !view.over && view.player === 'black');
   $('score-w').classList.toggle('turn', !view.over && view.player === 'white');
   renderKifu();
   $('result').textContent = view.over
     ? (view.black === view.white ? '引き分け' : (view.black > view.white ? '黒の勝ち' : '白の勝ち'))
     : '';
-  $('btn-undo').disabled = thinking || view.move_count === 0;
-  $('btn-new').disabled = thinking;
-  const start = $('btn-start');
+  $<HTMLButtonElement>('btn-undo').disabled = thinking || view.move_count === 0;
+  $<HTMLButtonElement>('btn-new').disabled = thinking;
+  const start = $<HTMLButtonElement>('btn-start');
   start.textContent = playing ? '■ 対局停止' : '▶ 対局開始';
   start.classList.toggle('primary', !playing);
   start.disabled = !playing && (view.over || thinking);
@@ -431,15 +169,15 @@ function updatePanel() {
   $('graph-card').style.display = appMode === 'study' ? 'flex' : 'none';
 }
 
-function setPlaying(b) {
+function setPlaying(b: boolean): void {
   playing = b;
   updatePanel();
 }
 
-const sqName = sq => 'abcdefgh'[Math.floor(sq / 8)] + (sq % 8 + 1);
+const sqName = (sq: number): string => 'abcdefgh'[Math.floor(sq / 8)] + (sq % 8 + 1);
 
 // ---- 評価値グラフ (黒視点の折れ線、1 系列) ----
-let graphVals = null;   // [n] = {value, exact} / undefined。長さ moves.length+1
+let graphVals: ({ value: number; exact: boolean } | undefined)[] | null = null;   // [n] = {value, exact} / undefined。長さ moves.length+1
 let graphKey = '';      // どの手順に対する値か (変わったら無効化)
 let graphSeq = 0;
 let graphBusy = false;
@@ -462,7 +200,7 @@ async function updateGraph() {
     if (n < len && view.moves[n] == null) continue;
     setStatus(`グラフ計算中 ${n}/${len}…`, true);
     try {
-      const p = await invoke('eval_at', { n, depth });
+      const p = await api.evalAt(n, depth);
       if (seq !== graphSeq || lineKey() !== key) break;
       if (Number.isFinite(p.value)) graphVals[n] = { value: p.value, exact: p.exact };
     } catch (e) { setStatus('' + e, false); break; }
@@ -480,14 +218,14 @@ function drawGraph() {
   if (!view) return;
   const len = Math.max(1, view.moves.length);
   const vals = graphVals || [];
-  const defined = vals.filter(Boolean).map(v => Math.abs(v.value));
+  const defined = vals.filter((v): v is { value: number; exact: boolean } => !!v).map(v => Math.abs(v.value));
   const ymax = Math.max(8, Math.min(64, Math.ceil((defined.length ? Math.max(...defined) : 0) / 8) * 8 || 8));
-  const clampV = v => Math.max(-ymax, Math.min(ymax, v));
-  const x = n => L + (W - L - R) * n / len;
-  const y = v => T + (H - T - B) * (1 - (v + ymax) / (2 * ymax));
+  const clampV = (v: number): number => Math.max(-ymax, Math.min(ymax, v));
+  const x = (n: number): number => L + (W - L - R) * n / len;
+  const y = (v: number): number => T + (H - T - B) * (1 - (v + ymax) / (2 * ymax));
 
   // 目盛 (控えめ): ±ymax とゼロ線
-  const grid = (v, label, strong) => {
+  const grid = (v: number, label: string, strong: boolean): void => {
     svg.appendChild(el('line', { x1: L, y1: y(v), x2: W - R, y2: y(v), stroke: strong ? '#3a4450' : '#272e37', 'stroke-width': 1 }));
     svg.appendChild(el('text', { x: L - 4, y: y(v) + 3, 'text-anchor': 'end', fill: 'var(--sub)', 'font-size': 11 }, label));
   };
@@ -510,13 +248,13 @@ function drawGraph() {
 
   // 折れ線 (パス・未計算の点は飛ばして繋ぐ)
   let d = '', pen = false;
-  vals.forEach((v, n) => {
+  vals.forEach((v: { value: number; exact: boolean } | undefined, n: number) => {
     if (!v) return;
     d += (pen ? 'L' : 'M') + x(n).toFixed(1) + ' ' + y(clampV(v.value)).toFixed(1) + ' ';
     pen = true;
   });
   svg.appendChild(el('path', { d, fill: 'none', stroke: 'var(--accent)', 'stroke-width': 2, 'stroke-linejoin': 'round' }));
-  vals.forEach((v, n) => {
+  vals.forEach((v: { value: number; exact: boolean } | undefined, n: number) => {
     if (!v) return;
     svg.appendChild(el('circle', {
       cx: x(n), cy: y(clampV(v.value)), r: v.exact ? 4 : 3,
@@ -530,53 +268,63 @@ function drawGraph() {
   const tipText = el('text', { 'font-size': 12, fill: 'var(--text)', 'text-anchor': 'middle', visibility: 'hidden' });
   svg.appendChild(tipDot); svg.appendChild(tipText);
   const hover = el('rect', { x: L, y: 0, width: W - L - R, height: H, fill: 'transparent', cursor: 'pointer' });
-  const nearest = ev => {
+  const nearest = (ev: MouseEvent): number | null => {
     const r = svg.getBoundingClientRect();
     const mx = (ev.clientX - r.left) * (W / r.width);
     let n = Math.round((mx - L) / ((W - L - R) / len));
-    n = Math.max(0, Math.min(view.moves.length, n));
+    n = Math.max(0, Math.min(view!.moves.length, n));
     return vals[n] ? n : null;
   };
-  hover.addEventListener('mousemove', ev => {
-    const n = nearest(ev);
-    if (n == null) { tipDot.setAttribute('visibility', 'hidden'); tipText.setAttribute('visibility', 'hidden'); return; }
-    const v = vals[n];
-    tipDot.setAttribute('cx', x(n)); tipDot.setAttribute('cy', y(clampV(v.value)));
+  hover.addEventListener('mousemove', (ev) => {
+    const n = nearest(ev as MouseEvent);
+    const v = n === null ? undefined : vals[n];
+    if (n === null || !v) {
+      tipDot.setAttribute('visibility', 'hidden');
+      tipText.setAttribute('visibility', 'hidden');
+      return;
+    }
+    tipDot.setAttribute('cx', String(x(n)));
+    tipDot.setAttribute('cy', String(y(clampV(v.value))));
     tipDot.setAttribute('visibility', 'visible');
     tipText.textContent = `${n}手 ${v.value > 0 ? '+' : ''}${v.exact ? v.value.toFixed(0) : v.value.toFixed(1)}`;
-    tipText.setAttribute('x', Math.max(L + 20, Math.min(W - R - 20, x(n))));
-    tipText.setAttribute('y', y(clampV(v.value)) < H / 2 ? y(clampV(v.value)) + 14 : y(clampV(v.value)) - 8);
+    tipText.setAttribute('x', String(Math.max(L + 20, Math.min(W - R - 20, x(n)))));
+    tipText.setAttribute('y', String(y(clampV(v.value)) < H / 2 ? y(clampV(v.value)) + 14 : y(clampV(v.value)) - 8));
     tipText.setAttribute('visibility', 'visible');
   });
   hover.addEventListener('mouseleave', () => {
     tipDot.setAttribute('visibility', 'hidden');
     tipText.setAttribute('visibility', 'hidden');
   });
-  hover.addEventListener('click', ev => {
-    const n0 = nearest(ev);
-    if (n0 == null) return;
+  hover.addEventListener('click', (ev) => {
+    const n0 = nearest(ev as MouseEvent);
+    if (n0 === null || !view) return;
     let n = n0;
     while (n < view.moves.length && view.moves[n] == null) n++;
-    jumpTo(n);
+    void jumpTo(n);
   });
   svg.appendChild(hover);
 }
 
 // 棋譜をチップ列で描く。クリックで**その手を打った直後**の局面へ移動。
 // 先の手は薄く残り、前へも戻れる。
-function renderKifu() {
+function renderKifu(): void {
+  const v0 = view;
+  if (!v0) return;
   const box = $('kifu');
   box.innerHTML = '';
-  view.moves.forEach((m, i) => {
+  v0.moves.forEach((m: number | null, i: number) => {
     const n = i + 1;                         // n 手目
     const d = document.createElement('span');
     let cls = 'mv';
-    if (n === view.cursor) cls += ' current';   // 最後に打たれた手
-    if (n > view.cursor) cls += ' future';
+    if (n === v0.cursor) cls += ' current';   // 最後に打たれた手
+    if (n > v0.cursor) cls += ' future';
     if (m == null) cls += ' pass';
+    const src = moveSource[n];
+    if (src) cls += ' src-' + src;
     d.className = cls;
+    if (src) d.title = src === 'book' ? '定石 book の手' : 'エンジンの探索による手';
     const num = document.createElement('i');
-    num.textContent = n;
+    num.textContent = String(n);
     d.appendChild(num);
     // パス込みで 1 手ごとに手番が入れ替わるので、奇数手 = 黒で確定
     const st = document.createElement('span');
@@ -587,8 +335,8 @@ function renderKifu() {
       // 着地先の次の手がパスなら「打てない手番」で止まらないよう、
       // パスを消化した局面まで進めて着地する
       let n = i + 1;
-      while (n < view.moves.length && view.moves[n] == null) n++;
-      jumpTo(n);
+      while (n < v0.moves.length && v0.moves[n] == null) n++;
+      void jumpTo(n);
     });
     box.appendChild(d);
   });
@@ -596,21 +344,21 @@ function renderKifu() {
   if (cur) cur.scrollIntoView({ block: 'nearest' });
 }
 
-async function jumpTo(n) {
+async function jumpTo(n: number): Promise<void> {
   if (thinking) return;
   hintSeq++;
-  invoke('stop_search').catch(() => {});   // 進行中の解析を打ち切る
+  api.stopSearch().catch(() => {});   // 進行中の解析を打ち切る
   if (playing) {
     setPlaying(false);
     setStatus('棋譜を移動したため停止しました', false);
   }
   try {
     hints = null;
-    setView(await invoke('goto', { n }));
+    setView(await api.goto(n));
   } catch (e) { setStatus('' + e, false); }
 }
 
-function setView(v) {
+function setView(v: GameView): void {
   view = v;
   if (graphKey !== lineKey()) { graphVals = null; graphKey = lineKey(); }
   render(); updatePanel(); drawGraph(); refreshHints();
@@ -626,7 +374,7 @@ async function refreshHints() {
   setStatus('解析中…', true);
   try {
     await pushLevels();
-    const hs = await invoke('analyze', { depth: currentLevels().depth });
+    const hs = await api.analyze(currentLevels().depth);
     if (seq !== hintSeq || !view || view.kifu !== kifuAt) return;  // 古い
     hints = {};
     for (const h of hs) {
@@ -641,21 +389,21 @@ async function refreshHints() {
   }
   if (seq === hintSeq) setStatus('', false);
 }
-function setStatus(s, spin) {
+function setStatus(s: string, spin?: boolean): void {
   $('status').textContent = s;
   $('status').className = spin ? 'spin' : '';
 }
 
 function engineSide() {
   if (appMode === 'study') return [];   // 検討モードではエンジンは打たない
-  const m = document.querySelector('#mode button.active').dataset.v;
+  const m = document.querySelector<HTMLElement>('#mode button.active')?.dataset.v ?? 'off';
   if (m === 'both') return ['black', 'white'];
   return [m];
 }
 
 async function pushLevels() {
   const { depth, solve, band } = currentLevels();
-  await invoke('set_levels', { depth, solveEmpties: solve, band }).catch(() => {});
+  await api.setLevels(depth, solve, band).catch(() => {});
 }
 
 async function maybeEngineTurn() {
@@ -665,7 +413,7 @@ async function maybeEngineTurn() {
     render(); updatePanel();
     let r;
     try {
-      r = await invoke('think');
+      r = await api.think();
     } catch (e) {
       thinking = false;
       // 停止済みで局面が変わっていた場合はエラー扱いにしない
@@ -682,8 +430,10 @@ async function maybeEngineTurn() {
       return;
     }
     try {
-      const v = await invoke('apply_move', { sq: r.pos });
+      const v = await api.applyMove(r.pos);
       hints = null;
+      // この手が book 由来か探索由来かを棋譜に残す (v.cursor が指した後の手数)
+      moveSource[v.cursor] = r.from_book ? 'book' : 'search';
       setView(v);
       $('eval').textContent = Number.isFinite(r.value)
         ? `エンジン評価: ${r.value > 0 ? '+' : ''}${r.exact ? r.value.toFixed(0) : r.value.toFixed(1)} 石` +
@@ -701,22 +451,22 @@ async function maybeEngineTurn() {
   refreshHints();
 }
 
-async function humanPlay(sq) {
+async function humanPlay(sq: number): Promise<void> {
   if (thinking) return;
-  if (playing && engineSide().includes(view.player)) return;  // エンジンの手番
+  if (playing && view && engineSide().includes(view.player)) return;  // エンジンの手番
   try {
-    const v = await invoke('play', { sq });
+    const v = await api.play(sq);
     hints = null;
     setView(v);
     if (playing) await maybeEngineTurn();
   } catch (e) { setStatus('' + e, false); }
 }
 
-$('btn-start').addEventListener('click', async () => {
+$<HTMLButtonElement>('btn-start').addEventListener('click', async () => {
   if (playing) {
     // 停止: エンジンの探索も実際に中断させる (結果は破棄)
     setPlaying(false);
-    invoke('stop_search').catch(() => {});
+    api.stopSearch().catch(() => {});
     setStatus('対局を停止しました', false);
     return;
   }
@@ -727,29 +477,30 @@ $('btn-start').addEventListener('click', async () => {
   await maybeEngineTurn();
 });
 
-$('btn-new').addEventListener('click', async () => {
+$<HTMLButtonElement>('btn-new').addEventListener('click', async () => {
   await pushLevels();
   hints = null;
+  moveSource = {};
   $('eval').textContent = '';
   setPlaying(false);
-  setView(await invoke('new_game'));
+  setView(await api.newGame());
   setStatus('「▶ 対局開始」で対局、そのまま打てば検討モード', false);
 });
 
-$('btn-undo').addEventListener('click', async () => {
+$<HTMLButtonElement>('btn-undo').addEventListener('click', async () => {
   try {
     hints = null;
-    setView(await invoke('undo'));
-    if (engineSide().includes(view.player) && view.move_count > 0)
-      setView(await invoke('undo'));
+    setView(await api.undo());
+    if (view && engineSide().includes(view.player) && view.move_count > 0)
+      setView(await api.undo());
   } catch (e) { setStatus('' + e, false); }
 });
 
-document.querySelectorAll('#app-mode button').forEach(b => {
+document.querySelectorAll<HTMLElement>('#app-mode button').forEach(b => {
   b.addEventListener('click', () => {
     document.querySelectorAll('#app-mode button').forEach(x => x.classList.remove('active'));
     b.classList.add('active');
-    appMode = b.dataset.v;
+    appMode = b.dataset.v === 'study' ? 'study' : 'vs';
     if (appMode === 'study' && playing) setPlaying(false);
     graphSeq++;             // モードをまたぐグラフ計算は打ち切る
     setStatus(appMode === 'study'
@@ -759,7 +510,7 @@ document.querySelectorAll('#app-mode button').forEach(b => {
   });
 });
 
-document.querySelectorAll('#mode button').forEach(b => {
+document.querySelectorAll<HTMLElement>('#mode button').forEach(b => {
   b.addEventListener('click', () => {
     document.querySelectorAll('#mode button').forEach(x => x.classList.remove('active'));
     b.classList.add('active');
@@ -771,7 +522,7 @@ document.querySelectorAll('#mode button').forEach(b => {
   });
 });
 
-document.querySelectorAll('#auto-hint button').forEach(b => {
+document.querySelectorAll<HTMLElement>('#auto-hint button').forEach(b => {
   b.addEventListener('click', () => {
     document.querySelectorAll('#auto-hint button').forEach(x => x.classList.remove('active'));
     b.classList.add('active');
@@ -780,7 +531,7 @@ document.querySelectorAll('#auto-hint button').forEach(b => {
       refreshHints();
     } else {
       hintSeq++;          // 進行中の解析結果を無効化
-      invoke('stop_search').catch(() => {});
+      api.stopSearch().catch(() => {});
       hints = null;
       render();
     }
@@ -791,14 +542,15 @@ $('btn-graph').addEventListener('click', updateGraph);
 
 $('btn-save').addEventListener('click', async () => {
   try {
-    const p = await invoke('save_kifu');
+    const p = await api.saveKifu();
     if (p) setStatus('保存しました: ' + p, false);
   } catch (e) { setStatus('' + e, false); }
 });
 
-function afterKifuLoad(v) {
+function afterKifuLoad(v: GameView): void {
   setPlaying(false);
   hints = null;
+  moveSource = {};
   $('eval').textContent = '';
   $('paste-modal').hidden = true;
   setView(v);
@@ -806,45 +558,42 @@ function afterKifuLoad(v) {
 }
 
 $('btn-load').addEventListener('click', () => {
-  $('paste-text').value = '';
+  $<HTMLTextAreaElement>('paste-text').value = '';
   $('paste-modal').hidden = false;
-  $('paste-text').focus();
+  $<HTMLTextAreaElement>('paste-text').focus();
 });
 
 $('paste-cancel').addEventListener('click', () => { $('paste-modal').hidden = true; });
 
 $('paste-ok').addEventListener('click', async () => {
   try {
-    const text = $('paste-text').value;
+    const text = $<HTMLTextAreaElement>('paste-text').value;
     if (!text.trim()) return;
-    afterKifuLoad(await invoke('load_kifu_text', { text }));
+    afterKifuLoad(await api.loadKifuText(text));
   } catch (e) { setStatus('' + e, false); $('paste-modal').hidden = true; }
 });
 
 $('paste-file').addEventListener('click', async () => {
   try {
-    const v = await invoke('load_kifu');
+    const v = await api.loadKifu();
     if (v) afterKifuLoad(v);
   } catch (e) { setStatus('' + e, false); $('paste-modal').hidden = true; }
 });
 
-$('level').addEventListener('change', () => {
-  $('custom-row').style.display = $('level').value === 'custom' ? 'flex' : 'none';
+$<HTMLSelectElement>('level').addEventListener('change', () => {
+  $('custom-row').style.display = $<HTMLSelectElement>('level').value === 'custom' ? 'flex' : 'none';
   pushLevels();
 });
-$('depth').addEventListener('change', pushLevels);
-$('solve').addEventListener('change', pushLevels);
-$('band').addEventListener('change', pushLevels);
+$<HTMLSelectElement>('depth').addEventListener('change', pushLevels);
+$<HTMLSelectElement>('solve').addEventListener('change', pushLevels);
+$<HTMLSelectElement>('band').addEventListener('change', pushLevels);
 
 (async () => {
   render();
   try {
-    setView(await invoke('state'));
+    setView(await api.state());
     await pushLevels();
   } catch (e) {
     setStatus('初期化エラー: ' + e, false);
   }
 })();
-</script>
-</body>
-</html>

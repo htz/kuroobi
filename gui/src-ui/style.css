@@ -1,0 +1,156 @@
+:root {
+    --bg: #16191d; --panel: #1e2329; --card: #252b33; --border: #313943;
+    --text: #e8ebee; --sub: #8b96a2; --accent: #4d9fff; --accent-dim: #2d5f99;
+    --board: #337a52; --board-dark: #235c3c; --line: #1e5136;
+    --gold: #ffd479;
+  }
+  * { box-sizing: border-box; }
+  html, body {
+    margin: 0; height: 100%; overflow: hidden;
+    background: var(--bg); color: var(--text);
+    font-family: -apple-system, BlinkMacSystemFont, "Hiragino Sans", sans-serif;
+    -webkit-user-select: none; user-select: none;
+    -webkit-user-drag: none; cursor: default;
+  }
+  body { display: flex; }
+
+  /* ---- 盤 + グラフ (メイン領域) ---- */
+  #main { flex: 1; display: flex; flex-direction: column; padding: 16px; gap: 12px; min-width: 0; }
+  #board-wrap { flex: 1; display: flex; align-items: center; justify-content: center; min-height: 0; }
+  #board { max-width: 100%; max-height: 100%; filter: drop-shadow(0 8px 28px rgba(0,0,0,.45)); }
+  #graph-card { flex: none; }
+
+  /* ---- サイドパネル ---- */
+  #panel {
+    width: 316px; background: var(--panel); border-left: 1px solid var(--border);
+    padding: 18px 16px; display: flex; flex-direction: column; gap: 14px;
+    overflow-y: auto;
+  }
+  h1 { font-size: 17px; margin: 0; letter-spacing: .14em; font-weight: 700; }
+  h1 small { color: var(--sub); font-weight: 400; letter-spacing: .04em; margin-left: 8px; font-size: 11px; }
+
+  .card {
+    background: var(--card); border: 1px solid var(--border); border-radius: 10px;
+    padding: 12px; display: flex; flex-direction: column; gap: 10px;
+  }
+  label.field { font-size: 11px; color: var(--sub); display: block; margin-bottom: 4px; letter-spacing: .05em; }
+
+  /* ---- スコア ---- */
+  .score { display: flex; align-items: center; justify-content: center; gap: 10px; }
+  .side {
+    flex: 1; display: flex; align-items: center; gap: 8px; justify-content: center;
+    padding: 8px 10px; border-radius: 8px; border: 1px solid transparent;
+    font-size: 20px; font-weight: 700; font-variant-numeric: tabular-nums;
+    transition: border-color .15s, background .15s;
+  }
+  .side.turn { border-color: var(--accent); background: rgba(77,159,255,.08); }
+  .disc { width: 18px; height: 18px; border-radius: 50%; flex: none; }
+  .disc.b { background: #101010; border: 1px solid #2e2e2e; }
+  .disc.w { background: #f1f1f1; border: 1px solid #c8c8c8; }
+  .vs { color: var(--sub); font-size: 12px; }
+  #result { text-align: center; font-size: 13px; color: var(--gold); min-height: 0; }
+  #result:empty { display: none; }
+
+  /* ---- セグメント切替 ---- */
+  .seg { display: flex; background: #1a1f25; border: 1px solid var(--border); border-radius: 8px; padding: 3px; gap: 2px; }
+  .seg button {
+    flex: 1; border: none; background: transparent; color: var(--sub);
+    font-size: 12px; padding: 6px 2px; border-radius: 6px; cursor: pointer;
+    font-family: inherit; transition: background .12s, color .12s;
+  }
+  .seg button:hover { color: var(--text); }
+  .seg button.active { background: var(--accent-dim); color: #fff; }
+
+  /* ---- セレクト (ネイティブ矢印を消してカスタム描画) ---- */
+  .selwrap { position: relative; }
+  select {
+    -webkit-appearance: none; appearance: none;
+    width: 100%; padding: 8px 30px 8px 10px; border-radius: 8px;
+    border: 1px solid var(--border); background: #1a1f25; color: var(--text);
+    font-size: 13px; font-family: inherit; cursor: pointer; outline: none;
+    transition: border-color .12s;
+  }
+  select:hover, select:focus { border-color: var(--accent-dim); }
+  .selwrap::after {
+    content: ""; position: absolute; right: 11px; top: 50%;
+    width: 8px; height: 8px; pointer-events: none;
+    border-right: 1.6px solid var(--sub); border-bottom: 1.6px solid var(--sub);
+    transform: translateY(-70%) rotate(45deg);
+  }
+
+  /* ---- ボタン ---- */
+  button.btn {
+    padding: 9px 10px; border-radius: 8px; border: 1px solid var(--border);
+    background: #2a313a; color: var(--text); font-size: 13px; font-family: inherit;
+    cursor: pointer; transition: background .12s, border-color .12s, transform .05s;
+  }
+  button.btn:hover { border-color: var(--accent-dim); background: #313945; }
+  button.btn:active { transform: translateY(1px); }
+  button.btn:disabled { opacity: .38; cursor: default; transform: none; }
+  button.btn.primary { background: var(--accent-dim); border-color: var(--accent-dim); color: #fff; }
+  button.btn.primary:hover { background: #366fae; }
+  button.btn.small { padding: 4px 10px; font-size: 11px; flex: none; }
+  #graph { width: 100%; height: auto; display: block; filter: none; }
+  .row { display: flex; gap: 8px; }
+  .row > * { flex: 1; }
+
+  /* ---- 情報表示 ---- */
+  #eval { font-size: 13px; min-height: 18px; font-variant-numeric: tabular-nums; }
+  #status { font-size: 12px; color: var(--sub); min-height: 16px; }
+  #status.spin { color: var(--accent); }
+  #status.spin::before {
+    content: ""; display: inline-block; width: 9px; height: 9px; margin-right: 6px;
+    border: 2px solid var(--accent); border-top-color: transparent; border-radius: 50%;
+    animation: rot .8s linear infinite; vertical-align: -1px;
+  }
+  @keyframes rot { to { transform: rotate(360deg); } }
+  #kifu {
+    display: grid; grid-template-columns: repeat(auto-fill, minmax(56px, 1fr));
+    gap: 4px; align-content: flex-start;
+    background: #1a1f25; border: 1px solid var(--border); border-radius: 8px;
+    padding: 8px; min-height: 56px; max-height: 168px; overflow-y: auto;
+  }
+  .mv {
+    display: flex; align-items: baseline; gap: 4px;
+    font-family: ui-monospace, SFMono-Regular, monospace; font-size: 12px;
+    padding: 3px 6px; border-radius: 5px; background: #232932;
+    border: 1px solid transparent; cursor: pointer; color: var(--text);
+    transition: border-color .1s, opacity .1s;
+    font-variant-numeric: tabular-nums;
+  }
+  .mv i {
+    font-style: normal; font-size: 9px; color: var(--sub);
+    width: 16px; text-align: right; flex: none;
+  }
+  .mv .st {
+    width: 9px; height: 9px; border-radius: 50%; flex: none; align-self: center;
+  }
+  .mv .st.b { background: #0d0d0d; box-shadow: inset 0 0 2px #444; }
+  .mv .st.w { background: #ececec; }
+  .mv:hover { border-color: var(--accent-dim); }
+  .mv.future { opacity: .4; }
+  .mv.current { border-color: var(--accent); background: rgba(77,159,255,.12); }
+  .mv.pass { color: var(--sub); }
+  /* エンジンが指した手の由来 */
+  .mv.src-book { box-shadow: inset 2px 0 0 var(--gold); }
+  .mv.src-search { box-shadow: inset 2px 0 0 var(--accent); }
+  .mv.nolink { cursor: default; }
+  .mv.nolink:hover { border-color: transparent; }
+
+  /* ---- 棋譜貼り付けモーダル ---- */
+  #paste-modal {
+    position: fixed; inset: 0; background: rgba(0,0,0,.55);
+    display: flex; align-items: center; justify-content: center; z-index: 10;
+  }
+  #paste-modal[hidden] { display: none; }
+  #paste-modal .box {
+    width: 420px; background: var(--panel); border: 1px solid var(--border);
+    border-radius: 12px; padding: 16px; display: flex; flex-direction: column; gap: 10px;
+  }
+  #paste-modal textarea {
+    height: 110px; resize: none; border-radius: 8px; border: 1px solid var(--border);
+    background: #1a1f25; color: var(--text); padding: 8px 10px;
+    font-family: ui-monospace, SFMono-Regular, monospace; font-size: 12px;
+    outline: none; -webkit-user-select: text; user-select: text; cursor: text;
+  }
+  #paste-modal textarea:focus { border-color: var(--accent-dim); }

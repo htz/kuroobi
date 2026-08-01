@@ -12,3 +12,8 @@
 .ggs_credentials
 /gui/target/
 /gui/gen/
+node_modules/
+# フロント (Vite) のビルド出力。index.html も含めて生成物なので追跡しない。
+# Tauri は frontendDist として ui/ を読むため、アプリを組む前に
+# `npm ci && npm run build` が要る (CI もその順で回している)。
+/gui/ui/
