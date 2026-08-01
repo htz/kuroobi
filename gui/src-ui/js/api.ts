@@ -16,6 +16,12 @@ export const api = {
   play: (sq: number) => call<GameView>('play', { sq }),
   undo: () => call<GameView>('undo'),
   goto: (n: number) => call<GameView>('goto', { n }),
+  setUseBook: (on: boolean) => call<void>('set_use_book', { on }),
+  hasBook: () => call<boolean>('has_book', {}),
+  resourceStatus: () => call<[string, string, boolean][]>('resource_status', {}),
+  pickResource: (kind: string) => call<string | null>('pick_resource', { kind }),
+  setResource: (kind: string, path: string | null) =>
+    call<void>('set_resource', { kind, path }),
   setLevels: (depth: number, solveEmpties: number, band: number) =>
     call('set_levels', { depth, solveEmpties, band }),
   stopSearch: () => call('stop_search'),

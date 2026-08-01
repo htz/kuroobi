@@ -21,6 +21,8 @@ export interface ThinkView {
   value: number;
   exact: boolean;
   from_book: boolean;
+  /** この手に使った時間 (秒)。 */
+  secs: number;
 }
 
 export interface HintView {

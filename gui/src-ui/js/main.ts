@@ -6,6 +6,9 @@ const CELL = 100, PAD = 40;
 let view: GameView | null = null;
 let hints: Record<number, { value: number; exact: boolean }> | null = null;
 let thinking = false;   // エンジンの思考 (think) が進行中
+// 一局を通した思考時間 (秒)。手番ごとに積む。
+const thinkTotal = { black: 0, white: 0 };
+let thinkTimer: number | null = null;
 let playing = false;    // 対局中 (エンジンが自動で応手する状態)
 let appMode: 'vs' | 'study' = 'vs';     // 'vs' = 対局モード, 'study' = 検討モード
 let autoHint = false;
@@ -322,7 +325,7 @@ function renderKifu(): void {
     const src = moveSource[n];
     if (src) cls += ' src-' + src;
     d.className = cls;
-    if (src) d.title = src === 'book' ? '定石 book の手' : 'エンジンの探索による手';
+    if (src) d.title = src === 'book' ? '定石どおりの手' : 'エンジンの探索による手';
     const num = document.createElement('i');
     num.textContent = String(n);
     d.appendChild(num);
@@ -394,10 +397,38 @@ function setStatus(s: string, spin?: boolean): void {
   $('status').className = spin ? 'spin' : '';
 }
 
-function engineSide() {
+const fmtSecs = (v: number): string =>
+  v >= 60 ? `${Math.floor(v / 60)} 分 ${(v % 60).toFixed(0)} 秒` : `${v.toFixed(1)} 秒`;
+
+/// 思考時間の合計を出す。まだ誰も考えていなければ隠す。
+function renderThinkTime(): void {
+  const box = $('think-time');
+  const any = thinkTotal.black > 0 || thinkTotal.white > 0;
+  box.hidden = !any;
+  $('tb').textContent = fmtSecs(thinkTotal.black);
+  $('tw').textContent = fmtSecs(thinkTotal.white);
+}
+
+/// 思考中は経過時間を出し続ける (どれだけ待たされているかが分かる)。
+function startThinkClock(): void {
+  const t0 = performance.now();
+  stopThinkClock();
+  const tick = () => {
+    setStatus(`思考中… ${((performance.now() - t0) / 1000).toFixed(1)} 秒`, true);
+  };
+  tick();
+  thinkTimer = window.setInterval(tick, 100);
+}
+
+function stopThinkClock(): void {
+  if (thinkTimer !== null) { clearInterval(thinkTimer); thinkTimer = null; }
+}
+
+function engineSide(): string[] {
   if (appMode === 'study') return [];   // 検討モードではエンジンは打たない
   const m = document.querySelector<HTMLElement>('#mode button.active')?.dataset.v ?? 'off';
   if (m === 'both') return ['black', 'white'];
+  if (m === 'off') return [];           // 人が両方を打つ
   return [m];
 }
 
@@ -406,22 +437,120 @@ async function pushLevels() {
   await api.setLevels(depth, solve, band).catch(() => {});
 }
 
+/* ---- エンジンが使うファイル ---- */
+const RES_KINDS: [string, string][] = [
+  ['dir', '置き場所 (フォルダ)'],
+  ['weights', '線形評価の重み'],
+  ['nnue', 'NNUE の重み'],
+  ['book', '定石のファイル'],
+];
+
+async function renderFiles(): Promise<void> {
+  const box = $('files-list');
+  box.textContent = '';
+  const st = await api.resourceStatus();
+  // status は weights / nnue / book の 3 つ。フォルダは個別に足す。
+  const byName = new Map(st.map(([n, p, ok]) => [n, { p, ok }]));
+  const label: Record<string, string> = {
+    weights: '線形評価の重み', nnue: 'NNUE の重み', book: '定石のファイル',
+  };
+  for (const [kind, title] of RES_KINDS) {
+    const info = kind === 'dir' ? null : byName.get(label[kind]);
+    const row = document.createElement('div');
+    row.className = 'file-row';
+    const head = document.createElement('div');
+    head.className = 'file-head';
+    head.textContent = title;
+    if (info) {
+      const badge = document.createElement('span');
+      badge.className = 'file-state ' + (info.ok ? 'ok' : 'ng');
+      badge.textContent = info.ok ? '見つかりました' : '見つかりません';
+      head.append(badge);
+    }
+    const path = document.createElement('div');
+    path.className = 'file-path';
+    path.textContent = info ? info.p : '(未指定なら自動で探します)';
+    const btns = document.createElement('div');
+    btns.className = 'row actions';
+    const pick = document.createElement('button');
+    pick.className = 'btn small';
+    pick.textContent = '選ぶ…';
+    pick.onclick = async () => {
+      const p = await api.pickResource(kind);
+      if (!p) return;
+      await api.setResource(kind, p);
+      await renderFiles();
+      await syncBookAvailability();
+      setStatus('使うファイルを変更しました (次の思考から反映)', false);
+    };
+    const clear = document.createElement('button');
+    clear.className = 'btn small ghost';
+    clear.textContent = '既定に戻す';
+    clear.onclick = async () => {
+      await api.setResource(kind, null);
+      await renderFiles();
+      await syncBookAvailability();
+    };
+    btns.append(pick, clear);
+    row.append(head, path, btns);
+    box.append(row);
+  }
+}
+
+$('btn-files').addEventListener('click', async () => {
+  $('files-modal').hidden = false;
+  await renderFiles();
+});
+$('files-close').addEventListener('click', () => { $('files-modal').hidden = true; });
+
+// 定石の on/off。切ると序盤から自力で読む (研究向け)。
+document.querySelectorAll<HTMLElement>('#use-book button').forEach((b) => {
+  b.addEventListener('click', async () => {
+    if (b.classList.contains('disabled')) return;
+    document.querySelectorAll('#use-book button').forEach((x) => x.classList.remove('active'));
+    b.classList.add('active');
+    await api.setUseBook(b.dataset.v === 'on')
+      .catch((e) => setStatus('book 切り替え失敗: ' + e, false));
+    hints = null;
+    refreshHints();
+  });
+});
+
+/// book のファイルが無ければ選べない。設定から選び直せることも伝える。
+async function syncBookAvailability(): Promise<void> {
+  let ok = false;
+  try { ok = await api.hasBook(); } catch { /* エンジン未初期化 */ }
+  const seg = $('use-book');
+  seg.classList.toggle('disabled', !ok);
+  document.querySelectorAll<HTMLElement>('#use-book button').forEach((b) => {
+    b.classList.toggle('disabled', !ok);
+    if (!ok) b.classList.toggle('active', b.dataset.v === 'off');
+  });
+  $('book-note').textContent = ok ? '' : '— ファイルがありません (歯車から指定できます)';
+}
+void syncBookAvailability();
+
 async function maybeEngineTurn() {
   while (playing && view && !view.over && engineSide().includes(view.player)) {
     thinking = true;
-    setStatus('思考中…', true);
+    const side = view.player as 'black' | 'white';
+    startThinkClock();
     render(); updatePanel();
     let r;
     try {
       r = await api.think();
     } catch (e) {
       thinking = false;
+      stopThinkClock();
       // 停止済みで局面が変わっていた場合はエラー扱いにしない
       if (playing) { setStatus('エンジンエラー: ' + e, false); setPlaying(false); }
       render(); updatePanel();
       return;
     }
     thinking = false;
+    stopThinkClock();
+    thinkTotal[side] += r.secs;
+    renderThinkTime();
     if (!playing) {
       // 思考中に停止された: 結果は適用せず捨てる
       setStatus('対局を停止しました', false);
@@ -481,6 +610,9 @@ $<HTMLButtonElement>('btn-new').addEventListener('click', async () => {
   await pushLevels();
   hints = null;
   moveSource = {};
+  thinkTotal.black = 0;
+  thinkTotal.white = 0;
+  renderThinkTime();
   $('eval').textContent = '';
   setPlaying(false);
   setView(await api.newGame());

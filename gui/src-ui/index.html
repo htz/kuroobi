@@ -17,13 +17,28 @@
     </div>
   </div>
   <div id="panel">
-    <h1>KUROOBI</h1>
+    <div class="panel-head">
+      <h1>KUROOBI</h1>
+      <button class="btn icon ghost" id="btn-files" title="設定" aria-label="設定">
+        <svg viewBox="0 0 24 24" width="17" height="17" fill="none" stroke="currentColor"
+             stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+          <circle cx="12" cy="12" r="3"></circle>
+          <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 1 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 1 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06A1.65 1.65 0 0 0 9 4.6a1.65 1.65 0 0 0 1-1.51V3a2 2 0 1 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9c.14.36.4.66.73.86.3.18.65.28 1 .28H21a2 2 0 1 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"></path>
+        </svg>
+      </button>
+    </div>
 
     <div class="card">
       <div class="score">
         <span class="side" id="score-b"><i class="disc b"></i><span id="nb">2</span></span>
         <span class="vs">—</span>
         <span class="side" id="score-w"><span id="nw">2</span><i class="disc w"></i></span>
+      </div>
+      <!-- 一局を通してどちらがどれだけ考えたか -->
+      <div class="think-time" id="think-time" hidden>
+        <span class="side"><i class="disc b"></i><span id="tb">0.0 秒</span></span>
+        <span class="vs">思考時間</span>
+        <span class="side"><span id="tw">0.0 秒</span><i class="disc w"></i></span>
       </div>
       <div id="result"></div>
     </div>
@@ -41,12 +56,20 @@
         <div class="seg" id="mode">
           <button data-v="black">黒</button>
           <button data-v="white" class="active">白</button>
-          <button data-v="both">観戦</button>
+          <button data-v="both" title="エンジン同士で打たせる">両方</button>
+          <button data-v="off" title="人が両方を打つ">なし</button>
         </div>
       </div>
       <div>
         <label class="field">強さ</label>
         <div class="selwrap"><select id="level"></select></div>
+      </div>
+      <div id="book-row">
+        <label class="field">定石 <span class="hint-inline" id="book-note"></span></label>
+        <div class="seg" id="use-book">
+          <button data-v="on" class="active">使う</button>
+          <button data-v="off">使わない</button>
+        </div>
       </div>
       <div class="row" id="custom-row" style="display:none">
         <div>
@@ -58,7 +81,7 @@
           <div class="selwrap"><select id="solve"></select></div>
         </div>
         <div>
-          <label class="field">帯</label>
+          <label class="field">選択読み</label>
           <div class="selwrap"><select id="band"></select></div>
         </div>
       </div>
@@ -103,5 +126,19 @@
     </div>
   </div>
 <script type="module" src="./js/main.ts"></script>
+<div class="modal" id="files-modal" hidden>
+  <div class="card box wide">
+    <h2>設定</h2>
+    <div class="settings-section">
+      <div class="settings-title">エンジンが使うファイル</div>
+      <p class="hint">指定しなければ <code>weights/</code> を上へ辿って探します。
+        個別に選ぶと、そのファイルだけを差し替えます。変更は次の思考から効きます。</p>
+      <div id="files-list"></div>
+    </div>
+    <div class="row actions">
+      <button class="btn ghost" id="files-close">閉じる</button>
+    </div>
+  </div>
+</div>
 </body>
 </html>

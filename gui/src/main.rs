@@ -10,6 +10,7 @@ use std::sync::{Arc, Mutex};
 use serde::Serialize;
 use tauri::State;
 
+use kuroobi::resources::Resources;
 use kuroobi::engine::{Engine, EngineConfig};
 use kuroobi::game::Reversi;
 use kuroobi::{Board, Color, Position};
@@ -69,6 +70,8 @@ struct ThinkView {
     exact: bool,
     /// 定石 book から返した手か。
     from_book: bool,
+    /// この手に使った時間 (秒)。定石から返した手はほぼ 0。
+    secs: f32,
 }
 
 #[derive(Serialize)]
@@ -144,28 +147,37 @@ fn auto_pass(game: &mut Reversi) {
     }
 }
 
-fn weights_dir() -> PathBuf {
-    if let Ok(d) = std::env::var("KUROOBI_WEIGHTS_DIR") {
-        return PathBuf::from(d);
+/// 設定ファイルの場所。OS の設定ディレクトリに置く (配布時はここしかない)。
+fn resources_path() -> PathBuf {
+    let base = dirs_config()
+        .unwrap_or_else(|| PathBuf::from(concat!(env!("CARGO_MANIFEST_DIR"), "/..")));
+    base.join("kuroobi").join("resources.conf")
+}
+
+/// $XDG_CONFIG_HOME / ~/Library/Application Support / %APPDATA%。
+fn dirs_config() -> Option<PathBuf> {
+    if let Ok(d) = std::env::var("XDG_CONFIG_HOME") {
+        return Some(PathBuf::from(d));
     }
-    // 開発時はワークスペースルートで cargo run するのでカレント直下、
-    // それ以外はリポジトリ相対を順に試す。
-    for c in ["weights", "../weights", "../../weights"] {
-        let p = PathBuf::from(c);
-        if p.join("nnue_champion.bin").exists() {
-            return p;
-        }
-    }
-    PathBuf::from(concat!(env!("CARGO_MANIFEST_DIR"), "/../weights"))
+    let home = std::env::var("HOME").ok()?;
+    #[cfg(target_os = "macos")]
+    return Some(PathBuf::from(home).join("Library/Application Support"));
+    #[cfg(not(target_os = "macos"))]
+    return Some(PathBuf::from(home).join(".config"));
+}
+
+fn resources() -> Resources {
+    Resources::load(&resources_path())
 }
 
 fn ensure_engine(app: &State<App>) -> Result<(), String> {
     let mut guard = app.engine.lock().unwrap();
     if guard.is_none() {
-        let dir = weights_dir();
+        let res = resources();
         let cfg = EngineConfig {
-            weights: dir.join("weights_full.bin"),
-            nnue: dir.join("nnue_champion.bin"),
+            weights: res.weights_path(),
+            nnue: res.nnue_path(),
+            book: res.book_path(),
             threads: std::thread::available_parallelism()
                 .map(|n| (n.get() / 2).max(1))
                 .unwrap_or(4),
@@ -238,6 +250,75 @@ fn stop_search(app: State<App>) -> Result<(), String> {
     Ok(())
 }
 
+/// 定石 book を使うかどうか。研究中は切って自力の手を見たいことがある。
+#[tauri::command]
+fn set_use_book(app: State<App>, on: bool) -> Result<(), String> {
+    ensure_engine(&app)?;
+    app.engine
+        .lock()
+        .unwrap()
+        .as_mut()
+        .ok_or("engine")?
+        .set_use_book(on);
+    Ok(())
+}
+
+/// book を使えるか (画面の表示に使う)。エンジンの初期化は重いので、
+/// ファイルの有無だけで答える。
+#[tauri::command]
+fn has_book() -> bool {
+    resources().book_path().exists()
+}
+
+/// 使うファイルの一覧 (名前・パス・見つかったか)。
+#[tauri::command]
+fn resource_status() -> Vec<(String, String, bool)> {
+    resources()
+        .status()
+        .into_iter()
+        .map(|(n, p, ok)| (n.to_string(), p.display().to_string(), ok))
+        .collect()
+}
+
+/// ファイル選択ダイアログを開く。`kind` に応じて絞り込む。
+#[tauri::command]
+async fn pick_resource(handle: tauri::AppHandle, kind: String) -> Result<Option<String>, String> {
+    use tauri_plugin_dialog::DialogExt;
+    let d = handle.dialog().file();
+    let picked = match kind.as_str() {
+        "dir" => d.blocking_pick_folder().map(|p| p.to_string()),
+        "book" => d
+            .add_filter("定石 book", &["txt"])
+            .blocking_pick_file()
+            .map(|p| p.to_string()),
+        _ => d
+            .add_filter("重み", &["bin"])
+            .blocking_pick_file()
+            .map(|p| p.to_string()),
+    };
+    Ok(picked)
+}
+
+/// 使うファイルを選び直す。`kind` は "dir" | "weights" | "nnue" | "book"。
+/// path が null なら指定を外して既定に戻す。エンジンは次回の思考で作り直す。
+#[tauri::command]
+fn set_resource(app: State<App>, kind: String, path: Option<String>) -> Result<(), String> {
+    let mut r = resources();
+    let p = path.map(PathBuf::from);
+    match kind.as_str() {
+        "dir" => r.dir = p,
+        "weights" => r.weights = p,
+        "nnue" => r.nnue = p,
+        "book" => r.book = p,
+        other => return Err(format!("unknown resource: {other}")),
+    }
+    r.save(&resources_path())?;
+    // 読み直しは次のエンジン生成から。今のエンジンは捨てる。
+    *app.engine.lock().unwrap() = None;
+    *app.stop.lock().unwrap() = None;
+    Ok(())
+}
+
 #[tauri::command]
 fn set_levels(app: State<App>, depth: u32, solve_empties: u8, band: u8) -> Result<(), String> {
     ensure_engine(&app)?;
@@ -257,9 +338,11 @@ async fn think(app: State<'_, App>) -> Result<ThinkView, String> {
     ensure_engine(&app)?;
     let board = app.game.lock().unwrap().board;
     let eng = app.engine.clone();
-    let mv = tauri::async_runtime::spawn_blocking(move || {
+    let (mv, secs) = tauri::async_runtime::spawn_blocking(move || {
         let mut guard = eng.lock().unwrap();
-        guard.as_mut().unwrap().choose(&board)
+        let t0 = std::time::Instant::now();
+        let mv = guard.as_mut().unwrap().choose(&board);
+        (mv, t0.elapsed().as_secs_f32())
     })
     .await
     .map_err(|e| e.to_string())?;
@@ -272,6 +355,7 @@ async fn think(app: State<'_, App>) -> Result<ThinkView, String> {
         value: finite(mv.value),
         exact: mv.exact,
         from_book: mv.from_book,
+        secs,
     })
 }
 
@@ -578,6 +662,11 @@ fn main() {
             undo,
             goto,
             set_levels,
+            set_use_book,
+            has_book,
+            resource_status,
+            pick_resource,
+            set_resource,
             stop_search,
             think,
             apply_move,
