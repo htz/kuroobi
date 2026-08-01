@@ -263,6 +263,14 @@ fn set_use_book(app: State<App>, on: bool) -> Result<(), String> {
     Ok(())
 }
 
+/// 動作確認用: 起動直後に自動で始めたいこと (KUROOBI_AUTOPLAY)。
+/// 空なら何もしない。"vs" で対局、"both" でエンジン同士。":<レベル番号>"
+/// を付けると強さも指定できる (例: "both:11")。
+#[tauri::command]
+fn autoplay() -> String {
+    std::env::var("KUROOBI_AUTOPLAY").unwrap_or_default()
+}
+
 /// book を使えるか (画面の表示に使う)。エンジンの初期化は重いので、
 /// ファイルの有無だけで答える。
 #[tauri::command]
@@ -664,6 +672,7 @@ fn main() {
             set_levels,
             set_use_book,
             has_book,
+            autoplay,
             resource_status,
             pick_resource,
             set_resource,

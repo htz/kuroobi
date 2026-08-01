@@ -18,6 +18,7 @@ export const api = {
   goto: (n: number) => call<GameView>('goto', { n }),
   setUseBook: (on: boolean) => call<void>('set_use_book', { on }),
   hasBook: () => call<boolean>('has_book', {}),
+  autoplay: () => call<string>('autoplay', {}),
   resourceStatus: () => call<[string, string, boolean][]>('resource_status', {}),
   pickResource: (kind: string) => call<string | null>('pick_resource', { kind }),
   setResource: (kind: string, path: string | null) =>

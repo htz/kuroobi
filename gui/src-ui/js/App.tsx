@@ -44,14 +44,32 @@ export function App() {
 
   const isGgs = view.startsWith('ggs-');
 
+  // 動作確認用: KUROOBI_AUTOPLAY=both:11 のように指定すると自動で対局を始める
+  const started = useRef(false);
+  const { setPlaying: begin, setSide, setLevel } = g;
+  useEffect(() => {
+    if (started.current) return;
+    started.current = true;
+    void api.autoplay().then((v) => {
+      if (!v) return;
+      const [who, lv] = v.split(':');
+      if (who === 'both') setSide('both');
+      if (lv !== undefined && Number.isFinite(+lv)) setLevel(+lv);
+      begin(true);
+    }).catch(() => {});
+  }, [begin, setSide, setLevel]);
+
   // ---- エンジンの手番 ----
   // 局面が「エンジンが打つ番」になったら 1 度だけ走る。二重起動を
   // 防ぐため、走っている間は ref で塞ぐ。
   const turnRef = useRef(false);
   const { playing, view: gv, engineSides, setThinking, setThinkSecs, setThinkTotal,
-          setMoveSource, setView: applyView, setPlaying, say } = g;
+          setMoveSource, setView: applyView, setPlaying, say, setLastEval } = g;
   useEffect(() => {
-    if (!playing || !gv || gv.over || turnRef.current) return;
+    if (!playing || !gv) return;
+    // 終局したら自分で止まる (停止を押させない)
+    if (gv.over) { setPlaying(false); return; }
+    if (turnRef.current) return;
     if (!engineSides().includes(gv.player)) return;
 
     turnRef.current = true;
@@ -59,7 +77,7 @@ export function App() {
     const t0 = performance.now();
     setThinking(true);
     const timer = window.setInterval(
-      () => setThinkSecs((performance.now() - t0) / 1000), 100);
+      () => setThinkSecs((performance.now() - t0) / 1000), 50);
 
     void (async () => {
       try {
@@ -69,6 +87,12 @@ export function App() {
         // 何手目の手だったかを記録する (棋譜に出所を出すため)
         setMoveSource((m) => ({ ...m, [next.cursor]: r.from_book ? 'book' : 'search' }));
         applyView(next);
+        // どのくらい良いと見て指したかを残す
+        setLastEval(Number.isFinite(r.value)
+          ? `エンジン評価: ${r.value > 0 ? '+' : ''}${
+              r.exact ? r.value.toFixed(0) : r.value.toFixed(1)} 石`
+            + (r.exact ? ' (完全読み)' : (r.from_book ? ' (定石)' : ''))
+          : '');
         say(r.pos === null ? 'パス' : '');
       } catch (e) {
         say('' + e);
@@ -83,7 +107,7 @@ export function App() {
 
     return () => clearInterval(timer);
   }, [playing, gv, engineSides, setThinking, setThinkSecs, setThinkTotal,
-      setMoveSource, applyView, setPlaying, say]);
+      setMoveSource, applyView, setPlaying, say, setLastEval]);
 
   const updateGraph = useCallback(async () => {
     const v = g.view;
@@ -118,6 +142,7 @@ export function App() {
     try {
       g.setMoveSource({});
       g.setThinkTotal({ black: 0, white: 0 });
+      g.setLastEval('');
       g.setPlaying(false);
       g.setView(await api.loadKifuText(text));
       setPaste(false);

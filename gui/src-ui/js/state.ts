@@ -50,6 +50,8 @@ export function useGame() {
   const [moveSource, setMoveSource] = useState<Record<number, MoveSource>>({});
   const [status, setStatus] = useState('');
   const [spin, setSpin] = useState(false);
+  // エンジンが直前に指した手の評価 (「エンジン評価: +2.5 石」と出す)
+  const [lastEval, setLastEval] = useState('');
 
   // 解析結果は返ってきた時点で局面が進んでいることがある。世代で捨てる。
   const hintSeq = useRef(0);
@@ -116,16 +118,19 @@ export function useGame() {
   // ---- 人が打つ ----
   const play = useCallback(async (sq: number) => {
     if (thinking) return;
+    // 対局中にエンジンが受け持つ手番なら、人は打てない
+    if (playing && view && engineSides().includes(view.player)) return;
     try {
       apply(await api.play(sq));
     } catch (e) { say('' + e); }
-  }, [thinking, apply, say]);
+  }, [thinking, playing, view, engineSides, apply, say]);
 
   const newGame = useCallback(async () => {
     hintSeq.current++;
     await pushLevels();
     setMoveSource({});
     setThinkTotal({ black: 0, white: 0 });
+    setLastEval('');
     setPlaying(false);
     apply(await api.newGame());
     say('「▶ 対局開始」で対局、そのまま打てば検討モード');
@@ -164,6 +169,7 @@ export function useGame() {
     thinkTotal, setThinkTotal,
     moveSource, setMoveSource,
     status, spin, say,
+    lastEval, setLastEval,
     engineSides, pushLevels, refreshHints,
     play, newGame, undo, jumpTo, stop,
     hintSeq,

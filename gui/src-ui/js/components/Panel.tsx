@@ -48,7 +48,7 @@ export function Panel({ g, onStart, onSave, onLoad }: PanelProps) {
         {anyThink && (
           <div className="think-time">
             <span className="side"><i className="disc b" />{fmtSecs(g.thinkTotal.black)}</span>
-            <span className="vs">思考時間</span>
+            <span className="vs">思考時間の合計</span>
             <span className="side">{fmtSecs(g.thinkTotal.white)}<i className="disc w" /></span>
           </div>
         )}
@@ -156,7 +156,10 @@ export function Panel({ g, onStart, onSave, onLoad }: PanelProps) {
                onChange={(x) => g.setAutoHint(x === 'on')}
                options={[['off', 'オフ'], ['on', 'オン']]} />
         </div>
-        <div id="status" className={g.spin ? 'spin' : ''}>{g.status}</div>
+        {g.lastEval && <div id="eval">{g.lastEval}</div>}
+        <div id="status" className={g.thinking || g.spin ? 'spin' : ''}>
+          {g.thinking ? `思考中… ${g.thinkSecs.toFixed(1)} 秒` : g.status}
+        </div>
       </div>
 
       <div>
