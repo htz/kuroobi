@@ -6,7 +6,7 @@
   "scripts": {
     "dev": "vite",
     "build": "tsc --noEmit && vite build",
-    "check": "tsc --noEmit"
+    "check": "test -z \"$(ls src-ui/js/*.js 2>/dev/null)\" && tsc --noEmit || (echo 'src-ui/js に .js が残っています (TypeScript 化前の残骸)。Vite はそちらを読むので消してください。' && exit 1)"
   },
   "devDependencies": {
     "typescript": "^5.7.0",
