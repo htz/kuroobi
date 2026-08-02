@@ -761,14 +761,16 @@ fn read_credentials() -> Option<(String, String)> {
     None
 }
 
-/// 保存済みの認証情報。キーチェーンが空なら旧ファイルから一度だけ
-/// 取り込む (次からはキーチェーンで完結する)。
+/// 保存済みの認証情報。キーチェーンに項目が全く無い初回だけ旧ファイル
+/// から取り込む (次からはキーチェーンで完結する)。ログアウト済み
+/// (墓標あり) のときは取り込まない — 復活してしまうため。
 fn saved_credentials() -> Option<(String, String)> {
-    keychain::load().or_else(|| {
-        let (l, p) = read_credentials()?;
-        keychain::save(&l, &p);
-        Some((l, p))
-    })
+    if keychain::exists() {
+        return keychain::load();
+    }
+    let (l, p) = read_credentials()?;
+    keychain::save(&l, &p);
+    Some((l, p))
 }
 
 #[tauri::command]
@@ -801,8 +803,12 @@ fn js_log(msg: String) {
     }
 }
 
+/// ログアウト。切断に加えて保存済みの認証情報も忘れる (この手のアプリの
+/// 通例に合わせる: アプリを閉じただけならログイン状態が続き、明示的な
+/// ログアウトで次回の自動ログインも止まる)。
 #[tauri::command]
 fn ggs_disconnect(app: State<App>) -> Result<(), String> {
+    keychain::forget();
     ggs_tx(&app)?
         .send(ggs::Cmd::Disconnect)
         .map_err(|e| e.to_string())
