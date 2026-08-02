@@ -88,11 +88,12 @@ function CpuStatus({ cpu }: { cpu?: ActivityView | null }) {
   if (cpu.learn) {
     rows.push(`学習 ${cpu.learn[0]}/${cpu.learn[1]}${cpu.learn_paused ? ' 譲り中' : ''}`);
   }
+  // 常に実数を出す。「待機」と書くと 0% に見えるが、画面が動いている
+  // 限り 0 にはならない。低い値が 0% に丸まらないよう、10% 未満は小数第 1 位まで
+  const pct = cpu.cpu < 10 ? cpu.cpu.toFixed(1) : Math.round(cpu.cpu);
   return (
     <div className="cpu-status">
-      <div className="cpu-head">
-        CPU {cpu.cpu >= 0.5 ? `${Math.round(cpu.cpu)}%` : '待機'}
-      </div>
+      <div className="cpu-head">CPU {pct}%</div>
       {rows.map((r) => <div key={r} className="cpu-row">{r}</div>)}
     </div>
   );
