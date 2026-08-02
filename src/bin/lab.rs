@@ -21,7 +21,7 @@
 //!   lab --edax <path-to-edax-binary> [OPTIONS]
 //!
 //! Options:
-//!   --weights <path>     Our weight file (default weights/weights_full.bin)
+//!   --weights <path>     Our weight file (default weights/linear.bin)
 //!   --patterns <set>     egaroucid | edax | egaroucid-plus (default egaroucid)
 //!   --depth <n>          Our midgame depth (default 6)
 //!   --solve-empties <n>  Our exact-endgame threshold (default 14)
@@ -96,7 +96,7 @@ struct Args {
 fn parse_args() -> Result<Args, String> {
     let mut args = Args {
         edax_path: PathBuf::new(),
-        weights: PathBuf::from("weights/weights_full.bin"),
+        weights: PathBuf::from("weights/linear.bin"),
         nnue: None,
         patterns: "egaroucid",
         depth: 6,

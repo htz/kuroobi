@@ -25,14 +25,14 @@ pub struct Resources {
 /// 既定の置き場所を探す。
 ///
 /// `KUROOBI_WEIGHTS_DIR` があればそれ、無ければカレントから上へ `weights/`
-/// を辿る。`nnue_champion.bin` の有無で判定する (重みが揃っている印)。
+/// を辿る。`nnue-h16.bin` の有無で判定する (重みが揃っている印)。
 pub fn default_dir() -> PathBuf {
     if let Ok(d) = std::env::var("KUROOBI_WEIGHTS_DIR") {
         return PathBuf::from(d);
     }
     for c in ["weights", "../weights", "../../weights"] {
         let p = PathBuf::from(c);
-        if p.join("nnue_champion.bin").exists() {
+        if p.join("nnue-h16.bin").exists() {
             return p;
         }
     }
@@ -95,13 +95,13 @@ impl Resources {
     pub fn weights_path(&self) -> PathBuf {
         self.weights
             .clone()
-            .unwrap_or_else(|| self.dir().join("weights_full.bin"))
+            .unwrap_or_else(|| self.dir().join("linear.bin"))
     }
 
     pub fn nnue_path(&self) -> PathBuf {
         self.nnue
             .clone()
-            .unwrap_or_else(|| self.dir().join("nnue_champion.bin"))
+            .unwrap_or_else(|| self.dir().join("nnue-h16.bin"))
     }
 
     pub fn book_path(&self) -> PathBuf {
@@ -137,7 +137,7 @@ mod tests {
             dir: Some(PathBuf::from("/tmp/w")),
             ..Default::default()
         };
-        assert_eq!(r.nnue_path(), PathBuf::from("/tmp/w/nnue_champion.bin"));
+        assert_eq!(r.nnue_path(), PathBuf::from("/tmp/w/nnue-h16.bin"));
         assert_eq!(r.book_path(), PathBuf::from("/tmp/w/book.txt"));
     }
 
@@ -150,7 +150,7 @@ mod tests {
         };
         assert_eq!(r.book_path(), PathBuf::from("/other/opening.txt"));
         // 指定のないものは起点から引く
-        assert_eq!(r.weights_path(), PathBuf::from("/tmp/w/weights_full.bin"));
+        assert_eq!(r.weights_path(), PathBuf::from("/tmp/w/linear.bin"));
     }
 
     #[test]

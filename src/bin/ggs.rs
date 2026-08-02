@@ -56,8 +56,8 @@ fn parse_args() -> Result<Args, String> {
         band: 0,
         mpc: true,
         threads: 8,
-        weights: PathBuf::from("weights/weights_full.bin"),
-        nnue: PathBuf::from("weights/nnue_champion.bin"),
+        weights: PathBuf::from("weights/linear.bin"),
+        nnue: PathBuf::from("weights/nnue-h16.bin"),
         solver_hash: 22,
     };
     let mut it = std::env::args().skip(1);

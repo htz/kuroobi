@@ -7,7 +7,7 @@ use std::time::Instant;
 
 fn main() {
     let mut ev = Evaluator::new(EGAROUCID_PATTERNS);
-    ev.load_weights(std::path::Path::new("weights/weights_full.bin"))
+    ev.load_weights(std::path::Path::new("weights/linear.bin"))
         .expect("weights");
     let depth: u8 = std::env::args()
         .nth(1)

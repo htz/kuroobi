@@ -27,7 +27,7 @@ fn main() -> ExitCode {
     let mut threads: usize = 1;
     let mut mpc_t: Option<f32> = None;
     let mut weights: Option<PathBuf> = None;
-    let mut nnue_path: Option<PathBuf> = Some(PathBuf::from("weights/nnue_champion.bin"));
+    let mut nnue_path: Option<PathBuf> = Some(PathBuf::from("weights/nnue-h16.bin"));
     let mut files: Vec<PathBuf> = Vec::new();
 
     let mut grand_time = 0.0f64;
@@ -54,7 +54,7 @@ fn main() -> ExitCode {
     // Weights serve the midgame search directly and the endgame solver's
     // eval-based move ordering.
     let mut evaluator = Evaluator::new(EGAROUCID_PATTERNS);
-    let wpath = weights.unwrap_or_else(|| PathBuf::from("weights/weights_full.bin"));
+    let wpath = weights.unwrap_or_else(|| PathBuf::from("weights/linear.bin"));
     if let Err(e) = evaluator.load_weights(&wpath) {
         eprintln!("failed to load {}: {e}", wpath.display());
         return ExitCode::FAILURE;

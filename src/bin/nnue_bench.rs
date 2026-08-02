@@ -174,7 +174,7 @@ fn walk_scratch(
 }
 
 fn main() {
-    let mut nnue_path = PathBuf::from("weights/nnue_champion.bin");
+    let mut nnue_path = PathBuf::from("weights/nnue-h16.bin");
     let mut depth = 8u32;
     let mut val_files: Vec<PathBuf> = Vec::new();
     let mut it = std::env::args().skip(1);
@@ -219,7 +219,7 @@ fn main() {
         return;
     }
     let mut lin = Evaluator::new(EGAROUCID_PATTERNS);
-    lin.load_weights(std::path::Path::new("weights/weights_full.bin"))
+    lin.load_weights(std::path::Path::new("weights/linear.bin"))
         .expect("load linear");
 
     // A mid-game start position (a few plies in).
