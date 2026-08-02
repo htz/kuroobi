@@ -40,6 +40,21 @@ impl Entry {
     pub fn best(&self) -> Option<&Candidate> {
         self.moves.first()
     }
+
+    /// 候補 `mv` (正規化空間の手) の値を付け替える。無ければ追加する。
+    /// 値の降順を保つので、付け替えで最善が入れ替わることがある
+    /// (実戦の帰結を書き戻す学習がこれを使う)。
+    pub fn update_move(&mut self, mv: Position, value: f32) {
+        match self.moves.iter_mut().find(|c| c.mv == mv) {
+            Some(c) => c.value = value,
+            None => self.moves.push(Candidate {
+                mv,
+                value,
+                games: 0,
+            }),
+        }
+        self.moves.sort_by(|a, b| b.value.total_cmp(&a.value));
+    }
 }
 
 /// 盤面の 8 対称のうち辞書順で最小のものを正規化形とし、その変換 index を
@@ -130,6 +145,11 @@ impl Book {
     /// 正規化キーで直接引く (生成ツール用)。
     pub fn get_raw(&self, key: (u64, u64)) -> Option<&Entry> {
         self.map.get(&key)
+    }
+
+    /// 正規化キーで直接引く (学習の書き戻し用)。
+    pub fn get_raw_mut(&mut self, key: (u64, u64)) -> Option<&mut Entry> {
+        self.map.get_mut(&key)
     }
 
     pub fn insert_raw(&mut self, key: (u64, u64), e: Entry) {

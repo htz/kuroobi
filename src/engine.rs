@@ -75,7 +75,7 @@ impl Default for EngineConfig {
 }
 
 /// 1 手の判断結果。`value` は手番視点の石差 (exact なら厳密値)。
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Copy, Debug, Default)]
 pub struct MoveEval {
     pub pos: Option<Position>,
     pub value: f32,
@@ -83,6 +83,8 @@ pub struct MoveEval {
     pub exact: bool,
     /// 定石 book から返した手かどうか。
     pub from_book: bool,
+    /// 実戦から学習した局面の定石から返した手か (表示用)。
+    pub learned: bool,
 }
 
 /// 探索一式を束ねたセッション。生成コストが高い (重み読み込み +
@@ -96,6 +98,11 @@ pub struct Engine {
     book: Option<Book>,
     /// book の乱択用の乱数状態 (起動ごとに変わる)。
     book_rand: u64,
+    /// 実戦から取り込んだ学習分 (保存対象)。`book` には起動時と
+    /// 取り込み時に重ねてあり、選択は `book` 側で行う。
+    learned: Book,
+    /// 学習分の保存先 (book と同じディレクトリの book_learn.txt)。
+    learn_path: std::path::PathBuf,
 }
 
 impl Engine {
@@ -126,10 +133,20 @@ impl Engine {
         // 実戦の思考時間を序盤で使わずに済む。
         // 読み込みは常に試みる。`use_book` は参照するかどうかの切り替えで、
         // 対局中に切っても読み直しが要らないようにしてある。
-        let book = match Book::load(&config.book) {
+        let mut book = match Book::load(&config.book) {
             Ok(b) if !b.is_empty() => Some(b),
             _ => None,
         };
+        // 実戦から取り込んだ学習分 (learn.rs) を定石へ重ねる。学習分だけ
+        // でも定石として機能する (定石ファイルが無い環境でも実戦で通った
+        // 局面から「経験の定石」が育つ)。別ファイルなので bookgen が
+        // 定石本体を回している間も衝突しない。
+        let learn_path = config.book.with_file_name("book_learn.txt");
+        let learned = Book::load(&learn_path).unwrap_or_default();
+        if !learned.is_empty() {
+            let base = book.get_or_insert_with(Book::new);
+            crate::learn::merge_learned(base, &learned);
+        }
         let book_rand = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
             .map(|d| d.as_nanos() as u64)
@@ -143,6 +160,8 @@ impl Engine {
             stop,
             book,
             book_rand,
+            learned,
+            learn_path,
         })
     }
 
@@ -153,6 +172,11 @@ impl Engine {
     /// 読み込んだ book の局面数 (0 = book なし)。
     pub fn book_size(&self) -> usize {
         self.book.as_ref().map_or(0, |b| b.len())
+    }
+
+    /// 実戦から取り込んだ学習分の局面数。
+    pub fn learned_size(&self) -> usize {
+        self.learned.len()
     }
 
     /// 進行中の探索を中断させるためのハンドル (別スレッドから使う)。
@@ -181,6 +205,10 @@ impl Engine {
 
     /// 対局と同じ選択則で着手を決める。合法手がなければ `pos: None`
     /// (パス)。値は手番視点の石差。
+    ///
+    /// 定石には実戦から学習した局面 (learn.rs) も重ねてあり、選択は
+    /// どちらも同じ乱択 (`probe_varied`) に乗る。負けた帰結で値が下がった
+    /// 手は自然に選ばれなくなる — 回避のための特別な判定は持たない。
     pub fn choose(&mut self, board: &Board) -> MoveEval {
         self.stop.reset();
         // 定石 book: 実戦より深い探索で付けた答えなので、あれば即返す
@@ -196,11 +224,14 @@ impl Engine {
                 book.probe(board)
             };
             if let Some((pos, value, _depth)) = hit {
+                // 実戦から学習した局面か (画面の表示用)
+                let learned = self.learned.get_raw(Book::key(board).0).is_some();
                 return MoveEval {
                     pos: Some(pos),
                     value,
                     exact: false,
                     from_book: true,
+                    learned,
                 };
             }
         }
@@ -213,6 +244,7 @@ impl Engine {
                 value: final_score(board) as f32,
                 exact: true,
                 from_book: false,
+                learned: false,
             };
         }
         if board.empty_count() <= c.solve_empties {
@@ -224,6 +256,7 @@ impl Engine {
                 value: r.value as f32,
                 exact: true,
                 from_book: false,
+                learned: false,
             }
         } else if let Some(t) = selective_band(board.empty_count(), c.solve_empties, c.band) {
             let r = self.solver.solve_selective(board, Some(&self.evaluator), t);
@@ -232,6 +265,7 @@ impl Engine {
                 value: r.value as f32,
                 exact: false,
                 from_book: false,
+                learned: false,
             }
         } else {
             let (pos, value) = self.search.best_move_valued(board, c.depth);
@@ -240,20 +274,80 @@ impl Engine {
                 value,
                 exact: false,
                 from_book: false,
+                learned: false,
             }
         }
+    }
+
+    /// 対局の取り込み (learn.rs) を用意する。実行は `learn_step` で
+    /// 1 探索ずつ進める。
+    pub fn learn_start(
+        &self,
+        start: Option<&str>,
+        kifu: &str,
+        learn_depth: u32,
+    ) -> Result<crate::learn::BackupJob, String> {
+        crate::learn::BackupJob::new(start, kifu, learn_depth.min(u8::MAX as u32) as u8)
+    }
+
+    /// 対局の取り込みを 1 探索ぶんだけ進める。完了したら結果を返し、
+    /// 学習分をファイルへ保存する。
+    ///
+    /// 1 回の呼び出しは高々 1 回の評価 (代替手の子局面 1 つ、または
+    /// 終局していない棋譜の終端) しかしないので、対局の合間に呼んでも
+    /// 応答性を壊さない。`learn_depth` は評価の深さ (実戦より浅い速報値。
+    /// 完全読みの開始も一時的に絞る)。
+    pub fn learn_step(
+        &mut self,
+        job: &mut crate::learn::BackupJob,
+        learn_depth: u32,
+    ) -> Result<Option<crate::learn::BackupOutcome>, String> {
+        use crate::learn::JobStep;
+        self.stop.reset();
+        // learned/book を外してジョブに渡す (self は探索にだけ使う)
+        let mut base = self.book.take().unwrap_or_default();
+        let mut learned = std::mem::take(&mut self.learned);
+        let done = match job.next(&mut learned, &mut base) {
+            JobStep::Search(b) => {
+                // 学習は局面ごとに合法手の数だけ評価するので、完全読みの
+                // 開始を一時的に絞ってコストを抑える (速報値でよい)
+                let saved_solve = self.config.solve_empties;
+                self.config.solve_empties = saved_solve.min(20);
+                let v = self.eval_position_inner(&b, learn_depth);
+                self.config.solve_empties = saved_solve;
+                job.feed(v.value);
+                None
+            }
+            JobStep::Done(out) => Some(out),
+        };
+        let save = if done.is_some() {
+            learned.save(&self.learn_path)
+        } else {
+            Ok(())
+        };
+        self.book = (!base.is_empty()).then_some(base);
+        self.learned = learned;
+        save.map_err(|e| format!("学習の保存 {}: {e}", self.learn_path.display()))?;
+        Ok(done)
     }
 
     /// 局面を指定深さで評価する (評価値グラフ・検討用)。完全読み域は厳密値。
     /// 値は手番視点。
     pub fn eval_position(&mut self, board: &Board, depth: u32) -> MoveEval {
         self.stop.reset();
+        self.eval_position_inner(board, depth)
+    }
+
+    /// `eval_position` の本体。停止ハンドルをリセットしないので、外から
+    /// 止められる長い処理 (学習の書き戻し) が繰り返し呼べる。
+    fn eval_position_inner(&mut self, board: &Board, depth: u32) -> MoveEval {
         if is_game_over(board) {
             return MoveEval {
                 pos: None,
                 value: final_score(board) as f32,
                 exact: true,
                 from_book: false,
+                learned: false,
             };
         }
         if board.empty_count() <= self.config.solve_empties {
@@ -265,6 +359,7 @@ impl Engine {
                 value: r.value as f32,
                 exact: true,
                 from_book: false,
+                learned: false,
             }
         } else {
             let (pos, value) = self.search.best_move_valued(board, depth);
@@ -273,6 +368,7 @@ impl Engine {
                 value,
                 exact: false,
                 from_book: false,
+                learned: false,
             }
         }
     }
@@ -301,6 +397,7 @@ impl Engine {
                     value: -(final_score(&child) as f32),
                     exact: true,
                     from_book: false,
+                    learned: false,
                 }
             } else if child.empty_count() <= self.config.solve_empties {
                 let r = self.solver.solve_with_eval(
@@ -313,6 +410,7 @@ impl Engine {
                     value: -(r.value as f32),
                     exact: true,
                     from_book: false,
+                    learned: false,
                 }
             } else {
                 self.search.clear();
@@ -323,6 +421,7 @@ impl Engine {
                     value: -v,
                     exact: false,
                     from_book: false,
+                    learned: false,
                 }
             };
             out.push((pos, ev));

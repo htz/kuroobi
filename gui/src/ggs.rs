@@ -625,6 +625,11 @@ fn parse_clock(s: &str) -> (Option<u64>, Option<u64>, Option<u64>) {
     (out[0], out[1], out[2])
 }
 
+/// 学習 (実戦の取り込み) の評価深さ。「実戦手以外の合法手の最善」を
+/// 局面ごとに測るので、実戦 (22) より浅い速報値にしてある。1 回の
+/// 呼び出しは 1 評価だけなので、対局の合間に回しても応答を壊さない。
+const LEARN_DEPTH: u32 = 16;
+
 fn base_id(id: &str) -> String {
     // ".82726.1" → ".82726"、それ以外はそのまま
     let parts: Vec<&str> = id.split('.').collect();
@@ -667,6 +672,8 @@ struct Ctx {
     dirty: bool,
     /// 検証用の自動観戦キュー (KUROOBI_GGS_AUTOWATCH=auto)。
     auto_watch: Vec<String>,
+    /// 終わった対局の取り込み (学習) の残り。対局の合間に 1 探索ずつ進める。
+    learn_jobs: VecDeque<(String, kuroobi::learn::BackupJob)>,
 }
 
 impl Ctx {
@@ -816,6 +823,7 @@ pub fn run(app: tauri::AppHandle, rx: Receiver<Cmd>, snap: Arc<Mutex<Snapshot>>)
         last_emit: Instant::now(),
         dirty: true,
         auto_watch: Vec::new(),
+        learn_jobs: VecDeque::new(),
     };
     ctx.snap.lock().unwrap().engine = EngineCfgView {
         depth: 22,
@@ -865,7 +873,10 @@ pub fn run(app: tauri::AppHandle, rx: Receiver<Cmd>, snap: Arc<Mutex<Snapshot>>)
                 }
                 Ok(Cmd::Rank { .. }) | Ok(Cmd::ListMatches) => {} // 未接続時は無視
                 Ok(_) => {}
-                Err(mpsc::RecvTimeoutError::Timeout) => {}
+                Err(mpsc::RecvTimeoutError::Timeout) => {
+                    // 未接続の待ち時間も学習 (実戦の取り込み) を消化する
+                    learn_tick(&mut ctx);
+                }
                 Err(mpsc::RecvTimeoutError::Disconnected) => return,
             }
         };
@@ -1495,6 +1506,13 @@ pub fn run(app: tauri::AppHandle, rx: Receiver<Cmd>, snap: Arc<Mutex<Snapshot>>)
                     }
                 }
 
+                // ---------- 実戦の取り込み (学習) ----------
+                // 自分の対局が無い間に 1 探索ずつ進める。1 回のブロックは
+                // 高々 1 評価ぶんなので、着信への応答が数秒以上遅れない。
+                if !matches.values().any(|m| m.my_color.is_some()) {
+                    learn_tick(&mut ctx);
+                }
+
                 ctx.emit(false);
             }
         }
@@ -1867,7 +1885,13 @@ fn think_and_play(
         "info",
         &format!(
             "{mid} {mstr}: {} {:+.2}{}",
-            if mv.from_book { "定石" } else { "探索" },
+            if mv.from_book && mv.learned {
+                "定石 (実戦の学習)"
+            } else if mv.from_book {
+                "定石"
+            } else {
+                "探索"
+            },
             mv.value,
             if mv.exact { " (完全読み)" } else { "" }
         ),
@@ -2011,7 +2035,7 @@ fn handle_match_end(
     // 棋譜は先に始まった方 (`.N.0`) を代表として残す。
     let mut dropped = drop_match(matches, &id);
     dropped.sort_by_key(|m| m.seen);
-    let m = dropped.into_iter().next();
+    let m = dropped.first();
     let re = score.map(|s| format!("{s:+.2}"));
     let (kifu, ggf, opp, i_am_black) = match &m {
         Some(m) if m.my_color.is_some() => (
@@ -2095,6 +2119,71 @@ fn handle_match_end(
     ctx.notify("GGS: 対局終了", &msg);
     ctx.log("info", &format!("対局終了: {rest}"));
     ctx.emit(true);
+
+    // ---- 実戦の取り込み (学習) をキューに積む ----
+    // 勝敗にかかわらず自分の対局を取り込む。負け・引き分けは同じ展開の
+    // 反復を避けるため、勝ちは相手のミスでしか勝てなかったラインを良いと
+    // 思い込み続けないため。実行は対局の合間に 1 探索ずつ (メインループ)。
+    // synchro は 2 局それぞれを取り込む。
+    for lm in &dropped {
+        if lm.my_color.is_none() {
+            continue; // 観戦は取り込まない (自分の選択ではない)
+        }
+        let kifu = lm.kifu();
+        if kifu.is_empty() {
+            continue;
+        }
+        if ctx.ensure_engine().is_err() {
+            break;
+        }
+        let start = lm.start_string();
+        let start_opt = (!start.is_empty()).then_some(start.as_str());
+        match ctx
+            .engine
+            .as_ref()
+            .unwrap()
+            .learn_start(start_opt, &kifu, LEARN_DEPTH)
+        {
+            Ok(job) => {
+                ctx.log(
+                    "info",
+                    &format!("学習: {id} を取り込み待ちに追加 ({} 局面)", job.remaining()),
+                );
+                ctx.learn_jobs.push_back((id.clone(), job));
+            }
+            Err(e) => ctx.log("info", &format!("学習の準備に失敗 ({id}): {e}")),
+        }
+    }
+    ctx.emit(true);
+}
+
+/// 学習キューを 1 探索ぶんだけ進める。自分の対局が無い間に呼ぶ。
+/// 完了した対局はログに出してキューから外す。
+fn learn_tick(ctx: &mut Ctx) {
+    if ctx.learn_jobs.is_empty() || ctx.ensure_engine().is_err() {
+        return;
+    }
+    let (id, job) = ctx.learn_jobs.front_mut().expect("非空を確認済み");
+    let id = id.clone();
+    match ctx.engine.as_mut().unwrap().learn_step(job, LEARN_DEPTH) {
+        Ok(Some(out)) => {
+            ctx.learn_jobs.pop_front();
+            ctx.log(
+                "info",
+                &format!(
+                    "学習: {id} を取り込んだ ({} 手の値を更新、{} 局面を追加。残り {} 局)",
+                    out.updated,
+                    out.added,
+                    ctx.learn_jobs.len()
+                ),
+            );
+        }
+        Ok(None) => {}
+        Err(e) => {
+            ctx.learn_jobs.pop_front();
+            ctx.log("info", &format!("学習に失敗 ({id}): {e}"));
+        }
+    }
 }
 
 /// 応答本文の先頭行 (ヘッダ) かどうか。ACK の READY と区別するために使う。
