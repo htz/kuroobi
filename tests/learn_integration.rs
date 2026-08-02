@@ -201,3 +201,105 @@ fn play_game(cfg_black: &EngineConfig, cfg_white: &EngineConfig) -> (String, i32
     let diff = board.black_count() as i32 - board.white_count() as i32;
     (kifu, diff)
 }
+
+/// 手替わり (学習で実戦ラインから逸れて選んだ手) の質を深い探索で測る。
+///
+/// 学習の代替評価は浅い速報値なので、深く見ると悪手へ逸れている恐れが
+/// ある。連戦の各分岐点について、逸れる前の手・逸れた先の手・その局面の
+/// 最善を深い設定 (学習を読まない別エンジン) で採点して比較する。
+/// 計測が目的なので、失敗条件は「表示した評価損が大きすぎないか」を
+/// 人が見る前提の緩いものにしてある。
+#[test]
+#[ignore]
+fn measure_deviation_quality() {
+    let res = Resources::load(Path::new("/nonexistent"));
+    let dir_a = std::env::temp_dir().join("kuroobi_learn_devq_a");
+    let dir_b = std::env::temp_dir().join("kuroobi_learn_devq_b");
+    let dir_j = std::env::temp_dir().join("kuroobi_learn_devq_judge");
+    for d in [&dir_a, &dir_b, &dir_j] {
+        std::fs::create_dir_all(d).unwrap();
+        let _ = std::fs::remove_file(d.join("book_learn.txt"));
+    }
+
+    let mk = |dir: &Path, depth: u32, solve: u8, threads: usize| EngineConfig {
+        weights: res.weights_path(),
+        nnue: res.nnue_path(),
+        book: dir.join("book.txt"),
+        depth,
+        solve_empties: solve,
+        band: 0,
+        threads,
+        midgame_hash_bits: 20,
+        solver_hash_bits: 20,
+        ..Default::default()
+    };
+    let cfg_a = mk(&dir_a, 2, 8, 1); // 学習する側 (黒)
+    let cfg_b = mk(&dir_b, 6, 10, 1); // 相手役 (白)
+
+    // 連戦 + 毎局取り込み (repeated_matches_diverge_after_losses と同じ)
+    let mut games: Vec<(String, i32)> = Vec::new();
+    for _ in 0..8 {
+        let (kifu, diff) = play_game(&cfg_a, &cfg_b);
+        let mut a = Engine::new(cfg_a.clone()).unwrap();
+        let mut job = a.learn_start(None, &kifu, 4).unwrap();
+        while a.learn_step(&mut job, 4).unwrap().is_none() {}
+        games.push((kifu, diff));
+    }
+
+    // 審判: 深い設定。学習ファイルを読まない (判定を汚さない)
+    let mut judge = Engine::new(mk(&dir_j, 16, 18, 8)).unwrap();
+
+    println!("-- 手替わりの深掘り (深さ16 / 読切18) --");
+    let mut worst: f32 = 0.0;
+    let mut count = 0;
+    for g in 1..games.len() {
+        let (prev, _) = &games[g - 1];
+        let (cur, _) = &games[g];
+        // 最初に違う手 (手数) を探す
+        let n = (0..prev.len().min(cur.len()) / 2)
+            .find(|i| prev[i * 2..i * 2 + 2] != cur[i * 2..i * 2 + 2]);
+        let Some(n) = n else { continue };
+        let old_mv = &prev[n * 2..n * 2 + 2];
+        let new_mv = &cur[n * 2..n * 2 + 2];
+        // 分岐局面を再構築
+        let (line, _) = kuroobi::learn::replay(None, cur).unwrap();
+        let board = line
+            .iter()
+            .filter(|(_, m)| m.is_some())
+            .nth(n)
+            .expect("分岐手は棋譜内")
+            .0;
+        let side = if board.player() == Color::Black {
+            "黒"
+        } else {
+            "白"
+        };
+        // 深い探索でこの局面の最善と、旧手・新手の値を測る
+        let best = judge.eval_position(&board, 16);
+        let mut val_of = |mv: &str| -> f32 {
+            let p = Position::from_kifu(mv).unwrap();
+            let mut c = board;
+            c.make_move(p).unwrap();
+            -judge.eval_position(&c, 15).value
+        };
+        let v_old = val_of(old_mv);
+        let v_new = val_of(new_mv);
+        let best_mv = best
+            .pos
+            .map(|p| p.to_kifu().to_lowercase())
+            .unwrap_or_default();
+        let loss_vs_old = v_old - v_new;
+        let loss_vs_best = best.value - v_new;
+        println!(
+            "game {g}: {}手目 ({side}) {old_mv}→{new_mv}  深い評価: 旧 {v_old:+.1} / 新 {v_new:+.1} / 最善 {best_mv} {:+.1}  (旧比 {:+.1}, 最善比 {:+.1})",
+            n + 1,
+            best.value,
+            -loss_vs_old,
+            -loss_vs_best,
+        );
+        worst = worst.max(loss_vs_best);
+        count += 1;
+    }
+    println!("分岐 {count} 箇所 / 最善からの最大損失 {worst:+.1} 石");
+    assert!(count > 0, "分岐が観測できる");
+}
