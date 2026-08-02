@@ -49,9 +49,7 @@ export const api = {
 /* ============================ GGS ============================ */
 
 export const ggsApi = {
-  savedLogin: () => call<string | null>('ggs_saved_login'),
   connect: (login: string, pw: string) => call<string>('ggs_connect', { login, pw }),
-  connectSaved: () => call<string>('ggs_connect_saved'),
   disconnect: () => call('ggs_disconnect'),
   snapshot: () => call<GgsSnapshot>('ggs_snapshot'),
   raw: (cmd: string) => call('ggs_raw', { cmd }),

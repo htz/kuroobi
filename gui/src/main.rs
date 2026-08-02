@@ -786,24 +786,6 @@ fn ggs_connect(app: State<App>, login: String, pw: String) -> Result<String, Str
     Ok(l)
 }
 
-/// 保存済みの認証情報でログインする (ログアウト後の再ログイン用)。
-#[tauri::command]
-fn ggs_connect_saved(app: State<App>) -> Result<String, String> {
-    let (l, p) = saved_credentials().ok_or("保存済みの認証情報がありません")?;
-    ggs_tx(&app)?
-        .send(ggs::Cmd::Connect {
-            login: l.clone(),
-            pw: p,
-        })
-        .map_err(|e| e.to_string())?;
-    Ok(l)
-}
-
-/// 保存済みのログイン名 (ログイン画面の表示用)。
-#[tauri::command]
-fn ggs_saved_login() -> Option<String> {
-    saved_credentials().map(|(l, _)| l)
-}
 
 /// フロントエンドの例外を拾うための診断コマンド。WebView のコンソールが
 /// 見えない環境でも /tmp のログで追える。
@@ -1151,8 +1133,6 @@ fn main() {
             load_kifu_text,
             js_log,
             ggs_connect,
-            ggs_connect_saved,
-            ggs_saved_login,
             ggs_disconnect,
             ggs_raw,
             ggs_ask,

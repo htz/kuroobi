@@ -301,12 +301,6 @@
 
   /* ---- ログイン・モーダル ---- */
   .ggs-login { flex: 1; display: flex; align-items: center; justify-content: center; }
-  /* 保存済みログインと手入力の区切り (「──── 別のアカウントを使う ────」) */
-  .login-sep { display: flex; align-items: center; gap: 10px; color: var(--sub);
-               font-size: 11.5px; margin-top: 2px; }
-  .login-sep::before, .login-sep::after {
-    content: ""; flex: 1; height: 1px; background: var(--border);
-  }
   .modal { position: fixed; inset: 0; background: rgba(0,0,0,.55); z-index: 20;
            display: flex; align-items: center; justify-content: center; }
   .box { width: 440px; padding: 20px; gap: 12px; max-height: 90vh; overflow-y: auto; }

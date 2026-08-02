@@ -186,22 +186,18 @@ function GgsHeader({ snap, onEngine }: { snap: GgsSnapshot; onEngine: () => void
 
 /* ---------------- ログイン ---------------- */
 
+// ログインの手入力。保存済みの認証情報は起動時の自動ログインが使うので、
+// この画面が出るのは未保存のとき・自動ログインに失敗したとき・
+// ログアウトした後だけ。
 function GgsLogin() {
-  // キーチェーンに保存済みのログイン名。あれば 1 押しで再ログインできる
-  // (通常は起動時に自動ログインするので、この画面はログアウト後か未保存時)
-  const [saved, setSaved] = useState<string | null>(null);
   const [user, setUser] = useState('');
   const [pw, setPw] = useState('');
   const [status, setStatus] = useState('');
 
-  useEffect(() => {
-    void ggsApi.savedLogin().then(setSaved).catch(() => {});
-  }, []);
-
-  const run = async (connect: () => Promise<unknown>) => {
+  const connect = async () => {
     setStatus('接続しています…');
     try {
-      await connect();
+      await ggsApi.connect(user, pw);
     } catch (e) {
       setStatus(String(e));
     }
@@ -215,27 +211,13 @@ function GgsLogin() {
           skatgame.net:5000 — ログインに成功するとキーチェーンに保存され、
           次回から自動ログインします
         </p>
-        {saved && (
-          <>
-            <button className="btn primary"
-                    onClick={() => void run(() => ggsApi.connectSaved())}>
-              保存済みの「{saved}」でログイン
-            </button>
-            {/* 下は別アカウント用の手入力。区切らないとボタンが 2 つ並んで
-                どちらを押すのか分からなくなる */}
-            <div className="login-sep">別のアカウントを使う</div>
-          </>
-        )}
         <div>
           <label className="field">ログイン名</label>
           <input type="text" value={user} onChange={(e) => setUser(e.target.value)} />
           <label className="field">パスワード</label>
           <input type="password" value={pw} onChange={(e) => setPw(e.target.value)} />
         </div>
-        <button className={'btn' + (saved ? '' : ' primary')}
-                onClick={() => void run(() => ggsApi.connect(user, pw))}>
-          入力した情報でログイン
-        </button>
+        <button className="btn primary" onClick={() => void connect()}>ログイン</button>
         <div className="muted">{status}</div>
       </div>
     </div>
