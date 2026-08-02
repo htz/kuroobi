@@ -24,9 +24,11 @@
     /* 本文側の再描画がナビに残らないよう重ね順を明示する */
     position: relative; z-index: 2;
   }
-  /* ロゴ (SVG)。色は currentColor 任せ、高さだけ指定して幅は比率に従う */
-  .nav-brand { color: var(--text); padding: 6px 11px 16px; }
-  .nav-brand svg { display: block; height: 15px; width: auto; }
+  /* ロゴ (SVG)。色は currentColor 任せ。メニューの幅いっぱいに置き、
+     高さは比率に従わせる。SVG 自体は余白を持たないので、左右は #nav の
+     余白がそのままロゴの余白になる。下だけメニューとの間隔を空ける */
+  .nav-brand { color: var(--text); padding: 2px 0 20px; }
+  .nav-brand svg { display: block; width: 100%; height: auto; }
   .nav-item {
     display: block; width: 100%; text-align: left; border: none; background: transparent;
     color: var(--sub); padding: 9px 12px; border-radius: 8px; font-size: 13.5px;
