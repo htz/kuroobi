@@ -39,6 +39,11 @@
   .conn-dot { width: 7px; height: 7px; border-radius: 50%; background: var(--ok, #8bc34a); }
   .conn-dot.off { background: var(--sub); }
   .nav-spacer { flex: 1; }
+  /* CPU の稼働状況 (常時表示)。歯車の上に小さく積む */
+  .cpu-status { padding: 6px 5px 10px; font-size: 10.5px; color: var(--sub);
+                line-height: 1.6; border-top: 1px solid var(--border); }
+  .cpu-status .cpu-head { letter-spacing: .08em; }
+  .cpu-status .cpu-row { color: var(--text); opacity: .8; white-space: nowrap; }
   #nav .btn.icon { align-self: flex-start; }
 
 

@@ -357,7 +357,11 @@ pub struct Handle {
     pub snapshot: Arc<Mutex<Snapshot>>,
 }
 
-pub fn spawn(app: tauri::AppHandle) -> Handle {
+pub fn spawn(
+    app: tauri::AppHandle,
+    local_stop: Arc<Mutex<Option<kuroobi::midgame::StopHandle>>>,
+    local_activity: Arc<Mutex<crate::Activity>>,
+) -> Handle {
     let (tx, rx) = mpsc::channel::<Cmd>();
     let snapshot = Arc::new(Mutex::new(Snapshot {
         conn: "disconnected".into(),
@@ -376,7 +380,7 @@ pub fn spawn(app: tauri::AppHandle) -> Handle {
         ..Default::default()
     }));
     let snap2 = snapshot.clone();
-    std::thread::spawn(move || run(app, rx, snap2));
+    std::thread::spawn(move || run(app, rx, snap2, local_stop, local_activity));
     Handle { tx, snapshot }
 }
 
@@ -692,6 +696,11 @@ struct Ctx {
     auto_watch: Vec<String>,
     /// 終わった対局の取り込み (学習) の残り。対局の合間に 1 探索ずつ進める。
     learn_jobs: VecDeque<(String, kuroobi::learn::BackupJob)>,
+    /// ローカル側の探索の停止ハンドル (GGS の自分の対局を最優先にするため、
+    /// 対局が始まったらローカルの探索を止める)。
+    local_stop: Arc<Mutex<Option<kuroobi::midgame::StopHandle>>>,
+    /// ローカル側の稼働記録 (何か走っているときだけ通知を出す)。
+    local_activity: Arc<Mutex<crate::Activity>>,
 }
 
 impl Ctx {
@@ -820,7 +829,13 @@ impl Ctx {
     }
 }
 
-pub fn run(app: tauri::AppHandle, rx: Receiver<Cmd>, snap: Arc<Mutex<Snapshot>>) {
+pub fn run(
+    app: tauri::AppHandle,
+    rx: Receiver<Cmd>,
+    snap: Arc<Mutex<Snapshot>>,
+    local_stop: Arc<Mutex<Option<kuroobi::midgame::StopHandle>>>,
+    local_activity: Arc<Mutex<crate::Activity>>,
+) {
     let mut ctx = Ctx {
         app,
         stop: None,
@@ -842,6 +857,8 @@ pub fn run(app: tauri::AppHandle, rx: Receiver<Cmd>, snap: Arc<Mutex<Snapshot>>)
         dirty: true,
         auto_watch: Vec::new(),
         learn_jobs: VecDeque::new(),
+        local_stop,
+        local_activity,
     };
     ctx.snap.lock().unwrap().engine = EngineCfgView {
         depth: 22,
@@ -965,6 +982,8 @@ pub fn run(app: tauri::AppHandle, rx: Receiver<Cmd>, snap: Arc<Mutex<Snapshot>>)
             let mut capture: Option<(String, Vec<String>)> = None; // (kind, lines)
             let mut next_ask_at: Option<Instant> = None;
             let mut want_quit = false;
+            // 自分の対局の有無 (前回値)。始まった瞬間にローカル探索を止める
+            let mut had_own_match = false;
 
             macro_rules! send {
                 ($ctx:expr, $cmd:expr) => {{
@@ -1542,10 +1561,27 @@ pub fn run(app: tauri::AppHandle, rx: Receiver<Cmd>, snap: Arc<Mutex<Snapshot>>)
                     }
                 }
 
+                // ---------- 自分の対局が始まったらローカルへ CPU を渡させる ----------
+                // GGS は時計のある実対局なので最優先。走っているローカルの
+                // 探索 (思考・検討) を止めて知らせる。以後の開始は
+                // コマンド側 (main.rs) が断る
+                let own_match = matches.values().any(|m| m.my_color.is_some());
+                if own_match && !had_own_match {
+                    let local_busy = ctx.local_activity.lock().unwrap().local.is_some();
+                    if local_busy {
+                        if let Some(h) = ctx.local_stop.lock().unwrap().as_ref() {
+                            h.stop();
+                        }
+                        ctx.notify("GGS: 対局開始", "ローカルの探索を停止しました");
+                        ctx.log("info", "GGS 対局開始 — ローカルの探索を停止しました");
+                    }
+                }
+                had_own_match = own_match;
+
                 // ---------- 実戦の取り込み (学習) ----------
                 // 自分の対局が無い間に 1 探索ずつ進める。1 回のブロックは
                 // 高々 1 評価ぶんなので、着信への応答が数秒以上遅れない。
-                if !matches.values().any(|m| m.my_color.is_some()) {
+                if !own_match {
                     learn_tick(&mut ctx);
                 }
 
@@ -1580,6 +1616,9 @@ fn apply_engine_cfg(ctx: &mut Ctx, depth: u32, solve: u8, band: u8, threads: usi
     ctx.engine_cfg.threads = threads;
     if let Some(e) = ctx.engine.as_mut() {
         e.set_levels(depth, solve, band);
+        // スレッド数も既存エンジンへ反映する (以前は cfg に控えるだけで、
+        // エンジンを作り直すまで効いていなかった)
+        e.set_threads(threads);
     }
     let mut s = ctx.snap.lock().unwrap();
     s.engine.depth = depth;

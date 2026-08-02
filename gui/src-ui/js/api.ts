@@ -44,7 +44,28 @@ export const api = {
   saveKifu: () => call<string | null>('save_kifu'),
   loadKifu: () => call<GameView | null>('load_kifu'),
   loadKifuText: (text: string) => call<GameView>('load_kifu_text', { text }),
+  localThreads: () => call<ThreadsView>('local_threads', {}),
+  setLocalThreads: (n: number | null) => call('set_local_threads', { n }),
+  activity: () => call<ActivityView>('activity_status', {}),
 };
+
+/** スレッド数の設定 (set が null なら自動 = auto の値)。 */
+export interface ThreadsView { set: number | null; auto: number }
+
+/** いま何が CPU を使っているか (ナビの常時表示)。 */
+export interface ActivityView {
+  /** ローカル探索の種別 (思考 / 解析 / 採点)。無ければ null。 */
+  local: string | null;
+  local_threads: number;
+  /** 学習の取り込み [済み, 総数]。 */
+  learn: [number, number] | null;
+  learn_paused: boolean;
+  ggs_match: boolean;
+  ggs_thinking: boolean;
+  ggs_threads: number;
+  /** プロセス全体の CPU 使用率 (%)。100% = 1 コア。 */
+  cpu: number;
+}
 
 /* ============================ GGS ============================ */
 

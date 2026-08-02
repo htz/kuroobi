@@ -6,9 +6,9 @@
 
 use std::path::{Path, PathBuf};
 
-/// 使うファイルの場所。空なら「既定の探索に任せる」。
+/// 使うファイルの場所と、マシンごとの実行設定。空なら「既定に任せる」。
 ///
-/// 形式は `鍵=値` の 1 行ずつ。項目が 4 つしかないので、この程度のために
+/// 形式は `鍵=値` の 1 行ずつ。項目が数個しかないので、この程度のために
 /// エンジン本体へ serde を持ち込まない。
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct Resources {
@@ -20,6 +20,9 @@ pub struct Resources {
     pub nnue: Option<PathBuf>,
     /// 定石 book。
     pub book: Option<PathBuf>,
+    /// ローカル探索のスレッド数。未指定なら「コア数の半分」。
+    /// マシン依存の設定なので、ファイルの場所と同じこのファイルに置く。
+    pub threads: Option<usize>,
 }
 
 /// 既定の置き場所を探す。
@@ -64,6 +67,7 @@ impl Resources {
                 "weights" => r.weights = p,
                 "nnue" => r.nnue = p,
                 "book" => r.book = p,
+                "threads" => r.threads = v.parse().ok(),
                 _ => {}
             }
         }
@@ -84,6 +88,9 @@ impl Resources {
         put("weights", &self.weights);
         put("nnue", &self.nnue);
         put("book", &self.book);
+        if let Some(n) = self.threads {
+            out.push_str(&format!("threads={n}\n"));
+        }
         std::fs::write(path, out).map_err(|e| e.to_string())
     }
 

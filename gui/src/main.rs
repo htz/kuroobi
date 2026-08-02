@@ -27,6 +27,75 @@ struct App {
     ggs: Mutex<Option<ggs::Handle>>,
     /// ローカル対局を定石の学習に取り込むか。
     learn_on: Mutex<bool>,
+    /// いま CPU を使っている機能の記録 (画面の常時表示と、学習が譲る判断)。
+    activity: Arc<Mutex<Activity>>,
+    /// CPU 使用率の前回サンプル (実時間, プロセスの CPU 時間)。
+    cpu_meter: Mutex<Option<(std::time::Instant, std::time::Duration)>>,
+}
+
+/// このプロセスが使った CPU 時間 (user + sys)。自プロセスなので特別な
+/// 権限は要らない。
+fn process_cpu_time() -> std::time::Duration {
+    unsafe {
+        let mut ru: libc::rusage = std::mem::zeroed();
+        libc::getrusage(libc::RUSAGE_SELF, &mut ru);
+        let secs = (ru.ru_utime.tv_sec + ru.ru_stime.tv_sec).max(0) as u64;
+        let micros = (ru.ru_utime.tv_usec + ru.ru_stime.tv_usec).max(0) as u64;
+        std::time::Duration::from_secs(secs) + std::time::Duration::from_micros(micros)
+    }
+}
+
+/// ローカルで CPU を使っている機能。探索は排他 (同時に 1 つ) なので
+/// local は 1 枠でよい。学習は裏で進むが、他が動いている間は譲って止まる。
+#[derive(Default)]
+pub(crate) struct Activity {
+    /// 走っているローカル探索の種別 (思考 / 解析 / 採点)。
+    pub(crate) local: Option<&'static str>,
+    /// 学習の取り込み進捗 (済み, 総数)。ジョブが無ければ None。
+    learn: Option<(u32, u32)>,
+    /// 学習が他の機能に譲って止まっているか。
+    learn_paused: bool,
+}
+
+/// ローカル探索の実行中マーク。スコープを抜けたら自動で消える。
+struct ActivityGuard(Arc<Mutex<Activity>>);
+impl ActivityGuard {
+    fn begin(slot: &Arc<Mutex<Activity>>, kind: &'static str) -> Self {
+        slot.lock().unwrap().local = Some(kind);
+        Self(slot.clone())
+    }
+}
+impl Drop for ActivityGuard {
+    fn drop(&mut self) {
+        self.0.lock().unwrap().local = None;
+    }
+}
+
+/// スレッド数の既定 (コア数の半分)。
+fn auto_threads() -> usize {
+    std::thread::available_parallelism()
+        .map(|n| (n.get() / 2).max(1))
+        .unwrap_or(4)
+}
+
+fn ggs_snap_arc(app: &State<App>) -> Option<Arc<Mutex<ggs::Snapshot>>> {
+    app.ggs.lock().unwrap().as_ref().map(|h| h.snapshot.clone())
+}
+
+/// GGS で自分の対局が進行中か。時計のある実対局なので最優先で CPU を
+/// 渡す — この間ローカルの探索は開始を断り、学習も譲って止まる。
+fn ggs_match_in(snap: &Option<Arc<Mutex<ggs::Snapshot>>>) -> bool {
+    snap.as_ref().is_some_and(|s| {
+        s.lock()
+            .unwrap()
+            .matches
+            .iter()
+            .any(|m| !m.my_color.is_empty())
+    })
+}
+
+fn ggs_match_active(app: &State<App>) -> bool {
+    ggs_match_in(&ggs_snap_arc(app))
 }
 
 fn same_board(a: &Board, b: &Board) -> bool {
@@ -198,9 +267,7 @@ fn ensure_engine_in(
             weights: res.weights_path(),
             nnue: res.nnue_path(),
             book: res.book_path(),
-            threads: std::thread::available_parallelism()
-                .map(|n| (n.get() / 2).max(1))
-                .unwrap_or(4),
+            threads: res.threads.unwrap_or_else(auto_threads),
             ..Default::default()
         };
         let engine = Engine::new(cfg)?;
@@ -339,6 +406,8 @@ fn learn_game(app: State<App>) -> Result<(), String> {
     }
     let eng = app.engine.clone();
     let stop = app.stop.clone();
+    let act = app.activity.clone();
+    let ggs_snap = ggs_snap_arc(&app);
     tauri::async_runtime::spawn_blocking(move || {
         // エンジンの用意もここで行う (同期コマンド内でロックを待つと
         // メインスレッドごと固まるため)
@@ -353,7 +422,20 @@ fn learn_game(app: State<App>) -> Result<(), String> {
                 Err(_) => return,
             }
         };
+        let total = job.remaining() as u32;
         loop {
+            // 対局・検討・GGS 対局が動いている間は譲って止まる
+            // (裏の学習が CPU を奪わない)。空いたら続きから再開する
+            let busy = act.lock().unwrap().local.is_some() || ggs_match_in(&ggs_snap);
+            {
+                let mut a = act.lock().unwrap();
+                a.learn_paused = busy;
+                a.learn = Some((total.saturating_sub(job.remaining() as u32), total));
+            }
+            if busy {
+                std::thread::sleep(std::time::Duration::from_millis(300));
+                continue;
+            }
             let done = {
                 let mut guard = eng.lock().unwrap();
                 // 設定変更でエンジンが作り直されたら、この取り込みは諦める
@@ -368,8 +450,101 @@ fn learn_game(app: State<App>) -> Result<(), String> {
             // 割り込めないことがある
             std::thread::sleep(std::time::Duration::from_millis(50));
         }
+        let mut a = act.lock().unwrap();
+        a.learn = None;
+        a.learn_paused = false;
     });
     Ok(())
+}
+
+/// スレッド数の設定 (ローカルのエンジン)。set が None なら自動。
+#[derive(Serialize)]
+struct ThreadsView {
+    set: Option<u32>,
+    auto: u32,
+}
+
+#[tauri::command]
+fn local_threads() -> ThreadsView {
+    ThreadsView {
+        set: resources().threads.map(|n| n as u32),
+        auto: auto_threads() as u32,
+    }
+}
+
+/// ローカルのスレッド数を設定する (None で自動へ戻す)。resources.conf に
+/// 保存し、既存エンジンには次の探索から効かせる。
+#[tauri::command]
+async fn set_local_threads(app: State<'_, App>, n: Option<u32>) -> Result<(), String> {
+    let mut r = resources();
+    r.threads = n.map(|v| v.clamp(1, 64) as usize);
+    r.save(&resources_path())?;
+    let threads = r.threads.unwrap_or_else(auto_threads);
+    let eng = app.engine.clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        if let Some(e) = eng.lock().unwrap().as_mut() {
+            e.set_threads(threads);
+        }
+    })
+    .await
+    .map_err(|e| e.to_string())
+}
+
+/// いま何が CPU を使っているか (ナビの常時表示用)。
+#[derive(Serialize)]
+struct ActivityView {
+    /// ローカル探索の種別 (思考 / 解析 / 採点)。無ければ null。
+    local: Option<String>,
+    local_threads: u32,
+    /// 学習の取り込み (済み, 総数)。
+    learn: Option<(u32, u32)>,
+    learn_paused: bool,
+    /// GGS の自分の対局が進行中か。
+    ggs_match: bool,
+    ggs_thinking: bool,
+    ggs_threads: u32,
+    /// プロセス全体の CPU 使用率 (%)。100% = 1 コア相当。
+    cpu: f32,
+}
+
+#[tauri::command]
+fn activity_status(app: State<App>) -> ActivityView {
+    // 前回の呼び出しからの差分で CPU 使用率を出す (呼び出しは 1 秒間隔)
+    let cpu = {
+        let now = (std::time::Instant::now(), process_cpu_time());
+        let mut meter = app.cpu_meter.lock().unwrap();
+        let pct = meter.take().map_or(0.0, |(t0, c0)| {
+            let wall = now.0.duration_since(t0).as_secs_f32();
+            if wall > 0.05 {
+                (now.1.saturating_sub(c0).as_secs_f32() / wall) * 100.0
+            } else {
+                0.0
+            }
+        });
+        *meter = Some(now);
+        pct
+    };
+    let (ggs_match, ggs_thinking, ggs_threads) = ggs_snap_arc(&app)
+        .map(|s| {
+            let s = s.lock().unwrap();
+            (
+                s.matches.iter().any(|m| !m.my_color.is_empty()),
+                s.thinking.is_some(),
+                s.engine.threads as u32,
+            )
+        })
+        .unwrap_or((false, false, 0));
+    let a = app.activity.lock().unwrap();
+    ActivityView {
+        local: a.local.map(String::from),
+        local_threads: resources().threads.unwrap_or_else(auto_threads) as u32,
+        learn: a.learn,
+        learn_paused: a.learn_paused,
+        ggs_match,
+        ggs_thinking,
+        ggs_threads,
+        cpu,
+    }
 }
 
 /// 使うファイルの一覧 (名前・パス・見つかったか)。
@@ -458,10 +633,16 @@ async fn set_levels(
 /// 「停止」が成立する。
 #[tauri::command]
 async fn think(app: State<'_, App>) -> Result<ThinkView, String> {
+    // GGS の対局が最優先。進行中はローカルの探索を始めない
+    if ggs_match_active(&app) {
+        return Err("GGS 対局中はローカルの探索を控えます (終局までお待ちください)".into());
+    }
     ensure_engine(&app)?;
     let board = app.game.lock().unwrap().board;
     let eng = app.engine.clone();
+    let act = app.activity.clone();
     let (mv, secs) = tauri::async_runtime::spawn_blocking(move || {
+        let _g = ActivityGuard::begin(&act, "思考");
         let mut guard = eng.lock().unwrap();
         let t0 = std::time::Instant::now();
         let mv = guard.as_mut().unwrap().choose(&board);
@@ -500,10 +681,15 @@ fn apply_move(app: State<App>, sq: Option<u8>) -> Result<GameView, String> {
 
 #[tauri::command]
 async fn analyze(app: State<'_, App>, depth: u32) -> Result<Vec<HintView>, String> {
+    if ggs_match_active(&app) {
+        return Err("GGS 対局中は解析を控えます".into());
+    }
     ensure_engine(&app)?;
     let board = app.game.lock().unwrap().board;
     let eng = app.engine.clone();
+    let act = app.activity.clone();
     let (hints, book) = tauri::async_runtime::spawn_blocking(move || {
+        let _g = ActivityGuard::begin(&act, "解析");
         let mut guard = eng.lock().unwrap();
         let e = guard.as_mut().unwrap();
         // 定石にある手は定石の値 (実戦より深い探索で付けた値) を優先して
@@ -531,11 +717,16 @@ async fn analyze(app: State<'_, App>, depth: u32) -> Result<Vec<HintView>, Strin
 /// 返す値は黒視点。
 #[tauri::command]
 async fn eval_at(app: State<'_, App>, n: usize, depth: u32) -> Result<EvalPoint, String> {
+    if ggs_match_active(&app) {
+        return Err("GGS 対局中は検討の計算を控えます".into());
+    }
     ensure_engine(&app)?;
     let board = board_at_line(&app.game.lock().unwrap(), n)?;
     let white = board.player() == Color::White;
     let eng = app.engine.clone();
+    let act = app.activity.clone();
     let (value, exact, from_book) = tauri::async_runtime::spawn_blocking(move || {
+        let _g = ActivityGuard::begin(&act, "採点");
         let mut guard = eng.lock().unwrap();
         let e = guard.as_mut().unwrap();
         // 定石にある局面は定石の値をそのまま使う (深い値で、探索も省ける)
@@ -1117,9 +1308,14 @@ fn main() {
             stop: Arc::new(Mutex::new(None)),
             ggs: Mutex::new(None),
             learn_on: Mutex::new(true),
+            activity: Arc::new(Mutex::new(Activity::default())),
+            cpu_meter: Mutex::new(None),
         })
         .setup(|app| {
-            let handle = ggs::spawn(app.handle().clone());
+            // GGS 側にはローカル探索の停止ハンドルと稼働記録を渡す。
+            // 自分の GGS 対局が始まったらローカルの探索を止めるため
+            let st = app.state::<App>();
+            let handle = ggs::spawn(app.handle().clone(), st.stop.clone(), st.activity.clone());
             // 保存済みの認証情報があれば起動時に自動ログインする。
             // 画面確認の自動運転 (KUROOBI_AUTOPLAY) とデモ
             // (KUROOBI_GGS_AUTOVIEW) では実サーバーに繋がない
@@ -1171,6 +1367,9 @@ fn main() {
             goto,
             set_levels,
             set_use_book,
+            local_threads,
+            set_local_threads,
+            activity_status,
             set_learn,
             learn_game,
             has_book,

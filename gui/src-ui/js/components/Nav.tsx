@@ -1,4 +1,8 @@
 // 左メニュー。ローカルの対局・検討と、GGS の各画面を切り替える。
+// 下部に「いま何が CPU を使っているか」を常時出す (対局と検討・学習が
+// CPU を食い合う構成なので、何が走っているか見えないと切り分けられない)。
+import type { ActivityView } from '../api';
+
 export type View =
   | 'play' | 'study'
   | 'ggs-play' | 'ggs-lobby' | 'ggs-users' | 'ggs-chat' | 'ggs-standby' | 'ggs-console';
@@ -23,10 +27,12 @@ export interface NavProps {
   online: boolean;
   /** 画面ごとの件数バッジ (申し込み・対局・チャット未読)。 */
   badges?: Partial<Record<View, number>>;
+  /** CPU の稼働状況 (1 秒ごとの取得値)。 */
+  cpu?: ActivityView | null;
   onSettings: () => void;
 }
 
-export function Nav({ view, onView, online, badges, onSettings }: NavProps) {
+export function Nav({ view, onView, online, badges, cpu, onSettings }: NavProps) {
   const item = ([v, label]: [View, string]) => {
     const n = badges?.[v] ?? 0;
     return (
@@ -58,6 +64,7 @@ export function Nav({ view, onView, online, badges, onSettings }: NavProps) {
         </button>
       )}
       <span className="nav-spacer" />
+      <CpuStatus cpu={cpu} />
       <button className="btn icon ghost" title="設定" aria-label="設定" onClick={onSettings}>
         <svg viewBox="0 0 24 24" width="17" height="17" fill="none" stroke="currentColor"
              strokeWidth={1.8} strokeLinecap="round" strokeLinejoin="round">
@@ -66,5 +73,27 @@ export function Nav({ view, onView, online, badges, onSettings }: NavProps) {
         </svg>
       </button>
     </nav>
+  );
+}
+
+/// CPU の稼働状況。動いている機能だけを行にする。全部止まっていれば
+/// 使用率だけを淡く出す。
+function CpuStatus({ cpu }: { cpu?: ActivityView | null }) {
+  if (!cpu) return null;
+  const rows: string[] = [];
+  if (cpu.ggs_match) {
+    rows.push(`GGS対局${cpu.ggs_thinking ? '·思考中' : ''} (${cpu.ggs_threads}スレ)`);
+  }
+  if (cpu.local) rows.push(`${cpu.local}中 (${cpu.local_threads}スレ)`);
+  if (cpu.learn) {
+    rows.push(`学習 ${cpu.learn[0]}/${cpu.learn[1]}${cpu.learn_paused ? ' 譲り中' : ''}`);
+  }
+  return (
+    <div className="cpu-status">
+      <div className="cpu-head">
+        CPU {cpu.cpu >= 0.5 ? `${Math.round(cpu.cpu)}%` : '待機'}
+      </div>
+      {rows.map((r) => <div key={r} className="cpu-row">{r}</div>)}
+    </div>
   );
 }

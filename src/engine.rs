@@ -236,6 +236,15 @@ impl Engine {
         self.config.band = band;
     }
 
+    /// 探索の並列スレッド数 (中盤・終盤とも) を差し替える。実行中の探索には
+    /// 効かず、次の探索から効く。
+    pub fn set_threads(&mut self, n: usize) {
+        let n = n.max(1);
+        self.config.threads = n;
+        self.search.threads = n;
+        self.solver.set_threads(n);
+    }
+
     /// 対局と同じ選択則で着手を決める。合法手がなければ `pos: None`
     /// (パス)。値は手番視点の石差。
     ///

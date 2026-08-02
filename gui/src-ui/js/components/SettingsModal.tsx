@@ -1,6 +1,7 @@
 // 設定 (歯車)。エンジンが使うファイルを選び直す。
-import { useCallback, useState } from 'react';
+import { useCallback, useEffect, useState } from 'react';
 import { api } from '../api';
+import type { ThreadsView } from '../api';
 
 const KINDS: [string, string][] = [
   ['dir', '置き場所 (フォルダ)'],
@@ -79,6 +80,7 @@ export function SettingsModal({ initial, learnOn, onLearn, onClose, onChanged }:
             );
           })}
         </div>
+        <ThreadsSection />
         <div className="settings-section">
           <div className="settings-title">学習</div>
           <p className="hint">
@@ -96,6 +98,44 @@ export function SettingsModal({ initial, learnOn, onLearn, onClose, onChanged }:
         <div className="row actions">
           <button className="btn ghost" onClick={onClose}>閉じる</button>
         </div>
+      </div>
+    </div>
+  );
+}
+
+/// ローカル探索のスレッド数。GGS の対局用は GGS 画面のエンジン設定にある
+/// (エンジンが別なので設定も別)。値は resources.conf に保存される。
+function ThreadsSection() {
+  const [th, setTh] = useState<ThreadsView | null>(null);
+
+  useEffect(() => {
+    void api.localThreads().then(setTh).catch(() => {});
+  }, []);
+
+  const set = async (n: number | null) => {
+    try {
+      await api.setLocalThreads(n);
+      setTh(await api.localThreads());
+    } catch { /* 保存失敗はそのまま */ }
+  };
+
+  if (!th) return null;
+  const options = [1, 2, 4, 6, 8, 12, 16].filter((n) => n <= th.auto * 2);
+  return (
+    <div className="settings-section">
+      <div className="settings-title">ローカル探索のスレッド数</div>
+      <p className="hint">
+        ローカル対局・検討・学習の取り込みが使う並列数です。自動 = コア数の半分
+        ({th.auto})。GGS 対局用は GGS 画面の「エンジン設定」にあります (エンジンが
+        別々なので、両方が同時に動くと合計ぶんの CPU を使います)。
+      </p>
+      <div className="seg" style={{ alignSelf: 'flex-start' }}>
+        <button className={th.set == null ? 'active' : ''}
+                onClick={() => void set(null)}>自動</button>
+        {options.map((n) => (
+          <button key={n} className={th.set === n ? 'active' : ''}
+                  onClick={() => void set(n)}>{n}</button>
+        ))}
       </div>
     </div>
   );

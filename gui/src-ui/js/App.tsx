@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { api, ggsApi, jsLog } from './api';
+import { api, ggsApi, jsLog, type ActivityView } from './api';
 import { useGame } from './state';
 import { useGgs } from './ggs';
 import type { GameView } from './types';
@@ -49,6 +49,17 @@ export function App() {
   // 局面が動いたら採点し直す
   const refresh = g.refreshHints;
   useEffect(() => { void refresh(); }, [g.view, g.autoHint, refresh]);
+
+  // ---- CPU の稼働状況 (ナビの常時表示) ----
+  const [cpu, setCpu] = useState<ActivityView | null>(null);
+  useEffect(() => {
+    const t = window.setInterval(() => {
+      api.activity().then(setCpu).catch(() => {});
+    }, 1000);
+    return () => clearInterval(t);
+  }, []);
+  // GGS の自分の対局が進行中か (最優先なのでローカルの開始を断る)
+  const ggsMatch = ggs.snap?.matches.some((m) => m.my_color) ?? false;
 
   const isGgs = view.startsWith('ggs-');
 
@@ -192,6 +203,13 @@ export function App() {
   const updateGraph = useCallback(async () => {
     const v = g.view;
     if (gbusy || !v) return;
+    // CPU を食い合う機能は同時に動かさない。GGS 対局は最優先なので断り、
+    // ローカル対局が進行中なら確認の上で停止してから始める
+    if (ggsMatch) { g.say('GGS 対局中は検討の計算を控えます'); return; }
+    if (g.playing || g.thinking) {
+      if (!window.confirm('対局が進行中です。停止して全局面を採点しますか？')) return;
+      g.stop();
+    }
     setGbusy(true);
     const seq = ++gseq.current;
     const key = lineKey(v);
@@ -216,7 +234,7 @@ export function App() {
     }
     if (seq === gseq.current) g.say('');
     setGbusy(false);
-  }, [g, gbusy, gvals]);
+  }, [g, gbusy, gvals, ggsMatch]);
 
   const loadText = async (text: string) => {
     try {
@@ -244,7 +262,7 @@ export function App() {
         'ggs-lobby': ggs.snap?.offers.filter((o) => o.incoming).length ?? 0,
         'ggs-play': ggs.snap?.matches.length ?? 0,
         'ggs-chat': chatUnread,
-      }} onSettings={async () => {
+      }} cpu={cpu} onSettings={async () => {
         setSettings(await api.resourceStatus().catch(() => []));
       }} />
 
@@ -283,8 +301,18 @@ export function App() {
 
           <Panel g={g} gvals={gvals}
                  onStart={() => {
-                   if (g.playing) { g.stop(); g.say('対局を停止しました'); }
-                   else { g.setPlaying(true); g.say(''); }
+                   if (g.playing) { g.stop(); g.say('対局を停止しました'); return; }
+                   // CPU を食い合う機能は同時に動かさない。GGS 対局は最優先、
+                   // グラフの採点中は確認してから止める
+                   if (ggsMatch) { g.say('GGS 対局中はローカル対局を開始できません'); return; }
+                   if (gbusy) {
+                     if (!window.confirm('評価値グラフを採点中です。停止して対局を始めますか？')) return;
+                     gseq.current++;
+                     setGbusy(false);
+                     void api.stopSearch();
+                   }
+                   g.setPlaying(true);
+                   g.say('');
                  }}
                  onSave={() => void api.saveKifu().catch((e) => g.say('' + e))}
                  onLoad={() => setPaste(true)} />
