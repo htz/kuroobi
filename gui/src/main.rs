@@ -5,6 +5,7 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
 mod ggs;
+mod keychain;
 
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
@@ -742,7 +743,9 @@ fn ggs_tx(app: &State<App>) -> Result<std::sync::mpsc::Sender<ggs::Cmd>, String>
         .ok_or_else(|| "GGS セッションが起動していません".into())
 }
 
-/// `.ggs_credentials` (repo 直下、name:pw) を探して読む。
+/// `.ggs_credentials` (repo 直下、name:pw) を探して読む。GUI のログインは
+/// キーチェーンに移したので、これは初回の取り込み元としてだけ残っている
+/// (ファイル自体は CLI 版 ggs が使うため消さない)。
 fn read_credentials() -> Option<(String, String)> {
     for c in [
         ".ggs_credentials",
@@ -758,21 +761,35 @@ fn read_credentials() -> Option<(String, String)> {
     None
 }
 
+/// 保存済みの認証情報。キーチェーンが空なら旧ファイルから一度だけ
+/// 取り込む (次からはキーチェーンで完結する)。
+fn saved_credentials() -> Option<(String, String)> {
+    keychain::load().or_else(|| {
+        let (l, p) = read_credentials()?;
+        keychain::save(&l, &p);
+        Some((l, p))
+    })
+}
+
 #[tauri::command]
-fn ggs_connect(
-    app: State<App>,
-    login: String,
-    pw: String,
-    use_credentials: bool,
-) -> Result<String, String> {
-    let (l, p) = if use_credentials {
-        read_credentials().ok_or(".ggs_credentials が見つかりません")?
-    } else {
-        if login.trim().is_empty() || pw.is_empty() {
-            return Err("ログイン名とパスワードを入力してください".into());
-        }
-        (login.trim().to_string(), pw)
-    };
+fn ggs_connect(app: State<App>, login: String, pw: String) -> Result<String, String> {
+    if login.trim().is_empty() || pw.is_empty() {
+        return Err("ログイン名とパスワードを入力してください".into());
+    }
+    let l = login.trim().to_string();
+    ggs_tx(&app)?
+        .send(ggs::Cmd::Connect {
+            login: l.clone(),
+            pw,
+        })
+        .map_err(|e| e.to_string())?;
+    Ok(l)
+}
+
+/// 保存済みの認証情報でログインする (ログアウト後の再ログイン用)。
+#[tauri::command]
+fn ggs_connect_saved(app: State<App>) -> Result<String, String> {
+    let (l, p) = saved_credentials().ok_or("保存済みの認証情報がありません")?;
     ggs_tx(&app)?
         .send(ggs::Cmd::Connect {
             login: l.clone(),
@@ -782,9 +799,10 @@ fn ggs_connect(
     Ok(l)
 }
 
+/// 保存済みのログイン名 (ログイン画面の表示用)。
 #[tauri::command]
-fn ggs_has_credentials() -> bool {
-    read_credentials().is_some()
+fn ggs_saved_login() -> Option<String> {
+    saved_credentials().map(|(l, _)| l)
 }
 
 /// フロントエンドの例外を拾うための診断コマンド。WebView のコンソールが
@@ -1065,12 +1083,20 @@ fn main() {
         })
         .setup(|app| {
             let handle = ggs::spawn(app.handle().clone());
-            // 診断・自動運転用: KUROOBI_GGS_AUTOCONNECT=1 なら
-            // .ggs_credentials で自動ログインする (UI 操作なしで検証できる)。
-            if std::env::var("KUROOBI_GGS_AUTOCONNECT").is_ok() {
-                if let Some((l, p)) = read_credentials() {
+            // 保存済みの認証情報があれば起動時に自動ログインする。
+            // 画面確認の自動運転 (KUROOBI_AUTOPLAY) とデモ
+            // (KUROOBI_GGS_AUTOVIEW) では実サーバーに繋がない
+            // (KUROOBI_GGS_AUTOCONNECT=1 はその場合でも強制的に繋ぐ)。
+            // 別ウィンドウが接続中のときは黙って見送る (そちらを使う)。
+            let force = std::env::var("KUROOBI_GGS_AUTOCONNECT").is_ok();
+            let demo = std::env::var("KUROOBI_AUTOPLAY").is_ok()
+                || std::env::var("KUROOBI_GGS_AUTOVIEW").is_ok();
+            if (force || !demo) && !ggs::session_locked_by_other() {
+                if let Some((l, p)) = saved_credentials() {
                     let _ = handle.tx.send(ggs::Cmd::Connect { login: l, pw: p });
                 }
+            }
+            if force {
                 // KUROOBI_GGS_AUTOLOOK=<id> なら棋譜取得も試す
                 // (取得経路を UI 操作なしで確かめるため)。
                 if let Ok(id) = std::env::var("KUROOBI_GGS_AUTOLOOK") {
@@ -1125,7 +1151,8 @@ fn main() {
             load_kifu_text,
             js_log,
             ggs_connect,
-            ggs_has_credentials,
+            ggs_connect_saved,
+            ggs_saved_login,
             ggs_disconnect,
             ggs_raw,
             ggs_ask,

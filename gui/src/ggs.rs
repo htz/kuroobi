@@ -430,6 +430,18 @@ fn session_lock_path() -> PathBuf {
     std::env::temp_dir().join("kuroobi_ggs.pid")
 }
 
+/// 別プロセスがセッションを掴んでいるか (ロックは取らない)。起動時の
+/// 自動ログインが、通知を出さずに見送るための照会用。
+pub fn session_locked_by_other() -> bool {
+    let Ok(s) = std::fs::read_to_string(session_lock_path()) else {
+        return false;
+    };
+    match s.trim().parse::<i32>() {
+        Ok(pid) => pid != std::process::id() as i32 && unsafe { libc::kill(pid, 0) } == 0,
+        Err(_) => false,
+    }
+}
+
 /// ロックを取る。別プロセスが接続中ならその PID を返す。
 fn try_lock_session() -> Result<(), i32> {
     let path = session_lock_path();
@@ -909,6 +921,7 @@ pub fn run(app: tauri::AppHandle, rx: Receiver<Cmd>, snap: Arc<Mutex<Snapshot>>)
 
         let mut reconnect = false; // 再接続中か (stored 再開を試す)
         let mut login_fails = 0u32; // ログイン前に切られた回数
+        let mut cred_saved = false; // 認証情報をキーチェーンへ保存したか
                                     // ---- 接続セッション (切断時は絶対不放棄で再接続) ----
         'session: loop {
             {
@@ -1261,6 +1274,14 @@ pub fn run(app: tauri::AppHandle, rx: Receiver<Cmd>, snap: Arc<Mutex<Snapshot>>)
                 // ---------- 行処理 ----------
                 while let Some(ln) = lines.pop_front() {
                     ctx.log("in", &ln);
+
+                    // ログイン後に /os の応答が届いた = 認証が通った。ここで
+                    // 保存する (誤ったパスワードは応答の前に切断される)。
+                    // 次回起動時はこれで自動ログインする。
+                    if !cred_saved && (ln == "READY" || ln.starts_with("/os")) {
+                        cred_saved = true;
+                        crate::keychain::save(&login, &pw);
+                    }
 
                     // チャンネルチャット: ".chat name: text"
                     if let Some(rest) = ln.strip_prefix('.') {

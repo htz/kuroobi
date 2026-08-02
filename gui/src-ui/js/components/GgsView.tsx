@@ -187,19 +187,21 @@ function GgsHeader({ snap, onEngine }: { snap: GgsSnapshot; onEngine: () => void
 /* ---------------- ログイン ---------------- */
 
 function GgsLogin() {
-  const [useCred, setUseCred] = useState(false);
+  // キーチェーンに保存済みのログイン名。あれば 1 押しで再ログインできる
+  // (通常は起動時に自動ログインするので、この画面はログアウト後か未保存時)
+  const [saved, setSaved] = useState<string | null>(null);
   const [user, setUser] = useState('');
   const [pw, setPw] = useState('');
   const [status, setStatus] = useState('');
 
   useEffect(() => {
-    void ggsApi.hasCredentials().then(setUseCred).catch(() => {});
+    void ggsApi.savedLogin().then(setSaved).catch(() => {});
   }, []);
 
-  const connect = async () => {
+  const run = async (connect: () => Promise<unknown>) => {
     setStatus('接続しています…');
     try {
-      await ggsApi.connect(user, pw, useCred);
+      await connect();
     } catch (e) {
       setStatus(String(e));
     }
@@ -209,21 +211,24 @@ function GgsLogin() {
     <div className="ggs-login">
       <div className="card box">
         <h2>GGS へログイン</h2>
-        <p className="hint">skatgame.net:5000</p>
-        <label className="check">
-          <input type="checkbox" checked={useCred}
-                 onChange={(e) => setUseCred(e.target.checked)} />
-          保存済みの認証情報を使う
-        </label>
-        {!useCred && (
-          <div>
-            <label className="field">ログイン名</label>
-            <input type="text" value={user} onChange={(e) => setUser(e.target.value)} />
-            <label className="field">パスワード</label>
-            <input type="password" value={pw} onChange={(e) => setPw(e.target.value)} />
-          </div>
+        <p className="hint">
+          skatgame.net:5000 — ログインに成功するとキーチェーンに保存され、
+          次回から自動ログインします
+        </p>
+        {saved && (
+          <button className="btn primary"
+                  onClick={() => void run(() => ggsApi.connectSaved())}>
+            「{saved}」でログイン
+          </button>
         )}
-        <button className="btn primary" onClick={() => void connect()}>接続</button>
+        <div>
+          <label className="field">ログイン名</label>
+          <input type="text" value={user} onChange={(e) => setUser(e.target.value)} />
+          <label className="field">パスワード</label>
+          <input type="password" value={pw} onChange={(e) => setPw(e.target.value)} />
+        </div>
+        <button className={'btn' + (saved ? '' : ' primary')}
+                onClick={() => void run(() => ggsApi.connect(user, pw))}>接続</button>
         <div className="muted">{status}</div>
       </div>
     </div>
