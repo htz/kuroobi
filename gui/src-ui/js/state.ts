@@ -41,6 +41,8 @@ export function useGame() {
   const [custom, setCustom] = useState<Levels>({ depth: 12, solve: 18, band: 0 });
   const [useBook, setUseBook] = useState(true);
   const [hasBook, setHasBook] = useState(true);
+  // 終局した対局を定石の学習に取り込むか (バックエンドの既定も on)
+  const [learnOn, setLearnOn] = useState(true);
   const [autoHint, setAutoHint] = useState(false);
   const [hints, setHints] = useState<Hints | null>(null);
   const [playing, setPlaying] = useState(false);
@@ -115,15 +117,26 @@ export function useGame() {
     setHints(null);
   }, []);
 
+  // 手が指されて終局したら、その対局を定石の学習に取り込む
+  // (読み込んだだけの棋譜では呼ばれない)
+  const maybeLearn = useCallback((v: GameView) => {
+    if (!v.over || mode !== 'vs' || !learnOn) return;
+    api.learnGame()
+      .then(() => say('終局した対局を定石の学習に取り込みます (裏で実行)'))
+      .catch(() => {});
+  }, [mode, learnOn, say]);
+
   // ---- 人が打つ ----
   const play = useCallback(async (sq: number) => {
     if (thinking) return;
     // 対局中にエンジンが受け持つ手番なら、人は打てない
     if (playing && view && engineSides().includes(view.player)) return;
     try {
-      apply(await api.play(sq));
+      const v = await api.play(sq);
+      apply(v);
+      maybeLearn(v);
     } catch (e) { say('' + e); }
-  }, [thinking, playing, view, engineSides, apply, say]);
+  }, [thinking, playing, view, engineSides, apply, maybeLearn, say]);
 
   const newGame = useCallback(async () => {
     hintSeq.current++;
@@ -161,6 +174,7 @@ export function useGame() {
     side, setSide,
     level, setLevel, custom, setCustom, levels,
     useBook, setUseBook, hasBook, setHasBook,
+    learnOn, setLearnOn, maybeLearn,
     autoHint, setAutoHint,
     hints, setHints,
     playing, setPlaying,

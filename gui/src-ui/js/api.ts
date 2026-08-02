@@ -26,6 +26,8 @@ export const api = {
   undo: () => call<GameView>('undo'),
   goto: (n: number) => call<GameView>('goto', { n }),
   setUseBook: (on: boolean) => call<void>('set_use_book', { on }),
+  setLearn: (on: boolean) => call<void>('set_learn', { on }),
+  learnGame: () => call<void>('learn_game'),
   hasBook: () => call<boolean>('has_book', {}),
   autoplay: () => call<string>('autoplay', {}),
   resourceStatus: () => call<[string, string, boolean][]>('resource_status', {}),
@@ -78,6 +80,7 @@ export const ggsApi = {
   setAutoPlay: (on: boolean) => call('ggs_set_auto_play', { on }),
   setWatchAnalysis: (on: boolean) => call('ggs_set_watch_analysis', { on }),
   setUseBook: (on: boolean) => call('ggs_set_use_book', { on }),
+  setLearn: (on: boolean) => call('ggs_set_learn', { on }),
   setStandby: (cfg: StandbyCfg) => call('ggs_set_standby', { cfg }),
   saveKifu: (kifu: string, name: string) =>
     call<string | null>('ggs_save_kifu', { kifu, name }),

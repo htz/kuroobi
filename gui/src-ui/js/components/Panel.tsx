@@ -95,6 +95,12 @@ export function Panel({ g, onStart, onSave, onLoad }: PanelProps) {
                onChange={(x) => g.setUseBook(x === 'on')}
                options={[['on', '使う'], ['off', '使わない']]} />
         </div>
+        <div>
+          <label className="field">学習 (終局した対局を定石へ取り込む)</label>
+          <Seg value={g.learnOn ? 'on' : 'off'}
+               onChange={(x) => g.setLearnOn(x === 'on')}
+               options={[['on', 'オン'], ['off', 'オフ']]} />
+        </div>
         {g.level === 'custom' && (
           <div className="row">
             <div>

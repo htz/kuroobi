@@ -196,6 +196,8 @@ export interface EngineCfgView {
   ready: boolean;
   use_book: boolean;
   book_loaded: boolean;
+  /** 終わった対局を定石の学習に取り込むか。 */
+  learn: boolean;
 }
 
 export interface FetchedGgf {

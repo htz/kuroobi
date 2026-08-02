@@ -40,6 +40,7 @@ export function App() {
     api.setLevels(depth, solve, band).catch(() => {});
   }, [depth, solve, band]);
   useEffect(() => { api.setUseBook(g.useBook).catch(() => {}); }, [g.useBook]);
+  useEffect(() => { api.setLearn(g.learnOn).catch(() => {}); }, [g.learnOn]);
 
   // 局面が動いたら採点し直す
   const refresh = g.refreshHints;
@@ -100,6 +101,7 @@ export function App() {
   // 局面が「エンジンが打つ番」になったら 1 度だけ走る。二重起動を
   // 防ぐため、走っている間は ref で塞ぐ。
   const turnRef = useRef(false);
+  const maybeLearn = g.maybeLearn;
   useEffect(() => {
     if (!playing || !gv) return;
     // 終局したら自分で止まる (停止を押させない)
@@ -122,6 +124,7 @@ export function App() {
         // 何手目の手だったかを記録する (棋譜に出所を出すため)
         setMoveSource((m) => ({ ...m, [next.cursor]: r.from_book ? 'book' : 'search' }));
         applyView(next);
+        maybeLearn(next);
         // どのくらい良いと見て指したかを残す
         setLastEval(Number.isFinite(r.value)
           ? `エンジン評価: ${r.value > 0 ? '+' : ''}${
@@ -142,7 +145,7 @@ export function App() {
 
     return () => clearInterval(timer);
   }, [playing, gv, engineSides, setThinking, setThinkSecs, setThinkTotal,
-      setMoveSource, applyView, setPlaying, say, setLastEval]);
+      setMoveSource, applyView, setPlaying, say, setLastEval, maybeLearn]);
 
   // GGS の棋譜 (GGF か着手列) を検討画面で開く。アプリ内で完結する。
   const openStudy = useCallback(async (kifu: string) => {

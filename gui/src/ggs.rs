@@ -64,6 +64,8 @@ pub enum Cmd {
     SetWatchAnalysis(bool),
     /// 定石 book を使うか。研究や検証で自力の手を見たいときに切る。
     SetUseBook(bool),
+    /// 終わった対局を定石の学習に取り込むか。
+    SetLearn(bool),
     /// 対局操作: undo / abort / resign / (対局内 tell)。
     /// GGS 側の呼び名に合わせているので、enum 名との重なりは許す。
     #[allow(clippy::enum_variant_names)]
@@ -329,6 +331,8 @@ pub struct EngineCfgView {
     pub use_book: bool,
     /// book のファイルを読み込めているか。
     pub book_loaded: bool,
+    /// 終わった対局を定石の学習に取り込むか。
+    pub learn: bool,
 }
 
 impl Default for EngineCfgView {
@@ -341,6 +345,7 @@ impl Default for EngineCfgView {
             ready: false,
             use_book: true,
             book_loaded: false,
+            learn: true,
         }
     }
 }
@@ -628,7 +633,8 @@ fn parse_clock(s: &str) -> (Option<u64>, Option<u64>, Option<u64>) {
 /// 学習 (実戦の取り込み) の評価深さ。「実戦手以外の合法手の最善」を
 /// 局面ごとに測るので、実戦 (22) より浅い速報値にしてある。1 回の
 /// 呼び出しは 1 評価だけなので、対局の合間に回しても応答を壊さない。
-const LEARN_DEPTH: u32 = 16;
+/// ローカル対局の取り込み (main.rs) も同じ深さを使う。
+pub(crate) const LEARN_DEPTH: u32 = 18;
 
 fn base_id(id: &str) -> String {
     // ".82726.1" → ".82726"、それ以外はそのまま
@@ -833,6 +839,7 @@ pub fn run(app: tauri::AppHandle, rx: Receiver<Cmd>, snap: Arc<Mutex<Snapshot>>)
         ready: false,
         use_book: ctx.engine_cfg.use_book,
         book_loaded: false,
+        learn: true,
     };
 
     // 接続ごとの外側ループ (未接続時はコマンド待ち)
@@ -869,6 +876,10 @@ pub fn run(app: tauri::AppHandle, rx: Receiver<Cmd>, snap: Arc<Mutex<Snapshot>>)
                 }
                 Ok(Cmd::SetWatchAnalysis(b)) => {
                     ctx.snap.lock().unwrap().watch_analysis = b;
+                    ctx.emit(true);
+                }
+                Ok(Cmd::SetLearn(b)) => {
+                    ctx.snap.lock().unwrap().engine.learn = b;
                     ctx.emit(true);
                 }
                 Ok(Cmd::Rank { .. }) | Ok(Cmd::ListMatches) => {} // 未接続時は無視
@@ -1077,6 +1088,10 @@ pub fn run(app: tauri::AppHandle, rx: Receiver<Cmd>, snap: Arc<Mutex<Snapshot>>)
                         }
                         Cmd::SetWatchAnalysis(b) => {
                             ctx.snap.lock().unwrap().watch_analysis = b;
+                            ctx.dirty = true;
+                        }
+                        Cmd::SetLearn(b) => {
+                            ctx.snap.lock().unwrap().engine.learn = b;
                             ctx.dirty = true;
                         }
                         Cmd::ListStored => {
@@ -2125,6 +2140,9 @@ fn handle_match_end(
     // 反復を避けるため、勝ちは相手のミスでしか勝てなかったラインを良いと
     // 思い込み続けないため。実行は対局の合間に 1 探索ずつ (メインループ)。
     // synchro は 2 局それぞれを取り込む。
+    if !ctx.snap.lock().unwrap().engine.learn {
+        return;
+    }
     for lm in &dropped {
         if lm.my_color.is_none() {
             continue; // 観戦は取り込まない (自分の選択ではない)

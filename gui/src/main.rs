@@ -24,6 +24,8 @@ struct App {
     stop: Arc<Mutex<Option<kuroobi::midgame::StopHandle>>>,
     /// GGS セッション (常駐スレッド)。
     ggs: Mutex<Option<ggs::Handle>>,
+    /// ローカル対局を定石の学習に取り込むか。
+    learn_on: Mutex<bool>,
 }
 
 fn same_board(a: &Board, b: &Board) -> bool {
@@ -280,6 +282,58 @@ fn autoplay() -> String {
 #[tauri::command]
 fn has_book() -> bool {
     resources().book_path().exists()
+}
+
+/// ローカル対局を定石の学習に取り込むかどうか。
+#[tauri::command]
+fn set_learn(app: State<App>, on: bool) {
+    *app.learn_on.lock().unwrap() = on;
+}
+
+/// 終局したローカル対局を定石の学習に取り込む (learn.rs)。
+/// フロントが「手が指されて終局した」ときに呼ぶ。読み込んだだけの棋譜は
+/// 対象にしない。取り込みは裏で 1 探索ずつ進み、エンジンのロックを
+/// 探索ごとに手放すので、途中で思考を始めても 1 探索ぶんしか待たない。
+#[tauri::command]
+fn learn_game(app: State<App>) -> Result<(), String> {
+    if !*app.learn_on.lock().unwrap() {
+        return Ok(());
+    }
+    ensure_engine(&app)?;
+    let (kifu, board) = {
+        let game = app.game.lock().unwrap();
+        if !game.is_game_over() {
+            return Err("終局していません".into());
+        }
+        (game.to_kifu(), game.board)
+    };
+    // 標準初期局面から再生できて最終盤面が一致する対局だけを取り込む
+    // (読み込んだ抽選開局の対局などを誤って学習しないため)
+    let (_, fin) = kuroobi::learn::replay(None, &kifu)?;
+    if fin.black != board.black || fin.white != board.white {
+        return Err("初期局面から始まった対局ではないため取り込みません".into());
+    }
+    let eng = app.engine.clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        let mut job = {
+            let mut guard = eng.lock().unwrap();
+            let Some(engine) = guard.as_mut() else { return };
+            match engine.learn_start(None, &kifu, ggs::LEARN_DEPTH) {
+                Ok(j) => j,
+                Err(_) => return,
+            }
+        };
+        loop {
+            let mut guard = eng.lock().unwrap();
+            // 設定変更でエンジンが作り直されたら、この取り込みは諦める
+            let Some(engine) = guard.as_mut() else { break };
+            match engine.learn_step(&mut job, ggs::LEARN_DEPTH) {
+                Ok(None) => {}
+                Ok(Some(_)) | Err(_) => break,
+            }
+        }
+    });
+    Ok(())
 }
 
 /// 使うファイルの一覧 (名前・パス・見つかったか)。
@@ -913,6 +967,14 @@ fn ggs_set_use_book(app: State<App>, on: bool) -> Result<(), String> {
         .map_err(|e| e.to_string())
 }
 
+/// GGS の対局を定石の学習に取り込むかどうか。
+#[tauri::command]
+fn ggs_set_learn(app: State<App>, on: bool) -> Result<(), String> {
+    ggs_tx(&app)?
+        .send(ggs::Cmd::SetLearn(on))
+        .map_err(|e| e.to_string())
+}
+
 #[tauri::command]
 fn ggs_set_standby(app: State<App>, cfg: ggs::StandbyCfg) -> Result<(), String> {
     ggs_tx(&app)?
@@ -977,6 +1039,7 @@ fn main() {
             engine: Arc::new(Mutex::new(None)),
             stop: Arc::new(Mutex::new(None)),
             ggs: Mutex::new(None),
+            learn_on: Mutex::new(true),
         })
         .setup(|app| {
             let handle = ggs::spawn(app.handle().clone());
@@ -1023,6 +1086,8 @@ fn main() {
             goto,
             set_levels,
             set_use_book,
+            set_learn,
+            learn_game,
             has_book,
             autoplay,
             resource_status,
@@ -1061,6 +1126,7 @@ fn main() {
             ggs_set_auto_play,
             ggs_set_watch_analysis,
             ggs_set_use_book,
+            ggs_set_learn,
             ggs_set_standby,
             ggs_snapshot,
             ggs_autoview,
