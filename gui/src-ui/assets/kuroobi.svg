@@ -1,8 +1,9 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="12 10 310 44" width="310" height="44" role="img" aria-label="KUROOBI">
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="11.5 9.5 311 45" width="311" height="45" role="img" aria-label="KUROOBI">
   <!-- 座標はすべて「線の外形」基準。線幅 8 なので、端点や水平線・円弧の頂点では
        中心線を 4 内側に置く (丸い端は端点から全方向へ 4 膨らむ)。
        全文字の外形が y 10-54 (高さ 44) に収まり、上下のラインが揃う。
-       viewBox は字の外形ぴったり (余白を持たない) — 余白は使う側で決める。
+       viewBox は字の外形 + 0.5 (余白は使う側で決める)。ぴったりに詰めると
+       描画時の丸めで端の丸みが削れる — 0.5 は表示上ゼロだが欠けは防げる。
        外形幅は K U = 36、R B = 32 (縦線から片側だけ出る字は狭くする)、字間は 13。
        O だけ 44 なのは石として置くため。 -->
   <g fill="none" stroke="currentColor" stroke-width="8" stroke-linecap="round" stroke-linejoin="round">
