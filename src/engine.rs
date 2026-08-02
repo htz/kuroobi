@@ -18,11 +18,16 @@ use crate::{Board, Position};
 /// 表す (ヒューリスティック評価より必ず優先されるように)。エンジンの
 /// 外へ返す値は石差のスケールへ戻す。学習 (learn.rs) が定石に書く値も
 /// この出口を通るので、スケールが混ざらない。
+///
+/// あわせて石差の範囲 (±64) に収める。中断された探索は番兵 (i32 の極値)
+/// を返し、それが素通りすると「+2147483600 石」のような値が画面や定石に
+/// 出る。石差はどうやっても ±64 なので、外へ出る前にここで潰す。
 fn stone_scale(v: f32) -> f32 {
-    if v.abs() >= 999.0 {
-        v / 1000.0
+    let v = if v.abs() >= 999.0 { v / 1000.0 } else { v };
+    if v.is_finite() {
+        v.clamp(-64.0, 64.0)
     } else {
-        v
+        0.0
     }
 }
 
@@ -295,7 +300,7 @@ impl Engine {
                     .solve_with_eval(EndSolverMode::Perfect, board, Some(&self.evaluator));
             MoveEval {
                 pos: r.best_move,
-                value: r.value as f32,
+                value: stone_scale(r.value as f32),
                 exact: true,
                 from_book: false,
                 learned: false,
@@ -304,7 +309,7 @@ impl Engine {
             let r = self.solver.solve_selective(board, Some(&self.evaluator), t);
             MoveEval {
                 pos: r.best_move,
-                value: r.value as f32,
+                value: stone_scale(r.value as f32),
                 exact: false,
                 from_book: false,
                 learned: false,
@@ -398,7 +403,7 @@ impl Engine {
                     .solve_with_eval(EndSolverMode::Perfect, board, Some(&self.evaluator));
             MoveEval {
                 pos: r.best_move,
-                value: r.value as f32,
+                value: stone_scale(r.value as f32),
                 exact: true,
                 from_book: false,
                 learned: false,
