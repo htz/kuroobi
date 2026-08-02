@@ -641,15 +641,25 @@ async fn think(app: State<'_, App>) -> Result<ThinkView, String> {
     let board = app.game.lock().unwrap().board;
     let eng = app.engine.clone();
     let act = app.activity.clone();
-    let (mv, secs) = tauri::async_runtime::spawn_blocking(move || {
+    let stop = app.stop.clone();
+    let (mv, secs, aborted) = tauri::async_runtime::spawn_blocking(move || {
         let _g = ActivityGuard::begin(&act, "思考");
         let mut guard = eng.lock().unwrap();
         let t0 = std::time::Instant::now();
         let mv = guard.as_mut().unwrap().choose(&board);
-        (mv, t0.elapsed().as_secs_f32())
+        // 停止された探索の値は不完全 (番兵が混じる)。呼び出し元へ返さない
+        let aborted = stop
+            .lock()
+            .unwrap()
+            .as_ref()
+            .is_some_and(|h| h.is_stopped());
+        (mv, t0.elapsed().as_secs_f32(), aborted)
     })
     .await
     .map_err(|e| e.to_string())?;
+    if aborted {
+        return Err("stopped".into());
+    }
     // 思考中に局面が動いていたら無効 (フロント側でも照合する)
     if !same_board(&app.game.lock().unwrap().board, &board) {
         return Err("position changed".into());
@@ -725,6 +735,7 @@ async fn eval_at(app: State<'_, App>, n: usize, depth: u32) -> Result<EvalPoint,
     let white = board.player() == Color::White;
     let eng = app.engine.clone();
     let act = app.activity.clone();
+    let stop = app.stop.clone();
     let (value, exact, from_book) = tauri::async_runtime::spawn_blocking(move || {
         let _g = ActivityGuard::begin(&act, "採点");
         let mut guard = eng.lock().unwrap();
@@ -738,6 +749,15 @@ async fn eval_at(app: State<'_, App>, n: usize, depth: u32) -> Result<EvalPoint,
     })
     .await
     .map_err(|e| e.to_string())?;
+    // 停止された探索の値は不完全なので返さない (グラフに残ってしまう)
+    if stop
+        .lock()
+        .unwrap()
+        .as_ref()
+        .is_some_and(|h| h.is_stopped())
+    {
+        return Err("stopped".into());
+    }
     let value = finite(if white { -value } else { value });
     Ok(EvalPoint {
         n,
