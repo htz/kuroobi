@@ -43,14 +43,20 @@ export function Nav({ view, onView, online, badges, onSettings }: NavProps) {
     <nav id="nav">
       <div className="nav-brand">KUROOBI</div>
       {LOCAL.map((x) => item(x))}
-      {/* 見出し自体がログイン画面への入口。各画面はログイン後にだけ出す
-          (未接続では中身が無く、押しても空の画面が並ぶだけのため) */}
-      <button className={'nav-sep' + (!online && view.startsWith('ggs') ? ' current' : '')}
-              onClick={() => onView('ggs-play')}>
+      <div className="nav-sep">
         <span className={'conn-dot' + (online ? '' : ' off')} />
         GGS
-      </button>
-      {online && GGS.map((x) => item(x))}
+      </div>
+      {/* 各画面はログイン後にだけ出す (未接続では中身が無いため)。
+          未接続のあいだは代わりに「ログイン」を置く */}
+      {online ? (
+        GGS.map((x) => item(x))
+      ) : (
+        <button className={'nav-item' + (view.startsWith('ggs') ? ' active' : '')}
+                onClick={() => onView('ggs-play')}>
+          ログイン
+        </button>
+      )}
       <span className="nav-spacer" />
       <button className="btn icon ghost" title="設定" aria-label="設定" onClick={onSettings}>
         <svg viewBox="0 0 24 24" width="17" height="17" fill="none" stroke="currentColor"
