@@ -14,6 +14,18 @@ use crate::pattern::EGAROUCID_PATTERNS;
 use crate::solver::{final_score, EndSolverMode, Solver};
 use crate::{Board, Position};
 
+/// 中盤探索は「探索の途中で終局まで読み切った」ことを石差 × 1000 で
+/// 表す (ヒューリスティック評価より必ず優先されるように)。エンジンの
+/// 外へ返す値は石差のスケールへ戻す。学習 (learn.rs) が定石に書く値も
+/// この出口を通るので、スケールが混ざらない。
+fn stone_scale(v: f32) -> f32 {
+    if v.abs() >= 999.0 {
+        v / 1000.0
+    } else {
+        v
+    }
+}
+
 /// 双方に合法手がない = 終局。
 fn is_game_over(board: &Board) -> bool {
     if board.movable() != 0 {
@@ -271,7 +283,7 @@ impl Engine {
             let (pos, value) = self.search.best_move_valued(board, c.depth);
             MoveEval {
                 pos,
-                value,
+                value: stone_scale(value),
                 exact: false,
                 from_book: false,
                 learned: false,
@@ -365,7 +377,7 @@ impl Engine {
             let (pos, value) = self.search.best_move_valued(board, depth);
             MoveEval {
                 pos,
-                value,
+                value: stone_scale(value),
                 exact: false,
                 from_book: false,
                 learned: false,
@@ -418,7 +430,7 @@ impl Engine {
                 let (_, v) = self.search.best_move_valued(&child, d);
                 MoveEval {
                     pos: Some(pos),
-                    value: -v,
+                    value: stone_scale(-v),
                     exact: false,
                     from_book: false,
                     learned: false,
