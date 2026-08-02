@@ -5,7 +5,7 @@ use std::path::Path;
 
 use kuroobi::engine::{Engine, EngineConfig};
 use kuroobi::resources::Resources;
-use kuroobi::{Board, Position};
+use kuroobi::{Board, Color, Position};
 
 /// GGS のアーカイブから取った実対局 (黒 +54 で終局、パスを含む)。
 const KIFU: &str = "e6f4c3d6f6e7f5g5e3g4c7d3f3c4c6c5b4b6d7b5c2a3f8e8d8c8b8d2g3e2\
@@ -96,4 +96,108 @@ fn absorbs_a_game_and_biases_the_choice() {
         "負けの帰結が値として書き戻されている (diverged={diverged})"
     );
     let _ = std::fs::remove_file(&learn_path);
+}
+
+/// 決定的な同じ相手との連戦で、負けた棋譜を繰り返さないこと。
+///
+/// 黒 = 学習する側 (浅い)、白 = 相手役 (深く、学習しない)。毎局エンジンを
+/// 作り直して置換表の持ち越しを排除するので、白は完全に決定的。学習分は
+/// book_learn.txt 経由で次の局へ引き継がれる (再起動を跨ぐ実運用と同じ形)。
+#[test]
+#[ignore]
+fn repeated_matches_diverge_after_losses() {
+    let res = Resources::load(Path::new("/nonexistent"));
+    let dir_a = std::env::temp_dir().join("kuroobi_learn_arena_a");
+    let dir_b = std::env::temp_dir().join("kuroobi_learn_arena_b");
+    std::fs::create_dir_all(&dir_a).unwrap();
+    std::fs::create_dir_all(&dir_b).unwrap();
+    let _ = std::fs::remove_file(dir_a.join("book_learn.txt"));
+    let _ = std::fs::remove_file(dir_b.join("book_learn.txt"));
+
+    let mk = |dir: &Path, depth: u32, solve: u8| EngineConfig {
+        weights: res.weights_path(),
+        nnue: res.nnue_path(),
+        book: dir.join("book.txt"), // 存在しない (定石なし)
+        depth,
+        solve_empties: solve,
+        band: 0,
+        threads: 1,
+        midgame_hash_bits: 18,
+        solver_hash_bits: 18,
+        ..Default::default()
+    };
+    let cfg_a = mk(&dir_a, 2, 8); // 学習する側 (黒)。浅くして負けやすく
+    let cfg_b = mk(&dir_b, 6, 10); // 相手役 (白)。学習しない
+
+    // 対照実験: 学習しなければ同じ棋譜を正確に繰り返す (両者決定的)。
+    // この前提が崩れたら、以降の「変化」を学習の効果と言えない。
+    let control1 = play_game(&cfg_a, &cfg_b);
+    let control2 = play_game(&cfg_a, &cfg_b);
+    assert_eq!(
+        control1.0, control2.0,
+        "学習しなければ同一棋譜になる (前提の確認)"
+    );
+    println!(
+        "対照 (学習なし): 黒 {:+} の同一棋譜を反復 ({}…)",
+        control1.1,
+        &control1.0[..24]
+    );
+
+    // 連戦 + 毎局取り込み
+    let mut games: Vec<(String, i32)> = Vec::new();
+    for g in 0..8 {
+        let (kifu, diff) = play_game(&cfg_a, &cfg_b);
+        if let Some((prev, prev_diff)) = games.last() {
+            if *prev_diff < 0 {
+                assert_ne!(&kifu, prev, "{g} 局目: 負けた棋譜をそのまま繰り返した");
+            }
+        }
+        println!("game {g}: 黒 {diff:+}  {}…", &kifu[..kifu.len().min(28)]);
+        // 勝敗問わず取り込む (book_learn.txt に保存され次の局に効く)
+        let mut a = Engine::new(cfg_a.clone()).unwrap();
+        let mut job = a.learn_start(None, &kifu, 4).unwrap();
+        while a.learn_step(&mut job, 4).unwrap().is_none() {}
+        games.push((kifu, diff));
+    }
+
+    let uniq: std::collections::HashSet<&String> = games.iter().map(|(k, _)| k).collect();
+    let losses = games.iter().filter(|(_, d)| *d < 0).count();
+    println!(
+        "{} 局中 {} 種類の棋譜 / 黒の負け {} 回",
+        games.len(),
+        uniq.len(),
+        losses
+    );
+    assert!(losses > 0, "この深さ差なら黒が負ける局が出るはず");
+    assert!(uniq.len() > 1, "棋譜が変化する");
+    let _ = std::fs::remove_file(dir_a.join("book_learn.txt"));
+}
+
+/// 1 局打つ。エンジンは毎回作り直し (置換表の持ち越しなし)。
+/// 戻り値は (棋譜, 黒視点の石差)。
+fn play_game(cfg_black: &EngineConfig, cfg_white: &EngineConfig) -> (String, i32) {
+    let mut black = Engine::new(cfg_black.clone()).expect("weights が必要");
+    let mut white = Engine::new(cfg_white.clone()).unwrap();
+    let mut board = Board::new();
+    let mut kifu = String::new();
+    for _ in 0..200 {
+        if board.is_game_over() {
+            break;
+        }
+        if board.movable() == 0 {
+            board.pass();
+            continue;
+        }
+        let e = if board.player() == Color::Black {
+            &mut black
+        } else {
+            &mut white
+        };
+        let mv = e.choose(&board);
+        let p = mv.pos.expect("合法手がある局面で手が返る");
+        board.make_move(p).expect("エンジンの手は合法");
+        kifu.push_str(&p.to_kifu().to_lowercase());
+    }
+    let diff = board.black_count() as i32 - board.white_count() as i32;
+    (kifu, diff)
 }
