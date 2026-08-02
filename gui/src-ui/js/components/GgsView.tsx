@@ -216,10 +216,15 @@ function GgsLogin() {
           次回から自動ログインします
         </p>
         {saved && (
-          <button className="btn primary"
-                  onClick={() => void run(() => ggsApi.connectSaved())}>
-            「{saved}」でログイン
-          </button>
+          <>
+            <button className="btn primary"
+                    onClick={() => void run(() => ggsApi.connectSaved())}>
+              保存済みの「{saved}」でログイン
+            </button>
+            {/* 下は別アカウント用の手入力。区切らないとボタンが 2 つ並んで
+                どちらを押すのか分からなくなる */}
+            <div className="login-sep">別のアカウントを使う</div>
+          </>
         )}
         <div>
           <label className="field">ログイン名</label>
@@ -228,7 +233,9 @@ function GgsLogin() {
           <input type="password" value={pw} onChange={(e) => setPw(e.target.value)} />
         </div>
         <button className={'btn' + (saved ? '' : ' primary')}
-                onClick={() => void run(() => ggsApi.connect(user, pw))}>接続</button>
+                onClick={() => void run(() => ggsApi.connect(user, pw))}>
+          入力した情報でログイン
+        </button>
         <div className="muted">{status}</div>
       </div>
     </div>
