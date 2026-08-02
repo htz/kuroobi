@@ -12,6 +12,14 @@ export type AppMode = 'vs' | 'study';
 export type EngineSide = 'black' | 'white' | 'both' | 'off';
 export type MoveSource = 'book' | 'search';
 
+/** エンジンが指した手の記録 (棋譜の表に出す)。value は黒視点の石差。 */
+export interface MoveInfo {
+  source: MoveSource;
+  value: number;
+  exact: boolean;
+  learned: boolean;
+}
+
 /** 強さのプリセット。カスタムを選ぶと下の 3 つを直接いじる。 */
 export const LEVELS = [
   { name: 'Lv1 (入門)', depth: 1, solve: 2, band: 0 },
@@ -49,7 +57,7 @@ export function useGame() {
   const [thinking, setThinking] = useState(false);
   const [thinkSecs, setThinkSecs] = useState(0);          // 思考中の経過
   const [thinkTotal, setThinkTotal] = useState({ black: 0, white: 0 });
-  const [moveSource, setMoveSource] = useState<Record<number, MoveSource>>({});
+  const [moveSource, setMoveSource] = useState<Record<number, MoveInfo>>({});
   const [status, setStatus] = useState('');
   const [spin, setSpin] = useState(false);
   // エンジンが直前に指した手の評価 (「エンジン評価: +2.5 石」と出す)

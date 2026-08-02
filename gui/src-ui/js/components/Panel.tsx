@@ -2,12 +2,15 @@
 import { LEVELS } from '../state';
 import type { Game } from '../state';
 import { Kifu } from './Kifu';
+import type { GraphPoint } from './Graph';
 
 const fmtSecs = (v: number): string =>
   v >= 60 ? `${Math.floor(v / 60)} 分 ${(v % 60).toFixed(0)} 秒` : `${v.toFixed(1)} 秒`;
 
 export interface PanelProps {
   g: Game;
+  /** 評価値グラフの計算結果 (棋譜の表にも出す)。 */
+  gvals?: (GraphPoint | undefined)[] | null;
   onStart: () => void;
   onSave: () => void;
   onLoad: () => void;
@@ -28,7 +31,7 @@ function Seg<T extends string>(props: {
   );
 }
 
-export function Panel({ g, onStart, onSave, onLoad }: PanelProps) {
+export function Panel({ g, gvals, onStart, onSave, onLoad }: PanelProps) {
   const v = g.view;
   const vs = g.mode === 'vs';
   const anyThink = g.thinkTotal.black > 0 || g.thinkTotal.white > 0;
@@ -165,14 +168,13 @@ export function Panel({ g, onStart, onSave, onLoad }: PanelProps) {
       <div>
         <div className="row" style={{ alignItems: 'center', marginBottom: 4 }}>
           <label className="field" style={{ flex: 1, margin: 0 }}>
-            棋譜 <span style={{ color: 'var(--gold)' }}>|</span>定石{' '}
-            <span style={{ color: 'var(--accent)' }}>|</span>探索
+            棋譜 (評価は黒視点)
           </label>
           <button className="btn small" onClick={onSave}>保存</button>
           <button className="btn small" onClick={onLoad}>読込</button>
         </div>
         {v && (
-          <Kifu moves={v.moves} cursor={v.cursor} source={g.moveSource}
+          <Kifu moves={v.moves} cursor={v.cursor} info={g.moveSource} values={gvals}
                 onJump={(n) => void g.jumpTo(n)} />
         )}
       </div>

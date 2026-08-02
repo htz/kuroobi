@@ -171,38 +171,40 @@
     animation: rot .8s linear infinite; vertical-align: -1px;
   }
   @keyframes rot { to { transform: rotate(360deg); } }
+  /* ---- 棋譜 (1 手 1 行の表。評価値と出所つき) ---- */
   #kifu {
-    display: grid; grid-template-columns: repeat(auto-fill, minmax(56px, 1fr));
-    gap: 4px; align-content: flex-start;
     background: #1a1f25; border: 1px solid var(--border); border-radius: 8px;
-    padding: 8px; min-height: 56px; max-height: 168px; overflow-y: auto;
+    min-height: 56px; max-height: 260px; overflow-y: auto;
   }
-  .mv {
-    display: flex; align-items: baseline; gap: 4px;
-    font-family: ui-monospace, SFMono-Regular, monospace; font-size: 12px;
-    padding: 3px 6px; border-radius: 5px; background: #232932;
-    border: 1px solid transparent; cursor: pointer; color: var(--text);
-    transition: border-color .1s, opacity .1s;
-    font-variant-numeric: tabular-nums;
+  #kifu table { width: 100%; font-size: 12px; border-collapse: collapse; }
+  #kifu th, #kifu td {
+    padding: 3px 8px; border-bottom: 1px solid #232932; text-align: left;
   }
-  .mv i {
-    font-style: normal; font-size: 9px; color: var(--sub);
-    width: 16px; text-align: right; flex: none;
+  #kifu th {
+    position: sticky; top: 0; background: #1a1f25; color: var(--sub);
+    font-size: 10px; font-weight: 600; z-index: 1;
   }
-  .mv .st {
-    width: 9px; height: 9px; border-radius: 50%; flex: none; align-self: center;
+  #kifu th.n, #kifu td.n { width: 26px; text-align: right; color: var(--sub);
+                           font-size: 10px; }
+  #kifu td.m { font-family: ui-monospace, SFMono-Regular, monospace;
+               color: var(--text); }
+  #kifu td.m .st {
+    display: inline-block; width: 9px; height: 9px; border-radius: 50%;
+    margin-right: 6px; vertical-align: 0;
   }
-  .mv .st.b { background: #0d0d0d; box-shadow: inset 0 0 2px #444; }
-  .mv .st.w { background: #ececec; }
-  .mv:hover { border-color: var(--accent-dim); }
-  .mv.future { opacity: .4; }
-  .mv.current { border-color: var(--accent); background: rgba(77,159,255,.12); }
-  .mv.pass { color: var(--sub); }
-  /* エンジンが指した手の由来 */
-  .mv.src-book { box-shadow: inset 2px 0 0 var(--gold); }
-  .mv.src-search { box-shadow: inset 2px 0 0 var(--accent); }
-  .mv.nolink { cursor: default; }
-  .mv.nolink:hover { border-color: transparent; }
+  #kifu td.m .st.b { background: #0d0d0d; box-shadow: inset 0 0 2px #444; }
+  #kifu td.m .st.w { background: #ececec; }
+  #kifu th.v, #kifu td.v { text-align: right; font-variant-numeric: tabular-nums;
+                           color: var(--text); }
+  #kifu td.s { font-size: 11px; color: var(--sub); white-space: nowrap; }
+  #kifu td.s.book { color: var(--gold); }
+  #kifu td.s.exact { color: var(--text); }
+  #kifu tr.mv { cursor: pointer; transition: background .1s, opacity .1s; }
+  #kifu tr.mv:hover { background: rgba(255,255,255,.04); }
+  #kifu tr.current { background: rgba(77,159,255,.14);
+                     box-shadow: inset 2px 0 0 var(--accent); }
+  #kifu tr.future { opacity: .4; }
+  #kifu tr.pass td.m { color: var(--sub); }
 
   /* ---- 棋譜貼り付けモーダル ---- */
   #paste-modal {

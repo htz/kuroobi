@@ -135,8 +135,17 @@ export function App() {
         const r = await api.think();
         setThinkTotal((t) => ({ ...t, [side]: t[side] + r.secs }));
         const next = await api.applyMove(r.pos);
-        // 何手目の手だったかを記録する (棋譜に出所を出すため)
-        setMoveSource((m) => ({ ...m, [next.cursor]: r.from_book ? 'book' : 'search' }));
+        // 何手目の手だったかを記録する (棋譜の表に出所と評価を出すため)。
+        // 値は手番視点なので黒視点へ揃える
+        setMoveSource((m) => ({
+          ...m,
+          [next.cursor]: {
+            source: r.from_book ? 'book' : 'search',
+            value: side === 'white' ? -r.value : r.value,
+            exact: r.exact,
+            learned: r.learned,
+          },
+        }));
         applyView(next);
         maybeLearn(next);
         // どのくらい良いと見て指したかを残す
@@ -270,7 +279,7 @@ export function App() {
             )}
           </div>
 
-          <Panel g={g}
+          <Panel g={g} gvals={gvals}
                  onStart={() => {
                    if (g.playing) { g.stop(); g.say('対局を停止しました'); }
                    else { g.setPlaying(true); g.say(''); }
