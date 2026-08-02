@@ -21,6 +21,8 @@ export interface ThinkView {
   value: number;
   exact: boolean;
   from_book: boolean;
+  /** 実戦から学習した局面の定石か。 */
+  learned: boolean;
   /** この手に使った時間 (秒)。 */
   secs: number;
 }
@@ -29,6 +31,8 @@ export interface HintView {
   pos: number;
   value: number;
   exact: boolean;
+  /** 定石 book の値か (探索でなく)。 */
+  from_book: boolean;
 }
 
 export interface EvalPoint {
@@ -36,6 +40,8 @@ export interface EvalPoint {
   /** 黒視点の石差。 */
   value: number;
   exact: boolean;
+  /** 定石 book の値か (探索でなく)。 */
+  from_book: boolean;
 }
 
 /* ============================ GGS ============================ */

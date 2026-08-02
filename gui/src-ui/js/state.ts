@@ -31,7 +31,7 @@ export const LEVELS = [
 
 export interface Levels { depth: number; solve: number; band: number }
 
-export interface Hints { [sq: number]: { value: number; exact: boolean } }
+export interface Hints { [sq: number]: { value: number; exact: boolean; book: boolean } }
 
 export function useGame() {
   const [view, setView] = useState<GameView | null>(null);
@@ -102,7 +102,7 @@ export function useGame() {
       const next: Hints = {};
       for (const h of hs) {
         if (!Number.isFinite(h.value)) continue;
-        next[h.pos] = { value: h.value, exact: h.exact };
+        next[h.pos] = { value: h.value, exact: h.exact, book: h.from_book };
       }
       setHints(Object.keys(next).length ? next : null);
       void at;

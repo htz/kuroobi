@@ -76,6 +76,8 @@ struct ThinkView {
     exact: bool,
     /// 定石 book から返した手か。
     from_book: bool,
+    /// 実戦から学習した局面の定石か (表示用)。
+    learned: bool,
     /// この手に使った時間 (秒)。定石から返した手はほぼ 0。
     secs: f32,
 }
@@ -85,6 +87,8 @@ struct HintView {
     pos: u8,
     value: f32,
     exact: bool,
+    /// 定石 book の値か (探索でなく)。
+    from_book: bool,
 }
 
 #[derive(Serialize)]
@@ -93,6 +97,8 @@ struct EvalPoint {
     /// 黒視点の石差。
     value: f32,
     exact: bool,
+    /// 定石 book の値か (探索でなく)。
+    from_book: bool,
 }
 
 /// 手順 (line) 上の n 手目直後の盤面。redo 側 (現在より先) も辿れるよう、
@@ -421,6 +427,7 @@ async fn think(app: State<'_, App>) -> Result<ThinkView, String> {
         value: finite(mv.value),
         exact: mv.exact,
         from_book: mv.from_book,
+        learned: mv.learned,
         secs,
     })
 }
@@ -445,18 +452,26 @@ async fn analyze(app: State<'_, App>, depth: u32) -> Result<Vec<HintView>, Strin
     ensure_engine(&app)?;
     let board = app.game.lock().unwrap().board;
     let eng = app.engine.clone();
-    let hints = tauri::async_runtime::spawn_blocking(move || {
+    let (hints, book) = tauri::async_runtime::spawn_blocking(move || {
         let mut guard = eng.lock().unwrap();
-        guard.as_mut().unwrap().analyze(&board, depth)
+        let e = guard.as_mut().unwrap();
+        // 定石にある手は定石の値 (実戦より深い探索で付けた値) を優先して
+        // 出す。出所が分かるように印を付けて返す。
+        let book = e.book_hints(&board).unwrap_or_default();
+        (e.analyze(&board, depth), book)
     })
     .await
     .map_err(|e| e.to_string())?;
     Ok(hints
         .into_iter()
-        .map(|(p, e)| HintView {
-            pos: p.index(),
-            value: finite(e.value),
-            exact: e.exact,
+        .map(|(p, e)| {
+            let b = book.iter().find(|(bp, _)| *bp == p);
+            HintView {
+                pos: p.index(),
+                value: finite(b.map(|(_, v)| *v).unwrap_or(e.value)),
+                exact: e.exact,
+                from_book: b.is_some(),
+            }
         })
         .collect())
 }
@@ -469,17 +484,24 @@ async fn eval_at(app: State<'_, App>, n: usize, depth: u32) -> Result<EvalPoint,
     let board = board_at_line(&app.game.lock().unwrap(), n)?;
     let white = board.player() == Color::White;
     let eng = app.engine.clone();
-    let mv = tauri::async_runtime::spawn_blocking(move || {
+    let (value, exact, from_book) = tauri::async_runtime::spawn_blocking(move || {
         let mut guard = eng.lock().unwrap();
-        guard.as_mut().unwrap().eval_position(&board, depth)
+        let e = guard.as_mut().unwrap();
+        // 定石にある局面は定石の値をそのまま使う (深い値で、探索も省ける)
+        if let Some((v, _)) = e.book_value(&board) {
+            return (v, false, true);
+        }
+        let mv = e.eval_position(&board, depth);
+        (mv.value, mv.exact, false)
     })
     .await
     .map_err(|e| e.to_string())?;
-    let value = finite(if white { -mv.value } else { mv.value });
+    let value = finite(if white { -value } else { value });
     Ok(EvalPoint {
         n,
         value,
-        exact: mv.exact,
+        exact,
+        from_book,
     })
 }
 

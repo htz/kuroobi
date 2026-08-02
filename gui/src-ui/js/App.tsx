@@ -78,7 +78,7 @@ export function App() {
   // "study" なら適当な棋譜を読み込んで検討画面を開き、"settings" なら
   // 設定 (歯車) を開く (どちらも見た目の確認用)。
   const started = useRef(false);
-  const { setPlaying: begin, setSide, setLevel,
+  const { setPlaying: begin, setSide, setLevel, setAutoHint,
           playing, view: gv, engineSides, setThinking, setThinkSecs, setThinkTotal,
           setMoveSource, setView: applyView, setPlaying, say, setLastEval, setMode } = g;
   useEffect(() => {
@@ -98,13 +98,18 @@ export function App() {
         setMode('study');
         applyView(await api.loadKifuText(
           'e6f4c3d6f6e7f5g5e3g4c7d3f3c4c6c5b4b6d7b5c2a3f8e8d8c8b8d2g3e2'));
+        // "study:hint" は序盤 (定石内) の局面で評価値表示まで自動で入れる
+        if (lv === 'hint') {
+          applyView(await api.goto(8));
+          setAutoHint(true);
+        }
         return;
       }
       if (who === 'both') setSide('both');
       if (lv !== undefined && Number.isFinite(+lv)) setLevel(+lv);
       begin(true);
     }).catch((e) => jsLog('autoplay: ' + e));
-  }, [begin, setSide, setLevel, setMode, applyView]);
+  }, [begin, setSide, setLevel, setMode, applyView, setAutoHint]);
 
   // ---- エンジンの手番 ----
   // 局面が「エンジンが打つ番」になったら 1 度だけ走る。二重起動を
@@ -138,7 +143,9 @@ export function App() {
         setLastEval(Number.isFinite(r.value)
           ? `エンジン評価: ${r.value > 0 ? '+' : ''}${
               r.exact ? r.value.toFixed(0) : r.value.toFixed(1)} 石`
-            + (r.exact ? ' (完全読み)' : (r.from_book ? ' (定石)' : ''))
+            + (r.exact ? ' (完全読み)'
+              : r.from_book && r.learned ? ' (定石·実戦学習)'
+              : r.from_book ? ' (定石)' : '')
           : '');
         say(r.pos === null ? 'パス' : '');
       } catch (e) {
@@ -192,7 +199,7 @@ export function App() {
       try {
         const p = await api.evalAt(n, depth);
         if (seq !== gseq.current) break;
-        if (Number.isFinite(p.value)) vals[n] = { value: p.value, exact: p.exact };
+        if (Number.isFinite(p.value)) vals[n] = { value: p.value, exact: p.exact, book: p.from_book };
         setGvals([...vals]);
       } catch (e) { g.say('' + e); break; }
     }
@@ -251,7 +258,9 @@ export function App() {
               <div className="card" id="graph-card">
                 <div className="row" style={{ alignItems: 'center' }}>
                   <label className="field" style={{ flex: 1, margin: 0 }}>
-                    評価値グラフ (黒視点)
+                    評価値グラフ (黒視点) — <span style={{ color: 'var(--gold)' }}>●</span>定石{' '}
+                    <span style={{ color: 'var(--text)' }}>●</span>読切{' '}
+                    <span style={{ color: 'var(--accent)' }}>●</span>探索
                   </label>
                   <button className="btn small" onClick={() => void updateGraph()}>更新</button>
                 </div>

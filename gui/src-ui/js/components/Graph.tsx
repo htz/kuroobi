@@ -4,7 +4,7 @@
 // 測っても 0 が並ぶだけなので飛ばす。
 import { useState } from 'react';
 
-export interface GraphPoint { value: number; exact: boolean }
+export interface GraphPoint { value: number; exact: boolean; book: boolean }
 
 export interface GraphProps {
   /** [n] = n 手目まで進めた局面の評価。undefined は未計算。長さ moves.length+1 */
@@ -77,8 +77,9 @@ export function Graph({ values, moves, cursor, busy, onJump }: GraphProps) {
         <>
           <path d={d} fill="none" stroke="var(--accent)" strokeWidth={2} strokeLinejoin="round" />
           {vals.map((v, n) => v && (
-            <circle key={n} cx={x(n)} cy={y(clamp(v.value))} r={v.exact ? 4 : 3}
-                    fill={v.exact ? 'var(--gold)' : 'var(--accent)'}
+            // 出所で塗り分け: 定石 = 金 / 読切 = 白 / 探索 = 青
+            <circle key={n} cx={x(n)} cy={y(clamp(v.value))} r={v.exact || v.book ? 4 : 3}
+                    fill={v.book ? 'var(--gold)' : v.exact ? '#e8ebee' : 'var(--accent)'}
                     stroke="#1a1f25" strokeWidth={1} />
           ))}
           {tip && (
@@ -90,7 +91,8 @@ export function Graph({ values, moves, cursor, busy, onJump }: GraphProps) {
                     y={y(clamp(tip.p.value)) < H / 2
                       ? y(clamp(tip.p.value)) + 14 : y(clamp(tip.p.value)) - 8}>
                 {`${tip.n}手 ${tip.p.value > 0 ? '+' : ''}${
-                  tip.p.exact ? tip.p.value.toFixed(0) : tip.p.value.toFixed(1)}`}
+                  tip.p.exact ? tip.p.value.toFixed(0) : tip.p.value.toFixed(1)}${
+                  tip.p.book ? ' (定石)' : tip.p.exact ? ' (読切)' : ''}`}
               </text>
             </>
           )}

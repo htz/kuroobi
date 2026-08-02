@@ -209,6 +209,27 @@ impl Engine {
         self.book.is_some()
     }
 
+    /// 表示用: 局面が定石にあれば候補手の値の一覧 (盤面の向き・手番視点)
+    /// を返す。定石を使わない設定では返さない (対局の選択と揃える)。
+    pub fn book_hints(&self, board: &Board) -> Option<Vec<(Position, f32)>> {
+        self.book
+            .as_ref()
+            .filter(|_| self.config.use_book)?
+            .candidates(board)
+    }
+
+    /// 表示用: 局面が定石にあれば (最善の値, 実戦学習由来か) を返す。
+    /// 評価値グラフが探索の代わりに使う。
+    pub fn book_value(&self, board: &Board) -> Option<(f32, bool)> {
+        let hints = self.book_hints(board)?;
+        let best = hints
+            .iter()
+            .map(|(_, v)| *v)
+            .fold(f32::NEG_INFINITY, f32::max);
+        let learned = self.learned.get_raw(Book::key(board).0).is_some();
+        Some((best, learned))
+    }
+
     pub fn set_levels(&mut self, depth: u32, solve_empties: u8, band: u8) {
         self.config.depth = depth;
         self.config.solve_empties = solve_empties;

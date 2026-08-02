@@ -208,6 +208,22 @@ impl Book {
         Some((p, v, e.depth))
     }
 
+    /// 局面の候補一覧を盤面の向きに戻して返す (合法手のみ、値の降順)。
+    /// 検討画面などの表示用。
+    pub fn candidates(&self, board: &Board) -> Option<Vec<(Position, f32)>> {
+        let (key, i) = Book::key(board);
+        let e = self.map.get(&key)?;
+        let out: Vec<(Position, f32)> = e
+            .moves
+            .iter()
+            .filter_map(|c| {
+                let p = Self::back(c.mv, i)?;
+                board.check(p).then_some((p, c.value))
+            })
+            .collect();
+        (!out.is_empty()).then_some(out)
+    }
+
     /// 正規化空間の手を元の盤面の向きへ戻す。
     fn back(mv: Position, i: u8) -> Option<Position> {
         Position::from_index(unmap_square(mv.index(), i) as u32)
