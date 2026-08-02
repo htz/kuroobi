@@ -183,8 +183,15 @@ fn resources() -> Resources {
     Resources::load(&resources_path())
 }
 
-fn ensure_engine(app: &State<App>) -> Result<(), String> {
-    let mut guard = app.engine.lock().unwrap();
+/// エンジンが無ければ作る。Arc を受け取るのは、ワーカースレッド
+/// (spawn_blocking) からも使えるようにするため — 同期コマンドは
+/// メインスレッドで走るので、そこでエンジンのロックを待つと探索が
+/// 終わるまで UI 全体が固まる。
+fn ensure_engine_in(
+    engine_slot: &Arc<Mutex<Option<Engine>>>,
+    stop_slot: &Arc<Mutex<Option<kuroobi::midgame::StopHandle>>>,
+) -> Result<(), String> {
+    let mut guard = engine_slot.lock().unwrap();
     if guard.is_none() {
         let res = resources();
         let cfg = EngineConfig {
@@ -197,10 +204,14 @@ fn ensure_engine(app: &State<App>) -> Result<(), String> {
             ..Default::default()
         };
         let engine = Engine::new(cfg)?;
-        *app.stop.lock().unwrap() = Some(engine.stop_handle());
+        *stop_slot.lock().unwrap() = Some(engine.stop_handle());
         *guard = Some(engine);
     }
     Ok(())
+}
+
+fn ensure_engine(app: &State<App>) -> Result<(), String> {
+    ensure_engine_in(&app.engine, &app.stop)
 }
 
 #[tauri::command]
@@ -264,16 +275,23 @@ fn stop_search(app: State<App>) -> Result<(), String> {
 }
 
 /// 定石 book を使うかどうか。研究中は切って自力の手を見たいことがある。
+/// async + spawn_blocking なのはロック待ちを UI から切り離すため
+/// (同期コマンドはメインスレッドで走るので、探索がロックを持っていると
+/// 解放まで画面ごと固まる)。
 #[tauri::command]
-fn set_use_book(app: State<App>, on: bool) -> Result<(), String> {
-    ensure_engine(&app)?;
-    app.engine
-        .lock()
-        .unwrap()
-        .as_mut()
-        .ok_or("engine")?
-        .set_use_book(on);
-    Ok(())
+async fn set_use_book(app: State<'_, App>, on: bool) -> Result<(), String> {
+    let (eng, stop) = (app.engine.clone(), app.stop.clone());
+    tauri::async_runtime::spawn_blocking(move || {
+        ensure_engine_in(&eng, &stop)?;
+        eng.lock()
+            .unwrap()
+            .as_mut()
+            .ok_or("engine")?
+            .set_use_book(on);
+        Ok(())
+    })
+    .await
+    .map_err(|e| e.to_string())?
 }
 
 /// 動作確認用: 起動直後に自動で始めたいこと (KUROOBI_AUTOPLAY)。
@@ -306,7 +324,6 @@ fn learn_game(app: State<App>) -> Result<(), String> {
     if !*app.learn_on.lock().unwrap() {
         return Ok(());
     }
-    ensure_engine(&app)?;
     let (kifu, board) = {
         let game = app.game.lock().unwrap();
         if !game.is_game_over() {
@@ -321,7 +338,13 @@ fn learn_game(app: State<App>) -> Result<(), String> {
         return Err("初期局面から始まった対局ではないため取り込みません".into());
     }
     let eng = app.engine.clone();
+    let stop = app.stop.clone();
     tauri::async_runtime::spawn_blocking(move || {
+        // エンジンの用意もここで行う (同期コマンド内でロックを待つと
+        // メインスレッドごと固まるため)
+        if ensure_engine_in(&eng, &stop).is_err() {
+            return;
+        }
         let mut job = {
             let mut guard = eng.lock().unwrap();
             let Some(engine) = guard.as_mut() else { return };
@@ -331,13 +354,19 @@ fn learn_game(app: State<App>) -> Result<(), String> {
             }
         };
         loop {
-            let mut guard = eng.lock().unwrap();
-            // 設定変更でエンジンが作り直されたら、この取り込みは諦める
-            let Some(engine) = guard.as_mut() else { break };
-            match engine.learn_step(&mut job, ggs::LEARN_DEPTH) {
-                Ok(None) => {}
-                Ok(Some(_)) | Err(_) => break,
+            let done = {
+                let mut guard = eng.lock().unwrap();
+                // 設定変更でエンジンが作り直されたら、この取り込みは諦める
+                let Some(engine) = guard.as_mut() else { break };
+                !matches!(engine.learn_step(&mut job, ggs::LEARN_DEPTH), Ok(None))
+            };
+            if done {
+                break;
             }
+            // ロックを取り直す前に一拍置く。すぐ取り直すと (Mutex は待った
+            // 順に渡るとは限らない)、強さ変更や思考の開始が何探索ぶんも
+            // 割り込めないことがある
+            std::thread::sleep(std::time::Duration::from_millis(50));
         }
     });
     Ok(())
@@ -375,7 +404,11 @@ async fn pick_resource(handle: tauri::AppHandle, kind: String) -> Result<Option<
 /// 使うファイルを選び直す。`kind` は "dir" | "weights" | "nnue" | "book"。
 /// path が null なら指定を外して既定に戻す。エンジンは次回の思考で作り直す。
 #[tauri::command]
-fn set_resource(app: State<App>, kind: String, path: Option<String>) -> Result<(), String> {
+async fn set_resource(
+    app: State<'_, App>,
+    kind: String,
+    path: Option<String>,
+) -> Result<(), String> {
     let mut r = resources();
     let p = path.map(PathBuf::from);
     match kind.as_str() {
@@ -386,21 +419,38 @@ fn set_resource(app: State<App>, kind: String, path: Option<String>) -> Result<(
         other => return Err(format!("unknown resource: {other}")),
     }
     r.save(&resources_path())?;
-    // 読み直しは次のエンジン生成から。今のエンジンは捨てる。
-    *app.engine.lock().unwrap() = None;
-    *app.stop.lock().unwrap() = None;
-    Ok(())
+    // 読み直しは次のエンジン生成から。今のエンジンは捨てる。捨てるにも
+    // ロックが要るので、探索中でも UI が固まらないようワーカーで待つ。
+    let (eng, stop) = (app.engine.clone(), app.stop.clone());
+    tauri::async_runtime::spawn_blocking(move || {
+        *eng.lock().unwrap() = None;
+        *stop.lock().unwrap() = None;
+    })
+    .await
+    .map_err(|e| e.to_string())
 }
 
+/// 強さの変更。set_use_book と同じ理由で async + spawn_blocking。
+/// 進行中の探索はそのまま走り切り、変更は次の探索から効く。
 #[tauri::command]
-fn set_levels(app: State<App>, depth: u32, solve_empties: u8, band: u8) -> Result<(), String> {
-    ensure_engine(&app)?;
-    let mut guard = app.engine.lock().unwrap();
-    guard
-        .as_mut()
-        .unwrap()
-        .set_levels(depth, solve_empties, band);
-    Ok(())
+async fn set_levels(
+    app: State<'_, App>,
+    depth: u32,
+    solve_empties: u8,
+    band: u8,
+) -> Result<(), String> {
+    let (eng, stop) = (app.engine.clone(), app.stop.clone());
+    tauri::async_runtime::spawn_blocking(move || {
+        ensure_engine_in(&eng, &stop)?;
+        eng.lock()
+            .unwrap()
+            .as_mut()
+            .ok_or("engine")?
+            .set_levels(depth, solve_empties, band);
+        Ok(())
+    })
+    .await
+    .map_err(|e| e.to_string())?
 }
 
 /// 現局面の最善手を計算する。**局面は動かさない** — 適用は `apply_move`。
@@ -787,7 +837,6 @@ fn ggs_connect(app: State<App>, login: String, pw: String) -> Result<String, Str
         .map_err(|e| e.to_string())?;
     Ok(l)
 }
-
 
 /// フロントエンドの例外を拾うための診断コマンド。WebView のコンソールが
 /// 見えない環境でも /tmp のログで追える。

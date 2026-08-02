@@ -150,7 +150,10 @@ export function useGame() {
 
   const newGame = useCallback(async () => {
     hintSeq.current++;
-    await pushLevels();
+    // 進行中の探索は打ち切る。強さの反映は待たない — 待つとエンジンの
+    // ロックが空くまで盤面が作られず、押した感触が無くなる
+    api.stopSearch().catch(() => {});
+    void pushLevels();
     setMoveSource({});
     setThinkTotal({ black: 0, white: 0 });
     setLastEval('');
