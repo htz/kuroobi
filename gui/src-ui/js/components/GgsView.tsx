@@ -262,7 +262,6 @@ function GgsEngineModal({ snap, onClose }: { snap: GgsSnapshot; onClose: () => v
   const [auto, setAuto] = useState(snap.auto_play);
   const [watch, setWatch] = useState(snap.watch_analysis);
   const [book, setBook] = useState(snap.engine.use_book);
-  const [learn, setLearn] = useState(snap.engine.learn);
   const [preset, setPreset] = useState<string>(() => {
     const hit = Object.entries(PRESETS).find(([, p]) =>
       p[0] === snap.engine.depth && p[1] === snap.engine.solve && p[2] === snap.engine.band);
@@ -305,10 +304,6 @@ function GgsEngineModal({ snap, onClose }: { snap: GgsSnapshot; onClose: () => v
           <input type="checkbox" checked={watch} onChange={(e) => setWatch(e.target.checked)} />
           観戦中の対局も解析する
         </label>
-        <label className="check">
-          <input type="checkbox" checked={learn} onChange={(e) => setLearn(e.target.checked)} />
-          終局した対局を定石の学習に取り込む
-        </label>
         <div>
           <label className="field">
             定石{!snap.engine.book_loaded && (
@@ -334,7 +329,6 @@ function GgsEngineModal({ snap, onClose }: { snap: GgsSnapshot; onClose: () => v
             await ggsApi.setAutoPlay(auto).catch(() => {});
             await ggsApi.setWatchAnalysis(watch).catch(() => {});
             await ggsApi.setUseBook(book).catch(() => {});
-            await ggsApi.setLearn(learn).catch(() => {});
             onClose();
           }}>適用</button>
         </div>

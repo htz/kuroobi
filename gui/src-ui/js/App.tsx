@@ -40,7 +40,11 @@ export function App() {
     api.setLevels(depth, solve, band).catch(() => {});
   }, [depth, solve, band]);
   useEffect(() => { api.setUseBook(g.useBook).catch(() => {}); }, [g.useBook]);
-  useEffect(() => { api.setLearn(g.learnOn).catch(() => {}); }, [g.learnOn]);
+  // 学習の取り込みはローカル・GGS 共通の設定 (歯車)。両方へ流す
+  useEffect(() => {
+    api.setLearn(g.learnOn).catch(() => {});
+    ggsApi.setLearn(g.learnOn).catch(() => {});
+  }, [g.learnOn]);
 
   // 局面が動いたら採点し直す
   const refresh = g.refreshHints;
@@ -71,7 +75,8 @@ export function App() {
 
 
   // 動作確認用: KUROOBI_AUTOPLAY=both:11 のように指定すると自動で対局を始める。
-  // "study" なら適当な棋譜を読み込んで検討画面を開く (見た目の確認用)。
+  // "study" なら適当な棋譜を読み込んで検討画面を開き、"settings" なら
+  // 設定 (歯車) を開く (どちらも見た目の確認用)。
   const started = useRef(false);
   const { setPlaying: begin, setSide, setLevel,
           playing, view: gv, engineSides, setThinking, setThinkSecs, setThinkTotal,
@@ -82,6 +87,10 @@ export function App() {
     void api.autoplay().then(async (v) => {
       if (!v) return;
       const [who, lv] = v.split(':');
+      if (who === 'settings') {
+        setSettings(await api.resourceStatus().catch(() => []));
+        return;
+      }
       if (who === 'study') {
         // 起動時の状態取得と前後すると初期局面で上書きされるので一拍おく
         await new Promise((r) => setTimeout(r, 500));
@@ -287,7 +296,8 @@ export function App() {
       )}
 
       {settings && (
-        <SettingsModal initial={settings} onClose={() => setSettings(null)}
+        <SettingsModal initial={settings} learnOn={g.learnOn} onLearn={g.setLearnOn}
+                       onClose={() => setSettings(null)}
                        onChanged={() => { void api.hasBook().then(g.setHasBook); }} />
       )}
     </>

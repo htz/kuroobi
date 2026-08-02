@@ -16,6 +16,9 @@ const BY_KIND: Record<string, string> = {
 export interface SettingsModalProps {
   /** 開いた時点のファイルの状態。呼ぶ側が取ってから渡す。 */
   initial: [string, string, boolean][];
+  /** 終局した対局を定石の学習に取り込むか (ローカル・GGS 共通)。 */
+  learnOn: boolean;
+  onLearn: (on: boolean) => void;
   onClose: () => void;
   /** ファイルを変えたら呼ぶ (定石の有無が変わるため)。 */
   onChanged: () => void;
@@ -23,7 +26,7 @@ export interface SettingsModalProps {
 
 /// 開いているときだけ描く。呼ぶ側で出し分けることで、
 /// 「閉じているのに中身を取りに行く」経路をなくしている。
-export function SettingsModal({ initial, onClose, onChanged }: SettingsModalProps) {
+export function SettingsModal({ initial, learnOn, onLearn, onClose, onChanged }: SettingsModalProps) {
   const [status, setStatus] = useState(initial);
 
   // 変更したあとの取り直しだけ。開いた時点のものは呼ぶ側から受け取る。
@@ -75,6 +78,20 @@ export function SettingsModal({ initial, onClose, onChanged }: SettingsModalProp
               </div>
             );
           })}
+        </div>
+        <div className="settings-section">
+          <div className="settings-title">学習</div>
+          <p className="hint">
+            終局した対局 (ローカル対局と GGS の両方) を定石の学習に取り込みます。
+            負けた展開は次から自然に避けられるようになります。学習分は定石とは
+            別のファイル (book_learn.txt) に貯まります。
+          </p>
+          <div className="seg" style={{ alignSelf: 'flex-start' }}>
+            <button className={learnOn ? 'active' : ''}
+                    onClick={() => onLearn(true)}>取り込む</button>
+            <button className={learnOn ? '' : 'active'}
+                    onClick={() => onLearn(false)}>取り込まない</button>
+          </div>
         </div>
         <div className="row actions">
           <button className="btn ghost" onClick={onClose}>閉じる</button>
