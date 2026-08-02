@@ -196,7 +196,7 @@
   #kifu td.m .st.w { background: #ececec; }
   #kifu th.v, #kifu td.v { text-align: right; font-variant-numeric: tabular-nums;
                            color: var(--text); white-space: nowrap; }
-  #kifu td.v .dl { color: var(--bad); font-size: 10px; margin-left: 5px; }
+  #kifu td.v .dl { color: var(--bad); font-size: 10px; margin-right: 5px; }
   #kifu th.t, #kifu td.t { text-align: right; font-variant-numeric: tabular-nums;
                            color: var(--sub); font-size: 11px; }
   #kifu td.s { font-size: 11px; color: var(--sub); white-space: nowrap; }

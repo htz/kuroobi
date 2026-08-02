@@ -84,11 +84,12 @@ export function Kifu({ moves, cursor, info, values, onJump }: KifuProps) {
                   <span className={'st ' + (i % 2 === 0 ? 'b' : 'w')} />
                   {m == null ? 'パス' : sqName(m)}
                 </td>
+                {/* 悪手マークは値の左に出す。右に付けると値の縦の並びがずれる */}
                 <td className="v">
+                  {loss >= 2 && <span className="dl">▼{loss.toFixed(1)}</span>}
                   {value !== undefined
                     ? (value > 0 ? '+' : '') + value.toFixed(exact ? 0 : 1)
                     : ''}
-                  {loss >= 2 && <span className="dl">▼{loss.toFixed(1)}</span>}
                 </td>
                 <td className="t">{rec ? rec.secs.toFixed(1) : ''}</td>
                 <td className={'s' + (book ? ' book' : exact ? ' exact' : '')}>{src}</td>
