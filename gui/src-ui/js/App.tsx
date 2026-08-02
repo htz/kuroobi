@@ -136,14 +136,16 @@ export function App() {
         setThinkTotal((t) => ({ ...t, [side]: t[side] + r.secs }));
         const next = await api.applyMove(r.pos);
         // 何手目の手だったかを記録する (棋譜の表に出所と評価を出すため)。
-        // 値は手番視点なので黒視点へ揃える
+        // next.cursor は強制パスの先まで進んでいることがあるので、
+        // 指す前の局面から数える。値は手番視点なので黒視点へ揃える
         setMoveSource((m) => ({
           ...m,
-          [next.cursor]: {
+          [gv.cursor + 1]: {
             source: r.from_book ? 'book' : 'search',
             value: side === 'white' ? -r.value : r.value,
             exact: r.exact,
             learned: r.learned,
+            secs: r.secs,
           },
         }));
         applyView(next);

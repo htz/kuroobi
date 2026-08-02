@@ -195,7 +195,10 @@
   #kifu td.m .st.b { background: #0d0d0d; box-shadow: inset 0 0 2px #444; }
   #kifu td.m .st.w { background: #ececec; }
   #kifu th.v, #kifu td.v { text-align: right; font-variant-numeric: tabular-nums;
-                           color: var(--text); }
+                           color: var(--text); white-space: nowrap; }
+  #kifu td.v .dl { color: var(--bad); font-size: 10px; margin-left: 5px; }
+  #kifu th.t, #kifu td.t { text-align: right; font-variant-numeric: tabular-nums;
+                           color: var(--sub); font-size: 11px; }
   #kifu td.s { font-size: 11px; color: var(--sub); white-space: nowrap; }
   #kifu td.s.book { color: var(--gold); }
   #kifu td.s.exact { color: var(--text); }
