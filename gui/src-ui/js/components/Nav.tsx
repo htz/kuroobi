@@ -2,6 +2,8 @@
 // 下部に「いま何が CPU を使っているか」を常時出す (対局と検討・学習が
 // CPU を食い合う構成なので、何が走っているか見えないと切り分けられない)。
 import type { ActivityView } from '../api';
+// ロゴは SVG ファイルをそのまま読む (色は currentColor で地に追従する)。
+import logo from '../../assets/kuroobi.svg?raw';
 
 export type View =
   | 'play' | 'study'
@@ -47,7 +49,10 @@ export function Nav({ view, onView, online, badges, cpu, onSettings }: NavProps)
 
   return (
     <nav id="nav">
-      <div className="nav-brand">KUROOBI</div>
+      {/* 自前のアセットなので挿入して構わない。SVG のまま入れることで
+          currentColor が効き、地の明暗に合わせて色が変わる */}
+      <div className="nav-brand" aria-label="Kuroobi"
+           dangerouslySetInnerHTML={{ __html: logo }} />
       {LOCAL.map((x) => item(x))}
       <div className="nav-sep">
         <span className={'conn-dot' + (online ? '' : ' off')} />

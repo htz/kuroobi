@@ -24,8 +24,9 @@
     /* 本文側の再描画がナビに残らないよう重ね順を明示する */
     position: relative; z-index: 2;
   }
-  .nav-brand { font-size: 13px; letter-spacing: .16em; font-weight: 700;
-               color: var(--text); padding: 4px 11px 14px; }
+  /* ロゴ (SVG)。色は currentColor 任せ、高さだけ指定して幅は比率に従う */
+  .nav-brand { color: var(--text); padding: 6px 11px 16px; }
+  .nav-brand svg { display: block; height: 15px; width: auto; }
   .nav-item {
     display: block; width: 100%; text-align: left; border: none; background: transparent;
     color: var(--sub); padding: 9px 12px; border-radius: 8px; font-size: 13.5px;
