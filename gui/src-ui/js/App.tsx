@@ -218,9 +218,12 @@ export function App() {
     const seq = ++gseq.current;
     const key = lineKey(v);
     const len = v.moves.length;
-    const vals: (GraphPoint | undefined)[] = gvals && gkey.current === key
-      ? [...gvals] : new Array(len + 1);
+    // 押されたら必ず全局面を測り直す。前の結果を引き継ぐと、埋まっている
+    // ときに 1 局面も動かず「押しても何も起きない」ことになる。強さを
+    // 変えた後に測り直せないのも困る
+    const vals: (GraphPoint | undefined)[] = new Array(len + 1);
     gkey.current = key;
+    setGvals(null);
     let failed = false;
     await g.pushLevels();
     // 全局面を測るので深さは控えめに
@@ -240,7 +243,7 @@ export function App() {
     // 失敗したときは理由を残す。ここで消すと「押しても何も起きない」ように見える
     if (!failed && seq === gseq.current) g.say('');
     setGbusy(false);
-  }, [g, gbusy, gvals, ggsMatch]);
+  }, [g, gbusy, ggsMatch]);
 
   const loadText = async (text: string) => {
     try {
