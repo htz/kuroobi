@@ -30,10 +30,16 @@
   .nav-brand { color: var(--text); padding: 2px 0 20px; }
   .nav-brand svg { display: block; width: 100%; height: auto; }
   .nav-item {
-    display: block; width: 100%; text-align: left; border: none; background: transparent;
-    color: var(--sub); padding: 9px 12px; border-radius: 8px; font-size: 13.5px;
+    display: flex; align-items: center; gap: 9px; width: 100%; text-align: left;
+    border: none; background: transparent;
+    color: var(--sub); padding: 8px 11px; border-radius: 8px; font-size: 13.5px;
     font-family: inherit; cursor: pointer; transition: background .12s, color .12s;
   }
+  /* アイコンは文字より一段淡く。選択中は文字と同じ明るさまで上げる */
+  .nav-item svg { flex: none; opacity: .72; transition: opacity .12s; }
+  .nav-item:hover svg { opacity: .9; }
+  .nav-item.active svg { opacity: 1; }
+  .nav-item .badge-n { margin-left: auto; }
   .nav-item:hover { background: var(--panel-2, rgba(255,255,255,.05)); color: var(--text); }
   .nav-item.active { background: var(--accent); color: #fff; font-weight: 600; }
   .nav-sep { display: flex; align-items: center; gap: 7px; font-size: 10.5px;
@@ -48,7 +54,9 @@
                 display: flex; flex-direction: column; gap: 8px; }
   .cpu-status .meter { display: flex; flex-direction: column; gap: 3px; }
   .cpu-status .meter-head { display: flex; justify-content: space-between;
-                            align-items: baseline; letter-spacing: .06em; }
+                            align-items: center; letter-spacing: .06em; }
+  .cpu-status .meter-head .label { display: flex; align-items: center; gap: 5px; }
+  .cpu-status .meter-head .label svg { opacity: .8; }
   .cpu-status .meter-head .val { color: var(--text); font-size: 12px; font-weight: 600;
                                  font-variant-numeric: tabular-nums; }
   .cpu-status .meter-head .unit { color: var(--sub); font-size: 9.5px; font-weight: 400;
@@ -531,7 +539,8 @@
                     color: var(--text); }
 
   /* ---- ナビのバッジ ---- */
-  .nav-item { display: flex; align-items: center; justify-content: space-between; }
+  /* 並べ方は .nav-item の定義 (上) が持つ。ここで justify-content を足すと
+     アイコンと文字が左右に引き離される */
   .badge-n { background: var(--bad); color: #fff; font-size: 10.5px; font-weight: 700;
              border-radius: 50px; padding: 1px 7px; }
   .nav-item.active .badge-n { background: rgba(0,0,0,.3); }

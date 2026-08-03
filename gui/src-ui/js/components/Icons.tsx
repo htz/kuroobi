@@ -1,0 +1,87 @@
+// 画面で使うアイコン。外部ライブラリは入れられない (CSP) ので自前で描く。
+//
+// 作りは統一してある: 24×24 のマス目・線幅 1.8・丸い端と角・塗りなし。
+// ロゴと同じ「円と直線」の性格に揃えたいので、曲線は円弧だけにした。
+// 色は currentColor 任せ (地と状態に追従する)。
+
+export type IconName =
+  | 'play' | 'study' | 'ggs-play' | 'ggs-lobby' | 'ggs-users' | 'ggs-chat'
+  | 'ggs-standby' | 'ggs-console' | 'login' | 'cpu' | 'memory' | 'gear';
+
+/** 中身だけを持つ (svg 要素は Icon が用意する)。 */
+const PATHS: Record<IconName, React.ReactNode> = {
+  // 対局: 並んだ白石と黒石。ロゴの OO と同じ見立て
+  play: <>
+    <circle cx="9" cy="12" r="5" />
+    <circle cx="16.5" cy="12" r="5" fill="currentColor" stroke="none" />
+  </>,
+  // 検討: 盤を覗く虫めがね
+  study: <>
+    <circle cx="10.5" cy="10.5" r="6.5" />
+    <path d="M15.4 15.4 L20.5 20.5" />
+  </>,
+  // 対局・観戦: 盤
+  'ggs-play': <>
+    <rect x="3.5" y="3.5" width="17" height="17" rx="2" />
+    <path d="M3.5 9.2h17M3.5 14.8h17M9.2 3.5v17M14.8 3.5v17" />
+  </>,
+  // ロビー: 申し込みの一覧
+  'ggs-lobby': <>
+    <path d="M4 6.5h16M4 12h16M4 17.5h10" />
+  </>,
+  // プレイヤー
+  'ggs-users': <>
+    <circle cx="12" cy="8" r="3.6" />
+    <path d="M5 20c0-3.9 3.1-6 7-6s7 2.1 7 6" />
+  </>,
+  // チャット: 吹き出し
+  'ggs-chat': <>
+    <path d="M20 15.5a2 2 0 0 1-2 2H8.5L4.5 21v-3.5a2 2 0 0 1-.5-1.5v-9a2 2 0 0 1 2-2h12a2 2 0 0 1 2 2z" />
+  </>,
+  // 待機モード: 時計 (放置して待つ)
+  'ggs-standby': <>
+    <circle cx="12" cy="12" r="8.5" />
+    <path d="M12 6.8V12l3.6 2.1" />
+  </>,
+  // コンソール: プロンプト
+  'ggs-console': <>
+    <rect x="3" y="4.5" width="18" height="15" rx="2" />
+    <path d="M7.5 10l2.6 2.5-2.6 2.5M13 15h3.8" />
+  </>,
+  // ログイン: 中へ入る
+  login: <>
+    <path d="M13.5 4h4.5a2 2 0 0 1 2 2v12a2 2 0 0 1-2 2h-4.5" />
+    <path d="M9.5 16l4-4-4-4M13.5 12H3.5" />
+  </>,
+  // CPU: ピンの出たチップ
+  cpu: <>
+    <rect x="5.5" y="5.5" width="13" height="13" rx="1.5" />
+    <rect x="9.5" y="9.5" width="5" height="5" rx="0.5" />
+    <path d="M9 5.5V2.5M15 5.5V2.5M9 21.5v-3M15 21.5v-3M5.5 9H2.5M5.5 15H2.5M21.5 9h-3M21.5 15h-3" />
+  </>,
+  // メモリ: 積んだ層
+  memory: <>
+    <path d="M12 3.2 21 8l-9 4.8L3 8z" />
+    <path d="M3 12.6 12 17.4l9-4.8M3 17.2 12 22l9-4.8" />
+  </>,
+  gear: <>
+    <circle cx="12" cy="12" r="3" />
+    <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 1 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 1 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06A1.65 1.65 0 0 0 9 4.6a1.65 1.65 0 0 0 1-1.51V3a2 2 0 1 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9c.14.36.4.66.73.86.3.18.65.28 1 .28H21a2 2 0 1 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z" />
+  </>,
+};
+
+export interface IconProps {
+  name: IconName;
+  size?: number;
+  className?: string;
+}
+
+export function Icon({ name, size = 17, className }: IconProps) {
+  return (
+    <svg className={className} width={size} height={size} viewBox="0 0 24 24"
+         fill="none" stroke="currentColor" strokeWidth={1.8}
+         strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+      {PATHS[name]}
+    </svg>
+  );
+}
