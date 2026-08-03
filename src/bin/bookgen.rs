@@ -255,6 +255,10 @@ fn deepen(book: &mut Book, out: &Path, a: &Args) -> Result<(), String> {
                     // 表を全消去するため、大きな表は消去コストがそのまま損になる。
                     midgame_hash_bits: a.hash_bits,
                     solver_hash_bits: a.hash_bits,
+                    // 定石は引かない。引くと「これから評価する局面」が
+                    // 定石に当たり、探索せずに古い値 (未評価なら 0) を
+                    // そのまま書き戻してしまう
+                    use_book: false,
                     ..Default::default()
                 };
                 let mut engine = Engine::new(cfg)?;
