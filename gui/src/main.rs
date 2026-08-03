@@ -800,25 +800,33 @@ async fn eval_at(app: State<'_, App>, n: usize, depth: u32) -> Result<EvalPoint,
     let eng = app.engine.clone();
     let act = app.activity.clone();
     let stop = app.stop.clone();
-    let (value, exact, from_book) = tauri::async_runtime::spawn_blocking(move || {
+    // 前の停止を引きずらない。定石に当たった局面は探索を呼ばず、探索側の
+    // リセットも走らないので、ここで消しておかないと以降ずっと「停止済み」
+    // と誤判定して採点が 1 局面も進まなくなる
+    if let Some(h) = stop.lock().unwrap().as_ref() {
+        h.reset();
+    }
+    let (value, exact, from_book, searched) = tauri::async_runtime::spawn_blocking(move || {
         let _g = ActivityGuard::begin(&act, "採点");
         let mut guard = eng.lock().unwrap();
         let e = guard.as_mut().unwrap();
         // 定石にある局面は定石の値をそのまま使う (深い値で、探索も省ける)
         if let Some((v, _)) = e.book_value(&board) {
-            return (v, false, true);
+            return (v, false, true, false);
         }
         let mv = e.eval_position(&board, depth);
-        (mv.value, mv.exact, false)
+        (mv.value, mv.exact, false, true)
     })
     .await
     .map_err(|e| e.to_string())?;
-    // 停止された探索の値は不完全なので返さない (グラフに残ってしまう)
-    if stop
-        .lock()
-        .unwrap()
-        .as_ref()
-        .is_some_and(|h| h.is_stopped())
+    // 停止された探索の値は不完全なので返さない (グラフに残ってしまう)。
+    // 探索していない (定石) ときは見ない
+    if searched
+        && stop
+            .lock()
+            .unwrap()
+            .as_ref()
+            .is_some_and(|h| h.is_stopped())
     {
         return Err("stopped".into());
     }

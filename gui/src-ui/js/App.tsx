@@ -221,6 +221,7 @@ export function App() {
     const vals: (GraphPoint | undefined)[] = gvals && gkey.current === key
       ? [...gvals] : new Array(len + 1);
     gkey.current = key;
+    let failed = false;
     await g.pushLevels();
     // 全局面を測るので深さは控えめに
     const depth = Math.min(g.levels.depth, 14);
@@ -234,9 +235,10 @@ export function App() {
         if (seq !== gseq.current) break;
         if (Number.isFinite(p.value)) vals[n] = { value: p.value, exact: p.exact, book: p.from_book };
         setGvals([...vals]);
-      } catch (e) { g.say('' + e); break; }
+      } catch (e) { g.say('' + e); failed = true; break; }
     }
-    if (seq === gseq.current) g.say('');
+    // 失敗したときは理由を残す。ここで消すと「押しても何も起きない」ように見える
+    if (!failed && seq === gseq.current) g.say('');
     setGbusy(false);
   }, [g, gbusy, gvals, ggsMatch]);
 
