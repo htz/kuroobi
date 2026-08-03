@@ -60,18 +60,29 @@ export function GgsPlay({ ctx }: { ctx: GgsCtx }) {
               : (m.players.map((p) => p.name).join(' 対 ') || key);
             const moves = Math.max(...g.map((x) => x.moves.length));
             const thinking = g.some((x) => snap.thinking === x.id);
+            // 終局しても一覧からは消さない (盤面から棋譜を取り出せるように)
+            const over = g.every((x) => x.over);
+            const result = g.map((x) => x.result).find(Boolean) ?? '';
             return (
               <div key={key} className={'thread' + (key === cur ? ' active' : '')}
                    onClick={() => setSel(key)}>
                 <div className="thread-top">
-                  <span className={'tag ' + (isMine ? 'mine' : 'watch')}>
-                    {isMine ? '自分' : '観戦'}
+                  <span className={'tag ' + (over ? 'done' : isMine ? 'mine' : 'watch')}>
+                    {over ? '終局' : isMine ? '自分' : '観戦'}
                   </span>
                   <span className="thread-name">{names}</span>
                   {thinking && <span className="thinking-dot" />}
+                  {over && (
+                    <button className="btn icon ghost close-x" title="一覧から閉じる"
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              void ggsApi.closeMatch(m.base || m.id);
+                            }}>×</button>
+                  )}
                 </div>
                 <div className="thread-last">
                   {`${gtypeLabel(m.gtype)}${g.length === 2 ? ' · 2 局' : ''} · ${moves} 手目`}
+                  {over && result && ` · ${result}`}
                 </div>
               </div>
             );

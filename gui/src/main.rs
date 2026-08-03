@@ -1021,6 +1021,68 @@ fn load_kifu_text(app: State<App>, text: String) -> Result<GameView, String> {
     load_kifu_into(&app, &text)
 }
 
+/// 棋譜を「1 手ごとの盤面」に開く。読むためではなく見るための形。
+/// 対局の状態は変えないので、履歴から盤面を確かめるのに使える。
+#[derive(Serialize)]
+struct KifuFrame {
+    /// 64 マス: 0 空き / 1 黒 / 2 白。
+    cells: Vec<u8>,
+    /// この手で置いたマス (初期局面は null、パスも null)。
+    last: Option<u8>,
+    black: u8,
+    white: u8,
+    /// 手番 ("black" | "white")。
+    player: String,
+}
+
+#[tauri::command]
+fn preview_kifu(text: String) -> Result<Vec<KifuFrame>, String> {
+    let mut game = game_from_text(&text).ok_or("棋譜を読めません")?;
+    let line = game.line();
+    // 開始局面まで巻き戻す (抽選オープニングは初期配置と違う)
+    while game.move_count() > 0 {
+        game.undo().map_err(|e| format!("{e:?}"))?;
+    }
+    let mut b = game.board;
+
+    let frame = |b: &Board, last: Option<u8>| {
+        let mut cells = vec![0u8; 64];
+        for i in 0..64u8 {
+            let bit = 1u64 << i;
+            if b.black & bit != 0 {
+                cells[i as usize] = 1;
+            } else if b.white & bit != 0 {
+                cells[i as usize] = 2;
+            }
+        }
+        KifuFrame {
+            cells,
+            last,
+            black: b.black.count_ones() as u8,
+            white: b.white.count_ones() as u8,
+            player: match b.player() {
+                Color::Black => "black".into(),
+                Color::White => "white".into(),
+            },
+        }
+    };
+
+    let mut out = vec![frame(&b, None)];
+    for e in line {
+        match e {
+            Some(p) => {
+                b.make_move(p).map_err(|e| format!("{e:?}"))?;
+                out.push(frame(&b, Some(p.index())));
+            }
+            None => {
+                b.pass();
+                out.push(frame(&b, None));
+            }
+        }
+    }
+    Ok(out)
+}
+
 /// 外部から渡された棋譜 (あれば読んで削除)。
 fn take_handoff_kifu() -> Option<String> {
     let path = std::env::temp_dir().join("kuroobi_handoff.txt");
@@ -1194,6 +1256,14 @@ fn ggs_top(app: State<App>, gtype: String, n: u32) -> Result<(), String> {
 fn ggs_rank(app: State<App>, gtype: String, name: String) -> Result<(), String> {
     ggs_tx(&app)?
         .send(ggs::Cmd::Rank { gtype, name })
+        .map_err(|e| e.to_string())
+}
+
+/// 終局した対局を一覧から閉じる。
+#[tauri::command]
+fn ggs_close_match(app: State<App>, id: String) -> Result<(), String> {
+    ggs_tx(&app)?
+        .send(ggs::Cmd::CloseMatch(id))
         .map_err(|e| e.to_string())
 }
 
@@ -1468,6 +1538,7 @@ fn main() {
             save_kifu,
             load_kifu,
             load_kifu_text,
+            preview_kifu,
             js_log,
             ggs_connect,
             ggs_disconnect,
@@ -1480,6 +1551,7 @@ fn main() {
             ggs_top,
             ggs_rank,
             ggs_watch,
+            ggs_close_match,
             ggs_look,
             ggs_chat,
             ggs_match_cmd,

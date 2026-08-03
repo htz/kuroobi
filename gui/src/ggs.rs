@@ -27,6 +27,8 @@ pub enum Cmd {
         pw: String,
     },
     Disconnect,
+    /// 終局した対局を一覧から閉じる (進行中のものは閉じない)。
+    CloseMatch(String),
     Raw(String),
     Ask {
         gtype: String,
@@ -218,6 +220,10 @@ pub struct Offer {
 pub struct MatchView {
     pub id: String,
     pub base: String,
+    /// 終局したか。終わっても一覧には残す (手動で閉じる)。
+    pub over: bool,
+    /// 終局の結果 (石差の文字列)。
+    pub result: String,
     pub cells: Vec<u8>, // 0 空 1 黒(*) 2 白(O)
     pub turn: String,   // "black" | "white" | ""
     pub my_color: String,
@@ -502,9 +508,48 @@ struct MatchState {
     watch_hash: u64,
     last_played_hash: u64, // 同一局面への二重着手防止
     seen: u64,
+    /// 終局したか。終わっても一覧からは消さない (終局後の盤面から
+    /// 棋譜を見たり検討へ送ったりしたいため)。閉じるのは手動。
+    over: bool,
+    /// 終局の結果 ("+12.00" など)。表示用。
+    result: String,
 }
 
 impl MatchState {
+    /// 履歴と学習へ渡すための写し。終局後も一覧に本体を残すので、
+    /// 取り出す側には複製を渡す。
+    fn snapshot(&self) -> MatchState {
+        MatchState {
+            cells: self.cells.clone(),
+            start_cells: self.start_cells.clone(),
+            start_turn: self.start_turn,
+            gtype: self.gtype.clone(),
+            turn: self.turn,
+            my_color: self.my_color,
+            my_clock: self.my_clock.clone(),
+            my_clock_secs: self.my_clock_secs,
+            my_ext: self.my_ext,
+            opp_name: self.opp_name.clone(),
+            opp_rating: self.opp_rating.clone(),
+            opp_clock: self.opp_clock.clone(),
+            opp_secs: self.opp_secs,
+            opp_ext: self.opp_ext,
+            players: self.players.clone(),
+            moves: self.moves.clone(),
+            last_eval: self.last_eval,
+            last_eval_exact: self.last_eval_exact,
+            last_from_book: self.last_from_book,
+            watch_eval: self.watch_eval,
+            watch_best: self.watch_best.clone(),
+            watch_exact: self.watch_exact,
+            watch_hash: self.watch_hash,
+            last_played_hash: self.last_played_hash,
+            seen: self.seen,
+            over: self.over,
+            result: self.result.clone(),
+        }
+    }
+
     fn new() -> Self {
         MatchState {
             cells: vec![0; 64],
@@ -532,6 +577,8 @@ impl MatchState {
             watch_hash: 0,
             last_played_hash: 0,
             seen: 0,
+            over: false,
+            result: String::new(),
         }
     }
     /// 開始局面を盤面文字列にする。標準の初期局面から始まるなら空を返す。
@@ -674,6 +721,33 @@ fn drop_match(matches: &mut HashMap<String, MatchState>, id: &str) -> Vec<MatchS
         .cloned()
         .collect();
     keys.iter().filter_map(|k| matches.remove(k)).collect()
+}
+
+/// 終局しても一覧からは消さず、終わった印だけ付ける。終局後の盤面から
+/// 棋譜を取り出したり検討へ送ったりできるようにするため。閉じるのは手動。
+/// 戻り値は終局した対局の写し (履歴と学習に使う)。
+fn finish_match(
+    matches: &mut HashMap<String, MatchState>,
+    id: &str,
+    result: &str,
+) -> Vec<MatchState> {
+    let keys: Vec<String> = matches
+        .keys()
+        .filter(|k| k.as_str() == id || base_id(k) == id)
+        .cloned()
+        .collect();
+    let mut out = Vec::new();
+    for k in keys {
+        if let Some(m) = matches.get_mut(&k) {
+            m.over = true;
+            m.turn = ' ';
+            if !result.is_empty() {
+                m.result = result.to_string();
+            }
+            out.push(m.snapshot());
+        }
+    }
+    out
 }
 
 fn coord(p: Position) -> String {
@@ -1050,6 +1124,19 @@ pub fn run(
                         Cmd::Look(id) => {
                             pending.push(format!("look:{id}"));
                             send!(ctx, format!("tell /os look {id}"));
+                        }
+                        Cmd::CloseMatch(id) => {
+                            // 終局したものだけ閉じる (進行中は残す)
+                            let keys: Vec<String> = matches
+                                .iter()
+                                .filter(|(k, m)| m.over && (k.as_str() == id || base_id(k) == id))
+                                .map(|(k, _)| k.clone())
+                                .collect();
+                            for k in keys {
+                                matches.remove(&k);
+                            }
+                            sync_matches(&mut ctx, &matches);
+                            ctx.emit(true);
                         }
                         Cmd::Watch(id) => {
                             send!(ctx, format!("tell /os watch + {id}"));
@@ -1499,7 +1586,9 @@ pub fn run(
                                 s.ongoing.retain(|o| o.id != id);
                                 drop(s);
                                 if !was_mine {
-                                    drop_match(&mut matches, &id);
+                                    // 観戦していた対局も残す (終局後の盤面から
+                                    // 棋譜を取り出したいため)。閉じるのは手動
+                                    finish_match(&mut matches, &id, "");
                                 }
                             }
                             // 観戦盤から消えたことを画面に伝える。ここで
@@ -2014,6 +2103,8 @@ fn sync_matches(ctx: &mut Ctx, matches: &HashMap<String, MatchState>) {
             gtype: m.gtype.clone(),
             ggf: m.ggf(id, None),
             moves: m.moves.values().cloned().collect(),
+            over: m.over,
+            result: m.result.clone(),
             last_eval: m.last_eval,
             last_eval_exact: m.last_eval_exact,
             last_from_book: m.last_from_book,
@@ -2081,6 +2172,11 @@ fn parse_offer(rest: &str, login: &str) -> Option<Offer> {
     })
 }
 
+/// 結果の表示文字列 (石差)。
+fn re_text(score: Option<f32>) -> Option<String> {
+    score.map(|s| format!("{s:+.2}"))
+}
+
 fn handle_match_end(
     ctx: &mut Ctx,
     rest: &str,
@@ -2108,7 +2204,7 @@ fn handle_match_end(
         .unwrap_or("");
     // synchro は親 ID で終局が来るので、`.N.0` / `.N.1` をまとめて回収する。
     // 棋譜は先に始まった方 (`.N.0`) を代表として残す。
-    let mut dropped = drop_match(matches, &id);
+    let mut dropped = finish_match(matches, &id, re_text(score).as_deref().unwrap_or(""));
     dropped.sort_by_key(|m| m.seen);
     let m = dropped.first();
     let re = score.map(|s| format!("{s:+.2}"));

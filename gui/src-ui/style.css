@@ -407,6 +407,24 @@
   /* 文字と並ぶアイコンは行の中央に置く */
   .btn { display: inline-flex; align-items: center; justify-content: center; gap: 6px; }
 
+  /* 終局した手合い。消さずに残すので、状態と閉じる口を出す */
+  .tag.done { background: rgba(255,255,255,.10); color: var(--sub); }
+  .thread .close-x { margin-left: auto; padding: 0 6px; font-size: 15px;
+                     line-height: 1; color: var(--sub); }
+  .thread .close-x:hover { color: var(--text); }
+
+  /* 棋譜のビューア (盤面で確かめてから渡す) */
+  .kifu-view { display: flex; flex-direction: column; gap: 10px; }
+  .kv-board { display: flex; justify-content: center; }
+  .kv-board .board { width: 100%; max-width: 380px; height: auto; }
+  .kv-bar { display: flex; align-items: center; font-size: 13px; }
+  .kv-score { display: flex; align-items: center; gap: 7px; font-weight: 600;
+              font-variant-numeric: tabular-nums; }
+  .kv-score .vs { color: var(--sub); font-weight: 400; margin: 0 2px; }
+  .kv-at { color: var(--sub); font-size: 12px; font-variant-numeric: tabular-nums; }
+  .kv-nav { display: flex; align-items: center; gap: 8px; }
+  .kv-nav input[type=range] { flex: 1; accent-color: var(--accent); }
+
   /* ---- 左に一覧・右に本体 (対局とチャットで共通) ---- */
   .chat-pane, .split-pane { display: grid; grid-template-columns: 250px 1fr; flex: 1;
                             min-height: 0; min-width: 0; padding: 0; overflow: hidden; }

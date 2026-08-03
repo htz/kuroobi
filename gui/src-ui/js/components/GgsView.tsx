@@ -11,7 +11,7 @@ import { GgsUsers } from './GgsUsers';
 import { GgsChat } from './GgsChat';
 import { GgsStandby } from './GgsStandby';
 import { GgsConsole } from './GgsConsole';
-import { Modal } from './Modal';
+import { KifuViewer } from './KifuViewer';
 import { Icon } from './Icons';
 
 /** 各画面へ渡す共通の入口。 */
@@ -124,22 +124,10 @@ export function GgsView({ view, onView, snap, patch, onOpenStudy }: GgsViewProps
         )}
 
       {kifuModal && (
-        <Modal title={`棋譜 — ${kifuModal.title}`} onClose={() => setKifuModal(null)}
-               actions={<>
-                 <button className="btn ghost" onClick={() => setKifuModal(null)}>閉じる</button>
-                 <span className="spacer" />
-                 <CopyButton text={kifuBody} />
-                 <button className="btn" onClick={() =>
-                   void ggsApi.saveKifu(kifuBody, 'kifu').catch((e) => alert(e))}>
-                   ファイルに保存
-                 </button>
-                 <button className="btn primary" onClick={() => {
-                   onOpenStudy(kifuBody);
-                   setKifuModal(null);
-                 }}>検討で開く</button>
-               </>}>
-          <textarea readOnly value={kifuBody || '(手なし)'} />
-        </Modal>
+        <KifuViewer title={kifuModal.title} kifu={kifuBody}
+                    onClose={() => setKifuModal(null)}
+                    onOpenStudy={onOpenStudy}
+                    onSave={(k) => void ggsApi.saveKifu(k, 'kifu').catch((e) => alert(e))} />
       )}
 
     </div>
@@ -215,19 +203,6 @@ function GgsLogin() {
         <div className="muted">{status}</div>
       </div>
     </div>
-  );
-}
-
-/* ---------------- コピー (押した直後だけ文言を変える) ---------------- */
-
-function CopyButton({ text }: { text: string }) {
-  const [done, setDone] = useState(false);
-  return (
-    <button className="btn" onClick={async () => {
-      try { await navigator.clipboard.writeText(text); } catch { /* 選択不可環境 */ }
-      setDone(true);
-      setTimeout(() => setDone(false), 1200);
-    }}>{done ? 'コピーしました' : 'コピー'}</button>
   );
 }
 
@@ -439,7 +414,8 @@ async function runAutoview(
     showKifu('kuroobi 対 scorpion',
       '(;GM[Othello]PB[kuroobi]PW[scorpion]RE[+14.00]'
       + 'BO[8 ---------------------------O*------*O--------------------------- *]'
-      + 'B[E8]W[d2/-6.46]B[C8]W[b7/-16.49];)');
+      // 実際に打てる手順にしておく (盤面で再生するので、不正だと開けない)
+      + 'B[F5]W[D6/-6.46]B[C3]W[D3/-16.49]B[C4]W[F4/-8.10];)');
     return;
   }
   const known: View[] = ['ggs-play', 'ggs-lobby', 'ggs-users', 'ggs-chat', 'ggs-standby', 'ggs-console'];

@@ -44,10 +44,20 @@ export const api = {
   saveKifu: () => call<string | null>('save_kifu'),
   loadKifu: () => call<GameView | null>('load_kifu'),
   loadKifuText: (text: string) => call<GameView>('load_kifu_text', { text }),
+  previewKifu: (text: string) => call<KifuFrame[]>('preview_kifu', { text }),
   localThreads: () => call<ThreadsView>('local_threads', {}),
   setLocalThreads: (n: number | null) => call('set_local_threads', { n }),
   activity: () => call<ActivityView>('activity_status', {}),
 };
+
+/** 棋譜を 1 手ごとに開いた盤面 (見るための形。対局の状態は変えない)。 */
+export interface KifuFrame {
+  cells: number[];
+  last: number | null;
+  black: number;
+  white: number;
+  player: string;
+}
 
 /** スレッド数の設定 (set が null なら自動 = auto の値)。 */
 export interface ThreadsView { set: number | null; auto: number }
@@ -88,6 +98,7 @@ export const ggsApi = {
   top: (gtype: string, n: number) => call('ggs_top', { gtype, n }),
   rank: (gtype: string, name: string) => call('ggs_rank', { gtype, name }),
   watch: (id: string, on: boolean) => call('ggs_watch', { id, on }),
+  closeMatch: (id: string) => call('ggs_close_match', { id }),
   look: (id: string) => call('ggs_look', { id }),
   autoview: () => call<string>('ggs_autoview', {}),
   chat: (target: string, text: string) => call('ggs_chat', { target, text }),

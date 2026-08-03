@@ -115,6 +115,10 @@ export interface PlayerView {
 export interface MatchView {
   id: string;
   base: string;
+  /** 終局したか (終わっても一覧には残る)。 */
+  over: boolean;
+  /** 終局の結果 (石差)。 */
+  result: string;
   /** 64 マス: 0 空 / 1 黒 / 2 白 (file-major)。 */
   cells: number[];
   turn: '' | 'black' | 'white';
