@@ -52,6 +52,11 @@ const ABORTED: f32 = f32::NEG_INFINITY;
 /// How much each step of `mpc_relax` widens the ProbCut margin.
 const MPC_RELAX_STEP: f32 = 1.18;
 
+/// 反復深化で「次の段」が前の段の何倍かかるかの見積もり。オセロの中盤は
+/// 分岐が 8〜12 で、置換表と手順付けが効くぶん実測はこれより小さい。
+/// 大きく見るほど早めに切り上げる (時間切れで段を丸ごと捨てるより得)。
+const NEXT_PASS_FACTOR: f32 = 3.0;
+
 /// Minimum remaining depth for a YBWC split. Overridable so the split can be
 /// switched off (set it above the search depth) when isolating which half of
 /// the parallel scheme costs strength.
@@ -931,29 +936,94 @@ impl NnueSearch {
     /// search reproduces the sequential one exactly — the move alone can
     /// coincide while the value diverges.
     pub fn best_move_valued(&mut self, b: &Board, depth: u32) -> (Option<Position>, f32) {
+        let (p, v, _) = self.best_move_deadline(b, depth, None);
+        (p, v)
+    }
+
+    /// 期限つきの探索。反復深化なので、期限が来たら**直前に完了した段**の
+    /// 答えを返せる (途中の段は捨てる)。戻り値の 3 つ目は到達した深さ。
+    ///
+    /// 期限の見張りは専用スレッドに任せて停止ハンドルを立てさせる。探索の
+    /// 内側で時計を読むと、読む頻度を落とせば効きが鈍り、上げれば探索が
+    /// 遅くなる。停止ハンドルの確認はもともと一定ノードごとに走っている。
+    pub fn best_move_deadline(
+        &mut self,
+        b: &Board,
+        depth: u32,
+        deadline: Option<std::time::Instant>,
+    ) -> (Option<Position>, f32, u32) {
         if b.movable() == 0 {
-            return (None, f32::NAN);
+            return (None, f32::NAN, 0);
         }
         SEARCH_ACTIVE.store(true, std::sync::atomic::Ordering::Relaxed);
-        let r = self.best_move_valued_inner(b, depth);
+        let watcher = deadline.and_then(|dl| {
+            let stop = self.stop.clone()?;
+            let done = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+            let d2 = done.clone();
+            std::thread::spawn(move || {
+                // 細かく起きて、探索が先に終わっていれば黙って抜ける
+                while !d2.load(std::sync::atomic::Ordering::Relaxed) {
+                    let now = std::time::Instant::now();
+                    if now >= dl {
+                        stop.stop();
+                        return;
+                    }
+                    std::thread::sleep((dl - now).min(std::time::Duration::from_millis(20)));
+                }
+            });
+            Some(done)
+        });
+        let r = self.best_move_valued_inner(b, depth, deadline);
+        if let Some(d) = watcher {
+            d.store(true, std::sync::atomic::Ordering::Relaxed);
+        }
         SEARCH_ACTIVE.store(false, std::sync::atomic::Ordering::Relaxed);
         r
     }
 
-    fn best_move_valued_inner(&mut self, b: &Board, depth: u32) -> (Option<Position>, f32) {
-        if self.threads > 1 && depth >= 2 {
+    fn best_move_valued_inner(
+        &mut self,
+        b: &Board,
+        depth: u32,
+        deadline: Option<std::time::Instant>,
+    ) -> (Option<Position>, f32, u32) {
+        if self.threads > 1 && depth >= 2 && deadline.is_none() {
             // Lazy SMP runs its own iterative deepening on every worker; doing
             // the shallow passes here as well would just duplicate them.
-            return self.lazy_smp(b, depth);
+            let (p, v) = self.lazy_smp(b, depth);
+            return (p, v, depth);
         }
         let mut acc = self.nn.indices(b.black, b.white);
         // Iterative deepening: each pass seeds the table so the next orders by
         // the prior best move.
         let mut value = f32::NAN;
+        let mut best = None;
+        let mut reached = 0;
+        let mut last_pass = std::time::Duration::ZERO;
         for d in 1..=depth {
-            value = self.negamax(b, &mut acc, d, f32::NEG_INFINITY, f32::INFINITY);
+            if let Some(dl) = deadline {
+                let now = std::time::Instant::now();
+                if now >= dl {
+                    break;
+                }
+                // 次の段は前の段の数倍かかる。入っても終わらないなら始めない
+                // (始めれば見張りに切られ、その段はまるごと捨て札になる)
+                if reached > 0 && now + last_pass.mul_f32(NEXT_PASS_FACTOR) >= dl {
+                    break;
+                }
+            }
+            let t0 = std::time::Instant::now();
+            let v = self.negamax(b, &mut acc, d, f32::NEG_INFINITY, f32::INFINITY);
+            // 期限で切られた段は不完全。直前の段の答えを残す
+            if self.stop.as_ref().is_some_and(|s| s.is_stopped()) {
+                break;
+            }
+            last_pass = t0.elapsed();
+            value = v;
+            best = self.root_best(b, &mut acc);
+            reached = d;
         }
-        (self.root_best(b, &mut acc), value)
+        (best.or_else(|| self.root_best(b, &mut acc)), value, reached)
     }
 
     /// The move the table records for `b`, falling back to a 1-ply ordering.
@@ -1776,5 +1846,39 @@ impl NnueSearch {
             best_move,
         );
         best
+    }
+}
+
+#[cfg(test)]
+mod deadline_tests {
+    use super::*;
+
+    /// 期限を過ぎたら、そこまでに終わった深さの答えを返す。
+    /// (深い指定でも待たされない = 反復深化が段ごとに畳まれている)
+    #[test]
+    fn deadline_cuts_the_search_short() {
+        // 重みは読まない (テストに weights/ を要求しない)。値は無意味だが、
+        // 段が畳まれるかどうかの確認には要らない。quantize は必須 (忘れると
+        // SIMD 経路が未初期化領域を読む)
+        let mut nn0 = Nnue::new(crate::pattern::EGAROUCID_PATTERNS);
+        nn0.quantize();
+        let nn: &'static Nnue = Box::leak(Box::new(nn0));
+        let tt: &'static SharedTt = Box::leak(Box::new(SharedTt::new(18)));
+        let mut s = NnueSearch::new(nn, tt);
+        s.threads = 1;
+        s.set_stop(Some(StopHandle::new()));
+        let b = Board::new();
+        let t0 = std::time::Instant::now();
+        let dl = t0 + std::time::Duration::from_millis(120);
+        // 深さ 40 は本来数分かかる。期限で切り上がること
+        let (pos, _v, reached) = s.best_move_deadline(&b, 40, Some(dl));
+        let el = t0.elapsed();
+        assert!(pos.is_some(), "浅くても手は返る");
+        assert!(reached >= 1, "少なくとも 1 段は終わっている");
+        assert!(reached < 40, "期限で切り上がる (到達 {reached})");
+        assert!(
+            el < std::time::Duration::from_secs(3),
+            "期限を大きく超えない ({el:?})"
+        );
     }
 }

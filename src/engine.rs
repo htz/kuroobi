@@ -102,6 +102,8 @@ pub struct MoveEval {
     pub from_book: bool,
     /// 実戦から学習した局面の定石から返した手か (表示用)。
     pub learned: bool,
+    /// 中盤探索が到達した深さ。読み切りと定石では 0。
+    pub depth: u32,
 }
 
 /// 探索一式を束ねたセッション。生成コストが高い (重み読み込み +
@@ -257,6 +259,18 @@ impl Engine {
     /// どちらも同じ乱択 (`probe_varied`) に乗る。負けた帰結で値が下がった
     /// 手は自然に選ばれなくなる — 回避のための特別な判定は持たない。
     pub fn choose(&mut self, board: &Board) -> MoveEval {
+        self.choose_within(board, None)
+    }
+
+    /// 期限つきの着手選択。中盤探索は反復深化なので、期限が来ても直前に
+    /// 完了した深さの答えを返せる。読み切りと定石は途中で刻めないので
+    /// 期限を見ない (読み切りに入る手前で残り時間を見て決めるのは
+    /// 呼び出し側の仕事)。
+    pub fn choose_within(
+        &mut self,
+        board: &Board,
+        deadline: Option<std::time::Instant>,
+    ) -> MoveEval {
         self.stop.reset();
         // 定石 book: 実戦より深い探索で付けた答えなので、あれば即返す
         if let Some(book) = self.book.as_ref().filter(|_| self.config.use_book) {
@@ -279,6 +293,7 @@ impl Engine {
                     exact: false,
                     from_book: true,
                     learned,
+                    depth: 0,
                 };
             }
         }
@@ -292,6 +307,7 @@ impl Engine {
                 exact: true,
                 from_book: false,
                 learned: false,
+                depth: 0,
             };
         }
         if board.empty_count() <= c.solve_empties {
@@ -304,6 +320,7 @@ impl Engine {
                 exact: true,
                 from_book: false,
                 learned: false,
+                depth: 0,
             }
         } else if let Some(t) = selective_band(board.empty_count(), c.solve_empties, c.band) {
             let r = self.solver.solve_selective(board, Some(&self.evaluator), t);
@@ -313,15 +330,17 @@ impl Engine {
                 exact: false,
                 from_book: false,
                 learned: false,
+                depth: 0,
             }
         } else {
-            let (pos, value) = self.search.best_move_valued(board, c.depth);
+            let (pos, value, reached) = self.search.best_move_deadline(board, c.depth, deadline);
             MoveEval {
                 pos,
                 value: stone_scale(value),
                 exact: false,
                 from_book: false,
                 learned: false,
+                depth: reached,
             }
         }
     }
@@ -395,6 +414,7 @@ impl Engine {
                 exact: true,
                 from_book: false,
                 learned: false,
+                depth: 0,
             };
         }
         if board.empty_count() <= self.config.solve_empties {
@@ -407,6 +427,7 @@ impl Engine {
                 exact: true,
                 from_book: false,
                 learned: false,
+                depth: 0,
             }
         } else {
             let (pos, value) = self.search.best_move_valued(board, depth);
@@ -416,6 +437,7 @@ impl Engine {
                 exact: false,
                 from_book: false,
                 learned: false,
+                depth: 0,
             }
         }
     }
@@ -445,6 +467,7 @@ impl Engine {
                     exact: true,
                     from_book: false,
                     learned: false,
+                    depth: 0,
                 }
             } else if child.empty_count() <= self.config.solve_empties {
                 let r = self.solver.solve_with_eval(
@@ -458,6 +481,7 @@ impl Engine {
                     exact: true,
                     from_book: false,
                     learned: false,
+                    depth: 0,
                 }
             } else {
                 self.search.clear();
@@ -469,6 +493,7 @@ impl Engine {
                     exact: false,
                     from_book: false,
                     learned: false,
+                    depth: 0,
                 }
             };
             out.push((pos, ev));
