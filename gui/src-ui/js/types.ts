@@ -33,6 +33,8 @@ export interface HintView {
   exact: boolean;
   /** 定石 book の値か (探索でなく)。 */
   from_book: boolean;
+  /** この値を出した探索の深さ (読み切り・定石は 0)。 */
+  depth: number;
 }
 
 export interface EvalPoint {

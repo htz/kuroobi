@@ -11,7 +11,7 @@ use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 
 use serde::Serialize;
-use tauri::{Manager, State};
+use tauri::{Emitter, Manager, State};
 
 use kuroobi::engine::{Engine, EngineConfig};
 use kuroobi::game::Reversi;
@@ -208,13 +208,15 @@ struct ThinkView {
     secs: f32,
 }
 
-#[derive(Serialize)]
+#[derive(Serialize, Clone)]
 struct HintView {
     pos: u8,
     value: f32,
     exact: bool,
     /// 定石 book の値か (探索でなく)。
     from_book: bool,
+    /// この値を出した探索の深さ (読み切り・定石は 0)。
+    depth: u32,
 }
 
 #[derive(Serialize)]
@@ -788,9 +790,50 @@ async fn analyze(app: State<'_, App>, depth: u32) -> Result<Vec<HintView>, Strin
                 value: finite(b.map(|(_, v)| *v).unwrap_or(e.value)),
                 exact: e.exact,
                 from_book: b.is_some(),
+                depth: if b.is_some() || e.exact { 0 } else { depth },
             }
         })
         .collect())
+}
+
+/// 反復深化しながら評価値を出し続ける。段が終わるたびに画面へ送るので、
+/// 見ている間じわじわ深くなる。局面を変えるか止めるまで続く。
+#[tauri::command]
+async fn analyze_live(app: State<'_, App>, handle: tauri::AppHandle) -> Result<(), String> {
+    if ggs_match_active(&app) {
+        return Err("GGS 対局中は分析を控えます".into());
+    }
+    ensure_engine(&app)?;
+    let board = app.game.lock().unwrap().board;
+    let eng = app.engine.clone();
+    let act = app.activity.clone();
+    let stop = app.stop.clone();
+    if let Some(h) = stop.lock().unwrap().as_ref() {
+        h.reset();
+    }
+    tauri::async_runtime::spawn_blocking(move || {
+        let _g = ActivityGuard::begin(&act, "分析");
+        let mut guard = eng.lock().unwrap();
+        let Some(e) = guard.as_mut() else { return };
+        let book = e.book_hints(&board).unwrap_or_default();
+        e.analyze_deepening(&board, 1, |depth, hints| {
+            let view: Vec<HintView> = hints
+                .iter()
+                .map(|(p, ev)| {
+                    let b = book.iter().find(|(bp, _)| bp == p);
+                    HintView {
+                        pos: p.index(),
+                        value: finite(b.map(|(_, v)| *v).unwrap_or(ev.value)),
+                        exact: ev.exact,
+                        from_book: b.is_some(),
+                        depth: if b.is_some() { 0 } else { ev.depth },
+                    }
+                })
+                .collect();
+            handle.emit("hints", (depth, view)).is_ok()
+        });
+    });
+    Ok(())
 }
 
 /// 手順上の n 手目直後の局面を固定深さで評価する (評価値グラフ用)。
@@ -1566,6 +1609,7 @@ fn main() {
             think,
             apply_move,
             analyze,
+            analyze_live,
             eval_at,
             save_kifu,
             load_kifu,

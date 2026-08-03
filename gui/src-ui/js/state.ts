@@ -6,7 +6,7 @@
 // そこから導くだけにする。
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { api } from './api';
-import type { GameView, HintView } from './types';
+import type { GameView } from './types';
 
 export type AppMode = 'vs' | 'study';
 export type EngineSide = 'black' | 'white' | 'both' | 'off';
@@ -41,7 +41,9 @@ export const LEVELS = [
 
 export interface Levels { depth: number; solve: number; band: number }
 
-export interface Hints { [sq: number]: { value: number; exact: boolean; book: boolean } }
+export interface Hints {
+  [sq: number]: { value: number; exact: boolean; book: boolean; depth: number };
+}
 
 export function useGame() {
   const [view, setView] = useState<GameView | null>(null);
@@ -99,28 +101,20 @@ export function useGame() {
   }, [say]);
 
   // ---- 常時ヒント ----
+  // 反復深化で回し続ける。結果は段ごとにイベントで届き、購読側が入れる。
+  // 深い答えが出るたびに置き換わるので、見ているあいだ値が締まっていく。
   const refreshHints = useCallback(async (v: GameView | null = view) => {
+    api.stopSearch().catch(() => {});     // 前の局面の分析を止める
     if (!autoHint || !v || v.over || thinking) return;
     if (playing && engineSides().includes(v.player)) return;   // エンジンが打つ番
-    const seq = ++hintSeq.current;
-    const at = v.kifu;
-    say('解析中…', true);
+    hintSeq.current++;
     try {
       await pushLevels();
-      const hs: HintView[] = await api.analyze(levels.depth);
-      if (seq !== hintSeq.current) return;
-      const next: Hints = {};
-      for (const h of hs) {
-        if (!Number.isFinite(h.value)) continue;
-        next[h.pos] = { value: h.value, exact: h.exact, book: h.from_book };
-      }
-      setHints(Object.keys(next).length ? next : null);
-      void at;
-      say('');
+      await api.analyzeLive();
     } catch (e) {
-      if (seq === hintSeq.current) say('' + e);
+      say('' + e);
     }
-  }, [view, autoHint, thinking, playing, engineSides, pushLevels, levels.depth, say]);
+  }, [view, autoHint, thinking, playing, engineSides, pushLevels, say]);
 
   /** 評価値の表示を切り替える。切ったらいま出ている値も消す。 */
   const setAutoHint = useCallback((on: boolean) => {

@@ -504,4 +504,83 @@ impl Engine {
         out.sort_by(|a, b| b.1.value.total_cmp(&a.1.value));
         out
     }
+
+    /// 深さを 1 ずつ上げながら全合法手を採点し、段ごとに結果を渡す。
+    ///
+    /// 止めるまで深くし続ける (`on_pass` が false を返すか、停止ハンドルが
+    /// 立つまで)。深い答えが出るたびに前の答えを置き換えるので、途中で
+    /// 止めてもその時点の最良が手元に残る。
+    ///
+    /// 読み切りに届いた手はそこで確定するので、以後の段では測り直さない。
+    pub fn analyze_deepening(
+        &mut self,
+        board: &Board,
+        from_depth: u32,
+        mut on_pass: impl FnMut(u32, &[(Position, MoveEval)]) -> bool,
+    ) {
+        self.stop.reset();
+        let saved_threads = self.search.threads;
+        self.search.threads = 1;
+        let mut depth = from_depth.max(1);
+        loop {
+            let mut out: Vec<(Position, MoveEval)> = Vec::new();
+            let mut all_exact = true;
+            for pos in board.movable_iter() {
+                if self.stop.is_stopped() {
+                    self.search.threads = saved_threads;
+                    self.search.clear();
+                    return;
+                }
+                let mut child = *board;
+                child.make_move_bits(pos);
+                let ev = if is_game_over(&child) {
+                    MoveEval {
+                        pos: Some(pos),
+                        value: -(final_score(&child) as f32),
+                        exact: true,
+                        from_book: false,
+                        learned: false,
+                        depth: 0,
+                    }
+                } else if child.empty_count() <= self.config.solve_empties {
+                    let r = self.solver.solve_with_eval(
+                        EndSolverMode::Perfect,
+                        &child,
+                        Some(&self.evaluator),
+                    );
+                    MoveEval {
+                        pos: Some(pos),
+                        value: stone_scale(-(r.value as f32)),
+                        exact: true,
+                        from_book: false,
+                        learned: false,
+                        depth: 0,
+                    }
+                } else {
+                    all_exact = false;
+                    self.search.clear();
+                    let (_, v, reached) = self.search.best_move_deadline(&child, depth, None);
+                    MoveEval {
+                        pos: Some(pos),
+                        value: stone_scale(-v),
+                        exact: false,
+                        from_book: false,
+                        learned: false,
+                        depth: reached + 1, // 子を d 読んだ = 親から見て d+1 手先まで
+                    }
+                };
+                out.push((pos, ev));
+            }
+            out.sort_by(|a, b| b.1.value.total_cmp(&a.1.value));
+            let go_on = on_pass(depth, &out);
+            // 全部が読み切りなら、深くしても答えは変わらない
+            if !go_on || all_exact || depth >= 60 {
+                break;
+            }
+            depth += 1;
+        }
+        self.search.threads = saved_threads;
+        // 解析でばらまいた浅いエントリを対局用の探索に引き継がない
+        self.search.clear();
+    }
 }

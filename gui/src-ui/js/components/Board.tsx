@@ -100,16 +100,23 @@ export function Board(props: BoardProps) {
                         fill={isBest ? 'rgba(255,212,121,.14)' : 'rgba(255,255,255,.06)'}
                         stroke={isBest ? 'var(--gold)' : 'rgba(255,255,255,.25)'}
                         strokeWidth={isBest ? 2 : 1} />
-                <text x={cx} y={cy + (h.book ? 2 : 8)} textAnchor="middle" fontSize={24}
+                <text x={cx} y={cy + (h.book || h.depth ? 2 : 8)} textAnchor="middle" fontSize={24}
                       fill={isBest ? 'var(--gold)' : '#d9e6de'}
                       fontWeight={isBest ? 700 : 400}>
                   {(h.value > 0 ? '+' : '') + h.value.toFixed(h.exact ? 0 : 1)}
                 </text>
-                {/* 出所: 定石の値には印を付ける (探索値と混ざるため) */}
-                {h.book && (
+                {/* 値の下に出どころ。定石か、読み切りか、何手先まで読んだか。
+                    分析は深さを上げ続けるので、この数字が育っていく */}
+                {h.book ? (
                   <text x={cx} y={cy + 22} textAnchor="middle" fontSize={13}
                         fill="var(--gold)">定石</text>
-                )}
+                ) : h.exact ? (
+                  <text x={cx} y={cy + 22} textAnchor="middle" fontSize={13}
+                        fill="#cfd8d2">読切</text>
+                ) : h.depth > 0 ? (
+                  <text x={cx} y={cy + 22} textAnchor="middle" fontSize={13}
+                        fill="#9fb0a6">{h.depth} 手</text>
+                ) : null}
               </>
             ) : (
               <circle className="hint-dot" cx={cx} cy={cy} r={7}

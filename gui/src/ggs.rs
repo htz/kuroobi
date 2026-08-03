@@ -2070,7 +2070,11 @@ fn time_budget(
     // 本時間が尽きていればロスタイム勝負: 最速で指す
     if secs == 0 {
         let d = if ext_secs > 0 { 4 } else { 2 };
-        let solve = if ext_secs > 0 { base.1.min(14) } else { base.1.min(10) };
+        let solve = if ext_secs > 0 {
+            base.1.min(14)
+        } else {
+            base.1.min(10)
+        };
         let cap = Duration::from_millis(if ext_secs > 0 { 800 } else { 300 });
         return (d, solve, 0, Some(cap));
     }
@@ -3278,7 +3282,10 @@ mod budget_tests {
         let a = cap(Some(900), 40, "even", 0).unwrap();
         let b = cap(Some(300), 40, "even", 0).unwrap();
         let c = cap(Some(60), 40, "even", 0).unwrap();
-        assert!(a > b && b > c, "残りが減るほど 1 手が短い: {a:?} > {b:?} > {c:?}");
+        assert!(
+            a > b && b > c,
+            "残りが減るほど 1 手が短い: {a:?} > {b:?} > {c:?}"
+        );
     }
 
     #[test]
@@ -3310,6 +3317,9 @@ mod budget_tests {
         let moves = ((40 - 26) as f64 / 2.0).ceil();
         let pool = c.unwrap().as_secs_f64() * moves;
         // 100 秒のうち 20 秒は読み切り用。中盤へ配るのは残り 80 秒まで
-        assert!(pool < 81.0, "中盤に配ったのは {pool:.1} 秒 (予備 20 秒を残すこと)");
+        assert!(
+            pool < 81.0,
+            "中盤に配ったのは {pool:.1} 秒 (予備 20 秒を残すこと)"
+        );
     }
 }

@@ -40,6 +40,7 @@ export const api = {
   think: () => call<ThinkView>('think'),
   applyMove: (sq: number | null) => call<GameView>('apply_move', { sq }),
   analyze: (depth: number) => call<HintView[]>('analyze', { depth }),
+  analyzeLive: () => call<void>('analyze_live'),
   evalAt: (n: number, depth: number) => call<EvalPoint>('eval_at', { n, depth }),
   saveKifu: () => call<string | null>('save_kifu'),
   loadKifu: () => call<GameView | null>('load_kifu'),
@@ -122,6 +123,15 @@ export const ggsApi = {
   saveKifu: (kifu: string, name: string) =>
     call<string | null>('ggs_save_kifu', { kifu, name }),
 };
+
+/** 分析の途中経過を購読する (深さ, 全合法手の評価)。 */
+export async function onHints(
+  fn: (depth: number, hints: HintView[]) => void,
+): Promise<() => void> {
+  const ev = window.__TAURI__?.event;
+  if (!ev) throw new Error('Tauri event が使えません');
+  return ev.listen<[number, HintView[]]>('hints', (e) => fn(e.payload[0], e.payload[1]));
+}
 
 /** バックエンドからの状態更新を購読する。戻り値で購読を解除できる。 */
 export async function onGgsSnapshot(fn: (s: GgsSnapshot) => void): Promise<() => void> {

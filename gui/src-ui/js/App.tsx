@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { api, ggsApi, jsLog, type ActivityView } from './api';
+import { api, ggsApi, jsLog, onHints, type ActivityView } from './api';
 import { useGame } from './state';
 import { useGgs } from './ggs';
 import type { GameView } from './types';
@@ -51,6 +51,22 @@ export function App() {
   // 局面が動いたら評価値を出し直す
   const refresh = g.refreshHints;
   useEffect(() => { void refresh(); }, [g.view, g.autoHint, refresh]);
+
+  // ---- 分析の途中経過 ----
+  // 反復深化の段が終わるたびに届く。深いものが来たら置き換えるだけ。
+  const setHints = g.setHints;
+  useEffect(() => {
+    let off: (() => void) | undefined;
+    void onHints((_depth, hs) => {
+      const next: Record<number, { value: number; exact: boolean; book: boolean; depth: number }> = {};
+      for (const h of hs) {
+        if (!Number.isFinite(h.value)) continue;
+        next[h.pos] = { value: h.value, exact: h.exact, book: h.from_book, depth: h.depth };
+      }
+      setHints(Object.keys(next).length ? next : null);
+    }).then((f) => { off = f; }).catch(() => {});
+    return () => off?.();
+  }, [setHints]);
 
   // ---- CPU の稼働状況 (ナビの常時表示) ----
   const [cpu, setCpu] = useState<ActivityView | null>(null);
