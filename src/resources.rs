@@ -122,7 +122,7 @@ impl Resources {
         let items = [
             ("線形評価の重み", self.weights_path()),
             ("NNUE の重み", self.nnue_path()),
-            ("定石 book", self.book_path()),
+            ("定石", self.book_path()),
         ];
         items
             .into_iter()

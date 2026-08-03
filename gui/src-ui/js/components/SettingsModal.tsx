@@ -4,16 +4,13 @@ import { api } from '../api';
 import type { ThreadsView } from '../api';
 import { Modal } from './Modal';
 
+// 画面に出す名前は resource_status が返すものと同じにする
+// (食い違うと状態が引けず、パスも出なくなる)
 const KINDS: [string, string][] = [
-  ['dir', '置き場所 (フォルダ)'],
   ['weights', '線形評価の重み'],
   ['nnue', 'NNUE の重み'],
-  ['book', '定石のファイル'],
+  ['book', '定石'],
 ];
-// resource_status が返す名前 → 画面の種別
-const BY_KIND: Record<string, string> = {
-  weights: '線形評価の重み', nnue: 'NNUE の重み', book: '定石のファイル',
-};
 
 export interface SettingsModalProps {
   /** 開いた時点のファイルの状態。呼ぶ側が取ってから渡す。 */
@@ -51,24 +48,20 @@ export function SettingsModal({ initial, learnOn, onLearn, onClose, onChanged }:
         <div className="settings-section">
           <div className="settings-title">KUROOBI が使うファイル</div>
           <p className="hint">
-            指定しなければ <code>weights/</code> を上へ辿って探します。
-            個別に選ぶと、そのファイルだけを差し替えます。変更は次の思考から効きます。
+            既定では <code>weights/</code> の中を使います。個別に選ぶと、そのファイルだけを
+            差し替えます。変更は次の思考から効きます。
           </p>
           {KINDS.map(([kind, title]) => {
-            const info = kind === 'dir' ? null : byName.get(BY_KIND[kind]);
+            const info = byName.get(title);
             return (
               <div className="file-row" key={kind}>
                 <div className="file-head">
                   {title}
-                  {info && (
-                    <span className={'file-state ' + (info.ok ? 'ok' : 'ng')}>
-                      {info.ok ? '見つかりました' : '見つかりません'}
-                    </span>
-                  )}
+                  <span className={'file-state ' + (info?.ok ? 'ok' : 'ng')}>
+                    {info?.ok ? '読み込めます' : 'ありません'}
+                  </span>
                 </div>
-                <div className="file-path">
-                  {info ? info.p : '(未指定なら自動で探します)'}
-                </div>
+                <div className="file-path">{info?.p ?? '—'}</div>
                 <div className="row actions">
                   <button className="btn small" onClick={async () => {
                     const p = await api.pickResource(kind);
