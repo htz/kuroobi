@@ -26,9 +26,18 @@ export function Kifu({ moves, cursor, info, values, onJump }: KifuProps) {
   // 現在手を掴んでおく。クラス名で探すと、装飾を変えたときに黙って壊れる。
   const current = useRef<HTMLTableRowElement>(null);
 
-  // 現在手が隠れないように追う
+  // 現在手が隠れないように追う。scrollIntoView は祖先も動かしてしまい
+  // (パネルごと流れる)、上の操作が画面外へ出るので、枠の中だけで計算する
   useEffect(() => {
-    current.current?.scrollIntoView({ block: 'nearest' });
+    const row = current.current;
+    const box = row?.parentElement?.parentElement?.parentElement;   // tr → tbody → table → #kifu
+    if (!row || !box) return;
+    const top = row.offsetTop;
+    const bottom = top + row.offsetHeight;
+    if (top < box.scrollTop) box.scrollTop = top;
+    else if (bottom > box.scrollTop + box.clientHeight) {
+      box.scrollTop = bottom - box.clientHeight;
+    }
   }, [cursor, moves.length]);
 
   // 悪手マークは前の手との評価差から出すので、先に全手の表示値を並べる

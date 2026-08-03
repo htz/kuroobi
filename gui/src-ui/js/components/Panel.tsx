@@ -31,42 +31,46 @@ function Seg<T extends string>(props: {
   );
 }
 
+/// 盤の上に置くスコア帯。石数・思考時間・結果を 1 行にまとめる。
+/// 右ペインに置くと縦を食い、盤の上下は余るので、こちらへ移した。
+export function ScoreBar({ g }: { g: PanelProps['g'] }) {
+  const v = g.view;
+  const anyThink = g.thinkTotal.black > 0 || g.thinkTotal.white > 0;
+  const result = v?.over
+    ? (v.black === v.white ? '引き分け' : v.black > v.white ? '黒の勝ち' : '白の勝ち')
+    : '';
+  return (
+    <div className="scorebar">
+      <span className={'side' + (v && !v.over && v.player === 'black' ? ' turn' : '')}>
+        <i className="disc b" />{v?.black ?? 2}
+      </span>
+      <div className="mid">
+        {result && <span className="result">{result}</span>}
+        {anyThink && (
+          <span className="times">
+            <i className="disc b" />{fmtSecs(g.thinkTotal.black)}
+            <span className="vs">思考時間</span>
+            {fmtSecs(g.thinkTotal.white)}<i className="disc w" />
+          </span>
+        )}
+      </div>
+      <span className={'side' + (v && !v.over && v.player === 'white' ? ' turn' : '')}>
+        {v?.white ?? 2}<i className="disc w" />
+      </span>
+    </div>
+  );
+}
+
 export function Panel({ g, gvals, onStart, onSave, onLoad }: PanelProps) {
   const v = g.view;
   const vs = g.mode === 'vs';
-  const anyThink = g.thinkTotal.black > 0 || g.thinkTotal.white > 0;
 
   return (
     <div id="panel">
       <div className="card">
-        <div className="score">
-          <span className={'side' + (v && !v.over && v.player === 'black' ? ' turn' : '')}>
-            <i className="disc b" />{v?.black ?? 2}
-          </span>
-          <span className="vs">—</span>
-          <span className={'side' + (v && !v.over && v.player === 'white' ? ' turn' : '')}>
-            {v?.white ?? 2}<i className="disc w" />
-          </span>
-        </div>
-        {anyThink && (
-          <div className="think-time">
-            <span className="side"><i className="disc b" />{fmtSecs(g.thinkTotal.black)}</span>
-            <span className="vs">思考時間の合計</span>
-            <span className="side">{fmtSecs(g.thinkTotal.white)}<i className="disc w" /></span>
-          </div>
-        )}
-        <div id="result">
-          {v?.over
-            ? (v.black === v.white ? '引き分け'
-              : (v.black > v.white ? '黒の勝ち' : '白の勝ち'))
-            : ''}
-        </div>
-      </div>
-
-      <div className="card">
         {vs && (
           <div>
-            <label className="field">エンジンの担当</label>
+            <label className="field">KUROOBI の担当</label>
             <Seg value={g.side} onChange={g.setSide} options={[
               ['black', '黒'], ['white', '白'], ['both', '両方'], ['off', 'なし'],
             ]} />
@@ -91,7 +95,7 @@ export function Panel({ g, gvals, onStart, onSave, onLoad }: PanelProps) {
         <div>
           <label className="field">
             定石{!g.hasBook && (
-              <span className="hint-inline"> — ファイルがありません (歯車から指定できます)</span>
+              <span className="hint-inline"> — ファイルがありません (設定から指定できます)</span>
             )}
           </label>
           <Seg value={g.useBook ? 'on' : 'off'} disabled={!g.hasBook}
@@ -165,7 +169,7 @@ export function Panel({ g, gvals, onStart, onSave, onLoad }: PanelProps) {
         </div>
       </div>
 
-      <div>
+      <div className="kifu-wrap">
         <div className="row" style={{ alignItems: 'center', marginBottom: 4 }}>
           <label className="field" style={{ flex: 1, margin: 0 }}>
             棋譜 (評価は黒視点)

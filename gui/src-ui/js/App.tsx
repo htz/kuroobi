@@ -7,9 +7,10 @@ import { Board } from './components/Board';
 import { GgsView } from './components/GgsView';
 import { Graph, type GraphPoint } from './components/Graph';
 import { Nav, type View } from './components/Nav';
-import { Panel } from './components/Panel';
+import { Panel, ScoreBar } from './components/Panel';
 import { SettingsModal } from './components/SettingsModal';
 import { Modal } from './components/Modal';
+import { Icon } from './components/Icons';
 
 export function App() {
   const g = useGame();
@@ -164,7 +165,7 @@ export function App() {
         maybeLearn(next);
         // どのくらい良いと見て指したかを残す
         setLastEval(Number.isFinite(r.value)
-          ? `エンジン評価: ${r.value > 0 ? '+' : ''}${
+          ? `KUROOBI の評価: ${r.value > 0 ? '+' : ''}${
               r.exact ? r.value.toFixed(0) : r.value.toFixed(1)} 石`
             + (r.exact ? ' (完全読み)'
               : r.from_book && r.learned ? ' (定石·実戦学習)'
@@ -273,6 +274,7 @@ export function App() {
       ) : (
         <>
           <div id="main">
+            <ScoreBar g={g} />
             <div id="board-wrap">
               <Board
                 cells={g.view?.cells ?? new Array(64).fill(0)}
@@ -292,7 +294,9 @@ export function App() {
                     <span style={{ color: 'var(--text)' }}>●</span>読切{' '}
                     <span style={{ color: 'var(--accent)' }}>●</span>探索
                   </label>
-                  <button className="btn small" onClick={() => void updateGraph()}>更新</button>
+                  <button className="btn small" onClick={() => void updateGraph()}>
+                    <Icon name="refresh" size={14} />更新
+                  </button>
                 </div>
                 <Graph values={gvals} moves={g.view.moves} cursor={g.view.cursor}
                        busy={gbusy} onJump={(n) => void g.jumpTo(n)} />

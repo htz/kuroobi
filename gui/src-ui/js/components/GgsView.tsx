@@ -12,6 +12,7 @@ import { GgsChat } from './GgsChat';
 import { GgsStandby } from './GgsStandby';
 import { GgsConsole } from './GgsConsole';
 import { Modal } from './Modal';
+import { Icon } from './Icons';
 
 /** 各画面へ渡す共通の入口。 */
 export interface GgsCtx {
@@ -45,7 +46,6 @@ export function GgsView({ view, onView, snap, patch, onOpenStudy }: GgsViewProps
   // 結果待ちにする。結果は snapshot の fetched_ggf から表示時に導く。
   const [kifuModal, setKifuModal] =
     useState<{ title: string; text?: string; pending?: string } | null>(null);
-  const [engineModal, setEngineModal] = useState(false);
 
   const fetched = snap?.fetched_ggf;
   const kifuBody = !kifuModal ? ''
@@ -86,7 +86,7 @@ export function GgsView({ view, onView, snap, patch, onOpenStudy }: GgsViewProps
   const autoRef = useRef<Parameters<typeof runAutoview> | null>(null);
   useEffect(() => {
     autoRef.current = [patch, onView, showUser,
-      (title, text) => setKifuModal({ title, text }), () => setEngineModal(true)];
+      (title, text) => setKifuModal({ title, text }), () => onView('ggs-engine')];
   });
   const demoDone = useRef(false);
   useEffect(() => {
@@ -104,7 +104,7 @@ export function GgsView({ view, onView, snap, patch, onOpenStudy }: GgsViewProps
 
   return (
     <div className="ggs-root">
-      <GgsHeader snap={snap} onEngine={() => setEngineModal(true)} />
+      <GgsHeader snap={snap} />
       {snap.conn === 'disconnected'
         ? <GgsLogin />
         : (
@@ -119,6 +119,7 @@ export function GgsView({ view, onView, snap, patch, onOpenStudy }: GgsViewProps
             {view === 'ggs-chat' && <GgsChat ctx={ctx} />}
             {view === 'ggs-standby' && <GgsStandby ctx={ctx} />}
             {view === 'ggs-console' && <GgsConsole ctx={ctx} />}
+            {view === 'ggs-engine' && <GgsEngine snap={snap} />}
           </div>
         )}
 
@@ -141,14 +142,13 @@ export function GgsView({ view, onView, snap, patch, onOpenStudy }: GgsViewProps
         </Modal>
       )}
 
-      {engineModal && <GgsEngineModal snap={snap} onClose={() => setEngineModal(false)} />}
     </div>
   );
 }
 
 /* ---------------- ヘッダー ---------------- */
 
-function GgsHeader({ snap, onEngine }: { snap: GgsSnapshot; onEngine: () => void }) {
+function GgsHeader({ snap }: { snap: GgsSnapshot }) {
   const r8 = snap.my_ranks.find((r) => r.gtype === '8');
   const r8r = snap.my_ranks.find((r) => r.gtype === '8r');
   return (
@@ -172,12 +172,6 @@ function GgsHeader({ snap, onEngine }: { snap: GgsSnapshot; onEngine: () => void
       {snap.standby.enabled && <span className="badge gold">待機モード</span>}
       {snap.thinking && <span className="ggs-thinking">思考中…</span>}
       <span className="spacer" />
-      <button className="btn small" onClick={onEngine}>エンジン設定</button>
-      {snap.conn === 'online' && (
-        <button className="btn small danger" onClick={() => void ggsApi.disconnect()}>
-          ログアウト
-        </button>
-      )}
     </header>
   );
 }
@@ -235,7 +229,7 @@ function CopyButton({ text }: { text: string }) {
   );
 }
 
-/* ---------------- エンジン設定 ---------------- */
+/* ---------------- KUROOBI の設定 (GGS 用) ---------------- */
 
 const PRESETS: Record<string, [number, number, number, number]> = {
   // [中盤の深さ, 読切 (空き), 選択読み, スレッド]
@@ -246,7 +240,9 @@ const PRESETS: Record<string, [number, number, number, number]> = {
   max: [26, 30, 10, 8],
 };
 
-function GgsEngineModal({ snap, onClose }: { snap: GgsSnapshot; onClose: () => void }) {
+function GgsEngine({ snap }: { snap: GgsSnapshot }) {
+  // 反映したことを伝える (画面なので閉じて消えることがない)
+  const [saved, setSaved] = useState(false);
   const [depth, setDepth] = useState(snap.engine.depth);
   const [solve, setSolve] = useState(snap.engine.solve);
   const [band, setBand] = useState(snap.engine.band);
@@ -273,18 +269,8 @@ function GgsEngineModal({ snap, onClose }: { snap: GgsSnapshot; onClose: () => v
   );
 
   return (
-    <Modal title="エンジン設定" onClose={onClose}
-           actions={<>
-             <button className="btn ghost" onClick={onClose}>閉じる</button>
-             <span className="spacer" />
-             <button className="btn primary" onClick={async () => {
-               await ggsApi.setEngine(depth, solve, band, threads).catch(() => {});
-               await ggsApi.setAutoPlay(auto).catch(() => {});
-               await ggsApi.setWatchAnalysis(watch).catch(() => {});
-               await ggsApi.setUseBook(book).catch(() => {});
-               onClose();
-             }}>適用</button>
-           </>}>
+    <div className="ggs-pane">
+      <div className="card settings-card">
         <div className="seg">
           {[['light', '軽量'], ['ggs', '実戦'], ['max', '最強'], ['custom', '自由設定']].map(([v, label]) => (
             <button key={v} className={preset === v ? 'active' : ''}
@@ -308,7 +294,7 @@ function GgsEngineModal({ snap, onClose }: { snap: GgsSnapshot; onClose: () => v
         <div>
           <label className="field">
             定石{!snap.engine.book_loaded && (
-              <span className="hint-inline"> — ファイルがありません (歯車から指定できます)</span>
+              <span className="hint-inline"> — ファイルがありません (設定から指定できます)</span>
             )}
           </label>
           <div className={'seg' + (snap.engine.book_loaded ? '' : ' disabled')}>
@@ -319,10 +305,38 @@ function GgsEngineModal({ snap, onClose }: { snap: GgsSnapshot; onClose: () => v
           </div>
         </div>
         <p className="hint">
-          エンジンが使うファイルは左メニュー下の歯車 (設定) から選べます。
+          KUROOBI が使うファイルは左メニュー下の「設定」から選べます。
           持ち時間が減ると、この設定を上限に自動で浅くします。
         </p>
-    </Modal>
+        <div className="row actions">
+          {saved && <span className="saved-note">反映しました</span>}
+          <span className="spacer" />
+          <button className="btn primary" onClick={async () => {
+            await ggsApi.setEngine(depth, solve, band, threads).catch(() => {});
+            await ggsApi.setAutoPlay(auto).catch(() => {});
+            await ggsApi.setWatchAnalysis(watch).catch(() => {});
+            await ggsApi.setUseBook(book).catch(() => {});
+            setSaved(true);
+            window.setTimeout(() => setSaved(false), 2000);
+          }}>適用</button>
+        </div>
+      </div>
+
+      {/* 接続そのものの操作。設定とは別の枠に分ける */}
+      <div className="card settings-card">
+        <div className="settings-title">接続</div>
+        <p className="hint">
+          ログアウトすると保存済みの認証情報も消えます。次の起動では
+          自動ログインしません。
+        </p>
+        <div className="row actions">
+          <span className="spacer" />
+          <button className="btn danger" onClick={() => void ggsApi.disconnect()}>
+            <Icon name="logout" size={15} />ログアウト
+          </button>
+        </div>
+      </div>
+    </div>
   );
 }
 

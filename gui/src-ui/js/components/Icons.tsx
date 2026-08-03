@@ -6,14 +6,16 @@
 
 export type IconName =
   | 'play' | 'study' | 'ggs-play' | 'ggs-lobby' | 'ggs-users' | 'ggs-chat'
-  | 'ggs-standby' | 'ggs-console' | 'login' | 'cpu' | 'memory' | 'gear';
+  | 'ggs-standby' | 'ggs-console' | 'login' | 'logout' | 'cpu' | 'memory' | 'gear'
+  | 'refresh';
 
 /** 中身だけを持つ (svg 要素は Icon が用意する)。 */
 const PATHS: Record<IconName, React.ReactNode> = {
   // 対局: 並んだ白石と黒石。ロゴの OO と同じ見立て
   play: <>
-    <circle cx="9" cy="12" r="5" />
-    <circle cx="16.5" cy="12" r="5" fill="currentColor" stroke="none" />
+    <circle cx="8.8" cy="12" r="5.2" />
+    {/* 塗りの円は輪郭のぶん小さく見えるので、線幅の半分だけ半径を足す */}
+    <circle cx="16.4" cy="12" r="6.1" fill="currentColor" stroke="none" />
   </>,
   // 検討: 盤を覗く虫めがね
   study: <>
@@ -22,12 +24,16 @@ const PATHS: Record<IconName, React.ReactNode> = {
   </>,
   // 対局・観戦: 盤
   'ggs-play': <>
-    <rect x="3.5" y="3.5" width="17" height="17" rx="2" />
-    <path d="M3.5 9.2h17M3.5 14.8h17M9.2 3.5v17M14.8 3.5v17" />
+    <circle cx="5.6" cy="12" r="3.4" />
+    <circle cx="18.4" cy="12" r="3.4" fill="currentColor" stroke="none" />
+    <path d="M11 6.5 9.4 11h2.9L10.6 17.5" />
   </>,
   // ロビー: 申し込みの一覧
   'ggs-lobby': <>
-    <path d="M4 6.5h16M4 12h16M4 17.5h10" />
+    <circle cx="12" cy="7.2" r="2.9" />
+    <path d="M6.6 19.5c0-3 2.4-4.7 5.4-4.7s5.4 1.7 5.4 4.7" />
+    <path d="M6.2 10.4a2.4 2.4 0 1 0 0-4.4M2.5 18c0-2.2 1.3-3.6 3.2-4" />
+    <path d="M17.8 10.4a2.4 2.4 0 1 1 0-4.4M21.5 18c0-2.2-1.3-3.6-3.2-4" />
   </>,
   // プレイヤー
   'ggs-users': <>
@@ -63,6 +69,16 @@ const PATHS: Record<IconName, React.ReactNode> = {
   memory: <>
     <path d="M12 3.2 21 8l-9 4.8L3 8z" />
     <path d="M3 12.6 12 17.4l9-4.8M3 17.2 12 22l9-4.8" />
+  </>,
+  // ログアウト: 外へ出る (login の向き違い)
+  logout: <>
+    <path d="M10.5 4H6a2 2 0 0 0-2 2v12a2 2 0 0 0 2 2h4.5" />
+    <path d="M16.5 16l4-4-4-4M20.5 12H10.5" />
+  </>,
+  // 更新: 循環する矢印
+  refresh: <>
+    <path d="M20 12a8 8 0 1 1-2.6-5.9" />
+    <path d="M20.5 4v4.5H16" />
   </>,
   gear: <>
     <circle cx="12" cy="12" r="3" />

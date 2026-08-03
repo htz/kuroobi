@@ -13,8 +13,8 @@
         "title": "Kuroobi",
         "width": 1100,
         "height": 820,
-        "minWidth": 900,
-        "minHeight": 700
+        "minWidth": 860,
+        "minHeight": 560
       }
     ],
     "security": {

@@ -49,7 +49,7 @@ export function SettingsModal({ initial, learnOn, onLearn, onClose, onChanged }:
            actions={<><span className="spacer" />
                       <button className="btn" onClick={onClose}>閉じる</button></>}>
         <div className="settings-section">
-          <div className="settings-title">エンジンが使うファイル</div>
+          <div className="settings-title">KUROOBI が使うファイル</div>
           <p className="hint">
             指定しなければ <code>weights/</code> を上へ辿って探します。
             個別に選ぶと、そのファイルだけを差し替えます。変更は次の思考から効きます。
@@ -123,8 +123,8 @@ function ThreadsSection() {
       <div className="settings-title">ローカル探索のスレッド数</div>
       <p className="hint">
         ローカル対局・検討・学習の取り込みが使う並列数です。自動 = コア数の半分
-        ({th.auto})。GGS 対局用は GGS 画面の「エンジン設定」にあります (エンジンが
-        別々なので、両方が同時に動くと合計ぶんの CPU を使います)。
+        ({th.auto})。GGS 対局用は GGS の「KUROOBI の設定」にあります (別々に動く
+        ので、両方が同時に動くと合計ぶんの CPU を使います)。
       </p>
       <div className="seg" style={{ alignSelf: 'flex-start' }}>
         <button className={th.set == null ? 'active' : ''}

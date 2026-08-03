@@ -8,7 +8,8 @@ import logo from '../../assets/kuroobi.svg?raw';
 
 export type View =
   | 'play' | 'study'
-  | 'ggs-play' | 'ggs-lobby' | 'ggs-users' | 'ggs-chat' | 'ggs-standby' | 'ggs-console';
+  | 'ggs-play' | 'ggs-lobby' | 'ggs-users' | 'ggs-chat' | 'ggs-standby' | 'ggs-console'
+  | 'ggs-engine';
 
 const LOCAL: [View, string][] = [
   ['play', '対局'],
@@ -21,6 +22,7 @@ const GGS: [View, string][] = [
   ['ggs-chat', 'チャット'],
   ['ggs-standby', '待機モード'],
   ['ggs-console', 'コンソール'],
+  ['ggs-engine', 'KUROOBI の設定'],
 ];
 
 export interface NavProps {
@@ -42,7 +44,7 @@ export function Nav({ view, onView, online, badges, cpu, onSettings }: NavProps)
       <button key={v}
               className={'nav-item' + (view === v ? ' active' : '')}
               onClick={() => onView(v)}>
-        <Icon name={v} size={16} />
+        <Icon name={v === 'ggs-engine' ? 'gear' : v} size={16} />
         {label}
         {n > 0 && <span className="badge-n">{n}</span>}
       </button>
