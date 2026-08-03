@@ -227,6 +227,9 @@ function GgsEngine({ snap }: { snap: GgsSnapshot }) {
   const [auto, setAuto] = useState(snap.auto_play);
   const [watch, setWatch] = useState(snap.watch_analysis);
   const [book, setBook] = useState(snap.engine.use_book);
+  const [pace, setPace] = useState(snap.engine.pace || 'even');
+  const [maxMove, setMaxMove] = useState(snap.engine.max_move_secs);
+  const [reserve, setReserve] = useState(snap.engine.reserve_secs);
   const [preset, setPreset] = useState<string>(() => {
     const hit = Object.entries(PRESETS).find(([, p]) =>
       p[0] === snap.engine.depth && p[1] === snap.engine.solve && p[2] === snap.engine.band);
@@ -255,7 +258,7 @@ function GgsEngine({ snap }: { snap: GgsSnapshot }) {
       <section className="pane-sec">
         <div className="sec-head">
           <h3>強さ</h3>
-          <p>持ち時間が減ると、この設定を上限に自動で浅くします。</p>
+          <p>読む深さの上限です。どこまで読めるかは下の持ち時間の使い方が決めます。</p>
         </div>
         <div className="seg">
           {[['light', '軽量'], ['ggs', '実戦'], ['max', '最強'], ['custom', '自由設定']].map(([v, label]) => (
@@ -269,6 +272,42 @@ function GgsEngine({ snap }: { snap: GgsSnapshot }) {
           <div><label className="field">選択読み</label>{num(band, setBand)}</div>
           <div><label className="field">スレッド</label>{num(threads, setThreads)}</div>
         </div>
+      </section>
+
+      <section className="pane-sec">
+        <div className="sec-head">
+          <h3>持ち時間の使い方</h3>
+          <p>1 手にかける時間を、残り時間と残り手数から決めます。時間内で
+          読める深さまで読み、時間が来たらそこまでの答えで指します。</p>
+        </div>
+        <div className="seg">
+          {[['slow', 'じっくり'], ['even', '均等'], ['fast', '速指し'],
+            ['depth', '深さ固定']].map(([v, label]) => (
+            <button key={v} className={pace === v ? 'active' : ''}
+                    onClick={() => setPace(v)}>{label}</button>
+          ))}
+        </div>
+        <p className="hint">
+          {pace === 'depth'
+            ? '時間を見ずに上の深さまで読みます。持ち時間の管理は自分で行うことになります。'
+            : pace === 'slow' ? '序盤に厚く配ります。研究向き。'
+            : pace === 'fast' ? '序盤を短く切り上げ、終盤に残します。'
+            : '残り手数で等分します。'}
+        </p>
+        {pace !== 'depth' && (
+          <div className="num-grid">
+            <div>
+              <label className="field">1 手の上限 (秒、0 = なし)</label>
+              <input type="number" value={maxMove}
+                     onChange={(e) => setMaxMove(Math.max(0, +e.target.value))} />
+            </div>
+            <div>
+              <label className="field">読み切り用に残す (秒)</label>
+              <input type="number" value={reserve}
+                     onChange={(e) => setReserve(Math.max(0, +e.target.value))} />
+            </div>
+          </div>
+        )}
       </section>
 
       <section className="pane-sec">
@@ -303,6 +342,7 @@ function GgsEngine({ snap }: { snap: GgsSnapshot }) {
         <span className="spacer" />
         <button className="btn primary" onClick={async () => {
           await ggsApi.setEngine(depth, solve, band, threads).catch(() => {});
+          await ggsApi.setPacing(pace, maxMove, reserve).catch(() => {});
           await ggsApi.setAutoPlay(auto).catch(() => {});
           await ggsApi.setWatchAnalysis(watch).catch(() => {});
           await ggsApi.setUseBook(book).catch(() => {});

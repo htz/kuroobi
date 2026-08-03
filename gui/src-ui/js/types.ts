@@ -208,6 +208,12 @@ export interface EngineCfgView {
   book_loaded: boolean;
   /** 終わった対局を定石の学習に取り込むか。 */
   learn: boolean;
+  /** 持ち時間の配り方 ("depth" 深さ固定 / "slow" / "even" / "fast")。 */
+  pace: string;
+  /** 1 手に使う上限 (秒)。0 で上限なし。 */
+  max_move_secs: number;
+  /** 読み切り用に残す秒数。 */
+  reserve_secs: number;
 }
 
 export interface FetchedGgf {

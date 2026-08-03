@@ -62,6 +62,12 @@ pub enum Cmd {
         band: u8,
         threads: usize,
     },
+    /// 持ち時間の使い方 (配り方・1 手の上限・予備)。
+    SetPacing {
+        pace: String,
+        max_move_secs: u64,
+        reserve_secs: u64,
+    },
     SetAutoPlay(bool),
     SetWatchAnalysis(bool),
     /// 定石 book を使うか。研究や検証で自力の手を見たいときに切る。
@@ -341,6 +347,13 @@ pub struct EngineCfgView {
     pub book_loaded: bool,
     /// 終わった対局を定石の学習に取り込むか。
     pub learn: bool,
+    /// 持ち時間の配り方 ("depth" 深さ固定 / "slow" 序盤に厚く / "even" 均等 /
+    /// "fast" 終盤に残す)。
+    pub pace: String,
+    /// 1 手に使う上限 (秒)。0 で上限なし。
+    pub max_move_secs: u64,
+    /// 読み切り用に取っておく秒数。
+    pub reserve_secs: u64,
 }
 
 impl Default for EngineCfgView {
@@ -354,6 +367,9 @@ impl Default for EngineCfgView {
             use_book: true,
             book_loaded: false,
             learn: true,
+            pace: "even".into(),
+            max_move_secs: 0,
+            reserve_secs: 20,
         }
     }
 }
@@ -780,6 +796,10 @@ struct Ctx {
     /// 観戦を頼んだ対局と期限。盤面が届かないまま過ぎたら、その対局は
     /// もう終わっている (GGS は watch の失敗を返さないことがある)。
     pending_watch: HashMap<String, Instant>,
+    /// 持ち時間の配り方と上限 (画面から変えられる)。
+    engine_cfg_pace: String,
+    engine_cfg_max_move: u64,
+    engine_cfg_reserve: u64,
 }
 
 impl Ctx {
@@ -939,6 +959,9 @@ pub fn run(
         local_stop,
         local_activity,
         pending_watch: HashMap::new(),
+        engine_cfg_pace: "even".into(),
+        engine_cfg_max_move: 0,
+        engine_cfg_reserve: 20,
     };
     ctx.snap.lock().unwrap().engine = EngineCfgView {
         depth: 22,
@@ -949,6 +972,9 @@ pub fn run(
         use_book: ctx.engine_cfg.use_book,
         book_loaded: false,
         learn: true,
+        pace: ctx.engine_cfg_pace.clone(),
+        max_move_secs: ctx.engine_cfg_max_move,
+        reserve_secs: ctx.engine_cfg_reserve,
     };
 
     // 接続ごとの外側ループ (未接続時はコマンド待ち)
@@ -969,6 +995,14 @@ pub fn run(
                 }
                 Ok(Cmd::SetStandby(cfg)) => {
                     ctx.snap.lock().unwrap().standby = cfg;
+                    ctx.emit(true);
+                }
+                Ok(Cmd::SetPacing {
+                    pace,
+                    max_move_secs,
+                    reserve_secs,
+                }) => {
+                    apply_pacing(&mut ctx, pace, max_move_secs, reserve_secs);
                     ctx.emit(true);
                 }
                 Ok(Cmd::SetAutoPlay(b)) => {
@@ -1200,6 +1234,13 @@ pub fn run(
                             threads,
                         } => {
                             apply_engine_cfg(&mut ctx, depth, solve, band, threads);
+                        }
+                        Cmd::SetPacing {
+                            pace,
+                            max_move_secs,
+                            reserve_secs,
+                        } => {
+                            apply_pacing(&mut ctx, pace, max_move_secs, reserve_secs);
                         }
                         Cmd::SetAutoPlay(b) => {
                             ctx.snap.lock().unwrap().auto_play = b;
@@ -1747,6 +1788,19 @@ fn ctx_send(writer: &mut TcpStream, cmd: &str) {
         .and_then(|_| writer.write_all(b"\n"));
 }
 
+/// 持ち時間の使い方を差し替える。
+fn apply_pacing(ctx: &mut Ctx, pace: String, max_move_secs: u64, reserve_secs: u64) {
+    ctx.engine_cfg_pace = pace.clone();
+    ctx.engine_cfg_max_move = max_move_secs;
+    ctx.engine_cfg_reserve = reserve_secs;
+    let mut s = ctx.snap.lock().unwrap();
+    s.engine.pace = pace;
+    s.engine.max_move_secs = max_move_secs;
+    s.engine.reserve_secs = reserve_secs;
+    drop(s);
+    ctx.dirty = true;
+}
+
 fn apply_engine_cfg(ctx: &mut Ctx, depth: u32, solve: u8, band: u8, threads: usize) {
     ctx.engine_cfg.depth = depth;
     ctx.engine_cfg.solve_empties = solve;
@@ -2002,42 +2056,47 @@ fn time_budget(
     ext_secs: u64,
     empties: u8,
     base: (u32, u8, u8),
-) -> (u32, u8, u8) {
+    pace: &str,
+    max_move_secs: u64,
+    reserve_secs: u64,
+) -> (u32, u8, u8, Option<Duration>) {
+    // 深さで決める: 時間を見ずに設定どおり読む (持ち時間の管理は指す側の責任)
+    if pace == "depth" {
+        return (base.0, base.1, base.2, None);
+    }
     let Some(secs) = clock_secs else {
-        return (base.0, base.1, base.2);
+        return (base.0, base.1, base.2, None);
     };
     // 本時間が尽きていればロスタイム勝負: 最速で指す
     if secs == 0 {
-        return if ext_secs > 0 {
-            (4, base.1.min(14), 0)
-        } else {
-            (2, base.1.min(10), 0)
-        };
+        let d = if ext_secs > 0 { 4 } else { 2 };
+        let solve = if ext_secs > 0 { base.1.min(14) } else { base.1.min(10) };
+        let cap = Duration::from_millis(if ext_secs > 0 { 800 } else { 300 });
+        return (d, solve, 0, Some(cap));
     }
     // 自分が指す残り手数 (最低 1)。終盤の完全読みは 1 手で全部読むので、
     // 読切に入る手前までを予算配分の対象にする。
     let my_moves = ((empties.saturating_sub(base.1) as f64 / 2.0).ceil() as u64).max(1);
     // 完全読み 1 回分を確保したうえで中盤に配る
-    let reserve = 20u64.min(secs / 3);
-    let budget = (secs.saturating_sub(reserve)) as f64 / my_moves as f64;
-
-    // 1 手予算 → 深さ (帯は予算に余裕があるときだけ)
-    let (d, band) = if budget >= 25.0 {
-        (base.0, base.2)
-    } else if budget >= 12.0 {
-        (base.0.min(20), base.2.min(4))
-    } else if budget >= 6.0 {
-        (base.0.min(16), 0)
-    } else if budget >= 3.0 {
-        (base.0.min(12), 0)
-    } else if budget >= 1.5 {
-        (base.0.min(9), 0)
-    } else if budget >= 0.6 {
-        (base.0.min(6), 0)
-    } else {
-        (base.0.min(4), 0)
+    let reserve = reserve_secs.min(secs / 2);
+    let pool = secs.saturating_sub(reserve) as f64;
+    let even = pool / my_moves as f64;
+    // 配り方。序盤は手数が多いので、厚くするほど 1 手が長くなる
+    let budget = match pace {
+        // 序盤に厚く: 残り手数が多いうちほど多めに使う
+        "slow" => even * (1.0 + 0.8 / (my_moves as f64).sqrt()),
+        // 終盤に残す: 序盤は控えめにして、手数が減るほど厚くなる
+        "fast" => even * (0.6 + 0.4 / (my_moves as f64).sqrt()),
+        _ => even,
     };
-    // 残りが極端に少ないときは完全読みの開始も遅らせる (読切自体が高いため)
+    let budget = if max_move_secs > 0 {
+        budget.min(max_move_secs as f64)
+    } else {
+        budget
+    };
+
+    // 深さは上限として渡す (実際にどこまで行けるかは期限が決める)。
+    // 予算が乏しいときだけ、読み切り自体が入らないよう浅くしておく
     let solve = if secs < 20 {
         base.1.min(14)
     } else if secs < 60 {
@@ -2045,7 +2104,9 @@ fn time_budget(
     } else {
         base.1
     };
-    (d.max(1), solve, band)
+    let band = if budget >= 12.0 { base.2 } else { 0 };
+    let cap = Duration::from_secs_f64(budget.max(0.05));
+    (base.0, solve, band, Some(cap))
 }
 
 /// 自分の手番の局面でエンジンを回して着手を送る。
@@ -2083,9 +2144,19 @@ fn think_and_play(
         ctx.engine_cfg.solve_empties,
         ctx.engine_cfg.band,
     );
-    let (d, solve, band) = time_budget(clock_secs, ext, empties, base);
+    let (d, solve, band, cap) = time_budget(
+        clock_secs,
+        ext,
+        empties,
+        base,
+        &ctx.engine_cfg_pace,
+        ctx.engine_cfg_max_move,
+        ctx.engine_cfg_reserve,
+    );
     engine.set_levels(d, solve, band);
-    let mv = engine.choose(&board);
+    // 期限まで反復深化する。深さは上限で、実際にどこまで行けるかは時間が決める
+    let deadline = cap.map(|c| std::time::Instant::now() + c);
+    let mv = engine.choose_within(&board, deadline);
     engine.set_levels(base.0, base.1, base.2);
 
     let mstr = match mv.pos {
@@ -3186,49 +3257,59 @@ mod who_tests {
 #[cfg(test)]
 mod budget_tests {
     use super::time_budget;
+    use std::time::Duration;
 
     const BASE: (u32, u8, u8) = (22, 26, 6);
 
-    #[test]
-    fn plenty_of_time_uses_full_strength() {
-        // 15 分・空き 50 → 1 手あたり十分 → 満額
-        assert_eq!(time_budget(Some(900), 120, 50, BASE), (22, 26, 6));
+    fn cap(secs: Option<u64>, empties: u8, pace: &str, max: u64) -> Option<Duration> {
+        time_budget(secs, 120, empties, BASE, pace, max, 20).3
     }
 
     #[test]
-    fn shrinks_as_clock_drains() {
-        // 残り 60 秒・空き 40 (自分の残り 7 手) → 中盤を絞る
-        let (d, _, band) = time_budget(Some(60), 120, 40, BASE);
-        assert!(d < 22, "深さが絞られる: {d}");
-        assert_eq!(band, 0, "帯は落とす");
-        // さらに少ないほど浅くなる (単調)
-        let (d2, _, _) = time_budget(Some(20), 120, 40, BASE);
-        assert!(d2 <= d, "{d2} <= {d}");
-        let (d3, _, _) = time_budget(Some(5), 120, 40, BASE);
-        assert!(d3 <= d2, "{d3} <= {d2}");
+    fn depth_mode_ignores_the_clock() {
+        // 深さで決める: 期限を付けない (設定どおり読み切る)
+        let (d, solve, band, c) = time_budget(Some(30), 120, 40, BASE, "depth", 0, 20);
+        assert_eq!((d, solve, band), BASE);
+        assert!(c.is_none(), "期限なし");
     }
 
     #[test]
-    fn endgame_gets_the_whole_clock() {
-        // 空き 26 = 読切域。残り手数の分母が小さいので深さは満額のまま
-        let (d, solve, _) = time_budget(Some(300), 120, 26, BASE);
-        assert_eq!(d, 22);
-        assert_eq!(solve, 26);
+    fn the_budget_shrinks_with_the_clock() {
+        let a = cap(Some(900), 40, "even", 0).unwrap();
+        let b = cap(Some(300), 40, "even", 0).unwrap();
+        let c = cap(Some(60), 40, "even", 0).unwrap();
+        assert!(a > b && b > c, "残りが減るほど 1 手が短い: {a:?} > {b:?} > {c:?}");
     }
 
     #[test]
-    fn main_time_exhausted_uses_fastest() {
-        // 本時間 0・ロスタイムあり → 最速設定
-        let (d, solve, band) = time_budget(Some(0), 120, 30, BASE);
-        assert_eq!((d, band), (4, 0));
-        assert!(solve <= 14);
-        // ロスタイムも無ければさらに最速
-        let (d2, _, _) = time_budget(Some(0), 0, 30, BASE);
-        assert!(d2 < d);
+    fn pace_shifts_where_the_time_goes() {
+        // 序盤 (残り手数が多い) では、序盤に厚い方が長く使う
+        let slow = cap(Some(900), 50, "slow", 0).unwrap();
+        let even = cap(Some(900), 50, "even", 0).unwrap();
+        let fast = cap(Some(900), 50, "fast", 0).unwrap();
+        assert!(slow > even && even > fast, "{slow:?} > {even:?} > {fast:?}");
     }
 
     #[test]
-    fn unknown_clock_keeps_base() {
-        assert_eq!(time_budget(None, 0, 40, BASE), BASE);
+    fn the_per_move_cap_is_honoured() {
+        let c = cap(Some(3600), 50, "even", 5).unwrap();
+        assert!(c <= Duration::from_secs(5), "上限 5 秒を超えない: {c:?}");
+    }
+
+    #[test]
+    fn out_of_main_time_plays_fast() {
+        // 本時間 0・ロスタイムあり → ごく短い期限で指す
+        let c = cap(Some(0), 30, "even", 0).unwrap();
+        assert!(c <= Duration::from_secs(1), "{c:?}");
+    }
+
+    #[test]
+    fn the_endgame_keeps_a_reserve() {
+        // 読み切り 1 回分を残すので、中盤の予算は残り時間そのものではない
+        let (_, _, _, c) = time_budget(Some(100), 0, 40, BASE, "even", 0, 20);
+        let moves = ((40 - 26) as f64 / 2.0).ceil();
+        let pool = c.unwrap().as_secs_f64() * moves;
+        // 100 秒のうち 20 秒は読み切り用。中盤へ配るのは残り 80 秒まで
+        assert!(pool < 81.0, "中盤に配ったのは {pool:.1} 秒 (予備 20 秒を残すこと)");
     }
 }

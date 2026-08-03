@@ -1382,6 +1382,23 @@ fn ggs_set_engine(
         .map_err(|e| e.to_string())
 }
 
+/// 持ち時間の使い方 (配り方・1 手の上限・予備)。
+#[tauri::command]
+fn ggs_set_pacing(
+    app: State<App>,
+    pace: String,
+    max_move_secs: u64,
+    reserve_secs: u64,
+) -> Result<(), String> {
+    ggs_tx(&app)?
+        .send(ggs::Cmd::SetPacing {
+            pace,
+            max_move_secs,
+            reserve_secs,
+        })
+        .map_err(|e| e.to_string())
+}
+
 #[tauri::command]
 fn ggs_set_auto_play(app: State<App>, on: bool) -> Result<(), String> {
     ggs_tx(&app)?
@@ -1576,6 +1593,7 @@ fn main() {
             ggs_resume_stored,
             ggs_history,
             ggs_set_engine,
+            ggs_set_pacing,
             ggs_set_auto_play,
             ggs_set_watch_analysis,
             ggs_set_use_book,
