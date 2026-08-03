@@ -67,8 +67,13 @@ export function GgsPlay({ ctx }: { ctx: GgsCtx }) {
               <div key={key} className={'thread' + (key === cur ? ' active' : '')}
                    onClick={() => setSel(key)}>
                 <div className="thread-top">
-                  <span className={'tag ' + (over ? 'done' : isMine ? 'mine' : 'watch')}>
-                    {over ? '終局' : isMine ? '自分' : '観戦'}
+                  {/* 種別と状態は別に出す。終局しても自分の対局か観戦かは
+                      分かるようにしておきたい */}
+                  <span className={'tag ' + (isMine ? 'mine' : 'watch')}>
+                    {isMine ? '自分' : '観戦'}
+                  </span>
+                  <span className={'tag ' + (over ? 'done' : 'live')}>
+                    {over ? '終局' : '対局中'}
                   </span>
                   <span className="thread-name">{names}</span>
                   {thinking && <span className="thinking-dot" />}

@@ -262,7 +262,8 @@ export function App() {
         }
       }} online={conn === 'online'} badges={{
         'ggs-lobby': ggs.snap?.offers.filter((o) => o.incoming).length ?? 0,
-        'ggs-play': ggs.snap?.matches.length ?? 0,
+        // 手合いの「組」数。同期対局は 2 局で 1 組なので base でまとめる
+        'ggs-play': new Set(ggs.snap?.matches.map((m) => m.base || m.id) ?? []).size,
         'ggs-chat': chatUnread,
       }} cpu={cpu} onSettings={async () => {
         setSettings(await api.resourceStatus().catch(() => []));

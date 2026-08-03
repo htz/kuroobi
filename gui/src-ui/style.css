@@ -407,7 +407,8 @@
   /* 文字と並ぶアイコンは行の中央に置く */
   .btn { display: inline-flex; align-items: center; justify-content: center; gap: 6px; }
 
-  /* 終局した手合い。消さずに残すので、状態と閉じる口を出す */
+  /* 手合いの状態。終局しても消さずに残すので、進行中かどうかを出す */
+  .tag.live { background: rgba(77,159,255,.16); color: var(--accent); }
   .tag.done { background: rgba(255,255,255,.10); color: var(--sub); }
   .thread .close-x { margin-left: auto; padding: 0 6px; font-size: 15px;
                      line-height: 1; color: var(--sub); }
