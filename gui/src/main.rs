@@ -227,22 +227,28 @@ struct EvalPoint {
     from_book: bool,
 }
 
-/// 手順 (line) 上の n 手目直後の盤面。redo 側 (現在より先) も辿れるよう、
-/// 初期局面から line を再生して作る (GUI の対局は常に標準初期配置)。
-fn board_at_line(game: &Reversi, n: usize) -> Result<Board, String> {
-    let line = game.line();
-    if n > line.len() {
+/// 手順 (line) 上の n 手目直後の盤面。
+///
+/// 初期配置から再生してはいけない。GGS の抽選オープニングは開始局面が
+/// 標準と違うので、そこから並べ直すと最初の手から打てなくなる。開始局面を
+/// 持っていないので、undo/redo で目的の手数まで動かして読み、元へ戻す。
+fn board_at_line(game: &mut Reversi, n: usize) -> Result<Board, String> {
+    if n > game.line().len() {
         return Err("out of range".into());
     }
-    let mut b = Board::new();
-    for e in &line[..n] {
-        match e {
-            Some(p) => {
-                b.make_move(*p).map_err(|e| format!("{e:?}"))?;
-            }
-            None => b.pass(),
+    let saved = game.move_count();
+    let goto = |to: usize, game: &mut Reversi| -> Result<(), String> {
+        while game.move_count() > to {
+            game.undo().map_err(|e| format!("{e:?}"))?;
         }
-    }
+        while game.move_count() < to {
+            game.redo().map_err(|e| format!("{e:?}"))?;
+        }
+        Ok(())
+    };
+    goto(n, game)?;
+    let b = game.board;
+    goto(saved, game)?;
     Ok(b)
 }
 
@@ -795,7 +801,7 @@ async fn eval_at(app: State<'_, App>, n: usize, depth: u32) -> Result<EvalPoint,
         return Err("GGS 対局中は検討の計算を控えます".into());
     }
     ensure_engine(&app)?;
-    let board = board_at_line(&app.game.lock().unwrap(), n)?;
+    let board = board_at_line(&mut app.game.lock().unwrap(), n)?;
     let white = board.player() == Color::White;
     let eng = app.engine.clone();
     let act = app.activity.clone();
