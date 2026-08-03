@@ -104,7 +104,7 @@ fn total_memory() -> u64 {
 /// local は 1 枠でよい。学習は裏で進むが、他が動いている間は譲って止まる。
 #[derive(Default)]
 pub(crate) struct Activity {
-    /// 走っているローカル探索の種別 (思考 / 解析 / 採点)。
+    /// 走っているローカル探索の種別 (思考 / 解析 / 分析)。
     pub(crate) local: Option<&'static str>,
     /// 学習の取り込み進捗 (済み, 総数)。ジョブが無ければ None。
     learn: Option<(u32, u32)>,
@@ -555,7 +555,7 @@ async fn set_local_threads(app: State<'_, App>, n: Option<u32>) -> Result<(), St
 /// いま何が CPU を使っているか (ナビの常時表示用)。
 #[derive(Serialize)]
 struct ActivityView {
-    /// ローカル探索の種別 (思考 / 解析 / 採点)。無ければ null。
+    /// ローカル探索の種別 (思考 / 解析 / 分析)。無ければ null。
     local: Option<String>,
     local_threads: u32,
     /// 学習の取り込み (済み, 総数)。
@@ -798,7 +798,7 @@ async fn analyze(app: State<'_, App>, depth: u32) -> Result<Vec<HintView>, Strin
 #[tauri::command]
 async fn eval_at(app: State<'_, App>, n: usize, depth: u32) -> Result<EvalPoint, String> {
     if ggs_match_active(&app) {
-        return Err("GGS 対局中は検討の計算を控えます".into());
+        return Err("GGS 対局中は分析を控えます".into());
     }
     ensure_engine(&app)?;
     let board = board_at_line(&mut app.game.lock().unwrap(), n)?;
@@ -808,12 +808,12 @@ async fn eval_at(app: State<'_, App>, n: usize, depth: u32) -> Result<EvalPoint,
     let stop = app.stop.clone();
     // 前の停止を引きずらない。定石に当たった局面は探索を呼ばず、探索側の
     // リセットも走らないので、ここで消しておかないと以降ずっと「停止済み」
-    // と誤判定して採点が 1 局面も進まなくなる
+    // と誤判定して分析が 1 局面も進まなくなる
     if let Some(h) = stop.lock().unwrap().as_ref() {
         h.reset();
     }
     let (value, exact, from_book, searched) = tauri::async_runtime::spawn_blocking(move || {
-        let _g = ActivityGuard::begin(&act, "採点");
+        let _g = ActivityGuard::begin(&act, "分析");
         let mut guard = eng.lock().unwrap();
         let e = guard.as_mut().unwrap();
         // 定石にある局面は定石の値をそのまま使う (深い値で、探索も省ける)

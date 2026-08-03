@@ -158,7 +158,7 @@ export function Panel({ g, gvals, onStart, onSave, onLoad }: PanelProps) {
           </div>
         )}
         <div>
-          <label className="field">評価値を表示 (全合法手を自動採点)</label>
+          <label className="field">評価値を表示</label>
           <Seg value={g.autoHint ? 'on' : 'off'}
                onChange={(x) => g.setAutoHint(x === 'on')}
                options={[['off', 'オフ'], ['on', 'オン']]} />

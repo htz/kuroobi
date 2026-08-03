@@ -48,7 +48,7 @@ export function App() {
     ggsApi.setLearn(g.learnOn).catch(() => {});
   }, [g.learnOn]);
 
-  // 局面が動いたら採点し直す
+  // 局面が動いたら評価値を出し直す
   const refresh = g.refreshHints;
   useEffect(() => { void refresh(); }, [g.view, g.autoHint, refresh]);
 
@@ -206,12 +206,12 @@ export function App() {
     const v = g.view;
     // 押しても何も起きない、という状態を作らない。始められない理由は必ず出す
     if (!v) { g.say('棋譜がありません'); return; }
-    if (gbusy) { g.say('採点中です'); return; }
+    if (gbusy) { g.say('分析中です'); return; }
     // CPU を食い合う機能は同時に動かさない。GGS 対局は最優先なので断り、
     // ローカル対局が進行中なら確認の上で停止してから始める
-    if (ggsMatch) { g.say('GGS 対局中は検討の計算を控えます'); return; }
+    if (ggsMatch) { g.say('GGS 対局中は分析を控えます'); return; }
     if (g.playing || g.thinking) {
-      if (!window.confirm('対局が進行中です。停止して全局面を採点しますか？')) return;
+      if (!window.confirm('対局が進行中です。停止して分析しますか？')) return;
       g.stop();
     }
     setGbusy(true);
@@ -232,7 +232,7 @@ export function App() {
       if (seq !== gseq.current) break;
       if (vals[n]) continue;
       if (n < len && v.moves[n] == null) continue;   // パスの手番は測らない
-      g.say(`グラフ計算中 ${n}/${len}…`, true);
+      g.say(`分析中 ${n}/${len}…`, true);
       try {
         const p = await api.evalAt(n, depth);
         if (seq !== gseq.current) break;
@@ -303,7 +303,7 @@ export function App() {
                     <span style={{ color: 'var(--accent)' }}>●</span>探索
                   </label>
                   <button className="btn small" onClick={() => void updateGraph()}>
-                    <Icon name="refresh" size={14} />{gvals ? '採点し直す' : '全局面を採点'}
+                    <Icon name="refresh" size={14} />分析
                   </button>
                 </div>
                 <Graph values={gvals} moves={g.view.moves} cursor={g.view.cursor}
@@ -316,10 +316,10 @@ export function App() {
                  onStart={() => {
                    if (g.playing) { g.stop(); g.say('対局を停止しました'); return; }
                    // CPU を食い合う機能は同時に動かさない。GGS 対局は最優先、
-                   // グラフの採点中は確認してから止める
+                   // 分析中は確認してから止める
                    if (ggsMatch) { g.say('GGS 対局中はローカル対局を開始できません'); return; }
                    if (gbusy) {
-                     if (!window.confirm('評価値グラフを採点中です。停止して対局を始めますか？')) return;
+                     if (!window.confirm('評価値グラフを分析中です。停止して対局を始めますか？')) return;
                      gseq.current++;
                      setGbusy(false);
                      void api.stopSearch();

@@ -93,6 +93,8 @@ macOS なら `~/Library/Application Support/kuroobi/resources.conf`) で
 | 定石 | 定石 book、book |
 | 選択読み | 帯 |
 | 読切 | 完全読み (画面では) |
+| 分析 (棋譜を通して評価値を出す) | 採点、グラフ計算 |
+| KUROOBI (自分のエンジン) | エンジン |
 
 コードの識別子 (`book`, `band` など) は英語のままでよい。
 

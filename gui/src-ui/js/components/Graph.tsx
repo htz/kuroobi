@@ -71,7 +71,7 @@ export function Graph({ values, moves, cursor, busy, onJump }: GraphProps) {
       {defined.length === 0 ? (
         <text x={(L + W - R) / 2} y={H / 2 - 8} textAnchor="middle"
               fill="var(--sub)" fontSize={13}>
-          {busy ? '計算中…' : '「更新」で全局面を採点します'}
+          {busy ? '分析中…' : '「分析」で評価値を出します'}
         </text>
       ) : (
         <>

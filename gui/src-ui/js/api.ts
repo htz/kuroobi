@@ -64,7 +64,7 @@ export interface ThreadsView { set: number | null; auto: number }
 
 /** いま何が CPU を使っているか (ナビの常時表示)。 */
 export interface ActivityView {
-  /** ローカル探索の種別 (思考 / 解析 / 採点)。無ければ null。 */
+  /** ローカル探索の種別 (思考 / 解析 / 分析)。無ければ null。 */
   local: string | null;
   local_threads: number;
   /** 学習の取り込み [済み, 総数]。 */
