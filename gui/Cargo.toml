@@ -18,6 +18,10 @@ serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 libc = "0.2"
 
+# メモリ使用量 (常駐サイズ) の取得。libc の mach 系は非推奨になったため
+[target.'cfg(target_os = "macos")'.dependencies]
+mach2 = "0.4"
+
 [build-dependencies]
 tauri-build = { version = "2", features = [] }
 

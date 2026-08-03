@@ -65,6 +65,11 @@ export interface ActivityView {
   ggs_threads: number;
   /** プロセス全体の CPU 使用率 (%)。100% = 1 コア。 */
   cpu: number;
+  /** マシンのコア数 (使用率の上限は cores × 100%)。 */
+  cores: number;
+  /** 使用中の物理メモリと、積んでいる総量 (バイト)。 */
+  mem: number;
+  mem_total: number;
 }
 
 /* ============================ GGS ============================ */

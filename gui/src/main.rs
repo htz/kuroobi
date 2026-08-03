@@ -45,6 +45,61 @@ fn process_cpu_time() -> std::time::Duration {
     }
 }
 
+/// このプロセスが今使っている物理メモリ (常駐サイズ)。ピーク値ではなく
+/// 現在値なので、置換表を張り直したときの増減がそのまま見える。
+#[cfg(target_os = "macos")]
+fn process_memory() -> u64 {
+    // 構造体と定数は libc、タスクポートだけ mach2 から取る
+    // (libc の mach_task_self_ は非推奨になったため)
+    unsafe {
+        let mut info: libc::mach_task_basic_info = std::mem::zeroed();
+        let mut count = (std::mem::size_of::<libc::mach_task_basic_info>()
+            / std::mem::size_of::<libc::natural_t>())
+            as libc::mach_msg_type_number_t;
+        let rc = libc::task_info(
+            mach2::traps::mach_task_self(),
+            libc::MACH_TASK_BASIC_INFO,
+            &mut info as *mut _ as libc::task_info_t,
+            &mut count,
+        );
+        if rc == 0 {
+            info.resident_size
+        } else {
+            0
+        }
+    }
+}
+
+#[cfg(not(target_os = "macos"))]
+fn process_memory() -> u64 {
+    0
+}
+
+/// 積んでいる物理メモリの総量 (使用率の分母)。
+#[cfg(target_os = "macos")]
+fn total_memory() -> u64 {
+    let mut sz: u64 = 0;
+    let mut len = std::mem::size_of::<u64>();
+    let Ok(name) = std::ffi::CString::new("hw.memsize") else {
+        return 0;
+    };
+    unsafe {
+        libc::sysctlbyname(
+            name.as_ptr(),
+            &mut sz as *mut _ as *mut libc::c_void,
+            &mut len,
+            std::ptr::null_mut(),
+            0,
+        );
+    }
+    sz
+}
+
+#[cfg(not(target_os = "macos"))]
+fn total_memory() -> u64 {
+    0
+}
+
 /// ローカルで CPU を使っている機能。探索は排他 (同時に 1 つ) なので
 /// local は 1 枠でよい。学習は裏で進むが、他が動いている間は譲って止まる。
 #[derive(Default)]
@@ -505,6 +560,11 @@ struct ActivityView {
     ggs_threads: u32,
     /// プロセス全体の CPU 使用率 (%)。100% = 1 コア相当。
     cpu: f32,
+    /// マシンのコア数 (使用率の上限 = cores × 100%)。
+    cores: u32,
+    /// 使用中の物理メモリと、積んでいる総量 (バイト)。
+    mem: u64,
+    mem_total: u64,
 }
 
 #[tauri::command]
@@ -544,6 +604,9 @@ fn activity_status(app: State<App>) -> ActivityView {
         ggs_thinking,
         ggs_threads,
         cpu,
+        cores: std::thread::available_parallelism().map_or(1, |n| n.get()) as u32,
+        mem: process_memory(),
+        mem_total: total_memory(),
     }
 }
 

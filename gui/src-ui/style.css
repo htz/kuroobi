@@ -42,11 +42,30 @@
   .conn-dot { width: 7px; height: 7px; border-radius: 50%; background: var(--ok, #8bc34a); }
   .conn-dot.off { background: var(--sub); }
   .nav-spacer { flex: 1; }
-  /* CPU の稼働状況 (常時表示)。歯車の上に小さく積む */
-  .cpu-status { padding: 6px 5px 10px; font-size: 10.5px; color: var(--sub);
-                line-height: 1.6; border-top: 1px solid var(--border); }
-  .cpu-status .cpu-head { letter-spacing: .08em; }
+  /* 資源の使用状況 (常時表示)。歯車の上に小さく積む */
+  .cpu-status { padding: 8px 4px 10px; font-size: 10.5px; color: var(--sub);
+                line-height: 1.5; border-top: 1px solid var(--border);
+                display: flex; flex-direction: column; gap: 8px; }
+  .cpu-status .meter { display: flex; flex-direction: column; gap: 3px; }
+  .cpu-status .meter-head { display: flex; justify-content: space-between;
+                            align-items: baseline; letter-spacing: .06em; }
+  .cpu-status .meter-head .val { color: var(--text); font-size: 12px; font-weight: 600;
+                                 font-variant-numeric: tabular-nums; }
+  .cpu-status .meter-head .unit { color: var(--sub); font-size: 9.5px; font-weight: 400;
+                                  margin-left: 1px; }
+  .cpu-status .sub { font-size: 9.5px; opacity: .75; }
+  /* バー。幅の変化はゆっくり追わせる (1 秒ごとの更新で跳ねて見えないように) */
+  .cpu-status .bar { height: 4px; border-radius: 3px; overflow: hidden;
+                     background: rgba(255,255,255,.08); }
+  .cpu-status .bar .fill { display: block; height: 100%; border-radius: 3px;
+                           background: var(--accent); transition: width .45s ease-out,
+                           background-color .3s; }
+  .cpu-status .bar .fill.busy { background: var(--gold); }
+  .cpu-status .bar .fill.hot { background: var(--bad); }
   .cpu-status .cpu-row { color: var(--text); opacity: .8; white-space: nowrap; }
+  @media (prefers-reduced-motion: reduce) {
+    .cpu-status .bar .fill { transition: none; }
+  }
   #nav .btn.icon { align-self: flex-start; }
 
 
