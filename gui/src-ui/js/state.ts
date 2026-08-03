@@ -53,7 +53,7 @@ export function useGame() {
   const [hasBook, setHasBook] = useState(true);
   // 終局した対局を定石の学習に取り込むか (バックエンドの既定も on)
   const [learnOn, setLearnOn] = useState(true);
-  const [autoHint, setAutoHint] = useState(false);
+  const [autoHint, setAutoHintRaw] = useState(false);
   const [hints, setHints] = useState<Hints | null>(null);
   const [playing, setPlaying] = useState(false);
   const [thinking, setThinking] = useState(false);
@@ -121,6 +121,12 @@ export function useGame() {
       if (seq === hintSeq.current) say('' + e);
     }
   }, [view, autoHint, thinking, playing, engineSides, pushLevels, levels.depth, say]);
+
+  /** 評価値の表示を切り替える。切ったらいま出ている値も消す。 */
+  const setAutoHint = useCallback((on: boolean) => {
+    setAutoHintRaw(on);
+    if (!on) setHints(null);
+  }, []);
 
   const apply = useCallback((v: GameView) => {
     setView(v);
