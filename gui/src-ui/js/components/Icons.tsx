@@ -7,7 +7,7 @@
 export type IconName =
   | 'play' | 'study' | 'ggs-play' | 'ggs-lobby' | 'ggs-users' | 'ggs-chat'
   | 'ggs-standby' | 'ggs-console' | 'login' | 'logout' | 'cpu' | 'memory' | 'gear'
-  | 'refresh';
+  | 'refresh' | 'check' | 'alert';
 
 /** 中身だけを持つ (svg 要素は Icon が用意する)。 */
 const PATHS: Record<IconName, React.ReactNode> = {
@@ -22,11 +22,13 @@ const PATHS: Record<IconName, React.ReactNode> = {
     <circle cx="10.5" cy="10.5" r="6.5" />
     <path d="M15.4 15.4 L20.5 20.5" />
   </>,
-  // 対局・観戦: 盤
+  // 対局・観戦: 向かい合う白石と黒石、間に稲妻。細いと何か分からないので
+  // 稲妻は線ではなく塗りで描く
   'ggs-play': <>
-    <circle cx="5.6" cy="12" r="3.4" />
-    <circle cx="18.4" cy="12" r="3.4" fill="currentColor" stroke="none" />
-    <path d="M11 6.5 9.4 11h2.9L10.6 17.5" />
+    <circle cx="4.9" cy="12" r="3.6" />
+    <circle cx="19.1" cy="12" r="4.3" fill="currentColor" stroke="none" />
+    <path d="M13.9 3.4 9.2 11.6h2.9L10.1 20.6l4.7-8.2h-2.9z"
+          fill="currentColor" stroke="none" />
   </>,
   // ロビー: 申し込みの一覧
   'ggs-lobby': <>
@@ -79,6 +81,14 @@ const PATHS: Record<IconName, React.ReactNode> = {
   refresh: <>
     <path d="M20 12a8 8 0 1 1-2.6-5.9" />
     <path d="M20.5 4v4.5H16" />
+  </>,
+  // 状態: 使える / 足りない
+  check: <>
+    <path d="M4.5 12.5 9.5 17.5 19.5 6.5" />
+  </>,
+  alert: <>
+    <path d="M12 3.5 22 20.5H2z" />
+    <path d="M12 10v4.5M12 17.6v.1" />
   </>,
   gear: <>
     <circle cx="12" cy="12" r="3" />

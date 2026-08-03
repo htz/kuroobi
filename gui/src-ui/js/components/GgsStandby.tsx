@@ -46,7 +46,7 @@ export function GgsStandby({ ctx }: { ctx: GgsCtx }) {
       <div className="col-main">
         <div className="card">
           <div className="card-head">
-            <h2>放置で連戦する</h2>
+            <h2>連戦の待機</h2>
             <span className="spacer" />
             <div className="stat-strip">
               <span className={'run-state ' + (sb.enabled ? 'on' : 'off')}>

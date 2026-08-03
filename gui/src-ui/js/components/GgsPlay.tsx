@@ -132,7 +132,7 @@ function NoMatch({ online, showView }: { online: boolean; showView: GgsCtx['show
           <div className="row actions" style={{ marginTop: 18 }}>
             <button className="btn primary" onClick={() => showView('ggs-lobby')}>ロビーへ</button>
             <button className="btn" onClick={() => showView('ggs-standby')}>
-              待機モードで放置する
+              待機モードへ
             </button>
           </div>
         )}

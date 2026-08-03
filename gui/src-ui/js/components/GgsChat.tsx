@@ -111,7 +111,7 @@ export function GgsChat({ ctx }: { ctx: GgsCtx }) {
       <aside className="chat-list">
         <div className="chat-list-head">
           <h2>会話</h2>
-          <button className="btn small" onClick={newTalk}>新しく話す</button>
+          <button className="btn small" onClick={newTalk}>新しい相手</button>
         </div>
         <div className="scroll grow">
           {sorted.map(([key, info]) => (

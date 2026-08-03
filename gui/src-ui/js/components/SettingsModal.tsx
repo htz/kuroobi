@@ -3,6 +3,7 @@ import { useCallback, useEffect, useState } from 'react';
 import { api } from '../api';
 import type { ThreadsView } from '../api';
 import { Modal } from './Modal';
+import { Icon } from './Icons';
 
 // 画面に出す名前は resource_status が返すものと同じにする
 // (食い違うと状態が引けず、パスも出なくなる)
@@ -47,18 +48,16 @@ export function SettingsModal({ initial, learnOn, onLearn, onClose, onChanged }:
                       <button className="btn" onClick={onClose}>閉じる</button></>}>
         <div className="settings-section">
           <div className="settings-title">KUROOBI が使うファイル</div>
-          <p className="hint">
-            既定では <code>weights/</code> の中を使います。個別に選ぶと、そのファイルだけを
-            差し替えます。変更は次の思考から効きます。
-          </p>
           {KINDS.map(([kind, title]) => {
             const info = byName.get(title);
             return (
               <div className="file-row" key={kind}>
                 <div className="file-head">
                   {title}
+                  {/* 使えているときは印だけ。足りないときだけ言葉で伝える */}
                   <span className={'file-state ' + (info?.ok ? 'ok' : 'ng')}>
-                    {info?.ok ? '読み込めます' : 'ありません'}
+                    <Icon name={info?.ok ? 'check' : 'alert'} size={13} />
+                    {!info?.ok && 'ファイルがありません'}
                   </span>
                 </div>
                 <div className="file-path">{info?.p ?? '—'}</div>
@@ -84,9 +83,9 @@ export function SettingsModal({ initial, learnOn, onLearn, onClose, onChanged }:
           </p>
           <div className="seg" style={{ alignSelf: 'flex-start' }}>
             <button className={learnOn ? 'active' : ''}
-                    onClick={() => onLearn(true)}>取り込む</button>
+                    onClick={() => onLearn(true)}>する</button>
             <button className={learnOn ? '' : 'active'}
-                    onClick={() => onLearn(false)}>取り込まない</button>
+                    onClick={() => onLearn(false)}>しない</button>
           </div>
         </div>
     </Modal>

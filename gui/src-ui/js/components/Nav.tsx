@@ -22,7 +22,7 @@ const GGS: [View, string][] = [
   ['ggs-chat', 'チャット'],
   ['ggs-standby', '待機モード'],
   ['ggs-console', 'コンソール'],
-  ['ggs-engine', 'KUROOBI の設定'],
+  ['ggs-engine', 'GGS の設定'],
 ];
 
 export interface NavProps {

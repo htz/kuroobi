@@ -158,17 +158,19 @@ function GgsHeader({ snap }: { snap: GgsSnapshot }) {
       <span className="badge">
         {snap.conn === 'online' ? (
           <>
+            <span className="k">自分</span>
             <b>{snap.login}</b>
-            {r8r && <span className="rate"> ランダム {r8r.rating.toFixed(0)}</span>}
-            {r8 && <span className="rate"> 通常 {r8.rating.toFixed(0)}</span>}
+            {r8r && <span className="rate">ランダム {r8r.rating.toFixed(0)}</span>}
+            {r8 && <span className="rate">通常 {r8.rating.toFixed(0)}</span>}
           </>
         ) : snap.conn === 'disconnected' ? '未接続' : '接続中…'}
       </span>
       <span className="badge">
-        {`Kuroobi  深さ${snap.engine.depth} / 読切${snap.engine.solve}` +
-          (snap.engine.band ? ` / 選択読み+${snap.engine.band}` : '') +
-          (snap.auto_play ? '' : '  (観戦のみ)')}
+        <span className="k">強さ</span>
+        {`深さ ${snap.engine.depth} / 読切 ${snap.engine.solve}` +
+          (snap.engine.band ? ` / 選択読み +${snap.engine.band}` : '')}
       </span>
+      {!snap.auto_play && <span className="badge">観戦のみ</span>}
       {snap.standby.enabled && <span className="badge gold">待機モード</span>}
       {snap.thinking && <span className="ggs-thinking">思考中…</span>}
       <span className="spacer" />
@@ -270,19 +272,47 @@ function GgsEngine({ snap }: { snap: GgsSnapshot }) {
 
   return (
     <div className="ggs-pane">
-      <div className="card settings-card">
+      <div className="pane-head">
+        <h2>GGS の設定</h2>
+        <p>GGS で対局・観戦するときの強さとふるまい。ローカル対局とは別に持ちます。</p>
+      </div>
+
+      <section className="pane-sec">
+        <div className="sec-head">
+          <h3>強さ</h3>
+          <p>持ち時間が減ると、この設定を上限に自動で浅くします。</p>
+        </div>
         <div className="seg">
           {[['light', '軽量'], ['ggs', '実戦'], ['max', '最強'], ['custom', '自由設定']].map(([v, label]) => (
             <button key={v} className={preset === v ? 'active' : ''}
                     onClick={() => applyPreset(v)}>{label}</button>
           ))}
         </div>
-        <div className="row">
+        <div className="num-grid">
           <div><label className="field">中盤の深さ</label>{num(depth, setDepth)}</div>
           <div><label className="field">読切 (空き)</label>{num(solve, setSolve)}</div>
           <div><label className="field">選択読み</label>{num(band, setBand)}</div>
           <div><label className="field">スレッド</label>{num(threads, setThreads)}</div>
         </div>
+      </section>
+
+      <section className="pane-sec">
+        <div className="sec-head"><h3>定石</h3></div>
+        {snap.engine.book_loaded ? (
+          <div className="seg">
+            <button className={book ? 'active' : ''} onClick={() => setBook(true)}>使う</button>
+            <button className={book ? '' : 'active'} onClick={() => setBook(false)}>使わない</button>
+          </div>
+        ) : (
+          <p className="warn-line">
+            <Icon name="alert" size={14} />
+            ファイルがありません。左メニュー下の「設定」で指定してください。
+          </p>
+        )}
+      </section>
+
+      <section className="pane-sec">
+        <div className="sec-head"><h3>ふるまい</h3></div>
         <label className="check">
           <input type="checkbox" checked={auto} onChange={(e) => setAuto(e.target.checked)} />
           自分の手番で自動的に指す
@@ -291,51 +321,33 @@ function GgsEngine({ snap }: { snap: GgsSnapshot }) {
           <input type="checkbox" checked={watch} onChange={(e) => setWatch(e.target.checked)} />
           観戦中の対局も解析する
         </label>
-        <div>
-          <label className="field">
-            定石{!snap.engine.book_loaded && (
-              <span className="hint-inline"> — ファイルがありません (設定から指定できます)</span>
-            )}
-          </label>
-          <div className={'seg' + (snap.engine.book_loaded ? '' : ' disabled')}>
-            <button className={book ? 'active' : ''} disabled={!snap.engine.book_loaded}
-                    onClick={() => setBook(true)}>使う</button>
-            <button className={book ? '' : 'active'} disabled={!snap.engine.book_loaded}
-                    onClick={() => setBook(false)}>使わない</button>
-          </div>
-        </div>
-        <p className="hint">
-          KUROOBI が使うファイルは左メニュー下の「設定」から選べます。
-          持ち時間が減ると、この設定を上限に自動で浅くします。
-        </p>
-        <div className="row actions">
-          {saved && <span className="saved-note">反映しました</span>}
-          <span className="spacer" />
-          <button className="btn primary" onClick={async () => {
-            await ggsApi.setEngine(depth, solve, band, threads).catch(() => {});
-            await ggsApi.setAutoPlay(auto).catch(() => {});
-            await ggsApi.setWatchAnalysis(watch).catch(() => {});
-            await ggsApi.setUseBook(book).catch(() => {});
-            setSaved(true);
-            window.setTimeout(() => setSaved(false), 2000);
-          }}>適用</button>
-        </div>
+      </section>
+
+      <div className="pane-actions">
+        {saved && <span className="saved-note"><Icon name="check" size={14} />反映しました</span>}
+        <span className="spacer" />
+        <button className="btn primary" onClick={async () => {
+          await ggsApi.setEngine(depth, solve, band, threads).catch(() => {});
+          await ggsApi.setAutoPlay(auto).catch(() => {});
+          await ggsApi.setWatchAnalysis(watch).catch(() => {});
+          await ggsApi.setUseBook(book).catch(() => {});
+          setSaved(true);
+          window.setTimeout(() => setSaved(false), 2000);
+        }}>適用</button>
       </div>
 
-      {/* 接続そのものの操作。設定とは別の枠に分ける */}
-      <div className="card settings-card">
-        <div className="settings-title">接続</div>
-        <p className="hint">
-          ログアウトすると保存済みの認証情報も消えます。次の起動では
-          自動ログインしません。
-        </p>
-        <div className="row actions">
-          <span className="spacer" />
+      <section className="pane-sec danger-sec">
+        <div className="sec-head">
+          <h3>接続</h3>
+          <p>ログアウトすると保存済みの認証情報も消えます。次の起動では自動
+          ログインしません。</p>
+        </div>
+        <div>
           <button className="btn danger" onClick={() => void ggsApi.disconnect()}>
             <Icon name="logout" size={15} />ログアウト
           </button>
         </div>
-      </div>
+      </section>
     </div>
   );
 }
