@@ -84,6 +84,34 @@ fn normalize(board: &Board) -> (u64, u64, u8) {
     (best.0, best.1, best_i)
 }
 
+/// 盤面の向きに戻した候補手 (マス, 手番視点の値, 実戦での採用回数)。
+pub type BookMove = (Position, f32, u32);
+
+/// 変換 `i` をビットボード全体に適用する (`map_square` の 64 マス版)。
+fn transform_bb(bb: u64, i: u8) -> u64 {
+    let mut b = bb;
+    if i >= 4 {
+        b = crate::bitboard::mirror_horizontal(b);
+        for _ in 0..(i - 4) {
+            b = crate::bitboard::rotate_90(b);
+        }
+    } else {
+        for _ in 0..i {
+            b = crate::bitboard::rotate_90(b);
+        }
+    }
+    b
+}
+
+/// 盤面を変えない変換の一覧 (自己同型)。初期局面のように対称な盤面では
+/// 複数あり、そこでは 1 つの手が同値な手すべてを代表する。
+pub fn stabilizers(board: &Board) -> Vec<u8> {
+    let (p, o) = (board.player_bb(), board.opponent_bb());
+    (0..8u8)
+        .filter(|&i| (transform_bb(p, i), transform_bb(o, i)) == (p, o))
+        .collect()
+}
+
 /// 正規化変換 `i` を 1 マスに適用する。
 fn map_square(sq: u8, i: u8) -> u8 {
     let mut bit = 1u64 << sq;
@@ -162,11 +190,41 @@ impl Book {
 
     /// 局面を引いて最善手を返す (研究・検証用の決定的な選択)。
     pub fn probe(&self, board: &Board) -> Option<(Position, f32, u8)> {
+        let (cands, depth) = self.expand(board)?;
+        // 値の高い順に並んでいる
+        cands.first().map(|(p, v, _)| (*p, *v, depth))
+    }
+
+    /// 局面を引き、盤面の向きに戻した候補 (手, 値, 採用回数) と深さを返す。
+    ///
+    /// 対称な盤面 (初期局面など) では、記録された 1 手が同値な手すべてを
+    /// 代表している。自己同型で写した先も同じ候補として広げる。これを
+    /// しないと、互いに移り合うだけの手が抜け落ちる — 表示では手が欠け、
+    /// 乱択では同じ向きの手ばかり選ばれる。
+    fn expand(&self, board: &Board) -> Option<(Vec<BookMove>, u8)> {
         let (key, i) = Book::key(board);
         let e = self.map.get(&key)?;
-        let c = e.best()?;
-        let pos = Self::back(c.mv, i)?;
-        board.check(pos).then_some((pos, c.value, e.depth))
+        let stab = stabilizers(board);
+        let mut out: Vec<BookMove> = Vec::new();
+        for c in &e.moves {
+            let Some(p0) = Self::back(c.mv, i) else {
+                continue;
+            };
+            for &g in &stab {
+                let Some(p) = Position::from_index(map_square(p0.index(), g) as u32) else {
+                    continue;
+                };
+                if !board.check(p) || out.iter().any(|(q, _, _)| *q == p) {
+                    continue;
+                }
+                out.push((p, c.value, c.games));
+            }
+        }
+        if out.is_empty() {
+            return None;
+        }
+        out.sort_by(|a, b| b.1.total_cmp(&a.1));
+        Some((out, e.depth))
     }
 
     /// 局面を引き、**最善から `tolerance` 石以内**の候補から 1 手選ぶ。
@@ -180,18 +238,13 @@ impl Book {
         tolerance: f32,
         rand: u64,
     ) -> Option<(Position, f32, u8)> {
-        let (key, i) = Book::key(board);
-        let e = self.map.get(&key)?;
-        let best = e.best()?.value;
-        // 許容幅内 かつ 盤面で合法な候補だけ集める
-        let cands: Vec<(Position, f32, u64)> = e
-            .moves
-            .iter()
-            .filter(|c| c.value >= best - tolerance)
-            .filter_map(|c| {
-                let p = Self::back(c.mv, i)?;
-                board.check(p).then_some((p, c.value, c.games as u64 + 1))
-            })
+        let (all, depth) = self.expand(board)?;
+        let best = all.first()?.1;
+        // 許容幅内の候補だけ集める
+        let cands: Vec<(Position, f32, u64)> = all
+            .into_iter()
+            .filter(|(_, v, _)| *v >= best - tolerance)
+            .map(|(p, v, g)| (p, v, g as u64 + 1))
             .collect();
         if cands.is_empty() {
             return None;
@@ -200,28 +253,19 @@ impl Book {
         let mut pick = rand % total.max(1);
         for (p, v, w) in &cands {
             if pick < *w {
-                return Some((*p, *v, e.depth));
+                return Some((*p, *v, depth));
             }
             pick -= *w;
         }
         let (p, v, _) = cands[0];
-        Some((p, v, e.depth))
+        Some((p, v, depth))
     }
 
     /// 局面の候補一覧を盤面の向きに戻して返す (合法手のみ、値の降順)。
     /// 検討画面などの表示用。
     pub fn candidates(&self, board: &Board) -> Option<Vec<(Position, f32)>> {
-        let (key, i) = Book::key(board);
-        let e = self.map.get(&key)?;
-        let out: Vec<(Position, f32)> = e
-            .moves
-            .iter()
-            .filter_map(|c| {
-                let p = Self::back(c.mv, i)?;
-                board.check(p).then_some((p, c.value))
-            })
-            .collect();
-        (!out.is_empty()).then_some(out)
+        let (out, _) = self.expand(board)?;
+        Some(out.into_iter().map(|(p, v, _)| (p, v)).collect())
     }
 
     /// 正規化空間の手を元の盤面の向きへ戻す。
@@ -491,5 +535,62 @@ mod tests {
         assert!((e.moves[0].value + 2.0).abs() < 1e-6);
         assert_eq!(e.moves[1].games, 3);
         std::fs::remove_file(&path).ok();
+    }
+}
+
+#[cfg(test)]
+mod symmetry_tests {
+    use super::*;
+
+    /// 初期局面は 4 通りの対称で不変 (90 度回すと黒白が入れ替わるので
+    /// 8 通りではない)。その 4 通りが 4 つの合法手を互いに移し合うので、
+    /// 定石は 1 手だけ持てば足り、引くときに残りへ広げられる。
+    #[test]
+    fn the_opening_moves_are_all_equivalent() {
+        let b = Board::new();
+        let stab = stabilizers(&b);
+        assert_eq!(stab.len(), 4, "自己同型は 4 通り: {stab:?}");
+
+        let mut moves: Vec<u8> = b.movable_iter().map(|p| p.index()).collect();
+        moves.sort_unstable();
+        assert_eq!(moves.len(), 4);
+
+        // 1 手を自己同型で写すと 4 手すべてに届く
+        let mut reached: Vec<u8> = stab.iter().map(|&i| map_square(moves[0], i)).collect();
+        reached.sort_unstable();
+        reached.dedup();
+        assert_eq!(reached, moves, "1 手から 4 手すべてへ");
+    }
+
+    /// 対称な盤面では、記録されている 1 手から同値の手すべてを返す。
+    #[test]
+    fn candidates_expand_over_the_symmetry() {
+        let b = Board::new();
+        let (key, i) = Book::key(&b);
+        let mv = b.movable_iter().next().unwrap();
+        let mut book = Book::new();
+        book.insert_raw(
+            key,
+            Entry {
+                moves: vec![Candidate {
+                    mv: Position::from_index(map_square(mv.index(), i) as u32).unwrap(),
+                    value: -1.5,
+                    games: 10,
+                }],
+                depth: 26,
+                games: 10,
+            },
+        );
+        let got = book.candidates(&b).expect("定石にある");
+        assert_eq!(got.len(), 4, "4 手すべて返る: {got:?}");
+        assert!(got.iter().all(|(_, v)| *v == -1.5), "値は同じ: {got:?}");
+    }
+
+    /// 対称でない局面では広がらない (余計な手を作らない)。
+    #[test]
+    fn asymmetric_positions_are_untouched() {
+        let mut b = Board::new();
+        b.make_move(Position::from_index(26).unwrap()).unwrap(); // d3
+        assert_eq!(stabilizers(&b).len(), 1, "自己同型は恒等だけ");
     }
 }

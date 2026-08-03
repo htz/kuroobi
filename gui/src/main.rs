@@ -815,19 +815,17 @@ async fn analyze_live(app: State<'_, App>, handle: tauri::AppHandle) -> Result<(
         let _g = ActivityGuard::begin(&act, "分析");
         let mut guard = eng.lock().unwrap();
         let Some(e) = guard.as_mut() else { return };
-        let book = e.book_hints(&board).unwrap_or_default();
+        // 分析では定石を引かない。定石の値は「どこかの時点の探索結果」で、
+        // 深めている探索値と混ざると手どうしを比べられなくなる
         e.analyze_deepening(&board, 1, |depth, hints| {
             let view: Vec<HintView> = hints
                 .iter()
-                .map(|(p, ev)| {
-                    let b = book.iter().find(|(bp, _)| bp == p);
-                    HintView {
-                        pos: p.index(),
-                        value: finite(b.map(|(_, v)| *v).unwrap_or(ev.value)),
-                        exact: ev.exact,
-                        from_book: b.is_some(),
-                        depth: if b.is_some() { 0 } else { ev.depth },
-                    }
+                .map(|(p, ev)| HintView {
+                    pos: p.index(),
+                    value: finite(ev.value),
+                    exact: ev.exact,
+                    from_book: false,
+                    depth: ev.depth,
                 })
                 .collect();
             handle.emit("hints", (depth, view)).is_ok()
