@@ -9,6 +9,7 @@ import { Graph, type GraphPoint } from './components/Graph';
 import { Nav, type View } from './components/Nav';
 import { Panel } from './components/Panel';
 import { SettingsModal } from './components/SettingsModal';
+import { Modal } from './components/Modal';
 
 export function App() {
   const g = useGame();
@@ -320,27 +321,24 @@ export function App() {
       )}
 
       {paste && (
-        <div id="paste-modal">
-          <div className="box">
-            <label className="field" style={{ margin: 0 }}>
-              棋譜の読み込み — GGF・f5d6… 形式・盤面つきのいずれでも
-            </label>
-            <textarea value={pasteText} onChange={(e) => setPasteText(e.target.value)}
-                      placeholder="f5d6c3d3c4f4f3e3e2…" />
-            <div className="row">
-              <button className="btn" onClick={async () => {
-                try {
-                  const v = await api.loadKifu();
-                  if (v) { g.setView(v); setPaste(false); }
-                } catch (e) { g.say('' + e); }
-              }}>ファイルから…</button>
-              <button className="btn primary" onClick={() => void loadText(pasteText)}>
-                読み込む
-              </button>
-              <button className="btn" onClick={() => setPaste(false)}>キャンセル</button>
-            </div>
-          </div>
-        </div>
+        <Modal title="棋譜の読み込み" onClose={() => setPaste(false)}
+               subtitle="GGF・f5d6… 形式・盤面つきのいずれでも"
+               actions={<>
+                 <button className="btn" onClick={async () => {
+                   try {
+                     const v = await api.loadKifu();
+                     if (v) { g.setView(v); setPaste(false); }
+                   } catch (e) { g.say('' + e); }
+                 }}>ファイルから…</button>
+                 <span className="spacer" />
+                 <button className="btn ghost" onClick={() => setPaste(false)}>キャンセル</button>
+                 <button className="btn primary" onClick={() => void loadText(pasteText)}>
+                   読み込む
+                 </button>
+               </>}>
+          <textarea value={pasteText} onChange={(e) => setPasteText(e.target.value)}
+                    placeholder="f5d6c3d3c4f4f3e3e2…" />
+        </Modal>
       )}
 
       {settings && (

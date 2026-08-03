@@ -2,6 +2,7 @@
 import { useCallback, useEffect, useState } from 'react';
 import { api } from '../api';
 import type { ThreadsView } from '../api';
+import { Modal } from './Modal';
 
 const KINDS: [string, string][] = [
   ['dir', '置き場所 (フォルダ)'],
@@ -44,9 +45,9 @@ export function SettingsModal({ initial, learnOn, onLearn, onClose, onChanged }:
   };
 
   return (
-    <div className="modal">
-      <div className="card box wide">
-        <h2>設定</h2>
+    <Modal title="設定" wide onClose={onClose}
+           actions={<><span className="spacer" />
+                      <button className="btn" onClick={onClose}>閉じる</button></>}>
         <div className="settings-section">
           <div className="settings-title">エンジンが使うファイル</div>
           <p className="hint">
@@ -95,11 +96,7 @@ export function SettingsModal({ initial, learnOn, onLearn, onClose, onChanged }:
                     onClick={() => onLearn(false)}>取り込まない</button>
           </div>
         </div>
-        <div className="row actions">
-          <button className="btn ghost" onClick={onClose}>閉じる</button>
-        </div>
-      </div>
-    </div>
+    </Modal>
   );
 }
 

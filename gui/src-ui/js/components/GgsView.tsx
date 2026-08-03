@@ -11,6 +11,7 @@ import { GgsUsers } from './GgsUsers';
 import { GgsChat } from './GgsChat';
 import { GgsStandby } from './GgsStandby';
 import { GgsConsole } from './GgsConsole';
+import { Modal } from './Modal';
 
 /** 各画面へ渡す共通の入口。 */
 export interface GgsCtx {
@@ -122,25 +123,22 @@ export function GgsView({ view, onView, snap, patch, onOpenStudy }: GgsViewProps
         )}
 
       {kifuModal && (
-        <div className="modal">
-          <div className="card box">
-            <h2>棋譜 — {kifuModal.title}</h2>
-            <textarea readOnly value={kifuBody || '(手なし)'} />
-            <div className="row actions">
-              <button className="btn ghost" onClick={() => setKifuModal(null)}>閉じる</button>
-              <span className="spacer" />
-              <CopyButton text={kifuBody} />
-              <button className="btn" onClick={() =>
-                void ggsApi.saveKifu(kifuBody, 'kifu').catch((e) => alert(e))}>
-                ファイルに保存
-              </button>
-              <button className="btn primary" onClick={() => {
-                onOpenStudy(kifuBody);
-                setKifuModal(null);
-              }}>検討で開く</button>
-            </div>
-          </div>
-        </div>
+        <Modal title={`棋譜 — ${kifuModal.title}`} onClose={() => setKifuModal(null)}
+               actions={<>
+                 <button className="btn ghost" onClick={() => setKifuModal(null)}>閉じる</button>
+                 <span className="spacer" />
+                 <CopyButton text={kifuBody} />
+                 <button className="btn" onClick={() =>
+                   void ggsApi.saveKifu(kifuBody, 'kifu').catch((e) => alert(e))}>
+                   ファイルに保存
+                 </button>
+                 <button className="btn primary" onClick={() => {
+                   onOpenStudy(kifuBody);
+                   setKifuModal(null);
+                 }}>検討で開く</button>
+               </>}>
+          <textarea readOnly value={kifuBody || '(手なし)'} />
+        </Modal>
       )}
 
       {engineModal && <GgsEngineModal snap={snap} onClose={() => setEngineModal(false)} />}
@@ -275,9 +273,18 @@ function GgsEngineModal({ snap, onClose }: { snap: GgsSnapshot; onClose: () => v
   );
 
   return (
-    <div className="modal">
-      <div className="card box">
-        <h2>エンジン設定</h2>
+    <Modal title="エンジン設定" onClose={onClose}
+           actions={<>
+             <button className="btn ghost" onClick={onClose}>閉じる</button>
+             <span className="spacer" />
+             <button className="btn primary" onClick={async () => {
+               await ggsApi.setEngine(depth, solve, band, threads).catch(() => {});
+               await ggsApi.setAutoPlay(auto).catch(() => {});
+               await ggsApi.setWatchAnalysis(watch).catch(() => {});
+               await ggsApi.setUseBook(book).catch(() => {});
+               onClose();
+             }}>適用</button>
+           </>}>
         <div className="seg">
           {[['light', '軽量'], ['ggs', '実戦'], ['max', '最強'], ['custom', '自由設定']].map(([v, label]) => (
             <button key={v} className={preset === v ? 'active' : ''}
@@ -315,19 +322,7 @@ function GgsEngineModal({ snap, onClose }: { snap: GgsSnapshot; onClose: () => v
           エンジンが使うファイルは左メニュー下の歯車 (設定) から選べます。
           持ち時間が減ると、この設定を上限に自動で浅くします。
         </p>
-        <div className="row actions">
-          <button className="btn ghost" onClick={onClose}>閉じる</button>
-          <span className="spacer" />
-          <button className="btn primary" onClick={async () => {
-            await ggsApi.setEngine(depth, solve, band, threads).catch(() => {});
-            await ggsApi.setAutoPlay(auto).catch(() => {});
-            await ggsApi.setWatchAnalysis(watch).catch(() => {});
-            await ggsApi.setUseBook(book).catch(() => {});
-            onClose();
-          }}>適用</button>
-        </div>
-      </div>
-    </div>
+    </Modal>
   );
 }
 
