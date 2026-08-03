@@ -204,7 +204,9 @@ export function App() {
 
   const updateGraph = useCallback(async () => {
     const v = g.view;
-    if (gbusy || !v) return;
+    // 押しても何も起きない、という状態を作らない。始められない理由は必ず出す
+    if (!v) { g.say('棋譜がありません'); return; }
+    if (gbusy) { g.say('採点中です'); return; }
     // CPU を食い合う機能は同時に動かさない。GGS 対局は最優先なので断り、
     // ローカル対局が進行中なら確認の上で停止してから始める
     if (ggsMatch) { g.say('GGS 対局中は検討の計算を控えます'); return; }
