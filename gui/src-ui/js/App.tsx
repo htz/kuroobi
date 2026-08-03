@@ -61,7 +61,7 @@ export function App() {
     return () => clearInterval(t);
   }, []);
   // GGS の自分の対局が進行中か (最優先なのでローカルの開始を断る)
-  const ggsMatch = ggs.snap?.matches.some((m) => m.my_color) ?? false;
+  const ggsMatch = ggs.snap?.matches.some((m) => m.my_color && !m.over) ?? false;
 
   const isGgs = view.startsWith('ggs-');
 
@@ -296,7 +296,7 @@ export function App() {
                     <span style={{ color: 'var(--accent)' }}>●</span>探索
                   </label>
                   <button className="btn small" onClick={() => void updateGraph()}>
-                    <Icon name="refresh" size={14} />更新
+                    <Icon name="refresh" size={14} />{gvals ? '採点し直す' : '全局面を採点'}
                   </button>
                 </div>
                 <Graph values={gvals} moves={g.view.moves} cursor={g.view.cursor}

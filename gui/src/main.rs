@@ -145,7 +145,8 @@ fn ggs_match_in(snap: &Option<Arc<Mutex<ggs::Snapshot>>>) -> bool {
             .unwrap()
             .matches
             .iter()
-            .any(|m| !m.my_color.is_empty())
+            // 終局した対局は一覧に残るので、進行中のものだけを見る
+            .any(|m| !m.my_color.is_empty() && !m.over)
     })
 }
 
@@ -588,7 +589,7 @@ fn activity_status(app: State<App>) -> ActivityView {
         .map(|s| {
             let s = s.lock().unwrap();
             (
-                s.matches.iter().any(|m| !m.my_color.is_empty()),
+                s.matches.iter().any(|m| !m.my_color.is_empty() && !m.over),
                 s.thinking.is_some(),
                 s.engine.threads as u32,
             )

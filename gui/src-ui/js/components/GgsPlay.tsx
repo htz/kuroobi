@@ -117,8 +117,11 @@ export function GgsPlay({ ctx }: { ctx: GgsCtx }) {
             <span className="muted small">同じ開局を先後入れ替えた 2 局。結果は合計で判定</span>
           )}
           {!mine && (
+            // 手合いごと (組の全局) をまとめて止める
             <button className="btn small danger"
-                    onClick={() => void ggsApi.watch(cur, false)}>観戦をやめる</button>
+                    onClick={() => pair?.forEach((m) => void ggsApi.watch(m.id, false))}>
+              観戦をやめる
+            </button>
           )}
         </div>
         <div className="split-body">
@@ -282,10 +285,9 @@ function MatchCard({ ctx, m, clock }: {
       <div className="row">
         <button className="btn small"
                 onClick={() => ctx.showKifu(m.id, kifuText(m.ggf, m.moves))}>棋譜</button>
-        {observer ? (
-          <button className="btn small danger"
-                  onClick={() => void ggsApi.watch(m.id, false)}>観戦をやめる</button>
-        ) : (
+        {/* 観戦をやめるのは手合いごと (上のボタン)。1 局だけ抜けても
+            同期対局では片方が残って中途半端になる */}
+        {!observer && (
           actions.map(([label, verb, msg]) => (
             <button key={verb} className={'btn small' + (verb === 'resign' ? ' danger' : '')}
                     onClick={() => {
