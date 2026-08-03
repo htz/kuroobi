@@ -302,6 +302,8 @@ pub struct Snapshot {
     pub offers: Vec<Offer>,
     pub matches: Vec<MatchView>,
     pub ongoing: Vec<OngoingView>,
+    /// 画面に出す一言 (観戦に失敗した等)。表示したら消える前提の短い文。
+    pub notice: String,
     pub stored: Vec<StoredView>,
     /// history の結果 (対象名 → 行)。
     pub history: HashMap<String, Vec<HistoryRow>>,
@@ -775,6 +777,9 @@ struct Ctx {
     local_stop: Arc<Mutex<Option<kuroobi::midgame::StopHandle>>>,
     /// ローカル側の稼働記録 (何か走っているときだけ通知を出す)。
     local_activity: Arc<Mutex<crate::Activity>>,
+    /// 観戦を頼んだ対局と期限。盤面が届かないまま過ぎたら、その対局は
+    /// もう終わっている (GGS は watch の失敗を返さないことがある)。
+    pending_watch: HashMap<String, Instant>,
 }
 
 impl Ctx {
@@ -933,6 +938,7 @@ pub fn run(
         learn_jobs: VecDeque::new(),
         local_stop,
         local_activity,
+        pending_watch: HashMap::new(),
     };
     ctx.snap.lock().unwrap().engine = EngineCfgView {
         depth: 22,
@@ -1140,6 +1146,8 @@ pub fn run(
                         }
                         Cmd::Watch(id) => {
                             send!(ctx, format!("tell /os watch + {id}"));
+                            ctx.pending_watch
+                                .insert(id.clone(), Instant::now() + Duration::from_secs(6));
                             let mut s = ctx.snap.lock().unwrap();
                             for o in s.ongoing.iter_mut() {
                                 if o.id == id {
@@ -1448,6 +1456,18 @@ pub fn run(
                     if in_block {
                         if ln == "READY" {
                             in_block = false;
+                            // 盤面が届いた = 観戦できた
+                            if let Some(mid) = block
+                                .first()
+                                .and_then(|l| l.split_whitespace().nth(2))
+                                .map(str::to_string)
+                            {
+                                if ctx.pending_watch.remove(&mid).is_some()
+                                    | ctx.pending_watch.remove(&base_id(&mid)).is_some()
+                                {
+                                    ctx.snap.lock().unwrap().notice.clear();
+                                }
+                            }
                             handle_block(&mut ctx, &block, &login, &mut matches, |c| {
                                 let c: String = c;
                                 ctx_send(&mut writer, &c);
@@ -1648,6 +1668,35 @@ pub fn run(
                             );
                         }
                     }
+                }
+
+                // ---------- 観戦の失敗を拾う ----------
+                // GGS は終わった対局への watch にエラーを返さないことがある。
+                // 盤面が来ないまま期限が過ぎたら、その対局はもう無い
+                let now = Instant::now();
+                let stale: Vec<String> = ctx
+                    .pending_watch
+                    .iter()
+                    .filter(|(_, &due)| now >= due)
+                    .map(|(id, _)| id.clone())
+                    .collect();
+                if !stale.is_empty() {
+                    for id in &stale {
+                        ctx.pending_watch.remove(id);
+                        ctx.log(
+                            "info",
+                            &format!("{id} は観戦できませんでした (対局が終わっています)"),
+                        );
+                    }
+                    let mut s = ctx.snap.lock().unwrap();
+                    s.ongoing.retain(|o| !stale.contains(&o.id));
+                    s.notice = format!(
+                        "{} を観戦できませんでした。対局がすでに終わっているか、\
+                         参加できない対局です。",
+                        stale.join(" / ")
+                    );
+                    drop(s);
+                    ctx.emit(true);
                 }
 
                 // ---------- 自分の対局が始まったらローカルへ CPU を渡させる ----------

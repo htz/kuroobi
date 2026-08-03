@@ -228,6 +228,8 @@ export interface GgsSnapshot {
   offers: Offer[];
   matches: MatchView[];
   ongoing: OngoingView[];
+  /** 画面に出す一言 (観戦に失敗した等)。 */
+  notice: string;
   stored: StoredView[];
   history: Record<string, HistoryRow[]>;
   chat: ChatMsg[];

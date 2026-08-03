@@ -31,7 +31,8 @@ export function GgsPlay({ ctx }: { ctx: GgsCtx }) {
   if (!groups.size) {
     return (
       <div className="split-pane card no-list">
-        <NoMatch online={snap.conn === 'online'} showView={ctx.showView} />
+        <NoMatch online={snap.conn === 'online'} showView={ctx.showView}
+                 notice={snap.notice} />
       </div>
     );
   }
@@ -134,7 +135,8 @@ export function GgsPlay({ ctx }: { ctx: GgsCtx }) {
   );
 }
 
-function NoMatch({ online, showView }: { online: boolean; showView: GgsCtx['showView'] }) {
+function NoMatch({ online, showView, notice }:
+    { online: boolean; showView: GgsCtx['showView']; notice: string }) {
   return (
     <div className="no-match">
       <EmptyBoard />
@@ -144,7 +146,7 @@ function NoMatch({ online, showView }: { online: boolean; showView: GgsCtx['show
         </div>
         <div className="muted">
           {online
-            ? 'ロビーで申し込むか、進行中の対局を観戦できます。'
+            ? (notice || 'ロビーで申し込むか、進行中の対局を観戦できます。')
             : '接続すると、対局と観戦がここに表示されます。'}
         </div>
         {online && (
