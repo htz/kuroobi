@@ -7,7 +7,7 @@ import { Board } from './components/Board';
 import { GgsView } from './components/GgsView';
 import { Graph, type GraphPoint } from './components/Graph';
 import { Nav, type View } from './components/Nav';
-import { Panel, ScoreBar } from './components/Panel';
+import { ControlBar, MessageBar, Panel, ScoreBar } from './components/Panel';
 import { SettingsModal } from './components/SettingsModal';
 import { Modal } from './components/Modal';
 import { Icon } from './components/Icons';
@@ -55,18 +55,20 @@ export function App() {
   // ---- 分析の途中経過 ----
   // 反復深化の段が終わるたびに届く。深いものが来たら置き換えるだけ。
   const setHints = g.setHints;
+  const setStat = g.setStat;
   useEffect(() => {
     let off: (() => void) | undefined;
-    void onHints((_depth, hs) => {
+    void onHints((_depth, hs, nodes, secs) => {
       const next: Record<number, { value: number; exact: boolean; book: boolean; depth: number }> = {};
       for (const h of hs) {
         if (!Number.isFinite(h.value)) continue;
         next[h.pos] = { value: h.value, exact: h.exact, book: h.from_book, depth: h.depth };
       }
       setHints(Object.keys(next).length ? next : null);
+      setStat({ nodes, secs });
     }).then((f) => { off = f; }).catch(() => {});
     return () => off?.();
-  }, [setHints]);
+  }, [setHints, setStat]);
 
   // ---- CPU の稼働状況 (ナビの常時表示) ----
   const [cpu, setCpu] = useState<ActivityView | null>(null);
@@ -179,15 +181,20 @@ export function App() {
         }));
         applyView(next);
         maybeLearn(next);
+        // 働きぶりは局面を進めた後に立てる (applyView が消しにかかるため)。
+        // 人が打つまで直前の 1 手ぶんが盤の下に残る
+        setStat(r.nodes > 0 ? { nodes: r.nodes, secs: r.secs } : null);
         // どのくらい良いと見て指したかを残す
+        // 見出し (「KUROOBI の評価」) は付けない。狭い幅では見出しだけ畳んで
+        // 数字を残したいので、出し分けは表示側 (ScoreBar) の仕事にする
         setLastEval(Number.isFinite(r.value)
-          ? `KUROOBI の評価: ${r.value > 0 ? '+' : ''}${
+          ? `${r.value > 0 ? '+' : ''}${
               r.exact ? r.value.toFixed(0) : r.value.toFixed(1)} 石`
             + (r.exact ? ' (完全読み)'
               : r.from_book && r.learned ? ' (定石·実戦学習)'
               : r.from_book ? ' (定石)' : '')
           : '');
-        say(r.pos === null ? 'パス' : '');
+        say('');
       } catch (e) {
         say('' + e);
         setPlaying(false);
@@ -201,7 +208,7 @@ export function App() {
 
     return () => clearInterval(timer);
   }, [playing, gv, engineSides, setThinking, setThinkSecs, setThinkTotal,
-      setMoveSource, applyView, setPlaying, say, setLastEval, maybeLearn]);
+      setMoveSource, applyView, setPlaying, say, setLastEval, maybeLearn, setStat]);
 
   // GGS の棋譜 (GGF か着手列) を検討画面で開く。アプリ内で完結する。
   const openStudy = useCallback(async (kifu: string) => {
@@ -214,7 +221,7 @@ export function App() {
       setMode('study');
       applyView(v);
       setView('study');
-      say('棋譜を読み込みました');
+      say('');
     } catch (e) { say('' + e); }
   }, [setMoveSource, setThinkTotal, setLastEval, setPlaying, setMode, applyView, say]);
 
@@ -261,6 +268,24 @@ export function App() {
     setGbusy(false);
   }, [g, gbusy, ggsMatch]);
 
+  // 対局の開始 / 停止。盤の上の操作帯から呼ぶ。
+  const startGame = useCallback(() => {
+    // 停止したことは伝えない。押した本人がやったことで、ボタンも
+    // 「対局開始」に戻るので、言葉で言い直す意味がない
+    if (g.playing) { g.stop(); g.say(''); return; }
+    // CPU を食い合う機能は同時に動かさない。GGS 対局は最優先、
+    // 分析中は確認してから止める
+    if (ggsMatch) { g.say('GGS 対局中はローカル対局を開始できません'); return; }
+    if (gbusy) {
+      if (!window.confirm('評価値グラフを分析中です。停止して対局を始めますか？')) return;
+      gseq.current++;
+      setGbusy(false);
+      void api.stopSearch();
+    }
+    g.setPlaying(true);
+    g.say('');
+  }, [g, ggsMatch, gbusy]);
+
   const loadText = async (text: string) => {
     try {
       g.setMoveSource({});
@@ -270,7 +295,7 @@ export function App() {
       g.setView(await api.loadKifuText(text));
       setPaste(false);
       setPasteText('');
-      g.say('棋譜を読み込みました');
+      g.say('');
     } catch (e) { g.say('' + e); }
   };
 
@@ -298,7 +323,7 @@ export function App() {
       ) : (
         <>
           <div id="main">
-            <ScoreBar g={g} />
+            <ControlBar g={g} onStart={startGame} />
             <div id="board-wrap">
               <Board
                 cells={g.view?.cells ?? new Array(64).fill(0)}
@@ -310,6 +335,8 @@ export function App() {
                 onPlay={(sq) => void g.play(sq)}
               />
             </div>
+            <ScoreBar g={g} />
+            <MessageBar g={g} />
             {g.mode === 'study' && g.view && (
               <div className="card" id="graph-card">
                 <div className="row" style={{ alignItems: 'center' }}>
@@ -329,20 +356,6 @@ export function App() {
           </div>
 
           <Panel g={g} gvals={gvals}
-                 onStart={() => {
-                   if (g.playing) { g.stop(); g.say('対局を停止しました'); return; }
-                   // CPU を食い合う機能は同時に動かさない。GGS 対局は最優先、
-                   // 分析中は確認してから止める
-                   if (ggsMatch) { g.say('GGS 対局中はローカル対局を開始できません'); return; }
-                   if (gbusy) {
-                     if (!window.confirm('評価値グラフを分析中です。停止して対局を始めますか？')) return;
-                     gseq.current++;
-                     setGbusy(false);
-                     void api.stopSearch();
-                   }
-                   g.setPlaying(true);
-                   g.say('');
-                 }}
                  onSave={() => void api.saveKifu().catch((e) => g.say('' + e))}
                  onLoad={() => setPaste(true)} />
         </>

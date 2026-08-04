@@ -25,6 +25,16 @@ export interface ThinkView {
   learned: boolean;
   /** この手に使った時間 (秒)。 */
   secs: number;
+  /** この手を選ぶまでに訪れたノード数 (定石なら 0)。 */
+  nodes: number;
+}
+
+/** 探索の働きぶり (盤の下に出す)。動いていないときは null にする。 */
+export interface SearchStat {
+  /** 訪れたノード数。 */
+  nodes: number;
+  /** そこまでの経過秒。速さ (nps) はこの 2 つから割って出す。 */
+  secs: number;
 }
 
 export interface HintView {

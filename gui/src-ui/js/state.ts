@@ -6,7 +6,7 @@
 // そこから導くだけにする。
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { api } from './api';
-import type { GameView } from './types';
+import type { GameView, SearchStat } from './types';
 
 export type AppMode = 'vs' | 'study';
 export type EngineSide = 'black' | 'white' | 'both' | 'off';
@@ -57,6 +57,10 @@ export function useGame() {
   const [learnOn, setLearnOn] = useState(true);
   const [autoHint, setAutoHintRaw] = useState(false);
   const [hints, setHints] = useState<Hints | null>(null);
+  // 探索の働きぶり (盤の下)。分析中はライブで伸び、対局では直前の 1 手ぶんが
+  // 残る。動いていないときは null にして行ごと消す — 古い数字を残すと
+  // 「まだ動いている」と誤解する。
+  const [stat, setStat] = useState<SearchStat | null>(null);
   const [playing, setPlaying] = useState(false);
   const [thinking, setThinking] = useState(false);
   const [thinkSecs, setThinkSecs] = useState(0);          // 思考中の経過
@@ -119,22 +123,23 @@ export function useGame() {
   /** 評価値の表示を切り替える。切ったらいま出ている値も消す。 */
   const setAutoHint = useCallback((on: boolean) => {
     setAutoHintRaw(on);
-    if (!on) setHints(null);
+    if (!on) { setHints(null); setStat(null); }
   }, []);
 
   const apply = useCallback((v: GameView) => {
     setView(v);
     setHints(null);
+    setStat(null);
   }, []);
 
   // 手が指されて終局したら、その対局を定石の学習に取り込む
   // (読み込んだだけの棋譜では呼ばれない)
   const maybeLearn = useCallback((v: GameView) => {
     if (!v.over || mode !== 'vs' || !learnOn) return;
-    api.learnGame()
-      .then(() => say('終局した対局を定石の学習に取り込みます (裏で実行)'))
-      .catch(() => {});
-  }, [mode, learnOn, say]);
+    // 取り込みの進み具合は左メニュー下の「学習 n/m」に出るので、
+    // ここで言葉にはしない
+    api.learnGame().catch(() => {});
+  }, [mode, learnOn]);
 
   // ---- 人が打つ ----
   const play = useCallback(async (sq: number) => {
@@ -159,7 +164,7 @@ export function useGame() {
     setLastEval('');
     setPlaying(false);
     apply(await api.newGame());
-    say('「▶ 対局開始」で対局、そのまま打てば検討モード');
+    say('');
   }, [apply, pushLevels, say]);
 
   const undo = useCallback(async () => {
@@ -172,7 +177,7 @@ export function useGame() {
     if (thinking) return;
     hintSeq.current++;
     api.stopSearch().catch(() => {});
-    if (playing) { setPlaying(false); say('棋譜を移動したため停止しました'); }
+    if (playing) setPlaying(false);   // 棋譜を動かしたら対局は続けられない
     try { apply(await api.goto(n)); } catch (e) { say('' + e); }
   }, [thinking, playing, apply, say]);
 
@@ -190,6 +195,7 @@ export function useGame() {
     learnOn, setLearnOn, maybeLearn,
     autoHint, setAutoHint,
     hints, setHints,
+    stat, setStat,
     playing, setPlaying,
     thinking, setThinking,
     thinkSecs, setThinkSecs,

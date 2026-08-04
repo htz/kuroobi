@@ -7,7 +7,8 @@
 export type IconName =
   | 'play' | 'study' | 'ggs-play' | 'ggs-lobby' | 'ggs-users' | 'ggs-chat'
   | 'ggs-standby' | 'ggs-console' | 'login' | 'logout' | 'cpu' | 'memory' | 'gear'
-  | 'refresh' | 'check' | 'alert';
+  | 'refresh' | 'check' | 'alert'
+  | 'start' | 'stop' | 'newgame' | 'undo' | 'hint';
 
 /** 中身だけを持つ (svg 要素は Icon が用意する)。 */
 const PATHS: Record<IconName, React.ReactNode> = {
@@ -89,6 +90,38 @@ const PATHS: Record<IconName, React.ReactNode> = {
   alert: <>
     <path d="M12 3.5 22 20.5H2z" />
     <path d="M12 10v4.5M12 17.6v.1" />
+  </>,
+  // ---- 盤の上の操作帯 (ControlBar) で使うもの ----
+  // 始める / 止める。線で描くと他のアイコンに埋もれて「押すもの」に
+  // 見えないので、この 2 つだけ塗りにしてある
+  start: <>
+    <path d="M8.6 5.9 18.4 12 8.6 18.1z" fill="currentColor" strokeWidth="2.6" />
+  </>,
+  stop: <>
+    <rect x="7.4" y="7.4" width="9.2" height="9.2" rx="1.7"
+          fill="currentColor" strokeWidth="2.2" />
+  </>,
+  // 新規対局: 初期配置。既製の絵は当たりが無かった —
+  // ＋ は「もう一つ増やして別に開く」、循環矢印は「更新」(グラフの分析で
+  // 使用)、⏮ は「先頭へ移動」と読まれる。どれも意味がずれるので、
+  // この競技にしかない形 = 初期配置そのものを描いた。
+  // 盤の枠で囲うと石が小さくなってサイコロの目に見えたので枠は無し
+  newgame: <>
+    <circle cx="8.2" cy="8.2" r="2.9" />
+    <circle cx="15.8" cy="15.8" r="2.9" />
+    {/* 塗りの円は輪郭のぶん小さく見えるので、線幅の半分だけ半径を足す */}
+    <circle cx="15.8" cy="8.2" r="3.3" fill="currentColor" stroke="none" />
+    <circle cx="8.2" cy="15.8" r="3.3" fill="currentColor" stroke="none" />
+  </>,
+  // 待った: 一手戻す (円弧 + 矢じり)
+  undo: <>
+    <path d="M8.6 8.6h5.9a4.9 4.9 0 0 1 0 9.8h-4.4" />
+    <path d="M11.4 5.2 8 8.6l3.4 3.4" />
+  </>,
+  // 評価値: 盤を見る目
+  hint: <>
+    <path d="M3.1 12a10.6 10.6 0 0 1 17.8 0 10.6 10.6 0 0 1-17.8 0z" />
+    <circle cx="12" cy="12" r="2.7" />
   </>,
   gear: <>
     <circle cx="12" cy="12" r="3" />

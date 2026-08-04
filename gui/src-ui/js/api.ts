@@ -124,13 +124,16 @@ export const ggsApi = {
     call<string | null>('ggs_save_kifu', { kifu, name }),
 };
 
-/** 分析の途中経過を購読する (深さ, 全合法手の評価)。 */
+/** 分析の途中経過を購読する (深さ, 全合法手の評価, ノード数, 経過秒)。 */
 export async function onHints(
-  fn: (depth: number, hints: HintView[]) => void,
+  fn: (depth: number, hints: HintView[], nodes: number, secs: number) => void,
 ): Promise<() => void> {
   const ev = window.__TAURI__?.event;
   if (!ev) throw new Error('Tauri event が使えません');
-  return ev.listen<[number, HintView[]]>('hints', (e) => fn(e.payload[0], e.payload[1]));
+  return ev.listen<[number, HintView[], number, number]>(
+    'hints',
+    (e) => fn(e.payload[0], e.payload[1], e.payload[2], e.payload[3]),
+  );
 }
 
 /** バックエンドからの状態更新を購読する。戻り値で購読を解除できる。 */

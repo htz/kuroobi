@@ -1,17 +1,26 @@
 // 右の設定パネル。石数・思考時間・エンジンの設定・棋譜。
 import { LEVELS } from '../state';
 import type { Game } from '../state';
+import { Icon } from './Icons';
 import { Kifu } from './Kifu';
 import type { GraphPoint } from './Graph';
+import type { SearchStat } from '../types';
 
 const fmtSecs = (v: number): string =>
   v >= 60 ? `${Math.floor(v / 60)} 分 ${(v % 60).toFixed(0)} 秒` : `${v.toFixed(1)} 秒`;
+
+/// 桁が 4 つも 5 つも動くので、単位を繰り上げて 3 桁前後に収める。
+/// 生の桁数を出すと、伸びているのか止まっているのかがかえって読めない。
+const fmtNodes = (v: number): string =>
+  v >= 1e9 ? `${(v / 1e9).toFixed(1)}G`
+    : v >= 1e6 ? `${(v / 1e6).toFixed(1)}M`
+    : v >= 1e3 ? `${(v / 1e3).toFixed(0)}k`
+    : `${Math.round(v)}`;
 
 export interface PanelProps {
   g: Game;
   /** 評価値グラフの計算結果 (棋譜の表にも出す)。 */
   gvals?: (GraphPoint | undefined)[] | null;
-  onStart: () => void;
   onSave: () => void;
   onLoad: () => void;
 }
@@ -31,8 +40,9 @@ function Seg<T extends string>(props: {
   );
 }
 
-/// 盤の上に置くスコア帯。石数・思考時間・結果を 1 行にまとめる。
-/// 右ペインに置くと縦を食い、盤の上下は余るので、こちらへ移した。
+/// 盤の下に置くスコア帯。石数・思考時間・結果を 1 行にまとめる。
+/// 「いまの盤面がどうなっているか」の話なので盤に近い下側へ置き、
+/// 「これから何をするか」の操作は盤の上 (ControlBar) にまとめてある。
 export function ScoreBar({ g }: { g: PanelProps['g'] }) {
   const v = g.view;
   const anyThink = g.thinkTotal.black > 0 || g.thinkTotal.white > 0;
@@ -46,6 +56,14 @@ export function ScoreBar({ g }: { g: PanelProps['g'] }) {
       </span>
       <div className="mid">
         {result && <span className="result">{result}</span>}
+        {/* 直前の手を KUROOBI がどう見たか。指した結果の話なので、盤面の
+            状況と一緒にこちらへ置く (思考の進行は盤の上の帯が受け持つ)。
+            幅が足りなければ末尾から畳む。全文は title で読める */}
+        {g.lastEval && (
+          <span className="eval-inline" title={`KUROOBI の評価 ${g.lastEval}`}>
+            <span className="lbl">KUROOBI の評価</span>{g.lastEval}
+          </span>
+        )}
         {anyThink && (
           <span className="times">
             <i className="disc b" />{fmtSecs(g.thinkTotal.black)}
@@ -61,7 +79,98 @@ export function ScoreBar({ g }: { g: PanelProps['g'] }) {
   );
 }
 
-export function Panel({ g, gvals, onStart, onSave, onLoad }: PanelProps) {
+/// 盤の上に置く操作帯。対局の開始・停止、新規対局、待った、評価値の
+/// 表示切り替えと、KUROOBI がいま何をしているか (思考中の秒数・ノード数・
+/// 速さ) を 1 行にまとめる。
+///
+/// 押すものと KUROOBI の状態を隣に置いたのは、どちらも「これから / いま
+/// 何が起きるか」の話だから。盤面そのものの状況 (石数・結果) は下の
+/// ScoreBar が受け持つ。
+export function ControlBar({ g, onStart }: { g: PanelProps['g']; onStart: () => void }) {
+  const v = g.view;
+  const vs = g.mode === 'vs';
+  return (
+    <div className="controlbar">
+      {vs && (
+        <>
+          {/* 主動作は 1 つだけ塗る。並んだボタンが全部同じ重さだと、
+              どれを押せばいいのかが見た目から分からない */}
+          {/* ラベルは幅が足りなくなると畳まれてアイコンだけになる。
+              その状態でも何のボタンか分かるよう title を必ず付ける */}
+          <button className={'hbtn ' + (g.playing ? 'stop' : 'go')}
+                  disabled={!g.playing && (!!v?.over || g.thinking)}
+                  title={g.playing ? '対局を停止する' : '対局を始める'}
+                  onClick={onStart}>
+            <Icon name={g.playing ? 'stop' : 'start'} size={15} />
+            <span className="lbl">{g.playing ? '対局停止' : '対局開始'}</span>
+          </button>
+          <button className="hbtn" disabled={g.thinking} title="新規対局 (盤を初期配置に戻す)"
+                  onClick={() => void g.newGame()}>
+            <Icon name="newgame" size={15} /><span className="lbl">新規対局</span>
+          </button>
+          <button className="hbtn" disabled={g.thinking || !v || v.move_count === 0}
+                  title="待った (一手戻す)"
+                  onClick={() => void g.undo()}>
+            <Icon name="undo" size={15} /><span className="lbl">待った</span>
+          </button>
+          <span className="hsep" />
+        </>
+      )}
+      {/* 設定は Seg に揃えてあるが、ここは設定欄ではなく道具の並びなので
+          押し込み式の 1 ボタンにする (オフ/オンの 2 枠は帯の中では重い) */}
+      <button className={'hbtn toggle' + (g.autoHint ? ' on' : '')}
+              aria-pressed={g.autoHint}
+              title={g.autoHint ? '評価値を消す' : '盤に評価値を出す'}
+              onClick={() => g.setAutoHint(!g.autoHint)}>
+        <Icon name="hint" size={15} /><span className="lbl">評価値</span>
+      </button>
+      <span className="spacer" />
+      <EngineStatus g={g} />
+    </div>
+  );
+}
+
+/// 帯の右端: KUROOBI がいま何をしているか。思考中の秒数と、探索した
+/// ノード数・その速さ。単位だけは英語のまま — 数量の単位で、訳すと
+/// かえって読みにくい。
+///
+/// ここに置くのは**短くて桁の決まっているものだけ**にしてある。長さの
+/// 読めない伝言を混ぜると、幅の取り合いで数字が押し出される
+/// (盤の横幅は 400px 台まで狭くなりうる)。伝言は盤の下の MessageBar。
+///
+/// 定石から返した手はノードを訪れないので数字が出ない。0 を出すと「働いて
+/// いない」ではなく「壊れている」に見えるため、その場合は消す。
+function EngineStatus({ g }: { g: PanelProps['g'] }) {
+  const stat: SearchStat | null = g.stat;
+  const nodes = stat && stat.nodes > 0 ? stat.nodes : 0;
+  const nps = stat && nodes > 0 && stat.secs > 0 ? nodes / stat.secs : 0;
+  return (
+    <div className="cb-stat">
+      {g.thinking && <span className="thinking">思考中… {g.thinkSecs.toFixed(1)} 秒</span>}
+      {nodes > 0 && <span className="num"><b>{fmtNodes(nodes)}</b> nodes</span>}
+      {nps > 0 && <span className="num nps"><b>{fmtNodes(nps)}</b> nps</span>}
+    </div>
+  );
+}
+
+/// 盤の下の伝言。**出るのは失敗したときと、待たせているときだけ**
+/// (「エンジンが初期化できません」「分析中 3/60…」)。
+///
+/// 「棋譜を読み込みました」「対局を停止しました」のような、押した本人が
+/// 見れば分かることは言わない — 読む前に消えるうえ、行が出たり消えたり
+/// して盤が動く。ただし**失敗は必ず出す**。無言で終わる経路を作ると、
+/// 動かない理由が画面のどこにも残らない。
+///
+/// 一時的なものなので、無いときは行ごと消えて場所を返す。幅いっぱいを
+/// 使えるので、長い文でも切らずに読める。
+export function MessageBar({ g }: { g: PanelProps['g'] }) {
+  if (!g.status) return null;
+  return (
+    <div className={'msgbar' + (g.spin ? ' spin' : '')}>{g.status}</div>
+  );
+}
+
+export function Panel({ g, gvals, onSave, onLoad }: PanelProps) {
   const v = g.view;
   const vs = g.mode === 'vs';
 
@@ -138,36 +247,8 @@ export function Panel({ g, gvals, onStart, onSave, onLoad }: PanelProps) {
         )}
       </div>
 
-      <div className="card">
-        {vs && (
-          <button className={'btn' + (g.playing ? '' : ' primary')}
-                  disabled={!g.playing && (!!v?.over || g.thinking)}
-                  onClick={onStart}>
-            {g.playing ? '■ 対局停止' : '▶ 対局開始'}
-          </button>
-        )}
-        {vs && (
-          <div className="row" id="game-btns">
-            <button className="btn" disabled={g.thinking} onClick={() => void g.newGame()}>
-              新規対局
-            </button>
-            <button className="btn" disabled={g.thinking || !v || v.move_count === 0}
-                    onClick={() => void g.undo()}>
-              待った
-            </button>
-          </div>
-        )}
-        <div>
-          <label className="field">評価値を表示</label>
-          <Seg value={g.autoHint ? 'on' : 'off'}
-               onChange={(x) => g.setAutoHint(x === 'on')}
-               options={[['off', 'オフ'], ['on', 'オン']]} />
-        </div>
-        {g.lastEval && <div id="eval">{g.lastEval}</div>}
-        <div id="status" className={g.thinking || g.spin ? 'spin' : ''}>
-          {g.thinking ? `思考中… ${g.thinkSecs.toFixed(1)} 秒` : g.status}
-        </div>
-      </div>
+      {/* 操作・思考中・伝言は盤の上の帯へ、直前の手の評価は盤の下のスコア帯へ
+          移した。右ペインに残すのは「あらかじめ決める設定」と棋譜だけ */}
 
       <div className="kifu-wrap">
         <div className="row" style={{ alignItems: 'center', marginBottom: 4 }}>

@@ -206,6 +206,8 @@ struct ThinkView {
     learned: bool,
     /// この手に使った時間 (秒)。定石から返した手はほぼ 0。
     secs: f32,
+    /// この手を選ぶまでに訪れたノード数。定石から返した手は 0。
+    nodes: u64,
 }
 
 #[derive(Serialize, Clone)]
@@ -714,18 +716,21 @@ async fn think(app: State<'_, App>) -> Result<ThinkView, String> {
     let eng = app.engine.clone();
     let act = app.activity.clone();
     let stop = app.stop.clone();
-    let (mv, secs, aborted) = tauri::async_runtime::spawn_blocking(move || {
+    let (mv, secs, nodes, aborted) = tauri::async_runtime::spawn_blocking(move || {
         let _g = ActivityGuard::begin(&act, "思考");
         let mut guard = eng.lock().unwrap();
         let t0 = std::time::Instant::now();
+        // ノードは累計で持っているので、この 1 手ぶんは前後の差で取る
+        let n0 = guard.as_ref().unwrap().nodes();
         let mv = guard.as_mut().unwrap().choose(&board);
+        let nodes = guard.as_ref().unwrap().nodes() - n0;
         // 停止された探索の値は不完全 (番兵が混じる)。呼び出し元へ返さない
         let aborted = stop
             .lock()
             .unwrap()
             .as_ref()
             .is_some_and(|h| h.is_stopped());
-        (mv, t0.elapsed().as_secs_f32(), aborted)
+        (mv, t0.elapsed().as_secs_f32(), nodes, aborted)
     })
     .await
     .map_err(|e| e.to_string())?;
@@ -743,6 +748,7 @@ async fn think(app: State<'_, App>) -> Result<ThinkView, String> {
         from_book: mv.from_book,
         learned: mv.learned,
         secs,
+        nodes,
     })
 }
 
@@ -817,7 +823,8 @@ async fn analyze_live(app: State<'_, App>, handle: tauri::AppHandle) -> Result<(
         let Some(e) = guard.as_mut() else { return };
         // 分析では定石を引かない。定石の値は「どこかの時点の探索結果」で、
         // 深めている探索値と混ざると手どうしを比べられなくなる
-        e.analyze_deepening(&board, 1, |depth, hints| {
+        let t0 = std::time::Instant::now();
+        e.analyze_deepening(&board, 1, |depth, hints, nodes| {
             let view: Vec<HintView> = hints
                 .iter()
                 .map(|(p, ev)| HintView {
@@ -828,7 +835,10 @@ async fn analyze_live(app: State<'_, App>, handle: tauri::AppHandle) -> Result<(
                     depth: ev.depth,
                 })
                 .collect();
-            handle.emit("hints", (depth, view)).is_ok()
+            // 働きぶり (ノード数と経過) も一緒に送る。速さは画面側で割る
+            handle
+                .emit("hints", (depth, view, nodes, t0.elapsed().as_secs_f32()))
+                .is_ok()
         });
     });
     Ok(())

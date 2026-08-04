@@ -122,6 +122,9 @@ pub struct Engine {
     learned: Book,
     /// 学習分の保存先 (book と同じディレクトリの book_learn.txt)。
     learn_path: std::path::PathBuf,
+    /// 読み切りが訪れたノードの累計。中盤探索は `search.nodes` が自分で
+    /// 積んでいるが、Solver は 1 回ぶんしか持たないのでここで足す。
+    solver_nodes: u64,
 }
 
 impl Engine {
@@ -181,11 +184,18 @@ impl Engine {
             book_rand,
             learned,
             learn_path,
+            solver_nodes: 0,
         })
     }
 
     pub fn config(&self) -> &EngineConfig {
         &self.config
+    }
+
+    /// この Engine が生涯に訪れたノードの累計 (中盤探索 + 読み切り)。
+    /// 差分を取れば 1 回の探索ぶんが出る。表示専用。
+    pub fn nodes(&self) -> u64 {
+        self.search.nodes + self.solver_nodes
     }
 
     /// 読み込んだ book の局面数 (0 = book なし)。
@@ -314,6 +324,7 @@ impl Engine {
             let r =
                 self.solver
                     .solve_with_eval(EndSolverMode::Perfect, board, Some(&self.evaluator));
+            self.solver_nodes += r.nodes;
             MoveEval {
                 pos: r.best_move,
                 value: stone_scale(r.value as f32),
@@ -324,6 +335,7 @@ impl Engine {
             }
         } else if let Some(t) = selective_band(board.empty_count(), c.solve_empties, c.band) {
             let r = self.solver.solve_selective(board, Some(&self.evaluator), t);
+            self.solver_nodes += r.nodes;
             MoveEval {
                 pos: r.best_move,
                 value: stone_scale(r.value as f32),
@@ -475,6 +487,7 @@ impl Engine {
                     &child,
                     Some(&self.evaluator),
                 );
+                self.solver_nodes += r.nodes;
                 MoveEval {
                     pos: Some(pos),
                     value: -(r.value as f32),
@@ -512,12 +525,15 @@ impl Engine {
     /// 止めてもその時点の最良が手元に残る。
     ///
     /// 読み切りに届いた手はそこで確定するので、以後の段では測り直さない。
+    /// `on_pass` の第 3 引数は、この呼び出しが始まってから訪れたノードの数。
+    /// 画面に働きぶりを出すために渡す (探索の判断には使わない)。
     pub fn analyze_deepening(
         &mut self,
         board: &Board,
         from_depth: u32,
-        mut on_pass: impl FnMut(u32, &[(Position, MoveEval)]) -> bool,
+        mut on_pass: impl FnMut(u32, &[(Position, MoveEval)], u64) -> bool,
     ) {
+        let base_nodes = self.nodes();
         self.stop.reset();
         let saved_threads = self.search.threads;
         self.search.threads = 1;
@@ -548,6 +564,7 @@ impl Engine {
                         &child,
                         Some(&self.evaluator),
                     );
+                    self.solver_nodes += r.nodes;
                     MoveEval {
                         pos: Some(pos),
                         value: stone_scale(-(r.value as f32)),
@@ -572,7 +589,7 @@ impl Engine {
                 out.push((pos, ev));
             }
             out.sort_by(|a, b| b.1.value.total_cmp(&a.1.value));
-            let go_on = on_pass(depth, &out);
+            let go_on = on_pass(depth, &out, self.nodes() - base_nodes);
             // 全部が読み切りなら、深くしても答えは変わらない
             if !go_on || all_exact || depth >= 60 {
                 break;

@@ -102,7 +102,61 @@
   #main { flex: 1; display: flex; flex-direction: column; padding: 16px; gap: 12px;
           min-width: 0; min-height: 0; position: relative; z-index: 1;
           overflow: hidden; contain: paint; }
-  /* 盤の上のスコア帯。石数を左右に置き、間に結果と思考時間を出す */
+  /* 盤の上の操作帯。押すもの (対局・評価値の表示) と、KUROOBI がいま何を
+     しているか (思考中・伝言・ノード数) を 1 行に並べる。
+     帯そのものはカードと同じ地にして、盤の上に浮いた 1 本の道具立てとして
+     読めるようにする。状態は右端へ寄せてあるので、出たり消えたりしても
+     左のボタンの位置は動かない */
+  .controlbar { flex: none; display: flex; align-items: center; gap: 4px;
+                background: var(--card); border: 1px solid var(--border);
+                border-radius: 10px; padding: 5px 8px; min-height: 40px;
+                overflow: hidden; }
+  .controlbar .hsep { width: 1px; align-self: stretch; background: var(--border);
+                      margin: 2px 7px; }
+  .controlbar .spacer { flex: 1; min-width: 8px; }
+  /* 帯のボタン。既定は地なしの軽いもので、押せることは輪郭でなく
+     ホバーで示す。並びの中で目を引かせたいものだけ下で塗る */
+  .hbtn { display: inline-flex; align-items: center; gap: 6px; white-space: nowrap;
+          border: 1px solid transparent; background: none; color: var(--text);
+          font-family: inherit; font-size: 12.5px; letter-spacing: .02em;
+          padding: 6px 10px; border-radius: 7px; cursor: pointer;
+          transition: background .12s, color .12s, border-color .12s, opacity .12s; }
+  .hbtn svg { flex: none; opacity: .75; transition: opacity .12s; }
+  .hbtn:hover:not(:disabled) { background: rgba(255,255,255,.07); }
+  .hbtn:hover:not(:disabled) svg { opacity: 1; }
+  .hbtn:disabled { opacity: .35; cursor: default; }
+  /* 主動作: 対局を始める。ここだけ塗る */
+  .hbtn.go { background: var(--accent-dim); border-color: var(--accent);
+             color: #fff; font-weight: 600; }
+  .hbtn.go:hover:not(:disabled) { background: var(--accent); }
+  .hbtn.go svg { opacity: 1; }
+  /* 止めるのは進行中の唯一の出口なので、目立たせつつ色で別物だと示す */
+  .hbtn.stop { border-color: var(--bad); color: var(--bad); }
+  .hbtn.stop:hover:not(:disabled) { background: rgba(239,122,122,.12); }
+  .hbtn.stop svg { opacity: 1; }
+  /* 押し込み式 (評価値の表示)。入っているかが一目で分かるように、
+     枠ではなく地の明るさで示す */
+  .hbtn.toggle.on { background: rgba(77,159,255,.16); border-color: var(--accent-dim);
+                    color: var(--accent); }
+  .hbtn.toggle.on svg { opacity: 1; }
+  .controlbar .cb-stat { display: flex; align-items: center; gap: 14px; font-size: 12px;
+                         color: var(--sub); min-width: 0;
+                         font-variant-numeric: tabular-nums; }
+  .controlbar .cb-stat .num { white-space: nowrap; }
+  .controlbar .cb-stat b { color: var(--text); font-weight: 600; }
+  .controlbar .cb-stat .thinking { color: var(--accent); white-space: nowrap; }
+  /* 盤の下の伝言。一時的なものなので、無いときは行ごと消えて場所を返す。
+     幅いっぱいを使えるので長い文も切らずに読める */
+  .msgbar { flex: none; padding: 0 6px; font-size: 12px; color: var(--sub);
+            text-align: center; }
+  .msgbar.spin { color: var(--accent); }
+  .msgbar.spin::before {
+    content: ""; display: inline-block; width: 9px; height: 9px; margin-right: 6px;
+    border: 2px solid var(--accent); border-top-color: transparent; border-radius: 50%;
+    animation: rot .8s linear infinite; vertical-align: -1px;
+  }
+
+  /* 盤の下のスコア帯。石数を左右に置き、間に結果と思考時間を出す */
   .scorebar { flex: none; display: flex; align-items: center; gap: 14px;
               padding: 0 6px; }
   .scorebar .side { flex: none; font-size: 19px; }
@@ -110,6 +164,13 @@
                    gap: 14px; min-width: 0; }
   .scorebar .result { color: var(--gold); font-weight: 600; font-size: 14px;
                       white-space: nowrap; }
+  /* 直前の手を KUROOBI がどう見たか。結果ほど強くは出さない */
+  /* 縮むほうを担当する (flex は既定では中身より縮まないので min-width を 0 に)。
+     見出しは狭いと畳まれ、石差の数字だけが残る */
+  .scorebar .eval-inline { color: var(--text); font-size: 12.5px; white-space: nowrap;
+                           overflow: hidden; text-overflow: ellipsis; min-width: 0;
+                           font-variant-numeric: tabular-nums; }
+  .scorebar .eval-inline .lbl { color: var(--sub); margin-right: 6px; }
   .scorebar .times { display: flex; align-items: center; gap: 6px; color: var(--sub);
                      font-size: 12.5px; white-space: nowrap;
                      font-variant-numeric: tabular-nums; }
@@ -119,6 +180,35 @@
   #board-wrap .board { max-width: 100%; max-height: 100%; filter: drop-shadow(0 8px 28px rgba(0,0,0,.45)); }
   #graph-card { flex: none; }
 
+  /* 幅が縮んだときの畳み方。盤の左右は固定幅 (メニュー 174 + 右ペイン 316)
+     なので、ウィンドウ幅から盤の欄の幅が決まる。下限の 860px では盤の欄は
+     340px 程度しかない。優先度の低いものから順に落とす:
+     nps → ボタンのラベル → 「思考時間」の語 → 主動作のラベル → 思考時間。
+     ラベルを畳んだボタンは title で何のボタンか読める。
+     **上の定義より後に置くこと** — 同じ強さの規則なので、先に書くと
+     あとの `.scorebar .times { display: flex }` に上書きされる */
+  /* 畳む順は「絵だけでどれだけ通じるか」で決める。▶ / ■ は再生・停止の
+     絵として広く通っているのでラベルは真っ先に外してよい。逆に循環矢印や
+     ↶ は「何を」やり直す / 戻すのかまでは伝えないので、言葉を最後まで残す */
+  @media (max-width: 1120px) {
+    .hbtn.go .lbl, .hbtn.stop .lbl { display: none; }
+    .scorebar .eval-inline .lbl { display: none; }        /* 石差の数字だけ残す */
+    /* 「思考時間」の語は落とすが、黒と白の秒がくっつくので区切りは残す */
+    .scorebar .times .vs { font-size: 0; }
+    .scorebar .times .vs::before { content: "/"; font-size: 12.5px; }
+  }
+  @media (max-width: 1040px) {
+    /* 目は「表示の入り切り」の絵として通じるほうなので、次に外す */
+    .hbtn.toggle .lbl { display: none; }
+  }
+  @media (max-width: 940px) {
+    /* ここまで来たら幅がない。残りのラベルも畳み、意味は title に預ける */
+    .hbtn .lbl { display: none; }
+    .hbtn { padding: 6px 8px; }
+    .controlbar .cb-stat .nps { display: none; }
+    .scorebar .times { display: none; }
+  }
+
   /* ---- サイドパネル ---- */
   #panel {
     width: 316px; background: var(--panel); border-left: 1px solid var(--border);
@@ -127,7 +217,11 @@
     overflow-y: auto;
   }
   #panel > .card { flex: none; }
-  #panel .kifu-wrap { flex: 1 0 auto; min-height: 130px;
+  /* 基準を 0 にして「余った高さちょうど」に収める。auto のままだと基準が
+     中身 (棋譜の全行) の高さになり、枠が伸びてパネルごと流れてしまう。
+     縮めるほうも許す (min-height: 0) 代わりに、下限だけ 130px で押さえる。
+     そこまで詰まったときはパネル全体が流れる (overflow-y: auto) */
+  #panel .kifu-wrap { flex: 1 1 0; min-height: 130px;
                       display: flex; flex-direction: column; }
   h1 { font-size: 17px; margin: 0; letter-spacing: .14em; font-weight: 700; }
   h1 small { color: var(--sub); font-weight: 400; letter-spacing: .04em; margin-left: 8px; font-size: 11px; }
@@ -234,19 +328,20 @@
   .row > * { flex: 1; }
 
   /* ---- 情報表示 ---- */
-  #eval { font-size: 13px; min-height: 18px; font-variant-numeric: tabular-nums; }
-  #status { font-size: 12px; color: var(--sub); min-height: 16px; }
-  #status.spin { color: var(--accent); }
-  #status.spin::before {
+  /* 待たせている伝言だけ回るしるしを付ける (帯の中でも位置は変わらない) */
+  .cb-stat .msg.spin { color: var(--accent); }
+  .cb-stat .msg.spin::before {
     content: ""; display: inline-block; width: 9px; height: 9px; margin-right: 6px;
     border: 2px solid var(--accent); border-top-color: transparent; border-radius: 50%;
     animation: rot .8s linear infinite; vertical-align: -1px;
   }
   @keyframes rot { to { transform: rotate(360deg); } }
   /* ---- 棋譜 (1 手 1 行の表。評価値と出所つき) ---- */
+  /* 枠の高さは外 (kifu-wrap) が決め、中身はここで流す。見出しは sticky で
+     残るので、どこまで流しても列の意味が分かる */
   #kifu {
     background: #1a1f25; border: 1px solid var(--border); border-radius: 8px;
-    flex: 1; min-height: 56px; overflow-y: auto;
+    flex: 1; min-height: 0; overflow-y: auto;
   }
   #kifu table { width: 100%; font-size: 12px; border-collapse: collapse; }
   #kifu th, #kifu td {
