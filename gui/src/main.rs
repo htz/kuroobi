@@ -871,10 +871,12 @@ async fn eval_at(app: State<'_, App>, n: usize, depth: u32) -> Result<EvalPoint,
         let _g = ActivityGuard::begin(&act, "分析");
         let mut guard = eng.lock().unwrap();
         let e = guard.as_mut().unwrap();
-        // 定石にある局面は定石の値をそのまま使う (深い値で、探索も省ける)
-        if let Some((v, _)) = e.book_value(&board) {
-            return (v, false, true, false);
-        }
+        // **定石は引かない。** 分析は「いまの強さ設定で測り直す」もので、
+        // 定石の値は「どこかの時点の探索結果」。混ぜると局面どうしを比べ
+        // られなくなる (盤の評価値表示も同じ理由で引いていない)。
+        // 実害も出ていた: 再計算中の定石は未評価 (0.000) をそのまま返し、
+        // 実戦から学習した分は終局石差を根まで書き戻した値で、どちらも
+        // 「その局面の評価」ではないのにグラフへ出ていた。
         let mv = e.eval_position(&board, depth);
         (mv.value, mv.exact, false, true)
     })

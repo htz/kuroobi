@@ -354,9 +354,9 @@ export function App() {
             {g.mode === 'study' && g.view && (
               <div className="card" id="graph-card">
                 <div className="row" style={{ alignItems: 'center' }}>
+                  {/* 定石は出ない (分析では引かないので)。凡例からも外す */}
                   <label className="field" style={{ flex: 1, margin: 0 }}>
-                    評価値グラフ (黒視点) — <span style={{ color: 'var(--gold)' }}>●</span>定石{' '}
-                    <span style={{ color: 'var(--text)' }}>●</span>読切{' '}
+                    評価値グラフ (黒視点) — <span style={{ color: 'var(--text)' }}>●</span>読切{' '}
                     <span style={{ color: 'var(--accent)' }}>●</span>探索
                   </label>
                   {/* 走っている間は止める口にする。押しても何も起きない
