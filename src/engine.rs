@@ -527,6 +527,11 @@ impl Engine {
     /// 読み切りに届いた手はそこで確定するので、以後の段では測り直さない。
     /// `on_pass` の第 3 引数は、この呼び出しが始まってから訪れたノードの数。
     /// 画面に働きぶりを出すために渡す (探索の判断には使わない)。
+    ///
+    /// **強さの設定 (`solve_empties`) は見ない。** ここは「反復深化がいま
+    /// どこまで読めたか」をそのまま出す場所で、深さは止めるまで上がり続ける。
+    /// 読み切りに入るかは深さが残り空きマス数に届いたかだけで決まる。
+    /// 設定の読切は対局と評価値グラフ (固定の強さで測る側) に効く。
     pub fn analyze_deepening(
         &mut self,
         board: &Board,
@@ -558,7 +563,10 @@ impl Engine {
                         learned: false,
                         depth: 0,
                     }
-                } else if child.empty_count() <= self.config.solve_empties {
+                } else if u32::from(child.empty_count()) <= depth {
+                    // 深化がこの手の終局まで届いた。中盤探索は MPC で枝を
+                    // 刈るので深さが足りていても厳密ではない — ここだけは
+                    // ソルバに渡して厳密値にし、読み切りとして確定させる
                     let r = self.solver.solve_with_eval(
                         EndSolverMode::Perfect,
                         &child,
