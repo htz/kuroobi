@@ -970,7 +970,14 @@ pub fn run(
         threads: ctx.engine_cfg.threads,
         ready: false,
         use_book: ctx.engine_cfg.use_book,
-        book_loaded: false,
+        // エンジンは対局や観戦解析が始まるまで作らない (重みの読み込みと
+        // 置換表の確保が高いので、接続しただけでは持たない)。定石があるかを
+        // エンジン生成まで分からないままにすると、繋いだ直後の設定画面が
+        // 「ファイルがありません」と出てしまう — 実際にはあるのに。
+        // 「使うファイルがそこにあるか」はエンジンの生成状態とは別の話なので、
+        // 歯車の設定と同じくファイルの有無で答える。エンジンができたら
+        // ensure_engine が実際に読めたかどうかで上書きする。
+        book_loaded: resources().book_path().exists(),
         learn: true,
         pace: ctx.engine_cfg_pace.clone(),
         max_move_secs: ctx.engine_cfg_max_move,
