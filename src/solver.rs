@@ -1630,12 +1630,47 @@ impl Solver {
         let tt = &self.hash_table;
         let neighbours = &self.neighbours;
         let stop_ref = self.stop.as_ref();
+        // 見張りスレッドから借りるので、スコープの外に置く (スコープ内の
+        // ローカルはスコープより長生きしないため借用できない)
+        let root_abort = AbortFlag::root();
+        let watching = std::sync::atomic::AtomicBool::new(true);
         let (value, nodes, best) = std::thread::scope(|scope| {
             for _ in 0..extra {
                 let b = &budget;
                 scope.spawn(move || b.pool.worker_loop());
             }
-            let root_abort = AbortFlag::root();
+            // 外からの停止を、兄弟打ち切りと同じ口へ流す。
+            //
+            // 並列に走るワーカー (spawn_worker) は停止ハンドルを持たない。
+            // 渡してもよいが、判定が 1 つ増えるぶん葉に近い層が重くなる。
+            // 打ち切りフラグは**もともと全ワーカーが毎ノード見ており**、
+            // `aborted()` は親をたどるので、根を立てれば全員に届く。
+            // 探索の内側には何も足さずに済む。
+            //
+            // 見張りは専用スレッド。探索の内側で停止ハンドルを読むと、
+            // 頻度を落とせば効きが鈍り、上げれば探索が遅くなる (中盤探索の
+            // 期限つき探索と同じ理屈)。
+            // 見張りは解が出たら黙って抜ける。立てっぱなしにするとスコープの
+            // join が返らないので、抜ける口は Drop で必ず通す
+            struct StopWatch<'a>(&'a std::sync::atomic::AtomicBool);
+            impl Drop for StopWatch<'_> {
+                fn drop(&mut self) {
+                    self.0.store(false, std::sync::atomic::Ordering::Relaxed);
+                }
+            }
+            let _watch = StopWatch(&watching);
+            if stop_ref.is_some() {
+                let (stop, abort, watching) = (stop_ref, &root_abort, &watching);
+                scope.spawn(move || {
+                    while watching.load(std::sync::atomic::Ordering::Relaxed) {
+                        if stop.is_some_and(|s| s.is_stopped()) {
+                            abort.abort();
+                            return;
+                        }
+                        std::thread::sleep(std::time::Duration::from_millis(5));
+                    }
+                });
+            }
             let mut w = Worker::new(tt, neighbours, &budget, &root_abort);
             w.stop = stop_ref;
             // NNUE probes pay off only where the selective pass *is* the
