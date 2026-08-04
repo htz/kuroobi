@@ -251,11 +251,15 @@ export function App() {
     await g.pushLevels();
     // 全局面を測るので深さは控えめに
     const depth = Math.min(g.levels.depth, 14);
-    for (let n = 0; n <= len; n++) {
+    // 終局から逆向きに測る。終盤ほど空きが少なく読み切りで即確定するので
+    // 先に片づき、グラフは右から埋まっていく。加えて中盤の置換表は局面を
+    // またいで残るので (消しているのは終盤表だけ)、手前の局面の探索が
+    // いま測ったばかりの先の局面のエントリをそのまま通れる。
+    for (let n = len; n >= 0; n--) {
       if (seq !== gseq.current) break;
       if (vals[n]) continue;
       if (n < len && v.moves[n] == null) continue;   // パスの手番は測らない
-      g.say(`分析中 ${n}/${len}…`, true);
+      g.say(`分析中 ${len - n + 1}/${len + 1}…`, true);
       try {
         const p = await api.evalAt(n, depth);
         if (seq !== gseq.current) break;
@@ -265,8 +269,20 @@ export function App() {
     }
     // 失敗したときは理由を残す。ここで消すと「押しても何も起きない」ように見える
     if (!failed && seq === gseq.current) g.say('');
-    setGbusy(false);
+    // 世代が変わっている = 止められて次の分析が始まっている。ここで false に
+    // すると、始まったばかりの分析の「動いている」印を消してしまう
+    if (seq === gseq.current) setGbusy(false);
   }, [g, gbusy, ggsMatch]);
+
+  /// 分析の停止。押し直しても続きからにはならない (毎回すべて測り直す作りで、
+  /// 前の結果を引き継ぐと埋まっているときに 1 局面も動かなくなる) ので、
+  /// 「中断」ではなく「停止」と呼ぶ。測り終えたぶんはグラフに残す。
+  const stopGraph = useCallback(() => {
+    gseq.current++;
+    setGbusy(false);
+    void api.stopSearch();
+    g.say('');
+  }, [g]);
 
   // 対局の開始 / 停止。盤の上の操作帯から呼ぶ。
   const startGame = useCallback(() => {
@@ -278,13 +294,11 @@ export function App() {
     if (ggsMatch) { g.say('GGS 対局中はローカル対局を開始できません'); return; }
     if (gbusy) {
       if (!window.confirm('評価値グラフを分析中です。停止して対局を始めますか？')) return;
-      gseq.current++;
-      setGbusy(false);
-      void api.stopSearch();
+      stopGraph();
     }
     g.setPlaying(true);
     g.say('');
-  }, [g, ggsMatch, gbusy]);
+  }, [g, ggsMatch, gbusy, stopGraph]);
 
   const loadText = async (text: string) => {
     try {
@@ -345,8 +359,12 @@ export function App() {
                     <span style={{ color: 'var(--text)' }}>●</span>読切{' '}
                     <span style={{ color: 'var(--accent)' }}>●</span>探索
                   </label>
-                  <button className="btn small" onClick={() => void updateGraph()}>
-                    <Icon name="refresh" size={14} />分析
+                  {/* 走っている間は止める口にする。押しても何も起きない
+                      ボタンを見せない (もう一度押しても最初から測り直す) */}
+                  <button className={'btn small' + (gbusy ? ' stop' : '')}
+                          onClick={() => (gbusy ? stopGraph() : void updateGraph())}>
+                    <Icon name={gbusy ? 'stop' : 'refresh'} size={14} />
+                    {gbusy ? '分析停止' : '分析'}
                   </button>
                 </div>
                 <Graph values={gvals} moves={g.view.moves} cursor={g.view.cursor}

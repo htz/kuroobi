@@ -412,6 +412,11 @@
   .badge.gold { color: var(--gold); }
   .ggs-thinking { color: var(--accent); font-size: 12.5px; }
   button.btn.danger:hover { border-color: var(--bad); color: var(--bad); }
+  /* 走っているものを止めるボタン。進行中の唯一の出口なので、ホバーを待たず
+     色で示す (盤の上の「対局停止」と同じ扱い)。danger と違い、押すこと自体は
+     壊す操作ではないので背景は控えめにする */
+  button.btn.stop { border-color: var(--bad); color: var(--bad); }
+  button.btn.stop:hover { background: rgba(239,122,122,.12); }
 
   /* ---- レイアウト ---- */
   .ggs-body { flex: 1; min-height: 0; padding: 14px; display: flex; }
