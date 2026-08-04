@@ -2,7 +2,7 @@
 // 右に選んだ手合いの盤。盤はローカル対局と同じ Board 部品で描く。
 import { useState } from 'react';
 import { ggsApi } from '../api';
-import type { GgsSnapshot, MatchView } from '../types';
+import type { GameResult, GgsSnapshot, MatchView } from '../types';
 import { countDiscs, ggsMoveToIndex, gtypeLabel, kifuText, relTime, useClocks } from '../ggs';
 import type { ClockSide, ClockView } from '../ggs';
 import { Board } from './Board';
@@ -286,7 +286,8 @@ function MatchCard({ ctx, m, clock }: {
 
       <div className="row">
         <button className="btn small"
-                onClick={() => ctx.showKifu(m.id, kifuText(m.ggf, m.moves))}>棋譜</button>
+                onClick={() => ctx.showKifu(kifuTitle(m, observer),
+                                            kifuText(m.ggf, m.moves))}>棋譜</button>
         {/* 観戦をやめるのは手合いごと (上のボタン)。1 局だけ抜けても
             同期対局では片方が残って中途半端になる */}
         {!observer && (
@@ -315,6 +316,27 @@ function resultsSummary(snap: GgsSnapshot): string {
   return `${rs.length} 局  ${w}勝 ${l}敗 ${d}分`;
 }
 
+/// 棋譜を開いたときの題名。**対局 ID は出さない** — サーバが採番しただけの
+/// 番号で、人には何も伝えない (盤面で見せてから渡す作りにしたのと同じ理由)。
+/// 同期対局は 1 マッチが `.N.0` と `.N.1` の 2 面に分かれるので、何面目かだけ
+/// 添える。ID の形は Rust 側の base_id と揃えてある。
+function kifuTitle(m: MatchView, observer: boolean): string {
+  const names = observer && m.players.length >= 2
+    ? m.players.map((p) => p.name).join(' 対 ')
+    : `自分 対 ${m.opp_name || '?'}`;
+  const parts = m.id.split('.');
+  const last = parts[parts.length - 1];
+  const nth = parts.length >= 3 && last.length === 1 && !Number.isNaN(+last)
+    ? ` — ${+last + 1} 面目`
+    : '';
+  return names + nth;
+}
+
+/// 対局結果から棋譜を開いたときの題名。相手が分からないときも ID は出さない。
+function resultTitle(r: GameResult): string {
+  return r.opp ? `自分 対 ${r.opp}` : '終わった対局';
+}
+
 function Results({ ctx }: { ctx: GgsCtx }) {
   const rs = ctx.snap.results;
   if (!rs.length) return <div className="empty">対局結果はまだありません。</div>;
@@ -332,9 +354,9 @@ function Results({ ctx }: { ctx: GgsCtx }) {
             <span className="muted" style={{ fontSize: 12 }}>{relTime(r.at)}</span>
             <button className="btn small" disabled={!(r.ggf || r.kifu || r.archive)}
                     onClick={() => (r.ggf || r.kifu)
-                      ? ctx.showKifu(r.id, r.ggf || r.kifu)
+                      ? ctx.showKifu(resultTitle(r), r.ggf || r.kifu)
                       // 手元に無くても、GGS のアーカイブから取り出せる
-                      : ctx.fetchKifu(r.archive, r.opp || r.id)}>棋譜</button>
+                      : ctx.fetchKifu(r.archive, resultTitle(r))}>棋譜</button>
           </div>
         );
       })}
