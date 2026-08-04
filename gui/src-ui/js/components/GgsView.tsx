@@ -2,7 +2,7 @@
 // モーダルを束ね、選ばれた画面に snapshot を渡す。通信は ggsApi、状態は
 // snapshot だけを見る。
 import { useEffect, useRef, useState } from 'react';
-import { ggsApi } from '../api';
+import { api, ggsApi } from '../api';
 import type { GgsSnapshot } from '../types';
 import type { View } from './Nav';
 import { GgsPlay } from './GgsPlay';
@@ -13,6 +13,7 @@ import { GgsStandby } from './GgsStandby';
 import { GgsConsole } from './GgsConsole';
 import { KifuViewer } from './KifuViewer';
 import { Icon } from './Icons';
+import { Strength } from './Strength';
 
 /** 各画面へ渡す共通の入口。 */
 export interface GgsCtx {
@@ -208,15 +209,6 @@ function GgsLogin() {
 
 /* ---------------- KUROOBI の設定 (GGS 用) ---------------- */
 
-const PRESETS: Record<string, [number, number, number, number]> = {
-  // [中盤の深さ, 読切 (空き), 選択読み, スレッド]
-  // 実戦は GGS の持ち時間 (15 分前後) で使い切らない設定。最強は時間を
-  // かけてよい場面向けで、実戦より必ず深い。
-  light: [12, 18, 0, 2],
-  ggs: [22, 26, 6, 4],
-  max: [26, 30, 10, 8],
-};
-
 function GgsEngine({ snap }: { snap: GgsSnapshot }) {
   // 反映したことを伝える (画面なので閉じて消えることがない)
   const [saved, setSaved] = useState(false);
@@ -230,23 +222,11 @@ function GgsEngine({ snap }: { snap: GgsSnapshot }) {
   const [pace, setPace] = useState(snap.engine.pace || 'even');
   const [maxMove, setMaxMove] = useState(snap.engine.max_move_secs);
   const [reserve, setReserve] = useState(snap.engine.reserve_secs);
-  const [preset, setPreset] = useState<string>(() => {
-    const hit = Object.entries(PRESETS).find(([, p]) =>
-      p[0] === snap.engine.depth && p[1] === snap.engine.solve && p[2] === snap.engine.band);
-    return hit?.[0] ?? 'custom';
-  });
-
-  const applyPreset = (name: string) => {
-    setPreset(name);
-    const p = PRESETS[name];
-    if (p) {
-      setDepth(p[0]); setSolve(p[1]); setBand(p[2]); setThreads(p[3]);
-    }
-  };
-
-  const num = (v: number, set: (n: number) => void) => (
-    <input type="number" value={v} onChange={(e) => { set(+e.target.value); setPreset('custom'); }} />
-  );
+  // 並列数の選択肢を機械のコア数で切るために取る (ローカルの設定と同じ考え)
+  const [cores, setCores] = useState(0);
+  useEffect(() => {
+    api.activity().then((a) => setCores(a.cores)).catch(() => {});
+  }, []);
 
   return (
     <div className="ggs-pane">
@@ -260,17 +240,19 @@ function GgsEngine({ snap }: { snap: GgsSnapshot }) {
           <h3>強さ</h3>
           <p>読む深さの上限です。どこまで読めるかは下の持ち時間の使い方が決めます。</p>
         </div>
-        <div className="seg">
-          {[['light', '軽量'], ['ggs', '実戦'], ['max', '最強'], ['custom', '自由設定']].map(([v, label]) => (
-            <button key={v} className={preset === v ? 'active' : ''}
-                    onClick={() => applyPreset(v)}>{label}</button>
-          ))}
-        </div>
-        <div className="num-grid">
-          <div><label className="field">中盤の深さ</label>{num(depth, setDepth)}</div>
-          <div><label className="field">読切 (空き)</label>{num(solve, setSolve)}</div>
-          <div><label className="field">選択読み</label>{num(band, setBand)}</div>
-          <div><label className="field">スレッド</label>{num(threads, setThreads)}</div>
+        {/* 選び方は対局側と共通 (Strength) */}
+        <Strength value={{ depth, solve, band }}
+                  onChange={(v) => { setDepth(v.depth); setSolve(v.solve); setBand(v.band); }} />
+        <div>
+          {/* コア数まで 1 刻み。飛び飛びにする理由は無い (奇数でも動くし、
+              コアを 1 つ空けたいことはある)。コアを超えても食い合うだけ */}
+          <label className="field">スレッド</label>
+          <div className="selwrap">
+            <select value={threads} onChange={(e) => setThreads(+e.target.value)}>
+              {Array.from({ length: cores || threads }, (_, i) => i + 1)
+                .map((n) => <option key={n} value={n}>{n}</option>)}
+            </select>
+          </div>
         </div>
       </section>
 

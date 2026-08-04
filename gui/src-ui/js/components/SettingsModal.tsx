@@ -109,7 +109,9 @@ function ThreadsSection() {
   };
 
   if (!th) return null;
-  const options = [1, 2, 4, 6, 8, 12, 16].filter((n) => n <= th.auto * 2);
+  // コア数まで 1 刻み。飛び飛びにする理由は無い (奇数でも動くし、コアを
+  // 1 つ空けたいこともある)。数が増えたので並びボタンからプルダウンへ
+  const cores = th.auto * 2;
   return (
     <div className="settings-section">
       <div className="settings-title">ローカル探索のスレッド数</div>
@@ -118,13 +120,14 @@ function ThreadsSection() {
         ({th.auto})。GGS 対局用は GGS の「KUROOBI の設定」にあります (別々に動く
         ので、両方が同時に動くと合計ぶんの CPU を使います)。
       </p>
-      <div className="seg" style={{ alignSelf: 'flex-start' }}>
-        <button className={th.set == null ? 'active' : ''}
-                onClick={() => void set(null)}>自動</button>
-        {options.map((n) => (
-          <button key={n} className={th.set === n ? 'active' : ''}
-                  onClick={() => void set(n)}>{n}</button>
-        ))}
+      <div className="selwrap" style={{ alignSelf: 'flex-start', minWidth: 140 }}>
+        <select value={th.set == null ? 'auto' : th.set}
+                onChange={(e) => void set(e.target.value === 'auto' ? null : +e.target.value)}>
+          <option value="auto">自動 ({th.auto})</option>
+          {Array.from({ length: cores }, (_, i) => i + 1).map((n) => (
+            <option key={n} value={n}>{n}</option>
+          ))}
+        </select>
       </div>
     </div>
   );

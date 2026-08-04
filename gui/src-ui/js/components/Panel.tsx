@@ -3,6 +3,7 @@ import { LEVELS } from '../state';
 import type { Game } from '../state';
 import { Icon } from './Icons';
 import { Kifu } from './Kifu';
+import { Strength } from './Strength';
 import type { GraphPoint } from './Graph';
 import type { SearchStat } from '../types';
 
@@ -185,22 +186,15 @@ export function Panel({ g, gvals, onSave, onLoad }: PanelProps) {
             ]} />
           </div>
         )}
-        <div>
-          <label className="field">強さ</label>
-          <div className="selwrap">
-            <select value={String(g.level)}
-                    onChange={(e) => g.setLevel(
-                      e.target.value === 'custom' ? 'custom' : +e.target.value)}>
-              {LEVELS.map((lv, i) => (
-                <option key={i} value={i}>
-                  {`${lv.name} — 深さ${lv.depth} / 読切${lv.solve}${
-                    lv.band ? ` / 選択読み+${lv.band}` : ''}`}
-                </option>
-              ))}
-              <option value="custom">カスタム…</option>
-            </select>
-          </div>
-        </div>
+        {/* 選び方は GGS の設定と共通 (Strength)。同じ 3 つを決めるのに
+            操作が違うと、片方で覚えたことがもう片方で通じない */}
+        <Strength value={g.levels} onChange={(v) => {
+          const i = LEVELS.findIndex(
+            (lv) => lv.depth === v.depth && lv.solve === v.solve && lv.band === v.band);
+          if (i >= 0) { g.setLevel(i); return; }
+          g.setCustom(v);
+          g.setLevel('custom');
+        }} />
         <div>
           <label className="field">
             定石{!g.hasBook && (
@@ -211,40 +205,6 @@ export function Panel({ g, gvals, onSave, onLoad }: PanelProps) {
                onChange={(x) => g.setUseBook(x === 'on')}
                options={[['on', '使う'], ['off', '使わない']]} />
         </div>
-        {g.level === 'custom' && (
-          <div className="row">
-            <div>
-              <label className="field">深さ</label>
-              <div className="selwrap">
-                <select value={g.custom.depth}
-                        onChange={(e) => g.setCustom({ ...g.custom, depth: +e.target.value })}>
-                  {Array.from({ length: 60 }, (_, i) => i + 1).map((n) => (
-                    <option key={n} value={n}>{n}</option>))}
-                </select>
-              </div>
-            </div>
-            <div>
-              <label className="field">読切</label>
-              <div className="selwrap">
-                <select value={g.custom.solve}
-                        onChange={(e) => g.setCustom({ ...g.custom, solve: +e.target.value })}>
-                  {Array.from({ length: 37 }, (_, i) => i).map((n) => (
-                    <option key={n} value={n}>{n === 0 ? 'なし' : n}</option>))}
-                </select>
-              </div>
-            </div>
-            <div>
-              <label className="field">選択読み</label>
-              <div className="selwrap">
-                <select value={g.custom.band}
-                        onChange={(e) => g.setCustom({ ...g.custom, band: +e.target.value })}>
-                  {Array.from({ length: 13 }, (_, i) => i).map((n) => (
-                    <option key={n} value={n}>{n === 0 ? 'なし' : `+${n}`}</option>))}
-                </select>
-              </div>
-            </div>
-          </div>
-        )}
       </div>
 
       {/* 操作・思考中・伝言は盤の上の帯へ、直前の手の評価は盤の下のスコア帯へ
