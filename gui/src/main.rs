@@ -724,12 +724,16 @@ async fn think(app: State<'_, App>) -> Result<ThinkView, String> {
         let n0 = guard.as_ref().unwrap().nodes();
         let mv = guard.as_mut().unwrap().choose(&board);
         let nodes = guard.as_ref().unwrap().nodes() - n0;
-        // 停止された探索の値は不完全 (番兵が混じる)。呼び出し元へ返さない
-        let aborted = stop
-            .lock()
-            .unwrap()
-            .as_ref()
-            .is_some_and(|h| h.is_stopped());
+        // 停止された探索の値は不完全 (番兵が混じる)。呼び出し元へ返さない。
+        // ただし判定するのは**探索したときだけ** — 定石から返した手は探索を
+        // 呼ばないのでフラグを消す機会がなく、前に立った停止が残っていると
+        // 正しい手まで捨ててしまう (分析側で踏んだのと同じ形)
+        let aborted = nodes > 0
+            && stop
+                .lock()
+                .unwrap()
+                .as_ref()
+                .is_some_and(|h| h.is_stopped());
         (mv, t0.elapsed().as_secs_f32(), nodes, aborted)
     })
     .await

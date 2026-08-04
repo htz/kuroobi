@@ -108,8 +108,16 @@ export function useGame() {
   // 反復深化で回し続ける。結果は段ごとにイベントで届き、購読側が入れる。
   // 深い答えが出るたびに置き換わるので、見ているあいだ値が締まっていく。
   const refreshHints = useCallback(async (v: GameView | null = view) => {
+    // 思考中は停止すら送らない。この関数は thinking を見ているので、
+    // エンジンが思考を始めた時点で作り直され、購読側の effect が再び走る。
+    // そこで停止を送ると**エンジン自身の探索**にフラグが立ち、「停止された
+    // 結果は捨てる」の判定に当たって対局が止まる (定石の間は即座に返るので
+    // 競争に勝ち、定石を抜けた最初の探索手だけが確実に落ちていた)。
+    // 前の局面の分析は、この 1 つ前 — 局面が動いた時点の呼び出し — が
+    // 既に止めている。
+    if (thinking) return;
     api.stopSearch().catch(() => {});     // 前の局面の分析を止める
-    if (!autoHint || !v || v.over || thinking) return;
+    if (!autoHint || !v || v.over) return;
     if (playing && engineSides().includes(v.player)) return;   // エンジンが打つ番
     hintSeq.current++;
     try {
