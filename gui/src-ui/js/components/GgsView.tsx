@@ -351,6 +351,59 @@ function GgsEngine({ snap }: { snap: GgsSnapshot }) {
 
 /* ---------------- 画面確認用のデモ (KUROOBI_GGS_AUTOVIEW) ---------------- */
 
+/** デモの盤に並べる実戦の手順 (60 手で埋まる)。 */
+const DEMO_KIFU =
+  'e6f4c3d6f6e7f5g5e3g4c7d3f3c4c6c5b4b6d7b5c2a3f8e8d8c8b8d2g3e2'
+  + 'a6c1d1e1f2f1f7h3a5a7a8b7g2g8h8g1b3a4a2b2a1b1g7g6h6h7h5h4h2h1';
+
+const DIRS: [number, number][] = [
+  [-1, -1], [0, -1], [1, -1], [-1, 0], [1, 0], [-1, 1], [0, 1], [1, 1],
+];
+
+/** 棋譜を n 手まで並べた盤面 (0 空 / 1 黒 / 2 白)。file-major。
+ *
+ * 打てない手番はパスとして飛ばす。デモだからと石を機械的に置くと、
+ * 挟まれていないのに色が違う・石が飛び地になるといった、ありえない配置が
+ * そのまま画面に出る。 */
+function replay(kifu: string, n: number): number[] {
+  const c = new Array(64).fill(0);
+  c[3 * 8 + 3] = 2; c[4 * 8 + 3] = 1; c[3 * 8 + 4] = 1; c[4 * 8 + 4] = 2;
+  const flips = (f: number, r: number, me: number): number[] => {
+    if (c[f * 8 + r] !== 0) return [];
+    const got: number[] = [];
+    for (const [df, dr] of DIRS) {
+      const line: number[] = [];
+      let x = f + df, y = r + dr;
+      while (x >= 0 && x < 8 && y >= 0 && y < 8 && c[x * 8 + y] === 3 - me) {
+        line.push(x * 8 + y);
+        x += df; y += dr;
+      }
+      if (line.length && x >= 0 && x < 8 && y >= 0 && y < 8 && c[x * 8 + y] === me) {
+        got.push(...line);
+      }
+    }
+    return got;
+  };
+  let me = 1;
+  for (let i = 0; i < n; i++) {
+    const mv = kifu.slice(i * 2, i * 2 + 2);
+    if (mv.length < 2) break;
+    const f = mv.charCodeAt(0) - 97;
+    const r = mv.charCodeAt(1) - 49;
+    let got = flips(f, r, me);
+    if (!got.length) { me = 3 - me; got = flips(f, r, me); }   // 相手がパス
+    if (!got.length) break;                                    // 棋譜が合わない
+    c[f * 8 + r] = me;
+    for (const p of got) c[p] = me;
+    me = 3 - me;
+  }
+  return c;
+}
+
+/** 棋譜表に出す着手の並び (n 手ぶん)。 */
+const demoMoves = (n: number): string[] =>
+  Array.from({ length: n }, (_, i) => DEMO_KIFU.slice(i * 2, i * 2 + 2).toUpperCase());
+
 async function runAutoview(
   patch: (p: Partial<GgsSnapshot>) => void,
   onView: (v: View) => void,
@@ -363,13 +416,9 @@ async function runAutoview(
   const [tab, arg] = v.split(':');
   if (tab === 'playdemo') {
     // 見た目の確認用: 手合いの一覧と盤を、通信せずに埋める
-    const cells = (moves: number): number[] => {
-      const c = new Array(64).fill(0);
-      const put = (f: number, r: number, x: number) => { c[f * 8 + r] = x; };
-      put(3, 3, 2); put(4, 3, 1); put(3, 4, 1); put(4, 4, 2);
-      for (let i = 0; i < moves; i++) put(i % 8, (i * 3) % 8, (i % 2) + 1);
-      return c;
-    };
+    // 実在する進行を並べる。適当に石を置くと、盤にありえない配置が出る
+    // (石が飛び地になる・挟まれていないのに色が違う、など)
+    const cells = (n: number): number[] => replay(DEMO_KIFU, n);
     const p = (name: string, rating: string, color: string) =>
       ({ name, rating, color, clock: '12:30', secs: 750, ext: 30 });
     const mk = (id: string, base: string, opp: string, my: string, n: number,
@@ -377,20 +426,20 @@ async function runAutoview(
       id, base, cells: cells(n), turn: 'black', my_color: my,
       opp_name: opp, opp_rating: '2612.4', opp_clock: '12:30', my_clock: '11:04',
       my_secs: 664, opp_secs: 750, my_ext: 30, opp_ext: 30,
-      players, gtype: gt, moves: new Array(n).fill('f5'), ggf: '',
+      players, gtype: gt, moves: demoMoves(n), ggf: '',
       last_eval: my ? 2.5 : null, last_eval_exact: false, last_from_book: true,
       watch_eval: my ? null : -1.5, watch_best: my ? null : 'D6', watch_exact: false, seen: n,
     });
     patch({
       matches: [
-        mk('.71.0', '.71', 'Rhapsody', 'black', 23, 's8r16', []),
-        mk('.71.1', '.71', 'Rhapsody', 'white', 22, 's8r16', []),
+        mk('.71.0', '.71', 'demo-bob', 'black', 23, 's8r16', []),
+        mk('.71.1', '.71', 'demo-bob', 'white', 22, 's8r16', []),
         mk('.80.0', '.80', '', '', 31, 's8r14',
-           [p('nyanyan', '2646.5', 'black'), p('egrcd', '2598.3', 'white')]),
+           [p('demo-carol', '2246.5', 'black'), p('demo-dave', '2198.3', 'white')]),
         mk('.80.1', '.80', '', '', 30, 's8r14',
-           [p('egrcd', '2598.3', 'black'), p('nyanyan', '2646.5', 'white')]),
+           [p('demo-dave', '2198.3', 'black'), p('demo-carol', '2246.5', 'white')]),
         mk('.90', '.90', '', '', 44, '8',
-           [p('scorpion', '1938.0', 'black'), p('viper', '1687.7', 'white')]),
+           [p('demo-erin', '1938.0', 'black'), p('demo-frank', '1687.7', 'white')]),
       ] as unknown as GgsSnapshot['matches'],
       thinking: '.71.0',
       conn: 'online',
@@ -406,14 +455,14 @@ async function runAutoview(
       conn: 'online',
       login: 'kuroobi',
       chat: [
-        { chan: '.chat', from: 'Rhapsody', text: 'anyone up for a game?', at: now - 3600, thread: '.chat' },
+        { chan: '.chat', from: 'demo-bob', text: 'anyone up for a game?', at: now - 3600, thread: '.chat' },
         { chan: '.chat', from: 'kuroobi', text: 'sure, 15 min?', at: now - 3550, thread: '.chat' },
-        { chan: '.chat', from: 'Rhapsody', text: 'sounds good. synchro rand 16?', at: now - 3500, thread: '.chat' },
+        { chan: '.chat', from: 'demo-bob', text: 'sounds good. synchro rand 16?', at: now - 3500, thread: '.chat' },
         { chan: '.chat', from: 'kuroobi', text: 'ok, sending a request now', at: now - 3400, thread: '.chat' },
-        { chan: '.chat', from: 'nyanyan', text: 'good luck both', at: now - 900, thread: '.chat' },
-        { chan: '', from: 'scorpion', text: 'nice endgame in that last one', at: now - 300, thread: 'scorpion' },
-        { chan: '→scorpion', from: 'kuroobi', text: 'thanks! the book helped a lot', at: now - 120, thread: 'scorpion' },
-        { chan: '', from: 'scorpion', text: 'rematch later?', at: now - 30, thread: 'scorpion' },
+        { chan: '.chat', from: 'demo-carol', text: 'good luck both', at: now - 900, thread: '.chat' },
+        { chan: '', from: 'demo-erin', text: 'nice endgame in that last one', at: now - 300, thread: 'demo-erin' },
+        { chan: '→demo-erin', from: 'kuroobi', text: 'thanks! the book helped a lot', at: now - 120, thread: 'demo-erin' },
+        { chan: '', from: 'demo-erin', text: 'rematch later?', at: now - 30, thread: 'demo-erin' },
       ],
     });
     onView('ggs-chat');
@@ -433,8 +482,8 @@ async function runAutoview(
   }
   if (tab === 'engine') { openEngine(); return; }
   if (tab === 'kifu') {
-    showKifu('kuroobi 対 scorpion',
-      '(;GM[Othello]PB[kuroobi]PW[scorpion]RE[+14.00]'
+    showKifu('kuroobi 対 demo-erin',
+      '(;GM[Othello]PB[kuroobi]PW[demo-erin]RE[+14.00]'
       + 'BO[8 ---------------------------O*------*O--------------------------- *]'
       // 実際に打てる手順にしておく (盤面で再生するので、不正だと開けない)
       + 'B[F5]W[D6/-6.46]B[C3]W[D3/-16.49]B[C4]W[F4/-8.10];)');

@@ -362,7 +362,7 @@ fn main() -> ExitCode {
 
             while let Some(ln) = lines.pop_front() {
                 if awaiting_stored {
-                    // "|.82726   30 Jul 2026 ... kuroobi  Rhapsody s8r16:l"
+                    // "|.82726   30 Jul 2026 ... kuroobi  opponent s8r16:l"
                     if let Some(rest) = ln.strip_prefix('|') {
                         let id = rest.split_whitespace().next().unwrap_or("");
                         if id.starts_with('.') && rest.contains(&login) {
