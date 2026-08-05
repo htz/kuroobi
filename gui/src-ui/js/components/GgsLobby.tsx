@@ -51,8 +51,8 @@ export function GgsLobby({ ctx, initialOpp = '' }: { ctx: GgsCtx; initialOpp?: s
   return (
     <div className="ggs-cols">
       <div className="col-main">
-        <div className="card">
-          <div className="card-head">
+        <div className="sec">
+          <div className="sec-head">
             <h2>対局中</h2>
             <span className="muted">{games.length ? `${games.length} 局` : ''}</span>
             <button className="btn small" onClick={() => void ggsApi.listMatches()}>更新</button>
@@ -89,8 +89,8 @@ export function GgsLobby({ ctx, initialOpp = '' }: { ctx: GgsCtx; initialOpp?: s
           </div>
         </div>
 
-        <div className="card grow">
-          <div className="card-head"><h2>対局の申し込み</h2></div>
+        <div className="sec grow">
+          <div className="sec-head"><h2>対局の申し込み</h2></div>
           <div className="scroll grow">
             {!snap.offers.length && <div className="empty">対局の申し込みはありません。</div>}
             {snap.offers.map((o) => {
@@ -126,8 +126,8 @@ export function GgsLobby({ ctx, initialOpp = '' }: { ctx: GgsCtx; initialOpp?: s
       </div>
 
       <aside className="col-side">
-        <div className="card">
-          <div className="card-head"><h2>対局を申し込む</h2></div>
+        <div className="sec">
+          <div className="sec-head"><h2>対局を申し込む</h2></div>
           <label className="field">相手</label>
           <OpponentSelect ctx={ctx} value={opp} onChange={setOpp} />
           <label className="field">形式</label>
@@ -149,8 +149,8 @@ export function GgsLobby({ ctx, initialOpp = '' }: { ctx: GgsCtx; initialOpp?: s
             判定します。レートは「ランダム開局」に反映されます。
           </p>
         </div>
-        <div className="card">
-          <div className="card-head">
+        <div className="sec">
+          <div className="sec-head">
             <h2>中断対局</h2>
             <button className="btn small" onClick={() => void ggsApi.listStored()}>更新</button>
           </div>

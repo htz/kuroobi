@@ -7,7 +7,7 @@ import { Board } from './components/Board';
 import { GgsView } from './components/GgsView';
 import { Graph, type GraphPoint } from './components/Graph';
 import { Nav, type View } from './components/Nav';
-import { ControlBar, MessageBar, Panel, ScoreBar } from './components/Panel';
+import { ControlBar, Panel, ScoreBar, Toasts } from './components/Panel';
 import { SettingsModal } from './components/SettingsModal';
 import { Modal } from './components/Modal';
 import { Icon } from './components/Icons';
@@ -24,6 +24,8 @@ export function App() {
   // ---- 評価値グラフ ----
   const [gvals, setGvals] = useState<(GraphPoint | undefined)[] | null>(null);
   const [gbusy, setGbusy] = useState(false);
+  /** 分析の進み具合 (測った局面 / 全局面)。走っていない間は null。 */
+  const [gprog, setGprog] = useState<{ done: number; total: number } | null>(null);
   const gseq = useRef(0);
   const lineKey = (v: GameView | null) =>
     v ? v.moves.map((m) => (m == null ? 'p' : m)).join(',') : '';
@@ -109,6 +111,9 @@ export function App() {
   // "study" なら適当な棋譜を読み込んで検討画面を開き、"settings" なら
   // 設定 (歯車) を開く (どちらも見た目の確認用)。
   const started = useRef(false);
+  // "study:graph" 用。updateGraph はこの effect より後ろで作られるので、
+  // 直接呼ばずに ref 越しに渡す (依存に入れると毎回走り直す)
+  const autoGraph = useRef<(() => void) | null>(null);
   const { setPlaying: begin, setSide, setLevel, setAutoHint,
           playing, view: gv, engineSides, setThinking, setThinkSecs, setThinkTotal,
           setMoveSource, setView: applyView, setPlaying, say, setLastEval, setMode } = g;
@@ -134,6 +139,8 @@ export function App() {
           applyView(await api.goto(8));
           setAutoHint(true);
         }
+        // "study:graph" は分析まで始める (進み具合の見た目を確かめるため)
+        if (lv === 'graph') setTimeout(() => { autoGraph.current?.(); }, 400);
         return;
       }
       if (who === 'both') setSide('both');
@@ -229,7 +236,9 @@ export function App() {
     const v = g.view;
     // 押しても何も起きない、という状態を作らない。始められない理由は必ず出す
     if (!v) { g.say('棋譜がありません'); return; }
-    if (gbusy) { g.say('分析中です'); return; }
+    // 二重に走らせない。ボタンは走っている間「分析停止」に変わるので人には
+    // 踏めず、言葉にする相手がいない (踏めるのは自動起動の経路だけ)
+    if (gbusy) return;
     // CPU を食い合う機能は同時に動かさない。GGS 対局は最優先なので断り、
     // ローカル対局が進行中なら確認の上で停止してから始める
     if (ggsMatch) { g.say('GGS 対局中は分析を控えます'); return; }
@@ -259,7 +268,7 @@ export function App() {
       if (seq !== gseq.current) break;
       if (vals[n]) continue;
       if (n < len && v.moves[n] == null) continue;   // パスの手番は測らない
-      g.say(`分析中 ${len - n + 1}/${len + 1}…`, true);
+      setGprog({ done: len - n + 1, total: len + 1 });
       try {
         const p = await api.evalAt(n, depth);
         if (seq !== gseq.current) break;
@@ -271,8 +280,9 @@ export function App() {
     if (!failed && seq === gseq.current) g.say('');
     // 世代が変わっている = 止められて次の分析が始まっている。ここで false に
     // すると、始まったばかりの分析の「動いている」印を消してしまう
-    if (seq === gseq.current) setGbusy(false);
+    if (seq === gseq.current) { setGbusy(false); setGprog(null); }
   }, [g, gbusy, ggsMatch]);
+  useEffect(() => { autoGraph.current = () => void updateGraph(); }, [updateGraph]);
 
   /// 分析の停止。押し直しても続きからにはならない (毎回すべて測り直す作りで、
   /// 前の結果を引き継ぐと埋まっているときに 1 局面も動かなくなる) ので、
@@ -280,6 +290,7 @@ export function App() {
   const stopGraph = useCallback(() => {
     gseq.current++;
     setGbusy(false);
+    setGprog(null);
     void api.stopSearch();
     g.say('');
   }, [g]);
@@ -349,24 +360,47 @@ export function App() {
                 onPlay={(sq) => void g.play(sq)}
               />
             </div>
-            <ScoreBar g={g} />
-            <MessageBar g={g} />
+            {/* 盤面の状況 (石数・結果・思考時間)。中身は常に 1 行ぶんなので
+                帯の高さは動かない。報せは浮かせてある (Toasts) */}
+            <div className="mainfoot">
+              <ScoreBar g={g} />
+            </div>
             {g.mode === 'study' && g.view && (
-              <div className="card" id="graph-card">
-                <div className="row" style={{ alignItems: 'center' }}>
+              <div className="graph-band">
+                {/* .row は使わない。あれは子を等分に伸ばす (.row > * { flex: 1 })
+                    ので、右へ寄せるための余白が残らない */}
+                <div className="graph-head">
                   {/* 定石は出ない (分析では引かないので)。凡例からも外す */}
-                  <label className="field" style={{ flex: 1, margin: 0 }}>
+                  <label className="field" style={{ margin: 0 }}>
                     評価値グラフ (黒視点) — <span style={{ color: 'var(--text)' }}>●</span>読切{' '}
                     <span style={{ color: 'var(--accent)' }}>●</span>探索
                   </label>
-                  {/* 走っている間は止める口にする。押しても何も起きない
-                      ボタンを見せない (もう一度押しても最初から測り直す) */}
-                  <button className={'btn small' + (gbusy ? ' stop' : '')}
-                          onClick={() => (gbusy ? stopGraph() : void updateGraph())}>
-                    <Icon name={gbusy ? 'stop' : 'refresh'} size={14} />
-                    {gbusy ? '分析停止' : '分析'}
-                  </button>
+                  {/* 進行と操作は 1 つのまとまりにして右端へ寄せる。進行だけを
+                      見出しとボタンの間に浮かせると、どちらの連れなのか読めない */}
+                  <div className="graph-actions">
+                    {/* 分析の進み具合。盤の下の報せは「押したのに進まない理由」
+                        を持つ場所で、動いていることの報せとは別もの */}
+                    {gprog && (
+                      <span className="graph-prog">
+                        分析中 <b>{gprog.done}</b>/{gprog.total}
+                      </span>
+                    )}
+                    {/* 走っている間は止める口にする。押しても何も起きない
+                        ボタンを見せない (もう一度押しても最初から測り直す) */}
+                    <button className={'btn small' + (gbusy ? ' stop' : '')}
+                            onClick={() => (gbusy ? stopGraph() : void updateGraph())}>
+                      <Icon name={gbusy ? 'stop' : 'refresh'} size={14} />
+                      {gbusy ? '分析停止' : '分析'}
+                    </button>
+                  </div>
                 </div>
+                {/* どこまで進んだか。61 局面を測る間ずっと数字だけだと、
+                    進んでいるのか止まっているのかが読み取りにくい */}
+                {gprog && (
+                  <div className="graph-bar">
+                    <span style={{ width: `${(gprog.done / gprog.total) * 100}%` }} />
+                  </div>
+                )}
                 <Graph values={gvals} moves={g.view.moves} cursor={g.view.cursor}
                        busy={gbusy} onJump={(n) => void g.jumpTo(n)} />
               </div>
@@ -405,6 +439,9 @@ export function App() {
                        onClose={() => setSettings(null)}
                        onChanged={() => { void api.hasBook().then(g.setHasBook); }} />
       )}
+
+      {/* 報せ。内容の並びの外に浮かせるので、出入りしても画面は動かない */}
+      <Toasts items={g.toasts} onClose={g.dismiss} />
     </>
   );
 }

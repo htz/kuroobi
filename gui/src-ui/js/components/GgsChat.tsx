@@ -107,7 +107,7 @@ export function GgsChat({ ctx }: { ctx: GgsCtx }) {
   }
 
   return (
-    <div className="chat-pane card">
+    <div className="chat-pane">
       <aside className="chat-list">
         <div className="chat-list-head">
           <h2>会話</h2>

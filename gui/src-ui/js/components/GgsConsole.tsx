@@ -26,8 +26,8 @@ export function GgsConsole({ ctx }: { ctx: GgsCtx }) {
   return (
     <div className="ggs-cols">
       <div className="col-main">
-        <div className="card grow">
-          <div className="card-head"><h2>通信ログ</h2></div>
+        <div className="sec grow">
+          <div className="sec-head"><h2>通信ログ</h2></div>
           <div className="scroll grow console-log" ref={box}
                onScroll={() => {
                  const b = box.current;

@@ -48,8 +48,8 @@ function UserList({ ctx }: { ctx: GgsCtx }) {
 
   return (
     <div className="col-main">
-      <div className="card">
-        <div className="card-head">
+      <div className="sec">
+        <div className="sec-head">
           <h2>自分のレート</h2>
           <button className="btn small" onClick={() => {
             for (const t of ['8', '8r']) void ggsApi.rank(t, snap.login);
@@ -58,8 +58,8 @@ function UserList({ ctx }: { ctx: GgsCtx }) {
         <MyRanks snap={snap} />
       </div>
 
-      <div className="card grow">
-        <div className="card-head">
+      <div className="sec grow">
+        <div className="sec-head">
           <div className="seg">
             <button className={mode === 'who' ? 'active' : ''}
                     onClick={() => { setMode('who'); refresh('who'); }}>接続中</button>
@@ -165,8 +165,8 @@ function UserDetail({ ctx, name, onSelectUser, userTab, onUserTab }:
   const { snap } = ctx;
   return (
     <div className="col-main">
-      <div className="card grow">
-        <div className="card-head">
+      <div className="sec grow">
+        <div className="sec-head">
           <button className="btn ghost icon" title="一覧へ戻る"
                   onClick={() => onSelectUser(null)}>←</button>
           <h2>{name}</h2>

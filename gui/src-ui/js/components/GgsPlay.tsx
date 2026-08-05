@@ -30,7 +30,7 @@ export function GgsPlay({ ctx }: { ctx: GgsCtx }) {
 
   if (!groups.size) {
     return (
-      <div className="split-pane card no-list">
+      <div className="split-pane no-list">
         <NoMatch online={snap.conn === 'online'} showView={ctx.showView}
                  notice={snap.notice} />
       </div>
@@ -45,7 +45,7 @@ export function GgsPlay({ ctx }: { ctx: GgsCtx }) {
   const m0 = pair?.[0];
 
   return (
-    <div className="split-pane card">
+    <div className="split-pane">
       <aside className="split-list">
         <div className="split-list-head">
           <h2>手合い</h2>
@@ -95,7 +95,7 @@ export function GgsPlay({ ctx }: { ctx: GgsCtx }) {
           })}
         </div>
         <div className="split-list-foot">
-          <div className="card-head">
+          <div className="sec-head">
             <h2>対局結果</h2>
             <span className="muted">{resultsSummary(snap)}</span>
           </div>
@@ -260,7 +260,7 @@ function MatchCard({ ctx, m, clock }: {
     .find((r) => r.gtype === (m.gtype.includes('r') ? '8r' : '8'))?.rating;
 
   return (
-    <div className="card board-card">
+    <div className="board-card">
       {observer && m.players.length >= 2 ? (
         <>
           <PlayerRow ctx={ctx} name={m.players[0].name} rating={m.players[0].rating}

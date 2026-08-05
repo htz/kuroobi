@@ -136,7 +136,7 @@ export function ControlBar({ g, onStart }: { g: PanelProps['g']; onStart: () => 
 ///
 /// ここに置くのは**短くて桁の決まっているものだけ**にしてある。長さの
 /// 読めない伝言を混ぜると、幅の取り合いで数字が押し出される
-/// (盤の横幅は 400px 台まで狭くなりうる)。伝言は盤の下の MessageBar。
+/// (盤の横幅は 400px 台まで狭くなりうる)。失敗などの報せは Toasts。
 ///
 /// 定石から返した手はノードを訪れないので数字が出ない。0 を出すと「働いて
 /// いない」ではなく「壊れている」に見えるため、その場合は消す。
@@ -153,20 +153,34 @@ function EngineStatus({ g }: { g: PanelProps['g'] }) {
   );
 }
 
-/// 盤の下の伝言。**出るのは失敗したときと、待たせているときだけ**
-/// (「エンジンが初期化できません」「分析中 3/60…」)。
+/// 報せ。**出るのは失敗と、押したのに進まない理由だけ**
+/// (「棋譜が見つかりません」「GGS 対局中は分析を控えます」)。
 ///
-/// 「棋譜を読み込みました」「対局を停止しました」のような、押した本人が
-/// 見れば分かることは言わない — 読む前に消えるうえ、行が出たり消えたり
-/// して盤が動く。ただし**失敗は必ず出す**。無言で終わる経路を作ると、
-/// 動かない理由が画面のどこにも残らない。
+/// 浮かせてあるのは、盤の下に行を置くと出入りのたびに帯の高さが動いて画面
+/// 全体が跳ねるから。内容の並びに場所を取らせない。
 ///
-/// 一時的なものなので、無いときは行ごと消えて場所を返す。幅いっぱいを
-/// 使えるので、長い文でも切らずに読める。
-export function MessageBar({ g }: { g: PanelProps['g'] }) {
-  if (!g.status) return null;
+/// ここに入れないもの:
+/// - **作業が進んでいることの報せ** — その作業を出している場所が自分で持つ
+///   (分析の進み具合なら評価値グラフの節)
+/// - **押した本人が見れば分かること** (「棋譜を読み込みました」「対局を
+///   停止しました」)。読む前に消えるうえ、報せとして何も足していない
+/// - **エンジンの内部の符丁** (`stopped` など)。state.ts の INTERNAL で落とす
+///
+/// ただし**失敗は必ず出す**。無言で終わる経路を作ると、動かない理由が画面の
+/// どこにも残らない。
+export function Toasts({ items, onClose }: {
+  items: Game['toasts']; onClose: (id: number) => void;
+}) {
+  if (!items.length) return null;
   return (
-    <div className={'msgbar' + (g.spin ? ' spin' : '')}>{g.status}</div>
+    <div className="toasts">
+      {items.map((t) => (
+        // 読み終わって邪魔なら押して消せる (待たせない)
+        <button key={t.id} className="toast" onClick={() => onClose(t.id)}>
+          {t.text}
+        </button>
+      ))}
+    </div>
   );
 }
 
@@ -176,7 +190,7 @@ export function Panel({ g, gvals, onSave, onLoad }: PanelProps) {
 
   return (
     <div id="panel">
-      <div className="card">
+      <div className="panel-sec">
         {vs && (
           <div>
             <label className="field">KUROOBI の担当</label>
@@ -210,7 +224,8 @@ export function Panel({ g, gvals, onSave, onLoad }: PanelProps) {
           移した。右ペインに残すのは「あらかじめ決める設定」と棋譜だけ */}
 
       <div className="kifu-wrap">
-        <div className="row" style={{ alignItems: 'center', marginBottom: 4 }}>
+        {/* 見出しと保存/読込だけが余白を持つ。表は端まで伸ばして列幅を稼ぐ */}
+        <div className="row kifu-head" style={{ alignItems: 'center' }}>
           <label className="field" style={{ flex: 1, margin: 0 }}>
             棋譜 (評価は黒視点)
           </label>

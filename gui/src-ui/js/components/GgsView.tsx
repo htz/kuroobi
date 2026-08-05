@@ -236,7 +236,7 @@ function GgsEngine({ snap }: { snap: GgsSnapshot }) {
       </div>
 
       <section className="pane-sec">
-        <div className="sec-head">
+        <div className="pane-sec-head">
           <h3>強さ</h3>
           <p>読む深さの上限です。どこまで読めるかは下の持ち時間の使い方が決めます。</p>
         </div>
@@ -257,7 +257,7 @@ function GgsEngine({ snap }: { snap: GgsSnapshot }) {
       </section>
 
       <section className="pane-sec">
-        <div className="sec-head">
+        <div className="pane-sec-head">
           <h3>持ち時間の使い方</h3>
           <p>1 手にかける時間を、残り時間と残り手数から決めます。時間内で
           読める深さまで読み、時間が来たらそこまでの答えで指します。</p>
@@ -293,7 +293,7 @@ function GgsEngine({ snap }: { snap: GgsSnapshot }) {
       </section>
 
       <section className="pane-sec">
-        <div className="sec-head"><h3>定石</h3></div>
+        <div className="pane-sec-head"><h3>定石</h3></div>
         {snap.engine.book_loaded ? (
           <div className="seg">
             <button className={book ? 'active' : ''} onClick={() => setBook(true)}>使う</button>
@@ -308,7 +308,7 @@ function GgsEngine({ snap }: { snap: GgsSnapshot }) {
       </section>
 
       <section className="pane-sec">
-        <div className="sec-head"><h3>ふるまい</h3></div>
+        <div className="pane-sec-head"><h3>ふるまい</h3></div>
         <label className="check">
           <input type="checkbox" checked={auto} onChange={(e) => setAuto(e.target.checked)} />
           自分の手番で自動的に指す
@@ -334,7 +334,7 @@ function GgsEngine({ snap }: { snap: GgsSnapshot }) {
       </div>
 
       <section className="pane-sec danger-sec">
-        <div className="sec-head">
+        <div className="pane-sec-head">
           <h3>接続</h3>
           <p>ログアウトすると保存済みの認証情報も消えます。次の起動では自動
           ログインしません。</p>
@@ -470,7 +470,10 @@ async function runAutoview(
   }
   if (tab === 'tour') {
     // 画面確認用: 各画面を順に開く。外から撮って見比べるため。
-    const tabs: View[] = ['ggs-users', 'ggs-standby', 'ggs-console'];
+    // 未接続のままだと GGS はどの画面もログインを出すので、繋がったことに
+    // しておく (中身は空でよい — 見たいのは画面の枠組み)
+    patch({ conn: 'online', login: 'kuroobi' });
+    const tabs: View[] = ['ggs-lobby', 'ggs-users', 'ggs-standby', 'ggs-console', 'ggs-engine'];
     let i = 0;
     onView(tabs[0]);
     setInterval(() => { i++; onView(tabs[i % tabs.length]); }, 9000);

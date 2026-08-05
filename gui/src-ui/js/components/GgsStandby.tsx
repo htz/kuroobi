@@ -44,8 +44,8 @@ export function GgsStandby({ ctx }: { ctx: GgsCtx }) {
   return (
     <div className="ggs-cols">
       <div className="col-main">
-        <div className="card">
-          <div className="card-head">
+        <div className="sec">
+          <div className="sec-head">
             <h2>連戦の待機</h2>
             <span className="spacer" />
             <div className="stat-strip">
@@ -155,8 +155,8 @@ function AformCard() {
   );
 
   return (
-    <div className="card">
-      <div className="card-head"><h2>自動で受ける条件 (サーバー側)</h2></div>
+    <div className="sec">
+      <div className="sec-head"><h2>自動で受ける条件 (サーバー側)</h2></div>
       <p className="hint">
         アプリを閉じてもサーバー側で有効な条件です。待機モードの保険になります。
       </p>

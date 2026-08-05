@@ -5,8 +5,28 @@
 // といった取りこぼしが繰り返し起きた。状態を 1 か所に集めて、画面は
 // そこから導くだけにする。
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { api } from './api';
+import { api, jsLog } from './api';
 import type { GameView, SearchStat } from './types';
+
+/// エンジンが返す**内部の符丁**。画面には出さない。
+///
+/// どれも「押した本人がやったこと」の結果で、読み手に用がない — 停止を
+/// 押せば `stopped` は必ず返るし、打てないマスを押せば `NotPlayable` が
+/// 返る (盤を見れば分かる)。これを出すと、正常な操作のたびに異常が起きた
+/// ように見える。調べられるようログには残す。
+///
+/// 出どころ: `stopped` / `position changed` / `out of range` は
+/// `gui/src/main.rs`、残りは `MoveError` / `GameError` の Debug 出力。
+const INTERNAL = new Set([
+  'stopped', 'position changed', 'out of range',
+  'InvalidPosition', 'NotPlayable', 'Occupied', 'NoMoves', 'GameOver',
+]);
+
+/** 画面に出す短い報せ。出るのは失敗と、押したのに進まない理由だけ。 */
+export interface Toast { id: number; text: string }
+
+/// 消えるまでの時間。読み切れる長さと、居座って邪魔にならない長さの兼ね合い。
+const TOAST_MS = 5000;
 
 export type AppMode = 'vs' | 'study';
 export type EngineSide = 'black' | 'white' | 'both' | 'off';
@@ -24,7 +44,7 @@ export interface MoveInfo {
 
 /** 強さのプリセット。カスタムを選ぶと下の 3 つを直接いじる。 */
 export const LEVELS = [
-  { name: 'Lv1 (入門)', depth: 1, solve: 2, band: 0 },
+  { name: 'Lv1', depth: 1, solve: 2, band: 0 },
   { name: 'Lv2', depth: 2, solve: 4, band: 0 },
   { name: 'Lv3', depth: 4, solve: 8, band: 0 },
   { name: 'Lv4', depth: 6, solve: 10, band: 0 },
@@ -35,8 +55,8 @@ export const LEVELS = [
   { name: 'Lv9', depth: 16, solve: 20, band: 0 },
   { name: 'Lv10', depth: 18, solve: 22, band: 6 },
   { name: 'Lv11', depth: 20, solve: 24, band: 6 },
-  { name: 'Lv12 (GGS 設定)', depth: 22, solve: 26, band: 6 },
-  { name: 'Lv13 (全力)', depth: 24, solve: 26, band: 8 },
+  { name: 'Lv12', depth: 22, solve: 26, band: 6 },
+  { name: 'Lv13', depth: 24, solve: 26, band: 8 },
 ] as const;
 
 export interface Levels { depth: number; solve: number; band: number }
@@ -66,8 +86,12 @@ export function useGame() {
   const [thinkSecs, setThinkSecs] = useState(0);          // 思考中の経過
   const [thinkTotal, setThinkTotal] = useState({ black: 0, white: 0 });
   const [moveSource, setMoveSource] = useState<Record<number, MoveInfo>>({});
-  const [status, setStatus] = useState('');
-  const [spin, setSpin] = useState(false);
+  // 報せは浮かせる (トースト)。盤の下に行を置いていたときは、出入りのたびに
+  // 帯の高さが動いて画面全体が跳ねていた。作業が進んでいることの報せはここに
+  // 入れない — それはその作業を出している場所が自分で持つ (分析の進み具合なら
+  // 評価値グラフの節)
+  const [toasts, setToasts] = useState<Toast[]>([]);
+  const toastId = useRef(0);
   // エンジンが直前に指した手の評価 (「エンジン評価: +2.5 石」と出す)
   const [lastEval, setLastEval] = useState('');
 
@@ -83,10 +107,20 @@ export function useGame() {
     return [side];
   }, [mode, side]);
 
-  const say = useCallback((s: string, spinning = false) => {
-    setStatus(s);
-    setSpin(spinning);
+  const dismiss = useCallback((id: number) => {
+    setToasts((t) => t.filter((x) => x.id !== id));
   }, []);
+
+  const say = useCallback((s: string) => {
+    // 空文字は「前の伝言を消す」の名残。浮かせる形では自分で消えるので用がない
+    if (!s) return;
+    if (INTERNAL.has(s)) { jsLog('内部の符丁 (画面には出さない): ' + s); return; }
+    const id = ++toastId.current;
+    // 同じ文が続けて出ることがある (局面を動かすたびに同じ失敗をする、など)。
+    // 積み上げずに出し直す
+    setToasts((t) => [...t.filter((x) => x.text !== s), { id, text: s }]);
+    window.setTimeout(() => dismiss(id), TOAST_MS);
+  }, [dismiss]);
 
   const pushLevels = useCallback(async () => {
     await api.setLevels(levels.depth, levels.solve, levels.band).catch(() => {});
@@ -209,7 +243,7 @@ export function useGame() {
     thinkSecs, setThinkSecs,
     thinkTotal, setThinkTotal,
     moveSource, setMoveSource,
-    status, spin, say,
+    toasts, say, dismiss,
     lastEval, setLastEval,
     engineSides, pushLevels, refreshHints,
     play, newGame, undo, jumpTo, stop,

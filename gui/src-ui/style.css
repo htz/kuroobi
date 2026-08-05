@@ -5,6 +5,19 @@
     --board: #77914e; --board-dark: #3f4f2c; --line: #3d5226; --grain: #33421d;
     --gold: #ffd479; --ok: #8bc34a; --bad: #ef7a7a;
   }
+  /* ---- 枠の決まり ----
+     区切りは 3 段階しかない。迷ったらこの表に戻ること。
+
+     | 段階 | 何を分ける          | 見せ方                                  |
+     |------|---------------------|-----------------------------------------|
+     | 領域 | メニュー/本文/ペイン | 地の色 + 1px 罫                         |
+     | 帯   | 領域の頭と足        | 全幅・角丸なし・地は --panel・境に 1px 罫 |
+     | 節   | 領域内のまとまり    | 1px 罫 + 見出しだけ。地も枠も置かない    |
+
+     **丸四角の箱 (.card) を内容に使わない。** 領域が既に地と罫で立って
+     いるのに中でさらに箱にすると、枠が二重になって左右 28px ずつが死ぬ。
+     箱が残るのはモーダルと GGS のログインだけ — あれは「浮いている」こと
+     自体に意味がある。 */
   * { box-sizing: border-box; }
   html, body {
     margin: 0; height: 100%; overflow: hidden;
@@ -88,8 +101,13 @@
     .nav-sep { margin: 9px 0 3px; }
     .cpu-status { padding: 6px 4px 6px; gap: 6px; }
     .cpu-status .sub { display: none; }
-    #main { padding: 10px; gap: 8px; }
-    #panel { padding: 12px 14px; gap: 10px; }
+    .controlbar { min-height: 38px; padding: 4px 12px; }
+    #board-wrap { padding: 10px; }
+    .mainfoot { padding: 7px 12px; }
+    .graph-band { padding: 8px 12px 10px; }
+    .panel-sec, .sec { padding: 10px 14px; gap: 8px; }
+    #panel .kifu-wrap { padding-top: 10px; }
+    #panel .kifu-head { padding: 0 14px 6px; }
     .card { padding: 10px; gap: 8px; }
     .side { font-size: 17px; padding: 5px 8px; }
   }
@@ -100,17 +118,18 @@
   }
 
   /* ---- 盤 + グラフ (メイン領域) ---- */
-  #main { flex: 1; display: flex; flex-direction: column; padding: 16px; gap: 12px;
+  /* 余白は帯と盤の欄がそれぞれ自分で持つ。#main 自身が padding を持つと
+     帯が全幅にならず、盤との境が「浮いた箱の縁」になってしまう */
+  #main { flex: 1; display: flex; flex-direction: column; padding: 0; gap: 0;
           min-width: 0; min-height: 0; position: relative; z-index: 1;
           overflow: hidden; contain: paint; }
   /* 盤の上の操作帯。押すもの (対局・評価値の表示) と、KUROOBI がいま何を
-     しているか (思考中・伝言・ノード数) を 1 行に並べる。
-     帯そのものはカードと同じ地にして、盤の上に浮いた 1 本の道具立てとして
-     読めるようにする。状態は右端へ寄せてあるので、出たり消えたりしても
-     左のボタンの位置は動かない */
+     しているか (思考中・ノード数) を 1 行に並べる。
+     全幅の帯にして、下の罫で盤の欄と切る。状態は右端へ寄せてあるので、
+     出たり消えたりしても左のボタンの位置は動かない */
   .controlbar { flex: none; display: flex; align-items: center; gap: 4px;
-                background: var(--card); border: 1px solid var(--border);
-                border-radius: 10px; padding: 5px 8px; min-height: 40px;
+                background: var(--panel); border-bottom: 1px solid var(--border);
+                padding: 6px 14px; min-height: 44px;
                 /* 入り切らなければ折り返す。ラベルを畳む幅の段は下で決めて
                    いるが、数字 (nodes / nps) の幅は桁で変わるので段だけでは
                    読み切れない。溢れたら切るのではなく次の行へ送る */
@@ -151,20 +170,36 @@
   .controlbar .cb-stat .num { white-space: nowrap; }
   .controlbar .cb-stat b { color: var(--text); font-weight: 600; }
   .controlbar .cb-stat .thinking { color: var(--accent); white-space: nowrap; }
-  /* 盤の下の伝言。一時的なものなので、無いときは行ごと消えて場所を返す。
-     幅いっぱいを使えるので長い文も切らずに読める */
-  .msgbar { flex: none; padding: 0 6px; font-size: 12px; color: var(--sub);
-            text-align: center; }
-  .msgbar.spin { color: var(--accent); }
-  .msgbar.spin::before {
-    content: ""; display: inline-block; width: 9px; height: 9px; margin-right: 6px;
-    border: 2px solid var(--accent); border-top-color: transparent; border-radius: 50%;
-    animation: rot .8s linear infinite; vertical-align: -1px;
-  }
+  /* 盤の下の帯。いまの盤面がどうなっているか (石数・結果) と伝言を持つ。
+     上の操作帯と対になる形にして、地と罫の両方で盤の欄と切る。罫線だけだと
+     盤の影と紛れて境目が読めなかった */
+  .mainfoot { flex: none; background: var(--panel);
+              border-top: 1px solid var(--border); padding: 9px 14px;
+              display: flex; flex-direction: column; gap: 4px; }
+  /* 報せ (失敗と、押したのに進まない理由)。内容の並びの外に浮かせる。
+     盤の下に行として置いていたときは、出入りのたびに帯の高さが動いて画面
+     全体が跳ねていた。
+     置き場所は画面の右下。どの画面から出しても同じ場所に出す — 下に何が
+     置かれているかで位置を変えると、画面ごとの作りに縛られるうえ、次に
+     どこへ出るのかが読めなくなる。
+     幅は決め打ち。中身なりに縮めると、短い文のときだけ小さな札になって、
+     出たことに気づきにくい */
+  .toasts { position: fixed; right: 20px; bottom: 20px; z-index: 30;
+            display: flex; flex-direction: column-reverse; gap: 8px;
+            align-items: flex-end; pointer-events: none; }
+  .toast { pointer-events: auto; width: 340px; max-width: 100%; text-align: left;
+           background: var(--card); border: 1px solid var(--border);
+           border-left: 3px solid var(--bad); border-radius: 8px;
+           padding: 10px 14px; font-size: 12.5px; line-height: 1.55;
+           color: var(--text); font-family: inherit; cursor: pointer;
+           box-shadow: 0 6px 24px rgba(0,0,0,.45);
+           animation: toast-in .16s ease-out; }
+  .toast:hover { background: #2b323b; }
+  @keyframes toast-in { from { opacity: 0; transform: translateY(6px); } }
+  @media (prefers-reduced-motion: reduce) { .toast { animation: none; } }
 
-  /* 盤の下のスコア帯。石数を左右に置き、間に結果と思考時間を出す */
-  .scorebar { flex: none; display: flex; align-items: center; gap: 14px;
-              padding: 0 6px; }
+  /* 石数を左右に置き、間に結果と思考時間を出す (帯の中身) */
+  .scorebar { flex: none; display: flex; align-items: center; gap: 14px; }
   .scorebar .side { flex: none; font-size: 19px; }
   .scorebar .mid { flex: 1; display: flex; align-items: center; justify-content: center;
                    gap: 14px; min-width: 0; }
@@ -182,11 +217,36 @@
                      font-variant-numeric: tabular-nums; }
   .scorebar .times .disc { width: 10px; height: 10px; }
   .scorebar .times .vs { margin: 0 2px; }
-  #board-wrap { flex: 1; display: flex; align-items: center; justify-content: center; min-height: 0; }
+  #board-wrap { flex: 1; display: flex; align-items: center; justify-content: center;
+                min-height: 0; padding: 14px; }
   #board-wrap .board { max-width: 100%; max-height: 100%; filter: drop-shadow(0 8px 28px rgba(0,0,0,.45)); }
-  #graph-card { flex: none; }
+  /* 評価値グラフ。箱に入れると左右 28px ずつと上下の枠ぶんが死ぬので、
+     いちばん下の帯として全幅に置く。地は変えず、上の罫だけで切る
+     (足の帯と続けて 2 枚も地を敷くと、画面の下半分が明るくなりすぎる) */
+  .graph-band { flex: none; border-top: 1px solid var(--border); position: relative;
+                padding: 10px 14px 12px; display: flex; flex-direction: column; gap: 8px; }
+  /* 分析の進み具合。グラフ自身の作業なのでこの節の中に置く (盤の下の伝言帯は
+     「押したのに進まない理由」を持つ場所)。
+     **出ても消えても節の高さを変えないこと。** 高さが動くと、余りを取り合って
+     いる盤の欄が伸び縮みして画面全体がカタカタ動く。数字は既にボタンの方が
+     背の高い行に置き、棒は節の上の罫に重ねて場所を取らせない */
+  /* 見出しの行。**.row を使わない** — あれは `.row > * { flex: 1 }` で子を
+     等分に伸ばすので、右へ寄せるための余白が 1px も残らない。
+     伸びる項目を置かないこと: flex は先に伸縮を解いてから auto の余白へ回す
+     ので、伸びる子が 1 つでもあると margin-left: auto が何も受け取れない */
+  .graph-head { display: flex; align-items: center; gap: 10px; }
+  /* 進行と操作は 1 つのまとまりにして右端へ寄せる */
+  .graph-actions { margin-left: auto; display: flex; align-items: center; gap: 10px; }
+  .graph-prog { flex: none; font-size: 12px; color: var(--sub);
+                font-variant-numeric: tabular-nums; }
+  .graph-prog b { color: var(--accent); font-weight: 600; }
+  .graph-bar { position: absolute; top: -1px; left: 0; right: 0; height: 2px;
+               overflow: hidden; pointer-events: none; }
+  .graph-bar span { display: block; height: 100%; background: var(--accent);
+                    transition: width .2s linear; }
+  @media (prefers-reduced-motion: reduce) { .graph-bar span { transition: none; } }
 
-  /* 幅が縮んだときの畳み方。盤の左右は固定幅 (メニュー 174 + 右ペイン 316)
+  /* 幅が縮んだときの畳み方。盤の左右は固定幅 (メニュー 174 + 右ペイン 290)
      なので、ウィンドウ幅から盤の欄の幅が決まる。下限の 860px では盤の欄は
      340px 程度しかない。優先度の低いものから順に落とす:
      nps → ボタンのラベル → 「思考時間」の語 → 主動作のラベル → 思考時間。
@@ -216,19 +276,28 @@
   }
 
   /* ---- サイドパネル ---- */
+  /* 余白は節が持つ。パネル自身が padding を持つと、棋譜の表が端まで
+     伸びられない */
   #panel {
-    width: 316px; background: var(--panel); border-left: 1px solid var(--border);
-    padding: 18px 16px; display: flex; flex-direction: column; gap: 14px;
+    /* 箱をやめて棋譜の表を端まで伸ばしたぶん、幅を 316 から詰めた。
+       表に使える幅は 290-32=258 で箱があった頃と同じなので、列は折れない */
+    width: 290px; background: var(--panel); border-left: 1px solid var(--border);
+    padding: 0; display: flex; flex-direction: column; gap: 0;
     /* 余った高さは棋譜が使う。入りきらないときだけ全体を流す */
     overflow-y: auto;
   }
-  #panel > .card { flex: none; }
+  /* 節。地も枠も置かず、罫と見出しだけで分ける */
+  .panel-sec { flex: none; padding: 14px 16px;
+               display: flex; flex-direction: column; gap: 10px; }
+  .panel-sec + .panel-sec, #panel .kifu-wrap { border-top: 1px solid var(--border); }
   /* 基準を 0 にして「余った高さちょうど」に収める。auto のままだと基準が
      中身 (棋譜の全行) の高さになり、枠が伸びてパネルごと流れてしまう。
      縮めるほうも許す (min-height: 0) 代わりに、下限だけ 130px で押さえる。
      そこまで詰まったときはパネル全体が流れる (overflow-y: auto) */
-  #panel .kifu-wrap { flex: 1 1 0; min-height: 130px;
+  #panel .kifu-wrap { flex: 1 1 0; min-height: 130px; padding: 14px 0 0;
                       display: flex; flex-direction: column; }
+  /* 見出しと保存/読込だけが余白を持つ。表は端まで伸ばす */
+  #panel .kifu-head { flex: none; padding: 0 16px 8px; }
   h1 { font-size: 17px; margin: 0; letter-spacing: .14em; font-weight: 700; }
   h1 small { color: var(--sub); font-weight: 400; letter-spacing: .04em; margin-left: 8px; font-size: 11px; }
 
@@ -254,7 +323,8 @@
 .settings-title { font-size: 14px; font-weight: 600; margin-bottom: 6px; }
 .modal .box.wide { width: 620px; }
 
-.file-row { padding: 12px 0; border-bottom: 1px solid var(--line, #2a2d31); }
+/* 区切りは --border。--line は盤の畳の線なので、ここで使うと緑がかる */
+.file-row { padding: 12px 0; border-bottom: 1px solid var(--border); }
 .file-row:last-child { border-bottom: none; }
 .file-head { font-size: 13px; font-weight: 600; display: flex; align-items: center; gap: 10px; }
 .file-state { font-size: 11.5px; font-weight: 400; padding: 2px 8px; border-radius: 50px;
@@ -345,16 +415,18 @@
   /* ---- 棋譜 (1 手 1 行の表。評価値と出所つき) ---- */
   /* 枠の高さは外 (kifu-wrap) が決め、中身はここで流す。見出しは sticky で
      残るので、どこまで流しても列の意味が分かる */
-  #kifu {
-    background: #1a1f25; border: 1px solid var(--border); border-radius: 8px;
-    flex: 1; min-height: 0; overflow-y: auto;
-  }
+  /* 箱に入れず、パネルの端まで伸ばす。行の罫が表の形を出すので、外枠は
+     要らない (枠を付けると列幅が 24px 縮んで、出所の語が折れる) */
+  #kifu { flex: 1; min-height: 0; overflow-y: auto; }
   #kifu table { width: 100%; font-size: 12px; border-collapse: collapse; }
   #kifu th, #kifu td {
     padding: 3px 8px; border-bottom: 1px solid #232932; text-align: left;
   }
+  /* 端の列だけパネルの余白を持つ (表そのものは端まで届く) */
+  #kifu th:first-child, #kifu td:first-child { padding-left: 16px; }
+  #kifu th:last-child, #kifu td:last-child { padding-right: 16px; }
   #kifu th {
-    position: sticky; top: 0; background: #1a1f25; color: var(--sub);
+    position: sticky; top: 0; background: var(--panel); color: var(--sub);
     font-size: 10px; font-weight: 600; z-index: 1;
   }
   #kifu th.n, #kifu td.n { width: 26px; text-align: right; color: var(--sub);
@@ -425,26 +497,36 @@
   button.btn.stop:hover { background: rgba(239,122,122,.12); }
 
   /* ---- レイアウト ---- */
-  .ggs-body { flex: 1; min-height: 0; padding: 14px; display: flex; }
-  .ggs-cols { flex: 1; min-width: 0; min-height: 0; display: flex; gap: 14px; }
-  .col-main { flex: 1.7; display: flex; flex-direction: column; gap: 14px;
+  /* 余白は節が持つ。列は縦罫で分ける (箱をやめると、罫が無ければ左右の
+     境目が見出しの位置だけになって読めない) */
+  .ggs-body { flex: 1; min-height: 0; padding: 0; display: flex; }
+  .ggs-cols { flex: 1; min-width: 0; min-height: 0; display: flex; gap: 0; }
+  .col-main { flex: 1.7; display: flex; flex-direction: column; gap: 0;
               min-width: 0; min-height: 0; }
-  .col-side { flex: 1; display: flex; flex-direction: column; gap: 14px;
-              min-width: 280px; max-width: 380px; min-height: 0; }
-  .col-side .card { flex: none; }
+  /* 右列は伸びない節を積むだけなので、縦が足りなければ列ごと流す
+     (本編側は中の .scroll が受け持つので、ここでは要らない) */
+  .col-side { flex: 1; display: flex; flex-direction: column; gap: 0;
+              min-width: 280px; max-width: 380px; min-height: 0;
+              border-left: 1px solid var(--border); overflow-y: auto; }
+  /* 節。地も枠も置かず、罫と見出しだけで分ける */
+  .sec { flex: none; padding: 14px 16px; display: flex; flex-direction: column; gap: 10px; }
+  .sec + .sec { border-top: 1px solid var(--border); }
+  .col-side .sec { flex: none; }
   .grow { flex: 1; min-height: 0; }
-  /* 中身が「〜はありません」だけのカードは伸ばさない (空白ばかりになる) */
-  .ggs-cols .card.grow:has(.empty) { flex: 0 1 auto; }
+  /* 中身が「〜はありません」だけの節は伸ばさない (空白ばかりになる) */
+  .ggs-cols .sec.grow:has(.empty) { flex: 0 1 auto; }
   .scroll { overflow-y: auto; min-height: 0; }
   .scroll::-webkit-scrollbar { width: 10px; }
   .scroll::-webkit-scrollbar-thumb {
     background: rgba(255,255,255,.09); border-radius: 50px;
     border: 3px solid transparent; background-clip: content-box;
   }
-  .card-head { display: flex; align-items: center; gap: 10px; }
-  .card-head h2 { font-size: 14px; font-weight: 600; color: var(--text); flex: 1;
-                  margin: 0; }
-  .card-head .btn { flex: none; }
+  /* 節の見出し行 (題と、右に寄せるボタン)。設定ペインの見出しは題と説明文を
+     縦に積むので別物 (.pane-sec-head) */
+  .sec-head { display: flex; align-items: center; gap: 10px; }
+  .sec-head h2 { font-size: 14px; font-weight: 600; color: var(--text);
+                 flex: 1; margin: 0; }
+  .sec-head .btn { flex: none; }
   .row.actions { align-items: center; }
   .row.actions > .btn { flex: none; }
   .row.actions > .spacer { flex: 1; }
@@ -491,7 +573,7 @@
 
   /* GGS の設定ペイン (メニューから開く画面)。ダイアログの詰まった見た目を
      持ち込まず、見出しと区切りで段を作る */
-  .ggs-pane { flex: 1; min-width: 0; overflow-y: auto; padding: 4px 6px 24px;
+  .ggs-pane { flex: 1; min-width: 0; overflow-y: auto; padding: 18px 16px 24px;
               display: flex; flex-direction: column; }
   .ggs-pane > * { max-width: 680px; width: 100%; }
   .pane-head { padding-bottom: 18px; }
@@ -499,8 +581,8 @@
   .pane-head p { margin: 7px 0 0; color: var(--sub); font-size: 12.5px; line-height: 1.7; }
   .pane-sec { border-top: 1px solid var(--border); padding: 18px 0;
               display: flex; flex-direction: column; gap: 12px; }
-  .sec-head h3 { margin: 0; font-size: 14px; font-weight: 600; }
-  .sec-head p { margin: 5px 0 0; color: var(--sub); font-size: 12px; line-height: 1.7; }
+  .pane-sec-head h3 { margin: 0; font-size: 14px; font-weight: 600; }
+  .pane-sec-head p { margin: 5px 0 0; color: var(--sub); font-size: 12px; line-height: 1.7; }
   .num-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(120px, 1fr));
               gap: 12px; }
   .pane-actions { display: flex; align-items: center; gap: 10px; padding: 16px 0 4px;
@@ -545,7 +627,7 @@
   .split-list-foot { border-top: 1px solid var(--border); padding: 10px 12px;
                      max-height: 42%; display: flex; flex-direction: column;
                      min-height: 0; }
-  .split-list-foot .card-head { padding: 0 0 6px; }
+  .split-list-foot .sec-head { padding: 0 0 6px; }
   .split-room { display: flex; flex-direction: column; min-height: 0; min-width: 0; }
   .split-room-head { display: flex; align-items: center; gap: 12px; flex-wrap: wrap;
                      padding: 12px 16px; border-bottom: 1px solid var(--border); }
@@ -572,7 +654,9 @@
   /* ---- 盤 (対局・観戦) ---- */
   .ggs-boards { display: flex; gap: 16px; align-items: flex-start;
                 justify-content: center; flex-wrap: wrap; }
-  .board-card { flex: 1; min-width: 300px; max-width: 440px; gap: 8px; }
+  /* 盤 1 面ぶん。節ではない (節にすると 2 面の間に区切りの罫が入る) */
+  .board-card { flex: 1; min-width: 300px; max-width: 440px;
+                display: flex; flex-direction: column; gap: 8px; }
   .board-card .board { width: 100%; height: auto; }
   .player-row { display: flex; align-items: center; gap: 9px; font-size: 14px; }
   .player-row .pname { color: var(--text); font-weight: 600; }
