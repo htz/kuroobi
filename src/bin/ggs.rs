@@ -1,7 +1,7 @@
 //! Kuroobi の GGS クライアント。
 //!
-//! skatgame.net:5000 (Generic Game Server) に接続し、/os (Othello Service)
-//! で非レートの 8x8 を指す。プロトコルの要点はメモリ
+//! skatgame.net:5000 (Generic Game Server) に接続し、リバーシのサービス
+//! `/os` で非レートの 8x8 を指す。プロトコルの要点はメモリ
 //! ggs-server-alive-protocol-notes を参照。
 //!
 //! 使い方:
@@ -159,7 +159,7 @@ fn main() -> ExitCode {
     // 与えられた局面の着手を、対局路と同じ選択則 (中盤探索 / 選択帯 / 完全読み)
     // で決める。
     // 残り時間 (秒) に応じて絞る: 60 秒で帯オフ + 深さ -2、20 秒で深さ 6、
-    // 8 秒で深さ 4。オセロのソフトタイムアウトは「切れたら勝ちが消える」なので
+    // 8 秒で深さ 4。GGS のソフトタイムアウトは「切れたら勝ちが消える」なので
     // 保険は厚めに。
     let pick = |board: &Board,
                 search: &mut NnueSearch,

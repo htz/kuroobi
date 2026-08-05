@@ -566,7 +566,7 @@ impl Evaluator {
     /// Train on one labeled position with 8-fold symmetry augmentation:
     /// every rotation/mirror of the position shares the same value, so one
     /// sample teaches eight — this is the single biggest convergence win for
-    /// pattern-based Othello evaluators. Returns the mean **squared** error
+    /// pattern-based Reversi evaluators. Returns the mean **squared** error
     /// over the eight variants (each measured before its own update), so a
     /// trainer summing the return gets a true MSE, comparable to `valmse`.
     ///

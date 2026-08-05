@@ -231,7 +231,7 @@ function fingerValue(k: string, v: string): string {
     const body = v.replace(/^\s*:\s*/, '').trim();
     return body ? readFormula(body) : '指定なし (申し込みごとに本人が判断)';
   }
-  if (key === 'notify') return v === '/os' ? 'オセロサービス全体' : (v.trim() || 'なし');
+  if (key === 'notify') return v === '/os' ? 'リバーシサービス全体' : (v.trim() || 'なし');
   if (key === 'play') return v === '-' || !v ? '対局していない' : `対局中 (${v})`;
   if (key === 'client') return v === '+' ? '専用クライアント' : 'telnet など';
   if (key === 'hear') return v === '+' ? '受け取る' : '受け取らない';

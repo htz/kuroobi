@@ -194,7 +194,7 @@ const FORMULA_WORDS: [RegExp, string][] = [
   [/\brand\b/g, 'ランダム開局'],
   [/\bsynchro\b/g, '同期対局'],
   [/\bkomi\b/g, 'コミあり'],
-  [/\banti\b/g, 'アンチオセロ'],
+  [/\banti\b/g, 'アンチ (石が少ない方が勝ち)'],
   [/\bdiscs\b/g, '開局の石数'],
   [/\bsize\b/g, '盤の大きさ'],
   [/\bstored\b/g, 'この相手との中断対局数'],

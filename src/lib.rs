@@ -1,5 +1,5 @@
 //! # Kuroobi
-//! Ultra-fast Reversi (Othello) board processing using 2x uint64 bitboards.
+//! Ultra-fast Reversi board processing using 2x uint64 bitboards.
 //!
 //! ## Quick Start
 //! ```rust

@@ -88,7 +88,7 @@ fn solver_deep_endgame_16_empties() {
     let best = perfect.best_move.expect("legal move must exist");
     assert!(board.movable() & best.to_bit() != 0);
 
-    // Score is a reachable Othello score: |score| <= 64 and parity matches
+    // Score is a reachable Reversi score: |score| <= 64 and parity matches
     // the board size (both players' discs + empties sum to 64).
     assert!(perfect.value.abs() <= 64);
 

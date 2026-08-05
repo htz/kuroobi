@@ -347,7 +347,7 @@ nnue_symmetrize <in.bin> <out.bin> [--val <file>]
 
 ### ggs
 
-**GGS (skatgame.net:5000) のクライアント。**`/os` (Othello Service) で非
+**GGS (skatgame.net:5000) のクライアント。** リバーシのサービス `/os` で非
 レートの 8×8 を指す。GUI の「GGS」画面が同じ機能を持つので、普段はそちらで
 足りる。
 

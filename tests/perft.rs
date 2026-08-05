@@ -1,4 +1,4 @@
-//! Perft (move-path counting) validation against known Othello values.
+//! Perft (move-path counting) validation against known Reversi values.
 //!
 //! Reference sequence (leaf counts from the standard initial position,
 //! where a forced pass does not consume a ply):

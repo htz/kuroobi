@@ -97,7 +97,7 @@ impl Board {
     }
 
     fn set_initial(&mut self) {
-        // Standard Othello initial position (file-major indices):
+        // Standard Reversi initial position (file-major indices):
         // D4 (file=3, rank=3) → 27: White
         // E4 (file=4, rank=3) → 35: Black
         // D5 (file=3, rank=4) → 28: Black
@@ -458,7 +458,7 @@ mod tests {
     fn test_first_moves() {
         let b = Board::new();
 
-        // Standard Othello: Black's opening moves are D3, C4, F5, E6
+        // Standard Reversi: Black's opening moves are D3, C4, F5, E6
         let movable = b.movable();
         assert_eq!(movable.count_ones(), 4, "Black should have 4 valid moves");
 

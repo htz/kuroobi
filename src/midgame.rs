@@ -52,7 +52,7 @@ const ABORTED: f32 = f32::NEG_INFINITY;
 /// How much each step of `mpc_relax` widens the ProbCut margin.
 const MPC_RELAX_STEP: f32 = 1.18;
 
-/// 反復深化で「次の段」が前の段の何倍かかるかの見積もり。オセロの中盤は
+/// 反復深化で「次の段」が前の段の何倍かかるかの見積もり。リバーシの中盤は
 /// 分岐が 8〜12 で、置換表と手順付けが効くぶん実測はこれより小さい。
 /// 大きく見るほど早めに切り上げる (時間切れで段を丸ごと捨てるより得)。
 const NEXT_PASS_FACTOR: f32 = 3.0;
