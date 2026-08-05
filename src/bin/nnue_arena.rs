@@ -1,4 +1,4 @@
-//! Fixed-depth head-to-head: NNUE evaluator vs the linear champion.
+//! Fixed-depth head-to-head: NNUE evaluator vs the best linear evaluator.
 //!
 //! Both sides run the *same* plain alpha-beta at a fixed depth, so search
 //! effort is equal and only the evaluator differs — a pure eval-strength test

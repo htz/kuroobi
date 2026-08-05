@@ -1,0 +1,78 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="900" height="372" viewBox="0 0 900 372" font-family="-apple-system, BlinkMacSystemFont, 'Hiragino Sans', sans-serif">
+<rect width="900" height="372" fill="#ffffff"/>
+<text x="24" y="32" font-size="15" font-weight="700" fill="#1f2328">石を返す — 8 方向を同時に進める (Kogge-Stone 風の倍化スメア)</text>
+<text x="24" y="52" font-size="11.5" fill="#59636e">図は右向き 1 方向の例。実際は 8 方向ぶんを 1 本のビット演算で並行に進めるので、方向ごとのループが要らない</text>
+<text x="24" y="86" font-size="12" font-weight="600" fill="#1f2328">打つ前</text>
+<rect x="24" y="96" width="320" height="40" fill="#e8efe9" stroke="#c8d0d8"/>
+<rect x="24" y="96" width="40" height="40" fill="none" stroke="#c8d0d8" stroke-width="0.7"/>
+<text x="44.0" y="149" font-size="9.5" fill="#8b949e" text-anchor="middle">a1</text>
+<rect x="64" y="96" width="40" height="40" fill="none" stroke="#c8d0d8" stroke-width="0.7"/>
+<circle cx="84.0" cy="116.0" r="13.600000000000001" fill="#1f2328" stroke="#c8d0d8"/>
+<text x="84.0" y="149" font-size="9.5" fill="#8b949e" text-anchor="middle">b1</text>
+<rect x="104" y="96" width="40" height="40" fill="none" stroke="#c8d0d8" stroke-width="0.7"/>
+<circle cx="124.0" cy="116.0" r="13.600000000000001" fill="#ffffff" stroke="#c8d0d8"/>
+<text x="124.0" y="149" font-size="9.5" fill="#8b949e" text-anchor="middle">c1</text>
+<rect x="144" y="96" width="40" height="40" fill="none" stroke="#c8d0d8" stroke-width="0.7"/>
+<circle cx="164.0" cy="116.0" r="13.600000000000001" fill="#ffffff" stroke="#c8d0d8"/>
+<text x="164.0" y="149" font-size="9.5" fill="#8b949e" text-anchor="middle">d1</text>
+<rect x="184" y="96" width="40" height="40" fill="none" stroke="#c8d0d8" stroke-width="0.7"/>
+<circle cx="204.0" cy="116.0" r="13.600000000000001" fill="#ffffff" stroke="#c8d0d8"/>
+<text x="204.0" y="149" font-size="9.5" fill="#8b949e" text-anchor="middle">e1</text>
+<rect x="224" y="96" width="40" height="40" fill="none" stroke="#c8d0d8" stroke-width="0.7"/>
+<text x="244.0" y="149" font-size="9.5" fill="#8b949e" text-anchor="middle">f1</text>
+<rect x="264" y="96" width="40" height="40" fill="none" stroke="#c8d0d8" stroke-width="0.7"/>
+<text x="284.0" y="149" font-size="9.5" fill="#8b949e" text-anchor="middle">g1</text>
+<rect x="304" y="96" width="40" height="40" fill="none" stroke="#c8d0d8" stroke-width="0.7"/>
+<text x="324.0" y="149" font-size="9.5" fill="#8b949e" text-anchor="middle">h1</text>
+<text x="364" y="120.0" font-size="11.5" fill="#59636e">黒は b1。c1-e1 が白。黒番で f1 に打つ</text>
+<text x="24" y="184" font-size="12" font-weight="600" fill="#1f2328">① 置いた石から相手の石が続く区間を取る</text>
+<rect x="24" y="194" width="320" height="40" fill="#e8efe9" stroke="#c8d0d8"/>
+<rect x="24" y="194" width="40" height="40" fill="none" stroke="#c8d0d8" stroke-width="0.7"/>
+<text x="44.0" y="247" font-size="9.5" fill="#8b949e" text-anchor="middle">a1</text>
+<rect x="64" y="194" width="40" height="40" fill="none" stroke="#c8d0d8" stroke-width="0.7"/>
+<circle cx="84.0" cy="214.0" r="13.600000000000001" fill="#1f2328" stroke="#c8d0d8"/>
+<text x="84.0" y="247" font-size="9.5" fill="#8b949e" text-anchor="middle">b1</text>
+<rect x="104" y="194" width="40" height="40" fill="none" stroke="#c8d0d8" stroke-width="0.7"/>
+<circle cx="124.0" cy="214.0" r="13.600000000000001" fill="#ffffff" stroke="#c8d0d8"/>
+<text x="124.0" y="247" font-size="9.5" fill="#8b949e" text-anchor="middle">c1</text>
+<rect x="144" y="194" width="40" height="40" fill="none" stroke="#c8d0d8" stroke-width="0.7"/>
+<circle cx="164.0" cy="214.0" r="13.600000000000001" fill="#ffffff" stroke="#c8d0d8"/>
+<text x="164.0" y="247" font-size="9.5" fill="#8b949e" text-anchor="middle">d1</text>
+<rect x="184" y="194" width="40" height="40" fill="none" stroke="#c8d0d8" stroke-width="0.7"/>
+<circle cx="204.0" cy="214.0" r="13.600000000000001" fill="#ffffff" stroke="#c8d0d8"/>
+<text x="204.0" y="247" font-size="9.5" fill="#8b949e" text-anchor="middle">e1</text>
+<rect x="224" y="194" width="40" height="40" fill="none" stroke="#c8d0d8" stroke-width="0.7"/>
+<circle cx="244.0" cy="214.0" r="13.600000000000001" fill="#1f2328" stroke="#c8d0d8"/>
+<text x="244.0" y="247" font-size="9.5" fill="#8b949e" text-anchor="middle">f1</text>
+<rect x="264" y="194" width="40" height="40" fill="none" stroke="#c8d0d8" stroke-width="0.7"/>
+<text x="284.0" y="247" font-size="9.5" fill="#8b949e" text-anchor="middle">g1</text>
+<rect x="304" y="194" width="40" height="40" fill="none" stroke="#c8d0d8" stroke-width="0.7"/>
+<text x="324.0" y="247" font-size="9.5" fill="#8b949e" text-anchor="middle">h1</text>
+<rect x="102" y="192" width="124" height="44" fill="none" stroke="#eb6834" stroke-width="2" rx="3"/>
+<text x="364" y="218.0" font-size="11.5" fill="#59636e">f1 から左へ白が 3 つ (c1-e1)</text>
+<text x="24" y="282" font-size="12" font-weight="600" fill="#1f2328">② その先が自分の石なら、区間が返る</text>
+<rect x="24" y="292" width="320" height="40" fill="#e8efe9" stroke="#c8d0d8"/>
+<rect x="24" y="292" width="40" height="40" fill="none" stroke="#c8d0d8" stroke-width="0.7"/>
+<text x="44.0" y="345" font-size="9.5" fill="#8b949e" text-anchor="middle">a1</text>
+<rect x="64" y="292" width="40" height="40" fill="none" stroke="#c8d0d8" stroke-width="0.7"/>
+<circle cx="84.0" cy="312.0" r="13.600000000000001" fill="#1f2328" stroke="#c8d0d8"/>
+<text x="84.0" y="345" font-size="9.5" fill="#8b949e" text-anchor="middle">b1</text>
+<rect x="104" y="292" width="40" height="40" fill="none" stroke="#c8d0d8" stroke-width="0.7"/>
+<circle cx="124.0" cy="312.0" r="13.600000000000001" fill="#1f2328" stroke="#c8d0d8"/>
+<text x="124.0" y="345" font-size="9.5" fill="#8b949e" text-anchor="middle">c1</text>
+<rect x="144" y="292" width="40" height="40" fill="none" stroke="#c8d0d8" stroke-width="0.7"/>
+<circle cx="164.0" cy="312.0" r="13.600000000000001" fill="#1f2328" stroke="#c8d0d8"/>
+<text x="164.0" y="345" font-size="9.5" fill="#8b949e" text-anchor="middle">d1</text>
+<rect x="184" y="292" width="40" height="40" fill="none" stroke="#c8d0d8" stroke-width="0.7"/>
+<circle cx="204.0" cy="312.0" r="13.600000000000001" fill="#1f2328" stroke="#c8d0d8"/>
+<text x="204.0" y="345" font-size="9.5" fill="#8b949e" text-anchor="middle">e1</text>
+<rect x="224" y="292" width="40" height="40" fill="none" stroke="#c8d0d8" stroke-width="0.7"/>
+<circle cx="244.0" cy="312.0" r="13.600000000000001" fill="#1f2328" stroke="#c8d0d8"/>
+<text x="244.0" y="345" font-size="9.5" fill="#8b949e" text-anchor="middle">f1</text>
+<rect x="264" y="292" width="40" height="40" fill="none" stroke="#c8d0d8" stroke-width="0.7"/>
+<text x="284.0" y="345" font-size="9.5" fill="#8b949e" text-anchor="middle">g1</text>
+<rect x="304" y="292" width="40" height="40" fill="none" stroke="#c8d0d8" stroke-width="0.7"/>
+<text x="324.0" y="345" font-size="9.5" fill="#8b949e" text-anchor="middle">h1</text>
+<rect x="102" y="290" width="124" height="44" fill="none" stroke="#eb6834" stroke-width="2" rx="3"/>
+<text x="364" y="316.0" font-size="11.5" fill="#59636e">先が b1 の黒なので挟めている。空きや盤端なら 1 つも返らない</text>
+</svg>
