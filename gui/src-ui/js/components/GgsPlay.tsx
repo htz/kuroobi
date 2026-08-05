@@ -240,12 +240,6 @@ function MatchCard({ ctx, m, clock }: {
   const myRate = snap.my_ranks
     .find((r) => r.gtype === (m.gtype.includes('r') ? '8r' : '8'))?.rating;
 
-  const actions: [string, 'undo' | 'abort' | 'resign', string][] = [
-    ['待った', 'undo', '相手に待ったを要求しますか?'],
-    ['中止', 'abort', '対局の中止を要求しますか?'],
-    ['投了', 'resign', '投了しますか? (負けになります)'],
-  ];
-
   return (
     <div className="card board-card">
       {observer && m.players.length >= 2 ? (
@@ -290,13 +284,17 @@ function MatchCard({ ctx, m, clock }: {
                                             kifuText(m.ggf, m.moves))}>棋譜</button>
         {/* 観戦をやめるのは手合いごと (上のボタン)。1 局だけ抜けても
             同期対局では片方が残って中途半端になる */}
+        {/* 待った (undo) と中止 (abort) は出さない。どちらも相手の承諾が要る
+            要求で、GGS の相手はたいていプログラムなので通らない。投了だけは
+            自分ひとりで決められるので残す */}
         {!observer && (
-          actions.map(([label, verb, msg]) => (
-            <button key={verb} className={'btn small' + (verb === 'resign' ? ' danger' : '')}
-                    onClick={() => {
-                      if (confirm(`${m.id}: ${msg}`)) void ggsApi.matchCmd(m.id, verb);
-                    }}>{label}</button>
-          ))
+          <button className="btn small danger"
+                  title="負けを認めて終わる (相手の承諾は要らない。レートが動く)"
+                  onClick={() => {
+                    if (confirm(`${m.id}: 投了しますか? (負けになります)`)) {
+                      void ggsApi.matchCmd(m.id, 'resign');
+                    }
+                  }}>投了</button>
         )}
       </div>
     </div>
