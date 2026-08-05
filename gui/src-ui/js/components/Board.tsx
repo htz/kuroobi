@@ -8,6 +8,38 @@ import type { Hints } from '../state';
 const CELL = 100;
 const PAD = 40;
 
+// 盤の地は畳。1 マスを縁なし半畳 1 枚と見て、市松に藺草の目の向きを変える
+// (琉球畳の敷き方)。目はマスの中で完結するので、盤の格子線とは干渉しない。
+// 薄くしてあるのは、石とヒントの数字より前に出てはいけないから。
+//
+// 毎フレーム作り直す意味がないのでモジュール読み込み時に 1 度だけ組む
+// (盤は GGS で 2 面同時に出ることがある)。
+const PITCH = 12.5;       // 藺草の目の間隔。1 マスに 7 本
+const GRAIN_OPACITY = 0.07;
+
+function tatami() {
+  const out = [];
+  for (let f = 0; f < 8; f++) {
+    for (let r = 0; r < 8; r++) {
+      const x0 = PAD + f * CELL;
+      const y0 = PAD + r * CELL;
+      const vertical = (f + r) % 2 === 1;
+      // 両端はマスの境界 = 格子線と重なるので引かない
+      for (let i = 1; i * PITCH < CELL; i++) {
+        const d = i * PITCH;
+        out.push(vertical
+          ? <line key={`${f}${r}-${i}`} x1={x0 + d} y1={y0} x2={x0 + d} y2={y0 + CELL}
+                  stroke="var(--grain)" strokeOpacity={GRAIN_OPACITY} strokeWidth={2.4} />
+          : <line key={`${f}${r}-${i}`} x1={x0} y1={y0 + d} x2={x0 + CELL} y2={y0 + d}
+                  stroke="var(--grain)" strokeOpacity={GRAIN_OPACITY} strokeWidth={2.4} />);
+      }
+    }
+  }
+  return out;
+}
+
+const TATAMI = tatami();
+
 export interface BoardProps {
   /** 64 マス: 0 空き / 1 黒 / 2 白 (file-major: sq = file*8 + rank)。 */
   cells: number[];
@@ -38,6 +70,7 @@ export function Board(props: BoardProps) {
       <rect x={0} y={0} width={880} height={880} rx={14} fill="#20252c" />
       <rect x={PAD - 6} y={PAD - 6} width={812} height={812} rx={6} fill="var(--board-dark)" />
       <rect x={PAD} y={PAD} width={800} height={800} fill="var(--board)" />
+      <g>{TATAMI}</g>
 
       {Array.from({ length: 9 }, (_, i) => (
         <g key={`grid${i}`}>

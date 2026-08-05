@@ -163,12 +163,31 @@ function NoMatch({ online, showView, notice }:
 }
 
 /// 対局がないときに置く、石を並べただけの盤。操作はできない。
+///
+/// 地は対局盤と同じ畳。1 マスを縁なし半畳 1 枚と見て、市松に藺草の目の向き
+/// を変える。viewBox が 1 マス = 1 なので、目の間隔は Board.tsx の 12.5/100
+/// と同じ 0.125 になる。
 function EmptyBoard() {
+  const grain = [];
+  for (let f = 0; f < 8; f++) {
+    for (let r = 0; r < 8; r++) {
+      const vertical = (f + r) % 2 === 1;
+      for (let i = 1; i < 8; i++) {
+        const d = i * 0.125;
+        grain.push(vertical
+          ? <line key={`${f}${r}-${i}`} className="eb-grain"
+                  x1={f + d} y1={r} x2={f + d} y2={r + 1} />
+          : <line key={`${f}${r}-${i}`} className="eb-grain"
+                  x1={f} y1={r + d} x2={f + 1} y2={r + d} />);
+      }
+    }
+  }
   return (
     <svg viewBox="0 0 8 8" className="empty-board">
       {Array.from({ length: 64 }, (_, i) => (
         <rect key={i} x={Math.floor(i / 8)} y={i % 8} width={1} height={1} className="eb-cell" />
       ))}
+      {grain}
       {([[3, 3, false], [4, 3, true], [3, 4, true], [4, 4, false]] as
           [number, number, boolean][]).map(([f, r, black]) => (
         <circle key={`${f}${r}`} cx={f + 0.5} cy={r + 0.5} r={0.38}

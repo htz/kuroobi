@@ -1,7 +1,8 @@
 :root {
     --bg: #16191d; --panel: #1e2329; --card: #252b33; --border: #313943;
     --text: #e8ebee; --sub: #8b96a2; --accent: #4d9fff; --accent-dim: #2d5f99;
-    --board: #337a52; --board-dark: #235c3c; --line: #1e5136;
+    /* 盤は畳。緑は藺草の色で、盤の緑ではない (アイコンと同系) */
+    --board: #77914e; --board-dark: #3f4f2c; --line: #3d5226; --grain: #33421d;
     --gold: #ffd479; --ok: #8bc34a; --bad: #ef7a7a;
   }
   * { box-sizing: border-box; }
@@ -723,9 +724,11 @@
   /* ---- 対局がないとき ---- */
   .no-match { display: flex; align-items: center; justify-content: center; gap: 42px;
               flex: 1; padding: 24px; }
+  /* 主役は右の文言なので盤は落とす。ただし .5 まで落とすと畳の目が飛ぶ */
   .empty-board { width: 248px; height: 248px; flex: none; border-radius: 10px;
-                 background: #1b2026; padding: 6px; opacity: .5; }
-  .eb-cell { fill: #2b4636; stroke: #171c21; stroke-width: .03; }
+                 background: #1b2026; padding: 6px; opacity: .68; }
+  .eb-cell { fill: var(--board); stroke: var(--line); stroke-width: .03; }
+  .eb-grain { stroke: var(--grain); stroke-opacity: .07; stroke-width: .024; }
   .eb-black { fill: #16181c; }
   .eb-white { fill: #e9ecef; }
   .no-match-text { max-width: 340px; }
