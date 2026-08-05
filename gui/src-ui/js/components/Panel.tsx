@@ -4,6 +4,7 @@ import type { Game } from '../state';
 import { Icon } from './Icons';
 import { Kifu } from './Kifu';
 import { Strength } from './Strength';
+import { Seg } from './Seg';
 import type { GraphPoint } from './Graph';
 import type { SearchStat } from '../types';
 
@@ -24,21 +25,6 @@ export interface PanelProps {
   gvals?: (GraphPoint | undefined)[] | null;
   onSave: () => void;
   onLoad: () => void;
-}
-
-/** 2〜4 択の切り替え。画面の設定はすべてこの形に揃えてある。 */
-function Seg<T extends string>(props: {
-  value: T; options: [T, string][]; onChange: (v: T) => void; disabled?: boolean;
-}) {
-  return (
-    <div className={'seg' + (props.disabled ? ' disabled' : '')}>
-      {props.options.map(([v, label]) => (
-        <button key={v} className={props.value === v ? 'active' : ''}
-                disabled={props.disabled}
-                onClick={() => props.onChange(v)}>{label}</button>
-      ))}
-    </div>
-  );
 }
 
 /// 盤の下に置くスコア帯。石数・思考時間・結果を 1 行にまとめる。

@@ -4,6 +4,7 @@ import { api } from '../api';
 import type { ThreadsView } from '../api';
 import { Modal } from './Modal';
 import { Icon } from './Icons';
+import { Seg } from './Seg';
 
 // 画面に出す名前は resource_status が返すものと同じにする
 // (食い違うと状態が引けず、パスも出なくなる)
@@ -81,11 +82,9 @@ export function SettingsModal({ initial, learnOn, onLearn, onClose, onChanged }:
             負けた展開は次から自然に避けられるようになります。学習分は定石とは
             別のファイル (book_learn.txt) に貯まります。
           </p>
-          <div className="seg" style={{ alignSelf: 'flex-start' }}>
-            <button className={learnOn ? 'active' : ''}
-                    onClick={() => onLearn(true)}>する</button>
-            <button className={learnOn ? '' : 'active'}
-                    onClick={() => onLearn(false)}>しない</button>
+          <div style={{ alignSelf: 'flex-start' }}>
+            <Seg value={learnOn ? 'on' : 'off'} onChange={(v) => onLearn(v === 'on')}
+                 options={[['on', 'する'], ['off', 'しない']] as const} />
           </div>
         </div>
     </Modal>

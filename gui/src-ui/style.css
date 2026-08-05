@@ -312,6 +312,16 @@
 [hidden] { display: none !important; }
 .panel-head { display: flex; align-items: center; gap: 12px; }
 .btn.icon { padding: 7px 9px; line-height: 0; }
+/* 絵だけのボタン (戻る・閉じる)。**押せる領域を 32px 角で確保する** —
+   中の絵は 17px でも、狙うのは枠のほう。文字の ← を padding で囲んでいた
+   ときは 26px 角しか当たりが無く、押しにくかった */
+.iconbtn { flex: none; display: inline-flex; align-items: center; justify-content: center;
+           width: 32px; height: 32px; padding: 0;
+           border: 1px solid var(--border); border-radius: 8px;
+           background: none; color: var(--sub); cursor: pointer;
+           transition: background .12s, color .12s, border-color .12s; }
+.iconbtn:hover { background: rgba(255,255,255,.07); color: var(--text);
+                 border-color: var(--accent-dim); }
 .btn.ghost { background: none; border-color: transparent; opacity: .8; }
 .btn.ghost:hover { background: rgba(255,255,255,.07); opacity: 1; }
 .panel-head h1 { flex: 1; }
@@ -598,9 +608,7 @@
   /* 手合いの状態。終局しても消さずに残すので、進行中かどうかを出す */
   .tag.live { background: rgba(77,159,255,.16); color: var(--accent); }
   .tag.done { background: rgba(255,255,255,.10); color: var(--sub); }
-  .thread .close-x { margin-left: auto; padding: 0 6px; font-size: 15px;
-                     line-height: 1; color: var(--sub); }
-  .thread .close-x:hover { color: var(--text); }
+  .thread .close-x { margin-left: auto; display: flex; }
 
   /* 棋譜のビューア (盤面で確かめてから渡す) */
   .kifu-view { display: flex; flex-direction: column; gap: 10px; }
@@ -747,13 +755,85 @@
 
   /* ---- プレイヤー詳細 ---- */
   /* ラベルは折り返さず、値の側で折り返す。対戦条件は 1 行に収まらない。 */
-  .kv-grid { display: grid; grid-template-columns: 168px 1fr; gap: 11px 16px;
-             align-content: start; }
-  .kv-grid .k { color: var(--sub); font-size: 12.5px; white-space: nowrap; }
+  /* ---- プレイヤー詳細 ---- */
+  /* 頭は帯。名前だけでは一覧で見えていたレートが消えるので要約も載せる */
+  .user-head { flex: none; display: flex; align-items: center; gap: 12px;
+               padding: 12px 16px; background: var(--panel);
+               border-bottom: 1px solid var(--border); }
+  .user-id { flex: 1; min-width: 0; }
+  .user-id h2 { margin: 0; font-size: 17px; font-weight: 700; }
+  .user-sum { margin-top: 3px; font-size: 12px; color: var(--sub);
+              font-variant-numeric: tabular-nums; }
+  .user-sum .sep { margin: 0 8px; opacity: .5; }
+  .user-sum .dev { margin-left: 4px; }
+  .user-sum .prov { color: var(--gold); margin-left: 6px; }
+  .user-tabs { flex: none; padding: 12px 16px 0; }
+  .user-body { padding: 0 16px 20px; }
+
+  /* 項目。短いものは 2 列に詰める — 24 行を 1 列で流すと縦に間延びして、
+     どこまでが同じ話なのかも分からない。長いもの (条件式・備考) だけ全幅 */
+  .kv-sec { padding-top: 16px; }
+  .kv-sec h3 { margin: 0 0 8px; font-size: 12px; font-weight: 700; color: var(--text);
+               letter-spacing: .04em; padding-bottom: 7px;
+               border-bottom: 1px solid var(--border); }
+  /* 2 列。**窓の幅ではなく入る幅で決める** — 段で切ると、ペインの幅が
+     変わったときに合わなくなる (窓 1100px でも本文は 900px 以上ある) */
+  .kv-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(330px, 1fr));
+             gap: 9px 28px; align-content: start; }
+  .kv-row { display: grid; grid-template-columns: 132px 1fr; gap: 12px;
+            align-items: baseline; min-width: 0; }
+  .kv-row.wide { grid-column: 1 / -1; }
+  .kv-grid .k { color: var(--sub); font-size: 12px; }
   .kv-grid .v { color: var(--text); overflow-wrap: anywhere; line-height: 1.55;
-                font-size: 13px; }
-  ul.formula { margin: 6px 0 0; padding-left: 20px; }
-  ul.formula li { margin: 4px 0; line-height: 1.5; font-size: 13px; }
+                font-size: 13px; min-width: 0; }
+
+  /* 条件式。もとは論理式で、構造がそのまま意味になっている。括弧の代わりに
+     字下げで見せ、葉は札にする (1 文に潰すと括弧の対応を目で追う羽目になる)。
+     札は横に流す — 縦に積むと 10 条件で画面 1 枚ぶんの高さになる */
+  .condgroup > .condop { font-size: 11px; color: var(--sub); letter-spacing: .04em; }
+  .condgroup > ul { list-style: none; margin: 3px 0 0; padding: 0 0 0 10px;
+                    border-left: 1px solid var(--border);
+                    display: flex; flex-wrap: wrap; gap: 4px 5px; align-items: baseline; }
+  .condgroup.top > ul { padding-left: 0; border-left: none; }
+  /* 入れ子は行を折り返させて、束であることを見せる */
+  .condgroup > ul > li:has(.condgroup) { flex: 1 0 100%; margin: 3px 0; }
+  .cond { display: inline-block; background: #1a1f25; border: 1px solid var(--border);
+          border-radius: 5px; padding: 2px 8px; font-size: 12px; line-height: 1.5;
+          font-variant-numeric: tabular-nums; white-space: nowrap; }
+
+  /* ---- 条件式を組む (GGS の設定) ---- */
+  /* 入れ子は左の罫で見せる。プロフィールの表示と同じ作りにして、見て覚えた
+     形をそのまま組めるようにする */
+  .cond-editor { display: flex; flex-direction: column; gap: 10px; margin-top: 6px; }
+  .cond-group { display: flex; flex-direction: column; gap: 7px;
+                border: 1px solid var(--border); border-radius: 8px; padding: 9px 10px;
+                background: rgba(255,255,255,.015); }
+  .cond-group.top { border: none; padding: 0; background: none; }
+  .cond-head { display: flex; align-items: center; gap: 8px; }
+  .cond-kids { display: flex; flex-direction: column; gap: 7px;
+               padding-left: 10px; border-left: 1px solid var(--border); }
+  .cond-group.top > .cond-kids { padding-left: 0; border-left: none; }
+  .cond-row { display: flex; align-items: center; gap: 7px; flex-wrap: wrap; }
+  .cond-row.nest { display: block; }
+  .cond-add { display: flex; gap: 7px; }
+  /* 選ぶものは幅を決め打ちにする。中身の長さで枠が伸び縮みすると、
+     行ごとに列がずれて読みにくい */
+  .cond-editor .selwrap.cond-var { width: 200px; flex: none; }
+  .cond-editor .selwrap.cond-join { width: 148px; flex: none; }
+  .cond-editor .selwrap.cond-op { width: 96px; flex: none; }
+  .cond-editor .selwrap.cond-val { width: 108px; flex: none; }
+  .cond-editor .selwrap select { font-size: 12.5px; padding: 5px 26px 5px 9px; }
+  .cond-num { width: 92px !important; flex: none; padding: 5px 9px !important;
+              font-size: 12.5px !important; }
+  .cond-unit { font-size: 12px; color: var(--sub); }
+  /* 何がサーバーへ行くのかを隠さない */
+  .cond-src { display: flex; align-items: baseline; gap: 9px; font-size: 12px;
+              background: #1a1f25; border: 1px solid var(--border); border-radius: 6px;
+              padding: 6px 10px; overflow-wrap: anywhere; }
+  .cond-src .k { color: var(--sub); flex: none; font-size: 11px; }
+  .cond-src code { color: var(--text); font-family: ui-monospace, SFMono-Regular, monospace; }
+  .cond-raw { height: 72px; resize: vertical;
+              font-family: ui-monospace, SFMono-Regular, monospace; font-size: 12.5px; }
 
   /* ---- チャット ---- */
   .chat-room { display: flex; flex-direction: column; min-height: 0; min-width: 0; }

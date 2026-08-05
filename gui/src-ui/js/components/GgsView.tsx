@@ -14,6 +14,8 @@ import { GgsConsole } from './GgsConsole';
 import { KifuViewer } from './KifuViewer';
 import { Icon } from './Icons';
 import { Strength } from './Strength';
+import { Seg } from './Seg';
+import { FormulaEditor } from './Formula';
 
 /** 各画面へ渡す共通の入口。 */
 export interface GgsCtx {
@@ -228,6 +230,22 @@ function GgsEngine({ snap }: { snap: GgsSnapshot }) {
     api.activity().then((a) => setCores(a.cores)).catch(() => {});
   }, []);
 
+  // 申し込みの条件はサーバーが持っている。自分の finger を取って読み出す
+  // (この画面を開いたときだけでよい — 変えるのは自分だけなので)
+  const login = snap.login;
+  useEffect(() => {
+    if (login) ggsApi.finger(login).catch(() => {});
+  }, [login]);
+  /// 自分の finger から accept / decline の式を取り出す。
+  const myForm = (key: 'accept' | 'decline'): string =>
+    snap.fingers[login]?.fields
+      .find(([k]) => k.replace(/\s+/g, '').replace(/\(.*\)/, '') === key)?.[1] ?? '';
+  const save = async (kind: 'aform' | 'dform', expr: string) => {
+    await ggsApi.setFormula(kind, expr).catch(() => {});
+    // 送っただけで信じない。サーバーの値を取り直して画面に反映する
+    if (login) ggsApi.finger(login).catch(() => {});
+  };
+
   return (
     <div className="ggs-pane">
       <div className="pane-head">
@@ -262,13 +280,10 @@ function GgsEngine({ snap }: { snap: GgsSnapshot }) {
           <p>1 手にかける時間を、残り時間と残り手数から決めます。時間内で
           読める深さまで読み、時間が来たらそこまでの答えで指します。</p>
         </div>
-        <div className="seg">
-          {[['slow', 'じっくり'], ['even', '均等'], ['fast', '速指し'],
-            ['depth', '深さ固定']].map(([v, label]) => (
-            <button key={v} className={pace === v ? 'active' : ''}
-                    onClick={() => setPace(v)}>{label}</button>
-          ))}
-        </div>
+        <Seg value={pace} onChange={setPace} options={[
+          ['slow', 'じっくり'], ['even', '均等'],
+          ['fast', '速指し'], ['depth', '深さ固定'],
+        ]} />
         <p className="hint">
           {pace === 'depth'
             ? '時間を見ずに上の深さまで読みます。持ち時間の管理は自分で行うことになります。'
@@ -295,16 +310,33 @@ function GgsEngine({ snap }: { snap: GgsSnapshot }) {
       <section className="pane-sec">
         <div className="pane-sec-head"><h3>定石</h3></div>
         {snap.engine.book_loaded ? (
-          <div className="seg">
-            <button className={book ? 'active' : ''} onClick={() => setBook(true)}>使う</button>
-            <button className={book ? '' : 'active'} onClick={() => setBook(false)}>使わない</button>
-          </div>
+          <Seg value={book ? 'on' : 'off'} onChange={(v) => setBook(v === 'on')}
+               options={[['on', '使う'], ['off', '使わない']] as const} />
         ) : (
           <p className="warn-line">
             <Icon name="alert" size={14} />
             ファイルがありません。左メニュー下の「設定」で指定してください。
           </p>
         )}
+      </section>
+
+      <section className="pane-sec">
+        <div className="pane-sec-head">
+          <h3>申し込みの扱い</h3>
+          <p>相手から対局を申し込まれたときに、自動で受ける / 断る条件です。
+          <b>サーバー側に残る</b>ので、アプリを閉じていても効きます。
+          受ける条件と断る条件の両方に当てはまるときは、断るほうが勝ちます。</p>
+        </div>
+        <div>
+          <label className="field">自動で受ける条件</label>
+          <FormulaEditor value={myForm('accept')}
+                         onSave={(s) => void save('aform', s)} />
+        </div>
+        <div>
+          <label className="field">自動で断る条件</label>
+          <FormulaEditor value={myForm('decline')}
+                         onSave={(s) => void save('dform', s)} />
+        </div>
       </section>
 
       <section className="pane-sec">
@@ -479,8 +511,60 @@ async function runAutoview(
     setInterval(() => { i++; onView(tabs[i % tabs.length]); }, 9000);
     return;
   }
+  if (tab === 'userdemo') {
+    // 画面確認用: プロフィールを通信せずに埋める。finger の生の並びをそのまま
+    // 置く (項目の分類・条件式の入れ子・2 列の折り方を確かめるため)。
+    // 条件式は実際に GGS で見かける形をそのまま使っている
+    // showUser は finger と history を取りに行き、未接続だと失敗して
+    // スナップショットを押し戻す。デモの値はその後に載せる
+    const demo = {
+      conn: 'online' as const, login: 'kuroobi',
+      users: [{ name: 'demo-scorpion', rating: 2245.8, raw: '2245.8@ 34.2' }],
+      fingers: {
+        'demo-scorpion': {
+          name: 'demo-scorpion',
+          raw: [],
+          fields: [
+            ['open', '+'],
+            ['accept', ': rand & discs>=14 & discs<=20 & mt1>=120'],
+            ['decline', ': !saved & (size!=8 | anti | mc!=? | (rand & (discs<14 | discs>20))'
+              + ' | (synchro & !rand) | mt1<60 | mm1!=0 | ml1==F | ot1>1800 | stored>0) | !rated'],
+            ['rated', '+'], ['play', '-'], ['stored (-)', ''],
+            ['name', '6-ply LOGISTELLO'], ['since', 'Thu 31 Jul 2026 08:39:06 MDT'],
+            ['idle', '00:01:12, on line : 5.13:32:08'], ['host', 'example.net'],
+            ['dblen', '100.0 = 2,862 / 2,862'],
+            ['level', '1'], ['trust', '+'], ['client', '+'], ['vt100', '-'], ['hear', '+'],
+            ['bell', '-r -p -w -n'], ['groups (+)', '_client'], ['notify (+)', '/os'],
+            ['channs (+)', ''], ['watch (-)', ''], ['track (-)', ''], ['ignore (-)', ''],
+          ] as [string, string][],
+        },
+      },
+    };
+    patch(demo);
+    showUser('demo-scorpion');
+    return;
+  }
   if (tab === 'user' && arg) {
     showUser(arg);
+    return;
+  }
+  if (tab === 'formdemo') {
+    // 画面確認用: 申し込みの条件を組む節を、通信せずに開く
+    patch({
+      conn: 'online', login: 'kuroobi',
+      fingers: {
+        kuroobi: {
+          name: 'kuroobi', raw: [],
+          fields: [
+            ['accept', ': rand & discs>=14 & mt1>=120'],
+            ['decline', ': !saved & (size!=8 | anti) | !rated'],
+          ] as [string, string][],
+        },
+      },
+    });
+    openEngine();
+    // 条件の節は下のほうにある。確認用なのでそこまで送る
+    setTimeout(() => document.querySelector('.ggs-pane')?.scrollTo(0, 99999), 400);
     return;
   }
   if (tab === 'engine') { openEngine(); return; }

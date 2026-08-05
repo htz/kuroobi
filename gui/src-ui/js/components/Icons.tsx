@@ -7,7 +7,7 @@
 export type IconName =
   | 'play' | 'study' | 'ggs-play' | 'ggs-lobby' | 'ggs-users' | 'ggs-chat'
   | 'ggs-standby' | 'ggs-console' | 'login' | 'logout' | 'cpu' | 'memory' | 'gear'
-  | 'refresh' | 'check' | 'alert'
+  | 'refresh' | 'check' | 'alert' | 'back' | 'close'
   | 'start' | 'stop' | 'newgame' | 'undo' | 'hint';
 
 /** 中身だけを持つ (svg 要素は Icon が用意する)。 */
@@ -123,6 +123,14 @@ const PATHS: Record<IconName, React.ReactNode> = {
     <path d="M3.1 12a10.6 10.6 0 0 1 17.8 0 10.6 10.6 0 0 1-17.8 0z" />
     <circle cx="12" cy="12" r="2.7" />
   </>,
+  // 戻る・閉じる。以前は生の「←」「×」を書いていて、他が全部この 24×24 の
+  // 線画なのにそこだけ書体が違って見えていた
+  back: <>
+    <path d="M14.5 5.5 8 12l6.5 6.5" />
+  </>,
+  close: <>
+    <path d="M6.5 6.5 17.5 17.5M17.5 6.5 6.5 17.5" />
+  </>,
   gear: <>
     <circle cx="12" cy="12" r="3" />
     <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 1 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 1 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06A1.65 1.65 0 0 0 9 4.6a1.65 1.65 0 0 0 1-1.51V3a2 2 0 1 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9c.14.36.4.66.73.86.3.18.65.28 1 .28H21a2 2 0 1 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z" />
@@ -142,5 +150,22 @@ export function Icon({ name, size = 17, className }: IconProps) {
          strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
       {PATHS[name]}
     </svg>
+  );
+}
+
+/// 絵だけのボタン (戻る・閉じる)。
+///
+/// **押せる領域を 32px 角で確保する。** 中の絵は 17px でも、指やポインタが
+/// 狙うのは枠のほう。以前は文字の「←」を padding だけで囲んでいて、26px 角の
+/// 当たりしか無く押しにくかった。
+///
+/// 絵だけなので、何のボタンかは title と aria-label で必ず言う。
+export function IconButton({ name, label, onClick, size = 17 }: {
+  name: IconName; label: string; onClick: () => void; size?: number;
+}) {
+  return (
+    <button className="iconbtn" title={label} aria-label={label} onClick={onClick}>
+      <Icon name={name} size={size} />
+    </button>
   );
 }

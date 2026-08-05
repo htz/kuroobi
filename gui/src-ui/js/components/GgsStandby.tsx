@@ -1,8 +1,10 @@
-// 待機モード。対局終了 → 間隔待ち → 自動申し込みの繰り返しと、
-// サーバー側の自動受諾条件 (aform) の設定。
-import { useState } from 'react';
+// 待機モード。対局終了 → 間隔待ち → 自動申し込みの繰り返し。
+// サーバー側の申し込み条件は今の値を見せるだけで、編集は「GGS の設定」。
+import { useEffect, useState } from 'react';
 import { ggsApi } from '../api';
+import { parseFormula } from '../ggs';
 import type { GgsCtx } from './GgsView';
+import { FormulaTree } from './GgsUsers';
 import { OpponentSelect } from './GgsLobby';
 
 const SB_TYPES: [string, string][] = [
@@ -109,7 +111,7 @@ export function GgsStandby({ ctx }: { ctx: GgsCtx }) {
           </p>
         </div>
 
-        <AformCard />
+        <AformCard ctx={ctx} />
       </div>
     </div>
   );
@@ -124,74 +126,44 @@ function Stat({ v, label, color }: { v: string; label: string; color?: string })
   );
 }
 
-/* ---------------- 自動受諾の条件 (サーバー側) ---------------- */
+/* ---------------- 申し込みの条件 (サーバー側) ---------------- */
 
-function AformCard() {
-  const [rated, setRated] = useState(true);
-  const [size8, setSize8] = useState(true);
-  const [sync, setSync] = useState(false);
-  const [noSaved, setNoSaved] = useState(true);
-  const [minRate, setMinRate] = useState(false);
-  const [minRateV, setMinRateV] = useState(2000);
-  const [minTime, setMinTime] = useState(false);
-  const [minTimeV, setMinTimeV] = useState(600);
+/// 条件そのものは「GGS の設定」で組む。ここでは今の値を見せて、そちらへ送る。
+/// 同じ設定を 2 か所で編集できるようにすると、どちらが本物か分からなくなる。
+function AformCard({ ctx }: { ctx: GgsCtx }) {
+  const { snap } = ctx;
+  useEffect(() => {
+    if (snap.login) ggsApi.finger(snap.login).catch(() => {});
+  }, [snap.login]);
+  const form = (key: 'accept' | 'decline'): string =>
+    (snap.fingers[snap.login]?.fields
+      .find(([k]) => k.replace(/\s+/g, '').replace(/\(.*\)/, '') === key)?.[1] ?? '')
+      .replace(/^\s*:\s*/, '').trim();
 
-  const build = (): string => {
-    const parts = [];
-    if (rated) parts.push('rated');
-    if (size8) parts.push('size=8');
-    if (sync) parts.push('synchro');
-    if (noSaved) parts.push('!saved');
-    if (minRate) parts.push(`or>=${minRateV}`);
-    if (minTime) parts.push(`mt1>=${minTimeV}`);
-    return parts.join('&');
-  };
-
-  const check = (label: React.ReactNode, on: boolean, set: (b: boolean) => void) => (
-    <label className="check">
-      <input type="checkbox" checked={on} onChange={(e) => set(e.target.checked)} />
-      {label}
-    </label>
+  const row = (label: string, src: string) => (
+    <div className="kv-row">
+      <div className="k">{label}</div>
+      <div className="v">
+        {src ? <FormulaTree node={parseFormula(src)} top /> : '指定なし'}
+      </div>
+    </div>
   );
 
   return (
     <div className="sec">
-      <div className="sec-head"><h2>自動で受ける条件 (サーバー側)</h2></div>
+      <div className="sec-head"><h2>申し込みの条件 (サーバー側)</h2></div>
       <p className="hint">
         アプリを閉じてもサーバー側で有効な条件です。待機モードの保険になります。
       </p>
-      <div className="checks">
-        {check('レート戦のみ', rated, setRated)}
-        {check('8x8 のみ', size8, setSize8)}
-        {check('同期対局のみ', sync, setSync)}
-        {check('中断対局は除く', noSaved, setNoSaved)}
-        <label className="check">
-          <input type="checkbox" checked={minRate}
-                 onChange={(e) => setMinRate(e.target.checked)} />
-          相手レート
-          <input type="number" className="inline-num" value={minRateV}
-                 onChange={(e) => setMinRateV(+e.target.value)} />
-          以上
-        </label>
-        <label className="check">
-          <input type="checkbox" checked={minTime}
-                 onChange={(e) => setMinTime(e.target.checked)} />
-          持ち時間
-          <select className="inline-num" value={minTimeV}
-                  onChange={(e) => setMinTimeV(+e.target.value)}>
-            <option value={300}>5 分</option>
-            <option value={600}>10 分</option>
-            <option value={900}>15 分</option>
-          </select>
-          以上
-        </label>
+      <div className="kv-grid">
+        {row('自動で受ける条件', form('accept'))}
+        {row('自動で断る条件', form('decline'))}
       </div>
       <div className="row actions">
-        <button className="btn fix"
-                onClick={() => void ggsApi.setFormula('aform', '')}>解除</button>
         <span className="spacer" />
-        <button className="btn primary fix"
-                onClick={() => void ggsApi.setFormula('aform', build())}>条件を設定</button>
+        <button className="btn fix" onClick={() => ctx.showView('ggs-engine')}>
+          条件を変える
+        </button>
       </div>
     </div>
   );

@@ -1,7 +1,7 @@
 // GGS の状態と共通ヘルパ。バックエンド (gui/src/ggs.rs) が Tauri イベント
 // "ggs" で流すスナップショットを購読し、画面はそこから導くだけにする。
 
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { ggsApi, jsLog, onGgsSnapshot } from './api';
 import type { GgsSnapshot, MatchView, PlayerView } from './types';
 
@@ -9,6 +9,10 @@ import type { GgsSnapshot, MatchView, PlayerView } from './types';
 
 export function useGgs() {
   const [snap, setSnap] = useState<GgsSnapshot | null>(null);
+  // 画面確認用のデモを貼ったか。貼った後はバックエンドの押し戻しを無視する。
+  // 未接続だとサーバー側は「未接続」を繰り返し流してくるので、これが無いと
+  // デモと実イベントが取り合って画面が点滅する。
+  const demo = useRef(false);
 
   useEffect(() => {
     let alive = true;
@@ -16,7 +20,7 @@ export function useGgs() {
     void (async () => {
       try {
         unlisten = await onGgsSnapshot((s) => {
-          if (alive) setSnap(s);
+          if (alive && !demo.current) setSnap(s);
         });
         const s = await ggsApi.snapshot();
         if (alive) setSnap((prev) => prev ?? s);
@@ -30,8 +34,10 @@ export function useGgs() {
     };
   }, []);
 
-  // 画面確認用 (KUROOBI_GGS_AUTOVIEW のデモ): 次の実イベントで上書きされる
+  /// 画面確認用 (KUROOBI_GGS_AUTOVIEW のデモ)。**貼ったらそのまま残る** —
+  /// 見た目を確かめるための経路なので、実イベントに流されると用をなさない。
   const patch = useCallback((p: Partial<GgsSnapshot>) => {
+    demo.current = true;
     setSnap((prev) => (prev ? { ...prev, ...p } : prev));
   }, []);
 
@@ -215,7 +221,9 @@ const FORMULA_WORDS: [RegExp, string][] = [
   [/\bor\b/g, '相手のレート'],
 ];
 
-export function readFormula(src: string): string {
+/// 葉 1 つ (`size!=8`、`!saved`) を日本語にする。
+/// 木を保ったまま葉だけ訳すので、`&` `|` はここでは扱わない。
+function readAtom(src: string): string {
   let t = ` ${src} `;
   for (const [re, word] of FORMULA_WORDS) t = t.replace(re, word);
   return t
@@ -224,9 +232,148 @@ export function readFormula(src: string): string {
     .replace(/!=\s*\?/g, ' がおまかせでない')                  // mc!=?
     .replace(/!=/g, ' ≠ ')                                    // その他の比較
     .replace(/!\s*([^\s()!]+)/g, '$1 ではない')                // !saved → 中断対局 ではない
-    .replace(/\s*&\s*/g, ' かつ ')
-    .replace(/\s*\|\s*/g, ' または ')
     .replace(/\s*(<=|>=|<|>)\s*/g, ' $1 ')
     .replace(/\s+/g, ' ')
     .trim();
 }
+
+/** 条件式の木。`all` = すべて満たす (&)、`any` = どれか (|)。 */
+export type Formula =
+  | { kind: 'all' | 'any'; kids: Formula[] }
+  | { kind: 'atom'; text: string; src: string };
+
+/* ---- 条件式を組み立てるための語彙 ---- */
+
+/** 条件に使える変数。編集画面は入力の形をここの `type` で決める。 */
+export interface FormulaVar {
+  name: string;
+  label: string;
+  /** bool = そのもの / num = 比較と値 / color = 黒白おまかせ。 */
+  type: 'bool' | 'num' | 'color';
+  /** 数値の単位 (画面に添えるだけ)。 */
+  unit?: string;
+  /** 数値の既定値。 */
+  def?: number;
+}
+
+/// 使える変数の一覧。GGS の `tell /os help formula` に載っているもののうち、
+/// 対局の申し込みを判断するのに意味があるものだけ。並び順が画面の並び順。
+export const FORMULA_VARS: FormulaVar[] = [
+  { name: 'rated', label: 'レート戦', type: 'bool' },
+  { name: 'rand', label: 'ランダム開局', type: 'bool' },
+  { name: 'synchro', label: '同期対局', type: 'bool' },
+  { name: 'saved', label: '中断対局', type: 'bool' },
+  { name: 'komi', label: 'コミあり', type: 'bool' },
+  { name: 'anti', label: 'アンチ (石が少ない方が勝ち)', type: 'bool' },
+  { name: 'ml1', label: '自分は時間切れ負け', type: 'bool' },
+  { name: 'ol1', label: '相手は時間切れ負け', type: 'bool' },
+  { name: 'size', label: '盤の大きさ', type: 'num', def: 8 },
+  { name: 'discs', label: '開局の石数', type: 'num', def: 16 },
+  { name: 'mr', label: '自分のレート', type: 'num', def: 2000 },
+  { name: 'or', label: '相手のレート', type: 'num', def: 2000 },
+  { name: 'mt1', label: '自分の持ち時間', type: 'num', unit: '秒', def: 600 },
+  { name: 'ot1', label: '相手の持ち時間', type: 'num', unit: '秒', def: 600 },
+  { name: 'mt2', label: '自分の加算', type: 'num', unit: '秒', def: 0 },
+  { name: 'ot2', label: '相手の加算', type: 'num', unit: '秒', def: 0 },
+  { name: 'mt3', label: '自分の延長', type: 'num', unit: '秒', def: 0 },
+  { name: 'ot3', label: '相手の延長', type: 'num', unit: '秒', def: 0 },
+  { name: 'mm1', label: '自分の初期手数', type: 'num', def: 0 },
+  { name: 'om1', label: '相手の初期手数', type: 'num', def: 0 },
+  { name: 'stored', label: 'この相手との中断対局数', type: 'num', def: 0 },
+  { name: 'playing', label: '自分の対局数', type: 'num', def: 0 },
+  { name: 'mc', label: '自分の色', type: 'color' },
+  { name: 'oc', label: '相手の色', type: 'color' },
+];
+
+export const FORMULA_OPS = ['=', '≠', '<', '>', '≤', '≥'] as const;
+export type FormulaOp = (typeof FORMULA_OPS)[number];
+
+/** 画面の比較記号 → GGS の記法。 */
+const OP_SRC: Record<FormulaOp, string> = {
+  '=': '=', '≠': '!=', '<': '<', '>': '>', '≤': '<=', '≥': '>=',
+};
+const SRC_OP: Record<string, FormulaOp> = {
+  '=': '=', '==': '=', '!=': '≠', '<': '<', '>': '>', '<=': '≤', '>=': '≥',
+};
+
+/** 編集中の 1 条件。木のまま持ち、保存するときだけ文字列にする。 */
+export type Cond =
+  | { kind: 'all' | 'any'; kids: Cond[] }
+  | { kind: 'atom'; name: string; op: FormulaOp; val: string; neg: boolean };
+
+export const varOf = (name: string): FormulaVar | undefined =>
+  FORMULA_VARS.find((v) => v.name === name);
+
+/// 葉 1 つを編集できる形に読み解く。読めない綴りは `rated` 扱いに倒さず、
+/// 名前をそのまま残す (保存し直したときに他人の設定を壊さないため)。
+function parseAtomSrc(src: string): Cond {
+  const m = /^\s*(!?)\s*([A-Za-z][A-Za-z0-9]*)\s*(==|!=|<=|>=|<|>|=)?\s*(.*?)\s*$/.exec(src);
+  if (!m) return { kind: 'atom', name: src.trim(), op: '=', val: '', neg: false };
+  const [, bang, name, op, rawVal] = m;
+  // `ml1==F` / `ml1==T` は真偽の書き方。比較として持つと画面が不自然になる
+  if (op === '==' && /^[TF]$/.test(rawVal)) {
+    return { kind: 'atom', name, op: '=', val: '', neg: rawVal === 'F' };
+  }
+  if (!op) return { kind: 'atom', name, op: '=', val: '', neg: bang === '!' };
+  return { kind: 'atom', name, op: SRC_OP[op] ?? '=', val: rawVal, neg: bang === '!' };
+}
+
+/** 条件式を編集できる木にする。 */
+export function parseCond(src: string): Cond | null {
+  const body = src.replace(/^\s*:\s*/, '').trim();
+  if (!body) return null;
+  const walk = (n: Formula): Cond =>
+    n.kind === 'atom' ? parseAtomSrc(n.src) : { kind: n.kind, kids: n.kids.map(walk) };
+  return walk(parseFormula(body));
+}
+
+/** 編集した木を GGS の記法に戻す。空の束は落とす。 */
+export function condToSrc(c: Cond): string {
+  if (c.kind === 'atom') {
+    const v = varOf(c.name);
+    if (!v || v.type === 'bool') return (c.neg ? '!' : '') + c.name;
+    return `${c.name}${OP_SRC[c.op]}${c.val}`;
+  }
+  const parts = c.kids.map(condToSrc).filter(Boolean);
+  if (!parts.length) return '';
+  if (parts.length === 1) return parts[0];
+  const sep = c.kind === 'all' ? '&' : '|';
+  // `&` のほうが強いので、`|` の束を `&` の中へ入れるときだけ括弧が要る
+  return parts.map((p) => (c.kind === 'all' && p.includes('|') ? `(${p})` : p)).join(sep);
+}
+
+/// 条件式を木のまま取り出す。
+///
+/// もとは `!saved & (size!=8 | anti | …) | !rated` のような論理式で、**構造が
+/// そのまま意味**になっている。1 本の文に潰すと「かつ」「または」が入り混じった
+/// 5 行の呪文になり、括弧の対応を目で追う羽目になる。木で返して、括弧の代わりに
+/// 入れ子で見せる。
+///
+/// `&` が `|` より強い (GGS の `tell /os help formula` に従う)。
+export function parseFormula(src: string): Formula {
+  // 空白だけの断片を落とす。落とさないと `& (` の間の " " を葉として食い、
+  // 続く括弧が束ねられずに空の札が出る
+  const toks = (src.match(/\(|\)|&|\||[^()&|]+/g) ?? [])
+    .map((t) => t.trim()).filter(Boolean);
+  let i = 0;
+  const atom = (): Formula => {
+    if (toks[i] === '(') {
+      i++;
+      const inner = or();
+      if (toks[i] === ')') i++;
+      return inner;
+    }
+    const raw = toks[i++] ?? '';
+    return { kind: 'atom', text: readAtom(raw), src: raw };
+  };
+  const join = (kind: 'all' | 'any', sep: string, next: () => Formula): Formula => {
+    const kids = [next()];
+    while (toks[i] === sep) { i++; kids.push(next()); }
+    // 1 つしかないなら束ねない (「すべて満たす: 1 件」を出さない)
+    return kids.length === 1 ? kids[0] : { kind, kids };
+  };
+  const and = () => join('all', '&', atom);
+  const or = () => join('any', '|', and);
+  return or();
+}
+

@@ -6,6 +6,7 @@ import type { GameResult, GgsSnapshot, MatchView } from '../types';
 import { countDiscs, ggsMoveToIndex, gtypeLabel, kifuText, relTime, useClocks } from '../ggs';
 import type { ClockSide, ClockView } from '../ggs';
 import { Board } from './Board';
+import { IconButton } from './Icons';
 import type { GgsCtx } from './GgsView';
 
 export function GgsPlay({ ctx }: { ctx: GgsCtx }) {
@@ -79,11 +80,10 @@ export function GgsPlay({ ctx }: { ctx: GgsCtx }) {
                   <span className="thread-name">{names}</span>
                   {thinking && <span className="thinking-dot" />}
                   {over && (
-                    <button className="btn icon ghost close-x" title="一覧から閉じる"
-                            onClick={(e) => {
-                              e.stopPropagation();
-                              void ggsApi.closeMatch(m.base || m.id);
-                            }}>×</button>
+                    <span className="close-x" onClick={(e) => e.stopPropagation()}>
+                      <IconButton name="close" label="一覧から閉じる" size={14}
+                                  onClick={() => void ggsApi.closeMatch(m.base || m.id)} />
+                    </span>
                   )}
                 </div>
                 <div className="thread-last">
