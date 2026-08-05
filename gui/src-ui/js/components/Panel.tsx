@@ -125,7 +125,6 @@ export function ControlBar({ g, onStart }: { g: PanelProps['g']; onStart: () => 
               onClick={() => g.setAutoHint(!g.autoHint)}>
         <Icon name="hint" size={15} /><span className="lbl">評価値</span>
       </button>
-      <span className="spacer" />
       <EngineStatus g={g} />
     </div>
   );

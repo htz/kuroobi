@@ -110,10 +110,15 @@
   .controlbar { flex: none; display: flex; align-items: center; gap: 4px;
                 background: var(--card); border: 1px solid var(--border);
                 border-radius: 10px; padding: 5px 8px; min-height: 40px;
-                overflow: hidden; }
+                /* 入り切らなければ折り返す。ラベルを畳む幅の段は下で決めて
+                   いるが、数字 (nodes / nps) の幅は桁で変わるので段だけでは
+                   読み切れない。溢れたら切るのではなく次の行へ送る */
+                flex-wrap: wrap; row-gap: 2px; }
   .controlbar .hsep { width: 1px; align-self: stretch; background: var(--border);
                       margin: 2px 7px; }
-  .controlbar .spacer { flex: 1; min-width: 8px; }
+  /* 状態は右端へ。折り返したときも右に付くよう、詰め物ではなく余白で寄せる
+     (詰め物だと 1 行目に居座って、状態が次の行の左端に来てしまう) */
+  .controlbar .cb-stat { margin-left: auto; }
   /* 帯のボタン。既定は地なしの軽いもので、押せることは輪郭でなく
      ホバーで示す。並びの中で目を引かせたいものだけ下で塗る */
   .hbtn { display: inline-flex; align-items: center; gap: 6px; white-space: nowrap;
