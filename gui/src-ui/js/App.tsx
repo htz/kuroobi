@@ -6,7 +6,7 @@ import type { GameView } from './types';
 import { api, ggsApi, jsLog, type ActivityView } from './api';
 import { useActivity, useEngineSettings, useEngineTurn, useGraph, useHints, useLearnLog, useStartGame } from './engine';
 import { fmtSecs } from './ggs';
-import { cellsOf, connOf, evalsOf, ggsPlaying, movesOf, navBadges } from './adapt';
+import { cellsOf, connOf, evalsOf, ggsPlaying, movesOf, navBadges, sqName } from './adapt';
 import { AppFrame, Dock, Main, Section, StatusBar, StatusStat, Toolbar } from './components/layout';
 import { GgsScreen } from './GgsScreens';
 import { Confirm, PasteKifu, Settings } from './Dialogs';
@@ -74,18 +74,6 @@ export function App() {
   const conn = connOf(ggs.snap?.conn);
   const book = useBookBrowse(isBook);
   const learnLog = useLearnLog(tab === '学習' && !isGgs && !isBook, !!cpu?.learn);
-
-  // ⌘B で定石へ。盤の上に置く操作ではない (行き先なので、左の並びと同じもの)
-  useEffect(() => {
-    const onKey = (e: KeyboardEvent) => {
-      if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === 'b') {
-        e.preventDefault();
-        setNav('book');
-      }
-    };
-    window.addEventListener('keydown', onKey);
-    return () => window.removeEventListener('keydown', onKey);
-  }, [setNav]);
 
   const [paste, setPaste] = useState(false);
   const [settings, setSettings] = useState(false);
@@ -171,6 +159,48 @@ export function App() {
     [v, g.moveSource, graph.values]);
   const evals = g.autoHint ? evalsOf(g.hints) : undefined;
 
+  /* キー操作。
+   *
+   * 文字を打っている最中 (GGS のチャット・コンソール・棋譜の貼り付け) と、
+   * 覆いが出ている間は何もしない — 打った文字が画面を切り替えてしまう。
+   * 覆いの中の操作は覆い自身が持つ (Esc など)。 */
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      const t = e.target as HTMLElement | null;
+      if (t && (t.tagName === 'INPUT' || t.tagName === 'TEXTAREA' || t.isContentEditable)) return;
+      if (settings || paste || ask) return;
+      const cmd = e.metaKey || e.ctrlKey;
+      const key = e.key.toLowerCase();
+      if (cmd && key === 'b') { e.preventDefault(); setNav('book'); return; }
+      if (cmd && key === 'n') { e.preventDefault(); if (!g.thinking) void g.newGame(); return; }
+      if (cmd && key === 'z') {
+        e.preventDefault();
+        if (!g.thinking && v && v.move_count > 0) void g.undo();
+        return;
+      }
+      // 手順を行き来するのは検討と定石。対局中に矢印で戻せると、打った手が
+      // 消えたのか戻したのか分からなくなる
+      if (isBook) {
+        if (e.key === 'ArrowLeft') { e.preventDefault(); book.back(); }
+        if (e.key === 'ArrowUp') { e.preventDefault(); book.reset(); }
+        // 右は「いちばん値の高い手へ進む」。盤を見ながら本筋をなぞれる
+        if (e.key === 'ArrowRight' && book.node?.moves.length) {
+          e.preventDefault();
+          book.push(book.node.moves[0].pos);
+        }
+        return;
+      }
+      if (!study || !v) return;
+      if (e.key === 'ArrowLeft') { e.preventDefault(); void g.jumpTo(cmd ? 0 : Math.max(0, v.cursor - 1)); }
+      if (e.key === 'ArrowRight') {
+        e.preventDefault();
+        void g.jumpTo(cmd ? v.moves.length : Math.min(v.moves.length, v.cursor + 1));
+      }
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [setNav, settings, paste, ask, isBook, study, book, g, v]);
+
   const toasts: Toast[] = g.toasts.map(t => ({ id: String(t.id), tone: t.tone, text: t.text }));
 
   const over = v?.over ?? false;
@@ -230,6 +260,14 @@ export function App() {
                       onClick={() => void g.jumpTo(v!.cursor + 1)}>進む</Button>
               <Button disabled={!v || v.cursor >= v.moves.length}
                       onClick={() => void g.jumpTo(v!.moves.length)}>最後へ</Button>
+              {/* いまの局面から定石を辿る。ここが無いと、検討で見ている手順を
+                  初期局面から入れ直すしかない (打ち直しでしか行けない) */}
+              <Button disabled={!g.hasBook || !v}
+                      onClick={() => {
+                        book.open(v!.moves.slice(0, v!.cursor)
+                          .filter((m): m is number => m != null).map(sqName).join(''));
+                        setNav('book');
+                      }}>定石で開く</Button>
             </>
           ) : (
             <>
