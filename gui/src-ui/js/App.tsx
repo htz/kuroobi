@@ -241,6 +241,13 @@ export function App() {
             <>
               <Button disabled={!book.line.length} onClick={book.back}>戻る</Button>
               <Button disabled={!book.line.length} onClick={book.reset}>最初へ</Button>
+              {/* 定石で見つけた手順をそのまま検討へ。定石の先を自分で読ませる
+                  にはこの向きの道が要る (行きだけあって帰りが無かった) */}
+              <Button disabled={!book.line.length}
+                      onClick={() => {
+                        setNav('study');
+                        void loadFromText(book.line.map(sqName).join(''));
+                      }}>検討で開く</Button>
               <span style={{ marginLeft: 'var(--sp-3)', fontSize: 'var(--fs-6)', color: 'var(--sub)' }}>
                 {book.line.length ? book.line.length + ' 手目' : '初期局面'}
               </span>
