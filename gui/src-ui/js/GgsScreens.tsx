@@ -16,6 +16,7 @@ import {
   type Cond, type Match, type NavId,
 } from './components/ggs';
 import { Board, type Cell } from './components/board';
+import { RateChart, ResultRow } from './components/data';
 import { flipped, type Prefs } from './prefs';
 import { logLinesOf } from './adapt';
 
@@ -25,8 +26,10 @@ import { logLinesOf } from './adapt';
  * ログイン画面だけ。残りは順に置き換えていく。
  */
 
-export function GgsScreen({ nav, snap, onNav, prefs }: {
+export function GgsScreen({ nav, snap, onNav, prefs, onStudy }: {
   nav: NavId; snap: GgsSnapshot | null; onNav: (id: NavId) => void; prefs: Prefs;
+  /** 終わった対局を検討で開く。 */
+  onStudy: (text: string) => void;
 }) {
   if (nav === 'ggs-login') return <GgsLogin />;
   if (!snap) return <EmptyState title="GGS に接続していません" />;
@@ -35,6 +38,7 @@ export function GgsScreen({ nav, snap, onNav, prefs }: {
     case 'ggs-play': return <GgsPlay snap={snap} onNav={onNav} prefs={prefs} />;
     case 'ggs-lobby': return <GgsLobby snap={snap} onNav={onNav} />;
     case 'ggs-players': return <GgsUsers snap={snap} onNav={onNav} />;
+    case 'ggs-results': return <GgsResults snap={snap} onStudy={onStudy} />;
     case 'ggs-chat': return <GgsChat snap={snap} />;
     case 'ggs-standby': return <GgsStandby snap={snap} onNav={onNav} />;
     case 'ggs-console': return <GgsConsole snap={snap} />;
@@ -795,6 +799,65 @@ function FormulaField({ label, src, onSave }: { label: string; src: string; onSa
                      onSave={onSave} />
     </Field>
   );
+}
+
+/* ---------------- 対局結果 ----------------
+ *
+ * 終わった対局はバックエンドが 200 局ぶん控えていて、起動し直しても残る。
+ * これまで見る場所が無く、**溜まるだけで一度も読めなかった**。
+ *
+ * レートの推移を上に、対局の一覧を下に置く。行を押すと検討で開く —
+ * 「負けた対局を後から読む」がこの画面の用事なので、そこへ行けないと
+ * 一覧を見せる意味が薄い。
+ */
+function GgsResults({ snap, onStudy }: { snap: GgsSnapshot; onStudy: (text: string) => void }) {
+  const [gtype, setGtype] = useState('all');
+  // 形式ごとにレートのプールが違うので、混ぜて折れ線にすると嘘になる
+  const kinds = [...new Set(snap.results.map((r) => baseType(r.base)))].filter(Boolean);
+  const rows = snap.results.filter((r) => gtype === 'all' || baseType(r.base) === gtype);
+  // グラフは古い順。results は新しい順に積まれている
+  const rates = rows.filter((r) => r.my_rating != null).map((r) => r.my_rating as number).reverse();
+
+  return (
+    <div className="k-scroll" style={{ flex: 1, minHeight: 0, padding: 'var(--sp-4) var(--sp-4) 0' }}>
+      <Section title="レートの推移"
+               aside={kinds.length > 1 ? (
+                 <Segmented size="chip" value={gtype} onChange={setGtype}
+                            options={[{ value: 'all', label: 'すべて' },
+                                      ...kinds.map((k) => ({ value: k, label: gtypeLabel(k) }))]} />
+               ) : undefined}>
+        {/* 本文の幅いっぱいに置くので viewBox もそれに合わせる
+            (300 のままだと横に引き伸ばされて線の太さが崩れる) */}
+        <RateChart points={rates} width={800} height={120} />
+      </Section>
+
+      <Section title="終わった対局" aside={<span>{rows.length}</span>}>
+        {!rows.length && <Empty>まだ記録がありません。</Empty>}
+        {rows.map((r) => (
+          <ResultRow key={r.id + r.seq} opponent={r.opp}
+                     win={(r.my_diff ?? 0) > 0} draw={r.my_diff === 0}
+                     discs={r.my_diff ?? 0} when={fmtDay(r.at)}
+                     note={gtype === 'all' ? gtypeLabel(baseType(r.base)) : undefined}
+                     rating={r.my_rating}
+                     // GGF なら開始局面も入っている (抽選開局の対局が戻る)
+                     onClick={() => onStudy(r.ggf || r.kifu)} />
+        ))}
+      </Section>
+    </div>
+  );
+}
+
+/** 対局の種別 ("s8r16.2024..." のような id から "s8r16" だけ取る)。 */
+const baseType = (base: string) => base.split('.')[0] ?? '';
+
+/** 終わった日。今日なら時刻だけ。 */
+function fmtDay(secs: number): string {
+  if (!secs) return '';
+  const d = new Date(secs * 1000);
+  const now = new Date();
+  const p2 = (n: number) => String(n).padStart(2, '0');
+  const same = d.toDateString() === now.toDateString();
+  return same ? `${p2(d.getHours())}:${p2(d.getMinutes())}` : `${d.getMonth() + 1}/${p2(d.getDate())}`;
 }
 
 /* ---------------- プレイヤー ----------------

@@ -8,7 +8,7 @@ export type IconName =
   | 'play' | 'study' | 'ggs-play' | 'ggs-lobby' | 'ggs-users' | 'ggs-chat'
   | 'ggs-standby' | 'ggs-console' | 'login' | 'logout' | 'cpu' | 'memory' | 'gear'
   | 'refresh' | 'check' | 'alert' | 'back' | 'close' | 'panel'
-  | 'start' | 'stop' | 'newgame' | 'undo' | 'hint' | 'book';
+  | 'start' | 'stop' | 'newgame' | 'undo' | 'hint' | 'book' | 'results';
 
 /** 中身だけを持つ (svg 要素は Icon が用意する)。 */
 const PATHS: Record<IconName, React.ReactNode> = {
@@ -141,6 +141,12 @@ const PATHS: Record<IconName, React.ReactNode> = {
   book: <>
     <path d="M12 6.6C10.4 5.2 8.2 4.6 4.5 4.6v12.6c3.7 0 5.9.6 7.5 2 1.6-1.4 3.8-2 7.5-2V4.6c-3.7 0-5.9.6-7.5 2z" />
     <path d="M12 6.6v14" />
+  </>,
+  // 結果: 高さの違う 3 本。成績の並びを表す。
+  // 時計 (ggs-standby) とも本 (book) とも別の絵にする
+  results: <>
+    <path d="M4.5 20.5V13M12 20.5V6.5M19.5 20.5v-5" />
+    <path d="M2.8 20.5h18.4" />
   </>,
   gear: <>
     <circle cx="12" cy="12" r="3" />

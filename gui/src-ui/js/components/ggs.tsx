@@ -21,7 +21,7 @@ import logo from '../../assets/kuroobi.svg?raw';
 
 export type NavId =
   | 'play' | 'study' | 'book'
-  | 'ggs-play' | 'ggs-lobby' | 'ggs-players' | 'ggs-chat' | 'ggs-standby' | 'ggs-console' | 'ggs-settings'
+  | 'ggs-play' | 'ggs-lobby' | 'ggs-players' | 'ggs-results' | 'ggs-chat' | 'ggs-standby' | 'ggs-console' | 'ggs-settings'
   | 'ggs-login';
 
 export type NavItem = {
@@ -52,6 +52,7 @@ export function ggsNav(conn: Conn, badges?: Partial<Record<NavId, Pick<NavItem, 
     { id: 'ggs-play', label: '対局・観戦', icon: 'ggs-play' },
     { id: 'ggs-lobby', label: 'ロビー', icon: 'ggs-lobby' },
     { id: 'ggs-players', label: 'プレイヤー', icon: 'ggs-users' },
+    { id: 'ggs-results', label: '結果', icon: 'results' },
     { id: 'ggs-chat', label: 'チャット', icon: 'ggs-chat' },
     { id: 'ggs-standby', label: '待機モード', icon: 'ggs-standby' },
     { id: 'ggs-console', label: 'コンソール', icon: 'ggs-console' },

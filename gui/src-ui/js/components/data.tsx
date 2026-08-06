@@ -288,7 +288,13 @@ export function PlayerRow({ color, name, rate, dev, meta, clock, active, discs, 
  * 広すぎると svg 全体が縮小され、font-size 10 が 6px になって読めなくなる
  * （トークンの下限は --fs-7 = 10px）。このグラフはドック幅 268 を前提に 300。
  */
-export function RateChart({ points, height = 74 }: { points: number[]; height?: number }) {
+export function RateChart({ points, height = 74, width = 300 }: {
+  points: number[];
+  height?: number;
+  /** viewBox の幅。**器の実寸に合わせる** — 300 のまま広い器へ置くと、
+   *  preserveAspectRatio="none" で横に引き伸ばされて線の太さが崩れる。 */
+  width?: number;
+}) {
   // 新規プレイヤーや初対局前は必ず空。点が 1 個だと線が引けない
   if (points.length < 2) {
     return (
@@ -297,7 +303,7 @@ export function RateChart({ points, height = 74 }: { points: number[]; height?: 
       </div>
     );
   }
-  const w = 300, pad = 8;
+  const w = width, pad = 8;
   const min = Math.min(...points), max = Math.max(...points), span = Math.max(1, max - min);
   const y = (p: number) => height - pad - ((p - min) / span) * (height - pad * 2 - 4);
   const xy = points.map((p, i) => [(i / (points.length - 1)) * w, y(p)] as const);
@@ -315,18 +321,57 @@ export function RateChart({ points, height = 74 }: { points: number[]; height?: 
   );
 }
 
-export function ResultRow({ win, opponent, discs, delta }: { win: boolean; opponent: string; discs: number; delta: number }) {
-  return (
-    <div style={{
-      display: 'flex', gap: 'var(--sp-2)', height: 'var(--h-row)', alignItems: 'center',
-      fontSize: 'var(--fs-5)', borderBottom: '1px solid var(--border-weak)',
-    }}>
-      <span style={{ width: 24, color: win ? 'var(--ok)' : 'var(--bad)' }}>{win ? '勝' : '負'}</span>
-      <span style={{ flex: 1 }}>{opponent}</span>
-      <span style={{ width: 40, textAlign: 'right', color: 'var(--sub)' }}>{discs > 0 ? '+' + discs : discs}</span>
-      <span style={{ width: 36, textAlign: 'right', color: delta > 0 ? 'var(--ok)' : 'var(--bad)' }}>{delta > 0 ? '+' + delta : delta}</span>
-    </div>
-  );
+export function ResultRow({ win, draw, opponent, discs, when, note, rating, onClick }: {
+  win: boolean;
+  /** 引き分け。勝/負の 2 値に丸めると石差 0 の対局が「負」になる */
+  draw?: boolean;
+  opponent: string;
+  discs: number;
+  /** 終わった時刻 (表示用の文字列)。 */
+  when?: string;
+  /** 対局の形式など、名前の次に置く補足。 */
+  note?: string;
+  /** 対局後の自分のレート。 */
+  rating?: number | null;
+  onClick?: () => void;
+}) {
+  const body = <>
+    <span style={{ width: 24, flex: 'none', color: draw ? 'var(--sub)' : win ? 'var(--ok)' : 'var(--bad)' }}>
+      {draw ? '分' : win ? '勝' : '負'}
+    </span>
+    <span style={{ flex: 1, minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+      {opponent}
+    </span>
+    {note && (
+      <span style={{ width: 'var(--w-gtype)', flex: 'none', color: 'var(--sub)',
+                     fontSize: 'var(--fs-6)', overflow: 'hidden', textOverflow: 'ellipsis',
+                     whiteSpace: 'nowrap' }}>{note}</span>
+    )}
+    <span style={{ width: 44, flex: 'none', textAlign: 'right', color: 'var(--sub)',
+                   fontVariantNumeric: 'tabular-nums' }}>
+      {discs > 0 ? '+' + discs : discs}
+    </span>
+    {rating != null && (
+      <span style={{ width: 60, flex: 'none', textAlign: 'right', color: 'var(--sub)',
+                     fontSize: 'var(--fs-6)', fontVariantNumeric: 'tabular-nums' }}>
+        {rating.toFixed(1)}
+      </span>
+    )}
+    {when && (
+      <span style={{ width: 64, flex: 'none', textAlign: 'right', color: 'var(--sub)',
+                     fontSize: 'var(--fs-6)', fontVariantNumeric: 'tabular-nums' }}>{when}</span>
+    )}
+  </>;
+  const style: React.CSSProperties = {
+    display: 'flex', gap: 'var(--sp-2)', height: 'var(--h-field)', alignItems: 'center',
+    width: '100%', fontSize: 'var(--fs-5)', borderBottom: '1px solid var(--border-weak)',
+    padding: '0 var(--sp-2)', textAlign: 'left', color: 'var(--text)',
+  };
+  // 押せないときは span。button のままだと Tab で回ってくるのに何も起きない
+  return onClick
+    ? <button type="button" className="k-row" onClick={onClick} title="検討で開く"
+              style={{ ...style, border: 0, background: 'transparent', cursor: 'pointer' }}>{body}</button>
+    : <div style={style}>{body}</div>;
 }
 
 export { Badge, Dot };

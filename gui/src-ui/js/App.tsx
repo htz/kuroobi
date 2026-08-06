@@ -328,7 +328,8 @@ export function App() {
           )}
         </Toolbar>
 
-        {isGgs ? <GgsScreen nav={nav} snap={ggs.snap} onNav={setNav} prefs={prefs} />
+        {isGgs ? <GgsScreen nav={nav} snap={ggs.snap} onNav={setNav} prefs={prefs}
+                       onStudy={(text) => { setNav('study'); void loadFromText(text); }} />
          : isBook ? (
           <BookPane b={book} coords={prefs.coords} grain={prefs.grain}
                     flip={flipped(prefs.facing, '')} />
