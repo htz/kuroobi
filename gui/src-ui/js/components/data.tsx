@@ -35,7 +35,7 @@ export function KifuTable({ moves, current, onSelect }: { moves: Move[]; current
     else if (bottom > b.scrollTop + b.clientHeight) b.scrollTop = bottom - b.clientHeight;
   }, [current, moves.length]);
   return (
-    <div style={{ display: 'flex', flexDirection: 'column', minHeight: 0 }}>
+    <div style={{ flex: 1, display: 'flex', flexDirection: 'column', minHeight: 0 }}>
       <div style={{
         display: 'flex', gap: 'var(--sp-2)', height: 'var(--h-head)', flex: 'none', alignItems: 'center',
         padding: '0 var(--sp-3)', fontSize: 'var(--fs-7)', fontWeight: 600, letterSpacing: '.08em',

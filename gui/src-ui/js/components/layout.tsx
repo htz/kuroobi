@@ -54,14 +54,18 @@ export function Toolbar({ children, aux, dock }: {
   dock?: { open: boolean; onToggle: () => void; label?: string };
 }) {
   return (
-    <div style={{
+    /* 窓を掴める帯でもある。左メニューの上端だけだと掴める幅が 208px しか
+       なく、しかもロゴの上では掴めない (属性を持つ要素そのものでしか効かない)。
+       ここは帯の地の部分だけが掴める — 子のボタンは属性を持たないので、
+       押すつもりが窓を動かすことはない。 */
+    <div data-tauri-drag-region style={{
       height: 'var(--h-bar)', flex: 'none', borderBottom: '1px solid var(--border-weak)',
       display: 'flex', alignItems: 'center', padding: '0 var(--sp-4)', gap: 'var(--sp-2)',
     }}>
       {children}
       {/* 押し出しはこれが持つ。畳む段で消える要素（k-toolbar-aux）に
           marginLeft:auto を持たせると、消えた瞬間に後ろのものが左へ飛ぶ */}
-      <span style={{ flex: 1 }} />
+      <span data-tauri-drag-region style={{ flex: 1 }} />
       {/* display は .k-toolbar-aux が持つ（940px で消す） */}
       {aux && <span className="k-toolbar-aux" style={{ alignItems: 'center', gap: 'var(--sp-3)' }}>{aux}</span>}
       {dock && (
@@ -76,11 +80,14 @@ export function Toolbar({ children, aux, dock }: {
   );
 }
 
-export function Dock({ tabs, active, onTab, children, open }: {
+export function Dock({ tabs, active, onTab, children, open, scroll = true }: {
   tabs: string[]; active: string; onTab?: (t: string) => void; children: React.ReactNode;
   /** 畳む段（1120px 以下）で出し入れする。広い窓では無視される。
    *  true にする操作は Toolbar の dock={{...}} が持つ。 */
   open?: boolean;
+  /** 中身を丸ごとスクロールさせる。**自前で見出しを固定したい中身は false**
+   *  (棋譜の表は列の見出しと操作を残したまま行だけ流したい)。 */
+  scroll?: boolean;
 }) {
   return (
     // width と display は base.css の .k-dock が持つ（1120px で消すので、
@@ -93,7 +100,9 @@ export function Dock({ tabs, active, onTab, children, open }: {
         <Segmented fill value={active} onChange={onTab}
                    options={tabs.map(t => ({ value: t, label: t }))} />
       </div>
-      <div className="k-scroll" style={{ flex: 1, minHeight: 0 }}>{children}</div>
+      <div className={scroll ? 'k-scroll' : undefined} style={{
+        flex: 1, minHeight: 0, display: scroll ? undefined : 'flex', flexDirection: 'column',
+      }}>{children}</div>
     </aside>
   );
 }
@@ -104,11 +113,17 @@ export function Dock({ tabs, active, onTab, children, open }: {
 export function Section({ title, aside, children }: { title: string; aside?: React.ReactNode; children?: React.ReactNode }) {
   return (
     <section style={{ display: 'flex', flexDirection: 'column', gap: 'var(--sp-3)', padding: '0 var(--sp-3) var(--sp-4)' }}>
+      {/* 操作が乗るときは帯を高くする。--h-head (20px) のままだと押せるものが
+          罫にめり込み、当たりも文字ぶんしか無くなる (実際に指摘が出た) */}
       <h3 style={{
-        margin: 0, height: 'var(--h-head)', display: 'flex', alignItems: 'center',
+        margin: 0, minHeight: aside ? 'var(--h-field)' : 'var(--h-head)',
+        display: 'flex', alignItems: 'center', gap: 'var(--sp-3)',
+        paddingBottom: aside ? 'var(--sp-1)' : 0,
         fontSize: 'var(--fs-7)', fontWeight: 600, letterSpacing: '.08em', color: 'var(--sub)',
         borderBottom: '1px solid var(--border)',
-      }}>{title}{aside && <span style={{ marginLeft: 'auto', letterSpacing: 0 }}>{aside}</span>}</h3>
+      }}>{title}{aside && <span style={{
+        marginLeft: 'auto', letterSpacing: 0, display: 'flex', alignItems: 'center', gap: 'var(--sp-2)',
+      }}>{aside}</span>}</h3>
       {children}
     </section>
   );

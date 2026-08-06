@@ -473,8 +473,11 @@ export function App() {
         </Dock>
       )}
 
+      {/* 棋譜のときは丸ごとスクロールさせない — 表が列の見出しを固定し、
+          行だけを流す作りになっている (操作も上に残す) */}
       {!isGgs && !isBook && (
-      <Dock tabs={['棋譜', '強さ', '学習']} active={tab} onTab={setTab} open={dockOpen}>
+      <Dock tabs={['棋譜', '強さ', '学習']} active={tab} onTab={setTab} open={dockOpen}
+            scroll={tab !== '棋譜'}>
         {tab === '棋譜' && (
           <>
             {/* 分析 (評価値グラフ) は検討画面のもの。対局には置かない */}
@@ -486,8 +489,10 @@ export function App() {
               </Button>
               <Button size="chip" onClick={() => setPaste(true)}>読込</Button>
             </div>
-            <KifuTable moves={moves} current={v?.cursor}
-                       onSelect={(n) => void g.jumpTo(n)} />
+            <div style={{ flex: 1, minHeight: 0, display: 'flex', flexDirection: 'column' }}>
+              <KifuTable moves={moves} current={v?.cursor}
+                         onSelect={(n) => void g.jumpTo(n)} />
+            </div>
           </>
         )}
         {tab === '強さ' && (

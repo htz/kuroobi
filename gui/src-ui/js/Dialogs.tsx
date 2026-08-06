@@ -177,14 +177,21 @@ export function Settings({ learnOn, onLearn, onChanged, onClose, prefs, setPref 
 
   return (
     <Overlay onClose={onClose}>
-      <div role="dialog" aria-modal className="k-scroll" style={{
+      {/* 見出しは動かさない。長い設定を下まで見ているときに「閉じる」が
+          画面外へ出ると、Esc を知らない人が閉じられなくなる */}
+      <div role="dialog" aria-modal style={{
         width: 560, maxHeight: '80vh', borderRadius: 'var(--r-4)', background: 'var(--card)',
-        border: '1px solid var(--border)', boxShadow: 'var(--sh-2)', padding: 'var(--sp-5)',
+        border: '1px solid var(--border)', boxShadow: 'var(--sh-2)',
+        display: 'flex', flexDirection: 'column', minHeight: 0, overflow: 'hidden',
       }}>
-        <div style={{ display: 'flex', alignItems: 'center', marginBottom: 'var(--sp-4)' }}>
+        <div style={{
+          flex: 'none', display: 'flex', alignItems: 'center',
+          padding: 'var(--sp-4) var(--sp-5)', borderBottom: '1px solid var(--border-weak)',
+        }}>
           <span style={{ fontSize: 'var(--fs-3)', fontWeight: 600 }}>設定</span>
           <span style={{ marginLeft: 'auto' }}><IconButton name="close" label="閉じる" onClick={onClose} /></span>
         </div>
+        <div className="k-scroll" style={{ flex: 1, minHeight: 0, padding: 'var(--sp-5)' }}>
 
         {/* 見え方だけの設定。エンジンの動きには関わらないので、
             バックエンドに送らず localStorage に置く */}
@@ -277,6 +284,7 @@ export function Settings({ learnOn, onLearn, onChanged, onClose, prefs, setPref 
                        options={[{ value: 'on', label: 'する' }, { value: 'off', label: 'しない' }]} />
           </div>
         </Section>
+        </div>
       </div>
     </Overlay>
   );

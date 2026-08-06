@@ -221,15 +221,17 @@ function BookRow({ r, open, onToggle, onGo, onStudy }: {
       display: 'flex', alignItems: 'center', height: 'var(--h-row)',
       paddingLeft: r.depth * 12, borderRadius: 'var(--r-2)',
     }}>
+      {/* 三角は当たりを行の高さいっぱいに取る。16px 角に fs-7 の記号だと
+          押す場所が分からないうえ、外しやすい */}
       {leaf ? (
-        <span style={{ width: 16, flex: 'none' }} />
+        <span style={{ width: 22, flex: 'none' }} />
       ) : (
         <button type="button" className="k-press" onClick={onToggle}
                 title={open ? '閉じる' : '先を開く'} aria-label={open ? '閉じる' : '先を開く'}
                 style={{
-                  width: 16, height: 16, flex: 'none', border: 0, padding: 0,
-                  background: 'transparent', color: 'var(--sub)', cursor: 'pointer',
-                  fontSize: 'var(--fs-7)', lineHeight: 1, borderRadius: 'var(--r-1)',
+                  width: 22, height: 'var(--h-row)', flex: 'none', border: 0, padding: 0,
+                  background: 'transparent', color: 'var(--sub)',
+                  fontSize: 'var(--fs-5)', lineHeight: 1, borderRadius: 'var(--r-1)',
                 }}>{open ? '▾' : '▸'}</button>
       )}
       <button type="button" onClick={onGo} onDoubleClick={onStudy}

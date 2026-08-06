@@ -1,7 +1,10 @@
 {
   "$schema": "../gen/schemas/desktop-schema.json",
   "identifier": "default",
-  "description": "メインウィンドウに IPC (invoke/event) を許可する",
+  "description": "メインウィンドウに IPC (invoke/event) と窓の移動を許可する",
   "windows": ["main"],
-  "permissions": ["core:default"]
+  "permissions": [
+    "core:default",
+    "core:window:allow-start-dragging"
+  ]
 }

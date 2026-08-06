@@ -20,7 +20,11 @@ body {
 a { color:var(--accent); text-decoration:none; }
 a:hover { color:var(--text); }
 button, input, select, textarea { font:inherit; color:inherit; }
-button { cursor:default; }                 /* macOS 流。pointer にしない */
+/* 押せるものは指の形にする。macOS の流儀では default だが、この画面は
+ * 罫と余白で区切っていて枠の無い操作が多く、**押せる場所が見て分からない**
+ * という指摘が実際に出た。押せないもの (disabled) は default のまま。 */
+button:not(:disabled):not([aria-disabled="true"]) { cursor:pointer; }
+button:disabled, button[aria-disabled="true"] { cursor:default; }
 
 /* フォーカスリング — キーボード操作のときだけ */
 :focus { outline:none; }
@@ -52,12 +56,13 @@ button { cursor:default; }                 /* macOS 流。pointer にしない *
 
 /* 一覧の行（棋譜・手合い・プレイヤー・ロビー・会話）。
  * 選ばれている行は部品側が背景と 2px の帯を持つので、ここは hover だけ。 */
-.k-row { transition:background var(--dur) var(--ease); }
+.k-row { transition:background var(--dur) var(--ease); cursor:pointer; }
 .k-row:hover { background-image:linear-gradient(var(--hover), var(--hover)); }
 .k-row[aria-current="true"]:hover, .k-row.k-on:hover { background-image:none; }
 
-/* 盤のマス。合法手だけ反応する（押せない盤で手が動くと嘘になる） */
-.k-cell { cursor:default; }
+/* 盤のマス。合法手だけ反応する（押せない盤で手が動くと嘘になる）。
+ * .k-cell が付くのは合法手かつ押せるときだけなので、指の形にしてよい */
+.k-cell { cursor:pointer; }
 .k-cell circle { transition:opacity var(--dur) var(--ease), r var(--dur) var(--ease); }
 .k-cell:hover .k-legal { opacity:.75; }
 .k-cell:hover .k-eval { opacity:1; }
@@ -68,7 +73,7 @@ button { cursor:default; }                 /* macOS 流。pointer にしない *
 .k-input:focus-within, .k-input:focus { border-color:var(--accent); }
 
 /* リンク風の文字（プレイヤー名など）。下線の濃さだけ変える */
-.k-link { transition:border-color var(--dur) var(--ease), color var(--dur) var(--ease); }
+.k-link { cursor:pointer; transition:border-color var(--dur) var(--ease), color var(--dur) var(--ease); }
 .k-link:hover { color:var(--accent); border-bottom-color:var(--accent); }
 
 /* 掴める境目。今は使っていない — BottomPanel の高さは固定で、掴めるのに
@@ -97,7 +102,10 @@ button { cursor:default; }                 /* macOS 流。pointer にしない *
 /* ロゴは器の幅に従わせる。SVG は放っておくと固有の大きさで描かれるので、
    48px の列に畳んだときに帯からはみ出してツールバーの上に重なる */
 .k-nav-logo { display:block; }
-.k-nav-logo > svg { display:block; width:100%; height:auto; }
+/* 掴む帯の中なので、絵そのものは当たりを持たない。持つと mousedown の
+ * 相手が svg になり、data-tauri-drag-region の付いた span に届かない
+ * (属性は付けた要素そのものにしか効かない) */
+.k-nav-logo > svg { display:block; width:100%; height:auto; pointer-events:none; }
 
 /* Dock を開く入口は Toolbar の右端（k-dock-toggle）。
  * 広い窓では Dock が常に見えているので入口は出さない。 */

@@ -78,7 +78,9 @@ export function Nav({ items, ggsItems, conn, active, onSelect, footer }: {
       <div data-tauri-drag-region className="k-drag"
            style={{ height: 'var(--h-bar)', flex: 'none', display: 'flex', alignItems: 'center', padding: '0 var(--sp-3) 0 78px' }}>
         {/* 幅は .k-nav-logo が持つ (48px に畳んだとき帯からはみ出さないように) */}
-        <span className="k-nav-logo" aria-label="KUROOBI" style={{ width: 100 }}
+        {/* 属性は付けた要素そのものにしか効かないので、ロゴにも付ける。
+            付けないと帯の中でロゴの上だけ掴めない */}
+        <span data-tauri-drag-region className="k-nav-logo" aria-label="KUROOBI" style={{ width: 100 }}
               dangerouslySetInnerHTML={{ __html: logo }} />
       </div>
       <div style={{ padding: 'var(--sp-1) var(--sp-2) 0', display: 'flex', flexDirection: 'column', gap: 1 }}>
