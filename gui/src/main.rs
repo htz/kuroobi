@@ -500,6 +500,26 @@ pub fn learn_log_append(e: &LearnEntry) {
         use std::io::Write;
         let _ = writeln!(f, "{line}");
     }
+    trim_learn_log(&path);
+}
+
+/// 控えの上限。1 行 100 バイト前後なので、これで数十 KB に収まる。
+/// 画面に出すのは 200 件だが、それより少し多く残す — 出していない
+/// ぶんも「前に取り込んだか」を数えるのには使える。
+const LEARN_LOG_MAX: usize = 500;
+
+/// 伸びすぎた控えを新しい側だけ残して書き直す。
+/// 毎回書き直すと追記の意味が無いので、上限を超えたときだけ。
+fn trim_learn_log(path: &std::path::Path) {
+    let Ok(text) = std::fs::read_to_string(path) else {
+        return;
+    };
+    let lines: Vec<&str> = text.lines().collect();
+    if lines.len() <= LEARN_LOG_MAX + 100 {
+        return;
+    }
+    let keep = lines[lines.len() - LEARN_LOG_MAX..].join("\n");
+    let _ = std::fs::write(path, keep + "\n");
 }
 
 /// 取り込んだ対局の控え (新しい順)。読めない行は飛ばす。

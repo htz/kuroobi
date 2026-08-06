@@ -173,6 +173,13 @@ export function App() {
       const key = e.key.toLowerCase();
       if (cmd && key === 'b') { e.preventDefault(); setNav('book'); return; }
       if (cmd && key === 'n') { e.preventDefault(); if (!g.thinking) void g.newGame(); return; }
+      // 棋譜の出し入れ。GGS と定石では扱う棋譜が無い
+      if (cmd && key === 's' && !isGgs && !isBook) {
+        e.preventDefault();
+        void api.saveKifu(...ggfNames(g.side)).catch((err) => g.say('' + err));
+        return;
+      }
+      if (cmd && key === 'o' && !isGgs && !isBook) { e.preventDefault(); setPaste(true); return; }
       if (cmd && key === 'z') {
         e.preventDefault();
         if (!g.thinking && v && v.move_count > 0) void g.undo();
@@ -199,7 +206,7 @@ export function App() {
     };
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
-  }, [setNav, settings, paste, ask, isBook, study, book, g, v]);
+  }, [setNav, settings, paste, ask, isBook, isGgs, study, book, g, v]);
 
   const toasts: Toast[] = g.toasts.map(t => ({ id: String(t.id), tone: t.tone, text: t.text }));
 
