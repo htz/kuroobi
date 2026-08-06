@@ -129,6 +129,9 @@ export function fmtSecs(s: number): string {
 const GTYPE: Record<string, string> = {
   s8r16: '同期・ランダム16手', s8r18: '同期・ランダム18手', s8r20: '同期・ランダム20手',
   s8r14: '同期・ランダム14手', s8: '同期・通常', '8': '通常', '8r16': 'ランダム16手',
+  // レートの区分 (my_ranks / rank コマンド) は形式より粗い 2 つ。
+  // 生の "8r" は画面に出しても何のことか分からない
+  '8r': 'ランダム開局',
 };
 export const gtypeLabel = (t: string): string => GTYPE[t] ?? (t || '?');
 

@@ -1142,7 +1142,14 @@ pub fn run(
                             time,
                             opponent,
                         } => {
-                            send!(ctx, format!("tell /os ask {gtype} {time} {opponent}"))
+                            // 相手を指定しないと「誰でも受けられる」募集になる。
+                            // 空のまま繋ぐと末尾に空白が残るので、そのときは付けない
+                            let cmd = if opponent.is_empty() {
+                                format!("tell /os ask {gtype} {time}")
+                            } else {
+                                format!("tell /os ask {gtype} {time} {opponent}")
+                            };
+                            send!(ctx, cmd)
                         }
                         Cmd::Accept(id) => send!(ctx, format!("tell /os accept {id}")),
                         Cmd::Decline(id) => send!(ctx, format!("tell /os decline {id}")),

@@ -355,8 +355,12 @@ function GgsLobby({ snap, onNav }: { snap: GgsSnapshot; onNav: (id: NavId) => vo
           </Field>
           <Field label="形式"><Select value={gtype} onChange={setGtype} options={GTYPE_CHOICES} /></Field>
           <Field label="持ち時間"><Select value={time} onChange={setTime} options={CLOCK_CHOICES} /></Field>
-          <Button variant="primary" disabled={!opp}
-                  onClick={() => void ggsApi.ask(gtype, time, opp)}>申し込む</Button>
+          {/* 相手を指定しない申し込みは「誰でも受けられる」募集になる。
+              GGS の /os ask はそういう使い方ができるので、止めない */}
+          <Button variant="primary"
+                  onClick={() => void ggsApi.ask(gtype, time, opp)}>
+            {opp ? '申し込む' : '募集する'}
+          </Button>
           <p style={{ margin: 0, fontSize: 'var(--fs-6)', color: 'var(--sub)', lineHeight: 1.8 }}>
             同期対局は同じ開局を先後入れ替えて 2 局同時に行い、結果は合計で判定します。
             レートは「ランダム開局」に反映されます。

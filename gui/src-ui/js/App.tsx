@@ -2,7 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useGame } from './state';
 import { useGgs } from './ggs';
 import type { GameView } from './types';
-import { api, jsLog, type ActivityView } from './api';
+import { api, ggsApi, jsLog, type ActivityView } from './api';
 import { useActivity, useEngineSettings, useEngineTurn, useGraph, useHints, useStartGame } from './engine';
 import { fmtSecs } from './ggs';
 import { cellsOf, connOf, evalsOf, ggsPlaying, movesOf, navBadges } from './adapt';
@@ -110,6 +110,14 @@ export function App() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
   useEffect(() => { autoGraph.current = () => void graph.update(); }, [graph]);
+
+  /* 画面確認用 (KUROOBI_GGS_AUTOVIEW=players のように指定する)。
+   * GGS の画面は開くまで描かれないので、撮るには行き先を指定する経路が要る。 */
+  useEffect(() => {
+    void ggsApi.autoview().then((v) => {
+      if (v) setNavRaw(('ggs-' + v) as NavId);
+    }).catch(() => {});
+  }, []);
 
   /** 読み込んだら手順の記録も消す (前の対局の評価が残ると嘘になる) */
   const applyLoaded = (v: GameView) => {

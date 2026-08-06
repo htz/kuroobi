@@ -181,7 +181,12 @@ export type Rate = { value: number; dev: number; rank?: number; w: number; l: nu
 export function RateRow({ label, rate }: { label: string; rate: Rate }) {
   return (
     <div style={{ display: 'flex', alignItems: 'baseline', gap: 'var(--sp-3)' }}>
-      <span style={{ width: 'var(--w-label)', fontSize: 'var(--fs-6)', color: 'var(--sub)' }}>{label}</span>
+      {/* 対局形式の名前は設定の見出しより長い (「同期・ランダム20手」)。
+          --w-label のままだと 2 行に折り返して行の高さが揃わなくなる */}
+      <span style={{
+        width: 'var(--w-gtype)', flex: 'none', whiteSpace: 'nowrap',
+        fontSize: 'var(--fs-6)', color: 'var(--sub)',
+      }}>{label}</span>
       <span style={{ fontSize: 'var(--fs-1)', fontWeight: 700 }}>{rate.value.toFixed(1)}</span>
       <span style={{ fontSize: 'var(--fs-6)', color: 'var(--sub)' }}>
         ±{rate.dev}{rate.provisional && <span style={{ color: 'var(--gold)', marginLeft: 5 }}>暫定</span>}
