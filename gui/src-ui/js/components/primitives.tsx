@@ -164,7 +164,7 @@ export function Select({ value, options, onChange, size = 'field', width, disabl
 
 /* 打ち込む欄。onChange を渡さなければ読むだけになる（readOnly が付く）ので、
  * 表示専用の使い方も同じ部品でできる。 */
-export function TextField({ value, onChange, mono, invalid, placeholder, readOnly, numeric, password, align, width, className }: {
+export function TextField({ value, onChange, mono, invalid, placeholder, readOnly, numeric, password, align, width, className, title }: {
   value?: string;
   onChange?: (v: string) => void;
   mono?: boolean;
@@ -176,11 +176,13 @@ export function TextField({ value, onChange, mono, invalid, placeholder, readOnl
   align?: 'left' | 'right';
   width?: number;
   className?: string;
+  /** 触れる範囲など、常時は出さない補足。 */
+  title?: string;
 }) {
   const ro = readOnly ?? !onChange;
   return (
     <input
-      value={value} placeholder={placeholder} readOnly={ro}
+      value={value} placeholder={placeholder} readOnly={ro} title={title}
       type={password ? 'password' : undefined}
       inputMode={numeric ? 'numeric' : undefined}
       onChange={ro ? undefined : e => onChange?.(numeric ? e.target.value.replace(/[^\d-]/g, '') : e.target.value)}

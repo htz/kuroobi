@@ -1,6 +1,6 @@
 import { useState } from 'react';
 import { LEVELS, SOLVE_MAX, clampLevels, type Levels } from '../state';
-import { Select, Slider } from './primitives';
+import { Button, Select, TextField } from './primitives';
 
 /* 強さの選び方。対局・検討・GGS で同じ形にするための共通部品。
  *
@@ -41,9 +41,10 @@ export function Strength({ value, onChange }: { value: Levels; onChange: (v: Lev
                 const l = LEVELS[+s];
                 onChange({ depth: l.depth, solve: l.solve, band: l.band });
               }} />
-      {/* 3 つとも連続した数なので摘みで選ぶ (規則 68)。36 個の選択肢を
-          Select で出すのは操作が重い。**制限は選択肢を減らさず min で表す** —
-          読切の下限が深さに追随するので、触れる範囲そのものが答えになる */}
+      {/* **数字そのものを触らせる。** 36 段を摘みに載せると 1 段が数 px しか
+          なく狙った値に止められないし、数字が脇の小さな文字に降格する。
+          ここで決めるのは「いくつか」なので、数字が主役でなければならない。
+          ±1 は隣のボタンで、飛ばすときは打ち込む (選択肢 36 個も出さない)。 */}
       {custom && (
         <div style={{ display: 'flex', flexDirection: 'column', gap: 'var(--sp-2)' }}>
           <Num label="深さ" value={value.depth} min={1} max={SOLVE_MAX}
@@ -60,26 +61,38 @@ export function Strength({ value, onChange }: { value: Levels; onChange: (v: Lev
   );
 }
 
-/** 摘みで選ぶ 1 つの数。**現在値は摘みの脇に数字で出す** — 摘みの位置
- *  だけでは 22 なのか 23 なのかが読めない。 */
+/** 数を 1 つ決める。**数字の欄が主役**で、±1 は隣のボタン。
+ *  範囲は打ち込んだ後に丸める (打っている途中で直すと、2 桁目が打てない)。 */
 function Num({ label, value, min, max, zero, onChange }: {
   label: string; value: number; min: number; max: number;
-  /** 0 のときに数字の代わりに出す言葉 (選択読みの「なし」)。 */
+  /** 0 の意味を添える言葉 (選択読みの「0 = なし」)。 */
   zero?: string;
   onChange: (n: number) => void;
 }) {
+  const clamp = (n: number) => Math.max(min, Math.min(max, n));
   return (
-    <label style={{ display: 'flex', alignItems: 'center', gap: 'var(--sp-3)' }}>
-      <span style={{ width: 'var(--w-label)', flex: 'none', fontSize: 'var(--fs-6)', color: 'var(--sub)' }}>
+    <label style={{ display: 'flex', alignItems: 'center', gap: 'var(--sp-2)' }}>
+      {/* --w-label (96px) は設定の見出し用で、ここには広すぎる。
+          290px の枠に 欄 + ± + 補足 まで収めたいので、名前は 4 文字ぶん */}
+      <span style={{ width: 64, flex: 'none', fontSize: 'var(--fs-6)', color: 'var(--sub)' }}>
         {label}
       </span>
-      <span style={{ flex: 1, minWidth: 0 }}>
-        <Slider value={value} min={min} max={max} onChange={onChange} />
-      </span>
-      <span style={{
-        width: 34, flex: 'none', textAlign: 'right', fontSize: 'var(--fs-5)',
-        fontVariantNumeric: 'tabular-nums',
-      }}>{zero && value === 0 ? zero : value}</span>
+      {/* 範囲は欄の脇に書かない — 290px の枠では折り返して 3 行になる。
+          端に来たら ± が押せなくなるので、触れる範囲はそれで分かる */}
+      <TextField numeric align="right" width={56} value={String(value)}
+                 title={`${min}〜${max}`}
+                 onChange={(t) => {
+                   // 空にした途中の状態では動かさない (消してから打ち直せる)
+                   if (t === '') return;
+                   const n = parseInt(t, 10);
+                   if (Number.isFinite(n)) onChange(clamp(n));
+                 }} />
+      <Button size="ctrl" disabled={value <= min} onClick={() => onChange(clamp(value - 1))}>−</Button>
+      <Button size="ctrl" disabled={value >= max} onClick={() => onChange(clamp(value + 1))}>＋</Button>
+      {/* 0 に意味のある欄だけ、0 のときにその意味を添える */}
+      {zero && value === 0 && (
+        <span style={{ fontSize: 'var(--fs-7)', color: 'var(--sub)' }}>{zero}</span>
+      )}
     </label>
   );
 }
