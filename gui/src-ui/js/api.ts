@@ -1,6 +1,6 @@
 // バックエンドとの入出力。
 
-import type { BookNode, EvalPoint, GameView, GgsSnapshot, HintView, StandbyCfg, ThinkView } from './types';
+import type { BookNode, EvalPoint, GameView, GgsSnapshot, HintView, LearnEntry, StandbyCfg, ThinkView } from './types';
 
 const core = () => window.__TAURI__?.core;
 
@@ -28,6 +28,8 @@ export const api = {
   setUseBook: (on: boolean) => call<void>('set_use_book', { on }),
   setLearn: (on: boolean) => call<void>('set_learn', { on }),
   learnGame: () => call<void>('learn_game'),
+  /** 取り込んだ対局の控え (新しい順)。 */
+  learnLog: () => call<LearnEntry[]>('learn_log', {}),
   hasBook: () => call<boolean>('has_book', {}),
   /** 定石を眺める。kifu は初期局面からの手順 ("f5d6" 形式、空なら初期局面)。 */
   bookNode: (kifu: string) => call<BookNode>('book_node', { kifu }),

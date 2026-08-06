@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { api, ggsApi, onHints, type ActivityView } from './api';
 import type { Game } from './state';
-import type { GameView } from './types';
+import type { GameView, LearnEntry } from './types';
 
 /* エンジンとのやりとり。画面には依存しない。
  *
@@ -250,4 +250,25 @@ export function useStartGame(
     g.setPlaying(true);
     g.say('');
   }, [g, ggsMatch, graph, ask]);
+}
+
+/* 取り込んだ対局の控え。
+ *
+ * 開いたときと、学習が終わった瞬間だけ読み直す。定期的に読むと、
+ * 何も取り込んでいない間もファイルを触り続けることになる。 */
+export function useLearnLog(on: boolean, learning: boolean) {
+  const [items, setItems] = useState<LearnEntry[]>([]);
+  // 「走っていた学習が終わった」を捉えるために前回の値を持つ
+  const wasLearning = useRef(false);
+  const reload = useCallback(() => {
+    void api.learnLog().then(setItems).catch(() => {});
+  }, []);
+  useEffect(() => {
+    const ended = wasLearning.current && !learning;
+    wasLearning.current = learning;
+    if (on && (ended || items.length === 0)) reload();
+    // items を依存に入れると、空のまま返ってきたときに読み直しが止まらない
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [on, learning, reload]);
+  return items;
 }

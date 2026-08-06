@@ -4,7 +4,7 @@ import { useGgs } from './ggs';
 import { flipped, usePrefs } from './prefs';
 import type { GameView } from './types';
 import { api, ggsApi, jsLog, type ActivityView } from './api';
-import { useActivity, useEngineSettings, useEngineTurn, useGraph, useHints, useStartGame } from './engine';
+import { useActivity, useEngineSettings, useEngineTurn, useGraph, useHints, useLearnLog, useStartGame } from './engine';
 import { fmtSecs } from './ggs';
 import { cellsOf, connOf, evalsOf, ggsPlaying, movesOf, navBadges } from './adapt';
 import { AppFrame, Dock, Main, Section, StatusBar, StatusStat, Toolbar } from './components/layout';
@@ -73,6 +73,7 @@ export function App() {
 
   const conn = connOf(ggs.snap?.conn);
   const book = useBookBrowse(isBook);
+  const learnLog = useLearnLog(tab === '学習' && !isGgs && !isBook, !!cpu?.learn);
 
   // ⌘B で定石へ。盤の上に置く操作ではない (行き先なので、左の並びと同じもの)
   useEffect(() => {
@@ -104,6 +105,8 @@ export function App() {
       if (!v) return;
       const [who, lv] = v.split(':');
       if (who === 'settings') { setSettings(true); return; }
+      // "tab:学習" のようにドックの見出しを指定する (撮るためだけの入口)
+      if (who === 'tab') { if (lv) setTab(lv); return; }
       // "book:f5d6" のように手順を渡すと、その節まで辿った状態で開く
       if (who === 'book') { setNavRaw('book'); if (lv) bookLine.current?.(lv); return; }
       if (who === 'study') {
@@ -351,12 +354,39 @@ export function App() {
           </Section>
         )}
         {tab === '学習' && (
-          <Section title="定石への書き戻し">
-            <Toggle checked={g.learnOn} onChange={g.setLearnOn} label="終局した対局を取り込む" />
-            <span style={{ fontSize: 'var(--fs-6)', color: 'var(--sub)', lineHeight: 1.8 }}>
-              勝敗にかかわらず取り込み、終局の石差を根まで書き戻します。同じ負け方をなぞらなくなります。
-            </span>
-          </Section>
+          <>
+            <Section title="定石への書き戻し">
+              <Toggle checked={g.learnOn} onChange={g.setLearnOn} label="終局した対局を取り込む" />
+              <span style={{ fontSize: 'var(--fs-6)', color: 'var(--sub)', lineHeight: 1.8 }}>
+                勝敗にかかわらず取り込み、終局の石差を根まで書き戻します。同じ負け方をなぞらなくなります。
+              </span>
+            </Section>
+            {/* 取り込みは裏で静かに進むので、何が入ったかを見る場所が要る。
+                押すと検討で開く — 「変な手を覚えていないか」を確かめる道 */}
+            <Section title="取り込んだ対局" aside={learnLog.length ? <span>{learnLog.length}</span> : undefined}>
+              {learnLog.length === 0 && (
+                <span style={{ fontSize: 'var(--fs-6)', color: 'var(--sub)' }}>
+                  まだありません。
+                </span>
+              )}
+              {learnLog.map((e) => (
+                <button key={e.at + e.kifu} type="button" className="k-row"
+                        onClick={() => { setNav('study'); void loadFromText(e.kifu); }}
+                        style={{
+                          display: 'flex', alignItems: 'baseline', gap: 'var(--sp-3)',
+                          border: 0, background: 'transparent', cursor: 'pointer',
+                          padding: 'var(--sp-2)', borderRadius: 'var(--r-2)',
+                          fontSize: 'var(--fs-6)', color: 'var(--text)', textAlign: 'left',
+                        }}>
+                  <span style={{ color: 'var(--sub)', fontVariantNumeric: 'tabular-nums' }}>{fmtWhen(e.at)}</span>
+                  <span style={{ fontWeight: 600, fontVariantNumeric: 'tabular-nums' }}>{e.black}–{e.white}</span>
+                  <span style={{ marginLeft: 'auto', color: 'var(--sub)', fontVariantNumeric: 'tabular-nums' }}>
+                    {e.positions} 局面
+                  </span>
+                </button>
+              ))}
+            </Section>
+          </>
         )}
       </Dock>
       )}
@@ -383,6 +413,18 @@ export function App() {
       <Toasts items={toasts} onDismiss={(id) => g.dismiss(+id)} />
     </AppFrame>
   );
+}
+
+/** 取り込んだ時刻。今日のものは時刻だけ、それ以外は日付だけにする —
+ *  並べたときに縦が揃い、かつ「さっき入ったもの」がすぐ分かる。 */
+function fmtWhen(secs: number): string {
+  const d = new Date(secs * 1000);
+  const now = new Date();
+  const sameDay = d.getFullYear() === now.getFullYear() && d.getMonth() === now.getMonth()
+    && d.getDate() === now.getDate();
+  const p2 = (n: number) => String(n).padStart(2, '0');
+  return sameDay ? `${p2(d.getHours())}:${p2(d.getMinutes())}`
+    : `${d.getMonth() + 1}/${p2(d.getDate())}`;
 }
 
 /** 桁が伸びても幅が暴れないように短く畳む。 */

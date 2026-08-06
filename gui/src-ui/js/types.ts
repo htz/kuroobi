@@ -290,3 +290,14 @@ export interface BookNode {
   /** そのうち実戦から書き戻したぶん。 */
   learned_size: number;
 }
+
+/** 定石に取り込んだ対局 1 件 (learn_log の返り)。 */
+export interface LearnEntry {
+  /** unix 秒。書式は見る側で決める。 */
+  at: number;
+  kifu: string;
+  black: number;
+  white: number;
+  /** 書き戻した局面数。 */
+  positions: number;
+}

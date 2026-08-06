@@ -10,7 +10,7 @@ mod keychain;
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use tauri::{Emitter, Manager, State};
 
 use kuroobi::engine::{Engine, EngineConfig};
@@ -302,6 +302,15 @@ fn resources_path() -> PathBuf {
     base.join("kuroobi").join("resources.conf")
 }
 
+/// 取り込んだ対局の控え。定石ファイルの隣ではなく設定ディレクトリに置く —
+/// 定石は差し替えられるが、「自分が何を取り込んだか」は差し替えても残って
+/// ほしい記録なので、寿命の違うものを同じ場所に置かない。
+fn learn_log_path() -> PathBuf {
+    let base =
+        dirs_config().unwrap_or_else(|| PathBuf::from(concat!(env!("CARGO_MANIFEST_DIR"), "/..")));
+    base.join("kuroobi").join("learn_log.jsonl")
+}
+
 /// $XDG_CONFIG_HOME / ~/Library/Application Support / %APPDATA%。
 fn dirs_config() -> Option<PathBuf> {
     if let Ok(d) = std::env::var("XDG_CONFIG_HOME") {
@@ -448,6 +457,50 @@ fn set_learn(app: State<App>, on: bool) {
     *app.learn_on.lock().unwrap() = on;
 }
 
+/// 取り込んだ対局 1 件。時刻は unix 秒のまま持つ — 書式は見る側の
+/// 時間帯と暦で決まるので、記録側で文字列にしてしまうと直せない。
+#[derive(Serialize, Deserialize, Clone)]
+struct LearnEntry {
+    at: u64,
+    kifu: String,
+    black: u8,
+    white: u8,
+    /// 書き戻した局面数。途中で諦めた取り込みは実際に進んだぶんだけになる。
+    positions: u32,
+}
+
+/// 1 行 1 件で追記する。読みながら書いても壊れないので、途中で落ちても
+/// それまでの記録は残る (途中の 1 行だけが読めなくなる)。
+fn learn_log_append(e: &LearnEntry) {
+    let path = learn_log_path();
+    if let Some(dir) = path.parent() {
+        let _ = std::fs::create_dir_all(dir);
+    }
+    let Ok(line) = serde_json::to_string(e) else {
+        return;
+    };
+    if let Ok(mut f) = std::fs::OpenOptions::new().create(true).append(true).open(&path) {
+        use std::io::Write;
+        let _ = writeln!(f, "{line}");
+    }
+}
+
+/// 取り込んだ対局の控え (新しい順)。読めない行は飛ばす。
+#[tauri::command]
+fn learn_log() -> Vec<LearnEntry> {
+    let Ok(text) = std::fs::read_to_string(learn_log_path()) else {
+        return Vec::new();
+    };
+    let mut out: Vec<LearnEntry> = text
+        .lines()
+        .filter_map(|l| serde_json::from_str(l).ok())
+        .collect();
+    out.reverse();
+    // 画面に出すのは直近だけ。全部返すと、長く使うほど起動のたびに重くなる
+    out.truncate(200);
+    out
+}
+
 /// 終局したローカル対局を定石の学習に取り込む (learn.rs)。
 /// フロントが「手が指されて終局した」ときに呼ぶ。読み込んだだけの棋譜は
 /// 対象にしない。取り込みは裏で 1 探索ずつ進み、エンジンのロックを
@@ -516,6 +569,18 @@ fn learn_game(app: State<App>) -> Result<(), String> {
             // 割り込めないことがある
             std::thread::sleep(std::time::Duration::from_millis(50));
         }
+        // 控えは終わってから 1 行だけ書く。途中で諦めた取り込みも、進んだ
+        // ぶんだけを記録する (書き戻し自体はそこまで済んでいるため)
+        learn_log_append(&LearnEntry {
+            at: std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map(|d| d.as_secs())
+                .unwrap_or(0),
+            kifu,
+            black: board.black.count_ones() as u8,
+            white: board.white.count_ones() as u8,
+            positions: total.saturating_sub(job.remaining() as u32),
+        });
         let mut a = act.lock().unwrap();
         a.learn = None;
         a.learn_paused = false;
@@ -1692,6 +1757,7 @@ fn main() {
             activity_status,
             set_learn,
             learn_game,
+            learn_log,
             has_book,
             book_node,
             autoplay,
