@@ -16,6 +16,7 @@ import {
   type Cond, type Match, type NavId,
 } from './components/ggs';
 import { Board, type Cell } from './components/board';
+import { flipped, type Prefs } from './prefs';
 import { logLinesOf } from './adapt';
 
 /* GGS の画面。左メニューの行き先ごとに中身を出し分ける。
@@ -24,12 +25,14 @@ import { logLinesOf } from './adapt';
  * ログイン画面だけ。残りは順に置き換えていく。
  */
 
-export function GgsScreen({ nav, snap, onNav }: { nav: NavId; snap: GgsSnapshot | null; onNav: (id: NavId) => void }) {
+export function GgsScreen({ nav, snap, onNav, prefs }: {
+  nav: NavId; snap: GgsSnapshot | null; onNav: (id: NavId) => void; prefs: Prefs;
+}) {
   if (nav === 'ggs-login') return <GgsLogin />;
   if (!snap) return <EmptyState title="GGS に接続していません" />;
 
   switch (nav) {
-    case 'ggs-play': return <GgsPlay snap={snap} onNav={onNav} />;
+    case 'ggs-play': return <GgsPlay snap={snap} onNav={onNav} prefs={prefs} />;
     case 'ggs-lobby': return <GgsLobby snap={snap} onNav={onNav} />;
     case 'ggs-players': return <GgsUsers snap={snap} onNav={onNav} />;
     case 'ggs-chat': return <GgsChat snap={snap} />;
@@ -520,7 +523,7 @@ function FormulaRow({ label, src }: { label: string; src: string }) {
  * 待った (undo) と中止 (abort) は出さない — どちらも相手の承諾が要る要求で、
  * GGS の相手はたいていプログラムなので通らない。投了だけは自分で決められる。
  */
-function GgsPlay({ snap, onNav }: { snap: GgsSnapshot; onNav: (id: NavId) => void }) {
+function GgsPlay({ snap, onNav, prefs }: { snap: GgsSnapshot; onNav: (id: NavId) => void; prefs: Prefs }) {
   const [sel, setSel] = useState('');
   const clock = useClocks(snap.matches);
 
@@ -556,7 +559,7 @@ function GgsPlay({ snap, onNav }: { snap: GgsSnapshot; onNav: (id: NavId) => voi
       <div className="k-scroll" style={{ flex: 1, minWidth: 0, minHeight: 0, padding: 'var(--sp-3)' }}>
         {/* 同期対局は 2 面。横に並べて、狭ければ折り返す */}
         <div style={{ display: 'flex', gap: 'var(--sp-3)', flexWrap: 'wrap', justifyContent: 'center' }}>
-          {pair?.map((m) => <MatchBoard key={m.id} snap={snap} m={m} clock={clock} />)}
+          {pair?.map((m) => <MatchBoard key={m.id} snap={snap} m={m} clock={clock} prefs={prefs} />)}
         </div>
       </div>
     </div>
@@ -577,8 +580,8 @@ function matchRowOf(g: MatchView[], key: string): Match {
   };
 }
 
-function MatchBoard({ snap, m, clock }: {
-  snap: GgsSnapshot; m: MatchView; clock: (id: string, side: ClockSide) => ClockView;
+function MatchBoard({ snap, m, clock, prefs }: {
+  snap: GgsSnapshot; m: MatchView; clock: (id: string, side: ClockSide) => ClockView; prefs: Prefs;
 }) {
   const [resign, setResign] = useState(false);
   const observer = !m.my_color;
@@ -607,7 +610,10 @@ function MatchBoard({ snap, m, clock }: {
       <PlayerRow color={top.color === 'black' ? 'b' : 'w'} name={top.name || '?'}
                  rate={top.rate ? +top.rate : undefined}
                  clock={clock(m.id, top.side).text} active={clock(m.id, top.side).cls === 'turn'} />
-      <Board cells={m.cells as Cell[]} last={last} disabled />
+      {/* 「自分が下」は自分の色を下にする。観戦は my_color が空なので黒が下 */}
+      <Board cells={m.cells as Cell[]} last={last} disabled
+             coords={prefs.coords} grain={prefs.grain}
+             flip={flipped(prefs.facing, m.my_color)} />
       <PlayerRow color={bottom.color === 'black' ? 'b' : 'w'} name={bottom.name || '?'}
                  rate={bottom.rate ? +bottom.rate : undefined}
                  meta={myEval}

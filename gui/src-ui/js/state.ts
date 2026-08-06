@@ -22,8 +22,13 @@ const INTERNAL = new Set([
   'InvalidPosition', 'NotPlayable', 'Occupied', 'NoMoves', 'GameOver',
 ]);
 
+/** 報せの種類。
+ *  `bad` = 失敗した。`gold` = 失敗ではないが、押したのに進まない理由。
+ *  この 2 つしか作らない — 「うまくいった」は押した本人が見れば分かるので出さない。 */
+export type ToastTone = 'bad' | 'gold';
+
 /** 画面に出す短い報せ。出るのは失敗と、押したのに進まない理由だけ。 */
-export interface Toast { id: number; text: string }
+export interface Toast { id: number; text: string; tone: ToastTone }
 
 /// 消えるまでの時間。読み切れる長さと、居座って邪魔にならない長さの兼ね合い。
 const TOAST_MS = 5000;
@@ -124,14 +129,14 @@ export function useGame() {
     setToasts((t) => t.filter((x) => x.id !== id));
   }, []);
 
-  const say = useCallback((s: string) => {
+  const say = useCallback((s: string, tone: ToastTone = 'bad') => {
     // 空文字は「前の伝言を消す」の名残。浮かせる形では自分で消えるので用がない
     if (!s) return;
     if (INTERNAL.has(s)) { jsLog('内部の符丁 (画面には出さない): ' + s); return; }
     const id = ++toastId.current;
     // 同じ文が続けて出ることがある (局面を動かすたびに同じ失敗をする、など)。
     // 積み上げずに出し直す
-    setToasts((t) => [...t.filter((x) => x.text !== s), { id, text: s }]);
+    setToasts((t) => [...t.filter((x) => x.text !== s), { id, text: s, tone }]);
     window.setTimeout(() => dismiss(id), TOAST_MS);
   }, [dismiss]);
 

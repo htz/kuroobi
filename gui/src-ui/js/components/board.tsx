@@ -64,24 +64,33 @@ export const sourceLabel = (s: EvalSource) =>
 const cx = (i: number) => PAD + i * CELL + CELL / 2;
 const fr = (sq: number): [number, number] => [Math.floor(sq / 8), sq % 8];
 
-export function Board({ cells, legal = [], evals, last, next, coords = true, disabled, onPlay }: {
+export function Board({ cells, legal = [], evals, last, next, coords = true, grain = true, flip = false, disabled, onPlay }: {
   cells: Cell[];                                   // 64（sq = file*8 + rank）
   legal?: number[];
   evals?: Record<number, EvalInfo>;
   last?: number | null;
   next?: number | null;                            // 棋譜上で次に指された手。金の破線
   coords?: boolean;
+  /** 畳の藺草の目。薄いので普段は気にならないが、消したい人もいる */
+  grain?: boolean;
+  /** 盤を回す (白を下にする)。マスの番号はそのまま、描く場所だけ入れ替える */
+  flip?: boolean;
   disabled?: boolean;
   onPlay?: (sq: number) => void;
 }) {
   const legalSet = new Set(legal);
+  // 回すのは「どこに描くか」だけ。番号を裏返すと、打った手が別のマスになる
+  const at = (sq: number): [number, number] => {
+    const [f, r] = fr(flip ? 63 - sq : sq);
+    return [cx(f), cx(r)];
+  };
   return (
     <svg viewBox={`0 0 ${SIZE} ${SIZE}`} style={{ width: '100%', height: 'auto', display: 'block' }}
          role="img" aria-label="盤面">
       <rect x={0} y={0} width={SIZE} height={SIZE} rx={14} fill="var(--card)" />
       <rect x={PAD - 6} y={PAD - 6} width={812} height={812} rx={6} fill="var(--board-dark)" />
       <rect x={PAD} y={PAD} width={800} height={800} fill="var(--board)" />
-      <rect x={PAD} y={PAD} width={800} height={800} fill={`url(#${TATAMI_ID})`} />
+      {grain && <rect x={PAD} y={PAD} width={800} height={800} fill={`url(#${TATAMI_ID})`} />}
 
       {Array.from({ length: 9 }, (_, i) => (
         <g key={'g' + i}>
@@ -94,14 +103,13 @@ export function Board({ cells, legal = [], evals, last, next, coords = true, dis
       ))}
       {coords && Array.from({ length: 8 }, (_, i) => (
         <g key={'l' + i}>
-          <text x={cx(i)} y={27} textAnchor="middle" fill="var(--sub)" fontSize={19}>{'abcdefgh'[i]}</text>
-          <text x={21} y={PAD + i * CELL + 57} textAnchor="middle" fill="var(--sub)" fontSize={19}>{i + 1}</text>
+          <text x={cx(i)} y={27} textAnchor="middle" fill="var(--sub)" fontSize={19}>{'abcdefgh'[flip ? 7 - i : i]}</text>
+          <text x={21} y={PAD + i * CELL + 57} textAnchor="middle" fill="var(--sub)" fontSize={19}>{flip ? 8 - i : i + 1}</text>
         </g>
       ))}
 
       {cells.map((v, sq) => {
-        const [f, r] = fr(sq);
-        const x = cx(f), y = cx(r);
+        const [x, y] = at(sq);
         if (v !== 0) return <Stone key={sq} x={x} y={y} color={v as 1 | 2} last={last === sq} />;
         if (!legalSet.has(sq)) return null;
         const ev = evals?.[sq];

@@ -169,13 +169,13 @@ export function useGraph(g: Game, ggsMatch: boolean, ask: Ask = askDefault) {
   const update = useCallback(async () => {
     const v = g.view;
     // 押しても何も起きない、という状態を作らない。始められない理由は必ず出す
-    if (!v) { g.say('棋譜がありません'); return; }
+    if (!v) { g.say('棋譜がありません', 'gold'); return; }
     // 二重に走らせない。ボタンは走っている間「分析停止」に変わるので人には
     // 踏めず、言葉にする相手がいない (踏めるのは自動起動の経路だけ)
     if (busy) return;
     // CPU を食い合う機能は同時に動かさない。GGS 対局は最優先なので断り、
     // ローカル対局が進行中なら確認の上で停止してから始める
-    if (ggsMatch) { g.say('GGS 対局中は分析を控えます'); return; }
+    if (ggsMatch) { g.say('GGS 対局中は分析を控えます', 'gold'); return; }
     if (g.playing || g.thinking) {
       if (!await ask('対局が進行中です。停止して分析しますか？')) return;
       g.stop();
@@ -242,7 +242,7 @@ export function useStartGame(
     // 「対局開始」に戻るので、言葉で言い直す意味がない
     if (g.playing) { g.stop(); g.say(''); return; }
     // GGS 対局は最優先、分析中は確認してから止める
-    if (ggsMatch) { g.say('GGS 対局中はローカル対局を開始できません'); return; }
+    if (ggsMatch) { g.say('GGS 対局中はローカル対局を開始できません', 'gold'); return; }
     if (graph.busy) {
       if (!await ask('評価値グラフを分析中です。停止して対局を始めますか？')) return;
       graph.stop();

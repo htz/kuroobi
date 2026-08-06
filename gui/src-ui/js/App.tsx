@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useGame } from './state';
 import { useGgs } from './ggs';
+import { flipped, usePrefs } from './prefs';
 import type { GameView } from './types';
 import { api, ggsApi, jsLog, type ActivityView } from './api';
 import { useActivity, useEngineSettings, useEngineTurn, useGraph, useHints, useStartGame } from './engine';
@@ -32,6 +33,7 @@ const SIDES = [
 export function App() {
   const g = useGame();
   const ggs = useGgs();
+  const { prefs, set: setPref } = usePrefs();
   const [nav, setNavRaw] = useState<NavId>('play');
   const study = nav === 'study';
   const isGgs = nav.startsWith('ggs');
@@ -147,8 +149,7 @@ export function App() {
     [v, g.moveSource, graph.values]);
   const evals = g.autoHint ? evalsOf(g.hints) : undefined;
 
-  // トーストの種類は実装が持っていないので、当面すべて失敗の色で出す
-  const toasts: Toast[] = g.toasts.map(t => ({ id: String(t.id), tone: 'bad' as const, text: t.text }));
+  const toasts: Toast[] = g.toasts.map(t => ({ id: String(t.id), tone: t.tone, text: t.text }));
 
   const over = v?.over ?? false;
   const result = v?.over
@@ -158,6 +159,8 @@ export function App() {
   const nodes = g.stat && g.stat.nodes > 0 ? g.stat.nodes : 0;
   const nps = nodes && g.stat && g.stat.secs > 0 ? nodes / g.stat.secs : 0;
   const lv = g.level === 'custom' ? 'カスタム' : LEVELS[g.level].name;
+  // 「自分が下」は、KUROOBI が持っていない色 = 人が打つ色を下にする
+  const sideColor = g.side === 'black' ? 'white' : g.side === 'white' ? 'black' : '';
 
   return (
     <AppFrame>
@@ -216,7 +219,7 @@ export function App() {
           )}
         </Toolbar>
 
-        {isGgs ? <GgsScreen nav={nav} snap={ggs.snap} onNav={setNav} /> : (
+        {isGgs ? <GgsScreen nav={nav} snap={ggs.snap} onNav={setNav} prefs={prefs} /> : (
         <div style={{ flex: 1, minHeight: 0, display: 'flex', flexDirection: 'column', padding: '0 var(--sp-4)' }}>
           <PlayerRow color="b" name="黒" discs={v?.black ?? 2}
                      active={!!v && !v.over && v.player === 'black'}
@@ -224,6 +227,9 @@ export function App() {
           <div style={{ flex: 1, minHeight: 0, display: 'grid', placeItems: 'center', padding: 'var(--sp-2) 0' }}>
             <div style={{ height: '100%', aspectRatio: '1 / 1', maxWidth: '100%' }}>
               {v && <Board cells={cellsOf(v)} legal={v.legal} last={v.last} evals={evals}
+                           coords={prefs.coords} grain={prefs.grain}
+                           // 検討では「自分の色」が無いので、auto は黒が下のまま
+                           flip={flipped(prefs.facing, study ? '' : sideColor)}
                            disabled={g.thinking}
                            onPlay={(sq) => void g.play(sq)} />}
             </div>
@@ -317,7 +323,8 @@ export function App() {
       )}
 
       {settings && (
-        <Settings learnOn={g.learnOn} onLearn={g.setLearnOn}
+        <Settings prefs={prefs} setPref={setPref}
+                  learnOn={g.learnOn} onLearn={g.setLearnOn}
                   onChanged={() => void api.hasBook().then(g.setHasBook).catch(() => {})}
                   onClose={() => setSettings(false)} />
       )}

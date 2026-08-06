@@ -1,5 +1,6 @@
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useState, type ReactNode } from 'react';
 import { api, type ThreadsView } from './api';
+import type { Prefs } from './prefs';
 import { Modal, Overlay, Section } from './components/layout';
 import { Button, Segmented, Select } from './components/primitives';
 import { Icon, IconButton } from './components/Icons';
@@ -93,8 +94,9 @@ const KINDS: [string, string][] = [
   ['book', '定石'],
 ];
 
-export function Settings({ learnOn, onLearn, onChanged, onClose }: {
+export function Settings({ learnOn, onLearn, onChanged, onClose, prefs, setPref }: {
   learnOn: boolean; onLearn: (on: boolean) => void; onChanged: () => void; onClose: () => void;
+  prefs: Prefs; setPref: <K extends keyof Prefs>(k: K, v: Prefs[K]) => void;
 }) {
   const [status, setStatus] = useState<[string, string, boolean][]>([]);
   const [th, setTh] = useState<ThreadsView | null>(null);
@@ -140,6 +142,39 @@ export function Settings({ learnOn, onLearn, onChanged, onClose }: {
           <span style={{ fontSize: 'var(--fs-3)', fontWeight: 600 }}>設定</span>
           <span style={{ marginLeft: 'auto' }}><IconButton name="close" label="閉じる" onClick={onClose} /></span>
         </div>
+
+        {/* 見え方だけの設定。エンジンの動きには関わらないので、
+            バックエンドに送らず localStorage に置く */}
+        <Section title="表示">
+          <Row2 label="テーマ">
+            <Segmented value={prefs.theme} onChange={(v) => setPref('theme', v)} options={[
+              { value: 'os', label: 'OS に従う' },
+              { value: 'dark', label: 'ダーク' },
+              { value: 'light', label: 'ライト' },
+            ]} />
+          </Row2>
+          <Row2 label="盤の向き">
+            <Segmented value={prefs.facing} onChange={(v) => setPref('facing', v)} options={[
+              { value: 'black', label: '黒が下' },
+              { value: 'white', label: '白が下' },
+              { value: 'auto', label: '自分が下' },
+            ]} />
+          </Row2>
+          <Row2 label="座標">
+            <Segmented value={prefs.coords ? 'on' : 'off'} onChange={(v) => setPref('coords', v === 'on')}
+                       options={[{ value: 'on', label: '出す' }, { value: 'off', label: '出さない' }]} />
+          </Row2>
+          <Row2 label="畳の織り目">
+            <Segmented value={prefs.grain ? 'on' : 'off'} onChange={(v) => setPref('grain', v === 'on')}
+                       options={[{ value: 'on', label: '出す' }, { value: 'off', label: '出さない' }]} />
+          </Row2>
+          <Row2 label="石返し">
+            <Segmented value={String(prefs.flipMs)} onChange={(v) => setPref('flipMs', +v as Prefs['flipMs'])}
+                       options={[{ value: '0', label: '動かさない' },
+                                 { value: '120', label: '速い' },
+                                 { value: '240', label: 'ゆっくり' }]} />
+          </Row2>
+        </Section>
 
         <Section title="KUROOBI が使うファイル">
           {KINDS.map(([kind, title]) => {
@@ -201,5 +236,15 @@ export function Settings({ learnOn, onLearn, onChanged, onClose }: {
         </Section>
       </div>
     </Overlay>
+  );
+}
+
+/** 設定の 1 行。見出しの列を揃える */
+function Row2({ label, children }: { label: string; children: ReactNode }) {
+  return (
+    <div style={{ display: 'flex', alignItems: 'center', gap: 'var(--sp-3)', minHeight: 'var(--h-field)' }}>
+      <span style={{ width: 'var(--w-label)', flex: 'none', fontSize: 'var(--fs-6)', color: 'var(--sub)' }}>{label}</span>
+      {children}
+    </div>
   );
 }
