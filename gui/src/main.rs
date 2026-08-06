@@ -1758,6 +1758,19 @@ fn ggs_watch(app: State<App>, id: String, on: bool) -> Result<(), String> {
     ggs_tx(&app)?.send(cmd).map_err(|e| e.to_string())
 }
 
+/// 画面が受け取った一言と取り出した棋譜を消す。
+///
+/// **受け取った側が消す。** 出しっぱなしにすると、画面を開き直すたびに
+/// 同じ報せが出るし、次に取り出した棋譜と見分けが付かない。
+#[tauri::command]
+fn ggs_ack(app: State<App>) -> Result<(), String> {
+    let snap = ggs_snap_arc(&app).ok_or("GGS に接続していません")?;
+    let mut s = snap.lock().unwrap();
+    s.notice.clear();
+    s.fetched_ggf = None;
+    Ok(())
+}
+
 /// 終わった対局の棋譜 (GGF) を GGS から取り出す。結果は snapshot に載る。
 #[tauri::command]
 fn ggs_look(app: State<App>, id: String) -> Result<(), String> {
@@ -2055,6 +2068,7 @@ fn main() {
             ggs_watch,
             ggs_close_match,
             ggs_look,
+            ggs_ack,
             ggs_chat,
             ggs_match_cmd,
             ggs_set_formula,

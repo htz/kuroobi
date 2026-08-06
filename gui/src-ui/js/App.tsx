@@ -74,6 +74,7 @@ export function App() {
   }, [setMode, nav, chatTotal]);
 
   const conn = connOf(ggs.snap?.conn);
+
   const book = useBookBrowse(isBook);
   const { items: learnLog, reload: learnLogReload } = useLearnLog(
     tab === '学習' && !isGgs && !isBook, !!cpu?.learn);
@@ -157,6 +158,36 @@ export function App() {
       if (ply !== undefined) await g.jumpTo(ply);
     } catch (e) { g.say('' + e); }
   };
+
+  /* GGS からの一言と、取り出した棋譜を受け取る。
+   *
+   * どちらもバックエンドが載せっぱなしにするので、**受け取ったら消す**。
+   * 消さないと画面を開き直すたびに同じ報せが出るし、次に取り出した棋譜と
+   * 見分けが付かない。 */
+  const notice = ggs.snap?.notice ?? '';
+  const fetched = ggs.snap?.fetched_ggf ?? null;
+  useEffect(() => {
+    if (!notice) return;
+    void (async () => {
+      g.say(notice);
+      await ggsApi.ack().catch(() => {});
+    })();
+    // g は毎描画で作り直されるので依存に入れない (notice が変わったときだけ)
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [notice]);
+  useEffect(() => {
+    if (!fetched) return;
+    void (async () => {
+      if (fetched.ggf) {
+        setNav('study');
+        await loadFromText(fetched.ggf);
+      } else {
+        g.say(fetched.error || '棋譜を取り出せません');
+      }
+      await ggsApi.ack().catch(() => {});
+    })();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [fetched]);
 
   const v = g.view;
   const moves = useMemo(

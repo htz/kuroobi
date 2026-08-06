@@ -839,8 +839,14 @@ function GgsResults({ snap, onStudy }: { snap: GgsSnapshot; onStudy: (text: stri
                      discs={r.my_diff ?? 0} when={fmtDay(r.at)}
                      note={gtype === 'all' ? gtypeLabel(baseType(r.base)) : undefined}
                      rating={r.my_rating}
-                     // GGF なら開始局面も入っている (抽選開局の対局が戻る)
-                     onClick={() => onStudy(r.ggf || r.kifu)} />
+                     // GGF なら開始局面も入っている (抽選開局の対局が戻る)。
+                     // どちらも無い対局は GGS から取り出す (番号があるとき)
+                     onClick={() => {
+                       const text = r.ggf || r.kifu;
+                       if (text) onStudy(text);
+                       else if (r.archive) void ggsApi.look(r.archive);
+                     }}
+                     dim={!r.ggf && !r.kifu && !r.archive} />
         ))}
       </Section>
     </div>

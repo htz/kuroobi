@@ -110,6 +110,8 @@ export const ggsApi = {
   watch: (id: string, on: boolean) => call('ggs_watch', { id, on }),
   closeMatch: (id: string) => call('ggs_close_match', { id }),
   look: (id: string) => call('ggs_look', { id }),
+  /** 受け取った一言と棋譜を消す (出しっぱなしにしない)。 */
+  ack: () => call('ggs_ack', {}),
   autoview: () => call<string>('ggs_autoview', {}),
   chat: (target: string, text: string) => call('ggs_chat', { target, text }),
   matchCmd: (id: string, verb: 'undo' | 'abort' | 'resign' | 'tell', arg = '') =>

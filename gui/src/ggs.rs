@@ -1708,6 +1708,15 @@ pub fn run(
                         }
                     } else if ln.starts_with("/os: ERR") {
                         ctx.log("info", &format!("サーバーエラー: {ln}"));
+                        // 通信ログは開いていないと読めない。押した結果が
+                        // 断られたことは、その場で言わないと伝わらない
+                        let msg = ln.trim_start_matches("/os: ERR").trim();
+                        ctx.snap.lock().unwrap().notice = if msg.is_empty() {
+                            "GGS がこの操作を受け付けませんでした".into()
+                        } else {
+                            format!("GGS: {msg}")
+                        };
+                        ctx.dirty = true;
                     }
                 }
 

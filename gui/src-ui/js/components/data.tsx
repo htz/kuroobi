@@ -321,7 +321,7 @@ export function RateChart({ points, height = 74, width = 300 }: {
   );
 }
 
-export function ResultRow({ win, draw, opponent, discs, when, note, rating, onClick }: {
+export function ResultRow({ win, draw, opponent, discs, when, note, rating, dim, onClick }: {
   win: boolean;
   /** 引き分け。勝/負の 2 値に丸めると石差 0 の対局が「負」になる */
   draw?: boolean;
@@ -333,6 +333,8 @@ export function ResultRow({ win, draw, opponent, discs, when, note, rating, onCl
   note?: string;
   /** 対局後の自分のレート。 */
   rating?: number | null;
+  /** 棋譜がどこにも無くて開けない対局。押せないことを見た目でも言う。 */
+  dim?: boolean;
   onClick?: () => void;
 }) {
   const body = <>
@@ -368,10 +370,10 @@ export function ResultRow({ win, draw, opponent, discs, when, note, rating, onCl
     padding: '0 var(--sp-2)', textAlign: 'left', color: 'var(--text)',
   };
   // 押せないときは span。button のままだと Tab で回ってくるのに何も起きない
-  return onClick
+  return onClick && !dim
     ? <button type="button" className="k-row" onClick={onClick} title="検討で開く"
               style={{ ...style, border: 0, background: 'transparent', cursor: 'pointer' }}>{body}</button>
-    : <div style={style}>{body}</div>;
+    : <div style={{ ...style, opacity: dim ? 0.5 : 1 }}>{body}</div>;
 }
 
 export { Badge, Dot };
