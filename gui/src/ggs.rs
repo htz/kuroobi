@@ -1916,7 +1916,11 @@ fn handle_block(
         // 打つなら人は何もしないので、鳴らすと邪魔にしかならない
         m.told_turn = true;
         if !auto {
-            let who = if m.opp_name.is_empty() { mid.clone() } else { m.opp_name.clone() };
+            let who = if m.opp_name.is_empty() {
+                mid.clone()
+            } else {
+                m.opp_name.clone()
+            };
             ctx.notify("GGS: あなたの手番です", &who);
         }
     } else if turn != m.my_color {
@@ -2515,10 +2519,7 @@ fn handle_match_end(
                 // 終局の石差は棋譜を再生して数える。対局の記録は取り込みが
                 // 終わるころには残っていない
                 let (black, white) = match kuroobi::learn::replay(start_opt, &kifu) {
-                    Ok((_, fin)) => (
-                        fin.black.count_ones() as u8,
-                        fin.white.count_ones() as u8,
-                    ),
+                    Ok((_, fin)) => (fin.black.count_ones() as u8, fin.white.count_ones() as u8),
                     Err(_) => (0, 0),
                 };
                 let entry = crate::LearnEntry {

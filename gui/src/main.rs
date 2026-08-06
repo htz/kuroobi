@@ -551,7 +551,11 @@ pub fn learn_log_append(e: &LearnEntry) {
     let Ok(line) = serde_json::to_string(e) else {
         return;
     };
-    if let Ok(mut f) = std::fs::OpenOptions::new().create(true).append(true).open(&path) {
+    if let Ok(mut f) = std::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(&path)
+    {
         use std::io::Write;
         let _ = writeln!(f, "{line}");
     }
@@ -628,7 +632,11 @@ async fn learn_undo(app: State<'_, App>, at: u64, kifu: String) -> Result<usize,
         ensure_engine_in(&eng, &stop)?;
         let mut guard = eng.lock().unwrap();
         let engine = guard.as_mut().ok_or("エンジンがまだありません")?;
-        engine.undo_learn((!start.is_empty()).then_some(start.as_str()), &kifu, &changes)
+        engine.undo_learn(
+            (!start.is_empty()).then_some(start.as_str()),
+            &kifu,
+            &changes,
+        )
     })
     .await
     .map_err(|e| e.to_string())??;
@@ -1126,9 +1134,7 @@ async fn save_kifu(
     let p = path.into_path().map_err(|e| e.to_string())?;
     // 書き分けは拡張子で決める。保存の窓で形式をもう一度聞くと、名前を
     // 決めたばかりの人に同じことを二度考えさせることになる
-    let ggf_out = p
-        .extension()
-        .is_some_and(|e| e.eq_ignore_ascii_case("ggf"));
+    let ggf_out = p.extension().is_some_and(|e| e.eq_ignore_ascii_case("ggf"));
     let body = if ggf_out { ggf } else { format!("{kifu}\n") };
     std::fs::write(&p, body).map_err(|e| e.to_string())?;
     Ok(Some(p.display().to_string()))
@@ -1157,7 +1163,11 @@ fn to_ggf(game: &Reversi, black: &str, white: &str) -> String {
     out.push_str(&format!(
         "BO[8 {} {}]",
         ggf_squares(&start),
-        if start.player == Color::Black { "*" } else { "O" }
+        if start.player == Color::Black {
+            "*"
+        } else {
+            "O"
+        }
     ));
     let mut color = start.player;
     for r in &game.history {
@@ -1483,7 +1493,12 @@ async fn book_node(app: State<'_, App>, kifu: String) -> Result<BookNodeView, St
         }
         Ok(BookNodeView {
             cells,
-            player: if player == Color::Black { "black" } else { "white" }.into(),
+            player: if player == Color::Black {
+                "black"
+            } else {
+                "white"
+            }
+            .into(),
             black: b.black.count_ones() as u8,
             white: b.white.count_ones() as u8,
             moves: moves
@@ -2232,7 +2247,8 @@ mod tests {
     /// パスを含む 1 局を書いて読み直しても手番がずれない。
     #[test]
     fn writes_pass_and_result() {
-        let src = "(;GM[Othello]BO[8 ---------------------------O*------*O--------------------------- *]\
+        let src =
+            "(;GM[Othello]BO[8 ---------------------------O*------*O--------------------------- *]\
                    B[E6]W[F4]B[C3]W[D6]B[F6]W[E7]B[F5]W[G5]B[E3]W[G4]B[C7]W[D3]B[F3]W[C4]\
                    B[C6]W[C5]B[B4]W[B6]B[D7]W[B5]B[C2]W[A3]B[F8]W[E8]B[D8]W[C8]B[B8]W[D2]\
                    B[G3]W[E2]B[A6]W[C1]B[D1]W[E1]B[F2]W[F1]B[F7]W[H3]B[A5]W[A7]B[A8]W[B7]\

@@ -69,13 +69,15 @@ jobs:
         run: npm run build
 
   gui-app:
-    name: 対局 GUI のアプリ (ビルド)
+    name: 対局 GUI のアプリ (fmt / clippy / test / ビルド)
     runs-on: macos-latest
     needs: gui-ui
     steps:
       - uses: actions/checkout@v7
 
       - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
       - uses: Swatinem/rust-cache@v2
         with:
           workspaces: gui
@@ -91,6 +93,21 @@ jobs:
         run: |
           npm ci
           npm run build
+
+      # gui/ はルートとは別のクレート。ルートの job で回した fmt / clippy /
+      # test はこちらを見ない。ここで回さないと、不要キャストのような
+      # 指摘が素通りする (実際に 1 つ紛れたことがある)。
+      - name: 書式
+        working-directory: gui
+        run: cargo fmt --all -- --check
+
+      - name: clippy
+        working-directory: gui
+        run: cargo clippy --all-targets -- -D warnings
+
+      - name: テスト
+        working-directory: gui
+        run: cargo test --release
 
       - name: アプリをビルド
         working-directory: gui
