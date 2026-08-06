@@ -3,7 +3,7 @@ import { api, ggsApi, jsLog } from './api';
 import type { ChatMsg, GgsSnapshot, MatchView } from './types';
 import {
   CLOCK_CHOICES, GTYPE_CHOICES, clockOf, countDiscs, ggsMoveToIndex, gtypeLabel,
-  fingerValue, hasJapanese, normKey, parseCond, translate, useClocks,
+  fingerGroups, fingerValue, hasJapanese, normKey, parseCond, translate, useClocks,
   type ClockSide, type ClockView,
 } from './ggs';
 import { EmptyState, Section } from './components/layout';
@@ -888,6 +888,9 @@ function fmtDay(secs: number): string {
 function GgsUsers({ snap, onNav }: { snap: GgsSnapshot; onNav: (id: NavId) => void }) {
   const [sel, setSel] = useState<string | null>(null);
   const [mode, setMode] = useState<'who' | 'top'>('who');
+  // レートは形式ごとに別のプール。混ぜると順位が意味を持たないので、
+  // ランキングは見たいプールを選べるようにする (自分のレートは両方出る)
+  const [pool, setPool] = useState('8');
   const [tab, setTab] = useState('プロフィール');
 
   if (sel) {
@@ -912,12 +915,20 @@ function GgsUsers({ snap, onNav }: { snap: GgsSnapshot; onNav: (id: NavId) => vo
       </Section>
 
       <Section title={mode === 'who' ? '接続中' : 'ランキング'}
-               aside={<span style={{ display: 'flex', gap: 'var(--sp-2)', alignItems: 'center' }}>
+               aside={<>
+                 {/* プールは上位のときだけ選ばせる。接続中の一覧は
+                     プールに関係なく同じ顔ぶれなので、出すと嘘になる */}
+                 {mode === 'top' && (
+                   <Segmented size="chip" value={pool} onChange={(p) => {
+                     setPool(p);
+                     void ggsApi.top(p, 100);
+                   }} options={[{ value: '8', label: '通常' }, { value: '8r', label: 'ランダム開局' }]} />
+                 )}
                  <Segmented size="chip" value={mode} onChange={(m) => {
                    setMode(m);
-                   if (m === 'who') void ggsApi.who('8'); else void ggsApi.top('8', 100);
+                   if (m === 'who') void ggsApi.who('8'); else void ggsApi.top(pool, 100);
                  }} options={[{ value: 'who', label: '接続中' }, { value: 'top', label: '上位' }]} />
-               </span>}>
+               </>}>
         {!rows.length && <Empty>いません。</Empty>}
         {rows.map((u) => (
           <button key={u.name} type="button" className="k-row" onClick={() => setSel(u.name)}
@@ -984,26 +995,33 @@ function UserDetail({ snap, name, tab, onTab, onBack, onNav }: {
         {tab === 'プロフィール' ? (
           <>
             {!fields.length && <Empty>読み込んでいます…</Empty>}
-            {fields.map(([k, v]) => {
-              const key = normKey(k).replace(/\(.*\)/, '');
-              // 条件式は文字に潰さず木のまま描く。構造がそのまま意味になっている
-              const cond = ['accept', 'decline', 'request'].includes(key) ? parseCond(v) : null;
-              return (
-                <div key={k} style={{
-                  display: 'flex', gap: 'var(--sp-3)', alignItems: 'flex-start',
-                  padding: '6px 0', borderBottom: '1px solid var(--border-weak)',
-                }}>
-                  <span style={{
-                    width: 'var(--w-label)', flex: 'none', fontSize: 'var(--fs-6)', color: 'var(--sub)',
-                  }}>{k}</span>
-                  <span style={{ flex: 1, minWidth: 0, fontSize: 'var(--fs-5)' }}>
-                    {cond ? <FormulaView node={cond} top />
-                      : ['accept', 'decline', 'request'].includes(key) ? '指定なし'
-                      : fingerValue(k, v)}
-                  </span>
-                </div>
-              );
-            })}
+            {/* 均一に 24 行並べると、申し込む前に見たいものが埋もれる。
+                まとまりと並び順は ggs.ts の FINGER_GROUPS が決める */}
+            {fingerGroups(fields).map((g) => (
+              <Section key={g.title} title={g.title}>
+                {g.rows.map((r) => {
+                  const key = normKey(r.key).replace(/\(.*\)/, '');
+                  // 条件式は文字に潰さず木のまま描く。構造がそのまま意味になっている
+                  const cond = ['accept', 'decline', 'request'].includes(key)
+                    ? parseCond(r.value) : null;
+                  return (
+                    <div key={r.key} style={{
+                      display: 'flex', gap: 'var(--sp-3)', alignItems: 'flex-start',
+                      padding: '6px 0', borderBottom: '1px solid var(--border-weak)',
+                    }}>
+                      <span style={{
+                        width: 'var(--w-label)', flex: 'none', fontSize: 'var(--fs-6)', color: 'var(--sub)',
+                      }}>{r.label}</span>
+                      <span style={{ flex: 1, minWidth: 0, fontSize: 'var(--fs-5)' }}>
+                        {cond ? <FormulaView node={cond} top />
+                          : ['accept', 'decline', 'request'].includes(key) ? '指定なし'
+                          : fingerValue(r.key, r.value)}
+                      </span>
+                    </div>
+                  );
+                })}
+              </Section>
+            ))}
           </>
         ) : (
           <>

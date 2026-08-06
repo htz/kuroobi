@@ -219,6 +219,89 @@ export const hasJapanese = (t: string): boolean => /[぀-ヿ一-鿿]/.test(t);
 /// finger のキーは "stored (-)" のように空白が入ることがある。
 export const normKey = (k: string): string => k.replace(/\s+/g, '');
 
+/* プロフィール (finger) の項目名。**サーバーの鍵をそのまま出さない** —
+ * dblen や vt100 が並んでも読めないし、画面の文言は日本語で揃える決め。 */
+const FINGER_LABEL: Record<string, string> = {
+  // --- 対局を申し込む前に見たいもの ---
+  open: '申し込み受付', accept: '自動で受ける条件', decline: '自動で断る条件',
+  'request(+)': '募集中の条件', 'request(-)': '募集中の条件',
+  rated: 'レート戦', play: '対局の状況',
+  'stored(+)': '中断中の対局', 'stored(-)': '中断中の対局',
+  // --- 素性 ---
+  name: '登録名', info: '備考', email: 'メール', since: '接続開始',
+  idle: '無操作の時間', host: 'ホスト', dblen: '定石どおりの手',
+  // --- 設定・状態 ---
+  level: 'アクセス権限', trust: '信用', client: 'クライアント',
+  sock: '接続方式', bell: '通知を受け取るもの', hear: '発言の受信', vt100: 'VT100 表示',
+  'watch(+)': '観戦中の対局', 'watch(-)': '観戦中の対局',
+  'track(+)': '入退室を知らせる相手', 'track(-)': '入退室を知らせる相手',
+  'groups(+)': '所属グループ', 'groups(-)': '所属グループ',
+  'channs(+)': '参加チャンネル', 'channs(-)': '参加チャンネル',
+  'notify(+)': '通知を受け取る相手', 'notify(-)': '通知を受け取る相手',
+  'ignore(+)': '無視している相手', 'ignore(-)': '無視している相手',
+};
+
+/** 画面で意味を持たないもの (認証情報と、コマンドのエコー)。 */
+const FINGER_HIDDEN = ['passw', 'password', 'login', '/os', 'sock'];
+
+/** 申し込む前に見たい項目。値が空でも「指定なし」と出す。 */
+const FINGER_ALWAYS = ['open', 'accept', 'decline', 'request(+)', 'request(-)'];
+
+/* 項目のまとまり。**並び順もここが決める。**
+ * 載っていないものは「設定」の末尾へ回す。均一に 24 行並べると、
+ * 申し込む前に見たいものが埋もれる。 */
+const FINGER_GROUPS: { title: string; keys: string[] }[] = [
+  {
+    title: '対局の申し込み',
+    keys: ['open', 'accept', 'decline', 'request(+)', 'request(-)', 'rated',
+           'play', 'stored(+)', 'stored(-)'],
+  },
+  { title: '素性', keys: ['name', 'info', 'email', 'since', 'idle', 'host', 'dblen'] },
+  {
+    title: '設定',
+    keys: ['level', 'trust', 'client', 'vt100', 'hear', 'bell', 'groups(+)',
+           'groups(-)', 'channs(+)', 'channs(-)', 'notify(+)', 'notify(-)',
+           'watch(+)', 'watch(-)', 'track(+)', 'track(-)', 'ignore(+)', 'ignore(-)'],
+  },
+];
+
+/** プロフィールの 1 行。`label` は日本語、`raw` は元の鍵 (条件式の判定用)。 */
+export interface FingerRow { key: string; label: string; value: string }
+
+/** finger の生の項目を、まとまりごとに並べ直して日本語の名前を付ける。 */
+export function fingerGroups(fields: [string, string][]): { title: string; rows: FingerRow[] }[] {
+  const got = new Map(fields.map(([k, v]) => [normKey(k), v]));
+  const used = new Set<string>();
+  const row = (k: string): FingerRow | null => {
+    if (FINGER_HIDDEN.includes(k.replace(/\(.*\)/, ''))) return null;
+    const v = got.get(k);
+    if (v === undefined && !FINGER_ALWAYS.includes(k)) return null;
+    used.add(k);
+    return { key: k, label: FINGER_LABEL[k] ?? k, value: v ?? '' };
+  };
+  /* `foo(+)` と `foo(-)` は同じ名前になる (サーバーが持ち方を 2 通り返す)。
+   * 両方出すと同じ見出しが 2 行並ぶので、**値のあるほうだけ**を残す。 */
+  const dedupe = (rows: FingerRow[]): FingerRow[] => {
+    const seen = new Map<string, FingerRow>();
+    for (const r of rows) {
+      const cur = seen.get(r.label);
+      if (!cur || (!cur.value.trim() && r.value.trim())) seen.set(r.label, r);
+    }
+    return [...seen.values()];
+  };
+  const out = FINGER_GROUPS.map((g) => ({
+    title: g.title,
+    rows: dedupe(g.keys.map(row).filter((r): r is FingerRow => r !== null)),
+  }));
+  // 表に載っていない項目は落とさず「設定」の末尾へ。サーバーが項目を
+  // 増やしたときに黙って消えるほうが困る
+  const rest = [...got.entries()]
+    .filter(([k]) => !used.has(k) && !FINGER_HIDDEN.includes(k.replace(/\(.*\)/, '')))
+    .map(([k, v]) => ({ key: k, label: FINGER_LABEL[k] ?? k, value: v }));
+  out[out.length - 1].rows.push(...dedupe(rest));
+  return out.filter((g) => g.rows.length > 0);
+}
+
 // GGS の記号をそのまま出しても読めないので言い換える。
 export function fingerValue(k: string, v: string): string {
   const key = normKey(k).replace(/\(.*\)/, '');
