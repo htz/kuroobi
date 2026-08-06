@@ -121,7 +121,7 @@ export function App() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
   useEffect(() => { autoGraph.current = () => void graph.update(); }, [graph]);
-  useEffect(() => { bookLine.current = book.open; }, [book.open]);
+  useEffect(() => { bookLine.current = book.goto; }, [book.goto]);
 
   /* 画面確認用 (KUROOBI_GGS_AUTOVIEW=players のように指定する)。
    * GGS の画面は開くまで描かれないので、撮るには行き先を指定する経路が要る。 */
@@ -286,7 +286,7 @@ export function App() {
                   初期局面から入れ直すしかない (打ち直しでしか行けない) */}
               <Button disabled={!g.hasBook || !v}
                       onClick={() => {
-                        book.open(v!.moves.slice(0, v!.cursor)
+                        book.goto(v!.moves.slice(0, v!.cursor)
                           .filter((m): m is number => m != null).map(sqName).join(''));
                         setNav('book');
                       }}>定石で開く</Button>
@@ -378,7 +378,7 @@ export function App() {
       {/* GGS はドックを持たない (一覧が本体の左に付く) */}
       {isBook && (
         <Dock tabs={['定石']} active="定石" open={dockOpen}>
-          <BookDock b={book} />
+          <BookDock b={book} onStudy={(kifu) => { setNav('study'); void loadFromText(kifu); }} />
         </Dock>
       )}
 
