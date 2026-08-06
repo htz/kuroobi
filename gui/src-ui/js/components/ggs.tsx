@@ -140,10 +140,13 @@ export function Meter({ icon, label, value, unit, ratio, note }: {
 }) {
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: 'var(--sp-1)' }}>
-      {/* display は .k-meter-text が持つ（1040px で消す） */}
-      <div className="k-meter-text" style={{ alignItems: 'center', fontSize: 'var(--fs-6)', color: 'var(--sub)' }}>
-        <span style={{ display: 'flex', alignItems: 'center', gap: 6 }}><Icon name={icon} size={13} />{label}</span>
-        <span style={{ marginLeft: 'auto', color: 'var(--text)' }}>
+      {/* 48px の列に残すのは絵と 4px の溝だけ。文字は .k-meter-text が
+          1040px で落とす。**絵はその外に出す** — 中に入れると一緒に消えて、
+          何の溝なのか分からない棒が 2 本並ぶ */}
+      <div style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 'var(--fs-6)', color: 'var(--sub)' }}>
+        <Icon name={icon} size={13} />
+        <span className="k-meter-text">{label}</span>
+        <span className="k-meter-text" style={{ marginLeft: 'auto', color: 'var(--text)' }}>
           <b style={{ fontWeight: 600 }}>{value}</b>{unit && <span style={{ color: 'var(--sub)' }}>{unit}</span>}
         </span>
       </div>

@@ -14,6 +14,7 @@ import { Board } from './components/board';
 import { EvalGraph, KifuTable, MoveScrub, PlayerRow } from './components/data';
 import { JobList, Meter, Nav, NAV_LOCAL, ggsNav, Toasts, type NavId, type Toast } from './components/ggs';
 import { Button, Segmented, Toggle } from './components/primitives';
+import { Icon } from './components/Icons';
 import { Strength } from './components/strength';
 import { BookDock, BookPane, useBookBrowse } from './BookScreen';
 import { LearnLog } from './LearnLog';
@@ -242,12 +243,26 @@ export function App() {
              {/* 使用率の上限はコア数 × 100%。溝はその割合で埋める */}
              <Meter icon="cpu" label="CPU" value={Math.round(cpu.cpu)} unit="%"
                     ratio={cpu.cpu / (cpu.cores * 100)} />
-             <Meter icon="memory" label="メモリ" value={(cpu.mem / 1e9).toFixed(1)} unit=" GB"
+             {/* 単位の前の空白は flex の中で潰れるので、潰れない空白を使う */}
+             <Meter icon="memory" label="メモリ" value={(cpu.mem / 1e9).toFixed(1)} unit={'\u00a0GB'}
                     ratio={cpu.mem_total > 0 ? cpu.mem / cpu.mem_total : 0} />
              <JobList jobs={jobsOf(cpu)} />
              </>}
-             {/* 設定はいちばん下。行き先ではないので行の並びには入れない */}
-             <Button onClick={() => setSettings(true)}>設定</Button>
+             {/* 設定はいちばん下。行き先ではないので行の並びには入れない。
+                 48px の列では文字を落として絵だけにする — 素の Button だと
+                 幅が足りずに文字がはみ出す */}
+             <button type="button" className="k-press" title="設定" aria-label="設定"
+                     onClick={() => setSettings(true)}
+                     style={{
+                       display: 'flex', alignItems: 'center', justifyContent: 'center',
+                       gap: 'var(--sp-2)', height: 'var(--h-field)', width: '100%',
+                       border: '1px solid var(--border)', borderRadius: 'var(--r-2)',
+                       background: 'var(--card)', color: 'var(--text)',
+                       fontSize: 'var(--fs-6)', cursor: 'pointer', padding: 0,
+                     }}>
+               <Icon name="gear" size={15} />
+               <span className="k-nav-label">設定</span>
+             </button>
            </>} />
 
       <Main>
