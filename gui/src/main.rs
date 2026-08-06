@@ -345,11 +345,33 @@ fn ensure_engine_in(
             threads: res.threads.unwrap_or_else(auto_threads),
             ..Default::default()
         };
-        let engine = Engine::new(cfg)?;
+        let engine = Engine::new(cfg).map_err(setup_error)?;
         *stop_slot.lock().unwrap() = Some(engine.stop_handle());
         *guard = Some(engine);
     }
     Ok(())
+}
+
+/// エンジンを用意できなかった理由を、画面に出す言葉へ直す。
+///
+/// ライブラリ側の文言は CLI と共用なので `nnue <path>: …` のように
+/// 内部の名前と英語のまま来る。**トーストに内部符丁と直し方の無い文は
+/// 出さない** (デザイン規則 34 / 61) ので、ここで言い換える。
+fn setup_error(e: String) -> String {
+    let what = if e.starts_with("nnue ") {
+        "NNUE の重み"
+    } else if e.starts_with("weights ") {
+        "線形評価の重み"
+    } else {
+        return e;
+    };
+    // "nnue /path/to/x.bin: No such file or directory (os error 2)"
+    let path = e
+        .split_once(' ')
+        .and_then(|(_, rest)| rest.split_once(": "))
+        .map(|(p, _)| p)
+        .unwrap_or("");
+    format!("{what}を読み込めません ({path})。設定でファイルの場所を指定してください。")
 }
 
 fn ensure_engine(app: &State<App>) -> Result<(), String> {
