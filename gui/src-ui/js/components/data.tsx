@@ -272,7 +272,7 @@ export function PlayerRow({ color, name, rate, dev, meta, clock, active, discs, 
         marginLeft: 'auto', fontSize: 'var(--fs-4)', fontWeight: active ? 700 : 400,
         padding: '3px 12px', borderRadius: 'var(--r-pill)',
         background: active ? 'var(--accent)' : 'var(--bg)',
-        color: active ? '#fff' : 'var(--sub)',
+        color: active ? 'var(--on-accent)' : 'var(--sub)',
       }}>{clock}</span>}
     </div>
   );

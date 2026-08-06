@@ -169,7 +169,7 @@ export function BottomPanel({ tabs, active, onTab, onClose, height = 240, childr
                 display: 'flex', alignItems: 'center', gap: 6,
               }}>
               {t.label}
-              {t.unread ? <span style={{ background: 'var(--bad)', color: '#fff', borderRadius: 'var(--r-pill)', padding: '0 5px', fontSize: 'var(--fs-7)' }}>{t.unread}</span> : null}
+              {t.unread ? <span style={{ background: 'var(--bad)', color: 'var(--on-bad)', borderRadius: 'var(--r-pill)', padding: '0 5px', fontSize: 'var(--fs-7)' }}>{t.unread}</span> : null}
             </button>
           );
         })}
@@ -240,7 +240,7 @@ export function Overlay({ onClose, children }: { onClose?: () => void; children:
   return (
     <div onClick={onClose} style={{
       position: 'absolute', inset: 0, zIndex: 30,
-      background: 'rgba(0,0,0,.45)', display: 'grid', placeItems: 'center',
+      background: 'var(--scrim)', display: 'grid', placeItems: 'center',
       padding: 'var(--sp-5)',
     }}>
       {/* 中身を押したときに閉じない */}

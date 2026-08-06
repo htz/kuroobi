@@ -29,7 +29,7 @@ export type ButtonProps = {
 
 export function Button({ variant = 'secondary', size = 'ctrl', disabled, children, onClick, title, className }: ButtonProps) {
   const skin: React.CSSProperties =
-    variant === 'primary' ? { background: 'var(--accent-dim)', border: '1px solid var(--accent)', color: '#fff', fontWeight: 600 }
+    variant === 'primary' ? { background: 'var(--accent-dim)', border: '1px solid var(--accent)', color: 'var(--on-accent)', fontWeight: 600 }
     : variant === 'danger' ? { background: 'transparent', border: '1px solid var(--bad)', color: 'var(--bad)' }
     : variant === 'ghost' ? { background: 'transparent', border: '1px solid var(--border)', color: 'var(--sub)' }
     : { background: 'var(--card)', border: '1px solid var(--border)', color: 'var(--text)' };
@@ -103,7 +103,7 @@ export function Toggle({ checked, onChange, label }: { checked: boolean; onChang
         }}>
         <span style={{
           position: 'absolute', top: 2, left: checked ? 16 : 2, width: 16, height: 16, borderRadius: '50%',
-          background: checked ? '#fff' : 'var(--sub)', transition: 'left var(--dur) var(--ease)',
+          background: checked ? 'var(--on-accent)' : 'var(--sub)', transition: 'left var(--dur) var(--ease)',
         }} />
       </button>
     </label>
@@ -201,7 +201,7 @@ export function Badge({ tone = 'sub', children }: { tone?: 'sub' | 'accent' | 'o
     <span style={{
       padding: '0 5px', borderRadius: 'var(--r-pill)', fontSize: 'var(--fs-7)',
       background: tone === 'bad' ? 'var(--bad)' : 'transparent',
-      color: tone === 'bad' ? '#fff' : c,
+      color: tone === 'bad' ? 'var(--on-bad)' : c,
       boxShadow: tone === 'bad' ? 'none' : 'inset 0 0 0 1px ' + c,
     }}>{children}</span>
   );

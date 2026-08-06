@@ -112,7 +112,7 @@ function NavRow({ item, active, onSelect }: { item: NavItem; active: boolean; on
         height: 'var(--h-field)', display: 'flex', alignItems: 'center', gap: 'var(--sp-3)',
         border: 0, borderRadius: 'var(--r-2)', fontSize: 'var(--fs-4)',
         background: active ? 'var(--accent-dim)' : 'transparent',
-        color: active ? '#fff' : 'var(--text)', fontWeight: active ? 600 : 400,
+        color: active ? 'var(--on-accent)' : 'var(--text)', fontWeight: active ? 600 : 400,
       }}>
       <Icon name={item.icon} size={16} />
       <span className="k-nav-label">{item.label}</span>
@@ -120,8 +120,9 @@ function NavRow({ item, active, onSelect }: { item: NavItem; active: boolean; on
         <span style={{
           marginLeft: 'auto', minWidth: 18, height: 18, padding: '0 5px', borderRadius: 9,
           fontSize: 'var(--fs-7)', fontWeight: item.alert ? 700 : 600, display: 'grid', placeItems: 'center',
-          background: item.alert ? 'var(--bad)' : active ? 'rgba(255,255,255,.22)' : 'var(--border)',
-          color: item.alert ? 'var(--bg)' : active ? '#fff' : 'var(--text)',
+          background: item.alert ? 'var(--bad)'
+            : active ? 'color-mix(in srgb, var(--on-accent) 22%, transparent)' : 'var(--border)',
+          color: item.alert ? 'var(--on-bad)' : active ? 'var(--on-accent)' : 'var(--text)',
         }}>{item.count}</span>
       )}
       {item.dot && <span style={{
@@ -276,7 +277,7 @@ export function Tag({ tone = 'sub', children }: { tone?: 'sub' | 'accent' | 'ok'
     padding: '1px 6px', borderRadius: 'var(--r-1)', fontSize: 9.5, flex: 'none',
     fontWeight: solid ? 600 : 400,
     background: solid ? 'var(--accent-dim)' : tone === 'sub' ? 'var(--card)' : `color-mix(in srgb, var(--${tone}) 18%, transparent)`,
-    color: solid ? '#fff' : tone === 'sub' ? 'var(--sub)' : `var(--${tone})`,
+    color: solid ? 'var(--on-accent)' : tone === 'sub' ? 'var(--sub)' : `var(--${tone})`,
   }}>{children}</span>;
 }
 
@@ -493,7 +494,7 @@ export function Bubble({ m, showName }: { m: Msg; showName?: boolean }) {
       )}
       <div style={{
         maxWidth: 320, padding: '6px 10px', borderRadius: 9, fontSize: 'var(--fs-5)', lineHeight: 1.5,
-        background: m.mine ? 'var(--accent-dim)' : 'var(--panel)', color: m.mine ? '#fff' : 'var(--text)',
+        background: m.mine ? 'var(--accent-dim)' : 'var(--panel)', color: m.mine ? 'var(--on-accent)' : 'var(--text)',
       }}>
         {m.body}
         {m.ja && <div style={{
