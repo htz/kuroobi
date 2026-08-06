@@ -108,7 +108,7 @@ function GgsLogin() {
  * 通信ログと生コマンド。GGS は画面に出していない機能が多いので、
  * 逃げ道として直に打てる場所を必ず残す。
  */
-function GgsConsole({ snap }: { snap: GgsSnapshot }) {
+export function GgsConsole({ snap }: { snap: GgsSnapshot }) {
   const [cmd, setCmd] = useState('');
   const send = () => {
     const c = cmd.trim();
@@ -146,7 +146,7 @@ const wantsTranslation = (c: ChatMsg, login: string): boolean =>
 
 const trKey = (c: ChatMsg): string => c.from + '|' + c.text;
 
-function GgsChat({ snap }: { snap: GgsSnapshot }) {
+export function GgsChat({ snap }: { snap: GgsSnapshot }) {
   const [thread, setThread] = useState('.chat');
   const [text, setText] = useState('');
   const [autoJa, setAutoJa] = useState(true);

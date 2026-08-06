@@ -7,12 +7,12 @@ import { api, ggsApi, jsLog, type ActivityView } from './api';
 import { useActivity, useEngineSettings, useEngineTurn, useGraph, useHints, useLearnLog, useStartGame } from './engine';
 import { fmtSecs } from './ggs';
 import { cellsOf, connOf, evalsOf, ggsPlaying, movesOf, navBadges, sqName } from './adapt';
-import { AppFrame, Dock, Main, Section, StatusBar, StatusStat, Toolbar } from './components/layout';
-import { GgsScreen } from './GgsScreens';
+import { AppFrame, BottomPanel, Dock, Main, Section, StatusBar, StatusStat, Toolbar } from './components/layout';
+import { GgsChat, GgsConsole, GgsScreen } from './GgsScreens';
 import { Confirm, PasteKifu, Settings } from './Dialogs';
 import { Board } from './components/board';
 import { EvalGraph, KifuTable, MoveScrub, PlayerRow } from './components/data';
-import { JobList, Meter, Nav, NAV_LOCAL, ggsNav, Toasts, type NavId, type Toast } from './components/ggs';
+import { JobList, Meter, Nav, NAV_LOCAL, StatusChip, ggsNav, Toasts, type NavId, type Toast } from './components/ggs';
 import { Button, Segmented, Toggle } from './components/primitives';
 import { Icon } from './components/Icons';
 import { Strength } from './components/strength';
@@ -59,9 +59,26 @@ export function App() {
   const startGame = useStartGame(g, ggsMatch, graph, confirm);
 
   // チャットの未読数。開いている間は 0 で、離れるときに既読位置を進める
+  /* GGS の対局中だけ、下の帯の右端からチャットとコンソールを開けるようにする。
+   *
+   * 行き先としては左の並びにもあるが、**対局中に離れたくない**。盤を見た
+   * まま 1 枚のパネルで済ませる (デザイン規則 12)。 */
+  const [panel, setPanel] = useState<'' | 'chat' | 'console'>('');
+
   const chatTotal = ggs.snap?.chat.length ?? 0;
   const [chatSeen, setChatSeen] = useState(0);
-  const chatUnread = nav === 'ggs-chat' ? 0 : Math.max(0, chatTotal - chatSeen);
+  // 下の板でチャットを開いている間も「読んでいる」扱いにする。
+  // 行き先として開いたときと同じにしないと、板を開けたまま未読が増える
+  const chatOpen = nav === 'ggs-chat' || panel === 'chat';
+  const chatUnread = chatOpen ? 0 : Math.max(0, chatTotal - chatSeen);
+
+  /** 下の板を切り替える。チャットから離れるときに既読位置を進める。 */
+  const showPanel = useCallback((next: '' | 'chat' | 'console') => {
+    setPanel((cur) => {
+      if (cur === 'chat' && next !== 'chat') setChatSeen(chatTotal);
+      return cur === next ? '' : next;
+    });
+  }, [chatTotal]);
 
   // 行き先とエンジンのモードは同じもの。ずれると検討中に打たれる
   const setMode = g.setMode;
@@ -386,6 +403,17 @@ export function App() {
         </div>
         )}
 
+        {/* GGS の対局中に開く下の板。チャットとコンソールが 1 枚を共有する */}
+        {isGgs && panel && ggs.snap && (
+          <BottomPanel
+            tabs={[{ id: 'chat', label: 'チャット', unread: panel === 'chat' ? 0 : chatUnread },
+                   { id: 'console', label: 'コンソール' }]}
+            active={panel} onTab={(id) => showPanel(id as 'chat' | 'console')}
+            onClose={() => showPanel('')}>
+            {panel === 'chat' ? <GgsChat snap={ggs.snap} /> : <GgsConsole snap={ggs.snap} />}
+          </BottomPanel>
+        )}
+
         {/* 手数を辿る帯。分析していなくても辿れるので、グラフより先に置く */}
         {study && !isGgs && !isBook && v && (
           <MoveScrub plies={v.moves.length} cursor={v.cursor} blunder={blunder}
@@ -417,7 +445,18 @@ export function App() {
             {nps > 0 && <StatusStat label="nps" value={(nps / 1e6).toFixed(1)} unit="Mnps" />}
           </>}
           right={isGgs
-            ? <StatusStat label="GGS" value={conn === 'online' ? '接続中' : conn === 'offline' ? '未接続' : '接続しています…'} />
+            ? <>
+              {/* 対局中だけ出す。観戦や一覧を見ているときに出すと、
+                  左の並びと同じものが 2 か所にあるだけになる */}
+              {ggsMatch && <>
+                <StatusChip label="チャット" unread={panel === 'chat' ? 0 : chatUnread}
+                            active={panel === 'chat'}
+                            onClick={() => showPanel('chat')} />
+                <StatusChip label="コンソール" active={panel === 'console'}
+                            onClick={() => showPanel('console')} />
+              </>}
+              <StatusStat label="GGS" value={conn === 'online' ? '接続中' : conn === 'offline' ? '未接続' : '接続しています…'} />
+            </>
             : isBook
             ? <StatusStat label="定石" value={book.node ? book.node.size.toLocaleString() + ' 局面' : '—'} />
             : <>
