@@ -419,6 +419,34 @@ impl Engine {
         Ok(done)
     }
 
+    /// 取り込みを 1 局ぶん取り消す。戻せた手の数を返す。
+    ///
+    /// 学習分を書き戻して保存したあと、**定石本体をファイルから読み直して
+    /// 重ね直す**。あちらは「ファイル + 学習分」なので、学習分を直したら
+    /// 作り直すのが正しい (部分的に戻すと、元のファイルに何が入っていたかを
+    /// 推測することになる)。
+    pub fn undo_learn(
+        &mut self,
+        start: Option<&str>,
+        kifu: &str,
+        changes: &[crate::learn::BackupChange],
+    ) -> Result<usize, String> {
+        let n = crate::learn::undo_backup(&mut self.learned, start, kifu, changes)?;
+        self.learned
+            .save(&self.learn_path)
+            .map_err(|e| format!("学習の保存 {}: {e}", self.learn_path.display()))?;
+        let mut book = match Book::load(&self.config.book) {
+            Ok(b) if !b.is_empty() => Some(b),
+            _ => None,
+        };
+        if !self.learned.is_empty() {
+            let base = book.get_or_insert_with(Book::new);
+            crate::learn::merge_learned(base, &self.learned);
+        }
+        self.book = book;
+        Ok(n)
+    }
+
     /// 局面を指定深さで評価する (評価値グラフ・検討用)。完全読み域は厳密値。
     /// 値は手番視点。
     pub fn eval_position(&mut self, board: &Board, depth: u32) -> MoveEval {

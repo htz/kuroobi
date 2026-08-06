@@ -41,6 +41,11 @@ impl Entry {
         self.moves.first()
     }
 
+    /// 候補 `mv` を消す。取り込みの取り消しで、その手が元は無かった場合に使う。
+    pub fn remove_move(&mut self, mv: Position) {
+        self.moves.retain(|c| c.mv != mv);
+    }
+
     /// 候補 `mv` (正規化空間の手) の値を付け替える。無ければ追加する。
     /// 値の降順を保つので、付け替えで最善が入れ替わることがある
     /// (実戦の帰結を書き戻す学習がこれを使う)。
@@ -181,6 +186,11 @@ impl Book {
     /// 正規化キーで直接引く (学習の書き戻し用)。
     pub fn get_raw_mut(&mut self, key: (u64, u64)) -> Option<&mut Entry> {
         self.map.get_mut(&key)
+    }
+
+    /// 正規化済みの鍵で消す (取り込みの取り消しで使う)。
+    pub fn remove_raw(&mut self, key: (u64, u64)) -> Option<Entry> {
+        self.map.remove(&key)
     }
 
     pub fn insert_raw(&mut self, key: (u64, u64), e: Entry) {

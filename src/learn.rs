@@ -43,6 +43,9 @@ pub struct BackupChange {
     /// 書き換えたあとの、その局面の最善手の値。
     /// `best - after` がその手で損した石差になる。
     pub best: f32,
+    /// この取り込みで学習分に新しく作った局面か。取り消すときに
+    /// 「値を戻す」のか「局面ごと消す」のかが変わる。
+    pub new_entry: bool,
 }
 
 /// 取り込みの結果。
@@ -179,7 +182,8 @@ impl BackupJob {
                 continue;
             };
             let (key, i) = Book::key(&board);
-            if learned.get_raw(key).is_none() {
+            let fresh = learned.get_raw(key).is_none();
+            if fresh {
                 if let Some(b) = base.get_raw(key) {
                     // 定石本体の候補一式 (深い値) を引き継いで学習を始める
                     learned.insert_raw(key, b.clone());
@@ -236,6 +240,7 @@ impl BackupJob {
                 before,
                 after,
                 best: e.best().map(|c| c.value).unwrap_or(after),
+                new_entry: fresh,
             });
             // この局面の値は「更新後の最善」。実戦手より良い代替が残って
             // いればそちらが親へ伝わる (敗着より根側へ負を遡らせない)
@@ -528,5 +533,79 @@ mod tests {
         merge_learned(&mut base, &learned);
         let v = base.get_raw(key0).unwrap().best().unwrap().value;
         assert!((v + 5.0).abs() < 1e-6);
+    }
+}
+
+/// 取り込みを 1 局ぶん取り消す。書き戻した値を控えの `before` へ戻し、
+/// この取り込みで作った局面は消す。戻せた手の数を返す。
+///
+/// **定石本体 (`base`) はここでは触らない。** あちらは「ファイル + 学習分」を
+/// 重ねたものなので、学習分を直したら読み直すのが正しい (部分的に戻すと、
+/// 元のファイルに何が入っていたかを推測することになる)。
+pub fn undo_backup(
+    learned: &mut Book,
+    start: Option<&str>,
+    kifu: &str,
+    changes: &[BackupChange],
+) -> Result<usize, String> {
+    let (line, _) = replay(start, kifu)?;
+    // 控えは手数 (パスを除く) で場所を指すので、同じ数え方で盤面を並べる
+    let boards: Vec<Board> = line
+        .iter()
+        .filter(|(_, m)| m.is_some())
+        .map(|(b, _)| *b)
+        .collect();
+    let mut n = 0;
+    // 書き込んだ順の逆に戻す。同じ局面が 2 度出る棋譜でも元に戻る
+    for c in changes.iter().rev() {
+        let Some(board) = boards.get(c.ply.wrapping_sub(1)) else {
+            continue;
+        };
+        let (key, i) = Book::key(board);
+        if c.new_entry {
+            if learned.remove_raw(key).is_some() {
+                n += 1;
+            }
+            continue;
+        }
+        let Some(e) = learned.get_raw_mut(key) else {
+            continue;
+        };
+        let mapped = Book::map_move(c.mv, i);
+        match c.before {
+            Some(v) => e.update_move(mapped, v),
+            None => e.remove_move(mapped),
+        }
+        n += 1;
+    }
+    Ok(n)
+}
+
+#[cfg(test)]
+mod undo_tests {
+    use super::*;
+
+    /// 取り込んで取り消すと、学習分が元に戻る。
+    #[test]
+    fn undo_restores_learned() {
+        let kifu = "f5d6c3d3c4f4c5b3c2e6";
+        let mut learned = Book::new();
+        let mut base = Book::new();
+        let mut job = BackupJob::new(None, kifu, 8).expect("作れること");
+        // 探索の代わりに 0 を返す (取り消しの検査に値の中身は要らない)
+        let out = loop {
+            match job.next(&mut learned, &mut base) {
+                JobStep::Search(_) => job.feed(0.0),
+                JobStep::Done(o) => break o,
+            }
+        };
+        assert!(out.updated > 0, "何も書き換えていない");
+        assert!(!learned.is_empty());
+        let n = undo_backup(&mut learned, None, kifu, &out.changes).expect("戻せること");
+        assert!(n > 0);
+        assert!(
+            learned.is_empty(),
+            "空の定石へ取り込んだので、戻せば空に戻る"
+        );
     }
 }

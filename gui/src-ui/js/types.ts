@@ -318,4 +318,6 @@ export interface LearnChange {
   after: number;
   /** 書き換えたあとのその局面の最善値。best - after が損した石差。 */
   best: number;
+  /** この取り込みで学習分に新しく作った局面か。 */
+  new_entry: boolean;
 }

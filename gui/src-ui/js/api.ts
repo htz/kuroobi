@@ -30,6 +30,8 @@ export const api = {
   learnGame: () => call<void>('learn_game'),
   /** 取り込んだ対局の控え (新しい順)。 */
   learnLog: () => call<LearnEntry[]>('learn_log', {}),
+  /** 取り込みを 1 局ぶん取り消す。戻せた手の数を返す。 */
+  learnUndo: (at: number, kifu: string) => call<number>('learn_undo', { at, kifu }),
   hasBook: () => call<boolean>('has_book', {}),
   /** 定石を眺める。kifu は初期局面からの手順 ("f5d6" 形式、空なら初期局面)。 */
   bookNode: (kifu: string) => call<BookNode>('book_node', { kifu }),

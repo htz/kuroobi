@@ -493,6 +493,9 @@ pub struct LearnChange {
     pub after: f32,
     /// 書き換えたあとのその局面の最善値。`best - after` が損した石差。
     pub best: f32,
+    /// この取り込みで学習分に新しく作った局面か。
+    #[serde(default)]
+    pub new_entry: bool,
 }
 
 impl LearnChange {
@@ -503,6 +506,7 @@ impl LearnChange {
             before: c.before,
             after: c.after,
             best: c.best,
+            new_entry: c.new_entry,
         }
     }
 }
@@ -564,6 +568,67 @@ fn learn_log() -> Vec<LearnEntry> {
     // 画面に出すのは直近だけ。全部返すと、長く使うほど起動のたびに重くなる
     out.truncate(200);
     out
+}
+
+/// 取り込みを 1 局ぶん取り消す。控えの行 (`at` と棋譜で 1 件に決まる) を
+/// 探し、定石を戻してから控えからも消す。
+///
+/// 控えを先に消さない — 定石を戻せなかったのに記録だけ消えると、
+/// 「取り消したはずなのに残っている」を確かめる手立てが無くなる。
+#[tauri::command]
+async fn learn_undo(app: State<'_, App>, at: u64, kifu: String) -> Result<usize, String> {
+    let log = learn_log();
+    let e = log
+        .into_iter()
+        .find(|e| e.at == at && e.kifu == kifu)
+        .ok_or("その対局は控えにありません")?;
+    if e.changes.is_empty() {
+        return Err("書き換えの明細が無いので戻せません".into());
+    }
+    let changes: Vec<kuroobi::learn::BackupChange> = e
+        .changes
+        .iter()
+        .map(|c| {
+            Ok(kuroobi::learn::BackupChange {
+                ply: c.ply,
+                mv: Position::from_kifu(&c.mv).map_err(|x| x.to_string())?,
+                before: c.before,
+                after: c.after,
+                best: c.best,
+                new_entry: c.new_entry,
+            })
+        })
+        .collect::<Result<_, String>>()?;
+    let eng = app.engine.clone();
+    let stop = app.stop.clone();
+    let start = e.start.clone();
+    let n = tauri::async_runtime::spawn_blocking(move || {
+        ensure_engine_in(&eng, &stop)?;
+        let mut guard = eng.lock().unwrap();
+        let engine = guard.as_mut().ok_or("エンジンがまだありません")?;
+        engine.undo_learn((!start.is_empty()).then_some(start.as_str()), &kifu, &changes)
+    })
+    .await
+    .map_err(|e| e.to_string())??;
+    learn_log_remove(at, &e.kifu);
+    Ok(n)
+}
+
+/// 控えから 1 件消す (取り消したあと)。
+fn learn_log_remove(at: u64, kifu: &str) {
+    let path = learn_log_path();
+    let Ok(text) = std::fs::read_to_string(&path) else {
+        return;
+    };
+    let kept: Vec<&str> = text
+        .lines()
+        .filter(|l| {
+            serde_json::from_str::<LearnEntry>(l)
+                .map(|e| !(e.at == at && e.kifu == kifu))
+                .unwrap_or(true)
+        })
+        .collect();
+    let _ = std::fs::write(&path, kept.join("\n") + "\n");
 }
 
 /// 終局したローカル対局を定石の学習に取り込む (learn.rs)。
@@ -1959,6 +2024,7 @@ fn main() {
             set_learn,
             learn_game,
             learn_log,
+            learn_undo,
             has_book,
             book_node,
             autoplay,

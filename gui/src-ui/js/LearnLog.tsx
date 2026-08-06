@@ -1,6 +1,7 @@
 import { useState } from 'react';
 import type { LearnChange, LearnEntry } from './types';
 import { Section } from './components/layout';
+import { Button } from './components/primitives';
 
 /* 定石に取り込んだ対局の控え。
  *
@@ -23,10 +24,12 @@ function blunderOf(e: LearnEntry): LearnChange | undefined {
 
 const sign = (v: number) => (v > 0 ? '+' : '') + v.toFixed(1);
 
-export function LearnLog({ items, onOpen }: {
+export function LearnLog({ items, onOpen, onUndo }: {
   items: LearnEntry[];
   /** 検討で開く。ply を渡すとその手数まで進める */
   onOpen: (e: LearnEntry, ply?: number) => void;
+  /** 取り込みを取り消す。 */
+  onUndo: (e: LearnEntry) => void;
 }) {
   const [open, setOpen] = useState<string>('');
   return (
@@ -84,6 +87,15 @@ export function LearnLog({ items, onOpen }: {
               </button>
             </div>
 
+            {/* 取り消しは対局単位。1 手だけ戻すと、その局面から根までの
+                値がその手を前提にしたままになる (書き戻しは連なっている) */}
+            {shown && (
+              <div style={{ display: 'flex', gap: 'var(--sp-2)', padding: 'var(--sp-1) 0 var(--sp-1) 20px' }}>
+                <Button size="chip" variant="danger" onClick={() => onUndo(e)}>
+                  この対局の取り込みを取り消す
+                </Button>
+              </div>
+            )}
             {shown && e.changes.map((c) => (
               <button key={c.ply} type="button" className="k-row"
                       onClick={() => onOpen(e, c.ply)}

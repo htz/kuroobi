@@ -74,7 +74,8 @@ export function App() {
 
   const conn = connOf(ggs.snap?.conn);
   const book = useBookBrowse(isBook);
-  const learnLog = useLearnLog(tab === '学習' && !isGgs && !isBook, !!cpu?.learn);
+  const { items: learnLog, reload: learnLogReload } = useLearnLog(
+    tab === '学習' && !isGgs && !isBook, !!cpu?.learn);
 
   const [paste, setPaste] = useState(false);
   const [settings, setSettings] = useState(false);
@@ -436,7 +437,16 @@ export function App() {
             </Section>
             {/* 取り込みは裏で静かに進むので、何が入ったかを見る場所が要る。
                 対局 → 敗着 → 書き換えた手 (旧→新) まで一本で辿れる */}
-            <LearnLog items={learnLog} onOpen={(e, ply) => {
+            <LearnLog items={learnLog}
+              onUndo={(e) => void (async () => {
+                if (!await confirm('この対局で書き換えた定石を元に戻します。よろしいですか。')) return;
+                try {
+                  const n = await api.learnUndo(e.at, e.kifu);
+                  g.say(`${n} 手ぶんの書き換えを戻しました`, 'gold');
+                  learnLogReload();
+                } catch (err) { g.say('' + err); }
+              })()}
+              onOpen={(e, ply) => {
               setNav('study');
               // 抽選開局は開始局面を頭に付けないと別の対局になる
               void loadFromText(e.start ? e.start + '\n' + e.kifu : e.kifu, ply);

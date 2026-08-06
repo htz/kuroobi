@@ -270,5 +270,5 @@ export function useLearnLog(on: boolean, learning: boolean) {
     // items を依存に入れると、空のまま返ってきたときに読み直しが止まらない
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [on, learning, reload]);
-  return items;
+  return { items, reload };
 }
