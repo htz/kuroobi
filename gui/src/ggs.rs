@@ -910,6 +910,8 @@ impl Ctx {
         if self.engine.is_none() {
             let res = resources();
             let mut cfg = self.engine_cfg.clone();
+            // 0 は「自動」の印なので、エンジンを作る直前に実数へ直す
+            cfg.threads = resolve_threads(cfg.threads);
             cfg.weights = res.weights_path();
             cfg.nnue = res.nnue_path();
             cfg.book = res.book_path();
@@ -1815,6 +1817,22 @@ fn apply_pacing(ctx: &mut Ctx, pace: String, max_move_secs: u64, reserve_secs: u
     ctx.dirty = true;
 }
 
+/// GGS 用エンジンの並列数。0 は「自動」の印で、コア数の半分にする。
+///
+/// ローカル側 (`resources.conf` の `threads`) は `Option<usize>` で持てるが、
+/// こちらはスナップショットに載る値なので、型を変えずに済む 0 を印にした。
+/// **画面には解決後の数ではなく 0 のまま出す** — 解決した数を出すと、
+/// コア数が違う機械へ設定を移したときに自動が固定値に化ける。
+pub fn resolve_threads(n: usize) -> usize {
+    if n == 0 {
+        std::thread::available_parallelism()
+            .map(|c| (c.get() / 2).max(1))
+            .unwrap_or(4)
+    } else {
+        n
+    }
+}
+
 fn apply_engine_cfg(ctx: &mut Ctx, depth: u32, solve: u8, band: u8, threads: usize) {
     ctx.engine_cfg.depth = depth;
     ctx.engine_cfg.solve_empties = solve;
@@ -1824,7 +1842,7 @@ fn apply_engine_cfg(ctx: &mut Ctx, depth: u32, solve: u8, band: u8, threads: usi
         e.set_levels(depth, solve, band);
         // スレッド数も既存エンジンへ反映する (以前は cfg に控えるだけで、
         // エンジンを作り直すまで効いていなかった)
-        e.set_threads(threads);
+        e.set_threads(resolve_threads(threads));
     }
     let mut s = ctx.snap.lock().unwrap();
     s.engine.depth = depth;

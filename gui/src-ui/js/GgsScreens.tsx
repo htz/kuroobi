@@ -696,12 +696,15 @@ function GgsSettings({ snap }: { snap: GgsSnapshot }) {
             <Strength value={levels} onChange={setLevels} />
           </span>
           {/* コア数まで 1 刻み。飛び飛びにする理由は無い (奇数でも動くし、
-              コアを 1 つ空けたいことはある) */}
+              コアを 1 つ空けたいことはある)。
+              0 は「自動」の印 — 解決した数ではなく 0 のまま持つので、
+              コア数の違う機械へ設定を移しても自動のまま */}
           <Field label="スレッド">
-            <Select width={90} size="ctrl" value={String(threads)}
+            <Select width={120} size="ctrl" value={String(threads)}
                     onChange={(s) => setThreads(+s)}
-                    options={Array.from({ length: cores || threads }, (_, i) =>
-                      [String(i + 1), String(i + 1)] as [string, string])} />
+                    options={[['0', `自動 (${Math.max(1, Math.floor(cores / 2)) || '—'})`],
+                              ...Array.from({ length: cores || Math.max(threads, 1) }, (_, i) =>
+                                [String(i + 1), String(i + 1)] as [string, string])]} />
           </Field>
         </Section>
 
