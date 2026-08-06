@@ -25,13 +25,35 @@ use crate::book::{Book, Candidate, Entry};
 use crate::solver::final_score;
 use crate::{Board, Position};
 
+/// 書き換えた手 1 つ。
+///
+/// **旧→新を残すのは後から確かめるため。** 書き戻しは値を上書きするので、
+/// 変な対局が 1 局混ざると以後の手が変わる。何がどう変わったかが残って
+/// いないと、見つけることも戻すこともできない。
+#[derive(Debug, Clone, Copy)]
+pub struct BackupChange {
+    /// 棋譜の何手目か (パスを除いた 1 始まり)。
+    pub ply: usize,
+    /// 実戦で指した手 (盤の向きのまま。正規化空間の手ではない)。
+    pub mv: Position,
+    /// 上書き前の値。定石に無かった手なら None。
+    pub before: Option<f32>,
+    /// 上書き後の値。
+    pub after: f32,
+    /// 書き換えたあとの、その局面の最善手の値。
+    /// `best - after` がその手で損した石差になる。
+    pub best: f32,
+}
+
 /// 取り込みの結果。
-#[derive(Debug, Default, Clone, Copy)]
+#[derive(Debug, Default, Clone)]
 pub struct BackupOutcome {
     /// 値を付け替えた手の数。
     pub updated: usize,
     /// 新たに学習分へ足した局面の数。
     pub added: usize,
+    /// 書き換えの明細 (終局側から前へ向かう順)。
+    pub changes: Vec<BackupChange>,
 }
 
 /// 再生した手順。要素は (指す前の盤面, 指した手)。パスは `None`。
@@ -140,7 +162,7 @@ impl BackupJob {
     pub fn next(&mut self, learned: &mut Book, base: &mut Book) -> JobStep {
         loop {
             if self.done {
-                return JobStep::Done(self.out);
+                return JobStep::Done(std::mem::take(&mut self.out));
             }
             if self.awaiting_terminal {
                 return JobStep::Search(self.terminal);
@@ -198,8 +220,23 @@ impl BackupJob {
                 }
             }
             let e = learned.get_raw_mut(key).expect("直前に挿入済み");
-            e.update_move(Book::map_move(mv, i), -self.v_next);
+            let mapped = Book::map_move(mv, i);
+            let before = e.moves.iter().find(|c| c.mv == mapped).map(|c| c.value);
+            let after = -self.v_next;
+            e.update_move(mapped, after);
             self.out.updated += 1;
+            self.out.changes.push(BackupChange {
+                // パスは手数に数えない (棋譜の表と番号を合わせる)
+                ply: self.line[..self.idx - 1]
+                    .iter()
+                    .filter(|(_, m)| m.is_some())
+                    .count()
+                    + 1,
+                mv,
+                before,
+                after,
+                best: e.best().map(|c| c.value).unwrap_or(after),
+            });
             // この局面の値は「更新後の最善」。実戦手より良い代替が残って
             // いればそちらが親へ伝わる (敗着より根側へ負を遡らせない)
             self.v_next = e.best().map(|c| c.value).unwrap_or(-self.v_next);

@@ -2497,6 +2497,8 @@ fn handle_match_end(
                     white,
                     positions: job.remaining() as u32,
                     start: start.clone(),
+                    // 明細は取り込みが終わってから入る
+                    changes: Vec::new(),
                     opponent: lm.opp_name.clone(),
                 };
                 ctx.learn_jobs.push_back((id.clone(), job, entry));
@@ -2521,6 +2523,8 @@ fn learn_tick(ctx: &mut Ctx) {
             ctx.learn_jobs.pop_front();
             // 控えはローカル対局と同じ場所へ。どちらから覚えた手かは
             // 相手の名前で分かる
+            let mut entry = entry;
+            entry.changes = out.changes.iter().map(crate::LearnChange::of).collect();
             crate::learn_log_append(&entry);
             ctx.log(
                 "info",

@@ -471,11 +471,40 @@ pub struct LearnEntry {
     /// これが無いと、抽選開局の対局を後から開いても別の対局になる。
     #[serde(default)]
     pub start: String,
+    /// 書き換えの明細。何がどう変わったかが残っていないと、変な対局が
+    /// 混ざったときに見つけることも戻すこともできない。
+    #[serde(default)]
+    pub changes: Vec<LearnChange>,
     /// GGS の対局なら相手の名前。ローカル対局は空。
     /// **古い控えには無い項目なので既定を持たせる** — 無いと過去の行が
     /// 丸ごと読めなくなる。
     #[serde(default)]
     pub opponent: String,
+}
+
+/// 定石を 1 手ぶん書き換えた記録。
+#[derive(Serialize, Deserialize, Clone)]
+pub struct LearnChange {
+    /// 棋譜の何手目か (パスを除いた 1 始まり)。
+    pub ply: usize,
+    pub mv: String,
+    /// 上書き前の値。定石に無かった手なら null。
+    pub before: Option<f32>,
+    pub after: f32,
+    /// 書き換えたあとのその局面の最善値。`best - after` が損した石差。
+    pub best: f32,
+}
+
+impl LearnChange {
+    pub fn of(c: &kuroobi::learn::BackupChange) -> LearnChange {
+        LearnChange {
+            ply: c.ply,
+            mv: c.mv.to_kifu(),
+            before: c.before,
+            after: c.after,
+            best: c.best,
+        }
+    }
 }
 
 /// いまの unix 秒。控えの時刻に使う。
@@ -503,10 +532,9 @@ pub fn learn_log_append(e: &LearnEntry) {
     trim_learn_log(&path);
 }
 
-/// 控えの上限。1 行 100 バイト前後なので、これで数十 KB に収まる。
-/// 画面に出すのは 200 件だが、それより少し多く残す — 出していない
-/// ぶんも「前に取り込んだか」を数えるのには使える。
-const LEARN_LOG_MAX: usize = 500;
+/// 控えの上限。書き換えの明細を持つので 1 行が 3〜4 KB になる。
+/// 200 件で 1 MB 弱に収まり、画面に出す件数とも一致する。
+const LEARN_LOG_MAX: usize = 200;
 
 /// 伸びすぎた控えを新しい側だけ残して書き直す。
 /// 毎回書き直すと追記の意味が無いので、上限を超えたときだけ。
@@ -579,6 +607,8 @@ fn learn_game(app: State<App>) -> Result<(), String> {
             }
         };
         let total = job.remaining() as u32;
+        // 終わるまで空。途中で諦めた取り込みは明細を残さない
+        let mut changes: Vec<kuroobi::learn::BackupChange> = Vec::new();
         loop {
             // 対局・検討・GGS 対局が動いている間は譲って止まる
             // (裏の学習が CPU を奪わない)。空いたら続きから再開する
@@ -592,14 +622,19 @@ fn learn_game(app: State<App>) -> Result<(), String> {
                 std::thread::sleep(std::time::Duration::from_millis(300));
                 continue;
             }
-            let done = {
+            let step = {
                 let mut guard = eng.lock().unwrap();
                 // 設定変更でエンジンが作り直されたら、この取り込みは諦める
                 let Some(engine) = guard.as_mut() else { break };
-                !matches!(engine.learn_step(&mut job, ggs::LEARN_DEPTH), Ok(None))
+                engine.learn_step(&mut job, ggs::LEARN_DEPTH)
             };
-            if done {
-                break;
+            match step {
+                Ok(None) => {}
+                Ok(Some(out)) => {
+                    changes = out.changes;
+                    break;
+                }
+                Err(_) => break,
             }
             // ロックを取り直す前に一拍置く。すぐ取り直すと (Mutex は待った
             // 順に渡るとは限らない)、強さ変更や思考の開始が何探索ぶんも
@@ -616,6 +651,7 @@ fn learn_game(app: State<App>) -> Result<(), String> {
             positions: total.saturating_sub(job.remaining() as u32),
             // ローカル対局は初期局面から始まったものだけを取り込む
             start: String::new(),
+            changes: changes.iter().map(LearnChange::of).collect(),
             opponent: String::new(),
         });
         let mut a = act.lock().unwrap();

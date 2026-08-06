@@ -16,6 +16,7 @@ import { JobList, Meter, Nav, NAV_LOCAL, ggsNav, Toasts, type NavId, type Toast 
 import { Button, Segmented, Toggle } from './components/primitives';
 import { Strength } from './components/strength';
 import { BookDock, BookPane, useBookBrowse } from './BookScreen';
+import { LearnLog } from './LearnLog';
 import { LEVELS } from './state';
 
 /* 対局と検討の画面。
@@ -146,10 +147,12 @@ export function App() {
       if (loaded) { applyLoaded(loaded); setPaste(false); }   // null = 選ばずに閉じた
     } catch (e) { g.say('' + e); }
   };
-  const loadFromText = async (text: string) => {
+  /** 読み込んで、必要ならその手数まで進める (控えの明細から飛ぶときに使う)。 */
+  const loadFromText = async (text: string, ply?: number) => {
     try {
       applyLoaded(await api.loadKifuText(text));
       setPaste(false);
+      if (ply !== undefined) await g.jumpTo(ply);
     } catch (e) { g.say('' + e); }
   };
 
@@ -432,39 +435,12 @@ export function App() {
               </span>
             </Section>
             {/* 取り込みは裏で静かに進むので、何が入ったかを見る場所が要る。
-                押すと検討で開く — 「変な手を覚えていないか」を確かめる道 */}
-            <Section title="取り込んだ対局" aside={learnLog.length ? <span>{learnLog.length}</span> : undefined}>
-              {learnLog.length === 0 && (
-                <span style={{ fontSize: 'var(--fs-6)', color: 'var(--sub)' }}>
-                  まだありません。
-                </span>
-              )}
-              {learnLog.map((e) => (
-                <button key={e.at + e.kifu} type="button" className="k-row"
-                        // 抽選開局は開始局面を頭に付けないと別の対局になる
-                        onClick={() => {
-                          setNav('study');
-                          void loadFromText(e.start ? e.start + '\n' + e.kifu : e.kifu);
-                        }}
-                        style={{
-                          display: 'flex', alignItems: 'baseline', gap: 'var(--sp-3)',
-                          border: 0, background: 'transparent', cursor: 'pointer',
-                          padding: 'var(--sp-2)', borderRadius: 'var(--r-2)',
-                          fontSize: 'var(--fs-6)', color: 'var(--text)', textAlign: 'left',
-                        }}>
-                  <span style={{ color: 'var(--sub)', fontVariantNumeric: 'tabular-nums' }}>{fmtWhen(e.at)}</span>
-                  <span style={{ fontWeight: 600, fontVariantNumeric: 'tabular-nums' }}>{e.black}–{e.white}</span>
-                  {/* 相手の名前があれば GGS の対局。無ければローカル */}
-                  {e.opponent && (
-                    <span style={{ color: 'var(--sub)', overflow: 'hidden', textOverflow: 'ellipsis',
-                                   whiteSpace: 'nowrap', maxWidth: 90 }}>{e.opponent}</span>
-                  )}
-                  <span style={{ marginLeft: 'auto', color: 'var(--sub)', fontVariantNumeric: 'tabular-nums' }}>
-                    {e.positions} 局面
-                  </span>
-                </button>
-              ))}
-            </Section>
+                対局 → 敗着 → 書き換えた手 (旧→新) まで一本で辿れる */}
+            <LearnLog items={learnLog} onOpen={(e, ply) => {
+              setNav('study');
+              // 抽選開局は開始局面を頭に付けないと別の対局になる
+              void loadFromText(e.start ? e.start + '\n' + e.kifu : e.kifu, ply);
+            }} />
           </>
         )}
       </Dock>
@@ -501,18 +477,6 @@ function ggfNames(side: 'black' | 'white' | 'both' | 'off'): [string, string] {
   if (side === 'black') return ['KUROOBI', 'Player'];
   if (side === 'white') return ['Player', 'KUROOBI'];
   return ['Player', 'Player'];
-}
-
-/** 取り込んだ時刻。今日のものは時刻だけ、それ以外は日付だけにする —
- *  並べたときに縦が揃い、かつ「さっき入ったもの」がすぐ分かる。 */
-function fmtWhen(secs: number): string {
-  const d = new Date(secs * 1000);
-  const now = new Date();
-  const sameDay = d.getFullYear() === now.getFullYear() && d.getMonth() === now.getMonth()
-    && d.getDate() === now.getDate();
-  const p2 = (n: number) => String(n).padStart(2, '0');
-  return sameDay ? `${p2(d.getHours())}:${p2(d.getMinutes())}`
-    : `${d.getMonth() + 1}/${p2(d.getDate())}`;
 }
 
 /** 桁が伸びても幅が暴れないように短く畳む。 */

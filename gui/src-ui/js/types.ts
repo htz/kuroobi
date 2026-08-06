@@ -304,4 +304,18 @@ export interface LearnEntry {
   start: string;
   /** GGS の対局なら相手の名前。ローカル対局は空。 */
   opponent: string;
+  /** 定石を書き換えた明細。古い控えには無い。 */
+  changes: LearnChange[];
+}
+
+/** 定石を 1 手ぶん書き換えた記録。 */
+export interface LearnChange {
+  /** 棋譜の何手目か (パスを除いた 1 始まり)。 */
+  ply: number;
+  mv: string;
+  /** 上書き前の値。定石に無かった手なら null。 */
+  before: number | null;
+  after: number;
+  /** 書き換えたあとのその局面の最善値。best - after が損した石差。 */
+  best: number;
 }
