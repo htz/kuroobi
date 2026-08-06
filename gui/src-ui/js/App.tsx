@@ -360,7 +360,11 @@ export function App() {
           <>
             {/* 分析 (評価値グラフ) は検討画面のもの。対局には置かない */}
             <div style={{ display: 'flex', gap: 'var(--sp-2)', padding: 'var(--sp-2) var(--sp-3)' }}>
-              <Button size="chip" onClick={() => void api.saveKifu().catch((e) => g.say('' + e))}>保存</Button>
+              {/* .ggf で保存すると、どちらがどの色か・結果・開始局面まで入る */}
+              <Button size="chip"
+                      onClick={() => void api.saveKifu(...ggfNames(g.side)).catch((e) => g.say('' + e))}>
+                保存
+              </Button>
               <Button size="chip" onClick={() => setPaste(true)}>読込</Button>
             </div>
             <KifuTable moves={moves} current={v?.cursor}
@@ -451,6 +455,15 @@ export function App() {
       <Toasts items={toasts} onDismiss={(id) => g.dismiss(+id)} />
     </AppFrame>
   );
+}
+
+/** GGF に載せる対局者名。KUROOBI が持っている色にその名を置く。
+ *  GGF は他のソフトが読むので ASCII に留める。 */
+function ggfNames(side: 'black' | 'white' | 'both' | 'off'): [string, string] {
+  if (side === 'both') return ['KUROOBI', 'KUROOBI'];
+  if (side === 'black') return ['KUROOBI', 'Player'];
+  if (side === 'white') return ['Player', 'KUROOBI'];
+  return ['Player', 'Player'];
 }
 
 /** 取り込んだ時刻。今日のものは時刻だけ、それ以外は日付だけにする —

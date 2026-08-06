@@ -46,7 +46,10 @@ export const api = {
   analyze: (depth: number) => call<HintView[]>('analyze', { depth }),
   analyzeLive: () => call<void>('analyze_live'),
   evalAt: (n: number, depth: number) => call<EvalPoint>('eval_at', { n, depth }),
-  saveKifu: () => call<string | null>('save_kifu'),
+  /** 保存。名前は GGF に載る (拡張子が .ggf のときだけ書かれる)。 */
+  /** 棋譜を保存する。名前は GGF にだけ載る (拡張子が .ggf のとき)。 */
+  saveKifu: (black: string, white: string) =>
+    call<string | null>('save_kifu', { black, white }),
   loadKifu: () => call<GameView | null>('load_kifu'),
   loadKifuText: (text: string) => call<GameView>('load_kifu_text', { text }),
   previewKifu: (text: string) => call<KifuFrame[]>('preview_kifu', { text }),
@@ -124,6 +127,7 @@ export const ggsApi = {
   setUseBook: (on: boolean) => call('ggs_set_use_book', { on }),
   setLearn: (on: boolean) => call('ggs_set_learn', { on }),
   setStandby: (cfg: StandbyCfg) => call('ggs_set_standby', { cfg }),
+  /** 保存。名前は GGF に載る (拡張子が .ggf のときだけ書かれる)。 */
   saveKifu: (kifu: string, name: string) =>
     call<string | null>('ggs_save_kifu', { kifu, name }),
 };

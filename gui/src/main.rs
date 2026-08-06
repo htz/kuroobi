@@ -971,9 +971,21 @@ async fn eval_at(app: State<'_, App>, n: usize, depth: u32) -> Result<EvalPoint,
 async fn save_kifu(
     app: State<'_, App>,
     handle: tauri::AppHandle,
+    black: Option<String>,
+    white: Option<String>,
 ) -> Result<Option<String>, String> {
     use tauri_plugin_dialog::DialogExt;
-    let kifu = app.game.lock().unwrap().to_kifu();
+    let (kifu, ggf) = {
+        let game = app.game.lock().unwrap();
+        (
+            game.to_kifu(),
+            to_ggf(
+                &game,
+                black.as_deref().unwrap_or("Black"),
+                white.as_deref().unwrap_or("White"),
+            ),
+        )
+    };
     if kifu.is_empty() {
         return Err("棋譜が空です".into());
     }
@@ -981,14 +993,133 @@ async fn save_kifu(
         .dialog()
         .file()
         .add_filter("棋譜", &["ggf", "txt", "kifu"])
-        .set_file_name("kuroobi_game.txt")
+        .set_file_name("kuroobi_game.ggf")
         .blocking_save_file()
     else {
         return Ok(None);
     };
     let p = path.into_path().map_err(|e| e.to_string())?;
-    std::fs::write(&p, format!("{kifu}\n")).map_err(|e| e.to_string())?;
+    // 書き分けは拡張子で決める。保存の窓で形式をもう一度聞くと、名前を
+    // 決めたばかりの人に同じことを二度考えさせることになる
+    let ggf_out = p
+        .extension()
+        .is_some_and(|e| e.eq_ignore_ascii_case("ggf"));
+    let body = if ggf_out { ggf } else { format!("{kifu}\n") };
+    std::fs::write(&p, body).map_err(|e| e.to_string())?;
     Ok(Some(p.display().to_string()))
+}
+
+/* ---------------- GGF (他のソフトへ渡す形) ---------------- */
+
+/// 対局を GGF 1 局ぶんにする。
+///
+/// f5 の並びだけの形と違い、**どちらがどの色か・結果・開始局面**が入る。
+/// 抽選開局から始めた対局や、パスの入った対局を渡せるのはこちらだけ。
+fn to_ggf(game: &Reversi, black: &str, white: &str) -> String {
+    let start = start_board(game);
+    let mut out = String::from("(;GM[Othello]PC[KUROOBI]");
+    out.push_str(&format!("DT[{}]", ggf_now()));
+    out.push_str(&format!("PB[{}]PW[{}]", ggf_text(black), ggf_text(white)));
+    // 結果は黒から見た石差。終局していない対局は「?」— 0 と書くと
+    // 引き分けで終わったことになってしまう
+    if game.is_game_over() {
+        let d = game.board.black.count_ones() as i32 - game.board.white.count_ones() as i32;
+        out.push_str(&format!("RE[{d:+}]"));
+    } else {
+        out.push_str("RE[?]");
+    }
+    out.push_str("TI[0]TY[8]");
+    out.push_str(&format!(
+        "BO[8 {} {}]",
+        ggf_squares(&start),
+        if start.player == Color::Black { "*" } else { "O" }
+    ));
+    let mut color = start.player;
+    for r in &game.history {
+        let tag = if color == Color::Black { "B" } else { "W" };
+        match r.pos {
+            // パスも残す。落とすと手番がずれた棋譜になる
+            None => out.push_str(&format!("{tag}[PA]")),
+            Some(p) => out.push_str(&format!("{}[{}]", tag, p.to_kifu().to_uppercase())),
+        }
+        color = color.opponent();
+    }
+    out.push_str(";)\n");
+    out
+}
+
+/// 開始局面。いまの盤から着手を巻き戻して作る (開始局面そのものは
+/// 持っていないため)。返した石は `flipped` に残っているので厳密に戻せる。
+fn start_board(game: &Reversi) -> Board {
+    let mut b = game.board;
+    for r in game.history.iter().rev() {
+        b.player = b.player.opponent();
+        if let Some(p) = r.pos {
+            let bit = 1u64 << p.index();
+            let (mine, theirs) = if b.player == Color::Black {
+                (&mut b.black, &mut b.white)
+            } else {
+                (&mut b.white, &mut b.black)
+            };
+            *mine &= !(bit | r.flipped);
+            *theirs |= r.flipped;
+        }
+    }
+    b.empty_count = (!(b.black | b.white)).count_ones() as u8;
+    b
+}
+
+/// 64 マスを GGF の並び (a1..h1, a2..h2, …) で書く。
+fn ggf_squares(b: &Board) -> String {
+    let mut s = String::with_capacity(64);
+    for rank in 0..8 {
+        for file in 0..8 {
+            let bit = 1u64 << (file * 8 + rank);
+            s.push(if b.black & bit != 0 {
+                '*'
+            } else if b.white & bit != 0 {
+                'O'
+            } else {
+                '-'
+            });
+        }
+    }
+    s
+}
+
+/// `]` はタグの終わりなので入れられない。他のソフトが読めなくなる。
+fn ggf_text(s: &str) -> String {
+    s.replace(']', ")")
+}
+
+/// GGF の DT。UTC で「YYYY-MM-DD HH:MM:SS GMT」。
+/// 暦は自前で出す — この 1 か所のために依存を 1 つ増やしたくない。
+fn ggf_now() -> String {
+    let secs = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs())
+        .unwrap_or(0) as i64;
+    let (days, rem) = (secs.div_euclid(86_400), secs.rem_euclid(86_400));
+    // Howard Hinnant の civil_from_days。1970-01-01 からの日数を暦に直す
+    let z = days + 719_468;
+    let era = z.div_euclid(146_097);
+    let doe = z.rem_euclid(146_097);
+    let yoe = (doe - doe / 1_460 + doe / 36_524 - doe / 146_096) / 365;
+    let y = yoe + era * 400;
+    let doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
+    let mp = (5 * doy + 2) / 153;
+    let d = doy - (153 * mp + 2) / 5 + 1;
+    let m = if mp < 10 { mp + 3 } else { mp - 9 };
+    let y = if m <= 2 { y + 1 } else { y };
+    format!(
+        "{:04}-{:02}-{:02} {:02}:{:02}:{:02} GMT",
+        y,
+        m,
+        d,
+        rem / 3_600,
+        (rem % 3_600) / 60,
+        rem % 60
+    )
 }
 
 /// 貼り付け・ファイル内容から f5 形式の着手列だけを抽出する。
@@ -1236,7 +1367,7 @@ async fn book_node(app: State<'_, App>, kifu: String) -> Result<BookNodeView, St
             moves: moves
                 .into_iter()
                 .map(|(p, value, games)| BookMoveView {
-                    pos: p.index() as u8,
+                    pos: p.index(),
                     value,
                     games,
                 })
@@ -1945,5 +2076,74 @@ mod tests {
         );
         assert_eq!(b - w, 54, "結果が RE と一致する");
         assert!(ggf.contains("W[pass]"), "終盤にパスが入っている局");
+    }
+
+    /* ---- GGF を書く側 ---- */
+
+    /// 書いた GGF を読み直すと元の対局に戻る。
+    #[test]
+    fn writes_ggf_that_reads_back() {
+        let g = Reversi::from_kifu("e6f4c3d6f6e7").unwrap();
+        let ggf = to_ggf(&g, "KUROOBI", "Player");
+        assert!(ggf.contains("PB[KUROOBI]PW[Player]"), "{ggf}");
+        assert!(ggf.contains("RE[?]"), "終局していない対局は結果を書かない");
+        assert!(ggf.contains("B[E6]W[F4]"), "手は大文字・色つき: {ggf}");
+        let back = game_from_text(&ggf).expect("読めること");
+        assert_eq!(back.board.black, g.board.black);
+        assert_eq!(back.board.white, g.board.white);
+    }
+
+    /// パスを含む 1 局を書いて読み直しても手番がずれない。
+    #[test]
+    fn writes_pass_and_result() {
+        let src = "(;GM[Othello]BO[8 ---------------------------O*------*O--------------------------- *]\
+                   B[E6]W[F4]B[C3]W[D6]B[F6]W[E7]B[F5]W[G5]B[E3]W[G4]B[C7]W[D3]B[F3]W[C4]\
+                   B[C6]W[C5]B[B4]W[B6]B[D7]W[B5]B[C2]W[A3]B[F8]W[E8]B[D8]W[C8]B[B8]W[D2]\
+                   B[G3]W[E2]B[A6]W[C1]B[D1]W[E1]B[F2]W[F1]B[F7]W[H3]B[A5]W[A7]B[A8]W[B7]\
+                   B[G2]W[G8]B[H8]W[G1]B[B3]W[A4]B[A2]W[B2]B[A1]W[B1]B[G7]W[G6]B[H6]W[H7]\
+                   B[H5]W[H4]B[H2]W[PASS]B[H1];)";
+        let g = game_from_text(src).expect("読めること");
+        assert!(g.board.is_game_over());
+        let ggf = to_ggf(&g, "a", "b");
+        assert!(ggf.contains("W[PA]"), "パスを落とすと手番がずれる: {ggf}");
+        assert!(ggf.contains("RE[+54]"), "終局した対局は石差を書く: {ggf}");
+        let back = game_from_text(&ggf).expect("読めること");
+        assert_eq!(back.board.black, g.board.black);
+        assert_eq!(back.board.white, g.board.white);
+    }
+
+    /// 抽選開局から始めた対局は BO に開始局面が入る (初期局面ではない)。
+    #[test]
+    fn writes_drawn_opening_start() {
+        let mut drawn = Reversi::new();
+        for _ in 0..5 {
+            let p = drawn.board.movable_iter().next().unwrap();
+            drawn.make_move(p).unwrap();
+        }
+        let start = drawn.board;
+        let mut kifu = String::new();
+        for _ in 0..4 {
+            let p = drawn.board.movable_iter().next().unwrap();
+            drawn.make_move(p).unwrap();
+            kifu.push_str(&p.to_kifu());
+        }
+        let g = Reversi::from_kifu_with_start(&start.to_string(), &kifu).unwrap();
+        let ggf = to_ggf(&g, "a", "b");
+        assert!(
+            ggf.contains(&format!("BO[8 {}", ggf_squares(&start))),
+            "開始局面が入っていない: {ggf}"
+        );
+        let back = game_from_text(&ggf).expect("読めること");
+        assert_eq!(back.board.black, g.board.black);
+        assert_eq!(back.board.white, g.board.white);
+    }
+
+    /// 名前に `]` が入ってもタグが壊れない。
+    #[test]
+    fn ggf_escapes_bracket_in_names() {
+        let g = Reversi::from_kifu("e6").unwrap();
+        let ggf = to_ggf(&g, "a]b", "c");
+        assert!(!ggf.contains("a]b"), "そのまま入れるとタグが切れる");
+        assert_eq!(game_from_text(&ggf).unwrap().move_count(), 1);
     }
 }
