@@ -420,7 +420,11 @@ export function App() {
               )}
               {learnLog.map((e) => (
                 <button key={e.at + e.kifu} type="button" className="k-row"
-                        onClick={() => { setNav('study'); void loadFromText(e.kifu); }}
+                        // 抽選開局は開始局面を頭に付けないと別の対局になる
+                        onClick={() => {
+                          setNav('study');
+                          void loadFromText(e.start ? e.start + '\n' + e.kifu : e.kifu);
+                        }}
                         style={{
                           display: 'flex', alignItems: 'baseline', gap: 'var(--sp-3)',
                           border: 0, background: 'transparent', cursor: 'pointer',
@@ -429,6 +433,11 @@ export function App() {
                         }}>
                   <span style={{ color: 'var(--sub)', fontVariantNumeric: 'tabular-nums' }}>{fmtWhen(e.at)}</span>
                   <span style={{ fontWeight: 600, fontVariantNumeric: 'tabular-nums' }}>{e.black}–{e.white}</span>
+                  {/* 相手の名前があれば GGS の対局。無ければローカル */}
+                  {e.opponent && (
+                    <span style={{ color: 'var(--sub)', overflow: 'hidden', textOverflow: 'ellipsis',
+                                   whiteSpace: 'nowrap', maxWidth: 90 }}>{e.opponent}</span>
+                  )}
                   <span style={{ marginLeft: 'auto', color: 'var(--sub)', fontVariantNumeric: 'tabular-nums' }}>
                     {e.positions} 局面
                   </span>

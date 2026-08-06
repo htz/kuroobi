@@ -787,7 +787,9 @@ struct Ctx {
     /// 検証用の自動観戦キュー (KUROOBI_GGS_AUTOWATCH=auto)。
     auto_watch: Vec<String>,
     /// 終わった対局の取り込み (学習) の残り。対局の合間に 1 探索ずつ進める。
-    learn_jobs: VecDeque<(String, kuroobi::learn::BackupJob)>,
+    /// 取り込み待ちの対局。控えに書く材料 (`LearnEntry`) を一緒に持つ —
+    /// 終わってから作ろうとしても、そのころには対局の記録が消えている。
+    learn_jobs: VecDeque<(String, kuroobi::learn::BackupJob, crate::LearnEntry)>,
     /// ローカル側の探索の停止ハンドル (GGS の自分の対局を最優先にするため、
     /// 対局が始まったらローカルの探索を止める)。
     local_stop: Arc<Mutex<Option<kuroobi::midgame::StopHandle>>>,
@@ -2479,7 +2481,25 @@ fn handle_match_end(
                     "info",
                     &format!("学習: {id} を取り込み待ちに追加 ({} 局面)", job.remaining()),
                 );
-                ctx.learn_jobs.push_back((id.clone(), job));
+                // 終局の石差は棋譜を再生して数える。対局の記録は取り込みが
+                // 終わるころには残っていない
+                let (black, white) = match kuroobi::learn::replay(start_opt, &kifu) {
+                    Ok((_, fin)) => (
+                        fin.black.count_ones() as u8,
+                        fin.white.count_ones() as u8,
+                    ),
+                    Err(_) => (0, 0),
+                };
+                let entry = crate::LearnEntry {
+                    at: crate::now_secs(),
+                    kifu: kifu.clone(),
+                    black,
+                    white,
+                    positions: job.remaining() as u32,
+                    start: start.clone(),
+                    opponent: lm.opp_name.clone(),
+                };
+                ctx.learn_jobs.push_back((id.clone(), job, entry));
             }
             Err(e) => ctx.log("info", &format!("学習の準備に失敗 ({id}): {e}")),
         }
@@ -2493,11 +2513,15 @@ fn learn_tick(ctx: &mut Ctx) {
     if ctx.learn_jobs.is_empty() || ctx.ensure_engine().is_err() {
         return;
     }
-    let (id, job) = ctx.learn_jobs.front_mut().expect("非空を確認済み");
+    let (id, job, entry) = ctx.learn_jobs.front_mut().expect("非空を確認済み");
     let id = id.clone();
+    let entry = entry.clone();
     match ctx.engine.as_mut().unwrap().learn_step(job, LEARN_DEPTH) {
         Ok(Some(out)) => {
             ctx.learn_jobs.pop_front();
+            // 控えはローカル対局と同じ場所へ。どちらから覚えた手かは
+            // 相手の名前で分かる
+            crate::learn_log_append(&entry);
             ctx.log(
                 "info",
                 &format!(

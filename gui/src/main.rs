@@ -460,18 +460,35 @@ fn set_learn(app: State<App>, on: bool) {
 /// 取り込んだ対局 1 件。時刻は unix 秒のまま持つ — 書式は見る側の
 /// 時間帯と暦で決まるので、記録側で文字列にしてしまうと直せない。
 #[derive(Serialize, Deserialize, Clone)]
-struct LearnEntry {
-    at: u64,
-    kifu: String,
-    black: u8,
-    white: u8,
+pub struct LearnEntry {
+    pub at: u64,
+    pub kifu: String,
+    pub black: u8,
+    pub white: u8,
     /// 書き戻した局面数。途中で諦めた取り込みは実際に進んだぶんだけになる。
-    positions: u32,
+    pub positions: u32,
+    /// 抽選開局の開始局面 (盤面文字列)。標準の初期局面なら空。
+    /// これが無いと、抽選開局の対局を後から開いても別の対局になる。
+    #[serde(default)]
+    pub start: String,
+    /// GGS の対局なら相手の名前。ローカル対局は空。
+    /// **古い控えには無い項目なので既定を持たせる** — 無いと過去の行が
+    /// 丸ごと読めなくなる。
+    #[serde(default)]
+    pub opponent: String,
+}
+
+/// いまの unix 秒。控えの時刻に使う。
+pub fn now_secs() -> u64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs())
+        .unwrap_or(0)
 }
 
 /// 1 行 1 件で追記する。読みながら書いても壊れないので、途中で落ちても
 /// それまでの記録は残る (途中の 1 行だけが読めなくなる)。
-fn learn_log_append(e: &LearnEntry) {
+pub fn learn_log_append(e: &LearnEntry) {
     let path = learn_log_path();
     if let Some(dir) = path.parent() {
         let _ = std::fs::create_dir_all(dir);
@@ -572,14 +589,14 @@ fn learn_game(app: State<App>) -> Result<(), String> {
         // 控えは終わってから 1 行だけ書く。途中で諦めた取り込みも、進んだ
         // ぶんだけを記録する (書き戻し自体はそこまで済んでいるため)
         learn_log_append(&LearnEntry {
-            at: std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .map(|d| d.as_secs())
-                .unwrap_or(0),
+            at: now_secs(),
             kifu,
             black: board.black.count_ones() as u8,
             white: board.white.count_ones() as u8,
             positions: total.saturating_sub(job.remaining() as u32),
+            // ローカル対局は初期局面から始まったものだけを取り込む
+            start: String::new(),
+            opponent: String::new(),
         });
         let mut a = act.lock().unwrap();
         a.learn = None;
@@ -1095,10 +1112,7 @@ fn ggf_text(s: &str) -> String {
 /// GGF の DT。UTC で「YYYY-MM-DD HH:MM:SS GMT」。
 /// 暦は自前で出す — この 1 か所のために依存を 1 つ増やしたくない。
 fn ggf_now() -> String {
-    let secs = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .map(|d| d.as_secs())
-        .unwrap_or(0) as i64;
+    let secs = now_secs() as i64;
     let (days, rem) = (secs.div_euclid(86_400), secs.rem_euclid(86_400));
     // Howard Hinnant の civil_from_days。1970-01-01 からの日数を暦に直す
     let z = days + 719_468;

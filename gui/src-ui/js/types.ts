@@ -300,4 +300,8 @@ export interface LearnEntry {
   white: number;
   /** 書き戻した局面数。 */
   positions: number;
+  /** 抽選開局の開始局面 (盤面文字列)。標準の初期局面なら空。 */
+  start: string;
+  /** GGS の対局なら相手の名前。ローカル対局は空。 */
+  opponent: string;
 }
