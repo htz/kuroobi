@@ -110,7 +110,13 @@ export function Board({ cells, legal = [], evals, last, next, coords = true, gra
 
       {cells.map((v, sq) => {
         const [x, y] = at(sq);
-        if (v !== 0) return <Stone key={sq} x={x} y={y} color={v as 1 | 2} last={last === sq} />;
+        // key に色を混ぜると、返った石は別の要素として描き直される。
+        // .k-flip は animation なので、描き直された時点で 1 回だけ走る
+        // (前の局面を覚えて差分を取る必要がない)。
+        // 置いたばかりの石も同じように回る — 局面を飛ばしたときは盤全体が
+        // 返るので、置いた石だけ回らないほうがかえって不揃いになる。
+        // 動かしたくない人は設定の「石返し」で --flip-dur を 0 にできる
+        if (v !== 0) return <Stone key={sq + ':' + v} x={x} y={y} color={v as 1 | 2} last={last === sq} />;
         if (!legalSet.has(sq)) return null;
         const ev = evals?.[sq];
         return (
@@ -133,7 +139,9 @@ export function Board({ cells, legal = [], evals, last, next, coords = true, gra
 export function Stone({ x, y, color, last }: { x: number; y: number; color: 1 | 2; last?: boolean }) {
   const black = color === 1;
   return (
-    <g>
+    // 回転の軸はマスの中心。既定の transform-origin (SVG の原点) のままだと
+    // 石が画面の隅を中心に振り回される
+    <g className="k-flip" style={{ transformOrigin: `${x}px ${y}px` }}>
       <circle cx={x} cy={y + 2} r={40} fill="var(--stone-shadow)" />
       <circle cx={x} cy={y} r={40}
               fill={black ? 'var(--stone-black)' : 'var(--stone-white)'}
