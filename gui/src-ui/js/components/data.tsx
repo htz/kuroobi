@@ -330,3 +330,97 @@ export function ResultRow({ win, opponent, discs, delta }: { win: boolean; oppon
 }
 
 export { Badge, Dot };
+
+/* 手数を辿る帯。盤の下に全幅で置く。
+ *
+ * 評価値グラフでも飛べるが、あれは**分析したあと**にしか点が無い。
+ * 読み込んだだけの棋譜を辿る道が「戻る／進む」の連打しか無かった。
+ *
+ * 掴めるように見えるものは本当に掴めること (掴めるのに動かないのは
+ * 無いより悪い) — 押しても掴んで滑らせても同じところへ行く。
+ */
+export function MoveScrub({ plies, cursor, blunder, onSeek }: {
+  /** 全手数。0 なら帯は出さない */
+  plies: number;
+  cursor: number;
+  /** 敗着。盤に触らずに場所が分かるように赤い印を打つ */
+  blunder?: { at: number; loss: number };
+  onSeek: (n: number) => void;
+}) {
+  const box = React.useRef<HTMLDivElement>(null);
+  if (plies <= 0) return null;
+
+  const at = (n: number) => (n / plies) * 100;
+  // 押した場所・滑らせた場所からいちばん近い手数へ。端は丸めずに 0 と plies
+  const seekAt = (clientX: number) => {
+    const r = box.current?.getBoundingClientRect();
+    if (!r || r.width <= 0) return;
+    const t = Math.min(1, Math.max(0, (clientX - r.left) / r.width));
+    onSeek(Math.round(t * plies));
+  };
+
+  // 刻みは 1 手ごと。10 手ごとだけ長くして数字を添える
+  const ticks = Array.from({ length: plies + 1 }, (_, i) => i);
+
+  return (
+    <div style={{ padding: '0 var(--sp-4)', flex: 'none' }}>
+      <div ref={box} role="slider" aria-label="手数" aria-valuemin={0}
+           aria-valuemax={plies} aria-valuenow={cursor} tabIndex={0}
+           onPointerDown={(e) => {
+             (e.target as HTMLElement).setPointerCapture?.(e.pointerId);
+             seekAt(e.clientX);
+           }}
+           onPointerMove={(e) => { if (e.buttons & 1) seekAt(e.clientX); }}
+           style={{
+             position: 'relative', height: 'var(--h-scrub)', width: '100%',
+             cursor: 'pointer', touchAction: 'none', userSelect: 'none',
+           }}>
+        {/* 溝と、いまいるところまでの塗り */}
+        <div style={{
+          position: 'absolute', left: 0, right: 0, top: 11, height: 2,
+          background: 'var(--track)', borderRadius: 1,
+        }} />
+        <div style={{
+          position: 'absolute', left: 0, width: at(cursor) + '%', top: 11, height: 2,
+          background: 'var(--accent)', borderRadius: 1,
+        }} />
+
+        {ticks.map((i) => {
+          const ten = i % 10 === 0;
+          return (
+            <div key={i} style={{
+              position: 'absolute', left: at(i) + '%', top: ten ? 6 : 8,
+              width: 1, height: ten ? 12 : 8, marginLeft: -0.5,
+              background: ten ? 'var(--border)' : 'var(--border-weak)',
+            }} />
+          );
+        })}
+
+        {/* 敗着。刻みより太く・赤く、上まで伸ばす */}
+        {blunder && blunder.at <= plies && (
+          <div title={`${blunder.at} 手 敗着 ▼${blunder.loss}`} style={{
+            position: 'absolute', left: at(blunder.at) + '%', top: 3,
+            width: 2, height: 18, marginLeft: -1, background: 'var(--bad)',
+          }} />
+        )}
+
+        {ticks.filter((i) => i % 10 === 0).map((i) => (
+          <span key={'n' + i} style={{
+            position: 'absolute', left: at(i) + '%', top: 20,
+            transform: 'translateX(-50%)',
+            fontSize: 'var(--fs-7)', color: 'var(--sub)', lineHeight: 1,
+          }}>{i}</span>
+        ))}
+
+        {/* 掴む丸。盤の石と同じ色づかいにすると盤面と読み違えるので、
+            面は --card・縁は --accent にして「操作するもの」に見せる */}
+        <div style={{
+          position: 'absolute', left: at(cursor) + '%', top: 4,
+          width: 16, height: 16, marginLeft: -8, borderRadius: '50%',
+          background: 'var(--card)', border: '2px solid var(--accent)',
+          boxShadow: 'var(--sh-1)', pointerEvents: 'none',
+        }} />
+      </div>
+    </div>
+  );
+}

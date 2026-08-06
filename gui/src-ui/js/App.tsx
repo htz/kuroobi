@@ -11,7 +11,7 @@ import { AppFrame, Dock, Main, Section, StatusBar, StatusStat, Toolbar } from '.
 import { GgsScreen } from './GgsScreens';
 import { Confirm, PasteKifu, Settings } from './Dialogs';
 import { Board } from './components/board';
-import { EvalGraph, KifuTable, PlayerRow } from './components/data';
+import { EvalGraph, KifuTable, MoveScrub, PlayerRow } from './components/data';
 import { JobList, Meter, Nav, NAV_LOCAL, ggsNav, Toasts, type NavId, type Toast } from './components/ggs';
 import { Button, Segmented, Toggle } from './components/primitives';
 import { Strength } from './components/strength';
@@ -158,6 +158,12 @@ export function App() {
     () => (v ? movesOf(v, g.moveSource, graph.values) : []),
     [v, g.moveSource, graph.values]);
   const evals = g.autoHint ? evalsOf(g.hints) : undefined;
+  // 敗着 = いちばん損した手。帯とグラフの両方が同じものを指すように 1 か所で出す
+  const blunder = useMemo(() => {
+    let best: { at: number; loss: number } | undefined;
+    for (const m of moves) if (m.loss && (!best || m.loss > best.loss)) best = { at: m.n, loss: m.loss };
+    return best;
+  }, [moves]);
 
   /* キー操作。
    *
@@ -198,10 +204,12 @@ export function App() {
         return;
       }
       if (!study || !v) return;
-      if (e.key === 'ArrowLeft') { e.preventDefault(); void g.jumpTo(cmd ? 0 : Math.max(0, v.cursor - 1)); }
+      // ⌘ で端まで、⇧ で 10 手、素で 1 手
+      const step = e.shiftKey ? 10 : 1;
+      if (e.key === 'ArrowLeft') { e.preventDefault(); void g.jumpTo(cmd ? 0 : Math.max(0, v.cursor - step)); }
       if (e.key === 'ArrowRight') {
         e.preventDefault();
-        void g.jumpTo(cmd ? v.moves.length : Math.min(v.moves.length, v.cursor + 1));
+        void g.jumpTo(cmd ? v.moves.length : Math.min(v.moves.length, v.cursor + step));
       }
     };
     window.addEventListener('keydown', onKey);
@@ -327,10 +335,16 @@ export function App() {
         </div>
         )}
 
+        {/* 手数を辿る帯。分析していなくても辿れるので、グラフより先に置く */}
+        {study && !isGgs && !isBook && v && (
+          <MoveScrub plies={v.moves.length} cursor={v.cursor} blunder={blunder}
+                     onSeek={(n) => void g.jumpTo(n)} />
+        )}
+
         {/* 箱に入れず、盤の下の帯として全幅に置く。検討だけ */}
         {study && !isGgs && !isBook && (
           <EvalGraph points={graph.values ?? []} plies={v?.moves.length} cursor={v?.cursor}
-                     busy={graph.busy} onJump={(n) => void g.jumpTo(n)}
+                     blunder={blunder} busy={graph.busy} onJump={(n) => void g.jumpTo(n)}
                      extra={<>
                        {/* 進み具合は見出し行に出す。帯の高さは変えない —
                            出るたびに枠が伸びると下の段が全部カタカタ動く */}
