@@ -556,7 +556,13 @@ function GgsPlay({ snap, onNav, prefs }: { snap: GgsSnapshot; onNav: (id: NavId)
       }}>
         {keys.map((key) => (
           <MatchRow key={key} m={matchRowOf(groups.get(key)!, key)}
-                    active={key === cur} onSelect={() => setSel(key)} />
+                    active={key === cur} onSelect={() => setSel(key)}
+                    // 終わった対局は一覧に残り続けていた。閉じる先は
+                    // 「結果」に控えてあるので、ここから消しても失われない
+                    onClose={() => {
+                      void ggsApi.closeMatch(key);
+                      if (key === sel) setSel('');
+                    }} />
         ))}
       </aside>
 

@@ -1,9 +1,10 @@
 import { useCallback, useEffect, useState, type ReactNode } from 'react';
-import { api, type ThreadsView } from './api';
+import { api, type KifuFrame, type ThreadsView } from './api';
 import type { Prefs } from './prefs';
 import { Modal, Overlay, Section } from './components/layout';
 import { Button, Segmented, Select } from './components/primitives';
 import { Icon, IconButton } from './components/Icons';
+import { Board } from './components/board';
 
 /* 確認と入力。現行がブラウザの confirm() / prompt() を使っているところを
  * 置き換える。ブラウザのダイアログはデザインに乗らないうえ、Tauri の
@@ -49,6 +50,31 @@ export function PasteKifu({ onLoad, onFile, onCancel }: {
   onLoad: (text: string) => void; onFile: () => void; onCancel: () => void;
 }) {
   const [text, setText] = useState('');
+  /* 貼ったものが読めるかを、読み込む前に見せる。
+   *
+   * GGF・着手列・盤面つきのどれでも受けるので、**読めたかどうかが押すまで
+   * 分からない**のが困る。バックエンドに下読みだけさせる (対局の状態は
+   * 動かさない)。打鍵のたびに投げないよう少し待ってから。 */
+  const [peek, setPeek] = useState<{ frames: KifuFrame[]; err: string } | null>(null);
+  useEffect(() => {
+    const t = text.trim();
+    let alive = true;
+    if (!t) {
+      // 空にしたときも遅らせて消す。effect の中で直に状態を書かない
+      const clear = setTimeout(() => { if (alive) setPeek(null); }, 0);
+      return () => { alive = false; clearTimeout(clear); };
+    }
+    const id = setTimeout(() => {
+      void api.previewKifu(t)
+        .then((frames) => { if (alive) setPeek({ frames, err: '' }); })
+        .catch((e) => { if (alive) setPeek({ frames: [], err: '' + e }); });
+    }, 250);
+    return () => { alive = false; clearTimeout(id); };
+  }, [text]);
+
+  // frames の 1 枚目は初期局面。2 枚以上なければ手が 1 つも読めていない
+  const ok = !!peek && !peek.err && peek.frames.length > 1;
+  const last = ok ? peek!.frames[peek!.frames.length - 1] : null;
   return (
     <Overlay onClose={onCancel}>
       <div role="dialog" aria-modal style={{
@@ -67,11 +93,28 @@ export function PasteKifu({ onLoad, onFile, onCancel }: {
             background: 'var(--bg)', border: '1px solid var(--border)',
             fontFamily: 'var(--ff-mono)', fontSize: 'var(--fs-6)', lineHeight: 1.6,
           }} />
+        {/* 下読みの結果。読めなければ理由、読めれば手数と終局図 */}
+        <div style={{ display: 'flex', gap: 'var(--sp-4)', alignItems: 'center', minHeight: 96 }}>
+          <div style={{ width: 96, flex: 'none' }}>
+            {last && <Board cells={last.cells as (0 | 1 | 2)[]} last={last.last} coords={false} grain={false} />}
+          </div>
+          <div style={{ fontSize: 'var(--fs-6)', color: peek?.err ? 'var(--bad)' : 'var(--sub)', lineHeight: 1.7 }}>
+            {!peek && '貼り付けると、ここに読み取り結果が出ます。'}
+            {peek?.err && peek.err}
+            {last && <>
+              {/* 初期局面ぶんの 1 枚を引いて手数にする */}
+              {peek!.frames.length - 1} 手 ／ 黒 <b style={{ color: 'var(--text)' }}>{last.black}</b>
+              {' '}白 <b style={{ color: 'var(--text)' }}>{last.white}</b>
+            </>}
+            {peek && !peek.err && !ok && '手が 1 つも読み取れません。'}
+          </div>
+        </div>
+
         <div style={{ display: 'flex', gap: 'var(--sp-2)', alignItems: 'center' }}>
           <Button onClick={onFile}>ファイルから…</Button>
           <span style={{ marginLeft: 'auto' }} />
           <Button onClick={onCancel}>やめる</Button>
-          <Button variant="primary" disabled={!text.trim()} onClick={() => onLoad(text)}>読み込む</Button>
+          <Button variant="primary" disabled={!ok} onClick={() => onLoad(text)}>読み込む</Button>
         </div>
       </div>
     </Overlay>
