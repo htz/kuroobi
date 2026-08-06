@@ -298,6 +298,9 @@ pub struct StandbyStats {
 pub struct Snapshot {
     pub conn: String, // disconnected | connecting | logging_in | online
     pub login: String,
+    /// 直近に取れた自分のレート。**画面には出さない** (プールごとの
+    /// `my_ranks` が出す) が、終わった対局に後追いで刻むために持つ。
+    #[serde(skip)]
     pub my_rating: Option<f32>,
     /// プール別の自分のレート。
     pub my_ranks: Vec<RankRow>,
