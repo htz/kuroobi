@@ -132,6 +132,27 @@ const GTYPE: Record<string, string> = {
 };
 export const gtypeLabel = (t: string): string => GTYPE[t] ?? (t || '?');
 
+/// 申し込みと待機モードで選べる形式・持ち時間。
+///
+/// 以前はロビー側と待機モード側に別々の配列があり、**ロビーでは選べるのに
+/// 待機モードでは選べない形式** (`s8r20` / `8r16` / 30 分) があった。申し込みと
+/// 待機で選べるものが違う理由は無いので、広いほうに揃えて 1 か所にした。
+export const GTYPE_CHOICES: [string, string][] = [
+  ['s8r16', '同期・ランダム16手 (推奨)'],
+  ['s8r18', '同期・ランダム18手'],
+  ['s8r20', '同期・ランダム20手'],
+  ['s8', '同期・通常開局'],
+  ['8', '通常 (1局)'],
+  ['8r16', '通常・ランダム16手'],
+];
+export const CLOCK_CHOICES: [string, string][] = [
+  ['00:05:00', '5 分'],
+  ['00:10:00', '10 分'],
+  ['00:15:00', '15 分'],
+  ['00:20:00', '20 分'],
+  ['00:30:00', '30 分'],
+];
+
 export function relTime(unixSecs: number): string {
   if (!unixSecs) return '';
   const d = Math.max(0, Date.now() / 1000 - unixSecs);
@@ -189,6 +210,80 @@ export async function translate(text: string, target: string): Promise<string> {
 }
 
 export const hasJapanese = (t: string): boolean => /[぀-ヿ一-鿿]/.test(t);
+
+/* ---------------- finger の項目を読み下す ---------------- */
+
+/// finger のキーは "stored (-)" のように空白が入ることがある。
+export const normKey = (k: string): string => k.replace(/\s+/g, '');
+
+// GGS の記号をそのまま出しても読めないので言い換える。
+export function fingerValue(k: string, v: string): string {
+  const key = normKey(k).replace(/\(.*\)/, '');
+  if (key === 'open') return v === '0' || v === '-' ? '受け付けていない' : '受け付ける';
+  if (key === 'rated' || key === 'trust') return v === '+' ? 'あり' : 'なし';
+  // accept / decline / request はここへ来ない。論理式なので文字に潰さず、
+  // FingerValue が木のまま描く
+  if (key === 'notify') return v === '/os' ? 'リバーシサービス全体' : (v.trim() || 'なし');
+  if (key === 'play') return v === '-' || !v ? '対局していない' : `対局中 (${v})`;
+  if (key === 'client') return v === '+' ? '専用クライアント' : 'telnet など';
+  if (key === 'hear') return v === '+' ? '受け取る' : '受け取らない';
+  if (key === 'vt100') return v === '+' ? '対応' : '非対応';
+  if (key === 'level') return v === '1' ? '一般' : v;
+  if (key === 'dblen') {
+    // "100.0 = 2,862 / 2,862" = 公開棋譜データベースと一致した手の割合
+    const m = /([\d.]+)\s*=\s*([\d,]+)\s*\/\s*([\d,]+)/.exec(v);
+    return m ? `${m[1]}% (${m[2]} / ${m[3]} 手が一致)` : v;
+  }
+  if (key === 'groups') return v === '_client' ? 'クライアント (対局プログラム)' : v;
+  if (key === 'bell') return readBell(v);
+  if (key === 'since' || key === 'idle') return readTime(k, v);
+  if (['track', 'watch', 'groups', 'channs', 'notify', 'ignore', 'stored'].includes(key)) {
+    return v.trim() || 'なし';
+  }
+  return v;
+}
+
+/// 通知設定 (`-r -p -w ...`) は記号の羅列なので、有効なものだけ並べる。
+const BELL_LABEL: Record<string, string> = {
+  r: '対局の申し込み', p: '個人あての発言', w: '観戦中の対局', n: 'お知らせ',
+  ns: '対局開始', nn: '新しい対局', nt: '手番', ni: '中断', nr: '再開', nw: '観戦',
+  ta: '全体の発言', to: '対局中の発言', tp: '個人あて',
+};
+function readBell(v: string): string {
+  const on = v.split(/\s+/).filter((t) => t.startsWith('+')).map((t) => t.slice(1));
+  const names = on.map((k) => BELL_LABEL[k] || k).filter(Boolean);
+  return names.length ? names.join('、') : 'すべて切っている';
+}
+
+/// GGS の時刻表記を日本語のロケールに直す。
+/// `since` は "Thu 30 Jul 2026 17:39:06 MDT"、`idle` は "00:14:02, on line : 1.09:59:08"。
+function readTime(k: string, v: string): string {
+  if (k === 'since') {
+    const t = Date.parse(v.replace(/\s*[A-Z]{3}$/, ' GMT-0600'));
+    if (!Number.isNaN(t)) {
+      return new Date(t).toLocaleString('ja-JP', {
+        year: 'numeric', month: 'long', day: 'numeric',
+        hour: '2-digit', minute: '2-digit', weekday: 'short',
+      });
+    }
+    return v;
+  }
+  // idle: 手前が無操作の時間、"on line" が接続してからの時間
+  const m = /^([\d:.]+)(?:,\s*on line\s*:\s*([\d:.]+))?/.exec(v.trim());
+  if (!m) return v;
+  const span = (x: string): string => {
+    const [d, hms] = x.includes('.') ? x.split('.') : ['0', x];
+    const [h, mi] = hms.split(':').map(Number);
+    const parts: string[] = [];
+    if (+d) parts.push(`${+d} 日`);
+    if (h) parts.push(`${h} 時間`);
+    parts.push(`${mi ?? 0} 分`);
+    return parts.join(' ');
+  };
+  const idle = span(m[1]);
+  return m[2] ? `${idle} (接続してから ${span(m[2])})` : idle;
+}
+
 
 /* ---------------- 条件式 (formula) の読み下し ---------------- */
 // 自動受諾/拒否の条件式を日本語にする。記法は `tell /os help formula` 準拠。
@@ -303,6 +398,34 @@ export type Cond =
 
 export const varOf = (name: string): FormulaVar | undefined =>
   FORMULA_VARS.find((v) => v.name === name);
+
+/// 色の選択肢。**GGS の盤面表記は `*` = 黒 / `O` = 白**で、`b` / `w` は通らない。
+/// 画面に描く石の色 (`'b' | 'w'`) とは別物なので混ぜないこと。
+export const COLOR_CHOICES: [string, string][] = [
+  ['?', 'おまかせ'], ['*', '黒'], ['O', '白'],
+];
+
+/// 真偽の選択肢。`[否定するか, 表示]`。
+/// 「が」「でない」だと単体で読めないので、色と同じ語 (である / ではない) に揃える。
+export const BOOL_OPS: [boolean, string][] = [[false, 'である'], [true, 'ではない']];
+
+/** 束 (`&` / `|`) か葉かを型で分ける。 */
+export const isGroup = (c: Cond): c is { kind: 'all' | 'any'; kids: Cond[] } =>
+  c.kind !== 'atom';
+
+/// 葉 1 つを日本語にする (読むだけの木で使う)。
+/// 文字列を訳す `readAtom` とは入口が違うだけで、語彙は揃えてある。
+export function condLabel(c: Cond): string {
+  if (isGroup(c)) return c.kind === 'all' ? 'すべて満たす' : '次のどれか';
+  const v = varOf(c.name);
+  const label = v?.label ?? c.name;
+  if (!v || v.type === 'bool') return label + (c.neg ? ' ではない' : '');
+  if (v.type === 'color') {
+    const name = COLOR_CHOICES.find(([x]) => x === c.val)?.[1] ?? c.val;
+    return `${label} ${c.op === '≠' ? 'ではない' : 'である'} ${name}`;
+  }
+  return `${label} ${c.op} ${c.val}${v.unit ?? ''}`;
+}
 
 /// 葉 1 つを編集できる形に読み解く。読めない綴りは `rated` 扱いに倒さず、
 /// 名前をそのまま残す (保存し直したときに他人の設定を壊さないため)。

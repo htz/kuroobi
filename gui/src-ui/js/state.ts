@@ -61,6 +61,19 @@ export const LEVELS = [
 
 export interface Levels { depth: number; solve: number; band: number }
 
+/** 読切 (空きマス数) の上限。これ以上は現実的な時間で解けない。 */
+export const SOLVE_MAX = 36;
+
+/// 読切は深さ以上でなければならない。深さのほうが大きいと、中盤探索が
+/// 終局を跨いで読むだけの区間ができる — 読み切れる局面なのに読み切りに
+/// 入らず、MPC で枝を刈った不正確な値のまま深さだけを費やす。
+/// 深さの上限も読切に合わせる (それより深くしても選べる読切が無い)。
+export function clampLevels(v: Levels): Levels {
+  const depth = Math.max(1, Math.min(SOLVE_MAX, v.depth));
+  return { depth, solve: Math.max(depth, Math.min(SOLVE_MAX, v.solve)), band: v.band };
+}
+
+
 export interface Hints {
   [sq: number]: { value: number; exact: boolean; book: boolean; depth: number };
 }

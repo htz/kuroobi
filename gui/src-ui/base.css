@@ -1,0 +1,150 @@
+/* KUROOBI base — tokens.css の後に読む
+ *
+ * ここに置くのは「インラインの style では書けないもの」だけ:
+ *   1. リセットとフォーカスリング
+ *   2. 状態の層（hover / active / selected）← 押せる面の定義は設計の一部
+ *   3. 畳む段（media query）
+ *   4. 畳む段が動かすプロパティ（インラインに書くと media query が届かない）
+ *   5. 窓のドラッグ領域・スクロールバー・石返しアニメ
+ * 見た目そのものは部品のインライン style が持つ。ここは「変化」だけを持つ。
+ */
+* { box-sizing:border-box; }
+html, body, #root { height:100%; }
+body {
+  margin:0; background:var(--bg); color:var(--text);
+  font:var(--fs-4)/1.6 var(--ff);
+  font-feature-settings:"tnum";           /* 数値の桁を揃える。全画面で必須 */
+  -webkit-font-smoothing:antialiased;
+  overflow:hidden;                         /* デスクトップアプリ。窓の外にはスクロールさせない */
+}
+a { color:var(--accent); text-decoration:none; }
+a:hover { color:var(--text); }
+button, input, select, textarea { font:inherit; color:inherit; }
+button { cursor:default; }                 /* macOS 流。pointer にしない */
+
+/* フォーカスリング — キーボード操作のときだけ */
+:focus { outline:none; }
+:focus-visible { outline:2px solid var(--accent); outline-offset:2px; border-radius:var(--r-1); }
+
+
+/* ============================================================
+ * 状態の層
+ *
+ * インライン style では :hover / :active が書けないので、変化だけを
+ * クラスで持つ。部品は className を受け取り、既定のクラスを付ける。
+ * 色は必ず --hover / --accent 由来。ここで新しい色を作らない。
+ *
+ * 原則:
+ *   hover  = --hover を重ねる（面の色は変えない）
+ *   active = --hover を 1 段濃く（押し込みの transform はしない。
+ *            密度が高い表で 1px 動くとちらつく）
+ *   選ばれているもの = 部品側のインライン style が持つ（.k-on は
+ *            hover の効き方を弱める役だけ）
+ *   disabled / aria-disabled = 変化しない
+ * ============================================================ */
+
+/* 押せる面すべての土台。Button / Segmented の駒 / IconButton / Select */
+.k-press { transition:background var(--dur) var(--ease), border-color var(--dur) var(--ease); }
+.k-press:hover:not(:disabled):not([aria-disabled="true"]) { background-image:linear-gradient(var(--hover), var(--hover)); }
+.k-press:active:not(:disabled):not([aria-disabled="true"]) { background-image:linear-gradient(var(--hover), var(--hover)), linear-gradient(var(--hover), var(--hover)); }
+/* 選ばれている駒・主ボタンは既に濃いので、hover は控えめに */
+.k-press.k-on:hover { background-image:linear-gradient(var(--hover-on), var(--hover-on)); }
+
+/* 一覧の行（棋譜・手合い・プレイヤー・ロビー・会話）。
+ * 選ばれている行は部品側が背景と 2px の帯を持つので、ここは hover だけ。 */
+.k-row { transition:background var(--dur) var(--ease); }
+.k-row:hover { background-image:linear-gradient(var(--hover), var(--hover)); }
+.k-row[aria-current="true"]:hover, .k-row.k-on:hover { background-image:none; }
+
+/* 盤のマス。合法手だけ反応する（押せない盤で手が動くと嘘になる） */
+.k-cell { cursor:default; }
+.k-cell circle { transition:opacity var(--dur) var(--ease), r var(--dur) var(--ease); }
+.k-cell:hover .k-legal { opacity:.75; }
+.k-cell:hover .k-eval { opacity:1; }
+
+/* 入力。枠だけ明るくする（面は変えない — 打ち込む場所は静かなほうがよい） */
+.k-input { transition:border-color var(--dur) var(--ease); }
+.k-input:hover:not([readonly]) { border-color:var(--sub); }
+.k-input:focus-within, .k-input:focus { border-color:var(--accent); }
+
+/* リンク風の文字（プレイヤー名など）。下線の濃さだけ変える */
+.k-link { transition:border-color var(--dur) var(--ease), color var(--dur) var(--ease); }
+.k-link:hover { color:var(--accent); border-bottom-color:var(--accent); }
+
+/* 掴める境目。今は使っていない — BottomPanel の高さは固定で、掴めるのに
+ * 動かないのは無いより悪いので摘みを落とした。高さ変更を入れるときに戻す。 */
+.k-grip { cursor:row-resize; }
+.k-grip:hover > span, .k-grip:active > span { background:var(--sub); }
+
+
+/* ============================================================
+ * 畳む段
+ *
+ * デスクトップアプリなので小さすぎる窓は考えない。狭くなったときに
+ * 落とす順は「盤を最後まで残す」— 盤が読めなければ何もできない。
+ *   1120px: 右ドックを畳む（ボタンで出し入れ）
+ *   1040px: 左メニューをアイコンだけにする
+ *    940px: ツールバーの補助情報（担当・評価値を表示）を落とす
+ * 段の高さ（44 / 32 / 28 / 24 / 20）は変えない。密度は保つ。
+ * ============================================================ */
+/* ⚠ 畳む段が動かすプロパティは、ここが持つ。
+ * インライン style は media query より強いので、部品側に書くと段が届かない。
+ * 部品はこれらのプロパティを style に書かないこと。 */
+.k-nav { width:var(--w-nav); }
+.k-dock { width:var(--w-dock); display:flex; }
+.k-nav-section, .k-meter-text, .k-toolbar-aux, .k-nav-jobs { display:flex; }
+.k-nav-row { padding:0 10px; }
+/* ロゴは器の幅に従わせる。SVG は放っておくと固有の大きさで描かれるので、
+   48px の列に畳んだときに帯からはみ出してツールバーの上に重なる */
+.k-nav-logo { display:block; }
+.k-nav-logo > svg { display:block; width:100%; height:auto; }
+
+/* Dock を開く入口は Toolbar の右端（k-dock-toggle）。
+ * 広い窓では Dock が常に見えているので入口は出さない。 */
+.k-dock-toggle { display:none; }
+@media (max-width: 1120px) {
+  .k-dock { display:none; }
+  .k-dock.k-open { display:flex; position:absolute; right:0; top:var(--h-bar); bottom:var(--h-status); z-index:5; box-shadow:var(--sh-2); }
+  .k-dock-toggle { display:inline-flex; }
+}
+@media (max-width: 1040px) {
+  /* アイコンだけの細い列。48px = 32px の当たり ＋ 左右 8px */
+  .k-nav { width:48px; }
+  /* 文字はすべて落とす。ロゴと仕事一覧も文字なので同じ扱い — メーターの
+     ラベルだけ消して他を残すと、48px の列で折り返して縦に伸びる */
+  .k-nav .k-nav-label, .k-nav .k-nav-section, .k-nav .k-meter-text,
+  .k-nav .k-nav-logo, .k-nav .k-nav-jobs { display:none; }
+  .k-nav .k-nav-row { justify-content:center; padding:0; }
+  /* ロゴを落としても帯は残す — 信号機の居場所とドラッグ領域なので */
+  .k-nav .k-drag { padding:0; }
+}
+@media (max-width: 940px) {
+  .k-toolbar-aux { display:none; }
+}
+
+
+/* タイトルバーのドラッグ領域。
+ * macOS の Tauri は WKWebView なので -webkit-app-region が効かない。窓を掴む
+ * のは data-tauri-drag-region 属性で、Nav の上端がそれを持つ (Nav.tsx)。
+ * この規則は WebView2 (Windows) 側のためだけに残してある。
+ * 信号機ぶんの 78px の余白は titleBarStyle: "Overlay" が前提。 */
+.k-drag { -webkit-app-region:drag; }
+.k-nodrag { -webkit-app-region:no-drag; }
+
+/* スクロール — ドックと表の中だけ */
+.k-scroll { overflow-y:auto; overscroll-behavior:contain; }
+.k-scroll::-webkit-scrollbar { width:9px; }
+.k-scroll::-webkit-scrollbar-thumb { background:var(--border); border-radius:9px; border:2px solid transparent; background-clip:content-box; }
+.k-scroll::-webkit-scrollbar-track { background:transparent; }
+.k-scroll:hover::-webkit-scrollbar-thumb { background:var(--sub); }
+
+/* 石返し。設定の「石返し」で --flip-dur を 0ms / 120ms / 240ms に差し替える */
+:root { --flip-dur:120ms; }
+@keyframes k-flip { from { transform:rotateY(180deg); } to { transform:rotateY(0); } }
+.k-flip { animation:k-flip var(--flip-dur) var(--ease); }
+
+@media (prefers-reduced-motion: reduce) {
+  .k-flip { animation:none; }
+  .k-press, .k-row, .k-input, .k-link, .k-cell circle { transition:none; }
+  .k-nav-row, .k-dock { transition:none; }
+}

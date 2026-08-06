@@ -10,11 +10,12 @@
     "withGlobalTauri": true,
     "windows": [
       {
-        "title": "Kuroobi",
-        "width": 1100,
-        "height": 820,
+        "title": "",
+        "width": 1240,
+        "height": 860,
         "minWidth": 860,
-        "minHeight": 560
+        "minHeight": 560,
+        "titleBarStyle": "Overlay"
       }
     ],
     "security": {

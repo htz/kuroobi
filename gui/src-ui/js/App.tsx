@@ -1,447 +1,349 @@
-import { useCallback, useEffect, useRef, useState } from 'react';
-import { api, ggsApi, jsLog, onHints, type ActivityView } from './api';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useGame } from './state';
 import { useGgs } from './ggs';
 import type { GameView } from './types';
-import { Board } from './components/Board';
-import { GgsView } from './components/GgsView';
-import { Graph, type GraphPoint } from './components/Graph';
-import { Nav, type View } from './components/Nav';
-import { ControlBar, Panel, ScoreBar, Toasts } from './components/Panel';
-import { SettingsModal } from './components/SettingsModal';
-import { Modal } from './components/Modal';
-import { Icon } from './components/Icons';
+import { api, jsLog, type ActivityView } from './api';
+import { useActivity, useEngineSettings, useEngineTurn, useGraph, useHints, useStartGame } from './engine';
+import { fmtSecs } from './ggs';
+import { cellsOf, connOf, evalsOf, ggsPlaying, movesOf, navBadges } from './adapt';
+import { AppFrame, Dock, Main, Section, StatusBar, StatusStat, Toolbar } from './components/layout';
+import { GgsScreen } from './GgsScreens';
+import { Confirm, PasteKifu, Settings } from './Dialogs';
+import { Board } from './components/board';
+import { EvalGraph, KifuTable, PlayerRow } from './components/data';
+import { JobList, Meter, Nav, NAV_LOCAL, ggsNav, Toasts, type NavId, type Toast } from './components/ggs';
+import { Button, Segmented, Toggle } from './components/primitives';
+import { Strength } from './components/strength';
+import { LEVELS } from './state';
+
+/* 対局と検討の画面。
+ *
+ * エンジンとのやりとりは engine.ts が持つ (旧 App と同じものを使う)。
+ * ここがやるのは「状態を画面の形にして並べる」だけ。
+ */
+
+const SIDES = [
+  { value: 'black' as const, label: '黒' },
+  { value: 'white' as const, label: '白' },
+  { value: 'both' as const, label: '両方' },
+  { value: 'off' as const, label: 'なし' },
+];
 
 export function App() {
   const g = useGame();
   const ggs = useGgs();
-  const [view, setView] = useState<View>('play');
-  // 設定ダイアログ。開くときにファイルの状態を取ってから渡す。
-  const [settings, setSettings] = useState<[string, string, boolean][] | null>(null);
-  const [paste, setPaste] = useState(false);
-  const [pasteText, setPasteText] = useState('');
+  const [nav, setNavRaw] = useState<NavId>('play');
+  const study = nav === 'study';
+  const isGgs = nav.startsWith('ggs');
+  const [tab, setTab] = useState('棋譜');
+  const [dockOpen, setDockOpen] = useState(false);
 
-  // ---- 評価値グラフ ----
-  const [gvals, setGvals] = useState<(GraphPoint | undefined)[] | null>(null);
-  const [gbusy, setGbusy] = useState(false);
-  /** 分析の進み具合 (測った局面 / 全局面)。走っていない間は null。 */
-  const [gprog, setGprog] = useState<{ done: number; total: number } | null>(null);
-  const gseq = useRef(0);
-  const lineKey = (v: GameView | null) =>
-    v ? v.moves.map((m) => (m == null ? 'p' : m)).join(',') : '';
-  const gkey = useRef('');
+  useEngineSettings(g);
+  useHints(g);
+  useEngineTurn(g);
+  const cpu = useActivity();
+  // engine.ts は画面を持たないので、確認はこちらが出して答えだけ返す
+  const [ask, setAsk] = useState<{ msg: string; done: (ok: boolean) => void } | null>(null);
+  const confirm = useCallback(
+    (msg: string) => new Promise<boolean>((done) => setAsk({ msg, done })),
+    []);
+  // GGS 対局は最優先。走っている間はローカル対局も分析も断る
+  const ggsMatch = ggsPlaying(ggs.snap);
+  const graph = useGraph(g, ggsMatch, confirm);
+  const startGame = useStartGame(g, ggsMatch, graph, confirm);
 
-  // 手順が変わったらグラフは無効
-  useEffect(() => {
-    const k = lineKey(g.view);
-    if (k !== gkey.current) { gkey.current = k; setGvals(null); }
-  }, [g.view]);
-
-  // 設定が変わったらエンジンへ流す (値に依存させる。関数を並べると
-  // 毎回作り直されて無限に走る)
-  const { depth, solve, band } = g.levels;
-  useEffect(() => {
-    api.setLevels(depth, solve, band).catch(() => {});
-  }, [depth, solve, band]);
-  useEffect(() => { api.setUseBook(g.useBook).catch(() => {}); }, [g.useBook]);
-  // 学習の取り込みはローカル・GGS 共通の設定 (歯車)。両方へ流す
-  useEffect(() => {
-    api.setLearn(g.learnOn).catch(() => {});
-    ggsApi.setLearn(g.learnOn).catch(() => {});
-  }, [g.learnOn]);
-
-  // 局面が動いたら評価値を出し直す
-  const refresh = g.refreshHints;
-  useEffect(() => { void refresh(); }, [g.view, g.autoHint, refresh]);
-
-  // ---- 分析の途中経過 ----
-  // 反復深化の段が終わるたびに届く。深いものが来たら置き換えるだけ。
-  const setHints = g.setHints;
-  const setStat = g.setStat;
-  useEffect(() => {
-    let off: (() => void) | undefined;
-    void onHints((_depth, hs, nodes, secs) => {
-      const next: Record<number, { value: number; exact: boolean; book: boolean; depth: number }> = {};
-      for (const h of hs) {
-        if (!Number.isFinite(h.value)) continue;
-        next[h.pos] = { value: h.value, exact: h.exact, book: h.from_book, depth: h.depth };
-      }
-      setHints(Object.keys(next).length ? next : null);
-      setStat({ nodes, secs });
-    }).then((f) => { off = f; }).catch(() => {});
-    return () => off?.();
-  }, [setHints, setStat]);
-
-  // ---- CPU の稼働状況 (ナビの常時表示) ----
-  const [cpu, setCpu] = useState<ActivityView | null>(null);
-  useEffect(() => {
-    const t = window.setInterval(() => {
-      api.activity().then(setCpu).catch(() => {});
-    }, 1000);
-    return () => clearInterval(t);
-  }, []);
-  // GGS の自分の対局が進行中か (最優先なのでローカルの開始を断る)
-  const ggsMatch = ggs.snap?.matches.some((m) => m.my_color && !m.over) ?? false;
-
-  const isGgs = view.startsWith('ggs-');
-
-  // ---- GGS ----
-  const conn = ggs.snap?.conn;
-  // チャットの未読数。開いている間は 0 で、離れるときに既読位置を進める。
+  // チャットの未読数。開いている間は 0 で、離れるときに既読位置を進める
   const chatTotal = ggs.snap?.chat.length ?? 0;
   const [chatSeen, setChatSeen] = useState(0);
-  const chatUnread = view === 'ggs-chat' ? 0 : Math.max(0, chatTotal - chatSeen);
+  const chatUnread = nav === 'ggs-chat' ? 0 : Math.max(0, chatTotal - chatSeen);
 
-  // 進行中の対局は定期的に取り直す (他人の対局は開始通知が来ないことがある)
-  useEffect(() => {
-    if (conn !== 'online') return;
-    const t = window.setInterval(() => { ggsApi.listMatches().catch(() => {}); }, 60000);
-    return () => clearInterval(t);
-  }, [conn]);
+  // 行き先とエンジンのモードは同じもの。ずれると検討中に打たれる
+  const setMode = g.setMode;
+  const setNav = useCallback((id: NavId) => {
+    // チャットを離れるときに既読位置を進める。開いている間は 0 のままなので、
+    // 離れた後に届いたぶんだけが未読として数えられる
+    if (nav === 'ggs-chat' && id !== 'ggs-chat') setChatSeen(chatTotal);
+    setNavRaw(id);
+    if (id === 'play' || id === 'study') setMode(id === 'study' ? 'study' : 'vs');
+  }, [setMode, nav, chatTotal]);
 
-  // 画面確認用 (KUROOBI_GGS_AUTOVIEW): GGS の画面はそちらを開くまで
-  // マウントされないので、指定があればまず GGS 側へ切り替える。
-  // 個別の画面への移動は GgsView がマウント後に行う。
-  useEffect(() => {
-    void ggsApi.autoview().then((v) => { if (v) setView('ggs-play'); }).catch(() => {});
-  }, []);
+  const conn = connOf(ggs.snap?.conn);
 
+  const [paste, setPaste] = useState(false);
+  const [settings, setSettings] = useState(false);
 
-  // 動作確認用: KUROOBI_AUTOPLAY=both:11 のように指定すると自動で対局を始める。
-  // "study" なら適当な棋譜を読み込んで検討画面を開き、"settings" なら
-  // 設定 (歯車) を開く (どちらも見た目の確認用)。
+  /* 動作確認用 (KUROOBI_AUTOPLAY=both:11 のように指定する)。
+   * この repo は画面の確認を「起動して撮る」でやるので、その入口を残す。
+   * "study" なら棋譜を読んで検討を開き、"settings" なら設定を開く。 */
   const started = useRef(false);
-  // "study:graph" 用。updateGraph はこの effect より後ろで作られるので、
-  // 直接呼ばずに ref 越しに渡す (依存に入れると毎回走り直す)
+  // "study:graph" 用。graph.update はこの effect より後ろで作られるので
+  // ref 越しに渡す (依存に入れると毎回走り直す)
   const autoGraph = useRef<(() => void) | null>(null);
-  const { setPlaying: begin, setSide, setLevel, setAutoHint,
-          playing, view: gv, engineSides, setThinking, setThinkSecs, setThinkTotal,
-          setMoveSource, setView: applyView, setPlaying, say, setLastEval, setMode } = g;
   useEffect(() => {
     if (started.current) return;
     started.current = true;
     void api.autoplay().then(async (v) => {
       if (!v) return;
       const [who, lv] = v.split(':');
-      if (who === 'settings') {
-        setSettings(await api.resourceStatus().catch(() => []));
-        return;
-      }
+      if (who === 'settings') { setSettings(true); return; }
       if (who === 'study') {
         // 起動時の状態取得と前後すると初期局面で上書きされるので一拍おく
         await new Promise((r) => setTimeout(r, 500));
-        setView('study');
-        setMode('study');
-        applyView(await api.loadKifuText(
+        setNavRaw('study');
+        g.setMode('study');
+        g.setView(await api.loadKifuText(
           'e6f4c3d6f6e7f5g5e3g4c7d3f3c4c6c5b4b6d7b5c2a3f8e8d8c8b8d2g3e2'));
         // "study:hint" は序盤 (定石内) の局面で評価値表示まで自動で入れる
         if (lv === 'hint') {
-          applyView(await api.goto(8));
-          setAutoHint(true);
+          g.setView(await api.goto(8));
+          g.setAutoHint(true);
         }
         // "study:graph" は分析まで始める (進み具合の見た目を確かめるため)
-        if (lv === 'graph') setTimeout(() => { autoGraph.current?.(); }, 400);
+        if (lv === 'graph') setTimeout(() => autoGraph.current?.(), 400);
         return;
       }
-      if (who === 'both') setSide('both');
-      if (lv !== undefined && Number.isFinite(+lv)) setLevel(+lv);
-      begin(true);
+      if (who === 'both') g.setSide('both');
+      if (lv !== undefined && Number.isFinite(+lv)) g.setLevel(+lv);
+      g.setPlaying(true);
     }).catch((e) => jsLog('autoplay: ' + e));
-  }, [begin, setSide, setLevel, setMode, applyView, setAutoHint]);
+    // g は毎描画で作り直されるので依存に入れない (started で 1 度だけに絞っている)
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+  useEffect(() => { autoGraph.current = () => void graph.update(); }, [graph]);
 
-  // ---- エンジンの手番 ----
-  // 局面が「エンジンが打つ番」になったら 1 度だけ走る。二重起動を
-  // 防ぐため、走っている間は ref で塞ぐ。
-  const turnRef = useRef(false);
-  const maybeLearn = g.maybeLearn;
-  useEffect(() => {
-    if (!playing || !gv) return;
-    // 終局したら自分で止まる (停止を押させない)
-    if (gv.over) { setPlaying(false); return; }
-    if (turnRef.current) return;
-    if (!engineSides().includes(gv.player)) return;
-
-    turnRef.current = true;
-    const side = gv.player as 'black' | 'white';
-    const t0 = performance.now();
-    setThinking(true);
-    const timer = window.setInterval(
-      () => setThinkSecs((performance.now() - t0) / 1000), 50);
-
-    void (async () => {
-      try {
-        const r = await api.think();
-        setThinkTotal((t) => ({ ...t, [side]: t[side] + r.secs }));
-        const next = await api.applyMove(r.pos);
-        // 何手目の手だったかを記録する (棋譜の表に出所と評価を出すため)。
-        // next.cursor は強制パスの先まで進んでいることがあるので、
-        // 指す前の局面から数える。値は手番視点なので黒視点へ揃える
-        setMoveSource((m) => ({
-          ...m,
-          [gv.cursor + 1]: {
-            source: r.from_book ? 'book' : 'search',
-            value: side === 'white' ? -r.value : r.value,
-            exact: r.exact,
-            learned: r.learned,
-            secs: r.secs,
-          },
-        }));
-        applyView(next);
-        maybeLearn(next);
-        // 働きぶりは局面を進めた後に立てる (applyView が消しにかかるため)。
-        // 人が打つまで直前の 1 手ぶんが盤の下に残る
-        setStat(r.nodes > 0 ? { nodes: r.nodes, secs: r.secs } : null);
-        // どのくらい良いと見て指したかを残す
-        // 見出し (「KUROOBI の評価」) は付けない。狭い幅では見出しだけ畳んで
-        // 数字を残したいので、出し分けは表示側 (ScoreBar) の仕事にする
-        setLastEval(Number.isFinite(r.value)
-          ? `${r.value > 0 ? '+' : ''}${
-              r.exact ? r.value.toFixed(0) : r.value.toFixed(1)} 石`
-            + (r.exact ? ' (完全読み)'
-              : r.from_book && r.learned ? ' (定石·実戦学習)'
-              : r.from_book ? ' (定石)' : '')
-          : '');
-        say('');
-      } catch (e) {
-        say('' + e);
-        setPlaying(false);
-      } finally {
-        clearInterval(timer);
-        setThinking(false);
-        setThinkSecs(0);
-        turnRef.current = false;
-      }
-    })();
-
-    return () => clearInterval(timer);
-  }, [playing, gv, engineSides, setThinking, setThinkSecs, setThinkTotal,
-      setMoveSource, applyView, setPlaying, say, setLastEval, maybeLearn, setStat]);
-
-  // GGS の棋譜 (GGF か着手列) を検討画面で開く。アプリ内で完結する。
-  const openStudy = useCallback(async (kifu: string) => {
-    try {
-      const v = await api.loadKifuText(kifu);
-      setMoveSource({});
-      setThinkTotal({ black: 0, white: 0 });
-      setLastEval('');
-      setPlaying(false);
-      setMode('study');
-      applyView(v);
-      setView('study');
-      say('');
-    } catch (e) { say('' + e); }
-  }, [setMoveSource, setThinkTotal, setLastEval, setPlaying, setMode, applyView, say]);
-
-  const updateGraph = useCallback(async () => {
-    const v = g.view;
-    // 押しても何も起きない、という状態を作らない。始められない理由は必ず出す
-    if (!v) { g.say('棋譜がありません'); return; }
-    // 二重に走らせない。ボタンは走っている間「分析停止」に変わるので人には
-    // 踏めず、言葉にする相手がいない (踏めるのは自動起動の経路だけ)
-    if (gbusy) return;
-    // CPU を食い合う機能は同時に動かさない。GGS 対局は最優先なので断り、
-    // ローカル対局が進行中なら確認の上で停止してから始める
-    if (ggsMatch) { g.say('GGS 対局中は分析を控えます'); return; }
-    if (g.playing || g.thinking) {
-      if (!window.confirm('対局が進行中です。停止して分析しますか？')) return;
-      g.stop();
-    }
-    setGbusy(true);
-    const seq = ++gseq.current;
-    const key = lineKey(v);
-    const len = v.moves.length;
-    // 押されたら必ず全局面を測り直す。前の結果を引き継ぐと、埋まっている
-    // ときに 1 局面も動かず「押しても何も起きない」ことになる。強さを
-    // 変えた後に測り直せないのも困る
-    const vals: (GraphPoint | undefined)[] = new Array(len + 1);
-    gkey.current = key;
-    setGvals(null);
-    let failed = false;
-    await g.pushLevels();
-    // 全局面を測るので深さは控えめに
-    const depth = Math.min(g.levels.depth, 14);
-    // 終局から逆向きに測る。終盤ほど空きが少なく読み切りで即確定するので
-    // 先に片づき、グラフは右から埋まっていく。加えて中盤の置換表は局面を
-    // またいで残るので (消しているのは終盤表だけ)、手前の局面の探索が
-    // いま測ったばかりの先の局面のエントリをそのまま通れる。
-    for (let n = len; n >= 0; n--) {
-      if (seq !== gseq.current) break;
-      if (vals[n]) continue;
-      if (n < len && v.moves[n] == null) continue;   // パスの手番は測らない
-      setGprog({ done: len - n + 1, total: len + 1 });
-      try {
-        const p = await api.evalAt(n, depth);
-        if (seq !== gseq.current) break;
-        if (Number.isFinite(p.value)) vals[n] = { value: p.value, exact: p.exact, book: p.from_book };
-        setGvals([...vals]);
-      } catch (e) { g.say('' + e); failed = true; break; }
-    }
-    // 失敗したときは理由を残す。ここで消すと「押しても何も起きない」ように見える
-    if (!failed && seq === gseq.current) g.say('');
-    // 世代が変わっている = 止められて次の分析が始まっている。ここで false に
-    // すると、始まったばかりの分析の「動いている」印を消してしまう
-    if (seq === gseq.current) { setGbusy(false); setGprog(null); }
-  }, [g, gbusy, ggsMatch]);
-  useEffect(() => { autoGraph.current = () => void updateGraph(); }, [updateGraph]);
-
-  /// 分析の停止。押し直しても続きからにはならない (毎回すべて測り直す作りで、
-  /// 前の結果を引き継ぐと埋まっているときに 1 局面も動かなくなる) ので、
-  /// 「中断」ではなく「停止」と呼ぶ。測り終えたぶんはグラフに残す。
-  const stopGraph = useCallback(() => {
-    gseq.current++;
-    setGbusy(false);
-    setGprog(null);
-    void api.stopSearch();
+  /** 読み込んだら手順の記録も消す (前の対局の評価が残ると嘘になる) */
+  const applyLoaded = (v: GameView) => {
+    g.setMoveSource({});
+    g.setThinkTotal({ black: 0, white: 0 });
+    g.setLastEval('');
+    g.setPlaying(false);
+    g.setView(v);
     g.say('');
-  }, [g]);
-
-  // 対局の開始 / 停止。盤の上の操作帯から呼ぶ。
-  const startGame = useCallback(() => {
-    // 停止したことは伝えない。押した本人がやったことで、ボタンも
-    // 「対局開始」に戻るので、言葉で言い直す意味がない
-    if (g.playing) { g.stop(); g.say(''); return; }
-    // CPU を食い合う機能は同時に動かさない。GGS 対局は最優先、
-    // 分析中は確認してから止める
-    if (ggsMatch) { g.say('GGS 対局中はローカル対局を開始できません'); return; }
-    if (gbusy) {
-      if (!window.confirm('評価値グラフを分析中です。停止して対局を始めますか？')) return;
-      stopGraph();
-    }
-    g.setPlaying(true);
-    g.say('');
-  }, [g, ggsMatch, gbusy, stopGraph]);
-
-  const loadText = async (text: string) => {
+  };
+  const loadFromFile = async () => {
     try {
-      g.setMoveSource({});
-      g.setThinkTotal({ black: 0, white: 0 });
-      g.setLastEval('');
-      g.setPlaying(false);
-      g.setView(await api.loadKifuText(text));
+      const loaded = await api.loadKifu();
+      if (loaded) { applyLoaded(loaded); setPaste(false); }   // null = 選ばずに閉じた
+    } catch (e) { g.say('' + e); }
+  };
+  const loadFromText = async (text: string) => {
+    try {
+      applyLoaded(await api.loadKifuText(text));
       setPaste(false);
-      setPasteText('');
-      g.say('');
     } catch (e) { g.say('' + e); }
   };
 
+  const v = g.view;
+  const moves = useMemo(
+    () => (v ? movesOf(v, g.moveSource, graph.values) : []),
+    [v, g.moveSource, graph.values]);
+  const evals = g.autoHint ? evalsOf(g.hints) : undefined;
+
+  // トーストの種類は実装が持っていないので、当面すべて失敗の色で出す
+  const toasts: Toast[] = g.toasts.map(t => ({ id: String(t.id), tone: 'bad' as const, text: t.text }));
+
+  const over = v?.over ?? false;
+  const result = v?.over
+    ? (v.black === v.white ? '引き分け' : v.black > v.white ? '黒の勝ち' : '白の勝ち')
+    : undefined;
+  const anyThink = g.thinkTotal.black > 0 || g.thinkTotal.white > 0;
+  const nodes = g.stat && g.stat.nodes > 0 ? g.stat.nodes : 0;
+  const nps = nodes && g.stat && g.stat.secs > 0 ? nodes / g.stat.secs : 0;
+  const lv = g.level === 'custom' ? 'カスタム' : LEVELS[g.level].name;
+
   return (
-    <>
-      <Nav view={view} onView={(v) => {
-        if (view === 'ggs-chat' && v !== 'ggs-chat') setChatSeen(chatTotal);
-        setView(v);
-        if (v === 'play' || v === 'study') {
-          g.setMode(v === 'study' ? 'study' : 'vs');
-          if (v === 'study' && g.playing) g.stop();
-        }
-      }} online={conn === 'online'} badges={{
-        'ggs-lobby': ggs.snap?.offers.filter((o) => o.incoming).length ?? 0,
-        // 手合いの「組」数。同期対局は 2 局で 1 組なので base でまとめる
-        'ggs-play': new Set(ggs.snap?.matches.map((m) => m.base || m.id) ?? []).size,
-        'ggs-chat': chatUnread,
-      }} cpu={cpu} onSettings={async () => {
-        setSettings(await api.resourceStatus().catch(() => []));
-      }} />
+    <AppFrame>
+      <Nav items={NAV_LOCAL} ggsItems={ggsNav(conn, navBadges(ggs.snap, chatUnread))} conn={conn}
+           active={nav} onSelect={setNav}
+           footer={<>
+             {cpu && <>
+             {/* 使用率の上限はコア数 × 100%。溝はその割合で埋める */}
+             <Meter icon="cpu" label="CPU" value={Math.round(cpu.cpu)} unit="%"
+                    ratio={cpu.cpu / (cpu.cores * 100)} />
+             <Meter icon="memory" label="メモリ" value={(cpu.mem / 1e9).toFixed(1)} unit=" GB"
+                    ratio={cpu.mem_total > 0 ? cpu.mem / cpu.mem_total : 0} />
+             <JobList jobs={jobsOf(cpu)} />
+             </>}
+             {/* 設定はいちばん下。行き先ではないので行の並びには入れない */}
+             <Button onClick={() => setSettings(true)}>設定</Button>
+           </>} />
 
-      {isGgs ? (
-        <GgsView view={view} onView={setView} snap={ggs.snap} patch={ggs.patch}
-                 onOpenStudy={(kifu) => void openStudy(kifu)} />
-      ) : (
-        <>
-          <div id="main">
-            <ControlBar g={g} onStart={startGame} />
-            <div id="board-wrap">
-              <Board
-                cells={g.view?.cells ?? new Array(64).fill(0)}
-                legal={g.view?.legal ?? []}
-                last={g.view?.last ?? null}
-                next={g.view ? g.view.moves[g.view.cursor] ?? null : null}
-                hints={g.hints}
-                disabled={g.thinking}
-                onPlay={(sq) => void g.play(sq)}
-              />
+      <Main>
+        {/* 盤の上の帯は「対局の操作」と、対局の前提を決める最小限だけ。
+            思考中の数字は下の帯へ */}
+        <Toolbar
+          dock={isGgs ? undefined : { open: dockOpen, onToggle: () => setDockOpen(o => !o) }}
+          aux={isGgs ? undefined : <Toggle checked={g.autoHint} onChange={g.setAutoHint} label="評価値" />}>
+          {isGgs ? (
+            <span style={{ fontSize: 'var(--fs-5)', color: 'var(--sub)' }}>
+              {conn === 'online' ? <>接続中 <b style={{ color: 'var(--text)' }}>{ggs.snap?.login}</b></>
+                : conn === 'offline' ? '未接続' : 'ログインしています…'}
+            </span>
+          ) : study ? (
+            // 検討では KUROOBI は打たない。操作は手順を行き来することだけで、
+            // 分析はグラフの見出し行が持つ (押す場所と結果の出る場所を離さない)
+            <>
+              <Button disabled={!v || v.cursor === 0} onClick={() => void g.jumpTo(0)}>最初へ</Button>
+              <Button disabled={!v || v.cursor === 0} onClick={() => void g.jumpTo(v!.cursor - 1)}>戻る</Button>
+              <Button disabled={!v || v.cursor >= v.moves.length}
+                      onClick={() => void g.jumpTo(v!.cursor + 1)}>進む</Button>
+              <Button disabled={!v || v.cursor >= v.moves.length}
+                      onClick={() => void g.jumpTo(v!.moves.length)}>最後へ</Button>
+            </>
+          ) : (
+            <>
+              <Button variant={g.playing ? 'danger' : 'primary'}
+                      disabled={!g.playing && (over || g.thinking)}
+                      onClick={startGame}>
+                {g.playing ? '対局停止' : '対局開始'}
+              </Button>
+              <Button disabled={g.thinking} onClick={() => void g.newGame()}>新規対局</Button>
+              <Button disabled={g.thinking || !v || v.move_count === 0}
+                      onClick={() => void g.undo()}>待った</Button>
+              {/* 担当は狭い窓でも変えられないと困るので aux ではなく children 側。
+                  aux は 940px で消える */}
+              <span style={{ marginLeft: 'var(--sp-3)', fontSize: 'var(--fs-6)', color: 'var(--sub)' }}>KUROOBI</span>
+              <Segmented value={g.side} onChange={g.setSide} options={SIDES} />
+            </>
+          )}
+        </Toolbar>
+
+        {isGgs ? <GgsScreen nav={nav} snap={ggs.snap} onNav={setNav} /> : (
+        <div style={{ flex: 1, minHeight: 0, display: 'flex', flexDirection: 'column', padding: '0 var(--sp-4)' }}>
+          <PlayerRow color="b" name="黒" discs={v?.black ?? 2}
+                     active={!!v && !v.over && v.player === 'black'}
+                     clock={!study && anyThink ? fmtSecs(g.thinkTotal.black) : undefined} />
+          <div style={{ flex: 1, minHeight: 0, display: 'grid', placeItems: 'center', padding: 'var(--sp-2) 0' }}>
+            <div style={{ height: '100%', aspectRatio: '1 / 1', maxWidth: '100%' }}>
+              {v && <Board cells={cellsOf(v)} legal={v.legal} last={v.last} evals={evals}
+                           disabled={g.thinking}
+                           onPlay={(sq) => void g.play(sq)} />}
             </div>
-            {/* 盤面の状況 (石数・結果・思考時間)。中身は常に 1 行ぶんなので
-                帯の高さは動かない。報せは浮かせてある (Toasts) */}
-            <div className="mainfoot">
-              <ScoreBar g={g} />
-            </div>
-            {g.mode === 'study' && g.view && (
-              <div className="graph-band">
-                {/* .row は使わない。あれは子を等分に伸ばす (.row > * { flex: 1 })
-                    ので、右へ寄せるための余白が残らない */}
-                <div className="graph-head">
-                  {/* 定石は出ない (分析では引かないので)。凡例からも外す */}
-                  <label className="field" style={{ margin: 0 }}>
-                    評価値グラフ (黒視点) — <span style={{ color: 'var(--text)' }}>●</span>読切{' '}
-                    <span style={{ color: 'var(--accent)' }}>●</span>探索
-                  </label>
-                  {/* 進行と操作は 1 つのまとまりにして右端へ寄せる。進行だけを
-                      見出しとボタンの間に浮かせると、どちらの連れなのか読めない */}
-                  <div className="graph-actions">
-                    {/* 分析の進み具合。盤の下の報せは「押したのに進まない理由」
-                        を持つ場所で、動いていることの報せとは別もの */}
-                    {gprog && (
-                      <span className="graph-prog">
-                        分析中 <b>{gprog.done}</b>/{gprog.total}
-                      </span>
-                    )}
-                    {/* 走っている間は止める口にする。押しても何も起きない
-                        ボタンを見せない (もう一度押しても最初から測り直す) */}
-                    <button className={'btn small' + (gbusy ? ' stop' : '')}
-                            onClick={() => (gbusy ? stopGraph() : void updateGraph())}>
-                      <Icon name={gbusy ? 'stop' : 'refresh'} size={14} />
-                      {gbusy ? '分析停止' : '分析'}
-                    </button>
-                  </div>
-                </div>
-                {/* どこまで進んだか。61 局面を測る間ずっと数字だけだと、
-                    進んでいるのか止まっているのかが読み取りにくい */}
-                {gprog && (
-                  <div className="graph-bar">
-                    <span style={{ width: `${(gprog.done / gprog.total) * 100}%` }} />
-                  </div>
-                )}
-                <Graph values={gvals} moves={g.view.moves} cursor={g.view.cursor}
-                       busy={gbusy} onJump={(n) => void g.jumpTo(n)} />
-              </div>
-            )}
           </div>
+          <PlayerRow color="w" name="白" discs={v?.white ?? 2}
+                     active={!!v && !v.over && v.player === 'white'}
+                     meta={result ?? (g.lastEval ? `KUROOBI の評価 ${g.lastEval}` : undefined)}
+                     clock={!study && anyThink ? fmtSecs(g.thinkTotal.white) : undefined} />
+        </div>
+        )}
 
-          <Panel g={g} gvals={gvals}
-                 onSave={() => void api.saveKifu().catch((e) => g.say('' + e))}
-                 onLoad={() => setPaste(true)} />
-        </>
-      )}
+        {/* 箱に入れず、盤の下の帯として全幅に置く。検討だけ */}
+        {study && !isGgs && (
+          <EvalGraph points={graph.values ?? []} plies={v?.moves.length} cursor={v?.cursor}
+                     busy={graph.busy} onJump={(n) => void g.jumpTo(n)}
+                     extra={<>
+                       {/* 進み具合は見出し行に出す。帯の高さは変えない —
+                           出るたびに枠が伸びると下の段が全部カタカタ動く */}
+                       {graph.prog && (
+                         <span>分析中 <b style={{ color: 'var(--text)' }}>{graph.prog.done}</b>/{graph.prog.total}</span>
+                       )}
+                       <Button size="chip" variant={graph.busy ? 'danger' : 'secondary'}
+                               onClick={() => (graph.busy ? graph.stop() : void graph.update())}>
+                         {graph.busy ? '分析停止' : '分析'}
+                       </Button>
+                     </>} />
+        )}
 
-      {paste && (
-        <Modal title="棋譜の読み込み" onClose={() => setPaste(false)}
-               subtitle="GGF・f5d6… 形式・盤面つきのいずれでも"
-               actions={<>
-                 <button className="btn" onClick={async () => {
-                   try {
-                     const v = await api.loadKifu();
-                     if (v) { g.setView(v); setPaste(false); }
-                   } catch (e) { g.say('' + e); }
-                 }}>ファイルから…</button>
-                 <span className="spacer" />
-                 <button className="btn ghost" onClick={() => setPaste(false)}>キャンセル</button>
-                 <button className="btn primary" onClick={() => void loadText(pasteText)}>
-                   読み込む
-                 </button>
-               </>}>
-          <textarea value={pasteText} onChange={(e) => setPasteText(e.target.value)}
-                    placeholder="f5d6c3d3c4f4f3e3e2…" />
-        </Modal>
+        {/* 短くて桁の決まっているものだけを置く。長さの読めない報せはトーストへ */}
+        <StatusBar
+          left={<>
+            {g.thinking && <StatusStat label="思考" value={g.thinkSecs.toFixed(1)} unit="s" />}
+            {nodes > 0 && <StatusStat label="nodes" value={fmtNodes(nodes)} />}
+            {nps > 0 && <StatusStat label="nps" value={(nps / 1e6).toFixed(1)} unit="Mnps" />}
+          </>}
+          right={isGgs
+            ? <StatusStat label="GGS" value={conn === 'online' ? '接続中' : conn === 'offline' ? '未接続' : '接続しています…'} />
+            : <>
+              <StatusStat label="定石" value={g.hasBook ? (g.useBook ? '有効' : '使わない') : 'なし'} />
+              <StatusStat label="KUROOBI" value={lv} />
+            </>} />
+      </Main>
+
+      {/* GGS はドックを持たない (一覧が本体の左に付く) */}
+      {!isGgs && (
+      <Dock tabs={['棋譜', '強さ', '学習']} active={tab} onTab={setTab} open={dockOpen}>
+        {tab === '棋譜' && (
+          <>
+            {/* 分析 (評価値グラフ) は検討画面のもの。対局には置かない */}
+            <div style={{ display: 'flex', gap: 'var(--sp-2)', padding: 'var(--sp-2) var(--sp-3)' }}>
+              <Button size="chip" onClick={() => void api.saveKifu().catch((e) => g.say('' + e))}>保存</Button>
+              <Button size="chip" onClick={() => setPaste(true)}>読込</Button>
+            </div>
+            <KifuTable moves={moves} current={v?.cursor}
+                       onSelect={(n) => void g.jumpTo(n)} />
+          </>
+        )}
+        {tab === '強さ' && (
+          // 検討では同じ 3 つが解析の深さになる。値も操作も同じなので節の名前だけ変える
+          <Section title={study ? '解析の設定' : '強さ'}>
+            {/* 選び方は GGS の設定と共通 (Strength)。同じ 3 つを決めるのに
+                操作が違うと、片方で覚えたことがもう片方で通じない */}
+            <Strength value={g.levels} onChange={(v) => {
+              const i = LEVELS.findIndex((l) => l.depth === v.depth && l.solve === v.solve && l.band === v.band);
+              if (i >= 0) { g.setLevel(i); return; }
+              g.setCustom(v);
+              g.setLevel('custom');
+            }} />
+            <div style={{ display: 'flex', alignItems: 'center', gap: 'var(--sp-3)' }}>
+              <span style={{ fontSize: 'var(--fs-6)', color: 'var(--sub)' }}>定石</span>
+              <Segmented value={g.useBook ? 'on' : 'off'} disabled={!g.hasBook}
+                         onChange={(x) => g.setUseBook(x === 'on')}
+                         options={[{ value: 'on', label: '使う' }, { value: 'off', label: '使わない' }]} />
+            </div>
+            {!g.hasBook && (
+              <span style={{ fontSize: 'var(--fs-6)', color: 'var(--sub)' }}>
+                — ファイルがありません (設定から指定できます)
+              </span>
+            )}
+          </Section>
+        )}
+        {tab === '学習' && (
+          <Section title="定石への書き戻し">
+            <Toggle checked={g.learnOn} onChange={g.setLearnOn} label="終局した対局を取り込む" />
+            <span style={{ fontSize: 'var(--fs-6)', color: 'var(--sub)', lineHeight: 1.8 }}>
+              勝敗にかかわらず取り込み、終局の石差を根まで書き戻します。同じ負け方をなぞらなくなります。
+            </span>
+          </Section>
+        )}
+      </Dock>
       )}
 
       {settings && (
-        <SettingsModal initial={settings} learnOn={g.learnOn} onLearn={g.setLearnOn}
-                       onClose={() => setSettings(null)}
-                       onChanged={() => { void api.hasBook().then(g.setHasBook); }} />
+        <Settings learnOn={g.learnOn} onLearn={g.setLearnOn}
+                  onChanged={() => void api.hasBook().then(g.setHasBook).catch(() => {})}
+                  onClose={() => setSettings(false)} />
       )}
 
-      {/* 報せ。内容の並びの外に浮かせるので、出入りしても画面は動かない */}
-      <Toasts items={g.toasts} onClose={g.dismiss} />
-    </>
+      {ask && (
+        <Confirm title="確認" body={ask.msg} ok="続ける"
+                 onCancel={() => { ask.done(false); setAsk(null); }}
+                 onOk={() => { ask.done(true); setAsk(null); }} />
+      )}
+
+      {paste && (
+        <PasteKifu onCancel={() => setPaste(false)}
+                   onFile={() => void loadFromFile()}
+                   onLoad={(t) => void loadFromText(t)} />
+      )}
+
+      <Toasts items={toasts} onDismiss={(id) => g.dismiss(+id)} />
+    </AppFrame>
   );
+}
+
+/** 桁が伸びても幅が暴れないように短く畳む。 */
+const fmtNodes = (n: number): string =>
+  n >= 1e9 ? (n / 1e9).toFixed(1) + 'G' : n >= 1e6 ? (n / 1e6).toFixed(1) + 'M'
+    : n >= 1e3 ? (n / 1e3).toFixed(0) + 'k' : String(n);
+
+/** 走っている仕事。左メニューの下に常時出す。
+ *  ローカル探索と GGS 対局は別スレッドプールなので、両方を別の行として出す。 */
+function jobsOf(cpu: ActivityView) {
+  const jobs: { label: string; threads?: number; yielded?: boolean }[] = [];
+  if (cpu.local) jobs.push({ label: cpu.local, threads: cpu.local_threads });
+  if (cpu.ggs_match) jobs.push({ label: 'GGS 対局', threads: cpu.ggs_thinking ? cpu.ggs_threads : undefined });
+  if (cpu.learn) {
+    jobs.push({ label: `学習 ${cpu.learn[0]}/${cpu.learn[1]}`, yielded: cpu.learn_paused });
+  }
+  return jobs;
 }

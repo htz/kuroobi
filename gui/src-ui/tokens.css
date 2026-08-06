@@ -1,0 +1,100 @@
+/* KUROOBI design tokens
+ * gui/src-ui/style.css の :root を置き換える。
+ * ダークが既定。data-theme="light" か OS 設定でライトに切り替わる。
+ * これ以降、コンポーネント側で色・寸法の px 直書きは禁止。
+ */
+:root {
+  /* 色 */
+  --bg:#16191d; --panel:#1e2329; --card:#252b33;
+  --border:#313943; --border-weak:#232932;
+  --text:#e8ebee; --sub:#8b96a2;
+  --accent:#4d9fff; --accent-dim:#2d5f99; --hover:rgba(255,255,255,.06);
+  --hover-on:rgba(255,255,255,.03);   /* 選ばれているものの hover。すでに濃いので --hover より弱く */
+  --track:rgba(255,255,255,.09);      /* バーの溝。状態の色（--hover）を面に使わない */
+  --board:#77914e; --board-dark:#3f4f2c; --line:#3d5226; --grain:#33421d;
+  --gold:#ffd479; --ok:#8bc34a; --bad:#ef7a7a;
+  --stone-black:#111213; --stone-black-edge:#2c2e30;
+  /* 盤の上に重ねるもの。ダークは白を重ねるが、ライトは畳が明るいので黒を重ねる
+     — リテラルで書くとライトで合法手の点と評価値マスが消える */
+  --stone-shadow:rgba(0,0,0,.25);
+  --board-hint:rgba(255,255,255,.30);
+  --board-eval-bg:rgba(255,255,255,.06); --board-eval-edge:rgba(255,255,255,.25);
+  --board-eval-text:#d9e6de; --board-eval-strong:#cfd8d2; --board-eval-weak:#9fb0a6;
+  /* 出所「定石」の文字。--gold をそのまま乗せるとライトで畳と同化して読めない
+     （面のほうは color-mix 14% なので --gold のままでよい — 文字は 100% で乗る） */
+  --board-eval-book:#ffd479;
+  --stone-white:#f1f1f1; --stone-white-edge:#c9cdd1;
+
+  /* 余白 */
+  --sp-1:4px; --sp-2:8px; --sp-3:12px; --sp-4:16px; --sp-5:24px; --sp-6:32px;
+
+  /* 高さ — これ以外の値を作らない */
+  --h-bar:44px;      /* タイトルバー / ツールバー / タブ帯 */
+  --h-status:28px;   /* ステータスバー */
+  --h-field:32px;    /* 入力・セレクト・モーダルのボタン */
+  --h-ctrl:28px;     /* ボタン・セグメント・アイコンボタン */
+  --h-row:24px;      /* 表の行・リストの行 */
+  --h-head:20px;     /* 表と節の見出し */
+  --h-chip:20px;     /* ステータスバー内のボタン・バッジ */
+  --w-dock:290px;    /* 右ドック。3 画面で不変 */
+  --w-nav:208px;     /* 左メニュー */
+  --w-list:268px;    /* GGS 手合い一覧・棋譜列 */
+  --w-lobby:174px;   /* GGS 左カラム */
+  --w-label:96px;    /* 設定の見出し列 */
+
+  /* 角丸 */
+  --r-1:5px;   /* 行・チップ・小さな面 */
+  --r-2:7px;   /* ボタン・セグメントの中身 */
+  --r-3:8px;   /* 入力・セグメントの外枠 */
+  --r-4:11px;  /* 浮く箱・ウィンドウ */
+  --r-pill:50px;
+
+  /* 影 — 浮くものだけが持つ。大きなぼかしは Modal / Popover / Toast だけ */
+  --sh-1:0 1px 2px rgba(0,0,0,.28);
+  --sh-2:0 20px 48px rgba(0,0,0,.6);
+  --sh-stone:0 2px 3px rgba(0,0,0,.28);
+
+  /* 文字 */
+  --ff:-apple-system,BlinkMacSystemFont,"Hiragino Sans","Helvetica Neue",sans-serif;
+  --ff-mono:ui-monospace,SFMono-Regular,Menlo,monospace;
+  --fs-1:20px; --fs-2:17px; --fs-3:15px; --fs-4:13px;
+  --fs-5:12px; --fs-6:11px; --fs-7:10px;
+
+  --dur:120ms;
+  --ease:cubic-bezier(.2,.7,.3,1);
+}
+
+:root[data-theme="light"] {
+  --bg:#faf8f3; --panel:#f2efe8; --card:#ffffff;
+  --border:#ddd8cd; --border-weak:#e8e3d9;
+  --text:#1e2124; --sub:#7d8794;
+  --accent:#2b6fd0; --accent-dim:#2b6fd0; --hover:rgba(0,0,0,.045); --hover-on:rgba(0,0,0,.025); --track:rgba(0,0,0,.10);
+  --board:#8fa661; --board-dark:#4a3323; --line:#3f5323; --grain:#5c6b38;
+  --stone-shadow:rgba(0,0,0,.22);
+  --board-hint:rgba(0,0,0,.34);
+  --board-eval-bg:rgba(0,0,0,.10); --board-eval-edge:rgba(0,0,0,.28);
+  --board-eval-text:#1c2418; --board-eval-strong:#101710; --board-eval-weak:#3c4a36;
+  --board-eval-book:#6b4e00;
+  --gold:#a07b1e; --ok:#4c7a2c; --bad:#c0503c;
+  --sh-1:0 1px 2px rgba(0,0,0,.18);
+  --sh-2:0 20px 48px rgba(60,50,35,.28);
+}
+
+/* OS 追従。main.tsx で data-theme を書かない限りこれが効く */
+@media (prefers-color-scheme: light) {
+  :root:not([data-theme="dark"]) {
+    --bg:#faf8f3; --panel:#f2efe8; --card:#ffffff;
+    --border:#ddd8cd; --border-weak:#e8e3d9;
+    --text:#1e2124; --sub:#7d8794;
+    --accent:#2b6fd0; --accent-dim:#2b6fd0; --hover:rgba(0,0,0,.045); --hover-on:rgba(0,0,0,.025); --track:rgba(0,0,0,.10);
+    --board:#8fa661; --board-dark:#4a3323; --line:#3f5323; --grain:#5c6b38;
+    --stone-shadow:rgba(0,0,0,.22);
+    --board-hint:rgba(0,0,0,.34);
+    --board-eval-bg:rgba(0,0,0,.10); --board-eval-edge:rgba(0,0,0,.28);
+    --board-eval-text:#1c2418; --board-eval-strong:#101710; --board-eval-weak:#3c4a36;
+    --board-eval-book:#6b4e00;
+    --gold:#a07b1e; --ok:#4c7a2c; --bad:#c0503c;
+    --sh-1:0 1px 2px rgba(0,0,0,.18);
+    --sh-2:0 20px 48px rgba(60,50,35,.28);
+  }
+}
