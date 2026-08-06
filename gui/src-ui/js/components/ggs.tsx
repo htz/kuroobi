@@ -20,7 +20,7 @@ import logo from '../../assets/kuroobi.svg?raw';
 /* ============ 左メニュー ============ */
 
 export type NavId =
-  | 'play' | 'study'
+  | 'play' | 'study' | 'book'
   | 'ggs-play' | 'ggs-lobby' | 'ggs-players' | 'ggs-chat' | 'ggs-standby' | 'ggs-console' | 'ggs-settings'
   | 'ggs-login';
 
@@ -42,6 +42,7 @@ const CONN_TONE: Record<Conn, 'sub' | 'gold' | 'ok'> = {
 export const NAV_LOCAL: NavItem[] = [
   { id: 'play', label: '対局', icon: 'play' },
   { id: 'study', label: '検討', icon: 'study' },
+  { id: 'book', label: '定石', icon: 'book' },
 ];
 
 /* 未接続のときは 7 行を出さず「ログイン」1 行だけにする */

@@ -155,6 +155,9 @@ pub struct Book {
     map: HashMap<(u64, u64), Entry>,
 }
 
+/// 定石の候補手 1 つ: (マス, 手番視点の値, 棋譜での採用回数)。
+pub type BookCandidate = (Position, f32, u32);
+
 impl Book {
     pub fn new() -> Book {
         Book {
@@ -266,6 +269,20 @@ impl Book {
     pub fn candidates(&self, board: &Board) -> Option<Vec<(Position, f32)>> {
         let (out, _) = self.expand(board)?;
         Some(out.into_iter().map(|(p, v, _)| (p, v)).collect())
+    }
+
+    /// 候補手を採用回数まで含めて返す (定石を眺めるための出し口)。
+    ///
+    /// `candidates` は対局で選ぶための一覧なので回数を落としているが、
+    /// 人が読むときは「何局で選ばれた手か」が枝の重みになる。
+    pub fn candidates_detailed(&self, board: &Board) -> Option<Vec<BookCandidate>> {
+        let (out, _) = self.expand(board)?;
+        Some(out)
+    }
+
+    /// この局面が定石にあるか (候補が 1 つも打てない場合でも true)。
+    pub fn has(&self, board: &Board) -> bool {
+        self.map.contains_key(&Book::key(board).0)
     }
 
     /// 正規化空間の手を元の盤面の向きへ戻す。

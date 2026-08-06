@@ -15,6 +15,7 @@ import { EvalGraph, KifuTable, PlayerRow } from './components/data';
 import { JobList, Meter, Nav, NAV_LOCAL, ggsNav, Toasts, type NavId, type Toast } from './components/ggs';
 import { Button, Segmented, Toggle } from './components/primitives';
 import { Strength } from './components/strength';
+import { BookDock, BookPane, useBookBrowse } from './BookScreen';
 import { LEVELS } from './state';
 
 /* 対局と検討の画面。
@@ -36,6 +37,7 @@ export function App() {
   const { prefs, set: setPref } = usePrefs();
   const [nav, setNavRaw] = useState<NavId>('play');
   const study = nav === 'study';
+  const isBook = nav === 'book';
   const isGgs = nav.startsWith('ggs');
   const [tab, setTab] = useState('棋譜');
   const [dockOpen, setDockOpen] = useState(false);
@@ -70,6 +72,19 @@ export function App() {
   }, [setMode, nav, chatTotal]);
 
   const conn = connOf(ggs.snap?.conn);
+  const book = useBookBrowse(isBook);
+
+  // ⌘B で定石へ。盤の上に置く操作ではない (行き先なので、左の並びと同じもの)
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === 'b') {
+        e.preventDefault();
+        setNav('book');
+      }
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [setNav]);
 
   const [paste, setPaste] = useState(false);
   const [settings, setSettings] = useState(false);
@@ -81,6 +96,7 @@ export function App() {
   // "study:graph" 用。graph.update はこの effect より後ろで作られるので
   // ref 越しに渡す (依存に入れると毎回走り直す)
   const autoGraph = useRef<(() => void) | null>(null);
+  const bookLine = useRef<((kifu: string) => void) | null>(null);
   useEffect(() => {
     if (started.current) return;
     started.current = true;
@@ -88,6 +104,8 @@ export function App() {
       if (!v) return;
       const [who, lv] = v.split(':');
       if (who === 'settings') { setSettings(true); return; }
+      // "book:f5d6" のように手順を渡すと、その節まで辿った状態で開く
+      if (who === 'book') { setNavRaw('book'); if (lv) bookLine.current?.(lv); return; }
       if (who === 'study') {
         // 起動時の状態取得と前後すると初期局面で上書きされるので一拍おく
         await new Promise((r) => setTimeout(r, 500));
@@ -112,6 +130,7 @@ export function App() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
   useEffect(() => { autoGraph.current = () => void graph.update(); }, [graph]);
+  useEffect(() => { bookLine.current = book.open; }, [book.open]);
 
   /* 画面確認用 (KUROOBI_GGS_AUTOVIEW=players のように指定する)。
    * GGS の画面は開くまで描かれないので、撮るには行き先を指定する経路が要る。 */
@@ -184,8 +203,16 @@ export function App() {
             思考中の数字は下の帯へ */}
         <Toolbar
           dock={isGgs ? undefined : { open: dockOpen, onToggle: () => setDockOpen(o => !o) }}
-          aux={isGgs ? undefined : <Toggle checked={g.autoHint} onChange={g.setAutoHint} label="評価値" />}>
-          {isGgs ? (
+          aux={isGgs || isBook ? undefined : <Toggle checked={g.autoHint} onChange={g.setAutoHint} label="評価値" />}>
+          {isBook ? (
+            <>
+              <Button disabled={!book.line.length} onClick={book.back}>戻る</Button>
+              <Button disabled={!book.line.length} onClick={book.reset}>最初へ</Button>
+              <span style={{ marginLeft: 'var(--sp-3)', fontSize: 'var(--fs-6)', color: 'var(--sub)' }}>
+                {book.line.length ? book.line.length + ' 手目' : '初期局面'}
+              </span>
+            </>
+          ) : isGgs ? (
             <span style={{ fontSize: 'var(--fs-5)', color: 'var(--sub)' }}>
               {conn === 'online' ? <>接続中 <b style={{ color: 'var(--text)' }}>{ggs.snap?.login}</b></>
                 : conn === 'offline' ? '未接続' : 'ログインしています…'}
@@ -219,7 +246,11 @@ export function App() {
           )}
         </Toolbar>
 
-        {isGgs ? <GgsScreen nav={nav} snap={ggs.snap} onNav={setNav} prefs={prefs} /> : (
+        {isGgs ? <GgsScreen nav={nav} snap={ggs.snap} onNav={setNav} prefs={prefs} />
+         : isBook ? (
+          <BookPane b={book} coords={prefs.coords} grain={prefs.grain}
+                    flip={flipped(prefs.facing, '')} />
+        ) : (
         <div style={{ flex: 1, minHeight: 0, display: 'flex', flexDirection: 'column', padding: '0 var(--sp-4)' }}>
           <PlayerRow color="b" name="黒" discs={v?.black ?? 2}
                      active={!!v && !v.over && v.player === 'black'}
@@ -242,7 +273,7 @@ export function App() {
         )}
 
         {/* 箱に入れず、盤の下の帯として全幅に置く。検討だけ */}
-        {study && !isGgs && (
+        {study && !isGgs && !isBook && (
           <EvalGraph points={graph.values ?? []} plies={v?.moves.length} cursor={v?.cursor}
                      busy={graph.busy} onJump={(n) => void g.jumpTo(n)}
                      extra={<>
@@ -267,6 +298,8 @@ export function App() {
           </>}
           right={isGgs
             ? <StatusStat label="GGS" value={conn === 'online' ? '接続中' : conn === 'offline' ? '未接続' : '接続しています…'} />
+            : isBook
+            ? <StatusStat label="定石" value={book.node ? book.node.size.toLocaleString() + ' 局面' : '—'} />
             : <>
               <StatusStat label="定石" value={g.hasBook ? (g.useBook ? '有効' : '使わない') : 'なし'} />
               <StatusStat label="KUROOBI" value={lv} />
@@ -274,7 +307,13 @@ export function App() {
       </Main>
 
       {/* GGS はドックを持たない (一覧が本体の左に付く) */}
-      {!isGgs && (
+      {isBook && (
+        <Dock tabs={['定石']} active="定石" open={dockOpen}>
+          <BookDock b={book} />
+        </Dock>
+      )}
+
+      {!isGgs && !isBook && (
       <Dock tabs={['棋譜', '強さ', '学習']} active={tab} onTab={setTab} open={dockOpen}>
         {tab === '棋譜' && (
           <>

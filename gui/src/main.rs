@@ -1107,6 +1107,84 @@ struct KifuFrame {
     player: String,
 }
 
+/* ---------------- 定石を眺める ---------------- */
+
+/// 定石の 1 手。値は手番視点の石差、`games` は棋譜での採用回数。
+#[derive(Serialize)]
+struct BookMoveView {
+    pos: u8,
+    value: f32,
+    games: u32,
+}
+
+/// 定石のある 1 局面。
+#[derive(Serialize)]
+struct BookNodeView {
+    /// 64 マス: 0 空き / 1 黒 / 2 白。
+    cells: Vec<u8>,
+    /// "black" | "white"
+    player: String,
+    black: u8,
+    white: u8,
+    /// 値の高い順。空なら「この局面は定石に無い」。
+    moves: Vec<BookMoveView>,
+    /// 実戦から学習して書き戻された局面か。
+    learned: bool,
+    /// 定石に載っている局面の総数 (見出しに出す)。
+    size: usize,
+    /// そのうち実戦から書き戻したぶん。
+    learned_size: usize,
+}
+
+/// 棋譜で指した局面の定石を返す。
+///
+/// **対局の状態は触らない。** 眺めるのと打つのは別の営みで、定石を辿って
+/// いる最中に対局の盤が動くと、どちらを見ているのか分からなくなる。
+#[tauri::command]
+async fn book_node(app: State<'_, App>, kifu: String) -> Result<BookNodeView, String> {
+    let game = if kifu.trim().is_empty() {
+        Reversi::new()
+    } else {
+        game_from_text(&kifu).ok_or("棋譜を読めません")?
+    };
+    let b = game.board;
+    let player = game.player();
+    let eng = app.engine.clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        let mut guard = eng.lock().unwrap();
+        let e = guard.as_mut().ok_or("エンジンがまだありません")?;
+        let (moves, learned) = e.book_node(&b).unwrap_or((Vec::new(), false));
+        let mut cells = vec![0u8; 64];
+        for i in 0..64u8 {
+            let bit = 1u64 << i;
+            if b.black & bit != 0 {
+                cells[i as usize] = 1;
+            } else if b.white & bit != 0 {
+                cells[i as usize] = 2;
+            }
+        }
+        Ok(BookNodeView {
+            cells,
+            player: if player == Color::Black { "black" } else { "white" }.into(),
+            black: b.black.count_ones() as u8,
+            white: b.white.count_ones() as u8,
+            moves: moves
+                .into_iter()
+                .map(|(p, value, games)| BookMoveView {
+                    pos: p.index() as u8,
+                    value,
+                    games,
+                })
+                .collect(),
+            learned,
+            size: e.book_size(),
+            learned_size: e.learned_size(),
+        })
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+
 #[tauri::command]
 fn preview_kifu(text: String) -> Result<Vec<KifuFrame>, String> {
     let mut game = game_from_text(&text).ok_or("棋譜を読めません")?;
@@ -1615,6 +1693,7 @@ fn main() {
             set_learn,
             learn_game,
             has_book,
+            book_node,
             autoplay,
             resource_status,
             pick_resource,

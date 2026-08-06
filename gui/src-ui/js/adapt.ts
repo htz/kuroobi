@@ -13,7 +13,7 @@ import type { LogLine } from './components/ggs';
  * 済んでから — いま変えると、差分がデザインのせいか変換のせいか分からなくなる。
  */
 
-const sqName = (sq: number): string => 'abcdefgh'[Math.floor(sq / 8)] + (sq % 8 + 1);
+export const sqName = (sq: number): string => 'abcdefgh'[Math.floor(sq / 8)] + (sq % 8 + 1);
 
 /** パス込みで 1 手ごとに手番が入れ替わるので、奇数手 (i が偶数) が黒。 */
 export const colorOf = (i: number): StoneColor => (i % 2 === 0 ? 'b' : 'w');

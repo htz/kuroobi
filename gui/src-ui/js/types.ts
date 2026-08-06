@@ -271,3 +271,22 @@ declare global {
     };
   }
 }
+
+/** 定石の 1 手。value は手番から見た石差、games は棋譜での採用回数。 */
+export interface BookMove { pos: number; value: number; games: number }
+
+/** 定石のある 1 局面 (book_node の返り)。 */
+export interface BookNode {
+  cells: number[];
+  player: 'black' | 'white';
+  black: number;
+  white: number;
+  /** 値の高い順。空なら「この局面は定石に無い」。 */
+  moves: BookMove[];
+  /** 実戦から学習して書き戻された局面か。 */
+  learned: boolean;
+  /** 定石に載っている局面の総数。 */
+  size: number;
+  /** そのうち実戦から書き戻したぶん。 */
+  learned_size: number;
+}

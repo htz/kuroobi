@@ -8,7 +8,7 @@ export type IconName =
   | 'play' | 'study' | 'ggs-play' | 'ggs-lobby' | 'ggs-users' | 'ggs-chat'
   | 'ggs-standby' | 'ggs-console' | 'login' | 'logout' | 'cpu' | 'memory' | 'gear'
   | 'refresh' | 'check' | 'alert' | 'back' | 'close' | 'panel'
-  | 'start' | 'stop' | 'newgame' | 'undo' | 'hint';
+  | 'start' | 'stop' | 'newgame' | 'undo' | 'hint' | 'book';
 
 /** 中身だけを持つ (svg 要素は Icon が用意する)。 */
 const PATHS: Record<IconName, React.ReactNode> = {
@@ -136,6 +136,11 @@ const PATHS: Record<IconName, React.ReactNode> = {
   panel: <>
     <rect x="3.2" y="4.6" width="17.6" height="14.8" rx="2.4" />
     <path d="M14.6 4.6v14.8" />
+  </>,
+  // 定石: 開いた本。中央の綴じ目で 2 面に分ける
+  book: <>
+    <path d="M12 6.6C10.4 5.2 8.2 4.6 4.5 4.6v12.6c3.7 0 5.9.6 7.5 2 1.6-1.4 3.8-2 7.5-2V4.6c-3.7 0-5.9.6-7.5 2z" />
+    <path d="M12 6.6v14" />
   </>,
   gear: <>
     <circle cx="12" cy="12" r="3" />

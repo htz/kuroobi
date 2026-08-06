@@ -6,7 +6,7 @@
 
 use std::path::PathBuf;
 
-use crate::book::Book;
+use crate::book::{Book, BookCandidate};
 use crate::evaluator::Evaluator;
 use crate::midgame::{selective_band, NnueSearch, SharedTt, StopHandle};
 use crate::nnue::Nnue;
@@ -233,6 +233,16 @@ impl Engine {
             .as_ref()
             .filter(|_| self.config.use_book)?
             .candidates(board)
+    }
+
+    /// 定石を眺めるための出し口。候補手 (値・採用回数) と、この局面が
+    /// 実戦学習で書き戻されたものかを返す。
+    ///
+    /// `book_hints` と違って `use_book` を見ない — 定石を切っていても
+    /// 中身は見たいことがあるし、切ったから消えるのは嘘になる。
+    pub fn book_node(&self, board: &Board) -> Option<(Vec<BookCandidate>, bool)> {
+        let moves = self.book.as_ref()?.candidates_detailed(board)?;
+        Some((moves, self.learned.has(board)))
     }
 
     /// 表示用: 局面が定石にあれば (最善の値, 実戦学習由来か) を返す。
