@@ -199,11 +199,17 @@ export function BottomPanel({ tabs, active, onTab, onClose, height = 240, childr
   );
 }
 
-/* 浮くもの。角丸 --r-4 と影を持つのはこの 2 つだけ */
-export function Modal({ title, body, actions }: { title: string; body?: React.ReactNode; actions?: React.ReactNode }) {
+
+/* 浮くもの。角丸 --r-4 と影を持つのは Modal / Toast / 盤の外枠だけ
+ * (Popover は使い所が無かったので削除した — 規則 70) */
+export function Modal({ title, body, actions, width = 340 }: {
+  title: string; body?: React.ReactNode; actions?: React.ReactNode;
+  /** 既定は 340px。棋譜ビューアのように中身の要る覆いは広げる (規則 71) */
+  width?: number;
+}) {
   return (
     <div role="dialog" aria-modal style={{
-      width: 340, borderRadius: 'var(--r-4)', background: 'var(--card)',
+      width, borderRadius: 'var(--r-4)', background: 'var(--card)',
       border: '1px solid var(--border)', boxShadow: 'var(--sh-2)',
       padding: 'var(--sp-5)', display: 'flex', flexDirection: 'column', gap: 'var(--sp-4)',
     }}>
@@ -211,15 +217,6 @@ export function Modal({ title, body, actions }: { title: string; body?: React.Re
       {body && <div style={{ fontSize: 'var(--fs-5)', color: 'var(--sub)', lineHeight: 1.7 }}>{body}</div>}
       {actions && <div style={{ display: 'flex', gap: 'var(--sp-2)', justifyContent: 'flex-end' }}>{actions}</div>}
     </div>
-  );
-}
-
-export function Popover({ children }: { children: React.ReactNode }) {
-  return (
-    <div style={{
-      width: 340, borderRadius: 'var(--r-4)', background: 'var(--card)',
-      border: '1px solid var(--border)', boxShadow: 'var(--sh-2)', overflow: 'hidden',
-    }}>{children}</div>
   );
 }
 
@@ -240,7 +237,7 @@ export function EmptyState({ title, body, actions }: { title: string; body?: Rea
   );
 }
 
-/* 浮くものを画面の真ん中に置く暗幕。Modal / Popover はこれに入れる。
+/* 浮くものを画面の真ん中に置く暗幕。Modal はこれに入れる。
  *
  * 押せない場所を作るのが役目なので、暗幕そのものを押したら閉じる。
  * Esc でも閉じる — 開いたら閉じ方が要る、というだけの話だが、

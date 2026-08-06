@@ -13,11 +13,12 @@ import { Confirm, PasteKifu, Settings } from './Dialogs';
 import { Board } from './components/board';
 import { EvalGraph, KifuTable, MoveScrub, PlayerRow } from './components/data';
 import { JobList, Meter, Nav, NAV_LOCAL, StatusChip, ggsNav, Toasts, type NavId, type Toast } from './components/ggs';
-import { Button, Segmented, Toggle } from './components/primitives';
+import { Button, Progress, Segmented, Toggle } from './components/primitives';
 import { Icon } from './components/Icons';
 import { Strength } from './components/strength';
 import { BookDock, BookPane, useBookBrowse } from './BookScreen';
 import { LearnLog } from './LearnLog';
+import { KifuViewer } from './KifuViewer';
 import { LEVELS } from './state';
 
 /* 対局と検討の画面。
@@ -95,6 +96,10 @@ export function App() {
   const book = useBookBrowse(isBook);
   const { items: learnLog, reload: learnLogReload } = useLearnLog(
     tab === '学習' && !isGgs && !isBook, !!cpu?.learn);
+
+  /* 棋譜ビューア (規則 71)。`pending` はアーカイブ番号 — 手元に棋譜が
+   * 無い対局は覆いを先に開き、届いたら中身を差し込む。 */
+  const [viewer, setViewer] = useState<{ title: string; kifu: string; pending?: string } | null>(null);
 
   const [paste, setPaste] = useState(false);
   const [settings, setSettings] = useState(false);
@@ -195,10 +200,17 @@ export function App() {
   useEffect(() => {
     if (!fetched) return;
     void (async () => {
+      // 覆いが待っているならそちらへ差し込む。待っていないときだけ検討へ
       if (fetched.ggf) {
-        setNav('study');
-        await loadFromText(fetched.ggf);
+        setViewer((cur) => (cur && cur.pending === fetched.id ? { ...cur, kifu: fetched.ggf } : cur));
+        // 覆いが待っていないときだけ検討へ。viewer は依存に入れない
+        // (入れると覆いを開くたびにこの effect が走り直す)
+        if (!viewer?.pending) {
+          setNav('study');
+          await loadFromText(fetched.ggf);
+        }
       } else {
+        setViewer(null);
         g.say(fetched.error || '棋譜を取り出せません');
       }
       await ggsApi.ack().catch(() => {});
@@ -377,7 +389,10 @@ export function App() {
         </Toolbar>
 
         {isGgs ? <GgsScreen nav={nav} snap={ggs.snap} onNav={setNav} prefs={prefs}
-                       onStudy={(text) => { setNav('study'); void loadFromText(text); }} />
+                       onKifu={(title, kifu, archive) => {
+                         setViewer({ title, kifu, pending: kifu ? undefined : archive });
+                         if (!kifu && archive) void ggsApi.look(archive);
+                       }} />
          : isBook ? (
           <BookPane b={book} coords={prefs.coords} grain={prefs.grain}
                     flip={flipped(prefs.facing, '')} onSettings={() => setSettings(true)} />
@@ -427,8 +442,15 @@ export function App() {
                      extra={<>
                        {/* 進み具合は見出し行に出す。帯の高さは変えない —
                            出るたびに枠が伸びると下の段が全部カタカタ動く */}
+                       {/* 数字の隣に細い帯を並べる (規則 69)。数字だけだと
+                           残りの見当が付かない */}
                        {graph.prog && (
-                         <span>分析中 <b style={{ color: 'var(--text)' }}>{graph.prog.done}</b>/{graph.prog.total}</span>
+                         <span style={{ display: 'flex', alignItems: 'center', gap: 'var(--sp-2)' }}>
+                           分析中 <b style={{ color: 'var(--text)' }}>{graph.prog.done}</b>/{graph.prog.total}
+                           <span style={{ width: 72 }}>
+                             <Progress value={graph.prog.total > 0 ? graph.prog.done / graph.prog.total : 0} />
+                           </span>
+                         </span>
                        )}
                        <Button size="chip" variant={graph.busy ? 'danger' : 'secondary'}
                                onClick={() => (graph.busy ? graph.stop() : void graph.update())}>
@@ -560,6 +582,12 @@ export function App() {
         <Confirm title="確認" body={ask.msg} ok="続ける"
                  onCancel={() => { ask.done(false); setAsk(null); }}
                  onOk={() => { ask.done(true); setAsk(null); }} />
+      )}
+
+      {viewer && (
+        <KifuViewer title={viewer.title} kifu={viewer.kifu}
+                    onClose={() => setViewer(null)}
+                    onStudy={(text) => { setNav('study'); void loadFromText(text); }} />
       )}
 
       {paste && (

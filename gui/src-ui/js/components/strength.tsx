@@ -1,6 +1,6 @@
 import { useState } from 'react';
 import { LEVELS, SOLVE_MAX, clampLevels, type Levels } from '../state';
-import { Select } from './primitives';
+import { Select, Slider } from './primitives';
 
 /* 強さの選び方。対局・検討・GGS で同じ形にするための共通部品。
  *
@@ -21,8 +21,7 @@ const presetOf = (v: Levels): number | 'custom' => {
   return i >= 0 ? i : 'custom';
 };
 
-const range = (from: number, to: number) =>
-  Array.from({ length: to - from + 1 }, (_, i) => [String(from + i), String(from + i)] as [string, string]);
+
 
 export function Strength({ value, onChange }: { value: Levels; onChange: (v: Levels) => void }) {
   // 「カスタム」を選んだことを覚えておく。値だけから導くと、プリセットと
@@ -42,15 +41,18 @@ export function Strength({ value, onChange }: { value: Levels; onChange: (v: Lev
                 const l = LEVELS[+s];
                 onChange({ depth: l.depth, solve: l.solve, band: l.band });
               }} />
+      {/* 3 つとも連続した数なので摘みで選ぶ (規則 68)。36 個の選択肢を
+          Select で出すのは操作が重い。**制限は選択肢を減らさず min で表す** —
+          読切の下限が深さに追随するので、触れる範囲そのものが答えになる */}
       {custom && (
-        <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: 'var(--sp-2)' }}>
-          <Num label="深さ" value={value.depth} opts={range(1, SOLVE_MAX)}
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 'var(--sp-2)' }}>
+          <Num label="深さ" value={value.depth} min={1} max={SOLVE_MAX}
                onChange={(n) => onChange(clampLevels({ ...value, depth: n }))} />
           {/* 読切は深さ以上でなければならない。深さのほうが大きいと、中盤探索が
               終局を跨いで読むだけの区間ができる */}
-          <Num label="読切" value={value.solve} opts={range(value.depth, SOLVE_MAX)}
+          <Num label="読切" value={value.solve} min={value.depth} max={SOLVE_MAX}
                onChange={(n) => onChange(clampLevels({ ...value, solve: n }))} />
-          <Num label="選択読み" value={value.band} opts={range(0, 12)}
+          <Num label="選択読み" value={value.band} min={0} max={12} zero="なし"
                onChange={(n) => onChange({ ...value, band: n })} />
         </div>
       )}
@@ -58,13 +60,26 @@ export function Strength({ value, onChange }: { value: Levels; onChange: (v: Lev
   );
 }
 
-function Num({ label, value, opts, onChange }: {
-  label: string; value: number; opts: [string, string][]; onChange: (n: number) => void;
+/** 摘みで選ぶ 1 つの数。**現在値は摘みの脇に数字で出す** — 摘みの位置
+ *  だけでは 22 なのか 23 なのかが読めない。 */
+function Num({ label, value, min, max, zero, onChange }: {
+  label: string; value: number; min: number; max: number;
+  /** 0 のときに数字の代わりに出す言葉 (選択読みの「なし」)。 */
+  zero?: string;
+  onChange: (n: number) => void;
 }) {
   return (
-    <label style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
-      <span style={{ fontSize: 'var(--fs-7)', color: 'var(--sub)' }}>{label}</span>
-      <Select size="ctrl" value={String(value)} options={opts} onChange={(s) => onChange(+s)} />
+    <label style={{ display: 'flex', alignItems: 'center', gap: 'var(--sp-3)' }}>
+      <span style={{ width: 'var(--w-label)', flex: 'none', fontSize: 'var(--fs-6)', color: 'var(--sub)' }}>
+        {label}
+      </span>
+      <span style={{ flex: 1, minWidth: 0 }}>
+        <Slider value={value} min={min} max={max} onChange={onChange} />
+      </span>
+      <span style={{
+        width: 34, flex: 'none', textAlign: 'right', fontSize: 'var(--fs-5)',
+        fontVariantNumeric: 'tabular-nums',
+      }}>{zero && value === 0 ? zero : value}</span>
     </label>
   );
 }

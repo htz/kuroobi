@@ -26,19 +26,19 @@ import { logLinesOf } from './adapt';
  * ログイン画面だけ。残りは順に置き換えていく。
  */
 
-export function GgsScreen({ nav, snap, onNav, prefs, onStudy }: {
+export function GgsScreen({ nav, snap, onNav, prefs, onKifu }: {
   nav: NavId; snap: GgsSnapshot | null; onNav: (id: NavId) => void; prefs: Prefs;
-  /** 終わった対局を検討で開く。 */
-  onStudy: (text: string) => void;
+  /** 棋譜を覆いで見せる。手元に棋譜が無いときは `archive` から取り出す。 */
+  onKifu: (title: string, kifu: string, archive?: string) => void;
 }) {
   if (nav === 'ggs-login') return <GgsLogin />;
   if (!snap) return <EmptyState title="GGS に接続していません" />;
 
   switch (nav) {
-    case 'ggs-play': return <GgsPlay snap={snap} onNav={onNav} prefs={prefs} />;
+    case 'ggs-play': return <GgsPlay snap={snap} onNav={onNav} prefs={prefs} onKifu={onKifu} />;
     case 'ggs-lobby': return <GgsLobby snap={snap} onNav={onNav} />;
     case 'ggs-players': return <GgsUsers snap={snap} onNav={onNav} />;
-    case 'ggs-results': return <GgsResults snap={snap} onStudy={onStudy} />;
+    case 'ggs-results': return <GgsResults snap={snap} onKifu={onKifu} />;
     case 'ggs-chat': return <GgsChat snap={snap} />;
     case 'ggs-standby': return <GgsStandby snap={snap} onNav={onNav} />;
     case 'ggs-console': return <GgsConsole snap={snap} />;
@@ -530,7 +530,10 @@ function FormulaRow({ label, src }: { label: string; src: string }) {
  * 待った (undo) と中止 (abort) は出さない — どちらも相手の承諾が要る要求で、
  * GGS の相手はたいていプログラムなので通らない。投了だけは自分で決められる。
  */
-function GgsPlay({ snap, onNav, prefs }: { snap: GgsSnapshot; onNav: (id: NavId) => void; prefs: Prefs }) {
+function GgsPlay({ snap, onNav, prefs, onKifu }: {
+  snap: GgsSnapshot; onNav: (id: NavId) => void; prefs: Prefs;
+  onKifu: (title: string, kifu: string, archive?: string) => void;
+}) {
   const [sel, setSel] = useState('');
   const clock = useClocks(snap.matches);
 
@@ -576,7 +579,9 @@ function GgsPlay({ snap, onNav, prefs }: { snap: GgsSnapshot; onNav: (id: NavId)
       <div className="k-scroll" style={{ flex: 1, minWidth: 0, minHeight: 0, padding: 'var(--sp-3)' }}>
         {/* 同期対局は 2 面。横に並べて、狭ければ折り返す */}
         <div style={{ display: 'flex', gap: 'var(--sp-3)', flexWrap: 'wrap', justifyContent: 'center' }}>
-          {pair?.map((m) => <MatchBoard key={m.id} snap={snap} m={m} clock={clock} prefs={prefs} />)}
+          {pair?.map((m) => (
+            <MatchBoard key={m.id} snap={snap} m={m} clock={clock} prefs={prefs} onKifu={onKifu} />
+          ))}
         </div>
       </div>
     </div>
@@ -597,8 +602,9 @@ function matchRowOf(g: MatchView[], key: string): Match {
   };
 }
 
-function MatchBoard({ snap, m, clock, prefs }: {
+function MatchBoard({ snap, m, clock, prefs, onKifu }: {
   snap: GgsSnapshot; m: MatchView; clock: (id: string, side: ClockSide) => ClockView; prefs: Prefs;
+  onKifu: (title: string, kifu: string, archive?: string) => void;
 }) {
   const [resign, setResign] = useState(false);
   const observer = !m.my_color;
@@ -647,6 +653,11 @@ function MatchBoard({ snap, m, clock, prefs }: {
         )}
         {snap.thinking === m.id && <span style={{ color: 'var(--accent)' }}>思考中</span>}
         <span style={{ marginLeft: 'auto' }} />
+        {/* 終わった対局も一覧に残るので、そこから棋譜を取り出せる。
+            旧 GUI にあった道を戻した (規則 71) */}
+        <Button size="chip"
+                onClick={() => onKifu(m.opp_name ? `${m.opp_name} との対局` : '対局の棋譜',
+                                      m.ggf || m.moves.join(''))}>棋譜</Button>
         {!observer && (
           <Button size="chip" variant="danger"
                   title="負けを認めて終わる (相手の承諾は要らない。レートが動く)"
@@ -823,7 +834,10 @@ function FormulaField({ label, src, onSave }: { label: string; src: string; onSa
  * 「負けた対局を後から読む」がこの画面の用事なので、そこへ行けないと
  * 一覧を見せる意味が薄い。
  */
-function GgsResults({ snap, onStudy }: { snap: GgsSnapshot; onStudy: (text: string) => void }) {
+function GgsResults({ snap, onKifu }: {
+  snap: GgsSnapshot;
+  onKifu: (title: string, kifu: string, archive?: string) => void;
+}) {
   const [gtype, setGtype] = useState('all');
   // 形式ごとにレートのプールが違うので、混ぜて折れ線にすると嘘になる
   const kinds = [...new Set(snap.results.map((r) => baseType(r.base)))].filter(Boolean);
@@ -853,12 +867,8 @@ function GgsResults({ snap, onStudy }: { snap: GgsSnapshot; onStudy: (text: stri
                      note={gtype === 'all' ? gtypeLabel(baseType(r.base)) : undefined}
                      rating={r.my_rating}
                      // GGF なら開始局面も入っている (抽選開局の対局が戻る)。
-                     // どちらも無い対局は GGS から取り出す (番号があるとき)
-                     onClick={() => {
-                       const text = r.ggf || r.kifu;
-                       if (text) onStudy(text);
-                       else if (r.archive) void ggsApi.look(r.archive);
-                     }}
+                     // どちらも無い対局は番号から取り出す
+                     onClick={() => onKifu(`${r.opp} との対局`, r.ggf || r.kifu, r.archive)}
                      dim={!r.ggf && !r.kifu && !r.archive} />
         ))}
       </Section>
@@ -891,6 +901,10 @@ function GgsUsers({ snap, onNav }: { snap: GgsSnapshot; onNav: (id: NavId) => vo
   // レートは形式ごとに別のプール。混ぜると順位が意味を持たないので、
   // ランキングは見たいプールを選べるようにする (自分のレートは両方出る)
   const [pool, setPool] = useState('8');
+  // 順位を探す場所なので頁で切る (規則 74)。スクロールだと「いま何位を
+  // 見ているか」が分からなくなる
+  const [page, setPage] = useState(0);
+  const [perPage, setPerPage] = useState(25);
   const [tab, setTab] = useState('プロフィール');
 
   if (sel) {
@@ -900,6 +914,9 @@ function GgsUsers({ snap, onNav }: { snap: GgsSnapshot; onNav: (id: NavId) => vo
 
   const rows = mode === 'who' ? snap.users : snap.ranking;
   const mine = snap.my_ranks;
+  const pages = Math.max(1, Math.ceil(rows.length / perPage));
+  const cur = Math.min(page, pages - 1);
+  const slice = rows.slice(cur * perPage, (cur + 1) * perPage);
 
   return (
     <div className="k-scroll" style={{ flex: 1, minHeight: 0, padding: 'var(--sp-4) var(--sp-4) 0' }}>
@@ -926,11 +943,12 @@ function GgsUsers({ snap, onNav }: { snap: GgsSnapshot; onNav: (id: NavId) => vo
                  )}
                  <Segmented size="chip" value={mode} onChange={(m) => {
                    setMode(m);
+                   setPage(0);
                    if (m === 'who') void ggsApi.who('8'); else void ggsApi.top(pool, 100);
                  }} options={[{ value: 'who', label: '接続中' }, { value: 'top', label: '上位' }]} />
                </>}>
         {!rows.length && <Empty>いません。</Empty>}
-        {rows.map((u) => (
+        {slice.map((u) => (
           <button key={u.name} type="button" className="k-row" onClick={() => setSel(u.name)}
             style={{
               width: '100%', border: 0, background: 'transparent', textAlign: 'left',
@@ -945,6 +963,20 @@ function GgsUsers({ snap, onNav }: { snap: GgsSnapshot; onNav: (id: NavId) => vo
             {snap.ongoing.some((o) => o.names.includes(u.name)) && <Tag tone="ok">対局中</Tag>}
           </button>
         ))}
+        {rows.length > perPage && (
+          <div style={{
+            display: 'flex', alignItems: 'center', gap: 'var(--sp-2)',
+            padding: 'var(--sp-2) 0', fontSize: 'var(--fs-6)', color: 'var(--sub)',
+          }}>
+            <Button size="chip" disabled={cur === 0} onClick={() => setPage(cur - 1)}>前へ</Button>
+            <span style={{ fontVariantNumeric: 'tabular-nums' }}>{cur + 1} / {pages}</span>
+            <Button size="chip" disabled={cur >= pages - 1} onClick={() => setPage(cur + 1)}>次へ</Button>
+            <span style={{ marginLeft: 'auto' }}>表示件数</span>
+            <Select size="ctrl" value={String(perPage)}
+                    options={[['25', '25'], ['50', '50'], ['100', '100']]}
+                    onChange={(v) => { setPerPage(+v); setPage(0); }} />
+          </div>
+        )}
       </Section>
     </div>
   );

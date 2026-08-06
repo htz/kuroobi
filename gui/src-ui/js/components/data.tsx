@@ -419,7 +419,9 @@ export function MoveScrub({ plies, cursor, blunder, onSeek }: {
            }}
            onPointerMove={(e) => { if (e.buttons & 1) seekAt(e.clientX); }}
            style={{
-             position: 'relative', height: 'var(--h-scrub)', width: '100%',
+             // 高さは 5 段のうちの --h-field。10 手ごとの数字は帯の外 (下の
+             // 12px の行) に置くので、32px でも刻みと掴む丸 (16px) は収まる
+             position: 'relative', height: 'var(--h-field)', width: '100%',
              cursor: 'pointer', touchAction: 'none', userSelect: 'none',
            }}>
         {/* 溝と、いまいるところまでの塗り */}
