@@ -374,7 +374,10 @@ function GgsLobby({ snap, onNav }: { snap: GgsSnapshot; onNav: (id: NavId) => vo
           </p>
         </Section>
 
-        <Section title="中断対局">
+        {/* 中断対局は login のときに 1 度だけ流れてくる。あとから相手が
+            中断したぶんは、こちらから聞き直さないと出てこない */}
+        <Section title="中断対局"
+                 aside={<Button size="chip" onClick={() => void ggsApi.listStored()}>更新</Button>}>
           {!snap.stored.length && <Empty>中断対局はありません。</Empty>}
           {snap.stored.map((x) => (
             <Row key={x.id} title={x.opp || '?'} sub={gtypeLabel(x.gtype)}
@@ -545,7 +548,11 @@ function GgsPlay({ snap, onNav, prefs }: { snap: GgsSnapshot; onNav: (id: NavId)
     return (
       <EmptyState title="対局はまだありません"
                   body="ロビーで申し込むか、進行中の対局を観戦できます。"
-                  actions={<Button variant="primary" onClick={() => onNav('ggs-lobby')}>ロビーへ</Button>} />
+                  actions={<>
+                    <Button variant="primary" onClick={() => onNav('ggs-lobby')}>ロビーへ</Button>
+                    {/* 繋ぎ直した直後などは一覧が古いことがある。聞き直す道を残す */}
+                    <Button onClick={() => void ggsApi.listMatches()}>更新</Button>
+                  </>} />
     );
   }
 

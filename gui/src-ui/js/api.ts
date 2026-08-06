@@ -45,7 +45,6 @@ export const api = {
   stopSearch: () => call('stop_search'),
   think: () => call<ThinkView>('think'),
   applyMove: (sq: number | null) => call<GameView>('apply_move', { sq }),
-  analyze: (depth: number) => call<HintView[]>('analyze', { depth }),
   analyzeLive: () => call<void>('analyze_live'),
   evalAt: (n: number, depth: number) => call<EvalPoint>('eval_at', { n, depth }),
   /** 保存。名前は GGF に載る (拡張子が .ggf のときだけ書かれる)。 */

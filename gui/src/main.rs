@@ -974,41 +974,6 @@ fn apply_move(app: State<App>, sq: Option<u8>) -> Result<GameView, String> {
     Ok(view(&game))
 }
 
-#[tauri::command]
-async fn analyze(app: State<'_, App>, depth: u32) -> Result<Vec<HintView>, String> {
-    if ggs_match_active(&app) {
-        return Err("GGS 対局中は解析を控えます".into());
-    }
-    ensure_engine(&app)?;
-    let board = app.game.lock().unwrap().board;
-    let eng = app.engine.clone();
-    let act = app.activity.clone();
-    let (hints, book) = tauri::async_runtime::spawn_blocking(move || {
-        let _g = ActivityGuard::begin(&act, "解析");
-        let mut guard = eng.lock().unwrap();
-        let e = guard.as_mut().unwrap();
-        // 定石にある手は定石の値 (実戦より深い探索で付けた値) を優先して
-        // 出す。出所が分かるように印を付けて返す。
-        let book = e.book_hints(&board).unwrap_or_default();
-        (e.analyze(&board, depth), book)
-    })
-    .await
-    .map_err(|e| e.to_string())?;
-    Ok(hints
-        .into_iter()
-        .map(|(p, e)| {
-            let b = book.iter().find(|(bp, _)| *bp == p);
-            HintView {
-                pos: p.index(),
-                value: finite(b.map(|(_, v)| *v).unwrap_or(e.value)),
-                exact: e.exact,
-                from_book: b.is_some(),
-                depth: if b.is_some() || e.exact { 0 } else { depth },
-            }
-        })
-        .collect())
-}
-
 /// 反復深化しながら評価値を出し続ける。段が終わるたびに画面へ送るので、
 /// 見ている間じわじわ深くなる。局面を変えるか止めるまで続く。
 #[tauri::command]
@@ -2047,7 +2012,6 @@ fn main() {
             stop_search,
             think,
             apply_move,
-            analyze,
             analyze_live,
             eval_at,
             save_kifu,

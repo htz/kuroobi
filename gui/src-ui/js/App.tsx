@@ -488,8 +488,9 @@ export function App() {
               onUndo={(e) => void (async () => {
                 if (!await confirm('この対局で書き換えた定石を元に戻します。よろしいですか。')) return;
                 try {
-                  const n = await api.learnUndo(e.at, e.kifu);
-                  g.say(`${n} 手ぶんの書き換えを戻しました`, 'gold');
+                  await api.learnUndo(e.at, e.kifu);
+                  // 済んだことは報せない (デザイン規則 34)。行が消えるのが
+                  // 結果そのもので、トーストは失敗と進まない理由だけに使う
                   learnLogReload();
                 } catch (err) { g.say('' + err); }
               })()}
