@@ -363,7 +363,7 @@ export function App() {
                        onStudy={(text) => { setNav('study'); void loadFromText(text); }} />
          : isBook ? (
           <BookPane b={book} coords={prefs.coords} grain={prefs.grain}
-                    flip={flipped(prefs.facing, '')} />
+                    flip={flipped(prefs.facing, '')} onSettings={() => setSettings(true)} />
         ) : (
         <div style={{ flex: 1, minHeight: 0, display: 'flex', flexDirection: 'column', padding: '0 var(--sp-4)' }}>
           <PlayerRow color="b" name="黒" discs={v?.black ?? 2}
@@ -427,7 +427,8 @@ export function App() {
       </Main>
 
       {/* GGS はドックを持たない (一覧が本体の左に付く) */}
-      {isBook && (
+      {/* 定石が無いときは空のドックも出さない (盤側が報せを出している) */}
+      {isBook && book.node?.size !== 0 && (
         <Dock tabs={['定石']} active="定石" open={dockOpen}>
           <BookDock b={book} onStudy={(kifu) => { setNav('study'); void loadFromText(kifu); }} />
         </Dock>

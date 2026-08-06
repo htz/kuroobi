@@ -4,7 +4,7 @@ import { sqName } from './adapt';
 import type { BookNode } from './types';
 import { Board, type EvalInfo } from './components/board';
 import { PlayerRow } from './components/data';
-import { Section } from './components/layout';
+import { EmptyState, Section } from './components/layout';
 import { Button } from './components/primitives';
 
 /* 定石を眺める。
@@ -100,10 +100,22 @@ export function useBookBrowse(on: boolean): BookBrowse {
 }
 
 /** 盤。定石にある手だけを打てる — 定石の外へ出る道はここでは要らない。 */
-export function BookPane({ b, coords, grain, flip }: {
+export function BookPane({ b, coords, grain, flip, onSettings }: {
   b: BookBrowse; coords: boolean; grain: boolean; flip: boolean;
+  /** 定石ファイルが無いときの直し方への入口。 */
+  onSettings: () => void;
 }) {
   const n = b.node;
+  /* 定石そのものが無いときは、空の盤を出しても嘘になる。
+   * 「この局面から先は定石にありません」と読めてしまい、局面のせいだと
+   * 思わせる。押せない状態と直し方は同時に出す (デザイン規則 61)。 */
+  if (n && n.size === 0) {
+    return (
+      <EmptyState title="定石がありません"
+                  body="定石ファイルを読み込めていません。設定から場所を指定できます。"
+                  actions={<Button variant="primary" onClick={onSettings}>設定を開く</Button>} />
+    );
+  }
   // 候補は評価値のマスとして出す。値の高いものが金の輪 (best)
   const evals: Record<number, EvalInfo> = {};
   n?.moves.forEach((m, i) => {
