@@ -506,6 +506,9 @@ struct MatchState {
     gtype: String,
     turn: char, // '*' / 'O' / ' '
     my_color: Option<char>,
+    /// この手番について報せたか。1 手のあいだに update が何度も来るので、
+    /// これが無いと同じ手番で何度も鳴る。
+    told_turn: bool,
     my_clock: String,
     my_clock_secs: Option<u64>,
     my_ext: Option<u64>,
@@ -544,6 +547,7 @@ impl MatchState {
             gtype: self.gtype.clone(),
             turn: self.turn,
             my_color: self.my_color,
+            told_turn: false,
             my_clock: self.my_clock.clone(),
             my_clock_secs: self.my_clock_secs,
             my_ext: self.my_ext,
@@ -576,6 +580,7 @@ impl MatchState {
             gtype: String::new(),
             turn: ' ',
             my_color: None,
+            told_turn: false,
             my_clock: String::new(),
             my_clock_secs: None,
             my_ext: None,
@@ -1894,6 +1899,20 @@ fn handle_block(
         }
         return;
     }
+    if turn.is_some() && turn == m.my_color && !m.told_turn {
+        // 自分が打つ設定 (auto を切っている) のときだけ報せる。KUROOBI が
+        // 打つなら人は何もしないので、鳴らすと邪魔にしかならない
+        m.told_turn = true;
+        if !auto {
+            let who = if m.opp_name.is_empty() { mid.clone() } else { m.opp_name.clone() };
+            ctx.notify("GGS: あなたの手番です", &who);
+        }
+    } else if turn != m.my_color {
+        // 相手の手番に戻ったら次の手番でまた報せる
+        let m = matches.get_mut(&mid).unwrap();
+        m.told_turn = false;
+    }
+    let m = matches.get_mut(&mid).unwrap();
     if !auto || !rows_ok || turn.is_none() || turn != m.my_color {
         return;
     }

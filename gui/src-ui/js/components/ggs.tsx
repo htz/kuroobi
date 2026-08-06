@@ -30,7 +30,7 @@ export type NavItem = {
   icon: IconName;     // Icons.tsx の IconName
   count?: number;    // 件数バッジ
   alert?: boolean;   // 自分宛・未読は --bad で塗る
-  dot?: 'ok' | 'gold';  // 状態バッジ（待機モードが有効 等）
+  dot?: 'ok' | 'gold' | 'bad';  // 状態バッジ（待機モードが有効・自分の手番 等）
 };
 
 export type Conn = 'offline' | 'connecting' | 'logging-in' | 'online';
@@ -124,7 +124,7 @@ function NavRow({ item, active, onSelect }: { item: NavItem; active: boolean; on
         }}>{item.count}</span>
       )}
       {item.dot && <span style={{
-        marginLeft: 'auto', width: 7, height: 7, borderRadius: '50%', background: 'var(--' + (item.dot === 'ok' ? 'ok' : 'gold') + ')',
+        marginLeft: 'auto', width: 7, height: 7, borderRadius: '50%', background: 'var(--' + item.dot + ')',
       }} />}
     </button>
   );

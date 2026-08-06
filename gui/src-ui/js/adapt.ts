@@ -93,8 +93,14 @@ export function navBadges(snap: GgsSnapshot | null, chatUnread: number) {
   return {
     // 自分宛の申し込みだけ数える (一覧には他人宛も流れる)
     'ggs-lobby': { count: snap?.offers.filter((o) => o.incoming).length || undefined, alert: true },
-    // 手合いの「組」数。同期対局は 2 局で 1 組なので base でまとめる
-    'ggs-play': { count: new Set(snap?.matches.map((m) => m.base || m.id) ?? []).size || undefined },
+    // 手合いの「組」数。同期対局は 2 局で 1 組なので base でまとめる。
+    // 自分の手番が来ている組があれば点も出す — 数字だけだと「増えた」と
+    // 「自分が待たれている」が同じ見え方になる
+    'ggs-play': {
+      count: new Set(snap?.matches.map((m) => m.base || m.id) ?? []).size || undefined,
+      dot: snap?.matches.some((m) => m.my_color && !m.over && m.turn === m.my_color)
+        ? ('bad' as const) : undefined,
+    },
     'ggs-chat': { count: chatUnread || undefined, alert: true },
     'ggs-standby': { dot: snap?.standby.enabled ? ('ok' as const) : undefined },
   };
