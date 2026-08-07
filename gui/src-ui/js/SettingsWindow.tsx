@@ -1,6 +1,7 @@
 import { useEffect } from 'react';
 import { Settings } from './Dialogs';
 import { usePrefs } from './prefs';
+import { useGgs } from './ggs';
 import { BoardDefs } from './components/board';
 
 /* 設定の窓。`index.html?w=settings` で開く (main.tsx が振り分ける)。
@@ -15,6 +16,8 @@ import { BoardDefs } from './components/board';
  */
 export function SettingsWindow() {
   const { prefs, set } = usePrefs();
+  // GGS タブの中身に要る。窓が別でも Tauri のイベントは届く
+  const ggs = useGgs();
 
   // Esc で閉じる。窓なので ⌘W でも閉じられるが、覆いから窓に変えた後も
   // 同じ指の動きで閉じられるようにしておく
@@ -32,7 +35,7 @@ export function SettingsWindow() {
   return (
     <>
       <BoardDefs />
-      <Settings prefs={prefs} setPref={set} />
+      <Settings prefs={prefs} setPref={set} ggs={ggs.snap} />
     </>
   );
 }

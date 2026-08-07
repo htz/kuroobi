@@ -5,6 +5,8 @@ import { Modal, Overlay, Section } from './components/layout';
 import { Button, Segmented, Select, TextField } from './components/primitives';
 import { Icon } from './components/Icons';
 import { Board } from './components/board';
+import { GgsSettings } from './GgsScreens';
+import type { GgsSnapshot } from './types';
 
 /* 確認と入力。現行がブラウザの confirm() / prompt() を使っているところを
  * 置き換える。ブラウザのダイアログはデザインに乗らないうえ、Tauri の
@@ -165,8 +167,10 @@ const NOT_FOUND: Record<string, string> = {
  *   - ファイルとスレッドはバックエンドが持つので、変えたら報せだけ送る
  * という分担にしてある。学習の取り込みはドックに操作があるので置かない
  * (同じ設定を 2 か所に出さない — 規則 58)。 */
-export function Settings({ prefs, setPref }: {
+export function Settings({ prefs, setPref, ggs }: {
   prefs: Prefs; setPref: <K extends keyof Prefs>(k: K, v: Prefs[K]) => void;
+  /** GGS のスナップショット。GGS タブの中身に使う (未接続なら null)。 */
+  ggs?: GgsSnapshot | null;
 }) {
   const [tab, setTab] = useState<'engine' | 'view' | 'ggs' | 'more'>('engine');
   const [reset, setReset] = useState(false);
@@ -333,36 +337,32 @@ export function Settings({ prefs, setPref }: {
           </Row2>
         </Section>
         <Section title="数値">
-          {/* 設計はここに 単位 / 小数 / 視点 を並べている。単位は
-              エンジンが勝率を返さないので選べない — **選べない理由まで
-              書く** (規則 61)。視点は「盤の向き」と同じものなので上に寄せた */}
-          <Row2 label="単位">
-            <span style={{ fontSize: 'var(--fs-5)' }}>石差のみ</span>
-            <span style={{ marginLeft: 'auto', fontSize: 'var(--fs-7)', color: 'var(--sub)' }}>
-              勝率はエンジンが返さない
-            </span>
-          </Row2>
+          {/* 設計の 単位 / 視点 は置かない。単位は石差しか無く、視点は
+              「盤の向き」と同じもの。**選べない行を置くと、触れるのに
+              変わらない場所が増えるだけ** */}
           <Row2 label="小数">
             <Segmented value={String(prefs.decimals)}
                        onChange={(v) => setPref('decimals', +v as Prefs['decimals'])}
                        options={[{ value: '0', label: '0' },
                                  { value: '1', label: '1' },
                                  { value: '2', label: '2' }]} />
-            <span style={{ marginLeft: 'auto', fontSize: 'var(--fs-7)', color: 'var(--sub)' }}>
-              棋譜・グラフ・定石
-            </span>
           </Row2>
         </Section>
         </>}
 
-        {tab === 'ggs' && (
-          <Section title="GGS">
-            <p style={{ margin: 0, fontSize: 'var(--fs-6)', color: 'var(--sub)', lineHeight: 1.8 }}>
-              GGS の強さ・持ち時間の使い方・申し込みの扱いは、
-              左メニューの「GGS の設定」にあります。サーバー側に残る設定が
-              混ざるので、繋いでいる状態で触れる場所に置いてあります。
-            </p>
-          </Section>
+        {/* 設計どおり GGS の設定もこの窓に入れる。左メニューの行き先は
+            落とした — 同じ設定へ行く道が 2 つあると、どちらが本物か
+            分からなくなる (規則 58) */}
+        {tab === 'ggs' && (ggs
+          ? <GgsSettings snap={ggs} />
+          : (
+            <Section title="GGS">
+              <p style={{ margin: 0, fontSize: 'var(--fs-6)', color: 'var(--sub)', lineHeight: 1.8 }}>
+                GGS に繋いでいないあいだは触れません。**設定はサーバー側に
+                残る**ので、繋いでから読み書きします。
+              </p>
+            </Section>
+          )
         )}
 
         {tab === 'more' && (
@@ -417,7 +417,7 @@ export function Settings({ prefs, setPref }: {
                 字下げすると、欄の補足なのか節の説明なのかが曖昧になる */}
             <p style={{ margin: 0, fontSize: 'var(--fs-6)', color: 'var(--sub)', lineHeight: 1.8 }}>
               ローカル対局・検討・学習の取り込みが使う並列数です。自動 = コア数の半分 ({th.auto})。
-              GGS 対局用は GGS の設定にあります (別々に動くので、両方が同時に動くと合計ぶんの CPU を使います)。
+              GGS 対局用は「GGS」タブにあります (別々に動くので、両方が同時に動くと合計ぶんの CPU を使います)。
             </p>
           </Section>
         )}
@@ -432,11 +432,8 @@ export function Settings({ prefs, setPref }: {
           borderTop: '1px solid var(--border-weak)',
         }}>
           {tab === 'engine' && (
-            <Button size="field" variant="ghost" onClick={() => setReset(true)}>既定に戻す</Button>
+            <Button size="field" onClick={() => setReset(true)}>既定に戻す</Button>
           )}
-          <span style={{ marginLeft: 'auto', fontSize: 'var(--fs-6)', color: 'var(--sub)' }}>
-            変更は即時に反映されます
-          </span>
         </div>
         </div>
       </div>

@@ -57,7 +57,8 @@ export function ggsNav(conn: Conn, badges?: Partial<Record<NavId, Pick<NavItem, 
     { id: 'ggs-chat', label: 'チャット', icon: 'ggs-chat' },
     { id: 'ggs-standby', label: '待機モード', icon: 'ggs-standby' },
     { id: 'ggs-console', label: 'コンソール', icon: 'ggs-console' },
-    { id: 'ggs-settings', label: 'GGS の設定', icon: 'gear' },
+    // GGS の設定は設定の窓の「GGS」タブへ移した。行き先を 2 つ持つと、
+    // どちらが本物か分からなくなる (規則 58)
   ];
   return base.map(i => ({ ...i, ...(badges?.[i.id] ?? {}) }));
 }

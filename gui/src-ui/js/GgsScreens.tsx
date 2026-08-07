@@ -747,7 +747,7 @@ function MatchBoard({ snap, m, clock, prefs, onKifu }: {
  * GGS で対局・観戦するときの強さとふるまい。ローカル対局とは別に持つ。
  * 申し込みの条件は**サーバー側に残る**ので、アプリを閉じていても効く。
  */
-function GgsSettings({ snap }: { snap: GgsSnapshot }) {
+export function GgsSettings({ snap }: { snap: GgsSnapshot }) {
   const e = snap.engine;
   const [saved, setSaved] = useState(false);
   const [levels, setLevels] = useState({ depth: e.depth, solve: e.solve, band: e.band });
