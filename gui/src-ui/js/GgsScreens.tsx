@@ -137,9 +137,11 @@ export function GgsConsole({ snap }: { snap: GgsSnapshot }) {
         flex: 'none', display: 'flex', gap: 'var(--sp-2)', alignItems: 'center',
         padding: 'var(--sp-3) var(--sp-4)', borderTop: '1px solid var(--border-weak)',
       }}>
-        <TextField mono value={cmd} onChange={setCmd}
-                   placeholder="コマンド (例: tell /os who 8)" />
-        <Button onClick={send}>送信</Button>
+        {/* コンソールも Enter で送れる。生コマンドを何度も打つ場所なので、
+            毎回釦まで手を運ばせない */}
+        <TextField mono value={cmd} onChange={setCmd} onEnter={send}
+                   placeholder="コマンド (例: tell /os who 8。Enter で送信)" />
+        <Button size="field" onClick={send}>送信</Button>
       </div>
     </div>
   );
@@ -270,6 +272,19 @@ export function GgsChat({ snap }: { snap: GgsSnapshot }) {
       </aside>
 
       <div style={{ flex: 1, minWidth: 0, display: 'flex', flexDirection: 'column' }}>
+        {/* どの会話を見ているかと、**誰に届くか**を頭に出す。左の一覧の
+            選ばれている行だけでは、送る直前に確かめる場所が無い */}
+        <div style={{
+          flex: 'none', display: 'flex', alignItems: 'baseline', gap: 'var(--sp-3)',
+          padding: 'var(--sp-3) var(--sp-4)', borderBottom: '1px solid var(--border-weak)',
+        }}>
+          <span style={{ fontSize: 'var(--fs-3)', fontWeight: 600 }}>
+            {cur === '.chat' ? '全体チャット' : cur}
+          </span>
+          <span style={{ fontSize: 'var(--fs-6)', color: 'var(--sub)' }}>
+            {cur === '.chat' ? 'ここにいる全員に届きます' : '本人にだけ届きます'}
+          </span>
+        </div>
         <div className="k-scroll" ref={box} style={{
           flex: 1, minHeight: 0, padding: 'var(--sp-4)',
           display: 'flex', flexDirection: 'column', gap: 'var(--sp-3)',
@@ -297,9 +312,9 @@ export function GgsChat({ snap }: { snap: GgsSnapshot }) {
         }}>
           <Toggle checked={autoJa} onChange={setAutoJa} label="和訳" />
           <Toggle checked={toEn} onChange={setToEn} label="英訳して送る" />
-          <TextField value={text} onChange={setText}
-                     placeholder={cur === '.chat' ? '全体チャットへ' : `${cur} へ`} />
-          <Button variant="primary" onClick={() => void send()}>送信</Button>
+          <TextField value={text} onChange={setText} onEnter={() => void send()}
+                     placeholder="メッセージを入力 (Enter で送信)" />
+          <Button size="field" variant="primary" onClick={() => void send()}>送信</Button>
         </div>
       </div>
       {pick && (
