@@ -3,12 +3,11 @@ import { api, emitApp, jsLog, onApp, openWindow } from './api';
 import { usePrefs } from './prefs';
 import { useActivity, useLearnLog } from './engine';
 import { BoardDefs } from './components/board';
-import { Body, Dock, Main, StatusBar, StatusStat, Toolbar } from './components/layout';
+import { Body, Main, StatusBar, StatusStat, Toolbar } from './components/layout';
 import { Button } from './components/primitives';
-import { BookDock, BookPane, useBookBrowse } from './BookScreen';
+import { BookInfo, BookPane, BookTree, useBookBrowse } from './BookScreen';
 import { LearnLog } from './LearnLog';
 import { Confirm } from './Dialogs';
-import { sqName } from './adapt';
 
 /* 定石ブラウザと学習ログの窓 (`index.html?w=book`、⌘B で開く)。
  *
@@ -29,8 +28,6 @@ type Tab = typeof TABS[number];
 export function BookWindow() {
   const { prefs } = usePrefs();
   const [tab, setTab] = useState<Tab>('定石');
-  // 窓を狭めると畳む段でドックが消える。消したら開く入口が要る (規則 8)
-  const [dockOpen, setDockOpen] = useState(false);
   const b = useBookBrowse(true);
   const cpu = useActivity();
   const { items: learnLog, reload: learnLogReload } = useLearnLog(tab === '学習ログ', !!cpu?.learn);
@@ -123,16 +120,22 @@ export function BookWindow() {
       </div>
 
       <Body>
-        <Main inset={dockOpen}>
+        {/* 設計 §7 は 木 269 / 盤 / この局面 291 の 3 列。木を右のドックに
+            入れていたときは盤の右に押し込まれ、枝の広がりが読めなかった */}
+        {tab === '定石' && <BookTree b={b} decimals={prefs.decimals} onStudy={toStudy} />}
+        <Main>
           {tab === '定石' ? (
             <>
-              <Toolbar dock={{ open: dockOpen, onToggle: () => setDockOpen((o) => !o) }}>
+              {/* 設計のツールバーは 手順を検索 / 出所の絞り込み / 深さの上限 /
+                  登録局面。前の 3 つはエンジン側に口が無い (SYNC §20)。
+                  戻る・最初へ は絵に無いが、木は今いる節より下しか出さないので
+                  上へ戻る道がこれしか無い */}
+              <Toolbar aux={<span style={{ fontSize: 'var(--fs-6)', color: 'var(--sub)' }}>
+                              登録局面 <b style={{ color: 'var(--text)', fontWeight: 600 }}>
+                                {b.node ? b.node.size.toLocaleString() : '—'}</b>
+                            </span>}>
                 <Button disabled={!b.line.length} onClick={b.back}>戻る</Button>
                 <Button disabled={!b.line.length} onClick={b.reset}>最初へ</Button>
-                {/* 定石で見つけた手順をそのまま検討へ。定石の先を自分で読ませる
-                    にはこの向きの道が要る (行きだけあって帰りが無かった) */}
-                <Button disabled={!b.line.length}
-                        onClick={() => toStudy(b.line.map(sqName).join(''))}>検討で開く</Button>
                 <span style={{ marginLeft: 'var(--sp-3)', fontSize: 'var(--fs-6)', color: 'var(--sub)' }}>
                   {b.line.length ? b.line.length + ' 手目' : '初期局面'}
                 </span>
@@ -158,12 +161,8 @@ export function BookWindow() {
             </div>
           )}
         </Main>
-        {/* 定石が無いときは空のドックも出さない (盤側が報せを出している) */}
-        {tab === '定石' && b.node?.size !== 0 && (
-          <Dock tabs={['この先の枝']} active="この先の枝" open={dockOpen}>
-            <BookDock b={b} decimals={prefs.decimals} onStudy={toStudy} />
-          </Dock>
-        )}
+        {/* 定石が無いときは空の列も出さない (盤側が報せを出している) */}
+        {tab === '定石' && b.node?.size !== 0 && <BookInfo b={b} decimals={prefs.decimals} />}
       </Body>
 
       <StatusBar right={<StatusStat label="定石" value={b.node ? b.node.size.toLocaleString() + ' 局面' : '—'} />} />
