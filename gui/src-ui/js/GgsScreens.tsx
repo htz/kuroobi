@@ -514,19 +514,25 @@ function GgsStandby({ snap, onNav }: { snap: GgsSnapshot; onNav: (id: NavId) => 
                  <Stat v={st.draws} label="分" />
                  <Stat v={`${st.diff_sum > 0 ? '+' : ''}${st.diff_sum}`} label="石差" />
                </span>}>
-        <div style={{ display: 'flex', gap: 'var(--sp-4)', flexWrap: 'wrap' }}>
-          <Field label="相手">
-            <Select value={names.includes(opp) ? opp : ''} onChange={setOpp} width={180}
+        {/* 設計は 3 列の格子。**幅を欄ごとに決めない** — 決めると
+            「同期・ランダム16手 (推奨)」だけが窮屈になり、数値欄だけが
+            極端に短くなって列が揃わない。器の幅を 3 等分して各欄に配る */}
+        <div style={{
+          display: 'grid', gap: 'var(--sp-4)',
+          gridTemplateColumns: 'repeat(auto-fit, minmax(240px, 1fr))',
+        }}>
+          <Field stretch label="相手">
+            <Select value={names.includes(opp) ? opp : ''} onChange={setOpp}
                     options={[['', '指定しない (誰でも)'], ...names.map((n) => [n, n] as [string, string])]} />
           </Field>
-          <Field label="形式"><Select value={gtype} onChange={setGtype} width={200} options={GTYPE_CHOICES} /></Field>
-          <Field label="持ち時間"><Select value={time} onChange={setTime} width={110} options={CLOCK_CHOICES} /></Field>
-          <Field label="最大対局数 (0 = 無制限)">
-            <TextField numeric align="right" width={80} value={String(maxGames)}
+          <Field stretch label="形式"><Select value={gtype} onChange={setGtype} options={GTYPE_CHOICES} /></Field>
+          <Field stretch label="持ち時間"><Select value={time} onChange={setTime} options={CLOCK_CHOICES} /></Field>
+          <Field stretch label="最大対局数 (0 = 無制限)">
+            <TextField numeric align="right" value={String(maxGames)}
                        onChange={(x) => setMaxGames(+x || 0)} />
           </Field>
-          <Field label="対局の間隔 (秒)">
-            <TextField numeric align="right" width={80} value={String(interval)}
+          <Field stretch label="対局の間隔 (秒)">
+            <TextField numeric align="right" value={String(interval)}
                        onChange={(x) => setInterval(+x || 0)} />
           </Field>
           {/* こちらから申し込むときのレート有無。GGS ではアカウント単位の
