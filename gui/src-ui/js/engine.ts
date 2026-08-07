@@ -67,7 +67,8 @@ export function useEngineTurn(g: Game) {
   const turnRef = useRef(false);
   const {
     playing, view: gv, engineSides, setThinking, setThinkSecs, setThinkTotal,
-    setMoveSource, setView: applyView, setPlaying, say, setLastEval, maybeLearn, setStat,
+    setMoveSource, setView: applyView, setPlaying, say, setLastEval, setLastEvalSide,
+    maybeLearn, setStat,
   } = g;
 
   useEffect(() => {
@@ -110,6 +111,9 @@ export function useEngineTurn(g: Game) {
         // どのくらい良いと見て指したかを残す。
         // 見出し (「KUROOBI の評価」) は付けない。狭い幅では見出しだけ畳んで
         // 数字を残したいので、出し分けは表示側の仕事にする
+        // どちらの色で指したかも残す。白に決め打ちすると、KUROOBI が黒でも
+        // 両方でも白の行に出てしまう
+        setLastEvalSide(side);
         setLastEval(Number.isFinite(r.value)
           ? `${r.value > 0 ? '+' : ''}${
               r.exact ? r.value.toFixed(0) : r.value.toFixed(1)} 石`
@@ -131,7 +135,8 @@ export function useEngineTurn(g: Game) {
 
     return () => clearInterval(timer);
   }, [playing, gv, engineSides, setThinking, setThinkSecs, setThinkTotal,
-      setMoveSource, applyView, setPlaying, say, setLastEval, maybeLearn, setStat]);
+      setMoveSource, applyView, setPlaying, say, setLastEval, setLastEvalSide,
+      maybeLearn, setStat]);
 }
 
 /** 評価値グラフの 1 点。

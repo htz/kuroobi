@@ -266,10 +266,13 @@ export function PlayerRow({ color, name, rate, dev, meta, clock, active, discs, 
           {rate.toFixed(1)}{dev !== undefined && <span style={{ opacity: .7, marginLeft: 4 }}>±{dev}</span>}
         </span>
       )}
-      {meta && <span style={{ color: 'var(--sub)', fontSize: 'var(--fs-6)' }}>{meta}</span>}
+      {/* 石数は名前の隣に固定する。**長さの変わる meta を左に置くと、常時
+          出ている石数が左右に動いて目障りになる。** meta は右へ回す */}
       {discs !== undefined && <span style={{ fontSize: 'var(--fs-1)', fontWeight: 700 }}>{discs}</span>}
+      <span style={{ flex: 1 }} />
+      {meta && <span style={{ color: 'var(--sub)', fontSize: 'var(--fs-6)' }}>{meta}</span>}
       {clock && <span style={{
-        marginLeft: 'auto', fontSize: 'var(--fs-4)', fontWeight: active ? 700 : 400,
+        fontSize: 'var(--fs-4)', fontWeight: active ? 700 : 400,
         padding: '3px 12px', borderRadius: 'var(--r-pill)',
         background: active ? 'var(--accent)' : 'var(--bg)',
         color: active ? 'var(--on-accent)' : 'var(--sub)',
