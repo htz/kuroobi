@@ -75,6 +75,10 @@ button:disabled, button[aria-disabled="true"] { cursor:default; }
 .k-cell:hover .k-legal { opacity:.75; }
 .k-cell:hover .k-eval { opacity:1; }
 
+/* 設定の窓は中身の地が --bg なので、欄も --bg のままだと面が消える。
+ * 設計はここだけ欄を 1 段明るくしている。 */
+.k-settings .k-input, .k-settings .k-select { background:var(--panel) !important; }
+
 /* 入力。枠だけ明るくする（面は変えない — 打ち込む場所は静かなほうがよい） */
 .k-input { transition:border-color var(--dur) var(--ease); }
 .k-input:hover:not([readonly]) { border-color:var(--sub); }

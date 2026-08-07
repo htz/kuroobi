@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useState, type ReactNode } from 'react';
 import { api, emitApp, type KifuFrame, type ThreadsView } from './api';
 import { TATAMI, type Prefs, type Theme } from './prefs';
-import { Modal, Overlay, Section, WindowBar } from './components/layout';
+import { Modal, Overlay, Section } from './components/layout';
 import { Button, Segmented, Select, TextField } from './components/primitives';
 import { Icon } from './components/Icons';
 import { Board } from './components/board';
@@ -207,7 +207,18 @@ export function Settings({ prefs, setPref }: {
 
   return (
     <div style={{ height: '100%', display: 'flex', flexDirection: 'column', background: 'var(--bg)' }}>
-      <WindowBar title="設定" />
+      {/* 設計の設定は**窓の帯もタブの帯も 44px の --panel**。主画面の窓の帯
+          (32px / --bg) とは別物なので、共有の WindowBar は使わない。
+          信号機ぶんは --w-signals で空け、題名は窓の中央に置く */}
+      <div data-tauri-drag-region className="k-drag" style={{
+        height: 'var(--h-bar)', flex: 'none', background: 'var(--panel)',
+        borderBottom: '1px solid var(--border)', display: 'flex', alignItems: 'center',
+        padding: '0 var(--w-signals)',
+      }}>
+        <span data-tauri-drag-region style={{
+          margin: '0 auto', fontSize: 'var(--fs-4)', fontWeight: 600, color: 'var(--text)',
+        }}>設定</span>
+      </div>
       {/* **タブの帯だけが明るい面 (--card)。** 窓の帯と中身はどちらも --bg で、
           間に挟まる帯が浮いて見える形 — 設計の絵がそうなっている。
           逆にすると (帯が暗く中身が明るい) タブが窓の帯と地続きになり、
@@ -223,7 +234,7 @@ export function Settings({ prefs, setPref }: {
       <div style={{
         flex: 'none', height: 'var(--h-bar)', display: 'flex',
         alignItems: 'center', justifyContent: 'center', gap: 'var(--sp-1)',
-        padding: '0 var(--sp-5)', background: 'var(--card)',
+        padding: '0 var(--sp-5)', background: 'var(--panel)',
         borderBottom: '1px solid var(--border)',
       }}>
         {TABS.map(([v, label]) => {
@@ -232,7 +243,7 @@ export function Settings({ prefs, setPref }: {
             <button key={v} type="button" className={'k-press' + (on ? ' k-on' : '')}
                     onClick={() => setTab(v)} aria-pressed={on}
                     style={{
-                      height: 'var(--h-ctrl)', padding: '0 var(--sp-3)', border: 0,
+                      height: 'var(--h-ctrl)', padding: '0 14px', border: 0,
                       borderRadius: 'var(--r-2)', fontSize: 'var(--fs-5)',
                       background: on ? 'var(--accent-dim)' : 'transparent',
                       color: on ? 'var(--on-accent)' : 'var(--sub)',
@@ -245,7 +256,9 @@ export function Settings({ prefs, setPref }: {
         flex: 1, minHeight: 0, background: 'var(--bg)',
         display: 'flex', flexDirection: 'column', overflow: 'hidden',
       }}>
-        <div className="k-scroll" style={{ flex: 1, minHeight: 0, padding: 'var(--sp-5)' }}>
+        <div className="k-scroll k-settings" style={{
+          flex: 1, minHeight: 0, padding: 'var(--sp-4) var(--sp-3) var(--sp-5)',
+        }}>
 
         {/* 見え方だけの設定。エンジンの動きには関わらないので、
             バックエンドに送らず localStorage に置く */}
@@ -371,15 +384,15 @@ export function Settings({ prefs, setPref }: {
                     if (p) await change(kind, p);
                   }}>選択…</Button>
                 </Row2>
-                {/* 良し悪しは欄の直下に置く。欄の列に揃えるので左に見出しぶんを空ける */}
+                {/* 良し悪しは欄の直下、**欄の列に揃える** (設計も 96px 空けている) */}
                 <div style={{
                   marginLeft: 'calc(var(--w-label) + var(--sp-3))',
-                  display: 'flex', alignItems: 'center', gap: 6,
-                  fontSize: 'var(--fs-7)', color: info?.ok ? 'var(--ok)' : 'var(--bad)',
+                  display: 'flex', alignItems: 'center', gap: 'var(--sp-2)',
+                  fontSize: 'var(--fs-6)', color: info?.ok ? 'var(--ok)' : 'var(--bad)',
                 }}>
                   <Icon name={info?.ok ? 'check' : 'alert'} size={12} />
                   {info?.ok
-                    ? ['読み込み済み', fmtSize(info.size), info.kind].filter(Boolean).join('・')
+                    ? ['読み込み済み', fmtSize(info.size), info.kind].filter(Boolean).join(' · ')
                     : NOT_FOUND[kind]}
                 </div>
               </div>
@@ -398,7 +411,7 @@ export function Settings({ prefs, setPref }: {
             </Row2>
             {/* 説明は操作の下、節の幅いっぱい (設計の絵と同じ)。欄の列に
                 字下げすると、欄の補足なのか節の説明なのかが曖昧になる */}
-            <p style={{ margin: 0, fontSize: 'var(--fs-7)', color: 'var(--sub)', lineHeight: 1.8 }}>
+            <p style={{ margin: 0, fontSize: 'var(--fs-6)', color: 'var(--sub)', lineHeight: 1.8 }}>
               ローカル対局・検討・学習の取り込みが使う並列数です。自動 = コア数の半分 ({th.auto})。
               GGS 対局用は GGS の設定にあります (別々に動くので、両方が同時に動くと合計ぶんの CPU を使います)。
             </p>
@@ -406,19 +419,21 @@ export function Settings({ prefs, setPref }: {
         )}
         </>}
 
-        </div>
         {/* OK ボタンは置かない (変更は即時に反映される)。それが分からないと
-            「決定していないのでは」と不安になるので、下の帯で言い切る */}
+            「決定していないのでは」と不安になるので言い切る。
+            **帯ではなく中身の最後の行**にする — 設計も上に罫を引いた行 */}
         <div style={{
-          flex: 'none', display: 'flex', alignItems: 'center', gap: 'var(--sp-3)',
-          padding: 'var(--sp-3) var(--sp-5)', borderTop: '1px solid var(--border-weak)',
+          display: 'flex', alignItems: 'center', gap: 'var(--sp-3)',
+          margin: '0 var(--sp-3)', paddingTop: 'var(--sp-4)',
+          borderTop: '1px solid var(--border-weak)',
         }}>
           {tab === 'engine' && (
             <Button size="field" variant="ghost" onClick={() => setReset(true)}>既定に戻す</Button>
           )}
-          <span style={{ marginLeft: 'auto', fontSize: 'var(--fs-7)', color: 'var(--sub)' }}>
+          <span style={{ marginLeft: 'auto', fontSize: 'var(--fs-6)', color: 'var(--sub)' }}>
             変更は即時に反映されます
           </span>
+        </div>
         </div>
       </div>
       {reset && (
@@ -469,7 +484,7 @@ function Row2({ label, children }: { label: string; children: ReactNode }) {
   return (
     <div style={{ display: 'flex', alignItems: 'center', gap: 'var(--sp-3)', minHeight: 'var(--h-field)' }}>
       <span style={{ width: 'var(--w-label)', flex: 'none', textAlign: 'right',
-                     fontSize: 'var(--fs-6)', color: 'var(--sub)' }}>{label}</span>
+                     fontSize: 'var(--fs-5)', color: 'var(--sub)' }}>{label}</span>
       {children}
     </div>
   );
