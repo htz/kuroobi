@@ -131,9 +131,10 @@ export function PasteKifu({ onLoad, onFile, onCancel }: {
 
 // 画面に出す名前は resource_status が返すものと同じにする
 // (食い違うと状態が引けず、パスも出なくなる)
+// 並びは設計と同じ「NNUE → 線形評価 → 定石」。KUROOBI が主に読むものが上。
 const KINDS: [string, string][] = [
-  ['weights', '線形評価の重み'],
   ['nnue', 'NNUE の重み'],
+  ['weights', '線形評価の重み'],
   ['book', '定石'],
 ];
 
@@ -191,7 +192,7 @@ export function Settings({ learnOn, onLearn, onChanged, onClose, prefs, setPref 
       {/* 見出しは動かさない。長い設定を下まで見ているときに「閉じる」が
           画面外へ出ると、Esc を知らない人が閉じられなくなる */}
       <div role="dialog" aria-modal style={{
-        width: 560, maxHeight: '80vh', borderRadius: 'var(--r-4)', background: 'var(--card)',
+        width: 480, maxHeight: '80vh', borderRadius: 'var(--r-4)', background: 'var(--card)',
         border: '1px solid var(--border)', boxShadow: 'var(--sh-2)',
         display: 'flex', flexDirection: 'column', minHeight: 0, overflow: 'hidden',
       }}>
@@ -283,10 +284,6 @@ export function Settings({ learnOn, onLearn, onChanged, onClose, prefs, setPref 
 
         {th && (
           <Section title="ローカル探索のスレッド数">
-            <p style={{ margin: 0, fontSize: 'var(--fs-6)', color: 'var(--sub)', lineHeight: 1.8 }}>
-              ローカル対局・検討・学習の取り込みが使う並列数です。自動 = コア数の半分 ({th.auto})。
-              GGS 対局用は GGS の設定にあります (別々に動くので、両方が同時に動くと合計ぶんの CPU を使います)。
-            </p>
             <Row2 label="スレッド">
               <Select width={140} value={th.set == null ? 'auto' : String(th.set)}
                       onChange={(v) => void setThreads(v === 'auto' ? null : +v)}
@@ -294,21 +291,29 @@ export function Settings({ learnOn, onLearn, onChanged, onClose, prefs, setPref 
                                 ...Array.from({ length: th.auto * 2 }, (_, i) =>
                                   [String(i + 1), String(i + 1)] as [string, string])]} />
             </Row2>
+            {/* 説明は操作の下。上に置くと、読まないと何を選ぶ場所か分からない
+                欄に見える (欄そのものは「スレッド」で足りている) */}
+            <p style={{ margin: 0, marginLeft: 'calc(var(--w-label) + var(--sp-3))',
+                        fontSize: 'var(--fs-7)', color: 'var(--sub)', lineHeight: 1.8 }}>
+              ローカル対局・検討・学習の取り込みが使う並列数です。自動 = コア数の半分 ({th.auto})。
+              GGS 対局用は GGS の設定にあります (別々に動くので、両方が同時に動くと合計ぶんの CPU を使います)。
+            </p>
           </Section>
         )}
         </>}
 
         {tab === 'learn' && (
         <Section title="定石の学習">
-          <p style={{ margin: 0, fontSize: 'var(--fs-6)', color: 'var(--sub)', lineHeight: 1.8 }}>
-            終局した対局 (ローカル対局と GGS の両方) を定石の学習に取り込みます。
-            負けた展開は次から自然に避けられるようになります。
-            学習分は定石とは別のファイル (book_learn.txt) に貯まります。
-          </p>
           <Row2 label="取り込む">
             <Segmented value={learnOn ? 'on' : 'off'} onChange={(v) => onLearn(v === 'on')}
                        options={[{ value: 'on', label: 'する' }, { value: 'off', label: 'しない' }]} />
           </Row2>
+          <p style={{ margin: 0, marginLeft: 'calc(var(--w-label) + var(--sp-3))',
+                      fontSize: 'var(--fs-7)', color: 'var(--sub)', lineHeight: 1.8 }}>
+            終局した対局 (ローカル対局と GGS の両方) を定石の学習に取り込みます。
+            負けた展開は次から自然に避けられるようになります。
+            学習分は定石とは別のファイル (book_learn.txt) に貯まります。
+          </p>
         </Section>
         )}
         </div>
