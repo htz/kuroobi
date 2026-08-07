@@ -12,7 +12,7 @@ import { GgsChat, GgsConsole, GgsScreen } from './GgsScreens';
 import { Confirm, PasteKifu } from './Dialogs';
 import { Board } from './components/board';
 import { EvalGraph, KifuTable, MoveScrub, ScoreRow, StoneDot } from './components/data';
-import { JobList, Meter, Nav, NAV_LOCAL, StatusChip, ggsNav, Toasts, type NavId, type Toast } from './components/ggs';
+import { GgsStatus, JobList, Meter, Nav, NAV_LOCAL, StatusChip, ggsNav, Toasts, type NavId, type Toast } from './components/ggs';
 import { Button, Progress, Segmented, Toggle } from './components/primitives';
 import { Icon } from './components/Icons';
 import { Strength } from './components/strength';
@@ -364,7 +364,9 @@ export function App() {
       <Main inset={dockOpen && !isGgs}>
       <Toolbar
           dock={isGgs ? undefined : { open: dockOpen, onToggle: () => setDockOpen(o => !o) }}
-          aux={isGgs || isBook ? undefined : <Toggle checked={g.autoHint} onChange={g.setAutoHint} label="評価値" />}>
+          aux={isBook ? undefined
+            : isGgs ? (conn === 'online' && ggs.snap ? <GgsStatus snap={ggs.snap} /> : undefined)
+            : <Toggle checked={g.autoHint} onChange={g.setAutoHint} label="評価値" />}>
           {isBook ? (
             <>
               <Button disabled={!book.line.length} onClick={book.back}>戻る</Button>

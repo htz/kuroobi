@@ -3,6 +3,7 @@ import React from 'react';
  * props は {name, label, onClick, size} — label が title と aria-label の両方になり、
  * onClick は引数を取らない。 */
 import { Icon, IconButton, type IconName } from './Icons';
+import type { GgsSnapshot } from '../types';
 import { Badge, Dot, Button, Select, TextField } from './primitives';
 import logo from '../../assets/kuroobi.svg?raw';
 // 値の実体は 1 つ。設計側の state.ts に写しがあったが、定数が 2 か所にあると
@@ -607,3 +608,40 @@ export function StatusChip({ label, unread, active, onClick }: {
     </button>
   );
 }
+
+/* ============ GGS の状態の帯 ============
+ *
+ * 設計の GGS 画面は上端に「自分の名前・両プールのレート・いまの強さ・
+ * 待機モード」を並べている。**GGS で打つときに知りたいのはこの 4 つ**で、
+ * どれも別の画面へ行かないと分からなかった (レートはプレイヤー、強さと
+ * 待機モードは GGS の設定)。
+ *
+ * ツールバーの `aux` に置くので 940px 以下では落ちる — 落ちて困る操作は
+ * 無く、全部ただの表示 (規則 8)。
+ */
+export function GgsStatus({ snap }: { snap: GgsSnapshot }) {
+  const e = snap.engine;
+  return (
+    <>
+      {snap.my_ranks.map((r) => (
+        <span key={r.gtype} style={{ fontSize: 'var(--fs-6)', color: 'var(--sub)' }}>
+          {POOL_LABEL[r.gtype] ?? r.gtype}{' '}
+          <b style={{ color: 'var(--text)', fontWeight: 600, fontVariantNumeric: 'tabular-nums' }}>
+            {r.rating.toFixed(0)}
+          </b>
+          {/* レートには必ず偏差を添える (規則 29) */}
+          <span style={{ opacity: .7, marginLeft: 3 }}>±{Math.round(r.dev)}</span>
+        </span>
+      ))}
+      <span style={{ fontSize: 'var(--fs-6)', color: 'var(--sub)', fontVariantNumeric: 'tabular-nums' }}>
+        強さ <b style={{ color: 'var(--text)', fontWeight: 600 }}>
+          深さ{e.depth} / 読切{e.solve}{e.band > 0 ? ` / 選択読み+${e.band}` : ''}
+        </b>
+      </span>
+      {snap.standby.enabled && <Tag tone="ok">待機モード</Tag>}
+    </>
+  );
+}
+
+/** レートプールの短い名前。GGS の 8 / 8r の 2 つだけ。 */
+const POOL_LABEL: Record<string, string> = { '8': '通常', '8r': 'ランダム' };
