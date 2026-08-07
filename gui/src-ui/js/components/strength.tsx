@@ -87,8 +87,10 @@ function Num({ label, value, min, max, zero, onChange }: {
                    const n = parseInt(t, 10);
                    if (Number.isFinite(n)) onChange(clamp(n));
                  }} />
-      <Button size="ctrl" disabled={value <= min} onClick={() => onChange(clamp(value - 1))}>−</Button>
-      <Button size="ctrl" disabled={value >= max} onClick={() => onChange(clamp(value + 1))}>＋</Button>
+      {/* 欄と同じ 32px。既定の ctrl (28px) だと、同じ行で欄より 4px 低くなり
+          底が揃わない。数を増減する釦は欄の一部なので、高さも欄に合わせる */}
+      <Button size="field" disabled={value <= min} onClick={() => onChange(clamp(value - 1))}>−</Button>
+      <Button size="field" disabled={value >= max} onClick={() => onChange(clamp(value + 1))}>＋</Button>
       {/* 0 に意味のある欄だけ、0 のときにその意味を添える */}
       {zero && value === 0 && (
         <span style={{ fontSize: 'var(--fs-7)', color: 'var(--sub)' }}>{zero}</span>
