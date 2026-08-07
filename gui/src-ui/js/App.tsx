@@ -566,17 +566,22 @@ export function App() {
               g.setCustom(v);
               g.setLevel('custom');
             }} />
-            <div style={{ display: 'flex', alignItems: 'center', gap: 'var(--sp-3)' }}>
-              <span style={{ fontSize: 'var(--fs-6)', color: 'var(--sub)' }}>定石</span>
-              <Segmented value={g.useBook ? 'on' : 'off'} disabled={!g.hasBook}
+            {/* 名前と「なぜ押せないか」を 1 行に、選ぶものはその下に全幅で。
+                横に並べると 290px の枠では選択肢が中身の幅まで縮み、直し方の
+                文言だけが釦の下に離れて置かれて、対応が読めなくなる (規則 61) */}
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 'var(--sp-2)' }}>
+              <div style={{ display: 'flex', alignItems: 'baseline', gap: 'var(--sp-2)' }}>
+                <span style={{ fontSize: 'var(--fs-5)' }}>定石</span>
+                {!g.hasBook && (
+                  <span style={{ fontSize: 'var(--fs-6)', color: 'var(--gold)' }}>
+                    — ファイルがありません (設定から指定できます)
+                  </span>
+                )}
+              </div>
+              <Segmented fill value={g.useBook ? 'on' : 'off'} disabled={!g.hasBook}
                          onChange={(x) => g.setUseBook(x === 'on')}
                          options={[{ value: 'on', label: '使う' }, { value: 'off', label: '使わない' }]} />
             </div>
-            {!g.hasBook && (
-              <span style={{ fontSize: 'var(--fs-6)', color: 'var(--sub)' }}>
-                — ファイルがありません (設定から指定できます)
-              </span>
-            )}
           </Section>
         )}
         {tab === '学習' && (
