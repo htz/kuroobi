@@ -208,36 +208,38 @@ export function Settings({ prefs, setPref }: {
   return (
     <div style={{ height: '100%', display: 'flex', flexDirection: 'column', background: 'var(--bg)' }}>
       <WindowBar title="設定" />
+      {/* **タブの帯は窓の帯と同じ地に置く。** 設計の絵は 窓の帯 + タブ が
+          ひと続きの暗い帯で、その下から中身の面 (--card) が始まる。
+          中身と同じ地に置くと、タブが節の見出しに見えて層が潰れる。
+
+          **タブは Segmented ではない。** 絵は囲みの枠を持たず、字を並べて
+          選ばれているものだけを塗る形。Segmented の囲みは「並んだ選択肢の
+          1 つ」を示す部品で、画面を切り替えるタブとは役目が違う
+          (規則 40 は選択肢の列の話)。 */}
+      <div style={{
+        flex: 'none', display: 'flex', justifyContent: 'center', gap: 'var(--sp-1)',
+        padding: '0 var(--sp-5) var(--sp-3)', background: 'var(--bg)',
+        borderBottom: '1px solid var(--border)',
+      }}>
+        {TABS.map(([v, label]) => {
+          const on = tab === v;
+          return (
+            <button key={v} type="button" className={'k-press' + (on ? ' k-on' : '')}
+                    onClick={() => setTab(v)} aria-pressed={on}
+                    style={{
+                      height: 'var(--h-ctrl)', padding: '0 var(--sp-3)', border: 0,
+                      borderRadius: 'var(--r-2)', fontSize: 'var(--fs-5)',
+                      background: on ? 'var(--accent-dim)' : 'transparent',
+                      color: on ? 'var(--on-accent)' : 'var(--sub)',
+                      fontWeight: on ? 600 : 400,
+                    }}>{label}</button>
+          );
+        })}
+      </div>
       <div style={{
         flex: 1, minHeight: 0, background: 'var(--card)',
         display: 'flex', flexDirection: 'column', overflow: 'hidden',
       }}>
-        {/* 節を縦に積むと下まで巻かないと何があるか分からない。区分はタブで
-            分ける (設計の 設定 と同じ形)。GGS は左メニューに行き先があるので
-            ここには置かない — 同じ設定を 2 か所に出さない (規則 58) */}
-        {/* **タブは Segmented ではない。** 設計の絵は囲みの枠を持たず、
-            字を並べて選ばれているものだけを塗る形。Segmented の囲みは
-            「並んだ選択肢の 1 つ」を示す部品で、画面を切り替えるタブとは
-            見た目を分けてある (規則 40 は選択肢の列の話)。 */}
-        <div style={{
-          flex: 'none', display: 'flex', justifyContent: 'center', gap: 'var(--sp-1)',
-          padding: 'var(--sp-3) var(--sp-5)', borderBottom: '1px solid var(--border-weak)',
-        }}>
-          {TABS.map(([v, label]) => {
-            const on = tab === v;
-            return (
-              <button key={v} type="button" className={'k-press' + (on ? ' k-on' : '')}
-                      onClick={() => setTab(v)} aria-pressed={on}
-                      style={{
-                        height: 'var(--h-ctrl)', padding: '0 var(--sp-3)', border: 0,
-                        borderRadius: 'var(--r-2)', fontSize: 'var(--fs-5)',
-                        background: on ? 'var(--accent-dim)' : 'transparent',
-                        color: on ? 'var(--on-accent)' : 'var(--sub)',
-                        fontWeight: on ? 600 : 400,
-                      }}>{label}</button>
-            );
-          })}
-        </div>
         <div className="k-scroll" style={{ flex: 1, minHeight: 0, padding: 'var(--sp-5)' }}>
 
         {/* 見え方だけの設定。エンジンの動きには関わらないので、
