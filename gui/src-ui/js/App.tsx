@@ -438,8 +438,21 @@ export function App() {
                     flip={flipped(prefs.facing, '')} onSettings={() => void openWindow('settings')} />
         ) : (
         <div style={{ flex: 1, minHeight: 0, display: 'flex', flexDirection: 'column', padding: '0 var(--sp-4)' }}>
-          <div style={{ flex: 1, minHeight: 0, display: 'grid', placeItems: 'center', padding: 'var(--sp-2) 0' }}>
-            <div style={{ height: '100%', aspectRatio: '1 / 1', maxWidth: '100%' }}>
+          {/* 行に minmax(0,1fr) を入れて**高さを確定させる**。既定の auto だと
+              行の高さが中身で決まり、中の height:100% の基準が定まらない
+              (基準が無いと auto 扱いになり、svg が固有の 880px で描かれて
+              下へはみ出す)。はみ出しは全部下に出るので、石数の行と手数の帯に
+              重なって初めて気付く (規則 77) */}
+          <div style={{
+            flex: 1, minHeight: 0, display: 'grid', placeItems: 'center',
+            gridTemplateRows: 'minmax(0, 1fr)', gridTemplateColumns: 'minmax(0, 1fr)',
+            padding: 'var(--sp-2) 0',
+          }}>
+            {/* maxHeight も要る。器が横長のときは maxWidth が効くが、**器が低く
+                  なると grid の行が中身の大きさで決まり**、svg が固有の大きさ
+                  (880px) で描かれて下へはみ出す。はみ出しは全部下に出るので
+                  石数の行と手数の帯に重なって初めて気付く (規則 77) */}
+              <div style={{ height: '100%', maxHeight: '100%', aspectRatio: '1 / 1', maxWidth: '100%' }}>
               {v && <Board cells={cellsOf(v)} legal={v.legal} last={v.last} evals={evals}
                            coords={prefs.coords} grain={prefs.grain}
                            // 検討では「自分の色」が無いので、auto は黒が下のまま
