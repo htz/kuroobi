@@ -44,11 +44,25 @@ const SIDES = [
   { value: 'off' as const, label: 'なし' },
 ];
 
+/** いま実際に行ける行き先へ読み替える。左メニューから消えた行に居座らせない。 */
+function reachable(raw: NavId, conn: ReturnType<typeof connOf>): NavId {
+  if (conn === 'online') return raw === 'ggs-login' ? 'ggs-play' : raw;
+  return raw.startsWith('ggs-') && raw !== 'ggs-login' ? 'ggs-login' : raw;
+}
+
 export function App() {
   const g = useGame();
   const ggs = useGgs();
   const { prefs } = usePrefs();   // 書き換えは設定の窓が行う
-  const [nav, setNavRaw] = useState<NavId>('play');
+  const [navRaw, setNavRaw] = useState<NavId>('play');
+  const conn = connOf(ggs.snap?.conn);
+  /* 繋がり方が変わると左メニューの GGS の行が総入れ替わりになる (規則 10 —
+   * 未接続はログイン 1 行、接続後は 7 行)。**行が消えても居場所は残る**ので、
+   * ログインが通っているのにログイン画面が出たままだった (上の帯と下の帯は
+   * 「接続中」を出しているのに中央だけ古い)。いる行が消えたら、その時点で
+   * 行ける先へ読み替える。状態を書き換えず導くのは、繋がり方が先に変わって
+   * から描き直す順を保つため (効果の中で書き換えると 1 枚古い絵が挟まる)。 */
+  const nav = reachable(navRaw, conn);
   const study = nav === 'study';
   const isBook = nav === 'book';
   const isGgs = nav.startsWith('ggs');
@@ -73,7 +87,7 @@ export function App() {
   const [ask, setAsk] = useState<{ msg: string; done: (ok: boolean) => void } | null>(null);
   const confirm = useCallback(
     (msg: string) => new Promise<boolean>((done) => setAsk({ msg, done })),
-    []);
+    [setAsk]);
   // GGS 対局は最優先。走っている間はローカル対局も分析も断る
   const ggsMatch = ggsPlaying(ggs.snap);
   const graph = useGraph(g, ggsMatch, confirm);
@@ -106,12 +120,10 @@ export function App() {
   const setNav = useCallback((id: NavId) => {
     // チャットを離れるときに既読位置を進める。開いている間は 0 のままなので、
     // 離れた後に届いたぶんだけが未読として数えられる
-    if (nav === 'ggs-chat' && id !== 'ggs-chat') setChatSeen(chatTotal);
+    if (navRaw === 'ggs-chat' && id !== 'ggs-chat') setChatSeen(chatTotal);
     setNavRaw(id);
     if (id === 'play' || id === 'study') setMode(id === 'study' ? 'study' : 'vs');
-  }, [setMode, nav, chatTotal]);
-
-  const conn = connOf(ggs.snap?.conn);
+  }, [setMode, navRaw, chatTotal]);
 
   const book = useBookBrowse(isBook);
   const { items: learnLog, reload: learnLogReload } = useLearnLog(
