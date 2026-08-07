@@ -1121,8 +1121,16 @@ async fn eval_at(app: State<'_, App>, n: usize, depth: u32) -> Result<EvalPoint,
         // 実害も出ていた: 再計算中の定石は未評価 (0.000) をそのまま返し、
         // 実戦から学習した分は終局石差を根まで書き戻した値で、どちらも
         // 「その局面の評価」ではないのにグラフへ出ていた。
+        // **値は必ず探索で出す** (上の理由)。ただし「その局面が定石にあるか」は
+        // 別の話で、規則 19 はグラフの点を 定石 / 読切 / 探索 の 3 色で塗り
+        // 分けると決めている。出所を見ずに一律 false を返していたので、定石を
+        // 「使う」にしていても金の点が 1 つも出なかった (ユーザー指摘)。
+        // 値は探索のまま、**印だけ立てる** — こうすれば序盤のどこまでが定石で
+        // 覆われているかが読め、未評価の 0.000 や書き戻した終局石差を
+        // グラフへ持ち込む害も起きない。
+        let in_book = e.book_node(&board).is_some_and(|(mv, _)| !mv.is_empty());
         let mv = e.eval_position(&board, depth);
-        (mv.value, mv.exact, false, true)
+        (mv.value, mv.exact, in_book, true)
     })
     .await
     .map_err(|e| e.to_string())?;
