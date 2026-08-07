@@ -49,9 +49,14 @@ export function GgsScreen({ nav, snap, onNav, prefs, onKifu }: {
 
 /* 浮く箱の中の入力ラベル。節 (1px 罫つきの見出し) はコンテンツ領域のもので、
  * 340px の箱の中に置くと罫が箱を横切って見出しに見えてしまう */
-function Field({ label, children }: { label: string; children: React.ReactNode }) {
+/* 縦並びの中では、`alignItems` を `flex-start` にすると中身が自分の幅まで
+ * 縮む (TextField の `flex:1` は縦並びでは高さの話になる)。選択肢の幅を
+ * 内容で決めたい欄はそれでよいが、**打ち込む欄は箱いっぱいに伸ばす** —
+ * 半分の幅で止まっている入力欄は、押せる場所に見えない。 */
+function Field({ label, children, stretch }: { label: string; children: React.ReactNode; stretch?: boolean }) {
   return (
-    <label style={{ display: 'flex', flexDirection: 'column', gap: 'var(--sp-2)', alignItems: 'flex-start' }}>
+    <label style={{ display: 'flex', flexDirection: 'column', gap: 'var(--sp-2)',
+                    alignItems: stretch ? 'stretch' : 'flex-start' }}>
       <span style={{ fontSize: 'var(--fs-6)', color: 'var(--sub)' }}>{label}</span>
       {children}
     </label>
@@ -92,8 +97,8 @@ function GgsLogin() {
         <div style={{ fontSize: 'var(--fs-6)', color: 'var(--sub)', lineHeight: 1.7 }}>
           skatgame.net:5000 — ログインに成功するとキーチェーンに保存され、次回から自動ログインします
         </div>
-        <Field label="ログイン名"><TextField value={user} onChange={setUser} /></Field>
-        <Field label="パスワード"><TextField value={pw} password onChange={setPw} /></Field>
+        <Field stretch label="ログイン名"><TextField value={user} onChange={setUser} /></Field>
+        <Field stretch label="パスワード"><TextField value={pw} password onChange={setPw} /></Field>
         <div style={{ display: 'flex', alignItems: 'center', gap: 'var(--sp-3)' }}>
           <span style={{ flex: 1, fontSize: 'var(--fs-6)', color: 'var(--bad)' }}>{status}</span>
           <Button variant="primary" onClick={() => void connect()}>ログイン</Button>
