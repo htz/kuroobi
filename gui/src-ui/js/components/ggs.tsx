@@ -146,7 +146,7 @@ export function Meter({ icon, label, value, unit, ratio, note }: {
       {/* 48px の列に残すのは絵と 4px の溝だけ。文字は .k-meter-text が
           1040px で落とす。**絵はその外に出す** — 中に入れると一緒に消えて、
           何の溝なのか分からない棒が 2 本並ぶ */}
-      <div style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 'var(--fs-6)', color: 'var(--sub)' }}>
+      <div className="k-meter-head" style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 'var(--fs-6)', color: 'var(--sub)' }}>
         <Icon name={icon} size={13} />
         <span className="k-meter-text">{label}</span>
         <span className="k-meter-text" style={{ marginLeft: 'auto', color: 'var(--text)' }}>

@@ -8,8 +8,8 @@
   --bg:#16191d; --panel:#1e2329; --card:#252b33;
   --border:#313943; --border-weak:#232932;
   --text:#e8ebee; --sub:#8b96a2;
-  --accent:#4d9fff; --accent-dim:#2d5f99; --hover:rgba(255,255,255,.06);
-  --hover-on:rgba(255,255,255,.03);   /* 選ばれているものの hover。すでに濃いので --hover より弱く */
+  --accent:#4d9fff; --accent-dim:#2d5f99; --hover:rgba(255,255,255,.10);
+  --hover-on:rgba(255,255,255,.05);   /* 選ばれているものの hover。すでに濃いので --hover より弱く */
   --track:rgba(255,255,255,.09);      /* バーの溝。状態の色（--hover）を面に使わない */
   --board:#77914e; --board-dark:#3f4f2c; --line:#3d5226; --grain:#33421d;
   --gold:#ffd479; --ok:#8bc34a; --bad:#ef7a7a;
@@ -80,7 +80,7 @@
   --bg:#faf8f3; --panel:#f2efe8; --card:#ffffff;
   --border:#ddd8cd; --border-weak:#e8e3d9;
   --text:#1e2124; --sub:#7d8794;
-  --accent:#2b6fd0; --accent-dim:#2b6fd0; --hover:rgba(0,0,0,.045); --hover-on:rgba(0,0,0,.025); --track:rgba(0,0,0,.10);
+  --accent:#2b6fd0; --accent-dim:#2b6fd0; --hover:rgba(0,0,0,.075); --hover-on:rgba(0,0,0,.04); --track:rgba(0,0,0,.10);
   --board:#8fa661; --board-dark:#4a3323; --line:#3f5323; --grain:#5c6b38;
   --stone-shadow:rgba(0,0,0,.22);
   --board-hint:rgba(0,0,0,.34);
@@ -98,7 +98,7 @@
     --bg:#faf8f3; --panel:#f2efe8; --card:#ffffff;
     --border:#ddd8cd; --border-weak:#e8e3d9;
     --text:#1e2124; --sub:#7d8794;
-    --accent:#2b6fd0; --accent-dim:#2b6fd0; --hover:rgba(0,0,0,.045); --hover-on:rgba(0,0,0,.025); --track:rgba(0,0,0,.10);
+    --accent:#2b6fd0; --accent-dim:#2b6fd0; --hover:rgba(0,0,0,.075); --hover-on:rgba(0,0,0,.04); --track:rgba(0,0,0,.10);
     --board:#8fa661; --board-dark:#4a3323; --line:#3f5323; --grain:#5c6b38;
     --stone-shadow:rgba(0,0,0,.22);
     --board-hint:rgba(0,0,0,.34);

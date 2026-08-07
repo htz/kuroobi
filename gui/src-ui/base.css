@@ -45,20 +45,28 @@ button:disabled, button[aria-disabled="true"] { cursor:default; }
  *   選ばれているもの = 部品側のインライン style が持つ（.k-on は
  *            hover の効き方を弱める役だけ）
  *   disabled / aria-disabled = 変化しない
+ *
+ * ⚠ ここだけ !important を使う。部品は面の色を `background:` の一括指定で
+ * 書いており、一括指定は background-image を none に戻す。インラインは
+ * どんな選択子より強いので、!important 無しだと **hover が一切効かない**
+ * (実際にそうなっていて、押せる場所に乗せても何も起きなかった)。
+ * 面の色は部品が持ち、重ねる層はここが持つ、という分担を保つための例外。
  * ============================================================ */
 
-/* 押せる面すべての土台。Button / Segmented の駒 / IconButton / Select */
-.k-press { transition:background var(--dur) var(--ease), border-color var(--dur) var(--ease); }
-.k-press:hover:not(:disabled):not([aria-disabled="true"]) { background-image:linear-gradient(var(--hover), var(--hover)); }
-.k-press:active:not(:disabled):not([aria-disabled="true"]) { background-image:linear-gradient(var(--hover), var(--hover)), linear-gradient(var(--hover), var(--hover)); }
+/* 押せる面すべての土台。Button / Segmented の駒 / IconButton / Select。
+ * 重ねる層そのものは間を取らない (none ↔ 勾配は補間できないので、書いても
+ * 段差になる)。滑らかにしたいのは枠の色だけ。 */
+.k-press { transition:border-color var(--dur) var(--ease); }
+.k-press:hover:not(:disabled):not([aria-disabled="true"]) { background-image:linear-gradient(var(--hover), var(--hover)) !important; }
+.k-press:active:not(:disabled):not([aria-disabled="true"]) { background-image:linear-gradient(var(--hover), var(--hover)), linear-gradient(var(--hover), var(--hover)) !important; }
 /* 選ばれている駒・主ボタンは既に濃いので、hover は控えめに */
-.k-press.k-on:hover { background-image:linear-gradient(var(--hover-on), var(--hover-on)); }
+.k-press.k-on:hover { background-image:linear-gradient(var(--hover-on), var(--hover-on)) !important; }
 
 /* 一覧の行（棋譜・手合い・プレイヤー・ロビー・会話）。
  * 選ばれている行は部品側が背景と 2px の帯を持つので、ここは hover だけ。 */
-.k-row { transition:background var(--dur) var(--ease); cursor:pointer; }
-.k-row:hover { background-image:linear-gradient(var(--hover), var(--hover)); }
-.k-row[aria-current="true"]:hover, .k-row.k-on:hover { background-image:none; }
+.k-row { cursor:pointer; }
+.k-row:hover { background-image:linear-gradient(var(--hover), var(--hover)) !important; }
+.k-row[aria-current="true"]:hover, .k-row.k-on:hover { background-image:linear-gradient(var(--hover-on), var(--hover-on)) !important; }
 
 /* 盤のマス。合法手だけ反応する（押せない盤で手が動くと嘘になる）。
  * .k-cell が付くのは合法手かつ押せるときだけなので、指の形にしてよい */
@@ -138,6 +146,8 @@ button:disabled, button[aria-disabled="true"] { cursor:default; }
   .k-nav .k-nav-settings { width:32px; margin:0 auto; }
   /* 行と同じ左右 8px。12px のままだと中身が 24px しか残らない */
   .k-nav .k-nav-foot { padding:var(--sp-3) 8px; }
+  /* 文字が消えたあとの絵は左端に取り残されるので、数字と同じ真ん中に置く */
+  .k-nav .k-meter-head { justify-content:center; }
   .k-nav .k-nav-row { justify-content:center; padding:0; }
   /* ロゴを落としても帯は残す — 信号機の居場所とドラッグ領域なので */
 }
@@ -168,6 +178,6 @@ button:disabled, button[aria-disabled="true"] { cursor:default; }
 
 @media (prefers-reduced-motion: reduce) {
   .k-flip { animation:none; }
-  .k-press, .k-row, .k-input, .k-link, .k-cell circle { transition:none; }
+  .k-press, .k-input, .k-link, .k-cell circle { transition:none; }
   .k-nav-row, .k-dock { transition:none; }
 }
