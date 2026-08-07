@@ -80,7 +80,13 @@ export function Segmented<T extends string>({ value, options, onChange, size = '
             onClick={() => onChange?.(o.value)}
             className={cx('k-press', on && 'k-on')}
             style={{
-              flex: fill ? 1 : 'none', padding: '0 12px', border: 0, borderRadius: 'var(--r-1)', fontSize: FS[size],
+              flex: fill ? 1 : 'none', padding: '0 12px', borderRadius: 'var(--r-1)', fontSize: FS[size],
+              // ライトでは --card (#fff) と --bg (#faf8f3) の差がほとんど無く、
+              // 面の色だけでは選ばれている駒が見分けられない。**1px の罫で
+              // 縁取る** — 面の色を足すのではないので、状態の色を面に使わない
+              // 決まり (規則 44) にも触れない。選んでいない駒は同じ幅の
+              // 透明な罫を持たせて、切り替えで字が動かないようにする
+              border: '1px solid ' + (on ? 'var(--border)' : 'transparent'),
               background: on ? 'var(--card)' : 'transparent',
               color: on ? 'var(--text)' : 'var(--sub)', fontWeight: on ? 600 : 400,
               display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 6,
