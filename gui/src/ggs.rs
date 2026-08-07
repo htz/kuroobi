@@ -2648,7 +2648,9 @@ fn parse_dev_token(t: &str) -> Option<f32> {
         .chars()
         .take_while(|c| c.is_ascii_digit() || *c == '.')
         .collect();
-    head.parse::<f32>().ok().filter(|v| (0.0..1000.0).contains(v))
+    head.parse::<f32>()
+        .ok()
+        .filter(|v| (0.0..1000.0).contains(v))
 }
 
 fn parse_rating_token(t: &str) -> Option<f32> {
