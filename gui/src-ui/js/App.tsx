@@ -13,7 +13,7 @@ import { Confirm, PasteKifu } from './Dialogs';
 import { Board } from './components/board';
 import { EvalGraph, KifuTable, MoveScrub, ScoreRow, StoneDot } from './components/data';
 import { GgsStatus, JobList, Meter, Nav, NAV_LOCAL, StatusChip, ggsNav, Toasts, type NavId, type Toast } from './components/ggs';
-import { Button, Progress, Segmented, Toggle } from './components/primitives';
+import { Button, Dot, Progress, Segmented, Toggle } from './components/primitives';
 import { Icon } from './components/Icons';
 import { Strength } from './components/strength';
 import { BookDock, BookPane, useBookBrowse } from './BookScreen';
@@ -614,6 +614,15 @@ export function App() {
       {/* 短くて桁の決まっているものだけを置く。長さの読めない報せはトーストへ */}
         <StatusBar
           left={<>
+            {/* 分析は g.thinking を立てない (api.evalAt を局面ごとに呼ぶ) ので、
+                走っている印がどこにも出ていなかった。グラフの見出し行の進み具合は
+                帯の中の話で、**機械が動いているか**は下の帯が持つ (規則 11・76) */}
+            {graph.busy && (
+              <span style={{ display: 'flex', alignItems: 'center',
+                             gap: 'var(--sp-2)', color: 'var(--accent)' }}>
+                <Dot />分析中
+              </span>
+            )}
             {g.thinking && <StatusStat label="思考" value={g.thinkSecs.toFixed(1)} unit="s" />}
             {nodes > 0 && <StatusStat label="nodes" value={fmtNodes(nodes)} />}
             {nps > 0 && <StatusStat label="nps" value={(nps / 1e6).toFixed(1)} unit="Mnps" />}
@@ -634,6 +643,10 @@ export function App() {
             : isBook
             ? <StatusStat label="定石" value={book.node ? book.node.size.toLocaleString() + ' 局面' : '—'} />
             : <>
+              {/* 検討はいま何手目を見ているかが読めないと辿れない。手数の帯の
+                  目盛は 10 手ごとなので、正確な数字はここが持つ (規則 58 —
+                  ツールバーは操作だけで、数値は下の帯) */}
+              {study && v && <StatusStat label="棋譜" value={v.cursor} unit={`/ ${v.moves.length} 手`} />}
               <StatusStat label="定石" value={g.hasBook ? (g.useBook ? '有効' : '使わない') : 'なし'} />
               <StatusStat label="KUROOBI" value={lv} />
             </>} />
