@@ -113,7 +113,7 @@ export function BookPane({ b, coords, grain, flip, onSettings }: {
     return (
       <EmptyState title="定石がありません"
                   body="定石ファイルを読み込めていません。設定から場所を指定できます。"
-                  actions={<Button variant="primary" onClick={onSettings}>設定を開く</Button>} />
+                  actions={<Button size="field" variant="primary" onClick={onSettings}>設定を開く</Button>} />
     );
   }
   // 候補は評価値のマスとして出す。値の高いものが金の輪 (best)

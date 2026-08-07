@@ -96,20 +96,20 @@ export function KifuViewer({ title, kifu, onClose, onStudy }: KifuViewerProps) {
         )}
 
         <div style={{ display: 'flex', gap: 'var(--sp-2)', alignItems: 'center' }}>
-          <Button onClick={onClose}>閉じる</Button>
+          <Button size="field" onClick={onClose}>閉じる</Button>
           <span style={{ flex: 1 }} />
           {/* コピーと保存を落とさない — 検討へ直行するだけだと、棋譜を人に
               渡す道が消える */}
-          <Button disabled={!kifu} onClick={() => {
+          <Button size="field" disabled={!kifu} onClick={() => {
             void navigator.clipboard.writeText(kifu).catch(() => { /* 権限なし */ });
             setCopied(true);
             window.setTimeout(() => setCopied(false), 1200);
           }}>{copied ? 'コピーしました' : '棋譜をコピー'}</Button>
-          <Button disabled={!kifu}
+          <Button size="field" disabled={!kifu}
                   onClick={() => void ggsApi.saveKifu(kifu, 'kifu').catch(() => {})}>
             ファイルに保存
           </Button>
-          <Button variant="primary" disabled={!frames}
+          <Button size="field" variant="primary" disabled={!frames}
                   onClick={() => { onStudy(kifu); onClose(); }}>検討で開く</Button>
         </div>
       </div>

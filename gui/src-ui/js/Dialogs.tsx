@@ -17,8 +17,8 @@ export function Confirm({ title, body, ok = 'OK', danger, onOk, onCancel }: {
   return (
     <Overlay onClose={onCancel}>
       <Modal title={title} body={body} actions={<>
-        <Button onClick={onCancel}>やめる</Button>
-        <Button variant={danger ? 'danger' : 'primary'} onClick={onOk}>{ok}</Button>
+        <Button size="field" onClick={onCancel}>やめる</Button>
+        <Button size="field" variant={danger ? 'danger' : 'primary'} onClick={onOk}>{ok}</Button>
       </>} />
     </Overlay>
   );
@@ -38,8 +38,8 @@ export function PickOne({ title, body, options, ok = '開く', onOk, onCancel }:
                <Select value={v} options={options} onChange={setV} />
              </div>}
              actions={<>
-               <Button onClick={onCancel}>やめる</Button>
-               <Button variant="primary" disabled={!v} onClick={() => onOk(v)}>{ok}</Button>
+               <Button size="field" onClick={onCancel}>やめる</Button>
+               <Button size="field" variant="primary" disabled={!v} onClick={() => onOk(v)}>{ok}</Button>
              </>} />
     </Overlay>
   );
@@ -111,10 +111,10 @@ export function PasteKifu({ onLoad, onFile, onCancel }: {
         </div>
 
         <div style={{ display: 'flex', gap: 'var(--sp-2)', alignItems: 'center' }}>
-          <Button onClick={onFile}>ファイルから…</Button>
+          <Button size="field" onClick={onFile}>ファイルから…</Button>
           <span style={{ marginLeft: 'auto' }} />
-          <Button onClick={onCancel}>やめる</Button>
-          <Button variant="primary" disabled={!ok} onClick={() => onLoad(text)}>読み込む</Button>
+          <Button size="field" onClick={onCancel}>やめる</Button>
+          <Button size="field" variant="primary" disabled={!ok} onClick={() => onLoad(text)}>読み込む</Button>
         </div>
       </div>
     </Overlay>
@@ -269,7 +269,7 @@ export function Settings({ prefs, setPref }: {
                     読んでいるかとその直し方が別の場所に散る */}
                 <Row2 label={title}>
                   <TextField value={info?.p ?? ''} placeholder="未指定" invalid={!info?.ok} />
-                  <Button onClick={async () => {
+                  <Button size="field" onClick={async () => {
                     const p = await api.pickResource(kind);
                     if (p) await change(kind, p);
                   }}>選択…</Button>
@@ -320,7 +320,7 @@ export function Settings({ prefs, setPref }: {
           padding: 'var(--sp-3) var(--sp-5)', borderTop: '1px solid var(--border-weak)',
         }}>
           {tab === 'engine' && (
-            <Button variant="ghost" onClick={() => setReset(true)}>既定に戻す</Button>
+            <Button size="field" variant="ghost" onClick={() => setReset(true)}>既定に戻す</Button>
           )}
           <span style={{ marginLeft: 'auto', fontSize: 'var(--fs-7)', color: 'var(--sub)' }}>
             変更は即時に反映されます
