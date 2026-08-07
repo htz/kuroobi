@@ -178,9 +178,7 @@ function rowsOf(b: BookBrowse, key: string, depth: number, out: Row[]): void {
 }
 
 /** 手順と、その先の木。 */
-export function BookDock({ b, onStudy, decimals = 1 }: {
-  b: BookBrowse; onStudy: (kifu: string) => void; decimals?: number;
-}) {
+export function BookDock({ b, decimals = 1 }: { b: BookBrowse; decimals?: number }) {
   const n = b.node;
   const root = keyOf(b.line);
   const rows: Row[] = [];
@@ -213,8 +211,7 @@ export function BookDock({ b, onStudy, decimals = 1 }: {
           {rows.map((r) => (
             <BookRow key={r.key} r={r} open={b.open.has(r.key)} decimals={decimals}
                      onToggle={() => b.toggle(r.key)}
-                     onGo={() => b.goto(r.key)}
-                     onStudy={() => onStudy(r.key)} />
+                     onGo={() => b.goto(r.key)} />
           ))}
         </div>
         {n && n.moves.length > 0 && (
@@ -228,9 +225,8 @@ export function BookDock({ b, onStudy, decimals = 1 }: {
   );
 }
 
-function BookRow({ r, open, onToggle, onGo, onStudy, decimals = 1 }: {
-  r: Row; open: boolean; onToggle: () => void; onGo: () => void; onStudy: () => void;
-  decimals?: number;
+function BookRow({ r, open, onToggle, onGo, decimals = 1 }: {
+  r: Row; open: boolean; onToggle: () => void; onGo: () => void; decimals?: number;
 }) {
   // 先があるかは節を取るまで分からない。取れていて 0 手なら三角を出さない
   const leaf = r.child && r.child.moves.length === 0;
@@ -258,8 +254,8 @@ function BookRow({ r, open, onToggle, onGo, onStudy, decimals = 1 }: {
                   fontSize: 'var(--fs-3)', lineHeight: 1, borderRadius: 'var(--r-1)',
                 }}>{open ? '▾' : '▸'}</button>
       )}
-      <button type="button" onClick={onGo} onDoubleClick={onStudy}
-              title="押すとこの局面へ。2 度押すと検討で開く"
+      <button type="button" onClick={onGo}
+              title="押すとこの局面へ"
               style={{
                 flex: 1, minWidth: 0, display: 'flex', alignItems: 'center', gap: 'var(--sp-2)',
                 border: 0, background: 'transparent', cursor: 'pointer', padding: '0 var(--sp-1)',

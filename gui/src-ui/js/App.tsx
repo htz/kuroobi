@@ -386,13 +386,6 @@ export function App() {
             <>
               <Button disabled={!book.line.length} onClick={book.back}>戻る</Button>
               <Button disabled={!book.line.length} onClick={book.reset}>最初へ</Button>
-              {/* 定石で見つけた手順をそのまま検討へ。定石の先を自分で読ませる
-                  にはこの向きの道が要る (行きだけあって帰りが無かった) */}
-              <Button disabled={!book.line.length}
-                      onClick={() => {
-                        setNav('study');
-                        void loadFromText(book.line.map(sqName).join(''));
-                      }}>検討で開く</Button>
               <span style={{ marginLeft: 'var(--sp-3)', fontSize: 'var(--fs-6)', color: 'var(--sub)' }}>
                 {book.line.length ? book.line.length + ' 手目' : '初期局面'}
               </span>
@@ -412,14 +405,6 @@ export function App() {
                       onClick={() => void g.jumpTo(v!.cursor + 1)}>進む</Button>
               <Button disabled={!v || v.cursor >= v.moves.length}
                       onClick={() => void g.jumpTo(v!.moves.length)}>最後へ</Button>
-              {/* いまの局面から定石を辿る。ここが無いと、検討で見ている手順を
-                  初期局面から入れ直すしかない (打ち直しでしか行けない) */}
-              <Button disabled={!g.hasBook || !v}
-                      onClick={() => {
-                        book.goto(v!.moves.slice(0, v!.cursor)
-                          .filter((m): m is number => m != null).map(sqName).join(''));
-                        setNav('book');
-                      }}>定石で開く</Button>
             </>
           ) : (
             <>
@@ -537,8 +522,7 @@ export function App() {
       {/* 定石が無いときは空のドックも出さない (盤側が報せを出している) */}
       {isBook && book.node?.size !== 0 && (
         <Dock tabs={['定石']} active="定石" open={dockOpen}>
-          <BookDock b={book} decimals={prefs.decimals}
-                    onStudy={(kifu) => { setNav('study'); void loadFromText(kifu); }} />
+          <BookDock b={book} decimals={prefs.decimals} />
         </Dock>
       )}
 
