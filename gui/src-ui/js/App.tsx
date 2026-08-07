@@ -525,11 +525,10 @@ export function App() {
               flex: 'none', display: 'flex', gap: 'var(--sp-2)',
               padding: 'var(--sp-2) var(--sp-3)', borderTop: '1px solid var(--border-weak)',
             }}>
-              <Button size="chip" onClick={() => setPaste(true)}>貼り付け</Button>
-              <Button size="chip" onClick={() => void loadFromFile()}>読込</Button>
+              <Button onClick={() => setPaste(true)}>貼り付け</Button>
+              <Button onClick={() => void loadFromFile()}>読込</Button>
               {/* .ggf で保存すると、どちらがどの色か・結果・開始局面まで入る */}
-              <Button size="chip"
-                      onClick={() => void api.saveKifu(...ggfNames(g.side)).catch((e) => g.say('' + e))}>
+              <Button onClick={() => void api.saveKifu(...ggfNames(g.side)).catch((e) => g.say('' + e))}>
                 保存
               </Button>
             </div>

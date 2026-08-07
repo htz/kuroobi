@@ -96,7 +96,7 @@ export function LearnLog({ items, onOpen, onUndo }: {
                 値がその手を前提にしたままになる (書き戻しは連なっている) */}
             {shown && (
               <div style={{ display: 'flex', gap: 'var(--sp-2)', padding: 'var(--sp-1) 0 var(--sp-1) 20px' }}>
-                <Button size="chip" variant="danger" onClick={() => onUndo(e)}>
+                <Button variant="danger" onClick={() => onUndo(e)}>
                   この対局の取り込みを取り消す
                 </Button>
               </div>
