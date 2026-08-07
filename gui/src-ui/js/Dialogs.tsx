@@ -172,7 +172,7 @@ export function Settings({ prefs, setPref, ggs }: {
   /** GGS のスナップショット。GGS タブの中身に使う (未接続なら null)。 */
   ggs?: GgsSnapshot | null;
 }) {
-  const [tab, setTab] = useState<'engine' | 'view' | 'ggs' | 'more'>('engine');
+  const [tab, setTab] = useState<'engine' | 'view' | 'ggs'>('engine');
   const [reset, setReset] = useState(false);
   const [status, setStatus] = useState<[string, string, boolean, number, string][]>([]);
   const [th, setTh] = useState<ThreadsView | null>(null);
@@ -353,25 +353,21 @@ export function Settings({ prefs, setPref, ggs }: {
         {/* 設計どおり GGS の設定もこの窓に入れる。左メニューの行き先は
             落とした — 同じ設定へ行く道が 2 つあると、どちらが本物か
             分からなくなる (規則 58) */}
-        {tab === 'ggs' && (ggs
+        {/* **未接続でもスナップショットは返る** (conn が "disconnected" の
+            既定値)。`ggs` の有無で判ると、繋いでいないのにログアウトの釦まで
+            出てしまう。接続状態で判る */}
+        {tab === 'ggs' && (ggs && ggs.conn === 'online'
           ? <GgsSettings snap={ggs} />
           : (
             <Section title="GGS">
               <p style={{ margin: 0, fontSize: 'var(--fs-6)', color: 'var(--sub)', lineHeight: 1.8 }}>
-                GGS に繋いでいないあいだは触れません。**設定はサーバー側に
-                残る**ので、繋いでから読み書きします。
+                GGS に繋いでいないあいだは触れません。申し込みの扱いなどは
+                サーバー側に残る設定なので、繋いでから読み書きします。
               </p>
             </Section>
           )
         )}
 
-        {tab === 'more' && (
-          <Section title="詳細">
-            <p style={{ margin: 0, fontSize: 'var(--fs-6)', color: 'var(--sub)', lineHeight: 1.8 }}>
-              いまのところ、ここに置くものはありません。
-            </p>
-          </Section>
-        )}
 
         {tab === 'engine' && <>
         <Section title="ファイル">
@@ -456,8 +452,10 @@ export function Settings({ prefs, setPref, ggs }: {
   );
 }
 
-const TABS: ['engine' | 'view' | 'ggs' | 'more', string][] = [
-  ['engine', 'エンジン'], ['view', '表示'], ['ggs', 'GGS'], ['more', '詳細'],
+/* 設計の 4 枚目「詳細」は落とした。絵に中身が描かれておらず、仕様にも
+ * 該当するものが無い。**空のタブを置くと、押した人が探し物をして戻ってくる。** */
+const TABS: ['engine' | 'view' | 'ggs', string][] = [
+  ['engine', 'エンジン'], ['view', '表示'], ['ggs', 'GGS'],
 ];
 
 const THEMES: [Theme, string][] = [

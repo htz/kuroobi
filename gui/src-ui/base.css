@@ -83,6 +83,10 @@ button:disabled, button[aria-disabled="true"] { cursor:default; }
   :root:not([data-theme="dark"]) .k-seg-on { box-shadow:inset 0 0 0 1px var(--border); }
 }
 
+/* 箱いっぱいに伸ばす釦 (ログイン)。Button は inline-grid なので、
+ * 呼び出し側で幅を決められるようにしておく */
+.k-wide { width:100%; }
+
 /* 設定の窓は中身の地が --bg なので、欄も --bg のままだと面が消える。
  * 設計はここだけ欄を 1 段明るくしている。 */
 .k-settings .k-input, .k-settings .k-select, .k-settings .k-seg { background:var(--panel) !important; }

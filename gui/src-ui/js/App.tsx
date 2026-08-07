@@ -421,8 +421,8 @@ export function App() {
                       onClick={() => void g.undo()}>待った</Button>
               {/* 押す操作と、対局の前提を決めるものは別の話なので縦罫で切る。
                   切らないと「新規対局」と「黒」が同じ並びに見える */}
-              <span style={{ width: 1, height: 18, background: 'var(--border)',
-                             margin: '0 var(--sp-2)', flex: 'none' }} />
+              <span style={{ width: 1, height: 20, background: 'var(--border)',
+                             margin: '0 var(--sp-1)', flex: 'none' }} />
               {/* 担当は狭い窓でも変えられないと困るので aux ではなく children 側。
                   aux は 940px で消える */}
               <span style={{ fontSize: 'var(--fs-6)', color: 'var(--sub)' }}>KUROOBI</span>

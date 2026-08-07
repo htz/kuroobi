@@ -39,7 +39,10 @@ export function Button({ variant = 'secondary', size = 'ctrl', disabled, childre
       // primary は既に濃いので hover を控えめにする（k-on）
       className={cx('k-press', variant === 'primary' && 'k-on', className)}
       style={{
-        height: H[size], padding: PAD[size], borderRadius: R[size], fontSize: FS[size],
+        // 主ボタンだけ左右を 14px にする (設計の実測)。押させたいものは
+        // 面の色だけでなく幅でも他と差を付ける
+        height: H[size], padding: variant === 'primary' && size === 'ctrl' ? '0 14px' : PAD[size],
+        borderRadius: R[size], fontSize: FS[size],
         display: 'inline-grid', placeItems: 'center', whiteSpace: 'nowrap',
         opacity: disabled ? 0.4 : 1, ...skin,
       }}

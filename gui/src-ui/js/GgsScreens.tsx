@@ -88,29 +88,49 @@ function GgsLogin() {
 
   return (
     <div style={{ flex: 1, display: 'grid', placeItems: 'center', padding: 'var(--sp-5)' }}>
+      {/* 設計の実測: 箱 340px / 角丸 --r-4 / 地は --panel / 余白 22px /
+          行間 14px。欄は 32px で地は --bg。**釦は箱いっぱいの幅**で、
+          状態の文はその下に置く (欄と釦が縦に一続きになる)。
+          見出しは節と同じ小さい字 (10px・600・字間 .08em)。 */}
       <div style={{
-        // 340px (Modal の既定) だと、説明文が 2 行に折り返すうえ欄が
-        // 292px の細い帯になり、**打ち込む場所に見えない**という指摘が出た。
-        // ここは画面に 1 つしかない入口で、他に並ぶものが無いので広く取れる
-        width: 420, borderRadius: 'var(--r-4)', background: 'var(--card)',
-        border: '1px solid var(--border)', boxShadow: 'var(--sh-2)',
-        padding: 'var(--sp-5)', display: 'flex', flexDirection: 'column', gap: 'var(--sp-4)',
+        width: 340, borderRadius: 'var(--r-4)', background: 'var(--panel)',
+        border: '1px solid var(--border)', padding: 22,
+        display: 'flex', flexDirection: 'column', gap: 14,
       }}>
         <div style={{ fontSize: 'var(--fs-3)', fontWeight: 600 }}>GGS へログイン</div>
-        <div style={{ fontSize: 'var(--fs-6)', color: 'var(--sub)', lineHeight: 1.7 }}>
-          skatgame.net:5000 — ログインに成功するとキーチェーンに保存され、次回から自動ログインします
+        <div style={{ fontSize: 'var(--fs-6)', color: 'var(--sub)', lineHeight: 1.8 }}>
+          <span style={{ fontFamily: 'var(--ff-mono)' }}>skatgame.net:5000</span>
+          {' '}— ログインに成功するとキーチェーンに保存され、次回から自動ログインします
         </div>
-        <Field stretch label="ログイン名"><TextField value={user} onChange={setUser} /></Field>
-        <Field stretch label="パスワード"><TextField value={pw} password onChange={setPw} /></Field>
-        <div style={{ display: 'flex', alignItems: 'center', gap: 'var(--sp-3)' }}>
-          <span style={{ flex: 1, fontSize: 'var(--fs-6)', color: 'var(--bad)' }}>{status}</span>
-          {/* 欄と同じ高さにする。--h-field の説明そのものが
-              「入力・セレクト・モーダルのボタン」なので、28px だと欄より
-              低く、並べたときに揃わない */}
-          <Button size="field" variant="primary" onClick={() => void connect()}>ログイン</Button>
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 'var(--sp-2)' }}>
+          <LoginField label="ログイン名">
+            <TextField value={user} onChange={setUser} />
+          </LoginField>
+          <LoginField label="パスワード">
+            <TextField value={pw} password onChange={setPw} />
+          </LoginField>
         </div>
+        <Button size="field" variant="primary" className="k-wide"
+                onClick={() => void connect()}>ログイン</Button>
+        {/* 文が出ていなくても場所を空けておく — 出た瞬間に下がずれない */}
+        <div style={{
+          fontSize: 'var(--fs-6)', minHeight: 16,
+          color: status.startsWith('接続') ? 'var(--sub)' : 'var(--bad)',
+        }}>{status}</div>
       </div>
     </div>
+  );
+}
+
+/** ログインの欄。見出しは節と同じ小さい字 (設計の `.fld`)。 */
+function LoginField({ label, children }: { label: string; children: React.ReactNode }) {
+  return (
+    <label style={{ display: 'flex', flexDirection: 'column', gap: 5, alignItems: 'stretch' }}>
+      <span style={{
+        fontSize: 'var(--fs-7)', fontWeight: 600, letterSpacing: '.08em', color: 'var(--sub)',
+      }}>{label}</span>
+      {children}
+    </label>
   );
 }
 
