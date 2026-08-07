@@ -428,8 +428,8 @@ function CondNode({ node, top, onChange, onRemove }: {
           <CondNode key={i} node={k} onChange={c => setKid(i, c)} onRemove={() => setKid(i, null)} />
         ))}
         <div style={{ display: 'flex', gap: 'var(--sp-2)', paddingTop: 2 }}>
-          <Button size="chip" onClick={addAtom}>+ 条件</Button>
-          <Button size="chip" onClick={addGroup}>+ 束</Button>
+          <Button onClick={addAtom}>+ 条件</Button>
+          <Button onClick={addGroup}>+ 束</Button>
         </div>
       </div>
     </div>

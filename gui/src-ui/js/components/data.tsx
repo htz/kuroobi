@@ -155,8 +155,11 @@ export function EvalGraph({ points, plies, cursor, blunder, busy, title = '評�
     }}>
       {/* 凡例は必ずグラフの外（見出し行）に置く — 描画領域に重ねると
           データと衝突するし、縮小されて読めなくなる */}
+      {/* 操作が乗るときは帯を高くする。--h-head (20px) のままだと押せるものが
+          罫にめり込み、当たりも文字ぶんしか無くなる (Section の aside と同じ話) */}
       <div style={{
-        height: 'var(--h-head)', display: 'flex', alignItems: 'center', gap: 'var(--sp-3)',
+        minHeight: extra ? 'var(--h-field)' : 'var(--h-head)',
+        display: 'flex', alignItems: 'center', gap: 'var(--sp-3)',
         fontSize: 'var(--fs-6)', color: 'var(--sub)',
       }}>
         <span>{title}</span>

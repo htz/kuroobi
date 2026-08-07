@@ -238,7 +238,7 @@ export function GgsChat({ snap }: { snap: GgsSnapshot }) {
         }}>
           <span style={{ fontSize: 'var(--fs-7)', fontWeight: 600, letterSpacing: '.08em', color: 'var(--sub)' }}>会話</span>
           <span style={{ marginLeft: 'auto' }} />
-          <Button size="chip" onClick={() => setPick(true)}>新しい相手</Button>
+          <Button onClick={() => setPick(true)}>新しい相手</Button>
         </div>
         <div className="k-scroll" style={{ flex: 1, minHeight: 0 }}>
         {sorted.map(([key, info]) => (
@@ -330,7 +330,7 @@ function GgsLobby({ snap, onNav }: { snap: GgsSnapshot; onNav: (id: NavId) => vo
                  title={`${o.names[0] || '?'} 対 ${o.names[1] || '?'}`}
                  sub={gtypeLabel(o.gtype)}
                  actions={
-                   <Button size="chip" variant={o.watching ? 'danger' : 'primary'}
+                   <Button variant={o.watching ? 'danger' : 'primary'}
                            onClick={() => {
                              const on = !o.watching;
                              void ggsApi.watch(o.id, on);
@@ -352,8 +352,8 @@ function GgsLobby({ snap, onNav }: { snap: GgsSnapshot; onNav: (id: NavId) => vo
                    tag={o.incoming ? '自分宛' : undefined}
                    sub={`${gtypeLabel(o.gtype)} · ${o.time || '?'}${o.rated ? ' · レート戦' : ''}`}
                    actions={o.incoming ? <>
-                     <Button size="chip" variant="primary" onClick={() => void ggsApi.accept(o.id)}>受ける</Button>
-                     <Button size="chip" variant="danger" onClick={() => void ggsApi.decline(o.id)}>断る</Button>
+                     <Button variant="primary" onClick={() => void ggsApi.accept(o.id)}>受ける</Button>
+                     <Button variant="danger" onClick={() => void ggsApi.decline(o.id)}>断る</Button>
                    </> : undefined} />
             );
           })}
@@ -388,11 +388,11 @@ function GgsLobby({ snap, onNav }: { snap: GgsSnapshot; onNav: (id: NavId) => vo
         {/* 中断対局は login のときに 1 度だけ流れてくる。あとから相手が
             中断したぶんは、こちらから聞き直さないと出てこない */}
         <Section title="中断対局"
-                 aside={<Button size="chip" onClick={() => void ggsApi.listStored()}>更新</Button>}>
+                 aside={<Button onClick={() => void ggsApi.listStored()}>更新</Button>}>
           {!snap.stored.length && <Empty>中断対局はありません。</Empty>}
           {snap.stored.map((x) => (
             <Row key={x.id} title={x.opp || '?'} sub={gtypeLabel(x.gtype)}
-                 actions={<Button size="chip" variant="primary"
+                 actions={<Button variant="primary"
                                   onClick={() => void ggsApi.resumeStored(x.id)}>再開</Button>} />
           ))}
         </Section>
@@ -504,7 +504,7 @@ function GgsStandby({ snap, onNav }: { snap: GgsSnapshot; onNav: (id: NavId) => 
       </Section>
 
       <Section title="申し込みの扱い (サーバー側)"
-               aside={<Button size="chip" onClick={() => onNav('ggs-settings')}>条件を変える</Button>}>
+               aside={<Button onClick={() => onNav('ggs-settings')}>条件を変える</Button>}>
         <p style={{ margin: 0, fontSize: 'var(--fs-6)', color: 'var(--sub)', lineHeight: 1.8 }}>
           条件は GGS のサーバーが持っています。ここでは今の値を見るだけ —
           同じ設定を 2 か所で編集できると、どちらが本物か分からなくなります。
@@ -666,11 +666,11 @@ function MatchBoard({ snap, m, clock, prefs, onKifu }: {
         <span style={{ marginLeft: 'auto' }} />
         {/* 終わった対局も一覧に残るので、そこから棋譜を取り出せる。
             旧 GUI にあった道を戻した (規則 71) */}
-        <Button size="chip"
+        <Button
                 onClick={() => onKifu(m.opp_name ? `${m.opp_name} との対局` : '対局の棋譜',
                                       m.ggf || m.moves.join(''))}>棋譜</Button>
         {!observer && (
-          <Button size="chip" variant="danger"
+          <Button variant="danger"
                   title="負けを認めて終わる (相手の承諾は要らない。レートが動く)"
                   onClick={() => setResign(true)}>投了</Button>
         )}
@@ -860,7 +860,7 @@ function GgsResults({ snap, onKifu }: {
     <div className="k-scroll" style={{ flex: 1, minHeight: 0, padding: 'var(--sp-4) var(--sp-4) 0' }}>
       <Section title="レートの推移"
                aside={kinds.length > 1 ? (
-                 <Segmented size="chip" value={gtype} onChange={setGtype}
+                 <Segmented value={gtype} onChange={setGtype}
                             options={[{ value: 'all', label: 'すべて' },
                                       ...kinds.map((k) => ({ value: k, label: gtypeLabel(k) }))]} />
                ) : undefined}>
@@ -932,7 +932,7 @@ function GgsUsers({ snap, onNav }: { snap: GgsSnapshot; onNav: (id: NavId) => vo
   return (
     <div className="k-scroll" style={{ flex: 1, minHeight: 0, padding: 'var(--sp-4) var(--sp-4) 0' }}>
       <Section title="自分のレート"
-               aside={<Button size="chip" onClick={() => {
+               aside={<Button onClick={() => {
                  for (const t of ['8', '8r']) void ggsApi.rank(t, snap.login);
                }}>更新</Button>}>
         {!mine.length && <Empty>まだ記録がありません。</Empty>}
@@ -947,12 +947,12 @@ function GgsUsers({ snap, onNav }: { snap: GgsSnapshot; onNav: (id: NavId) => vo
                  {/* プールは上位のときだけ選ばせる。接続中の一覧は
                      プールに関係なく同じ顔ぶれなので、出すと嘘になる */}
                  {mode === 'top' && (
-                   <Segmented size="chip" value={pool} onChange={(p) => {
+                   <Segmented value={pool} onChange={(p) => {
                      setPool(p);
                      void ggsApi.top(p, 100);
                    }} options={[{ value: '8', label: '通常' }, { value: '8r', label: 'ランダム開局' }]} />
                  )}
-                 <Segmented size="chip" value={mode} onChange={(m) => {
+                 <Segmented value={mode} onChange={(m) => {
                    setMode(m);
                    setPage(0);
                    if (m === 'who') void ggsApi.who('8'); else void ggsApi.top(pool, 100);
@@ -979,9 +979,9 @@ function GgsUsers({ snap, onNav }: { snap: GgsSnapshot; onNav: (id: NavId) => vo
             display: 'flex', alignItems: 'center', gap: 'var(--sp-2)',
             padding: 'var(--sp-2) 0', fontSize: 'var(--fs-6)', color: 'var(--sub)',
           }}>
-            <Button size="chip" disabled={cur === 0} onClick={() => setPage(cur - 1)}>前へ</Button>
+            <Button disabled={cur === 0} onClick={() => setPage(cur - 1)}>前へ</Button>
             <span style={{ fontVariantNumeric: 'tabular-nums' }}>{cur + 1} / {pages}</span>
-            <Button size="chip" disabled={cur >= pages - 1} onClick={() => setPage(cur + 1)}>次へ</Button>
+            <Button disabled={cur >= pages - 1} onClick={() => setPage(cur + 1)}>次へ</Button>
             <span style={{ marginLeft: 'auto' }}>表示件数</span>
             <Select size="ctrl" value={String(perPage)}
                     options={[['25', '25'], ['50', '50'], ['100', '100']]}

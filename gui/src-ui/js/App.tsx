@@ -490,7 +490,7 @@ export function App() {
                            </span>
                          </span>
                        )}
-                       <Button size="chip" variant={graph.busy ? 'danger' : 'secondary'}
+                       <Button variant={graph.busy ? 'danger' : 'secondary'}
                                onClick={() => (graph.busy ? graph.stop() : void graph.update())}>
                          {graph.busy ? '分析停止' : '分析'}
                        </Button>
