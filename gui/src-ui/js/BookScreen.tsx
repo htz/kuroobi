@@ -236,9 +236,13 @@ function BookRow({ r, open, onToggle, onGo, onStudy, decimals = 1 }: {
   const leaf = r.child && r.child.moves.length === 0;
   return (
     // 行の本体と三角は兄弟にする (button の中に button は置けない)
+    // 字下げは設計の実測どおり 1 段 16px。12px だと 3 段目で親と子の頭が
+    // 揃って見え、木として読めない。行の下罫も設計にある — 24px の行を
+    // 罫なしで積むと、字下げの段差だけでは行の切れ目が分からない
     <div className="k-row" style={{
       display: 'flex', alignItems: 'center', height: 'var(--h-row)',
-      paddingLeft: r.depth * 12, borderRadius: 'var(--r-2)',
+      paddingLeft: r.depth * 16, borderRadius: 'var(--r-2)',
+      borderBottom: '1px solid var(--border-weak)',
     }}>
       {/* 三角は当たりを行の高さいっぱいに取る。16px 角に fs-7 の記号だと
           押す場所が分からないうえ、外しやすい。**記号自体も大きくする** —
