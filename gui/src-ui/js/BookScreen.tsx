@@ -261,9 +261,11 @@ function BookRow({ r, open, onToggle, onGo, onStudy }: {
         <span style={{ width: 44, textAlign: 'right', fontVariantNumeric: 'tabular-nums' }}>
           {r.value > 0 ? '+' : ''}{r.value.toFixed(1)}
         </span>
-        <span style={{ width: 50, textAlign: 'right', fontSize: 'var(--fs-7)',
+        {/* 桁区切りを入れる。5 桁を超える数を素で並べると桁が読めない
+            (設計の絵も 12,480 の形。下の帯の局面数も同じ書き方) */}
+        <span style={{ width: 58, textAlign: 'right', fontSize: 'var(--fs-7)',
                        color: 'var(--sub)', fontVariantNumeric: 'tabular-nums' }}>
-          {r.games}
+          {r.games.toLocaleString()}
         </span>
         {/* 出所。実戦から書き戻した枝は色でも分かるようにする */}
         <span style={{ marginLeft: 'auto', fontSize: 'var(--fs-7)',
