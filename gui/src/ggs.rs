@@ -148,6 +148,8 @@ pub struct FingerInfo {
 pub struct UserRow {
     pub name: String,
     pub rating: Option<f32>,
+    /// レートの偏差。`/os top` は返すが `/os who` は返さない。
+    pub dev: Option<f32>,
     pub raw: String,
 }
 
@@ -2640,6 +2642,15 @@ fn capture_header_matches(kind: &str, ln: &str) -> bool {
 }
 
 /// "1938.0@71.7=" / "1720.0@350.0" などから先頭のレート値を取り出す。
+/// 偏差のトークン (`74.9=` `267.8` など)。末尾の傾向印を落として読む。
+fn parse_dev_token(t: &str) -> Option<f32> {
+    let head: String = t
+        .chars()
+        .take_while(|c| c.is_ascii_digit() || *c == '.')
+        .collect();
+    head.parse::<f32>().ok().filter(|v| (0.0..1000.0).contains(v))
+}
+
 fn parse_rating_token(t: &str) -> Option<f32> {
     let head = t.split('@').next()?;
     head.parse::<f32>()
@@ -2710,16 +2721,30 @@ fn finish_capture(ctx: &mut Ctx, kind: &str, buf: &[String], login: &str) {
             {
                 continue;
             }
-            let rating = toks.iter().skip(1).find_map(|t| parse_rating_token(t));
-            if rating.is_none() {
-                continue;
-            }
+            // 実際の行: `| 1 scorpion 1938.0@ 74.9= 7.12:05:00+@ …`
+            // レートの直後に `@` が付き、**偏差は次のトークン**に来る
+            // (末尾に `=` `+` `-` の傾向印が付く)。
+            let at = toks
+                .iter()
+                .enumerate()
+                .skip(1)
+                .find_map(|(i, t)| parse_rating_token(t).map(|v| (i, v)));
+            let Some((ri, r)) = at else { continue };
+            let rating = Some(r);
+            // `1938.0@ 74.9=` (次のトークン) と `2066.9@126.4=` (同じ
+            // トークンの続き) の両方がある
+            let dev = match toks[ri].split_once('@') {
+                Some((_, rest)) if !rest.is_empty() => parse_dev_token(rest),
+                Some(_) => toks.get(ri + 1).and_then(|t| parse_dev_token(t)),
+                None => None,
+            };
             if name == login {
                 my_rating = rating;
             }
             users.push(UserRow {
                 name: name.to_string(),
                 rating,
+                dev,
                 raw: b.to_string(),
             });
         }

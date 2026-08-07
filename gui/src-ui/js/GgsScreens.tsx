@@ -997,8 +997,16 @@ function GgsUsers({ snap, onNav }: { snap: GgsSnapshot; onNav: (id: NavId) => vo
               borderBottom: '1px solid var(--border-weak)',
             }}>
             <span style={{ flex: 1, minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis' }}>{u.name}</span>
+            {/* レートには必ず偏差を添える (規則 29) — 偏差が大きいと数字が
+                意味を持たない。ランキング (`/os t`) は偏差を返すが、接続中の
+                一覧 (`/os who`) は返さないので、そちらは数字だけになる */}
             {u.rating != null && (
-              <span style={{ color: 'var(--sub)', fontSize: 'var(--fs-6)' }}>{u.rating.toFixed(1)}</span>
+              <span style={{ color: 'var(--sub)', fontSize: 'var(--fs-6)' }}>
+                {u.rating.toFixed(1)}
+                {u.dev != null && (
+                  <span style={{ opacity: .7, marginLeft: 4 }}>±{Math.round(u.dev)}</span>
+                )}
+              </span>
             )}
             {snap.ongoing.some((o) => o.names.includes(u.name)) && <Tag tone="ok">対局中</Tag>}
           </button>

@@ -67,6 +67,8 @@ export interface LogLine {
 export interface UserRow {
   name: string;
   rating: number | null;
+  /** レートの偏差。`/os top` は返すが `/os who` は返さない。 */
+  dev: number | null;
   raw: string;
 }
 
