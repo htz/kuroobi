@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react';
 import { api, ggsApi, type KifuFrame } from './api';
 import { Board } from './components/board';
-import { MoveScrub } from './components/data';
+import { MoveScrub, ScoreRow } from './components/data';
 import { Overlay } from './components/layout';
 import { Button } from './components/primitives';
 
@@ -73,17 +73,10 @@ export function KifuViewer({ title, kifu, onClose, onStudy }: KifuViewerProps) {
                 <div style={{ fontSize: 'var(--fs-1)', fontWeight: 700, fontVariantNumeric: 'tabular-nums' }}>
                   {cur === 0 ? '初期局面' : `${cur}. ${sqName(f.last)}`}
                 </div>
-                <div style={{ display: 'flex', alignItems: 'center', gap: 'var(--sp-3)', fontSize: 'var(--fs-4)' }}>
-                  <span style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
-                    <i style={{ width: 12, height: 12, borderRadius: '50%', background: 'var(--stone-black)',
-                                border: '1px solid var(--stone-black-edge)' }} />
-                    <b style={{ fontVariantNumeric: 'tabular-nums' }}>{f.black}</b>
-                  </span>
-                  <span style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
-                    <i style={{ width: 12, height: 12, borderRadius: '50%', background: '#f2f2f0' }} />
-                    <b style={{ fontVariantNumeric: 'tabular-nums' }}>{f.white}</b>
-                  </span>
-                </div>
+                {/* 石数は対局・検討・定石と同じ 1 行の部品を使う。ここだけ
+                    手で丸を描いていて、白石が `#f2f2f0` のリテラルだったため
+                    ライトで地に沈んでいた (規則 44・50) */}
+                <ScoreRow black={f.black} white={f.white} />
                 <div style={{ fontSize: 'var(--fs-6)', color: 'var(--sub)', fontVariantNumeric: 'tabular-nums' }}>
                   {cur} / {last} 手
                 </div>
