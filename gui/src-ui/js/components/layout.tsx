@@ -5,6 +5,7 @@ import { IconButton } from './Icons';
 // アセットを唯一の出所にする (assets.d.ts の方針)。画面用に写した複製と
 // ファイルが食い違う事故を防ぐため、<img src> ではなく中身を読む
 import icon from '../../assets/icon.svg?raw';
+import logo from '../../assets/kuroobi.svg?raw';
 
 /* KUROOBI layout
  * 画面は 左メニュー（ggs.tsx の Nav）＋右に縦 3 段
@@ -36,15 +37,42 @@ export function AppFrame({ children }: { children: React.ReactNode }) {
   );
 }
 
-/* 上下の帯に挟まれた段。左メニューと本体 (と Dock) が横に並ぶ。
+/* 窓の帯。全幅 28px。**押せるものを 1 つも置かない** — これが層の境目 (規則 75)。
+ * 押せるものはすべて画面の側 (Toolbar / Nav / 本体) にいる。
  *
- * **上下の帯は窓の全幅。** 左メニューを畳んでも帯は動かない。信号機ぶんの
- * 78px を空けるのも Toolbar 1 か所で済む — 左メニューの幅に依存しない。 */
-export function Body({ children }: { children: React.ReactNode }) {
-  return <div style={{ flex: 1, display: 'flex', minHeight: 0 }}>{children}</div>;
+ * 左に信号機ぶんの余白とロゴ、その右に **いま何を見ているか** を受け身の
+ * 文字で出す (macOS の題名の役)。Mission Control やスクショでも何をして
+ * いたかが分かる。Tauri は title を空にしてこちらで描く。 */
+export function WindowBar({ title, sub }: { title: string; sub?: React.ReactNode }) {
+  return (
+    <div data-tauri-drag-region className="k-drag" style={{
+      height: 'var(--h-window)', flex: 'none', background: 'var(--bg)',
+      borderBottom: '1px solid var(--border)', display: 'flex', alignItems: 'center',
+      paddingLeft: 'var(--w-signals)', paddingRight: 'var(--sp-3)', gap: 'var(--sp-3)',
+    }}>
+      {/* 絵に当たりを持たせない — mousedown の相手が svg になると、
+          data-tauri-drag-region を持つ親に届かず窓が動かせなくなる */}
+      <span data-tauri-drag-region className="k-window-logo" aria-label="KUROOBI"
+            dangerouslySetInnerHTML={{ __html: logo }} />
+      <span style={{ width: 1, height: 12, background: 'var(--border)', flex: 'none' }} />
+      <span data-tauri-drag-region style={{ fontSize: 'var(--fs-6)', color: 'var(--text)' }}>{title}</span>
+      {sub && (
+        <span data-tauri-drag-region style={{
+          fontSize: 'var(--fs-6)', color: 'var(--sub)',
+          overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
+        }}>{sub}</span>
+      )}
+    </div>
+  );
 }
 
-/* 左メニューの右。画面の中身を縦に積む */
+/* WindowBar と StatusBar に挟まれた中段。Nav / 画面 / Dock を横に並べる。
+ * Dock を重ねて出す (k-open) ときの基準もここ — 全幅の帯の下に潜らせない。 */
+export function Body({ children }: { children: React.ReactNode }) {
+  return <div style={{ position: 'relative', flex: 1, display: 'flex', minHeight: 0 }}>{children}</div>;
+}
+
+/* Nav の右。Toolbar → 本体 を縦に積む、**画面そのもの**の列 */
 export function Main({ children }: { children: React.ReactNode }) {
   return <div style={{ flex: 1, display: 'flex', flexDirection: 'column', minWidth: 0 }}>{children}</div>;
 }
@@ -69,16 +97,16 @@ export function Toolbar({ children, aux, dock }: {
        なく、しかもロゴの上では掴めない (属性を持つ要素そのものでしか効かない)。
        ここは帯の地の部分だけが掴める — 子のボタンは属性を持たないので、
        押すつもりが窓を動かすことはない。 */
-    <div data-tauri-drag-region className="k-toolbar" style={{
-      // padding-left は .k-toolbar が持つ (48px に畳んだとき信号機ぶんを
-      // 空ける。インラインに書くと media query が届かない)
+    /* 画面の帯。Nav の右、本体の上。**その画面だけの操作**を置く。
+       信号機の余白もロゴもここには無い — WindowBar が持つ (規則 75)。 */
+    <div style={{
       height: 'var(--h-bar)', flex: 'none', borderBottom: '1px solid var(--border-weak)',
-      display: 'flex', alignItems: 'center', paddingRight: 'var(--sp-4)', gap: 'var(--sp-2)',
+      display: 'flex', alignItems: 'center', padding: '0 var(--sp-4)', gap: 'var(--sp-2)',
     }}>
       {children}
       {/* 押し出しはこれが持つ。畳む段で消える要素（k-toolbar-aux）に
           marginLeft:auto を持たせると、消えた瞬間に後ろのものが左へ飛ぶ */}
-      <span data-tauri-drag-region style={{ flex: 1 }} />
+      <span style={{ flex: 1 }} />
       {/* display は .k-toolbar-aux が持つ（940px で消す） */}
       {aux && <span className="k-toolbar-aux" style={{ alignItems: 'center', gap: 'var(--sp-3)' }}>{aux}</span>}
       {dock && (

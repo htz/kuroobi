@@ -98,25 +98,21 @@ button:disabled, button[aria-disabled="true"] { cursor:default; }
 .k-nav { width:var(--w-nav); }
 .k-dock { width:var(--w-dock); display:flex; }
 .k-nav-section, .k-meter-text, .k-toolbar-aux, .k-nav-jobs { display:flex; }
-.k-nav .k-drag { display:flex; align-items:center; }
 .k-nav-row { padding:0 10px; }
-/* ツールバーは窓の全幅で、左上に信号機が乗る。**78px を空けるのはここだけ**
-   — 左メニューの幅が 208px でも 48px でも関係しない (titleBarStyle:"Overlay") */
-.k-toolbar { padding-left:78px; }
-/* ロゴは器の幅に従わせる。SVG は放っておくと固有の大きさで描かれるので、
-   48px の列に畳んだときに帯からはみ出してツールバーの上に重なる */
-.k-nav-logo { display:block; }
-/* 掴む帯の中なので、絵そのものは当たりを持たない。持つと mousedown の
- * 相手が svg になり、data-tauri-drag-region の付いた span に届かない
- * (属性は付けた要素そのものにしか効かない) */
-.k-nav-logo > svg { display:block; width:100%; height:auto; pointer-events:none; }
+/* 窓の帯のロゴ。SVG は放っておくと固有の大きさで描かれるので幅を決める。
+   絵そのものは当たりを持たない — 持つと mousedown の相手が svg になり、
+   data-tauri-drag-region を持つ親に届かず窓が動かせない */
+.k-window-logo { display:block; width:72px; flex:none; }
+.k-window-logo > svg { display:block; width:100%; height:auto; pointer-events:none; }
 
 /* Dock を開く入口は Toolbar の右端（k-dock-toggle）。
  * 広い窓では Dock が常に見えているので入口は出さない。 */
 .k-dock-toggle { display:none; }
 @media (max-width: 1120px) {
   .k-dock { display:none; }
-  .k-dock.k-open { display:flex; position:absolute; right:0; top:var(--h-bar); bottom:var(--h-status); z-index:5; box-shadow:var(--sh-2); }
+  /* 基準は Body (position:relative)。全幅の帯の下には潜らせない —
+     上は画面のツールバーの下から、下は Body の底 (= StatusBar の上) まで */
+  .k-dock.k-open { display:flex; position:absolute; right:0; top:var(--h-bar); bottom:0; z-index:5; box-shadow:var(--sh-2); }
   .k-dock-toggle { display:inline-flex; }
 }
 @media (max-width: 1040px) {
@@ -125,12 +121,9 @@ button:disabled, button[aria-disabled="true"] { cursor:default; }
   /* 文字はすべて落とす。ロゴと仕事一覧も文字なので同じ扱い — メーターの
      ラベルだけ消して他を残すと、48px の列で折り返して縦に伸びる */
   .k-nav .k-nav-label, .k-nav .k-nav-section, .k-nav .k-meter-text,
-  .k-nav .k-nav-logo, .k-nav .k-nav-jobs { display:none; }
+  .k-nav .k-nav-jobs { display:none; }
   .k-nav .k-nav-row { justify-content:center; padding:0; }
   /* ロゴを落としても帯は残す — 信号機の居場所とドラッグ領域なので */
-  /* ロゴを落とすと 44px の空の帯だけが残る。窓を掴む役目は全幅の
-     Toolbar が持つので、帯ごと畳む */
-  .k-nav .k-drag { display:none; }
 }
 @media (max-width: 940px) {
   .k-toolbar-aux { display:none; }

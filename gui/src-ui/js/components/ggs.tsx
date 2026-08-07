@@ -10,7 +10,6 @@ import {
   COLOR_CHOICES, BOOL_OPS, FORMULA_OPS, FORMULA_VARS, varOf, condToSrc, condLabel,
   isGroup, type Cond as SharedCond, type FormulaOp,
 } from '../ggs';
-import logo from '../../assets/kuroobi.svg?raw';
 
 /* KUROOBI GGS 専用の部品
  * 左メニュー / 資源メーター / 手合い一覧 / レート / 条件式の木 /
@@ -71,19 +70,6 @@ export function Nav({ items, ggsItems, conn, active, onSelect, footer }: {
       flex: 'none', background: 'var(--panel)',
       borderRight: '1px solid var(--border)', display: 'flex', flexDirection: 'column', minHeight: 0,
     }}>
-      {/* ロゴの帯。窓の上端は Toolbar が全幅で持つので、**信号機ぶんの 78px は
-          ここでは要らない** (空けるのは Toolbar 1 か所)。掴める場所としては
-          残す — 押せるものが 1 つも無い帯なので、行のボタンと喧嘩しない。 */}
-      {/* display は .k-drag が持つ (1040px で帯ごと畳むので、インラインに
-          書くと media query が届かない — この repo で何度も踏んだ罠) */}
-      <div data-tauri-drag-region className="k-drag"
-           style={{ height: 'var(--h-bar)', flex: 'none', padding: '0 var(--sp-3)' }}>
-        {/* 幅は .k-nav-logo が持つ (48px に畳んだとき帯からはみ出さないように) */}
-        {/* 属性は付けた要素そのものにしか効かないので、ロゴにも付ける。
-            付けないと帯の中でロゴの上だけ掴めない */}
-        <span data-tauri-drag-region className="k-nav-logo" aria-label="KUROOBI" style={{ width: 100 }}
-              dangerouslySetInnerHTML={{ __html: logo }} />
-      </div>
       <div style={{ padding: 'var(--sp-1) var(--sp-2) 0', display: 'flex', flexDirection: 'column', gap: 1 }}>
         {items.map(i => <NavRow key={i.id} item={i} active={active === i.id} onSelect={onSelect} />)}
       </div>

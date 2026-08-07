@@ -7,7 +7,7 @@ import { api, ggsApi, jsLog, type ActivityView } from './api';
 import { useActivity, useEngineSettings, useEngineTurn, useGraph, useHints, useLearnLog, useStartGame } from './engine';
 import { fmtSecs } from './ggs';
 import { cellsOf, connOf, evalsOf, ggsPlaying, movesOf, navBadges, sqName } from './adapt';
-import { AppFrame, Body, BottomPanel, Dock, Main, Section, StatusBar, StatusStat, Toolbar } from './components/layout';
+import { AppFrame, Body, BottomPanel, Dock, Main, Section, StatusBar, StatusStat, Toolbar, WindowBar } from './components/layout';
 import { GgsChat, GgsConsole, GgsScreen } from './GgsScreens';
 import { Confirm, PasteKifu, Settings } from './Dialogs';
 import { Board } from './components/board';
@@ -287,14 +287,61 @@ export function App() {
     ? (v.black === v.white ? '引き分け' : v.black > v.white ? '黒の勝ち' : '白の勝ち')
     : undefined;
   const anyThink = g.thinkTotal.black > 0 || g.thinkTotal.white > 0;
+
+
   const nodes = g.stat && g.stat.nodes > 0 ? g.stat.nodes : 0;
   const nps = nodes && g.stat && g.stat.secs > 0 ? nodes / g.stat.secs : 0;
   const lv = g.level === 'custom' ? 'カスタム' : LEVELS[g.level].name;
+  /* 窓の帯に出す「いま何を見ているか」。押せるものではなく受け身の文字
+   * (規則 75)。行き先の名前は左の並びと同じものを使う — 2 か所で書くと割れる */
+  const screenTitle =
+    [...NAV_LOCAL, ...ggsNav(conn)].find((i) => i.id === nav)?.label ?? 'KUROOBI';
+  const screenSub = isGgs
+    ? (conn === 'online' ? ggs.snap?.login : undefined)
+    : isBook ? undefined
+    : `${lv} · ${g.side === 'both' ? '両方' : g.side === 'off' ? '担当なし'
+        : g.side === 'black' ? '黒' : '白'}`;
+
   // 「自分が下」は、KUROOBI が持っていない色 = 人が打つ色を下にする
   const sideColor = g.side === 'black' ? 'white' : g.side === 'white' ? 'black' : '';
 
   return (
     <AppFrame>
+      {/* 窓の層。押せるものは 1 つも置かない (規則 75) */}
+      <WindowBar title={screenTitle} sub={screenSub} />
+
+      <Body>
+
+      <Nav items={NAV_LOCAL} ggsItems={ggsNav(conn, navBadges(ggs.snap, chatUnread))} conn={conn}
+           active={nav} onSelect={setNav}
+           footer={<>
+             {cpu && <>
+             {/* 使用率の上限はコア数 × 100%。溝はその割合で埋める */}
+             <Meter icon="cpu" label="CPU" value={Math.round(cpu.cpu)} unit="%"
+                    ratio={cpu.cpu / (cpu.cores * 100)} />
+             {/* 単位の前の空白は flex の中で潰れるので、潰れない空白を使う */}
+             <Meter icon="memory" label="メモリ" value={(cpu.mem / 1e9).toFixed(1)} unit={'\u00a0GB'}
+                    ratio={cpu.mem_total > 0 ? cpu.mem / cpu.mem_total : 0} />
+             <JobList jobs={jobsOf(cpu)} />
+             </>}
+             {/* 設定はいちばん下。行き先ではないので行の並びには入れない。
+                 48px の列では文字を落として絵だけにする — 素の Button だと
+                 幅が足りずに文字がはみ出す */}
+             <button type="button" className="k-press" title="設定" aria-label="設定"
+                     onClick={() => setSettings(true)}
+                     style={{
+                       display: 'flex', alignItems: 'center', justifyContent: 'center',
+                       gap: 'var(--sp-2)', height: 'var(--h-field)', width: '100%',
+                       border: '1px solid var(--border)', borderRadius: 'var(--r-2)',
+                       background: 'var(--card)', color: 'var(--text)',
+                       fontSize: 'var(--fs-6)', cursor: 'pointer', padding: 0,
+                     }}>
+               <Icon name="gear" size={15} />
+               <span className="k-nav-label">設定</span>
+             </button>
+           </>} />
+
+      <Main>
       <Toolbar
           dock={isGgs ? undefined : { open: dockOpen, onToggle: () => setDockOpen(o => !o) }}
           aux={isGgs || isBook ? undefined : <Toggle checked={g.autoHint} onChange={g.setAutoHint} label="評価値" />}>
@@ -354,38 +401,6 @@ export function App() {
             </>
           )}
       </Toolbar>
-
-      <Body>
-      <Nav items={NAV_LOCAL} ggsItems={ggsNav(conn, navBadges(ggs.snap, chatUnread))} conn={conn}
-           active={nav} onSelect={setNav}
-           footer={<>
-             {cpu && <>
-             {/* 使用率の上限はコア数 × 100%。溝はその割合で埋める */}
-             <Meter icon="cpu" label="CPU" value={Math.round(cpu.cpu)} unit="%"
-                    ratio={cpu.cpu / (cpu.cores * 100)} />
-             {/* 単位の前の空白は flex の中で潰れるので、潰れない空白を使う */}
-             <Meter icon="memory" label="メモリ" value={(cpu.mem / 1e9).toFixed(1)} unit={'\u00a0GB'}
-                    ratio={cpu.mem_total > 0 ? cpu.mem / cpu.mem_total : 0} />
-             <JobList jobs={jobsOf(cpu)} />
-             </>}
-             {/* 設定はいちばん下。行き先ではないので行の並びには入れない。
-                 48px の列では文字を落として絵だけにする — 素の Button だと
-                 幅が足りずに文字がはみ出す */}
-             <button type="button" className="k-press" title="設定" aria-label="設定"
-                     onClick={() => setSettings(true)}
-                     style={{
-                       display: 'flex', alignItems: 'center', justifyContent: 'center',
-                       gap: 'var(--sp-2)', height: 'var(--h-field)', width: '100%',
-                       border: '1px solid var(--border)', borderRadius: 'var(--r-2)',
-                       background: 'var(--card)', color: 'var(--text)',
-                       fontSize: 'var(--fs-6)', cursor: 'pointer', padding: 0,
-                     }}>
-               <Icon name="gear" size={15} />
-               <span className="k-nav-label">設定</span>
-             </button>
-           </>} />
-
-      <Main>
         {/* 盤の上の帯は「対局の操作」と、対局の前提を決める最小限だけ。
             思考中の数字は下の帯へ */}
 
