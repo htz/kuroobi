@@ -574,12 +574,13 @@ export function Toasts({ items, onDismiss }: { items: Toast[]; onDismiss?: (id: 
     }}>
       {items.map(t => (
         <button key={t.id} type="button" onClick={() => onDismiss?.(t.id)} className="k-press" style={{
-          maxWidth: 340, padding: '11px var(--sp-3)', borderRadius: 9, textAlign: 'left',
+          // 浮くものなので角丸は --r-4 と影 (規則 13)。裸の px を書かない (規則 1)
+          maxWidth: 340, padding: 'var(--sp-3)', borderRadius: 'var(--r-4)', textAlign: 'left',
           background: 'var(--card)', border: '1px solid var(--border)', boxShadow: 'var(--sh-2)',
           fontSize: 'var(--fs-5)', lineHeight: 1.6, color: 'var(--text)',
-          display: 'flex', gap: 9, alignItems: 'flex-start',
+          display: 'flex', gap: 'var(--sp-2)', alignItems: 'flex-start',
         }}>
-          <span style={{ color: 'var(--' + t.tone + ')', flex: 'none', marginTop: 2 }}><Icon name="alert" size={15} /></span>
+            <span style={{ color: 'var(--' + t.tone + ')', flex: 'none', marginTop: 1 }}><Icon name="alert" size={15} /></span>
           {t.text}
         </button>
       ))}
