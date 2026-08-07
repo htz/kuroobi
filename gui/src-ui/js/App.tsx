@@ -161,8 +161,6 @@ export function App() {
   const applyLoaded = (v: GameView) => {
     g.setMoveSource({});
     g.setThinkTotal({ black: 0, white: 0 });
-    g.setLastEval('');
-    g.setLastEvalSide('');
     g.setPlaying(false);
     g.setView(v);
     g.say('');
@@ -289,10 +287,6 @@ export function App() {
     ? (v.black === v.white ? '引き分け' : v.black > v.white ? '黒の勝ち' : '白の勝ち')
     : undefined;
   const anyThink = g.thinkTotal.black > 0 || g.thinkTotal.white > 0;
-  /** KUROOBI の評価は**指した側の行**に出す。担当は黒のことも両方のことも
-   *  あるので、白に決め打ちすると別の人の手の評価に見える。 */
-  const evalMeta = (side: 'black' | 'white') =>
-    !study && g.lastEval && g.lastEvalSide === side ? `KUROOBI の評価 ${g.lastEval}` : undefined;
   const nodes = g.stat && g.stat.nodes > 0 ? g.stat.nodes : 0;
   const nps = nodes && g.stat && g.stat.secs > 0 ? nodes / g.stat.secs : 0;
   const lv = g.level === 'custom' ? 'カスタム' : LEVELS[g.level].name;
@@ -405,7 +399,6 @@ export function App() {
         <div style={{ flex: 1, minHeight: 0, display: 'flex', flexDirection: 'column', padding: '0 var(--sp-4)' }}>
           <PlayerRow color="b" name="黒" discs={v?.black ?? 2}
                      active={!!v && !v.over && v.player === 'black'}
-                     meta={evalMeta('black')}
                      clock={!study && anyThink ? fmtSecs(g.thinkTotal.black) : undefined} />
           <div style={{ flex: 1, minHeight: 0, display: 'grid', placeItems: 'center', padding: 'var(--sp-2) 0' }}>
             <div style={{ height: '100%', aspectRatio: '1 / 1', maxWidth: '100%' }}>
@@ -419,7 +412,7 @@ export function App() {
           </div>
           <PlayerRow color="w" name="白" discs={v?.white ?? 2}
                      active={!!v && !v.over && v.player === 'white'}
-                     meta={result ?? evalMeta('white')}
+                     meta={result}
                      clock={!study && anyThink ? fmtSecs(g.thinkTotal.white) : undefined} />
         </div>
         )}

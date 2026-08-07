@@ -111,10 +111,6 @@ export function useGame() {
   const [toasts, setToasts] = useState<Toast[]>([]);
   const toastId = useRef(0);
   // エンジンが直前に指した手の評価 (「エンジン評価: +2.5 石」と出す)
-  const [lastEval, setLastEval] = useState('');
-  /** その評価を出したのがどちらの色か。**KUROOBI は黒のことも両方のことも
-   *  ある**ので、白の行に決め打ちすると嘘になる。 */
-  const [lastEvalSide, setLastEvalSide] = useState<'black' | 'white' | ''>('');
 
   // 解析結果は返ってきた時点で局面が進んでいることがある。世代で捨てる。
   const hintSeq = useRef(0);
@@ -224,8 +220,6 @@ export function useGame() {
     void pushLevels();
     setMoveSource({});
     setThinkTotal({ black: 0, white: 0 });
-    setLastEval('');
-    setLastEvalSide('');
     setPlaying(false);
     apply(await api.newGame());
     say('');
@@ -266,7 +260,6 @@ export function useGame() {
     thinkTotal, setThinkTotal,
     moveSource, setMoveSource,
     toasts, say, dismiss,
-    lastEval, setLastEval, lastEvalSide, setLastEvalSide,
     engineSides, pushLevels, refreshHints,
     play, newGame, undo, jumpTo, stop,
     hintSeq,
