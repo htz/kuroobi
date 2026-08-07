@@ -25,14 +25,14 @@ export const openWindow = (kind: 'settings' | 'book') =>
 
 /* 窓をまたぐ報せ。設定の窓でファイルを差し替えても、主画面は自分で
  * 気付けない (別の document なので React の状態は共有されない)。 */
-export function emitApp(name: string, payload?: unknown): void {
-  void window.__TAURI__?.event.emit(name, payload).catch(() => { /* 相手が居なくてもよい */ });
+export function emitApp(name: string): void {
+  void window.__TAURI__?.event.emit(name).catch(() => { /* 相手が居なくてもよい */ });
 }
 
-export function onApp<T = void>(name: string, fn: (payload: T) => void): Promise<() => void> {
+export function onApp(name: string, fn: () => void): Promise<() => void> {
   const ev = window.__TAURI__?.event;
   if (!ev) return Promise.resolve(() => { /* Tauri 外 */ });
-  return ev.listen<T>(name, (e) => fn(e.payload));
+  return ev.listen(name, () => fn());
 }
 
 export const api = {

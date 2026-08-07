@@ -40,11 +40,10 @@ const CONN_TONE: Record<Conn, 'sub' | 'gold' | 'ok'> = {
   offline: 'sub', connecting: 'gold', 'logging-in': 'gold', online: 'ok',
 };
 
-/* 定石と学習ログは行き先ではなく独立ウィンドウ (⌘B)。設計の左メニューにも
-   定石の行は無く、規則の「定石ブラウザ / 学習ログ」の節も窓と決めている。 */
 export const NAV_LOCAL: NavItem[] = [
   { id: 'play', label: '対局', icon: 'play' },
   { id: 'study', label: '検討', icon: 'study' },
+  { id: 'book', label: '定石', icon: 'book' },
 ];
 
 /* 未接続のときは 7 行を出さず「ログイン」1 行だけにする */

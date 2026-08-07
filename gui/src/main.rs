@@ -884,10 +884,7 @@ fn open_child_window(handle: tauri::AppHandle, kind: String) -> Result<(), Strin
     // 綴り違いのたびに空の窓が増える
     let (label, title, w, h) = match kind.as_str() {
         "settings" => ("settings", "設定", 560.0, 640.0),
-        // 設計 §7 の実測どおり。左の木 269 + 盤 560 + 右の情報 291 = 1120。
-        // ドックを使わない作りなので、畳む段の 1 段目 (1120px) と同じでも
-        // 消えるものは無い
-        "book" => ("book", "定石", 1120.0, 720.0),
+        "book" => ("book", "定石", 1080.0, 760.0),
         _ => return Err(format!("知らない窓: {kind}")),
     };
     if let Some(win) = handle.get_webview_window(label) {
