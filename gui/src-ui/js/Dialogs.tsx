@@ -131,11 +131,13 @@ export function PasteKifu({ onLoad, onFile, onCancel }: {
 
 // 画面に出す名前は resource_status が返すものと同じにする
 // (食い違うと状態が引けず、パスも出なくなる)
-// 並びは設計と同じ「NNUE → 線形評価 → 定石」。KUROOBI が主に読むものが上。
-const KINDS: [string, string][] = [
-  ['nnue', 'NNUE の重み'],
-  ['weights', '線形評価の重み'],
-  ['book', '定石'],
+/* 並びは設計と同じ「NNUE → 線形評価 → 定石」。KUROOBI が主に読むものが上。
+ * 3 つ目は**画面に出す名前**で、設計の絵の文言に合わせてある。
+ * 2 つ目はバックエンドが返す名前なので、勝手に変えると状態が引けなくなる。 */
+const KINDS: [string, string, string][] = [
+  ['nnue', 'NNUE の重み', 'NNUE 重み'],
+  ['weights', '線形評価の重み', '線形評価'],
+  ['book', '定石', '定石'],
 ];
 
 /** ファイルの大きさ。桁が動くと読みにくいので、MB は小数 1 桁で止める。 */
@@ -217,7 +219,9 @@ export function Settings({ prefs, setPref }: {
           flex: 'none', display: 'flex', justifyContent: 'center',
           padding: 'var(--sp-3) var(--sp-5)', borderBottom: '1px solid var(--border-weak)',
         }}>
-          <Segmented value={tab} onChange={setTab} options={[
+          {/* 設計はここを塗りで示している。左メニューを持たない窓なので、
+              青地が 2 か所になる心配が無い (規則 40 の但し書き) */}
+          <Segmented solid value={tab} onChange={setTab} options={[
             { value: 'engine', label: 'エンジン' },
             { value: 'view', label: '表示' },
           ]} />
@@ -261,13 +265,13 @@ export function Settings({ prefs, setPref }: {
 
         {tab === 'engine' && <>
         <Section title="ファイル">
-          {KINDS.map(([kind, title]) => {
+          {KINDS.map(([kind, title, label]) => {
             const info = byName.get(title);
             return (
               <div key={kind} style={{ display: 'flex', flexDirection: 'column', gap: 'var(--sp-1)' }}>
                 {/* パスは打ち込む欄に入れる。行の右端に押しやると、いま何を
                     読んでいるかとその直し方が別の場所に散る */}
-                <Row2 label={title}>
+                <Row2 label={label}>
                   <TextField value={info?.p ?? ''} placeholder="未指定" invalid={!info?.ok} />
                   <Button size="field" onClick={async () => {
                     const p = await api.pickResource(kind);
@@ -282,9 +286,7 @@ export function Settings({ prefs, setPref }: {
                 }}>
                   <Icon name={info?.ok ? 'check' : 'alert'} size={12} />
                   {info?.ok
-                    ? '読み込み済み' +
-                      ([fmtSize(info.size), info.kind].filter(Boolean).join('・')
-                        ? ' — ' + [fmtSize(info.size), info.kind].filter(Boolean).join('・') : '')
+                    ? ['読み込み済み', fmtSize(info.size), info.kind].filter(Boolean).join('・')
                     : NOT_FOUND[kind]}
                 </div>
               </div>
@@ -301,10 +303,9 @@ export function Settings({ prefs, setPref }: {
                                 ...Array.from({ length: th.auto * 2 }, (_, i) =>
                                   [String(i + 1), String(i + 1)] as [string, string])]} />
             </Row2>
-            {/* 説明は操作の下。上に置くと、読まないと何を選ぶ場所か分からない
-                欄に見える (欄そのものは「スレッド」で足りている) */}
-            <p style={{ margin: 0, marginLeft: 'calc(var(--w-label) + var(--sp-3))',
-                        fontSize: 'var(--fs-7)', color: 'var(--sub)', lineHeight: 1.8 }}>
+            {/* 説明は操作の下、節の幅いっぱい (設計の絵と同じ)。欄の列に
+                字下げすると、欄の補足なのか節の説明なのかが曖昧になる */}
+            <p style={{ margin: 0, fontSize: 'var(--fs-7)', color: 'var(--sub)', lineHeight: 1.8 }}>
               ローカル対局・検討・学習の取り込みが使う並列数です。自動 = コア数の半分 ({th.auto})。
               GGS 対局用は GGS の設定にあります (別々に動くので、両方が同時に動くと合計ぶんの CPU を使います)。
             </p>

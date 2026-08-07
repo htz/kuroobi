@@ -55,7 +55,7 @@ export function Button({ variant = 'secondary', size = 'ctrl', disabled, childre
  * 「数枚から 1 枚を選ぶ」列はこれ 1 つ。Dock のタブもこれを使う（fill）。
  * 選択中は --card で浮かせる — 塗り（--accent-dim）は左メニューの現在地に
  * 取ってあるので、青地を画面に 2 か所出すと「いまどこにいるか」が薄まる。 */
-export function Segmented<T extends string>({ value, options, onChange, size = 'ctrl', fill, disabled, className }: {
+export function Segmented<T extends string>({ value, options, onChange, size = 'ctrl', fill, disabled, solid, className }: {
   value: T;
   /** label は文字とは限らない — 担当の駒には石を添える (規則 59)。 */
   options: { value: T; label: React.ReactNode }[];
@@ -65,6 +65,9 @@ export function Segmented<T extends string>({ value, options, onChange, size = '
   fill?: boolean;
   /** 選べない状態（定石ファイルが無い、など）。押せないことを見た目でも示す */
   disabled?: boolean;
+  /** 選択中を塗りで示す。**左メニューが無い窓 (設定) でだけ使う** —
+   *  主画面で使うと「いまどこにいるか」の青地が 2 か所になる (規則 40)。 */
+  solid?: boolean;
   className?: string;
 }) {
   return (
@@ -86,9 +89,10 @@ export function Segmented<T extends string>({ value, options, onChange, size = '
               // 縁取る** — 面の色を足すのではないので、状態の色を面に使わない
               // 決まり (規則 44) にも触れない。選んでいない駒は同じ幅の
               // 透明な罫を持たせて、切り替えで字が動かないようにする
-              border: '1px solid ' + (on ? 'var(--border)' : 'transparent'),
-              background: on ? 'var(--card)' : 'transparent',
-              color: on ? 'var(--text)' : 'var(--sub)', fontWeight: on ? 600 : 400,
+              border: '1px solid ' + (on ? (solid ? 'var(--accent)' : 'var(--border)') : 'transparent'),
+              background: on ? (solid ? 'var(--accent-dim)' : 'var(--card)') : 'transparent',
+              color: on ? (solid ? 'var(--on-accent)' : 'var(--text)') : 'var(--sub)',
+              fontWeight: on ? 600 : 400,
               display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 6,
               whiteSpace: 'nowrap',
             }}

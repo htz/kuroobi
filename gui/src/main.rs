@@ -883,7 +883,7 @@ fn open_child_window(handle: tauri::AppHandle, kind: String) -> Result<(), Strin
     // 札は固定の集合から選ぶ。画面側の文字列をそのまま窓の札にすると、
     // 綴り違いのたびに空の窓が増える
     let (label, title, w, h) = match kind.as_str() {
-        "settings" => ("settings", "設定", 480.0, 620.0),
+        "settings" => ("settings", "設定", 560.0, 640.0),
         "book" => ("book", "定石", 1080.0, 760.0),
         _ => return Err(format!("知らない窓: {kind}")),
     };
