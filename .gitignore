@@ -17,3 +17,4 @@ node_modules/
 # Tauri は frontendDist として ui/ を読むため、アプリを組む前に
 # `npm ci && npm run build` が要る (CI もその順で回している)。
 /gui/ui/
+__pycache__/
