@@ -8,7 +8,7 @@ export type IconName =
   | 'play' | 'study' | 'ggs-play' | 'ggs-lobby' | 'ggs-users' | 'ggs-chat'
   | 'ggs-standby' | 'ggs-console' | 'login' | 'logout' | 'cpu' | 'memory' | 'gear'
   | 'refresh' | 'check' | 'alert' | 'back' | 'close' | 'panel'
-  | 'start' | 'stop' | 'newgame' | 'undo' | 'hint' | 'book' | 'results';
+  | 'start' | 'stop' | 'newgame' | 'undo' | 'hint' | 'book' | 'results' | 'prefs';
 
 /** 中身だけを持つ (svg 要素は Icon が用意する)。 */
 const PATHS: Record<IconName, React.ReactNode> = {
@@ -141,6 +141,13 @@ const PATHS: Record<IconName, React.ReactNode> = {
   book: <>
     <path d="M12 6.6C10.4 5.2 8.2 4.6 4.5 4.6v12.6c3.7 0 5.9.6 7.5 2 1.6-1.4 3.8-2 7.5-2V4.6c-3.7 0-5.9.6-7.5 2z" />
     <path d="M12 6.6v14" />
+  </>,
+  // 設定 (このアプリ): つまみの付いた 3 本の横棒。歯車は GGS の設定に
+  // 譲る — 同じ絵を別の意味で 2 か所に出さない (規則 49)
+  prefs: <>
+    <path d="M4 7.5h5M14 7.5h6M4 16.5h9M18 16.5h2" />
+    <circle cx="11.5" cy="7.5" r="2.4" />
+    <circle cx="15.5" cy="16.5" r="2.4" />
   </>,
   // 結果: 高さの違う 3 本。成績の並びを表す。
   // 時計 (ggs-standby) とも本 (book) とも別の絵にする

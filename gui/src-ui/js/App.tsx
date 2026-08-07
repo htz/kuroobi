@@ -325,18 +325,19 @@ export function App() {
              <JobList jobs={jobsOf(cpu)} />
              </>}
              {/* 設定はいちばん下。行き先ではないので行の並びには入れない。
-                 48px の列では文字を落として絵だけにする — 素の Button だと
-                 幅が足りずに文字がはみ出す */}
-             <button type="button" className="k-press" title="設定" aria-label="設定"
+                 **絵は歯車ではない** — 歯車は「GGS の設定」が使っているので、
+                 同じ絵を別の意味で 2 か所に出さない (規則 49)。
+                 48px の列では文字を落として絵だけの正方形にする */}
+             <button type="button" className="k-press k-nav-settings" title="設定" aria-label="設定"
                      onClick={() => setSettings(true)}
                      style={{
-                       display: 'flex', alignItems: 'center', justifyContent: 'center',
-                       gap: 'var(--sp-2)', height: 'var(--h-field)', width: '100%',
+                       alignItems: 'center', justifyContent: 'center',
+                       gap: 'var(--sp-2)', height: 'var(--h-field)',
                        border: '1px solid var(--border)', borderRadius: 'var(--r-2)',
                        background: 'var(--card)', color: 'var(--text)',
                        fontSize: 'var(--fs-6)', cursor: 'pointer', padding: 0,
                      }}>
-               <Icon name="gear" size={15} />
+               <Icon name="prefs" size={15} />
                <span className="k-nav-label">設定</span>
              </button>
            </>} />

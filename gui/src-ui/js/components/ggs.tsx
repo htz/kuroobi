@@ -80,6 +80,9 @@ export function Nav({ items, ggsItems, conn, active, onSelect, footer }: {
         {items.map(i => <NavRow key={i.id} item={i} active={active === i.id} onSelect={onSelect} />)}
       </div>
       {/* display は .k-nav-section が持つ（1040px で消す） */}
+      {/* 畳んでも区切りは残す — 文字は落とすが 1px の罫は残して、
+          行き先の 2 つの束が地続きに見えないようにする (.k-nav-rule) */}
+      <div className="k-nav-rule" />
       <div className="k-nav-section" style={{
         margin: 'var(--sp-4) 0 6px', padding: '0 18px', alignItems: 'center', gap: 'var(--sp-2)',
         fontSize: 'var(--fs-7)', fontWeight: 600, letterSpacing: '.1em', color: 'var(--sub)',
@@ -147,12 +150,19 @@ export function Meter({ icon, label, value, unit, ratio, note }: {
           <b style={{ fontWeight: 600 }}>{value}</b>{unit && <span style={{ color: 'var(--sub)' }}>{unit}</span>}
         </span>
       </div>
-      <div style={{ height: 4, borderRadius: 3, background: 'var(--track)', overflow: 'hidden' }}>
+      {/* 溝は 48px の列では落とす (.k-meter-bar)。4px の棒が 2 本並んでも
+          読めるのは「多いか少ないか」だけで、数字のほうが要る */}
+      <div className="k-meter-bar" style={{ height: 4, borderRadius: 3, background: 'var(--track)', overflow: 'hidden' }}>
         <span style={{
           display: 'block', width: Math.min(100, Math.round(ratio * 100)) + '%', height: '100%',
           background: ratio > 0.75 ? 'var(--gold)' : 'var(--accent)',
         }} />
       </div>
+      {/* 畳んだ列ではこちらだけが出る。絵の下に数字 1 つ */}
+      <div className="k-meter-mini" style={{
+        fontSize: 'var(--fs-7)', color: 'var(--text)', textAlign: 'center',
+        fontVariantNumeric: 'tabular-nums',
+      }}>{value}{unit}</div>
       {note && <div style={{ fontSize: 'var(--fs-7)', color: 'var(--sub)' }}>{note}</div>}
     </div>
   );

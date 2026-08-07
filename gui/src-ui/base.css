@@ -98,6 +98,14 @@ button:disabled, button[aria-disabled="true"] { cursor:default; }
 .k-nav { width:var(--w-nav); }
 .k-dock { width:var(--w-dock); display:flex; }
 .k-nav-section, .k-meter-text, .k-toolbar-aux, .k-nav-jobs { display:flex; }
+.k-meter-bar { display:block; }
+.k-meter-mini { display:none; }      /* 畳んだ列でだけ出る */
+/* 畳んだ列でだけ出る区切り。広い窓では「● GGS」の見出しが区切りなので
+   要らない (見出しの上余白と二重に空けない) */
+.k-nav-rule { display:none; height:1px; background:var(--border); }
+/* 設定のボタン。広い窓は横いっぱい、48px の列では正方形にする
+   (width も display も畳む段が動かすので、ここが持つ) */
+.k-nav-settings { display:flex; width:100%; }
 .k-nav-row { padding:0 10px; }
 /* Nav の上端のロゴ。SVG は放っておくと固有の大きさで描かれるので幅を決める。
    display は畳む段が動かすので、ここが持つ (インラインに書くと届かない) */
@@ -121,7 +129,12 @@ button:disabled, button[aria-disabled="true"] { cursor:default; }
   /* 文字はすべて落とす。ロゴと仕事一覧も文字なので同じ扱い — メーターの
      ラベルだけ消して他を残すと、48px の列で折り返して縦に伸びる */
   .k-nav .k-nav-label, .k-nav .k-nav-section, .k-nav .k-meter-text,
-  .k-nav .k-nav-logo, .k-nav .k-nav-jobs { display:none; }
+  .k-nav .k-nav-logo, .k-nav .k-nav-jobs, .k-nav .k-meter-bar { display:none; }
+  /* 棒の代わりに数字、文字の代わりに 1px の罫 */
+  .k-nav .k-meter-mini { display:block; }
+  .k-nav .k-nav-rule { display:block; margin:var(--sp-3) var(--sp-2); }
+  /* 正方形に。横いっぱいのままだと縦長の板に見える */
+  .k-nav .k-nav-settings { width:32px; margin:0 auto; }
   .k-nav .k-nav-row { justify-content:center; padding:0; }
   /* ロゴを落としても帯は残す — 信号機の居場所とドラッグ領域なので */
 }
