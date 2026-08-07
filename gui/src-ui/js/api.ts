@@ -52,7 +52,8 @@ export const api = {
   /** 定石を眺める。kifu は初期局面からの手順 ("f5d6" 形式、空なら初期局面)。 */
   bookNode: (kifu: string) => call<BookNode>('book_node', { kifu }),
   autoplay: () => call<string>('autoplay', {}),
-  resourceStatus: () => call<[string, string, boolean][]>('resource_status', {}),
+  /** 名前・パス・実在・大きさ (byte)・中身の見分け。 */
+  resourceStatus: () => call<[string, string, boolean, number, string][]>('resource_status', {}),
   pickResource: (kind: string) => call<string | null>('pick_resource', { kind }),
   setResource: (kind: string, path: string | null) =>
     call<void>('set_resource', { kind, path }),

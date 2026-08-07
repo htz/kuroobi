@@ -138,6 +138,14 @@ const KINDS: [string, string][] = [
   ['book', '定石'],
 ];
 
+/** ファイルの大きさ。桁が動くと読みにくいので、MB は小数 1 桁で止める。 */
+function fmtSize(n: number): string {
+  if (n <= 0) return '';
+  if (n < 1024) return n + ' B';
+  if (n < 1024 * 1024) return Math.round(n / 1024) + ' KB';
+  return (n / 1024 / 1024).toFixed(1) + ' MB';
+}
+
 /* 足りないときは、無いことだけでなく**その先どうなるか**を言う。
  * 「ファイルがありません」だけだと、直さないと動かないのか、
  * 直さなくても済むのかが分からない。 */
@@ -160,7 +168,7 @@ export function Settings({ prefs, setPref }: {
 }) {
   const [tab, setTab] = useState<'engine' | 'view'>('engine');
   const [reset, setReset] = useState(false);
-  const [status, setStatus] = useState<[string, string, boolean][]>([]);
+  const [status, setStatus] = useState<[string, string, boolean, number, string][]>([]);
   const [th, setTh] = useState<ThreadsView | null>(null);
 
   const load = useCallback(async () => {
@@ -181,7 +189,7 @@ export function Settings({ prefs, setPref }: {
     return () => { alive = false; };
   }, []);
 
-  const byName = new Map(status.map(([n, p, ok]) => [n, { p, ok }]));
+  const byName = new Map(status.map(([n, p, ok, size, kind]) => [n, { p, ok, size, kind }]));
   const change = async (kind: string, path: string | null) => {
     await api.setResource(kind, path);
     await load();
@@ -273,7 +281,11 @@ export function Settings({ prefs, setPref }: {
                   fontSize: 'var(--fs-7)', color: info?.ok ? 'var(--ok)' : 'var(--bad)',
                 }}>
                   <Icon name={info?.ok ? 'check' : 'alert'} size={12} />
-                  {info?.ok ? '読み込み済み' : NOT_FOUND[kind]}
+                  {info?.ok
+                    ? '読み込み済み' +
+                      ([fmtSize(info.size), info.kind].filter(Boolean).join('・')
+                        ? ' — ' + [fmtSize(info.size), info.kind].filter(Boolean).join('・') : '')
+                    : NOT_FOUND[kind]}
                 </div>
               </div>
             );

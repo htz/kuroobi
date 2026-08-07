@@ -854,13 +854,17 @@ fn activity_status(app: State<App>) -> ActivityView {
     }
 }
 
-/// 使うファイルの一覧 (名前・パス・見つかったか)。
+/// 使うファイルの一覧 (名前・パス・見つかったか・大きさ・中身の見分け)。
+///
+/// 大きさと形式まで返すのは、**「ある」だけでは足りない**から。重みは
+/// 差し替えて使うものなので、いま読んでいるのがどれか分からないと、
+/// 指し手が変わった理由を追えない。
 #[tauri::command]
-fn resource_status() -> Vec<(String, String, bool)> {
+fn resource_status() -> Vec<(String, String, bool, u64, String)> {
     resources()
-        .status()
+        .detailed()
         .into_iter()
-        .map(|(n, p, ok)| (n.to_string(), p.display().to_string(), ok))
+        .map(|(n, p, ok, size, kind)| (n.to_string(), p.display().to_string(), ok, size, kind))
         .collect()
 }
 

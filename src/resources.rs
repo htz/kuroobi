@@ -119,6 +119,18 @@ impl Resources {
 
     /// 画面に出すための、実在するかどうかの一覧。
     pub fn status(&self) -> Vec<(&'static str, PathBuf, bool)> {
+        self.detailed()
+            .into_iter()
+            .map(|(n, p, ok, _, _)| (n, p, ok))
+            .collect()
+    }
+
+    /// 画面に出すための一覧 (名前・パス・実在・大きさ・中身の見分け)。
+    ///
+    /// **「ある」だけでは足りない。** 重みは差し替えて使うものなので、
+    /// いま読んでいるのがどれなのかが分からないと、指し手が変わった理由を
+    /// 追えない。大きさと形式まで出す。
+    pub fn detailed(&self) -> Vec<(&'static str, PathBuf, bool, u64, String)> {
         let items = [
             ("線形評価の重み", self.weights_path()),
             ("NNUE の重み", self.nnue_path()),
@@ -127,11 +139,34 @@ impl Resources {
         items
             .into_iter()
             .map(|(name, p)| {
+                let size = std::fs::metadata(&p).map(|m| m.len()).unwrap_or(0);
                 let ok = p.exists();
-                (name, p, ok)
+                // 中身の見分けは頭だけ読んで済ませる。全部読むと、起動のたびに
+                // 数十 MB を無駄に舐めることになる
+                let kind = if ok && name == "NNUE の重み" {
+                    nnue_header(&p).unwrap_or_default()
+                } else {
+                    String::new()
+                };
+                (name, p, ok, size, kind)
             })
             .collect()
     }
+}
+
+/// NNUE ファイルの頭 16 バイトから「形式・隠れ層の幅」を読む。
+/// 形式が違うファイルを選んでも、読み込みで落ちるまで気付けないのを防ぐ。
+fn nnue_header(p: &std::path::Path) -> Option<String> {
+    use std::io::Read;
+    let mut f = std::fs::File::open(p).ok()?;
+    let mut head = [0u8; 12];
+    f.read_exact(&mut head).ok()?;
+    let magic = std::str::from_utf8(&head[..8]).ok()?;
+    if !magic.starts_with("BBRVNN") {
+        return None;
+    }
+    let h = u32::from_le_bytes([head[8], head[9], head[10], head[11]]);
+    Some(format!("{magic} / H{h}"))
 }
 
 #[cfg(test)]
