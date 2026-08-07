@@ -208,17 +208,22 @@ export function Settings({ prefs, setPref }: {
   return (
     <div style={{ height: '100%', display: 'flex', flexDirection: 'column', background: 'var(--bg)' }}>
       <WindowBar title="設定" />
-      {/* **タブの帯は窓の帯と同じ地に置く。** 設計の絵は 窓の帯 + タブ が
-          ひと続きの暗い帯で、その下から中身の面 (--card) が始まる。
-          中身と同じ地に置くと、タブが節の見出しに見えて層が潰れる。
+      {/* **タブの帯だけが明るい面 (--card)。** 窓の帯と中身はどちらも --bg で、
+          間に挟まる帯が浮いて見える形 — 設計の絵がそうなっている。
+          逆にすると (帯が暗く中身が明るい) タブが窓の帯と地続きになり、
+          中身の面だけが浮いた別の箱に見える。
+
+          高さは --h-bar (44px)。**上下に同じ余白**を取らないとタブが窓の帯に
+          貼り付いて見える。
 
           **タブは Segmented ではない。** 絵は囲みの枠を持たず、字を並べて
           選ばれているものだけを塗る形。Segmented の囲みは「並んだ選択肢の
           1 つ」を示す部品で、画面を切り替えるタブとは役目が違う
           (規則 40 は選択肢の列の話)。 */}
       <div style={{
-        flex: 'none', display: 'flex', justifyContent: 'center', gap: 'var(--sp-1)',
-        padding: '0 var(--sp-5) var(--sp-3)', background: 'var(--bg)',
+        flex: 'none', height: 'var(--h-bar)', display: 'flex',
+        alignItems: 'center', justifyContent: 'center', gap: 'var(--sp-1)',
+        padding: '0 var(--sp-5)', background: 'var(--card)',
         borderBottom: '1px solid var(--border)',
       }}>
         {TABS.map(([v, label]) => {
@@ -237,7 +242,7 @@ export function Settings({ prefs, setPref }: {
         })}
       </div>
       <div style={{
-        flex: 1, minHeight: 0, background: 'var(--card)',
+        flex: 1, minHeight: 0, background: 'var(--bg)',
         display: 'flex', flexDirection: 'column', overflow: 'hidden',
       }}>
         <div className="k-scroll" style={{ flex: 1, minHeight: 0, padding: 'var(--sp-5)' }}>
