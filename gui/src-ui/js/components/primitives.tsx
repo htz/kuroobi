@@ -211,7 +211,10 @@ export function TextField({ value, onChange, mono, invalid, placeholder, readOnl
       onChange={ro ? undefined : e => onChange?.(numeric ? e.target.value.replace(/[^\d-]/g, '') : e.target.value)}
       className={cx('k-input', className)}
       style={{
-        flex: width ? 'none' : 1, width, minWidth: 0,
+        /* ⚠ `flex: 1` と書かない。一括指定は `flex-basis: 0%` を含むので、
+           **縦並びの中に置くと height が潰れる** (32px の欄が 20px になって
+           いた)。伸ばしたいのは横だけなので basis は auto のままにする。 */
+        flexGrow: width ? 0 : 1, flexShrink: 1, flexBasis: 'auto', width, minWidth: 0,
         height: 'var(--h-field)', padding: '0 var(--sp-3)', borderRadius: 'var(--r-3)',
         background: 'var(--bg)', border: '1px solid ' + (invalid ? 'var(--bad)' : 'var(--border)'),
         fontFamily: mono ? 'var(--ff-mono)' : 'var(--ff)', fontSize: 'var(--fs-5)',

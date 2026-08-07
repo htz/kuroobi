@@ -122,7 +122,8 @@ export function BookPane({ b, coords, grain, flip, onSettings }: {
     evals[m.pos] = { score: m.value, src: { book: true }, best: i === 0 };
   });
   return (
-    <div style={{ flex: 1, minHeight: 0, display: 'flex', flexDirection: 'column', padding: '0 var(--sp-4)' }}>
+    // 左右の余白は中の要素が持つ (石数の行の罫を端まで届かせる)
+    <div style={{ flex: 1, minHeight: 0, display: 'flex', flexDirection: 'column' }}>
       {/* 行に minmax(0,1fr) を入れて**高さを確定させる**。既定の auto だと
               行の高さが中身で決まり、中の height:100% の基準が定まらない
               (基準が無いと auto 扱いになり、svg が固有の 880px で描かれて
@@ -131,7 +132,7 @@ export function BookPane({ b, coords, grain, flip, onSettings }: {
           <div style={{
             flex: 1, minHeight: 0, display: 'grid', placeItems: 'center',
             gridTemplateRows: 'minmax(0, 1fr)', gridTemplateColumns: 'minmax(0, 1fr)',
-            padding: 'var(--sp-2) 0',
+            padding: 'var(--sp-2) var(--sp-4)',
           }}>
         {/* maxHeight も要る。器が横長のときは maxWidth が効くが、**器が低く
                   なると grid の行が中身の大きさで決まり**、svg が固有の大きさ

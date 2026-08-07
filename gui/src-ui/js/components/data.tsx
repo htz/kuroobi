@@ -262,7 +262,10 @@ function Legend({ tone, children }: { tone: 'gold' | 'text' | 'accent'; children
  *
  * **上下に 1 人ずつ置かない。** 盤を上下から挟むと、窓の高さから盤の大きさを
  * 決める (規則 77) ときに 2 行ぶん取られるうえ、視線が盤をまたいで往復する。
- * 数は並べたほうが差が読める。手番は石を明るくして示す。 */
+ * 数は並べたほうが差が読める。手番は石を明るくして示す。
+ *
+ * 寸法は設計の実測 — 帯は --h-bar (44px)、上に --border-weak の罫、
+ * 左右 --sp-4、要素の間 20px、石は 14px、数は --fs-1 の 700。 */
 export function ScoreRow({ black, white, turn, meta, blackClock, whiteClock }: {
   black: number; white: number;
   /** 手番。終局後は undefined。 */
@@ -276,20 +279,23 @@ export function ScoreRow({ black, white, turn, meta, blackClock, whiteClock }: {
       opacity: turn === undefined || turn === c ? 1 : 0.55,
     }}>
       <StoneDot color={c} size={14} />
-      <b style={{ fontSize: 'var(--fs-1)', fontWeight: 700 }}>{n}</b>
+      <b style={{ fontSize: 'var(--fs-1)', fontWeight: 700, color: 'var(--text)' }}>{n}</b>
     </span>
   );
   return (
     <div style={{
-      display: 'flex', alignItems: 'center', gap: 'var(--sp-4)',
-      height: 'var(--h-field)', fontSize: 'var(--fs-5)',
+      flex: 'none', height: 'var(--h-bar)', display: 'flex', alignItems: 'center',
+      padding: '0 var(--sp-4)', gap: 20, borderTop: '1px solid var(--border-weak)',
+      fontSize: 'var(--fs-5)', color: 'var(--sub)',
     }}>
       {side('b', black)}
       {side('w', white)}
-      {meta && <span style={{ color: 'var(--sub)', fontSize: 'var(--fs-6)' }}>{meta}</span>}
-      <span style={{ flex: 1 }} />
+      {meta && <>
+        <span style={{ width: 1, height: 20, background: 'var(--border)', flex: 'none' }} />
+        <span>{meta}</span>
+      </>}
       {(blackClock || whiteClock) && (
-        <span style={{ display: 'flex', gap: 'var(--sp-3)', color: 'var(--sub)', fontSize: 'var(--fs-6)' }}>
+        <span style={{ marginLeft: 'auto', display: 'flex', gap: 'var(--sp-4)' }}>
           {blackClock && <span>黒 <b style={{ color: 'var(--text)', fontWeight: 600 }}>{blackClock}</b></span>}
           {whiteClock && <span>白 <b style={{ color: 'var(--text)', fontWeight: 600 }}>{whiteClock}</b></span>}
         </span>
