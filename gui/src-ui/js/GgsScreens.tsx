@@ -378,10 +378,11 @@ function GgsLobby({ snap, onNav }: { snap: GgsSnapshot; onNav: (id: NavId) => vo
           {/* GGS の /os ではレート有無はアカウント単位の設定なので、
               申し込みの直前に毎回送って揃える (バックエンド側)。ここは
               「この申し込みをどちらにするか」だけを持つ */}
-          {/* 「レート」だけでは何を決める欄か分からない。**変わるのは
-              「この対局がレートに反映されるか」の一点**なので、それを
-              そのまま名前にする (規則 59 — ラベルは主語を落とさない) */}
-          <Field label="レートに反映">
+          {/* 見出しは名詞、駒は動詞 — 「座標: 出す / 出さない」「定石: 使う /
+              使わない」と同じ形に揃える。**「レート戦」は GGS で通じている
+              呼び名**なので、そのまま見出しにするのがいちばん短く読める
+              (「レートに反映」だと言い換えになり、駒との対も冗長になる) */}
+          <Field label="レート戦">
             <Segmented value={rated ? 'on' : 'off'} onChange={(v) => setRated(v === 'on')}
                        options={[{ value: 'on', label: 'する' },
                                  { value: 'off', label: 'しない' }]} />
@@ -503,7 +504,7 @@ function GgsStandby({ snap, onNav }: { snap: GgsSnapshot; onNav: (id: NavId) => 
           {/* こちらから申し込むときのレート有無。GGS ではアカウント単位の
               設定なので、申し込みの直前に毎回送って揃える (バックエンド側)。
               受ける側のレート有無は申し込んだ相手が決めるので変えられない */}
-          <Field label="レートに反映">
+          <Field label="レート戦">
             <Segmented value={rated ? 'on' : 'off'} onChange={(v) => setRated(v === 'on')}
                        options={[{ value: 'on', label: 'する' },
                                  { value: 'off', label: 'しない' }]} />
