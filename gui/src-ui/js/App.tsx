@@ -11,7 +11,7 @@ import { AppFrame, Body, BottomPanel, Dock, Main, Section, StatusBar, StatusStat
 import { GgsChat, GgsConsole, GgsScreen } from './GgsScreens';
 import { Confirm, PasteKifu } from './Dialogs';
 import { Board } from './components/board';
-import { EvalGraph, KifuTable, MoveScrub, PlayerRow } from './components/data';
+import { EvalGraph, KifuTable, MoveScrub, ScoreRow, StoneDot } from './components/data';
 import { JobList, Meter, Nav, NAV_LOCAL, StatusChip, ggsNav, Toasts, type NavId, type Toast } from './components/ggs';
 import { Button, Progress, Segmented, Toggle } from './components/primitives';
 import { Icon } from './components/Icons';
@@ -27,10 +27,20 @@ import { LEVELS } from './state';
  * ここがやるのは「状態を画面の形にして並べる」だけ。
  */
 
+/* 担当の選択肢には石を添える (規則 59)。名前と石が並べば「KUROOBI が白を
+ * 持つ」と読めるので、それ以上の語が要らない。「なし」だけは人が両方を打つ
+ * ので石を出さない — 出すと「両方」との違いが石では付かなくなる。 */
 const SIDES = [
-  { value: 'black' as const, label: '黒' },
-  { value: 'white' as const, label: '白' },
-  { value: 'both' as const, label: '両方' },
+  { value: 'black' as const, label: <><StoneDot color="b" />黒</> },
+  { value: 'white' as const, label: <><StoneDot color="w" />白</> },
+  {
+    // 2 つの石は重ねない。9px で重ねると輪郭が潰れて 1 つの黒い塊に見え、
+    // ライトでは白石の縁が地に紛れてなおさら分からない
+    value: 'both' as const,
+    label: <><span style={{ display: 'flex', gap: 2 }}>
+      <StoneDot color="b" /><StoneDot color="w" />
+    </span>両方</>,
+  },
   { value: 'off' as const, label: 'なし' },
 ];
 
@@ -404,9 +414,13 @@ export function App() {
               <Button disabled={g.thinking} onClick={() => void g.newGame()}>新規対局</Button>
               <Button disabled={g.thinking || !v || v.move_count === 0}
                       onClick={() => void g.undo()}>待った</Button>
+              {/* 押す操作と、対局の前提を決めるものは別の話なので縦罫で切る。
+                  切らないと「新規対局」と「黒」が同じ並びに見える */}
+              <span style={{ width: 1, height: 18, background: 'var(--border)',
+                             margin: '0 var(--sp-2)', flex: 'none' }} />
               {/* 担当は狭い窓でも変えられないと困るので aux ではなく children 側。
                   aux は 940px で消える */}
-              <span style={{ marginLeft: 'var(--sp-3)', fontSize: 'var(--fs-6)', color: 'var(--sub)' }}>KUROOBI</span>
+              <span style={{ fontSize: 'var(--fs-6)', color: 'var(--sub)' }}>KUROOBI</span>
               <Segmented value={g.side} onChange={g.setSide} options={SIDES} />
             </>
           )}
@@ -424,9 +438,6 @@ export function App() {
                     flip={flipped(prefs.facing, '')} onSettings={() => void openWindow('settings')} />
         ) : (
         <div style={{ flex: 1, minHeight: 0, display: 'flex', flexDirection: 'column', padding: '0 var(--sp-4)' }}>
-          <PlayerRow color="b" name="黒" discs={v?.black ?? 2}
-                     active={!!v && !v.over && v.player === 'black'}
-                     clock={!study && anyThink ? fmtSecs(g.thinkTotal.black) : undefined} />
           <div style={{ flex: 1, minHeight: 0, display: 'grid', placeItems: 'center', padding: 'var(--sp-2) 0' }}>
             <div style={{ height: '100%', aspectRatio: '1 / 1', maxWidth: '100%' }}>
               {v && <Board cells={cellsOf(v)} legal={v.legal} last={v.last} evals={evals}
@@ -437,10 +448,11 @@ export function App() {
                            onPlay={(sq) => void g.play(sq)} />}
             </div>
           </div>
-          <PlayerRow color="w" name="白" discs={v?.white ?? 2}
-                     active={!!v && !v.over && v.player === 'white'}
-                     meta={result}
-                     clock={!study && anyThink ? fmtSecs(g.thinkTotal.white) : undefined} />
+          <ScoreRow black={v?.black ?? 2} white={v?.white ?? 2}
+                    turn={!v || v.over ? undefined : v.player === 'black' ? 'b' : 'w'}
+                    meta={result}
+                    blackClock={!study && anyThink ? fmtSecs(g.thinkTotal.black) : undefined}
+                    whiteClock={!study && anyThink ? fmtSecs(g.thinkTotal.white) : undefined} />
         </div>
         )}
 

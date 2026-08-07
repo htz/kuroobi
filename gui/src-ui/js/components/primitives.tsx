@@ -57,7 +57,8 @@ export function Button({ variant = 'secondary', size = 'ctrl', disabled, childre
  * 取ってあるので、青地を画面に 2 か所出すと「いまどこにいるか」が薄まる。 */
 export function Segmented<T extends string>({ value, options, onChange, size = 'ctrl', fill, disabled, className }: {
   value: T;
-  options: { value: T; label: string }[];
+  /** label は文字とは限らない — 担当の駒には石を添える (規則 59)。 */
+  options: { value: T; label: React.ReactNode }[];
   onChange?: (v: T) => void;
   size?: Size;
   /** 器の幅いっぱいに等分する（Dock のタブ） */
@@ -82,7 +83,8 @@ export function Segmented<T extends string>({ value, options, onChange, size = '
               flex: fill ? 1 : 'none', padding: '0 12px', border: 0, borderRadius: 'var(--r-1)', fontSize: FS[size],
               background: on ? 'var(--card)' : 'transparent',
               color: on ? 'var(--text)' : 'var(--sub)', fontWeight: on ? 600 : 400,
-              display: 'grid', placeItems: 'center', whiteSpace: 'nowrap',
+              display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 6,
+              whiteSpace: 'nowrap',
             }}
           >{o.label}</button>
         );

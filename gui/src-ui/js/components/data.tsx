@@ -245,6 +245,46 @@ function Legend({ tone, children }: { tone: 'gold' | 'text' | 'accent'; children
  * 意味を持たないので、GGS では省かないこと。
  * name を押せるようにするのは GGS だけ（プロフィールへ飛ぶ）。
  */
+/* 盤の下の 1 行。石数と持ち時間を左右に置く。
+ *
+ * **上下に 1 人ずつ置かない。** 盤を上下から挟むと、窓の高さから盤の大きさを
+ * 決める (規則 77) ときに 2 行ぶん取られるうえ、視線が盤をまたいで往復する。
+ * 数は並べたほうが差が読める。手番は石を明るくして示す。 */
+export function ScoreRow({ black, white, turn, meta, blackClock, whiteClock }: {
+  black: number; white: number;
+  /** 手番。終局後は undefined。 */
+  turn?: 'b' | 'w';
+  meta?: React.ReactNode;
+  blackClock?: string; whiteClock?: string;
+}) {
+  const side = (c: 'b' | 'w', n: number) => (
+    <span style={{
+      display: 'flex', alignItems: 'center', gap: 'var(--sp-2)',
+      opacity: turn === undefined || turn === c ? 1 : 0.55,
+    }}>
+      <StoneDot color={c} size={14} />
+      <b style={{ fontSize: 'var(--fs-1)', fontWeight: 700 }}>{n}</b>
+    </span>
+  );
+  return (
+    <div style={{
+      display: 'flex', alignItems: 'center', gap: 'var(--sp-4)',
+      height: 'var(--h-field)', fontSize: 'var(--fs-5)',
+    }}>
+      {side('b', black)}
+      {side('w', white)}
+      {meta && <span style={{ color: 'var(--sub)', fontSize: 'var(--fs-6)' }}>{meta}</span>}
+      <span style={{ flex: 1 }} />
+      {(blackClock || whiteClock) && (
+        <span style={{ display: 'flex', gap: 'var(--sp-3)', color: 'var(--sub)', fontSize: 'var(--fs-6)' }}>
+          {blackClock && <span>黒 <b style={{ color: 'var(--text)', fontWeight: 600 }}>{blackClock}</b></span>}
+          {whiteClock && <span>白 <b style={{ color: 'var(--text)', fontWeight: 600 }}>{whiteClock}</b></span>}
+        </span>
+      )}
+    </div>
+  );
+}
+
 export function PlayerRow({ color, name, rate, dev, meta, clock, active, discs, onName }: {
   color: StoneColor; name: string;
   rate?: number; dev?: number; meta?: React.ReactNode;
