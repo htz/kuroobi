@@ -311,7 +311,11 @@ export function GgsChat({ snap }: { snap: GgsSnapshot }) {
 /* ---------------- ロビー ----------------
  *
  * 進行中の対局 (観戦できる)・対局の申し込み・申し込みフォーム・中断対局。
- * 左が一覧、右が「これから始める」もの。幅は --w-lobby。
+ * 左が一覧、右が「これから始める」もの。
+ *
+ * **右の列は --w-dock (290px)。** 設計には --w-lobby (174px) というトークンが
+ * あるが使っていない — 174px では「同期・ランダム16手 (推奨)」の選択が
+ * 折り返すし、画面ごとに違う幅を作ると行き来したときに本体の幅が動く。
  */
 function GgsLobby({ snap, onNav }: { snap: GgsSnapshot; onNav: (id: NavId) => void }) {
   const [opp, setOpp] = useState('');
@@ -389,7 +393,9 @@ function GgsLobby({ snap, onNav }: { snap: GgsSnapshot; onNav: (id: NavId) => vo
           </Field>
           {/* 相手を指定しない申し込みは「誰でも受けられる」募集になる。
               GGS の /os ask はそういう使い方ができるので、止めない */}
-          <Button variant="primary"
+          {/* 上の欄と同じ 32px。欄を埋めて押す釦なので、欄より低いと
+              一続きの手順に見えない (ログインの釦と同じ理由) */}
+          <Button size="field" variant="primary"
                   onClick={() => void ggsApi.ask(gtype, time, opp, rated)}>
             {opp ? '申し込む' : '募集する'}
           </Button>
