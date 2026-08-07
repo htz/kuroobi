@@ -3,7 +3,7 @@ import { api } from './api';
 import { sqName } from './adapt';
 import type { BookNode } from './types';
 import { Board, type EvalInfo } from './components/board';
-import { PlayerRow } from './components/data';
+import { ScoreRow } from './components/data';
 import { EmptyState, Section } from './components/layout';
 import { Button } from './components/primitives';
 
@@ -123,7 +123,6 @@ export function BookPane({ b, coords, grain, flip, onSettings }: {
   });
   return (
     <div style={{ flex: 1, minHeight: 0, display: 'flex', flexDirection: 'column', padding: '0 var(--sp-4)' }}>
-      <PlayerRow color="b" name="黒" discs={n?.black ?? 2} active={n?.player === 'black'} />
       <div style={{ flex: 1, minHeight: 0, display: 'grid', placeItems: 'center', padding: 'var(--sp-2) 0' }}>
         <div style={{ height: '100%', aspectRatio: '1 / 1', maxWidth: '100%' }}>
           <Board cells={(n?.cells ?? INITIAL) as (0 | 1 | 2)[]}
@@ -133,8 +132,11 @@ export function BookPane({ b, coords, grain, flip, onSettings }: {
                  onPlay={(sq) => { if (n?.moves.some((m) => m.pos === sq)) b.push(sq); }} />
         </div>
       </div>
-      <PlayerRow color="w" name="白" discs={n?.white ?? 2} active={n?.player === 'white'}
-                 meta={b.err || (n && n.moves.length === 0 ? 'この局面から先は定石にありません' : undefined)} />
+      {/* 対局・検討と同じ 1 行。画面ごとに石数の置き場所が変わると、
+          同じものを探すのに毎回目が迷う */}
+      <ScoreRow black={n?.black ?? 2} white={n?.white ?? 2}
+                turn={n?.player === 'white' ? 'w' : 'b'}
+                meta={b.err || (n && n.moves.length === 0 ? 'この局面から先は定石にありません' : undefined)} />
     </div>
   );
 }
@@ -174,10 +176,6 @@ export function BookDock({ b, onStudy }: { b: BookBrowse; onStudy: (kifu: string
         <div style={{ fontSize: 'var(--fs-6)', color: 'var(--sub)', lineHeight: 1.9, wordBreak: 'break-all' }}>
           {b.line.length ? b.line.map(sqName).join(' ') : '初期局面'}
         </div>
-        <div style={{ display: 'flex', gap: 'var(--sp-2)' }}>
-          <Button size="chip" disabled={!b.line.length} onClick={b.back}>戻る</Button>
-          <Button size="chip" disabled={!b.line.length} onClick={b.reset}>最初へ</Button>
-        </div>
         {n?.learned && (
           // 元の定石ファイルの値か、自分の対局から書き戻した値かで重みが違う。
           // 学習ぶんは数局しか根拠が無いこともあるので、その断りを出す
@@ -193,12 +191,16 @@ export function BookDock({ b, onStudy }: { b: BookBrowse; onStudy: (kifu: string
             この局面から先は定石にありません。
           </span>
         )}
-        {rows.map((r) => (
-          <BookRow key={r.key} r={r} open={b.open.has(r.key)}
-                   onToggle={() => b.toggle(r.key)}
-                   onGo={() => b.goto(r.key)}
-                   onStudy={() => onStudy(r.key)} />
-        ))}
+        {/* 行どうしは詰める。節の余白 (12px) が行間に入ると 24px の行が
+            36px 間隔で並び、字下げで木を読ませる作りが効かなくなる */}
+        <div style={{ display: 'flex', flexDirection: 'column' }}>
+          {rows.map((r) => (
+            <BookRow key={r.key} r={r} open={b.open.has(r.key)}
+                     onToggle={() => b.toggle(r.key)}
+                     onGo={() => b.goto(r.key)}
+                     onStudy={() => onStudy(r.key)} />
+          ))}
+        </div>
         {n && n.moves.length > 0 && (
           <span style={{ fontSize: 'var(--fs-7)', color: 'var(--sub)', lineHeight: 1.7 }}>
             値は手番から見た石差、右は採用局数。行を押すとその局面へ移り、
@@ -222,7 +224,8 @@ function BookRow({ r, open, onToggle, onGo, onStudy }: {
       paddingLeft: r.depth * 12, borderRadius: 'var(--r-2)',
     }}>
       {/* 三角は当たりを行の高さいっぱいに取る。16px 角に fs-7 の記号だと
-          押す場所が分からないうえ、外しやすい */}
+          押す場所が分からないうえ、外しやすい。**記号自体も大きくする** —
+          当たりが足りていても、絵が小さいと「押せる」と思われない */}
       {leaf ? (
         <span style={{ width: 22, flex: 'none' }} />
       ) : (
@@ -231,7 +234,7 @@ function BookRow({ r, open, onToggle, onGo, onStudy }: {
                 style={{
                   width: 22, height: 'var(--h-row)', flex: 'none', border: 0, padding: 0,
                   background: 'transparent', color: 'var(--sub)',
-                  fontSize: 'var(--fs-5)', lineHeight: 1, borderRadius: 'var(--r-1)',
+                  fontSize: 'var(--fs-3)', lineHeight: 1, borderRadius: 'var(--r-1)',
                 }}>{open ? '▾' : '▸'}</button>
       )}
       <button type="button" onClick={onGo} onDoubleClick={onStudy}
