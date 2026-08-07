@@ -110,7 +110,7 @@ export function StoneDot({ color, size = 9 }: { color: StoneColor; size?: number
  */
 export type GraphPoint = { value: number; exact?: boolean; book?: boolean };
 
-export function EvalGraph({ points, plies, cursor, blunder, busy, title = '評価値グラフ (黒視点)', extra, onJump }: {
+export function EvalGraph({ points, plies, cursor, blunder, busy, title = '評価値グラフ (黒視点)', extra, onJump, moveName }: {
   points: (GraphPoint | undefined)[];
   plies?: number;
   cursor?: number;
@@ -122,7 +122,13 @@ export function EvalGraph({ points, plies, cursor, blunder, busy, title = '評�
   extra?: React.ReactNode;
   /** 押した手数へ飛ぶ。現行にある操作なので落とさない */
   onJump?: (n: number) => void;
+  /** その手数に指された手の名前 ("f5")。見出し行の読み取りに添える。 */
+  moveName?: (n: number) => string | undefined;
 }) {
+  /* 触れているところの手数。**押さなくても読める**ようにする —
+     点の位置だけでは何手目の何石差か分からず、いちいち押して盤を動かす
+     しかなかった。出す場所は見出し行 (規則 19 — 描画領域に重ねない)。 */
+  const [hover, setHover] = React.useState<number | null>(null);
   const W = 800, H = 210, L = 44, R = 54, T = 18, B = 26, STEP = 8;
   const len = Math.max(1, plies ?? points.length - 1);
   const defined = points.filter((p): p is GraphPoint => !!p).map(p => Math.abs(p.value));
@@ -152,6 +158,15 @@ export function EvalGraph({ points, plies, cursor, blunder, busy, title = '評�
   const bVal = blunder ? points[blunder.at]?.value : undefined;
   const bHigh = bVal !== undefined && bVal > 0;
 
+  /** 器の中の x から手数を出す。viewBox は器より広いので実寸の比で数え直す */
+  const plyAt = (e: React.MouseEvent<SVGSVGElement>) => {
+    const r = e.currentTarget.getBoundingClientRect();
+    const px = ((e.clientX - r.left) / r.width) * W;
+    const n = Math.round(((px - L) / (W - L - R)) * len);
+    return n >= 0 && n <= len ? n : null;
+  };
+  const shown = hover !== null ? points[hover] : undefined;
+
   return (
     <div style={{
       flex: 'none', borderTop: '1px solid var(--border)', background: 'var(--panel)',
@@ -170,18 +185,28 @@ export function EvalGraph({ points, plies, cursor, blunder, busy, title = '評�
         <Legend tone="gold">定石</Legend>
         <Legend tone="text">読切</Legend>
         <Legend tone="accent">探索</Legend>
+        {/* 触れているところの読み取り。**幅の決まった枠に入れる** —
+            文字数で凡例が左右に動くと、目で追う先が毎回変わる */}
+        <span style={{ minWidth: 132, color: 'var(--text)', whiteSpace: 'nowrap' }}>
+          {hover !== null && shown && <>
+            {hover} 手{moveName?.(hover) ? ' ' + moveName(hover) : ''}
+            {' '}<b style={{ fontWeight: 600 }}>
+              {shown.value > 0 ? '+' : ''}{shown.value.toFixed(1)}
+            </b>
+            <span style={{ color: shown.book ? 'var(--gold)' : 'var(--sub)' }}>
+              {' '}{shown.book ? '定石' : shown.exact ? '読切' : '探索'}
+            </span>
+          </>}
+        </span>
         {extra && <span style={{ marginLeft: 'auto', display: 'flex', alignItems: 'center', gap: 'var(--sp-3)' }}>{extra}</span>}
       </div>
       <div style={{ position: 'relative' }}>
         {/* 押した位置の手数へ飛ぶ。viewBox は器より広いので、実寸の比で数え直す */}
         <svg viewBox={`0 0 ${W} ${H}`} style={{ width: '100%', height: 'auto', display: 'block' }}
              role="img" aria-label="評価値グラフ（縦軸 石差、横軸 手数）"
-             onClick={onJump && (e => {
-               const r = e.currentTarget.getBoundingClientRect();
-               const px = ((e.clientX - r.left) / r.width) * W;
-               const n = Math.round(((px - L) / (W - L - R)) * len);
-               if (n >= 0 && n <= len) onJump(n);
-             })}>
+             onMouseMove={(e) => setHover(plyAt(e))}
+             onMouseLeave={() => setHover(null)}
+             onClick={onJump && ((e) => { const n = plyAt(e); if (n !== null) onJump(n); })}>
           <rect x={0} y={0} width={W} height={H} rx={8} fill="var(--bg)" />
           {/* 単位は目盛の列に入れない（+16 と重なる）。左上に逃がす */}
           <text x={10} y={12} fill="var(--sub)" fontSize={10}>石差</text>
@@ -225,10 +250,17 @@ export function EvalGraph({ points, plies, cursor, blunder, busy, title = '評�
           )}
 
           {points.map((p, n) => p && (
-            <circle key={n} cx={x(n)} cy={y(clamp(p.value))} r={p.exact || p.book ? 4 : 3}
+            <circle key={n} cx={x(n)} cy={y(clamp(p.value))}
+                    r={n === hover ? 5 : p.exact || p.book ? 4 : 3}
                     fill={p.book ? 'var(--gold)' : p.exact ? 'var(--text)' : 'var(--accent)'}
                     stroke="var(--bg)" strokeWidth={1} />
           ))}
+          {/* 触れているところの縦線。いまいる手数の線 (--accent-dim の破線) と
+              見分けが付くよう、細い実線にする */}
+          {hover !== null && shown && (
+            <line x1={x(hover)} y1={T} x2={x(hover)} y2={H - B}
+                  stroke="var(--sub)" strokeWidth={1} />
+          )}
         </svg>
         {/* 線が無いグラフをそのまま出すと、壊れているのか未計算なのか分からない */}
         {!d && (

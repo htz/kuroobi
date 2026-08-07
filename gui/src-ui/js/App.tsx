@@ -491,6 +491,8 @@ export function App() {
         {study && !isGgs && (
           <EvalGraph points={graph.values ?? []} plies={v?.moves.length} cursor={v?.cursor}
                      blunder={blunder} busy={graph.busy} onJump={(n) => void g.jumpTo(n)}
+                     // n 手目の点は「n 手指し終えた局面」。指した手は n 番目
+                     moveName={(n) => { const m = v?.moves[n - 1]; return m == null ? undefined : sqName(m); }}
                      extra={<>
                        {/* 進み具合は見出し行に出す。帯の高さは変えない —
                            出るたびに枠が伸びると下の段が全部カタカタ動く */}
