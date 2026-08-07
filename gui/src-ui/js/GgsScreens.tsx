@@ -864,10 +864,33 @@ function Note({ children }: { children: React.ReactNode }) {
 /** 条件式 1 つ。木のまま組ませ、保存するときだけ文字列に戻す */
 function FormulaField({ label, src, onSave }: { label: string; src: string; onSave: (s: string) => void }) {
   const [cond, setCond] = useState<Cond | null>(() => (src ? parseCond(src) : null));
+  /* **逃げ道を必ず残す (規則 30)。** 木で表せない式が実際にあり、
+   * その場合に画面から手が出せなくなる。`onRaw` を渡さないと部品が
+   * 「式を直接書く」を出さないので、ここで渡すのを忘れない。 */
+  const [raw, setRaw] = useState<string | null>(null);
+  if (raw !== null) {
+    return (
+      <Field label={label}>
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 'var(--sp-2)' }}>
+          <TextField mono value={raw} onChange={setRaw}
+                     placeholder="例: rated & or>=1600 & !synchro" />
+          <div style={{ display: 'flex', gap: 'var(--sp-2)' }}>
+            <Button onClick={() => { setRaw(null); setCond(raw ? parseCond(raw) : null); }}>
+              木に戻す
+            </Button>
+            <span style={{ flex: 1 }} />
+            <Button variant="primary" onClick={() => { onSave(raw); setRaw(null); setCond(raw ? parseCond(raw) : null); }}>
+              反映する
+            </Button>
+          </div>
+        </div>
+      </Field>
+    );
+  }
   return (
     <Field label={label}>
       <FormulaEditor value={cond} onChange={setCond} onClear={() => setCond(null)}
-                     onSave={onSave} />
+                     onSave={onSave} onRaw={(s) => setRaw(s)} />
     </Field>
   );
 }
