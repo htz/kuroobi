@@ -143,6 +143,10 @@ export function EvalGraph({ points, plies, cursor, blunder, busy, title = '評�
   // 右に寄ったら線の左側へ回す（そのままだと viewBox から切れる）。
   const bx = blunder ? x(blunder.at) : 0;
   const bRight = blunder ? bx > W - R - 100 : false;
+  // 敗着の手の値が上半分にあるなら、ラベルは下端へ回す (逆も同じ)。
+  // 敗着はたいてい形勢が大きく動いた所なので、線は端に寄っていることが多い
+  const bVal = blunder ? points[blunder.at]?.value : undefined;
+  const bHigh = bVal !== undefined && bVal > 0;
 
   return (
     <div style={{
@@ -201,8 +205,10 @@ export function EvalGraph({ points, plies, cursor, blunder, busy, title = '評�
 
           {blunder && <>
             <line x1={bx} y1={T} x2={bx} y2={H - B} stroke="var(--bad)" strokeWidth={1.5} />
-            <text x={bRight ? bx - 7 : bx + 7} y={T + 11} textAnchor={bRight ? 'end' : 'start'}
-                  fill="var(--bad)" fontSize={11}>
+            {/* 上端に固定すると、線が上に張り付いている局面 (大差) でデータと
+                重なる。**線の反対側へ回す** — 規則 52 を縦にも当てはめる */}
+            <text x={bRight ? bx - 7 : bx + 7} y={bHigh ? H - B - 6 : T + 11}
+                  textAnchor={bRight ? 'end' : 'start'} fill="var(--bad)" fontSize={11}>
               {blunder.at} 手 敗着 ▼{blunder.loss}
             </text>
           </>}
