@@ -4,6 +4,7 @@ import React from 'react';
  * onClick は引数を取らない。 */
 import { Icon, IconButton, type IconName } from './Icons';
 import { Badge, Dot, Button, Select, TextField } from './primitives';
+import logo from '../../assets/kuroobi.svg?raw';
 // 値の実体は 1 つ。設計側の state.ts に写しがあったが、定数が 2 か所にあると
 // 必ず割れる（レベル表・条件式の変数・色の値で実際に割れていた）
 import {
@@ -70,6 +71,11 @@ export function Nav({ items, ggsItems, conn, active, onSelect, footer }: {
       flex: 'none', background: 'var(--panel)',
       borderRight: '1px solid var(--border)', display: 'flex', flexDirection: 'column', minHeight: 0,
     }}>
+      {/* ロゴの帯。信号機ぶんの 78px は窓の帯が持つので、ここには要らない。
+          畳む段では丸ごと落とす (48px の列に文字のロゴは入らない) */}
+      <div className="k-nav-logo" style={{ height: 'var(--h-bar)', flex: 'none', padding: '0 var(--sp-3)' }}>
+        <span aria-label="KUROOBI" dangerouslySetInnerHTML={{ __html: logo }} />
+      </div>
       <div style={{ padding: 'var(--sp-1) var(--sp-2) 0', display: 'flex', flexDirection: 'column', gap: 1 }}>
         {items.map(i => <NavRow key={i.id} item={i} active={active === i.id} onSelect={onSelect} />)}
       </div>

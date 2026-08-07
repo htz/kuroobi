@@ -99,11 +99,11 @@ button:disabled, button[aria-disabled="true"] { cursor:default; }
 .k-dock { width:var(--w-dock); display:flex; }
 .k-nav-section, .k-meter-text, .k-toolbar-aux, .k-nav-jobs { display:flex; }
 .k-nav-row { padding:0 10px; }
-/* 窓の帯のロゴ。SVG は放っておくと固有の大きさで描かれるので幅を決める。
-   絵そのものは当たりを持たない — 持つと mousedown の相手が svg になり、
-   data-tauri-drag-region を持つ親に届かず窓が動かせない */
-.k-window-logo { display:block; width:72px; flex:none; }
-.k-window-logo > svg { display:block; width:100%; height:auto; pointer-events:none; }
+/* Nav の上端のロゴ。SVG は放っておくと固有の大きさで描かれるので幅を決める。
+   display は畳む段が動かすので、ここが持つ (インラインに書くと届かない) */
+.k-nav-logo { display:flex; align-items:center; }
+.k-nav-logo > span { display:block; width:100px; }
+.k-nav-logo > span > svg { display:block; width:100%; height:auto; }
 
 /* Dock を開く入口は Toolbar の右端（k-dock-toggle）。
  * 広い窓では Dock が常に見えているので入口は出さない。 */
@@ -121,7 +121,7 @@ button:disabled, button[aria-disabled="true"] { cursor:default; }
   /* 文字はすべて落とす。ロゴと仕事一覧も文字なので同じ扱い — メーターの
      ラベルだけ消して他を残すと、48px の列で折り返して縦に伸びる */
   .k-nav .k-nav-label, .k-nav .k-nav-section, .k-nav .k-meter-text,
-  .k-nav .k-nav-jobs { display:none; }
+  .k-nav .k-nav-logo, .k-nav .k-nav-jobs { display:none; }
   .k-nav .k-nav-row { justify-content:center; padding:0; }
   /* ロゴを落としても帯は残す — 信号機の居場所とドラッグ領域なので */
 }

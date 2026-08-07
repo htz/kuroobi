@@ -5,7 +5,6 @@ import { IconButton } from './Icons';
 // アセットを唯一の出所にする (assets.d.ts の方針)。画面用に写した複製と
 // ファイルが食い違う事故を防ぐため、<img src> ではなく中身を読む
 import icon from '../../assets/icon.svg?raw';
-import logo from '../../assets/kuroobi.svg?raw';
 
 /* KUROOBI layout
  * 画面は 左メニュー（ggs.tsx の Nav）＋右に縦 3 段
@@ -45,23 +44,26 @@ export function AppFrame({ children }: { children: React.ReactNode }) {
  * いたかが分かる。Tauri は title を空にしてこちらで描く。 */
 export function WindowBar({ title, sub }: { title: string; sub?: React.ReactNode }) {
   return (
+    /* 左右に信号機ぶんの余白を同じだけ取り、題名は**窓の中央**に置く。
+       左だけ空けて左寄せにすると、窓の題名ではなく画面の見出しに見える。
+       ロゴはここには置かない — 28px の帯に押し込むと窮屈で、Nav の上端の
+       ほうが余裕がある。 */
     <div data-tauri-drag-region className="k-drag" style={{
       height: 'var(--h-window)', flex: 'none', background: 'var(--bg)',
       borderBottom: '1px solid var(--border)', display: 'flex', alignItems: 'center',
-      paddingLeft: 'var(--w-signals)', paddingRight: 'var(--sp-3)', gap: 'var(--sp-3)',
+      padding: '0 var(--w-signals)', gap: 'var(--sp-2)',
     }}>
-      {/* 絵に当たりを持たせない — mousedown の相手が svg になると、
-          data-tauri-drag-region を持つ親に届かず窓が動かせなくなる */}
-      <span data-tauri-drag-region className="k-window-logo" aria-label="KUROOBI"
-            dangerouslySetInnerHTML={{ __html: logo }} />
-      <span style={{ width: 1, height: 12, background: 'var(--border)', flex: 'none' }} />
-      <span data-tauri-drag-region style={{ fontSize: 'var(--fs-6)', color: 'var(--text)' }}>{title}</span>
-      {sub && (
-        <span data-tauri-drag-region style={{
-          fontSize: 'var(--fs-6)', color: 'var(--sub)',
-          overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
-        }}>{sub}</span>
-      )}
+      <span data-tauri-drag-region style={{
+        margin: '0 auto', display: 'flex', alignItems: 'center', gap: 'var(--sp-2)',
+        minWidth: 0, fontSize: 'var(--fs-6)',
+      }}>
+        <span style={{ color: 'var(--text)' }}>{title}</span>
+        {sub && (
+          <span style={{
+            color: 'var(--sub)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
+          }}>{sub}</span>
+        )}
+      </span>
     </div>
   );
 }
