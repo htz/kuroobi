@@ -177,7 +177,9 @@ function rowsOf(b: BookBrowse, key: string, depth: number, out: Row[]): void {
 }
 
 /** 手順と、その先の木。 */
-export function BookDock({ b, onStudy }: { b: BookBrowse; onStudy: (kifu: string) => void }) {
+export function BookDock({ b, onStudy, decimals = 1 }: {
+  b: BookBrowse; onStudy: (kifu: string) => void; decimals?: number;
+}) {
   const n = b.node;
   const root = keyOf(b.line);
   const rows: Row[] = [];
@@ -208,7 +210,7 @@ export function BookDock({ b, onStudy }: { b: BookBrowse; onStudy: (kifu: string
             36px 間隔で並び、字下げで木を読ませる作りが効かなくなる */}
         <div style={{ display: 'flex', flexDirection: 'column' }}>
           {rows.map((r) => (
-            <BookRow key={r.key} r={r} open={b.open.has(r.key)}
+            <BookRow key={r.key} r={r} open={b.open.has(r.key)} decimals={decimals}
                      onToggle={() => b.toggle(r.key)}
                      onGo={() => b.goto(r.key)}
                      onStudy={() => onStudy(r.key)} />
@@ -225,8 +227,9 @@ export function BookDock({ b, onStudy }: { b: BookBrowse; onStudy: (kifu: string
   );
 }
 
-function BookRow({ r, open, onToggle, onGo, onStudy }: {
+function BookRow({ r, open, onToggle, onGo, onStudy, decimals = 1 }: {
   r: Row; open: boolean; onToggle: () => void; onGo: () => void; onStudy: () => void;
+  decimals?: number;
 }) {
   // 先があるかは節を取るまで分からない。取れていて 0 手なら三角を出さない
   const leaf = r.child && r.child.moves.length === 0;
@@ -259,7 +262,7 @@ function BookRow({ r, open, onToggle, onGo, onStudy }: {
               }}>
         <span style={{ width: 30, fontWeight: 600 }}>{r.name}</span>
         <span style={{ width: 44, textAlign: 'right', fontVariantNumeric: 'tabular-nums' }}>
-          {r.value > 0 ? '+' : ''}{r.value.toFixed(1)}
+          {r.value > 0 ? '+' : ''}{r.value.toFixed(decimals)}
         </span>
         {/* 桁区切りを入れる。5 桁を超える数を素で並べると桁が読めない
             (設計の絵も 12,480 の形。下の帯の局面数も同じ書き方) */}

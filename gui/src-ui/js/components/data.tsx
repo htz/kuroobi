@@ -21,7 +21,11 @@ export type Move = {
   pass?: boolean;
 };
 
-export function KifuTable({ moves, current, onSelect }: { moves: Move[]; current?: number; onSelect?: (n: number) => void }) {
+export function KifuTable({ moves, current, onSelect, decimals = 1 }: {
+  moves: Move[]; current?: number; onSelect?: (n: number) => void;
+  /** 評価値の小数桁 (設定の 表示 タブ)。 */
+  decimals?: number;
+}) {
   // 現在手を追う。対局中は毎手増えるので、放っておくと下へ流れて見えなくなる。
   // scrollIntoView は祖先ごと動かしてしまう (パネル全体が流れて上の操作が
   // 画面外へ出る) ので、枠の中だけで計算する
@@ -77,7 +81,7 @@ export function KifuTable({ moves, current, onSelect }: { moves: Move[]; current
               </span>
               <span style={{ width: 56, display: 'flex', justifyContent: 'flex-end', gap: 5 }}>
                 {m.loss ? <span style={{ fontSize: 'var(--fs-7)', color: 'var(--bad)' }}>▼{m.loss}</span> : null}
-                <span>{m.score === undefined ? '' : (m.score > 0 ? '+' : '') + m.score.toFixed(1)}</span>
+                <span>{m.score === undefined ? '' : (m.score > 0 ? '+' : '') + m.score.toFixed(decimals)}</span>
               </span>
               <span style={{ width: 34, textAlign: 'right', color: 'var(--sub)', fontSize: 'var(--fs-6)' }}>{m.secs?.toFixed(1) ?? ''}</span>
               <span style={{ flex: 1, textAlign: 'right', fontSize: 'var(--fs-6)', color: m.src?.startsWith('定石') ? 'var(--gold)' : m.src === '読切' ? 'var(--text)' : 'var(--sub)' }}>{m.src ?? ''}</span>

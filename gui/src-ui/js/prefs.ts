@@ -11,8 +11,17 @@ export type Theme = 'os' | 'dark' | 'light';
 /** 盤の向き。`auto` は自分が持っている色を下にする (対局のときだけ効く)。 */
 export type Facing = 'black' | 'white' | 'auto';
 
+/** 畳の色。設計の 表示 タブが 4 色の見本を並べている。 */
+export type Tatami = 0 | 1 | 2 | 3;
+/** 評価値の小数桁。設計の 表示 タブが 0 / 1 / 2 を出している。 */
+export type Decimals = 0 | 1 | 2;
+
 export interface Prefs {
   theme: Theme;
+  /** 畳の色 (0 = 標準)。 */
+  tatami: Tatami;
+  /** 評価値の小数桁。 */
+  decimals: Decimals;
   /** 盤の縁の a〜h / 1〜8。 */
   coords: boolean;
   /** 畳の藺草の目。薄いので普段は気にならないが、消したい人もいる。 */
@@ -23,8 +32,19 @@ export interface Prefs {
 }
 
 const DEFAULTS: Prefs = {
-  theme: 'os', coords: true, grain: true, flipMs: 120, facing: 'black',
+  theme: 'os', tatami: 0, decimals: 1,
+  coords: true, grain: true, flipMs: 120, facing: 'black',
 };
+
+/* 畳の色。**盤の 4 つのトークンを組で差し替える** — 地だけ変えると
+ * 縁と罫と藺草の目が取り残されて、盤が濁って見える。
+ * 色は設計の 表示 タブの見本から取った。 */
+export const TATAMI: { label: string; board: string; dark: string; line: string; grain: string }[] = [
+  { label: '標準', board: '#77914e', dark: '#3f4f2c', line: '#3d5226', grain: '#33421d' },
+  { label: '明るい', board: '#93a55e', dark: '#4b5c33', line: '#4a6130', grain: '#3f5124' },
+  { label: '灰', board: '#7f8b72', dark: '#414a3a', line: '#3f4a35', grain: '#38422f' },
+  { label: '深い', board: '#5c7040', dark: '#313d22', line: '#2f4020', grain: '#27331a' },
+];
 
 const KEY = 'kuroobi.prefs';
 
@@ -76,6 +96,20 @@ export function usePrefs() {
   useEffect(() => {
     document.documentElement.style.setProperty('--flip-dur', prefs.flipMs + 'ms');
   }, [prefs.flipMs]);
+
+  /* 畳の色。トークンを上書きするので、テーマを切り替えても選んだ色が残る。
+   * 標準 (0) のときは何も書かない — tokens.css の値をそのまま使わせる
+   * (ライトはライトの緑を持っているので、上書きすると台無しになる)。 */
+  useEffect(() => {
+    const el = document.documentElement;
+    const keys = ['--board', '--board-dark', '--line', '--grain'];
+    if (prefs.tatami === 0) { for (const k of keys) el.style.removeProperty(k); return; }
+    const t = TATAMI[prefs.tatami];
+    el.style.setProperty('--board', t.board);
+    el.style.setProperty('--board-dark', t.dark);
+    el.style.setProperty('--line', t.line);
+    el.style.setProperty('--grain', t.grain);
+  }, [prefs.tatami]);
 
   return { prefs, set };
 }

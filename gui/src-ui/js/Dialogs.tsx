@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useState, type ReactNode } from 'react';
 import { api, emitApp, type KifuFrame, type ThreadsView } from './api';
-import type { Prefs, Theme } from './prefs';
+import { TATAMI, type Prefs, type Theme } from './prefs';
 import { Modal, Overlay, Section, WindowBar } from './components/layout';
 import { Button, Segmented, Select, TextField } from './components/primitives';
 import { Icon } from './components/Icons';
@@ -168,7 +168,7 @@ const NOT_FOUND: Record<string, string> = {
 export function Settings({ prefs, setPref }: {
   prefs: Prefs; setPref: <K extends keyof Prefs>(k: K, v: Prefs[K]) => void;
 }) {
-  const [tab, setTab] = useState<'engine' | 'view'>('engine');
+  const [tab, setTab] = useState<'engine' | 'view' | 'ggs' | 'more'>('engine');
   const [reset, setReset] = useState(false);
   const [status, setStatus] = useState<[string, string, boolean, number, string][]>([]);
   const [th, setTh] = useState<ThreadsView | null>(null);
@@ -224,6 +224,8 @@ export function Settings({ prefs, setPref }: {
           <Segmented solid value={tab} onChange={setTab} options={[
             { value: 'engine', label: 'エンジン' },
             { value: 'view', label: '表示' },
+            { value: 'ggs', label: 'GGS' },
+            { value: 'more', label: '詳細' },
           ]} />
         </div>
         <div className="k-scroll" style={{ flex: 1, minHeight: 0, padding: 'var(--sp-5)' }}>
@@ -255,6 +257,25 @@ export function Settings({ prefs, setPref }: {
           </div>
         </Section>
         <Section title="盤">
+          <Row2 label="畳の色">
+            {/* 設計は 4 色の見本。色の選択に文字を使うと、選んでから盤を
+                見に行く往復が要る */}
+            <span style={{ display: 'flex', gap: 'var(--sp-2)' }}>
+              {TATAMI.map((t, i) => {
+                const on = prefs.tatami === i;
+                return (
+                  <button key={t.label} type="button" className="k-press"
+                          onClick={() => setPref('tatami', i as Prefs['tatami'])}
+                          title={t.label} aria-label={t.label} aria-pressed={on}
+                          style={{
+                            width: 26, height: 26, borderRadius: 'var(--r-1)', padding: 0,
+                            background: t.board,
+                            border: '2px solid ' + (on ? 'var(--accent)' : 'transparent'),
+                          }} />
+                );
+              })}
+            </span>
+          </Row2>
           <Row2 label="盤の向き">
             <Segmented value={prefs.facing} onChange={(v) => setPref('facing', v)} options={[
               { value: 'black', label: '黒が下' },
@@ -277,7 +298,46 @@ export function Settings({ prefs, setPref }: {
                                  { value: '240', label: 'ゆっくり' }]} />
           </Row2>
         </Section>
+        <Section title="数値">
+          {/* 設計はここに 単位 / 小数 / 視点 を並べている。単位は
+              エンジンが勝率を返さないので選べない — **選べない理由まで
+              書く** (規則 61)。視点は「盤の向き」と同じものなので上に寄せた */}
+          <Row2 label="単位">
+            <span style={{ fontSize: 'var(--fs-5)' }}>石差のみ</span>
+            <span style={{ marginLeft: 'auto', fontSize: 'var(--fs-7)', color: 'var(--sub)' }}>
+              勝率はエンジンが返さない
+            </span>
+          </Row2>
+          <Row2 label="小数">
+            <Segmented value={String(prefs.decimals)}
+                       onChange={(v) => setPref('decimals', +v as Prefs['decimals'])}
+                       options={[{ value: '0', label: '0' },
+                                 { value: '1', label: '1' },
+                                 { value: '2', label: '2' }]} />
+            <span style={{ marginLeft: 'auto', fontSize: 'var(--fs-7)', color: 'var(--sub)' }}>
+              棋譜・グラフ・定石
+            </span>
+          </Row2>
+        </Section>
         </>}
+
+        {tab === 'ggs' && (
+          <Section title="GGS">
+            <p style={{ margin: 0, fontSize: 'var(--fs-6)', color: 'var(--sub)', lineHeight: 1.8 }}>
+              GGS の強さ・持ち時間の使い方・申し込みの扱いは、
+              左メニューの「GGS の設定」にあります。サーバー側に残る設定が
+              混ざるので、繋いでいる状態で触れる場所に置いてあります。
+            </p>
+          </Section>
+        )}
+
+        {tab === 'more' && (
+          <Section title="詳細">
+            <p style={{ margin: 0, fontSize: 'var(--fs-6)', color: 'var(--sub)', lineHeight: 1.8 }}>
+              いまのところ、ここに置くものはありません。
+            </p>
+          </Section>
+        )}
 
         {tab === 'engine' && <>
         <Section title="ファイル">

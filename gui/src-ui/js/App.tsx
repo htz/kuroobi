@@ -521,7 +521,8 @@ export function App() {
       {/* 定石が無いときは空のドックも出さない (盤側が報せを出している) */}
       {isBook && book.node?.size !== 0 && (
         <Dock tabs={['定石']} active="定石" open={dockOpen}>
-          <BookDock b={book} onStudy={(kifu) => { setNav('study'); void loadFromText(kifu); }} />
+          <BookDock b={book} decimals={prefs.decimals}
+                    onStudy={(kifu) => { setNav('study'); void loadFromText(kifu); }} />
         </Dock>
       )}
 
@@ -533,7 +534,7 @@ export function App() {
         {tab === '棋譜' && (
           <>
             <div style={{ flex: 1, minHeight: 0, display: 'flex', flexDirection: 'column' }}>
-              <KifuTable moves={moves} current={v?.cursor}
+              <KifuTable moves={moves} current={v?.cursor} decimals={prefs.decimals}
                          onSelect={(n) => void g.jumpTo(n)} />
             </div>
             {/* 棋譜の出し入れは列の**下**。上に置くと、表を見に来ただけの
