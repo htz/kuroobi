@@ -3,7 +3,7 @@ import { useGame } from './state';
 import { useGgs } from './ggs';
 import { flipped, usePrefs } from './prefs';
 import type { GameView } from './types';
-import { api, ggsApi, jsLog, onApp, openWindow, type ActivityView } from './api';
+import { api, emitApp, ggsApi, jsLog, onApp, openWindow, type ActivityView } from './api';
 import { useActivity, useEngineSettings, useEngineTurn, useGraph, useHints, useLearnLog, useStartGame } from './engine';
 import { fmtSecs } from './ggs';
 import { cellsOf, connOf, evalsOf, ggsPlaying, movesOf, navBadges, sqName } from './adapt';
@@ -16,7 +16,6 @@ import { GgsStatus, JobList, Meter, Nav, NAV_LOCAL, StatusChip, ggsNav, Toasts, 
 import { Button, Dot, Progress, Segmented, Toggle } from './components/primitives';
 import { Icon } from './components/Icons';
 import { Strength } from './components/strength';
-import { BookDock, BookPane, useBookBrowse } from './BookScreen';
 import { LearnLog } from './LearnLog';
 import { KifuViewer } from './KifuViewer';
 import { LEVELS } from './state';
@@ -64,7 +63,6 @@ export function App() {
    * から描き直す順を保つため (効果の中で書き換えると 1 枚古い絵が挟まる)。 */
   const nav = reachable(navRaw, conn);
   const study = nav === 'study';
-  const isBook = nav === 'book';
   const isGgs = nav.startsWith('ggs');
   const [tab, setTab] = useState('棋譜');
   const [dockOpen, setDockOpen] = useState(false);
@@ -125,9 +123,8 @@ export function App() {
     if (id === 'play' || id === 'study') setMode(id === 'study' ? 'study' : 'vs');
   }, [setMode, navRaw, chatTotal]);
 
-  const book = useBookBrowse(isBook);
   const { items: learnLog, reload: learnLogReload } = useLearnLog(
-    tab === '学習' && !isGgs && !isBook, !!cpu?.learn);
+    tab === '学習' && !isGgs, !!cpu?.learn);
 
   /* 棋譜ビューア (規則 71)。`pending` はアーカイブ番号 — 手元に棋譜が
    * 無い対局は覆いを先に開き、届いたら中身を差し込む。 */
@@ -142,7 +139,6 @@ export function App() {
   // "study:graph" 用。graph.update はこの effect より後ろで作られるので
   // ref 越しに渡す (依存に入れると毎回走り直す)
   const autoGraph = useRef<(() => void) | null>(null);
-  const bookLine = useRef<((kifu: string) => void) | null>(null);
   useEffect(() => {
     if (started.current) return;
     started.current = true;
@@ -152,8 +148,10 @@ export function App() {
       if (who === 'settings') { void openWindow('settings'); return; }
       // "tab:学習" のようにドックの見出しを指定する (撮るためだけの入口)
       if (who === 'tab') { if (lv) setTab(lv); return; }
-      // "book:f5d6" のように手順を渡すと、その節まで辿った状態で開く
-      if (who === 'book') { setNavRaw('book'); if (lv) bookLine.current?.(lv); return; }
+      // "book:f5d6" のように手順を渡すと、その節まで辿った状態で開く。
+      // 手順は窓の側が autoplay を読み直して使う (立ち上がる前に報せを飛ばすと
+      // 取りこぼす)
+      if (who === 'book') { void openWindow('book'); return; }
       if (who === 'study') {
         // 起動時の状態取得と前後すると初期局面で上書きされるので一拍おく
         await new Promise((r) => setTimeout(r, 500));
@@ -178,7 +176,6 @@ export function App() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
   useEffect(() => { autoGraph.current = () => void graph.update(); }, [graph]);
-  useEffect(() => { bookLine.current = book.goto; }, [book.goto]);
 
   /* 画面確認用 (KUROOBI_GGS_AUTOVIEW=players のように指定する)。
    * GGS の画面は開くまで描かれないので、撮るには行き先を指定する経路が要る。 */
@@ -210,6 +207,18 @@ export function App() {
       if (ply !== undefined) await g.jumpTo(ply);
     } catch (e) { g.say('' + e); }
   };
+
+  /* 定石の窓から「この手順を検討で開いて」と言われる。窓は別の document で
+     状態を共有できないので報せで受ける。loadFromText は毎描画で作り直される
+     ので ref 越しに渡す (依存に入れると聞き手を張り直し続ける)。 */
+  const openStudy = useRef<((p: { kifu: string; ply?: number }) => void) | null>(null);
+  useEffect(() => {
+    openStudy.current = ({ kifu, ply }) => { setNav('study'); void loadFromText(kifu, ply); };
+  });
+  useEffect(() => {
+    const off = onApp<{ kifu: string; ply?: number }>('open-study', (p) => openStudy.current?.(p));
+    return () => { void off.then((f) => f()); };
+  }, []);
 
   /* GGS からの一言と、取り出した棋譜を受け取る。
    *
@@ -272,32 +281,23 @@ export function App() {
       if (paste || ask) return;
       const cmd = e.metaKey || e.ctrlKey;
       const key = e.key.toLowerCase();
-      if (cmd && key === 'b') { e.preventDefault(); setNav('book'); return; }
+      // 定石は独立ウィンドウ (規則の「定石ブラウザ / 学習ログ」の節)
+      if (cmd && key === 'b') { e.preventDefault(); void openWindow('book'); return; }
       if (cmd && key === 'n') { e.preventDefault(); if (!g.thinking) void g.newGame(); return; }
       // 棋譜の出し入れ。GGS と定石では扱う棋譜が無い
-      if (cmd && key === 's' && !isGgs && !isBook) {
+      if (cmd && key === 's' && !isGgs) {
         e.preventDefault();
         void api.saveKifu(...ggfNames(g.side)).catch((err) => g.say('' + err));
         return;
       }
-      if (cmd && key === 'o' && !isGgs && !isBook) { e.preventDefault(); setPaste(true); return; }
+      if (cmd && key === 'o' && !isGgs) { e.preventDefault(); setPaste(true); return; }
       if (cmd && key === 'z') {
         e.preventDefault();
         if (!g.thinking && v && v.move_count > 0) void g.undo();
         return;
       }
-      // 手順を行き来するのは検討と定石。対局中に矢印で戻せると、打った手が
-      // 消えたのか戻したのか分からなくなる
-      if (isBook) {
-        if (e.key === 'ArrowLeft') { e.preventDefault(); book.back(); }
-        if (e.key === 'ArrowUp') { e.preventDefault(); book.reset(); }
-        // 右は「いちばん値の高い手へ進む」。盤を見ながら本筋をなぞれる
-        if (e.key === 'ArrowRight' && book.node?.moves.length) {
-          e.preventDefault();
-          book.push(book.node.moves[0].pos);
-        }
-        return;
-      }
+      // 手順を行き来するのは検討だけ。対局中に矢印で戻せると、打った手が
+      // 消えたのか戻したのか分からなくなる (定石は独立ウィンドウが持つ)
       if (!study || !v) return;
       // ⌘ で端まで、⇧ で 10 手、素で 1 手
       const step = e.shiftKey ? 10 : 1;
@@ -309,7 +309,7 @@ export function App() {
     };
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
-  }, [setNav, paste, ask, isBook, isGgs, study, book, g, v]);
+  }, [setNav, paste, ask, isGgs, study, g, v]);
 
   const toasts: Toast[] = g.toasts.map(t => ({ id: String(t.id), tone: t.tone, text: t.text }));
 
@@ -329,7 +329,6 @@ export function App() {
     [...NAV_LOCAL, ...ggsNav(conn)].find((i) => i.id === nav)?.label ?? 'KUROOBI';
   const screenSub = isGgs
     ? (conn === 'online' ? ggs.snap?.login : undefined)
-    : isBook ? undefined
     : `${lv} · ${g.side === 'both' ? '両方' : g.side === 'off' ? '担当なし'
         : g.side === 'black' ? '黒' : '白'}`;
 
@@ -376,28 +375,12 @@ export function App() {
       <Main inset={dockOpen && !isGgs}>
       <Toolbar
           dock={isGgs ? undefined : { open: dockOpen, onToggle: () => setDockOpen(o => !o) }}
-          aux={isBook ? undefined
-            : isGgs ? (conn === 'online' && ggs.snap
+          aux={isGgs ? (conn === 'online' && ggs.snap
               ? <GgsStatus snap={ggs.snap}
                            showStrength={nav !== 'ggs-settings' && nav !== 'ggs-standby'} />
               : undefined)
             : <Toggle checked={g.autoHint} onChange={g.setAutoHint} label="評価値" />}>
-          {isBook ? (
-            <>
-              <Button disabled={!book.line.length} onClick={book.back}>戻る</Button>
-              <Button disabled={!book.line.length} onClick={book.reset}>最初へ</Button>
-              {/* 定石で見つけた手順をそのまま検討へ。定石の先を自分で読ませる
-                  にはこの向きの道が要る (行きだけあって帰りが無かった) */}
-              <Button disabled={!book.line.length}
-                      onClick={() => {
-                        setNav('study');
-                        void loadFromText(book.line.map(sqName).join(''));
-                      }}>検討で開く</Button>
-              <span style={{ marginLeft: 'var(--sp-3)', fontSize: 'var(--fs-6)', color: 'var(--sub)' }}>
-                {book.line.length ? book.line.length + ' 手目' : '初期局面'}
-              </span>
-            </>
-          ) : isGgs ? (
+          {isGgs ? (
             <span style={{ fontSize: 'var(--fs-5)', color: 'var(--sub)' }}>
               {conn === 'online' ? <>接続中 <b style={{ color: 'var(--text)' }}>{ggs.snap?.login}</b></>
                 : conn === 'offline' ? '未接続' : 'ログインしています…'}
@@ -414,12 +397,14 @@ export function App() {
                       onClick={() => void g.jumpTo(v!.moves.length)}>最後へ</Button>
               {/* いまの局面から定石を辿る。ここが無いと、検討で見ている手順を
                   初期局面から入れ直すしかない (打ち直しでしか行けない) */}
+              {/* 定石は独立ウィンドウ。手順は報せで渡す — 窓が立ち上がる前に
+                  飛ばすと取りこぼすので、開いてから一拍おいて送る */}
               <Button disabled={!g.hasBook || !v}
-                      onClick={() => {
-                        book.goto(v!.moves.slice(0, v!.cursor)
+                      onClick={() => void (async () => {
+                        await openWindow('book');
+                        emitApp('book-line', v!.moves.slice(0, v!.cursor)
                           .filter((m): m is number => m != null).map(sqName).join(''));
-                        setNav('book');
-                      }}>定石で開く</Button>
+                      })()}>定石で開く</Button>
             </>
           ) : (
             <>
@@ -450,10 +435,7 @@ export function App() {
                          setViewer({ title, kifu, pending: kifu ? undefined : archive });
                          if (!kifu && archive) void ggsApi.look(archive);
                        }} />
-         : isBook ? (
-          <BookPane b={book} coords={prefs.coords} grain={prefs.grain}
-                    flip={flipped(prefs.facing, '')} onSettings={() => void openWindow('settings')} />
-        ) : (
+         : (
         // 左右の余白は中の要素が持つ。ここに持たせると、石数の行の罫が
         // 端まで届かず途中で切れる (設計は端から端まで)
         <div style={{ flex: 1, minHeight: 0, display: 'flex', flexDirection: 'column' }}>
@@ -500,13 +482,13 @@ export function App() {
         )}
 
         {/* 手数を辿る帯。分析していなくても辿れるので、グラフより先に置く */}
-        {study && !isGgs && !isBook && v && (
+        {study && !isGgs && v && (
           <MoveScrub plies={v.moves.length} cursor={v.cursor} blunder={blunder}
                      onSeek={(n) => void g.jumpTo(n)} />
         )}
 
         {/* 箱に入れず、盤の下の帯として全幅に置く。検討だけ */}
-        {study && !isGgs && !isBook && (
+        {study && !isGgs && (
           <EvalGraph points={graph.values ?? []} plies={v?.moves.length} cursor={v?.cursor}
                      blunder={blunder} busy={graph.busy} onJump={(n) => void g.jumpTo(n)}
                      extra={<>
@@ -532,17 +514,9 @@ export function App() {
       </Main>
 
       {/* GGS はドックを持たない (一覧が本体の左に付く) */}
-      {/* 定石が無いときは空のドックも出さない (盤側が報せを出している) */}
-      {isBook && book.node?.size !== 0 && (
-        <Dock tabs={['定石']} active="定石" open={dockOpen}>
-          <BookDock b={book} decimals={prefs.decimals}
-                    onStudy={(kifu) => { setNav('study'); void loadFromText(kifu); }} />
-        </Dock>
-      )}
-
       {/* 棋譜のときは丸ごとスクロールさせない — 表が列の見出しを固定し、
           行だけを流す作りになっている (操作も上に残す) */}
-      {!isGgs && !isBook && (
+      {!isGgs && (
       <Dock tabs={['棋譜', '強さ', '学習']} active={tab} onTab={setTab} open={dockOpen}
             scroll={tab !== '棋譜'}>
         {tab === '棋譜' && (
@@ -657,8 +631,6 @@ export function App() {
               </>}
               <StatusStat label="GGS" value={conn === 'online' ? '接続中' : conn === 'offline' ? '未接続' : '接続しています…'} />
             </>
-            : isBook
-            ? <StatusStat label="定石" value={book.node ? book.node.size.toLocaleString() + ' 局面' : '—'} />
             : <>
               {/* 検討はいま何手目を見ているかが読めないと辿れない。手数の帯の
                   目盛は 10 手ごとなので、正確な数字はここが持つ (規則 58 —
