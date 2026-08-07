@@ -215,18 +215,28 @@ export function Settings({ prefs, setPref }: {
         {/* 節を縦に積むと下まで巻かないと何があるか分からない。区分はタブで
             分ける (設計の 設定 と同じ形)。GGS は左メニューに行き先があるので
             ここには置かない — 同じ設定を 2 か所に出さない (規則 58) */}
+        {/* **タブは Segmented ではない。** 設計の絵は囲みの枠を持たず、
+            字を並べて選ばれているものだけを塗る形。Segmented の囲みは
+            「並んだ選択肢の 1 つ」を示す部品で、画面を切り替えるタブとは
+            見た目を分けてある (規則 40 は選択肢の列の話)。 */}
         <div style={{
-          flex: 'none', display: 'flex', justifyContent: 'center',
+          flex: 'none', display: 'flex', justifyContent: 'center', gap: 'var(--sp-1)',
           padding: 'var(--sp-3) var(--sp-5)', borderBottom: '1px solid var(--border-weak)',
         }}>
-          {/* 設計はここを塗りで示している。左メニューを持たない窓なので、
-              青地が 2 か所になる心配が無い (規則 40 の但し書き) */}
-          <Segmented solid value={tab} onChange={setTab} options={[
-            { value: 'engine', label: 'エンジン' },
-            { value: 'view', label: '表示' },
-            { value: 'ggs', label: 'GGS' },
-            { value: 'more', label: '詳細' },
-          ]} />
+          {TABS.map(([v, label]) => {
+            const on = tab === v;
+            return (
+              <button key={v} type="button" className={'k-press' + (on ? ' k-on' : '')}
+                      onClick={() => setTab(v)} aria-pressed={on}
+                      style={{
+                        height: 'var(--h-ctrl)', padding: '0 var(--sp-3)', border: 0,
+                        borderRadius: 'var(--r-2)', fontSize: 'var(--fs-5)',
+                        background: on ? 'var(--accent-dim)' : 'transparent',
+                        color: on ? 'var(--on-accent)' : 'var(--sub)',
+                        fontWeight: on ? 600 : 400,
+                      }}>{label}</button>
+            );
+          })}
         </div>
         <div className="k-scroll" style={{ flex: 1, minHeight: 0, padding: 'var(--sp-5)' }}>
 
@@ -422,6 +432,10 @@ export function Settings({ prefs, setPref }: {
     </div>
   );
 }
+
+const TABS: ['engine' | 'view' | 'ggs' | 'more', string][] = [
+  ['engine', 'エンジン'], ['view', '表示'], ['ggs', 'GGS'], ['more', '詳細'],
+];
 
 const THEMES: [Theme, string][] = [
   ['os', 'システムに合わせる'], ['dark', 'ダーク'], ['light', 'ライト'],
