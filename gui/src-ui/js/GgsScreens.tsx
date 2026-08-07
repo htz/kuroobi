@@ -89,7 +89,10 @@ function GgsLogin() {
   return (
     <div style={{ flex: 1, display: 'grid', placeItems: 'center', padding: 'var(--sp-5)' }}>
       <div style={{
-        width: 340, borderRadius: 'var(--r-4)', background: 'var(--card)',
+        // 340px (Modal の既定) だと、説明文が 2 行に折り返すうえ欄が
+        // 292px の細い帯になり、**打ち込む場所に見えない**という指摘が出た。
+        // ここは画面に 1 つしかない入口で、他に並ぶものが無いので広く取れる
+        width: 420, borderRadius: 'var(--r-4)', background: 'var(--card)',
         border: '1px solid var(--border)', boxShadow: 'var(--sh-2)',
         padding: 'var(--sp-5)', display: 'flex', flexDirection: 'column', gap: 'var(--sp-4)',
       }}>
@@ -101,7 +104,10 @@ function GgsLogin() {
         <Field stretch label="パスワード"><TextField value={pw} password onChange={setPw} /></Field>
         <div style={{ display: 'flex', alignItems: 'center', gap: 'var(--sp-3)' }}>
           <span style={{ flex: 1, fontSize: 'var(--fs-6)', color: 'var(--bad)' }}>{status}</span>
-          <Button variant="primary" onClick={() => void connect()}>ログイン</Button>
+          {/* 欄と同じ高さにする。--h-field の説明そのものが
+              「入力・セレクト・モーダルのボタン」なので、28px だと欄より
+              低く、並べたときに揃わない */}
+          <Button size="field" variant="primary" onClick={() => void connect()}>ログイン</Button>
         </div>
       </div>
     </div>
