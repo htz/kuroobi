@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useState, type ReactNode } from 'react';
 import { api, emitApp, type KifuFrame, type ThreadsView } from './api';
-import type { Prefs } from './prefs';
+import type { Prefs, Theme } from './prefs';
 import { Modal, Overlay, Section, WindowBar } from './components/layout';
 import { Button, Segmented, Select, TextField } from './components/primitives';
 import { Icon } from './components/Icons';
@@ -231,14 +231,30 @@ export function Settings({ prefs, setPref }: {
         {/* 見え方だけの設定。エンジンの動きには関わらないので、
             バックエンドに送らず localStorage に置く */}
         {tab === 'view' && <>
-        <Section title="盤と配色">
-          <Row2 label="テーマ">
-            <Segmented value={prefs.theme} onChange={(v) => setPref('theme', v)} options={[
-              { value: 'os', label: 'OS に従う' },
-              { value: 'dark', label: 'ダーク' },
-              { value: 'light', label: 'ライト' },
-            ]} />
-          </Row2>
+        <Section title="テーマ">
+          {/* 設計は見本つきの札 3 枚。**配色は言葉より見たほうが早い** —
+              「OS に従う」がどちらになるかも、札を見れば分かる */}
+          <div style={{ display: 'flex', gap: 'var(--sp-3)' }}>
+            {THEMES.map(([v, label]) => {
+              const on = prefs.theme === v;
+              return (
+                <button key={v} type="button" className="k-press" onClick={() => setPref('theme', v)}
+                  aria-pressed={on}
+                  style={{
+                    flex: 1, minWidth: 0, display: 'flex', flexDirection: 'column',
+                    gap: 'var(--sp-2)', padding: 'var(--sp-2)', borderRadius: 'var(--r-3)',
+                    background: 'transparent', fontSize: 'var(--fs-6)',
+                    border: '1px solid ' + (on ? 'var(--accent)' : 'var(--border)'),
+                    color: on ? 'var(--text)' : 'var(--sub)', fontWeight: on ? 600 : 400,
+                  }}>
+                  <ThemeSwatch kind={v} />
+                  {label}
+                </button>
+              );
+            })}
+          </div>
+        </Section>
+        <Section title="盤">
           <Row2 label="盤の向き">
             <Segmented value={prefs.facing} onChange={(v) => setPref('facing', v)} options={[
               { value: 'black', label: '黒が下' },
@@ -344,6 +360,24 @@ export function Settings({ prefs, setPref }: {
                  }} />
       )}
     </div>
+  );
+}
+
+const THEMES: [Theme, string][] = [
+  ['os', 'システムに合わせる'], ['dark', 'ダーク'], ['light', 'ライト'],
+];
+
+/** テーマの見本。地の色だけを出す — 盤や文字まで描くと札が小さすぎて潰れる。
+ *  「システムに合わせる」は 2 つが斜めに割れている絵にする。 */
+function ThemeSwatch({ kind }: { kind: Theme }) {
+  const dark = '#16191d', light = '#faf8f3';
+  return (
+    <span style={{
+      display: 'block', height: 44, borderRadius: 'var(--r-2)',
+      border: '1px solid var(--border)', overflow: 'hidden',
+      background: kind === 'dark' ? dark : kind === 'light' ? light
+        : `linear-gradient(115deg, ${dark} 50%, ${light} 50%)`,
+    }} />
   );
 }
 
