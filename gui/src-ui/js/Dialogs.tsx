@@ -2,7 +2,7 @@ import { useCallback, useEffect, useState, type ReactNode } from 'react';
 import { api, type KifuFrame, type ThreadsView } from './api';
 import type { Prefs } from './prefs';
 import { Modal, Overlay, Section } from './components/layout';
-import { Button, Segmented, Select } from './components/primitives';
+import { Button, Segmented, Select, TextField } from './components/primitives';
 import { Icon, IconButton } from './components/Icons';
 import { Board } from './components/board';
 
@@ -137,10 +137,21 @@ const KINDS: [string, string][] = [
   ['book', '定石'],
 ];
 
+/* 足りないときは、無いことだけでなく**その先どうなるか**を言う。
+ * 「ファイルがありません」だけだと、直さないと動かないのか、
+ * 直さなくても済むのかが分からない。 */
+const NOT_FOUND: Record<string, string> = {
+  weights: '見つかりません。KUROOBI は評価できません',
+  nnue: '見つかりません。線形評価だけで指します',
+  book: '見つかりません。実戦から育つ book_learn.txt だけを使います',
+};
+
 export function Settings({ learnOn, onLearn, onChanged, onClose, prefs, setPref }: {
   learnOn: boolean; onLearn: (on: boolean) => void; onChanged: () => void; onClose: () => void;
   prefs: Prefs; setPref: <K extends keyof Prefs>(k: K, v: Prefs[K]) => void;
 }) {
+  const [tab, setTab] = useState<'engine' | 'view' | 'learn'>('engine');
+  const [reset, setReset] = useState(false);
   const [status, setStatus] = useState<[string, string, boolean][]>([]);
   const [th, setTh] = useState<ThreadsView | null>(null);
 
@@ -191,11 +202,25 @@ export function Settings({ learnOn, onLearn, onChanged, onClose, prefs, setPref 
           <span style={{ fontSize: 'var(--fs-3)', fontWeight: 600 }}>設定</span>
           <span style={{ marginLeft: 'auto' }}><IconButton name="close" label="閉じる" onClick={onClose} /></span>
         </div>
+        {/* 節を縦に積むと下まで巻かないと何があるか分からない。区分はタブで
+            分ける (設計の 設定 と同じ形)。GGS は左メニューに行き先があるので
+            ここには置かない — 同じ設定を 2 か所に出さない (規則 58) */}
+        <div style={{
+          flex: 'none', display: 'flex', justifyContent: 'center',
+          padding: 'var(--sp-3) var(--sp-5)', borderBottom: '1px solid var(--border-weak)',
+        }}>
+          <Segmented value={tab} onChange={setTab} options={[
+            { value: 'engine', label: 'エンジン' },
+            { value: 'view', label: '表示' },
+            { value: 'learn', label: '学習' },
+          ]} />
+        </div>
         <div className="k-scroll" style={{ flex: 1, minHeight: 0, padding: 'var(--sp-5)' }}>
 
         {/* 見え方だけの設定。エンジンの動きには関わらないので、
             バックエンドに送らず localStorage に置く */}
-        <Section title="表示">
+        {tab === 'view' && <>
+        <Section title="盤と配色">
           <Row2 label="テーマ">
             <Segmented value={prefs.theme} onChange={(v) => setPref('theme', v)} options={[
               { value: 'os', label: 'OS に従う' },
@@ -225,33 +250,32 @@ export function Settings({ learnOn, onLearn, onChanged, onClose, prefs, setPref 
                                  { value: '240', label: 'ゆっくり' }]} />
           </Row2>
         </Section>
+        </>}
 
-        <Section title="KUROOBI が使うファイル">
+        {tab === 'engine' && <>
+        <Section title="ファイル">
           {KINDS.map(([kind, title]) => {
             const info = byName.get(title);
             return (
-              <div key={kind} style={{
-                display: 'flex', flexDirection: 'column', gap: 4,
-                padding: '8px 0', borderBottom: '1px solid var(--border-weak)',
-              }}>
-                <span style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 'var(--fs-5)' }}>
-                  {title}
-                  {/* 使えているときは印だけ。足りないときだけ言葉で伝える */}
-                  <Icon name={info?.ok ? 'check' : 'alert'} size={13} />
-                  {!info?.ok && <span style={{ fontSize: 'var(--fs-6)', color: 'var(--bad)' }}>ファイルがありません</span>}
-                  <span style={{ marginLeft: 'auto', display: 'flex', gap: 'var(--sp-2)' }}>
-                    <Button size="chip" onClick={async () => {
-                      const p = await api.pickResource(kind);
-                      if (p) await change(kind, p);
-                    }}>選ぶ…</Button>
-                    <Button size="chip" variant="ghost"
-                            onClick={() => void change(kind, null)}>既定に戻す</Button>
-                  </span>
-                </span>
-                <span style={{
-                  fontFamily: 'var(--ff-mono)', fontSize: 'var(--fs-7)', color: 'var(--sub)',
-                  overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
-                }}>{info?.p ?? '—'}</span>
+              <div key={kind} style={{ display: 'flex', flexDirection: 'column', gap: 'var(--sp-1)' }}>
+                {/* パスは打ち込む欄に入れる。行の右端に押しやると、いま何を
+                    読んでいるかとその直し方が別の場所に散る */}
+                <Row2 label={title}>
+                  <TextField value={info?.p ?? ''} placeholder="未指定" invalid={!info?.ok} />
+                  <Button onClick={async () => {
+                    const p = await api.pickResource(kind);
+                    if (p) await change(kind, p);
+                  }}>選択…</Button>
+                </Row2>
+                {/* 良し悪しは欄の直下に置く。欄の列に揃えるので左に見出しぶんを空ける */}
+                <div style={{
+                  marginLeft: 'calc(var(--w-label) + var(--sp-3))',
+                  display: 'flex', alignItems: 'center', gap: 6,
+                  fontSize: 'var(--fs-7)', color: info?.ok ? 'var(--ok)' : 'var(--bad)',
+                }}>
+                  <Icon name={info?.ok ? 'check' : 'alert'} size={12} />
+                  {info?.ok ? '読み込み済み' : NOT_FOUND[kind]}
+                </div>
               </div>
             );
           })}
@@ -263,38 +287,72 @@ export function Settings({ learnOn, onLearn, onChanged, onClose, prefs, setPref 
               ローカル対局・検討・学習の取り込みが使う並列数です。自動 = コア数の半分 ({th.auto})。
               GGS 対局用は GGS の設定にあります (別々に動くので、両方が同時に動くと合計ぶんの CPU を使います)。
             </p>
-            <div>
+            <Row2 label="スレッド">
               <Select width={140} value={th.set == null ? 'auto' : String(th.set)}
                       onChange={(v) => void setThreads(v === 'auto' ? null : +v)}
                       options={[['auto', `自動 (${th.auto})`],
                                 ...Array.from({ length: th.auto * 2 }, (_, i) =>
                                   [String(i + 1), String(i + 1)] as [string, string])]} />
-            </div>
+            </Row2>
           </Section>
         )}
+        </>}
 
-        <Section title="学習">
+        {tab === 'learn' && (
+        <Section title="定石の学習">
           <p style={{ margin: 0, fontSize: 'var(--fs-6)', color: 'var(--sub)', lineHeight: 1.8 }}>
             終局した対局 (ローカル対局と GGS の両方) を定石の学習に取り込みます。
             負けた展開は次から自然に避けられるようになります。
             学習分は定石とは別のファイル (book_learn.txt) に貯まります。
           </p>
-          <div>
+          <Row2 label="取り込む">
             <Segmented value={learnOn ? 'on' : 'off'} onChange={(v) => onLearn(v === 'on')}
                        options={[{ value: 'on', label: 'する' }, { value: 'off', label: 'しない' }]} />
-          </div>
+          </Row2>
         </Section>
+        )}
+        </div>
+        {/* OK ボタンは置かない (変更は即時に反映される)。それが分からないと
+            「決定していないのでは」と不安になるので、下の帯で言い切る */}
+        <div style={{
+          flex: 'none', display: 'flex', alignItems: 'center', gap: 'var(--sp-3)',
+          padding: 'var(--sp-3) var(--sp-5)', borderTop: '1px solid var(--border-weak)',
+        }}>
+          {tab === 'engine' && (
+            <Button variant="ghost" onClick={() => setReset(true)}>既定に戻す</Button>
+          )}
+          <span style={{ marginLeft: 'auto', fontSize: 'var(--fs-7)', color: 'var(--sub)' }}>
+            変更は即時に反映されます
+          </span>
         </div>
       </div>
+      {reset && (
+        <Confirm title="ファイルの指定を既定に戻しますか？"
+                 body="選んだ重みと定石の場所を忘れ、既定の探し方に戻します。ファイルそのものは消えません。"
+                 ok="戻す"
+                 onCancel={() => setReset(false)}
+                 onOk={() => {
+                   setReset(false);
+                   void (async () => {
+                     for (const [kind] of KINDS) await api.setResource(kind, null);
+                     await setThreads(null);
+                     await load();
+                     onChanged();
+                   })();
+                 }} />
+      )}
     </Overlay>
   );
 }
 
-/** 設定の 1 行。見出しの列を揃える */
+/** 設定の 1 行。見出しの列を揃える。
+ *  見出しは右揃え — 語の長さがまちまちなので、左揃えだと欄との間隔が
+ *  行ごとに変わって、欄の列が揃っていても揃って見えない。 */
 function Row2({ label, children }: { label: string; children: ReactNode }) {
   return (
     <div style={{ display: 'flex', alignItems: 'center', gap: 'var(--sp-3)', minHeight: 'var(--h-field)' }}>
-      <span style={{ width: 'var(--w-label)', flex: 'none', fontSize: 'var(--fs-6)', color: 'var(--sub)' }}>{label}</span>
+      <span style={{ width: 'var(--w-label)', flex: 'none', textAlign: 'right',
+                     fontSize: 'var(--fs-6)', color: 'var(--sub)' }}>{label}</span>
       {children}
     </div>
   );
