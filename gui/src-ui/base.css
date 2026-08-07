@@ -101,7 +101,7 @@ button:disabled, button[aria-disabled="true"] { cursor:default; }
 .k-nav-row { padding:0 10px; }
 /* Nav の上端のロゴ。SVG は放っておくと固有の大きさで描かれるので幅を決める。
    display は畳む段が動かすので、ここが持つ (インラインに書くと届かない) */
-.k-nav-logo { display:flex; align-items:center; }
+.k-nav-logo { display:flex; align-items:center; justify-content:center; }
 .k-nav-logo > span { display:block; width:100px; }
 .k-nav-logo > span > svg { display:block; width:100%; height:auto; }
 

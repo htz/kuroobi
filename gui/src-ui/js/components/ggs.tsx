@@ -73,7 +73,7 @@ export function Nav({ items, ggsItems, conn, active, onSelect, footer }: {
     }}>
       {/* ロゴの帯。信号機ぶんの 78px は窓の帯が持つので、ここには要らない。
           畳む段では丸ごと落とす (48px の列に文字のロゴは入らない) */}
-      <div className="k-nav-logo" style={{ height: 'var(--h-bar)', flex: 'none', padding: '0 var(--sp-3)' }}>
+      <div className="k-nav-logo" style={{ height: 'var(--h-bar)', flex: 'none' }}>
         <span aria-label="KUROOBI" dangerouslySetInnerHTML={{ __html: logo }} />
       </div>
       <div style={{ padding: 'var(--sp-1) var(--sp-2) 0', display: 'flex', flexDirection: 'column', gap: 1 }}>
