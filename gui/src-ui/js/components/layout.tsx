@@ -58,9 +58,11 @@ export function Toolbar({ children, aux, dock }: {
        なく、しかもロゴの上では掴めない (属性を持つ要素そのものでしか効かない)。
        ここは帯の地の部分だけが掴める — 子のボタンは属性を持たないので、
        押すつもりが窓を動かすことはない。 */
-    <div data-tauri-drag-region style={{
+    <div data-tauri-drag-region className="k-toolbar" style={{
+      // padding-left は .k-toolbar が持つ (48px に畳んだとき信号機ぶんを
+      // 空ける。インラインに書くと media query が届かない)
       height: 'var(--h-bar)', flex: 'none', borderBottom: '1px solid var(--border-weak)',
-      display: 'flex', alignItems: 'center', padding: '0 var(--sp-4)', gap: 'var(--sp-2)',
+      display: 'flex', alignItems: 'center', paddingRight: 'var(--sp-4)', gap: 'var(--sp-2)',
     }}>
       {children}
       {/* 押し出しはこれが持つ。畳む段で消える要素（k-toolbar-aux）に
