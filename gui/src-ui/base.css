@@ -106,6 +106,7 @@ button:disabled, button[aria-disabled="true"] { cursor:default; }
 /* 設定のボタン。広い窓は横いっぱい、48px の列では正方形にする
    (width も display も畳む段が動かすので、ここが持つ) */
 .k-nav-settings { display:flex; width:100%; }
+.k-nav-foot { padding:var(--sp-3); }
 .k-nav-row { padding:0 10px; }
 /* Nav の上端のロゴ。SVG は放っておくと固有の大きさで描かれるので幅を決める。
    display は畳む段が動かすので、ここが持つ (インラインに書くと届かない) */
@@ -135,6 +136,8 @@ button:disabled, button[aria-disabled="true"] { cursor:default; }
   .k-nav .k-nav-rule { display:block; margin:var(--sp-3) var(--sp-2); }
   /* 正方形に。横いっぱいのままだと縦長の板に見える */
   .k-nav .k-nav-settings { width:32px; margin:0 auto; }
+  /* 行と同じ左右 8px。12px のままだと中身が 24px しか残らない */
+  .k-nav .k-nav-foot { padding:var(--sp-3) 8px; }
   .k-nav .k-nav-row { justify-content:center; padding:0; }
   /* ロゴを落としても帯は残す — 信号機の居場所とドラッグ領域なので */
 }

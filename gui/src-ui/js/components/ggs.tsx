@@ -92,8 +92,11 @@ export function Nav({ items, ggsItems, conn, active, onSelect, footer }: {
       <div style={{ padding: '0 var(--sp-2)', display: 'flex', flexDirection: 'column', gap: 1 }}>
         {ggsItems.map(i => <NavRow key={i.id} item={i} active={active === i.id} onSelect={onSelect} />)}
       </div>
-      {footer && <div style={{
-        marginTop: 'auto', padding: 'var(--sp-3)', display: 'flex', flexDirection: 'column',
+      {/* padding は畳む段が動かすので .k-nav-foot が持つ。48px の列で
+          sp-3 (12px) を左右に取ると中身が 24px しか残らず、32px の当たりが
+          はみ出す */}
+      {footer && <div className="k-nav-foot" style={{
+        marginTop: 'auto', display: 'flex', flexDirection: 'column',
         gap: 'var(--sp-3)', borderTop: '1px solid var(--border)',
       }}>{footer}</div>}
     </nav>
@@ -162,7 +165,7 @@ export function Meter({ icon, label, value, unit, ratio, note }: {
       <div className="k-meter-mini" style={{
         fontSize: 'var(--fs-7)', color: 'var(--text)', textAlign: 'center',
         fontVariantNumeric: 'tabular-nums',
-      }}>{value}{unit}</div>
+      }}>{value}{typeof unit === 'string' ? unit.trim() : unit}</div>
       {note && <div style={{ fontSize: 'var(--fs-7)', color: 'var(--sub)' }}>{note}</div>}
     </div>
   );
