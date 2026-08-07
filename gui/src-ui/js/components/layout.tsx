@@ -26,14 +26,25 @@ import icon from '../../assets/icon.svg?raw';
  * エラーも出ずに畳が無地の緑になる — 静かな壊れ方なので忘れようがない形にする。 */
 export function AppFrame({ children }: { children: React.ReactNode }) {
   return (
-    <div style={{ position: 'relative', height: '100%', display: 'flex', background: 'var(--bg)' }}>
+    <div style={{
+      position: 'relative', height: '100%', display: 'flex', flexDirection: 'column',
+      background: 'var(--bg)',
+    }}>
       <BoardDefs />
       {children}
     </div>
   );
 }
 
-/* 左メニューの右。Toolbar → 本体 → StatusBar を縦に積む */
+/* 上下の帯に挟まれた段。左メニューと本体 (と Dock) が横に並ぶ。
+ *
+ * **上下の帯は窓の全幅。** 左メニューを畳んでも帯は動かない。信号機ぶんの
+ * 78px を空けるのも Toolbar 1 か所で済む — 左メニューの幅に依存しない。 */
+export function Body({ children }: { children: React.ReactNode }) {
+  return <div style={{ flex: 1, display: 'flex', minHeight: 0 }}>{children}</div>;
+}
+
+/* 左メニューの右。画面の中身を縦に積む */
 export function Main({ children }: { children: React.ReactNode }) {
   return <div style={{ flex: 1, display: 'flex', flexDirection: 'column', minWidth: 0 }}>{children}</div>;
 }

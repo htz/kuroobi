@@ -98,10 +98,11 @@ button:disabled, button[aria-disabled="true"] { cursor:default; }
 .k-nav { width:var(--w-nav); }
 .k-dock { width:var(--w-dock); display:flex; }
 .k-nav-section, .k-meter-text, .k-toolbar-aux, .k-nav-jobs { display:flex; }
+.k-nav .k-drag { display:flex; align-items:center; }
 .k-nav-row { padding:0 10px; }
-/* ツールバーの左の余白。広い窓では左メニュー (208px) が信号機を覆うので
-   要らないが、48px に畳むと足りなくなる (下の段で足す) */
-.k-toolbar { padding-left:var(--sp-4); }
+/* ツールバーは窓の全幅で、左上に信号機が乗る。**78px を空けるのはここだけ**
+   — 左メニューの幅が 208px でも 48px でも関係しない (titleBarStyle:"Overlay") */
+.k-toolbar { padding-left:78px; }
 /* ロゴは器の幅に従わせる。SVG は放っておくと固有の大きさで描かれるので、
    48px の列に畳んだときに帯からはみ出してツールバーの上に重なる */
 .k-nav-logo { display:block; }
@@ -121,18 +122,15 @@ button:disabled, button[aria-disabled="true"] { cursor:default; }
 @media (max-width: 1040px) {
   /* アイコンだけの細い列。48px = 32px の当たり ＋ 左右 8px */
   .k-nav { width:48px; }
-  /* **信号機の 78px は誰かが空けなければならない。** 広い窓では左メニューの
-     上端が 78px の左余白で覆っているが、48px に畳むとその役目を失う。
-     ツールバーが繰り上がって信号機の下に潜るので、こちらで空ける
-     (48 + 38 = 86px ≥ 78px)。titleBarStyle: "Overlay" が前提 (規則 47)。 */
-  .k-toolbar { padding-left:38px; }
   /* 文字はすべて落とす。ロゴと仕事一覧も文字なので同じ扱い — メーターの
      ラベルだけ消して他を残すと、48px の列で折り返して縦に伸びる */
   .k-nav .k-nav-label, .k-nav .k-nav-section, .k-nav .k-meter-text,
   .k-nav .k-nav-logo, .k-nav .k-nav-jobs { display:none; }
   .k-nav .k-nav-row { justify-content:center; padding:0; }
   /* ロゴを落としても帯は残す — 信号機の居場所とドラッグ領域なので */
-  .k-nav .k-drag { padding:0; }
+  /* ロゴを落とすと 44px の空の帯だけが残る。窓を掴む役目は全幅の
+     Toolbar が持つので、帯ごと畳む */
+  .k-nav .k-drag { display:none; }
 }
 @media (max-width: 940px) {
   .k-toolbar-aux { display:none; }

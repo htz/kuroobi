@@ -71,12 +71,13 @@ export function Nav({ items, ggsItems, conn, active, onSelect, footer }: {
       flex: 'none', background: 'var(--panel)',
       borderRight: '1px solid var(--border)', display: 'flex', flexDirection: 'column', minHeight: 0,
     }}>
-      {/* 窓を掴む帯。macOS の Tauri は WKWebView なので -webkit-app-region が効かず、
-          data-tauri-drag-region 属性で受ける。押せるものが 1 つも無いこの帯だけに
-          付ける — nav 全体に付けると行のボタンを押すつもりが窓を動かしてしまう。
-          左の 78px は信号機ぶん (titleBarStyle: "Overlay" が前提)。 */}
+      {/* ロゴの帯。窓の上端は Toolbar が全幅で持つので、**信号機ぶんの 78px は
+          ここでは要らない** (空けるのは Toolbar 1 か所)。掴める場所としては
+          残す — 押せるものが 1 つも無い帯なので、行のボタンと喧嘩しない。 */}
+      {/* display は .k-drag が持つ (1040px で帯ごと畳むので、インラインに
+          書くと media query が届かない — この repo で何度も踏んだ罠) */}
       <div data-tauri-drag-region className="k-drag"
-           style={{ height: 'var(--h-bar)', flex: 'none', display: 'flex', alignItems: 'center', padding: '0 var(--sp-3) 0 78px' }}>
+           style={{ height: 'var(--h-bar)', flex: 'none', padding: '0 var(--sp-3)' }}>
         {/* 幅は .k-nav-logo が持つ (48px に畳んだとき帯からはみ出さないように) */}
         {/* 属性は付けた要素そのものにしか効かないので、ロゴにも付ける。
             付けないと帯の中でロゴの上だけ掴めない */}

@@ -7,7 +7,7 @@ import { api, ggsApi, jsLog, type ActivityView } from './api';
 import { useActivity, useEngineSettings, useEngineTurn, useGraph, useHints, useLearnLog, useStartGame } from './engine';
 import { fmtSecs } from './ggs';
 import { cellsOf, connOf, evalsOf, ggsPlaying, movesOf, navBadges, sqName } from './adapt';
-import { AppFrame, BottomPanel, Dock, Main, Section, StatusBar, StatusStat, Toolbar } from './components/layout';
+import { AppFrame, Body, BottomPanel, Dock, Main, Section, StatusBar, StatusStat, Toolbar } from './components/layout';
 import { GgsChat, GgsConsole, GgsScreen } from './GgsScreens';
 import { Confirm, PasteKifu, Settings } from './Dialogs';
 import { Board } from './components/board';
@@ -295,39 +295,7 @@ export function App() {
 
   return (
     <AppFrame>
-      <Nav items={NAV_LOCAL} ggsItems={ggsNav(conn, navBadges(ggs.snap, chatUnread))} conn={conn}
-           active={nav} onSelect={setNav}
-           footer={<>
-             {cpu && <>
-             {/* 使用率の上限はコア数 × 100%。溝はその割合で埋める */}
-             <Meter icon="cpu" label="CPU" value={Math.round(cpu.cpu)} unit="%"
-                    ratio={cpu.cpu / (cpu.cores * 100)} />
-             {/* 単位の前の空白は flex の中で潰れるので、潰れない空白を使う */}
-             <Meter icon="memory" label="メモリ" value={(cpu.mem / 1e9).toFixed(1)} unit={'\u00a0GB'}
-                    ratio={cpu.mem_total > 0 ? cpu.mem / cpu.mem_total : 0} />
-             <JobList jobs={jobsOf(cpu)} />
-             </>}
-             {/* 設定はいちばん下。行き先ではないので行の並びには入れない。
-                 48px の列では文字を落として絵だけにする — 素の Button だと
-                 幅が足りずに文字がはみ出す */}
-             <button type="button" className="k-press" title="設定" aria-label="設定"
-                     onClick={() => setSettings(true)}
-                     style={{
-                       display: 'flex', alignItems: 'center', justifyContent: 'center',
-                       gap: 'var(--sp-2)', height: 'var(--h-field)', width: '100%',
-                       border: '1px solid var(--border)', borderRadius: 'var(--r-2)',
-                       background: 'var(--card)', color: 'var(--text)',
-                       fontSize: 'var(--fs-6)', cursor: 'pointer', padding: 0,
-                     }}>
-               <Icon name="gear" size={15} />
-               <span className="k-nav-label">設定</span>
-             </button>
-           </>} />
-
-      <Main>
-        {/* 盤の上の帯は「対局の操作」と、対局の前提を決める最小限だけ。
-            思考中の数字は下の帯へ */}
-        <Toolbar
+      <Toolbar
           dock={isGgs ? undefined : { open: dockOpen, onToggle: () => setDockOpen(o => !o) }}
           aux={isGgs || isBook ? undefined : <Toggle checked={g.autoHint} onChange={g.setAutoHint} label="評価値" />}>
           {isBook ? (
@@ -385,7 +353,41 @@ export function App() {
               <Segmented value={g.side} onChange={g.setSide} options={SIDES} />
             </>
           )}
-        </Toolbar>
+      </Toolbar>
+
+      <Body>
+      <Nav items={NAV_LOCAL} ggsItems={ggsNav(conn, navBadges(ggs.snap, chatUnread))} conn={conn}
+           active={nav} onSelect={setNav}
+           footer={<>
+             {cpu && <>
+             {/* 使用率の上限はコア数 × 100%。溝はその割合で埋める */}
+             <Meter icon="cpu" label="CPU" value={Math.round(cpu.cpu)} unit="%"
+                    ratio={cpu.cpu / (cpu.cores * 100)} />
+             {/* 単位の前の空白は flex の中で潰れるので、潰れない空白を使う */}
+             <Meter icon="memory" label="メモリ" value={(cpu.mem / 1e9).toFixed(1)} unit={'\u00a0GB'}
+                    ratio={cpu.mem_total > 0 ? cpu.mem / cpu.mem_total : 0} />
+             <JobList jobs={jobsOf(cpu)} />
+             </>}
+             {/* 設定はいちばん下。行き先ではないので行の並びには入れない。
+                 48px の列では文字を落として絵だけにする — 素の Button だと
+                 幅が足りずに文字がはみ出す */}
+             <button type="button" className="k-press" title="設定" aria-label="設定"
+                     onClick={() => setSettings(true)}
+                     style={{
+                       display: 'flex', alignItems: 'center', justifyContent: 'center',
+                       gap: 'var(--sp-2)', height: 'var(--h-field)', width: '100%',
+                       border: '1px solid var(--border)', borderRadius: 'var(--r-2)',
+                       background: 'var(--card)', color: 'var(--text)',
+                       fontSize: 'var(--fs-6)', cursor: 'pointer', padding: 0,
+                     }}>
+               <Icon name="gear" size={15} />
+               <span className="k-nav-label">設定</span>
+             </button>
+           </>} />
+
+      <Main>
+        {/* 盤の上の帯は「対局の操作」と、対局の前提を決める最小限だけ。
+            思考中の数字は下の帯へ */}
 
         {isGgs ? <GgsScreen nav={nav} snap={ggs.snap} onNav={setNav} prefs={prefs}
                        onKifu={(title, kifu, archive) => {
@@ -458,32 +460,6 @@ export function App() {
                      </>} />
         )}
 
-        {/* 短くて桁の決まっているものだけを置く。長さの読めない報せはトーストへ */}
-        <StatusBar
-          left={<>
-            {g.thinking && <StatusStat label="思考" value={g.thinkSecs.toFixed(1)} unit="s" />}
-            {nodes > 0 && <StatusStat label="nodes" value={fmtNodes(nodes)} />}
-            {nps > 0 && <StatusStat label="nps" value={(nps / 1e6).toFixed(1)} unit="Mnps" />}
-          </>}
-          right={isGgs
-            ? <>
-              {/* 対局中だけ出す。観戦や一覧を見ているときに出すと、
-                  左の並びと同じものが 2 か所にあるだけになる */}
-              {ggsMatch && <>
-                <StatusChip label="チャット" unread={panel === 'chat' ? 0 : chatUnread}
-                            active={panel === 'chat'}
-                            onClick={() => showPanel('chat')} />
-                <StatusChip label="コンソール" active={panel === 'console'}
-                            onClick={() => showPanel('console')} />
-              </>}
-              <StatusStat label="GGS" value={conn === 'online' ? '接続中' : conn === 'offline' ? '未接続' : '接続しています…'} />
-            </>
-            : isBook
-            ? <StatusStat label="定石" value={book.node ? book.node.size.toLocaleString() + ' 局面' : '—'} />
-            : <>
-              <StatusStat label="定石" value={g.hasBook ? (g.useBook ? '有効' : '使わない') : 'なし'} />
-              <StatusStat label="KUROOBI" value={lv} />
-            </>} />
       </Main>
 
       {/* GGS はドックを持たない (一覧が本体の左に付く) */}
@@ -569,6 +545,35 @@ export function App() {
         )}
       </Dock>
       )}
+
+      </Body>
+
+      {/* 短くて桁の決まっているものだけを置く。長さの読めない報せはトーストへ */}
+        <StatusBar
+          left={<>
+            {g.thinking && <StatusStat label="思考" value={g.thinkSecs.toFixed(1)} unit="s" />}
+            {nodes > 0 && <StatusStat label="nodes" value={fmtNodes(nodes)} />}
+            {nps > 0 && <StatusStat label="nps" value={(nps / 1e6).toFixed(1)} unit="Mnps" />}
+          </>}
+          right={isGgs
+            ? <>
+              {/* 対局中だけ出す。観戦や一覧を見ているときに出すと、
+                  左の並びと同じものが 2 か所にあるだけになる */}
+              {ggsMatch && <>
+                <StatusChip label="チャット" unread={panel === 'chat' ? 0 : chatUnread}
+                            active={panel === 'chat'}
+                            onClick={() => showPanel('chat')} />
+                <StatusChip label="コンソール" active={panel === 'console'}
+                            onClick={() => showPanel('console')} />
+              </>}
+              <StatusStat label="GGS" value={conn === 'online' ? '接続中' : conn === 'offline' ? '未接続' : '接続しています…'} />
+            </>
+            : isBook
+            ? <StatusStat label="定石" value={book.node ? book.node.size.toLocaleString() + ' 局面' : '—'} />
+            : <>
+              <StatusStat label="定石" value={g.hasBook ? (g.useBook ? '有効' : '使わない') : 'なし'} />
+              <StatusStat label="KUROOBI" value={lv} />
+            </>} />
 
       {settings && (
         <Settings prefs={prefs} setPref={setPref}
