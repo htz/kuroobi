@@ -514,18 +514,24 @@ export function App() {
             scroll={tab !== '棋譜'}>
         {tab === '棋譜' && (
           <>
-            {/* 分析 (評価値グラフ) は検討画面のもの。対局には置かない */}
-            <div style={{ display: 'flex', gap: 'var(--sp-2)', padding: 'var(--sp-2) var(--sp-3)' }}>
+            <div style={{ flex: 1, minHeight: 0, display: 'flex', flexDirection: 'column' }}>
+              <KifuTable moves={moves} current={v?.cursor}
+                         onSelect={(n) => void g.jumpTo(n)} />
+            </div>
+            {/* 棋譜の出し入れは列の**下**。上に置くと、表を見に来ただけの
+                ときにも操作が視線の先頭に来る。行は下へ伸びるので、
+                出来上がった棋譜を渡す操作は行の終わりにあるほうが近い */}
+            <div style={{
+              flex: 'none', display: 'flex', gap: 'var(--sp-2)',
+              padding: 'var(--sp-2) var(--sp-3)', borderTop: '1px solid var(--border-weak)',
+            }}>
+              <Button size="chip" onClick={() => setPaste(true)}>貼り付け</Button>
+              <Button size="chip" onClick={() => void loadFromFile()}>読込</Button>
               {/* .ggf で保存すると、どちらがどの色か・結果・開始局面まで入る */}
               <Button size="chip"
                       onClick={() => void api.saveKifu(...ggfNames(g.side)).catch((e) => g.say('' + e))}>
                 保存
               </Button>
-              <Button size="chip" onClick={() => setPaste(true)}>読込</Button>
-            </div>
-            <div style={{ flex: 1, minHeight: 0, display: 'flex', flexDirection: 'column' }}>
-              <KifuTable moves={moves} current={v?.cursor}
-                         onSelect={(n) => void g.jumpTo(n)} />
             </div>
           </>
         )}
