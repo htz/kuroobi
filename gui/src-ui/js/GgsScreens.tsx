@@ -1,6 +1,6 @@
 import React, { useEffect, useRef, useState } from 'react';
 import { api, ggsApi, jsLog } from './api';
-import type { ChatMsg, GgsSnapshot, MatchView } from './types';
+import type { ChatMsg, GameResult, GgsSnapshot, MatchView } from './types';
 import {
   CLOCK_CHOICES, GTYPE_CHOICES, clockOf, countDiscs, ggsMoveToIndex, gtypeLabel,
   fingerGroups, fingerValue, hasJapanese, normKey, parseCond, translate, useClocks,
@@ -879,9 +879,34 @@ function GgsResults({ snap, onKifu }: {
   onKifu: (title: string, kifu: string, archive?: string) => void;
 }) {
   const [gtype, setGtype] = useState('all');
+  /* サーバーの履歴も取り込む。**手元に残るのはこのアプリで終局した対局
+   * だけ**なので、別の端末や以前の GUI で打ったぶんが丸ごと抜けていた
+   * (この画面が空のままになる)。GGS は `/os history` で全部返す。 */
+  const login = snap.login;
+  // 要求は空文字 (= 自分)、**保存されるキーは login** — バックエンドが
+  // 他人の履歴と同じ map に入れるので、自分だけ空キーにはならない
+  useEffect(() => { if (login) void ggsApi.history('').catch(() => {}); }, [login]);
   // 形式ごとにレートのプールが違うので、混ぜて折れ線にすると嘘になる
-  const kinds = [...new Set(snap.results.map((r) => baseType(r.base)))].filter(Boolean);
-  const rows = snap.results.filter((r) => gtype === 'all' || baseType(r.base) === gtype);
+  const kinds = [...new Set([...snap.results, ...(snap.history[snap.login] ?? []).map((h) => ({ base: h.gtype }))]
+    .map((r) => baseType(r.base)))].filter(Boolean);
+  // 手元の記録に無い対局をサーバーの履歴から補う。番号で重複を落とす
+  const known = new Set(snap.results.map((r) => r.id));
+  const fromServer: GameResult[] = (snap.history[snap.login] ?? [])
+    .filter((h) => !known.has(h.id))
+    .map((h) => {
+      const iAmBlack = h.black === snap.login;
+      const diff = parseFloat(h.score);
+      return {
+        id: h.id, seq: 0, base: h.gtype, opp: iAmBlack ? h.white : h.black,
+        my_diff: Number.isFinite(diff) ? (iAmBlack ? diff : -diff) : null,
+        my_rating: parseFloat(iAmBlack ? h.black_rating : h.white_rating) || null,
+        at: Date.parse(h.at) / 1000 || 0,
+        // 棋譜は手元に無いが、番号で取り出せる (規則 71 の覆いが引き受ける)
+        kifu: '', ggf: '', archive: h.id,
+      } as GameResult;
+    });
+  const all = [...snap.results, ...fromServer];
+  const rows = all.filter((r) => gtype === 'all' || baseType(r.base) === gtype);
   // グラフは古い順。results は新しい順に積まれている
   const rates = rows.filter((r) => r.my_rating != null).map((r) => r.my_rating as number).reverse();
 
@@ -1044,7 +1069,8 @@ function UserDetail({ snap, name, tab, onTab, onBack, onNav }: {
   const dev = m ? Math.round(parseFloat(m[2])) : null;
   const playing = snap.ongoing.some((o) => o.names.includes(name));
   const fields = snap.fingers[name]?.fields ?? [];
-  const rows = snap.history[name === snap.login ? '' : name] ?? [];
+  // 自分の履歴も他人と同じく login のキーで入る (要求だけが空文字)
+  const rows = snap.history[name] ?? [];
 
   return (
     <div style={{ flex: 1, minHeight: 0, display: 'flex', flexDirection: 'column' }}>
