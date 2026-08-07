@@ -274,6 +274,13 @@ export function GgsChat({ snap }: { snap: GgsSnapshot }) {
           flex: 1, minHeight: 0, padding: 'var(--sp-4)',
           display: 'flex', flexDirection: 'column', gap: 'var(--sp-3)',
         }}>
+          {/* 何も無いと壊れているのか、単に発言が無いのかが分からない。
+              全体チャットは静かなことが多いので、ここは必ず埋める */}
+          {!rows.length && (
+            <span style={{ margin: 'auto', fontSize: 'var(--fs-6)', color: 'var(--sub)' }}>
+              {cur === '.chat' ? 'まだ発言はありません。' : 'まだやりとりはありません。'}
+            </span>
+          )}
           {rows.map(({ c, day, dayHead, head }, i) => (
             <React.Fragment key={i}>
               {dayHead && <DayMark>{day}</DayMark>}

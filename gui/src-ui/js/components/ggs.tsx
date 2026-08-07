@@ -619,7 +619,12 @@ export function StatusChip({ label, unread, active, onClick }: {
  * ツールバーの `aux` に置くので 940px 以下では落ちる — 落ちて困る操作は
  * 無く、全部ただの表示 (規則 8)。
  */
-export function GgsStatus({ snap }: { snap: GgsSnapshot }) {
+export function GgsStatus({ snap, showStrength = true }: {
+  snap: GgsSnapshot;
+  /** 強さを出すか。**GGS の設定の画面では出さない** — すぐ下に同じものを
+   *  変える操作があり、どちらが本物か分からなくなる (規則 58)。 */
+  showStrength?: boolean;
+}) {
   const e = snap.engine;
   return (
     <>
@@ -633,11 +638,13 @@ export function GgsStatus({ snap }: { snap: GgsSnapshot }) {
           <span style={{ opacity: .7, marginLeft: 3 }}>±{Math.round(r.dev)}</span>
         </span>
       ))}
-      <span style={{ fontSize: 'var(--fs-6)', color: 'var(--sub)', fontVariantNumeric: 'tabular-nums' }}>
-        強さ <b style={{ color: 'var(--text)', fontWeight: 600 }}>
-          深さ{e.depth} / 読切{e.solve}{e.band > 0 ? ` / 選択読み+${e.band}` : ''}
-        </b>
-      </span>
+      {showStrength && (
+        <span style={{ fontSize: 'var(--fs-6)', color: 'var(--sub)', fontVariantNumeric: 'tabular-nums' }}>
+          強さ <b style={{ color: 'var(--text)', fontWeight: 600 }}>
+            深さ{e.depth} / 読切{e.solve}{e.band > 0 ? ` / 選択読み+${e.band}` : ''}
+          </b>
+        </span>
+      )}
       {snap.standby.enabled && <Tag tone="ok">待機モード</Tag>}
     </>
   );

@@ -365,7 +365,10 @@ export function App() {
       <Toolbar
           dock={isGgs ? undefined : { open: dockOpen, onToggle: () => setDockOpen(o => !o) }}
           aux={isBook ? undefined
-            : isGgs ? (conn === 'online' && ggs.snap ? <GgsStatus snap={ggs.snap} /> : undefined)
+            : isGgs ? (conn === 'online' && ggs.snap
+              ? <GgsStatus snap={ggs.snap}
+                           showStrength={nav !== 'ggs-settings' && nav !== 'ggs-standby'} />
+              : undefined)
             : <Toggle checked={g.autoHint} onChange={g.setAutoHint} label="評価値" />}>
           {isBook ? (
             <>
