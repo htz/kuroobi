@@ -71,9 +71,11 @@ export function Segmented<T extends string>({ value, options, onChange, size = '
   className?: string;
 }) {
   return (
-    <div role="radiogroup" aria-disabled={disabled || undefined} className={className} style={{
+    <div role="radiogroup" aria-disabled={disabled || undefined} className={cx('k-seg', className)} style={{
+      // 外枠の角丸は --r-2 (7px)。中の駒が --r-1 (5px) なので、8px だと
+      // 外と中の差が 3px 開いて縁が太く見える (設計の実測は 7 / 5)
       height: H[size], display: fill ? 'flex' : 'inline-flex', gap: 2, padding: 2,
-      background: 'var(--bg)', border: '1px solid var(--border)', borderRadius: 'var(--r-3)',
+      background: 'var(--bg)', border: '1px solid var(--border)', borderRadius: 'var(--r-2)',
       opacity: disabled ? 0.4 : 1,
     }}>
       {options.map(o => {
@@ -81,7 +83,7 @@ export function Segmented<T extends string>({ value, options, onChange, size = '
         return (
           <button key={o.value} type="button" role="radio" aria-checked={on} disabled={disabled}
             onClick={() => onChange?.(o.value)}
-            className={cx('k-press', on && 'k-on')}
+            className={cx('k-press', on && 'k-on', on && !solid && 'k-seg-on')}
             style={{
               flex: fill ? 1 : 'none', padding: '0 12px', borderRadius: 'var(--r-1)', fontSize: FS[size],
               // ライトでは --card (#fff) と --bg (#faf8f3) の差がほとんど無く、
@@ -89,7 +91,10 @@ export function Segmented<T extends string>({ value, options, onChange, size = '
               // 縁取る** — 面の色を足すのではないので、状態の色を面に使わない
               // 決まり (規則 44) にも触れない。選んでいない駒は同じ幅の
               // 透明な罫を持たせて、切り替えで字が動かないようにする
-              border: '1px solid ' + (on ? (solid ? 'var(--accent)' : 'var(--border)') : 'transparent'),
+              // 選ばれている駒に罫は引かない (設計は面の色だけ)。ライトは
+              // --card と地の差が出ないので、base.css がライトのときだけ
+              // 内側に 1px 入れる (.k-seg-on)
+              border: 0,
               background: on ? (solid ? 'var(--accent-dim)' : 'var(--card)') : 'transparent',
               color: on ? (solid ? 'var(--on-accent)' : 'var(--text)') : 'var(--sub)',
               fontWeight: on ? 600 : 400,

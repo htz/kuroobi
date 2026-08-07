@@ -40,10 +40,11 @@ const DEFAULTS: Prefs = {
  * 縁と罫と藺草の目が取り残されて、盤が濁って見える。
  * 色は設計の 表示 タブの見本から取った。 */
 export const TATAMI: { label: string; board: string; dark: string; line: string; grain: string }[] = [
+  // 見本の色は設計の実測値。縁・罫・藺草の目はそれに合わせて落とした
   { label: '標準', board: '#77914e', dark: '#3f4f2c', line: '#3d5226', grain: '#33421d' },
-  { label: '明るい', board: '#93a55e', dark: '#4b5c33', line: '#4a6130', grain: '#3f5124' },
-  { label: '灰', board: '#7f8b72', dark: '#414a3a', line: '#3f4a35', grain: '#38422f' },
-  { label: '深い', board: '#5c7040', dark: '#313d22', line: '#2f4020', grain: '#27331a' },
+  { label: '枯草', board: '#8a8f5c', dark: '#474a2f', line: '#464a28', grain: '#3b3f1f' },
+  { label: '苔', board: '#6f7f6a', dark: '#3a4238', line: '#374033', grain: '#2f382c' },
+  { label: '深緑', board: '#3f4f2c', dark: '#232c18', line: '#212b14', grain: '#1b230f' },
 ];
 
 const KEY = 'kuroobi.prefs';

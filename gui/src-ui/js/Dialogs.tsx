@@ -266,7 +266,7 @@ export function Settings({ prefs, setPref }: {
         <Section title="テーマ">
           {/* 設計は見本つきの札 3 枚。**配色は言葉より見たほうが早い** —
               「OS に従う」がどちらになるかも、札を見れば分かる */}
-          <div style={{ display: 'flex', gap: 'var(--sp-3)' }}>
+          <div style={{ display: 'flex', gap: 10 }}>
             {THEMES.map(([v, label]) => {
               const on = prefs.theme === v;
               return (
@@ -275,9 +275,9 @@ export function Settings({ prefs, setPref }: {
                   style={{
                     flex: 1, minWidth: 0, display: 'flex', flexDirection: 'column',
                     gap: 'var(--sp-2)', padding: 'var(--sp-2)', borderRadius: 'var(--r-3)',
-                    background: 'transparent', fontSize: 'var(--fs-6)',
+                    background: on ? 'var(--panel)' : 'transparent', fontSize: 'var(--fs-6)',
                     border: '1px solid ' + (on ? 'var(--accent)' : 'var(--border)'),
-                    color: on ? 'var(--text)' : 'var(--sub)', fontWeight: on ? 600 : 400,
+                    color: on ? 'var(--text)' : 'var(--sub)', fontWeight: 400,
                   }}>
                   <ThemeSwatch kind={v} />
                   {label}
@@ -298,9 +298,13 @@ export function Settings({ prefs, setPref }: {
                           onClick={() => setPref('tatami', i as Prefs['tatami'])}
                           title={t.label} aria-label={t.label} aria-pressed={on}
                           style={{
-                            width: 26, height: 26, borderRadius: 'var(--r-1)', padding: 0,
-                            background: t.board,
-                            border: '2px solid ' + (on ? 'var(--accent)' : 'transparent'),
+                            width: 28, height: 28, borderRadius: 'var(--r-2)', padding: 0,
+                            border: 0, background: t.board,
+                            // 選ばれているものは外に 2px の輪。地が濃い色なので
+                            // 枠を内側に取ると色が痩せて見える
+                            boxShadow: on
+                              ? '0 0 0 2px var(--accent), inset 0 0 0 1px var(--border)'
+                              : 'inset 0 0 0 1px var(--border)',
                           }} />
                 );
               })}
@@ -469,10 +473,11 @@ function ThemeSwatch({ kind }: { kind: Theme }) {
   const dark = '#16191d', light = '#faf8f3';
   return (
     <span style={{
-      display: 'block', height: 44, borderRadius: 'var(--r-2)',
-      border: '1px solid var(--border)', overflow: 'hidden',
+      display: 'block', height: 38, borderRadius: 'var(--r-1)', width: '100%',
+      // ダークは地と同じ色なので、内側に 1px 入れないと札の中で溶ける
+      boxShadow: kind === 'dark' ? 'inset 0 0 0 1px var(--border)' : undefined,
       background: kind === 'dark' ? dark : kind === 'light' ? light
-        : `linear-gradient(115deg, ${dark} 50%, ${light} 50%)`,
+        : `linear-gradient(135deg, ${dark} 50%, ${light} 50%)`,
     }} />
   );
 }
