@@ -37,6 +37,9 @@ export function LearnLog({ items, onOpen, onUndo }: {
       {items.length === 0 && (
         <span style={{ fontSize: 'var(--fs-6)', color: 'var(--sub)' }}>まだありません。</span>
       )}
+      {/* 行どうしは詰める。節の余白 (12px) が行間に入ると 24px の行が
+          36px 間隔で並び、一覧ではなく箇条書きに見える (定石の木と同じ話) */}
+      <div style={{ display: 'flex', flexDirection: 'column' }}>
       {items.map((e) => {
         const key = e.at + e.kifu;
         const bad = blunderOf(e);
@@ -48,17 +51,19 @@ export function LearnLog({ items, onOpen, onUndo }: {
               borderRadius: 'var(--r-2)',
             }}>
               {/* 明細を開く三角と、検討で開く行の本体は兄弟にする
-                  (button の中に button は置けない) */}
+                  (button の中に button は置けない)。
+                  **当たりも絵も行の高さに合わせる** — 16px 角に fs-7 の
+                  記号だと、押せることが見て分からないうえ外しやすい */}
               <button type="button" className="k-press"
                       onClick={() => setOpen(shown ? '' : key)}
                       title={shown ? '閉じる' : '書き換えた手を見る'}
                       aria-label={shown ? '閉じる' : '書き換えた手を見る'}
                       disabled={!e.changes.length}
                       style={{
-                        width: 16, height: 16, flex: 'none', border: 0, padding: 0,
+                        width: 22, height: 'var(--h-row)', flex: 'none', border: 0, padding: 0,
                         background: 'transparent', color: 'var(--sub)',
                         cursor: e.changes.length ? 'pointer' : 'default',
-                        fontSize: 'var(--fs-7)', lineHeight: 1, borderRadius: 'var(--r-1)',
+                        fontSize: 'var(--fs-3)', lineHeight: 1, borderRadius: 'var(--r-1)',
                         opacity: e.changes.length ? 1 : 0,
                       }}>{shown ? '▾' : '▸'}</button>
               <button type="button" onClick={() => onOpen(e)} title="検討で開く"
@@ -126,6 +131,7 @@ export function LearnLog({ items, onOpen, onUndo }: {
           </div>
         );
       })}
+      </div>
     </Section>
   );
 }
