@@ -195,6 +195,8 @@ export interface ChatMsg {
 export interface StandbyCfg {
   enabled: boolean;
   auto_accept: boolean;
+  /** 待機モードから申し込むときレート戦にするか。 */
+  rated: boolean;
   opponent: string;
   gtype: string;
   time: string;

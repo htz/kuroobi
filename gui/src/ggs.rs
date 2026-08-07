@@ -34,6 +34,10 @@ pub enum Cmd {
         gtype: String,
         time: String,
         opponent: String,
+        /// レート戦にするか。GGS の `/os` ではレート有無は**アカウント単位の
+        /// 設定**なので、申し込みの直前に毎回 `/os rated +|-` を送って
+        /// 揃える。送らずに済ませると、前回の申し込みの設定が残る。
+        rated: bool,
     },
     Accept(String),
     Decline(String),
@@ -102,6 +106,8 @@ pub enum Cmd {
 pub struct StandbyCfg {
     pub enabled: bool,
     pub auto_accept: bool,
+    /// 待機モードから申し込むときレート戦にするか。
+    pub rated: bool,
     pub opponent: String,
     pub gtype: String,
     pub time: String,
@@ -395,6 +401,7 @@ pub fn spawn(
         standby: StandbyCfg {
             enabled: false,
             auto_accept: true,
+            rated: true,
             opponent: String::new(),
             gtype: "s8r16".into(),
             time: "00:15:00".into(),
@@ -1153,7 +1160,14 @@ pub fn run(
                             gtype,
                             time,
                             opponent,
+                            rated,
                         } => {
+                            // レート有無はアカウント単位の設定なので、申し込みの
+                            // 直前に必ず送って揃える (前回のぶんが残るのを防ぐ)
+                            send!(
+                                ctx,
+                                format!("tell /os rated {}", if rated { "+" } else { "-" })
+                            );
                             // 相手を指定しないと「誰でも受けられる」募集になる。
                             // 空のまま繋ぐと末尾に空白が残るので、そのときは付けない
                             let cmd = if opponent.is_empty() {
@@ -1738,6 +1752,11 @@ pub fn run(
                             && (sb.max_games == 0 || games < sb.max_games)
                         {
                             ctx.log("info", &format!("待機モード: {} に申し込み", sb.opponent));
+                            // 申し込みの直前にレート有無を揃える (Cmd::Ask と同じ)
+                            send!(
+                                ctx,
+                                format!("tell /os rated {}", if sb.rated { "+" } else { "-" })
+                            );
                             send!(
                                 ctx,
                                 format!("tell /os ask {} {} {}", sb.gtype, sb.time, sb.opponent)

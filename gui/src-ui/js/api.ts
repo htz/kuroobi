@@ -115,8 +115,8 @@ export const ggsApi = {
   disconnect: () => call('ggs_disconnect'),
   snapshot: () => call<GgsSnapshot>('ggs_snapshot'),
   raw: (cmd: string) => call('ggs_raw', { cmd }),
-  ask: (gtype: string, time: string, opponent: string) =>
-    call('ggs_ask', { gtype, time, opponent }),
+  ask: (gtype: string, time: string, opponent: string, rated: boolean) =>
+    call('ggs_ask', { gtype, time, opponent, rated }),
   accept: (id: string) => call('ggs_accept', { id }),
   decline: (id: string) => call('ggs_decline', { id }),
   finger: (name: string) => call('ggs_finger', { name }),

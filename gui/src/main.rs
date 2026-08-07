@@ -1733,12 +1733,19 @@ fn ggs_raw(app: State<App>, cmd: String) -> Result<(), String> {
 }
 
 #[tauri::command]
-fn ggs_ask(app: State<App>, gtype: String, time: String, opponent: String) -> Result<(), String> {
+fn ggs_ask(
+    app: State<App>,
+    gtype: String,
+    time: String,
+    opponent: String,
+    rated: bool,
+) -> Result<(), String> {
     ggs_tx(&app)?
         .send(ggs::Cmd::Ask {
             gtype,
             time,
             opponent,
+            rated,
         })
         .map_err(|e| e.to_string())
 }

@@ -316,6 +316,7 @@ function GgsLobby({ snap, onNav }: { snap: GgsSnapshot; onNav: (id: NavId) => vo
   const [opp, setOpp] = useState('');
   const [gtype, setGtype] = useState('s8r16');
   const [time, setTime] = useState('00:15:00');
+  const [rated, setRated] = useState(true);
 
   const games = snap.ongoing.filter((o) => !o.mine);
   const names = snap.users.filter((u) => u.name !== snap.login).map((u) => u.name);
@@ -373,10 +374,18 @@ function GgsLobby({ snap, onNav }: { snap: GgsSnapshot; onNav: (id: NavId) => vo
           </Field>
           <Field label="形式"><Select value={gtype} onChange={setGtype} options={GTYPE_CHOICES} /></Field>
           <Field label="持ち時間"><Select value={time} onChange={setTime} options={CLOCK_CHOICES} /></Field>
+          {/* GGS の /os ではレート有無はアカウント単位の設定なので、
+              申し込みの直前に毎回送って揃える (バックエンド側)。ここは
+              「この申し込みをどちらにするか」だけを持つ */}
+          <Field label="レート">
+            <Segmented value={rated ? 'on' : 'off'} onChange={(v) => setRated(v === 'on')}
+                       options={[{ value: 'on', label: 'レート戦' },
+                                 { value: 'off', label: '非レート' }]} />
+          </Field>
           {/* 相手を指定しない申し込みは「誰でも受けられる」募集になる。
               GGS の /os ask はそういう使い方ができるので、止めない */}
           <Button variant="primary"
-                  onClick={() => void ggsApi.ask(gtype, time, opp)}>
+                  onClick={() => void ggsApi.ask(gtype, time, opp, rated)}>
             {opp ? '申し込む' : '募集する'}
           </Button>
           <p style={{ margin: 0, fontSize: 'var(--fs-6)', color: 'var(--sub)', lineHeight: 1.8 }}>
@@ -441,12 +450,13 @@ function GgsStandby({ snap, onNav }: { snap: GgsSnapshot; onNav: (id: NavId) => 
   const [maxGames, setMaxGames] = useState(sb.max_games);
   const [interval, setInterval] = useState(sb.interval_secs || 20);
   const [autoAccept, setAutoAccept] = useState(sb.auto_accept);
+  const [rated, setRated] = useState(sb.rated);
 
   const names = snap.users.filter((u) => u.name !== snap.login).map((u) => u.name);
   const state = sb.enabled ? (snap.matches.length ? '対局中' : '申し込み待ち') : '停止中';
 
   const toggle = () => void ggsApi.setStandby({
-    enabled: !sb.enabled, auto_accept: autoAccept, opponent: opp.trim(),
+    enabled: !sb.enabled, auto_accept: autoAccept, rated, opponent: opp.trim(),
     gtype, time, max_games: maxGames, interval_secs: interval,
   });
 
@@ -485,6 +495,14 @@ function GgsStandby({ snap, onNav }: { snap: GgsSnapshot; onNav: (id: NavId) => 
           <Field label="対局の間隔 (秒)">
             <TextField numeric align="right" width={80} value={String(interval)}
                        onChange={(x) => setInterval(+x || 0)} />
+          </Field>
+          {/* こちらから申し込むときのレート有無。GGS ではアカウント単位の
+              設定なので、申し込みの直前に毎回送って揃える (バックエンド側)。
+              受ける側のレート有無は申し込んだ相手が決めるので変えられない */}
+          <Field label="レート">
+            <Segmented value={rated ? 'on' : 'off'} onChange={(v) => setRated(v === 'on')}
+                       options={[{ value: 'on', label: 'レート戦' },
+                                 { value: 'off', label: '非レート' }]} />
           </Field>
         </div>
         {/* Toggle は摘みを右端へ寄せる作りなので、幅を決めずに置くと画面の端まで離れる */}
