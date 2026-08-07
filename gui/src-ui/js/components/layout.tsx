@@ -75,8 +75,17 @@ export function Body({ children }: { children: React.ReactNode }) {
 }
 
 /* Nav の右。Toolbar → 本体 を縦に積む、**画面そのもの**の列 */
-export function Main({ children }: { children: React.ReactNode }) {
-  return <div style={{ flex: 1, display: 'flex', flexDirection: 'column', minWidth: 0 }}>{children}</div>;
+export function Main({ children, inset }: {
+  children: React.ReactNode;
+  /** 重ねて出した Dock のぶんだけ本体を狭める (畳む段でだけ効く)。 */
+  inset?: boolean;
+}) {
+  return (
+    <div className={inset ? 'k-main k-dock-inset' : 'k-main'}
+         style={{ flex: 1, display: 'flex', flexDirection: 'column', minWidth: 0 }}>
+      {children}
+    </div>
+  );
 }
 
 /* 盤の上の帯。そのモードの「操作」と、対局の前提を決める最小限だけを置く。

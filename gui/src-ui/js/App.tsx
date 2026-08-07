@@ -361,7 +361,7 @@ export function App() {
              </button>
            </>} />
 
-      <Main>
+      <Main inset={dockOpen && !isGgs}>
       <Toolbar
           dock={isGgs ? undefined : { open: dockOpen, onToggle: () => setDockOpen(o => !o) }}
           aux={isGgs || isBook ? undefined : <Toggle checked={g.autoHint} onChange={g.setAutoHint} label="評価値" />}>

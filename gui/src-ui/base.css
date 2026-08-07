@@ -131,6 +131,13 @@ button:disabled, button[aria-disabled="true"] { cursor:default; }
      上は画面のツールバーの下から、下は Body の底 (= StatusBar の上) まで */
   .k-dock.k-open { display:flex; position:absolute; right:0; top:var(--h-bar); bottom:0; z-index:5; box-shadow:var(--sh-2); }
   .k-dock-toggle { display:inline-flex; }
+  /* 重ねて出した Dock の下に盤が潜らないようにする。盤は器の高さから
+     大きさを決める (規則 77) ので、器が Dock ぶん狭くならないと右の列が
+     隠れる — 畳む順は「盤を最後まで残す」(規則 7)。
+     ツールバー (最初の子) は Dock の上端より上にいるので動かさない。
+     padding ではなく margin を使う: 部品が padding を一括指定で書いており、
+     インラインは media query より強いので届かない */
+  .k-dock-inset > :not(:first-child) { margin-right:var(--w-dock); }
 }
 @media (max-width: 1040px) {
   /* アイコンだけの細い列。48px = 32px の当たり ＋ 左右 8px */
