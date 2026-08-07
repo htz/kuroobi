@@ -3,13 +3,13 @@ import { useGame } from './state';
 import { useGgs } from './ggs';
 import { flipped, usePrefs } from './prefs';
 import type { GameView } from './types';
-import { api, ggsApi, jsLog, type ActivityView } from './api';
+import { api, ggsApi, jsLog, onApp, openWindow, type ActivityView } from './api';
 import { useActivity, useEngineSettings, useEngineTurn, useGraph, useHints, useLearnLog, useStartGame } from './engine';
 import { fmtSecs } from './ggs';
 import { cellsOf, connOf, evalsOf, ggsPlaying, movesOf, navBadges, sqName } from './adapt';
 import { AppFrame, Body, BottomPanel, Dock, Main, Section, StatusBar, StatusStat, Toolbar, WindowBar } from './components/layout';
 import { GgsChat, GgsConsole, GgsScreen } from './GgsScreens';
-import { Confirm, PasteKifu, Settings } from './Dialogs';
+import { Confirm, PasteKifu } from './Dialogs';
 import { Board } from './components/board';
 import { EvalGraph, KifuTable, MoveScrub, PlayerRow } from './components/data';
 import { JobList, Meter, Nav, NAV_LOCAL, StatusChip, ggsNav, Toasts, type NavId, type Toast } from './components/ggs';
@@ -37,13 +37,23 @@ const SIDES = [
 export function App() {
   const g = useGame();
   const ggs = useGgs();
-  const { prefs, set: setPref } = usePrefs();
+  const { prefs } = usePrefs();   // 書き換えは設定の窓が行う
   const [nav, setNavRaw] = useState<NavId>('play');
   const study = nav === 'study';
   const isBook = nav === 'book';
   const isGgs = nav.startsWith('ggs');
   const [tab, setTab] = useState('棋譜');
   const [dockOpen, setDockOpen] = useState(false);
+
+  // 設定は別の窓なので、そこでファイルを差し替えてもこちらは気付けない。
+  // 報せを聞いて定石の有無だけ取り直す (盤の「定石」表示が変わる)
+  const setHasBook = g.setHasBook;
+  useEffect(() => {
+    const off = onApp('resources-changed', () => {
+      void api.hasBook().then(setHasBook).catch(() => { /* エンジン未初期化 */ });
+    });
+    return () => { void off.then((f) => f()); };
+  }, [setHasBook]);
 
   useEngineSettings(g);
   useHints(g);
@@ -102,7 +112,6 @@ export function App() {
   const [viewer, setViewer] = useState<{ title: string; kifu: string; pending?: string } | null>(null);
 
   const [paste, setPaste] = useState(false);
-  const [settings, setSettings] = useState(false);
 
   /* 動作確認用 (KUROOBI_AUTOPLAY=both:11 のように指定する)。
    * この repo は画面の確認を「起動して撮る」でやるので、その入口を残す。
@@ -118,7 +127,7 @@ export function App() {
     void api.autoplay().then(async (v) => {
       if (!v) return;
       const [who, lv] = v.split(':');
-      if (who === 'settings') { setSettings(true); return; }
+      if (who === 'settings') { void openWindow('settings'); return; }
       // "tab:学習" のようにドックの見出しを指定する (撮るためだけの入口)
       if (who === 'tab') { if (lv) setTab(lv); return; }
       // "book:f5d6" のように手順を渡すと、その節まで辿った状態で開く
@@ -238,7 +247,7 @@ export function App() {
     const onKey = (e: KeyboardEvent) => {
       const t = e.target as HTMLElement | null;
       if (t && (t.tagName === 'INPUT' || t.tagName === 'TEXTAREA' || t.isContentEditable)) return;
-      if (settings || paste || ask) return;
+      if (paste || ask) return;
       const cmd = e.metaKey || e.ctrlKey;
       const key = e.key.toLowerCase();
       if (cmd && key === 'b') { e.preventDefault(); setNav('book'); return; }
@@ -278,7 +287,7 @@ export function App() {
     };
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
-  }, [setNav, settings, paste, ask, isBook, isGgs, study, book, g, v]);
+  }, [setNav, paste, ask, isBook, isGgs, study, book, g, v]);
 
   const toasts: Toast[] = g.toasts.map(t => ({ id: String(t.id), tone: t.tone, text: t.text }));
 
@@ -329,7 +338,7 @@ export function App() {
                  同じ絵を別の意味で 2 か所に出さない (規則 49)。
                  48px の列では文字を落として絵だけの正方形にする */}
              <button type="button" className="k-press k-nav-settings" title="設定" aria-label="設定"
-                     onClick={() => setSettings(true)}
+                     onClick={() => void openWindow('settings')}
                      style={{
                        alignItems: 'center', justifyContent: 'center',
                        gap: 'var(--sp-2)', height: 'var(--h-field)',
@@ -412,7 +421,7 @@ export function App() {
                        }} />
          : isBook ? (
           <BookPane b={book} coords={prefs.coords} grain={prefs.grain}
-                    flip={flipped(prefs.facing, '')} onSettings={() => setSettings(true)} />
+                    flip={flipped(prefs.facing, '')} onSettings={() => void openWindow('settings')} />
         ) : (
         <div style={{ flex: 1, minHeight: 0, display: 'flex', flexDirection: 'column', padding: '0 var(--sp-4)' }}>
           <PlayerRow color="b" name="黒" discs={v?.black ?? 2}
@@ -591,12 +600,6 @@ export function App() {
               <StatusStat label="KUROOBI" value={lv} />
             </>} />
 
-      {settings && (
-        <Settings prefs={prefs} setPref={setPref}
-                  learnOn={g.learnOn} onLearn={g.setLearnOn}
-                  onChanged={() => void api.hasBook().then(g.setHasBook).catch(() => {})}
-                  onClose={() => setSettings(false)} />
-      )}
 
       {ask && (
         <Confirm title="確認" body={ask.msg} ok="続ける"

@@ -864,6 +864,45 @@ fn resource_status() -> Vec<(String, String, bool)> {
         .collect()
 }
 
+/// 付属ウィンドウを開く (設定・定石ブラウザ)。すでに開いていれば前へ出す。
+///
+/// **設定や定石は主画面の脇役ではなく、それ自体を腰を据えて触るもの**なので、
+/// 覆い (Modal) ではなく窓にする。覆いだと後ろの盤が見えているのに触れず、
+/// 開いている間ずっと主画面が止まって見える。
+///
+/// 中身は同じ `index.html` に `?w=<種別>` を付けて出し分ける
+/// (`main.tsx` が見る)。窓ごとにバンドルを分けると読み込みが二重になる。
+/// **`capabilities/default.json` の `windows` に札を足すこと** — 足さないと
+/// その窓からは invoke が一切通らない (画面は出るのに何も動かない)。
+#[tauri::command]
+fn open_child_window(handle: tauri::AppHandle, kind: String) -> Result<(), String> {
+    // 札は固定の集合から選ぶ。画面側の文字列をそのまま窓の札にすると、
+    // 綴り違いのたびに空の窓が増える
+    let (label, title, w, h) = match kind.as_str() {
+        "settings" => ("settings", "設定", 480.0, 620.0),
+        "book" => ("book", "定石", 1080.0, 760.0),
+        _ => return Err(format!("知らない窓: {kind}")),
+    };
+    if let Some(win) = handle.get_webview_window(label) {
+        let _ = win.unminimize();
+        let _ = win.show();
+        let _ = win.set_focus();
+        return Ok(());
+    }
+    let url = tauri::WebviewUrl::App(format!("index.html?w={label}").into());
+    tauri::WebviewWindowBuilder::new(&handle, label, url)
+        // 題名は画面側の帯が描く (主画面と同じ作り)。ここで入れると
+        // macOS の題名が重なって二重に出る
+        .title("")
+        .title_bar_style(tauri::TitleBarStyle::Overlay)
+        .inner_size(w, h)
+        .min_inner_size(400.0, 420.0)
+        .build()
+        .map_err(|e| e.to_string())?;
+    let _ = title; // 窓の題名は使わない (帯が描く)
+    Ok(())
+}
+
 /// ファイル選択ダイアログを開く。`kind` に応じて絞り込む。
 #[tauri::command]
 async fn pick_resource(handle: tauri::AppHandle, kind: String) -> Result<Option<String>, String> {
@@ -2086,7 +2125,8 @@ fn main() {
             ggs_set_standby,
             ggs_snapshot,
             ggs_autoview,
-            ggs_save_kifu
+            ggs_save_kifu,
+            open_child_window
         ])
         .run(tauri::generate_context!())
         .expect("tauri run");

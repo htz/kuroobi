@@ -266,6 +266,8 @@ declare global {
       core: { invoke: <T = unknown>(cmd: string, args?: Record<string, unknown>) => Promise<T> };
       event: {
         listen: <T>(name: string, fn: (e: { payload: T }) => void) => Promise<() => void>;
+        /** 窓をまたいで報せる。付属ウィンドウ (設定) の変更を主画面へ伝える。 */
+        emit: (name: string, payload?: unknown) => Promise<void>;
       };
     };
   }

@@ -52,6 +52,18 @@ export function usePrefs() {
     });
   }, []);
 
+  /* 設定は別の窓で触るので、こちらは書き換えを聞いて追いかける。
+   * 同じ生成元の document どうしなら storage が飛ぶ (自分が書いたときは
+   * 飛ばないので、書いた側の setPrefs と二重にはならない)。 */
+  useEffect(() => {
+    const onStorage = (e: StorageEvent) => {
+      if (e.key !== null && e.key !== KEY) return;
+      setPrefs(load());
+    };
+    window.addEventListener('storage', onStorage);
+    return () => window.removeEventListener('storage', onStorage);
+  }, []);
+
   // テーマは :root の属性で切り替える。`os` のときは属性を外して
   // prefers-color-scheme に任せる (tokens.css がその形で書いてある)
   useEffect(() => {

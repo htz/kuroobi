@@ -19,6 +19,22 @@ async function call<T = void>(cmd: string, args?: Record<string, unknown>): Prom
   return c.invoke<T>(cmd, args);
 }
 
+/** 付属ウィンドウ (設定・定石) を開く。すでに開いていれば前へ出す。 */
+export const openWindow = (kind: 'settings' | 'book') =>
+  call<void>('open_child_window', { kind });
+
+/* 窓をまたぐ報せ。設定の窓でファイルを差し替えても、主画面は自分で
+ * 気付けない (別の document なので React の状態は共有されない)。 */
+export function emitApp(name: string): void {
+  void window.__TAURI__?.event.emit(name).catch(() => { /* 相手が居なくてもよい */ });
+}
+
+export function onApp(name: string, fn: () => void): Promise<() => void> {
+  const ev = window.__TAURI__?.event;
+  if (!ev) return Promise.resolve(() => { /* Tauri 外 */ });
+  return ev.listen(name, () => fn());
+}
+
 export const api = {
   state: () => call<GameView>('state'),
   newGame: () => call<GameView>('new_game'),

@@ -1,9 +1,9 @@
 import { useCallback, useEffect, useState, type ReactNode } from 'react';
-import { api, type KifuFrame, type ThreadsView } from './api';
+import { api, emitApp, type KifuFrame, type ThreadsView } from './api';
 import type { Prefs } from './prefs';
-import { Modal, Overlay, Section } from './components/layout';
+import { Modal, Overlay, Section, WindowBar } from './components/layout';
 import { Button, Segmented, Select, TextField } from './components/primitives';
-import { Icon, IconButton } from './components/Icons';
+import { Icon } from './components/Icons';
 import { Board } from './components/board';
 
 /* 確認と入力。現行がブラウザの confirm() / prompt() を使っているところを
@@ -147,11 +147,18 @@ const NOT_FOUND: Record<string, string> = {
   book: '見つかりません。実戦から育つ book_learn.txt だけを使います',
 };
 
-export function Settings({ learnOn, onLearn, onChanged, onClose, prefs, setPref }: {
-  learnOn: boolean; onLearn: (on: boolean) => void; onChanged: () => void; onClose: () => void;
+/* 設定は主画面の脇役ではないので**別の窓**に出す (規則 79)。覆いだと後ろの
+ * 盤が見えているのに触れず、開いている間ずっと主画面が止まって見える。
+ *
+ * 窓が別なら React の状態は共有されないので、
+ *   - 見え方 (Prefs) は localStorage 経由。書けば storage が飛んで主画面が追う
+ *   - ファイルとスレッドはバックエンドが持つので、変えたら報せだけ送る
+ * という分担にしてある。学習の取り込みはドックに操作があるので置かない
+ * (同じ設定を 2 か所に出さない — 規則 58)。 */
+export function Settings({ prefs, setPref }: {
   prefs: Prefs; setPref: <K extends keyof Prefs>(k: K, v: Prefs[K]) => void;
 }) {
-  const [tab, setTab] = useState<'engine' | 'view' | 'learn'>('engine');
+  const [tab, setTab] = useState<'engine' | 'view'>('engine');
   const [reset, setReset] = useState(false);
   const [status, setStatus] = useState<[string, string, boolean][]>([]);
   const [th, setTh] = useState<ThreadsView | null>(null);
@@ -178,7 +185,8 @@ export function Settings({ learnOn, onLearn, onChanged, onClose, prefs, setPref 
   const change = async (kind: string, path: string | null) => {
     await api.setResource(kind, path);
     await load();
-    onChanged();
+    // 主画面は別の document なので自分では気付けない
+    emitApp('resources-changed');
   };
   const setThreads = async (n: number | null) => {
     try {
@@ -188,21 +196,12 @@ export function Settings({ learnOn, onLearn, onChanged, onClose, prefs, setPref 
   };
 
   return (
-    <Overlay onClose={onClose}>
-      {/* 見出しは動かさない。長い設定を下まで見ているときに「閉じる」が
-          画面外へ出ると、Esc を知らない人が閉じられなくなる */}
-      <div role="dialog" aria-modal style={{
-        width: 480, maxHeight: '80vh', borderRadius: 'var(--r-4)', background: 'var(--card)',
-        border: '1px solid var(--border)', boxShadow: 'var(--sh-2)',
-        display: 'flex', flexDirection: 'column', minHeight: 0, overflow: 'hidden',
+    <div style={{ height: '100%', display: 'flex', flexDirection: 'column', background: 'var(--bg)' }}>
+      <WindowBar title="設定" />
+      <div style={{
+        flex: 1, minHeight: 0, background: 'var(--card)',
+        display: 'flex', flexDirection: 'column', overflow: 'hidden',
       }}>
-        <div style={{
-          flex: 'none', display: 'flex', alignItems: 'center',
-          padding: 'var(--sp-4) var(--sp-5)', borderBottom: '1px solid var(--border-weak)',
-        }}>
-          <span style={{ fontSize: 'var(--fs-3)', fontWeight: 600 }}>設定</span>
-          <span style={{ marginLeft: 'auto' }}><IconButton name="close" label="閉じる" onClick={onClose} /></span>
-        </div>
         {/* 節を縦に積むと下まで巻かないと何があるか分からない。区分はタブで
             分ける (設計の 設定 と同じ形)。GGS は左メニューに行き先があるので
             ここには置かない — 同じ設定を 2 か所に出さない (規則 58) */}
@@ -213,7 +212,6 @@ export function Settings({ learnOn, onLearn, onChanged, onClose, prefs, setPref 
           <Segmented value={tab} onChange={setTab} options={[
             { value: 'engine', label: 'エンジン' },
             { value: 'view', label: '表示' },
-            { value: 'learn', label: '学習' },
           ]} />
         </div>
         <div className="k-scroll" style={{ flex: 1, minHeight: 0, padding: 'var(--sp-5)' }}>
@@ -302,20 +300,6 @@ export function Settings({ learnOn, onLearn, onChanged, onClose, prefs, setPref 
         )}
         </>}
 
-        {tab === 'learn' && (
-        <Section title="定石の学習">
-          <Row2 label="取り込む">
-            <Segmented value={learnOn ? 'on' : 'off'} onChange={(v) => onLearn(v === 'on')}
-                       options={[{ value: 'on', label: 'する' }, { value: 'off', label: 'しない' }]} />
-          </Row2>
-          <p style={{ margin: 0, marginLeft: 'calc(var(--w-label) + var(--sp-3))',
-                      fontSize: 'var(--fs-7)', color: 'var(--sub)', lineHeight: 1.8 }}>
-            終局した対局 (ローカル対局と GGS の両方) を定石の学習に取り込みます。
-            負けた展開は次から自然に避けられるようになります。
-            学習分は定石とは別のファイル (book_learn.txt) に貯まります。
-          </p>
-        </Section>
-        )}
         </div>
         {/* OK ボタンは置かない (変更は即時に反映される)。それが分からないと
             「決定していないのでは」と不安になるので、下の帯で言い切る */}
@@ -342,11 +326,11 @@ export function Settings({ learnOn, onLearn, onChanged, onClose, prefs, setPref 
                      for (const [kind] of KINDS) await api.setResource(kind, null);
                      await setThreads(null);
                      await load();
-                     onChanged();
+                     emitApp('resources-changed');
                    })();
                  }} />
       )}
-    </Overlay>
+    </div>
   );
 }
 
