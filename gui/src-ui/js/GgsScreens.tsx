@@ -246,12 +246,13 @@ export function GgsChat({ snap }: { snap: GgsSnapshot }) {
             aria-current={key === cur || undefined}
             className={'k-row' + (key === cur ? ' k-on' : '')}
             style={{
-              width: '100%', border: 0, textAlign: 'left', display: 'flex', flexDirection: 'column', gap: 3,
-              padding: '9px var(--sp-3)', borderBottom: '1px solid var(--border-weak)',
+              width: '100%', border: 0, textAlign: 'left', display: 'flex', flexDirection: 'column',
+              gap: 'var(--sp-1)', padding: 'var(--sp-2) var(--sp-3)',
+              borderBottom: '1px solid var(--border-weak)',
               background: key === cur ? 'color-mix(in srgb, var(--accent) 14%, transparent)' : 'transparent',
               boxShadow: key === cur ? 'inset 2px 0 0 var(--accent)' : 'none',
             }}>
-            <span style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 'var(--fs-5)' }}>
+            <span style={{ display: 'flex', alignItems: 'center', gap: 'var(--sp-2)', fontSize: 'var(--fs-5)' }}>
               {key === '.chat' ? '全体チャット' : key}
               {info.last.at > 0 && (
                 <span style={{ marginLeft: 'auto', fontSize: 'var(--fs-7)', color: 'var(--sub)' }}>
@@ -420,10 +421,10 @@ function Row({ title, sub, tag, actions }: {
   return (
     <div style={{
       display: 'flex', alignItems: 'center', gap: 'var(--sp-2)',
-      padding: '7px 0', borderBottom: '1px solid var(--border-weak)',
+      padding: 'var(--sp-2) 0', borderBottom: '1px solid var(--border-weak)',
     }}>
-      <span style={{ flex: 1, minWidth: 0, display: 'flex', flexDirection: 'column', gap: 2 }}>
-        <span style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 'var(--fs-5)' }}>
+      <span style={{ flex: 1, minWidth: 0, display: 'flex', flexDirection: 'column', gap: 'var(--sp-1)' }}>
+        <span style={{ display: 'flex', alignItems: 'center', gap: 'var(--sp-2)', fontSize: 'var(--fs-5)' }}>
           <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{title}</span>
           {tag && <Tag tone="accent">{tag}</Tag>}
         </span>
@@ -435,7 +436,7 @@ function Row({ title, sub, tag, actions }: {
 }
 
 function Empty({ children }: { children: React.ReactNode }) {
-  return <div style={{ padding: '10px 0', fontSize: 'var(--fs-6)', color: 'var(--sub)' }}>{children}</div>;
+  return <div style={{ padding: 'var(--sp-3) 0', fontSize: 'var(--fs-6)', color: 'var(--sub)' }}>{children}</div>;
 }
 
 /* ---------------- 待機モード ----------------
@@ -1071,7 +1072,7 @@ function UserDetail({ snap, name, tab, onTab, onBack, onNav }: {
                   return (
                     <div key={r.key} style={{
                       display: 'flex', gap: 'var(--sp-3)', alignItems: 'flex-start',
-                      padding: '6px 0', borderBottom: '1px solid var(--border-weak)',
+                      padding: 'var(--sp-2) 0', borderBottom: '1px solid var(--border-weak)',
                     }}>
                       <span style={{
                         width: 'var(--w-label)', flex: 'none', fontSize: 'var(--fs-6)', color: 'var(--sub)',

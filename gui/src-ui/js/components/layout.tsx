@@ -230,13 +230,13 @@ export function BottomPanel({ tabs, active, onTab, onClose, height = 240, childr
             <button key={t.id} type="button" onClick={() => onTab?.(t.id)}
               aria-pressed={on} className={'k-press' + (on ? ' k-on' : '')}
               style={{
-                height: 'var(--h-chip)', padding: '0 10px', border: 0, borderRadius: 'var(--r-1)', fontSize: 'var(--fs-6)',
+                height: 'var(--h-chip)', padding: '0 var(--sp-3)', border: 0, borderRadius: 'var(--r-1)', fontSize: 'var(--fs-6)',
                 background: on ? 'var(--card)' : 'transparent',
                 color: on ? 'var(--text)' : 'var(--sub)', fontWeight: on ? 600 : 400,
-                display: 'flex', alignItems: 'center', gap: 6,
+                display: 'flex', alignItems: 'center', gap: 'var(--sp-2)',
               }}>
               {t.label}
-              {t.unread ? <span style={{ background: 'var(--bad)', color: 'var(--on-bad)', borderRadius: 'var(--r-pill)', padding: '0 5px', fontSize: 'var(--fs-7)' }}>{t.unread}</span> : null}
+              {t.unread ? <span style={{ background: 'var(--bad)', color: 'var(--on-bad)', borderRadius: 'var(--r-pill)', padding: '0 var(--sp-1)', fontSize: 'var(--fs-7)' }}>{t.unread}</span> : null}
             </button>
           );
         })}
@@ -277,7 +277,7 @@ export function EmptyState({ title, body, actions }: { title: string; body?: Rea
   return (
     <div style={{ flex: 1, display: 'grid', placeItems: 'center', padding: 'var(--sp-5)' }}>
       <div style={{ maxWidth: 420, textAlign: 'center', display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 'var(--sp-5)' }}>
-        <span aria-hidden style={{ width: 64, height: 64, borderRadius: 14, overflow: 'hidden', opacity: .5, display: 'block' }}
+        <span aria-hidden style={{ width: 64, height: 64, borderRadius: 'var(--r-4)', overflow: 'hidden', opacity: .5, display: 'block' }}
               dangerouslySetInnerHTML={{ __html: icon }} />
         <div style={{ display: 'flex', flexDirection: 'column', gap: 'var(--sp-2)' }}>
           <div style={{ fontSize: 'var(--fs-3)', fontWeight: 600 }}>{title}</div>
