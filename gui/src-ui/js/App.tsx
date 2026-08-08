@@ -393,9 +393,13 @@ export function App() {
       if (cmd && key === 'b') { e.preventDefault(); setNav('book'); return; }
       if (cmd && key === 'n') { e.preventDefault(); if (!g.thinking) void g.newGame(); return; }
       // 棋譜の出し入れ。GGS と定石では扱う棋譜が無い
+      // **釦と同じ条件で断る。**釦は 1 手も無いと沈むのに、鍵だけ通ると
+      // 「棋譜が空です」が出て、押せない釦があることと辻褄が合わない
       if (cmd && key === 's' && !isGgs && !isBook) {
         e.preventDefault();
-        void api.saveKifu(...ggfNames(g.side)).catch((err) => g.say('' + err));
+        if (v && v.moves.length > 0) {
+          void api.saveKifu(...ggfNames(g.side)).catch((err) => g.say('' + err));
+        }
         return;
       }
       if (cmd && key === 'o' && !isGgs && !isBook) { e.preventDefault(); setPaste(true); return; }
@@ -540,8 +544,10 @@ export function App() {
                       onClick={startGame}>
                 {g.playing ? '対局停止' : '対局開始'}
               </Button>
-              <Button disabled={g.thinking} onClick={() => void g.newGame()}>新規対局</Button>
-              <Button disabled={g.thinking || !v || v.move_count === 0}
+              {/* **鍵は釦に書いておく。**押せることは見れば分かるが、
+                  鍵があることは押しても分からない */}
+              <Button title="⌘N" disabled={g.thinking} onClick={() => void g.newGame()}>新規対局</Button>
+              <Button title="⌘Z" disabled={g.thinking || !v || v.move_count === 0}
                       onClick={() => void g.undo()}>待った</Button>
               {/* 押す操作と、対局の前提を決めるものは別の話なので縦罫で切る。
                   切らないと「新規対局」と「黒」が同じ並びに見える */}
@@ -714,13 +720,13 @@ export function App() {
               flex: 'none', display: 'flex', gap: 'var(--sp-2)',
               padding: 'var(--sp-2) var(--sp-3)', borderTop: '1px solid var(--border-weak)',
             }}>
-              <Button onClick={() => setPaste(true)}>貼り付け</Button>
+              <Button title="⌘O" onClick={() => setPaste(true)}>貼り付け</Button>
               <Button onClick={() => void loadFromFile()}>読込</Button>
               {/* .ggf で保存すると、どちらがどの色か・結果・開始局面まで入る。
                   **1 手も無いときは押せなくする。**押すと「棋譜が空です」で
                   返ってくるだけで、理由はすぐ上の表が「まだ手がありません」と
                   言っている (規則 61 — 直し方は操作のそばに) */}
-              <Button disabled={!moves.length}
+              <Button title="⌘S" disabled={!moves.length}
                       onClick={() => void api.saveKifu(...ggfNames(g.side)).catch((e) => g.say('' + e))}>
                 保存
               </Button>
