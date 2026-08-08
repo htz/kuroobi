@@ -311,11 +311,13 @@ function BookRow({ r, open, onToggle, onGo, decimals = 1 }: {
                   fontSize: 'var(--fs-3)', lineHeight: 1, borderRadius: 'var(--r-1)',
                 }}>{open ? '▾' : '▸'}</button>
       )}
-      <button type="button" onClick={onGo}
+      {/* **状態の層を付ける。**隣の三角は `k-press` で光るのに、名前のほうは
+          何も付いておらず、押せるのに触れても変わらなかった */}
+      <button type="button" onClick={onGo} className="k-row"
               title="押すとこの局面へ"
               style={{
                 flex: 1, minWidth: 0, display: 'flex', alignItems: 'center', gap: 'var(--sp-2)',
-                border: 0, background: 'transparent', cursor: 'pointer', padding: '0 var(--sp-1)',
+                border: 0, background: 'transparent', padding: '0 var(--sp-1)',
                 fontSize: 'var(--fs-6)', color: 'var(--text)', textAlign: 'left',
               }}>
         <span style={{ width: 30, fontWeight: 600 }}>{r.name}</span>

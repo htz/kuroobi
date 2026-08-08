@@ -255,7 +255,10 @@ export function MatchRow({ m, active, onSelect, onClose }: {
     }}>
       {/* 閉じるボタンは右端から 36px を占めるので、行の本体に余白を持たせる。
           持たせないと長い名前がボタンの下に潜る */}
-      <button type="button" onClick={onSelect} aria-current={active || undefined} style={{
+      {/* 一覧の行なので `k-row`。付け忘れると、選ばれている行の色は出るのに
+          触れても何も変わらない (押せる場所だと分からない) */}
+      <button type="button" onClick={onSelect} className="k-row"
+              aria-current={active || undefined} style={{
         width: '100%', border: 0, background: 'transparent', textAlign: 'left',
         padding: '9px var(--sp-3)', paddingRight: closable ? 40 : undefined,
         display: 'flex', flexDirection: 'column', gap: 5,
