@@ -380,7 +380,7 @@ pub fn demo_snapshot() -> Snapshot {
             draws: 2,
         },
     ];
-    s.users = vec![
+    let mut users: Vec<UserRow> = vec![
         ("saio", 2245.8, 34.0),
         ("tamaki", 2011.4, 46.0),
         ("edax-bot", 2280.1, 22.0),
@@ -396,6 +396,18 @@ pub fn demo_snapshot() -> Snapshot {
         raw: format!("{n} {r}@{d}"),
     })
     .collect();
+    /* **頁送り (規則 74) を出すには 25 人を超えないといけない。**
+       実サーバーは接続中が 10 件ほどしか居らず、一度も出せていなかった */
+    for i in 0..26 {
+        let r = 1900.0 - i as f32 * 21.0;
+        users.push(UserRow {
+            name: format!("player{:02}", i + 1),
+            rating: Some(r),
+            dev: Some(40.0 + i as f32),
+            raw: format!("player{:02} {r}@40", i + 1),
+        });
+    }
+    s.users = users;
     s.ranking = s.users.clone();
     s.ongoing = vec![
         OngoingView {
