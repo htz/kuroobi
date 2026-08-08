@@ -311,6 +311,11 @@ export function EmptyState({ title, body, actions }: { title: string; body?: Rea
  * 押せない場所を作るのが役目なので、暗幕そのものを押したら閉じる。
  * Esc でも閉じる — 開いたら閉じ方が要る、というだけの話だが、
  * ブラウザの confirm() と違って自分で書かないと付いてこない。 */
+/** 焦点を置ける相手。**欄を釦より先に**書いてある — 覆いを開いたときに
+ *  入る先は「打つ場所」であってほしい (棋譜の読み込みなら貼り付け先)。 */
+const FOCUSABLE =
+  'textarea:not(:disabled), input:not(:disabled), button:not(:disabled), select:not(:disabled), [tabindex]:not([tabindex="-1"])';
+
 export function Overlay({ onClose, children }: { onClose?: () => void; children: React.ReactNode }) {
   React.useEffect(() => {
     if (!onClose) return;
@@ -319,17 +324,32 @@ export function Overlay({ onClose, children }: { onClose?: () => void; children:
     return () => window.removeEventListener('keydown', on);
   }, [onClose]);
 
-  /* **焦点を中へ入れ、閉じたら元へ返す。**`aria-modal` を名乗っているのに
-     焦点は後ろに残ったままで、Tab を押すと暗幕の下の押せないものを
-     順に辿っていた。入れる先は最初の押せるもの (棋譜の読み込みなら
-     貼り付け先の欄) — 無ければ器そのもの。 */
+  /* **焦点を中へ入れ、輪にして、閉じたら元へ返す。**`aria-modal` を
+     名乗っているのに焦点は後ろに残ったままで、Tab を押すと暗幕の下の
+     押せないものを順に辿っていた。入れる先は最初の押せるもの
+     (棋譜の読み込みなら貼り付け先の欄) — 無ければ器そのもの。 */
   const box = React.useRef<HTMLDivElement>(null);
   React.useEffect(() => {
+    const el = box.current;
     const back = document.activeElement as HTMLElement | null;
-    const first = box.current?.querySelector<HTMLElement>(
-      'textarea:not(:disabled), input:not(:disabled), button:not(:disabled), select:not(:disabled), [tabindex]:not([tabindex="-1"])');
-    (first ?? box.current)?.focus();
-    return () => back?.focus?.();
+    /** いま押せるものだけ。`offsetParent` が無いもの (畳まれた段) は数えない */
+    const items = () => [...(el?.querySelectorAll<HTMLElement>(FOCUSABLE) ?? [])]
+      .filter((x) => x.offsetParent !== null);
+    (items()[0] ?? el)?.focus();
+    // 端で折り返す。輪にしないと、最後の釦から暗幕の下へ抜けてしまう
+    const on = (e: KeyboardEvent) => {
+      if (e.key !== 'Tab' || !el) return;
+      const list = items();
+      if (!list.length) return;
+      const a = document.activeElement;
+      const out = !el.contains(a);
+      if (e.shiftKey ? (out || a === list[0]) : (out || a === list[list.length - 1])) {
+        e.preventDefault();
+        (e.shiftKey ? list[list.length - 1] : list[0]).focus();
+      }
+    };
+    window.addEventListener('keydown', on);
+    return () => { window.removeEventListener('keydown', on); back?.focus?.(); };
   }, []);
 
   return (
