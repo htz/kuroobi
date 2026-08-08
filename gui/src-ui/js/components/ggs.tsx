@@ -125,12 +125,12 @@ function NavRow({ item, active, onSelect }: { item: NavItem; active: boolean; on
         <Icon name={item.icon} size={16} />
       </span>
       <span className="k-nav-label">{item.label}</span>
-      {/* 置き場所は base.css が持つ (畳む段で絵の角へ移すため)。
-          インラインに書くと media query が届かない */}
+      {/* **置き場所も大きさも base.css が持つ。** 畳む段で絵の角へ移して
+          小さくするので、ここに書くと media query が届かない。
+          色と太さだけがここの持ち物 */}
       {item.count != null && (
         <span className="k-nav-n" style={{
-          minWidth: 18, height: 18, padding: '0 5px', borderRadius: 9,
-          fontSize: 'var(--fs-7)', fontWeight: item.alert ? 700 : 600, display: 'grid', placeItems: 'center',
+          fontWeight: item.alert ? 700 : 600, display: 'grid', placeItems: 'center',
           background: item.alert ? 'var(--bad)'
             : active ? 'color-mix(in srgb, var(--on-accent) 22%, transparent)' : 'var(--border)',
           color: item.alert ? 'var(--on-bad)' : active ? 'var(--on-accent)' : 'var(--text)',

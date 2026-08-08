@@ -134,6 +134,14 @@ button:disabled, button[aria-disabled="true"] { cursor:default; }
 .k-nav-settings { display:flex; width:100%; }
 .k-nav-foot { padding:var(--sp-3); }
 .k-nav-row { padding:0 10px; }
+/* 件数バッジと状態の点。広い窓は行の右端へ押し出し、48px の列では絵の角へ
+   重ねる (下の 1040px の段)。**置き場所も大きさも畳む段が動かすので、
+   部品の style に書かない** — インラインは media query より強い */
+.k-nav-n, .k-nav-dot { margin-left:auto; }
+.k-nav-n {
+  min-width:18px; height:18px; padding:0 5px;
+  border-radius:9px; font-size:var(--fs-7);
+}
 /* Nav の上端のロゴ。SVG は放っておくと固有の大きさで描かれるので幅を決める。
    display は畳む段が動かすので、ここが持つ (インラインに書くと届かない) */
 .k-nav-logo { display:flex; align-items:center; justify-content:center; }
