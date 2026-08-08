@@ -353,6 +353,28 @@ export function List({ children }: { children: React.ReactNode }) {
   return <div style={{ display: 'flex', flexDirection: 'column' }}>{children}</div>;
 }
 
+/* 表の列見出しの行。**4 か所で同じ体裁を手書きしていた** (棋譜の表 /
+ * 学習ログ / プレイヤーの一覧 / 定石の木) — 字も高さも罫も同じなのに
+ * 書いた場所ごとに並び順が違い、直すときに見落とす。
+ *
+ * 高さは `--h-head` (20px)、字は節の見出しと同じ (`--fs-7` / 600 /
+ * 字間 .08em / `--sub`)。**列そのものは呼ぶ側が `<span>` の幅で並べる** —
+ * 幅はその表だけの数字なので、部品に持たせても揃わない。 */
+export function TableHead({ pad = 'var(--sp-3)', children }: {
+  /** 左右の余白。行の余白と揃える (既定は `--sp-3`)。 */
+  pad?: string;
+  children: React.ReactNode;
+}) {
+  return (
+    <div style={{
+      flex: 'none', height: 'var(--h-head)', display: 'flex', alignItems: 'center',
+      gap: 'var(--sp-2)', padding: `0 ${pad}`,
+      borderBottom: '1px solid var(--border)',
+      fontSize: 'var(--fs-7)', fontWeight: 600, letterSpacing: '.08em', color: 'var(--sub)',
+    }}>{children}</div>
+  );
+}
+
 /* **一覧が空のときの一言。**節や表の中に置く小さいほう。
  *
  * 画面まるごとが空なら `EmptyState` (絵と題名と行き先を持つ大きいほう)。

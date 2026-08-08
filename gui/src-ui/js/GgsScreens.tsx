@@ -6,7 +6,7 @@ import {
   fingerGroups, fingerValue, hasJapanese, normKey, parseCond, translate, useClocks,
   type ClockSide, type ClockView,
 } from './ggs';
-import { Empty, EmptyState, List, Section } from './components/layout';
+import { Empty, EmptyState, List, Section, TableHead } from './components/layout';
 import { Button, Segmented, Select, TextField, Toggle } from './components/primitives';
 import { Strength } from './components/strength';
 import { Confirm, PickOne } from './Dialogs';
@@ -1255,17 +1255,12 @@ function GgsUsers({ snap, onNav, onKifu }: {
             行ごとに動いていた。
             `#` は順位なので「上位」のときだけ出す (接続中の一覧に順位は無い) */}
         {!!rows.length && (
-          <div style={{
-            display: 'flex', alignItems: 'center', gap: 'var(--sp-2)',
-            height: 'var(--h-head)', padding: '0 var(--sp-4)',
-            borderBottom: '1px solid var(--border)',
-            fontSize: 'var(--fs-7)', fontWeight: 600, letterSpacing: '.08em', color: 'var(--sub)',
-          }}>
+          <TableHead pad="var(--sp-4)">
             {mode === 'top' && <span style={{ width: 26, textAlign: 'right' }}>#</span>}
             <span style={{ flex: 1 }}>名前</span>
             <span style={{ width: 96, textAlign: 'right' }}>レート</span>
             <span style={{ width: 52, textAlign: 'right' }}>状態</span>
-          </div>
+          </TableHead>
         )}
         {/* 列見出しだけを残さない。繋いだ直後は一覧がまだ届いていない */}
         {!slice.length && (

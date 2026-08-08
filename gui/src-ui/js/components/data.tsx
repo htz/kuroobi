@@ -1,6 +1,6 @@
 import React from 'react';
 import { Badge, Dot } from './primitives';
-import { Empty } from './layout';
+import { Empty, TableHead } from './layout';
 
 /* KUROOBI data — 棋譜表・評価値グラフ・対局者行・レート
  * 表は 1 行 --h-row。列幅は固定で、値は右揃え。
@@ -41,17 +41,13 @@ export function KifuTable({ moves, current, onSelect, decimals = 1 }: {
   }, [current, moves.length]);
   return (
     <div style={{ flex: 1, display: 'flex', flexDirection: 'column', minHeight: 0 }}>
-      <div style={{
-        display: 'flex', gap: 'var(--sp-2)', height: 'var(--h-head)', flex: 'none', alignItems: 'center',
-        padding: '0 var(--sp-3)', fontSize: 'var(--fs-7)', fontWeight: 600, letterSpacing: '.08em',
-        color: 'var(--sub)', borderBottom: '1px solid var(--border)',
-      }}>
+      <TableHead>
         <span style={{ width: 22, textAlign: 'right' }}>#</span>
         <span style={{ width: 58 }}>手</span>
         <span style={{ width: 56, textAlign: 'right' }}>評価</span>
         <span style={{ width: 34, textAlign: 'right' }}>時間</span>
         <span style={{ flex: 1, textAlign: 'right' }}>出所</span>
-      </div>
+      </TableHead>
       <div className="k-scroll" ref={box} style={{ flex: 1, minHeight: 0 }}>
         {/* **1 手も無いときに列見出しだけを残さない。**対局を始める前の
             画面はここが必ず空で、いちばん最初に目に入る枠が「壊れている

@@ -4,7 +4,7 @@ import { sqName } from './adapt';
 import type { BookNode } from './types';
 import { Board, type EvalInfo } from './components/board';
 import { ScoreRow } from './components/data';
-import { Empty, EmptyState, List, Section } from './components/layout';
+import { Empty, EmptyState, List, Section, TableHead } from './components/layout';
 import { Button } from './components/primitives';
 
 /* 定石を眺める。
@@ -254,16 +254,11 @@ export function BookTree({ b, decimals = 1 }: { b: BookBrowse; decimals?: number
     }}>
       {/* 列の見出し。節の見出し (Section) と同じ 20px + 1px 罫だが、
           ここは列名なので右の 2 つを数字の幅に合わせて右揃えにする */}
-      <div style={{
-        flex: 'none', height: 'var(--h-head)', display: 'flex', alignItems: 'center',
-        gap: 'var(--sp-2)', padding: '0 var(--sp-3)',
-        borderBottom: '1px solid var(--border)',
-        fontSize: 'var(--fs-7)', fontWeight: 600, letterSpacing: '.08em', color: 'var(--sub)',
-      }}>
+      <TableHead>
         <span style={{ flex: 1 }}>手順</span>
         <span style={{ width: 44, textAlign: 'right' }}>評価</span>
         <span style={{ width: 58, textAlign: 'right' }}>出現</span>
-      </div>
+      </TableHead>
       <div className="k-scroll" style={{ flex: 1, minHeight: 0, padding: '0 var(--sp-3)' }}>
         {rows.length === 0 && <Empty>この局面から先は定石にありません。</Empty>}
         {rows.map((r) => (

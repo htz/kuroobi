@@ -2,7 +2,7 @@ import { useEffect, useState } from 'react';
 import { api, type KifuFrame } from './api';
 import type { LearnChange, LearnEntry } from './types';
 import { Board } from './components/board';
-import { Empty, List, Section } from './components/layout';
+import { Empty, List, Section, TableHead } from './components/layout';
 import { Button } from './components/primitives';
 
 /* 定石に取り込んだ対局の控え。設計 §8 の三面。
@@ -82,15 +82,11 @@ export function LearnLog({ items, onOpen, onUndo, onBook }: {
         width: 'var(--w-book-tree)', flex: 'none', minHeight: 0,
         borderRight: '1px solid var(--border)', display: 'flex', flexDirection: 'column',
       }}>
-        <div style={{
-          flex: 'none', height: 'var(--h-head)', display: 'flex', alignItems: 'center',
-          gap: 'var(--sp-2)', padding: '0 var(--sp-3)', borderBottom: '1px solid var(--border)',
-          fontSize: 'var(--fs-7)', fontWeight: 600, letterSpacing: '.08em', color: 'var(--sub)',
-        }}>
+        <TableHead>
           <span style={{ flex: 1 }}>対局</span>
           <span style={{ width: 52, textAlign: 'right' }}>石数</span>
           <span style={{ width: 36, textAlign: 'right' }}>局面</span>
-        </div>
+        </TableHead>
         <div className="k-scroll" style={{ flex: 1, minHeight: 0, padding: '0 var(--sp-3)' }}>
           <List>
             {items.map((e) => {
