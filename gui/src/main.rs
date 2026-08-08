@@ -890,76 +890,11 @@ fn resource_status() -> Vec<(String, String, bool, u64, String)> {
         .collect()
 }
 
-/// 付属ウィンドウを開く (設定・定石ブラウザ)。すでに開いていれば前へ出す。
-///
-/// **設定や定石は主画面の脇役ではなく、それ自体を腰を据えて触るもの**なので、
-/// 付属ウィンドウを**主画面の右外**に置く座標を返す。画面からはみ出す
-/// ぶんだけ内側へ戻す。取れないときは None (Tauri の既定 = 中央)。
-///
-/// **既定の中央だと盤の真上に開く。**実測 (主画面 1240×860 を 100,100 に
-/// 置いたとき) — 盤は x 362..995、設定の窓は x 476..1036 で、**盤の 82% が
-/// 隠れていた**。設定を覆いではなく窓にした理由は「表示」タブ (テーマ・
-/// 畳の色・座標・石返し) を**盤を見ながら選ぶ**ためなので、盤を隠したら
-/// 窓にした意味が無くなる。
-fn beside_main(handle: &tauri::AppHandle, w: f64, h: f64) -> Option<(f64, f64)> {
-    let main = handle.get_webview_window("main")?;
-    let scale = main.scale_factor().ok()?;
-    let pos = main.outer_position().ok()?.to_logical::<f64>(scale);
-    let size = main.outer_size().ok()?.to_logical::<f64>(scale);
-    let mon = main.current_monitor().ok()??;
-    let mp = mon.position().to_logical::<f64>(scale);
-    let ms = mon.size().to_logical::<f64>(scale);
-    // 主画面の右隣。入りきらなければ画面の右端へ寄せる (盤ではなく
-    // 右のドックに重なる)
-    let x = (pos.x + size.width).min(mp.x + ms.width - w).max(mp.x);
-    // 縦は主画面の上端に揃える。下がはみ出すぶんだけ上げる
-    let y = pos.y.min(mp.y + ms.height - h).max(mp.y);
-    Some((x, y))
-}
-
-/// 覆い (Modal) ではなく窓にする。覆いだと後ろの盤が見えているのに触れず、
-/// 開いている間ずっと主画面が止まって見える。
-///
-/// **窓にしているのは「表示」タブのため。**エンジンとファイル・GGS の設定は
-/// 変えても主画面は何も変わらないので覆いでも足りるが、テーマ・畳の色・
-/// 座標・石返しの速さは**盤を見ながら**選ぶもので、暗幕の下では確かめられない。
-///
-/// 中身は同じ `index.html` に `?w=<種別>` を付けて出し分ける
-/// (`main.tsx` が見る)。窓ごとにバンドルを分けると読み込みが二重になる。
-/// **`capabilities/default.json` の `windows` に札を足すこと** — 足さないと
-/// その窓からは invoke が一切通らない (画面は出るのに何も動かない)。
-#[tauri::command]
-fn open_child_window(handle: tauri::AppHandle, kind: String) -> Result<(), String> {
-    // 札は固定の集合から選ぶ。画面側の文字列をそのまま窓の札にすると、
-    // 綴り違いのたびに空の窓が増える
-    // **開く先が無い札を置かない。**定石の独立ウィンドウは取りやめになった
-    // (定石は主画面の行き先に戻した) のに札だけ残っていて、開いても
-    // `main.tsx` に振り分けが無いので主画面が丸ごと出る窓ができていた
-    let (label, title, w, h) = match kind.as_str() {
-        "settings" => ("settings", "設定", 560.0, 640.0),
-        _ => return Err(format!("知らない窓: {kind}")),
-    };
-    if let Some(win) = handle.get_webview_window(label) {
-        let _ = win.unminimize();
-        let _ = win.show();
-        let _ = win.set_focus();
-        return Ok(());
-    }
-    let url = tauri::WebviewUrl::App(format!("index.html?w={label}").into());
-    let mut b = tauri::WebviewWindowBuilder::new(&handle, label, url)
-        // 題名は画面側の帯が描く (主画面と同じ作り)。ここで入れると
-        // macOS の題名が重なって二重に出る
-        .title("")
-        .title_bar_style(tauri::TitleBarStyle::Overlay)
-        .inner_size(w, h)
-        .min_inner_size(400.0, 420.0);
-    if let Some((x, y)) = beside_main(&handle, w, h) {
-        b = b.position(x, y);
-    }
-    b.build().map_err(|e| e.to_string())?;
-    let _ = title; // 窓の題名は使わない (帯が描く)
-    Ok(())
-}
+/* 付属ウィンドウは廃止した (2026-08-08)。設定は主画面の覆いに戻っている。
+ * 窓である値打ちは「表示」タブだけが持っていたのに、1240 幅の主画面では
+ * 盤に重なるのを避けられず (置き場所を直しても 12%)、そのために
+ * localStorage 越しの同期・窓の札・置き場所の計算まで抱えていた。
+ * 窓が要るようになったら `WebviewWindowBuilder` で書き直す。 */
 
 /// ファイル選択ダイアログを開く。`kind` に応じて絞り込む。
 #[tauri::command]
@@ -2222,8 +2157,7 @@ fn main() {
             ggs_snapshot,
             ggs_autoview,
             ggs_save_kifu,
-            ggs_save_log,
-            open_child_window
+            ggs_save_log
         ])
         .run(tauri::generate_context!())
         .expect("tauri run");

@@ -19,12 +19,8 @@ async function call<T = void>(cmd: string, args?: Record<string, unknown>): Prom
   return c.invoke<T>(cmd, args);
 }
 
-/** 付属ウィンドウ (設定・定石) を開く。すでに開いていれば前へ出す。 */
-export const openWindow = (kind: 'settings') =>
-  call<void>('open_child_window', { kind });
-
-/* 窓をまたぐ報せ。設定の窓でファイルを差し替えても、主画面は自分で
- * 気付けない (別の document なので React の状態は共有されない)。 */
+/* アプリ内の報せ。設定でファイルを差し替えたことを、盤の「定石」表示へ
+ * 伝える (窓は 1 つに戻したが、状態を親まで持ち上げずに済むので残す)。 */
 export function emitApp(name: string): void {
   void window.__TAURI__?.event.emit(name).catch(() => { /* 相手が居なくてもよい */ });
 }

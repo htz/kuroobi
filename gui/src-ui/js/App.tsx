@@ -3,13 +3,13 @@ import { useGame } from './state';
 import { useGgs } from './ggs';
 import { flipped, usePrefs } from './prefs';
 import type { GameView } from './types';
-import { api, ggsApi, jsLog, onApp, openWindow, type ActivityView } from './api';
+import { api, ggsApi, jsLog, onApp, type ActivityView } from './api';
 import { useActivity, useEngineSettings, useEngineTurn, useGraph, useHints, useLearnLog, useStartGame, type AskArgs } from './engine';
 import { fmtSecs } from './ggs';
 import { cellsOf, connOf, evalsOf, ggsPlaying, movesOf, navBadges, sqName } from './adapt';
-import { AppFrame, Body, BottomPanel, Dock, Main, Section, StatusBar, StatusStat, Toolbar, WindowBar } from './components/layout';
+import { AppFrame, Body, BottomPanel, Dock, Main, Overlay, Section, StatusBar, StatusStat, Toolbar, WindowBar } from './components/layout';
 import { GgsChat, GgsConsole, GgsScreen } from './GgsScreens';
-import { Confirm, PasteKifu } from './Dialogs';
+import { Confirm, PasteKifu, Settings } from './Dialogs';
 import { Board } from './components/board';
 import { EvalGraph, KifuTable, MoveScrub, ScoreRow, StoneDot } from './components/data';
 import { GgsStatus, JobList, Meter, Nav, NAV_LOCAL, StatusChip, ggsNav, Toasts, type NavId, type Toast } from './components/ggs';
@@ -68,7 +68,7 @@ function reachable(raw: NavId, conn: ReturnType<typeof connOf>): NavId {
 export function App() {
   const g = useGame();
   const ggs = useGgs();
-  const { prefs } = usePrefs();   // 書き換えは設定の窓が行う
+  const { prefs, set: setPref } = usePrefs();
   const [navRaw, setNavRaw] = useState<NavId>('play');
   const conn = connOf(ggs.snap?.conn);
   /* 繋がり方が変わると左メニューの GGS の行が総入れ替わりになる (規則 10 —
@@ -154,6 +154,12 @@ export function App() {
   const [viewer, setViewer] = useState<{ title: string; kifu: string; pending?: string } | null>(null);
 
   const [paste, setPaste] = useState(false);
+  /* 設定は覆い。**窓にしていたのをやめた** — 窓である値打ちは「表示」タブ
+     だけが持っていたのに、1240 幅の主画面では盤に重なるのを避けられず
+     (直したあとでも 12%)、そのために localStorage 越しの同期・窓の札・
+     置き場所の計算まで抱えていた。割に合わない (要 push — 設計 §5 は
+     「独立ウィンドウ (⌘,)」と描いている) */
+  const [settings, setSettings] = useState(false);
 
   /* 動作確認用 (KUROOBI_AUTOPLAY=both:11 のように指定する)。
    * この repo は画面の確認を「起動して撮る」でやるので、その入口を残す。
@@ -169,7 +175,7 @@ export function App() {
     void api.autoplay().then(async (v) => {
       if (!v) return;
       const [who, lv, extra] = v.split(':');
-      if (who === 'settings') { void openWindow('settings'); return; }
+      if (who === 'settings') { setSettings(true); return; }
       /* 覆いを出す入口 (撮るためだけ)。**覆いはクリックでしか出せず、
          寸法をずっと実測できていなかった** — 確認 / 棋譜の読み込み /
          棋譜ビューア。`overlay:confirm` のように指定する */
@@ -482,7 +488,7 @@ export function App() {
                  同じ絵を別の意味で 2 か所に出さない (規則 49)。
                  48px の列では文字を落として絵だけの正方形にする */}
              <button type="button" className="k-press k-nav-settings" title="設定" aria-label="設定"
-                     onClick={() => void openWindow('settings')}
+                     onClick={() => setSettings(true)}
                      style={{
                        alignItems: 'center', justifyContent: 'center',
                        gap: 'var(--sp-2)', height: 'var(--h-field)',
@@ -576,7 +582,7 @@ export function App() {
             <div style={{ flex: 1, minHeight: 0, display: 'flex' }}>
               {book.node?.size !== 0 && <BookTree b={book} decimals={prefs.decimals} />}
               <BookPane b={book} coords={prefs.coords} grain={prefs.grain}
-                        flip={flipped(prefs.facing, '')} onSettings={() => void openWindow('settings')} />
+                        flip={flipped(prefs.facing, '')} onSettings={() => setSettings(true)} />
             </div>
           ) : (
             /* 書き戻しの明細。定石が「何にどう書き換わったか」を見る場所なので、
@@ -882,6 +888,15 @@ export function App() {
         <PasteKifu onCancel={() => setPaste(false)}
                    onFile={() => void loadFromFile()}
                    onLoad={(t) => void loadFromText(t)} />
+      )}
+
+      {/* 設定。**同じ document なので値は素通りで届く** — 窓だったころは
+          localStorage へ書いて `storage` の報せを待っていた */}
+      {settings && (
+        <Overlay onClose={() => setSettings(false)}>
+          <Settings prefs={prefs} setPref={setPref} ggs={ggs.snap}
+                    onClose={() => setSettings(false)} />
+        </Overlay>
       )}
 
       <Toasts items={toasts} onDismiss={(id) => g.dismiss(+id)} />

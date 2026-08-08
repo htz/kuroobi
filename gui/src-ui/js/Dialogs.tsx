@@ -3,7 +3,7 @@ import { api, emitApp, type KifuFrame, type ThreadsView } from './api';
 import { TATAMI, type Prefs, type Theme } from './prefs';
 import { Modal, Overlay, Section } from './components/layout';
 import { Button, Segmented, Select, TextField } from './components/primitives';
-import { Icon } from './components/Icons';
+import { Icon, IconButton } from './components/Icons';
 import { Board } from './components/board';
 import { GgsSettings } from './GgsScreens';
 import type { GgsSnapshot } from './types';
@@ -186,18 +186,18 @@ const NOT_FOUND: Record<string, string> = {
  *   - ファイルとスレッドはバックエンドが持つので、変えたら報せだけ送る
  * という分担にしてある。学習の取り込みはドックに操作があるので置かない
  * (同じ設定を 2 か所に出さない — 規則 58)。 */
-export function Settings({ prefs, setPref, ggs }: {
+export function Settings({ prefs, setPref, ggs, onClose }: {
   prefs: Prefs; setPref: <K extends keyof Prefs>(k: K, v: Prefs[K]) => void;
   /** GGS のスナップショット。GGS タブの中身に使う (未接続なら null)。 */
   ggs?: GgsSnapshot | null;
+  /** 閉じる (覆いの足の釦)。 */
+  onClose?: () => void;
 }) {
   const [tab, setTab] = useState<'engine' | 'view' | 'ggs'>('engine');
   /* 撮るためだけの入口。`KUROOBI_AUTOPLAY=settings:ggs` のようにタブを
      指定できる。タブはクリックでしか切り替えられず、確認が人手頼みだった。
      **`settings:view:light` のように 3 つ目を渡すとテーマを実際に変える** —
-     設定を覆いではなく窓にした理由 (「表示」を**盤を見ながら**選ぶ) が
-     本当に働くか、つまり**この窓で変えた瞬間に主画面が追うか**を、
-     人が押さずに確かめるため */
+     押さずにテーマの切り替わりを撮るため */
   useEffect(() => {
     void api.autoplay().then((v) => {
       const [, t, arg] = (v ?? '').split(':');
@@ -247,18 +247,28 @@ export function Settings({ prefs, setPref, ggs }: {
   };
 
   return (
-    <div style={{ height: '100%', display: 'flex', flexDirection: 'column', background: 'var(--bg)' }}>
-      {/* 設計の設定は**窓の帯もタブの帯も 44px の --panel**。主画面の窓の帯
-          (32px / --bg) とは別物なので、共有の WindowBar は使わない。
-          信号機ぶんは --w-signals で空け、題名は窓の中央に置く */}
-      <div data-tauri-drag-region className="k-drag" style={{
+    /* **覆い。窓ではない。**窓にしていたころの名残 (信号機ぶんの余白・
+       ドラッグ領域) は落としてある。幅と高さは絵の窓と同じ 560×640 だが、
+       低い画面では縮む */
+    <div role="dialog" aria-modal style={{
+      width: 560, maxHeight: 'min(640px, 88vh)',
+      borderRadius: 'var(--r-4)', background: 'var(--bg)',
+      border: '1px solid var(--border)', boxShadow: 'var(--sh-2)',
+      display: 'flex', flexDirection: 'column', overflow: 'hidden',
+    }}>
+      {/* 設計の設定は**帯が 44px の --panel**。題名は中央、閉じるは右端 */}
+      <div style={{
         height: 'var(--h-bar)', flex: 'none', background: 'var(--panel)',
         borderBottom: '1px solid var(--border)', display: 'flex', alignItems: 'center',
-        padding: '0 var(--w-signals)',
+        padding: '0 var(--sp-3)',
       }}>
-        <span data-tauri-drag-region style={{
+        <span style={{ width: 32, flex: 'none' }} />
+        <span style={{
           margin: '0 auto', fontSize: 'var(--fs-4)', fontWeight: 600, color: 'var(--text)',
         }}>設定</span>
+        <span style={{ flex: 'none' }}>
+          {onClose && <IconButton name="close" label="閉じる" onClick={onClose} />}
+        </span>
       </div>
       {/* **タブの帯だけが明るい面 (--card)。** 窓の帯と中身はどちらも --bg で、
           間に挟まる帯が浮いて見える形 — 設計の絵がそうなっている。
