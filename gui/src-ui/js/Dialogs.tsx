@@ -227,37 +227,38 @@ export function Settings({ prefs, setPref, ggs, onClose }: {
   };
 
   return (
-    <Modal title="設定" width="560px" onClose={onClose} scroll>
+    <Modal title="設定" width="560px" onClose={onClose} scroll
+           band={<>
       {/* **タブの帯だけが明るい面 (--card)。** 覆いの頭は --panel、中身は
-          --bg で、間に挟まる帯が浮いて見える形 — 設計の絵がそうなっている。
-          逆にすると (帯が暗く中身が明るい) タブが頭と地続きになり、中身の
-          面だけが浮いた別の箱に見える。高さは --h-bar (44px)。
+                   --bg で、間に挟まる帯が浮いて見える形 — 設計の絵がそうなっている。
+                   逆にすると (帯が暗く中身が明るい) タブが頭と地続きになり、中身の
+                   面だけが浮いた別の箱に見える。高さは --h-bar (44px)。
 
-          **タブは Segmented ではない。** 絵は囲みの枠を持たず、字を並べて
-          選ばれているものだけを塗る形。Segmented の囲みは「並んだ選択肢の
-          1 つ」を示す部品で、画面を切り替えるタブとは役目が違う
-          (規則 40 は選択肢の列の話)。 */}
-      <div style={{
-        flex: 'none', height: 'var(--h-bar)', display: 'flex',
-        alignItems: 'center', justifyContent: 'center', gap: 'var(--sp-1)',
-        margin: 'calc(var(--sp-4) * -1) calc(var(--sp-5) * -1) 0',
-        background: 'var(--card)', borderBottom: '1px solid var(--border)',
-      }}>
-        {TABS.map(([v, label]) => {
-          const on = tab === v;
-          return (
-            <button key={v} type="button" className={'k-press' + (on ? ' k-on' : '')}
-                    onClick={() => setTab(v)} aria-pressed={on}
-                    style={{
-                      height: 'var(--h-ctrl)', padding: '0 14px', border: 0,
-                      borderRadius: 'var(--r-2)', fontSize: 'var(--fs-5)',
-                      background: on ? 'var(--accent-dim)' : 'transparent',
-                      color: on ? 'var(--on-accent)' : 'var(--sub)',
-                      fontWeight: on ? 600 : 400,
-                    }}>{label}</button>
-          );
-        })}
-      </div>
+                   **タブは Segmented ではない。** 絵は囲みの枠を持たず、字を並べて
+                   選ばれているものだけを塗る形。Segmented の囲みは「並んだ選択肢の
+                   1 つ」を示す部品で、画面を切り替えるタブとは役目が違う
+                   (規則 40 は選択肢の列の話)。 */}
+               <div style={{
+                 flex: 'none', height: 'var(--h-bar)', display: 'flex',
+                 alignItems: 'center', justifyContent: 'center', gap: 'var(--sp-1)',
+                          background: 'var(--card)', borderBottom: '1px solid var(--border)',
+               }}>
+                 {TABS.map(([v, label]) => {
+                   const on = tab === v;
+                   return (
+                     <button key={v} type="button" className={'k-press' + (on ? ' k-on' : '')}
+                             onClick={() => setTab(v)} aria-pressed={on}
+                             style={{
+                               height: 'var(--h-ctrl)', padding: '0 14px', border: 0,
+                               borderRadius: 'var(--r-2)', fontSize: 'var(--fs-5)',
+                               background: on ? 'var(--accent-dim)' : 'transparent',
+                               color: on ? 'var(--on-accent)' : 'var(--sub)',
+                               fontWeight: on ? 600 : 400,
+                             }}>{label}</button>
+                   );
+                 })}
+               </div>
+           </>}>
       <div className="k-settings" style={{ display: 'flex', flexDirection: 'column' }}>
 
         {/* 見え方だけの設定。エンジンの動きには関わらないので、

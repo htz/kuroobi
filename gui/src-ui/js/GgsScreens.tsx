@@ -6,7 +6,7 @@ import {
   fingerGroups, fingerValue, hasJapanese, normKey, parseCond, translate, useClocks,
   type ClockSide, type ClockView,
 } from './ggs';
-import { EmptyState, List, Section } from './components/layout';
+import { Empty, EmptyState, List, Section } from './components/layout';
 import { Button, Segmented, Select, TextField, Toggle } from './components/primitives';
 import { Strength } from './components/strength';
 import { Confirm, PickOne } from './Dialogs';
@@ -360,9 +360,10 @@ export function GgsChat({ snap }: { snap: GgsSnapshot }) {
         }}>
           {/* 何も無いと壊れているのか、単に発言が無いのかが分からない。
               全体チャットは静かなことが多いので、ここは必ず埋める */}
+          {/* 発言は下から積むので、空のときだけ真ん中へ置く */}
           {!rows.length && (
-            <span style={{ margin: 'auto', fontSize: 'var(--fs-6)', color: 'var(--sub)' }}>
-              {cur === '.chat' ? 'まだ発言はありません。' : 'まだやりとりはありません。'}
+            <span style={{ margin: 'auto' }}>
+              <Empty>{cur === '.chat' ? 'まだ発言はありません。' : 'まだやりとりはありません。'}</Empty>
             </span>
           )}
           {rows.map(({ c, day, dayHead, head }, i) => (
@@ -584,10 +585,6 @@ function Row({ title, sub, tag, tagTone, alert, actions, onClick, title2 }: {
       {actions}
     </Tag_>
   );
-}
-
-function Empty({ children }: { children: React.ReactNode }) {
-  return <div style={{ padding: 'var(--sp-3) 0', fontSize: 'var(--fs-6)', color: 'var(--sub)' }}>{children}</div>;
 }
 
 /* ---------------- 待機モード ----------------

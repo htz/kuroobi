@@ -277,7 +277,7 @@ export function BottomPanel({ tabs, active, onTab, onClose, height = 240, childr
  * 幅は `--w-modal` (340) か `--w-modal-wide` (520)。高さは中身なりで、
  * 画面が低ければ `88vh` で頭打ちにして本体だけを巻く。
  */
-export function Modal({ title, sub, body, actions, width = 'var(--w-modal)', onClose, scroll, children }: {
+export function Modal({ title, sub, body, actions, width = 'var(--w-modal)', onClose, scroll, band, children }: {
   title: string;
   /** 題名の下の一行 (棋譜の読み込みの「GGF・f5d6… のいずれでも」など)。 */
   sub?: React.ReactNode;
@@ -290,6 +290,9 @@ export function Modal({ title, sub, body, actions, width = 'var(--w-modal)', onC
   onClose?: () => void;
   /** 本体を巻けるようにする (設定のように中身が長いもの)。 */
   scroll?: boolean;
+  /** 頭のすぐ下に**固定**で置く帯 (設定のタブ)。**本体と一緒に巻かない** —
+   *  巻くとタブが上へ流れて、いまどの枚を見ているのか分からなくなる。 */
+  band?: React.ReactNode;
   children?: React.ReactNode;
 }) {
   return (
@@ -314,6 +317,8 @@ export function Modal({ title, sub, body, actions, width = 'var(--w-modal)', onC
           {onClose && <IconButton name="close" label="閉じる" onClick={onClose} />}
         </span>
       </div>
+
+      {band && <div style={{ flex: 'none' }}>{band}</div>}
 
       <div className={scroll ? 'k-scroll' : undefined} style={{
         flex: scroll ? 1 : 'none', minHeight: 0, background: 'var(--bg)',
@@ -346,6 +351,20 @@ export function Modal({ title, sub, body, actions, width = 'var(--w-modal)', onC
  */
 export function List({ children }: { children: React.ReactNode }) {
   return <div style={{ display: 'flex', flexDirection: 'column' }}>{children}</div>;
+}
+
+/* **一覧が空のときの一言。**節や表の中に置く小さいほう。
+ *
+ * 画面まるごとが空なら `EmptyState` (絵と題名と行き先を持つ大きいほう)。
+ * **この 2 つ以外を書かない** — 生の `<span>` で書くと、色も余白も
+ * 書いた場所ごとに変わる。実際に 4 か所が別々の見た目になっていた
+ * (棋譜の表 / 学習ログ / 定石の木 / チャット)。 */
+export function Empty({ children }: { children: React.ReactNode }) {
+  return (
+    <div style={{ padding: 'var(--sp-3) 0', fontSize: 'var(--fs-6)', color: 'var(--sub)' }}>
+      {children}
+    </div>
+  );
 }
 
 /* 押せない盤を出さないための空状態。GGS 未対局時など */

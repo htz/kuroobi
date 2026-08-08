@@ -1,5 +1,6 @@
 import React from 'react';
 import { Badge, Dot } from './primitives';
+import { Empty } from './layout';
 
 /* KUROOBI data — 棋譜表・評価値グラフ・対局者行・レート
  * 表は 1 行 --h-row。列幅は固定で、値は右揃え。
@@ -56,10 +57,9 @@ export function KifuTable({ moves, current, onSelect, decimals = 1 }: {
             画面はここが必ず空で、いちばん最初に目に入る枠が「壊れている
             のか、まだ何も無いのか」判らなかった */}
         {!moves.length && (
-          <span style={{
-            display: 'block', padding: 'var(--sp-4) var(--sp-3)',
-            fontSize: 'var(--fs-6)', color: 'var(--sub)', lineHeight: 1.8,
-          }}>まだ手がありません。</span>
+          <span style={{ display: 'block', padding: '0 var(--sp-3)' }}>
+            <Empty>まだ手がありません。</Empty>
+          </span>
         )}
         {moves.map(m => {
           const played = m.score !== undefined;

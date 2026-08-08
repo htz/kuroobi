@@ -4,7 +4,7 @@ import { sqName } from './adapt';
 import type { BookNode } from './types';
 import { Board, type EvalInfo } from './components/board';
 import { ScoreRow } from './components/data';
-import { EmptyState, List, Section } from './components/layout';
+import { Empty, EmptyState, List, Section } from './components/layout';
 import { Button } from './components/primitives';
 
 /* 定石を眺める。
@@ -265,12 +265,7 @@ export function BookTree({ b, decimals = 1 }: { b: BookBrowse; decimals?: number
         <span style={{ width: 58, textAlign: 'right' }}>出現</span>
       </div>
       <div className="k-scroll" style={{ flex: 1, minHeight: 0, padding: '0 var(--sp-3)' }}>
-        {rows.length === 0 && (
-          <span style={{
-            display: 'block', padding: 'var(--sp-3) 0',
-            fontSize: 'var(--fs-6)', color: 'var(--sub)',
-          }}>この局面から先は定石にありません。</span>
-        )}
+        {rows.length === 0 && <Empty>この局面から先は定石にありません。</Empty>}
         {rows.map((r) => (
           <BookRow key={r.key} r={r} open={b.open.has(r.key)} decimals={decimals}
                    onToggle={() => b.toggle(r.key)}

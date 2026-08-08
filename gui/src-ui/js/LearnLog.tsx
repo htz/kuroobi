@@ -2,7 +2,7 @@ import { useEffect, useState } from 'react';
 import { api, type KifuFrame } from './api';
 import type { LearnChange, LearnEntry } from './types';
 import { Board } from './components/board';
-import { List, Section } from './components/layout';
+import { Empty, List, Section } from './components/layout';
 import { Button } from './components/primitives';
 
 /* 定石に取り込んだ対局の控え。設計 §8 の三面。
@@ -70,7 +70,7 @@ export function LearnLog({ items, onOpen, onUndo, onBook }: {
   if (!items.length || !cur) {
     return (
       <Section title="取り込んだ対局">
-        <span style={{ fontSize: 'var(--fs-6)', color: 'var(--sub)' }}>まだありません。</span>
+        <Empty>まだありません。</Empty>
       </Section>
     );
   }
