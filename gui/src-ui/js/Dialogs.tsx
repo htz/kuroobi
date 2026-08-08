@@ -193,12 +193,22 @@ export function Settings({ prefs, setPref, ggs }: {
 }) {
   const [tab, setTab] = useState<'engine' | 'view' | 'ggs'>('engine');
   /* 撮るためだけの入口。`KUROOBI_AUTOPLAY=settings:ggs` のようにタブを
-     指定できる。タブはクリックでしか切り替えられず、確認が人手頼みだった */
+     指定できる。タブはクリックでしか切り替えられず、確認が人手頼みだった。
+     **`settings:view:light` のように 3 つ目を渡すとテーマを実際に変える** —
+     設定を覆いではなく窓にした理由 (「表示」を**盤を見ながら**選ぶ) が
+     本当に働くか、つまり**この窓で変えた瞬間に主画面が追うか**を、
+     人が押さずに確かめるため */
   useEffect(() => {
     void api.autoplay().then((v) => {
-      const t = (v ?? '').split(':')[1];
+      const [, t, arg] = (v ?? '').split(':');
       if (t === 'engine' || t === 'view' || t === 'ggs') setTab(t);
+      if (arg === 'light' || arg === 'dark' || arg === 'os') {
+        // 撮る側が「変える前」を押さえられるよう、少し待ってから変える
+        window.setTimeout(() => setPref('theme', arg), 5000);
+      }
     }).catch(() => { /* Tauri 外では効かないだけ */ });
+    // setPref は窓が生きている間ずっと同じものなので、1 度だけでよい
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
   const [reset, setReset] = useState(false);
   const [status, setStatus] = useState<[string, string, boolean, number, string][]>([]);
