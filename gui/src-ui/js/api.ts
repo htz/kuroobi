@@ -152,6 +152,8 @@ export const ggsApi = {
   /** 保存。名前は GGF に載る (拡張子が .ggf のときだけ書かれる)。 */
   saveKifu: (kifu: string, name: string) =>
     call<string | null>('ggs_save_kifu', { kifu, name }),
+  /** 通信ログを保存。棋譜とは絞り込みも既定の名前も違うので別の口 */
+  saveLog: (text: string) => call<string | null>('ggs_save_log', { text }),
 };
 
 /** 分析の途中経過を購読する (深さ, 全合法手の評価, ノード数, 経過秒)。 */

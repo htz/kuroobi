@@ -141,17 +141,39 @@ function LoginField({ label, children }: { label: string; children: React.ReactN
  */
 export function GgsConsole({ snap }: { snap: GgsSnapshot }) {
   const [cmd, setCmd] = useState('');
+  /* 絞り込みと「クリア」。設計 §6 の見出しに載っている。
+     **クリアは画面の話** — サーバーとのやりとりを消してしまうのではなく、
+     ここから先だけを見る印を置く (端末の clear と同じ)。数で覚えるので
+     ログが伸びるぶんには狂わない */
+  const [dir, setDir] = useState<'all' | 'out' | 'in'>('all');
+  const [from, setFrom] = useState(0);
   const send = () => {
     const c = cmd.trim();
     if (!c) return;
     void ggsApi.raw(c);
     setCmd('');
   };
+  const all = logLinesOf(snap.log);
+  const shown = all.slice(Math.min(from, all.length))
+    // 「送信」「受信」は自分が打ったものと相手から来たもの。app (アプリの
+    // 断り書き) はどちらでもないので、絞ったときは落とす
+    .filter((l) => dir === 'all' || l.dir === dir);
   return (
     <div style={{ flex: 1, minHeight: 0, display: 'flex', flexDirection: 'column' }}>
       <div style={{ flex: 1, minHeight: 0, display: 'flex', flexDirection: 'column', padding: '0 var(--sp-4)' }}>
-        <Section title="通信ログ" />
-        <ConsoleLog lines={logLinesOf(snap.log)} />
+        <Section title="通信ログ" aside={<>
+          <Segmented value={dir} onChange={setDir} options={[
+            { value: 'all', label: 'すべて' },
+            { value: 'out', label: '送信' },
+            { value: 'in', label: '受信' },
+          ]} />
+          <Button onClick={() => setFrom(all.length)} disabled={!all.length}>クリア</Button>
+          <Button disabled={!shown.length}
+                  onClick={() => void ggsApi.saveLog(
+                    shown.map((l) => (l.dir === 'out' ? '› ' : '') + l.text).join('\n') + '\n',
+                  ).catch(() => {})}>保存</Button>
+        </>} />
+        <ConsoleLog lines={shown} />
       </div>
       <div style={{
         flex: 'none', display: 'flex', gap: 'var(--sp-2)', alignItems: 'center',

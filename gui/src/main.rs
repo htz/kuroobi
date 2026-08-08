@@ -2003,6 +2003,28 @@ fn ggs_autoview() -> String {
     std::env::var("KUROOBI_GGS_AUTOVIEW").unwrap_or_default()
 }
 
+/// 通信ログをファイルへ落とす。棋譜とは絞り込みも既定の名前も違うので
+/// `ggs_save_kifu` を使い回さない (「棋譜」の絞り込みでログを保存させない)。
+#[tauri::command]
+async fn ggs_save_log(handle: tauri::AppHandle, text: String) -> Result<Option<String>, String> {
+    use tauri_plugin_dialog::DialogExt;
+    if text.is_empty() {
+        return Err("ログが空です".into());
+    }
+    let Some(path) = handle
+        .dialog()
+        .file()
+        .add_filter("ログ", &["log", "txt"])
+        .set_file_name("ggs-log.txt")
+        .blocking_save_file()
+    else {
+        return Ok(None);
+    };
+    let p = path.into_path().map_err(|e| e.to_string())?;
+    std::fs::write(&p, text).map_err(|e| e.to_string())?;
+    Ok(Some(p.display().to_string()))
+}
+
 /// GGS の棋譜 (文字列で渡される) をファイルに保存する。
 #[tauri::command]
 async fn ggs_save_kifu(
@@ -2156,6 +2178,7 @@ fn main() {
             ggs_snapshot,
             ggs_autoview,
             ggs_save_kifu,
+            ggs_save_log,
             open_child_window
         ])
         .run(tauri::generate_context!())
