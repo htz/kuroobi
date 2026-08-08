@@ -280,6 +280,17 @@ impl SharedTt {
         TtEntry::EMPTY
     }
 
+    /// 置換表に載っている最善手 (無ければ `None`)。
+    ///
+    /// **ポンダリングが「相手が指すと思う手」を取るための口。** 既に済んだ
+    /// 探索の結果を読むだけで、探索し直さない。表は上書きされるので、
+    /// 直前に読んだ局面でも消えていることがある — 予測が取れないときは
+    /// 「予測しない」で正しく、そこで探索し直すと本末転倒になる。
+    pub fn best_move(&self, hash: u64) -> Option<u8> {
+        let e = self.get(hash);
+        (e.flag != 0 && e.best < 64).then_some(e.best)
+    }
+
     /// Store: walk the bucket and take the first slot that is worth
     /// no more than what is being stored, where worth is `(depth, accuracy)`.
     /// If all three hold deeper or more accurate results, store nothing.

@@ -245,6 +245,19 @@ impl Engine {
         Some((moves, self.learned.has(board)))
     }
 
+    /// 置換表に載っているこの局面の最善手。**探索し直さない。**
+    ///
+    /// ポンダリングが「相手が指すと思う手」を取るための口。自分の手を
+    /// 指したあとの局面を渡すと、直前の探索が読んだ範囲での相手の最善手が
+    /// 返る (表から溢れていれば `None`)。
+    pub fn tt_best(&self, board: &Board) -> Option<Position> {
+        let h = crate::zobrist::board_hash(board.player_bb(), board.opponent_bb());
+        self.search
+            .tt
+            .best_move(h)
+            .and_then(|i| Position::from_index(i as u32))
+    }
+
     /// 表示用: 局面が定石にあれば (最善の値, 実戦学習由来か) を返す。
     /// 評価値グラフが探索の代わりに使う。
     pub fn book_value(&self, board: &Board) -> Option<(f32, bool)> {
