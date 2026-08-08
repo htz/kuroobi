@@ -305,27 +305,42 @@ export function Modal({ title, sub, body, actions, width = 'var(--w-modal)', onC
       <div style={{
         height: 'var(--h-bar)', flex: 'none', background: 'var(--panel)',
         borderBottom: '1px solid var(--border)', display: 'flex', alignItems: 'center',
-        padding: '0 var(--sp-3)',
+        padding: '0 var(--sp-2)',
       }}>
         {/* 題名を**窓の中央**に置くため、閉じると同じ幅を左にも取る */}
         <span style={{ width: 32, flex: 'none' }} />
-        <span style={{
-          margin: '0 auto', fontSize: 'var(--fs-4)', fontWeight: 600, color: 'var(--text)',
-          overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
-        }}>{title}</span>
-        <span style={{ width: 32, flex: 'none', display: 'flex', justifyContent: 'flex-end' }}>
+        <div style={{ flex: 1, minWidth: 0, textAlign: 'center' }}>
+          <div style={{
+            fontSize: 'var(--fs-4)', fontWeight: 600, color: 'var(--text)',
+            overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
+          }}>{title}</div>
+          {/* 副題は**頭の中**、題名の下 (絵の §9 がこの形)。本体に置くと
+              中身の 1 行目と見分けが付かない */}
+          {sub && <div style={{
+            fontSize: 'var(--fs-7)', color: 'var(--sub)',
+            overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
+          }}>{sub}</div>}
+        </div>
+        <span style={{ width: 32, flex: 'none', display: 'grid', placeItems: 'center' }}>
           {onClose && <IconButton name="close" label="閉じる" onClick={onClose} />}
         </span>
       </div>
 
-      {band && <div style={{ flex: 'none' }}>{band}</div>}
+      {/* 帯の器は**こちらが持つ** — 高さも地も罫も覆いの決まりなので、
+          中身の側に書かせると画面ごとにずれる */}
+      {band && (
+        <div style={{
+          flex: 'none', height: 'var(--h-bar)', background: 'var(--card)',
+          borderBottom: '1px solid var(--border)', padding: '0 var(--sp-4)',
+          display: 'flex', alignItems: 'center',
+        }}>{band}</div>
+      )}
 
       <div className={scroll ? 'k-scroll' : undefined} style={{
         flex: scroll ? 1 : 'none', minHeight: 0, background: 'var(--bg)',
         padding: 'var(--sp-4) var(--sp-5)',
         display: 'flex', flexDirection: 'column', gap: 'var(--sp-3)',
       }}>
-        {sub && <div style={{ fontSize: 'var(--fs-6)', color: 'var(--sub)', lineHeight: 1.7 }}>{sub}</div>}
         {body && <div style={{ fontSize: 'var(--fs-5)', color: 'var(--sub)', lineHeight: 1.7 }}>{body}</div>}
         {children}
       </div>

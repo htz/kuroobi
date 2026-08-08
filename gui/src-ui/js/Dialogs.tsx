@@ -229,19 +229,14 @@ export function Settings({ prefs, setPref, ggs, onClose }: {
   return (
     <Modal title="設定" width="560px" onClose={onClose} scroll
            band={<>
-      {/* **タブの帯だけが明るい面 (--card)。** 覆いの頭は --panel、中身は
-                   --bg で、間に挟まる帯が浮いて見える形 — 設計の絵がそうなっている。
-                   逆にすると (帯が暗く中身が明るい) タブが頭と地続きになり、中身の
-                   面だけが浮いた別の箱に見える。高さは --h-bar (44px)。
-
-                   **タブは Segmented ではない。** 絵は囲みの枠を持たず、字を並べて
-                   選ばれているものだけを塗る形。Segmented の囲みは「並んだ選択肢の
-                   1 つ」を示す部品で、画面を切り替えるタブとは役目が違う
-                   (規則 40 は選択肢の列の話)。 */}
+               {/* **タブは Segmented ではない。** 絵は囲みの枠を持たず、字を
+                   並べて選ばれているものだけを塗る形。Segmented の囲みは
+                   「並んだ選択肢の 1 つ」を示す部品で、画面を切り替えるタブとは
+                   役目が違う (規則 40 は選択肢の列の話)。
+                   **帯の器 (高さ 44・地 --card・下罫) は `Modal` が持つ。** */}
                <div style={{
-                 flex: 'none', height: 'var(--h-bar)', display: 'flex',
-                 alignItems: 'center', justifyContent: 'center', gap: 'var(--sp-1)',
-                          background: 'var(--card)', borderBottom: '1px solid var(--border)',
+                 flex: 1, display: 'flex', alignItems: 'center',
+                 justifyContent: 'center', gap: 'var(--sp-1)',
                }}>
                  {TABS.map(([v, label]) => {
                    const on = tab === v;
