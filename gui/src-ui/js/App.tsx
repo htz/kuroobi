@@ -315,6 +315,29 @@ export function App() {
     return best;
   }, [moves]);
 
+  /* 検討では**いま見ている手の評価**を石数の行に添える (設計 §2)。
+     グラフは形の流れを見るもので、点を目で追って値を読み取るのは無理がある。
+     手を送るたびに数字が 1 つ出ていれば、辿りながら読める。
+     `moves` が既に 手・色・評価・損失 を持っているので、そこから引くだけ */
+  const cur = v && v.cursor > 0 ? moves[v.cursor - 1] : undefined;
+  const curMoveMeta = cur && cur.score !== undefined ? (
+    <span style={{ display: 'flex', alignItems: 'center', gap: 'var(--sp-3)' }}>
+      この手の評価
+      <b style={{
+        fontSize: 'var(--fs-3)', fontWeight: 600, color: 'var(--text)',
+        fontVariantNumeric: 'tabular-nums',
+      }}>{cur.score > 0 ? '+' : ''}{cur.score.toFixed(1)}</b>
+      {/* 損は色で言う。数字だけ並べると「良い手だが値が低い」局面と読み違える */}
+      {!!cur.loss && (
+        <span style={{ color: 'var(--bad)', fontVariantNumeric: 'tabular-nums' }}>
+          ▼{cur.loss.toFixed(1)}
+        </span>
+      )}
+      <span>{cur.pass ? 'パス' : cur.move} · {cur.color === 'b' ? '黒' : '白'}</span>
+      {cur.src && <span style={{ color: cur.src.startsWith('定石') ? 'var(--gold)' : 'var(--sub)' }}>{cur.src}</span>}
+    </span>
+  ) : undefined;
+
   /* キー操作。
    *
    * 文字を打っている最中 (GGS のチャット・コンソール・棋譜の貼り付け) と、
@@ -574,7 +597,7 @@ export function App() {
           </div>
           <ScoreRow black={v?.black ?? 2} white={v?.white ?? 2}
                     turn={!v || v.over ? undefined : v.player === 'black' ? 'b' : 'w'}
-                    meta={result}
+                    meta={study ? curMoveMeta : result}
                     blackClock={!study && anyThink ? fmtSecs(g.thinkTotal.black) : undefined}
                     whiteClock={!study && anyThink ? fmtSecs(g.thinkTotal.white) : undefined} />
         </div>
