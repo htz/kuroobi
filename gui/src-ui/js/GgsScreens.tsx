@@ -203,6 +203,18 @@ export function GgsConsole({ snap }: { snap: GgsSnapshot }) {
  * 英語の発言は自動で和訳を添え、日本語の発言は英訳して送れる。
  */
 
+/** ここより偏差が大きいレートは**まだ動く** = 暫定として印を付ける。
+ *
+ * **GGS は「暫定」を直接は返さない。**`rank` の生の行 (`2184.2@180.8=`) に
+ * 印らしき字はあるが、暫定のはずの 2 つ (6 局と 5 局) がどちらも `=` で、
+ * これでは見分けが付かなかった。**偏差で決める**しかない。
+ *
+ * 100 にした根拠 — 絵 (§5) が「1795.1±112」を**暫定**として描いている。
+ * 実データ (接続中の一覧) も、初めての人が ±350 (初期値)、数局の人が
+ * ±125〜216、よく打つ常連が ±44 / ±75 / ±91 と割れている。
+ * **要確認** (絵の例 1 つを根拠にしているので、閾値は相談したい)。 */
+const PROVISIONAL_DEV = 100;
+
 /** 訳文を添える対象か (自分以外の英語の発言だけ)。 */
 const wantsTranslation = (c: ChatMsg, login: string): boolean =>
   c.from !== login && !hasJapanese(c.text) && /[a-zA-Z]{2,}/.test(c.text);
@@ -1227,7 +1239,9 @@ function GgsUsers({ snap, onNav, onKifu }: {
         {!mine.length && <Empty>まだ記録がありません。</Empty>}
         {mine.map((r) => (
           <RateRow key={r.gtype} label={gtypeLabel(r.gtype)}
-                   rate={{ value: r.rating, dev: r.dev, rank: r.rank, w: r.wins, l: r.losses, d: r.draws }} />
+                   rate={{ value: r.rating, dev: r.dev, rank: r.rank,
+                           w: r.wins, l: r.losses, d: r.draws,
+                           provisional: r.dev > PROVISIONAL_DEV }} />
         ))}
       </Section>
 
