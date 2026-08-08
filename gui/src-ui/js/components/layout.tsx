@@ -375,6 +375,45 @@ export function TableHead({ pad = 'var(--sp-3)', children }: {
   );
 }
 
+/* 表の 1 行。**同じ形を 3 か所で手書きしていた** (棋譜の表 / 学習ログ /
+ * プレイヤーの一覧)。高さ `--h-row` (24px)、下に 1px の罫、選ばれている行は
+ * **accent 14% の面 + 左に 2px** — この「選ばれている」の見せ方が画面ごとに
+ * 違っていて、一度直したのにまた別の場所でずれた。名前のある器にする。
+ *
+ * **列そのものは呼ぶ側が `<span>` の幅で並べる** (`TableHead` と同じ理由)。 */
+export function TableRow({ on, pad = 'var(--sp-3)', fs = 'var(--fs-5)', muted, onClick, title, innerRef, children }: {
+  /** 選ばれている行。 */
+  on?: boolean;
+  /** 左右の余白。列見出しと揃える。 */
+  pad?: string;
+  /** 字の大きさ。狭い列では `--fs-6` にする。 */
+  fs?: string;
+  /** まだ値の無い行 (棋譜の未着手) は弱く出す。 */
+  muted?: boolean;
+  onClick?: () => void;
+  title?: string;
+  /** 現在行を追いかけるための ref (棋譜の表が使う)。 */
+  innerRef?: React.Ref<HTMLButtonElement>;
+  children: React.ReactNode;
+}) {
+  return (
+    <button type="button" onClick={onClick} title={title} ref={innerRef}
+      aria-current={on || undefined}
+      className={'k-row' + (on ? ' k-on' : '')}
+      style={{
+        width: '100%', border: 0, textAlign: 'left',
+        display: 'flex', alignItems: 'center', gap: 'var(--sp-2)',
+        height: 'var(--h-row)', padding: `0 ${pad}`, fontSize: fs,
+        // 表の行は必ず数字の列を持つ。桁が揃わないと縦に読み比べられない
+        fontVariantNumeric: 'tabular-nums',
+        borderBottom: '1px solid var(--border-weak)',
+        color: muted ? 'var(--sub)' : 'var(--text)',
+        background: on ? 'color-mix(in srgb, var(--accent) 14%, transparent)' : 'transparent',
+        boxShadow: on ? 'inset 2px 0 0 var(--accent)' : 'none',
+      }}>{children}</button>
+  );
+}
+
 /* **一覧が空のときの一言。**節や表の中に置く小さいほう。
  *
  * 画面まるごとが空なら `EmptyState` (絵と題名と行き先を持つ大きいほう)。

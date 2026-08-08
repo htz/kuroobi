@@ -6,7 +6,7 @@ import {
   fingerGroups, fingerValue, hasJapanese, normKey, parseCond, translate, useClocks,
   type ClockSide, type ClockView,
 } from './ggs';
-import { Empty, EmptyState, List, Section, TableHead } from './components/layout';
+import { Empty, EmptyState, List, Section, TableHead, TableRow } from './components/layout';
 import { Button, Segmented, Select, TextField, Toggle } from './components/primitives';
 import { Strength } from './components/strength';
 import { Confirm, PickOne } from './Dialogs';
@@ -1269,14 +1269,7 @@ function GgsUsers({ snap, onNav, onKifu }: {
         {/* 行どうしは詰める (節の余白が行間に入る) */}
         <List>
         {slice.map((u, i) => (
-          <button key={u.name} type="button" className="k-row" onClick={() => setSel(u.name)}
-            style={{
-              width: '100%', border: 0, background: 'transparent', textAlign: 'left',
-              display: 'flex', alignItems: 'center', gap: 'var(--sp-2)',
-              height: 'var(--h-row)', padding: '0 var(--sp-4)', fontSize: 'var(--fs-5)',
-              color: 'var(--text)', cursor: 'pointer',
-              borderBottom: '1px solid var(--border-weak)',
-            }}>
+          <TableRow key={u.name} pad="var(--sp-4)" onClick={() => setSel(u.name)}>
             {mode === 'top' && (
               <span style={{ width: 26, textAlign: 'right', fontSize: 'var(--fs-7)',
                              color: 'var(--sub)', fontVariantNumeric: 'tabular-nums' }}>
@@ -1300,7 +1293,7 @@ function GgsUsers({ snap, onNav, onKifu }: {
             <span style={{ width: 52, textAlign: 'right', fontSize: 'var(--fs-6)', color: 'var(--ok)' }}>
               {snap.ongoing.some((o) => o.names.includes(u.name)) ? '対局中' : ''}
             </span>
-          </button>
+          </TableRow>
         ))}
         </List>
         {/* ページ送りは一覧の外。詰めた一覧のすぐ下だと行に見える */}

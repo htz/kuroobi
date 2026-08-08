@@ -1,6 +1,6 @@
 import React from 'react';
 import { Badge, Dot } from './primitives';
-import { Empty, TableHead } from './layout';
+import { Empty, TableHead, TableRow } from './layout';
 
 /* KUROOBI data — 棋譜表・評価値グラフ・対局者行・レート
  * 表は 1 行 --h-row。列幅は固定で、値は右揃え。
@@ -63,20 +63,10 @@ export function KifuTable({ moves, current, onSelect, decimals = 1 }: {
           return (
             // 行は選択肢なので button。検討中はここを ↑↓ で送り続けるので、
             // 表に焦点が当たること自体が前提になる（div だと Tab で回ってこない）。
-            <button key={m.n} type="button" onClick={() => onSelect?.(m.n)}
-              ref={isCurrent ? row : undefined}
-              aria-current={isCurrent || undefined}
-              className={'k-row' + (isCurrent ? ' k-on' : '')} style={{
-                width: '100%', border: 0, textAlign: 'left',
-                display: 'flex', gap: 'var(--sp-2)', height: 'var(--h-row)', alignItems: 'center',
-                padding: '0 var(--sp-3)', fontSize: 'var(--fs-5)',
-                // 評価と時間は縦に並ぶ数字の列。桁が揃わないと読み比べられない
-                fontVariantNumeric: 'tabular-nums',
-                borderBottom: '1px solid var(--border-weak)',
-                color: played ? 'var(--text)' : 'var(--sub)',
-                background: isCurrent ? 'color-mix(in srgb, var(--accent) 14%, transparent)' : 'transparent',
-                boxShadow: isCurrent ? 'inset 2px 0 0 var(--accent)' : 'none',
-              }}>
+            // 評価と時間は縦に並ぶ数字の列。桁が揃わないと読み比べられない
+            <TableRow key={m.n} on={isCurrent} muted={!played}
+                      innerRef={isCurrent ? row : undefined}
+                      onClick={() => onSelect?.(m.n)}>
               <span style={{ width: 22, textAlign: 'right', fontSize: 'var(--fs-7)', color: 'var(--sub)' }}>{m.n}</span>
               <span style={{ width: 58, display: 'flex', alignItems: 'center', gap: 6, fontFamily: 'var(--ff-mono)' }}>
                 <StoneDot color={m.color} />
@@ -92,7 +82,7 @@ export function KifuTable({ moves, current, onSelect, decimals = 1 }: {
               </span>
               <span style={{ width: 34, textAlign: 'right', color: 'var(--sub)', fontSize: 'var(--fs-6)' }}>{m.secs?.toFixed(1) ?? ''}</span>
               <span style={{ flex: 1, textAlign: 'right', fontSize: 'var(--fs-6)', color: m.src?.startsWith('定石') ? 'var(--gold)' : m.src === '読切' ? 'var(--text)' : 'var(--sub)' }}>{m.src ?? ''}</span>
-            </button>
+            </TableRow>
           );
         })}
       </div>

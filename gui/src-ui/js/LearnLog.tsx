@@ -2,7 +2,7 @@ import { useEffect, useState } from 'react';
 import { api, type KifuFrame } from './api';
 import type { LearnChange, LearnEntry } from './types';
 import { Board } from './components/board';
-import { Empty, List, Section, TableHead } from './components/layout';
+import { Empty, List, Section, TableHead, TableRow } from './components/layout';
 import { Button } from './components/primitives';
 
 /* 定石に取り込んだ対局の控え。設計 §8 の三面。
@@ -92,22 +92,8 @@ export function LearnLog({ items, onOpen, onUndo, onBook }: {
             {items.map((e) => {
               const on = keyOf(e) === keyOf(cur);
               return (
-                <button key={keyOf(e)} type="button" className={'k-row' + (on ? ' k-on' : '')}
-                        onClick={() => setSel(keyOf(e))}
-                        style={{
-                          width: '100%', display: 'flex', alignItems: 'center', gap: 'var(--sp-2)',
-                          height: 'var(--h-row)', border: 0,
-                          borderBottom: '1px solid var(--border-weak)',
-                          /* **選ばれている行の見せ方は 1 つに揃える。**棋譜の表・
-                             会話の一覧・手合いの一覧はどれも accent 14% の面 +
-                             左の 2px。ここだけ `--card` の面だけで、しかも
-                             角丸を持っていたので、同じ「選ばれている」が
-                             画面ごとに違って見えていた */
-                          background: on ? 'color-mix(in srgb, var(--accent) 14%, transparent)' : 'transparent',
-                          boxShadow: on ? 'inset 2px 0 0 var(--accent)' : 'none',
-                          padding: '0 var(--sp-1)', fontSize: 'var(--fs-6)',
-                          color: 'var(--text)', textAlign: 'left',
-                        }}>
+                <TableRow key={keyOf(e)} on={on} pad="var(--sp-1)" fs="var(--fs-6)"
+                          onClick={() => setSel(keyOf(e))}>
                   <span style={{
                     flex: 1, minWidth: 0, overflow: 'hidden',
                     textOverflow: 'ellipsis', whiteSpace: 'nowrap',
@@ -122,7 +108,7 @@ export function LearnLog({ items, onOpen, onUndo, onBook }: {
                     width: 36, textAlign: 'right', fontSize: 'var(--fs-7)',
                     color: 'var(--sub)', fontVariantNumeric: 'tabular-nums',
                   }}>{e.positions}</span>
-                </button>
+                </TableRow>
               );
             })}
           </List>
