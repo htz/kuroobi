@@ -292,6 +292,10 @@ export interface BookNode {
   moves: BookMove[];
   /** 実戦から学習して書き戻された局面か。 */
   learned: boolean;
+  /** この局面の定石の値 (石差)。定石に無ければ null。 */
+  value: number | null;
+  /** その値を付けたときの読み深さ。値がどれくらい確かかの手がかり。 */
+  depth: number | null;
   /** 定石に載っている局面の総数。 */
   size: number;
   /** そのうち実戦から書き戻したぶん。 */

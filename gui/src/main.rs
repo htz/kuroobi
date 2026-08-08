@@ -1064,7 +1064,7 @@ async fn ponder_live(app: State<'_, App>) -> Result<(), String> {
         let mut guard = eng.lock().unwrap();
         let Some(e) = guard.as_mut() else { return };
         /* 上限は 60 秒。**読む深さに達すれば自分で止まる**ので普段は
-           使われないが、人が席を外したときに回し続けないための蓋 */
+        使われないが、人が席を外したときに回し続けないための蓋 */
         let until = std::time::Instant::now() + std::time::Duration::from_secs(60);
         e.ponder(&board, until);
     });
@@ -1533,6 +1533,10 @@ struct BookNodeView {
     moves: Vec<BookMoveView>,
     /// 実戦から学習して書き戻された局面か。
     learned: bool,
+    /// この局面の定石の値 (石差)。定石に無ければ null。
+    value: Option<f32>,
+    /// その値を付けたときの読み深さ。**値がどれくらい確かかの手がかり**。
+    depth: Option<u8>,
     /// 定石に載っている局面の総数 (見出しに出す)。
     size: usize,
     /// そのうち実戦から書き戻したぶん。
@@ -1557,6 +1561,7 @@ async fn book_node(app: State<'_, App>, kifu: String) -> Result<BookNodeView, St
         let mut guard = eng.lock().unwrap();
         let e = guard.as_mut().ok_or("エンジンがまだありません")?;
         let (moves, learned) = e.book_node(&b).unwrap_or((Vec::new(), false));
+        let entry = e.book_entry(&b);
         let mut cells = vec![0u8; 64];
         for i in 0..64u8 {
             let bit = 1u64 << i;
@@ -1567,6 +1572,8 @@ async fn book_node(app: State<'_, App>, kifu: String) -> Result<BookNodeView, St
             }
         }
         Ok(BookNodeView {
+            value: entry.map(|(v, _, _)| v),
+            depth: entry.map(|(_, _, d)| d),
             cells,
             player: if player == Color::Black {
                 "black"

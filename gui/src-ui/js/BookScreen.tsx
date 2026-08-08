@@ -189,12 +189,28 @@ export function BookDock({ b, decimals = 1 }: { b: BookBrowse; decimals?: number
         <div style={{ fontSize: 'var(--fs-6)', color: 'var(--sub)', lineHeight: 1.9, wordBreak: 'break-all' }}>
           {b.line.length ? b.line.map(sqName).join(' ') : '初期局面'}
         </div>
-        {n?.learned && (
-          // 元の定石ファイルの値か、自分の対局から書き戻した値かで重みが違う。
-          // 学習ぶんは数局しか根拠が無いこともあるので、その断りを出す
-          <span style={{ fontSize: 'var(--fs-6)', color: 'var(--gold)' }}>
-            定石·学 — 実戦から学習した値を含みます
-          </span>
+        {/* この局面そのものの値。設計 §7 は「+2.0 / 石差 · 12 手読み」と
+            2 段で出す。**深さは値がどれくらい確かかの手がかり** — 浅い枝と
+            深く読んだ枝が同じ顔で並ぶと、どちらを信じるか決められない */}
+        {n?.value != null && (
+          <div style={{ display: 'flex', alignItems: 'baseline', gap: 'var(--sp-3)' }}>
+            <b style={{ fontSize: 'var(--fs-1)', fontWeight: 700, fontVariantNumeric: 'tabular-nums' }}>
+              {n.value > 0 ? '+' : ''}{n.value.toFixed(decimals)}
+            </b>
+            <span style={{ fontSize: 'var(--fs-6)', color: 'var(--sub)' }}>
+              石差{n.depth != null && ` · ${n.depth} 手読み`}
+            </span>
+          </div>
+        )}
+        {/* 出所。元の定石ファイルの値か、自分の対局から書き戻した値かで
+            重みが違う。学習ぶんは数局しか根拠が無いこともある */}
+        {n?.value != null && (
+          <div style={{ display: 'flex', alignItems: 'center', fontSize: 'var(--fs-5)' }}>
+            <span style={{ color: 'var(--sub)' }}>出所</span>
+            <span style={{ marginLeft: 'auto', color: n.learned ? 'var(--gold)' : undefined }}>
+              {n.learned ? '実戦の学習' : 'book.txt'}
+            </span>
+          </div>
         )}
       </Section>
 

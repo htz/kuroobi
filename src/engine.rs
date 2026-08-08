@@ -339,6 +339,16 @@ impl Engine {
         Some((best, learned))
     }
 
+    /// 定石に載っているこの局面の (最善の値, 実戦学習由来か, 付けたときの
+    /// 読み深さ)。**深さは「その値がどれくらい確かか」を読む手がかり**で、
+    /// 定石の画面が「石差 · 12 手読み」と出すのに使う。
+    pub fn book_entry(&self, board: &Board) -> Option<(f32, bool, u8)> {
+        let book = self.book.as_ref()?;
+        let (_, value, depth) = book.probe(board)?;
+        let learned = self.learned.get_raw(Book::key(board).0).is_some();
+        Some((value, learned, depth))
+    }
+
     pub fn set_levels(&mut self, depth: u32, solve_empties: u8, band: u8) {
         self.config.depth = depth;
         self.config.solve_empties = solve_empties;
