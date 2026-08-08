@@ -49,6 +49,9 @@ struct Args {
     games: usize,
     ms: u64,
     ponder: bool,
+    /// ProbCut (MPC) を切る。**確率的な枝刈りなので、置換表の中身で結果が
+    /// 変わり得る。**「深さ固定なら手は変わらないはず」を確かめる用。
+    no_mpc: bool,
     /// 深さ固定で測る。**効き方が変わる** — 同じ深さへより速く着くので、
     /// 見るのは到達深さではなく 1 手にかかった時間。
     fixed: bool,
@@ -69,6 +72,7 @@ impl Default for Args {
             games: 10,
             ms: 200,
             ponder: true,
+            no_mpc: false,
             fixed: false,
             ponder_ms: 300,
             depth: 20,
@@ -97,6 +101,7 @@ fn parse_args() -> Result<Args, String> {
                     m => return Err(format!("--ponder は on か off ({m})")),
                 }
             }
+            "--no-mpc" => a.no_mpc = true,
             "--fixed-depth" => a.fixed = true,
             "--ponder-ms" => a.ponder_ms = val()?.parse().map_err(|_| "bad --ponder-ms")?,
             "--depth" => a.depth = val()?.parse().map_err(|_| "bad --depth")?,
@@ -170,6 +175,7 @@ fn main() -> ExitCode {
         // 定石は切る。定石から返る手は探索を通らないので、ポンダリングの
         // 効きも持ち時間の使われ方も測れなくなる
         use_book: false,
+        mpc: !args.no_mpc,
         ..EngineConfig::default()
     };
 
