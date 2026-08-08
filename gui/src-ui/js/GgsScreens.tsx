@@ -607,11 +607,15 @@ function GgsStandby({ snap, onNav }: { snap: GgsSnapshot; onNav: (id: NavId) => 
         </p>
       </Section>
 
-      <Section title="申し込みの扱い (サーバー側)"
+      {/* 節の名前と説明文は設計 §7 のまま。実装が書いていた「同じ設定を
+          2 か所で編集できると、どちらが本物か分からなくなります」は
+          **作る側の理屈**で、規則 64 が画面の器の中に入れるなと決めている
+          (絵でも器の外の注記に置かれている)。画面に出すのは、読む人にとっての
+          意味 — アプリを閉じても効くこと */}
+      <Section title="申し込みの条件 (サーバー側)"
                aside={<Button onClick={() => onNav('ggs-settings')}>条件を変える</Button>}>
         <p style={{ margin: 0, fontSize: 'var(--fs-6)', color: 'var(--sub)', lineHeight: 1.8 }}>
-          条件は GGS のサーバーが持っています。ここでは今の値を見るだけ —
-          同じ設定を 2 か所で編集できると、どちらが本物か分からなくなります。
+          アプリを閉じてもサーバー側で有効な条件です。待機モードの保険になります。
         </p>
         <FormulaRow label="自動で受ける条件" src={form('accept')} />
         <FormulaRow label="自動で断る条件" src={form('decline')} />
