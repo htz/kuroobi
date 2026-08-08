@@ -25,9 +25,12 @@ export type ButtonProps = {
   onClick?: () => void;
   title?: string;
   className?: string;
+  /** 正方形にする。記号 1 文字だけを載せる送りの釦 (棋譜ビューア) 用。
+   *  絵のあるものは Icons の IconButton を使う — こちらは記号の字を置く場合 */
+  square?: boolean;
 };
 
-export function Button({ variant = 'secondary', size = 'ctrl', disabled, children, onClick, title, className }: ButtonProps) {
+export function Button({ variant = 'secondary', size = 'ctrl', disabled, children, onClick, title, className, square }: ButtonProps) {
   const skin: React.CSSProperties =
     variant === 'primary' ? { background: 'var(--accent-dim)', border: '1px solid var(--accent)', color: 'var(--on-accent)', fontWeight: 600 }
     : variant === 'danger' ? { background: 'transparent', border: '1px solid var(--bad)', color: 'var(--bad)' }
@@ -41,7 +44,9 @@ export function Button({ variant = 'secondary', size = 'ctrl', disabled, childre
       style={{
         // 主ボタンだけ左右を 14px にする (設計の実測)。押させたいものは
         // 面の色だけでなく幅でも他と差を付ける
-        height: H[size], padding: variant === 'primary' && size === 'ctrl' ? '0 14px' : PAD[size],
+        height: H[size],
+        width: square ? H[size] : undefined, flex: square ? 'none' : undefined,
+        padding: square ? 0 : variant === 'primary' && size === 'ctrl' ? '0 14px' : PAD[size],
         borderRadius: R[size], fontSize: FS[size],
         display: 'inline-grid', placeItems: 'center', whiteSpace: 'nowrap',
         opacity: disabled ? 0.4 : 1, ...skin,

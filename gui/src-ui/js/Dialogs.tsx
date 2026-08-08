@@ -79,42 +79,61 @@ export function PasteKifu({ onLoad, onFile, onCancel }: {
   const last = ok ? peek!.frames[peek!.frames.length - 1] : null;
   return (
     <Overlay onClose={onCancel}>
+      {/* 幅は絵の実測 520 (以前は 460)。段は 3 つで、見出しと足を罫で切る */}
       <div role="dialog" aria-modal style={{
-        width: 460, borderRadius: 'var(--r-4)', background: 'var(--card)',
+        width: 520, borderRadius: 'var(--r-4)', background: 'var(--card)',
         border: '1px solid var(--border)', boxShadow: 'var(--sh-2)',
-        padding: 'var(--sp-5)', display: 'flex', flexDirection: 'column', gap: 'var(--sp-4)',
+        display: 'flex', flexDirection: 'column',
       }}>
-        <div style={{ fontSize: 'var(--fs-3)', fontWeight: 600 }}>棋譜を読み込む</div>
-        <div style={{ fontSize: 'var(--fs-6)', color: 'var(--sub)', lineHeight: 1.7 }}>
-          GGF・f5d6… 形式・盤面つきのいずれでも読めます。
+        <div style={{
+          flex: 'none', padding: 'var(--sp-4) var(--sp-5)',
+          borderBottom: '1px solid var(--border)',
+          display: 'flex', flexDirection: 'column', gap: 'var(--sp-1)',
+        }}>
+          <span style={{ fontSize: 'var(--fs-3)', fontWeight: 600 }}>棋譜を読み込む</span>
+          <span style={{ fontSize: 'var(--fs-6)', color: 'var(--sub)' }}>
+            GGF・f5d6… 形式・盤面つきのいずれでも読めます。
+          </span>
         </div>
-        <textarea value={text} onChange={(e) => setText(e.target.value)}
-          className="k-input"
-          style={{
-            height: 160, resize: 'none', padding: 'var(--sp-3)', borderRadius: 'var(--r-3)',
-            background: 'var(--bg)', border: '1px solid var(--border)',
-            fontFamily: 'var(--ff-mono)', fontSize: 'var(--fs-6)', lineHeight: 1.6,
-          }} />
-        {/* 下読みの結果。読めなければ理由、読めれば手数と終局図 */}
-        <div style={{ display: 'flex', gap: 'var(--sp-4)', alignItems: 'center', minHeight: 96 }}>
-          <div style={{ width: 96, flex: 'none' }}>
-            {last && <Board cells={last.cells as (0 | 1 | 2)[]} last={last.last} coords={false} grain={false} />}
-          </div>
-          <div style={{ fontSize: 'var(--fs-6)', color: peek?.err ? 'var(--bad)' : 'var(--sub)', lineHeight: 1.7 }}>
-            {!peek && '貼り付けると、ここに読み取り結果が出ます。'}
-            {peek?.err && peek.err}
-            {last && <>
-              {/* 初期局面ぶんの 1 枚を引いて手数にする */}
-              {peek!.frames.length - 1} 手 ／ 黒 <b style={{ color: 'var(--text)' }}>{last.black}</b>
-              {' '}白 <b style={{ color: 'var(--text)' }}>{last.white}</b>
-            </>}
-            {peek && !peek.err && !ok && '手が 1 つも読み取れません。'}
+
+        <div style={{
+          padding: 'var(--sp-4) var(--sp-5)', display: 'flex', flexDirection: 'column', gap: 'var(--sp-4)',
+        }}>
+          <textarea value={text} onChange={(e) => setText(e.target.value)}
+            className="k-input"
+            style={{
+              height: 110, resize: 'none', padding: 'var(--sp-3)', borderRadius: 'var(--r-3)',
+              background: 'var(--bg)', border: '1px solid var(--border)',
+              fontFamily: 'var(--ff-mono)', fontSize: 'var(--fs-6)', lineHeight: 1.6,
+            }} />
+          {/* 下読みの結果。読めなければ理由、読めれば手数と終局図。
+              **絵には無い** — 読み込んでから間違いに気付くのを避けるために
+              足してある (絵にも入れてもらう。要 push) */}
+          <div style={{ display: 'flex', gap: 'var(--sp-4)', alignItems: 'center', minHeight: 96 }}>
+            <div style={{ width: 96, height: 96, flex: 'none' }}>
+              {last && <Board cells={last.cells as (0 | 1 | 2)[]} last={last.last} coords={false} grain={false} />}
+            </div>
+            <div style={{ fontSize: 'var(--fs-6)', color: peek?.err ? 'var(--bad)' : 'var(--sub)', lineHeight: 1.7 }}>
+              {!peek && '貼り付けると、ここに読み取り結果が出ます。'}
+              {peek?.err && peek.err}
+              {last && <>
+                {/* 初期局面ぶんの 1 枚を引いて手数にする */}
+                {peek!.frames.length - 1} 手 ／ 黒 <b style={{ color: 'var(--text)' }}>{last.black}</b>
+                {' '}白 <b style={{ color: 'var(--text)' }}>{last.white}</b>
+              </>}
+              {peek && !peek.err && !ok && '手が 1 つも読み取れません。'}
+            </div>
           </div>
         </div>
 
-        <div style={{ display: 'flex', gap: 'var(--sp-2)', alignItems: 'center' }}>
+        <div style={{
+          flex: 'none', display: 'flex', gap: 'var(--sp-2)', alignItems: 'center',
+          padding: 'var(--sp-3) var(--sp-5)', borderTop: '1px solid var(--border)',
+        }}>
           <Button size="field" onClick={onFile}>ファイルから…</Button>
           <span style={{ marginLeft: 'auto' }} />
+          {/* 絵は「キャンセル」だが、実装は 3 か所とも「やめる」で揃えてある
+              (画面の文言は日本語で統一する)。**絵を直してもらう (要 push)** */}
           <Button size="field" onClick={onCancel}>やめる</Button>
           <Button size="field" variant="primary" disabled={!ok} onClick={() => onLoad(text)}>読み込む</Button>
         </div>
