@@ -488,7 +488,15 @@ export function App() {
           ) : (
             /* 書き戻しの明細。定石が「何にどう書き換わったか」を見る場所なので、
                木と同じ画面に置く — 対局 → 敗着 → 旧→新 → 取り消し が一本で辿れる */
-            <div className="k-scroll" style={{ flex: 1, minHeight: 0, padding: 'var(--sp-4) var(--sp-3)' }}>
+            /* **幅は --w-text で止める。** 規則 73 は「表・一覧は窓いっぱいに
+               伸びてよい (情報量が増えるので役に立つ)」と言っているが、この
+               一覧は 日付 / 石数 / 相手 / 敗着 の 4 列しか無く、全幅にすると
+               日付と敗着が 1200px 離れるだけで何も増えない。節の見出しの罫も
+               一緒に止めたいので、器の側に付ける */
+            <div className="k-scroll" style={{
+              flex: 1, minHeight: 0, padding: 'var(--sp-4) var(--sp-3)',
+              maxWidth: 'var(--w-text)',
+            }}>
               <LearnLog items={learnLog}
                 onUndo={(e) => void (async () => {
                   if (!await confirm('この対局で書き換えた定石を元に戻します。よろしいですか。')) return;
