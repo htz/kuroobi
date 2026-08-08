@@ -333,18 +333,11 @@ export function Settings({ prefs, setPref, ggs, onClose }: {
               })}
             </span>
           </Row2>
-          <Row2 label="盤の向き">
-            <Segmented value={prefs.facing} onChange={(v) => setPref('facing', v)} options={[
-              { value: 'black', label: '黒が下' },
-              { value: 'white', label: '白が下' },
-              { value: 'auto', label: '自分が下' },
-            ]} />
-          </Row2>
           <Row2 label="座標">
             <Segmented value={prefs.coords ? 'on' : 'off'} onChange={(v) => setPref('coords', v === 'on')}
                        options={[{ value: 'on', label: '出す' }, { value: 'off', label: '出さない' }]} />
           </Row2>
-          <Row2 label="畳の織り目">
+          <Row2 label="織り目">
             <Segmented value={prefs.grain ? 'on' : 'off'} onChange={(v) => setPref('grain', v === 'on')}
                        options={[{ value: 'on', label: '出す' }, { value: 'off', label: '出さない' }]} />
           </Row2>
@@ -353,6 +346,13 @@ export function Settings({ prefs, setPref, ggs, onClose }: {
                        options={[{ value: '0', label: '動かさない' },
                                  { value: '120', label: '速い' },
                                  { value: '240', label: 'ゆっくり' }]} />
+          </Row2>
+          <Row2 label="盤の向き">
+            <Segmented value={prefs.facing} onChange={(v) => setPref('facing', v)} options={[
+              { value: 'black', label: '黒が下' },
+              { value: 'white', label: '白が下' },
+              { value: 'auto', label: '自分が下' },
+            ]} />
           </Row2>
         </Section>
         <Section title="数値">
