@@ -162,7 +162,9 @@ export function Dock({ tabs, active, onTab, children, open, scroll = true }: {
       borderLeft: '1px solid var(--border)', flexDirection: 'column', minHeight: 0,
     }}>
       <div style={{ padding: 'var(--sp-2)', flex: 'none' }}>
-        <Segmented fill value={active} onChange={onTab}
+        {/* 設計が寸法を描いているのはここだけ (5 か所すべて 器 39.2 / 駒 31.2)。
+            駒を --h-field (32) に載せると器は 38 になり、絵と 1.2px で合う */}
+        <Segmented fill size="field" value={active} onChange={onTab}
                    options={tabs.map(t => ({ value: t, label: t }))} />
       </div>
       <div className={scroll ? 'k-scroll' : undefined} style={{
