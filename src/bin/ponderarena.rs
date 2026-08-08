@@ -196,6 +196,8 @@ fn main() -> ExitCode {
     let (mut na, mut nb) = (0u64, 0u64);
     let (mut wins, mut losses, mut draws) = (0u32, 0u32, 0u32);
     let mut ponder_nodes = 0u64;
+    // 完全読み域での先読みが何回・何ミリ秒走ったか
+    let (mut end_n, mut end_ms) = (0u64, 0u128);
 
     for g in 0..args.games {
         // **1 局ごとに消す。**温まった表の持ち越しは同一設定でも結果を歪める
@@ -246,7 +248,12 @@ fn main() -> ExitCode {
                     } else {
                         budget
                     };
+                    let t = Instant::now();
                     ponder_nodes += a.ponder(&board, Instant::now() + slice);
+                    if board.empty_count() <= args.solve_empties {
+                        end_n += 1;
+                        end_ms += t.elapsed().as_millis();
+                    }
                 }
             } else {
                 let t0 = Instant::now();
@@ -296,12 +303,22 @@ fn main() -> ExitCode {
             ta as f64 / na.max(1) as f64 / 1000.0,
             tb as f64 / nb.max(1) as f64 / 1000.0,
         );
+        /* **深さ固定の指標は総探索時間。** 勝率は意味を持たない (同じ深さ
+        まで読むので手は変わらない)。**A 対 B ではなく、同じ種で
+        「A の先読みあり」と「A の先読みなし」を並べる** — A と B は
+        持つ色も局面も違うので、そのまま比べると偏りが乗る。
+        B の数字は 2 回の走行で一致するはずで、それが対照になる。 */
         println!(
-            "  1 手の時間  A {:.1} ms  B {:.1} ms   {:+.1}% ({} ms の先読み)",
+            "  探索の合計  A {:.2} s ({} 手 / 1 手 {:.1} ms)   B {:.2} s ({} 手 / 1 手 {:.1} ms)",
+            ta as f64 / 1e6,
+            na,
             aa,
+            tb as f64 / 1e6,
+            nb,
             bb,
-            100.0 * (aa - bb) / bb,
-            args.ponder_ms,
+        );
+        println!(
+            "  ※ 同じ種で --ponder off を回し、**A の合計どうし**を比べる。\n     B の合計が 2 回でずれていたら、その比較は使えない"
         );
     }
     println!(
@@ -319,6 +336,7 @@ fn main() -> ExitCode {
             ponder_nodes as f64 / da.n as f64
         }
     );
+    println!("  完全読み域の先読み {} 回 / 合計 {} ms", end_n, end_ms);
     let total = (wins + losses + draws) as f64;
     println!(
         "  A の成績  {}勝 {}敗 {}分 ({:.1}%)",
