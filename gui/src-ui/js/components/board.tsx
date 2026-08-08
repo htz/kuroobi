@@ -85,7 +85,12 @@ export function Board({ cells, legal = [], evals, last, next, coords = true, gra
     return [cx(f), cx(r)];
   };
   return (
-    <svg viewBox={`0 0 ${SIZE} ${SIZE}`} style={{ width: '100%', height: 'auto', display: 'block' }}
+    /* 幅も高さも器いっぱいに取り、比は preserveAspectRatio (既定の
+       xMidYMid meet) に守らせる。`height:'auto'` だと**幅だけで大きさが
+       決まる**ので、器が縦に長いとき盤が上に寄って下が空く (定石の画面を
+       3 列にしたときに出た)。逆に器が横に長いときは下へはみ出していた
+       (規則 77)。両方 100% にすると、どちらに余るときも中央に収まる。 */
+    <svg viewBox={`0 0 ${SIZE} ${SIZE}`} style={{ width: '100%', height: '100%', display: 'block' }}
          role="img" aria-label="盤面">
       <rect x={0} y={0} width={SIZE} height={SIZE} rx={14} fill="var(--card)" />
       <rect x={PAD - 6} y={PAD - 6} width={812} height={812} rx={6} fill="var(--board-dark)" />

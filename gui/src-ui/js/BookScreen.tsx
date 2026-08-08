@@ -122,8 +122,10 @@ export function BookPane({ b, coords, grain, flip, onSettings }: {
     evals[m.pos] = { score: m.value, src: { book: true }, best: i === 0 };
   });
   return (
-    // 左右の余白は中の要素が持つ (石数の行の罫を端まで届かせる)
-    <div style={{ flex: 1, minHeight: 0, display: 'flex', flexDirection: 'column' }}>
+    // 左右の余白は中の要素が持つ (石数の行の罫を端まで届かせる)。
+    // minWidth:0 が要る — 横並びの中に置くと、既定の auto では中身 (盤の
+    // 固有幅) より縮まず、隣の列を押し出す
+    <div style={{ flex: 1, minWidth: 0, minHeight: 0, display: 'flex', flexDirection: 'column' }}>
       {/* 行に minmax(0,1fr) を入れて**高さを確定させる**。既定の auto だと
               行の高さが中身で決まり、中の height:100% の基準が定まらない
               (基準が無いと auto 扱いになり、svg が固有の 880px で描かれて
@@ -180,13 +182,10 @@ function rowsOf(b: BookBrowse, key: string, depth: number, out: Row[]): void {
 /** 手順と、その先の木。 */
 export function BookDock({ b, decimals = 1 }: { b: BookBrowse; decimals?: number }) {
   const n = b.node;
-  const root = keyOf(b.line);
-  const rows: Row[] = [];
-  rowsOf(b, root, 0, rows);
 
   return (
     <>
-      <Section title="手順" aside={<span>{b.line.length} 手</span>}>
+      <Section title="この局面" aside={<span>{b.line.length} 手</span>}>
         <div style={{ fontSize: 'var(--fs-6)', color: 'var(--sub)', lineHeight: 1.9, wordBreak: 'break-all' }}>
           {b.line.length ? b.line.map(sqName).join(' ') : '初期局面'}
         </div>
@@ -199,31 +198,89 @@ export function BookDock({ b, decimals = 1 }: { b: BookBrowse; decimals?: number
         )}
       </Section>
 
-      <Section title="この先の枝" aside={n ? <span>{n.moves.length}</span> : undefined}>
-        {n && n.moves.length === 0 && (
+      {/* 木は左の列が持つ (設計 §7)。ここは**次の 1 手だけ**を表にする。
+          同じ一覧を 2 か所に出すと、どちらが本物か分からなくなる */}
+      <Section title="次の手" aside={n ? <span>{n.moves.length}</span> : undefined}>
+        {n && n.moves.length === 0 ? (
           <span style={{ fontSize: 'var(--fs-6)', color: 'var(--sub)' }}>
             この局面から先は定石にありません。
           </span>
-        )}
-        {/* 行どうしは詰める。節の余白 (12px) が行間に入ると 24px の行が
-            36px 間隔で並び、字下げで木を読ませる作りが効かなくなる */}
-        <div style={{ display: 'flex', flexDirection: 'column' }}>
-          {rows.map((r) => (
-            <BookRow key={r.key} r={r} open={b.open.has(r.key)} decimals={decimals}
-                     onToggle={() => b.toggle(r.key)}
-                     onGo={() => b.goto(r.key)} />
-          ))}
-        </div>
-        {n && n.moves.length > 0 && (
-          <span style={{ fontSize: 'var(--fs-7)', color: 'var(--sub)', lineHeight: 1.7 }}>
-            値は手番から見た石差、右は採用局数。行を押すとその局面へ移り、
-            ▸ で先を開きます。
-          </span>
+        ) : (
+          <div style={{ display: 'flex', flexDirection: 'column' }}>
+            {n?.moves.map((m) => (
+              <button key={m.pos} type="button" className="k-row" onClick={() => b.push(m.pos)}
+                      title="押すとこの手へ進む"
+                      style={{
+                        display: 'flex', alignItems: 'center', gap: 'var(--sp-2)',
+                        height: 'var(--h-row)', border: 0, background: 'transparent',
+                        borderBottom: '1px solid var(--border-weak)', borderRadius: 'var(--r-2)',
+                        padding: '0 var(--sp-1)', fontSize: 'var(--fs-6)',
+                        color: 'var(--text)', textAlign: 'left', cursor: 'pointer',
+                      }}>
+                <span style={{ flex: 1, fontWeight: 600 }}>{sqName(m.pos)}</span>
+                <span style={{ width: 44, textAlign: 'right', fontVariantNumeric: 'tabular-nums' }}>
+                  {m.value > 0 ? '+' : ''}{m.value.toFixed(decimals)}
+                </span>
+                <span style={{ width: 58, textAlign: 'right', fontSize: 'var(--fs-7)',
+                               color: 'var(--sub)', fontVariantNumeric: 'tabular-nums' }}>
+                  {m.games.toLocaleString()}
+                </span>
+              </button>
+            ))}
+          </div>
         )}
       </Section>
     </>
   );
 }
+
+/* 左の列 — 定石の木。設計 §7 は 269px の独立した列で、見出しに
+ * 手順 / 評価 / 出現 の 3 つを置き、24px の行を字下げで重ねる。
+ * ドックに入れていたときは「この局面」と同じ枠に積まれ、枝の広がりが
+ * 読めなかった。
+ *
+ * **絵は左メニューの無い独立ウィンドウを前提にしている。** 主画面では
+ * 左メニュー 208 + この列 269 + ドック 290 が乗るので、盤に残るのは
+ * 473px (絵は 560px)。それでも枝が読めるほうが効くと判断した。 */
+export function BookTree({ b, decimals = 1 }: { b: BookBrowse; decimals?: number }) {
+  const root = keyOf(b.line);
+  const rows: Row[] = [];
+  rowsOf(b, root, 0, rows);
+
+  return (
+    <div style={{
+      width: 'var(--w-book-tree)', flex: 'none', minHeight: 0,
+      borderRight: '1px solid var(--border)', display: 'flex', flexDirection: 'column',
+    }}>
+      {/* 列の見出し。節の見出し (Section) と同じ 20px + 1px 罫だが、
+          ここは列名なので右の 2 つを数字の幅に合わせて右揃えにする */}
+      <div style={{
+        flex: 'none', height: 'var(--h-head)', display: 'flex', alignItems: 'center',
+        gap: 'var(--sp-2)', padding: '0 var(--sp-3)',
+        borderBottom: '1px solid var(--border)',
+        fontSize: 'var(--fs-7)', fontWeight: 600, letterSpacing: '.08em', color: 'var(--sub)',
+      }}>
+        <span style={{ flex: 1 }}>手順</span>
+        <span style={{ width: 44, textAlign: 'right' }}>評価</span>
+        <span style={{ width: 58, textAlign: 'right' }}>出現</span>
+      </div>
+      <div className="k-scroll" style={{ flex: 1, minHeight: 0, padding: '0 var(--sp-3)' }}>
+        {rows.length === 0 && (
+          <span style={{
+            display: 'block', padding: 'var(--sp-3) 0',
+            fontSize: 'var(--fs-6)', color: 'var(--sub)',
+          }}>この局面から先は定石にありません。</span>
+        )}
+        {rows.map((r) => (
+          <BookRow key={r.key} r={r} open={b.open.has(r.key)} decimals={decimals}
+                   onToggle={() => b.toggle(r.key)}
+                   onGo={() => b.goto(r.key)} />
+        ))}
+      </div>
+    </div>
+  );
+}
+
 
 function BookRow({ r, open, onToggle, onGo, decimals = 1 }: {
   r: Row; open: boolean; onToggle: () => void; onGo: () => void; decimals?: number;

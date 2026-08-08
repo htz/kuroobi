@@ -16,7 +16,7 @@ import { GgsStatus, JobList, Meter, Nav, NAV_LOCAL, StatusChip, ggsNav, Toasts, 
 import { Button, Dot, Progress, Segmented, Toggle } from './components/primitives';
 import { Icon } from './components/Icons';
 import { Strength } from './components/strength';
-import { BookDock, BookPane, useBookBrowse } from './BookScreen';
+import { BookDock, BookPane, BookTree, useBookBrowse } from './BookScreen';
 import { LearnLog } from './LearnLog';
 import { KifuViewer } from './KifuViewer';
 import { LEVELS } from './state';
@@ -469,8 +469,14 @@ export function App() {
                        }} />
          : isBook ? (
           bookTab === '定石' ? (
-            <BookPane b={book} coords={prefs.coords} grain={prefs.grain}
-                      flip={flipped(prefs.facing, '')} onSettings={() => void openWindow('settings')} />
+            /* 設計 §7 は 木 / 盤 / この局面 の 3 列。木は左の列が持ち、
+               「この局面」と「次の手」は右のドックが持つ (幅 290 は絵の 291
+               とほぼ同じ)。主画面には左メニューが乗るぶん盤は絵より狭い */
+            <div style={{ flex: 1, minHeight: 0, display: 'flex' }}>
+              {book.node?.size !== 0 && <BookTree b={book} decimals={prefs.decimals} />}
+              <BookPane b={book} coords={prefs.coords} grain={prefs.grain}
+                        flip={flipped(prefs.facing, '')} onSettings={() => void openWindow('settings')} />
+            </div>
           ) : (
             /* 書き戻しの明細。定石が「何にどう書き換わったか」を見る場所なので、
                木と同じ画面に置く — 対局 → 敗着 → 旧→新 → 取り消し が一本で辿れる */
