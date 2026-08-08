@@ -178,6 +178,12 @@ export function App() {
                          ok: '戻す' });
           return;
         }
+        if (lv === 'toast') {
+          // 2 つ積んだところを撮る (設計 §9 は 2 枚を溝 10 で重ねている)
+          g.say('GGS 対局中は分析を控えます', 'gold');
+          setTimeout(() => g.say('棋譜がありません'), 150);
+          return;
+        }
         if (lv === 'viewer') {
           setViewer({ title: 'saio との対局',
                       kifu: 'e6f4c3d6f6e7f5g5e3g4c7d3f3c4c6c5b4b6d7b5c2a3f8e8d8c8b8d2g3e2' });
