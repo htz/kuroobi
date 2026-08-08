@@ -1,13 +1,24 @@
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
+import { api, type KifuFrame } from './api';
 import type { LearnChange, LearnEntry } from './types';
+import { Board } from './components/board';
 import { List, Section } from './components/layout';
 import { Button } from './components/primitives';
 
-/* 定石に取り込んだ対局の控え。
+/* 定石に取り込んだ対局の控え。設計 §8 の三面。
  *
  * 取り込みは裏で静かに進み、値を上書きする。変な対局が 1 局混ざるだけで
  * 以後の手が変わるので、**何がどう変わったか**まで辿れないと見つけられない。
- * 対局 → 敗着 → 書き換えた手 (旧→新) が一本で追える形にしてある。
+ * 対局 → 敗着 → 書き換えた手 (旧→新) → 取り消し が一本で追える形にしてある。
+ *
+ * 左に対局の一覧、中央に敗着の局面、右にその対局の明細。行を開いて中身を
+ * 出す形にしていたが、**盤を置く場所が無く**、どの手で損したのかを数字だけで
+ * 読ませていた。
+ *
+ * **絵にあって作れないもの** (`notes/design-sync-from-impl.md` に数え上げた):
+ * この対局の評価値グラフ (控えに 1 手ごとの評価値が無い) / 取り込みの状態
+ * 「完了」/「対象外」の絞り込み / 勝敗 (自分がどちらの色だったかを控えが
+ * 持っていないので石数だけ出す)。
  */
 
 /** その手で損した石差。定石が「もっと良い手があった」と言っている量。 */
@@ -23,116 +34,221 @@ function blunderOf(e: LearnEntry): LearnChange | undefined {
 }
 
 const sign = (v: number) => (v > 0 ? '+' : '') + v.toFixed(1);
+const keyOf = (e: LearnEntry) => e.at + e.kifu;
 
-export function LearnLog({ items, onOpen, onUndo }: {
+export function LearnLog({ items, onOpen, onUndo, onBook }: {
   items: LearnEntry[];
   /** 検討で開く。ply を渡すとその手数まで進める */
   onOpen: (e: LearnEntry, ply?: number) => void;
   /** 取り込みを取り消す。 */
   onUndo: (e: LearnEntry) => void;
+  /** その手順を定石の枚で開く。 */
+  onBook?: (kifu: string) => void;
 }) {
-  const [open, setOpen] = useState<string>('');
-  return (
-    <Section title="取り込んだ対局" aside={items.length ? <span>{items.length}</span> : undefined}>
-      {items.length === 0 && (
-        <span style={{ fontSize: 'var(--fs-6)', color: 'var(--sub)' }}>まだありません。</span>
-      )}
-      {/* 行どうしは詰める。節の余白 (12px) が行間に入ると 24px の行が
-          36px 間隔で並び、一覧ではなく箇条書きに見える (定石の木と同じ話) */}
-      <List>
-      {items.map((e) => {
-        const key = e.at + e.kifu;
-        const bad = blunderOf(e);
-        const shown = open === key;
-        return (
-          <div key={key} style={{ display: 'flex', flexDirection: 'column' }}>
-            <div className="k-row" style={{
-              display: 'flex', alignItems: 'center', height: 'var(--h-row)',
-              borderRadius: 'var(--r-2)',
-            }}>
-              {/* 明細を開く三角と、検討で開く行の本体は兄弟にする
-                  (button の中に button は置けない)。
-                  **当たりも絵も行の高さに合わせる** — 16px 角に fs-7 の
-                  記号だと、押せることが見て分からないうえ外しやすい */}
-              <button type="button" className="k-press"
-                      onClick={() => setOpen(shown ? '' : key)}
-                      title={shown ? '閉じる' : '書き換えた手を見る'}
-                      aria-label={shown ? '閉じる' : '書き換えた手を見る'}
-                      disabled={!e.changes.length}
-                      style={{
-                        width: 22, height: 'var(--h-row)', flex: 'none', border: 0, padding: 0,
-                        background: 'transparent', color: 'var(--sub)',
-                        cursor: e.changes.length ? 'pointer' : 'default',
-                        fontSize: 'var(--fs-3)', lineHeight: 1, borderRadius: 'var(--r-1)',
-                        opacity: e.changes.length ? 1 : 0,
-                      }}>{shown ? '▾' : '▸'}</button>
-              <button type="button" onClick={() => onOpen(e)} title="検討で開く"
-                      style={{
-                        flex: 1, minWidth: 0, display: 'flex', alignItems: 'center',
-                        gap: 'var(--sp-2)', border: 0, background: 'transparent',
-                        cursor: 'pointer', padding: '0 var(--sp-1)',
-                        fontSize: 'var(--fs-6)', color: 'var(--text)', textAlign: 'left',
-                      }}>
-                <span style={{ color: 'var(--sub)', fontVariantNumeric: 'tabular-nums' }}>
-                  {fmtWhen(e.at)}
-                </span>
-                <span style={{ fontWeight: 600, fontVariantNumeric: 'tabular-nums' }}>
-                  {e.black}–{e.white}
-                </span>
-                {/* 相手の名前があれば GGS の対局。無ければローカル */}
-                {e.opponent && (
-                  <span style={{ color: 'var(--sub)', overflow: 'hidden', textOverflow: 'ellipsis',
-                                 whiteSpace: 'nowrap', maxWidth: 80 }}>{e.opponent}</span>
-                )}
-                <span style={{ marginLeft: 'auto', fontSize: 'var(--fs-7)',
-                               color: bad ? 'var(--bad)' : 'var(--sub)',
-                               fontVariantNumeric: 'tabular-nums' }}>
-                  {bad ? `${bad.ply} 手 ▼${lossOf(bad).toFixed(1)}` : `${e.positions} 局面`}
-                </span>
-              </button>
-            </div>
+  const [sel, setSel] = useState('');
+  const cur = items.find((e) => keyOf(e) === sel) ?? items[0];
+  const bad = cur ? blunderOf(cur) : undefined;
 
-            {/* 取り消しは対局単位。1 手だけ戻すと、その局面から根までの
-                値がその手を前提にしたままになる (書き戻しは連なっている) */}
-            {shown && (
-              <div style={{ display: 'flex', gap: 'var(--sp-2)', padding: 'var(--sp-1) 0 var(--sp-1) 20px' }}>
-                <Button variant="danger" onClick={() => onUndo(e)}>
-                  この対局の取り込みを取り消す
-                </Button>
-              </div>
+  /* 敗着の局面を出すために棋譜を 1 手ずつ開く。盤の規則は JS に写さず、
+     バックエンドに再生させる (対局・検討・定石と同じ考え方)。 */
+  const [frames, setFrames] = useState<{ text: string; f: KifuFrame[] }>({ text: '', f: [] });
+  const text = cur ? (cur.start ? cur.start + '\n' + cur.kifu : cur.kifu) : '';
+  useEffect(() => {
+    if (!text) return;
+    let alive = true;
+    void api.previewKifu(text)
+      .then((f) => { if (alive) setFrames({ text, f }); })
+      .catch(() => { if (alive) setFrames({ text, f: [] }); });
+    return () => { alive = false; };
+  }, [text]);
+  // 前の対局の盤を出したままにしない (棋譜が変われば取り直すまで空)
+  const shown = frames.text === text ? frames.f : [];
+  const frame = shown.length
+    ? shown[Math.min(bad?.ply ?? shown.length - 1, shown.length - 1)]
+    : null;
+
+  if (!items.length || !cur) {
+    return (
+      <Section title="取り込んだ対局">
+        <span style={{ fontSize: 'var(--fs-6)', color: 'var(--sub)' }}>まだありません。</span>
+      </Section>
+    );
+  }
+
+  return (
+    <div style={{ flex: 1, minHeight: 0, display: 'flex' }}>
+      {/* 左 — 対局の一覧。設計 §8 は 269px の表 */}
+      <div style={{
+        width: 'var(--w-book-tree)', flex: 'none', minHeight: 0,
+        borderRight: '1px solid var(--border)', display: 'flex', flexDirection: 'column',
+      }}>
+        <div style={{
+          flex: 'none', height: 'var(--h-head)', display: 'flex', alignItems: 'center',
+          gap: 'var(--sp-2)', padding: '0 var(--sp-3)', borderBottom: '1px solid var(--border)',
+          fontSize: 'var(--fs-7)', fontWeight: 600, letterSpacing: '.08em', color: 'var(--sub)',
+        }}>
+          <span style={{ flex: 1 }}>対局</span>
+          <span style={{ width: 52, textAlign: 'right' }}>石数</span>
+          <span style={{ width: 36, textAlign: 'right' }}>局面</span>
+        </div>
+        <div className="k-scroll" style={{ flex: 1, minHeight: 0, padding: '0 var(--sp-3)' }}>
+          <List>
+            {items.map((e) => {
+              const on = keyOf(e) === keyOf(cur);
+              return (
+                <button key={keyOf(e)} type="button" className={'k-row' + (on ? ' k-on' : '')}
+                        onClick={() => setSel(keyOf(e))}
+                        style={{
+                          width: '100%', display: 'flex', alignItems: 'center', gap: 'var(--sp-2)',
+                          height: 'var(--h-row)', border: 0, borderRadius: 'var(--r-2)',
+                          borderBottom: '1px solid var(--border-weak)',
+                          background: on ? 'var(--card)' : 'transparent',
+                          padding: '0 var(--sp-1)', fontSize: 'var(--fs-6)',
+                          color: 'var(--text)', textAlign: 'left', cursor: 'pointer',
+                        }}>
+                  <span style={{
+                    flex: 1, minWidth: 0, overflow: 'hidden',
+                    textOverflow: 'ellipsis', whiteSpace: 'nowrap',
+                  }}>
+                    <span style={{ color: 'var(--sub)' }}>{fmtWhen(e.at)}</span>
+                    {' '}{e.opponent || 'KUROOBI'}
+                  </span>
+                  <span style={{ width: 52, textAlign: 'right', fontVariantNumeric: 'tabular-nums' }}>
+                    {e.black}–{e.white}
+                  </span>
+                  <span style={{
+                    width: 36, textAlign: 'right', fontSize: 'var(--fs-7)',
+                    color: 'var(--sub)', fontVariantNumeric: 'tabular-nums',
+                  }}>{e.positions}</span>
+                </button>
+              );
+            })}
+          </List>
+        </div>
+        {/* 絵は一覧の下に合計を置く。定石が何局面ぶん動いたかが一目で分かる */}
+        <div style={{
+          flex: 'none', display: 'flex', alignItems: 'center', gap: 'var(--sp-2)',
+          padding: 'var(--sp-2) var(--sp-3)', borderTop: '1px solid var(--border)',
+          fontSize: 'var(--fs-6)', color: 'var(--sub)',
+        }}>
+          <span>{items.length} 局の合計</span>
+          <span style={{
+            marginLeft: 'auto', color: 'var(--text)', fontWeight: 600,
+            fontVariantNumeric: 'tabular-nums',
+          }}>{items.reduce((n, e) => n + e.positions, 0).toLocaleString()}</span>
+          <span>局面</span>
+        </div>
+      </div>
+
+      {/* 中央 — 敗着の局面。数字だけで「どの手で損したか」を読ませない */}
+      <div style={{
+        flex: 1, minWidth: 0, minHeight: 0, display: 'flex', flexDirection: 'column',
+        padding: 'var(--sp-4)', gap: 'var(--sp-3)',
+      }}>
+        <div style={{
+          flex: 1, minHeight: 0, display: 'grid', placeItems: 'center',
+          gridTemplateRows: 'minmax(0, 1fr)', gridTemplateColumns: 'minmax(0, 1fr)',
+        }}>
+          <div style={{ height: '100%', maxHeight: '100%', aspectRatio: '1 / 1', maxWidth: '100%' }}>
+            {frame && (
+              <Board cells={frame.cells as (0 | 1 | 2)[]} last={frame.last} coords={false} disabled />
             )}
-            {shown && e.changes.map((c) => (
+          </div>
+        </div>
+        {bad ? (
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 'var(--sp-2)' }}>
+            <div style={{ display: 'flex', alignItems: 'baseline', gap: 'var(--sp-2)' }}>
+              <span style={{ fontSize: 'var(--fs-3)', fontWeight: 600 }}>
+                {bad.ply} 手目 {bad.mv}
+              </span>
+              <span style={{ color: 'var(--bad)', fontVariantNumeric: 'tabular-nums' }}>
+                ▼{lossOf(bad).toFixed(1)}
+              </span>
+              <span style={{ marginLeft: 'auto' }}>
+                <Button onClick={() => onOpen(cur, bad.ply)}>検討で開く</Button>
+              </span>
+            </div>
+            <span style={{
+              maxWidth: 'var(--w-text)', fontSize: 'var(--fs-6)',
+              color: 'var(--sub)', lineHeight: 1.8,
+            }}>
+              この局面の評価を終局の石差で上書きし、根まで書き戻しました。
+              定石は「もっと良い手があった」と言っています
+              ({sign(bad.best)} に対して {sign(bad.after)})。
+            </span>
+          </div>
+        ) : (
+          <span style={{ fontSize: 'var(--fs-6)', color: 'var(--sub)' }}>
+            この対局に大きく損した手はありません。
+          </span>
+        )}
+      </div>
+
+      {/* 右 — この対局の明細。設計 §8 は 291px (ドックと同じ幅) */}
+      <div className="k-scroll" style={{
+        width: 'var(--w-dock)', flex: 'none', minHeight: 0,
+        borderLeft: '1px solid var(--border)', padding: 'var(--sp-3) 0',
+      }}>
+        <Section title="この対局">
+          <Fact label="相手" value={cur.opponent || 'KUROOBI'} />
+          <Fact label="石数" value={`${cur.black} – ${cur.white}`} />
+          <Fact label="取り込み" value={`${cur.positions} 局面 · ${fmtWhen(cur.at)}`} />
+        </Section>
+
+        <Section title="更新した定石" aside={<span>{cur.changes.length}</span>}>
+          {!cur.changes.length && (
+            <span style={{ fontSize: 'var(--fs-6)', color: 'var(--sub)' }}>
+              明細の無い古い控えです。
+            </span>
+          )}
+          <List>
+            {cur.changes.map((c) => (
               <button key={c.ply} type="button" className="k-row"
-                      onClick={() => onOpen(e, c.ply)}
+                      onClick={() => onOpen(cur, c.ply)}
                       title="その手の局面を検討で開く"
                       style={{
                         display: 'flex', alignItems: 'center', gap: 'var(--sp-2)',
-                        height: 'var(--h-row)', paddingLeft: 20, border: 0,
-                        background: 'transparent', cursor: 'pointer',
-                        borderRadius: 'var(--r-2)', textAlign: 'left',
-                        fontSize: 'var(--fs-7)', color: 'var(--sub)',
+                        height: 'var(--h-row)', border: 0, background: 'transparent',
+                        borderBottom: '1px solid var(--border-weak)', borderRadius: 'var(--r-2)',
+                        padding: '0 var(--sp-1)', cursor: 'pointer', textAlign: 'left',
+                        fontSize: 'var(--fs-6)', color: 'var(--sub)',
                       }}>
                 <span style={{ width: 26, textAlign: 'right', fontVariantNumeric: 'tabular-nums' }}>
                   {c.ply}
                 </span>
                 <span style={{ width: 24, color: 'var(--text)', fontWeight: 600 }}>{c.mv}</span>
                 {/* 旧→新。定石に無かった手は「新規」 */}
-                <span style={{ fontVariantNumeric: 'tabular-nums' }}>
-                  {c.before === null ? '新規' : sign(c.before)} → <b style={{ color: 'var(--text)' }}>{sign(c.after)}</b>
+                <span style={{ marginLeft: 'auto', fontVariantNumeric: 'tabular-nums' }}>
+                  {c.before === null ? '新規' : sign(c.before)}
+                  {' → '}
+                  <b style={{ color: 'var(--text)' }}>{sign(c.after)}</b>
                 </span>
-                {lossOf(c) > 0.05 && (
-                  <span style={{ marginLeft: 'auto', color: 'var(--bad)',
-                                 fontVariantNumeric: 'tabular-nums' }}>
-                    ▼{lossOf(c).toFixed(1)}
-                  </span>
-                )}
               </button>
             ))}
-          </div>
-        );
-      })}
-      </List>
-    </Section>
+          </List>
+        </Section>
+
+        <div style={{ display: 'flex', gap: 'var(--sp-2)', padding: '0 var(--sp-3)' }}>
+          {onBook && <Button onClick={() => onBook(cur.kifu)}>定石で見る</Button>}
+          {/* 取り消しは対局単位。1 手だけ戻すと、その局面から根までの値が
+              その手を前提にしたままになる (書き戻しは連なっている) */}
+          <Button variant="danger" onClick={() => onUndo(cur)}>取り消す</Button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+/** 「名前 / 値」の 1 行。値を右へ寄せて縦を揃える。 */
+function Fact({ label, value }: { label: string; value: string }) {
+  return (
+    <div style={{ display: 'flex', alignItems: 'center', fontSize: 'var(--fs-5)' }}>
+      <span style={{ color: 'var(--sub)' }}>{label}</span>
+      <span style={{
+        marginLeft: 'auto', overflow: 'hidden',
+        textOverflow: 'ellipsis', whiteSpace: 'nowrap',
+      }}>{value}</span>
+    </div>
   );
 }
 
