@@ -2035,12 +2035,16 @@ fn handle_block(
 /// 相手が指したことに気付けなくなる — 受信の待ちが 250ms なので、
 /// 同じくらいの刻みで交互に回す。
 ///
-/// 効くのは**持ち時間で刻んでいるときだけ**。「深さ固定」なら本番の探索が
-/// どのみち最後まで走るので、先に読んでも得るものが無い (計測どおり)。
-/// 実測では 1 手 150ms の条件で到達深さが **+1.25 段**。
+/// **「深さ固定」でも効く。** 効き方が変わるだけで、
+///
+/// * 持ち時間で刻むとき … 同じ時間で **+1.25 段**深く読める
+/// * 深さ固定のとき … 同じ深さへ **1/3 の時間**で着く (実測 −62〜65%)
+///
+/// 「深さ固定では探索がどのみち最後まで走るので無駄」と一度書いたが誤り。
+/// 走り切る先が置換表に載っていれば、走り切るのが速くなる。
 fn ponder_slice(ctx: &mut Ctx, matches: &HashMap<String, MatchState>) {
     const SLICE: Duration = Duration::from_millis(200);
-    if !ctx.engine_cfg_ponder || ctx.engine_cfg_pace == "depth" {
+    if !ctx.engine_cfg_ponder {
         return;
     }
     let Some(mid) = ctx.ponder_at.clone() else {

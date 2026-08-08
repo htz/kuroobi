@@ -27,6 +27,8 @@
 //!   --games <n>          対局数 (default 10)
 //!   --ms <n>             1 手の持ち時間 (ミリ秒, default 200)
 //!   --ponder <on|off>    先読みするか (default on)。off は対照実験
+//!   --fixed-depth        深さ固定で測る (見るのは時間。深さは両者同じ)
+//!   --ponder-ms <n>      深さ固定のときの先読み時間 (default 300)
 //!   --depth <n>          中盤深さの上限 (default 20)
 //!   --solve-empties <n>  完全読み開始 (default 14)
 //!   --threads <n>        スレッド数 (default 1)
@@ -47,6 +49,11 @@ struct Args {
     games: usize,
     ms: u64,
     ponder: bool,
+    /// 深さ固定で測る。**効き方が変わる** — 同じ深さへより速く着くので、
+    /// 見るのは到達深さではなく 1 手にかかった時間。
+    fixed: bool,
+    /// 深さ固定のときに先読みへ与える時間 (相手の考慮時間の見立て)。
+    ponder_ms: u64,
     depth: u32,
     solve_empties: u8,
     threads: usize,
@@ -62,6 +69,8 @@ impl Default for Args {
             games: 10,
             ms: 200,
             ponder: true,
+            fixed: false,
+            ponder_ms: 300,
             depth: 20,
             solve_empties: 14,
             threads: 1,
@@ -88,6 +97,8 @@ fn parse_args() -> Result<Args, String> {
                     m => return Err(format!("--ponder は on か off ({m})")),
                 }
             }
+            "--fixed-depth" => a.fixed = true,
+            "--ponder-ms" => a.ponder_ms = val()?.parse().map_err(|_| "bad --ponder-ms")?,
             "--depth" => a.depth = val()?.parse().map_err(|_| "bad --depth")?,
             "--solve-empties" => {
                 a.solve_empties = val()?.parse().map_err(|_| "bad --solve-empties")?
@@ -180,6 +191,9 @@ fn main() -> ExitCode {
     let budget = Duration::from_millis(args.ms);
     let mut rng = Rng(args.seed | 1);
     let (mut da, mut db) = (Depths::default(), Depths::default());
+    // 深さ固定のときに見る数字。**同じ深さへ何ミリ秒で着いたか**
+    let (mut ta, mut tb) = (0u128, 0u128);
+    let (mut na, mut nb) = (0u64, 0u64);
     let (mut wins, mut losses, mut draws) = (0u32, 0u32, 0u32);
     let mut ponder_nodes = 0u64;
 
@@ -212,7 +226,14 @@ fn main() -> ExitCode {
             }
             let deadline = Instant::now() + budget;
             if a_turn {
-                let ev = a.choose_within(&board, Some(deadline));
+                let t0 = Instant::now();
+                let ev = if args.fixed {
+                    a.choose(&board)
+                } else {
+                    a.choose_within(&board, Some(deadline))
+                };
+                ta += t0.elapsed().as_micros();
+                na += 1;
                 da.add(ev.depth);
                 let Some(p) = ev.pos else { break };
                 board.make_move_unchecked(p);
@@ -220,10 +241,22 @@ fn main() -> ExitCode {
                 走るので、A の持ち時間は減らない。測定でも B の持ち時間と
                 同じ長さだけ回す */
                 if args.ponder && !board.is_game_over() && board.movable_count() > 0 {
-                    ponder_nodes += a.ponder(&board, Instant::now() + budget);
+                    let slice = if args.fixed {
+                        Duration::from_millis(args.ponder_ms)
+                    } else {
+                        budget
+                    };
+                    ponder_nodes += a.ponder(&board, Instant::now() + slice);
                 }
             } else {
-                let ev = b.choose_within(&board, Some(deadline));
+                let t0 = Instant::now();
+                let ev = if args.fixed {
+                    b.choose(&board)
+                } else {
+                    b.choose_within(&board, Some(deadline))
+                };
+                tb += t0.elapsed().as_micros();
+                nb += 1;
                 db.add(ev.depth);
                 let Some(p) = ev.pos else { break };
                 board.make_move_unchecked(p);
@@ -258,6 +291,19 @@ fn main() -> ExitCode {
         args.ms, args.depth, args.solve_empties, args.threads, args.games,
     );
     println!("  A = ポンダリング {m} / B = しない");
+    if args.fixed {
+        let (aa, bb) = (
+            ta as f64 / na.max(1) as f64 / 1000.0,
+            tb as f64 / nb.max(1) as f64 / 1000.0,
+        );
+        println!(
+            "  1 手の時間  A {:.1} ms  B {:.1} ms   {:+.1}% ({} ms の先読み)",
+            aa,
+            bb,
+            100.0 * (aa - bb) / bb,
+            args.ponder_ms,
+        );
+    }
     println!(
         "  到達深さ  A {:.2}  B {:.2}   差 {:+.2} 段",
         da.avg(),

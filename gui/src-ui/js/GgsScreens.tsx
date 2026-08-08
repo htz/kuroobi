@@ -976,10 +976,10 @@ export function GgsSettings({ snap }: { snap: GgsSnapshot }) {
                               ...Array.from({ length: cores || Math.max(threads, 1) }, (_, i) =>
                                 [String(i + 1), String(i + 1)] as [string, string])]} />
           </Field>
-          {/* 先読み。**「深さ固定」では効かない**ので、そのときは押せなく
-              して理由をその場に出す (規則 61 — 直し方は操作のそばに) */}
+          {/* 先読み。**「深さ固定」でも効く** — 効き方が「深く」から
+              「速く」に変わるだけ (同じ深さへ 1/3 の時間で着く。実測) */}
           <Field label="先読み">
-            <Segmented value={ponder ? 'on' : 'off'} disabled={pace === 'depth'}
+            <Segmented value={ponder ? 'on' : 'off'}
                        onChange={(v) => setPonder(v === 'on')}
                        options={[{ value: 'on', label: 'する' },
                                  { value: 'off', label: 'しない' }]} />
@@ -988,8 +988,9 @@ export function GgsSettings({ snap }: { snap: GgsSnapshot }) {
             相手が考えている間に、相手が指すと思う手の先を読んでおきます。
             自分の持ち時間は減りません。
             {pace === 'depth'
-              ? '「深さ固定」では働きません — 探索がどのみち最後まで走るので、先に読んでも得るものがないためです。'
-              : '当たれば同じ持ち時間で 1 段ほど深く読めます (実測 +1.25 段)。外れた回は読み直します。'}
+              ? '「深さ固定」では、同じ深さまで読み終えるのが速くなります (実測でおよそ 1/3 の時間)。'
+              : '当たれば同じ持ち時間で 1 段ほど深く読めます (実測 +1.25 段)。'}
+            外れた回は読み直します。
           </Note>
         </Section>
 
