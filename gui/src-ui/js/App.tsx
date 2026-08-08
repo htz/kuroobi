@@ -220,10 +220,17 @@ export function App() {
         }
         // "study:graph" は分析まで始める (進み具合の見た目を確かめるため)
         if (lv === 'graph') setTimeout(() => autoGraph.current?.(), 400);
+        // "study:graph:学習" のようにドックの見出しも指定できる。分析は
+        // `Activity.local` を立てるので、**学習が譲っている見た目**はここで撮れる
+        if (extra) setTab(extra);
         return;
       }
       if (who === 'both') g.setSide('both');
       if (lv !== undefined && Number.isFinite(+lv)) g.setLevel(+lv);
+      /* "both:12:学習:nobook" — 定石を切ってから始める (撮るためだけの入口)。
+         **序盤が定石から返ると探索を呼ばない**ので、学習が譲る条件
+         (`Activity.local`) が立たず「譲り中」の行を一度も撮れなかった */
+      if (v.endsWith(':nobook')) g.setUseBook(false);
       // "both:1:学習" のようにドックの見出しも指定できる。取り込みの状況は
       // 対局が終わって学習が走っている間しか出ないので、その枠を撮る入口
       if (extra) setTab(extra);
