@@ -373,6 +373,9 @@ function GgsLobby({ snap, onNav }: { snap: GgsSnapshot; onNav: (id: NavId) => vo
       <div className="k-scroll" style={{ flex: 1, minWidth: 0, padding: 'var(--sp-4) var(--sp-2) 0' }}>
         <Section title="対局中" aside={games.length ? `${games.length} 局` : undefined}>
           {!games.length && <Empty>進行中の対局はありません。</Empty>}
+          {/* 行どうしは詰める。節の余白 (--sp-3 = 12px) が行間に入ると、
+              一覧ではなく箇条書きに見える (定石の木・学習ログでも踏んだ) */}
+          <div style={{ display: 'flex', flexDirection: 'column' }}>
           {games.map((o) => (
             <Row key={o.id}
                  title={`${o.names[0] || '?'} 対 ${o.names[1] || '?'}`}
@@ -388,6 +391,7 @@ function GgsLobby({ snap, onNav }: { snap: GgsSnapshot; onNav: (id: NavId) => vo
                      {o.watching ? '観戦をやめる' : '観戦'}
                    </Button>} />
           ))}
+          </div>
         </Section>
 
         <Section title="対局の申し込み">
@@ -1033,6 +1037,8 @@ function GgsResults({ snap, onKifu }: {
 
       <Section title="終わった対局" aside={<span>{rows.length}</span>}>
         {!rows.length && <Empty>まだ記録がありません。</Empty>}
+        {/* 行どうしは詰める (節の余白が行間に入る) */}
+        <div style={{ display: 'flex', flexDirection: 'column' }}>
         {rows.map((r) => (
           <ResultRow key={r.id + r.seq} opponent={r.opp}
                      win={(r.my_diff ?? 0) > 0} draw={r.my_diff === 0}
@@ -1044,6 +1050,7 @@ function GgsResults({ snap, onKifu }: {
                      onClick={() => onKifu(`${r.opp} との対局`, r.ggf || r.kifu, r.archive)}
                      dim={!r.ggf && !r.kifu && !r.archive} />
         ))}
+        </div>
       </Section>
     </div>
   );
@@ -1124,6 +1131,8 @@ function GgsUsers({ snap, onNav, onKifu }: {
                  }} options={[{ value: 'who', label: '接続中' }, { value: 'top', label: '上位' }]} />
                </>}>
         {!rows.length && <Empty>いません。</Empty>}
+        {/* 行どうしは詰める (節の余白が行間に入る) */}
+        <div style={{ display: 'flex', flexDirection: 'column' }}>
         {slice.map((u) => (
           <button key={u.name} type="button" className="k-row" onClick={() => setSel(u.name)}
             style={{
@@ -1147,6 +1156,8 @@ function GgsUsers({ snap, onNav, onKifu }: {
             {snap.ongoing.some((o) => o.names.includes(u.name)) && <Tag tone="ok">対局中</Tag>}
           </button>
         ))}
+        </div>
+        {/* ページ送りは一覧の外。詰めた一覧のすぐ下だと行に見える */}
         {rows.length > perPage && (
           <div style={{
             display: 'flex', alignItems: 'center', gap: 'var(--sp-2)',
