@@ -318,6 +318,20 @@ export function Overlay({ onClose, children }: { onClose?: () => void; children:
     window.addEventListener('keydown', on);
     return () => window.removeEventListener('keydown', on);
   }, [onClose]);
+
+  /* **焦点を中へ入れ、閉じたら元へ返す。**`aria-modal` を名乗っているのに
+     焦点は後ろに残ったままで、Tab を押すと暗幕の下の押せないものを
+     順に辿っていた。入れる先は最初の押せるもの (棋譜の読み込みなら
+     貼り付け先の欄) — 無ければ器そのもの。 */
+  const box = React.useRef<HTMLDivElement>(null);
+  React.useEffect(() => {
+    const back = document.activeElement as HTMLElement | null;
+    const first = box.current?.querySelector<HTMLElement>(
+      'textarea:not(:disabled), input:not(:disabled), button:not(:disabled), select:not(:disabled), [tabindex]:not([tabindex="-1"])');
+    (first ?? box.current)?.focus();
+    return () => back?.focus?.();
+  }, []);
+
   return (
     <div onClick={onClose} style={{
       position: 'absolute', inset: 0, zIndex: 30,
@@ -325,7 +339,7 @@ export function Overlay({ onClose, children }: { onClose?: () => void; children:
       padding: 'var(--sp-5)',
     }}>
       {/* 中身を押したときに閉じない */}
-      <div onClick={(e) => e.stopPropagation()}>{children}</div>
+      <div ref={box} tabIndex={-1} onClick={(e) => e.stopPropagation()}>{children}</div>
     </div>
   );
 }
