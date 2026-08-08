@@ -1121,6 +1121,8 @@ pub fn run(
             // 返し、本文 (ヘッダ行 + | 行 + READY) は後から届くので、ヘッダ行を
             // 見てから収集を始める。
             let mut pending: Vec<String> = Vec::new();
+            // 進行中の対局を聞き直す時刻 (login 直後の 1 回は下で送る)
+            let mut next_match_at = Instant::now() + Duration::from_secs(60);
             let mut capture: Option<(String, Vec<String>)> = None; // (kind, lines)
             let mut next_ask_at: Option<Instant> = None;
             let mut want_quit = false;
@@ -1442,6 +1444,14 @@ pub fn run(
                         send!(ctx, "tell /os client -");
                         send!(ctx, "tell /os trust +");
                         send!(ctx, "tell /os rated +");
+                        /* **他人の対局の開始・終了は「通知」で届く。**購読しないと
+                           一生届かない — 一覧は login 時の `tell /os match` の
+                           1 回きりになり、そのとき誰も打っていなければロビーの
+                           「対局中」は空のままになる。
+                           `+ match` / `- match` を受ける側の処理は前からあるのに、
+                           **購読だけが抜けていた** (finger が `notify (-)` の
+                           まま = 空だったのが証拠)。 */
+                        send!(ctx, "tell /os notify +");
                         send!(ctx, "tell /os open 1");
                         send!(ctx, "chann + .chat");
                         pending.push("who".into());
@@ -1765,6 +1775,20 @@ pub fn run(
                             );
                         }
                     }
+                }
+
+                // ---------- 進行中の対局を取り直す ----------
+                /* **通知だけに頼らない。**他人の対局の開始・終了は
+                   `+ match` / `- match` で届くはずだが、購読が効いていな
+                   かった間、ロビーの「対局中」は login 時の 1 回きりの
+                   一覧のまま (そのとき誰も打っていなければ空のまま) だった。
+                   **一度でも取りこぼすと二度と埋まらない**作りなので、
+                   60 秒ごとに聞き直す。`tell /os match` は一覧を返すだけで
+                   何も動かさない。 */
+                if Instant::now() >= next_match_at {
+                    next_match_at = Instant::now() + Duration::from_secs(60);
+                    pending.push("match_list".into());
+                    send!(ctx, "tell /os match");
                 }
 
                 // ---------- 観戦の失敗を拾う ----------
