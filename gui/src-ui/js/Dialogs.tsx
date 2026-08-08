@@ -356,9 +356,9 @@ export function Settings({ prefs, setPref, ggs, onClose }: {
           </Row2>
         </Section>
         <Section title="数値">
-          {/* 設計の 単位 / 視点 は置かない。単位は石差しか無く、視点は
-              「盤の向き」と同じもの。**選べない行を置くと、触れるのに
-              変わらない場所が増えるだけ** */}
+          {/* 設計の 単位 は置かない (石差しか無い)。**視点は「盤の向き」では
+              なく評価値の符号**で、絵も設定では黒固定にして検討の
+              ツールバーで切り替える形にしている (`9677afb` で入れた)。 */}
           <Row2 label="小数">
             <Segmented value={String(prefs.decimals)}
                        onChange={(v) => setPref('decimals', +v as Prefs['decimals'])}
