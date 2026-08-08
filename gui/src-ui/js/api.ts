@@ -52,6 +52,8 @@ export const api = {
   /** 定石を眺める。kifu は初期局面からの手順 ("f5d6" 形式、空なら初期局面)。 */
   bookNode: (kifu: string) => call<BookNode>('book_node', { kifu }),
   autoplay: () => call<string>('autoplay', {}),
+  /** 画面確認用のテーマ固定 (KUROOBI_THEME)。空なら好みに従う。 */
+  themeOverride: () => call<string>('theme_override', {}),
   /** 名前・パス・実在・大きさ (byte)・中身の見分け。 */
   resourceStatus: () => call<[string, string, boolean, number, string][]>('resource_status', {}),
   pickResource: (kind: string) => call<string | null>('pick_resource', { kind }),

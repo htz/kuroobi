@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useState } from 'react';
+import { api } from './api';
 
 /* 見え方の好み。エンジンの動きには一切関わらないので、バックエンドには
  * 持たせず localStorage に置く (機械ごとの設定でよく、保存の往復も要らない)。
@@ -85,13 +86,24 @@ export function usePrefs() {
     return () => window.removeEventListener('storage', onStorage);
   }, []);
 
+  /* 画面確認用の固定 (`KUROOBI_THEME=light`)。テーマの切り替えは
+     設定 → 表示 にしかなく、撮るたびに人が押すしかなかった。
+     **保存はしない**ので、次に普通に起動すれば好みどおりに戻る。 */
+  const [forced, setForced] = useState<Theme | ''>('');
+  useEffect(() => {
+    void api.themeOverride()
+      .then((t) => { if (t === 'light' || t === 'dark') setForced(t); })
+      .catch(() => { /* Tauri 外や古いバイナリでは効かないだけ */ });
+  }, []);
+
   // テーマは :root の属性で切り替える。`os` のときは属性を外して
   // prefers-color-scheme に任せる (tokens.css がその形で書いてある)
   useEffect(() => {
     const el = document.documentElement;
-    if (prefs.theme === 'os') el.removeAttribute('data-theme');
-    else el.setAttribute('data-theme', prefs.theme);
-  }, [prefs.theme]);
+    const t = forced || prefs.theme;
+    if (t === 'os') el.removeAttribute('data-theme');
+    else el.setAttribute('data-theme', t);
+  }, [prefs.theme, forced]);
 
   // 石返しの長さは CSS 変数。base.css の .k-flip がこれを見る
   useEffect(() => {

@@ -466,6 +466,16 @@ fn autoplay() -> String {
     std::env::var("KUROOBI_AUTOPLAY").unwrap_or_default()
 }
 
+/// 画面確認用: テーマを固定する (`KUROOBI_THEME=light` / `dark`)。
+///
+/// テーマの切り替えは 設定 → 表示 のタブにしかなく、撮るたびに人が押す
+/// しかなかった。ライトの確認が後回しになる原因だったので、環境変数で
+/// 指定できるようにする。**保存はしない** — その起動の間だけ効く。
+#[tauri::command]
+fn theme_override() -> String {
+    std::env::var("KUROOBI_THEME").unwrap_or_default()
+}
+
 /// book を使えるか (画面の表示に使う)。エンジンの初期化は重いので、
 /// ファイルの有無だけで答える。
 #[tauri::command]
@@ -2101,6 +2111,7 @@ fn main() {
             has_book,
             book_node,
             autoplay,
+            theme_override,
             resource_status,
             pick_resource,
             set_resource,
