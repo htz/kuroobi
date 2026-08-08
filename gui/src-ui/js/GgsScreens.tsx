@@ -6,7 +6,7 @@ import {
   fingerGroups, fingerValue, hasJapanese, normKey, parseCond, translate, useClocks,
   type ClockSide, type ClockView,
 } from './ggs';
-import { Empty, EmptyState, List, picked, Section, TableHead, TableRow } from './components/layout';
+import { Empty, EmptyState, List, Modal, Overlay, picked, Section, TableHead, TableRow } from './components/layout';
 import { Button, Segmented, Select, TextField, Toggle } from './components/primitives';
 import { Strength } from './components/strength';
 import { Confirm, PickOne } from './Dialogs';
@@ -1198,6 +1198,85 @@ function fmtDay(secs: number): string {
   return same ? `${p2(d.getHours())}:${p2(d.getMinutes())}` : `${d.getMonth() + 1}/${p2(d.getDate())}`;
 }
 
+
+/* プレイヤーの名刺 (設計 §6 の「浮くもの」)。
+ *
+ * **全画面の詳細を置き換えるものではなく、その前の下読み。**「詳しく見る」で
+ * 全画面へ渡す。対局中に相手を調べたいときに、盤から離れずに済むのが値打ち。
+ *
+ * 絵は 在室 / 最終対局 / 直近 10 戦 / レート推移 / 勝敗表 / 観戦 も描いて
+ * いたが、**エンジンにもサーバーにも口が無い**ことを伝えたら絵から落ちた。
+ * いま出せるのは finger の「対局の申し込み」4 行と対戦履歴だけ。
+ */
+function UserCard({ snap, name, onClose, onDetail, onAsk, onKifu }: {
+  snap: GgsSnapshot; name: string;
+  onClose: () => void;
+  onDetail: () => void;
+  onAsk: () => void;
+  onKifu: (title: string, kifu: string, archive?: string) => void;
+}) {
+  const [tab, setTab] = useState('プロフィール');
+  useEffect(() => { ggsApi.finger(name).catch(() => {}); }, [name]);
+  useEffect(() => { ggsApi.history(name === snap.login ? '' : name).catch(() => {}); }, [name, snap.login]);
+
+  const u = snap.users.find((x) => x.name === name);
+  const m = /(\d+(?:\.\d+)?)@\s*(\d+(?:\.\d+)?)/.exec(u?.raw || '');
+  const rate = m ? m[1] : (u?.rating != null ? u.rating.toFixed(1) : '');
+  const dev = m ? Math.round(parseFloat(m[2])) : null;
+  const fields = snap.fingers[name]?.fields ?? [];
+  const rows = snap.history[name] ?? [];
+
+  /* 「対局の申し込み」のうち**条件式でない 4 行**だけ。条件式は木で描くもので、
+     340px の名刺には収まらない (全画面の詳細が持つ) */
+  const facts = (fingerGroups(fields).find((g) => g.title === '対局の申し込み')?.rows ?? [])
+    .filter((r) => !['accept', 'decline', 'request'].includes(normKey(r.key).replace(/\(.*\)/, '')));
+
+  return (
+    <Overlay onClose={onClose}>
+      <Modal title={name} onClose={onClose}
+             sub={rate ? `レート ${rate}${dev != null ? ` ±${dev}` : ''}` : undefined}
+             band={<Segmented value={tab} onChange={setTab}
+                              options={[{ value: 'プロフィール', label: 'プロフィール' },
+                                        { value: '対戦履歴', label: '対戦履歴' }]} />}
+             scroll
+             actions={<>
+               <Button size="field" onClick={onDetail}>詳しく見る</Button>
+               <span style={{ marginLeft: 'auto' }} />
+               <Button size="field" variant="primary" onClick={onAsk}>申し込む</Button>
+             </>}>
+        {tab === 'プロフィール' ? (
+          <Section title="対局の申し込み">
+            {!facts.length && <Empty>読み込んでいます…</Empty>}
+            {facts.map((r) => (
+              <div key={r.key} style={{ display: 'flex', alignItems: 'center',
+                                        gap: 'var(--sp-3)', fontSize: 'var(--fs-5)' }}>
+                <span style={{ color: 'var(--sub)' }}>{r.label}</span>
+                <span style={{ marginLeft: 'auto', overflow: 'hidden',
+                               textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                  {r.value || '—'}
+                </span>
+              </div>
+            ))}
+          </Section>
+        ) : (
+          <>
+            {!rows.length && <Empty>対戦履歴はありません。</Empty>}
+            <List>
+              {rows.map((h) => (
+                <Row key={h.id}
+                     title={`${h.black} 対 ${h.white}`}
+                     sub={`${h.at} · ${gtypeLabel(h.gtype)} · ${h.score}`}
+                     title2="棋譜を見る"
+                     onClick={() => onKifu(`${h.black} 対 ${h.white}`, '', h.id)} />
+              ))}
+            </List>
+          </>
+        )}
+      </Modal>
+    </Overlay>
+  );
+}
+
 /* ---------------- プレイヤー ----------------
  *
  * 接続中の一覧と、選んだ人の詳細。詳細の頭には名前だけでなくレートと
@@ -1208,6 +1287,17 @@ function GgsUsers({ snap, onNav, onKifu }: {
   snap: GgsSnapshot; onNav: (id: NavId) => void;
   onKifu: (title: string, kifu: string, archive?: string) => void;
 }) {
+  /* 一覧 → 名刺 → 全画面の詳細、の 3 段 (設計 §6)。**一覧から直に全画面へ
+     飛ばさない** — 相手を軽く見たいだけのときに一覧が消えるのは重い。
+     `card` が名刺、`sel` が全画面。 */
+  const [card, setCard] = useState<string | null>(null);
+  /* 確認用の入口。**繋がずに名刺の枠だけ撮る**ための道
+     (`KUROOBI_GGS_AUTOVIEW=users:card`)。中身は空のままでよく、
+     見たいのは 340 の器・3 段・足の 2 つの釦 */
+  useEffect(() => {
+    void ggsApi.autoview().then((v) => { if (v === 'users:card') setCard(snap.login || '—'); })
+      .catch(() => {});
+  }, [snap.login]);
   const [sel, setSel] = useState<string | null>(null);
   const [mode, setMode] = useState<'who' | 'top'>('who');
   // レートは形式ごとに別のプール。混ぜると順位が意味を持たないので、
@@ -1232,6 +1322,12 @@ function GgsUsers({ snap, onNav, onKifu }: {
 
   return (
     <div className="k-scroll" style={{ flex: 1, minHeight: 0, padding: 'var(--sp-4) var(--sp-4) 0' }}>
+      {card && (
+        <UserCard snap={snap} name={card} onKifu={onKifu}
+                  onClose={() => setCard(null)}
+                  onDetail={() => { setSel(card); setCard(null); }}
+                  onAsk={() => { setCard(null); onNav('ggs-lobby'); }} />
+      )}
       <Section title="自分のレート"
                aside={<Button onClick={() => {
                  for (const t of ['8', '8r']) void ggsApi.rank(t, snap.login);
@@ -1282,7 +1378,7 @@ function GgsUsers({ snap, onNav, onKifu }: {
         {/* 行どうしは詰める (節の余白が行間に入る) */}
         <List>
         {slice.map((u, i) => (
-          <TableRow key={u.name} pad="var(--sp-4)" onClick={() => setSel(u.name)}>
+          <TableRow key={u.name} pad="var(--sp-4)" onClick={() => setCard(u.name)}>
             {mode === 'top' && (
               <span style={{ width: 26, textAlign: 'right', fontSize: 'var(--fs-7)',
                              color: 'var(--sub)', fontVariantNumeric: 'tabular-nums' }}>

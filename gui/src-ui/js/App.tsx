@@ -298,7 +298,9 @@ export function App() {
    * GGS の画面は開くまで描かれないので、撮るには行き先を指定する経路が要る。 */
   useEffect(() => {
     void ggsApi.autoview().then((v) => {
-      if (v) setNavRaw(('ggs-' + v) as NavId);
+      // "users:card" のように画面の中の状態まで指定できる。行き先は前半だけ
+      const to = v.split(':')[0];
+      if (to) setNavRaw(('ggs-' + to) as NavId);
     }).catch(() => {});
   }, []);
 
