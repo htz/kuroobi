@@ -100,11 +100,17 @@ export function LearnLog({ items, onOpen, onUndo, onBook }: {
                         onClick={() => setSel(keyOf(e))}
                         style={{
                           width: '100%', display: 'flex', alignItems: 'center', gap: 'var(--sp-2)',
-                          height: 'var(--h-row)', border: 0, borderRadius: 'var(--r-2)',
+                          height: 'var(--h-row)', border: 0,
                           borderBottom: '1px solid var(--border-weak)',
-                          background: on ? 'var(--card)' : 'transparent',
+                          /* **選ばれている行の見せ方は 1 つに揃える。**棋譜の表・
+                             会話の一覧・手合いの一覧はどれも accent 14% の面 +
+                             左の 2px。ここだけ `--card` の面だけで、しかも
+                             角丸を持っていたので、同じ「選ばれている」が
+                             画面ごとに違って見えていた */
+                          background: on ? 'color-mix(in srgb, var(--accent) 14%, transparent)' : 'transparent',
+                          boxShadow: on ? 'inset 2px 0 0 var(--accent)' : 'none',
                           padding: '0 var(--sp-1)', fontSize: 'var(--fs-6)',
-                          color: 'var(--text)', textAlign: 'left', cursor: 'pointer',
+                          color: 'var(--text)', textAlign: 'left',
                         }}>
                   <span style={{
                     flex: 1, minWidth: 0, overflow: 'hidden',
