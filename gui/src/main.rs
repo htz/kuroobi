@@ -2009,6 +2009,12 @@ fn ggs_set_standby(app: State<App>, cfg: ggs::StandbyCfg) -> Result<(), String> 
 
 #[tauri::command]
 fn ggs_snapshot(app: State<App>) -> Result<ggs::Snapshot, String> {
+    /* 画面確認用。**繋がずに GGS の画面を描かせる** — ロビー・プレイヤー・
+       対局結果は相手が要るので、一度も実機で確かめられていなかった。
+       操作は通らない (見た目を確かめるためだけ)。 */
+    if std::env::var("KUROOBI_GGS_DEMO").is_ok() {
+        return Ok(ggs::demo_snapshot());
+    }
     let snap = {
         let guard = app.ggs.lock().unwrap();
         let h = guard
@@ -2094,6 +2100,12 @@ fn main() {
             // GGS 側にはローカル探索の停止ハンドルと稼働記録を渡す。
             // 自分の GGS 対局が始まったらローカルの探索を止めるため
             let st = app.state::<App>();
+            /* 見た目を確かめるためだけの作り物 (`KUROOBI_GGS_DEMO`) では
+               **通信そのものを始めない。** 始めると「未接続」のスナップ
+               ショットを繰り返し流してきて、作り物を上書きしてしまう。 */
+            if std::env::var("KUROOBI_GGS_DEMO").is_ok() {
+                return Ok(());
+            }
             let handle = ggs::spawn(app.handle().clone(), st.stop.clone(), st.activity.clone());
             // 保存済みの認証情報があれば起動時に自動ログインする。
             // 画面確認の自動運転 (KUROOBI_AUTOPLAY) とデモ

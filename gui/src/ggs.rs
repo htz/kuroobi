@@ -343,6 +343,88 @@ pub struct Snapshot {
     pub fetched_ggf: Option<FetchedGgf>,
 }
 
+
+/// 画面確認用の作り物のスナップショット (`KUROOBI_GGS_DEMO=1`)。
+///
+/// **GGS の画面は繋がないと何も出ない。** ロビー・プレイヤー・対局結果は
+/// 相手が要るので、寸法も配色も一度も実機で確かめられていなかった
+/// (台帳の「未検証」の大半がこれ)。繋ぐには許可が要り、しかも相手が
+/// 居るとは限らないので、**中身だけを作って画面を描かせる**口を用意する。
+///
+/// 打つ・申し込むといった操作は繋がっていないので通らない。**見た目を
+/// 確かめるためだけのもの。**
+pub fn demo_snapshot() -> Snapshot {
+    let mut s = Snapshot {
+        conn: "online".into(),
+        login: "kuroobi".into(),
+        ..Default::default()
+    };
+    s.my_ranks = vec![
+        RankRow { gtype: "8".into(), name: "kuroobi".into(), rating: 1842.3, dev: 34.0, rank: 12, wins: 128, losses: 74, draws: 6 },
+        RankRow { gtype: "8r16".into(), name: "kuroobi".into(), rating: 1795.0, dev: 51.0, rank: 27, wins: 41, losses: 38, draws: 2 },
+    ];
+    s.users = vec![
+        ("saio", 2245.8, 34.0), ("tamaki", 2011.4, 46.0), ("edax-bot", 2280.1, 22.0),
+        ("nara", 1688.2, 91.0), ("kei", 1488.9, 216.0), ("newbie", 1200.0, 350.0),
+    ]
+    .into_iter()
+    .map(|(n, r, d)| UserRow {
+        name: n.into(),
+        rating: Some(r),
+        dev: Some(d),
+        raw: format!("{n} {r}@{d}"),
+    })
+    .collect();
+    s.ranking = s.users.clone();
+    s.ongoing = vec![
+        OngoingView {
+            id: ".71.0".into(),
+            raw: "tamaki 対 edax-bot".into(),
+            watching: true,
+            names: vec!["tamaki".into(), "edax-bot".into()],
+            ratings: vec!["2011.4".into(), "2280.1".into()],
+            gtype: "s8r14".into(),
+            mine: false,
+        },
+        OngoingView {
+            id: ".72.0".into(),
+            raw: "nara 対 kei".into(),
+            watching: false,
+            names: vec!["nara".into(), "kei".into()],
+            ratings: vec!["1688.2".into(), "1488.9".into()],
+            gtype: "8".into(),
+            mine: false,
+        },
+    ];
+    s.offers = vec![
+        Offer {
+            id: "1".into(),
+            raw: "+ .1 saio 2245.8 8r16 15:00 R".into(),
+            incoming: true,
+            names: vec!["saio".into(), "kuroobi".into()],
+            gtype: "s8r16".into(),
+            time: "00:15:00".into(),
+            rated: true,
+        },
+        Offer {
+            id: "2".into(),
+            raw: "+ .2 tamaki 2011.4 8 10:00".into(),
+            incoming: false,
+            names: vec!["tamaki".into(), "nara".into()],
+            gtype: "8".into(),
+            time: "00:10:00".into(),
+            rated: false,
+        },
+    ];
+    s.stored = vec![StoredView {
+        id: "3".into(),
+        raw: "tamaki".into(),
+        opp: "tamaki".into(),
+        gtype: "s8r16".into(),
+    }];
+    s
+}
+
 /// 終わった対局から取り出した棋譜。
 #[derive(Clone, Serialize)]
 pub struct FetchedGgf {
