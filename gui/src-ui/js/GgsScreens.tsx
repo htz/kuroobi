@@ -249,9 +249,13 @@ export function GgsChat({ snap }: { snap: GgsSnapshot }) {
 
   return (
     <div style={{ flex: 1, minHeight: 0, display: 'flex' }}>
-      {/* 会話の一覧。幅は手合い一覧と同じ --w-list に揃える */}
+      {/* 会話の一覧は `--w-lobby` (174px)。**手合い一覧の `--w-list` を
+          借りない** — 規則 6 は「役割が違う列は幅を借りない」と決めている。
+          設計 §6 のこの列も 173px で、`--w-lobby` の「GGS 左カラム」という
+          説明はここのことだった (ロビーには 174 幅の列が無い)。
+          相手の名前は溢れたら省略記号で切る。 */}
       <aside style={{
-        width: 'var(--w-list)', flex: 'none', borderRight: '1px solid var(--border)',
+        width: 'var(--w-lobby)', flex: 'none', borderRight: '1px solid var(--border)',
         minHeight: 0, display: 'flex', flexDirection: 'column',
       }}>
         <div style={{
