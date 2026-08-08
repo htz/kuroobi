@@ -16,7 +16,7 @@ import type { LogLine } from './components/ggs';
 export const sqName = (sq: number): string => 'abcdefgh'[Math.floor(sq / 8)] + (sq % 8 + 1);
 
 /** パス込みで 1 手ごとに手番が入れ替わるので、奇数手 (i が偶数) が黒。 */
-export const colorOf = (i: number): StoneColor => (i % 2 === 0 ? 'b' : 'w');
+const colorOf = (i: number): StoneColor => (i % 2 === 0 ? 'b' : 'w');
 
 /** 盤の 64 マス。エンジンは number[] で返すが、値は 0/1/2 しか入らない。 */
 export const cellsOf = (v: GameView): Cell[] => v.cells as Cell[];

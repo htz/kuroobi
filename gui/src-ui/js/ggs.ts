@@ -542,7 +542,7 @@ export function condToSrc(c: Cond): string {
 /// 入れ子で見せる。
 ///
 /// `&` が `|` より強い (GGS の `tell /os help formula` に従う)。
-export function parseFormula(src: string): Formula {
+function parseFormula(src: string): Formula {
   // 空白だけの断片を落とす。落とさないと `& (` の間の " " を葉として食い、
   // 続く括弧が束ねられずに空の札が出る
   const toks = (src.match(/\(|\)|&|\||[^()&|]+/g) ?? [])

@@ -254,7 +254,7 @@ function Fact({ label, value }: { label: string; value: string }) {
 
 /** 取り込んだ時刻。今日のものは時刻だけ、それ以外は日付だけにする —
  *  並べたときに縦が揃い、かつ「さっき入ったもの」がすぐ分かる。 */
-export function fmtWhen(secs: number): string {
+function fmtWhen(secs: number): string {
   const d = new Date(secs * 1000);
   const now = new Date();
   const sameDay = d.getFullYear() === now.getFullYear() && d.getMonth() === now.getMonth()

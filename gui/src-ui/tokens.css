@@ -65,7 +65,8 @@
   /* 影 — 浮くものだけが持つ。大きなぼかしは Modal / Popover / Toast だけ */
   --sh-1:0 1px 2px rgba(0,0,0,.28);
   --sh-2:0 20px 48px rgba(0,0,0,.6);
-  --sh-stone:0 2px 3px rgba(0,0,0,.28);
+  /* 石の影は CSS の box-shadow ではなく svg の円 (board.tsx) で描く。
+     色は --stone-shadow が持つので、ここに影のトークンは要らない */
 
   /* 文字 */
   --ff:-apple-system,BlinkMacSystemFont,"Hiragino Sans","Helvetica Neue",sans-serif;

@@ -135,22 +135,9 @@ export function Toggle({ checked, onChange, label }: { checked: boolean; onChang
   );
 }
 
-export function Slider({ value, min, max, onChange }: { value: number; min: number; max: number; onChange?: (v: number) => void }) {
-  const pct = ((value - min) / (max - min)) * 100;
-  return (
-    <div style={{ padding: '6px var(--sp-2) 0' }}>
-      <div style={{ height: 4, borderRadius: 3, background: 'var(--track)', position: 'relative' }}>
-        <span style={{ position: 'absolute', inset: '0 auto 0 0', width: pct + '%', borderRadius: 3, background: 'var(--accent)' }} />
-        <input type="range" min={min} max={max} value={value} onChange={e => onChange?.(+e.target.value)}
-          style={{ position: 'absolute', inset: '-8px 0', width: '100%', opacity: 0, cursor: 'default' }} />
-        <span style={{
-          position: 'absolute', left: pct + '%', top: -6, width: 16, height: 16, borderRadius: '50%',
-          background: 'var(--text)', transform: 'translateX(-8px)', boxShadow: 'var(--sh-1)', pointerEvents: 'none',
-        }} />
-      </div>
-    </div>
-  );
-}
+/* Slider は落とした (2026-08-08)。規則 68 を撤回して強さのカスタムを
+ * 3 列の `Select` にした時点で、押す場所がどこにも無くなっていた。
+ * **カタログにしか無い部品は置かない** (規則 70) — 要るときに書き直す。 */
 
 /* 5 個以上の選択肢。ネイティブの <select> を透明にして重ね、見た目だけ自前で描く
  * （macOS のポップアップの見た目はテーマに合わないが、開いたときの挙動は

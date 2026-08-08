@@ -237,7 +237,7 @@ export type Match = {
   result?: string;   // 終局時 +8 等
 };
 
-export const matchTitle = (m: Match) =>
+const matchTitle = (m: Match) =>
   m.mine ? `自分 対 ${m.opponent ?? '?'}` : `${m.black} 対 ${m.white}`;
 
 export function MatchRow({ m, active, onSelect, onClose }: {
@@ -331,7 +331,7 @@ function CondChip({ c }: { c: Cond }) {
 }
 
 /* 何がサーバーへ行くのかは隠さない。逃げ道として生の式も書けるようにする */
-export function FormulaWire({ text }: { text: string }) {
+function FormulaWire({ text }: { text: string }) {
   return (
     <div style={{
       display: 'flex', alignItems: 'center', gap: 'var(--sp-3)', padding: '9px var(--sp-3)',

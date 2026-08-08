@@ -21,7 +21,7 @@ const SIZE = PAD * 2 + CELL * 8;   // 880
 
 /* 畳の pattern。AppFrame が自分で描くので、画面側で置く必要はない。
  * （運用の約束にしていたときは、置き忘れると静かに畳が消えていた） */
-export const TATAMI_ID = 'kb-tatami';
+const TATAMI_ID = 'kb-tatami';
 
 export function BoardDefs() {
   const lines: React.ReactNode[] = [];
@@ -58,7 +58,7 @@ export type Cell = 0 | 1 | 2;            // 0 空 / 1 黒 / 2 白
 export type EvalSource = { book: true } | { exact: true } | { depth: number };
 export type EvalInfo = { score: number; src: EvalSource; best?: boolean };
 
-export const sourceLabel = (s: EvalSource) =>
+const sourceLabel = (s: EvalSource) =>
   'book' in s ? '定石' : 'exact' in s ? '読切' : `${s.depth} 手`;
 
 const cx = (i: number) => PAD + i * CELL + CELL / 2;
@@ -157,7 +157,7 @@ export function Stone({ x, y, color, last }: { x: number; y: number; color: 1 | 
 }
 
 /* 数値（石差）が主、出所が副。最善だけ枠と --gold を持つ */
-export function EvalCell({ x, y, info }: { x: number; y: number; info: EvalInfo }) {
+function EvalCell({ x, y, info }: { x: number; y: number; info: EvalInfo }) {
   const { score, src, best } = info;
   const label = sourceLabel(src);
   // 「N 手」は途中の値なので、定石・読切より弱く出す。
