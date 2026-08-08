@@ -173,6 +173,14 @@ export function Settings({ prefs, setPref, ggs }: {
   ggs?: GgsSnapshot | null;
 }) {
   const [tab, setTab] = useState<'engine' | 'view' | 'ggs'>('engine');
+  /* 撮るためだけの入口。`KUROOBI_AUTOPLAY=settings:ggs` のようにタブを
+     指定できる。タブはクリックでしか切り替えられず、確認が人手頼みだった */
+  useEffect(() => {
+    void api.autoplay().then((v) => {
+      const t = (v ?? '').split(':')[1];
+      if (t === 'engine' || t === 'view' || t === 'ggs') setTab(t);
+    }).catch(() => { /* Tauri 外では効かないだけ */ });
+  }, []);
   const [reset, setReset] = useState(false);
   const [status, setStatus] = useState<[string, string, boolean, number, string][]>([]);
   const [th, setTh] = useState<ThreadsView | null>(null);
@@ -421,16 +429,21 @@ export function Settings({ prefs, setPref, ggs }: {
 
         {/* OK ボタンは置かない (変更は即時に反映される)。それが分からないと
             「決定していないのでは」と不安になるので言い切る。
-            **帯ではなく中身の最後の行**にする — 設計も上に罫を引いた行 */}
-        <div style={{
-          display: 'flex', alignItems: 'center', gap: 'var(--sp-3)',
-          margin: '0 var(--sp-3)', paddingTop: 'var(--sp-4)',
-          borderTop: '1px solid var(--border-weak)',
-        }}>
-          {tab === 'engine' && (
+            **帯ではなく中身の最後の行**にする — 設計も上に罫を引いた行。
+
+            **中身があるタブでだけ出す。** 「既定に戻す」はエンジンのタブの
+            ものなので、表示 と GGS では罫だけが引かれて下に何も無い行に
+            なっていた。空の罫は「何か足りない」としか読めない (規則 13 —
+            節は見出しと罫で区切るもので、飾りに使わない) */}
+        {tab === 'engine' && (
+          <div style={{
+            display: 'flex', alignItems: 'center', gap: 'var(--sp-3)',
+            margin: '0 var(--sp-3)', paddingTop: 'var(--sp-4)',
+            borderTop: '1px solid var(--border-weak)',
+          }}>
             <Button size="field" onClick={() => setReset(true)}>既定に戻す</Button>
-          )}
-        </div>
+          </div>
+        )}
         </div>
       </div>
       {reset && (
