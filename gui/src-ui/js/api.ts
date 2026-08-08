@@ -136,8 +136,8 @@ export const ggsApi = {
   listMatches: () => call('ggs_list_matches'),
   resumeStored: (id: string) => call('ggs_resume_stored', { id }),
   history: (name: string) => call('ggs_history', { name }),
-  setEngine: (depth: number, solve: number, band: number, threads: number) =>
-    call('ggs_set_engine', { depth, solve, band, threads }),
+  setEngine: (depth: number, solve: number, band: number, threads: number, ponder: boolean) =>
+    call('ggs_set_engine', { depth, solve, band, threads, ponder }),
   setPacing: (pace: string, maxMoveSecs: number, reserveSecs: number) =>
     call('ggs_set_pacing', { pace, maxMoveSecs, reserveSecs }),
   setAutoPlay: (on: boolean) => call('ggs_set_auto_play', { on }),

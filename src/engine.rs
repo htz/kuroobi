@@ -295,14 +295,12 @@ impl Engine {
             return 0;
         }
         self.stop.reset();
-        let mut depth = 1;
-        while depth <= self.config.depth {
-            if std::time::Instant::now() >= deadline || self.stop.is_stopped() {
-                break;
-            }
-            self.search.best_move_valued(&child, depth);
-            depth += 1;
-        }
+        /* **期限は探索の中に渡す。** 自前で段ごとに見ていると、深い 1 段が
+        始まってしまったら止まらない — 実戦の待ち行列 (GGS の受信ループ)
+        を数秒ふさぐことになる。`best_move_deadline` は反復深化を内側に
+        持っていて、期限が来た段は捨てて直前の段まで返す。 */
+        self.search
+            .best_move_deadline(&child, self.config.depth, Some(deadline));
         self.nodes() - base
     }
 

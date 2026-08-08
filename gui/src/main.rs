@@ -1899,6 +1899,7 @@ fn ggs_set_engine(
     solve: u8,
     band: u8,
     threads: usize,
+    ponder: bool,
 ) -> Result<(), String> {
     ggs_tx(&app)?
         .send(ggs::Cmd::SetEngine {
@@ -1906,6 +1907,7 @@ fn ggs_set_engine(
             solve,
             band,
             threads,
+            ponder,
         })
         .map_err(|e| e.to_string())
 }

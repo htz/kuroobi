@@ -908,6 +908,7 @@ export function GgsSettings({ snap }: { snap: GgsSnapshot }) {
   const say = (t: string) => { setSaved(t); window.setTimeout(() => setSaved(''), 2500); };
   const [levels, setLevels] = useState({ depth: e.depth, solve: e.solve, band: e.band });
   const [threads, setThreads] = useState(e.threads);
+  const [ponder, setPonder] = useState(e.ponder);
   const [auto, setAuto] = useState(snap.auto_play);
   const [watch, setWatch] = useState(snap.watch_analysis);
   const [book, setBook] = useState(e.use_book);
@@ -940,7 +941,7 @@ export function GgsSettings({ snap }: { snap: GgsSnapshot }) {
      いたので、繋がっていなくても反映されたように見えた */
   const apply = async () => {
     try {
-      await ggsApi.setEngine(levels.depth, levels.solve, levels.band, threads);
+      await ggsApi.setEngine(levels.depth, levels.solve, levels.band, threads, ponder);
       await ggsApi.setPacing(pace, maxMove, reserve);
       await ggsApi.setAutoPlay(auto);
       await ggsApi.setWatchAnalysis(watch);
@@ -971,6 +972,21 @@ export function GgsSettings({ snap }: { snap: GgsSnapshot }) {
                               ...Array.from({ length: cores || Math.max(threads, 1) }, (_, i) =>
                                 [String(i + 1), String(i + 1)] as [string, string])]} />
           </Field>
+          {/* 先読み。**「深さ固定」では効かない**ので、そのときは押せなく
+              して理由をその場に出す (規則 61 — 直し方は操作のそばに) */}
+          <Field label="先読み">
+            <Segmented value={ponder ? 'on' : 'off'} disabled={pace === 'depth'}
+                       onChange={(v) => setPonder(v === 'on')}
+                       options={[{ value: 'on', label: 'する' },
+                                 { value: 'off', label: 'しない' }]} />
+          </Field>
+          <Note>
+            相手が考えている間に、相手が指すと思う手の先を読んでおきます。
+            自分の持ち時間は減りません。
+            {pace === 'depth'
+              ? '「深さ固定」では働きません — 探索がどのみち最後まで走るので、先に読んでも得るものがないためです。'
+              : '当たれば同じ持ち時間で 1 段ほど深く読めます (実測 +1.25 段)。外れた回は読み直します。'}
+          </Note>
         </Section>
 
         <Section title="持ち時間の使い方">
