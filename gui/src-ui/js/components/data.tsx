@@ -403,12 +403,12 @@ export function RateChart({ points, height = 74, width = 300 }: {
   const xy = points.map((p, i) => [(i / (points.length - 1)) * w, y(p)] as const);
   const last = xy[xy.length - 1];
   return (
+    /* **罫線は引かない (規則 56)。** 「上がっているか下がっているか」が
+       分かれば足る場所なので軸は省くと決めてあり、規則は
+       「罫線 3 本で軸のつもりをするのが一番悪い」と名指ししている。
+       目盛の無い線は「読める気がするのに読めない」だけ。現在値は隣の
+       `RateRow` が出す。目盛を出すなら `EvalGraph` と同じ作りにすること。 */
     <svg viewBox={'0 0 ' + w + ' ' + height} preserveAspectRatio="none" style={{ width: '100%', height, display: 'block' }}>
-      {/* 罫線は height から出す — 固定値にすると height を変えた瞬間に枠からずれる */}
-      {[0.25, 0.5, 0.75].map(t => {
-        const gy = pad + t * (height - pad * 2);
-        return <line key={t} x1={0} y1={gy} x2={w} y2={gy} stroke="var(--border-weak)" strokeWidth={1} />;
-      })}
       <polyline points={xy.map(([px, py]) => px.toFixed(1) + ',' + py.toFixed(1)).join(' ')} fill="none" stroke="var(--accent)" strokeWidth={1.6} />
       <circle cx={last[0]} cy={last[1]} r={3} fill="var(--accent)" />
     </svg>
