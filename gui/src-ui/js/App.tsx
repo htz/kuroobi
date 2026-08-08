@@ -918,7 +918,18 @@ export function App() {
               <StatusStat label="GGS" value={conn === 'online' ? '接続中' : conn === 'offline' ? '未接続' : '接続しています…'} />
             </>
             : isBook
-            ? <StatusStat label="定石" value={book.node ? book.node.size.toLocaleString() + ' 局面' : '—'} />
+            ? <>
+              {/* 絵 §7 の下の帯は「登録局面 / うち学習」の 2 つ。
+                  **うち学習は定石の画面のどこにも出ていなかった** —
+                  対局のドックの「学習」タブにしか無く、定石を眺めている
+                  ときに「この山のどれだけが実戦由来か」が読めなかった。
+                  絵はツールバーにも同じ 2 つを置いているが、そちらには
+                  足さない (同じ数字が 1 画面に 2 か所。要 push) */}
+              <StatusStat label="登録局面"
+                          value={book.node ? book.node.size.toLocaleString() : '—'} />
+              <StatusStat label="うち学習"
+                          value={book.node ? book.node.learned_size.toLocaleString() : '—'} />
+            </>
             : <>
               {/* 検討はいま何手目を見ているかが読めないと辿れない。手数の帯の
                   目盛は 10 手ごとなので、正確な数字はここが持つ (規則 58 —
