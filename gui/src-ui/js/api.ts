@@ -61,6 +61,8 @@ export const api = {
   think: () => call<ThinkView>('think'),
   applyMove: (sq: number | null) => call<GameView>('apply_move', { sq }),
   analyzeLive: () => call<void>('analyze_live'),
+  /** 人の手番のあいだ裏で読んでおく (深さ固定なので「速くなる」効き)。 */
+  ponderLive: () => call<void>('ponder_live'),
   evalAt: (n: number, depth: number) => call<EvalPoint>('eval_at', { n, depth }),
   /** 保存。名前は GGF に載る (拡張子が .ggf のときだけ書かれる)。 */
   /** 棋譜を保存する。名前は GGF にだけ載る (拡張子が .ggf のとき)。 */

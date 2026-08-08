@@ -175,9 +175,24 @@ export function useGame() {
     // 前の局面の分析は、この 1 つ前 — 局面が動いた時点の呼び出し — が
     // 既に止めている。
     if (thinking) return;
-    api.stopSearch().catch(() => {});     // 前の局面の分析を止める
-    if (!autoHint || !v || v.over) return;
+    /* 前の局面の分析を止める。**待つ。** 投げっぱなしにすると、次に始めた
+       探索の `stop.reset()` より後に停止が届き、**始まった瞬間に止まる**。
+       分析の側は `pushLevels` の await が挟まって偶然ここを避けていたが、
+       先読みは直に呼ぶので踏んだ (実機で「先読み」が一度も走らなかった) */
+    await api.stopSearch().catch(() => {});
+    if (!v || v.over) return;
     if (playing && engineSides().includes(v.player)) return;   // エンジンが打つ番
+    /* 評価値を出していないときは、**代わりに先読み**しておく。
+       人が考えている間に KUROOBI が次に読む局面を温めるので、指したあとの
+       応答が速くなる (ローカルは深さ固定なので効き方は「速く」。実測で
+       同じ深さへ 1/3 の時間)。**評価値と同じエンジンを取り合う**ので
+       両方は走らせない — 画面に数字が出ているほうを優先する。
+       対局中 (KUROOBI が受け持つ色がある) ときだけ。検討では次の手番が
+       来ないので読んでも使われない。 */
+    if (!autoHint) {
+      if (playing) api.ponderLive().catch(() => {});
+      return;
+    }
     hintSeq.current++;
     try {
       await pushLevels();

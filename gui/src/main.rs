@@ -1036,6 +1036,41 @@ fn apply_move(app: State<App>, sq: Option<u8>) -> Result<GameView, String> {
     Ok(view(&game))
 }
 
+/// 人の手番のあいだ、相手 (人) が指すと思う手の先を裏で読んでおく。
+///
+/// **ローカル対局は深さ固定**なので、効き方は「深く」ではなく「速く」。
+/// 実測で同じ深さへ **1/3 の時間**で着く (深さ 12 / 先読み 300ms / −62〜65%)。
+/// KUROOBI の応答が速くなるだけで、手の質は変わらない。
+///
+/// `analyze_live` (評価値の表示) とは**同じエンジンを取り合う**ので、
+/// 両方は走らせない。画面側が評価値を出していないときだけ呼ぶ。
+///
+/// 読む深さに達したら自分で止まるので、人が長考しても回し続けない。
+#[tauri::command]
+async fn ponder_live(app: State<'_, App>) -> Result<(), String> {
+    if ggs_match_active(&app) {
+        return Err("GGS 対局中は控えます".into());
+    }
+    ensure_engine(&app)?;
+    let board = app.game.lock().unwrap().board;
+    let eng = app.engine.clone();
+    let act = app.activity.clone();
+    let stop = app.stop.clone();
+    if let Some(h) = stop.lock().unwrap().as_ref() {
+        h.reset();
+    }
+    tauri::async_runtime::spawn_blocking(move || {
+        let _g = ActivityGuard::begin(&act, "先読み");
+        let mut guard = eng.lock().unwrap();
+        let Some(e) = guard.as_mut() else { return };
+        /* 上限は 60 秒。**読む深さに達すれば自分で止まる**ので普段は
+           使われないが、人が席を外したときに回し続けないための蓋 */
+        let until = std::time::Instant::now() + std::time::Duration::from_secs(60);
+        e.ponder(&board, until);
+    });
+    Ok(())
+}
+
 /// 反復深化しながら評価値を出し続ける。段が終わるたびに画面へ送るので、
 /// 見ている間じわじわ深くなる。局面を変えるか止めるまで続く。
 #[tauri::command]
@@ -2122,6 +2157,7 @@ fn main() {
             think,
             apply_move,
             analyze_live,
+            ponder_live,
             eval_at,
             save_kifu,
             load_kifu,
