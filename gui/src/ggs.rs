@@ -153,6 +153,10 @@ pub struct UserRow {
     pub raw: String,
 }
 
+/// `tell` を付けずに送る命令。サーバーはこれらに「命令名: いまの値」で
+/// 返すので、**ダイレクト tell と見分けが付かない**。送る側で数え上げる。
+const BARE_CMDS: [&str; 2] = ["verbose", "chann"];
+
 #[derive(Clone, Serialize, Default)]
 pub struct ChatMsg {
     /// チャンネル名 (".chat" 等)。ダイレクトは空文字。
@@ -1521,6 +1525,15 @@ pub fn run(
                             if !name.is_empty()
                                 && name.chars().all(|c| c.is_ascii_alphanumeric() || c == '_')
                                 && name.chars().next().unwrap().is_ascii_alphabetic()
+                                // **サーバーの返事を発言にしない。**`tell` を
+                                // 付けずに送る命令には、サーバーが
+                                // 「命令名: いまの値」の形で返す。これが
+                                // ダイレクト tell と同じ見た目なので、
+                                // **`verbose` という名前の相手からの発言**
+                                // として会話一覧に並んでいた
+                                // (実物: `verbose: -news -ack -help -faq`)。
+                                // ここで弾く語は、こちらが素で送る命令だけ
+                                && !BARE_CMDS.contains(&name)
                             {
                                 let mut s = ctx.snap.lock().unwrap();
                                 s.chat.push_back(ChatMsg {
