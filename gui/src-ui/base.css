@@ -208,3 +208,19 @@ button:disabled, button[aria-disabled="true"] { cursor:default; }
   .k-press, .k-input, .k-link, .k-cell circle { transition:none; }
   .k-nav-row, .k-dock { transition:none; }
 }
+
+
+/* いちばん狭い段 — 評価値グラフの帯を畳む (設計が採った答え)。
+ *
+ * **縮めるだけでは足りなかった。** グラフの高さを器から決めるようにして
+ * 盤は 82 → 183px まで戻った (`75d1d23`) が、860×560 ではまだ小さい。
+ * 畳めば盤は 330px 前後まで伸びる。**縮みと畳みは併用する** —
+ * 中くらいの高さでは縮んで両方見え、いちばん低い段でだけ畳める。
+ * 開閉は見出し行の釦が持つ (規則 7 — 盤を最後まで残す)。 */
+.k-graph { display:flex; }
+.k-graph-toggle { display:none; }
+@media (max-height: 620px) {
+  .k-graph { display:none; }
+  .k-graph.k-open { display:flex; }
+  .k-graph-toggle { display:inline-flex; }
+}

@@ -107,7 +107,7 @@ export function StoneDot({ color, size = 9 }: { color: StoneColor; size?: number
  */
 export type GraphPoint = { value: number; exact?: boolean; book?: boolean };
 
-export function EvalGraph({ points, plies, cursor, blunder, busy, title = '評価値グラフ (黒視点)', extra, onJump, moveName }: {
+export function EvalGraph({ points, plies, cursor, blunder, busy, title = '評価値グラフ (黒視点)', extra, onJump, moveName, open }: {
   points: (GraphPoint | undefined)[];
   plies?: number;
   cursor?: number;
@@ -121,6 +121,9 @@ export function EvalGraph({ points, plies, cursor, blunder, busy, title = '評�
   onJump?: (n: number) => void;
   /** その手数に指された手の名前 ("f5")。見出し行の読み取りに添える。 */
   moveName?: (n: number) => string | undefined;
+  /** いちばん低い窓 (620px 以下) で開いているか。畳む段は base.css が持つ。
+   *  開閉の釦は Toolbar 側 — 畳むと見出し行ごと消えるので中には置けない。 */
+  open?: boolean;
 }) {
   /* 触れているところの手数。**押さなくても読める**ようにする —
      点の位置だけでは何手目の何石差か分からず、いちいち押して盤を動かす
@@ -196,11 +199,14 @@ export function EvalGraph({ points, plies, cursor, blunder, busy, title = '評�
   const shown = hover !== null ? points[hover] : undefined;
 
   return (
-    <div style={{
+    /* display はここに書かない。畳む段 (max-height 620) が動かすので、
+       インラインに書くと media query が届かない — base.css の警告どおり、
+       実際に「入口は出るのにグラフが消えない」状態になった */
+    <div className={'k-graph' + (open ? ' k-open' : '')} style={{
       /* 縮む。盤より先に畳む側なので `none` にしない (規則 7) */
       flex: '0 1 auto', minHeight: 0,
       borderTop: '1px solid var(--border)', background: 'var(--panel)',
-      padding: 'var(--sp-3) var(--sp-4) var(--sp-4)', display: 'flex', flexDirection: 'column', gap: 'var(--sp-2)',
+      padding: 'var(--sp-3) var(--sp-4) var(--sp-4)', flexDirection: 'column', gap: 'var(--sp-2)',
     }}>
       {/* 凡例は必ずグラフの外（見出し行）に置く — 描画領域に重ねると
           データと衝突するし、縮小されて読めなくなる */}

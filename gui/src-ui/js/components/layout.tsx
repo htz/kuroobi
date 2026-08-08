@@ -1,6 +1,6 @@
 import React from 'react';
 import { BoardDefs } from './board';
-import { Segmented } from './primitives';
+import { Button, Segmented } from './primitives';
 import { IconButton } from './Icons';
 // アセットを唯一の出所にする (assets.d.ts の方針)。画面用に写した複製と
 // ファイルが食い違う事故を防ぐため、<img src> ではなく中身を読む
@@ -99,11 +99,14 @@ export function Main({ children, inset }: {
  * 必ず付け忘れるから。
  * dock は畳む段（1120px 以下）でだけ出る Dock の開閉。Dock は本体の右に
  * あるものなので、入口も上の帯に置く（BottomPanel の onClose と対称）。
+ * graph も同じ考え方で、いちばん低い段（620px 以下）でだけ出る評価値グラフの
+ * 開閉。畳むと見出し行ごと消えるので、入口は帯に置くしかない。
  */
-export function Toolbar({ children, aux, dock }: {
+export function Toolbar({ children, aux, dock, graph }: {
   children: React.ReactNode;
   aux?: React.ReactNode;
   dock?: { open: boolean; onToggle: () => void; label?: string };
+  graph?: { open: boolean; onToggle: () => void };
 }) {
   return (
     /* 窓を掴める帯でもある。左メニューの上端だけだと掴める幅が 208px しか
@@ -122,6 +125,14 @@ export function Toolbar({ children, aux, dock }: {
       <span style={{ flex: 1 }} />
       {/* display は .k-toolbar-aux が持つ（940px で消す） */}
       {aux && <span className="k-toolbar-aux" style={{ alignItems: 'center', gap: 'var(--sp-3)' }}>{aux}</span>}
+      {graph && (
+        /* 文字の釦。ドックの入口と並ぶので、絵にすると 2 つの四角が
+           何を開くのか見分けられない */
+        <span className="k-graph-toggle">
+          <Button size="chip" variant={graph.open ? 'secondary' : 'ghost'}
+                  title="評価値グラフ" onClick={graph.onToggle}>グラフ</Button>
+        </span>
+      )}
       {dock && (
         <span className="k-dock-toggle">
           {/* panel = 縦に二分された矩形。ggs-console（左メニューのコンソール）を

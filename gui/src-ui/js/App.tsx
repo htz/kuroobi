@@ -87,6 +87,9 @@ export function App() {
      取りやめになったので、ここが §7 と §8 の置き場所になる */
   const [bookTab, setBookTab] = useState('定石');
   const [dockOpen, setDockOpen] = useState(false);
+  /* 評価値グラフの帯。620px 以下でだけ畳む (base.css)。広い窓では
+     この値は使われない — 畳む段が持つので、閉じたまま窓を広げても出る */
+  const [graphOpen, setGraphOpen] = useState(false);
 
   // 設定は別の窓なので、そこでファイルを差し替えてもこちらは気付けない。
   // 報せを聞いて定石の有無だけ取り直す (盤の「定石」表示が変わる)
@@ -508,6 +511,8 @@ export function App() {
       <Main inset={dockOpen && !isGgs}>
       <Toolbar
           dock={isGgs ? undefined : { open: dockOpen, onToggle: () => setDockOpen(o => !o) }}
+          graph={study && !isGgs && !isBook
+            ? { open: graphOpen, onToggle: () => setGraphOpen(o => !o) } : undefined}
           aux={isBook ? undefined
             : isGgs ? (conn === 'online' && ggs.snap
               ? <GgsStatus snap={ggs.snap}
@@ -680,6 +685,7 @@ export function App() {
         {study && !isGgs && !isBook && (
           <EvalGraph points={graph.values ?? []} plies={v?.moves.length} cursor={v?.cursor}
                      blunder={blunder} busy={graph.busy} onJump={(n) => void g.jumpTo(n)}
+                     open={graphOpen}
                      // n 手目の点は「n 手指し終えた局面」。指した手は n 番目
                      moveName={(n) => { const m = v?.moves[n - 1]; return m == null ? undefined : sqName(m); }}
                      extra={<>
