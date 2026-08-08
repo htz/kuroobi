@@ -41,10 +41,6 @@ export function Strength({ value, onChange }: { value: Levels; onChange: (v: Lev
                 const l = LEVELS[+s];
                 onChange({ depth: l.depth, solve: l.solve, band: l.band });
               }} />
-      {/* **数字そのものを触らせる。** 36 段を摘みに載せると 1 段が数 px しか
-          なく狙った値に止められないし、数字が脇の小さな文字に降格する。
-          ここで決めるのは「いくつか」なので、数字が主役でなければならない。
-          ±1 は隣のボタンで、飛ばすときは打ち込む (選択肢 36 個も出さない)。 */}
       {custom && (
         /* 設計 §4 は 深さ / 読切 / 選択読み を **3 列の格子**に並べ、
            それぞれ 10px のラベルの下に 28px の `Select` を置く。
