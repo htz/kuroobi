@@ -696,32 +696,38 @@ export function App() {
                 例外は進行中のジョブだけ)。**「一時停止」は置かない** —
                 止める口がエンジン側に無く、譲りは対局・検討が動くと自動で
                 かかる。押せない釦を描くより、譲っていることを言う */}
+            {/* 走っている間だけ出る枠。**節の見出しは付けない** — 設計 §4 は
+                見出しの無い枠を 書き戻しの節と 学習した定石の節の間に挟んでいる。
+                進行中のジョブだけが枠を持つ (規則 13 の「箱を入れ子にしない」の
+                唯一の例外)。**「一時停止」は置かない** — 止める口がエンジン側に
+                無く、譲りは対局・検討が動くと自動でかかる */}
             {cpu?.learn && (
-              <Section title="取り込みの状況">
-                <div style={{
-                  border: '1px solid var(--border)', borderRadius: 'var(--r-2)',
-                  padding: 'var(--sp-3)', display: 'flex', flexDirection: 'column', gap: 'var(--sp-2)',
-                }}>
-                  <div style={{ display: 'flex', alignItems: 'center', fontSize: 'var(--fs-5)' }}>
-                    <span style={{
-                      display: 'flex', alignItems: 'center', gap: 'var(--sp-2)',
-                      color: cpu.learn_paused ? 'var(--sub)' : 'var(--accent)',
-                    }}>
-                      <Dot tone={cpu.learn_paused ? 'sub' : 'accent'} />
-                      {cpu.learn_paused ? '譲り中' : '取り込み中'}
-                    </span>
-                    <span style={{ marginLeft: 'auto', fontSize: 'var(--fs-6)', color: 'var(--sub)' }}>
-                      局面 {cpu.learn[0].toLocaleString()} / {cpu.learn[1].toLocaleString()}
-                    </span>
-                  </div>
-                  <Progress value={cpu.learn[1] > 0 ? cpu.learn[0] / cpu.learn[1] : 0} />
-                  {cpu.learn_paused && (
-                    <span style={{ fontSize: 'var(--fs-7)', color: 'var(--sub)', lineHeight: 1.7 }}>
-                      対局・検討が動いている間は譲って止まります。空いたら続きから再開します。
-                    </span>
-                  )}
+              <div style={{
+                border: '1px solid var(--border)', borderRadius: 'var(--r-2)',
+                margin: '0 var(--sp-3)',
+                padding: 'var(--sp-3)', display: 'flex', flexDirection: 'column', gap: 'var(--sp-2)',
+              }}>
+                <div style={{ display: 'flex', alignItems: 'center', fontSize: 'var(--fs-5)' }}>
+                  <span style={{
+                    display: 'flex', alignItems: 'center', gap: 'var(--sp-2)', color: 'var(--accent)',
+                  }}>
+                    <Dot />取り込み中
+                  </span>
+                  <span style={{ marginLeft: 'auto', fontSize: 'var(--fs-6)', color: 'var(--sub)' }}>
+                    局面 {cpu.learn[0].toLocaleString()} / {cpu.learn[1].toLocaleString()}
+                  </span>
                 </div>
-              </Section>
+                <Progress value={cpu.learn[1] > 0 ? cpu.learn[0] / cpu.learn[1] : 0} />
+                {/* 譲っている間だけ下の行に出す。設計 §4 もこの位置
+                    (絵は左に対局名、右に「譲り中」)。対局名を出す口は
+                    エンジン側に無い */}
+                {cpu.learn_paused && (
+                  <div style={{ display: 'flex', alignItems: 'center', fontSize: 'var(--fs-6)', color: 'var(--sub)' }}>
+                    <span>対局・検討が動いている間は譲ります</span>
+                    <span style={{ marginLeft: 'auto' }}>譲り中</span>
+                  </div>
+                )}
+              </div>
             )}
             {/* 明細は「定石」の画面の 2 枚目へ移した。同じ一覧をドックにも
                 出すと、どちらが本物か分からなくなる (規則 58 と同じ話) */}
