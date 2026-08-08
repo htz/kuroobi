@@ -397,7 +397,7 @@ pub fn demo_snapshot() -> Snapshot {
     })
     .collect();
     /* **頁送り (規則 74) を出すには 25 人を超えないといけない。**
-       実サーバーは接続中が 10 件ほどしか居らず、一度も出せていなかった */
+    実サーバーは接続中が 10 件ほどしか居らず、一度も出せていなかった */
     for i in 0..26 {
         let r = 1900.0 - i as f32 * 21.0;
         users.push(UserRow {
@@ -516,8 +516,8 @@ pub fn demo_snapshot() -> Snapshot {
     ]
     .into();
     /* レートは 1 局ごとに動かす — **同じ値を並べると推移の線が平らになり、
-       グラフが描けているのか壊れているのか分からない**。形式も入れる
-       (空だと「?」と出る) */
+    グラフが描けているのか壊れているのか分からない**。形式も入れる
+    (空だと「?」と出る) */
     s.results = vec![
         (".70", "saio", 6i32, 1_754_003_000u64, 1842.3, "s8r16"),
         (".69", "tamaki", -4, 1_753_990_000, 1836.1, "8"),
@@ -530,7 +530,7 @@ pub fn demo_snapshot() -> Snapshot {
     .map(|(id, opp, d, at, rate, gt)| GameResult {
         id: id.into(),
         /* **形式は `base` の頭から取り出される** (`base.split('.')[0]`)。
-           番号だけを入れると画面に「?」と出る */
+        番号だけを入れると画面に「?」と出る */
         base: format!("{gt}{id}"),
         raw: format!("{id} {opp} {d:+}"),
         my_diff: Some(d),
@@ -574,6 +574,29 @@ pub fn demo_snapshot() -> Snapshot {
         draws: 1,
         diff_sum: 38,
     };
+    /* finger の項目。**条件式の木 (`FormulaView`) はこれが無いと描けない** —
+    待機モードの「申し込みの条件」と、設定の「申し込みの扱い」の両方が
+    ここから来る。相手の名刺 (プロフィール) も同じ */
+    let finger = |name: &str, accept: &str| FingerInfo {
+        name: name.into(),
+        fields: vec![
+            ("open".into(), "1".into()),
+            ("rated".into(), "+".into()),
+            ("accept".into(), accept.into()),
+            ("decline".into(), "rated&or>2400".into()),
+            ("play".into(), "0".into()),
+            ("stored (+)".into(), "0".into()),
+            ("info".into(), "画面確認用の作り物".into()),
+            ("since".into(), "2026-01-15".into()),
+        ],
+        raw: vec![format!("{name} 1842.3@34.0")],
+    };
+    s.fingers.insert(
+        "kuroobi".into(),
+        finger("kuroobi", "rand&discs>=14&discs<=20&mt1>=120"),
+    );
+    s.fingers
+        .insert("saio".into(), finger("saio", "rand&or>=1600"));
     s
 }
 
