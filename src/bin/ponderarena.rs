@@ -219,6 +219,12 @@ fn main() -> ExitCode {
         }
         // 開幕は 2 局で 1 組にして色を入れ替える (先後の差を消す)
         let mut a_turn = g % 2 == 0;
+        /* 1 局ぶんの記録。**定石なし・同じ開幕なら棋譜は一致するはず**
+        なので、指し手の並びを控えて 2 回の走行で突き合わせる。
+        ずれたら「先読みが手を変えている」ということで、そのときは
+        時間の比較そのものが成り立たない。 */
+        let mut line = String::new();
+        let g_start = (ta, tb);
 
         while !board.is_game_over() {
             if board.movable_count() == 0 {
@@ -238,6 +244,7 @@ fn main() -> ExitCode {
                 na += 1;
                 da.add(ev.depth);
                 let Some(p) = ev.pos else { break };
+                line.push_str(&format!("{},", p.index()));
                 board.make_move_unchecked(p);
                 /* **ここがポンダリング。** 実戦では相手が考えている間に
                 走るので、A の持ち時間は減らない。測定でも B の持ち時間と
@@ -266,6 +273,7 @@ fn main() -> ExitCode {
                 nb += 1;
                 db.add(ev.depth);
                 let Some(p) = ev.pos else { break };
+                line.push_str(&format!("{},", p.index()));
                 board.make_move_unchecked(p);
             }
             a_turn = !a_turn;
@@ -284,7 +292,19 @@ fn main() -> ExitCode {
             std::cmp::Ordering::Less => losses += 1,
             std::cmp::Ordering::Equal => draws += 1,
         }
-        eprint!("\r{}/{} 局", g + 1, args.games);
+        // 1 局トータル。棋譜の指紋も一緒に出して、2 回の走行で突き合わせる
+        let mut h: u64 = 1469598103934665603;
+        for b in line.bytes() {
+            h ^= b as u64;
+            h = h.wrapping_mul(1099511628211);
+        }
+        println!(
+            "  局 {:>2}  A {:>8.3} s  B {:>8.3} s  棋譜 {:016x}",
+            g + 1,
+            (ta - g_start.0) as f64 / 1e6,
+            (tb - g_start.1) as f64 / 1e6,
+            h,
+        );
     }
     eprintln!();
 
