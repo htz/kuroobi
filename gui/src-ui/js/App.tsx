@@ -165,7 +165,7 @@ export function App() {
     started.current = true;
     void api.autoplay().then(async (v) => {
       if (!v) return;
-      const [who, lv] = v.split(':');
+      const [who, lv, extra] = v.split(':');
       if (who === 'settings') { void openWindow('settings'); return; }
       // "tab:学習" のようにドックの見出しを指定する (撮るためだけの入口)。
       // "tab:強さ:custom" なら強さをカスタムにして 3 枠を開く
@@ -200,6 +200,9 @@ export function App() {
       }
       if (who === 'both') g.setSide('both');
       if (lv !== undefined && Number.isFinite(+lv)) g.setLevel(+lv);
+      // "both:1:学習" のようにドックの見出しも指定できる。取り込みの状況は
+      // 対局が終わって学習が走っている間しか出ないので、その枠を撮る入口
+      if (extra) setTab(extra);
       g.setPlaying(true);
     }).catch((e) => jsLog('autoplay: ' + e));
     // g は毎描画で作り直されるので依存に入れない (started で 1 度だけに絞っている)
