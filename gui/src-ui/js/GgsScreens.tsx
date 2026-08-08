@@ -147,6 +147,9 @@ export function GgsConsole({ snap }: { snap: GgsSnapshot }) {
      ログが伸びるぶんには狂わない */
   const [dir, setDir] = useState<'all' | 'out' | 'in'>('all');
   const [from, setFrom] = useState(0);
+  /* 押した結果の一言 (規則 34 — 出すのは失敗と、押したのに進まない理由) */
+  const [note, setNote] = useState('');
+  const say = (t: string) => { setNote(t); window.setTimeout(() => setNote(''), 2500); };
   const send = () => {
     const c = cmd.trim();
     if (!c) return;
@@ -171,7 +174,12 @@ export function GgsConsole({ snap }: { snap: GgsSnapshot }) {
           <Button disabled={!shown.length}
                   onClick={() => void ggsApi.saveLog(
                     shown.map((l) => (l.dir === 'out' ? '› ' : '') + l.text).join('\n') + '\n',
-                  ).catch(() => {})}>保存</Button>
+                  )
+                    // 成功したときは何も言わない (規則 34)
+                    .catch((e) => say('保存できませんでした (' + e + ')'))}>保存</Button>
+          {note && <span style={{
+            fontSize: 'var(--fs-6)', letterSpacing: 0, color: 'var(--bad)',
+          }}>{note}</span>}
         </>} />
         <ConsoleLog lines={shown} />
       </div>
@@ -887,7 +895,9 @@ function MatchBoard({ snap, m, clock, prefs, onKifu, face }: {
  */
 export function GgsSettings({ snap }: { snap: GgsSnapshot }) {
   const e = snap.engine;
-  const [saved, setSaved] = useState(false);
+  /* 押した結果の一言。成功も失敗も同じ場所に出す */
+  const [saved, setSaved] = useState('');
+  const say = (t: string) => { setSaved(t); window.setTimeout(() => setSaved(''), 2500); };
   const [levels, setLevels] = useState({ depth: e.depth, solve: e.solve, band: e.band });
   const [threads, setThreads] = useState(e.threads);
   const [auto, setAuto] = useState(snap.auto_play);
@@ -907,19 +917,31 @@ export function GgsSettings({ snap }: { snap: GgsSnapshot }) {
     snap.fingers[login]?.fields
       .find(([k]) => k.replace(/\s+/g, '').replace(/\(.*\)/, '') === key)?.[1] ?? '';
   const saveForm = async (kind: 'aform' | 'dform', expr: string) => {
-    await ggsApi.setFormula(kind, expr).catch(() => {});
+    try {
+      await ggsApi.setFormula(kind, expr);
+    } catch (e) {
+      say('条件を送れませんでした (' + e + ')');
+      return;
+    }
     // 送っただけで信じない。サーバーの値を取り直して画面に反映する
     if (login) ggsApi.finger(login).catch(() => {});
   };
 
+  /* **失敗を握り潰して「反映しました」と言わない** (規則 34)。
+     以前は 5 本すべて `.catch(() => {})` で捨てたうえで必ず成功を出して
+     いたので、繋がっていなくても反映されたように見えた */
   const apply = async () => {
-    await ggsApi.setEngine(levels.depth, levels.solve, levels.band, threads).catch(() => {});
-    await ggsApi.setPacing(pace, maxMove, reserve).catch(() => {});
-    await ggsApi.setAutoPlay(auto).catch(() => {});
-    await ggsApi.setWatchAnalysis(watch).catch(() => {});
-    await ggsApi.setUseBook(book).catch(() => {});
-    setSaved(true);
-    window.setTimeout(() => setSaved(false), 2000);
+    try {
+      await ggsApi.setEngine(levels.depth, levels.solve, levels.band, threads);
+      await ggsApi.setPacing(pace, maxMove, reserve);
+      await ggsApi.setAutoPlay(auto);
+      await ggsApi.setWatchAnalysis(watch);
+      await ggsApi.setUseBook(book);
+    } catch (e) {
+      say('反映できませんでした (' + e + ')');
+      return;
+    }
+    say('反映しました');
   };
 
   return (
@@ -1008,7 +1030,12 @@ export function GgsSettings({ snap }: { snap: GgsSnapshot }) {
         </Section>
 
         <div style={{ display: 'flex', alignItems: 'center', gap: 'var(--sp-3)', padding: '0 var(--sp-3) var(--sp-5)' }}>
-          {saved && <span style={{ fontSize: 'var(--fs-6)', color: 'var(--ok)' }}>反映しました</span>}
+          {saved && (
+            <span style={{
+              fontSize: 'var(--fs-6)',
+              color: saved.startsWith('反映しました') ? 'var(--ok)' : 'var(--bad)',
+            }}>{saved}</span>
+          )}
           <span style={{ marginLeft: 'auto' }} />
           <Button variant="primary" onClick={() => void apply()}>適用</Button>
         </div>

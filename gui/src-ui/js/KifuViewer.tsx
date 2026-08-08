@@ -38,7 +38,11 @@ export function KifuViewer({ title, kifu, onClose, onStudy }: KifuViewerProps) {
   // 前の盤面が残らない)
   const [got, setGot] = useState<{ kifu: string; frames?: KifuFrame[]; err?: string } | null>(null);
   const [at, setAt] = useState<number | null>(null);
-  const [copied, setCopied] = useState(false);
+  /* 押した結果の一言。**成功も失敗も同じ場所に出す** (規則 34 —
+     出すのは失敗と、押したのに進まない理由)。押していないのに何か言うことは
+     しないので、トーストではなく足の中に置く */
+  const [note, setNote] = useState('');
+  const say = (t: string) => { setNote(t); window.setTimeout(() => setNote(''), 2000); };
   const [playing, setPlaying] = useState(false);
 
   useEffect(() => {
@@ -170,16 +174,27 @@ export function KifuViewer({ title, kifu, onClose, onStudy }: KifuViewerProps) {
           padding: 'var(--sp-3) var(--sp-5)', borderTop: '1px solid var(--border)',
         }}>
           <Button size="field" onClick={onClose}>閉じる</Button>
-          <span style={{ flex: 1 }} />
+          <span style={{
+            flex: 1, minWidth: 0, paddingLeft: 'var(--sp-3)',
+            fontSize: 'var(--fs-6)', color: 'var(--sub)',
+            overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
+          }}>{note}</span>
           {/* コピーと保存を落とさない — 検討へ直行するだけだと、棋譜を人に
               渡す道が消える */}
+          {/* **成否を待ってから言う。**以前は書き込みを待たずに
+              「コピーしました」と出していたので、権限が無くても成功して
+              見えていた */}
           <Button size="field" disabled={!kifu} onClick={() => {
-            void navigator.clipboard.writeText(kifu).catch(() => { /* 権限なし */ });
-            setCopied(true);
-            window.setTimeout(() => setCopied(false), 1200);
-          }}>{copied ? 'コピーしました' : '棋譜をコピー'}</Button>
+            void navigator.clipboard.writeText(kifu)
+              .then(() => say('コピーしました'))
+              .catch(() => say('コピーできませんでした'));
+          }}>棋譜をコピー</Button>
           <Button size="field" disabled={!kifu}
-                  onClick={() => void ggsApi.saveKifu(kifu, 'kifu').catch(() => {})}>
+                  // **成功したときは何も言わない** (規則 34 — 出すのは失敗と
+                  // 押したのに進まない理由だけ)。保存の窓が閉じたこと自体が
+                  // 報せになっている。主画面の「保存」も元からこの扱い
+                  onClick={() => void ggsApi.saveKifu(kifu, 'kifu')
+                    .catch((e) => say('保存できませんでした (' + e + ')'))}>
             ファイルに保存
           </Button>
           <Button size="field" variant="primary" disabled={!frames}
