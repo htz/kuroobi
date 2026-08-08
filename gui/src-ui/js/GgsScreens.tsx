@@ -741,8 +741,11 @@ function GgsPlay({ snap, onNav, prefs, onKifu }: {
       <div className="k-scroll" style={{ flex: 1, minWidth: 0, minHeight: 0, padding: 'var(--sp-3)' }}>
         {/* 同期対局は 2 面。横に並べて、狭ければ折り返す */}
         <div style={{ display: 'flex', gap: 'var(--sp-3)', flexWrap: 'wrap', justifyContent: 'center' }}>
-          {pair?.map((m) => (
-            <MatchBoard key={m.id} snap={snap} m={m} clock={clock} prefs={prefs} onKifu={onKifu} />
+          {pair?.map((m, i) => (
+            <MatchBoard key={m.id} snap={snap} m={m} clock={clock} prefs={prefs} onKifu={onKifu}
+                        // 同期対局は 2 局で 1 組。**どちらの面で自分が何色か**が
+                        // 分からないと、並んだ 2 枚を見分けられない (設計 §2)
+                        face={(pair?.length ?? 1) > 1 ? i + 1 : undefined} />
           ))}
         </div>
       </div>
@@ -764,9 +767,11 @@ function matchRowOf(g: MatchView[], key: string): Match {
   };
 }
 
-function MatchBoard({ snap, m, clock, prefs, onKifu }: {
+function MatchBoard({ snap, m, clock, prefs, onKifu, face }: {
   snap: GgsSnapshot; m: MatchView; clock: (id: string, side: ClockSide) => ClockView; prefs: Prefs;
   onKifu: (title: string, kifu: string, archive?: string) => void;
+  /** 同期対局の何面目か (1 起点)。1 局だけの手合いでは渡さない。 */
+  face?: number;
 }) {
   const [resign, setResign] = useState(false);
   const observer = !m.my_color;
@@ -791,7 +796,22 @@ function MatchBoard({ snap, m, clock, prefs, onKifu }: {
   return (
     // 同期対局は 2 面が横に並ぶ。固定幅にすると 2 面で必ず折り返すので、
     // 器を分け合って縮む形にする (1 面のときは 460px で頭打ち)
-    <div style={{ flex: '1 1 300px', minWidth: 260, maxWidth: 460, display: 'flex', flexDirection: 'column' }}>
+    <div style={{
+      flex: '1 1 300px', minWidth: 260, maxWidth: 460, display: 'flex', flexDirection: 'column',
+      // 絵は 1 面ずつ枠に入れる (地 --panel / 角丸 11 / 余白 12)。
+      // 2 枚が地続きだと、どこまでが 1 局なのかが読めない
+      background: 'var(--panel)', borderRadius: 'var(--r-4)', padding: 'var(--sp-3)',
+    }}>
+      {/* 同期対局のときだけ。**自分の色は面ごとに逆**になる */}
+      {face !== undefined && (
+        <div style={{
+          height: 'var(--h-head)', display: 'flex', alignItems: 'center', gap: 'var(--sp-3)',
+          fontSize: 'var(--fs-7)', color: 'var(--sub)',
+        }}>
+          <span>{face} 面目</span>
+          {m.my_color && <span>自分が{m.my_color === 'black' ? '黒' : '白'}</span>}
+        </div>
+      )}
       <PlayerRow color={top.color === 'black' ? 'b' : 'w'} name={top.name || '?'}
                  rate={top.rate ? +top.rate : undefined}
                  clock={clock(m.id, top.side).text} active={clock(m.id, top.side).cls === 'turn'} />
