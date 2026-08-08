@@ -79,15 +79,14 @@ export function Segmented<T extends string>({ value, options, onChange, size = '
   className?: string;
 }) {
   return (
-    /* **size は「駒」の高さ。器の高さではない。**
-       設計の絵は 器 39.2 / 駒 31.2 で描いている (5 か所すべて同じ)。
-       器のほうを段に載せると駒が 22px まで痩せ、実測で 11px の差に
-       なっていた。段に載せるのは押せる面 (駒) で、器はその結果 —
-       駒 + 内余白 4 + 罫 2。 */
+    /* **size は器の高さ。** 一度「駒の高さ」に変えたが誤りだった
+       (`ac4883f` → 戻した)。古い写しの絵 (器 39.2 / 駒 31.2) を測って
+       いたためで、**いまの絵は 器 28 / 駒 22 / 内余白 2 / 角丸 7・5**
+       で実装と一致している。絵を測るときは取り直してから測ること。 */
     <div role="radiogroup" aria-disabled={disabled || undefined} className={cx('k-seg', className)} style={{
       // 外枠の角丸は --r-2 (7px)。中の駒が --r-1 (5px) なので、8px だと
       // 外と中の差が 3px 開いて縁が太く見える (設計の実測は 7 / 5)
-      display: fill ? 'flex' : 'inline-flex', gap: 2, padding: 2,
+      height: H[size], display: fill ? 'flex' : 'inline-flex', gap: 2, padding: 2,
       background: 'var(--bg)', border: '1px solid var(--border)', borderRadius: 'var(--r-2)',
       opacity: disabled ? 0.4 : 1,
     }}>
@@ -98,7 +97,6 @@ export function Segmented<T extends string>({ value, options, onChange, size = '
             onClick={() => onChange?.(o.value)}
             className={cx('k-press', on && 'k-on', on && !solid && 'k-seg-on')}
             style={{
-              height: H[size],
               flex: fill ? 1 : 'none', padding: '0 12px', borderRadius: 'var(--r-1)', fontSize: FS[size],
               // ライトでは --card (#fff) と --bg (#faf8f3) の差がほとんど無く、
               // 面の色だけでは選ばれている駒が見分けられない。**1px の罫で
