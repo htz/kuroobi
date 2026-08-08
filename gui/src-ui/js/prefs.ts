@@ -131,5 +131,3 @@ export function usePrefs() {
 export const flipped = (facing: Facing, myColor: 'black' | 'white' | ''): boolean =>
   facing === 'white' || (facing === 'auto' && myColor === 'white');
 
-/** 回した盤のマス番号。a1 が右上に来る (file も rank も裏返す)。 */
-export const viewSq = (sq: number, flip: boolean): number => (flip ? 63 - sq : sq);

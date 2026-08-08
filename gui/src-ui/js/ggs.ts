@@ -156,15 +156,6 @@ export const CLOCK_CHOICES: [string, string][] = [
   ['00:30:00', '30 分'],
 ];
 
-export function relTime(unixSecs: number): string {
-  if (!unixSecs) return '';
-  const d = Math.max(0, Date.now() / 1000 - unixSecs);
-  if (d < 60) return '今';
-  if (d < 3600) return `${Math.floor(d / 60)} 分前`;
-  if (d < 86400) return `${Math.floor(d / 3600)} 時間前`;
-  return `${Math.floor(d / 86400)} 日前`;
-}
-
 /** UNIX 秒を "14:03" にする。 */
 export function clockOf(at: number): string {
   return new Date(at * 1000).toLocaleTimeString('ja-JP',
@@ -172,13 +163,6 @@ export function clockOf(at: number): string {
 }
 
 /* ---------------- 棋譜 ---------------- */
-
-export const kifuOf = (moves: string[]): string =>
-  moves.filter((x) => !/^pa/i.test(x)).map((x) => x.toLowerCase()).join('');
-
-// 抽選オープニングの対局は着手列だけでは再生できない。GGS の標準形式
-// (GGF) は開始局面を持つので、あればそのまま渡して往復させる。
-export const kifuText = (ggf: string, moves: string[]): string => ggf || kifuOf(moves);
 
 /** GGS の着手 ("F5" / "pa") をマス番号 (file-major) にする。パスは null。 */
 export function ggsMoveToIndex(mv: string): number | null {
@@ -369,7 +353,6 @@ function readTime(k: string, v: string): string {
   const idle = span(m[1]);
   return m[2] ? `${idle} (接続してから ${span(m[2])})` : idle;
 }
-
 
 /* ---------------- 条件式 (formula) の読み下し ---------------- */
 // 自動受諾/拒否の条件式を日本語にする。記法は `tell /os help formula` 準拠。

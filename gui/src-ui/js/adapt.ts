@@ -1,4 +1,4 @@
-import type { GameView, GgsSnapshot, LogLine as RawLog, ThinkView } from './types';
+import type { GameView, GgsSnapshot, LogLine as RawLog } from './types';
 import type { MoveInfo } from './state';
 import type { Cell, EvalInfo } from './components/board';
 import type { GraphPoint, Move, StoneColor } from './components/data';
@@ -76,10 +76,6 @@ export function evalsOf(
   }
   return out;
 }
-
-/** 直前の手の評価 (盤の下に出す)。動いていないときは null で行ごと消す。 */
-export const evalText = (t: ThinkView | null): string | null =>
-  t == null ? null : (t.value > 0 ? '+' : '') + t.value.toFixed(t.exact ? 0 : 1) + ' 石';
 
 /* ---------------- GGS ---------------- */
 
