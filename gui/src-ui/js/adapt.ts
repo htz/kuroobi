@@ -33,6 +33,8 @@ export function movesOf(
   v: GameView,
   info: Record<number, MoveInfo>,
   values?: (GraphPoint | undefined)[] | null,
+  /** 見る側。黒視点なら 1、白視点なら -1。損 (▼n) は量なので符号を持たない */
+  sign: 1 | -1 = 1,
 ): Move[] {
   const shown = v.moves.map((_, i) => (info[i + 1] ? info[i + 1].value : values?.[i + 1]?.value));
   return v.moves.map((m, i) => {
@@ -48,7 +50,8 @@ export function movesOf(
       move: m == null ? '' : sqName(m),
       pass: m == null,
       color: colorOf(i),
-      score: value,
+      score: value === undefined ? undefined : value * sign,
+      // 損は「その手で減らした量」。どちらから見ても同じ大きさなので反さない
       loss: lossOf(i, value, prev),
       secs: rec?.secs,
       src: value === undefined ? undefined
@@ -59,16 +62,30 @@ export function movesOf(
 }
 
 /** 盤に載せる評価値マス。ヒントは「いま打てる手」にだけ付く。 */
+/** 盤に出す候補手の評価。
+ *
+ * **エンジンが返すのは手番視点** (`HintView.value`) だが、棋譜表とグラフは
+ * 黒視点で揃えてある。同じ画面で `+8` の意味が場所によって変わっていたので、
+ * ここで黒視点へ直す (設計の設定「表示」の注記 —「棋譜・グラフ・盤のすべて」)。
+ * `sign` はそのうえでの見る側 (黒 = 1 / 白 = -1)。
+ *
+ * **最善の印は直す前の値で選ぶ。** 符号を返してから最大を取ると、白番では
+ * いちばん悪い手に枠が付く。 */
 export function evalsOf(
   hints: Record<number, { value: number; exact: boolean; book: boolean; depth: number }> | null,
+  /** 手番が黒か。false なら手番視点の値を反転して黒視点にする */
+  blackToMove = true,
+  /** 見る側。黒視点なら 1、白視点なら -1 */
+  sign: 1 | -1 = 1,
 ): Record<number, EvalInfo> | undefined {
   if (!hints) return undefined;
   const out: Record<number, EvalInfo> = {};
   let best = -Infinity;
   for (const h of Object.values(hints)) best = Math.max(best, h.value);
+  const flip = (blackToMove ? 1 : -1) * sign;
   for (const [sq, h] of Object.entries(hints)) {
     out[+sq] = {
-      score: h.value,
+      score: h.value * flip,
       // 出所は 3 種。「N 手」だけが途中の値で、これが出ている間は数字が育つ
       src: h.book ? { book: true } : h.exact ? { exact: true } : { depth: h.depth },
       best: h.value === best,

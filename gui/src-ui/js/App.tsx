@@ -90,6 +90,11 @@ export function App() {
   /* 評価値グラフの帯。620px 以下でだけ畳む (base.css)。広い窓では
      この値は使われない — 畳む段が持つので、閉じたまま窓を広げても出る */
   const [graphOpen, setGraphOpen] = useState(false);
+  /* 見る側 (設計 §2 の「黒視点 / 白視点」)。**盤の回転ではなく評価値の符号**で、
+     棋譜表・グラフ・盤のすべてに同じ向きで効く (設計の設定「表示」の注記)。
+     検討だけが切り替えられる — 対局中に符号が反ると、指しながら読む数字の
+     意味が変わって危ない */
+  const [pov, setPov] = useState<'b' | 'w'>('b');
 
   // 設定は別の窓なので、そこでファイルを差し替えてもこちらは気付けない。
   // 報せを聞いて定石の有無だけ取り直す (盤の「定石」表示が変わる)
@@ -358,10 +363,17 @@ export function App() {
   }, [fetched]);
 
   const v = g.view;
+  // 検討でだけ反す。対局・定石・GGS は黒視点のまま
+  const sign: 1 | -1 = study && pov === 'w' ? -1 : 1;
   const moves = useMemo(
-    () => (v ? movesOf(v, g.moveSource, graph.values) : []),
-    [v, g.moveSource, graph.values]);
-  const evals = g.autoHint ? evalsOf(g.hints) : undefined;
+    () => (v ? movesOf(v, g.moveSource, graph.values, sign) : []),
+    [v, g.moveSource, graph.values, sign]);
+  const evals = g.autoHint ? evalsOf(g.hints, v?.player !== 'white', sign) : undefined;
+  /* グラフに渡す点も見る側で反す。**名札だけ入れ替えて値を残すと嘘になる** —
+     白視点にしたのに黒有利の点が「白有利」側へ伸びていた (実機で見つけた)。 */
+  const povPoints = useMemo(
+    () => (graph.values ?? []).map((p) => (p && sign === -1 ? { ...p, value: -p.value } : p)),
+    [graph.values, sign]);
   // 敗着 = いちばん損した手。帯とグラフの両方が同じものを指すように 1 か所で出す
   const blunder = useMemo(() => {
     let best: { at: number; loss: number } | undefined;
@@ -559,6 +571,9 @@ export function App() {
               <Button onClick={() => setPaste(true)}>棋譜を読み込む</Button>
               <span style={{ width: 1, height: 20, background: 'var(--border)',
                              margin: '0 var(--sp-1)', flex: 'none' }} />
+              <Segmented value={pov} onChange={setPov}
+                         options={[{ value: 'b', label: '黒視点' },
+                                   { value: 'w', label: '白視点' }]} />
               <span style={{ fontSize: 'var(--fs-6)', color: 'var(--sub)' }}>
                 {v && v.moves.length ? `${v.cursor} / ${v.moves.length} 手` : '棋譜がありません'}
               </span>
@@ -694,9 +709,9 @@ export function App() {
 
         {/* 箱に入れず、盤の下の帯として全幅に置く。検討だけ */}
         {study && !isGgs && !isBook && (
-          <EvalGraph points={graph.values ?? []} plies={v?.moves.length} cursor={v?.cursor}
+          <EvalGraph points={povPoints} plies={v?.moves.length} cursor={v?.cursor}
                      blunder={blunder} busy={graph.busy} onJump={(n) => void g.jumpTo(n)}
-                     open={graphOpen}
+                     open={graphOpen} pov={pov}
                      // n 手目の点は「n 手指し終えた局面」。指した手は n 番目
                      moveName={(n) => { const m = v?.moves[n - 1]; return m == null ? undefined : sqName(m); }}
                      extra={<>
@@ -904,6 +919,9 @@ export function App() {
                   目盛は 10 手ごとなので、正確な数字はここが持つ (規則 58 —
                   ツールバーは操作だけで、数値は下の帯) */}
               {study && v && <StatusStat label="棋譜" value={v.cursor} unit={`/ ${v.moves.length} 手`} />}
+              {/* いまどちらから見ているか。**符号の意味は数字を見ても分からない**
+                  ので、状態として出す (絵 §2 も下の帯に置いている) */}
+              {study && <StatusStat value={pov === 'b' ? '黒視点' : '白視点'} />}
               <StatusStat label="定石" value={g.hasBook ? (g.useBook ? '有効' : '使わない') : 'なし'} />
               <StatusStat label="KUROOBI" value={lv} />
             </>} />

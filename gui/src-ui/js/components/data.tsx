@@ -107,14 +107,15 @@ export function StoneDot({ color, size = 9 }: { color: StoneColor; size?: number
  */
 export type GraphPoint = { value: number; exact?: boolean; book?: boolean };
 
-export function EvalGraph({ points, plies, cursor, blunder, busy, title = '評価値グラフ (黒視点)', extra, onJump, moveName, open }: {
+export function EvalGraph({ points, plies, cursor, blunder, busy, pov = 'b', extra, onJump, moveName, open }: {
   points: (GraphPoint | undefined)[];
   plies?: number;
   cursor?: number;
   blunder?: { at: number; loss: number };
   /** 分析中。未計算と区別するために中央の文言を変える */
   busy?: boolean;
-  title?: string;
+  /** 見る側。見出しと上下の名札が入れ替わる (値は呼ぶ側が反して渡す) */
+  pov?: 'b' | 'w';
   /** 見出し行の右端（分析の進み具合・停止ボタンなど） */
   extra?: React.ReactNode;
   /** 押した手数へ飛ぶ。現行にある操作なので落とさない */
@@ -150,6 +151,11 @@ export function EvalGraph({ points, plies, cursor, blunder, busy, title = '評�
     obs.current = o;
   }, []);
 
+  /* 見る側。**値は呼ぶ側が反して渡す** — 反す場所を 1 か所 (adapt) に
+     まとめないと、棋譜表とグラフで符号がずれる */
+  const up = pov === 'b' ? '黒' : '白';
+  const down = pov === 'b' ? '白' : '黒';
+  const title = `評価値グラフ (${up}視点)`;
   const W = 800, L = 44, R = 54, T = 18, B = 26, STEP = 8;
   /** 自然な高さと、これ以上は潰さない下限 */
   const NAT = 210, MIN = 120;
@@ -265,9 +271,11 @@ export function EvalGraph({ points, plies, cursor, blunder, busy, title = '評�
               </text>
             </g>
           ))}
-          <text x={W - R + 8} y={y(ymax) + 12} fill="var(--sub)" fontSize={11}>黒有利</text>
+          {/* 上下の名札も見る側で入れ替える。値だけ反して名札を残すと、
+              白視点で「上が黒有利なのに白が良いほど上へ伸びる」になる */}
+          <text x={W - R + 8} y={y(ymax) + 12} fill="var(--sub)" fontSize={11}>{up}有利</text>
           <text x={W - R + 8} y={y(0) + 4} fill="var(--sub)" fontSize={11}>互角</text>
-          <text x={W - R + 8} y={y(-ymax) - 6} fill="var(--sub)" fontSize={11}>白有利</text>
+          <text x={W - R + 8} y={y(-ymax) - 6} fill="var(--sub)" fontSize={11}>{down}有利</text>
 
           {cols.map(n => (
             <g key={'c' + n}>
