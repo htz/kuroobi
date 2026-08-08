@@ -1135,29 +1135,58 @@ function GgsUsers({ snap, onNav, onKifu }: {
                  }} options={[{ value: 'who', label: '接続中' }, { value: 'top', label: '上位' }]} />
                </>}>
         {!rows.length && <Empty>いません。</Empty>}
+        {/* 設計 §5 はこの一覧を**表**として描いている — 列見出し (# / 名前 /
+            レート / 状態) と 24px の行。規則 5 の「`--h-row` 24px = 表の行」に
+            合う。以前は 32px の行で列見出しも無く、レートと状態の位置が
+            行ごとに動いていた。
+            `#` は順位なので「上位」のときだけ出す (接続中の一覧に順位は無い) */}
+        {!!rows.length && (
+          <div style={{
+            display: 'flex', alignItems: 'center', gap: 'var(--sp-2)',
+            height: 'var(--h-head)', padding: '0 var(--sp-4)',
+            borderBottom: '1px solid var(--border)',
+            fontSize: 'var(--fs-7)', fontWeight: 600, letterSpacing: '.08em', color: 'var(--sub)',
+          }}>
+            {mode === 'top' && <span style={{ width: 26, textAlign: 'right' }}>#</span>}
+            <span style={{ flex: 1 }}>名前</span>
+            <span style={{ width: 96, textAlign: 'right' }}>レート</span>
+            <span style={{ width: 52, textAlign: 'right' }}>状態</span>
+          </div>
+        )}
         {/* 行どうしは詰める (節の余白が行間に入る) */}
         <List>
-        {slice.map((u) => (
+        {slice.map((u, i) => (
           <button key={u.name} type="button" className="k-row" onClick={() => setSel(u.name)}
             style={{
               width: '100%', border: 0, background: 'transparent', textAlign: 'left',
-              display: 'flex', alignItems: 'center', gap: 'var(--sp-3)',
-              height: 'var(--h-field)', padding: '0 var(--sp-2)', fontSize: 'var(--fs-5)',
+              display: 'flex', alignItems: 'center', gap: 'var(--sp-2)',
+              height: 'var(--h-row)', padding: '0 var(--sp-4)', fontSize: 'var(--fs-5)',
+              color: 'var(--text)', cursor: 'pointer',
               borderBottom: '1px solid var(--border-weak)',
             }}>
-            <span style={{ flex: 1, minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis' }}>{u.name}</span>
+            {mode === 'top' && (
+              <span style={{ width: 26, textAlign: 'right', fontSize: 'var(--fs-7)',
+                             color: 'var(--sub)', fontVariantNumeric: 'tabular-nums' }}>
+                {cur * perPage + i + 1}
+              </span>
+            )}
+            <span style={{ flex: 1, minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis',
+                           whiteSpace: 'nowrap' }}>{u.name}</span>
             {/* レートには必ず偏差を添える (規則 29) — 偏差が大きいと数字が
                 意味を持たない。ランキング (`/os t`) は偏差を返すが、接続中の
                 一覧 (`/os who`) は返さないので、そちらは数字だけになる */}
-            {u.rating != null && (
-              <span style={{ color: 'var(--sub)', fontSize: 'var(--fs-6)' }}>
+            <span style={{ width: 96, textAlign: 'right', fontVariantNumeric: 'tabular-nums' }}>
+              {u.rating != null && <>
                 {u.rating.toFixed(1)}
                 {u.dev != null && (
-                  <span style={{ opacity: .7, marginLeft: 4 }}>±{Math.round(u.dev)}</span>
+                  <span style={{ color: 'var(--sub)', marginLeft: 4 }}>±{Math.round(u.dev)}</span>
                 )}
-              </span>
-            )}
-            {snap.ongoing.some((o) => o.names.includes(u.name)) && <Tag tone="ok">対局中</Tag>}
+              </>}
+            </span>
+            {/* 状態は色つきの文字 (絵と同じ)。バッジにすると行の高さが動く */}
+            <span style={{ width: 52, textAlign: 'right', fontSize: 'var(--fs-6)', color: 'var(--ok)' }}>
+              {snap.ongoing.some((o) => o.names.includes(u.name)) ? '対局中' : ''}
+            </span>
           </button>
         ))}
         </List>
