@@ -167,8 +167,13 @@ export function App() {
       if (!v) return;
       const [who, lv] = v.split(':');
       if (who === 'settings') { void openWindow('settings'); return; }
-      // "tab:学習" のようにドックの見出しを指定する (撮るためだけの入口)
-      if (who === 'tab') { if (lv) setTab(lv); return; }
+      // "tab:学習" のようにドックの見出しを指定する (撮るためだけの入口)。
+      // "tab:強さ:custom" なら強さをカスタムにして 3 枠を開く
+      if (who === 'tab') {
+        if (lv) setTab(lv);
+        if (v.endsWith(':custom')) { g.setCustom({ depth: 20, solve: 24, band: 4 }); g.setLevel('custom'); }
+        return;
+      }
       // "book:f5d6" のように手順を渡すと、その節まで辿った状態で開く。
       // "book:log" は 2 枚目 (学習ログ) を開く — 撮るためだけの入口
       if (who === 'book') {
