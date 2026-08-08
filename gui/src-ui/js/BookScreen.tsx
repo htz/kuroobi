@@ -258,7 +258,11 @@ export function BookDock({ b, decimals = 1 }: { b: BookBrowse; decimals?: number
  * **絵は左メニューの無い独立ウィンドウを前提にしている。** 主画面では
  * 左メニュー 208 + この列 269 + ドック 290 が乗るので、盤に残るのは
  * 473px (絵は 560px)。それでも枝が読めるほうが効くと判断した。 */
-export function BookTree({ b, decimals = 1 }: { b: BookBrowse; decimals?: number }) {
+export function BookTree({ b, decimals = 1, onStudy }: {
+  b: BookBrowse; decimals?: number;
+  /** いま辿っている手順を検討で開く (設計 §7 は木の列の下端に置く)。 */
+  onStudy?: (kifu: string) => void;
+}) {
   const root = keyOf(b.line);
   const rows: Row[] = [];
   rowsOf(b, root, 0, rows);
@@ -283,6 +287,19 @@ export function BookTree({ b, decimals = 1 }: { b: BookBrowse; decimals?: number
                    onGo={() => b.goto(r.key)} />
         ))}
       </div>
+      {/* 木の列の下端。設計 §7 の位置。**辿った手順をそのまま検討へ渡す** —
+          定石は「この手はどうなのか」を調べる場所で、腑に落ちない枝を
+          自分で読ませたくなるのが自然な流れ。1 手も辿っていなければ
+          渡すものが無いので押せなくする (規則 61) */}
+      {onStudy && (
+        <div style={{
+          flex: 'none', padding: 'var(--sp-2) var(--sp-3)',
+          borderTop: '1px solid var(--border-weak)',
+        }}>
+          <Button disabled={!b.line.length}
+                  onClick={() => onStudy(b.line.map(sqName).join(''))}>検討で開く</Button>
+        </div>
+      )}
     </div>
   );
 }

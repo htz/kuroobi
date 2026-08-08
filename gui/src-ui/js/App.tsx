@@ -617,7 +617,10 @@ export function App() {
                「この局面」と「次の手」は右のドックが持つ (幅 290 は絵の 291
                とほぼ同じ)。主画面には左メニューが乗るぶん盤は絵より狭い */
             <div style={{ flex: 1, minHeight: 0, display: 'flex' }}>
-              {book.node?.size !== 0 && <BookTree b={book} decimals={prefs.decimals} />}
+              {book.node?.size !== 0 && (
+                <BookTree b={book} decimals={prefs.decimals}
+                          onStudy={(kifu) => { setNav('study'); void loadFromText(kifu); }} />
+              )}
               <BookPane b={book} coords={prefs.coords} grain={prefs.grain}
                         flip={flipped(prefs.facing, '')} onSettings={() => setSettings(true)} />
             </div>
