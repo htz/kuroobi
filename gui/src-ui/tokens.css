@@ -78,18 +78,24 @@
   --ease:cubic-bezier(.2,.7,.3,1);
 }
 
+/* ライトの字の色は**地に対して 4.5:1 を満たすところまで暗くしてある**。
+   絵の値のままだと --sub が 3.2〜3.6:1 しかなく、fs-6 (11px) や fs-7 (10px)
+   で使うと読めない。--gold 3.4 / --bad 4.1 / --accent 4.3 (--panel の上) も
+   足りていなかった。**いちばん厳しいのは --panel (#f2efe8) の上**なので、
+   そこで 4.5 に届く最小の暗さにした (絵からのずれを小さくするため)。
+   ダークは全部 4.7 以上で足りている。要 push */
 :root[data-theme="light"] {
   --bg:#faf8f3; --panel:#f2efe8; --card:#ffffff;
   --border:#ddd8cd; --border-weak:#e8e3d9;
-  --text:#1e2124; --sub:#7d8794;
-  --accent:#2b6fd0; --accent-dim:#2b6fd0; --hover:rgba(0,0,0,.075); --hover-on:rgba(0,0,0,.04); --track:rgba(0,0,0,.10);
+  --text:#1e2124; --sub:#656d78;
+  --accent:#296bc9; --accent-dim:#296bc9; --hover:rgba(0,0,0,.075); --hover-on:rgba(0,0,0,.04); --track:rgba(0,0,0,.10);
   --board:#8fa661; --board-dark:#4a3323; --line:#3f5323; --grain:#5c6b38;
   --stone-shadow:rgba(0,0,0,.22);
   --board-hint:rgba(0,0,0,.34);
   --board-eval-bg:rgba(0,0,0,.10); --board-eval-edge:rgba(0,0,0,.28);
   --board-eval-text:#1c2418; --board-eval-strong:#101710; --board-eval-weak:#3c4a36;
   --board-eval-book:#6b4e00;
-  --gold:#a07b1e; --ok:#4c7a2c; --bad:#c0503c;
+  --gold:#876819; --ok:#4b782b; --bad:#b54c39;
   --sh-1:0 1px 2px rgba(0,0,0,.18);
   --sh-2:0 20px 48px rgba(60,50,35,.28);
 }
@@ -99,15 +105,15 @@
   :root:not([data-theme="dark"]) {
     --bg:#faf8f3; --panel:#f2efe8; --card:#ffffff;
     --border:#ddd8cd; --border-weak:#e8e3d9;
-    --text:#1e2124; --sub:#7d8794;
-    --accent:#2b6fd0; --accent-dim:#2b6fd0; --hover:rgba(0,0,0,.075); --hover-on:rgba(0,0,0,.04); --track:rgba(0,0,0,.10);
+    --text:#1e2124; --sub:#656d78;
+    --accent:#296bc9; --accent-dim:#296bc9; --hover:rgba(0,0,0,.075); --hover-on:rgba(0,0,0,.04); --track:rgba(0,0,0,.10);
     --board:#8fa661; --board-dark:#4a3323; --line:#3f5323; --grain:#5c6b38;
     --stone-shadow:rgba(0,0,0,.22);
     --board-hint:rgba(0,0,0,.34);
     --board-eval-bg:rgba(0,0,0,.10); --board-eval-edge:rgba(0,0,0,.28);
     --board-eval-text:#1c2418; --board-eval-strong:#101710; --board-eval-weak:#3c4a36;
     --board-eval-book:#6b4e00;
-    --gold:#a07b1e; --ok:#4c7a2c; --bad:#c0503c;
+    --gold:#876819; --ok:#4b782b; --bad:#b54c39;
     --sh-1:0 1px 2px rgba(0,0,0,.18);
     --sh-2:0 20px 48px rgba(60,50,35,.28);
   }
