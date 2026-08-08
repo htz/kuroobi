@@ -445,7 +445,7 @@ function GgsLobby({ snap, onNav }: { snap: GgsSnapshot; onNav: (id: NavId) => vo
                   onClick={() => void ggsApi.ask(gtype, time, opp, rated)}>
             {opp ? '申し込む' : '募集する'}
           </Button>
-          <p style={{ margin: 0, fontSize: 'var(--fs-6)', color: 'var(--sub)', lineHeight: 1.8 }}>
+          <p style={{ margin: 0, maxWidth: 'var(--w-text)', fontSize: 'var(--fs-6)', color: 'var(--sub)', lineHeight: 1.8 }}>
             同期対局は同じ開局を先後入れ替えて 2 局同時に行い、結果は合計で判定します。
             レートは「ランダム開局」に反映されます。
           </p>
@@ -600,7 +600,7 @@ function GgsStandby({ snap, onNav }: { snap: GgsSnapshot; onNav: (id: NavId) => 
             {sb.enabled ? '待機モードを停止' : '待機モードを開始'}
           </Button>
         </div>
-        <p style={{ margin: 0, fontSize: 'var(--fs-6)', color: 'var(--sub)', lineHeight: 1.8 }}>
+        <p style={{ margin: 0, maxWidth: 'var(--w-text)', fontSize: 'var(--fs-6)', color: 'var(--sub)', lineHeight: 1.8 }}>
           対局終了 → 間隔待ち → 自動申し込みを繰り返します。切断時は自動で再接続し、
           中断対局も自動再開します。相手を指定しないときは自分からは申し込まず、
           届いた申し込みを受けるだけになります。
@@ -614,7 +614,7 @@ function GgsStandby({ snap, onNav }: { snap: GgsSnapshot; onNav: (id: NavId) => 
           意味 — アプリを閉じても効くこと */}
       <Section title="申し込みの条件 (サーバー側)"
                aside={<Button onClick={() => onNav('ggs-settings')}>条件を変える</Button>}>
-        <p style={{ margin: 0, fontSize: 'var(--fs-6)', color: 'var(--sub)', lineHeight: 1.8 }}>
+        <p style={{ margin: 0, maxWidth: 'var(--w-text)', fontSize: 'var(--fs-6)', color: 'var(--sub)', lineHeight: 1.8 }}>
           アプリを閉じてもサーバー側で有効な条件です。待機モードの保険になります。
         </p>
         <FormulaRow label="自動で受ける条件" src={form('accept')} />
@@ -929,8 +929,14 @@ export function GgsSettings({ snap }: { snap: GgsSnapshot }) {
   );
 }
 
+/* 説明文。**折り返しは `--w-text` (720px) で止める (規則 73)。**
+ * 全幅の画面で 1 行が 1500px になると、目が行頭に戻れない。
+ * 表・一覧・盤は窓いっぱいでよいので、折り返すのは文章だけ。 */
 function Note({ children }: { children: React.ReactNode }) {
-  return <p style={{ margin: 0, fontSize: 'var(--fs-6)', color: 'var(--sub)', lineHeight: 1.8 }}>{children}</p>;
+  return <p style={{
+    margin: 0, maxWidth: 'var(--w-text)',
+    fontSize: 'var(--fs-6)', color: 'var(--sub)', lineHeight: 1.8,
+  }}>{children}</p>;
 }
 
 /** 条件式 1 つ。木のまま組ませ、保存するときだけ文字列に戻す */

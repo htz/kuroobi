@@ -360,7 +360,7 @@ export function Settings({ prefs, setPref, ggs }: {
           ? <GgsSettings snap={ggs} />
           : (
             <Section title="GGS">
-              <p style={{ margin: 0, fontSize: 'var(--fs-6)', color: 'var(--sub)', lineHeight: 1.8 }}>
+              <p style={{ margin: 0, maxWidth: 'var(--w-text)', fontSize: 'var(--fs-6)', color: 'var(--sub)', lineHeight: 1.8 }}>
                 GGS に繋いでいないあいだは触れません。申し込みの扱いなどは
                 サーバー側に残る設定なので、繋いでから読み書きします。
               </p>
@@ -411,7 +411,7 @@ export function Settings({ prefs, setPref, ggs }: {
             </Row2>
             {/* 説明は操作の下、節の幅いっぱい (設計の絵と同じ)。欄の列に
                 字下げすると、欄の補足なのか節の説明なのかが曖昧になる */}
-            <p style={{ margin: 0, fontSize: 'var(--fs-6)', color: 'var(--sub)', lineHeight: 1.8 }}>
+            <p style={{ margin: 0, maxWidth: 'var(--w-text)', fontSize: 'var(--fs-6)', color: 'var(--sub)', lineHeight: 1.8 }}>
               ローカル対局・検討・学習の取り込みが使う並列数です。自動 = コア数の半分 ({th.auto})。
               GGS 対局用は「GGS」タブにあります (別々に動くので、両方が同時に動くと合計ぶんの CPU を使います)。
             </p>
