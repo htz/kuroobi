@@ -5,6 +5,7 @@ import React from 'react';
 import { Icon, IconButton, type IconName } from './Icons';
 import type { GgsSnapshot } from '../types';
 import { Badge, Dot, Button, Select, TextField } from './primitives';
+import { picked } from './layout';
 import logo from '../../assets/kuroobi.svg?raw';
 // 値の実体は 1 つ。設計側の state.ts に写しがあったが、定数が 2 か所にあると
 // 必ず割れる（レベル表・条件式の変数・色の値で実際に割れていた）
@@ -250,8 +251,7 @@ export function MatchRow({ m, active, onSelect, onClose }: {
   return (
     <div className={'k-row' + (active ? ' k-on' : '')} style={{
       position: 'relative', borderBottom: '1px solid var(--border-weak)',
-      background: active ? 'color-mix(in srgb, var(--accent) 14%, transparent)' : 'transparent',
-      boxShadow: active ? 'inset 2px 0 0 var(--accent)' : 'none',
+      ...picked(!!active),
     }}>
       {/* 閉じるボタンは右端から 36px を占めるので、行の本体に余白を持たせる。
           持たせないと長い名前がボタンの下に潜る */}

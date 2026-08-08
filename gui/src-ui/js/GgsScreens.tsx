@@ -6,7 +6,7 @@ import {
   fingerGroups, fingerValue, hasJapanese, normKey, parseCond, translate, useClocks,
   type ClockSide, type ClockView,
 } from './ggs';
-import { Empty, EmptyState, List, Section, TableHead, TableRow } from './components/layout';
+import { Empty, EmptyState, List, picked, Section, TableHead, TableRow } from './components/layout';
 import { Button, Segmented, Select, TextField, Toggle } from './components/primitives';
 import { Strength } from './components/strength';
 import { Confirm, PickOne } from './Dialogs';
@@ -309,8 +309,7 @@ export function GgsChat({ snap }: { snap: GgsSnapshot }) {
               width: '100%', border: 0, textAlign: 'left', display: 'flex', flexDirection: 'column',
               gap: 'var(--sp-1)', padding: 'var(--sp-2) var(--sp-3)',
               borderBottom: '1px solid var(--border-weak)',
-              background: key === cur ? 'color-mix(in srgb, var(--accent) 14%, transparent)' : 'transparent',
-              boxShadow: key === cur ? 'inset 2px 0 0 var(--accent)' : 'none',
+              ...picked(key === cur),
             }}>
             <span style={{ display: 'flex', alignItems: 'center', gap: 'var(--sp-2)', fontSize: 'var(--fs-5)' }}>
               {key === '.chat' ? '全体チャット' : key}

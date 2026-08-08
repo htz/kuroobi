@@ -375,6 +375,16 @@ export function TableHead({ pad = 'var(--sp-3)', children }: {
   );
 }
 
+/** 選ばれている行の見せ方。**accent 14% の面 + 左に 2px。**
+ *
+ * 一覧は形が 3 通りある (表の行 / 会話の 2 段 / 手合いの 2 段) が、
+ * **「選ばれている」の見せ方だけは 1 つ**にする。値を手書きで散らして
+ * いたせいで一度ずれた (学習ログだけ `--card` の面 + 角丸だった)。 */
+export const picked = (on: boolean): React.CSSProperties => ({
+  background: on ? 'color-mix(in srgb, var(--accent) 14%, transparent)' : 'transparent',
+  boxShadow: on ? 'inset 2px 0 0 var(--accent)' : 'none',
+});
+
 /* 表の 1 行。**同じ形を 3 か所で手書きしていた** (棋譜の表 / 学習ログ /
  * プレイヤーの一覧)。高さ `--h-row` (24px)、下に 1px の罫、選ばれている行は
  * **accent 14% の面 + 左に 2px** — この「選ばれている」の見せ方が画面ごとに
@@ -408,8 +418,7 @@ export function TableRow({ on, pad = 'var(--sp-3)', fs = 'var(--fs-5)', muted, o
         fontVariantNumeric: 'tabular-nums',
         borderBottom: '1px solid var(--border-weak)',
         color: muted ? 'var(--sub)' : 'var(--text)',
-        background: on ? 'color-mix(in srgb, var(--accent) 14%, transparent)' : 'transparent',
-        boxShadow: on ? 'inset 2px 0 0 var(--accent)' : 'none',
+        ...picked(!!on),
       }}>{children}</button>
   );
 }
