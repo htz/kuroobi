@@ -37,7 +37,7 @@ export function GgsScreen({ nav, snap, onNav, prefs, onKifu }: {
   switch (nav) {
     case 'ggs-play': return <GgsPlay snap={snap} onNav={onNav} prefs={prefs} onKifu={onKifu} />;
     case 'ggs-lobby': return <GgsLobby snap={snap} onNav={onNav} />;
-    case 'ggs-players': return <GgsUsers snap={snap} onNav={onNav} />;
+    case 'ggs-players': return <GgsUsers snap={snap} onNav={onNav} onKifu={onKifu} />;
     case 'ggs-results': return <GgsResults snap={snap} onKifu={onKifu} />;
     case 'ggs-chat': return <GgsChat snap={snap} />;
     case 'ggs-standby': return <GgsStandby snap={snap} onNav={onNav} />;
@@ -464,13 +464,28 @@ function GgsLobby({ snap, onNav }: { snap: GgsSnapshot; onNav: (id: NavId) => vo
 }
 
 /** 一覧の 1 行。名前と補足が左、操作が右。行そのものは押さない */
-function Row({ title, sub, tag, actions }: {
+function Row({ title, sub, tag, actions, onClick, title2 }: {
   title: string; sub?: string; tag?: string; actions?: React.ReactNode;
+  /** 押せる行にする。行の中に別の押せるものがあるときは使わない (規則 46)。 */
+  onClick?: () => void;
+  /** 押せる行の補足 (title 属性)。 */
+  title2?: string;
 }) {
+  /* 押せるなら押せる要素で書く (規則 41)。div + onClick だと Tab で
+     回ってこないし Enter / Space でも選べない。 */
+  const Tag_ = onClick && !actions ? 'button' : 'div';
   return (
-    <div style={{
-      display: 'flex', alignItems: 'center', gap: 'var(--sp-2)',
-      padding: 'var(--sp-2) 0', borderBottom: '1px solid var(--border-weak)',
+    <Tag_ {...(onClick && !actions
+      ? { type: 'button' as const, className: 'k-row', onClick, title: title2 }
+      : {})} style={{
+      display: 'flex', alignItems: 'center', gap: 'var(--sp-2)', width: '100%',
+      padding: 'var(--sp-2) 0',
+      // 一括の border を先に置く。**あとに書くと borderBottom を消す** —
+      // 行の区切りが全部消えるが、GGS に繋がないと見えないので気付けない
+      border: 0, borderRadius: 0,
+      borderBottom: '1px solid var(--border-weak)',
+      background: 'transparent', textAlign: 'left',
+      color: 'var(--text)', cursor: onClick && !actions ? 'pointer' : undefined,
     }}>
       <span style={{ flex: 1, minWidth: 0, display: 'flex', flexDirection: 'column', gap: 'var(--sp-1)' }}>
         <span style={{ display: 'flex', alignItems: 'center', gap: 'var(--sp-2)', fontSize: 'var(--fs-5)' }}>
@@ -480,7 +495,7 @@ function Row({ title, sub, tag, actions }: {
         {sub && <span style={{ fontSize: 'var(--fs-6)', color: 'var(--sub)' }}>{sub}</span>}
       </span>
       {actions}
-    </div>
+    </Tag_>
   );
 }
 
@@ -1031,7 +1046,10 @@ function fmtDay(secs: number): string {
  * 対局の状況も載せる — 一覧で見えていたものが詳細で消えると、
  * 申し込む前に一覧へ戻る羽目になる。
  */
-function GgsUsers({ snap, onNav }: { snap: GgsSnapshot; onNav: (id: NavId) => void }) {
+function GgsUsers({ snap, onNav, onKifu }: {
+  snap: GgsSnapshot; onNav: (id: NavId) => void;
+  onKifu: (title: string, kifu: string, archive?: string) => void;
+}) {
   const [sel, setSel] = useState<string | null>(null);
   const [mode, setMode] = useState<'who' | 'top'>('who');
   // レートは形式ごとに別のプール。混ぜると順位が意味を持たないので、
@@ -1045,7 +1063,7 @@ function GgsUsers({ snap, onNav }: { snap: GgsSnapshot; onNav: (id: NavId) => vo
 
   if (sel) {
     return <UserDetail snap={snap} name={sel} tab={tab} onTab={setTab}
-                       onBack={() => setSel(null)} onNav={onNav} />;
+                       onBack={() => setSel(null)} onNav={onNav} onKifu={onKifu} />;
   }
 
   const rows = mode === 'who' ? snap.users : snap.ranking;
@@ -1126,9 +1144,10 @@ function GgsUsers({ snap, onNav }: { snap: GgsSnapshot; onNav: (id: NavId) => vo
   );
 }
 
-function UserDetail({ snap, name, tab, onTab, onBack, onNav }: {
+function UserDetail({ snap, name, tab, onTab, onBack, onNav, onKifu }: {
   snap: GgsSnapshot; name: string; tab: string;
   onTab: (t: string) => void; onBack: () => void; onNav: (id: NavId) => void;
+  onKifu: (title: string, kifu: string, archive?: string) => void;
 }) {
   useEffect(() => { ggsApi.finger(name).catch(() => {}); }, [name]);
   useEffect(() => { ggsApi.history(name === snap.login ? '' : name).catch(() => {}); }, [name, snap.login]);
@@ -1203,10 +1222,15 @@ function UserDetail({ snap, name, tab, onTab, onBack, onNav }: {
         ) : (
           <>
             {!rows.length && <Empty>対戦履歴はありません。</Empty>}
+            {/* 押すと棋譜を覆いで見せる。手元に棋譜は無いので、対局の番号から
+                取り出す (結果の画面と同じ道)。押せない行を並べていたので、
+                一覧から棋譜へ行く道が無かった */}
             {rows.map((h) => (
               <Row key={h.id}
                    title={`${h.black} 対 ${h.white}`}
-                   sub={`${h.at} · ${gtypeLabel(h.gtype)} · ${h.score}`} />
+                   sub={`${h.at} · ${gtypeLabel(h.gtype)} · ${h.score}`}
+                   title2="棋譜を見る"
+                   onClick={() => onKifu(`${h.black} 対 ${h.white}`, '', h.id)} />
             ))}
           </>
         )}
