@@ -820,6 +820,7 @@ export function GgsSettings({ snap }: { snap: GgsSnapshot }) {
   const [cores, setCores] = useState(0);
   useEffect(() => { api.activity().then((a) => setCores(a.cores)).catch(() => {}); }, []);
 
+  const online = snap.conn === 'online';
   // 申し込みの条件はサーバーが持っている。開いたときに取り直す
   const login = snap.login;
   useEffect(() => { if (login) ggsApi.finger(login).catch(() => {}); }, [login]);
@@ -899,16 +900,23 @@ export function GgsSettings({ snap }: { snap: GgsSnapshot }) {
             : <Note>ファイルがありません。左メニュー下の「設定」で指定してください。</Note>}
         </Section>
 
+        {/* **ここだけはサーバーに置いてある値なので、繋がないと読めない。**
+            上の 強さ / 持ち時間 / 定石 / ふるまい は手元の設定で、
+            未接続でも `ggs.rs` の待ち受けが受け取る (1015〜1055 行) */}
         <Section title="申し込みの扱い">
           <Note>
             相手から対局を申し込まれたときに、自動で受ける / 断る条件です。
             <b style={{ color: 'var(--text)' }}>サーバー側に残る</b>ので、アプリを閉じていても効きます。
             受ける条件と断る条件の両方に当てはまるときは、断るほうが勝ちます。
           </Note>
-          <FormulaField label="自動で受ける条件" src={myForm('accept')}
-                        onSave={(s) => void saveForm('aform', s)} />
-          <FormulaField label="自動で断る条件" src={myForm('decline')}
-                        onSave={(s) => void saveForm('dform', s)} />
+          {online ? <>
+            <FormulaField label="自動で受ける条件" src={myForm('accept')}
+                          onSave={(s) => void saveForm('aform', s)} />
+            <FormulaField label="自動で断る条件" src={myForm('decline')}
+                          onSave={(s) => void saveForm('dform', s)} />
+          </> : (
+            <Note>繋いでいないあいだは読めません。ログインすると出ます。</Note>
+          )}
         </Section>
 
         <Section title="ふるまい">
@@ -926,12 +934,15 @@ export function GgsSettings({ snap }: { snap: GgsSnapshot }) {
           <Button variant="primary" onClick={() => void apply()}>適用</Button>
         </div>
 
-        <Section title="接続">
-          <Note>
-            ログアウトすると保存済みの認証情報も消えます。次の起動では自動ログインしません。
-          </Note>
-          <div><Button variant="danger" onClick={() => void ggsApi.disconnect()}>ログアウト</Button></div>
-        </Section>
+        {/* 繋いでいるときだけ。押せないログアウトを描いても意味が無い */}
+        {online && (
+          <Section title="接続">
+            <Note>
+              ログアウトすると保存済みの認証情報も消えます。次の起動では自動ログインしません。
+            </Note>
+            <div><Button variant="danger" onClick={() => void ggsApi.disconnect()}>ログアウト</Button></div>
+          </Section>
+        )}
       </div>
     </div>
   );

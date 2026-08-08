@@ -381,14 +381,18 @@ export function Settings({ prefs, setPref, ggs }: {
             落とした — 同じ設定へ行く道が 2 つあると、どちらが本物か
             分からなくなる (規則 58) */}
         {/* **未接続でもスナップショットは返る** (conn が "disconnected" の
-            既定値)。`ggs` の有無で判ると、繋いでいないのにログアウトの釦まで
-            出てしまう。接続状態で判る */}
-        {tab === 'ggs' && (ggs && ggs.conn === 'online'
+            既定値)。**繋がないと丸ごと出さない作りだったが、それは行き過ぎ
+            だった** — 強さ・持ち時間・定石・ふるまいは手元の設定で、
+            `ggs.rs` の未接続の待ち受け (1015〜1055 行) がちゃんと受け取る。
+            繋いでからでないと GGS 用の強さを決められないのはおかしい。
+            サーバーに置いてある「申し込みの扱い」と「接続」だけを
+            `GgsSettings` の中で畳む */}
+        {tab === 'ggs' && (ggs
           ? <GgsSettings snap={ggs} />
           : (
             <Section title="GGS">
               <p style={{ margin: 0, maxWidth: 'var(--w-text)', fontSize: 'var(--fs-6)', color: 'var(--sub)', lineHeight: 1.8 }}>
-                GGS に繋いでいないあいだは触れません。申し込みの扱いなどは
+                GGS の設定を読み込めていません。申し込みの扱いなどは
                 サーバー側に残る設定なので、繋いでから読み書きします。
               </p>
             </Section>
