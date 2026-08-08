@@ -118,19 +118,26 @@ function NavRow({ item, active, onSelect }: { item: NavItem; active: boolean; on
         background: active ? 'var(--accent-dim)' : 'transparent',
         color: active ? 'var(--on-accent)' : 'var(--text)', fontWeight: active ? 600 : 400,
       }}>
-      <Icon name={item.icon} size={16} />
+      {/* **絵は縮ませない。** 48px の列では 絵 16 + 溝 12 + バッジ 18 = 46 で
+          32px の当たりに収まらず、`flex` が絵のほうを 0 まで潰していた
+          (数字だけが残ってどの行か分からなくなる) */}
+      <span style={{ flex: 'none', display: 'grid', placeItems: 'center' }}>
+        <Icon name={item.icon} size={16} />
+      </span>
       <span className="k-nav-label">{item.label}</span>
+      {/* 置き場所は base.css が持つ (畳む段で絵の角へ移すため)。
+          インラインに書くと media query が届かない */}
       {item.count != null && (
-        <span style={{
-          marginLeft: 'auto', minWidth: 18, height: 18, padding: '0 5px', borderRadius: 9,
+        <span className="k-nav-n" style={{
+          minWidth: 18, height: 18, padding: '0 5px', borderRadius: 9,
           fontSize: 'var(--fs-7)', fontWeight: item.alert ? 700 : 600, display: 'grid', placeItems: 'center',
           background: item.alert ? 'var(--bad)'
             : active ? 'color-mix(in srgb, var(--on-accent) 22%, transparent)' : 'var(--border)',
           color: item.alert ? 'var(--on-bad)' : active ? 'var(--on-accent)' : 'var(--text)',
         }}>{item.count}</span>
       )}
-      {item.dot && <span style={{
-        marginLeft: 'auto', width: 7, height: 7, borderRadius: '50%', background: 'var(--' + item.dot + ')',
+      {item.dot && <span className="k-nav-dot" style={{
+        width: 7, height: 7, borderRadius: '50%', background: 'var(--' + item.dot + ')',
       }} />}
     </button>
   );

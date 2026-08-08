@@ -171,6 +171,15 @@ button:disabled, button[aria-disabled="true"] { cursor:default; }
   .k-nav .k-nav-settings { width:32px; margin:0 auto; }
   /* 行と同じ左右 8px。12px のままだと中身が 24px しか残らない */
   .k-nav .k-nav-foot { padding:var(--sp-3) 8px; }
+  /* バッジは絵の角へ。**数を捨てない** — 点に置き換えると「何件あるか」が
+     読めなくなる。絵より小さくして角に載せれば両方出せる */
+  .k-nav .k-nav-row { position:relative; }
+  .k-nav .k-nav-n {
+    position:absolute; top:1px; right:1px; margin-left:0;
+    min-width:14px; height:14px; padding:0 3px; border-radius:7px;
+    font-size:9px; line-height:1;
+  }
+  .k-nav .k-nav-dot { position:absolute; top:4px; right:4px; margin-left:0; }
   /* 文字が消えたあとの絵は左端に取り残されるので、数字と同じ真ん中に置く */
   .k-nav .k-meter-head { justify-content:center; }
   .k-nav .k-nav-row { justify-content:center; padding:0; }
