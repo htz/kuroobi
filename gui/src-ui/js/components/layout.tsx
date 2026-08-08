@@ -256,10 +256,10 @@ export function BottomPanel({ tabs, active, onTab, onClose, height = 240, childr
 
 /* 浮くもの。角丸 --r-4 と影を持つのは Modal / Toast / 盤の外枠だけ
  * (Popover は使い所が無かったので削除した — 規則 70) */
-export function Modal({ title, body, actions, width = 340 }: {
+export function Modal({ title, body, actions, width = 'var(--w-modal)' }: {
   title: string; body?: React.ReactNode; actions?: React.ReactNode;
-  /** 既定は 340px。棋譜ビューアのように中身の要る覆いは広げる (規則 71) */
-  width?: number;
+  /** 既定は `--w-modal` (340px)。中身の要る覆いは `--w-modal-wide` (規則 71) */
+  width?: string;
 }) {
   return (
     <div role="dialog" aria-modal style={{

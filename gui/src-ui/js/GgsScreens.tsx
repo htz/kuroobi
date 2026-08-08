@@ -93,7 +93,7 @@ function GgsLogin() {
           状態の文はその下に置く (欄と釦が縦に一続きになる)。
           見出しは節と同じ小さい字 (10px・600・字間 .08em)。 */}
       <div style={{
-        width: 340, borderRadius: 'var(--r-4)', background: 'var(--panel)',
+        width: 'var(--w-modal)', borderRadius: 'var(--r-4)', background: 'var(--panel)',
         border: '1px solid var(--border)', padding: 22,
         display: 'flex', flexDirection: 'column', gap: 14,
       }}>

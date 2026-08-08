@@ -80,7 +80,7 @@ export function KifuViewer({ title, kifu, onClose, onStudy }: KifuViewerProps) {
     <Overlay onClose={onClose}>
       {/* 幅 520 は設計の実測と規則 71 で一致している。中身 = 盤 260 + 情報列 */}
       <div role="dialog" aria-modal style={{
-        width: 520, borderRadius: 'var(--r-4)', background: 'var(--card)',
+        width: 'var(--w-modal-wide)', borderRadius: 'var(--r-4)', background: 'var(--card)',
         border: '1px solid var(--border)', boxShadow: 'var(--sh-2)',
         display: 'flex', flexDirection: 'column',
       }}>

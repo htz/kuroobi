@@ -81,7 +81,7 @@ export function PasteKifu({ onLoad, onFile, onCancel }: {
     <Overlay onClose={onCancel}>
       {/* 幅は絵の実測 520 (以前は 460)。段は 3 つで、見出しと足を罫で切る */}
       <div role="dialog" aria-modal style={{
-        width: 520, borderRadius: 'var(--r-4)', background: 'var(--card)',
+        width: 'var(--w-modal-wide)', borderRadius: 'var(--r-4)', background: 'var(--card)',
         border: '1px solid var(--border)', boxShadow: 'var(--sh-2)',
         display: 'flex', flexDirection: 'column',
       }}>
