@@ -91,30 +91,6 @@ impl Default for EngineConfig {
     }
 }
 
-/// ポンダリングの方式。相手の手番中に何を読むか。
-///
-/// **時間制限があるときにしか効かない。** 深さを決め打ちして指すなら
-/// 探索はどのみち最後まで走るので、先に読んでも得るものが無い。
-///
-/// 的中率を測った結果 (`ponderhit`、depth 8 / solve 14 / 自己対戦):
-/// 予測手が当たるのは **58%** (相手を弱くしても 53%)。相手の合法手は
-/// 中盤で平均 11.7 手。
-#[derive(Clone, Copy, PartialEq, Eq, Debug, Default)]
-pub enum PonderMethod {
-    /// 読まない。
-    #[default]
-    Off,
-    /// **予測手 1 本。** 置換表が指す相手の最善手だけを反復深化する。
-    /// 当たれば深さをまるごと稼げるが、4 割強は外す。
-    Predict,
-    /// **全合法手。** 相手のどの手が来ても何かは温まっている。1 手あたり
-    /// 1/N の時間しか使えない (中盤で N ≒ 11.7)。
-    All,
-    /// **混合。** 予測手を毎巡読み、残りの巡で他の手を 1 つずつ回す。
-    /// 当たりの大きさと外さなさの中間。
-    Mixed,
-}
-
 /// 1 手の判断結果。`value` は手番視点の石差 (exact なら厳密値)。
 #[derive(Clone, Copy, Debug, Default)]
 pub struct MoveEval {
@@ -269,88 +245,62 @@ impl Engine {
         Some((moves, self.learned.has(board)))
     }
 
+    /// 中盤の置換表を空にする。
+    ///
+    /// **測定用。** 1 局ごとに消さないと、温まった表が次の局へ持ち越されて
+    /// 同一条件の対戦ですら偏った結果が出る (CLAUDE.md の 4 番)。
+    /// 対局中に呼ぶものではない — ポンダリングは表を持ち越すためにある。
+    pub fn clear_tables(&mut self) {
+        self.search.clear();
+    }
+
     /// 相手の手番中に先行して読む。**盤は動かさない。**
     ///
-    /// `after_my_move` は自分が指し終えた局面 (= 相手の手番)。期限が来るか
-    /// `stop` が立つまで置換表を埋め、訪れたノード数を返す。
+    /// `after_my_move` は自分が指し終えた局面 (= 相手の手番)。置換表が指す
+    /// **相手の最善手 1 本だけ**を反復深化し、期限か `stop` まで走って、
+    /// 訪れたノード数を返す。
     ///
-    /// **解析の経路 (`analyze` / `analyze_deepening`) を使わない。** あちらは
-    /// 手どうしを公平に比べるために各手の前後で置換表を消すので、
-    /// ポンダリングの目的 (**読んだものを本番の探索へ渡す**) と正反対になる。
+    /// **全合法手に配る形と混合は測って捨てた** (`notes/pondering.md`)。
+    /// 11 手に時間を配ると 1 手あたり 4〜6 段までしか届かず、17 段前後まで
+    /// 読む本番の探索では枝を刈れない。到達深さの差は
+    /// **予測手 1 本で +1.6〜1.8 段、全合法手では 0** だった。
+    /// **先に読んでおけば足しになる、は成り立たない** — 本番と同じ深さまで
+    /// 行けたものだけが役に立つ。
     ///
-    /// 定石も引かない。定石から返る手は探索を通らないので表に何も残らない。
-    pub fn ponder(
-        &mut self,
-        after_my_move: &Board,
-        method: PonderMethod,
-        deadline: std::time::Instant,
-    ) -> u64 {
+    /// **解析の経路 (`analyze` / `analyze_deepening`) は使えない。** あちらは
+    /// 手どうしを公平に比べるために各手の前後で置換表を消しており
+    /// (「解析でばらまいた浅いエントリを対局用の探索に引き継がない」)、
+    /// ポンダリングの目的と正反対になる。
+    ///
+    /// **時間制限があるときにしか効かない。** 深さを決め打ちして指すなら
+    /// 探索はどのみち最後まで走るので、先に読んでも得るものが無い。
+    pub fn ponder(&mut self, after_my_move: &Board, deadline: std::time::Instant) -> u64 {
         let base = self.nodes();
-        if method == PonderMethod::Off || is_game_over(after_my_move) {
+        if is_game_over(after_my_move) || after_my_move.movable_count() == 0 {
             return 0;
         }
-        // パスの局面は読んでも意味が無い (手番がすぐ戻る)
-        if after_my_move.movable_count() == 0 {
+        /* 予測が取れないことがある (終盤は完全読みが別の表を使うので中盤の
+        表に最善手が残らない。実測で終盤の 47%)。**そこで適当な手を選んで
+        読まない** — 当たる見込みが無いまま時間を使うだけになる。 */
+        let Some(pred) = self.tt_best(after_my_move) else {
+            return 0;
+        };
+        let mut child = *after_my_move;
+        child.make_move_bits(pred);
+        if is_game_over(&child) {
+            return 0;
+        }
+        // 完全読み域はここで刻めない (期限を無視して走り切る)。本番に任せる
+        if child.empty_count() <= self.config.solve_empties {
             return 0;
         }
         self.stop.reset();
-
-        /* 読む先を並べる。**先頭は予測手** — 置換表が指す相手の最善手で、
-        これが `Predict` の唯一の対象、`Mixed` では毎巡読む相手になる。 */
-        let pred = self.tt_best(after_my_move);
-        let mut targets: Vec<Position> = Vec::new();
-        if let Some(p) = pred {
-            targets.push(p);
-        }
-        if method != PonderMethod::Predict {
-            for p in after_my_move.movable_iter() {
-                if Some(p) != pred {
-                    targets.push(p);
-                }
-            }
-        }
-        if targets.is_empty() {
-            /* 予測が取れないことがある (終盤は完全読みが別の表を使うので
-            中盤の表に最善手が残らない。実測で終盤の 47%)。`Predict` の
-            ときはそこで諦める — 適当な手を選んで読むと、当たる見込みが
-            無いまま時間を使う */
-            return 0;
-        }
-
-        /* 反復深化。**全員を 1 段ずつ上げる** — 1 つを深く読み切ってから
-        次へ行くと、期限が来たときに読めていない手が残る。 */
         let mut depth = 1;
-        let mut ready = vec![false; targets.len()];
         while depth <= self.config.depth {
-            for (i, &pos) in targets.iter().enumerate() {
-                if std::time::Instant::now() >= deadline || self.stop.is_stopped() {
-                    return self.nodes() - base;
-                }
-                /* `Mixed` は予測手 (i == 0) を毎巡、他は 1 巡に 1 つずつ。
-                `depth` を人数で割った余りで回す */
-                if method == PonderMethod::Mixed && i > 0 {
-                    let turn = (depth as usize) % (targets.len() - 1);
-                    if i - 1 != turn {
-                        continue;
-                    }
-                }
-                if ready[i] {
-                    continue;
-                }
-                let mut child = *after_my_move;
-                child.make_move_bits(pos);
-                if is_game_over(&child) {
-                    ready[i] = true;
-                    continue;
-                }
-                // 完全読み域はここで刻めないので触らない (期限を無視して
-                // 走り切ってしまう。本番の探索に任せる)
-                if child.empty_count() <= self.config.solve_empties {
-                    ready[i] = true;
-                    continue;
-                }
-                self.search.best_move_valued(&child, depth);
+            if std::time::Instant::now() >= deadline || self.stop.is_stopped() {
+                break;
             }
+            self.search.best_move_valued(&child, depth);
             depth += 1;
         }
         self.nodes() - base
