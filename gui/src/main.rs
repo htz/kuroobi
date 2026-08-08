@@ -714,13 +714,25 @@ fn learn_game(app: State<App>) -> Result<(), String> {
         let total = job.remaining() as u32;
         // 終わるまで空。途中で諦めた取り込みは明細を残さない
         let mut changes: Vec<kuroobi::learn::BackupChange> = Vec::new();
+        /* 直近で譲った時刻。**譲りは一瞬ずつ何度も起きる。**
+           分析は 1 局面ごとに探索の印を立てて外すので、その瞬間だけを
+           見ていると譲っている間隔が数十ミリ秒しか続かない。画面は
+           1 秒ごとにしか状態を取らないので、**実際には何度も譲っている
+           のに「譲り中」が一度も出ない**。少しのあいだ立てたままにして、
+           人の時間の刻みで正しくする (譲ったこと自体は本当に起きている)。 */
+        let mut last_yield: Option<std::time::Instant> = None;
+        const YIELD_HOLD: std::time::Duration = std::time::Duration::from_millis(1500);
         loop {
             // 対局・検討・GGS 対局が動いている間は譲って止まる
             // (裏の学習が CPU を奪わない)。空いたら続きから再開する
             let busy = act.lock().unwrap().local.is_some() || ggs_match_in(&ggs_snap);
+            if busy {
+                last_yield = Some(std::time::Instant::now());
+            }
+            let recently = last_yield.is_some_and(|t| t.elapsed() < YIELD_HOLD);
             {
                 let mut a = act.lock().unwrap();
-                a.learn_paused = busy;
+                a.learn_paused = busy || recently;
                 a.learn = Some((total.saturating_sub(job.remaining() as u32), total));
             }
             if busy {

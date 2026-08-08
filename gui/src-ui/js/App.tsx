@@ -194,6 +194,36 @@ export function App() {
         }
         return;
       }
+      /* "yield" — **学習が譲っているところを撮るための入口**。
+         `learn_paused` は `Activity.local` (思考 / 分析) が立っている間だけ
+         true になるが、対局の序盤は定石から手が返るので探索を呼ばず、
+         中盤に入る頃には 1 局ぶんの取り込み (60 局面) が終わっている。
+         **同じプロセスの中で「対局が終わる → 取り込みが始まる →
+         もう一度探索を始める」を作らないと重ならない。**
+         取り込みが始まるのを待ってから検討の分析を重ねる。 */
+      if (who === 'yield') {
+        setTab('学習');
+        g.setSide('both');
+        g.setLevel(0);   // いちばん速い。早く終局させて取り込みを始めさせる
+        g.setPlaying(true);
+        void (async () => {
+          for (let i = 0; i < 240; i++) {
+            await new Promise((r) => setTimeout(r, 500));
+            const a = await api.activity().catch(() => null);
+            if (a?.learn) break;
+          }
+          /* **もう一局、こんどは深く読ませる。**検討の分析では重ならない —
+             1 局面ずつ短く印を立てるだけで、値が控えてあると一瞬で終わる。
+             譲りが続くのは**1 手に秒を使う探索**のときだけ */
+          await g.newGame();
+          // **定石を切る。**序盤が定石から返ると探索を呼ばないので、
+          // 深さを上げても 1 手目から譲りが起きない
+          g.setUseBook(false);
+          g.setLevel(12);
+          g.setPlaying(true);
+        })();
+        return;
+      }
       // "tab:学習" のようにドックの見出しを指定する (撮るためだけの入口)。
       // "tab:強さ:custom" なら強さをカスタムにして 3 枠を開く
       if (who === 'tab') {
