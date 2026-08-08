@@ -532,7 +532,20 @@ export function App() {
           dock={isGgs ? undefined : { open: dockOpen, onToggle: () => setDockOpen(o => !o) }}
           graph={study && !isGgs && !isBook
             ? { open: graphOpen, onToggle: () => setGraphOpen(o => !o) } : undefined}
-          aux={isBook ? undefined
+          /* 定石の画面では取り込みの進み具合を右へ出す (絵 §8)。
+             **走っているのは分かるが何が変わったか分からない**を無くすのが
+             この画面の狙いなので、いま何局面目かが見えないと始まらない。
+             走っていないときは行ごと出さない (規則 11) */
+          aux={isBook
+            ? (cpu?.learn
+              ? <span style={{ display: 'flex', alignItems: 'center',
+                               gap: 'var(--sp-2)', color: 'var(--accent)' }}>
+                  <Dot />取り込み中
+                  <span style={{ color: 'var(--sub)', fontVariantNumeric: 'tabular-nums' }}>
+                    局面 {cpu.learn[0].toLocaleString()} / {cpu.learn[1].toLocaleString()}
+                  </span>
+                </span>
+              : undefined)
             : isGgs ? (conn === 'online' && ggs.snap
               ? <GgsStatus snap={ggs.snap}
                            showStrength={nav !== 'ggs-settings' && nav !== 'ggs-standby'} />
