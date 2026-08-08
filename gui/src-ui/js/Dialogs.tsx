@@ -228,9 +228,10 @@ export function Settings({ prefs, setPref, ggs, onClose }: {
 
   return (
     <Modal title="設定" width="560px" onClose={onClose} scroll>
-      {/* タブの帯。**覆いの頭 (--panel) のすぐ下に、同じ --panel をもう 1 段**
-          置くと帯が 2 つ重なって見えるので、地は --card のまま罫だけで切る。
-          高さは --h-bar (44px)。
+      {/* **タブの帯だけが明るい面 (--card)。** 覆いの頭は --panel、中身は
+          --bg で、間に挟まる帯が浮いて見える形 — 設計の絵がそうなっている。
+          逆にすると (帯が暗く中身が明るい) タブが頭と地続きになり、中身の
+          面だけが浮いた別の箱に見える。高さは --h-bar (44px)。
 
           **タブは Segmented ではない。** 絵は囲みの枠を持たず、字を並べて
           選ばれているものだけを塗る形。Segmented の囲みは「並んだ選択肢の
@@ -240,7 +241,7 @@ export function Settings({ prefs, setPref, ggs, onClose }: {
         flex: 'none', height: 'var(--h-bar)', display: 'flex',
         alignItems: 'center', justifyContent: 'center', gap: 'var(--sp-1)',
         margin: 'calc(var(--sp-4) * -1) calc(var(--sp-5) * -1) 0',
-        borderBottom: '1px solid var(--border)',
+        background: 'var(--card)', borderBottom: '1px solid var(--border)',
       }}>
         {TABS.map(([v, label]) => {
           const on = tab === v;

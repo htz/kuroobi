@@ -265,10 +265,14 @@ export function BottomPanel({ tabs, active, onTab, onClose, height = 240, childr
  * 設定だけ 44px の `--panel` の帯に閉じる釦。**同じ「浮いて決めさせるもの」
  * が画面ごとに違って見えていた。**
  *
- * 段は 3 つ:
+ * 段は 3 つ。**地の色は 3 段で変える** (設定の窓がそうだった。実測 —
+ * 題名 #1f2328 / タブ #2c3138 / 中身 #17191d):
  *   頭 … `--h-bar` (44px) の `--panel`。題名は中央、閉じるは右端 (規則 5)
- *   本体 … 余白 16/24。長ければ `scroll` で巻く
- *   足 … 上罫 + 釦の行 (右寄せ)。`actions` を渡したときだけ出す
+ *   本体 … **`--bg` (いちばん暗い)**。余白 16/24。長ければ `scroll` で巻く
+ *   足 … 頭と同じ `--panel` + 上罫。`actions` を渡したときだけ出す
+ *
+ * **中身を明るくしない。**帯より中身が明るいと、帯が沈んで箱の縁に見え、
+ * 「浮いている 1 枚」ではなく「窓の中の板」に見える。
  *
  * 幅は `--w-modal` (340) か `--w-modal-wide` (520)。高さは中身なりで、
  * 画面が低ければ `88vh` で頭打ちにして本体だけを巻く。
@@ -291,7 +295,7 @@ export function Modal({ title, sub, body, actions, width = 'var(--w-modal)', onC
   return (
     <div role="dialog" aria-modal style={{
       width, maxHeight: '88vh',
-      borderRadius: 'var(--r-4)', background: 'var(--card)',
+      borderRadius: 'var(--r-4)', background: 'var(--bg)',
       border: '1px solid var(--border)', boxShadow: 'var(--sh-2)',
       display: 'flex', flexDirection: 'column', overflow: 'hidden',
     }}>
@@ -312,7 +316,7 @@ export function Modal({ title, sub, body, actions, width = 'var(--w-modal)', onC
       </div>
 
       <div className={scroll ? 'k-scroll' : undefined} style={{
-        flex: scroll ? 1 : 'none', minHeight: 0,
+        flex: scroll ? 1 : 'none', minHeight: 0, background: 'var(--bg)',
         padding: 'var(--sp-4) var(--sp-5)',
         display: 'flex', flexDirection: 'column', gap: 'var(--sp-3)',
       }}>
@@ -325,6 +329,7 @@ export function Modal({ title, sub, body, actions, width = 'var(--w-modal)', onC
         <div style={{
           flex: 'none', display: 'flex', gap: 'var(--sp-2)', alignItems: 'center',
           padding: 'var(--sp-3) var(--sp-5)', borderTop: '1px solid var(--border)',
+          background: 'var(--panel)',
         }}>{actions}</div>
       )}
     </div>
