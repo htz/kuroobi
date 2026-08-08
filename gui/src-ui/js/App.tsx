@@ -518,7 +518,7 @@ export function App() {
               ? <GgsStatus snap={ggs.snap}
                            showStrength={nav !== 'ggs-settings' && nav !== 'ggs-standby'} />
               : undefined)
-            : <Toggle checked={g.autoHint} onChange={g.setAutoHint} label="評価値" />}>
+            : <Toggle checked={g.autoHint} onChange={g.setAutoHint} label="評価値を表示" />}>
           {isBook ? (
             <>
               {/* 2 枚の切り替えは children に置く — aux は 940px で消えるので、
@@ -548,9 +548,16 @@ export function App() {
             // 別の場所に出る。分析はグラフの見出し行が持つ (同じ理由)。
             // 絵はここに 分析 / 棋譜を読み込む / 黒視点・白視点 を置いている
             // が、どれも今は別の場所にある (台帳に項目として積んだ)
-            <span style={{ fontSize: 'var(--fs-6)', color: 'var(--sub)' }}>
-              {v && v.moves.length ? `${v.cursor} / ${v.moves.length} 手` : '棋譜がありません'}
-            </span>
+            <>
+              <Button variant="primary" disabled={graph.busy || !v?.moves.length}
+                      onClick={() => void graph.update()}>分析</Button>
+              <Button onClick={() => setPaste(true)}>棋譜を読み込む</Button>
+              <span style={{ width: 1, height: 20, background: 'var(--border)',
+                             margin: '0 var(--sp-1)', flex: 'none' }} />
+              <span style={{ fontSize: 'var(--fs-6)', color: 'var(--sub)' }}>
+                {v && v.moves.length ? `${v.cursor} / ${v.moves.length} 手` : '棋譜がありません'}
+              </span>
+            </>
           ) : (
             <>
               <Button variant={g.playing ? 'danger' : 'primary'}
@@ -700,10 +707,13 @@ export function App() {
                            </span>
                          </span>
                        )}
-                       <Button variant={graph.busy ? 'danger' : 'secondary'}
-                               onClick={() => (graph.busy ? graph.stop() : void graph.update())}>
-                         {graph.busy ? '分析停止' : '分析'}
-                       </Button>
+                       {/* **止めるのはここ、始めるのはツールバー** (絵 §2)。
+                           走っている間だけ出す — 動いていないものを止める釦を
+                           描かない。始める側を帯に置いていたが、グラフが
+                           畳まれている段 (620px 以下) では押す場所ごと消える */}
+                       {graph.busy && (
+                         <Button variant="danger" onClick={() => graph.stop()}>分析停止</Button>
+                       )}
                      </>} />
         )}
 
@@ -735,7 +745,10 @@ export function App() {
               flex: 'none', display: 'flex', gap: 'var(--sp-2)',
               padding: 'var(--sp-2) var(--sp-3)', borderTop: '1px solid var(--border-weak)',
             }}>
-              <Button title="⌘O" onClick={() => setPaste(true)}>貼り付け</Button>
+              {/* 検討ではツールバーの「棋譜を読み込む」が同じ覆いを開くので
+                  出さない。同じ操作を 1 画面に 2 つ置かない (規則 58)。
+                  対局では絵 (§1) どおりここに 3 つ並ぶ */}
+              {!study && <Button title="⌘O" onClick={() => setPaste(true)}>貼り付け</Button>}
               <Button onClick={() => void loadFromFile()}>読込</Button>
               {/* .ggf で保存すると、どちらがどの色か・結果・開始局面まで入る。
                   **1 手も無いときは押せなくする。**押すと「棋譜が空です」で
