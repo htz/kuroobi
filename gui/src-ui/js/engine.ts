@@ -136,8 +136,12 @@ const lineKey = (v: GameView | null) =>
 /** 「はい / いいえ」を聞く。既定はブラウザのダイアログ。
  *  engine.ts は画面を持たない約束なので、見た目のあるものを出したい画面は
  *  自前の確認を渡す (v2 は Overlay の中のモーダル)。 */
-export type Ask = (message: string) => boolean | Promise<boolean>;
-const askDefault: Ask = (m) => window.confirm(m);
+/* 確認の口。**題名は「何が起きるか」を言う** (設計 §6 の形)。
+ * 「確認」+「よろしいですか」だと、押す前に何が起きるか読み取れない。
+ * `ok` も同じで、動作そのものを名前にする (規則 65 の考え方)。 */
+export interface AskArgs { title: string; body: string; ok: string; danger?: boolean }
+export type Ask = (a: AskArgs) => boolean | Promise<boolean>;
+const askDefault: Ask = (a) => window.confirm(a.title + '\n' + a.body);
 
 /** 評価値グラフ。全局面を測る。
  *  `ggsMatch` は GGS の自分の対局が進行中か — GGS は最優先なので分析を断る。
@@ -167,7 +171,12 @@ export function useGraph(g: Game, ggsMatch: boolean, ask: Ask = askDefault) {
     // ローカル対局が進行中なら確認の上で停止してから始める
     if (ggsMatch) { g.say('GGS 対局中は分析を控えます', 'gold'); return; }
     if (g.playing || g.thinking) {
-      if (!await ask('対局が進行中です。停止して分析しますか？')) return;
+      if (!await ask({
+        title: '対局を止めて分析します',
+        body: 'いま進んでいる対局を止めます。分析はいまの強さで全局面を測り直すので、'
+          + '終わるまで盤は動かせません。',
+        ok: '分析する',
+      })) return;
       g.stop();
     }
     setBusy(true);
@@ -234,7 +243,11 @@ export function useStartGame(
     // GGS 対局は最優先、分析中は確認してから止める
     if (ggsMatch) { g.say('GGS 対局中はローカル対局を開始できません', 'gold'); return; }
     if (graph.busy) {
-      if (!await ask('評価値グラフを分析中です。停止して対局を始めますか？')) return;
+      if (!await ask({
+        title: '分析を止めて対局を始めます',
+        body: '評価値グラフの分析を途中で止めます。測り終えたところまでの点は残ります。',
+        ok: '対局を始める',
+      })) return;
       graph.stop();
     }
     g.setPlaying(true);

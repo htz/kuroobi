@@ -4,7 +4,7 @@ import { useGgs } from './ggs';
 import { flipped, usePrefs } from './prefs';
 import type { GameView } from './types';
 import { api, ggsApi, jsLog, onApp, openWindow, type ActivityView } from './api';
-import { useActivity, useEngineSettings, useEngineTurn, useGraph, useHints, useLearnLog, useStartGame } from './engine';
+import { useActivity, useEngineSettings, useEngineTurn, useGraph, useHints, useLearnLog, useStartGame, type AskArgs } from './engine';
 import { fmtSecs } from './ggs';
 import { cellsOf, connOf, evalsOf, ggsPlaying, movesOf, navBadges, sqName } from './adapt';
 import { AppFrame, Body, BottomPanel, Dock, Main, Section, StatusBar, StatusStat, Toolbar, WindowBar } from './components/layout';
@@ -100,9 +100,9 @@ export function App() {
   useEngineTurn(g);
   const cpu = useActivity();
   // engine.ts は画面を持たないので、確認はこちらが出して答えだけ返す
-  const [ask, setAsk] = useState<{ msg: string; done: (ok: boolean) => void } | null>(null);
+  const [ask, setAsk] = useState<(AskArgs & { done: (ok: boolean) => void }) | null>(null);
   const confirm = useCallback(
-    (msg: string) => new Promise<boolean>((done) => setAsk({ msg, done })),
+    (a: AskArgs) => new Promise<boolean>((done) => setAsk({ ...a, done })),
     [setAsk]);
   // GGS 対局は最優先。走っている間はローカル対局も分析も断る
   const ggsMatch = ggsPlaying(ggs.snap);
@@ -167,6 +167,24 @@ export function App() {
       if (!v) return;
       const [who, lv, extra] = v.split(':');
       if (who === 'settings') { void openWindow('settings'); return; }
+      /* 覆いを出す入口 (撮るためだけ)。**覆いはクリックでしか出せず、
+         寸法をずっと実測できていなかった** — 確認 / 棋譜の読み込み /
+         棋譜ビューア。`overlay:confirm` のように指定する */
+      if (who === 'overlay') {
+        if (lv === 'paste') { setPaste(true); return; }
+        if (lv === 'confirm') {
+          void confirm({ title: '27 手目まで戻します',
+                         body: '自分の手と KUROOBI の手を 1 手ずつ戻します。戻した先から指し直せます。',
+                         ok: '戻す' });
+          return;
+        }
+        if (lv === 'viewer') {
+          setViewer({ title: 'saio との対局',
+                      kifu: 'e6f4c3d6f6e7f5g5e3g4c7d3f3c4c6c5b4b6d7b5c2a3f8e8d8c8b8d2g3e2' });
+          return;
+        }
+        return;
+      }
       // "tab:学習" のようにドックの見出しを指定する (撮るためだけの入口)。
       // "tab:強さ:custom" なら強さをカスタムにして 3 枠を開く
       if (who === 'tab') {
@@ -499,7 +517,12 @@ export function App() {
             }}>
               <LearnLog items={learnLog}
                 onUndo={(e) => void (async () => {
-                  if (!await confirm('この対局で書き換えた定石を元に戻します。よろしいですか。')) return;
+                  if (!await confirm({
+                    title: 'この対局の取り込みを取り消します',
+                    body: 'この対局で書き戻した定石の値を、取り込む前に戻します。ほかの対局で'
+                      + '書き戻したぶんは残ります。',
+                    ok: '取り消す', danger: true,
+                  })) return;
                   try {
                     await api.learnUndo(e.at, e.kifu);
                     learnLogReload();
@@ -750,7 +773,7 @@ export function App() {
 
 
       {ask && (
-        <Confirm title="確認" body={ask.msg} ok="続ける"
+        <Confirm title={ask.title} body={ask.body} ok={ask.ok} danger={ask.danger}
                  onCancel={() => { ask.done(false); setAsk(null); }}
                  onOk={() => { ask.done(true); setAsk(null); }} />
       )}
