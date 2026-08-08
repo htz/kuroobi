@@ -231,8 +231,12 @@ export function LearnLog({ items, onOpen, onUndo, onBook }: {
         <div style={{ display: 'flex', gap: 'var(--sp-2)', padding: '0 var(--sp-3)' }}>
           {onBook && <Button onClick={() => onBook(cur.kifu)}>定石で見る</Button>}
           {/* 取り消しは対局単位。1 手だけ戻すと、その局面から根までの値が
-              その手を前提にしたままになる (書き戻しは連なっている) */}
-          <Button variant="danger" onClick={() => onUndo(cur)}>取り消す</Button>
+              その手を前提にしたままになる (書き戻しは連なっている)。
+              **書き換えの明細が無い対局は押せなくする** — 押しても
+              「戻せません」で返ってくるだけで、理由はすぐ上の
+              「更新した定石」が空なことで見えている (規則 61) */}
+          <Button variant="danger" disabled={!cur.changes.length}
+                  onClick={() => onUndo(cur)}>取り消す</Button>
         </div>
       </div>
     </div>

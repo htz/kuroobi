@@ -716,8 +716,12 @@ export function App() {
             }}>
               <Button onClick={() => setPaste(true)}>貼り付け</Button>
               <Button onClick={() => void loadFromFile()}>読込</Button>
-              {/* .ggf で保存すると、どちらがどの色か・結果・開始局面まで入る */}
-              <Button onClick={() => void api.saveKifu(...ggfNames(g.side)).catch((e) => g.say('' + e))}>
+              {/* .ggf で保存すると、どちらがどの色か・結果・開始局面まで入る。
+                  **1 手も無いときは押せなくする。**押すと「棋譜が空です」で
+                  返ってくるだけで、理由はすぐ上の表が「まだ手がありません」と
+                  言っている (規則 61 — 直し方は操作のそばに) */}
+              <Button disabled={!moves.length}
+                      onClick={() => void api.saveKifu(...ggfNames(g.side)).catch((e) => g.say('' + e))}>
                 保存
               </Button>
             </div>
