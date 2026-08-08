@@ -525,13 +525,17 @@ export { Badge, Dot };
  * 掴めるように見えるものは本当に掴めること (掴めるのに動かないのは
  * 無いより悪い) — 押しても掴んで滑らせても同じところへ行く。
  */
-export function MoveScrub({ plies, cursor, blunder, onSeek }: {
+export function MoveScrub({ plies, cursor, blunder, onSeek, nav = true }: {
   /** 全手数。0 なら帯は出さない */
   plies: number;
   cursor: number;
   /** 敗着。盤に触らずに場所が分かるように赤い印を打つ */
   blunder?: { at: number; loss: number };
   onSeek: (n: number) => void;
+  /** 送りの釦を帯に出すか。**呼ぶ側が既に送りの行を持っているときは false**
+   *  — 棋譜ビューアは絵 (§9) が帯の上に 5 つ並べる形なので、そちらに任せる。
+   *  既定で出すのは、帯だけ置くと 1 手ずつ動かせなくなるため。 */
+  nav?: boolean;
 }) {
   /* 送りの釦は**この帯の左端**。設計 §2 は 32px の帯に 24px の四角 4 つを
      溝 4px で並べ、ツールバーからは外している。**辿る道具を 1 か所に
@@ -559,12 +563,14 @@ export function MoveScrub({ plies, cursor, blunder, onSeek }: {
       padding: '0 var(--sp-4)', flex: 'none',
       display: 'flex', alignItems: 'center', gap: 10,
     }}>
-      <span style={{ display: 'flex', gap: 4, flex: 'none' }}>
-        <Button square size="row" title="最初へ" disabled={cursor === 0} onClick={() => step(0)}>|◀</Button>
-        <Button square size="row" title="前の手" disabled={cursor === 0} onClick={() => step(cursor - 1)}>◀</Button>
-        <Button square size="row" title="次の手" disabled={cursor >= plies} onClick={() => step(cursor + 1)}>▶</Button>
-        <Button square size="row" title="最後へ" disabled={cursor >= plies} onClick={() => step(plies)}>▶|</Button>
-      </span>
+      {nav && (
+        <span style={{ display: 'flex', gap: 4, flex: 'none' }}>
+          <Button square size="row" title="最初へ" disabled={cursor === 0} onClick={() => step(0)}>|◀</Button>
+          <Button square size="row" title="前の手" disabled={cursor === 0} onClick={() => step(cursor - 1)}>◀</Button>
+          <Button square size="row" title="次の手" disabled={cursor >= plies} onClick={() => step(cursor + 1)}>▶</Button>
+          <Button square size="row" title="最後へ" disabled={cursor >= plies} onClick={() => step(plies)}>▶|</Button>
+        </span>
+      )}
       <div ref={box} role="slider" aria-label="手数" aria-valuemin={0}
            aria-valuemax={plies} aria-valuenow={cursor} tabIndex={0}
            onPointerDown={(e) => {

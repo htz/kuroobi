@@ -61,6 +61,10 @@ export function KifuViewer({ title, kifu, onClose, onStudy }: KifuViewerProps) {
   const cur = Math.min(at ?? last, last);
   const f = frames?.[cur];
   const end = frames?.[last];
+  /* 着手列は控えの局面から作る。GGF を画面側で解き直さない (盤の規則を
+     JS に写さない、という他の画面と同じ考え方)。パスは座標を持たないので
+     「パス」と書く — 貼り直せる字ではないが、ここは読むための行 */
+  const moveList = frames ? frames.slice(1).map((k) => sqName(k.last)).join('') : '';
 
   /* 自動再生。**最後まで来たら勝手に止まる** — 止める条件を効果の
      依存に入れておくと、状態を書き戻さずに (React Compiler の
@@ -137,17 +141,12 @@ export function KifuViewer({ title, kifu, onClose, onStudy }: KifuViewerProps) {
                   {cur === 0 ? '初期局面' : `${cur}. ${sqName(f.last)}`}
                 </div>
                 {/* 棋譜の生の字。**「棋譜をコピー」で何が渡るのかを見せる** —
-                    見えないまま押させると、GGF なのか着手列なのか分からない */}
-                <div style={{ display: 'flex', flexDirection: 'column', gap: 'var(--sp-1)', minHeight: 0 }}>
-                  <span style={{ fontSize: 'var(--fs-7)', color: 'var(--sub)', letterSpacing: '.08em' }}>
-                    {kifu.startsWith('(;') ? 'GGF' : '着手列'}
-                  </span>
-                  <div className="k-scroll" style={{
-                    maxHeight: 92, overflowY: 'auto', fontFamily: 'var(--ff-mono)',
-                    fontSize: 'var(--fs-7)', color: 'var(--sub)', lineHeight: 1.6,
-                    wordBreak: 'break-all',
-                  }}>{kifu}</div>
-                </div>
+                    見えないまま押させると、GGF なのか着手列なのか分からない。
+                    絵 (§9) は**着手列と GGF を両方**出す。GGF は人が読むもの
+                    ではないので、読める形の着手列を上に置く。着手列は控えの
+                    局面から作る (GGF を自分で解き直さない) */}
+                <Raw label="着手列" tone="text" text={moveList} />
+                {kifu.startsWith('(;') && <Raw label="GGF" text={kifu} scroll />}
               </div>
             </div>
           )}
@@ -158,10 +157,10 @@ export function KifuViewer({ title, kifu, onClose, onStudy }: KifuViewerProps) {
                 名前は検討のツールバーと同じにする — 同じ動作に別の呼び名を
                 作らない (規則 49) */}
             <div style={{ display: 'flex', alignItems: 'center', gap: 'var(--sp-2)' }}>
-              <Button size="field" square title="最初へ" disabled={cur === 0} onClick={() => seek(0)}>⏮</Button>
+              <Button size="field" square title="最初へ" disabled={cur === 0} onClick={() => seek(0)}>|◀</Button>
               <Button size="field" square title="戻る" disabled={cur === 0} onClick={() => seek(cur - 1)}>◀</Button>
               <Button size="field" square title="進む" disabled={cur >= last} onClick={() => seek(cur + 1)}>▶</Button>
-              <Button size="field" square title="最後へ" disabled={cur >= last} onClick={() => seek(last)}>⏭</Button>
+              <Button size="field" square title="最後へ" disabled={cur >= last} onClick={() => seek(last)}>▶|</Button>
               <Button size="field" square title={running ? '止める' : '自動再生'}
                       disabled={last === 0}
                       onClick={() => { if (running) { setPlaying(false); return; } if (cur >= last) setAt(0); setPlaying(true); }}>
@@ -173,13 +172,35 @@ export function KifuViewer({ title, kifu, onClose, onStudy }: KifuViewerProps) {
                 {' '}/ {last} 手
               </span>
             </div>
-            {/* 手を辿るのは検討と同じ帯。同じ動作に 2 つの部品を作らない */}
-            <MoveScrub plies={last} cursor={cur} onSeek={seek} />
+            {/* 手を辿るのは検討と同じ帯。同じ動作に 2 つの部品を作らない。
+                **釦は出させない** — この覆いは絵 (§9) のとおり帯の上に
+                自前の 5 つを並べており、帯にも出すと同じ操作が 2 列になる
+                (`7279c1f` で MoveScrub に釦を足した副作用。実機で見つけた) */}
+            <MoveScrub nav={false} plies={last} cursor={cur} onSeek={seek} />
           </div>
         )}
 
       </Modal>
     </Overlay>
+  );
+}
+
+/** 棋譜の生の字を 1 段。絵は 見出し (fs-7 / --sub) の下に等幅の枠
+ *  (角丸 --r-2 / 地 --card / 余白 6・10)。GGF は長いので巻けるようにする。 */
+function Raw({ label, text, tone, scroll }: {
+  label: string; text: string; tone?: 'text'; scroll?: boolean;
+}) {
+  if (!text) return null;
+  return (
+    <div style={{ display: 'flex', flexDirection: 'column', gap: 'var(--sp-1)', minHeight: 0 }}>
+      <span style={{ fontSize: 'var(--fs-7)', color: 'var(--sub)', letterSpacing: '.08em' }}>{label}</span>
+      <div className={scroll ? 'k-scroll' : undefined} style={{
+        maxHeight: scroll ? 60 : undefined,
+        padding: '6px 10px', borderRadius: 'var(--r-2)', background: 'var(--card)',
+        fontFamily: 'var(--ff-mono)', fontSize: 'var(--fs-6)', lineHeight: 1.6,
+        color: tone === 'text' ? 'var(--text)' : 'var(--sub)', wordBreak: 'break-all',
+      }}>{text}</div>
+    </div>
   );
 }
 
