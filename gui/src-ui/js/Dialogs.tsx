@@ -5,6 +5,7 @@ import { Modal, Overlay, Section } from './components/layout';
 import { Button, Segmented, Select, TextField } from './components/primitives';
 import { Icon } from './components/Icons';
 import { Board } from './components/board';
+import { StoneDot } from './components/data';
 import { GgsSettings } from './GgsScreens';
 import type { GgsSnapshot } from './types';
 
@@ -86,8 +87,7 @@ export function PasteKifu({ onLoad, onFile, onCancel }: {
              actions={<>
                <Button size="field" onClick={onFile}>ファイルから…</Button>
                <span style={{ marginLeft: 'auto' }} />
-               {/* 絵は「キャンセル」だが、実装は 3 か所とも「やめる」で
-                   揃えてある (画面の文言は日本語で統一する)。要 push */}
+               {/* 絵も「やめる」になった (2026-08-08 の更新で追従) */}
                <Button size="field" onClick={onCancel}>やめる</Button>
                <Button size="field" variant="primary" disabled={!ok}
                        onClick={() => onLoad(text)}>読み込む</Button>
@@ -99,22 +99,49 @@ export function PasteKifu({ onLoad, onFile, onCancel }: {
             background: 'var(--bg)', border: '1px solid var(--border)',
             fontFamily: 'var(--ff-mono)', fontSize: 'var(--fs-6)', lineHeight: 1.6,
           }} />
-        {/* 下読みの結果。読めなければ理由、読めれば手数と終局図。
-            **絵には無い** — 読み込んでから間違いに気付くのを避けるために
-            足してある (絵にも入れてもらう。要 push) */}
+        {/* 下読みの結果。読めなければ理由、読めれば石数と手数。
+            先に実装へ入れて「絵にも入れてほしい」と投げていたもので、
+            **絵が追いついた** (2026-08-08)。寸法は絵の実測 —
+            盤 96 / 角丸 6 / 溝 6 / 石の点 13 / 数の間 10 / 点と数の間 6。 */}
         <div style={{ display: 'flex', gap: 'var(--sp-4)', alignItems: 'center', minHeight: 96 }}>
-          <div style={{ width: 96, height: 96, flex: 'none' }}>
+          <div style={{
+            width: 96, height: 96, flex: 'none',
+            // 盤の svg 自身の角丸 (viewBox 880 の rx 14) は 96px では 1.5px に
+            // しかならない。器で切って絵と同じ丸みにする
+            borderRadius: 'var(--r-2)', overflow: 'hidden',
+          }}>
             {last && <Board cells={last.cells as (0 | 1 | 2)[]} last={last.last} coords={false} grain={false} />}
           </div>
-          <div style={{ fontSize: 'var(--fs-6)', color: peek?.err ? 'var(--bad)' : 'var(--sub)', lineHeight: 1.7 }}>
-            {!peek && '貼り付けると、ここに読み取り結果が出ます。'}
-            {peek?.err && peek.err}
+          <div style={{
+            display: 'flex', flexDirection: 'column', gap: 6,
+            fontSize: 'var(--fs-5)', color: peek?.err ? 'var(--bad)' : 'var(--text)',
+          }}>
+            <span style={{
+              fontSize: 'var(--fs-7)', fontWeight: 600, letterSpacing: '.08em', color: 'var(--sub)',
+            }}>下読み</span>
+            {!peek && <span style={{ color: 'var(--sub)' }}>貼り付けると、ここに読み取り結果が出ます。</span>}
+            {peek?.err && <span>{peek.err}</span>}
             {last && <>
-              {/* 初期局面ぶんの 1 枚を引いて手数にする */}
-              {peek!.frames.length - 1} 手 ／ 黒 <b style={{ color: 'var(--text)' }}>{last.black}</b>
-              {' '}白 <b style={{ color: 'var(--text)' }}>{last.white}</b>
+              {/* 石は数の外側に置く。ScoreRow は両方とも点が左だが、あちらは
+                  並べて差を読ませる帯で、こちらは 1 局の結果を「黒 対 白」と
+                  読ませる (絵もこの向き) */}
+              <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+                <span style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+                  <StoneDot color="b" size={13} /><b style={{ fontWeight: 600 }}>{last.black}</b>
+                </span>
+                <span style={{ color: 'var(--sub)' }}>—</span>
+                <span style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+                  <b style={{ fontWeight: 600 }}>{last.white}</b><StoneDot color="w" size={13} />
+                </span>
+              </div>
+              {/* 絵は「42 手 ・ 終局図」。**盤が埋まっていないものまで終局図と
+                  呼ばない** — 途中で切れた棋譜も読めるので、そのときは
+                  最後の局面だと言う */}
+              <span style={{ color: 'var(--sub)' }}>
+                {peek!.frames.length - 1} 手 ・ {last.black + last.white === 64 ? '終局図' : '最後の局面'}
+              </span>
             </>}
-            {peek && !peek.err && !ok && '手が 1 つも読み取れません。'}
+            {peek && !peek.err && !ok && <span style={{ color: 'var(--sub)' }}>手が 1 つも読み取れません。</span>}
           </div>
         </div>
       </Modal>
