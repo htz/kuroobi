@@ -177,7 +177,12 @@ export function App() {
     started.current = true;
     void api.autoplay().then(async (v) => {
       if (!v) return;
-      const [who, lv, extra] = v.split(':');
+      const [who, lv, extraRaw] = v.split(':');
+      /* `:nobook` は末尾に付く目印で、ドックの見出しではない。位置で
+         受けていたので `both:40:nobook` と書くと見出しが "nobook" になり、
+         **どの枚も出ない = 画面が真っ白**になっていた (実際に踏んだ)。
+         見出しの位置に来ても目印として扱う */
+      const extra = extraRaw === 'nobook' ? undefined : extraRaw;
       if (who === 'settings') { setSettings(true); return; }
       /* 覆いを出す入口 (撮るためだけ)。**覆いはクリックでしか出せず、
          寸法をずっと実測できていなかった** — 確認 / 棋譜の読み込み /
@@ -865,7 +870,17 @@ export function App() {
                 <Dot />分析中
               </span>
             )}
-            {g.thinking && <StatusStat label="思考" value={g.thinkSecs.toFixed(1)} unit="s" />}
+            {/* 絵は「● 思考中」と秒を分けて出す。**状態と数値を 1 つの
+                「思考 3.2s」に畳むと、動いているのかどうかが数字の有無でしか
+                分からない** — 分析中と同じ形にして、機械が何をしているかを
+                言葉で言う (規則 11) */}
+            {g.thinking && (
+              <span style={{ display: 'flex', alignItems: 'center',
+                             gap: 'var(--sp-2)', color: 'var(--accent)' }}>
+                <Dot />思考中
+              </span>
+            )}
+            {g.thinking && <StatusStat value={g.thinkSecs.toFixed(1)} unit="s" />}
             {nodes > 0 && <StatusStat label="nodes" value={fmtNodes(nodes)} />}
             {nps > 0 && <StatusStat label="nps" value={(nps / 1e6).toFixed(1)} unit="Mnps" />}
           </>}

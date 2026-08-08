@@ -87,7 +87,15 @@ export function useGame() {
   const [view, setView] = useState<GameView | null>(null);
   const [mode, setMode] = useState<AppMode>('vs');
   const [side, setSide] = useState<EngineSide>('white');
-  const [level, setLevel] = useState<number | 'custom'>(6);
+  /* **段は出どころで丸める。** `LEVELS[level]` が undefined になると、
+     次に `.depth` や `.name` を読んだ時点で描画ごと落ちて**窓が真っ白**に
+     なる。画面からは選択肢しか渡らないが、確認用の入口
+     (`KUROOBI_AUTOPLAY=both:40`) で範囲外を渡してしまい、原因の分からない
+     白い窓を数分追いかけた。**使う側で丸めると必ず数え漏らす** —
+     実際 `levels` だけ直したら題名 (`LEVELS[g.level].name`) がまだ落ちた。 */
+  const [levelRaw, setLevel] = useState<number | 'custom'>(6);
+  const level: number | 'custom' =
+    levelRaw === 'custom' ? 'custom' : Math.max(0, Math.min(LEVELS.length - 1, levelRaw));
   const [custom, setCustom] = useState<Levels>({ depth: 12, solve: 18, band: 0 });
   const [useBook, setUseBook] = useState(true);
   const [hasBook, setHasBook] = useState(true);
