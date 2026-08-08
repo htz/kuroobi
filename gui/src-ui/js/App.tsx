@@ -44,6 +44,18 @@ const SIDES = [
   { value: 'off' as const, label: 'なし' },
 ];
 
+/** ドックの「学習した定石」の 1 行。数字を主役にする (絵も 15px の太字)。 */
+function LearnStat({ label, value }: { label: string; value?: number }) {
+  return (
+    <div style={{ display: 'flex', alignItems: 'center', fontSize: 'var(--fs-5)' }}>
+      <span style={{ color: 'var(--sub)' }}>{label}</span>
+      <span style={{ marginLeft: 'auto', fontSize: 'var(--fs-3)', fontWeight: 600 }}>
+        {value === undefined ? '—' : value.toLocaleString()}
+      </span>
+    </div>
+  );
+}
+
 /** いま実際に行ける行き先へ読み替える。左メニューから消えた行に居座らせない。 */
 function reachable(raw: NavId, conn: ReturnType<typeof connOf>): NavId {
   if (conn === 'online') return raw === 'ggs-login' ? 'ggs-play' : raw;
@@ -67,6 +79,10 @@ export function App() {
   const isBook = nav === 'book';
   const isGgs = nav.startsWith('ggs');
   const [tab, setTab] = useState('棋譜');
+  /* 定石の画面は 2 枚 — 木と盤の「定石」、書き戻しの明細の「学習ログ」。
+     行き先は 1 つのままにする (左メニューを増やさない)。独立ウィンドウは
+     取りやめになったので、ここが §7 と §8 の置き場所になる */
+  const [bookTab, setBookTab] = useState('定石');
   const [dockOpen, setDockOpen] = useState(false);
 
   // 設定は別の窓なので、そこでファイルを差し替えてもこちらは気付けない。
@@ -125,9 +141,10 @@ export function App() {
     if (id === 'play' || id === 'study') setMode(id === 'study' ? 'study' : 'vs');
   }, [setMode, navRaw, chatTotal]);
 
-  const book = useBookBrowse(isBook);
+  // ドックの学習タブでも登録局面の数を出すので、そこでも節を取る
+  const book = useBookBrowse(isBook || tab === '学習');
   const { items: learnLog, reload: learnLogReload } = useLearnLog(
-    tab === '学習' && !isGgs && !isBook, !!cpu?.learn);
+    isBook && bookTab === '学習ログ', !!cpu?.learn);
 
   /* 棋譜ビューア (規則 71)。`pending` はアーカイブ番号 — 手元に棋譜が
    * 無い対局は覆いを先に開き、届いたら中身を差し込む。 */
@@ -152,8 +169,14 @@ export function App() {
       if (who === 'settings') { void openWindow('settings'); return; }
       // "tab:学習" のようにドックの見出しを指定する (撮るためだけの入口)
       if (who === 'tab') { if (lv) setTab(lv); return; }
-      // "book:f5d6" のように手順を渡すと、その節まで辿った状態で開く
-      if (who === 'book') { setNavRaw('book'); if (lv) bookLine.current?.(lv); return; }
+      // "book:f5d6" のように手順を渡すと、その節まで辿った状態で開く。
+      // "book:log" は 2 枚目 (学習ログ) を開く — 撮るためだけの入口
+      if (who === 'book') {
+        setNavRaw('book');
+        if (lv === 'log') setBookTab('学習ログ');
+        else if (lv) bookLine.current?.(lv);
+        return;
+      }
       if (who === 'study') {
         // 起動時の状態取得と前後すると初期局面で上書きされるので一拍おく
         await new Promise((r) => setTimeout(r, 500));
@@ -384,11 +407,20 @@ export function App() {
             : <Toggle checked={g.autoHint} onChange={g.setAutoHint} label="評価値" />}>
           {isBook ? (
             <>
-              <Button disabled={!book.line.length} onClick={book.back}>戻る</Button>
-              <Button disabled={!book.line.length} onClick={book.reset}>最初へ</Button>
-              <span style={{ marginLeft: 'var(--sp-3)', fontSize: 'var(--fs-6)', color: 'var(--sub)' }}>
-                {book.line.length ? book.line.length + ' 手目' : '初期局面'}
-              </span>
+              {/* 2 枚の切り替えは children に置く — aux は 940px で消えるので、
+                  狭い窓で学習ログへ行けなくなる (規則 8・58) */}
+              <Segmented value={bookTab} onChange={setBookTab}
+                         options={[{ value: '定石', label: '定石' },
+                                   { value: '学習ログ', label: '学習ログ' }]} />
+              {bookTab === '定石' && <>
+                <span style={{ width: 1, height: 20, background: 'var(--border)',
+                               margin: '0 var(--sp-1)', flex: 'none' }} />
+                <Button disabled={!book.line.length} onClick={book.back}>戻る</Button>
+                <Button disabled={!book.line.length} onClick={book.reset}>最初へ</Button>
+                <span style={{ marginLeft: 'var(--sp-3)', fontSize: 'var(--fs-6)', color: 'var(--sub)' }}>
+                  {book.line.length ? book.line.length + ' 手目' : '初期局面'}
+                </span>
+              </>}
             </>
           ) : isGgs ? (
             <span style={{ fontSize: 'var(--fs-5)', color: 'var(--sub)' }}>
@@ -436,8 +468,27 @@ export function App() {
                          if (!kifu && archive) void ggsApi.look(archive);
                        }} />
          : isBook ? (
-          <BookPane b={book} coords={prefs.coords} grain={prefs.grain}
-                    flip={flipped(prefs.facing, '')} onSettings={() => void openWindow('settings')} />
+          bookTab === '定石' ? (
+            <BookPane b={book} coords={prefs.coords} grain={prefs.grain}
+                      flip={flipped(prefs.facing, '')} onSettings={() => void openWindow('settings')} />
+          ) : (
+            /* 書き戻しの明細。定石が「何にどう書き換わったか」を見る場所なので、
+               木と同じ画面に置く — 対局 → 敗着 → 旧→新 → 取り消し が一本で辿れる */
+            <div className="k-scroll" style={{ flex: 1, minHeight: 0, padding: 'var(--sp-4) var(--sp-3)' }}>
+              <LearnLog items={learnLog}
+                onUndo={(e) => void (async () => {
+                  if (!await confirm('この対局で書き換えた定石を元に戻します。よろしいですか。')) return;
+                  try {
+                    await api.learnUndo(e.at, e.kifu);
+                    learnLogReload();
+                  } catch (err) { g.say('' + err); }
+                })()}
+                onOpen={(e, ply) => {
+                  setNav('study');
+                  void loadFromText(e.start ? e.start + '\n' + e.kifu : e.kifu, ply);
+                }} />
+            </div>
+          )
         ) : (
         // 左右の余白は中の要素が持つ。ここに持たせると、石数の行の罫が
         // 端まで届かず途中で切れる (設計は端から端まで)
@@ -520,7 +571,7 @@ export function App() {
 
       {/* GGS はドックを持たない (一覧が本体の左に付く) */}
       {/* 定石が無いときは空のドックも出さない (盤側が報せを出している) */}
-      {isBook && book.node?.size !== 0 && (
+      {isBook && bookTab === '定石' && book.node?.size !== 0 && (
         <Dock tabs={['定石']} active="定石" open={dockOpen}>
           <BookDock b={book} decimals={prefs.decimals} />
         </Dock>
@@ -590,23 +641,44 @@ export function App() {
                 勝敗にかかわらず取り込み、終局の石差を根まで書き戻します。同じ負け方をなぞらなくなります。
               </span>
             </Section>
-            {/* 取り込みは裏で静かに進むので、何が入ったかを見る場所が要る。
-                対局 → 敗着 → 書き換えた手 (旧→新) まで一本で辿れる */}
-            <LearnLog items={learnLog}
-              onUndo={(e) => void (async () => {
-                if (!await confirm('この対局で書き換えた定石を元に戻します。よろしいですか。')) return;
-                try {
-                  await api.learnUndo(e.at, e.kifu);
-                  // 済んだことは報せない (デザイン規則 34)。行が消えるのが
-                  // 結果そのもので、トーストは失敗と進まない理由だけに使う
-                  learnLogReload();
-                } catch (err) { g.say('' + err); }
-              })()}
-              onOpen={(e, ply) => {
-              setNav('study');
-              // 抽選開局は開始局面を頭に付けないと別の対局になる
-              void loadFromText(e.start ? e.start + '\n' + e.kifu : e.kifu, ply);
-            }} />
+            {/* 走っている間だけ枠を持つ (規則 13 の「箱を入れ子にしない」の
+                例外は進行中のジョブだけ)。**「一時停止」は置かない** —
+                止める口がエンジン側に無く、譲りは対局・検討が動くと自動で
+                かかる。押せない釦を描くより、譲っていることを言う */}
+            {cpu?.learn && (
+              <Section title="取り込みの状況">
+                <div style={{
+                  border: '1px solid var(--border)', borderRadius: 'var(--r-2)',
+                  padding: 'var(--sp-3)', display: 'flex', flexDirection: 'column', gap: 'var(--sp-2)',
+                }}>
+                  <div style={{ display: 'flex', alignItems: 'center', fontSize: 'var(--fs-5)' }}>
+                    <span style={{
+                      display: 'flex', alignItems: 'center', gap: 'var(--sp-2)',
+                      color: cpu.learn_paused ? 'var(--sub)' : 'var(--accent)',
+                    }}>
+                      <Dot tone={cpu.learn_paused ? 'sub' : 'accent'} />
+                      {cpu.learn_paused ? '譲り中' : '取り込み中'}
+                    </span>
+                    <span style={{ marginLeft: 'auto', fontSize: 'var(--fs-6)', color: 'var(--sub)' }}>
+                      局面 {cpu.learn[0].toLocaleString()} / {cpu.learn[1].toLocaleString()}
+                    </span>
+                  </div>
+                  <Progress value={cpu.learn[1] > 0 ? cpu.learn[0] / cpu.learn[1] : 0} />
+                  {cpu.learn_paused && (
+                    <span style={{ fontSize: 'var(--fs-7)', color: 'var(--sub)', lineHeight: 1.7 }}>
+                      対局・検討が動いている間は譲って止まります。空いたら続きから再開します。
+                    </span>
+                  )}
+                </div>
+              </Section>
+            )}
+            {/* 明細は「定石」の画面の 2 枚目へ移した。同じ一覧をドックにも
+                出すと、どちらが本物か分からなくなる (規則 58 と同じ話) */}
+            <Section title="学習した定石">
+              <LearnStat label="登録局面" value={book.node?.size} />
+              <LearnStat label="うち学習" value={book.node?.learned_size} />
+              <Button onClick={() => { setNav('book'); setBookTab('学習ログ'); }}>学習ログを見る</Button>
+            </Section>
           </>
         )}
       </Dock>
