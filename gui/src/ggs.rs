@@ -343,7 +343,6 @@ pub struct Snapshot {
     pub fetched_ggf: Option<FetchedGgf>,
 }
 
-
 /// 画面確認用の作り物のスナップショット (`KUROOBI_GGS_DEMO=1`)。
 ///
 /// **GGS の画面は繋がないと何も出ない。** ロビー・プレイヤー・対局結果は
@@ -360,12 +359,34 @@ pub fn demo_snapshot() -> Snapshot {
         ..Default::default()
     };
     s.my_ranks = vec![
-        RankRow { gtype: "8".into(), name: "kuroobi".into(), rating: 1842.3, dev: 34.0, rank: 12, wins: 128, losses: 74, draws: 6 },
-        RankRow { gtype: "8r16".into(), name: "kuroobi".into(), rating: 1795.0, dev: 51.0, rank: 27, wins: 41, losses: 38, draws: 2 },
+        RankRow {
+            gtype: "8".into(),
+            name: "kuroobi".into(),
+            rating: 1842.3,
+            dev: 34.0,
+            rank: 12,
+            wins: 128,
+            losses: 74,
+            draws: 6,
+        },
+        RankRow {
+            gtype: "8r16".into(),
+            name: "kuroobi".into(),
+            rating: 1795.0,
+            dev: 51.0,
+            rank: 27,
+            wins: 41,
+            losses: 38,
+            draws: 2,
+        },
     ];
     s.users = vec![
-        ("saio", 2245.8, 34.0), ("tamaki", 2011.4, 46.0), ("edax-bot", 2280.1, 22.0),
-        ("nara", 1688.2, 91.0), ("kei", 1488.9, 216.0), ("newbie", 1200.0, 350.0),
+        ("saio", 2245.8, 34.0),
+        ("tamaki", 2011.4, 46.0),
+        ("edax-bot", 2280.1, 22.0),
+        ("nara", 1688.2, 91.0),
+        ("kei", 1488.9, 216.0),
+        ("newbie", 1200.0, 350.0),
     ]
     .into_iter()
     .map(|(n, r, d)| UserRow {
@@ -422,6 +443,117 @@ pub fn demo_snapshot() -> Snapshot {
         opp: "tamaki".into(),
         gtype: "s8r16".into(),
     }];
+    /* ---- 同期対局の 2 面 (規則 28)。**面ごとに自分の色が逆**なので、
+    見出しが無いと並んだ 2 枚を見分けられない ---- */
+    let cells = |mv: &[(usize, u8)]| {
+        let mut c = vec![0u8; 64];
+        c[27] = 2;
+        c[28] = 1;
+        c[35] = 1;
+        c[36] = 2;
+        for &(i, v) in mv {
+            c[i] = v;
+        }
+        c
+    };
+    let face = |id: &str, my: &str, turn: &str, mine: u64, opp: u64| MatchView {
+        id: id.into(),
+        base: ".71".into(),
+        over: false,
+        cells: cells(&[(20, 1), (29, 1), (34, 2), (37, 1), (43, 2), (44, 1)]),
+        turn: turn.into(),
+        my_color: my.into(),
+        opp_name: "saio".into(),
+        opp_rating: "2245.8".into(),
+        my_clock: format!("{}:{:02}", mine / 60, mine % 60),
+        opp_clock: format!("{}:{:02}", opp / 60, opp % 60),
+        my_secs: Some(mine),
+        opp_secs: Some(opp),
+        gtype: "s8r16".into(),
+        moves: vec!["f5".into(), "d6".into(), "c3".into(), "d3".into()],
+        last_eval: Some(2.5),
+        last_from_book: true,
+        ..Default::default()
+    };
+    s.matches = vec![
+        face(".71.0", "black", "black", 664, 750),
+        face(".71.1", "white", "white", 672, 746),
+    ];
+    s.chat = vec![
+        ChatMsg {
+            chan: ".chat".into(),
+            from: "demo-bob".into(),
+            text: "anyone up for a game?".into(),
+            at: 1_754_000_000,
+            thread: ".chat".into(),
+        },
+        ChatMsg {
+            chan: ".chat".into(),
+            from: "kuroobi".into(),
+            text: "sure, 15 min?".into(),
+            at: 1_754_000_060,
+            thread: ".chat".into(),
+        },
+        ChatMsg {
+            chan: ".chat".into(),
+            from: "saio".into(),
+            text: "good luck both".into(),
+            at: 1_754_002_800,
+            thread: ".chat".into(),
+        },
+    ]
+    .into();
+    s.results = vec![
+        (".70", "saio", 6i32, 1_754_003_000u64),
+        (".69", "tamaki", -4, 1_753_990_000),
+        (".68", "nobu", 12, 1_753_900_000),
+    ]
+    .into_iter()
+    .map(|(id, opp, d, at)| GameResult {
+        id: id.into(),
+        base: id.into(),
+        raw: format!("{id} {opp} {d:+}"),
+        my_diff: Some(d),
+        opp: opp.into(),
+        at,
+        my_rating: Some(1842.3),
+        ..Default::default()
+    })
+    .collect();
+    s.log = vec![
+        LogLine {
+            dir: "info".into(),
+            text: "接続しました (skatgame.net:5000)".into(),
+        },
+        LogLine {
+            dir: "out".into(),
+            text: "tell /os play .71.0 F5".into(),
+        },
+        LogLine {
+            dir: "in".into(),
+            text: "/os: match .71.0 update".into(),
+        },
+        LogLine {
+            dir: "in".into(),
+            text: "/os: | 1 kuroobi 1842.3 11:04 vs saio 2245.8 12:30".into(),
+        },
+        LogLine {
+            dir: "out".into(),
+            text: "tell /os look".into(),
+        },
+        LogLine {
+            dir: "in".into(),
+            text: "/os: 12 waiting requests".into(),
+        },
+    ]
+    .into();
+    s.standby_stats = StandbyStats {
+        games: 12,
+        wins: 7,
+        losses: 4,
+        draws: 1,
+        diff_sum: 38,
+    };
     s
 }
 
