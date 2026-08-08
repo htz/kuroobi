@@ -2026,6 +2026,14 @@ fn ggs_snapshot(app: State<App>) -> Result<ggs::Snapshot, String> {
     Ok(s)
 }
 
+/// レート戦が禁じられているか (`KUROOBI_NO_RATED=1`)。画面はこれを見て
+/// 「する」を選べなくする。**送る側でも潰している**ので、画面が古くても
+/// レート戦は成立しない。
+#[tauri::command]
+fn ggs_no_rated() -> bool {
+    ggs::no_rated()
+}
+
 /// 画面確認用: 起動直後に開く画面 (KUROOBI_GGS_AUTOVIEW)。
 #[tauri::command]
 fn ggs_autoview() -> String {
@@ -2213,6 +2221,7 @@ fn main() {
             ggs_set_standby,
             ggs_snapshot,
             ggs_autoview,
+            ggs_no_rated,
             ggs_save_kifu,
             ggs_save_log
         ])

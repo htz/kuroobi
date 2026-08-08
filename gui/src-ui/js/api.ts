@@ -129,6 +129,8 @@ export const ggsApi = {
   /** 受け取った一言と棋譜を消す (出しっぱなしにしない)。 */
   ack: () => call('ggs_ack', {}),
   autoview: () => call<string>('ggs_autoview', {}),
+  /** レート戦が禁じられているか (KUROOBI_NO_RATED=1)。 */
+  noRated: () => call<boolean>('ggs_no_rated', {}),
   chat: (target: string, text: string) => call('ggs_chat', { target, text }),
   matchCmd: (id: string, verb: 'undo' | 'abort' | 'resign' | 'tell', arg = '') =>
     call('ggs_match_cmd', { id, verb, arg }),

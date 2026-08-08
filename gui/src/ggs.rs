@@ -174,6 +174,17 @@ pub struct ChatMsg {
     pub thread: String,
 }
 
+/// **レート戦を禁じる。** `KUROOBI_NO_RATED=1` で起動すると、申し込みも
+/// 待機モードも必ず `rated -` になり、画面からも「する」を選べなくなる。
+///
+/// **人が押し間違えないための蓋ではなく、自動で動かすときの蓋。**
+/// 画面確認を自動で回している最中に、既定が「する」のまま待機モードが
+/// 始まると本当にレート戦が成立してしまう。**画面側の見た目だけでは
+/// 足りない**ので、サーバーへ送る直前でも潰す。
+pub fn no_rated() -> bool {
+    std::env::var("KUROOBI_NO_RATED").is_ok()
+}
+
 fn now_secs() -> u64 {
     std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
@@ -1451,7 +1462,10 @@ pub fn run(
                             // 直前に必ず送って揃える (前回のぶんが残るのを防ぐ)
                             send!(
                                 ctx,
-                                format!("tell /os rated {}", if rated { "+" } else { "-" })
+                                format!(
+                                    "tell /os rated {}",
+                                    if rated && !no_rated() { "+" } else { "-" }
+                                )
                             );
                             // 相手を指定しないと「誰でも受けられる」募集になる。
                             // 空のまま繋ぐと末尾に空白が残るので、そのときは付けない
@@ -1728,7 +1742,15 @@ pub fn run(
                         send!(ctx, "verbose -news -faq -help -ack");
                         send!(ctx, "tell /os client -");
                         send!(ctx, "tell /os trust +");
-                        send!(ctx, "tell /os rated +");
+                        // 起動時の既定。禁止されているときは立てない
+                        send!(
+                            ctx,
+                            if no_rated() {
+                                "tell /os rated -"
+                            } else {
+                                "tell /os rated +"
+                            }
+                        );
                         /* **他人の対局の開始・終了は「通知」で届く。**購読しないと
                         一生届かない — 一覧は login 時の `tell /os match` の
                         1 回きりになり、そのとき誰も打っていなければロビーの
@@ -2061,7 +2083,10 @@ pub fn run(
                             // 申し込みの直前にレート有無を揃える (Cmd::Ask と同じ)
                             send!(
                                 ctx,
-                                format!("tell /os rated {}", if sb.rated { "+" } else { "-" })
+                                format!(
+                                    "tell /os rated {}",
+                                    if sb.rated && !no_rated() { "+" } else { "-" }
+                                )
                             );
                             send!(
                                 ctx,

@@ -422,6 +422,7 @@ function GgsLobby({ snap, onNav }: { snap: GgsSnapshot; onNav: (id: NavId) => vo
   const [opp, setOpp] = useState('');
   const [gtype, setGtype] = useState('s8r16');
   const [time, setTime] = useState('00:15:00');
+  const noRated = useNoRated();
   const [rated, setRated] = useState(true);
   /** 「情報」を開いている申し込みの id (1 つだけ)。 */
   const [info, setInfo] = useState('');
@@ -517,9 +518,13 @@ function GgsLobby({ snap, onNav }: { snap: GgsSnapshot; onNav: (id: NavId) => vo
               呼び名**なので、そのまま見出しにするのがいちばん短く読める
               (「レートに反映」だと言い換えになり、駒との対も冗長になる) */}
           <Field label="レート戦">
-            <Segmented value={rated ? 'on' : 'off'} onChange={(v) => setRated(v === 'on')}
+            {/* **禁じられているときは押せなくして理由をその場に出す**
+                (規則 61)。送る側でも潰しているので、ここは見た目の話 */}
+            <Segmented value={rated && !noRated ? 'on' : 'off'} disabled={noRated}
+                       onChange={(v) => setRated(v === 'on')}
                        options={[{ value: 'on', label: 'する' },
                                  { value: 'off', label: 'しない' }]} />
+            {noRated && <Note>レート戦を禁じて起動しています (KUROOBI_NO_RATED)。</Note>}
           </Field>
           {/* 相手を指定しない申し込みは「誰でも受けられる」募集になる。
               GGS の /os ask はそういう使い方ができるので、止めない */}
@@ -602,6 +607,14 @@ function Row({ title, sub, tag, tagTone, alert, actions, onClick, title2 }: {
   );
 }
 
+/** レート戦が禁じられているか。**自動で回すときの蓋** (`KUROOBI_NO_RATED=1`)。
+ *  送る側でも潰しているので、これは「選べないことを見せる」ための値。 */
+function useNoRated(): boolean {
+  const [no, setNo] = useState(false);
+  useEffect(() => { ggsApi.noRated().then(setNo).catch(() => {}); }, []);
+  return no;
+}
+
 /* ---------------- 待機モード ----------------
  *
  * 対局終了 → 間隔待ち → 自動申し込みの繰り返し。
@@ -617,13 +630,15 @@ function GgsStandby({ snap, onNav }: { snap: GgsSnapshot; onNav: (id: NavId) => 
   const [maxGames, setMaxGames] = useState(sb.max_games);
   const [interval, setInterval] = useState(sb.interval_secs || 20);
   const [autoAccept, setAutoAccept] = useState(sb.auto_accept);
+  const noRated = useNoRated();
   const [rated, setRated] = useState(sb.rated);
 
   const names = snap.users.filter((u) => u.name !== snap.login).map((u) => u.name);
   const state = sb.enabled ? (snap.matches.length ? '対局中' : '申し込み待ち') : '停止中';
 
   const toggle = () => void ggsApi.setStandby({
-    enabled: !sb.enabled, auto_accept: autoAccept, rated, opponent: opp.trim(),
+    // **禁じられているときは何が来ても false。** 画面が古くても通さない
+    enabled: !sb.enabled, auto_accept: autoAccept, rated: rated && !noRated, opponent: opp.trim(),
     gtype, time, max_games: maxGames, interval_secs: interval,
   });
 
@@ -673,9 +688,13 @@ function GgsStandby({ snap, onNav }: { snap: GgsSnapshot; onNav: (id: NavId) => 
               設定なので、申し込みの直前に毎回送って揃える (バックエンド側)。
               受ける側のレート有無は申し込んだ相手が決めるので変えられない */}
           <Field label="レート戦">
-            <Segmented value={rated ? 'on' : 'off'} onChange={(v) => setRated(v === 'on')}
+            {/* **禁じられているときは押せなくして理由をその場に出す**
+                (規則 61)。送る側でも潰しているので、ここは見た目の話 */}
+            <Segmented value={rated && !noRated ? 'on' : 'off'} disabled={noRated}
+                       onChange={(v) => setRated(v === 'on')}
                        options={[{ value: 'on', label: 'する' },
                                  { value: 'off', label: 'しない' }]} />
+            {noRated && <Note>レート戦を禁じて起動しています (KUROOBI_NO_RATED)。</Note>}
           </Field>
         </div>
         {/* Toggle は摘みを右端へ寄せる作りなので、幅を決めずに置くと画面の端まで離れる */}
@@ -1272,9 +1291,13 @@ function UserCard({ snap, name, onClose, onDetail, onAsk, onKifu }: {
               <div key={r.key} style={{ display: 'flex', alignItems: 'center',
                                         gap: 'var(--sp-3)', fontSize: 'var(--fs-5)' }}>
                 <span style={{ color: 'var(--sub)' }}>{r.label}</span>
+                {/* **値も読み下す。** サーバーは `1` / `+` / `0` を返すので、
+                    そのままだと「申し込み受付 1」になって意味が読めない。
+                    全画面の詳細は前から `fingerValue` を通していたのに、
+                    名刺だけ生のまま出していた */}
                 <span style={{ marginLeft: 'auto', overflow: 'hidden',
                                textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-                  {r.value || '—'}
+                  {fingerValue(r.key, r.value) || '—'}
                 </span>
               </div>
             ))}
