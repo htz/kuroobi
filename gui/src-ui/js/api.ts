@@ -20,7 +20,7 @@ async function call<T = void>(cmd: string, args?: Record<string, unknown>): Prom
 }
 
 /** 付属ウィンドウ (設定・定石) を開く。すでに開いていれば前へ出す。 */
-export const openWindow = (kind: 'settings' | 'book') =>
+export const openWindow = (kind: 'settings') =>
   call<void>('open_child_window', { kind });
 
 /* 窓をまたぐ報せ。設定の窓でファイルを差し替えても、主画面は自分で

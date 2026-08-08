@@ -904,9 +904,11 @@ fn resource_status() -> Vec<(String, String, bool, u64, String)> {
 fn open_child_window(handle: tauri::AppHandle, kind: String) -> Result<(), String> {
     // 札は固定の集合から選ぶ。画面側の文字列をそのまま窓の札にすると、
     // 綴り違いのたびに空の窓が増える
+    // **開く先が無い札を置かない。**定石の独立ウィンドウは取りやめになった
+    // (定石は主画面の行き先に戻した) のに札だけ残っていて、開いても
+    // `main.tsx` に振り分けが無いので主画面が丸ごと出る窓ができていた
     let (label, title, w, h) = match kind.as_str() {
         "settings" => ("settings", "設定", 560.0, 640.0),
-        "book" => ("book", "定石", 1080.0, 760.0),
         _ => return Err(format!("知らない窓: {kind}")),
     };
     if let Some(win) = handle.get_webview_window(label) {
