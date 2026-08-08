@@ -393,7 +393,11 @@ export function App() {
     const onKey = (e: KeyboardEvent) => {
       const t = e.target as HTMLElement | null;
       if (t && (t.tagName === 'INPUT' || t.tagName === 'TEXTAREA' || t.isContentEditable)) return;
-      if (paste || ask) return;
+      /* **覆いが 1 枚でも出ていたら何もしない。**棋譜の貼り付けと確認しか
+         見ていなかったので、**棋譜ビューアや設定を開いている間に ← → を
+         押すと、後ろの盤が動いていた**。覆いを足すたびにここへ書き足す
+         のではなく、覆いを 1 つにまとめて数える */
+      if (paste || ask || viewer || settings) return;
       const cmd = e.metaKey || e.ctrlKey;
       const key = e.key.toLowerCase();
       if (cmd && key === 'b') { e.preventDefault(); setNav('book'); return; }
@@ -437,7 +441,7 @@ export function App() {
     };
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
-  }, [setNav, paste, ask, isBook, isGgs, study, book, g, v]);
+  }, [setNav, paste, ask, viewer, settings, isBook, isGgs, study, book, g, v]);
 
   const toasts: Toast[] = g.toasts.map(t => ({ id: String(t.id), tone: t.tone, text: t.text }));
 
