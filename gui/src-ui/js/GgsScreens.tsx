@@ -442,7 +442,7 @@ function GgsLobby({ snap, onNav }: { snap: GgsSnapshot; onNav: (id: NavId) => vo
                  title={`${o.names[0] || '?'} 対 ${o.names[1] || '?'}`}
                  sub={gtypeLabel(o.gtype)}
                  actions={
-                   <Button variant={o.watching ? 'danger' : 'primary'}
+                   <Button size="row" variant={o.watching ? 'danger' : 'primary'}
                            onClick={() => {
                              const on = !o.watching;
                              void ggsApi.watch(o.id, on);
@@ -476,10 +476,10 @@ function GgsLobby({ snap, onNav }: { snap: GgsSnapshot; onNav: (id: NavId) => vo
                      {/* 絵は自分宛でない申し込みにも「情報」を置いている。
                          **まとめた 1 行は色・コミ・乱数の手数を落としている**ので、
                          受けるかどうかを決める前に元の行を読めるようにする */}
-                     <Button onClick={() => setInfo(info === o.id ? '' : o.id)}>情報</Button>
+                     <Button size="row" onClick={() => setInfo(info === o.id ? '' : o.id)}>情報</Button>
                      {o.incoming && <>
-                       <Button variant="primary" onClick={() => void ggsApi.accept(o.id)}>受ける</Button>
-                       <Button variant="danger" onClick={() => void ggsApi.decline(o.id)}>断る</Button>
+                       <Button size="row" variant="primary" onClick={() => void ggsApi.accept(o.id)}>受ける</Button>
+                       <Button size="row" variant="danger" onClick={() => void ggsApi.decline(o.id)}>断る</Button>
                      </>}
                    </>} />
               {info === o.id && (
@@ -544,7 +544,7 @@ function GgsLobby({ snap, onNav }: { snap: GgsSnapshot; onNav: (id: NavId) => vo
           <List>
           {snap.stored.map((x) => (
             <Row key={x.id} title={x.opp || '?'} sub={gtypeLabel(x.gtype)}
-                 actions={<Button variant="primary"
+                 actions={<Button size="row" variant="primary"
                                   onClick={() => void ggsApi.resumeStored(x.id)}>再開</Button>} />
           ))}
           </List>
@@ -575,18 +575,22 @@ function Row({ title, sub, tag, tagTone, alert, actions, onClick, title2 }: {
       ? { type: 'button' as const, className: 'k-row', onClick, title: title2 }
       : {})} style={{
       display: 'flex', alignItems: 'center', gap: 'var(--sp-2)', width: '100%',
-      padding: 'var(--sp-2) 0',
+      /* **高さは固定** (絵の実測 40)。中身で伸ばすと、補足のある行と
+         ない行で高さが変わって一覧が揃わない。24px の行とは別の型 */
+      height: 'var(--h-row2)', flex: 'none', padding: '0 var(--sp-4)',
       // 一括の border を先に置く。**あとに書くと borderBottom を消す** —
       // 行の区切りが全部消えるが、GGS に繋がないと見えないので気付けない
       border: 0, borderRadius: 0,
       borderBottom: '1px solid var(--border-weak)',
-      // 自分宛だけ左に帯を引く (設計 §4)。色は規則 27 の --bad
-      borderLeft: alert ? '3px solid var(--bad)' : undefined,
-      paddingLeft: alert ? 'var(--sp-2)' : undefined,
-      background: 'transparent', textAlign: 'left',
+      /* 自分宛の印 (設計 §4)。**罫ではなく内側の影と薄い地** — 選んでいる
+         行 (`picked`) と同じ形で、罫にすると中身が 3px ずれる。色は規則 27 */
+      background: alert ? 'color-mix(in srgb, var(--bad) 8%, transparent)' : 'transparent',
+      boxShadow: alert ? 'inset 2px 0 0 var(--bad)' : undefined,
+      textAlign: 'left',
       color: 'var(--text)', cursor: onClick && !actions ? 'pointer' : undefined,
     }}>
-      <span style={{ flex: 1, minWidth: 0, display: 'flex', flexDirection: 'column', gap: 'var(--sp-1)' }}>
+      {/* 2 段の溝は 2px。sp-1 (4) だと 40px に収まらない (絵の実測) */}
+      <span style={{ flex: 1, minWidth: 0, display: 'flex', flexDirection: 'column', gap: 2 }}>
         <span style={{ display: 'flex', alignItems: 'center', gap: 'var(--sp-2)', fontSize: 'var(--fs-5)' }}>
           <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{title}</span>
           {tag && <Tag tone={tagTone ?? 'accent'}>{tag}</Tag>}
