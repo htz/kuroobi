@@ -1,6 +1,6 @@
 import { useState } from 'react';
 import type { LearnChange, LearnEntry } from './types';
-import { Section } from './components/layout';
+import { List, Section } from './components/layout';
 import { Button } from './components/primitives';
 
 /* 定石に取り込んだ対局の控え。
@@ -39,7 +39,7 @@ export function LearnLog({ items, onOpen, onUndo }: {
       )}
       {/* 行どうしは詰める。節の余白 (12px) が行間に入ると 24px の行が
           36px 間隔で並び、一覧ではなく箇条書きに見える (定石の木と同じ話) */}
-      <div style={{ display: 'flex', flexDirection: 'column' }}>
+      <List>
       {items.map((e) => {
         const key = e.at + e.kifu;
         const bad = blunderOf(e);
@@ -131,7 +131,7 @@ export function LearnLog({ items, onOpen, onUndo }: {
           </div>
         );
       })}
-      </div>
+      </List>
     </Section>
   );
 }

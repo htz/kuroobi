@@ -274,6 +274,18 @@ export function Modal({ title, body, actions, width = 340 }: {
   );
 }
 
+/* 節の中に並べる一覧。**`Section` の直下に行を置かないこと。**
+ *
+ * `Section` は節の中身を `--sp-3` (12px) の溝で積む。説明文や欄が並ぶ節では
+ * それでよいが、**一覧の行の間に 12px が入ると箇条書きに見える** —
+ * 24px の行が 36px 間隔、32px の行が 44px 間隔で並ぶ。
+ * 同じ取りこぼしを 4 回踏んだ (定石の木 / 学習ログ / GGS の 3 つ) ので、
+ * 名前のある器にした。行を並べるときは必ずこれで包む。
+ */
+export function List({ children }: { children: React.ReactNode }) {
+  return <div style={{ display: 'flex', flexDirection: 'column' }}>{children}</div>;
+}
+
 /* 押せない盤を出さないための空状態。GGS 未対局時など */
 export function EmptyState({ title, body, actions }: { title: string; body?: React.ReactNode; actions?: React.ReactNode }) {
   return (

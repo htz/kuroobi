@@ -6,7 +6,7 @@ import {
   fingerGroups, fingerValue, hasJapanese, normKey, parseCond, translate, useClocks,
   type ClockSide, type ClockView,
 } from './ggs';
-import { EmptyState, Section } from './components/layout';
+import { EmptyState, List, Section } from './components/layout';
 import { Button, Segmented, Select, TextField, Toggle } from './components/primitives';
 import { Strength } from './components/strength';
 import { Confirm, PickOne } from './Dialogs';
@@ -375,7 +375,7 @@ function GgsLobby({ snap, onNav }: { snap: GgsSnapshot; onNav: (id: NavId) => vo
           {!games.length && <Empty>進行中の対局はありません。</Empty>}
           {/* 行どうしは詰める。節の余白 (--sp-3 = 12px) が行間に入ると、
               一覧ではなく箇条書きに見える (定石の木・学習ログでも踏んだ) */}
-          <div style={{ display: 'flex', flexDirection: 'column' }}>
+          <List>
           {games.map((o) => (
             <Row key={o.id}
                  title={`${o.names[0] || '?'} 対 ${o.names[1] || '?'}`}
@@ -391,7 +391,7 @@ function GgsLobby({ snap, onNav }: { snap: GgsSnapshot; onNav: (id: NavId) => vo
                      {o.watching ? '観戦をやめる' : '観戦'}
                    </Button>} />
           ))}
-          </div>
+          </List>
         </Section>
 
         <Section title="対局の申し込み">
@@ -1038,7 +1038,7 @@ function GgsResults({ snap, onKifu }: {
       <Section title="終わった対局" aside={<span>{rows.length}</span>}>
         {!rows.length && <Empty>まだ記録がありません。</Empty>}
         {/* 行どうしは詰める (節の余白が行間に入る) */}
-        <div style={{ display: 'flex', flexDirection: 'column' }}>
+        <List>
         {rows.map((r) => (
           <ResultRow key={r.id + r.seq} opponent={r.opp}
                      win={(r.my_diff ?? 0) > 0} draw={r.my_diff === 0}
@@ -1050,7 +1050,7 @@ function GgsResults({ snap, onKifu }: {
                      onClick={() => onKifu(`${r.opp} との対局`, r.ggf || r.kifu, r.archive)}
                      dim={!r.ggf && !r.kifu && !r.archive} />
         ))}
-        </div>
+        </List>
       </Section>
     </div>
   );
@@ -1132,7 +1132,7 @@ function GgsUsers({ snap, onNav, onKifu }: {
                </>}>
         {!rows.length && <Empty>いません。</Empty>}
         {/* 行どうしは詰める (節の余白が行間に入る) */}
-        <div style={{ display: 'flex', flexDirection: 'column' }}>
+        <List>
         {slice.map((u) => (
           <button key={u.name} type="button" className="k-row" onClick={() => setSel(u.name)}
             style={{
@@ -1156,7 +1156,7 @@ function GgsUsers({ snap, onNav, onKifu }: {
             {snap.ongoing.some((o) => o.names.includes(u.name)) && <Tag tone="ok">対局中</Tag>}
           </button>
         ))}
-        </div>
+        </List>
         {/* ページ送りは一覧の外。詰めた一覧のすぐ下だと行に見える */}
         {rows.length > perPage && (
           <div style={{

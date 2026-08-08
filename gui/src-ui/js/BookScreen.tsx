@@ -4,7 +4,7 @@ import { sqName } from './adapt';
 import type { BookNode } from './types';
 import { Board, type EvalInfo } from './components/board';
 import { ScoreRow } from './components/data';
-import { EmptyState, Section } from './components/layout';
+import { EmptyState, List, Section } from './components/layout';
 import { Button } from './components/primitives';
 
 /* 定石を眺める。
@@ -206,7 +206,7 @@ export function BookDock({ b, decimals = 1 }: { b: BookBrowse; decimals?: number
             この局面から先は定石にありません。
           </span>
         ) : (
-          <div style={{ display: 'flex', flexDirection: 'column' }}>
+          <List>
             {n?.moves.map((m) => (
               <button key={m.pos} type="button" className="k-row" onClick={() => b.push(m.pos)}
                       title="押すとこの手へ進む"
@@ -227,7 +227,7 @@ export function BookDock({ b, decimals = 1 }: { b: BookBrowse; decimals?: number
                 </span>
               </button>
             ))}
-          </div>
+          </List>
         )}
       </Section>
     </>
