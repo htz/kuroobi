@@ -81,7 +81,9 @@ export function Main({ children, inset }: {
   inset?: boolean;
 }) {
   return (
-    <div className={inset ? 'k-main k-dock-inset' : 'k-main'}
+    // `k-main` は規則を持っていなかった (base.css に .k-main が無い)。
+    // 効かないクラスを付けたままにすると、洗い出しのたびに引っかかる
+    <div className={inset ? 'k-dock-inset' : undefined}
          style={{ flex: 1, display: 'flex', flexDirection: 'column', minWidth: 0 }}>
       {children}
     </div>
