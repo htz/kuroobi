@@ -515,20 +515,28 @@ pub fn demo_snapshot() -> Snapshot {
         },
     ]
     .into();
+    /* レートは 1 局ごとに動かす — **同じ値を並べると推移の線が平らになり、
+       グラフが描けているのか壊れているのか分からない**。形式も入れる
+       (空だと「?」と出る) */
     s.results = vec![
-        (".70", "saio", 6i32, 1_754_003_000u64),
-        (".69", "tamaki", -4, 1_753_990_000),
-        (".68", "nobu", 12, 1_753_900_000),
+        (".70", "saio", 6i32, 1_754_003_000u64, 1842.3, "s8r16"),
+        (".69", "tamaki", -4, 1_753_990_000, 1836.1, "8"),
+        (".68", "nobu", 12, 1_753_900_000, 1840.0, "s8r16"),
+        (".67", "kei", 18, 1_753_820_000, 1828.4, "8r16"),
+        (".66", "edax-bot", -18, 1_753_740_000, 1812.9, "s8"),
+        (".65", "nara", 0, 1_753_650_000, 1825.5, "8"),
     ]
     .into_iter()
-    .map(|(id, opp, d, at)| GameResult {
+    .map(|(id, opp, d, at, rate, gt)| GameResult {
         id: id.into(),
-        base: id.into(),
+        /* **形式は `base` の頭から取り出される** (`base.split('.')[0]`)。
+           番号だけを入れると画面に「?」と出る */
+        base: format!("{gt}{id}"),
         raw: format!("{id} {opp} {d:+}"),
         my_diff: Some(d),
         opp: opp.into(),
         at,
-        my_rating: Some(1842.3),
+        my_rating: Some(rate),
         ..Default::default()
     })
     .collect();
