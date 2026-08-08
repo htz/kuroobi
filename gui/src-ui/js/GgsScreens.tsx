@@ -280,13 +280,17 @@ export function GgsChat({ snap }: { snap: GgsSnapshot }) {
         width: 'var(--w-lobby)', flex: 'none', borderRight: '1px solid var(--border)',
         minHeight: 0, display: 'flex', flexDirection: 'column',
       }}>
+        {/* 見出しの釦は `chip` (20px)。**列が 174px しかないので、28px の
+            釦だと「会話」と押し合いになる**。絵の帯は 21px だが、それだと
+            釦が罫にめり込む (Section の見出しで一度指摘が出ている) ので
+            帯だけ 32px にした。要 push */}
         <div style={{
-          flex: 'none', display: 'flex', alignItems: 'center', gap: 'var(--sp-2)',
-          padding: 'var(--sp-2) var(--sp-3)', borderBottom: '1px solid var(--border-weak)',
+          flex: 'none', height: 'var(--h-field)', display: 'flex', alignItems: 'center',
+          gap: 'var(--sp-2)', padding: '0 var(--sp-3)', borderBottom: '1px solid var(--border-weak)',
         }}>
           <span style={{ fontSize: 'var(--fs-7)', fontWeight: 600, letterSpacing: '.08em', color: 'var(--sub)' }}>会話</span>
           <span style={{ marginLeft: 'auto' }} />
-          <Button onClick={() => setPick(true)}>新しい相手</Button>
+          <Button size="chip" onClick={() => setPick(true)}>新しい相手</Button>
         </div>
         <div className="k-scroll" style={{ flex: 1, minHeight: 0 }}>
         {sorted.map(([key, info]) => (
@@ -331,6 +335,17 @@ export function GgsChat({ snap }: { snap: GgsSnapshot }) {
             {cur === '.chat' ? 'ここにいる全員に届きます' : '本人にだけ届きます'}
           </span>
         </div>
+        {/* 訳の切り替えは**送る行から出して独立した帯にする** (絵もこの位置)。
+            入力欄と同じ行に置くと、打つ場所が 2 つのつまみに押されて狭くなる。
+            どちらも「これから送る 1 通」ではなく**この会話の見え方**の設定
+            なので、上に置くほうが筋も合う */}
+        <div style={{
+          flex: 'none', height: 'var(--h-field)', display: 'flex', alignItems: 'center',
+          gap: 'var(--sp-4)', padding: '0 var(--sp-4)', borderBottom: '1px solid var(--border-weak)',
+        }}>
+          <Toggle checked={autoJa} onChange={setAutoJa} label="和訳して表示" />
+          <Toggle checked={toEn} onChange={setToEn} label="英訳して送信" />
+        </div>
         <div className="k-scroll" ref={box} style={{
           flex: 1, minHeight: 0, padding: 'var(--sp-4)',
           display: 'flex', flexDirection: 'column', gap: 'var(--sp-3)',
@@ -356,8 +371,6 @@ export function GgsChat({ snap }: { snap: GgsSnapshot }) {
           flex: 'none', display: 'flex', gap: 'var(--sp-2)', alignItems: 'center',
           padding: 'var(--sp-3) var(--sp-4)', borderTop: '1px solid var(--border-weak)',
         }}>
-          <Toggle checked={autoJa} onChange={setAutoJa} label="和訳" />
-          <Toggle checked={toEn} onChange={setToEn} label="英訳して送る" />
           <TextField value={text} onChange={setText} onEnter={() => void send()}
                      placeholder="メッセージを入力 (Enter で送信)" />
           <Button size="field" variant="primary" onClick={() => void send()}>送信</Button>
