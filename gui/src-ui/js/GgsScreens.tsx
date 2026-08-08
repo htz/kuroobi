@@ -403,6 +403,8 @@ function GgsLobby({ snap, onNav }: { snap: GgsSnapshot; onNav: (id: NavId) => vo
   const [gtype, setGtype] = useState('s8r16');
   const [time, setTime] = useState('00:15:00');
   const [rated, setRated] = useState(true);
+  /** 「情報」を開いている申し込みの id (1 つだけ)。 */
+  const [info, setInfo] = useState('');
 
   const games = snap.ongoing.filter((o) => !o.mine);
   const names = snap.users.filter((u) => u.name !== snap.login).map((u) => u.name);
@@ -435,23 +437,42 @@ function GgsLobby({ snap, onNav }: { snap: GgsSnapshot; onNav: (id: NavId) => vo
 
         <Section title="対局の申し込み">
           {!snap.offers.length && <Empty>対局の申し込みはありません。</Empty>}
+          {/* **ここも `List` で包む。**節の余白 (12px) が行間に入ると一覧に
+              見えない — 対局中・定石の木・学習ログ・GGS の 3 つの一覧で
+              同じ罠を踏んでいて、これが 5 か所目だった */}
+          <List>
           {snap.offers.map((o) => {
             const who = o.names.filter((n) => n !== snap.login);
             return (
-              <Row key={o.id}
-                   title={who.join(' と ') || '?'}
+              <React.Fragment key={o.id}>
+              <Row title={who.join(' と ') || '?'}
                    // 規則 27 — 自分宛と未読だけ --bad で塗る。accent にすると
                    // 「押せる場所」の青と同じになり、急ぎのものが埋もれる
                    tag={o.incoming ? '自分宛' : undefined}
                    tagTone={o.incoming ? 'bad' : undefined}
                    alert={o.incoming}
                    sub={`${gtypeLabel(o.gtype)} · ${o.time || '?'}${o.rated ? ' · レート戦' : ''}`}
-                   actions={o.incoming ? <>
-                     <Button variant="primary" onClick={() => void ggsApi.accept(o.id)}>受ける</Button>
-                     <Button variant="danger" onClick={() => void ggsApi.decline(o.id)}>断る</Button>
-                   </> : undefined} />
+                   actions={<>
+                     {/* 絵は自分宛でない申し込みにも「情報」を置いている。
+                         **まとめた 1 行は色・コミ・乱数の手数を落としている**ので、
+                         受けるかどうかを決める前に元の行を読めるようにする */}
+                     <Button onClick={() => setInfo(info === o.id ? '' : o.id)}>情報</Button>
+                     {o.incoming && <>
+                       <Button variant="primary" onClick={() => void ggsApi.accept(o.id)}>受ける</Button>
+                       <Button variant="danger" onClick={() => void ggsApi.decline(o.id)}>断る</Button>
+                     </>}
+                   </>} />
+              {info === o.id && (
+                <div style={{
+                  padding: 'var(--sp-2) var(--sp-3)', borderBottom: '1px solid var(--border-weak)',
+                  fontFamily: 'var(--ff-mono)', fontSize: 'var(--fs-7)', color: 'var(--sub)',
+                  lineHeight: 1.7, wordBreak: 'break-all',
+                }}>{o.raw || '元の行がありません'}</div>
+              )}
+              </React.Fragment>
             );
           })}
+          </List>
         </Section>
       </div>
 
@@ -499,11 +520,14 @@ function GgsLobby({ snap, onNav }: { snap: GgsSnapshot; onNav: (id: NavId) => vo
         <Section title="中断対局"
                  aside={<Button onClick={() => void ggsApi.listStored()}>更新</Button>}>
           {!snap.stored.length && <Empty>中断対局はありません。</Empty>}
+          {/* 行どうしは詰める (節の余白 12px が行間に入ると一覧に見えない) */}
+          <List>
           {snap.stored.map((x) => (
             <Row key={x.id} title={x.opp || '?'} sub={gtypeLabel(x.gtype)}
                  actions={<Button variant="primary"
                                   onClick={() => void ggsApi.resumeStored(x.id)}>再開</Button>} />
           ))}
+          </List>
         </Section>
       </aside>
     </div>
@@ -1357,6 +1381,7 @@ function UserDetail({ snap, name, tab, onTab, onBack, onNav, onKifu }: {
             {/* 押すと棋譜を覆いで見せる。手元に棋譜は無いので、対局の番号から
                 取り出す (結果の画面と同じ道)。押せない行を並べていたので、
                 一覧から棋譜へ行く道が無かった */}
+            <List>
             {rows.map((h) => (
               <Row key={h.id}
                    title={`${h.black} 対 ${h.white}`}
@@ -1364,6 +1389,7 @@ function UserDetail({ snap, name, tab, onTab, onBack, onNav, onKifu }: {
                    title2="棋譜を見る"
                    onClick={() => onKifu(`${h.black} 対 ${h.white}`, '', h.id)} />
             ))}
+            </List>
           </>
         )}
       </div>
