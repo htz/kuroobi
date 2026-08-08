@@ -397,7 +397,11 @@ function GgsLobby({ snap, onNav }: { snap: GgsSnapshot; onNav: (id: NavId) => vo
             return (
               <Row key={o.id}
                    title={who.join(' と ') || '?'}
+                   // 規則 27 — 自分宛と未読だけ --bad で塗る。accent にすると
+                   // 「押せる場所」の青と同じになり、急ぎのものが埋もれる
                    tag={o.incoming ? '自分宛' : undefined}
+                   tagTone={o.incoming ? 'bad' : undefined}
+                   alert={o.incoming}
                    sub={`${gtypeLabel(o.gtype)} · ${o.time || '?'}${o.rated ? ' · レート戦' : ''}`}
                    actions={o.incoming ? <>
                      <Button variant="primary" onClick={() => void ggsApi.accept(o.id)}>受ける</Button>
@@ -464,8 +468,13 @@ function GgsLobby({ snap, onNav }: { snap: GgsSnapshot; onNav: (id: NavId) => vo
 }
 
 /** 一覧の 1 行。名前と補足が左、操作が右。行そのものは押さない */
-function Row({ title, sub, tag, actions, onClick, title2 }: {
-  title: string; sub?: string; tag?: string; actions?: React.ReactNode;
+function Row({ title, sub, tag, tagTone, alert, actions, onClick, title2 }: {
+  title: string; sub?: string; tag?: string;
+  /** 印の色。既定は accent (規則 27 — 自分宛と未読だけ --bad)。 */
+  tagTone?: 'sub' | 'accent' | 'ok' | 'bad';
+  /** 自分宛。左に --bad の帯を引く (設計 §4)。 */
+  alert?: boolean;
+  actions?: React.ReactNode;
   /** 押せる行にする。行の中に別の押せるものがあるときは使わない (規則 46)。 */
   onClick?: () => void;
   /** 押せる行の補足 (title 属性)。 */
@@ -484,13 +493,16 @@ function Row({ title, sub, tag, actions, onClick, title2 }: {
       // 行の区切りが全部消えるが、GGS に繋がないと見えないので気付けない
       border: 0, borderRadius: 0,
       borderBottom: '1px solid var(--border-weak)',
+      // 自分宛だけ左に帯を引く (設計 §4)。色は規則 27 の --bad
+      borderLeft: alert ? '3px solid var(--bad)' : undefined,
+      paddingLeft: alert ? 'var(--sp-2)' : undefined,
       background: 'transparent', textAlign: 'left',
       color: 'var(--text)', cursor: onClick && !actions ? 'pointer' : undefined,
     }}>
       <span style={{ flex: 1, minWidth: 0, display: 'flex', flexDirection: 'column', gap: 'var(--sp-1)' }}>
         <span style={{ display: 'flex', alignItems: 'center', gap: 'var(--sp-2)', fontSize: 'var(--fs-5)' }}>
           <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{title}</span>
-          {tag && <Tag tone="accent">{tag}</Tag>}
+          {tag && <Tag tone={tagTone ?? 'accent'}>{tag}</Tag>}
         </span>
         {sub && <span style={{ fontSize: 'var(--fs-6)', color: 'var(--sub)' }}>{sub}</span>}
       </span>
