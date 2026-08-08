@@ -538,14 +538,24 @@ export function App() {
         ) : (
         // 左右の余白は中の要素が持つ。ここに持たせると、石数の行の罫が
         // 端まで届かず途中で切れる (設計は端から端まで)
-        <div style={{ flex: 1, minHeight: 0, display: 'flex', flexDirection: 'column' }}>
+        // 下限は**この段**に置く。中の盤だけに置くと、flex は外側を伸ばし切った
+        // あと (自由空間が余っている扱いのまま) 中身がはみ出して、手数の帯と
+        // グラフの上に盤が重なって描かれる。ここに置くと「足りない」ことが
+        // flex に伝わり、縮む側 (グラフ) から先に削られる
+        <div style={{
+          flex: 1, minHeight: 'calc(200px + var(--h-bar))',
+          display: 'flex', flexDirection: 'column',
+        }}>
           {/* 行に minmax(0,1fr) を入れて**高さを確定させる**。既定の auto だと
               行の高さが中身で決まり、中の height:100% の基準が定まらない
               (基準が無いと auto 扱いになり、svg が固有の 880px で描かれて
               下へはみ出す)。はみ出しは全部下に出るので、石数の行と手数の帯に
               重なって初めて気付く (規則 77) */}
+          {/* **盤に下限を持たせる (規則 7)。** 評価値グラフの帯が縮まないので、
+              窓を最小 (860×560) にすると盤が 82px まで潰れていた。畳む順は
+              盤を最後まで残す決まりなので、先にグラフを縮める */}
           <div style={{
-            flex: 1, minHeight: 0, display: 'grid', placeItems: 'center',
+            flex: 1, minHeight: 200, display: 'grid', placeItems: 'center',
             gridTemplateRows: 'minmax(0, 1fr)', gridTemplateColumns: 'minmax(0, 1fr)',
             padding: 'var(--sp-2) var(--sp-4)',
           }}>

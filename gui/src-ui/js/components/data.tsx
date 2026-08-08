@@ -129,7 +129,34 @@ export function EvalGraph({ points, plies, cursor, blunder, busy, title = '評�
      点の位置だけでは何手目の何石差か分からず、いちいち押して盤を動かす
      しかなかった。出す場所は見出し行 (規則 19 — 描画領域に重ねない)。 */
   const [hover, setHover] = React.useState<number | null>(null);
-  const W = 800, H = 210, L = 44, R = 54, T = 18, B = 26, STEP = 8;
+  /* 器の実寸。**viewBox の高さを器から決める** — 幅 100% / 高さ auto だと
+     縦横比が固定され、窓を低くしても帯が 266px のまま縮まず、盤が
+     82px まで潰れていた (規則 7 は盤を最後まで残すと決めている)。
+     幅の倍率 (実寸 / W) はそのままなので、**字も余白も大きさが変わらず**
+     描画に使う縦だけが減る。ResizeObserver は ref のコールバックで張る
+     (effect の中で setState すると React Compiler の lint が落ちる)。 */
+  const [box, setBox] = React.useState({ w: 0, h: 0 });
+  const obs = React.useRef<ResizeObserver | null>(null);
+  const attach = React.useCallback((el: HTMLDivElement | null) => {
+    obs.current?.disconnect();
+    obs.current = null;
+    if (!el) return;
+    const o = new ResizeObserver(() => {
+      const r = el.getBoundingClientRect();
+      setBox((b) => (Math.abs(b.w - r.width) < 0.5 && Math.abs(b.h - r.height) < 0.5
+        ? b : { w: r.width, h: r.height }));
+    });
+    o.observe(el);
+    obs.current = o;
+  }, []);
+
+  const W = 800, L = 44, R = 54, T = 18, B = 26, STEP = 8;
+  /** 自然な高さと、これ以上は潰さない下限 */
+  const NAT = 210, MIN = 120;
+  const scale = box.w > 0 ? box.w / W : 0;
+  /* 上限・下限は**器の側**に px で置く (倍率は幅だけで決まるので循環しない)。
+     H を後から丸めると縦横で倍率がずれて字が歪む */
+  const H = scale > 0 ? box.h / scale : NAT;
   const len = Math.max(1, plies ?? points.length - 1);
   const defined = points.filter((p): p is GraphPoint => !!p).map(p => Math.abs(p.value));
   const ymax = Math.max(STEP, Math.min(64, Math.ceil((defined.length ? Math.max(...defined) : 0) / STEP) * STEP));
@@ -137,8 +164,12 @@ export function EvalGraph({ points, plies, cursor, blunder, busy, title = '評�
   const x = (n: number) => L + (W - L - R) * n / len;
   const y = (v: number) => T + (H - T - B) * (1 - (v + ymax) / (2 * ymax));
 
+  /* 罫線の間隔。**帯が低いと 8 石ごとでは目盛が重なって読めない** —
+     字は倍率が同じで縮まないので、間隔のほうを間引く (16 → 32 → 64 石) */
+  const rowStep = [1, 2, 4, 8].map(k => STEP * k)
+    .find(s => (H - T - B) * s / (2 * ymax) >= 14) ?? STEP * 8;
   const rows: number[] = [];
-  for (let v = -ymax; v <= ymax; v += STEP) rows.push(v);
+  for (let v = -ymax; v <= ymax; v += rowStep) rows.push(v);
   const cols: number[] = [];
   for (let n = 0; n <= len; n += 10) cols.push(n);
 
@@ -169,7 +200,9 @@ export function EvalGraph({ points, plies, cursor, blunder, busy, title = '評�
 
   return (
     <div style={{
-      flex: 'none', borderTop: '1px solid var(--border)', background: 'var(--panel)',
+      /* 縮む。盤より先に畳む側なので `none` にしない (規則 7) */
+      flex: '0 1 auto', minHeight: 0,
+      borderTop: '1px solid var(--border)', background: 'var(--panel)',
       padding: 'var(--sp-3) var(--sp-4) var(--sp-4)', display: 'flex', flexDirection: 'column', gap: 'var(--sp-2)',
     }}>
       {/* 凡例は必ずグラフの外（見出し行）に置く — 描画領域に重ねると
@@ -200,9 +233,17 @@ export function EvalGraph({ points, plies, cursor, blunder, busy, title = '評�
         </span>
         {extra && <span style={{ marginLeft: 'auto', display: 'flex', alignItems: 'center', gap: 'var(--sp-3)' }}>{extra}</span>}
       </div>
-      <div style={{ position: 'relative' }}>
+      {/* 基準の高さを**明示する**。svg を height:100% にした時点で中身の高さが
+          0 になり、auto のままだと帯が最小のまま伸びなくなる (窓が広くても
+          グラフが潰れる)。基準 = 自然な高さ、下限まで縮む */}
+      <div ref={attach} style={{
+        position: 'relative', flexGrow: 0, flexShrink: 1,
+        flexBasis: (scale ? NAT * scale : NAT) + 'px',
+        minHeight: scale ? MIN * scale : MIN,
+      }}>
         {/* 押した位置の手数へ飛ぶ。viewBox は器より広いので、実寸の比で数え直す */}
-        <svg viewBox={`0 0 ${W} ${H}`} style={{ width: '100%', height: 'auto', display: 'block' }}
+        <svg viewBox={`0 0 ${W} ${H.toFixed(2)}`} preserveAspectRatio="none"
+             style={{ width: '100%', height: '100%', display: 'block' }}
              role="img" aria-label="評価値グラフ（縦軸 石差、横軸 手数）"
              onMouseMove={(e) => setHover(plyAt(e))}
              onMouseLeave={() => setHover(null)}
