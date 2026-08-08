@@ -542,16 +542,15 @@ export function App() {
                 : conn === 'offline' ? '未接続' : 'ログインしています…'}
             </span>
           ) : study ? (
-            // 検討では KUROOBI は打たない。操作は手順を行き来することだけで、
-            // 分析はグラフの見出し行が持つ (押す場所と結果の出る場所を離さない)
-            <>
-              <Button disabled={!v || v.cursor === 0} onClick={() => void g.jumpTo(0)}>最初へ</Button>
-              <Button disabled={!v || v.cursor === 0} onClick={() => void g.jumpTo(v!.cursor - 1)}>戻る</Button>
-              <Button disabled={!v || v.cursor >= v.moves.length}
-                      onClick={() => void g.jumpTo(v!.cursor + 1)}>進む</Button>
-              <Button disabled={!v || v.cursor >= v.moves.length}
-                      onClick={() => void g.jumpTo(v!.moves.length)}>最後へ</Button>
-            </>
+            // 検討では KUROOBI は打たない。**送りの釦は手数の帯へ移した**
+            // (設計 §2)。辿る道具を 1 か所にまとめる — 帯で掴んで滑らせるのと
+            // 1 手ずつ送るのは同じ操作で、離して置くと ▶ を押した結果が
+            // 別の場所に出る。分析はグラフの見出し行が持つ (同じ理由)。
+            // 絵はここに 分析 / 棋譜を読み込む / 黒視点・白視点 を置いている
+            // が、どれも今は別の場所にある (台帳に項目として積んだ)
+            <span style={{ fontSize: 'var(--fs-6)', color: 'var(--sub)' }}>
+              {v && v.moves.length ? `${v.cursor} / ${v.moves.length} 手` : '棋譜がありません'}
+            </span>
           ) : (
             <>
               <Button variant={g.playing ? 'danger' : 'primary'}

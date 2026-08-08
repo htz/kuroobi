@@ -1,7 +1,7 @@
 import React from 'react';
 
 /* KUROOBI primitives
- * 色と寸法は必ずトークン経由。size は h-ctrl / h-field / h-chip の 3 段だけ。
+ * 色と寸法は必ずトークン経由。size は規則 5 の段から取る (下の Size)。
  *
  * 押せる感じ（hover / active）は base.css の状態の層が持つ。
  * インライン style では :hover が書けないので、部品は k-press / k-row /
@@ -9,11 +9,14 @@ import React from 'react';
  * className を受け取れるようにしてあるので、画面側で足すこともできる。
  */
 
-type Size = 'chip' | 'ctrl' | 'field';
-const H: Record<Size, string> = { chip: 'var(--h-chip)', ctrl: 'var(--h-ctrl)', field: 'var(--h-field)' };
-const PAD: Record<Size, string> = { chip: '0 10px', ctrl: '0 12px', field: '0 14px' };
-const FS: Record<Size, string> = { chip: 'var(--fs-6)', ctrl: 'var(--fs-5)', field: 'var(--fs-4)' };
-const R: Record<Size, string> = { chip: 'var(--r-1)', ctrl: 'var(--r-2)', field: 'var(--r-3)' };
+/* 段は規則 5 の 44/32/28/24/20 から取る。`row` (24) は手数の帯の送りの釦
+   だけが使う — 帯そのものが 32px なので、28 だと上下に 2px しか残らない
+   (設計も 32 の帯に 24 の釦を置いている)。 */
+type Size = 'chip' | 'row' | 'ctrl' | 'field';
+const H: Record<Size, string> = { chip: 'var(--h-chip)', row: 'var(--h-row)', ctrl: 'var(--h-ctrl)', field: 'var(--h-field)' };
+const PAD: Record<Size, string> = { chip: '0 10px', row: '0 10px', ctrl: '0 12px', field: '0 14px' };
+const FS: Record<Size, string> = { chip: 'var(--fs-6)', row: 'var(--fs-7)', ctrl: 'var(--fs-5)', field: 'var(--fs-4)' };
+const R: Record<Size, string> = { chip: 'var(--r-1)', row: 'var(--r-1)', ctrl: 'var(--r-2)', field: 'var(--r-3)' };
 
 const cx = (...v: (string | false | undefined)[]) => v.filter(Boolean).join(' ');
 

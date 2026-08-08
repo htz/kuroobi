@@ -1,5 +1,5 @@
 import React from 'react';
-import { Badge, Dot } from './primitives';
+import { Badge, Button, Dot } from './primitives';
 import { Empty, TableHead, TableRow } from './layout';
 
 /* KUROOBI data — 棋譜表・評価値グラフ・対局者行・レート
@@ -533,6 +533,10 @@ export function MoveScrub({ plies, cursor, blunder, onSeek }: {
   blunder?: { at: number; loss: number };
   onSeek: (n: number) => void;
 }) {
+  /* 送りの釦は**この帯の左端**。設計 §2 は 32px の帯に 24px の四角 4 つを
+     溝 4px で並べ、ツールバーからは外している。**辿る道具を 1 か所に
+     まとめる** — 帯で掴んで滑らせるのと 1 手ずつ送るのは同じ操作で、
+     離して置くと ▶ を押した結果が別の場所 (帯の丸) に出る。 */
   const box = React.useRef<HTMLDivElement>(null);
   if (plies <= 0) return null;
 
@@ -548,8 +552,19 @@ export function MoveScrub({ plies, cursor, blunder, onSeek }: {
   // 刻みは 1 手ごと。10 手ごとだけ長くして数字を添える
   const ticks = Array.from({ length: plies + 1 }, (_, i) => i);
 
+  const step = (n: number) => onSeek(Math.max(0, Math.min(plies, n)));
+
   return (
-    <div style={{ padding: '0 var(--sp-4)', flex: 'none' }}>
+    <div style={{
+      padding: '0 var(--sp-4)', flex: 'none',
+      display: 'flex', alignItems: 'center', gap: 10,
+    }}>
+      <span style={{ display: 'flex', gap: 4, flex: 'none' }}>
+        <Button square size="row" title="最初へ" disabled={cursor === 0} onClick={() => step(0)}>|◀</Button>
+        <Button square size="row" title="前の手" disabled={cursor === 0} onClick={() => step(cursor - 1)}>◀</Button>
+        <Button square size="row" title="次の手" disabled={cursor >= plies} onClick={() => step(cursor + 1)}>▶</Button>
+        <Button square size="row" title="最後へ" disabled={cursor >= plies} onClick={() => step(plies)}>▶|</Button>
+      </span>
       <div ref={box} role="slider" aria-label="手数" aria-valuemin={0}
            aria-valuemax={plies} aria-valuenow={cursor} tabIndex={0}
            onPointerDown={(e) => {
@@ -560,7 +575,7 @@ export function MoveScrub({ plies, cursor, blunder, onSeek }: {
            style={{
              // 高さは 5 段のうちの --h-field。10 手ごとの数字は帯の外 (下の
              // 12px の行) に置くので、32px でも刻みと掴む丸 (16px) は収まる
-             position: 'relative', height: 'var(--h-field)', width: '100%',
+             position: 'relative', height: 'var(--h-field)', flex: 1, minWidth: 0,
              cursor: 'pointer', touchAction: 'none', userSelect: 'none',
            }}>
         {/* 溝と、いまいるところまでの塗り */}
