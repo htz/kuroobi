@@ -49,7 +49,10 @@ function LearnStat({ label, value }: { label: string; value?: number }) {
   return (
     <div style={{ display: 'flex', alignItems: 'center', fontSize: 'var(--fs-5)' }}>
       <span style={{ color: 'var(--sub)' }}>{label}</span>
-      <span style={{ marginLeft: 'auto', fontSize: 'var(--fs-3)', fontWeight: 600 }}>
+      <span style={{
+        marginLeft: 'auto', fontSize: 'var(--fs-3)', fontWeight: 600,
+        fontVariantNumeric: 'tabular-nums',
+      }}>
         {value === undefined ? '—' : value.toLocaleString()}
       </span>
     </div>
@@ -748,7 +751,11 @@ export function App() {
                   }}>
                     <Dot />取り込み中
                   </span>
-                  <span style={{ marginLeft: 'auto', fontSize: 'var(--fs-6)', color: 'var(--sub)' }}>
+                  {/* 取り込みは 1 局面ずつ進む。桁が動くと「取り込み中」まで揺れる */}
+                  <span style={{
+                    marginLeft: 'auto', fontSize: 'var(--fs-6)', color: 'var(--sub)',
+                    fontVariantNumeric: 'tabular-nums',
+                  }}>
                     局面 {cpu.learn[0].toLocaleString()} / {cpu.learn[1].toLocaleString()}
                   </span>
                 </div>

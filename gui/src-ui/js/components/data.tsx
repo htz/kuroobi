@@ -74,6 +74,8 @@ export function KifuTable({ moves, current, onSelect, decimals = 1 }: {
                 width: '100%', border: 0, textAlign: 'left',
                 display: 'flex', gap: 'var(--sp-2)', height: 'var(--h-row)', alignItems: 'center',
                 padding: '0 var(--sp-3)', fontSize: 'var(--fs-5)',
+                // 評価と時間は縦に並ぶ数字の列。桁が揃わないと読み比べられない
+                fontVariantNumeric: 'tabular-nums',
                 borderBottom: '1px solid var(--border-weak)',
                 color: played ? 'var(--text)' : 'var(--sub)',
                 background: isCurrent ? 'color-mix(in srgb, var(--accent) 14%, transparent)' : 'transparent',
@@ -376,8 +378,9 @@ export function ScoreRow({ black, white, turn, meta, blackClock, whiteClock }: {
         <span style={{ width: 1, height: 20, background: 'var(--border)', flex: 'none' }} />
         <span>{meta}</span>
       </>}
+      {/* 時計は 1 秒ごとに書き換わる。桁が動くと石数まで揺れる */}
       {(blackClock || whiteClock) && (
-        <span style={{ marginLeft: 'auto', display: 'flex', gap: 'var(--sp-4)' }}>
+        <span style={{ marginLeft: 'auto', display: 'flex', gap: 'var(--sp-4)', fontVariantNumeric: 'tabular-nums' }}>
           {blackClock && <span>黒 <b style={{ color: 'var(--text)', fontWeight: 600 }}>{blackClock}</b></span>}
           {whiteClock && <span>白 <b style={{ color: 'var(--text)', fontWeight: 600 }}>{whiteClock}</b></span>}
         </span>
@@ -403,7 +406,7 @@ export function PlayerRow({ color, name, rate, dev, meta, clock, active, discs, 
           }}>{name}</button>
         : <b style={{ fontSize: 'var(--fs-4)', fontWeight: 600 }}>{name}</b>}
       {rate !== undefined && (
-        <span style={{ color: 'var(--sub)', fontSize: 'var(--fs-6)' }}>
+        <span style={{ color: 'var(--sub)', fontSize: 'var(--fs-6)', fontVariantNumeric: 'tabular-nums' }}>
           {rate.toFixed(1)}{dev !== undefined && <span style={{ opacity: .7, marginLeft: 4 }}>±{dev}</span>}
         </span>
       )}

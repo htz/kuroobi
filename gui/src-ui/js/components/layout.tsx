@@ -190,6 +190,9 @@ export function StatusBar({ left, right }: { left?: React.ReactNode; right?: Rea
       height: 'var(--h-status)', flex: 'none', background: 'var(--bg)', borderTop: '1px solid var(--border)',
       display: 'flex', alignItems: 'center', gap: 'var(--sp-4)', padding: '0 var(--sp-4)',
       fontSize: 'var(--fs-6)', color: 'var(--sub)', whiteSpace: 'nowrap',
+      // **帯ごと桁を揃える。**思考の秒・nodes・nps は毎フレーム変わるので、
+      // 桁が動くと下の帯全体が左右に揺れて読めない
+      fontVariantNumeric: 'tabular-nums',
     }}>
       {left}
       <span style={{ marginLeft: 'auto', display: 'flex', alignItems: 'center', gap: 'var(--sp-3)' }}>{right}</span>

@@ -196,7 +196,7 @@ export type Rate = { value: number; dev: number; rank?: number; w: number; l: nu
 /* 偏差 ±n は必ず添える。GGS のレートは偏差が大きいと数字が意味を持たない */
 export function RateRow({ label, rate }: { label: string; rate: Rate }) {
   return (
-    <div style={{ display: 'flex', alignItems: 'baseline', gap: 'var(--sp-3)' }}>
+    <div style={{ display: 'flex', alignItems: 'baseline', gap: 'var(--sp-3)', fontVariantNumeric: 'tabular-nums' }}>
       {/* 対局形式の名前は設定の見出しより長い (「同期・ランダム20手」)。
           --w-label のままだと 2 行に折り返して行の高さが揃わなくなる */}
       <span style={{
