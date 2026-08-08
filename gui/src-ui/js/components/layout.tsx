@@ -258,21 +258,75 @@ export function BottomPanel({ tabs, active, onTab, onClose, height = 240, childr
 
 
 /* 浮くもの。角丸 --r-4 と影を持つのは Modal / Toast / 盤の外枠だけ
- * (Popover は使い所が無かったので削除した — 規則 70) */
-export function Modal({ title, body, actions, width = 'var(--w-modal)' }: {
-  title: string; body?: React.ReactNode; actions?: React.ReactNode;
+ * (Popover は使い所が無かったので削除した — 規則 70)
+ *
+ * **覆いは 1 つの形しか無い。** 以前は 4 枚が 4 通りの作りだった —
+ * 確認は帯なしで余白 24、棋譜の読み込みと棋譜ビューアは罫つきの頭と足、
+ * 設定だけ 44px の `--panel` の帯に閉じる釦。**同じ「浮いて決めさせるもの」
+ * が画面ごとに違って見えていた。**
+ *
+ * 段は 3 つ:
+ *   頭 … `--h-bar` (44px) の `--panel`。題名は中央、閉じるは右端 (規則 5)
+ *   本体 … 余白 16/24。長ければ `scroll` で巻く
+ *   足 … 上罫 + 釦の行 (右寄せ)。`actions` を渡したときだけ出す
+ *
+ * 幅は `--w-modal` (340) か `--w-modal-wide` (520)。高さは中身なりで、
+ * 画面が低ければ `88vh` で頭打ちにして本体だけを巻く。
+ */
+export function Modal({ title, sub, body, actions, width = 'var(--w-modal)', onClose, scroll, children }: {
+  title: string;
+  /** 題名の下の一行 (棋譜の読み込みの「GGF・f5d6… のいずれでも」など)。 */
+  sub?: React.ReactNode;
+  /** 本体。`children` と同じ扱い — 短い文だけのときはこちらが読みやすい。 */
+  body?: React.ReactNode;
+  actions?: React.ReactNode;
   /** 既定は `--w-modal` (340px)。中身の要る覆いは `--w-modal-wide` (規則 71) */
   width?: string;
+  /** 閉じる。渡すと頭の右端に釦が出る。 */
+  onClose?: () => void;
+  /** 本体を巻けるようにする (設定のように中身が長いもの)。 */
+  scroll?: boolean;
+  children?: React.ReactNode;
 }) {
   return (
     <div role="dialog" aria-modal style={{
-      width, borderRadius: 'var(--r-4)', background: 'var(--card)',
+      width, maxHeight: '88vh',
+      borderRadius: 'var(--r-4)', background: 'var(--card)',
       border: '1px solid var(--border)', boxShadow: 'var(--sh-2)',
-      padding: 'var(--sp-5)', display: 'flex', flexDirection: 'column', gap: 'var(--sp-4)',
+      display: 'flex', flexDirection: 'column', overflow: 'hidden',
     }}>
-      <div style={{ fontSize: 'var(--fs-3)', fontWeight: 600 }}>{title}</div>
-      {body && <div style={{ fontSize: 'var(--fs-5)', color: 'var(--sub)', lineHeight: 1.7 }}>{body}</div>}
-      {actions && <div style={{ display: 'flex', gap: 'var(--sp-2)', justifyContent: 'flex-end' }}>{actions}</div>}
+      <div style={{
+        height: 'var(--h-bar)', flex: 'none', background: 'var(--panel)',
+        borderBottom: '1px solid var(--border)', display: 'flex', alignItems: 'center',
+        padding: '0 var(--sp-3)',
+      }}>
+        {/* 題名を**窓の中央**に置くため、閉じると同じ幅を左にも取る */}
+        <span style={{ width: 32, flex: 'none' }} />
+        <span style={{
+          margin: '0 auto', fontSize: 'var(--fs-4)', fontWeight: 600, color: 'var(--text)',
+          overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
+        }}>{title}</span>
+        <span style={{ width: 32, flex: 'none', display: 'flex', justifyContent: 'flex-end' }}>
+          {onClose && <IconButton name="close" label="閉じる" onClick={onClose} />}
+        </span>
+      </div>
+
+      <div className={scroll ? 'k-scroll' : undefined} style={{
+        flex: scroll ? 1 : 'none', minHeight: 0,
+        padding: 'var(--sp-4) var(--sp-5)',
+        display: 'flex', flexDirection: 'column', gap: 'var(--sp-3)',
+      }}>
+        {sub && <div style={{ fontSize: 'var(--fs-6)', color: 'var(--sub)', lineHeight: 1.7 }}>{sub}</div>}
+        {body && <div style={{ fontSize: 'var(--fs-5)', color: 'var(--sub)', lineHeight: 1.7 }}>{body}</div>}
+        {children}
+      </div>
+
+      {actions && (
+        <div style={{
+          flex: 'none', display: 'flex', gap: 'var(--sp-2)', alignItems: 'center',
+          padding: 'var(--sp-3) var(--sp-5)', borderTop: '1px solid var(--border)',
+        }}>{actions}</div>
+      )}
     </div>
   );
 }
@@ -311,10 +365,14 @@ export function EmptyState({ title, body, actions }: { title: string; body?: Rea
  * 押せない場所を作るのが役目なので、暗幕そのものを押したら閉じる。
  * Esc でも閉じる — 開いたら閉じ方が要る、というだけの話だが、
  * ブラウザの confirm() と違って自分で書かないと付いてこない。 */
-/** 焦点を置ける相手。**欄を釦より先に**書いてある — 覆いを開いたときに
- *  入る先は「打つ場所」であってほしい (棋譜の読み込みなら貼り付け先)。 */
+/** 焦点を置ける相手 (Tab の輪に入るもの)。 */
 const FOCUSABLE =
   'textarea:not(:disabled), input:not(:disabled), button:not(:disabled), select:not(:disabled), [tabindex]:not([tabindex="-1"])';
+/** 開いたときに焦点を置きたい相手。**打つ場所を釦より先に**する —
+ *  `querySelectorAll` は書いた順ではなく**文書の順**で返すので、
+ *  頭の閉じる釦が先に来てしまう (棋譜の読み込みで貼り付け先ではなく
+ *  「閉じる」に入っていた)。 */
+const FIRST_STOP = 'textarea:not(:disabled), input:not(:disabled), select:not(:disabled)';
 
 export function Overlay({ onClose, children }: { onClose?: () => void; children: React.ReactNode }) {
   React.useEffect(() => {
@@ -335,7 +393,7 @@ export function Overlay({ onClose, children }: { onClose?: () => void; children:
     /** いま押せるものだけ。`offsetParent` が無いもの (畳まれた段) は数えない */
     const items = () => [...(el?.querySelectorAll<HTMLElement>(FOCUSABLE) ?? [])]
       .filter((x) => x.offsetParent !== null);
-    (items()[0] ?? el)?.focus();
+    (el?.querySelector<HTMLElement>(FIRST_STOP) ?? items()[0] ?? el)?.focus();
     // 端で折り返す。輪にしないと、最後の釦から暗幕の下へ抜けてしまう
     const on = (e: KeyboardEvent) => {
       if (e.key !== 'Tab' || !el) return;

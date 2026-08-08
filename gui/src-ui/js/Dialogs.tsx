@@ -3,7 +3,7 @@ import { api, emitApp, type KifuFrame, type ThreadsView } from './api';
 import { TATAMI, type Prefs, type Theme } from './prefs';
 import { Modal, Overlay, Section } from './components/layout';
 import { Button, Segmented, Select, TextField } from './components/primitives';
-import { Icon, IconButton } from './components/Icons';
+import { Icon } from './components/Icons';
 import { Board } from './components/board';
 import { GgsSettings } from './GgsScreens';
 import type { GgsSnapshot } from './types';
@@ -18,7 +18,8 @@ export function Confirm({ title, body, ok = 'OK', danger, onOk, onCancel }: {
 }) {
   return (
     <Overlay onClose={onCancel}>
-      <Modal title={title} body={body} actions={<>
+      <Modal title={title} body={body} onClose={onCancel} actions={<>
+        <span style={{ marginLeft: 'auto' }} />
         <Button size="field" onClick={onCancel}>やめる</Button>
         <Button size="field" variant={danger ? 'danger' : 'primary'} onClick={onOk}>{ok}</Button>
       </>} />
@@ -34,12 +35,13 @@ export function PickOne({ title, body, options, ok = '開く', onOk, onCancel }:
   const [v, setV] = useState(options[0]?.[0] ?? '');
   return (
     <Overlay onClose={onCancel}>
-      <Modal title={title}
+      <Modal title={title} onClose={onCancel}
              body={<div style={{ display: 'flex', flexDirection: 'column', gap: 'var(--sp-3)' }}>
                {body}
                <Select value={v} options={options} onChange={setV} />
              </div>}
              actions={<>
+               <span style={{ marginLeft: 'auto' }} />
                <Button size="field" onClick={onCancel}>やめる</Button>
                <Button size="field" variant="primary" disabled={!v} onClick={() => onOk(v)}>{ok}</Button>
              </>} />
@@ -79,65 +81,43 @@ export function PasteKifu({ onLoad, onFile, onCancel }: {
   const last = ok ? peek!.frames[peek!.frames.length - 1] : null;
   return (
     <Overlay onClose={onCancel}>
-      {/* 幅は絵の実測 520 (以前は 460)。段は 3 つで、見出しと足を罫で切る */}
-      <div role="dialog" aria-modal style={{
-        width: 'var(--w-modal-wide)', borderRadius: 'var(--r-4)', background: 'var(--card)',
-        border: '1px solid var(--border)', boxShadow: 'var(--sh-2)',
-        display: 'flex', flexDirection: 'column',
-      }}>
-        <div style={{
-          flex: 'none', padding: 'var(--sp-4) var(--sp-5)',
-          borderBottom: '1px solid var(--border)',
-          display: 'flex', flexDirection: 'column', gap: 'var(--sp-1)',
-        }}>
-          <span style={{ fontSize: 'var(--fs-3)', fontWeight: 600 }}>棋譜を読み込む</span>
-          <span style={{ fontSize: 'var(--fs-6)', color: 'var(--sub)' }}>
-            GGF・f5d6… 形式・盤面つきのいずれでも読めます。
-          </span>
-        </div>
-
-        <div style={{
-          padding: 'var(--sp-4) var(--sp-5)', display: 'flex', flexDirection: 'column', gap: 'var(--sp-4)',
-        }}>
-          <textarea value={text} onChange={(e) => setText(e.target.value)}
-            className="k-input"
-            style={{
-              height: 110, resize: 'none', padding: 'var(--sp-3)', borderRadius: 'var(--r-3)',
-              background: 'var(--bg)', border: '1px solid var(--border)',
-              fontFamily: 'var(--ff-mono)', fontSize: 'var(--fs-6)', lineHeight: 1.6,
-            }} />
-          {/* 下読みの結果。読めなければ理由、読めれば手数と終局図。
-              **絵には無い** — 読み込んでから間違いに気付くのを避けるために
-              足してある (絵にも入れてもらう。要 push) */}
-          <div style={{ display: 'flex', gap: 'var(--sp-4)', alignItems: 'center', minHeight: 96 }}>
-            <div style={{ width: 96, height: 96, flex: 'none' }}>
-              {last && <Board cells={last.cells as (0 | 1 | 2)[]} last={last.last} coords={false} grain={false} />}
-            </div>
-            <div style={{ fontSize: 'var(--fs-6)', color: peek?.err ? 'var(--bad)' : 'var(--sub)', lineHeight: 1.7 }}>
-              {!peek && '貼り付けると、ここに読み取り結果が出ます。'}
-              {peek?.err && peek.err}
-              {last && <>
-                {/* 初期局面ぶんの 1 枚を引いて手数にする */}
-                {peek!.frames.length - 1} 手 ／ 黒 <b style={{ color: 'var(--text)' }}>{last.black}</b>
-                {' '}白 <b style={{ color: 'var(--text)' }}>{last.white}</b>
-              </>}
-              {peek && !peek.err && !ok && '手が 1 つも読み取れません。'}
-            </div>
+      <Modal title="棋譜を読み込む" width="var(--w-modal-wide)" onClose={onCancel}
+             sub="GGF・f5d6… 形式・盤面つきのいずれでも読めます。"
+             actions={<>
+               <Button size="field" onClick={onFile}>ファイルから…</Button>
+               <span style={{ marginLeft: 'auto' }} />
+               {/* 絵は「キャンセル」だが、実装は 3 か所とも「やめる」で
+                   揃えてある (画面の文言は日本語で統一する)。要 push */}
+               <Button size="field" onClick={onCancel}>やめる</Button>
+               <Button size="field" variant="primary" disabled={!ok}
+                       onClick={() => onLoad(text)}>読み込む</Button>
+             </>}>
+        <textarea value={text} onChange={(e) => setText(e.target.value)}
+          className="k-input"
+          style={{
+            height: 110, resize: 'none', padding: 'var(--sp-3)', borderRadius: 'var(--r-3)',
+            background: 'var(--bg)', border: '1px solid var(--border)',
+            fontFamily: 'var(--ff-mono)', fontSize: 'var(--fs-6)', lineHeight: 1.6,
+          }} />
+        {/* 下読みの結果。読めなければ理由、読めれば手数と終局図。
+            **絵には無い** — 読み込んでから間違いに気付くのを避けるために
+            足してある (絵にも入れてもらう。要 push) */}
+        <div style={{ display: 'flex', gap: 'var(--sp-4)', alignItems: 'center', minHeight: 96 }}>
+          <div style={{ width: 96, height: 96, flex: 'none' }}>
+            {last && <Board cells={last.cells as (0 | 1 | 2)[]} last={last.last} coords={false} grain={false} />}
+          </div>
+          <div style={{ fontSize: 'var(--fs-6)', color: peek?.err ? 'var(--bad)' : 'var(--sub)', lineHeight: 1.7 }}>
+            {!peek && '貼り付けると、ここに読み取り結果が出ます。'}
+            {peek?.err && peek.err}
+            {last && <>
+              {/* 初期局面ぶんの 1 枚を引いて手数にする */}
+              {peek!.frames.length - 1} 手 ／ 黒 <b style={{ color: 'var(--text)' }}>{last.black}</b>
+              {' '}白 <b style={{ color: 'var(--text)' }}>{last.white}</b>
+            </>}
+            {peek && !peek.err && !ok && '手が 1 つも読み取れません。'}
           </div>
         </div>
-
-        <div style={{
-          flex: 'none', display: 'flex', gap: 'var(--sp-2)', alignItems: 'center',
-          padding: 'var(--sp-3) var(--sp-5)', borderTop: '1px solid var(--border)',
-        }}>
-          <Button size="field" onClick={onFile}>ファイルから…</Button>
-          <span style={{ marginLeft: 'auto' }} />
-          {/* 絵は「キャンセル」だが、実装は 3 か所とも「やめる」で揃えてある
-              (画面の文言は日本語で統一する)。**絵を直してもらう (要 push)** */}
-          <Button size="field" onClick={onCancel}>やめる</Button>
-          <Button size="field" variant="primary" disabled={!ok} onClick={() => onLoad(text)}>読み込む</Button>
-        </div>
-      </div>
+      </Modal>
     </Overlay>
   );
 }
@@ -247,36 +227,10 @@ export function Settings({ prefs, setPref, ggs, onClose }: {
   };
 
   return (
-    /* **覆い。窓ではない。**窓にしていたころの名残 (信号機ぶんの余白・
-       ドラッグ領域) は落としてある。幅と高さは絵の窓と同じ 560×640 だが、
-       低い画面では縮む */
-    <div role="dialog" aria-modal style={{
-      width: 560, maxHeight: 'min(640px, 88vh)',
-      borderRadius: 'var(--r-4)', background: 'var(--bg)',
-      border: '1px solid var(--border)', boxShadow: 'var(--sh-2)',
-      display: 'flex', flexDirection: 'column', overflow: 'hidden',
-    }}>
-      {/* 設計の設定は**帯が 44px の --panel**。題名は中央、閉じるは右端 */}
-      <div style={{
-        height: 'var(--h-bar)', flex: 'none', background: 'var(--panel)',
-        borderBottom: '1px solid var(--border)', display: 'flex', alignItems: 'center',
-        padding: '0 var(--sp-3)',
-      }}>
-        <span style={{ width: 32, flex: 'none' }} />
-        <span style={{
-          margin: '0 auto', fontSize: 'var(--fs-4)', fontWeight: 600, color: 'var(--text)',
-        }}>設定</span>
-        <span style={{ flex: 'none' }}>
-          {onClose && <IconButton name="close" label="閉じる" onClick={onClose} />}
-        </span>
-      </div>
-      {/* **タブの帯だけが明るい面 (--card)。** 窓の帯と中身はどちらも --bg で、
-          間に挟まる帯が浮いて見える形 — 設計の絵がそうなっている。
-          逆にすると (帯が暗く中身が明るい) タブが窓の帯と地続きになり、
-          中身の面だけが浮いた別の箱に見える。
-
-          高さは --h-bar (44px)。**上下に同じ余白**を取らないとタブが窓の帯に
-          貼り付いて見える。
+    <Modal title="設定" width="560px" onClose={onClose} scroll>
+      {/* タブの帯。**覆いの頭 (--panel) のすぐ下に、同じ --panel をもう 1 段**
+          置くと帯が 2 つ重なって見えるので、地は --card のまま罫だけで切る。
+          高さは --h-bar (44px)。
 
           **タブは Segmented ではない。** 絵は囲みの枠を持たず、字を並べて
           選ばれているものだけを塗る形。Segmented の囲みは「並んだ選択肢の
@@ -285,7 +239,7 @@ export function Settings({ prefs, setPref, ggs, onClose }: {
       <div style={{
         flex: 'none', height: 'var(--h-bar)', display: 'flex',
         alignItems: 'center', justifyContent: 'center', gap: 'var(--sp-1)',
-        padding: '0 var(--sp-5)', background: 'var(--panel)',
+        margin: 'calc(var(--sp-4) * -1) calc(var(--sp-5) * -1) 0',
         borderBottom: '1px solid var(--border)',
       }}>
         {TABS.map(([v, label]) => {
@@ -303,13 +257,7 @@ export function Settings({ prefs, setPref, ggs, onClose }: {
           );
         })}
       </div>
-      <div style={{
-        flex: 1, minHeight: 0, background: 'var(--bg)',
-        display: 'flex', flexDirection: 'column', overflow: 'hidden',
-      }}>
-        <div className="k-scroll k-settings" style={{
-          flex: 1, minHeight: 0, padding: 'var(--sp-4) var(--sp-3) var(--sp-5)',
-        }}>
+      <div className="k-settings" style={{ display: 'flex', flexDirection: 'column' }}>
 
         {/* 見え方だけの設定。エンジンの動きには関わらないので、
             バックエンドに送らず localStorage に置く */}
@@ -487,7 +435,6 @@ export function Settings({ prefs, setPref, ggs, onClose }: {
             <Button size="field" onClick={() => setReset(true)}>既定に戻す</Button>
           </div>
         )}
-        </div>
       </div>
       {reset && (
         <Confirm title="ファイルの指定を既定に戻しますか？"
@@ -504,7 +451,7 @@ export function Settings({ prefs, setPref, ggs, onClose }: {
                    })();
                  }} />
       )}
-    </div>
+    </Modal>
   );
 }
 

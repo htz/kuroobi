@@ -2,7 +2,7 @@ import { useEffect, useState } from 'react';
 import { api, ggsApi, type KifuFrame } from './api';
 import { Board } from './components/board';
 import { MoveScrub, ScoreRow } from './components/data';
-import { Overlay } from './components/layout';
+import { Modal, Overlay } from './components/layout';
 import { Button } from './components/primitives';
 
 /* 棋譜を盤面で確かめる覆い (規則 71)。設計 `適用画面 GGS 2` §9。
@@ -78,22 +78,32 @@ export function KifuViewer({ title, kifu, onClose, onStudy }: KifuViewerProps) {
 
   return (
     <Overlay onClose={onClose}>
-      {/* 幅 520 は設計の実測と規則 71 で一致している。中身 = 盤 260 + 情報列 */}
-      <div role="dialog" aria-modal style={{
-        width: 'var(--w-modal-wide)', borderRadius: 'var(--r-4)', background: 'var(--card)',
-        border: '1px solid var(--border)', boxShadow: 'var(--sh-2)',
-        display: 'flex', flexDirection: 'column',
-      }}>
-        {/* 見出し。絵は下罫で本体と切る */}
-        <div style={{
-          flex: 'none', display: 'flex', alignItems: 'baseline', gap: 'var(--sp-2)',
-          padding: 'var(--sp-4) var(--sp-5)', borderBottom: '1px solid var(--border)',
-        }}>
-          <span style={{ fontSize: 'var(--fs-3)', fontWeight: 600 }}>{title}</span>
-        </div>
-
-        <div style={{ padding: 'var(--sp-4) var(--sp-5)', display: 'flex', flexDirection: 'column', gap: 'var(--sp-4)' }}>
-          {!kifu.trim() && (
+      <Modal title={title} width="var(--w-modal-wide)" onClose={onClose}
+             actions={<>
+               <Button size="field" onClick={onClose}>閉じる</Button>
+               <span style={{
+                 flex: 1, minWidth: 0, paddingLeft: 'var(--sp-3)',
+                 fontSize: 'var(--fs-6)', color: 'var(--bad)',
+                 overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
+               }}>{note}</span>
+               {/* コピーと保存を落とさない — 検討へ直行するだけだと、
+                   棋譜を人に渡す道が消える */}
+               <Button size="field" disabled={!kifu} onClick={() => {
+                 void navigator.clipboard.writeText(kifu)
+                   .then(() => say('コピーしました'))
+                   .catch(() => say('コピーできませんでした'));
+               }}>棋譜をコピー</Button>
+               {/* **成功したときは何も言わない** (規則 34)。保存の窓が閉じた
+                   こと自体が報せになっている */}
+               <Button size="field" disabled={!kifu}
+                       onClick={() => void ggsApi.saveKifu(kifu, 'kifu')
+                         .catch((e) => say('保存できませんでした (' + e + ')'))}>
+                 ファイルに保存
+               </Button>
+               <Button size="field" variant="primary" disabled={!frames}
+                       onClick={() => { onStudy(kifu); onClose(); }}>検討で開く</Button>
+             </>}>
+        {!kifu.trim() && (
             <span style={{ fontSize: 'var(--fs-5)', color: 'var(--sub)' }}>取り出しています…</span>
           )}
           {err && <span style={{ fontSize: 'var(--fs-5)', color: 'var(--bad)' }}>{err}</span>}
@@ -141,10 +151,9 @@ export function KifuViewer({ title, kifu, onClose, onStudy }: KifuViewerProps) {
               </div>
             </div>
           )}
-        </div>
 
         {f && (
-          <div style={{ padding: '0 var(--sp-5) var(--sp-4)', display: 'flex', flexDirection: 'column', gap: 'var(--sp-3)' }}>
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 'var(--sp-3)' }}>
             {/* 送りの行。**帯だけだと 1 手ずつ動かせない** (掴んで引くしかない)。
                 名前は検討のツールバーと同じにする — 同じ動作に別の呼び名を
                 作らない (規則 49) */}
@@ -169,38 +178,7 @@ export function KifuViewer({ title, kifu, onClose, onStudy }: KifuViewerProps) {
           </div>
         )}
 
-        <div style={{
-          flex: 'none', display: 'flex', gap: 'var(--sp-2)', alignItems: 'center',
-          padding: 'var(--sp-3) var(--sp-5)', borderTop: '1px solid var(--border)',
-        }}>
-          <Button size="field" onClick={onClose}>閉じる</Button>
-          <span style={{
-            flex: 1, minWidth: 0, paddingLeft: 'var(--sp-3)',
-            fontSize: 'var(--fs-6)', color: 'var(--sub)',
-            overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
-          }}>{note}</span>
-          {/* コピーと保存を落とさない — 検討へ直行するだけだと、棋譜を人に
-              渡す道が消える */}
-          {/* **成否を待ってから言う。**以前は書き込みを待たずに
-              「コピーしました」と出していたので、権限が無くても成功して
-              見えていた */}
-          <Button size="field" disabled={!kifu} onClick={() => {
-            void navigator.clipboard.writeText(kifu)
-              .then(() => say('コピーしました'))
-              .catch(() => say('コピーできませんでした'));
-          }}>棋譜をコピー</Button>
-          <Button size="field" disabled={!kifu}
-                  // **成功したときは何も言わない** (規則 34 — 出すのは失敗と
-                  // 押したのに進まない理由だけ)。保存の窓が閉じたこと自体が
-                  // 報せになっている。主画面の「保存」も元からこの扱い
-                  onClick={() => void ggsApi.saveKifu(kifu, 'kifu')
-                    .catch((e) => say('保存できませんでした (' + e + ')'))}>
-            ファイルに保存
-          </Button>
-          <Button size="field" variant="primary" disabled={!frames}
-                  onClick={() => { onStudy(kifu); onClose(); }}>検討で開く</Button>
-        </div>
-      </div>
+      </Modal>
     </Overlay>
   );
 }
