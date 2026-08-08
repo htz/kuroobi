@@ -52,6 +52,15 @@ export function KifuTable({ moves, current, onSelect, decimals = 1 }: {
         <span style={{ flex: 1, textAlign: 'right' }}>出所</span>
       </div>
       <div className="k-scroll" ref={box} style={{ flex: 1, minHeight: 0 }}>
+        {/* **1 手も無いときに列見出しだけを残さない。**対局を始める前の
+            画面はここが必ず空で、いちばん最初に目に入る枠が「壊れている
+            のか、まだ何も無いのか」判らなかった */}
+        {!moves.length && (
+          <span style={{
+            display: 'block', padding: 'var(--sp-4) var(--sp-3)',
+            fontSize: 'var(--fs-6)', color: 'var(--sub)', lineHeight: 1.8,
+          }}>まだ手がありません。</span>
+        )}
         {moves.map(m => {
           const played = m.score !== undefined;
           const isCurrent = m.n === current;

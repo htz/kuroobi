@@ -1243,6 +1243,10 @@ function GgsUsers({ snap, onNav, onKifu }: {
             <span style={{ width: 52, textAlign: 'right' }}>状態</span>
           </div>
         )}
+        {/* 列見出しだけを残さない。繋いだ直後は一覧がまだ届いていない */}
+        {!slice.length && (
+          <Empty>{mode === 'who' ? '接続中の人はいません。' : '順位をまだ受け取っていません。'}</Empty>
+        )}
         {/* 行どうしは詰める (節の余白が行間に入る) */}
         <List>
         {slice.map((u, i) => (
