@@ -119,6 +119,8 @@ arena --a <weights-A> --b <weights-B> [OPTIONS]
 | `--patterns <set>` | `egaroucid` | `egaroucid` / `edax` / `egaroucid-plus` |
 | `--patterns-a` / `--patterns-b` | `--patterns` | 片側だけのパターン |
 | `--seed <n>` | 7 | 乱数の種 |
+| `--mpc-a` / `--mpc-b` | — | 片側だけ確率的枝刈り (ProbCut) を入れる |
+| `--mpc-t <f>` | 1.1 | ProbCut の閾値 (σ の倍数)。小さいほどよく刈る |
 
 **片側だけを指定できるのが要点。**深さ・読切・パターンを非対称にすると、
 どの条件差が効いたのかを分けて測れる。
@@ -194,6 +196,75 @@ roundrobin --games 100 --depth 8 \
   --engine kuroobi=ours=- \
   --engine edax=edax=/path/to/edax \
   --engine egaroucid=egaroucid=/path/to/egaroucid
+```
+
+### ponderhit
+
+**ポンダリングの予測手がどれくらい当たるかを測る。**予測手 1 本を追う方式の
+値打ちはこの的中率でほぼ決まる。**予測は探索し直さず、自分の着手後の局面を
+置換表に問い合わせて出す** — 実際のポンダリングもそうするしかないので、
+それより良い予測を測っても意味がない。
+
+```sh
+ponderhit [OPTIONS]
+```
+
+| オプション | 既定 | 意味 |
+|---|---|---|
+| `--games <n>` | 20 | 対局数 |
+| `--depth <n>` | 8 | 自分の中盤深さ |
+| `--solve-empties <n>` | 14 | 自分の完全読み開始 |
+| `--opp-depth <n>` | `--depth` | 相手の中盤深さ |
+| `--opp-solve <n>` | `--solve-empties` | 相手の完全読み開始 |
+| `--threads <n>` | 1 | スレッド数 |
+| `--random-plies <n>` | 8 | 開幕の乱数手数 |
+| `--seed <n>` | 7 | 乱数の種 |
+| `--nnue` / `--weights` | `weights/nnue-h16.bin` / `weights/linear.bin` | 重み |
+
+**`--opp-depth` で相手だけ弱くできる。**予測が相手の強さにどれだけ依るかを
+見るため。実測では大幅に弱くしても的中率は 4 ポイントしか落ちなかった。
+
+```sh
+# 同じ強さ同士と、相手だけ弱い場合
+ponderhit --games 14 --depth 12 --solve-empties 18
+ponderhit --games 12 --depth 12 --solve-empties 18 --opp-depth 4
+```
+
+### ponderarena
+
+**ポンダリングの効果を測る。**先読みの有無で 2 回走らせ、同じプレイヤーの
+合計どうしを比べる。**A と B を戦わせて両者を比べる形は使えない** — 持つ色も
+直面する局面も違うので偏りが乗る (対照実験で 24.5% の差が出たことがある)。
+
+```sh
+ponderarena [OPTIONS]
+```
+
+| オプション | 既定 | 意味 |
+|---|---|---|
+| `--games <n>` | 10 | 対局数 |
+| `--ms <n>` | 200 | 1 手の持ち時間 (ミリ秒) |
+| `--ponder <on\|off>` | `on` | 先読みするか。`off` は対照実験 |
+| `--fixed-depth` | — | 深さ固定で測る。**見るのは勝率ではなく探索時間** |
+| `--ponder-ms <n>` | 300 | 深さ固定のときの先読み時間 |
+| `--no-mpc` | — | 確率的枝刈りを切る |
+| `--depth <n>` | 20 | 中盤深さの上限 |
+| `--solve-empties <n>` | 14 | 完全読み開始 |
+| `--threads <n>` | 1 | スレッド数 |
+| `--random-plies <n>` | 8 | 開幕の乱数手数 |
+| `--seed <n>` | 7 | 乱数の種 |
+| `--nnue` / `--weights` | `weights/nnue-h16.bin` / `weights/linear.bin` | 重み |
+
+**深さ固定では 1 スレッドで走らせる。**並列探索 (Lazy SMP) は非決定的で、
+同じ条件でも着手が変わって対局が分岐する。1 スレッドなら先読みの有無で
+着手は 1 手も変わらないので、棋譜の指紋で突き合わせられる。
+
+1 局ごとに置換表を消す (CLAUDE.md の 4 番)。
+
+```sh
+# 深さ固定。同じ種で 2 回走らせて合計を比べる
+ponderarena --games 14 --fixed-depth --depth 13 --solve-empties 20 --ponder on
+ponderarena --games 14 --fixed-depth --depth 13 --solve-empties 20 --ponder off
 ```
 
 ---
