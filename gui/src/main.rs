@@ -306,6 +306,13 @@ fn resources_path() -> PathBuf {
 /// 定石は差し替えられるが、「自分が何を取り込んだか」は差し替えても残って
 /// ほしい記録なので、寿命の違うものを同じ場所に置かない。
 fn learn_log_path() -> PathBuf {
+    /* **場所を差し替えられるようにする** (`KUROOBI_LEARN_LOG`)。
+    この画面は実データしか出ないので、控えが 1 つも無いときや期間で
+    隠れたときの見た目を確かめる手が他にない。重みと定石は
+    `resources.conf` で差し替えられるのに、控えだけ固定だった。 */
+    if let Ok(p) = std::env::var("KUROOBI_LEARN_LOG") {
+        return PathBuf::from(p);
+    }
     let base =
         dirs_config().unwrap_or_else(|| PathBuf::from(concat!(env!("CARGO_MANIFEST_DIR"), "/..")));
     base.join("kuroobi").join("learn_log.jsonl")
