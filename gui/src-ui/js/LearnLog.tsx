@@ -2,7 +2,7 @@ import { useEffect, useState } from 'react';
 import { api, type KifuFrame } from './api';
 import type { LearnChange, LearnEntry } from './types';
 import { Board } from './components/board';
-import { Empty, List, Section, TableHead, TableRow } from './components/layout';
+import { Empty, KeyValue, List, Section, TableHead, TableRow } from './components/layout';
 import { Button } from './components/primitives';
 
 /* 定石に取り込んだ対局の控え。設計 §8 の三面。
@@ -177,9 +177,9 @@ export function LearnLog({ items, onOpen, onUndo, onBook }: {
         borderLeft: '1px solid var(--border)', padding: 'var(--sp-3) 0',
       }}>
         <Section title="この対局">
-          <Fact label="相手" value={cur.opponent || 'KUROOBI'} />
-          <Fact label="石数" value={`${cur.black} – ${cur.white}`} />
-          <Fact label="取り込み" value={`${cur.positions} 局面 · ${fmtWhen(cur.at)}`} />
+          <KeyValue label="相手" value={cur.opponent || 'KUROOBI'} />
+          <KeyValue label="石数" value={`${cur.black} – ${cur.white}`} />
+          <KeyValue label="取り込み" value={`${cur.positions} 局面 · ${fmtWhen(cur.at)}`} />
         </Section>
 
         <Section title="更新した定石" aside={<span>{cur.changes.length}</span>}>
@@ -230,18 +230,6 @@ export function LearnLog({ items, onOpen, onUndo, onBook }: {
   );
 }
 
-/** 「名前 / 値」の 1 行。値を右へ寄せて縦を揃える。 */
-function Fact({ label, value }: { label: string; value: string }) {
-  return (
-    <div style={{ display: 'flex', alignItems: 'center', fontSize: 'var(--fs-5)' }}>
-      <span style={{ color: 'var(--sub)' }}>{label}</span>
-      <span style={{
-        marginLeft: 'auto', overflow: 'hidden',
-        textOverflow: 'ellipsis', whiteSpace: 'nowrap',
-      }}>{value}</span>
-    </div>
-  );
-}
 
 /** 取り込んだ時刻。今日のものは時刻だけ、それ以外は日付だけにする —
  *  並べたときに縦が揃い、かつ「さっき入ったもの」がすぐ分かる。 */

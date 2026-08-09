@@ -7,7 +7,7 @@ import { api, ggsApi, jsLog, onApp, type ActivityView } from './api';
 import { useActivity, useEngineSettings, useEngineTurn, useGraph, useHints, useLearnLog, useStartGame, type AskArgs } from './engine';
 import { fmtSecs } from './ggs';
 import { cellsOf, connOf, evalsOf, ggsPlaying, movesOf, navBadges, sqName } from './adapt';
-import { AppFrame, Body, BottomPanel, Divider, Dock, Main, Overlay, Section, StatusBar, StatusStat, Toolbar, WindowBar } from './components/layout';
+import { AppFrame, Body, BottomPanel, Divider, Dock, KeyValue, Main, Overlay, Section, StatusBar, StatusStat, Toolbar, WindowBar } from './components/layout';
 import { GgsChat, GgsConsole, GgsScreen } from './GgsScreens';
 import { Confirm, PasteKifu, Settings } from './Dialogs';
 import { Board } from './components/board';
@@ -44,20 +44,6 @@ const SIDES = [
   { value: 'off' as const, label: 'なし' },
 ];
 
-/** ドックの「学習した定石」の 1 行。数字を主役にする (絵も 15px の太字)。 */
-function LearnStat({ label, value }: { label: string; value?: number }) {
-  return (
-    <div style={{ display: 'flex', alignItems: 'center', fontSize: 'var(--fs-5)' }}>
-      <span style={{ color: 'var(--sub)' }}>{label}</span>
-      <span style={{
-        marginLeft: 'auto', fontSize: 'var(--fs-3)', fontWeight: 600,
-        fontVariantNumeric: 'tabular-nums',
-      }}>
-        {value === undefined ? '—' : value.toLocaleString()}
-      </span>
-    </div>
-  );
-}
 
 /** いま実際に行ける行き先へ読み替える。左メニューから消えた行に居座らせない。 */
 function reachable(raw: NavId, conn: ReturnType<typeof connOf>): NavId {
@@ -886,8 +872,8 @@ export function App() {
             {/* 明細は「定石」の画面の 2 枚目へ移した。同じ一覧をドックにも
                 出すと、どちらが本物か分からなくなる (規則 58 と同じ話) */}
             <Section title="学習した定石">
-              <LearnStat label="登録局面" value={book.node?.size} />
-              <LearnStat label="うち学習" value={book.node?.learned_size} />
+              <KeyValue big label="登録局面" value={book.node?.size} />
+              <KeyValue big label="うち学習" value={book.node?.learned_size} />
               <Button onClick={() => { setNav('book'); setBookTab('学習ログ'); }}>学習ログを見る</Button>
             </Section>
           </>

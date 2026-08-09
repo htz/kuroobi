@@ -382,6 +382,36 @@ export function List({ children }: { children: React.ReactNode }) {
   return <div style={{ display: 'flex', flexDirection: 'column' }}>{children}</div>;
 }
 
+/** ラベルを左、値を右に置く 1 行。**節の中で「名前: 値」を並べる形。**
+ *  `App.tsx` の `LearnStat` と `LearnLog.tsx` の `Fact` が同じ形を別々に
+ *  持っていたのでまとめた (規則 50)。
+ *
+ *  `big` は数を目立たせたいとき (登録局面など)。既定は本文と同じ大きさで、
+ *  長い値は省略記号で切る。 */
+export function KeyValue({ label, value, big }: {
+  label: string;
+  /** 数を渡すと**桁区切りを入れる** (`70,622`)。`undefined` は「—」 */
+  value: React.ReactNode;
+  /** 値を `--fs-3` の太字にして桁を揃える。数を読ませる行だけ */
+  big?: boolean;
+}) {
+  // 数はここで整える。呼ぶ側で toLocaleString() を書くと、書き忘れた
+  // 場所だけ桁区切りの無い数字が並ぶ (定石の局面数は 5 桁を超える)
+  const shown = typeof value === 'number' ? value.toLocaleString()
+    : value === undefined ? '—' : value;
+  return (
+    <div style={{ display: 'flex', alignItems: 'center', fontSize: 'var(--fs-5)' }}>
+      <span style={{ color: 'var(--sub)' }}>{label}</span>
+      <span style={{
+        marginLeft: 'auto',
+        ...(big
+          ? { fontSize: 'var(--fs-3)', fontWeight: 600, fontVariantNumeric: 'tabular-nums' }
+          : { overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }),
+      }}>{shown}</span>
+    </div>
+  );
+}
+
 /** ツールバーの縦罫。**押す操作と前提を決めるものを切る。**
  *  切らないと「新規対局」と「黒」が同じ並びに見える。
  *  `App.tsx` に同じ 4 行が並んでいたのでまとめた。 */
