@@ -745,6 +745,16 @@ fn resources() -> kuroobi::resources::Resources {
 /// 後から繋いだ方が必ず失敗する。接続時にロックファイルへ PID を書き、
 /// 生きている別プロセスが持っていれば繋ぎに行かない。
 fn session_lock_path() -> PathBuf {
+    /* `KUROOBI_SESSION_LOCK` で差し替えられる。**このロックは 1 プロセス
+    しか GGS に繋がせない** ので、既定のままでは 2 つの実体を別々の
+    アカウントで同時に動かせない (後から起動したほうが黙って見送る)。
+    アカウントが違うなら二重ログインにはならないので、分けてよい。
+    キーチェーンの `KUROOBI_KEYCHAIN_SERVICE` と対で使う。 */
+    if let Ok(p) = std::env::var("KUROOBI_SESSION_LOCK") {
+        if !p.is_empty() {
+            return PathBuf::from(p);
+        }
+    }
     std::env::temp_dir().join("kuroobi_ggs.pid")
 }
 
