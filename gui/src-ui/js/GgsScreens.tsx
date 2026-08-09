@@ -815,8 +815,14 @@ function MatchBoard({ snap, m, clock, prefs, onKifu, face }: {
   return (
     // 同期対局は 2 面が横に並ぶ。固定幅にすると 2 面で必ず折り返すので、
     // 器を分け合って縮む形にする (1 面のときは 460px で頭打ち)
+    //
+    // **幅だけで頭打ちにすると低い窓で溢れる。** 盤は正方形なので幅が
+    // そのまま高さになり、860×560 では 8 行目と時計・投了が画面の外に
+    // 出ていた。窓の高さからも上限をかける (280px は盤以外が使う分 —
+    // ツールバー 44 + 下帯 28 + 面の帯と 2 人の行と釦で約 130 + 余白)
     <div style={{
-      flex: '1 1 300px', minWidth: 260, maxWidth: 460, display: 'flex', flexDirection: 'column',
+      flex: '1 1 300px', minWidth: 260, maxWidth: 'min(460px, calc(100vh - 280px))',
+      display: 'flex', flexDirection: 'column',
       // 絵は 1 面ずつ枠に入れる (地 --panel / 角丸 11 / 余白 12)。
       // 2 枚が地続きだと、どこまでが 1 局なのかが読めない
       background: 'var(--panel)', borderRadius: 'var(--r-4)', padding: 'var(--sp-3)',
