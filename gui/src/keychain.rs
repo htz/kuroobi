@@ -13,7 +13,23 @@ use std::io::Write as _;
 use std::process::{Command, Stdio};
 
 /// キーチェーン上のサービス名。項目はこの名前で 1 つだけ持つ。
-const SERVICE: &str = "kuroobi-ggs";
+const SERVICE_DEFAULT: &str = "kuroobi-ggs";
+
+/// サービス名。`KUROOBI_KEYCHAIN_SERVICE` で差し替えられる。
+///
+/// **項目は 1 つしか持たない作りなので、既定のままでは 2 つの実体が
+/// 別々のアカウントを覚えられない** (後からログインしたほうが前の項目を
+/// 消す)。開発版と本番、あるいは旧版と現行版を同時に動かして別の
+/// アカウントで繋ぎたいときに、片方だけ名前を変える。
+fn service() -> &'static str {
+    static S: std::sync::OnceLock<String> = std::sync::OnceLock::new();
+    S.get_or_init(|| {
+        std::env::var("KUROOBI_KEYCHAIN_SERVICE")
+            .ok()
+            .filter(|v| !v.is_empty())
+            .unwrap_or_else(|| SERVICE_DEFAULT.to_string())
+    })
+}
 
 /// security -i のコマンド行に埋め込むための引用。
 fn quote(s: &str) -> String {
@@ -26,7 +42,7 @@ fn quote(s: &str) -> String {
 fn clear() {
     loop {
         let deleted = Command::new("/usr/bin/security")
-            .args(["delete-generic-password", "-s", SERVICE])
+            .args(["delete-generic-password", "-s", service()])
             .stdout(Stdio::null())
             .stderr(Stdio::null())
             .status()
@@ -54,7 +70,8 @@ pub fn save(login: &str, pw: &str) {
     if let Some(mut stdin) = child.stdin.take() {
         let _ = writeln!(
             stdin,
-            "add-generic-password -U -s {SERVICE} -a {} -w {}",
+            "add-generic-password -U -s {} -a {} -w {}",
+            quote(service()),
             quote(login),
             quote(pw)
         );
@@ -73,7 +90,7 @@ pub fn forget() {
 /// 項目が全く無い初回だけに限るための照会。
 pub fn exists() -> bool {
     Command::new("/usr/bin/security")
-        .args(["find-generic-password", "-s", SERVICE])
+        .args(["find-generic-password", "-s", service()])
         .stdout(Stdio::null())
         .stderr(Stdio::null())
         .status()
@@ -86,7 +103,7 @@ pub fn exists() -> bool {
 pub fn load() -> Option<(String, String)> {
     // 項目のメタデータからログイン名 (acct) を取り出す
     let meta = Command::new("/usr/bin/security")
-        .args(["find-generic-password", "-s", SERVICE])
+        .args(["find-generic-password", "-s", service()])
         .output()
         .ok()?;
     if !meta.status.success() {
@@ -101,7 +118,7 @@ pub fn load() -> Option<(String, String)> {
     })?;
     // パスワード本体は -w で標準出力に出る
     let pw = Command::new("/usr/bin/security")
-        .args(["find-generic-password", "-s", SERVICE, "-w"])
+        .args(["find-generic-password", "-s", service(), "-w"])
         .output()
         .ok()?;
     if !pw.status.success() {
