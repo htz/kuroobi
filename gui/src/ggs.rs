@@ -2620,9 +2620,17 @@ fn think_and_play(
         ctx.log("info", "盤面の解析に失敗しました");
         return;
     };
-    let bh = board.black.wrapping_mul(31).wrapping_add(board.white);
+    /* 同一局面への二重着手防止。**手数も混ぜる** — 盤面だけで見ると、
+    相手がパスしたときに「自分が最後に指した局面」と一致してしまい、
+    黙って return して二度と指さなくなる (時計だけが減り続ける)。
+    パスは石を置かないので盤面が変わらず、手番だけが戻ってくる。 */
+    let bh = board
+        .black
+        .wrapping_mul(31)
+        .wrapping_add(board.white)
+        .wrapping_add((m.moves.len() as u64).wrapping_mul(0x9e37_79b9));
     if bh == m.last_played_hash {
-        return; // 同一局面への二重着手防止
+        return;
     }
     if let Err(e) = ctx.ensure_engine() {
         ctx.log("info", &format!("エンジン初期化失敗: {e}"));
