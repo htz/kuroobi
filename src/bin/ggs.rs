@@ -1,14 +1,20 @@
 //! Kuroobi の GGS クライアント。
 //!
 //! skatgame.net:5000 (Generic Game Server) に接続し、リバーシのサービス
-//! `/os` で非レートの 8x8 を指す。プロトコルの要点はメモリ
+//! `/os` で 8x8 を指す (`KUROOBI_NO_RATED=1` で非レートに固定)。プロトコルの要点はメモリ
 //! ggs-server-alive-protocol-notes を参照。
 //!
 //! 使い方:
 //!   ggs --play <相手> [--games N] [--login 名 --pw パス | --credentials .ggs_credentials]
 //!       [--depth N] [--solve-empties N] [--selective-band N] [--mpc]
 //!       [--threads N] [--weights path] [--nnue path]
+//!   ggs --console (stdin の 1 行をそのまま送り、受信を標準出力へ)
 //!   ggs --serve   (stdin で "<64面> <X|O>" を受け "= <座標>" を返すブリッジ)
+//!
+//! **動作確認では `KUROOBI_NO_RATED=1` を付ける。** レートが動くと以後の
+//! 測定条件が変わる。`--console` は `/os` の生のコマンドを投げられるので、
+//! 申し込み・受諾・観戦・チャット・一覧・待機モードの条件式まで、GUI が
+//! 持つ機能を一通り確かめられる。
 
 use std::path::PathBuf;
 use std::process::ExitCode;
@@ -27,6 +33,11 @@ struct Args {
     login: Option<String>,
     pw: Option<String>,
     credentials: PathBuf,
+    /// 生のコマンドを標準入力から送り、受信を標準出力へ出すモード。
+    /// **GGS の機能を一通り確かめるための口** — 対局だけでなく、
+    /// 申し込みの受諾・観戦・チャット・一覧・待機モードの条件式まで、
+    /// `/os` に投げられるものはすべてここから試せる。
+    console: bool,
     games: usize,
     time: String,
     gtype: String,
@@ -48,6 +59,7 @@ fn parse_args() -> Result<Args, String> {
         login: None,
         pw: None,
         credentials: PathBuf::from(".ggs_credentials"),
+        console: false,
         games: 1,
         time: "30:00".into(),
         gtype: "8".into(),
@@ -67,6 +79,7 @@ fn parse_args() -> Result<Args, String> {
             "--play" => args.play = Some(value("--play")?),
             "--resume" => args.resume = Some(value("--resume")?),
             "--serve" => args.serve = true,
+            "--console" => args.console = true,
             "--login" => args.login = Some(value("--login")?),
             "--pw" => args.pw = Some(value("--pw")?),
             "--credentials" => args.credentials = PathBuf::from(value("--credentials")?),
@@ -108,8 +121,8 @@ fn parse_args() -> Result<Args, String> {
             other => return Err(format!("unknown option: {other}")),
         }
     }
-    if args.play.is_none() && !args.serve && args.resume.is_none() {
-        return Err("--play <opponent>, --resume <.id> or --serve is required".into());
+    if args.play.is_none() && !args.serve && args.resume.is_none() && !args.console {
+        return Err("--play <opponent>, --resume <.id>, --console or --serve is required".into());
     }
     Ok(args)
 }
@@ -267,12 +280,45 @@ fn main() -> ExitCode {
         stream
             .set_read_timeout(Some(std::time::Duration::from_millis(300)))
             .ok();
+        /* **パスワードは絶対に出さない。** 送った中身をそのまま印字して
+        いたので、ログイン時の 1 行が標準出力とログに平文で残っていた。
+        伏せる相手を送る側で指定する (`send_secret`)。 */
+        let pw_for_mask = pw.clone();
         let mut send = {
             let mut w = stream.try_clone().expect("clone stream");
             move |cmd: &str| {
-                println!(">>> {cmd}");
+                if !pw_for_mask.is_empty() && cmd == pw_for_mask {
+                    println!(">>> ********");
+                } else {
+                    println!(">>> {cmd}");
+                }
                 let _ = w.write_all(cmd.as_bytes()).and_then(|_| w.write_all(b"\n"));
             }
+        };
+
+        /* `--console`: 標準入力の 1 行をそのまま送る。`/os` を頭に付けない
+        ので、`tell /os who 8` のように GGS の生のコマンドを書く。
+        スレッドは 1 度だけ起こし、再接続しても同じキューを使う。 */
+        let stdin_rx = if args.console {
+            let (tx, rx) = std::sync::mpsc::channel::<String>();
+            std::thread::spawn(move || {
+                let mut line = String::new();
+                loop {
+                    line.clear();
+                    match std::io::stdin().read_line(&mut line) {
+                        Ok(0) | Err(_) => break,
+                        Ok(_) => {
+                            let t = line.trim_end_matches(['\r', '\n']).to_string();
+                            if !t.is_empty() && tx.send(t).is_err() {
+                                break;
+                            }
+                        }
+                    }
+                }
+            });
+            Some(rx)
+        } else {
+            None
         };
 
         let mut raw = Vec::<u8>::new();
@@ -291,9 +337,23 @@ fn main() -> ExitCode {
         let mut lost = false;
 
         loop {
-            // 非対局時のみの idle 退出。対局中は無期限に待つ (相手の長考・
-            // 中断復帰待ちを含む)。
-            if !in_match && last_activity.elapsed().as_secs() > 900 {
+            /* 標準入力に届いた行をそのまま送る (--console)。
+            **ログインが済むまでは送らない** — 名前とパスワードを聞かれて
+            いる最中に割り込むと、コマンドがパスワードとして解釈されて
+            認証に失敗する (実際に踏んだ)。 */
+            if logged_in {
+                if let Some(rx) = &stdin_rx {
+                    while let Ok(cmd) = rx.try_recv() {
+                        send(&cmd);
+                        last_activity = std::time::Instant::now();
+                    }
+                }
+            }
+            /* 非対局時のみの idle 退出。対局中は無期限に待つ (相手の長考・
+            中断復帰待ちを含む)。**`--console` では退出しない** — 人 (や
+            自動の検証) がコマンドを打つのを待つ場なので、黙って切れると
+            確かめている最中に接続が消える。 */
+            if !in_match && !args.console && last_activity.elapsed().as_secs() > 900 {
                 eprintln!("### idle timeout (not in match)");
                 send("quit");
                 break 'session;
@@ -349,7 +409,16 @@ fn main() -> ExitCode {
                     send("verbose -news -faq -help -ack");
                     send("tell /os client -");
                     send("tell /os trust +");
-                    send("tell /os rated +");
+                    /* **レート戦の可否。** `KUROOBI_NO_RATED=1` で禁じる
+                    (GUI 側の同名の口と揃えた)。動作確認や デバッグで
+                    自分どうしを戦わせるときは、必ずこちらを使う —
+                    レートが動くと以後の測定条件が変わってしまう。 */
+                    if std::env::var("KUROOBI_NO_RATED").is_ok() {
+                        send("tell /os rated -");
+                        eprintln!("### 非レート戦に固定 (KUROOBI_NO_RATED)");
+                    } else {
+                        send("tell /os rated +");
+                    }
                     send("tell /os open 1");
                     if !first_session {
                         // 再接続: 中断ゲームを探して自動再開する。
@@ -477,10 +546,14 @@ fn main() -> ExitCode {
                 if ln.starts_with("/os: ERR") {
                     // 対局中は何があっても離脱しない。非対局時のみ、申し込みが
                     // 受からない類の ERR で終了する。
+                    /* `--console` は人が打つ場なので、何が返っても落ちない。
+                    **`not registered` は致命ではない** — 正式登録をしていない
+                    ので非レート戦しかできない、という案内で、非レートなら
+                    対局できる (一覧系の命令だけが断られる)。 */
                     let fatal = !in_match
+                        && !args.console
                         && (ln.contains("formula")
                             || ln.contains("not accepting")
-                            || ln.contains("not registered")
                             || ln.contains("variable mismatch")
                             || (ln.contains("not found")
                                 && !opponent.is_empty()
@@ -505,7 +578,8 @@ fn main() -> ExitCode {
                     games_done += 1;
                     stored_ids.retain(|_| false);
                     println!("### game {games_done}/{} over: {ln}", args.games);
-                    if games_done >= args.games {
+                    // `--console` は人が打つ場。1 局終わっても抜けない
+                    if !args.console && games_done >= args.games {
                         send("quit");
                         break 'session;
                     }
@@ -514,6 +588,10 @@ fn main() -> ExitCode {
 
             if let Some(t0) = ready_at {
                 if first_session && !in_match && asked_at.is_none() && t0.elapsed().as_secs() >= 4 {
+                    // `--console` は人が打つ場。勝手に申し込まない
+                    if args.console {
+                        continue;
+                    }
                     asked_at = Some(std::time::Instant::now());
                     if let Some(id) = &args.resume {
                         send(&format!("tell /os ask {id}"));
