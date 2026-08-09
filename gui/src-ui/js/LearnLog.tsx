@@ -3,7 +3,7 @@ import { api, type KifuFrame } from './api';
 import type { LearnChange, LearnEntry } from './types';
 import { Board } from './components/board';
 import { Empty, KeyValue, List, Section, TableHead, TableRow } from './components/layout';
-import { Button } from './components/primitives';
+import { Button, Select } from './components/primitives';
 
 /* 定石に取り込んだ対局の控え。設計 §8 の三面。
  *
@@ -36,7 +36,7 @@ function blunderOf(e: LearnEntry): LearnChange | undefined {
 const sign = (v: number) => (v > 0 ? '+' : '') + v.toFixed(1);
 const keyOf = (e: LearnEntry) => e.at + e.kifu;
 
-export function LearnLog({ items, onOpen, onUndo, onBook }: {
+export function LearnLog({ items: all, onOpen, onUndo, onBook }: {
   items: LearnEntry[];
   /** 検討で開く。ply を渡すとその手数まで進める */
   onOpen: (e: LearnEntry, ply?: number) => void;
@@ -46,6 +46,23 @@ export function LearnLog({ items, onOpen, onUndo, onBook }: {
   onBook?: (kifu: string) => void;
 }) {
   const [sel, setSel] = useState('');
+  /* 設計 §8 の帯にある期間の絞り込み。**`▾` の中身は絵に書かれていない**
+     ので、こちらで すべて / 7 / 30 / 90 日 にした (依頼 14-2)。既定は絵の
+     とおり 30 日。**古い控えは既定で隠れる**ので、隠れているときだけ
+     その旨を一覧の下に出す — 「取り込んだはずの対局が無い」と読まれると
+     取り込み自体を疑わせてしまう */
+  const [days, setDays] = useState('30');
+  /* **`Date.now()` は描く途中で呼べない** (再描画のたびに値が動くので
+     React が止める)。`useState` の遅延初期化なら 1 回しか走らないので
+     ここで取る。effect で入れ直すのも駄目 — 同期の setState は
+     再描画の連鎖を招くとして同じく弾かれる。
+     画面を開きっぱなしにすると基準が古びるが、日をまたぐ間ずっと
+     学習ログを開いたままにする使い方は無いので、ここでは困らない */
+  const [now] = useState(() => Date.now());
+  const items = days === '0' ? all
+    : all.filter((e) => e.at * 1000 >= now - Number(days) * 86400_000);
+  const hidden = all.length - items.length;
+
   const cur = items.find((e) => keyOf(e) === sel) ?? items[0];
   const bad = cur ? blunderOf(cur) : undefined;
 
@@ -70,7 +87,16 @@ export function LearnLog({ items, onOpen, onUndo, onBook }: {
   if (!items.length || !cur) {
     return (
       <Section title="取り込んだ対局">
-        <Empty>まだありません。</Empty>
+        {/* **絞り込んで 0 件になったときに期間を戻せないと詰む。**
+            控えが 1 つも無いときと違って、ここには戻す道が要る */}
+        {hidden > 0 ? (
+          <div style={{ display: 'flex', alignItems: 'center', gap: 'var(--sp-3)' }}>
+            <Empty>この期間に取り込んだ対局はありません ({hidden} 局は期間の外)。</Empty>
+            <Button size="ctrl" onClick={() => setDays('0')}>すべて出す</Button>
+          </div>
+        ) : (
+          <Empty>まだありません。</Empty>
+        )}
       </Section>
     );
   }
@@ -82,6 +108,16 @@ export function LearnLog({ items, onOpen, onUndo, onBook }: {
         width: 'var(--w-book-tree)', flex: 'none', minHeight: 0,
         borderRight: '1px solid var(--border)', display: 'flex', flexDirection: 'column',
       }}>
+        {/* 設計 §8 の帯。絵は「すべて / 負けた対局」も並べるが、そちらは
+            控えが自分の色を持たないので入れていない (依頼 5-9) */}
+        <div style={{
+          height: 'var(--h-field)', flex: 'none', display: 'flex', alignItems: 'center',
+          padding: '0 var(--sp-3)', borderBottom: '1px solid var(--border-weak)',
+        }}>
+          <Select size="ctrl" value={days} onChange={setDays} options={[
+            ['0', 'すべて'], ['7', '直近 7 日'], ['30', '直近 30 日'], ['90', '直近 90 日'],
+          ]} />
+        </div>
         <TableHead>
           <span style={{ flex: 1 }}>対局</span>
           <span style={{ width: 52, textAlign: 'right' }}>石数</span>
@@ -119,7 +155,9 @@ export function LearnLog({ items, onOpen, onUndo, onBook }: {
           padding: 'var(--sp-2) var(--sp-3)', borderTop: '1px solid var(--border)',
           fontSize: 'var(--fs-6)', color: 'var(--sub)',
         }}>
-          <span>{items.length} 局の合計</span>
+          {/* **隠れている控えがあることを言う。** 既定が 30 日なので、
+              黙って減らすと「取り込んだはずの対局が無い」と読まれる */}
+          <span>{items.length} 局の合計{hidden > 0 ? ` (他 ${hidden} 局)` : ''}</span>
           <span style={{
             marginLeft: 'auto', color: 'var(--text)', fontWeight: 600,
             fontVariantNumeric: 'tabular-nums',
