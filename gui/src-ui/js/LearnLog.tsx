@@ -129,47 +129,7 @@ export function LearnLog({ items, onOpen, onUndo, onBook }: {
       </div>
 
       {/* 中央 — 敗着の局面。数字だけで「どの手で損したか」を読ませない */}
-      <div style={{
-        flex: 1, minWidth: 0, minHeight: 0, display: 'flex', flexDirection: 'column',
-        padding: 'var(--sp-4)', gap: 'var(--sp-3)',
-      }}>
-        <div style={{
-          flex: 1, minHeight: 0, display: 'grid', placeItems: 'center',
-          gridTemplateRows: 'minmax(0, 1fr)', gridTemplateColumns: 'minmax(0, 1fr)',
-        }}>
-          <div style={{ height: '100%', maxHeight: '100%', aspectRatio: '1 / 1', maxWidth: '100%' }}>
-            {frame && (
-              <Board cells={frame.cells as (0 | 1 | 2)[]} last={frame.last} coords={false} disabled />
-            )}
-          </div>
-        </div>
-        {bad ? (
-          <div style={{ display: 'flex', flexDirection: 'column', gap: 'var(--sp-2)' }}>
-            <div style={{ display: 'flex', alignItems: 'baseline', gap: 'var(--sp-2)' }}>
-              <span style={{ fontSize: 'var(--fs-3)', fontWeight: 600 }}>
-                {bad.ply} 手目 {bad.mv}
-              </span>
-              <span style={{ color: 'var(--bad)', fontVariantNumeric: 'tabular-nums' }}>
-                ▼{lossOf(bad).toFixed(1)}
-              </span>
-              <span style={{ marginLeft: 'auto' }}>
-                <Button onClick={() => onOpen(cur, bad.ply)}>検討で開く</Button>
-              </span>
-            </div>
-            <span style={{
-              maxWidth: 'var(--w-text)', fontSize: 'var(--fs-6)',
-              color: 'var(--sub)', lineHeight: 1.8,
-            }}>
-              この局面の評価を終局の石差で上書きし、根まで書き戻しました。
-              定石は「もっと良い手があった」と言っています
-              ({sign(bad.best)} に対して {sign(bad.after)})。
-            </span>
-          </div>
-        ) : (
-          /* 同上 (規則 91) */
-          <Empty>この対局に大きく損した手はありません。</Empty>
-        )}
-      </div>
+      <BlunderPane cur={cur} bad={bad} frame={frame} onOpen={onOpen} />
 
       {/* 右 — この対局の明細。設計 §8 は 291px (ドックと同じ幅) */}
       <div className="k-scroll" style={{
@@ -241,4 +201,60 @@ function fmtWhen(secs: number): string {
   const p2 = (n: number) => String(n).padStart(2, '0');
   return sameDay ? `${p2(d.getHours())}:${p2(d.getMinutes())}`
     : `${d.getMonth() + 1}/${p2(d.getDate())}`;
+}
+
+/** 学習ログの中央 — 敗着の局面。**数字だけで「どの手で損したか」を
+ *  読ませない**ので、盤を出して赤い印を打つ。
+ *
+ *  `LearnLog` が 193 行あり、三面 (一覧 / この面 / 明細) がきれいに
+ *  割れていたので切り出した。props は 4 つで済む。 */
+function BlunderPane({ cur, bad, frame, onOpen }: {
+  cur: LearnEntry;
+  bad: LearnChange | undefined;
+  frame: KifuFrame | null;
+  onOpen: (e: LearnEntry, ply?: number) => void;
+}) {
+  return (
+    <div style={{
+      flex: 1, minWidth: 0, minHeight: 0, display: 'flex', flexDirection: 'column',
+      padding: 'var(--sp-4)', gap: 'var(--sp-3)',
+    }}>
+      <div style={{
+        flex: 1, minHeight: 0, display: 'grid', placeItems: 'center',
+        gridTemplateRows: 'minmax(0, 1fr)', gridTemplateColumns: 'minmax(0, 1fr)',
+      }}>
+        <div style={{ height: '100%', maxHeight: '100%', aspectRatio: '1 / 1', maxWidth: '100%' }}>
+          {frame && (
+            <Board cells={frame.cells as (0 | 1 | 2)[]} last={frame.last} coords={false} disabled />
+          )}
+        </div>
+      </div>
+      {bad ? (
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 'var(--sp-2)' }}>
+          <div style={{ display: 'flex', alignItems: 'baseline', gap: 'var(--sp-2)' }}>
+            <span style={{ fontSize: 'var(--fs-3)', fontWeight: 600 }}>
+              {bad.ply} 手目 {bad.mv}
+            </span>
+            <span style={{ color: 'var(--bad)', fontVariantNumeric: 'tabular-nums' }}>
+              ▼{lossOf(bad).toFixed(1)}
+            </span>
+            <span style={{ marginLeft: 'auto' }}>
+              <Button onClick={() => onOpen(cur, bad.ply)}>検討で開く</Button>
+            </span>
+          </div>
+          <span style={{
+            maxWidth: 'var(--w-text)', fontSize: 'var(--fs-6)',
+            color: 'var(--sub)', lineHeight: 1.8,
+          }}>
+            この局面の評価を終局の石差で上書きし、根まで書き戻しました。
+            定石は「もっと良い手があった」と言っています
+            ({sign(bad.best)} に対して {sign(bad.after)})。
+          </span>
+        </div>
+      ) : (
+        /* 同上 (規則 91) */
+        <Empty>この対局に大きく損した手はありません。</Empty>
+      )}
+    </div>
+  );
 }
