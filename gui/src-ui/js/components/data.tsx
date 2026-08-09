@@ -1,6 +1,6 @@
 import React from 'react';
 import { Badge, Button, Dot } from './primitives';
-import { Empty, TableHead, TableRow } from './layout';
+import { Divider, Empty, TableHead, TableRow } from './layout';
 
 /* KUROOBI data — 棋譜表・評価値グラフ・対局者行・レート
  * 表は 1 行 --h-row。列幅は固定で、値は右揃え。
@@ -375,7 +375,7 @@ export function ScoreRow({ black, white, turn, meta, blackClock, whiteClock }: {
       {side('b', black)}
       {side('w', white)}
       {meta && <>
-        <span style={{ width: 1, height: 20, background: 'var(--border)', flex: 'none' }} />
+        <Divider />
         <span>{meta}</span>
       </>}
       {/* 時計は 1 秒ごとに書き換わる。桁が動くと石数まで揺れる */}
