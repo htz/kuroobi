@@ -1126,8 +1126,10 @@ function GgsResults({ snap, onKifu }: {
   // 他人の履歴と同じ map に入れるので、自分だけ空キーにはならない
   useEffect(() => { if (login) void ggsApi.history('').catch(() => {}); }, [login]);
   // 形式ごとにレートのプールが違うので、混ぜて折れ線にすると嘘になる
-  const kinds = [...new Set([...snap.results, ...(snap.history[snap.login] ?? []).map((h) => ({ base: h.gtype }))]
-    .map((r) => baseType(r.base)))].filter(Boolean);
+  const kinds = [...new Set([
+    ...snap.results.map((r) => baseType(r.base, r.raw)),
+    ...(snap.history[snap.login] ?? []).map((h) => baseType(h.gtype)),
+  ])].filter(Boolean);
   // 手元の記録に無い対局をサーバーの履歴から補う。番号で重複を落とす
   const known = new Set(snap.results.map((r) => r.id));
   const fromServer: GameResult[] = (snap.history[snap.login] ?? [])
@@ -1145,7 +1147,7 @@ function GgsResults({ snap, onKifu }: {
       } as GameResult;
     });
   const all = [...snap.results, ...fromServer];
-  const rows = all.filter((r) => gtype === 'all' || baseType(r.base) === gtype);
+  const rows = all.filter((r) => gtype === 'all' || baseType(r.base, r.raw) === gtype);
   // グラフは古い順。results は新しい順に積まれている
   const rates = rows.filter((r) => r.my_rating != null).map((r) => r.my_rating as number).reverse();
 
@@ -1170,7 +1172,7 @@ function GgsResults({ snap, onKifu }: {
           <ResultRow key={r.id + r.seq} opponent={r.opp}
                      win={(r.my_diff ?? 0) > 0} draw={r.my_diff === 0}
                      discs={r.my_diff ?? 0} when={fmtDay(r.at)}
-                     note={gtype === 'all' ? gtypeLabel(baseType(r.base)) : undefined}
+                     note={gtype === 'all' ? gtypeLabel(baseType(r.base, r.raw)) : undefined}
                      rating={r.my_rating}
                      // GGF なら開始局面も入っている (抽選開局の対局が戻る)。
                      // どちらも無い対局は番号から取り出す
@@ -1183,8 +1185,17 @@ function GgsResults({ snap, onKifu }: {
   );
 }
 
-/** 対局の種別 ("s8r16.2024..." のような id から "s8r16" だけ取る)。 */
-const baseType = (base: string) => base.split('.')[0] ?? '';
+/** 対局の種別。
+ *
+ * 履歴から来た結果は `base` が `"s8r16.2024..."` の形なので頭を取れば済む。
+ * **終局の報せから作った結果は `base` が `.11` のような対局 id** で、
+ * 切っても空にしかならない (画面に `?` が出ていた)。そちらは生の行に
+ * 形式が入っているので拾う。 */
+const baseType = (base: string, raw?: string) => {
+  const head = base.split('.')[0] ?? '';
+  if (head) return head;
+  return raw?.split(/\s+/).find((t) => /^s?8(r\d+)?$/.test(t)) ?? '';
+};
 
 /** 終わった日。今日なら時刻だけ。 */
 function fmtDay(secs: number): string {
