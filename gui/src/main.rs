@@ -1899,7 +1899,9 @@ fn ggs_match_cmd(app: State<App>, id: String, verb: String, arg: String) -> Resu
 #[tauri::command]
 fn ggs_set_formula(app: State<App>, kind: String, expr: String) -> Result<(), String> {
     if kind != "aform" && kind != "dform" {
-        return Err("kind must be aform or dform".into());
+        // 画面からは定数しか渡さないので普段は起きない。**それでも日本語で
+        // 返す** — この文字列はトーストに素通しで出る経路にいる
+        return Err(format!("申し込みの扱いの種別が不正です ({kind})"));
     }
     ggs_tx(&app)?
         .send(ggs::Cmd::SetFormula { kind, expr })
