@@ -6,7 +6,7 @@ import {
   fingerGroups, fingerValue, hasJapanese, normKey, parseCond, translate, useClocks,
   type ClockSide, type ClockView,
 } from './ggs';
-import { Empty, EmptyState, List, Modal, Note, Overlay, Section, TableHead, TableRow, picked } from './components/layout';
+import { Empty, EmptyBoard, EmptyState, List, Modal, Note, Overlay, Section, TableHead, TableRow, picked } from './components/layout';
 import { Button, Segmented, Select, TextField, Toggle } from './components/primitives';
 import { Strength } from './components/strength';
 import { Confirm, PickOne } from './Dialogs';
@@ -728,6 +728,7 @@ function GgsPlay({ snap, onNav, prefs, onKifu }: {
   if (!groups.size) {
     return (
       <EmptyState title="対局はまだありません"
+                  visual={<EmptyBoard />}
                   body="ロビーで申し込むか、進行中の対局を観戦できます。"
                   actions={<>
                     <Button variant="primary" onClick={() => onNav('ggs-lobby')}>ロビーへ</Button>

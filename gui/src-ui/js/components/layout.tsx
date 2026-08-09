@@ -1,5 +1,5 @@
 import React from 'react';
-import { BoardDefs } from './board';
+import { Board, BoardDefs } from './board';
 import { Button, Dot, Segmented } from './primitives';
 import { IconButton } from './Icons';
 // アセットを唯一の出所にする (assets.d.ts の方針)。画面用に写した複製と
@@ -532,18 +532,58 @@ export function Empty({ children }: { children: React.ReactNode }) {
   );
 }
 
-/* 押せない盤を出さないための空状態。GGS 未対局時など */
-export function EmptyState({ title, body, actions }: { title: string; body?: React.ReactNode; actions?: React.ReactNode }) {
+/* 押せない盤を出さないための空状態。GGS 未対局時など
+ *
+ * `visual` を渡すと**横並び**になる (絵の GGS 対局の空状態がこれ) —
+ * 左に見せるもの、右に文言と釦。渡さなければ従来どおりロゴを上に置いた
+ * 縦積みのまま。**縦のときだけ中央揃え** で、横のときは行が短いので
+ * 左に揃える (中央だと釦の左端が文の途中から始まって落ち着かない)。 */
+export function EmptyState({ title, body, actions, visual }: {
+  title: string; body?: React.ReactNode; actions?: React.ReactNode; visual?: React.ReactNode;
+}) {
+  const side = !!visual;
   return (
     <div style={{ flex: 1, display: 'grid', placeItems: 'center', padding: 'var(--sp-5)' }}>
-      <div style={{ maxWidth: 420, textAlign: 'center', display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 'var(--sp-5)' }}>
-        <span aria-hidden style={{ width: 64, height: 64, borderRadius: 'var(--r-4)', overflow: 'hidden', opacity: .5, display: 'block' }}
-              dangerouslySetInnerHTML={{ __html: icon }} />
-        <div style={{ display: 'flex', flexDirection: 'column', gap: 'var(--sp-2)' }}>
+      <div style={{
+        maxWidth: side ? undefined : 420,
+        textAlign: side ? 'left' : 'center',
+        display: 'flex',
+        flexDirection: side ? 'row' : 'column',
+        alignItems: 'center',
+        gap: 'var(--sp-5)',
+      }}>
+        {visual ?? (
+          <span aria-hidden style={{ width: 64, height: 64, borderRadius: 'var(--r-4)', overflow: 'hidden', opacity: .5, display: 'block' }}
+                dangerouslySetInnerHTML={{ __html: icon }} />
+        )}
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 'var(--sp-2)', maxWidth: side ? 250 : undefined }}>
           <div style={{ fontSize: 'var(--fs-3)', fontWeight: 600 }}>{title}</div>
           {body && <div style={{ fontSize: 'var(--fs-5)', color: 'var(--sub)', lineHeight: 1.8 }}>{body}</div>}
+          {/* 横のときは釦も文の列に入れる。縦のときは外に出して中央に置く */}
+          {side && actions && <div style={{ display: 'flex', gap: 'var(--sp-2)', marginTop: 'var(--sp-2)' }}>{actions}</div>}
         </div>
-        {actions && <div style={{ display: 'flex', gap: 'var(--sp-2)' }}>{actions}</div>}
+        {!side && actions && <div style={{ display: 'flex', gap: 'var(--sp-2)' }}>{actions}</div>}
+      </div>
+    </div>
+  );
+}
+
+/** 空状態に置く飾りの盤。初期配置を描くだけで、押せない。
+ *
+ * 絵の注記は「畳の織り目まで描くが操作はできない」。`Board` をそのまま
+ * 使う — 空状態のためだけに別の盤を書くと、畳や石の見た目が二重管理になる。 */
+export function EmptyBoard({ size = 150 }: { size?: number }) {
+  // sq = file*8 + rank。d4/e5 が白、e4/d5 が黒
+  const cells: (0 | 1 | 2)[] = Array(64).fill(0);
+  cells[3 * 8 + 3] = 2; cells[4 * 8 + 4] = 2;
+  cells[4 * 8 + 3] = 1; cells[3 * 8 + 4] = 1;
+  return (
+    <div aria-hidden style={{
+      width: size, flex: 'none', padding: 'var(--sp-1)',
+      borderRadius: 'var(--r-4)', background: 'var(--panel)',
+    }}>
+      <div style={{ borderRadius: 'var(--r-1)', overflow: 'hidden' }}>
+        <Board cells={cells} coords={false} disabled />
       </div>
     </div>
   );
