@@ -310,7 +310,6 @@ export function App() {
     g.setThinkTotal({ black: 0, white: 0 });
     g.setPlaying(false);
     g.setView(v);
-    g.say('');
   };
   const loadFromFile = async () => {
     try {
@@ -422,6 +421,10 @@ export function App() {
       if (paste || ask || viewer || settings) return;
       const cmd = e.metaKey || e.ctrlKey;
       const key = e.key.toLowerCase();
+      /* 設定は覆い。**絵が §5 で「設定 — 覆い（⌘,）」と明記している**のに
+         鍵が無く、左メニュー下端の釦からしか開けなかった。macOS の慣習でも
+         あるので、押す前に試す人がいる */
+      if (cmd && key === ',') { e.preventDefault(); setSettings(true); return; }
       if (cmd && key === 'b') { e.preventDefault(); setNav('book'); return; }
       if (cmd && key === 'n') { e.preventDefault(); if (!g.thinking) void g.newGame(); return; }
       // 棋譜の出し入れ。GGS と定石では扱う棋譜が無い
@@ -513,7 +516,7 @@ export function App() {
                  **絵は歯車ではない** — 歯車は「GGS の設定」が使っているので、
                  同じ絵を別の意味で 2 か所に出さない (規則 49)。
                  48px の列では文字を落として絵だけの正方形にする */}
-             <button type="button" className="k-press k-nav-settings" title="設定" aria-label="設定"
+             <button type="button" className="k-press k-nav-settings" title="設定 (⌘,)" aria-label="設定"
                      onClick={() => setSettings(true)}
                      style={{
                        alignItems: 'center', justifyContent: 'center',
@@ -550,7 +553,7 @@ export function App() {
               ? <GgsStatus snap={ggs.snap}
                            showStrength={nav !== 'ggs-settings' && nav !== 'ggs-standby'} />
               : undefined)
-            : <Toggle checked={g.autoHint} onChange={g.setAutoHint} label="評価値を表示" />}>
+            : undefined}>
           {isBook ? (
             <>
               {/* 2 枚の切り替えは children に置く — aux は 940px で消えるので、
@@ -613,6 +616,13 @@ export function App() {
                   aux は 940px で消える */}
               <span style={{ fontSize: 'var(--fs-6)', color: 'var(--sub)' }}>KUROOBI</span>
               <Segmented value={g.side} onChange={g.setSide} options={SIDES} />
+              {/* 評価値の表示も aux ではなく children 側。**aux は 940px で
+                  消えるので、狭い窓で切り替える道が無くなっていた**
+                  (規則 8・58 — 担当と同じ話)。実機で 900px にすると
+                  丸ごと消えることを確認した */}
+              <span style={{ width: 1, height: 20, background: 'var(--border)',
+                             margin: '0 var(--sp-1)', flex: 'none' }} />
+              <Toggle checked={g.autoHint} onChange={g.setAutoHint} label="評価値を表示" />
             </>
           )}
       </Toolbar>

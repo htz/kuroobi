@@ -166,9 +166,8 @@ export function LearnLog({ items, onOpen, onUndo, onBook }: {
             </span>
           </div>
         ) : (
-          <span style={{ fontSize: 'var(--fs-6)', color: 'var(--sub)' }}>
-            この対局に大きく損した手はありません。
-          </span>
+          /* 同上 (規則 91) */
+          <Empty>この対局に大きく損した手はありません。</Empty>
         )}
       </div>
 

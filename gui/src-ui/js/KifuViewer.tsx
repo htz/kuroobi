@@ -91,14 +91,19 @@ export function KifuViewer({ title, kifu, onClose, onStudy }: KifuViewerProps) {
                  overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
                }}>{note}</span>
                {/* コピーと保存を落とさない — 検討へ直行するだけだと、
-                   棋譜を人に渡す道が消える */}
+                   棋譜を人に渡す道が消える。
+                   **コピーだけは成功も言う。** 規則 34 は「成功したときは
+                   何も言わない」だが、それが成り立つのは*画面か OS に
+                   変化が出る*操作 (下の保存は窓が閉じる)。クリップボードは
+                   どこにも変化が出ないので、黙ると押せたのかどうかが
+                   分からない。**この線引きは規則に無いので投げてある** */}
                <Button size="field" disabled={!kifu} onClick={() => {
                  void navigator.clipboard.writeText(kifu)
                    .then(() => say('コピーしました'))
                    .catch(() => say('コピーできませんでした'));
                }}>棋譜をコピー</Button>
-               {/* **成功したときは何も言わない** (規則 34)。保存の窓が閉じた
-                   こと自体が報せになっている */}
+               {/* こちらは何も言わない (規則 34)。保存の窓が閉じたこと自体が
+                   報せになっている — 上のコピーとの違いはそこ */}
                <Button size="field" disabled={!kifu}
                        onClick={() => void ggsApi.saveKifu(kifu, 'kifu')
                          .catch((e) => say('保存できませんでした (' + e + ')'))}>

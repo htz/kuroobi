@@ -217,10 +217,15 @@ export function BookDock({ b, decimals = 1 }: { b: BookBrowse; decimals?: number
       {/* 木は左の列が持つ (設計 §7)。ここは**次の 1 手だけ**を表にする。
           同じ一覧を 2 か所に出すと、どちらが本物か分からなくなる */}
       <Section title="次の手" aside={n ? <span>{n.moves.length}</span> : undefined}>
-        {n && n.moves.length === 0 ? (
-          <span style={{ fontSize: 'var(--fs-6)', color: 'var(--sub)' }}>
-            この局面から先は定石にありません。
-          </span>
+        {/* **`n` が無いときも空状態を出す。** `n && …` で書いていたので、
+            定石に**無い**局面では節の見出しだけが出て中身が空のままだった
+            (何も説明されないので、読み込みに失敗したようにも見える)。
+            「先が無い」と「そもそも載っていない」は別の話なので文言も分ける */}
+        {!n || n.moves.length === 0 ? (
+          /* 生の span で書かない (規則 91)。節の中が空なら Empty —
+             色も余白も部品が持つ */
+          <Empty>{n ? 'この局面から先は定石にありません。'
+                    : 'この局面は定石に載っていません。'}</Empty>
         ) : (
           <List>
             {n?.moves.map((m) => (

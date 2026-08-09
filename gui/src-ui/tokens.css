@@ -98,6 +98,10 @@
   --text:#1e2124; --sub:#656d78;
   --accent:#296bc9; --accent-dim:#296bc9; --hover:rgba(0,0,0,.075); --hover-on:rgba(0,0,0,.04); --track:rgba(0,0,0,.10);
   --board:#8fa661; --board-dark:#4a3323; --line:#3f5323; --grain:#5c6b38;
+  /* 白石の縁。ダークの #c9cdd1 のままだと --panel (#f2efe8) の上で 1.41:1、
+     面 (#f1f1f1) に至っては 1.007:1 で**石が見えない**。盤の上 (緑) では
+     問題ないが、名刺や一覧に置く小さい石が消える。3:1 まで濃くした */
+  --stone-white-edge:#8b9198;
   --stone-shadow:rgba(0,0,0,.22);
   --board-hint:rgba(0,0,0,.34);
   --board-eval-bg:rgba(0,0,0,.10); --board-eval-edge:rgba(0,0,0,.28);
@@ -116,6 +120,10 @@
     --text:#1e2124; --sub:#656d78;
     --accent:#296bc9; --accent-dim:#296bc9; --hover:rgba(0,0,0,.075); --hover-on:rgba(0,0,0,.04); --track:rgba(0,0,0,.10);
     --board:#8fa661; --board-dark:#4a3323; --line:#3f5323; --grain:#5c6b38;
+    /* 白石の縁。ダークの #c9cdd1 のままだと --panel (#f2efe8) の上で 1.41:1、
+       面 (#f1f1f1) に至っては 1.007:1 で**石が見えない**。盤の上 (緑) では
+       問題ないが、名刺や一覧に置く小さい石が消える。3:1 まで濃くした */
+    --stone-white-edge:#8b9198;
     --stone-shadow:rgba(0,0,0,.22);
     --board-hint:rgba(0,0,0,.34);
     --board-eval-bg:rgba(0,0,0,.10); --board-eval-edge:rgba(0,0,0,.28);

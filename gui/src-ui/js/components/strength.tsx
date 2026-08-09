@@ -54,7 +54,7 @@ export function Strength({ value, onChange }: { value: Levels; onChange: (v: Lev
               終局を跨いで読むだけの区間ができる */}
           <Pick label="読切" value={value.solve} min={value.depth} max={SOLVE_MAX}
                 onChange={(n) => onChange(clampLevels({ ...value, solve: n }))} />
-          <Pick label="選択読み" value={value.band} min={0} max={12} zero="なし"
+          <Pick label="選択読み" value={value.band} min={0} max={12} zero="なし" plus
                 onChange={(n) => onChange({ ...value, band: n })} />
         </div>
       )}
@@ -65,12 +65,18 @@ export function Strength({ value, onChange }: { value: Levels; onChange: (v: Lev
 /** 数を 1 つ選ぶ。**選べる値だけを並べる** — 範囲外を打ち込ませて後から
  *  丸める形だと、読切が深さを下回る途中の状態が一瞬できる。
  *  0 に意味のある欄 (選択読み) は 0 の表示だけ言葉に替える。 */
-function Pick({ label, value, min, max, zero, onChange }: {
+function Pick({ label, value, min, max, zero, plus, onChange }: {
   label: string; value: number; min: number; max: number;
-  zero?: string; onChange: (n: number) => void;
+  zero?: string;
+  /** 加算だと分かる欄 (選択読み) に `+` を付ける。深さや読切のような
+   *  絶対値の欄には付けない。プリセットのラベル (`選択読み+6`) と揃える */
+  plus?: boolean;
+  onChange: (n: number) => void;
 }) {
   const options: [string, string][] = [];
-  for (let n = min; n <= max; n++) options.push([String(n), zero && n === 0 ? zero : String(n)]);
+  for (let n = min; n <= max; n++) {
+    options.push([String(n), zero && n === 0 ? zero : (plus ? '+' : '') + n]);
+  }
   return (
     <label style={{ display: 'flex', flexDirection: 'column', gap: 'var(--sp-1)' }}>
       <span style={{ fontSize: 'var(--fs-7)', color: 'var(--sub)' }}>{label}</span>

@@ -33,6 +33,10 @@ export type NavItem = {
   count?: number;    // 件数バッジ
   alert?: boolean;   // 自分宛・未読は --bad で塗る
   dot?: 'ok' | 'gold' | 'bad';  // 状態バッジ（待機モードが有効・自分の手番 等）
+  /** 鍵。**押せることは見れば分かるが、鍵があることは押しても分からない**
+   *  ので title に添える (対局の釦が `title="⌘N"` としているのと同じ)。
+   *  畳んだ 48px の列では文字が消えるぶん、title の値打ちが上がる */
+  hint?: string;
 };
 
 export type Conn = 'offline' | 'connecting' | 'logging-in' | 'online';
@@ -44,7 +48,7 @@ const CONN_TONE: Record<Conn, 'sub' | 'gold' | 'ok'> = {
 export const NAV_LOCAL: NavItem[] = [
   { id: 'play', label: '対局', icon: 'play' },
   { id: 'study', label: '検討', icon: 'study' },
-  { id: 'book', label: '定石', icon: 'book' },
+  { id: 'book', label: '定石', icon: 'book', hint: '⌘B' },
 ];
 
 /* 未接続のときは 7 行を出さず「ログイン」1 行だけにする */
@@ -109,7 +113,7 @@ export function Nav({ items, ggsItems, conn, active, onSelect, footer }: {
 function NavRow({ item, active, onSelect }: { item: NavItem; active: boolean; onSelect?: (id: NavId) => void }) {
   return (
     <button type="button" onClick={() => onSelect?.(item.id)} aria-current={active || undefined}
-      title={item.label}
+      title={item.hint ? `${item.label} (${item.hint})` : item.label}
       className={'k-nav-row k-row' + (active ? ' k-on' : '')}
       // padding / justify-content は .k-nav-row が持つ（1040px で中央寄せにする）
       style={{

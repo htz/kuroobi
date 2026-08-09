@@ -236,8 +236,11 @@ export function BottomPanel({ tabs, active, onTab, onClose, height = 240, childr
       background: 'var(--panel)', borderTop: '1px solid var(--border)',
       display: 'flex', flexDirection: 'column',
     }}>
+      {/* タブの帯は --h-field (32px)。36 は規則 5 の 5 段
+          (44/32/28/24/20) に無く、絵の下部パネルも 32px。中のタブは
+          --h-chip (20px) なので 32 でも上下に 6px ずつ残る */}
       <div style={{
-        height: 36, flex: 'none', display: 'flex', alignItems: 'center', gap: 'var(--sp-2)',
+        height: 'var(--h-field)', flex: 'none', display: 'flex', alignItems: 'center', gap: 'var(--sp-2)',
         padding: '0 var(--sp-3)', borderBottom: '1px solid var(--border-weak)',
       }}>
         {tabs.map(t => {

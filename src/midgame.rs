@@ -205,9 +205,17 @@ fn pool_slack() -> usize {
     })
 }
 
-/// Slots probed per position. Four
-/// 16-byte entries are exactly one 64-byte cache line, so the whole probe is a
-/// single memory transaction.
+/// Slots probed per position.
+///
+/// The comment here used to claim that four 16-byte entries fit exactly in one
+/// 64-byte cache line. That was never true: `TtEntry` is 24 B (u64 key, two
+/// f32 bounds, four u8 tags, padded to 8), so a bucket is **128 B — two cache
+/// lines**. Measured, not assumed.
+///
+/// Packing the bucket into a single line was tried and rejected: 2-way at the
+/// real settings (depth 22 / solve 26) came out at -0.7%, inside the noise, and
+/// shrinking the entry to 16 B has the same ceiling while risking key
+/// collisions and rounding. See `docs/benchmarks.md`.
 const TT_WAYS: usize = 4;
 
 /// How valuable an entry is: depth first,
