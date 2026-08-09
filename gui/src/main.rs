@@ -1462,10 +1462,18 @@ fn load_kifu_into(app: &State<App>, text: &str) -> Result<GameView, String> {
     if s.is_empty() && start.is_none() {
         return Err("棋譜が見つかりません".into());
     }
+    /* **エンジンのエラーを素通しにしない。** `invalid KIFU: xx` が
+    そのままトーストに出ていた — すぐ上の「棋譜が見つかりません」は
+    日本語なのに、こちらだけ英語だった。原因はログに残して、画面には
+    直し方の分かる日本語だけを出す (設計 §9 の注記)。 */
     let loaded = match &start {
-        Some(b) => Reversi::from_kifu_with_start(b, &s)?,
-        None => Reversi::from_kifu(&s)?,
-    };
+        Some(b) => Reversi::from_kifu_with_start(b, &s),
+        None => Reversi::from_kifu(&s),
+    }
+    .map_err(|e| {
+        eprintln!("棋譜を読み取れません: {e}");
+        "棋譜を読み取れません。手の並びが正しいか確かめてください".to_string()
+    })?;
     let mut game = app.game.lock().unwrap();
     *game = loaded;
     Ok(view(&game))
