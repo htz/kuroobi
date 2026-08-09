@@ -115,6 +115,7 @@ fn main() -> ExitCode {
         println!("---+---------+-------+----------+-------------+----------");
         let mut total_nodes = 0u64;
         let mut total_time = 0.0f64;
+        let mut solved = 0usize;
 
         for (i, line) in content.lines().enumerate() {
             let line = line.trim();
@@ -122,8 +123,16 @@ fn main() -> ExitCode {
                 continue;
             }
             // OBF: "<64 chars> <X|O>; MOVE:+SCORE; ..."
-            let Some(semi) = line.find(';') else { continue };
-            let board_part = &line[..semi];
+            //
+            // A line without `;` is still a position: `bench/band*.obf` holds
+            // just "<64 chars> <X|O>" with no move list. Skipping those made
+            // the whole file vanish and the run print "0 nodes" with exit code
+            // 0 — a success that measured nothing. Take the line as-is and let
+            // `Board::from_string` reject it if it really is garbage.
+            let board_part = match line.find(';') {
+                Some(semi) => &line[..semi],
+                None => line,
+            };
             let board = match Board::from_string(board_part) {
                 Ok(b) => b,
                 Err(e) => {
@@ -164,6 +173,7 @@ fn main() -> ExitCode {
 
             total_nodes += nodes;
             total_time += secs;
+            solved += 1;
             println!(
                 "{:>2} | {:>7} | {:>5.0} | {:>7.3}s | {:>11} | {:>8.2}M",
                 i + 1,
@@ -173,6 +183,16 @@ fn main() -> ExitCode {
                 nodes,
                 nodes as f64 / secs / 1e6
             );
+        }
+        // Nothing parsed means the file is in a format we cannot read. Saying
+        // "0 nodes in 0.000s (NaNM nodes/s)" and exiting 0 reads as success.
+        if solved == 0 {
+            eprintln!(
+                "{}: 読めた問題がありません (0 / {} 行)",
+                file.display(),
+                content.lines().filter(|l| !l.trim().is_empty()).count()
+            );
+            return ExitCode::FAILURE;
         }
         println!("---+---------+-------+----------+-------------+----------");
         println!(
