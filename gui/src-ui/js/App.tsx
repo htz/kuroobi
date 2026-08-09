@@ -7,7 +7,7 @@ import { api, ggsApi, jsLog, onApp, type ActivityView } from './api';
 import { useActivity, useEngineSettings, useEngineTurn, useGraph, useHints, useLearnLog, useStartGame, type AskArgs } from './engine';
 import { fmtSecs } from './ggs';
 import { cellsOf, connOf, evalsOf, ggsPlaying, movesOf, navBadges, sqName } from './adapt';
-import { AppFrame, Body, BottomPanel, Busy, Divider, Dock, KeyValue, Main, Overlay, Section, StatusBar, StatusStat, Toolbar, WindowBar } from './components/layout';
+import { AppFrame, Body, BottomPanel, Busy, Divider, Dock, KeyValue, Main, Note, Overlay, Section, StatusBar, StatusStat, Toolbar, WindowBar } from './components/layout';
 import { GgsChat, GgsConsole, GgsScreen } from './GgsScreens';
 import { Confirm, PasteKifu, Settings } from './Dialogs';
 import { Board } from './components/board';
@@ -821,9 +821,9 @@ export function App() {
           <>
             <Section title="定石への書き戻し">
               <Toggle checked={g.learnOn} onChange={g.setLearnOn} label="終局した対局を取り込む" />
-              <span style={{ fontSize: 'var(--fs-6)', color: 'var(--sub)', lineHeight: 1.8 }}>
+              <Note>
                 勝敗にかかわらず取り込み、終局の石差を根まで書き戻します。同じ負け方をなぞらなくなります。
-              </span>
+              </Note>
             </Section>
             {/* 走っている間だけ枠を持つ (規則 13 の「箱を入れ子にしない」の
                 例外は進行中のジョブだけ)。**「一時停止」は置かない** —

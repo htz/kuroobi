@@ -98,10 +98,10 @@ function GgsLogin() {
         display: 'flex', flexDirection: 'column', gap: 14,
       }}>
         <div style={{ fontSize: 'var(--fs-3)', fontWeight: 600 }}>GGS へログイン</div>
-        <div style={{ fontSize: 'var(--fs-6)', color: 'var(--sub)', lineHeight: 1.8 }}>
+        <Note>
           <span style={{ fontFamily: 'var(--ff-mono)' }}>skatgame.net:5000</span>
           {' '}— ログインに成功するとキーチェーンに保存され、次回から自動ログインします
-        </div>
+        </Note>
         <div style={{ display: 'flex', flexDirection: 'column', gap: 'var(--sp-2)' }}>
           <LoginField label="ログイン名">
             <TextField value={user} onChange={setUser} />

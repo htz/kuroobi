@@ -5,7 +5,7 @@ import React from 'react';
 import { Icon, IconButton, type IconName } from './Icons';
 import type { GgsSnapshot } from '../types';
 import { Badge, Dot, Button, Select, TextField } from './primitives';
-import { picked } from './layout';
+import { Note, picked } from './layout';
 import logo from '../../assets/kuroobi.svg?raw';
 // 値の実体は 1 つ。設計側の state.ts に写しがあったが、定数が 2 か所にあると
 // 必ず割れる（レベル表・条件式の変数・色の値で実際に割れていた）
@@ -378,9 +378,7 @@ export function FormulaEditor({ value, onChange, onSave, onClear, onRaw }: {
         padding: 'var(--sp-4)', display: 'flex', flexDirection: 'column', gap: 'var(--sp-3)', alignItems: 'flex-start',
       }}>
         <div style={{ fontSize: 'var(--fs-5)', color: 'var(--text)' }}>指定なし</div>
-        <div style={{ fontSize: 'var(--fs-6)', color: 'var(--sub)', lineHeight: 1.8 }}>
-          申し込みは自動で処理せず、届いたときに本人が判断します。
-        </div>
+        <Note>申し込みは自動で処理せず、届いたときに本人が判断します。</Note>
         <div style={{ display: 'flex', gap: 'var(--sp-2)' }}>
           <Button onClick={() => onChange(newGroup())}>条件を付ける</Button>
           {onRaw && <Button variant="ghost" onClick={() => onRaw('')}>式を直接書く</Button>}
