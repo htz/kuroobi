@@ -6,7 +6,7 @@ import {
   fingerGroups, fingerValue, hasJapanese, normKey, parseCond, translate, useClocks,
   type ClockSide, type ClockView,
 } from './ggs';
-import { Empty, EmptyState, List, Modal, Overlay, picked, Section, TableHead, TableRow } from './components/layout';
+import { Empty, EmptyState, List, Modal, Note, Overlay, Section, TableHead, TableRow, picked } from './components/layout';
 import { Button, Segmented, Select, TextField, Toggle } from './components/primitives';
 import { Strength } from './components/strength';
 import { Confirm, PickOne } from './Dialogs';
@@ -534,10 +534,10 @@ function GgsLobby({ snap, onNav }: { snap: GgsSnapshot; onNav: (id: NavId) => vo
                   onClick={() => void ggsApi.ask(gtype, time, opp, rated)}>
             {opp ? '申し込む' : '募集する'}
           </Button>
-          <p style={{ margin: 0, maxWidth: 'var(--w-text)', fontSize: 'var(--fs-6)', color: 'var(--sub)', lineHeight: 1.8 }}>
+          <Note>
             同期対局は同じ開局を先後入れ替えて 2 局同時に行い、結果は合計で判定します。
             レートは「ランダム開局」に反映されます。
-          </p>
+          </Note>
         </Section>
 
         {/* 中断対局は login のときに 1 度だけ流れてくる。あとから相手が
@@ -706,11 +706,11 @@ function GgsStandby({ snap, onNav }: { snap: GgsSnapshot; onNav: (id: NavId) => 
             {sb.enabled ? '待機モードを停止' : '待機モードを開始'}
           </Button>
         </div>
-        <p style={{ margin: 0, maxWidth: 'var(--w-text)', fontSize: 'var(--fs-6)', color: 'var(--sub)', lineHeight: 1.8 }}>
+        <Note>
           対局終了 → 間隔待ち → 自動申し込みを繰り返します。切断時は自動で再接続し、
           中断対局も自動再開します。相手を指定しないときは自分からは申し込まず、
           届いた申し込みを受けるだけになります。
-        </p>
+        </Note>
       </Section>
 
       {/* 節の名前と説明文は設計 §7 のまま。実装が書いていた「同じ設定を
@@ -720,9 +720,9 @@ function GgsStandby({ snap, onNav }: { snap: GgsSnapshot; onNav: (id: NavId) => 
           意味 — アプリを閉じても効くこと */}
       <Section title="申し込みの条件 (サーバー側)"
                aside={<Button onClick={() => onNav('ggs-settings')}>条件を変える</Button>}>
-        <p style={{ margin: 0, maxWidth: 'var(--w-text)', fontSize: 'var(--fs-6)', color: 'var(--sub)', lineHeight: 1.8 }}>
+        <Note>
           アプリを閉じてもサーバー側で有効な条件です。待機モードの保険になります。
-        </p>
+        </Note>
         <FormulaRow label="自動で受ける条件" src={form('accept')} />
         <FormulaRow label="自動で断る条件" src={form('decline')} />
       </Section>
@@ -1105,13 +1105,6 @@ export function GgsSettings({ snap }: { snap: GgsSnapshot }) {
 /* 説明文。**折り返しは `--w-text` (720px) で止める (規則 73)。**
  * 全幅の画面で 1 行が 1500px になると、目が行頭に戻れない。
  * 表・一覧・盤は窓いっぱいでよいので、折り返すのは文章だけ。 */
-function Note({ children }: { children: React.ReactNode }) {
-  return <p style={{
-    margin: 0, maxWidth: 'var(--w-text)',
-    fontSize: 'var(--fs-6)', color: 'var(--sub)', lineHeight: 1.8,
-  }}>{children}</p>;
-}
-
 /** 条件式 1 つ。木のまま組ませ、保存するときだけ文字列に戻す */
 function FormulaField({ label, src, onSave }: { label: string; src: string; onSave: (s: string) => void }) {
   const [cond, setCond] = useState<Cond | null>(() => (src ? parseCond(src) : null));

@@ -7,7 +7,7 @@ import { api, ggsApi, jsLog, onApp, type ActivityView } from './api';
 import { useActivity, useEngineSettings, useEngineTurn, useGraph, useHints, useLearnLog, useStartGame, type AskArgs } from './engine';
 import { fmtSecs } from './ggs';
 import { cellsOf, connOf, evalsOf, ggsPlaying, movesOf, navBadges, sqName } from './adapt';
-import { AppFrame, Body, BottomPanel, Dock, Main, Overlay, Section, StatusBar, StatusStat, Toolbar, WindowBar } from './components/layout';
+import { AppFrame, Body, BottomPanel, Divider, Dock, Main, Overlay, Section, StatusBar, StatusStat, Toolbar, WindowBar } from './components/layout';
 import { GgsChat, GgsConsole, GgsScreen } from './GgsScreens';
 import { Confirm, PasteKifu, Settings } from './Dialogs';
 import { Board } from './components/board';
@@ -562,8 +562,7 @@ export function App() {
                          options={[{ value: '定石', label: '定石' },
                                    { value: '学習ログ', label: '学習ログ' }]} />
               {bookTab === '定石' && <>
-                <span style={{ width: 1, height: 20, background: 'var(--border)',
-                               margin: '0 var(--sp-1)', flex: 'none' }} />
+                <Divider />
                 <Button disabled={!book.line.length} onClick={book.back}>戻る</Button>
                 <Button disabled={!book.line.length} onClick={book.reset}>最初へ</Button>
                 <span style={{ marginLeft: 'var(--sp-3)', fontSize: 'var(--fs-6)', color: 'var(--sub)' }}>
@@ -587,8 +586,7 @@ export function App() {
               <Button variant="primary" disabled={graph.busy || !v?.moves.length}
                       onClick={() => void graph.update()}>分析</Button>
               <Button onClick={() => setPaste(true)}>棋譜を読み込む</Button>
-              <span style={{ width: 1, height: 20, background: 'var(--border)',
-                             margin: '0 var(--sp-1)', flex: 'none' }} />
+              <Divider />
               <Segmented value={pov} onChange={setPov}
                          options={[{ value: 'b', label: '黒視点' },
                                    { value: 'w', label: '白視点' }]} />
@@ -610,8 +608,7 @@ export function App() {
                       onClick={() => void g.undo()}>待った</Button>
               {/* 押す操作と、対局の前提を決めるものは別の話なので縦罫で切る。
                   切らないと「新規対局」と「黒」が同じ並びに見える */}
-              <span style={{ width: 1, height: 20, background: 'var(--border)',
-                             margin: '0 var(--sp-1)', flex: 'none' }} />
+              <Divider />
               {/* 担当は狭い窓でも変えられないと困るので aux ではなく children 側。
                   aux は 940px で消える */}
               <span style={{ fontSize: 'var(--fs-6)', color: 'var(--sub)' }}>KUROOBI</span>
@@ -620,8 +617,7 @@ export function App() {
                   消えるので、狭い窓で切り替える道が無くなっていた**
                   (規則 8・58 — 担当と同じ話)。実機で 900px にすると
                   丸ごと消えることを確認した */}
-              <span style={{ width: 1, height: 20, background: 'var(--border)',
-                             margin: '0 var(--sp-1)', flex: 'none' }} />
+              <Divider />
               <Toggle checked={g.autoHint} onChange={g.setAutoHint} label="評価値を表示" />
             </>
           )}

@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useState, type ReactNode } from 'react';
 import { api, emitApp, type KifuFrame, type ThreadsView } from './api';
 import { TATAMI, type Prefs, type Theme } from './prefs';
-import { Modal, Overlay, Section } from './components/layout';
+import { Modal, Note, Overlay, Section } from './components/layout';
 import { Button, Segmented, Select, TextField } from './components/primitives';
 import { Icon } from './components/Icons';
 import { Board } from './components/board';
@@ -383,10 +383,10 @@ export function Settings({ prefs, setPref, ggs, onClose }: {
           ? <GgsSettings snap={ggs} />
           : (
             <Section title="GGS">
-              <p style={{ margin: 0, maxWidth: 'var(--w-text)', fontSize: 'var(--fs-6)', color: 'var(--sub)', lineHeight: 1.8 }}>
+              <Note>
                 GGS の設定を読み込めていません。申し込みの扱いなどは
                 サーバー側に残る設定なので、繋いでから読み書きします。
-              </p>
+              </Note>
             </Section>
           )
         )}
@@ -434,10 +434,10 @@ export function Settings({ prefs, setPref, ggs, onClose }: {
             </Row2>
             {/* 説明は操作の下、節の幅いっぱい (設計の絵と同じ)。欄の列に
                 字下げすると、欄の補足なのか節の説明なのかが曖昧になる */}
-            <p style={{ margin: 0, maxWidth: 'var(--w-text)', fontSize: 'var(--fs-6)', color: 'var(--sub)', lineHeight: 1.8 }}>
+            <Note>
               ローカル対局・検討・学習の取り込みが使う並列数です。自動 = コア数の半分 ({th.auto})。
               GGS 対局用は「GGS」タブにあります (別々に動くので、両方が同時に動くと合計ぶんの CPU を使います)。
-            </p>
+            </Note>
           </Section>
         )}
         </>}

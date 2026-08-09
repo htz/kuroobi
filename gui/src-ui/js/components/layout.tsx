@@ -382,6 +382,26 @@ export function List({ children }: { children: React.ReactNode }) {
   return <div style={{ display: 'flex', flexDirection: 'column' }}>{children}</div>;
 }
 
+/** ツールバーの縦罫。**押す操作と前提を決めるものを切る。**
+ *  切らないと「新規対局」と「黒」が同じ並びに見える。
+ *  `App.tsx` に同じ 4 行が並んでいたのでまとめた。 */
+export function Divider() {
+  return <span style={{
+    width: 1, height: 20, flex: 'none',
+    margin: '0 var(--sp-1)', background: 'var(--border)',
+  }} />;
+}
+
+/** 節や欄に添える説明文。**規則 73 — 読み物は `--w-text` (720px) で
+ *  折り返す。** 表・一覧・盤は窓いっぱいでよいが、文章の 1 行が 1500px に
+ *  なると目が行頭に戻れない。7 か所で同じ体裁を手書きしていた。 */
+export function Note({ children }: { children: React.ReactNode }) {
+  return <p style={{
+    margin: 0, maxWidth: 'var(--w-text)',
+    fontSize: 'var(--fs-6)', color: 'var(--sub)', lineHeight: 1.8,
+  }}>{children}</p>;
+}
+
 /* 表の列見出しの行。**4 か所で同じ体裁を手書きしていた** (棋譜の表 /
  * 学習ログ / プレイヤーの一覧 / 定石の木) — 字も高さも罫も同じなのに
  * 書いた場所ごとに並び順が違い、直すときに見落とす。
