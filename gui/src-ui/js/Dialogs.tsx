@@ -285,89 +285,7 @@ export function Settings({ prefs, setPref, ggs, onClose }: {
 
         {/* 見え方だけの設定。エンジンの動きには関わらないので、
             バックエンドに送らず localStorage に置く */}
-        {tab === 'view' && <>
-        <Section title="テーマ">
-          {/* 設計は見本つきの札 3 枚。**配色は言葉より見たほうが早い** —
-              「OS に従う」がどちらになるかも、札を見れば分かる */}
-          <div style={{ display: 'flex', gap: 10 }}>
-            {THEMES.map(([v, label]) => {
-              const on = prefs.theme === v;
-              return (
-                <button key={v} type="button" className="k-press" onClick={() => setPref('theme', v)}
-                  aria-pressed={on}
-                  style={{
-                    flex: 1, minWidth: 0, display: 'flex', flexDirection: 'column',
-                    gap: 'var(--sp-2)', padding: 'var(--sp-2)', borderRadius: 'var(--r-3)',
-                    background: on ? 'var(--panel)' : 'transparent', fontSize: 'var(--fs-6)',
-                    border: '1px solid ' + (on ? 'var(--accent)' : 'var(--border)'),
-                    color: on ? 'var(--text)' : 'var(--sub)', fontWeight: 400,
-                  }}>
-                  <ThemeSwatch kind={v} />
-                  {label}
-                </button>
-              );
-            })}
-          </div>
-        </Section>
-        <Section title="盤">
-          <Row2 label="畳の色">
-            {/* 設計は 4 色の見本。色の選択に文字を使うと、選んでから盤を
-                見に行く往復が要る */}
-            <span style={{ display: 'flex', gap: 'var(--sp-2)' }}>
-              {TATAMI.map((t, i) => {
-                const on = prefs.tatami === i;
-                return (
-                  <button key={t.label} type="button" className="k-press"
-                          onClick={() => setPref('tatami', i as Prefs['tatami'])}
-                          title={t.label} aria-label={t.label} aria-pressed={on}
-                          style={{
-                            width: 28, height: 28, borderRadius: 'var(--r-2)', padding: 0,
-                            border: 0, background: t.board,
-                            // 選ばれているものは外に 2px の輪。地が濃い色なので
-                            // 枠を内側に取ると色が痩せて見える
-                            boxShadow: on
-                              ? '0 0 0 2px var(--accent), inset 0 0 0 1px var(--border)'
-                              : 'inset 0 0 0 1px var(--border)',
-                          }} />
-                );
-              })}
-            </span>
-          </Row2>
-          <Row2 label="座標">
-            <Segmented value={prefs.coords ? 'on' : 'off'} onChange={(v) => setPref('coords', v === 'on')}
-                       options={[{ value: 'on', label: '出す' }, { value: 'off', label: '出さない' }]} />
-          </Row2>
-          <Row2 label="織り目">
-            <Segmented value={prefs.grain ? 'on' : 'off'} onChange={(v) => setPref('grain', v === 'on')}
-                       options={[{ value: 'on', label: '出す' }, { value: 'off', label: '出さない' }]} />
-          </Row2>
-          <Row2 label="石返し">
-            <Segmented value={String(prefs.flipMs)} onChange={(v) => setPref('flipMs', +v as Prefs['flipMs'])}
-                       options={[{ value: '0', label: '動かさない' },
-                                 { value: '120', label: '速い' },
-                                 { value: '240', label: 'ゆっくり' }]} />
-          </Row2>
-          <Row2 label="盤の向き">
-            <Segmented value={prefs.facing} onChange={(v) => setPref('facing', v)} options={[
-              { value: 'black', label: '黒が下' },
-              { value: 'white', label: '白が下' },
-              { value: 'auto', label: '自分が下' },
-            ]} />
-          </Row2>
-        </Section>
-        <Section title="数値">
-          {/* 設計の 単位 は置かない (石差しか無い)。**視点は「盤の向き」では
-              なく評価値の符号**で、絵も設定では黒固定にして検討の
-              ツールバーで切り替える形にしている (`9677afb` で入れた)。 */}
-          <Row2 label="小数">
-            <Segmented value={String(prefs.decimals)}
-                       onChange={(v) => setPref('decimals', +v as Prefs['decimals'])}
-                       options={[{ value: '0', label: '0' },
-                                 { value: '1', label: '1' },
-                                 { value: '2', label: '2' }]} />
-          </Row2>
-        </Section>
-        </>}
+        {tab === 'view' && <ViewSettings prefs={prefs} setPref={setPref} />}
 
         {/* 設計どおり GGS の設定もこの窓に入れる。左メニューの行き先は
             落とした — 同じ設定へ行く道が 2 つあると、どちらが本物か
@@ -518,5 +436,101 @@ function Row2({ label, children }: { label: string; children: ReactNode }) {
                      fontSize: 'var(--fs-5)', color: 'var(--sub)' }}>{label}</span>
       {children}
     </div>
+  );
+}
+
+/** 設定の「表示」タブ。**見え方だけの設定**で、エンジンの動きには関わらない
+ *  ので、バックエンドに送らず localStorage に置く。
+ *
+ *  `Settings` が 285 行あり、そのうち 83 行がここだった。3 つのタブは
+ *  互いに何も共有していないので、切り出しても呼び出しは 1 行で済む。 */
+function ViewSettings({ prefs, setPref }: {
+  prefs: Prefs;
+  setPref: <K extends keyof Prefs>(k: K, v: Prefs[K]) => void;
+}) {
+  return (
+    <>
+      <Section title="テーマ">
+        {/* 設計は見本つきの札 3 枚。**配色は言葉より見たほうが早い** —
+            「OS に従う」がどちらになるかも、札を見れば分かる */}
+        <div style={{ display: 'flex', gap: 10 }}>
+          {THEMES.map(([v, label]) => {
+            const on = prefs.theme === v;
+            return (
+              <button key={v} type="button" className="k-press" onClick={() => setPref('theme', v)}
+                aria-pressed={on}
+                style={{
+                  flex: 1, minWidth: 0, display: 'flex', flexDirection: 'column',
+                  gap: 'var(--sp-2)', padding: 'var(--sp-2)', borderRadius: 'var(--r-3)',
+                  background: on ? 'var(--panel)' : 'transparent', fontSize: 'var(--fs-6)',
+                  border: '1px solid ' + (on ? 'var(--accent)' : 'var(--border)'),
+                  color: on ? 'var(--text)' : 'var(--sub)', fontWeight: 400,
+                }}>
+                <ThemeSwatch kind={v} />
+                {label}
+              </button>
+            );
+          })}
+        </div>
+      </Section>
+      <Section title="盤">
+        <Row2 label="畳の色">
+          {/* 設計は 4 色の見本。色の選択に文字を使うと、選んでから盤を
+              見に行く往復が要る */}
+          <span style={{ display: 'flex', gap: 'var(--sp-2)' }}>
+            {TATAMI.map((t, i) => {
+              const on = prefs.tatami === i;
+              return (
+                <button key={t.label} type="button" className="k-press"
+                        onClick={() => setPref('tatami', i as Prefs['tatami'])}
+                        title={t.label} aria-label={t.label} aria-pressed={on}
+                        style={{
+                          width: 28, height: 28, borderRadius: 'var(--r-2)', padding: 0,
+                          border: 0, background: t.board,
+                          // 選ばれているものは外に 2px の輪。地が濃い色なので
+                          // 枠を内側に取ると色が痩せて見える
+                          boxShadow: on
+                            ? '0 0 0 2px var(--accent), inset 0 0 0 1px var(--border)'
+                            : 'inset 0 0 0 1px var(--border)',
+                        }} />
+              );
+            })}
+          </span>
+        </Row2>
+        <Row2 label="座標">
+          <Segmented value={prefs.coords ? 'on' : 'off'} onChange={(v) => setPref('coords', v === 'on')}
+                     options={[{ value: 'on', label: '出す' }, { value: 'off', label: '出さない' }]} />
+        </Row2>
+        <Row2 label="織り目">
+          <Segmented value={prefs.grain ? 'on' : 'off'} onChange={(v) => setPref('grain', v === 'on')}
+                     options={[{ value: 'on', label: '出す' }, { value: 'off', label: '出さない' }]} />
+        </Row2>
+        <Row2 label="石返し">
+          <Segmented value={String(prefs.flipMs)} onChange={(v) => setPref('flipMs', +v as Prefs['flipMs'])}
+                     options={[{ value: '0', label: '動かさない' },
+                               { value: '120', label: '速い' },
+                               { value: '240', label: 'ゆっくり' }]} />
+        </Row2>
+        <Row2 label="盤の向き">
+          <Segmented value={prefs.facing} onChange={(v) => setPref('facing', v)} options={[
+            { value: 'black', label: '黒が下' },
+            { value: 'white', label: '白が下' },
+            { value: 'auto', label: '自分が下' },
+          ]} />
+        </Row2>
+      </Section>
+      <Section title="数値">
+        {/* 設計の 単位 は置かない (石差しか無い)。**視点は「盤の向き」では
+            なく評価値の符号**で、絵も設定では黒固定にして検討の
+            ツールバーで切り替える形にしている (`9677afb` で入れた)。 */}
+        <Row2 label="小数">
+          <Segmented value={String(prefs.decimals)}
+                     onChange={(v) => setPref('decimals', +v as Prefs['decimals'])}
+                     options={[{ value: '0', label: '0' },
+                               { value: '1', label: '1' },
+                               { value: '2', label: '2' }]} />
+        </Row2>
+      </Section>
+    </>
   );
 }
