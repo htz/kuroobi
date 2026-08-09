@@ -379,6 +379,9 @@ function GgsLobby({ snap, onNav }: { snap: GgsSnapshot; onNav: (id: NavId) => vo
   const [rated, setRated] = useState(true);
   /** 「情報」を開いている申し込みの id (1 つだけ)。 */
   const [info, setInfo] = useState('');
+  /* 「対局中」の節も進行中の一覧から出す。**届くのはログイン時と 60 秒ごと**
+     なので、開いた時点で聞き直す (プレイヤーの一覧と同じ理由)。 */
+  useEffect(() => { void ggsApi.listMatches().catch(() => {}); }, []);
 
   const games = snap.ongoing.filter((o) => !o.mine);
   const names = snap.users.filter((u) => u.name !== snap.login).map((u) => u.name);
@@ -1290,6 +1293,12 @@ function GgsUsers({ snap, onNav, onKifu }: {
      飛ばさない** — 相手を軽く見たいだけのときに一覧が消えるのは重い。
      `card` が名刺、`sel` が全画面。 */
   const [card, setCard] = useState<string | null>(null);
+  /* 一覧の「状態」列は進行中の対局 (`snap.ongoing`) から出す。**その一覧は
+     ログイン時と 60 秒ごとにしか届かない**ので、繋いだ直後にこの画面を
+     開くと全員の状態が空になる。開いた時点で聞き直す — `tell /os match` は
+     一覧を返すだけで何も動かさない (規則 61 — 直し方は操作のそばに、の
+     裏返しで、聞けば済むものを人に待たせない)。 */
+  useEffect(() => { void ggsApi.listMatches().catch(() => {}); }, []);
   /* 確認用の入口。**繋がずに名刺の枠だけ撮る**ための道
      (`KUROOBI_GGS_AUTOVIEW=users:card`)。中身は空のままでよく、
      見たいのは 340 の器・3 段・足の 2 つの釦 */
