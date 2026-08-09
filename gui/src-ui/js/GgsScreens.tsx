@@ -1385,7 +1385,9 @@ function GgsUsers({ snap, onNav, onKifu }: {
         )}
         {/* 行どうしは詰める (節の余白が行間に入る) */}
         <List>
-        {slice.map((u, i) => (
+        {slice.map((u, i) => {
+        const playing = snap.ongoing.some((o) => o.names.includes(u.name));
+        return (
           <TableRow key={u.name} pad="var(--sp-4)" onClick={() => setCard(u.name)}>
             {mode === 'top' && (
               <span style={{ width: 26, textAlign: 'right', fontSize: 'var(--fs-7)',
@@ -1406,12 +1408,16 @@ function GgsUsers({ snap, onNav, onKifu }: {
                 )}
               </>}
             </span>
-            {/* 状態は色つきの文字 (絵と同じ)。バッジにすると行の高さが動く */}
-            <span style={{ width: 52, textAlign: 'right', fontSize: 'var(--fs-6)', color: 'var(--ok)' }}>
-              {snap.ongoing.some((o) => o.names.includes(u.name)) ? '対局中' : ''}
-            </span>
+            {/* 状態は色つきの文字 (絵と同じ)。バッジにすると行の高さが動く。
+                **対局していない人は「待機」と出す** — 空欄にすると、列ごと
+                効いていないのか誰も対局していないのかが読み手に分からない
+                (設計 §5 も 対局中 / 待機 の 2 値で描いている) */}
+            <span style={{
+              width: 52, textAlign: 'right', fontSize: 'var(--fs-6)',
+              color: playing ? 'var(--ok)' : 'var(--sub)',
+            }}>{playing ? '対局中' : '待機'}</span>
           </TableRow>
-        ))}
+        );})}
         </List>
         {/* ページ送りは一覧の外。詰めた一覧のすぐ下だと行に見える */}
         {rows.length > perPage && (
