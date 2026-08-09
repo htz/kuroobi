@@ -1034,7 +1034,7 @@ export function GgsSettings({ snap }: { snap: GgsSnapshot }) {
                 <TextField numeric align="right" width={80} value={String(maxMove)}
                            onChange={(x) => setMaxMove(Math.max(0, +x || 0))} />
               </Field>
-              <Field label="読み切り用に残す (秒)">
+              <Field label="読切に残す (秒)">
                 <TextField numeric align="right" width={80} value={String(reserve)}
                            onChange={(x) => setReserve(Math.max(0, +x || 0))} />
               </Field>
