@@ -41,6 +41,9 @@ train [OPTIONS] <data-file>...
 | `--limit <n>` | 全件 | ファイルごとに使う件数の上限 |
 | `--max-examples <n>` | 64M | 同時に RAM へ載せる件数 (`0` = 全部) |
 | `--log <path>` | — | エポックごとのステージ別損失を CSV で追記 |
+| `--optimizer <k>` | `sgd` | `sgd` / `adam`。**`--lr` の意味が変わる**ので既定を変えるときは学習率も見直す |
+| `--swa` | — | 重みの移動平均を取る (Stochastic Weight Averaging) |
+| `--swa-start <n>` | 2 | 平均を取り始めるエポック |
 
 ```sh
 train --epochs 20 --lr 0.008 --weights weights/linear.bin train_data/*.data
@@ -94,6 +97,7 @@ selfplay [OPTIONS]
 | `--solve-empties <n>` | 12 | この空きマス数から完全読み (`0` で無効) |
 | `--patterns <set>` | `egaroucid` | `egaroucid` / `edax` |
 | `--save-every <n>` | 500 | 何局ごとに保存するか |
+| `--opponents <a,b,…>` | — | 相手の重みをカンマ区切りで複数。指定すると自己対戦ではなく総当たりになる |
 
 ---
 
@@ -314,6 +318,11 @@ wstats [--patterns egaroucid|edax] <weights.bin>
 solve_obf [--depth <n>] [--weights <path>] <file.obf>...
 ```
 
+| オプション | 既定 | 意味 |
+|---|---|---|
+| `--hash-bits <n>` | 26 | 置換表の大きさ (2^n エントリ) |
+| `--mpc-t <f>` | — | ProbCut の閾値。指定すると確率的枝刈りを入れる |
+
 `--depth` を渡すと完全読みではなく**固定深さの中盤探索**になる (同じ局面で
 探索速度だけを比べたいとき)。
 
@@ -385,6 +394,12 @@ bookgen --scan train_data/wthor --max-ply 24 --min-games 3 --out book.txt
 bookgen --deepen book.txt --depth 26 --solve 30 --band 8 [--limit 500]
 ```
 
+| オプション | 既定 | 意味 |
+|---|---|---|
+| `--book <path>` | — | `--out` の別名 |
+| `--hash-bits <n>` | 19 | 中盤置換表の大きさ (2^n エントリ) |
+| `--max-cands <n>` | 4 | 1 局面から広げる候補手の数。増やすと木が太る |
+
 **定石の値は「実戦では届かない深さ」でなければ意味がない**ので、既定は
 深さ 26 / 読切 30 / 帯 8 (実戦の GGS 設定は 22 / 26 / 6)。途中で止めても
 保存済みの分は残るので、何度でも継ぎ足せる。止めるまで回し続けるループは
@@ -426,12 +441,20 @@ nnue_symmetrize <in.bin> <out.bin> [--val <file>]
 # 対局する
 ggs --play <相手> [--games N]
     [--login 名 --pw パス | --credentials .ggs_credentials]
+    [--type 8] [--time 30:00] [--resume <対局 id>]
     [--depth N] [--solve-empties N] [--selective-band N] [--mpc]
-    [--threads N] [--weights path] [--nnue path]
+    [--solver-hash 22] [--threads N] [--weights path] [--nnue path]
 
 # 着手だけを返すブリッジ (stdin で「<64 面> <X|O>」を受け「= <座標>」を返す)
 ggs --serve
 ```
+
+| オプション | 既定 | 意味 |
+|---|---|---|
+| `--type <t>` | `8` | 対局形式。`s8r16` (同期・ランダム16手) など。GUI の一覧と同じ記法 |
+| `--time <hh:mm>` | `30:00` | 持ち時間 |
+| `--resume <id>` | — | 中断対局を再開する |
+| `--solver-hash <n>` | 22 | 完全読み用の置換表の大きさ (2^n エントリ) |
 
 認証情報を平文で渡さずに済むよう `--credentials` がある。GUI 側は macOS の
 キーチェーンに保存する。
