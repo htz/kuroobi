@@ -1,6 +1,6 @@
 import React from 'react';
 import { BoardDefs } from './board';
-import { Button, Segmented } from './primitives';
+import { Button, Dot, Segmented } from './primitives';
 import { IconButton } from './Icons';
 // アセットを唯一の出所にする (assets.d.ts の方針)。画面用に写した複製と
 // ファイルが食い違う事故を防ぐため、<img src> ではなく中身を読む
@@ -380,6 +380,22 @@ export function Modal({ title, sub, body, actions, width = 'var(--w-modal)', onC
  */
 export function List({ children }: { children: React.ReactNode }) {
   return <div style={{ display: 'flex', flexDirection: 'column' }}>{children}</div>;
+}
+
+/** 機械が動いていることの印。**`Dot` + 一言**で、色は `--accent`。
+ *  「取り込み中」「分析中」「思考中」が同じ形を 4 か所で手書きしていた。
+ *
+ *  規則 34 の「作業が進んでいることの報せはトーストに出さない」と対で、
+ *  **進んでいることは画面の中で静かに示す。** */
+export function Busy({ children }: { children: React.ReactNode }) {
+  return (
+    <span style={{
+      display: 'flex', alignItems: 'center',
+      gap: 'var(--sp-2)', color: 'var(--accent)',
+    }}>
+      <Dot />{children}
+    </span>
+  );
 }
 
 /** ラベルを左、値を右に置く 1 行。**節の中で「名前: 値」を並べる形。**

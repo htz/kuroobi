@@ -7,13 +7,13 @@ import { api, ggsApi, jsLog, onApp, type ActivityView } from './api';
 import { useActivity, useEngineSettings, useEngineTurn, useGraph, useHints, useLearnLog, useStartGame, type AskArgs } from './engine';
 import { fmtSecs } from './ggs';
 import { cellsOf, connOf, evalsOf, ggsPlaying, movesOf, navBadges, sqName } from './adapt';
-import { AppFrame, Body, BottomPanel, Divider, Dock, KeyValue, Main, Overlay, Section, StatusBar, StatusStat, Toolbar, WindowBar } from './components/layout';
+import { AppFrame, Body, BottomPanel, Busy, Divider, Dock, KeyValue, Main, Overlay, Section, StatusBar, StatusStat, Toolbar, WindowBar } from './components/layout';
 import { GgsChat, GgsConsole, GgsScreen } from './GgsScreens';
 import { Confirm, PasteKifu, Settings } from './Dialogs';
 import { Board } from './components/board';
 import { EvalGraph, KifuTable, MoveScrub, ScoreRow, StoneDot } from './components/data';
 import { GgsStatus, JobList, Meter, Nav, NAV_LOCAL, StatusChip, ggsNav, Toasts, type NavId, type Toast } from './components/ggs';
-import { Button, Dot, Progress, Segmented, Toggle } from './components/primitives';
+import { Button, Progress, Segmented, Toggle } from './components/primitives';
 import { Icon } from './components/Icons';
 import { Strength } from './components/strength';
 import { BookDock, BookPane, BookTree, useBookBrowse } from './BookScreen';
@@ -527,13 +527,10 @@ export function App() {
              走っていないときは行ごと出さない (規則 11) */
           aux={isBook
             ? (cpu?.learn
-              ? <span style={{ display: 'flex', alignItems: 'center',
-                               gap: 'var(--sp-2)', color: 'var(--accent)' }}>
-                  <Dot />取り込み中
-                  <span style={{ color: 'var(--sub)', fontVariantNumeric: 'tabular-nums' }}>
+              ? <Busy>取り込み中<span style={{ color: 'var(--sub)', fontVariantNumeric: 'tabular-nums' }}>
                     局面 {cpu.learn[0].toLocaleString()} / {cpu.learn[1].toLocaleString()}
                   </span>
-                </span>
+                </Busy>
               : undefined)
             : isGgs ? (conn === 'online' && ggs.snap
               ? <GgsStatus snap={ggs.snap}
@@ -844,11 +841,7 @@ export function App() {
                 padding: 'var(--sp-3)', display: 'flex', flexDirection: 'column', gap: 'var(--sp-2)',
               }}>
                 <div style={{ display: 'flex', alignItems: 'center', fontSize: 'var(--fs-5)' }}>
-                  <span style={{
-                    display: 'flex', alignItems: 'center', gap: 'var(--sp-2)', color: 'var(--accent)',
-                  }}>
-                    <Dot />取り込み中
-                  </span>
+                  <Busy>取り込み中</Busy>
                   {/* 取り込みは 1 局面ずつ進む。桁が動くと「取り込み中」まで揺れる */}
                   <span style={{
                     marginLeft: 'auto', fontSize: 'var(--fs-6)', color: 'var(--sub)',
@@ -890,20 +883,14 @@ export function App() {
                 走っている印がどこにも出ていなかった。グラフの見出し行の進み具合は
                 帯の中の話で、**機械が動いているか**は下の帯が持つ (規則 11・76) */}
             {graph.busy && (
-              <span style={{ display: 'flex', alignItems: 'center',
-                             gap: 'var(--sp-2)', color: 'var(--accent)' }}>
-                <Dot />分析中
-              </span>
+              <Busy>分析中</Busy>
             )}
             {/* 絵は「● 思考中」と秒を分けて出す。**状態と数値を 1 つの
                 「思考 3.2s」に畳むと、動いているのかどうかが数字の有無でしか
                 分からない** — 分析中と同じ形にして、機械が何をしているかを
                 言葉で言う (規則 11) */}
             {g.thinking && (
-              <span style={{ display: 'flex', alignItems: 'center',
-                             gap: 'var(--sp-2)', color: 'var(--accent)' }}>
-                <Dot />思考中
-              </span>
+              <Busy>思考中</Busy>
             )}
             {g.thinking && <StatusStat value={g.thinkSecs.toFixed(1)} unit="s" />}
             {nodes > 0 && <StatusStat label="nodes" value={fmtNodes(nodes)} />}
