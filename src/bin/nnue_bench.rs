@@ -238,17 +238,34 @@ fn main() {
     // Correctness: incremental accumulator must match from-scratch eval along
     // a short move sequence (both colours).
     {
+        // Compare the incremental accumulator against one rebuilt from
+        // scratch — **both on the i16 path**. The old check compared i16
+        // against the f32 forward, so quantization error and a genuine
+        // incremental bug were indistinguishable: it reported MISMATCH on a
+        // 1.16-disc gap that was pure rounding, and a real regression smaller
+        // than the tolerance would have hidden underneath it.
+        //
+        // Same path both ways means any difference is the update itself, so
+        // the tolerance can be exact.
         let mut acc = nn.accumulator(&b);
         let mut tb = b;
         let mut ok = true;
-        for _ in 0..6 {
+        let mut quant_max = 0.0f32;
+        let mut plies = 0usize;
+        for _ in 0..40 {
             let inc = nn.eval_acc(&acc, &tb);
-            let scratch = nn.eval(&tb);
-            // Tolerance covers int16 quantization of the incremental path.
-            if (inc - scratch).abs() > 1.0 {
-                println!("MISMATCH: incremental(i16) {inc:.4} vs scratch(f32) {scratch:.4} (player {:?})", tb.player());
+            let fresh = nn.eval_acc(&nn.accumulator(&tb), &tb);
+            if inc != fresh {
+                println!(
+                    "MISMATCH: incremental {inc:.6} vs rebuilt {fresh:.6} (ply {plies}, player {:?})",
+                    tb.player()
+                );
                 ok = false;
             }
+            // Reported, not asserted: how far the quantized path sits from the
+            // f32 forward. This is a property of the net, not of the update.
+            quant_max = quant_max.max((inc - nn.eval(&tb)).abs());
+            plies += 1;
             let moves = tb.movable();
             if moves == 0 {
                 break;
@@ -259,9 +276,10 @@ fn main() {
             nn.acc_apply(&mut acc, pos, flipped, mover);
         }
         println!(
-            "incremental correctness: {}",
+            "incremental correctness: {} ({plies} plies)",
             if ok { "OK" } else { "FAILED" }
         );
+        println!("  i16 vs f32 gap: max {quant_max:.3} discs (quantization, not a failure)");
     }
 
     // Linear throughput.
