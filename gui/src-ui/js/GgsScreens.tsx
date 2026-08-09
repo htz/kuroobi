@@ -291,54 +291,7 @@ export function GgsChat({ snap }: { snap: GgsSnapshot }) {
 
   return (
     <div style={{ flex: 1, minHeight: 0, display: 'flex' }}>
-      {/* 会話の一覧は `--w-lobby` (174px)。**手合い一覧の `--w-list` を
-          借りない** — 規則 6 は「役割が違う列は幅を借りない」と決めている。
-          設計 §6 のこの列も 173px で、`--w-lobby` の「GGS 左カラム」という
-          説明はここのことだった (ロビーには 174 幅の列が無い)。
-          相手の名前は溢れたら省略記号で切る。 */}
-      <aside style={{
-        width: 'var(--w-lobby)', flex: 'none', borderRight: '1px solid var(--border)',
-        minHeight: 0, display: 'flex', flexDirection: 'column',
-      }}>
-        {/* 見出しの釦は `chip` (20px)。**列が 174px しかないので、28px の
-            釦だと「会話」と押し合いになる**。絵の帯は 21px だが、それだと
-            釦が罫にめり込む (Section の見出しで一度指摘が出ている) ので
-            帯だけ 32px にした。要 push */}
-        <div style={{
-          flex: 'none', height: 'var(--h-field)', display: 'flex', alignItems: 'center',
-          gap: 'var(--sp-2)', padding: '0 var(--sp-3)', borderBottom: '1px solid var(--border-weak)',
-        }}>
-          <span style={{ fontSize: 'var(--fs-7)', fontWeight: 600, letterSpacing: '.08em', color: 'var(--sub)' }}>会話</span>
-          <span style={{ marginLeft: 'auto' }} />
-          <Button size="chip" onClick={() => setPick(true)}>新しい相手</Button>
-        </div>
-        <div className="k-scroll" style={{ flex: 1, minHeight: 0 }}>
-        {sorted.map(([key, info]) => (
-          <button key={key} type="button" onClick={() => setThread(key)}
-            aria-current={key === cur || undefined}
-            className={'k-row' + (key === cur ? ' k-on' : '')}
-            style={{
-              width: '100%', border: 0, textAlign: 'left', display: 'flex', flexDirection: 'column',
-              gap: 'var(--sp-1)', padding: 'var(--sp-2) var(--sp-3)',
-              borderBottom: '1px solid var(--border-weak)',
-              ...picked(key === cur),
-            }}>
-            <span style={{ display: 'flex', alignItems: 'center', gap: 'var(--sp-2)', fontSize: 'var(--fs-5)' }}>
-              {key === '.chat' ? '全体チャット' : key}
-              {info.last.at > 0 && (
-                <span style={{ marginLeft: 'auto', fontSize: 'var(--fs-7)', color: 'var(--sub)' }}>
-                  {clockOf(info.last.at)}
-                </span>
-              )}
-            </span>
-            <span style={{
-              fontSize: 'var(--fs-6)', color: 'var(--sub)',
-              overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
-            }}>{info.last.text || '—'}</span>
-          </button>
-        ))}
-        </div>
-      </aside>
+      <ChatList sorted={sorted} cur={cur} onThread={setThread} onPick={setPick} />
 
       <div style={{ flex: 1, minWidth: 0, display: 'flex', flexDirection: 'column' }}>
         {/* どの会話を見ているかと、**誰に届くか**を頭に出す。左の一覧の
@@ -1556,5 +1509,70 @@ function UserDetail({ snap, name, tab, onTab, onBack, onNav, onKifu }: {
         )}
       </div>
     </div>
+  );
+}
+
+/** チャットの左 — 会話の一覧。**`--w-lobby` (174px)。手合い一覧の
+ *  `--w-list` を借りない** (規則 6 — 役割が違う列は幅を借りない)。
+ *
+ *  `GgsChat` が 187 行あり、左の一覧・中央の会話・下の入力に割れて
+ *  いたので左を出した。props は 4 つで済む。 */
+function ChatList({ sorted, cur, onThread, onPick }: {
+  sorted: [string, { last: ChatMsg; n: number }][];
+  cur: string;
+  onThread: (t: string) => void;
+  onPick: (v: boolean) => void;
+}) {
+  return (
+    <>
+    {/* 会話の一覧は `--w-lobby` (174px)。**手合い一覧の `--w-list` を
+        借りない** — 規則 6 は「役割が違う列は幅を借りない」と決めている。
+        設計 §6 のこの列も 173px で、`--w-lobby` の「GGS 左カラム」という
+        説明はここのことだった (ロビーには 174 幅の列が無い)。
+        相手の名前は溢れたら省略記号で切る。 */}
+    <aside style={{
+      width: 'var(--w-lobby)', flex: 'none', borderRight: '1px solid var(--border)',
+      minHeight: 0, display: 'flex', flexDirection: 'column',
+    }}>
+      {/* 見出しの釦は `chip` (20px)。**列が 174px しかないので、28px の
+          釦だと「会話」と押し合いになる**。絵の帯は 21px だが、それだと
+          釦が罫にめり込む (Section の見出しで一度指摘が出ている) ので
+          帯だけ 32px にした。要 push */}
+      <div style={{
+        flex: 'none', height: 'var(--h-field)', display: 'flex', alignItems: 'center',
+        gap: 'var(--sp-2)', padding: '0 var(--sp-3)', borderBottom: '1px solid var(--border-weak)',
+      }}>
+        <span style={{ fontSize: 'var(--fs-7)', fontWeight: 600, letterSpacing: '.08em', color: 'var(--sub)' }}>会話</span>
+        <span style={{ marginLeft: 'auto' }} />
+        <Button size="chip" onClick={() => onPick(true)}>新しい相手</Button>
+      </div>
+      <div className="k-scroll" style={{ flex: 1, minHeight: 0 }}>
+      {sorted.map(([key, info]) => (
+        <button key={key} type="button" onClick={() => onThread(key)}
+          aria-current={key === cur || undefined}
+          className={'k-row' + (key === cur ? ' k-on' : '')}
+          style={{
+            width: '100%', border: 0, textAlign: 'left', display: 'flex', flexDirection: 'column',
+            gap: 'var(--sp-1)', padding: 'var(--sp-2) var(--sp-3)',
+            borderBottom: '1px solid var(--border-weak)',
+            ...picked(key === cur),
+          }}>
+          <span style={{ display: 'flex', alignItems: 'center', gap: 'var(--sp-2)', fontSize: 'var(--fs-5)' }}>
+            {key === '.chat' ? '全体チャット' : key}
+            {info.last.at > 0 && (
+              <span style={{ marginLeft: 'auto', fontSize: 'var(--fs-7)', color: 'var(--sub)' }}>
+                {clockOf(info.last.at)}
+              </span>
+            )}
+          </span>
+          <span style={{
+            fontSize: 'var(--fs-6)', color: 'var(--sub)',
+            overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
+          }}>{info.last.text || '—'}</span>
+        </button>
+      ))}
+      </div>
+    </aside>
+    </>
   );
 }
