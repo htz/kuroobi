@@ -568,7 +568,7 @@ export function App() {
             <>
               <Button variant="primary" disabled={graph.busy || !v?.moves.length}
                       onClick={() => void graph.update()}>分析</Button>
-              <Button onClick={() => setPaste(true)}>棋譜を読み込む</Button>
+              <Button title="⌘O" onClick={() => setPaste(true)}>棋譜を読み込む</Button>
               <Divider />
               <Segmented value={pov} onChange={setPov}
                          options={[{ value: 'b', label: '黒視点' },
