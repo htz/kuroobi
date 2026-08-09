@@ -731,6 +731,8 @@ function GgsPlay({ snap, onNav, prefs, onKifu }: {
                   body="ロビーで申し込むか、進行中の対局を観戦できます。"
                   actions={<>
                     <Button variant="primary" onClick={() => onNav('ggs-lobby')}>ロビーへ</Button>
+                    {/* 絵の 2 つ目の釦。対局が無いなら自動で申し込ませる方が早い */}
+                    <Button onClick={() => onNav('ggs-standby')}>待機モードへ</Button>
                     {/* 繋ぎ直した直後などは一覧が古いことがある。聞き直す道を残す */}
                     <Button onClick={() => void ggsApi.listMatches()}>更新</Button>
                   </>} />

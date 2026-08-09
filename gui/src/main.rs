@@ -2012,8 +2012,17 @@ fn ggs_snapshot(app: State<App>) -> Result<ggs::Snapshot, String> {
     /* 画面確認用。**繋がずに GGS の画面を描かせる** — ロビー・プレイヤー・
     対局結果は相手が要るので、一度も実機で確かめられていなかった。
     操作は通らない (見た目を確かめるためだけ)。 */
-    if std::env::var("KUROOBI_GGS_DEMO").is_ok() {
-        return Ok(ggs::demo_snapshot());
+    if let Ok(v) = std::env::var("KUROOBI_GGS_DEMO") {
+        let mut s = ggs::demo_snapshot();
+        /* `=empty` で中身を空にする。**空状態は作り物にも対局が入っている
+        ので出せなかった** — 釦の並びを確かめるのに実機で撮れる道が要る */
+        if v == "empty" {
+            s.matches.clear();
+            s.ongoing.clear();
+            s.offers.clear();
+            s.stored.clear();
+        }
+        return Ok(s);
     }
     let snap = {
         let guard = app.ggs.lock().unwrap();
