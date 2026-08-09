@@ -345,8 +345,16 @@ solve_obf [--depth <n>] [--weights <path>] <file.obf>...
 探索速度だけを比べたいとき)。
 
 ```sh
+# 同梱の局面集
+solve_obf bench/band22.obf
+
+# FFO40-59 (README の数字はこれ)。**同梱していない**ので別途用意する
 solve_obf bench/ffo40-59.obf
 ```
+
+**`bench/` に入っているのは `band22` / `band29` / `band29v2` /
+`calib1030` の 4 つ。** FFO の局面集は容量の都合で置いていないので、
+README の FFO の数字を手元で再現するには自分で用意する必要がある。
 
 ### flipbench
 
