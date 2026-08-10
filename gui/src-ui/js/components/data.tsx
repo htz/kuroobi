@@ -435,12 +435,20 @@ export function PlayerRow({ color, name, rate, dev, meta, clock, active, discs, 
  * 広すぎると svg 全体が縮小され、font-size 10 が 6px になって読めなくなる
  * （トークンの下限は --fs-7 = 10px）。このグラフはドック幅 268 を前提に 300。
  */
-export function RateChart({ points, height = 74, width = 300 }: {
+export function RateChart({ points, height = 74, width = 300, axes, dates }: {
   points: number[];
   height?: number;
   /** viewBox の幅。**器の実寸に合わせる** — 300 のまま広い器へ置くと、
    *  preserveAspectRatio="none" で横に引き伸ばされて線の太さが崩れる。 */
   width?: number;
+  /** 軸を出す (結果画面のような主役の場所)。既定は軸なし。
+   *
+   *  **部品は割らない。** 仕事は同じで読ませる深さだけが違うので、
+   *  `RateChartFull` を別に作ると線の色や空状態の文言を 2 か所で
+   *  直すことになる (規則 50・56。2026-08-10 にデザイン側と決着)。 */
+  axes?: boolean;
+  /** 横軸のラベル。`axes` のときだけ使う。点と同じ数だけ渡す。 */
+  dates?: string[];
 }) {
   // 新規プレイヤーや初対局前は必ず空。点が 1 個だと線が引けない
   if (points.length < 2) {
@@ -450,18 +458,44 @@ export function RateChart({ points, height = 74, width = 300 }: {
       </div>
     );
   }
+  /* 軸を出すときは目盛の字ぶんを空ける。左は 4 桁のレート、下は日付 */
+  const padL = axes ? 34 : 0, padB = axes ? 16 : 0;
   const w = width, pad = 8;
   const min = Math.min(...points), max = Math.max(...points), span = Math.max(1, max - min);
-  const y = (p: number) => height - pad - ((p - min) / span) * (height - pad * 2 - 4);
-  const xy = points.map((p, i) => [(i / (points.length - 1)) * w, y(p)] as const);
+  const y = (p: number) =>
+    height - pad - padB - ((p - min) / span) * (height - pad * 2 - 4 - padB);
+  const x = (i: number) => padL + (i / (points.length - 1)) * (w - padL);
+  const xy = points.map((p, i) => [x(i), y(p)] as const);
   const last = xy[xy.length - 1];
+  /* 縦軸は 25 刻み。範囲に入る目盛だけ出す (レートは 25 で 1 段の感覚) */
+  const ticks: number[] = [];
+  if (axes) {
+    for (let t = Math.ceil(min / 25) * 25; t <= max; t += 25) ticks.push(t);
+  }
   return (
     /* **罫線は引かない (規則 56)。** 「上がっているか下がっているか」が
        分かれば足る場所なので軸は省くと決めてあり、規則は
        「罫線 3 本で軸のつもりをするのが一番悪い」と名指ししている。
        目盛の無い線は「読める気がするのに読めない」だけ。現在値は隣の
        `RateRow` が出す。目盛を出すなら `EvalGraph` と同じ作りにすること。 */
-    <svg viewBox={'0 0 ' + w + ' ' + height} preserveAspectRatio="none" style={{ width: '100%', height, display: 'block' }}>
+    <svg viewBox={'0 0 ' + w + ' ' + height}
+         preserveAspectRatio={axes ? 'xMidYMid meet' : 'none'}
+         style={{ width: '100%', height, display: 'block' }}>
+      {ticks.map((t) => (
+        <g key={t}>
+          <line x1={padL} y1={y(t)} x2={w} y2={y(t)} stroke="var(--border-weak)" strokeWidth={1} />
+          <text x={padL - 6} y={y(t) + 3} textAnchor="end"
+                fontSize={10} fill="var(--sub)">{t}</text>
+        </g>
+      ))}
+      {axes && dates && dates.length === points.length && dates.map((d, i) => (
+        // 端と中央だけ。全部出すと重なって読めない
+        (i === 0 || i === dates.length - 1 || i === (dates.length >> 1)) ? (
+          <text key={i} x={x(i)} y={height - 3}
+                textAnchor={i === 0 ? 'start' : i === dates.length - 1 ? 'end' : 'middle'}
+                fontSize={10} fill="var(--sub)">{d}</text>
+        ) : null
+      ))}
       <polyline points={xy.map(([px, py]) => px.toFixed(1) + ',' + py.toFixed(1)).join(' ')} fill="none" stroke="var(--accent)" strokeWidth={1.6} />
       <circle cx={last[0]} cy={last[1]} r={3} fill="var(--accent)" />
     </svg>

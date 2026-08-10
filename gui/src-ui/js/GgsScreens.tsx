@@ -1154,7 +1154,10 @@ function GgsResults({ snap, onKifu }: {
   const all = [...snap.results, ...fromServer];
   const rows = all.filter((r) => gtype === 'all' || baseType(r.base, r.raw) === gtype);
   // グラフは古い順。results は新しい順に積まれている
-  const rates = rows.filter((r) => r.my_rating != null).map((r) => r.my_rating as number).reverse();
+  const rated = rows.filter((r) => r.my_rating != null).reverse();
+  const rates = rated.map((r) => r.my_rating as number);
+  // 横軸のラベル。端と中央だけ出るので全部渡してよい
+  const rateDates = rated.map((r) => fmtDay(r.at ?? 0));
 
   return (
     <div className="k-scroll" style={{ flex: 1, minHeight: 0, padding: 'var(--sp-4) var(--sp-4) 0' }}>
@@ -1165,8 +1168,10 @@ function GgsResults({ snap, onKifu }: {
                                       ...kinds.map((k) => ({ value: k, label: gtypeLabel(k) }))]} />
                ) : undefined}>
         {/* 本文の幅いっぱいに置くので viewBox もそれに合わせる
-            (300 のままだと横に引き伸ばされて線の太さが崩れる) */}
-        <RateChart points={rates} width={800} height={120} />
+            (300 のままだと横に引き伸ばされて線の太さが崩れる)。
+            **ここは画面の主役なので軸を出す** — 「いつ何点だったか」を
+            読む場所 (2026-08-10 にデザイン側と決着。ドックの中は軸なし) */}
+        <RateChart points={rates} width={800} height={180} axes dates={rateDates} />
       </Section>
 
       <Section title="終わった対局" aside={<span>{rows.length}</span>}>
