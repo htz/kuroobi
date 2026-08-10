@@ -2542,10 +2542,11 @@ fn apply_block(m: &mut MatchState, block: &[String], login: &str) -> (bool, Opti
 /// 残り時間と残り手数から 1 手の探索設定を決める。
 ///
 /// 固定閾値ではなく「残り時間 ÷ 自分の残り手数」で 1 手の予算を出す。
-/// 自分が指す残り手数はおおよそ空きマスの半分 (パスがあるので下振れする)。
-/// 予算に対する深さの対応は実測ベースのざっくりした階段で、
-/// 深い設定ほど 1 手のコストが跳ねるため安全側に倒してある。
-/// 戻り値は (中盤深さ, 完全読み開始の空き, 帯)。
+/// 1 手ぶんの計画を立てる。**中身は `kuroobi::timectl` が持つ** —
+/// 配り方の良し悪しは持ち時間制の対局でしか測れないのに、GUI の中にあると
+/// CLI から呼べず自己対局で比べられなかった。ここは呼ぶだけの橋。
+///
+/// 戻り値は (中盤深さ, 完全読み開始の空き, 帯, 1 手の期限)。
 fn time_budget(
     clock_secs: Option<u64>,
     ext_secs: u64,
@@ -2555,57 +2556,22 @@ fn time_budget(
     max_move_secs: u64,
     reserve_secs: u64,
 ) -> (u32, u8, u8, Option<Duration>) {
-    // 深さで決める: 時間を見ずに設定どおり読む (持ち時間の管理は指す側の責任)
-    if pace == "depth" {
-        return (base.0, base.1, base.2, None);
-    }
-    let Some(secs) = clock_secs else {
-        return (base.0, base.1, base.2, None);
-    };
-    // 本時間が尽きていればロスタイム勝負: 最速で指す
-    if secs == 0 {
-        let d = if ext_secs > 0 { 4 } else { 2 };
-        let solve = if ext_secs > 0 {
-            base.1.min(14)
-        } else {
-            base.1.min(10)
-        };
-        let cap = Duration::from_millis(if ext_secs > 0 { 800 } else { 300 });
-        return (d, solve, 0, Some(cap));
-    }
-    // 自分が指す残り手数 (最低 1)。終盤の完全読みは 1 手で全部読むので、
-    // 読切に入る手前までを予算配分の対象にする。
-    let my_moves = ((empties.saturating_sub(base.1) as f64 / 2.0).ceil() as u64).max(1);
-    // 完全読み 1 回分を確保したうえで中盤に配る
-    let reserve = reserve_secs.min(secs / 2);
-    let pool = secs.saturating_sub(reserve) as f64;
-    let even = pool / my_moves as f64;
-    // 配り方。序盤は手数が多いので、厚くするほど 1 手が長くなる
-    let budget = match pace {
-        // 序盤に厚く: 残り手数が多いうちほど多めに使う
-        "slow" => even * (1.0 + 0.8 / (my_moves as f64).sqrt()),
-        // 終盤に残す: 序盤は控えめにして、手数が減るほど厚くなる
-        "fast" => even * (0.6 + 0.4 / (my_moves as f64).sqrt()),
-        _ => even,
-    };
-    let budget = if max_move_secs > 0 {
-        budget.min(max_move_secs as f64)
-    } else {
-        budget
-    };
-
-    // 深さは上限として渡す (実際にどこまで行けるかは期限が決める)。
-    // 予算が乏しいときだけ、読み切り自体が入らないよう浅くしておく
-    let solve = if secs < 20 {
-        base.1.min(14)
-    } else if secs < 60 {
-        base.1.min(20)
-    } else {
-        base.1
-    };
-    let band = if budget >= 12.0 { base.2 } else { 0 };
-    let cap = Duration::from_secs_f64(budget.max(0.05));
-    (base.0, solve, band, Some(cap))
+    let p = kuroobi::timectl::plan(
+        kuroobi::timectl::Situation {
+            clock_secs,
+            ext_secs,
+            empties,
+            max_move_secs,
+            reserve_secs,
+        },
+        kuroobi::timectl::Levels {
+            depth: base.0,
+            solve: base.1,
+            band: base.2,
+        },
+        kuroobi::timectl::Pace::parse(pace),
+    );
+    (p.depth, p.solve, p.band, p.cap)
 }
 
 /// 自分の手番の局面でエンジンを回して着手を送る。

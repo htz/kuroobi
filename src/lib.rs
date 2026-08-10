@@ -40,6 +40,7 @@ pub mod resources;
 pub mod search;
 pub mod solver;
 pub mod stability;
+pub mod timectl;
 pub mod trainer;
 pub mod zobrist;
 

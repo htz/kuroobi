@@ -24,12 +24,19 @@ use kuroobi::evaluator::Evaluator;
 use kuroobi::pattern::{EDAX_PATTERNS, EGAROUCID_PATTERNS, EGAROUCID_PLUS_PATTERNS};
 use kuroobi::search::Searcher;
 use kuroobi::solver::{EndSolverMode, Solver};
+use kuroobi::timectl::{self, Levels, Pace, Situation};
 use kuroobi::{Board, Color, Position};
+use std::time::Instant;
 
 struct Args {
     /// NNUE モード。両方指定すると Engine (実戦そのもの) で戦わせる。
     nnue_a: Option<PathBuf>,
     nnue_b: Option<PathBuf>,
+    /// **対局全体の持ち時間** (秒)。時間配分の良し悪しはこれでしか測れない。
+    time_secs: u64,
+    /// 時間の配り方。片側だけ変えて配り方の差を測る。
+    pace_a: String,
+    pace_b: String,
     weights_a: PathBuf,
     weights_b: PathBuf,
     games: usize,
@@ -94,6 +101,9 @@ fn parse_args() -> Result<Args, String> {
         solve_empties: 0,
         nnue_a: None,
         nnue_b: None,
+        time_secs: 0,
+        pace_a: "even".into(),
+        pace_b: "even".into(),
         depth_a: None,
         depth_b: None,
         solve_a: None,
@@ -128,6 +138,13 @@ fn parse_args() -> Result<Args, String> {
                     .parse()
                     .map_err(|e| format!("--depth: {e}"))?
             }
+            "--time" => {
+                args.time_secs = value("--time")?
+                    .parse()
+                    .map_err(|e| format!("--time: {e}"))?
+            }
+            "--pace-a" => args.pace_a = value("--pace-a")?.to_string(),
+            "--pace-b" => args.pace_b = value("--pace-b")?.to_string(),
             "--nnue-a" => {
                 args.nnue_a = Some(PathBuf::from(value("--nnue-a")?));
             }
@@ -372,6 +389,91 @@ fn play_nnue(start: &Board, black: &mut Engine, white: &mut Engine) -> i32 {
     }
 }
 
+/// **持ち時間制**で戦わせる。時間配分の良し悪しはこれでしか測れない。
+///
+/// 各手で `timectl::plan` に残り時間と空きを渡して 1 手の期限を決め、
+/// `choose_within` に渡す。**使った時間はその場の実測**なので、配り方が
+/// 下手なら本当に時間切れになる。
+///
+/// 時間切れは**負け**として扱う (GGS と同じ)。石差ではなく勝敗で数える
+/// ので、戻り値は「黒から見た石差」ではなく `Option` — `None` が時間切れ。
+struct Clocks {
+    black: f64,
+    white: f64,
+}
+
+fn play_timed(
+    start: &Board,
+    black: &mut Engine,
+    white: &mut Engine,
+    pace_black: Pace,
+    pace_white: Pace,
+    total: f64,
+) -> (i32, Option<Color>) {
+    let mut board = *start;
+    let mut clocks = Clocks {
+        black: total,
+        white: total,
+    };
+    loop {
+        if board.movable() == 0 {
+            let mut passed = board;
+            passed.pass();
+            if passed.movable() == 0 {
+                let s = board.score();
+                let v = if board.player() == Color::Black {
+                    s
+                } else {
+                    -s
+                };
+                return (v, None);
+            }
+            board = passed;
+            continue;
+        }
+        let is_black = board.player() == Color::Black;
+        let left = if is_black { clocks.black } else { clocks.white };
+        if left <= 0.0 {
+            // 時間切れ。指した側の負け
+            return (0, Some(board.player()));
+        }
+        let pace = if is_black { pace_black } else { pace_white };
+        let eng = if is_black { &mut *black } else { &mut *white };
+        let base = Levels {
+            depth: eng.config().depth,
+            solve: eng.config().solve_empties,
+            band: eng.config().band,
+        };
+        let plan = timectl::plan(
+            Situation {
+                clock_secs: Some(left as u64),
+                ext_secs: 0,
+                empties: board.empty_count(),
+                max_move_secs: 0,
+                reserve_secs: 20,
+            },
+            base,
+            pace,
+        );
+        // 計画した深さ・読切・帯をその手だけ効かせる
+        eng.set_levels(plan.depth, plan.solve, plan.band);
+        let t0 = Instant::now();
+        let pos = match plan.cap {
+            Some(cap) => eng.choose_within(&board, Some(t0 + cap)),
+            None => eng.choose(&board),
+        }
+        .pos
+        .expect("legal move exists");
+        let used = t0.elapsed().as_secs_f64();
+        if is_black {
+            clocks.black -= used;
+        } else {
+            clocks.white -= used;
+        }
+        board.make_move_bits(pos);
+    }
+}
+
 /// NNUE モードの本体。開局・先後入れ替え・1 局ごとの表クリア・統計は
 /// 線形側と同じ形にしてある (結果を並べて読めるように)。
 fn run_nnue(args: &Args, a: &std::path::Path, b: &std::path::Path) -> ExitCode {
@@ -405,38 +507,105 @@ fn run_nnue(args: &Args, a: &std::path::Path, b: &std::path::Path) -> ExitCode {
     eng_a.set_use_book(false);
     eng_b.set_use_book(false);
 
-    println!(
+    let timed = args.time_secs > 0;
+    let (pace_a, pace_b) = (Pace::parse(&args.pace_a), Pace::parse(&args.pace_b));
+    if timed {
+        println!(
+            "arena (持ち時間 {} 秒): A={} ({}) vs B={} ({})  ({} 局, 開局 {} 手ランダム, 定石なし)",
+            args.time_secs,
+            a.display(),
+            pace_a.as_str(),
+            b.display(),
+            pace_b.as_str(),
+            args.games,
+            args.random_plies,
+        );
+    }
+    if !timed {
+        println!(
         "arena (NNUE): A={} (depth {depth_a}, solve {solve_a}) vs B={} (depth {depth_b}, solve {solve_b})  ({} games, {} random plies, book off)",
         a.display(),
         b.display(),
         args.games,
         args.random_plies,
     );
+    }
 
     let mut rng = Rng::new(args.seed);
     let (mut a_wins, mut b_wins, mut draws) = (0usize, 0usize, 0usize);
     let mut a_disc_sum = 0i64;
+    // 時間切れは配り方の失敗そのものなので別に数える
+    let (mut a_timeouts, mut b_timeouts) = (0usize, 0usize);
     for pair in 0..args.games / 2 {
         let opening = random_opening(&mut rng, args.random_plies);
         // 1 局ごとに表を捨てる (CLAUDE.md 4)。温まった表を持ち越すと
         // 色を入れ替えた再戦が鏡にならない
         eng_a.clear_tables();
         eng_b.clear_tables();
-        let s1 = play_nnue(&opening, &mut eng_a, &mut eng_b);
-        a_disc_sum += s1 as i64;
-        match s1.cmp(&0) {
-            std::cmp::Ordering::Greater => a_wins += 1,
-            std::cmp::Ordering::Less => b_wins += 1,
-            std::cmp::Ordering::Equal => draws += 1,
+        // 1 局目: A が黒
+        let (s1, to1) = if timed {
+            play_timed(
+                &opening,
+                &mut eng_a,
+                &mut eng_b,
+                pace_a,
+                pace_b,
+                args.time_secs as f64,
+            )
+        } else {
+            (play_nnue(&opening, &mut eng_a, &mut eng_b), None)
+        };
+        match to1 {
+            // 時間切れは負け。石差は数えない (勝敗だけが意味を持つ)
+            Some(Color::Black) => {
+                b_wins += 1;
+                a_timeouts += 1;
+            }
+            Some(Color::White) => {
+                a_wins += 1;
+                b_timeouts += 1;
+            }
+            None => {
+                a_disc_sum += s1 as i64;
+                match s1.cmp(&0) {
+                    std::cmp::Ordering::Greater => a_wins += 1,
+                    std::cmp::Ordering::Less => b_wins += 1,
+                    std::cmp::Ordering::Equal => draws += 1,
+                }
+            }
         }
         eng_a.clear_tables();
         eng_b.clear_tables();
-        let s2 = play_nnue(&opening, &mut eng_b, &mut eng_a);
-        a_disc_sum -= s2 as i64;
-        match s2.cmp(&0) {
-            std::cmp::Ordering::Greater => b_wins += 1,
-            std::cmp::Ordering::Less => a_wins += 1,
-            std::cmp::Ordering::Equal => draws += 1,
+        // 2 局目: 色を入れ替える
+        let (s2, to2) = if timed {
+            play_timed(
+                &opening,
+                &mut eng_b,
+                &mut eng_a,
+                pace_b,
+                pace_a,
+                args.time_secs as f64,
+            )
+        } else {
+            (play_nnue(&opening, &mut eng_b, &mut eng_a), None)
+        };
+        match to2 {
+            Some(Color::Black) => {
+                a_wins += 1;
+                b_timeouts += 1;
+            }
+            Some(Color::White) => {
+                b_wins += 1;
+                a_timeouts += 1;
+            }
+            None => {
+                a_disc_sum -= s2 as i64;
+                match s2.cmp(&0) {
+                    std::cmp::Ordering::Greater => b_wins += 1,
+                    std::cmp::Ordering::Less => a_wins += 1,
+                    std::cmp::Ordering::Equal => draws += 1,
+                }
+            }
         }
         // 長く回るので途中経過を出す (400 局で数時間規模)
         if (pair + 1) % 10 == 0 {
@@ -444,6 +613,9 @@ fn run_nnue(args: &Args, a: &std::path::Path, b: &std::path::Path) -> ExitCode {
             let p = (a_wins as f64 + draws as f64 / 2.0) / n;
             println!("  [{}/{}] A {:.1}%", n as usize, args.games, p * 100.0);
         }
+    }
+    if timed {
+        println!("時間切れ: A {a_timeouts} / B {b_timeouts}");
     }
     report(a_wins, b_wins, draws, a_disc_sum);
     ExitCode::SUCCESS
