@@ -71,7 +71,7 @@ impl Position {
     pub fn from_kifu(s: &str) -> Result<Position, String> {
         let bytes = s.as_bytes();
         if bytes.len() != 2 {
-            return Err(format!("invalid KIFU: {}", s));
+            return Err(format!("棋譜として読み取れません: {s}"));
         }
         let file = bytes[0].wrapping_sub(b'a');
         let rank = bytes[1].wrapping_sub(b'1');

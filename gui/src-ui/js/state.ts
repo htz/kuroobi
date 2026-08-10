@@ -22,6 +22,16 @@ const INTERNAL = new Set([
   'InvalidPosition', 'NotPlayable', 'Occupied', 'NoMoves', 'GameOver',
 ]);
 
+/** 数を含むので完全一致では拾えない符丁。**前方一致で見る。**
+ *
+ *  `move index 5 out of range` のように可変の値が混ざる。どちらも盤の
+ *  内部状態のずれで、**読み手に用がない** — 棋譜の形式の誤りのように
+ *  「直し方が要る」ものとは違う (そちらは日本語にしてある)。 */
+const INTERNAL_PREFIX = [
+  'move index ',
+  'hash does not match',
+];
+
 /** 報せの種類。
  *  `bad` = 失敗した。`gold` = 失敗ではないが、押したのに進まない理由。
  *  この 2 つしか作らない — 「うまくいった」は押した本人が見れば分かるので出さない。 */
@@ -139,7 +149,10 @@ export function useGame() {
   const say = useCallback((s: string, tone: ToastTone = 'bad') => {
     // 空文字は「前の伝言を消す」の名残。浮かせる形では自分で消えるので用がない
     if (!s) return;
-    if (INTERNAL.has(s)) { jsLog('内部の符丁 (画面には出さない): ' + s); return; }
+    if (INTERNAL.has(s) || INTERNAL_PREFIX.some((p) => s.startsWith(p))) {
+      jsLog('内部の符丁 (画面には出さない): ' + s);
+      return;
+    }
     const id = ++toastId.current;
     // 同じ文が続けて出ることがある (局面を動かすたびに同じ失敗をする、など)。
     // 積み上げずに出し直す
