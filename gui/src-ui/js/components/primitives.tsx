@@ -214,6 +214,12 @@ export function TextField({ value, onChange, mono, invalid, placeholder, readOnl
            **縦並びの中に置くと height が潰れる** (32px の欄が 20px になって
            いた)。伸ばしたいのは横だけなので basis は auto のままにする。 */
         flexGrow: width ? 0 : 1, flexShrink: 1, flexBasis: 'auto', width, minWidth: 0,
+        /* **交差軸で伸ばされないようにする。** 親が `align-items: stretch`
+           を持つと (待機モードの `Field` がそう)、`height` を書いていても
+           行の高さいっぱいまで引き伸ばされる。実際に「最大対局数」と
+           「対局の間隔」が 3 倍の高さになっていた — 同じ行の「レート戦」に
+           説明文が付いて行が高くなったのが引き金。 */
+        alignSelf: 'flex-start',
         height: 'var(--h-field)', padding: '0 var(--sp-3)', borderRadius: 'var(--r-3)',
         background: 'var(--bg)', border: '1px solid ' + (invalid ? 'var(--bad)' : 'var(--border)'),
         fontFamily: mono ? 'var(--ff-mono)' : 'var(--ff)', fontSize: 'var(--fs-5)',
