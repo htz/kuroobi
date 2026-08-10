@@ -46,11 +46,19 @@ fn choose_and_analyze_on_opening() {
 
     let hints = engine.analyze(&board, 6);
     assert_eq!(hints.len(), 4, "初期局面の合法手は 4");
-    // 対称局面なので 4 手の評価は一致するはず (探索順の揺れは許容して幅で見る)
+    /* 初期局面は盤自身が対称なので、**4 手は同値でなければならない**。
+    基準は `< 2.0` と緩かったが、それでは非対称な重み (実際に
+    `-1.3 / -1.9 / -2.1 / -2.1` = 幅 0.8 だった) を通してしまう。
+    出荷する重みを対称化済みに替えた 2026-08-10 から幅は 0 なので、
+    **完全一致で見る** (探索は決定的なので揺れない)。 */
     let vals: Vec<f32> = hints.iter().map(|(_, e)| e.value).collect();
     let spread = vals.iter().cloned().fold(f32::MIN, f32::max)
         - vals.iter().cloned().fold(f32::MAX, f32::min);
-    assert!(spread < 2.0, "対称 4 手の評価差が大きすぎる: {vals:?}");
+    println!("初期局面の 4 手: {vals:?}  幅 {spread:.4}");
+    assert!(
+        spread <= 1e-3,
+        "対称な初期局面で 4 手の値がばらついている: {vals:?}"
+    );
 }
 
 /// 画面の評価値表示 (反復深化) が読み切りに入る条件は**深さだけ**で決まる。
