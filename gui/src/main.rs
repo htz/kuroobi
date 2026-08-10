@@ -519,6 +519,12 @@ pub struct LearnEntry {
     /// 丸ごと読めなくなる。
     #[serde(default)]
     pub opponent: String,
+    /// 自分がどちらの色だったか (`"b"` / `"w"`)。**これが無いと石数だけでは
+    /// 勝敗を判定できない** — 学習ログの「負けた対局」の絞り込みが作れない
+    /// (依頼 5-9)。古い控えには無いので既定は空で、そのときは絞り込みから
+    /// 外れる。
+    #[serde(default)]
+    pub my_color: String,
 }
 
 /// 定石を 1 手ぶん書き換えた記録。
@@ -683,7 +689,7 @@ fn learn_log_remove(at: u64, kifu: &str) {
 /// 対象にしない。取り込みは裏で 1 探索ずつ進み、エンジンのロックを
 /// 探索ごとに手放すので、途中で思考を始めても 1 探索ぶんしか待たない。
 #[tauri::command]
-fn learn_game(app: State<App>) -> Result<(), String> {
+fn learn_game(app: State<App>, my_color: String) -> Result<(), String> {
     if !*app.learn_on.lock().unwrap() {
         return Ok(());
     }
@@ -704,6 +710,10 @@ fn learn_game(app: State<App>) -> Result<(), String> {
     let stop = app.stop.clone();
     let act = app.activity.clone();
     let ggs_snap = ggs_snap_arc(&app);
+    /* **人がどちらの色だったかは画面しか知らない** (KUROOBI の担当は
+    黒 / 白 / 両方 / なし から選べる)。控えに残さないと、あとから
+    石数だけを見ても勝敗が決まらない (依頼 5-9)。 */
+    let my_color = my_color;
     tauri::async_runtime::spawn_blocking(move || {
         // エンジンの用意もここで行う (同期コマンド内でロックを待つと
         // メインスレッドごと固まるため)
@@ -777,6 +787,7 @@ fn learn_game(app: State<App>) -> Result<(), String> {
             start: String::new(),
             changes: changes.iter().map(LearnChange::of).collect(),
             opponent: String::new(),
+            my_color: my_color.clone(),
         });
         let mut a = act.lock().unwrap();
         a.learn = None;

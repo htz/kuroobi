@@ -315,6 +315,10 @@ export interface LearnEntry {
   start: string;
   /** GGS の対局なら相手の名前。ローカル対局は空。 */
   opponent: string;
+  /** 自分がどちらの色だったか (`'b'` / `'w'`)。**石数だけでは勝敗が
+   *  決まらない**ので控えに残す。古い控えと、担当が「両方 / なし」の
+   *  対局は空。 */
+  my_color?: string;
   /** 定石を書き換えた明細。古い控えには無い。 */
   changes: LearnChange[];
 }

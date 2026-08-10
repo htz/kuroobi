@@ -3,7 +3,7 @@ import { api, type KifuFrame } from './api';
 import type { LearnChange, LearnEntry } from './types';
 import { Board } from './components/board';
 import { Empty, KeyValue, List, Section, TableHead, TableRow } from './components/layout';
-import { Button, Select } from './components/primitives';
+import { Button, Segmented, Select } from './components/primitives';
 
 /* 定石に取り込んだ対局の控え。設計 §8 の三面。
  *
@@ -47,11 +47,15 @@ export function LearnLog({ items: all, onOpen, onUndo, onBook }: {
 }) {
   const [sel, setSel] = useState('');
   /* 設計 §8 の帯にある期間の絞り込み。**`▾` の中身は絵に書かれていない**
-     ので、こちらで すべて / 7 / 30 / 90 日 にした (依頼 14-2)。既定は絵の
-     とおり 30 日。**古い控えは既定で隠れる**ので、隠れているときだけ
-     その旨を一覧の下に出す — 「取り込んだはずの対局が無い」と読まれると
-     取り込み自体を疑わせてしまう */
-  const [days, setDays] = useState('30');
+     ので、こちらで すべて / 7 / 30 / 90 日 にした (依頼 14-2)。
+     **既定は「すべて」。** 絵は「直近 30 日」を描いているが、それは選択中の
+     例であって既定ではない、とデザイン側が答えた (2026-08-10) —
+     「取り込んだはずの対局が無い」と読まれるほうが、一覧が長いことより
+     高くつく。隠れているときは一覧の下にその旨を出す */
+  const [days, setDays] = useState('0');
+  /* 勝敗の絞り込み (依頼 5-9 / 14-1)。**自分の色が分からない控えは外す** —
+     古い控えと、担当が「両方 / なし」の対局には色が無い。 */
+  const [only, setOnly] = useState<'all' | 'lost'>('all');
   /* **`Date.now()` は描く途中で呼べない** (再描画のたびに値が動くので
      React が止める)。`useState` の遅延初期化なら 1 回しか走らないので
      ここで取る。effect で入れ直すのも駄目 — 同期の setState は
@@ -59,8 +63,13 @@ export function LearnLog({ items: all, onOpen, onUndo, onBook }: {
      画面を開きっぱなしにすると基準が古びるが、日をまたぐ間ずっと
      学習ログを開いたままにする使い方は無いので、ここでは困らない */
   const [now] = useState(() => Date.now());
-  const items = days === '0' ? all
+  const lostOf = (e: LearnEntry) =>
+    e.my_color === 'b' ? e.black < e.white
+      : e.my_color === 'w' ? e.white < e.black
+        : false;
+  const byDays = days === '0' ? all
     : all.filter((e) => e.at * 1000 >= now - Number(days) * 86400_000);
+  const items = only === 'lost' ? byDays.filter(lostOf) : byDays;
   const hidden = all.length - items.length;
 
   const cur = items.find((e) => keyOf(e) === sel) ?? items[0];
@@ -114,6 +123,10 @@ export function LearnLog({ items: all, onOpen, onUndo, onBook }: {
           height: 'var(--h-field)', flex: 'none', display: 'flex', alignItems: 'center',
           padding: '0 var(--sp-3)', borderBottom: '1px solid var(--border-weak)',
         }}>
+          <Segmented value={only} onChange={(v) => setOnly(v as 'all' | 'lost')}
+                     options={[{ value: 'all', label: 'すべて' },
+                               { value: 'lost', label: '負けた対局' }]} />
+          <span style={{ width: 'var(--sp-2)' }} />
           <Select size="ctrl" value={days} onChange={setDays} options={[
             ['0', 'すべて'], ['7', '直近 7 日'], ['30', '直近 30 日'], ['90', '直近 90 日'],
           ]} />

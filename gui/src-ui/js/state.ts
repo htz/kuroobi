@@ -220,8 +220,11 @@ export function useGame() {
     if (!v.over || mode !== 'vs' || !learnOn) return;
     // 取り込みの進み具合は左メニュー下の「学習 n/m」に出るので、
     // ここで言葉にはしない
-    api.learnGame().catch(() => {});
-  }, [mode, learnOn]);
+    /* KUROOBI の担当 (`side`) の裏が人の色。両方 / なし のときは決められない
+       ので空で送る (学習ログの絞り込みから外れる) */
+    const mine = side === 'black' ? 'w' : side === 'white' ? 'b' : '';
+    api.learnGame(mine).catch(() => {});
+  }, [mode, learnOn, side]);
 
   // ---- 人が打つ ----
   const play = useCallback(async (sq: number) => {

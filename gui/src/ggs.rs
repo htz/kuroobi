@@ -2966,6 +2966,12 @@ fn handle_match_end(
                     // 明細は取り込みが終わってから入る
                     changes: Vec::new(),
                     opponent: lm.opp_name.clone(),
+                    // GGS は自分の色を知っている ('*' が黒 / 'O' が白)
+                    my_color: match lm.my_color {
+                        Some('*') => "b".into(),
+                        Some('O') => "w".into(),
+                        _ => String::new(),
+                    },
                 };
                 ctx.learn_jobs.push_back((id.clone(), job, entry));
             }

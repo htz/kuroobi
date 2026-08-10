@@ -39,7 +39,9 @@ export const api = {
   goto: (n: number) => call<GameView>('goto', { n }),
   setUseBook: (on: boolean) => call<void>('set_use_book', { on }),
   setLearn: (on: boolean) => call<void>('set_learn', { on }),
-  learnGame: () => call<void>('learn_game'),
+  /** `myColor` は**人**がどちらだったか (`'b'` / `'w'`)。両方や観るだけの
+   *  ときは空。控えに残さないと、あとで石数だけ見ても勝敗が決まらない。 */
+  learnGame: (myColor: string) => call<void>('learn_game', { myColor }),
   /** 取り込んだ対局の控え (新しい順)。 */
   learnLog: () => call<LearnEntry[]>('learn_log', {}),
   /** 取り込みを 1 局ぶん取り消す。戻せた手の数を返す。 */
