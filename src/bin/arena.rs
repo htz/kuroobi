@@ -19,6 +19,7 @@
 use std::path::PathBuf;
 use std::process::ExitCode;
 
+use kuroobi::engine::{Engine, EngineConfig as EngCfg};
 use kuroobi::evaluator::Evaluator;
 use kuroobi::pattern::{EDAX_PATTERNS, EGAROUCID_PATTERNS, EGAROUCID_PLUS_PATTERNS};
 use kuroobi::search::Searcher;
@@ -26,6 +27,9 @@ use kuroobi::solver::{EndSolverMode, Solver};
 use kuroobi::{Board, Color, Position};
 
 struct Args {
+    /// NNUE モード。両方指定すると Engine (実戦そのもの) で戦わせる。
+    nnue_a: Option<PathBuf>,
+    nnue_b: Option<PathBuf>,
     weights_a: PathBuf,
     weights_b: PathBuf,
     games: usize,
@@ -88,6 +92,8 @@ fn parse_args() -> Result<Args, String> {
         random_plies: 6,
         depth: 1,
         solve_empties: 0,
+        nnue_a: None,
+        nnue_b: None,
         depth_a: None,
         depth_b: None,
         solve_a: None,
@@ -121,6 +127,12 @@ fn parse_args() -> Result<Args, String> {
                 args.depth = value("--depth")?
                     .parse()
                     .map_err(|e| format!("--depth: {e}"))?
+            }
+            "--nnue-a" => {
+                args.nnue_a = Some(PathBuf::from(value("--nnue-a")?));
+            }
+            "--nnue-b" => {
+                args.nnue_b = Some(PathBuf::from(value("--nnue-b")?));
             }
             "--solve-empties" => {
                 args.solve_empties = value("--solve-empties")?
@@ -175,8 +187,15 @@ fn parse_args() -> Result<Args, String> {
         }
     }
 
-    args.weights_a = weights_a.ok_or(format!("--a is required\n\n{USAGE}"))?;
-    args.weights_b = weights_b.ok_or(format!("--b is required\n\n{USAGE}"))?;
+    // NNUE モードでは線形の重みは終盤の並べ替えにしか使わないので、
+    // 1 本を既定で共有する (両者で同じものを使うため差の原因にならない)
+    if args.nnue_a.is_some() && args.nnue_b.is_some() {
+        args.weights_a = weights_a.unwrap_or_else(|| PathBuf::from("weights/linear.bin"));
+        args.weights_b = weights_b.unwrap_or_else(|| args.weights_a.clone());
+    } else {
+        args.weights_a = weights_a.ok_or(format!("--a is required\n\n{USAGE}"))?;
+        args.weights_b = weights_b.ok_or(format!("--b is required\n\n{USAGE}"))?;
+    }
     args.games = args.games.div_ceil(2) * 2;
     Ok(args)
 }
@@ -321,6 +340,138 @@ fn play(
     }
 }
 
+/// NNUE 同士を **実戦そのもの** (`Engine::choose`) で戦わせる。
+///
+/// `Searcher` を使う線形の経路とは別に持つ。線形の `Evaluator` と NNUE は
+/// 探索の入口から違い (`NnueSearch` / 帯 / MPC)、`Engine` を通さないと
+/// 「実戦条件で測る」(CLAUDE.md 3) を満たせないため。
+///
+/// **定石は切る。** 両者が同じ定石を引くと序盤が完全に同一になり、
+/// 評価関数の差が出るのは定石を外れた後だけになる。
+fn play_nnue(start: &Board, black: &mut Engine, white: &mut Engine) -> i32 {
+    let mut board = *start;
+    loop {
+        if board.movable() == 0 {
+            let mut passed = board;
+            passed.pass();
+            if passed.movable() == 0 {
+                let s = board.score();
+                return if board.player() == Color::Black {
+                    s
+                } else {
+                    -s
+                };
+            }
+            board = passed;
+            continue;
+        }
+        let is_black = board.player() == Color::Black;
+        let eng = if is_black { &mut *black } else { &mut *white };
+        let pos = eng.choose(&board).pos.expect("legal move exists");
+        board.make_move_bits(pos);
+    }
+}
+
+/// NNUE モードの本体。開局・先後入れ替え・1 局ごとの表クリア・統計は
+/// 線形側と同じ形にしてある (結果を並べて読めるように)。
+fn run_nnue(args: &Args, a: &std::path::Path, b: &std::path::Path) -> ExitCode {
+    let mk = |nnue: &std::path::Path, depth: u32, solve: u8| -> Result<Engine, String> {
+        Engine::new(EngCfg {
+            depth,
+            solve_empties: solve,
+            band: 0,
+            threads: 1,
+            mpc: true,
+            midgame_hash_bits: 22,
+            solver_hash_bits: 20,
+            weights: args.weights_a.clone(),
+            nnue: nnue.to_path_buf(),
+            book: std::path::PathBuf::from("book.txt"),
+            use_book: false,
+            book_tolerance: 0.0,
+        })
+    };
+    let depth_a = u32::from(args.depth_a.unwrap_or(args.depth));
+    let depth_b = u32::from(args.depth_b.unwrap_or(args.depth));
+    let solve_a = args.solve_a.unwrap_or(args.solve_empties);
+    let solve_b = args.solve_b.unwrap_or(args.solve_empties);
+    let (mut eng_a, mut eng_b) = match (mk(a, depth_a, solve_a), mk(b, depth_b, solve_b)) {
+        (Ok(x), Ok(y)) => (x, y),
+        (Err(e), _) | (_, Err(e)) => {
+            eprintln!("{e}");
+            return ExitCode::FAILURE;
+        }
+    };
+    eng_a.set_use_book(false);
+    eng_b.set_use_book(false);
+
+    println!(
+        "arena (NNUE): A={} (depth {depth_a}, solve {solve_a}) vs B={} (depth {depth_b}, solve {solve_b})  ({} games, {} random plies, book off)",
+        a.display(),
+        b.display(),
+        args.games,
+        args.random_plies,
+    );
+
+    let mut rng = Rng::new(args.seed);
+    let (mut a_wins, mut b_wins, mut draws) = (0usize, 0usize, 0usize);
+    let mut a_disc_sum = 0i64;
+    for pair in 0..args.games / 2 {
+        let opening = random_opening(&mut rng, args.random_plies);
+        // 1 局ごとに表を捨てる (CLAUDE.md 4)。温まった表を持ち越すと
+        // 色を入れ替えた再戦が鏡にならない
+        eng_a.clear_tables();
+        eng_b.clear_tables();
+        let s1 = play_nnue(&opening, &mut eng_a, &mut eng_b);
+        a_disc_sum += s1 as i64;
+        match s1.cmp(&0) {
+            std::cmp::Ordering::Greater => a_wins += 1,
+            std::cmp::Ordering::Less => b_wins += 1,
+            std::cmp::Ordering::Equal => draws += 1,
+        }
+        eng_a.clear_tables();
+        eng_b.clear_tables();
+        let s2 = play_nnue(&opening, &mut eng_b, &mut eng_a);
+        a_disc_sum -= s2 as i64;
+        match s2.cmp(&0) {
+            std::cmp::Ordering::Greater => b_wins += 1,
+            std::cmp::Ordering::Less => a_wins += 1,
+            std::cmp::Ordering::Equal => draws += 1,
+        }
+        // 長く回るので途中経過を出す (400 局で数時間規模)
+        if (pair + 1) % 10 == 0 {
+            let n = (a_wins + b_wins + draws) as f64;
+            let p = (a_wins as f64 + draws as f64 / 2.0) / n;
+            println!("  [{}/{}] A {:.1}%", n as usize, args.games, p * 100.0);
+        }
+    }
+    report(a_wins, b_wins, draws, a_disc_sum);
+    ExitCode::SUCCESS
+}
+
+/// 勝率と 95% 信頼区間。引き分けは 0.5 勝で数える。
+fn report(a_wins: usize, b_wins: usize, draws: usize, a_disc_sum: i64) {
+    let n = (a_wins + b_wins + draws) as f64;
+    let p = (a_wins as f64 + draws as f64 / 2.0) / n;
+    let se = (p * (1.0 - p) / n).sqrt();
+    let (lo, hi) = (p - 1.96 * se, p + 1.96 * se);
+    println!("A wins {a_wins}, B wins {b_wins}, draws {draws}");
+    println!(
+        "A score {:.1}%  (95% CI {:.1}%..{:.1}%)  mean disc diff {:+.2}",
+        p * 100.0,
+        lo * 100.0,
+        hi * 100.0,
+        a_disc_sum as f64 / n
+    );
+    if lo > 0.5 {
+        println!("=> A is significantly stronger");
+    } else if hi < 0.5 {
+        println!("=> B is significantly stronger");
+    } else {
+        println!("=> no significant difference");
+    }
+}
+
 fn main() -> ExitCode {
     let args = match parse_args() {
         Ok(a) => a,
@@ -329,6 +480,16 @@ fn main() -> ExitCode {
             return ExitCode::FAILURE;
         }
     };
+
+    // 両方そろったときだけ NNUE モード (片方だけの指定は取り違えのもと)
+    match (&args.nnue_a, &args.nnue_b) {
+        (Some(a), Some(b)) => return run_nnue(&args, &a.clone(), &b.clone()),
+        (Some(_), None) | (None, Some(_)) => {
+            eprintln!("--nnue-a と --nnue-b は両方まとめて指定してください");
+            return ExitCode::FAILURE;
+        }
+        (None, None) => {}
+    }
 
     let lib = |name: &str| match name {
         "edax" => EDAX_PATTERNS,
@@ -433,27 +594,6 @@ fn main() -> ExitCode {
         }
     }
 
-    let n = (a_wins + b_wins + draws) as f64;
-    // Win rate counting draws as half
-    let p = (a_wins as f64 + draws as f64 / 2.0) / n;
-    // 95% CI via normal approximation
-    let se = (p * (1.0 - p) / n).sqrt();
-    let (lo, hi) = (p - 1.96 * se, p + 1.96 * se);
-
-    println!("A wins {a_wins}, B wins {b_wins}, draws {draws}");
-    println!(
-        "A score {:.1}%  (95% CI {:.1}%..{:.1}%)  mean disc diff {:+.2}",
-        p * 100.0,
-        lo * 100.0,
-        hi * 100.0,
-        a_disc_sum as f64 / n
-    );
-    if lo > 0.5 {
-        println!("=> A is significantly stronger");
-    } else if hi < 0.5 {
-        println!("=> B is significantly stronger");
-    } else {
-        println!("=> no significant difference");
-    }
+    report(a_wins, b_wins, draws, a_disc_sum);
     ExitCode::SUCCESS
 }

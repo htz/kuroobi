@@ -125,6 +125,8 @@ arena --a <weights-A> --b <weights-B> [OPTIONS]
 | `--seed <n>` | 7 | 乱数の種 |
 | `--mpc-a` / `--mpc-b` | — | 片側だけ確率的枝刈り (ProbCut) を入れる |
 | `--mpc-t <f>` | 1.1 | ProbCut の閾値 (σ の倍数)。小さいほどよく刈る |
+| `--nnue-a <path>` | — | **NNUE モード**: A の重み (`--nnue-b` と対で指定) |
+| `--nnue-b <path>` | — | **NNUE モード**: B の重み |
 
 **片側だけを指定できるのが要点。**深さ・読切・パターンを非対称にすると、
 どの条件差が効いたのかを分けて測れる。
@@ -133,6 +135,18 @@ arena --a <weights-A> --b <weights-B> [OPTIONS]
 # 実戦条件で 400 局
 arena --a weights/linear.bin --b weights/exp/new.bin \
       --games 400 --depth 8 --solve-empties 12
+```
+
+**NNUE 同士は `--nnue-a` / `--nnue-b`。** 線形の `--a` / `--b` とは別経路で、
+`Engine`(実戦そのもの) を 2 つ立てて戦わせる — NNUE は探索の入口から違う
+(`NnueSearch` / 帯 / MPC) ので、`Searcher` を使う線形の経路では実戦条件に
+ならない。**定石は切る** (両者が同じ定石を引くと序盤が完全に同一になり、
+評価関数の差が出るのは定石を外れた後だけになる)。線形の重みは終盤の
+並べ替えにしか使わないので、指定しなければ 1 本を共有する。
+
+```sh
+arena --nnue-a weights/nnue-h16.bin --nnue-b weights/archive/nnue-h16-sym.bin \
+      --games 400 --depth 16 --solve-empties 20
 ```
 
 ### nnue_arena
