@@ -282,6 +282,10 @@ export function App() {
 
   /* 画面確認用 (KUROOBI_GGS_AUTOVIEW=players のように指定する)。
    * GGS の画面は開くまで描かれないので、撮るには行き先を指定する経路が要る。 */
+  /* 環境変数の上書き。起動時に 1 度だけ聞く (途中で変わらない) */
+  const [envOverrides, setEnvOverrides] = useState<[string, string][]>([]);
+  useEffect(() => { void api.envOverrides().then(setEnvOverrides).catch(() => {}); }, []);
+
   useEffect(() => {
     void ggsApi.autoview().then((v) => {
       // "users:card" のように画面の中の状態まで指定できる。行き先は前半だけ
@@ -768,6 +772,23 @@ export function App() {
       {/* 短くて桁の決まっているものだけを置く。長さの読めない報せはトーストへ */}
         <StatusBar
           left={<>
+            {/* **環境変数で起動した印。** 付けると素の起動と違うふるまいを
+                する (レート戦が禁じられる / 繋ぐ先が作り物 / 控えの置き場所が
+                違う など)。**それを知らずに画面を触ると、出ている絵が本物なのか
+                確認用なのか区別が付かない。** 常に見える下の帯のいちばん左に
+                置き、名前と値は乗せたときに出す */}
+            {envOverrides.length > 0 && (
+              <span title={envOverrides.map(([k, v]) => `${k}=${v}`).join('\n')}
+                    style={{
+                      height: 'var(--h-chip)', padding: '0 var(--sp-2)',
+                      borderRadius: 'var(--r-1)', display: 'flex', alignItems: 'center',
+                      gap: 'var(--sp-1)', fontSize: 'var(--fs-7)', fontWeight: 600,
+                      background: 'color-mix(in srgb, var(--gold) 18%, transparent)',
+                      color: 'var(--gold)',
+                    }}>
+                確認用の起動 {envOverrides.length}
+              </span>
+            )}
             {/* 分析は g.thinking を立てない (api.evalAt を局面ごとに呼ぶ) ので、
                 走っている印がどこにも出ていなかった。グラフの見出し行の進み具合は
                 帯の中の話で、**機械が動いているか**は下の帯が持つ (規則 11・76) */}

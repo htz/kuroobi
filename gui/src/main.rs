@@ -2071,6 +2071,41 @@ fn ggs_no_rated() -> bool {
     ggs::no_rated()
 }
 
+/// **いま効いている環境変数の一覧。** 画面の下の帯に出す。
+///
+/// 環境変数を付けて起動すると、レート戦が禁じられていたり、繋ぐ先が
+/// 作り物だったり、控えの置き場所が違ったりする。**それを知らずに画面を
+/// 触ると、出ている絵が本物なのか確認用なのか区別が付かない。**
+/// 名前と値をそのまま返し、画面は「素の起動と違う」ことだけを示す。
+///
+/// 値そのものを隠す必要があるものは無い (認証情報を持つ変数は無く、
+/// `KUROOBI_KEYCHAIN_SERVICE` は項目の名前でしかない)。
+#[tauri::command]
+fn env_overrides() -> Vec<(String, String)> {
+    const NAMES: &[&str] = &[
+        "KUROOBI_NO_RATED",
+        "KUROOBI_GGS_DEMO",
+        "KUROOBI_GGS_AUTOCONNECT",
+        "KUROOBI_GGS_AUTOVIEW",
+        "KUROOBI_GGS_AUTOWATCH",
+        "KUROOBI_GGS_AUTOLOOK",
+        "KUROOBI_AUTOPLAY",
+        "KUROOBI_THEME",
+        "KUROOBI_LEARN_LOG",
+        "KUROOBI_KEYCHAIN_SERVICE",
+        "KUROOBI_SESSION_LOCK",
+        "KUROOBI_WEIGHTS_DIR",
+    ];
+    NAMES
+        .iter()
+        .filter_map(|n| {
+            std::env::var(n)
+                .ok()
+                .map(|v| ((*n).to_string(), if v.is_empty() { "1".into() } else { v }))
+        })
+        .collect()
+}
+
 /// 画面確認用: 起動直後に開く画面 (KUROOBI_GGS_AUTOVIEW)。
 #[tauri::command]
 fn ggs_autoview() -> String {
@@ -2259,6 +2294,7 @@ fn main() {
             ggs_snapshot,
             ggs_autoview,
             ggs_no_rated,
+            env_overrides,
             ggs_save_kifu,
             ggs_save_log
         ])

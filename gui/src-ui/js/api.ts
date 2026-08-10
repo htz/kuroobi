@@ -41,6 +41,8 @@ export const api = {
   setLearn: (on: boolean) => call<void>('set_learn', { on }),
   /** `myColor` は**人**がどちらだったか (`'b'` / `'w'`)。両方や観るだけの
    *  ときは空。控えに残さないと、あとで石数だけ見ても勝敗が決まらない。 */
+  /** いま効いている環境変数 (名前, 値)。素の起動なら空。 */
+  envOverrides: () => call<[string, string][]>('env_overrides'),
   learnGame: (myColor: string) => call<void>('learn_game', { myColor }),
   /** 取り込んだ対局の控え (新しい順)。 */
   learnLog: () => call<LearnEntry[]>('learn_log', {}),
