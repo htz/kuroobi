@@ -99,7 +99,7 @@ fn rotation_swaps_colors(i: usize) -> bool {
 fn kifu_and_board_symmetries_agree() {
     for plies in [4, 12, 30, 44] {
         let base = replay(KIFU, plies);
-        for i in 0..8 {
+        for (i, name) in SYM_NAMES.iter().enumerate() {
             let from_kifu = replay(&sym_kifu(KIFU, i), plies);
             let black = bitboard::symmetries(base.black)[i];
             let white = bitboard::symmetries(base.white)[i];
@@ -112,8 +112,7 @@ fn kifu_and_board_symmetries_agree() {
             assert_eq!(
                 (from_kifu.black, from_kifu.white),
                 want,
-                "{plies} 手目・{}: 棋譜を変換した結果と盤を変換した結果が違う",
-                SYM_NAMES[i]
+                "{plies} 手目・{name}: 棋譜を変換した結果と盤を変換した結果が違う"
             );
         }
     }
@@ -122,10 +121,10 @@ fn kifu_and_board_symmetries_agree() {
 /// 16 通り (8 対称 × 白黒逆) を作る。
 fn all_views(kifu: &str, plies: usize) -> Vec<(String, Board)> {
     let mut out = Vec::new();
-    for i in 0..8 {
+    for (i, name) in SYM_NAMES.iter().enumerate() {
         let b = replay(&sym_kifu(kifu, i), plies);
-        out.push((SYM_NAMES[i].to_string(), b));
-        out.push((format!("{} + 白黒逆", SYM_NAMES[i]), flip_colors(&b)));
+        out.push(((*name).to_string(), b));
+        out.push((format!("{name} + 白黒逆"), flip_colors(&b)));
     }
     out
 }
