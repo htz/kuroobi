@@ -894,14 +894,15 @@ const ENV_LABELS: Record<string, string> = {
  *  パスを渡す変数も値は出さない — 48px の列どころか 208px にも入らないので、
  *  **乗せたときに名前と値をそのまま出す**。
  *
- *  畳んだ列では札が落ちて金色の点だけが残る (`.k-env-mini`)。**印そのものを
- *  消さない** — 素の起動と見分けが付かなくなるのがいちばん困る。 */
+ *  畳んだ列では札が落ちて数だけが残る (`.k-env-mini`)。**印そのものを
+ *  消さない** — 素の起動と見分けが付かなくなるのがいちばん困る。点ではなく
+ *  数にするのは、**何個立っているかまでは 48px でも読めるから**。 */
 function EnvTags({ items }: { items: [string, string][] }) {
   if (!items.length) return null;
   const title = items.map(([k, v]) => `${k}=${v}`).join('\n');
   return (
     <div className="k-env" title={title}>
-      <span className="k-env-mini" />
+      <span className="k-env-mini">{items.length}</span>
       {items.map(([k, v]) => {
         const label = ENV_LABELS[k] ?? k.replace(/^KUROOBI_/, '');
         // 値に `/` が入るものは置き場所の差し替え。名前だけで足りる
