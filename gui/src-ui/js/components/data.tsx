@@ -1,6 +1,6 @@
 import React from 'react';
 import { Badge, Button, Dot } from './primitives';
-import { Divider, Empty, TableHead, TableRow } from './layout';
+import { Col, Divider, Empty, TableHead, TableRow } from './layout';
 
 /* KUROOBI data — 棋譜表・評価値グラフ・対局者行・レート
  * 表は 1 行 --h-row。列幅は固定で、値は右揃え。
@@ -18,9 +18,19 @@ export type Move = {
   score?: number; loss?: number; secs?: number;
   /** 出所。「定石·学」は実戦から学習した枝 — 現行の棋譜表が区別しているので落とさない */
   src?: '定石' | '定石·学' | '探索' | '読切';
-  /** 打てる手がなくて飛んだ手番。move は使わない */
+/** 打てる手がなくて飛んだ手番。move は使わない */
   pass?: boolean;
 };
+
+  /** 棋譜の表の列。**見出しと行が同じ配列を見る。** 評価と時間は縦に読み
+ *  比べる数字なので桁を揃え、出所が余りを取る。 */
+const MOVE_COLS: Col[] = [
+  { head: '#', w: 22, right: true },
+  { head: '手', w: 58 },
+  { head: '評価', w: 56, right: true, num: true },
+  { head: '時間', w: 34, right: true, num: true },
+  { head: '出所', right: true },
+];
 
 export function KifuTable({ moves, current, onSelect, decimals = 1 }: {
   moves: Move[]; current?: number; onSelect?: (n: number) => void;
@@ -41,13 +51,7 @@ export function KifuTable({ moves, current, onSelect, decimals = 1 }: {
   }, [current, moves.length]);
   return (
     <div style={{ flex: 1, display: 'flex', flexDirection: 'column', minHeight: 0 }}>
-      <TableHead>
-        <span style={{ width: 22, textAlign: 'right' }}>#</span>
-        <span style={{ width: 58 }}>手</span>
-        <span style={{ width: 56, textAlign: 'right' }}>評価</span>
-        <span style={{ width: 34, textAlign: 'right' }}>時間</span>
-        <span style={{ flex: 1, textAlign: 'right' }}>出所</span>
-      </TableHead>
+      <TableHead cols={MOVE_COLS} />
       <div className="k-scroll" ref={box} style={{ flex: 1, minHeight: 0 }}>
         {/* **1 手も無いときに列見出しだけを残さない。**対局を始める前の
             画面はここが必ず空で、いちばん最初に目に入る枠が「壊れている
@@ -64,11 +68,11 @@ export function KifuTable({ moves, current, onSelect, decimals = 1 }: {
             // 行は選択肢なので button。検討中はここを ↑↓ で送り続けるので、
             // 表に焦点が当たること自体が前提になる（div だと Tab で回ってこない）。
             // 評価と時間は縦に並ぶ数字の列。桁が揃わないと読み比べられない
-            <TableRow key={m.n} on={isCurrent} muted={!played}
+            <TableRow key={m.n} cols={MOVE_COLS} on={isCurrent} muted={!played}
                       innerRef={isCurrent ? row : undefined}
                       onClick={() => onSelect?.(m.n)}>
-              <span style={{ width: 22, textAlign: 'right', fontSize: 'var(--fs-7)', color: 'var(--sub)' }}>{m.n}</span>
-              <span style={{ width: 58, display: 'flex', alignItems: 'center', gap: 'var(--sp-0)', fontFamily: 'var(--ff-mono)' }}>
+              <span style={{ fontSize: 'var(--fs-7)', color: 'var(--sub)' }}>{m.n}</span>
+              <span style={{ fontFamily: 'var(--ff-mono)' }}>
                 <StoneDot color={m.color} />
                 {/* パスは座標ではないので等幅を外し、--sub で弱く出す
                     （着手の列に日本語が混ざるので、桁を揃えようとしない） */}
@@ -76,12 +80,12 @@ export function KifuTable({ moves, current, onSelect, decimals = 1 }: {
                   ? <span style={{ fontFamily: 'inherit', fontSize: 'var(--fs-6)', color: 'var(--sub)' }}>パス</span>
                   : m.move}
               </span>
-              <span style={{ width: 56, display: 'flex', justifyContent: 'flex-end', gap: 5 }}>
+              <span style={{ display: 'flex', justifyContent: 'flex-end', gap: 5 }}>
                 {m.loss ? <span style={{ fontSize: 'var(--fs-7)', color: 'var(--bad)' }}>▼{m.loss}</span> : null}
                 <span>{m.score === undefined ? '' : (m.score > 0 ? '+' : '') + m.score.toFixed(decimals)}</span>
               </span>
-              <span style={{ width: 34, textAlign: 'right', color: 'var(--sub)', fontSize: 'var(--fs-6)' }}>{m.secs?.toFixed(1) ?? ''}</span>
-              <span style={{ flex: 1, textAlign: 'right', fontSize: 'var(--fs-6)', color: m.src?.startsWith('定石') ? 'var(--gold)' : m.src === '読切' ? 'var(--text)' : 'var(--sub)' }}>{m.src ?? ''}</span>
+              <span style={{ color: 'var(--sub)', fontSize: 'var(--fs-6)' }}>{m.secs?.toFixed(1) ?? ''}</span>
+              <span style={{ fontSize: 'var(--fs-6)', color: m.src?.startsWith('定石') ? 'var(--gold)' : m.src === '読切' ? 'var(--text)' : 'var(--sub)' }}>{m.src ?? ''}</span>
             </TableRow>
           );
         })}

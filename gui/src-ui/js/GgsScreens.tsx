@@ -6,7 +6,7 @@ import {
   fingerGroups, fingerValue, hasJapanese, normKey, parseCond, translate, useClocks,
   type ClockSide, type ClockView,
 } from './ggs';
-import { Empty, EmptyBoard, EmptyState, List, Modal, Note, Overlay, Section, TableHead, TableRow, picked } from './components/layout';
+import { Col, Empty, EmptyBoard, EmptyState, List, Modal, Note, Overlay, Section, TableHead, TableRow, picked } from './components/layout';
 import { Button, Segmented, Select, TextField, Toggle } from './components/primitives';
 import { Strength } from './components/strength';
 import { Confirm, PickOne } from './Dialogs';
@@ -1314,6 +1314,16 @@ function GgsUsers({ snap, onNav, onKifu }: {
      飛ばさない** — 相手を軽く見たいだけのときに一覧が消えるのは重い。
      `card` が名刺、`sel` が全画面。 */
   const [card, setCard] = useState<string | null>(null);
+  const [mode, setMode] = useState<'who' | 'top'>('who');
+  /* プレイヤー一覧の列。**見出しと行が同じ配列を見る。** `#` は順位なので
+     「上位」のときだけ立ち、そのぶん先頭が 1 つ増える — 条件が 2 か所に
+     あると片方だけ直して列がずれる。 */
+  const userCols: Col[] = [
+    ...(mode === 'top' ? [{ head: '#', w: 26, right: true, num: true } as Col] : []),
+    { head: '名前', clip: true },
+    { head: 'レート', w: 96, right: true, num: true },
+    { head: '状態', w: 52, right: true },
+  ];
   /* 一覧の「状態」列は進行中の対局 (`snap.ongoing`) から出す。**その一覧は
      ログイン時と 60 秒ごとにしか届かない**ので、繋いだ直後にこの画面を
      開くと全員の状態が空になる。開いた時点で聞き直す — `tell /os match` は
@@ -1324,11 +1334,15 @@ function GgsUsers({ snap, onNav, onKifu }: {
      (`KUROOBI_GGS_AUTOVIEW=users:card`)。中身は空のままでよく、
      見たいのは 340 の器・3 段・足の 2 つの釦 */
   useEffect(() => {
-    void ggsApi.autoview().then((v) => { if (v === 'users:card') setCard(snap.login || '—'); })
-      .catch(() => {});
+    void ggsApi.autoview().then((v) => {
+      /* **前半は行き先の id と同じ綴りにする。** `ggs-users` から
+         `ggs-players` に変えたときここだけ古いままで、`users:card` は
+         当たらないうえに nav が無い行き先に落ちて本文が真っ白になった */
+      if (v === 'players:card') setCard(snap.login || '—');
+      if (v === 'players:top') setMode('top');
+    }).catch(() => {});
   }, [snap.login]);
   const [sel, setSel] = useState<string | null>(null);
-  const [mode, setMode] = useState<'who' | 'top'>('who');
   // レートは形式ごとに別のプール。混ぜると順位が意味を持たないので、
   // ランキングは見たいプールを選べるようにする (自分のレートは両方出る)
   const [pool, setPool] = useState('8');
@@ -1393,12 +1407,7 @@ function GgsUsers({ snap, onNav, onKifu }: {
             行ごとに動いていた。
             `#` は順位なので「上位」のときだけ出す (接続中の一覧に順位は無い) */}
         {!!rows.length && (
-          <TableHead pad="var(--sp-4)">
-            {mode === 'top' && <span style={{ width: 26, textAlign: 'right' }}>#</span>}
-            <span style={{ flex: 1 }}>名前</span>
-            <span style={{ width: 96, textAlign: 'right' }}>レート</span>
-            <span style={{ width: 52, textAlign: 'right' }}>状態</span>
-          </TableHead>
+          <TableHead cols={userCols} pad="var(--sp-4)" />
         )}
         {/* 列見出しだけを残さない。繋いだ直後は一覧がまだ届いていない */}
         {!slice.length && (
@@ -1409,19 +1418,17 @@ function GgsUsers({ snap, onNav, onKifu }: {
         {slice.map((u, i) => {
         const playing = snap.ongoing.some((o) => o.names.includes(u.name));
         return (
-          <TableRow key={u.name} pad="var(--sp-4)" onClick={() => setCard(u.name)}>
+          <TableRow key={u.name} cols={userCols} pad="var(--sp-4)" onClick={() => setCard(u.name)}>
             {mode === 'top' && (
-              <span style={{ width: 26, textAlign: 'right', fontSize: 'var(--fs-7)',
-                             color: 'var(--sub)', fontVariantNumeric: 'tabular-nums' }}>
+              <span style={{ fontSize: 'var(--fs-7)', color: 'var(--sub)' }}>
                 {cur * perPage + i + 1}
               </span>
             )}
-            <span style={{ flex: 1, minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis',
-                           whiteSpace: 'nowrap' }}>{u.name}</span>
+            <span>{u.name}</span>
             {/* レートには必ず偏差を添える (規則 29) — 偏差が大きいと数字が
                 意味を持たない。ランキング (`/os t`) は偏差を返すが、接続中の
                 一覧 (`/os who`) は返さないので、そちらは数字だけになる */}
-            <span style={{ width: 96, textAlign: 'right', fontVariantNumeric: 'tabular-nums' }}>
+            <span>
               {u.rating != null && <>
                 {u.rating.toFixed(1)}
                 {u.dev != null && (
@@ -1434,8 +1441,7 @@ function GgsUsers({ snap, onNav, onKifu }: {
                 効いていないのか誰も対局していないのかが読み手に分からない
                 (設計 §5 も 対局中 / 待機 の 2 値で描いている) */}
             <span style={{
-              width: 52, textAlign: 'right', fontSize: 'var(--fs-6)',
-              color: playing ? 'var(--ok)' : 'var(--sub)',
+              fontSize: 'var(--fs-6)', color: playing ? 'var(--ok)' : 'var(--sub)',
             }}>{playing ? '対局中' : '待機'}</span>
           </TableRow>
         );})}

@@ -4,7 +4,7 @@ import { sqName } from './adapt';
 import type { BookNode } from './types';
 import { Board, type EvalInfo } from './components/board';
 import { ScoreRow } from './components/data';
-import { Empty, EmptyState, List, Section, TableHead } from './components/layout';
+import { Col, Empty, EmptyState, List, Section, TableHead } from './components/layout';
 import { Button } from './components/primitives';
 
 /* 定石を眺める。
@@ -34,9 +34,19 @@ export interface BookBrowse {
   push: (sq: number) => void;
   back: () => void;
   reset: () => void;
-  /** 手順を丸ごと入れ替える。木の行から飛ぶときと、動作確認用の入口。 */
+/** 手順を丸ごと入れ替える。木の行から飛ぶときと、動作確認用の入口。 */
   goto: (kifu: string) => void;
 }
+
+/** 定石の木の列。**見出しと行が同じ配列を見る。** 木の行は折りたたみの
+ *  三角を持つので `TableRow` ではなく手で組むが、**幅はここから取る** —
+ *  前は見出しと行の 2 か所に同じ 44 / 58 が書いてあった。 */
+const TREE_COLS: Col[] = [
+  { head: '手順' },
+  { head: '評価', w: 44, right: true, num: true },
+  { head: '出現', w: 58, right: true, num: true },
+];
+const [, C_VALUE, C_GAMES] = TREE_COLS;
 
 export function useBookBrowse(on: boolean): BookBrowse {
   const [line, setLine] = useState<number[]>([]);
@@ -239,10 +249,10 @@ export function BookDock({ b, decimals = 1 }: { b: BookBrowse; decimals?: number
                         color: 'var(--text)', textAlign: 'left', cursor: 'pointer',
                       }}>
                 <span style={{ flex: 1, fontWeight: 600 }}>{sqName(m.pos)}</span>
-                <span style={{ width: 44, textAlign: 'right', fontVariantNumeric: 'tabular-nums' }}>
+                <span style={{ width: C_VALUE.w, textAlign: 'right', fontVariantNumeric: 'tabular-nums' }}>
                   {m.value > 0 ? '+' : ''}{m.value.toFixed(decimals)}
                 </span>
-                <span style={{ width: 58, textAlign: 'right', fontSize: 'var(--fs-7)',
+                <span style={{ width: C_GAMES.w, textAlign: 'right', fontSize: 'var(--fs-7)',
                                color: 'var(--sub)', fontVariantNumeric: 'tabular-nums' }}>
                   {m.games.toLocaleString()}
                 </span>
@@ -279,11 +289,7 @@ export function BookTree({ b, decimals = 1, onStudy }: {
     }}>
       {/* 列の見出し。節の見出し (Section) と同じ 20px + 1px 罫だが、
           ここは列名なので右の 2 つを数字の幅に合わせて右揃えにする */}
-      <TableHead>
-        <span style={{ flex: 1 }}>手順</span>
-        <span style={{ width: 44, textAlign: 'right' }}>評価</span>
-        <span style={{ width: 58, textAlign: 'right' }}>出現</span>
-      </TableHead>
+      <TableHead cols={TREE_COLS} />
       <div className="k-scroll" style={{ flex: 1, minHeight: 0, padding: '0 var(--sp-3)' }}>
         {rows.length === 0 && <Empty>この局面から先は定石にありません。</Empty>}
         {rows.map((r) => (
@@ -349,12 +355,12 @@ function BookRow({ r, open, onToggle, onGo, decimals = 1 }: {
                 fontSize: 'var(--fs-6)', color: 'var(--text)', textAlign: 'left',
               }}>
         <span style={{ width: 30, fontWeight: 600 }}>{r.name}</span>
-        <span style={{ width: 44, textAlign: 'right', fontVariantNumeric: 'tabular-nums' }}>
+        <span style={{ width: C_VALUE.w, textAlign: 'right', fontVariantNumeric: 'tabular-nums' }}>
           {r.value > 0 ? '+' : ''}{r.value.toFixed(decimals)}
         </span>
         {/* 桁区切りを入れる。5 桁を超える数を素で並べると桁が読めない
             (設計の絵も 12,480 の形。下の帯の局面数も同じ書き方) */}
-        <span style={{ width: 58, textAlign: 'right', fontSize: 'var(--fs-7)',
+        <span style={{ width: C_GAMES.w, textAlign: 'right', fontSize: 'var(--fs-7)',
                        color: 'var(--sub)', fontVariantNumeric: 'tabular-nums' }}>
           {r.games.toLocaleString()}
         </span>

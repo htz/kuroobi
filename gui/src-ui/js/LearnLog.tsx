@@ -2,7 +2,7 @@ import { useEffect, useState } from 'react';
 import { api, type KifuFrame } from './api';
 import type { LearnChange, LearnEntry } from './types';
 import { Board } from './components/board';
-import { Empty, KeyValue, List, Section, TableHead, TableRow } from './components/layout';
+import { Col, Empty, KeyValue, List, Section, TableHead, TableRow } from './components/layout';
 import { Button, Segmented, Select } from './components/primitives';
 
 /* 定石に取り込んだ対局の控え。設計 §8 の三面。
@@ -23,6 +23,13 @@ import { Button, Segmented, Select } from './components/primitives';
 
 /** その手で損した石差。定石が「もっと良い手があった」と言っている量。 */
 const lossOf = (c: LearnChange) => c.best - c.after;
+
+/** 学習ログの一覧の列。**見出しと行が同じ配列を見る。** */
+const LOG_COLS: Col[] = [
+  { head: '対局', clip: true },
+  { head: '石数', w: 52, right: true, num: true },
+  { head: '局面', w: 36, right: true, num: true },
+];
 
 /** いちばん損した手。全部が最善なら無し。 */
 function blunderOf(e: LearnEntry): LearnChange | undefined {
@@ -131,32 +138,20 @@ export function LearnLog({ items: all, onOpen, onUndo, onBook }: {
             ['0', 'すべて'], ['7', '直近 7 日'], ['30', '直近 30 日'], ['90', '直近 90 日'],
           ]} />
         </div>
-        <TableHead>
-          <span style={{ flex: 1 }}>対局</span>
-          <span style={{ width: 52, textAlign: 'right' }}>石数</span>
-          <span style={{ width: 36, textAlign: 'right' }}>局面</span>
-        </TableHead>
+        <TableHead cols={LOG_COLS} />
         <div className="k-scroll" style={{ flex: 1, minHeight: 0, padding: '0 var(--sp-3)' }}>
           <List>
             {items.map((e) => {
               const on = keyOf(e) === keyOf(cur);
               return (
-                <TableRow key={keyOf(e)} on={on} pad="var(--sp-1)" fs="var(--fs-6)"
+                <TableRow key={keyOf(e)} cols={LOG_COLS} on={on} pad="var(--sp-1)" fs="var(--fs-6)"
                           onClick={() => setSel(keyOf(e))}>
-                  <span style={{
-                    flex: 1, minWidth: 0, overflow: 'hidden',
-                    textOverflow: 'ellipsis', whiteSpace: 'nowrap',
-                  }}>
+                  <span>
                     <span style={{ color: 'var(--sub)' }}>{fmtWhen(e.at)}</span>
                     {' '}{e.opponent || 'KUROOBI'}
                   </span>
-                  <span style={{ width: 52, textAlign: 'right', fontVariantNumeric: 'tabular-nums' }}>
-                    {e.black}–{e.white}
-                  </span>
-                  <span style={{
-                    width: 36, textAlign: 'right', fontSize: 'var(--fs-7)',
-                    color: 'var(--sub)', fontVariantNumeric: 'tabular-nums',
-                  }}>{e.positions}</span>
+                  <span>{e.black}–{e.white}</span>
+                  <span style={{ fontSize: 'var(--fs-7)', color: 'var(--sub)' }}>{e.positions}</span>
                 </TableRow>
               );
             })}

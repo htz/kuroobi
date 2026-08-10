@@ -448,17 +448,57 @@ export function Note({ children }: { children: React.ReactNode }) {
   }}>{children}</p>;
 }
 
+/** 表の 1 列の決めごと。**幅と揃えを見出しと行で 1 つの配列から取る。**
+ *
+ * 前は見出しと行が別々に `<span style={{ width: 58 }}>` を手書きしていて、
+ * **同じ数字が 2 か所にある**ぶん片方だけ直してずれた。中身そのものは
+ * 列ごとに違う (石 + 座標、レート + 偏差) ので `children` のまま置く —
+ * 器だけを配列が持ち、何を入れるかは呼ぶ側が決める。 */
+export interface Col {
+  /** 列見出しに出す文字。 */
+  head?: React.ReactNode;
+  /** 幅 (px)。**省いた列が余りを分ける。** */
+  w?: number;
+  /** 右揃え。数字の列に使う。 */
+  right?: boolean;
+  /** 桁を揃える (縦に読み比べる数字の列)。見出しには効かない。 */
+  num?: boolean;
+  /** はみ出しを … で畳む (名前の列)。見出しには効かない。 */
+  clip?: boolean;
+}
+
+/** 列の器。`head` のときは行だけの決めごと (`num` / `clip`) を落とす。 */
+function cell(c: Col, head?: boolean): React.CSSProperties {
+  if (!head && c.clip) {
+    // 畳む列は flex をやめる。flex の子に textOverflow は効かない
+    return {
+      ...(c.w === undefined ? { flex: 1, minWidth: 0 } : { width: c.w, flex: 'none' }),
+      overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
+      textAlign: c.right ? 'right' : undefined,
+    };
+  }
+  return {
+    ...(c.w === undefined ? { flex: 1, minWidth: 0 } : { width: c.w, flex: 'none' }),
+    display: 'flex', alignItems: 'center', gap: 'var(--sp-0)',
+    justifyContent: c.right ? 'flex-end' : 'flex-start',
+    ...(!head && c.num ? { fontVariantNumeric: 'tabular-nums' } : null),
+  };
+}
+
 /* 表の列見出しの行。**4 か所で同じ体裁を手書きしていた** (棋譜の表 /
  * 学習ログ / プレイヤーの一覧 / 定石の木) — 字も高さも罫も同じなのに
  * 書いた場所ごとに並び順が違い、直すときに見落とす。
  *
  * 高さは `--h-head` (20px)、字は節の見出しと同じ (`--fs-7` / 600 /
- * 字間 .08em / `--sub`)。**列そのものは呼ぶ側が `<span>` の幅で並べる** —
- * 幅はその表だけの数字なので、部品に持たせても揃わない。 */
-export function TableHead({ pad = 'var(--sp-3)', children }: {
+ * 字間 .08em / `--sub`)。**列は `cols` が並べる** — 同じ配列を行にも
+ * 渡すことで、幅が二度書かれない。 */
+export function TableHead({ cols, pad = 'var(--sp-3)', children }: {
+  /** 列の決めごと。行に渡すものと**同じ配列**を渡す。 */
+  cols?: Col[];
   /** 左右の余白。行の余白と揃える (既定は `--sp-3`)。 */
   pad?: string;
-  children: React.ReactNode;
+  /** `cols` を使わないとき (見出しに列の形が無い表) だけ。 */
+  children?: React.ReactNode;
 }) {
   return (
     <div style={{
@@ -466,7 +506,9 @@ export function TableHead({ pad = 'var(--sp-3)', children }: {
       gap: 'var(--sp-2)', padding: `0 ${pad}`,
       borderBottom: '1px solid var(--border)',
       fontSize: 'var(--fs-7)', fontWeight: 600, letterSpacing: '.08em', color: 'var(--sub)',
-    }}>{children}</div>
+    }}>
+      {cols ? cols.map((c, i) => <span key={i} style={cell(c, true)}>{c.head}</span>) : children}
+    </div>
   );
 }
 
@@ -485,8 +527,11 @@ export const picked = (on: boolean): React.CSSProperties => ({
  * **accent 14% の面 + 左に 2px** — この「選ばれている」の見せ方が画面ごとに
  * 違っていて、一度直したのにまた別の場所でずれた。名前のある器にする。
  *
- * **列そのものは呼ぶ側が `<span>` の幅で並べる** (`TableHead` と同じ理由)。 */
-export function TableRow({ on, pad = 'var(--sp-3)', fs = 'var(--fs-5)', muted, onClick, title, innerRef, children }: {
+ * **列は `cols` が並べる** (`TableHead` と同じ配列を渡す)。子は列と同じ順で
+ * 置き、**器の幅は配列が、中身は子が**受け持つ。 */
+export function TableRow({ cols, on, pad = 'var(--sp-3)', fs = 'var(--fs-5)', muted, onClick, title, innerRef, children }: {
+  /** 列の決めごと。見出しに渡すものと**同じ配列**を渡す。 */
+  cols?: Col[];
   /** 選ばれている行。 */
   on?: boolean;
   /** 左右の余白。列見出しと揃える。 */
@@ -514,7 +559,13 @@ export function TableRow({ on, pad = 'var(--sp-3)', fs = 'var(--fs-5)', muted, o
         borderBottom: '1px solid var(--border-weak)',
         color: muted ? 'var(--sub)' : 'var(--text)',
         ...picked(!!on),
-      }}>{children}</button>
+      }}>
+      {cols
+        ? React.Children.toArray(children).map((ch, i) => (
+            <span key={i} style={cell(cols[i] ?? {})}>{ch}</span>
+          ))
+        : children}
+    </button>
   );
 }
 
