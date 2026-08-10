@@ -68,7 +68,7 @@ export function KifuTable({ moves, current, onSelect, decimals = 1 }: {
                       innerRef={isCurrent ? row : undefined}
                       onClick={() => onSelect?.(m.n)}>
               <span style={{ width: 22, textAlign: 'right', fontSize: 'var(--fs-7)', color: 'var(--sub)' }}>{m.n}</span>
-              <span style={{ width: 58, display: 'flex', alignItems: 'center', gap: 6, fontFamily: 'var(--ff-mono)' }}>
+              <span style={{ width: 58, display: 'flex', alignItems: 'center', gap: 'var(--sp-0)', fontFamily: 'var(--ff-mono)' }}>
                 <StoneDot color={m.color} />
                 {/* パスは座標ではないので等幅を外し、--sub で弱く出す
                     （着手の列に日本語が混ざるので、桁を揃えようとしない） */}
@@ -569,7 +569,7 @@ export function MoveScrub({ plies, cursor, blunder, onSeek, nav = true }: {
   return (
     <div style={{
       padding: '0 var(--sp-4)', flex: 'none',
-      display: 'flex', alignItems: 'center', gap: 10,
+      display: 'flex', alignItems: 'center', gap: 'var(--sp-2h)',
     }}>
       {nav && (
         <span style={{ display: 'flex', gap: 4, flex: 'none' }}>

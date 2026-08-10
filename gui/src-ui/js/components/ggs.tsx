@@ -160,7 +160,7 @@ export function Meter({ icon, label, value, unit, ratio, note }: {
       {/* 48px の列に残すのは絵と 4px の溝だけ。文字は .k-meter-text が
           1040px で落とす。**絵はその外に出す** — 中に入れると一緒に消えて、
           何の溝なのか分からない棒が 2 本並ぶ */}
-      <div className="k-meter-head" style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 'var(--fs-6)', color: 'var(--sub)' }}>
+      <div className="k-meter-head" style={{ display: 'flex', alignItems: 'center', gap: 'var(--sp-0)', fontSize: 'var(--fs-6)', color: 'var(--sub)' }}>
         <Icon name={icon} size={13} />
         <span className="k-meter-text">{label}</span>
         <span className="k-meter-text" style={{ marginLeft: 'auto', color: 'var(--text)' }}>
@@ -169,7 +169,7 @@ export function Meter({ icon, label, value, unit, ratio, note }: {
       </div>
       {/* 溝は 48px の列では落とす (.k-meter-bar)。4px の棒が 2 本並んでも
           読めるのは「多いか少ないか」だけで、数字のほうが要る */}
-      <div className="k-meter-bar" style={{ height: 4, borderRadius: 3, background: 'var(--track)', overflow: 'hidden' }}>
+      <div className="k-meter-bar" style={{ height: 4, borderRadius: 'var(--r-0)', background: 'var(--track)', overflow: 'hidden' }}>
         <span style={{
           display: 'block', width: Math.min(100, Math.round(ratio * 100)) + '%', height: '100%',
           background: ratio > 0.75 ? 'var(--gold)' : 'var(--accent)',
@@ -274,7 +274,7 @@ export function MatchRow({ m, active, onSelect, onClose }: {
         padding: '9px var(--sp-3)', paddingRight: closable ? 40 : undefined,
         display: 'flex', flexDirection: 'column', gap: 5,
       }}>
-        <span style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+        <span style={{ display: 'flex', alignItems: 'center', gap: 'var(--sp-0)' }}>
           <Tag tone={m.mine ? 'accent' : 'sub'}>{m.mine ? '自分' : '観戦'}</Tag>
           <Tag tone={m.live ? 'ok' : 'sub'}>{m.live ? '対局中' : '終局'}</Tag>
           <span style={{ fontSize: 'var(--fs-5)', color: m.live ? 'var(--text)' : 'var(--sub)' }}>
@@ -298,7 +298,7 @@ export function MatchRow({ m, active, onSelect, onClose }: {
 export function Tag({ tone = 'sub', children }: { tone?: 'sub' | 'accent' | 'ok' | 'bad'; children: React.ReactNode }) {
   const solid = tone === 'accent';
   return <span style={{
-    padding: '1px 6px', borderRadius: 'var(--r-1)', fontSize: 9.5, flex: 'none',
+    padding: '1px 6px', borderRadius: 'var(--r-1)', fontSize: 'var(--fs-tag)', flex: 'none',
     fontWeight: solid ? 600 : 400,
     background: solid ? 'var(--accent-dim)' : tone === 'sub' ? 'var(--card)' : `color-mix(in srgb, var(--${tone}) 18%, transparent)`,
     color: solid ? 'var(--on-accent)' : tone === 'sub' ? 'var(--sub)' : `var(--${tone})`,
@@ -320,7 +320,7 @@ export function FormulaView({ node, top }: { node: Cond; top?: boolean }) {
   return (
     <div style={{
       borderLeft: '2px solid var(--' + (top ? 'accent' : 'border') + ')',
-      paddingLeft: 10, display: 'flex', flexDirection: 'column', gap: 5,
+      paddingLeft: 'var(--sp-2h)', display: 'flex', flexDirection: 'column', gap: 5,
     }}>
       <div style={{
         fontSize: 'var(--fs-7)', fontWeight: 600, letterSpacing: '.06em',
@@ -456,7 +456,7 @@ function AtomRow({ c, onChange, onRemove }: {
   const v = varOf(c.name);
   const type = v?.type ?? 'bool';
   return (
-    <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+    <div style={{ display: 'flex', alignItems: 'center', gap: 'var(--sp-0)' }}>
       <Select value={c.name} width={140} size="ctrl"
               options={FORMULA_VARS.map(x => [x.name, x.label] as [string, string])}
               onChange={name => {
@@ -515,7 +515,7 @@ export function Bubble({ m, showName }: { m: Msg; showName?: boolean }) {
         </div>
       )}
       <div style={{
-        maxWidth: 320, padding: '6px 10px', borderRadius: 9, fontSize: 'var(--fs-5)', lineHeight: 1.5,
+        maxWidth: 320, padding: '6px 10px', borderRadius: 'var(--r-bubble)', fontSize: 'var(--fs-5)', lineHeight: 1.5,
         background: m.mine ? 'var(--accent-dim)' : 'var(--panel)', color: m.mine ? 'var(--on-accent)' : 'var(--text)',
       }}>
         {m.body}
@@ -584,7 +584,7 @@ export function Toasts({ items, onDismiss }: { items: Toast[]; onDismiss?: (id: 
   return (
     <div style={{
       position: 'absolute', right: 'var(--sp-4)', bottom: 'calc(var(--h-status) + var(--sp-3))',
-      display: 'flex', flexDirection: 'column', gap: 10, alignItems: 'flex-end', zIndex: 20,
+      display: 'flex', flexDirection: 'column', gap: 'var(--sp-2h)', alignItems: 'flex-end', zIndex: 20,
     }}>
       {items.map(t => (
         <button key={t.id} type="button" onClick={() => onDismiss?.(t.id)} className="k-press" style={{
@@ -614,7 +614,7 @@ export function StatusChip({ label, unread, active, onClick }: {
       height: 'var(--h-chip)', padding: '0 10px', borderRadius: 'var(--r-1)', background: 'transparent',
       border: '1px solid var(--' + (active ? 'accent' : 'border') + ')',
       color: 'var(--' + (active ? 'accent' : 'sub') + ')',
-      fontSize: 'var(--fs-7)', display: 'flex', alignItems: 'center', gap: 6,
+      fontSize: 'var(--fs-7)', display: 'flex', alignItems: 'center', gap: 'var(--sp-0)',
     }}>
       {label}
       {unread ? <Badge tone="bad">{unread}</Badge> : null}

@@ -113,7 +113,7 @@ export function PasteKifu({ onLoad, onFile, onCancel }: {
             {last && <Board cells={last.cells as (0 | 1 | 2)[]} last={last.last} coords={false} grain={false} />}
           </div>
           <div style={{
-            display: 'flex', flexDirection: 'column', gap: 6,
+            display: 'flex', flexDirection: 'column', gap: 'var(--sp-0)',
             fontSize: 'var(--fs-5)', color: peek?.err ? 'var(--bad)' : 'var(--text)',
           }}>
             <span style={{
@@ -125,12 +125,12 @@ export function PasteKifu({ onLoad, onFile, onCancel }: {
               {/* 石は数の外側に置く。ScoreRow は両方とも点が左だが、あちらは
                   並べて差を読ませる帯で、こちらは 1 局の結果を「黒 対 白」と
                   読ませる (絵もこの向き) */}
-              <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
-                <span style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: 'var(--sp-2h)' }}>
+                <span style={{ display: 'flex', alignItems: 'center', gap: 'var(--sp-0)' }}>
                   <StoneDot color="b" size={13} /><b style={{ fontWeight: 600 }}>{last.black}</b>
                 </span>
                 <span style={{ color: 'var(--sub)' }}>—</span>
-                <span style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+                <span style={{ display: 'flex', alignItems: 'center', gap: 'var(--sp-0)' }}>
                   <b style={{ fontWeight: 600 }}>{last.white}</b><StoneDot color="w" size={13} />
                 </span>
               </div>
@@ -453,7 +453,7 @@ function ViewSettings({ prefs, setPref }: {
       <Section title="テーマ">
         {/* 設計は見本つきの札 3 枚。**配色は言葉より見たほうが早い** —
             「OS に従う」がどちらになるかも、札を見れば分かる */}
-        <div style={{ display: 'flex', gap: 10 }}>
+        <div style={{ display: 'flex', gap: 'var(--sp-2h)' }}>
           {THEMES.map(([v, label]) => {
             const on = prefs.theme === v;
             return (

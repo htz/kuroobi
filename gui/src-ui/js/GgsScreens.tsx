@@ -100,7 +100,7 @@ function GgsLogin() {
       <div style={{
         width: 'var(--w-modal)', borderRadius: 'var(--r-4)', background: 'var(--panel)',
         border: '1px solid var(--border)', padding: 22,
-        display: 'flex', flexDirection: 'column', gap: 14,
+        display: 'flex', flexDirection: 'column', gap: 'var(--sp-3h)',
       }}>
         <div style={{ fontSize: 'var(--fs-3)', fontWeight: 600 }}>GGS へログイン</div>
         <Note>

@@ -113,7 +113,7 @@ export function Segmented<T extends string>({ value, options, onChange, size = '
               background: on ? (solid ? 'var(--accent-dim)' : 'var(--card)') : 'transparent',
               color: on ? (solid ? 'var(--on-accent)' : 'var(--text)') : 'var(--sub)',
               fontWeight: on ? 600 : 400,
-              display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 6,
+              display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 'var(--sp-0)',
               whiteSpace: 'nowrap',
             }}
           >{o.label}</button>
@@ -237,7 +237,7 @@ export function Badge({ tone = 'sub', children }: { tone?: 'sub' | 'accent' | 'o
 /* 進行中を示す唯一の部品。％が分かるときだけ使い、分からないときは Dot で足りる */
 export function Progress({ value }: { value: number }) {
   return (
-    <div style={{ height: 4, borderRadius: 3, background: 'var(--track)', overflow: 'hidden' }}>
+    <div style={{ height: 4, borderRadius: 'var(--r-0)', background: 'var(--track)', overflow: 'hidden' }}>
       <span style={{ display: 'block', width: Math.round(value * 100) + '%', height: '100%', background: 'var(--accent)' }} />
     </div>
   );
