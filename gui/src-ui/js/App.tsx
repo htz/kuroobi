@@ -174,6 +174,13 @@ export function App() {
          **どの枚も出ない = 画面が真っ白**になっていた (実際に踏んだ)。
          見出しの位置に来ても目印として扱う */
       const extra = extraRaw === 'nobook' ? undefined : extraRaw;
+      /* `:nobook` は定石を切ってから始める目印。**どの入口より先に効かせる** —
+         `study` などの分岐が `return` するので、下に置くと届く入口と届かない
+         入口ができる (実際 `study:graph:nobook` で切れていなかった)。
+         対局では**序盤が定石から返ると探索を呼ばない**ので、学習が譲る条件
+         (`Activity.local`) が立たず「譲り中」の行を撮れない。分析では
+         定石の点が出るかどうかの出し分けを確かめるのに要る */
+      if (v.endsWith(':nobook')) g.setUseBook(false);
       if (who === 'settings') { setSettings(true); return; }
       /* 覆いを出す入口 (撮るためだけ)。**覆いはクリックでしか出せず、
          寸法をずっと実測できていなかった** — 確認 / 棋譜の読み込み /
@@ -265,10 +272,6 @@ export function App() {
       }
       if (who === 'both') g.setSide('both');
       if (lv !== undefined && Number.isFinite(+lv)) g.setLevel(+lv);
-      /* "both:12:学習:nobook" — 定石を切ってから始める (撮るためだけの入口)。
-         **序盤が定石から返ると探索を呼ばない**ので、学習が譲る条件
-         (`Activity.local`) が立たず「譲り中」の行を一度も撮れなかった */
-      if (v.endsWith(':nobook')) g.setUseBook(false);
       // "both:1:学習" のようにドックの見出しも指定できる。取り込みの状況は
       // 対局が終わって学習が走っている間しか出ないので、その枠を撮る入口
       if (extra) setTab(extra);
