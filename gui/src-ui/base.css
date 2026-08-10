@@ -126,6 +126,18 @@ button:disabled, button[aria-disabled="true"] { cursor:default; }
 .k-nav-section, .k-meter-text, .k-toolbar-aux, .k-nav-jobs { display:flex; }
 .k-meter-bar { display:block; }
 .k-meter-mini { display:none; }      /* 畳んだ列でだけ出る */
+/* 環境変数で起動した印。**何が立っているかを札で出す** — 数だけでは
+   「素の起動ではない」しか伝わらず、どう違うかが分からない。
+   大きさは畳む段が動かすので、部品側に書かずここが持つ */
+.k-env { display:flex; flex-wrap:wrap; gap:var(--sp-1); }
+.k-env-tag {
+  display:flex; align-items:center; height:var(--h-chip);
+  padding:0 var(--sp-2); border-radius:var(--r-1);
+  font-size:var(--fs-7); font-weight:600; white-space:nowrap;
+  background:color-mix(in srgb, var(--gold) 18%, transparent); color:var(--gold);
+}
+.k-env-val { margin-left:var(--sp-1); font-weight:400; opacity:.85; }
+.k-env-mini { display:none; }        /* 畳んだ列でだけ出る */
 /* 畳んだ列でだけ出る区切り。広い窓では「● GGS」の見出しが区切りなので
    要らない (見出しの上余白と二重に空けない) */
 .k-nav-rule { display:none; height:1px; background:var(--border); }
@@ -174,6 +186,14 @@ button:disabled, button[aria-disabled="true"] { cursor:default; }
   .k-nav .k-nav-logo, .k-nav .k-nav-jobs, .k-nav .k-meter-bar { display:none; }
   /* 棒の代わりに数字、文字の代わりに 1px の罫 */
   .k-nav .k-meter-mini { display:block; }
+  /* 環境変数の札は文字なので落ちる。**印は捨てない** — 素の起動と
+     見分けが付かなくなるのがいちばん困る。金色の点だけ残し、内訳は
+     乗せたときに出す (バッジを角へ寄せるのと同じ考え方) */
+  .k-nav .k-env-tag { display:none; }
+  .k-nav .k-env-mini {
+    display:block; width:8px; height:8px; border-radius:var(--r-pill);
+    margin:0 auto; background:var(--gold);
+  }
   .k-nav .k-nav-rule { display:block; margin:var(--sp-3) var(--sp-2); }
   /* 正方形に。横いっぱいのままだと縦長の板に見える */
   .k-nav .k-nav-settings { width:32px; margin:0 auto; }

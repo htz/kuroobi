@@ -502,6 +502,14 @@ export function App() {
                     ratio={cpu.mem_total > 0 ? cpu.mem / cpu.mem_total : 0} />
              <JobList jobs={jobsOf(cpu)} />
              </>}
+             {/* **環境変数で起動した印。** 付けると素の起動と違うふるまいを
+                 する (レート戦が禁じられる / 繋ぐ先が作り物 / 控えの置き場所が
+                 違う など)。**それを知らずに画面を触ると、出ている絵が本物なのか
+                 確認用なのか区別が付かない。**
+                 **数ではなく何が立っているかを出す** — 「2 個」では素の起動で
+                 ないことしか伝わらず、どう違うかが分からない。値は挙動を
+                 決めるものだけ添える (`1` は印なので出さない) */}
+             <EnvTags items={envOverrides} />
              {/* 設定はいちばん下。行き先ではないので行の並びには入れない。
                  **絵は歯車ではない** — 歯車は「GGS の設定」が使っているので、
                  同じ絵を別の意味で 2 か所に出さない (規則 49)。
@@ -772,23 +780,6 @@ export function App() {
       {/* 短くて桁の決まっているものだけを置く。長さの読めない報せはトーストへ */}
         <StatusBar
           left={<>
-            {/* **環境変数で起動した印。** 付けると素の起動と違うふるまいを
-                する (レート戦が禁じられる / 繋ぐ先が作り物 / 控えの置き場所が
-                違う など)。**それを知らずに画面を触ると、出ている絵が本物なのか
-                確認用なのか区別が付かない。** 常に見える下の帯のいちばん左に
-                置き、名前と値は乗せたときに出す */}
-            {envOverrides.length > 0 && (
-              <span title={envOverrides.map(([k, v]) => `${k}=${v}`).join('\n')}
-                    style={{
-                      height: 'var(--h-chip)', padding: '0 var(--sp-2)',
-                      borderRadius: 'var(--r-1)', display: 'flex', alignItems: 'center',
-                      gap: 'var(--sp-1)', fontSize: 'var(--fs-7)', fontWeight: 600,
-                      background: 'color-mix(in srgb, var(--gold) 18%, transparent)',
-                      color: 'var(--gold)',
-                    }}>
-                確認用の起動 {envOverrides.length}
-              </span>
-            )}
             {/* 分析は g.thinking を立てない (api.evalAt を局面ごとに呼ぶ) ので、
                 走っている印がどこにも出ていなかった。グラフの見出し行の進み具合は
                 帯の中の話で、**機械が動いているか**は下の帯が持つ (規則 11・76) */}
@@ -874,6 +865,55 @@ export function App() {
 
       <Toasts items={toasts} onDismiss={(id) => g.dismiss(+id)} />
     </AppFrame>
+  );
+}
+
+/** 環境変数の短い呼び名。**変数名をそのまま出さない** — 画面の文言は
+ *  日本語で統一していて、帯だけ英語になると読み手が切り替わる。
+ *  ここに無いものは `KUROOBI_` を落とした名前で出す (足し忘れても
+ *  印は消えない)。 */
+const ENV_LABELS: Record<string, string> = {
+  KUROOBI_NO_RATED: '非レート',
+  KUROOBI_GGS_DEMO: 'GGS デモ',
+  KUROOBI_GGS_AUTOCONNECT: '自動接続',
+  KUROOBI_GGS_AUTOVIEW: '自動表示',
+  KUROOBI_GGS_AUTOWATCH: '自動観戦',
+  KUROOBI_GGS_AUTOLOOK: '自動棋譜',
+  KUROOBI_AUTOPLAY: '自動運転',
+  KUROOBI_THEME: 'テーマ',
+  KUROOBI_LEARN_LOG: '控え差替',
+  KUROOBI_KEYCHAIN_SERVICE: '鍵束差替',
+  KUROOBI_SESSION_LOCK: '錠差替',
+  KUROOBI_WEIGHTS_DIR: '重み差替',
+};
+
+/** 左メニューの下端に出す、環境変数で起動した印。
+ *
+ *  **値は挙動を決めるものだけ添える。** `=1` は「立っている」の印でしか
+ *  ないので出さない (`自動運転 both:14` は要るが `非レート 1` は要らない)。
+ *  パスを渡す変数も値は出さない — 48px の列どころか 208px にも入らないので、
+ *  **乗せたときに名前と値をそのまま出す**。
+ *
+ *  畳んだ列では札が落ちて金色の点だけが残る (`.k-env-mini`)。**印そのものを
+ *  消さない** — 素の起動と見分けが付かなくなるのがいちばん困る。 */
+function EnvTags({ items }: { items: [string, string][] }) {
+  if (!items.length) return null;
+  const title = items.map(([k, v]) => `${k}=${v}`).join('\n');
+  return (
+    <div className="k-env" title={title}>
+      <span className="k-env-mini" />
+      {items.map(([k, v]) => {
+        const label = ENV_LABELS[k] ?? k.replace(/^KUROOBI_/, '');
+        // 値に `/` が入るものは置き場所の差し替え。名前だけで足りる
+        const val = v === '1' || v.includes('/') ? '' : v;
+        return (
+          <span key={k} className="k-env-tag">
+            {label}
+            {val && <span className="k-env-val">{val}</span>}
+          </span>
+        );
+      })}
+    </div>
   );
 }
 
