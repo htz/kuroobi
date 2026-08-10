@@ -489,7 +489,15 @@ export function App() {
   return (
     <AppFrame>
       {/* 窓の層。押せるものは 1 つも置かない (規則 75) */}
-      <WindowBar title={screenTitle} sub={screenSub} />
+      {/* **環境変数で起動した印は窓の帯の右端。** 付けると素の起動と違う
+          ふるまいをする (レート戦が禁じられる / 繋ぐ先が作り物 / 控えの
+          置き場所が違う など) ので、**それを知らずに触ると出ている絵が
+          本物なのか確認用なのか区別が付かない**。
+          左メニューの下端に置いていたが 2 つ間違っていた — そこは資源
+          メーターの場所 (規則 9) で、**`--gold` は定石の色** (規則 19) なので
+          金の意味が 2 つになる。窓の帯なら**どの画面でも同じ場所**で、
+          畳む段の影響も受けない (全幅なので) */}
+      <WindowBar title={screenTitle} sub={screenSub} right={<EnvTags items={envOverrides} />} />
 
       <Body>
 
@@ -505,14 +513,6 @@ export function App() {
                     ratio={cpu.mem_total > 0 ? cpu.mem / cpu.mem_total : 0} />
              <JobList jobs={jobsOf(cpu)} />
              </>}
-             {/* **環境変数で起動した印。** 付けると素の起動と違うふるまいを
-                 する (レート戦が禁じられる / 繋ぐ先が作り物 / 控えの置き場所が
-                 違う など)。**それを知らずに画面を触ると、出ている絵が本物なのか
-                 確認用なのか区別が付かない。**
-                 **数ではなく何が立っているかを出す** — 「2 個」では素の起動で
-                 ないことしか伝わらず、どう違うかが分からない。値は挙動を
-                 決めるものだけ添える (`1` は印なので出さない) */}
-             <EnvTags items={envOverrides} />
              {/* 設定はいちばん下。行き先ではないので行の並びには入れない。
                  **絵は歯車ではない** — 歯車は「GGS の設定」が使っているので、
                  同じ絵を別の意味で 2 か所に出さない (規則 49)。
@@ -897,15 +897,13 @@ const ENV_LABELS: Record<string, string> = {
  *  パスを渡す変数も値は出さない — 48px の列どころか 208px にも入らないので、
  *  **乗せたときに名前と値をそのまま出す**。
  *
- *  畳んだ列では札が落ちて数だけが残る (`.k-env-mini`)。**印そのものを
- *  消さない** — 素の起動と見分けが付かなくなるのがいちばん困る。点ではなく
- *  数にするのは、**何個立っているかまでは 48px でも読めるから**。 */
+ *  居場所は窓の帯の右端。**全幅なので畳む段の影響を受けず**、左メニューを
+ *  48px にしても札がそのまま残る (畳んだ列用の逃げ道が要らない)。 */
 function EnvTags({ items }: { items: [string, string][] }) {
   if (!items.length) return null;
   const title = items.map(([k, v]) => `${k}=${v}`).join('\n');
   return (
     <div className="k-env" title={title}>
-      <span className="k-env-mini">{items.length}</span>
       {items.map(([k, v]) => {
         const label = ENV_LABELS[k] ?? k.replace(/^KUROOBI_/, '');
         // 値に `/` が入るものは置き場所の差し替え。名前だけで足りる

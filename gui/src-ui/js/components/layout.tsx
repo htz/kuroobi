@@ -42,13 +42,20 @@ export function AppFrame({ children }: { children: React.ReactNode }) {
  * 左に信号機ぶんの余白とロゴ、その右に **いま何を見ているか** を受け身の
  * 文字で出す (macOS の題名の役)。Mission Control やスクショでも何をして
  * いたかが分かる。Tauri は title を空にしてこちらで描く。 */
-export function WindowBar({ title, sub }: { title: string; sub?: React.ReactNode }) {
+export function WindowBar({ title, sub, right }: {
+  title: string;
+  sub?: React.ReactNode;
+  /** 右端に置く**受け身の印**。押せるものは置かない (規則 75)。
+   *  いまは確認用の環境変数の札だけが使う。 */
+  right?: React.ReactNode;
+}) {
   return (
     /* 左右に信号機ぶんの余白を同じだけ取り、題名は**窓の中央**に置く。
        左だけ空けて左寄せにすると、窓の題名ではなく画面の見出しに見える。
        ロゴはここには置かない — 28px の帯に押し込むと窮屈で、Nav の上端の
        ほうが余裕がある。 */
     <div data-tauri-drag-region className="k-drag" style={{
+      position: 'relative',
       height: 'var(--h-window)', flex: 'none', background: 'var(--bg)',
       borderBottom: '1px solid var(--border)', display: 'flex', alignItems: 'center',
       padding: '0 var(--w-signals)', gap: 'var(--sp-2)',
@@ -64,6 +71,14 @@ export function WindowBar({ title, sub }: { title: string; sub?: React.ReactNode
           }}>{sub}</span>
         )}
       </span>
+      {/* 題名を**窓の中央**に保つため、右端の印は絶対位置で重ねる。
+          並びに入れると題名が左へずれる */}
+      {right && (
+        <span style={{
+          position: 'absolute', right: 'var(--sp-3)', top: 0,
+          height: 'var(--h-window)', display: 'flex', alignItems: 'center', gap: 'var(--sp-1)',
+        }}>{right}</span>
+      )}
     </div>
   );
 }
