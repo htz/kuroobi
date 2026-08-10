@@ -55,7 +55,12 @@ export function GgsScreen({ nav, snap, onNav, prefs, onKifu }: {
  * 半分の幅で止まっている入力欄は、押せる場所に見えない。 */
 function Field({ label, children, stretch }: { label: string; children: React.ReactNode; stretch?: boolean }) {
   return (
+    /* `alignSelf: 'start'` が要る。**格子の子は既定で行の高さまで伸びる**
+       ので、同じ行に背の高いもの (説明文つきの「レート戦」など) があると
+       この器も伸び、中の入力欄が `flexGrow` で余りを吸って縦長になる。
+       実際に「最大対局数」と「対局の間隔」が 3 倍の高さになっていた。 */
     <label style={{ display: 'flex', flexDirection: 'column', gap: 'var(--sp-2)',
+                    alignSelf: 'start',
                     alignItems: stretch ? 'stretch' : 'flex-start' }}>
       <span style={{ fontSize: 'var(--fs-6)', color: 'var(--sub)' }}>{label}</span>
       {children}
