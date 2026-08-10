@@ -339,7 +339,8 @@ export function Modal({ title, sub, body, actions, width = 'var(--w-modal)', onC
         {/* 題名を**窓の中央**に置くため、閉じると同じ幅を左にも取る */}
         <span style={{ width: 32, flex: 'none' }} />
         <div style={{ flex: 1, minWidth: 0, textAlign: 'center' }}>
-          <div style={{
+          {/* 題名に名前が入ることがある (プレイヤーの名刺)。写せるようにする */}
+          <div className="k-sel" style={{
             fontSize: 'var(--fs-4)', fontWeight: 600, color: 'var(--text)',
             overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
           }}>{title}</div>

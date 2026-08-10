@@ -16,7 +16,25 @@ body {
   font-feature-settings:"tnum";           /* 数値の桁を揃える。全画面で必須 */
   -webkit-font-smoothing:antialiased;
   overflow:hidden;                         /* デスクトップアプリ。窓の外にはスクロールさせない */
+  /* **画面の文字は選べない。** デスクトップアプリなので、盤や表の上で
+     ドラッグすると文字が青く反転するのは web ページの挙動で、ここでは
+     押し損ねただけに見える。**選べるのは「写して他所へ持っていくもの」
+     だけ** — 下の `.k-sel` を付けたところに戻す */
+  -webkit-user-select:none; user-select:none;
 }
+
+/* 選べるものだけに付ける。**器ではなく文字そのものに付ける** — 器に付けると
+   隣の余白からドラッグが始まって行ごと拾ってしまう。
+   いま戻しているのは 4 つ:
+     入力欄 (打った文字を選び直せないと直せない)
+     人の名前 (相手に言及するとき写す)
+     チャットの本文 (引用する)
+     通信ログ (不具合を報告するとき貼る) */
+.k-sel, input, textarea {
+  -webkit-user-select:text; user-select:text;
+}
+/* 入力欄は文字を打つ場所なので、指の形も文字カーソルに */
+input, textarea { cursor:text; }
 a { color:var(--accent); text-decoration:none; }
 a:hover { color:var(--text); }
 button, input, select, textarea { font:inherit; color:inherit; }

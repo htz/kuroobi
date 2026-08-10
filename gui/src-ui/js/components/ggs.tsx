@@ -508,7 +508,7 @@ export function Bubble({ m, showName }: { m: Msg; showName?: boolean }) {
     <div style={{ display: 'flex', flexDirection: 'column', gap: 3, alignItems: m.mine ? 'flex-end' : 'flex-start' }}>
       {showName && (
         <div style={{ display: 'flex', alignItems: 'baseline', gap: 7 }}>
-          <span style={{ fontSize: 'var(--fs-6)', fontWeight: 600, color: m.mine ? 'var(--accent)' : 'var(--text)' }}>
+          <span className="k-sel" style={{ fontSize: 'var(--fs-6)', fontWeight: 600, color: m.mine ? 'var(--accent)' : 'var(--text)' }}>
             {m.mine ? '自分' : m.from}
           </span>
           <span style={{ fontSize: 'var(--fs-7)', color: 'var(--sub)' }}>{m.at}</span>
@@ -518,8 +518,9 @@ export function Bubble({ m, showName }: { m: Msg; showName?: boolean }) {
         maxWidth: 320, padding: '6px 10px', borderRadius: 'var(--r-bubble)', fontSize: 'var(--fs-5)', lineHeight: 1.5,
         background: m.mine ? 'var(--accent-dim)' : 'var(--panel)', color: m.mine ? 'var(--on-accent)' : 'var(--text)',
       }}>
-        {m.body}
-        {m.ja && <div style={{
+        {/* 引用するので選べる (k-sel)。和訳も同じ */}
+        <span className="k-sel">{m.body}</span>
+        {m.ja && <div className="k-sel" style={{
           marginTop: 4, paddingTop: 4, borderTop: '1px solid var(--border)',
           fontSize: 'var(--fs-6)', color: 'var(--sub)',
         }}>{m.ja}</div>}
@@ -565,7 +566,8 @@ export function ConsoleLog({ lines }: { lines: LogLine[] }) {
           color: l.dir === 'out' ? 'var(--accent)' : l.dir === 'app' ? 'var(--sub)' : 'var(--text)',
         }}>
           <span style={{ flex: 'none', width: 8 }}>{l.dir === 'out' ? '›' : ''}</span>
-          <span>{l.text}</span>
+          {/* 不具合を報告するときに貼るので選べる (k-sel) */}
+          <span className="k-sel">{l.text}</span>
         </div>
       ))}
     </div>

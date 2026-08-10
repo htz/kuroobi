@@ -1424,7 +1424,7 @@ function GgsUsers({ snap, onNav, onKifu }: {
                 {cur * perPage + i + 1}
               </span>
             )}
-            <span>{u.name}</span>
+            <span className="k-sel">{u.name}</span>
             {/* レートには必ず偏差を添える (規則 29) — 偏差が大きいと数字が
                 意味を持たない。ランキング (`/os t`) は偏差を返すが、接続中の
                 一覧 (`/os who`) は返さないので、そちらは数字だけになる */}
@@ -1493,7 +1493,7 @@ function UserDetail({ snap, name, tab, onTab, onBack, onNav, onKifu }: {
         background: 'var(--panel)',
       }}>
         <IconButton name="back" label="一覧へ戻る" onClick={onBack} />
-        <span style={{ fontSize: 'var(--fs-2)', fontWeight: 600 }}>{name}</span>
+        <span className="k-sel" style={{ fontSize: 'var(--fs-2)', fontWeight: 600 }}>{name}</span>
         {rate && (
           <span style={{ fontSize: 'var(--fs-6)', color: 'var(--sub)' }}>
             {rate}{dev != null && <span style={{ opacity: .7, marginLeft: 4 }}>±{dev}</span>}

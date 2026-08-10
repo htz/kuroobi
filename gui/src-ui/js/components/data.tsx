@@ -404,11 +404,11 @@ export function PlayerRow({ color, name, rate, dev, meta, clock, active, discs, 
       <StoneDot color={color} size={14} />
       {/* 押せないときは span。button のままだと Tab で回ってくるのに何も起きない */}
       {onName
-        ? <button type="button" onClick={onName} className="k-link" style={{
+        ? <button type="button" onClick={onName} className="k-link k-sel" style={{
             border: 0, background: 'transparent', padding: 0, fontSize: 'var(--fs-4)', fontWeight: 600, color: 'var(--text)',
             borderBottom: '1px solid color-mix(in srgb, var(--accent) 40%, transparent)',
           }}>{name}</button>
-        : <b style={{ fontSize: 'var(--fs-4)', fontWeight: 600 }}>{name}</b>}
+        : <b className="k-sel" style={{ fontSize: 'var(--fs-4)', fontWeight: 600 }}>{name}</b>}
       {rate !== undefined && (
         <span style={{ color: 'var(--sub)', fontSize: 'var(--fs-6)', fontVariantNumeric: 'tabular-nums' }}>
           {rate.toFixed(1)}{dev !== undefined && <span style={{ opacity: .7, marginLeft: 4 }}>±{dev}</span>}
@@ -526,7 +526,7 @@ export function ResultRow({ win, draw, opponent, discs, when, note, rating, dim,
     <span style={{ width: 24, flex: 'none', color: draw ? 'var(--sub)' : win ? 'var(--ok)' : 'var(--bad)' }}>
       {draw ? '分' : win ? '勝' : '負'}
     </span>
-    <span style={{ flex: 1, minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+    <span className="k-sel" style={{ flex: 1, minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
       {opponent}
     </span>
     {note && (
