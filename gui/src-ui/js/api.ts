@@ -1,6 +1,6 @@
 // バックエンドとの入出力。
 
-import type { BookNode, EvalPoint, GameView, GgsSnapshot, HintView, LearnEntry, StandbyCfg, ThinkView } from './types';
+import type { BookNode, ClockView, EvalPoint, GameView, GgsSnapshot, HintView, LearnEntry, StandbyCfg, ThinkView } from './types';
 
 const core = () => window.__TAURI__?.core;
 
@@ -34,6 +34,10 @@ export function onApp(name: string, fn: () => void): Promise<() => void> {
 export const api = {
   state: () => call<GameView>('state'),
   newGame: () => call<GameView>('new_game'),
+  /** 時計を読む。走っている手番のぶんは Rust 側で差し引かれて返る */
+  clocks: () => call<ClockView>('clocks'),
+  /** 持ち時間を決めて初期化する。0 で時計なし */
+  setClock: (secs: number) => call<ClockView>('set_clock', { secs }),
   play: (sq: number) => call<GameView>('play', { sq }),
   undo: () => call<GameView>('undo'),
   goto: (n: number) => call<GameView>('goto', { n }),

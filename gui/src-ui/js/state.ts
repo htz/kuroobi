@@ -6,7 +6,7 @@
 // そこから導くだけにする。
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { api, jsLog } from './api';
-import type { GameView, SearchStat } from './types';
+import type { ClockView, GameView, SearchStat } from './types';
 
 /// エンジンが返す**内部の符丁**。画面には出さない。
 ///
@@ -93,7 +93,7 @@ export interface Hints {
   [sq: number]: { value: number; exact: boolean; book: boolean; depth: number };
 }
 
-export function useGame() {
+export function useGame(clockSecs = 0) {
   const [view, setView] = useState<GameView | null>(null);
   const [mode, setMode] = useState<AppMode>('vs');
   const [side, setSide] = useState<EngineSide>('white');
@@ -251,6 +251,29 @@ export function useGame() {
     } catch (e) { say('' + e); }
   }, [thinking, playing, view, engineSides, apply, maybeLearn, say]);
 
+  /* **持ち時間。** 0 は「時計なし」。GGS と同じ配り方 (`timectl`) を
+     Rust 側が通すので、ここは秒数を渡すだけ。**新規対局のたびに初期化する**
+     — 前の対局の残りを引き継ぐと、始めた時点で時間切れになる */
+  const [clock, setClock] = useState<ClockView | null>(null);
+  /* 走っている手番は Rust 側が差し引いて返すので、こちらは毎秒読むだけ。
+     **対局していないときは読まない** — 盤を眺めている間に問い合わせても
+     値は動かない */
+  useEffect(() => {
+    if (!clockSecs || !playing) return;
+    const id = setInterval(() => {
+      void api.clocks().then((c) => {
+        setClock(c);
+        /* **切れたら止める。** 放っておくと切れた側が指し続けて、
+           時計だけ 0 で止まった不思議な対局になる */
+        if (c.lost) {
+          setPlaying(false);
+          say(c.lost === 'black' ? '黒の時間切れ' : '白の時間切れ', 'gold');
+        }
+      }).catch(() => {});
+    }, 1000);
+    return () => clearInterval(id);
+  }, [clockSecs, playing, say]);
+
   const newGame = useCallback(async () => {
     hintSeq.current++;
     // 進行中の探索は打ち切る。強さの反映は待たない — 待つとエンジンの
@@ -261,8 +284,9 @@ export function useGame() {
     setThinkTotal({ black: 0, white: 0 });
     setPlaying(false);
     apply(await api.newGame());
+    setClock(await api.setClock(clockSecs).catch(() => null));
     say('');
-  }, [apply, pushLevels, say]);
+  }, [apply, pushLevels, say, clockSecs]);
 
   const undo = useCallback(async () => {
     if (thinking) return;
@@ -301,6 +325,7 @@ export function useGame() {
     toasts, say, dismiss,
     engineSides, pushLevels, refreshHints,
     play, newGame, undo, jumpTo, stop,
+    clockSecs, clock,
     hintSeq,
   };
 }

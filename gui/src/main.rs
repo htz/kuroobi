@@ -31,6 +31,69 @@ struct App {
     activity: Arc<Mutex<Activity>>,
     /// CPU 使用率の前回サンプル (実時間, プロセスの CPU 時間)。
     cpu_meter: Mutex<Option<(std::time::Instant, std::time::Duration)>>,
+    /// ローカル対局の時計。**GGS と同じ形にする** — 持ち時間を意識して
+    /// 指す練習の場が無いと、本番でしか配り方を試せない。
+    clocks: Mutex<Clocks>,
+}
+
+/// ローカル対局の時計。0 秒の持ち時間は「時間制でない」の意味。
+#[derive(Default)]
+struct Clocks {
+    /// 1 人ぶんの持ち時間 (秒)。0 なら時計を使わない。
+    total: u64,
+    /// 残り (秒)。人と KUROOBI で別に持つ。
+    black: f64,
+    white: f64,
+    /// 時間切れした側。決まったら以降は動かさない。
+    lost: Option<kuroobi::Color>,
+    /// いまの手番が始まった時刻。**着手のたびに引く** — 人と KUROOBI で
+    /// 計り方を分けない (`think` の実測だけを引くと、人の考慮時間が
+    /// どこにも計上されない)。
+    turn_started: Option<std::time::Instant>,
+}
+
+impl Clocks {
+    fn reset(&mut self, total: u64) {
+        self.total = total;
+        self.black = total as f64;
+        self.white = total as f64;
+        self.lost = None;
+        self.turn_started = if total > 0 {
+            Some(std::time::Instant::now())
+        } else {
+            None
+        };
+    }
+
+    /// 手番が終わったので経過を引き、次の手番を始める。
+    fn turn_done(&mut self, mover: kuroobi::Color) {
+        if self.total == 0 {
+            return;
+        }
+        if let Some(t) = self.turn_started.take() {
+            self.spend(mover, t.elapsed().as_secs_f64());
+        }
+        self.turn_started = Some(std::time::Instant::now());
+    }
+    fn left(&self, c: kuroobi::Color) -> f64 {
+        if c == kuroobi::Color::Black {
+            self.black
+        } else {
+            self.white
+        }
+    }
+    /// 使った時間を引く。**0 で止める** — 負にすると画面の桁が崩れる。
+    fn spend(&mut self, c: kuroobi::Color, secs: f64) {
+        let v = if c == kuroobi::Color::Black {
+            &mut self.black
+        } else {
+            &mut self.white
+        };
+        *v = (*v - secs).max(0.0);
+        if *v <= 0.0 && self.lost.is_none() {
+            self.lost = Some(c);
+        }
+    }
 }
 
 /// このプロセスが使った CPU 時間 (user + sys)。自プロセスなので特別な
@@ -985,6 +1048,60 @@ async fn set_levels(
     .map_err(|e| e.to_string())?
 }
 
+/// 画面に出す時計。**`GameView` には入れない** — 盤の更新は着手のたび
+/// だが、時計は毎秒動くので更新の周期が違う。混ぜると盤ごと描き直す。
+#[derive(Serialize)]
+struct ClockView {
+    /// 1 人ぶんの持ち時間 (秒)。0 なら時計を使っていない。
+    total: u64,
+    black: f64,
+    white: f64,
+    /// 時間切れした側 ("black" | "white")。まだなら null。
+    lost: Option<String>,
+}
+
+/// 時計を読む。走っている手番のぶんは**その場で差し引いて**返す —
+/// 控えている値は着手のたびにしか動かないので、そのまま出すと止まって見える。
+#[tauri::command]
+fn clocks(app: State<App>) -> ClockView {
+    let c = app.clocks.lock().unwrap();
+    let mut black = c.black;
+    let mut white = c.white;
+    if c.total > 0 && c.lost.is_none() {
+        if let Some(t) = c.turn_started {
+            let used = t.elapsed().as_secs_f64();
+            let turn = app.game.lock().unwrap().board.player();
+            if turn == kuroobi::Color::Black {
+                black = (black - used).max(0.0);
+            } else {
+                white = (white - used).max(0.0);
+            }
+        }
+    }
+    ClockView {
+        total: c.total,
+        black,
+        white,
+        lost: c.lost.map(|x| {
+            if x == kuroobi::Color::Black {
+                "black".into()
+            } else {
+                "white".into()
+            }
+        }),
+    }
+}
+
+/// 持ち時間を決めて時計を初期化する。**0 で時計なし**。
+///
+/// 対局を始めるたびに呼ぶ (新規対局と同時)。GGS と違って途中で変えられる
+/// 必要は無いので、設定を持ち回さず引数で受ける。
+#[tauri::command]
+fn set_clock(app: State<App>, secs: u64) -> ClockView {
+    app.clocks.lock().unwrap().reset(secs);
+    clocks(app)
+}
+
 /// 現局面の最善手を計算する。**局面は動かさない** — 適用は `apply_move`。
 /// 分離してあるので、思考中に停止された場合はフロントが結果を捨てるだけで
 /// 「停止」が成立する。
@@ -999,13 +1116,48 @@ async fn think(app: State<'_, App>) -> Result<ThinkView, String> {
     let eng = app.engine.clone();
     let act = app.activity.clone();
     let stop = app.stop.clone();
+    /* **時計があるときは期限つきで読む。** 配り方 (`timectl`) は GGS と
+       同じものを通す — ローカルだけ別の計算にすると、練習した感覚が本番で
+       通じない。配り方は `even` 固定 (選択肢を増やす前に、持ち時間から
+       自動で決める形を作るのが本筋)。 */
+    let cap = {
+        let c = app.clocks.lock().unwrap();
+        if c.total == 0 {
+            None
+        } else {
+            let e = app.engine.lock().unwrap();
+            let cfg = e.as_ref().unwrap().config();
+            let base = kuroobi::timectl::Levels {
+                depth: cfg.depth,
+                solve: cfg.solve_empties,
+                band: cfg.band,
+            };
+            drop(e);
+            kuroobi::timectl::plan(
+                kuroobi::timectl::Situation {
+                    clock_secs: Some(c.left(board.player()) as u64),
+                    ext_secs: 0,
+                    empties: board.empty_count(),
+                    max_move_secs: 0,
+                    reserve_secs: 20,
+                },
+                base,
+                kuroobi::timectl::Pace::Even,
+            )
+            .cap
+        }
+    };
     let (mv, secs, nodes, aborted) = tauri::async_runtime::spawn_blocking(move || {
         let _g = ActivityGuard::begin(&act, "思考");
         let mut guard = eng.lock().unwrap();
         let t0 = std::time::Instant::now();
         // ノードは累計で持っているので、この 1 手ぶんは前後の差で取る
         let n0 = guard.as_ref().unwrap().nodes();
-        let mv = guard.as_mut().unwrap().choose(&board);
+        let e = guard.as_mut().unwrap();
+        let mv = match cap {
+            Some(d) => e.choose_within(&board, Some(t0 + d)),
+            None => e.choose(&board),
+        };
         let nodes = guard.as_ref().unwrap().nodes() - n0;
         // 停止された探索の値は不完全 (番兵が混じる)。呼び出し元へ返さない。
         // ただし判定するのは**探索したときだけ** — 定石から返した手は探索を
@@ -1043,6 +1195,9 @@ async fn think(app: State<'_, App>) -> Result<ThinkView, String> {
 #[tauri::command]
 fn apply_move(app: State<App>, sq: Option<u8>) -> Result<GameView, String> {
     let mut game = app.game.lock().unwrap();
+    // 指した側の手番が終わったので、その経過を引く
+    let mover = game.board.player();
+    app.clocks.lock().unwrap().turn_done(mover);
     match sq {
         Some(s) => {
             let pos = Position::from_index(s as u32).ok_or("bad square")?;
@@ -2176,6 +2331,7 @@ fn main() {
         .plugin(tauri_plugin_notification::init())
         .manage(App {
             game: Mutex::new(initial),
+            clocks: Mutex::new(Clocks::default()),
             engine: Arc::new(Mutex::new(None)),
             stop: Arc::new(Mutex::new(None)),
             ggs: Mutex::new(None),
@@ -2238,6 +2394,8 @@ fn main() {
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
+            clocks,
+            set_clock,
             state,
             new_game,
             play,

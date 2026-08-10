@@ -12,7 +12,7 @@
 use std::time::Duration;
 
 /// 持ち時間の配り方。
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq)]
 pub enum Pace {
     /// 序盤に厚く。研究向き。
     Slow,
@@ -22,6 +22,12 @@ pub enum Pace {
     Fast,
     /// 時間を見ずに設定の深さまで読む。持ち時間の管理は指す側の責任。
     Depth,
+    /// **終盤に残す度合いを係数で直に指定する。** `a + (1-a)/√残り手数`。
+    ///
+    /// `a = 1.0` が [`Pace::Even`]、`a = 0.6` が [`Pace::Fast`] と同じ式。
+    /// 小さいほど序盤を切り詰めて終盤に回す。**どこまで寄せると効かなく
+    /// なるかを測るため**に置いた (自己対局で端を探す)。
+    Tail(f64),
 }
 
 impl Pace {
@@ -30,6 +36,12 @@ impl Pace {
     /// `FromStr` にしないのは**失敗しないため**。設定から来る値なので、
     /// 知らない語で対局を止めるより既定へ倒すほうがよい。
     pub fn parse(s: &str) -> Pace {
+        // `tail:0.4` のように係数を渡せる (測定用)
+        if let Some(a) = s.strip_prefix("tail:") {
+            if let Ok(v) = a.parse::<f64>() {
+                return Pace::Tail(v.clamp(0.0, 1.0));
+            }
+        }
         match s {
             "slow" => Pace::Slow,
             "fast" => Pace::Fast,
@@ -44,6 +56,7 @@ impl Pace {
             Pace::Even => "even",
             Pace::Fast => "fast",
             Pace::Depth => "depth",
+            Pace::Tail(_) => "tail",
         }
     }
 }
@@ -122,9 +135,11 @@ pub fn plan(s: Situation, base: Levels, pace: Pace) -> Plan {
     let pool = secs.saturating_sub(reserve) as f64;
     let even = pool / my_moves as f64;
     // 配り方。序盤は手数が多いので、厚くするほど 1 手が長くなる
+    let root = (my_moves as f64).sqrt();
     let budget = match pace {
-        Pace::Slow => even * (1.0 + 0.8 / (my_moves as f64).sqrt()),
-        Pace::Fast => even * (0.6 + 0.4 / (my_moves as f64).sqrt()),
+        Pace::Slow => even * (1.0 + 0.8 / root),
+        Pace::Fast => even * (0.6 + 0.4 / root),
+        Pace::Tail(a) => even * (a + (1.0 - a) / root),
         _ => even,
     };
     let budget = if s.max_move_secs > 0 {
@@ -233,6 +248,27 @@ mod tests {
         for secs in [1, 2, 5, 10] {
             assert!(cap_secs(secs, 60, Pace::Even) >= 0.05);
         }
+    }
+
+    /// **`Tail(1.0)` は `Even`、`Tail(0.6)` は `Fast` と同じ値になる。**
+    /// 係数の式が既存の 2 つと地続きであることを固定する — ずれると、
+    /// 測って決めた係数が既存の方式と比べられなくなる。
+    #[test]
+    fn tail_matches_the_existing_two() {
+        for empties in [60u8, 44, 30] {
+            let e = cap_secs(600, empties, Pace::Even);
+            let f = cap_secs(600, empties, Pace::Fast);
+            assert!((cap_secs(600, empties, Pace::Tail(1.0)) - e).abs() < 1e-9);
+            assert!((cap_secs(600, empties, Pace::Tail(0.6)) - f).abs() < 1e-9);
+        }
+    }
+
+    /// 係数が小さいほど序盤は薄い。
+    #[test]
+    fn smaller_tail_is_thinner_in_the_opening() {
+        let a = cap_secs(600, 60, Pace::Tail(0.6));
+        let b = cap_secs(600, 60, Pace::Tail(0.25));
+        assert!(b < a, "0.25 {b} < 0.6 {a}");
     }
 
     /// 上限を渡したらそこで頭打ちになる。

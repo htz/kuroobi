@@ -52,9 +52,11 @@ function reachable(raw: NavId, conn: ReturnType<typeof connOf>): NavId {
 }
 
 export function App() {
-  const g = useGame();
-  const ggs = useGgs();
   const { prefs, set: setPref } = usePrefs();
+  /* 持ち時間は設定 (`prefs`) が持つ。**対局の状態ではなく好み** —
+     アプリを閉じても残ってほしいし、対局中に変わると時計が飛ぶ */
+  const g = useGame(prefs.clockSecs);
+  const ggs = useGgs();
   const [navRaw, setNavRaw] = useState<NavId>('play');
   const conn = connOf(ggs.snap?.conn);
   /* 繋がり方が変わると左メニューの GGS の行が総入れ替わりになる (規則 10 —
@@ -173,7 +175,9 @@ export function App() {
          受けていたので `both:40:nobook` と書くと見出しが "nobook" になり、
          **どの枚も出ない = 画面が真っ白**になっていた (実際に踏んだ)。
          見出しの位置に来ても目印として扱う */
-      const extra = extraRaw === 'nobook' ? undefined : extraRaw;
+      // 末尾の目印 (`nobook` / `clock<秒>`) は見出しではない
+      const extra =
+        extraRaw === 'nobook' || /^clock\d+$/.test(extraRaw ?? '') ? undefined : extraRaw;
       /* `:nobook` は定石を切ってから始める目印。**どの入口より先に効かせる** —
          `study` などの分岐が `return` するので、下に置くと届く入口と届かない
          入口ができる (実際 `study:graph:nobook` で切れていなかった)。
@@ -181,6 +185,13 @@ export function App() {
          (`Activity.local`) が立たず「譲り中」の行を撮れない。分析では
          定石の点が出るかどうかの出し分けを確かめるのに要る */
       if (v.endsWith(':nobook')) g.setUseBook(false);
+      /* `both:6:clock60` — 末尾に付ける目印 (`nobook` と同じ形)。持ち時間を
+         入れてから始める (撮るためだけの入口)。設定を押さないと時計が
+         動かず、実機で確かめられなかった。
+         **`api.setClock` も直に呼ぶ** — この経路は「新規対局」を通らないので、
+         `prefs` を変えるだけでは時計が初期化されない */
+      const mc = v.match(/:clock(\d+)$/);
+      if (mc) { setPref('clockSecs', +mc[1]); void api.setClock(+mc[1]); }
       if (who === 'settings') { setSettings(true); return; }
       /* 覆いを出す入口 (撮るためだけ)。**覆いはクリックでしか出せず、
          寸法をずっと実測できていなかった** — 確認 / 棋譜の読み込み /
@@ -468,6 +479,14 @@ export function App() {
     ? (v.black === v.white ? '引き分け' : v.black > v.white ? '黒の勝ち' : '白の勝ち')
     : undefined;
   const anyThink = g.thinkTotal.black > 0 || g.thinkTotal.white > 0;
+  /** 石数の行に出す時計。持ち時間があれば残り、無ければ思考の累計。 */
+  const clockLabel = (c: 'b' | 'w') => {
+    if (g.clockSecs) {
+      const v = c === 'b' ? g.clock?.black : g.clock?.white;
+      return v === undefined ? undefined : fmtSecs(v);
+    }
+    return !study && anyThink ? fmtSecs(c === 'b' ? g.thinkTotal.black : g.thinkTotal.white) : undefined;
+  };
 
 
   const nodes = g.stat && g.stat.nodes > 0 ? g.stat.nodes : 0;
@@ -707,8 +726,10 @@ export function App() {
           <ScoreRow black={v?.black ?? 2} white={v?.white ?? 2}
                     turn={!v || v.over ? undefined : v.player === 'black' ? 'b' : 'w'}
                     meta={study ? curMoveMeta : result}
-                    blackClock={!study && anyThink ? fmtSecs(g.thinkTotal.black) : undefined}
-                    whiteClock={!study && anyThink ? fmtSecs(g.thinkTotal.white) : undefined} />
+                    /* **持ち時間があるときは残り時間**、無いときは思考の累計。
+                       同じ場所に別のものが出るが、時計を付けた対局では
+                       「あと何秒あるか」が読みたいもので、累計は要らない */
+                    blackClock={clockLabel('b')} whiteClock={clockLabel('w')} />
         </div>
         )}
 

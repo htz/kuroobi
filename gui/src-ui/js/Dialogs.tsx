@@ -341,6 +341,19 @@ export function Settings({ prefs, setPref, ggs, onClose }: {
           })}
         </Section>
 
+          <Section title="ローカル対局の持ち時間">
+            <Row2 label="持ち時間">
+              <Select width={140} value={String(prefs.clockSecs)}
+                      onChange={(v) => setPref('clockSecs', +v)}
+                      options={[['0', 'なし'], ['300', '5 分'], ['600', '10 分'],
+                                ['900', '15 分'], ['1200', '20 分'], ['1800', '30 分']]} />
+            </Row2>
+            <Note>
+              KUROOBI と自分の<b style={{ color: 'var(--text)' }}>両方</b>が持ちます。次の「新規対局」から効きます。
+              時間の配り方は GGS と同じもの (残り手数で等分) を使うので、
+              本番前の練習になります。切れた側の負けです。
+            </Note>
+          </Section>
         {th && (
           <Section title="ローカル探索のスレッド数">
             <Row2 label="スレッド">

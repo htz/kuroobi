@@ -30,11 +30,14 @@ export interface Prefs {
   /** 石が返るときの動き (ミリ秒)。0 で動かさない。 */
   flipMs: 0 | 120 | 240;
   facing: Facing;
+  /** ローカル対局の持ち時間 (秒)。0 で時計なし。**次の新規対局から効く** */
+  clockSecs: number;
 }
 
 const DEFAULTS: Prefs = {
   theme: 'os', tatami: 0, decimals: 1,
   coords: true, grain: true, flipMs: 120, facing: 'black',
+  clockSecs: 0,
 };
 
 /* 畳の色。**盤の 4 つのトークンを組で差し替える** — 地だけ変えると

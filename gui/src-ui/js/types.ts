@@ -336,3 +336,12 @@ export interface LearnChange {
   /** この取り込みで学習分に新しく作った局面か。 */
   new_entry: boolean;
 }
+
+/** ローカル対局の時計。`total` が 0 なら時計を使っていない。 */
+export interface ClockView {
+  total: number;
+  black: number;
+  white: number;
+  /** 時間切れした側。まだなら null */
+  lost: 'black' | 'white' | null;
+}
