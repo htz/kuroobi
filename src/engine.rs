@@ -120,6 +120,14 @@ pub struct Engine {
     /// 実戦から取り込んだ学習分 (保存対象)。`book` には起動時と
     /// 取り込み時に重ねてあり、選択は `book` 側で行う。
     learned: Book,
+    /// **学習分を重ねる前の定石本体。** 分析のグラフが「定石の値」として
+    /// 使ってよいのはこちらだけ — 本体は深い探索で付けた値だが、学習分は
+    /// 終局の石差を根まで書き戻したもので、その局面の評価ではない。
+    ///
+    /// `learned` との差分では代用できない。**序盤の局面は実戦で必ず通る
+    /// ので学習分にも載っており**、「学習分にあるか」で外すと本体に載って
+    /// いる定石手まで落ちる (実際に落ちた)。
+    book_base: Option<Book>,
     /// 学習分の保存先 (book と同じディレクトリの book_learn.txt)。
     learn_path: std::path::PathBuf,
     /// 読み切りが訪れたノードの累計。中盤探索は `search.nodes` が自分で
@@ -164,6 +172,11 @@ impl Engine {
         // 局面から「経験の定石」が育つ)。別ファイルなので bookgen が
         // 定石本体を回している間も衝突しない。
         let learn_path = config.book.with_file_name("book_learn.txt");
+        // **重ねる前の本体を控える。** 重ねると上書きされて区別できなくなる
+        let book_base = match Book::load(&config.book) {
+            Ok(b) if !b.is_empty() => Some(b),
+            _ => None,
+        };
         let learned = Book::load(&learn_path).unwrap_or_default();
         if !learned.is_empty() {
             let base = book.get_or_insert_with(Book::new);
@@ -181,6 +194,7 @@ impl Engine {
             config,
             stop,
             book,
+            book_base,
             book_rand,
             learned,
             learn_path,
@@ -337,6 +351,24 @@ impl Engine {
             .fold(f32::NEG_INFINITY, f32::max);
         let learned = self.learned.get_raw(Book::key(board).0).is_some();
         Some((best, learned))
+    }
+
+    /// **定石本体**に載っているこの局面の最善の値 (手番視点)。
+    ///
+    /// 分析のグラフが使う。学習分は見ない — 値の性質が違う (本体は深い
+    /// 探索、学習分は終局の石差の書き戻し)。`use_book` を見るので、定石を
+    /// 使わない設定なら返さない (対局の選択と揃える)。
+    pub fn book_base_value(&self, board: &Board) -> Option<f32> {
+        let hints = self
+            .book_base
+            .as_ref()
+            .filter(|_| self.config.use_book)?
+            .candidates(board)?;
+        hints
+            .iter()
+            .map(|(_, v)| *v)
+            .fold(f32::NEG_INFINITY, f32::max)
+            .into()
     }
 
     /// 定石に載っているこの局面の (最善の値, 実戦学習由来か, 付けたときの
