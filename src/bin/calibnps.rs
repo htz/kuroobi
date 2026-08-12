@@ -67,7 +67,7 @@ fn report(nps: f64, threads: usize) {
                 solve: 30,
                 band: 0,
             },
-            kuroobi::timectl::Pace::Even,
+            kuroobi::timectl::Pace::Fast,
         );
         let t = kuroobi::timectl::solve_secs(p.solve, nps, threads);
         println!("  {secs:>6} 秒  {:>12}  {t:>14.1} 秒", p.solve);

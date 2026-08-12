@@ -226,7 +226,7 @@ export interface EngineCfgView {
   learn: boolean;
   /** 相手の手番中に先読みするか。**「深さ固定」では効かない。** */
   ponder: boolean;
-  /** 持ち時間の配り方 ("depth" 深さ固定 / "slow" / "even" / "fast")。 */
+  /** 持ち時間の配り方 ("fast" 終盤に残す / "depth" 深さ固定)。 */
   pace: string;
   /** 1 手に使う上限 (秒)。0 で上限なし。 */
   max_move_secs: number;

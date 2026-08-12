@@ -638,8 +638,11 @@ pub struct EngineCfgView {
     /// 相手の手番中に先読みするか。**「深さ固定」では効かない** —
     /// 本番の探索がどのみち最後まで走るので、先に読んでも得るものが無い。
     pub ponder: bool,
-    /// 持ち時間の配り方 ("depth" 深さ固定 / "slow" 序盤に厚く / "even" 均等 /
-    /// "fast" 終盤に残す)。
+    /// 持ち時間の配り方 ("fast" 終盤に残す / "depth" 深さ固定)。
+    ///
+    /// **"slow" と "even" は落とした。** 自己対局で "slow" は 3 秒・8 秒の
+    /// 対局で勝率 0.0% (石差 −34)、"fast" は全条件で "even" に劣らなかった。
+    /// 古い設定に残っていても `Pace::parse` が既定 ("fast") へ倒す。
     pub pace: String,
     /// 1 手に使う上限 (秒)。0 で上限なし。
     pub max_move_secs: u64,
@@ -659,7 +662,7 @@ impl Default for EngineCfgView {
             book_loaded: false,
             learn: true,
             ponder: true,
-            pace: "even".into(),
+            pace: "fast".into(),
             max_move_secs: 0,
             reserve_secs: 20,
         }
@@ -1277,7 +1280,7 @@ pub fn run(
         local_stop,
         local_activity,
         pending_watch: HashMap::new(),
-        engine_cfg_pace: "even".into(),
+        engine_cfg_pace: "fast".into(),
         engine_cfg_max_move: 0,
         engine_cfg_reserve: 20,
         engine_cfg_ponder: true,
@@ -3838,34 +3841,38 @@ mod budget_tests {
 
     #[test]
     fn the_budget_shrinks_with_the_clock() {
-        let a = cap(Some(900), 40, "even", 0).unwrap();
-        let b = cap(Some(300), 40, "even", 0).unwrap();
-        let c = cap(Some(60), 40, "even", 0).unwrap();
+        let a = cap(Some(900), 40, "fast", 0).unwrap();
+        let b = cap(Some(300), 40, "fast", 0).unwrap();
+        let c = cap(Some(60), 40, "fast", 0).unwrap();
         assert!(
             a > b && b > c,
             "残りが減るほど 1 手が短い: {a:?} > {b:?} > {c:?}"
         );
     }
 
+    /// **落とした配り方は既定へ倒れる。** 古い設定ファイルに "slow" が
+    /// 残っていても、3 秒の対局で勝率 0% だった配り方に戻らない。
     #[test]
-    fn pace_shifts_where_the_time_goes() {
-        // 序盤 (残り手数が多い) では、序盤に厚い方が長く使う
-        let slow = cap(Some(900), 50, "slow", 0).unwrap();
-        let even = cap(Some(900), 50, "even", 0).unwrap();
+    fn dropped_paces_fall_back_to_the_default() {
         let fast = cap(Some(900), 50, "fast", 0).unwrap();
-        assert!(slow > even && even > fast, "{slow:?} > {even:?} > {fast:?}");
+        for p in ["slow", "even", ""] {
+            assert_eq!(cap(Some(900), 50, p, 0).unwrap(), fast, "{p:?}");
+        }
+        // 等分の式そのものは基準として生きている (既定より厚い)
+        let even = cap(Some(900), 50, "tail:1.0", 0).unwrap();
+        assert!(even > fast, "等分 {even:?} > 既定 {fast:?}");
     }
 
     #[test]
     fn the_per_move_cap_is_honoured() {
-        let c = cap(Some(3600), 50, "even", 5).unwrap();
+        let c = cap(Some(3600), 50, "fast", 5).unwrap();
         assert!(c <= Duration::from_secs(5), "上限 5 秒を超えない: {c:?}");
     }
 
     #[test]
     fn out_of_main_time_plays_fast() {
         // 本時間 0・ロスタイムあり → ごく短い期限で指す
-        let c = cap(Some(0), 30, "even", 0).unwrap();
+        let c = cap(Some(0), 30, "fast", 0).unwrap();
         assert!(c <= Duration::from_secs(1), "{c:?}");
     }
 
@@ -3879,7 +3886,9 @@ mod budget_tests {
                 ..Default::default()
             },
             BASE,
-            "even",
+            // 等分の式で見る。既定 (fast) は 1 手を薄くするので、
+            // 「取り置きぶんだけ残るか」の確認には向かない
+            "tail:1.0",
         );
         let moves = ((40 - 26) as f64 / 2.0).ceil();
         let pool = c.unwrap().as_secs_f64() * moves;

@@ -1275,7 +1275,7 @@ async fn think(app: State<'_, App>) -> Result<ThinkView, String> {
                     ..Default::default()
                 },
                 base,
-                kuroobi::timectl::Pace::Even,
+                kuroobi::timectl::Pace::Fast,
             )
         });
         (base, plan)

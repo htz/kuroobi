@@ -372,17 +372,25 @@ export function Settings({ prefs, setPref, ggs, initialTab, onClose }: {
         {th && (
           <Section title="ローカル探索のスレッド数">
             <Row2 label="スレッド">
-              <Select width={140} value={th.set == null ? 'auto' : String(th.set)}
-                      onChange={(v) => void setThreads(v === 'auto' ? null : +v)}
-                      options={[['auto', `自動 (${th.auto})`],
-                                ...Array.from({ length: th.auto * 2 }, (_, i) =>
-                                  [String(i + 1), String(i + 1)] as [string, string])]} />
+              {/* **「自動」を別項目にしない。** 数の列の外にもう 1 つ置くと、
+                  自動が幾つなのかが分かっていても列の中から探せない。
+                  該当する数に印を付けて 1 列にまとめる。
+                  **選んだときは未指定として保存する** — 数で保存すると、
+                  コア数の違う機械へ設定を移したときに自動が固定値に化ける */}
+              <Select width={140} value={String(th.set ?? th.auto)}
+                      onChange={(v) => void setThreads(+v === th.auto ? null : +v)}
+                      options={Array.from({ length: th.auto * 2 }, (_, i) => {
+                        const n = i + 1;
+                        return [String(n), n === th.auto ? `${n} (自動)` : String(n)] as [string, string];
+                      })} />
             </Row2>
             {/* 説明は操作の下、節の幅いっぱい (設計の絵と同じ)。欄の列に
                 字下げすると、欄の補足なのか節の説明なのかが曖昧になる */}
             <Note>
-              ローカル対局・検討・学習の取り込みが使う並列数です。自動 = コア数の半分 ({th.auto})。
-              GGS 対局用は「GGS」タブにあります (別々に動くので、両方が同時に動くと合計ぶんの CPU を使います)。
+              ローカル対局・検討・学習の取り込み・
+              <b style={{ color: 'var(--text)' }}>GGS 対局</b>が使う並列数です
+              (以前は GGS だけ別に持っていましたが、下の読切の速度がスレッド数ごとの値なので
+              一本にしました)。自動 = コア数の半分 ({th.auto})。
             </Note>
           </Section>
         )}

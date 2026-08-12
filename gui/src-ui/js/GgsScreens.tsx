@@ -942,7 +942,9 @@ export function GgsSettings({ snap }: { snap: GgsSnapshot }) {
   const [auto, setAuto] = useState(snap.auto_play);
   const [watch, setWatch] = useState(snap.watch_analysis);
   const [book, setBook] = useState(e.use_book);
-  const [pace, setPace] = useState(e.pace || 'even');
+  /* 配り方は選ばせない (速指しに一本化した)。GGS では「深さ固定」も
+     置かない — 時間を見ないので時間切れが確定する。値は送るだけ持つ */
+  const pace = 'fast';
   const [maxMove, setMaxMove] = useState(e.max_move_secs);
   const [reserve, setReserve] = useState(e.reserve_secs);
   const [cores, setCores] = useState(0);
@@ -1012,29 +1014,24 @@ export function GgsSettings({ snap }: { snap: GgsSnapshot }) {
           <Note>
             相手が考えている間に、相手が指すと思う手の先を読んでおきます。
             自分の持ち時間は減りません。
-            {pace === 'depth'
-              ? '「深さ固定」では、同じ深さまで読み終えるのが速くなります (実測でおよそ 1/3 の時間)。'
-              : '当たれば同じ持ち時間で 1 段ほど深く読めます (実測 +1.25 段)。'}
-            外れた回は読み直します。
+            当たれば同じ持ち時間で 1 段ほど深く読めます (実測 +1.25 段)。外れた回は読み直します。
           </Note>
         </Section>
 
+        {/* **選ばせない。** 4 択で測ったところ「じっくり」は 3 秒・8 秒の
+            対局で勝率 0.0% (石差 −34)、「速指し」は全条件で「均等」に
+            劣らなかった。選択肢に正解と罠が並んでいるだけだったので、
+            速指しの配り方に一本化した。「深さ固定」は時間を見ないので
+            GGS では時間切れが確定する — ここには置かない (検討用の設定は
+            設定 → エンジン) */}
         <Section title="持ち時間の使い方">
           <Note>
-            1 手にかける時間を、残り時間と残り手数から決めます。時間内で読める深さまで読み、
-            時間が来たらそこまでの答えで指します。
+            1 手にかける時間を、残り時間と残り手数から決めます。
+            <b style={{ color: 'var(--text)' }}>序盤を短く切り上げ、終盤に残します</b> —
+            自己対局で、序盤に厚く配ると 3 秒・8 秒の対局で勝率 0% まで落ちました。
+            読切に入る空きは<b style={{ color: 'var(--text)' }}>この機械の速さから自動で決まります</b>。
           </Note>
-          <div><Segmented value={pace} onChange={setPace} options={[
-            { value: 'slow', label: 'じっくり' }, { value: 'even', label: '均等' },
-            { value: 'fast', label: '速指し' }, { value: 'depth', label: '深さ固定' },
-          ]} /></div>
-          <Note>
-            {pace === 'depth' ? '時間を見ずに上の深さまで読みます。持ち時間の管理は自分で行うことになります。'
-              : pace === 'slow' ? '序盤に厚く配ります。研究向き。'
-              : pace === 'fast' ? '序盤を短く切り上げ、終盤に残します。'
-              : '残り手数で等分します。'}
-          </Note>
-          {pace !== 'depth' && (
+          {(
             <div style={{ display: 'flex', gap: 'var(--sp-4)' }}>
               <Field label="1 手の上限 (秒、0 = なし)">
                 <TextField numeric align="right" width={80} value={String(maxMove)}

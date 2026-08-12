@@ -103,7 +103,9 @@ Options:
 
 Timed play (the only way to measure time management):
   --time <secs>        Whole-game clock per side; running out loses the game
-  --pace-a <mode>      slow | even | fast | depth | tail:<a> (default even)
+  --pace-a <mode>      fast | depth | tail:<a> (default fast). slow/even were
+                       dropped: slow lost 0.0% at 3s and 8s clocks, and fast
+                       was never worse than even. tail:<a> still spans them
   --pace-b <mode>      same, for B
   --nps-a <n|auto>     Calibrated solve speed: the side that gets it derives
                        its exact-solve entry from the clock left instead of a
@@ -128,8 +130,8 @@ fn parse_args() -> Result<Args, String> {
         nnue_a: None,
         nnue_b: None,
         time_secs: 0,
-        pace_a: "even".into(),
-        pace_b: "even".into(),
+        pace_a: "fast".into(),
+        pace_b: "fast".into(),
         nps_a: None,
         nps_b: None,
         time_a: None,

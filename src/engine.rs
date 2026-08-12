@@ -285,7 +285,19 @@ impl Engine {
     /// 置換表を空にする時間は差し引く (毎回の固定費で、ノード数に比例
     /// しない)。空きが深くなると表が溢れて nps は 1 割ほど落ちるが、その
     /// ぶんは `timectl` 側の `DEEP_NPS_RATIO` が持つ。
+    ///
+    /// **2 周測って速いほうを採る。** 他のプロセスが CPU を使っていると
+    /// 値が落ちる — 実機で 5 スレッドが 4 スレッドより遅く出た。外乱は
+    /// **遅くする方向にしか効かない**ので、速いほうが真値に近い
+    /// (真値より速くは測れないので、過大評価にはならない)。
     pub fn measure_solve_nps(&mut self) -> f64 {
+        let a = self.measure_solve_nps_once();
+        let b = self.measure_solve_nps_once();
+        a.max(b)
+    }
+
+    /// 1 周ぶんの実測。[`Engine::measure_solve_nps`] が 2 回呼ぶ。
+    fn measure_solve_nps_once(&mut self) -> f64 {
         /// 空き 22 の較正局面 (OBF)。
         const POSITIONS: [&str; 3] = [
             "--XOOO----XOOOOO-XXOOOOX-XXXOXXX-XXXOXXX-XOOOOXX--OO-O------O--- X",

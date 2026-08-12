@@ -12,29 +12,36 @@
 use std::time::Duration;
 
 /// 持ち時間の配り方。
+///
+/// **選ばせる意味がなかったので減らした。** 自己対局で `even` (残り手数で
+/// 等分) を基準に測ったところ、`slow` (序盤に厚く) は 3 秒・8 秒の対局で
+/// **勝率 0.0%・石差 −34** と壊滅し、30 秒では差が無い。逆に `fast` は
+/// 3 秒で **97.5%**、8 秒 51.2%、30 秒 47.5% と**全条件で `even` に劣らない**。
+/// つまり `fast` 一本でよく、持ち時間で切り替える必要すらない。
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum Pace {
-    /// 序盤に厚く。研究向き。
-    Slow,
-    /// 残り手数で等分する。
-    Even,
-    /// 序盤を短く切り上げ、終盤に残す。
+    /// 序盤を短く切り上げ、終盤に残す。**既定。**
     Fast,
     /// 時間を見ずに設定の深さまで読む。持ち時間の管理は指す側の責任。
+    ///
+    /// **研究用。** 持ち時間のある対局では時間切れが確定するので、GGS では
+    /// 選べないようにしてある。
     Depth,
     /// **終盤に残す度合いを係数で直に指定する。** `a + (1-a)/√残り手数`。
     ///
-    /// `a = 1.0` が [`Pace::Even`]、`a = 0.6` が [`Pace::Fast`] と同じ式。
-    /// 小さいほど序盤を切り詰めて終盤に回す。**どこまで寄せると効かなく
-    /// なるかを測るため**に置いた (自己対局で端を探す)。
+    /// `a = 1.0` が「残り手数で等分」、`a = 0.6` が [`Pace::Fast`] と同じ式。
+    /// 小さいほど序盤を切り詰めて終盤に回す。**傾きをまた疑ったときに、
+    /// 既存の式と地続きで比べるため**に残してある (自己対局で端を探す)。
     Tail(f64),
 }
 
 impl Pace {
-    /// 画面と GGS が使う文字列から。知らない語は [`Pace::Even`]。
+    /// 画面と GGS が使う文字列から。知らない語は既定 ([`Pace::Fast`])。
     ///
     /// `FromStr` にしないのは**失敗しないため**。設定から来る値なので、
-    /// 知らない語で対局を止めるより既定へ倒すほうがよい。
+    /// 知らない語で対局を止めるより既定へ倒すほうがよい。**落とした
+    /// `slow` / `even` もここへ落ちる** — 古い設定ファイルが残っていても、
+    /// 害のある配り方に戻らない。
     pub fn parse(s: &str) -> Pace {
         // `tail:0.4` のように係数を渡せる (測定用)
         if let Some(a) = s.strip_prefix("tail:") {
@@ -43,17 +50,13 @@ impl Pace {
             }
         }
         match s {
-            "slow" => Pace::Slow,
-            "fast" => Pace::Fast,
             "depth" => Pace::Depth,
-            _ => Pace::Even,
+            _ => Pace::Fast,
         }
     }
 
     pub fn as_str(self) -> &'static str {
         match self {
-            Pace::Slow => "slow",
-            Pace::Even => "even",
             Pace::Fast => "fast",
             Pace::Depth => "depth",
             Pace::Tail(_) => "tail",
@@ -267,12 +270,15 @@ pub fn plan(s: Situation, base: Levels, pace: Pace) -> Plan {
     let reserve = s.reserve_secs.min(secs / 2);
     let pool = secs.saturating_sub(reserve) as f64;
     let even = pool / my_moves as f64;
-    // 配り方。序盤は手数が多いので、厚くするほど 1 手が長くなる
+    /* 配り方。序盤は手数が多いので、厚くするほど 1 手が長くなる。
+
+    **`even` はもう選べないが、基準としては残す。** 係数はこれに掛かる形で
+    書いてあり、式を書き換えると過去の測定と比べられなくなる。 */
     let root = (my_moves as f64).sqrt();
     let budget = match pace {
-        Pace::Slow => even * (1.0 + 0.8 / root),
         Pace::Fast => even * (0.6 + 0.4 / root),
         Pace::Tail(a) => even * (a + (1.0 - a) / root),
+        // Depth は先に返している
         _ => even,
     };
     let budget = if s.max_move_secs > 0 {
@@ -347,16 +353,27 @@ mod tests {
         assert_eq!(p.depth, BASE.depth);
     }
 
-    /// **序盤は slow > even > fast。** 配り方の向きが逆になっていないか。
+    /// **既定は序盤を薄く配る。**
+    ///
+    /// 残り手数で等分する版 (`Tail(1.0)`) より短くなっていなければ、
+    /// 落とした `even` と同じものになってしまう。実測では厚くするほど
+    /// 弱く、3 秒の対局で 1.18 倍厚い `slow` が勝率 0.0% だった。
     #[test]
-    fn pace_order_in_the_opening() {
-        let (slow, even, fast) = (
-            cap_secs(600, 60, Pace::Slow),
-            cap_secs(600, 60, Pace::Even),
-            cap_secs(600, 60, Pace::Fast),
-        );
-        assert!(slow > even, "slow {slow} > even {even}");
-        assert!(even > fast, "even {even} > fast {fast}");
+    fn the_default_is_thin_in_the_opening() {
+        let even = cap_secs(600, 60, Pace::Tail(1.0));
+        let fast = cap_secs(600, 60, Pace::Fast);
+        assert!(fast < even, "既定 {fast} < 等分 {even}");
+    }
+
+    /// **落とした語は既定へ落ちる。** 古い設定ファイルに `slow` が
+    /// 残っていても、害のある配り方へ戻らない。
+    #[test]
+    fn dropped_names_fall_back_to_the_default() {
+        for s in ["slow", "even", "", "なにか"] {
+            assert_eq!(Pace::parse(s), Pace::Fast, "{s:?}");
+        }
+        assert_eq!(Pace::parse("depth"), Pace::Depth);
+        assert_eq!(Pace::parse("tail:0.4"), Pace::Tail(0.4));
     }
 
     /// 本時間が尽きたらロスタイム勝負。1 秒未満で指す。
@@ -370,7 +387,7 @@ mod tests {
                 ..Situation::default()
             },
             BASE,
-            Pace::Even,
+            Pace::Fast,
         );
         assert!(p.cap.unwrap() < Duration::from_secs(1));
         assert_eq!(p.band, 0, "帯は使わない");
@@ -381,20 +398,22 @@ mod tests {
     #[test]
     fn budget_never_reaches_zero() {
         for secs in [1, 2, 5, 10] {
-            assert!(cap_secs(secs, 60, Pace::Even) >= 0.05);
+            assert!(cap_secs(secs, 60, Pace::Fast) >= 0.05);
         }
     }
 
-    /// **`Tail(1.0)` は `Even`、`Tail(0.6)` は `Fast` と同じ値になる。**
-    /// 係数の式が既存の 2 つと地続きであることを固定する — ずれると、
-    /// 測って決めた係数が既存の方式と比べられなくなる。
+    /// **`Tail(0.6)` は既定と同じ値になる。**
+    ///
+    /// 係数の式が既定と地続きであることを固定する — ずれると、傾きをまた
+    /// 疑ったときに過去の測定と比べられなくなる。`Tail(1.0)` は落とした
+    /// 「残り手数で等分」に相当し、これも基準として残っている。
     #[test]
-    fn tail_matches_the_existing_two() {
+    fn tail_is_continuous_with_the_default() {
         for empties in [60u8, 44, 30] {
-            let e = cap_secs(600, empties, Pace::Even);
             let f = cap_secs(600, empties, Pace::Fast);
-            assert!((cap_secs(600, empties, Pace::Tail(1.0)) - e).abs() < 1e-9);
             assert!((cap_secs(600, empties, Pace::Tail(0.6)) - f).abs() < 1e-9);
+            // 等分は既定より厚い (落とした側の式が生きていることの確認)
+            assert!(cap_secs(600, empties, Pace::Tail(1.0)) > f);
         }
     }
 
@@ -423,8 +442,8 @@ mod tests {
                     ..Situation::default()
                 };
                 assert_eq!(
-                    plan(sit(None), BASE, Pace::Even).cap,
-                    plan(sit(Some(90e6)), BASE, Pace::Even).cap,
+                    plan(sit(None), BASE, Pace::Fast).cap,
+                    plan(sit(Some(90e6)), BASE, Pace::Fast).cap,
                     "{secs} 秒・空き {empties} で 1 手の予算が動いている"
                 );
             }
@@ -451,7 +470,7 @@ mod tests {
                                 ..Situation::default()
                             },
                             BASE,
-                            Pace::Even,
+                            Pace::Fast,
                         );
                         if p.solve == 0 {
                             continue;
@@ -482,7 +501,7 @@ mod tests {
                     ..Situation::default()
                 },
                 BASE,
-                Pace::Even,
+                Pace::Fast,
             )
             .solve
         };
@@ -502,7 +521,7 @@ mod tests {
                 ..Situation::default()
             },
             BASE,
-            Pace::Slow,
+            Pace::Fast,
         );
         assert!(p.cap.unwrap() <= Duration::from_secs(3));
     }
