@@ -14,6 +14,7 @@
 //! calibnps --threads 8          # スレッド数を指定して測る
 //! calibnps --show               # 保存済みの値と、そこから出る入り口を見る
 //! calibnps --no-save            # 測るだけ (書かない)
+//! calibnps --depths             # 1 手の予算で届く深さも測る (数分かかる)
 //! ```
 
 use std::path::PathBuf;
@@ -43,34 +44,112 @@ fn auto_threads() -> usize {
         .unwrap_or(1)
 }
 
-/// 較正した値から、持ち時間ごとの読切の入り口を並べる。**数字 1 個より
+/// 1 手の予算と読切の入り口を、その持ち時間・その空きで出す。
+fn at(nps: f64, threads: usize, secs: u64, empties: u8, solve_cap: u8) -> (f64, u8) {
+    let p = kuroobi::timectl::plan(
+        kuroobi::timectl::Situation {
+            clock_secs: Some(secs),
+            empties,
+            nps: Some(nps),
+            threads,
+            ..Default::default()
+        },
+        kuroobi::timectl::Levels {
+            depth: 22,
+            solve: solve_cap,
+            band: 6,
+        },
+        kuroobi::timectl::Pace::Fast,
+    );
+    (p.cap.map_or(0.0, |c| c.as_secs_f64()), p.solve)
+}
+
+/// 較正した値から、持ち時間ごとの配り方を並べる。**数字 1 個より
 /// 「それで何が変わるか」のほうが読める。**
 ///
-/// 空きの上限は 30 で見せる。設定の読切 (既定 18) で切ると表が全部同じ数に
-/// なり、較正で何が変わるのかが読めない。
+/// 読切の上限は 2 通り出す。**設定が枷になっているかが分かる** — 較正が
+/// もっと深く入れると言っていても、強さの設定を超えては入らない。
 fn report(nps: f64, threads: usize) {
     println!("読切 {:.1}M ノード/秒 ({threads} スレッド)", nps / 1e6);
-    println!("  持ち時間  読切に入る空き  その 1 回の見込み");
-    for secs in [3u64, 10, 30, 60, 300, 900] {
-        // 画面に出すのは序盤 (空き 60) の判断。対局が進むと残り手数が減り、
-        // 1 手の予算が増えるので入り口はこれより深くなる
-        let p = kuroobi::timectl::plan(
-            kuroobi::timectl::Situation {
-                clock_secs: Some(secs),
-                empties: 60,
-                nps: Some(nps),
-                threads,
-                ..Default::default()
-            },
-            kuroobi::timectl::Levels {
-                depth: 22,
-                solve: 30,
-                band: 0,
-            },
-            kuroobi::timectl::Pace::Fast,
+    println!();
+    println!("  持ち時間 |  1 手の予算 (空き 60 / 44 / 30) | 読切の入り口 (上限 26 / 30)");
+    println!("  ---------+-------------------------------+---------------------------");
+    for secs in [300u64, 600, 900, 1200, 1800] {
+        let (b60, s26) = at(nps, threads, secs, 60, 26);
+        let (b44, _) = at(nps, threads, secs, 44, 26);
+        let (b30, _) = at(nps, threads, secs, 30, 26);
+        let (_, s30) = at(nps, threads, secs, 60, 30);
+        let t = kuroobi::timectl::solve_secs(s30, nps, threads);
+        println!(
+            "  {:>4} 分 | {b60:>7.1}s {b44:>8.1}s {b30:>8.1}s | {s26:>7} {s30:>10}  (空き {s30} は {t:.0} 秒の見込み)",
+            secs / 60
         );
-        let t = kuroobi::timectl::solve_secs(p.solve, nps, threads);
-        println!("  {secs:>6} 秒  {:>12}  {t:>14.1} 秒", p.solve);
+    }
+}
+
+/// **1 手の予算で中盤が何段まで読めるかを実測する。**
+///
+/// 「強さ」の深さは上限でしかなく、実際にどこまで行くかは時間が決める。
+/// **上限が予算に対して低すぎると時間が余り、高すぎると使い切って序盤に
+/// 厚くなる** (深さ 34 で残り 2.2 秒 → 0.5 秒まで削れて勝率 47%)。
+/// どこが釣り合うかは測らないと分からない。
+///
+/// 局面はランダム開局から作る。**空きを変えて測る** — 序盤ほど手が多く、
+/// 同じ予算でも到達深さが違う。
+fn depth_table(engine: &mut Engine, threads: usize) {
+    use kuroobi::{Board, Position};
+    // 決定的な擬似乱数 (開局を毎回同じにする)
+    let mut st = 0x9E37_79B9_7F4A_7C15u64;
+    let mut next = move || {
+        st ^= st >> 12;
+        st ^= st << 25;
+        st ^= st >> 27;
+        st.wrapping_mul(0x2545_F491_4F6C_DD1D)
+    };
+    let opening = |plies: usize, next: &mut dyn FnMut() -> u64| {
+        let mut b = Board::new();
+        for _ in 0..plies {
+            let m = b.movable();
+            if m == 0 {
+                b.pass();
+                continue;
+            }
+            let pick = (next() % m.count_ones() as u64) as u32;
+            let mut x = m;
+            for _ in 0..pick {
+                x &= x - 1;
+            }
+            b.make_move_unchecked(Position::from_index(x.trailing_zeros()).unwrap());
+        }
+        b
+    };
+    println!();
+    println!("1 手の予算で届く中盤の深さ ({threads} スレッド、局面 3 つの中央値)");
+    print!("  空き |");
+    let budgets = [2u64, 5, 10, 20, 40, 80, 160];
+    for b in budgets {
+        print!(" {b:>4}s");
+    }
+    println!();
+    println!("  -----+{}", "-".repeat(budgets.len() * 6));
+    for plies in [10usize, 16, 24, 30] {
+        let boards: Vec<Board> = (0..3).map(|_| opening(plies, &mut next)).collect();
+        print!("  {:>4} |", boards[0].empty_count());
+        for b in budgets {
+            let mut ds: Vec<u32> = boards
+                .iter()
+                .map(|bd| {
+                    engine.clear_tables();
+                    let t0 = std::time::Instant::now();
+                    engine
+                        .choose_within(bd, Some(t0 + std::time::Duration::from_secs(b)))
+                        .depth
+                })
+                .collect();
+            ds.sort_unstable();
+            print!(" {:>5}", ds[1]);
+        }
+        println!();
     }
 }
 
@@ -78,12 +157,14 @@ fn main() -> ExitCode {
     let mut threads: Option<usize> = None;
     let mut save = true;
     let mut show = false;
+    let mut depths = false;
     let mut it = std::env::args().skip(1);
     while let Some(a) = it.next() {
         match a.as_str() {
             "--threads" => threads = it.next().and_then(|v| v.parse().ok()),
             "--no-save" => save = false,
             "--show" => show = true,
+            "--depths" => depths = true,
             other => {
                 eprintln!("unknown option {other}");
                 return ExitCode::FAILURE;
@@ -131,6 +212,11 @@ fn main() -> ExitCode {
         return ExitCode::FAILURE;
     }
     report(nps, threads);
+    if depths {
+        engine.set_levels(60, 0, 0); // 深さの上限を外して、時間だけで決めさせる
+        engine.set_use_book(false);
+        depth_table(&mut engine, threads);
+    }
 
     if save {
         res.set_nps(threads, nps);

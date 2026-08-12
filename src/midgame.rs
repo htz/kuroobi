@@ -1006,11 +1006,15 @@ impl NnueSearch {
         depth: u32,
         deadline: Option<std::time::Instant>,
     ) -> (Option<Position>, f32, u32) {
-        if self.threads > 1 && depth >= 2 && deadline.is_none() {
+        if self.threads > 1 && depth >= 2 {
             // Lazy SMP runs its own iterative deepening on every worker; doing
             // the shallow passes here as well would just duplicate them.
-            let (p, v) = self.lazy_smp(b, depth);
-            return (p, v, depth);
+            //
+            // **期限つきでもこちらへ来る。** 以前は `deadline.is_none()` を
+            // 条件に入れていたので、持ち時間のある対局では中盤が常に
+            // 1 スレッドだった (読切だけが並列)。スレッド数を上げても中盤が
+            // 速くならない、という状態を実機の CPU 使用率で見つけた。
+            return self.lazy_smp(b, depth, deadline);
         }
         let mut acc = self.nn.indices(b.black, b.white);
         // Iterative deepening: each pass seeds the table so the next orders by
@@ -1078,7 +1082,12 @@ impl NnueSearch {
     ///
     /// Helpers are also only worth launching while the iteration is cheap
     /// (see `smp_max_depth`).
-    fn lazy_smp(&mut self, b: &Board, depth: u32) -> (Option<Position>, f32) {
+    fn lazy_smp(
+        &mut self,
+        b: &Board,
+        depth: u32,
+        deadline: Option<std::time::Instant>,
+    ) -> (Option<Position>, f32, u32) {
         use std::sync::atomic::{AtomicU64, Ordering};
         // Tuning knobs read once from the environment, so a sweep does not need
         // one build per point (thermal drift makes serial rebuild-and-measure
@@ -1120,6 +1129,11 @@ impl NnueSearch {
         let nodes = AtomicU64::new(0);
         let mut acc = self.nn.indices(b.black, b.white);
         let mut value = f32::NAN;
+        // 期限つきのときは逐次経路と同じ扱い: 切られた段は捨て、直前の段の
+        // 答えを返す。到達した深さも返す (画面に出る「N 手」)
+        let mut best = None;
+        let mut reached = 0;
+        let mut last_pass = std::time::Duration::ZERO;
 
         // One pool for both kinds of parallel work, so a core
         // freed by one is immediately usable by the other. It is built once and
@@ -1129,6 +1143,18 @@ impl NnueSearch {
 
         {
             for main_depth in 1..=depth {
+                if let Some(dl) = deadline {
+                    let now = std::time::Instant::now();
+                    if now >= dl {
+                        break;
+                    }
+                    // 次の段は前の段の数倍かかる。入っても終わらないなら始めない
+                    // (始めれば見張りに切られ、その段はまるごと捨て札になる)
+                    if reached > 0 && now + last_pass.mul_f32(NEXT_PASS_FACTOR) >= dl {
+                        break;
+                    }
+                }
+                let t0 = std::time::Instant::now();
                 let lazy = main_depth >= smp_min_depth() && main_depth <= smp_max_depth();
                 // Helpers are retired at the end of the iteration by this flag;
                 // the generation counter doubles as their stop signal.
@@ -1162,20 +1188,35 @@ impl NnueSearch {
                     self.pool = pool;
                 }
 
-                value = self.negamax(b, &mut acc, main_depth, f32::NEG_INFINITY, f32::INFINITY);
+                let v = self.negamax(b, &mut acc, main_depth, f32::NEG_INFINITY, f32::INFINITY);
                 self.pool = None;
 
                 // Retire this iteration's helpers before starting the next, so
                 // stale passes do not keep cores away from the deeper search.
+                // **切られたときも必ず通す** — 引退させずに抜けるとヘルパーが
+                // 次の探索まで走り続け、コアを奪ったままになる。
                 gen.store(u32::MAX, Ordering::Relaxed);
                 for slot in slots {
                     pool.unwrap().wait(&slot);
                     nodes.fetch_add(slot.nodes.load(Ordering::Relaxed), Ordering::Relaxed);
                 }
+
+                // 期限で切られた段は不完全。直前の段の答えを残す
+                if self.stop.as_ref().is_some_and(|s| s.is_stopped()) {
+                    break;
+                }
+                last_pass = t0.elapsed();
+                value = v;
+                best = self.root_best(b, &mut acc);
+                reached = main_depth;
             }
         }
         self.nodes += nodes.load(Ordering::Relaxed);
-        (self.root_best(b, &mut acc), value)
+        (
+            best.or_else(|| self.root_best(b, &mut acc)),
+            value,
+            reached.max(if deadline.is_none() { depth } else { 0 }),
+        )
     }
 
     /// Children with their flip masks, best-first.
