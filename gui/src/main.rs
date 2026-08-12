@@ -422,6 +422,70 @@ fn ensure_engine_in(
     Ok(())
 }
 
+/// **未較正のスレッド数があれば、背景で測って控える。**
+///
+/// 較正しないと `timectl` は固定の階段に落ちて機能しない。**測る仕組みが
+/// あるだけでは足りず、誰かが押すまで一度も測られない**ので、ここで自動で
+/// 済ませる。
+///
+/// 測るのは 1〜3 秒。**対局中は絶対に測らない** — CPU を食って探索が遅く
+/// なり、持ち時間対局では直接損になる。起動直後の、まだ何も走っていない
+/// ときだけ。
+///
+/// ローカルと GGS でスレッド数の設定が別なので、**両方を測る**。
+fn calibrate_missing(
+    app: tauri::AppHandle,
+    engine_slot: Arc<Mutex<Option<Engine>>>,
+    stop_slot: Arc<Mutex<Option<kuroobi::midgame::StopHandle>>>,
+    activity: Arc<Mutex<Activity>>,
+    wanted: Vec<usize>,
+) {
+    std::thread::spawn(move || {
+        let missing: Vec<usize> = {
+            let r = resources();
+            let mut v: Vec<usize> = wanted
+                .into_iter()
+                .filter(|t| r.nps_for(*t).is_none())
+                .collect();
+            v.sort_unstable();
+            v.dedup();
+            v
+        };
+        if missing.is_empty() {
+            return;
+        }
+        if ensure_engine_in(&engine_slot, &stop_slot).is_err() {
+            return;
+        }
+        for t in missing {
+            // 途中で対局が始まっていたら残りは諦める (次の起動で測る)
+            if activity.lock().unwrap().local.is_some() {
+                return;
+            }
+            let nps = {
+                let _g = ActivityGuard::begin(&activity, "較正");
+                let mut guard = engine_slot.lock().unwrap();
+                let Some(e) = guard.as_mut() else { return };
+                let keep = e.config().threads;
+                e.set_threads(t);
+                let n = e.measure_solve_nps();
+                e.set_threads(keep);
+                n
+            };
+            if nps > 0.0 {
+                let mut r = resources();
+                r.set_nps(t, nps);
+                let _ = r.save(&resources_path());
+                /* **開いている設定画面へ報せる。** 画面は開いた時点の値を
+                取るだけなので、黙って書くと「未測定」のまま残る (実機で
+                そうなった)。 */
+                use tauri::Emitter;
+                let _ = app.emit("resources-changed", ());
+            }
+        }
+    });
+}
+
 /// エンジンを用意できなかった理由を、画面に出す言葉へ直す。
 ///
 /// ライブラリ側の文言は CLI と共用なので `nnue <path>: …` のように
@@ -864,32 +928,101 @@ fn learn_game(app: State<App>, my_color: String) -> Result<(), String> {
 struct ThreadsView {
     set: Option<u32>,
     auto: u32,
+    /// **今のスレッド数で**較正した読切の速度 (ノード毎秒)。未較正なら null。
+    /// 別のスレッド数の値は使わないので出さない (4 倍違う)。
+    nps: Option<f64>,
+}
+
+fn threads_view() -> ThreadsView {
+    let r = resources();
+    let now = r.threads.unwrap_or_else(auto_threads);
+    ThreadsView {
+        set: r.threads.map(|n| n as u32),
+        auto: auto_threads() as u32,
+        // **今のスレッド数の値だけを出す。** 別のスレッド数の値を見せると
+        // 較正済みに見えるが、実際には使われない (4 倍違う)
+        nps: r.nps_for(now),
+    }
 }
 
 #[tauri::command]
 fn local_threads() -> ThreadsView {
-    ThreadsView {
-        set: resources().threads.map(|n| n as u32),
-        auto: auto_threads() as u32,
+    threads_view()
+}
+
+/// **この機械の読切速度を測って控える。**
+///
+/// 持ち時間から読切の入り口を逆算する (`timectl`) には、見積ったノード数を
+/// 秒へ直す係数が要る。3 層のうち**機械で変わるのはこれだけ**なので、
+/// 空き 22 の 3 問を実際に読み切って測る。1〜3 秒で終わる。
+///
+/// **効果は棋力ではなく破綻の回避に出る。** 自己対局 (計 1400 局) では
+/// 勝率は動かず、終局時の残り時間が増えた — 30 秒の対局で最悪の局の
+/// 残りが 5.0 秒 (固定の階段) から 8.9 秒へ。
+///
+/// スレッド数を変えると速度も変わるので、**測ったときのスレッド数も一緒に
+/// 控える** (食い違っていたら使わない)。
+#[tauri::command]
+async fn calibrate_nps(app: State<'_, App>) -> Result<ThreadsView, String> {
+    ensure_engine(&app)?;
+    let eng = app.engine.clone();
+    let act = app.activity.clone();
+    let (nps, threads) = tauri::async_runtime::spawn_blocking(move || {
+        let _g = ActivityGuard::begin(&act, "較正");
+        let mut guard = eng.lock().unwrap();
+        let e = guard.as_mut().unwrap();
+        let threads = e.config().threads;
+        (e.measure_solve_nps(), threads)
+    })
+    .await
+    .map_err(|e| e.to_string())?;
+    if nps <= 0.0 {
+        return Err("読切の速度を測れませんでした".into());
     }
+    let mut r = resources();
+    r.set_nps(threads, nps);
+    r.save(&resources_path())?;
+    Ok(threads_view())
 }
 
 /// ローカルのスレッド数を設定する (None で自動へ戻す)。resources.conf に
 /// 保存し、既存エンジンには次の探索から効かせる。
 #[tauri::command]
-async fn set_local_threads(app: State<'_, App>, n: Option<u32>) -> Result<(), String> {
+async fn set_local_threads(
+    app: State<'_, App>,
+    handle: tauri::AppHandle,
+    n: Option<u32>,
+) -> Result<(), String> {
     let mut r = resources();
     r.threads = n.map(|v| v.clamp(1, 64) as usize);
     r.save(&resources_path())?;
     let threads = r.threads.unwrap_or_else(auto_threads);
     let eng = app.engine.clone();
-    tauri::async_runtime::spawn_blocking(move || {
-        if let Some(e) = eng.lock().unwrap().as_mut() {
-            e.set_threads(threads);
+    tauri::async_runtime::spawn_blocking({
+        let eng = eng.clone();
+        move || {
+            if let Some(e) = eng.lock().unwrap().as_mut() {
+                e.set_threads(threads);
+            }
         }
     })
     .await
-    .map_err(|e| e.to_string())
+    .map_err(|e| e.to_string())?;
+    /* **GGS 側にも伝える。** スレッド数は全体設定に一本化してあるので、
+    ここで変えた値がそのまま GGS 対局のエンジンにも効く必要がある。 */
+    if let Ok(tx) = ggs_tx(&app) {
+        let _ = tx.send(ggs::Cmd::ReloadThreads);
+    }
+    // **新しいスレッド数の読切速度はまだ測っていない。** 測るまで持ち時間の
+    // 管理は固定の階段に落ちるので、背景で埋めておく
+    calibrate_missing(
+        handle,
+        eng,
+        app.stop.clone(),
+        app.activity.clone(),
+        vec![threads],
+    );
+    Ok(())
 }
 
 /// いま何が CPU を使っているか (ナビの常時表示用)。
@@ -1117,35 +1250,35 @@ async fn think(app: State<'_, App>) -> Result<ThinkView, String> {
     let act = app.activity.clone();
     let stop = app.stop.clone();
     /* **時計があるときは期限つきで読む。** 配り方 (`timectl`) は GGS と
-       同じものを通す — ローカルだけ別の計算にすると、練習した感覚が本番で
-       通じない。配り方は `even` 固定 (選択肢を増やす前に、持ち時間から
-       自動で決める形を作るのが本筋)。 */
-    let cap = {
+    同じものを通す — ローカルだけ別の計算にすると、練習した感覚が本番で
+    通じない。配り方は `even` 固定 (選択肢を増やす前に、持ち時間から
+    自動で決める形を作るのが本筋)。 */
+    let (base, plan) = {
         let c = app.clocks.lock().unwrap();
-        if c.total == 0 {
-            None
-        } else {
-            let e = app.engine.lock().unwrap();
-            let cfg = e.as_ref().unwrap().config();
-            let base = kuroobi::timectl::Levels {
-                depth: cfg.depth,
-                solve: cfg.solve_empties,
-                band: cfg.band,
-            };
-            drop(e);
+        let e = app.engine.lock().unwrap();
+        let cfg = e.as_ref().unwrap().config();
+        let base = kuroobi::timectl::Levels {
+            depth: cfg.depth,
+            solve: cfg.solve_empties,
+            band: cfg.band,
+        };
+        let threads = cfg.threads;
+        drop(e);
+        let plan = (c.total > 0).then(|| {
             kuroobi::timectl::plan(
                 kuroobi::timectl::Situation {
                     clock_secs: Some(c.left(board.player()) as u64),
-                    ext_secs: 0,
                     empties: board.empty_count(),
-                    max_move_secs: 0,
-                    reserve_secs: 20,
+                    // 較正済みなら読切の入り口を残り時間から逆算する
+                    nps: resources().nps_for(threads),
+                    threads,
+                    ..Default::default()
                 },
                 base,
                 kuroobi::timectl::Pace::Even,
             )
-            .cap
-        }
+        });
+        (base, plan)
     };
     let (mv, secs, nodes, aborted) = tauri::async_runtime::spawn_blocking(move || {
         let _g = ActivityGuard::begin(&act, "思考");
@@ -1154,10 +1287,20 @@ async fn think(app: State<'_, App>) -> Result<ThinkView, String> {
         // ノードは累計で持っているので、この 1 手ぶんは前後の差で取る
         let n0 = guard.as_ref().unwrap().nodes();
         let e = guard.as_mut().unwrap();
-        let mv = match cap {
+        /* **この 1 手だけ強さを差し替える。** 読切の入り口は残り時間で動く
+        (`timectl`) が、設定画面に出る値まで動くと「勝手に変わった」ように
+        見える。**戻さないと次の計画の入力が今回の結果になり、設定が毎手
+        削られる** (`arena` で踏んだ。片側だけ壊れて効果に見えた)。 */
+        if let Some(p) = plan {
+            e.set_levels(p.depth, p.solve, p.band);
+        }
+        let mv = match plan.and_then(|p| p.cap) {
             Some(d) => e.choose_within(&board, Some(t0 + d)),
             None => e.choose(&board),
         };
+        if plan.is_some() {
+            e.set_levels(base.depth, base.solve, base.band);
+        }
         let nodes = guard.as_ref().unwrap().nodes() - n0;
         // 停止された探索の値は不完全 (番兵が混じる)。呼び出し元へ返さない。
         // ただし判定するのは**探索したときだけ** — 定石から返した手は探索を
@@ -1310,20 +1453,20 @@ async fn eval_at(app: State<'_, App>, n: usize, depth: u32) -> Result<EvalPoint,
         let mut guard = eng.lock().unwrap();
         let e = guard.as_mut().unwrap();
         /* **定石を使ったときだけ金の点。** 印の意味は「分析がこの局面の値を
-           定石から取った」であって、「この局面が定石に載っている」では
-           ない。載っているだけで印を立てていたので、**定石を使わない設定
-           でも金の点が出ていた** (`book_node` は定石ブラウザ用で、意図的に
-           `use_book` を見ない)。`book_value` は `use_book` を見る。
+        定石から取った」であって、「この局面が定石に載っている」では
+        ない。載っているだけで印を立てていたので、**定石を使わない設定
+        でも金の点が出ていた** (`book_node` は定石ブラウザ用で、意図的に
+        `use_book` を見ない)。`book_value` は `use_book` を見る。
 
-           **学習分は使わない。** 定石本体は深さ 26 の探索結果で探索の値と
-           並べられるが、学習分は「終局の石差を根まで書き戻した値」で
-           その局面の評価ではない。**空き 1 まで入っている**ので、混ぜると
-           終盤まで金の点が並び、しかも中身が自分の過去の対局になる。
+        **学習分は使わない。** 定石本体は深さ 26 の探索結果で探索の値と
+        並べられるが、学習分は「終局の石差を根まで書き戻した値」で
+        その局面の評価ではない。**空き 1 まで入っている**ので、混ぜると
+        終盤まで金の点が並び、しかも中身が自分の過去の対局になる。
 
-           **「学習分にも載っているか」で外してはいけない。** 序盤の局面は
-           実戦で必ず通るので学習分にも載っており、それで外すと本体に
-           載っている定石手まで印が消える (実際に消えた)。重ねる前の
-           本体だけを見る `book_base_value` を使う。 */
+        **「学習分にも載っているか」で外してはいけない。** 序盤の局面は
+        実戦で必ず通るので学習分にも載っており、それで外すと本体に
+        載っている定石手まで印が消える (実際に消えた)。重ねる前の
+        本体だけを見る `book_base_value` を使う。 */
         let from_book = e.book_base_value(&board);
         if let Some(v) = from_book {
             // **定石も探索も手番視点。**黒視点へ直すのはこの関数の出口 1 か所
@@ -1959,6 +2102,24 @@ fn ggs_raw(app: State<App>, cmd: String) -> Result<(), String> {
         .map_err(|e| e.to_string())
 }
 
+/// **読切の速度を測っていなければ、時間の絡む操作を止める。**
+///
+/// 未較正だと持ち時間の管理が固定の階段に落ち、機械の速さを知らないまま
+/// 対局に入る。**GGS は時間切れがレートに直結する**ので、待ち受け・申し込み・
+/// 持ち時間の設定はここで止めて先に測らせる。
+///
+/// 較正は起動時に背景で走る (`calibrate_missing`) ので、ふつうは
+/// 数秒待てば通る。走っている最中に押したときも同じ文言でよい。
+fn require_calibration() -> Result<(), String> {
+    let t = resources().threads.unwrap_or_else(auto_threads);
+    if resources().nps_for(t).is_none() {
+        return Err(format!(
+            "読切の速度をまだ測っていません ({t} スレッド)。設定 → エンジン の「読切の速度」で測ってから設定してください"
+        ));
+    }
+    Ok(())
+}
+
 #[tauri::command]
 fn ggs_ask(
     app: State<App>,
@@ -1967,6 +2128,8 @@ fn ggs_ask(
     opponent: String,
     rated: bool,
 ) -> Result<(), String> {
+    // 時間切れはレートに直結する。持ち時間の管理が効く状態でだけ申し込む
+    require_calibration()?;
     ggs_tx(&app)?
         .send(ggs::Cmd::Ask {
             gtype,
@@ -2130,7 +2293,6 @@ fn ggs_set_engine(
     depth: u32,
     solve: u8,
     band: u8,
-    threads: usize,
     ponder: bool,
 ) -> Result<(), String> {
     ggs_tx(&app)?
@@ -2138,7 +2300,6 @@ fn ggs_set_engine(
             depth,
             solve,
             band,
-            threads,
             ponder,
         })
         .map_err(|e| e.to_string())
@@ -2152,6 +2313,7 @@ fn ggs_set_pacing(
     max_move_secs: u64,
     reserve_secs: u64,
 ) -> Result<(), String> {
+    require_calibration()?;
     ggs_tx(&app)?
         .send(ggs::Cmd::SetPacing {
             pace,
@@ -2192,6 +2354,10 @@ fn ggs_set_learn(app: State<App>, on: bool) -> Result<(), String> {
 
 #[tauri::command]
 fn ggs_set_standby(app: State<App>, cfg: ggs::StandbyCfg) -> Result<(), String> {
+    // **切るのは止めない。** 未較正で身動きが取れなくなるほうが困る
+    if cfg.enabled {
+        require_calibration()?;
+    }
     ggs_tx(&app)?
         .send(ggs::Cmd::SetStandby(cfg))
         .map_err(|e| e.to_string())
@@ -2349,6 +2515,21 @@ fn main() {
             if std::env::var("KUROOBI_GGS_DEMO").is_ok() {
                 return Ok(());
             }
+            /* **読切の速度を起動時に測っておく。** 未較正だと持ち時間の
+            管理が固定の階段に落ちる。対局が始まってからでは CPU を
+            奪えないので、まだ何も走っていないこの時点で済ませる。 */
+            calibrate_missing(
+                app.handle().clone(),
+                st.engine.clone(),
+                st.stop.clone(),
+                st.activity.clone(),
+                // ローカルと GGS でスレッド数の設定が別。GGS の既定は
+                // ローカルと同じ「コア数の半分」なので、多くの場合 1 回で済む
+                vec![
+                    resources().threads.unwrap_or_else(auto_threads),
+                    auto_threads(),
+                ],
+            );
             let handle = ggs::spawn(app.handle().clone(), st.stop.clone(), st.activity.clone());
             // 保存済みの認証情報があれば起動時に自動ログインする。
             // 画面確認の自動運転 (KUROOBI_AUTOPLAY) とデモ
@@ -2405,6 +2586,7 @@ fn main() {
             set_use_book,
             local_threads,
             set_local_threads,
+            calibrate_nps,
             activity_status,
             set_learn,
             learn_game,

@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useState, type ReactNode } from 'react';
-import { api, emitApp, type KifuFrame, type ThreadsView } from './api';
+import { api, emitApp, onApp, type KifuFrame, type ThreadsView } from './api';
 import { TATAMI, type Prefs, type Theme } from './prefs';
 import { Modal, Note, Overlay, Section } from './components/layout';
 import { Button, Segmented, Select, TextField } from './components/primitives';
@@ -193,14 +193,16 @@ const NOT_FOUND: Record<string, string> = {
  *   - ファイルとスレッドはバックエンドが持つので、変えたら報せだけ送る
  * という分担にしてある。学習の取り込みはドックに操作があるので置かない
  * (同じ設定を 2 か所に出さない — 規則 58)。 */
-export function Settings({ prefs, setPref, ggs, onClose }: {
+export function Settings({ prefs, setPref, ggs, initialTab, onClose }: {
   prefs: Prefs; setPref: <K extends keyof Prefs>(k: K, v: Prefs[K]) => void;
   /** GGS のスナップショット。GGS タブの中身に使う (未接続なら null)。 */
   ggs?: GgsSnapshot | null;
+  /** 最初に出すタブ (撮るためだけの入口。`KUROOBI_AUTOPLAY=settings:ggs`)。 */
+  initialTab?: 'engine' | 'view' | 'ggs';
   /** 閉じる (覆いの足の釦)。 */
   onClose?: () => void;
 }) {
-  const [tab, setTab] = useState<'engine' | 'view' | 'ggs'>('engine');
+  const [tab, setTab] = useState<'engine' | 'view' | 'ggs'>(initialTab ?? 'engine');
   /* 撮るためだけの入口。`KUROOBI_AUTOPLAY=settings:ggs` のようにタブを
      指定できる。タブはクリックでしか切り替えられず、確認が人手頼みだった。
      **`settings:view:light` のように 3 つ目を渡すとテーマを実際に変える** —
@@ -220,6 +222,8 @@ export function Settings({ prefs, setPref, ggs, onClose }: {
   const [reset, setReset] = useState(false);
   const [status, setStatus] = useState<[string, string, boolean, number, string][]>([]);
   const [th, setTh] = useState<ThreadsView | null>(null);
+  /** 読切速度の測定中 (数秒かかるので、押せないことを見せる)。 */
+  const [calib, setCalib] = useState(false);
 
   const load = useCallback(async () => {
     try { setStatus(await api.resourceStatus()); } catch { /* エンジン未初期化 */ }
@@ -237,6 +241,17 @@ export function Settings({ prefs, setPref, ggs, onClose }: {
       } catch { /* エンジン未初期化 */ }
     })();
     return () => { alive = false; };
+  }, []);
+
+  /* **較正は背景で走る。** 起動直後にこの窓を開くと、まだ測り終える前の
+     値 (未測定) を掴んだまま残る — 実機でそうなった。終わったら報せが
+     来るので取り直す。 */
+  useEffect(() => {
+    let alive = true;
+    const off = onApp('resources-changed', () => {
+      void api.localThreads().then((t) => { if (alive) setTh(t); }).catch(() => {});
+    });
+    return () => { alive = false; void off.then((f) => f()); };
   }, []);
 
   const byName = new Map(status.map(([n, p, ok, size, kind]) => [n, { p, ok, size, kind }]));
@@ -368,6 +383,37 @@ export function Settings({ prefs, setPref, ggs, onClose }: {
             <Note>
               ローカル対局・検討・学習の取り込みが使う並列数です。自動 = コア数の半分 ({th.auto})。
               GGS 対局用は「GGS」タブにあります (別々に動くので、両方が同時に動くと合計ぶんの CPU を使います)。
+            </Note>
+          </Section>
+        )}
+        {/* **速さはスレッド数ごとの値**なので、スレッド数の節の直後に置く。
+            ただし別の節にする — 「スレッド数」の見出しの下に速度を入れると
+            見出しが内容と合わなくなる (規則 13: 節は見出しで区切るもの) */}
+        {th && (
+          <Section title="読切の速度">
+            <Row2 label="この機械">
+              {/* 値の欄に幅を持たせる。上の「選択…」と同じ列にボタンが
+                  揃わないと、行ごとに押すものの位置が変わる */}
+              <span style={{
+                width: 200, flex: 'none',
+                fontSize: 'var(--fs-5)', fontVariantNumeric: 'tabular-nums',
+                color: th.nps != null ? 'var(--text)' : 'var(--sub)',
+              }}>
+                {th.nps == null ? '未測定' : `${(th.nps / 1e6).toFixed(1)}M ノード/秒`}
+              </span>
+              <Button size="field" disabled={calib}
+                      onClick={() => void (async () => {
+                        setCalib(true);
+                        try { setTh(await api.calibrateNps()); } catch { /* 測れなければ据え置き */ }
+                        setCalib(false);
+                      })()}>{calib ? '測定中…' : '測り直す'}</Button>
+            </Row2>
+            <Note>
+              持ち時間のある対局で<b style={{ color: 'var(--text)' }}>読切に入る空き</b>を決めるのに使います。
+              読切は途中で打ち切れないので、入る前に「この機械なら何秒で読み切れるか」を知っている必要があります。
+              <b style={{ color: 'var(--text)' }}>起動時に自動で測る</b>ので、ふつうは触らなくて構いません
+              (空き 22 の 3 局面を実際に読み切るもので、数秒で終わります)。
+              速さはスレッド数で 4 倍変わるため、上のスレッド数を変えると測り直します。
             </Note>
           </Section>
         )}

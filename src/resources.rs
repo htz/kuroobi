@@ -10,7 +10,7 @@ use std::path::{Path, PathBuf};
 ///
 /// 形式は `鍵=値` の 1 行ずつ。項目が数個しかないので、この程度のために
 /// エンジン本体へ serde を持ち込まない。
-#[derive(Clone, Debug, Default, PartialEq, Eq)]
+#[derive(Clone, Debug, Default, PartialEq)]
 pub struct Resources {
     /// 探す起点のディレクトリ。個別指定が無いものはここから引く。
     pub dir: Option<PathBuf>,
@@ -23,6 +23,19 @@ pub struct Resources {
     /// ローカル探索のスレッド数。未指定なら「コア数の半分」。
     /// マシン依存の設定なので、ファイルの場所と同じこのファイルに置く。
     pub threads: Option<usize>,
+    /// **較正した読切のノード毎秒を、スレッド数ごとに。** 持ち時間から
+    /// 読切の入り口を逆算するのに要る (`timectl`)。無いスレッド数は
+    /// 固定の階段に落ちる。
+    ///
+    /// **1 個で済ませられない。** nps はスレッド数で 4 倍動き
+    /// (実測 1T 24M / 5T 70M / 10T 103M)、しかも線形でない (1→5 が 2.9 倍、
+    /// 5→10 が 1.47 倍) ので、1 スレッドの値から掛け算では出せない。曲線
+    /// そのものが機械依存 (コア数とメモリ帯域) なので、**使うスレッド数で
+    /// 実測する**しかない。ローカル対局と GGS でスレッド数の設定が別なので、
+    /// 現実に 2 つ以上要る。
+    ///
+    /// 書式は `nps.<スレッド数>=<値>`。
+    pub nps: Vec<(usize, f64)>,
 }
 
 /// 既定の置き場所を探す。
@@ -68,6 +81,11 @@ impl Resources {
                 "nnue" => r.nnue = p,
                 "book" => r.book = p,
                 "threads" => r.threads = v.parse().ok(),
+                k if k.starts_with("nps.") => {
+                    if let (Ok(t), Ok(n)) = (k[4..].parse::<usize>(), v.parse::<f64>()) {
+                        r.set_nps(t, n);
+                    }
+                }
                 _ => {}
             }
         }
@@ -91,7 +109,31 @@ impl Resources {
         if let Some(n) = self.threads {
             out.push_str(&format!("threads={n}\n"));
         }
+        for (t, n) in &self.nps {
+            out.push_str(&format!("nps.{t}={n:.0}\n"));
+        }
         std::fs::write(path, out).map_err(|e| e.to_string())
+    }
+
+    /// **そのスレッド数で使ってよい nps。** 測っていなければ `None` —
+    /// 別のスレッド数の値で代用するより、固定の階段に落ちるほうが安全
+    /// (速いと思い込んで読切に入るのが一番危ない)。
+    pub fn nps_for(&self, threads: usize) -> Option<f64> {
+        self.nps
+            .iter()
+            .find(|(t, n)| *t == threads && *n > 0.0)
+            .map(|(_, n)| *n)
+    }
+
+    /// 較正の結果を控える (同じスレッド数の値は差し替える)。
+    pub fn set_nps(&mut self, threads: usize, nps: f64) {
+        match self.nps.iter_mut().find(|(t, _)| *t == threads) {
+            Some(e) => e.1 = nps,
+            None => {
+                self.nps.push((threads, nps));
+                self.nps.sort_by_key(|(t, _)| *t);
+            }
+        }
     }
 
     /// 起点のディレクトリ。未指定なら既定の探索。

@@ -37,6 +37,17 @@ struct Args {
     /// 時間の配り方。片側だけ変えて配り方の差を測る。
     pace_a: String,
     pace_b: String,
+    /// **較正した読切速度** (ノード毎秒、`auto` でその場で実測)。渡した側
+    /// だけ、読切に入る空きを残り時間から逆算する。**片方だけに渡せば
+    /// 「較正あり 対 なし」を測れる** — 較正の効果はこれで見る。
+    nps_a: Option<String>,
+    nps_b: Option<String>,
+    /// 片側だけの持ち時間 (省略時は `--time`)。
+    time_a: Option<u64>,
+    time_b: Option<u64>,
+    /// 探索のスレッド数 (両側同じ)。較正した nps はスレッド数ごとの値
+    /// なので、測ったときと同じ数で戦わせないと意味がない。
+    threads: usize,
     weights_a: PathBuf,
     weights_b: PathBuf,
     games: usize,
@@ -87,7 +98,22 @@ Options:
   --patterns-a <set>   A's pattern library (default: --patterns)
   --patterns-b <set>   B's pattern library (default: --patterns)
   --seed <n>           RNG seed (default 7)
-  -h, --help           Show this help";
+  --threads <n>        Search threads for both sides (default 1)
+  -h, --help           Show this help
+
+Timed play (the only way to measure time management):
+  --time <secs>        Whole-game clock per side; running out loses the game
+  --pace-a <mode>      slow | even | fast | depth | tail:<a> (default even)
+  --pace-b <mode>      same, for B
+  --nps-a <n|auto>     Calibrated solve speed: the side that gets it derives
+                       its exact-solve entry from the clock left instead of a
+                       fixed staircase. `auto` measures it here. Give it to
+                       one side only to measure what calibration is worth.
+  --nps-b <n|auto>     same, for B
+  --time-a <secs>      A's clock only (default: --time). Pit a short clock
+                       against a long one to measure what the time limit
+                       itself costs — comparing pacing modes cannot show it.
+  --time-b <secs>      same, for B";
 
 fn parse_args() -> Result<Args, String> {
     let mut weights_a = None;
@@ -104,6 +130,11 @@ fn parse_args() -> Result<Args, String> {
         time_secs: 0,
         pace_a: "even".into(),
         pace_b: "even".into(),
+        nps_a: None,
+        nps_b: None,
+        time_a: None,
+        time_b: None,
+        threads: 1,
         depth_a: None,
         depth_b: None,
         solve_a: None,
@@ -145,6 +176,28 @@ fn parse_args() -> Result<Args, String> {
             }
             "--pace-a" => args.pace_a = value("--pace-a")?.to_string(),
             "--pace-b" => args.pace_b = value("--pace-b")?.to_string(),
+            // `auto` は実測 (エンジンを作ってから測るので後で埋める)
+            "--time-a" => {
+                args.time_a = Some(
+                    value("--time-a")?
+                        .parse()
+                        .map_err(|e| format!("--time-a: {e}"))?,
+                )
+            }
+            "--time-b" => {
+                args.time_b = Some(
+                    value("--time-b")?
+                        .parse()
+                        .map_err(|e| format!("--time-b: {e}"))?,
+                )
+            }
+            "--nps-a" => args.nps_a = Some(value("--nps-a")?.to_string()),
+            "--nps-b" => args.nps_b = Some(value("--nps-b")?.to_string()),
+            "--threads" => {
+                args.threads = value("--threads")?
+                    .parse()
+                    .map_err(|e| format!("--threads: {e}"))?
+            }
             "--nnue-a" => {
                 args.nnue_a = Some(PathBuf::from(value("--nnue-a")?));
             }
@@ -402,18 +455,48 @@ struct Clocks {
     white: f64,
 }
 
+/// 1 局の結果。**残り時間まで返す。**
+///
+/// 時間切れの件数だけでは配り方を直せない。「余らせる前提」で組むなら
+/// **どれだけ余ったか**が要る — 余りすぎなら読む時間を増やせるし、
+/// 余りが薄いなら遅い機械で破綻する。
+struct Timed {
+    /// 黒から見た石差 (時間切れなら 0)。
+    score: i32,
+    /// 時間切れした側。
+    timeout: Option<Color>,
+    /// 終局時の残り時間 (秒)。
+    left_black: f64,
+    left_white: f64,
+}
+
+/// 片側の時間の使い方。**配り方と較正値は組で入れ替える** — 色を交換した
+/// 再戦で片方だけ付け替えると、測っているものが変わってしまう。
+#[derive(Clone, Copy)]
+struct SideTime {
+    pace: Pace,
+    /// 較正した読切速度。`None` なら固定の階段で読切に入る。
+    nps: Option<f64>,
+    /// **この側の持ち時間** (秒)。片側だけ潤沢にできる。
+    ///
+    /// **「時間制限で棋力を削っていないか」はこれでしか測れない。** 配り方
+    /// どうしを比べても「どの配り方でも同じ」しか出ず、時間制限そのものの
+    /// 損は見えない。潤沢な側に勝てるなら、その持ち時間では飽和している。
+    total: f64,
+}
+
 fn play_timed(
     start: &Board,
     black: &mut Engine,
     white: &mut Engine,
-    pace_black: Pace,
-    pace_white: Pace,
-    total: f64,
-) -> (i32, Option<Color>) {
+    black_time: SideTime,
+    white_time: SideTime,
+    threads: usize,
+) -> Timed {
     let mut board = *start;
     let mut clocks = Clocks {
-        black: total,
-        white: total,
+        black: black_time.total,
+        white: white_time.total,
     };
     loop {
         if board.movable() == 0 {
@@ -426,7 +509,12 @@ fn play_timed(
                 } else {
                     -s
                 };
-                return (v, None);
+                return Timed {
+                    score: v,
+                    timeout: None,
+                    left_black: clocks.black,
+                    left_white: clocks.white,
+                };
             }
             board = passed;
             continue;
@@ -435,9 +523,14 @@ fn play_timed(
         let left = if is_black { clocks.black } else { clocks.white };
         if left <= 0.0 {
             // 時間切れ。指した側の負け
-            return (0, Some(board.player()));
+            return Timed {
+                score: 0,
+                timeout: Some(board.player()),
+                left_black: clocks.black.max(0.0),
+                left_white: clocks.white.max(0.0),
+            };
         }
-        let pace = if is_black { pace_black } else { pace_white };
+        let t = if is_black { black_time } else { white_time };
         let eng = if is_black { &mut *black } else { &mut *white };
         let base = Levels {
             depth: eng.config().depth,
@@ -451,11 +544,20 @@ fn play_timed(
                 empties: board.empty_count(),
                 max_move_secs: 0,
                 reserve_secs: 20,
+                nps: t.nps,
+                threads,
             },
             base,
-            pace,
+            t.pace,
         );
-        // 計画した深さ・読切・帯をその手だけ効かせる
+        /* 計画した深さ・読切・帯を**その手だけ**効かせる。
+
+        **戻すのを忘れると設定が毎手削られる。** 次の手の `base` は
+        `eng.config()` から読むので、書きっぱなしにすると計画の結果が
+        次の計画の入力になる。読切の入り口を残り時間から決める側は
+        `solve_entry` の上限が `base.solve` なので、**ラチェットのように
+        下がり続けて 0 に落ちた** (10 秒の対局で勝率 7%)。階段側は
+        `min(14)` で止まるため無傷で、片側だけ壊れて差に見えていた。 */
         eng.set_levels(plan.depth, plan.solve, plan.band);
         let t0 = Instant::now();
         let pos = match plan.cap {
@@ -465,6 +567,7 @@ fn play_timed(
         .pos
         .expect("legal move exists");
         let used = t0.elapsed().as_secs_f64();
+        eng.set_levels(base.depth, base.solve, base.band);
         if is_black {
             clocks.black -= used;
         } else {
@@ -482,7 +585,7 @@ fn run_nnue(args: &Args, a: &std::path::Path, b: &std::path::Path) -> ExitCode {
             depth,
             solve_empties: solve,
             band: 0,
-            threads: 1,
+            threads: args.threads,
             mpc: true,
             midgame_hash_bits: 22,
             solver_hash_bits: 20,
@@ -507,16 +610,59 @@ fn run_nnue(args: &Args, a: &std::path::Path, b: &std::path::Path) -> ExitCode {
     eng_a.set_use_book(false);
     eng_b.set_use_book(false);
 
-    let timed = args.time_secs > 0;
+    // 片側だけ指定したときも持ち時間制に入る (`--time` の指定は要らない)
+    let timed = args.time_secs > 0 || args.time_a.is_some() || args.time_b.is_some();
     let (pace_a, pace_b) = (Pace::parse(&args.pace_a), Pace::parse(&args.pace_b));
+    /* `--nps-* auto` はここで実測する。**A と B で別々に測らない** — 同じ
+    機械の同じスレッド数なので値は同じで、片側だけ 2 回測ると熱の分だけ
+    ずれ、較正の効果と区別がつかなくなる。 */
+    let mut measured: Option<f64> = None;
+    let mut resolve = |v: &Option<String>, eng: &mut Engine| -> Option<f64> {
+        match v.as_deref() {
+            None => None,
+            Some("auto") => Some(*measured.get_or_insert_with(|| {
+                let n = eng.measure_solve_nps();
+                println!(
+                    "較正: 読切 {:.1}M ノード/秒 ({} スレッド)",
+                    n / 1e6,
+                    args.threads
+                );
+                n
+            })),
+            Some(s) => s.parse().ok(),
+        }
+    };
+    let side_a = SideTime {
+        pace: pace_a,
+        nps: resolve(&args.nps_a, &mut eng_a),
+        total: args.time_a.unwrap_or(args.time_secs) as f64,
+    };
+    let side_b = SideTime {
+        pace: pace_b,
+        nps: resolve(&args.nps_b, &mut eng_b),
+        total: args.time_b.unwrap_or(args.time_secs) as f64,
+    };
     if timed {
+        // 較正の有無は結果の解釈を変えるので、見出しに出す
+        let tag = |s: &SideTime| {
+            format!(
+                "{}s, {}{}",
+                s.total,
+                s.pace.as_str(),
+                if s.nps.is_some() {
+                    ", 較正あり"
+                } else {
+                    ""
+                }
+            )
+        };
         println!(
-            "arena (持ち時間 {} 秒): A={} ({}) vs B={} ({})  ({} 局, 開局 {} 手ランダム, 定石なし)",
-            args.time_secs,
+            "arena (持ち時間制, {} スレッド): A={} ({}) vs B={} ({})  ({} 局, 開局 {} 手ランダム, 定石なし)",
+            args.threads,
             a.display(),
-            pace_a.as_str(),
+            tag(&side_a),
             b.display(),
-            pace_b.as_str(),
+            tag(&side_b),
             args.games,
             args.random_plies,
         );
@@ -536,6 +682,12 @@ fn run_nnue(args: &Args, a: &std::path::Path, b: &std::path::Path) -> ExitCode {
     let mut a_disc_sum = 0i64;
     // 時間切れは配り方の失敗そのものなので別に数える
     let (mut a_timeouts, mut b_timeouts) = (0usize, 0usize);
+    /* **終局時に余った時間。** 配り方は「使い切らず余らせる」前提で組むので、
+    余りの平均と最小を出す。平均は「読む時間をまだ増やせるか」を、最小は
+    「遅い機械で破綻しないか」を見るためのもの。 */
+    let (mut a_left_sum, mut b_left_sum) = (0f64, 0f64);
+    let (mut a_left_min, mut b_left_min) = (f64::MAX, f64::MAX);
+    let mut left_n = 0usize;
     for pair in 0..args.games / 2 {
         let opening = random_opening(&mut rng, args.random_plies);
         // 1 局ごとに表を捨てる (CLAUDE.md 4)。温まった表を持ち越すと
@@ -543,18 +695,32 @@ fn run_nnue(args: &Args, a: &std::path::Path, b: &std::path::Path) -> ExitCode {
         eng_a.clear_tables();
         eng_b.clear_tables();
         // 1 局目: A が黒
-        let (s1, to1) = if timed {
+        let r1 = if timed {
             play_timed(
                 &opening,
                 &mut eng_a,
                 &mut eng_b,
-                pace_a,
-                pace_b,
-                args.time_secs as f64,
+                side_a,
+                side_b,
+                args.threads,
             )
         } else {
-            (play_nnue(&opening, &mut eng_a, &mut eng_b), None)
+            Timed {
+                score: play_nnue(&opening, &mut eng_a, &mut eng_b),
+                timeout: None,
+                left_black: 0.0,
+                left_white: 0.0,
+            }
         };
+        // 1 局目は A が黒
+        if timed {
+            a_left_sum += r1.left_black;
+            b_left_sum += r1.left_white;
+            a_left_min = a_left_min.min(r1.left_black);
+            b_left_min = b_left_min.min(r1.left_white);
+            left_n += 1;
+        }
+        let (s1, to1) = (r1.score, r1.timeout);
         match to1 {
             // 時間切れは負け。石差は数えない (勝敗だけが意味を持つ)
             Some(Color::Black) => {
@@ -577,18 +743,32 @@ fn run_nnue(args: &Args, a: &std::path::Path, b: &std::path::Path) -> ExitCode {
         eng_a.clear_tables();
         eng_b.clear_tables();
         // 2 局目: 色を入れ替える
-        let (s2, to2) = if timed {
+        let r2 = if timed {
             play_timed(
                 &opening,
                 &mut eng_b,
                 &mut eng_a,
-                pace_b,
-                pace_a,
-                args.time_secs as f64,
+                side_b,
+                side_a,
+                args.threads,
             )
         } else {
-            (play_nnue(&opening, &mut eng_b, &mut eng_a), None)
+            Timed {
+                score: play_nnue(&opening, &mut eng_b, &mut eng_a),
+                timeout: None,
+                left_black: 0.0,
+                left_white: 0.0,
+            }
         };
+        // 2 局目は B が黒
+        if timed {
+            b_left_sum += r2.left_black;
+            a_left_sum += r2.left_white;
+            b_left_min = b_left_min.min(r2.left_black);
+            a_left_min = a_left_min.min(r2.left_white);
+            left_n += 1;
+        }
+        let (s2, to2) = (r2.score, r2.timeout);
         match to2 {
             Some(Color::Black) => {
                 a_wins += 1;
@@ -616,6 +796,17 @@ fn run_nnue(args: &Args, a: &std::path::Path, b: &std::path::Path) -> ExitCode {
     }
     if timed {
         println!("時間切れ: A {a_timeouts} / B {b_timeouts}");
+        if left_n > 0 {
+            println!(
+                "終局時の残り時間 (持ち時間 A {}s / B {}s): A 平均 {:.1}s 最小 {:.1}s / B 平均 {:.1}s 最小 {:.1}s",
+                side_a.total,
+                side_b.total,
+                a_left_sum / left_n as f64,
+                a_left_min,
+                b_left_sum / left_n as f64,
+                b_left_min,
+            );
+        }
     }
     report(a_wins, b_wins, draws, a_disc_sum);
     ExitCode::SUCCESS

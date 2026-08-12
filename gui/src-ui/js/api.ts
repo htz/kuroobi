@@ -81,6 +81,7 @@ export const api = {
   previewKifu: (text: string) => call<KifuFrame[]>('preview_kifu', { text }),
   localThreads: () => call<ThreadsView>('local_threads', {}),
   setLocalThreads: (n: number | null) => call('set_local_threads', { n }),
+  calibrateNps: () => call<ThreadsView>('calibrate_nps', {}),
   activity: () => call<ActivityView>('activity_status', {}),
 };
 
@@ -94,7 +95,14 @@ export interface KifuFrame {
 }
 
 /** スレッド数の設定 (set が null なら自動 = auto の値)。 */
-export interface ThreadsView { set: number | null; auto: number }
+export interface ThreadsView {
+  set: number | null;
+  auto: number;
+  /** 較正した読切の速度 (ノード毎秒)。未測定なら null。 */
+  nps: number | null;
+  /** 測ったときと今のスレッド数が食い違っている (古い値は使わない)。 */
+  nps_stale: boolean;
+}
 
 /** いま何が CPU を使っているか (ナビの常時表示)。 */
 export interface ActivityView {
@@ -148,8 +156,8 @@ export const ggsApi = {
   listMatches: () => call('ggs_list_matches'),
   resumeStored: (id: string) => call('ggs_resume_stored', { id }),
   history: (name: string) => call('ggs_history', { name }),
-  setEngine: (depth: number, solve: number, band: number, threads: number, ponder: boolean) =>
-    call('ggs_set_engine', { depth, solve, band, threads, ponder }),
+  setEngine: (depth: number, solve: number, band: number, ponder: boolean) =>
+    call('ggs_set_engine', { depth, solve, band, ponder }),
   setPacing: (pace: string, maxMoveSecs: number, reserveSecs: number) =>
     call('ggs_set_pacing', { pace, maxMoveSecs, reserveSecs }),
   setAutoPlay: (on: boolean) => call('ggs_set_auto_play', { on }),

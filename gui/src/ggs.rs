@@ -64,10 +64,13 @@ pub enum Cmd {
         depth: u32,
         solve: u8,
         band: u8,
-        threads: usize,
         /// 相手の手番中に先読みするか。
         ponder: bool,
     },
+    /// **全体設定のスレッド数が変わった。** GGS 専用の欄は持たない —
+    /// 別々に持つと読切速度の較正が 2 つ要り、片方が未較正のまま
+    /// 気づかず対局に入る (`resources.conf` の `nps.<スレッド数>`)。
+    ReloadThreads,
     /// 持ち時間の使い方 (配り方・1 手の上限・予備)。
     SetPacing {
         pace: String,
@@ -1261,11 +1264,9 @@ pub fn run(
             depth: 22,
             solve_empties: 26,
             band: 6,
-            threads: (std::thread::available_parallelism()
-                .map(|n| n.get())
-                .unwrap_or(8)
-                / 2)
-            .max(1),
+            // **全体設定 (resources.conf の threads) を使う。** GGS 専用の
+            // 欄は持たない — 別々だと較正が 2 つ要る
+            threads: resources().threads.unwrap_or_else(|| resolve_threads(0)),
             ..Default::default()
         },
         seq: 0,
@@ -1315,12 +1316,15 @@ pub fn run(
                     depth,
                     solve,
                     band,
-                    threads,
                     ponder,
                 }) => {
-                    apply_engine_cfg(&mut ctx, depth, solve, band, threads);
+                    apply_engine_cfg(&mut ctx, depth, solve, band);
                     ctx.engine_cfg_ponder = ponder;
                     ctx.snap.lock().unwrap().engine.ponder = ponder;
+                    ctx.emit(true);
+                }
+                Ok(Cmd::ReloadThreads) => {
+                    apply_threads(&mut ctx);
                     ctx.emit(true);
                 }
                 Ok(Cmd::SetStandby(cfg)) => {
@@ -1580,12 +1584,15 @@ pub fn run(
                             depth,
                             solve,
                             band,
-                            threads,
                             ponder,
                         } => {
-                            apply_engine_cfg(&mut ctx, depth, solve, band, threads);
+                            apply_engine_cfg(&mut ctx, depth, solve, band);
                             ctx.engine_cfg_ponder = ponder;
                             ctx.snap.lock().unwrap().engine.ponder = ponder;
+                            ctx.dirty = true;
+                        }
+                        Cmd::ReloadThreads => {
+                            apply_threads(&mut ctx);
                             ctx.dirty = true;
                         }
                         Cmd::SetPacing {
@@ -2229,24 +2236,35 @@ pub fn resolve_threads(n: usize) -> usize {
     }
 }
 
-fn apply_engine_cfg(ctx: &mut Ctx, depth: u32, solve: u8, band: u8, threads: usize) {
+fn apply_engine_cfg(ctx: &mut Ctx, depth: u32, solve: u8, band: u8) {
     ctx.engine_cfg.depth = depth;
     ctx.engine_cfg.solve_empties = solve;
     ctx.engine_cfg.band = band;
-    ctx.engine_cfg.threads = threads;
     if let Some(e) = ctx.engine.as_mut() {
         e.set_levels(depth, solve, band);
-        // スレッド数も既存エンジンへ反映する (以前は cfg に控えるだけで、
-        // エンジンを作り直すまで効いていなかった)
-        e.set_threads(resolve_threads(threads));
     }
     let mut s = ctx.snap.lock().unwrap();
     s.engine.depth = depth;
     s.engine.solve = solve;
     s.engine.band = band;
-    s.engine.threads = threads;
     drop(s);
     ctx.dirty = true;
+}
+
+/// **全体設定のスレッド数を引き直して反映する。**
+///
+/// GGS 専用の欄は持たない。別々に持つと読切速度の較正
+/// (`resources.conf` の `nps.<スレッド数>`) が 2 つ要り、片方が未較正の
+/// まま対局に入ってしまう。持ち時間の管理はそこで固定の階段に落ちる。
+fn apply_threads(ctx: &mut Ctx) {
+    let n = resources()
+        .threads
+        .unwrap_or_else(|| resolve_threads(0));
+    ctx.engine_cfg.threads = n;
+    if let Some(e) = ctx.engine.as_mut() {
+        e.set_threads(n);
+    }
+    ctx.snap.lock().unwrap().engine.threads = n;
 }
 
 /// update/join ブロックを解析して盤面状態を更新し、自分の手番なら思考して指す。
@@ -2548,22 +2566,16 @@ fn apply_block(m: &mut MatchState, block: &[String], login: &str) -> (bool, Opti
 ///
 /// 戻り値は (中盤深さ, 完全読み開始の空き, 帯, 1 手の期限)。
 fn time_budget(
-    clock_secs: Option<u64>,
-    ext_secs: u64,
-    empties: u8,
+    mut s: kuroobi::timectl::Situation,
     base: (u32, u8, u8),
     pace: &str,
-    max_move_secs: u64,
-    reserve_secs: u64,
 ) -> (u32, u8, u8, Option<Duration>) {
+    // 較正済みなら読切の入り口を残り時間から逆算する。**呼び出し側に
+    // 覚えさせない** — 設定ファイルの読み方をここに閉じておけば、GGS と
+    // ローカルで食い違いようがない
+    s.nps = resources().nps_for(s.threads);
     let p = kuroobi::timectl::plan(
-        kuroobi::timectl::Situation {
-            clock_secs,
-            ext_secs,
-            empties,
-            max_move_secs,
-            reserve_secs,
-        },
+        s,
         kuroobi::timectl::Levels {
             depth: base.0,
             solve: base.1,
@@ -2618,13 +2630,17 @@ fn think_and_play(
         ctx.engine_cfg.band,
     );
     let (d, solve, band, cap) = time_budget(
-        clock_secs,
-        ext,
-        empties,
+        kuroobi::timectl::Situation {
+            clock_secs,
+            ext_secs: ext,
+            empties,
+            max_move_secs: ctx.engine_cfg_max_move,
+            reserve_secs: ctx.engine_cfg_reserve,
+            threads: resolve_threads(ctx.engine_cfg.threads),
+            ..Default::default()
+        },
         base,
         &ctx.engine_cfg_pace,
-        ctx.engine_cfg_max_move,
-        ctx.engine_cfg_reserve,
     );
     engine.set_levels(d, solve, band);
     // 期限まで反復深化する。深さは上限で、実際にどこまで行けるかは時間が決める
@@ -3789,13 +3805,33 @@ mod budget_tests {
     const BASE: (u32, u8, u8) = (22, 26, 6);
 
     fn cap(secs: Option<u64>, empties: u8, pace: &str, max: u64) -> Option<Duration> {
-        time_budget(secs, 120, empties, BASE, pace, max, 20).3
+        time_budget(
+            kuroobi::timectl::Situation {
+                clock_secs: secs,
+                ext_secs: 120,
+                empties,
+                max_move_secs: max,
+                ..Default::default()
+            },
+            BASE,
+            pace,
+        )
+        .3
     }
 
     #[test]
     fn depth_mode_ignores_the_clock() {
         // 深さで決める: 期限を付けない (設定どおり読み切る)
-        let (d, solve, band, c) = time_budget(Some(30), 120, 40, BASE, "depth", 0, 20);
+        let (d, solve, band, c) = time_budget(
+            kuroobi::timectl::Situation {
+                clock_secs: Some(30),
+                ext_secs: 120,
+                empties: 40,
+                ..Default::default()
+            },
+            BASE,
+            "depth",
+        );
         assert_eq!((d, solve, band), BASE);
         assert!(c.is_none(), "期限なし");
     }
@@ -3836,7 +3872,15 @@ mod budget_tests {
     #[test]
     fn the_endgame_keeps_a_reserve() {
         // 読み切り 1 回分を残すので、中盤の予算は残り時間そのものではない
-        let (_, _, _, c) = time_budget(Some(100), 0, 40, BASE, "even", 0, 20);
+        let (_, _, _, c) = time_budget(
+            kuroobi::timectl::Situation {
+                clock_secs: Some(100),
+                empties: 40,
+                ..Default::default()
+            },
+            BASE,
+            "even",
+        );
         let moves = ((40 - 26) as f64 / 2.0).ceil();
         let pool = c.unwrap().as_secs_f64() * moves;
         // 100 秒のうち 20 秒は読み切り用。中盤へ配るのは残り 80 秒まで

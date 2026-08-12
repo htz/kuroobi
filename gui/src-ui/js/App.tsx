@@ -156,6 +156,8 @@ export function App() {
      置き場所の計算まで抱えていた。割に合わない (要 push — 設計 §5 は
      「独立ウィンドウ (⌘,)」と描いている) */
   const [settings, setSettings] = useState(false);
+  /** 設定を開いたときの最初のタブ (撮るためだけの入口)。 */
+  const [settingsTab, setSettingsTab] = useState<'engine' | 'view' | 'ggs'>('engine');
 
   /* 動作確認用 (KUROOBI_AUTOPLAY=both:11 のように指定する)。
    * この repo は画面の確認を「起動して撮る」でやるので、その入口を残す。
@@ -192,7 +194,12 @@ export function App() {
          `prefs` を変えるだけでは時計が初期化されない */
       const mc = v.match(/:clock(\d+)$/);
       if (mc) { setPref('clockSecs', +mc[1]); void api.setClock(+mc[1]); }
-      if (who === 'settings') { setSettings(true); return; }
+      if (who === 'settings') {
+        // `settings:ggs` のようにタブを指定できる (撮るためだけ)
+        if (lv === 'ggs' || lv === 'view' || lv === 'engine') setSettingsTab(lv);
+        setSettings(true);
+        return;
+      }
       /* 覆いを出す入口 (撮るためだけ)。**覆いはクリックでしか出せず、
          寸法をずっと実測できていなかった** — 確認 / 棋譜の読み込み /
          棋譜ビューア。`overlay:confirm` のように指定する */
@@ -883,6 +890,7 @@ export function App() {
       {settings && (
         <Overlay onClose={() => setSettings(false)}>
           <Settings prefs={prefs} setPref={setPref} ggs={ggs.snap}
+                    initialTab={settingsTab}
                     onClose={() => setSettings(false)} />
         </Overlay>
       )}

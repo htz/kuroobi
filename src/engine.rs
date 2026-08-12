@@ -268,6 +268,52 @@ impl Engine {
         self.search.clear();
     }
 
+    /// **この機械の読切速度 (ノード毎秒) を測る。**
+    ///
+    /// 持ち時間から読切の入り口を逆算する ([`crate::timectl::solve_entry`])
+    /// には、ノード数の見積りを秒へ直す係数が要る。**そこだけが機械依存**
+    /// なので、ここで実測して `resources.conf` に控える。
+    ///
+    /// 測るのは**この Engine 自身の Solver** — スレッド数も置換表の大きさも
+    /// NNUE の有無も対局と同じものが効く。別に組んだ計測器で測ると、対局で
+    /// 出る速度とずれる。
+    ///
+    /// 局面は空き 22 の 3 問 (`bench/calib1030.obf` から、その群の中央付近の
+    /// 所要時間のものを選んだ)。1 スレッドで 2 秒強、8 スレッドなら 1 秒を
+    /// 切る — **起動のたびに測っても待たされない**長さにしてある。
+    ///
+    /// 置換表を空にする時間は差し引く (毎回の固定費で、ノード数に比例
+    /// しない)。空きが深くなると表が溢れて nps は 1 割ほど落ちるが、その
+    /// ぶんは `timectl` 側の `DEEP_NPS_RATIO` が持つ。
+    pub fn measure_solve_nps(&mut self) -> f64 {
+        /// 空き 22 の較正局面 (OBF)。
+        const POSITIONS: [&str; 3] = [
+            "--XOOO----XOOOOO-XXOOOOX-XXXOXXX-XXXOXXX-XOOOOXX--OO-O------O--- X",
+            "----X-----OX-O---XXXXO--XXXXXO--OOXXXOO-OOOXOXOO-OOOOOX--XXXXXX- X",
+            "-OOOOX---OXXOX--XXXOOOOOXXXXO-O-XXXOOO--XXXXXXX-X--XXX------X--- X",
+        ];
+        use std::sync::atomic::Ordering;
+        let clear0 = crate::solver::CLEAR_NS.load(Ordering::Relaxed);
+        let t0 = std::time::Instant::now();
+        let mut nodes = 0u64;
+        for p in POSITIONS {
+            let Ok(board) = Board::from_string(p) else {
+                continue;
+            };
+            let r =
+                self.solver
+                    .solve_with_eval(EndSolverMode::Perfect, &board, Some(&self.evaluator));
+            nodes += r.nodes;
+        }
+        self.solver_nodes += nodes;
+        let clear = (crate::solver::CLEAR_NS.load(Ordering::Relaxed) - clear0) as f64 / 1e9;
+        let secs = t0.elapsed().as_secs_f64() - clear;
+        if secs <= 0.0 || nodes == 0 {
+            return 0.0;
+        }
+        nodes as f64 / secs
+    }
+
     /// 相手の手番中に先行して読む。**盤は動かさない。**
     ///
     /// `after_my_move` は自分が指し終えた局面 (= 相手の手番)。置換表が指す

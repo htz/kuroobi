@@ -1,5 +1,5 @@
 import React, { useEffect, useRef, useState } from 'react';
-import { api, ggsApi, jsLog } from './api';
+import { api, ggsApi, jsLog, onApp } from './api';
 import type { ChatMsg, GameResult, GgsSnapshot, MatchView } from './types';
 import {
   CLOCK_CHOICES, GTYPE_CHOICES, clockOf, countDiscs, ggsMoveToIndex, gtypeLabel,
@@ -381,6 +381,7 @@ function GgsLobby({ snap, onNav }: { snap: GgsSnapshot; onNav: (id: NavId) => vo
   const [gtype, setGtype] = useState('s8r16');
   const [time, setTime] = useState('00:15:00');
   const noRated = useNoRated();
+  const calibrated = useCalibrated();
   const [rated, setRated] = useState(true);
   /** 「情報」を開いている申し込みの id (1 つだけ)。 */
   const [info, setInfo] = useState('');
@@ -491,10 +492,11 @@ function GgsLobby({ snap, onNav }: { snap: GgsSnapshot; onNav: (id: NavId) => vo
               GGS の /os ask はそういう使い方ができるので、止めない */}
           {/* 上の欄と同じ 32px。欄を埋めて押す釦なので、欄より低いと
               一続きの手順に見えない (ログインの釦と同じ理由) */}
-          <Button size="field" variant="primary"
+          <Button size="field" variant="primary" disabled={!calibrated}
                   onClick={() => void ggsApi.ask(gtype, time, opp, rated)}>
             {opp ? '申し込む' : '募集する'}
           </Button>
+          {!calibrated && <Note>{CALIB_NOTE}</Note>}
           <Note>
             同期対局は同じ開局を先後入れ替えて 2 局同時に行い、結果は合計で判定します。
             レートは「ランダム開局」に反映されます。
@@ -576,6 +578,35 @@ function useNoRated(): boolean {
   return no;
 }
 
+/** 読切の速度を測ってあるか。
+ *
+ * **測っていないと持ち時間の管理が固定の階段に落ちる。** 機械の速さを
+ * 知らないまま対局に入ることになり、GGS では時間切れがレートに直結する。
+ * だから時間の絡む操作 (申し込み・待ち受け・持ち時間の設定) はここで
+ * 止める。**バックエンドでも同じ判定をしている** — 画面だけで止めると、
+ * 古い画面や別経路から通ってしまう。
+ *
+ * 既定は「測ってある」。取りに行く前の一瞬だけ押せなくなるのを避ける
+ * (通っても後ろで止まる)。
+ */
+function useCalibrated(): boolean {
+  const [ok, setOk] = useState(true);
+  useEffect(() => {
+    let alive = true;
+    const load = () => void api.localThreads()
+      .then((t) => { if (alive) setOk(t.nps != null); })
+      .catch(() => {});
+    load();
+    // 起動時の較正は背景で走る。終わったら報せが来る
+    const off = onApp('resources-changed', load);
+    return () => { alive = false; void off.then((f) => f()); };
+  }, []);
+  return ok;
+}
+
+/** 未較正のときに出す一言。**直し方まで書く** (規則 34)。 */
+const CALIB_NOTE = '読切の速度をまだ測っていません。設定 → エンジン の「読切の速度」で測ってください (数秒で終わります)。';
+
 /* ---------------- 待機モード ----------------
  *
  * 対局終了 → 間隔待ち → 自動申し込みの繰り返し。
@@ -592,6 +623,7 @@ function GgsStandby({ snap, onNav }: { snap: GgsSnapshot; onNav: (id: NavId) => 
   const [interval, setInterval] = useState(sb.interval_secs || 20);
   const [autoAccept, setAutoAccept] = useState(sb.auto_accept);
   const noRated = useNoRated();
+  const calibrated = useCalibrated();
   const [rated, setRated] = useState(sb.rated);
 
   const names = snap.users.filter((u) => u.name !== snap.login).map((u) => u.name);
@@ -663,9 +695,12 @@ function GgsStandby({ snap, onNav }: { snap: GgsSnapshot; onNav: (id: NavId) => 
           <Toggle checked={autoAccept} onChange={setAutoAccept} label="届いた申し込みを自動で受ける" />
         </span>
         <div>
-          <Button variant={sb.enabled ? 'danger' : 'primary'} onClick={toggle}>
+          {/* **止めるのは未較正でも通す。** 身動きが取れなくなるほうが困る */}
+          <Button variant={sb.enabled ? 'danger' : 'primary'}
+                  disabled={!sb.enabled && !calibrated} onClick={toggle}>
             {sb.enabled ? '待機モードを停止' : '待機モードを開始'}
           </Button>
+          {!sb.enabled && !calibrated && <Note>{CALIB_NOTE}</Note>}
         </div>
         <Note>
           対局終了 → 間隔待ち → 自動申し込みを繰り返します。切断時は自動で再接続し、
@@ -896,11 +931,13 @@ function MatchBoard({ snap, m, clock, prefs, onKifu, face }: {
  */
 export function GgsSettings({ snap }: { snap: GgsSnapshot }) {
   const e = snap.engine;
+  const calibrated = useCalibrated();
   /* 押した結果の一言。成功も失敗も同じ場所に出す */
   const [saved, setSaved] = useState('');
   const say = (t: string) => { setSaved(t); window.setTimeout(() => setSaved(''), 2500); };
   const [levels, setLevels] = useState({ depth: e.depth, solve: e.solve, band: e.band });
-  const [threads, setThreads] = useState(e.threads);
+  // 全体設定から来る値 (この画面では変えられない。表示のみ)
+  const threads = e.threads;
   const [ponder, setPonder] = useState(e.ponder);
   const [auto, setAuto] = useState(snap.auto_play);
   const [watch, setWatch] = useState(snap.watch_analysis);
@@ -934,7 +971,7 @@ export function GgsSettings({ snap }: { snap: GgsSnapshot }) {
      いたので、繋がっていなくても反映されたように見えた */
   const apply = async () => {
     try {
-      await ggsApi.setEngine(levels.depth, levels.solve, levels.band, threads, ponder);
+      await ggsApi.setEngine(levels.depth, levels.solve, levels.band, ponder);
       await ggsApi.setPacing(pace, maxMove, reserve);
       await ggsApi.setAutoPlay(auto);
       await ggsApi.setWatchAnalysis(watch);
@@ -954,16 +991,15 @@ export function GgsSettings({ snap }: { snap: GgsSnapshot }) {
           <span style={{ maxWidth: 340, display: 'block' }}>
             <Strength value={levels} onChange={setLevels} />
           </span>
-          {/* コア数まで 1 刻み。飛び飛びにする理由は無い (奇数でも動くし、
-              コアを 1 つ空けたいことはある)。
-              0 は「自動」の印 — 解決した数ではなく 0 のまま持つので、
-              コア数の違う機械へ設定を移しても自動のまま */}
+          {/* **スレッド数はここに置かない。** 設定 → エンジンの全体設定を
+              GGS も使う。別々に持つと読切速度の較正 (機械ごとの実測) が
+              2 つ要り、片方が未較正のまま対局に入って持ち時間の管理が
+              固定の階段に落ちる */}
           <Field label="スレッド">
-            <Select width={120} size="ctrl" value={String(threads)}
-                    onChange={(s) => setThreads(+s)}
-                    options={[['0', `自動 (${Math.max(1, Math.floor(cores / 2)) || '—'})`],
-                              ...Array.from({ length: cores || Math.max(threads, 1) }, (_, i) =>
-                                [String(i + 1), String(i + 1)] as [string, string])]} />
+            <span style={{ fontSize: 'var(--fs-5)', color: 'var(--sub)' }}>
+              {threads === 0 ? `自動 (${Math.max(1, Math.floor(cores / 2)) || '—'})` : threads}
+              {' · '}設定 → エンジンで変えられます
+            </span>
           </Field>
           {/* 先読み。**「深さ固定」でも効く** — 効き方が「深く」から
               「速く」に変わるだけ (同じ深さへ 1/3 の時間で着く。実測) */}
@@ -1055,7 +1091,9 @@ export function GgsSettings({ snap }: { snap: GgsSnapshot }) {
             }}>{saved}</span>
           )}
           <span style={{ marginLeft: 'auto' }} />
-          <Button variant="primary" onClick={() => void apply()}>適用</Button>
+          <Button variant="primary" disabled={!calibrated}
+                  onClick={() => void apply()}>適用</Button>
+          {!calibrated && <Note>{CALIB_NOTE}</Note>}
         </div>
 
         {/* 繋いでいるときだけ。押せないログアウトを描いても意味が無い */}
