@@ -1229,8 +1229,14 @@ impl Ctx {
     /// 分けた後の数で引く必要があるので、その数を控えておく。
     fn share_threads(&mut self) {
         let total = resolve_threads(self.engine_cfg.threads);
-        let n = self.workers.len().max(1);
-        let each = (total / n).max(1);
+        /* **割り当て中の数で割る。ワーカーの数ではない。** ワーカーは対局が
+        終わっても捨てない (置換表を抱えているため) ので、`workers.len()` で
+        割ると 2 局を戦った後は単独対局でも半分しか使わなくなる。 */
+        let active = self.workers.iter().filter(|w| w.mid.is_some()).count().max(1);
+        let each = (total / active).max(1);
+        if each == self.worker_threads {
+            return;
+        }
         for w in &mut self.workers {
             w.send(Job::SetThreads(each));
         }
@@ -1238,11 +1244,18 @@ impl Ctx {
     }
 
     /// 対局が終わったらワーカーの割り当てを外す (エンジンは残す)。
+    ///
+    /// **外したらスレッドを配り直す。** 残った対局が全部使えるようにする。
     fn release_worker(&mut self, mid: &str) {
+        let mut hit = false;
         for w in &mut self.workers {
             if w.mid.as_deref() == Some(mid) {
                 w.mid = None;
+                hit = true;
             }
+        }
+        if hit {
+            self.share_threads();
         }
     }
 }
