@@ -413,6 +413,10 @@ fn ensure_engine_in(
             nnue: res.nnue_path(),
             book: res.book_path(),
             threads: res.threads.unwrap_or_else(auto_threads),
+            // **置換表の大きさは起動時にしか効かない。** 中身は `Box::leak` で
+            // `'static` にしてあり、作り直すと古いぶんが解放されずに積み上がる
+            midgame_hash_bits: res.hash_mid_bits(),
+            solver_hash_bits: res.hash_end_bits(),
             ..Default::default()
         };
         let engine = Engine::new(cfg).map_err(setup_error)?;
@@ -948,6 +952,51 @@ fn threads_view() -> ThreadsView {
 #[tauri::command]
 fn local_threads() -> ThreadsView {
     threads_view()
+}
+
+/// 置換表の大きさ (2^bits) と、それが使うメモリ量。
+#[derive(Serialize)]
+struct HashView {
+    mid: u32,
+    end: u32,
+    min: u32,
+    max: u32,
+    /// 2 つ合わせた実際のバイト数 (画面に出すため)。
+    bytes: u64,
+}
+
+fn hash_view() -> HashView {
+    let r = resources();
+    let (mid, end) = (r.hash_mid_bits(), r.hash_end_bits());
+    HashView {
+        mid,
+        end,
+        min: kuroobi::resources::HASH_BITS_MIN,
+        max: kuroobi::resources::HASH_BITS_MAX,
+        bytes: kuroobi::resources::midgame_bytes(mid) + kuroobi::resources::endgame_bytes(end),
+    }
+}
+
+#[tauri::command]
+fn hash_sizes() -> HashView {
+    hash_view()
+}
+
+/// 置換表の大きさを設定する。**効くのは次の起動から。**
+///
+/// 中身は `Box::leak` で `'static` にしてあり (探索が生涯参照を要求する)、
+/// 作り直すと古い表が解放されずに積み上がる。**今のエンジンには触らない**。
+#[tauri::command]
+fn set_hash_sizes(mid: u32, end: u32) -> Result<HashView, String> {
+    let (lo, hi) = (
+        kuroobi::resources::HASH_BITS_MIN,
+        kuroobi::resources::HASH_BITS_MAX,
+    );
+    let mut r = resources();
+    r.hash_mid = Some(mid.clamp(lo, hi));
+    r.hash_end = Some(end.clamp(lo, hi));
+    r.save(&resources_path())?;
+    Ok(hash_view())
 }
 
 /// **この機械の読切速度を測って控える。**
@@ -2586,6 +2635,8 @@ fn main() {
             set_use_book,
             local_threads,
             set_local_threads,
+            hash_sizes,
+            set_hash_sizes,
             calibrate_nps,
             activity_status,
             set_learn,

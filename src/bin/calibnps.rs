@@ -197,6 +197,10 @@ fn main() -> ExitCode {
         nnue: res.nnue_path(),
         book: res.book_path(),
         threads,
+        // **設定した置換表で測る。** 既定のまま測ると、対局で使う表と違う
+        // 大きさの値を控えることになる (終盤 22 → 24 で読切が 8.9% 速い)
+        midgame_hash_bits: res.hash_mid_bits(),
+        solver_hash_bits: res.hash_end_bits(),
         ..Default::default()
     };
     let mut engine = match Engine::new(cfg) {

@@ -1085,6 +1085,53 @@ fn coord(p: Position) -> String {
     format!("{f}{r}")
 }
 
+/// **1 局ぶんの探索を持つワーカー。**
+///
+/// 同期対局は 2 局が同時に進む。エンジンが 1 つだと、片方を読んでいる間
+/// もう片方は何もできない — 本探索なら時計を捨てているのと同じで、相手の
+/// 手番なら先読みの機会を捨てている (先読みは実測で +1.6〜1.8 段)。
+///
+/// **エンジンは使い回す。捨てない。** `Engine::new` は置換表を `Box::leak`
+/// で `'static` にするので、対局のたびに作り直すと解放されないまま積み上がる
+/// (1 つ 167 MB)。対局が終わっても割り当てを外すだけにして、次の対局で
+/// 同じワーカーを使う。
+struct EngineWorker {
+    tx: std::sync::mpsc::Sender<Job>,
+    rx: std::sync::mpsc::Receiver<Done>,
+    stop: kuroobi::midgame::StopHandle,
+    /// いま探索中か (結果を受け取るまで次を投げない)。
+    busy: bool,
+    /// 割り当てている対局。無ければ空き。
+    mid: Option<String>,
+    /// 投げた探索の局面ハッシュ (返ってきたときに二重着手を防ぐ印を書くため)。
+    pending_hash: u64,
+}
+
+/// ワーカーへの指示。
+enum Job {
+    /// 本探索。期限まで読んで着手を返す。
+    Think {
+        board: Board,
+        levels: (u32, u8, u8),
+        cap: Option<Duration>,
+    },
+    /// 先読み。**自分の時計は減らない**ので、空いていれば常に投げてよい。
+    /// 1 回で読むのは `slice` だけ (刻んで投げ直す)。
+    Ponder { board: Board, slice: Duration },
+    SetUseBook(bool),
+    SetThreads(usize),
+}
+
+/// ワーカーからの返事。
+///
+/// **学習の取り込みと観戦の解析はワーカーへ載せない。** どちらも対局が
+/// 空いているときだけ動く仕事で、従来どおり `Ctx.engine` が受け持つ。
+/// 対局を並行にすることと、余った時間の使い道を変えることは別の話。
+enum Done {
+    Moved(Box<kuroobi::engine::MoveEval>),
+    Pondered,
+}
+
 struct Ctx {
     app: tauri::AppHandle,
     /// エンジンの停止ハンドル (Engine 生成時に控える)。
@@ -1120,7 +1167,146 @@ struct Ctx {
     engine_cfg_ponder: bool,
     /// 先読みの相手。**相手の手番になった対局の番号**を入れておき、
     /// 受信の合間に少しずつ読む。自分の手番に戻したら空にする。
+    ///
+    /// **ワーカーを使うときは見ない** (対局ごとに割り当てたワーカーが
+    /// それぞれ先読みする)。ワーカーを作れなかったときの退路として残す。
     ponder_at: Option<String>,
+    /// 対局ごとの探索ワーカー。**同期対局は 2 局が同時に進む**ので、
+    /// 1 つのエンジンを取り合うと片方は必ず待たされる。
+    ///
+    /// プールとして持ち、対局が終わっても捨てない (置換表のリークを避ける)。
+    workers: Vec<EngineWorker>,
+    /// ワーカー 1 つあたりのスレッド数 (`share_threads` が決める)。
+    /// 較正した nps を引くのに要る。
+    worker_threads: usize,
+}
+
+/// ワーカーの上限。
+///
+/// 同期対局は 2 局なのでふつうは 2 で足りる。1 つ 167 MB (既定の置換表)
+/// なので、増やすほどメモリを食う。超える対局は既存のワーカーを共有する
+/// (従来どおり待たされるだけで、壊れはしない)。
+const MAX_WORKERS: usize = 2;
+
+impl Ctx {
+    /// `mid` の探索を受け持つワーカーの番号。無ければ用意する。
+    ///
+    /// 空いているワーカーを再利用し、無ければ上限まで新しく立てる。上限に
+    /// 達していたら**いちばん古い割り当てを奪う** (共有すると待たされるが、
+    /// 壊れはしない)。
+    fn worker_for(&mut self, mid: &str) -> Option<usize> {
+        if let Some(i) = self.workers.iter().position(|w| w.mid.as_deref() == Some(mid)) {
+            return Some(i);
+        }
+        if let Some(i) = self.workers.iter().position(|w| w.mid.is_none()) {
+            self.workers[i].mid = Some(mid.to_string());
+            return Some(i);
+        }
+        if self.workers.len() < MAX_WORKERS {
+            match EngineWorker::spawn(self.engine_cfg.clone()) {
+                Ok(mut w) => {
+                    w.mid = Some(mid.to_string());
+                    self.workers.push(w);
+                    // **スレッドを配り直す。** 2 つのエンジンが同時に走るので、
+                    // 片方が全部使うと取り合いになる
+                    self.share_threads();
+                    return Some(self.workers.len() - 1);
+                }
+                Err(e) => {
+                    self.log("info", &format!("探索ワーカーを作れません: {e}"));
+                    return None;
+                }
+            }
+        }
+        // 上限。空いていないので先頭を共有する (busy なら投げずに待つ)
+        self.workers.iter().position(|w| !w.busy)
+    }
+
+    /// ワーカーの数でスレッドを分ける。
+    ///
+    /// **同時に走るので足し算で決まる。** 1 つが全部使うと、もう 1 つが
+    /// 立ち上がった瞬間に取り合いになる。較正 (`nps.<スレッド数>`) も
+    /// 分けた後の数で引く必要があるので、その数を控えておく。
+    fn share_threads(&mut self) {
+        let total = resolve_threads(self.engine_cfg.threads);
+        let n = self.workers.len().max(1);
+        let each = (total / n).max(1);
+        for w in &mut self.workers {
+            w.send(Job::SetThreads(each));
+        }
+        self.worker_threads = each;
+    }
+
+    /// 対局が終わったらワーカーの割り当てを外す (エンジンは残す)。
+    fn release_worker(&mut self, mid: &str) {
+        for w in &mut self.workers {
+            if w.mid.as_deref() == Some(mid) {
+                w.mid = None;
+            }
+        }
+    }
+}
+
+impl EngineWorker {
+    /// エンジンを 1 つ抱えたスレッドを立てる。**重みの読み込みが入るので
+    /// 数百 ms かかる。** 呼ぶのは対局が始まるときで、以後は使い回す。
+    fn spawn(mut cfg: EngineConfig) -> Result<EngineWorker, String> {
+        let res = resources();
+        cfg.threads = resolve_threads(cfg.threads);
+        cfg.weights = res.weights_path();
+        cfg.nnue = res.nnue_path();
+        cfg.book = res.book_path();
+        cfg.midgame_hash_bits = res.hash_mid_bits();
+        cfg.solver_hash_bits = res.hash_end_bits();
+        let engine = Engine::new(cfg)?;
+        let stop = engine.stop_handle();
+        let (jtx, jrx) = std::sync::mpsc::channel::<Job>();
+        let (dtx, drx) = std::sync::mpsc::channel::<Done>();
+        std::thread::spawn(move || {
+            let mut engine = engine;
+            while let Ok(job) = jrx.recv() {
+                match job {
+                    Job::Think { board, levels, cap } => {
+                        let base = {
+                            let c = engine.config();
+                            (c.depth, c.solve_empties, c.band)
+                        };
+                        engine.set_levels(levels.0, levels.1, levels.2);
+                        let dl = cap.map(|c| Instant::now() + c);
+                        let mv = engine.choose_within(&board, dl);
+                        engine.set_levels(base.0, base.1, base.2);
+                        if dtx.send(Done::Moved(Box::new(mv))).is_err() {
+                            return;
+                        }
+                    }
+                    Job::Ponder { board, slice } => {
+                        engine.ponder(&board, Instant::now() + slice);
+                        if dtx.send(Done::Pondered).is_err() {
+                            return;
+                        }
+                    }
+                    Job::SetUseBook(b) => engine.set_use_book(b),
+                    Job::SetThreads(n) => engine.set_threads(n),
+                }
+            }
+        });
+        Ok(EngineWorker {
+            tx: jtx,
+            rx: drx,
+            stop,
+            busy: false,
+            mid: None,
+            pending_hash: 0,
+        })
+    }
+
+    /// 指示を投げる。**返事を待たない** — 待つとこの構造の意味が無い。
+    fn send(&mut self, job: Job) {
+        let counts = matches!(job, Job::Think { .. } | Job::Ponder { .. });
+        if self.tx.send(job).is_ok() && counts {
+            self.busy = true;
+        }
+    }
 }
 
 impl Ctx {
@@ -1270,6 +1456,10 @@ pub fn run(
             // **全体設定 (resources.conf の threads) を使う。** GGS 専用の
             // 欄は持たない — 別々だと較正が 2 つ要る
             threads: resources().threads.unwrap_or_else(|| resolve_threads(0)),
+            // 置換表の大きさも全体設定から。**起動時にしか効かない**
+            // (中身は `Box::leak` で `'static`。作り直すと積み上がる)
+            midgame_hash_bits: resources().hash_mid_bits(),
+            solver_hash_bits: resources().hash_end_bits(),
             ..Default::default()
         },
         seq: 0,
@@ -1285,6 +1475,8 @@ pub fn run(
         engine_cfg_reserve: 20,
         engine_cfg_ponder: true,
         ponder_at: None,
+        workers: Vec::new(),
+        worker_threads: resolve_threads(0),
     };
     ctx.snap.lock().unwrap().engine = EngineCfgView {
         depth: 22,
@@ -1530,6 +1722,9 @@ pub fn run(
                                 .collect();
                             for k in keys {
                                 matches.remove(&k);
+                                // ワーカーは残して割り当てだけ外す (置換表を
+                                // 抱えているので、作り直すとリークが積み上がる)
+                                ctx.release_worker(&k);
                             }
                             sync_matches(&mut ctx, &matches);
                             ctx.emit(true);
@@ -1558,6 +1753,7 @@ pub fn run(
                             s.matches.retain(|m| m.id != id && base_id(&m.id) != id);
                             drop(s);
                             drop_match(&mut matches, &id);
+                            ctx.release_worker(&id);
                             ctx.dirty = true;
                         }
                         Cmd::Chat { target, text } => {
@@ -2130,8 +2326,19 @@ pub fn run(
                     send!(ctx, "tell /os match");
                 }
 
-                // ---------- 相手の手番中の先読み ----------
-                ponder_slice(&mut ctx, &matches);
+                // ---------- 探索ワーカーの結果を拾う ----------
+                /* **毎周ここで拾う。** 投げっぱなしにしてあるので、拾わないと
+                着手が送られない。返す形にしているのは `send!` が `writer` を
+                直に持っており、関数の中から呼ぶと借用が噛み合わないため。 */
+                for line in collect_workers(&mut ctx, &mut matches) {
+                    send!(ctx, line);
+                }
+                sync_matches(&mut ctx, &matches);
+
+                // ---------- 相手の手番中の先読み (ワーカーが無いときの退路) ----------
+                if ctx.workers.is_empty() {
+                    ponder_slice(&mut ctx, &matches);
+                }
 
                 // ---------- 観戦の失敗を拾う ----------
                 // GGS は終わった対局への watch にエラーを返さないことがある。
@@ -2626,7 +2833,6 @@ fn think_and_play(
     }
     ctx.emit(true);
 
-    let engine = ctx.engine.as_mut().unwrap();
     let base = (
         ctx.engine_cfg.depth,
         ctx.engine_cfg.solve_empties,
@@ -2639,14 +2845,35 @@ fn think_and_play(
             empties,
             max_move_secs: ctx.engine_cfg_max_move,
             reserve_secs: ctx.engine_cfg_reserve,
-            threads: resolve_threads(ctx.engine_cfg.threads),
+            // **ワーカーで分けた後の数。** 2 つ同時に走るので、全体の数で
+            // 見積もると読切に入りすぎる
+            threads: ctx.worker_threads,
             ..Default::default()
         },
         base,
         &ctx.engine_cfg_pace,
     );
+    /* **ワーカーへ投げて返事を待たない。** 同期対局は 2 局が同時に進むので、
+    ここで待つと片方の時計を捨てることになる。結果は受信ループが毎周
+    `collect_worker` で拾い、そこで着手を送る。 */
+    if let Some(i) = ctx.worker_for(mid) {
+        if !ctx.workers[i].busy {
+            ctx.workers[i].pending_hash = bh;
+            ctx.workers[i].send(Job::Think {
+                board,
+                levels: (d, solve, band),
+                cap,
+            });
+        }
+        return;
+    }
+    // ワーカーを作れなかったときの退路: 従来どおりここで読む
+    if let Err(e) = ctx.ensure_engine() {
+        ctx.log("info", &format!("エンジン初期化失敗: {e}"));
+        return;
+    }
+    let engine = ctx.engine.as_mut().unwrap();
     engine.set_levels(d, solve, band);
-    // 期限まで反復深化する。深さは上限で、実際にどこまで行けるかは時間が決める
     let deadline = cap.map(|c| std::time::Instant::now() + c);
     let mv = engine.choose_within(&board, deadline);
     engine.set_levels(base.0, base.1, base.2);
@@ -2684,6 +2911,91 @@ fn think_and_play(
     }
     sync_matches(ctx, matches);
     ctx.emit(true);
+}
+
+/// **ワーカーが返した着手を拾う。**
+///
+/// 送るべき行を返すだけで、自分では送らない — 受信ループの `send!` は
+/// `writer` を直に持っており、ここへ渡すと `ctx` の可変借用と噛み合わない。
+///
+/// あわせて、相手の手番の対局には**空いているワーカーで先読みを投げる**。
+/// 先読みは自分の時計を減らさないので、空いているなら常に読ませたほうが得
+/// (実測で予測手 1 本のとき +1.6〜1.8 段)。
+fn collect_workers(ctx: &mut Ctx, matches: &mut HashMap<String, MatchState>) -> Vec<String> {
+    let mut out = Vec::new();
+    for i in 0..ctx.workers.len() {
+        // 返事が来ていれば拾う (来ていなければ何もしない)
+        let done = ctx.workers[i].rx.try_recv().ok();
+        let Some(done) = done else { continue };
+        ctx.workers[i].busy = false;
+        let Done::Moved(mv) = done else { continue };
+        let Some(mid) = ctx.workers[i].mid.clone() else {
+            continue;
+        };
+        let bh = ctx.workers[i].pending_hash;
+        let Some(m) = matches.get_mut(&mid) else {
+            continue;
+        };
+        let mstr = match mv.pos {
+            Some(p) => coord(p),
+            None => "pa".to_string(),
+        };
+        out.push(format!("tell /os play {mid} {mstr}"));
+        m.last_eval = Some(if mv.value.is_finite() { mv.value } else { 0.0 });
+        m.last_eval_exact = mv.exact;
+        m.last_from_book = mv.from_book;
+        m.last_played_hash = bh;
+        ctx.log(
+            "info",
+            &format!(
+                "{mid} {mstr}: {} {:+.2}{}",
+                if mv.from_book && mv.learned {
+                    "定石 (実戦の学習)"
+                } else if mv.from_book {
+                    "定石"
+                } else {
+                    "探索"
+                },
+                mv.value,
+                if mv.exact { " (完全読み)" } else { "" }
+            ),
+        );
+        {
+            let mut s = ctx.snap.lock().unwrap();
+            if s.thinking.as_deref() == Some(mid.as_str()) {
+                s.thinking = None;
+            }
+        }
+        ctx.dirty = true;
+    }
+
+    // 空いているワーカーは相手の手番の局を先読みしておく
+    if ctx.engine_cfg_ponder {
+        const SLICE: Duration = Duration::from_millis(200);
+        for i in 0..ctx.workers.len() {
+            if ctx.workers[i].busy {
+                continue;
+            }
+            let Some(mid) = ctx.workers[i].mid.clone() else {
+                continue;
+            };
+            let Some(m) = matches.get(&mid) else { continue };
+            // 自分の手番なら本探索の番。先読みはしない
+            if m.my_color.is_none() || Some(m.turn) == m.my_color {
+                continue;
+            }
+            /* **相手の手番の盤を組む。** `board_of` は「渡した色が手番」の盤を
+            返すので、自分の色を渡すと手番が入れ替わった別の局面になる。 */
+            let Some(board) = board_of(m, m.turn) else {
+                continue;
+            };
+            ctx.workers[i].send(Job::Ponder {
+                board,
+                slice: SLICE,
+            });
+        }
+    }
+    out
 }
 
 fn sync_matches(ctx: &mut Ctx, matches: &HashMap<String, MatchState>) {

@@ -36,6 +36,38 @@ pub struct Resources {
     ///
     /// 書式は `nps.<スレッド数>=<値>`。
     pub nps: Vec<(usize, f64)>,
+    /// 中盤置換表の大きさ (2^bits エントリ)。未指定なら既定 (22)。
+    ///
+    /// **機械のメモリ量で決まる設定**なので、重みの場所と同じここに置く。
+    pub hash_mid: Option<u32>,
+    /// 終盤置換表の大きさ (2^bits エントリ)。未指定なら既定 (24)。
+    ///
+    /// **既定を 22 から 24 へ上げた。** 対局が読む領域 (空き 26〜30、30 問、
+    /// 8 スレッド) で測ると、22 → 24 で**時間 -8.9% / ノード -5.9%**。
+    /// 26 まで上げても -10.1% で、24 の 4 倍のメモリ (403 MB → 1.6 GB) に
+    /// 対して +1.2% しかない。
+    ///
+    /// `solve_obf` の既定が 26 なのは 10 億ノード級 (FFO の最深部) の話で、
+    /// そこでは -23〜31% 出る。**対局の領域はそこまで表を溢れさせない。**
+    pub hash_end: Option<u32>,
+}
+
+/// 置換表の大きさとして受け付ける範囲 (2^bits)。
+///
+/// 上は 26 で止める。中盤 26 は 1.1 GB、終盤 26 は 1.6 GB で、2 つ合わせて
+/// 2.7 GB。**エンジンを複数持つとその倍になる**ので、ここを青天井にすると
+/// 機械を止めてしまう。
+pub const HASH_BITS_MIN: u32 = 16;
+pub const HASH_BITS_MAX: u32 = 26;
+
+/// 中盤置換表が使うバイト数。1 バケット 64 バイトで、バケット数は 2^(bits-2)。
+pub fn midgame_bytes(bits: u32) -> u64 {
+    1u64 << (bits.clamp(HASH_BITS_MIN, HASH_BITS_MAX) + 4)
+}
+
+/// 終盤置換表が使うバイト数。1 エントリ 24 バイト。
+pub fn endgame_bytes(bits: u32) -> u64 {
+    (1u64 << bits.clamp(HASH_BITS_MIN, HASH_BITS_MAX)) * 24
 }
 
 /// 既定の置き場所を探す。
@@ -81,6 +113,8 @@ impl Resources {
                 "nnue" => r.nnue = p,
                 "book" => r.book = p,
                 "threads" => r.threads = v.parse().ok(),
+                "hash_mid" => r.hash_mid = v.parse().ok(),
+                "hash_end" => r.hash_end = v.parse().ok(),
                 k if k.starts_with("nps.") => {
                     if let (Ok(t), Ok(n)) = (k[4..].parse::<usize>(), v.parse::<f64>()) {
                         r.set_nps(t, n);
@@ -112,6 +146,12 @@ impl Resources {
         for (t, n) in &self.nps {
             out.push_str(&format!("nps.{t}={n:.0}\n"));
         }
+        if let Some(n) = self.hash_mid {
+            out.push_str(&format!("hash_mid={n}\n"));
+        }
+        if let Some(n) = self.hash_end {
+            out.push_str(&format!("hash_end={n}\n"));
+        }
         std::fs::write(path, out).map_err(|e| e.to_string())
     }
 
@@ -134,6 +174,20 @@ impl Resources {
                 self.nps.sort_by_key(|(t, _)| *t);
             }
         }
+    }
+
+    /// 中盤置換表の大きさ (2^bits)。範囲外の設定は既定へ倒す。
+    pub fn hash_mid_bits(&self) -> u32 {
+        self.hash_mid
+            .filter(|b| (HASH_BITS_MIN..=HASH_BITS_MAX).contains(b))
+            .unwrap_or(22)
+    }
+
+    /// 終盤置換表の大きさ (2^bits)。範囲外の設定は既定へ倒す。
+    pub fn hash_end_bits(&self) -> u32 {
+        self.hash_end
+            .filter(|b| (HASH_BITS_MIN..=HASH_BITS_MAX).contains(b))
+            .unwrap_or(24)
     }
 
     /// 起点のディレクトリ。未指定なら既定の探索。

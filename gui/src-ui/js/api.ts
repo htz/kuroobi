@@ -82,6 +82,8 @@ export const api = {
   localThreads: () => call<ThreadsView>('local_threads', {}),
   setLocalThreads: (n: number | null) => call('set_local_threads', { n }),
   calibrateNps: () => call<ThreadsView>('calibrate_nps', {}),
+  hashSizes: () => call<HashView>('hash_sizes', {}),
+  setHashSizes: (mid: number, end: number) => call<HashView>('set_hash_sizes', { mid, end }),
   activity: () => call<ActivityView>('activity_status', {}),
 };
 
@@ -95,6 +97,11 @@ export interface KifuFrame {
 }
 
 /** スレッド数の設定 (set が null なら自動 = auto の値)。 */
+/** 置換表の大きさ (2^bits) と、2 つ合わせて使うメモリ量。 */
+export interface HashView {
+  mid: number; end: number; min: number; max: number; bytes: number;
+}
+
 export interface ThreadsView {
   set: number | null;
   auto: number;

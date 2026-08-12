@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useState, type ReactNode } from 'react';
-import { api, emitApp, onApp, type KifuFrame, type ThreadsView } from './api';
+import { api, emitApp, onApp, type HashView, type KifuFrame, type ThreadsView } from './api';
 import { TATAMI, type Prefs, type Theme } from './prefs';
 import { Modal, Note, Overlay, Section } from './components/layout';
 import { Button, Segmented, Select, TextField } from './components/primitives';
@@ -224,6 +224,7 @@ export function Settings({ prefs, setPref, ggs, initialTab, onClose }: {
   const [th, setTh] = useState<ThreadsView | null>(null);
   /** 読切速度の測定中 (数秒かかるので、押せないことを見せる)。 */
   const [calib, setCalib] = useState(false);
+  const [hash, setHash] = useState<HashView | null>(null);
 
   const load = useCallback(async () => {
     try { setStatus(await api.resourceStatus()); } catch { /* エンジン未初期化 */ }
@@ -234,10 +235,13 @@ export function Settings({ prefs, setPref, ggs, initialTab, onClose }: {
     let alive = true;
     void (async () => {
       try {
-        const [st, t] = await Promise.all([api.resourceStatus(), api.localThreads()]);
+        const [st, t, h] = await Promise.all([
+          api.resourceStatus(), api.localThreads(), api.hashSizes(),
+        ]);
         if (!alive) return;
         setStatus(st);
         setTh(t);
+        setHash(h);
       } catch { /* エンジン未初期化 */ }
     })();
     return () => { alive = false; };
@@ -422,6 +426,41 @@ export function Settings({ prefs, setPref, ggs, initialTab, onClose }: {
               <b style={{ color: 'var(--text)' }}>起動時に自動で測る</b>ので、ふつうは触らなくて構いません
               (空き 22 の 3 局面を実際に読み切るもので、数秒で終わります)。
               速さはスレッド数で 4 倍変わるため、上のスレッド数を変えると測り直します。
+            </Note>
+          </Section>
+        )}
+        {hash && (
+          <Section title="置換表の大きさ">
+            {/* **終盤は既定 (22) では小さい。** 10 億ノード級の読切では表が
+                桁で溢れており、2^22 → 2^26 でノード -14〜16% / 時間 -23〜31%
+                という実測がある。GGS 対局はまさにその領域を読む */}
+            <Row2 label="中盤">
+                <Select width={140} value={String(hash.mid)}
+                        onChange={(v) => void (async () => {
+                          try { setHash(await api.setHashSizes(+v, hash.end)); } catch { /* 保存失敗 */ }
+                        })()}
+                        options={Array.from({ length: hash.max - hash.min + 1 }, (_, i) => {
+                          const b = hash.min + i;
+                          return [String(b), `${fmtSize(2 ** (b + 4))}${b === 22 ? ' (既定)' : ''}`] as [string, string];
+                        })} />
+            </Row2>
+            <Row2 label="終盤">
+              <Select width={140} value={String(hash.end)}
+                      onChange={(v) => void (async () => {
+                        try { setHash(await api.setHashSizes(hash.mid, +v)); } catch { /* 保存失敗 */ }
+                      })()}
+                      options={Array.from({ length: hash.max - hash.min + 1 }, (_, i) => {
+                        const b = hash.min + i;
+                        return [String(b), `${fmtSize(2 ** b * 24)}${b === 24 ? ' (既定)' : ''}`] as [string, string];
+                      })} />
+            </Row2>
+            <Note>
+              合計 <b style={{ color: 'var(--text)' }}>{fmtSize(hash.bytes)}</b> を使います
+              (エンジン 1 つあたり)。<b style={{ color: 'var(--text)' }}>次の起動から効きます</b>。
+              終盤の既定 (403 MB) は実測で決めました — 対局が読む空き 26〜30 で、
+              1 段下げる (100 MB) と <b style={{ color: 'var(--text)' }}>8.9% 遅く</b>なり、
+              1 段上げても (1.6 GB) 1.2% しか速くなりません。
+              メモリが足りない機械では起動できなくなるので、増やしたら一度起動して確かめてください。
             </Note>
           </Section>
         )}
