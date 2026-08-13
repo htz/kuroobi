@@ -485,8 +485,8 @@ fn report_moves(moves: &[MoveInfo]) {
     /* **中央値だけでは足りない。** 同じ空きでも局面によって使える時間が
     違うので、「最大どこまで読めたか」と「時間が無いとき何段まで落ちたか」の
     両端が要る。落ちた側がその持ち時間の実力の下限になる。 */
-    println!("   空き | 手数 | 中盤の深さ 最浅/中央/最深 | 読切 | 1 手の秒 中央/最大");
-    println!("  ------+------+---------------------------+------+-------------------");
+    println!("   空き | 手数 | 中盤の深さ 最浅/中央/最深 | 読切 | 打切 | 1 手の秒 中央/最大");
+    println!("  ------+------+---------------------------+------+------+-------------------");
     for lo in (0..=60usize).rev().filter(|n| n % 4 == 0) {
         let hi = lo + 3;
         let grp: Vec<&MoveInfo> = moves
@@ -511,16 +511,19 @@ fn report_moves(moves: &[MoveInfo]) {
                 ds[ds.len() - 1]
             )
         };
+        let cut = grp.iter().filter(|m| m.cut).count();
         println!(
-            "  {lo:>2}-{hi:<2} | {:>4} | {dtxt:>25} | {:>3}% | {:>8.1} / {:>6.1}",
+            "  {lo:>2}-{hi:<2} | {:>4} | {dtxt:>25} | {:>3}% | {:>4} | {:>8.1} / {:>6.1}",
             grp.len(),
             solved * 100 / grp.len(),
+            cut,
             ts[ts.len() / 2],
             ts[ts.len() - 1],
         );
     }
     let book = moves.iter().filter(|m| m.from_book).count();
-    println!("  (定石で指した手 {book})");
+    let cut = moves.iter().filter(|m| m.cut).count();
+    println!("  (定石で指した手 {book} / 読切を打ち切った手 {cut})");
 }
 
 /// 1 手ぶんの記録。**持ち時間ごとの実力を見るための計器。**
@@ -531,6 +534,8 @@ struct MoveInfo {
     depth: u32,
     /// 読切で決めたか。
     exact: bool,
+    /// 読切が期限で打ち切られ、保険の手を指したか。
+    cut: bool,
     from_book: bool,
     secs: f64,
 }
@@ -639,6 +644,7 @@ fn play_timed(
             empties: board.empty_count(),
             depth: mv.depth,
             exact: mv.exact,
+            cut: mv.cut,
             from_book: mv.from_book,
             secs: used,
         });

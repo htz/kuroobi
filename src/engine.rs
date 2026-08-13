@@ -114,6 +114,11 @@ pub struct MoveEval {
     pub learned: bool,
     /// 中盤探索が到達した深さ。読み切りと定石では 0。
     pub depth: u32,
+    /// **読切 (または選択読み) が期限で打ち切られ、保険の手を指した。**
+    ///
+    /// 入り口の判断が甘かったことの印。頻発するなら、入り口を浅くするか
+    /// 保険を厚くするかを決める材料になる。
+    pub cut: bool,
 }
 
 /// 探索一式を束ねたセッション。生成コストが高い (重み読み込み +
@@ -545,6 +550,7 @@ impl Engine {
                     from_book: true,
                     learned,
                     depth: 0,
+                    cut: false,
                 };
             }
         }
@@ -559,6 +565,7 @@ impl Engine {
                 from_book: false,
                 learned: false,
                 depth: 0,
+                cut: false,
             };
         }
         if board.empty_count() <= c.solve_empties {
@@ -599,6 +606,7 @@ impl Engine {
                         from_book: false,
                         learned: false,
                         depth: BACKUP_DEPTH,
+                        cut: true,
                     };
                 }
             }
@@ -609,6 +617,7 @@ impl Engine {
                 from_book: false,
                 learned: false,
                 depth: 0,
+                cut: false,
             }
         } else if let Some(t) = selective_band(board.empty_count(), c.solve_empties, c.band) {
             // 選択読みも同じ。期限で切れたら保険の手を返す
@@ -636,6 +645,7 @@ impl Engine {
                         from_book: false,
                         learned: false,
                         depth: BACKUP_DEPTH,
+                        cut: true,
                     };
                 }
             }
@@ -646,6 +656,7 @@ impl Engine {
                 from_book: false,
                 learned: false,
                 depth: 0,
+                cut: false,
             }
         } else {
             let (pos, value, reached) = self.search.best_move_deadline(board, c.depth, deadline);
@@ -656,6 +667,7 @@ impl Engine {
                 from_book: false,
                 learned: false,
                 depth: reached,
+                cut: false,
             }
         }
     }
@@ -758,6 +770,7 @@ impl Engine {
                 from_book: false,
                 learned: false,
                 depth: 0,
+                cut: false,
             };
         }
         if board.empty_count() <= self.config.solve_empties {
@@ -771,6 +784,7 @@ impl Engine {
                 from_book: false,
                 learned: false,
                 depth: 0,
+                cut: false,
             }
         } else {
             let (pos, value) = self.search.best_move_valued(board, depth);
@@ -781,6 +795,7 @@ impl Engine {
                 from_book: false,
                 learned: false,
                 depth: 0,
+                cut: false,
             }
         }
     }
@@ -811,6 +826,7 @@ impl Engine {
                     from_book: false,
                     learned: false,
                     depth: 0,
+                    cut: false,
                 }
             } else if child.empty_count() <= self.config.solve_empties {
                 let r = self.solver.solve_with_eval(
@@ -826,6 +842,7 @@ impl Engine {
                     from_book: false,
                     learned: false,
                     depth: 0,
+                    cut: false,
                 }
             } else {
                 self.search.clear();
@@ -838,6 +855,7 @@ impl Engine {
                     from_book: false,
                     learned: false,
                     depth: 0,
+                    cut: false,
                 }
             };
             out.push((pos, ev));
@@ -893,6 +911,7 @@ impl Engine {
                         from_book: false,
                         learned: false,
                         depth: 0,
+                        cut: false,
                     }
                 } else if u32::from(child.empty_count()) <= depth {
                     // 深化がこの手の終局まで届いた。中盤探索は MPC で枝を
@@ -911,6 +930,7 @@ impl Engine {
                         from_book: false,
                         learned: false,
                         depth: 0,
+                        cut: false,
                     }
                 } else {
                     all_exact = false;
@@ -922,7 +942,8 @@ impl Engine {
                         exact: false,
                         from_book: false,
                         learned: false,
-                        depth: reached + 1, // 子を d 読んだ = 親から見て d+1 手先まで
+                        depth: reached + 1,
+                        cut: false, // 子を d 読んだ = 親から見て d+1 手先まで
                     }
                 };
                 out.push((pos, ev));
