@@ -48,6 +48,9 @@ struct Args {
     /// 探索のスレッド数 (両側同じ)。較正した nps はスレッド数ごとの値
     /// なので、測ったときと同じ数で戦わせないと意味がない。
     threads: usize,
+    /// 定石を使う。**実戦は使うのが既定**なので、時間の使われ方を測るなら
+    /// 揃えないと序盤の数手ぶんずれる。
+    use_book: bool,
     weights_a: PathBuf,
     weights_b: PathBuf,
     games: usize,
@@ -102,6 +105,8 @@ Options:
   -h, --help           Show this help
 
 Timed play (the only way to measure time management):
+  --book               Use the opening book (matches real play; off by default
+                       so evaluator comparisons are not masked by book moves)
   --time <secs>        Whole-game clock per side; running out loses the game
   --pace-a <mode>      fast | depth | tail:<a> (default fast). slow/even were
                        dropped: slow lost 0.0% at 3s and 8s clocks, and fast
@@ -137,6 +142,7 @@ fn parse_args() -> Result<Args, String> {
         time_a: None,
         time_b: None,
         threads: 1,
+        use_book: false,
         depth_a: None,
         depth_b: None,
         solve_a: None,
@@ -195,6 +201,7 @@ fn parse_args() -> Result<Args, String> {
             }
             "--nps-a" => args.nps_a = Some(value("--nps-a")?.to_string()),
             "--nps-b" => args.nps_b = Some(value("--nps-b")?.to_string()),
+            "--book" => args.use_book = true,
             "--threads" => {
                 args.threads = value("--threads")?
                     .parse()
@@ -672,9 +679,10 @@ fn run_nnue(args: &Args, a: &std::path::Path, b: &std::path::Path) -> ExitCode {
             solver_hash_bits: 20,
             weights: args.weights_a.clone(),
             nnue: nnue.to_path_buf(),
-            book: std::path::PathBuf::from("book.txt"),
-            use_book: false,
-            book_tolerance: 0.0,
+            book: args.weights_a.with_file_name("book.txt"),
+            use_book: args.use_book,
+            // 同じ棋譜の繰り返しを避ける (実戦と同じ)
+            book_tolerance: if args.use_book { 1.0 } else { 0.0 },
         })
     };
     let depth_a = u32::from(args.depth_a.unwrap_or(args.depth));
@@ -688,8 +696,8 @@ fn run_nnue(args: &Args, a: &std::path::Path, b: &std::path::Path) -> ExitCode {
             return ExitCode::FAILURE;
         }
     };
-    eng_a.set_use_book(false);
-    eng_b.set_use_book(false);
+    eng_a.set_use_book(args.use_book);
+    eng_b.set_use_book(args.use_book);
 
     // 片側だけ指定したときも持ち時間制に入る (`--time` の指定は要らない)
     let timed = args.time_secs > 0 || args.time_a.is_some() || args.time_b.is_some();

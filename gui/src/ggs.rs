@@ -2982,9 +2982,15 @@ fn collect_workers(ctx: &mut Ctx, matches: &mut HashMap<String, MatchState>) -> 
         ctx.dirty = true;
     }
 
-    // 空いているワーカーは相手の手番の局を先読みしておく
+    /* 空いているワーカーは相手の手番の局を先読みしておく。
+
+    **刻みが 200ms なのは受信ループの都合だった。** エンジンを受信ループで
+    直に回していたころは、長く読むと相手の着手に気付けなくなるので細かく
+    刻むしかなかった。ワーカーは別スレッドなので、その制約はもう無い。
+    **相手が長考する 30 秒を 150 回に切り刻む理由が無い** — 刻むたびに
+    反復深化が浅い段から回り直すので、実質的に浅い読みを繰り返していた。 */
     if ctx.engine_cfg_ponder {
-        const SLICE: Duration = Duration::from_millis(200);
+        const SLICE: Duration = Duration::from_secs(5);
         for i in 0..ctx.workers.len() {
             if ctx.workers[i].busy {
                 continue;
