@@ -31,6 +31,16 @@ fn stone_scale(v: f32) -> f32 {
     }
 }
 
+/// 読切が期限で切れたときに指す「保険の手」を取る深さ。
+///
+/// **浅くてよい。** 使われるのは見積りが外れたときだけで、そこで求められる
+/// のは「まともな手」であって最善手ではない。深くすると保険そのものが本命の
+/// 時間を食う。
+const BACKUP_DEPTH: u32 = 8;
+
+/// 保険に使ってよい残り時間の割合。
+const BACKUP_SHARE: f32 = 0.05;
+
 /// 双方に合法手がない = 終局。
 fn is_game_over(board: &Board) -> bool {
     if board.movable() != 0 {
@@ -204,6 +214,45 @@ impl Engine {
 
     pub fn config(&self) -> &EngineConfig {
         &self.config
+    }
+
+    /// **期限の見張りを立てる。** 期限が来たら停止ハンドルを立てて、
+    /// 走っている読切を打ち切らせる。
+    ///
+    /// 中盤の反復深化は自前で期限を見られる (段の切れ目で戻れる) が、
+    /// 読切には切れ目が無い。外から止めるしかない。
+    fn watch_deadline(
+        &self,
+        deadline: Option<std::time::Instant>,
+    ) -> Option<std::sync::Arc<std::sync::atomic::AtomicBool>> {
+        let dl = deadline?;
+        let stop = self.stop.clone();
+        let done = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let d2 = done.clone();
+        std::thread::spawn(move || {
+            while !d2.load(std::sync::atomic::Ordering::Relaxed) {
+                let now = std::time::Instant::now();
+                if now >= dl {
+                    stop.stop();
+                    return;
+                }
+                std::thread::sleep((dl - now).min(std::time::Duration::from_millis(20)));
+            }
+        });
+        Some(done)
+    }
+
+    /// 見張りを畳んで、**期限で切られたか**を返す。
+    fn stop_watch_done(
+        &mut self,
+        watcher: Option<std::sync::Arc<std::sync::atomic::AtomicBool>>,
+    ) -> bool {
+        let Some(done) = watcher else { return false };
+        done.store(true, std::sync::atomic::Ordering::Relaxed);
+        let cut = self.stop.is_stopped();
+        // 次の探索のために戻す (`choose_within` の頭でも reset している)
+        self.stop.reset();
+        cut
     }
 
     /// この Engine が生涯に訪れたノードの累計 (中盤探索 + 読み切り)。
@@ -513,21 +562,83 @@ impl Engine {
             };
         }
         if board.empty_count() <= c.solve_empties {
+            /* **読切も期限で打ち切る。**
+
+            入る前に所要時間を見積もってはいるが (`timectl`)、見積りは必ず
+            外れる — 同じ空きでも局面によって中央値の 5 倍以上散る。外れた
+            ときに終わるまで返ってこないと、**時間切れで一発レートダウン**に
+            なる。打ち切って浅い答えを指すほうが、棋力の損は小さい。
+
+            打ち切ったときのために**保険の手を先に取る**。読切の途中で
+            止めた値は不完全 (番兵が混じる) ので使えない。 */
+            let backup = deadline.map(|_| {
+                let (pos, value, _) = self.search.best_move_deadline(
+                    board,
+                    BACKUP_DEPTH,
+                    // 保険に使ってよいのは予算のごく一部。ここで使いすぎると
+                    // 本命の読切に入る時間が無くなる
+                    deadline.map(|d| {
+                        let now = std::time::Instant::now();
+                        now + (d - now).mul_f32(BACKUP_SHARE)
+                    }),
+                );
+                (pos, value)
+            });
+            let watcher = self.watch_deadline(deadline);
             let r =
                 self.solver
                     .solve_with_eval(EndSolverMode::Perfect, board, Some(&self.evaluator));
             self.solver_nodes += r.nodes;
+            let cut = self.stop_watch_done(watcher);
+            if cut {
+                if let Some((pos, value)) = backup.filter(|(p, _)| p.is_some()) {
+                    return MoveEval {
+                        pos,
+                        value: stone_scale(value),
+                        exact: false,
+                        from_book: false,
+                        learned: false,
+                        depth: BACKUP_DEPTH,
+                    };
+                }
+            }
             MoveEval {
                 pos: r.best_move,
                 value: stone_scale(r.value as f32),
-                exact: true,
+                exact: !cut,
                 from_book: false,
                 learned: false,
                 depth: 0,
             }
         } else if let Some(t) = selective_band(board.empty_count(), c.solve_empties, c.band) {
+            // 選択読みも同じ。期限で切れたら保険の手を返す
+            let backup = deadline.map(|_| {
+                let (pos, value, _) = self.search.best_move_deadline(
+                    board,
+                    BACKUP_DEPTH,
+                    deadline.map(|d| {
+                        let now = std::time::Instant::now();
+                        now + (d - now).mul_f32(BACKUP_SHARE)
+                    }),
+                );
+                (pos, value)
+            });
+            let watcher = self.watch_deadline(deadline);
             let r = self.solver.solve_selective(board, Some(&self.evaluator), t);
             self.solver_nodes += r.nodes;
+            let cut = self.stop_watch_done(watcher);
+            if cut {
+                if let Some((pos, value)) = backup.filter(|(p, _)| p.is_some()) {
+                    return MoveEval {
+                        pos,
+                        value: stone_scale(value),
+                        exact: false,
+                        from_book: false,
+                        learned: false,
+                        depth: BACKUP_DEPTH,
+                    };
+                }
+            }
             MoveEval {
                 pos: r.best_move,
                 value: stone_scale(r.value as f32),

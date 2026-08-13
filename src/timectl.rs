@@ -201,6 +201,20 @@ pub fn solve_entry(budget_secs: f64, nps: f64, threads: usize, max: u8) -> u8 {
         .unwrap_or(0)
 }
 
+/// 持ち時間があるときの中盤の深さ。
+///
+/// **上限を置かない。期限だけが探索を止める。** 反復深化は期限が来れば
+/// 直前の段で返し、読切と選択読みも期限で打ち切って保険の手を指すように
+/// したので (`Engine::choose_within`)、深さで止める理由が無くなった。
+///
+/// 上限を残すと持ち時間を使い切れない。**実測で 5 分・10 分の対局が
+/// どちらも 28 秒しか使わず、到達深さも同じ 24 段だった** — 深さ 24 で
+/// 頭打ちになり、予算の 9 割を捨てていた。
+///
+/// 弱く指したいときは**持ち時間を付けない** (`clock_secs: None`)。そちらは
+/// 設定した深さがそのまま効く。持ち時間を付けたら全力、と割り切る。
+const DEPTH_BY_CLOCK: u32 = 60;
+
 /// 読切に使ってよい時間 / **その手の予算**。
 ///
 /// **読切に別の予算を持たせない。** 「残り時間の N% を投じてよい」という
@@ -303,7 +317,8 @@ pub fn plan(s: Situation, base: Levels, pace: Pace) -> Plan {
     };
     let band = if budget >= 12.0 { base.band } else { 0 };
     Plan {
-        depth: base.depth,
+        // **深さで止めない。** 期限が決める (読切も打ち切れるようにした)
+        depth: DEPTH_BY_CLOCK,
         solve,
         band,
         cap: Some(Duration::from_secs_f64(budget.max(0.05))),
@@ -508,6 +523,40 @@ mod tests {
         assert!(at(3) <= at(10), "3 秒 {} <= 10 秒 {}", at(3), at(10));
         assert!(at(10) <= at(60), "10 秒 {} <= 60 秒 {}", at(10), at(60));
         assert!(at(600) <= BASE.solve, "設定した上限は超えない");
+    }
+
+    /// **持ち時間があれば深さの上限は外れる。**
+    ///
+    /// 期限だけが探索を止める。上限を残すと持ち時間を使い切れず、実測で
+    /// 5 分と 10 分の対局がどちらも 28 秒しか使わなかった。
+    #[test]
+    fn a_clock_lifts_the_depth_cap() {
+        let timed = plan(
+            Situation {
+                clock_secs: Some(600),
+                empties: 44,
+                ..Situation::default()
+            },
+            BASE,
+            Pace::Fast,
+        );
+        assert!(timed.depth > BASE.depth, "{} > {}", timed.depth, BASE.depth);
+
+        // 持ち時間なしは設定どおり (弱く指すための道)
+        let untimed = plan(Situation::default(), BASE, Pace::Fast);
+        assert_eq!(untimed.depth, BASE.depth);
+        assert!(untimed.cap.is_none());
+
+        // 深さ固定も設定どおり (研究用)
+        let fixed = plan(
+            Situation {
+                clock_secs: Some(600),
+                ..Situation::default()
+            },
+            BASE,
+            Pace::Depth,
+        );
+        assert_eq!(fixed.depth, BASE.depth);
     }
 
     /// 上限を渡したらそこで頭打ちになる。

@@ -96,7 +96,7 @@ fn report(nps: f64, threads: usize) {
 ///
 /// 局面はランダム開局から作る。**空きを変えて測る** — 序盤ほど手が多く、
 /// 同じ予算でも到達深さが違う。
-fn depth_table(engine: &mut Engine, threads: usize) {
+fn depth_table(engine: &mut Engine, threads_list: &[usize]) {
     use kuroobi::{Board, Position};
     // 決定的な擬似乱数 (開局を毎回同じにする)
     let mut st = 0x9E37_79B9_7F4A_7C15u64;
@@ -123,34 +123,43 @@ fn depth_table(engine: &mut Engine, threads: usize) {
         }
         b
     };
+    let keep = engine.config().threads;
     println!();
-    println!("1 手の予算で届く中盤の深さ ({threads} スレッド、局面 3 つの中央値)");
-    print!("  空き |");
-    let budgets = [2u64, 5, 10, 20, 40, 80, 160];
-    for b in budgets {
-        print!(" {b:>4}s");
+    println!("1 手の予算で届く中盤の深さとノード数 (局面 3 つの中央値)");
+    println!("  **同じ局面を同じ予算で、スレッド数だけ変えて測る。** 並列で深さが");
+    println!("  伸びないのに ノードが増えていれば、木が太っただけ (重複)。");
+    println!();
+    print!("  空き  予算 |");
+    for t in threads_list {
+        print!(" {t:>3}T 深さ  ノード");
     }
     println!();
-    println!("  -----+{}", "-".repeat(budgets.len() * 6));
+    println!("  -----------+{}", "-".repeat(threads_list.len() * 17));
     for plies in [10usize, 16, 24, 30] {
         let boards: Vec<Board> = (0..3).map(|_| opening(plies, &mut next)).collect();
-        print!("  {:>4} |", boards[0].empty_count());
-        for b in budgets {
-            let mut ds: Vec<u32> = boards
-                .iter()
-                .map(|bd| {
-                    engine.clear_tables();
-                    let t0 = std::time::Instant::now();
-                    engine
-                        .choose_within(bd, Some(t0 + std::time::Duration::from_secs(b)))
-                        .depth
-                })
-                .collect();
-            ds.sort_unstable();
-            print!(" {:>5}", ds[1]);
+        for b in [2u64, 10, 40] {
+            print!("  {:>4} {b:>4}s |", boards[0].empty_count());
+            for &t in threads_list {
+                engine.set_threads(t);
+                let mut rows: Vec<(u32, u64)> = boards
+                    .iter()
+                    .map(|bd| {
+                        engine.clear_tables();
+                        let n0 = engine.nodes();
+                        let t0 = std::time::Instant::now();
+                        let d = engine
+                            .choose_within(bd, Some(t0 + std::time::Duration::from_secs(b)))
+                            .depth;
+                        (d, engine.nodes() - n0)
+                    })
+                    .collect();
+                rows.sort_unstable();
+                print!(" {:>7} {:>8.0}M", rows[1].0, rows[1].1 as f64 / 1e6);
+            }
+            println!();
         }
-        println!();
     }
+    engine.set_threads(keep);
 }
 
 fn main() -> ExitCode {
@@ -219,7 +228,7 @@ fn main() -> ExitCode {
     if depths {
         engine.set_levels(60, 0, 0); // 深さの上限を外して、時間だけで決めさせる
         engine.set_use_book(false);
-        depth_table(&mut engine, threads);
+        depth_table(&mut engine, &[1, 4, 8]);
     }
 
     if save {

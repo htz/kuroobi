@@ -472,6 +472,69 @@ struct Timed {
     left_white: f64,
 }
 
+/// 空きごとに「何段読めたか・どこから読み切ったか」を出す。
+///
+/// **持ち時間ごとの実力はこれで見る。** 勝率は相手との相対でしか出ないが、
+/// こちらは「この持ち時間なら空き 40 で 26 段、空き 26 から読切」と
+/// 絶対値で言える。レベル設定 (深さ・読切) が実際に届いているかも分かる。
+fn report_moves(moves: &[MoveInfo]) {
+    if moves.is_empty() {
+        return;
+    }
+    println!("空きごとの到達 (両者ぶん、定石の手は除く)");
+    /* **中央値だけでは足りない。** 同じ空きでも局面によって使える時間が
+    違うので、「最大どこまで読めたか」と「時間が無いとき何段まで落ちたか」の
+    両端が要る。落ちた側がその持ち時間の実力の下限になる。 */
+    println!("   空き | 手数 | 中盤の深さ 最浅/中央/最深 | 読切 | 1 手の秒 中央/最大");
+    println!("  ------+------+---------------------------+------+-------------------");
+    for lo in (0..=60usize).rev().filter(|n| n % 4 == 0) {
+        let hi = lo + 3;
+        let grp: Vec<&MoveInfo> = moves
+            .iter()
+            .filter(|m| !m.from_book && (m.empties as usize) >= lo && (m.empties as usize) <= hi)
+            .collect();
+        if grp.is_empty() {
+            continue;
+        }
+        let mut ds: Vec<u32> = grp.iter().filter(|m| !m.exact).map(|m| m.depth).collect();
+        ds.sort_unstable();
+        let mut ts: Vec<f64> = grp.iter().map(|m| m.secs).collect();
+        ts.sort_by(|a, b| a.partial_cmp(b).unwrap());
+        let solved = grp.iter().filter(|m| m.exact).count();
+        let dtxt = if ds.is_empty() {
+            "—".to_string()
+        } else {
+            format!(
+                "{:>2} / {:>2} / {:>2}",
+                ds[0],
+                ds[ds.len() / 2],
+                ds[ds.len() - 1]
+            )
+        };
+        println!(
+            "  {lo:>2}-{hi:<2} | {:>4} | {dtxt:>25} | {:>3}% | {:>8.1} / {:>6.1}",
+            grp.len(),
+            solved * 100 / grp.len(),
+            ts[ts.len() / 2],
+            ts[ts.len() - 1],
+        );
+    }
+    let book = moves.iter().filter(|m| m.from_book).count();
+    println!("  (定石で指した手 {book})");
+}
+
+/// 1 手ぶんの記録。**持ち時間ごとの実力を見るための計器。**
+#[derive(Clone, Copy)]
+struct MoveInfo {
+    empties: u8,
+    /// 中盤探索が到達した深さ (読切と定石では 0)。
+    depth: u32,
+    /// 読切で決めたか。
+    exact: bool,
+    from_book: bool,
+    secs: f64,
+}
+
 /// 片側の時間の使い方。**配り方と較正値は組で入れ替える** — 色を交換した
 /// 再戦で片方だけ付け替えると、測っているものが変わってしまう。
 #[derive(Clone, Copy)]
@@ -494,6 +557,7 @@ fn play_timed(
     black_time: SideTime,
     white_time: SideTime,
     threads: usize,
+    moves: &mut Vec<MoveInfo>,
 ) -> Timed {
     let mut board = *start;
     let mut clocks = Clocks {
@@ -562,13 +626,22 @@ fn play_timed(
         `min(14)` で止まるため無傷で、片側だけ壊れて差に見えていた。 */
         eng.set_levels(plan.depth, plan.solve, plan.band);
         let t0 = Instant::now();
-        let pos = match plan.cap {
+        let mv = match plan.cap {
             Some(cap) => eng.choose_within(&board, Some(t0 + cap)),
             None => eng.choose(&board),
-        }
-        .pos
-        .expect("legal move exists");
+        };
+        let pos = mv.pos.expect("legal move exists");
         let used = t0.elapsed().as_secs_f64();
+        /* **その手が何をしたかを控える。** 「この持ち時間はどれくらいの
+        棋力で打てているか」は、勝率ではなく**空きごとに何段読めたか・
+        どこから読み切れたか**で見るのが直接的。 */
+        moves.push(MoveInfo {
+            empties: board.empty_count(),
+            depth: mv.depth,
+            exact: mv.exact,
+            from_book: mv.from_book,
+            secs: used,
+        });
         eng.set_levels(base.depth, base.solve, base.band);
         if is_black {
             clocks.black -= used;
@@ -687,6 +760,8 @@ fn run_nnue(args: &Args, a: &std::path::Path, b: &std::path::Path) -> ExitCode {
     /* **終局時に余った時間。** 配り方は「使い切らず余らせる」前提で組むので、
     余りの平均と最小を出す。平均は「読む時間をまだ増やせるか」を、最小は
     「遅い機械で破綻しないか」を見るためのもの。 */
+    // 空きごとに何段読めたか (両者ぶんまとめて。同じ設定なので分ける意味が薄い)
+    let mut moves: Vec<MoveInfo> = Vec::new();
     let (mut a_left_sum, mut b_left_sum) = (0f64, 0f64);
     let (mut a_left_min, mut b_left_min) = (f64::MAX, f64::MAX);
     let mut left_n = 0usize;
@@ -705,6 +780,7 @@ fn run_nnue(args: &Args, a: &std::path::Path, b: &std::path::Path) -> ExitCode {
                 side_a,
                 side_b,
                 args.threads,
+                &mut moves,
             )
         } else {
             Timed {
@@ -753,6 +829,7 @@ fn run_nnue(args: &Args, a: &std::path::Path, b: &std::path::Path) -> ExitCode {
                 side_b,
                 side_a,
                 args.threads,
+                &mut moves,
             )
         } else {
             Timed {
@@ -798,6 +875,7 @@ fn run_nnue(args: &Args, a: &std::path::Path, b: &std::path::Path) -> ExitCode {
     }
     if timed {
         println!("時間切れ: A {a_timeouts} / B {b_timeouts}");
+        report_moves(&moves);
         if left_n > 0 {
             println!(
                 "終局時の残り時間 (持ち時間 A {}s / B {}s): A 平均 {:.1}s 最小 {:.1}s / B 平均 {:.1}s 最小 {:.1}s",
