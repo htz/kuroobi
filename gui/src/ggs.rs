@@ -1234,8 +1234,22 @@ impl Ctx {
                 }
             }
         }
-        // 上限。空いていないので先頭を共有する (busy なら投げずに待つ)
-        self.workers.iter().position(|w| !w.busy)
+        /* 上限に達した。**空いているワーカーを流用してはいけない** —
+        `pending` は 1 つしか持てないので、別の対局の手を上書きして消す。
+        消された対局は指されないまま時計だけ減り、時間切れになる
+        (実戦で踏んだ: 2 局同時に投げて 1 局しか返らなかった)。
+
+        **終わった対局を掴んだままのワーカーがあれば奪う。** それも無ければ
+        諦めて従来の同期経路へ落とす (待たされるが、指されないよりよい)。 */
+        if let Some(i) = self
+            .workers
+            .iter()
+            .position(|w| !w.busy && w.pending.is_none())
+        {
+            self.workers[i].mid = Some(mid.to_string());
+            return Some(i);
+        }
+        None
     }
 
     /// ワーカーの数でスレッドを分ける。
@@ -1267,6 +1281,13 @@ impl Ctx {
         for w in &mut self.workers {
             if w.mid.as_deref() == Some(mid) {
                 w.mid = None;
+                /* **走っている探索と控えを捨てる。** 終わった対局の手を
+                指しても `ERR match not found` になるだけで、その間ワーカー
+                が塞がって別の対局が指されない。 */
+                w.pending = None;
+                if w.busy {
+                    w.stop.stop();
+                }
                 hit = true;
             }
         }
@@ -1354,17 +1375,20 @@ impl Ctx {
             .show();
     }
     fn log(&mut self, dir: &str, text: &str) {
-        // 診断: 画面のログは 600 行で丸めるので、切り分け用に全量を残す
-        // (デバッグビルドのみ)。
-        #[cfg(debug_assertions)]
+        /* 診断: 画面のログは 600 行で丸めるので、切り分け用に全量を残す。
+        **実戦でしか出ない不具合を追うので release でも要る** —
+        `KUROOBI_GGS_WIRE=<path>` を渡したときだけ書く。 */
         {
             use std::io::Write as _;
-            if let Ok(mut f) = std::fs::OpenOptions::new()
-                .create(true)
-                .append(true)
-                .open("/tmp/ggs_session_wire.log")
-            {
-                let _ = writeln!(f, "{dir} {text}");
+            let path = std::env::var("KUROOBI_GGS_WIRE").ok().or(if cfg!(debug_assertions) {
+                Some("/tmp/ggs_session_wire.log".to_string())
+            } else {
+                None
+            });
+            if let Some(p) = path {
+                if let Ok(mut f) = std::fs::OpenOptions::new().create(true).append(true).open(p) {
+                    let _ = writeln!(f, "{dir} {text}");
+                }
             }
         }
         let mut s = self.snap.lock().unwrap();
@@ -2232,7 +2256,10 @@ pub fn run(
                             // 待機モード: 自分宛の申し込みを自動受諾
                             let s = ctx.snap.lock().unwrap();
                             let auto = s.standby.enabled && s.standby.auto_accept;
-                            let in_match = !s.matches.is_empty();
+                            // **終局した対局は数えない。** 棋譜を見られるよう
+                            // 一覧には残す作りなので、そのまま数えると一度
+                            // 対局しただけで待機モードが二度と受けなくなる
+                            let in_match = s.matches.iter().any(|m| !m.over);
                             let incoming = s.offers.last().map(|o| (o.incoming, o.id.clone()));
                             drop(s);
                             if let Some((true, id)) = incoming {
@@ -2319,7 +2346,8 @@ pub fn run(
                         next_ask_at = None;
                         let s = ctx.snap.lock().unwrap();
                         let sb = s.standby.clone();
-                        let in_match = !s.matches.is_empty();
+                        // 終局したものは「対局中」に数えない (上と同じ理由)
+                        let in_match = s.matches.iter().any(|m| !m.over);
                         let games = s.standby_stats.games;
                         drop(s);
                         if sb.enabled
@@ -2356,6 +2384,24 @@ pub fn run(
                     next_match_at = Instant::now() + Duration::from_secs(60);
                     pending.push("match_list".into());
                     send!(ctx, "tell /os match");
+                }
+
+                /* ---------- 終わった対局のワーカーを解放する ----------
+
+                **終局しても一覧からは消さない作り** (棋譜を見られるように)
+                なので、`release_worker` は「閉じたとき」にしか呼ばれない。
+                掴んだままだと次の対局で 2 局が 1 つのワーカーを取り合い、
+                `pending` の上書きで片方が指されなくなる。 */
+                {
+                    let done: Vec<String> = ctx
+                        .workers
+                        .iter()
+                        .filter_map(|w| w.mid.clone())
+                        .filter(|mid| matches.get(mid).is_none_or(|m| m.over))
+                        .collect();
+                    for mid in done {
+                        ctx.release_worker(&mid);
+                    }
                 }
 
                 /* ---------- 指し忘れの救済 ----------
@@ -3004,6 +3050,18 @@ fn pump_worker(ctx: &mut Ctx, i: usize) {
     ));
     // 先読みを打ち切った直後は停止が立ったままなので戻す
     ctx.workers[i].stop.reset();
+    let empties = p.board.empty_count();
+    let movable = p.board.movable_count();
+    ctx.log(
+        "info",
+        &format!(
+            "投: 空き {empties} 手数 {movable} 期限 {:.1}s (深さ {} 読切 {} 帯 {})",
+            p.cap.map_or(-1.0, |c| c.as_secs_f32()),
+            p.levels.0,
+            p.levels.1,
+            p.levels.2,
+        ),
+    );
     ctx.workers[i].send(Job::Think {
         board: p.board,
         levels: p.levels,
@@ -3051,11 +3109,24 @@ fn collect_workers(ctx: &mut Ctx, matches: &mut HashMap<String, MatchState>) -> 
         let done = ctx.workers[i].rx.try_recv().ok();
         let Some(done) = done else { continue };
         ctx.workers[i].busy = false;
+        // 実測は投げ直す前に取る (pump_worker が sent_at を上書きする)
+        let took = ctx.workers[i].sent_at.map(|(t, _)| t.elapsed());
         ctx.workers[i].sent_at = None;
         // **拾った直後に投げ直す。** ここを忘れると、控えた本探索が
         // 次の update まで投げられない (来なければ永久に指さない)
         pump_worker(ctx, i);
         let Done::Moved(mv) = done else { continue };
+        if let Some(t) = took {
+            ctx.log(
+                "info",
+                &format!(
+                    "着: {:.1}s{} {}",
+                    t.as_secs_f32(),
+                    if mv.cut { " (打切)" } else { "" },
+                    if mv.exact { "読切" } else { "探索" }
+                ),
+            );
+        }
         let Some(mid) = ctx.workers[i].mid.clone() else {
             continue;
         };
