@@ -1105,6 +1105,22 @@ struct EngineWorker {
     mid: Option<String>,
     /// 投げた探索の局面ハッシュ (返ってきたときに二重着手を防ぐ印を書くため)。
     pending_hash: u64,
+    /// **まだ投げられていない本探索。** 塞がっている間に自分の手番が来たら
+    /// ここへ控え、空いた瞬間に投げる。
+    pending: Option<Pending>,
+    /// いま走らせているのが先読みか (本探索が来たら捨てる)。
+    pondering: bool,
+    /// 本探索を投げた時刻と、そのとき渡した期限。**返ってこないことを
+    /// 検出する**ために持つ (期限を大きく過ぎたら停止を立てて拾い直す)。
+    sent_at: Option<(Instant, Duration)>,
+}
+
+/// 投げ待ちの本探索。
+struct Pending {
+    board: Board,
+    levels: (u32, u8, u8),
+    cap: Option<Duration>,
+    hash: u64,
 }
 
 /// ワーカーへの指示。
@@ -1310,6 +1326,9 @@ impl EngineWorker {
             busy: false,
             mid: None,
             pending_hash: 0,
+            pending: None,
+            pondering: false,
+            sent_at: None,
         })
     }
 
@@ -2339,6 +2358,37 @@ pub fn run(
                     send!(ctx, "tell /os match");
                 }
 
+                /* ---------- 指し忘れの救済 ----------
+
+                **`think_and_play` は update が来たときにしか呼ばれない。**
+                そこで投げ損ねると、その対局は次の update まで — 相手も
+                待っているなら永久に — 指されない。時計だけが減り、
+                時間切れで負ける (実戦で踏んだ)。
+
+                update に頼らず、**毎周「自分の手番なのに指していない対局」を
+                探して投げ直す**。二重着手防止 (盤面 + 手数のハッシュ) が
+                効くので、既に指した局面は素通りする。 */
+                {
+                    let stalled: Vec<String> = matches
+                        .iter()
+                        .filter(|(_, m)| {
+                            !m.over
+                                && m.my_color.is_some()
+                                && Some(m.turn) == m.my_color
+                        })
+                        .map(|(k, _)| k.clone())
+                        .collect();
+                    if !stalled.is_empty() {
+                        let mut out: Vec<String> = Vec::new();
+                        for mid in stalled {
+                            think_and_play(&mut ctx, &mid, &mut matches, |s| out.push(s));
+                        }
+                        for line in out {
+                            send!(ctx, line);
+                        }
+                    }
+                }
+
                 // ---------- 探索ワーカーの結果を拾う ----------
                 /* **毎周ここで拾う。** 投げっぱなしにしてあるので、拾わないと
                 着手が送られない。返す形にしているのは `send!` が `writer` を
@@ -2870,14 +2920,23 @@ fn think_and_play(
     ここで待つと片方の時計を捨てることになる。結果は受信ループが毎周
     `collect_worker` で拾い、そこで着手を送る。 */
     if let Some(i) = ctx.worker_for(mid) {
-        if !ctx.workers[i].busy {
-            ctx.workers[i].pending_hash = bh;
-            ctx.workers[i].send(Job::Think {
-                board,
-                levels: (d, solve, band),
-                cap,
-            });
+        /* **待っている仕事を控えておく。** `think_and_play` は update が
+        来たときにしか呼ばれないので、ここで投げ損ねるとその対局は二度と
+        指されない — 先読みで塞がっている隙に自分の手番が来ると、時計だけ
+        減って時間切れになる (実戦で踏んだ)。
+
+        塞がっているのが**先読み**なら捨ててよい。自分の時計は減らないので
+        価値はあるが、**指さないほうが遥かに高くつく**。 */
+        ctx.workers[i].pending = Some(Pending {
+            board,
+            levels: (d, solve, band),
+            cap,
+            hash: bh,
+        });
+        if ctx.workers[i].pondering {
+            ctx.workers[i].stop.stop();
         }
+        pump_worker(ctx, i);
         return;
     }
     // ワーカーを作れなかったときの退路: 従来どおりここで読む
@@ -2926,6 +2985,32 @@ fn think_and_play(
     ctx.emit(true);
 }
 
+/// **控えてある本探索を、空いていれば投げる。**
+///
+/// 塞がっているうちは何もしない。`collect_workers` が結果を拾って `busy` を
+/// 下ろした直後にも呼ぶので、**投げ損ねが残らない**。
+fn pump_worker(ctx: &mut Ctx, i: usize) {
+    if ctx.workers[i].busy || ctx.workers[i].pending.is_none() {
+        return;
+    }
+    let Some(p) = ctx.workers[i].pending.take() else {
+        return;
+    };
+    ctx.workers[i].pending_hash = p.hash;
+    ctx.workers[i].pondering = false;
+    ctx.workers[i].sent_at = Some((
+        Instant::now(),
+        p.cap.unwrap_or(Duration::from_secs(60)),
+    ));
+    // 先読みを打ち切った直後は停止が立ったままなので戻す
+    ctx.workers[i].stop.reset();
+    ctx.workers[i].send(Job::Think {
+        board: p.board,
+        levels: p.levels,
+        cap: p.cap,
+    });
+}
+
 /// **ワーカーが返した着手を拾う。**
 ///
 /// 送るべき行を返すだけで、自分では送らない — 受信ループの `send!` は
@@ -2936,11 +3021,40 @@ fn think_and_play(
 /// (実測で予測手 1 本のとき +1.6〜1.8 段)。
 fn collect_workers(ctx: &mut Ctx, matches: &mut HashMap<String, MatchState>) -> Vec<String> {
     let mut out = Vec::new();
+    /* **期限を大きく過ぎても返らない探索を止める。**
+
+    読切は期限で打ち切るようにしたが、それでも返らない経路が残っていたら
+    (打ち切りの取りこぼし、想定外の長考) 対局が止まる。時間切れは一発で
+    レートを失うので、**保険としてここでも止める**。余裕を持って 3 倍。 */
+    for i in 0..ctx.workers.len() {
+        if !ctx.workers[i].busy {
+            continue;
+        }
+        let Some((at, cap)) = ctx.workers[i].sent_at else {
+            continue;
+        };
+        if at.elapsed() > cap.mul_f32(3.0) + Duration::from_secs(2) {
+            ctx.workers[i].stop.stop();
+            ctx.workers[i].sent_at = None;
+            ctx.log(
+                "info",
+                &format!(
+                    "探索が期限を大きく超えたので止めました ({:.1} 秒 / 期限 {:.1} 秒)",
+                    at.elapsed().as_secs_f32(),
+                    cap.as_secs_f32()
+                ),
+            );
+        }
+    }
     for i in 0..ctx.workers.len() {
         // 返事が来ていれば拾う (来ていなければ何もしない)
         let done = ctx.workers[i].rx.try_recv().ok();
         let Some(done) = done else { continue };
         ctx.workers[i].busy = false;
+        ctx.workers[i].sent_at = None;
+        // **拾った直後に投げ直す。** ここを忘れると、控えた本探索が
+        // 次の update まで投げられない (来なければ永久に指さない)
+        pump_worker(ctx, i);
         let Done::Moved(mv) = done else { continue };
         let Some(mid) = ctx.workers[i].mid.clone() else {
             continue;
@@ -3008,6 +3122,11 @@ fn collect_workers(ctx: &mut Ctx, matches: &mut HashMap<String, MatchState>) -> 
             let Some(board) = board_of(m, m.turn) else {
                 continue;
             };
+            // 控えている本探索があるなら先読みしない (そちらが先)
+            if ctx.workers[i].pending.is_some() {
+                continue;
+            }
+            ctx.workers[i].pondering = true;
             ctx.workers[i].send(Job::Ponder {
                 board,
                 slice: SLICE,
