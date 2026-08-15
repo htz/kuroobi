@@ -999,6 +999,37 @@ impl MatchState {
 /// GGS の時計表記を秒に分解する。実形式 (実測ログより):
 /// `15:00,0:0//02:00,0:0` = 本時間15分 / (加算なし) / 延長2分。
 /// `/` 区切りの各要素は `,` の後ろに副フィールドを持つので先頭だけ読む。
+/// 相手からの待った (`undo`) / 中断 (`abort`) の申し出。
+struct Request {
+    verb: &'static str,
+    id: String,
+    who: String,
+}
+
+/// `/os: undo .24 htz is asking` を読む。
+///
+/// **書式は実サーバーで採った。** 資料には `undo [.match]` という送る側の
+/// 形しか無く、届く側の形は書かれていない。自分が出した申し出も同じ形で
+/// 返ってくるので、名前で弾く。
+fn parse_request(ln: &str, login: &str) -> Option<Request> {
+    let rest = ln.strip_prefix("/os: ")?;
+    let verb = ["undo", "abort"]
+        .into_iter()
+        .find(|v| rest.starts_with(&format!("{v} ")))?;
+    let mut it = rest[verb.len() + 1..].split_whitespace();
+    let id = it.next()?;
+    let who = it.next()?;
+    // 末尾は "is asking"。違う形なら知らない通知として見送る
+    if it.next() != Some("is") || who == login || !id.starts_with('.') {
+        return None;
+    }
+    Some(Request {
+        verb,
+        id: id.to_string(),
+        who: who.to_string(),
+    })
+}
+
 fn parse_clock(s: &str) -> (Option<u64>, Option<u64>, Option<u64>) {
     let mut out = [None, None, None];
     for (i, part) in s.split('/').take(3).enumerate() {
@@ -1129,7 +1160,15 @@ struct EngineWorker {
     /// 本探索を投げた時刻と、そのとき渡した期限。**返ってこないことを
     /// 検出する**ために持つ (期限を大きく過ぎたら停止を立てて拾い直す)。
     sent_at: Option<(Instant, Duration)>,
+    /// 停止を立てた時刻。**返らないワーカーを見捨てる判断に使う。**
+    stopped_at: Option<Instant>,
 }
+
+/// 停止を立ててからこれだけ待っても返らなければ、そのワーカーを捨てる。
+///
+/// 席は 2 つしかない。1 つ失うと同期対局が片肺になり、2 つ失うと対局が
+/// 止まる。**起きるべきでない経路だが、起きたときの損が大きすぎる。**
+const WORKER_GIVE_UP: Duration = Duration::from_secs(10);
 
 /// 投げ待ちの本探索。
 struct Pending {
@@ -1378,6 +1417,7 @@ impl EngineWorker {
             pending: None,
             pondering: false,
             sent_at: None,
+            stopped_at: None,
         })
     }
 
@@ -1949,7 +1989,26 @@ pub fn run(
                             if !was && s.standby.enabled {
                                 s.standby_stats = Default::default();
                             }
+                            /* **開始した時点で既に届いている申し込みを拾う。**
+                            自動受諾は「`+ .N` が届いたとき」にしか動かないので、
+                            相手が先に申し込んで、こちらが後から待機モードを
+                            入れると永久に受けない。実際に踏んだ (相手は待って
+                            いるのに、こちらは申し込み待ちのまま並んでいた)。 */
+                            let take = if s.standby.enabled && s.standby.auto_accept {
+                                let busy = s.matches.iter().any(|m| !m.over);
+                                if busy {
+                                    None
+                                } else {
+                                    s.offers.iter().find(|o| o.incoming).map(|o| o.id.clone())
+                                }
+                            } else {
+                                None
+                            };
                             drop(s);
+                            if let Some(id) = take {
+                                ctx.log("info", &format!("待機モード: 届いていた {id} を受けます"));
+                                send!(ctx, format!("tell /os accept {id}"));
+                            }
                             next_ask_at = Some(Instant::now() + Duration::from_secs(3));
                             ctx.dirty = true;
                         }
@@ -2360,6 +2419,45 @@ pub fn run(
                             drop(s);
                             ctx.dirty = true;
                         }
+                    } else if let Some(req) = parse_request(&ln, &login) {
+                        /* ---------- 相手からの undo / abort ----------
+
+                        実測した書式 (推測ではない):
+
+                            /os: undo  .24 htz is asking
+                            /os: abort .24 htz is asking
+
+                        **今まで完全に無視していた。** 相手は返事を待っている
+                        のに、こちらの画面には何も出ない。放っておいても対局は
+                        続くので気付けなかった。
+
+                        待った・中断はこちらの不利益になりうる (勝勢の局面を
+                        巻き戻される) ので、**自動では受けない**。ただし待機
+                        モードで無人で回しているときは、答えないまま相手を
+                        待たせるほうが悪いので断る。人が見ているときは知らせて
+                        判断を任せる (画面から accept / decline を送れる)。 */
+                        let unattended = {
+                            let s = ctx.snap.lock().unwrap();
+                            s.standby.enabled
+                        };
+                        let what = if req.verb == "undo" { "待った" } else { "中断" };
+                        ctx.log(
+                            "info",
+                            &format!("{} が {} を求めています ({})", req.who, what, req.id),
+                        );
+                        ctx.notify(
+                            &format!("GGS: {what}の申し出"),
+                            &format!("{} ({})", req.who, req.id),
+                        );
+                        if unattended {
+                            /* **断るのは相手の名前に対して。** 通知が持って
+                            いるのは対局 ID (`.27`) だが、`decline` が受ける
+                            のは要求 ID か**プレイヤー名**で、対局 ID を渡すと
+                            `decline ERR not found: .27` になる (実測)。
+                            要求 ID は通知に含まれないので名前で断る。 */
+                            ctx.log("info", &format!("待機モード: 無人なので断ります ({})", req.who));
+                            send!(ctx, format!("tell /os decline {}", req.who));
+                        }
                     } else if ln.starts_with("/os: ERR") {
                         ctx.log("info", &format!("サーバーエラー: {ln}"));
                         // 通信ログは開いていないと読めない。押した結果が
@@ -2649,7 +2747,21 @@ fn handle_block(
             m.gtype = t.to_string();
         }
     }
+    let was_overtime = m.in_overtime;
     let (rows_ok, turn) = apply_block(m, block, login);
+    /* **ロスタイムに入ったら必ず言う。** 勝敗が決まる状態なのに、時計は
+    健全な残り 2 分に見える (猶予が同じ時計へ加算されるため)。ここで
+    出しておかないと、後からログを見ても入ったかどうか分からない。 */
+    if m.in_overtime && !was_overtime {
+        ctx.log(
+            "info",
+            &format!(
+                "{mid}: ロスタイムに入りました。**この対局は時間切れ負けが確定** \
+                 しています (結果は最小差負けで頭打ち)。以降は全滅を避けるため \
+                 速く指し切ります"
+            ),
+        );
+    }
 
     // スナップショット反映
     sync_matches(ctx, matches);
@@ -2851,8 +2963,19 @@ fn apply_block(m: &mut MatchState, block: &[String], login: &str) -> (bool, Opti
                         加算は減っていくものが増える唯一の場面。持ち時間の
                         加算 (`inc`) がある対局では毎手増えうるので、猶予の
                         設定値ぶん近く跳ねたときだけ拾う。 */
-                        if let (Some(prev), Some(now), Some(g)) = (m.my_clock_secs, main, ext) {
-                            if g > 0 && now > prev + g / 2 {
+                        if let (Some(now), Some(g)) = (main, ext) {
+                            /* **実測で 2 通りの見え方があった。**
+
+                            ① 猶予が加算されて跳ね上がる (`00:05` → `01:59`)
+                            ② `00:00` に張り付いたまま手数だけ進む
+
+                            ② のほうが多い。どちらでも「本時間を使い切った」
+                            ことに変わりはなく、やることも同じなので、両方を
+                            拾う。0 を見て立てるほうは、まだ厳密には切れて
+                            いない (0.4 秒残りが 00:00 と出る) 場合も含むが、
+                            **どのみち読んでいる余裕は無い**ので害がない。 */
+                            let jumped = m.my_clock_secs.is_some_and(|prev| now > prev + g / 2);
+                            if g > 0 && (jumped || now == 0) {
                                 m.in_overtime = true;
                             }
                         }
@@ -3175,6 +3298,7 @@ fn collect_workers(ctx: &mut Ctx, matches: &mut HashMap<String, MatchState>) -> 
         };
         if at.elapsed() > cap.mul_f32(3.0) + Duration::from_secs(2) {
             ctx.workers[i].stop.stop();
+            ctx.workers[i].stopped_at.get_or_insert_with(Instant::now);
             ctx.workers[i].sent_at = None;
             ctx.log(
                 "info",
@@ -3184,6 +3308,33 @@ fn collect_workers(ctx: &mut Ctx, matches: &mut HashMap<String, MatchState>) -> 
                     cap.as_secs_f32()
                 ),
             );
+        }
+    }
+    /* **止まらないワーカーは見捨てて作り直す。**
+
+    停止を立てても返らないなら、その席は二度と空かない。上限は 2 なので
+    1 つ失うだけで同期対局が片肺になり、2 つ失えば対局そのものが止まる。
+    見捨てた側のスレッドは探索が終われば送信口が閉じて自分で抜ける
+    (一時的にスレッドが 1 本余分に残るが、起きるべきでない経路の保険と
+    しては安い)。 */
+    for i in 0..ctx.workers.len() {
+        let Some(since) = ctx.workers[i].stopped_at else {
+            continue;
+        };
+        if !ctx.workers[i].busy {
+            ctx.workers[i].stopped_at = None;
+            continue;
+        }
+        if since.elapsed() < WORKER_GIVE_UP {
+            continue;
+        }
+        let cfg = ctx.engine_cfg.clone();
+        match EngineWorker::spawn(cfg) {
+            Ok(w) => {
+                ctx.workers[i] = w;
+                ctx.log("info", "止まらない探索を見捨てて、ワーカーを作り直しました");
+            }
+            Err(e) => ctx.log("info", &format!("ワーカーの作り直しに失敗: {e}")),
         }
     }
     for i in 0..ctx.workers.len() {
@@ -4145,6 +4296,21 @@ mod tests {
         assert_eq!(ext, None);
     }
 
+    /// 待った・中断の申し出。**書式は実サーバーで採った** (資料に無い)。
+    #[test]
+    fn request_real_format() {
+        let r = parse_request("/os: undo .24 htz is asking", "kuroobi").unwrap();
+        assert_eq!((r.verb, r.id.as_str(), r.who.as_str()), ("undo", ".24", "htz"));
+        let r = parse_request("/os: abort .24 htz is asking", "kuroobi").unwrap();
+        assert_eq!(r.verb, "abort");
+        // 自分が出した申し出も同じ形で返る。反応してはいけない
+        assert!(parse_request("/os: undo .24 kuroobi is asking", "kuroobi").is_none());
+        // 似て非なるものを拾わない
+        assert!(parse_request("/os: update .24 8 K?", "kuroobi").is_none());
+        assert!(parse_request("/os: undo .24 htz declined", "kuroobi").is_none());
+        assert!(parse_request("/os: - match .24 1720 htz", "kuroobi").is_none());
+    }
+
     /// 負の残り時間は 0 として読む。**解析に失敗させてはいけない** —
     /// `None` は「時間制でない対局」の意味で、期限なしで読み始める。
     #[test]
@@ -4189,6 +4355,12 @@ mod tests {
         // 本時間を切らした → サーバーが 2:00 を足して寄こす
         apply_block(&mut m, &with_clock("02:00,0:0"), "kuroobi");
         assert!(m.in_overtime, "跳ね上がりを拾えていない");
+        // 実測ではこちらのほうが多い: 00:00 に張り付いたまま手数だけ進む
+        let mut m2 = MatchState::new();
+        apply_block(&mut m2, &with_clock("00:03,0:0"), "kuroobi");
+        assert!(!m2.in_overtime);
+        apply_block(&mut m2, &with_clock("00:00,0:0"), "kuroobi");
+        assert!(m2.in_overtime, "0 への張り付きを拾えていない");
         // 一度入ったら下ろさない (以後は普通に減っていく)
         apply_block(&mut m, &with_clock("01:12,0:0"), "kuroobi");
         assert!(m.in_overtime, "下ろしてしまった");
