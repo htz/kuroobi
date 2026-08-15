@@ -285,3 +285,38 @@ fn the_deadline_cuts_the_endgame_solver() {
         took.as_secs_f32()
     );
 }
+
+/// **期限をどれだけ使えているか。**
+///
+/// GGS のレート戦で、持ち時間 15 分に対し実際に使ったのは 40〜46% だった。
+/// 反復深化は「次の段が期限に収まらなければ始めない」ので、収まらないと
+/// 判断した時点で予算を残して返る。その取りこぼしを測る。
+#[test]
+#[ignore = "weights/ の実ファイルが必要 (git 管理外)"]
+fn report_deadline_utilisation() {
+    let cfg = EngineConfig {
+        depth: 60,
+        solve_empties: 26,
+        band: 6,
+        threads: 8,
+        ..Default::default()
+    };
+    let mut engine = Engine::new(cfg).expect("engine init");
+    println!("  空き  期限   実測   使用率");
+    let mut sum = 0.0;
+    let mut n = 0;
+    for empties in [48u8, 44, 40, 36, 32] {
+        let board = replay_until_empties(KIFU, empties);
+        for cap_s in [20u64, 60] {
+            let cap = std::time::Duration::from_secs(cap_s);
+            let t0 = std::time::Instant::now();
+            let _ = engine.choose_within(&board, Some(t0 + cap));
+            let took = t0.elapsed().as_secs_f64();
+            let r = took / cap_s as f64;
+            sum += r;
+            n += 1;
+            println!("  {empties:4}  {cap_s:3}s  {took:5.1}s  {:5.0}%", r * 100.0);
+        }
+    }
+    println!("  平均使用率 {:.0}%", sum / n as f64 * 100.0);
+}

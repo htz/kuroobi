@@ -254,6 +254,17 @@ const SOLVE_GREED: f64 = 10.0;
 /// 同じ値**にして、判断と確保を一致させる。
 const SOLVE_MAX_SHARE: f64 = 0.5;
 
+/// **配分を実際の使い方へ合わせる係数。**
+///
+/// 反復深化は期限まで粘らない (次の段が入らないと判断したら返る)。実測で
+/// 期限の 47% しか使わないので、その逆数ぶん期限を伸ばして帳尻を合わせる。
+/// 2.0 は 47% を 94% 相当に戻す値。
+///
+/// **時間切れの危険は増えない。** 期限は見張りが守っており (実測 1.02 倍)、
+/// 読切用の取り置きも `SOLVE_MAX_SHARE` も残り時間に対して掛かるので、
+/// 残りが減れば自動で締まる。
+const BUDGET_USE: f64 = 2.0;
+
 /* ---------- ロスタイム中の指し方 ----------
 
 **もう負けている対局を、全滅させずに終わらせるだけ。** 深さに投資する
@@ -380,6 +391,30 @@ pub fn plan(s: Situation, base: Levels, pace: Pace) -> Plan {
         // Depth は先に返している
         _ => even,
     };
+    /* **反復深化が予算を使い切れないぶんを補う。**
+
+    ここまでの `budget` は「1 手にこれだけ使ってよい」という配分だが、
+    探索は期限まで粘れない。次の段が期限に収まらないと判断した時点で
+    返るためで、実測すると**期限の 47% しか使わない**。
+
+    結果、GGS のレート戦で 15 分のうち 6〜9 分を残して終わっていた
+    (実測: 自分 40〜46% に対し相手 98〜99%)。配分が薄いのではなく、
+    配ったぶんを使い切れていなかった。
+
+    期限を伸ばせば、その 47% が伸びたぶんに比例して増える。**深く読める
+    ようになるのであって、無駄に待つわけではない**。 */
+    let budget = budget * BUDGET_USE;
+    /* **残っている以上は約束しない。**
+
+    `BUDGET_USE` で期限を伸ばすと、残り手数が 1 になったときに予算が
+    取り置きを除いた残り全部の 2 倍になる。使い切れば時間切れなので、
+    ここで頭を押さえる。
+
+    **割合 (`残り × 0.25` など) で押さえてはいけない。** 試したところ
+    10 分・空き 30 のような現実的な場面で上限が先に効いてしまい、配り方
+    (`Pace`) の違いが消えた。取り置きは別に確保してあるので、上限は
+    「配れるぶんの全部」でよい。 */
+    let budget = budget.min(pool);
     let budget = if s.max_move_secs > 0 {
         budget.min(s.max_move_secs as f64)
     } else {
@@ -763,5 +798,84 @@ mod tests {
         let p = ot_plan(120, 20);
         assert!(p.solve <= OVERTIME_SOLVE);
         assert_eq!(p.band, 0);
+    }
+}
+
+#[cfg(test)]
+mod clock_usage_tests {
+    use super::*;
+
+    const BASE: Levels = Levels {
+        depth: 22,
+        solve: 26,
+        band: 6,
+    };
+
+    /// **1 局を通して持ち時間をどれだけ使うか。**
+    ///
+    /// 反復深化は期限まで粘らず、実測で**期限の 47%** で返る。その率を当てて
+    /// 15 分の対局を最後まで進め、使用率と「尽きないこと」を見る。
+    ///
+    /// GGS のレート戦では 40〜46% しか使えておらず、相手 (98〜99%) に対して
+    /// 半分以下だった。`BUDGET_USE` はここを埋めるための係数。
+    fn play_out(use_ratio: f64) -> (f64, bool) {
+        let mut left = 900.0_f64;
+        let mut empties = 48u8;
+        let mut spent = 0.0;
+        let mut ran_out = false;
+        /* **読切に入る手前までを見る。** そこから先は 1 回読み切れば
+        以降はほぼ無料 (実戦でも 4〜22 秒だった)。`BUDGET_USE` が効くのも
+        この区間なので、ここでの使用率が問題になる。 */
+        while empties > BASE.solve {
+            let p = plan(
+                Situation {
+                    clock_secs: Some(left as u64),
+                    empties,
+                    nps: Some(60e6),
+                    threads: 4,
+                    ..Situation::default()
+                },
+                BASE,
+                Pace::Fast,
+            );
+            let take = p.cap.map_or(0.0, |c| c.as_secs_f64()) * use_ratio;
+            left -= take;
+            spent += take;
+            if left <= 0.0 {
+                ran_out = true;
+                break;
+            }
+            // 自分と相手で 1 手ずつ進む
+            empties = empties.saturating_sub(2);
+        }
+        (spent / 900.0, ran_out)
+    }
+
+    #[test]
+    fn the_clock_is_actually_used() {
+        let (rate, out) = play_out(0.47);
+        println!("  中盤で使う割合 (実測 47%):        {:.0}%", rate * 100.0);
+        println!(
+            "  BUDGET_USE を入れる前の相当値:     {:.0}%",
+            play_out(0.235).0 * 100.0
+        );
+        println!(
+            "  期限どおり使い切った場合:          {:.0}%",
+            play_out(1.0).0 * 100.0
+        );
+        assert!(!out, "持ち時間を使い切った");
+        assert!(
+            rate > 0.60,
+            "1 局で持ち時間の {:.0}% しか使えていない",
+            rate * 100.0
+        );
+    }
+
+    /// **期限まで粘っても尽きない。** 見積りが外れて毎手いっぱいまで
+    /// 使った場合でも、時間切れにならないこと。
+    #[test]
+    fn even_full_use_does_not_run_out() {
+        let (_, out) = play_out(1.0);
+        assert!(!out, "期限どおり使うと時間切れになる");
     }
 }

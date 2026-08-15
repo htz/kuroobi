@@ -55,7 +55,25 @@ const MPC_RELAX_STEP: f32 = 1.18;
 /// 反復深化で「次の段」が前の段の何倍かかるかの見積もり。リバーシの中盤は
 /// 分岐が 8〜12 で、置換表と手順付けが効くぶん実測はこれより小さい。
 /// 大きく見るほど早めに切り上げる (時間切れで段を丸ごと捨てるより得)。
-const NEXT_PASS_FACTOR: f32 = 3.0;
+///
+/// **3.0 は切り上げが早すぎた。** 期限に対する実際の使用率を測ると 34%
+/// しかなく、GGS のレート戦でも持ち時間の 40〜46% を残して終わっていた。
+/// 2.0 へ下げると 47%。1.5 でも 47% で変わらないので、余計に踏み込まない
+/// 2.0 を採る。
+///
+/// **47% が構造的な上限。** 1 段が前段の約 3 倍かかるので、完了した段までの
+/// 累計は最後の段の約 1.5 倍、次の段はその 3 倍 — 予算に収める条件が
+/// `4.5 × 最後の段 ≤ 予算` になり、使えるのは 3 分の 1 前後にしかならない。
+/// 残りは予算側で補う ([`crate::timectl`] の `BUDGET_USE`)。
+fn next_pass_factor() -> f32 {
+    static V: std::sync::OnceLock<f32> = std::sync::OnceLock::new();
+    *V.get_or_init(|| {
+        std::env::var("NEXT_PASS")
+            .ok()
+            .and_then(|v| v.parse().ok())
+            .unwrap_or(2.0)
+    })
+}
 
 /// Minimum remaining depth for a YBWC split. Overridable so the split can be
 /// switched off (set it above the search depth) when isolating which half of
@@ -297,6 +315,27 @@ impl SharedTt {
     pub fn best_move(&self, hash: u64) -> Option<u8> {
         let e = self.get(hash);
         (e.flag != 0 && e.best < 64).then_some(e.best)
+    }
+
+    /// **外から「この手を先に見ろ」と入れる口。**
+    ///
+    /// 同期対局では 2 面が鏡像なので、相手が片方で指した手はこちらの
+    /// もう片方の候補そのものになる。強い相手が長考して選んだ手を並べ替えの
+    /// 先頭に置ければ、同じ時間でより深く読める。
+    ///
+    /// **打ち切りには一切使わせない。** 上下限を `-∞ / +∞` で入れるので、
+    /// 探索が値として読む条件 (`upper <= alpha`, `beta <= lower`,
+    /// `upper == lower`) はどれも成り立たない。運ぶのは手だけ。
+    ///
+    /// 深さは 0 で入れる。実際の探索結果が来たら必ず上書きされる。
+    pub fn seed_move(&self, hash: u64, best_move: u8) {
+        if best_move >= 64 {
+            return;
+        }
+        if self.best_move(hash).is_some() {
+            return; // 既に自前の答えがあるなら触らない
+        }
+        self.put(hash, 0, 0, f32::INFINITY, f32::NEG_INFINITY, 0.0, best_move);
     }
 
     /// Store: walk the bucket and take the first slot that is worth
@@ -1031,7 +1070,7 @@ impl NnueSearch {
                 }
                 // 次の段は前の段の数倍かかる。入っても終わらないなら始めない
                 // (始めれば見張りに切られ、その段はまるごと捨て札になる)
-                if reached > 0 && now + last_pass.mul_f32(NEXT_PASS_FACTOR) >= dl {
+                if reached > 0 && now + last_pass.mul_f32(next_pass_factor()) >= dl {
                     break;
                 }
             }
@@ -1150,7 +1189,7 @@ impl NnueSearch {
                     }
                     // 次の段は前の段の数倍かかる。入っても終わらないなら始めない
                     // (始めれば見張りに切られ、その段はまるごと捨て札になる)
-                    if reached > 0 && now + last_pass.mul_f32(NEXT_PASS_FACTOR) >= dl {
+                    if reached > 0 && now + last_pass.mul_f32(next_pass_factor()) >= dl {
                         break;
                     }
                 }
@@ -1984,5 +2023,56 @@ mod deadline_tests {
             el < std::time::Duration::from_secs(3),
             "並列でも期限を大きく超えない ({el:?})"
         );
+    }
+}
+
+#[cfg(test)]
+mod seed_tests {
+    use super::*;
+
+    /// **入れた手が並べ替えに載り、値としては使われない。**
+    ///
+    /// 同期対局の鏡像から借りた手を運ぶための口なので、**打ち切りに使われて
+    /// はいけない**。上下限が `-∞ / +∞` で入っていることを、表から読み直して
+    /// 確かめる。
+    #[test]
+    fn a_seeded_move_carries_no_bounds() {
+        let tt = SharedTt::new(16);
+        let b = Board::new();
+        let h = zobrist::board_hash(b.player_bb(), b.opponent_bb());
+        assert_eq!(tt.best_move(h), None, "最初は空");
+
+        tt.seed_move(h, 19);
+        assert_eq!(tt.best_move(h), Some(19), "手は載る");
+        let e = tt.get(h);
+        assert!(e.lower.is_infinite() && e.lower < 0.0, "下限が -∞ でない");
+        assert!(e.upper.is_infinite() && e.upper > 0.0, "上限が +∞ でない");
+        // 探索が値として読む 3 条件のどれも成り立たないこと
+        let (alpha, beta) = (-5.0f32, 5.0f32);
+        assert!(e.upper > alpha, "上限で切られる");
+        assert!(beta < e.lower || e.lower.is_infinite(), "下限で切られる");
+        assert!(e.upper != e.lower, "確定値として読まれる");
+    }
+
+    /// 自前の探索結果があるときは触らない (借り物で上書きしない)。
+    #[test]
+    fn a_seed_never_overwrites_a_real_result() {
+        let tt = SharedTt::new(16);
+        let b = Board::new();
+        let h = zobrist::board_hash(b.player_bb(), b.opponent_bb());
+        tt.put(h, 8, 0, -1.0, 1.0, 0.5, 20);
+        assert_eq!(tt.best_move(h), Some(20));
+        tt.seed_move(h, 19);
+        assert_eq!(tt.best_move(h), Some(20), "自前の答えが消えた");
+    }
+
+    /// 範囲外は黙って捨てる。
+    #[test]
+    fn an_out_of_range_seed_is_ignored() {
+        let tt = SharedTt::new(16);
+        let b = Board::new();
+        let h = zobrist::board_hash(b.player_bb(), b.opponent_bb());
+        tt.seed_move(h, 64);
+        assert_eq!(tt.best_move(h), None);
     }
 }

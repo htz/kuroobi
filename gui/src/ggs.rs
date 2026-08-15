@@ -999,6 +999,43 @@ impl MatchState {
 /// GGS の時計表記を秒に分解する。実形式 (実測ログより):
 /// `15:00,0:0//02:00,0:0` = 本時間15分 / (加算なし) / 延長2分。
 /// `/` 区切りの各要素は `,` の後ろに副フィールドを持つので先頭だけ読む。
+/// **同期対局の鏡像から、相手が既に指した手を借りる。**
+///
+/// `s8r16` は同じ開局を先後入れ替えて 2 面同時に打つので、2 面が同じ手順を
+/// たどっている間は**同一局面**になる。手番は原理的にずれるため、片方で
+/// 相手が指した手は、もう片方でこちらが指す局面の候補そのものになる。
+///
+/// **相手はこれをやっている。** 実測 (3 局) では、相手はこちらの着手を待って
+/// から同じ手を指し続け、より良い手を見つけたところで初めて分岐した。持ち時間
+/// の 7〜9 割を最初の 10 手に投じていたのは、この「待つ時間」だった。
+///
+/// こちら側は相手より速く指すため、鏡像が先に埋まるのは自分の手番の
+/// **29%** (24 手中 7 手) に留まる。それでも只で手に入る情報なので使う。
+///
+/// **手順が分岐したら使わない。** 分岐後は別の局面なので、借りた手は
+/// 合法とも限らない。
+fn mirror_hint(matches: &HashMap<String, MatchState>, mid: &str) -> Option<Position> {
+    let (base, side) = mid.rsplit_once('.')?;
+    let other = format!("{base}.{}", if side == "0" { "1" } else { "0" });
+    let me = matches.get(mid)?;
+    let you = matches.get(&other)?;
+    // 次に指す手数 = こちらの最大手数 + 1
+    let n = me.moves.keys().copied().max().unwrap_or(0) + 1;
+    // ここまでの手順が完全に一致している間だけ鏡像が成り立つ
+    if (1..n).any(|i| me.moves.get(&i) != you.moves.get(&i)) {
+        return None;
+    }
+    // 相手の面が既にその手数を埋めていれば借りられる
+    let mv = you.moves.get(&n)?;
+    let b = mv.as_bytes();
+    if b.len() != 2 {
+        return None;
+    }
+    let file = b[0].to_ascii_lowercase().wrapping_sub(b'a');
+    let rank = b[1].wrapping_sub(b'1');
+    Position::from_file_rank(file, rank)
+}
+
 /// 相手からの待った (`undo`) / 中断 (`abort`) の申し出。
 struct Request {
     verb: &'static str,
@@ -1176,6 +1213,8 @@ struct Pending {
     levels: (u32, u8, u8),
     cap: Option<Duration>,
     hash: u64,
+    /// 鏡像から借りた手 (`mirror_hint`)。並べ替えの先頭に置くだけ。
+    hint: Option<Position>,
 }
 
 /// ワーカーへの指示。
@@ -1185,6 +1224,9 @@ enum Job {
         board: Board,
         levels: (u32, u8, u8),
         cap: Option<Duration>,
+        /// 鏡像から借りた手 (`mirror_hint`)。並べ替えの先頭に置くだけで、
+        /// 打ち切りには使われない。
+        hint: Option<Position>,
     },
     /// 先読み。**自分の時計は減らない**ので、空いていれば常に投げてよい。
     /// 1 回で読むのは `slice` だけ (刻んで投げ直す)。
@@ -1396,12 +1438,20 @@ impl EngineWorker {
             let mut engine = engine;
             while let Ok(job) = jrx.recv() {
                 match job {
-                    Job::Think { board, levels, cap } => {
+                    Job::Think {
+                        board,
+                        levels,
+                        cap,
+                        hint,
+                    } => {
                         let base = {
                             let c = engine.config();
                             (c.depth, c.solve_empties, c.band)
                         };
                         engine.set_levels(levels.0, levels.1, levels.2);
+                        if let Some(h) = hint {
+                            engine.hint_move(&board, h);
+                        }
                         let dl = cap.map(|c| Instant::now() + c);
                         let mv = engine.choose_within(&board, dl);
                         engine.set_levels(base.0, base.1, base.2);
@@ -2471,7 +2521,11 @@ pub fn run(
                             let s = ctx.snap.lock().unwrap();
                             s.standby.enabled
                         };
-                        let what = if req.verb == "undo" { "待った" } else { "中断" };
+                        let what = if req.verb == "undo" {
+                            "待った"
+                        } else {
+                            "中断"
+                        };
                         ctx.log(
                             "info",
                             &format!("{} が {} を求めています ({})", req.who, what, req.id),
@@ -2486,7 +2540,10 @@ pub fn run(
                             のは要求 ID か**プレイヤー名**で、対局 ID を渡すと
                             `decline ERR not found: .27` になる (実測)。
                             要求 ID は通知に含まれないので名前で断る。 */
-                            ctx.log("info", &format!("待機モード: 無人なので断ります ({})", req.who));
+                            ctx.log(
+                                "info",
+                                &format!("待機モード: 無人なので断ります ({})", req.who),
+                            );
                             send!(ctx, format!("tell /os decline {}", req.who));
                         }
                     } else if ln.starts_with("/os: ERR") {
@@ -3224,6 +3281,8 @@ fn think_and_play(
             levels: (d, solve, band),
             cap,
             hash: bh,
+            // 同期対局の鏡像で相手が既に指していれば、その手を先に見る
+            hint: mirror_hint(matches, mid),
         });
         if ctx.workers[i].pondering {
             ctx.workers[i].stop.stop();
@@ -3309,6 +3368,7 @@ fn pump_worker(ctx: &mut Ctx, i: usize) {
         board: p.board,
         levels: p.levels,
         cap: p.cap,
+        hint: p.hint,
     });
 }
 
@@ -4334,11 +4394,55 @@ mod tests {
         assert_eq!(ext, None);
     }
 
+    /// **鏡像から手を借りる条件。**
+    ///
+    /// 同期対局の 2 面は同じ手順をたどる間だけ同一局面になる。分岐したら
+    /// 別の局面なので、借りた手は合法とも限らない。
+    #[test]
+    fn a_mirror_hint_is_only_taken_while_the_boards_agree() {
+        use std::collections::BTreeMap;
+        let mk = |mv: &[(&str, &str)]| {
+            let mut m = MatchState::new();
+            m.moves = mv
+                .iter()
+                .enumerate()
+                .map(|(i, (_, s))| (i as u32 + 1, s.to_string()))
+                .collect::<BTreeMap<_, _>>();
+            m
+        };
+        let mut ms = HashMap::new();
+        // こちらは 2 手、相手の面は 3 手進んでいて、手順は一致
+        ms.insert(".9.0".to_string(), mk(&[("", "e2"), ("", "g4")]));
+        ms.insert(
+            ".9.1".to_string(),
+            mk(&[("", "e2"), ("", "g4"), ("", "g5")]),
+        );
+        let h = mirror_hint(&ms, ".9.0").expect("借りられるはず");
+        assert_eq!(coord(h), "G5");
+
+        // 相手の面が先に進んでいなければ借りるものが無い
+        assert!(mirror_hint(&ms, ".9.1").is_none());
+
+        // 手順が分岐していたら使わない
+        ms.insert(
+            ".9.1".to_string(),
+            mk(&[("", "e2"), ("", "h4"), ("", "g5")]),
+        );
+        assert!(mirror_hint(&ms, ".9.0").is_none(), "分岐後に借りた");
+
+        // 相方が無ければ何も返さない
+        ms.remove(".9.1");
+        assert!(mirror_hint(&ms, ".9.0").is_none());
+    }
+
     /// 待った・中断の申し出。**書式は実サーバーで採った** (資料に無い)。
     #[test]
     fn request_real_format() {
         let r = parse_request("/os: undo .24 htz is asking", "kuroobi").unwrap();
-        assert_eq!((r.verb, r.id.as_str(), r.who.as_str()), ("undo", ".24", "htz"));
+        assert_eq!(
+            (r.verb, r.id.as_str(), r.who.as_str()),
+            ("undo", ".24", "htz")
+        );
         let r = parse_request("/os: abort .24 htz is asking", "kuroobi").unwrap();
         assert_eq!(r.verb, "abort");
         // 自分が出した申し出も同じ形で返る。反応してはいけない
@@ -4801,12 +4905,16 @@ mod budget_tests {
             // 「取り置きぶんだけ残るか」の確認には向かない
             "tail:1.0",
         );
-        let moves = ((40 - 26) as f64 / 2.0).ceil();
-        let pool = c.unwrap().as_secs_f64() * moves;
-        // 100 秒のうち 20 秒は読み切り用。中盤へ配るのは残り 80 秒まで
-        assert!(
-            pool < 81.0,
-            "中盤に配ったのは {pool:.1} 秒 (予備 20 秒を残すこと)"
-        );
+        /* **期限は「配分」ではなく「上限」。**
+
+        反復深化は期限まで粘らず、次の段が入らないと判断した時点で返る
+        (実測で期限の 47%)。そのぶん期限を伸ばしてあるので
+        (`timectl::BUDGET_USE`)、期限 × 残り手数は残り時間を超えてよい。
+
+        守るべきは**使い切っても尽きないこと**。1 手ぶんの期限が、取り置きを
+        除いた残り全部を超えないことを見る。 */
+        let b = c.unwrap().as_secs_f64();
+        assert!(b <= 80.0, "1 手の期限が配れるぶん (80 秒) を超えた: {b:.1}");
+        assert!(b > 0.0);
     }
 }

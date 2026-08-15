@@ -282,6 +282,20 @@ impl Engine {
         self.learned.len()
     }
 
+    /// **次の探索で「この手を先に見ろ」と伝える。**
+    ///
+    /// 同期対局は 2 面が鏡像なので、相手が片方で指した手はこちらのもう
+    /// 片方の候補そのものになる。2650 の相手が長考して選んだ手を並べ替えの
+    /// 先頭に置ければ、同じ時間でより深く読める。
+    ///
+    /// **手の選択を委ねるわけではない。** 置換表には上下限を入れないので
+    /// 打ち切りには使われず、探索は今までどおり全部の手を評価する。効くのは
+    /// 順序だけ。
+    pub fn hint_move(&mut self, board: &Board, pos: Position) {
+        let h = crate::zobrist::board_hash(board.player_bb(), board.opponent_bb());
+        self.search.tt.seed_move(h, pos.index());
+    }
+
     /// 進行中の探索を中断させるためのハンドル (別スレッドから使う)。
     /// 立てた後の結果は不完全なので捨てること。次の探索前に `reset` される。
     pub fn stop_handle(&self) -> StopHandle {
