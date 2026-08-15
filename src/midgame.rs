@@ -1731,6 +1731,18 @@ impl NnueSearch {
                     let (nn, tt, mpc, relax) = (self.nn, self.tt, self.mpc, self.mpc_relax);
                     let (gen, my_gen) = (self.done.clone(), self.my_gen);
                     let stop = fan_stop.clone().unwrap();
+                    /* **外からの停止も渡す。渡さないと期限が効かない。**
+
+                    分割タスクは `NnueSearch::new` で作り直すので、`stop` が
+                    空のまま始まっていた。`abort` (兄弟が alpha を破った印) は
+                    渡していたが、それは木の中の都合であって、**期限・停止
+                    ボタン・時間切れの保険はどれも届かない**。
+
+                    結果、期限を過ぎても分割した部分木は最後まで走った。実測で
+                    **期限 5 秒に対して 13.1 秒** (空き 44・4 スレッド)。逐次
+                    (`threads: 1`) では守られるので並列のときだけ出る。Lazy SMP の
+                    ヘルパーは `worker()` 経由なので引き継げていた。 */
+                    let ext_stop = self.stop.clone();
                     let (task_slot, child, a, d) = (slot.clone(), nb, alpha, depth - 1);
                     let pushed = pool.try_push(move || {
                         // Check before doing anything. A task that waited in the
@@ -1753,6 +1765,7 @@ impl NnueSearch {
                         // once someone has beaten alpha every other subtree is
                         // about to be restarted against a better window.
                         w.abort = Some(stop.clone());
+                        w.stop = ext_stop;
                         // Look at the flag on the first node too, not only after
                         // the first full interval.
                         w.abort_countdown = 1;

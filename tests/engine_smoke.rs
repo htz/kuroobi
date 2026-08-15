@@ -140,3 +140,111 @@ fn the_midgame_deadline_is_honoured() {
         took.as_secs_f32()
     );
 }
+
+/// **同期対局と同じ取り合いで期限が守られるか。**
+///
+/// 1 局面を単独で読ませる分には期限は守られる。実戦で 3〜4 倍に膨らんだのは
+/// **2 面が同時に読むから**なので、そこを再現して測る。エンジンを 2 つ、
+/// それぞれ 4 スレッドで同じ期限を渡して同時に走らせる。
+#[test]
+#[ignore = "weights/ の実ファイルが必要 (git 管理外)"]
+fn the_deadline_holds_when_two_engines_share_the_machine() {
+    let cap = std::time::Duration::from_secs(5);
+    let handles: Vec<_> = (0..2)
+        .map(|i| {
+            std::thread::spawn(move || {
+                let cfg = EngineConfig {
+                    depth: 60,
+                    solve_empties: 12,
+                    band: 0,
+                    threads: 4,
+                    ..Default::default()
+                };
+                let mut engine = Engine::new(cfg).expect("engine init");
+                // 2 面は同じ開局を色違いで打つので、空きは 1 つずれる
+                let board = replay_until_empties(KIFU, 44 - i);
+                // 1 手では足りない。**詰まりは積み上がって出る** (実戦でも
+                // 序盤 3 手は期限内で、そこから 1.2 → 2.0 → 3.1 倍と伸びた)
+                let mut worst = std::time::Duration::ZERO;
+                let mut ok = true;
+                for _ in 0..6 {
+                    let t0 = std::time::Instant::now();
+                    let mv = engine.choose_within(&board, Some(t0 + cap));
+                    ok &= mv.pos.is_some();
+                    worst = worst.max(t0.elapsed());
+                }
+                (ok, worst)
+            })
+        })
+        .collect();
+    for h in handles {
+        let (got, took) = h.join().expect("探索スレッド");
+        assert!(got, "手が返らない");
+        assert!(
+            took < cap * 2,
+            "期限 {:.1}s に対して {:.1}s かかった (2 面同時)",
+            cap.as_secs_f32(),
+            took.as_secs_f32()
+        );
+    }
+}
+
+/// **期限で本当に切れているか。**
+///
+/// これまでの計測は「期限より先に読み終わる」条件だったので、切る力を
+/// 測れていなかった。空きを増やして**絶対に読み終わらない**木にし、
+/// 期限だけが止められる状況で測る。
+#[test]
+#[ignore = "weights/ の実ファイルが必要 (git 管理外)"]
+fn a_search_that_cannot_finish_is_still_cut() {
+    let cfg = EngineConfig {
+        depth: 60,
+        solve_empties: 12,
+        band: 0,
+        threads: 8,
+        ..Default::default()
+    };
+    let mut engine = Engine::new(cfg).expect("engine init");
+    // 空き 43。深さ 60 まで読ませたら終わらない
+    let board = replay_until_empties(KIFU, 43);
+    let cap = std::time::Duration::from_secs(10);
+    let t0 = std::time::Instant::now();
+    let mv = engine.choose_within(&board, Some(t0 + cap));
+    let took = t0.elapsed();
+    assert!(mv.pos.is_some(), "手が返らない");
+    assert!(
+        took < cap * 2,
+        "期限 {:.1}s に対して {:.1}s かかった",
+        cap.as_secs_f32(),
+        took.as_secs_f32()
+    );
+}
+
+/// 上の測り方を 1 面だけで。**取り合いが原因かどうかの対照。**
+#[test]
+#[ignore = "weights/ の実ファイルが必要 (git 管理外)"]
+fn the_deadline_holds_for_a_single_engine() {
+    let cfg = EngineConfig {
+        depth: 60,
+        solve_empties: 12,
+        band: 0,
+        threads: 4,
+        ..Default::default()
+    };
+    let mut engine = Engine::new(cfg).expect("engine init");
+    let board = replay_until_empties(KIFU, 44);
+    let cap = std::time::Duration::from_secs(5);
+    let mut worst = std::time::Duration::ZERO;
+    for _ in 0..6 {
+        let t0 = std::time::Instant::now();
+        let mv = engine.choose_within(&board, Some(t0 + cap));
+        assert!(mv.pos.is_some());
+        worst = worst.max(t0.elapsed());
+    }
+    assert!(
+        worst < cap * 2,
+        "期限 {:.1}s に対して最悪 {:.1}s (1 面)",
+        cap.as_secs_f32(),
+        worst.as_secs_f32()
+    );
+}

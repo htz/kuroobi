@@ -1709,7 +1709,6 @@ pub fn run(
             continue 'outer;
         }
 
-        let mut reconnect = false; // 再接続中か (stored 再開を試す)
         let mut login_fails = 0u32; // ログイン前に切られた回数
         let mut cred_saved = false; // 認証情報をキーチェーンへ保存したか
                                     // ---- 接続セッション (切断時は絶対不放棄で再接続) ----
@@ -2056,7 +2055,6 @@ pub fn run(
                     ctx.log("info", "接続断 — 10 秒後に再接続して対局を再開します");
                     ctx.emit(true);
                     std::thread::sleep(Duration::from_secs(10));
-                    reconnect = true;
                     continue 'session;
                 }
                 while let Some(nl) = raw.iter().position(|&b| b == b'\n') {
@@ -2140,10 +2138,21 @@ pub fn run(
                         send!(ctx, "tell /os match");
                         pending.push("history:".into());
                         send!(ctx, "tell /os history");
-                        if reconnect {
-                            pending.push("stored".into());
-                            send!(ctx, "tell /os stored");
-                        }
+                        /* **起動でも中断対局を再開する。** 以前は再接続
+                        のときだけだった。**落ちて上がり直した
+                        ときが抜けていた** — 相手は待っているのに、こちらは
+                        一覧に出して眺めるだけで指さない。
+
+                        中断対局は定義上「終わっていない自分の対局」なので、
+                        見つけたら戻るのが筋。放置すれば時間切れになる。
+
+                        なお実測では、**こちらを強制終了しても中断対局には
+                        ならなかった** (`stored 0`)。サーバーは切断を「退出」
+                        と見て対局を畳む (相手側に `kuroobi left` と出る)。
+                        つまりここが効くのは別の経路 — サーバーの再起動など
+                        — で中断が作られたときで、落ちた対局は戻らない。 */
+                        pending.push("stored".into());
+                        send!(ctx, "tell /os stored");
                         ctx.emit(true);
                     }
                     ctx.emit(false);
