@@ -2277,7 +2277,16 @@ pub fn run(
                                         }
                                     }
                                 }
-                                if let Some(id) = ids.first().cloned() {
+                                /* **全部再開する。先頭 1 件では足りない。**
+
+                                同期対局は 2 面あり、中断の一覧に別々に
+                                並びうる。1 件しか投げないと、もう 1 面は
+                                誰も指さないまま時計だけ減って時間切れ —
+                                レート戦では 1 面落とすだけで負けになる。
+
+                                余分に投げても、既に動いている対局への
+                                `ask` はサーバーが弾くだけで害がない。 */
+                                for id in &ids {
                                     ctx.log("info", &format!("中断対局 {id} を再開します"));
                                     send!(ctx, format!("tell /os ask {id}"));
                                 }
@@ -2975,7 +2984,14 @@ fn apply_block(m: &mut MatchState, block: &[String], login: &str) -> (bool, Opti
                             いない (0.4 秒残りが 00:00 と出る) 場合も含むが、
                             **どのみち読んでいる余裕は無い**ので害がない。 */
                             let jumped = m.my_clock_secs.is_some_and(|prev| now > prev + g / 2);
-                            if g > 0 && (jumped || now == 0) {
+                            /* **一度立てたら下ろさない**ので、序盤で誤って
+                            立てるとその対局を丸ごと捨てることになる (以後
+                            1.5 秒/手)。自分がまだ 1 手も指していないうちに
+                            0 を見るのは、時計が届いていないなど別の理由の
+                            はず — **持ち時間を使っていないのに使い切ることは
+                            ない**。跳ね上がりのほうは形が特徴的なので通す。 */
+                            let played = m.moves.len() >= 2;
+                            if g > 0 && (jumped || (now == 0 && played)) {
                                 m.in_overtime = true;
                             }
                         }
@@ -4344,7 +4360,13 @@ mod tests {
         .map(|s| s.to_string())
         .collect();
         let with_clock = |secs: &str| {
-            let mut b = vec![format!("|kuroobi  (1720.0 *) {secs}//02:00,0:0")];
+            // 手数の行を入れる。**指してもいないのに時間切れにはならない**
+            // ので、0 への張り付きは 1 手以上進んでからしか拾わない
+            let mut b = vec![
+                format!("|kuroobi  (1720.0 *) {secs}//02:00,0:0"),
+                "|  1: F5/1.00/0.00".to_string(),
+                "|  2: D6/1.00/0.00".to_string(),
+            ];
             b.extend(board.iter().cloned());
             b
         };
@@ -4364,6 +4386,21 @@ mod tests {
         // 一度入ったら下ろさない (以後は普通に減っていく)
         apply_block(&mut m, &with_clock("01:12,0:0"), "kuroobi");
         assert!(m.in_overtime, "下ろしてしまった");
+    }
+
+    /// **指してもいないうちの 0 は拾わない。**
+    ///
+    /// 一度立てたら下ろさないので、序盤で誤ると対局を丸ごと捨てる
+    /// (以後 1.5 秒/手)。持ち時間を使っていないのに使い切ることはない。
+    #[test]
+    fn a_zero_before_any_move_is_not_overtime() {
+        let mut m = MatchState::new();
+        let b = vec![
+            "|kuroobi  (1720.0 *) 00:00,0:0//02:00,0:0".to_string(),
+            "|* to move".to_string(),
+        ];
+        apply_block(&mut m, &b, "kuroobi");
+        assert!(!m.in_overtime, "1 手も指していないのに立った");
     }
 
     /// 普通に減っていくだけの時計をロスタイムと誤認しない。
