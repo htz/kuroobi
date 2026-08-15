@@ -248,3 +248,40 @@ fn the_deadline_holds_for_a_single_engine() {
         worst.as_secs_f32()
     );
 }
+
+/// **読切も期限で切れるか。**
+///
+/// 中盤 (YBWC) で「分割した先に停止が届いていない」穴を踏んだので、
+/// ソルバも同じかを疑って測った。**こちらは元から正しかった。**
+/// 兄弟タスクは停止ハンドルを持たないが、専用の見張りスレッドが根の
+/// 打ち切りフラグを立て、`aborted()` が親をたどるので全員に届く
+/// (葉に近い層へ判定を足さないための意図的な設計)。
+///
+/// 疑って測ったこと自体を残す。**次に同じ疑いが出たときのため。**
+#[test]
+#[ignore = "weights/ の実ファイルが必要 (git 管理外)"]
+fn the_deadline_cuts_the_endgame_solver() {
+    let cfg = EngineConfig {
+        depth: 60,
+        // **読切に必ず入る空きにする。** ここを浅くすると中盤で終わって
+        // しまい、ソルバの切れ方を測れない
+        solve_empties: 26,
+        band: 0,
+        threads: 4,
+        ..Default::default()
+    };
+    let mut engine = Engine::new(cfg).expect("engine init");
+    let board = replay_until_empties(KIFU, 26);
+    assert_eq!(board.empty_count(), 26);
+    let cap = std::time::Duration::from_secs(2);
+    let t0 = std::time::Instant::now();
+    let mv = engine.choose_within(&board, Some(t0 + cap));
+    let took = t0.elapsed();
+    assert!(mv.pos.is_some(), "手が返らない");
+    assert!(
+        took < cap * 3,
+        "期限 {:.1}s に対して {:.1}s かかった",
+        cap.as_secs_f32(),
+        took.as_secs_f32()
+    );
+}

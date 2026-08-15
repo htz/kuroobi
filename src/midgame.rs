@@ -1954,4 +1954,35 @@ mod deadline_tests {
             "期限を大きく超えない ({el:?})"
         );
     }
+
+    /// **並列でも切り上がるか。**
+    ///
+    /// 上のテストは `threads = 1` だった。それだけを見ていたせいで、
+    /// **YBWC で分割した先に停止が届いていない**バグを通した (期限の 2.6 倍)。
+    ///
+    /// **ただしこれは砦であって、再現ではない。** 合成重みでは評価が退化して
+    /// 木が小さく、分割が起きる深さへ届く前に読み終わってしまう。落とすには
+    /// 実重みが要るので、再現は `tests/engine_smoke.rs` (要 weights) に置いた。
+    /// ここでは並列経路が期限内に手を返すことだけを見ている。
+    #[test]
+    fn deadline_cuts_the_search_short_in_parallel() {
+        let mut nn0 = Nnue::new(crate::pattern::EGAROUCID_PATTERNS);
+        nn0.quantize();
+        let nn: &'static Nnue = Box::leak(Box::new(nn0));
+        let tt: &'static SharedTt = Box::leak(Box::new(SharedTt::new(18)));
+        let mut s = NnueSearch::new(nn, tt);
+        s.threads = 4;
+        s.set_stop(Some(StopHandle::new()));
+        let b = Board::new();
+        let t0 = std::time::Instant::now();
+        let dl = t0 + std::time::Duration::from_millis(200);
+        let (pos, _v, reached) = s.best_move_deadline(&b, 40, Some(dl));
+        let el = t0.elapsed();
+        assert!(pos.is_some(), "手は返る");
+        assert!(reached < 40, "期限で切り上がる (到達 {reached})");
+        assert!(
+            el < std::time::Duration::from_secs(3),
+            "並列でも期限を大きく超えない ({el:?})"
+        );
+    }
 }
