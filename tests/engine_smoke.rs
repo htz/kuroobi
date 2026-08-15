@@ -98,3 +98,45 @@ fn deepening_solves_when_depth_reaches_the_end() {
     );
     assert_eq!(last_depth, d, "全部読み切ったらそこで深化が止まる");
 }
+
+/// **中盤の期限が守られるか。**
+///
+/// **これは砦であって、再現ではない。** 実戦 (15 分の同期対局、空き 37) で
+/// 期限 43.5 秒の手が 132.6 秒走ったが、同じ空き・同じ期限で 1 局面を
+/// 読ませても再現しない — 本番との違いは同期対局が CPU を取り合うことで、
+/// 単独なら 30 秒の段が 3 倍に伸びる。ここで見ているのは「素直な条件では
+/// 期限が守られる」ことだけ。
+///
+/// 読切にも選択読みにも入らない空きで測る (どちらも別経路で見張り済み)。
+#[test]
+#[ignore = "weights/ の実ファイルが必要 (git 管理外)"]
+fn the_midgame_deadline_is_honoured() {
+    let cfg = EngineConfig {
+        // **深さで止めない。** 持ち時間があるときの設定 (`DEPTH_BY_CLOCK`)
+        // と同じにして、期限だけが探索を止める状況を作る
+        depth: 60,
+        solve_empties: 12,
+        band: 0,
+        threads: 4,
+        ..Default::default()
+    };
+    let mut engine = Engine::new(cfg).expect("engine init");
+
+    // 実戦で踏んだのと同じ空き 37。読切 (12) にも選択読み (帯 0) にも入らない
+    let board = replay_until_empties(KIFU, 44);
+    assert_eq!(board.empty_count(), 44);
+
+    let cap = std::time::Duration::from_secs(5);
+    let t0 = std::time::Instant::now();
+    let mv = engine.choose_within(&board, Some(t0 + cap));
+    let took = t0.elapsed();
+
+    assert!(mv.pos.is_some(), "手が返らない");
+    // 見張りの粒度と後始末のぶんは見込む。3 倍は外側の保険が動く境目
+    assert!(
+        took < cap * 3,
+        "期限 {:.1}s に対して {:.1}s かかった",
+        cap.as_secs_f32(),
+        took.as_secs_f32()
+    );
+}

@@ -669,7 +669,26 @@ impl Engine {
                 cut: false,
             }
         } else {
+            /* **中盤にも見張りを付ける。** 読切と選択読みには付けていたのに、
+            ここだけ「反復深化は段の切れ目で期限を見るから要らない」と思って
+            外していた。**足りなかった。**
+
+            段の頭で見ても、その段自体が長ければ止まらない。実戦 (15 分の
+            同期対局、空き 37) で**期限 43.5 秒の手が 132.6 秒**走り、
+            外側の保険が殺すまで返ってこなかった。
+
+            **単体では再現しない。** 同じ空き・同じ期限で 1 局面を読ませても
+            段の切れ目で素直に止まる。違いは**同期対局が CPU を取り合うこと**。
+            2 ワーカー × 4 スレッドに先読みが重なると、単独なら 30 秒の段が
+            3 倍に伸びる。段の頭で見る方式は「次の段がどれだけかかるか」を
+            知らないので、これを防ぎようがない。
+
+            見張りが停止を立てれば段の途中でも抜ける (保険がそれで止められた
+            のが証拠)。切られた段は捨てて直前の段を返す仕組みが
+            `lazy_smp` 側にあるので、手が消えることはない。 */
+            let watcher = self.watch_deadline(deadline);
             let (pos, value, reached) = self.search.best_move_deadline(board, c.depth, deadline);
+            let cut = self.stop_watch_done(watcher);
             MoveEval {
                 pos,
                 value: stone_scale(value),
@@ -677,7 +696,7 @@ impl Engine {
                 from_book: false,
                 learned: false,
                 depth: reached,
-                cut: false,
+                cut,
             }
         }
     }
