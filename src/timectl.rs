@@ -86,9 +86,20 @@ pub struct Plan {
 #[derive(Debug, Clone, Copy)]
 pub struct Situation {
     /// 自分の残り持ち時間 (秒)。`None` は時間制でない対局。
+    ///
+    /// **ロスタイム中もここに出る。** GGS の時計は 1 本で、本時間を
+    /// 切らすと猶予ぶんが加算されて同じ欄が動き続ける。
     pub clock_secs: Option<u64>,
-    /// ロスタイム (GGS の第 3 時計)。本時間が尽きた後に使える。
-    pub ext_secs: u64,
+    /// **ロスタイムに入っているか。**
+    ///
+    /// 入っていたらその対局は既に負けが確定していて、残るのは全滅
+    /// (`timeout_hard`) を避けることだけ。`clock_secs` からは判定
+    /// できない (加算後は健全な残り時間と見分けが付かない) ので、
+    /// 時計が跳ね上がったことを見て呼び出し側が立てる。
+    pub in_overtime: bool,
+    /// 猶予時間の**設定値** (GGS の表示第 3 項)。残量ではない。
+    /// 0 なら本時間切れがそのまま全滅負けになる。
+    pub grace_secs: u64,
     /// 盤の空きマス数。
     pub empties: u8,
     /// 1 手に使ってよい上限 (0 で無制限)。
@@ -107,7 +118,8 @@ impl Default for Situation {
     fn default() -> Situation {
         Situation {
             clock_secs: None,
-            ext_secs: 0,
+            in_overtime: false,
+            grace_secs: 0,
             empties: 60,
             max_move_secs: 0,
             reserve_secs: 20,
@@ -242,6 +254,37 @@ const SOLVE_GREED: f64 = 10.0;
 /// 同じ値**にして、判断と確保を一致させる。
 const SOLVE_MAX_SHARE: f64 = 0.5;
 
+/* ---------- ロスタイム中の指し方 ----------
+
+**もう負けている対局を、全滅させずに終わらせるだけ。** 深さに投資する
+意味は無い (結果が `min(minimal_loss, board_score)` で頭打ちになる) ので、
+どの定数も「読む」ではなく「確実に指し切る」側に倒してある。 */
+
+/// ロスタイム中に空けておく秒数。
+///
+/// 見積りの外れ・通信の往復・終局処理のぶん。ここを踏み越えると
+/// `timeout_hard` = 最大差負けなので、手数割りの前に引いておく。
+const OVERTIME_RESERVE: u64 = 5;
+
+/// ロスタイム中の 1 手の上限。
+///
+/// 残り手数で割ったうえで更に頭を押さえる。終盤に近いほど手数割りは
+/// 大きな値を出すが、**そこで長考しても結果は変わらない**。
+const OVERTIME_MAX_SECS: f64 = 1.5;
+
+/// ロスタイム中に読切へ入ってよい空き。
+///
+/// 読切は「1 手で残り全部を読む」ので、外したときの超過が桁で違う。
+/// 最小差負け (-2 前後) と全滅 (-64) の差はここで決まる。
+const OVERTIME_SOLVE: u8 = 12;
+
+/// 猶予の無い対局で取り置きを何倍にするか。
+///
+/// 猶予があれば本時間切れは最小差負け、無ければ全滅負け。**失うものが
+/// 60 石違う**ので、同じ取り置きでは釣り合わない。GGS の既定は 2 分の
+/// 猶予付きなので、これが効くのは猶予を外した対局だけ。
+const NO_GRACE_RESERVE_MUL: u64 = 2;
+
 /// 1 手ぶんの計画を立てる。
 ///
 /// 自分が指す残り手数はおおよそ空きマスの半分 (パスがあるので下振れする)。
@@ -265,16 +308,41 @@ pub fn plan(s: Situation, base: Levels, pace: Pace) -> Plan {
             cap: None,
         };
     };
-    // 本時間が尽きていればロスタイム勝負: 最速で指す
-    if secs == 0 {
-        let has_ext = s.ext_secs > 0;
+    /* ---------- ロスタイム (GGS の overtime) ----------
+
+    **入った時点で、その対局はもう負けている。**
+
+    GGS の時計は 1 本しかない (`GAME_Clock.C::Update`)。本時間を切らすと
+    サーバーは `timeout_soft` を立て、そのうえで `now += ext` として時計を
+    戻す。オセロは soft-timeout の競技なので、そこから何をしても
+
+        score = min( minimal_loss, board_score )
+
+    で頭打ちになる。**勝ちには絶対に戻らない。** ロスタイムは挽回のための
+    持ち時間ではなく、`COsClock` の言葉どおり "additional time to avoid a
+    wipeout" — **全滅 (-64) を避けるためだけの時間**で、これも切らすと
+    `timeout_hard` = 最大差負けになる。
+
+    だからここでやることは 1 つしかない。**残りの手を確実に指し切る。**
+    深く読む価値は無く (結果は頭打ち)、読み過ぎは全滅に直結する。
+
+    なお **`ext_secs` は設定値であって残量ではない**。表示の第 3 項は
+    `ext_set` をそのまま出しているので、対局中ずっと `02:00` から動かない。
+    残量はロスタイム中も第 1 項 (`secs`) に出る。 */
+    if s.in_overtime {
+        let moves = ((s.empties as f64 / 2.0).ceil() as u64).max(1);
+        let pool = secs.saturating_sub(OVERTIME_RESERVE) as f64;
+        let per = (pool / moves as f64).min(OVERTIME_MAX_SECS);
         return Plan {
-            depth: if has_ext { 4 } else { 2 },
-            solve: base.solve.min(if has_ext { 14 } else { 10 }),
+            depth: DEPTH_BY_CLOCK,
+            // 読切は「1 手で残り全部」なので、ここで踏むと落ちるときに
+            // 全滅まで落ちる。浅い入り口に留める
+            solve: base.solve.min(OVERTIME_SOLVE),
             band: 0,
-            cap: Some(Duration::from_millis(if has_ext { 800 } else { 300 })),
+            cap: Some(Duration::from_secs_f64(per.max(0.05))),
         };
     }
+    let avail = secs;
     /* 自分が指す残り手数 (最低 1)。終盤の完全読みは 1 手で全部読むので、
     読切に入る手前までを予算配分の対象にする。
 
@@ -287,9 +355,19 @@ pub fn plan(s: Situation, base: Levels, pace: Pace) -> Plan {
     `reserve` も同じ理由で較正値を入れない。900 秒の対局なら取り置きが
     20 秒から 183 秒に増え、中盤の配分が 2 割薄くなる。 */
     let my_moves = ((s.empties.saturating_sub(base.solve) as f64 / 2.0).ceil() as u64).max(1);
-    // 完全読み 1 回分を確保したうえで中盤に配る
-    let reserve = s.reserve_secs.min(secs / 2);
-    let pool = secs.saturating_sub(reserve) as f64;
+    /* 完全読み 1 回分を確保したうえで中盤に配る。
+
+    **猶予の無い対局では厚く取る。** 猶予があれば本時間を切らしても
+    最小差負けで済むが (`min(minimal_loss, board_score)`)、無ければ
+    そのまま全滅負けになる。同じ 1 秒の超過で失うものが 60 石違うので、
+    同じ取り置きでは釣り合わない。 */
+    let want = if s.grace_secs == 0 {
+        s.reserve_secs * NO_GRACE_RESERVE_MUL
+    } else {
+        s.reserve_secs
+    };
+    let reserve = want.min(avail / 2);
+    let pool = avail.saturating_sub(reserve) as f64;
     let even = pool / my_moves as f64;
     /* 配り方。序盤は手数が多いので、厚くするほど 1 手が長くなる。
 
@@ -307,7 +385,6 @@ pub fn plan(s: Situation, base: Levels, pace: Pace) -> Plan {
     } else {
         budget
     };
-
     // 深さは上限として渡す (実際にどこまで行けるかは期限が決める)。
     // 読切だけは期限が効かないので、入り口を残り時間から決める
     let solve = match s.nps {
@@ -321,13 +398,13 @@ pub fn plan(s: Situation, base: Levels, pace: Pace) -> Plan {
         上限は盤の空き数 (`SOLVE_CEILING`)。弱く指したいときは持ち時間を
         付けない (そちらは設定がそのまま効く)。 */
         Some(nps) => {
-            let b = (budget * SOLVE_GREED).min(secs as f64 * SOLVE_MAX_SHARE);
+            let b = (budget * SOLVE_GREED).min(avail as f64 * SOLVE_MAX_SHARE);
             solve_entry(b, nps, s.threads, SOLVE_CEILING)
         }
         // **未較正: 固定の階段。** 機械の速さを知らないので当て推量になる。
         // 遅い機械では設定の読切がそのまま通り、読み切れずに時間切れになる
-        None if secs < 20 => base.solve.min(14),
-        None if secs < 60 => base.solve.min(20),
+        None if avail < 20 => base.solve.min(14),
+        None if avail < 60 => base.solve.min(20),
         None => base.solve,
     };
     let band = if budget >= 12.0 { base.band } else { 0 };
@@ -354,7 +431,7 @@ mod tests {
         plan(
             Situation {
                 clock_secs: Some(secs),
-                ext_secs: 120,
+                grace_secs: 120,
                 empties,
                 ..Situation::default()
             },
@@ -372,7 +449,7 @@ mod tests {
         let p = plan(
             Situation {
                 clock_secs: Some(30),
-                ext_secs: 120,
+                grace_secs: 120,
                 empties: 40,
                 ..Situation::default()
             },
@@ -406,21 +483,23 @@ mod tests {
         assert_eq!(Pace::parse("tail:0.4"), Pace::Tail(0.4));
     }
 
-    /// 本時間が尽きたらロスタイム勝負。1 秒未満で指す。
+    /// 時計が 0 を指していたら、猶予の設定があっても即座に指す。
+    ///
+    /// **猶予は自分で使うものではない。** サーバーが時計へ足してくれるまで
+    /// 待つ形になるので、ここで読むと足される前に全滅側へ倒れる。
     #[test]
-    fn out_of_time_moves_fast() {
+    fn a_zero_clock_moves_at_once() {
         let p = plan(
             Situation {
                 clock_secs: Some(0),
-                ext_secs: 120,
+                grace_secs: 120,
                 empties: 20,
                 ..Situation::default()
             },
             BASE,
             Pace::Fast,
         );
-        assert!(p.cap.unwrap() < Duration::from_secs(1));
-        assert_eq!(p.band, 0, "帯は使わない");
+        assert!(p.cap.unwrap() <= Duration::from_millis(100));
     }
 
     /// **持ち時間が減っても予算は 0 にならない。** 0 だと反復深化が
@@ -595,5 +674,94 @@ mod tests {
             Pace::Fast,
         );
         assert!(p.cap.unwrap() <= Duration::from_secs(3));
+    }
+
+    /// ロスタイム中の 1 手 (残りは第 1 項に出る。第 3 項は設定値)。
+    fn ot_plan(left: u64, empties: u8) -> Plan {
+        plan(
+            Situation {
+                clock_secs: Some(left),
+                in_overtime: true,
+                grace_secs: 120,
+                empties,
+                ..Situation::default()
+            },
+            BASE,
+            Pace::Fast,
+        )
+    }
+
+    /// **ロスタイム中は読まない。** 結果が `min(minimal_loss, board_score)`
+    /// で頭打ちなので、深さに投資しても勝ちには戻らない。同じ残り時間でも
+    /// 本時間なら遠慮なく使ってよく、そこがはっきり分かれる。
+    #[test]
+    fn overtime_is_far_cheaper_than_main_time() {
+        let ot = ot_plan(120, 40).cap.unwrap();
+        let main = plan(
+            Situation {
+                clock_secs: Some(120),
+                empties: 40,
+                ..Situation::default()
+            },
+            BASE,
+            Pace::Fast,
+        )
+        .cap
+        .unwrap();
+        assert!(ot <= Duration::from_secs_f64(OVERTIME_MAX_SECS));
+        assert!(ot < main, "ロスタイムなのに本時間と同じだけ使っている");
+    }
+
+    /// **全滅させない。** 残りの手を全部指し切っても猶予を使い切らない。
+    /// 使い切ると `timeout_hard` = 最大差負けで、最小差負けとの差は 60 石。
+    #[test]
+    fn overtime_finishes_the_game_without_a_wipeout() {
+        for grace in [120u64, 60, 30] {
+            let mut left = grace as f64;
+            // 空き 60 から 1 手ずつ (自分の手番はおよそ半分だが、全部
+            // 自分が指す最悪の場合で見る)
+            for e in (0..=60u8).rev() {
+                let used = ot_plan(left.max(0.0) as u64, e).cap.unwrap().as_secs_f64();
+                left -= used;
+                assert!(left > 0.0, "猶予 {grace}s・空き {e} で使い切った");
+            }
+        }
+    }
+
+    /// 猶予が残り少なくなるほど 1 手も短くする。
+    #[test]
+    fn overtime_shrinks_as_the_grace_runs_down() {
+        let much = ot_plan(120, 40).cap.unwrap();
+        let little = ot_plan(8, 40).cap.unwrap();
+        assert!(little < much);
+    }
+
+    /// **猶予の無い対局では慎重に配る。** 本時間切れが最小差負けで
+    /// 済まず、そのまま全滅負けになるため。
+    #[test]
+    fn no_grace_means_a_thicker_reserve() {
+        let budget = |grace: u64| {
+            plan(
+                Situation {
+                    clock_secs: Some(60),
+                    grace_secs: grace,
+                    empties: 40,
+                    ..Situation::default()
+                },
+                BASE,
+                Pace::Fast,
+            )
+            .cap
+            .unwrap()
+        };
+        assert!(budget(0) < budget(120), "猶予の有無で配分が同じ");
+    }
+
+    /// 読切は 1 手で残り全部を読むので、ロスタイム中は浅い入り口に留める。
+    #[test]
+    fn overtime_keeps_the_solver_shallow() {
+        let p = ot_plan(120, 20);
+        assert!(p.solve <= OVERTIME_SOLVE);
+        assert_eq!(p.band, 0);
     }
 }

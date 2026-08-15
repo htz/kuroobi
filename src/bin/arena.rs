@@ -618,7 +618,8 @@ fn play_timed(
         let plan = timectl::plan(
             Situation {
                 clock_secs: Some(left as u64),
-                ext_secs: 0,
+                in_overtime: false,
+                grace_secs: 0,
                 empties: board.empty_count(),
                 max_move_secs: 0,
                 reserve_secs: 20,

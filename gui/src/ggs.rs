@@ -271,6 +271,10 @@ pub struct MatchView {
     /// ロスタイム (延長時間) の秒数。GGS の時計 "main/inc/ext" の第 3 要素。
     pub my_ext: Option<u64>,
     pub opp_ext: Option<u64>,
+    /// **自分がロスタイムに入ったか。** 入ったらこの対局は時間切れ負けが
+    /// 確定していて、残るのは全滅 (`timeout_hard`) を避けることだけ。
+    /// 一度立てたら下ろさない (サーバー側も戻さない)。
+    pub in_overtime: bool,
     /// 観戦用: 両プレイヤーの情報 (黒, 白 の順とは限らない)。
     pub players: Vec<PlayerView>,
     /// 対局の種別 ("s8r14" など)。
@@ -818,6 +822,8 @@ struct MatchState {
     my_clock: String,
     my_clock_secs: Option<u64>,
     my_ext: Option<u64>,
+    /// ロスタイムに入ったか (`MatchView::in_overtime` を参照)。
+    in_overtime: bool,
     opp_name: String,
     opp_rating: String,
     opp_clock: String,
@@ -857,6 +863,7 @@ impl MatchState {
             my_clock: self.my_clock.clone(),
             my_clock_secs: self.my_clock_secs,
             my_ext: self.my_ext,
+            in_overtime: self.in_overtime,
             opp_name: self.opp_name.clone(),
             opp_rating: self.opp_rating.clone(),
             opp_clock: self.opp_clock.clone(),
@@ -890,6 +897,7 @@ impl MatchState {
             my_clock: String::new(),
             my_clock_secs: None,
             my_ext: None,
+            in_overtime: false,
             opp_name: String::new(),
             opp_rating: String::new(),
             opp_clock: String::new(),
@@ -995,6 +1003,14 @@ fn parse_clock(s: &str) -> (Option<u64>, Option<u64>, Option<u64>) {
     let mut out = [None, None, None];
     for (i, part) in s.split('/').take(3).enumerate() {
         let p = part.trim().split(',').next().unwrap_or("").trim();
+        /* **負の残り時間は 0 として読む。** 使い切った直後に `-0:01` の
+        ような値が来ることがある。数字始まりだけを受けていると解析に失敗し、
+        「時間制でない対局」と同じ `None` に落ちる — その扱いは**期限なし**
+        なので、いちばん時間の無い場面でいちばん長く考えることになる。 */
+        let (p, neg) = match p.strip_prefix('-') {
+            Some(rest) => (rest.trim(), true),
+            None => (p, false),
+        };
         if p.is_empty()
             || !p
                 .chars()
@@ -1016,7 +1032,7 @@ fn parse_clock(s: &str) -> (Option<u64>, Option<u64>, Option<u64>) {
             }
         }
         if ok {
-            out[i] = Some(secs);
+            out[i] = Some(if neg { 0 } else { secs });
         }
     }
     (out[0], out[1], out[2])
@@ -1133,7 +1149,10 @@ enum Job {
     },
     /// 先読み。**自分の時計は減らない**ので、空いていれば常に投げてよい。
     /// 1 回で読むのは `slice` だけ (刻んで投げ直す)。
-    Ponder { board: Board, slice: Duration },
+    Ponder {
+        board: Board,
+        slice: Duration,
+    },
     SetUseBook(bool),
     SetThreads(usize),
 }
@@ -1211,7 +1230,11 @@ impl Ctx {
     /// 達していたら**いちばん古い割り当てを奪う** (共有すると待たされるが、
     /// 壊れはしない)。
     fn worker_for(&mut self, mid: &str) -> Option<usize> {
-        if let Some(i) = self.workers.iter().position(|w| w.mid.as_deref() == Some(mid)) {
+        if let Some(i) = self
+            .workers
+            .iter()
+            .position(|w| w.mid.as_deref() == Some(mid))
+        {
             return Some(i);
         }
         if let Some(i) = self.workers.iter().position(|w| w.mid.is_none()) {
@@ -1262,7 +1285,12 @@ impl Ctx {
         /* **割り当て中の数で割る。ワーカーの数ではない。** ワーカーは対局が
         終わっても捨てない (置換表を抱えているため) ので、`workers.len()` で
         割ると 2 局を戦った後は単独対局でも半分しか使わなくなる。 */
-        let active = self.workers.iter().filter(|w| w.mid.is_some()).count().max(1);
+        let active = self
+            .workers
+            .iter()
+            .filter(|w| w.mid.is_some())
+            .count()
+            .max(1);
         let each = (total / active).max(1);
         if each == self.worker_threads {
             return;
@@ -1380,13 +1408,19 @@ impl Ctx {
         `KUROOBI_GGS_WIRE=<path>` を渡したときだけ書く。 */
         {
             use std::io::Write as _;
-            let path = std::env::var("KUROOBI_GGS_WIRE").ok().or(if cfg!(debug_assertions) {
-                Some("/tmp/ggs_session_wire.log".to_string())
-            } else {
-                None
-            });
+            let path = std::env::var("KUROOBI_GGS_WIRE")
+                .ok()
+                .or(if cfg!(debug_assertions) {
+                    Some("/tmp/ggs_session_wire.log".to_string())
+                } else {
+                    None
+                });
             if let Some(p) = path {
-                if let Ok(mut f) = std::fs::OpenOptions::new().create(true).append(true).open(p) {
+                if let Ok(mut f) = std::fs::OpenOptions::new()
+                    .create(true)
+                    .append(true)
+                    .open(p)
+                {
                     let _ = writeln!(f, "{dir} {text}");
                 }
             }
@@ -2349,12 +2383,25 @@ pub fn run(
                         // 終局したものは「対局中」に数えない (上と同じ理由)
                         let in_match = s.matches.iter().any(|m| !m.over);
                         let games = s.standby_stats.games;
+                        /* **自分が出したまま残っている申し込みがあるか。**
+                        受けられずに残っている間に再申し込みすると、
+                        募集が二重になって 2 局同時に成立しうる。 */
+                        let outgoing = s.offers.iter().any(|o| !o.incoming);
                         drop(s);
-                        if sb.enabled
-                            && !in_match
-                            && !sb.opponent.is_empty()
-                            && (sb.max_games == 0 || games < sb.max_games)
-                        {
+                        let more = sb.max_games == 0 || games < sb.max_games;
+                        /* **不発なら鳴らし直す。** 申し込みは「終局した」
+                        ときにしか予約しておらず、送った後は `None` に
+                        戻していた。相手が離席・拒否・接続断で受けな
+                        かったら、そこで待機モードが黙って止まる
+                        (放置運用ではこれが効く場面そのもの)。
+                        成立すれば `in_match` で弾かれるので、鳴らし
+                        続けても害はない。 */
+                        if sb.enabled && !sb.opponent.is_empty() && more {
+                            next_ask_at = Some(
+                                Instant::now() + Duration::from_secs(sb.interval_secs.max(30)),
+                            );
+                        }
+                        if sb.enabled && !in_match && !outgoing && !sb.opponent.is_empty() && more {
                             ctx.log("info", &format!("待機モード: {} に申し込み", sb.opponent));
                             // 申し込みの直前にレート有無を揃える (Cmd::Ask と同じ)
                             send!(
@@ -2418,9 +2465,7 @@ pub fn run(
                     let stalled: Vec<String> = matches
                         .iter()
                         .filter(|(_, m)| {
-                            !m.over
-                                && m.my_color.is_some()
-                                && Some(m.turn) == m.my_color
+                            !m.over && m.my_color.is_some() && Some(m.turn) == m.my_color
                         })
                         .map(|(k, _)| k.clone())
                         .collect();
@@ -2576,9 +2621,7 @@ fn apply_engine_cfg(ctx: &mut Ctx, depth: u32, solve: u8, band: u8) {
 /// (`resources.conf` の `nps.<スレッド数>`) が 2 つ要り、片方が未較正の
 /// まま対局に入ってしまう。持ち時間の管理はそこで固定の階段に落ちる。
 fn apply_threads(ctx: &mut Ctx) {
-    let n = resources()
-        .threads
-        .unwrap_or_else(|| resolve_threads(0));
+    let n = resources().threads.unwrap_or_else(|| resolve_threads(0));
     ctx.engine_cfg.threads = n;
     if let Some(e) = ctx.engine.as_mut() {
         e.set_threads(n);
@@ -2792,6 +2835,27 @@ fn apply_block(m: &mut MatchState, block: &[String], login: &str) -> (bool, Opti
                     if name == login {
                         m.my_color = Some(color);
                         m.my_clock = clock.clone();
+                        /* ---------- ロスタイムに入ったかを見る ----------
+
+                        **時計が増えたら入っている。** GGS の時計は 1 本で
+                        (`GAME_Clock.C::Update`)、本時間を切らすと猶予ぶんが
+                        **その時計に加算される**。表示の第 3 項は設定値を
+                        出しているだけなので動かない。つまり「残り時間が
+                        0 になった」も「第 3 項が減った」も観測できず、
+                        **時計が跳ね上がったことだけが手掛かり**になる。
+
+                        入った時点でその対局は時間切れ負けが確定していて、
+                        残るのは全滅を避けることだけ ([`timectl`] を参照)。
+                        だから一度立てたら下ろさない。
+
+                        加算は減っていくものが増える唯一の場面。持ち時間の
+                        加算 (`inc`) がある対局では毎手増えうるので、猶予の
+                        設定値ぶん近く跳ねたときだけ拾う。 */
+                        if let (Some(prev), Some(now), Some(g)) = (m.my_clock_secs, main, ext) {
+                            if g > 0 && now > prev + g / 2 {
+                                m.in_overtime = true;
+                            }
+                        }
                         m.my_clock_secs = main;
                         m.my_ext = ext;
                     } else {
@@ -2929,12 +2993,32 @@ fn think_and_play(
     if bh == m.last_played_hash {
         return;
     }
+    /* **もう読んでいる局面なら投げ直さない。**
+
+    `last_played_hash` は着手を**送った後**に立つ。読んでいる最中はまだ
+    立っていないので、毎周の「指し忘れの救済」がその隙に同じ局面をもう一度
+    積み、返ってきた瞬間に控えが投げられて**同じ手を 2 回送る**。
+
+    実戦の通信ログで気付いた — 60 手の対局で 58 回 `play` を送っており、
+    ほとんどの手が重複していた。サーバーは 2 通目を撥ねるので**棋譜は
+    正しいまま**で、そこが厄介だった。実害は指し手ではなく**探索が毎手
+    二度走ること** (持ち時間が実質半分になる)。
+
+    走っている探索と控えの両方を見る。控えだけを見ると、投げた直後の
+    `pending` が空の窓で素通りする。 */
+    if ctx.workers.iter().any(|w| {
+        w.mid.as_deref() == Some(mid)
+            && ((w.busy && !w.pondering && w.pending_hash == bh)
+                || w.pending.as_ref().is_some_and(|p| p.hash == bh))
+    }) {
+        return;
+    }
     if let Err(e) = ctx.ensure_engine() {
         ctx.log("info", &format!("エンジン初期化失敗: {e}"));
         return;
     }
     let clock_secs = m.my_clock_secs;
-    let ext = m.my_ext.unwrap_or(0);
+    let grace = m.my_ext.unwrap_or(0);
     let empties = board.empty_count();
     {
         let mut s = ctx.snap.lock().unwrap();
@@ -2950,7 +3034,8 @@ fn think_and_play(
     let (d, solve, band, cap) = time_budget(
         kuroobi::timectl::Situation {
             clock_secs,
-            ext_secs: ext,
+            in_overtime: m.in_overtime,
+            grace_secs: grace,
             empties,
             max_move_secs: ctx.engine_cfg_max_move,
             reserve_secs: ctx.engine_cfg_reserve,
@@ -3044,10 +3129,7 @@ fn pump_worker(ctx: &mut Ctx, i: usize) {
     };
     ctx.workers[i].pending_hash = p.hash;
     ctx.workers[i].pondering = false;
-    ctx.workers[i].sent_at = Some((
-        Instant::now(),
-        p.cap.unwrap_or(Duration::from_secs(60)),
-    ));
+    ctx.workers[i].sent_at = Some((Instant::now(), p.cap.unwrap_or(Duration::from_secs(60))));
     // 先読みを打ち切った直後は停止が立ったままなので戻す
     ctx.workers[i].stop.reset();
     let empties = p.board.empty_count();
@@ -3134,6 +3216,14 @@ fn collect_workers(ctx: &mut Ctx, matches: &mut HashMap<String, MatchState>) -> 
         let Some(m) = matches.get_mut(&mid) else {
             continue;
         };
+        /* **終わった対局へは指さない。** 相手が投了・中断すると、
+        こちらが読んでいる最中に終局する。解放は毎周やっているので
+        普段はここへ来ないが、順序に頼らず**指す直前でも確かめる**
+        (終局後の着手はサーバーに撥ねられ、ログだけが荒れる)。
+        自分の手番でなくなっている場合も同じ。 */
+        if m.over || m.my_color.is_none() || Some(m.turn) != m.my_color {
+            continue;
+        }
         let mstr = match mv.pos {
             Some(p) => coord(p),
             None => "pa".to_string(),
@@ -3184,6 +3274,11 @@ fn collect_workers(ctx: &mut Ctx, matches: &mut HashMap<String, MatchState>) -> 
                 continue;
             };
             let Some(m) = matches.get(&mid) else { continue };
+            // 終わった対局は読まない (終局で `turn` が ' ' になるため、
+            // 手番の判定だけだと「相手の手番」に見えて読み続けてしまう)
+            if m.over {
+                continue;
+            }
             // 自分の手番なら本探索の番。先読みはしない
             if m.my_color.is_none() || Some(m.turn) == m.my_color {
                 continue;
@@ -3232,6 +3327,7 @@ fn sync_matches(ctx: &mut Ctx, matches: &HashMap<String, MatchState>) {
             opp_secs: m.opp_secs,
             my_ext: m.my_ext,
             opp_ext: m.opp_ext,
+            in_overtime: m.in_overtime,
             players: m.players.clone(),
             gtype: m.gtype.clone(),
             ggf: m.ggf(id, None),
@@ -4049,6 +4145,69 @@ mod tests {
         assert_eq!(ext, None);
     }
 
+    /// 負の残り時間は 0 として読む。**解析に失敗させてはいけない** —
+    /// `None` は「時間制でない対局」の意味で、期限なしで読み始める。
+    #[test]
+    fn a_negative_clock_reads_as_zero() {
+        let (main, _, ext) = parse_clock("-0:03,0:0//02:00,0:0");
+        assert_eq!(main, Some(0));
+        assert_eq!(ext, Some(120));
+    }
+
+    /// **時計が跳ね上がったらロスタイムに入っている。**
+    ///
+    /// GGS の時計は 1 本しかなく、本時間を切らすと猶予ぶんが加算される
+    /// (`GAME_Clock.C::Update`)。表示の第 3 項は設定値なので動かない。
+    /// つまりこの跳ね上がりだけが手掛かりになる。
+    #[test]
+    fn a_jumping_clock_means_overtime() {
+        let board: Vec<String> = [
+            "|   A B C D E F G H",
+            "| 1 - - - - - - - - 1 ",
+            "| 2 - - - - - - - - 2 ",
+            "| 3 - - - - - - - - 3 ",
+            "| 4 - - - O * - - - 4 ",
+            "| 5 - - - * O - - - 5 ",
+            "| 6 - - - - - - - - 6 ",
+            "| 7 - - - - - - - - 7 ",
+            "| 8 - - - - - - - - 8 ",
+            "|   A B C D E F G H",
+            "|* to move",
+        ]
+        .iter()
+        .map(|s| s.to_string())
+        .collect();
+        let with_clock = |secs: &str| {
+            let mut b = vec![format!("|kuroobi  (1720.0 *) {secs}//02:00,0:0")];
+            b.extend(board.iter().cloned());
+            b
+        };
+
+        let mut m = MatchState::new();
+        apply_block(&mut m, &with_clock("00:04,0:0"), "kuroobi");
+        assert!(!m.in_overtime, "まだ本時間");
+        // 本時間を切らした → サーバーが 2:00 を足して寄こす
+        apply_block(&mut m, &with_clock("02:00,0:0"), "kuroobi");
+        assert!(m.in_overtime, "跳ね上がりを拾えていない");
+        // 一度入ったら下ろさない (以後は普通に減っていく)
+        apply_block(&mut m, &with_clock("01:12,0:0"), "kuroobi");
+        assert!(m.in_overtime, "下ろしてしまった");
+    }
+
+    /// 普通に減っていくだけの時計をロスタイムと誤認しない。
+    #[test]
+    fn a_falling_clock_is_not_overtime() {
+        let mut m = MatchState::new();
+        for secs in ["15:00,0:0", "14:31,0:0", "13:02,0:0", "00:41,0:0"] {
+            let b = vec![
+                format!("|kuroobi  (1720.0 *) {secs}//02:00,0:0"),
+                "|* to move".to_string(),
+            ];
+            apply_block(&mut m, &b, "kuroobi");
+            assert!(!m.in_overtime, "{secs} でロスタイム扱いになった");
+        }
+    }
+
     #[test]
     fn offer_real_format() {
         // 自分の申し込み (kuroobi が先頭) → incoming ではない
@@ -4332,7 +4491,7 @@ mod budget_tests {
         time_budget(
             kuroobi::timectl::Situation {
                 clock_secs: secs,
-                ext_secs: 120,
+                grace_secs: 120,
                 empties,
                 max_move_secs: max,
                 ..Default::default()
@@ -4349,7 +4508,7 @@ mod budget_tests {
         let (d, solve, band, c) = time_budget(
             kuroobi::timectl::Situation {
                 clock_secs: Some(30),
-                ext_secs: 120,
+                grace_secs: 120,
                 empties: 40,
                 ..Default::default()
             },

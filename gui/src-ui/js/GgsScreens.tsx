@@ -627,7 +627,11 @@ function GgsStandby({ snap, onNav }: { snap: GgsSnapshot; onNav: (id: NavId) => 
   const [rated, setRated] = useState(sb.rated);
 
   const names = snap.users.filter((u) => u.name !== snap.login).map((u) => u.name);
-  const state = sb.enabled ? (snap.matches.length ? '対局中' : '申し込み待ち') : '停止中';
+  /* **終局した対局は数えない。** 棋譜を見られるよう一覧には残す作りなので、
+     そのまま数えると一度対局しただけで「対局中」から戻らなくなる
+     (バックエンドの自動受諾も同じ判定を使っている) */
+  const playing = snap.matches.some((m) => !m.over);
+  const state = sb.enabled ? (playing ? '対局中' : '申し込み待ち') : '停止中';
 
   const toggle = () => void ggsApi.setStandby({
     // **禁じられているときは何が来ても false。** 画面が古くても通さない
