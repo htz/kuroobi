@@ -951,6 +951,7 @@ export function GgsSettings({ snap }: { snap: GgsSnapshot }) {
   const pace = 'fast';
   const [maxMove, setMaxMove] = useState(e.max_move_secs);
   const [reserve, setReserve] = useState(e.reserve_secs);
+  const [budgetUse, setBudgetUse] = useState(e.budget_use);
   const [cores, setCores] = useState(0);
   useEffect(() => { api.activity().then((a) => setCores(a.cores)).catch(() => {}); }, []);
 
@@ -978,7 +979,7 @@ export function GgsSettings({ snap }: { snap: GgsSnapshot }) {
   const apply = async () => {
     try {
       await ggsApi.setEngine(levels.depth, levels.solve, levels.band, ponder);
-      await ggsApi.setPacing(pace, maxMove, reserve);
+      await ggsApi.setPacing(pace, maxMove, reserve, budgetUse);
       await ggsApi.setAutoPlay(auto);
       await ggsApi.setWatchAnalysis(watch);
       await ggsApi.setUseBook(book);
@@ -1045,8 +1046,21 @@ export function GgsSettings({ snap }: { snap: GgsSnapshot }) {
                 <TextField numeric align="right" width={80} value={String(reserve)}
                            onChange={(x) => setReserve(Math.max(0, +x || 0))} />
               </Field>
+              <Field label="攻めて使う度合い">
+                <TextField numeric align="right" width={80} value={String(budgetUse)}
+                           onChange={(x) => setBudgetUse(Math.max(0.1, +x || 2.5))} />
+              </Field>
             </div>
           )}
+          <Note>
+            「攻めて使う度合い」は<b style={{ color: 'var(--text)' }}>1.0 で配分どおり</b>です。
+            反復深化は期限まで粘らず、次の段が入らないと判断した時点で返るので
+            (実測で期限の 47%)、1.0 だと配ったぶんの半分しか使いません。
+            既定の 2.5 では 15 分の対局で使用率が
+            <b style={{ color: 'var(--text)' }}>45% → 84%</b> に上がり、
+            同じ局面の到達深さが 20 秒 27 手 → 60 秒 30 手 と伸びました。
+            大きくするほど序盤に厚く使います。
+          </Note>
         </Section>
 
         <Section title="定石">

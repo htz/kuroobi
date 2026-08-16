@@ -106,6 +106,26 @@ pub struct Situation {
     pub max_move_secs: u64,
     /// 完全読み用に取っておく秒数。
     pub reserve_secs: u64,
+    /// **持ち時間をどれだけ攻めて使うか。** 1.0 で「配分どおり」。
+    ///
+    /// 反復深化は期限まで粘らず、次の段が入らないと判断した時点で返る
+    /// (実測で期限の 47%)。1.0 だと配ったぶんの半分しか使わない。
+    ///
+    /// **既定 2.5 は実測で決めた** (15 分の同期対局、非レート)。
+    ///
+    /// | 係数 | 持ち時間の使用率 |
+    /// |---|---|
+    /// | 1.0 相当 (変更前) | 45% |
+    /// | 2.0 | 71〜77% |
+    /// | **2.5** | **84%** |
+    ///
+    /// 足した時間は深さになる — 同じ局面で 20 秒 d27 / 40 秒 d29 /
+    /// 60 秒 d30。相手 (Rhapsody) は 98〜99% 使ってくるので、74% では譲り
+    /// すぎだった。48 手すべてで期限を守り (最悪 1.00 倍)、時間切れは 0。
+    ///
+    /// **0 以下や NaN は既定へ倒す。** 設定から来る値なので、壊れた値で
+    /// 対局を止めるより既定で動くほうがよい。
+    pub budget_use: f64,
     /// **較正した読切のノード毎秒**
     /// ([`crate::engine::Engine::measure_solve_nps`] が測る)。
     /// `None` なら読切の入り口は固定の階段で決める。
@@ -123,6 +143,7 @@ impl Default for Situation {
             empties: 60,
             max_move_secs: 0,
             reserve_secs: 20,
+            budget_use: 2.5,
             nps: None,
             threads: 1,
         }
@@ -263,7 +284,24 @@ const SOLVE_MAX_SHARE: f64 = 0.5;
 /// **時間切れの危険は増えない。** 期限は見張りが守っており (実測 1.02 倍)、
 /// 読切用の取り置きも `SOLVE_MAX_SHARE` も残り時間に対して掛かるので、
 /// 残りが減れば自動で締まる。
-const BUDGET_USE: f64 = 2.0;
+/// 設定値を検算して返す。**環境変数があればそちらが勝つ** (掃引用)。
+fn effective_budget_use(from_setting: f64) -> f64 {
+    static ENV: std::sync::OnceLock<Option<f64>> = std::sync::OnceLock::new();
+    let env = *ENV.get_or_init(|| {
+        std::env::var("BUDGET_USE")
+            .ok()
+            .and_then(|v| v.parse::<f64>().ok())
+            .filter(|v| v.is_finite() && *v > 0.0)
+    });
+    if let Some(v) = env {
+        return v;
+    }
+    if from_setting.is_finite() && from_setting > 0.0 {
+        from_setting
+    } else {
+        2.5
+    }
+}
 
 /* ---------- ロスタイム中の指し方 ----------
 
@@ -403,7 +441,7 @@ pub fn plan(s: Situation, base: Levels, pace: Pace) -> Plan {
 
     期限を伸ばせば、その 47% が伸びたぶんに比例して増える。**深く読める
     ようになるのであって、無駄に待つわけではない**。 */
-    let budget = budget * BUDGET_USE;
+    let budget = budget * effective_budget_use(s.budget_use);
     /* **残っている以上は約束しない。**
 
     `BUDGET_USE` で期限を伸ばすと、残り手数が 1 になったときに予算が
@@ -553,12 +591,19 @@ mod tests {
     /// 「残り手数で等分」に相当し、これも基準として残っている。
     #[test]
     fn tail_is_continuous_with_the_default() {
-        for empties in [60u8, 44, 30] {
+        /* **空きが少ない側は外した。** `budget_use` を上げると、残り手数が
+        1〜2 になったところで「残っている以上は約束しない」上限が先に効き、
+        どの配り方も同じ値に潰れる。**式が壊れたのではなく上限が勝っている
+        だけ**なので、式の関係は上限が効かない範囲で見る。 */
+        for empties in [60u8, 44] {
             let f = cap_secs(600, empties, Pace::Fast);
             assert!((cap_secs(600, empties, Pace::Tail(0.6)) - f).abs() < 1e-9);
             // 等分は既定より厚い (落とした側の式が生きていることの確認)
             assert!(cap_secs(600, empties, Pace::Tail(1.0)) > f);
         }
+        // 残り 2 手では上限が勝つ (配り方によらず配れるぶん全部)
+        let late = cap_secs(600, 30, Pace::Fast);
+        assert!((cap_secs(600, 30, Pace::Tail(1.0)) - late).abs() < 1e-9);
     }
 
     /// 係数が小さいほど序盤は薄い。
@@ -745,6 +790,53 @@ mod tests {
         .unwrap();
         assert!(ot <= Duration::from_secs_f64(OVERTIME_MAX_SECS));
         assert!(ot < main, "ロスタイムなのに本時間と同じだけ使っている");
+    }
+
+    /// **設定から来る値を信じきらない。** 壊れた値で対局を止めるより、
+    /// 既定で動くほうがよい。
+    #[test]
+    fn a_broken_budget_use_falls_back_to_the_default() {
+        let with = |v: f64| {
+            plan(
+                Situation {
+                    clock_secs: Some(600),
+                    empties: 44,
+                    budget_use: v,
+                    ..Situation::default()
+                },
+                BASE,
+                Pace::Fast,
+            )
+            .cap
+            .unwrap()
+        };
+        let good = with(2.5);
+        assert_eq!(with(0.0), good, "0 が既定へ倒れていない");
+        assert_ne!(with(1.0), good, "1.0 が既定と同じになっている");
+        assert_eq!(with(-1.0), good, "負の値が既定へ倒れていない");
+        assert_eq!(with(f64::NAN), good, "NaN が既定へ倒れていない");
+        assert_eq!(with(f64::INFINITY), good, "∞ が既定へ倒れていない");
+    }
+
+    /// 大きくするほど 1 手を長く取る。
+    #[test]
+    fn a_larger_budget_use_thinks_longer() {
+        let with = |v: f64| {
+            plan(
+                Situation {
+                    clock_secs: Some(600),
+                    empties: 44,
+                    budget_use: v,
+                    ..Situation::default()
+                },
+                BASE,
+                Pace::Fast,
+            )
+            .cap
+            .unwrap()
+        };
+        assert!(with(1.0) < with(2.0));
+        assert!(with(2.0) < with(3.0));
     }
 
     /// **全滅させない。** 残りの手を全部指し切っても猶予を使い切らない。

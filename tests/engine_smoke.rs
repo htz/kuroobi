@@ -320,3 +320,32 @@ fn report_deadline_utilisation() {
     }
     println!("  平均使用率 {:.0}%", sum / n as f64 * 100.0);
 }
+
+/// **時間を足すと深く読めるのか。**
+///
+/// 予算を伸ばす価値は「1 段でも深く届くか」で決まる。届かないなら伸ばす
+/// 意味は無い (使い切ることが目的ではない)。期限を 2 倍・3 倍にして、
+/// 到達深さがどう動くかを見る。
+#[test]
+#[ignore = "weights/ の実ファイルが必要 (git 管理外)"]
+fn report_depth_per_extra_time() {
+    let cfg = EngineConfig {
+        depth: 60,
+        solve_empties: 26,
+        band: 6,
+        threads: 8,
+        ..Default::default()
+    };
+    let mut engine = Engine::new(cfg).expect("engine init");
+    println!("  空き   期限   到達深さ");
+    for empties in [48u8, 44, 40] {
+        let board = replay_until_empties(KIFU, empties);
+        let mut line = format!("  {empties:4}  ");
+        for cap_s in [20u64, 40, 60] {
+            let t0 = std::time::Instant::now();
+            let mv = engine.choose_within(&board, Some(t0 + std::time::Duration::from_secs(cap_s)));
+            line.push_str(&format!(" {cap_s:3}s→d{:<3}", mv.depth));
+        }
+        println!("{line}");
+    }
+}

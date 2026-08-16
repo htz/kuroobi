@@ -165,8 +165,8 @@ export const ggsApi = {
   history: (name: string) => call('ggs_history', { name }),
   setEngine: (depth: number, solve: number, band: number, ponder: boolean) =>
     call('ggs_set_engine', { depth, solve, band, ponder }),
-  setPacing: (pace: string, maxMoveSecs: number, reserveSecs: number) =>
-    call('ggs_set_pacing', { pace, maxMoveSecs, reserveSecs }),
+  setPacing: (pace: string, maxMoveSecs: number, reserveSecs: number, budgetUse: number) =>
+    call('ggs_set_pacing', { pace, maxMoveSecs, reserveSecs, budgetUse }),
   setAutoPlay: (on: boolean) => call('ggs_set_auto_play', { on }),
   setWatchAnalysis: (on: boolean) => call('ggs_set_watch_analysis', { on }),
   setUseBook: (on: boolean) => call('ggs_set_use_book', { on }),

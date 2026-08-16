@@ -232,6 +232,8 @@ export interface EngineCfgView {
   max_move_secs: number;
   /** 読み切り用に残す秒数。 */
   reserve_secs: number;
+  /** 持ち時間をどれだけ攻めて使うか (1.0 = 配分どおり)。 */
+  budget_use: number;
 }
 
 export interface FetchedGgf {

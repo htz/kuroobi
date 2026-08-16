@@ -2361,6 +2361,7 @@ fn ggs_set_pacing(
     pace: String,
     max_move_secs: u64,
     reserve_secs: u64,
+    budget_use: f64,
 ) -> Result<(), String> {
     require_calibration()?;
     ggs_tx(&app)?
@@ -2368,6 +2369,7 @@ fn ggs_set_pacing(
             pace,
             max_move_secs,
             reserve_secs,
+            budget_use,
         })
         .map_err(|e| e.to_string())
 }

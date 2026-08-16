@@ -76,6 +76,8 @@ pub enum Cmd {
         pace: String,
         max_move_secs: u64,
         reserve_secs: u64,
+        /// 持ち時間をどれだけ攻めて使うか (`timectl::Situation::budget_use`)。
+        budget_use: f64,
     },
     SetAutoPlay(bool),
     SetWatchAnalysis(bool),
@@ -652,6 +654,11 @@ pub struct EngineCfgView {
     pub max_move_secs: u64,
     /// 読み切り用に取っておく秒数。
     pub reserve_secs: u64,
+    /// **持ち時間をどれだけ攻めて使うか。** 1.0 で「配分どおり」。
+    ///
+    /// 反復深化は期限まで粘らない (実測で 47%) ので、1.0 だと配ったぶんの
+    /// 半分しか使わない。既定 2.5 は実測 15 分の対局で使用率 45% → 84%。
+    pub budget_use: f64,
 }
 
 impl Default for EngineCfgView {
@@ -669,6 +676,7 @@ impl Default for EngineCfgView {
             pace: "fast".into(),
             max_move_secs: 0,
             reserve_secs: 20,
+            budget_use: 2.5,
         }
     }
 }
@@ -1276,6 +1284,7 @@ struct Ctx {
     engine_cfg_pace: String,
     engine_cfg_max_move: u64,
     engine_cfg_reserve: u64,
+    engine_cfg_budget_use: f64,
     /// 相手の手番中に先読みするか (画面から変えられる)。
     ///
     /// **時間制限があるときにしか効かない。** `pace` が「深さ固定」なら
@@ -1666,12 +1675,14 @@ pub fn run(
         engine_cfg_pace: "fast".into(),
         engine_cfg_max_move: 0,
         engine_cfg_reserve: 20,
+        engine_cfg_budget_use: 2.5,
         engine_cfg_ponder: true,
         ponder_at: None,
         workers: Vec::new(),
         worker_threads: resolve_threads(0),
     };
     ctx.snap.lock().unwrap().engine = EngineCfgView {
+        budget_use: 2.5,
         depth: 22,
         solve: 26,
         band: 6,
@@ -1723,8 +1734,9 @@ pub fn run(
                     pace,
                     max_move_secs,
                     reserve_secs,
+                    budget_use,
                 }) => {
-                    apply_pacing(&mut ctx, pace, max_move_secs, reserve_secs);
+                    apply_pacing(&mut ctx, pace, max_move_secs, reserve_secs, budget_use);
                     ctx.emit(true);
                 }
                 Ok(Cmd::SetAutoPlay(b)) => {
@@ -1990,8 +2002,9 @@ pub fn run(
                             pace,
                             max_move_secs,
                             reserve_secs,
+                            budget_use,
                         } => {
-                            apply_pacing(&mut ctx, pace, max_move_secs, reserve_secs);
+                            apply_pacing(&mut ctx, pace, max_move_secs, reserve_secs, budget_use);
                         }
                         Cmd::SetAutoPlay(b) => {
                             ctx.snap.lock().unwrap().auto_play = b;
@@ -2758,14 +2771,28 @@ fn ctx_send(writer: &mut TcpStream, cmd: &str) {
 }
 
 /// 持ち時間の使い方を差し替える。
-fn apply_pacing(ctx: &mut Ctx, pace: String, max_move_secs: u64, reserve_secs: u64) {
+fn apply_pacing(
+    ctx: &mut Ctx,
+    pace: String,
+    max_move_secs: u64,
+    reserve_secs: u64,
+    budget_use: f64,
+) {
+    // 壊れた値は既定へ倒す (timectl 側でも見るが、画面にも正しい値を出す)
+    let budget_use = if budget_use.is_finite() && budget_use > 0.0 {
+        budget_use
+    } else {
+        2.5
+    };
     ctx.engine_cfg_pace = pace.clone();
     ctx.engine_cfg_max_move = max_move_secs;
     ctx.engine_cfg_reserve = reserve_secs;
+    ctx.engine_cfg_budget_use = budget_use;
     let mut s = ctx.snap.lock().unwrap();
     s.engine.pace = pace;
     s.engine.max_move_secs = max_move_secs;
     s.engine.reserve_secs = reserve_secs;
+    s.engine.budget_use = budget_use;
     drop(s);
     ctx.dirty = true;
 }
@@ -3257,6 +3284,7 @@ fn think_and_play(
             empties,
             max_move_secs: ctx.engine_cfg_max_move,
             reserve_secs: ctx.engine_cfg_reserve,
+            budget_use: ctx.engine_cfg_budget_use,
             // **ワーカーで分けた後の数。** 2 つ同時に走るので、全体の数で
             // 見積もると読切に入りすぎる
             threads: ctx.worker_threads,
