@@ -83,7 +83,10 @@ function clockView(c: ClockBase | undefined, side: ClockSide, now: number): Cloc
     base = m.opp_secs; ext = m.opp_ext; raw = m.opp_clock;
     color = m.my_color === 'black' ? 'white' : m.my_color === 'white' ? 'black' : '';
   }
-  const active = !!m.turn && !!color && m.turn === color;
+  /* **終わった対局の時計は止める。** 終局しても最後の update で手番が
+     戻ることがあり、そのまま手元で刻み続けて「ロス」「時間切れ」まで
+     表示していた。実際にそれを見てロスタイム突入と誤認した。 */
+  const active = !m.over && !!m.turn && !!color && m.turn === color;
   if (base === null) return { text: raw || '', cls: active ? 'turn' : '' };
   const rem = base - (active ? (now - c.at) / 1000 : 0);
   if (rem >= 0) return { text: fmtSecs(rem), cls: active ? 'turn' : '' };

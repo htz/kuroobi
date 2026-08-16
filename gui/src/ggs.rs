@@ -1007,6 +1007,26 @@ impl MatchState {
 /// GGS の時計表記を秒に分解する。実形式 (実測ログより):
 /// `15:00,0:0//02:00,0:0` = 本時間15分 / (加算なし) / 延長2分。
 /// `/` 区切りの各要素は `,` の後ろに副フィールドを持つので先頭だけ読む。
+/// **終局行の石差を自分視点に直す。**
+///
+///     - match .48 2639 kuroobi 2644 Rhapsody s8r16 R +2.00
+///                    ~~~~~~~ この人から見て +2
+///
+/// 以前は自分の色 (`my_color == '*'`) で符号を決めていた。**同期対局では
+/// 面ごとに色が逆**なので、どちらの面を代表に選んだかで勝敗が反転する。
+/// 代表は「先に見た面」なので、届く順で結果が変わっていた。
+///
+/// 実際にレート戦の 1 局目 (+2.00 の勝ち) を「1 敗 −2 石差」と表示した。
+/// サーバーのレートは +85.3 動いており、画面だけが逆を向いていた。
+fn my_stone_diff(score: f32, first_name: &str, login: &str) -> i32 {
+    let v = score.round() as i32;
+    if first_name == login {
+        v
+    } else {
+        -v
+    }
+}
+
 /// **同期対局の鏡像から、相手が既に指した手を借りる。**
 ///
 /// `s8r16` は同じ開局を先後入れ替えて 2 面同時に打つので、2 面が同じ手順を
@@ -3690,7 +3710,8 @@ fn handle_match_end(
     matches: &mut HashMap<String, MatchState>,
 ) {
     // 実形式: ".13 1866 kuroobi 1411 fly 8 R +54.00  .82720"
-    // (黒番側が先に並ぶ。スコアは黒視点の小数、末尾はアーカイブ番号)
+    // (末尾はアーカイブ番号。スコアは**先に並ぶ側**から見た石差 —
+    //  「黒視点」と書いていたが誤りで、同期対局で勝敗が反転していた)
     let toks: Vec<&str> = rest.split_whitespace().collect();
     let id = toks.first().copied().unwrap_or("").to_string();
     if !rest.contains(login) {
@@ -3714,34 +3735,22 @@ fn handle_match_end(
     dropped.sort_by_key(|m| m.seen);
     let m = dropped.first();
     let re = score.map(|s| format!("{s:+.2}"));
-    let (kifu, ggf, opp, i_am_black) = match &m {
-        Some(m) if m.my_color.is_some() => (
-            m.kifu(),
-            m.ggf(&id, re.as_deref()),
-            m.opp_name.clone(),
-            m.my_color == Some('*'),
-        ),
-        Some(m) => (
-            m.kifu(),
-            m.ggf(&id, re.as_deref()),
-            m.opp_name.clone(),
-            first_name == login,
-        ),
-        None => (
-            String::new(),
-            String::new(),
-            String::new(),
-            first_name == login,
-        ),
+    let (kifu, ggf, opp) = match &m {
+        Some(m) => (m.kifu(), m.ggf(&id, re.as_deref()), m.opp_name.clone()),
+        None => (String::new(), String::new(), String::new()),
     };
-    let my_diff = score.map(|s| {
-        let v = s.round() as i32;
-        if i_am_black {
-            v
-        } else {
-            -v
-        }
-    });
+    /* **石差は「先に並ぶ側」から見た値。色ではない。**
+
+        - match .48 2639 kuroobi 2644 Rhapsody s8r16 R +2.00
+                       ~~~~~~~ この人から見て +2
+
+    以前は自分の色 (`my_color == '*'`) で符号を決めていた。**同期対局では
+    面ごとに色が逆**なので、どちらの面を代表に選んだかで勝敗が反転する。
+    代表は「先に見た面」なので、届く順で結果が変わっていた。
+
+    実際にレート戦の 1 局目 (+2.00 の勝ち) を「1 敗 −2 石差」と表示した。
+    サーバーのレートは +85.3 動いており、画面だけが逆を向いていた。 */
+    let my_diff = score.map(|s| my_stone_diff(s, first_name, login));
     let opp_for_note = if opp.is_empty() {
         "?".to_string()
     } else {
@@ -4461,6 +4470,26 @@ mod tests {
         // 相方が無ければ何も返さない
         ms.remove(".9.1");
         assert!(mirror_hint(&ms, ".9.0").is_none());
+    }
+
+    /// **石差の符号は「先に並ぶ側」から見る。色ではない。**
+    ///
+    /// 実際のレート戦 4 局の終局行で確かめる。1 局目は勝ちなのに
+    /// 「1 敗 −2 石差」と表示していた (サーバーのレートは +85.3 動いていた)。
+    #[test]
+    fn the_stone_diff_follows_the_first_name() {
+        // 自分が先に並ぶ → そのまま
+        assert_eq!(my_stone_diff(2.0, "kuroobi", "kuroobi"), 2);
+        assert_eq!(my_stone_diff(-10.0, "kuroobi", "kuroobi"), -10);
+        assert_eq!(my_stone_diff(-5.0, "kuroobi", "kuroobi"), -5);
+        assert_eq!(my_stone_diff(-7.0, "kuroobi", "kuroobi"), -7);
+        // 相手が先に並ぶ → 反転
+        // ".18 1720 htz 2580 kuroobi s8r16 U -6.00" は kuroobi の 6 石勝ち
+        assert_eq!(my_stone_diff(-6.0, "htz", "kuroobi"), 6);
+        assert_eq!(my_stone_diff(2.0, "htz", "kuroobi"), -2);
+        // 引き分けはどちらでも 0
+        assert_eq!(my_stone_diff(0.0, "kuroobi", "kuroobi"), 0);
+        assert_eq!(my_stone_diff(0.0, "htz", "kuroobi"), 0);
     }
 
     /// 待った・中断の申し出。**書式は実サーバーで採った** (資料に無い)。
