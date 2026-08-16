@@ -172,7 +172,8 @@ fn main() -> ExitCode {
     let mut plies = 6usize;
     let mut seed = 7u64;
     let mut a_path = PathBuf::from("weights/nnue-h16.bin"); // A = NNUE
-    let mut b_path = PathBuf::from("weights/linear.bin"); // B = linear
+    let mut b_path = PathBuf::from("weights/linear.bin"); // B = linear (--nnue-b で NNUE に)
+    let mut b_is_nnue = false;
     let mut it = std::env::args().skip(1);
     while let Some(a) = it.next() {
         match a.as_str() {
@@ -182,6 +183,16 @@ fn main() -> ExitCode {
             "--seed" => seed = it.next().unwrap().parse().unwrap(),
             "--nnue" => a_path = PathBuf::from(it.next().unwrap()),
             "--linear" => b_path = PathBuf::from(it.next().unwrap()),
+            /* **B 側にも NNUE を置けるようにする。**
+
+            元は「NNUE 対 線形」専用だった。学習し直した NNUE の採否は
+            **新旧の直接対戦**でしか決められない (val MSE と棋力は相関
+            しない — MSE 36.07 と 33.02 のモデルが 400 局で 52.5%、
+            95% CI 47.6..57.4 で有意差なし)。 */
+            "--nnue-b" => {
+                b_path = PathBuf::from(it.next().unwrap());
+                b_is_nnue = true;
+            }
             other => {
                 eprintln!("unknown option {other}");
                 return ExitCode::FAILURE;
@@ -194,18 +205,28 @@ fn main() -> ExitCode {
         eprintln!("failed to load nnue {}: {e}", a_path.display());
         return ExitCode::FAILURE;
     }
-    let mut lin = Evaluator::new(EGAROUCID_PATTERNS);
-    if let Err(e) = lin.load_weights(&b_path) {
-        eprintln!("failed to load linear {}: {e}", b_path.display());
-        return ExitCode::FAILURE;
-    }
     let a = Eval::Nn(nn);
-    let b = Eval::Linear(lin);
+    let b = if b_is_nnue {
+        let mut nb = Nnue::new(EGAROUCID_PATTERNS);
+        if let Err(e) = nb.load(&b_path) {
+            eprintln!("failed to load nnue {}: {e}", b_path.display());
+            return ExitCode::FAILURE;
+        }
+        Eval::Nn(nb)
+    } else {
+        let mut lin = Evaluator::new(EGAROUCID_PATTERNS);
+        if let Err(e) = lin.load_weights(&b_path) {
+            eprintln!("failed to load linear {}: {e}", b_path.display());
+            return ExitCode::FAILURE;
+        }
+        Eval::Linear(lin)
+    };
 
     println!(
-        "nnue_arena: A={} (NNUE) vs B={} (linear), depth {depth}, {games} games, {plies} random plies",
+        "nnue_arena: A={} (NNUE) vs B={} ({}), depth {depth}, {games} games, {plies} random plies",
         a_path.display(),
-        b_path.display()
+        b_path.display(),
+        if b_is_nnue { "NNUE" } else { "linear" }
     );
 
     let mut rng = Rng(seed ^ 0x9E37_79B9_7F4A_7C15);
