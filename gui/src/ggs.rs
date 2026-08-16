@@ -3358,7 +3358,12 @@ fn think_and_play(
     ctx.log(
         "info",
         &format!(
-            "{mid} {mstr}: {} {:+.2}{}",
+            /* **到達深さも出す。** これが無いと「深く読めているのに
+            負けている」のか「そもそも浅い」のかが切り分けられない。
+            実戦 7 局を解析したとき、中盤で 1 手あたり 0.55 石ずつ
+            失っていることは分かったが、原因が評価なのか深さなのかを
+            ログから判断できなかった。 */
+            "{mid} {mstr}: {} {:+.2}{}{}",
             if mv.from_book && mv.learned {
                 "定石 (実戦の学習)"
             } else if mv.from_book {
@@ -3367,7 +3372,13 @@ fn think_and_play(
                 "探索"
             },
             mv.value,
-            if mv.exact { " (完全読み)" } else { "" }
+            if mv.exact { " (完全読み)" } else { "" },
+            // 読切と定石は深さを持たない (0 が入る) ので出さない
+            if mv.depth > 0 {
+                format!(" 深さ {}", mv.depth)
+            } else {
+                String::new()
+            }
         ),
     );
 
@@ -3499,9 +3510,14 @@ fn collect_workers(ctx: &mut Ctx, matches: &mut HashMap<String, MatchState>) -> 
             ctx.log(
                 "info",
                 &format!(
-                    "着: {:.1}s{} {}",
+                    "着: {:.1}s{}{} {}",
                     t.as_secs_f32(),
                     if mv.cut { " (打切)" } else { "" },
+                    if mv.depth > 0 {
+                        format!(" 深さ {}", mv.depth)
+                    } else {
+                        String::new()
+                    },
                     if mv.exact { "読切" } else { "探索" }
                 ),
             );
