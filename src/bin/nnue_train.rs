@@ -13,8 +13,8 @@ use std::path::PathBuf;
 use std::process::ExitCode;
 use std::time::Instant;
 
-use kuroobi::evaluator::Evaluator;
-use kuroobi::nnue::Nnue;
+use kuroobi::evaluator::{Evaluator, STAGE_COUNT};
+use kuroobi::nnue::{sym_board, AdamState, Nnue};
 use kuroobi::pattern::EGAROUCID_PATTERNS;
 use kuroobi::trainer::{count_examples_binary, load_examples_binary_into, Example};
 
@@ -73,48 +73,94 @@ fn shards(counts: &[usize], order: &[usize], max: usize) -> Vec<Shard> {
     out
 }
 
-fn train_pass(nn: &mut Nnue, examples: &[Example], threads: usize, lr: f32) -> f64 {
-    if threads > 1 {
-        // Hogwild: workers share the model through raw pointers.
-        let view = nn.view();
-        let nn_ref = &*nn;
-        let chunk = examples.len().div_ceil(threads);
-        std::thread::scope(|scope| {
-            let mut handles = Vec::new();
-            for part in examples.chunks(chunk) {
-                let view = &view;
-                handles.push(scope.spawn(move || {
-                    let mut s = 0.0f64;
-                    for ex in part {
-                        let board = ex.board();
-                        let stage = Evaluator::stage(&board);
-                        let ix = nn_ref.indices(ex.black, ex.white);
-                        // SAFETY: `view` is from `nn`, borrowed immutably here.
-                        s += unsafe {
-                            nn_ref.train_black_shared(view, &ix, stage, ex.score as f32, lr)
-                        } as f64;
-                    }
-                    s
-                }));
-            }
-            handles.into_iter().map(|h| h.join().unwrap()).sum()
-        })
-    } else {
-        let mut s = 0.0f64;
-        for ex in examples {
-            let board = ex.board();
-            let stage = Evaluator::stage(&board);
-            let ix = nn.indices(ex.black, ex.white);
-            s += nn.train_black(&ix, stage, ex.score as f32, lr) as f64;
+fn train_pass(
+    nn: &mut Nnue,
+    adam: Option<&mut AdamState>,
+    examples: &[Example],
+    threads: usize,
+    lr: f32,
+    sym_seed: u64,
+) -> f64 {
+    // Hogwild: workers share the model (and the moments) through raw pointers.
+    // 単一スレッドも同じ経路で回す — 更新則を 2 通り持つと、片方だけ直して
+    // もう片方が古いまま、という食い違いが起きる。
+    let av = adam.map(|a| a.view());
+    let view = nn.view();
+    let nn_ref = &*nn;
+    let threads = threads.max(1);
+    let chunk = examples.len().div_ceil(threads).max(1);
+    std::thread::scope(|scope| {
+        let mut handles = Vec::new();
+        for (ti, part) in examples.chunks(chunk).enumerate() {
+            let view = &view;
+            let av = av.as_ref();
+            handles.push(scope.spawn(move || {
+                let mut s = 0.0f64;
+                /* **学習時の対称化。** 例ごとに 8 対称形から 1 つを引く。
+                盤面を回しても評価値は変わらないはずなので、ラベルはそのまま
+                でよい。事後の重み平均と違い、対称性を保ったまま当てはまりが
+                良くなる。種はスレッドごとに変える (同じ変換ばかり引かない)。 */
+                let mut rs = sym_seed ^ (0x9E37_79B9_7F4A_7C15u64.wrapping_mul(ti as u64 + 1));
+                for ex in part {
+                    let ex = if sym_seed == 0 {
+                        *ex
+                    } else {
+                        rs ^= rs >> 12;
+                        rs ^= rs << 25;
+                        rs ^= rs >> 27;
+                        let i = (rs.wrapping_mul(0x2545_F491_4F6C_DD1D) >> 61) as u8;
+                        Example {
+                            black: sym_board(ex.black, i),
+                            white: sym_board(ex.white, i),
+                            score: ex.score,
+                        }
+                    };
+                    let ex = &ex;
+                    let board = ex.board();
+                    let stage = Evaluator::stage(&board);
+                    // 学習例は黒番に正規化済みなので、手番側の石数 = 黒石数。
+                    let discs = ex.black.count_ones() as usize;
+                    let ix = nn_ref.indices(ex.black, ex.white);
+                    // SAFETY: `view` / `av` are from `nn` and its moments,
+                    // both borrowed immutably here.
+                    s += unsafe {
+                        match av {
+                            Some(a) => nn_ref.train_black_adam_shared(
+                                view,
+                                a,
+                                &ix,
+                                stage,
+                                discs,
+                                ex.score as f32,
+                                lr,
+                            ),
+                            None => nn_ref.train_black_shared(
+                                view,
+                                &ix,
+                                stage,
+                                discs,
+                                ex.score as f32,
+                                lr,
+                            ),
+                        }
+                    } as f64;
+                }
+                s
+            }));
         }
-        s
-    }
+        handles.into_iter().map(|h| h.join().unwrap()).sum()
+    })
 }
 
 fn main() -> ExitCode {
     let mut epochs = 10usize;
     let mut lr = 0.02f32;
     let mut decay = 1.0f32;
+    let mut adam = false;
+    let mut sym_train = false;
+    let mut fit_num = false;
+    let mut fit_lambda = 1000.0f64;
+    let mut swa_from = 0usize;
     let mut threads = 1usize;
     let mut limit: Option<usize> = None;
     let mut out = PathBuf::from("weights/nnue.bin");
@@ -130,6 +176,11 @@ fn main() -> ExitCode {
             "--epochs" => epochs = it.next().unwrap().parse().unwrap(),
             "--lr" => lr = it.next().unwrap().parse().unwrap(),
             "--decay" => decay = it.next().unwrap().parse().unwrap(),
+            "--adam" => adam = true,
+            "--sym-train" => sym_train = true,
+            "--fit-num" => fit_num = true,
+            "--fit-num-lambda" => fit_lambda = it.next().unwrap().parse().unwrap(),
+            "--swa" => swa_from = it.next().unwrap().parse().unwrap(),
             "--threads" => threads = it.next().unwrap().parse().unwrap(),
             "--limit" => limit = Some(it.next().unwrap().parse().unwrap()),
             "--out" => out = PathBuf::from(it.next().unwrap()),
@@ -208,6 +259,70 @@ fn main() -> ExitCode {
     }
     println!("nnue: H={} features={}", kuroobi::nnue::H, nn.n_features());
 
+    /* **石数表だけを閉じた式で当てはめる。** ネットワークを固定すれば
+    `num_w[stage][discs]` の最適値はそのバケツの残差の平均そのもの。学習で
+    近づけるより正確で速く、**この入力から得られる利得の上限**が分かる。
+    既存の重みは最適点にいるので、同じ lr で一緒に動かすと両方が中途半端に
+    なる (実測 -0.007 しか動かなかった)。 */
+    if fit_num {
+        let n_buckets = nn.num_w_len();
+        let mut sum = vec![0.0f64; n_buckets];
+        let mut cnt = vec![0u64; n_buckets];
+        // 表をゼロにしてから残差を数える (既存の値を二重に足さないため)
+        nn.set_num_w(&vec![0.0f32; n_buckets]);
+        for (fi, f) in data_files.iter().enumerate() {
+            let mut ex = Vec::new();
+            if let Err(e) = load_examples_binary_into(f, &mut ex, limit) {
+                eprintln!("load failed: {e}");
+                return ExitCode::FAILURE;
+            }
+            for e in &ex {
+                let board = e.board();
+                let stage = Evaluator::stage(&board);
+                let discs = e.black.count_ones() as usize;
+                let ix = nn.indices(e.black, e.white);
+                let r = e.score as f64 - nn.eval_indices(&board, &ix) as f64;
+                let b = stage * 65 + discs;
+                sum[b] += r;
+                cnt[b] += 1;
+            }
+            eprintln!("  fit-num: {}/{} files", fi + 1, data_files.len());
+        }
+        /* **標本の少ないバケツはゼロへ縮める。** (`--fit-num-lambda` で強さを変える) 素の平均だと 1 件しかない
+        バケツが生の残差 (110 石!) をそのまま採り、val をむしろ汚す。
+        `sum / (cnt + LAMBDA)` は ridge と同じ縮小で、件数が LAMBDA を
+        大きく超えるバケツだけが素の平均に近づく。 */
+        let table: Vec<f32> = sum
+            .iter()
+            .zip(&cnt)
+            .map(|(s, c)| (*s / (*c as f64 + fit_lambda)) as f32)
+            .collect();
+        let filled = cnt.iter().filter(|&&c| c > 0).count();
+        let mx = table.iter().fold(0.0f32, |m, &v| m.max(v.abs()));
+        println!("fit-num: {filled}/{n_buckets} buckets, max |correction| {mx:.3} discs");
+        nn.set_num_w(&table);
+        let vm = val_mse(&nn, &val);
+        println!("fit-num: val {vm:.4}");
+        if let Err(e) = nn.save(&out) {
+            eprintln!("save failed: {e}");
+            return ExitCode::FAILURE;
+        }
+        println!("  saved {}", out.display());
+        return ExitCode::SUCCESS;
+    }
+
+    /* Adam のモーメントは重み 2 本ぶん (H=16 で 78 MB)。要求されたときだけ
+    確保する — 素の SGD で回すときに払う理由がない。 */
+    let mut adam_state = adam.then(|| {
+        println!(
+            "adam: moments {} MB",
+            (nn.ft_len() + STAGE_COUNT * kuroobi::nnue::H) * 2 * 4 / 1_000_000
+        );
+        AdamState::new(&nn)
+    });
+
+    let mut swa_sum: Option<(Vec<f32>, usize)> = None;
+
     let mut state = 0x9E3779B97F4A7C15u64;
     let mut rand = move || {
         state ^= state >> 12;
@@ -253,7 +368,15 @@ fn main() -> ExitCode {
                 examples.swap(i, j);
             }
             let ts = Instant::now();
-            let sq: f64 = train_pass(&mut nn, &examples, threads, cur_lr);
+            let sym_seed = if sym_train { rand() | 1 } else { 0 };
+            let sq: f64 = train_pass(
+                &mut nn,
+                adam_state.as_mut(),
+                &examples,
+                threads,
+                cur_lr,
+                sym_seed,
+            );
             sq_total += sq;
             seen += examples.len();
             println!(
@@ -266,6 +389,25 @@ fn main() -> ExitCode {
                 examples.len() as f32 / ts.elapsed().as_secs_f32(),
             );
         }
+        /* **SWA: 一定 lr で雲を巡回した点を平均する。**
+        モデルは最適点の周りを lr に比例した半径で彷徨うので、鎖状に繋いだ
+        点列 (各段で lr を下げたもの) を平均しても意味がない — 古い点へ
+        引き戻されるだけで、実際 31.0437 が 31.0505 に悪化した。**同じ lr
+        で回した各エポックの重み**を平均して初めて中心に寄る。
+        `--swa N` で N エポック目以降を平均に取り込む。 */
+        if swa_from > 0 && epoch >= swa_from {
+            let w = nn.weights_flat();
+            match &mut swa_sum {
+                None => swa_sum = Some((w, 1usize)),
+                Some((acc, n)) => {
+                    for (a, x) in acc.iter_mut().zip(&w) {
+                        *a += x;
+                    }
+                    *n += 1;
+                }
+            }
+        }
+
         let train_mse = sq_total / seen.max(1) as f64;
         let vm = val_mse(&nn, &val);
         let is_best = vm < best;
@@ -283,6 +425,23 @@ fn main() -> ExitCode {
                 return ExitCode::FAILURE;
             }
             println!("  saved {}", out.display());
+        }
+    }
+    // 平均そのものを評価する。個々の点より良ければ、それが答え。
+    if let Some((acc, n)) = swa_sum {
+        let mean: Vec<f32> = acc.iter().map(|x| x / n as f32).collect();
+        let mut avg = Nnue::new(EGAROUCID_PATTERNS);
+        avg.set_weights_flat(&mean);
+        let vm = val_mse(&avg, &val);
+        println!("swa over {n} epochs: val {vm:.4}");
+        if vm < best {
+            best = vm;
+            let p = out.with_extension("swa.bin");
+            if let Err(e) = avg.save(&p) {
+                eprintln!("save failed: {e}");
+                return ExitCode::FAILURE;
+            }
+            println!("  saved {}", p.display());
         }
     }
     if best.is_finite() && !val.is_empty() {

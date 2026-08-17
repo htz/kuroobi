@@ -59,6 +59,15 @@ const H2: usize = 2 * H;
 /// 旧版が 14.3。32 ならどちらも素通しで、暴走だけを止める。
 const FT_CLAMP: f32 = 32.0;
 
+/// 石数表の幅 (0..=64 石)。線形評価の `NUM_TABLE_SIZE` と同じ。
+const NUM_TABLE_SIZE: usize = 65;
+
+/// 手番側の石数 = 石数表の添字。
+#[inline]
+fn num_index(board: &Board) -> usize {
+    board.player_bb().count_ones() as usize
+}
+
 /// `acc[i] += new[i] - old[i]` over `H2` int16 lanes (both perspectives).
 /// NEON on aarch64 (int16x8, so H2=32 is four vector ops), scalar elsewhere.
 #[inline]
@@ -186,10 +195,13 @@ unsafe fn accumulate_rows(
     }
 }
 
-/// `Σ_h relu(acc[h]) · w[h]` (i64) over H int16 lanes, ReLU on the fly.
+/// `Σ_h relu(acc[h] + b[h]) · w[h]` (i64) over H int16 lanes, ReLU on the fly.
+///
+/// **バイアスはここで足す。** ステージごとに違うので累算器には焼き込めない
+/// (1 手ごとにステージが変わる)。加算 1 本ぶんの増分で済む。
 /// NEON widening multiply on aarch64, scalar elsewhere. Called once per leaf.
 #[inline]
-fn readout_dot(acc: &[i16], w: &[i16]) -> i64 {
+fn readout_dot(acc: &[i16], b: &[i16], w: &[i16]) -> i64 {
     #[cfg(all(target_arch = "aarch64", not(feature = "nnue-scalar")))]
     unsafe {
         use std::arch::aarch64::*;
@@ -197,7 +209,8 @@ fn readout_dot(acc: &[i16], w: &[i16]) -> i64 {
         let mut sum = vdupq_n_s32(0);
         let mut h = 0;
         while h + 8 <= H {
-            let a = vmaxq_s16(vld1q_s16(acc.as_ptr().add(h)), zero); // ReLU
+            let s = vaddq_s16(vld1q_s16(acc.as_ptr().add(h)), vld1q_s16(b.as_ptr().add(h)));
+            let a = vmaxq_s16(s, zero); // ReLU
             let ww = vld1q_s16(w.as_ptr().add(h));
             sum = vmlal_s16(sum, vget_low_s16(a), vget_low_s16(ww));
             sum = vmlal_high_s16(sum, a, ww);
@@ -205,7 +218,10 @@ fn readout_dot(acc: &[i16], w: &[i16]) -> i64 {
         }
         let mut acc64 = vaddvq_s32(sum) as i64;
         while h < H {
-            acc64 += (*acc.get_unchecked(h)).max(0) as i64 * *w.get_unchecked(h) as i64;
+            acc64 += (*acc.get_unchecked(h))
+                .wrapping_add(*b.get_unchecked(h))
+                .max(0) as i64
+                * *w.get_unchecked(h) as i64;
             h += 1;
         }
         acc64
@@ -214,7 +230,7 @@ fn readout_dot(acc: &[i16], w: &[i16]) -> i64 {
     {
         let mut sum: i64 = 0;
         for h in 0..H {
-            sum += acc[h].max(0) as i64 * w[h] as i64;
+            sum += acc[h].wrapping_add(b[h]).max(0) as i64 * w[h] as i64;
         }
         sum
     }
@@ -240,12 +256,136 @@ pub struct NnueView {
     ft_bias: *mut f32,
     out_w: *mut f32,
     out_b: *mut f32,
+    num_w: *mut f32,
 }
 // SAFETY: the workers only ever add to disjoint-ish sparse cells; racing
 // updates cost at most a lost step, never memory unsafety (same argument as
 // the linear trainer's `WeightView`).
 unsafe impl Send for NnueView {}
 unsafe impl Sync for NnueView {}
+
+/// Adam の 1 次・2 次モーメント。**素の SGD だと稀なセルが万年未学習になる**
+/// ため用意した。
+///
+/// feature transformer は 61 万セル × H の巨大な疎表で、1 局面が触るのは
+/// 64 行だけ。素の SGD の歩幅は勾配そのものなので、**滅多に出ない盤面形は
+/// 滅多に更新されない**。Adam は 2 次モーメントで割るので、更新回数の少ない
+/// セルほど 1 回の歩幅が大きくなる (Adagrad 系が疎な埋め込みに効くのと同じ
+/// 理屈)。
+///
+/// **バイアス補正は入れていない。** 学習例が 13 億あるので、m/v がゼロ初期化
+/// から立ち上がる最初の数千歩の目減りは無視できる。線形側の [`AdamOptimizer`]
+/// はセルごとに歩数を持つが、こちらはセル数が 2 桁多く、歩数表だけで 39 MB
+/// 増えるので採らない。
+///
+/// [`AdamOptimizer`]: crate::evaluator::AdamOptimizer
+pub struct AdamState {
+    pub beta1: f32,
+    pub beta2: f32,
+    pub eps: f32,
+    m_ft: Vec<f32>,
+    v_ft: Vec<f32>,
+    m_ft_bias: Vec<f32>,
+    v_ft_bias: Vec<f32>,
+    m_out_w: Vec<f32>,
+    v_out_w: Vec<f32>,
+    m_out_b: Vec<f32>,
+    v_out_b: Vec<f32>,
+    m_num_w: Vec<f32>,
+    v_num_w: Vec<f32>,
+}
+
+impl AdamState {
+    pub fn new(nn: &Nnue) -> AdamState {
+        AdamState {
+            beta1: 0.9,
+            beta2: 0.999,
+            eps: 1e-8,
+            m_ft: vec![0.0; nn.ft.len()],
+            v_ft: vec![0.0; nn.ft.len()],
+            m_ft_bias: vec![0.0; STAGE_COUNT * H],
+            v_ft_bias: vec![0.0; STAGE_COUNT * H],
+            m_out_w: vec![0.0; nn.out_w.len()],
+            v_out_w: vec![0.0; nn.out_w.len()],
+            m_out_b: vec![0.0; STAGE_COUNT],
+            v_out_b: vec![0.0; STAGE_COUNT],
+            m_num_w: vec![0.0; STAGE_COUNT * NUM_TABLE_SIZE],
+            v_num_w: vec![0.0; STAGE_COUNT * NUM_TABLE_SIZE],
+        }
+    }
+
+    /// Raw pointers for Hogwild, mirroring [`Nnue::view`].
+    pub fn view(&mut self) -> AdamView {
+        AdamView {
+            m_ft: self.m_ft.as_mut_ptr(),
+            v_ft: self.v_ft.as_mut_ptr(),
+            m_ft_bias: self.m_ft_bias.as_mut_ptr(),
+            v_ft_bias: self.v_ft_bias.as_mut_ptr(),
+            m_out_w: self.m_out_w.as_mut_ptr(),
+            v_out_w: self.v_out_w.as_mut_ptr(),
+            m_out_b: self.m_out_b.as_mut_ptr(),
+            v_out_b: self.v_out_b.as_mut_ptr(),
+            m_num_w: self.m_num_w.as_mut_ptr(),
+            v_num_w: self.v_num_w.as_mut_ptr(),
+            beta1: self.beta1,
+            beta2: self.beta2,
+            eps: self.eps,
+        }
+    }
+}
+
+/// Hogwild view of [`AdamState`].
+#[derive(Clone, Copy)]
+pub struct AdamView {
+    m_ft: *mut f32,
+    v_ft: *mut f32,
+    m_ft_bias: *mut f32,
+    v_ft_bias: *mut f32,
+    m_out_w: *mut f32,
+    v_out_w: *mut f32,
+    m_out_b: *mut f32,
+    v_out_b: *mut f32,
+    m_num_w: *mut f32,
+    v_num_w: *mut f32,
+    beta1: f32,
+    beta2: f32,
+    eps: f32,
+}
+// SAFETY: same argument as `NnueView` — races lose a step, never memory safety.
+unsafe impl Send for AdamView {}
+unsafe impl Sync for AdamView {}
+
+impl AdamView {
+    /// One Adam step for the cell at `i`, returning the weight delta to apply.
+    #[inline]
+    unsafe fn step(&self, m: *mut f32, v: *mut f32, i: usize, grad: f32, lr: f32) -> f32 {
+        let mp = m.add(i);
+        let vp = v.add(i);
+        *mp = self.beta1 * *mp + (1.0 - self.beta1) * grad;
+        *vp = self.beta2 * *vp + (1.0 - self.beta2) * grad * grad;
+        lr * *mp / ((*vp).sqrt() + self.eps)
+    }
+}
+
+/// 盤面ビットボードに対称変換 i (0..8) を掛ける。
+///
+/// **学習時の水増しに使う。** 事後の重み平均 (`nnue_symmetrize`) は対称性を
+/// 射影で強制するだけだが、8 対称形を学習例として回せば**対称なまま当てはまり
+/// も良くなる**。推論コストはゼロ。
+pub fn sym_board(b: u64, i: u8) -> u64 {
+    let mut b = b;
+    if i >= 4 {
+        b = crate::bitboard::mirror_horizontal(b);
+        for _ in 0..(i - 4) {
+            b = crate::bitboard::rotate_90(b);
+        }
+    } else {
+        for _ in 0..i {
+            b = crate::bitboard::rotate_90(b);
+        }
+    }
+    b
+}
 
 /// 変換 i (0..8) を 1 マスに適用する。
 fn sym_square(sq: u8, i: u8) -> u8 {
@@ -341,11 +481,29 @@ pub struct Nnue {
     /// Feature transformer: `ft[feature * H + h]`. Shared across stages.
     ft: Vec<f32>,
     /// Accumulator bias, added once: `[H]`.
+    /// ステージごとの accumulator バイアス: `ft_bias[stage * H + h]`。
+    ///
+    /// **ReLU の閾値を局面の進行度で変えるため。** 読み出し (`out_w`) は
+    /// 最初からステージ別なのに、非線形の閾値だけが全 61 ステージ共通だった。
+    /// 序盤と終盤では発火すべき隠れ次元が違うはずで、ここを分けるのは
+    /// 976 個 (61 x 16) で済む。
+    ///
+    /// **累算器にはバイアスを入れない。** 1 手ごとにステージが変わるので、
+    /// 増分維持している累算器に焼き込むと毎手つけ替えが要る。読み出しの
+    /// 直前に足す方が安く、増分の不変条件も壊れない。
     ft_bias: Vec<f32>,
     /// Per-stage read-out weights: `out_w[stage * H + h]`.
     out_w: Vec<f32>,
     /// Per-stage read-out bias: `[STAGE_COUNT]`.
     out_b: Vec<f32>,
+    /// 手番側の石数ごとの補正: `num_w[stage * NUM_TABLE_SIZE + discs]`。
+    ///
+    /// **局所パターンだけでは出せない大域情報を足す。** `stage` は
+    /// `60 - 空きマス数` なのでステージ内では総石数が固定で、手番側の石数は
+    /// **石差そのもの**を決める。線形評価は最初からこの表を持っていたが
+    /// (`evaluator::num_weights`)、NNUE には無く、16 次元の隠れ表現が自力で
+    /// 覚えるしかなかった。読み出しは表引き 1 回で、探索の速度に影響しない。
+    num_w: Vec<f32>,
 
     // Quantized inference copies (built by `quantize`).
     /// Interleaved transformer: `ftc_i16[feature*H2 ..]` holds the Black row
@@ -357,7 +515,7 @@ pub struct Nnue {
     /// Halves the bytes touched per mask versus striding the interleaved table.
     ft_b_i16: Vec<i16>,
     ft_w_i16: Vec<i16>,
-    ft_bias_i16: [i16; H2],
+    ft_bias_i16: Vec<i16>,
     out_w_i16: Vec<i16>,
     /// Scale back the i64 read-out accumulation into disc-difference f32:
     /// `1 / (ft_scale * w_scale)`.
@@ -365,11 +523,11 @@ pub struct Nnue {
 
     // Precision-comparison paths (i32 and interleaved f32), built by quantize.
     ftc_i32: Vec<i32>,
-    ft_bias_i32: [i32; H2],
+    ft_bias_i32: Vec<i32>,
     out_w_i32: Vec<i32>,
     out_scale_i32: f32,
     ftc_f32: Vec<f32>,
-    ft_bias_f32: [f32; H2],
+    ft_bias_f32: Vec<f32>,
 }
 
 impl Nnue {
@@ -400,21 +558,22 @@ impl Nnue {
             mask_off,
             n_features,
             ft: vec![0.0; n_features * H],
-            ft_bias: vec![0.0; H],
+            ft_bias: vec![0.0; STAGE_COUNT * H],
             out_w: vec![0.0; STAGE_COUNT * H],
             out_b: vec![0.0; STAGE_COUNT],
+            num_w: vec![0.0; STAGE_COUNT * NUM_TABLE_SIZE],
             ftc_i16: Vec::new(),
             ft_b_i16: Vec::new(),
             ft_w_i16: Vec::new(),
-            ft_bias_i16: [0; H2],
+            ft_bias_i16: vec![0; STAGE_COUNT * H],
             out_w_i16: vec![0; STAGE_COUNT * H],
             out_scale: 0.0,
             ftc_i32: Vec::new(),
-            ft_bias_i32: [0; H2],
+            ft_bias_i32: vec![0; STAGE_COUNT * H],
             out_w_i32: vec![0; STAGE_COUNT * H],
             out_scale_i32: 0.0,
             ftc_f32: Vec::new(),
-            ft_bias_f32: [0.0; H2],
+            ft_bias_f32: vec![0.0; STAGE_COUNT * H],
         }
     }
 
@@ -515,10 +674,8 @@ impl Nnue {
                 self.ftc_i16[f * H2 + h] = q(self.ft[f * H + h], ft_scale);
             }
         }
-        for h in 0..H {
-            let b = q(self.ft_bias[h], ft_scale);
-            self.ft_bias_i16[h] = b;
-            self.ft_bias_i16[H + h] = b;
+        for i in 0..STAGE_COUNT * H {
+            self.ft_bias_i16[i] = q(self.ft_bias[i], ft_scale);
         }
         self.out_w_i16 = self.out_w.iter().map(|&v| q(v, w_scale)).collect();
 
@@ -571,10 +728,11 @@ impl Nnue {
             }
         }
         for h in 0..H {
-            self.ft_bias_i32[h] = (self.ft_bias[h] * ft_scale32).round() as i32;
-            self.ft_bias_i32[H + h] = self.ft_bias_i32[h];
-            self.ft_bias_f32[h] = self.ft_bias[h];
-            self.ft_bias_f32[H + h] = self.ft_bias[h];
+            for st in 0..STAGE_COUNT {
+                let i = st * H + h;
+                self.ft_bias_i32[i] = (self.ft_bias[i] * ft_scale32).round() as i32;
+                self.ft_bias_f32[i] = self.ft_bias[i];
+            }
         }
         self.out_w_i32 = self
             .out_w
@@ -618,7 +776,7 @@ impl Nnue {
             *w = next() * 0.1;
         }
         for b in &mut self.ft_bias {
-            *b = 0.1; // positive so ReLU units start active
+            *b = 0.1; // positive so ReLU units start active (全ステージ同値から)
         }
     }
 
@@ -663,10 +821,9 @@ impl Nnue {
         } else {
             &self.ft_w_i16
         };
-        let mut acc = [0i16; H];
-        acc.copy_from_slice(&self.ft_bias_i16[..H]); // halves are equal
-                                                     // SAFETY: indices stay inside their pattern's table (the invariant the
-                                                     // scalar sum relies on), so every base + H is in bounds.
+        let mut acc = [0i16; H]; // バイアスは読み出しで足す
+                                 // SAFETY: indices stay inside their pattern's table (the invariant the
+                                 // scalar sum relies on), so every base + H is in bounds.
         unsafe {
             accumulate_rows(
                 &mut acc,
@@ -677,8 +834,9 @@ impl Nnue {
             );
         }
         let ow = &self.out_w_i16[stage * H..stage * H + H];
-        let sum = readout_dot(&acc, ow);
-        self.out_b[stage] + sum as f32 * self.out_scale
+        let fb = &self.ft_bias_i16[stage * H..stage * H + H];
+        let sum = readout_dot(&acc, fb, ow);
+        self.out_b[stage] + sum as f32 * self.out_scale + self.num_term(board, stage)
     }
 
     /// Evaluate a board from scratch (rebuilds indices). Convenience for
@@ -692,12 +850,20 @@ impl Nnue {
     pub fn eval_indices(&self, board: &Board, indices: &PatternIndices) -> f32 {
         let stage = crate::evaluator::Evaluator::stage(board);
         let feats = self.features_player(indices, board.player());
-        self.forward(&feats, stage)
+        self.forward(&feats, stage) + self.num_term(board, stage)
     }
 
-    /// Forward from explicit features + stage.
+    /// 石数の補正項。`stage` 内では総石数が固定なので、手番側の石数は石差を
+    /// 一意に決める。
+    #[inline]
+    fn num_term(&self, board: &Board, stage: usize) -> f32 {
+        self.num_w[stage * NUM_TABLE_SIZE + num_index(board)]
+    }
+
+    /// Forward from explicit features + stage (石数の補正は含まない)。
     fn forward(&self, feats: &[u32; MAX_MASKS], stage: usize) -> f32 {
-        let mut acc = self.ft_bias.clone();
+        let mut acc = [0.0f32; H];
+        acc.copy_from_slice(&self.ft_bias[stage * H..stage * H + H]);
         for &f in feats.iter().take(self.n_masks) {
             let base = f as usize * H;
             let row = &self.ft[base..base + H];
@@ -743,7 +909,8 @@ impl Nnue {
     /// leaf eval is O(H). Needs [`quantize`](Self::quantize).
     pub fn accumulator(&self, board: &Board) -> Accumulator {
         let indices = self.indexer.init(board.black, board.white);
-        let mut acc = self.ft_bias_i16;
+        // バイアスはステージ別なので、ここでは足さない (読み出しで足す)。
+        let mut acc = [0i16; H2];
         for m in 0..self.n_masks {
             let raw = indices.raw()[m] as usize;
             let f = (self.mask_off[m] as usize + raw) * H2;
@@ -816,9 +983,10 @@ impl Nnue {
             &acc.acc[H..H2]
         };
         let ow = &self.out_w_i16[stage * H..stage * H + H];
-        // out = bias + scale · Σ relu(acc[h]) · out_w[h]
-        let sum = readout_dot(v, ow);
-        self.out_b[stage] + sum as f32 * self.out_scale
+        let fb = &self.ft_bias_i16[stage * H..stage * H + H];
+        // out = bias + scale · Σ relu(acc[h] + fb[h]) · out_w[h] + 石数の補正
+        let sum = readout_dot(v, fb, ow);
+        self.out_b[stage] + sum as f32 * self.out_scale + self.num_term(board, stage)
     }
 
     /// i32-precision read-out (finer quantization than i16).
@@ -831,11 +999,12 @@ impl Nnue {
             &acc.acc[H..H2]
         };
         let ow = &self.out_w_i32[stage * H..stage * H + H];
+        let fb = &self.ft_bias_i32[stage * H..stage * H + H];
         let mut sum: i64 = 0;
         for h in 0..H {
-            sum += v[h].max(0) as i64 * ow[h] as i64;
+            sum += (v[h] + fb[h]).max(0) as i64 * ow[h] as i64;
         }
-        self.out_b[stage] + sum as f32 * self.out_scale_i32
+        self.out_b[stage] + sum as f32 * self.out_scale_i32 + self.num_term(board, stage)
     }
 
     /// f32-precision read-out (reference, no quantization).
@@ -848,13 +1017,15 @@ impl Nnue {
             &acc.acc[H..H2]
         };
         let ow = &self.out_w[stage * H..stage * H + H];
+        let fb = &self.ft_bias_f32[stage * H..stage * H + H];
         let mut sum = 0.0f32;
         for h in 0..H {
-            if v[h] > 0.0 {
-                sum += v[h] * ow[h];
+            let a = v[h] + fb[h];
+            if a > 0.0 {
+                sum += a * ow[h];
             }
         }
-        self.out_b[stage] + sum
+        self.out_b[stage] + sum + self.num_term(board, stage)
     }
 
     /// One SGD step on a Black-to-move example at `stage`. Returns squared error.
@@ -867,13 +1038,15 @@ impl Nnue {
         &mut self,
         indices: &PatternIndices,
         stage: usize,
+        discs: usize,
         target: f32,
         lr: f32,
     ) -> f32 {
         let feats = self.features_black(indices);
 
         // Forward, keeping the pre-ReLU accumulator.
-        let mut acc = self.ft_bias.clone();
+        let mut acc = [0.0f32; H];
+        acc.copy_from_slice(&self.ft_bias[stage * H..stage * H + H]);
         for &f in feats.iter().take(self.n_masks) {
             let base = f as usize * H;
             for h in 0..H {
@@ -881,7 +1054,8 @@ impl Nnue {
             }
         }
         let ow_off = stage * H;
-        let mut out = self.out_b[stage];
+        let num_off = stage * NUM_TABLE_SIZE + discs;
+        let mut out = self.out_b[stage] + self.num_w[num_off];
         for h in 0..H {
             if acc[h] > 0.0 {
                 out += self.out_w[ow_off + h] * acc[h];
@@ -890,6 +1064,7 @@ impl Nnue {
 
         let err = out - target;
         let g = lr * err;
+        self.num_w[num_off] -= g;
 
         // Read-out gradients, and delta[h] = d out / d acc[h] using the OLD
         // read-out weights (ReLU-gated). Compute delta before mutating out_w.
@@ -904,8 +1079,10 @@ impl Nnue {
 
         // Transformer gradients: d acc[h] / d ft_bias[h] = 1, likewise for each
         // active feature's row. Step = lr · err · delta[h].
+        // バイアスは今のステージの行だけが動く。
         for h in 0..H {
-            self.ft_bias[h] = (self.ft_bias[h] - g * delta[h]).clamp(-FT_CLAMP, FT_CLAMP);
+            let i = stage * H + h;
+            self.ft_bias[i] = (self.ft_bias[i] - g * delta[h]).clamp(-FT_CLAMP, FT_CLAMP);
         }
         for &f in feats.iter().take(self.n_masks) {
             let base = f as usize * H;
@@ -917,6 +1094,62 @@ impl Nnue {
         err * err
     }
 
+    /// 全パラメータを 1 本の平坦な配列として出す (SWA / 重み平均のため)。
+    /// 並びは [`save`](Self::save) と同じ。
+    pub fn weights_flat(&self) -> Vec<f32> {
+        let mut v = Vec::with_capacity(
+            self.ft.len()
+                + self.ft_bias.len()
+                + self.out_w.len()
+                + self.out_b.len()
+                + self.num_w.len(),
+        );
+        v.extend_from_slice(&self.ft);
+        v.extend_from_slice(&self.ft_bias);
+        v.extend_from_slice(&self.out_w);
+        v.extend_from_slice(&self.out_b);
+        v.extend_from_slice(&self.num_w);
+        v
+    }
+
+    /// [`weights_flat`](Self::weights_flat) の逆。
+    pub fn set_weights_flat(&mut self, v: &[f32]) {
+        let mut o = 0;
+        for dst in [
+            &mut self.ft,
+            &mut self.ft_bias,
+            &mut self.out_w,
+            &mut self.out_b,
+            &mut self.num_w,
+        ] {
+            let n = dst.len();
+            dst.copy_from_slice(&v[o..o + n]);
+            o += n;
+        }
+        assert_eq!(o, v.len(), "weights_flat length mismatch");
+    }
+
+    /// 石数表を直に入れ替える。**最小二乗の閉じた解を外から流し込む**ため。
+    ///
+    /// ネットワークを固定すると、`num_w[stage][discs]` の最適値は
+    /// そのバケツの**残差の平均**そのものになる。学習で近づけるより、
+    /// 1 パスで数えて入れる方が速く、しかも**この入力から得られる利得の
+    /// 上限**が正確に出る。
+    pub fn set_num_w(&mut self, v: &[f32]) {
+        assert_eq!(v.len(), self.num_w.len(), "num_w length mismatch");
+        self.num_w.copy_from_slice(v);
+    }
+
+    /// 石数表の長さ (STAGE_COUNT x NUM_TABLE_SIZE)。
+    pub fn num_w_len(&self) -> usize {
+        self.num_w.len()
+    }
+
+    /// Number of feature-transformer weights (features x H).
+    pub fn ft_len(&self) -> usize {
+        self.ft.len()
+    }
+
     /// Raw mutable pointers to the trainable arrays, for lock-free (Hogwild)
     /// parallel SGD. Sound while the workers are the only access to the model
     /// and updates stay sparse (a handful of feature rows + one read-out row).
@@ -926,6 +1159,7 @@ impl Nnue {
             ft_bias: self.ft_bias.as_mut_ptr(),
             out_w: self.out_w.as_mut_ptr(),
             out_b: self.out_b.as_mut_ptr(),
+            num_w: self.num_w.as_mut_ptr(),
         }
     }
 
@@ -938,6 +1172,7 @@ impl Nnue {
         view: &NnueView,
         indices: &PatternIndices,
         stage: usize,
+        discs: usize,
         target: f32,
         lr: f32,
     ) -> f32 {
@@ -945,7 +1180,7 @@ impl Nnue {
 
         let mut acc = [0.0f32; H];
         for h in 0..H {
-            acc[h] = *view.ft_bias.add(h);
+            acc[h] = *view.ft_bias.add(stage * H + h);
         }
         for &f in feats.iter().take(self.n_masks) {
             let base = f as usize * H;
@@ -954,7 +1189,8 @@ impl Nnue {
             }
         }
         let ow_off = stage * H;
-        let mut out = *view.out_b.add(stage);
+        let num_off = stage * NUM_TABLE_SIZE + discs;
+        let mut out = *view.out_b.add(stage) + *view.num_w.add(num_off);
         for h in 0..H {
             if acc[h] > 0.0 {
                 out += *view.out_w.add(ow_off + h) * acc[h];
@@ -972,8 +1208,9 @@ impl Nnue {
             }
         }
         *view.out_b.add(stage) -= g;
+        *view.num_w.add(num_off) -= g;
         for h in 0..H {
-            let p = view.ft_bias.add(h);
+            let p = view.ft_bias.add(stage * H + h);
             *p = (*p - g * delta[h]).clamp(-FT_CLAMP, FT_CLAMP);
         }
         for &f in feats.iter().take(self.n_masks) {
@@ -986,13 +1223,92 @@ impl Nnue {
         err * err
     }
 
+    /// Hogwild Adam step; same forward/backward as [`train_black_shared`],
+    /// only the weight update differs.
+    ///
+    /// # Safety
+    /// `view` / `adam` must come from this model and its [`AdamState`], and no
+    /// `&mut` access to either may be live.
+    // 学習手は「モデル・モーメント・局面・ラベル・歩幅」を全部受ける必要が
+    // あり、構造体に束ねると 1 例ごとに構築が入る (13 億回走る)。
+    #[allow(clippy::too_many_arguments)]
+    pub unsafe fn train_black_adam_shared(
+        &self,
+        view: &NnueView,
+        adam: &AdamView,
+        indices: &PatternIndices,
+        stage: usize,
+        discs: usize,
+        target: f32,
+        lr: f32,
+    ) -> f32 {
+        let feats = self.features_black(indices);
+
+        let mut acc = [0.0f32; H];
+        for h in 0..H {
+            acc[h] = *view.ft_bias.add(stage * H + h);
+        }
+        for &f in feats.iter().take(self.n_masks) {
+            let base = f as usize * H;
+            for h in 0..H {
+                acc[h] += *view.ft.add(base + h);
+            }
+        }
+        let ow_off = stage * H;
+        let num_off = stage * NUM_TABLE_SIZE + discs;
+        let mut out = *view.out_b.add(stage) + *view.num_w.add(num_off);
+        for h in 0..H {
+            if acc[h] > 0.0 {
+                out += *view.out_w.add(ow_off + h) * acc[h];
+            }
+        }
+
+        let err = out - target;
+
+        /* **勾配は lr を掛ける前の生の値を渡す。** Adam は 2 次モーメントで
+        正規化するので、ここに lr を混ぜると正規化が壊れる (SGD 側の `g` は
+        lr 込みの歩幅で、意味が違う)。 */
+        let mut delta = [0.0f32; H];
+        for h in 0..H {
+            if acc[h] > 0.0 {
+                delta[h] = *view.out_w.add(ow_off + h);
+                let p = view.out_w.add(ow_off + h);
+                *p -= adam.step(adam.m_out_w, adam.v_out_w, ow_off + h, err * acc[h], lr);
+            }
+        }
+        {
+            let p = view.out_b.add(stage);
+            *p -= adam.step(adam.m_out_b, adam.v_out_b, stage, err, lr);
+            let q = view.num_w.add(num_off);
+            *q -= adam.step(adam.m_num_w, adam.v_num_w, num_off, err, lr);
+        }
+        for h in 0..H {
+            let i = stage * H + h;
+            let p = view.ft_bias.add(i);
+            let d = adam.step(adam.m_ft_bias, adam.v_ft_bias, i, err * delta[h], lr);
+            *p = (*p - d).clamp(-FT_CLAMP, FT_CLAMP);
+        }
+        for &f in feats.iter().take(self.n_masks) {
+            let base = f as usize * H;
+            for h in 0..H {
+                let p = view.ft.add(base + h);
+                let d = adam.step(adam.m_ft, adam.v_ft, base + h, err * delta[h], lr);
+                *p = (*p - d).clamp(-FT_CLAMP, FT_CLAMP);
+            }
+        }
+        err * err
+    }
+
     /// Serialize weights to a simple little-endian file.
     pub fn save(&self, path: &std::path::Path) -> std::io::Result<()> {
         use std::io::Write;
         let tmp = path.with_extension("tmp");
         {
             let mut w = std::io::BufWriter::new(std::fs::File::create(&tmp)?);
-            w.write_all(b"BBRVNN01")?;
+            /* **形式 03 = ステージ別バイアス + 石数表。** 01/02 も読める
+            (バイアスは全ステージへ複製、石数表はゼロ埋め) ので、以前に
+            学習した重みはそのまま同じ評価値を返す。 */
+            w.write_all(b"BBRVNN03")?;
             w.write_all(&(H as u32).to_le_bytes())?;
             w.write_all(&(self.n_features as u32).to_le_bytes())?;
             w.write_all(&(STAGE_COUNT as u32).to_le_bytes())?;
@@ -1002,6 +1318,7 @@ impl Nnue {
                 .chain(&self.ft_bias)
                 .chain(&self.out_w)
                 .chain(&self.out_b)
+                .chain(&self.num_w)
             {
                 w.write_all(&v.to_le_bytes())?;
             }
@@ -1016,12 +1333,20 @@ impl Nnue {
         let mut r = std::io::BufReader::new(std::fs::File::open(path)?);
         let mut magic = [0u8; 8];
         r.read_exact(&mut magic)?;
-        if &magic != b"BBRVNN01" {
-            return Err(std::io::Error::new(
-                std::io::ErrorKind::InvalidData,
-                "bad nnue magic",
-            ));
-        }
+        /* 01 = バイアス共通・石数表なし、02 = バイアス共通・石数表あり、
+        03 = 両方ステージ別。旧形式はバイアスを全ステージへ複製して読む
+        ので、評価値は以前と完全に一致する。 */
+        let (staged_bias, has_num) = match &magic {
+            b"BBRVNN03" => (true, true),
+            b"BBRVNN02" => (false, true),
+            b"BBRVNN01" => (false, false),
+            _ => {
+                return Err(std::io::Error::new(
+                    std::io::ErrorKind::InvalidData,
+                    "bad nnue magic",
+                ))
+            }
+        };
         let mut u = [0u8; 4];
         r.read_exact(&mut u)?;
         if u32::from_le_bytes(u) as usize != H {
@@ -1047,9 +1372,21 @@ impl Nnue {
             Ok(())
         };
         read_into(&mut r, &mut self.ft)?;
-        read_into(&mut r, &mut self.ft_bias)?;
+        if staged_bias {
+            read_into(&mut r, &mut self.ft_bias)?;
+        } else {
+            let mut one = vec![0.0f32; H];
+            read_into(&mut r, &mut one)?;
+            for st in 0..STAGE_COUNT {
+                self.ft_bias[st * H..st * H + H].copy_from_slice(&one);
+            }
+        }
         read_into(&mut r, &mut self.out_w)?;
         read_into(&mut r, &mut self.out_b)?;
+        self.num_w.fill(0.0);
+        if has_num {
+            read_into(&mut r, &mut self.num_w)?;
+        }
         Ok(())
     }
 }
@@ -1067,7 +1404,8 @@ macro_rules! quant_acc {
         impl Nnue {
             pub fn $build(&self, board: &Board) -> $Acc {
                 let indices = self.indexer.init(board.black, board.white);
-                let mut acc = self.$bias;
+                // バイアスはステージ別なので読み出しで足す (i16 経路と同じ)。
+                let mut acc = [<$T>::default(); H2];
                 for m in 0..self.n_masks {
                     let f = (self.mask_off[m] as usize + indices.raw()[m] as usize) * H2;
                     for i in 0..H2 {
