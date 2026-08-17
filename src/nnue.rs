@@ -43,6 +43,22 @@ pub const H: usize = 16;
 /// contiguous add/sub maintains the whole accumulator per feature change.
 const H2: usize = 2 * H;
 
+/// 学習中に feature transformer の重みを収める範囲。
+///
+/// **推論は int16 なので、外れ値 1 個が全体の分解能を食う。** `quantize` は
+/// `256 / |ft| の最大値` で倍率を決める (accumulator が i16 で、64 マスク分の
+/// 和が収まる必要があるため)。最大値だけ突出すると、典型的な重みが整数
+/// 1〜2 個ぶんの粒度しか持てなくなる。
+///
+/// H=64 を素から学習したとき、これで実際に事故った。lane 47 に ±200 級の
+/// **打ち消し合う**重みが育ち、f32 の val MSE は 28.19 と良いのに int16 では
+/// 13.98 石ずれ、同じ深さの直接対戦で H=16 に 0-12 で負けた。学習後に刈るの
+/// では直らない (釣り合いが崩れてかえって悪化する) ので、**育てる前に抑える**。
+///
+/// 境界は実測から決めた。健全なモデルの |ft| 最大は H=16 が 24.7、H=64 の
+/// 旧版が 14.3。32 ならどちらも素通しで、暴走だけを止める。
+const FT_CLAMP: f32 = 32.0;
+
 /// `acc[i] += new[i] - old[i]` over `H2` int16 lanes (both perspectives).
 /// NEON on aarch64 (int16x8, so H2=32 is four vector ops), scalar elsewhere.
 #[inline]
@@ -872,12 +888,12 @@ impl Nnue {
         // Transformer gradients: d acc[h] / d ft_bias[h] = 1, likewise for each
         // active feature's row. Step = lr · err · delta[h].
         for h in 0..H {
-            self.ft_bias[h] -= g * delta[h];
+            self.ft_bias[h] = (self.ft_bias[h] - g * delta[h]).clamp(-FT_CLAMP, FT_CLAMP);
         }
         for &f in feats.iter().take(self.n_masks) {
             let base = f as usize * H;
             for h in 0..H {
-                self.ft[base + h] -= g * delta[h];
+                self.ft[base + h] = (self.ft[base + h] - g * delta[h]).clamp(-FT_CLAMP, FT_CLAMP);
             }
         }
 
@@ -940,12 +956,14 @@ impl Nnue {
         }
         *view.out_b.add(stage) -= g;
         for h in 0..H {
-            *view.ft_bias.add(h) -= g * delta[h];
+            let p = view.ft_bias.add(h);
+            *p = (*p - g * delta[h]).clamp(-FT_CLAMP, FT_CLAMP);
         }
         for &f in feats.iter().take(self.n_masks) {
             let base = f as usize * H;
             for h in 0..H {
-                *view.ft.add(base + h) -= g * delta[h];
+                let p = view.ft.add(base + h);
+                *p = (*p - g * delta[h]).clamp(-FT_CLAMP, FT_CLAMP);
             }
         }
         err * err

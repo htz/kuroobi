@@ -8,10 +8,27 @@
 //! endgame needs no separate setting.
 //!
 //! Usage:
-//!   roundrobin --games <n> --depth <n> [--engine name=protocol=path]...
+//!   roundrobin --games <n> --depth <n> [--time-ms <n>] [--threads <n>]
+//!              [--engine name=protocol=path]...
 //!
-//! `protocol` is one of `edax`, `zebra`, `egaroucid`, or `ours`.
+//! `protocol` is one of `edax`, `zebra`, `egaroucid`, `kuroobi`, or `ours`.
 //! Exactly one `ours` entry is expected; its path is ignored.
+//!
+//! **`kuroobi` は自分自身を別プロセスとして立てる。** NNUE の accumulator
+//! 幅 `H` はコンパイル時定数なので、H の違うモデルは 1 プロセスに同居でき
+//! ない。worktree で別ビルドを建て、両方を `kuroobi` として登録すれば、
+//! **自分同士を直接対戦させられる** (`src/bin/gtp.rs` を見よ)。特徴集合や
+//! 探索を変えたビルドでも同じ。
+//!
+//! ```sh
+//! roundrobin --games 400 --time-ms 300 \
+//!   --engine h16=kuroobi=./target/release/gtp \
+//!   --engine h64=kuroobi=../wt-h64/target/release/gtp
+//! ```
+//!
+//! **速度差を含めて測るなら `--time-ms` を使う。** 深さ固定は速度を無視する
+//! ので、遅くて賢い側を過大評価する。評価関数だけを比べたいときは深さ固定
+//! (既定) のままでよい。
 
 use std::io::{BufRead, BufReader, Write};
 use std::path::PathBuf;
@@ -68,7 +85,14 @@ struct Engine {
 }
 
 impl Engine {
-    fn spawn(name: &str, protocol: &str, path: &PathBuf, depth: u8) -> std::io::Result<Engine> {
+    fn spawn(
+        name: &str,
+        protocol: &str,
+        path: &std::path::Path,
+        depth: u8,
+        threads: usize,
+        time_ms: u64,
+    ) -> std::io::Result<Engine> {
         if protocol == "ours" {
             let mut searcher = Searcher::new(20);
             searcher.mpc = false; // a plain fixed-depth search, like the others
@@ -102,6 +126,24 @@ impl Engine {
                 "-nobook".into(),
                 "-q".into(),
             ],
+            // 自分自身 (src/bin/gtp.rs)。Egaroucid と同じ綴りを受けるので
+            // 並びは揃えてあり、時間制のときだけ --time-ms が増える。
+            "kuroobi" => {
+                let mut v = vec![
+                    "-gtp".into(),
+                    "-l".into(),
+                    depth.to_string(),
+                    "-t".into(),
+                    threads.to_string(),
+                    "-nobook".into(),
+                    "-q".into(),
+                ];
+                if time_ms > 0 {
+                    v.push("--time-ms".into());
+                    v.push(time_ms.to_string());
+                }
+                v
+            }
             _ => vec![
                 "-book-usage".into(),
                 "off".into(),
@@ -111,12 +153,27 @@ impl Engine {
                 "1".into(),
             ],
         };
-        let mut child = Command::new(path)
-            .args(args)
+        /* `kuroobi` だけは path を空白で切り、2 語目以降を追加引数として
+        渡す。**ビルドごとに違う重みを指す必要がある**ため — H の違う NNUE は
+        読み込みに失敗するので、両者に同じ既定パスを引かせるわけにいかない。
+        作業ディレクトリも変えない (重みを相対パスで書けるように)。 */
+        let (program, extra): (PathBuf, Vec<String>) = if protocol == "kuroobi" {
+            let s = path.to_string_lossy();
+            let mut w = s.split_whitespace();
+            let p = PathBuf::from(w.next().unwrap_or_default());
+            (p, w.map(str::to_string).collect())
+        } else {
+            (path.to_path_buf(), Vec::new())
+        };
+        let mut cmd = Command::new(&program);
+        cmd.args(args).args(extra);
+        if protocol != "kuroobi" {
+            cmd.current_dir(dir);
+        }
+        let mut child = cmd
             // Edax's level table couples midgame depth to the endgame
             // threshold; this makes it a plain fixed-depth search instead.
             .env("EDAX_FIXED_DEPTH", "1")
-            .current_dir(dir)
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
             .stderr(Stdio::null())
@@ -198,7 +255,7 @@ impl Engine {
                     Ok(searcher.search(board, evaluator, depth).best_move)
                 }
             }
-            "egaroucid" => {
+            "egaroucid" | "kuroobi" => {
                 self.send("clear_board").map_err(|e| e.to_string())?;
                 self.read_gtp().map_err(|e| e.to_string())?;
                 let hist = std::mem::take(&mut self.history);
@@ -334,6 +391,8 @@ fn main() -> ExitCode {
     let mut depth = 8u8;
     let mut seed = 1234u64;
     let mut plies = 6usize;
+    let mut threads = 1usize;
+    let mut time_ms = 0u64;
     let mut specs: Vec<(String, String, PathBuf)> = Vec::new();
     let mut it = std::env::args().skip(1);
     while let Some(a) = it.next() {
@@ -342,6 +401,8 @@ fn main() -> ExitCode {
             "--depth" => depth = it.next().unwrap().parse().unwrap(),
             "--seed" => seed = it.next().unwrap().parse().unwrap(),
             "--random-plies" => plies = it.next().unwrap().parse().unwrap(),
+            "--threads" => threads = it.next().unwrap().parse().unwrap(),
+            "--time-ms" => time_ms = it.next().unwrap().parse().unwrap(),
             "--engine" => {
                 let v = it.next().unwrap();
                 let p: Vec<&str> = v.splitn(3, '=').collect();
@@ -370,8 +431,13 @@ fn main() -> ExitCode {
 
     let n = specs.len();
     println!(
-        "round robin: {} engines, {games} games per pairing, {depth}-ply fixed depth",
-        n
+        "round robin: {} engines, {games} games per pairing, {}",
+        n,
+        if time_ms > 0 {
+            format!("{time_ms} ms/move")
+        } else {
+            format!("{depth}-ply fixed depth")
+        }
     );
     for (name, proto, _) in &specs {
         println!("  {name} ({proto})");
@@ -383,14 +449,28 @@ fn main() -> ExitCode {
 
     for i in 0..n {
         for j in (i + 1)..n {
-            let mut ea = match Engine::spawn(&specs[i].0, &specs[i].1, &specs[i].2, depth) {
+            let mut ea = match Engine::spawn(
+                &specs[i].0,
+                &specs[i].1,
+                &specs[i].2,
+                depth,
+                threads,
+                time_ms,
+            ) {
                 Ok(e) => e,
                 Err(e) => {
                     eprintln!("spawn {}: {e}", specs[i].0);
                     return ExitCode::FAILURE;
                 }
             };
-            let mut eb = match Engine::spawn(&specs[j].0, &specs[j].1, &specs[j].2, depth) {
+            let mut eb = match Engine::spawn(
+                &specs[j].0,
+                &specs[j].1,
+                &specs[j].2,
+                depth,
+                threads,
+                time_ms,
+            ) {
                 Ok(e) => e,
                 Err(e) => {
                     eprintln!("spawn {}: {e}", specs[j].0);
