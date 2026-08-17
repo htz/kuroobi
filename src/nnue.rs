@@ -120,8 +120,14 @@ unsafe fn accumulate_rows(
     #[cfg(all(target_arch = "aarch64", not(feature = "nnue-scalar")))]
     {
         use std::arch::aarch64::*;
-        // H=16 i16 = two 128-bit vectors; keep four partial sums of each half.
-        let mut p: [[int16x8_t; 2]; 4] = [[vdupq_n_s16(0); 2]; 4];
+        /* 1 行 = H レーン = `VEC` 本の 128 bit ベクタ。**H を決め打ちにしない。**
+        以前は `[int16x8_t; 2]` (= 16 レーン) 固定で、H=64 にすると**先頭 16
+        レーンしか足されず残り 48 レーンが落ちた**。評価は静かに壊れるが、
+        val MSE を測る経路 (`eval` / 増分維持) はここを通らないので**数字は
+        健全なまま**で、直接対戦でしか現れない。実際 val 27.63 の H=64 が
+        深さ 1 で H=16 に 80% 負けた。 */
+        const VEC: usize = H.div_ceil(8);
+        let mut p: [[int16x8_t; VEC]; 4] = [[vdupq_n_s16(0); VEC]; 4];
         const PREFETCH_AHEAD: usize = 8;
 
         let mut m = 0;
@@ -134,21 +140,32 @@ unsafe fn accumulate_rows(
             }
             for (k, part) in p.iter_mut().enumerate() {
                 let r = row(ft, mask_off, raw, m + k);
-                part[0] = vaddq_s16(part[0], vld1q_s16(r));
-                if H > 8 {
-                    part[1] = vaddq_s16(part[1], vld1q_s16(r.add(8)));
+                for (v, slot) in part.iter_mut().enumerate() {
+                    if (v + 1) * 8 <= H {
+                        *slot = vaddq_s16(*slot, vld1q_s16(r.add(v * 8)));
+                    }
                 }
             }
             m += 4;
         }
         // Fold the partials, then the tail masks.
-        let lo = vaddq_s16(vaddq_s16(p[0][0], p[1][0]), vaddq_s16(p[2][0], p[3][0]));
-        let hi = vaddq_s16(vaddq_s16(p[0][1], p[1][1]), vaddq_s16(p[2][1], p[3][1]));
-        let a0 = vaddq_s16(vld1q_s16(acc.as_ptr()), lo);
-        vst1q_s16(acc.as_mut_ptr(), a0);
-        if H > 8 {
-            let a1 = vaddq_s16(vld1q_s16(acc.as_ptr().add(8)), hi);
-            vst1q_s16(acc.as_mut_ptr().add(8), a1);
+        for v in 0..VEC {
+            if (v + 1) * 8 > H {
+                break;
+            }
+            let s = vaddq_s16(vaddq_s16(p[0][v], p[1][v]), vaddq_s16(p[2][v], p[3][v]));
+            let a = vaddq_s16(vld1q_s16(acc.as_ptr().add(v * 8)), s);
+            vst1q_s16(acc.as_mut_ptr().add(v * 8), a);
+        }
+        // H が 8 の倍数でないときの端数レーンは、まとめて下のスカラーで拾う。
+        if !H.is_multiple_of(8) {
+            let done = (H / 8) * 8;
+            for mm in 0..m {
+                let r = row(ft, mask_off, raw, mm);
+                for h in done..H {
+                    *acc.get_unchecked_mut(h) = (*acc.get_unchecked(h)).wrapping_add(*r.add(h));
+                }
+            }
         }
         while m < n {
             let r = row(ft, mask_off, raw, m);
