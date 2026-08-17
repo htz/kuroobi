@@ -434,14 +434,18 @@ fn main() -> ExitCode {
         avg.set_weights_flat(&mean);
         let vm = val_mse(&avg, &val);
         println!("swa over {n} epochs: val {vm:.4}");
+        /* **平均は必ず保存する。** 起点が対称化済みだと、SWA の平均は対称
+        でないぶん (実測 0.006〜0.008) 不利に見える。改善時しか保存しないと
+        「対称化すれば起点に勝つ平均」を黙って捨てることになる。採否は
+        `nnue_symmetrize` を通してから決める。 */
+        let p = out.with_extension("swa.bin");
+        if let Err(e) = avg.save(&p) {
+            eprintln!("save failed: {e}");
+            return ExitCode::FAILURE;
+        }
+        println!("  saved {} (対称化してから採否を決めること)", p.display());
         if vm < best {
             best = vm;
-            let p = out.with_extension("swa.bin");
-            if let Err(e) = avg.save(&p) {
-                eprintln!("save failed: {e}");
-                return ExitCode::FAILURE;
-            }
-            println!("  saved {}", p.display());
         }
     }
     if best.is_finite() && !val.is_empty() {
