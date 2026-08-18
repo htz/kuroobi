@@ -97,89 +97,66 @@ unsafe fn acc_row_addsub(acc: &mut [i16; H2], new: *const i16, old: *const i16) 
     }
 }
 
-/// Sum the `n` masks' transformer rows into `acc` (leaf rebuild).
+/// leaf 再構成で `n` 個のマスクの行を `acc` へ足し込む (int8)。
 ///
-/// The naive loop adds every row into one accumulator, so 64 dependent adds
-/// serialise behind each other and the random row loads cannot overlap. Four
-/// independent partial accumulators break that chain — integer addition is
-/// associative, so the result is bit-identical — and the rows for later masks
-/// are prefetched while the current ones are being added.
+/// 素朴に 1 本の累算器へ足すと 64 回の加算が依存で直列化し、ランダムな行の
+/// ロードも重ならない。独立な部分和を 4 本持って鎖を切り、先の行を先読みする。
+/// 整数加算は結合的なので結果はビット単位で同じ。
+///
+/// **int8 なのは転送量のため。** leaf の律速は演算ではなくメモリで、1 行が
+/// 16 バイトなら 32 バイトの半分で済む。
 ///
 /// # Safety
-/// Every `mask_off[m] + raw[m]` must index a valid feature, i.e.
-/// `(mask_off[m] + raw[m]) * H + H <= ft_len`.
+/// `mask_off[m] + raw[m]` が必ず有効な特徴を指すこと。すなわち
+/// `(mask_off[m] + raw[m]) * H + H <= ft_len`。
 #[inline]
-unsafe fn accumulate_rows(
+unsafe fn accumulate_rows_i8(
     acc: &mut [i16; H],
-    ft: *const i16,
+    ft: *const i8,
     mask_off: &[u32],
     raw: &[u16; MAX_MASKS],
     n: usize,
 ) {
     #[inline(always)]
-    unsafe fn row(
-        ft: *const i16,
-        mask_off: &[u32],
-        raw: &[u16; MAX_MASKS],
-        m: usize,
-    ) -> *const i16 {
+    unsafe fn row(ft: *const i8, mask_off: &[u32], raw: &[u16; MAX_MASKS], m: usize) -> *const i8 {
         ft.add((*mask_off.get_unchecked(m) as usize + *raw.get_unchecked(m) as usize) * H)
     }
 
     #[cfg(all(target_arch = "aarch64", not(feature = "nnue-scalar")))]
     {
         use std::arch::aarch64::*;
-        /* 1 行 = H レーン = `VEC` 本の 128 bit ベクタ。**H を決め打ちにしない。**
-        以前は `[int16x8_t; 2]` (= 16 レーン) 固定で、H=64 にすると**先頭 16
-        レーンしか足されず残り 48 レーンが落ちた**。評価は静かに壊れるが、
-        val MSE を測る経路 (`eval` / 増分維持) はここを通らないので**数字は
-        健全なまま**で、直接対戦でしか現れない。実際 val 27.63 の H=64 が
-        深さ 1 で H=16 に 80% 負けた。 */
-        const VEC: usize = H.div_ceil(8);
-        let mut p: [[int16x8_t; VEC]; 4] = [[vdupq_n_s16(0); VEC]; 4];
+        // 1 行 = H バイト。16 レーンずつ int8x16 で読み、i16 へ広げて足す。
+        const VEC: usize = H / 16;
         const PREFETCH_AHEAD: usize = 8;
-
+        let mut p: [[int16x8_t; 2]; 4] = [[vdupq_n_s16(0); 2]; 4];
         let mut m = 0;
-        while m + 4 <= n {
-            if m + PREFETCH_AHEAD < n {
-                for k in 0..4 {
-                    let ptr = row(ft, mask_off, raw, m + PREFETCH_AHEAD + k);
-                    std::arch::asm!("prfm pldl1keep, [{p}]", p = in(reg) ptr, options(nostack, readonly));
-                }
-            }
-            for (k, part) in p.iter_mut().enumerate() {
-                let r = row(ft, mask_off, raw, m + k);
-                for (v, slot) in part.iter_mut().enumerate() {
-                    if (v + 1) * 8 <= H {
-                        *slot = vaddq_s16(*slot, vld1q_s16(r.add(v * 8)));
+        if VEC == 1 {
+            while m + 4 <= n {
+                if m + PREFETCH_AHEAD < n {
+                    for k in 0..4 {
+                        let ptr = row(ft, mask_off, raw, m + PREFETCH_AHEAD + k);
+                        std::arch::asm!("prfm pldl1keep, [{p}]", p = in(reg) ptr, options(nostack, readonly));
                     }
                 }
-            }
-            m += 4;
-        }
-        // Fold the partials, then the tail masks.
-        for v in 0..VEC {
-            if (v + 1) * 8 > H {
-                break;
-            }
-            let s = vaddq_s16(vaddq_s16(p[0][v], p[1][v]), vaddq_s16(p[2][v], p[3][v]));
-            let a = vaddq_s16(vld1q_s16(acc.as_ptr().add(v * 8)), s);
-            vst1q_s16(acc.as_mut_ptr().add(v * 8), a);
-        }
-        // H が 8 の倍数でないときの端数レーンは、まとめて下のスカラーで拾う。
-        if !H.is_multiple_of(8) {
-            let done = (H / 8) * 8;
-            for mm in 0..m {
-                let r = row(ft, mask_off, raw, mm);
-                for h in done..H {
-                    *acc.get_unchecked_mut(h) = (*acc.get_unchecked(h)).wrapping_add(*r.add(h));
+                for (k, part) in p.iter_mut().enumerate() {
+                    let r = vld1q_s8(row(ft, mask_off, raw, m + k));
+                    part[0] = vaddq_s16(part[0], vmovl_s8(vget_low_s8(r)));
+                    part[1] = vaddq_s16(part[1], vmovl_high_s8(r));
                 }
+                m += 4;
             }
+            let lo = vaddq_s16(vaddq_s16(p[0][0], p[1][0]), vaddq_s16(p[2][0], p[3][0]));
+            let hi = vaddq_s16(vaddq_s16(p[0][1], p[1][1]), vaddq_s16(p[2][1], p[3][1]));
+            vst1q_s16(acc.as_mut_ptr(), vaddq_s16(vld1q_s16(acc.as_ptr()), lo));
+            vst1q_s16(
+                acc.as_mut_ptr().add(8),
+                vaddq_s16(vld1q_s16(acc.as_ptr().add(8)), hi),
+            );
         }
         while m < n {
             let r = row(ft, mask_off, raw, m);
             for h in 0..H {
-                *acc.get_unchecked_mut(h) = (*acc.get_unchecked(h)).wrapping_add(*r.add(h));
+                *acc.get_unchecked_mut(h) = (*acc.get_unchecked(h)).wrapping_add(*r.add(h) as i16);
             }
             m += 1;
         }
@@ -189,7 +166,7 @@ unsafe fn accumulate_rows(
         for m in 0..n {
             let r = row(ft, mask_off, raw, m);
             for h in 0..H {
-                *acc.get_unchecked_mut(h) = (*acc.get_unchecked(h)).wrapping_add(*r.add(h));
+                *acc.get_unchecked_mut(h) = (*acc.get_unchecked(h)).wrapping_add(*r.add(h) as i16);
             }
         }
     }
@@ -510,6 +487,21 @@ pub struct Nnue {
     /// (H) then the pre-swapped White row (H). One contiguous 2H add/sub then
     /// maintains both perspectives, halving the loads in the hot loop.
     ftc_i16: Vec<i16>,
+    /// int8 版の分離テーブル。**探索が実際に引くのはこれ。**
+    ///
+    /// leaf 1 個の仕事は「61 万行 x H の表から 64 行をランダムに引いて足す」
+    /// で、律速は演算ではなく**メモリ**。H=16 で 1 leaf あたり 2 KB、H=64 で
+    /// 8 KB を触る (データ 4 倍で時間 2 倍という実測がそれを示す)。
+    ///
+    /// int8 にすれば**転送量が半分**になる。分解能は 256 段から 127 段へ落ちる
+    /// が、そのぶん深く読めるなら差し引きで得になる — 判定は同じ持ち時間での
+    /// 直接対戦で行う (`gtp` + `roundrobin --time-ms`)。
+    ft_b_i8: Vec<i8>,
+    ft_w_i8: Vec<i8>,
+    /// i8 の刻みに合わせた accumulator バイアスと出力倍率。
+    ft_bias_i8: Vec<i16>,
+    out_scale_i8: f32,
+
     /// Split (non-interleaved) copies for the leaf-rebuild path, which reads
     /// only the side to move: `ft_b_i16[feature*H..]` / `ft_w_i16[feature*H..]`.
     /// Halves the bytes touched per mask versus striding the interleaved table.
@@ -566,6 +558,10 @@ impl Nnue {
             ft_b_i16: Vec::new(),
             ft_w_i16: Vec::new(),
             ft_bias_i16: vec![0; STAGE_COUNT * H],
+            ft_b_i8: Vec::new(),
+            ft_w_i8: Vec::new(),
+            ft_bias_i8: vec![0; STAGE_COUNT * H],
+            out_scale_i8: 1.0,
             out_w_i16: vec![0; STAGE_COUNT * H],
             out_scale: 0.0,
             ftc_i32: Vec::new(),
@@ -703,6 +699,20 @@ impl Nnue {
             self.ft_b_i16[dst..dst + H].copy_from_slice(&self.ftc_i16[src..src + H]);
             self.ft_w_i16[dst..dst + H].copy_from_slice(&self.ftc_i16[src + H..src + H2]);
         }
+
+        /* **int8 版。探索が引くのはこちら。** i16 表を 127/256 倍して丸める。
+        i16 は既に `256/|ft|最大` で正規化済みなので、この倍率で ±127 に収まる
+        (二重丸めの誤差は 0.5 LSB 以下)。累算器は i16 のまま — 64 行 x 127 =
+        8128 で余裕がある。 */
+        const I8_MUL: f32 = 127.0 / 256.0;
+        let q8 = |v: i16| (v as f32 * I8_MUL).round().clamp(-127.0, 127.0) as i8;
+        self.ft_b_i8 = self.ft_b_i16.iter().map(|&v| q8(v)).collect();
+        self.ft_w_i8 = self.ft_w_i16.iter().map(|&v| q8(v)).collect();
+        for i in 0..STAGE_COUNT * H {
+            self.ft_bias_i8[i] = (self.ft_bias_i16[i] as f32 * I8_MUL).round() as i16;
+        }
+        // 累算器の刻みが 127/256 になったぶん、出力側で戻す。
+        self.out_scale_i8 = self.out_scale / I8_MUL;
     }
 
     /// Build the i32/f32 comparison tables (78 MB each). Bench only — the
@@ -817,15 +827,15 @@ impl Nnue {
     pub fn eval_from_indices(&self, indices: &PatternIndices, board: &Board) -> f32 {
         let stage = crate::evaluator::Evaluator::stage(board);
         let ft = if board.player() == Color::Black {
-            &self.ft_b_i16
+            &self.ft_b_i8
         } else {
-            &self.ft_w_i16
+            &self.ft_w_i8
         };
         let mut acc = [0i16; H]; // バイアスは読み出しで足す
                                  // SAFETY: indices stay inside their pattern's table (the invariant the
                                  // scalar sum relies on), so every base + H is in bounds.
         unsafe {
-            accumulate_rows(
+            accumulate_rows_i8(
                 &mut acc,
                 ft.as_ptr(),
                 &self.mask_off,
@@ -834,9 +844,9 @@ impl Nnue {
             );
         }
         let ow = &self.out_w_i16[stage * H..stage * H + H];
-        let fb = &self.ft_bias_i16[stage * H..stage * H + H];
+        let fb = &self.ft_bias_i8[stage * H..stage * H + H];
         let sum = readout_dot(&acc, fb, ow);
-        self.out_b[stage] + sum as f32 * self.out_scale + self.num_term(board, stage)
+        self.out_b[stage] + sum as f32 * self.out_scale_i8 + self.num_term(board, stage)
     }
 
     /// Evaluate a board from scratch (rebuilds indices). Convenience for
@@ -1515,10 +1525,14 @@ mod tests {
                 "incremental {inc} vs scratch {scratch} (player {:?})",
                 board.player()
             );
+            /* **leaf 再構成は int8、増分維持は int16** なので厳密一致はしない。
+            探索が使うのは前者で、後者は `nnue_bench` の参照用。刻みの違い
+            (127 段 対 256 段) から来るずれだけを許す。ここが 1 石を超えたら
+            量子化ではなく実装の壊れを疑うこと。 */
             assert!(
-                (from_ix - inc).abs() < 1e-3,
-                "from_indices {from_ix} vs incremental {inc}: both are the same \
-                 quantized computation and must match exactly"
+                (from_ix - inc).abs() < 1.0,
+                "from_indices {from_ix} vs incremental {inc}: i8 と i16 の刻み差を\
+                 超えている。量子化ではなく実装を疑え"
             );
 
             let moves = board.movable();
