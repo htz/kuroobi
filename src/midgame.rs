@@ -309,6 +309,24 @@ impl SharedTt {
         unsafe { self.bucket(hash).0.get_unchecked_mut(i as usize) }
     }
 
+    /// **その行を先に引き寄せる。** 536 MB の表はほぼ必ず主記憶まで行くので、
+    /// 引く直前に呼んでも意味がない。**親が子の分を出す**ことで、残りの手の
+    /// 並べ替えにかかる時間を待ちに充てる。
+    #[inline]
+    fn prefetch(&self, hash: u64) {
+        #[cfg(target_arch = "aarch64")]
+        {
+            let p = self.bucket(hash) as *const TtBucket as *const u8;
+            // SAFETY: prfm は投機的な読みで、行が無効でも例外にならない。
+            // ここは `bucket` が返した正規のポインタ。
+            unsafe {
+                std::arch::asm!("prfm pldl2keep, [{0}]", in(reg) p, options(nostack, readonly));
+            }
+        }
+        #[cfg(not(target_arch = "aarch64"))]
+        let _ = hash;
+    }
+
     /// Scan the bucket for this position.
     #[inline]
     fn get(&self, hash: u64) -> TtEntry {
@@ -1351,6 +1369,10 @@ impl NnueSearch {
                 }
                 k
             };
+            /* 子の行を先に引き寄せる。ここで出しておくと、残りの手を並べる
+            間に主記憶からの往復が終わる。 */
+            self.tt
+                .prefetch(zobrist::board_hash(nb.player_bb(), nb.opponent_bb()));
             out[n] = (pos, flipped, order_key(key));
             n += 1;
         }
