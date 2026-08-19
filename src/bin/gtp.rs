@@ -140,6 +140,10 @@ fn main() -> ExitCode {
     };
 
     let mut board = Board::new();
+    /* **NPS を測るための口。** 探索の外 (起動・棋譜の再生・入出力) を数から
+    外したいので、`genmove` の区間だけを足し込む。 */
+    let mut tot_nodes = 0u64;
+    let mut tot_secs = 0f64;
     let stdin = std::io::stdin();
     for line in stdin.lock().lines() {
         let Ok(line) = line else { break };
@@ -248,7 +252,11 @@ fn main() -> ExitCode {
                 }
                 let deadline =
                     (time_ms > 0).then(|| Instant::now() + Duration::from_millis(time_ms));
+                let n0 = engine.nodes();
+                let t0 = Instant::now();
                 let mv = engine.choose_within(&board, deadline);
+                tot_nodes += engine.nodes() - n0;
+                tot_secs += t0.elapsed().as_secs_f64();
                 match mv.pos {
                     Some(pos) => {
                         board.make_move_bits(pos);
@@ -262,10 +270,20 @@ fn main() -> ExitCode {
             }
             "quit" => {
                 ok(&id, "");
+                report(tot_nodes, tot_secs);
                 return ExitCode::SUCCESS;
             }
             other => err(&id, &format!("unknown command {other}")),
         }
     }
+    report(tot_nodes, tot_secs);
     ExitCode::SUCCESS
+}
+
+/// 探索区間だけの合計を標準エラーへ。GTP の応答には混ぜない。
+fn report(nodes: u64, secs: f64) {
+    if nodes > 0 {
+        let nps = nodes as f64 / secs.max(1e-9);
+        eprintln!("stats nodes {nodes} secs {secs:.3} nps {nps:.0}");
+    }
 }
