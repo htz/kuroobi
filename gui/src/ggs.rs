@@ -1191,6 +1191,25 @@ fn finish_match(
     out
 }
 
+/// GGS へ送る着手文字列。**評価値と思考時間を添える。**
+///
+/// `tell /os play <id> D8/6/17.39` のように `手/評価値/秒` で送る。
+/// 省略してもよい仕様だが、**省くとサーバーが trust-violation を出す** —
+/// 時計の減りと申告が突き合わせられないため。GGS の管理者から
+/// 「付けてほしい」と指摘を受けて足した (2026-08-19)。
+///
+/// 評価値は手番側から見た石差。パスには評価値を付けない (値の意味がない)。
+fn play_arg(mstr: &str, value: f32, took: Option<std::time::Duration>) -> String {
+    if mstr == "pa" {
+        return mstr.to_string();
+    }
+    let v = if value.is_finite() { value } else { 0.0 };
+    match took {
+        Some(t) => format!("{mstr}/{v:.2}/{:.2}", t.as_secs_f64()),
+        None => format!("{mstr}/{v:.2}"),
+    }
+}
+
 fn coord(p: Position) -> String {
     let f = (b'A' + p.index() / 8) as char;
     let r = (b'1' + p.index() % 8) as char;
@@ -3346,15 +3365,18 @@ fn think_and_play(
     let engine = ctx.engine.as_mut().unwrap();
     engine.set_levels(d, solve, band);
     let deadline = cap.map(|c| std::time::Instant::now() + c);
+    let began = std::time::Instant::now();
     let mv = engine.choose_within(&board, deadline);
+    let took = began.elapsed();
     engine.set_levels(base.0, base.1, base.2);
 
     let mstr = match mv.pos {
         Some(p) => coord(p),
         None => "pa".to_string(),
     };
-    send(format!("tell /os play {mid} {mstr}"));
-    ctx.log("out", &format!("tell /os play {mid} {mstr}"));
+    let arg = play_arg(&mstr, mv.value, Some(took));
+    send(format!("tell /os play {mid} {arg}"));
+    ctx.log("out", &format!("tell /os play {mid} {arg}"));
     ctx.log(
         "info",
         &format!(
@@ -3541,7 +3563,10 @@ fn collect_workers(ctx: &mut Ctx, matches: &mut HashMap<String, MatchState>) -> 
             Some(p) => coord(p),
             None => "pa".to_string(),
         };
-        out.push(format!("tell /os play {mid} {mstr}"));
+        out.push(format!(
+            "tell /os play {mid} {}",
+            play_arg(&mstr, mv.value, took)
+        ));
         m.last_eval = Some(if mv.value.is_finite() { mv.value } else { 0.0 });
         m.last_eval_exact = mv.exact;
         m.last_from_book = mv.from_book;
@@ -4989,5 +5014,49 @@ mod budget_tests {
         let b = c.unwrap().as_secs_f64();
         assert!(b <= 80.0, "1 手の期限が配れるぶん (80 秒) を超えた: {b:.1}");
         assert!(b > 0.0);
+    }
+}
+
+#[cfg(test)]
+mod play_arg_tests {
+    use super::play_arg;
+    use std::time::Duration;
+
+    /* **GGS は着手に評価値と思考時間を添えることを求める。**
+    省略してもよい仕様だが、省くとサーバーが trust-violation を出す
+    (時計の減りと申告を突き合わせられないため)。管理者から指摘を受けて
+    足した機能なので、書式が崩れていないことを固定しておく。 */
+
+    #[test]
+    fn a_move_carries_its_score_and_seconds() {
+        let s = play_arg("D8", 6.0, Some(Duration::from_millis(17_390)));
+        assert_eq!(s, "D8/6.00/17.39");
+    }
+
+    #[test]
+    fn a_negative_score_keeps_its_sign() {
+        let s = play_arg("F5", -3.5, Some(Duration::from_millis(1_200)));
+        assert_eq!(s, "F5/-3.50/1.20");
+    }
+
+    /// パスに評価値を付けない。局面の値としての意味がないうえ、
+    /// 余計な欄でサーバー側の解釈を揺らしたくない。
+    #[test]
+    fn a_pass_goes_bare() {
+        assert_eq!(play_arg("pa", 12.0, Some(Duration::from_secs(3))), "pa");
+    }
+
+    /// 定石から返した手は評価値が無限になりうる。そのまま流すと
+    /// "inf" という語がサーバーへ行くので 0 に均す。
+    #[test]
+    fn a_non_finite_score_becomes_zero() {
+        let s = play_arg("A1", f32::INFINITY, Some(Duration::from_secs(1)));
+        assert_eq!(s, "A1/0.00/1.00");
+    }
+
+    /// 時間が測れていないときは欄ごと落とす (0 秒と申告するより正直)。
+    #[test]
+    fn an_unmeasured_move_omits_the_time() {
+        assert_eq!(play_arg("C4", 2.0, None), "C4/2.00");
     }
 }
