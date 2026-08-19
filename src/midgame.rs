@@ -1344,9 +1344,10 @@ impl NnueSearch {
                     k += (38.0 - potential_mobility(nb.opponent_bb(), empties) as f32) * w_pm;
                 }
                 if eval_order {
-                    self.nn.ix_apply(acc, pos, flipped, mover);
-                    k += -self.nn.eval_from_indices(acc, &nb) * w_val;
-                    self.nn.ix_undo(acc, pos, flipped, mover);
+                    // 葉と同じ理由で戻さず写す (`eval1_nws` のコメント参照)。
+                    let mut child = *acc;
+                    self.nn.ix_apply(&mut child, pos, flipped, mover);
+                    k += -self.nn.eval_from_indices(&child, &nb) * w_val;
                 }
                 k
             };
@@ -1391,9 +1392,13 @@ impl NnueSearch {
                 let mut nb = *b;
                 let flipped = nb.make_move_bits(pos);
                 self.nodes += 1;
-                self.nn.ix_apply(acc, pos, flipped, mover);
-                let g = -self.nn.eval_from_indices(acc, &nb);
-                self.nn.ix_undo(acc, pos, flipped, mover);
+                /* **葉では索引を戻さず複製する。** `ix_undo` は裏返った石ごとに
+                CSR を引き直す (置いた 1 マス + 裏返り分で 40 前後の更新) のに
+                対し、`PatternIndices` は 160 バイトの固定配列なので丸ごと写す
+                方が命令数が少なく、依存の鎖も切れる。 */
+                let mut child = *acc;
+                self.nn.ix_apply(&mut child, pos, flipped, mover);
+                let g = -self.nn.eval_from_indices(&child, &nb);
                 if g > v {
                     if g > alpha {
                         return g;
@@ -1595,9 +1600,9 @@ impl NnueSearch {
             let pos = Position::from_index(tt_move as u32).unwrap();
             let mut nb = *b;
             let flipped = nb.make_move_bits(pos);
-            self.nn.ix_apply(acc, pos, flipped, mover);
-            let raw = self.negamax(&nb, acc, depth - 1, -beta, -alpha);
-            self.nn.ix_undo(acc, pos, flipped, mover);
+            let mut child = *acc;
+            self.nn.ix_apply(&mut child, pos, flipped, mover);
+            let raw = self.negamax(&nb, &mut child, depth - 1, -beta, -alpha);
             if raw == ABORTED {
                 return ABORTED;
             }
@@ -1749,9 +1754,9 @@ impl NnueSearch {
                 // The eldest brother fixes the window before anything is given
                 // away, and is always searched here with the full window.
                 if first {
-                    self.nn.ix_apply(acc, pos, flipped, mover);
-                    let raw = self.negamax(&nb, acc, depth - 1, -beta, -alpha);
-                    self.nn.ix_undo(acc, pos, flipped, mover);
+                    let mut child = *acc;
+                    self.nn.ix_apply(&mut child, pos, flipped, mover);
+                    let raw = self.negamax(&nb, &mut child, depth - 1, -beta, -alpha);
                     // Inspect the child's own return value: negating it would
                     // turn the ABORTED sentinel into +inf and hide the abort.
                     if raw == ABORTED {
@@ -1845,9 +1850,9 @@ impl NnueSearch {
                 if split_ok {
                     self.abort = fan_stop.clone();
                 }
-                self.nn.ix_apply(acc, pos, flipped, mover);
-                let raw = self.negamax(&nb, acc, depth - 1, -(alpha + PVS_EPS), -alpha);
-                self.nn.ix_undo(acc, pos, flipped, mover);
+                let mut child = *acc;
+                self.nn.ix_apply(&mut child, pos, flipped, mover);
+                let raw = self.negamax(&nb, &mut child, depth - 1, -(alpha + PVS_EPS), -alpha);
                 if split_ok {
                     self.abort = outer.clone();
                 }
@@ -1929,9 +1934,9 @@ impl NnueSearch {
                 let (pos, flipped, _) = kids[i];
                 let mut nb = *b;
                 nb.apply_flips(pos, flipped);
-                self.nn.ix_apply(acc, pos, flipped, mover);
-                let raw = self.negamax(&nb, acc, depth - 1, -beta, -alpha);
-                self.nn.ix_undo(acc, pos, flipped, mover);
+                let mut child = *acc;
+                self.nn.ix_apply(&mut child, pos, flipped, mover);
+                let raw = self.negamax(&nb, &mut child, depth - 1, -beta, -alpha);
                 if raw == ABORTED {
                     aborted = true;
                     break 'fanout;
