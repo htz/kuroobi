@@ -21,7 +21,22 @@ const PVS_EPS: f32 = 0.01;
 
 /// One ordered child: move, its flip mask (reused so the search never
 /// recomputes the flips), and the ordering key.
-type Kid = (Position, u64, f32);
+type Kid = (Position, u64, i32);
+
+/// f32 の並べ替え鍵を、**順序を保ったまま** i32 へ写す。
+///
+/// `f32::total_cmp` は比較のたびにこの変換をする。要素ごとに 1 回掛けて
+/// おけば n log n 回が n 回で済む。**並び順は 1 ビットも変わらない** —
+/// total_cmp の中身と同じ写像だから (テストで総当たり確認)。
+///
+/// **速度差は測っても分からなかった。** 同一バイナリでも巡ごとに 5.9%
+/// 動くので、この規模の変更は雑音に埋もれる。落ちていないことだけが
+/// 言える。順序が不変で費用も増えないので残す。
+#[inline]
+fn order_key(x: f32) -> i32 {
+    let b = x.to_bits() as i32;
+    b ^ (((b >> 31) as u32) >> 1) as i32
+}
 
 /// Upper bound on legal moves in a Reversi position.
 const MAX_KIDS: usize = 34;
@@ -1095,7 +1110,7 @@ impl NnueSearch {
         if e.key == h && e.best < 64 {
             return Position::from_index(e.best as u32);
         }
-        let mut kids: [Kid; MAX_KIDS] = [(Position(0), 0, 0.0); MAX_KIDS];
+        let mut kids: [Kid; MAX_KIDS] = [(Position(0), 0, 0); MAX_KIDS];
         let n = self.ordered_into(b, acc, 1, b.movable(), &mut kids, false, 64, 64);
         (n > 0).then(|| kids[0].0)
     }
@@ -1335,10 +1350,10 @@ impl NnueSearch {
                 }
                 k
             };
-            out[n] = (pos, flipped, key);
+            out[n] = (pos, flipped, order_key(key));
             n += 1;
         }
-        out[..n].sort_unstable_by(|a, b| b.2.total_cmp(&a.2));
+        out[..n].sort_unstable_by_key(|k| core::cmp::Reverse(k.2));
         n
     }
 
@@ -1620,7 +1635,7 @@ impl NnueSearch {
         //
         // The work is also skipped when there is nothing to order
         // (a single legal move).
-        let mut kids: [Kid; MAX_KIDS] = [(Position(0), 0, 0.0); MAX_KIDS];
+        let mut kids: [Kid; MAX_KIDS] = [(Position(0), 0, 0); MAX_KIDS];
         let will_split = self.pool.is_some() && depth >= ybwc_min_depth();
         let ordered = depth >= 2 && moves.count_ones() > 1;
         let n_kids = if ordered {
@@ -1632,7 +1647,7 @@ impl NnueSearch {
                 let pos = Position::from_index(m.trailing_zeros()).unwrap();
                 m &= m - 1;
                 let mut nb = *b;
-                kids[n] = (pos, nb.make_move_bits(pos), 0.0);
+                kids[n] = (pos, nb.make_move_bits(pos), 0);
                 n += 1;
             }
             n
@@ -2074,5 +2089,62 @@ mod seed_tests {
         let h = zobrist::board_hash(b.player_bb(), b.opponent_bb());
         tt.seed_move(h, 64);
         assert_eq!(tt.best_move(h), None);
+    }
+}
+
+#[cfg(test)]
+mod order_key_tests {
+    use super::order_key;
+
+    /* **`order_key` は `f32::total_cmp` と同じ順序でなければならない。**
+    整数化したのは比較を軽くするためで、順序が変われば探索木が変わる
+    (速くなったのか手が変わったのか切り分けられなくなる)。 */
+
+    fn agrees(a: f32, b: f32) -> bool {
+        a.total_cmp(&b) == order_key(a).cmp(&order_key(b))
+    }
+
+    #[test]
+    fn it_matches_total_cmp_on_ordinary_values() {
+        let vs = [
+            -1.0e9, -269.0, -38.0, -1.0, -0.5, -1e-30, 0.0, 1e-30, 0.5, 1.0, 38.0, 269.0, 1.0e8,
+            1.0e9,
+        ];
+        for &a in &vs {
+            for &b in &vs {
+                assert!(agrees(a, b), "{a} vs {b}");
+            }
+        }
+    }
+
+    /// 置換表の手は 1e9 / 1e8 という飛び離れた値で先頭に置かれる。
+    #[test]
+    fn it_keeps_the_table_moves_on_top() {
+        assert!(order_key(1.0e9) > order_key(1.0e8));
+        assert!(order_key(1.0e8) > order_key(269.0));
+    }
+
+    /// 評価値は負にもなる。符号をまたぐ比較が総当たりで一致すること。
+    #[test]
+    fn it_handles_the_sign_boundary() {
+        let mut x = -64.0f32;
+        while x <= 64.0 {
+            let mut y = -64.0f32;
+            while y <= 64.0 {
+                assert!(agrees(x, y), "{x} vs {y}");
+                y += 0.25;
+            }
+            x += 0.25;
+        }
+    }
+
+    #[test]
+    fn it_matches_on_zeros_and_infinities() {
+        let vs = [-0.0f32, 0.0, f32::NEG_INFINITY, f32::INFINITY, -1.0, 1.0];
+        for &a in &vs {
+            for &b in &vs {
+                assert!(agrees(a, b), "{a} vs {b}");
+            }
+        }
     }
 }
