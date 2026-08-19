@@ -657,11 +657,27 @@ impl Nnue {
     }
 
     pub fn quantize(&mut self) {
-        const ACC_MAX: f32 = 16_640.0; // 64 masks x 256 + bias
         let ft_max = self.ft.iter().fold(1e-6f32, |m, &v| m.max(v.abs()));
         let w_max = self.out_w.iter().fold(1e-6f32, |m, &v| m.max(v.abs()));
-        let ft_scale = 256.0 / ft_max;
-        let w_limit = (i32::MAX as f32 / (ACC_MAX * H as f32)).min(32_000.0);
+
+        /* **倍率は 2 の冪にする。** 固定小数点なので桁上げはビットシフトで
+        あるべきで、半端な小数倍にする理由が無い。復元も 2 の冪の掛け算に
+        なるので誤差が乗らない。
+
+        **上限は「累算器が i16 に収まること」から直に決める。** 以前は
+        `256 / |ft|最大` で、「量子化後の重みが 1 個 256 まで」という
+        保守的な仮定 (64 x 256 + bias = 16,640) から来ていた。本当の制約は
+        64 マスク分の和とバイアスが 32,767 に収まることなので、実測の
+        `ft_max` から収まる最大の 2 の冪を選べる。
+
+        現用モデル (ft_max 24.69) では 10.37 倍 → **16 倍**。1 単位が
+        0.0964 石から 0.0625 石になり、**分解能が 54% 上がる**。学習も
+        重みも変えず、量子化の取り方だけで得られる。 */
+        let bias_max = self.ft_bias.iter().fold(0.0f32, |m, &v| m.max(v.abs()));
+        let room = 32_000.0 / (self.n_masks as f32 * ft_max + bias_max);
+        let ft_scale = (2.0f32).powi(room.log2().floor() as i32).max(1.0);
+        let acc_max = (self.n_masks as f32 * ft_max + bias_max) * ft_scale;
+        let w_limit = (i32::MAX as f32 / (acc_max * H as f32)).min(32_000.0);
         let w_scale = w_limit / w_max;
         self.out_scale = 1.0 / (ft_scale * w_scale);
 
