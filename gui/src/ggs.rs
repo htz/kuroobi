@@ -1430,6 +1430,24 @@ impl Ctx {
         self.worker_threads = each;
     }
 
+    /// 定石を使うかの設定を、**ワーカーにも配る**。
+    ///
+    /// GGS の対局で実際に読んでいるのはワーカーで、`Ctx.engine` は解析と
+    /// 学習しか担っていない。ここを配り忘れると、画面で切り替えても対局の
+    /// 指し手は古い設定のまま — `Job::SetUseBook` は受け側だけ書かれていて
+    /// 送る側が無く、切り替えが対局に届いていなかった (CI の dead_code が
+    /// それを指していた)。
+    fn set_use_book(&mut self, b: bool) {
+        self.engine_cfg.use_book = b;
+        if let Some(e) = self.engine.as_mut() {
+            e.set_use_book(b);
+        }
+        for w in &mut self.workers {
+            w.send(Job::SetUseBook(b));
+        }
+        self.snap.lock().unwrap().engine.use_book = b;
+    }
+
     /// 対局が終わったらワーカーの割り当てを外す (エンジンは残す)。
     ///
     /// **外したらスレッドを配り直す。** 残った対局が全部使えるようにする。
@@ -1783,11 +1801,7 @@ pub fn run(
                     ctx.emit(true);
                 }
                 Ok(Cmd::SetUseBook(b)) => {
-                    ctx.engine_cfg.use_book = b;
-                    if let Some(e) = ctx.engine.as_mut() {
-                        e.set_use_book(b);
-                    }
-                    ctx.snap.lock().unwrap().engine.use_book = b;
+                    ctx.set_use_book(b);
                     ctx.emit(true);
                 }
                 Ok(Cmd::SetWatchAnalysis(b)) => {
@@ -2050,11 +2064,7 @@ pub fn run(
                             ctx.dirty = true;
                         }
                         Cmd::SetUseBook(b) => {
-                            ctx.engine_cfg.use_book = b;
-                            if let Some(e) = ctx.engine.as_mut() {
-                                e.set_use_book(b);
-                            }
-                            ctx.snap.lock().unwrap().engine.use_book = b;
+                            ctx.set_use_book(b);
                             ctx.dirty = true;
                         }
                         Cmd::SetWatchAnalysis(b) => {
