@@ -946,9 +946,11 @@ export function GgsSettings({ snap }: { snap: GgsSnapshot }) {
   const [auto, setAuto] = useState(snap.auto_play);
   const [watch, setWatch] = useState(snap.watch_analysis);
   const [book, setBook] = useState(e.use_book);
-  /* 配り方は選ばせない (速指しに一本化した)。GGS では「深さ固定」も
-     置かない — 時間を見ないので時間切れが確定する。値は送るだけ持つ */
-  const pace = 'fast';
+  /* **強さの決め方は 2 択。** 持ち時間から毎手決め直すか、Lv のとおりに
+     読むか。配り方 (`slow`/`even`/`fast`) の 3 択は別の軸で、そちらは
+     測って `fast` に一本化した — 2 択まで一緒に畳んだのは誤り。 */
+  const [pace, setPace] = useState(e.pace === 'depth' ? 'depth' : 'fast');
+  const byClock = pace !== 'depth';
   const [maxMove, setMaxMove] = useState(e.max_move_secs);
   const [reserve, setReserve] = useState(e.reserve_secs);
   const [budgetUse, setBudgetUse] = useState(e.budget_use);
@@ -994,10 +996,27 @@ export function GgsSettings({ snap }: { snap: GgsSnapshot }) {
     <div className="k-scroll" style={{ flex: 1, minHeight: 0, padding: 'var(--sp-4) var(--sp-4) 0' }}>
       <div style={{ maxWidth: 720, display: 'flex', flexDirection: 'column' }}>
         <Section title="強さ">
-          <Note>読む深さの上限です。どこまで読めるかは下の持ち時間の使い方が決めます。</Note>
-          <span style={{ maxWidth: 340, display: 'block' }}>
-            <Strength value={levels} onChange={setLevels} />
-          </span>
+          <Field label="決め方">
+            <Segmented value={pace} onChange={setPace}
+                       options={[{ value: 'fast', label: '持ち時間で決める' },
+                                 { value: 'depth', label: 'Lv で決める' }]} />
+          </Field>
+          <Note>
+            {byClock
+              ? <>読む深さ・読切に入る空き・選択読みの帯を、残り時間とこの機械の
+                  速さから<b style={{ color: 'var(--text)' }}>毎手決め直します</b>。
+                  決める物が残らないので、ここに強さの目盛りはありません。</>
+              : <>時間を見ずに、選んだ Lv のとおりに読みます。
+                  <b style={{ color: 'var(--text)' }}>持ち時間の管理は指す側の責任です</b> —
+                  深い Lv では時間切れになります。</>}
+          </Note>
+          {/* **時間で決めるなら目盛りは出さない。** 深さも読切も帯も時間から
+              決まるので、置いても効かない物を並べることになる */}
+          {!byClock && (
+            <span style={{ maxWidth: 340, display: 'block' }}>
+              <Strength value={levels} onChange={setLevels} />
+            </span>
+          )}
           {/* **スレッド数はここに置かない。** 設定 → エンジンの全体設定を
               GGS も使う。別々に持つと読切速度の較正 (機械ごとの実測) が
               2 つ要り、片方が未較正のまま対局に入って持ち時間の管理が
@@ -1023,13 +1042,16 @@ export function GgsSettings({ snap }: { snap: GgsSnapshot }) {
           </Note>
         </Section>
 
-        {/* **選ばせない。** 4 択で測ったところ「じっくり」は 3 秒・8 秒の
-            対局で勝率 0.0% (石差 −34)、「速指し」は全条件で「均等」に
-            劣らなかった。選択肢に正解と罠が並んでいるだけだったので、
-            速指しの配り方に一本化した。「深さ固定」は時間を見ないので
-            GGS では時間切れが確定する — ここには置かない (検討用の設定は
-            設定 → エンジン) */}
+        {/* **配り方は選ばせない。** 4 択で測ったところ「じっくり」は 3 秒・
+            8 秒の対局で勝率 0.0% (石差 −34)、「速指し」は全条件で「均等」に
+            劣らなかった。正解と罠が並んでいるだけだったので一本化した。
+            上の「決め方」はこれとは別の軸なので畳まない。 */}
         <Section title="持ち時間の使い方">
+          {!byClock && (
+            <Note>
+              <b style={{ color: 'var(--text)' }}>「Lv で決める」を選んでいるので、ここは効きません。</b>
+            </Note>
+          )}
           <Note>
             1 手にかける時間を、残り時間と残り手数から決めます。
             <b style={{ color: 'var(--text)' }}>序盤を短く切り上げ、終盤に残します</b> —

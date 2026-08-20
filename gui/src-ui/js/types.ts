@@ -224,7 +224,8 @@ export interface EngineCfgView {
   book_loaded: boolean;
   /** 終わった対局を定石の学習に取り込むか。 */
   learn: boolean;
-  /** 相手の手番中に先読みするか。**「深さ固定」では効かない。** */
+  /** 相手の手番中に先読みするか。**「Lv で決める」でも効く** — 効き方が
+      「深く」から「速く」に変わるだけ。 */
   ponder: boolean;
   /** 持ち時間の配り方 ("fast" 終盤に残す / "depth" 深さ固定)。 */
   pace: string;
