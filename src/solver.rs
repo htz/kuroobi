@@ -336,7 +336,7 @@ fn run_one_sibling(
     let t_live = std::time::Instant::now();
     let cur = shared_lower.load(Ordering::Relaxed);
     if group.aborted() || cur >= upper {
-        slot.finish(ABORTED, 0);
+        slot.finish(ABORTED, 0, false);
         return;
     }
     let tag = selective_t.map_or(0, f32::to_bits);
@@ -395,12 +395,17 @@ fn run_one_sibling(
         tag,
     });
     TASK_NS.fetch_add(t_live.elapsed().as_nanos() as u64, Ordering::Relaxed);
-    slot.finish(val, nodes);
+    slot.finish(val, nodes, val != ABORTED && val > cur);
 }
 
 /// One handed-off sibling's result, written by whoever ran it.
 struct TaskSlot {
     done: std::sync::atomic::AtomicBool,
+    /// **投げた窓を超えたか。** 超えていない値は上界なので、手の候補には
+    /// できない。回収側で判じるには投げた時点の窓が要るが、それを
+    /// `handed` に持たせると分割ごとの `Vec` が倍の幅になる (分割は 250 万
+    /// 回あるので確保のぶんが効く)。書く側が判じてここに置く。
+    beat: std::sync::atomic::AtomicBool,
     value: std::sync::atomic::AtomicI32,
     nodes: std::sync::atomic::AtomicU64,
     /// The thread that will wait for this slot, recorded when the slot is
@@ -414,6 +419,7 @@ impl TaskSlot {
     fn new(waiter: std::thread::Thread) -> TaskSlot {
         TaskSlot {
             done: std::sync::atomic::AtomicBool::new(false),
+            beat: std::sync::atomic::AtomicBool::new(false),
             value: std::sync::atomic::AtomicI32::new(ABORTED),
             nodes: std::sync::atomic::AtomicU64::new(0),
             waiter,
@@ -422,8 +428,9 @@ impl TaskSlot {
 
     /// Publish the result. `done` is released before the wake so a waiter that
     /// the unpark reaches always sees the value and node count.
-    fn finish(&self, value: i32, nodes: u64) {
+    fn finish(&self, value: i32, nodes: u64, beat: bool) {
         use std::sync::atomic::Ordering;
+        self.beat.store(beat, Ordering::Relaxed);
         self.value.store(value, Ordering::Relaxed);
         self.nodes.store(nodes, Ordering::Relaxed);
         // Take the handle *before* publishing. The slots live in the splitting
@@ -2278,8 +2285,7 @@ impl Worker<'_> {
             .collect();
         let board = *parent;
 
-        // 投げた窓 (`cur`) も覚える。回収時に「超えたか」を見るのに要る
-        let mut handed: Vec<(usize, i32)> = Vec::new();
+        let mut handed: Vec<usize> = Vec::new();
         /* **値と手は別々に積む。**
 
         零幅窓で沈んだ手の値は上界で、節点の値 (fail-soft) には使えるが
@@ -2336,7 +2342,7 @@ impl Worker<'_> {
                     })
                 };
                 if pushed {
-                    handed.push((i, cur));
+                    handed.push(i);
                     HANDED.fetch_add(1, Ordering::Relaxed);
                     continue;
                 }
@@ -2388,13 +2394,14 @@ impl Worker<'_> {
         // Everything handed over has to be accounted for before the borrows
         // above die, aborted or not.
         let t_wait = std::time::Instant::now();
-        for &(i, _) in &handed {
+        for &i in &handed {
             pool.help_until(&slots[i].done);
         }
         WAIT_NS.fetch_add(t_wait.elapsed().as_nanos() as u64, Ordering::Relaxed);
         let mut any_aborted = false;
-        for &(i, cur_i) in &handed {
+        for &i in &handed {
             let (val, nodes) = slots[i].result();
+            let beat = slots[i].beat.load(Ordering::Relaxed);
             self.nodes += nodes;
             if val == ABORTED {
                 any_aborted = true;
@@ -2402,7 +2409,7 @@ impl Worker<'_> {
             }
             if dbg_asp() && parent.empty_count() >= 10 {
                 eprintln!(
-                    "[split e{}] handed {:?} -> {val} (cur {cur_i}) ({}M)",
+                    "[split e{}] handed {:?} -> {val} (超えた {beat}) ({}M)",
                     parent.empty_count(),
                     siblings[i].pos,
                     nodes / 1_000_000
@@ -2413,7 +2420,7 @@ impl Worker<'_> {
                 if val > max {
                     max = val;
                 }
-                if val > cur_i && val > best_val {
+                if beat && val > best_val {
                     best_val = val;
                     best = Some(siblings[i].pos);
                 }
