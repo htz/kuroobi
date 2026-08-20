@@ -228,7 +228,9 @@ fn main() -> ExitCode {
                 let cap = threads as f64 * total_time;
                 let busy = live + total_time - wait;
                 println!(
-                    "  splits {} handing off {} siblings (refused {})",
+                    "  打ち切り発火 {} 回 / 潰れたタスク {}\n  splits {} handing off {} siblings (refused {})",
+                    kuroobi::solver::ABORT_FIRED.load(std::sync::atomic::Ordering::Relaxed),
+                    kuroobi::solver::TASK_ABORTED.load(std::sync::atomic::Ordering::Relaxed),
                     sp,
                     s::HANDED.load(Relaxed),
                     s::REFUSED.load(Relaxed)
