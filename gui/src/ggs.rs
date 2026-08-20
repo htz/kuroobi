@@ -3,7 +3,10 @@
 //! 1 本のスレッドが TCP 接続・プロトコル解析・エンジン思考・待機モードを
 //! すべて所有し、状態スナップショットを Tauri イベント "ggs" でフロントへ
 //! 流す。設計は src/bin/ggs.rs (CLI クライアント) を基にした常駐 UI 化:
-//! 対局中は絶対に自発離脱せず、切断は自動再接続 + stored 自動再開する。
+//! 対局中は絶対に自発離脱せず、切断は自動再接続する。**中断対局は自動で
+//! 再開しない** — GGS は中断中も時計を止めたまま保存するので、自動で戻ると
+//! 「不利になったら切断して解析してから再開する」相手に付き合うことになる。
+//! 一覧には出すので、戻るかどうかは人が決める。
 
 use std::collections::{HashMap, VecDeque};
 use std::io::{Read, Write};
@@ -2285,20 +2288,23 @@ pub fn run(
                         send!(ctx, "tell /os match");
                         pending.push("history:".into());
                         send!(ctx, "tell /os history");
-                        /* **起動でも中断対局を再開する。** 以前は再接続
-                        のときだけだった。**落ちて上がり直した
-                        ときが抜けていた** — 相手は待っているのに、こちらは
-                        一覧に出して眺めるだけで指さない。
+                        /* **中断対局は自動で再開しない。一覧に出すだけ。**
 
-                        中断対局は定義上「終わっていない自分の対局」なので、
-                        見つけたら戻るのが筋。放置すれば時間切れになる。
+                        GGS は中断のときに**時計を止めたまま保存する**
+                        (`VC_Request::save` が `GAME_Clock` を 4 本とも
+                        書き出し、`load` で戻す)。中断の記録に期限は無く
+                        (`GAME_Stored.H` は名前と日付しか持たない)、失効の
+                        処理もサーバーに無い。
 
-                        なお実測では、**こちらを強制終了しても中断対局には
-                        ならなかった** (`stored 0`)。サーバーは切断を「退出」
-                        と見て対局を畳む (相手側に `kuroobi left` と出る)。
-                        つまりここが効くのは別の経路 — サーバーの再起動など
-                        — で中断が作られたときで、落ちた対局は戻らない。 */
-                        pending.push("stored".into());
+                        つまり**不利になったら切断し、好きなだけ解析してから
+                        再開する**ことができる。こちらが自動で戻ると、その
+                        待ち合わせに黙って付き合うことになる。戻るかどうかは
+                        人が決める — 一覧から手で再開できる。
+
+                        なお片方が黙って抜けた対局は必ず中断になる。
+                        `Match::is_aborted()` は**両者が abort に同意した
+                        場合のみ**真で、それ以外は `cb_adjourn` へ行く。 */
+                        pending.push("stored_list".into());
                         send!(ctx, "tell /os stored");
                         ctx.emit(true);
                     }
@@ -2422,33 +2428,7 @@ pub fn run(
                             let kind = kind.clone();
                             let buf = buf.clone();
                             capture = None;
-                            if kind == "stored" {
-                                // 中断対局を探して自動再開
-                                let mut ids = Vec::new();
-                                for l in &buf {
-                                    if let Some(rest) = l.strip_prefix('|') {
-                                        let id = rest.split_whitespace().next().unwrap_or("");
-                                        if id.starts_with('.') && rest.contains(&login) {
-                                            ids.push(id.to_string());
-                                        }
-                                    }
-                                }
-                                /* **全部再開する。先頭 1 件では足りない。**
-
-                                同期対局は 2 面あり、中断の一覧に別々に
-                                並びうる。1 件しか投げないと、もう 1 面は
-                                誰も指さないまま時計だけ減って時間切れ —
-                                レート戦では 1 面落とすだけで負けになる。
-
-                                余分に投げても、既に動いている対局への
-                                `ask` はサーバーが弾くだけで害がない。 */
-                                for id in &ids {
-                                    ctx.log("info", &format!("中断対局 {id} を再開します"));
-                                    send!(ctx, format!("tell /os ask {id}"));
-                                }
-                            } else {
-                                finish_capture(&mut ctx, &kind, &buf, &login);
-                            }
+                            finish_capture(&mut ctx, &kind, &buf, &login);
                         } else {
                             buf.push(ln.clone());
                         }
@@ -4004,7 +3984,7 @@ fn capture_header_matches(kind: &str, ln: &str) -> bool {
         ln.starts_with("/os: who")
     } else if kind == "top" {
         ln.starts_with("/os: top")
-    } else if kind == "stored" || kind == "stored_list" {
+    } else if kind == "stored_list" {
         ln.starts_with("/os: stored")
     } else if kind.starts_with("history:") {
         ln.starts_with("/os: history")
