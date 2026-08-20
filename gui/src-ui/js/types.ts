@@ -69,6 +69,9 @@ export interface UserRow {
   rating: number | null;
   /** レートの偏差。`/os top` は返すが `/os who` は返さない。 */
   dev: number | null;
+  /** ランダム開局 (8r) のレートと偏差。接続中の一覧だけが持つ。 */
+  rating_r: number | null;
+  dev_r: number | null;
   raw: string;
 }
 

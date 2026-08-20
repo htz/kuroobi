@@ -1,6 +1,6 @@
 import React, { useEffect, useRef, useState } from 'react';
 import { api, ggsApi, jsLog, onApp } from './api';
-import type { ChatMsg, GameResult, GgsSnapshot, MatchView } from './types';
+import type { ChatMsg, GameResult, GgsSnapshot, MatchView, UserRow } from './types';
 import {
   CLOCK_CHOICES, GTYPE_CHOICES, clockOf, countDiscs, ggsMoveToIndex, gtypeLabel,
   fingerGroups, fingerValue, hasJapanese, normKey, parseCond, translate, useClocks,
@@ -933,6 +933,22 @@ function MatchBoard({ snap, m, clock, prefs, onKifu, face }: {
  * GGS で対局・観戦するときの強さとふるまい。ローカル対局とは別に持つ。
  * 申し込みの条件は**サーバー側に残る**ので、アプリを閉じていても効く。
  */
+/** 通常 8 とランダム開局 8r のレートを並べて書く。プールを選んでいない
+    画面 (名刺・詳細・接続中の一覧) は必ず両方出す。 */
+function bothRates(u: UserRow | undefined): string {
+  if (!u) return '';
+  // finger の生の行から "レート@偏差" を拾う (一覧の数字より詳しい)
+  const m = /(\d+(?:\.\d+)?)@\s*(\d+(?:\.\d+)?)/.exec(u.raw || '');
+  const r8 = m ? m[1] : (u.rating != null ? u.rating.toFixed(1) : '');
+  const d8 = m ? Math.round(parseFloat(m[2])) : null;
+  const parts: string[] = [];
+  if (r8) parts.push(`通常 ${r8}${d8 != null ? ` ±${d8}` : ''}`);
+  if (u.rating_r != null) {
+    parts.push(`ランダム ${u.rating_r.toFixed(1)}${u.dev_r != null ? ` ±${Math.round(u.dev_r)}` : ''}`);
+  }
+  return parts.join(' · ');
+}
+
 export function GgsSettings({ snap }: { snap: GgsSnapshot }) {
   const e = snap.engine;
   const calibrated = useCalibrated();
@@ -1289,9 +1305,7 @@ function UserCard({ snap, name, onClose, onDetail, onAsk, onKifu }: {
   useEffect(() => { ggsApi.history(name === snap.login ? '' : name).catch(() => {}); }, [name, snap.login]);
 
   const u = snap.users.find((x) => x.name === name);
-  const m = /(\d+(?:\.\d+)?)@\s*(\d+(?:\.\d+)?)/.exec(u?.raw || '');
-  const rate = m ? m[1] : (u?.rating != null ? u.rating.toFixed(1) : '');
-  const dev = m ? Math.round(parseFloat(m[2])) : null;
+  const rates = bothRates(u);
   const fields = snap.fingers[name]?.fields ?? [];
   const rows = snap.history[name] ?? [];
 
@@ -1303,7 +1317,7 @@ function UserCard({ snap, name, onClose, onDetail, onAsk, onKifu }: {
   return (
     <Overlay onClose={onClose}>
       <Modal title={name} onClose={onClose}
-             sub={rate ? `レート ${rate}${dev != null ? ` ±${dev}` : ''}` : undefined}
+             sub={rates || undefined}
              band={<Segmented value={tab} onChange={setTab}
                               options={[{ value: 'プロフィール', label: 'プロフィール' },
                                         { value: '対戦履歴', label: '対戦履歴' }]} />}
@@ -1371,7 +1385,9 @@ function GgsUsers({ snap, onNav, onKifu }: {
   const userCols: Col[] = [
     ...(mode === 'top' ? [{ head: '#', w: 26, right: true, num: true } as Col] : []),
     { head: '名前', clip: true },
-    { head: 'レート', w: 96, right: true, num: true },
+    // 接続中はプールを選んでいないので、通常 8 とランダム開局 8r を並べる
+    { head: mode === 'who' ? '通常' : 'レート', w: 96, right: true, num: true },
+    ...(mode === 'who' ? [{ head: 'ランダム', w: 104, right: true, num: true } as Col] : []),
     { head: '状態', w: 52, right: true },
   ];
   /* 一覧の「状態」列は進行中の対局 (`snap.ongoing`) から出す。**その一覧は
@@ -1447,7 +1463,7 @@ function GgsUsers({ snap, onNav, onKifu }: {
                  <Segmented value={mode} onChange={(m) => {
                    setMode(m);
                    setPage(0);
-                   if (m === 'who') void ggsApi.who('8'); else void ggsApi.top(pool, 100);
+                   if (m === 'who') void ggsApi.who(); else void ggsApi.top(pool, 100);
                  }} options={[{ value: 'who', label: '接続中' }, { value: 'top', label: '上位' }]} />
                </>}>
         {!rows.length && <Empty>いません。</Empty>}
@@ -1477,7 +1493,10 @@ function GgsUsers({ snap, onNav, onKifu }: {
             <span className="k-sel">{u.name}</span>
             {/* レートには必ず偏差を添える (規則 29) — 偏差が大きいと数字が
                 意味を持たない。ランキング (`/os t`) は偏差を返すが、接続中の
-                一覧 (`/os who`) は返さないので、そちらは数字だけになる */}
+                一覧 (`/os who`) は返さないので、そちらは数字だけになる。
+
+                **接続中はプールを選んでいないので両方出す。** ランキングは
+                プールを選んで見るものなので通常 8 の列だけを使う */}
             <span>
               {u.rating != null && <>
                 {u.rating.toFixed(1)}
@@ -1486,6 +1505,16 @@ function GgsUsers({ snap, onNav, onKifu }: {
                 )}
               </>}
             </span>
+            {mode === 'who' && (
+              <span>
+                {u.rating_r != null && <>
+                  {u.rating_r.toFixed(1)}
+                  {u.dev_r != null && (
+                    <span style={{ color: 'var(--sub)', marginLeft: 4 }}>±{Math.round(u.dev_r)}</span>
+                  )}
+                </>}
+              </span>
+            )}
             {/* 状態は色つきの文字 (絵と同じ)。バッジにすると行の高さが動く。
                 **対局していない人は「待機」と出す** — 空欄にすると、列ごと
                 効いていないのか誰も対局していないのかが読み手に分からない
@@ -1525,10 +1554,7 @@ function UserDetail({ snap, name, tab, onTab, onBack, onNav, onKifu }: {
   useEffect(() => { ggsApi.history(name === snap.login ? '' : name).catch(() => {}); }, [name, snap.login]);
 
   const u = snap.users.find((x) => x.name === name);
-  // finger の生の行から "レート@偏差" を拾う (一覧の数字より詳しい)
-  const m = /(\d+(?:\.\d+)?)@\s*(\d+(?:\.\d+)?)/.exec(u?.raw || '');
-  const rate = m ? m[1] : (u?.rating != null ? u.rating.toFixed(1) : '');
-  const dev = m ? Math.round(parseFloat(m[2])) : null;
+  const rates = bothRates(u);
   const playing = snap.ongoing.some((o) => o.names.includes(name));
   const fields = snap.fingers[name]?.fields ?? [];
   // 自分の履歴も他人と同じく login のキーで入る (要求だけが空文字)
@@ -1544,10 +1570,8 @@ function UserDetail({ snap, name, tab, onTab, onBack, onNav, onKifu }: {
       }}>
         <IconButton name="back" label="一覧へ戻る" onClick={onBack} />
         <span className="k-sel" style={{ fontSize: 'var(--fs-2)', fontWeight: 600 }}>{name}</span>
-        {rate && (
-          <span style={{ fontSize: 'var(--fs-6)', color: 'var(--sub)' }}>
-            {rate}{dev != null && <span style={{ opacity: .7, marginLeft: 4 }}>±{dev}</span>}
-          </span>
+        {rates && (
+          <span style={{ fontSize: 'var(--fs-6)', color: 'var(--sub)' }}>{rates}</span>
         )}
         {playing && <Tag tone="ok">対局中</Tag>}
         <span style={{ marginLeft: 'auto' }} />
