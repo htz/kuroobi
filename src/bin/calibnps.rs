@@ -58,6 +58,7 @@ fn at(nps: f64, threads: usize, secs: u64, empties: u8, solve_cap: u8) -> (f64, 
             depth: 22,
             solve: solve_cap,
             band: 6,
+            auto_band: true,
         },
         kuroobi::timectl::Pace::Fast,
     );

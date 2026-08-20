@@ -70,6 +70,9 @@ pub struct Levels {
     pub depth: u32,
     pub solve: u8,
     pub band: u8,
+    /// **選択読みの帯を予算から決めるか。** 持ち時間で指すときは真。
+    /// 偽にすると `band` をそのまま使う (深さ固定と、旧挙動との比較用)。
+    pub auto_band: bool,
 }
 
 /// 1 手ぶんの計画。
@@ -266,6 +269,22 @@ const DEPTH_BY_CLOCK: u32 = 60;
 /// 強さの設定を分母に持ち込むと「時間で決める」と言いながら Lv が予算を
 /// 動かすことになる。数える物差しは固定でよい (値は従来の既定と同じ)。
 const SOLVE_REF: u8 = 18;
+
+/// **選択読みの帯を 1 手の予算から決める。**
+///
+/// 帯は読切の入り口の手前どこまでを確率つきで終局まで読むか
+/// ([`crate::midgame::selective_band`]) で、入り口が時間から決まる以上、
+/// 帯も時間から決まるのが筋。段は従来の設定値をそのまま写した
+/// (Lv10〜12 が 6、Lv13 が 8)。
+fn band_for(budget: f64) -> u8 {
+    if budget < 12.0 {
+        0
+    } else if budget < 60.0 {
+        6
+    } else {
+        8
+    }
+}
 
 /// 読切に使ってよい時間 / **その手の予算**。
 ///
@@ -492,7 +511,16 @@ pub fn plan(s: Situation, base: Levels, pace: Pace) -> Plan {
         None if avail < 60 => base.solve.min(20),
         None => base.solve,
     };
-    let band = if budget >= 12.0 { base.band } else { 0 };
+    let band = if base.auto_band {
+        band_for(budget)
+    } else {
+        // 旧挙動: 設定の帯を、予算があるときだけ使う
+        if budget >= 12.0 {
+            base.band
+        } else {
+            0
+        }
+    };
     Plan {
         // **深さで止めない。** 期限が決める (読切も打ち切れるようにした)
         depth: DEPTH_BY_CLOCK,
@@ -510,6 +538,7 @@ mod tests {
         depth: 22,
         solve: 26,
         band: 6,
+        auto_band: false,
     };
 
     fn cap_secs(secs: u64, empties: u8, pace: Pace) -> f64 {
@@ -916,6 +945,7 @@ mod clock_usage_tests {
         depth: 22,
         solve: 26,
         band: 6,
+        auto_band: false,
     };
 
     /// **1 局を通して持ち時間をどれだけ使うか。**

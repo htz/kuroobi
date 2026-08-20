@@ -57,6 +57,9 @@ struct Args {
     random_plies: usize,
     depth: u8,
     solve_empties: u8,
+    /// 選択読みの帯: `None` は予算から自動、`Some(n)` は固定 (旧挙動との比較用)。
+    band_a: Option<u8>,
+    band_b: Option<u8>,
     /// Per-side overrides; fall back to the shared values above.
     depth_a: Option<u8>,
     depth_b: Option<u8>,
@@ -120,7 +123,10 @@ Timed play (the only way to measure time management):
   --time-a <secs>      A's clock only (default: --time). Pit a short clock
                        against a long one to measure what the time limit
                        itself costs — comparing pacing modes cannot show it.
-  --time-b <secs>      same, for B";
+  --time-b <secs>      same, for B
+  --band-a <auto|n>    Selective-read width: auto derives it from the move
+                       budget (default), a number pins it the old way
+  --band-b <auto|n>    same, for B";
 
 fn parse_args() -> Result<Args, String> {
     let mut weights_a = None;
@@ -132,6 +138,8 @@ fn parse_args() -> Result<Args, String> {
         random_plies: 6,
         depth: 1,
         solve_empties: 0,
+        band_a: None,
+        band_b: None,
         nnue_a: None,
         nnue_b: None,
         time_secs: 0,
@@ -212,6 +220,22 @@ fn parse_args() -> Result<Args, String> {
             }
             "--nnue-b" => {
                 args.nnue_b = Some(PathBuf::from(value("--nnue-b")?));
+            }
+            "--band-a" => {
+                let v = value("--band-a")?;
+                args.band_a = if v == "auto" {
+                    None
+                } else {
+                    Some(v.parse().map_err(|_| "--band-a wants auto or a number")?)
+                };
+            }
+            "--band-b" => {
+                let v = value("--band-b")?;
+                args.band_b = if v == "auto" {
+                    None
+                } else {
+                    Some(v.parse().map_err(|_| "--band-b wants auto or a number")?)
+                };
             }
             "--solve-empties" => {
                 args.solve_empties = value("--solve-empties")?
@@ -552,6 +576,8 @@ struct MoveInfo {
 #[derive(Clone, Copy)]
 struct SideTime {
     pace: Pace,
+    /// 選択読みの帯を予算から決めるか。偽なら `band` をそのまま使う。
+    auto_band: bool,
     /// 較正した読切速度。`None` なら固定の階段で読切に入る。
     nps: Option<f64>,
     /// **この側の持ち時間** (秒)。片側だけ潤沢にできる。
@@ -614,6 +640,7 @@ fn play_timed(
             depth: eng.config().depth,
             solve: eng.config().solve_empties,
             band: eng.config().band,
+            auto_band: t.auto_band,
         };
         let plan = timectl::plan(
             Situation {
@@ -670,11 +697,11 @@ fn play_timed(
 /// NNUE モードの本体。開局・先後入れ替え・1 局ごとの表クリア・統計は
 /// 線形側と同じ形にしてある (結果を並べて読めるように)。
 fn run_nnue(args: &Args, a: &std::path::Path, b: &std::path::Path) -> ExitCode {
-    let mk = |nnue: &std::path::Path, depth: u32, solve: u8| -> Result<Engine, String> {
+    let mk = |nnue: &std::path::Path, depth: u32, solve: u8, band: u8| -> Result<Engine, String> {
         Engine::new(EngCfg {
             depth,
             solve_empties: solve,
-            band: 0,
+            band,
             threads: args.threads,
             mpc: true,
             midgame_hash_bits: 22,
@@ -691,7 +718,10 @@ fn run_nnue(args: &Args, a: &std::path::Path, b: &std::path::Path) -> ExitCode {
     let depth_b = u32::from(args.depth_b.unwrap_or(args.depth));
     let solve_a = args.solve_a.unwrap_or(args.solve_empties);
     let solve_b = args.solve_b.unwrap_or(args.solve_empties);
-    let (mut eng_a, mut eng_b) = match (mk(a, depth_a, solve_a), mk(b, depth_b, solve_b)) {
+    let (mut eng_a, mut eng_b) = match (
+        mk(a, depth_a, solve_a, args.band_a.unwrap_or(0)),
+        mk(b, depth_b, solve_b, args.band_b.unwrap_or(0)),
+    ) {
         (Ok(x), Ok(y)) => (x, y),
         (Err(e), _) | (_, Err(e)) => {
             eprintln!("{e}");
@@ -725,11 +755,13 @@ fn run_nnue(args: &Args, a: &std::path::Path, b: &std::path::Path) -> ExitCode {
     };
     let side_a = SideTime {
         pace: pace_a,
+        auto_band: args.band_a.is_none(),
         nps: resolve(&args.nps_a, &mut eng_a),
         total: args.time_a.unwrap_or(args.time_secs) as f64,
     };
     let side_b = SideTime {
         pace: pace_b,
+        auto_band: args.band_b.is_none(),
         nps: resolve(&args.nps_b, &mut eng_b),
         total: args.time_b.unwrap_or(args.time_secs) as f64,
     };

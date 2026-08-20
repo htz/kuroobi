@@ -3257,6 +3257,7 @@ fn time_budget(
             depth: base.0,
             solve: base.1,
             band: base.2,
+            auto_band: true,
         },
         kuroobi::timectl::Pace::parse(pace),
     );

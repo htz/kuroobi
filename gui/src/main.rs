@@ -1310,6 +1310,7 @@ async fn think(app: State<'_, App>) -> Result<ThinkView, String> {
             depth: cfg.depth,
             solve: cfg.solve_empties,
             band: cfg.band,
+            auto_band: true,
         };
         let threads = cfg.threads;
         drop(e);
