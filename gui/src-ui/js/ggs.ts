@@ -83,6 +83,10 @@ function clockView(c: ClockBase | undefined, side: ClockSide, now: number): Cloc
     base = m.opp_secs; ext = m.opp_ext; raw = m.opp_clock;
     color = m.my_color === 'black' ? 'white' : m.my_color === 'white' ? 'black' : '';
   }
+  /* **中断・中止の対局は時計を出さない。** 勝敗が確定していないのに
+     「ロス」「時間切れ」と出ると、その表示だけが独り歩きする。中断中は
+     GGS 側も時計を止めて保存している。 */
+  if (m.ended === 'adjourned' || m.ended === 'aborted') return { text: '', cls: '' };
   /* **終わった対局の時計は止める。** 終局しても最後の update で手番が
      戻ることがあり、そのまま手元で刻み続けて「ロス」「時間切れ」まで
      表示していた。実際にそれを見てロスタイム突入と誤認した。 */

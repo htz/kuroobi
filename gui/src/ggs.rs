@@ -266,8 +266,16 @@ pub struct Offer {
 pub struct MatchView {
     pub id: String,
     pub base: String,
-    /// 終局したか。終わっても一覧には残す (手動で閉じる)。
+    /// 終わったか (終局・中断・中止のいずれか)。終わっても一覧には残す。
     pub over: bool,
+    /// **終わり方。** 空 = 進行中、`finished` = 終局、`adjourned` = 中断、
+    /// `aborted` = 中止。
+    ///
+    /// 中断を終局と同じに見せてはいけない。石差が付かないのに「終局」と
+    /// 出ると、時計の残りや ロスタイムの表示も道連れで嘘になる。
+    pub ended: String,
+    /// 中断のとき、抜けた側の名前。
+    pub left_by: String,
     /// 終局の結果 (石差の文字列)。
     pub result: String,
     pub cells: Vec<u8>, // 0 空 1 黒(*) 2 白(O)
@@ -847,6 +855,10 @@ struct MatchState {
     my_ext: Option<u64>,
     /// ロスタイムに入ったか (`MatchView::in_overtime` を参照)。
     in_overtime: bool,
+    /// 終わり方 (`MatchView::ended`)。
+    ended: String,
+    /// 中断のとき、抜けた側の名前。
+    left_by: String,
     opp_name: String,
     opp_rating: String,
     opp_clock: String,
@@ -904,6 +916,8 @@ impl MatchState {
             last_played_hash: self.last_played_hash,
             seen: self.seen,
             over: self.over,
+            ended: self.ended.clone(),
+            left_by: self.left_by.clone(),
             result: self.result.clone(),
         }
     }
@@ -921,6 +935,8 @@ impl MatchState {
             my_clock_secs: None,
             my_ext: None,
             in_overtime: false,
+            ended: String::new(),
+            left_by: String::new(),
             opp_name: String::new(),
             opp_rating: String::new(),
             opp_clock: String::new(),
@@ -1186,6 +1202,8 @@ fn finish_match(
     matches: &mut HashMap<String, MatchState>,
     id: &str,
     result: &str,
+    ended: &str,
+    left_by: &str,
 ) -> Vec<MatchState> {
     let keys: Vec<String> = matches
         .keys()
@@ -1199,6 +1217,10 @@ fn finish_match(
             m.turn = ' ';
             if !result.is_empty() {
                 m.result = result.to_string();
+            }
+            if !ended.is_empty() {
+                m.ended = ended.to_string();
+                m.left_by = left_by.to_string();
             }
             out.push(m.snapshot());
         }
@@ -2530,7 +2552,8 @@ pub fn run(
                                 if !was_mine {
                                     // 観戦していた対局も残す (終局後の盤面から
                                     // 棋譜を取り出したいため)。閉じるのは手動
-                                    finish_match(&mut matches, &id, "");
+                                    let (kind, who) = end_kind(mrest);
+                                    finish_match(&mut matches, &id, "", kind, &who);
                                 }
                             }
                             // 観戦盤から消えたことを画面に伝える。ここで
@@ -3661,6 +3684,8 @@ fn sync_matches(ctx: &mut Ctx, matches: &HashMap<String, MatchState>) {
         .map(|(id, m)| MatchView {
             id: id.clone(),
             base: base_id(id),
+            ended: m.ended.clone(),
+            left_by: m.left_by.clone(),
             cells: m.cells.clone(),
             turn: match m.turn {
                 '*' => "black".into(),
@@ -3755,6 +3780,29 @@ fn parse_offer(rest: &str, login: &str) -> Option<Offer> {
 }
 
 /// 結果の表示文字列 (石差)。
+/// `- match` の本文から終わり方を読む。
+///
+/// 実形式:
+/// - 終局:  `.13 1866 kuroobi 1411 fly 8 R +54.00  .82720`
+/// - 中断:  `.52 2326 kuroobi 2447 piglet s8r16 R piglet left .84058`
+/// - 中止:  `... aborted`
+///
+/// **石差の有無だけで判じない。** 中断は石差が付かないので「結果が読めない
+/// 終局」に見え、時計やロスタイムの表示まで道連れで嘘になる
+/// (GGS 側は `Match.C` で `is_finished()` でなければ `cb_adjourn` へ行く)。
+fn end_kind(rest: &str) -> (&'static str, String) {
+    if rest.contains(" aborted") {
+        return ("aborted", String::new());
+    }
+    // "<name> left" — 抜けた側の名前を拾う
+    let toks: Vec<&str> = rest.split_whitespace().collect();
+    if let Some(i) = toks.iter().position(|t| *t == "left") {
+        let who = i.checked_sub(1).map(|j| toks[j].to_string()).unwrap_or_default();
+        return ("adjourned", who);
+    }
+    ("finished", String::new())
+}
+
 fn re_text(score: Option<f32>) -> Option<String> {
     score.map(|s| format!("{s:+.2}"))
 }
@@ -3787,7 +3835,8 @@ fn handle_match_end(
         .unwrap_or("");
     // synchro は親 ID で終局が来るので、`.N.0` / `.N.1` をまとめて回収する。
     // 棋譜は先に始まった方 (`.N.0`) を代表として残す。
-    let mut dropped = finish_match(matches, &id, re_text(score).as_deref().unwrap_or(""));
+    let (kind, who) = end_kind(rest);
+    let mut dropped = finish_match(matches, &id, re_text(score).as_deref().unwrap_or(""), kind, &who);
     dropped.sort_by_key(|m| m.seen);
     let m = dropped.first();
     let re = score.map(|s| format!("{s:+.2}"));

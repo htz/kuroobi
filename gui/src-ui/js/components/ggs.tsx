@@ -247,6 +247,10 @@ export type Match = {
   ply: number;
   myTurn?: boolean;
   result?: string;   // 終局時 +8 等
+  /** 終わり方。'finished' / 'adjourned' (中断) / 'aborted' (中止)。 */
+  ended?: string;
+  /** 中断のとき、抜けた側の名前。 */
+  leftBy?: string;
 };
 
 const matchTitle = (m: Match) =>
@@ -276,14 +280,23 @@ export function MatchRow({ m, active, onSelect, onClose }: {
       }}>
         <span style={{ display: 'flex', alignItems: 'center', gap: 'var(--sp-0)' }}>
           <Tag tone={m.mine ? 'accent' : 'sub'}>{m.mine ? '自分' : '観戦'}</Tag>
-          <Tag tone={m.live ? 'ok' : 'sub'}>{m.live ? '対局中' : '終局'}</Tag>
+          {/* **終わり方は 3 通り。** 中断を「終局」と出すと、石差が付かない
+              のに勝敗が決したように見える */}
+          <Tag tone={m.live ? 'ok' : m.ended === 'adjourned' ? 'bad' : 'sub'}>
+            {m.live ? '対局中'
+              : m.ended === 'adjourned' ? '中断'
+              : m.ended === 'aborted' ? '中止' : '終局'}
+          </Tag>
           <span style={{ fontSize: 'var(--fs-5)', color: m.live ? 'var(--text)' : 'var(--sub)' }}>
             {matchTitle(m)}
           </span>
           {m.myTurn && <Dot />}
         </span>
         <span style={{ fontSize: 'var(--fs-6)', color: 'var(--sub)' }}>
-          {m.kind}{m.boards > 1 && ` · ${m.boards} 局`} · {m.ply} 手目{m.result && ` · ${m.result}`}
+          {m.kind}{m.boards > 1 && ` · ${m.boards} 局`} · {m.ply} 手目
+          {m.ended === 'adjourned'
+            ? (m.leftBy ? ` · ${m.leftBy} が退室` : ' · 相手が退室')
+            : m.result && ` · ${m.result}`}
         </span>
       </button>
       {closable && (

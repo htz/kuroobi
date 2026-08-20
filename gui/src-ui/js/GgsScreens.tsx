@@ -830,6 +830,9 @@ function matchRowOf(g: MatchView[], key: string): Match {
     kind: gtypeLabel(m.gtype), boards: g.length,
     ply: Math.max(...g.map((x) => x.moves.length)),
     result: g.map((x) => x.result).find(Boolean) || undefined,
+    // 中断は「終局・結果なし」に見せない。誰が抜けたかまで出す
+    ended: g.map((x) => x.ended).find(Boolean) || undefined,
+    leftBy: g.map((x) => x.left_by).find(Boolean) || undefined,
   };
 }
 
@@ -906,13 +909,24 @@ function MatchBoard({ snap, m, clock, prefs, onKifu, face }: {
             {m.watch_best ? ` (${m.watch_best})` : ''}</span>
         )}
         {snap.thinking === m.id && <span style={{ color: 'var(--accent)' }}>思考中</span>}
+        {/* **中断は終局と別物。** 石差が付かないので結果は出さず、誰が
+            抜けたかを出す。中止 (両者合意) も勝敗なしで終わる */}
+        {m.ended === 'adjourned' && (
+          <span style={{ color: 'var(--gold)' }}>
+            中断{m.left_by ? ` · ${m.left_by} が退室` : ''}
+          </span>
+        )}
+        {m.ended === 'aborted' && <span style={{ color: 'var(--sub)' }}>中止</span>}
+        {m.ended === 'finished' && m.result && (
+          <span style={{ color: 'var(--text)' }}>終局 {m.result}</span>
+        )}
         <span style={{ marginLeft: 'auto' }} />
         {/* 終わった対局も一覧に残るので、そこから棋譜を取り出せる。
             旧 GUI にあった道を戻した (規則 71) */}
         <Button
                 onClick={() => onKifu(m.opp_name ? `${m.opp_name} との対局` : '対局の棋譜',
                                       m.ggf || m.moves.join(''))}>棋譜</Button>
-        {!observer && (
+        {!observer && !m.over && (
           <Button variant="danger"
                   title="負けを認めて終わる (相手の承諾は要らない。レートが動く)"
                   onClick={() => setResign(true)}>投了</Button>

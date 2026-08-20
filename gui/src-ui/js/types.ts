@@ -132,8 +132,12 @@ export interface PlayerView {
 export interface MatchView {
   id: string;
   base: string;
-  /** 終局したか (終わっても一覧には残る)。 */
+  /** 終わったか (終局・中断・中止のいずれか。一覧には残る)。 */
   over: boolean;
+  /** 終わり方。'' = 進行中 / 'finished' / 'adjourned' / 'aborted'。 */
+  ended: '' | 'finished' | 'adjourned' | 'aborted';
+  /** 中断のとき、抜けた側の名前。 */
+  left_by: string;
   /** 終局の結果 (石差)。 */
   result: string;
   /** 64 マス: 0 空 / 1 黒 / 2 白 (file-major)。 */
