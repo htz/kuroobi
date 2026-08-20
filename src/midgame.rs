@@ -1892,7 +1892,14 @@ impl NnueSearch {
                 let g = -raw;
                 if g > best {
                     best = g;
-                    best_move = pos.index();
+                    /* **沈んだ手は最善手を名乗れない。** 零幅窓
+                    `(-(alpha+eps), -alpha)` で `g <= alpha` なら g は上界で、
+                    真値はもっと下かもしれない。値は fail-soft の上界として
+                    使えるが、**指し手として記録すると大負けの手が最善手に
+                    なる** — 読切側の同じ欠陥で実戦 36 石を失った。 */
+                    if g > alpha {
+                        best_move = pos.index();
+                    }
                 }
                 if g > alpha {
                     next_alpha = next_alpha.max(g);
@@ -1919,7 +1926,10 @@ impl NnueSearch {
                 let g = -raw;
                 if g > best {
                     best = g;
-                    best_move = kids[i].0.index();
+                    // 沈んだ手は候補にしない (上の零幅窓と同じ理由)
+                    if g > alpha {
+                        best_move = kids[i].0.index();
+                    }
                 }
                 if g > alpha {
                     next_alpha = next_alpha.max(g);

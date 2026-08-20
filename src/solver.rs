@@ -163,6 +163,33 @@ pub static EXACT_NODES: std::sync::atomic::AtomicU64 = std::sync::atomic::Atomic
 pub static CLEAR_NS: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
 /// A young brother was offered to the pool and refused: no worker was idle.
 pub static REFUSED: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+
+/// 打ち切り (カットオフ証明で兄弟を止めた) 回数と、それで潰れたタスク数。
+/// **経路を通っているかの確認に要る** — 通っていない集合で「値が一致した」と
+/// 言っても、その集合が検出力を持たないだけかもしれない。
+pub static ABORT_FIRED: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+
+/// **打ち切りを無理やり起こす** (`SOLVER_CHAOS=n` で n 回に 1 回)。
+///
+/// 競合でしか出ない不具合は、走るたびに出たり出なかったりする。**起こる条件を
+/// 濃くしてからでないと直したかどうかも分からない**ので、カットオフの有無に
+/// 関わらず打ち切りを撒く口を置く。
+/// カットオフでの打ち切りを行うか。**既定は行う** (`SOLVER_ABORT=0` で止める)。
+fn solver_abort() -> bool {
+    static V: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *V.get_or_init(|| std::env::var("SOLVER_ABORT").map_or(true, |v| v != "0"))
+}
+
+fn chaos_every() -> u64 {
+    static V: std::sync::OnceLock<u64> = std::sync::OnceLock::new();
+    *V.get_or_init(|| {
+        std::env::var("SOLVER_CHAOS")
+            .ok()
+            .and_then(|v| v.parse().ok())
+            .unwrap_or(0)
+    })
+}
+pub static TASK_ABORTED: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
 /// Thread-nanoseconds spent inside handed-off tasks.
 pub static TASK_NS: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
 /// Thread-nanoseconds a thread spent waiting for its own fan-out. This is the
@@ -327,10 +354,36 @@ fn run_one_sibling(
         let re = -w.pvs(&mut child, m.hash, -upper, -val, false, ev);
         val = if re == -ABORTED { ABORTED } else { re };
     }
-    if val != ABORTED {
+    /* **零幅窓で沈んだ手の値は上界にすぎない。**
+
+    `(-cur-1, -cur)` で探索して `val <= cur` なら「cur 以下」しか分からず、
+    真値はもっと下かもしれない。それを窓 (`shared_lower`) に流すと以降の
+    兄弟が誤った窓で探索し、最善手の選定にも上界が混じる。**実測で 19 空きの
+    局面が並列だと -20 の手を +14 と称して選んだ** (1 スレッドでは正しく
+    +16 の手を返す)。超えた場合だけ真値として扱う。 */
+    if val != ABORTED && val > cur {
         shared_lower.fetch_max(val, Ordering::Relaxed);
         if val >= upper {
-            // Proved the cutoff: stop the siblings still searching.
+            /* **カットオフを証明したので、残りの兄弟は止めてよい。**
+
+            止めた兄弟の結果は捨てるが、**捨て方を間違えると値が壊れる**。
+            打ち切られたタスクは `ABORTED` を返し、回収側はそれを「悪い手」
+            ではなく「見ていない手」として扱う必要がある — 残りだけで最大を
+            採ると、止められた側が最善だったときに取りこぼす。
+            `SOLVER_ABORT=0` で止められる (切り分け用)。 */
+            ABORT_FIRED.fetch_add(1, Ordering::Relaxed);
+            if solver_abort() {
+                group.abort();
+            }
+        }
+    }
+    if chaos_every() > 0
+        && TASK_ABORTED
+            .fetch_add(0, Ordering::Relaxed)
+            .is_multiple_of(7)
+    {
+        let n = ABORT_FIRED.fetch_add(1, Ordering::Relaxed);
+        if n.is_multiple_of(chaos_every()) {
             group.abort();
         }
     }
@@ -1941,6 +1994,9 @@ impl Worker<'_> {
                         eprintln!("[exact] reopening warm window [{lo},{hi}]");
                     }
                     let val = self.pvs_root(board, lo, hi, ev);
+                    if val == ABORTED {
+                        return ABORTED;
+                    }
                     if lo < val && val < hi {
                         return val;
                     }
@@ -1951,15 +2007,24 @@ impl Worker<'_> {
         }
 
         let mut val = self.pvs_root(board, -1, 1, ev);
+        if val == ABORTED {
+            return ABORTED;
+        }
         if val > 0 {
             let bound = val + 8;
             val = self.pvs_root(board, val, bound, ev);
+            if val == ABORTED {
+                return ABORTED;
+            }
             if val >= bound {
                 val = self.pvs_root(board, val, 64, ev);
             }
         } else if val < 0 {
             let bound = val - 8;
             val = self.pvs_root(board, bound, val, ev);
+            if val == ABORTED {
+                return ABORTED;
+            }
             if val <= bound {
                 val = self.pvs_root(board, -64, val, ev);
             }
@@ -2015,6 +2080,13 @@ impl Worker<'_> {
             }
             let n0 = self.nodes;
             let val = self.pvs_root(board, lo, hi, ev);
+            /* **中断は値ではない。** `ABORTED` は `i32::MIN + 1` なので、
+            そのまま窓の計算に入れると `val - 8` のような式で桁があふれ、
+            次の窓が壊れる。期限切れでも同じ経路を通るので、実戦で誤った手を
+            指しうる。 */
+            if val == ABORTED {
+                return ABORTED;
+            }
             if dbg_asp() {
                 eprintln!(
                     "[asp] window [{lo},{hi}] -> {val} ({}M nodes)",
@@ -2069,6 +2141,14 @@ impl Worker<'_> {
             let n0 = self.nodes;
             let mut child = moves[0].child(board);
             max = -self.pvs(&mut child, moves[0].hash, -upper, -lower, false, ev);
+            /* **打ち切られた探索の値を使わない。** `ABORTED` は `i32::MIN + 1`
+            なので符号を反転すると `i32::MAX` になり、そのまま `max` に入って
+            置換表へ流れる (`i32::MAX as i8` は -1、つまり「下界 -1」という嘘)。
+            表が汚れると、後の窓で本当は +16 の手が +1 で沈む — 19 空きの実局面
+            でそれを踏み、-20 の手を最善として指した。 */
+            if max == -ABORTED {
+                return ABORTED;
+            }
             if dbg_asp() {
                 eprintln!(
                     "[root] eldest {:?} [{lower},{upper}] -> {max} ({}M)",
@@ -2091,7 +2171,11 @@ impl Worker<'_> {
                 }
                 if val > max {
                     max = val;
-                    best = bpos;
+                    // 手は真値が確定したものだけ。沈んだ手の上界で
+                    // 値が上がることはあるが、その手は最善ではない
+                    if let Some(p) = bpos {
+                        best = p;
+                    }
                 }
                 self.tt.update(board, hash, alpha, beta, max, Some(best));
                 self.best = Some(best);
@@ -2106,8 +2190,15 @@ impl Worker<'_> {
             }
             let mut child = m.child(board);
             let mut val = -self.pvs(&mut child, m.hash, -lower - 1, -lower, false, ev);
+            // 打ち切りは値ではない (長兄と同じ理由)
+            if val == -ABORTED {
+                return ABORTED;
+            }
             if lower < val && val < upper {
                 val = -self.pvs(&mut child, m.hash, -upper, -val, false, ev);
+                if val == -ABORTED {
+                    return ABORTED;
+                }
             }
             if val > max {
                 max = val;
@@ -2160,7 +2251,7 @@ impl Worker<'_> {
         lower: i32,
         upper: i32,
         ev: Option<&Evaluator>,
-    ) -> Option<(i32, Position)> {
+    ) -> Option<(i32, Option<Position>)> {
         use std::sync::atomic::{AtomicI32, Ordering};
 
         let pool = &self.budget.pool;
@@ -2187,13 +2278,27 @@ impl Worker<'_> {
             .collect();
         let board = *parent;
 
-        let mut handed: Vec<usize> = Vec::new();
+        // 投げた窓 (`cur`) も覚える。回収時に「超えたか」を見るのに要る
+        let mut handed: Vec<(usize, i32)> = Vec::new();
+        /* **値と手は別々に積む。**
+
+        零幅窓で沈んだ手の値は上界で、節点の値 (fail-soft) には使えるが
+        **指し手には使えない**。同じ変数で両方を追うと、`max` だけ上がって
+        手が取り残され、実局面で -20 の手が +16 の顔で最善になった。 */
         let mut max = i32::MIN;
-        let mut best = siblings[0].pos;
+        let mut best_val = i32::MIN;
+        let mut best: Option<Position> = None;
         let mut unwound = false;
+        // 祖先の打ち切りで兄弟を見残したか
+        let mut cut_short = false;
 
         for (i, m) in siblings.iter().enumerate() {
             if group.aborted() {
+                /* **祖先に止められた。** ここで抜けると見ていない兄弟が残る
+                ので、`max` は「全部見た結果」ではない。それを返すと呼び出し側
+                が確定値として置換表に書き、後の探索が誤る。並列でしか起きず、
+                走るたびに出たり出なかったりする。 */
+                cut_short = true;
                 break;
             }
             let cur = shared_lower.load(Ordering::Relaxed);
@@ -2231,7 +2336,7 @@ impl Worker<'_> {
                     })
                 };
                 if pushed {
-                    handed.push(i);
+                    handed.push((i, cur));
                     HANDED.fetch_add(1, Ordering::Relaxed);
                     continue;
                 }
@@ -2252,20 +2357,30 @@ impl Worker<'_> {
                     break;
                 }
             }
-            if dbg_asp() && parent.empty_count() >= 26 {
+            if dbg_asp() && parent.empty_count() >= 10 {
                 eprintln!(
-                    "[split] inline {:?} probe@{cur} -> {val} ({}M)",
+                    "[split e{}] inline {:?} probe@{cur} -> {val} ({}M)",
+                    parent.empty_count(),
                     m.pos,
                     (self.nodes - n0) / 1_000_000
                 );
             }
+            /* **値と手は別に扱う。**
+
+            零幅窓 `(cur, cur+1)` で沈んだ手の値は上界で、節点の値
+            (fail-soft) としては使ってよい。**指し手としては使えない** —
+            真値はもっと下かもしれず、実局面で -20 の手が +16 の顔で最善に
+            なった。値だけ直すと手が壊れ、手だけ直すと値が壊れるので、
+            条件を分ける。 */
             if val > max {
                 max = val;
-                best = m.pos;
+                shared_lower.fetch_max(val, Ordering::Relaxed);
             }
-            shared_lower.fetch_max(val, Ordering::Relaxed);
+            if val > cur && val > best_val {
+                best_val = val;
+                best = Some(m.pos);
+            }
             if val >= upper {
-                group.abort();
                 break;
             }
         }
@@ -2273,27 +2388,48 @@ impl Worker<'_> {
         // Everything handed over has to be accounted for before the borrows
         // above die, aborted or not.
         let t_wait = std::time::Instant::now();
-        for &i in &handed {
+        for &(i, _) in &handed {
             pool.help_until(&slots[i].done);
         }
         WAIT_NS.fetch_add(t_wait.elapsed().as_nanos() as u64, Ordering::Relaxed);
-        for &i in &handed {
+        let mut any_aborted = false;
+        for &(i, cur_i) in &handed {
             let (val, nodes) = slots[i].result();
             self.nodes += nodes;
-            if dbg_asp() && parent.empty_count() >= 26 {
+            if val == ABORTED {
+                any_aborted = true;
+                TASK_ABORTED.fetch_add(1, Ordering::Relaxed);
+            }
+            if dbg_asp() && parent.empty_count() >= 10 {
                 eprintln!(
-                    "[split] handed {:?} -> {val} ({}M)",
+                    "[split e{}] handed {:?} -> {val} (cur {cur_i}) ({}M)",
+                    parent.empty_count(),
                     siblings[i].pos,
                     nodes / 1_000_000
                 );
             }
-            if val != ABORTED && val > max {
-                max = val;
-                best = siblings[i].pos;
+            // 値と手を分ける (inline と同じ理由)
+            if val != ABORTED {
+                if val > max {
+                    max = val;
+                }
+                if val > cur_i && val > best_val {
+                    best_val = val;
+                    best = Some(siblings[i].pos);
+                }
             }
         }
 
         if unwound {
+            return Some((ABORTED, best));
+        }
+        /* **打ち切られた兄弟がいるなら、残りだけで値を確定できない。**
+
+        カットオフを証明できた (`max >= upper`) ならその手で足りるが、そうで
+        ないうちに止められた兄弟は「見ていない手」であって「悪い手」ではない。
+        残りだけで最大を採ると、止められた側が最善だったときに取りこぼす。
+        実局面で +16 の手を落として +14 の手を最善として返した。 */
+        if (any_aborted || cut_short) && max < upper {
             return Some((ABORTED, best));
         }
         Some((max, best))
@@ -2388,6 +2524,10 @@ impl Worker<'_> {
                 ev,
             );
             board.pass();
+            // 打ち切りは値ではない。表にも書かない
+            if val == -ABORTED {
+                return ABORTED;
+            }
             self.tt.update(board, hash, alpha, beta, val, None);
             return val;
         }
@@ -2478,7 +2618,9 @@ impl Worker<'_> {
                 }
                 if val > max {
                     max = val;
-                    best = Some(bpos);
+                    if let Some(p) = bpos {
+                        best = Some(p);
+                    }
                 }
                 self.tt.update(board, hash, alpha, beta, max, best);
                 return max;
