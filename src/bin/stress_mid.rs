@@ -1,8 +1,14 @@
-//! 中盤の並列探索を 1 スレッドと突き合わせる。
+//! 中盤の並列探索が**自己整合**しているかを見る。
 //!
-//! 同じ深さ・同じ設定なら 1 スレッドの答えが正解。並列で違う手や値が出たら、
-//! それは並列化の欠陥であって「探索の揺らぎ」ではない。**読切側は 1 局面や
-//! FFO では見つからず、この形の検証器で初めて出た。**
+//! **逐次と一致することは求めない。** Lazy SMP のヘルパーは
+//! `main_depth + ctz(idx+1)` と違う深さを読み、その結果を共有の表に置く。
+//! 本探索がそれを使うのは設計どおりで、深さ N の逐次と同じ答えになったら
+//! ヘルパーが働いていないことになる。同値の別解を選ぶのも普通に起こる。
+//!
+//! 見るのは「**返した値が、返した手から出た値か**」。実戦の事故はそこが
+//! 壊れていた — 零幅窓で沈んだ手の上界を値として返し、真値 -20 の手を
+//! 「+16」と称して指した。手を実際に打って読み直し、大きく食い違ったら
+//! 並列化の欠陥を疑う。
 //!
 //! Usage: stress_mid [局面数] [深さ] [スレッド]
 use kuroobi::midgame::{NnueSearch, SharedTt};
@@ -78,15 +84,81 @@ fn main() {
         };
         let (p1, v1) = solve(1);
         let (pn, vn) = solve(threads);
-        // 手が違うのは同値の別解かもしれないので、値の差だけを数える
-        // 値も手も一致すべき (MPC を切れば一意)
+        /* **返した手を打って読み直す。** 中盤は近似なので多少はずれるが、
+        指し手と値が別物なら大きく開く。許容は 3 石 (`MID_TOL` で変えられる)。 */
+        let tol: f32 = std::env::var("MID_TOL")
+            .ok()
+            .and_then(|v| v.parse().ok())
+            .unwrap_or(3.0);
+        let own = pn.map(|p| {
+            let mut nb = b;
+            let flipped = nb.make_move_bits(p);
+            let _ = flipped;
+            let flip = if nb.movable() == 0 {
+                nb.pass();
+                false
+            } else {
+                true
+            };
+            let tt: &'static SharedTt = Box::leak(Box::new(SharedTt::new(22)));
+            let mut w = NnueSearch::new(nn, tt);
+            w.threads = 1;
+            w.mpc = false;
+            let (_, v) = w.best_move_valued(&nb, depth.saturating_sub(1));
+            if flip {
+                -v
+            } else {
+                v
+            }
+        });
+        if own.is_some_and(|o| (o - vn).abs() > tol) {
+            bad += 1;
+            println!(
+                "局面 {i}: {threads} スレッドは {:?} {vn:+.2} と言うが、その手を読み直すと {:+.2}",
+                pn.map(name),
+                own.unwrap()
+            );
+            if bad >= 5 {
+                break;
+            }
+            continue;
+        }
+        /* **食い違ったら同じ局面を繰り返す。** 競合は毎回出るとは限らないの
+        で、1 回の食い違いだけでは「たまたま」なのか「必ず壊れる」のか分から
+        ない。`MID_REPEAT=n` で n 回まわして出方を見る。 */
         if (v1 - vn).abs() > 0.001 || p1 != pn {
+            if let Ok(r) = std::env::var("MID_REPEAT") {
+                let r: usize = r.parse().unwrap_or(5);
+                print!("局面 {i} を {r} 回:");
+                for _ in 0..r {
+                    let (p, v) = solve(threads);
+                    print!(" {}{v:+.2}", p.map(name).unwrap_or_default());
+                }
+                println!(" / 逐次 {}{v1:+.2}", p1.map(name).unwrap_or_default());
+            }
+        }
+        // 手が違うのは同値の別解かもしれないので、値の差だけを数える
+        // 逐次との差は参考。既定では数えない (`MID_STRICT=1` で数える)
+        let strict = std::env::var("MID_STRICT").is_ok_and(|v| v != "0");
+        if strict && ((v1 - vn).abs() > 0.001 || p1 != pn) {
             bad += 1;
             println!(
                 "局面 {i}: 1 スレッド {:?} {v1:+.2} 対 {threads} スレッド {:?} {vn:+.2}",
                 p1.map(name),
                 pn.map(name)
             );
+            let mut obf = String::new();
+            for k in 0..64 {
+                let bit = 1u64 << k;
+                obf.push(if b.player_bb() & bit != 0 {
+                    'X'
+                } else if b.opponent_bb() & bit != 0 {
+                    'O'
+                } else {
+                    '-'
+                });
+            }
+            println!("  obf: {obf} X  (空き {})", b.empty_count());
             if bad >= 5 {
                 break;
             }

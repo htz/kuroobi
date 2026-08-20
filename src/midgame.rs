@@ -1608,7 +1608,12 @@ impl NnueSearch {
         // Which of the two ordering weight sets to use. Null-window nodes
         // are most of the tree and get the cheap one.
         let mover = b.player();
+        /* **値と手は別に積む。** 零幅窓で沈んだ手の値は上界で、節点の値
+        (fail-soft) には使えるが指し手には使えない。同じ変数で追うと「値だけ
+        上がって手が取り残される」— 読切側で -20 の手が +16 の顔をして最善に
+        なったのと同じ形。 */
         let mut best = f32::NEG_INFINITY;
+        let mut best_val = f32::NEG_INFINITY;
         let mut best_move = 64u8;
         let mut moves = moves;
 
@@ -1892,14 +1897,10 @@ impl NnueSearch {
                 let g = -raw;
                 if g > best {
                     best = g;
-                    /* **沈んだ手は最善手を名乗れない。** 零幅窓
-                    `(-(alpha+eps), -alpha)` で `g <= alpha` なら g は上界で、
-                    真値はもっと下かもしれない。値は fail-soft の上界として
-                    使えるが、**指し手として記録すると大負けの手が最善手に
-                    なる** — 読切側の同じ欠陥で実戦 36 石を失った。 */
-                    if g > alpha {
-                        best_move = pos.index();
-                    }
+                }
+                if g > alpha && g > best_val {
+                    best_val = g;
+                    best_move = pos.index();
                 }
                 if g > alpha {
                     next_alpha = next_alpha.max(g);
@@ -1926,10 +1927,10 @@ impl NnueSearch {
                 let g = -raw;
                 if g > best {
                     best = g;
-                    // 沈んだ手は候補にしない (上の零幅窓と同じ理由)
-                    if g > alpha {
-                        best_move = kids[i].0.index();
-                    }
+                }
+                if g > alpha && g > best_val {
+                    best_val = g;
+                    best_move = kids[i].0.index();
                 }
                 if g > alpha {
                     next_alpha = next_alpha.max(g);
@@ -1978,6 +1979,10 @@ impl NnueSearch {
                 let g = -raw;
                 if g > best {
                     best = g;
+                }
+                // 全窓で読み直した値は真値なので、手の候補になる
+                if g > best_val {
+                    best_val = g;
                     best_move = pos.index();
                 }
                 if best > alpha {
