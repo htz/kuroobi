@@ -1003,12 +1003,8 @@ export function GgsSettings({ snap }: { snap: GgsSnapshot }) {
           </Field>
           <Note>
             {byClock
-              ? <>読む深さ・読切に入る空き・選択読みの帯を、残り時間とこの機械の
-                  速さから<b style={{ color: 'var(--text)' }}>毎手決め直します</b>。
-                  決める物が残らないので、ここに強さの目盛りはありません。</>
-              : <>時間を見ずに、選んだ Lv のとおりに読みます。
-                  <b style={{ color: 'var(--text)' }}>持ち時間の管理は指す側の責任です</b> —
-                  深い Lv では時間切れになります。</>}
+              ? '深さ・読切・選択読みを、残り時間から毎手決めます。'
+              : '選んだ Lv のとおりに読みます。時間は見ません。'}
           </Note>
           {/* **時間で決めるなら目盛りは出さない。** 深さも読切も帯も時間から
               決まるので、置いても効かない物を並べることになる */}
@@ -1035,11 +1031,7 @@ export function GgsSettings({ snap }: { snap: GgsSnapshot }) {
                        options={[{ value: 'on', label: 'する' },
                                  { value: 'off', label: 'しない' }]} />
           </Field>
-          <Note>
-            相手が考えている間に、相手が指すと思う手の先を読んでおきます。
-            自分の持ち時間は減りません。
-            当たれば同じ持ち時間で 1 段ほど深く読めます (実測 +1.25 段)。外れた回は読み直します。
-          </Note>
+          <Note>相手の手番中に先を読みます。自分の持ち時間は減りません。</Note>
         </Section>
 
         {/* **配り方は選ばせない。** 4 択で測ったところ「じっくり」は 3 秒・
@@ -1052,12 +1044,7 @@ export function GgsSettings({ snap }: { snap: GgsSnapshot }) {
               <b style={{ color: 'var(--text)' }}>「Lv で決める」を選んでいるので、ここは効きません。</b>
             </Note>
           )}
-          <Note>
-            1 手にかける時間を、残り時間と残り手数から決めます。
-            <b style={{ color: 'var(--text)' }}>序盤を短く切り上げ、終盤に残します</b> —
-            自己対局で、序盤に厚く配ると 3 秒・8 秒の対局で勝率 0% まで落ちました。
-            読切に入る空きは<b style={{ color: 'var(--text)' }}>この機械の速さから自動で決まります</b>。
-          </Note>
+          <Note>1 手の時間を残り時間と残り手数から決めます。序盤を短く、終盤に残します。</Note>
           {(
             <div style={{ display: 'flex', gap: 'var(--sp-4)' }}>
               <Field label="1 手の上限 (秒、0 = なし)">
@@ -1074,15 +1061,7 @@ export function GgsSettings({ snap }: { snap: GgsSnapshot }) {
               </Field>
             </div>
           )}
-          <Note>
-            「攻めて使う度合い」は<b style={{ color: 'var(--text)' }}>1.0 で配分どおり</b>です。
-            反復深化は期限まで粘らず、次の段が入らないと判断した時点で返るので
-            (実測で期限の 47%)、1.0 だと配ったぶんの半分しか使いません。
-            既定の 2.5 では 15 分の対局で使用率が
-            <b style={{ color: 'var(--text)' }}>45% → 84%</b> に上がり、
-            同じ局面の到達深さが 20 秒 27 手 → 60 秒 30 手 と伸びました。
-            大きくするほど序盤に厚く使います。
-          </Note>
+          <Note>「攻めて使う度合い」は 1.0 で配分どおり。大きいほど 1 手に長く使います。</Note>
         </Section>
 
         <Section title="定石">
@@ -1096,11 +1075,7 @@ export function GgsSettings({ snap }: { snap: GgsSnapshot }) {
             上の 強さ / 持ち時間 / 定石 / ふるまい は手元の設定で、
             未接続でも `ggs.rs` の待ち受けが受け取る (1015〜1055 行) */}
         <Section title="申し込みの扱い">
-          <Note>
-            相手から対局を申し込まれたときに、自動で受ける / 断る条件です。
-            <b style={{ color: 'var(--text)' }}>サーバー側に残る</b>ので、アプリを閉じていても効きます。
-            受ける条件と断る条件の両方に当てはまるときは、断るほうが勝ちます。
-          </Note>
+          <Note>申し込みを自動で受ける / 断る条件です。サーバー側に残ります。</Note>
           {online ? <>
             <FormulaField label="自動で受ける条件" src={myForm('accept')}
                           onSave={(s) => void saveForm('aform', s)} />

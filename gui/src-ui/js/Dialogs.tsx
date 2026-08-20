@@ -367,11 +367,7 @@ export function Settings({ prefs, setPref, ggs, initialTab, onClose }: {
                       options={[['0', 'なし'], ['300', '5 分'], ['600', '10 分'],
                                 ['900', '15 分'], ['1200', '20 分'], ['1800', '30 分']]} />
             </Row2>
-            <Note>
-              KUROOBI と自分の<b style={{ color: 'var(--text)' }}>両方</b>が持ちます。次の「新規対局」から効きます。
-              時間の配り方は GGS と同じもの (残り手数で等分) を使うので、
-              本番前の練習になります。切れた側の負けです。
-            </Note>
+            <Note>KUROOBI と自分の両方が持ちます。次の「新規対局」から効きます。切れた側の負けです。</Note>
           </Section>
         {th && (
           <Section title="ローカル探索のスレッド数">
@@ -390,12 +386,7 @@ export function Settings({ prefs, setPref, ggs, initialTab, onClose }: {
             </Row2>
             {/* 説明は操作の下、節の幅いっぱい (設計の絵と同じ)。欄の列に
                 字下げすると、欄の補足なのか節の説明なのかが曖昧になる */}
-            <Note>
-              ローカル対局・検討・学習の取り込み・
-              <b style={{ color: 'var(--text)' }}>GGS 対局</b>が使う並列数です
-              (以前は GGS だけ別に持っていましたが、下の読切の速度がスレッド数ごとの値なので
-              一本にしました)。自動 = コア数の半分 ({th.auto})。
-            </Note>
+            <Note>ローカル対局・検討・学習・GGS 対局が使う並列数です。</Note>
           </Section>
         )}
         {/* **速さはスレッド数ごとの値**なので、スレッド数の節の直後に置く。
@@ -420,13 +411,7 @@ export function Settings({ prefs, setPref, ggs, initialTab, onClose }: {
                         setCalib(false);
                       })()}>{calib ? '測定中…' : '測り直す'}</Button>
             </Row2>
-            <Note>
-              持ち時間のある対局で<b style={{ color: 'var(--text)' }}>読切に入る空き</b>を決めるのに使います。
-              読切は途中で打ち切れないので、入る前に「この機械なら何秒で読み切れるか」を知っている必要があります。
-              <b style={{ color: 'var(--text)' }}>起動時に自動で測る</b>ので、ふつうは触らなくて構いません
-              (空き 22 の 3 局面を実際に読み切るもので、数秒で終わります)。
-              速さはスレッド数で 4 倍変わるため、上のスレッド数を変えると測り直します。
-            </Note>
+            <Note>持ち時間のある対局で読切に入る空きを決めるのに使います。起動時に自動で測ります。</Note>
           </Section>
         )}
         {hash && (
@@ -454,14 +439,7 @@ export function Settings({ prefs, setPref, ggs, initialTab, onClose }: {
                         return [String(b), `${fmtSize(2 ** b * 24)}${b === 24 ? ' (既定)' : ''}`] as [string, string];
                       })} />
             </Row2>
-            <Note>
-              合計 <b style={{ color: 'var(--text)' }}>{fmtSize(hash.bytes)}</b> を使います
-              (エンジン 1 つあたり)。<b style={{ color: 'var(--text)' }}>次の起動から効きます</b>。
-              終盤の既定 (403 MB) は実測で決めました — 対局が読む空き 26〜30 で、
-              1 段下げる (100 MB) と <b style={{ color: 'var(--text)' }}>8.9% 遅く</b>なり、
-              1 段上げても (1.6 GB) 1.2% しか速くなりません。
-              メモリが足りない機械では起動できなくなるので、増やしたら一度起動して確かめてください。
-            </Note>
+            <Note>次の起動から効きます。増やしたら一度起動して確かめてください。</Note>
           </Section>
         )}
         </>}
