@@ -42,7 +42,9 @@ pub enum Cmd {
     Accept(String),
     Decline(String),
     Finger(String),
-    Who(String),
+    /// 接続中の一覧。**プールは取らない** — どちらのレートも出すので、
+    /// 常に通常 8 とランダム開局 8r の両方を取る。
+    Who,
     Top {
         gtype: String,
         n: u32,
@@ -157,6 +159,11 @@ pub struct UserRow {
     pub rating: Option<f32>,
     /// レートの偏差。`/os top` は返すが `/os who` は返さない。
     pub dev: Option<f32>,
+    /// ランダム開局 (8r) のレートと偏差。**接続中の一覧だけが持つ** —
+    /// `/os who` を 2 プール分取って名前で重ねている。ランキングは
+    /// プールを選んで見るものなので、こちらは埋まらない。
+    pub rating_r: Option<f32>,
+    pub dev_r: Option<f32>,
     pub raw: String,
 }
 
@@ -413,6 +420,9 @@ pub fn demo_snapshot() -> Snapshot {
         name: n.into(),
         rating: Some(r),
         dev: Some(d),
+        // デモでも 2 プール分出す (見た目の確認に要る)
+        rating_r: Some(r - 30.0),
+        dev_r: Some(d + 8.0),
         raw: format!("{n} {r}@{d}"),
     })
     .collect();
@@ -424,6 +434,8 @@ pub fn demo_snapshot() -> Snapshot {
             name: format!("player{:02}", i + 1),
             rating: Some(r),
             dev: Some(40.0 + i as f32),
+            rating_r: Some(r - 30.0),
+            dev_r: Some(48.0 + i as f32),
             raw: format!("player{:02} {r}@40", i + 1),
         });
     }
@@ -1954,9 +1966,13 @@ pub fn run(
                             pending.push(format!("osfinger:{name}"));
                             send!(ctx, format!("tell /os finger {name}"));
                         }
-                        Cmd::Who(t) => {
-                            pending.push("who".into());
-                            send!(ctx, format!("tell /os who {t}"));
+                        /* 引数のプールは見ない。**一覧は常に 2 プール分**
+                        取って重ねる (どちらのレートも出すため)。 */
+                        Cmd::Who => {
+                            for t in ["8", "8r"] {
+                                pending.push(format!("who:{t}"));
+                                send!(ctx, format!("tell /os who {t}"));
+                            }
                         }
                         Cmd::Top { gtype, n } => {
                             pending.push("top".into());
@@ -2249,8 +2265,14 @@ pub fn run(
                         send!(ctx, "tell /os notify +");
                         send!(ctx, "tell /os open 1");
                         send!(ctx, "chann + .chat");
-                        pending.push("who".into());
-                        send!(ctx, "tell /os who 8");
+                        /* **接続中の一覧は 2 プール分取る。** 応答ヘッダは
+                        `/os: who ...` でプール名を含まないので、送った順に
+                        返ることに頼って `pending` の並びで見分ける
+                        (`rank` が前から同じ作り)。 */
+                        for t in ["8", "8r"] {
+                            pending.push(format!("who:{t}"));
+                            send!(ctx, format!("tell /os who {t}"));
+                        }
                         // GGS のレートプールは 8 (通常) と 8r (ランダム開局) の
                         // 2 つだけ。synchro は対局形式でありプールではない。
                         for t in ["8", "8r"] {
@@ -2539,8 +2561,10 @@ pub fn run(
                             handle_match_end(&mut ctx, mrest, &login, &mut matches);
                             if was_mine {
                                 // レートが動いたはずなので who を取り直す
-                                pending.push("who".into());
-                                send!(ctx, "tell /os who 8");
+                                for t in ["8", "8r"] {
+                                    pending.push(format!("who:{t}"));
+                                    send!(ctx, format!("tell /os who {t}"));
+                                }
                             }
                             // 待機モード: 次の対局を予約
                             let s = ctx.snap.lock().unwrap();
@@ -3976,7 +4000,7 @@ fn is_month(t: &str) -> bool {
 }
 
 fn capture_header_matches(kind: &str, ln: &str) -> bool {
-    if kind == "who" {
+    if kind.starts_with("who") {
         ln.starts_with("/os: who")
     } else if kind == "top" {
         ln.starts_with("/os: top")
@@ -4056,7 +4080,7 @@ fn finish_capture(ctx: &mut Ctx, kind: &str, buf: &[String], login: &str) {
         ctx.dirty = true;
         return;
     }
-    if kind == "who" || kind == "top" {
+    if kind.starts_with("who") || kind == "top" {
         // who 実形式: `|Rhapsody + 1720.0@350.0 ->   +33.6 ...`
         // top 実形式: `|    2 kuroobi  2184.2@179.3=  ...` (先頭に順位)
         let mut users = Vec::new();
@@ -4106,6 +4130,8 @@ fn finish_capture(ctx: &mut Ctx, kind: &str, buf: &[String], login: &str) {
                 name: name.to_string(),
                 rating,
                 dev,
+                rating_r: None,
+                dev_r: None,
                 raw: b.to_string(),
             });
         }
@@ -4120,10 +4146,20 @@ fn finish_capture(ctx: &mut Ctx, kind: &str, buf: &[String], login: &str) {
         });
         let mut s = ctx.snap.lock().unwrap();
         if !users.is_empty() {
-            if kind == "who" {
-                s.users = users;
-            } else {
-                s.ranking = users;
+            match kind {
+                /* **8r は重ねるだけ。** 顔ぶれは同じなので行は作り直さず、
+                名前で引いて 8r 側のレートを埋める。取り違えると通常のレートを
+                ランダム開局のもので上書きしてしまう。 */
+                "who:8r" => {
+                    for u in &users {
+                        if let Some(t) = s.users.iter_mut().find(|x| x.name == u.name) {
+                            t.rating_r = u.rating;
+                            t.dev_r = u.dev;
+                        }
+                    }
+                }
+                k if k.starts_with("who") => s.users = users,
+                _ => s.ranking = users,
             }
         }
         if let Some(r) = my_rating {
