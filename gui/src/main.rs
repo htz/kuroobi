@@ -2213,9 +2213,7 @@ fn ggs_finger(app: State<App>, name: String) -> Result<(), String> {
 
 #[tauri::command]
 fn ggs_who(app: State<App>) -> Result<(), String> {
-    ggs_tx(&app)?
-        .send(ggs::Cmd::Who)
-        .map_err(|e| e.to_string())
+    ggs_tx(&app)?.send(ggs::Cmd::Who).map_err(|e| e.to_string())
 }
 
 #[tauri::command]

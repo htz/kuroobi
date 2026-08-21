@@ -830,7 +830,13 @@ fn append_history(r: &GameResult) {
 fn chat_path(login: &str) -> PathBuf {
     let safe: String = login
         .chars()
-        .map(|c| if c.is_ascii_alphanumeric() || c == '_' || c == '-' { c } else { '_' })
+        .map(|c| {
+            if c.is_ascii_alphanumeric() || c == '_' || c == '-' {
+                c
+            } else {
+                '_'
+            }
+        })
         .collect();
     let dir = history_path()
         .parent()
@@ -905,7 +911,11 @@ fn append_chat(login: &str, m: &ChatMsg) {
         return;
     };
     use std::io::Write as _;
-    if let Ok(mut f) = std::fs::OpenOptions::new().create(true).append(true).open(&path) {
+    if let Ok(mut f) = std::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(&path)
+    {
         let _ = writeln!(f, "{line}");
     }
     /* 毎回数えると 5000 行を毎発言ぶん読むことになるので、**十分に
@@ -2072,10 +2082,10 @@ pub fn run(
 
         let mut login_fails = 0u32; // ログイン前に切られた回数
         let mut cred_saved = false; // 認証情報をキーチェーンへ保存したか
-        /* **前回までの会話を戻す。** 落とすたびに真っ白になるので、誰と
-        何を話したか (相手からの申し込みの経緯も) が辿れなかった。画面が
-        持つのは直近 300 件なので、そのぶんだけ載せる。**再接続では読み
-        直さない** — 切れただけで会話が二重になる。 */
+                                    /* **前回までの会話を戻す。** 落とすたびに真っ白になるので、誰と
+                                    何を話したか (相手からの申し込みの経緯も) が辿れなかった。画面が
+                                    持つのは直近 300 件なので、そのぶんだけ載せる。**再接続では読み
+                                    直さない** — 切れただけで会話が二重になる。 */
         {
             let mut s = ctx.snap.lock().unwrap();
             if s.chat.is_empty() {
@@ -3474,11 +3484,11 @@ fn apply_block(m: &mut MatchState, block: &[String], login: &str) -> (bool, Opti
             turns.push('O');
         }
         /* 着手履歴行: `N: F5/...` または `N: F5//1.2`
-        
+
         **0 番は着手ではない。** 対局開始の join は「まだ 0 手」の目印として
         `|0 move(s)` と `|  0: PASS` を送ってくる。これを着手として積むと
         2 つ壊れる:
-        
+
         - 棋譜の先頭に `B[PA]` が入り、以降の色が 1 つずれる
         - 「まだ 1 手も指していない」判定が成立せず、**抽選開局の開始局面を
           掴み損ねる**。棋譜が「初期配置 + 抽選明けの着手」になり、再生
@@ -4166,7 +4176,10 @@ fn end_kind(rest: &str) -> (&'static str, String) {
     // "<name> left" — 抜けた側の名前を拾う
     let toks: Vec<&str> = rest.split_whitespace().collect();
     if let Some(i) = toks.iter().position(|t| *t == "left") {
-        let who = i.checked_sub(1).map(|j| toks[j].to_string()).unwrap_or_default();
+        let who = i
+            .checked_sub(1)
+            .map(|j| toks[j].to_string())
+            .unwrap_or_default();
         return ("adjourned", who);
     }
     ("finished", String::new())
@@ -4477,7 +4490,7 @@ fn finish_capture(ctx: &mut Ctx, kind: &str, buf: &[String], login: &str) {
     if let Some(id) = kind.strip_prefix("look:") {
         // 実形式: `|1 (;GM[Othello]PC[GGS/os]...;)` (先頭の番号は連番)
         /* 折り返しで複数行に割れて届くので、まず 1 本に繋いでから切り出す。
-        **同期対局は 2 局入っている** ので全部拾う。 */
+         **同期対局は 2 局入っている** ので全部拾う。 */
         let joined: String = buf.iter().map(|l| l.trim()).collect::<Vec<_>>().join("");
         let mut parts: Vec<String> = Vec::new();
         let mut rest = joined.as_str();
@@ -5409,7 +5422,7 @@ mod tests {
         assert_eq!(disc(4, 4), 2); // E5 = O
         assert_eq!(m.cells.iter().filter(|&&c| c != 0).count(), 4);
         /* 着手履歴 (eval/time 付きの行も拾う)。
-        
+
         **0 番は積まない。** あれは「まだ 0 手」の目印で着手ではない
         (`the_zero_move_marker_is_not_a_move`)。積んでいた頃は棋譜の先頭に
         パスが入り、開始局面も掴み損ねていた。 */
