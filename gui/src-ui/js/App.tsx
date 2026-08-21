@@ -148,7 +148,7 @@ export function App() {
   /* 棋譜ビューア (規則 71)。`pending` はアーカイブ番号 — 手元に棋譜が
    * 無い対局は覆いを先に開き、届いたら中身を差し込む。 */
   const [viewer, setViewer] = useState<
-    { title: string; kifu: string; pending?: string; archive?: string } | null
+    { title: string; kifu: string; pending?: string; archive?: string; parts?: string[] } | null
   >(null);
 
   const [paste, setPaste] = useState(false);
@@ -360,7 +360,10 @@ export function App() {
     void (async () => {
       // 覆いが待っているならそちらへ差し込む。待っていないときだけ検討へ
       if (fetched.ggf) {
-        setViewer((cur) => (cur && cur.pending === fetched.id ? { ...cur, kifu: fetched.ggf } : cur));
+        // 同期対局は 2 面入っている。覆いで面を選べるように全部渡す
+        setViewer((cur) => (cur && cur.pending === fetched.id
+          ? { ...cur, kifu: fetched.ggf, parts: fetched.parts }
+          : cur));
         // 覆いが待っていないときだけ検討へ。viewer は依存に入れない
         // (入れると覆いを開くたびにこの effect が走り直す)
         if (!viewer?.pending) {
@@ -653,8 +656,16 @@ export function App() {
 
         {isGgs ? <GgsScreen nav={nav} snap={ggs.snap} onNav={setNav} prefs={prefs}
                        onKifu={(title, kifu, archive) => {
-                         setViewer({ title, kifu, pending: kifu ? undefined : archive, archive });
-                         if (!kifu && archive) void ggsApi.look(archive);
+                         /* **番号があるなら書庫から取る。** 同期対局は
+                            1 つの番号に 2 面入っていて、手元の記録は片面
+                            ぶんしか無い。書庫の棋譜には評価値と消費時間も
+                            付いてくる。手元の棋譜は番号が無いときの控え */
+                         if (archive) {
+                           setViewer({ title, kifu: '', pending: archive, archive });
+                           void ggsApi.look(archive);
+                         } else {
+                           setViewer({ title, kifu });
+                         }
                        }} />
          : isBook ? (
           bookTab === '定石' ? (
@@ -877,6 +888,7 @@ export function App() {
 
       {viewer && (
         <KifuViewer title={viewer.title} kifu={viewer.kifu}
+                    parts={viewer.parts}
                     onClose={() => setViewer(null)}
                     // 手元の棋譜が読めないときだけ書庫へ聞き直す (1 回きり)
                     onRefetch={viewer.archive && viewer.pending !== viewer.archive

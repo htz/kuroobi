@@ -1224,7 +1224,10 @@ function GgsResults({ snap, onKifu }: {
   snap: GgsSnapshot;
   onKifu: (title: string, kifu: string, archive?: string) => void;
 }) {
-  const [gtype, setGtype] = useState('all');
+  /* **既定は「すべて」にしない。** レートは形式ごとに別のプールで、
+     通しの値は存在しない。混ぜて折れ線にすると、8 と 8r を行き来する
+     たびに 150 点跳ぶ嘘のグラフになる。いちばん指している形式を出す。 */
+  const [gtype, setGtype] = useState('');
   /* サーバーの履歴も取り込む。**手元に残るのはこのアプリで終局した対局
    * だけ**なので、別の端末や以前の GUI で打ったぶんが丸ごと抜けていた
    * (この画面が空のままになる)。GGS は `/os history` で全部返す。 */
@@ -1253,8 +1256,20 @@ function GgsResults({ snap, onKifu }: {
         kifu: '', ggf: '', archive: h.id,
       } as GameResult;
     });
-  const all = [...snap.results, ...fromServer];
-  const rows = all.filter((r) => gtype === 'all' || baseType(r.base, r.raw) === gtype);
+  /* **時刻で並べ直す。** 手元の記録とサーバーの履歴を繋いだだけだと、
+     それぞれの中では新しい順でも、境目で時間が巻き戻る (グラフの横軸が
+     8/16 → 8/15 と逆走していた)。時刻の無いものは後ろへ。 */
+  const all = [...snap.results, ...fromServer].sort((x, y) => (y.at ?? 0) - (x.at ?? 0));
+  /* 既定 (未選択) は局数のいちばん多い形式。**「すべて」を既定にしない** —
+     レートは形式ごとに別のプールなので、通しの推移は存在しない。 */
+  let most = '';
+  let mostN = -1;
+  for (const k of kinds) {
+    const n = all.filter((r) => baseType(r.base, r.raw) === k).length;
+    if (n > mostN) { mostN = n; most = k; }
+  }
+  const cur = gtype || most || 'all';
+  const rows = all.filter((r) => cur === 'all' || baseType(r.base, r.raw) === cur);
   // グラフは古い順。results は新しい順に積まれている
   const rated = rows.filter((r) => r.my_rating != null).reverse();
   const rates = rated.map((r) => r.my_rating as number);
@@ -1279,16 +1294,23 @@ function GgsResults({ snap, onKifu }: {
                   padding: 'var(--sp-4) var(--sp-4) 0' }}>
       <Section title="レートの推移"
                aside={kinds.length > 1 ? (
-                 <Segmented value={gtype} onChange={setGtype}
-                            options={[{ value: 'all', label: 'すべて' },
-                                      ...kinds.map((k) => ({ value: k, label: gtypeLabel(k) }))]} />
+                 <Segmented value={cur} onChange={setGtype}
+                            options={[...kinds.map((k) => ({ value: k, label: gtypeLabel(k) })),
+                                      { value: 'all', label: 'すべて' }]} />
                ) : undefined}>
         {/* 本文の幅いっぱいに置くので viewBox もそれに合わせる
             (300 のままだと横に引き伸ばされて線の太さが崩れる)。
             **ここは画面の主役なので軸を出す** — 「いつ何点だったか」を
             読む場所 (2026-08-10 にデザイン側と決着。ドックの中は軸なし) */}
-        <RateChart points={rates} width={800} height={180} axes dates={rateDates}
-                   labels={rateLabels} hover={hover} onHover={setHover} />
+        {cur === 'all' ? (
+          /* **通しのレートは無い。** 形式ごとに別のプールなので、
+             ここで折れ線を引くと 8 と 8r の行き来がそのまま段差になる。
+             一覧のほうは「すべて」で見たいことがあるので残す。 */
+          <Note>レートは形式ごとに別です。推移は形式を選ぶと出ます。</Note>
+        ) : (
+          <RateChart points={rates} width={800} height={180} axes dates={rateDates}
+                     labels={rateLabels} hover={hover} onHover={setHover} />
+        )}
       </Section>
 
       <Section title="終わった対局" aside={<span>{rows.length}</span>} grow>
@@ -1305,7 +1327,7 @@ function GgsResults({ snap, onKifu }: {
                      }}
                      win={(r.my_diff ?? 0) > 0} draw={r.my_diff === 0}
                      discs={r.my_diff ?? 0} when={fmtDay(r.at)}
-                     note={gtype === 'all' ? gtypeLabel(baseType(r.base, r.raw)) : undefined}
+                     note={cur === 'all' ? gtypeLabel(baseType(r.base, r.raw)) : undefined}
                      rating={r.my_rating}
                      // GGF なら開始局面も入っている (抽選開局の対局が戻る)。
                      // どちらも無い対局は番号から取り出す
@@ -1694,7 +1716,7 @@ function UserDetail({ snap, name, tab, onTab, onBack, onNav, onKifu }: {
                   <span style={{ color: 'var(--sub)' }}>{black ? '黒' : '白'}</span>
                   <span style={{
                     color: mine == null ? 'var(--sub)'
-                      : mine > 0 ? 'var(--ok)' : mine < 0 ? 'var(--bad)' : 'var(--fg)',
+                      : mine > 0 ? 'var(--ok)' : mine < 0 ? 'var(--bad)' : 'var(--text)',
                   }}>
                     {mine == null ? '—' : mine > 0 ? `+${mine}` : `${mine}`}
                   </span>

@@ -3,6 +3,7 @@ import { api, ggsApi, type KifuFrame } from './api';
 import { Board } from './components/board';
 import { MoveScrub, ScoreRow } from './components/data';
 import { Modal, Overlay } from './components/layout';
+import { Segmented } from './components/primitives';
 import { Button } from './components/primitives';
 
 /* 棋譜を盤面で確かめる覆い (規則 71)。設計 `適用画面 GGS 2` §9。
@@ -33,9 +34,20 @@ export interface KifuViewerProps {
   onStudy: (kifu: string) => void;
   /** 手元の棋譜が読めなかったときの逃げ道 (サーバーの書庫から取り直す)。 */
   onRefetch?: () => void;
+  /** 同じ番号に入っていた全局。**同期対局は 2 面**あり、片面だけ見せると
+   *  「もう 1 局はどこへ行った」になる。2 つ以上あるときだけ帯を出す。 */
+  parts?: string[];
 }
 
-export function KifuViewer({ title, kifu, onClose, onStudy, onRefetch }: KifuViewerProps) {
+export function KifuViewer({ title, kifu, onClose, onStudy, onRefetch, parts }: KifuViewerProps) {
+  /* どの面を見ているか。**別の対局に変わったら 1 面目に戻す。**
+     effect で戻すと描画が二度走るので、持ち主 (棋譜そのもの) を鍵にして
+     描画中に判ずる。 */
+  const [pick, setPick] = useState({ key: '', face: 0 });
+  const key = parts?.[0] ?? '';
+  const face = pick.key === key ? pick.face : 0;
+  const setFace = (i: number) => setPick({ key, face: i });
+  const shown = parts && parts.length > 1 ? (parts[face] ?? kifu) : kifu;
   // 取得結果はどの棋譜のものかを持たせる (棋譜が差し替わった瞬間に
   // 前の盤面が残らない)
   const [got, setGot] = useState<{ kifu: string; frames?: KifuFrame[]; err?: string } | null>(null);
@@ -48,25 +60,25 @@ export function KifuViewer({ title, kifu, onClose, onStudy, onRefetch }: KifuVie
   const [playing, setPlaying] = useState(false);
 
   useEffect(() => {
-    if (!kifu.trim()) return;
+    if (!shown.trim()) return;
     let alive = true;
-    void api.previewKifu(kifu)
-      .then((frames) => { if (alive) { setGot({ kifu, frames }); setAt(null); } })
+    void api.previewKifu(shown)
+      .then((frames) => { if (alive) { setGot({ kifu: shown, frames }); setAt(null); } })
       .catch((e) => {
         if (!alive) return;
         /* **読めない棋譜は、まずサーバーへ聞き直す。** 手元の記録は
            抽選オープニングの開始局面を取り落としていた時期があり、その
            ぶんは再生できない。書庫には正しい棋譜が残っている。 */
         if (onRefetch) { onRefetch(); return; }
-        setGot({ kifu, err: String(e) }); setAt(null);
+        setGot({ kifu: shown, err: String(e) }); setAt(null);
       });
     return () => { alive = false; };
     // onRefetch は毎描画で作り直されるので依存に入れない
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [kifu]);
+  }, [shown]);
 
-  const frames = got?.kifu === kifu ? got.frames : undefined;
-  const err = got?.kifu === kifu ? got.err : undefined;
+  const frames = got?.kifu === shown ? got.frames : undefined;
+  const err = got?.kifu === shown ? got.err : undefined;
   const last = frames ? frames.length - 1 : 0;
   // 既定は最終手 (終局図をまず見たい)
   const cur = Math.min(at ?? last, last);
@@ -94,6 +106,11 @@ export function KifuViewer({ title, kifu, onClose, onStudy, onRefetch }: KifuVie
   return (
     <Overlay onClose={onClose}>
       <Modal title={title} width="var(--w-modal-wide)" onClose={onClose}
+             /* 同期対局は 1 つの番号に 2 面。どちらを見ているかを帯で出す */
+             band={parts && parts.length > 1 ? (
+               <Segmented value={String(face)} onChange={(v) => setFace(Number(v))}
+                          options={parts.map((_, i) => ({ value: String(i), label: `${i + 1} 面目` }))} />
+             ) : undefined}
              actions={<>
                <Button size="field" onClick={onClose}>閉じる</Button>
                <span style={{
@@ -108,22 +125,22 @@ export function KifuViewer({ title, kifu, onClose, onStudy, onRefetch }: KifuVie
                    変化が出る*操作 (下の保存は窓が閉じる)。クリップボードは
                    どこにも変化が出ないので、黙ると押せたのかどうかが
                    分からない。**この線引きは規則に無いので投げてある** */}
-               <Button size="field" disabled={!kifu} onClick={() => {
-                 void navigator.clipboard.writeText(kifu)
+               <Button size="field" disabled={!shown} onClick={() => {
+                 void navigator.clipboard.writeText(shown)
                    .then(() => say('コピーしました'))
                    .catch(() => say('コピーできませんでした'));
                }}>棋譜をコピー</Button>
                {/* こちらは何も言わない (規則 34)。保存の窓が閉じたこと自体が
                    報せになっている — 上のコピーとの違いはそこ */}
-               <Button size="field" disabled={!kifu}
-                       onClick={() => void ggsApi.saveKifu(kifu, 'kifu')
+               <Button size="field" disabled={!shown}
+                       onClick={() => void ggsApi.saveKifu(shown, 'kifu')
                          .catch((e) => say('保存できませんでした (' + e + ')'))}>
                  ファイルに保存
                </Button>
                <Button size="field" variant="primary" disabled={!frames}
-                       onClick={() => { onStudy(kifu); onClose(); }}>検討で開く</Button>
+                       onClick={() => { onStudy(shown); onClose(); }}>検討で開く</Button>
              </>}>
-        {!kifu.trim() && (
+        {!shown.trim() && (
             <span style={{ fontSize: 'var(--fs-5)', color: 'var(--sub)' }}>取り出しています…</span>
           )}
           {err && <span style={{ fontSize: 'var(--fs-5)', color: 'var(--bad)' }}>{err}</span>}
@@ -162,7 +179,7 @@ export function KifuViewer({ title, kifu, onClose, onStudy, onRefetch }: KifuVie
                     ではないので、読める形の着手列を上に置く。着手列は控えの
                     局面から作る (GGF を自分で解き直さない) */}
                 <Raw label="着手列" tone="text" text={moveList} />
-                {kifu.startsWith('(;') && <Raw label="GGF" text={kifu} scroll />}
+                {shown.startsWith('(;') && <Raw label="GGF" text={shown} scroll />}
               </div>
             </div>
           )}

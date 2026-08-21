@@ -647,7 +647,11 @@ pub fn demo_snapshot() -> Snapshot {
 #[derive(Clone, Serialize)]
 pub struct FetchedGgf {
     pub id: String,
+    /// 1 局目 (同期対局なら 1 面目)。**古い呼び出し側のために残す。**
     pub ggf: String,
+    /// **返ってきた全局。** 同期対局は 1 つの番号に 2 面が入っている
+    /// (`|2 (;…;)(;…;)`)。先頭だけ取ると片面しか見られない。
+    pub parts: Vec<String>,
     pub error: String,
 }
 
@@ -4196,16 +4200,28 @@ fn parse_rating_token(t: &str) -> Option<f32> {
 fn finish_capture(ctx: &mut Ctx, kind: &str, buf: &[String], login: &str) {
     if let Some(id) = kind.strip_prefix("look:") {
         // 実形式: `|1 (;GM[Othello]PC[GGS/os]...;)` (先頭の番号は連番)
-        let ggf = buf
-            .iter()
-            .filter_map(|l| l.find("(;").map(|i| l[i..].to_string()))
-            .find(|g| g.contains("GM[Othello]"));
+        /* 折り返しで複数行に割れて届くので、まず 1 本に繋いでから切り出す。
+        **同期対局は 2 局入っている** ので全部拾う。 */
+        let joined: String = buf.iter().map(|l| l.trim()).collect::<Vec<_>>().join("");
+        let mut parts: Vec<String> = Vec::new();
+        let mut rest = joined.as_str();
+        while let Some(i) = rest.find("(;") {
+            let after = &rest[i..];
+            let Some(end) = after.find(";)") else { break };
+            let one = &after[..end + 2];
+            if one.contains("GM[Othello]") {
+                parts.push(one.to_string());
+            }
+            rest = &after[end + 2..];
+        }
+        let ggf = parts.first().cloned();
         let mut s = ctx.snap.lock().unwrap();
         match ggf {
             Some(g) => {
                 s.fetched_ggf = Some(FetchedGgf {
                     id: id.to_string(),
                     ggf: g,
+                    parts,
                     error: String::new(),
                 });
             }
@@ -4218,6 +4234,7 @@ fn finish_capture(ctx: &mut Ctx, kind: &str, buf: &[String], login: &str) {
                 s.fetched_ggf = Some(FetchedGgf {
                     id: id.to_string(),
                     ggf: String::new(),
+                    parts: Vec::new(),
                     error: if err.is_empty() {
                         "棋譜が見つかりません".into()
                     } else {

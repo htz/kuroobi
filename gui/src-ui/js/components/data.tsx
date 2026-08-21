@@ -535,8 +535,10 @@ export function RateChart({ points, height = 74, width = 300, axes, dates, label
           <g pointerEvents="none">
             <line x1={hx} y1={pad} x2={hx} y2={height - padB} stroke="var(--sub)" strokeWidth={1} strokeDasharray="2 2" />
             <circle cx={hx} cy={hy} r={3.5} fill="var(--bg)" stroke="var(--accent)" strokeWidth={2} />
-            <rect x={bx} y={0} width={tw} height={17} rx={3} fill="var(--panel)" stroke="var(--border)" />
-            <text x={bx + 6} y={12} fontSize={10} fill="var(--fg)">{text}</text>
+            {/* **地は --card、字は --text。** 変数名を間違えると (--fg は
+                無い) SVG の既定色 = 黒で描かれ、暗い面の上で読めなくなる */}
+            <rect x={bx} y={0} width={tw} height={18} rx={3} fill="var(--card)" stroke="var(--border)" />
+            <text x={bx + 6} y={12.5} fontSize={11} fill="var(--text)">{text}</text>
           </g>
         );
       })()}

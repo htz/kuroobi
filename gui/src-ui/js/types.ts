@@ -249,6 +249,8 @@ export interface EngineCfgView {
 export interface FetchedGgf {
   id: string;
   ggf: string;
+  /** 返ってきた全局。同期対局は 2 面入っている。 */
+  parts: string[];
   error: string;
 }
 
