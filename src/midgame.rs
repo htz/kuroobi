@@ -1344,6 +1344,16 @@ impl NnueSearch {
                 if let Some(p) = self.progress.as_ref() {
                     p.reached(main_depth, best, v);
                 }
+                /* 調べもの用: 段ごとの値の動き。**実戦で「深い段だけ値が
+                跳ねる」ことがあったか**を後から見るために置く。既定では
+                何もしない。 */
+                if std::env::var("ROOT_TRACE").is_ok() {
+                    eprintln!(
+                        "  段 {main_depth:2} {v:+8.2} {:?} {:.1}s",
+                        best,
+                        t0.elapsed().as_secs_f32()
+                    );
+                }
             }
         }
         self.nodes += nodes.load(Ordering::Relaxed);
