@@ -116,26 +116,12 @@ export function KifuViewer({ title, kifu, onClose, onStudy, onRefetch, parts, me
   return (
     <Overlay onClose={onClose}>
       <Modal title={title} width="var(--w-modal-wide)" onClose={onClose}
-             /* 同期対局は 1 つの番号に 2 面。**面ごとに自分の色が逆**なので、
-                番号だけでは見分けが付かない。石を添えて色まで出す */
+             /* 同期対局は 1 つの番号に 2 面。**帯は番号だけ。** どちらの色
+                だったかは下の対局者の行が持つ (自分の対局と他人の対局で
+                見た目を変えない) */
              band={parts && parts.length > 1 ? (
                <Segmented value={String(face)} onChange={(v) => setFace(Number(v))}
-                          options={parts.map((g, i) => {
-                            const mine = me && playerOf(g, 'PB') === me ? 'b'
-                              : me && playerOf(g, 'PW') === me ? 'w' : null;
-                            return {
-                              value: String(i),
-                              label: (
-                                <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6 }}>
-                                  {i + 1} 面目
-                                  {mine && <>
-                                    <StoneDot color={mine} />
-                                    <span style={{ color: 'var(--sub)' }}>自分</span>
-                                  </>}
-                                </span>
-                              ),
-                            };
-                          })} />
+                          options={parts.map((_, i) => ({ value: String(i), label: `${i + 1} 面目` }))} />
              ) : undefined}
              actions={<>
                <Button size="field" onClick={onClose}>閉じる</Button>
@@ -183,20 +169,28 @@ export function KifuViewer({ title, kifu, onClose, onStudy, onRefetch, parts, me
                 {/* 石数は対局・検討・定石と同じ 1 行の部品を使う。ここだけ
                     手で丸を描いていて、白石が `#f2f2f0` のリテラルだったため
                     ライトで地に沈んでいた (規則 44・50) */}
-                <div style={{ display: 'flex', alignItems: 'center', gap: 'var(--sp-3)' }}>
-                  <ScoreRow black={f.black} white={f.white} />
-                </div>
-                {/* **誰が何色か。** 石数だけでは、いま見ている面で自分が
-                    どちらだったのかが読めない */}
-                {(pb || pw) && (
-                  <div style={{ display: 'flex', flexDirection: 'column', gap: 2, fontSize: 'var(--fs-6)' }}>
-                    {([['b', pb], ['w', pw]] as const).map(([c, n]) => (
-                      <span key={c} style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
-                        <StoneDot color={c} />
+                {/* **石数と対局者は 1 行にまとめる。** 別々に置くと、色と
+                    名前と数の 3 つを目で突き合わせることになる。名前が
+                    無い棋譜 (着手列だけ) では石数だけを出す */}
+                {pb || pw ? (
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: 'var(--sp-2)' }}>
+                    {([['b', pb, f.black], ['w', pw, f.white]] as const).map(([c, n, cnt]) => (
+                      <span key={c} style={{ display: 'flex', alignItems: 'center', gap: 'var(--sp-2)' }}>
+                        <StoneDot color={c} size={11} />
                         <span className="k-sel">{n || '?'}</span>
-                        {me && n === me && <span style={{ color: 'var(--sub)' }}>自分</span>}
+                        {me && n === me && (
+                          <span style={{ color: 'var(--sub)', fontSize: 'var(--fs-6)' }}>自分</span>
+                        )}
+                        <span style={{
+                          marginLeft: 'auto', fontSize: 'var(--fs-2)', fontWeight: 700,
+                          fontVariantNumeric: 'tabular-nums',
+                        }}>{cnt}</span>
                       </span>
                     ))}
+                  </div>
+                ) : (
+                  <div style={{ display: 'flex', alignItems: 'center', gap: 'var(--sp-3)' }}>
+                    <ScoreRow black={f.black} white={f.white} />
                   </div>
                 )}
                 {/* 終局の石差。**辿っている途中でも動かない** — この対局が
