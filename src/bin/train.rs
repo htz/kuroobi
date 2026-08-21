@@ -613,8 +613,8 @@ impl SwaAccumulator {
         }
         let payload = &bytes[self.header.len()..];
         debug_assert_eq!(payload.len() / 4, self.sum.len());
-        for (i, chunk) in payload.chunks_exact(4).enumerate() {
-            self.sum[i] += f32::from_le_bytes(chunk.try_into().unwrap()) as f64;
+        for (i, chunk) in payload.as_chunks::<4>().0.iter().enumerate() {
+            self.sum[i] += f32::from_le_bytes(*chunk) as f64;
         }
         self.count += 1;
         Ok(())

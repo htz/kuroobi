@@ -791,9 +791,8 @@ impl Nnue {
         for w in &mut self.out_w {
             *w = next() * 0.1;
         }
-        for b in &mut self.ft_bias {
-            *b = 0.1; // positive so ReLU units start active (全ステージ同値から)
-        }
+        // positive so ReLU units start active (全ステージ同値から)
+        self.ft_bias.fill(0.1);
     }
 
     /// Active features for a Black-to-move position (absolute indices; the

@@ -568,7 +568,7 @@ const fn build_ray_masks(increasing: bool) -> [[u64; 4]; 64] {
 #[inline(always)]
 fn ray_run(player: u64, opp: u64, ray: u64) -> u64 {
     let gap = ray & !opp;
-    let stop = gap & gap.wrapping_neg();
+    let stop = gap.isolate_lowest_one();
     // All-ones when a player disc anchors the run, zero otherwise (which
     // also covers `stop == 0`: opponent discs all the way to the edge).
     let anchored = 0u64.wrapping_sub(((stop & player) != 0) as u64);

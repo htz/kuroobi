@@ -174,7 +174,7 @@ pub fn load_examples_binary_into(
         }
         let eof = filled < BLOCK;
 
-        for rec in buf[..filled].chunks_exact(BIN_RECORD_SIZE) {
+        for rec in buf[..filled].as_chunks::<BIN_RECORD_SIZE>().0 {
             if n >= want {
                 return Ok(n);
             }
