@@ -948,6 +948,8 @@ struct MatchState {
     in_overtime: bool,
     /// 終わり方 (`MatchView::ended`)。
     ended: String,
+    /// 書庫の番号 (終局行の末尾)。**終局後にしか埋まらない。**
+    archive: String,
     /// 中断のとき、抜けた側の名前。
     left_by: String,
     opp_name: String,
@@ -1008,6 +1010,7 @@ impl MatchState {
             seen: self.seen,
             over: self.over,
             ended: self.ended.clone(),
+            archive: self.archive.clone(),
             left_by: self.left_by.clone(),
             result: self.result.clone(),
         }
@@ -1027,6 +1030,7 @@ impl MatchState {
             my_ext: None,
             in_overtime: false,
             ended: String::new(),
+            archive: String::new(),
             left_by: String::new(),
             opp_name: String::new(),
             opp_rating: String::new(),
@@ -1295,6 +1299,7 @@ fn finish_match(
     result: &str,
     ended: &str,
     left_by: &str,
+    archive: &str,
 ) -> Vec<MatchState> {
     let keys: Vec<String> = matches
         .keys()
@@ -1306,6 +1311,12 @@ fn finish_match(
         if let Some(m) = matches.get_mut(&k) {
             m.over = true;
             m.turn = ' ';
+            /* **書庫の番号を持たせる。** 終局後に棋譜を見たくなったとき、
+            手元の記録が読めなくてもサーバーから取り直せる (2 面と評価値も
+            付いてくる)。 */
+            if !archive.is_empty() {
+                m.archive = archive.to_string();
+            }
             if !result.is_empty() {
                 m.result = result.to_string();
             }
@@ -2664,7 +2675,7 @@ pub fn run(
                                     // 観戦していた対局も残す (終局後の盤面から
                                     // 棋譜を取り出したいため)。閉じるのは手動
                                     let (kind, who) = end_kind(mrest);
-                                    finish_match(&mut matches, &id, "", kind, &who);
+                                    finish_match(&mut matches, &id, "", kind, &who, "");
                                 }
                             }
                             // 観戦盤から消えたことを画面に伝える。ここで
@@ -2748,6 +2759,14 @@ pub fn run(
                         }
                     } else if ln.starts_with("/os: ERR") {
                         ctx.log("info", &format!("サーバーエラー: {ln}"));
+                        /* **終局と競合しただけのエラーは黙って捨てる。**
+                        同期対局は 2 面が別々に終わるので、片面へ指した手が
+                        サーバーに着く前に対局が閉じることがある。人が何か
+                        押したわけでもないのに `match '.24' not found` が
+                        トーストで出ていた。競合は避けようがなく、害も無い。 */
+                        if ln.contains("not found") && ln.contains("match") {
+                            continue;
+                        }
                         // 通信ログは開いていないと読めない。押した結果が
                         // 断られたことは、その場で言わないと伝わらない
                         let msg = ln.trim_start_matches("/os: ERR").trim();
@@ -3303,14 +3322,22 @@ fn apply_block(m: &mut MatchState, block: &[String], login: &str) -> (bool, Opti
                                 m.in_overtime = true;
                             }
                         }
-                        m.my_clock_secs = main;
-                        m.my_ext = ext;
+                        /* **終わった対局の時計は動かさない。** 終局の後にも
+                        update は届き、その値で書き換えると画面の時計が動いた
+                        り別の値に飛んだりする (実際に終局後の面で相手の残り
+                        時間が自分の欄に出た)。終局時点の値が最終値。 */
+                        if !m.over {
+                            m.my_clock_secs = main;
+                            m.my_ext = ext;
+                        }
                     } else {
                         m.opp_name = name.to_string();
                         m.opp_rating = rating;
-                        m.opp_clock = clock;
-                        m.opp_secs = main;
-                        m.opp_ext = ext;
+                        if !m.over {
+                            m.opp_clock = clock;
+                            m.opp_secs = main;
+                            m.opp_ext = ext;
+                        }
                     }
                 }
             }
@@ -3340,10 +3367,19 @@ fn apply_block(m: &mut MatchState, block: &[String], login: &str) -> (bool, Opti
             turn = Some('O');
             turns.push('O');
         }
-        // 着手履歴行: `N: F5/...` または `N: F5//1.2`
+        /* 着手履歴行: `N: F5/...` または `N: F5//1.2`
+        
+        **0 番は着手ではない。** 対局開始の join は「まだ 0 手」の目印として
+        `|0 move(s)` と `|  0: PASS` を送ってくる。これを着手として積むと
+        2 つ壊れる:
+        
+        - 棋譜の先頭に `B[PA]` が入り、以降の色が 1 つずれる
+        - 「まだ 1 手も指していない」判定が成立せず、**抽選開局の開始局面を
+          掴み損ねる**。棋譜が「初期配置 + 抽選明けの着手」になり、再生
+          できない (ビューアも定石学習も落ちる) */
         if let Some(colon) = t.find(':') {
             let (num, rest) = t.split_at(colon);
-            if let Ok(n) = num.trim().parse::<u32>() {
+            if let Some(n) = num.trim().parse::<u32>().ok().filter(|n| *n > 0) {
                 let mv = rest[1..]
                     .trim()
                     .split(['/', ' '])
@@ -3976,7 +4012,20 @@ fn handle_match_end(
     // synchro は親 ID で終局が来るので、`.N.0` / `.N.1` をまとめて回収する。
     // 棋譜は先に始まった方 (`.N.0`) を代表として残す。
     let (kind, who) = end_kind(rest);
-    let mut dropped = finish_match(matches, &id, re_text(score).as_deref().unwrap_or(""), kind, &who);
+    // 実形式の末尾が書庫の番号: ".13 1866 kuroobi ... +54.00  .82720"
+    let archive = toks
+        .last()
+        .filter(|t| t.starts_with('.') && t.len() > 1 && **t != id)
+        .copied()
+        .unwrap_or("");
+    let mut dropped = finish_match(
+        matches,
+        &id,
+        re_text(score).as_deref().unwrap_or(""),
+        kind,
+        &who,
+        archive,
+    );
     dropped.sort_by_key(|m| m.seen);
     let m = dropped.first();
     let re = score.map(|s| format!("{s:+.2}"));
@@ -4905,6 +4954,64 @@ mod tests {
         assert_eq!(back[0].thread, ".Harmony");
     }
 
+    /// **対局開始の `0: PASS` は着手ではない。**
+    ///
+    /// GGS は join で「まだ 0 手」の目印として `|0 move(s)` と
+    /// `|  0: PASS` を送る。これを着手として積むと 2 つ壊れる — 棋譜の
+    /// 先頭に `B[PA]` が入って以降の色がずれ、「まだ 1 手も指していない」
+    /// 判定が成立せず**抽選開局の開始局面を掴み損ねる**。実際に、再生も
+    /// 定石学習もできない棋譜が保存されていた。
+    #[test]
+    fn the_zero_move_marker_is_not_a_move() {
+        // 抽選明けの盤 (6 石) を持つ join。まだ 1 手も指していない
+        let join: Vec<String> = [
+            "|0 move(s)",
+            "|  0: PASS",
+            "|kuroobi  (2300.0 *) 15:00,0:0//02:00,0:0",
+            "|Rhapsody (2700.0 O) 15:00,0:0//02:00,0:0",
+            "|   A B C D E F G H",
+            "| 1 - - - - - - - - 1 ",
+            "| 2 - - - - - - - - 2 ",
+            "| 3 - - - * - - - - 3 ",
+            "| 4 - - * * * - - - 4 ",
+            "| 5 - - - * O - - - 5 ",
+            "| 6 - - - - - - - - 6 ",
+            "| 7 - - - - - - - - 7 ",
+            "| 8 - - - - - - - - 8 ",
+            "|   A B C D E F G H",
+            "|* to move",
+        ]
+        .iter()
+        .map(|s| s.to_string())
+        .collect();
+        let mut m = MatchState::new();
+        apply_block(&mut m, &join, "kuroobi");
+        assert!(m.moves.is_empty(), "0 番を着手として積んでいる");
+        let ggf = m.ggf(".1", None);
+        let bo = ggf.split_once("BO[8 ").expect("BO が無い").1;
+        let discs = bo.chars().take(64).filter(|c| *c != '-').count();
+        assert_eq!(discs, 6, "抽選明けの盤を開始局面にできていない: {bo}");
+        assert!(!ggf.contains("B[PA]"), "棋譜の先頭にパスが入っている");
+    }
+
+    /// **終わった対局の時計は書き換えない。** 終局の後にも update は届く。
+    #[test]
+    fn a_finished_clock_is_frozen() {
+        let with_clock = |secs: &str| {
+            vec![
+                format!("|kuroobi  (1720.0 *) {secs}//02:00,0:0"),
+                "|  1: F5/1.00/0.00".to_string(),
+                "|* to move".to_string(),
+            ]
+        };
+        let mut m = MatchState::new();
+        apply_block(&mut m, &with_clock("05:00,0:0"), "kuroobi");
+        assert_eq!(m.my_clock_secs, Some(300));
+        m.over = true;
+        apply_block(&mut m, &with_clock("02:09,0:0"), "kuroobi");
+        assert_eq!(m.my_clock_secs, Some(300), "終局後に時計が動いた");
+    }
+
     /// **自分の対局でも開始局面を控える。**
     ///
     /// 観戦の join だけが盤を 2 枚 (開始と現在) 寄こす。自分の対局は 1 枚
@@ -5108,8 +5215,12 @@ mod tests {
         assert_eq!(disc(3, 4), 1); // D5 = *
         assert_eq!(disc(4, 4), 2); // E5 = O
         assert_eq!(m.cells.iter().filter(|&&c| c != 0).count(), 4);
-        // 着手履歴 (0 始まり、eval/time 付きの行も拾う)
-        assert_eq!(m.moves.get(&0).map(|s| s.as_str()), Some("PASS"));
+        /* 着手履歴 (eval/time 付きの行も拾う)。
+        
+        **0 番は積まない。** あれは「まだ 0 手」の目印で着手ではない
+        (`the_zero_move_marker_is_not_a_move`)。積んでいた頃は棋譜の先頭に
+        パスが入り、開始局面も掴み損ねていた。 */
+        assert!(!m.moves.contains_key(&0), "0 番を着手として積んでいる");
         assert_eq!(m.moves.get(&1).map(|s| s.as_str()), Some("E6"));
         assert_eq!(m.moves.get(&2).map(|s| s.as_str()), Some("f4"));
         assert_eq!(m.kifu(), "e6f4");

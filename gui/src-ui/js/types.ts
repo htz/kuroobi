@@ -140,6 +140,8 @@ export interface MatchView {
   ended: '' | 'finished' | 'adjourned' | 'aborted';
   /** 中断のとき、抜けた側の名前。 */
   left_by: string;
+  /** 書庫の番号 (終局後のみ)。棋譜をサーバーから取り直すのに使う。 */
+  archive: string;
   /** 終局の結果 (石差)。 */
   result: string;
   /** 64 マス: 0 空 / 1 黒 / 2 白 (file-major)。 */

@@ -953,9 +953,12 @@ function MatchBoard({ snap, m, clock, prefs, onKifu, face }: {
         <span style={{ marginLeft: 'auto' }} />
         {/* 終わった対局も一覧に残るので、そこから棋譜を取り出せる。
             旧 GUI にあった道を戻した (規則 71) */}
+        {/* **書庫の番号も渡す。** 手元の棋譜が読めなくてもサーバーから
+            取り直せる (同期対局は 2 面と評価値も付いてくる)。渡していな
+            かったので「棋譜を読めません」で行き止まりになっていた */}
         <Button
                 onClick={() => onKifu(m.opp_name ? `${m.opp_name} との対局` : '対局の棋譜',
-                                      m.ggf || m.moves.join(''))}>棋譜</Button>
+                                      m.ggf || m.moves.join(''), m.archive || undefined)}>棋譜</Button>
         {!observer && !m.over && (
           <Button variant="danger"
                   title="負けを認めて終わる (相手の承諾は要らない。レートが動く)"
