@@ -135,6 +135,12 @@ pub struct Situation {
     pub nps: Option<f64>,
     /// 探索のスレッド数。並列で余分に踏むぶんを見込むのに要る。
     pub threads: usize,
+    /// **残り手数を数えるときの読切の基準** (既定 [`SOLVE_REF`])。
+    ///
+    /// `(空き − これ) / 2` が「自分があと何手指すか」。**時間で動く読切を
+    /// 入れてはいけない**理由は [`SOLVE_REF`] に書いた。ここを外から
+    /// 渡せるようにしてあるのは、値そのものを自己対局で比べるため。
+    pub solve_ref: u8,
 }
 
 impl Default for Situation {
@@ -149,6 +155,7 @@ impl Default for Situation {
             budget_use: 2.5,
             nps: None,
             threads: 1,
+            solve_ref: SOLVE_REF,
         }
     }
 }
@@ -434,7 +441,7 @@ pub fn plan(s: Situation, base: Levels, pace: Pace) -> Plan {
 
     `reserve` も同じ理由で較正値を入れない。900 秒の対局なら取り置きが
     20 秒から 183 秒に増え、中盤の配分が 2 割薄くなる。 */
-    let my_moves = ((s.empties.saturating_sub(SOLVE_REF) as f64 / 2.0).ceil() as u64).max(1);
+    let my_moves = ((s.empties.saturating_sub(s.solve_ref) as f64 / 2.0).ceil() as u64).max(1);
     /* 完全読み 1 回分を確保したうえで中盤に配る。
 
     **猶予の無い対局では厚く取る。** 猶予があれば本時間を切らしても

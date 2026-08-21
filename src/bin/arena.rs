@@ -60,6 +60,12 @@ struct Args {
     /// 選択読みの帯: `None` は予算から自動、`Some(n)` は固定 (旧挙動との比較用)。
     band_a: Option<u8>,
     band_b: Option<u8>,
+    /// 残り手数を数える読切の基準 (`timectl::Situation::solve_ref`)。
+    solve_ref_a: Option<u8>,
+    solve_ref_b: Option<u8>,
+    /// 持ち時間をどれだけ攻めて使うか (`timectl::Situation::budget_use`)。
+    budget_use_a: Option<f64>,
+    budget_use_b: Option<f64>,
     /// Per-side overrides; fall back to the shared values above.
     depth_a: Option<u8>,
     depth_b: Option<u8>,
@@ -124,6 +130,10 @@ Timed play (the only way to measure time management):
                        against a long one to measure what the time limit
                        itself costs — comparing pacing modes cannot show it.
   --time-b <secs>      same, for B
+  --budget-use-a <x>   How hard A spends its clock (default 2.5)
+  --budget-use-b <x>   same, for B
+  --solve-ref-a <n>    Denominator for the moves-left estimate: (empties-n)/2
+  --solve-ref-b <n>    same, for B
   --band-a <auto|n>    Selective-read width: auto derives it from the move
                        budget (default), a number pins it the old way
   --band-b <auto|n>    same, for B";
@@ -139,6 +149,10 @@ fn parse_args() -> Result<Args, String> {
         depth: 1,
         solve_empties: 0,
         band_a: None,
+        solve_ref_a: None,
+        solve_ref_b: None,
+        budget_use_a: None,
+        budget_use_b: None,
         band_b: None,
         nnue_a: None,
         nnue_b: None,
@@ -220,6 +234,34 @@ fn parse_args() -> Result<Args, String> {
             }
             "--nnue-b" => {
                 args.nnue_b = Some(PathBuf::from(value("--nnue-b")?));
+            }
+            "--budget-use-a" => {
+                args.budget_use_a = Some(
+                    value("--budget-use-a")?
+                        .parse()
+                        .map_err(|_| "--budget-use-a wants a number")?,
+                );
+            }
+            "--budget-use-b" => {
+                args.budget_use_b = Some(
+                    value("--budget-use-b")?
+                        .parse()
+                        .map_err(|_| "--budget-use-b wants a number")?,
+                );
+            }
+            "--solve-ref-a" => {
+                args.solve_ref_a = Some(
+                    value("--solve-ref-a")?
+                        .parse()
+                        .map_err(|_| "--solve-ref-a wants a number")?,
+                );
+            }
+            "--solve-ref-b" => {
+                args.solve_ref_b = Some(
+                    value("--solve-ref-b")?
+                        .parse()
+                        .map_err(|_| "--solve-ref-b wants a number")?,
+                );
             }
             "--band-a" => {
                 let v = value("--band-a")?;
@@ -580,6 +622,10 @@ struct SideTime {
     auto_band: bool,
     /// 較正した読切速度。`None` なら固定の階段で読切に入る。
     nps: Option<f64>,
+    /// 残り手数を数える読切の基準。`None` は `timectl` の既定。
+    solve_ref: Option<u8>,
+    /// 持ち時間をどれだけ攻めて使うか。`None` は `timectl` の既定。
+    budget_use: Option<f64>,
     /// **この側の持ち時間** (秒)。片側だけ潤沢にできる。
     ///
     /// **「時間制限で棋力を削っていないか」はこれでしか測れない。** 配り方
@@ -645,7 +691,7 @@ fn play_timed(
         let plan = timectl::plan(
             Situation {
                 clock_secs: Some(left as u64),
-                budget_use: 2.5,
+                budget_use: t.budget_use.unwrap_or(Situation::default().budget_use),
                 in_overtime: false,
                 grace_secs: 0,
                 empties: board.empty_count(),
@@ -653,6 +699,7 @@ fn play_timed(
                 reserve_secs: 20,
                 nps: t.nps,
                 threads,
+                solve_ref: t.solve_ref.unwrap_or(Situation::default().solve_ref),
             },
             base,
             t.pace,
@@ -756,12 +803,16 @@ fn run_nnue(args: &Args, a: &std::path::Path, b: &std::path::Path) -> ExitCode {
     let side_a = SideTime {
         pace: pace_a,
         auto_band: args.band_a.is_none(),
+        solve_ref: args.solve_ref_a,
+        budget_use: args.budget_use_a,
         nps: resolve(&args.nps_a, &mut eng_a),
         total: args.time_a.unwrap_or(args.time_secs) as f64,
     };
     let side_b = SideTime {
         pace: pace_b,
         auto_band: args.band_b.is_none(),
+        solve_ref: args.solve_ref_b,
+        budget_use: args.budget_use_b,
         nps: resolve(&args.nps_b, &mut eng_b),
         total: args.time_b.unwrap_or(args.time_secs) as f64,
     };
