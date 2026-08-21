@@ -1248,8 +1248,12 @@ function GgsResults({ snap, onKifu }: {
     ...snap.results.map((r) => baseType(r.base, r.raw)),
     ...(snap.history[snap.login] ?? []).map((h) => baseType(h.gtype)),
   ])].filter(Boolean);
-  // 手元の記録に無い対局をサーバーの履歴から補う。番号で重複を落とす
-  const known = new Set(snap.results.map((r) => r.id));
+  /* 手元の記録に無い対局をサーバーの履歴から補う。**突き合わせるのは
+     書庫の番号。** 手元の `id` は対局の番号 (`.64`) で、サーバーの履歴が
+     返すのは書庫の番号 (`.84058`) — 別物なので、いつも一致せず**全局が
+     二重に並んでいた**。同じ対局が 2 行あると、形式や勝敗の数え方まで
+     ずれる (通常の一覧にランダム開局の対局が混ざって見えた)。 */
+  const known = new Set(snap.results.flatMap((r) => [r.archive, r.id].filter(Boolean)));
   const fromServer: GameResult[] = (snap.history[snap.login] ?? [])
     .filter((h) => !known.has(h.id))
     .map((h) => {
@@ -1293,7 +1297,7 @@ function GgsResults({ snap, onKifu }: {
   /* グラフと表の対応付け。**同じ対局を指す**ので、点の番号ではなく
      対局そのもので突き合わせる (表は新しい順、グラフは古い順)。 */
   const [hover, setHover] = useState<number | null>(null);
-  const hoverKey = hover != null && rated[hover] ? rated[hover].id + rated[hover].seq : '';
+  const hoverKey = hover != null && rated[hover] ? rowKey(rated[hover]) : '';
 
   return (
     /* **縦のスクロールは一覧だけ。** 画面ごと流れると、行が増えたときに
@@ -1323,14 +1327,17 @@ function GgsResults({ snap, onKifu }: {
 
       <Section title="終わった対局" aside={<span>{rows.length}</span>} grow>
         {!rows.length && <Empty>まだ記録がありません。</Empty>}
-        {/* 行どうしは詰める (節の余白が行間に入る) */}
-        <List>
+        {/* 行どうしは詰める (節の余白が行間に入る)。
+            **形式を変えたら作り直す。** 同じ器に別の一覧を流し込むと、
+            前の行が残ることがあった (件数 11 に対し 14 行が描かれ、通常の
+            一覧にランダム開局の対局が居座って見えた)。 */}
+        <List key={cur}>
         {rows.map((r) => (
-          <ResultRow key={r.id + r.seq} opponent={r.opp}
+          <ResultRow key={rowKey(r)} opponent={r.opp}
                      // グラフでかざしている対局を光らせる
-                     picked={!!hoverKey && r.id + r.seq === hoverKey}
+                     picked={!!hoverKey && rowKey(r) === hoverKey}
                      onHover={(on) => {
-                       const i = rated.findIndex((x) => x.id + x.seq === r.id + r.seq);
+                       const i = rated.findIndex((x) => rowKey(x) === rowKey(r));
                        setHover(on ? (i < 0 ? null : i) : null);
                      }}
                      win={(r.my_diff ?? 0) > 0} draw={r.my_diff === 0}
@@ -1348,6 +1355,14 @@ function GgsResults({ snap, onKifu }: {
   );
 }
 
+/** 一覧の行の鍵。
+ *
+ * **繋ぐだけでは衝突する。** `id + seq` は `.6` + `86` と `.68` + `6` が
+ * どちらも `.686` になる。鍵が重なると、絞り込みを切り替えたときに前の
+ * 行が DOM に残り、**件数と表示行数が合わなくなる** (通常の一覧に
+ * ランダム開局の対局が居座って見えた)。 */
+const rowKey = (r: GameResult) => `${r.id}#${r.seq}`;
+
 /** 対局の種別。
  *
  * 履歴から来た結果は `base` が `"s8r16.2024..."` の形なので頭を取れば済む。
@@ -1355,9 +1370,12 @@ function GgsResults({ snap, onKifu }: {
  * 切っても空にしかならない (画面に `?` が出ていた)。そちらは生の行に
  * 形式が入っているので拾う。 */
 const baseType = (base: string, raw?: string) => {
-  const head = base.split('.')[0] ?? '';
-  if (head) return head;
-  return raw?.split(/\s+/).find((t) => /^s?8(r\d+)?$/.test(t)) ?? '';
+  /* **生の行にある形式を先に見る。** `base` が対局の番号 (`.64`) のときは
+     頭が空になるので raw へ落ちるが、番号でない `base` が来ることもある。
+     どちらでも生の行の形式が正しいので、そちらを優先する。 */
+  const fromRaw = raw?.split(/\s+/).find((t) => /^s?8(r\d+)?$/.test(t));
+  if (fromRaw) return fromRaw;
+  return base.split('.')[0] ?? '';
 };
 
 /** 履歴の日時 (`30 Jul 2026 17:36:36`) を `7/30 17:36` にする。

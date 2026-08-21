@@ -4021,7 +4021,26 @@ fn handle_match_end(
         opp,
         kifu,
         seq: ctx.seq,
-        my_rating: ctx.snap.lock().unwrap().my_rating,
+        /* **その対局のプールのレートを刻む。** `my_rating` は最後に届いた
+        who / rank の値で、プールを見ていない。同期・ランダム開局 (8r) の
+        対局に通常 (8) のレートが刻まれ、推移のグラフが 8r の帯に 2184 の
+        平らな線を引いていた (実測: 73 局中 4 局)。 */
+        my_rating: {
+            let pool = if rest
+                .split_whitespace()
+                .any(|t| t.starts_with("s8r") || t.starts_with("8r"))
+            {
+                "8r"
+            } else {
+                "8"
+            };
+            let s = ctx.snap.lock().unwrap();
+            s.my_ranks
+                .iter()
+                .find(|r| r.gtype == pool)
+                .map(|r| r.rating)
+                .or(s.my_rating)
+        },
         at: now,
     };
     append_history(&result);
