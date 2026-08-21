@@ -1151,7 +1151,8 @@ impl NnueSearch {
             self.root_move = None;
             let v = self.negamax(b, &mut acc, d, f32::NEG_INFINITY, f32::INFINITY);
             // 期限で切られた段は不完全。直前の段の答えを残す
-            if self.stop.as_ref().is_some_and(|s| s.is_stopped()) {
+            // (中断値そのものを見る — 理由は `lazy_smp` 側のコメント)
+            if v == ABORTED || self.stop.as_ref().is_some_and(|s| s.is_stopped()) {
                 break;
             }
             last_pass = t0.elapsed();
@@ -1319,8 +1320,17 @@ impl NnueSearch {
                     nodes.fetch_add(slot.nodes.load(Ordering::Relaxed), Ordering::Relaxed);
                 }
 
-                // 期限で切られた段は不完全。直前の段の答えを残す
-                if self.stop.as_ref().is_some_and(|s| s.is_stopped()) {
+                /* 期限で切られた段は不完全。直前の段の答えを残す。
+
+                **中断値そのものを見る。** 外部の期限だけを見ていたので、
+                それ以外の理由で中断した段 (扇形展開の打ち切りが根まで届いた
+                等) を「完了した段」として採ってしまっていた。実害は 3 つ
+                同時に出る — 値は `stone_scale` が非数を 0 に丸めるので
+                **+0.00 と報告**され、手は表から読み直した別物になり、
+                段だけ進むので**空きマス数を超える深さ**が出る。実戦で
+                空き 44・期限 128.7 秒の手が「深さ 45 / +0.00」で X 打ちに
+                なった (同じ局面を同じ期限で読み直すと深さ 31 で g4)。 */
+                if v == ABORTED || self.stop.as_ref().is_some_and(|s| s.is_stopped()) {
                     break;
                 }
                 last_pass = t0.elapsed();

@@ -1675,7 +1675,24 @@ impl EngineWorker {
                             engine.hint_move(&board, h);
                         }
                         let dl = cap.map(|c| Instant::now() + c);
+                        /* **非数が漏れたら気付く。** 中断値が外へ出ると
+                        `stone_scale` が静かに 0 へ丸め、画面には「+0.00」と
+                        いうもっともらしい数字が出る。実戦でそれが起き、値と
+                        手が食い違ったまま X 打ちを指した。0 でなければ探索の
+                        どこかが壊れている。 */
+                        let nf0 = kuroobi::engine::NON_FINITE_VALUES
+                            .load(std::sync::atomic::Ordering::Relaxed);
                         let mv = engine.choose_within(&board, dl);
+                        let nf1 = kuroobi::engine::NON_FINITE_VALUES
+                            .load(std::sync::atomic::Ordering::Relaxed);
+                        if nf1 != nf0 {
+                            eprintln!(
+                                "!! 探索が非数を返した (空き {} 深さ {} 打切 {})",
+                                board.empty_count(),
+                                mv.depth,
+                                mv.cut
+                            );
+                        }
                         engine.set_levels(base.0, base.1, base.2);
                         engine.progress().clear();
                         if dtx.send(Done::Moved(Box::new(mv))).is_err() {
