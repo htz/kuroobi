@@ -168,7 +168,14 @@ impl SolveRef {
     }
 
     fn value(self, clock_secs: u64, nps: Option<f64>, threads: usize) -> u8 {
-        match self {
+        /* **実戦で試すための逃がし口。** 自己対局の台は実戦の条件を
+        写せない (終盤 1 手が持ち時間に占める割合が 50 倍違う) ので、
+        採否は GGS の対局でしか決められない。GUI に設定を生やす前に
+        `SOLVE_REF=auto` で切り替えられるようにしておく。
+        `budget_use` と同じ扱い。 */
+        static ENV: std::sync::OnceLock<Option<SolveRef>> = std::sync::OnceLock::new();
+        let env = *ENV.get_or_init(|| std::env::var("SOLVE_REF").ok().map(|v| SolveRef::parse(&v)));
+        match env.unwrap_or(self) {
             SolveRef::Fixed(v) => v,
             SolveRef::Auto => auto_solve_ref(clock_secs, nps, threads),
         }
