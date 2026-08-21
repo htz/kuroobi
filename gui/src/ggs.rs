@@ -174,7 +174,7 @@ pub struct UserRow {
 /// 返すので、**ダイレクト tell と見分けが付かない**。送る側で数え上げる。
 const BARE_CMDS: [&str; 2] = ["verbose", "chann"];
 
-#[derive(Clone, Serialize, Default)]
+#[derive(Clone, Serialize, serde::Deserialize, Default)]
 pub struct ChatMsg {
     /// チャンネル名 (".chat" 等)。ダイレクトは空文字。
     pub chan: String,
@@ -773,6 +773,78 @@ fn append_history(r: &GameResult) {
             .open(history_path())
         {
             let _ = writeln!(f, "{line}");
+        }
+    }
+}
+
+/// チャットの保存先 (`ggs_games/chat/<ログイン名>.jsonl`)。
+///
+/// **ログインごとに分ける。** 別のアカウントで繋いだときに会話が混ざると、
+/// 誰に何を言ったのか分からなくなる。名前はサーバー側で英数に限られるが、
+/// 念のため区切り文字だけ落とす。
+fn chat_path(login: &str) -> PathBuf {
+    let safe: String = login
+        .chars()
+        .map(|c| if c.is_ascii_alphanumeric() || c == '_' || c == '-' { c } else { '_' })
+        .collect();
+    let dir = history_path()
+        .parent()
+        .unwrap_or(&PathBuf::from("."))
+        .join("chat");
+    let _ = std::fs::create_dir_all(&dir);
+    dir.join(format!("{safe}.jsonl"))
+}
+
+/// **保存しておく件数。** 画面は直近 300 件しか出さないので、これは
+/// 「遡れる量」。1 日 100 件来ても 1 か月半ぶん残る。
+const CHAT_KEEP: usize = 5000;
+
+/// 起動時にチャットを読み込む (古い順のまま、末尾 `CHAT_KEEP` 件)。
+///
+/// **読めない行は捨てる。** 書き込み中に落ちると最後の 1 行が切れるが、
+/// その 1 行のために全部を失うほうが悪い。
+fn load_chat(login: &str) -> Vec<ChatMsg> {
+    let Ok(text) = std::fs::read_to_string(chat_path(login)) else {
+        return Vec::new();
+    };
+    let mut out: Vec<ChatMsg> = text
+        .lines()
+        .filter_map(|l| serde_json::from_str::<ChatMsg>(l).ok())
+        .collect();
+    if out.len() > CHAT_KEEP {
+        out.drain(..out.len() - CHAT_KEEP);
+    }
+    out
+}
+
+/// 1 件書き足す。**溢れたら書き直して詰める** (追記だけでは減らせない)。
+fn append_chat(login: &str, m: &ChatMsg) {
+    if login.is_empty() {
+        return;
+    }
+    let path = chat_path(login);
+    let Ok(line) = serde_json::to_string(m) else {
+        return;
+    };
+    use std::io::Write as _;
+    if let Ok(mut f) = std::fs::OpenOptions::new().create(true).append(true).open(&path) {
+        let _ = writeln!(f, "{line}");
+    }
+    /* 毎回数えると 5000 行を毎発言ぶん読むことになるので、**十分に
+    増えたときだけ**詰める。2 割の余裕を持たせて書き直す。 */
+    if let Ok(meta) = std::fs::metadata(&path) {
+        // 1 行 ~120 バイトとして、上限の 1.2 倍を超えたら詰める
+        if meta.len() > (CHAT_KEEP as u64) * 120 * 12 / 10 {
+            let kept = load_chat(login);
+            let body: String = kept
+                .iter()
+                .filter_map(|m| serde_json::to_string(m).ok())
+                .map(|l| l + "\n")
+                .collect();
+            let tmp = path.with_extension("jsonl.tmp");
+            if std::fs::write(&tmp, body).is_ok() {
+                let _ = std::fs::rename(&tmp, &path);
+            }
         }
     }
 }
@@ -1876,6 +1948,20 @@ pub fn run(
 
         let mut login_fails = 0u32; // ログイン前に切られた回数
         let mut cred_saved = false; // 認証情報をキーチェーンへ保存したか
+        /* **前回までの会話を戻す。** 落とすたびに真っ白になるので、誰と
+        何を話したか (相手からの申し込みの経緯も) が辿れなかった。画面が
+        持つのは直近 300 件なので、そのぶんだけ載せる。**再接続では読み
+        直さない** — 切れただけで会話が二重になる。 */
+        {
+            let mut s = ctx.snap.lock().unwrap();
+            if s.chat.is_empty() {
+                let mut past = load_chat(&login);
+                if past.len() > 300 {
+                    past.drain(..past.len() - 300);
+                }
+                s.chat.extend(past);
+            }
+        }
         // ---- 接続セッション (切断時は絶対不放棄で再接続) ----
         'session: loop {
             {
@@ -2058,9 +2144,8 @@ pub fn run(
                             send!(ctx, format!("tell {target} {text}"));
                             // 自分の発言もチャット欄に出す
                             let me = login.clone();
-                            let mut s = ctx.snap.lock().unwrap();
                             let is_chan = target.starts_with('.');
-                            s.chat.push_back(ChatMsg {
+                            let msg = ChatMsg {
                                 chan: if is_chan {
                                     target.clone()
                                 } else {
@@ -2070,7 +2155,10 @@ pub fn run(
                                 text,
                                 at: now_secs(),
                                 thread: target,
-                            });
+                            };
+                            append_chat(&login, &msg);
+                            let mut s = ctx.snap.lock().unwrap();
+                            s.chat.push_back(msg);
                             while s.chat.len() > 300 {
                                 s.chat.pop_front();
                             }
@@ -2353,14 +2441,16 @@ pub fn run(
                             if let (Some(chan), Some(from), None) =
                                 (it.next(), it.next(), it.next())
                             {
-                                let mut s = ctx.snap.lock().unwrap();
-                                s.chat.push_back(ChatMsg {
+                                let msg = ChatMsg {
                                     chan: format!(".{chan}"),
                                     from: from.to_string(),
                                     text: text.to_string(),
                                     at: now_secs(),
                                     thread: format!(".{chan}"),
-                                });
+                                };
+                                append_chat(&login, &msg);
+                                let mut s = ctx.snap.lock().unwrap();
+                                s.chat.push_back(msg);
                                 while s.chat.len() > 300 {
                                     s.chat.pop_front();
                                 }
@@ -2387,14 +2477,16 @@ pub fn run(
                                 // ここで弾く語は、こちらが素で送る命令だけ
                                 && !BARE_CMDS.contains(&name)
                             {
-                                let mut s = ctx.snap.lock().unwrap();
-                                s.chat.push_back(ChatMsg {
+                                let msg = ChatMsg {
                                     chan: String::new(),
                                     from: name.to_string(),
                                     text: text.to_string(),
                                     at: now_secs(),
                                     thread: name.to_string(),
-                                });
+                                };
+                                append_chat(&login, &msg);
+                                let mut s = ctx.snap.lock().unwrap();
+                                s.chat.push_back(msg);
                                 while s.chat.len() > 300 {
                                     s.chat.pop_front();
                                 }
@@ -4715,6 +4807,42 @@ mod tests {
         // 一度入ったら下ろさない (以後は普通に減っていく)
         apply_block(&mut m, &with_clock("01:12,0:0"), "kuroobi");
         assert!(m.in_overtime, "下ろしてしまった");
+    }
+
+    /// **チャットは落としても残る。** ログインごとの JSONL に追記し、
+    /// 起動時に読み戻す。読めない行 (書き込み中に落ちた最後の 1 行など)
+    /// は捨てて、残りを活かす。
+    #[test]
+    fn chat_survives_a_restart() {
+        let dir = std::env::temp_dir().join(format!("kuroobi-chat-{}", std::process::id()));
+        let _ = std::fs::create_dir_all(&dir);
+        let prev = std::env::current_dir().unwrap();
+        // chat_path は履歴の隣に置くので、作業ディレクトリを移して確かめる
+        std::env::set_current_dir(&dir).unwrap();
+        let _ = std::fs::create_dir_all("ggs_games");
+        let m = ChatMsg {
+            chan: ".Harmony".into(),
+            from: "Harmony".into(),
+            text: "hi".into(),
+            at: 42,
+            thread: ".Harmony".into(),
+        };
+        append_chat("kuroobi", &m);
+        // 壊れた行を混ぜても残りは読める
+        {
+            use std::io::Write as _;
+            let mut f = std::fs::OpenOptions::new()
+                .append(true)
+                .open(chat_path("kuroobi"))
+                .unwrap();
+            let _ = writeln!(f, "{{\"chan\": 切れた行");
+        }
+        let back = load_chat("kuroobi");
+        std::env::set_current_dir(prev).unwrap();
+        let _ = std::fs::remove_dir_all(&dir);
+        assert_eq!(back.len(), 1, "読み戻せていない");
+        assert_eq!(back[0].text, "hi");
+        assert_eq!(back[0].thread, ".Harmony");
     }
 
     /// **自分の対局でも開始局面を控える。**
