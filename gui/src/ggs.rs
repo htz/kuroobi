@@ -882,6 +882,66 @@ fn load_chat(login: &str) -> Vec<ChatMsg> {
     out
 }
 
+/// GGS の設定の置き場 (履歴の隣)。
+fn settings_path() -> PathBuf {
+    history_path()
+        .parent()
+        .unwrap_or(&PathBuf::from("."))
+        .join("ggs_settings.json")
+}
+
+/// **画面から変えられる設定を残す。**
+///
+/// これが無かったので、**立ち上げ直すたびに既定へ戻っていた**。先読みを
+/// 切って対局したつもりが次の起動では入っている、という形で実際に外した。
+/// 「反映」を押したのに次の起動で消えるのは、押していないのと同じ。
+#[derive(Serialize, serde::Deserialize)]
+struct SavedSettings {
+    depth: u32,
+    solve: u8,
+    band: u8,
+    ponder: bool,
+    pace: String,
+    max_move_secs: u64,
+    reserve_secs: u64,
+    budget_use: f64,
+    auto_play: bool,
+    watch_analysis: bool,
+    use_book: bool,
+    learn: bool,
+}
+
+/// いまの設定を書き出す。**書けなくても対局は続ける** (次の起動で既定へ
+/// 戻るだけで、いま打っている手には影響しない)。
+fn save_settings(ctx: &Ctx) {
+    let s = ctx.snap.lock().unwrap();
+    let e = &s.engine;
+    let v = SavedSettings {
+        depth: e.depth,
+        solve: e.solve,
+        band: e.band,
+        ponder: e.ponder,
+        pace: e.pace.clone(),
+        max_move_secs: e.max_move_secs,
+        reserve_secs: e.reserve_secs,
+        budget_use: e.budget_use,
+        auto_play: s.auto_play,
+        watch_analysis: s.watch_analysis,
+        use_book: e.use_book,
+        learn: e.learn,
+    };
+    drop(s);
+    if let Ok(text) = serde_json::to_string_pretty(&v) {
+        let _ = std::fs::write(settings_path(), text);
+    }
+}
+
+/// 起動時に読む。無ければ既定のまま。
+fn load_settings() -> Option<SavedSettings> {
+    let text = std::fs::read_to_string(settings_path()).ok()?;
+    serde_json::from_str(&text).ok()
+}
+
 /// 既読位置の置き場 (チャット本体の隣)。
 fn chat_seen_path(login: &str) -> PathBuf {
     chat_path(login).with_extension("seen")
@@ -2052,6 +2112,35 @@ pub fn run(
         max_move_secs: ctx.engine_cfg_max_move,
         reserve_secs: ctx.engine_cfg_reserve,
     };
+    /* **前回の設定を戻す。** 無かったので、立ち上げ直すたびに既定へ
+    戻っていた (先読みを切ったつもりが次の起動では入っている)。 */
+    if let Some(v) = load_settings() {
+        apply_engine_cfg(&mut ctx, v.depth, v.solve, v.band);
+        ctx.engine_cfg_ponder = v.ponder;
+        ctx.engine_cfg_pace = v.pace.clone();
+        ctx.engine_cfg_max_move = v.max_move_secs;
+        ctx.engine_cfg_reserve = v.reserve_secs;
+        apply_pacing(
+            &mut ctx,
+            v.pace.clone(),
+            v.max_move_secs,
+            v.reserve_secs,
+            v.budget_use,
+        );
+        let mut s = ctx.snap.lock().unwrap();
+        s.engine.depth = v.depth;
+        s.engine.solve = v.solve;
+        s.engine.band = v.band;
+        s.engine.ponder = v.ponder;
+        s.engine.pace = v.pace;
+        s.engine.max_move_secs = v.max_move_secs;
+        s.engine.reserve_secs = v.reserve_secs;
+        s.engine.budget_use = v.budget_use;
+        s.engine.use_book = v.use_book;
+        s.engine.learn = v.learn;
+        s.auto_play = v.auto_play;
+        s.watch_analysis = v.watch_analysis;
+    }
 
     // 接続ごとの外側ループ (未接続時はコマンド待ち)
     'outer: loop {
@@ -2069,6 +2158,7 @@ pub fn run(
                     apply_engine_cfg(&mut ctx, depth, solve, band);
                     ctx.engine_cfg_ponder = ponder;
                     ctx.snap.lock().unwrap().engine.ponder = ponder;
+                    save_settings(&ctx);
                     ctx.emit(true);
                 }
                 Ok(Cmd::ReloadThreads) => {
@@ -2086,22 +2176,27 @@ pub fn run(
                     budget_use,
                 }) => {
                     apply_pacing(&mut ctx, pace, max_move_secs, reserve_secs, budget_use);
+                    save_settings(&ctx);
                     ctx.emit(true);
                 }
                 Ok(Cmd::SetAutoPlay(b)) => {
                     ctx.snap.lock().unwrap().auto_play = b;
+                    save_settings(&ctx);
                     ctx.emit(true);
                 }
                 Ok(Cmd::SetUseBook(b)) => {
                     ctx.set_use_book(b);
+                    save_settings(&ctx);
                     ctx.emit(true);
                 }
                 Ok(Cmd::SetWatchAnalysis(b)) => {
                     ctx.snap.lock().unwrap().watch_analysis = b;
+                    save_settings(&ctx);
                     ctx.emit(true);
                 }
                 Ok(Cmd::SetLearn(b)) => {
                     ctx.snap.lock().unwrap().engine.learn = b;
+                    save_settings(&ctx);
                     ctx.emit(true);
                 }
                 Ok(Cmd::Rank { .. }) | Ok(Cmd::ListMatches) => {} // 未接続時は無視
@@ -2369,6 +2464,7 @@ pub fn run(
                             apply_engine_cfg(&mut ctx, depth, solve, band);
                             ctx.engine_cfg_ponder = ponder;
                             ctx.snap.lock().unwrap().engine.ponder = ponder;
+                            save_settings(&ctx);
                             ctx.dirty = true;
                         }
                         Cmd::ReloadThreads => {
@@ -2382,21 +2478,26 @@ pub fn run(
                             budget_use,
                         } => {
                             apply_pacing(&mut ctx, pace, max_move_secs, reserve_secs, budget_use);
+                            save_settings(&ctx);
                         }
                         Cmd::SetAutoPlay(b) => {
                             ctx.snap.lock().unwrap().auto_play = b;
+                            save_settings(&ctx);
                             ctx.dirty = true;
                         }
                         Cmd::SetUseBook(b) => {
                             ctx.set_use_book(b);
+                            save_settings(&ctx);
                             ctx.dirty = true;
                         }
                         Cmd::SetWatchAnalysis(b) => {
                             ctx.snap.lock().unwrap().watch_analysis = b;
+                            save_settings(&ctx);
                             ctx.dirty = true;
                         }
                         Cmd::SetLearn(b) => {
                             ctx.snap.lock().unwrap().engine.learn = b;
+                            save_settings(&ctx);
                             ctx.dirty = true;
                         }
                         Cmd::ListStored => {
