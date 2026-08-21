@@ -93,6 +93,14 @@ function clockView(c: ClockBase | undefined, side: ClockSide, now: number): Cloc
   const active = !m.over && !!m.turn && !!color && m.turn === color;
   if (base === null) return { text: raw || '', cls: active ? 'turn' : '' };
   const rem = base - (active ? (now - c.at) / 1000 : 0);
+  /* **ロスタイムは残り時間の見た目では分からない。** GGS の時計は 1 本で、
+     本時間を切らすとサーバーが延長ぶんを**その時計に足して**送ってくる
+     (`GAME_Clock.C::update`)。残り 50 秒から 30 秒超過すれば `01:30` と
+     いう健全な値が届くだけなので、ここで `rem >= 0` を見ても普通の残り
+     時間と区別が付かない。入ったかどうかはエンジン側が持っている旗
+     (`in_overtime`) でしか判らない。 */
+  const mine = side === 'my' || (!!color && color === m.my_color);
+  if (mine && m.in_overtime && rem >= 0) return { text: `ロス ${fmtSecs(rem)}`, cls: 'ext' };
   if (rem >= 0) return { text: fmtSecs(rem), cls: active ? 'turn' : '' };
   if (ext && ext + rem >= 0) return { text: `ロス ${fmtSecs(ext + rem)}`, cls: 'ext' };
   return { text: '時間切れ', cls: 'dead' };

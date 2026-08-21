@@ -152,6 +152,8 @@ export interface MatchView {
   opp_secs: number | null;
   my_ext: number | null;
   opp_ext: number | null;
+  /** 自分がロスタイム (延長) に入ったか。入ったら時間切れ負けが確定。 */
+  in_overtime: boolean;
   players: PlayerView[];
   gtype: string;
   moves: string[];

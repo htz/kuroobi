@@ -3119,7 +3119,7 @@ fn apply_block(m: &mut MatchState, block: &[String], login: &str) -> (bool, Opti
                 if color == '*' || color == 'O' {
                     let rating = inner.trim_end_matches(['*', 'O']).trim().to_string();
                     let clock = b[close + 1..].trim().to_string();
-                    let (main, _inc, ext) = parse_clock(&clock);
+                    let (main, inc, ext) = parse_clock(&clock);
                     // join ブロックは開始時と現在で 2 組送ってくる。
                     // 同じ名前が来たら現在の情報で置き換える。
                     m.players.retain(|p| p.name != name);
@@ -3152,8 +3152,17 @@ fn apply_block(m: &mut MatchState, block: &[String], login: &str) -> (bool, Opti
                         だから一度立てたら下ろさない。
 
                         加算は減っていくものが増える唯一の場面。持ち時間の
-                        加算 (`inc`) がある対局では毎手増えうるので、猶予の
-                        設定値ぶん近く跳ねたときだけ拾う。 */
+                        加算 (`inc`) がある対局では毎手増えうるので、**その
+                        設定値を超えて増えたら**猶予が入ったと見る。
+
+                        **「猶予の半分ぶん跳ねたら」では取りこぼす。** 猶予は
+                        加算 (`now += ext`) なので、**残っていたぶんが増分から
+                        引かれる**。15 分・猶予 2 分の対局で残り 50 秒から
+                        30 秒超過すると 1:30 になり、増分は 40 秒しかない。
+                        半分 (60 秒) を閾値にすると、これが素通りしていた
+                        (実際に画面へ出ないという報告があった)。入ったことに
+                        気付けないと全滅回避に切り替われず、**最小差負けで
+                        済むはずが 64 石負けになりうる**。 */
                         if let (Some(now), Some(g)) = (main, ext) {
                             /* **実測で 2 通りの見え方があった。**
 
@@ -3165,7 +3174,10 @@ fn apply_block(m: &mut MatchState, block: &[String], login: &str) -> (bool, Opti
                             拾う。0 を見て立てるほうは、まだ厳密には切れて
                             いない (0.4 秒残りが 00:00 と出る) 場合も含むが、
                             **どのみち読んでいる余裕は無い**ので害がない。 */
-                            let jumped = m.my_clock_secs.is_some_and(|prev| now > prev + g / 2);
+                            let bump = inc.unwrap_or(0);
+                            let jumped = m
+                                .my_clock_secs
+                                .is_some_and(|prev| now > prev.saturating_add(bump));
                             /* **一度立てたら下ろさない**ので、序盤で誤って
                             立てるとその対局を丸ごと捨てることになる (以後
                             1.5 秒/手)。自分がまだ 1 手も指していないうちに
@@ -4686,6 +4698,46 @@ mod tests {
         // 一度入ったら下ろさない (以後は普通に減っていく)
         apply_block(&mut m, &with_clock("01:12,0:0"), "kuroobi");
         assert!(m.in_overtime, "下ろしてしまった");
+    }
+
+    /// **残り時間が多いまま超過しても拾う。**
+    ///
+    /// 猶予は加算 (`now += ext`) なので、残っていたぶんが増分から引かれる。
+    /// 残り 50 秒から 30 秒超過すると 1:30 になり、増分は 40 秒しかない。
+    /// 「猶予の半分ぶん跳ねたら」で見ていたときは、これが素通りしていた。
+    #[test]
+    fn a_small_jump_is_still_overtime() {
+        let with_clock = |secs: &str| {
+            vec![
+                format!("|kuroobi  (1720.0 *) {secs}//02:00,0:0"),
+                "|  1: F5/1.00/0.00".to_string(),
+                "|  2: D6/1.00/0.00".to_string(),
+                "|* to move".to_string(),
+            ]
+        };
+        let mut m = MatchState::new();
+        apply_block(&mut m, &with_clock("00:50,0:0"), "kuroobi");
+        assert!(!m.in_overtime, "まだ本時間");
+        apply_block(&mut m, &with_clock("01:30,0:0"), "kuroobi");
+        assert!(m.in_overtime, "40 秒の跳ね上がりを拾えていない");
+    }
+
+    /// 加算 (`inc`) のある対局では、加算ぶんの増加をロスタイムと誤認しない。
+    #[test]
+    fn an_increment_is_not_overtime() {
+        let with_clock2 = |secs: &str, inc: &str| {
+            vec![
+                format!("|kuroobi  (1720.0 *) {secs}/{inc}/02:00,0:0"),
+                "|  1: F5/1.00/0.00".to_string(),
+                "|  2: D6/1.00/0.00".to_string(),
+                "|* to move".to_string(),
+            ]
+        };
+        let mut m = MatchState::new();
+        // 1 手 20 秒加算 (第 2 要素)。指して 5 秒使い、20 秒足されて 15 秒増える
+        apply_block(&mut m, &with_clock2("05:00,0:0", "0:20"), "kuroobi");
+        apply_block(&mut m, &with_clock2("05:15,0:0", "0:20"), "kuroobi");
+        assert!(!m.in_overtime, "加算をロスタイムと誤認した");
     }
 
     /// **指してもいないうちの 0 は拾わない。**
