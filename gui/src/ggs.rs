@@ -167,6 +167,18 @@ pub struct UserRow {
     /// プールを選んで見るものなので、こちらは埋まらない。
     pub rating_r: Option<f32>,
     pub dev_r: Option<f32>,
+    /// **受付状態。** `/os who` は名前の次に印を出す (`VAR_Client::print_who`)。
+    ///
+    /// | 印 | 意味 |
+    /// |---|---|
+    /// | `+` | まだ受けられる (`open > 対局中の数`) |
+    /// | `-` | 受けない (満杯か `open` が 0) |
+    /// | `x` | 幽霊 (接続が切れた残骸) |
+    ///
+    /// **対局中でも `+` はありうる。** 同時に持てる数を超えていなければ
+    /// 受けるので、「対局中」と「受付中」は排他ではない。
+    /// `/os top` にはこの印が無いので `None`。
+    pub open: Option<char>,
     pub raw: String,
 }
 
@@ -434,6 +446,8 @@ pub fn demo_snapshot() -> Snapshot {
         // デモでも 2 プール分出す (見た目の確認に要る)
         rating_r: Some(r - 30.0),
         dev_r: Some(d + 8.0),
+        // デモは受付中と受付なしを混ぜる (見分けが付くかの確認に要る)
+        open: Some(if r > 1700.0 { '+' } else { '-' }),
         raw: format!("{n} {r}@{d}"),
     })
     .collect();
@@ -447,6 +461,7 @@ pub fn demo_snapshot() -> Snapshot {
             dev: Some(40.0 + i as f32),
             rating_r: Some(r - 30.0),
             dev_r: Some(48.0 + i as f32),
+            open: Some(if i % 3 == 0 { '-' } else { '+' }),
             raw: format!("player{:02} {r}@40", i + 1),
         });
     }
@@ -4293,12 +4308,21 @@ fn finish_capture(ctx: &mut Ctx, kind: &str, buf: &[String], login: &str) {
             if name == login {
                 my_rating = rating;
             }
+            // 名前の次のトークンが受付の印 (who だけ)。top には無い
+            let open = if kind.starts_with("who") {
+                toks.get(1)
+                    .filter(|t| matches!(*t, &"+" | &"-" | &"x"))
+                    .and_then(|t| t.chars().next())
+            } else {
+                None
+            };
             users.push(UserRow {
                 name: name.to_string(),
                 rating,
                 dev,
                 rating_r: None,
                 dev_r: None,
+                open,
                 raw: b.to_string(),
             });
         }

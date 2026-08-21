@@ -72,6 +72,8 @@ export interface UserRow {
   /** ランダム開局 (8r) のレートと偏差。接続中の一覧だけが持つ。 */
   rating_r: number | null;
   dev_r: number | null;
+  /** 受付状態。'+' 受けられる / '-' 受けない / 'x' 幽霊 / null 不明。 */
+  open: string | null;
   raw: string;
 }
 

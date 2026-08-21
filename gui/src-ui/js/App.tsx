@@ -888,7 +888,7 @@ export function App() {
 
       {viewer && (
         <KifuViewer title={viewer.title} kifu={viewer.kifu}
-                    parts={viewer.parts}
+                    parts={viewer.parts} me={ggs.snap?.login}
                     onClose={() => setViewer(null)}
                     // 手元の棋譜が読めないときだけ書庫へ聞き直す (1 回きり)
                     onRefetch={viewer.archive && viewer.pending !== viewer.archive

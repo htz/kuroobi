@@ -16,7 +16,7 @@ import {
   type Cond, type Match, type NavId,
 } from './components/ggs';
 import { Board, type Cell } from './components/board';
-import { RateChart, ResultRow } from './components/data';
+import { RateChart, ResultRow, StoneDot } from './components/data';
 import { flipped, type Prefs } from './prefs';
 import { logLinesOf } from './adapt';
 
@@ -871,8 +871,11 @@ function MatchBoard({ snap, m, clock, prefs, onKifu, face }: {
   const last = [...m.moves].reverse().map(ggsMoveToIndex).find((x) => x !== null) ?? null;
   // 自分の側もレートを出す。対局中に見たいのは「この 2 人の力量差」
   const myRate = snap.my_ranks.find((r) => r.gtype === (m.gtype.includes('r') ? '8r' : '8'))?.rating;
+  /* **誰から見た値かを言う。** エンジンが返すのは指した側 (=自分) から
+     見た石差だが、数字だけを行に置くと黒からの値とも読める。同期対局は
+     面ごとに自分の色が逆なので、なおさら符号の向きが分からない。 */
   const myEval = m.last_eval != null
-    ? (m.last_from_book ? '定石 ' : '') + (m.last_eval > 0 ? '+' : '')
+    ? '自分 ' + (m.last_from_book ? '定石 ' : '') + (m.last_eval > 0 ? '+' : '')
       + (m.last_eval_exact ? m.last_eval.toFixed(0) : m.last_eval.toFixed(1))
       + (m.last_eval_exact ? ' 読切' : '')
     : undefined;
@@ -926,9 +929,14 @@ function MatchBoard({ snap, m, clock, prefs, onKifu, face }: {
       }}>
         <span style={{ color: 'var(--text)' }}>{black} – {white}</span>
         <span>{m.moves.length} 手</span>
+        {/* 観戦の解析は**黒視点**に直して持っている (ggs.rs)。どちらから
+            見た値かを書かないと、盤の上下と合っているのかが分からない */}
         {observer && m.watch_eval != null && (
-          <span>解析 {m.watch_eval > 0 ? '+' : ''}{m.watch_eval.toFixed(1)}
-            {m.watch_best ? ` (${m.watch_best})` : ''}</span>
+          <span style={{ display: 'inline-flex', alignItems: 'center', gap: 4 }}>
+            解析 <StoneDot color="b" />
+            {m.watch_eval > 0 ? '+' : ''}{m.watch_eval.toFixed(1)}
+            {m.watch_best ? ` (${m.watch_best})` : ''}
+          </span>
         )}
         {snap.thinking === m.id && <span style={{ color: 'var(--accent)' }}>思考中</span>}
         {/* **中断は終局と別物。** 石差が付かないので結果は出さず、誰が
@@ -1460,6 +1468,9 @@ function GgsUsers({ snap, onNav, onKifu }: {
     // 接続中はプールを選んでいないので、通常 8 とランダム開局 8r を並べる
     { head: mode === 'who' ? '通常' : 'レート', w: 96, right: true, num: true },
     ...(mode === 'who' ? [{ head: 'ランダム', w: 104, right: true, num: true } as Col] : []),
+    // 受付は「申し込んで通るか」。**対局中でも受けることがある**ので
+    // 状態とは別の列にする (`open > 対局中の数` なら受ける)
+    ...(mode === 'who' ? [{ head: '受付', w: 56, right: true } as Col] : []),
     { head: '状態', w: 52, right: true },
   ];
   /* 一覧の「状態」列は進行中の対局 (`snap.ongoing`) から出す。**その一覧は
@@ -1585,6 +1596,18 @@ function GgsUsers({ snap, onNav, onKifu }: {
                     <span style={{ color: 'var(--sub)', marginLeft: 4 }}>±{Math.round(u.dev_r)}</span>
                   )}
                 </>}
+              </span>
+            )}
+            {/* **受付状態。** サーバーは who の名前の次に印を出す
+                (`+` 受ける / `-` 受けない / `x` 幽霊)。待機中でも受けない
+                人が居り、申し込む前に分からないと空振りする。 */}
+            {mode === 'who' && (
+              <span style={{
+                fontSize: 'var(--fs-6)',
+                color: u.open === '+' ? 'var(--accent)'
+                  : u.open === 'x' ? 'var(--bad)' : 'var(--sub)',
+              }}>
+                {u.open === '+' ? '受付中' : u.open === 'x' ? '切断' : u.open ? '受けない' : '—'}
               </span>
             )}
             {/* 状態は色つきの文字 (絵と同じ)。バッジにすると行の高さが動く。

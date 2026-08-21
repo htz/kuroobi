@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react';
 import { api, ggsApi, type KifuFrame } from './api';
 import { Board } from './components/board';
-import { MoveScrub, ScoreRow } from './components/data';
+import { MoveScrub, ScoreRow, StoneDot } from './components/data';
 import { Modal, Overlay } from './components/layout';
 import { Segmented } from './components/primitives';
 import { Button } from './components/primitives';
@@ -37,9 +37,17 @@ export interface KifuViewerProps {
   /** 同じ番号に入っていた全局。**同期対局は 2 面**あり、片面だけ見せると
    *  「もう 1 局はどこへ行った」になる。2 つ以上あるときだけ帯を出す。 */
   parts?: string[];
+  /** 自分のログイン名。**面ごとに自分の色が逆**になるので、どちらを見て
+   *  いるのかは色でしか分からない。 */
+  me?: string;
 }
 
-export function KifuViewer({ title, kifu, onClose, onStudy, onRefetch, parts }: KifuViewerProps) {
+/** GGF から対局者名を拾う。無ければ空。 */
+function playerOf(ggf: string, tag: 'PB' | 'PW'): string {
+  return new RegExp(tag + '\\[([^\\]]*)\\]').exec(ggf)?.[1] ?? '';
+}
+
+export function KifuViewer({ title, kifu, onClose, onStudy, onRefetch, parts, me }: KifuViewerProps) {
   /* どの面を見ているか。**別の対局に変わったら 1 面目に戻す。**
      effect で戻すと描画が二度走るので、持ち主 (棋譜そのもの) を鍵にして
      描画中に判ずる。 */
@@ -48,6 +56,8 @@ export function KifuViewer({ title, kifu, onClose, onStudy, onRefetch, parts }: 
   const face = pick.key === key ? pick.face : 0;
   const setFace = (i: number) => setPick({ key, face: i });
   const shown = parts && parts.length > 1 ? (parts[face] ?? kifu) : kifu;
+  const pb = playerOf(shown, 'PB');
+  const pw = playerOf(shown, 'PW');
   // 取得結果はどの棋譜のものかを持たせる (棋譜が差し替わった瞬間に
   // 前の盤面が残らない)
   const [got, setGot] = useState<{ kifu: string; frames?: KifuFrame[]; err?: string } | null>(null);
@@ -106,10 +116,26 @@ export function KifuViewer({ title, kifu, onClose, onStudy, onRefetch, parts }: 
   return (
     <Overlay onClose={onClose}>
       <Modal title={title} width="var(--w-modal-wide)" onClose={onClose}
-             /* 同期対局は 1 つの番号に 2 面。どちらを見ているかを帯で出す */
+             /* 同期対局は 1 つの番号に 2 面。**面ごとに自分の色が逆**なので、
+                番号だけでは見分けが付かない。石を添えて色まで出す */
              band={parts && parts.length > 1 ? (
                <Segmented value={String(face)} onChange={(v) => setFace(Number(v))}
-                          options={parts.map((_, i) => ({ value: String(i), label: `${i + 1} 面目` }))} />
+                          options={parts.map((g, i) => {
+                            const mine = me && playerOf(g, 'PB') === me ? 'b'
+                              : me && playerOf(g, 'PW') === me ? 'w' : null;
+                            return {
+                              value: String(i),
+                              label: (
+                                <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6 }}>
+                                  {i + 1} 面目
+                                  {mine && <>
+                                    <StoneDot color={mine} />
+                                    <span style={{ color: 'var(--sub)' }}>自分</span>
+                                  </>}
+                                </span>
+                              ),
+                            };
+                          })} />
              ) : undefined}
              actions={<>
                <Button size="field" onClick={onClose}>閉じる</Button>
@@ -160,6 +186,19 @@ export function KifuViewer({ title, kifu, onClose, onStudy, onRefetch, parts }: 
                 <div style={{ display: 'flex', alignItems: 'center', gap: 'var(--sp-3)' }}>
                   <ScoreRow black={f.black} white={f.white} />
                 </div>
+                {/* **誰が何色か。** 石数だけでは、いま見ている面で自分が
+                    どちらだったのかが読めない */}
+                {(pb || pw) && (
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: 2, fontSize: 'var(--fs-6)' }}>
+                    {([['b', pb], ['w', pw]] as const).map(([c, n]) => (
+                      <span key={c} style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+                        <StoneDot color={c} />
+                        <span className="k-sel">{n || '?'}</span>
+                        {me && n === me && <span style={{ color: 'var(--sub)' }}>自分</span>}
+                      </span>
+                    ))}
+                  </div>
+                )}
                 {/* 終局の石差。**辿っている途中でも動かない** — この対局が
                     どう終わったかは、どの手を見ていても知りたい情報 */}
                 {end && (
