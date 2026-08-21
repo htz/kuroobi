@@ -135,12 +135,44 @@ pub struct Situation {
     pub nps: Option<f64>,
     /// 探索のスレッド数。並列で余分に踏むぶんを見込むのに要る。
     pub threads: usize,
-    /// **残り手数を数えるときの読切の基準** (既定 [`SOLVE_REF`])。
+    /// **残り手数を数えるときの読切の基準。**
     ///
-    /// `(空き − これ) / 2` が「自分があと何手指すか」。**時間で動く読切を
-    /// 入れてはいけない**理由は [`SOLVE_REF`] に書いた。ここを外から
-    /// 渡せるようにしてあるのは、値そのものを自己対局で比べるため。
-    pub solve_ref: u8,
+    /// `(空き − これ) / 2` が「自分があと何手指すか」。既定は固定値で、
+    /// 機械から決める [`SolveRef::Auto`] は**まだ測っていないので選択制**。
+    pub solve_ref: SolveRef,
+}
+
+/// 残り手数の基準の決め方。
+///
+/// **既定は固定。** 較正から決める道 ([`SolveRef::Auto`]) は、同じ形の
+/// 変更が過去に 3 秒の対局で勝率を 20pt 落としているので
+/// (`calibration_does_not_move_the_move_budget` を参照)、自己対局で
+/// 確かめるまで既定にしない。
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum SolveRef {
+    /// 固定値 (既定は [`SOLVE_REF`])。
+    Fixed(u8),
+    /// 機械の速さ・スレッド数・持ち時間から決める ([`auto_solve_ref`])。
+    Auto,
+}
+
+impl SolveRef {
+    /// 画面や引数の文字から。知らない語は既定 (固定 [`SOLVE_REF`])。
+    pub fn parse(s: &str) -> SolveRef {
+        if s == "auto" {
+            return SolveRef::Auto;
+        }
+        s.parse()
+            .map(SolveRef::Fixed)
+            .unwrap_or(SolveRef::Fixed(SOLVE_REF))
+    }
+
+    fn value(self, clock_secs: u64, nps: Option<f64>, threads: usize) -> u8 {
+        match self {
+            SolveRef::Fixed(v) => v,
+            SolveRef::Auto => auto_solve_ref(clock_secs, nps, threads),
+        }
+    }
 }
 
 impl Default for Situation {
@@ -155,7 +187,7 @@ impl Default for Situation {
             budget_use: 2.5,
             nps: None,
             threads: 1,
-            solve_ref: SOLVE_REF,
+            solve_ref: SolveRef::Fixed(SOLVE_REF),
         }
     }
 }
@@ -276,6 +308,48 @@ const DEPTH_BY_CLOCK: u32 = 60;
 /// 強さの設定を分母に持ち込むと「時間で決める」と言いながら Lv が予算を
 /// 動かすことになる。数える物差しは固定でよい (値は従来の既定と同じ)。
 const SOLVE_REF: u8 = 18;
+
+/// **読切が「ただ同然」になる空き。** 残り手数の基準をここから決める。
+///
+/// 固定値 (18) は較正値ではなく従来の既定の引き写しで、**機械の速さも
+/// スレッド数も持ち時間も見ていなかった**。読切がいくらで済むかはその
+/// 3 つで決まる。実測した 2 つの条件では 50 倍違った:
+///
+/// | 条件 | 空き 24-27 の 1 手 | 持ち時間に占める割合 |
+/// |---|---|---|
+/// | GGS 15 分 / 8 スレ | 1.2 秒 | 0.13% |
+/// | 自己対局 60 秒 / 1 スレ | 4.0 秒 | 6.7% |
+///
+/// 固定 28 を両方に当てると、実戦では狙いどおり序盤が厚くなり、計測台
+/// では 120 局中 10 局が時間切れになった (勝率 46.2%)。**同じ数字が
+/// 条件によって正解にも誤りにもなる**ので、固定値では決められない。
+///
+/// 見込みは [`solve_secs`] が既に持っている (較正した nps と読切ノード数)。
+/// **持ち時間の [`SOLVE_REF_SHARE`] で収まる空き**を基準にすると、
+/// 15 分 8 スレで 28、60 秒 1 スレで 21 になる。
+///
+/// **下限は従来値。** 上げるほど 1 手が厚くなるので、機械が遅いときに
+/// 従来より薄くならないようにする。上限は [`SOLVE_REF_MAX`]。
+pub fn auto_solve_ref(clock_secs: u64, nps: Option<f64>, threads: usize) -> u8 {
+    let Some(nps) = nps else {
+        // 未較正は機械の速さを知らない。当て推量より従来値のほうがまし
+        return SOLVE_REF;
+    };
+    let budget = clock_secs as f64 * SOLVE_REF_SHARE;
+    solve_entry(budget, nps, threads, SOLVE_REF_MAX).max(SOLVE_REF)
+}
+
+/// 読切 1 回に許す持ち時間の割合 (基準を決めるためだけの値)。
+///
+/// **これは読切に入る判断ではない** (そちらは [`SOLVE_GREED`] と
+/// [`SOLVE_MAX_SHARE`])。「ここから先は予算を取り置かなくてよい」と
+/// 見なす境目。5% は 15 分なら 45 秒 — 1 手ぶんの予算としては大きいが、
+/// 読切は**残り全部を 1 手で読む**ので、この程度は取り置いてよい。
+const SOLVE_REF_SHARE: f64 = 0.05;
+
+/// 基準の上限。読切の物理的な壁 ([`SOLVE_CEILING`]) より手前に置く。
+/// 基準が空きに近づくと残り手数が 1 に潰れ、配り方の違いが消える。
+const SOLVE_REF_MAX: u8 = 30;
 
 /// **選択読みの帯を 1 手の予算から決める。**
 ///
@@ -441,7 +515,8 @@ pub fn plan(s: Situation, base: Levels, pace: Pace) -> Plan {
 
     `reserve` も同じ理由で較正値を入れない。900 秒の対局なら取り置きが
     20 秒から 183 秒に増え、中盤の配分が 2 割薄くなる。 */
-    let my_moves = ((s.empties.saturating_sub(s.solve_ref) as f64 / 2.0).ceil() as u64).max(1);
+    let solve_ref = s.solve_ref.value(avail, s.nps, s.threads);
+    let my_moves = ((s.empties.saturating_sub(solve_ref) as f64 / 2.0).ceil() as u64).max(1);
     /* 完全読み 1 回分を確保したうえで中盤に配る。
 
     **猶予の無い対局では厚く取る。** 猶予があれば本時間を切らしても
@@ -655,6 +730,49 @@ mod tests {
         let two_left = SOLVE_REF + 4;
         let late = cap_secs(600, two_left, Pace::Fast);
         assert!((cap_secs(600, two_left, Pace::Tail(1.0)) - late).abs() < 1e-9);
+    }
+
+    /// **基準は機械と持ち時間から決まる。**
+    ///
+    /// 同じ数字が条件によって正解にも誤りにもなる。実測 (自己対局 120 局)
+    /// では、60 秒 1 スレに固定 28 を当てると 10 局が時間切れになった。
+    #[test]
+    fn the_reference_follows_the_machine() {
+        // GGS の実戦: 15 分・8 スレ・130 M ノード/秒
+        let live = auto_solve_ref(900, Some(130e6), 8);
+        // 計測台: 60 秒・1 スレ・13.8 M ノード/秒
+        let bench = auto_solve_ref(60, Some(13.8e6), 1);
+        assert!(
+            live > bench,
+            "実戦のほうが厚く取れるはず ({live} vs {bench})"
+        );
+        assert!((26..=30).contains(&live), "実戦の基準が外れている: {live}");
+        assert!(
+            (18..=24).contains(&bench),
+            "計測台の基準が外れている: {bench}"
+        );
+    }
+
+    /// **従来より薄くしない。** 遅い機械や短い持ち時間で基準が下がると、
+    /// 1 手の予算が従来を下回る。下限は従来値に置く。
+    #[test]
+    fn the_reference_never_goes_below_the_old_default() {
+        for (clock, nps, threads) in [(3u64, 1e6, 1), (10, 5e5, 1), (60, 1e5, 2)] {
+            assert_eq!(auto_solve_ref(clock, Some(nps), threads), SOLVE_REF);
+        }
+    }
+
+    /// 較正していない機械は当て推量しない (従来値のまま)。
+    #[test]
+    fn without_calibration_the_reference_is_the_old_default() {
+        assert_eq!(auto_solve_ref(900, None, 8), SOLVE_REF);
+    }
+
+    /// 長い持ち時間ほど基準は上がるが、上限は超えない。
+    #[test]
+    fn the_reference_is_capped() {
+        assert!(auto_solve_ref(60, Some(130e6), 8) <= auto_solve_ref(1800, Some(130e6), 8));
+        assert!(auto_solve_ref(36_000, Some(130e6), 8) <= SOLVE_REF_MAX);
     }
 
     /// 係数が小さいほど序盤は薄い。

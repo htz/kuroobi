@@ -24,7 +24,7 @@ use kuroobi::evaluator::Evaluator;
 use kuroobi::pattern::{EDAX_PATTERNS, EGAROUCID_PATTERNS, EGAROUCID_PLUS_PATTERNS};
 use kuroobi::search::Searcher;
 use kuroobi::solver::{EndSolverMode, Solver};
-use kuroobi::timectl::{self, Levels, Pace, Situation};
+use kuroobi::timectl::{self, Levels, Pace, Situation, SolveRef};
 use kuroobi::{Board, Color, Position};
 use std::time::Instant;
 
@@ -61,8 +61,8 @@ struct Args {
     band_a: Option<u8>,
     band_b: Option<u8>,
     /// 残り手数を数える読切の基準 (`timectl::Situation::solve_ref`)。
-    solve_ref_a: Option<u8>,
-    solve_ref_b: Option<u8>,
+    solve_ref_a: Option<SolveRef>,
+    solve_ref_b: Option<SolveRef>,
     /// 持ち時間をどれだけ攻めて使うか (`timectl::Situation::budget_use`)。
     budget_use_a: Option<f64>,
     budget_use_b: Option<f64>,
@@ -132,7 +132,8 @@ Timed play (the only way to measure time management):
   --time-b <secs>      same, for B
   --budget-use-a <x>   How hard A spends its clock (default 2.5)
   --budget-use-b <x>   same, for B
-  --solve-ref-a <n>    Denominator for the moves-left estimate: (empties-n)/2
+  --solve-ref-a <auto|n>  Denominator for the moves-left estimate: (empties-n)/2.
+                       auto derives it from the calibrated solve speed
   --solve-ref-b <n>    same, for B
   --band-a <auto|n>    Selective-read width: auto derives it from the move
                        budget (default), a number pins it the old way
@@ -250,18 +251,10 @@ fn parse_args() -> Result<Args, String> {
                 );
             }
             "--solve-ref-a" => {
-                args.solve_ref_a = Some(
-                    value("--solve-ref-a")?
-                        .parse()
-                        .map_err(|_| "--solve-ref-a wants a number")?,
-                );
+                args.solve_ref_a = Some(SolveRef::parse(&value("--solve-ref-a")?));
             }
             "--solve-ref-b" => {
-                args.solve_ref_b = Some(
-                    value("--solve-ref-b")?
-                        .parse()
-                        .map_err(|_| "--solve-ref-b wants a number")?,
-                );
+                args.solve_ref_b = Some(SolveRef::parse(&value("--solve-ref-b")?));
             }
             "--band-a" => {
                 let v = value("--band-a")?;
@@ -623,7 +616,7 @@ struct SideTime {
     /// 較正した読切速度。`None` なら固定の階段で読切に入る。
     nps: Option<f64>,
     /// 残り手数を数える読切の基準。`None` は `timectl` の既定。
-    solve_ref: Option<u8>,
+    solve_ref: Option<SolveRef>,
     /// 持ち時間をどれだけ攻めて使うか。`None` は `timectl` の既定。
     budget_use: Option<f64>,
     /// **この側の持ち時間** (秒)。片側だけ潤沢にできる。
