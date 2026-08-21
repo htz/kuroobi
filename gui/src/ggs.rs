@@ -1876,7 +1876,7 @@ pub fn run(
 
         let mut login_fails = 0u32; // ログイン前に切られた回数
         let mut cred_saved = false; // 認証情報をキーチェーンへ保存したか
-                                    // ---- 接続セッション (切断時は絶対不放棄で再接続) ----
+        // ---- 接続セッション (切断時は絶対不放棄で再接続) ----
         'session: loop {
             {
                 let mut s = ctx.snap.lock().unwrap();
@@ -3106,6 +3106,9 @@ fn apply_block(m: &mut MatchState, block: &[String], login: &str) -> (bool, Opti
     let mut boards: Vec<Vec<Vec<char>>> = Vec::new();
     let mut turns: Vec<char> = Vec::new();
     let mut turn: Option<char> = None;
+    // このブロックを読む前に何手まで知っていたか。開始局面を掴むのに要る
+    // (このブロック自身が着手行を運んでくるので、後から数えても遅い)
+    let moves_before = m.moves.len();
     m.players.clear();
     for l in block {
         let b = l.strip_prefix('|').unwrap_or(l);
@@ -3263,11 +3266,25 @@ fn apply_block(m: &mut MatchState, block: &[String], login: &str) -> (bool, Opti
     if let Some(last) = boards.last() {
         m.cells = to_cells(last);
     }
-    // 2 枚あるなら 1 枚目が開始局面。抽選オープニングだと初期局面ではない
-    // ので、棋譜を復元するために控えておく (一度掴んだら上書きしない)。
+    /* 2 枚あるなら 1 枚目が開始局面。抽選オープニングだと初期局面ではない
+    ので、棋譜を復元するために控えておく (一度掴んだら上書きしない)。
+
+    **自分の対局は盤が 1 枚しか来ない。** 観戦の join だけが 2 枚 (開始と
+    現在) を寄こす。1 枚しか来ない側を拾い損ねていたので、抽選 16 手の
+    対局を「初期配置 + 17 手目以降」として保存していた。**再生すると着手
+    不能になる**ので、棋譜ビューアは「棋譜を読めません」しか出せず、
+    事後の解析もできなかった (実測: 12 局中 11 局が再生不能)。
+
+    まだ 1 手も指されていないうちに来た盤が開始局面。手が付いている
+    ブロックで掴むと、途中の盤を開始局面にしてしまう。 */
     if boards.len() >= 2 && m.start_cells.is_empty() {
         m.start_cells = to_cells(&boards[0]);
         m.start_turn = turns.first().copied().unwrap_or('*');
+    } else if m.start_cells.is_empty() && moves_before == 0 && m.moves.is_empty() {
+        if let Some(last) = boards.last() {
+            m.start_cells = to_cells(last);
+            m.start_turn = turn.unwrap_or('*');
+        }
     }
     m.turn = turn.unwrap_or(' ');
     (!boards.is_empty(), turn)
@@ -4698,6 +4715,72 @@ mod tests {
         // 一度入ったら下ろさない (以後は普通に減っていく)
         apply_block(&mut m, &with_clock("01:12,0:0"), "kuroobi");
         assert!(m.in_overtime, "下ろしてしまった");
+    }
+
+    /// **自分の対局でも開始局面を控える。**
+    ///
+    /// 観戦の join だけが盤を 2 枚 (開始と現在) 寄こす。自分の対局は 1 枚
+    /// しか来ないので、抽選オープニングの開始局面を取り落としていた。
+    /// 棋譜は「初期配置 + 途中からの着手」になり、再生すると着手不能に
+    /// なる (ビューアが「棋譜を読めません」しか出せなかった)。
+    #[test]
+    fn a_dealt_opening_is_kept_as_the_start() {
+        // 抽選明けの盤 (初期配置ではない) が 1 枚だけ来る
+        let dealt: Vec<String> = [
+            "|kuroobi  (2300.0 *) 15:00,0:0//02:00,0:0",
+            "|Rhapsody (2700.0 O) 15:00,0:0//02:00,0:0",
+            "|   A B C D E F G H",
+            "| 1 - - - - - - - - 1 ",
+            "| 2 - - - - - - - - 2 ",
+            "| 3 - - - * - - - - 3 ",
+            "| 4 - - * * * - - - 4 ",
+            "| 5 - - - * O - - - 5 ",
+            "| 6 - - - - - - - - 6 ",
+            "| 7 - - - - - - - - 7 ",
+            "| 8 - - - - - - - - 8 ",
+            "|   A B C D E F G H",
+            "|O to move",
+        ]
+        .iter()
+        .map(|s| s.to_string())
+        .collect();
+        let mut m = MatchState::new();
+        apply_block(&mut m, &dealt, "kuroobi");
+        let ggf = m.ggf(".1", None);
+        let bo = ggf.split_once("BO[8 ").expect("BO が無い").1;
+        let discs = bo.chars().take(64).filter(|c| *c != '-').count();
+        assert_eq!(discs, 6, "抽選明けの 6 石が開始局面になっていない: {bo}");
+        assert!(bo[..66].ends_with(" O"), "手番が白になっていない: {bo}");
+    }
+
+    /// **途中から見た対局を開始局面にしない。** 手が付いているブロックで
+    /// 掴むと、その盤が開始局面になってしまう。
+    #[test]
+    fn a_board_with_moves_is_not_the_start() {
+        let mid: Vec<String> = [
+            "|kuroobi  (2300.0 *) 15:00,0:0//02:00,0:0",
+            "|  1: F5/1.00/0.00",
+            "|   A B C D E F G H",
+            "| 1 - - - - - - - - 1 ",
+            "| 2 - - - - - - - - 2 ",
+            "| 3 - - - - - - - - 3 ",
+            "| 4 - - - O * - - - 4 ",
+            "| 5 - - - * * * - - 5 ",
+            "| 6 - - - - - - - - 6 ",
+            "| 7 - - - - - - - - 7 ",
+            "| 8 - - - - - - - - 8 ",
+            "|   A B C D E F G H",
+            "|O to move",
+        ]
+        .iter()
+        .map(|s| s.to_string())
+        .collect();
+        let mut m = MatchState::new();
+        apply_block(&mut m, &mid, "kuroobi");
+        let ggf = m.ggf(".1", None);
+        let bo = ggf.split_once("BO[8 ").expect("BO が無い").1;
+        let discs = bo.chars().take(64).filter(|c| *c != '-').count();
+        assert_eq!(discs, 4, "途中の盤を開始局面にした: {bo}");
     }
 
     /// **残り時間が多いまま超過しても拾う。**

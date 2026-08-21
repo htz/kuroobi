@@ -31,9 +31,11 @@ export interface KifuViewerProps {
   onClose: () => void;
   /** 検討で開く。 */
   onStudy: (kifu: string) => void;
+  /** 手元の棋譜が読めなかったときの逃げ道 (サーバーの書庫から取り直す)。 */
+  onRefetch?: () => void;
 }
 
-export function KifuViewer({ title, kifu, onClose, onStudy }: KifuViewerProps) {
+export function KifuViewer({ title, kifu, onClose, onStudy, onRefetch }: KifuViewerProps) {
   // 取得結果はどの棋譜のものかを持たせる (棋譜が差し替わった瞬間に
   // 前の盤面が残らない)
   const [got, setGot] = useState<{ kifu: string; frames?: KifuFrame[]; err?: string } | null>(null);
@@ -50,8 +52,17 @@ export function KifuViewer({ title, kifu, onClose, onStudy }: KifuViewerProps) {
     let alive = true;
     void api.previewKifu(kifu)
       .then((frames) => { if (alive) { setGot({ kifu, frames }); setAt(null); } })
-      .catch((e) => { if (alive) { setGot({ kifu, err: String(e) }); setAt(null); } });
+      .catch((e) => {
+        if (!alive) return;
+        /* **読めない棋譜は、まずサーバーへ聞き直す。** 手元の記録は
+           抽選オープニングの開始局面を取り落としていた時期があり、その
+           ぶんは再生できない。書庫には正しい棋譜が残っている。 */
+        if (onRefetch) { onRefetch(); return; }
+        setGot({ kifu, err: String(e) }); setAt(null);
+      });
     return () => { alive = false; };
+    // onRefetch は毎描画で作り直されるので依存に入れない
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [kifu]);
 
   const frames = got?.kifu === kifu ? got.frames : undefined;

@@ -147,7 +147,9 @@ export function App() {
 
   /* 棋譜ビューア (規則 71)。`pending` はアーカイブ番号 — 手元に棋譜が
    * 無い対局は覆いを先に開き、届いたら中身を差し込む。 */
-  const [viewer, setViewer] = useState<{ title: string; kifu: string; pending?: string } | null>(null);
+  const [viewer, setViewer] = useState<
+    { title: string; kifu: string; pending?: string; archive?: string } | null
+  >(null);
 
   const [paste, setPaste] = useState(false);
   /* 設定は覆い。**窓にしていたのをやめた** — 窓である値打ちは「表示」タブ
@@ -651,7 +653,7 @@ export function App() {
 
         {isGgs ? <GgsScreen nav={nav} snap={ggs.snap} onNav={setNav} prefs={prefs}
                        onKifu={(title, kifu, archive) => {
-                         setViewer({ title, kifu, pending: kifu ? undefined : archive });
+                         setViewer({ title, kifu, pending: kifu ? undefined : archive, archive });
                          if (!kifu && archive) void ggsApi.look(archive);
                        }} />
          : isBook ? (
@@ -876,6 +878,14 @@ export function App() {
       {viewer && (
         <KifuViewer title={viewer.title} kifu={viewer.kifu}
                     onClose={() => setViewer(null)}
+                    // 手元の棋譜が読めないときだけ書庫へ聞き直す (1 回きり)
+                    onRefetch={viewer.archive && viewer.pending !== viewer.archive
+                      ? () => {
+                          const id = viewer.archive!;
+                          setViewer((cur) => (cur ? { ...cur, kifu: '', pending: id } : cur));
+                          void ggsApi.look(id);
+                        }
+                      : undefined}
                     onStudy={(text) => { setNav('study'); void loadFromText(text); }} />
       )}
 
