@@ -16,7 +16,7 @@ import {
   type Cond, type Match, type NavId,
 } from './components/ggs';
 import { Board, type Cell, type EvalInfo } from './components/board';
-import { RateChart, ResultRow, StoneDot } from './components/data';
+import { EvalTrend, RateChart, ResultRow, StoneDot } from './components/data';
 import { flipped, type Prefs } from './prefs';
 import { logLinesOf } from './adapt';
 
@@ -890,13 +890,34 @@ function MatchBoard({ snap, m, clock, prefs, onKifu, face }: {
       + (m.opp_secs_used != null ? ` · ${m.opp_secs_used.toFixed(0)}s` : '')
     : undefined;
 
+  /* 申告値の推移。**手番号を X にすると穴が空く** (評価値を出さない相手だと
+     片側だけ飛び飛びになる) ので、手の並び順を通し番号にして両方を同じ
+     目盛に乗せる。相手のぶんは自分視点へ反転する。 */
+  const trend = (() => {
+    const by = new Map(m.eval_series.map((p) => [p.n, p]));
+    const ns = [...by.keys()].sort((a, b) => a - b);
+    return ns.map((n, i) => {
+      const p = by.get(n)!;
+      return {
+        x: i,
+        mine: p.mine ? p.eval : null,
+        opp: p.mine ? null : -p.eval,
+      };
+    });
+  })();
+
   /* 探索の途中経過。**段の切れ目でしか動かない**ので、深さが上がるたびに
-     印が動く。読切・選択読みに入ると深さは出ない (段が無い)。 */
+     印が動く。読切・選択読みに入ると深さは出ない (段が無い)。
+
+     **先読みの値も出す。** 「予測した相手の手」を出すだけで値は 0 に
+     潰していたが、盤に「0」と書かれると評価が互角だと読めてしまう。
+     先読みは相手の手番の局面を読むので符号を反転して記録してあり
+     (`Progress::flip`)、そのまま自分から見た石差として出せる。 */
   const busyEval: Record<number, EvalInfo> | undefined =
     m.busy && m.busy_best != null
       ? {
           [m.busy_best]: {
-            score: m.busy === 'ponder' ? 0 : (m.busy_eval ?? 0),
+            score: m.busy_eval ?? 0,
             src: m.busy === 'solve' ? { exact: true }
               : m.busy === 'select' ? { exact: true }
               : { depth: m.busy_depth },
@@ -959,6 +980,11 @@ function MatchBoard({ snap, m, clock, prefs, onKifu, face }: {
                  rate={bottom.rate ? +bottom.rate : undefined}
                  meta={myEval}
                  clock={clock(m.id, bottom.side).text} active={clock(m.id, bottom.side).cls === 'turn'} />
+      {/* **申告値の推移。** 両者が開局から何石勝っていると思っていたかを
+          並べる。生の申告は指した側から見た値なので、**相手のぶんは
+          反転して自分視点へ揃える** — 揃えないと 2 本が鏡像になり、
+          読みが食い違っている場所が読み取れない。 */}
+      {!observer && <EvalTrend points={trend} />}
       <div style={{
         display: 'flex', alignItems: 'center', gap: 'var(--sp-3)', height: 'var(--h-field)',
         fontSize: 'var(--fs-6)', color: 'var(--sub)',

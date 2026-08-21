@@ -728,3 +728,65 @@ export function MoveScrub({ plies, cursor, blunder, onSeek, nav = true }: {
     </div>
   );
 }
+
+/* ---------------- 申告値の推移 ----------------
+ *
+ * 対局中の 2 人が「自分は何石勝っていると思っているか」を並べる。
+ *
+ * **両方を自分から見た石差へ揃える。** 申告値は指した側から見た値なので、
+ * 生のまま重ねると 2 本が鏡像になり、読み取るのに毎回頭の中で反転させる
+ * ことになる。揃えれば、2 本が離れているところがそのまま「読みが食い違って
+ * いる場所」になる。
+ *
+ * 評価値を出さない相手も居るので、片方しか無い場合も普通に起きる。
+ */
+export function EvalTrend({ points, height = 56 }: {
+  /** `{ x: 手数, mine: 自分の値 | null, opp: 相手の値 | null }` (自分視点)。 */
+  points: { x: number; mine: number | null; opp: number | null }[];
+  height?: number;
+}) {
+  const has = points.some((p) => p.mine != null || p.opp != null);
+  if (points.length < 2 || !has) {
+    return (
+      <div style={{
+        height, display: 'grid', placeItems: 'center',
+        fontSize: 'var(--fs-7)', color: 'var(--sub)',
+      }}>
+        まだ申告値がありません
+      </div>
+    );
+  }
+  const w = 300, pad = 6, padB = 10;
+  /* **縦は必ず 0 を挟む。** 勝ち負けの境目が枠の外に出ると、線がどちら側に
+     居るのかが分からなくなる。±8 石は最低限見せて、細かい揺れで縦に
+     暴れないようにする。 */
+  const vals = points.flatMap((p) => [p.mine, p.opp]).filter((v): v is number => v != null);
+  const lim = Math.max(8, ...vals.map((v) => Math.abs(v)));
+  const x = (i: number) => pad + (i / (points.length - 1)) * (w - pad * 2);
+  const y = (v: number) => (height - padB) / 2 - (v / lim) * ((height - padB) / 2 - pad);
+
+  /** 値の無い手は線を切る (無い値を跨いで直線を引かない)。 */
+  const path = (pick: (p: (typeof points)[number]) => number | null) => {
+    let d = '';
+    let pen = false;
+    points.forEach((p, i) => {
+      const v = pick(p);
+      if (v == null) { pen = false; return; }
+      d += `${pen ? 'L' : 'M'}${x(i).toFixed(1)},${y(v).toFixed(1)}`;
+      pen = true;
+    });
+    return d;
+  };
+
+  return (
+    <svg viewBox={`0 0 ${w} ${height}`} preserveAspectRatio="none"
+         style={{ width: '100%', height, display: 'block' }}>
+      {/* 互角の線 */}
+      <line x1={0} x2={w} y1={y(0)} y2={y(0)} stroke="var(--line)" strokeWidth={1} />
+      <path d={path((p) => p.opp)} fill="none" stroke="var(--sub)"
+            strokeWidth={1.5} strokeLinejoin="round" vectorEffect="non-scaling-stroke" />
+      <path d={path((p) => p.mine)} fill="none" stroke="var(--accent)"
+            strokeWidth={1.5} strokeLinejoin="round" vectorEffect="non-scaling-stroke" />
+    </svg>
+  );
+}

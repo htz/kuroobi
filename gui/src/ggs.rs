@@ -277,6 +277,17 @@ pub struct Offer {
     pub rated: bool,
 }
 
+/// 申告値の推移の 1 点。
+#[derive(Clone, Serialize, Default)]
+pub struct EvalPoint {
+    /// 手番号 (GGS の通し番号。パスも 1 手として数える)。
+    pub n: u32,
+    /// 自分が指した手か。
+    pub mine: bool,
+    /// 申告値 (**指した側から見た石差**)。
+    pub eval: f32,
+}
+
 #[derive(Clone, Serialize, Default)]
 pub struct MatchView {
     pub id: String,
@@ -340,6 +351,9 @@ pub struct MatchView {
     pub opp_eval: Option<f32>,
     /// 相手がその手に使った秒数 (同じく申告値)。
     pub opp_secs_used: Option<f32>,
+    /// **両者の申告値の推移** (開局明けから、手の順)。値は申告したまま
+    /// (指した側から見た石差)。どちらが指した手かは `mine` が持つ。
+    pub eval_series: Vec<EvalPoint>,
     /// 直前の自分の手が定石 book 由来か。
     pub last_from_book: bool,
     /// 観戦解析の結果 (黒視点の評価値と最善手)。
@@ -1051,6 +1065,41 @@ struct MatchState {
 }
 
 impl MatchState {
+    /// **両者の申告値の推移を組む。**
+    ///
+    /// どちらが指した手かは**手番の突き合わせだけで決まる**。パスも `PA` と
+    /// して番号付きで届くので、番号の偶奇がそのまま色に対応する。いま指す番
+    /// が自分なら直前の手は相手のもの — そこから遡って全部の色が決まる。
+    ///
+    /// 終局後は手番が空になるので、その時は最後に分かっていた色を使えない。
+    /// **終局した対局は書庫の棋譜のほうが確かなので、ここでは諦める**
+    /// (推移は対局中に見るもの)。
+    fn eval_series(&self) -> Vec<EvalPoint> {
+        let (Some(mc), Some(&last_n)) = (self.my_color, self.moves.keys().next_back()) else {
+            return Vec::new();
+        };
+        if self.turn != '*' && self.turn != 'O' {
+            return Vec::new();
+        }
+        // 直前の手を指したのは「いま指す番でないほう」
+        let last_was_mine = self.turn != mc;
+        let mine_parity = if last_was_mine {
+            last_n % 2
+        } else {
+            (last_n + 1) % 2
+        };
+        self.move_evals
+            .iter()
+            .filter_map(|(&n, &(ev, _))| {
+                ev.map(|eval| EvalPoint {
+                    n,
+                    mine: (n % 2) == mine_parity,
+                    eval,
+                })
+            })
+            .collect()
+    }
+
     /// 履歴と学習へ渡すための写し。終局後も一覧に本体を残すので、
     /// 取り出す側には複製を渡す。
     fn snapshot(&self) -> MatchState {
@@ -4070,6 +4119,7 @@ fn sync_matches(ctx: &mut Ctx, matches: &HashMap<String, MatchState>) {
             last_eval_exact: m.last_eval_exact,
             opp_eval: m.opp_eval,
             opp_secs_used: m.opp_secs_used,
+            eval_series: m.eval_series(),
             last_from_book: m.last_from_book,
             watch_eval: m.watch_eval,
             watch_best: m.watch_best.clone(),

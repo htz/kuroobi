@@ -176,6 +176,8 @@ export interface MatchView {
   opp_eval: number | null;
   /** 相手がその手に使った秒数 (申告値)。 */
   opp_secs_used: number | null;
+  /** 両者の申告値の推移 (手の順)。値は**指した側から見た石差**。 */
+  eval_series: { n: number; mine: boolean; eval: number }[];
   last_from_book: boolean;
   watch_eval: number | null;
   watch_best: string | null;
