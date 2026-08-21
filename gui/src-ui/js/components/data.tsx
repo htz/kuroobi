@@ -734,17 +734,20 @@ export function MoveScrub({ plies, cursor, blunder, onSeek, nav = true }: {
  * 対局中の 2 人が「自分は何石勝っていると思っているか」を並べる。
  *
  * **両方を自分から見た石差へ揃える。** 申告値は指した側から見た値なので、
- * 生のまま重ねると 2 本が鏡像になり、読み取るのに毎回頭の中で反転させる
- * ことになる。揃えれば、2 本が離れているところがそのまま「読みが食い違って
- * いる場所」になる。
+ * 生のまま重ねると 2 本が鏡像になり、読むのに毎回頭の中で反転させることに
+ * なる。揃えれば、2 本が離れているところがそのまま「読みが食い違っている
+ * 場所」になる。
  *
- * 評価値を出さない相手も居るので、片方しか無い場合も普通に起きる。
+ * **目盛を出す以上は読める形にする (規則 56)。** 罫線 3 本で軸のつもりを
+ * するのが一番悪い。縦は石差の目盛、横は手数、かざせばその手の両者の値を
+ * 出す。線 2 本だけの版を一度出してしまったので、ここは省かない。
  */
-export function EvalTrend({ points, height = 56 }: {
+export function EvalTrend({ points, height = 96 }: {
   /** `{ x: 手数, mine: 自分の値 | null, opp: 相手の値 | null }` (自分視点)。 */
   points: { x: number; mine: number | null; opp: number | null }[];
   height?: number;
 }) {
+  const [at, setAt] = React.useState<number | null>(null);
   const has = points.some((p) => p.mine != null || p.opp != null);
   if (points.length < 2 || !has) {
     return (
@@ -756,13 +759,17 @@ export function EvalTrend({ points, height = 56 }: {
       </div>
     );
   }
-  const w = 300, pad = 6, padB = 10;
+  const w = 300, pad = 10, padL = 26, padB = 14;
   /* **縦は必ず 0 を挟む。** 勝ち負けの境目が枠の外に出ると、線がどちら側に
-     居るのかが分からなくなる。±8 石は最低限見せて、細かい揺れで縦に
-     暴れないようにする。 */
+     居るのかが分からない。±8 石は最低限見せて、細かい揺れで縦に暴れるのも
+     防ぐ。目盛が 5 本前後に収まる刻みを選ぶ (`RateChart` と同じ考え)。 */
   const vals = points.flatMap((p) => [p.mine, p.opp]).filter((v): v is number => v != null);
   const lim = Math.max(8, ...vals.map((v) => Math.abs(v)));
-  const x = (i: number) => pad + (i / (points.length - 1)) * (w - pad * 2);
+  const step = [2, 4, 8, 16, 32].find((v) => lim / v <= 2.5) ?? 32;
+  const ticks: number[] = [];
+  for (let t = -Math.floor(lim / step) * step; t <= lim; t += step) ticks.push(t);
+
+  const x = (i: number) => padL + (i / (points.length - 1)) * (w - padL - pad);
   const y = (v: number) => (height - padB) / 2 - (v / lim) * ((height - padB) / 2 - pad);
 
   /** 値の無い手は線を切る (無い値を跨いで直線を引かない)。 */
@@ -778,15 +785,67 @@ export function EvalTrend({ points, height = 56 }: {
     return d;
   };
 
+  /** かざした手を viewBox の座標から拾う (`preserveAspectRatio="none"`)。 */
+  const pickAt = (e: React.MouseEvent<SVGSVGElement>) => {
+    const r = e.currentTarget.getBoundingClientRect();
+    const vx = ((e.clientX - r.left) / r.width) * w;
+    const i = Math.round(((vx - padL) / (w - padL - pad)) * (points.length - 1));
+    setAt(Math.max(0, Math.min(points.length - 1, i)));
+  };
+
+  const cur = at != null ? points[at] : null;
+  const fmt = (v: number | null) => (v == null ? '—' : (v > 0 ? '+' : '') + v.toFixed(1));
+
   return (
-    <svg viewBox={`0 0 ${w} ${height}`} preserveAspectRatio="none"
-         style={{ width: '100%', height, display: 'block' }}>
-      {/* 互角の線 */}
-      <line x1={0} x2={w} y1={y(0)} y2={y(0)} stroke="var(--line)" strokeWidth={1} />
-      <path d={path((p) => p.opp)} fill="none" stroke="var(--sub)"
-            strokeWidth={1.5} strokeLinejoin="round" vectorEffect="non-scaling-stroke" />
-      <path d={path((p) => p.mine)} fill="none" stroke="var(--accent)"
-            strokeWidth={1.5} strokeLinejoin="round" vectorEffect="non-scaling-stroke" />
-    </svg>
+    <div>
+      {/* **凡例は要る。** 色だけで「自分」「相手」を当てさせない */}
+      <div style={{
+        display: 'flex', gap: 'var(--sp-3)', alignItems: 'center',
+        fontSize: 'var(--fs-7)', color: 'var(--sub)', height: 'var(--h-head)',
+      }}>
+        <span>申告値</span>
+        <span style={{ marginLeft: 'auto', display: 'inline-flex', gap: 'var(--sp-3)' }}>
+          <span><span style={{ color: 'var(--accent)' }}>—</span> 自分 {cur ? fmt(cur.mine) : ''}</span>
+          <span><span style={{ color: 'var(--sub)' }}>—</span> 相手 {cur ? fmt(cur.opp) : ''}</span>
+          <span>{cur ? `${cur.x} 手` : '自分から見た石差'}</span>
+        </span>
+      </div>
+      <svg viewBox={`0 0 ${w} ${height}`} preserveAspectRatio="none"
+           style={{ width: '100%', height, display: 'block' }}
+           onMouseMove={pickAt} onMouseLeave={() => setAt(null)}>
+        {ticks.map((t) => (
+          <g key={t}>
+            <line x1={padL} y1={y(t)} x2={w - pad} y2={y(t)}
+                  stroke={t === 0 ? 'var(--line)' : 'var(--border-weak)'} strokeWidth={1} />
+            <text x={padL - 4} y={y(t) + 3} textAnchor="end"
+                  fontSize={9} fill="var(--sub)">{t > 0 ? `+${t}` : t}</text>
+          </g>
+        ))}
+        {/* 横軸は端と中央だけ。全部出すと重なって読めない */}
+        {[0, points.length >> 1, points.length - 1].map((i, k) => (
+          <text key={k} x={x(i)} y={height - 3}
+                textAnchor={k === 0 ? 'start' : k === 2 ? 'end' : 'middle'}
+                fontSize={9} fill="var(--sub)">{points[i].x}</text>
+        ))}
+        <path d={path((p) => p.opp)} fill="none" stroke="var(--sub)"
+              strokeWidth={1.5} strokeLinejoin="round" vectorEffect="non-scaling-stroke" />
+        <path d={path((p) => p.mine)} fill="none" stroke="var(--accent)"
+              strokeWidth={1.5} strokeLinejoin="round" vectorEffect="non-scaling-stroke" />
+        {at != null && (
+          <g pointerEvents="none">
+            <line x1={x(at)} y1={pad} x2={x(at)} y2={height - padB}
+                  stroke="var(--sub)" strokeWidth={1} strokeDasharray="2 2" />
+            {points[at].opp != null && (
+              <circle cx={x(at)} cy={y(points[at].opp)} r={3}
+                      fill="var(--bg)" stroke="var(--sub)" strokeWidth={2} />
+            )}
+            {points[at].mine != null && (
+              <circle cx={x(at)} cy={y(points[at].mine)} r={3}
+                      fill="var(--bg)" stroke="var(--accent)" strokeWidth={2} />
+            )}
+          </g>
+        )}
+      </svg>
+    </div>
   );
 }
