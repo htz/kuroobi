@@ -1243,10 +1243,13 @@ function GgsResults({ snap, onKifu }: {
   // 要求は空文字 (= 自分)、**保存されるキーは login** — バックエンドが
   // 他人の履歴と同じ map に入れるので、自分だけ空キーにはならない
   useEffect(() => { if (login) void ggsApi.history('').catch(() => {}); }, [login]);
-  // 形式ごとにレートのプールが違うので、混ぜて折れ線にすると嘘になる
+  /* **レートのプールで分ける。** GGS のプールは通常 (8) とランダム開局
+     (8r) の 2 つだけで、16 手と 14 手は同じ 8r に入る (finger の Type 表も
+     2 行しか返さない)。形式ごとに分けると、同じレートの推移が 2 本に
+     割れて読めなくなる。 */
   const kinds = [...new Set([
-    ...snap.results.map((r) => baseType(r.base, r.raw)),
-    ...(snap.history[snap.login] ?? []).map((h) => baseType(h.gtype)),
+    ...snap.results.map((r) => poolOf(r.base, r.raw)),
+    ...(snap.history[snap.login] ?? []).map((h) => poolOf(h.gtype)),
   ])].filter(Boolean);
   /* 手元の記録に無い対局をサーバーの履歴から補う。**突き合わせるのは
      書庫の番号。** 手元の `id` は対局の番号 (`.64`) で、サーバーの履歴が
@@ -1277,11 +1280,11 @@ function GgsResults({ snap, onKifu }: {
   let most = '';
   let mostN = -1;
   for (const k of kinds) {
-    const n = all.filter((r) => baseType(r.base, r.raw) === k).length;
+    const n = all.filter((r) => poolOf(r.base, r.raw) === k).length;
     if (n > mostN) { mostN = n; most = k; }
   }
   const cur = gtype || most || 'all';
-  const rows = all.filter((r) => cur === 'all' || baseType(r.base, r.raw) === cur);
+  const rows = all.filter((r) => cur === 'all' || poolOf(r.base, r.raw) === cur);
   // グラフは古い順。results は新しい順に積まれている
   const rated = rows.filter((r) => r.my_rating != null).reverse();
   const rates = rated.map((r) => r.my_rating as number);
@@ -1307,7 +1310,7 @@ function GgsResults({ snap, onKifu }: {
       <Section title="レートの推移"
                aside={kinds.length > 1 ? (
                  <Segmented value={cur} onChange={setGtype}
-                            options={[...kinds.map((k) => ({ value: k, label: gtypeLabel(k) })),
+                            options={[...kinds.map((k) => ({ value: k, label: poolLabel(k) })),
                                       { value: 'all', label: 'すべて' }]} />
                ) : undefined}>
         {/* 本文の幅いっぱいに置くので viewBox もそれに合わせる
@@ -1362,6 +1365,18 @@ function GgsResults({ snap, onKifu }: {
  * 行が DOM に残り、**件数と表示行数が合わなくなる** (通常の一覧に
  * ランダム開局の対局が居座って見えた)。 */
 const rowKey = (r: GameResult) => `${r.id}#${r.seq}`;
+
+/** レートのプール。**GGS は通常 (8) とランダム開局 (8r) の 2 つだけ。**
+ *
+ * 形式は `s8r16` / `s8r14` / `8r16` … と分かれるが、レートは `r` の有無で
+ * しか分かれない。推移を見るときの単位はこちら。 */
+const poolOf = (base: string, raw?: string) => {
+  const t = baseType(base, raw);
+  if (!t) return '';
+  return t.includes('r') ? '8r' : '8';
+};
+
+const poolLabel = (p: string) => (p === '8r' ? 'ランダム開局' : p === '8' ? '通常' : p);
 
 /** 対局の種別。
  *
