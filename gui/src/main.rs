@@ -2337,6 +2337,14 @@ fn ggs_history(app: State<App>, name: String) -> Result<(), String> {
         .map_err(|e| e.to_string())
 }
 
+/// チャットの既読位置を進める (この時刻までは読んだ)。
+#[tauri::command]
+fn ggs_chat_seen(app: State<App>, at: u64) -> Result<(), String> {
+    ggs_tx(&app)?
+        .send(ggs::Cmd::ChatSeen(at))
+        .map_err(|e| e.to_string())
+}
+
 #[tauri::command]
 fn ggs_set_engine(
     app: State<App>,
@@ -2685,6 +2693,7 @@ fn main() {
             ggs_list_matches,
             ggs_resume_stored,
             ggs_history,
+            ggs_chat_seen,
             ggs_set_engine,
             ggs_set_pacing,
             ggs_set_auto_play,

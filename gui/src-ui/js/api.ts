@@ -163,6 +163,8 @@ export const ggsApi = {
   listMatches: () => call('ggs_list_matches'),
   resumeStored: (id: string) => call('ggs_resume_stored', { id }),
   history: (name: string) => call('ggs_history', { name }),
+  /** チャットの既読位置を進める (UNIX 秒)。落としても未読が復活しない。 */
+  chatSeen: (at: number) => call('ggs_chat_seen', { at }),
   setEngine: (depth: number, solve: number, band: number, ponder: boolean) =>
     call('ggs_set_engine', { depth, solve, band, ponder }),
   setPacing: (pace: string, maxMoveSecs: number, reserveSecs: number, budgetUse: number) =>

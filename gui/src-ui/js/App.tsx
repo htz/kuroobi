@@ -115,30 +115,47 @@ export function App() {
    * まま 1 枚のパネルで済ませる (デザイン規則 12)。 */
   const [panel, setPanel] = useState<'' | 'chat' | 'console'>('');
 
-  const chatTotal = ggs.snap?.chat.length ?? 0;
-  const [chatSeen, setChatSeen] = useState(0);
+  /* **既読位置は時刻で持ち、ディスクに残す。**
+   *
+   * 件数をメモリに置いていたので、立ち上げ直すたびに 0 に戻り、読み戻した
+   * 過去 300 件がまるごと新着として数えられていた (未読が毎回三桁)。
+   * 件数だと履歴を切り詰めたときにもずれる。 */
+  const chatMsgs = ggs.snap?.chat ?? [];
+  const chatSeen = ggs.snap?.chat_seen ?? 0;
+  const chatLatest = chatMsgs.length ? Math.max(...chatMsgs.map((m) => m.at)) : 0;
   // 下の板でチャットを開いている間も「読んでいる」扱いにする。
   // 行き先として開いたときと同じにしないと、板を開けたまま未読が増える
   const chatOpen = nav === 'ggs-chat' || panel === 'chat';
-  const chatUnread = chatOpen ? 0 : Math.max(0, chatTotal - chatSeen);
+  const chatUnread = chatOpen ? 0 : chatMsgs.filter((m) => m.at > chatSeen).length;
+
+  /** 読んだ位置を進める (下げはしない。ggs.rs 側でも守っている)。 */
+  const markChatRead = useCallback(() => {
+    if (chatLatest > chatSeen) void ggsApi.chatSeen(chatLatest);
+  }, [chatLatest, chatSeen]);
+
+  /* 開いている間に届いたものも読んだことにする。**離れるときだけに
+   * すると、開いたまま放っておいた分が離れた瞬間に未読へ回る。** */
+  useEffect(() => {
+    if (chatOpen) markChatRead();
+  }, [chatOpen, markChatRead]);
 
   /** 下の板を切り替える。チャットから離れるときに既読位置を進める。 */
   const showPanel = useCallback((next: '' | 'chat' | 'console') => {
     setPanel((cur) => {
-      if (cur === 'chat' && next !== 'chat') setChatSeen(chatTotal);
+      if (cur === 'chat' && next !== 'chat') markChatRead();
       return cur === next ? '' : next;
     });
-  }, [chatTotal]);
+  }, [markChatRead]);
 
   // 行き先とエンジンのモードは同じもの。ずれると検討中に打たれる
   const setMode = g.setMode;
   const setNav = useCallback((id: NavId) => {
     // チャットを離れるときに既読位置を進める。開いている間は 0 のままなので、
     // 離れた後に届いたぶんだけが未読として数えられる
-    if (navRaw === 'ggs-chat' && id !== 'ggs-chat') setChatSeen(chatTotal);
+    if (navRaw === 'ggs-chat' && id !== 'ggs-chat') markChatRead();
     setNavRaw(id);
     if (id === 'play' || id === 'study') setMode(id === 'study' ? 'study' : 'vs');
-  }, [setMode, navRaw, chatTotal]);
+  }, [setMode, navRaw, markChatRead]);
 
   // ドックの学習タブでも登録局面の数を出すので、そこでも節を取る
   const book = useBookBrowse(isBook || tab === '学習');
