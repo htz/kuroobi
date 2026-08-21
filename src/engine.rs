@@ -177,6 +177,11 @@ impl Progress {
     }
 
     /// 何もしていない状態へ戻す。
+    ///
+    /// **反転の指定も戻す。** ここを落としていたせいで、一度でも先読みを
+    /// した後の思考が**ずっと符号を反転して出ていた** (実戦で盤の途中経過
+    /// が −35、指した手の確定値が +35.3 と食い違って露見した)。先読みは
+    /// `clear()` の直後に自分で立て直すので、既定は倒しておいてよい。
     pub fn clear(&self) {
         self.kind
             .store(Self::IDLE, std::sync::atomic::Ordering::Relaxed);
@@ -184,6 +189,7 @@ impl Progress {
         self.best.store(64, std::sync::atomic::Ordering::Relaxed);
         self.milli
             .store(i32::MIN, std::sync::atomic::Ordering::Relaxed);
+        self.flip.store(false, std::sync::atomic::Ordering::Relaxed);
     }
 
     /// 段を 1 つ終えた。**値は常に自分から見た石差にして置く** (先読みは
@@ -1116,5 +1122,40 @@ impl Engine {
         self.search.threads = saved_threads;
         // 解析でばらまいた浅いエントリを対局用の探索に引き継がない
         self.search.clear();
+    }
+}
+
+#[cfg(test)]
+mod progress_tests {
+    use super::Progress;
+    use crate::Position;
+
+    /// **`clear()` は反転の指定も戻す。**
+    ///
+    /// 先読みは「自分が指した後の局面」を読むので手番が相手になり、画面へ
+    /// 出す石差だけ符号を反転している。その指定を `clear()` が戻していな
+    /// かったため、**一度でも先読みをすると以降の思考が全部反転して**
+    /// 出ていた。実戦では盤の途中経過が −35、指した手の確定値が +35.3 と
+    /// 逆に並んで露見した (指す手そのものは正しく、表示だけの害)。
+    #[test]
+    fn clear_drops_the_flip() {
+        let p = Progress::default();
+        let mv = Position::from_index(19);
+
+        // 先読み: 相手の手番の値なので反転して置く
+        p.set_kind(Progress::PONDER);
+        p.flip.store(true, std::sync::atomic::Ordering::Relaxed);
+        p.reached(6, mv, 4.0);
+        assert_eq!(p.snapshot().3, Some(-4.0), "先読みは反転して置く");
+
+        // 思考へ移る: clear() の後は反転しない
+        p.clear();
+        p.set_kind(Progress::THINK);
+        p.reached(6, mv, 4.0);
+        assert_eq!(
+            p.snapshot().3,
+            Some(4.0),
+            "clear() の後は反転を持ち越さない"
+        );
     }
 }
