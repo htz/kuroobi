@@ -290,6 +290,19 @@ pub struct MatchView {
     pub left_by: String,
     /// 終局の結果 (石差の文字列)。
     pub result: String,
+    /// 書庫の番号 (終局後のみ)。**これがあれば棋譜をサーバーから取り直せる**
+    /// — 手元の記録より確かで、同期対局の 2 面と評価値も付いてくる。
+    pub archive: String,
+    /// **いまこの面で何をしているか。** 空 / `think` / `ponder` / `solve`
+    /// / `select`。画面は「思考中」「先読み中」の出し分けに使う。
+    pub busy: String,
+    /// 途中経過の到達深さ (読切・選択読みでは 0)。
+    pub busy_depth: u32,
+    /// いま最善と思っている手。**先読み中は予測している相手の手**。
+    /// file-major の 0..64。
+    pub busy_best: Option<u32>,
+    /// その評価値 (石差)。指す側から見た値。
+    pub busy_eval: Option<f32>,
     pub cells: Vec<u8>, // 0 空 1 黒(*) 2 白(O)
     pub turn: String,   // "black" | "white" | ""
     pub my_color: String,
@@ -1385,6 +1398,9 @@ struct EngineWorker {
     sent_at: Option<(Instant, Duration)>,
     /// 停止を立てた時刻。**返らないワーカーを見捨てる判断に使う。**
     stopped_at: Option<Instant>,
+    /// **探索の途中経過を覗く口。** 別スレッドで走っているエンジンが段の
+    /// 切れ目で書き、こちらは毎周読むだけ (ロックなし)。
+    progress: std::sync::Arc<kuroobi::engine::Progress>,
 }
 
 /// 停止を立ててからこれだけ待っても返らなければ、そのワーカーを捨てる。
@@ -1637,6 +1653,7 @@ impl EngineWorker {
         cfg.solver_hash_bits = res.hash_end_bits();
         let engine = Engine::new(cfg)?;
         let stop = engine.stop_handle();
+        let progress = engine.progress();
         let (jtx, jrx) = std::sync::mpsc::channel::<Job>();
         let (dtx, drx) = std::sync::mpsc::channel::<Done>();
         std::thread::spawn(move || {
@@ -1660,12 +1677,14 @@ impl EngineWorker {
                         let dl = cap.map(|c| Instant::now() + c);
                         let mv = engine.choose_within(&board, dl);
                         engine.set_levels(base.0, base.1, base.2);
+                        engine.progress().clear();
                         if dtx.send(Done::Moved(Box::new(mv))).is_err() {
                             return;
                         }
                     }
                     Job::Ponder { board, slice } => {
                         engine.ponder(&board, Instant::now() + slice);
+                        engine.progress().clear();
                         if dtx.send(Done::Pondered).is_err() {
                             return;
                         }
@@ -1686,6 +1705,7 @@ impl EngineWorker {
             pondering: false,
             sent_at: None,
             stopped_at: None,
+            progress,
         })
     }
 
@@ -3773,6 +3793,28 @@ fn collect_workers(ctx: &mut Ctx, matches: &mut HashMap<String, MatchState>) -> 
         if m.over || m.my_color.is_none() || Some(m.turn) != m.my_color {
             continue;
         }
+        /* **読んだ局面と、いま指す局面が同じかを確かめる。**
+
+        控え (`pending`) に回った探索は、先読みが返ってから投げられる。
+        投げるのは控えたときの盤なので、その間に自分の盤が進んでいれば
+        **別の局面の答えを指す**ことになる。手が偶然その盤でも合法なら
+        サーバーは受け取ってしまい、棋譜には「意味不明な悪手」だけが残る。
+
+        起きてはいけない経路なので**黙って捨てずに言う**。捨てれば次の
+        update で読み直される。 */
+        let now_hash = board_of(m, m.turn).map(|b| {
+            b.black
+                .wrapping_mul(31)
+                .wrapping_add(b.white)
+                .wrapping_add((m.moves.len() as u64).wrapping_mul(0x9e37_79b9))
+        });
+        if now_hash != Some(bh) {
+            ctx.log(
+                "info",
+                &format!("{mid}: 読んだ局面と今の局面が違うので指しません (読み直します)"),
+            );
+            continue;
+        }
         let mstr = match mv.pos {
             Some(p) => coord(p),
             None => "pa".to_string(),
@@ -3862,6 +3904,14 @@ fn sync_matches(ctx: &mut Ctx, matches: &HashMap<String, MatchState>) {
             base: base_id(id),
             ended: m.ended.clone(),
             left_by: m.left_by.clone(),
+            archive: m.archive.clone(),
+            /* **その面に割り当てたワーカーの途中経過を写す。** 探索は別
+            スレッドで走っていて、段の切れ目でアトミックへ書いている。
+            ここは毎周それを読むだけ。 */
+            busy: String::new(),
+            busy_depth: 0,
+            busy_best: None,
+            busy_eval: None,
             cells: m.cells.clone(),
             turn: match m.turn {
                 '*' => "black".into(),
@@ -3898,6 +3948,29 @@ fn sync_matches(ctx: &mut Ctx, matches: &HashMap<String, MatchState>) {
         })
         .collect();
     view.sort_by(|a, b| a.id.cmp(&b.id));
+    /* **走っているワーカーの途中経過を重ねる。** どの面を読んでいるかは
+    ワーカーの割り当て (`mid`) が持っている。先読み中は「予測している相手の
+    手」が入るので、`busy` で意味を出し分ける。 */
+    for v in &mut view {
+        let Some(w) = ctx.workers.iter().find(|w| w.mid.as_deref() == Some(&v.id)) else {
+            continue;
+        };
+        if !w.busy {
+            continue;
+        }
+        let (kind, depth, best, eval) = w.progress.snapshot();
+        v.busy = match kind {
+            kuroobi::engine::Progress::THINK => "think",
+            kuroobi::engine::Progress::PONDER => "ponder",
+            kuroobi::engine::Progress::SOLVE => "solve",
+            kuroobi::engine::Progress::SELECT => "select",
+            _ => "",
+        }
+        .into();
+        v.busy_depth = depth;
+        v.busy_best = best;
+        v.busy_eval = eval;
+    }
     ctx.snap.lock().unwrap().matches = view;
     ctx.dirty = true;
 }

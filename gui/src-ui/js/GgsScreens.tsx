@@ -15,7 +15,7 @@ import {
   Bubble, ConsoleLog, DayMark, FormulaEditor, FormulaView, MatchRow, PlayerRow, RateRow, Tag,
   type Cond, type Match, type NavId,
 } from './components/ggs';
-import { Board, type Cell } from './components/board';
+import { Board, type Cell, type EvalInfo } from './components/board';
 import { RateChart, ResultRow, StoneDot } from './components/data';
 import { flipped, type Prefs } from './prefs';
 import { logLinesOf } from './adapt';
@@ -880,6 +880,21 @@ function MatchBoard({ snap, m, clock, prefs, onKifu, face }: {
       + (m.last_eval_exact ? ' 読切' : '')
     : undefined;
 
+  /* 探索の途中経過。**段の切れ目でしか動かない**ので、深さが上がるたびに
+     印が動く。読切・選択読みに入ると深さは出ない (段が無い)。 */
+  const busyEval: Record<number, EvalInfo> | undefined =
+    m.busy && m.busy_best != null
+      ? {
+          [m.busy_best]: {
+            score: m.busy === 'ponder' ? 0 : (m.busy_eval ?? 0),
+            src: m.busy === 'solve' ? { exact: true }
+              : m.busy === 'select' ? { exact: true }
+              : { depth: m.busy_depth },
+            best: true,
+          },
+        }
+      : undefined;
+
   const top = observer && m.players.length >= 2
     ? { name: m.players[0].name, rate: m.players[0].rating, color: m.players[0].color, side: 'p0' as const }
     : { name: m.opp_name, rate: m.opp_rating, color: m.my_color === 'black' ? 'white' as const : 'black' as const, side: 'opp' as const };
@@ -916,7 +931,17 @@ function MatchBoard({ snap, m, clock, prefs, onKifu, face }: {
                  rate={top.rate ? +top.rate : undefined}
                  clock={clock(m.id, top.side).text} active={clock(m.id, top.side).cls === 'turn'} />
       {/* 「自分が下」は自分の色を下にする。観戦は my_color が空なので黒が下 */}
+      {/* **思考中・先読み中は盤に出す。** 「評価値を表示」と同じ見せ方で、
+          いま最善と思っている手 (先読みなら予測している相手の手) を 1 つ。
+          対局中の探索は αβ で窓を共有するので**全マスの値は原理的に出ない** —
+          出せるのは探索が実際に知っているこの 1 手だけ */}
       <Board cells={m.cells as Cell[]} last={last} disabled
+             evals={busyEval}
+             /* **印を出すマスは `legal` にも入れる。** 盤は合法手として
+                渡されたマスにしか描かない (空きマス全部に丸を出さない
+                ため)。対局画面は普段 `legal` を渡さないので、途中経過の
+                1 マスだけを入れる */
+             legal={busyEval ? Object.keys(busyEval).map(Number) : []}
              coords={prefs.coords} grain={prefs.grain}
              flip={flipped(prefs.facing, m.my_color)} />
       <PlayerRow color={bottom.color === 'black' ? 'b' : 'w'} name={bottom.name || '?'}
@@ -938,7 +963,19 @@ function MatchBoard({ snap, m, clock, prefs, onKifu, face }: {
             {m.watch_best ? ` (${m.watch_best})` : ''}
           </span>
         )}
-        {snap.thinking === m.id && <span style={{ color: 'var(--accent)' }}>思考中</span>}
+        {/* **何をしているかを言葉でも出す。** 盤の印だけだと、深さが動いて
+            いるのか止まっているのかが読めない */}
+        {m.busy === 'think' && (
+          <span style={{ color: 'var(--accent)' }}>
+            思考中{m.busy_depth > 0 ? ` ${m.busy_depth} 手` : ''}
+          </span>
+        )}
+        {m.busy === 'solve' && <span style={{ color: 'var(--accent)' }}>読切中</span>}
+        {m.busy === 'select' && <span style={{ color: 'var(--accent)' }}>選択読み中</span>}
+        {m.busy === 'ponder' && <span style={{ color: 'var(--sub)' }}>先読み中</span>}
+        {!m.busy && snap.thinking === m.id && (
+          <span style={{ color: 'var(--accent)' }}>思考中</span>
+        )}
         {/* **中断は終局と別物。** 石差が付かないので結果は出さず、誰が
             抜けたかを出す。中止 (両者合意) も勝敗なしで終わる */}
         {m.ended === 'adjourned' && (

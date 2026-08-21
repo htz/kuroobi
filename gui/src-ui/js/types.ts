@@ -142,6 +142,14 @@ export interface MatchView {
   left_by: string;
   /** 書庫の番号 (終局後のみ)。棋譜をサーバーから取り直すのに使う。 */
   archive: string;
+  /** いまこの面で何をしているか。'' / 'think' / 'ponder' / 'solve' / 'select'。 */
+  busy: '' | 'think' | 'ponder' | 'solve' | 'select';
+  /** 途中経過の到達深さ (読切・選択読みでは 0)。 */
+  busy_depth: number;
+  /** いま最善と思っている手。**先読み中は予測している相手の手**。 */
+  busy_best: number | null;
+  /** その評価値 (石差)。指す側から見た値。 */
+  busy_eval: number | null;
   /** 終局の結果 (石差)。 */
   result: string;
   /** 64 マス: 0 空 / 1 黒 / 2 白 (file-major)。 */

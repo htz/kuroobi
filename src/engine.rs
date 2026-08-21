@@ -129,6 +129,90 @@ pub struct MoveEval {
 
 /// 探索一式を束ねたセッション。生成コストが高い (重み読み込み +
 /// 置換表確保) ので、プロセスにつき 1 個作って使い回す。
+/// **探索の途中経過。** 反復深化が段を 1 つ終えるたびに書き換える。
+///
+/// 対局中に「いま何を読んでいるか」を外から見るための唯一の口。読む側
+/// (GUI) は別スレッドなので、ロックを取らずに済むアトミックだけで持つ。
+/// **探索の挙動は変えない** — 書き込みは段の切れ目 (1 手につき十数回) で、
+/// 探索の内側には入らない。
+#[derive(Debug, Default)]
+pub struct Progress {
+    /// いま何をしているか ([`Progress::IDLE`] / [`Progress::THINK`] /
+    /// [`Progress::PONDER`] / [`Progress::SOLVE`] / [`Progress::SELECT`])。
+    pub kind: std::sync::atomic::AtomicU8,
+    /// 到達した深さ。読切・選択読みでは 0。
+    pub depth: std::sync::atomic::AtomicU32,
+    /// いま最善と思っている手 (0..64)。64 以上は「まだ無い」。
+    pub best: std::sync::atomic::AtomicU32,
+    /// その評価値の 1000 倍 (石差)。`i32::MIN` は「まだ無い」。
+    pub milli: std::sync::atomic::AtomicI32,
+    /// **符号を反転して記録するか。**
+    ///
+    /// 先読みは「自分が指した後の局面」を読む。その局面の手番は相手なので、
+    /// 探索が返す石差は**相手から見た値**になる。画面には常に自分から見た
+    /// 値を出したいので、先読みのあいだだけ反転して記録する。
+    flip: std::sync::atomic::AtomicBool,
+}
+
+impl Progress {
+    pub const IDLE: u8 = 0;
+    pub const THINK: u8 = 1;
+    pub const PONDER: u8 = 2;
+    pub const SOLVE: u8 = 3;
+    pub const SELECT: u8 = 4;
+
+    /// 何をしているかだけを立てる (深さと手は据え置き)。
+    pub fn set_kind(&self, kind: u8) {
+        self.kind.store(kind, std::sync::atomic::Ordering::Relaxed);
+    }
+
+    /// 何もしていない状態へ戻す。
+    pub fn clear(&self) {
+        self.kind
+            .store(Self::IDLE, std::sync::atomic::Ordering::Relaxed);
+        self.depth.store(0, std::sync::atomic::Ordering::Relaxed);
+        self.best.store(64, std::sync::atomic::Ordering::Relaxed);
+        self.milli
+            .store(i32::MIN, std::sync::atomic::Ordering::Relaxed);
+    }
+
+    /// 段を 1 つ終えた。**値は常に自分から見た石差にして置く** (先読みは
+    /// 相手の手番の局面を読んでいるので反転する)。
+    pub fn reached(&self, depth: u32, best: Option<Position>, value: f32) {
+        use std::sync::atomic::Ordering::Relaxed;
+        self.depth.store(depth, Relaxed);
+        self.best
+            .store(best.map(|p| p.index() as u32).unwrap_or(64), Relaxed);
+        if value.is_finite() {
+            let v = if self.flip.load(Relaxed) {
+                -value
+            } else {
+                value
+            };
+            self.milli.store((v * 1000.0) as i32, Relaxed);
+        }
+    }
+
+    /// 予測した相手の手を置く (先読み用)。
+    pub fn predict(&self, pos: Position) {
+        self.best
+            .store(pos.index() as u32, std::sync::atomic::Ordering::Relaxed);
+    }
+
+    /// 読む側が使う写し。
+    pub fn snapshot(&self) -> (u8, u32, Option<u32>, Option<f32>) {
+        use std::sync::atomic::Ordering::Relaxed;
+        let b = self.best.load(Relaxed);
+        let m = self.milli.load(Relaxed);
+        (
+            self.kind.load(Relaxed),
+            self.depth.load(Relaxed),
+            (b < 64).then_some(b),
+            (m != i32::MIN).then(|| m as f32 / 1000.0),
+        )
+    }
+}
+
 pub struct Engine {
     evaluator: Evaluator,
     search: NnueSearch,
@@ -154,6 +238,8 @@ pub struct Engine {
     /// 読み切りが訪れたノードの累計。中盤探索は `search.nodes` が自分で
     /// 積んでいるが、Solver は 1 回ぶんしか持たないのでここで足す。
     solver_nodes: u64,
+    /// 探索の途中経過 (外から覗くための口)。
+    progress: std::sync::Arc<Progress>,
 }
 
 impl Engine {
@@ -171,7 +257,9 @@ impl Engine {
         // プロセスに 1 個・使い回し前提なのでリークで満たす。
         let nn: &'static Nnue = Box::leak(Box::new(nn));
         let tt: &'static SharedTt = Box::leak(Box::new(SharedTt::new(config.midgame_hash_bits)));
+        let progress = std::sync::Arc::new(Progress::default());
         let mut search = NnueSearch::new(nn, tt);
+        search.set_progress(Some(progress.clone()));
         search.threads = config.threads;
         search.mpc = config.mpc;
         let mut solver = Solver::new(config.solver_hash_bits);
@@ -220,6 +308,7 @@ impl Engine {
             learned,
             learn_path,
             solver_nodes: 0,
+            progress: progress.clone(),
         })
     }
 
@@ -434,6 +523,12 @@ impl Engine {
         let Some(pred) = self.tt_best(after_my_move) else {
             return 0;
         };
+        self.progress.clear();
+        self.progress.set_kind(Progress::PONDER);
+        self.progress
+            .flip
+            .store(true, std::sync::atomic::Ordering::Relaxed);
+        self.progress.predict(pred);
         let mut child = *after_my_move;
         child.make_move_bits(pred);
         if is_game_over(&child) {
@@ -546,12 +641,19 @@ impl Engine {
     /// 完了した深さの答えを返せる。読み切りと定石は途中で刻めないので
     /// 期限を見ない (読み切りに入る手前で残り時間を見て決めるのは
     /// 呼び出し側の仕事)。
+    /// 探索の途中経過を覗く口 (別スレッドから読んでよい)。
+    pub fn progress(&self) -> std::sync::Arc<Progress> {
+        self.progress.clone()
+    }
+
     pub fn choose_within(
         &mut self,
         board: &Board,
         deadline: Option<std::time::Instant>,
     ) -> MoveEval {
         self.stop.reset();
+        self.progress.clear();
+        self.progress.set_kind(Progress::THINK);
         // 定石 book: 実戦より深い探索で付けた答えなので、あれば即返す
         if let Some(book) = self.book.as_ref().filter(|_| self.config.use_book) {
             let hit = if self.config.book_tolerance > 0.0 {
@@ -615,6 +717,7 @@ impl Engine {
                 );
                 (pos, value)
             });
+            self.progress.set_kind(Progress::SOLVE);
             let watcher = self.watch_deadline(deadline);
             let r =
                 self.solver
@@ -656,6 +759,7 @@ impl Engine {
                 );
                 (pos, value)
             });
+            self.progress.set_kind(Progress::SELECT);
             let watcher = self.watch_deadline(deadline);
             let r = self.solver.solve_selective(board, Some(&self.evaluator), t);
             self.solver_nodes += r.nodes;

@@ -879,6 +879,21 @@ pub struct NnueSearch {
     abort: Option<std::sync::Arc<AbortChain>>,
     /// 外部からの中断ハンドル (UI の停止ボタン等)。
     stop: Option<StopHandle>,
+    /// **この探索が根で選んだ手。**
+    ///
+    /// 置換表から読み直してはいけない。Lazy SMP のヘルパーは**同じ根を
+    /// 違う深さ・強い枝刈りで探索して同じ表に書く**ので、表の根エントリは
+    /// 「最後に書いた誰か」の手になる。値は主スレッドのものを返すのに手だけ
+    /// 他人のものになり、**値と手が別の探索から来る**。実戦で 15 手中 14 位の
+    /// X 打ちを 129 秒かけて選び、その手の真値 (-21) でも最善手の値 (-2) でも
+    /// ない -12.86 を報告した。
+    root_move: Option<Position>,
+    /// 根の局面ハッシュ。**この探索自身の根**を見分けるために持つ
+    /// (0 = 根を持たない = ヘルパー)。
+    root_hash: u64,
+    /// **段を 1 つ終えるたびに書き込む途中経過** (対局中に外から覗く口)。
+    /// 書き込みは 1 手につき十数回で、探索の内側には入らない。
+    progress: Option<std::sync::Arc<crate::engine::Progress>>,
     abort_countdown: u64,
     /// Set once the main Lazy SMP thread has reached the target depth; helpers
     /// stop as soon as they notice, since their results are no longer needed.
@@ -912,6 +927,9 @@ impl NnueSearch {
             probcut_level: 0,
             abort: None,
             stop: None,
+            root_move: None,
+            root_hash: 0,
+            progress: None,
             abort_countdown: ABORT_CHECK_INTERVAL,
             done: None,
             my_gen: 0,
@@ -962,11 +980,17 @@ impl NnueSearch {
             probcut_level: 0,
             abort: self.abort.clone(),
             stop: self.stop.clone(),
+            // 複製 (ヘルパー) の選んだ手は根へ返さない
+            root_move: None,
+            root_hash: 0,
             abort_countdown: ABORT_CHECK_INTERVAL,
             done: self.done.clone(),
             my_gen: self.my_gen,
             pool: self.pool,
             mpc_relax: self.mpc_relax,
+            // 途中経過を書くのは主スレッドだけ。手伝いが書くと、主が
+            // 到達していない深さが画面に出る
+            progress: None,
         }
     }
 
@@ -997,6 +1021,11 @@ impl NnueSearch {
     }
 
     /// 外部からの中断ハンドルを設定する。
+    /// 段の切れ目で途中経過を書き込む先を渡す (対局中だけ)。
+    pub fn set_progress(&mut self, p: Option<std::sync::Arc<crate::engine::Progress>>) {
+        self.progress = p;
+    }
+
     pub fn set_stop(&mut self, stop: Option<StopHandle>) {
         self.stop = stop;
     }
@@ -1108,6 +1137,8 @@ impl NnueSearch {
                 }
             }
             let t0 = std::time::Instant::now();
+            self.root_hash = zobrist::board_hash(b.player_bb(), b.opponent_bb());
+            self.root_move = None;
             let v = self.negamax(b, &mut acc, d, f32::NEG_INFINITY, f32::INFINITY);
             // 期限で切られた段は不完全。直前の段の答えを残す
             if self.stop.as_ref().is_some_and(|s| s.is_stopped()) {
@@ -1115,8 +1146,11 @@ impl NnueSearch {
             }
             last_pass = t0.elapsed();
             value = v;
-            best = self.root_best(b, &mut acc);
+            best = self.root_move.or_else(|| self.root_best(b, &mut acc));
             reached = d;
+            if let Some(p) = self.progress.as_ref() {
+                p.reached(d, best, v);
+            }
         }
         (best.or_else(|| self.root_best(b, &mut acc)), value, reached)
     }
@@ -1260,6 +1294,8 @@ impl NnueSearch {
                     self.pool = pool;
                 }
 
+                self.root_hash = zobrist::board_hash(b.player_bb(), b.opponent_bb());
+                self.root_move = None;
                 let v = self.negamax(b, &mut acc, main_depth, f32::NEG_INFINITY, f32::INFINITY);
                 self.pool = None;
 
@@ -1279,8 +1315,11 @@ impl NnueSearch {
                 }
                 last_pass = t0.elapsed();
                 value = v;
-                best = self.root_best(b, &mut acc);
+                best = self.root_move.or_else(|| self.root_best(b, &mut acc));
                 reached = main_depth;
+                if let Some(p) = self.progress.as_ref() {
+                    p.reached(main_depth, best, v);
+                }
             }
         }
         self.nodes += nodes.load(Ordering::Relaxed);
@@ -2005,6 +2044,11 @@ impl NnueSearch {
             return ABORTED;
         }
 
+        /* **自分の根で選んだ手を控える。** 置換表から読み直すと、同じ根を
+        違う深さ・強い枝刈りで探索しているヘルパーの手を掴む (`root_move`)。 */
+        if self.root_hash != 0 && h == self.root_hash && best_move < 64 {
+            self.root_move = Position::from_index(best_move as u32);
+        }
         self.tt.put(
             h,
             depth as u8,
