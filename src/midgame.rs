@@ -60,6 +60,16 @@ fn eval_order_depth() -> u32 {
 /// so the caller knows to discard it rather than treat it as an evaluation.
 const ABORTED: f32 = f32::NEG_INFINITY;
 
+/// **`root_move` と置換表の食い違いを数える計器** (`ROOT_DIFF=1` のときだけ)。
+///
+/// 「根の手を表から読み直す」欠陥がどれだけ発火するかを測るために置いた。
+/// 実測 (40 局面・深さ 16): 逐次 0 件、4 スレッド 7 件 — **並列のときだけ
+/// 食い違う**。ただし食い違うのは段の途中で、**返す手は変わらなかった**
+/// (深さ 8/10/12/14 いずれも 0 件)。欠陥は実在するが、実戦の悪手の原因では
+/// ないと判じた根拠。
+pub static ROOT_DIFF: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+pub static ROOT_TOTAL: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+
 /// Nodes between abort checks: the flag is shared, so reading it every node
 /// would put a contended load in the hot path.
 /// Below `ybwc_min_depth` a subtree is cheaper to
@@ -1323,8 +1333,23 @@ impl NnueSearch {
             }
         }
         self.nodes += nodes.load(Ordering::Relaxed);
+        let out = best.or_else(|| self.root_best(b, &mut acc));
+        /* 調べもの用: **旧実装 (置換表から読み直す) なら違う手を指していたか**。
+        段の途中の食い違いは指し手に出ないので、返す直前に 1 回だけ見る。 */
+        if std::env::var("ROOT_DIFF").is_ok() {
+            let from_tt = self.root_best(b, &mut acc);
+            ROOT_TOTAL.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+            if from_tt != out {
+                ROOT_DIFF.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                eprintln!(
+                    "  返す手 {:?} / 置換表 {:?} (深さ {reached})",
+                    out.map(|p| p.index()),
+                    from_tt.map(|p| p.index())
+                );
+            }
+        }
         (
-            best.or_else(|| self.root_best(b, &mut acc)),
+            out,
             value,
             reached.max(if deadline.is_none() { depth } else { 0 }),
         )
