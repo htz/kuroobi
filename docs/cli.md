@@ -14,6 +14,7 @@
 | 速度の計測 | [`solve_obf`](#solve_obf) [`flipbench`](#flipbench) [`mpbench`](#mpbench) [`nnue_bench`](#nnue_bench) |
 | データ・定石 | [`kifu2data`](#kifu2data) [`bookgen`](#bookgen) [`mpccalib`](#mpccalib) [`nnue_symmetrize`](#nnue_symmetrize) |
 | オンライン対戦 | [`ggs`](#ggs) |
+| 正しさの検証 | [`stress_par`](#stress_par--stress_mid--stress_engine--stress_stop) [`stress_mid`](#stress_par--stress_mid--stress_engine--stress_stop) [`stress_engine`](#stress_par--stress_mid--stress_engine--stress_stop) [`stress_stop`](#stress_par--stress_mid--stress_engine--stress_stop) |
 
 ---
 
@@ -148,6 +149,38 @@ arena --a weights/linear.bin --b weights/exp/new.bin \
 arena --nnue-a weights/nnue-h16.bin --nnue-b weights/archive/nnue-h16-sym.bin \
       --games 400 --depth 16 --solve-empties 20
 ```
+
+#### 持ち時間の配り方を比べる
+
+`--time` を付けると持ち時間制になり、**配り方そのものを A/B できる**。
+時間の使い方は深さ固定の対局では測れない (どちらも同じ深さまで読むので
+差が出ない)。
+
+| オプション | 既定 | 意味 |
+|---|---|---|
+| `--time <秒>` | — | 1 局ぶんの持ち時間 (使い切ると負け) |
+| `--time-a` / `--time-b` | `--time` | 片側だけの持ち時間 |
+| `--pace-a` / `--pace-b` | `fast` | `fast` / `depth` / `tail:<a>` |
+| `--nps-a` / `--nps-b` | — | 較正した読切速度 (`auto` でその場で測る) |
+| `--budget-use-a` / `--budget-use-b` | 2.5 | 持ち時間をどれだけ攻めて使うか |
+| `--solve-ref-a` / `--solve-ref-b` | 18 | 残り手数の分母 `(空き − n) / 2`。`auto` で機械から決める |
+| `--band-a` / `--band-b` | 予算から自動 | 選択読みの帯を固定する (旧挙動との比較) |
+
+出力には**終局時の残り時間と時間切れの数**が付く。配り方の変更はたいてい
+勝率ではなく破綻の有無に出るので、そちらを先に見る。
+
+```sh
+# 残り手数の分母を機械から決める案を、現状 (固定 18) と比べる
+arena --a weights/linear.bin --b weights/linear.bin \
+      --nnue-a weights/nnue-h16.bin --nnue-b weights/nnue-h16.bin \
+      --games 30 --time 60 --random-plies 16 \
+      --nps-a auto --nps-b auto --solve-ref-b auto --threads 1 --seed 201
+```
+
+**計測台が実戦を写しているかを先に確かめる。** 60 秒・1 スレッドでは空き
+24-27 の 1 手が持ち時間の 6.7% を食うが、実戦 (900 秒・8 スレッド) では
+0.13% しかない。終盤の重さが違う台で終盤の取り置きを削れば、実戦では
+起きない時間切れが出る (実測: [到達水準](benchmarks.md#分母を上げる-ab))。
 
 ### nnue_arena
 
@@ -398,6 +431,46 @@ nnue_bench [--nnue <path>] [--depth <n>] [--val <file>]...
 ```
 
 `--val` を渡すと、f32 の前向き計算と i16 量子化の MSE を比べる。
+
+---
+
+## 正しさの検証
+
+### stress_par / stress_mid / stress_engine / stress_stop
+
+**「返した手を実際に指して」確かめる。** 厳密解のテストは値しか見ないので、
+値が正しく手だけ誤る欠陥を通してしまう (実際に通し、実戦で 36 石を失った。
+詳細は [探索](search.md#並列探索の正しさ))。
+
+| 道具 | 何を確かめるか |
+|---|---|
+| `stress_par` | 並列の終盤探索が返した手を指し、逐次の厳密解と石差が一致するか |
+| `stress_mid` | 中盤探索の自己整合 (同じ局面・同じ設定で同じ手を返すか) |
+| `stress_engine` | 実戦の経路 (`Engine::choose_within`) で同じことを確かめる |
+| `stress_stop` | 期限切れで抜けたときに保険の手が返るか |
+
+引数は位置指定で `[局面数] [空き] [スレッド]` (既定 200 / 20 / 8)。
+
+```sh
+# 空き 20 を 300 局面、8 スレッド
+stress_par 300 20 8
+
+# 打ち切りをわざと起こす (実戦では数千手に 1 回しか起きない)
+SOLVER_CHAOS=32 stress_par 200 22 8
+```
+
+**中盤は並列と逐次で一致しない。** Lazy SMP は探索順が非決定的で、それが
+正しい挙動なので、`stress_mid` は自己整合だけを見る (一致を期待して書いた
+最初の版は、正常な非決定性を欠陥として報告した)。
+
+環境変数の逃がし口:
+
+| 変数 | 効果 |
+|---|---|
+| `SOLVER_CHAOS=n` | n 回に 1 回、カットが出ていないスレッドを打ち切る |
+| `SOLVER_ABORT=0` | 打ち切りそのものを止める (切り分け用) |
+| `MID_TOL` / `MID_STRICT` | 中盤の許容石差 / 完全一致を要求する |
+| `MID_MPC` / `MID_REPEAT` | 中盤の確率的枝刈りを入れる / 同じ局面を繰り返す |
 
 ---
 
