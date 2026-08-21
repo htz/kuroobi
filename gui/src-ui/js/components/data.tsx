@@ -749,7 +749,8 @@ export function EvalTrend({ points, height = 96 }: {
 }) {
   const [at, setAt] = React.useState<number | null>(null);
   const has = points.some((p) => p.mine != null || p.opp != null);
-  if (points.length < 2 || !has) {
+  // **1 点でも描く。** 点を打つようにしたので、2 点そろうまで待つ必要がない
+  if (!points.length || !has) {
     return (
       <div style={{
         height, display: 'grid', placeItems: 'center',
@@ -769,7 +770,8 @@ export function EvalTrend({ points, height = 96 }: {
   const ticks: number[] = [];
   for (let t = -Math.floor(lim / step) * step; t <= lim; t += step) ticks.push(t);
 
-  const x = (i: number) => padL + (i / (points.length - 1)) * (w - padL - pad);
+  const span = Math.max(1, points.length - 1);
+  const x = (i: number) => padL + (i / span) * (w - padL - pad);
   const y = (v: number) => (height - padB) / 2 - (v / lim) * ((height - padB) / 2 - pad);
 
   /** 値の無い手は線を切る (無い値を跨いで直線を引かない)。 */
@@ -831,6 +833,20 @@ export function EvalTrend({ points, height = 96 }: {
               strokeWidth={1.5} strokeLinejoin="round" vectorEffect="non-scaling-stroke" />
         <path d={path((p) => p.mine)} fill="none" stroke="var(--accent)"
               strokeWidth={1.5} strokeLinejoin="round" vectorEffect="non-scaling-stroke" />
+        {/* **点も打つ。** 線は 2 点そろって初めて現れるので、点だけだと
+            開局から数手のあいだ何も描かれない (自分の 2 手目が来るまで
+            自分の線が出ない = 実質 4 手目まで空っぽ)。1 つ目の申告値から
+            見えるようにする。 */}
+        {points.map((p, i) => (
+          <g key={i}>
+            {p.opp != null && (
+              <circle cx={x(i)} cy={y(p.opp)} r={1.6} fill="var(--sub)" />
+            )}
+            {p.mine != null && (
+              <circle cx={x(i)} cy={y(p.mine)} r={1.6} fill="var(--accent)" />
+            )}
+          </g>
+        ))}
         {at != null && (
           <g pointerEvents="none">
             <line x1={x(at)} y1={pad} x2={x(at)} y2={height - padB}

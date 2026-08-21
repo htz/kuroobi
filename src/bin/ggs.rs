@@ -178,9 +178,9 @@ fn main() -> ExitCode {
                 search: &mut NnueSearch,
                 solver: &mut Solver,
                 clock_secs: Option<u64>|
-     -> Option<Position> {
+     -> (Option<Position>, Option<f32>) {
         if board.movable() == 0 {
-            return None;
+            return (None, None);
         }
         let secs = clock_secs.unwrap_or(u64::MAX);
         let (depth, band) = if secs < 8 {
@@ -192,14 +192,18 @@ fn main() -> ExitCode {
         } else {
             (args.depth, args.band)
         };
+        /* **評価値も返す。** GGS の着手は `手/評価値/秒` を運べるので、
+        出さないと相手側の画面に「相手の読み」が一切出ない。デバッグ対局で
+        両者の読みを突き合わせたいときに、これが無いと片側しか見えない。 */
         if board.empty_count() <= args.solve_empties {
-            solver
-                .solve_with_eval(EndSolverMode::Perfect, board, Some(&evaluator))
-                .best_move
+            let r = solver.solve_with_eval(EndSolverMode::Perfect, board, Some(&evaluator));
+            (r.best_move, Some(r.value as f32))
         } else if let Some(t) = selective_band(board.empty_count(), args.solve_empties, band) {
-            solver.solve_selective(board, Some(&evaluator), t).best_move
+            let r = solver.solve_selective(board, Some(&evaluator), t);
+            (r.best_move, Some(r.value as f32))
         } else {
-            search.best_move(board, depth as u32)
+            let (mv, v) = search.best_move_valued(board, depth as u32);
+            (mv, v.is_finite().then_some(v))
         }
     };
 
@@ -530,12 +534,17 @@ fn main() -> ExitCode {
                             sboard.push(' ');
                             sboard.push(if my_color == Some('*') { 'X' } else { 'O' });
                             if let Ok(board) = Board::from_string(&sboard) {
-                                let m = match pick(&board, &mut search, &mut solver, my_clock_secs)
-                                {
+                                let t0 = std::time::Instant::now();
+                                let (mv, val) =
+                                    pick(&board, &mut search, &mut solver, my_clock_secs);
+                                let m = match mv {
                                     Some(p) => coord(p),
                                     None => "pa".to_string(),
                                 };
-                                send(&format!("tell /os play {mid} {m}"));
+                                // `手/評価値/秒`。評価値が無いときは空欄にする
+                                let ev = val.map(|v| format!("{v:.2}")).unwrap_or_default();
+                                let secs = t0.elapsed().as_secs_f32();
+                                send(&format!("tell /os play {mid} {m}/{ev}/{secs:.2}"));
                             }
                         }
                     } else {
