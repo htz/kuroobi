@@ -409,8 +409,9 @@ function GgsLobby({ snap, onNav }: { snap: GgsSnapshot; onNav: (id: NavId) => vo
                            onClick={() => {
                              const on = !o.watching;
                              void ggsApi.watch(o.id, on);
-                             // 観戦を始めたら盤が見たいはずなので対局画面へ移る
-                             if (on) onNav('ggs-play');
+                             // 観戦を始めたら盤が見たいはずなので対局画面へ移る。
+                             // **その対局**を映す (先頭の別の対局ではなく)
+                             if (on) { focusMatch(o.id); onNav('ggs-play'); }
                            }}>
                      {o.watching ? '観戦をやめる' : '観戦'}
                    </Button>} />
@@ -441,7 +442,8 @@ function GgsLobby({ snap, onNav }: { snap: GgsSnapshot; onNav: (id: NavId) => vo
                          受けるかどうかを決める前に元の行を読めるようにする */}
                      <Button size="row" onClick={() => setInfo(info === o.id ? '' : o.id)}>情報</Button>
                      {o.incoming && <>
-                       <Button size="row" variant="primary" onClick={() => void ggsApi.accept(o.id)}>受ける</Button>
+                       <Button size="row" variant="primary"
+                               onClick={() => { focusMatch(o.id); void ggsApi.accept(o.id); }}>受ける</Button>
                        <Button size="row" variant="danger" onClick={() => void ggsApi.decline(o.id)}>断る</Button>
                      </>}
                    </>} />
@@ -749,6 +751,17 @@ function FormulaRow({ label, src }: { label: string; src: string }) {
   );
 }
 
+/* **明示的に開いた対局を最初に映す。**
+ *
+ * 一覧の先頭を既定にしていたので、観戦を始めても・対局が成立しても、
+ * 別の対局が映ったままだった。押した本人はその対局が見たいので、押した
+ * ところで id を控えて、対局画面が立ち上がるときに拾う。
+ *
+ * 画面をまたぐが、React の状態にするには App まで持ち上げることになる。
+ * **一度きりの受け渡し**なので、置き場だけ用意して読んだら捨てる。 */
+let wantedMatch = '';
+export function focusMatch(id: string) { wantedMatch = id; }
+
 /* ---------------- 対局・観戦 ----------------
  *
  * 同期対局は 2 局で 1 組。組を 1 行として扱い、右に盤を並べる。
@@ -759,15 +772,24 @@ function GgsPlay({ snap, onNav, prefs, onKifu }: {
   snap: GgsSnapshot; onNav: (id: NavId) => void; prefs: Prefs;
   onKifu: (title: string, kifu: string, archive?: string) => void;
 }) {
-  const [sel, setSel] = useState('');
+  /* 押して来たならその対局を映す。**読んだら捨てる** — 次に来たときまで
+     残っていると、選び直した対局が勝手に戻る */
+  const [sel, setSel] = useState(() => { const w = wantedMatch; wantedMatch = ''; return w; });
   const clock = useClocks(snap.matches);
 
   // 手合いにまとめる。自分の対局を先に、次に観戦
   const groups = new Map<string, MatchView[]>();
   for (const m of snap.matches) groups.set(m.base, [...(groups.get(m.base) ?? []), m]);
+  /* **新しいものが上。** id は `.48` のような連番なので、数として比べる
+     (文字列だと `.100` が `.48` より前に来る)。番号を持たないものは
+     後ろへ回す。 */
+  const num = (k: string) => {
+    const n = parseInt(k.replace(/^\./, ''), 10);
+    return Number.isFinite(n) ? n : -1;
+  };
   const keys = [...groups.keys()].sort((a, b) => {
     const mine = (k: string) => (groups.get(k)!.some((m) => m.my_color) ? 0 : 1);
-    return mine(a) - mine(b) || a.localeCompare(b);
+    return mine(a) - mine(b) || num(b) - num(a) || b.localeCompare(a);
   });
   const cur = groups.has(sel) ? sel : keys[0] ?? '';
   const pair = groups.get(cur);
@@ -1238,9 +1260,23 @@ function GgsResults({ snap, onKifu }: {
   const rates = rated.map((r) => r.my_rating as number);
   // 横軸のラベル。端と中央だけ出るので全部渡してよい
   const rateDates = rated.map((r) => fmtDay(r.at ?? 0));
+  /* かざした点の一言。**どの対局のレートかが分からない**という声があった。
+     日時・相手・石差まで出せば、下の表のどの行かが読める。 */
+  const rateLabels = rated.map((r) => {
+    const d = r.my_diff;
+    const sign = d == null ? '' : d > 0 ? `+${d}` : `${d}`;
+    return `${fmtDay(r.at ?? 0)} · ${r.opp} · ${sign} · ${Math.round(r.my_rating as number)}`;
+  });
+  /* グラフと表の対応付け。**同じ対局を指す**ので、点の番号ではなく
+     対局そのもので突き合わせる (表は新しい順、グラフは古い順)。 */
+  const [hover, setHover] = useState<number | null>(null);
+  const hoverKey = hover != null && rated[hover] ? rated[hover].id + rated[hover].seq : '';
 
   return (
-    <div className="k-scroll" style={{ flex: 1, minHeight: 0, padding: 'var(--sp-4) var(--sp-4) 0' }}>
+    /* **縦のスクロールは一覧だけ。** 画面ごと流れると、行が増えたときに
+       グラフが上へ逃げて、対応付けを見ながら表を辿れない */
+    <div style={{ flex: 1, minHeight: 0, display: 'flex', flexDirection: 'column',
+                  padding: 'var(--sp-4) var(--sp-4) 0' }}>
       <Section title="レートの推移"
                aside={kinds.length > 1 ? (
                  <Segmented value={gtype} onChange={setGtype}
@@ -1251,15 +1287,22 @@ function GgsResults({ snap, onKifu }: {
             (300 のままだと横に引き伸ばされて線の太さが崩れる)。
             **ここは画面の主役なので軸を出す** — 「いつ何点だったか」を
             読む場所 (2026-08-10 にデザイン側と決着。ドックの中は軸なし) */}
-        <RateChart points={rates} width={800} height={180} axes dates={rateDates} />
+        <RateChart points={rates} width={800} height={180} axes dates={rateDates}
+                   labels={rateLabels} hover={hover} onHover={setHover} />
       </Section>
 
-      <Section title="終わった対局" aside={<span>{rows.length}</span>}>
+      <Section title="終わった対局" aside={<span>{rows.length}</span>} grow>
         {!rows.length && <Empty>まだ記録がありません。</Empty>}
         {/* 行どうしは詰める (節の余白が行間に入る) */}
         <List>
         {rows.map((r) => (
           <ResultRow key={r.id + r.seq} opponent={r.opp}
+                     // グラフでかざしている対局を光らせる
+                     picked={!!hoverKey && r.id + r.seq === hoverKey}
+                     onHover={(on) => {
+                       const i = rated.findIndex((x) => x.id + x.seq === r.id + r.seq);
+                       setHover(on ? (i < 0 ? null : i) : null);
+                     }}
                      win={(r.my_diff ?? 0) > 0} draw={r.my_diff === 0}
                      discs={r.my_diff ?? 0} when={fmtDay(r.at)}
                      note={gtype === 'all' ? gtypeLabel(baseType(r.base, r.raw)) : undefined}
@@ -1287,6 +1330,18 @@ const baseType = (base: string, raw?: string) => {
   return raw?.split(/\s+/).find((t) => /^s?8(r\d+)?$/.test(t)) ?? '';
 };
 
+/** 履歴の日時 (`30 Jul 2026 17:36:36`) を `7/30 17:36` にする。
+ *
+ * **読めなければ元の文字をそのまま返す。** サーバーの書式が変わったときに
+ * 空欄になるより、生のまま出ているほうが直しやすい。 */
+function fmtWhen(at: string): string {
+  const t = Date.parse(at);
+  if (!Number.isFinite(t)) return at;
+  const d = new Date(t);
+  const p2 = (n: number) => String(n).padStart(2, '0');
+  return `${d.getMonth() + 1}/${p2(d.getDate())} ${p2(d.getHours())}:${p2(d.getMinutes())}`;
+}
+
 /** 終わった日。今日なら時刻だけ。 */
 function fmtDay(secs: number): string {
   if (!secs) return '';
@@ -1305,23 +1360,22 @@ function fmtDay(secs: number): string {
  *
  * 絵は 在室 / 最終対局 / 直近 10 戦 / レート推移 / 勝敗表 / 観戦 も描いて
  * いたが、**エンジンにもサーバーにも口が無い**ことを伝えたら絵から落ちた。
- * いま出せるのは finger の「対局の申し込み」4 行と対戦履歴だけ。
+ * いま出せるのは finger の「対局の申し込み」4 行だけ。
+ *
+ * **対戦履歴は載せない。** 340px の名刺に 1 行 3 項目を詰めると溢れて
+ * 読めず、表にする幅も無い。履歴は「詳しく見る」が表で持つ。
  */
-function UserCard({ snap, name, onClose, onDetail, onAsk, onKifu }: {
+function UserCard({ snap, name, onClose, onDetail, onAsk }: {
   snap: GgsSnapshot; name: string;
   onClose: () => void;
   onDetail: () => void;
   onAsk: () => void;
-  onKifu: (title: string, kifu: string, archive?: string) => void;
 }) {
-  const [tab, setTab] = useState('プロフィール');
   useEffect(() => { ggsApi.finger(name).catch(() => {}); }, [name]);
-  useEffect(() => { ggsApi.history(name === snap.login ? '' : name).catch(() => {}); }, [name, snap.login]);
 
   const u = snap.users.find((x) => x.name === name);
   const rates = bothRates(u);
   const fields = snap.fingers[name]?.fields ?? [];
-  const rows = snap.history[name] ?? [];
 
   /* 「対局の申し込み」のうち**条件式でない 4 行**だけ。条件式は木で描くもので、
      340px の名刺には収まらない (全画面の詳細が持つ) */
@@ -1332,17 +1386,13 @@ function UserCard({ snap, name, onClose, onDetail, onAsk, onKifu }: {
     <Overlay onClose={onClose}>
       <Modal title={name} onClose={onClose}
              sub={rates || undefined}
-             band={<Segmented value={tab} onChange={setTab}
-                              options={[{ value: 'プロフィール', label: 'プロフィール' },
-                                        { value: '対戦履歴', label: '対戦履歴' }]} />}
              scroll
              actions={<>
                <Button size="field" onClick={onDetail}>詳しく見る</Button>
                <span style={{ marginLeft: 'auto' }} />
                <Button size="field" variant="primary" onClick={onAsk}>申し込む</Button>
              </>}>
-        {tab === 'プロフィール' ? (
-          <Section title="対局の申し込み">
+        <Section title="対局の申し込み">
             {!facts.length && <Empty>読み込んでいます…</Empty>}
             {facts.map((r) => (
               <div key={r.key} style={{ display: 'flex', alignItems: 'center',
@@ -1358,21 +1408,7 @@ function UserCard({ snap, name, onClose, onDetail, onAsk, onKifu }: {
                 </span>
               </div>
             ))}
-          </Section>
-        ) : (
-          <>
-            {!rows.length && <Empty>対戦履歴はありません。</Empty>}
-            <List>
-              {rows.map((h) => (
-                <Row key={h.id}
-                     title={`${h.black} 対 ${h.white}`}
-                     sub={`${h.at} · ${gtypeLabel(h.gtype)} · ${h.score}`}
-                     title2="棋譜を見る"
-                     onClick={() => onKifu(`${h.black} 対 ${h.white}`, '', h.id)} />
-              ))}
-            </List>
-          </>
-        )}
+        </Section>
       </Modal>
     </Overlay>
   );
@@ -1446,7 +1482,7 @@ function GgsUsers({ snap, onNav, onKifu }: {
   return (
     <div className="k-scroll" style={{ flex: 1, minHeight: 0, padding: 'var(--sp-4) var(--sp-4) 0' }}>
       {card && (
-        <UserCard snap={snap} name={card} onKifu={onKifu}
+        <UserCard snap={snap} name={card}
                   onClose={() => setCard(null)}
                   onDetail={() => { setSel(card); setCard(null); }}
                   onAsk={() => { setCard(null); onNav('ggs-lobby'); }} />
@@ -1573,6 +1609,13 @@ function UserDetail({ snap, name, tab, onTab, onBack, onNav, onKifu }: {
   const fields = snap.fingers[name]?.fields ?? [];
   // 自分の履歴も他人と同じく login のキーで入る (要求だけが空文字)
   const rows = snap.history[name] ?? [];
+  const histCols: Col[] = [
+    { head: '日時', w: 132 },
+    { head: '形式', w: 104 },
+    { head: '相手', clip: true },
+    { head: '手番', w: 44 },
+    { head: '石差', w: 64, right: true, num: true },
+  ];
 
   return (
     <div style={{ flex: 1, minHeight: 0, display: 'flex', flexDirection: 'column' }}>
@@ -1632,17 +1675,32 @@ function UserDetail({ snap, name, tab, onTab, onBack, onNav, onKifu }: {
         ) : (
           <>
             {!rows.length && <Empty>対戦履歴はありません。</Empty>}
-            {/* 押すと棋譜を覆いで見せる。手元に棋譜は無いので、対局の番号から
-                取り出す (結果の画面と同じ道)。押せない行を並べていたので、
-                一覧から棋譜へ行く道が無かった */}
+            {/* **表で出す。** 1 行 3 項目を「·」で繋いだ 2 段だと、日時・
+                形式・石差が行ごとに違う位置に来て縦に読めない。押すと
+                棋譜を覆いで見せる (手元に棋譜は無いので番号から取り出す) */}
+            {!!rows.length && <TableHead cols={histCols} />}
             <List>
-            {rows.map((h) => (
-              <Row key={h.id}
-                   title={`${h.black} 対 ${h.white}`}
-                   sub={`${h.at} · ${gtypeLabel(h.gtype)} · ${h.score}`}
-                   title2="棋譜を見る"
-                   onClick={() => onKifu(`${h.black} 対 ${h.white}`, '', h.id)} />
-            ))}
+            {rows.map((h) => {
+              const black = h.black === name;
+              const d = parseFloat(h.score);
+              // 石差はこの人から見た値にする。黒番の記録は黒視点で来る
+              const mine = Number.isFinite(d) ? (black ? d : -d) : null;
+              return (
+                <TableRow key={h.id} cols={histCols}
+                          onClick={() => onKifu(`${h.black} 対 ${h.white}`, '', h.id)}>
+                  <span style={{ color: 'var(--sub)' }}>{fmtWhen(h.at)}</span>
+                  <span style={{ color: 'var(--sub)' }}>{gtypeLabel(h.gtype)}</span>
+                  <span className="k-sel">{black ? h.white : h.black}</span>
+                  <span style={{ color: 'var(--sub)' }}>{black ? '黒' : '白'}</span>
+                  <span style={{
+                    color: mine == null ? 'var(--sub)'
+                      : mine > 0 ? 'var(--ok)' : mine < 0 ? 'var(--bad)' : 'var(--fg)',
+                  }}>
+                    {mine == null ? '—' : mine > 0 ? `+${mine}` : `${mine}`}
+                  </span>
+                </TableRow>
+              );
+            })}
             </List>
           </>
         )}

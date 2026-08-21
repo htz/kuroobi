@@ -190,9 +190,17 @@ export function Dock({ tabs, active, onTab, children, open, scroll = true }: {
 /* 節。丸四角の箱は使わず、見出し＋1px 罫だけで区切る。
  * 中身は無くてもよい — 節そのものが「ここから先は別の話」の印なので、
  * 器がスクロールを持つ場合 (通信ログなど) は見出しだけを置く */
-export function Section({ title, aside, children }: { title: string; aside?: React.ReactNode; children?: React.ReactNode }) {
+export function Section({ title, aside, grow, children }: {
+  title: string; aside?: React.ReactNode; children?: React.ReactNode;
+  /** 余りの高さを取り、**中身だけ**を縦に流す (画面ごと流さない)。 */
+  grow?: boolean;
+}) {
   return (
-    <section style={{ display: 'flex', flexDirection: 'column', gap: 'var(--sp-3)', padding: '0 var(--sp-3) var(--sp-4)' }}>
+    <section style={{
+      display: 'flex', flexDirection: 'column', gap: 'var(--sp-3)',
+      padding: '0 var(--sp-3) var(--sp-4)',
+      ...(grow ? { flex: 1, minHeight: 0, overflow: 'hidden' } : { flex: 'none' }),
+    }}>
       {/* 操作が乗るときは帯を高くする。--h-head (20px) のままだと押せるものが
           罫にめり込み、当たりも文字ぶんしか無くなる (実際に指摘が出た) */}
       <h3 style={{
@@ -204,7 +212,9 @@ export function Section({ title, aside, children }: { title: string; aside?: Rea
       }}>{title}{aside && <span style={{
         marginLeft: 'auto', letterSpacing: 0, display: 'flex', alignItems: 'center', gap: 'var(--sp-2)',
       }}>{aside}</span>}</h3>
-      {children}
+      {grow
+        ? <div className="k-scroll" style={{ flex: 1, minHeight: 0 }}>{children}</div>
+        : children}
     </section>
   );
 }

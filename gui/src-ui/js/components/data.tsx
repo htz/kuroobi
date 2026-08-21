@@ -1,6 +1,6 @@
 import React from 'react';
 import { Badge, Button, Dot } from './primitives';
-import { Col, Divider, Empty, TableHead, TableRow } from './layout';
+import { Col, Divider, Empty, TableHead, TableRow, picked as pickedStyle } from './layout';
 
 /* KUROOBI data — 棋譜表・評価値グラフ・対局者行・レート
  * 表は 1 行 --h-row。列幅は固定で、値は右揃え。
@@ -439,7 +439,7 @@ export function PlayerRow({ color, name, rate, dev, meta, clock, active, discs, 
  * 広すぎると svg 全体が縮小され、font-size 10 が 6px になって読めなくなる
  * （トークンの下限は --fs-7 = 10px）。このグラフはドック幅 268 を前提に 300。
  */
-export function RateChart({ points, height = 74, width = 300, axes, dates }: {
+export function RateChart({ points, height = 74, width = 300, axes, dates, labels, hover, onHover }: {
   points: number[];
   height?: number;
   /** viewBox の幅。**器の実寸に合わせる** — 300 のまま広い器へ置くと、
@@ -453,6 +453,12 @@ export function RateChart({ points, height = 74, width = 300, axes, dates }: {
   axes?: boolean;
   /** 横軸のラベル。`axes` のときだけ使う。点と同じ数だけ渡す。 */
   dates?: string[];
+  /** 点にかざしたときに出す一言 (「8/20 17:36 · piglet · +2」)。 */
+  labels?: string[];
+  /** かざしている点。**外から渡す** — 下の表と同じ行を指すため。 */
+  hover?: number | null;
+  /** かざした点を報せる。表の行と対応付ける側が受け取る。 */
+  onHover?: (i: number | null) => void;
 }) {
   // 新規プレイヤーや初対局前は必ず空。点が 1 個だと線が引けない
   if (points.length < 2) {
@@ -471,11 +477,26 @@ export function RateChart({ points, height = 74, width = 300, axes, dates }: {
   const x = (i: number) => padL + (i / (points.length - 1)) * (w - padL);
   const xy = points.map((p, i) => [x(i), y(p)] as const);
   const last = xy[xy.length - 1];
-  /* 縦軸は 25 刻み。範囲に入る目盛だけ出す (レートは 25 で 1 段の感覚) */
+  /* 縦軸の刻み。**幅を固定すると潰れる。** 25 刻みで固定していたので、
+     レートが 200 動いた頃には 9 本の目盛が 180px に重なって読めなかった。
+     目盛は 5 本前後に収まる刻みを選ぶ。 */
   const ticks: number[] = [];
   if (axes) {
-    for (let t = Math.ceil(min / 25) * 25; t <= max; t += 25) ticks.push(t);
+    const step = [1, 2, 5, 10, 25, 50, 100, 200, 500, 1000].find((v) => span / v <= 5) ?? 2000;
+    for (let t = Math.ceil(min / step) * step; t <= max; t += step) ticks.push(t);
   }
+  /* かざした点を viewBox の座標から拾う。**実寸から割り戻す** —
+     `meet` は器と縦横比が違うと左右に余白を作るので、器の幅で割ると
+     ずれる。 */
+  const pick = (e: React.MouseEvent<SVGSVGElement>): number => {
+    const r = e.currentTarget.getBoundingClientRect();
+    const scale = axes ? Math.min(r.width / w, r.height / height) : r.width / w;
+    const ox = axes ? (r.width - w * scale) / 2 : 0;
+    const vx = (e.clientX - r.left - ox) / scale;
+    const i = Math.round(((vx - padL) / (w - padL)) * (points.length - 1));
+    return Math.max(0, Math.min(points.length - 1, i));
+  };
+  const at = hover != null && hover >= 0 && hover < points.length ? hover : null;
   return (
     /* **罫線は引かない (規則 56)。** 「上がっているか下がっているか」が
        分かれば足る場所なので軸は省くと決めてあり、規則は
@@ -484,7 +505,9 @@ export function RateChart({ points, height = 74, width = 300, axes, dates }: {
        `RateRow` が出す。目盛を出すなら `EvalGraph` と同じ作りにすること。 */
     <svg viewBox={'0 0 ' + w + ' ' + height}
          preserveAspectRatio={axes ? 'xMidYMid meet' : 'none'}
-         style={{ width: '100%', height, display: 'block' }}>
+         style={{ width: '100%', height, display: 'block' }}
+         onMouseMove={onHover ? (e) => onHover(pick(e)) : undefined}
+         onMouseLeave={onHover ? () => onHover(null) : undefined}>
       {ticks.map((t) => (
         <g key={t}>
           <line x1={padL} y1={y(t)} x2={w} y2={y(t)} stroke="var(--border-weak)" strokeWidth={1} />
@@ -502,11 +525,26 @@ export function RateChart({ points, height = 74, width = 300, axes, dates }: {
       ))}
       <polyline points={xy.map(([px, py]) => px.toFixed(1) + ',' + py.toFixed(1)).join(' ')} fill="none" stroke="var(--accent)" strokeWidth={1.6} />
       <circle cx={last[0]} cy={last[1]} r={3} fill="var(--accent)" />
+      {at != null && (() => {
+        const [hx, hy] = xy[at];
+        const text = labels?.[at] ?? String(points[at]);
+        // 字幅は測れないので概算 (半角 6px / 全角 11px)。端では内側へ寄せる
+        const tw = [...text].reduce((n, c) => n + (c.charCodeAt(0) < 256 ? 6 : 11), 0) + 12;
+        const bx = Math.min(Math.max(hx - tw / 2, padL), w - tw);
+        return (
+          <g pointerEvents="none">
+            <line x1={hx} y1={pad} x2={hx} y2={height - padB} stroke="var(--sub)" strokeWidth={1} strokeDasharray="2 2" />
+            <circle cx={hx} cy={hy} r={3.5} fill="var(--bg)" stroke="var(--accent)" strokeWidth={2} />
+            <rect x={bx} y={0} width={tw} height={17} rx={3} fill="var(--panel)" stroke="var(--border)" />
+            <text x={bx + 6} y={12} fontSize={10} fill="var(--fg)">{text}</text>
+          </g>
+        );
+      })()}
     </svg>
   );
 }
 
-export function ResultRow({ win, draw, opponent, discs, when, note, rating, dim, onClick }: {
+export function ResultRow({ win, draw, opponent, discs, when, note, rating, dim, picked, onHover, onClick }: {
   win: boolean;
   /** 引き分け。勝/負の 2 値に丸めると石差 0 の対局が「負」になる */
   draw?: boolean;
@@ -520,6 +558,10 @@ export function ResultRow({ win, draw, opponent, discs, when, note, rating, dim,
   rating?: number | null;
   /** 棋譜がどこにも無くて開けない対局。押せないことを見た目でも言う。 */
   dim?: boolean;
+  /** グラフでかざしている対局。**表とグラフで同じ 1 局を指すため。** */
+  picked?: boolean;
+  /** この行にかざしたことを報せる (グラフ側の点を光らせる)。 */
+  onHover?: (on: boolean) => void;
   onClick?: () => void;
 }) {
   const body = <>
@@ -553,12 +595,17 @@ export function ResultRow({ win, draw, opponent, discs, when, note, rating, dim,
     display: 'flex', gap: 'var(--sp-2)', height: 'var(--h-field)', alignItems: 'center',
     width: '100%', fontSize: 'var(--fs-5)', borderBottom: '1px solid var(--border-weak)',
     padding: '0 var(--sp-2)', textAlign: 'left', color: 'var(--text)',
+    // 選ばれている行の見せ方は 1 つに揃える (layout.tsx の picked)
+    ...(picked ? pickedStyle(true) : null),
   };
+  const hov = onHover
+    ? { onMouseEnter: () => onHover(true), onMouseLeave: () => onHover(false) }
+    : {};
   // 押せないときは span。button のままだと Tab で回ってくるのに何も起きない
   return onClick && !dim
-    ? <button type="button" className="k-row" onClick={onClick} title="検討で開く"
+    ? <button type="button" className="k-row" onClick={onClick} title="検討で開く" {...hov}
               style={{ ...style, border: 0, background: 'transparent', cursor: 'pointer' }}>{body}</button>
-    : <div style={{ ...style, opacity: dim ? 0.5 : 1 }}>{body}</div>;
+    : <div style={{ ...style, opacity: dim ? 0.5 : 1 }} {...hov}>{body}</div>;
 }
 
 export { Badge, Dot };
