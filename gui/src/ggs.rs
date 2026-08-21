@@ -111,6 +111,9 @@ pub enum Cmd {
     ResumeStored(String),
     /// 対戦履歴 (自分または相手)。
     History(String),
+    /// **チャットの既読位置を進める** (この時刻までは読んだ)。
+    /// ディスクに残すので、落として立ち上げ直しても未読が復活しない。
+    ChatSeen(u64),
     SetStandby(StandbyCfg),
 }
 
@@ -330,6 +333,13 @@ pub struct MatchView {
     pub ggf: String,
     pub last_eval: Option<f32>,
     pub last_eval_exact: bool,
+    /// **相手が申告した直近の手の評価値。** GGS の着手行は
+    /// `3: C2/20.00/122.16` (手/評価値/秒) の形で届くので、相手が
+    /// 評価値を出す設定なら受け取れる。出さない相手では `None`。
+    /// 符号は**相手から見た石差**のまま (自分の値と並べて出す)。
+    pub opp_eval: Option<f32>,
+    /// 相手がその手に使った秒数 (同じく申告値)。
+    pub opp_secs_used: Option<f32>,
     /// 直前の自分の手が定石 book 由来か。
     pub last_from_book: bool,
     /// 観戦解析の結果 (黒視点の評価値と最善手)。
@@ -394,6 +404,9 @@ pub struct Snapshot {
     /// history の結果 (対象名 → 行)。
     pub history: HashMap<String, Vec<HistoryRow>>,
     pub chat: VecDeque<ChatMsg>,
+    /// **ここまでは読んだ** (UNIX 秒)。画面はこれより新しいものを未読と
+    /// 数える。件数で持つと、履歴を切り詰めたときにずれる。
+    pub chat_seen: u64,
     pub results: Vec<GameResult>,
     pub standby: StandbyCfg,
     pub standby_stats: StandbyStats,
@@ -849,6 +862,39 @@ fn load_chat(login: &str) -> Vec<ChatMsg> {
     out
 }
 
+/// 既読位置の置き場 (チャット本体の隣)。
+fn chat_seen_path(login: &str) -> PathBuf {
+    chat_path(login).with_extension("seen")
+}
+
+/// 既読位置を読む。無ければ 0 (＝全部未読) ではなく**いまの時刻**を返す。
+///
+/// **初めて使う人に 5000 件の未読を見せない。** 印が無いということは、
+/// この仕組みより前から在るチャットということ。遡って読ませる意味は
+/// 薄いので、既読として始める。
+fn load_chat_seen(login: &str) -> u64 {
+    std::fs::read_to_string(chat_seen_path(login))
+        .ok()
+        .and_then(|t| t.trim().parse::<u64>().ok())
+        .unwrap_or_else(now_secs)
+}
+
+/// 既読位置を書く。**戻さない** — 古い画面から遅れて届いた印で、
+/// 読んだはずのものが未読に戻るのを防ぐ。
+fn save_chat_seen(login: &str, at: u64) {
+    if login.is_empty() {
+        return;
+    }
+    let path = chat_seen_path(login);
+    let cur = std::fs::read_to_string(&path)
+        .ok()
+        .and_then(|t| t.trim().parse::<u64>().ok())
+        .unwrap_or(0);
+    if at > cur {
+        let _ = std::fs::write(&path, at.to_string());
+    }
+}
+
 /// 1 件書き足す。**溢れたら書き直して詰める** (追記だけでは減らせない)。
 fn append_chat(login: &str, m: &ChatMsg) {
     if login.is_empty() {
@@ -975,6 +1021,11 @@ struct MatchState {
     last_eval: Option<f32>,
     last_eval_exact: bool,
     last_from_book: bool,
+    /// 着手行が運んできた評価値と消費秒 (手番号 → 値)。**両者ぶん入る**。
+    move_evals: std::collections::BTreeMap<u32, (Option<f32>, Option<f32>)>,
+    /// 相手の直近の手の申告値。
+    opp_eval: Option<f32>,
+    opp_secs_used: Option<f32>,
     /// 観戦解析: 手番視点の評価値と最善手 (座標)。
     watch_eval: Option<f32>,
     watch_best: Option<String>,
@@ -1015,6 +1066,9 @@ impl MatchState {
             last_eval: self.last_eval,
             last_eval_exact: self.last_eval_exact,
             last_from_book: self.last_from_book,
+            move_evals: self.move_evals.clone(),
+            opp_eval: self.opp_eval,
+            opp_secs_used: self.opp_secs_used,
             watch_eval: self.watch_eval,
             watch_best: self.watch_best.clone(),
             watch_exact: self.watch_exact,
@@ -1055,6 +1109,9 @@ impl MatchState {
             last_eval: None,
             last_eval_exact: false,
             last_from_book: false,
+            move_evals: Default::default(),
+            opp_eval: None,
+            opp_secs_used: None,
             watch_eval: None,
             watch_best: None,
             watch_exact: false,
@@ -2028,6 +2085,10 @@ pub fn run(
                 }
                 s.chat.extend(past);
             }
+            /* **既読位置も戻す。** これが無いと、読み戻した過去ぶんが
+            まるごと新着として数えられ、立ち上げるたびに未読が
+            三桁に跳ねていた (印はメモリ上にしか無かった)。 */
+            s.chat_seen = load_chat_seen(&login);
         }
         // ---- 接続セッション (切断時は絶対不放棄で再接続) ----
         'session: loop {
@@ -2108,6 +2169,14 @@ pub fn run(
                             want_quit = true;
                         }
                         Cmd::Raw(c) => send!(ctx, c),
+                        Cmd::ChatSeen(at) => {
+                            save_chat_seen(&login, at);
+                            let mut s = ctx.snap.lock().unwrap();
+                            if at > s.chat_seen {
+                                s.chat_seen = at;
+                            }
+                            ctx.dirty = true;
+                        }
                         Cmd::Ask {
                             gtype,
                             time,
@@ -3417,16 +3486,48 @@ fn apply_block(m: &mut MatchState, block: &[String], login: &str) -> (bool, Opti
         if let Some(colon) = t.find(':') {
             let (num, rest) = t.split_at(colon);
             if let Some(n) = num.trim().parse::<u32>().ok().filter(|n| *n > 0) {
-                let mv = rest[1..]
-                    .trim()
-                    .split(['/', ' '])
+                /* **評価値と消費時間も運ばれてくる。** 形は
+                `3: C2/20.00/122.16` (手/評価値/秒)。第 2・第 3 項は
+                無いことも空のこともある (`F5//1.2`)。相手が評価値を
+                出す設定なら、これが**相手の読み筋の唯一の手掛かり**に
+                なるので拾う。符号は指した側から見た石差。 */
+                let body = rest[1..].trim();
+                let mut parts = body.split('/');
+                let mv = parts
+                    .next()
+                    .unwrap_or("")
+                    .split(' ')
                     .next()
                     .unwrap_or("")
                     .to_string();
                 if ((2..=4).contains(&mv.len()) || mv.eq_ignore_ascii_case("pa")) && !mv.is_empty()
                 {
+                    let ev = parts.next().and_then(|x| x.trim().parse::<f32>().ok());
+                    let sec = parts.next().and_then(|x| x.trim().parse::<f32>().ok());
                     m.moves.insert(n, mv);
+                    // 空欄で上書きしない (join の一覧は値を持たないことがある)
+                    let slot = m.move_evals.entry(n).or_insert((None, None));
+                    if ev.is_some() {
+                        slot.0 = ev;
+                    }
+                    if sec.is_some() {
+                        slot.1 = sec;
+                    }
                 }
+            }
+        }
+    }
+
+    /* **直前の手が相手のものなら、その申告値を控える。**
+    いま指す番が自分なら、直前に指したのは相手 — パスも `PA` として
+    番号付きで届くので、手番の突き合わせだけで色は決まる。相手が
+    評価値を出さない設定なら `None` のまま (前の値は残さない)。 */
+    if let (Some(t), Some(mc)) = (turn, m.my_color) {
+        if t == mc {
+            if let Some((n, _)) = m.moves.iter().next_back() {
+                let (ev, sec) = m.move_evals.get(n).copied().unwrap_or((None, None));
+                m.opp_eval = ev;
+                m.opp_secs_used = sec;
             }
         }
     }
@@ -3957,6 +4058,8 @@ fn sync_matches(ctx: &mut Ctx, matches: &HashMap<String, MatchState>) {
             result: m.result.clone(),
             last_eval: m.last_eval,
             last_eval_exact: m.last_eval_exact,
+            opp_eval: m.opp_eval,
+            opp_secs_used: m.opp_secs_used,
             last_from_book: m.last_from_book,
             watch_eval: m.watch_eval,
             watch_best: m.watch_best.clone(),

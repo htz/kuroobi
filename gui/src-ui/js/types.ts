@@ -172,6 +172,10 @@ export interface MatchView {
   ggf: string;
   last_eval: number | null;
   last_eval_exact: boolean;
+  /** 相手が申告した直近の手の評価値 (**相手から見た石差**)。出さない相手は null。 */
+  opp_eval: number | null;
+  /** 相手がその手に使った秒数 (申告値)。 */
+  opp_secs_used: number | null;
   last_from_book: boolean;
   watch_eval: number | null;
   watch_best: string | null;
@@ -282,6 +286,8 @@ export interface GgsSnapshot {
   stored: StoredView[];
   history: Record<string, HistoryRow[]>;
   chat: ChatMsg[];
+  /** **ここまでは読んだ** (UNIX 秒)。これより新しいものが未読。 */
+  chat_seen: number;
   results: GameResult[];
   standby: StandbyCfg;
   standby_stats: StandbyStats;

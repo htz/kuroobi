@@ -880,6 +880,16 @@ function MatchBoard({ snap, m, clock, prefs, onKifu, face }: {
       + (m.last_eval_exact ? ' 読切' : '')
     : undefined;
 
+  /* **相手の申告値も出す。** GGS の着手行は `3: C2/20.00/122.16`
+     (手/評価値/秒) の形で届くので、相手が評価値を出す設定なら受け取れる。
+     符号は**相手から見た石差**のまま — 自分の値と符号が逆に並ぶので、
+     どちらがどれだけ読み違えているかを 1 行で見比べられる。出さない
+     相手も居るので、無ければ何も置かない。 */
+  const oppEval = !observer && m.opp_eval != null
+    ? '相手 ' + (m.opp_eval > 0 ? '+' : '') + m.opp_eval.toFixed(1)
+      + (m.opp_secs_used != null ? ` · ${m.opp_secs_used.toFixed(0)}s` : '')
+    : undefined;
+
   /* 探索の途中経過。**段の切れ目でしか動かない**ので、深さが上がるたびに
      印が動く。読切・選択読みに入ると深さは出ない (段が無い)。 */
   const busyEval: Record<number, EvalInfo> | undefined =
@@ -929,6 +939,7 @@ function MatchBoard({ snap, m, clock, prefs, onKifu, face }: {
       )}
       <PlayerRow color={top.color === 'black' ? 'b' : 'w'} name={top.name || '?'}
                  rate={top.rate ? +top.rate : undefined}
+                 meta={oppEval}
                  clock={clock(m.id, top.side).text} active={clock(m.id, top.side).cls === 'turn'} />
       {/* 「自分が下」は自分の色を下にする。観戦は my_color が空なので黒が下 */}
       {/* **思考中・先読み中は盤に出す。** 「評価値を表示」と同じ見せ方で、
