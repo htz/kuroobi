@@ -1107,6 +1107,42 @@ is not squeezed this far. **Before importing a technique that worked
 elsewhere as is, look at which part of your own search is already
 saturated.**
 
+### No value cutoff at the root — the fix costs no measurable strength
+
+At the root the window is (−∞, +∞), so an entry with `upper == lower`
+short-circuited the whole search and returned the table's value without
+searching at all. Every iteration of the deepening hit it, so all of
+them finished in 0.0 s with the same value. Under MPC an entry recorded
+as "exact" is not exact, so values left by helper threads, by pondering
+or by the previous move surfaced as the root's answer — the same
+position returned different values from one search to the next.
+
+The fix stops using the table's *value* at the root; the table's *move*
+is still used for ordering, which is what the speed comes from. Removing
+a cutoff can cost time, so it was measured against the same build with
+only that exemption reverted, playing each other through `gtp`:
+
+| | Score | Games |
+|---|---:|---:|
+| **No cutoff at the root (current)** | **50.8%** | 1200 |
+| Cutoff at the root (before the fix) | 49.2% | 1200 |
+
+Depth 22, 300 ms/move, 4 threads. 560-541-99; the 95% confidence
+interval is 48.1-53.5%, so the two are indistinguishable — the fix does
+not pay for itself in strength, and it does not cost anything either.
+It stays because the values it removes are wrong, not because it is
+faster.
+
+**`--depth` defaults to 8 in `roundrobin`, and a fixed depth makes
+`--time-ms` inert.** The first attempt at this measurement ran 400 games
+in two minutes (2 ms per move) and compared two engines at depth 8,
+where the defect barely occurs. Pass a game-like depth so that time is
+what binds.
+
+Not covered here: pondering. `gtp` does not ponder, so the path where a
+ponder result leaks into the root is only closed by construction, not
+measured. That needs rated play to confirm.
+
 ### GGS rated games
 
 We take part in the 8x8 rated games on GGS (skatgame.net:5000) as
