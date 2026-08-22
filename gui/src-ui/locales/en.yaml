@@ -201,7 +201,7 @@ data:
     prev: "Previous move"
   src:
     book: "Book"
-    book_learned: "Learned book"
+    book_learned: "Learned"
     search: "Search"
     solve: "Solve"
   trend:

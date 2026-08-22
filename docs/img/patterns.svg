@@ -1,9 +1,9 @@
 <svg xmlns="http://www.w3.org/2000/svg" width="900" height="942" viewBox="0 0 900 942" font-family="-apple-system, BlinkMacSystemFont, 'Hiragino Sans', sans-serif">
 <rect width="900" height="942" fill="#ffffff"/>
-<text x="24" y="32" font-size="15" font-weight="700" fill="#1f2328">評価パターン — Egaroucid パターン (16 種 × 4 向き)</text>
-<text x="24" y="52" font-size="11.5" fill="#59636e">濃い緑が 1 つ目の向き、淡い緑が残り 3 つ。盤面をこの形に切って、並びごとの重みを足し合わせる</text>
+<text x="24" y="32" font-size="15" font-weight="700" fill="#1f2328">Evaluation patterns — Egaroucid patterns (16 kinds × 4 orientations)</text>
+<text x="24" y="52" font-size="11.5" fill="#59636e">Dark green is the first orientation, pale green the other three. The board is cut into these shapes and the weight of each arrangement is summed</text>
 <text x="24" y="84" font-size="11" font-weight="600" fill="#1f2328">Line2</text>
-<text x="204" y="84" font-size="10" fill="#59636e" text-anchor="end">8 マス</text>
+<text x="204" y="84" font-size="10" fill="#59636e" text-anchor="end">8 squares</text>
 <rect x="24" y="94" width="176" height="176" fill="#eef1f4" stroke="#c8d0d8"/>
 <rect x="46" y="204" width="22" height="22" fill="#7fb69a" opacity="0.35"/>
 <rect x="46" y="248" width="22" height="22" fill="#7fb69a" opacity="0.35"/>
@@ -52,7 +52,7 @@
 <line x1="200" y1="94" x2="200" y2="270" stroke="#c8d0d8" stroke-width="0.6"/>
 <line x1="24" y1="270" x2="200" y2="270" stroke="#c8d0d8" stroke-width="0.6"/>
 <text x="237" y="84" font-size="11" font-weight="600" fill="#1f2328">Line3</text>
-<text x="417" y="84" font-size="10" fill="#59636e" text-anchor="end">8 マス</text>
+<text x="417" y="84" font-size="10" fill="#59636e" text-anchor="end">8 squares</text>
 <rect x="237" y="94" width="176" height="176" fill="#eef1f4" stroke="#c8d0d8"/>
 <rect x="259" y="204" width="22" height="22" fill="#7fb69a" opacity="0.35"/>
 <rect x="347" y="160" width="22" height="22" fill="#7fb69a" opacity="0.35"/>
@@ -101,7 +101,7 @@
 <line x1="413" y1="94" x2="413" y2="270" stroke="#c8d0d8" stroke-width="0.6"/>
 <line x1="237" y1="270" x2="413" y2="270" stroke="#c8d0d8" stroke-width="0.6"/>
 <text x="450" y="84" font-size="11" font-weight="600" fill="#1f2328">Line4</text>
-<text x="630" y="84" font-size="10" fill="#59636e" text-anchor="end">8 マス</text>
+<text x="630" y="84" font-size="10" fill="#59636e" text-anchor="end">8 squares</text>
 <rect x="450" y="94" width="176" height="176" fill="#eef1f4" stroke="#c8d0d8"/>
 <rect x="538" y="182" width="22" height="22" fill="#7fb69a" opacity="0.35"/>
 <rect x="538" y="116" width="22" height="22" fill="#7fb69a" opacity="0.35"/>
@@ -150,7 +150,7 @@
 <line x1="626" y1="94" x2="626" y2="270" stroke="#c8d0d8" stroke-width="0.6"/>
 <line x1="450" y1="270" x2="626" y2="270" stroke="#c8d0d8" stroke-width="0.6"/>
 <text x="663" y="84" font-size="11" font-weight="600" fill="#1f2328">Corner3x3</text>
-<text x="843" y="84" font-size="10" fill="#59636e" text-anchor="end">9 マス</text>
+<text x="843" y="84" font-size="10" fill="#59636e" text-anchor="end">9 squares</text>
 <rect x="663" y="94" width="176" height="176" fill="#eef1f4" stroke="#c8d0d8"/>
 <rect x="685" y="204" width="22" height="22" fill="#7fb69a" opacity="0.35"/>
 <rect x="685" y="248" width="22" height="22" fill="#7fb69a" opacity="0.35"/>
@@ -207,7 +207,7 @@
 <line x1="839" y1="94" x2="839" y2="270" stroke="#c8d0d8" stroke-width="0.6"/>
 <line x1="663" y1="270" x2="839" y2="270" stroke="#c8d0d8" stroke-width="0.6"/>
 <text x="24" y="300" font-size="11" font-weight="600" fill="#1f2328">Diagonal5</text>
-<text x="204" y="300" font-size="10" fill="#59636e" text-anchor="end">7 マス</text>
+<text x="204" y="300" font-size="10" fill="#59636e" text-anchor="end">7 squares</text>
 <rect x="24" y="310" width="176" height="176" fill="#eef1f4" stroke="#c8d0d8"/>
 <rect x="46" y="398" width="22" height="22" fill="#7fb69a" opacity="0.35"/>
 <rect x="112" y="464" width="22" height="22" fill="#7fb69a" opacity="0.35"/>
@@ -252,7 +252,7 @@
 <line x1="200" y1="310" x2="200" y2="486" stroke="#c8d0d8" stroke-width="0.6"/>
 <line x1="24" y1="486" x2="200" y2="486" stroke="#c8d0d8" stroke-width="0.6"/>
 <text x="237" y="300" font-size="11" font-weight="600" fill="#1f2328">Diagonal6</text>
-<text x="417" y="300" font-size="10" fill="#59636e" text-anchor="end">9 マス</text>
+<text x="417" y="300" font-size="10" fill="#59636e" text-anchor="end">9 squares</text>
 <rect x="237" y="310" width="176" height="176" fill="#eef1f4" stroke="#c8d0d8"/>
 <rect x="259" y="464" width="22" height="22" fill="#7fb69a" opacity="0.35"/>
 <rect x="369" y="376" width="22" height="22" fill="#7fb69a" opacity="0.35"/>
@@ -309,7 +309,7 @@
 <line x1="413" y1="310" x2="413" y2="486" stroke="#c8d0d8" stroke-width="0.6"/>
 <line x1="237" y1="486" x2="413" y2="486" stroke="#c8d0d8" stroke-width="0.6"/>
 <text x="450" y="300" font-size="11" font-weight="600" fill="#1f2328">Diagonal7</text>
-<text x="630" y="300" font-size="10" fill="#59636e" text-anchor="end">9 マス</text>
+<text x="630" y="300" font-size="10" fill="#59636e" text-anchor="end">9 squares</text>
 <rect x="450" y="310" width="176" height="176" fill="#eef1f4" stroke="#c8d0d8"/>
 <rect x="472" y="420" width="22" height="22" fill="#7fb69a" opacity="0.35"/>
 <rect x="472" y="464" width="22" height="22" fill="#7fb69a" opacity="0.35"/>
@@ -362,7 +362,7 @@
 <line x1="626" y1="310" x2="626" y2="486" stroke="#c8d0d8" stroke-width="0.6"/>
 <line x1="450" y1="486" x2="626" y2="486" stroke="#c8d0d8" stroke-width="0.6"/>
 <text x="663" y="300" font-size="11" font-weight="600" fill="#1f2328">Diagonal8+2C</text>
-<text x="843" y="300" font-size="10" fill="#59636e" text-anchor="end">10 マス</text>
+<text x="843" y="300" font-size="10" fill="#59636e" text-anchor="end">10 squares</text>
 <rect x="663" y="310" width="176" height="176" fill="#eef1f4" stroke="#c8d0d8"/>
 <rect x="663" y="464" width="22" height="22" fill="#7fb69a" opacity="0.35"/>
 <rect x="817" y="332" width="22" height="22" fill="#7fb69a" opacity="0.35"/>
@@ -407,7 +407,7 @@
 <line x1="839" y1="310" x2="839" y2="486" stroke="#c8d0d8" stroke-width="0.6"/>
 <line x1="663" y1="486" x2="839" y2="486" stroke="#c8d0d8" stroke-width="0.6"/>
 <text x="24" y="516" font-size="11" font-weight="600" fill="#1f2328">Edge+2x</text>
-<text x="204" y="516" font-size="10" fill="#59636e" text-anchor="end">10 マス</text>
+<text x="204" y="516" font-size="10" fill="#59636e" text-anchor="end">10 squares</text>
 <rect x="24" y="526" width="176" height="176" fill="#eef1f4" stroke="#c8d0d8"/>
 <rect x="46" y="680" width="22" height="22" fill="#7fb69a" opacity="0.35"/>
 <rect x="24" y="548" width="22" height="22" fill="#7fb69a" opacity="0.35"/>
@@ -460,7 +460,7 @@
 <line x1="200" y1="526" x2="200" y2="702" stroke="#c8d0d8" stroke-width="0.6"/>
 <line x1="24" y1="702" x2="200" y2="702" stroke="#c8d0d8" stroke-width="0.6"/>
 <text x="237" y="516" font-size="11" font-weight="600" fill="#1f2328">Triangle</text>
-<text x="417" y="516" font-size="10" fill="#59636e" text-anchor="end">10 マス</text>
+<text x="417" y="516" font-size="10" fill="#59636e" text-anchor="end">10 squares</text>
 <rect x="237" y="526" width="176" height="176" fill="#eef1f4" stroke="#c8d0d8"/>
 <rect x="259" y="636" width="22" height="22" fill="#7fb69a" opacity="0.35"/>
 <rect x="369" y="548" width="22" height="22" fill="#7fb69a" opacity="0.35"/>
@@ -521,7 +521,7 @@
 <line x1="413" y1="526" x2="413" y2="702" stroke="#c8d0d8" stroke-width="0.6"/>
 <line x1="237" y1="702" x2="413" y2="702" stroke="#c8d0d8" stroke-width="0.6"/>
 <text x="450" y="516" font-size="11" font-weight="600" fill="#1f2328">Corner + Block</text>
-<text x="630" y="516" font-size="10" fill="#59636e" text-anchor="end">10 マス</text>
+<text x="630" y="516" font-size="10" fill="#59636e" text-anchor="end">10 squares</text>
 <rect x="450" y="526" width="176" height="176" fill="#eef1f4" stroke="#c8d0d8"/>
 <rect x="472" y="636" width="22" height="22" fill="#7fb69a" opacity="0.35"/>
 <rect x="582" y="592" width="22" height="22" fill="#7fb69a" opacity="0.35"/>
@@ -578,7 +578,7 @@
 <line x1="626" y1="526" x2="626" y2="702" stroke="#c8d0d8" stroke-width="0.6"/>
 <line x1="450" y1="702" x2="626" y2="702" stroke="#c8d0d8" stroke-width="0.6"/>
 <text x="663" y="516" font-size="11" font-weight="600" fill="#1f2328">Cross</text>
-<text x="843" y="516" font-size="10" fill="#59636e" text-anchor="end">10 マス</text>
+<text x="843" y="516" font-size="10" fill="#59636e" text-anchor="end">10 squares</text>
 <rect x="663" y="526" width="176" height="176" fill="#eef1f4" stroke="#c8d0d8"/>
 <rect x="685" y="636" width="22" height="22" fill="#7fb69a" opacity="0.35"/>
 <rect x="685" y="680" width="22" height="22" fill="#7fb69a" opacity="0.35"/>
@@ -639,7 +639,7 @@
 <line x1="839" y1="526" x2="839" y2="702" stroke="#c8d0d8" stroke-width="0.6"/>
 <line x1="663" y1="702" x2="839" y2="702" stroke="#c8d0d8" stroke-width="0.6"/>
 <text x="24" y="732" font-size="11" font-weight="600" fill="#1f2328">Edge+Y</text>
-<text x="204" y="732" font-size="10" fill="#59636e" text-anchor="end">10 マス</text>
+<text x="204" y="732" font-size="10" fill="#59636e" text-anchor="end">10 squares</text>
 <rect x="24" y="742" width="176" height="176" fill="#eef1f4" stroke="#c8d0d8"/>
 <rect x="46" y="852" width="22" height="22" fill="#7fb69a" opacity="0.35"/>
 <rect x="46" y="896" width="22" height="22" fill="#7fb69a" opacity="0.35"/>
@@ -696,7 +696,7 @@
 <line x1="200" y1="742" x2="200" y2="918" stroke="#c8d0d8" stroke-width="0.6"/>
 <line x1="24" y1="918" x2="200" y2="918" stroke="#c8d0d8" stroke-width="0.6"/>
 <text x="237" y="732" font-size="11" font-weight="600" fill="#1f2328">Narrow Triangle</text>
-<text x="417" y="732" font-size="10" fill="#59636e" text-anchor="end">10 マス</text>
+<text x="417" y="732" font-size="10" fill="#59636e" text-anchor="end">10 squares</text>
 <rect x="237" y="742" width="176" height="176" fill="#eef1f4" stroke="#c8d0d8"/>
 <rect x="259" y="896" width="22" height="22" fill="#7fb69a" opacity="0.35"/>
 <rect x="369" y="764" width="22" height="22" fill="#7fb69a" opacity="0.35"/>
@@ -749,7 +749,7 @@
 <line x1="413" y1="742" x2="413" y2="918" stroke="#c8d0d8" stroke-width="0.6"/>
 <line x1="237" y1="918" x2="413" y2="918" stroke="#c8d0d8" stroke-width="0.6"/>
 <text x="450" y="732" font-size="11" font-weight="600" fill="#1f2328">Fish</text>
-<text x="630" y="732" font-size="10" fill="#59636e" text-anchor="end">10 マス</text>
+<text x="630" y="732" font-size="10" fill="#59636e" text-anchor="end">10 squares</text>
 <rect x="450" y="742" width="176" height="176" fill="#eef1f4" stroke="#c8d0d8"/>
 <rect x="472" y="852" width="22" height="22" fill="#7fb69a" opacity="0.35"/>
 <rect x="472" y="896" width="22" height="22" fill="#7fb69a" opacity="0.35"/>
@@ -810,7 +810,7 @@
 <line x1="626" y1="742" x2="626" y2="918" stroke="#c8d0d8" stroke-width="0.6"/>
 <line x1="450" y1="918" x2="626" y2="918" stroke="#c8d0d8" stroke-width="0.6"/>
 <text x="663" y="732" font-size="11" font-weight="600" fill="#1f2328">Anvil</text>
-<text x="843" y="732" font-size="10" fill="#59636e" text-anchor="end">10 マス</text>
+<text x="843" y="732" font-size="10" fill="#59636e" text-anchor="end">10 squares</text>
 <rect x="663" y="742" width="176" height="176" fill="#eef1f4" stroke="#c8d0d8"/>
 <rect x="795" y="808" width="22" height="22" fill="#7fb69a" opacity="0.35"/>
 <rect x="751" y="764" width="22" height="22" fill="#7fb69a" opacity="0.35"/>

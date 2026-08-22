@@ -1,239 +1,276 @@
-# KUROOBI (黒帯)
+# KUROOBI
 
-**2×u64 ビットボードによるリバーシ (オセロ) エンジン。** Rust 実装、外部依存なし
-(乱数とベンチマークを除く)。中盤は NNUE 評価 + 選択的探索、終盤は完全読み。
-対局・検討・定石閲覧の GUI と、オンライン対戦サーバ (GGS) への接続を同梱している。
+*[日本語版はこちら](README.ja.md)*
 
-> 「オセロ」は株式会社メガハウスの登録商標。
+**A Reversi (Othello) engine built on a 2×u64 bitboard.** Written in Rust
+with no external dependencies (apart from random numbers and the
+benchmark harness). The midgame uses an NNUE evaluation with selective
+search; the endgame is solved exactly. A GUI for playing, studying and
+browsing the opening book ships with it, along with a client for the
+online server GGS.
+
+> "Othello" is a registered trademark of MegaHouse Corporation.
+> The name KUROOBI is Japanese for "black belt".
 
 | | |
 |---|---|
-| **棋力** | Edax 4.5.5 (level 13) に **53.9%** で勝ち越し (800 局)<br><sub>GGS のランダム開局プールで 2315〜2337 (2026-08-21)</sub> |
-| **終盤** | FFO40-59 を **535 秒** (1 スレッド) / **143 秒** (8 スレッド) で解き切る<br><sub>局面集は容量の都合で同梱していない (`bench/` にあるのは `band*` と `calib*`)</sub> |
-| **評価関数** | 8 手読み固定の総当たりで Edax・Zebra に勝ち越し、Egaroucid には届かない |
-| **実装** | Rust。エンジン本体に外部クレート依存なし |
-| **GUI** | Tauri + TypeScript。対局・検討・定石・GGS 接続 |
+| **Strength** | **53.9%** against Edax 4.5.5 (level 13) over 800 games<br><sub>2315-2337 in the GGS random-opening pool (2026-08-21)</sub> |
+| **Endgame** | Solves FFO40-59 in **535 s** (1 thread) / **143 s** (8 threads)<br><sub>The position set is not bundled, for size; `bench/` holds only `band*` and `calib*`</sub> |
+| **Evaluation** | Beats Edax and Zebra in a fixed 8-ply round robin; does not reach Egaroucid |
+| **Implementation** | Rust. The engine itself pulls in no external crates |
+| **GUI** | Tauri + TypeScript. Play, study, book, GGS |
 
 ---
 
-## 画面
+## Screens
 
-左の並びが行き先。**対局・検討・定石**と、GGS に接続すると開く 7 つの画面。
-狭くすると右の枠 → 左の文字 → 上の補助情報の順に畳み、盤を最後まで残す。
+The left column is where you go: **Play, Study and Book**, plus the seven
+screens that open once you connect to GGS. As the window narrows it drops
+the right pane, then the labels, then the auxiliary readouts on top — the
+board is the last thing to shrink.
 
-### 対局
+### Play
 
-![対局画面](docs/img/gui-play.png)
+![Play screen](docs/img/gui-play.png)
 
-盤の上に操作、下に石数と時計。右の棋譜には **1 手ごとの評価値・
-思考時間・その手がどこから来たか (定石 / 定石·学 / 探索 / 読切)** が並び、
-悪手には下げ幅つきの ▼ が付く。数字 (思考秒数・ノード数・その速さ) は
-下の帯にまとめてある。
+Controls sit above the board, disc counts and clocks below. The record on
+the right carries, for every move, **its evaluation, the time spent on
+it, and where the move came from (book, learned book, search, solve)**;
+a weak move gets a ▼ with how much it cost. The numbers (seconds thought,
+nodes, and the rate) live in the strip at the bottom.
 
-### 検討
+### Study
 
-![検討画面](docs/img/gui-study.png)
+![Study screen](docs/img/gui-study.png)
 
-ツールバーの「評価値を表示」を入れると、**盤のマスに全合法手の評価値**が
-出る。反復深化で深め続けるので、見ているあいだ値が締まっていく。マスの下には
-「定石 / 読切 / N 手」と出どころが付く。
+Turn on "Evals" in the toolbar and **every legal move is scored on the
+board itself**. Iterative deepening keeps going while you look, so the
+values tighten as you watch. Under each square is where the value came
+from: book, solve, or an N-ply search.
 
-盤の下は手数を辿る帯で、1 手ごとの刻みと 10 手ごとの目盛、**敗着の赤い印**が
-入る。押しても掴んで滑らせても同じ手数へ飛ぶ。その下の評価値グラフは棋譜を
-通して測り直したもので、どこで形勢が動いたかが 1 本の線で分かる。
+Below the board is a scrubber over the moves, ticked every move and
+numbered every ten, with **the losing move marked in red**. Clicking and
+dragging land on the same move. Under it, the eval graph re-measures the
+whole record, so one line shows where the game turned.
 
-### 定石
+### Book
 
-![定石ブラウザ](docs/img/gui-book.png)
+![Book browser](docs/img/gui-book.png)
 
-定石を局面から辿る。盤のマスに候補手の値が出て、右は枝を字下げで並べた
-一覧。**出所の列**が、元の定石ファイルの手 (定石) と実戦から学習して
-書き戻した手 (定石·学) を分ける。採用局数も添える。
+Walk the opening book from a position. Candidate values appear on the
+board's squares, and the list on the right indents the branches. **The
+source column** separates moves that came from the book file (book) from
+moves learned from real games and written back (learned book), with the
+number of games behind each.
 
-取り込んだ対局の控えは対局画面の「学習」タブにあり、**対局 → 敗着 →
-書き換えた手 (旧→新)** まで辿れる。おかしな対局を取り込んでしまったら
-対局単位で取り消せる。
+The record of what was imported is in the Learning tab of the play
+screen, where you can follow **game → losing move → the rewrite (old to
+new)**. If a bad game gets imported, it can be reverted game by game.
 
-### オンライン対戦 (GGS)
+### Online play (GGS)
 
-![GGS の対局結果](docs/img/gui-ggs.png)
+![GGS game results](docs/img/gui-ggs.png)
 
-対局・観戦・ロビー・チャット・待機モードを内蔵する。同期対局 (同じ開局を
-先後入れ替えて 2 局) にも対応し、持ち時間から 1 手の期限を決めて反復深化を
-その中で切り上げる。終わった対局は控えに残り、レートの推移と一緒に並ぶ
-(**画面写真の対局相手は架空の名前**)。行を押すとその棋譜が開く — 同期対局は
-2 面ぶんが入っているので、面を切り替えて両方を見られる。
+Playing, observing, the lobby, chat and waiting mode are all built in.
+Synchro matches (the same opening played twice with colours swapped) are
+supported; the per-move deadline is derived from the clock, and iterative
+deepening stops inside it. Finished games are kept and listed with the
+rating history (**the opponent names in the screenshot are fictitious**).
+Clicking a row opens that record — a synchro match holds two boards, so
+you can switch between them.
 
-サーバーの実装を読んで決めた振る舞い (中断対局を自動で再開しない、
-ロスタイムを時計の跳ね上がりで検出する、レートのプールは 2 つだけ) は
-[GUI](docs/gui.md#ggs-で分かったこと) にまとめてある。
+The behaviours that came out of reading the server's implementation — an
+adjourned game is not resumed automatically, lost time is detected from a
+jump in the clock, there are only two rating pools — are collected in
+[GUI](docs/gui.md#what-ggs-taught-us).
 
 ---
 
-## どのくらい強いか
+## How strong is it
 
-### 対 Edax 対局
+### Against Edax
 
-| 条件 | 相手 | 結果 |
+| Conditions | Opponent | Result |
 |---|---|---|
-| depth10 + solve22 (MPC なし) | level 11 | 46.5% (互角) |
-| depth14 + solve22 + MPC | level 11 | **57.8%** (400 局、有意) |
-| depth16 + solve22 + MPC | level 13 | **53.9%** (800 局、有意) |
-| depth22 + 空き 27 完全読み + MPC、8 スレッド | level 24 | 49.0% (100 局、互角) |
+| depth10 + solve22 (no MPC) | level 11 | 46.5% (even) |
+| depth14 + solve22 + MPC | level 11 | **57.8%** (400 games, significant) |
+| depth16 + solve22 + MPC | level 13 | **53.9%** (800 games, significant) |
+| depth22 + exact solve from 27 empties + MPC, 8 threads | level 24 | 49.0% (100 games, even) |
 
-### 評価関数だけを比べる (8 手読み固定の総当たり、各組 100 局)
+### Evaluation functions alone (fixed 8-ply, round robin, 100 games per pair)
 
-| 順位 | エンジン | 勝点 | 勝率 |
+| Rank | Engine | Points | Score |
 |---|---|---:|---:|
 | 1 | Egaroucid 7.8 | 196.0 / 300 | **65.3%** |
 | 2 | **KUROOBI** | 155.5 / 300 | **51.8%** |
 | 3 | Edax 4.6 | 141.5 / 300 | 47.2% |
-| 4 | Zebra (WZebra の思考エンジン) | 107.0 / 300 | 35.7% |
+| 4 | Zebra (the engine inside WZebra) | 107.0 / 300 | 35.7% |
 
-### 終盤の完全読み (FFO40-59)
+### Endgame exact solve (FFO40-59)
 
-![スレッド数別の FFO40-59](docs/img/bench-threads.svg)
+![FFO40-59 by thread count](docs/img/bench-threads.svg)
 
-同じ機械で arm64 ネイティブにビルドした Edax 4.6 との比較。**1 ノードあたりの
-速度は Edax の約半分**だが、**探索木がちょうど半分**なので総時間で上回る。
-この 2 つが打ち消し合っているのが現在の均衡で、片方だけを見ても実力は測れない。
+Compared against Edax 4.6 built natively for arm64 on the same machine.
+**Per node we run at about half Edax's speed**, but **the search tree is
+about half the size**, so the total time comes out ahead. Those two
+cancelling out is where things currently stand; neither number alone
+measures the engine.
 
-計測の詳細・棄却した施策・並列化の分解は [到達水準](docs/benchmarks.md)。
+Measurement details, rejected changes and the parallel-scaling breakdown
+are in [Where it stands](docs/benchmarks.md).
 
 ---
 
-## 仕組み
+## How it works
 
-### 1 手を決めるまで
+### Deciding a move
 
-![探索の受け持ち](docs/img/search-flow.svg)
+![What each search covers](docs/img/search-flow.svg)
 
-空きマス数で受け持ちが変わる。**定石にある間は探索しない**。抜けたら中盤
-探索が深さで打ち切り、終局が見えてくると確率で刈る選択読みへ、最後は刈らずに
-読み切って厳密な石差を返す。
+Responsibility changes with the number of empties. **While the position
+is in the book, nothing is searched.** Once out of book, the midgame
+search runs to a depth limit; as the end comes into view it switches to a
+selective search that prunes probabilistically; finally it solves without
+pruning and returns the exact disc difference.
 
-### 持ち時間は読切の入り口で守る
+### The clock is defended at the entrance to the solve
 
-中盤探索は反復深化なので、期限が来れば直前の深さの答えを返せる。**期限が
-効かないのは読切だけ**で、入ってしまうと終わるまで返ってこない。だから
-「入る前に何秒かかるかを当てる」必要がある。
+The midgame search deepens iteratively, so when the deadline arrives it
+can return the previous depth's answer. **The one place a deadline cannot
+help is the solve**: once inside, it does not come back until it is done.
+So the question is how long it will take *before* entering.
 
-所要時間の見積りを 3 層に分けてある。
+The estimate is layered in three:
 
-    所要時間 = 基準ノード数(空き) × 並列の割増(スレッド数) ÷ nps
+    time = reference nodes(empties) × parallel overhead(threads) ÷ nps
 
-基準ノード数は空きに対する指数則 (`2.82·e^{0.693·空き}`、分岐因子 **1.999**)
-で、機械が変わっても動かない。並列の割増もスレッド数だけで決まる。**機械
-依存なのは nps だけ**なので、そこだけ実測する — 空き 22 の 3 局面を実際に
-読み切るだけで、1〜3 秒で終わる。GUI の設定か `calibnps` から測り、
-`resources.conf` に控える (スレッド数を変えたら測り直す)。
+The reference node count follows an exponential in the empties
+(`2.82·e^{0.693·empties}`, branching factor **1.999**) and does not move
+between machines. The parallel overhead depends only on the thread count.
+**Only nps is machine-dependent**, so only nps is measured — solving
+three positions at 22 empties, which takes 1-3 seconds. Measure it from
+the GUI's settings or with `calibnps`; the result is stored in
+`resources.conf` (re-measure after changing the thread count).
 
-読切に**独立した予算を持たせない**。「残り時間の N% を投じてよい」という
-枠を別に持つと中盤の配分と食い違い、実際に破綻した (30 秒の対局で「24 秒
-使える」と判断し、長引いた局で残り 0.9 秒まで削られた)。その手の予算に
-連動させれば、残り時間が減れば判定も自動で厳しくなる。
+**The solve gets no budget of its own.** A separate "you may spend N% of
+the remaining time" allowance disagrees with the midgame's allocation,
+and it broke in practice (in a 30-second game it decided it could spend
+24 seconds, and a long game was left with 0.9 seconds). Tie it to the
+per-move budget instead, and the test tightens automatically as the clock
+runs down.
 
-**効果は棋力ではなく破綻の回避に出る。** 自己対局 (同一持ち時間・計 1400 局)
-で勝率は動かず、終局時の残り時間が増えた。
+**The effect shows up as failures avoided, not as strength.** In
+self-play at equal time controls (1400 games in total) the score did not
+move; the time left at the end did.
 
-| 持ち時間 | 最小残り (較正 / 固定の階段) | 勝率 |
+| Time control | Minimum time left (calibrated / fixed ladder) | Score |
 |---|---|---|
-| 30 秒 | **8.9s / 5.0s** | 51.5% (差なし) |
-| 10 秒 | **0.3s / 0.0s** | 50.2% (差なし) |
-| 10 秒 (5 スレッド) | **0.6s / 0.0s** | 50.5% (差なし) |
+| 30 s | **8.9 s / 5.0 s** | 51.5% (no difference) |
+| 10 s | **0.3 s / 0.0 s** | 50.2% (no difference) |
+| 10 s (5 threads) | **0.6 s / 0.0 s** | 50.5% (no difference) |
 
-**配り方はまだ余っている。** GGS の実戦 24 面を数えると、持ち時間の 63% しか
-使わずに終局していた (相手は 94%)。損失は空き 48-38 に集中していて 1 手あたり
-1.0〜1.1 石、空き 26 以下の読切区間は 300 手中 299 手が最善 — つまり**終盤で
-余った時間を、負けている序盤へ回せていない**。原因は配分の分母で、実際には
-空き 26〜30 で読切に入るのに `(空き − 18) / 2` が「あと 6 手ぶん要る」と
-見積もっている。機械の速さから分母を決める道 (`timectl::auto_solve_ref`) を
-用意して自己対局で確かめたが、60 秒・1 スレッドの台は実戦の条件を写せない
-(終盤 1 手が持ち時間の 6.7% を食う。実戦は 0.13%)。既定は据え置きで、実戦
-条件での検証待ち。数字は [到達水準](docs/benchmarks.md#ggs-レート戦)。
+**There is still time being left on the table.** Counting 24 real GGS
+boards, games ended having used only 63% of the clock (opponents used
+94%). The loss concentrates between 48 and 38 empties at 1.0-1.1 discs
+per move, while from 26 empties down 299 of 300 moves were best — that
+is, **time saved in the endgame is not reaching the opening, where the
+games are lost**. The cause is the denominator in the allocation: the
+solve actually starts around 26-30 empties, but `(empties − 18) / 2`
+estimates "six more moves to pay for". A path that derives the
+denominator from the machine's speed (`timectl::auto_solve_ref`) exists
+and was checked in self-play, but a 60-second single-threaded bench
+cannot reproduce match conditions (one endgame move eats 6.7% of the
+clock there, against 0.13% in a real game). The default stands, pending
+a check under match conditions. The numbers are in
+[Where it stands](docs/benchmarks.md#ggs-rated-games).
 
-### 盤面はビット演算で動く
+### The board moves by bit operations
 
-![盤面表現](docs/img/bitboard.svg)
+![Board representation](docs/img/bitboard.svg)
 
-石返しも合法手生成も、ループを回さず 8 方向を同時に進める。詳しくは
-[盤面表現とビット演算](docs/board.md)。
+Flipping discs and generating legal moves both advance all eight
+directions at once instead of looping. Details in
+[Board representation and bit operations](docs/board.md).
 
-### 評価はマスの組を索く
+### Evaluation looks up groups of squares
 
-![評価パターン](docs/img/patterns.svg)
+![Evaluation patterns](docs/img/patterns.svg)
 
-盤面を **16 種類のマスの組 (パターン) × 4 向き**に切り、それぞれの並びに
-対応する重みを足し合わせる。どのマスを 1 組にするかは自前ではなく、
-**Egaroucid パターン**をそのまま採用している (Edax パターンも実装してある)。
-上の図の濃い緑が 1 つ目の向き、淡い緑が残り 3 つ。
+The board is cut into **16 kinds of square groups (patterns) × 4
+orientations**, and the weights matching each arrangement are summed. The
+choice of which squares form a group is not ours: we use the **Egaroucid
+pattern set** as-is (the Edax set is implemented too). In the figure
+above, the dark green is the first orientation and the pale green the
+other three.
 
-着手のたびに全部を数え直すのではなく、**変化したマスを含むパターンだけ**を
-更新する (差分パターンインデックス)。
+Rather than recount everything after each move, **only the patterns
+containing a changed square** are updated (incremental pattern indices).
 
-いまの対局用評価はこのパターンを入力に取る NNUE で、int16 量子化 + NEON で
-動く。詳しくは [評価関数](docs/eval.md)。
+The evaluation used in games today is an NNUE that takes those patterns
+as input, quantized to int16 and running on NEON. Details in
+[Evaluation function](docs/eval.md).
 
 ---
 
-## ドキュメント
+## Documentation
 
-| | 中身 |
+| | Contents |
 |---|---|
-| [盤面表現とビット演算](docs/board.md) | 2×u64 の持ち方、石返し、合法手生成、局面ハッシュ、確定石 |
-| [評価関数](docs/eval.md) | パターン評価、差分インデックス、NNUE (量子化・速度・精度) |
-| [探索](docs/search.md) | 中盤 (PVS + ProbCut)、終盤完全読み、置換表 |
-| [学習](docs/learning.md) | 教師あり学習、自己対戦、到達点 |
-| [到達水準](docs/benchmarks.md) | 対局成績、FFO ベンチマーク、並列化の計測、棄却した施策 |
-| [CLI ツール](docs/cli.md) | 学習・計測・対戦のコマンド |
-| [GUI](docs/gui.md) | 対局・検討・定石・GGS、実戦からの定石学習 |
+| [Board representation and bit operations](docs/board.md) | The 2×u64 layout, flipping, legal-move generation, position hashing, stable discs |
+| [Evaluation function](docs/eval.md) | Pattern evaluation, incremental indices, NNUE (quantization, speed, precision) |
+| [Search](docs/search.md) | Midgame (PVS + ProbCut), endgame exact solve, transposition table |
+| [Learning](docs/learning.md) | Supervised learning, self-play, where it got to |
+| [Where it stands](docs/benchmarks.md) | Match results, FFO benchmarks, parallel-scaling measurements, rejected changes |
+| [CLI tools](docs/cli.md) | Commands for training, measuring and playing |
+| [GUI](docs/gui.md) | Play, study, book, GGS, and learning the book from real games |
 
-個々の施策の採否は原則すべて実測に基づいており、**計測して効果がなかった
-ものは採用していない**。棄却した施策も棄却理由ごと記録してある。
+Whether a given change was adopted rests on measurement throughout:
+**anything that measured no better was not adopted**. Rejected changes
+are recorded together with the reason they were rejected.
 
 ---
 
-## リポジトリ構成
+## Repository layout
 
 ```text
 src/
-├── lib.rs             クレートルート (公開 API の再輸出)
-├── board.rs           盤面型 Board (2×u64 + 手番 + 空きマス数)
-├── position.rs        座標型 (A1..H8 ⇄ ビット index)
-├── color.rs           手番 (Black/White)
-├── game.rs            対局進行・履歴・棋譜 (KIFU)
-├── bitboard.rs        石返し・合法手生成のビット演算
-├── zobrist.rs         局面ハッシュ (CRC32C)
-├── pattern.rs         評価パターン定義 (3 セット)
-├── pattern_index.rs   差分パターンインデックス
-├── evaluator.rs       線形パターン評価 + 教師あり学習
-├── nnue.rs            NNUE 評価関数 (int16 量子化 + NEON)
-├── search.rs          中盤探索: PVS + ETC + ProbCut
-├── midgame.rs         対局用 NNUE 中盤探索: YBWC + Lazy SMP
-├── solver.rs          終盤完全読みソルバ + 選択読み
-├── stability.rs       確定石
-├── book.rs            定石 (8 対称正規化・許容幅つき乱択)
-├── learn.rs           実戦の帰結を定石へ書き戻す学習 (負け局の回避)
-├── resources.rs       重み・定石の在り処 (設定ファイルで指定できる)
-├── timectl.rs         持ち時間の配り方・読切の入り口 (機械の速さから逆算)
-├── engine.rs          GUI と CLI が共用するセッション層 (着手選択・解析)
-├── trainer.rs         学習データ入出力・TD(λ)
-└── bin/               CLI ツール群 (学習・計測・対戦・正しさの検証)
+├── lib.rs             crate root (re-exports the public API)
+├── board.rs           the Board type (2×u64 + side to move + empties)
+├── position.rs        coordinates (A1..H8 ⇄ bit index)
+├── color.rs           side to move (Black/White)
+├── game.rs            game progress, history, records (KIFU)
+├── bitboard.rs        bit operations for flipping and legal moves
+├── zobrist.rs         position hashing (CRC32C)
+├── pattern.rs         evaluation pattern definitions (3 sets)
+├── pattern_index.rs   incremental pattern indices
+├── evaluator.rs       linear pattern evaluation + supervised learning
+├── nnue.rs            NNUE evaluation (int16 quantization + NEON)
+├── search.rs          midgame search: PVS + ETC + ProbCut
+├── midgame.rs         NNUE midgame search for games: YBWC + Lazy SMP
+├── solver.rs          endgame exact solver + selective search
+├── stability.rs       stable discs
+├── book.rs            opening book (8-fold symmetry, randomized within a margin)
+├── learn.rs           writing game outcomes back into the book (avoiding lost games)
+├── resources.rs       where weights and the book live (configurable)
+├── timectl.rs         time allocation and the entrance to the solve (derived from machine speed)
+├── engine.rs          session layer shared by the GUI and the CLI (move choice, analysis)
+├── trainer.rs         training data I/O, TD(λ)
+└── bin/               CLI tools (training, measurement, matches, correctness)
 gui/                   GUI (Tauri + Vite/TypeScript)
-docs/                  実装の解説 (この README から辿る)
-tests/                 perft 網羅・ソルバ統合テスト・停止までの時間
-benches/               マイクロベンチ (criterion)
-bench/                 σ 較正・選択読み判定の基準局面 (OBF) と較正データ
-tools/pgo-build.sh     プロファイル誘導最適化ビルド
-tools/book-loop.sh     定石の評価付けを止めるまで続けるループ
-.github/workflows/     CI (書式・clippy・テスト・GUI ビルド)
-CLAUDE.md              作業の手順と決まりごと
-weights/ logs/ train_data/   学習済み重み・ログ・教師データ (git 管理外)
+docs/                  implementation notes (linked from this README)
+tests/                 perft coverage, solver integration tests, time to stop
+benches/               micro-benchmarks (criterion)
+bench/                 reference positions (OBF) for σ calibration and selective-search checks
+tools/pgo-build.sh     profile-guided optimization build
+tools/book-loop.sh     loop that keeps scoring book entries until stopped
+.github/workflows/     CI (format, clippy, tests, GUI build)
+CLAUDE.md              how to work in this repository
+weights/ logs/ train_data/   trained weights, logs, training data (not in git)
 ```
 
 ---
 
-## 開発
+## Development
 
 ```sh
 cargo fmt --all
@@ -241,29 +278,34 @@ cargo clippy --all-targets -- -D warnings
 cargo test --release
 ```
 
-GUI は `gui/` で `npm run build` → `cargo build --release` の順に回す
-(Tauri はフロントをバイナリに埋め込むため、逆順だと変更が反映されない)。
+For the GUI, run `npm run build` then `cargo build --release` inside
+`gui/`, in that order (Tauri embeds the frontend into the binary, so the
+reverse order builds fine and changes nothing).
 
-テストは perft による着手生成の網羅検証、差分パターンインデックスの全再計算
-との一致、確定石の対局不変性 (プロパティテスト)、探索の値等価性 (参照
-negamax との一致)、停止を立ててから探索が抜けるまでの時間などを含む。
+The tests include exhaustive move-generation checks via perft, agreement
+between incremental pattern indices and a full recount, invariance of
+stable discs across a game (property tests), value equivalence of the
+search against a reference negamax, and how long the search takes to
+leave after a stop is raised.
 
-**値の一致だけでは足りない。** 並列探索が「正しい値」と「誤った手」を返す
-欠陥は、厳密解のテストも FFO も全部通り抜けて実戦で 36 石を失った。返した手を
-実際に指して確かめる検証器を `src/bin/stress_*.rs` に置いてある (打ち切りは
-実戦では数千手に 1 回しか起きないので、`SOLVER_CHAOS` でわざと濃く起こす)。
-詳しくは [探索](docs/search.md#並列探索の正しさ)。
+**Matching values is not enough.** A parallel-search defect that returned
+"the right value" with "the wrong move" passed the exact-solution tests
+and every FFO position, and lost 36 discs in a real game. Verifiers that
+play the returned move and check it live in `src/bin/stress_*.rs`
+(aborts happen once in a few thousand moves in real play, so
+`SOLVER_CHAOS` makes them dense on purpose). Details in
+[Search](docs/search.md#parallel-search-correctness).
 
-CI は push と pull request で、エンジン (書式・clippy・テスト・feature 別
-ビルド) と対局 GUI (型検査・フロントのビルド・アプリのビルド) を回す。
+CI runs on push and pull request: the engine (format, clippy, tests,
+per-feature builds) and the GUI (typecheck, frontend build, app build).
 
-学習済みの重みは容量の都合で git に入れていないため、それを要するテストと
-棋力の測定は CI では走らせない。手元で行う。
+Trained weights are not in git, for size, so the tests that need them and
+the strength measurements do not run in CI. Those are run locally.
 
-作業の手順と決まりごとは [CLAUDE.md](CLAUDE.md) にまとめてある。
+How to work in this repository is written up in [CLAUDE.md](CLAUDE.md).
 
 ---
 
-## ライセンス
+## License
 
 MIT ([LICENSE](LICENSE))

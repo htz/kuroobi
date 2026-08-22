@@ -1,50 +1,54 @@
-# CLI ツール
+# CLI tools
 
-学習・計測・対戦に使うコマンド群。`cargo run --release --bin <名前> -- <引数>`
-で動く (以下は `target/release/` のバイナリを直接呼ぶ書き方)。
+The commands used for training, measurement and playing. They run as
+`cargo run --release --bin <name> -- <args>` (what follows spells out
+the direct call to the binary in `target/release/`).
 
-引数の解析は自前で、**`--help` を実装しているのは `arena` だけ**。他は引数
-なしで呼ぶと使い方を表示するか、そのまま既定値で走り出す (ベンチ系は後者)。
+Argument parsing is hand-rolled, and **`arena` is the only one that
+implements `--help`**. Called without arguments the others either print
+their usage or start straight away on their defaults (the benchmarks do
+the latter).
 
-| 用途 | コマンド |
+| Purpose | Command |
 |---|---|
-| 学習 | [`train`](#train) [`nnue_train`](#nnue_train) [`selfplay`](#selfplay) |
-| 棋力の比較 | [`arena`](#arena) [`nnue_arena`](#nnue_arena) [`lab`](#lab) [`roundrobin`](#roundrobin) |
-| 精度の計測 | [`valmse`](#valmse) [`phase_mse`](#phase_mse) [`wstats`](#wstats) |
-| 速度の計測 | [`solve_obf`](#solve_obf) [`flipbench`](#flipbench) [`mpbench`](#mpbench) [`nnue_bench`](#nnue_bench) |
-| データ・定石 | [`kifu2data`](#kifu2data) [`bookgen`](#bookgen) [`mpccalib`](#mpccalib) [`nnue_symmetrize`](#nnue_symmetrize) |
-| オンライン対戦 | [`ggs`](#ggs) |
-| 正しさの検証 | [`stress_par`](#stress_par--stress_mid--stress_engine--stress_stop) [`stress_mid`](#stress_par--stress_mid--stress_engine--stress_stop) [`stress_engine`](#stress_par--stress_mid--stress_engine--stress_stop) [`stress_stop`](#stress_par--stress_mid--stress_engine--stress_stop) |
+| Training | [`train`](#train) [`nnue_train`](#nnue_train) [`selfplay`](#selfplay) |
+| Comparing strength | [`arena`](#arena) [`nnue_arena`](#nnue_arena) [`lab`](#lab) [`roundrobin`](#roundrobin) |
+| Measuring accuracy | [`valmse`](#valmse) [`phase_mse`](#phase_mse) [`wstats`](#wstats) |
+| Measuring speed | [`solve_obf`](#solve_obf) [`flipbench`](#flipbench) [`mpbench`](#mpbench) [`nnue_bench`](#nnue_bench) |
+| Data and the book | [`kifu2data`](#kifu2data) [`bookgen`](#bookgen) [`mpccalib`](#mpccalib) [`nnue_symmetrize`](#nnue_symmetrize) |
+| Online play | [`ggs`](#ggs) |
+| Verifying correctness | [`stress_par`](#stress_par--stress_mid--stress_engine--stress_stop) [`stress_mid`](#stress_par--stress_mid--stress_engine--stress_stop) [`stress_engine`](#stress_par--stress_mid--stress_engine--stress_stop) [`stress_stop`](#stress_par--stress_mid--stress_engine--stress_stop) |
 
 ---
 
-## 学習
+## Training
 
 ### train
 
-パターン評価 (線形) の教師あり学習。**入りきらないデータはシャードに分けて**
-学習する — ファイル単位で `--max-examples` までまとめ、1 エポックごとに各
-シャードを読んでは捨てる。
+Supervised training of the pattern (linear) evaluator. **Data that does
+not fit is trained in shards** — whole files are grouped up to
+`--max-examples`, and every epoch loads and drops one shard at a time.
 
 ```sh
 train [OPTIONS] <data-file>...
 ```
 
-入力は `.data` (17 バイト固定長) か `.txt` (`<64 文字の盤面> <石差>` を 1 行に
-1 件)。どちらかは拡張子で決まる。
+Input is `.data` (fixed 17-byte records) or `.txt` (one
+`<64 board chars> <disc difference>` per line). The extension decides
+which.
 
-| オプション | 既定 | 意味 |
+| Option | Default | Meaning |
 |---|---|---|
-| `--epochs <n>` | 10 | 全データを何周するか |
-| `--lr <f>` | 0.01 | Adam の学習率 |
-| `--weights <path>` | `weights.bin` | 読み込み先 (あれば) と保存先。**毎エポック保存する** |
+| `--epochs <n>` | 10 | How many passes over all the data |
+| `--lr <f>` | 0.01 | Adam learning rate |
+| `--weights <path>` | `weights.bin` | Where to load from (if it exists) and where to save. **Saved every epoch** |
 | `--patterns <set>` | `egaroucid` | `egaroucid` / `edax` |
-| `--limit <n>` | 全件 | ファイルごとに使う件数の上限 |
-| `--max-examples <n>` | 64M | 同時に RAM へ載せる件数 (`0` = 全部) |
-| `--log <path>` | — | エポックごとのステージ別損失を CSV で追記 |
-| `--optimizer <k>` | `sgd` | `sgd` / `adam`。**`--lr` の意味が変わる**ので既定を変えるときは学習率も見直す |
-| `--swa` | — | 重みの移動平均を取る (Stochastic Weight Averaging) |
-| `--swa-start <n>` | 2 | 平均を取り始めるエポック |
+| `--limit <n>` | all | Cap on the examples used per file |
+| `--max-examples <n>` | 64M | Examples held in RAM at once (`0` = all) |
+| `--log <path>` | — | Append per-epoch, per-stage loss as CSV |
+| `--optimizer <k>` | `sgd` | `sgd` / `adam`. **The meaning of `--lr` changes**, so revisit the learning rate when moving off the default |
+| `--swa` | — | Take a moving average of the weights (Stochastic Weight Averaging) |
+| `--swa-start <n>` | 2 | Epoch at which averaging starts |
 
 ```sh
 train --epochs 20 --lr 0.008 --weights weights/linear.bin train_data/*.data
@@ -52,26 +56,27 @@ train --epochs 20 --lr 0.008 --weights weights/linear.bin train_data/*.data
 
 ### nnue_train
 
-NNUE (1 隠れ層) の学習。`train` と同じ 17 バイト形式を読む。**毎エポック、
-凍結した重みで検証 MSE を測って表示する** — 学習 MSE ではなくこちらが、
-線形評価と比べるべき数字。
+NNUE (one hidden layer) training. Reads the same 17-byte format as
+`train`. **Every epoch it freezes the weights, measures the validation
+MSE and prints it** — that number, not the training MSE, is the one to
+compare against the linear evaluator.
 
 ```sh
 nnue_train [OPTIONS] <data-file>...
 ```
 
-| オプション | 意味 |
+| Option | Meaning |
 |---|---|
-| `--epochs <n>` | 周回数 |
-| `--lr <f>` | SGD の学習率 |
-| `--decay <f>` | 学習率の減衰 |
-| `--threads <n>` | 学習の並列数 |
-| `--limit <n>` | 使う件数の上限 |
-| `--val <file>` | 検証集合 (複数回渡せる) |
-| `--val-cap <n>` | 検証に使う件数の上限 |
-| `--out <path>` | 保存先。**最良 val の重みは `<out>.best` に別途残る** |
-| `--init <path>` | 初期重み (続きから学習する) |
-| `--max-examples <n>` | 同時に RAM へ載せる件数 |
+| `--epochs <n>` | Number of passes |
+| `--lr <f>` | SGD learning rate |
+| `--decay <f>` | Learning-rate decay |
+| `--threads <n>` | Training parallelism |
+| `--limit <n>` | Cap on the examples used |
+| `--val <file>` | Validation set (may be passed more than once) |
+| `--val-cap <n>` | Cap on the examples used for validation |
+| `--out <path>` | Where to save. **The best-val weights are kept separately in `<out>.best`** |
+| `--init <path>` | Initial weights (continue training from them) |
+| `--max-examples <n>` | Examples held in RAM at once |
 
 ```sh
 nnue_train --epochs 30 --lr 0.002 --val val.data \
@@ -80,185 +85,201 @@ nnue_train --epochs 30 --lr 0.002 --val val.data \
 
 ### selfplay
 
-自己対戦による強化学習。1 手読みの貪欲 + ε 乱択で指し、終盤はソルバで厳密に
-決着させ、TD(λ) で重みを更新する。
+Reinforcement training by self-play. Moves are 1-ply greedy with
+ε-random exploration, the endgame is decided exactly by the solver, and
+the weights are updated with TD(λ).
 
 ```sh
 selfplay [OPTIONS]
 ```
 
-| オプション | 既定 | 意味 |
+| Option | Default | Meaning |
 |---|---|---|
-| `--games <n>` | 10000 | 自己対戦の局数 |
-| `--weights <path>` | `weights.bin` | 読み込み + 更新先 |
-| `--lr <f>` | 0.0005 | SGD の学習率 |
-| `--decay <f>` | 1.0 | `--save-every` ごとに学習率へ掛ける |
-| `--lambda <f>` | 0.7 | TD(λ)。1.0 = モンテカルロ、0.0 = TD(0) |
-| `--epsilon <f>` | 0.10 | 一様乱択で指す確率 (探索の多様性) |
-| `--solve-empties <n>` | 12 | この空きマス数から完全読み (`0` で無効) |
+| `--games <n>` | 10000 | Number of self-play games |
+| `--weights <path>` | `weights.bin` | Loaded from and updated in place |
+| `--lr <f>` | 0.0005 | SGD learning rate |
+| `--decay <f>` | 1.0 | Multiplied into the learning rate every `--save-every` |
+| `--lambda <f>` | 0.7 | TD(λ). 1.0 = Monte Carlo, 0.0 = TD(0) |
+| `--epsilon <f>` | 0.10 | Probability of a uniformly random move (search diversity) |
+| `--solve-empties <n>` | 12 | Exact solve from this empty count (`0` disables) |
 | `--patterns <set>` | `egaroucid` | `egaroucid` / `edax` |
-| `--save-every <n>` | 500 | 何局ごとに保存するか |
-| `--opponents <a,b,…>` | — | 相手の重みをカンマ区切りで複数。指定すると自己対戦ではなく総当たりになる |
+| `--save-every <n>` | 500 | Save every n games |
+| `--opponents <a,b,…>` | — | Opponent weight files, comma-separated. Given these it becomes a round-robin instead of self-play |
 
 ---
 
-## 棋力の比較
+## Comparing strength
 
 ### arena
 
-**2 つの重みを直接対戦させる。**同じ開局を先後入れ替えて 2 局ずつ指し、A の
-勝率を 95% 信頼区間つきで出す。**`--help` を持つ唯一のツール。**
+**Plays two weight files directly against each other.** Each opening is
+played twice with the colours swapped, and A's win rate is reported with
+a 95% confidence interval. **The only tool with `--help`.**
 
 ```sh
 arena --a <weights-A> --b <weights-B> [OPTIONS]
 ```
 
-| オプション | 既定 | 意味 |
+| Option | Default | Meaning |
 |---|---|---|
-| `--games <n>` | 1000 | 総局数 (偶数へ切り上げ) |
-| `--random-plies <n>` | 6 | 開局をランダムに指す手数 |
-| `--depth <n>` | 1 | 両者の中盤探索の深さ (`1` = 貪欲) |
-| `--solve-empties <n>` | 0 | 両者がこの空きマス数から完全読み (`0` = 無効) |
-| `--depth-a` / `--depth-b` | `--depth` | 片側だけの深さ |
-| `--solve-a` / `--solve-b` | `--solve-empties` | 片側だけの読切 |
+| `--games <n>` | 1000 | Total games (rounded up to even) |
+| `--random-plies <n>` | 6 | Random opening plies |
+| `--depth <n>` | 1 | Midgame depth for both sides (`1` = greedy) |
+| `--solve-empties <n>` | 0 | Both sides solve exactly from this empty count (`0` = off) |
+| `--depth-a` / `--depth-b` | `--depth` | Depth for one side only |
+| `--solve-a` / `--solve-b` | `--solve-empties` | Solve entry for one side only |
 | `--patterns <set>` | `egaroucid` | `egaroucid` / `edax` / `egaroucid-plus` |
-| `--patterns-a` / `--patterns-b` | `--patterns` | 片側だけのパターン |
-| `--seed <n>` | 7 | 乱数の種 |
-| `--mpc-a` / `--mpc-b` | — | 片側だけ確率的枝刈り (ProbCut) を入れる |
-| `--mpc-t <f>` | 1.1 | ProbCut の閾値 (σ の倍数)。小さいほどよく刈る |
-| `--nnue-a <path>` | — | **NNUE モード**: A の重み (`--nnue-b` と対で指定) |
-| `--nnue-b <path>` | — | **NNUE モード**: B の重み |
+| `--patterns-a` / `--patterns-b` | `--patterns` | Patterns for one side only |
+| `--seed <n>` | 7 | RNG seed |
+| `--mpc-a` / `--mpc-b` | — | Enable probabilistic pruning (ProbCut) for one side only |
+| `--mpc-t <f>` | 1.1 | ProbCut threshold (multiples of σ). Smaller prunes more |
+| `--nnue-a <path>` | — | **NNUE mode**: A's weights (pair it with `--nnue-b`) |
+| `--nnue-b <path>` | — | **NNUE mode**: B's weights |
 
-**片側だけを指定できるのが要点。**深さ・読切・パターンを非対称にすると、
-どの条件差が効いたのかを分けて測れる。
+**The point is being able to set one side only.** Making depth, solve
+entry or patterns asymmetric separates out which difference in
+conditions did the work.
 
 ```sh
-# 実戦条件で 400 局
+# 400 games under game conditions
 arena --a weights/linear.bin --b weights/exp/new.bin \
       --games 400 --depth 8 --solve-empties 12
 ```
 
-**NNUE 同士は `--nnue-a` / `--nnue-b`。** 線形の `--a` / `--b` とは別経路で、
-`Engine`(実戦そのもの) を 2 つ立てて戦わせる — NNUE は探索の入口から違う
-(`NnueSearch` / 帯 / MPC) ので、`Searcher` を使う線形の経路では実戦条件に
-ならない。**定石は切る** (両者が同じ定石を引くと序盤が完全に同一になり、
-評価関数の差が出るのは定石を外れた後だけになる)。線形の重みは終盤の
-並べ替えにしか使わないので、指定しなければ 1 本を共有する。
+**NNUE against NNUE goes through `--nnue-a` / `--nnue-b`.** That is a
+different path from the linear `--a` / `--b`: it stands up two
+`Engine`s (the real game path) and has them fight — NNUE differs from
+the entry of the search onwards (`NnueSearch` / band / MPC), so the
+linear path through `Searcher` does not reproduce game conditions.
+**The opening book is turned off** (with both sides pulling the same
+book the opening becomes identical, and the evaluators only differ once
+the book runs out). The linear weights are used only for endgame move
+ordering, so a single file is shared unless one is given.
 
 ```sh
 arena --nnue-a weights/nnue-h16.bin --nnue-b weights/archive/nnue-h16-sym.bin \
       --games 400 --depth 16 --solve-empties 20
 ```
 
-#### 持ち時間の配り方を比べる
+#### Comparing time-allocation schemes
 
-`--time` を付けると持ち時間制になり、**配り方そのものを A/B できる**。
-時間の使い方は深さ固定の対局では測れない (どちらも同じ深さまで読むので
-差が出ない)。
+With `--time` the games run on a clock, so **the allocation scheme
+itself can be A/B tested**. How time is spent cannot be measured in
+fixed-depth games (both sides search to the same depth, so nothing
+differs).
 
-| オプション | 既定 | 意味 |
+| Option | Default | Meaning |
 |---|---|---|
-| `--time <秒>` | — | 1 局ぶんの持ち時間 (使い切ると負け) |
-| `--time-a` / `--time-b` | `--time` | 片側だけの持ち時間 |
+| `--time <seconds>` | — | Time control for a whole game (running out loses) |
+| `--time-a` / `--time-b` | `--time` | Time control for one side only |
 | `--pace-a` / `--pace-b` | `fast` | `fast` / `depth` / `tail:<a>` |
-| `--nps-a` / `--nps-b` | — | 較正した読切速度 (`auto` でその場で測る) |
-| `--budget-use-a` / `--budget-use-b` | 2.5 | 持ち時間をどれだけ攻めて使うか |
-| `--solve-ref-a` / `--solve-ref-b` | 18 | 残り手数の分母 `(空き − n) / 2`。`auto` で機械から決める |
-| `--band-a` / `--band-b` | 予算から自動 | 選択読みの帯を固定する (旧挙動との比較) |
+| `--nps-a` / `--nps-b` | — | Calibrated solve speed (`auto` measures it on the spot) |
+| `--budget-use-a` / `--budget-use-b` | 2.5 | How aggressively to spend the clock |
+| `--solve-ref-a` / `--solve-ref-b` | 18 | Denominator for the remaining move count, `(empties − n) / 2`. `auto` derives it from the machine |
+| `--band-a` / `--band-b` | derived from the budget | Fix the selective-search band (comparison against the old behaviour) |
 
-出力には**終局時の残り時間と時間切れの数**が付く。配り方の変更はたいてい
-勝率ではなく破綻の有無に出るので、そちらを先に見る。
+The output carries **the time left at the end of the game and the
+number of timeouts**. A change to the allocation usually shows up in
+whether things break down rather than in the win rate, so look there
+first.
 
 ```sh
-# 残り手数の分母を機械から決める案を、現状 (固定 18) と比べる
+# Compare deriving the remaining-move denominator from the machine
+# against the current fixed 18
 arena --a weights/linear.bin --b weights/linear.bin \
       --nnue-a weights/nnue-h16.bin --nnue-b weights/nnue-h16.bin \
       --games 30 --time 60 --random-plies 16 \
       --nps-a auto --nps-b auto --solve-ref-b auto --threads 1 --seed 201
 ```
 
-**計測台が実戦を写しているかを先に確かめる。** 60 秒・1 スレッドでは空き
-24-27 の 1 手が持ち時間の 6.7% を食うが、実戦 (900 秒・8 スレッド) では
-0.13% しかない。終盤の重さが違う台で終盤の取り置きを削れば、実戦では
-起きない時間切れが出る (実測: [到達水準](benchmarks.md#分母を上げる-ab))。
+**Check first that the test rig mirrors real games.** At 60 seconds and
+1 thread, a single move at 24-27 empties eats 6.7% of the time control,
+but in a real game (900 seconds, 8 threads) it is only 0.13%. Trim the
+endgame reserve on a rig whose endgame weighs differently and you get
+timeouts that never happen in a real game (measured:
+[where it stands](benchmarks.md#ab-on-raising-the-denominator)).
 
 ### nnue_arena
 
-**NNUE と線形評価を、同じ探索・同じ深さで戦わせる。**探索の手間が等しいので
-差は評価関数だけに出る (速度は無関係 — NNUE は毎ノード再計算する)。
+**Plays NNUE against the linear evaluator with the same search at the
+same depth.** Search effort is equal, so the difference falls entirely
+on the evaluator (speed is irrelevant — NNUE recomputes at every node).
 
 ```sh
 nnue_arena --nnue <nnue.bin> --linear <weights.bin> [OPTIONS]
 ```
 
-| オプション | 意味 |
+| Option | Meaning |
 |---|---|
-| `--depth <n>` | 両者の固定深さ |
-| `--games <n>` | 総局数 |
-| `--random-plies <n>` | 開局をランダムに指す手数 |
-| `--seed <n>` | 乱数の種 |
+| `--depth <n>` | Fixed depth for both sides |
+| `--games <n>` | Total games |
+| `--random-plies <n>` | Random opening plies |
+| `--seed <n>` | RNG seed |
 
 ### lab
 
-**外部エンジンとの直接対戦。**3 つの方言に対応する。
+**Head-to-head against an external engine.** Three dialects are
+supported.
 
-| `--protocol` | 相手 | やり取り |
+| `--protocol` | Opponent | Exchange |
 |---|---|---|
-| `edax` (既定) | Edax のコンソール | `setboard <盤面>` / `go` → `Edax plays XX` |
-| `zebra` | Zebra の思考エンジン | `setboard` / `go` → `move xx` |
-| `egaroucid` | GTP | 盤面を送らず着手列を再生する (GTP に局面指定が無いため) |
+| `edax` (default) | Edax's console | `setboard <board>` / `go` → `Edax plays XX` |
+| `zebra` | Zebra's engine mode | `setboard` / `go` → `move xx` |
+| `egaroucid` | GTP | Replays the move list instead of sending a board (GTP has no position command) |
 
-対局の進行はこちらが持ち、相手には局面と `go` だけを渡す。**パスや着手の
-反響を同期させる必要がない。**
+We own the progress of the game and hand the opponent only a position
+and `go`. **Passes and move echoes never need to be synchronized.**
 
 ```sh
 lab --edax <path-to-edax-binary> [OPTIONS]
 ```
 
-| オプション | 既定 | 意味 |
+| Option | Default | Meaning |
 |---|---|---|
-| `--weights <path>` | `weights/linear.bin` | こちらの重み |
-| `--patterns <set>` | `egaroucid` | パターンライブラリ |
-| `--depth <n>` | 6 | こちらの中盤の深さ |
-| `--solve-empties <n>` | 14 | こちらの読切 |
-| `--edax-level <n>` | 5 | 相手のレベル / 深さ |
-| `--protocol <p>` | `edax` | 上の表 |
-| `--threads <n>` | 1 | 両者のスレッド数。**こちらは終盤しか並列化しないので相手に有利** |
-| `--games <n>` | 200 | 総局数 (偶数へ切り上げ) |
-| `--random-plies <n>` | 6 | 開局をランダムに指す手数 |
-| `--seed <n>` | 7 | 乱数の種 |
-| `--per-game` | — | 1 局 1 行で出す (`game <組> <B\|W> <石差>`)。同じ種の 2 回の実行を対にして比べられる |
+| `--weights <path>` | `weights/linear.bin` | Our weights |
+| `--patterns <set>` | `egaroucid` | Pattern library |
+| `--depth <n>` | 6 | Our midgame depth |
+| `--solve-empties <n>` | 14 | Our solve entry |
+| `--edax-level <n>` | 5 | The opponent's level / depth |
+| `--protocol <p>` | `edax` | The table above |
+| `--threads <n>` | 1 | Threads for both sides. **We only parallelise the endgame, so this favours the opponent** |
+| `--games <n>` | 200 | Total games (rounded up to even) |
+| `--random-plies <n>` | 6 | Random opening plies |
+| `--seed <n>` | 7 | RNG seed |
+| `--per-game` | — | One line per game (`game <pair> <B\|W> <disc-diff>`). Two runs over the same seed can then be paired and compared |
 
-**外部エンジンと戦わせる以外に、計測用の経路が同じバイナリに入っている。**
-どれも指定したときだけ走り、対局はしない。
+**Besides playing external engines, the same binary carries paths meant
+for measurement.** Each runs only when asked for, and plays no games.
 
-| オプション | 何をするか |
+| Option | What it does |
 |---|---|
-| `--mpc-calib <out>` | ProbCut の較正データを出す。**探索している評価器そのもので測る** — 精度の低い評価器から借りた模型は誤差を過大に見積もり、刈り幅が広がりすぎる |
-| `--mid-sigma-calib <out>` | 中盤の σ を測る。線形評価の値を「より正確な評価器なら安全側だろう」と流用していたのを実測に置き換えるためのもの |
-| `--sigma-calib <out>` | 完全読みの値と各深さの probe を突き合わせ、`exact - probe` の散らばりを (空きマス数, probe 深さ) ごとに出す |
-| `--calib-stride <n>` / `--calib-max <n>` | 較正で拾う局面の間引きと上限 |
-| `--band-probe <n>` | 選択読みの帯を測る。**勝敗ではなく石差の損で採点する**ので、同じ局面で 2 つの枝を比べられて分散が小さい (既定 40 局面) |
-| `--band-empties <n>` | 帯を測る空きマス数 |
-| `--gen-obf <out>` | 局面集を OBF 形式で書き出す |
-| `--obf <path>` | 書き出した局面集を読んで使う |
-| `--self-vs <threads>` | **並列と逐次を直接対戦させる。** 同じ重み・同じ深さ・同じ読切でスレッド数だけ変えるので、50% から外れたら並列化が結果を変えている |
-| `--nnue-b <path>` | 上の対戦で相手側だけ別の NNUE にする |
-| `--verify-parallel` | **並列探索が逐次と同じ手を選ぶかを確かめる。** 勝率では小さな劣化が見えない (200 局でも埋もれる) ので、着手そのものを突き合わせる |
-| `--edax-threads <n>` | 相手 (Edax) 側のスレッド数を別に指定する |
+| `--mpc-calib <out>` | Emit ProbCut calibration data. **Measured with the very evaluator that searches** — a model borrowed from a less accurate evaluator overestimates the error and widens the pruning too far |
+| `--mid-sigma-calib <out>` | Measure the midgame σ. Meant to replace the linear evaluator's values, which were carried over on the assumption that "a more accurate evaluator would be on the safe side", with measurements |
+| `--sigma-calib <out>` | Match exact-solve values against probes at each depth and report the spread of `exact - probe` per (empty count, probe depth) |
+| `--calib-stride <n>` / `--calib-max <n>` | Thinning and cap on the positions collected for calibration |
+| `--band-probe <n>` | Measure the selective-search band. **Scored by disc difference lost, not by win or loss**, so two branches can be compared on the same position with low variance (40 positions by default) |
+| `--band-empties <n>` | Empty count at which to measure the band |
+| `--gen-obf <out>` | Write out a position set in OBF format |
+| `--obf <path>` | Read and use a position set that was written out |
+| `--self-vs <threads>` | **Play parallel directly against sequential.** Same weights, same depth, same solve entry with only the thread count changed, so anything away from 50% means parallelism is changing the result |
+| `--nnue-b <path>` | Give the opposing side a different NNUE in the match above |
+| `--verify-parallel` | **Check that the parallel search picks the same move as the sequential one.** A small degradation is invisible in the win rate (buried even over 200 games), so the moves themselves are compared |
+| `--edax-threads <n>` | Set the opponent's (Edax's) thread count separately |
 
 ### roundrobin
 
-**複数エンジンの総当たり。**同じ開局集合を全組が戦い、先後も入れ替える。
-評価関数を比べるのが目的なので、全エンジンを素の固定深さに揃える (N 手読み
-なら空き N 以下は自然に読み切るので、終盤の設定は要らない)。
+**Round-robin between several engines.** Every pair plays the same set
+of openings, colours swapped. The point is to compare evaluation
+functions, so all engines are lined up on a plain fixed depth (at N
+plies a position with N or fewer empties is solved to the end anyway,
+so the endgame needs no setting).
 
 ```sh
 roundrobin --games <n> --depth <n> [--engine name=protocol=path]...
 ```
 
-`protocol` は `edax` / `zebra` / `egaroucid` / `ours`。**`ours` はちょうど
-1 つ**必要で、そのパスは無視される。
+`protocol` is `edax` / `zebra` / `egaroucid` / `ours`. **Exactly one
+`ours`** is required, and its path is ignored.
 
 ```sh
 roundrobin --games 100 --depth 8 \
@@ -269,81 +290,86 @@ roundrobin --games 100 --depth 8 \
 
 ### ponderhit
 
-**ポンダリングの予測手がどれくらい当たるかを測る。**予測手 1 本を追う方式の
-値打ちはこの的中率でほぼ決まる。**予測は探索し直さず、自分の着手後の局面を
-置換表に問い合わせて出す** — 実際のポンダリングもそうするしかないので、
-それより良い予測を測っても意味がない。
+**Measures how often the pondering prediction is right.** The worth of
+the single-predicted-move scheme is essentially decided by this hit
+rate. **The prediction is not a fresh search: it asks the transposition
+table about the position after our own move** — live pondering has no
+other option, so measuring a better prediction would be meaningless.
 
 ```sh
 ponderhit [OPTIONS]
 ```
 
-| オプション | 既定 | 意味 |
+| Option | Default | Meaning |
 |---|---|---|
-| `--games <n>` | 20 | 対局数 |
-| `--depth <n>` | 8 | 自分の中盤深さ |
-| `--solve-empties <n>` | 14 | 自分の完全読み開始 |
-| `--opp-depth <n>` | `--depth` | 相手の中盤深さ |
-| `--opp-solve <n>` | `--solve-empties` | 相手の完全読み開始 |
-| `--threads <n>` | 1 | スレッド数 |
-| `--random-plies <n>` | 8 | 開幕の乱数手数 |
-| `--seed <n>` | 7 | 乱数の種 |
-| `--nnue` / `--weights` | `weights/nnue-h16.bin` / `weights/linear.bin` | 重み |
+| `--games <n>` | 20 | Number of games |
+| `--depth <n>` | 8 | Our midgame depth |
+| `--solve-empties <n>` | 14 | Our exact-solve entry |
+| `--opp-depth <n>` | `--depth` | The opponent's midgame depth |
+| `--opp-solve <n>` | `--solve-empties` | The opponent's exact-solve entry |
+| `--threads <n>` | 1 | Thread count |
+| `--random-plies <n>` | 8 | Random opening plies |
+| `--seed <n>` | 7 | RNG seed |
+| `--nnue` / `--weights` | `weights/nnue-h16.bin` / `weights/linear.bin` | Weights |
 
-**`--opp-depth` で相手だけ弱くできる。**予測が相手の強さにどれだけ依るかを
-見るため。実測では大幅に弱くしても的中率は 4 ポイントしか落ちなかった。
+**`--opp-depth` weakens the opponent alone.** It is there to see how
+much the prediction depends on the opponent's strength; in practice a
+drastic weakening cost only 4 points of hit rate.
 
 ```sh
-# 同じ強さ同士と、相手だけ弱い場合
+# Equal strength, then a weaker opponent only
 ponderhit --games 14 --depth 12 --solve-empties 18
 ponderhit --games 12 --depth 12 --solve-empties 18 --opp-depth 4
 ```
 
 ### ponderarena
 
-**ポンダリングの効果を測る。**先読みの有無で 2 回走らせ、同じプレイヤーの
-合計どうしを比べる。**A と B を戦わせて両者を比べる形は使えない** — 持つ色も
-直面する局面も違うので偏りが乗る (対照実験で 24.5% の差が出たことがある)。
+**Measures the effect of pondering.** It runs twice, with and without
+pondering, and compares the totals for the same player. **The shape
+where A and B fight and the two are compared cannot be used** — they
+hold different colours and face different positions, so bias creeps in
+(a control experiment once showed a 24.5% difference).
 
 ```sh
 ponderarena [OPTIONS]
 ```
 
-| オプション | 既定 | 意味 |
+| Option | Default | Meaning |
 |---|---|---|
-| `--games <n>` | 10 | 対局数 |
-| `--ms <n>` | 200 | 1 手の持ち時間 (ミリ秒) |
-| `--ponder <on\|off>` | `on` | 先読みするか。`off` は対照実験 |
-| `--fixed-depth` | — | 深さ固定で測る。**見るのは勝率ではなく探索時間** |
-| `--ponder-ms <n>` | 300 | 深さ固定のときの先読み時間 |
-| `--no-mpc` | — | 確率的枝刈りを切る |
-| `--depth <n>` | 20 | 中盤深さの上限 |
-| `--solve-empties <n>` | 14 | 完全読み開始 |
-| `--threads <n>` | 1 | スレッド数 |
-| `--random-plies <n>` | 8 | 開幕の乱数手数 |
-| `--seed <n>` | 7 | 乱数の種 |
-| `--nnue` / `--weights` | `weights/nnue-h16.bin` / `weights/linear.bin` | 重み |
+| `--games <n>` | 10 | Number of games |
+| `--ms <n>` | 200 | Time per move (milliseconds) |
+| `--ponder <on\|off>` | `on` | Whether to ponder. `off` is the control |
+| `--fixed-depth` | — | Measure at fixed depth. **What to look at is search time, not the win rate** |
+| `--ponder-ms <n>` | 300 | Ponder time in fixed-depth mode |
+| `--no-mpc` | — | Turn off probabilistic pruning |
+| `--depth <n>` | 20 | Midgame depth cap |
+| `--solve-empties <n>` | 14 | Exact-solve entry |
+| `--threads <n>` | 1 | Thread count |
+| `--random-plies <n>` | 8 | Random opening plies |
+| `--seed <n>` | 7 | RNG seed |
+| `--nnue` / `--weights` | `weights/nnue-h16.bin` / `weights/linear.bin` | Weights |
 
-**深さ固定では 1 スレッドで走らせる。**並列探索 (Lazy SMP) は非決定的で、
-同じ条件でも着手が変わって対局が分岐する。1 スレッドなら先読みの有無で
-着手は 1 手も変わらないので、棋譜の指紋で突き合わせられる。
+**At fixed depth, run on one thread.** Parallel search (Lazy SMP) is
+non-deterministic, so even under identical conditions the moves change
+and the games diverge. On one thread not a single move changes with or
+without pondering, so the game records can be matched by fingerprint.
 
-1 局ごとに置換表を消す (CLAUDE.md の 4 番)。
+The transposition table is cleared every game (rule 4 in CLAUDE.md).
 
 ```sh
-# 深さ固定。同じ種で 2 回走らせて合計を比べる
+# Fixed depth. Run twice on the same seed and compare the totals
 ponderarena --games 14 --fixed-depth --depth 13 --solve-empties 20 --ponder on
 ponderarena --games 14 --fixed-depth --depth 13 --solve-empties 20 --ponder off
 ```
 
 ---
 
-## 精度の計測
+## Measuring accuracy
 
 ### valmse
 
-重みを更新せずに検証集合の MSE を測る。`train` の早期打ち切りを判断する
-ためのもので、**ステージ別**に出す。
+Measures the MSE on a validation set without updating the weights. It
+exists to decide when to stop `train` early, and reports **per stage**.
 
 ```sh
 valmse [--patterns <set>] <weights.bin> <data-file>...
@@ -351,20 +377,22 @@ valmse [--patterns <set>] <weights.bin> <data-file>...
 
 ### phase_mse
 
-`valmse` の NNUE 版で、**空きマス数別**に区切って出す (CSV)。深さの梯子を
-振る実験がこの軸で動くため。外部の評価関数に同じ局面を採点させるための
-テキスト書き出しも持つ。
+The NNUE counterpart of `valmse`, bucketed **by empty count** (CSV) —
+that is the axis the depth-ladder experiments vary along. It also has a
+text export so an external evaluation function can score the same
+positions.
 
 ```sh
-phase_mse <nnue.bin> <data-file>...              # 空きマス別 MSE (CSV)
-phase_mse --dump-text <out.txt> <data-file>...   # 「盤面 スコア」の行に落とす
+phase_mse <nnue.bin> <data-file>...              # per-empties MSE (CSV)
+phase_mse --dump-text <out.txt> <data-file>...   # "board score" lines
 ```
 
 ### wstats
 
-**重みファイルの統計。**ステージ帯 × パターンごとに、非ゼロセルの割合
-(SGD/Adam は訪れたセルしか触らないので、非ゼロ = 訪問済み) と、その RMS に
-向き数を掛けた「1 局面あたりの寄与の目安」を出す。
+**Statistics of a weight file.** Per stage band and pattern, it reports
+the fraction of nonzero cells (SGD/Adam only ever touch visited cells,
+so nonzero = visited) and their RMS scaled by the orientation count — a
+rough scale for the contribution per position.
 
 ```sh
 wstats [--patterns egaroucid|edax] <weights.bin>
@@ -372,157 +400,181 @@ wstats [--patterns egaroucid|edax] <weights.bin>
 
 ---
 
-## 速度の計測
+## Measuring speed
 
 ### solve_obf
 
-**FFO ベンチマーク (OBF 形式) の一括求解。**局面ごとに時間・ノード数・NPS を
-出す。`edax -solve <file>` の出力と直接比べられる形式。
+**Bulk solving of the FFO benchmark (OBF format).** Reports time, node
+count and NPS per position, in a form directly comparable to the output
+of `edax -solve <file>`.
 
 ```sh
 solve_obf [--depth <n>] [--weights <path>] <file.obf>...
 ```
 
-| オプション | 既定 | 意味 |
+| Option | Default | Meaning |
 |---|---|---|
-| `--hash-bits <n>` | 26 | 置換表の大きさ (2^n エントリ) |
-| `--mpc-t <f>` | — | ProbCut の閾値。指定すると確率的枝刈りを入れる |
+| `--hash-bits <n>` | 26 | Transposition table size (2^n entries) |
+| `--mpc-t <f>` | — | ProbCut threshold. Passing it enables probabilistic pruning |
 
-`--depth` を渡すと完全読みではなく**固定深さの中盤探索**になる (同じ局面で
-探索速度だけを比べたいとき)。
+Passing `--depth` switches from exact solving to a **fixed-depth
+midgame search** (for when only search speed on identical positions is
+to be compared).
 
 ```sh
-# 同梱の局面集
+# The position sets that ship with the repo
 solve_obf bench/band22.obf
 
-# FFO40-59 (README の数字はこれ)。**同梱していない**ので別途用意する
+# FFO40-59 (the source of the README numbers). **Not shipped**, so
+# obtain it separately
 solve_obf bench/ffo40-59.obf
 ```
 
-**`bench/` に入っているのは `band22` / `band29` / `band29v2` /
-`calib1030` の 4 つ。** FFO の局面集は容量の都合で置いていないので、
-README の FFO の数字を手元で再現するには自分で用意する必要がある。
+**What `bench/` contains is `band22` / `band29` / `band29v2` /
+`calib1030`, four sets.** The FFO positions are left out for size, so
+reproducing the README's FFO numbers locally requires obtaining them
+yourself.
 
 ### flipbench
 
-石返しと合法手生成のマイクロベンチ。引数なし。
+Microbenchmark of disc flipping and move generation. No arguments.
 
-**結果は「どこに費用がありそうか」の目印であって、判断材料ではない。**
-ランダムなマスは分岐予測を外し、ランダムな局面は fill の連鎖を伸ばすので、
-実際の探索より両方向へ悲観的に出る (関数テーブル経由の石返しはここで
-14.3 ns、実際の求解では約 2.6 ns)。採否は FFO40-59 で決める。
+**The results mark where cost might be, and are not grounds for a
+decision.** Random squares defeat branch prediction and random
+positions lengthen the fill chains, so it comes out pessimistic in both
+directions relative to the real search (flipping through a function
+table takes 14.3 ns here, about 2.6 ns in real solving). Adoption is
+decided on FFO40-59.
 
 ### mpbench
 
-中盤の並列探索が**逐次と同じ手を返すか**と、どれだけ速くなるかを見る。
+Shows whether the parallel midgame search **returns the same move as
+the sequential one**, and how much faster it is.
 
 ```sh
-mpbench [depth]     # 既定 12
+mpbench [depth]     # default 12
 ```
 
 ### nnue_bench
 
-線形評価と差分 NNUE の**ノード処理量**を、探索と同じ形の全幅走査で比べる。
-同じノード集合を辿るので、実時間の比がそのまま探索に持ち込まれる NPS の
-影響になる。差分累積器が一から計算した評価と一致することも確かめる。
+Compares the **node throughput** of the linear evaluator and the
+incremental NNUE in a full-width traversal shaped like the search.
+Since both walk the identical node set, the wall-time ratio carries
+straight over as the NPS impact on the search. It also checks that the
+incremental accumulator agrees with an evaluation computed from
+scratch.
 
 ```sh
 nnue_bench [--nnue <path>] [--depth <n>] [--val <file>]...
 ```
 
-`--val` を渡すと、f32 の前向き計算と i16 量子化の MSE を比べる。
+Passing `--val` compares the MSE of the f32 forward pass against the
+i16 quantized one.
 
 ---
 
-## 正しさの検証
+## Verifying correctness
 
 ### stress_par / stress_mid / stress_engine / stress_stop
 
-**「返した手を実際に指して」確かめる。** 厳密解のテストは値しか見ないので、
-値が正しく手だけ誤る欠陥を通してしまう (実際に通し、実戦で 36 石を失った。
-詳細は [探索](search.md#並列探索の正しさ))。
+**They check by actually playing the move that was returned.** Tests of
+exact solving look only at values, so they let through a defect where
+the value is right and only the move is wrong (one got through, and
+36 discs were lost in a real game; details in
+[Search](search.md#parallel-search-correctness)).
 
-| 道具 | 何を確かめるか |
+| Tool | What it checks |
 |---|---|
-| `stress_par` | 並列の終盤探索が返した手を指し、逐次の厳密解と石差が一致するか |
-| `stress_mid` | 中盤探索の自己整合 (同じ局面・同じ設定で同じ手を返すか) |
-| `stress_engine` | 実戦の経路 (`Engine::choose_within`) で同じことを確かめる |
-| `stress_stop` | 期限切れで抜けたときに保険の手が返るか |
+| `stress_par` | Play the move the parallel endgame search returned and see whether the disc difference matches the sequential exact solution |
+| `stress_mid` | Self-consistency of the midgame search (same position, same settings, same move returned) |
+| `stress_engine` | The same, along the real game path (`Engine::choose_within`) |
+| `stress_stop` | Whether a fallback move comes back when the deadline cuts the search short |
 
-引数は位置指定で `[局面数] [空き] [スレッド]` (既定 200 / 20 / 8)。
+Arguments are positional: `[positions] [empties] [threads]` (defaults
+200 / 20 / 8).
 
 ```sh
-# 空き 20 を 300 局面、8 スレッド
+# 300 positions at 20 empties, 8 threads
 stress_par 300 20 8
 
-# 打ち切りをわざと起こす (実戦では数千手に 1 回しか起きない)
+# Force aborts on purpose (in real games they happen once in
+# thousands of moves)
 SOLVER_CHAOS=32 stress_par 200 22 8
 ```
 
-**中盤は並列と逐次で一致しない。** Lazy SMP は探索順が非決定的で、それが
-正しい挙動なので、`stress_mid` は自己整合だけを見る (一致を期待して書いた
-最初の版は、正常な非決定性を欠陥として報告した)。
+**The midgame does not agree between parallel and sequential.** Lazy
+SMP's search order is non-deterministic and that is the correct
+behaviour, so `stress_mid` looks only at self-consistency (the first
+version, written expecting agreement, reported normal non-determinism
+as a defect).
 
-環境変数の逃がし口:
+Escape hatches through environment variables:
 
-| 変数 | 効果 |
+| Variable | Effect |
 |---|---|
-| `SOLVER_CHAOS=n` | n 回に 1 回、カットが出ていないスレッドを打ち切る |
-| `SOLVER_ABORT=0` | 打ち切りそのものを止める (切り分け用) |
-| `MID_TOL` / `MID_STRICT` | 中盤の許容石差 / 完全一致を要求する |
-| `MID_MPC` / `MID_REPEAT` | 中盤の確率的枝刈りを入れる / 同じ局面を繰り返す |
+| `SOLVER_CHAOS=n` | One time in n, abort a thread that has no cutoff |
+| `SOLVER_ABORT=0` | Stop aborting altogether (for isolating a problem) |
+| `MID_TOL` / `MID_STRICT` | Tolerated disc difference in the midgame / require an exact match |
+| `MID_MPC` / `MID_REPEAT` | Enable midgame probabilistic pruning / repeat the same position |
 
 ---
 
-## データ・定石
+## Data and the opening book
 
 ### kifu2data
 
-**棋譜 (`f5d6…`) を学習データに変換する。**全局面に、その対局の最終石差
-(空きマスは勝者に加算) をラベルとして付ける。不正な手を含む対局は飛ばして
-数える。出力は `train` が読む 17 バイト形式 (黒 u64 LE、白 u64 LE、スコア
-i8。**黒番へ正規化**し、スコアも黒視点)。
+**Converts game records (`f5d6…`) into training data.** Every position
+gets the game's final disc difference as its label (empties awarded to
+the winner). Games containing an illegal move are skipped and counted.
+The output is the 17-byte format `train` reads (black u64 LE, white u64
+LE, score i8; **normalized to Black to move**, with the score from
+Black's perspective).
 
 ```sh
 kifu2data [OPTIONS] <transcript>...
 ```
 
-| オプション | 意味 |
+| Option | Meaning |
 |---|---|
-| `--limit-games <n>` | 入力ファイルごとに変換する対局数の上限 |
-| `--skip-games <n>` | 先頭 n 局を飛ばす (**学習と重ならない検証集合を切り出す**ため) |
-| `--skip-plies <k>` | 各対局の先頭 k 局面を記録しない (開局がランダムなデータでは、その結果ラベルは雑音) |
-| `--out <file>` | 全部を 1 ファイルに連結する |
-| `--out-dir <dir>` | 入力ごとに 1 つ出す (`<dir>/<入力名>.data`) |
+| `--limit-games <n>` | Cap on the games converted per input file |
+| `--skip-games <n>` | Skip the first n games (**to carve out a validation set disjoint from training**) |
+| `--skip-plies <k>` | Do not record the first k positions of each game (in data whose openings are random, their outcome labels are noise) |
+| `--out <file>` | Concatenate everything into one file |
+| `--out-dir <dir>` | One output per input (`<dir>/<input name>.data`) |
 
 ### bookgen
 
-**定石の生成。**2 段階で作る。
+**Generates the opening book.** Built in two stages.
 
 ```sh
-# 1. WTHOR (公式大会棋譜) から序盤の頻出局面を候補として積む (未評価)
+# 1. Collect frequent opening positions from WTHOR (official tournament
+#    records) as candidates (unevaluated)
 bookgen --scan train_data/wthor --max-ply 24 --min-games 3 --out book.txt
 
-# 2. 未評価・浅い評価のエントリを実戦より深い探索で解く
+# 2. Solve unevaluated and shallowly evaluated entries with a search
+#    deeper than a real game
 bookgen --deepen book.txt --depth 26 --solve 30 --band 8 [--limit 500]
 ```
 
-| オプション | 既定 | 意味 |
+| Option | Default | Meaning |
 |---|---|---|
-| `--book <path>` | — | `--out` の別名 |
-| `--hash-bits <n>` | 19 | 中盤置換表の大きさ (2^n エントリ) |
-| `--max-cands <n>` | 4 | 1 局面から広げる候補手の数。増やすと木が太る |
+| `--book <path>` | — | Another name for `--out` |
+| `--hash-bits <n>` | 19 | Midgame transposition table size (2^n entries) |
+| `--max-cands <n>` | 4 | How many candidate moves to expand per position. Raising it fattens the tree |
 
-**定石の値は「実戦では届かない深さ」でなければ意味がない**ので、既定は
-深さ 26 / 読切 30 / 帯 8 (実戦の GGS 設定は 22 / 26 / 6)。途中で止めても
-保存済みの分は残るので、何度でも継ぎ足せる。止めるまで回し続けるループは
-`tools/book-loop.sh`。
+**Book values are worthless unless they come from a depth a real game
+cannot reach**, hence the defaults of depth 26 / solve 30 / band 8 (the
+live GGS settings are 22 / 26 / 6). Stopping partway keeps what has
+been saved, so it can be topped up any number of times. The loop that
+keeps going until stopped is `tools/book-loop.sh`.
 
 ### mpccalib
 
-**ProbCut の較正データを作る。**局面ごとに、置換表をクリアしながら複数の
-深さで独立に探索し、1 局面 1 行の CSV に全深さの値を出す。誤差モデル
-σ(空き, 深さ, 浅い深さ) はこのデータから別途あてはめる。
+**Produces ProbCut calibration data.** Per position, it searches
+independently at several depths, clearing the transposition table in
+between, and emits one CSV row per position holding every depth's
+value. The error model σ(empties, depth, shallow depth) is fitted from
+this data separately.
 
 ```sh
 mpccalib [--patterns <set>] [--stride N] [--max N] <weights.bin> <data-file>...
@@ -530,44 +582,48 @@ mpccalib [--patterns <set>] [--stride N] [--max N] <weights.bin> <data-file>...
 
 ### nnue_symmetrize
 
-**NNUE の重みを 8 対称で平均し、評価を対称不変にする。**パターンのマスクは
-並び順が対称変換で変わるため、同じ配置でも別のインデックスを引いて評価が
-ずれる (実測 0.1〜0.8 石)。軌道ごとに平均して根治する。
+**Averages NNUE weights over the 8 symmetries, making evaluation
+symmetry-invariant.** A pattern's mask changes cell order under a
+symmetry transform, so an identical shape can hit a different index and
+the evaluation drifts (0.1-0.8 discs measured). Averaging per orbit
+fixes it at the root.
 
 ```sh
 nnue_symmetrize <in.bin> <out.bin> [--val <file>]
 ```
 
-`--val` を渡すと、対称化の前後で検証 MSE を測って表示する (品質確認)。
+Passing `--val` measures and prints the validation MSE before and after
+symmetrization (a quality check).
 
 ---
 
-## オンライン対戦
+## Online play
 
 ### ggs
 
-**GGS (skatgame.net:5000) のクライアント。** リバーシのサービス `/os` で非
-レートの 8×8 を指す。GUI の「GGS」画面が同じ機能を持つので、普段はそちらで
-足りる。
+**Client for GGS (skatgame.net:5000).** Plays unrated 8×8 on the
+reversi service `/os`. The GUI's "GGS" screen has the same
+functionality and usually suffices.
 
 ```sh
-# 対局する
-ggs --play <相手> [--games N]
-    [--login 名 --pw パス | --credentials .ggs_credentials]
-    [--type 8] [--time 30:00] [--resume <対局 id>]
+# Play games
+ggs --play <opponent> [--games N]
+    [--login name --pw pass | --credentials .ggs_credentials]
+    [--type 8] [--time 30:00] [--resume <game id>]
     [--depth N] [--solve-empties N] [--selective-band N] [--mpc]
     [--solver-hash 22] [--threads N] [--weights path] [--nnue path]
 
-# 着手だけを返すブリッジ (stdin で「<64 面> <X|O>」を受け「= <座標>」を返す)
+# Bridge that only returns a move (reads "<64 cells> <X|O>" on stdin
+# and answers "= <coord>")
 ggs --serve
 ```
 
-| オプション | 既定 | 意味 |
+| Option | Default | Meaning |
 |---|---|---|
-| `--type <t>` | `8` | 対局形式。`s8r16` (同期・ランダム16手) など。GUI の一覧と同じ記法 |
-| `--time <hh:mm>` | `30:00` | 持ち時間 |
-| `--resume <id>` | — | 中断対局を再開する |
-| `--solver-hash <n>` | 22 | 完全読み用の置換表の大きさ (2^n エントリ) |
+| `--type <t>` | `8` | Game type, e.g. `s8r16` (synchronous, 16 random plies). Same notation as the GUI's list |
+| `--time <hh:mm>` | `30:00` | Time control |
+| `--resume <id>` | — | Resume a suspended game |
+| `--solver-hash <n>` | 22 | Transposition table size for exact solving (2^n entries) |
 
-認証情報を平文で渡さずに済むよう `--credentials` がある。GUI 側は macOS の
-キーチェーンに保存する。
+`--credentials` exists so credentials need not be passed in plain text.
+The GUI stores them in the macOS keychain.

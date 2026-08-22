@@ -1,323 +1,402 @@
-# 探索
+# Search
 
-中盤の選択的探索、終盤の完全読み、両者が共有する置換表。
+The selective midgame search, the endgame exact solve, and the
+transposition table that both of them share.
 
-## 中盤探索
+## Midgame search
 
-![探索の受け持ち](img/search-flow.svg)
+![What each search covers](img/search-flow.svg)
 
-`src/search.rs`。パターン評価上の反復深化 αβ (negamax)。
+`src/search.rs`. Iterative-deepening αβ (negamax) on top of the
+pattern evaluation.
 
-### 基本構成
+### Basic structure
 
-- **PVS (Principal Variation Search)**: 第 1 子は全窓、以降は null-window で
-  確認し、改善したときだけ全窓で再探索
-- **反復深化** + 置換表による前段の最善手継承
-- **ETC (Enhanced Transposition Cutoff)**: 残り深さ 4 以上で、全子局面の
-  ハッシュを先に引き、fail-high が証明済みならこのノードを無探索で打ち切る
-- **killer / history ヒューリスティック**、深いノードは全子の評価値で並べ替え
-  (`EVAL_ORDER_MIN_DEPTH = 6`)、浅いノードは相手モビリティ・角/X 位置バイアス
-- **葉の 0.5 石量子化**: f32 の連続値では「わずかに良い子」が頻発して
-  PVS の null-window 確認がほぼ毎回フル再探索に化ける。半石は評価関数の
-  ノイズ下限より十分細かいので棋力を損なわずに探索効率だけ改善する
-- **葉の高速パス**: 深さ 0 では置換表を引かない (ほぼ確実にミスするうえ
-  節約できるのは評価計算だけ)。パスも深さ 0 で inline 処理するため、
-  深さ 1 のノードは子のハッシュ計算自体を省略できる
+- **PVS (Principal Variation Search)**: the first child gets a full
+  window; the rest are checked with a null window and re-searched with
+  a full window only when they improve
+- **Iterative deepening** plus inheritance of the previous iteration's
+  best move through the transposition table
+- **ETC (Enhanced Transposition Cutoff)**: at remaining depth 4 or
+  more, the hashes of all child positions are probed first, and the
+  node is cut without searching if a fail-high is already proven
+- **killer / history heuristics**; deep nodes are ordered by the
+  evaluation of every child (`EVAL_ORDER_MIN_DEPTH = 6`), shallow ones
+  by opponent mobility and a corner/X-square bias
+- **0.5-disc quantisation at the leaves**: with continuous f32 values
+  "a barely better child" occurs constantly, and the PVS null-window
+  check degenerates into a full re-search almost every time. Half a
+  disc is well below the noise floor of the evaluation function, so
+  it improves search efficiency alone, without costing strength
+- **Leaf fast path**: at depth 0 the transposition table is not probed
+  (it almost certainly misses, and all that could be saved is the
+  evaluation). Passes are handled inline at depth 0 as well, so
+  depth-1 nodes can skip computing the children's hashes entirely
 
-**aspiration window は採用していない**。PVS の null-window エントリと共有
-置換表の上で干渉し、根の値の厳密性が壊れることをバイセクトで特定した
-(参照 negamax との一致テストが失敗した)。
+**Aspiration windows are not used.** Bisection identified that they
+interfere with PVS null-window entries on the shared transposition
+table and break the exactness of the root value (the agreement test
+against the reference negamax failed).
 
-**LMR (遅い手ほど零幅窓の下読みを浅くする) も採用していない**。零幅窓・
-選択読み限定、3 手目以降を `0.5 + ln(深さ)·ln(手番号)/2.2` ply 削減、
-fail-high は全深さで読み直す形で実装し、深さ 14 でノード -31%・最善手
-不変まで確認したが、**直接対戦で明確に負けた** (400 局ずつ、gtp 自己対戦・
-1 スレッド: 深さ 8 固定で 44.4%、300ms/手の時間制で 41.3%)。時間制の方が
-悪いのは、深く読むほど縮めた探索の値が置換表の境界に混ざる害が増えるため
-と見ている。当方の木は評価並べ替えで実効分岐 ~3 まで細く、MPC の σ も
-「縮めない下読み」で較正してあるので、その上に別種の縮小を重ねる余地が
-なかった。再挑戦するなら並べ替え値の不足分で削減量をゲートする形だが、
-8pt 級の負けを埋める見込みは薄い。
+**LMR (searching later moves less deeply under a zero-width window) is
+not used either.** It was implemented restricted to zero-width windows
+and selective search, reducing moves from the 3rd onwards by
+`0.5 + ln(depth)·ln(move number)/2.2` ply and re-searching every
+fail-high at full depth, and it was confirmed down to -31% nodes at
+depth 14 with the best move unchanged — but it **clearly lost in
+head-to-head play** (400 games each, gtp self-play, 1 thread: 44.4% at
+fixed depth 8, 41.3% under a 300ms-per-move time control). We read the
+time control being the worse of the two as this: the deeper the search
+runs, the more harm the reduced searches' values do as they mix into
+the transposition table's bounds. Our tree is already thinned to an
+effective branching factor of ~3 by evaluation ordering, and the MPC σ
+is calibrated on "shallow searches that are not reduced", so there was
+no room left to stack another kind of reduction on top. A retry would
+have to gate the reduction on how far short the ordering value falls,
+but the prospect of making up an 8pt loss is thin.
 
-**NNUE 葉評価のキャッシュ (8 バイト/エントリ、48bit タグ + 1/256 石の i16)
-も採用していない**。葉評価は総時間の約 35% を占める (2 倍化計測で
-1.50→2.03 秒) が、**ヒット率が 10.5% しかなく** (深さ 18・6 局面・2^18
-エントリ)、当たらない 9 割の probe/store が上乗せになって逆に遅い
-(1.55→1.68 秒)。容量を増やすほど悪化する (2^16 で 1.58、2^20 で 1.95、
-2^24 で 2.61 秒) — probe がほぼ外れるのでテーブルはキャッシュ圧にしか
-ならない。H=16 の評価は 1 回 ~100ns で、キャッシュのランダムアクセスと
-同じ桁。**評価が μs 級のネットなら成立する手法で、評価を軽く作った当方には
-前提がない**。同じ理由で、索引更新 (`ix_apply`、総時間の約 19% = 1 回
-~15ns の L1 常駐 CSR ループ) を大テーブルの引き算に置き換える案も、
-テーブルが L2 (12MB) に収まらず 1 回のロードが現状の全費用を超えるので
-実装せずに却下した。
+**A cache for NNUE leaf evaluations (8 bytes/entry, a 48bit tag plus
+an i16 in units of 1/256 disc) is not used either.** Leaf evaluation
+accounts for about 35% of total time (1.50→2.03 seconds in a doubling
+measurement), but **the hit rate is only 10.5%** (depth 18, 6
+positions, 2^18 entries), and the probe/store on the 9 tenths that
+miss is added on top, making it slower instead (1.55→1.68 seconds).
+The larger the capacity the worse it gets (1.58 at 2^16, 1.95 at 2^20,
+2.61 seconds at 2^24) — the probes nearly always miss, so the table
+does nothing but add cache pressure. One H=16 evaluation takes ~100ns,
+the same order as a random access into the cache. **The technique
+works for nets whose evaluation costs microseconds; with an evaluation
+built as light as ours, the premise is absent.** For the same reason,
+the idea of replacing the index update (`ix_apply`, about 19% of total
+time = an L1-resident CSR loop of ~15ns per call) with a subtraction
+from a large table was rejected without implementing it: the table
+does not fit in L2 (12MB) and a single load would cost more than the
+entire current cost.
 
-### 対局用の中盤 (`midgame.rs`) を速くした 2 つ
+### Two speedups for the game-play midgame (`midgame.rs`)
 
-対局で使う NNUE 中盤は `src/midgame.rs`。**木も答えも変えずに** NPS だけを
-27% 上げた 2 つを残しておく。どちらも「同じノード数・同じ着手」を確かめて
-から採っている (深さ 10/12/14/16 で着手が全て一致)。
+The NNUE midgame used in games is `src/midgame.rs`. Two changes that
+raised NPS by 27% **without changing the tree or the answers** are
+recorded here. Both were adopted only after confirming "same node
+count, same move" (moves identical at depths 10/12/14/16).
 
-**索引は戻さず写す (+19%)。** `ix_undo` は裏返った石ごとに CSR を引き直す。
-置いた 1 マスと裏返り分で 40 前後の更新になり、しかも 1 つ前の結果を待って
-から次を書く鎖なので並べられない。対して `PatternIndices` は 160 バイトの
-固定配列で、**丸ごと写す方が命令数が少なく鎖も切れる**。線形探索も終盤
-ソルバも既にこの形で、NNUE の中盤だけが取り残されていた
-(8.25 → 9.81 Mnps、40 局面・深さ 14・1 スレッド)。
+**Copy the indices instead of undoing them (+19%).** `ix_undo` walks
+the CSR again for every flipped disc. With the placed square plus the
+flips that comes to around 40 updates, and it is a chain that waits
+for the previous result before writing the next, so nothing can be
+issued in parallel. `PatternIndices`, by contrast, is a fixed 160-byte
+array: **copying it wholesale takes fewer instructions and breaks the
+chain**. The linear search and the endgame solver were already in this
+form; only the NNUE midgame had been left behind (8.25 → 9.81 Mnps, 40
+positions, depth 14, 1 thread).
 
-**子の置換表の行を親から引き寄せる (+8.5%)。** 536MB の表はほぼ必ず主記憶
-まで行くのに、`negamax` の入口は「ハッシュを作って即引く」で先読みを挟む
-隙が無い。**親が出す** — `ordered_into` は子の盤面を既に作っているので、
-そこでハッシュを作って `prfm` だけ置いておけば、残りの手を並べている間に
-往復が終わる。引き寄せ先は L2 が最良 (10.59 対 L1 の 10.46 Mnps)。
-9.81 → 10.49 Mnps、深さ 16 の 8 スレッドでも 30.0 → 36.7 Mnps。
+**Prefetch the child's transposition-table line from the parent
+(+8.5%).** The 536MB table almost always reaches main memory, yet the
+entry point of `negamax` is "build the hash and probe immediately",
+leaving no room to insert a prefetch. **Let the parent issue it** —
+`ordered_into` has already built the child's board, so building the
+hash there and merely issuing a `prfm` lets the round trip finish
+while the remaining moves are being ordered. L2 is the best prefetch
+target (10.59 versus 10.46 Mnps for L1). 9.81 → 10.49 Mnps, and
+30.0 → 36.7 Mnps at depth 16 with 8 threads.
 
-### ProbCut (MPC) — 最大の探索効率化
+### ProbCut (MPC) — the largest search-efficiency gain
 
-浅い探索の結果から深い探索の結果を統計的に予測し、窓を確信度マージン付きで
-超えたら深い探索を省略する選択的枝刈り。null-window ノード限定 (PV 上では
-行わない)。
+Selective pruning that statistically predicts the result of a deep
+search from the result of a shallow one and skips the deep search when
+the shallow result passes the window by a confidence margin.
+Restricted to null-window nodes (never on the PV).
 
-較正は実測ベース。検証用棋譜から 3000 局面を抽出し、**局面ごとに置換表を
-クリアした独立探索**を深さ 0/2/4/6/8/10 で回して誤差分布を採り、
-2 次モデル `σ(空きマス, 深度, 縮小深度)` をフィットした
-(較正ツール `mpccalib` + フィットスクリプト)。
+Calibration is measurement-based. 3000 positions were extracted from
+validation games and searched at depths 0/2/4/6/8/10 as **independent
+searches with the transposition table cleared for every position** to
+collect the error distribution, and a quadratic model
+`σ(empties, depth, reduced depth)` was fitted to it (calibration tool
+`mpccalib` plus a fitting script).
 
-- 縮小深度は `2*(d/4) + (d&1)` — 約 1/4 だが**パリティを保つ**
-  (テンポのパリティが評価誤差に強く効くため)
-- 静的評価で先にゲートしてから縮小探索を撃つ 2 段構え
-- 再帰は 2 段まで。**probcut の結果は置換表に書かない** (未証明のバウンドが
-  深度タグ付きの確定値に偽装するのを防ぐ)
-- 既定は OFF。`Searcher::mpc` / `mpc_t` で有効化 (厳密性テストは OFF 前提)
+- The reduced depth is `2*(d/4) + (d&1)` — roughly a quarter, but
+  **parity-preserving** (tempo parity has a strong effect on the
+  evaluation error)
+- Two stages: gate on the static evaluation first, then fire the
+  reduced search
+- Recursion goes two levels at most. **ProbCut results are never
+  written to the transposition table** (this keeps an unproven bound
+  from masquerading as a settled value carrying a depth tag)
+- Off by default. Enabled through `Searcher::mpc` / `mpc_t` (the
+  exactness tests assume it is off)
 
-効果 (FFO40-52 中盤モード):
+Effect (FFO40-52, midgame mode):
 
-| 深度 | MPC なし | MPC あり | 削減 |
+| Depth | Without MPC | With MPC | Reduction |
 |---|---|---|---|
-| 10 | 3.42M ノード | 257k | **-92%** |
-| 12 | 18.4M ノード | 597k | **-97%** |
+| 10 | 3.42M nodes | 257k | **-92%** |
+| 12 | 18.4M nodes | 597k | **-97%** |
 
-**同深度での棋力劣化がないこと**を 800 局 × 2 で確認済み (47.7% / 47.1%、
-いずれも有意差なし)。そのうえで **MPC depth12 は非 MPC depth10 に 55.3% で
-有意に勝ち越す** (ノードは 1/5.7)。深度を上げるほど削減率が伸びるため、
-実用時間内での深度引き上げが可能になった。
+**No strength loss at equal depth** has been confirmed over 800 games
+× 2 (47.7% / 47.1%, neither significant). On top of that, **MPC at
+depth 12 beats non-MPC at depth 10 significantly, at 55.3%** (1/5.7
+the nodes). Since the reduction grows with depth, raising the depth
+within practical time became possible.
 
 ---
 
 ---
 
-## 終盤完全読み (solver)
+## Endgame exact solve (solver)
 
-`src/solver.rs`。空きマス数を深さの代理指標として、残り空きマスに応じた
-戦略の段階切り替えを行う。
+`src/solver.rs`. Using the empty count as a proxy for depth, the
+strategy is switched in stages according to the remaining empties.
 
-| 空きマス | 戦略 |
+| Empties | Strategy |
 |---|---|
-| 7 以上 | PVS + 置換表 + ETC + 評価関数による並べ替え |
-| 5〜6 | 素の αβ + **浅域専用の小型置換表** |
-| 4 | `last4` (象限パリティ順の特化探索) |
-| 3/2/1 | `last3` / `last2` / `last1` (再帰なしの直接計算) |
+| 7 or more | PVS + transposition table + ETC + evaluation-based ordering |
+| 5-6 | plain αβ + **a small transposition table dedicated to the shallow region** |
+| 4 | `last4` (specialised search in quadrant-parity order) |
+| 3/2/1 | `last3` / `last2` / `last1` (direct computation, no recursion) |
 
-### 段階的な並べ替え
+### Staged move ordering
 
-空きマスが多いほど 1 ノードあたりの部分木が巨大なので、並べ替えに手間を
-かける価値がある。**空きマス数に応じて並べ替えの精度を段階的に引き上げる**:
+The more empties there are, the larger the subtree under one node, so
+it is worth spending effort on the ordering. **The precision of the
+ordering is raised in stages according to the empty count**:
 
-| 空きマス | 並べ替え |
+| Empties | Ordering |
 |---|---|
-| 21 以上 | 評価関数 + **4 手先読み** (枝刈りあり) |
-| 16 以上 | 評価関数 + **2 手先読み** |
-| 14 以上 | 評価関数 (0 手) |
-| 14 未満 | 静的ヒューリスティック (相手モビリティ + 角の確定石) |
+| 21 or more | evaluation + **4-ply lookahead** (with pruning) |
+| 16 or more | evaluation + **2-ply lookahead** |
+| 14 or more | evaluation (0 ply) |
+| below 14 | static heuristics (opponent mobility + corner stable discs) |
 
-並べ替えの鍵は、評価値だけで並べないことにある。評価値と**同じ重み**で
-相手のモビリティを加算するのが単独では最大の改善だった
-(深い問題群でノード -33%)。
+The key to the ordering is not to order by the evaluation alone.
+Adding the opponent's mobility **at the same weight** as the
+evaluation was the single largest improvement (-33% nodes on the deep
+problem set).
 
-**「置換表の手が cut しなかった零幅窓ノード (All ノード濃厚) は静的並べ替えに
-落とす」は棄却。** どうせ全子を探索するなら並び順は費用だけ、という理屈だが、
-実測は band22 で中立 (ノード +0.7%・時間誤差内)、band29 で**ノード +6.3%・
-時間 +5.7% 悪化**。fail-low の予測が外れた節で cut が遅れるのに加え、悪い順で
-探索した子が置換表を悪い形で温めるので、All ノードでも並び順はただでは
-落とせない。
-評価関数は「その手が相手に何手残すか」を直接には表現しないため、
-両者は補完的に効く。現在の並べ替えキーは
+**"Drop zero-width nodes whose transposition-table move failed to cut
+(likely All nodes) down to static ordering" was rejected.** The
+reasoning was that if every child is going to be searched anyway the
+order is nothing but cost; the measurement was neutral at band22
+(+0.7% nodes, time within noise) but **+6.3% nodes and +5.7% time
+worse at band29**. On top of cuts being delayed at nodes where the
+fail-low prediction was wrong, children searched in a bad order warm
+the transposition table in a bad shape, so even at All nodes the order
+cannot be dropped for free.
+The evaluation does not directly express "how many moves this move
+leaves the opponent", so the two work complementarily. The current
+ordering key is
 
-    評価値 × 8 ＋ 相手の応手数 × 12 − 辺の確定石 × 1   (小さいほど先)
+    eval × 8 + opponent replies × 12 − edge stable discs × 1   (smaller first)
 
-で、係数は実測で決めた (応手1手 ≒ 評価1.5石)。辺の確定石は
-モビリティの 1/16 のスケールで足す。
+and the coefficients were fixed by measurement (one reply ≒ 1.5 discs
+of evaluation). Edge stable discs are added at 1/16 of the scale of
+mobility.
 
-先読みは全幅ではなく枝刈り付きの `shallow_search` を使い、さらに**節の
-alpha で上限を切る**。並べ替えは候補の優劣が付けば
-十分で、見込みのない手の正確な値を証明する必要はない。先読みは子局面
-視点で走るので、節の alpha は符号を反転して上限になる (下限として渡すと
-ノードが 44〜71% 悪化する)。
+The lookahead is not full width but uses `shallow_search` with
+pruning, and on top of that **caps the value with the node's alpha**.
+The ordering only needs the candidates to be ranked; it does not need
+to prove the exact value of hopeless moves. The lookahead runs from
+the child position's point of view, so the node's alpha becomes an
+upper bound with its sign flipped (passing it as a lower bound makes
+nodes 44-71% worse).
 
-**奇数深度の先読みは使わない** — テンポのパリティにより並べ替え品質が
-かえって落ちることを実測で確認している。
+**Odd-depth lookahead is not used** — measurements confirm that tempo
+parity makes the ordering quality worse instead.
 
-マス種別テーブルと潜在モビリティは並べ替えに入れていない。
-どちらもモビリティの 1/1000 以下が想定された純粋なタイブレーカーで、
-当方の整数キーでは表現できるスケールにない。実際、相対比を無視して
-足すと浅い局面は改善するが深い局面が 4〜31% 悪化した。
+The square-type table and potential mobility are not part of the
+ordering. Both were pure tiebreakers expected to be under 1/1000 of
+mobility, a scale our integer key cannot represent. Indeed, adding
+them while ignoring the relative ratio improved shallow positions but
+made deep ones 4-31% worse.
 
-### 象限パリティ
+### Quadrant parity
 
-盤を 4 象限に分け、**空きマスが奇数の象限の手を先に試す**
-(`parity_of` / `odd_quadrant_mask`)。最終手番の取り合いに直結する終盤の
-定石的な並べ替え。`last4` / `last3` にも組み込んである。
+The board is split into four quadrants and **moves in quadrants with
+an odd number of empties are tried first** (`parity_of` /
+`odd_quadrant_mask`). A standard endgame ordering rule, tied directly
+to the fight over the last move. It is built into `last4` / `last3`
+as well.
 
-### 全滅 (wipeout) の即時判定
+### Immediate wipeout detection
 
-一方の石が 0 になった時点で以後の着手はあり得ないので、`wipeout_score` が
-その場で ±64 を返す。全滅を招く手は並べ替えでも最優先に置く。
+Once one side's discs reach zero no further move is possible, so
+`wipeout_score` returns ±64 on the spot. Moves that cause a wipeout
+are also placed first in the ordering.
 
-### 選択的ウォームアップパスと推定スコア中心の窓
+### Selective warm-up pass and a window centred on the estimated score
 
-厳密求解の前に、**同じ全深度の終盤探索を確信度付き (selectivity) で一度
-走らせる**。要点は温まった置換表ではなく、**そのパスが返すスコアを
-厳密パスの窓の中心として持ち回る**ことにある。
+Before the exact solve, **the same full-depth endgame search is run
+once with selectivity**. The point is not the warmed transposition
+table but **carrying the score that pass returns over as the centre of
+the exact pass's window**.
 
-- 選択パスは null 窓の節で、評価関数の浅い探索が確信度マージン
-  (`t × σ`、σ は中盤 ProbCut と同じ実測モデル) を超えたら枝を打ち切る
-- パス後、表のエントリは**最善手のみ信頼する扱いに降格**する
-  (`demote_to_seed`)。推定バウンドを厳密探索が信じてはならない
-- 厳密パスはそのスコアを中心に **±6 の窓**から始め、外れた側だけを
-  倍々に広げる
-- 発動は空き 20 以上。それ未満では厳密探索が十分安く、パスのコストを
-  回収できない (FFO1-19 で空き16 なら +24%、14 なら +62% の時間悪化)
-- 段数は 1 段、`t = 1.8`。多段 (1.1 → 1.8 → 2.6) も試したが、最後まで
-  解く用途では段を増やすコストが利得を上回る。多段が意味を持つのは
-  時間制御 (途中で打ち切っても答えが出る) が目的の場合
+- The selective pass cuts a branch at null-window nodes when a shallow
+  evaluation search exceeds a confidence margin (`t × σ`, with the
+  same measured σ model as the midgame ProbCut)
+- After the pass, the table's entries are **demoted to a treatment
+  that trusts the best move only** (`demote_to_seed`). An exact search
+  must not believe estimated bounds
+- The exact pass starts from a **±6 window** centred on that score and
+  widens only the side that failed, doubling each time
+- It triggers at 20 or more empties. Below that the exact search is
+  cheap enough that the pass does not pay for itself (on FFO1-19, +24%
+  time at 16 empties, +62% at 14)
+- One rung, `t = 1.8`. Multiple rungs (1.1 → 1.8 → 2.6) were tried
+  too, but for solving all the way out the cost of extra rungs exceeds
+  the gain. Multiple rungs are meaningful when the goal is time
+  control (an answer comes out even if the search is cut off midway)
 
-**段の間でバウンドを降格しないと機能しない**という落とし穴がある。
-降格を怠ると、慎重な段が粗い段のエントリをそのまま信用し、誤った値を
-再確認するだけになる (FFO51 で全段が +8 を返したが真値は +6)。
+There is a pitfall: **it does not work unless bounds are demoted
+between rungs.** Without the demotion a careful rung trusts a coarse
+rung's entries as they are and merely re-confirms a wrong value (on
+FFO51 every rung returned +8 while the true value is +6).
 
-効果は劇的で、FFO53 で -51%、FFO57 で -62%、FFO59 では 19.3M → 1.8M。
-この仕組みの導入により、以前あった評価関数誘導の seeding
-(`|評価値| ≥ 40` の一方的局面で反復深化して最善手を仕込む) は完全に
-不要になり、削除した。FFO59 の診断で、19.29M ノードのうち探索本体は
-**約 250 ノード**しかなく残りはすべて seeding の評価探索だったことが
-分かっている。
+The effect is dramatic: -51% on FFO53, -62% on FFO57, and 19.3M → 1.8M
+on FFO59. Introducing this mechanism made the earlier
+evaluation-guided seeding (iterative deepening on lopsided positions
+with `|eval| ≥ 40` to plant a best move) completely unnecessary, and
+it was deleted. Diagnostics on FFO59 showed that of 19.29M nodes only
+**about 250** belonged to the search proper, all the rest being
+seeding's evaluation searches.
 
-なお seeding 自体に ProbCut を入れる実験は**逆効果** (#59 が 12.6 倍悪化)
-だった。カットした節は本深度の最善手を格納せずに返るため、種まきの品質が
-落ちて高価な exact 探索側で跳ね返る。**ProbCut は「自分が最終出力の探索」
-向きで、「他の探索の準備」には不向き**。
+An experiment putting ProbCut into the seeding itself was, for its
+part, **counterproductive** (#59 got 12.6 times worse). A node that
+cuts returns without storing the best move for the full depth, so the
+quality of the seeding drops and the expensive exact search pays for
+it. **ProbCut suits a search that is itself the final output, not one
+that prepares another search.**
 
 ---
 
-## 並列探索の正しさ
+## Parallel search correctness
 
-`split_siblings` (YBWC) は子を別スレッドへ渡し、戻ってきた値のうち最良を
-採る。ここに**値と手を取り違える欠陥**が 1 つあった。実戦で 36 石を失って
-初めて表に出たもので、性質と直し方を残しておく。
+`split_siblings` (YBWC) hands children to other threads and takes the
+best of the returned values. There was one **defect that confused a
+value with a move** here. It only came to light after losing 36 discs
+in a real game, so its nature and the fix are recorded.
 
-### fail-soft の下限は「節の値」だが「指す手」ではない
+### A fail-soft lower bound is the node's value, not the move to play
 
-窓 `(α, β)` を割った子は fail-low で返る。fail-soft ではその戻り値は
-**その手の上界**であり、節の値としては正しく使える。しかし**その手が
-最善である証拠にはならない**。同じ変数へ「最大値」と「その値を出した手」を
-同時に積むと、**どの手も窓を超えなかったとき**に、たまたま最大だった
-fail-low の手が「最善手」として返る。
+A child that was given a split of the window `(α, β)` returns a
+fail-low. Under fail-soft that return value is **an upper bound for
+that move**, and it can be used correctly as the node's value. But it
+is **no evidence that the move is best**. If a single variable
+accumulates both "the maximum" and "the move that produced that
+value", then **when no move exceeded the window** the fail-low move
+that happened to be the largest is returned as the "best move".
 
     max = i32::MIN;   best = None;
-    for 子 in 兄弟 {
-        val = -探索(子);
-        if val > max { max = val; best = Some(子); }   // ← ここが誤り
+    for child in siblings {
+        val = -search(child);
+        if val > max { max = val; best = Some(child); }   // ← wrong here
     }
 
-値は正しいので**厳密解のテストは全部通る**。FFO40-59 も 20/20 一致した。
-壊れるのは「返した手を実際に指したときだけ」で、値の検証では見つからない。
+The value is correct, so **every exactness test passes**. FFO40-59
+matched 20/20 as well. It breaks only "when the returned move is
+actually played", which value checks cannot find.
 
-直し方は変数を分けること。値は無条件に、手は**窓を超えた (`val > cur`)
-ときだけ**積む。
+The fix is to separate the variables. The value accumulates
+unconditionally; the move accumulates **only when it exceeds the
+window (`val > cur`)**.
 
-    if val > max { max = val; }                       // 節の値
-    if val > cur && val > best_val { best_val = val; best = Some(子); }
+    if val > max { max = val; }                       // node value
+    if val > cur && val > best_val { best_val = val; best = Some(child); }
 
-### 打ち切りは「窓を超えていない」ことの証明を壊す
+### An abort destroys the proof that the window was not exceeded
 
-兄弟の 1 つが β カットを出すと、残りのスレッドは打ち切られる。**打ち切られた
-子の値は上界ですらない**ので、その値で節を決めてはいけない。カットが出て
-いないのに打ち切りが起きた場合 (期限切れなど) は、節ごと `ABORTED` で
-返して上位に判断を委ねる。
+When one sibling produces a β cut, the remaining threads are aborted.
+**The value of an aborted child is not even an upper bound**, so the
+node must not be decided by that value. When an abort happens without
+a cut having occurred (a deadline expiring, for instance), the whole
+node returns `ABORTED` and leaves the decision to the caller.
 
-`ABORTED = i32::MIN + 1` としてあるのは、`-ABORTED` が `i32::MAX` に
-なって置換表へ書き込まれても `i8` へ丸めた時点で潰れる事故を避けるため。
-**符号を反転して伝える経路が多い**ので、番兵は反転しても壊れない値に
-選ぶ必要がある。
+`ABORTED = i32::MIN + 1` is chosen so as to avoid the accident where
+`-ABORTED` becomes `i32::MAX`, gets written to the transposition table
+and then collapses the moment it is rounded to `i8`. **There are many
+paths that propagate the value with its sign flipped**, so the
+sentinel has to be a value that survives negation.
 
-### 検証器 — 値ではなく「指した手」を確かめる
+### Verifiers — checking the move played, not the value
 
-`cargo test` の外に、実際に指させて確かめる道具を置いてある
-(`src/bin/stress_*.rs`)。
+Outside `cargo test` there are tools that actually make the engine
+play and check the result (`src/bin/stress_*.rs`).
 
-| 道具 | 何を確かめるか |
+| Tool | What it checks |
 |---|---|
-| `stress_par` | 並列探索の**返した手を実際に指し**、逐次の厳密解と石差が一致するか |
-| `stress_mid` | 中盤探索の自己整合 (同じ局面・同じ設定で同じ手を返すか) |
-| `stress_engine` | 実戦の経路 (`Engine::choose_within`) で同じことを確かめる |
-| `stress_stop` | 期限切れで抜けたときに、保険の手が正しく返るか |
+| `stress_par` | **actually plays the move returned** by the parallel search and checks the disc difference against the sequential exact solve |
+| `stress_mid` | self-consistency of the midgame search (does it return the same move for the same position and settings?) |
+| `stress_engine` | the same thing through the real game path (`Engine::choose_within`) |
+| `stress_stop` | that the fallback move is returned correctly when the search exits on a deadline |
 
-**中盤は並列と逐次で一致しない** (Lazy SMP は探索順が非決定的で、そういう
-アルゴリズムである)。だから中盤の検証は「逐次と一致するか」ではなく
-自己整合で見る。一致を期待して書いた最初の版は、正常な非決定性を欠陥と
-報告して 2 時間を溶かした。
+**The midgame does not match between parallel and sequential** (Lazy
+SMP searches in a non-deterministic order; that is the kind of
+algorithm it is). Midgame verification therefore looks at
+self-consistency rather than "does it match the sequential result".
+The first version, written expecting a match, reported normal
+non-determinism as a defect and burned two hours.
 
-再現には**わざと壊す仕掛け**が要る。打ち切りは実戦では数千手に 1 回しか
-起きないので、環境変数で発火頻度を上げられるようにしてある
-(`SOLVER_CHAOS=n` で n 回に 1 回、カットが出ていないスレッドを打ち切る)。
-修正前はこれで 320 局面中 4〜5% が食い違い、修正後は 0 になった。
+Reproduction needs **a mechanism that breaks things deliberately**.
+Aborts happen only about once in several thousand moves in real games,
+so an environment variable can raise the firing rate
+(`SOLVER_CHAOS=n` aborts a thread that has not produced a cut once
+every n times). Before the fix this made 4-5% of 320 positions
+disagree; after the fix, zero.
 
 ---
 
 ---
 
-## 置換表
+## Transposition table
 
-### エントリ設計 (32 バイト)
+### Entry layout (32 bytes)
 
 ```
 black u64 | white u64 | lower i8 | upper i8 | depth u8 | best u8 | flags u8 | pad[3]
 ```
 
-- **ハッシュキーを保持しない**。`(black, white, player)` が局面を完全に
-  同定するので、ハッシュはバケットの選択にのみ使う
-- スコアは i8 で保持し、`i8::MIN` / `i8::MAX` を ±∞ のセンチネルとする
-- 32 バイトなので **2 エントリが 1 キャッシュラインに収まり、2-way
-  連想バケットが単一メモリアクセスで済む**
-- `flags` に used / 手番 / seed の各ビット
+- **No hash key is stored**. `(black, white, player)` identifies the
+  position completely, so the hash is used only to select the bucket
+- Scores are held as i8, with `i8::MIN` / `i8::MAX` as the ±∞
+  sentinels
+- At 32 bytes, **two entries fit in one cache line, so a 2-way
+  associative bucket costs a single memory access**
+- `flags` holds the used / side-to-move / seed bits
 
-### 置換ポリシー
+### Replacement policy
 
-`depth` フィールドには**空きマス数**を入れ、ペアのうち浅い方を追い出す。
-結果として根に近い (= 空きマスが多い) エントリほど生存力が強い。
+The `depth` field holds **the empty count**, and the shallower of the
+pair is evicted. As a result, the closer an entry is to the root (i.e.
+the more empties it has) the stronger its survival.
 
-なお「PV 専用表」も実装して計測したが、**ノード数が 3 問群すべてで
-完全一致** し効果ゼロだった。上記の置換規則により根付近のエントリは
-既に構造的に最も守られており、守る対象が最初から守られていたため。
-PV 専用表が意味を持つのは探索深度基準の置換で根付近が弱者になる
-構成だからで、当方の設計とは**アーキテクチャ非互換**と結論している。
+A "PV-only table" was also implemented and measured, but **the node
+counts matched exactly on all three problem sets** — zero effect. The
+replacement rule above already protects entries near the root
+structurally, so what it set out to protect was protected from the
+start. A PV-only table is meaningful in a design where replacement is
+keyed on search depth and entries near the root are the weak ones; we
+conclude it is **architecturally incompatible** with our design.
 
-### 表の分離
+### Separate tables
 
-- 主表 (可変サイズ、既定 2^26 = 2.1GB)
-- **浅域専用表** (空き 5〜6、2^16): この領域は転置が密だが、
-  空きマス数基準の置換では主表のスロット争いに必ず負けるため分離した
-- 中盤探索の表は評価関数ごとに独立
+- Main table (variable size, 2^26 = 2.1GB by default)
+- **Shallow-region table** (5-6 empties, 2^16): transpositions are
+  dense in this region, but under empty-count-based replacement it
+  always loses the fight for slots in the main table, so it was split
+  out
+- The midgame search's table is separate per evaluation function
 
-置換表の**容量**は終盤性能を強く左右する。数十億ノードを探索する問題に
-対して旧既定の 2^22 エントリ (134MB) は桁違いに過飽和で、上書きが探索
-効率を直接損なっていた。2^26 に広げるとノード -14〜16%、時間 -23〜31%
-(FFO50/51/53/54/57 で一貫)。
+The **capacity** of the transposition table strongly governs endgame
+performance. For problems that search billions of nodes, the old
+default of 2^22 entries (134MB) was oversaturated by orders of
+magnitude, and the overwriting directly hurt search efficiency.
+Widening it to 2^26 gave -14 to -16% nodes and -23 to -31% time
+(consistently across FFO50/51/53/54/57).
 
-なお 4-way 連想化は効果がなかった (2-way と同値)。当方の
-空きマス数ベースの置換規則では、連想度より容量が支配的である。
+4-way associativity, on the other hand, had no effect (identical to
+2-way). Under our empty-count-based replacement rule, capacity
+dominates associativity.
 
-> **重要な不変条件**: 置換表を複数の評価関数で共有してはならない。
-> エントリは局面キーのみで評価関数を識別しないため、共有すると対戦結果が
-> 汚染される (症状: A/B の勝数が完全同数で連発)。学習・対戦系のコードは
-> 1 ゲームごとに `clear()` を呼ぶ。
+> **Important invariant**: a transposition table must never be shared
+> across evaluation functions. Entries identify only the position key
+> and not the evaluation function, so sharing contaminates match
+> results (symptom: A and B win exactly the same number of games, over
+> and over). Training and match code calls `clear()` once per game.

@@ -1,244 +1,278 @@
-# 評価関数
+# Evaluation function
 
-盤面を数値にする部分。マスの組 (パターン) を索く線形評価と、それを置き換えた NNUE。
+The part that turns a board into a number. A linear evaluation that looks up
+groups of squares (patterns), and the NNUE that replaced it.
 
-## 評価関数
+## Evaluation function
 
-![評価パターン](img/patterns.svg)
+![Evaluation patterns](img/patterns.svg)
 
-*既定の **Egaroucid パターン** (16 種 × 4 向き)。濃い緑が 1 つ目の向き、淡い緑が残り 3 つ。*
+*The default **Egaroucid patterns** (16 kinds × 4 orientations). Dark green is the first orientation, pale green the other 3.*
 
-### パターン評価
+### Pattern evaluation
 
-盤面上の決まった形 (パターン) ごとに、その形の石配置を 3 進数インデックスに
-変換して重みテーブルを引き、総和を取る線形モデル。
+A linear model: for every fixed shape (pattern) on the board, the disc
+configuration of that shape is converted into a base-3 index, a weight table
+is looked up, and the results are summed.
 
-インデックスは `0 = 自分, 1 = 相手, 2 = 空` の 3 進数 (先頭マスが最上位桁)、
-テーブルサイズは `3^size`。
+The index is base-3 with `0 = own, 1 = opponent, 2 = empty` (the leading
+square is the most significant digit), and the table size is `3^size`.
 
-どのマスを 1 組にするかは、公開エンジンが使っているものをそのまま採用して
-いる。**Egaroucid パターン**と **Edax パターン**の 2 系統に、前者を広げた
-実験セットを加えた 3 種類を実装している:
+Which squares form a group is taken directly from what the public engines
+use. Implemented are 3 sets: the 2 families **Egaroucid patterns** and
+**Edax patterns**, plus an experimental set that extends the former:
 
-| セット | パターン数 | 向き込みマスク数 | 備考 |
+| Set | Patterns | Masks incl. orientations | Notes |
 |---|---|---|---|
-| `EGAROUCID_PATTERNS` (Egaroucid パターン) | 16 | 64 | 既定。現時点で最強 |
-| `EDAX_PATTERNS` (Edax パターン) | 12 | 46 | — |
-| `EGAROUCID_PLUS_PATTERNS` | 18 | 72 | Egaroucid パターン + `ANGLE_X` + `DIAGONAL4` |
+| `EGAROUCID_PATTERNS` (Egaroucid patterns) | 16 | 64 | Default. The strongest at present |
+| `EDAX_PATTERNS` (Edax patterns) | 12 | 46 | — |
+| `EGAROUCID_PLUS_PATTERNS` | 18 | 72 | Egaroucid patterns + `ANGLE_X` + `DIAGONAL4` |
 
-`EGAROUCID_PLUS` は「学習済み重みの統計分析で、10 セルパターンの序盤ステージ
-テーブルは 2500 万教師局面でも訪問率 6% 未満」という実測から、序盤でも
-完全に学習しきれる小さい形 (`Diagonal4` = 81 セル) を足した実験セット。
-ただしリーグ戦の結果、既定の Egaroucid 16 を上回らなかった。
+`EGAROUCID_PLUS` is an experimental set that adds a shape small enough to be
+learned completely even in the opening (`Diagonal4` = 81 cells), motivated by
+the measurement that "statistical analysis of the trained weights shows the
+opening-stage tables of the 10-cell patterns are visited less than 6% of the
+time even with 25 million training positions". In league play, however, it
+did not beat the default Egaroucid 16.
 
-### ステージ分割と石数特徴
+### Stage split and the disc-count feature
 
-重みは `weights[stage][pattern][index]` の 3 次元。`STAGE_COUNT = 61` で、
-ステージ = 打たれた手数。
+The weights are 3-dimensional, `weights[stage][pattern][index]`.
+`STAGE_COUNT = 61`, and the stage is the number of moves played.
 
-さらに **`num_weights[stage][自分の石数]` (65 エントリ) を加算**する。
-ステージ内では総石数が固定なので、これは実質「石差」を
-表現し、局所パターンだけでは得られない大域情報を補う。
+On top of that, **`num_weights[stage][player disc count]` (65 entries) is
+added**. The total disc count is fixed within a stage, so this effectively
+expresses the **disc difference** and supplies the global information that
+local patterns alone cannot provide.
 
-### 重みファイル形式
+### Weight file format
 
-マジック `BBRVWT02` (v2、石数テーブル付き) / `BBRVWT01` (v1 互換、読み込み可)。
-保存は一時ファイル + `sync_all` + `rename` の**アトミック書き込み**なので、
-中断しても既存の重みが壊れない。ロード時にステージ数・パターン数・
-各テーブルサイズを照合するため、別ライブラリの重みは読み込みに失敗する。
-
----
-
----
-
-## 差分パターンインデックス
-
-探索を最も高速化した施策 (**中盤 NPS +130〜147%**)。
-
-パターン評価の素朴な実装は、評価のたびに全マスクのインデックスを再計算する。
-これが探索コストを支配していたため、**着手/取り消しに合わせてインデックスを
-差分更新**する方式に置き換えた。
-
-核心のトリックは **インデックスを絶対色 (0=黒, 1=白, 2=空) で保持する**こと。
-こうすると手番非依存になるので `apply` / `undo` が side-to-move を気にせず
-済む。白視点で評価するときだけ、事前計算した**桁スワップ表**
-(`swap_tables[size]`、桁 0↔1 を入れ替える対合写像) でインデックスを写す。
-
-実装上の要点:
-
-- 更新エントリは **CSR 形式** (`entries[offsets[sq]..offsets[sq+1]]`) で、
-  「このマスが属するマスクと桁の重み `3^k`」を引く
-- 更新は `digit_diff.wrapping_mul(pow3)` の `wrapping_add`。差分は 2 の補数
-  だが真の結果が常に `0..3^size` に収まるためラップ演算で厳密に正しい
-- 加算順序を再計算版 `Evaluator::eval` と一致させてあり、**f32 ビット完全一致**
-  (`test_eval_indices_bit_exact_with_eval` が検証)
-- `PatternIndices` は `[u16; 80]` の `Copy` 型
-
-終盤 solver の並べ替え用評価もこの差分化により **FFO40-49 で時間 -25%
-(ノード数は完全一致)** を達成した。
+Magic `BBRVWT02` (v2, with the disc-count table) / `BBRVWT01` (v1
+compatible, still readable). Saving is an **atomic write** — temporary file +
+`sync_all` + `rename` — so an interruption never corrupts the existing
+weights. On load the stage count, the pattern count and each table size are
+checked, so weights from a different library fail to load.
 
 ---
 
 ---
 
-## NNUE 評価関数
+## Incremental pattern indices
 
-線形パターン評価は MSE 損失が凸で、held-out MSE が **~39 石²** で頭打ちになる
-(特徴間の相互作用を表現できない)。同じ増分パターン特徴を非線形に通す NNUE で
-この床を破った。
+The change that sped up the search the most (**midgame NPS +130-147%**).
+
+The naive implementation of pattern evaluation recomputes the indices of
+every mask on each evaluation. That dominated the search cost, so it was
+replaced by a scheme that **updates the indices incrementally as moves are
+played and taken back**.
+
+The core trick is to **hold the indices in absolute colors (0 = black,
+1 = white, 2 = empty)**. That makes them independent of the side to move, so
+`apply` / `undo` do not have to care about it. Only when evaluating from
+White's point of view is the index mapped through a precomputed **digit-swap
+table** (`swap_tables[size]`, an involution that exchanges digits 0 and 1).
+
+Implementation notes:
+
+- The update entries are in **CSR form**
+  (`entries[offsets[sq]..offsets[sq+1]]`), giving "the mask this square
+  belongs to and the digit weight `3^k`"
+- The update is a `wrapping_add` of `digit_diff.wrapping_mul(pow3)`. The
+  difference is two's complement, but since the true result always fits in
+  `0..3^size` the wrapping arithmetic is exactly correct
+- The order of addition is kept identical to the recomputing
+  `Evaluator::eval`, so the results are **bit-exact in f32**
+  (`test_eval_indices_bit_exact_with_eval` verifies this)
+- `PatternIndices` is a `Copy` type of `[u16; 80]`
+
+Making the endgame solver's move-ordering evaluation incremental in the same
+way achieved **-25% time on FFO40-49 (with node counts exactly identical)**.
+
+---
+
+---
+
+## NNUE evaluation function
+
+The linear pattern evaluation has a convex MSE loss, and its held-out MSE
+plateaus at **~39 disc²** (it cannot express interactions between features).
+Feeding the same incremental pattern features through a non-linear NNUE broke
+that floor.
 
 ```text
-アクティブ特徴 (64 マスク) ──▶ feature transformer (H 次元/特徴、全ステージ共有)
-                                    │ 総和 = accumulator (H)
+active features (64 masks) ──▶ feature transformer (H dims/feature, shared by all stages)
+                                    │ sum = accumulator (H)
                                     │ ReLU
                                     ▼
-                        ステージ別線形読み出し ──▶ 評価値 (石差)
+                        per-stage linear readout ──▶ evaluation (disc difference)
 ```
 
-### 到達点 (v0002_valfull 1373 万局面)
+### Where it stands (v0002_valfull, 13.73 million positions)
 
-| 評価関数 | val MSE | 速度 (対線形) |
+| Evaluation function | val MSE | Speed (vs linear) |
 |---|---|---|
-| 線形評価 | 39.09 | 1.00x |
-| Egaroucid 本番 | 38.95 | — |
+| Linear evaluation | 39.09 | 1.00x |
+| Egaroucid production | 38.95 | — |
 | **NNUE (H=16)** | **36.15** | **0.98x** |
 
-同一探索深度の純評価対戦で線形評価 に **depth4 57.5% / depth6 64.7%** と
-有意勝ち。**MSE の大改善は深いほど優位が拡大**する (小差が depth8 で消えるのとは逆)。
+In pure-evaluation matches at the same search depth it beats the linear
+evaluation significantly, **57.5% at depth4 / 64.7% at depth6**. **A large
+improvement in MSE widens its edge the deeper the search goes** — the
+opposite of a small difference, which vanishes by depth8.
 
-### 速度: 16.3x → 0.98x の内訳 (MSE は完全不変)
+### Speed: the 16.3x → 0.98x breakdown (MSE completely unchanged)
 
-**この表の倍率は NPS 比と時間比の両方**である。全幅固定深度の巡回なので線形も
-NNUE も同一のノード集合 (6,248,308) を訪問し、両者は定義上一致する。
+**The ratios in this table are both NPS ratios and time ratios.** The sweep
+is full-width at fixed depth, so the linear and the NNUE versions visit the
+same node set (6,248,308), and the two coincide by definition.
 
-| 段階 | 対線形 | val MSE | 効いた理由 |
+| Step | vs linear | val MSE | Why it worked |
 |---|---|---|---|
-| f32 スカラー・増分維持 | 16.3x | 36.100 | — |
-| int16 量子化 + NEON | 2.64x | 36.148 | FT のメモリが半分、SIMD 幅 2 倍 |
-| 視点 interleave (2H 一括更新) | 1.51x | 36.148 | マスクあたりのロードが半減 |
-| **leaf 再構成方式** | **1.12x** | 36.148 | **内部ノードの累算を撤廃** |
-| 視点別の分離 FT | 1.05x | 36.148 | leaf のロード量が半減 |
-| **4 分割の部分和 + prefetch** | **0.98x** | **36.148** | 64 行の直列依存を分断 |
+| f32 scalar, incrementally maintained | 16.3x | 36.100 | — |
+| int16 quantization + NEON | 2.64x | 36.148 | Half the FT memory, 2x the SIMD width |
+| Interleaved viewpoints (2H updated at once) | 1.51x | 36.148 | Half the loads per mask |
+| **Leaf reconstruction scheme** | **1.12x** | 36.148 | **Accumulation at internal nodes removed** |
+| Separate FT per viewpoint | 1.05x | 36.148 | Half the load volume at leaves |
+| **4-way partial sums + prefetch** | **0.98x** | **36.148** | Breaks the serial dependency of 64 rows |
 
-int16 化以降はすべて**ビット同一の変形** (レイアウト変更と命令並列化) なので
-**MSE は 36.148 で完全に固定**。線形評価より速く、かつ精度は落ちていない。
+Everything from int16 onwards is a **bit-identical transformation** (layout
+changes and instruction-level parallelism), so **the MSE stays pinned at
+36.148**. It is faster than the linear evaluation and has lost no accuracy.
 
-**最大の一手は「増分維持をやめる」こと**だった。make/unmake で accumulator を
-維持すると 1 手あたり ~50 本のランダムキャッシュライン (2H 幅 × old/new ×
-マスク重複) を踏む。内部ノードは線形と同じ 2 バイトの index 更新だけにし、
-H 累算を leaf のみで行う方が総メモリトラフィックが小さい。
+**The single biggest step was to stop maintaining the accumulator
+incrementally.** Maintaining it across make/unmake touches ~50 random cache
+lines per move (2H wide × old/new × mask overlap). Restricting internal nodes
+to the same 2-byte index update as the linear version and doing the H
+accumulation only at leaves gives less total memory traffic.
 
-不採用: マスク単位に delta を集約して FT アクセスを 1 回に減らす案は逆に遅い
-(1.83x)。配列ゼロ初期化のコストに対して、返る石が一直線でマスク重複が少ない。
+Rejected: aggregating the deltas per mask to cut the FT accesses down to 1
+is slower instead (1.83x). Against the cost of zero-initializing the
+array, the flipped discs lie on a single line and the masks overlap little.
 
-### 精度: i16 が最適点 (全 val 1373 万局面)
+### Precision: i16 is the optimum (all 13.73 million val positions)
 
-| 精度 | val MSE | f32 比 | 速度 | 採否 |
+| Precision | val MSE | vs f32 | Speed | Verdict |
 |---|---|---|---|---|
-| f32 | 36.100 | — | 5.70x 遅 | ✗ 遅すぎる |
-| i32 | 36.103 | +0.004 | 5.41x 遅 | ✗ 遅すぎる |
-| **i16** | **36.148** | **+0.048** | **0.98x** | **✓ 採用** |
-| i8 | 36.632 | +0.532 | 0.90x | ✗ **精度を落とすので不採用** |
+| f32 | 36.100 | — | 5.70x slower | ✗ Too slow |
+| i32 | 36.103 | +0.004 | 5.41x slower | ✗ Too slow |
+| **i16** | **36.148** | **+0.048** | **0.98x** | **✓ Adopted** |
+| i8 | 36.632 | +0.532 | 0.90x | ✗ **Rejected: it costs accuracy** |
 
-i16 の量子化損失は 0.05 石² (0.1%) で無視できる一方、i32/f32 とは 5 倍の速度差が
-ある。2 バイトなら FT がキャッシュに乗り、NEON も int16x8 で幅が 2 倍になる。
+The quantization loss of i16 is 0.05 disc² (0.1%), negligible, while i32 and
+f32 are 5x slower. At 2 bytes the FT fits in cache, and NEON gets 2x the
+width with int16x8.
 
-**i8 は棄却した**。8% 速いが MSE が +0.48 悪化する。評価精度を落とす取引はしない
-方針であり、未使用でも 20MB の表を構築するコストが残るため、コードごと削除した。
+**i8 was rejected.** It is 8% faster but the MSE degrades by +0.48. The
+policy is not to trade away evaluation accuracy, and even unused it left the
+cost of building a 20MB table, so the code was deleted outright.
 
-> **落とし穴**: 読み出しの NEON (`vmlal_s16`) は **i32 レーンに累算**する。
-> `acc(~16.4k) × w(32k) × H=16 ≈ 2e9` は i32 を溢れ、**評価の符号が反転**する
-> (実測 f32 +115 に対し i16 -104)。読み出しスケールは i32 上限から逆算した値に
-> 制限している。`test_eval_paths_agree` が f32・増分・leaf 再構成の 3 経路の
-> 一致を検証し、この桁溢れを検出した。
+> **Pitfall**: the NEON readout (`vmlal_s16`) **accumulates into i32 lanes**.
+> `acc(~16.4k) × w(32k) × H=16 ≈ 2e9` overflows i32 and **flips the sign of
+> the evaluation** (measured: f32 +115 against i16 -104). The readout scale
+> is capped at a value derived backwards from the i32 limit.
+> `test_eval_paths_agree` verifies that the 3 paths — f32, incremental and
+> leaf reconstruction — agree, and it caught this overflow.
 
-### H (accumulator 幅) の選択
+### Choosing H (the accumulator width)
 
-**増分維持方式のときの測定** (2026-07-27):
+**Measured under the incrementally maintained scheme** (2026-07-27):
 
-| H | val MSE | 速度 | 当時の判定 |
+| H | val MSE | Speed | Verdict at the time |
 |---|---|---|---|
-| 64 | 33.83 | 遅い | 最強だが重い |
-| **16** | **36.15** | **0.98x** | **採用** |
-| 8 | 39.78 | 0.96x | 線形より速いが**線形より弱い**ので無意味 |
+| 64 | 33.83 | Slow | Strongest but heavy |
+| **16** | **36.15** | **0.98x** | **Adopted** |
+| 8 | 39.78 | 0.96x | Faster than linear but **weaker than linear**, so pointless |
 
-H=8 は線形を上回れず、速くても意味がない。当時は H=16 が強さと速度の最適点
-だった。
+H=8 cannot beat the linear evaluation, so its speed means nothing. At the
+time H=16 was the optimum between strength and speed.
 
-**判定は 2026-08-17 に測り直しても変わらなかった。** leaf 再構成方式に変えて
-内部ノードの累算を撤廃したので「H の代償は消えたのでは」と疑ったが、消えて
-いない。本番経路を線形基準で 3 回ずつ交互に測った実測:
+**Re-measuring on 2026-08-17 did not change the verdict.** Since the switch
+to leaf reconstruction removed the accumulation at internal nodes, there was
+reason to suspect that "the price of H is gone now" — it is not. Measured on
+the production path, alternating with the linear baseline 3 times each:
 
-| H | 対線形 | 実測 nps | val MSE |
+| H | vs linear | Measured nps | val MSE |
 |---|---|---|---:|
-| **16** | **0.96〜1.15x** | **9.5〜11.0 Mnps** | **31.05** |
-| 64 | 2.06〜2.18x | 4.95〜5.24 Mnps | 27.63 |
+| **16** | **0.96-1.15x** | **9.5-11.0 Mnps** | **31.05** |
+| 64 | 2.06-2.18x | 4.95-5.24 Mnps | 27.63 |
 
-**幅 4 倍で約 2 倍遅い。** 幅を広げると評価は確かに良くなる (MSE −3.4) が、
-その優位は深さで洗い流される。直接対戦 (`gtp` + `roundrobin`) の結果:
+**4x the width is about 2x slower.** Widening does improve the
+evaluation (MSE −3.4), but that edge is washed out by depth. Results of
+head-to-head play (`gtp` + `roundrobin`):
 
-| 条件 | 局数 | H=64 の勝率 |
+| Condition | Games | H=64 win rate |
 |---|---:|---|
-| 深さ 8 固定 | 200 | **60.8%** |
-| **300 ms/手** | 400 | 52.6% (95% CI 47.7..57.5) |
+| Fixed depth 8 | 200 | **60.8%** |
+| **300 ms/move** | 400 | 52.6% (95% CI 47.7..57.5) |
 
-**深さ固定だけを見ていたら誤って出荷していた。** 深さ固定は速度を無視する
-ので評価の質しか測らない。実戦条件では有意差が消える。
+**Looking only at fixed depth would have shipped the wrong thing.** Fixed
+depth ignores speed, so it measures only the quality of the evaluation. Under
+game conditions the difference disappears.
 
-> **一度「代償は 8%」と書いたが、あれは欠陥のあるビルドで測った無効な数字
-> だった。** `accumulate_rows` の NEON 部分和が `[int16x8_t; 2]` 固定で、
-> H=64 では 64 レーン中 16 レーンしか足していなかった (修正済み)。総和の
-> 仕事が 1/4 なら速く見えて当然である。**速度を測る前に、そのビルドで
-> `cargo test` を通すこと** — `test_eval_paths_agree` がこの欠陥を捕まえる。
+> **It was once written that "the price is 8%", but that was an invalid
+> number measured on a defective build.** The NEON partial sums in
+> `accumulate_rows` were fixed at `[int16x8_t; 2]`, so at H=64 only 16 of the
+> 64 lanes were being added (since fixed). Of course it looks fast when the
+> summation does 1/4 of the work. **Before measuring speed, make
+> `cargo test` pass on that build** — `test_eval_paths_agree` catches this
+> defect.
 
-なお同じ 2026-07-27 の 3 点 (H=8 39.67 / H=16 36.10 / H=64 33.63) は
-**幅が MSE には単調に効く**ことを示している。「H=64 (33.63) より H=16 の方が
-良い」という後年の記述は、H=64 の旧値を**学習データも手順も違う**新しい
-H=16 (31.05) と比べた誤り。ただし結論 (H=16 を採る) は速度の側から正しい。
+Incidentally, the 3 points from that same 2026-07-27 run (H=8 39.67 /
+H=16 36.10 / H=64 33.63) show that **width acts monotonically on MSE**. The
+later statement that "H=16 is better than H=64 (33.63)" was an error that
+compared the old H=64 figure against a newer H=16 (31.05) trained on
+**different data by a different procedure**. The conclusion (take H=16) is
+nevertheless correct, on the speed side.
 
-### 探索の並列化 (YBWC + Lazy SMP)
+### Parallelizing the search (YBWC + Lazy SMP)
 
-NNUE 中盤探索は二本立てで並列化してある。**浅い反復は
-Lazy SMP、深い反復は YBWC**。両者はプロセス寿命の単一スレッドプールを
-共有する。
+The NNUE midgame search is parallelized in two ways. **Shallow iterations use
+Lazy SMP, deep iterations use YBWC.** Both share a single thread pool that
+lives for the whole process.
 
-以前は逐次との**完全一致**を要件にしていたが、それでは helper が主スレッドに
-一切寄与できず 1.10x が上限だった。非決定性を性質として受け入れ、代わりに
-棋力を直接測る方針に変えてある。
+Exact agreement with the sequential search used to be a requirement, but that
+left helpers unable to contribute anything to the main thread and capped the
+speedup at 1.10x. Non-determinism is now accepted as a property, and playing
+strength is measured directly instead.
 
-#### 棋力の検証は同一エンジン同士の直接対局で行う
+#### Strength is verified by head-to-head games between identical engines
 
-外部エンジン相手の勝率では検出できない。200 局でも 95% 信頼区間が ±7% あり、
-実際にこの測定を根拠に「並列化は棋力を落としていない」と繰り返し誤判定した。
-`lab --self-vs <threads>` が**同じネット・同じ深さ・同じ終盤閾値で
-スレッド数だけを変えて**自己対局する。同一深さなら 50% になるはずで、
-下回ればそれが棋力低下である。
+Win rates against an external engine cannot detect it. Even at 200 games the
+95% confidence interval is ±7%, and this measurement was repeatedly used to
+conclude, wrongly, that "parallelization has not weakened play".
+`lab --self-vs <threads>` plays self-play games **with the same net, the same
+depth and the same endgame threshold, varying only the thread count**. At
+equal depth it should be 50%; anything below that is a loss of strength.
 
-この測定で見つけた欠陥。いずれも「ノード数が減る」形で現れるので、時間だけを
-見ていると高速化に見える:
+Defects found with this measurement. Both show up as "fewer nodes", so
+looking at time alone makes them look like speedups:
 
-| 欠陥 | 症状 |
+| Defect | Symptom |
 |---|---|
-| 置換表が選択度を無視 | helper の過剰枝刈りを主スレッドがそのまま採用 |
-| ABORTED の誤伝播 | 兄弟の fail-high でノード全体を破棄し、その fail-high 自体を捨てる |
+| The transposition table ignored selectivity | The main thread adopted the helpers' over-aggressive pruning as-is |
+| ABORTED propagated wrongly | A sibling's fail-high discarded the whole node, throwing away that fail-high itself |
 
-修正前は 10 並列で **38.8%** (95% CI 30.0..47.5)、石差 -3.14 と有意に弱い。
-見かけ上は 2.57x 速い。修正後は 48.5% / 1.11x。
+Before the fix, 10 threads scored **38.8%** (95% CI 30.0..47.5), disc
+difference -3.14 — significantly weaker. On the surface it was 2.57x faster.
+After the fix, 48.5% / 1.11x.
 
-#### 中盤の並列度は Egaroucid でも木の大きさで決まる
+#### Midgame parallelism is set by tree size for Egaroucid too
 
-**最初に置いた目標「Egaroucid の 6 並列 3.28x」は、中盤の目標として誤りだった。**
-あれは `--edax-threads` で全局の 1 手平均を測った値で、L15 の Egaroucid は 22 空き
-から完全読みに入る。**3 倍超の大半は終盤ソルバの並列度**である。
+**The goal set at the outset, "Egaroucid's 3.28x on 6 threads", was the wrong
+goal for the midgame.** That figure was measured with `--edax-threads` as a
+per-move average over whole games, and Egaroucid at L15 enters the exact
+solve from 22 empties. **Most of the 3x-plus is the parallelism of the
+endgame solver.**
 
-Egaroucid の**中盤だけ**を分離して測る手順: `-noise` を付けると
-`main mid depth ... n_nodes ... time ...` が出る。空き数 > 深さ になる局面を選べば
-主探索が中盤のままになる (30 空きで L21 だと完全読みに入ってしまう)。局面は
-`setboard` の後 `go` を繰り返せば進むので、低レベルで N 手進めて盤面を読み取る。
+How to isolate and measure **Egaroucid's midgame alone**: with `-noise` it
+prints `main mid depth ... n_nodes ... time ...`. Choosing positions where
+empties > depth keeps the main search in the midgame (at 30 empties with L21
+it enters the exact solve). Positions advance by repeating `go` after
+`setboard`, so play N moves at a low level and read the board off.
 
-42 空きの局面、5 巡の最小値:
+A 42-empty position, minimum of 5 rounds:
 
-| Egaroucid level | 木 (1 スレッド) | t=6 | t=8 |
+| Egaroucid level | Tree (1 thread) | t=6 | t=8 |
 |---|---|---|---|
 | 15 | 126k | 2.80x | 2.33x |
 | 17 | 278k | 1.93x | 1.93x |
@@ -247,309 +281,376 @@ Egaroucid の**中盤だけ**を分離して測る手順: `-noise` を付ける�
 | 23 | 4.09M | 3.55x | 5.09x |
 | 25 | 13.1M | 3.31x | 4.51x |
 
-**Egaroucid の中盤並列度も木の大きさに強く依存する。**そして木の大きさを揃えると
-当方はほぼ同等である: 当方 d20 は 1 手 78 万ノードで **2.34x**、Egaroucid の同規模
-L19 (57 万) は **2.48x** — 差 6%。1 手あたりのノード数も近い (当方 d16 で 17 万、
-Egaroucid L15 で 14 万) し、単一スレッド nps も近い (8.2 対 10.1 Mnps)。
+**Egaroucid's midgame parallelism also depends strongly on tree size.** And
+once the tree sizes are matched we are roughly on par: our d20 is 780
+thousand nodes per move at **2.34x**, and Egaroucid's comparably sized L19
+(570 thousand) is **2.48x** — a 6% difference. The nodes per move are close
+too (170 thousand for our d16, 140 thousand for Egaroucid L15), as is
+single-thread nps (8.2 against 10.1 Mnps).
 
-#### 3 倍は木が大きい相で出ている
+#### The 3x shows up in phases where the tree is big
 
-終盤ソルバ (別実装、`Solver::set_threads`) を分離して測ると、10 局・2 巡最小で:
+Isolating the endgame solver (a separate implementation,
+`Solver::set_threads`) and measuring it over 10 games, minimum of 2 rounds:
 
-| 終盤閾値 | 相 | T=1 | T=6 | T=8 |
+| Endgame threshold | Phase | T=1 | T=6 | T=8 |
 |---|---|---|---|---|
-| 22 空き | 終盤 | 9.1s | 3.8s (2.39x) | 3.4s (2.68x) |
-| 24 空き | 終盤 | 26.0s | 11.9s (2.18x) | **8.6s (3.02x)** |
-| 24 空き | 合計 | 28.7s | 13.8s (2.08x) | **10.5s (2.73x)** |
+| 22 empties | Endgame | 9.1s | 3.8s (2.39x) | 3.4s (2.68x) |
+| 24 empties | Endgame | 26.0s | 11.9s (2.18x) | **8.6s (3.02x)** |
+| 24 empties | Total | 28.7s | 13.8s (2.08x) | **10.5s (2.73x)** |
 
-d18 + 24 空き完全読みという実戦的な設定では 6 並列で中盤 1.98x / 終盤 2.33x /
-合計 **2.20x**。**木が数千万ノードになる相では 3 倍が出ており、中盤で出ないのは
-実装ではなく木の大きさが理由**である — Egaroucid も同じ制約を受けている。
+At the practical setting of d18 + a 24-empty exact solve, 6 threads give
+1.98x in the midgame / 2.33x in the endgame / **2.20x overall**. **The 3x
+does appear in phases whose trees run to tens of millions of nodes, so the
+reason it does not appear in the midgame is tree size, not the
+implementation** — Egaroucid is under the same constraint.
 
-#### 到達可能な並列度を先に測る
+#### Measure the reachable parallelism first
 
-自分の速度比だけ見ていても、それが実装の限界かハードの限界か分からない。
-`lab --edax-threads <n>` は**当方を 1 スレッドに固定したまま相手の
-スレッド数だけ変える**ので、同じ機械での Egaroucid の並列効率が直接出る
-(実コア 10、3 巡の最小値):
+Looking only at our own speed ratio does not tell whether it is the limit of
+the implementation or of the hardware. `lab --edax-threads <n>` **keeps us
+pinned to 1 thread and varies only the opponent's thread count**, so it
+yields Egaroucid's parallel efficiency directly, on the same machine (10
+physical cores, minimum of 3 rounds):
 
-| Egaroucid 並列数 | 1 | 2 | 4 | 6 | 8 | 10 |
+| Egaroucid threads | 1 | 2 | 4 | 6 | 8 | 10 |
 |---|---|---|---|---|---|---|
-| 速度比 | 1.00x | 1.47x | 2.43x | **3.28x** | **4.00x** | 3.74x |
+| Speed ratio | 1.00x | 1.47x | 2.43x | **3.28x** | **4.00x** | 3.74x |
 
-この機械で 3 倍は出る。以降の差はすべて実装差として扱ってよい。
+3x is achievable on this machine. Everything short of that may be treated as
+an implementation difference.
 
-#### YBWC の作り
+#### How YBWC is built
 
-- 分割するのは**子に渡す窓が null window のもの** (= 最年長でない子)。親の窓で
-  判定すると PV 系列が丸ごと対象外になり、木の最上部＝最大の部分木を捨てる。
-  直したらワーカー稼働率が 32% から 41% に上がった
-- タスクが fail-high したら兄弟を即打ち切る。
-  ただし**親が null window ノードのときだけ**。PV ノードの fail-high は全窓での
-  再探索を要求するだけで、兄弟は依然として意味を持つ
-- **停止フラグは先祖の分を全部持ち回る**。自ノードの分しか渡さないと、
-  祖先が打ち切っても孫タスクは誰も読まない木を最後まで読み、親はそれを `wait`
-  で待つ。これだけで並列時の余計なノードが**逐次比 1.42 倍から 1.04 倍**に落ちた
-- ただしフラグは**分割しうるノードでだけ確保する**。スタック上の
-  `bool` ならタダだが、こちらはヒープ確保なので全内部ノードで作ると誰も上げられない
-  フラグのために単一スレッド性能を 13% 失う。**扇形展開の打ち切り自体は
-  ローカルの bool で行う** — フラグの有無に依存させると、フラグの無いノード
-  (= 逐次実行時) で fail-high が何も止めず、ノード数が 4 倍になる
-- ワーカーも再帰的に分割する。分割を待つスレッドはキューのタスクを実行しながら
-  待つので、どのタスクも「それを必要とするスレッドの後ろ」で詰まらない
-- **分割の可否はロックを取る前に無ロックで判定する**。分割試行は毎秒数十万回あり、その大半は却下
-  なので、却下を知るためにミューテックスを取ると全探索スレッドが 1 本のロックに
-  直列化する
-- 分割待ちのポーリングはキュー長をアトミックで見てから初めてロックする。
-  空判定のたびにロックすると、待機側が全ワーカーを直列化する
+- What gets split are **children whose window is a null window** (i.e. not
+  the eldest child). Judging by the parent's window puts the whole PV line
+  out of scope, throwing away the top of the tree — the largest subtree.
+  Fixing it raised worker utilization from 32% to 41%
+- When a task fails high, cut the siblings off immediately. But **only when
+  the parent is a null-window node**. A fail-high at a PV node merely demands
+  a re-search with the full window; the siblings still matter
+- **Carry the abort flags of every ancestor.** Passing only the node's own
+  flag means that when an ancestor aborts, grandchild tasks search a tree
+  nobody will read all the way to the end, while the parent `wait`s for them.
+  This alone dropped the extra nodes under parallelism **from 1.42x the
+  sequential count to 1.04x**
+- But **allocate the flag only at nodes that can be split**. A `bool` on the
+  stack is free, but this one is heap-allocated, so creating it at every
+  internal node costs 13% of single-thread performance for a flag nobody can
+  raise. **The fan-out cutoff itself is done with a local bool** — making it
+  depend on the flag means that at nodes without one (i.e. during sequential
+  execution) a fail-high stops nothing and the node count quadruples
+- Workers split recursively as well. A thread waiting on a split runs tasks
+  from the queue while it waits, so no task is ever stuck "behind the thread
+  that needs it"
+- **Decide whether a split is possible without a lock, before taking one.**
+  Split attempts happen hundreds of thousands of times a second and most are
+  refused, so taking a mutex just to learn of the refusal serializes every
+  search thread onto a single lock
+- Polling for a split checks the queue length atomically before taking the
+  lock at all. Locking on every emptiness check lets the waiting side
+  serialize all the workers
 
-#### 並べ替えは「常に採点する」+ ノード種別で重みを変える
+#### Move ordering: "always score" + weights that vary by node type
 
-数値より**形**が重要である。
+The **shape** matters more than the numbers.
 
-1. **常に全手を採点する。** 置換表の手は大きな定数ボーナスで先頭に
-   来るだけで、並べ替え自体は省略しない。当方は置換表の手があると並べ替えを丸ごと
-   飛ばし、残りをビット順で並べていた。そこが**まさに YBWC が分割する年少兄弟**で、
-   順序の悪い兄弟が alpha を超えると扇形展開が止まり、後ろ全部が再探索になる
-2. **ノード種別で重みが違う。** PV ノードは評価値が支配的、null window
-   ノードでは評価値はほとんど効かず着手可能数が支配的。**木の大半は null window
-   ノードなので、木の大半は着手可能数で並べ替えられる**
-3. 着手可能数は重み付き (手数 x2 + 隅の手 +1)、PV ノードではさらに
-   潜在モビリティ (相手の石に隣接する空きマス) を加える
+1. **Always score every move.** The transposition-table move merely comes
+   first thanks to a large constant bonus; the ordering itself is not
+   skipped. We used to skip the ordering entirely when there was a
+   transposition-table move and leave the rest in bit order. Those are
+   **exactly the younger siblings YBWC splits**, and when a badly ordered
+   sibling exceeds alpha the fan-out stops and everything behind it is
+   re-searched
+2. **The weights differ by node type.** At PV nodes the evaluation
+   dominates; at null-window nodes the evaluation barely matters and the
+   mobility count dominates. **Most of the tree is null-window nodes, so most
+   of the tree is ordered by mobility**
+3. Mobility is weighted (moves x2 + corner moves +1), and at PV nodes
+   potential mobility (empties adjacent to the opponent's discs) is added on
+   top
 
-2 は評価が重い当方で特に効く。NNUE 評価は差分パターン評価より
-桁違いに重いので、全 null window ノードの並べ替えに
-それを使うのは予算を最悪の場所に注ぐことになる。
+Point 2 matters especially for us, where evaluation is expensive. The NNUE
+evaluation is orders of magnitude heavier than the incremental pattern
+evaluation, so using it to order every null-window node pours the budget into
+the worst possible place.
 
-d16 / 20 局 / 3 巡最小: **1 スレッドで 26.8s -> 21.3s (-21%)、ノード 172M ->
-111M (-35%)**。棋力は変わらない (対 Egaroucid L15 100 局で 49.0% -> 48.5%、
-いずれも 95% CI が広く差は出ない)。
+d16 / 20 games / minimum of 3 rounds: **26.8s -> 21.3s (-21%) on 1 thread,
+nodes 172M -> 111M (-35%)**. Strength is unchanged (49.0% -> 48.5% over 100
+games against Egaroucid L15; both have wide 95% CIs and show no difference).
 
-#### 浅い null window ノードは専用ルーチンで、置換表を触らない
+#### Shallow null-window nodes get a dedicated routine and never touch the transposition table
 
-NWS は深さで別実装に分ける:
+NWS is split into separate implementations by depth:
 
-- 深さ 1: **置換表もリストも並べ替えも無し**。
-  マス種別の固定優先順 (隅 -> box -> block -> X/C) に合法手を走査し、
-  alpha を超えた瞬間に返す
-- 深さ 2: 置換表は引くが、その手を先に読んでから残りを並べる
-- 深さ 3〜4: YBWC も ETC も無しの簡易並べ替え
+- Depth 1: **no transposition table, no list, no ordering**. Legal moves are
+  scanned in a fixed priority order by square type (corner -> box -> block ->
+  X/C) and it returns the moment alpha is exceeded
+- Depth 2: the transposition table is probed, but its move is searched first
+  and the rest ordered afterwards
+- Depth 3-4: simplified ordering, with neither YBWC nor ETC
 
-深さ 1 の専用化だけで **nps が 4.33 から 6.05 Mnps に上がった (+40%)**。ノード数は
-ほぼ同じなので、丸ごと 400 MB の表への読み書き 2 回ぶんである。深さ 1 の
-null window ノードは木の中で最も数が多く、しかも**分割できる深さより下にある**
-ので、この費用は全部逐次部分から出ていた。
+Specializing depth 1 alone **raised nps from 4.33 to 6.05 Mnps (+40%)**. The
+node count is essentially the same, so that is entirely the 2 read/write
+trips into a 400 MB table. Depth-1 null-window nodes are the most numerous in
+the tree, and **they sit below the depth at which splitting is possible**, so
+this cost was coming entirely out of the sequential part.
 
-> 固定優先順の 4 マスクの論理和は中央 4 マスを含まないが、そこは
-> 初期配置から埋まっていて合法手になり得ないので網羅性に問題はない。
+> The union of the 4 fixed-priority masks does not include the 4 central
+> squares, but those are filled from the initial position and can
+> never be legal moves, so coverage is not a problem.
 
-#### 置換表の手は並べ替えの前に単独で読む
+#### The transposition-table move is searched on its own, before the ordering
 
-置換表の手を先に読み、
-それで打ち切れたら**採点パスが一度も走らない**。当方の採点パスは子ごとに NNUE
-評価を 1 回するので、打ち切りノード (アルファベータ木の約半分) で省けるものとしては
-最も高い。ノード数は完全に一致したまま **nps +5%**。
+The transposition-table move is searched first, and if it produces a cutoff
+**the scoring pass never runs at all**. Our scoring pass runs 1 NNUE
+evaluation per child, so among the things that can be skipped at cutoff nodes
+(about half of an alpha-beta tree) this is the most expensive. Node counts
+stay exactly identical while **nps is +5%**.
 
-#### 置換表は値 1 個ではなく lower/upper の 2 境界を持つ
+#### The transposition table holds 2 bounds, lower/upper, not 1 value
 
-値 1 個 + 「下限/上限/確定」のタグでは、聞かれたことの半分しか答えられない。
-fail-low したノードは上限しか残さないので、次に下限を必要とする窓で来た探索は
-何も学べず読み直す。訪問ごとに両端を同じエントリに積み上げ、
-呼び手が使える側を渡す。ヒット時は窓自体も両側から狭める。
+1 value plus a "lower/upper/exact" tag can answer only half of what is
+asked. A node that failed low leaves only an upper bound, so a search
+arriving later with a window that needs a lower bound learns nothing and
+searches again. Both ends are accumulated into the same entry on every visit,
+and the side the caller can use is handed back. On a hit the window itself is
+narrowed from both sides.
 
-**この実装は 2 回失敗してから通った。** 落としていたのは 3 点:
+**This implementation failed twice before it landed.** 3 things were
+missing:
 
-1. **境界の修復節**。上限を下げるとき下限がそれを超えていたら
-   下限も下げる (逆も同様)。ProbCut は確率的なので同じノードを別の窓で読むと
-   `lower > upper` が実際に起きる
-2. 置換表手・次善手のボーナスは**採点値に加えてからソート**する。2 回
-   `swap(0, i)` すると次善手は 2 番目に来ず、並べ替えが選んだ先頭を弾き飛ばす
-   (これだけでノードが 32% 違った)
-3. 次善手そのものを持つこと
+1. **The bound-repair clause.** When lowering the upper bound, if the lower
+   bound exceeds it, lower the lower bound too (and vice versa). ProbCut is
+   probabilistic, so searching the same node with a different window really
+   does produce `lower > upper`
+2. The bonuses for the transposition-table move and the second-best move must
+   be **added to the score before sorting**. Doing `swap(0, i)` twice does not
+   put the second-best move second, and it kicks out the head that the
+   ordering chose (this alone changed node counts by 32%)
+3. Having the second-best move at all
 
-d16 / 20 局 / 3 巡最小: **1 スレッドで 21.8s -> 18.4s (-16%)、ノード 111M ->
-90M (-19%)**。棋力は対 Egaroucid L15 200 局で 46.0% -> 47.0%、自己対局 120 局で
-6 並列 54.6% (石差 +0.12)。
+d16 / 20 games / minimum of 3 rounds: **21.8s -> 18.4s (-16%) on 1 thread,
+nodes 111M -> 90M (-19%)**. Strength: 46.0% -> 47.0% over 200 games against
+Egaroucid L15, and 54.6% on 6 threads over 120 self-play games (disc
+difference +0.12).
 
-#### 置換表は 3-way・深さ優先で置換する
+#### The transposition table replaces 3-way, depth-first
 
-連続 3 スロットを走査し、**格納しようとしている結果より価値の低い
-スロットだけ**を上書きする (価値は深さ優先)。3 つとも深ければ何も書かない。
+3 consecutive slots are scanned, and **only slots worth less than the
+result being stored** are overwritten (worth is judged depth-first). If all 3
+are deeper, nothing is written.
 
-1-way 直接マップにはこれが表現できない。葉の近くの浅い格納が、その上の反復が
-必要とする深いエントリを毎回追い出す。**単一スレッドでノード -34%、実時間 -24%**。
-並列時はさらに効く — 浅い格納が全ワーカーから同時に来るので、深いエントリが
-ほとんど生き残らない。
+A 1-way direct-mapped table cannot express this. Shallow stores near the
+leaves evict, every time, the deep entries the iteration above them needs.
+**-34% nodes and -24% wall-clock on a single thread.** It helps even more
+under parallelism — shallow stores arrive from every worker at once, so deep
+entries barely survive.
 
-#### アイドル時のみ渡す規則は緩めたほうが速い
+#### Loosening the "hand off only when idle" rule is faster
 
-「ワーカーが**今**空いているときだけ仕事を渡す」規則 (`n_idle > 0`) は、
-緩めた方が速い。年少兄弟が 9 人いてアイドルが 5 本のとき、
-親は 5 個渡してから**残り 4 個を自分で順番に読む** (アイドルが無いので却下される)。
-その間に渡した 5 個 (各 45 µs) は終わり、ワーカーは扇形展開の残りずっと干上がる。
+The rule "hand work to a worker only when it is idle **right now**"
+(`n_idle > 0`) is faster once loosened. With 9 younger siblings and 5 idle
+threads, the parent hands off 5 and then **searches the remaining 4 itself,
+in sequence** (they are refused because nothing is idle). Meanwhile the 5 it
+handed off (45 µs each) finish, and the workers starve for the rest of the
+fan-out.
 
-アイドル数 + `POOL_SLACK` 個までキューに積めるようにする。d16 / 20 局 / 3 巡の
-最小値で 0 -> 2.25x, 2 -> 2.41x, **8 -> 2.47x**, 32 -> 2.18x, 128 -> 2.20x。
-8 を超えると重複探索の代償が占有率の利得を上回る (ノードが 175M から 252M へ)。
+Allow the queue to hold up to the idle count + `POOL_SLACK`. At d16 / 20
+games / minimum of 3 rounds: 0 -> 2.25x, 2 -> 2.41x, **8 -> 2.47x**,
+32 -> 2.18x, 128 -> 2.20x. Beyond 8 the price of duplicated search outweighs
+the gain in occupancy (nodes go from 175M to 252M).
 
-これは**一度棄却した施策の復活**である。以前キューを許すとノードが逐次の 1.87 倍
-に膨らんで負けていた。`searchings` 連鎖でノード膨張が 1.03 倍まで消えたので前提が
-変わった。棄却理由まで記録してあったから復活を判断できた。
+This is **the revival of a measure that was once rejected**. Allowing a queue
+used to inflate the nodes to 1.87x the sequential count and lose. The
+`searchings` chain removed the node inflation down to 1.03x, so the premise
+changed. The revival could be judged only because the reason for the
+rejection had been recorded too.
 
-キューに積むなら**取り出した瞬間に打ち切りを見る**こと。`ABORT_CHECK_INTERVAL` は
-512 ノードなので、待っている間に兄弟が fail-high していても、タスクは 512 ノード
-読んでからやっと気付く。取り出し時に一度見るだけで同設定が 12.0s から 11.2s に
-なった。
+If work is queued, **check for the abort the moment it is dequeued**.
+`ABORT_CHECK_INTERVAL` is 512 nodes, so even if a sibling failed high while
+the task was waiting, the task only notices after searching 512 nodes. A
+single check at dequeue took the same setting from 12.0s to 11.2s.
 
-#### 測定値
+#### Measurements
 
-上限は**独立プロセスを 6 個走らせた合計スループット 5.7x** (共有も同期も無い
-条件、1 コアあたり 94%)。メモリ帯域律速ではない。
+The ceiling is **5.7x of aggregate throughput from 6 independent
+processes** (no sharing, no synchronization; 94% per core). It is not
+memory-bandwidth bound.
 
-d16 / 20 局 / 対 Egaroucid L15、3 巡の最小値 (中盤時間):
+d16 / 20 games / against Egaroucid L15, minimum of 3 rounds (midgame time):
 
-| 版 | 1 並列 | 6 並列 | 速度比 | 1 並列のノード |
+| Version | 1 thread | 6 threads | Speed ratio | Nodes at 1 thread |
 |---|---|---|---|---|
-| 修正前 | 39.6s | 24.0s | 1.65x | 261M |
-| `searchings` 連鎖 + 3-way 置換表 + 無ロック分割判定 | 30.2s | 12.1s | 2.50x | 172M |
-| + 非分割ノードで `Arc` に触らない | 27.3s | 13.0s | 2.10x | 172M |
-| + キュー slack + 取り出し時の打ち切り判定 | 26.8s | 11.5s | **2.46x** (8 並列) | 172M |
-| + 並べ替えの移植 | 21.3s | 10.9s | 1.95x | 111M |
-| + lower/upper 2 境界 + 次善手 | 18.4s | 9.3s | 1.98x | 90M |
-| + キュー slack を 8 から 2 に (再測) | 18.0s | 9.0s | 2.00x | 90M |
-| + 深さ 1 の専用 NWS | 12.4s | 7.9s | 1.57x | 94M |
-| + 置換表の手を先に読む | **11.5s** | **7.2s** | 1.60x | **94M** |
+| Before the fixes | 39.6s | 24.0s | 1.65x | 261M |
+| `searchings` chain + 3-way transposition table + lock-free split test | 30.2s | 12.1s | 2.50x | 172M |
+| + not touching `Arc` at non-split nodes | 27.3s | 13.0s | 2.10x | 172M |
+| + queue slack + abort check at dequeue | 26.8s | 11.5s | **2.46x** (8 threads) | 172M |
+| + the ordering port | 21.3s | 10.9s | 1.95x | 111M |
+| + lower/upper bounds + second-best move | 18.4s | 9.3s | 1.98x | 90M |
+| + queue slack from 8 to 2 (re-measured) | 18.0s | 9.0s | 2.00x | 90M |
+| + dedicated depth-1 NWS | 12.4s | 7.9s | 1.57x | 94M |
+| + searching the transposition-table move first | **11.5s** | **7.2s** | 1.60x | **94M** |
 
-セッション開始時 (1 並列 39.6s / 6 並列 24.0s) からの累積で **1 並列 3.44 倍、
-6 並列 3.33 倍**。速度比は 1.65x から 1.60x へほぼ横ばいだが、これは分母が
-3.4 倍速くなったためで、**実時間では 6 並列が 3.3 倍改善している**。
+Cumulatively from the start of the session (39.6s on 1 thread / 24.0s on 6)
+that is **3.44x on 1 thread and 3.33x on 6 threads**. The speed ratio is
+roughly flat, from 1.65x to 1.60x, but that is because the denominator got
+3.4x faster — **in wall-clock terms 6 threads improved by 3.3x**.
 
-最後の行は**速度比が下がって実時間が縮む**例である。分母が 21% 速くなったので比は
-落ちるが、6 並列の実時間は 8 並列の最良と並ぶ。並列時のノード膨張は 1.02 倍から
-1.26 倍に増えた — 順序が良くなると 1 子で打ち切るノードが増え、分割できる年少
-兄弟が減り、分割が投機的になるからである。**比を目標にすると実時間の改善を
-棄却してしまう**ので、両方を並べて記録する。
+The last row is an example of **the speed ratio falling while wall-clock
+shrinks**. The denominator got 21% faster so the ratio drops, but the
+6-thread wall-clock matches the best 8-thread figure. Node inflation under
+parallelism rose from 1.02x to 1.26x — better ordering means more nodes cut
+off after 1 child, fewer younger siblings available to split, and therefore
+more speculative splitting. **Targeting the ratio would make us reject a
+wall-clock improvement**, so both are recorded side by side.
 
-**3 倍には届いていない。** 同じ機械で Egaroucid は 6 並列 3.28x を出す。
-スレッド数の数え方 (プール本数 + 主スレッド) が同じであることは確認して
-あるので、これは数え方の差ではなく実装差である。
+**3x has not been reached.** On the same machine Egaroucid gets 3.28x on 6
+threads. The way threads are counted (pool size + main thread) has been
+confirmed to be the same, so this is an implementation difference, not a
+counting difference.
 
-棋力は落ちていない (60 局の自己対局、d16): 6 並列 **53.3%** (29W 25L 6D, 石差
-+0.93)、8 並列 54.2% (31W 26L 3D, 石差 +0.53)。いずれも 95% 信頼区間が 50% を含む。
+Strength has not dropped (60 self-play games, d16): 6 threads **53.3%**
+(29W 25L 6D, disc difference +0.93), 8 threads 54.2% (31W 26L 3D, disc
+difference +0.53). Both 95% confidence intervals include 50%.
 
-**並列度は木の大きさで決まる** (10 局, 中盤時間のみ):
+**Parallelism is set by tree size** (10 games, midgame time only):
 
-| 深さ | 1 並列 | 6 並列 | 速度比 | ワーカー稼働率 |
+| Depth | 1 thread | 6 threads | Speed ratio | Worker utilization |
 |---|---|---|---|---|
 | 12 | 3.3s | 1.9s | 1.74x | 38% |
 | 16 | 15.0s | 9.1s | 1.65x | 50% |
 | 20 | 68.2s | 28.3s | **2.41x** | **64%** |
 
-当方は 1 手 32 万ノード (d16) と Egaroucid より 1 桁小さく、深さ 6 以上のノード
-= 分割点そのものが足りない。深さを上げると素直に伸びるが、**対局で使わない深さの
-速度比を成果として数えてはいけない**。分割の下限深さ (`YBWC_MIN`) は 4 と 6 が
-同等で 3 は悪化する (3 -> 1.87x, 4 -> 2.26x, 6 -> 2.27x)。
+At 320 thousand nodes per move (d16) we are an order of magnitude below
+Egaroucid, and nodes at depth 6 or more — the split points themselves — are
+simply too few. Raising the depth improves things straightforwardly, but **a
+speed ratio at a depth never used in games must not be counted as a result**.
+For the minimum split depth (`YBWC_MIN`), 4 and 6 are equivalent and 3 is
+worse (3 -> 1.87x, 4 -> 2.26x, 6 -> 2.27x).
 
-#### 残差は全部「遊び」で、1 コアの効率は落ちていない
+#### The residual is all idleness, and per-core efficiency has not dropped
 
-d16 / 6 並列で、有効 CPU 時間 = (中盤時間 - 主スレッドの干上がり) + (ワーカーの
-稼働時間 - ワーカーの干上がり) = 27.2 コア秒。逐次の中盤時間 27.8s とほぼ一致し、
-1 コアあたり nps は 6.49 対 6.18 Mnps で**逐次を下回っていない**。使える
-78 コア秒に対して 27.2 なので稼働率 35%。**3 倍にするのに必要な稼働率は 100% では
-なく 49%**。
+At d16 / 6 threads, effective CPU time = (midgame time - main-thread
+starvation) + (worker busy time - worker starvation) = 27.2 core seconds.
+That almost matches the sequential midgame time of 27.8s, and nps per core is
+6.49 against 6.18 Mnps — **not below the sequential figure**. Against the 78
+core seconds available, 27.2 is 35% utilization. **The utilization needed for
+3x is not 100% but 49%.**
 
-> 一時期「働いているコアの nps が逐次の 66%」と記録していたが、これは全内部
-> ノードで共有 refcount に atomic RMW を打っていた版の数字で、それを直した時点で
-> 消えている。1 コアの効率を狙った施策 (キャッシュライン整列した 4-way バケット、
-> ワーカーのパーク前スピン、条件変数のタイムアウト除去) がどれも誤差だったのは
-> これと整合する。**共有コストではなく遊びを潰さないと 3 倍にはならない。**
+> It was recorded at one point that "the nps of a working core is 66% of
+> sequential", but that number came from the version doing an atomic RMW on a
+> shared refcount at every internal node, and it disappeared the moment that
+> was fixed. It is consistent with this that every measure aimed at per-core
+> efficiency (cache-line-aligned 4-way buckets, spinning before workers park,
+> removing the condition-variable timeout) turned out to be noise. **3x will
+> not come from shared costs; it will come from killing the idleness.**
 
-#### 遊びの正体は二峰性 — `POOL_SAMPLE=1` で見る
+#### The idleness is bimodal — look at it with `POOL_SAMPLE=1`
 
-平均稼働率だけでは「常に半分」と「満載と空を往復」が区別できず、必要な対策は
-逆になる。`POOL_SAMPLE=1` で稼働ワーカー数を 100 µs ごとに採る。**中盤探索中
-だけ**採ること — 相手の手番と終盤ソルバを含めると 4 分の 3 が空になり、使えない。
+The average utilization alone cannot distinguish "always half" from
+"alternating between full and empty", and the two call for opposite remedies.
+`POOL_SAMPLE=1` samples the number of busy workers every 100 µs. Sample
+**only during the midgame search** — including the opponent's turn and the
+endgame solver leaves 3/4 of the samples empty and useless.
 
-d16 / 6 スレッド (ワーカー 5 本) の分布:
+Distribution at d16 / 6 threads (5 workers):
 
-| 稼働ワーカー数 | 0 | 1 | 2 | 3 | 4 | 5 |
+| Busy workers | 0 | 1 | 2 | 3 | 4 | 5 |
 |---|---|---|---|---|---|---|
-| 並べ替え・境界の移植前 | **29%** | 12% | 10% | 9% | 9% | **31%** |
-| 移植後 | 18% | 14% | 14% | 12% | 14% | 28% |
+| Before the ordering and bounds port | **29%** | 12% | 10% | 9% | 9% | **31%** |
+| After the port | 18% | 14% | 14% | 12% | 14% | 28% |
 
-移植前は平均 2.50 本 + 主スレッド 0.63 = 3.13 スレッドで、速度比 2.47x を説明する。
-移植後は平均 2.74 本まで上がり、0 本の時間も 29% から 18% に減った。それでも
-速度比が伸びないのは、並列時のノード膨張が 1.02 倍から 1.36 倍に増えたからである
-(順序が良くなると 1 子で打ち切るノードが増え、分割できる年少兄弟が減って分割が
-投機的になる)。**逐次を速くすると並列比は下がる**。
+Before the port the average was 2.50 workers + 0.63 main thread = 3.13
+threads, which explains the 2.47x ratio. After the port the average rose to
+2.74 and the time at 0 fell from 29% to 18%. The reason the ratio still
+does not improve is that node inflation under parallelism rose from 1.02x to
+1.36x (better ordering means more nodes cut off after 1 child, fewer
+younger siblings available to split, and therefore more speculative
+splitting). **Making the sequential search faster lowers the parallel ratio.**
 
-主スレッドが待ちで干上がるのは 37% で、そのときワーカーは 1 本以上動いている
-(待つ相手がいるから)。よって **0 本の 29% は主スレッドが「分割できない仕事」を
-している時間**である: 深さ 6 未満の部分木、MPC の縮約探索、最年長の子を辿る直列
-区間。ここを埋めれば平均は 3.4 本になり 3 倍圏に入る。
+The main thread starves waiting 37% of the time, and while it does at least
+1 worker is running (there is someone to wait for). Therefore **the 29% at 0
+workers is time the main thread spends on work that cannot be split**:
+subtrees below depth 6, the reduced searches of MPC, and the serial stretch
+walking down the eldest children. Filling that in would bring the average to
+3.4 workers, which is 3x territory.
 
-分割の下限深さを下げて埋めようとしても届かない。受け渡し遅延 9 µs を隠す
-パーク前スピンと組み合わせても、下げるほど悪化する (3 巡最小, slack=8, 6 並列):
+Trying to fill it by lowering the minimum split depth does not get there.
+Even combined with a pre-park spin that hides the 9 µs handoff latency, the
+lower it goes the worse it gets (minimum of 3 rounds, slack=8, 6 threads):
 
 | `YBWC_MIN` | 6 | 5 | 4 | 3 |
 |---|---|---|---|---|
-| spin なし | **11.7s** | 12.2s | 12.4s | 18.0s |
-| spin あり | 11.9s | 11.8s | 11.8s | 17.8s |
+| Without spin | **11.7s** | 12.2s | 12.4s | 18.0s |
+| With spin | 11.9s | 11.8s | 11.8s | 17.8s |
 
-スピンは下限を下げたときだけ効く (遅延がタスク長に対して相対的に大きくなるから)
-が、下げること自体の損を埋められない。**下限 6 が最適。**
+Spinning helps only when the minimum is lowered (the latency grows relative
+to the task length), but it cannot cover the loss of lowering it at all. **A
+minimum of 6 is optimal.**
 
-> 棄却した並列化: **ルート分割**は単一スレッドに負けた (1.7 倍のノードで 1.3 倍
-> 遅い)。**ワーカーごとの専用置換表**は nps を 19% 上げるがノードが 69% 増え、
-> 主スレッドの並べ替え情報を失うぶん実時間は 42% 悪化する。
-> **スレッド数 16〜20** は実コア 10 の環境では一貫して遅い。
-> **分割対象ノードで必ず子を並べ替える**のは
-> ノードを 3% 減らすが評価コストで nps が 10% 落ち、実時間で負ける。
-> **バケットを 1 キャッシュラインに収める** (16B x 4-way, 64B 整列) と
-> **ワーカーのパーク前スピン** はどちらも誤差 (11.4〜13.5s の範囲に散らばるだけ)。
-> どちらも 1 コアの効率を上げる施策なので、効かない理由は上記のとおり。
-> **浅い反復でも Lazy SMP をやめて YBWC にする**のも悪化する
-> (`SMP_MAX_DEPTH` 10 -> 2.37x, 4 -> 2.20x, 0 -> 2.20x)。浅い反復に
-> 限定するゲートが正しい。
-> **分割しないノード用の直列経路** (次善手を 1 個ずつ選ぶ) は
-> ノード +4%・nps ほぼ同じで負ける。
-> 扇形展開の帳簿 (settled 配列・Vec・停止フラグ) のコストは元々ゼロだった。
-> ただしこの実験で間違いを 1 つ見つけた: PVS の再探索窓は
-> `nega_scout(-beta, -g)` で **null window の結果 `g` を新しい alpha にする**。
-> 古い alpha を使うとノード +17%。
-> **fail-high 時に実行中タスクを殺さない** (`n_searching` を上げない) は悪化する
-> (7.6s / 膨張 1.54 対 7.0s / 1.34)。途中の仕事を捨ててでも古い窓での探索を
-> 止めるほうが得である。
-> **ETC** (`etc_nws`) は閾値をどう変えても効かない (ノード ±0.5%)。当方は
-> 置換表の窓絞り込みと「置換表の手の先読み」が同じ役割を果たしている。
-> **`Pool::wait` でブロック中のスレッドを `idle` に数える**のも効かない。
-> 分割は 1.10M -> 1.28M に増えるが時間は不変で、渡す先が無いのではなく
-> その瞬間に渡せる仕事が無い。
-> **タスクの添字を親の accumulator からコピーする** (再構築をやめる) は中立
-> (6.9s 対 7.2s、誤差内)。`Nnue::indices` は 80 マスクを走査するので仕事量は
-> 確実に減るが、実時間には出ない。
+> Rejected parallelizations: **root splitting** lost to a single thread (1.3x
+> slower for 1.7x the nodes). **A dedicated transposition table per worker**
+> raises nps by 19% but increases nodes by 69%, and losing the main thread's
+> ordering information makes wall-clock 42% worse.
+> **16-20 threads** is consistently slower in an environment with 10 physical
+> cores. **Always ordering the children at split-candidate nodes** cuts nodes
+> by 3% but costs 10% of nps in evaluation, and loses in wall-clock.
+> **Fitting a bucket into 1 cache line** (16B x 4-way, 64B aligned) and
+> **spinning before workers park** are both noise (they merely scatter over
+> the 11.4-13.5s range). Both are measures aimed at per-core efficiency, so
+> the reason they do nothing is as above.
+> **Dropping Lazy SMP for YBWC in the shallow iterations too** is worse as
+> well (`SMP_MAX_DEPTH` 10 -> 2.37x, 4 -> 2.20x, 0 -> 2.20x). The gate
+> limiting it to shallow iterations is right.
+> **A serial path for nodes that will not be split** (picking the second-best
+> move 1 at a time) loses at +4% nodes and roughly the same nps.
+> The bookkeeping of the fan-out (the settled array, the Vec, the abort
+> flags) cost nothing to begin with.
+> This experiment did find 1 bug, though: the PVS re-search window is
+> `nega_scout(-beta, -g)`, i.e. **the null-window result `g` becomes the new
+> alpha**. Using the old alpha costs +17% nodes.
+> **Not killing the running tasks on a fail-high** (not raising
+> `n_searching`) is worse (7.6s / 1.54 inflation against 7.0s / 1.34). It
+> pays to stop searches on the old window even at the cost of discarding work
+> in progress.
+> **ETC** (`etc_nws`) does nothing whatever the threshold (nodes ±0.5%). For
+> us the transposition table's window narrowing and "searching the
+> transposition-table move first" already play the same role.
+> **Counting threads blocked in `Pool::wait` as `idle`** does nothing either.
+> Splits rise from 1.10M to 1.28M but the time is unchanged: it is not that
+> there is nowhere to hand work to, it is that there is no work to hand off
+> at that moment.
+> **Copying a task's indices from the parent's accumulator** (dropping the
+> rebuild) is neutral (6.9s against 7.2s, within noise). `Nnue::indices`
+> scans 80 masks, so the amount of work certainly goes down, but it does not
+> show up in wall-clock.
 
-### 学習
+### Training
 
-`nnue_train` が Hogwild 並列 SGD (10 スレッドで 2.2M pos/s) で学習する。
-コーパス全体 (44 GB, 17.2 億局面) は RAM に載らないので、線形版と同じ
-**シャード読み込み**をする。ファイルを予算 (`--max-examples`, 既定 4800 万) まで
-まとめて読み、学習し、捨てる。エポックごとにファイル順をシャッフルするので
-シャードの組み合わせが固定の相関にならない。`--init` で既存モデルから継続できる。
+`nnue_train` trains with Hogwild parallel SGD (2.2M pos/s on 10 threads). The
+whole corpus (44 GB, 1.72 billion positions) does not fit in RAM, so it uses
+the same **sharded loading** as the linear version. It reads files together
+up to a budget (`--max-examples`, 48 million by default), trains, and
+discards them. The file order is shuffled every epoch, so the combination of
+shards never becomes a fixed correlation. `--init` continues from an existing
+model.
 
-**データ量が支配的**という傾向はそのまま続いた:
+**The trend that data volume dominates** continued unchanged:
 
-| 学習局面数 | val MSE |
+| Training positions | val MSE |
 |---|---|
-| 2400 万 | 40.7 (過学習) |
-| 1 億 | 36.1 |
-| **17.2 億** | **33.0** |
+| 24 million | 40.7 (overfitting) |
+| 100 million | 36.1 |
+| **1.72 billion** | **33.0** |
 
-比較対象は Egaroucid 本番 eval 38.95、線形評価 39.55 (いずれも同一 val で
-当方計測)。ただし **MSE の改善は棋力にはほとんど転換しない**: 36.07 のモデルと
-33.02 のモデルを同一探索で 400 局戦わせて 52.5% (95% CI 47.6..57.4)、石差 +0.80。
-有意差は出ていない。
+For comparison, Egaroucid's production eval is 38.95 and the linear
+evaluation 39.55 (both measured by us on the same val set). However,
+**improvements in MSE hardly convert into playing strength**: the 36.07 model
+and the 33.02 model played 400 games at equal search for 52.5% (95% CI
+47.6..57.4), disc difference +0.80. There is no significant difference.
 
-**lr は 0.0005 前後**。既定の 0.02 は桁違いに大きく、warm start でもゼロからでも
-val が 600 台に発散する。`--val` で毎エポック held-out MSE を測り、改善した
-エポックだけ保存するので、発散しても既存モデルは壊れない。
+**lr is around 0.0005.** The default of 0.02 is orders of magnitude too
+large; from a warm start or from scratch alike, val diverges into the 600s.
+`--val` measures held-out MSE every epoch and saves only the epochs that
+improved, so even a divergence does not destroy the existing model.

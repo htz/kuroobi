@@ -1,137 +1,163 @@
-# 盤面表現とビット演算
+# Board representation and bit operations
 
-盤面をどう持ち、石返しと合法手生成をどうビット演算に落としているか。局面ハッシュと確定石もここに置く。
+How the board is held, and how flipping and legal move generation are
+reduced to bit operations. The position hash and stable discs live here too.
 
-## 盤面表現とビット演算
+## Board representation and bit operations
 
-![盤面表現](img/bitboard.svg)
+![Board representation](img/bitboard.svg)
 
-### 表現
+### Representation
 
 ```rust
 pub struct Board { black: u64, white: u64, player: Color, empty_count: u8 }
 ```
 
-色ごとに 1 枚ずつのビットボード (計 2×u64)。空きマスは保持せず
-`!(black | white)` で導出する。構造体は 24 バイトの `Copy` 型で、
-ヒープ確保を一切含まないため探索中の局面コピーが memcpy 1 回で済む。
+One bitboard per colour (2×u64 in total). Empty squares are not held
+but derived as `!(black | white)`. The struct is a 24-byte `Copy` type
+containing no heap allocation at all, so copying a position during the
+search is a single memcpy.
 
-**ビットレイアウトは file-major (`bit = file*8 + rank`)** を採用している。
-一般的な rank-major ではないため方向オフセットは `±1` が縦、`±8` が横、
-`±7/±9` が斜めとなる。この選択の見返りとして 1 バイトが 1 ファイルに対応し、
-**左右ミラーが `swap_bytes()` 単一命令**になる。
+**The bit layout is file-major (`bit = file*8 + rank`)**. It is not
+the usual rank-major, so the direction offsets are `±1` for vertical,
+`±8` for horizontal and `±7/±9` for the diagonals. In return for this
+choice one byte corresponds to one file, and **the left-right mirror
+becomes a single `swap_bytes()` instruction**.
 
-手番側ビットボードの取得 `player_bb()` は `[black, white][player.index()]` の
-配列インデックス選択で、分岐を持たない (`Color` は `#[repr(u8)]` で
-`Black=0 / White=1`)。
+Fetching the side-to-move bitboard, `player_bb()`, is an array index
+selection `[black, white][player.index()]` with no branch (`Color` is
+`#[repr(u8)]` with `Black=0 / White=1`).
 
-### 反転計算 — Kogge-Stone 風の倍化スメア
+### Flip computation — a Kogge-Stone-style doubling smear
 
-![石を返す](img/flip.svg)
+![Flipping discs](img/flip.svg)
 
-`bitboard::flip_shift<const DIR: u32, const UP: bool>` が中核。方向を
-**const ジェネリクスでコンパイル時に固定**するため、8 方向すべてが
-シフト量即値の直線コードに単相化される。
+`bitboard::flip_shift<const DIR: u32, const UP: bool>` is the core.
+Because the direction is **fixed at compile time by a const generic**,
+all eight directions monomorphise into straight-line code with
+immediate shift amounts.
 
-アルゴリズムは自石を相手石の連続列に「にじませる」古典手法だが、
-`opp2 = opp & shift(opp)` (隣接する相手石ペア) を事前に作って
-**1 ステップで 2 マス進める**倍化を行う。ステップ列 1→1→2→2 で
-リバーシの最大反転長 6 をカバーし、素朴な 6 回逐次シフトに対して
-**依存チェーン長が 6→4 に短縮**される。
+The algorithm is the classic one of smearing one's own discs into a
+run of opponent discs, but it prepares `opp2 = opp & shift(opp)`
+(adjacent pairs of opponent discs) in advance to **advance two squares
+per step**. The step sequence 1→1→2→2 covers reversi's maximum flip
+length of 6, and **the dependency chain shortens from 6 to 4**
+compared with six naive sequential shifts.
 
-アンカー判定 (列の先が自石か) は `shift(f) & player != 0` の
-**ブランチフリー**判定で、成立時 `f`・非成立時 `0` を返す。
+The anchor test (is the end of the run one's own disc?) is the
+**branch-free** test `shift(f) & player != 0`, returning `f` when it
+holds and `0` when it does not.
 
-### 端の折り返し対策 — 方向別マスク
+### Edge wrap-around — per-direction masks
 
-ステップごとにマスクするのではなく、**相手ビットボード側を一度だけ**
-マスクする:
+Rather than masking at every step, **the opponent's bitboard is masked
+just once**:
 
-| 定数 | 値 | 用途 |
+| Constant | Value | Purpose |
 |---|---|---|
-| `MASK_RANK` | `0x7E7E…7E` | ±1 方向 (rank 0/7 を除外) |
-| `MASK_FILE` | `0x00FF…FF00` | ±8 方向 (file 0/7 を除外) |
-| `MASK_DIAG` | `0x007E…7E00` | ±7/±9 方向 (両方除外) |
+| `MASK_RANK` | `0x7E7E…7E` | ±1 directions (excludes rank 0/7) |
+| `MASK_FILE` | `0x00FF…FF00` | ±8 directions (excludes file 0/7) |
+| `MASK_DIAG` | `0x007E…7E00` | ±7/±9 directions (excludes both) |
 
-正当性の根拠は「反転列に走査方向の端マスは入り得ない (アンカーが盤外に
-なるため)」。これでシフト走査が wrap-free になり、**ループ内のマスク演算が
-消える**。`flippable` は 3 マスクを冒頭で 1 回計算し全方向で使い回す。
+The justification is that "the edge square along the scan direction
+can never be part of a flipped run (its anchor would be off the
+board)". This makes the shift scan wrap-free and **the masking inside
+the loop disappears**. `flippable` computes the three masks once at
+the top and reuses them for every direction.
 
-### 合法手生成
+### Legal move generation
 
-`some_mobility` は `<<dir` と `>>dir` を同時に OR して 1 関数で正負両方向を
-処理し、6 段のスメアを**アンロールした直線コード**として展開する。
-4 軸分を OR して空きマスと AND すれば合法手ビットボードが得られ、
-**モビリティ数は popcount 1 発** (`mobility_count`)。
+`some_mobility` ORs `<<dir` and `>>dir` together so that one function
+handles both signs, and expands the six-stage smear as **unrolled
+straight-line code**. ORing the four axes and ANDing with the empty
+squares yields the legal move bitboard, and **the mobility count is a
+single popcount** (`mobility_count`).
 
-### 着手適用 — make/unmake
+### Applying a move — make/unmake
 
 ```rust
 self.black ^= pos_bit | flipped;  self.white ^= flipped;
 ```
 
-置石と反転を **XOR 2 回**で完了。`undo_move` は同一の XOR パターンを
-再適用するだけの完全対称な取り消しで、**局面のコピーを保存しない
-make/unmake 方式**。`make_move_bits` は `flippable` を 1 回だけ呼び、
-その結果を検証と適用の両方に使う。
+Placing the disc and flipping are completed with **two XORs**.
+`undo_move` is a perfectly symmetric undo that merely re-applies the
+same XOR pattern: **a make/unmake scheme that saves no copy of the
+position**. `make_move_bits` calls `flippable` only once and uses the
+result for both validation and application.
 
-パスは `player` の反転のみ。
+A pass only flips `player`.
 
-### 対称性
+### Symmetries
 
-`transpose()` は delta-swap 3 段による a1-h8 転置。インデックス式が対称なので
-**rank-major ⇄ file-major のレイアウト変換にも同じ関数が双方向に使える**
-(学習データ入出力で利用)。`rotate_90() = transpose(swap_bytes())`、
-`mirror_horizontal() = swap_bytes()`。`symmetries()` が 8 対称形を返す。
+`transpose()` is an a1-h8 transpose via three delta-swap stages. The
+index expression is symmetric, so **the same function serves in both
+directions as a rank-major ⇄ file-major layout conversion** (used for
+training-data I/O). `rotate_90() = transpose(swap_bytes())`,
+`mirror_horizontal() = swap_bytes()`. `symmetries()` returns the eight
+symmetric forms.
 
-### 近傍テーブル
+### Neighbour table
 
-`NeighbourTable` が 64 マス分の 8 近傍マスクを事前計算しておき、終盤の空きマス
-列挙で `neighbours.get(sq) & opponent_bb == 0` なら「相手石に隣接しない =
-確実に非合法」として、`flippable` を呼ぶ前に枝を捨てる**早期棄却フィルタ**。
-
----
-
----
-
-## ハッシュ (Zobrist)
-
-`ZobristTable` は固定シードの 64bit LCG で生成する (再現性あり)。
-`OnceLock` により全スレッドで一度だけ初期化・共有される。
-
-工夫は **`flip_zobrist[sq] = set_zobrist[sq][Black] ^ set_zobrist[sq][White]`
-の派生テーブル**を持つこと。石の反転は「一方の色のキーを抜いて他方を入れる」
-操作なので、この 1 値の XOR だけで済む — **XOR が 2 回から 1 回になり、
-かつ反転前の色を知る必要がなくなる**。
-
-インクリメンタル更新 `update_hash_on_move` は
-①反転マスごとに `flip_zobrist` を XOR、②置石マスのキーを XOR、
-③手番キーを XOR で **O(反転数 + 2)**、盤面の全走査が不要。
-パスは手番キー 1 個の XOR のみで、XOR の自己逆性から
-連続パスの局面同一性が自然に保たれる。
+`NeighbourTable` precomputes the 8-neighbour masks for all 64 squares;
+during the endgame enumeration of empties, `neighbours.get(sq) &
+opponent_bb == 0` means "not adjacent to any opponent disc, hence
+certainly illegal", and the branch is discarded before `flippable` is
+called — an **early-rejection filter**.
 
 ---
 
 ---
 
-## 確定石 (stability)
+## Hashing (Zobrist)
 
-二度と裏返らない石 (確定石) の数から探索窓を刈る。相手の確定石が S 個なら
-自分の最終スコアは高々 `64 - 2S` である。
+`ZobristTable` is generated by a fixed-seed 64bit LCG (reproducible).
+`OnceLock` makes it initialised and shared exactly once across all
+threads.
 
-- **辺の確定石は厳密**: 1 次元 8 マスの全 `3^8` 配置に対し、「どう打たれても
-  裏返らない」集合を**最大不動点反復** (`build_edge_table`) で求めた
-  64KB テーブルを持つ。4 辺分をギャザー/スキャッタで引く
-- **全埋まりライン** (`full_lines`) はバイト単位の AND リダクションによる
-  ビット並列計算 (縦横斜め 4 方向)
-- **伝播ループ**: 4 方向すべてで「自石または壁」に挟まれた石を確定と認め、
-  変化がなくなるまで反復
+The trick is holding a **derived table
+`flip_zobrist[sq] = set_zobrist[sq][Black] ^ set_zobrist[sq][White]`**.
+Flipping a disc is the operation "remove one colour's key and insert
+the other's", so XORing this single value is enough — **two XORs
+become one, and there is no longer any need to know the colour before
+the flip**.
 
-探索での使い方に落とし穴があった。当初は α 値でゲートしていたが、PVS の
-null-window は根の値の近傍に置かれるため発火しなかった。正しくは
-**popcount による必要条件ゲート** — `need = (64 - alpha + 1) / 2` を計算し、
-相手の総石数がこれに満たなければ確定石を数えるまでもなく刈れない、と判定する。
+The incremental update `update_hash_on_move` (1) XORs `flip_zobrist`
+for each flipped square, (2) XORs the key of the placed square, and
+(3) XORs the side-to-move key, giving **O(flips + 2)** with no full
+board scan. A pass is a single XOR of the side-to-move key, and
+because XOR is its own inverse, the identity of positions across
+consecutive passes is preserved naturally.
 
-β 側のカットは均衡局面 (FFO40-45) では割に合わず一度は却下したが、
-一方的な局面 (FFO#59) では有効と判明して再採用した。**計測セットの偏りが
-採否を誤らせた実例**として記録している。
+---
+
+---
+
+## Stable discs (stability)
+
+The search window is pruned from the number of discs that can never be
+flipped again (stable discs). If the opponent has S stable discs, our
+final score is at most `64 - 2S`.
+
+- **Edge stable discs are exact**: for all `3^8` configurations of a
+  one-dimensional 8-square line, the set that "cannot be flipped no
+  matter how play goes" was computed by **greatest-fixed-point
+  iteration** (`build_edge_table`) into a 64KB table. The four edges
+  are read with gather/scatter
+- **Full lines** (`full_lines`) are computed bit-parallel by a
+  byte-wise AND reduction (four directions: horizontal, vertical and
+  both diagonals)
+- **Propagation loop**: in each of the four directions a disc
+  sandwiched between "one's own disc or a wall" is accepted as stable;
+  iterate until nothing changes
+
+There was a pitfall in how this is used in the search. Originally it
+was gated on the α value, but PVS null windows are placed near the
+root value, so it never fired. The correct form is a **necessary
+condition gate by popcount** — compute `need = (64 - alpha + 1) / 2`
+and decide that if the opponent's total disc count falls short of it,
+nothing can be pruned without even counting stable discs.
+
+The β-side cut did not pay off on balanced positions (FFO40-45) and
+was rejected once, but it turned out to be effective on lopsided ones
+(FFO#59) and was reinstated. It is recorded as **a concrete case where
+a biased measurement set led to the wrong accept/reject decision**.

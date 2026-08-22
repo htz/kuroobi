@@ -1,6 +1,6 @@
 <svg xmlns="http://www.w3.org/2000/svg" width="900" height="372" viewBox="0 0 900 372" font-family="-apple-system, BlinkMacSystemFont, 'Hiragino Sans', sans-serif">
 <rect width="900" height="372" fill="#ffffff"/>
-<text x="24" y="32" font-size="15" font-weight="700" fill="#1f2328">盤面は u64 2 枚。マスの番号は file-major (A1=0, A2=1, …, H8=63)</text>
+<text x="24" y="32" font-size="15" font-weight="700" fill="#1f2328">Board representation: two u64s, squares numbered file-major (A1=0, A2=1, …, H8=63)</text>
 <rect x="24" y="72" width="272" height="272" fill="#e8efe9" stroke="#c8d0d8"/>
 <rect x="24" y="72" width="34" height="34" fill="none" stroke="#c8d0d8" stroke-width="0.7"/>
 <text x="41.0" y="93.0" font-size="10" fill="#8b949e" text-anchor="middle">0</text>
@@ -149,17 +149,17 @@
 <circle cx="351" cy="74" r="8" fill="#1f2328" stroke="#c8d0d8"/>
 <text x="368" y="78" font-size="13" font-weight="700" fill="#1f2328" font-family="ui-monospace, SFMono-Regular, monospace">black: u64</text>
 <text x="368" y="98" font-size="12" fill="#59636e" font-family="ui-monospace, SFMono-Regular, monospace">0x0000000810000000</text>
-<text x="368" y="116" font-size="11.5" fill="#59636e">黒石のある場所に 1</text>
+<text x="368" y="116" font-size="11.5" fill="#59636e">1 where a black disc sits</text>
 <circle cx="351" cy="148" r="8" fill="#ffffff" stroke="#c8d0d8"/>
 <text x="368" y="152" font-size="13" font-weight="700" fill="#1f2328" font-family="ui-monospace, SFMono-Regular, monospace">white: u64</text>
 <text x="368" y="172" font-size="12" fill="#59636e" font-family="ui-monospace, SFMono-Regular, monospace">0x0000001008000000</text>
-<text x="368" y="190" font-size="11.5" fill="#59636e">白石のある場所に 1</text>
-<text x="342" y="232" font-size="11.5" fill="#59636e">空きマス = !(black | white)。両方に 1 が立つことは無い</text>
+<text x="368" y="190" font-size="11.5" fill="#59636e">1 where a white disc sits</text>
+<text x="342" y="232" font-size="11.5" fill="#59636e">empties = !(black | white). No square is ever set in both.</text>
 <text x="342" y="249" font-size="11.5" fill="#59636e"></text>
-<text x="342" y="266" font-size="11.5" fill="#59636e">1 マス 1 ビットなので、石を返す・合法手を数えるといった操作が</text>
-<text x="342" y="283" font-size="11.5" fill="#59636e">そのままビット演算になる。8 方向ぶんを同時に進める</text>
-<text x="342" y="300" font-size="11.5" fill="#59636e">(Kogge-Stone 風の倍化スメア) ため、ループを回さずに済む。</text>
+<text x="342" y="266" font-size="11.5" fill="#59636e">One bit per square, so flipping discs and counting legal moves become</text>
+<text x="342" y="283" font-size="11.5" fill="#59636e">plain bit operations. All 8 directions advance at once (a Kogge-Stone</text>
+<text x="342" y="300" font-size="11.5" fill="#59636e">style doubling smear), so no loop is needed.</text>
 <text x="342" y="317" font-size="11.5" fill="#59636e"></text>
-<text x="342" y="334" font-size="11.5" fill="#59636e">file-major にしているのは、縦方向のスメアが 1 ビットずらしに</text>
-<text x="342" y="351" font-size="11.5" fill="#59636e">なるため。rank-major だと 8 ビットずらしになる。</text>
+<text x="342" y="334" font-size="11.5" fill="#59636e">file-major is used because a vertical smear is then a 1-bit shift;</text>
+<text x="342" y="351" font-size="11.5" fill="#59636e">rank-major would make it an 8-bit shift.</text>
 </svg>

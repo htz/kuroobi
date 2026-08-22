@@ -1,172 +1,220 @@
 # GUI
 
-対局・検討・定石・GGS 接続の画面。
+The screens for play, study, the book and the GGS connection.
 
-## 画面
+## Screens
 
-左の並びが行き先。**対局・検討・定石**と、GGS に接続すると開く 7 つの画面
-(対局・観戦 / ロビー / プレイヤー / 結果 / チャット / 待機モード /
-コンソール)。窓を狭くすると右の枠 → 左の文字 → 上の補助情報の順に畳み、
-盤を最後まで残す。
+The rail on the left is where you go: **Play, Study and Book**, plus the
+seven screens that open once you connect to GGS (Play / observe, Lobby,
+Players, Results, Chat, Waiting mode, Console). As the window narrows,
+the right-hand panel folds first, then the labels on the left, then the
+auxiliary information along the top; the board is the last thing left.
 
-![対局画面](img/gui-play.png)
+![Play screen](img/gui-play.png)
 
-*対局。盤の上に操作、下に石数と時計。右の棋譜は 1 手ごとの評価値・
-思考時間・出所つきで、悪手には下げ幅の ▼ が付く。数字は下の帯。*
+*Play. Controls above the board, disc counts and clocks below. The game
+record on the right carries the evaluation, thinking time and source of
+every move, and poor moves get a ▼ with how much they lost. The numbers
+are in the strip at the bottom.*
 
-![検討画面](img/gui-study.png)
+![Study screen](img/gui-study.png)
 
-*検討。盤の下は手数を辿る帯 (敗着は赤い印)、その下は棋譜を通して測った
-評価値グラフ。ツールバーの「評価値を表示」を入れると、盤のマスにも全合法手の
-評価値が出る。*
+*Study. Below the board is the strip that walks the moves (the losing
+move carries a red mark), and below that the evaluation graph measured
+across the game record. Turn on Evals in the toolbar and the squares of
+the board show the evaluation of every legal move as well.*
 
-![定石ブラウザ](img/gui-book.png)
+![Book browser](img/gui-book.png)
 
-*定石。候補手を盤と字下げの一覧の両方に出す。出所の列が定石ファイルの手と
-実戦学習の手を分ける。*
+*Book. Candidate moves appear both on the board and in the indented
+list. The Source column separates moves from the book file from moves
+learned in real games.*
 
-![GGS の対局結果](img/gui-ggs.png)
+![GGS game results](img/gui-ggs.png)
 
-*GGS。終わった対局はレートの推移と一緒に残る (写真の相手は架空の名前)。*
+*GGS. Finished games stay, together with how the rating moved (the
+opponent in the picture is a made-up name).*
 
-`gui/` は対局・検討用のデスクトップアプリ。画面は Web 技術 (Vite +
-TypeScript)、思考はライブラリを直接呼ぶ Rust 側 (Tauri) で、両者は IPC で
-つながる。エンジンを別プロセスに切り出していないので、探索の途中経過も
-そのまま画面に返せる。
+`gui/` is the desktop app for playing and studying. The screen is web
+technology (Vite + TypeScript), the thinking is the Rust side (Tauri)
+calling the library directly, and IPC connects the two. The engine is
+not split off into a separate process, so even a search in progress can
+report back to the screen as it goes.
 
-- **対局** — 手番ごとに担当 (人間 / エンジン) を切り替えられる。
-- **検討** — 全合法手を同一条件で採点し、評価値の推移をグラフにする。
-  盤の下の帯で手数を辿れる (1 手ごとの刻み・10 手ごとの目盛・敗着の印)。
-- **定石** — 定石を局面から辿る。盤に候補手の値、右に枝の一覧を字下げで
-  並べ、**出所の列**が元の定石ファイルの手と実戦学習で書き戻した手を
-  分ける。採用局数も添える。検討との行き来ができる。
-- **棋譜** — 貼り付けとファイルの両方から読み込み、着手をクリックすると
-  その手番まで戻る。着手の出所 (定石 / 探索) も表示する。
-  GGS が使う **GGF** (Generic Game Format) を読めるので、初期局面から
-  始まらない対局 (抽選オープニング) も開始局面ごと再現できる。貼り付けと
-  `.ggf` ファイルのどちらでも読める。素の着手列 (`f5d6c3…`) と、盤面 1 行 +
-  着手列の形式も受け付ける。読み込む前に下読みの結果 (手数と終局図) が出る。
-  **書き出しも GGF に対応**していて、拡張子で形式が決まる (既定は `.ggf`)。
-  着手列だけの形式は色・結果・開始局面を落とすので、他のソフトへ渡すなら
-  GGF のほうがよい。
-- **GGS (オンライン対局)** — GGS (Generic Game Server) のクライアントを
-  内蔵する。対局・観戦・ロビー・プレイヤー情報・結果・チャット・待機モード
-  (対局終了 → 間隔待ち → 自動申し込みの繰り返し) と生コマンドの
-  コンソール。盤・時計・対局者の行はローカル対局と同じ部品で描く。
-  終わった対局は控えに残り、押すとその棋譜が検討で開く。詳しくは
-  [GGS で分かったこと](#ggs-で分かったこと) に。
+- **Play** — who plays each turn (human / engine) can be switched.
+- **Study** — scores every legal move under identical conditions and
+  graphs how the evaluation moves. The strip below the board walks the
+  moves (a tick per move, a scale mark every 10, a mark for the losing
+  move).
+- **Book** — walks the book from a position. The values of the candidate
+  moves go on the board and the list of branches goes on the right as an
+  indented tree, where the **Source column** separates moves from the
+  original book file from moves written back by learning from real
+  games. The number of games each was played in comes with it. You can
+  go back and forth with Study.
+- **Game record** — loads from both a paste and a file, and clicking a
+  move goes back to that turn. The source of each move (book / search)
+  is shown too. It reads **GGF** (Generic Game Format), which GGS uses,
+  so a game that does not start from the initial position (a drawn
+  opening) can be reproduced along with its starting position. Both a
+  paste and a `.ggf` file work. A plain move list (`f5d6c3…`) and the
+  form of one board line plus a move list are accepted as well. Before
+  loading, the result of a preliminary read (the number of moves and the
+  final diagram) is shown. **Export supports GGF too**, and the
+  extension decides the format (the default is `.ggf`). The move-list
+  form drops the colours, the result and the starting position, so GGF
+  is the better choice for handing a game to other software.
+- **GGS (online play)** — a client for GGS (Generic Game Server) is
+  built in: play, observing, lobby, player information, results, chat,
+  waiting mode (game over → interval wait → automatic match request,
+  repeated) and a console for raw commands. The board, the clocks and
+  the players' row are drawn with the same parts as a local game.
+  Finished games stay in the archive, and pressing one opens its record
+  in Study. See [What GGS taught us](#what-ggs-taught-us) for details.
 
-キー操作は ⌘N (新規対局)・⌘Z (待った)・⌘S (保存)・⌘O (読込)・⌘B (定石)。
-検討では ← → で 1 手、⇧ を足して 10 手、⌘ を足して最初・最後へ。
+The keys are ⌘N (new game), ⌘Z (take back), ⌘S (save), ⌘O (load), ⌘B
+(book). In Study, ← → move one move, with ⇧ ten moves, and with ⌘ to the
+first or last position.
 
-思考の設定 (深さ・読切・選択読み・スレッド数) はレベル選択かカスタムで指定する。
-定石を使うかどうかも切り替えられる (既定は使う)。研究で自力の手を見たいときに切る。
+The thinking settings (depth, exact solve, selective search, thread
+count) are given by picking a level or with Custom. Whether the book is
+used can be toggled too (used by default); turn it off when research
+calls for the engine's own move.
 
-エンジンが使うファイル (線形評価の重み・NNUE・定石) は歯車から選び直せる。
-指定しなければ `weights/` を上へ辿って探す。設定は OS の設定ディレクトリに残る。
-盤の見え方 (テーマ・向き・座標・畳の織り目・石返しの速さ) も同じ設定にある。
+The files the engine uses (linear evaluation weights, NNUE, book) can be
+re-pointed from the gear. If nothing is given, `weights/` is found by
+walking up. The settings are kept in the OS config directory. How the
+board looks (theme, orientation, coordinates, the weave of the tatami,
+the speed of the disc flip) is in the same settings.
 
-### 実戦からの定石学習 (同じ負け方を繰り返さない)
+### Learning the book from real games (not repeating the same loss)
 
-同じ相手との連戦では、決定的なエンジン同士だと同じ棋譜を繰り返しやすい。
-定石内は許容幅つき乱択 (最善から 1 石以内を採用頻度で重み付け抽選) で
-散らすが、それだけでは負けた展開の再現は防げない — 定石が無ければ選択は
-完全に決定的で、同じ負けをそのまま繰り返す。
+In back-to-back games against the same opponent, two deterministic
+engines easily repeat the same game record. Inside the book the choice
+is spread by a randomised pick with a tolerance (a draw among the moves
+within 1 disc of the best, weighted by how often each was played), but
+that alone does not prevent a lost line from being played out again —
+without a book the choice is completely deterministic, and the same loss
+is repeated exactly.
 
-そこで GGS の自分の対局を**勝敗にかかわらず**定石へ取り込む (`learn.rs`)。
-対局で通った各局面に「実戦で指した手」と「それ以外の合法手の最善 (代替)」
-を評価して持たせ、終局の石差 (投了局は終端の探索値) を negamax で根まで
-書き戻す。
+So our own GGS games are imported into the book **win or lose**
+(`learn.rs`). Each position the game passed through is given the move
+actually played and an evaluation of the best of the other legal moves
+(the alternative), and the final disc difference (for a resigned game,
+the search value at the end) is written back to the root with negamax.
 
-- 各局面の値は「候補の最善」なので、負けの値は代替でもまだ悪かった区間
-  だけを遡り、**良い代替が残っている地点 — 敗着 — に局在する**。序盤の
-  互角の手が巻き添えで避けられることはなく、同じラインをたどれば敗着で
-  乱択が自然に代替へ逸れる
-- 勝った対局も取り込む。代替の方が良かったのに相手のミスで勝てたラインを
-  良いと思い込み続けないため
-- 回避のための特別なロジックは無い。「同じ負けを繰り返さない」は
-  negamax の値の性質であって、手を禁止する仕組みではない
+- Since each position's value is the best of its candidates, the value
+  of a loss only travels back through the stretch where the alternative
+  was bad too, and **localises where a good alternative remains — at the
+  losing move**. Even opening moves are never avoided as collateral, and
+  following the same line, the randomised pick naturally veers to the
+  alternative at the losing move
+- Won games are imported too, so that a line which was only won because
+  the opponent erred, where the alternative was better, is not kept
+  believed good
+- There is no special logic for avoidance. "Not repeating the same loss"
+  is a property of the negamax values, not a mechanism that forbids
+  moves
 
-取り込みは 1 探索ずつ進むジョブになっていて、対局の合間に少しずつ回す
-(思考やサーバー応答を分単位で待たせない)。学習分は定石本体と別ファイル
-(`book_learn.txt`) に保存して起動時に重ねるので、`bookgen` が本体を
-更新中でも衝突しないし、定石ファイルが無い環境でも実戦で通った局面から
-「経験の定石」が育つ。
+The import is a job that advances one search at a time and runs a little
+at a time between games (so thinking and server responses are never kept
+waiting for minutes). What is learned is saved in a file separate from
+the book itself (`book_learn.txt`) and overlaid at startup, so it does
+not clash while `bookgen` is updating the main file, and even where
+there is no book file a "book of experience" grows from the positions
+real games went through.
 
-GGS だけでなく、ローカルの対局モードで終局した対局も同じ仕組みで
-取り込む (裏で実行。読み込んだだけの棋譜や、初期局面から始まらない
-対局は対象外)。取り込むかどうかは対局パネルの「学習」と GGS の
-エンジン設定で切り替えられる (既定は取り込む)。
+Not only on GGS: a game finished in the local play mode is imported by
+the same mechanism (run in the background; a game record that was merely
+loaded, and a game that does not start from the initial position, are
+out of scope). Whether to import is toggled by the play panel's Learning
+tab and by the GGS engine settings (imported by default).
 
-取り込んだ対局は同じ「学習」タブに控えとして残り、**対局 → 敗着 →
-書き換えた手 (旧→新)** まで辿れる。書き戻しは値を上書きするので、
-おかしな対局が 1 局混ざるだけで以後の手が変わる — 見つけられるように
-明細を残し、**対局単位で取り消せる**ようにしてある。取り消すと、元から
-定石にあった手は値が戻り、無かった手は候補ごと消える。
+Imported games stay in that same Learning tab as a list, and can be
+followed all the way to **game → losing move → the move that was
+rewritten (old→new)**. Write-back overwrites values, so a single odd
+game mixed in changes the moves that follow — the details are kept so it
+can be found, and **an import can be undone per game**. Undoing restores
+the value of a move that was in the book already, and removes, candidate
+and all, a move that was not.
 
-ビルドの手順と注意は [CLAUDE.md](CLAUDE.md) に置いた。
+The build steps and the pitfalls are in [CLAUDE.md](CLAUDE.md).
 
 ---
 
-## GGS で分かったこと
+## What GGS taught us
 
-実戦で回して初めて表に出たものと、サーバーの実装 (`GGS/Service/GameLib`) を
-読んで決めた方針。
+Things that only surfaced once we ran on the real server, and the
+policies decided by reading the server implementation
+(`GGS/Service/GameLib`).
 
-### 中断対局は自動で再開しない
+### An adjourned game is not resumed automatically
 
-対局中に相手が退室すると、GGS は**中断 (adjourn)** として保存する
-(`Match.C::cb_adjourn`)。時計はその時点で止まり、期限は無い
-(`GAME_Stored.H` に有効期限の概念が無い)。負けそうな側が抜けて解析してから
-再開しても、**サーバーはそれを咎めない**。
+If the opponent leaves during a game, GGS stores it as **adjourned**
+(`Match.C::cb_adjourn`). The clocks stop at that point and there is no
+deadline (`GAME_Stored.H` has no notion of expiry). If the side that is
+losing leaves, analyses and then resumes, **the server does not hold it
+against them**.
 
-こちらから自動で再開すると、相手に「好きなだけ考えてから戻ってくる」道を
-与えることになるので、**再開は手動だけ**にした。中断対局は一覧に残り、
-「中断対局」の更新から選んで再開できる。
+Resuming automatically from our side would hand the opponent a way to
+think for as long as they like and then come back, so **resuming is
+manual only**. Adjourned games stay in a list, and one can be picked and
+resumed after refreshing Adjourned games.
 
-### ロスタイムは残り時間の見た目では分からない
+### Lost time cannot be told from how much time is left
 
-GGS の時計は 1 本しかない。本時間を切らすとサーバーが延長ぶんを**その時計に
-足して**送ってくる (`GAME_Clock.C::update` の `now += ext`)。残り 50 秒から
-30 秒超過すれば `01:30` という健全な値が届くだけで、画面からは区別が付かない。
+GGS has only one clock. When the main time runs out, the server adds the
+extension **to that same clock** and sends it (`now += ext` in
+`GAME_Clock.C::update`). Overrunning by 30 seconds from 50 seconds left
+simply delivers a healthy-looking `01:30`; the screen cannot tell the
+difference.
 
-しかも**入った時点で負けが確定している**。`Game::blacks_result` は先に
-時間切れした側の結果を `min(盤面, 最小差負け)` で頭打ちにするので、盤上で
-勝っていても勝ちにはならない。延長は全滅 (64 石負け) を避けるためだけの
-時間で、これも切らすと最大差負けになる。
+And **entering it already decides the loss**. `Game::blacks_result` caps
+the result of whichever side flagged first at `min(the board, a
+minimum-margin loss)`, so being ahead on the board still does not make
+it a win. The extension is time for avoiding a shutout (a 64-disc loss)
+and nothing else; running that out too makes it a maximum-margin loss.
 
-だからエンジン側は「時計が増えた」ことでロスタイムを判定し、入ったら深く
-読まずに指し切る。判定の閾値を「延長の半分」にしていた頃は**残り時間が多い
-まま超過した場合を取りこぼしていた** (残り 50 秒から 1:30 なら増分は 40 秒
-しかない)。いまは加算設定を超えて増えたら入ったと見る。
+So the engine decides it is in lost time from "the clock went up", and
+once in it plays out without searching deep. While the threshold was
+"half the extension", it **missed the case of overrunning with plenty of
+time left** (from 50 seconds left to 1:30 the increase is only 40
+seconds). Now any increase beyond the increment setting counts as having
+entered it.
 
-### 棋譜は書庫から取り直す
+### Game records are re-fetched from the archive
 
-自分の対局は盤が 1 枚しか届かない (観戦の join だけが開始と現在の 2 枚を
-寄こす)。抽選オープニングの開始局面を控え損ねていた時期があり、その頃の
-記録は「初期配置 + 途中からの着手」として保存されていて**再生できない**。
+For our own games only one board arrives (only an observer's join hands
+over two, the start and the current one). There was a period where the
+starting position of a drawn opening went unrecorded, and records from
+then are stored as "the initial layout plus moves from partway through"
+and **cannot be replayed**.
 
-サーバーの書庫 (`tell /os look <番号>`) には正しい棋譜が残っていて、
-**両者の評価値と消費時間**まで入っている。番号のある対局はそちらから開く
-ようにした。同期対局は 1 つの番号に 2 面が入っているので、覆いで面を
-切り替えられる。
+The server's archive (`tell /os look <number>`) keeps the correct game
+record, down to **both sides' evaluations and time spent**. A game that
+has a number is now opened from there. A synchro match packs two boards
+into one number, so an overlay switches between them.
 
-### レートのプールは 2 つだけ
+### There are only two rating pools
 
-形式は `s8r16` / `s8r14` / `8r16` … と分かれるが、レートは通常 (`8`) と
-ランダム開局 (`8r`) の 2 つにしか分かれない (finger の Type 表も 2 行)。
-結果の画面はプール単位で絞り込む。**プールをまたいだ通しのレートは存在
-しない**ので、「すべて」では推移の線を引かない。
+Formats split into `s8r16` / `s8r14` / `8r16` and so on, but ratings
+split only two ways: standard (`8`) and random opening (`8r`) (the Type
+table in finger has two rows too). The Results screen filters by pool.
+**There is no rating that runs across pools**, so All draws no history
+line.
 
-### 一覧に受付状態を出す
+### The list shows who is accepting
 
-`who` は名前の次に印を出す (`VAR_Client::print_who`)。`+` は受けられる
-(`open > 対局中の数`)、`-` は受けない、`x` は幽霊 (接続が切れた残骸)。
-**待機中でも受けない人が居る**ので、これが読めないと申し込みが空振りする。
-対局中でも受けることがあるため、状態とは別の列にしてある。
+`who` prints a mark after the name (`VAR_Client::print_who`). `+` means
+they can accept (`open > number of games in progress`), `-` means they
+will not, `x` is a ghost (the remains of a dropped connection). **Some
+people will not accept even while idle**, so a match request comes up
+empty if this cannot be read. Since people do accept while playing too,
+it is a column of its own, separate from the status.
 
-### チャットは落としても残る
+### Chat survives a crash
 
-ログインごとに `ggs_games/chat/<名前>.jsonl` へ追記し、起動時に直近 300 件を
-戻す。保持は 5000 件で、溢れたら書き直して詰める。読めない行 (書き込み中に
-落ちて切れた最後の 1 行など) は捨てて残りを活かす。
+Each login appends to `ggs_games/chat/<name>.jsonl`, and the most recent
+300 entries are restored at startup. 5000 are kept; on overflow the file
+is rewritten and packed down. An unreadable line (such as a last line
+cut short by a crash mid-write) is discarded and the rest is used.

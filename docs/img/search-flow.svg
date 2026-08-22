@@ -1,40 +1,40 @@
 <svg xmlns="http://www.w3.org/2000/svg" width="900" height="268" viewBox="0 0 900 268" font-family="-apple-system, BlinkMacSystemFont, 'Hiragino Sans', sans-serif">
 <rect width="900" height="268" fill="#ffffff"/>
-<text x="24" y="32" font-size="15" font-weight="700" fill="#1f2328">1 手を決めるまで — 空きマス数で受け持ちが変わる</text>
-<text x="24" y="52" font-size="11.5" fill="#59636e">Lv12 の場合: 深さ 22 / 読切 26 / 選択読み +6</text>
+<text x="24" y="32" font-size="15" font-weight="700" fill="#1f2328">Choosing one move — search responsibilities shift with the number of empties</text>
+<text x="24" y="52" font-size="11.5" fill="#59636e">At Lv12: depth 22 / exact solve 26 / selective search +6</text>
 <rect x="24.0" y="76" width="284.0" height="46" fill="#ffd479" opacity="0.85" rx="3"/>
-<text x="166.0" y="105" font-size="12.5" font-weight="700" fill="#7a5b12" text-anchor="middle">定石</text>
+<text x="166.0" y="105" font-size="12.5" font-weight="700" fill="#7a5b12" text-anchor="middle">Opening book</text>
 <rect x="308.0" y="76" width="113.6" height="46" fill="#4d9fff" opacity="0.85" rx="3"/>
-<text x="364.8" y="105" font-size="12.5" font-weight="700" fill="#0b3f7a" text-anchor="middle">中盤探索</text>
+<text x="364.8" y="99" font-size="11.5" font-weight="700" fill="#0b3f7a" text-anchor="middle"><tspan x="364.8">Midgame</tspan><tspan x="364.8" dy="13">search</tspan></text>
 <rect x="421.6" y="76" width="85.2" height="46" fill="#8bc34a" opacity="0.85" rx="3"/>
-<text x="464.2" y="105" font-size="12.5" font-weight="700" fill="#2f5312" text-anchor="middle">選択読み</text>
+<text x="464.2" y="99" font-size="11.5" font-weight="700" fill="#2f5312" text-anchor="middle"><tspan x="464.2">Selective</tspan><tspan x="464.2" dy="13">search</tspan></text>
 <rect x="506.8" y="76" width="369.2" height="46" fill="#ef7a7a" opacity="0.85" rx="3"/>
-<text x="691.4" y="105" font-size="12.5" font-weight="700" fill="#7a1f1f" text-anchor="middle">完全読み</text>
+<text x="691.4" y="105" font-size="12.5" font-weight="700" fill="#7a1f1f" text-anchor="middle">Exact solve</text>
 <line x1="24" y1="128" x2="876" y2="128" stroke="#d0d7de"/>
 <line x1="24.0" y1="125" x2="24.0" y2="132" stroke="#d0d7de"/>
-<text x="24.0" y="146" font-size="10.5" fill="#59636e" text-anchor="middle">空き 60</text>
+<text x="24.0" y="146" font-size="10.5" fill="#59636e" text-anchor="start">60 empties</text>
 <line x1="308.0" y1="125" x2="308.0" y2="132" stroke="#d0d7de"/>
-<text x="308.0" y="146" font-size="10.5" fill="#59636e" text-anchor="middle">空き 40</text>
+<text x="308.0" y="146" font-size="10.5" fill="#59636e" text-anchor="middle">40 empties</text>
 <line x1="421.6" y1="125" x2="421.6" y2="132" stroke="#d0d7de"/>
-<text x="421.6" y="146" font-size="10.5" fill="#59636e" text-anchor="middle">空き 32</text>
+<text x="421.6" y="146" font-size="10.5" fill="#59636e" text-anchor="middle">32 empties</text>
 <line x1="506.8" y1="125" x2="506.8" y2="132" stroke="#d0d7de"/>
-<text x="506.8" y="146" font-size="10.5" fill="#59636e" text-anchor="middle">空き 26</text>
+<text x="506.8" y="146" font-size="10.5" fill="#59636e" text-anchor="middle">26 empties</text>
 <line x1="705.6" y1="125" x2="705.6" y2="132" stroke="#d0d7de"/>
-<text x="705.6" y="146" font-size="10.5" fill="#59636e" text-anchor="middle">空き 12</text>
+<text x="705.6" y="146" font-size="10.5" fill="#59636e" text-anchor="middle">12 empties</text>
 <line x1="876.0" y1="125" x2="876.0" y2="132" stroke="#d0d7de"/>
-<text x="876.0" y="146" font-size="10.5" fill="#59636e" text-anchor="middle">空き 0</text>
-<text x="24" y="170" font-size="10.5" fill="#59636e">← 序盤 (開始は空き 60)</text>
-<text x="876" y="170" font-size="10.5" fill="#59636e" text-anchor="end">終局 (空き 0) →</text>
+<text x="876.0" y="146" font-size="10.5" fill="#59636e" text-anchor="end">0 empties</text>
+<text x="24" y="170" font-size="10.5" fill="#59636e">← Opening (starts at 60 empties)</text>
+<text x="876" y="170" font-size="10.5" fill="#59636e" text-anchor="end">Game over (0 empties) →</text>
 <rect x="24" y="179" width="11" height="11" rx="2" fill="#ffd479"/>
-<text x="42" y="188" font-size="11" font-weight="600" fill="#1f2328">定石</text>
-<text x="116" y="188" font-size="11" fill="#59636e">定石にある間は即答する (探索しない)。手はここから返る</text>
+<text x="42" y="188" font-size="11" font-weight="600" fill="#1f2328">Opening book</text>
+<text x="152" y="188" font-size="11" fill="#59636e">While the position is in book, answers instantly without searching</text>
 <rect x="24" y="198" width="11" height="11" rx="2" fill="#4d9fff"/>
-<text x="42" y="207" font-size="11" font-weight="600" fill="#1f2328">中盤探索</text>
-<text x="116" y="207" font-size="11" fill="#59636e">NNUE 評価 + PVS + ProbCut。深さで打ち切る</text>
+<text x="42" y="207" font-size="11" font-weight="600" fill="#1f2328">Midgame search</text>
+<text x="152" y="207" font-size="11" fill="#59636e">NNUE eval + PVS + ProbCut, cut off at the depth limit</text>
 <rect x="24" y="217" width="11" height="11" rx="2" fill="#8bc34a"/>
-<text x="42" y="226" font-size="11" font-weight="600" fill="#1f2328">選択読み</text>
-<text x="116" y="226" font-size="11" fill="#59636e">終局まで読むが確率で刈る (差 1-2 で 99%、5-6 で 93%)</text>
+<text x="42" y="226" font-size="11" font-weight="600" fill="#1f2328">Selective search</text>
+<text x="152" y="226" font-size="11" fill="#59636e">Reads to the end but prunes by probability (99% at 1-2, 93% at 5-6)</text>
 <rect x="24" y="236" width="11" height="11" rx="2" fill="#ef7a7a"/>
-<text x="42" y="245" font-size="11" font-weight="600" fill="#1f2328">完全読み</text>
-<text x="116" y="245" font-size="11" fill="#59636e">刈らずに終局まで。答えは厳密な石差</text>
+<text x="42" y="245" font-size="11" font-weight="600" fill="#1f2328">Exact solve</text>
+<text x="152" y="245" font-size="11" fill="#59636e">To the end without pruning; the answer is the exact disc difference</text>
 </svg>

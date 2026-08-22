@@ -51,7 +51,8 @@ const moveCols = (): Col[] => [
   { head: t('data.moves.header_move'), w: 58 },
   { head: t('data.moves.header_eval'), w: 56, right: true, num: true },
   { head: t('data.moves.header_time'), w: 34, right: true, num: true },
-  { head: t('data.moves.header_source'), right: true },
+  // The remaining width; clip so a long source never bleeds into Time.
+  { head: t('data.moves.header_source'), right: true, clip: true },
 ];
 
 export function KifuTable({ moves, current, onSelect, decimals = 1 }: {
@@ -194,7 +195,18 @@ export function EvalGraph({ points, plies, cursor, blunder, busy, pov = 'b', ext
   /** Top edge is the viewpoint side ahead, bottom edge the other. */
   const upLabel = t(black ? 'data.graph.black_ahead' : 'data.graph.white_ahead');
   const downLabel = t(black ? 'data.graph.white_ahead' : 'data.graph.black_ahead');
-  const W = 800, L = 44, R = 54, T = 18, B = 26, STEP = 8;
+  /* The right margin holds the edge labels, so it follows their width
+     rather than a constant: "Black ahead" needs half again what its
+     Japanese counterpart does, and it was being cut off at the plot's
+     edge. Width is estimated the same way
+     `RateChart` does it (half-width ~6.1px, full-width ~11px at this
+     size) — SVG cannot measure text before it is laid out. */
+  const labelW = (s: string) =>
+    [...s].reduce((n, ch) => n + (ch.charCodeAt(0) < 0x2e80 ? 6.1 : 11), 0);
+  const W = 800, L = 44, T = 18, B = 26, STEP = 8;
+  const R = Math.max(54, Math.ceil(Math.max(
+    labelW(upLabel), labelW(downLabel), labelW(t('data.graph.even')),
+  )) + 14);
   /** Natural height and the floor below which we stop shrinking. */
   const NAT = 210, MIN = 120;
   const scale = box.w > 0 ? box.w / W : 0;

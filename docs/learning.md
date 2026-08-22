@@ -1,83 +1,103 @@
-# 学習
+# Learning
 
-教師あり学習と自己対戦。どこまで伸びて、どこで頭打ちになったか。
+Supervised learning and self-play. How far each went, and where it hit a
+ceiling.
 
-## 学習
+## Learning
 
-### 教師あり学習
+### Supervised learning
 
-線形モデルなので勾配は素直で、二乗損失から各有効セルの更新は `w += lr * error`。
+The model is linear, so the gradient is straightforward: from the
+squared loss, the update for each active cell is `w += lr * error`.
 
-- **オプティマイザは SGD が既定** (`--optimizer sgd`, lr 0.002)。線形モデルでは
-  ステップが誤差に比例するため、誤差の大きい学習初期は Adam より収束が速い
-  (Adam の正規化ステップは誤差の大小によらず概ね lr で頭打ちになる)。
-  Adam も実装しており、密配列でモーメントを保持する
-- **8 対称データ拡張**: 1 局面につき回転・鏡像 8 通りすべてを同じターゲットで
-  更新する
-- **決定論的 Fisher-Yates シャッフル** (CLI 側): SGD は IID な順序を仮定するが、
-  複数ソース (定石深さ別ファイル等) を連結すると順序が偏り、モデルが最後の
-  ソースに引っ張られてエポック損失が上昇する
-- 学習率の目安: 1 予測が読むセル数を K として `lr < 2/K` で収束
-  (K≈58 なら `lr ≲ 0.034`)
-- 毎エポック後にアトミック保存、Ctrl-C はシャード境界で保存して停止
+- **SGD is the default optimizer** (`--optimizer sgd`, lr 0.002). In a
+  linear model the step is proportional to the error, so early in
+  training, where the errors are large, it converges faster than Adam
+  (Adam's normalised step tops out at roughly lr however large or small
+  the error is). Adam is implemented as well, holding the moments in
+  dense arrays
+- **8-fold symmetry augmentation**: for each position all 8 rotations
+  and mirrors are updated against the same target
+- **Deterministic Fisher-Yates shuffle** (on the CLI side): SGD assumes
+  an IID order, but concatenating several sources (per-book-depth files
+  and the like) skews the order, the model is pulled towards the last
+  source, and the epoch loss rises
+- Rule of thumb for the learning rate: with K the number of cells one
+  prediction reads, `lr < 2/K` converges (`lr ≲ 0.034` for K≈58)
+- Atomic save after every epoch; Ctrl-C saves at a shard boundary and
+  stops
 
-#### 損失指標は「更新後の重み」で測る (val)
+#### The loss metric is measured with the updated weights (val)
 
-学習ループが毎エポック表示する MSE は、**更新しながら測った on-line 誤差**で、
-重みがエポック内で動いているぶんホールドアウトでの真の MSE とは別物になる。
-実際、この on-line 誤差はエポック数問で底を打って微増に転じることがあるが、
-そのとき凍結重みでの検証 MSE はまだ下がり続けている。**停止判断に on-line
-誤差を使ってはならない**。
+The MSE the training loop prints every epoch is an **on-line error
+measured while updating**, and because the weights move within the epoch
+it is a different thing from the true MSE on a hold-out. In fact this
+on-line error can bottom out after some number of epochs and turn to a
+slight rise while the validation MSE with frozen weights is still
+falling. **The on-line error must not be used to decide when to stop.**
 
-`--val <file>` を渡すと、毎エポック後に凍結した重みで検証集合の MSE を測って
-表示し、**最良 val の重みを `<weights>.best` に別途保存する**。学習は毎エポック
-`weights` を上書きするので、最終エポックが最良とは限らない以上、この別保存が
-実質の成果物になる。
+Passing `--val <file>` measures and prints the MSE on the validation set
+with frozen weights after every epoch, and **saves the weights with the
+best val separately to `<weights>.best`**. Training overwrites `weights`
+every epoch, and since the last epoch is not necessarily the best, this
+separate save is in practice the deliverable.
 
-`train` が返すのは 8 対称形の平均二乗誤差である。
+What `train` returns is the mean squared error over the 8 symmetric
+forms.
 
-データ形式は 17 バイト固定長のバイナリ (`black u64 LE, white u64 LE, score i8`)。
-ディスク上は rank-major で、読み書き時に `transpose` する。
-局面は**黒番・黒視点スコアに正規化**済み。
+The data format is a fixed-length 17-byte binary (`black u64 LE, white
+u64 LE, score i8`). On disk it is rank-major, and it is `transpose`d on
+read and write. Positions are normalised to **black to move, score from
+black's view**.
 
-#### シャード読み込み (大規模データ)
+#### Sharded loading (large data)
 
-学習データ全件を起動時に読み込む方式は「一度読めば全エポックで使い回せる」
-利点があったが、データが数 GB を超えると破綻する。メモリ上の `Example` は
-24 バイトなので、ディスク 16 GB のデータセットは **22 GB 以上**になり、
-読み込み中に OOM する。一方この規模では、再読み込みのコストは学習本体に対して
-誤差でしかない (実測でエポックあたり数秒 vs 数分)。
+Loading the whole training set at startup had the advantage of "read it
+once and reuse it for every epoch", but it breaks down past a few GB of
+data. An `Example` in memory is 24 bytes, so a dataset that is 16 GB on
+disk becomes **22 GB or more** and OOMs while loading. At this scale, on
+the other hand, the cost of re-reading is mere noise against training
+itself (measured: seconds per epoch versus minutes).
 
-そこで `--max-examples` (既定 64M ≒ 1.5 GB) を上限として、**ファイル単位で
-シャードに区切り、1 シャードずつ読み込んでは捨てる**方式にした。
+So, with `--max-examples` (default 64M ≒ 1.5 GB) as the ceiling, the
+data is **cut into shards along file boundaries and read one shard at a
+time, then dropped**.
 
-- シャード計画はファイルサイズだけから立てる。バイナリは固定長なので
-  `size / 17` が正確な件数になり、16 GB を読む前に配分が決まる
-  (テキストは 1 行 67 バイト以上として過大評価する = メモリ的に安全側)
-- **シャッフルはシャード内**で行う。加えて**エポックごとにファイルの並びを
-  入れ替える**ので、同じファイル同士が常に同居することはない
-- 学習率スケジュールは**エポックに 1 回**進める。シャードは「1 エポックを
-  分割したパス」なので、シャード毎に減衰させてはならない
-  (`train_pass` と `train_epoch_*` を分けている理由)
-- バッファはシャード間で使い回す。2 巡目以降は容量が足りているので、
-  GB 級の確保・解放をアロケータに繰り返させずに済む
+- The shard plan is drawn up from file sizes alone. The binary is
+  fixed-length, so `size / 17` is the exact count and the split is
+  decided before reading 16 GB (text is over-estimated at 67 bytes or
+  more per line = safe on the memory side)
+- **Shuffling happens within a shard.** On top of that **the order of
+  the files is permuted every epoch**, so the same files are not always
+  together
+- The learning-rate schedule advances **once per epoch**. A shard is "a
+  pass that splits one epoch", so it must not be decayed per shard
+  (this is why `train_pass` and `train_epoch_*` are separate)
+- Buffers are reused between shards. From the second round on the
+  capacity is already sufficient, sparing the allocator repeated
+  GB-scale allocation and release
 
-これによりピーク RSS はデータセットのサイズに依存せず、
-`--max-examples × 24 バイト + 重みテーブル 150 MB` で頭打ちになる
-(予算 4M で実測 255 MB)。
+Peak RSS therefore does not depend on the size of the dataset and tops
+out at `--max-examples × 24 bytes + the 150 MB weight table`
+(255 MB measured with a budget of 4M).
 
-### 自己対戦強化学習
+### Self-play reinforcement learning
 
-`train_game` が TD(λ) 風の全局面クレジット割当を行う。ターゲットは
-`λ * 最終結果 + (1-λ) * ブートストラップ値`。**後ろから前へ**学習することで、
-ブートストラップに更新済みの新しい重みを使う。
+`train_game` does TD(λ)-style credit assignment over every position. The
+target is `λ * final result + (1-λ) * bootstrap value`. Training **back
+to front** means the bootstrap uses the newly updated weights.
 
-### 学習の到達点 (実測に基づく結論)
+### Where learning got to (conclusions from measurement)
 
-- 教師あり学習 (公開棋譜 v0002 等) の重みが最強クラスで、**自己対戦 RL の
-  各世代を上回る**。過去に「RL 世代が教師ありに 93.4%」という記録があったが、
-  これは置換表共有による測定バイアスの産物だった (修正済み)
-- 継続学習は val MSE 39.56 付近で頭打ち。**val MSE の 0.01 級の改善は
-  もはや棋力に転化しない** (昇格アリーナ 800 局で 50.1% / 49.0%、
-  いずれも有意差なし) → 教師あり学習は収束と判断して打ち切り
-- 伸ばすならデータ量ではなく、パターン構成やステージ分割の再設計が必要
+- The weights from supervised learning (public game records v0002 and
+  the like) are the strongest class and **beat every generation of
+  self-play RL**. There was once a record of "an RL generation scoring
+  93.4% against supervised", but that was an artefact of measurement
+  bias from a shared transposition table (since fixed)
+- Continued training hits a ceiling around val MSE 39.56. **An
+  improvement of the 0.01 class in val MSE no longer turns into playing
+  strength** (50.1% / 49.0% over 800 games in the promotion arena,
+  neither significant) → supervised learning was judged converged and
+  stopped
+- Going further needs a redesign of the pattern composition or the stage
+  split, not more data
