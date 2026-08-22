@@ -823,6 +823,18 @@ impl Engine {
             let watcher = self.watch_deadline(deadline);
             let (pos, value, reached) = self.search.best_move_deadline(board, c.depth, deadline);
             let cut = self.stop_watch_done(watcher);
+            /* 調べもの用: **最後の段の値と、実際に返す値を突き合わせる**ため
+            に返り値も出す。段の記録だけでは「報告された値が段のどれとも
+            合わない」ことを示せない (実戦で 2 度その形の食い違いを見た)。 */
+            if std::env::var("ROOT_TRACE").is_ok() {
+                let h = crate::zobrist::board_hash(board.player_bb(), board.opponent_bb());
+                eprintln!(
+                    "  返: [{h:016x}] {:+8.2} (素 {value:+.2}) 深さ {reached} {:?}{}",
+                    stone_scale(value),
+                    pos,
+                    if cut { " 打切" } else { "" }
+                );
+            }
             MoveEval {
                 pos,
                 value: stone_scale(value),
