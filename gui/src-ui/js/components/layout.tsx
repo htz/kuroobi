@@ -2,28 +2,30 @@ import React from 'react';
 import { Board, BoardDefs } from './board';
 import { Button, Dot, Segmented } from './primitives';
 import { IconButton } from './Icons';
-// アセットを唯一の出所にする (assets.d.ts の方針)。画面用に写した複製と
-// ファイルが食い違う事故を防ぐため、<img src> ではなく中身を読む
+// Assets are the single source (assets.d.ts policy): read contents
+// instead of <img src> so no screen-side copy can drift.
 import icon from '../../assets/icon.svg?raw';
 
 /* KUROOBI layout
- * 画面は 左メニュー（ggs.tsx の Nav）＋右に縦 3 段
- * （Toolbar / 本体 / StatusBar）。段の高さは固定。中身が増えても外形は動かない。
- * TitleBar は置かない — 行き先は左メニューが持つので、上にもタブを出すと
- * ナビが 2 か所になる。信号機とドラッグ領域は Nav の上端が受ける
- * （Tauri。titleBarStyle: "Overlay" が前提）。
+ * The screen is the left nav (ggs.tsx's Nav) plus three fixed-height
+ * rows (Toolbar / body / StatusBar); growth never moves the frame.
+ * No TitleBar — destinations live in the nav, and a second tab row
+ * would split navigation. Traffic lights and the drag region belong
+ * to the nav's top edge (Tauri, titleBarStyle: "Overlay").
  *
- * 「数枚から 1 枚を選ぶ」列は Segmented 1 つに寄せた（Dock も BottomPanel も）。
- * 選択中は --card で浮かせる — 塗り（--accent-dim）は左メニューの現在地に
- * 取ってあるので、青地を画面に 2 か所出すと「いまどこにいるか」が薄まる。
+ * Pick-one-of-few rows all use one Segmented (Dock and BottomPanel
+ * alike). Selection floats on --card; the --accent-dim fill is
+ * reserved for the nav's current location, and a second blue patch
+ * would dilute "where am I".
  */
 
-/* Toasts が position:absolute で右下に付くので、ここが基準になる。
- * relative を外すと報せが画面の左上へ飛ぶ。
+/* Toasts anchor bottom-right against this element; dropping the
+ * relative sends them to the top-left.
  *
- * 畳の <pattern> もここが描く。id の重複を避けるためにドキュメントに 1 つだけ
- * 必要で、AppFrame は必ず 1 つしかない。置き忘れると url(#kb-tatami) が解決せず、
- * エラーも出ずに畳が無地の緑になる — 静かな壊れ方なので忘れようがない形にする。 */
+ * The tatami <pattern> is drawn here too: the document needs exactly
+ * one, and there is exactly one AppFrame. A missing pattern fails
+ * silently — url(#kb-tatami) resolves to nothing and the boards turn
+ * flat green — so it lives where it cannot be forgotten. */
 export function AppFrame({ children }: { children: React.ReactNode }) {
   return (
     <div style={{
@@ -36,24 +38,25 @@ export function AppFrame({ children }: { children: React.ReactNode }) {
   );
 }
 
-/* 窓の帯。全幅 28px。**押せるものを 1 つも置かない** — これが層の境目 (規則 75)。
- * 押せるものはすべて画面の側 (Toolbar / Nav / 本体) にいる。
+/* Window band, full width, 28px, with nothing clickable — that is
+ * the layer boundary (rule 75); clickables live in the screen
+ * (Toolbar / Nav / body).
  *
- * 左に信号機ぶんの余白とロゴ、その右に **いま何を見ているか** を受け身の
- * 文字で出す (macOS の題名の役)。Mission Control やスクショでも何をして
- * いたかが分かる。Tauri は title を空にしてこちらで描く。 */
+ * Traffic-light margin and logo on the left, then a passive "what am
+ * I looking at" (macOS title role) — legible in Mission Control and
+ * screenshots. Tauri's title is blanked; we draw it here. */
 export function WindowBar({ title, sub, right }: {
   title: string;
   sub?: React.ReactNode;
-  /** 右端に置く**受け身の印**。押せるものは置かない (規則 75)。
-   *  いまは確認用の環境変数の札だけが使う。 */
+  /** Passive badge at the right edge, never clickable (rule 75).
+   *  Currently only the env-var debug tag uses it. */
   right?: React.ReactNode;
 }) {
   return (
-    /* 左右に信号機ぶんの余白を同じだけ取り、題名は**窓の中央**に置く。
-       左だけ空けて左寄せにすると、窓の題名ではなく画面の見出しに見える。
-       ロゴはここには置かない — 28px の帯に押し込むと窮屈で、Nav の上端の
-       ほうが余裕がある。 */
+    /* Equal traffic-light margins on both sides keep the title at the
+       window's center; left-aligned it reads as a screen heading. The
+       logo stays out — the nav's top edge has more room than a 28px
+       band. */
     <div data-tauri-drag-region className="k-drag" style={{
       position: 'relative',
       height: 'var(--h-window)', flex: 'none', background: 'var(--bg)',
@@ -71,8 +74,8 @@ export function WindowBar({ title, sub, right }: {
           }}>{sub}</span>
         )}
       </span>
-      {/* 題名を**窓の中央**に保つため、右端の印は絶対位置で重ねる。
-          並びに入れると題名が左へずれる */}
+      {/* The right-edge badge overlays absolutely so the title stays
+          centered; in flow it would push the title left. */}
       {right && (
         <span style={{
           position: 'absolute', right: 'var(--sp-3)', top: 0,
@@ -83,21 +86,22 @@ export function WindowBar({ title, sub, right }: {
   );
 }
 
-/* WindowBar と StatusBar に挟まれた中段。Nav / 画面 / Dock を横に並べる。
- * Dock を重ねて出す (k-open) ときの基準もここ — 全幅の帯の下に潜らせない。 */
+/* Middle band between WindowBar and StatusBar: Nav / screen / Dock in
+ * a row. The overlaid Dock (k-open) anchors here so it never slides
+ * under the full-width bands. */
 export function Body({ children }: { children: React.ReactNode }) {
   return <div style={{ position: 'relative', flex: 1, display: 'flex', minHeight: 0 }}>{children}</div>;
 }
 
-/* Nav の右。Toolbar → 本体 を縦に積む、**画面そのもの**の列 */
+/* Right of the nav: Toolbar then body, stacked — the screen itself. */
 export function Main({ children, inset }: {
   children: React.ReactNode;
-  /** 重ねて出した Dock のぶんだけ本体を狭める (畳む段でだけ効く)。 */
+  /** Shrink the body by the overlaid Dock's width (collapsed tier only). */
   inset?: boolean;
 }) {
   return (
-    // `k-main` は規則を持っていなかった (base.css に .k-main が無い)。
-    // 効かないクラスを付けたままにすると、洗い出しのたびに引っかかる
+    // k-main had no rules (no .k-main in base.css); dead classes trip
+    // every audit.
     <div className={inset ? 'k-dock-inset' : undefined}
          style={{ flex: 1, display: 'flex', flexDirection: 'column', minWidth: 0 }}>
       {children}
@@ -105,18 +109,17 @@ export function Main({ children, inset }: {
   );
 }
 
-/* 盤の上の帯。そのモードの「操作」と、対局の前提を決める最小限だけを置く。
- * 数値は StatusBar へ。
+/* The band above the board: the mode's actions plus the minimum
+ * game-setup choices. Numbers go to the StatusBar.
  *
- * aux は 940px 以下で消える（base.css の k-toolbar-aux）。消えて困るものを
- * 入れないこと — 担当のように狭い窓でも変えられなければならないものは
- * children 側に置く。型で分けてあるのは、画面ごとに手でクラスを付けると
- * 必ず付け忘れるから。
- * dock は畳む段（1120px 以下）でだけ出る Dock の開閉。Dock は本体の右に
- * あるものなので、入口も上の帯に置く（BottomPanel の onClose と対称）。
- * graph も同じ考え方で、いちばん低い段（620px 以下）でだけ出る評価値グラフの
- * 開閉。畳むと見出し行ごと消えるので、入口は帯に置くしかない。
- */
+ * aux disappears below 940px (base.css k-toolbar-aux) — put nothing
+ * there that must survive; anything that must stay editable in a
+ * narrow window goes in children. The split is typed because
+ * per-screen manual classes always get forgotten.
+ * dock toggles the Dock in the collapsed tier (<=1120px); the Dock
+ * sits right of the body, so its entry point lives up here (mirror of
+ * BottomPanel's onClose). graph likewise toggles the eval graph in
+ * the lowest tier (<=620px), whose heading row collapses away. */
 export function Toolbar({ children, aux, dock, graph }: {
   children: React.ReactNode;
   aux?: React.ReactNode;
@@ -124,25 +127,26 @@ export function Toolbar({ children, aux, dock, graph }: {
   graph?: { open: boolean; onToggle: () => void };
 }) {
   return (
-    /* 窓を掴める帯でもある。左メニューの上端だけだと掴める幅が 208px しか
-       なく、しかもロゴの上では掴めない (属性を持つ要素そのものでしか効かない)。
-       ここは帯の地の部分だけが掴める — 子のボタンは属性を持たないので、
-       押すつもりが窓を動かすことはない。 */
-    /* 画面の帯。Nav の右、本体の上。**その画面だけの操作**を置く。
-       信号機の余白もロゴもここには無い — WindowBar が持つ (規則 75)。 */
+    /* Also a window-drag strip: the nav's top edge alone gives only
+       208px, and not over the logo (the attribute only works on the
+       element itself). Only the band's ground is draggable — child
+       buttons lack the attribute, so clicks never move the window. */
+    /* The screen's band, right of the nav, above the body — this
+       screen's actions only. No traffic-light margin, no logo; the
+       WindowBar owns those (rule 75). */
     <div style={{
       height: 'var(--h-bar)', flex: 'none', borderBottom: '1px solid var(--border-weak)',
       display: 'flex', alignItems: 'center', padding: '0 var(--sp-4)', gap: 'var(--sp-2)',
     }}>
       {children}
-      {/* 押し出しはこれが持つ。畳む段で消える要素（k-toolbar-aux）に
-          marginLeft:auto を持たせると、消えた瞬間に後ろのものが左へ飛ぶ */}
+      {/* This spacer owns the push; putting marginLeft:auto on the
+          disappearing aux makes everything jump left when it goes. */}
       <span style={{ flex: 1 }} />
-      {/* display は .k-toolbar-aux が持つ（940px で消す） */}
+      {/* display lives in .k-toolbar-aux (hidden at 940px). */}
       {aux && <span className="k-toolbar-aux" style={{ alignItems: 'center', gap: 'var(--sp-3)' }}>{aux}</span>}
       {graph && (
-        /* 文字の釦。ドックの入口と並ぶので、絵にすると 2 つの四角が
-           何を開くのか見分けられない */
+        /* Text button: next to the dock toggle, two icon squares would
+           be indistinguishable. */
         <span className="k-graph-toggle">
           <Button size="chip" variant={graph.open ? 'secondary' : 'ghost'}
                   title="評価値グラフ" onClick={graph.onToggle}>グラフ</Button>
@@ -150,8 +154,8 @@ export function Toolbar({ children, aux, dock, graph }: {
       )}
       {dock && (
         <span className="k-dock-toggle">
-          {/* panel = 縦に二分された矩形。ggs-console（左メニューのコンソール）を
-              使い回すと、同じ絵が別の意味で 2 か所に出る */}
+          {/* panel = vertically split rectangle; reusing ggs-console's
+              icon would give one glyph two meanings. */}
           <IconButton name="panel" label={dock.label ?? (dock.open ? 'パネルを閉じる' : 'パネルを開く')}
                       onClick={dock.onToggle} />
         </span>
@@ -162,16 +166,16 @@ export function Toolbar({ children, aux, dock, graph }: {
 
 export function Dock({ tabs, active, onTab, children, open, scroll = true }: {
   tabs: string[]; active: string; onTab?: (t: string) => void; children: React.ReactNode;
-  /** 畳む段（1120px 以下）で出し入れする。広い窓では無視される。
-   *  true にする操作は Toolbar の dock={{...}} が持つ。 */
+  /** Toggled in the collapsed tier (<=1120px), ignored when wide.
+   *  The opener lives in Toolbar's dock={{...}}. */
   open?: boolean;
-  /** 中身を丸ごとスクロールさせる。**自前で見出しを固定したい中身は false**
-   *  (棋譜の表は列の見出しと操作を残したまま行だけ流したい)。 */
+  /** Scroll the whole content. false for content pinning its own
+   *  header (the move table scrolls rows only). */
   scroll?: boolean;
 }) {
   return (
-    // width と display は base.css の .k-dock が持つ（1120px で消すので、
-    // インラインに書くと media query が届かない）。k-open で重ねて出る。
+    // width/display live in base.css's .k-dock (hidden at 1120px —
+    // inline styles escape the media query). k-open overlays it.
     <aside className={'k-dock' + (open ? ' k-open' : '')} style={{
       flex: 'none', background: 'var(--panel)',
       borderLeft: '1px solid var(--border)', flexDirection: 'column', minHeight: 0,
@@ -187,12 +191,12 @@ export function Dock({ tabs, active, onTab, children, open, scroll = true }: {
   );
 }
 
-/* 節。丸四角の箱は使わず、見出し＋1px 罫だけで区切る。
- * 中身は無くてもよい — 節そのものが「ここから先は別の話」の印なので、
- * 器がスクロールを持つ場合 (通信ログなど) は見出しだけを置く */
+/* Section: no rounded boxes, just a heading and a 1px rule. Content
+ * is optional — the section itself marks "new topic", so scrolling
+ * containers (protocol log) may hold just the heading. */
 export function Section({ title, aside, grow, children }: {
   title: string; aside?: React.ReactNode; children?: React.ReactNode;
-  /** 余りの高さを取り、**中身だけ**を縦に流す (画面ごと流さない)。 */
+  /** Take the remaining height and scroll only the content. */
   grow?: boolean;
 }) {
   return (
@@ -201,8 +205,8 @@ export function Section({ title, aside, grow, children }: {
       padding: '0 var(--sp-3) var(--sp-4)',
       ...(grow ? { flex: 1, minHeight: 0, overflow: 'hidden' } : { flex: 'none' }),
     }}>
-      {/* 操作が乗るときは帯を高くする。--h-head (20px) のままだと押せるものが
-          罫にめり込み、当たりも文字ぶんしか無くなる (実際に指摘が出た) */}
+      {/* Taller band when actions sit on it; at --h-head (20px) the
+          controls sink into the rule with a text-sized hit area. */}
       <h3 style={{
         margin: 0, minHeight: aside ? 'var(--h-field)' : 'var(--h-head)',
         display: 'flex', alignItems: 'center', gap: 'var(--sp-3)',
@@ -219,15 +223,16 @@ export function Section({ title, aside, grow, children }: {
   );
 }
 
-/* 右端の内容はモードごとに変える。GGS の対局中だけ チャット / コンソール を出す */
+/* Right-edge content varies by mode; chat/console only during a GGS
+ * game. */
 export function StatusBar({ left, right }: { left?: React.ReactNode; right?: React.ReactNode }) {
   return (
     <div style={{
       height: 'var(--h-status)', flex: 'none', background: 'var(--bg)', borderTop: '1px solid var(--border)',
       display: 'flex', alignItems: 'center', gap: 'var(--sp-4)', padding: '0 var(--sp-4)',
       fontSize: 'var(--fs-6)', color: 'var(--sub)', whiteSpace: 'nowrap',
-      // **帯ごと桁を揃える。**思考の秒・nodes・nps は毎フレーム変わるので、
-      // 桁が動くと下の帯全体が左右に揺れて読めない
+      // Tabular digits for the whole band: think time / nodes / nps
+      // change every frame, and shifting digits shake the strip.
       fontVariantNumeric: 'tabular-nums',
     }}>
       {left}
@@ -242,14 +247,14 @@ export function StatusStat({ label, value, unit }: { label?: string; value: Reac
   );
 }
 
-/* GGS だけが持つ下部パネル。チャットとコンソールが 1 枚を共有する。
+/* GGS-only bottom panel; chat and console share one sheet.
  *
- * 高さは固定（180〜420 の間で決め打ち）。掴んで変えられる見た目を出していたが、
- * 掴めるのに動かないのは無いより悪いので摘みは落とした。現行にも高さ変更は無い。
- * 入れるときは onResize を足し、上端に k-grip の摘みを戻す。
+ * Height is fixed (a constant within 180-420). A grip that looked
+ * draggable but wasn't was worse than none, so it went; to add
+ * resizing, restore onResize and the k-grip handle.
  *
- * タブは未読バッジを持つので Segmented ではないが、選択中の表現は揃える（--card）。
- */
+ * Tabs carry unread badges so they are not Segmented, but selection
+ * styling matches (--card). */
 export function BottomPanel({ tabs, active, onTab, onClose, height = 240, children }: {
   tabs: { id: string; label: string; unread?: number }[];
   active: string; onTab?: (id: string) => void; onClose?: () => void;
@@ -261,9 +266,8 @@ export function BottomPanel({ tabs, active, onTab, onClose, height = 240, childr
       background: 'var(--panel)', borderTop: '1px solid var(--border)',
       display: 'flex', flexDirection: 'column',
     }}>
-      {/* タブの帯は --h-field (32px)。36 は規則 5 の 5 段
-          (44/32/28/24/20) に無く、絵の下部パネルも 32px。中のタブは
-          --h-chip (20px) なので 32 でも上下に 6px ずつ残る */}
+      {/* Tab strip is --h-field (32px); 36 is not on rule 5's scale
+          and the design uses 32. Chips are 20px, leaving 6px each way. */}
       <div style={{
         height: 'var(--h-field)', flex: 'none', display: 'flex', alignItems: 'center', gap: 'var(--sp-2)',
         padding: '0 var(--sp-3)', borderBottom: '1px solid var(--border-weak)',
@@ -296,41 +300,39 @@ export function BottomPanel({ tabs, active, onTab, onClose, height = 240, childr
 }
 
 
-/* 浮くもの。角丸 --r-4 と影を持つのは Modal / Toast / 盤の外枠だけ
- * (Popover は使い所が無かったので削除した — 規則 70)
+/* Floating things. Only Modal / Toast / the board frame get --r-4
+ * radius and a shadow (Popover was unused and removed — rule 70).
  *
- * **覆いは 1 つの形しか無い。** 以前は 4 枚が 4 通りの作りだった —
- * 確認は帯なしで余白 24、棋譜の読み込みと棋譜ビューアは罫つきの頭と足、
- * 設定だけ 44px の `--panel` の帯に閉じる釦。**同じ「浮いて決めさせるもの」
- * が画面ごとに違って見えていた。**
+ * There is exactly one modal shape. Four dialogs used to have four
+ * builds, so the same "float and decide" thing looked different per
+ * screen.
  *
- * 段は 3 つ。**地の色は 3 段で変える** (設定の窓がそうだった。実測 —
- * 題名 #1f2328 / タブ #2c3138 / 中身 #17191d):
- *   頭 … `--h-bar` (44px) の `--panel`。題名は中央、閉じるは右端 (規則 5)
- *   本体 … **`--bg` (いちばん暗い)**。余白 16/24。長ければ `scroll` で巻く
- *   足 … 頭と同じ `--panel` + 上罫。`actions` を渡したときだけ出す
+ * Three tiers with three ground colors (measured from the settings
+ * window — title #1f2328 / tabs #2c3138 / body #17191d):
+ *   head - --h-bar (44px) of --panel; centered title, close at right
+ *   body - --bg (darkest); padding 16/24; scrolls when long
+ *   foot - same --panel + top rule; only when actions are passed
  *
- * **中身を明るくしない。**帯より中身が明るいと、帯が沈んで箱の縁に見え、
- * 「浮いている 1 枚」ではなく「窓の中の板」に見える。
+ * Never brighten the body: brighter than the bands, the bands sink
+ * into box edges and the modal reads as a plate, not a sheet.
  *
- * 幅は `--w-modal` (340) か `--w-modal-wide` (520)。高さは中身なりで、
- * 画面が低ければ `88vh` で頭打ちにして本体だけを巻く。
- */
+ * Width is --w-modal (340) or --w-modal-wide (520). Height follows
+ * content, capped at 88vh with only the body scrolling. */
 export function Modal({ title, sub, body, actions, width = 'var(--w-modal)', onClose, scroll, band, children }: {
   title: string;
-  /** 題名の下の一行 (棋譜の読み込みの「GGF・f5d6… のいずれでも」など)。 */
+  /** One line under the title (e.g. the record loader's format hint). */
   sub?: React.ReactNode;
-  /** 本体。`children` と同じ扱い — 短い文だけのときはこちらが読みやすい。 */
+  /** Body; same as children, but reads better for short text. */
   body?: React.ReactNode;
   actions?: React.ReactNode;
-  /** 既定は `--w-modal` (340px)。中身の要る覆いは `--w-modal-wide` (規則 71) */
+  /** Default --w-modal (340px); content-heavy modals use wide (rule 71). */
   width?: string;
-  /** 閉じる。渡すと頭の右端に釦が出る。 */
+  /** Close; when passed, a button appears at the head's right edge. */
   onClose?: () => void;
-  /** 本体を巻けるようにする (設定のように中身が長いもの)。 */
+  /** Make the body scrollable (long content like settings). */
   scroll?: boolean;
-  /** 頭のすぐ下に**固定**で置く帯 (設定のタブ)。**本体と一緒に巻かない** —
-   *  巻くとタブが上へ流れて、いまどの枚を見ているのか分からなくなる。 */
+  /** A strip pinned under the head (settings tabs) — never scrolled
+   *  with the body, or the tabs drift away. */
   band?: React.ReactNode;
   children?: React.ReactNode;
 }) {
@@ -346,16 +348,17 @@ export function Modal({ title, sub, body, actions, width = 'var(--w-modal)', onC
         borderBottom: '1px solid var(--border)', display: 'flex', alignItems: 'center',
         padding: '0 var(--sp-2)',
       }}>
-        {/* 題名を**窓の中央**に置くため、閉じると同じ幅を左にも取る */}
+        {/* Match the close button's width on the left to center the
+            title. */}
         <span style={{ width: 32, flex: 'none' }} />
         <div style={{ flex: 1, minWidth: 0, textAlign: 'center' }}>
-          {/* 題名に名前が入ることがある (プレイヤーの名刺)。写せるようにする */}
+          {/* Titles can carry names (player cards); keep selectable. */}
           <div className="k-sel" style={{
             fontSize: 'var(--fs-4)', fontWeight: 600, color: 'var(--text)',
             overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
           }}>{title}</div>
-          {/* 副題は**頭の中**、題名の下 (絵の §9 がこの形)。本体に置くと
-              中身の 1 行目と見分けが付かない */}
+          {/* Subtitle inside the head, under the title (design §9); in
+              the body it blends with the first content line. */}
           {sub && <div style={{
             fontSize: 'var(--fs-7)', color: 'var(--sub)',
             overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
@@ -366,8 +369,8 @@ export function Modal({ title, sub, body, actions, width = 'var(--w-modal)', onC
         </span>
       </div>
 
-      {/* 帯の器は**こちらが持つ** — 高さも地も罫も覆いの決まりなので、
-          中身の側に書かせると画面ごとにずれる */}
+      {/* The strip's container is owned here — height, ground and rule
+          are modal law, and content-side copies drift. */}
       {band && (
         <div style={{
           flex: 'none', height: 'var(--h-bar)', background: 'var(--card)',
@@ -396,23 +399,19 @@ export function Modal({ title, sub, body, actions, width = 'var(--w-modal)', onC
   );
 }
 
-/* 節の中に並べる一覧。**`Section` の直下に行を置かないこと。**
+/* Lists inside a section — never put rows directly under Section.
  *
- * `Section` は節の中身を `--sp-3` (12px) の溝で積む。説明文や欄が並ぶ節では
- * それでよいが、**一覧の行の間に 12px が入ると箇条書きに見える** —
- * 24px の行が 36px 間隔、32px の行が 44px 間隔で並ぶ。
- * 同じ取りこぼしを 4 回踏んだ (定石の木 / 学習ログ / GGS の 3 つ) ので、
- * 名前のある器にした。行を並べるときは必ずこれで包む。
- */
+ * Section stacks content with a 12px gap; fine for prose and fields,
+ * but 12px between list rows reads as bullet points. The same slip
+ * happened four times, hence a named container: always wrap rows in
+ * this. */
 export function List({ children }: { children: React.ReactNode }) {
   return <div style={{ display: 'flex', flexDirection: 'column' }}>{children}</div>;
 }
 
-/** 機械が動いていることの印。**`Dot` + 一言**で、色は `--accent`。
- *  「取り込み中」「分析中」「思考中」が同じ形を 4 か所で手書きしていた。
- *
- *  規則 34 の「作業が進んでいることの報せはトーストに出さない」と対で、
- *  **進んでいることは画面の中で静かに示す。** */
+/** Machine-at-work indicator: Dot + one word, --accent. Four places
+ *  hand-rolled the same shape. Pairs with rule 34 (no progress
+ *  toasts): progress is shown quietly in place. */
 export function Busy({ children }: { children: React.ReactNode }) {
   return (
     <span style={{
@@ -424,21 +423,20 @@ export function Busy({ children }: { children: React.ReactNode }) {
   );
 }
 
-/** ラベルを左、値を右に置く 1 行。**節の中で「名前: 値」を並べる形。**
- *  `App.tsx` の `LearnStat` と `LearnLog.tsx` の `Fact` が同じ形を別々に
- *  持っていたのでまとめた (規則 50)。
- *
- *  `big` は数を目立たせたいとき (登録局面など)。既定は本文と同じ大きさで、
- *  長い値は省略記号で切る。 */
+/** Label-left value-right row — the name: value shape inside a
+ *  section. Merged from App.tsx's LearnStat and LearnLog's Fact
+ *  (rule 50). big highlights a number; default is body-sized with
+ *  ellipsis for long values. */
 export function KeyValue({ label, value, big }: {
   label: string;
-  /** 数を渡すと**桁区切りを入れる** (`70,622`)。`undefined` は「—」 */
+  /** Numbers get digit grouping (70,622); undefined renders as em
+   *  dash. */
   value: React.ReactNode;
-  /** 値を `--fs-3` の太字にして桁を揃える。数を読ませる行だけ */
+  /** Bold --fs-3 tabular value; only for number-reading rows. */
   big?: boolean;
 }) {
-  // 数はここで整える。呼ぶ側で toLocaleString() を書くと、書き忘れた
-  // 場所だけ桁区切りの無い数字が並ぶ (定石の局面数は 5 桁を超える)
+  // Format here: caller-side toLocaleString() gets forgotten and the
+  // book's position count exceeds five digits.
   const shown = typeof value === 'number' ? value.toLocaleString()
     : value === undefined ? '—' : value;
   return (
@@ -454,9 +452,9 @@ export function KeyValue({ label, value, big }: {
   );
 }
 
-/** ツールバーの縦罫。**押す操作と前提を決めるものを切る。**
- *  切らないと「新規対局」と「黒」が同じ並びに見える。
- *  `App.tsx` に同じ 4 行が並んでいたのでまとめた。 */
+/** Toolbar vertical rule separating actions from setup choices —
+ *  without it "new game" and "black" read as one row. Merged from
+ *  four identical copies in App.tsx. */
 export function Divider() {
   return <span style={{
     width: 1, height: 20, flex: 'none',
@@ -464,9 +462,9 @@ export function Divider() {
   }} />;
 }
 
-/** 節や欄に添える説明文。**規則 73 — 読み物は `--w-text` (720px) で
- *  折り返す。** 表・一覧・盤は窓いっぱいでよいが、文章の 1 行が 1500px に
- *  なると目が行頭に戻れない。7 か所で同じ体裁を手書きしていた。 */
+/** Explanatory prose for sections and fields. Rule 73: prose wraps
+ *  at --w-text (720px) — a 1500px line loses the eye on the way back.
+ *  Seven places hand-rolled this. */
 export function Note({ children }: { children: React.ReactNode }) {
   return <p style={{
     margin: 0, maxWidth: 'var(--w-text)',
@@ -474,29 +472,27 @@ export function Note({ children }: { children: React.ReactNode }) {
   }}>{children}</p>;
 }
 
-/** 表の 1 列の決めごと。**幅と揃えを見出しと行で 1 つの配列から取る。**
- *
- * 前は見出しと行が別々に `<span style={{ width: 58 }}>` を手書きしていて、
- * **同じ数字が 2 か所にある**ぶん片方だけ直してずれた。中身そのものは
- * 列ごとに違う (石 + 座標、レート + 偏差) ので `children` のまま置く —
- * 器だけを配列が持ち、何を入れるかは呼ぶ側が決める。 */
+/* Table column spec: width and alignment come from ONE array shared
+ * by head and rows. Hand-written widths in two places drifted. Cell
+ * content stays as children — the array owns the container, the
+ * caller owns the content. */
 export interface Col {
-  /** 列見出しに出す文字。 */
+  /** Header label. */
   head?: React.ReactNode;
-  /** 幅 (px)。**省いた列が余りを分ける。** */
+  /** Width in px; columns without one share the remainder. */
   w?: number;
-  /** 右揃え。数字の列に使う。 */
+  /** Right-align, for numeric columns. */
   right?: boolean;
-  /** 桁を揃える (縦に読み比べる数字の列)。見出しには効かない。 */
+  /** Tabular digits (columns compared vertically). Rows only. */
   num?: boolean;
-  /** はみ出しを … で畳む (名前の列)。見出しには効かない。 */
+  /** Ellipsis overflow (name columns). Rows only. */
   clip?: boolean;
 }
 
-/** 列の器。`head` のときは行だけの決めごと (`num` / `clip`) を落とす。 */
+/** Column container; head mode drops the row-only bits (num/clip). */
 function cell(c: Col, head?: boolean): React.CSSProperties {
   if (!head && c.clip) {
-    // 畳む列は flex をやめる。flex の子に textOverflow は効かない
+    // Clipping columns leave flex; textOverflow fails on flex children.
     return {
       ...(c.w === undefined ? { flex: 1, minWidth: 0 } : { width: c.w, flex: 'none' }),
       overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
@@ -511,19 +507,15 @@ function cell(c: Col, head?: boolean): React.CSSProperties {
   };
 }
 
-/* 表の列見出しの行。**4 か所で同じ体裁を手書きしていた** (棋譜の表 /
- * 学習ログ / プレイヤーの一覧 / 定石の木) — 字も高さも罫も同じなのに
- * 書いた場所ごとに並び順が違い、直すときに見落とす。
- *
- * 高さは `--h-head` (20px)、字は節の見出しと同じ (`--fs-7` / 600 /
- * 字間 .08em / `--sub`)。**列は `cols` が並べる** — 同じ配列を行にも
- * 渡すことで、幅が二度書かれない。 */
+/* Table header row — four screens hand-rolled it identically. Height
+ * --h-head (20px), type matches section headings. Columns come from
+ * cols; passing the same array to rows keeps widths written once. */
 export function TableHead({ cols, pad = 'var(--sp-3)', children }: {
-  /** 列の決めごと。行に渡すものと**同じ配列**を渡す。 */
+  /** Column spec — the SAME array passed to the rows. */
   cols?: Col[];
-  /** 左右の余白。行の余白と揃える (既定は `--sp-3`)。 */
+  /** Side padding, matching the rows (default --sp-3). */
   pad?: string;
-  /** `cols` を使わないとき (見出しに列の形が無い表) だけ。 */
+  /** Only for tables without a columnar header. */
   children?: React.ReactNode;
 }) {
   return (
@@ -538,37 +530,34 @@ export function TableHead({ cols, pad = 'var(--sp-3)', children }: {
   );
 }
 
-/** 選ばれている行の見せ方。**accent 14% の面 + 左に 2px。**
- *
- * 一覧は形が 3 通りある (表の行 / 会話の 2 段 / 手合いの 2 段) が、
- * **「選ばれている」の見せ方だけは 1 つ**にする。値を手書きで散らして
- * いたせいで一度ずれた (学習ログだけ `--card` の面 + 角丸だった)。 */
+/** Selected-row treatment: 14% accent fill + 2px left bar. Lists come
+ *  in three shapes but selection has exactly one look; hand-written
+ *  values drifted once (LearnLog used --card + radius). */
 export const picked = (on: boolean): React.CSSProperties => ({
   background: on ? 'color-mix(in srgb, var(--accent) 14%, transparent)' : 'transparent',
   boxShadow: on ? 'inset 2px 0 0 var(--accent)' : 'none',
 });
 
-/* 表の 1 行。**同じ形を 3 か所で手書きしていた** (棋譜の表 / 学習ログ /
- * プレイヤーの一覧)。高さ `--h-row` (24px)、下に 1px の罫、選ばれている行は
- * **accent 14% の面 + 左に 2px** — この「選ばれている」の見せ方が画面ごとに
- * 違っていて、一度直したのにまた別の場所でずれた。名前のある器にする。
+/* Table row — hand-rolled in three places before. Height --h-row
+ * (24px), 1px bottom rule, selection = 14% accent + 2px left bar (a
+ * look that kept drifting until it got a named container).
  *
- * **列は `cols` が並べる** (`TableHead` と同じ配列を渡す)。子は列と同じ順で
- * 置き、**器の幅は配列が、中身は子が**受け持つ。 */
+ * Columns come from cols (same array as TableHead); children follow
+ * the column order — the array owns widths, children own content. */
 export function TableRow({ cols, on, pad = 'var(--sp-3)', fs = 'var(--fs-5)', muted, onClick, title, innerRef, children }: {
-  /** 列の決めごと。見出しに渡すものと**同じ配列**を渡す。 */
+  /** Column spec — the SAME array passed to the head. */
   cols?: Col[];
-  /** 選ばれている行。 */
+  /** Selected row. */
   on?: boolean;
-  /** 左右の余白。列見出しと揃える。 */
+  /** Side padding, matching the header. */
   pad?: string;
-  /** 字の大きさ。狭い列では `--fs-6` にする。 */
+  /** Font size; --fs-6 for narrow columns. */
   fs?: string;
-  /** まだ値の無い行 (棋譜の未着手) は弱く出す。 */
+  /** Dim rows with no value yet (unplayed moves). */
   muted?: boolean;
   onClick?: () => void;
   title?: string;
-  /** 現在行を追いかけるための ref (棋譜の表が使う)。 */
+  /** Ref for following the current row (used by the move table). */
   innerRef?: React.Ref<HTMLButtonElement>;
   children: React.ReactNode;
 }) {
@@ -580,7 +569,7 @@ export function TableRow({ cols, on, pad = 'var(--sp-3)', fs = 'var(--fs-5)', mu
         width: '100%', border: 0, textAlign: 'left',
         display: 'flex', alignItems: 'center', gap: 'var(--sp-2)',
         height: 'var(--h-row)', padding: `0 ${pad}`, fontSize: fs,
-        // 表の行は必ず数字の列を持つ。桁が揃わないと縦に読み比べられない
+        // Table rows always carry numeric columns; digits must align.
         fontVariantNumeric: 'tabular-nums',
         borderBottom: '1px solid var(--border-weak)',
         color: muted ? 'var(--sub)' : 'var(--text)',
@@ -595,12 +584,10 @@ export function TableRow({ cols, on, pad = 'var(--sp-3)', fs = 'var(--fs-5)', mu
   );
 }
 
-/* **一覧が空のときの一言。**節や表の中に置く小さいほう。
- *
- * 画面まるごとが空なら `EmptyState` (絵と題名と行き先を持つ大きいほう)。
- * **この 2 つ以外を書かない** — 生の `<span>` で書くと、色も余白も
- * 書いた場所ごとに変わる。実際に 4 か所が別々の見た目になっていた
- * (棋譜の表 / 学習ログ / 定石の木 / チャット)。 */
+/* One-liner for an empty list — the small variant, placed inside a
+ * section or table. A fully empty screen uses EmptyState (the big one
+ * with art, title and a destination). Use only these two: raw spans
+ * drifted into four different looks. */
 export function Empty({ children }: { children: React.ReactNode }) {
   return (
     <div style={{ padding: 'var(--sp-3) 0', fontSize: 'var(--fs-6)', color: 'var(--sub)' }}>
@@ -609,12 +596,11 @@ export function Empty({ children }: { children: React.ReactNode }) {
   );
 }
 
-/* 押せない盤を出さないための空状態。GGS 未対局時など
- *
- * `visual` を渡すと**横並び**になる (絵の GGS 対局の空状態がこれ) —
- * 左に見せるもの、右に文言と釦。渡さなければ従来どおりロゴを上に置いた
- * 縦積みのまま。**縦のときだけ中央揃え** で、横のときは行が短いので
- * 左に揃える (中央だと釦の左端が文の途中から始まって落ち着かない)。 */
+/* Empty state that avoids showing a dead board (e.g. GGS before any
+ * game). With visual it goes horizontal (design's GGS empty state):
+ * visual left, text and button right. Without it, the vertical
+ * logo-on-top stack. Centered only when vertical — short horizontal
+ * lines left-align, or the button floats mid-sentence. */
 export function EmptyState({ title, body, actions, visual }: {
   title: string; body?: React.ReactNode; actions?: React.ReactNode; visual?: React.ReactNode;
 }) {
@@ -636,7 +622,8 @@ export function EmptyState({ title, body, actions, visual }: {
         <div style={{ display: 'flex', flexDirection: 'column', gap: 'var(--sp-2)', maxWidth: side ? 250 : undefined }}>
           <div style={{ fontSize: 'var(--fs-3)', fontWeight: 600 }}>{title}</div>
           {body && <div style={{ fontSize: 'var(--fs-5)', color: 'var(--sub)', lineHeight: 1.8 }}>{body}</div>}
-          {/* 横のときは釦も文の列に入れる。縦のときは外に出して中央に置く */}
+          {/* Horizontal keeps the button in the text column; vertical
+              centers it outside. */}
           {side && actions && <div style={{ display: 'flex', gap: 'var(--sp-2)', marginTop: 'var(--sp-2)' }}>{actions}</div>}
         </div>
         {!side && actions && <div style={{ display: 'flex', gap: 'var(--sp-2)' }}>{actions}</div>}
@@ -645,12 +632,11 @@ export function EmptyState({ title, body, actions, visual }: {
   );
 }
 
-/** 空状態に置く飾りの盤。初期配置を描くだけで、押せない。
- *
- * 絵の注記は「畳の織り目まで描くが操作はできない」。`Board` をそのまま
- * 使う — 空状態のためだけに別の盤を書くと、畳や石の見た目が二重管理になる。 */
+/** Decorative board for empty states: initial position, not
+ *  interactive. Reuses Board — a separate board would double-manage
+ *  the tatami and stone rendering. */
 export function EmptyBoard({ size = 150 }: { size?: number }) {
-  // sq = file*8 + rank。d4/e5 が白、e4/d5 が黒
+  // sq = file*8 + rank; d4/e5 white, e4/d5 black.
   const cells: (0 | 1 | 2)[] = Array(64).fill(0);
   cells[3 * 8 + 3] = 2; cells[4 * 8 + 4] = 2;
   cells[4 * 8 + 3] = 1; cells[3 * 8 + 4] = 1;
@@ -666,18 +652,15 @@ export function EmptyBoard({ size = 150 }: { size?: number }) {
   );
 }
 
-/* 浮くものを画面の真ん中に置く暗幕。Modal はこれに入れる。
- *
- * 押せない場所を作るのが役目なので、暗幕そのものを押したら閉じる。
- * Esc でも閉じる — 開いたら閉じ方が要る、というだけの話だが、
- * ブラウザの confirm() と違って自分で書かないと付いてこない。 */
-/** 焦点を置ける相手 (Tab の輪に入るもの)。 */
+/* The scrim that centers floating things; Modals go inside. Its job
+ * is making the rest unclickable, so clicking it closes — as does
+ * Esc, which browser confirm() gave for free and we must write. */
+/** Focusable targets (members of the Tab ring). */
 const FOCUSABLE =
   'textarea:not(:disabled), input:not(:disabled), button:not(:disabled), select:not(:disabled), [tabindex]:not([tabindex="-1"])';
-/** 開いたときに焦点を置きたい相手。**打つ場所を釦より先に**する —
- *  `querySelectorAll` は書いた順ではなく**文書の順**で返すので、
- *  頭の閉じる釦が先に来てしまう (棋譜の読み込みで貼り付け先ではなく
- *  「閉じる」に入っていた)。 */
+/** Preferred initial focus: inputs before buttons — querySelectorAll
+ *  returns document order, which puts the head's close button first
+ *  (the record loader focused "close" instead of the paste field). */
 const FIRST_STOP = 'textarea:not(:disabled), input:not(:disabled), select:not(:disabled)';
 
 export function Overlay({ onClose, children }: { onClose?: () => void; children: React.ReactNode }) {
@@ -688,19 +671,20 @@ export function Overlay({ onClose, children }: { onClose?: () => void; children:
     return () => window.removeEventListener('keydown', on);
   }, [onClose]);
 
-  /* **焦点を中へ入れ、輪にして、閉じたら元へ返す。**`aria-modal` を
-     名乗っているのに焦点は後ろに残ったままで、Tab を押すと暗幕の下の
-     押せないものを順に辿っていた。入れる先は最初の押せるもの
-     (棋譜の読み込みなら貼り付け先の欄) — 無ければ器そのもの。 */
+  /* Move focus in, trap it, restore on close. We claimed aria-modal
+     while Tab still walked the unclickable things under the scrim.
+     Initial target is the first focusable (the paste field for the
+     record loader), else the container. */
   const box = React.useRef<HTMLDivElement>(null);
   React.useEffect(() => {
     const el = box.current;
     const back = document.activeElement as HTMLElement | null;
-    /** いま押せるものだけ。`offsetParent` が無いもの (畳まれた段) は数えない */
+    /** Only currently clickable ones; skip offsetParent-less
+     *  (collapsed) elements. */
     const items = () => [...(el?.querySelectorAll<HTMLElement>(FOCUSABLE) ?? [])]
       .filter((x) => x.offsetParent !== null);
     (el?.querySelector<HTMLElement>(FIRST_STOP) ?? items()[0] ?? el)?.focus();
-    // 端で折り返す。輪にしないと、最後の釦から暗幕の下へ抜けてしまう
+    // Wrap at the ends; without the ring, Tab escapes under the scrim.
     const on = (e: KeyboardEvent) => {
       if (e.key !== 'Tab' || !el) return;
       const list = items();
@@ -722,7 +706,7 @@ export function Overlay({ onClose, children }: { onClose?: () => void; children:
       background: 'var(--scrim)', display: 'grid', placeItems: 'center',
       padding: 'var(--sp-5)',
     }}>
-      {/* 中身を押したときに閉じない */}
+      {/* Clicks on the content do not close. */}
       <div ref={box} tabIndex={-1} onClick={(e) => e.stopPropagation()}>{children}</div>
     </div>
   );
