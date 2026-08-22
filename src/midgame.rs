@@ -1596,7 +1596,28 @@ impl NnueSearch {
                 // deep and at least as accurately as this node needs.
                 tt_move = e.best;
                 tt_move2 = e.best2;
-                if e.depth as u32 >= depth && e.relax >= self.mpc_relax as u8 {
+                /* **根では表のカットを使わない。**
+
+                根の窓は (−∞, +∞) なので `e.upper == e.lower` の登録に
+                当たると、**探索を一切せずに表の値をそのまま返す**。
+                反復深化の全段がこれに当たり、37 段が 0.0 秒で終わって
+                全段同じ値になる (CLI 対戦 5 局で 1484 回中 178 回)。
+
+                コメントが上で認めているとおり、**MPC のもとで登録された
+                「厳密」は本当は厳密ではない**。ヘルパースレッド・先読み・
+                前の手が別条件で入れた値が、そのまま根の答えとして出る。
+                同じ局面が探索ごとに違う値を返していた
+                (`-0.0 -0.0 -0.0 -15.1` のように)。
+
+                実戦で報告された `+0.00` / `+35.9` / `−4.66` は、いずれも
+                **手は正しいのに値だけ合わない**という形で、この筋と一致
+                する。手は表の最善手なので妥当なまま、値だけ素通しされる。
+
+                並べ替え用の手は引き続き使う (`tt_move`) — 速度に効いて
+                いるのはそちらで、値のカットは根では要らない。 */
+                if self.root_hash != 0 && h == self.root_hash {
+                    // 根: 値のカットはしない (手だけ使う)
+                } else if e.depth as u32 >= depth && e.relax >= self.mpc_relax as u8 {
                     // Transposition cutoff.
                     if e.upper <= alpha || e.upper == e.lower {
                         return e.upper;
