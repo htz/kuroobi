@@ -1,7 +1,7 @@
-// バックエンド (gui/src/main.rs) が返す型。Rust 側と 1 対 1 で対応させる。
+// Types returned by the backend (gui/src/main.rs); 1:1 with the Rust side.
 
 export interface GameView {
-  /** 64 マス: 0 空 / 1 黒 / 2 白 (A1=0 の file-major)。 */
+  /** 64 cells: 0 empty / 1 black / 2 white (file-major, A1 = 0). */
   cells: number[];
   player: 'black' | 'white';
   legal: number[];
@@ -11,7 +11,7 @@ export interface GameView {
   last: number | null;
   kifu: string;
   move_count: number;
-  /** 全手順 (undo で戻った先も含む)。null はパス。 */
+  /** Full move line (including undone moves); null = pass. */
   moves: (number | null)[];
   cursor: number;
 }
@@ -21,19 +21,19 @@ export interface ThinkView {
   value: number;
   exact: boolean;
   from_book: boolean;
-  /** 実戦から学習した局面の定石か。 */
+  /** Whether it is a game-learned book entry. */
   learned: boolean;
-  /** この手に使った時間 (秒)。 */
+  /** Seconds spent on this move. */
   secs: number;
-  /** この手を選ぶまでに訪れたノード数 (定石なら 0)。 */
+  /** Nodes visited for this move (0 for book moves). */
   nodes: number;
 }
 
-/** 探索の働きぶり (盤の下に出す)。動いていないときは null にする。 */
+/** Search workload (shown under the board); null while idle. */
 export interface SearchStat {
-  /** 訪れたノード数。 */
+  /** Nodes visited. */
   nodes: number;
-  /** そこまでの経過秒。速さ (nps) はこの 2 つから割って出す。 */
+  /** Elapsed seconds; nps derives from these two. */
   secs: number;
 }
 
@@ -41,23 +41,23 @@ export interface HintView {
   pos: number;
   value: number;
   exact: boolean;
-  /** 定石 book の値か (探索でなく)。 */
+  /** Whether the value came from the book, not search. */
   from_book: boolean;
-  /** この値を出した探索の深さ (読み切り・定石は 0)。 */
+  /** Search depth behind the value (0 for solves and book). */
   depth: number;
 }
 
 export interface EvalPoint {
   n: number;
-  /** 黒視点の石差。 */
+  /** Disc difference from Black's view. */
   value: number;
   exact: boolean;
-  /** 定石 book の値か (探索でなく)。 */
+  /** Whether the value came from the book, not search. */
   from_book: boolean;
 }
 
 /* ============================ GGS ============================ */
-// バックエンド (gui/src/ggs.rs) が送ってくる状態の型。
+// State types streamed by the backend (gui/src/ggs.rs).
 
 export interface LogLine {
   dir: 'in' | 'out' | 'info';
@@ -67,12 +67,12 @@ export interface LogLine {
 export interface UserRow {
   name: string;
   rating: number | null;
-  /** レートの偏差。`/os top` は返すが `/os who` は返さない。 */
+  /** Rating deviation; from `/os top` only. */
   dev: number | null;
-  /** ランダム開局 (8r) のレートと偏差。接続中の一覧だけが持つ。 */
+  /** Random-opening (8r) rating and deviation; who list only. */
   rating_r: number | null;
   dev_r: number | null;
-  /** 受付状態。'+' 受けられる / '-' 受けない / 'x' 幽霊 / null 不明。 */
+  /** Accepting: '+' open / '-' closed / 'x' ghost / null unknown. */
   open: string | null;
   raw: string;
 }
@@ -90,7 +90,7 @@ export interface RankRow {
 
 export interface FingerInfo {
   name: string;
-  /** [見出し, 値] の並び。 */
+  /** [heading, value] pairs. */
   fields: [string, string][];
   raw: string[];
 }
@@ -134,25 +134,25 @@ export interface PlayerView {
 export interface MatchView {
   id: string;
   base: string;
-  /** 終わったか (終局・中断・中止のいずれか。一覧には残る)。 */
+  /** Whether it ended (finished/adjourned/aborted; stays listed). */
   over: boolean;
-  /** 終わり方。'' = 進行中 / 'finished' / 'adjourned' / 'aborted'。 */
+  /** How it ended: '' ongoing / 'finished' / 'adjourned' / 'aborted'. */
   ended: '' | 'finished' | 'adjourned' | 'aborted';
-  /** 中断のとき、抜けた側の名前。 */
+  /** Who left, for adjournments. */
   left_by: string;
-  /** 書庫の番号 (終局後のみ)。棋譜をサーバーから取り直すのに使う。 */
+  /** Archive id (post-game); used to re-fetch the record. */
   archive: string;
-  /** いまこの面で何をしているか。'' / 'think' / 'ponder' / 'solve' / 'select'。 */
+  /** Current activity: '' / 'think' / 'ponder' / 'solve' / 'select'. */
   busy: '' | 'think' | 'ponder' | 'solve' | 'select';
-  /** 途中経過の到達深さ (読切・選択読みでは 0)。 */
+  /** Progress depth (0 during solves). */
   busy_depth: number;
-  /** いま最善と思っている手。**先読み中は予測している相手の手**。 */
+  /** Current best move (the predicted reply while pondering). */
   busy_best: number | null;
-  /** その評価値 (石差)。指す側から見た値。 */
+  /** Its value in discs, mover view. */
   busy_eval: number | null;
-  /** 終局の結果 (石差)。 */
+  /** Final result (disc difference). */
   result: string;
-  /** 64 マス: 0 空 / 1 黒 / 2 白 (file-major)。 */
+  /** 64 cells: 0 empty / 1 black / 2 white (file-major). */
   cells: number[];
   turn: '' | 'black' | 'white';
   my_color: '' | 'black' | 'white';
@@ -164,7 +164,7 @@ export interface MatchView {
   opp_secs: number | null;
   my_ext: number | null;
   opp_ext: number | null;
-  /** 自分がロスタイム (延長) に入ったか。入ったら時間切れ負けが確定。 */
+  /** Whether we entered overtime (the game is then lost on time). */
   in_overtime: boolean;
   players: PlayerView[];
   gtype: string;
@@ -172,13 +172,13 @@ export interface MatchView {
   ggf: string;
   last_eval: number | null;
   last_eval_exact: boolean;
-  /** 相手が申告した直近の手の評価値 (**相手から見た石差**)。出さない相手は null。 */
+  /** Opponent's reported eval for their last move (their view); null if unreported. */
   opp_eval: number | null;
-  /** 相手がその手に使った秒数 (申告値)。 */
+  /** Seconds the opponent reported spending. */
   opp_secs_used: number | null;
-  /** 両者の申告値の推移 (手の順)。値は**指した側から見た石差**。 */
+  /** Both players' reported evals in move order (mover-view discs). */
   eval_series: { n: number; mine: boolean; eval: number }[];
-  /** 一覧に載った順 (大きいほど新しい)。並び替えにだけ使う。 */
+  /** Listing order (larger = newer); sorting only. */
   order: number;
   last_from_book: boolean;
   watch_eval: number | null;
@@ -213,20 +213,20 @@ export interface HistoryRow {
 }
 
 export interface ChatMsg {
-  /** チャンネル名 (".chat" 等)。ダイレクトは空文字。 */
+  /** Channel name (".chat" etc.); empty for directs. */
   chan: string;
   from: string;
   text: string;
-  /** 受信時刻 (UNIX 秒)。 */
+  /** Receive time (unix seconds). */
   at: number;
-  /** 会話のまとまり (".chat" か相手の名前)。 */
+  /** Conversation key (".chat" or the peer). */
   thread: string;
 }
 
 export interface StandbyCfg {
   enabled: boolean;
   auto_accept: boolean;
-  /** 待機モードから申し込むときレート戦にするか。 */
+  /** Whether standby offers are rated. */
   rated: boolean;
   opponent: string;
   gtype: string;
@@ -251,25 +251,25 @@ export interface EngineCfgView {
   ready: boolean;
   use_book: boolean;
   book_loaded: boolean;
-  /** 終わった対局を定石の学習に取り込むか。 */
+  /** Whether finished games feed book learning. */
   learn: boolean;
-  /** 相手の手番中に先読みするか。**「Lv で決める」でも効く** — 効き方が
-      「深く」から「速く」に変わるだけ。 */
+  /** Whether to ponder. Works under fixed levels too — the gain just
+      shifts from depth to speed. */
   ponder: boolean;
-  /** 持ち時間の配り方 ("fast" 終盤に残す / "depth" 深さ固定)。 */
+  /** Pacing ("fast" saves for the endgame / "depth" fixed). */
   pace: string;
-  /** 1 手に使う上限 (秒)。0 で上限なし。 */
+  /** Per-move cap (seconds); 0 = none. */
   max_move_secs: number;
-  /** 読み切り用に残す秒数。 */
+  /** Seconds reserved for the solve. */
   reserve_secs: number;
-  /** 持ち時間をどれだけ攻めて使うか (1.0 = 配分どおり)。 */
+  /** Clock aggressiveness (1.0 = as allocated). */
   budget_use: number;
 }
 
 export interface FetchedGgf {
   id: string;
   ggf: string;
-  /** 返ってきた全局。同期対局は 2 面入っている。 */
+  /** All returned games; synchro archives hold two. */
   parts: string[];
   error: string;
 }
@@ -285,12 +285,12 @@ export interface GgsSnapshot {
   offers: Offer[];
   matches: MatchView[];
   ongoing: OngoingView[];
-  /** 画面に出す一言 (観戦に失敗した等)。 */
+  /** One-line notice (watch failed etc.). */
   notice: string;
   stored: StoredView[];
   history: Record<string, HistoryRow[]>;
   chat: ChatMsg[];
-  /** **ここまでは読んだ** (UNIX 秒)。これより新しいものが未読。 */
+  /** Read-up-to marker (unix seconds); newer counts as unread. */
   chat_seen: number;
   results: GameResult[];
   standby: StandbyCfg;
@@ -308,76 +308,75 @@ declare global {
       core: { invoke: <T = unknown>(cmd: string, args?: Record<string, unknown>) => Promise<T> };
       event: {
         listen: <T>(name: string, fn: (e: { payload: T }) => void) => Promise<() => void>;
-        /** 窓をまたいで報せる。付属ウィンドウ (設定) の変更を主画面へ伝える。 */
+        /** Cross-window notify (settings changes to the main screen). */
         emit: (name: string, payload?: unknown) => Promise<void>;
       };
     };
   }
 }
 
-/** 定石の 1 手。value は手番から見た石差、games は棋譜での採用回数。 */
+/** One book move; mover-view value, games = adoption count. */
 export interface BookMove { pos: number; value: number; games: number }
 
-/** 定石のある 1 局面 (book_node の返り)。 */
+/** One book position (book_node's return). */
 export interface BookNode {
   cells: number[];
   player: 'black' | 'white';
   black: number;
   white: number;
-  /** 値の高い順。空なら「この局面は定石に無い」。 */
+  /** By value descending; empty = not in the book. */
   moves: BookMove[];
-  /** 実戦から学習して書き戻された局面か。 */
+  /** Whether the position was game-learned. */
   learned: boolean;
-  /** この局面の定石の値 (石差)。定石に無ければ null。 */
+  /** Book value in discs; null if absent. */
   value: number | null;
-  /** その値を付けたときの読み深さ。値がどれくらい確かかの手がかり。 */
+  /** Search depth behind the value — its trustworthiness hint. */
   depth: number | null;
-  /** 定石に載っている局面の総数。 */
+  /** Total book positions. */
   size: number;
-  /** そのうち実戦から書き戻したぶん。 */
+  /** Of which game-learned. */
   learned_size: number;
 }
 
-/** 定石に取り込んだ対局 1 件 (learn_log の返り)。 */
+/** One imported game (learn_log's return). */
 export interface LearnEntry {
-  /** unix 秒。書式は見る側で決める。 */
+  /** Unix seconds; formatting is the viewer's business. */
   at: number;
   kifu: string;
   black: number;
   white: number;
-  /** 書き戻した局面数。 */
+  /** Positions written back. */
   positions: number;
-  /** 抽選開局の開始局面 (盤面文字列)。標準の初期局面なら空。 */
+  /** Drawn-opening start (board string); empty for the standard start. */
   start: string;
-  /** GGS の対局なら相手の名前。ローカル対局は空。 */
+  /** Opponent name for GGS games; empty for local. */
   opponent: string;
-  /** 自分がどちらの色だったか (`'b'` / `'w'`)。**石数だけでは勝敗が
-   *  決まらない**ので控えに残す。古い控えと、担当が「両方 / なし」の
-   *  対局は空。 */
+  /** Which color we played ('b'/'w'); recorded because disc counts
+   *  alone cannot decide results. Empty in old logs and both/none games. */
   my_color?: string;
-  /** 定石を書き換えた明細。古い控えには無い。 */
+  /** Book-rewrite details; absent in old logs. */
   changes: LearnChange[];
 }
 
-/** 定石を 1 手ぶん書き換えた記録。 */
+/** One book-move rewrite record. */
 export interface LearnChange {
-  /** 棋譜の何手目か (パスを除いた 1 始まり)。 */
+  /** Move number (1-based, passes excluded). */
   ply: number;
   mv: string;
-  /** 上書き前の値。定石に無かった手なら null。 */
+  /** Value before the overwrite; null if absent. */
   before: number | null;
   after: number;
-  /** 書き換えたあとのその局面の最善値。best - after が損した石差。 */
+  /** Best value after the rewrite; best - after = discs lost. */
   best: number;
-  /** この取り込みで学習分に新しく作った局面か。 */
+  /** Whether this import created the entry. */
   new_entry: boolean;
 }
 
-/** ローカル対局の時計。`total` が 0 なら時計を使っていない。 */
+/** Local game clock; total 0 = no clock. */
 export interface ClockView {
   total: number;
   black: number;
   white: number;
-  /** 時間切れした側。まだなら null */
+  /** Which side flagged; null if none. */
   lost: 'black' | 'white' | null;
 }

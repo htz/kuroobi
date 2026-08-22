@@ -1,17 +1,18 @@
-// GGS の状態と共通ヘルパ。バックエンド (gui/src/ggs.rs) が Tauri イベント
-// "ggs" で流すスナップショットを購読し、画面はそこから導くだけにする。
+// GGS state and shared helpers. Subscribes to the snapshots the
+// backend (gui/src/ggs.rs) streams over the "ggs" Tauri event; screens
+// derive everything from them.
 
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { ggsApi, jsLog, onGgsSnapshot } from './api';
 import type { GgsSnapshot, MatchView, PlayerView } from './types';
 
-/* ---------------- スナップショットの購読 ---------------- */
+/* ---------------- Snapshot subscription ---------------- */
 
 export function useGgs() {
   const [snap, setSnap] = useState<GgsSnapshot | null>(null);
-  // 画面確認用のデモを貼ったか。貼った後はバックエンドの押し戻しを無視する。
-  // 未接続だとサーバー側は「未接続」を繰り返し流してくるので、これが無いと
-  // デモと実イベントが取り合って画面が点滅する。
+  // Whether demo fixtures were applied; backend pushes are ignored
+  // afterwards (the disconnected stream would fight the fixtures and
+  // flicker).
   const demo = useRef(false);
 
   useEffect(() => {
@@ -34,8 +35,8 @@ export function useGgs() {
     };
   }, []);
 
-  /// 画面確認用 (KUROOBI_GGS_AUTOVIEW のデモ)。**貼ったらそのまま残る** —
-  /// 見た目を確かめるための経路なので、実イベントに流されると用をなさない。
+  /// Screenshot fixtures (KUROOBI_GGS_AUTOVIEW); sticky once applied —
+  /// being washed away by real events would defeat the purpose.
   const patch = useCallback((p: Partial<GgsSnapshot>) => {
     demo.current = true;
     setSnap((prev) => (prev ? { ...prev, ...p } : prev));
@@ -44,10 +45,10 @@ export function useGgs() {
   return { snap, patch };
 }
 
-/* ---------------- 時計 ---------------- */
-// サーバー更新のたびに基準を取り直し、手番側だけ減らして表示する。
-// 基準と現在時刻を state に置き、表示の計算は純粋関数にしてある
-// (render 中に Date.now() を呼ばない)。
+/* ---------------- Clocks ---------------- */
+// Re-baseline on every server update and tick down only the mover's
+// clock. Baseline and now live in state; display math is pure (no
+// Date.now() during render).
 
 interface ClockBase {
   match: MatchView;
@@ -83,22 +84,18 @@ function clockView(c: ClockBase | undefined, side: ClockSide, now: number): Cloc
     base = m.opp_secs; ext = m.opp_ext; raw = m.opp_clock;
     color = m.my_color === 'black' ? 'white' : m.my_color === 'white' ? 'black' : '';
   }
-  /* **中断・中止の対局は時計を出さない。** 勝敗が確定していないのに
-     「ロス」「時間切れ」と出ると、その表示だけが独り歩きする。中断中は
-     GGS 側も時計を止めて保存している。 */
+  /* No clocks on adjourned/aborted games — "overtime"/"flagged" labels
+     would be lies; GGS freezes their clocks too. */
   if (m.ended === 'adjourned' || m.ended === 'aborted') return { text: '', cls: '' };
-  /* **終わった対局の時計は止める。** 終局しても最後の update で手番が
-     戻ることがあり、そのまま手元で刻み続けて「ロス」「時間切れ」まで
-     表示していた。実際にそれを見てロスタイム突入と誤認した。 */
+  /* Freeze finished games' clocks: the last update can hand the turn
+     back and the local tick once ran on, displaying a bogus overtime
+     that was genuinely mistaken for the real thing. */
   const active = !m.over && !!m.turn && !!color && m.turn === color;
   if (base === null) return { text: raw || '', cls: active ? 'turn' : '' };
   const rem = base - (active ? (now - c.at) / 1000 : 0);
-  /* **ロスタイムは残り時間の見た目では分からない。** GGS の時計は 1 本で、
-     本時間を切らすとサーバーが延長ぶんを**その時計に足して**送ってくる
-     (`GAME_Clock.C::update`)。残り 50 秒から 30 秒超過すれば `01:30` と
-     いう健全な値が届くだけなので、ここで `rem >= 0` を見ても普通の残り
-     時間と区別が付かない。入ったかどうかはエンジン側が持っている旗
-     (`in_overtime`) でしか判らない。 */
+  /* Overtime is invisible in the remaining time: the server adds the
+     grace onto the single clock, so a healthy-looking `01:30` can be
+     overtime. Only the engine-side `in_overtime` flag knows. */
   const mine = side === 'my' || (!!color && color === m.my_color);
   if (mine && m.in_overtime && rem >= 0) return { text: `ロス ${fmtSecs(rem)}`, cls: 'ext' };
   if (rem >= 0) return { text: fmtSecs(rem), cls: active ? 'turn' : '' };
@@ -114,12 +111,13 @@ export function useClocks(matches: MatchView[]): (id: string, side: ClockSide) =
       const bases: Record<string, ClockBase> = {};
       for (const m of matches) {
         const old = prev.bases[m.id];
-        // seen が進んだ更新だけ基準を取り直す (同じ盤面の再送で時計を戻さない)
+        // Re-baseline only when seen advanced (a re-sent board must
+        // not rewind the clock).
         bases[m.id] = old && old.match.seen === m.seen ? old : { match: m, at: Date.now() };
       }
       return { bases, now: Date.now() };
     });
-    // 初回は次のティックを待たずに映す
+    // Show immediately on first render, without waiting for a tick.
     const t0 = window.setTimeout(sync, 0);
     const t = window.setInterval(sync, 500);
     return () => { clearTimeout(t0); clearInterval(t); };
@@ -131,7 +129,7 @@ export function useClocks(matches: MatchView[]): (id: string, side: ClockSide) =
   );
 }
 
-/* ---------------- 書式 ---------------- */
+/* ---------------- Formatting ---------------- */
 
 export function fmtSecs(s: number): string {
   s = Math.max(0, Math.floor(s));
@@ -144,17 +142,15 @@ export function fmtSecs(s: number): string {
 const GTYPE: Record<string, string> = {
   s8r16: '同期・ランダム16手', s8r18: '同期・ランダム18手', s8r20: '同期・ランダム20手',
   s8r14: '同期・ランダム14手', s8: '同期・通常', '8': '通常', '8r16': 'ランダム16手',
-  // レートの区分 (my_ranks / rank コマンド) は形式より粗い 2 つ。
-  // 生の "8r" は画面に出しても何のことか分からない
+  // Rating pools are coarser than game types (two of them), and a raw
+  // "8r" means nothing on screen.
   '8r': 'ランダム開局',
 };
 export const gtypeLabel = (t: string): string => GTYPE[t] ?? (t || '?');
 
-/// 申し込みと待機モードで選べる形式・持ち時間。
-///
-/// 以前はロビー側と待機モード側に別々の配列があり、**ロビーでは選べるのに
-/// 待機モードでは選べない形式** (`s8r20` / `8r16` / 30 分) があった。申し込みと
-/// 待機で選べるものが違う理由は無いので、広いほうに揃えて 1 か所にした。
+/// Game types and clocks offerable from the lobby and standby. They
+/// used to be two diverging arrays (some types offerable in one place
+/// only); unified to the wider set in one place.
 export const GTYPE_CHOICES: [string, string][] = [
   ['s8r16', '同期・ランダム16手 (推奨)'],
   ['s8r18', '同期・ランダム18手'],
@@ -171,15 +167,15 @@ export const CLOCK_CHOICES: [string, string][] = [
   ['00:30:00', '30 分'],
 ];
 
-/** UNIX 秒を "14:03" にする。 */
+/** Unix seconds -> "14:03". */
 export function clockOf(at: number): string {
   return new Date(at * 1000).toLocaleTimeString('ja-JP',
     { hour: '2-digit', minute: '2-digit' });
 }
 
-/* ---------------- 棋譜 ---------------- */
+/* ---------------- Records ---------------- */
 
-/** GGS の着手 ("F5" / "pa") をマス番号 (file-major) にする。パスは null。 */
+/** GGS move ("F5"/"pa") to a file-major square index; pass = null. */
 export function ggsMoveToIndex(mv: string): number | null {
   if (/^pa/i.test(mv)) return null;
   const m = mv.trim().toLowerCase();
@@ -199,37 +195,37 @@ export function countDiscs(cells: number[]): { black: number; white: number } {
   return { black, white };
 }
 
-/* ---------------- 翻訳 ---------------- */
+/* ---------------- Translation ---------------- */
 
 export async function translate(text: string, target: string): Promise<string> {
   const url = 'https://translate.googleapis.com/translate_a/single?client=gtx&sl=auto&tl=' +
     target + '&dt=t&q=' + encodeURIComponent(text);
   const r = await fetch(url);
   if (!r.ok) throw new Error('translate ' + r.status);
-  // gtx の応答は [[[訳文, 原文, ...], ...], ...] という入れ子配列
+  // gtx replies are nested arrays: [[[translated, original, ...], ...], ...]
   const j = (await r.json()) as [[string, string][]];
   return (j[0] ?? []).map((x) => x[0]).join('');
 }
 
 export const hasJapanese = (t: string): boolean => /[぀-ヿ一-鿿]/.test(t);
 
-/* ---------------- finger の項目を読み下す ---------------- */
+/* ---------------- Finger field rendering ---------------- */
 
-/// finger のキーは "stored (-)" のように空白が入ることがある。
+/// Finger keys can contain spaces, like "stored (-)".
 export const normKey = (k: string): string => k.replace(/\s+/g, '');
 
-/* プロフィール (finger) の項目名。**サーバーの鍵をそのまま出さない** —
- * dblen や vt100 が並んでも読めないし、画面の文言は日本語で揃える決め。 */
+/* Finger field labels. Raw server keys (dblen, vt100...) are
+ * unreadable; screen text stays Japanese per the UI convention. */
 const FINGER_LABEL: Record<string, string> = {
-  // --- 対局を申し込む前に見たいもの ---
+  // --- What you want to see before offering a game ---
   open: '申し込み受付', accept: '自動で受ける条件', decline: '自動で断る条件',
   'request(+)': '募集中の条件', 'request(-)': '募集中の条件',
   rated: 'レート戦', play: '対局の状況',
   'stored(+)': '中断中の対局', 'stored(-)': '中断中の対局',
-  // --- 素性 ---
+  // --- Identity ---
   name: '登録名', info: '備考', email: 'メール', since: '接続開始',
   idle: '無操作の時間', host: 'ホスト', dblen: '定石どおりの手',
-  // --- 設定・状態 ---
+  // --- Settings and state ---
   level: 'アクセス権限', trust: '信用', client: 'クライアント',
   sock: '接続方式', bell: '通知を受け取るもの', hear: '発言の受信', vt100: 'VT100 表示',
   'watch(+)': '観戦中の対局', 'watch(-)': '観戦中の対局',
@@ -240,15 +236,15 @@ const FINGER_LABEL: Record<string, string> = {
   'ignore(+)': '無視している相手', 'ignore(-)': '無視している相手',
 };
 
-/** 画面で意味を持たないもの (認証情報と、コマンドのエコー)。 */
+/** Fields meaningless on screen (credentials, command echoes). */
 const FINGER_HIDDEN = ['passw', 'password', 'login', '/os', 'sock'];
 
-/** 申し込む前に見たい項目。値が空でも「指定なし」と出す。 */
+/** Pre-offer fields; empty values still render as "unset". */
 const FINGER_ALWAYS = ['open', 'accept', 'decline', 'request(+)', 'request(-)'];
 
-/* 項目のまとまり。**並び順もここが決める。**
- * 載っていないものは「設定」の末尾へ回す。均一に 24 行並べると、
- * 申し込む前に見たいものが埋もれる。 */
+/* Field groups; ordering is decided here too. Unlisted fields go to
+ * the end of Settings — a uniform 24-row list buries what matters
+ * before an offer. */
 const FINGER_GROUPS: { title: string; keys: string[] }[] = [
   {
     title: '対局の申し込み',
@@ -264,10 +260,11 @@ const FINGER_GROUPS: { title: string; keys: string[] }[] = [
   },
 ];
 
-/** プロフィールの 1 行。`label` は日本語、`raw` は元の鍵 (条件式の判定用)。 */
+/** One profile row; `label` is display text, `raw` the original key
+ * (used by formula logic). */
 export interface FingerRow { key: string; label: string; value: string }
 
-/** finger の生の項目を、まとまりごとに並べ直して日本語の名前を付ける。 */
+/** Regroup raw finger fields and attach display labels. */
 export function fingerGroups(fields: [string, string][]): { title: string; rows: FingerRow[] }[] {
   const got = new Map(fields.map(([k, v]) => [normKey(k), v]));
   const used = new Set<string>();
@@ -278,8 +275,8 @@ export function fingerGroups(fields: [string, string][]): { title: string; rows:
     used.add(k);
     return { key: k, label: FINGER_LABEL[k] ?? k, value: v ?? '' };
   };
-  /* `foo(+)` と `foo(-)` は同じ名前になる (サーバーが持ち方を 2 通り返す)。
-   * 両方出すと同じ見出しが 2 行並ぶので、**値のあるほうだけ**を残す。 */
+  /* `foo(+)` and `foo(-)` share a label (the server returns both
+   * spellings); keep only the one with a value. */
   const dedupe = (rows: FingerRow[]): FingerRow[] => {
     const seen = new Map<string, FingerRow>();
     for (const r of rows) {
@@ -292,8 +289,8 @@ export function fingerGroups(fields: [string, string][]): { title: string; rows:
     title: g.title,
     rows: dedupe(g.keys.map(row).filter((r): r is FingerRow => r !== null)),
   }));
-  // 表に載っていない項目は落とさず「設定」の末尾へ。サーバーが項目を
-  // 増やしたときに黙って消えるほうが困る
+  // Unlisted fields are kept at the end of Settings — silently
+  // vanishing when the server adds fields would be worse.
   const rest = [...got.entries()]
     .filter(([k]) => !used.has(k) && !FINGER_HIDDEN.includes(k.replace(/\(.*\)/, '')))
     .map(([k, v]) => ({ key: k, label: FINGER_LABEL[k] ?? k, value: v }));
@@ -301,13 +298,13 @@ export function fingerGroups(fields: [string, string][]): { title: string; rows:
   return out.filter((g) => g.rows.length > 0);
 }
 
-// GGS の記号をそのまま出しても読めないので言い換える。
+// GGS symbols are unreadable raw; rephrase them.
 export function fingerValue(k: string, v: string): string {
   const key = normKey(k).replace(/\(.*\)/, '');
   if (key === 'open') return v === '0' || v === '-' ? '受け付けていない' : '受け付ける';
   if (key === 'rated' || key === 'trust') return v === '+' ? 'あり' : 'なし';
-  // accept / decline / request はここへ来ない。論理式なので文字に潰さず、
-  // FingerValue が木のまま描く
+  // accept/decline/request never reach here: they are formulas and
+  // FingerValue renders them as trees.
   if (key === 'notify') return v === '/os' ? 'リバーシサービス全体' : (v.trim() || 'なし');
   if (key === 'play') return v === '-' || !v ? '対局していない' : `対局中 (${v})`;
   if (key === 'client') return v === '+' ? '専用クライアント' : 'telnet など';
@@ -315,7 +312,8 @@ export function fingerValue(k: string, v: string): string {
   if (key === 'vt100') return v === '+' ? '対応' : '非対応';
   if (key === 'level') return v === '1' ? '一般' : v;
   if (key === 'dblen') {
-    // "100.0 = 2,862 / 2,862" = 公開棋譜データベースと一致した手の割合
+    // "100.0 = 2,862 / 2,862" = share of moves matching the public
+    // game database.
     const m = /([\d.]+)\s*=\s*([\d,]+)\s*\/\s*([\d,]+)/.exec(v);
     return m ? `${m[1]}% (${m[2]} / ${m[3]} 手が一致)` : v;
   }
@@ -328,7 +326,8 @@ export function fingerValue(k: string, v: string): string {
   return v;
 }
 
-/// 通知設定 (`-r -p -w ...`) は記号の羅列なので、有効なものだけ並べる。
+/// Notification settings (`-r -p -w ...`) are symbol soup; list only
+/// the enabled ones.
 const BELL_LABEL: Record<string, string> = {
   r: '対局の申し込み', p: '個人あての発言', w: '観戦中の対局', n: 'お知らせ',
   ns: '対局開始', nn: '新しい対局', nt: '手番', ni: '中断', nr: '再開', nw: '観戦',
@@ -340,8 +339,9 @@ function readBell(v: string): string {
   return names.length ? names.join('、') : 'すべて切っている';
 }
 
-/// GGS の時刻表記を日本語のロケールに直す。
-/// `since` は "Thu 30 Jul 2026 17:39:06 MDT"、`idle` は "00:14:02, on line : 1.09:59:08"。
+/// Convert GGS time strings for display.
+/// `since` is "Thu 30 Jul 2026 17:39:06 MDT"; `idle` is
+/// "00:14:02, on line : 1.09:59:08".
 function readTime(k: string, v: string): string {
   if (k === 'since') {
     const t = Date.parse(v.replace(/\s*[A-Z]{3}$/, ' GMT-0600'));
@@ -353,7 +353,7 @@ function readTime(k: string, v: string): string {
     }
     return v;
   }
-  // idle: 手前が無操作の時間、"on line" が接続してからの時間
+  // idle: leading part is inactivity, "on line" is connection age.
   const m = /^([\d:.]+)(?:,\s*on line\s*:\s*([\d:.]+))?/.exec(v.trim());
   if (!m) return v;
   const span = (x: string): string => {
@@ -369,9 +369,9 @@ function readTime(k: string, v: string): string {
   return m[2] ? `${idle} (接続してから ${span(m[2])})` : idle;
 }
 
-/* ---------------- 条件式 (formula) の読み下し ---------------- */
-// 自動受諾/拒否の条件式を日本語にする。記法は `tell /os help formula` 準拠。
-// m* が自分、o* が相手。
+/* ---------------- Formula rendering ---------------- */
+// Render accept/decline formulas for display. Notation per
+// `tell /os help formula`; m* = us, o* = the opponent.
 
 const FORMULA_WORDS: [RegExp, string][] = [
   [/\bsaved\b/g, '中断対局'],
@@ -400,8 +400,8 @@ const FORMULA_WORDS: [RegExp, string][] = [
   [/\bor\b/g, '相手のレート'],
 ];
 
-/// 葉 1 つ (`size!=8`、`!saved`) を日本語にする。
-/// 木を保ったまま葉だけ訳すので、`&` `|` はここでは扱わない。
+/// Render one leaf (`size!=8`, `!saved`); the tree stays intact, so
+/// `&`/`|` are not handled here.
 function readAtom(src: string): string {
   let t = ` ${src} `;
   for (const [re, word] of FORMULA_WORDS) t = t.replace(re, word);
@@ -416,27 +416,27 @@ function readAtom(src: string): string {
     .trim();
 }
 
-/** 条件式の木。`all` = すべて満たす (&)、`any` = どれか (|)。 */
+/** Formula tree; `all` = every condition (&), `any` = any (|). */
 export type Formula =
   | { kind: 'all' | 'any'; kids: Formula[] }
   | { kind: 'atom'; text: string; src: string };
 
-/* ---- 条件式を組み立てるための語彙 ---- */
+/* ---- Vocabulary for building formulas ---- */
 
-/** 条件に使える変数。編集画面は入力の形をここの `type` で決める。 */
+/** Variables usable in conditions; the editor picks input widgets by `type`. */
 export interface FormulaVar {
   name: string;
   label: string;
-  /** bool = そのもの / num = 比較と値 / color = 黒白おまかせ。 */
+  /** bool = as-is / num = comparison + value / color = black/white/any. */
   type: 'bool' | 'num' | 'color';
-  /** 数値の単位 (画面に添えるだけ)。 */
+  /** Numeric unit (display only). */
   unit?: string;
-  /** 数値の既定値。 */
+  /** Numeric default. */
   def?: number;
 }
 
-/// 使える変数の一覧。GGS の `tell /os help formula` に載っているもののうち、
-/// 対局の申し込みを判断するのに意味があるものだけ。並び順が画面の並び順。
+/// Available variables: the subset of `tell /os help formula` that
+/// matters for judging offers, in display order.
 export const FORMULA_VARS: FormulaVar[] = [
   { name: 'rated', label: 'レート戦', type: 'bool' },
   { name: 'rand', label: 'ランダム開局', type: 'bool' },
@@ -467,7 +467,7 @@ export const FORMULA_VARS: FormulaVar[] = [
 export const FORMULA_OPS = ['=', '≠', '<', '>', '≤', '≥'] as const;
 export type FormulaOp = (typeof FORMULA_OPS)[number];
 
-/** 画面の比較記号 → GGS の記法。 */
+/** Screen comparison symbols -> GGS notation. */
 const OP_SRC: Record<FormulaOp, string> = {
   '=': '=', '≠': '!=', '<': '<', '>': '>', '≤': '<=', '≥': '>=',
 };
@@ -475,7 +475,7 @@ const SRC_OP: Record<string, FormulaOp> = {
   '=': '=', '==': '=', '!=': '≠', '<': '<', '>': '>', '<=': '≤', '>=': '≥',
 };
 
-/** 編集中の 1 条件。木のまま持ち、保存するときだけ文字列にする。 */
+/** One condition being edited; kept as a tree, stringified only on save. */
 export type Cond =
   | { kind: 'all' | 'any'; kids: Cond[] }
   | { kind: 'atom'; name: string; op: FormulaOp; val: string; neg: boolean };
@@ -483,22 +483,22 @@ export type Cond =
 export const varOf = (name: string): FormulaVar | undefined =>
   FORMULA_VARS.find((v) => v.name === name);
 
-/// 色の選択肢。**GGS の盤面表記は `*` = 黒 / `O` = 白**で、`b` / `w` は通らない。
-/// 画面に描く石の色 (`'b' | 'w'`) とは別物なので混ぜないこと。
+/// Color options. GGS notation is `*` = black / `O` = white; `b`/`w`
+/// are rejected. Distinct from the screen's stone colors — never mix.
 export const COLOR_CHOICES: [string, string][] = [
   ['?', 'おまかせ'], ['*', '黒'], ['O', '白'],
 ];
 
-/// 真偽の選択肢。`[否定するか, 表示]`。
-/// 「が」「でない」だと単体で読めないので、色と同じ語 (である / ではない) に揃える。
+/// Boolean options as [negated?, label], phrased to match the color
+/// options.
 export const BOOL_OPS: [boolean, string][] = [[false, 'である'], [true, 'ではない']];
 
-/** 束 (`&` / `|`) か葉かを型で分ける。 */
+/** Bundles (`&`/`|`) vs leaves, split by type. */
 export const isGroup = (c: Cond): c is { kind: 'all' | 'any'; kids: Cond[] } =>
   c.kind !== 'atom';
 
-/// 葉 1 つを日本語にする (読むだけの木で使う)。
-/// 文字列を訳す `readAtom` とは入口が違うだけで、語彙は揃えてある。
+/// Render one leaf (for the read-only tree); same vocabulary as
+/// `readAtom`, different entry point.
 export function condLabel(c: Cond): string {
   if (isGroup(c)) return c.kind === 'all' ? 'すべて満たす' : '次のどれか';
   const v = varOf(c.name);
@@ -511,13 +511,15 @@ export function condLabel(c: Cond): string {
   return `${label} ${c.op} ${c.val}${v.unit ?? ''}`;
 }
 
-/// 葉 1 つを編集できる形に読み解く。読めない綴りは `rated` 扱いに倒さず、
-/// 名前をそのまま残す (保存し直したときに他人の設定を壊さないため)。
+/// Parse one leaf into editable form. Unknown spellings keep their
+/// name rather than degrading — re-saving must not clobber someone
+/// else's setting.
 function parseAtomSrc(src: string): Cond {
   const m = /^\s*(!?)\s*([A-Za-z][A-Za-z0-9]*)\s*(==|!=|<=|>=|<|>|=)?\s*(.*?)\s*$/.exec(src);
   if (!m) return { kind: 'atom', name: src.trim(), op: '=', val: '', neg: false };
   const [, bang, name, op, rawVal] = m;
-  // `ml1==F` / `ml1==T` は真偽の書き方。比較として持つと画面が不自然になる
+  // `ml1==F`/`ml1==T` are boolean spellings; treating them as
+  // comparisons renders awkwardly.
   if (op === '==' && /^[TF]$/.test(rawVal)) {
     return { kind: 'atom', name, op: '=', val: '', neg: rawVal === 'F' };
   }
@@ -525,7 +527,7 @@ function parseAtomSrc(src: string): Cond {
   return { kind: 'atom', name, op: SRC_OP[op] ?? '=', val: rawVal, neg: bang === '!' };
 }
 
-/** 条件式を編集できる木にする。 */
+/** Parse a formula into an editable tree. */
 export function parseCond(src: string): Cond | null {
   const body = src.replace(/^\s*:\s*/, '').trim();
   if (!body) return null;
@@ -534,7 +536,7 @@ export function parseCond(src: string): Cond | null {
   return walk(parseFormula(body));
 }
 
-/** 編集した木を GGS の記法に戻す。空の束は落とす。 */
+/** Serialize the edited tree back to GGS notation; empty bundles drop. */
 export function condToSrc(c: Cond): string {
   if (c.kind === 'atom') {
     const v = varOf(c.name);
@@ -545,21 +547,18 @@ export function condToSrc(c: Cond): string {
   if (!parts.length) return '';
   if (parts.length === 1) return parts[0];
   const sep = c.kind === 'all' ? '&' : '|';
-  // `&` のほうが強いので、`|` の束を `&` の中へ入れるときだけ括弧が要る
+  // `&` binds tighter; parentheses only when an `|` bundle nests in `&`.
   return parts.map((p) => (c.kind === 'all' && p.includes('|') ? `(${p})` : p)).join(sep);
 }
 
-/// 条件式を木のまま取り出す。
-///
-/// もとは `!saved & (size!=8 | anti | …) | !rated` のような論理式で、**構造が
-/// そのまま意味**になっている。1 本の文に潰すと「かつ」「または」が入り混じった
-/// 5 行の呪文になり、括弧の対応を目で追う羽目になる。木で返して、括弧の代わりに
-/// 入れ子で見せる。
-///
-/// `&` が `|` より強い (GGS の `tell /os help formula` に従う)。
+/// Extract the formula as a tree. The source is a boolean expression
+/// like `!saved & (size!=8 | anti | ...) | !rated` whose structure IS
+/// its meaning; flattened to a sentence it becomes a five-line
+/// incantation. Nesting replaces parentheses. `&` binds tighter than
+/// `|` (per `tell /os help formula`).
 function parseFormula(src: string): Formula {
-  // 空白だけの断片を落とす。落とさないと `& (` の間の " " を葉として食い、
-  // 続く括弧が束ねられずに空の札が出る
+  // Drop whitespace-only fragments — otherwise the space in `& (`
+  // becomes a leaf and the following group renders as an empty card.
   const toks = (src.match(/\(|\)|&|\||[^()&|]+/g) ?? [])
     .map((t) => t.trim()).filter(Boolean);
   let i = 0;
@@ -576,7 +575,7 @@ function parseFormula(src: string): Formula {
   const join = (kind: 'all' | 'any', sep: string, next: () => Formula): Formula => {
     const kids = [next()];
     while (toks[i] === sep) { i++; kids.push(next()); }
-    // 1 つしかないなら束ねない (「すべて満たす: 1 件」を出さない)
+    // A single item is not bundled (no "all of: 1 item").
     return kids.length === 1 ? kids[0] : { kind, kids };
   };
   const and = () => join('all', '&', atom);
