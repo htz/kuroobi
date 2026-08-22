@@ -3,15 +3,12 @@ import { api, ggsApi, onHints, type ActivityView } from './api';
 import type { Game } from './state';
 import type { GameView, LearnEntry } from './types';
 
-/* エンジンとのやりとり。画面には依存しない。
- *
- * もとは App.tsx に描画と同居していた。新しいデザインへ載せ替える間は
- * 画面が 2 つ並ぶので、同居したままだと同じ手順を 2 か所に書くことになる。
- * ここに集めて両方から使う。**移すときに挙動は変えていない** — 変えると、
- * 見え方の違いがデザインのせいか手順のせいか分からなくなる。
- */
+/* Engine interaction, screen-independent. Extracted from App.tsx so
+ * both UIs could share it during the redesign; behavior deliberately
+ * unchanged in the move. */
 
-/** 設定をエンジンへ流す。値に依存させる (関数を並べると毎回作り直されて無限に走る)。 */
+/** Push settings to the engine; depends on values (function deps would
+ * rebuild and loop forever). */
 export function useEngineSettings(g: Game) {
   const { depth, solve, band } = g.levels;
   useEffect(() => {
@@ -20,19 +17,19 @@ export function useEngineSettings(g: Game) {
 
   useEffect(() => { api.setUseBook(g.useBook).catch(() => {}); }, [g.useBook]);
 
-  // 学習の取り込みはローカル・GGS 共通の設定 (歯車)。両方へ流す
+  // Learning import is one shared setting; push to both sides.
   useEffect(() => {
     api.setLearn(g.learnOn).catch(() => {});
     ggsApi.setLearn(g.learnOn).catch(() => {});
   }, [g.learnOn]);
 }
 
-/** 局面が動いたら評価値を出し直す + 反復深化の途中経過を受ける。 */
+/** Re-evaluate on position changes and receive deepening progress. */
 export function useHints(g: Game) {
   const refresh = g.refreshHints;
   useEffect(() => { void refresh(); }, [g.view, g.autoHint, refresh]);
 
-  // 反復深化の段が終わるたびに届く。深いものが来たら置き換えるだけ。
+  // Arrives per finished pass; deeper results simply replace.
   const setHints = g.setHints;
   const setStat = g.setStat;
   useEffect(() => {
@@ -50,7 +47,7 @@ export function useHints(g: Game) {
   }, [setHints, setStat]);
 }
 
-/** CPU の稼働状況 (左メニューに常時出す)。 */
+/** CPU activity (always shown in the left nav). */
 export function useActivity(): ActivityView | null {
   const [cpu, setCpu] = useState<ActivityView | null>(null);
   useEffect(() => {
@@ -62,7 +59,7 @@ export function useActivity(): ActivityView | null {
   return cpu;
 }
 
-/** エンジンの手番。打つ番になったら考えて指す。 */
+/** The engine's turn: think and play when it comes up. */
 export function useEngineTurn(g: Game) {
   const turnRef = useRef(false);
   const {
@@ -72,7 +69,7 @@ export function useEngineTurn(g: Game) {
 
   useEffect(() => {
     if (!playing || !gv) return;
-    // 終局したら自分で止まる (停止を押させない)
+    // Stops itself at game over (no stop button needed).
     if (gv.over) { setPlaying(false); return; }
     if (turnRef.current) return;
     if (!engineSides().includes(gv.player)) return;
@@ -89,9 +86,9 @@ export function useEngineTurn(g: Game) {
         const r = await api.think();
         setThinkTotal((t) => ({ ...t, [side]: t[side] + r.secs }));
         const next = await api.applyMove(r.pos);
-        // 何手目の手だったかを記録する (棋譜の表に出所と評価を出すため)。
-        // next.cursor は強制パスの先まで進んでいることがあるので、
-        // 指す前の局面から数える。値は手番視点なので黒視点へ揃える
+        // Record which move this was (for the table's source/eval
+        // columns). next.cursor may sit past a forced pass, so count
+        // from the pre-move position; convert to Black's view.
         setMoveSource((m) => ({
           ...m,
           [gv.cursor + 1]: {
@@ -104,8 +101,8 @@ export function useEngineTurn(g: Game) {
         }));
         applyView(next);
         maybeLearn(next);
-        // 働きぶりは局面を進めた後に立てる (applyView が消しにかかるため)。
-        // 人が打つまで直前の 1 手ぶんが盤の下に残る
+        // Set the workload after advancing (applyView clears it); the
+        // last move's numbers linger until the human plays.
         setStat(r.nodes > 0 ? { nodes: r.nodes, secs: r.secs } : null);
         say('');
       } catch (e) {
@@ -124,37 +121,34 @@ export function useEngineTurn(g: Game) {
       setMoveSource, applyView, setPlaying, say, maybeLearn, setStat]);
 }
 
-/** 評価値グラフの 1 点。
- *  `exact` / `book` は必須にする — 測れた点は必ずどちらか分かるし、
- *  省略可にすると受け取る側 (Graph.tsx) の型と食い違う。 */
+/** One eval-graph point. `exact`/`book` are required — every measured
+ *  point knows both, and optionality would clash with Graph.tsx. */
 export type GraphPoint = { value: number; exact: boolean; book: boolean };
 
-/** 手順の指紋。手順が変わったら測り直しになるので、同じかどうかだけ見る。 */
+/** Line fingerprint; only equality matters (a changed line re-measures). */
 const lineKey = (v: GameView | null) =>
   v ? v.moves.map((m) => (m == null ? 'p' : m)).join(',') : '';
 
-/** 「はい / いいえ」を聞く。既定はブラウザのダイアログ。
- *  engine.ts は画面を持たない約束なので、見た目のあるものを出したい画面は
- *  自前の確認を渡す (v2 は Overlay の中のモーダル)。 */
-/* 確認の口。**題名は「何が起きるか」を言う** (設計 §6 の形)。
- * 「確認」+「よろしいですか」だと、押す前に何が起きるか読み取れない。
- * `ok` も同じで、動作そのものを名前にする (規則 65 の考え方)。 */
+/** Yes/no prompt; defaults to the browser dialog. engine.ts owns no
+ *  UI, so screens wanting styled dialogs pass their own. */
+/* Confirmation shape: the title states what will happen, and `ok` is
+ * named after the action itself — "Confirm / OK?" tells the user
+ * nothing before clicking. */
 export interface AskArgs { title: string; body: string; ok: string; danger?: boolean }
 export type Ask = (a: AskArgs) => boolean | Promise<boolean>;
 const askDefault: Ask = (a) => window.confirm(a.title + '\n' + a.body);
 
-/** 評価値グラフ。全局面を測る。
- *  `ggsMatch` は GGS の自分の対局が進行中か — GGS は最優先なので分析を断る。
- *  GGS の状態は画面側が持つので引数で渡す。 */
+/** Eval graph: measures every position. `ggsMatch` = our GGS game is
+ *  live (GGS outranks analysis); passed in since the screen owns it. */
 export function useGraph(g: Game, ggsMatch: boolean, ask: Ask = askDefault) {
   const [values, setValues] = useState<(GraphPoint | undefined)[] | null>(null);
   const [busy, setBusy] = useState(false);
-  /** 分析の進み具合 (測った局面 / 全局面)。走っていない間は null。 */
+  /** Analysis progress (measured / total); null while idle. */
   const [prog, setProg] = useState<{ done: number; total: number } | null>(null);
   const seqRef = useRef(0);
   const keyRef = useRef('');
 
-  // 手順が変わったらグラフは無効
+  // A changed line invalidates the graph.
   useEffect(() => {
     const k = lineKey(g.view);
     if (k !== keyRef.current) { keyRef.current = k; setValues(null); }
@@ -162,13 +156,13 @@ export function useGraph(g: Game, ggsMatch: boolean, ask: Ask = askDefault) {
 
   const update = useCallback(async () => {
     const v = g.view;
-    // 押しても何も起きない、という状態を作らない。始められない理由は必ず出す
+    // Never a dead button: always state why it cannot start.
     if (!v) { g.say('棋譜がありません', 'gold'); return; }
-    // 二重に走らせない。ボタンは走っている間「分析停止」に変わるので人には
-    // 踏めず、言葉にする相手がいない (踏めるのは自動起動の経路だけ)
+    // No double runs. The button reads "stop" while running so humans
+    // cannot hit this; only the auto-start path can.
     if (busy) return;
-    // CPU を食い合う機能は同時に動かさない。GGS 対局は最優先なので断り、
-    // ローカル対局が進行中なら確認の上で停止してから始める
+    // CPU-hungry features never overlap: refuse during GGS games,
+    // confirm-then-stop a local game.
     if (ggsMatch) { g.say('GGS 対局中は分析を控えます', 'gold'); return; }
     if (g.playing || g.thinking) {
       if (!await ask({
@@ -182,24 +176,24 @@ export function useGraph(g: Game, ggsMatch: boolean, ask: Ask = askDefault) {
     setBusy(true);
     const seq = ++seqRef.current;
     const len = v.moves.length;
-    // 押されたら必ず全局面を測り直す。前の結果を引き継ぐと、埋まっている
-    // ときに 1 局面も動かず「押しても何も起きない」ことになる。強さを
-    // 変えた後に測り直せないのも困る
+    // Every press re-measures everything: reusing results would make
+    // a full graph do nothing, and strength changes could never
+    // re-measure.
     const vals: (GraphPoint | undefined)[] = new Array(len + 1);
     keyRef.current = lineKey(v);
     setValues(null);
     let failed = false;
     await g.pushLevels();
-    // 全局面を測るので深さは控えめに
+    // Modest depth — every position gets measured.
     const depth = Math.min(g.levels.depth, 14);
-    // 終局から逆向きに測る。終盤ほど空きが少なく読み切りで即確定するので
-    // 先に片づき、グラフは右から埋まっていく。加えて中盤の置換表は局面を
-    // またいで残るので (消しているのは終盤表だけ)、手前の局面の探索が
-    // いま測ったばかりの先の局面のエントリをそのまま通れる。
+    // Measure backwards from the end: endgame positions solve
+    // instantly, so the graph fills from the right — and the midgame
+    // table persists across positions, letting earlier searches reuse
+    // the just-measured later entries.
     for (let n = len; n >= 0; n--) {
       if (seq !== seqRef.current) break;
       if (vals[n]) continue;
-      if (n < len && v.moves[n] == null) continue;   // パスの手番は測らない
+      if (n < len && v.moves[n] == null) continue;   // pass turns are not measured
       setProg({ done: len - n + 1, total: len + 1 });
       try {
         const p = await api.evalAt(n, depth);
@@ -208,16 +202,15 @@ export function useGraph(g: Game, ggsMatch: boolean, ask: Ask = askDefault) {
         setValues([...vals]);
       } catch (e) { g.say('' + e); failed = true; break; }
     }
-    // 失敗したときは理由を残す。ここで消すと「押しても何も起きない」ように見える
+    // Keep the failure reason; clearing it here looks like a dead button.
     if (!failed && seq === seqRef.current) g.say('');
-    // 世代が変わっている = 止められて次の分析が始まっている。ここで false に
-    // すると、始まったばかりの分析の「動いている」印を消してしまう
+    // A new generation means another analysis started; clearing here
+    // would kill its running indicator.
     if (seq === seqRef.current) { setBusy(false); setProg(null); }
   }, [g, busy, ggsMatch, ask]);
 
-  /// 分析の停止。押し直しても続きからにはならない (毎回すべて測り直す作りで、
-  /// 前の結果を引き継ぐと埋まっているときに 1 局面も動かなくなる) ので、
-  /// 「中断」ではなく「停止」と呼ぶ。測り終えたぶんはグラフに残す。
+  /// Stop the analysis. Restarting re-measures everything (by design),
+  /// so this is "stop", not "pause"; finished points stay on the graph.
   const stop = useCallback(() => {
     seqRef.current++;
     setBusy(false);
@@ -229,7 +222,7 @@ export function useGraph(g: Game, ggsMatch: boolean, ask: Ask = askDefault) {
   return { values, busy, prog, update, stop };
 }
 
-/** 対局の開始 / 停止。CPU を食い合う機能は同時に動かさない。 */
+/** Game start/stop; CPU-hungry features never overlap. */
 export function useStartGame(
   g: Game,
   ggsMatch: boolean,
@@ -237,10 +230,9 @@ export function useStartGame(
   ask: Ask = askDefault,
 ) {
   return useCallback(async () => {
-    // 停止したことは伝えない。押した本人がやったことで、ボタンも
-    // 「対局開始」に戻るので、言葉で言い直す意味がない
+    // No toast for stopping — the user did it and the button reverts.
     if (g.playing) { g.stop(); g.say(''); return; }
-    // GGS 対局は最優先、分析中は確認してから止める
+    // GGS outranks; a running analysis stops after confirmation.
     if (ggsMatch) { g.say('GGS 対局中はローカル対局を開始できません', 'gold'); return; }
     if (graph.busy) {
       if (!await ask({
@@ -255,13 +247,11 @@ export function useStartGame(
   }, [g, ggsMatch, graph, ask]);
 }
 
-/* 取り込んだ対局の控え。
- *
- * 開いたときと、学習が終わった瞬間だけ読み直す。定期的に読むと、
- * 何も取り込んでいない間もファイルを触り続けることになる。 */
+/* Imported-game log. Re-read only on open and when learning finishes;
+ * polling would touch the file even with nothing imported. */
 export function useLearnLog(on: boolean, learning: boolean) {
   const [items, setItems] = useState<LearnEntry[]>([]);
-  // 「走っていた学習が終わった」を捉えるために前回の値を持つ
+  // Keep the previous value to catch "learning just finished".
   const wasLearning = useRef(false);
   const reload = useCallback(() => {
     void api.learnLog().then(setItems).catch(() => {});
@@ -270,7 +260,7 @@ export function useLearnLog(on: boolean, learning: boolean) {
     const ended = wasLearning.current && !learning;
     wasLearning.current = learning;
     if (on && (ended || items.length === 0)) reload();
-    // items を依存に入れると、空のまま返ってきたときに読み直しが止まらない
+    // items in the deps would loop forever on empty results.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [on, learning, reload]);
   return { items, reload };

@@ -1,63 +1,55 @@
-// 対局の状態と、エンジンとのやり取り。画面はここから読むだけにする。
+// Game state and engine interaction; screens only read from here.
 //
-// 手書きの DOM 更新をやめた理由がここにある。状態と表示の同期を手で書いて
-// いたときは、担当の選択肢が消える・レートが空欄になる・hidden が効かない
-// といった取りこぼしが繰り返し起きた。状態を 1 か所に集めて、画面は
-// そこから導くだけにする。
+// This is why hand-written DOM updates were abandoned: manual
+// state/display sync kept dropping things (vanishing options, blank
+// ratings, dead hidden flags). One source of truth, screens derive.
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { api, jsLog } from './api';
 import type { ClockView, GameView, SearchStat } from './types';
 
-/// エンジンが返す**内部の符丁**。画面には出さない。
-///
-/// どれも「押した本人がやったこと」の結果で、読み手に用がない — 停止を
-/// 押せば `stopped` は必ず返るし、打てないマスを押せば `NotPlayable` が
-/// 返る (盤を見れば分かる)。これを出すと、正常な操作のたびに異常が起きた
-/// ように見える。調べられるようログには残す。
-///
-/// 出どころ: `stopped` / `position changed` / `out of range` は
-/// `gui/src/main.rs`、残りは `MoveError` / `GameError` の Debug 出力。
+/// Internal engine codes, never displayed: each is the result of the
+/// user's own action (`stopped` after stop, `NotPlayable` on an
+/// illegal square) and showing them makes normal actions look like
+/// failures. Logged for debugging. Sources: gui/src/main.rs and the
+/// MoveError/GameError Debug output.
 const INTERNAL = new Set([
   'stopped', 'position changed', 'out of range',
   'InvalidPosition', 'NotPlayable', 'Occupied', 'NoMoves', 'GameOver',
 ]);
 
-/** 数を含むので完全一致では拾えない符丁。**前方一致で見る。**
- *
- *  `move index 5 out of range` のように可変の値が混ざる。どちらも盤の
- *  内部状態のずれで、**読み手に用がない** — 棋譜の形式の誤りのように
- *  「直し方が要る」ものとは違う (そちらは日本語にしてある)。 */
+/** Codes with embedded numbers, matched by prefix (`move index 5 out
+ *  of range`). Internal state drift, useless to the reader — unlike
+ *  fixable input errors, which have display-language messages. */
 const INTERNAL_PREFIX = [
   'move index ',
   'hash does not match',
 ];
 
-/** 報せの種類。
- *  `bad` = 失敗した。`gold` = 失敗ではないが、押したのに進まない理由。
- *  この 2 つしか作らない — 「うまくいった」は押した本人が見れば分かるので出さない。 */
+/** Notice kinds: `bad` = failed, `gold` = not a failure but why the
+ *  action did not proceed. Nothing else — success is self-evident. */
 export type ToastTone = 'bad' | 'gold';
 
-/** 画面に出す短い報せ。出るのは失敗と、押したのに進まない理由だけ。 */
+/** Short on-screen notice; only failures and blocked-action reasons. */
 export interface Toast { id: number; text: string; tone: ToastTone }
 
-/// 消えるまでの時間。読み切れる長さと、居座って邪魔にならない長さの兼ね合い。
+/// Auto-dismiss time: long enough to read, short enough not to squat.
 const TOAST_MS = 5000;
 
 export type AppMode = 'vs' | 'study';
 export type EngineSide = 'black' | 'white' | 'both' | 'off';
 export type MoveSource = 'book' | 'search';
 
-/** エンジンが指した手の記録 (棋譜の表に出す)。value は黒視点の石差。 */
+/** Engine move record (for the table); value is Black-view discs. */
 export interface MoveInfo {
   source: MoveSource;
   value: number;
   exact: boolean;
   learned: boolean;
-  /** この手に使った時間 (秒)。 */
+  /** Seconds spent on this move. */
   secs: number;
 }
 
-/** 強さのプリセット。カスタムを選ぶと下の 3 つを直接いじる。 */
+/** Strength presets; custom edits the three knobs directly. */
 export const LEVELS = [
   { name: 'Lv1', depth: 1, solve: 2, band: 0 },
   { name: 'Lv2', depth: 2, solve: 4, band: 0 },
@@ -76,13 +68,13 @@ export const LEVELS = [
 
 export interface Levels { depth: number; solve: number; band: number }
 
-/** 読切 (空きマス数) の上限。これ以上は現実的な時間で解けない。 */
+/** Solve-entry ceiling; beyond this is not solvable in realistic time. */
 export const SOLVE_MAX = 36;
 
-/// 読切は深さ以上でなければならない。深さのほうが大きいと、中盤探索が
-/// 終局を跨いで読むだけの区間ができる — 読み切れる局面なのに読み切りに
-/// 入らず、MPC で枝を刈った不正確な値のまま深さだけを費やす。
-/// 深さの上限も読切に合わせる (それより深くしても選べる読切が無い)。
+/// Solve entry must be >= depth: otherwise a span exists where the
+/// midgame reads past the end of the game without solving — burning
+/// depth on MPC-pruned inexact values in solvable positions. The
+/// depth cap aligns with the solve for the same reason.
 export function clampLevels(v: Levels): Levels {
   const depth = Math.max(1, Math.min(SOLVE_MAX, v.depth));
   return { depth, solve: Math.max(depth, Math.min(SOLVE_MAX, v.solve)), band: v.band };
@@ -97,40 +89,38 @@ export function useGame(clockSecs = 0) {
   const [view, setView] = useState<GameView | null>(null);
   const [mode, setMode] = useState<AppMode>('vs');
   const [side, setSide] = useState<EngineSide>('white');
-  /* **段は出どころで丸める。** `LEVELS[level]` が undefined になると、
-     次に `.depth` や `.name` を読んだ時点で描画ごと落ちて**窓が真っ白**に
-     なる。画面からは選択肢しか渡らないが、確認用の入口
-     (`KUROOBI_AUTOPLAY=both:40`) で範囲外を渡してしまい、原因の分からない
-     白い窓を数分追いかけた。**使う側で丸めると必ず数え漏らす** —
-     実際 `levels` だけ直したら題名 (`LEVELS[g.level].name`) がまだ落ちた。 */
+  /* Clamp the level at the source: an undefined LEVELS[level] crashes
+     the render (blank window) at the next `.depth`/`.name` read. The
+     screenshot entry point once passed an out-of-range level, and
+     clamping at use sites provably misses one (fixing `levels` alone
+     left the title crashing). */
   const [levelRaw, setLevel] = useState<number | 'custom'>(6);
   const level: number | 'custom' =
     levelRaw === 'custom' ? 'custom' : Math.max(0, Math.min(LEVELS.length - 1, levelRaw));
   const [custom, setCustom] = useState<Levels>({ depth: 12, solve: 18, band: 0 });
   const [useBook, setUseBook] = useState(true);
   const [hasBook, setHasBook] = useState(true);
-  // 終局した対局を定石の学習に取り込むか (バックエンドの既定も on)
+  // Whether finished games feed learning (backend default is on too).
   const [learnOn, setLearnOn] = useState(true);
   const [autoHint, setAutoHintRaw] = useState(false);
   const [hints, setHints] = useState<Hints | null>(null);
-  // 探索の働きぶり (盤の下)。分析中はライブで伸び、対局では直前の 1 手ぶんが
-  // 残る。動いていないときは null にして行ごと消す — 古い数字を残すと
-  // 「まだ動いている」と誤解する。
+  // Search workload (under the board): live during analysis, last
+  // move's numbers during games. Null removes the row entirely —
+  // stale numbers read as "still running".
   const [stat, setStat] = useState<SearchStat | null>(null);
   const [playing, setPlaying] = useState(false);
   const [thinking, setThinking] = useState(false);
-  const [thinkSecs, setThinkSecs] = useState(0);          // 思考中の経過
+  const [thinkSecs, setThinkSecs] = useState(0);          // elapsed while thinking
   const [thinkTotal, setThinkTotal] = useState({ black: 0, white: 0 });
   const [moveSource, setMoveSource] = useState<Record<number, MoveInfo>>({});
-  // 報せは浮かせる (トースト)。盤の下に行を置いていたときは、出入りのたびに
-  // 帯の高さが動いて画面全体が跳ねていた。作業が進んでいることの報せはここに
-  // 入れない — それはその作業を出している場所が自分で持つ (分析の進み具合なら
-  // 評価値グラフの節)
+  // Notices float (toasts): an inline row used to bounce the whole
+  // layout on every show/hide. Progress reports don't belong here —
+  // each feature's own section carries them.
   const [toasts, setToasts] = useState<Toast[]>([]);
   const toastId = useRef(0);
-  // エンジンが直前に指した手の評価 (「エンジン評価: +2.5 石」と出す)
+  // The engine's last-move eval (rendered as its evaluation line).
 
-  // 解析結果は返ってきた時点で局面が進んでいることがある。世代で捨てる。
+  // Results can arrive after the position moved; generations discard them.
   const hintSeq = useRef(0);
 
   const levels: Levels = level === 'custom' ? custom : LEVELS[level];
@@ -147,15 +137,16 @@ export function useGame(clockSecs = 0) {
   }, []);
 
   const say = useCallback((s: string, tone: ToastTone = 'bad') => {
-    // 空文字は「前の伝言を消す」の名残。浮かせる形では自分で消えるので用がない
+    // Empty strings were the old "clear previous message"; toasts
+    // self-dismiss, so it is vestigial.
     if (!s) return;
     if (INTERNAL.has(s) || INTERNAL_PREFIX.some((p) => s.startsWith(p))) {
       jsLog('内部の符丁 (画面には出さない): ' + s);
       return;
     }
     const id = ++toastId.current;
-    // 同じ文が続けて出ることがある (局面を動かすたびに同じ失敗をする、など)。
-    // 積み上げずに出し直す
+    // The same text can repeat (same failure per move); replace
+    // rather than stack.
     setToasts((t) => [...t.filter((x) => x.text !== s), { id, text: s, tone }]);
     window.setTimeout(() => dismiss(id), TOAST_MS);
   }, [dismiss]);
@@ -164,7 +155,7 @@ export function useGame(clockSecs = 0) {
     await api.setLevels(levels.depth, levels.solve, levels.band).catch(() => {});
   }, [levels.depth, levels.solve, levels.band]);
 
-  // ---- 起動時 ----
+  // ---- Startup ----
   useEffect(() => {
     void (async () => {
       try {
@@ -176,32 +167,28 @@ export function useGame(clockSecs = 0) {
     })();
   }, [say]);
 
-  // ---- 常時ヒント ----
-  // 反復深化で回し続ける。結果は段ごとにイベントで届き、購読側が入れる。
-  // 深い答えが出るたびに置き換わるので、見ているあいだ値が締まっていく。
+  // ---- Live hints ----
+  // Keep deepening; results arrive per pass via events and replace
+  // shallower ones, so the numbers tighten while you watch.
   const refreshHints = useCallback(async (v: GameView | null = view) => {
-    // 思考中は停止すら送らない。この関数は thinking を見ているので、
-    // エンジンが思考を始めた時点で作り直され、購読側の effect が再び走る。
-    // そこで停止を送ると**エンジン自身の探索**にフラグが立ち、「停止された
-    // 結果は捨てる」の判定に当たって対局が止まる (定石の間は即座に返るので
-    // 競争に勝ち、定石を抜けた最初の探索手だけが確実に落ちていた)。
-    // 前の局面の分析は、この 1 つ前 — 局面が動いた時点の呼び出し — が
-    // 既に止めている。
+    // Never even send a stop while thinking: this function depends on
+    // `thinking`, so the effect re-runs when the engine starts, and a
+    // stop here would flag the ENGINE'S OWN search — reliably killing
+    // the first post-book move (book moves returned fast enough to
+    // win the race). The previous position's analysis was already
+    // stopped by the previous invocation.
     if (thinking) return;
-    /* 前の局面の分析を止める。**待つ。** 投げっぱなしにすると、次に始めた
-       探索の `stop.reset()` より後に停止が届き、**始まった瞬間に止まる**。
-       分析の側は `pushLevels` の await が挟まって偶然ここを避けていたが、
-       先読みは直に呼ぶので踏んだ (実機で「先読み」が一度も走らなかった) */
+    /* Stop the previous analysis AND await it: fire-and-forget lets
+       the stop land after the next search's stop.reset(), killing it
+       at birth. Analysis dodged this by a coincidental await; ponder
+       called directly and never ran once. */
     await api.stopSearch().catch(() => {});
     if (!v || v.over) return;
-    if (playing && engineSides().includes(v.player)) return;   // エンジンが打つ番
-    /* 評価値を出していないときは、**代わりに先読み**しておく。
-       人が考えている間に KUROOBI が次に読む局面を温めるので、指したあとの
-       応答が速くなる (ローカルは深さ固定なので効き方は「速く」。実測で
-       同じ深さへ 1/3 の時間)。**評価値と同じエンジンを取り合う**ので
-       両方は走らせない — 画面に数字が出ているほうを優先する。
-       対局中 (KUROOBI が受け持つ色がある) ときだけ。検討では次の手番が
-       来ないので読んでも使われない。 */
+    if (playing && engineSides().includes(v.player)) return;   // the engine's turn
+    /* Ponder instead when evals are off: warming the next position
+       makes replies faster (fixed depth: 1/3 the time). Both contend
+       for the same engine, so never run both — the on-screen numbers
+       win. Games only; study never gets a next turn. */
     if (!autoHint) {
       if (playing) api.ponderLive().catch(() => {});
       return;
@@ -215,7 +202,7 @@ export function useGame(clockSecs = 0) {
     }
   }, [view, autoHint, thinking, playing, engineSides, pushLevels, say]);
 
-  /** 評価値の表示を切り替える。切ったらいま出ている値も消す。 */
+  /** Toggle the eval display; turning it off clears current values. */
   const setAutoHint = useCallback((on: boolean) => {
     setAutoHintRaw(on);
     if (!on) { setHints(null); setStat(null); }
@@ -227,22 +214,21 @@ export function useGame(clockSecs = 0) {
     setStat(null);
   }, []);
 
-  // 手が指されて終局したら、その対局を定石の学習に取り込む
-  // (読み込んだだけの棋譜では呼ばれない)
+  // Import played-to-the-end games into learning (never merely
+  // loaded records).
   const maybeLearn = useCallback((v: GameView) => {
     if (!v.over || mode !== 'vs' || !learnOn) return;
-    // 取り込みの進み具合は左メニュー下の「学習 n/m」に出るので、
-    // ここで言葉にはしない
-    /* KUROOBI の担当 (`side`) の裏が人の色。両方 / なし のときは決められない
-       ので空で送る (学習ログの絞り込みから外れる) */
+    // Progress shows in the nav's learning counter; no toast.
+    /* The human's color is the complement of KUROOBI's side; both/
+       none is undecidable and sends empty (excluded from filters). */
     const mine = side === 'black' ? 'w' : side === 'white' ? 'b' : '';
     api.learnGame(mine).catch(() => {});
   }, [mode, learnOn, side]);
 
-  // ---- 人が打つ ----
+  // ---- Human moves ----
   const play = useCallback(async (sq: number) => {
     if (thinking) return;
-    // 対局中にエンジンが受け持つ手番なら、人は打てない
+    // Humans cannot move on the engine's turns.
     if (playing && view && engineSides().includes(view.player)) return;
     try {
       const v = await api.play(sq);
@@ -251,20 +237,19 @@ export function useGame(clockSecs = 0) {
     } catch (e) { say('' + e); }
   }, [thinking, playing, view, engineSides, apply, maybeLearn, say]);
 
-  /* **持ち時間。** 0 は「時計なし」。GGS と同じ配り方 (`timectl`) を
-     Rust 側が通すので、ここは秒数を渡すだけ。**新規対局のたびに初期化する**
-     — 前の対局の残りを引き継ぐと、始めた時点で時間切れになる */
+  /* Clock: 0 = none. Rust routes the same timectl as GGS; this side
+     only passes seconds. Re-initialized every new game — inheriting
+     the previous remainder would start games already flagged. */
   const [clock, setClock] = useState<ClockView | null>(null);
-  /* 走っている手番は Rust 側が差し引いて返すので、こちらは毎秒読むだけ。
-     **対局していないときは読まない** — 盤を眺めている間に問い合わせても
-     値は動かない */
+  /* Rust subtracts the running turn; this side polls once a second,
+     and only during games (idle polls return static values). */
   useEffect(() => {
     if (!clockSecs || !playing) return;
     const id = setInterval(() => {
       void api.clocks().then((c) => {
         setClock(c);
-        /* **切れたら止める。** 放っておくと切れた側が指し続けて、
-           時計だけ 0 で止まった不思議な対局になる */
+        /* Stop on a flag — otherwise the flagged side keeps playing
+           under a frozen zero clock. */
         if (c.lost) {
           setPlaying(false);
           say(c.lost === 'black' ? '黒の時間切れ' : '白の時間切れ', 'gold');
@@ -276,8 +261,8 @@ export function useGame(clockSecs = 0) {
 
   const newGame = useCallback(async () => {
     hintSeq.current++;
-    // 進行中の探索は打ち切る。強さの反映は待たない — 待つとエンジンの
-    // ロックが空くまで盤面が作られず、押した感触が無くなる
+    // Abort the running search; don't await the strength push (the
+    // board would stall until the engine lock frees).
     api.stopSearch().catch(() => {});
     void pushLevels();
     setMoveSource({});
@@ -298,7 +283,7 @@ export function useGame(clockSecs = 0) {
     if (thinking) return;
     hintSeq.current++;
     api.stopSearch().catch(() => {});
-    if (playing) setPlaying(false);   // 棋譜を動かしたら対局は続けられない
+    if (playing) setPlaying(false);   // scrubbing the record ends the live game
     try { apply(await api.goto(n)); } catch (e) { say('' + e); }
   }, [thinking, playing, apply, say]);
 
