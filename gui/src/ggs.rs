@@ -1110,6 +1110,10 @@ struct MatchState {
     /// 相手の直近の手の申告値。
     opp_eval: Option<f32>,
     opp_secs_used: Option<f32>,
+    /// **自分が指した手の番号の偶奇。** 手番の突き合わせで一度決まれば
+    /// 以降変わらないので控えておく。終局すると手番が空になり、その場では
+    /// 色を決められない (終局後の画面で申告値が消えていた)。
+    eval_parity: Option<u32>,
     /// 観戦解析: 手番視点の評価値と最善手 (座標)。
     watch_eval: Option<f32>,
     watch_best: Option<String>,
@@ -1135,18 +1139,27 @@ impl MatchState {
     /// **終局した対局は書庫の棋譜のほうが確かなので、ここでは諦める**
     /// (推移は対局中に見るもの)。
     fn eval_series(&self) -> Vec<EvalPoint> {
-        let (Some(mc), Some(&last_n)) = (self.my_color, self.moves.keys().next_back()) else {
+        let Some(&last_n) = self.moves.keys().next_back() else {
             return Vec::new();
         };
-        if self.turn != '*' && self.turn != 'O' {
-            return Vec::new();
-        }
-        // 直前の手を指したのは「いま指す番でないほう」
-        let last_was_mine = self.turn != mc;
-        let mine_parity = if last_was_mine {
-            last_n % 2
-        } else {
-            (last_n + 1) % 2
+        /* **一度決めた色を控えて使う。** 終局すると手番が空になるので、
+        その場では色を決められない。控えが無いときだけ手番から求める。 */
+        let mine_parity = match self.eval_parity {
+            Some(p) => p,
+            None => {
+                let Some(mc) = self.my_color else {
+                    return Vec::new();
+                };
+                if self.turn != '*' && self.turn != 'O' {
+                    return Vec::new();
+                }
+                // 直前の手を指したのは「いま指す番でないほう」
+                if self.turn != mc {
+                    last_n % 2
+                } else {
+                    (last_n + 1) % 2
+                }
+            }
         };
         self.move_evals
             .iter()
@@ -1188,6 +1201,7 @@ impl MatchState {
             move_evals: self.move_evals.clone(),
             opp_eval: self.opp_eval,
             opp_secs_used: self.opp_secs_used,
+            eval_parity: self.eval_parity,
             watch_eval: self.watch_eval,
             watch_best: self.watch_best.clone(),
             watch_exact: self.watch_exact,
@@ -1231,6 +1245,7 @@ impl MatchState {
             move_evals: Default::default(),
             opp_eval: None,
             opp_secs_used: None,
+            eval_parity: None,
             watch_eval: None,
             watch_best: None,
             watch_exact: false,
@@ -3683,6 +3698,11 @@ fn apply_block(m: &mut MatchState, block: &[String], login: &str) -> (bool, Opti
     番号付きで届くので、手番の突き合わせだけで色は決まる。相手が
     評価値を出さない設定なら `None` のまま (前の値は残さない)。 */
     if let (Some(t), Some(mc)) = (turn, m.my_color) {
+        /* **色が決まったら控える。** 終局後は手番が空になるので、その場で
+        は決められない (終局後の画面で申告値の推移が消えていた)。 */
+        if let Some((&n, _)) = m.moves.iter().next_back() {
+            m.eval_parity = Some(if t != mc { n % 2 } else { (n + 1) % 2 });
+        }
         if t == mc {
             if let Some((n, _)) = m.moves.iter().next_back() {
                 let (ev, sec) = m.move_evals.get(n).copied().unwrap_or((None, None));

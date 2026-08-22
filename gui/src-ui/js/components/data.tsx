@@ -774,13 +774,17 @@ export function EvalTrend({ points, height = 96 }: {
   const x = (i: number) => padL + (i / span) * (w - padL - pad);
   const y = (v: number) => (height - padB) / 2 - (v / lim) * ((height - padB) / 2 - pad);
 
-  /** 値の無い手は線を切る (無い値を跨いで直線を引かない)。 */
+  /** その人が申告した手だけを繋ぐ。
+   *
+   * **値の無い手で線を切ってはいけない。** 手番は交互なので、自分の値と
+   * 相手の値は 1 手おきにしか無い。切る作りにしたら**どの区間も繋がらず、
+   * 点だけが並んだ**。無い手は飛ばして、その人の申告どうしを繋ぐ。 */
   const path = (pick: (p: (typeof points)[number]) => number | null) => {
     let d = '';
     let pen = false;
     points.forEach((p, i) => {
       const v = pick(p);
-      if (v == null) { pen = false; return; }
+      if (v == null) return;
       d += `${pen ? 'L' : 'M'}${x(i).toFixed(1)},${y(v).toFixed(1)}`;
       pen = true;
     });
