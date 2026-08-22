@@ -823,10 +823,9 @@ impl Nnue {
     }
 
     /// Evaluate from pattern indices the caller already maintains (the search
-    /// keeps these incrementally). Recomputes the H accumulator from scratch —
-    /// like neural-reversi, which rebuilds its accumulator per eval rather than
-    /// threading it through make/unmake — so integrating into an existing
-    /// incremental-index search needs only this one call swapped in.
+    /// keeps these incrementally). Recomputes the H accumulator from scratch
+    /// rather than threading it through make/unmake — so integrating into an
+    /// existing incremental-index search needs only this one call swapped in.
     /// Requires [`quantize`](Self::quantize).
     #[inline]
     pub fn eval_from_indices(&self, indices: &PatternIndices, board: &Board) -> f32 {
