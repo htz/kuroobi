@@ -20,15 +20,15 @@ import { EvalTrend, RateChart, ResultRow, StoneDot } from './components/data';
 import { flipped, type Prefs } from './prefs';
 import { logLinesOf } from './adapt';
 
-/* GGS の画面。左メニューの行き先ごとに中身を出し分ける。
+/* GGS screens, one per nav destination.
  *
- * 未接続のときは 7 行を出さずログイン 1 行だけになるので、ここへ来るのは
- * ログイン画面だけ。残りは順に置き換えていく。
- */
+ * Disconnected, the nav shows only the login row, so login is the
+ * only reachable screen; the rest swap in as they are built. */
 
 export function GgsScreen({ nav, snap, onNav, prefs, onKifu }: {
   nav: NavId; snap: GgsSnapshot | null; onNav: (id: NavId) => void; prefs: Prefs;
-  /** 棋譜を覆いで見せる。手元に棋譜が無いときは `archive` から取り出す。 */
+  /** Show a record in the overlay, fetching from `archive` when there
+   *  is no local copy. */
   onKifu: (title: string, kifu: string, archive?: string) => void;
 }) {
   if (nav === 'ggs-login') return <GgsLogin />;
@@ -47,18 +47,19 @@ export function GgsScreen({ nav, snap, onNav, prefs, onKifu }: {
   }
 }
 
-/* 浮く箱の中の入力ラベル。節 (1px 罫つきの見出し) はコンテンツ領域のもので、
- * 340px の箱の中に置くと罫が箱を横切って見出しに見えてしまう */
-/* 縦並びの中では、`alignItems` を `flex-start` にすると中身が自分の幅まで
- * 縮む (TextField の `flex:1` は縦並びでは高さの話になる)。選択肢の幅を
- * 内容で決めたい欄はそれでよいが、**打ち込む欄は箱いっぱいに伸ばす** —
- * 半分の幅で止まっている入力欄は、押せる場所に見えない。 */
+/* Input label inside a floating box. Sections (1px-ruled headings)
+ * belong to the content area; in a 340px box the rule crosses the box
+ * and reads as a heading. */
+/* In a column, alignItems: flex-start shrinks children to their own
+ * width (TextField's flex:1 becomes a height matter). Fine for
+ * content-sized choices, but text inputs stretch to the box — a
+ * half-width input does not look like a place to type. */
 function Field({ label, children, stretch }: { label: string; children: React.ReactNode; stretch?: boolean }) {
   return (
-    /* `alignSelf: 'start'` が要る。**格子の子は既定で行の高さまで伸びる**
-       ので、同じ行に背の高いもの (説明文つきの「レート戦」など) があると
-       この器も伸び、中の入力欄が `flexGrow` で余りを吸って縦長になる。
-       実際に「最大対局数」と「対局の間隔」が 3 倍の高さになっていた。 */
+    /* alignSelf: 'start' is required: grid children stretch to the
+       row height by default, so a tall sibling (the rated toggle with
+       its description) stretched this too and flexGrow made the input
+       absorb the surplus — two fields once rendered 3x tall. */
     <label style={{ display: 'flex', flexDirection: 'column', gap: 'var(--sp-2)',
                     alignSelf: 'start',
                     alignItems: stretch ? 'stretch' : 'flex-start' }}>
@@ -68,14 +69,13 @@ function Field({ label, children, stretch }: { label: string; children: React.Re
   );
 }
 
-/* ---------------- ログイン ----------------
+/* ---------------- Login ----------------
  *
- * 保存済みの認証情報は起動時の自動ログインが使うので、この画面が出るのは
- * 未保存のとき・自動ログインに失敗したとき・ログアウトした後だけ。
+ * Saved credentials feed the startup auto-login, so this screen shows
+ * only when nothing is saved, auto-login failed, or after logout.
  *
- * 丸四角の箱を内容に使わないのが決まりだが、ここは例外 — 画面に 1 つしか
- * ない入口で、他に並ぶものが無いので、浮かせたほうが目的地だと分かる。
- */
+ * Rounded boxes are banned for content, except here — the screen's
+ * single entry point, with nothing beside it, reads better floated. */
 function GgsLogin() {
   const [user, setUser] = useState('');
   const [pw, setPw] = useState('');
@@ -93,10 +93,10 @@ function GgsLogin() {
 
   return (
     <div style={{ flex: 1, display: 'grid', placeItems: 'center', padding: 'var(--sp-5)' }}>
-      {/* 設計の実測: 箱 340px / 角丸 --r-4 / 地は --panel / 余白 22px /
-          行間 14px。欄は 32px で地は --bg。**釦は箱いっぱいの幅**で、
-          状態の文はその下に置く (欄と釦が縦に一続きになる)。
-          見出しは節と同じ小さい字 (10px・600・字間 .08em)。 */}
+      {/* Measured from the design: 340px box, --r-4, --panel ground,
+          22px padding, 14px gaps. Fields are 32px on --bg. The button
+          spans the box with the status line below, so fields and
+          button read as one column. Headings match section type. */}
       <div style={{
         width: 'var(--w-modal)', borderRadius: 'var(--r-4)', background: 'var(--panel)',
         border: '1px solid var(--border)', padding: 22,
@@ -117,7 +117,7 @@ function GgsLogin() {
         </div>
         <Button size="field" variant="primary" className="k-wide"
                 onClick={() => void connect()}>ログイン</Button>
-        {/* 文が出ていなくても場所を空けておく — 出た瞬間に下がずれない */}
+        {/* Reserve the line even when empty so nothing shifts. */}
         <div style={{
           fontSize: 'var(--fs-6)', minHeight: 16,
           color: status.startsWith('接続') ? 'var(--sub)' : 'var(--bad)',
@@ -127,7 +127,7 @@ function GgsLogin() {
   );
 }
 
-/** ログインの欄。見出しは節と同じ小さい字 (設計の `.fld`)。 */
+/** Login field; heading in section type (the design's .fld). */
 function LoginField({ label, children }: { label: string; children: React.ReactNode }) {
   return (
     <label style={{ display: 'flex', flexDirection: 'column', gap: 5, alignItems: 'stretch' }}>
@@ -139,20 +139,18 @@ function LoginField({ label, children }: { label: string; children: React.ReactN
   );
 }
 
-/* ---------------- コンソール ----------------
+/* ---------------- Console ----------------
  *
- * 通信ログと生コマンド。GGS は画面に出していない機能が多いので、
- * 逃げ道として直に打てる場所を必ず残す。
- */
+ * Protocol log and raw commands. GGS has many features the UI never
+ * surfaces; a direct-typing escape hatch always stays. */
 export function GgsConsole({ snap }: { snap: GgsSnapshot }) {
   const [cmd, setCmd] = useState('');
-  /* 絞り込みと「クリア」。設計 §6 の見出しに載っている。
-     **クリアは画面の話** — サーバーとのやりとりを消してしまうのではなく、
-     ここから先だけを見る印を置く (端末の clear と同じ)。数で覚えるので
-     ログが伸びるぶんには狂わない */
+  /* Filter and clear, per §6's heading. Clear is display-only — it
+     marks "show from here", like a terminal clear, without touching
+     the server traffic. Remembered as a count, so growth is safe. */
   const [dir, setDir] = useState<'all' | 'out' | 'in'>('all');
   const [from, setFrom] = useState(0);
-  /* 押した結果の一言 (規則 34 — 出すのは失敗と、押したのに進まない理由) */
+  /* One-line result (rule 34 — only failures and why-nothing-moved). */
   const [note, setNote] = useState('');
   const say = (t: string) => { setNote(t); window.setTimeout(() => setNote(''), 2500); };
   const send = () => {
@@ -163,8 +161,8 @@ export function GgsConsole({ snap }: { snap: GgsSnapshot }) {
   };
   const all = logLinesOf(snap.log);
   const shown = all.slice(Math.min(from, all.length))
-    // 「送信」「受信」は自分が打ったものと相手から来たもの。app (アプリの
-    // 断り書き) はどちらでもないので、絞ったときは落とす
+    // Sent/received are ours and theirs; app notes are neither and
+    // drop when filtered.
     .filter((l) => dir === 'all' || l.dir === dir);
   return (
     <div style={{ flex: 1, minHeight: 0, display: 'flex', flexDirection: 'column' }}>
@@ -180,7 +178,7 @@ export function GgsConsole({ snap }: { snap: GgsSnapshot }) {
                   onClick={() => void ggsApi.saveLog(
                     shown.map((l) => (l.dir === 'out' ? '› ' : '') + l.text).join('\n') + '\n',
                   )
-                    // 成功したときは何も言わない (規則 34)
+                    // Silence on success (rule 34).
                     .catch((e) => say('保存できませんでした (' + e + ')'))}>保存</Button>
           {note && <span style={{
             fontSize: 'var(--fs-6)', letterSpacing: 0, color: 'var(--bad)',
@@ -192,8 +190,8 @@ export function GgsConsole({ snap }: { snap: GgsSnapshot }) {
         flex: 'none', display: 'flex', gap: 'var(--sp-2)', alignItems: 'center',
         padding: 'var(--sp-3) var(--sp-4)', borderTop: '1px solid var(--border-weak)',
       }}>
-        {/* コンソールも Enter で送れる。生コマンドを何度も打つ場所なので、
-            毎回釦まで手を運ばせない */}
+        {/* Enter sends here too — a raw-command loop shouldn't need
+            the button each time. */}
         <TextField mono value={cmd} onChange={setCmd} onEnter={send}
                    placeholder="コマンド (例: tell /os who 8。Enter で送信)" />
         <Button size="field" onClick={send}>送信</Button>
@@ -202,25 +200,26 @@ export function GgsConsole({ snap }: { snap: GgsSnapshot }) {
   );
 }
 
-/* ---------------- チャット ----------------
+/* ---------------- Chat ----------------
  *
- * 左に会話の一覧 (全体チャット + 話した相手ごと)、右に選んだ会話。
- * 英語の発言は自動で和訳を添え、日本語の発言は英訳して送れる。
- */
+ * Conversation list left (global + per correspondent), the selected
+ * one right. English messages get an automatic Japanese translation;
+ * Japanese messages can be sent translated to English. */
 
-/** ここより偏差が大きいレートは**まだ動く** = 暫定として印を付ける。
+/** Ratings with deviation above this are still moving = provisional.
  *
- * **GGS は「暫定」を直接は返さない。**`rank` の生の行 (`2184.2@180.8=`) に
- * 印らしき字はあるが、暫定のはずの 2 つ (6 局と 5 局) がどちらも `=` で、
- * これでは見分けが付かなかった。**偏差で決める**しかない。
+ * GGS never says "provisional" directly: the raw rank row
+ * (2184.2@180.8=) has a marker-like character, but two known
+ * provisionals (6 and 5 games) both showed '=', so deviation is the
+ * only usable signal.
  *
- * 100 にした根拠 — 絵 (§5) が「1795.1±112」を**暫定**として描いている。
- * 実データ (接続中の一覧) も、初めての人が ±350 (初期値)、数局の人が
- * ±125〜216、よく打つ常連が ±44 / ±75 / ±91 と割れている。
- * **要確認** (絵の例 1 つを根拠にしているので、閾値は相談したい)。 */
+ * Why 100 — the design (§5) draws 1795.1±112 as provisional, and
+ * live data splits the same way: newcomers ±350 (initial), few-game
+ * players ±125-216, regulars ±44/±75/±91. TO CONFIRM (based on one
+ * design example; the threshold deserves a discussion). */
 const PROVISIONAL_DEV = 100;
 
-/** 訳文を添える対象か (自分以外の英語の発言だけ)。 */
+/** Whether to attach a translation (others' English messages only). */
 const wantsTranslation = (c: ChatMsg, login: string): boolean =>
   c.from !== login && !hasJapanese(c.text) && /[a-zA-Z]{2,}/.test(c.text);
 
@@ -232,12 +231,12 @@ export function GgsChat({ snap }: { snap: GgsSnapshot }) {
   const [autoJa, setAutoJa] = useState(true);
   const [pick, setPick] = useState(false);
   const [toEn, setToEn] = useState(false);
-  // 訳文 ('' = 訳さない。原文と同じか取得に失敗)
+  // Translation ('' = none: same as original, or fetch failed).
   const [trs, setTrs] = useState<Record<string, string>>({});
   const pending = useRef<Set<string>>(new Set());
   const box = useRef<HTMLDivElement>(null);
 
-  // 会話の一覧。全体チャットは必ず先頭、あとは新しい順
+  // Conversation list: global chat pinned first, then newest first.
   const threads = new Map<string, { last: ChatMsg; n: number }>();
   threads.set('.chat', { last: { chan: '.chat', from: '', text: '', at: 0, thread: '.chat' }, n: 0 });
   for (const c of snap.chat) {
@@ -256,7 +255,8 @@ export function GgsChat({ snap }: { snap: GgsSnapshot }) {
     if (b) b.scrollTop = b.scrollHeight;
   }, [count, cur]);
 
-  // 英語の発言に訳文を添える (取得は裏で、届いたら再描画)
+  // Attach translations to English messages (fetched in the
+  // background, re-render on arrival).
   useEffect(() => {
     if (!autoJa) return;
     for (const c of msgs) {
@@ -277,11 +277,11 @@ export function GgsChat({ snap }: { snap: GgsSnapshot }) {
     if (toEn && hasJapanese(t)) {
       try { t = (await translate(t, 'en')) || t; } catch (e) { jsLog('翻訳失敗: ' + e); }
     }
-    // 宛先は開いている会話 (全体チャット か 相手の名前)
+    // Recipient is the open conversation (global or a name).
     ggsApi.chat(cur, t).catch((e) => jsLog(String(e)));
   };
 
-  // 日付の見出しと「同じ人が続けて話したら名前を省く」を先に決める
+  // Precompute date headers and same-speaker name elision.
   const rows: { c: ChatMsg; day: string; dayHead: boolean; head: boolean }[] = [];
   let lastFrom = '', lastDay = '';
   for (const c of msgs) {
@@ -299,8 +299,8 @@ export function GgsChat({ snap }: { snap: GgsSnapshot }) {
       <ChatList sorted={sorted} cur={cur} onThread={setThread} onPick={setPick} />
 
       <div style={{ flex: 1, minWidth: 0, display: 'flex', flexDirection: 'column' }}>
-        {/* どの会話を見ているかと、**誰に届くか**を頭に出す。左の一覧の
-            選ばれている行だけでは、送る直前に確かめる場所が無い */}
+        {/* Header says which conversation and WHO receives — the
+            list's selected row alone gives no last-second check. */}
         <div style={{
           flex: 'none', display: 'flex', alignItems: 'baseline', gap: 'var(--sp-3)',
           padding: 'var(--sp-3) var(--sp-4)', borderBottom: '1px solid var(--border-weak)',
@@ -312,10 +312,10 @@ export function GgsChat({ snap }: { snap: GgsSnapshot }) {
             {cur === '.chat' ? 'ここにいる全員に届きます' : '本人にだけ届きます'}
           </span>
         </div>
-        {/* 訳の切り替えは**送る行から出して独立した帯にする** (絵もこの位置)。
-            入力欄と同じ行に置くと、打つ場所が 2 つのつまみに押されて狭くなる。
-            どちらも「これから送る 1 通」ではなく**この会話の見え方**の設定
-            なので、上に置くほうが筋も合う */}
+        {/* Translation toggles get their own strip above the send row
+            (as designed): in the send row they crowd the input, and
+            both are per-conversation view settings, not per-message
+            ones. */}
         <div style={{
           flex: 'none', height: 'var(--h-field)', display: 'flex', alignItems: 'center',
           gap: 'var(--sp-4)', padding: '0 var(--sp-4)', borderBottom: '1px solid var(--border-weak)',
@@ -327,9 +327,9 @@ export function GgsChat({ snap }: { snap: GgsSnapshot }) {
           flex: 1, minHeight: 0, padding: 'var(--sp-4)',
           display: 'flex', flexDirection: 'column', gap: 'var(--sp-3)',
         }}>
-          {/* 何も無いと壊れているのか、単に発言が無いのかが分からない。
-              全体チャットは静かなことが多いので、ここは必ず埋める */}
-          {/* 発言は下から積むので、空のときだけ真ん中へ置く */}
+          {/* Empty must say so — global chat is often quiet, and blank
+              reads as broken. */}
+          {/* Messages stack from the bottom; center only when empty. */}
           {!rows.length && (
             <span style={{ margin: 'auto' }}>
               <Empty>{cur === '.chat' ? 'まだ発言はありません。' : 'まだやりとりはありません。'}</Empty>
@@ -367,15 +367,14 @@ export function GgsChat({ snap }: { snap: GgsSnapshot }) {
   );
 }
 
-/* ---------------- ロビー ----------------
+/* ---------------- Lobby ----------------
  *
- * 進行中の対局 (観戦できる)・対局の申し込み・申し込みフォーム・中断対局。
- * 左が一覧、右が「これから始める」もの。
+ * Running games (observable), match requests, the request form, and
+ * adjourned games. Lists left, "start something" right.
  *
- * **右の列は --w-dock (290px)。** 設計には --w-lobby (174px) というトークンが
- * あるが使っていない — 174px では「同期・ランダム16手 (推奨)」の選択が
- * 折り返すし、画面ごとに違う幅を作ると行き来したときに本体の幅が動く。
- */
+ * The right column is --w-dock (290px). The design's --w-lobby
+ * (174px) is unused — the format select wraps at 174px, and
+ * per-screen widths make the body jump when switching. */
 function GgsLobby({ snap, onNav }: { snap: GgsSnapshot; onNav: (id: NavId) => void }) {
   const [opp, setOpp] = useState('');
   const [gtype, setGtype] = useState('s8r16');
@@ -383,10 +382,11 @@ function GgsLobby({ snap, onNav }: { snap: GgsSnapshot; onNav: (id: NavId) => vo
   const noRated = useNoRated();
   const calibrated = useCalibrated();
   const [rated, setRated] = useState(true);
-  /** 「情報」を開いている申し込みの id (1 つだけ)。 */
+  /** The one request id whose details are expanded. */
   const [info, setInfo] = useState('');
-  /* 「対局中」の節も進行中の一覧から出す。**届くのはログイン時と 60 秒ごと**
-     なので、開いた時点で聞き直す (プレイヤーの一覧と同じ理由)。 */
+  /* The "in progress" section also derives from the running list,
+     which arrives at login and every 60s — so re-ask on open (same
+     reason as the player list). */
   useEffect(() => { void ggsApi.listMatches().catch(() => {}); }, []);
 
   const games = snap.ongoing.filter((o) => !o.mine);
@@ -397,8 +397,8 @@ function GgsLobby({ snap, onNav }: { snap: GgsSnapshot; onNav: (id: NavId) => vo
       <div className="k-scroll" style={{ flex: 1, minWidth: 0, padding: 'var(--sp-4) var(--sp-2) 0' }}>
         <Section title="対局中" aside={games.length ? `${games.length} 局` : undefined}>
           {!games.length && <Empty>進行中の対局はありません。</Empty>}
-          {/* 行どうしは詰める。節の余白 (--sp-3 = 12px) が行間に入ると、
-              一覧ではなく箇条書きに見える (定石の木・学習ログでも踏んだ) */}
+          {/* Rows stay tight; the section gap (12px) between rows
+              reads as bullet points (hit before in book and log). */}
           <List>
           {games.map((o) => (
             <Row key={o.id}
@@ -409,8 +409,8 @@ function GgsLobby({ snap, onNav }: { snap: GgsSnapshot; onNav: (id: NavId) => vo
                            onClick={() => {
                              const on = !o.watching;
                              void ggsApi.watch(o.id, on);
-                             // 観戦を始めたら盤が見たいはずなので対局画面へ移る。
-                             // **その対局**を映す (先頭の別の対局ではなく)
+                             // Observing means wanting the board: go to
+                             // the game screen and show THAT game.
                              if (on) { focusMatch(o.id); onNav('ggs-play'); }
                            }}>
                      {o.watching ? '観戦をやめる' : '観戦'}
@@ -421,25 +421,24 @@ function GgsLobby({ snap, onNav }: { snap: GgsSnapshot; onNav: (id: NavId) => vo
 
         <Section title="対局の申し込み">
           {!snap.offers.length && <Empty>対局の申し込みはありません。</Empty>}
-          {/* **ここも `List` で包む。**節の余白 (12px) が行間に入ると一覧に
-              見えない — 対局中・定石の木・学習ログ・GGS の 3 つの一覧で
-              同じ罠を踏んでいて、これが 5 か所目だった */}
+          {/* Wrapped in List here too — the 12px section gap trap, hit
+              for the fifth time. */}
           <List>
           {snap.offers.map((o) => {
             const who = o.names.filter((n) => n !== snap.login);
             return (
               <React.Fragment key={o.id}>
               <Row title={who.join(' と ') || '?'}
-                   // 規則 27 — 自分宛と未読だけ --bad で塗る。accent にすると
-                   // 「押せる場所」の青と同じになり、急ぎのものが埋もれる
+                   // Rule 27 — only addressed-to-me and unread get
+                   // --bad; accent would blend with clickable blue.
                    tag={o.incoming ? '自分宛' : undefined}
                    tagTone={o.incoming ? 'bad' : undefined}
                    alert={o.incoming}
                    sub={`${gtypeLabel(o.gtype)} · ${o.time || '?'}${o.rated ? ' · レート戦' : ''}`}
                    actions={<>
-                     {/* 絵は自分宛でない申し込みにも「情報」を置いている。
-                         **まとめた 1 行は色・コミ・乱数の手数を落としている**ので、
-                         受けるかどうかを決める前に元の行を読めるようにする */}
+                     {/* Details exist on others' requests too: the
+                         one-line summary drops color/komi/random-ply,
+                         and you want the raw row before accepting. */}
                      <Button size="row" onClick={() => setInfo(info === o.id ? '' : o.id)}>情報</Button>
                      {o.incoming && <>
                        <Button size="row" variant="primary"
@@ -462,8 +461,8 @@ function GgsLobby({ snap, onNav }: { snap: GgsSnapshot; onNav: (id: NavId) => vo
       </div>
 
       <aside className="k-scroll" style={{
-        // 右の列はドックと同じ幅に揃える。画面ごとに違う幅を作ると、
-        // 行き来したときに本体の幅が動いて落ち着かない
+        // The right column matches the dock width; per-screen widths
+        // make the body jump.
         width: 'var(--w-dock)', flex: 'none', borderLeft: '1px solid var(--border)',
         padding: 'var(--sp-4) var(--sp-2) 0', minHeight: 0,
       }}>
@@ -474,26 +473,24 @@ function GgsLobby({ snap, onNav }: { snap: GgsSnapshot; onNav: (id: NavId) => vo
           </Field>
           <Field label="形式"><Select value={gtype} onChange={setGtype} options={GTYPE_CHOICES} /></Field>
           <Field label="持ち時間"><Select value={time} onChange={setTime} options={CLOCK_CHOICES} /></Field>
-          {/* GGS の /os ではレート有無はアカウント単位の設定なので、
-              申し込みの直前に毎回送って揃える (バックエンド側)。ここは
-              「この申し込みをどちらにするか」だけを持つ */}
-          {/* 見出しは名詞、駒は動詞 — 「座標: 出す / 出さない」「定石: 使う /
-              使わない」と同じ形に揃える。**「レート戦」は GGS で通じている
-              呼び名**なので、そのまま見出しにするのがいちばん短く読める
-              (「レートに反映」だと言い換えになり、駒との対も冗長になる) */}
+          {/* Rated-ness is account-level in /os; the backend sends it
+              before each request. This only holds the choice for this
+              request. */}
+          {/* Noun heading, verb chips — matching the other settings.
+              "Rated" is the GGS term, so it heads the row as-is. */}
           <Field label="レート戦">
-            {/* **禁じられているときは押せなくして理由をその場に出す**
-                (規則 61)。送る側でも潰しているので、ここは見た目の話 */}
+            {/* When banned: disabled with the reason in place (rule
+                61). The send path blocks too; this is presentation. */}
             <Segmented value={rated && !noRated ? 'on' : 'off'} disabled={noRated}
                        onChange={(v) => setRated(v === 'on')}
                        options={[{ value: 'on', label: 'する' },
                                  { value: 'off', label: 'しない' }]} />
             {noRated && <Note>レート戦を禁じて起動しています (KUROOBI_NO_RATED)。</Note>}
           </Field>
-          {/* 相手を指定しない申し込みは「誰でも受けられる」募集になる。
-              GGS の /os ask はそういう使い方ができるので、止めない */}
-          {/* 上の欄と同じ 32px。欄を埋めて押す釦なので、欄より低いと
-              一続きの手順に見えない (ログインの釦と同じ理由) */}
+          {/* An opponent-less request is an open invitation; /os ask
+              supports that, so don't block it. */}
+          {/* Same 32px as the fields above; a shorter button breaks
+              the fill-then-press sequence (as in login). */}
           <Button size="field" variant="primary" disabled={!calibrated}
                   onClick={() => void ggsApi.ask(gtype, time, opp, rated)}>
             {opp ? '申し込む' : '募集する'}
@@ -505,12 +502,12 @@ function GgsLobby({ snap, onNav }: { snap: GgsSnapshot; onNav: (id: NavId) => vo
           </Note>
         </Section>
 
-        {/* 中断対局は login のときに 1 度だけ流れてくる。あとから相手が
-            中断したぶんは、こちらから聞き直さないと出てこない */}
+        {/* Adjourned games arrive once at login; later adjournments
+            require asking again. */}
         <Section title="中断対局"
                  aside={<Button onClick={() => void ggsApi.listStored()}>更新</Button>}>
           {!snap.stored.length && <Empty>中断対局はありません。</Empty>}
-          {/* 行どうしは詰める (節の余白 12px が行間に入ると一覧に見えない) */}
+          {/* Rows stay tight (the 12px section-gap trap). */}
           <List>
           {snap.stored.map((x) => (
             <Row key={x.id} title={x.opp || '?'} sub={gtypeLabel(x.gtype)}
@@ -524,42 +521,47 @@ function GgsLobby({ snap, onNav }: { snap: GgsSnapshot; onNav: (id: NavId) => vo
   );
 }
 
-/** 一覧の 1 行。名前と補足が左、操作が右。行そのものは押さない */
+/** A list row: name and detail left, actions right; the row itself is
+ *  not clickable. */
 function Row({ title, sub, tag, tagTone, alert, actions, onClick, title2 }: {
   title: string; sub?: string; tag?: string;
-  /** 印の色。既定は accent (規則 27 — 自分宛と未読だけ --bad)。 */
+  /** Dot color; default accent (rule 27 — only addressed/unread get
+   *  --bad). */
   tagTone?: 'sub' | 'accent' | 'ok' | 'bad';
-  /** 自分宛。左に --bad の帯を引く (設計 §4)。 */
+  /** Addressed to me; --bad left bar (design §4). */
   alert?: boolean;
   actions?: React.ReactNode;
-  /** 押せる行にする。行の中に別の押せるものがあるときは使わない (規則 46)。 */
+  /** Make the row clickable; never with other clickables inside
+   *  (rule 46). */
   onClick?: () => void;
-  /** 押せる行の補足 (title 属性)。 */
+  /** Clickable-row hint (title attribute). */
   title2?: string;
 }) {
-  /* 押せるなら押せる要素で書く (規則 41)。div + onClick だと Tab で
-     回ってこないし Enter / Space でも選べない。 */
+  /* Clickable means a clickable element (rule 41): div + onClick
+     skips the Tab ring and ignores Enter/Space. */
   const Tag_ = onClick && !actions ? 'button' : 'div';
   return (
     <Tag_ {...(onClick && !actions
       ? { type: 'button' as const, className: 'k-row', onClick, title: title2 }
       : {})} style={{
       display: 'flex', alignItems: 'center', gap: 'var(--sp-2)', width: '100%',
-      /* **高さは固定** (絵の実測 40)。中身で伸ばすと、補足のある行と
-         ない行で高さが変わって一覧が揃わない。24px の行とは別の型 */
+      /* Fixed height (measured 40): content-sized rows vary with and
+         without details. A different type from the 24px rows. */
       height: 'var(--h-row2)', flex: 'none', padding: '0 var(--sp-4)',
-      // 一括の border を先に置く。**あとに書くと borderBottom を消す** —
-      // 行の区切りが全部消えるが、GGS に繋がないと見えないので気付けない
+      // Shorthand border first — written after, it erases
+      // borderBottom, and the loss is invisible without a GGS
+      // connection.
       border: 0, borderRadius: 0,
       borderBottom: '1px solid var(--border-weak)',
-      /* 自分宛の印 (設計 §4)。**罫ではなく内側の影と薄い地** — 選んでいる
-         行 (`picked`) と同じ形で、罫にすると中身が 3px ずれる。色は規則 27 */
+      /* Addressed marker (§4): inset shadow + tint, same shape as
+         picked — a border would shift the content 3px. Color per
+         rule 27. */
       background: alert ? 'color-mix(in srgb, var(--bad) 8%, transparent)' : 'transparent',
       boxShadow: alert ? 'inset 2px 0 0 var(--bad)' : undefined,
       textAlign: 'left',
       color: 'var(--text)', cursor: onClick && !actions ? 'pointer' : undefined,
     }}>
-      {/* 2 段の溝は 2px。sp-1 (4) だと 40px に収まらない (絵の実測) */}
+      {/* 2px between the two lines; sp-1 (4) overflows 40px. */}
       <span style={{ flex: 1, minWidth: 0, display: 'flex', flexDirection: 'column', gap: 2 }}>
         <span style={{ display: 'flex', alignItems: 'center', gap: 'var(--sp-2)', fontSize: 'var(--fs-5)' }}>
           <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{title}</span>
@@ -572,25 +574,25 @@ function Row({ title, sub, tag, tagTone, alert, actions, onClick, title2 }: {
   );
 }
 
-/** レート戦が禁じられているか。**自動で回すときの蓋** (`KUROOBI_NO_RATED=1`)。
- *  送る側でも潰しているので、これは「選べないことを見せる」ための値。 */
+/** Whether rated play is banned — the lid for automated runs
+ *  (KUROOBI_NO_RATED=1). The send path blocks too; this value only
+ *  shows the unavailability. */
 function useNoRated(): boolean {
   const [no, setNo] = useState(false);
   useEffect(() => { ggsApi.noRated().then(setNo).catch(() => {}); }, []);
   return no;
 }
 
-/** 読切の速度を測ってあるか。
+/* Whether solve speed is calibrated.
  *
- * **測っていないと持ち時間の管理が固定の階段に落ちる。** 機械の速さを
- * 知らないまま対局に入ることになり、GGS では時間切れがレートに直結する。
- * だから時間の絡む操作 (申し込み・待ち受け・持ち時間の設定) はここで
- * 止める。**バックエンドでも同じ判定をしている** — 画面だけで止めると、
- * 古い画面や別経路から通ってしまう。
+ * Uncalibrated, time management falls back to a fixed ladder —
+ * entering games blind to the machine's speed, where timeouts hit
+ * the rating directly. So every time-touching action (requests,
+ * waiting mode, clock settings) stops here. The backend enforces the
+ * same check — UI-only gates leak through stale screens.
  *
- * 既定は「測ってある」。取りに行く前の一瞬だけ押せなくなるのを避ける
- * (通っても後ろで止まる)。
- */
+ * Defaults to "calibrated" to avoid a flash of disabled while
+ * fetching (the backend still blocks). */
 function useCalibrated(): boolean {
   const [ok, setOk] = useState(true);
   useEffect(() => {
@@ -599,22 +601,21 @@ function useCalibrated(): boolean {
       .then((t) => { if (alive) setOk(t.nps != null); })
       .catch(() => {});
     load();
-    // 起動時の較正は背景で走る。終わったら報せが来る
+    // Startup calibration runs in the background; a notice follows.
     const off = onApp('resources-changed', load);
     return () => { alive = false; void off.then((f) => f()); };
   }, []);
   return ok;
 }
 
-/** 未較正のときに出す一言。**直し方まで書く** (規則 34)。 */
+/** Uncalibrated message — includes the remedy (rule 34). */
 const CALIB_NOTE = '読切の速度をまだ測っていません。設定 → エンジン の「読切の速度」で測ってください (数秒で終わります)。';
 
-/* ---------------- 待機モード ----------------
+/* ---------------- Waiting mode ----------------
  *
- * 対局終了 → 間隔待ち → 自動申し込みの繰り返し。
- * サーバー側の申し込み条件は今の値を見せるだけで、編集は「GGS の設定」。
- * 同じ設定を 2 か所で編集できると、どちらが本物か分からなくなる。
- */
+ * Game end -> interval -> auto-request, repeated. The server-side
+ * request formula is view-only here; editing lives in GGS settings —
+ * two editable copies compete for authority. */
 function GgsStandby({ snap, onNav }: { snap: GgsSnapshot; onNav: (id: NavId) => void }) {
   const sb = snap.standby;
   const st = snap.standby_stats;
@@ -629,19 +630,19 @@ function GgsStandby({ snap, onNav }: { snap: GgsSnapshot; onNav: (id: NavId) => 
   const [rated, setRated] = useState(sb.rated);
 
   const names = snap.users.filter((u) => u.name !== snap.login).map((u) => u.name);
-  /* **終局した対局は数えない。** 棋譜を見られるよう一覧には残す作りなので、
-     そのまま数えると一度対局しただけで「対局中」から戻らなくなる
-     (バックエンドの自動受諾も同じ判定を使っている) */
+  /* Finished games don't count: they stay listed for their records,
+     and counting them would leave "playing" stuck forever after one
+     game (the backend's auto-accept uses the same test). */
   const playing = snap.matches.some((m) => !m.over);
   const state = sb.enabled ? (playing ? '対局中' : '申し込み待ち') : '停止中';
 
   const toggle = () => void ggsApi.setStandby({
-    // **禁じられているときは何が来ても false。** 画面が古くても通さない
+    // Banned means false no matter what; stale screens don't pass.
     enabled: !sb.enabled, auto_accept: autoAccept, rated: rated && !noRated, opponent: opp.trim(),
     gtype, time, max_games: maxGames, interval_secs: interval,
   });
 
-  // 自分の設定を取り直す (条件式はサーバーが持っている)
+  // Re-fetch own settings (the server holds the formula).
   useEffect(() => {
     if (snap.login) ggsApi.finger(snap.login).catch(() => {});
   }, [snap.login]);
@@ -662,9 +663,9 @@ function GgsStandby({ snap, onNav }: { snap: GgsSnapshot; onNav: (id: NavId) => 
                  <Stat v={st.draws} label="分" />
                  <Stat v={`${st.diff_sum > 0 ? '+' : ''}${st.diff_sum}`} label="石差" />
                </span>}>
-        {/* 設計は 3 列の格子。**幅を欄ごとに決めない** — 決めると
-            「同期・ランダム16手 (推奨)」だけが窮屈になり、数値欄だけが
-            極端に短くなって列が揃わない。器の幅を 3 等分して各欄に配る */}
+        {/* Three-column grid with no per-field widths — those cramp
+            the format select and shrink number fields unevenly. Split
+            the container in thirds. */}
         <div style={{
           display: 'grid', gap: 'var(--sp-4)',
           gridTemplateColumns: 'repeat(auto-fit, minmax(240px, 1fr))',
@@ -683,12 +684,12 @@ function GgsStandby({ snap, onNav }: { snap: GgsSnapshot; onNav: (id: NavId) => 
             <TextField numeric align="right" value={String(interval)}
                        onChange={(x) => setInterval(+x || 0)} />
           </Field>
-          {/* こちらから申し込むときのレート有無。GGS ではアカウント単位の
-              設定なので、申し込みの直前に毎回送って揃える (バックエンド側)。
-              受ける側のレート有無は申し込んだ相手が決めるので変えられない */}
+          {/* Rated-ness for outgoing requests (account-level; sent
+              before each). Incoming requests' rated-ness is the
+              asker's choice. */}
           <Field label="レート戦">
-            {/* **禁じられているときは押せなくして理由をその場に出す**
-                (規則 61)。送る側でも潰しているので、ここは見た目の話 */}
+            {/* When banned: disabled with the reason in place (rule
+                61). The send path blocks too; this is presentation. */}
             <Segmented value={rated && !noRated ? 'on' : 'off'} disabled={noRated}
                        onChange={(v) => setRated(v === 'on')}
                        options={[{ value: 'on', label: 'する' },
@@ -696,12 +697,13 @@ function GgsStandby({ snap, onNav }: { snap: GgsSnapshot; onNav: (id: NavId) => 
             {noRated && <Note>レート戦を禁じて起動しています (KUROOBI_NO_RATED)。</Note>}
           </Field>
         </div>
-        {/* Toggle は摘みを右端へ寄せる作りなので、幅を決めずに置くと画面の端まで離れる */}
+        {/* Toggle pushes its knob right; unconstrained it drifts to
+            the screen edge. */}
         <span style={{ width: 300, display: 'block' }}>
           <Toggle checked={autoAccept} onChange={setAutoAccept} label="届いた申し込みを自動で受ける" />
         </span>
         <div>
-          {/* **止めるのは未較正でも通す。** 身動きが取れなくなるほうが困る */}
+          {/* Stopping works even uncalibrated — never trap the user. */}
           <Button variant={sb.enabled ? 'danger' : 'primary'}
                   disabled={!sb.enabled && !calibrated} onClick={toggle}>
             {sb.enabled ? '待機モードを停止' : '待機モードを開始'}
@@ -715,11 +717,10 @@ function GgsStandby({ snap, onNav }: { snap: GgsSnapshot; onNav: (id: NavId) => 
         </Note>
       </Section>
 
-      {/* 節の名前と説明文は設計 §7 のまま。実装が書いていた「同じ設定を
-          2 か所で編集できると、どちらが本物か分からなくなります」は
-          **作る側の理屈**で、規則 64 が画面の器の中に入れるなと決めている
-          (絵でも器の外の注記に置かれている)。画面に出すのは、読む人にとっての
-          意味 — アプリを閉じても効くこと */}
+      {/* Section name and description per §7. The old "two editable
+          copies compete" note was builder's reasoning — rule 64 keeps
+          that out of the UI. What the reader needs: it persists
+          across restarts. */}
       <Section title="申し込みの条件 (サーバー側)"
                aside={<Button onClick={() => onNav('ggs-settings')}>条件を変える</Button>}>
         <Note>
@@ -751,38 +752,37 @@ function FormulaRow({ label, src }: { label: string; src: string }) {
   );
 }
 
-/* **明示的に開いた対局を最初に映す。**
+/* Show the explicitly opened game first.
  *
- * 一覧の先頭を既定にしていたので、観戦を始めても・対局が成立しても、
- * 別の対局が映ったままだった。押した本人はその対局が見たいので、押した
- * ところで id を控えて、対局画面が立ち上がるときに拾う。
+ * Defaulting to the list head kept showing some other game after
+ * starting an observation or landing a match. Record the id at the
+ * click and pick it up when the game screen mounts.
  *
- * 画面をまたぐが、React の状態にするには App まで持ち上げることになる。
- * **一度きりの受け渡し**なので、置き場だけ用意して読んだら捨てる。 */
+ * It crosses screens, but React state would mean lifting to App; as
+ * a one-shot handoff, a slot that is read-then-cleared suffices. */
 let wantedMatch = '';
 export function focusMatch(id: string) { wantedMatch = id; }
 
-/* ---------------- 対局・観戦 ----------------
+/* ---------------- Play / observe ----------------
  *
- * 同期対局は 2 局で 1 組。組を 1 行として扱い、右に盤を並べる。
- * 待った (undo) と中止 (abort) は出さない — どちらも相手の承諾が要る要求で、
- * GGS の相手はたいていプログラムなので通らない。投了だけは自分で決められる。
- */
+ * Synchro games are pairs; a pair is one row with boards on the
+ * right. No undo/abort buttons — both need the opponent's consent,
+ * and GGS opponents are mostly programs. Only resignation is one's
+ * own decision. */
 function GgsPlay({ snap, onNav, prefs, onKifu }: {
   snap: GgsSnapshot; onNav: (id: NavId) => void; prefs: Prefs;
   onKifu: (title: string, kifu: string, archive?: string) => void;
 }) {
-  /* 押して来たならその対局を映す。**読んだら捨てる** — 次に来たときまで
-     残っていると、選び直した対局が勝手に戻る */
+  /* Show the clicked-through game, then clear — kept around, it
+     reverts later reselections. */
   const [sel, setSel] = useState(() => { const w = wantedMatch; wantedMatch = ''; return w; });
   const clock = useClocks(snap.matches);
 
-  // 手合いにまとめる。自分の対局を先に、次に観戦
+  // Group into matches: own games first, then observed.
   const groups = new Map<string, MatchView[]>();
   for (const m of snap.matches) groups.set(m.base, [...(groups.get(m.base) ?? []), m]);
-  /* **新しいものが上。** id の数で並べていたが、**GGS の番号は使い回される**
-     ので、新しく始めた対局や観戦が小さい番号を取ると一覧の途中に挿し込ま
-     れていた (実際にそう報告された)。載った順の通し番号で並べる。 */
+  /* Newest first — by arrival order, not id: GGS reuses ids, so a
+     new game with a small id landed mid-list (reported live). */
   const fresh = (k: string) => Math.max(...groups.get(k)!.map((m) => m.order));
   const keys = [...groups.keys()].sort((a, b) => {
     const mine = (k: string) => (groups.get(k)!.some((m) => m.my_color) ? 0 : 1);
@@ -798,9 +798,11 @@ function GgsPlay({ snap, onNav, prefs, onKifu }: {
                   body="ロビーで申し込むか、進行中の対局を観戦できます。"
                   actions={<>
                     <Button variant="primary" onClick={() => onNav('ggs-lobby')}>ロビーへ</Button>
-                    {/* 絵の 2 つ目の釦。対局が無いなら自動で申し込ませる方が早い */}
+                    {/* The design's second button: with no games,
+                        auto-requesting is faster. */}
                     <Button onClick={() => onNav('ggs-standby')}>待機モードへ</Button>
-                    {/* 繋ぎ直した直後などは一覧が古いことがある。聞き直す道を残す */}
+                    {/* The list can be stale right after reconnect;
+                        keep a re-ask path. */}
                     <Button onClick={() => void ggsApi.listMatches()}>更新</Button>
                   </>} />
     );
@@ -814,8 +816,8 @@ function GgsPlay({ snap, onNav, prefs, onKifu }: {
         {keys.map((key) => (
           <MatchRow key={key} m={matchRowOf(groups.get(key)!, key)}
                     active={key === cur} onSelect={() => setSel(key)}
-                    // 終わった対局は一覧に残り続けていた。閉じる先は
-                    // 「結果」に控えてあるので、ここから消しても失われない
+                    // Finished games used to linger; results keep a
+                    // copy, so closing here loses nothing.
                     onClose={() => {
                       void ggsApi.closeMatch(key);
                       if (key === sel) setSel('');
@@ -824,12 +826,12 @@ function GgsPlay({ snap, onNav, prefs, onKifu }: {
       </aside>
 
       <div className="k-scroll" style={{ flex: 1, minWidth: 0, minHeight: 0, padding: 'var(--sp-3)' }}>
-        {/* 同期対局は 2 面。横に並べて、狭ければ折り返す */}
+        {/* Synchro pairs sit side by side, wrapping when narrow. */}
         <div style={{ display: 'flex', gap: 'var(--sp-3)', flexWrap: 'wrap', justifyContent: 'center' }}>
           {pair?.map((m, i) => (
             <MatchBoard key={m.id} snap={snap} m={m} clock={clock} prefs={prefs} onKifu={onKifu}
-                        // 同期対局は 2 局で 1 組。**どちらの面で自分が何色か**が
-                        // 分からないと、並んだ 2 枚を見分けられない (設計 §2)
+                        // A synchro pair is unreadable without "which
+                        // board am I which color on" (design §2).
                         face={(pair?.length ?? 1) > 1 ? i + 1 : undefined} />
           ))}
         </div>
@@ -838,7 +840,7 @@ function GgsPlay({ snap, onNav, prefs, onKifu }: {
   );
 }
 
-/** 手合い 1 組を一覧の行にする。終局しても一覧からは消さない */
+/** One match as a list row; finished matches stay listed. */
 function matchRowOf(g: MatchView[], key: string): Match {
   const m = g[0];
   const mine = g.some((x) => x.my_color);
@@ -849,7 +851,7 @@ function matchRowOf(g: MatchView[], key: string): Match {
     kind: gtypeLabel(m.gtype), boards: g.length,
     ply: Math.max(...g.map((x) => x.moves.length)),
     result: g.map((x) => x.result).find(Boolean) || undefined,
-    // 中断は「終局・結果なし」に見せない。誰が抜けたかまで出す
+    // Adjournment is not "finished, no result"; say who left.
     ended: g.map((x) => x.ended).find(Boolean) || undefined,
     leftBy: g.map((x) => x.left_by).find(Boolean) || undefined,
   };
@@ -858,38 +860,38 @@ function matchRowOf(g: MatchView[], key: string): Match {
 function MatchBoard({ snap, m, clock, prefs, onKifu, face }: {
   snap: GgsSnapshot; m: MatchView; clock: (id: string, side: ClockSide) => ClockView; prefs: Prefs;
   onKifu: (title: string, kifu: string, archive?: string) => void;
-  /** 同期対局の何面目か (1 起点)。1 局だけの手合いでは渡さない。 */
+  /** Board index in a synchro pair (1-based); omit for single games. */
   face?: number;
 }) {
   const [resign, setResign] = useState(false);
   const observer = !m.my_color;
   const { black, white } = countDiscs(m.cells);
-  // 最後に打たれた石に印を付ける (パスは石を置かないので飛ばす)
+  // Mark the last placed stone (passes place none; skip them).
   const last = [...m.moves].reverse().map(ggsMoveToIndex).find((x) => x !== null) ?? null;
-  // 自分の側もレートを出す。対局中に見たいのは「この 2 人の力量差」
+  // Show own rating too; what you read mid-game is the gap.
   const myRate = snap.my_ranks.find((r) => r.gtype === (m.gtype.includes('r') ? '8r' : '8'))?.rating;
-  /* **誰から見た値かを言う。** エンジンが返すのは指した側 (=自分) から
-     見た石差だが、数字だけを行に置くと黒からの値とも読める。同期対局は
-     面ごとに自分の色が逆なので、なおさら符号の向きが分からない。 */
+  /* Say whose viewpoint: the engine returns mover-side (own) disc
+     diff, but a bare number reads as black's — worse in synchro pairs
+     where own color flips per board. */
   const myEval = m.last_eval != null
     ? '自分 ' + (m.last_from_book ? '定石 ' : '') + (m.last_eval > 0 ? '+' : '')
       + (m.last_eval_exact ? m.last_eval.toFixed(0) : m.last_eval.toFixed(1))
       + (m.last_eval_exact ? ' 読切' : '')
     : undefined;
 
-  /* **相手の申告値も出す。** GGS の着手行は `3: C2/20.00/122.16`
-     (手/評価値/秒) の形で届くので、相手が評価値を出す設定なら受け取れる。
-     符号は**相手から見た石差**のまま — 自分の値と符号が逆に並ぶので、
-     どちらがどれだけ読み違えているかを 1 行で見比べられる。出さない
-     相手も居るので、無ければ何も置かない。 */
+  /* Show the opponent's reported eval too. GGS move rows arrive as
+     `3: C2/20.00/122.16` (move/eval/time), so opponents who report
+     are readable. The sign stays opponent-side — opposite to ours,
+     so one line compares who misreads by how much. Absent when the
+     opponent doesn't report. */
   const oppEval = !observer && m.opp_eval != null
     ? '相手 ' + (m.opp_eval > 0 ? '+' : '') + m.opp_eval.toFixed(1)
       + (m.opp_secs_used != null ? ` · ${m.opp_secs_used.toFixed(0)}s` : '')
     : undefined;
 
-  /* 申告値の推移。**手番号を X にすると穴が空く** (評価値を出さない相手だと
-     片側だけ飛び飛びになる) ので、手の並び順を通し番号にして両方を同じ
-     目盛に乗せる。相手のぶんは自分視点へ反転する。 */
+  /* Reported-eval trend. Move numbers as X leave holes (silent
+     opponents gap one side), so use sequence indices for a shared
+     scale; opponent values negate to own view. */
   const trend = (() => {
     const by = new Map(m.eval_series.map((p) => [p.n, p]));
     const ns = [...by.keys()].sort((a, b) => a - b);
@@ -903,13 +905,14 @@ function MatchBoard({ snap, m, clock, prefs, onKifu, face }: {
     });
   })();
 
-  /* 探索の途中経過。**段の切れ目でしか動かない**ので、深さが上がるたびに
-     印が動く。読切・選択読みに入ると深さは出ない (段が無い)。
+  /* Search progress; it moves only at iteration boundaries, so the
+     marker steps with depth. Solve and selective phases show no depth
+     (no iterations).
 
-     **先読みの値も出す。** 「予測した相手の手」を出すだけで値は 0 に
-     潰していたが、盤に「0」と書かれると評価が互角だと読めてしまう。
-     先読みは相手の手番の局面を読むので符号を反転して記録してあり
-     (`Progress::flip`)、そのまま自分から見た石差として出せる。 */
+     Ponder values show too. They used to be squashed to 0, which the
+     board rendered as "even". Ponder reads the opponent's position
+     and is recorded sign-flipped (Progress::flip), so it displays
+     directly as own-view disc diff. */
   const busyEval: Record<number, EvalInfo> | undefined =
     m.busy && m.busy_best != null
       ? {
@@ -931,21 +934,22 @@ function MatchBoard({ snap, m, clock, prefs, onKifu, face }: {
     : { name: snap.login, rate: myRate != null ? myRate.toFixed(1) : '', color: m.my_color as 'black' | 'white', side: 'my' as const };
 
   return (
-    // 同期対局は 2 面が横に並ぶ。固定幅にすると 2 面で必ず折り返すので、
-    // 器を分け合って縮む形にする (1 面のときは 460px で頭打ち)
+    // Synchro boards sit side by side; fixed widths always wrap at
+    // two, so they share the container and shrink (460px cap for one).
     //
-    // **幅だけで頭打ちにすると低い窓で溢れる。** 盤は正方形なので幅が
-    // そのまま高さになり、860×560 では 8 行目と時計・投了が画面の外に
-    // 出ていた。窓の高さからも上限をかける (280px は盤以外が使う分 —
-    // ツールバー 44 + 下帯 28 + 面の帯と 2 人の行と釦で約 130 + 余白)
+    // A width-only cap overflows short windows: boards are square, so
+    // width becomes height, and at 860x560 row 8 and the clocks fell
+    // off screen. Cap by window height too (280px is the non-board
+    // share — toolbar 44 + status 28 + strips/rows/buttons ~130 +
+    // padding).
     <div style={{
       flex: '1 1 300px', minWidth: 260, maxWidth: 'min(460px, calc(100vh - 280px))',
       display: 'flex', flexDirection: 'column',
-      // 絵は 1 面ずつ枠に入れる (地 --panel / 角丸 11 / 余白 12)。
-      // 2 枚が地続きだと、どこまでが 1 局なのかが読めない
+      // The design frames each board (--panel, radius 11, padding 12);
+      // unframed, the two boards read as one.
       background: 'var(--panel)', borderRadius: 'var(--r-4)', padding: 'var(--sp-3)',
     }}>
-      {/* 同期対局のときだけ。**自分の色は面ごとに逆**になる */}
+      {/* Synchro only; own color flips per board. */}
       {face !== undefined && (
         <div style={{
           height: 'var(--h-head)', display: 'flex', alignItems: 'center', gap: 'var(--sp-3)',
@@ -959,17 +963,18 @@ function MatchBoard({ snap, m, clock, prefs, onKifu, face }: {
                  rate={top.rate ? +top.rate : undefined}
                  meta={oppEval}
                  clock={clock(m.id, top.side).text} active={clock(m.id, top.side).cls === 'turn'} />
-      {/* 「自分が下」は自分の色を下にする。観戦は my_color が空なので黒が下 */}
-      {/* **思考中・先読み中は盤に出す。** 「評価値を表示」と同じ見せ方で、
-          いま最善と思っている手 (先読みなら予測している相手の手) を 1 つ。
-          対局中の探索は αβ で窓を共有するので**全マスの値は原理的に出ない** —
-          出せるのは探索が実際に知っているこの 1 手だけ */}
+      {/* "Me at the bottom" uses own color; observing has no my_color,
+          so black sits at the bottom. */}
+      {/* Thinking/pondering shows on the board, styled like eval
+          display: the single move currently believed best (the
+          predicted reply while pondering). In-game αβ shares windows,
+          so all-square values cannot exist — only this one move is
+          actually known. */}
       <Board cells={m.cells as Cell[]} last={last} disabled
              evals={busyEval}
-             /* **印を出すマスは `legal` にも入れる。** 盤は合法手として
-                渡されたマスにしか描かない (空きマス全部に丸を出さない
-                ため)。対局画面は普段 `legal` を渡さないので、途中経過の
-                1 マスだけを入れる */
+             /* The marked square must also enter `legal`: the board
+                draws only on squares passed as legal, and the game
+                screen normally passes none — so pass just this one. */
              legal={busyEval ? Object.keys(busyEval).map(Number) : []}
              coords={prefs.coords} grain={prefs.grain}
              flip={flipped(prefs.facing, m.my_color)} />
@@ -977,10 +982,10 @@ function MatchBoard({ snap, m, clock, prefs, onKifu, face }: {
                  rate={bottom.rate ? +bottom.rate : undefined}
                  meta={myEval}
                  clock={clock(m.id, bottom.side).text} active={clock(m.id, bottom.side).cls === 'turn'} />
-      {/* **申告値の推移。** 両者が開局から何石勝っていると思っていたかを
-          並べる。生の申告は指した側から見た値なので、**相手のぶんは
-          反転して自分視点へ揃える** — 揃えないと 2 本が鏡像になり、
-          読みが食い違っている場所が読み取れない。 */}
+      {/* Reported-eval trend: what both sides thought they were
+          winning by, from move one. Raw reports are mover-side, so
+          the opponent's negate to own view — unnormalized, the lines
+          mirror and disagreements vanish. */}
       {!observer && <EvalTrend points={trend} />}
       <div style={{
         display: 'flex', alignItems: 'center', gap: 'var(--sp-3)', height: 'var(--h-field)',
@@ -988,8 +993,8 @@ function MatchBoard({ snap, m, clock, prefs, onKifu, face }: {
       }}>
         <span style={{ color: 'var(--text)' }}>{black} – {white}</span>
         <span>{m.moves.length} 手</span>
-        {/* 観戦の解析は**黒視点**に直して持っている (ggs.rs)。どちらから
-            見た値かを書かないと、盤の上下と合っているのかが分からない */}
+        {/* Observation analysis is stored black-view (ggs.rs); say
+            whose view, or the sign is unmoored from the board. */}
         {observer && m.watch_eval != null && (
           <span style={{ display: 'inline-flex', alignItems: 'center', gap: 4 }}>
             解析 <StoneDot color="b" />
@@ -997,8 +1002,8 @@ function MatchBoard({ snap, m, clock, prefs, onKifu, face }: {
             {m.watch_best ? ` (${m.watch_best})` : ''}
           </span>
         )}
-        {/* **何をしているかを言葉でも出す。** 盤の印だけだと、深さが動いて
-            いるのか止まっているのかが読めない */}
+        {/* Say the activity in words too; the board mark alone cannot
+            show whether depth is moving. */}
         {m.busy === 'think' && (
           <span style={{ color: 'var(--accent)' }}>
             思考中{m.busy_depth > 0 ? ` ${m.busy_depth} 手` : ''}
@@ -1010,8 +1015,8 @@ function MatchBoard({ snap, m, clock, prefs, onKifu, face }: {
         {!m.busy && snap.thinking === m.id && (
           <span style={{ color: 'var(--accent)' }}>思考中</span>
         )}
-        {/* **中断は終局と別物。** 石差が付かないので結果は出さず、誰が
-            抜けたかを出す。中止 (両者合意) も勝敗なしで終わる */}
+        {/* Adjournment is not a finish: no margin, so no result — say
+            who left. Aborts (mutual) end without a result too. */}
         {m.ended === 'adjourned' && (
           <span style={{ color: 'var(--gold)' }}>
             中断{m.left_by ? ` · ${m.left_by} が退室` : ''}
@@ -1022,11 +1027,11 @@ function MatchBoard({ snap, m, clock, prefs, onKifu, face }: {
           <span style={{ color: 'var(--text)' }}>終局 {m.result}</span>
         )}
         <span style={{ marginLeft: 'auto' }} />
-        {/* 終わった対局も一覧に残るので、そこから棋譜を取り出せる。
-            旧 GUI にあった道を戻した (規則 71) */}
-        {/* **書庫の番号も渡す。** 手元の棋譜が読めなくてもサーバーから
-            取り直せる (同期対局は 2 面と評価値も付いてくる)。渡していな
-            かったので「棋譜を読めません」で行き止まりになっていた */}
+        {/* Finished games stay listed and their records are
+            fetchable; restored from the old GUI (rule 71). */}
+        {/* Pass the archive id too: unreadable local records can be
+            re-fetched (synchro brings both boards plus evals).
+            Without it this dead-ended at "cannot read record". */}
         <Button
                 onClick={() => onKifu(m.opp_name ? `${m.opp_name} との対局` : '対局の棋譜',
                                       m.ggf || m.moves.join(''), m.archive || undefined)}>棋譜</Button>
@@ -1046,16 +1051,17 @@ function MatchBoard({ snap, m, clock, prefs, onKifu, face }: {
   );
 }
 
-/* ---------------- GGS の設定 ----------------
+/* ---------------- GGS settings ----------------
  *
- * GGS で対局・観戦するときの強さとふるまい。ローカル対局とは別に持つ。
- * 申し込みの条件は**サーバー側に残る**ので、アプリを閉じていても効く。
- */
-/** 通常 8 とランダム開局 8r のレートを並べて書く。プールを選んでいない
-    画面 (名刺・詳細・接続中の一覧) は必ず両方出す。 */
+ * Strength and behavior for GGS play, separate from local games. The
+ * request formula lives on the server, so it works with the app
+ * closed. */
+/** Both pool ratings (8 and 8r) side by side; pool-less screens
+    (cards, details, who-list) always show both. */
 function bothRates(u: UserRow | undefined): string {
   if (!u) return '';
-  // finger の生の行から "レート@偏差" を拾う (一覧の数字より詳しい)
+  // Pull "rating@deviation" from raw finger rows (more precise than
+  // the list).
   const m = /(\d+(?:\.\d+)?)@\s*(\d+(?:\.\d+)?)/.exec(u.raw || '');
   const r8 = m ? m[1] : (u.rating != null ? u.rating.toFixed(1) : '');
   const d8 = m ? Math.round(parseFloat(m[2])) : null;
@@ -1070,19 +1076,20 @@ function bothRates(u: UserRow | undefined): string {
 export function GgsSettings({ snap }: { snap: GgsSnapshot }) {
   const e = snap.engine;
   const calibrated = useCalibrated();
-  /* 押した結果の一言。成功も失敗も同じ場所に出す */
+  /* One-line result; success and failure share the spot. */
   const [saved, setSaved] = useState('');
   const say = (t: string) => { setSaved(t); window.setTimeout(() => setSaved(''), 2500); };
   const [levels, setLevels] = useState({ depth: e.depth, solve: e.solve, band: e.band });
-  // 全体設定から来る値 (この画面では変えられない。表示のみ)
+  // Values from global settings (view-only here).
   const threads = e.threads;
   const [ponder, setPonder] = useState(e.ponder);
   const [auto, setAuto] = useState(snap.auto_play);
   const [watch, setWatch] = useState(snap.watch_analysis);
   const [book, setBook] = useState(e.use_book);
-  /* **強さの決め方は 2 択。** 持ち時間から毎手決め直すか、Lv のとおりに
-     読むか。配り方 (`slow`/`even`/`fast`) の 3 択は別の軸で、そちらは
-     測って `fast` に一本化した — 2 択まで一緒に畳んだのは誤り。 */
+  /* Strength mode is a 2-way choice: derive per move from the clock,
+     or read at the fixed level. Pacing (slow/even/fast) is a separate
+     axis, measured and collapsed to fast — folding this choice in
+     with it was a mistake. */
   const [pace, setPace] = useState(e.pace === 'depth' ? 'depth' : 'fast');
   const byClock = pace !== 'depth';
   const [maxMove, setMaxMove] = useState(e.max_move_secs);
@@ -1092,7 +1099,7 @@ export function GgsSettings({ snap }: { snap: GgsSnapshot }) {
   useEffect(() => { api.activity().then((a) => setCores(a.cores)).catch(() => {}); }, []);
 
   const online = snap.conn === 'online';
-  // 申し込みの条件はサーバーが持っている。開いたときに取り直す
+  // The server holds the request formula; re-fetch on open.
   const login = snap.login;
   useEffect(() => { if (login) ggsApi.finger(login).catch(() => {}); }, [login]);
   const myForm = (key: 'accept' | 'decline'): string =>
@@ -1105,13 +1112,13 @@ export function GgsSettings({ snap }: { snap: GgsSnapshot }) {
       say('条件を送れませんでした (' + e + ')');
       return;
     }
-    // 送っただけで信じない。サーバーの値を取り直して画面に反映する
+    // Don't trust the send; re-fetch the server's value.
     if (login) ggsApi.finger(login).catch(() => {});
   };
 
-  /* **失敗を握り潰して「反映しました」と言わない** (規則 34)。
-     以前は 5 本すべて `.catch(() => {})` で捨てたうえで必ず成功を出して
-     いたので、繋がっていなくても反映されたように見えた */
+  /* Never swallow failures and claim success (rule 34): all five
+     calls used to .catch(() => {}) and report success even
+     disconnected. */
   const apply = async () => {
     try {
       await ggsApi.setEngine(levels.depth, levels.solve, levels.band, ponder);
@@ -1126,11 +1133,10 @@ export function GgsSettings({ snap }: { snap: GgsSnapshot }) {
     say('反映しました');
   };
 
-  /* **触った時点で効かせる (適用ボタンは置かない)。**
-     他の設定はどれも即時反映なのに、ここだけ「適用」を押させていた。
-     押し忘れると効いていないことに気付けず、実際に先読みを切ったつもり
-     で対局してしまった。値を触ってから少し待って送る (数字の入力欄を
-     1 文字ごとに送らないため)。 */
+  /* Apply on touch, no apply button. Everything else applies
+     immediately; this alone required a press, and a forgotten press
+     once sent a game out with ponder still on. Debounced so number
+     fields don't send per keystroke. */
   const first = useRef(true);
   useEffect(() => {
     if (first.current) { first.current = false; return; }
@@ -1156,25 +1162,25 @@ export function GgsSettings({ snap }: { snap: GgsSnapshot }) {
               ? '深さ・読切・選択読みを、残り時間から毎手決めます。'
               : '選んだ Lv のとおりに読みます。時間は見ません。'}
           </Note>
-          {/* **時間で決めるなら目盛りは出さない。** 深さも読切も帯も時間から
-              決まるので、置いても効かない物を並べることになる */}
+          {/* Clock-derived mode hides the dials — depth, solve and
+              band all derive from time, so the dials would be inert. */}
           {!byClock && (
             <span style={{ maxWidth: 340, display: 'block' }}>
               <Strength value={levels} onChange={setLevels} />
             </span>
           )}
-          {/* **スレッド数はここに置かない。** 設定 → エンジンの全体設定を
-              GGS も使う。別々に持つと読切速度の較正 (機械ごとの実測) が
-              2 つ要り、片方が未較正のまま対局に入って持ち時間の管理が
-              固定の階段に落ちる */}
+          {/* Thread count is NOT here: GGS uses the global engine
+              setting. Separate values would need two calibrations,
+              and the uncalibrated one would drop time management to
+              the fixed ladder. */}
           <Field label="スレッド">
             <span style={{ fontSize: 'var(--fs-5)', color: 'var(--sub)' }}>
               {threads === 0 ? `自動 (${Math.max(1, Math.floor(cores / 2)) || '—'})` : threads}
               {' · '}設定 → エンジンで変えられます
             </span>
           </Field>
-          {/* 先読み。**「深さ固定」でも効く** — 効き方が「深く」から
-              「速く」に変わるだけ (同じ深さへ 1/3 の時間で着く。実測) */}
+          {/* Ponder works in fixed-depth mode too — it turns "deeper"
+              into "faster" (same depth in 1/3 the time, measured). */}
           <Field label="先読み">
             <Segmented value={ponder ? 'on' : 'off'}
                        onChange={(v) => setPonder(v === 'on')}
@@ -1184,10 +1190,10 @@ export function GgsSettings({ snap }: { snap: GgsSnapshot }) {
           <Note>相手の手番中に先を読みます。自分の持ち時間は減りません。</Note>
         </Section>
 
-        {/* **配り方は選ばせない。** 4 択で測ったところ「じっくり」は 3 秒・
-            8 秒の対局で勝率 0.0% (石差 −34)、「速指し」は全条件で「均等」に
-            劣らなかった。正解と罠が並んでいるだけだったので一本化した。
-            上の「決め方」はこれとは別の軸なので畳まない。 */}
+        {/* Pacing is not a choice: measured, "slow" scored 0.0% in
+            3s/8s games (−34 discs) and "fast" never lost to "even" —
+            the menu was one right answer among traps, so it
+            collapsed. The mode above is a different axis. */}
         <Section title="持ち時間の使い方">
           {!byClock && (
             <Note>
@@ -1221,9 +1227,9 @@ export function GgsSettings({ snap }: { snap: GgsSnapshot }) {
             : <Note>ファイルがありません。左メニュー下の「設定」で指定してください。</Note>}
         </Section>
 
-        {/* **ここだけはサーバーに置いてある値なので、繋がないと読めない。**
-            上の 強さ / 持ち時間 / 定石 / ふるまい は手元の設定で、
-            未接続でも `ggs.rs` の待ち受けが受け取る (1015〜1055 行) */}
+        {/* Only this section lives on the server and needs a
+            connection; strength/clock/book/behavior above are local
+            and the disconnected loop accepts them. */}
         <Section title="申し込みの扱い">
           <Note>申し込みを自動で受ける / 断る条件です。サーバー側に残ります。</Note>
           {online ? <>
@@ -1256,7 +1262,7 @@ export function GgsSettings({ snap }: { snap: GgsSnapshot }) {
           {!calibrated && <Note>{CALIB_NOTE}</Note>}
         </div>
 
-        {/* 繋いでいるときだけ。押せないログアウトを描いても意味が無い */}
+        {/* Connected only; a disabled logout is pointless. */}
         {online && (
           <Section title="接続">
             <Note>
@@ -1270,15 +1276,13 @@ export function GgsSettings({ snap }: { snap: GgsSnapshot }) {
   );
 }
 
-/* 説明文。**折り返しは `--w-text` (720px) で止める (規則 73)。**
- * 全幅の画面で 1 行が 1500px になると、目が行頭に戻れない。
- * 表・一覧・盤は窓いっぱいでよいので、折り返すのは文章だけ。 */
-/** 条件式 1 つ。木のまま組ませ、保存するときだけ文字列に戻す */
+/* Prose wraps at --w-text (720px) (rule 73); only prose — tables,
+ * lists and boards may fill the window. */
+/** One formula, edited as a tree, serialized only on save. */
 function FormulaField({ label, src, onSave }: { label: string; src: string; onSave: (s: string) => void }) {
   const [cond, setCond] = useState<Cond | null>(() => (src ? parseCond(src) : null));
-  /* **逃げ道を必ず残す (規則 30)。** 木で表せない式が実際にあり、
-   * その場合に画面から手が出せなくなる。`onRaw` を渡さないと部品が
-   * 「式を直接書く」を出さないので、ここで渡すのを忘れない。 */
+  /* Keep the escape hatch (rule 30): formulas beyond the tree exist,
+   * and without onRaw the component hides the raw editor. */
   const [raw, setRaw] = useState<string | null>(null);
   if (raw !== null) {
     return (
@@ -1307,43 +1311,40 @@ function FormulaField({ label, src, onSave }: { label: string; src: string; onSa
   );
 }
 
-/* ---------------- 対局結果 ----------------
+/* ---------------- Results ----------------
  *
- * 終わった対局はバックエンドが 200 局ぶん控えていて、起動し直しても残る。
- * これまで見る場所が無く、**溜まるだけで一度も読めなかった**。
+ * The backend keeps 200 finished games across restarts; until now
+ * they accumulated with nowhere to be read.
  *
- * レートの推移を上に、対局の一覧を下に置く。行を押すと検討で開く —
- * 「負けた対局を後から読む」がこの画面の用事なので、そこへ行けないと
- * 一覧を見せる意味が薄い。
- */
+ * Rating history on top, game list below. Rows open in study — this
+ * screen exists to reread lost games, so the list means little
+ * without that path. */
 function GgsResults({ snap, onKifu }: {
   snap: GgsSnapshot;
   onKifu: (title: string, kifu: string, archive?: string) => void;
 }) {
-  /* **既定は「すべて」にしない。** レートは形式ごとに別のプールで、
-     通しの値は存在しない。混ぜて折れ線にすると、8 と 8r を行き来する
-     たびに 150 点跳ぶ嘘のグラフになる。いちばん指している形式を出す。 */
+  /* Never default to "all": ratings live in per-pool spaces with no
+     combined value, and a mixed line jumps 150 points at each 8/8r
+     switch. Default to the most-played format. */
   const [gtype, setGtype] = useState('');
-  /* サーバーの履歴も取り込む。**手元に残るのはこのアプリで終局した対局
-   * だけ**なので、別の端末や以前の GUI で打ったぶんが丸ごと抜けていた
-   * (この画面が空のままになる)。GGS は `/os history` で全部返す。 */
+  /* Import server history too: local records only cover games ended
+   * in this app, so other machines' games were wholly missing (blank
+   * screen). GGS returns everything via /os history. */
   const login = snap.login;
-  // 要求は空文字 (= 自分)、**保存されるキーは login** — バックエンドが
-  // 他人の履歴と同じ map に入れるので、自分だけ空キーにはならない
+  // Request with '' (= self); the stored key is the login — the
+  // backend shares the map with others' histories.
   useEffect(() => { if (login) void ggsApi.history('').catch(() => {}); }, [login]);
-  /* **レートのプールで分ける。** GGS のプールは通常 (8) とランダム開局
-     (8r) の 2 つだけで、16 手と 14 手は同じ 8r に入る (finger の Type 表も
-     2 行しか返さない)。形式ごとに分けると、同じレートの推移が 2 本に
-     割れて読めなくなる。 */
+  /* Split by rating pool: GGS has exactly two (8 and 8r) — 16- and
+     14-ply randoms share 8r (finger's Type table has two rows). A
+     per-format split would break one rating line in two. */
   const kinds = [...new Set([
     ...snap.results.map((r) => poolOf(r.base, r.raw)),
     ...(snap.history[snap.login] ?? []).map((h) => poolOf(h.gtype)),
   ])].filter(Boolean);
-  /* 手元の記録に無い対局をサーバーの履歴から補う。**突き合わせるのは
-     書庫の番号。** 手元の `id` は対局の番号 (`.64`) で、サーバーの履歴が
-     返すのは書庫の番号 (`.84058`) — 別物なので、いつも一致せず**全局が
-     二重に並んでいた**。同じ対局が 2 行あると、形式や勝敗の数え方まで
-     ずれる (通常の一覧にランダム開局の対局が混ざって見えた)。 */
+  /* Fill gaps from server history, matching on ARCHIVE id: local id
+     is the game number (.64), history returns archive numbers
+     (.84058) — matching those never hit and every game listed twice,
+     skewing format and win counts. */
   const known = new Set(snap.results.flatMap((r) => [r.archive, r.id].filter(Boolean)));
   const fromServer: GameResult[] = (snap.history[snap.login] ?? [])
     .filter((h) => !known.has(h.id))
@@ -1355,16 +1356,17 @@ function GgsResults({ snap, onKifu }: {
         my_diff: Number.isFinite(diff) ? (iAmBlack ? diff : -diff) : null,
         my_rating: parseFloat(iAmBlack ? h.black_rating : h.white_rating) || null,
         at: Date.parse(h.at) / 1000 || 0,
-        // 棋譜は手元に無いが、番号で取り出せる (規則 71 の覆いが引き受ける)
+        // No local record, but fetchable by id (the rule-71 overlay
+        // handles it).
         kifu: '', ggf: '', archive: h.id,
       } as GameResult;
     });
-  /* **時刻で並べ直す。** 手元の記録とサーバーの履歴を繋いだだけだと、
-     それぞれの中では新しい順でも、境目で時間が巻き戻る (グラフの横軸が
-     8/16 → 8/15 と逆走していた)。時刻の無いものは後ろへ。 */
+  /* Re-sort by time: concatenating local + server keeps each sorted
+     but rewinds at the seam (the graph's x ran 8/16 -> 8/15).
+     Timeless entries go last. */
   const all = [...snap.results, ...fromServer].sort((x, y) => (y.at ?? 0) - (x.at ?? 0));
-  /* 既定 (未選択) は局数のいちばん多い形式。**「すべて」を既定にしない** —
-     レートは形式ごとに別のプールなので、通しの推移は存在しない。 */
+  /* Default (unselected) is the most-played format; never "all" —
+     no combined rating exists. */
   let most = '';
   let mostN = -1;
   for (const k of kinds) {
@@ -1373,26 +1375,26 @@ function GgsResults({ snap, onKifu }: {
   }
   const cur = gtype || most || 'all';
   const rows = all.filter((r) => cur === 'all' || poolOf(r.base, r.raw) === cur);
-  // グラフは古い順。results は新しい順に積まれている
+  // The graph runs oldest-first; results stack newest-first.
   const rated = rows.filter((r) => r.my_rating != null).reverse();
   const rates = rated.map((r) => r.my_rating as number);
-  // 横軸のラベル。端と中央だけ出るので全部渡してよい
+  // X labels; only ends and center render, so pass all.
   const rateDates = rated.map((r) => fmtDay(r.at ?? 0));
-  /* かざした点の一言。**どの対局のレートかが分からない**という声があった。
-     日時・相手・石差まで出せば、下の表のどの行かが読める。 */
+  /* Hover text: "which game is this rating" was asked — date,
+     opponent and margin identify the table row. */
   const rateLabels = rated.map((r) => {
     const d = r.my_diff;
     const sign = d == null ? '' : d > 0 ? `+${d}` : `${d}`;
     return `${fmtDay(r.at ?? 0)} · ${r.opp} · ${sign} · ${Math.round(r.my_rating as number)}`;
   });
-  /* グラフと表の対応付け。**同じ対局を指す**ので、点の番号ではなく
-     対局そのもので突き合わせる (表は新しい順、グラフは古い順)。 */
+  /* Graph-table linking matches on the game itself, not the point
+     index (table newest-first, graph oldest-first). */
   const [hover, setHover] = useState<number | null>(null);
   const hoverKey = hover != null && rated[hover] ? rowKey(rated[hover]) : '';
 
   return (
-    /* **縦のスクロールは一覧だけ。** 画面ごと流れると、行が増えたときに
-       グラフが上へ逃げて、対応付けを見ながら表を辿れない */
+    /* Only the list scrolls; whole-screen scrolling floats the graph
+       away while you trace the correspondence. */
     <div style={{ flex: 1, minHeight: 0, display: 'flex', flexDirection: 'column',
                   padding: 'var(--sp-4) var(--sp-4) 0' }}>
       <Section title="レートの推移"
@@ -1401,14 +1403,13 @@ function GgsResults({ snap, onKifu }: {
                             options={[...kinds.map((k) => ({ value: k, label: poolLabel(k) })),
                                       { value: 'all', label: 'すべて' }]} />
                ) : undefined}>
-        {/* 本文の幅いっぱいに置くので viewBox もそれに合わせる
-            (300 のままだと横に引き伸ばされて線の太さが崩れる)。
-            **ここは画面の主役なので軸を出す** — 「いつ何点だったか」を
-            読む場所 (2026-08-10 にデザイン側と決着。ドックの中は軸なし) */}
+        {/* Full-width, so the viewBox matches (at 300 the strokes
+            stretch). This is the screen's star, so axes show —
+            "when was I at what" is the point (settled 2026-08-10;
+            dock charts stay axis-less). */}
         {cur === 'all' ? (
-          /* **通しのレートは無い。** 形式ごとに別のプールなので、
-             ここで折れ線を引くと 8 と 8r の行き来がそのまま段差になる。
-             一覧のほうは「すべて」で見たいことがあるので残す。 */
+          /* No combined rating exists — a line here would step at
+             every pool switch. The list keeps its "all" option. */
           <Note>レートは形式ごとに別です。推移は形式を選ぶと出ます。</Note>
         ) : (
           <RateChart points={rates} width={800} height={180} axes dates={rateDates}
@@ -1418,14 +1419,13 @@ function GgsResults({ snap, onKifu }: {
 
       <Section title="終わった対局" aside={<span>{rows.length}</span>} grow>
         {!rows.length && <Empty>まだ記録がありません。</Empty>}
-        {/* 行どうしは詰める (節の余白が行間に入る)。
-            **形式を変えたら作り直す。** 同じ器に別の一覧を流し込むと、
-            前の行が残ることがあった (件数 11 に対し 14 行が描かれ、通常の
-            一覧にランダム開局の対局が居座って見えた)。 */}
+        {/* Rows stay tight. Rebuild on format change: reusing the
+            container left stale rows (14 drawn for 11 items, randoms
+            squatting in the normal list). */}
         <List key={cur}>
         {rows.map((r) => (
           <ResultRow key={rowKey(r)} opponent={r.opp}
-                     // グラフでかざしている対局を光らせる
+                     // Light the game hovered in the graph.
                      picked={!!hoverKey && rowKey(r) === hoverKey}
                      onHover={(on) => {
                        const i = rated.findIndex((x) => rowKey(x) === rowKey(r));
@@ -1435,8 +1435,8 @@ function GgsResults({ snap, onKifu }: {
                      discs={r.my_diff ?? 0} when={fmtDay(r.at)}
                      note={cur === 'all' ? gtypeLabel(baseType(r.base, r.raw)) : undefined}
                      rating={r.my_rating}
-                     // GGF なら開始局面も入っている (抽選開局の対局が戻る)。
-                     // どちらも無い対局は番号から取り出す
+                     // GGF includes the start position (random-opening
+                     // games restore); with neither, fetch by id.
                      onClick={() => onKifu(`${r.opp} との対局`, r.ggf || r.kifu, r.archive)}
                      dim={!r.ggf && !r.kifu && !r.archive} />
         ))}
@@ -1446,18 +1446,14 @@ function GgsResults({ snap, onKifu }: {
   );
 }
 
-/** 一覧の行の鍵。
- *
- * **繋ぐだけでは衝突する。** `id + seq` は `.6` + `86` と `.68` + `6` が
- * どちらも `.686` になる。鍵が重なると、絞り込みを切り替えたときに前の
- * 行が DOM に残り、**件数と表示行数が合わなくなる** (通常の一覧に
- * ランダム開局の対局が居座って見えた)。 */
+/** List row key. Plain concatenation collides: '.6'+'86' and
+ * '.68'+'6' both make '.686', and duplicate keys leave stale DOM rows
+ * when the filter changes (counts vs rendered rows diverged). */
 const rowKey = (r: GameResult) => `${r.id}#${r.seq}`;
 
-/** レートのプール。**GGS は通常 (8) とランダム開局 (8r) の 2 つだけ。**
- *
- * 形式は `s8r16` / `s8r14` / `8r16` … と分かれるが、レートは `r` の有無で
- * しか分かれない。推移を見るときの単位はこちら。 */
+/** Rating pool — GGS has exactly two: normal (8) and random (8r).
+ * Formats vary (s8r16 / s8r14 / 8r16 ...) but ratings split only on
+ * the r; this is the unit for history. */
 const poolOf = (base: string, raw?: string) => {
   const t = baseType(base, raw);
   if (!t) return '';
@@ -1466,25 +1462,22 @@ const poolOf = (base: string, raw?: string) => {
 
 const poolLabel = (p: string) => (p === '8r' ? 'ランダム開局' : p === '8' ? '通常' : p);
 
-/** 対局の種別。
- *
- * 履歴から来た結果は `base` が `"s8r16.2024..."` の形なので頭を取れば済む。
- * **終局の報せから作った結果は `base` が `.11` のような対局 id** で、
- * 切っても空にしかならない (画面に `?` が出ていた)。そちらは生の行に
- * 形式が入っているので拾う。 */
+/** Game format. History results carry base like "s8r16.2024...", so
+ * take the head. Results built from game-over notices have base like
+ * ".11" (a game id) which yields nothing ('?' appeared on screen);
+ * their raw row carries the format instead. */
 const baseType = (base: string, raw?: string) => {
-  /* **生の行にある形式を先に見る。** `base` が対局の番号 (`.64`) のときは
-     頭が空になるので raw へ落ちるが、番号でない `base` が来ることもある。
-     どちらでも生の行の形式が正しいので、そちらを優先する。 */
+  /* Prefer the raw row's format: id-shaped bases fall through anyway,
+     and even non-id bases can lie — the raw row is right in both
+     cases. */
   const fromRaw = raw?.split(/\s+/).find((t) => /^s?8(r\d+)?$/.test(t));
   if (fromRaw) return fromRaw;
   return base.split('.')[0] ?? '';
 };
 
-/** 履歴の日時 (`30 Jul 2026 17:36:36`) を `7/30 17:36` にする。
- *
- * **読めなければ元の文字をそのまま返す。** サーバーの書式が変わったときに
- * 空欄になるより、生のまま出ているほうが直しやすい。 */
+/** History timestamp (`30 Jul 2026 17:36:36`) to `7/30 17:36`.
+ * Unparseable input returns as-is — raw text beats a blank when the
+ * server's format changes. */
 function fmtWhen(at: string): string {
   const t = Date.parse(at);
   if (!Number.isFinite(t)) return at;
@@ -1493,7 +1486,7 @@ function fmtWhen(at: string): string {
   return `${d.getMonth() + 1}/${p2(d.getDate())} ${p2(d.getHours())}:${p2(d.getMinutes())}`;
 }
 
-/** 終わった日。今日なら時刻だけ。 */
+/** End date; time only if today. */
 function fmtDay(secs: number): string {
   if (!secs) return '';
   const d = new Date(secs * 1000);
@@ -1504,18 +1497,19 @@ function fmtDay(secs: number): string {
 }
 
 
-/* プレイヤーの名刺 (設計 §6 の「浮くもの」)。
+/* Player card (design §6's floating one).
  *
- * **全画面の詳細を置き換えるものではなく、その前の下読み。**「詳しく見る」で
- * 全画面へ渡す。対局中に相手を調べたいときに、盤から離れずに済むのが値打ち。
+ * A preview before the full-screen detail, not a replacement —
+ * "details" hands over. Its value is checking an opponent without
+ * leaving the board.
  *
- * 絵は 在室 / 最終対局 / 直近 10 戦 / レート推移 / 勝敗表 / 観戦 も描いて
- * いたが、**エンジンにもサーバーにも口が無い**ことを伝えたら絵から落ちた。
- * いま出せるのは finger の「対局の申し込み」4 行だけ。
+ * The design once drew presence / last game / recent 10 / rating
+ * history / head-to-head / observe; all dropped once told neither
+ * engine nor server exposes them. What remains is finger's four
+ * request rows.
  *
- * **対戦履歴は載せない。** 340px の名刺に 1 行 3 項目を詰めると溢れて
- * 読めず、表にする幅も無い。履歴は「詳しく見る」が表で持つ。
- */
+ * No match history here: three items per row overflow 340px, and a
+ * table has no room. History lives in "details". */
 function UserCard({ snap, name, onClose, onDetail, onAsk }: {
   snap: GgsSnapshot; name: string;
   onClose: () => void;
@@ -1528,8 +1522,8 @@ function UserCard({ snap, name, onClose, onDetail, onAsk }: {
   const rates = bothRates(u);
   const fields = snap.fingers[name]?.fields ?? [];
 
-  /* 「対局の申し込み」のうち**条件式でない 4 行**だけ。条件式は木で描くもので、
-     340px の名刺には収まらない (全画面の詳細が持つ) */
+  /* Only the four non-formula request rows; formulas render as trees
+     and don't fit a 340px card (details holds them). */
   const facts = (fingerGroups(fields).find((g) => g.title === '対局の申し込み')?.rows ?? [])
     .filter((r) => !['accept', 'decline', 'request'].includes(normKey(r.key).replace(/\(.*\)/, '')));
 
@@ -1549,10 +1543,9 @@ function UserCard({ snap, name, onClose, onDetail, onAsk }: {
               <div key={r.key} style={{ display: 'flex', alignItems: 'center',
                                         gap: 'var(--sp-3)', fontSize: 'var(--fs-5)' }}>
                 <span style={{ color: 'var(--sub)' }}>{r.label}</span>
-                {/* **値も読み下す。** サーバーは `1` / `+` / `0` を返すので、
-                    そのままだと「申し込み受付 1」になって意味が読めない。
-                    全画面の詳細は前から `fingerValue` を通していたのに、
-                    名刺だけ生のまま出していた */}
+                {/* Values read out too: the server returns 1 / + / 0,
+                    unreadable raw. Details always went through
+                    fingerValue; the card alone showed raw. */}
                 <span style={{ marginLeft: 'auto', overflow: 'hidden',
                                textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
                   {fingerValue(r.key, r.value) || '—'}
@@ -1565,59 +1558,57 @@ function UserCard({ snap, name, onClose, onDetail, onAsk }: {
   );
 }
 
-/* ---------------- プレイヤー ----------------
+/* ---------------- Players ----------------
  *
- * 接続中の一覧と、選んだ人の詳細。詳細の頭には名前だけでなくレートと
- * 対局の状況も載せる — 一覧で見えていたものが詳細で消えると、
- * 申し込む前に一覧へ戻る羽目になる。
- */
+ * Who-list plus a selected player's detail. The detail header carries
+ * rating and game status, not just the name — losing what the list
+ * showed forces a round trip before requesting. */
 function GgsUsers({ snap, onNav, onKifu }: {
   snap: GgsSnapshot; onNav: (id: NavId) => void;
   onKifu: (title: string, kifu: string, archive?: string) => void;
 }) {
-  /* 一覧 → 名刺 → 全画面の詳細、の 3 段 (設計 §6)。**一覧から直に全画面へ
-     飛ばさない** — 相手を軽く見たいだけのときに一覧が消えるのは重い。
-     `card` が名刺、`sel` が全画面。 */
+  /* Three tiers: list -> card -> full detail (§6). Never jump list to
+     full — losing the list for a quick look is heavy. card = card,
+     sel = full screen. */
   const [card, setCard] = useState<string | null>(null);
   const [mode, setMode] = useState<'who' | 'top'>('who');
-  /* プレイヤー一覧の列。**見出しと行が同じ配列を見る。** `#` は順位なので
-     「上位」のときだけ立ち、そのぶん先頭が 1 つ増える — 条件が 2 か所に
-     あると片方だけ直して列がずれる。 */
+  /* Player-list columns; head and rows read the SAME array. '#' is
+     rank, present only in top mode — with the condition in two
+     places, one fix drifts the columns. */
   const userCols: Col[] = [
     ...(mode === 'top' ? [{ head: '#', w: 26, right: true, num: true } as Col] : []),
     { head: '名前', clip: true },
-    // 接続中はプールを選んでいないので、通常 8 とランダム開局 8r を並べる
+    // The who-list is pool-less; show both 8 and 8r.
     { head: mode === 'who' ? '通常' : 'レート', w: 96, right: true, num: true },
     ...(mode === 'who' ? [{ head: 'ランダム', w: 104, right: true, num: true } as Col] : []),
-    // 受付は「申し込んで通るか」。**対局中でも受けることがある**ので
-    // 状態とは別の列にする (`open > 対局中の数` なら受ける)
+    // Accepting = "would a request land"; playing players may still
+    // accept (open > games in progress), so it is a separate column.
     ...(mode === 'who' ? [{ head: '受付', w: 56, right: true } as Col] : []),
     { head: '状態', w: 52, right: true },
   ];
-  /* 一覧の「状態」列は進行中の対局 (`snap.ongoing`) から出す。**その一覧は
-     ログイン時と 60 秒ごとにしか届かない**ので、繋いだ直後にこの画面を
-     開くと全員の状態が空になる。開いた時点で聞き直す — `tell /os match` は
-     一覧を返すだけで何も動かさない (規則 61 — 直し方は操作のそばに、の
-     裏返しで、聞けば済むものを人に待たせない)。 */
+  /* The status column derives from snap.ongoing, which arrives only
+     at login and every 60s — freshly connected, everyone shows blank.
+     Re-ask on open; `tell /os match` is a pure query (rule 61: never
+     make people wait for what asking solves). */
   useEffect(() => { void ggsApi.listMatches().catch(() => {}); }, []);
-  /* 確認用の入口。**繋がずに名刺の枠だけ撮る**ための道
-     (`KUROOBI_GGS_AUTOVIEW=users:card`)。中身は空のままでよく、
-     見たいのは 340 の器・3 段・足の 2 つの釦 */
+  /* Capture entry (KUROOBI_GGS_AUTOVIEW=users:card): the card frame
+     without a connection — empty content is fine; the 340px box,
+     three tiers and two footer buttons are what's checked. */
   useEffect(() => {
     void ggsApi.autoview().then((v) => {
-      /* **前半は行き先の id と同じ綴りにする。** `ggs-users` から
-         `ggs-players` に変えたときここだけ古いままで、`users:card` は
-         当たらないうえに nav が無い行き先に落ちて本文が真っ白になった */
+      /* The first segment must spell the destination id: after the
+         ggs-users -> ggs-players rename this stayed stale, users:card
+         missed, and the body went blank on a navless destination. */
       if (v === 'players:card') setCard(snap.login || '—');
       if (v === 'players:top') setMode('top');
     }).catch(() => {});
   }, [snap.login]);
   const [sel, setSel] = useState<string | null>(null);
-  // レートは形式ごとに別のプール。混ぜると順位が意味を持たないので、
-  // ランキングは見たいプールを選べるようにする (自分のレートは両方出る)
+  // Rankings are per-pool (mixed ranks mean nothing); the pool is
+  // selectable, and own rating shows both.
   const [pool, setPool] = useState('8');
-  // 順位を探す場所なので頁で切る (規則 74)。スクロールだと「いま何位を
-  // 見ているか」が分からなくなる
+  // Paged, not scrolled (rule 74) — scrolling loses "what rank am I
+  // looking at".
   const [page, setPage] = useState(0);
   const [perPage, setPerPage] = useState(25);
   const [tab, setTab] = useState('プロフィール');
@@ -1656,8 +1647,8 @@ function GgsUsers({ snap, onNav, onKifu }: {
 
       <Section title={mode === 'who' ? '接続中' : 'ランキング'}
                aside={<>
-                 {/* プールは上位のときだけ選ばせる。接続中の一覧は
-                     プールに関係なく同じ顔ぶれなので、出すと嘘になる */}
+                 {/* Pool select only in top mode; the who-list is the
+                     same people regardless, so showing it would lie. */}
                  {mode === 'top' && (
                    <Segmented value={pool} onChange={(p) => {
                      setPool(p);
@@ -1671,19 +1662,18 @@ function GgsUsers({ snap, onNav, onKifu }: {
                  }} options={[{ value: 'who', label: '接続中' }, { value: 'top', label: '上位' }]} />
                </>}>
         {!rows.length && <Empty>いません。</Empty>}
-        {/* 設計 §5 はこの一覧を**表**として描いている — 列見出し (# / 名前 /
-            レート / 状態) と 24px の行。規則 5 の「`--h-row` 24px = 表の行」に
-            合う。以前は 32px の行で列見出しも無く、レートと状態の位置が
-            行ごとに動いていた。
-            `#` は順位なので「上位」のときだけ出す (接続中の一覧に順位は無い) */}
+        {/* §5 draws this as a TABLE — headers (#/name/rating/status)
+            and 24px rows (rule 5). It used to be headerless 32px rows
+            with drifting columns. '#' only in top mode. */}
         {!!rows.length && (
           <TableHead cols={userCols} pad="var(--sp-4)" />
         )}
-        {/* 列見出しだけを残さない。繋いだ直後は一覧がまだ届いていない */}
+        {/* Never bare headers; right after connect the list hasn't
+            arrived. */}
         {!slice.length && (
           <Empty>{mode === 'who' ? '接続中の人はいません。' : '順位をまだ受け取っていません。'}</Empty>
         )}
-        {/* 行どうしは詰める (節の余白が行間に入る) */}
+        {/* Rows stay tight (the section-gap trap). */}
         <List>
         {slice.map((u, i) => {
         const playing = snap.ongoing.some((o) => o.names.includes(u.name));
@@ -1695,12 +1685,10 @@ function GgsUsers({ snap, onNav, onKifu }: {
               </span>
             )}
             <span className="k-sel">{u.name}</span>
-            {/* レートには必ず偏差を添える (規則 29) — 偏差が大きいと数字が
-                意味を持たない。ランキング (`/os t`) は偏差を返すが、接続中の
-                一覧 (`/os who`) は返さないので、そちらは数字だけになる。
-
-                **接続中はプールを選んでいないので両方出す。** ランキングは
-                プールを選んで見るものなので通常 8 の列だけを使う */}
+            {/* Deviation always accompanies ratings (rule 29). /os t
+                returns it, /os who does not — the who-list shows bare
+                numbers. Who-list shows both pools; rankings use the
+                selected one. */}
             <span>
               {u.rating != null && <>
                 {u.rating.toFixed(1)}
@@ -1719,9 +1707,9 @@ function GgsUsers({ snap, onNav, onKifu }: {
                 </>}
               </span>
             )}
-            {/* **受付状態。** サーバーは who の名前の次に印を出す
-                (`+` 受ける / `-` 受けない / `x` 幽霊)。待機中でも受けない
-                人が居り、申し込む前に分からないと空振りする。 */}
+            {/* Accepting status: who marks names with + / - / x
+                (ghost). Idle players may still refuse, and not
+                knowing wastes a request. */}
             {mode === 'who' && (
               <span style={{
                 fontSize: 'var(--fs-6)',
@@ -1731,17 +1719,17 @@ function GgsUsers({ snap, onNav, onKifu }: {
                 {u.open === '+' ? '受付中' : u.open === 'x' ? '切断' : u.open ? '受けない' : '—'}
               </span>
             )}
-            {/* 状態は色つきの文字 (絵と同じ)。バッジにすると行の高さが動く。
-                **対局していない人は「待機」と出す** — 空欄にすると、列ごと
-                効いていないのか誰も対局していないのかが読み手に分からない
-                (設計 §5 も 対局中 / 待機 の 2 値で描いている) */}
+            {/* Status as colored text (badges change row height).
+                Non-playing players say "idle" — blanks read as a
+                broken column (§5 draws the two values too). */}
             <span style={{
               fontSize: 'var(--fs-6)', color: playing ? 'var(--ok)' : 'var(--sub)',
             }}>{playing ? '対局中' : '待機'}</span>
           </TableRow>
         );})}
         </List>
-        {/* ページ送りは一覧の外。詰めた一覧のすぐ下だと行に見える */}
+        {/* Paging sits outside the list — flush below, it reads as a
+            row. */}
         {rows.length > perPage && (
           <div style={{
             display: 'flex', alignItems: 'center', gap: 'var(--sp-2)',
@@ -1773,7 +1761,8 @@ function UserDetail({ snap, name, tab, onTab, onBack, onNav, onKifu }: {
   const rates = bothRates(u);
   const playing = snap.ongoing.some((o) => o.names.includes(name));
   const fields = snap.fingers[name]?.fields ?? [];
-  // 自分の履歴も他人と同じく login のキーで入る (要求だけが空文字)
+  // Own history sits under the login key like everyone's (only the
+  // request uses '').
   const rows = snap.history[name] ?? [];
   const histCols: Col[] = [
     { head: '日時', w: 132 },
@@ -1785,7 +1774,7 @@ function UserDetail({ snap, name, tab, onTab, onBack, onNav, onKifu }: {
 
   return (
     <div style={{ flex: 1, minHeight: 0, display: 'flex', flexDirection: 'column' }}>
-      {/* 頭は帯。名前・レート・対局の状況・申し込みを 1 行に収める */}
+      {/* Header band: name, rating, status and request in one row. */}
       <div style={{
         flex: 'none', display: 'flex', alignItems: 'center', gap: 'var(--sp-3)',
         padding: 'var(--sp-3) var(--sp-4)', borderBottom: '1px solid var(--border)',
@@ -1810,13 +1799,14 @@ function UserDetail({ snap, name, tab, onTab, onBack, onNav, onKifu }: {
         {tab === 'プロフィール' ? (
           <>
             {!fields.length && <Empty>読み込んでいます…</Empty>}
-            {/* 均一に 24 行並べると、申し込む前に見たいものが埋もれる。
-                まとまりと並び順は ggs.ts の FINGER_GROUPS が決める */}
+            {/* 24 uniform rows bury what matters pre-request; grouping
+                and order come from ggs.ts's FINGER_GROUPS. */}
             {fingerGroups(fields).map((g) => (
               <Section key={g.title} title={g.title}>
                 {g.rows.map((r) => {
                   const key = normKey(r.key).replace(/\(.*\)/, '');
-                  // 条件式は文字に潰さず木のまま描く。構造がそのまま意味になっている
+                  // Formulas render as trees, never flattened — the
+                  // structure is the meaning.
                   const cond = ['accept', 'decline', 'request'].includes(key)
                     ? parseCond(r.value) : null;
                   return (
@@ -1841,15 +1831,16 @@ function UserDetail({ snap, name, tab, onTab, onBack, onNav, onKifu }: {
         ) : (
           <>
             {!rows.length && <Empty>対戦履歴はありません。</Empty>}
-            {/* **表で出す。** 1 行 3 項目を「·」で繋いだ 2 段だと、日時・
-                形式・石差が行ごとに違う位置に来て縦に読めない。押すと
-                棋譜を覆いで見せる (手元に棋譜は無いので番号から取り出す) */}
+            {/* As a table: dot-joined two-liners scatter date, format
+                and margin per row. Clicking opens the record overlay
+                (fetched by id — nothing local). */}
             {!!rows.length && <TableHead cols={histCols} />}
             <List>
             {rows.map((h) => {
               const black = h.black === name;
               const d = parseFloat(h.score);
-              // 石差はこの人から見た値にする。黒番の記録は黒視点で来る
+              // Margin from this player's view; black-side records
+              // arrive black-view.
               const mine = Number.isFinite(d) ? (black ? d : -d) : null;
               return (
                 <TableRow key={h.id} cols={histCols}
@@ -1875,11 +1866,9 @@ function UserDetail({ snap, name, tab, onTab, onBack, onNav, onKifu }: {
   );
 }
 
-/** チャットの左 — 会話の一覧。**`--w-lobby` (174px)。手合い一覧の
- *  `--w-list` を借りない** (規則 6 — 役割が違う列は幅を借りない)。
- *
- *  `GgsChat` が 187 行あり、左の一覧・中央の会話・下の入力に割れて
- *  いたので左を出した。props は 4 つで済む。 */
+/** Chat's left column — the conversation list, at --w-lobby (174px),
+ *  never borrowing the match list's --w-list (rule 6). Extracted from
+ *  the 187-line GgsChat; four props suffice. */
 function ChatList({ sorted, cur, onThread, onPick }: {
   sorted: [string, { last: ChatMsg; n: number }][];
   cur: string;
@@ -1888,19 +1877,17 @@ function ChatList({ sorted, cur, onThread, onPick }: {
 }) {
   return (
     <>
-    {/* 会話の一覧は `--w-lobby` (174px)。**手合い一覧の `--w-list` を
-        借りない** — 規則 6 は「役割が違う列は幅を借りない」と決めている。
-        設計 §6 のこの列も 173px で、`--w-lobby` の「GGS 左カラム」という
-        説明はここのことだった (ロビーには 174 幅の列が無い)。
-        相手の名前は溢れたら省略記号で切る。 */}
+    {/* --w-lobby (174px), not the match list's --w-list (rule 6).
+        §6 draws this column at 173px — the token's "GGS left column"
+        description meant here (the lobby has no 174px column). Names
+        clip with ellipsis. */}
     <aside style={{
       width: 'var(--w-lobby)', flex: 'none', borderRight: '1px solid var(--border)',
       minHeight: 0, display: 'flex', flexDirection: 'column',
     }}>
-      {/* 見出しの釦は `chip` (20px)。**列が 174px しかないので、28px の
-          釦だと「会話」と押し合いになる**。絵の帯は 21px だが、それだと
-          釦が罫にめり込む (Section の見出しで一度指摘が出ている) ので
-          帯だけ 32px にした。要 push */}
+      {/* Heading button is chip (20px) — a 28px one fights the title
+          in 174px. The design's 21px band sinks buttons into the
+          rule, so this band alone is 32px. Needs a push. */}
       <div style={{
         flex: 'none', height: 'var(--h-field)', display: 'flex', alignItems: 'center',
         gap: 'var(--sp-2)', padding: '0 var(--sp-3)', borderBottom: '1px solid var(--border-weak)',
