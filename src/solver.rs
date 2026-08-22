@@ -3039,10 +3039,19 @@ impl Worker<'_> {
         // Parity ordering: squares in odd quadrants first (odd sorts before
         // even because !odd is false < true). The caller carries the parity
         // down the tree, so this level does not recompute it.
-        let odd = |sq: u8| parity & quadrant_id(sq) != 0;
-        let mut arr = [p1, p2, p3, p4];
-        arr.sort_by_key(|&s| !odd(s));
-        let [p1, p2, p3, p4] = arr;
+        //
+        // 全象限が偶数 (parity == 0) なら鍵が全部同じで、安定ソートは恒等
+        // 置換 — 象限引きごと飛ばす。4 空きの局面はかなりの割合がここに
+        // 落ちる (奇数象限が 1 つでもあると 4 空きまでに使い切られやすい)。
+        let (p1, p2, p3, p4) = if parity != 0 {
+            let odd = |sq: u8| parity & quadrant_id(sq) != 0;
+            let mut arr = [p1, p2, p3, p4];
+            arr.sort_by_key(|&s| !odd(s));
+            let [a, b, c, d] = arr;
+            (a, b, c, d)
+        } else {
+            (p1, p2, p3, p4)
+        };
 
         let mut alpha = alpha;
         let mut any = false;
@@ -3113,6 +3122,11 @@ impl Worker<'_> {
         let mut arr = [p1, p2, p3];
         arr.sort_by_key(|&s| !odd(s));
         let [p1, p2, p3] = arr;
+        // parity == 0 でソートを飛ばす分岐は `last4` では 0.7% 効いたが、
+        // ここでは効果が消える (band22 で誤差内、むしろ負けの回もある)。
+        // last3 は last4 の内側で呼ばれ、奇数象限は 4 空きまでに使われて
+        // parity 0 が多いはずだが、ソート 3 要素は 4 要素より安いので
+        // 分岐の予測失敗と相殺する。last4 だけに置く。
 
         let mut alpha = alpha;
         let mut any = false;
