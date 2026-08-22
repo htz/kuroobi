@@ -278,14 +278,25 @@ so the endgame needs no setting).
 roundrobin --games <n> --depth <n> [--engine name=protocol=path]...
 ```
 
-`protocol` is `edax` / `zebra` / `egaroucid` / `ours`. **Exactly one
-`ours`** is required, and its path is ignored.
+`protocol` is `edax` / `zebra` / `egaroucid` / `kuroobi` / `ours`.
+**Exactly one `ours`** is required, and its path is ignored.
 
 ```sh
 roundrobin --games 100 --depth 8 \
   --engine kuroobi=ours=- \
   --engine edax=edax=/path/to/edax \
   --engine egaroucid=egaroucid=/path/to/egaroucid
+```
+
+`kuroobi` runs another build of this engine as a separate process,
+through `gtp`. The NNUE accumulator width `H` is a compile-time
+constant, so two models with different `H` cannot share one process;
+build each variant in its own worktree and register both.
+
+```sh
+roundrobin --games 400 --time-ms 300 \
+  --engine h16=kuroobi=./target/release/gtp \
+  --engine h64=kuroobi=../wt-h64/target/release/gtp
 ```
 
 ### ponderhit
