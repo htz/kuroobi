@@ -1,25 +1,24 @@
 import React from 'react';
-/* IconButton は Icons.tsx のものを使う（primitives 側は削除済み）。
- * props は {name, label, onClick, size} — label が title と aria-label の両方になり、
- * onClick は引数を取らない。 */
+/* IconButton comes from Icons.tsx (the primitives copy was removed).
+ * props are {name, label, onClick, size} — label fills both title and
+ * aria-label; onClick takes no arguments. */
 import { Icon, IconButton, type IconName } from './Icons';
 import type { GgsSnapshot } from '../types';
 import { Badge, Dot, Button, Select, TextField } from './primitives';
 import { Note, picked } from './layout';
 import logo from '../../assets/kuroobi.svg?raw';
-// 値の実体は 1 つ。設計側の state.ts に写しがあったが、定数が 2 か所にあると
-// 必ず割れる（レベル表・条件式の変数・色の値で実際に割れていた）
+// Single source of truth; a copy in the design-side state.ts drifted
+// (level table, formula variables and colors all diverged once).
 import {
   COLOR_CHOICES, BOOL_OPS, FORMULA_OPS, FORMULA_VARS, varOf, condToSrc, condLabel,
   isGroup, type Cond as SharedCond, type FormulaOp,
 } from '../ggs';
 
-/* KUROOBI GGS 専用の部品
- * 左メニュー / 資源メーター / 手合い一覧 / レート / 条件式の木 /
- * 翻訳つき吹き出し / 通信ログ / トースト。
- */
+/* GGS-specific components: left nav, resource meters, match list,
+ * ratings, formula tree, translated chat bubbles, protocol log,
+ * toasts. */
 
-/* ============ 左メニュー ============ */
+/* ============ Left nav ============ */
 
 export type NavId =
   | 'play' | 'study' | 'book'
@@ -33,9 +32,9 @@ export type NavItem = {
   count?: number;    // 件数バッジ
   alert?: boolean;   // 自分宛・未読は --bad で塗る
   dot?: 'ok' | 'gold' | 'bad';  // 状態バッジ（待機モードが有効・自分の手番 等）
-  /** 鍵。**押せることは見れば分かるが、鍵があることは押しても分からない**
-   *  ので title に添える (対局の釦が `title="⌘N"` としているのと同じ)。
-   *  畳んだ 48px の列では文字が消えるぶん、title の値打ちが上がる */
+  /** Shortcut key, surfaced via title (like the play button's
+   *  `title="⌘N"`) — invisible otherwise, and worth more in the
+   *  collapsed 48px rail where labels disappear. */
   hint?: string;
 };
 
@@ -51,7 +50,7 @@ export const NAV_LOCAL: NavItem[] = [
   { id: 'book', label: '定石', icon: 'book', hint: '⌘B' },
 ];
 
-/* 未接続のときは 7 行を出さず「ログイン」1 行だけにする */
+/* While disconnected, show a single login row instead of all seven. */
 export function ggsNav(conn: Conn, badges?: Partial<Record<NavId, Pick<NavItem, 'count' | 'alert' | 'dot'>>>): NavItem[] {
   if (conn !== 'online') return [{ id: 'ggs-login', label: 'ログイン', icon: 'login' }];
   const base: NavItem[] = [
@@ -62,8 +61,8 @@ export function ggsNav(conn: Conn, badges?: Partial<Record<NavId, Pick<NavItem, 
     { id: 'ggs-chat', label: 'チャット', icon: 'ggs-chat' },
     { id: 'ggs-standby', label: '待機モード', icon: 'ggs-standby' },
     { id: 'ggs-console', label: 'コンソール', icon: 'ggs-console' },
-    // GGS の設定は設定の窓の「GGS」タブへ移した。行き先を 2 つ持つと、
-    // どちらが本物か分からなくなる (規則 58)
+    // GGS settings moved to the settings window's GGS tab; two
+    // destinations compete for authority (rule 58).
   ];
   return base.map(i => ({ ...i, ...(badges?.[i.id] ?? {}) }));
 }
@@ -73,22 +72,23 @@ export function Nav({ items, ggsItems, conn, active, onSelect, footer }: {
   active: NavId; onSelect?: (id: NavId) => void; footer?: React.ReactNode;
 }) {
   return (
-    // width は base.css の .k-nav が持つ（1040px で畳むので、インラインだと届かない）
+    // Width lives in base.css's .k-nav (collapses at 1040px; inline
+    // styles are out of the media query's reach).
     <nav className="k-nav" style={{
       flex: 'none', background: 'var(--panel)',
       borderRight: '1px solid var(--border)', display: 'flex', flexDirection: 'column', minHeight: 0,
     }}>
-      {/* ロゴの帯。信号機ぶんの 78px は窓の帯が持つので、ここには要らない。
-          畳む段では丸ごと落とす (48px の列に文字のロゴは入らない) */}
+      {/* Logo strip. The traffic-light 78px belongs to the window
+          band; dropped entirely in the collapsed rail. */}
       <div className="k-nav-logo" style={{ height: 'var(--h-bar)', flex: 'none' }}>
         <span aria-label="KUROOBI" dangerouslySetInnerHTML={{ __html: logo }} />
       </div>
       <div style={{ padding: 'var(--sp-1) var(--sp-2) 0', display: 'flex', flexDirection: 'column', gap: 1 }}>
         {items.map(i => <NavRow key={i.id} item={i} active={active === i.id} onSelect={onSelect} />)}
       </div>
-      {/* display は .k-nav-section が持つ（1040px で消す） */}
-      {/* 畳んでも区切りは残す — 文字は落とすが 1px の罫は残して、
-          行き先の 2 つの束が地続きに見えないようにする (.k-nav-rule) */}
+      {/* display lives in .k-nav-section (hidden at 1040px). */}
+      {/* Keep the separator when collapsed: labels go, but the 1px
+          rule keeps the two destination groups distinct (.k-nav-rule). */}
       <div className="k-nav-rule" />
       <div className="k-nav-section" style={{
         margin: 'var(--sp-4) 0 6px', padding: '0 18px', alignItems: 'center', gap: 'var(--sp-2)',
@@ -99,9 +99,8 @@ export function Nav({ items, ggsItems, conn, active, onSelect, footer }: {
       <div style={{ padding: '0 var(--sp-2)', display: 'flex', flexDirection: 'column', gap: 1 }}>
         {ggsItems.map(i => <NavRow key={i.id} item={i} active={active === i.id} onSelect={onSelect} />)}
       </div>
-      {/* padding は畳む段が動かすので .k-nav-foot が持つ。48px の列で
-          sp-3 (12px) を左右に取ると中身が 24px しか残らず、32px の当たりが
-          はみ出す */}
+      {/* Padding lives in .k-nav-foot; 12px sides in a 48px rail leave
+          24px for a 32px hit target. */}
       {footer && <div className="k-nav-foot" style={{
         marginTop: 'auto', display: 'flex', flexDirection: 'column',
         gap: 'var(--sp-3)', borderTop: '1px solid var(--border)',
@@ -115,23 +114,22 @@ function NavRow({ item, active, onSelect }: { item: NavItem; active: boolean; on
     <button type="button" onClick={() => onSelect?.(item.id)} aria-current={active || undefined}
       title={item.hint ? `${item.label} (${item.hint})` : item.label}
       className={'k-nav-row k-row' + (active ? ' k-on' : '')}
-      // padding / justify-content は .k-nav-row が持つ（1040px で中央寄せにする）
+      // padding/justify-content live in .k-nav-row (centered at 1040px).
       style={{
         height: 'var(--h-field)', display: 'flex', alignItems: 'center', gap: 'var(--sp-3)',
         border: 0, borderRadius: 'var(--r-2)', fontSize: 'var(--fs-4)',
         background: active ? 'var(--accent-dim)' : 'transparent',
         color: active ? 'var(--on-accent)' : 'var(--text)', fontWeight: active ? 600 : 400,
       }}>
-      {/* **絵は縮ませない。** 48px の列では 絵 16 + 溝 12 + バッジ 18 = 46 で
-          32px の当たりに収まらず、`flex` が絵のほうを 0 まで潰していた
-          (数字だけが残ってどの行か分からなくなる) */}
+      {/* Never let the icon shrink: 16 + 12 + 18 = 46 overflows the
+          32px target and flex crushed the icon to zero, leaving an
+          unidentifiable badge. */}
       <span style={{ flex: 'none', display: 'grid', placeItems: 'center' }}>
         <Icon name={item.icon} size={16} />
       </span>
       <span className="k-nav-label">{item.label}</span>
-      {/* **置き場所も大きさも base.css が持つ。** 畳む段で絵の角へ移して
-          小さくするので、ここに書くと media query が届かない。
-          色と太さだけがここの持ち物 */}
+      {/* Position and size live in base.css (the collapsed rail moves
+          and shrinks it); only color and weight belong here. */}
       {item.count != null && (
         <span className="k-nav-n" style={{
           fontWeight: item.alert ? 700 : 600, display: 'grid', placeItems: 'center',
@@ -147,19 +145,18 @@ function NavRow({ item, active, onSelect }: { item: NavItem; active: boolean; on
   );
 }
 
-/* ============ 資源メーター ============
- * ローカル探索と GGS 対局は別スレッドプールで動くので、
- * 何が走っているかが常に見えないと切り分けられない。
- */
+/* ============ Resource meters ============
+ * Local search and GGS games run on separate thread pools; you cannot
+ * triage without seeing what is running. */
 
 export function Meter({ icon, label, value, unit, ratio, note }: {
   icon: IconName; label: string; value: React.ReactNode; unit?: string; ratio: number; note?: string;
 }) {
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: 'var(--sp-1)' }}>
-      {/* 48px の列に残すのは絵と 4px の溝だけ。文字は .k-meter-text が
-          1040px で落とす。**絵はその外に出す** — 中に入れると一緒に消えて、
-          何の溝なのか分からない棒が 2 本並ぶ */}
+      {/* The rail keeps only the icon and the 4px bar; text drops at
+          1040px. The icon sits outside that wrapper or it vanishes
+          with the text, leaving two anonymous bars. */}
       <div className="k-meter-head" style={{ display: 'flex', alignItems: 'center', gap: 'var(--sp-0)', fontSize: 'var(--fs-6)', color: 'var(--sub)' }}>
         <Icon name={icon} size={13} />
         <span className="k-meter-text">{label}</span>
@@ -167,15 +164,15 @@ export function Meter({ icon, label, value, unit, ratio, note }: {
           <b style={{ fontWeight: 600 }}>{value}</b>{unit && <span style={{ color: 'var(--sub)' }}>{unit}</span>}
         </span>
       </div>
-      {/* 溝は 48px の列では落とす (.k-meter-bar)。4px の棒が 2 本並んでも
-          読めるのは「多いか少ないか」だけで、数字のほうが要る */}
+      {/* The bar drops in the rail (.k-meter-bar); at 4px it only says
+          more-or-less, and the number matters more. */}
       <div className="k-meter-bar" style={{ height: 4, borderRadius: 'var(--r-0)', background: 'var(--track)', overflow: 'hidden' }}>
         <span style={{
           display: 'block', width: Math.min(100, Math.round(ratio * 100)) + '%', height: '100%',
           background: ratio > 0.75 ? 'var(--gold)' : 'var(--accent)',
         }} />
       </div>
-      {/* 畳んだ列ではこちらだけが出る。絵の下に数字 1 つ */}
+      {/* Rail-only view: one number under the icon. */}
       <div className="k-meter-mini" style={{
         fontSize: 'var(--fs-7)', color: 'var(--text)', textAlign: 'center',
         fontVariantNumeric: 'tabular-nums',
@@ -185,11 +182,11 @@ export function Meter({ icon, label, value, unit, ratio, note }: {
   );
 }
 
-/* 走っている仕事。譲り中（GGS 対局を優先して学習を止めている）も出す */
+/* Running jobs, including "yielding" (learning paused for a GGS game). */
 export function JobList({ jobs }: { jobs: { label: string; threads?: number; yielded?: boolean }[] }) {
-  // 中身は文字だけなので、48px の列では丸ごと落とす (.k-nav-jobs)
+  // Text-only content; dropped entirely in the rail (.k-nav-jobs).
   if (!jobs.length) return <div className="k-nav-jobs" style={{ fontSize: 'var(--fs-7)', color: 'var(--sub)' }}>待機中</div>;
-  // display は .k-nav-jobs が持つ（1040px で消す）。インラインに書くと届かない
+  // display lives in .k-nav-jobs (hidden at 1040px).
   return (
     <div className="k-nav-jobs" style={{ flexDirection: 'column', gap: 3, fontSize: 'var(--fs-7)', color: 'var(--text)' }}>
       {jobs.map((j, i) => (
@@ -201,16 +198,16 @@ export function JobList({ jobs }: { jobs: { label: string; threads?: number; yie
   );
 }
 
-/* ============ レート ============ */
+/* ============ Ratings ============ */
 
 export type Rate = { value: number; dev: number; rank?: number; w: number; l: number; d: number; provisional?: boolean };
 
-/* 偏差 ±n は必ず添える。GGS のレートは偏差が大きいと数字が意味を持たない */
+/* Always show the ±n deviation; a GGS rating means nothing without it. */
 export function RateRow({ label, rate }: { label: string; rate: Rate }) {
   return (
     <div style={{ display: 'flex', alignItems: 'baseline', gap: 'var(--sp-3)', fontVariantNumeric: 'tabular-nums' }}>
-      {/* 対局形式の名前は設定の見出しより長い (「同期・ランダム20手」)。
-          --w-label のままだと 2 行に折り返して行の高さが揃わなくなる */}
+      {/* Format names outgrow --w-label and would wrap, breaking row
+          heights. */}
       <span style={{
         width: 'var(--w-gtype)', flex: 'none', whiteSpace: 'nowrap',
         fontSize: 'var(--fs-6)', color: 'var(--sub)',
@@ -228,18 +225,17 @@ export function RateRow({ label, rate }: { label: string; rate: Rate }) {
   );
 }
 
-/* 対局者行と石の点は data.tsx が持つ（PlayerRow / StoneDot）。
- * 同名の部品を 2 ファイルに置くと import 元を間違えるし、
- * 色の型が 1|2 と 'b'|'w' で割れていた。画面の色は 'b' | 'w' に統一。 */
+/* PlayerRow / StoneDot live in data.tsx. Duplicating them here caused
+ * wrong imports and a 1|2 vs 'b'|'w' color-type split; UI colors are
+ * 'b' | 'w'. */
 export { PlayerRow, StoneDot, toStoneColor, type StoneColor } from './data';
 
-/* ============ 手合い一覧 ============
- * 同期対局は 2 局で 1 組。組を 1 行として扱う。
- */
+/* ============ Match list ============
+ * Synchro games come in pairs; a pair is one row. */
 
 export type Match = {
   id: string; mine: boolean; live: boolean;
-  /** 自分の対局なら相手名。観戦なら black / white を使う */
+  /** Opponent name for own games; black/white for observed ones. */
   opponent?: string;
   black: string; white: string;
   kind: string;      // 同期・ランダム16手 / 通常
@@ -247,9 +243,9 @@ export type Match = {
   ply: number;
   myTurn?: boolean;
   result?: string;   // 終局時 +8 等
-  /** 終わり方。'finished' / 'adjourned' (中断) / 'aborted' (中止)。 */
+  /** How it ended: 'finished' / 'adjourned' / 'aborted'. */
   ended?: string;
-  /** 中断のとき、抜けた側の名前。 */
+  /** Who left, for adjourned games. */
   leftBy?: string;
 };
 
@@ -260,18 +256,18 @@ export function MatchRow({ m, active, onSelect, onClose }: {
   m: Match; active?: boolean; onSelect?: () => void; onClose?: () => void;
 }) {
   const closable = !m.live && !!onClose;
-  // 行の本体と閉じるボタンは兄弟にする。button の入れ子は HTML として無効で、
-  // IconButton も使えなくなる（role / tabIndex / onKeyDown を手で書き直す羽目になる）。
-  // hover は外側の .k-row が持つ。重なっていないので stopPropagation も要らない。
+  // Row body and close button are siblings: nested buttons are invalid
+  // HTML and would force reimplementing IconButton's a11y. Hover lives
+  // on the outer .k-row; no overlap, so no stopPropagation.
   return (
     <div className={'k-row' + (active ? ' k-on' : '')} style={{
       position: 'relative', borderBottom: '1px solid var(--border-weak)',
       ...picked(!!active),
     }}>
-      {/* 閉じるボタンは右端から 36px を占めるので、行の本体に余白を持たせる。
-          持たせないと長い名前がボタンの下に潜る */}
-      {/* 一覧の行なので `k-row`。付け忘れると、選ばれている行の色は出るのに
-          触れても何も変わらない (押せる場所だと分からない) */}
+      {/* Reserve 36px for the close button or long names slide under
+          it. */}
+      {/* k-row makes it read as clickable; without it the selection
+          color shows but hover gives nothing. */}
       <button type="button" onClick={onSelect} className="k-row"
               aria-current={active || undefined} style={{
         width: '100%', border: 0, background: 'transparent', textAlign: 'left',
@@ -280,8 +276,8 @@ export function MatchRow({ m, active, onSelect, onClose }: {
       }}>
         <span style={{ display: 'flex', alignItems: 'center', gap: 'var(--sp-0)' }}>
           <Tag tone={m.mine ? 'accent' : 'sub'}>{m.mine ? '自分' : '観戦'}</Tag>
-          {/* **終わり方は 3 通り。** 中断を「終局」と出すと、石差が付かない
-              のに勝敗が決したように見える */}
+          {/* Three endings; labeling an adjournment "finished" implies
+              a decided result with no margin. */}
           <Tag tone={m.live ? 'ok' : m.ended === 'adjourned' ? 'bad' : 'sub'}>
             {m.live ? '対局中'
               : m.ended === 'adjourned' ? '中断'
@@ -318,16 +314,15 @@ export function Tag({ tone = 'sub', children }: { tone?: 'sub' | 'accent' | 'ok'
   }}>{children}</span>;
 }
 
-/* ============ 条件式の木 ============
- * GGS の /os 条件式は入れ子の論理式で、構造がそのまま意味になっている。
- * 文字で打たせず木のまま組ませる。読むだけの場所では FormulaView。
- */
+/* ============ Formula tree ============
+ * GGS /os formulas are nested logic where structure is meaning; build
+ * them as a tree, not as text. Read-only places use FormulaView. */
 
 export type Cond = SharedCond;
 export { isGroup };
 
-/* 読むだけの木。束（すべて満たす / 次のどれか）は 2px の縦罫と字下げで示す。
- * 一番外側だけ --accent、内側は --border。 */
+/* Read-only tree. Groups (all-of / any-of) are shown by a 2px vertical
+ * rule plus indent; --accent outermost, --border inside. */
 export function FormulaView({ node, top }: { node: Cond; top?: boolean }) {
   if (node.kind === 'atom') return <CondChip c={node} />;
   return (
@@ -357,7 +352,8 @@ function CondChip({ c }: { c: Cond }) {
   );
 }
 
-/* 何がサーバーへ行くのかは隠さない。逃げ道として生の式も書けるようにする */
+/* Never hide what goes to the server; raw formula input stays as the
+ * escape hatch. */
 function FormulaWire({ text }: { text: string }) {
   return (
     <div style={{
@@ -370,18 +366,19 @@ function FormulaWire({ text }: { text: string }) {
   );
 }
 
-/* 組む側。変数の型で 3 枠目の中身が変わる（真偽なら「である／ではない」だけ、
- * 色なら 黒 / 白 / おまかせ、数値なら 比較 6 つ ＋ 値 ＋ 単位）。
- * 木を持ったまま編集し、保存するときだけ condToSrc で文字列にする。
+/* The builder. The third slot depends on the variable's type: boolean
+ * (is / is-not), color (black / white / either), numeric (six
+ * comparators + value + unit). Edits keep the tree; condToSrc
+ * serializes only on save.
  *
- * value は null を取る — 条件を付けていない状態がある。そのときは「指定なし」と
- * 「条件を付ける」をこの部品が出す（親で分岐させない）。 */
+ * value can be null — the no-condition state. This component renders
+ * the "unset" and "add condition" UI itself (no branching in parents). */
 export function FormulaEditor({ value, onChange, onSave, onClear, onRaw }: {
   value: Cond | null;
   onChange: (c: Cond) => void;
   onSave?: (src: string) => void;
   onClear?: () => void;
-  /** 逃げ道。GGS の式を直接書く（木では表せない式が書ける） */
+  /** Escape hatch: raw GGS formula (expressible beyond the tree). */
   onRaw?: (src: string) => void;
 }) {
   if (!value) {
@@ -416,8 +413,8 @@ export function FormulaEditor({ value, onChange, onSave, onClear, onRaw }: {
 }
 
 const newAtom = (): Cond => ({ kind: 'atom', name: 'rated', op: '=', val: '', neg: false });
-/* 束は必ず条件 1 つを入れた状態で作る — 中身ゼロの空の枠を
- * 置いても、押した直後に次の操作が見えない。 */
+/* New groups start with one condition inside; an empty frame gives no
+ * next action. */
 const newGroup = (op: 'all' | 'any' = 'all'): Cond => ({ kind: op, kids: [newAtom()] });
 
 function CondNode({ node, top, onChange, onRemove }: {
@@ -476,7 +473,8 @@ function AtomRow({ c, onChange, onRemove }: {
                 const nv = varOf(name);
                 onChange({
                   ...c, name,
-                  // 型が変われば比較と値も作り直す（数値の既定値は変数が持つ）
+                  // A type change rebuilds comparator and value (the
+                  // variable carries the numeric default).
                   op: nv?.type === 'num' ? '≥' : '=',
                   val: nv?.type === 'num' ? String(nv.def ?? 0) : nv?.type === 'color' ? '?' : '',
                 });
@@ -487,7 +485,8 @@ function AtomRow({ c, onChange, onRemove }: {
                 onChange={s => onChange({ ...c, neg: s === '1' })} />
       )}
       {type === 'color' && <>
-        {/* 真偽と同じ語に揃える — 「が」「でない」だけでは単体で読めない */}
+        {/* Same wording as the boolean case; the bare particles don't
+            read on their own. */}
         <Select value={c.op} width={88} size="ctrl"
                 options={[['=', 'である'], ['≠', 'ではない']]}
                 onChange={op => onChange({ ...c, op: op as FormulaOp })} />
@@ -511,11 +510,12 @@ function AtomRow({ c, onChange, onRemove }: {
   );
 }
 
-/* ============ チャット ============ */
+/* ============ Chat ============ */
 
 export type Msg = { from: string; mine?: boolean; at: string; body: string; ja?: string };
 
-/* 英語の発言には和訳を添える（原文の下に 1px 罫で区切って小さく） */
+/* English messages carry a Japanese translation (small, under a 1px
+ * rule). */
 export function Bubble({ m, showName }: { m: Msg; showName?: boolean }) {
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: 3, alignItems: m.mine ? 'flex-end' : 'flex-start' }}>
@@ -531,7 +531,7 @@ export function Bubble({ m, showName }: { m: Msg; showName?: boolean }) {
         maxWidth: 320, padding: '6px 10px', borderRadius: 'var(--r-bubble)', fontSize: 'var(--fs-5)', lineHeight: 1.5,
         background: m.mine ? 'var(--accent-dim)' : 'var(--panel)', color: m.mine ? 'var(--on-accent)' : 'var(--text)',
       }}>
-        {/* 引用するので選べる (k-sel)。和訳も同じ */}
+        {/* Selectable (k-sel) for quoting; the translation too. */}
         <span className="k-sel">{m.body}</span>
         {m.ja && <div className="k-sel" style={{
           marginTop: 4, paddingTop: 4, borderTop: '1px solid var(--border)',
@@ -549,14 +549,15 @@ export function DayMark({ children }: { children: React.ReactNode }) {
   }}>{children}</div>;
 }
 
-/* ============ 通信ログ ============
- * 送信行だけ › と --accent。受信は字下げを揃えて等幅の桁を崩さない。
- */
+/* ============ Protocol log ============
+ * Sent lines get › and --accent; received lines align the indent to
+ * keep monospace columns. */
 
 export type LogLine = { dir: 'out' | 'in' | 'app'; text: string };
 
 export function ConsoleLog({ lines }: { lines: LogLine[] }) {
-  // 末尾付近を見ているときだけ追従する (遡って読んでいる最中は動かさない)
+  // Follow the tail only while viewing near it; never yank while the
+  // user scrolls back.
   const box = React.useRef<HTMLDivElement>(null);
   const stick = React.useRef(true);
   React.useEffect(() => {
@@ -579,7 +580,7 @@ export function ConsoleLog({ lines }: { lines: LogLine[] }) {
           color: l.dir === 'out' ? 'var(--accent)' : l.dir === 'app' ? 'var(--sub)' : 'var(--text)',
         }}>
           <span style={{ flex: 'none', width: 8 }}>{l.dir === 'out' ? '›' : ''}</span>
-          {/* 不具合を報告するときに貼るので選べる (k-sel) */}
+          {/* Selectable (k-sel) for pasting into bug reports. */}
           <span className="k-sel">{l.text}</span>
         </div>
       ))}
@@ -587,11 +588,10 @@ export function ConsoleLog({ lines }: { lines: LogLine[] }) {
   );
 }
 
-/* ============ トースト ============
- * 出るのは「失敗」と「押したのに進まない理由」だけ。
- * 作業が進んでいることの報せ・押した本人が見れば分かること・
- * エンジンの内部符丁（stopped 等）は入れない。
- */
+/* ============ Toasts ============
+ * Only failures and why-nothing-happened messages. No progress
+ * notices, no restating what the user can see, no engine-internal
+ * codes ("stopped" etc.). */
 
 export type Toast = { id: string; tone: 'bad' | 'gold'; text: string };
 
@@ -603,7 +603,8 @@ export function Toasts({ items, onDismiss }: { items: Toast[]; onDismiss?: (id: 
     }}>
       {items.map(t => (
         <button key={t.id} type="button" onClick={() => onDismiss?.(t.id)} className="k-press" style={{
-          // 浮くものなので角丸は --r-4 と影 (規則 13)。裸の px を書かない (規則 1)
+          // Floating element: --r-4 radius and shadow (rule 13); no
+          // bare px (rule 1).
           maxWidth: 340, padding: 'var(--sp-3)', borderRadius: 'var(--r-4)', textAlign: 'left',
           background: 'var(--card)', border: '1px solid var(--border)', boxShadow: 'var(--sh-2)',
           fontSize: 'var(--fs-5)', lineHeight: 1.6, color: 'var(--text)',
@@ -617,9 +618,8 @@ export function Toasts({ items, onDismiss }: { items: Toast[]; onDismiss?: (id: 
   );
 }
 
-/* ============ ステータスバー右端 ============
- * GGS の対局中だけ チャット / コンソール を出す。
- */
+/* ============ Status-bar right edge ============
+ * Chat / console appear only during a GGS game. */
 
 export function StatusChip({ label, unread, active, onClick }: {
   label: string; unread?: number; active?: boolean; onClick?: () => void;
@@ -637,20 +637,15 @@ export function StatusChip({ label, unread, active, onClick }: {
   );
 }
 
-/* ============ GGS の状態の帯 ============
- *
- * 設計の GGS 画面は上端に「自分の名前・両プールのレート・いまの強さ・
- * 待機モード」を並べている。**GGS で打つときに知りたいのはこの 4 つ**で、
- * どれも別の画面へ行かないと分からなかった (レートはプレイヤー、強さと
- * 待機モードは GGS の設定)。
- *
- * ツールバーの `aux` に置くので 940px 以下では落ちる — 落ちて困る操作は
- * 無く、全部ただの表示 (規則 8)。
- */
+/* ============ GGS status band ============
+ * The design's GGS screen tops with name, both pool ratings, current
+ * strength and waiting mode — the four things you want while playing,
+ * previously scattered across screens. Lives in the toolbar's aux, so
+ * it drops below 940px; it is display-only, nothing lost (rule 8). */
 export function GgsStatus({ snap, showStrength = true }: {
   snap: GgsSnapshot;
-  /** 強さを出すか。**GGS の設定の画面では出さない** — すぐ下に同じものを
-   *  変える操作があり、どちらが本物か分からなくなる (規則 58)。 */
+  /** Whether to show strength. Hidden on the GGS settings screen —
+   *  the control that changes it sits right below (rule 58). */
   showStrength?: boolean;
 }) {
   const e = snap.engine;
@@ -662,7 +657,7 @@ export function GgsStatus({ snap, showStrength = true }: {
           <b style={{ color: 'var(--text)', fontWeight: 600, fontVariantNumeric: 'tabular-nums' }}>
             {r.rating.toFixed(0)}
           </b>
-          {/* レートには必ず偏差を添える (規則 29) */}
+          {/* Ratings always carry the deviation (rule 29). */}
           <span style={{ opacity: .7, marginLeft: 3 }}>±{Math.round(r.dev)}</span>
         </span>
       ))}
@@ -678,5 +673,5 @@ export function GgsStatus({ snap, showStrength = true }: {
   );
 }
 
-/** レートプールの短い名前。GGS の 8 / 8r の 2 つだけ。 */
+/** Short pool names; GGS has only 8 and 8r. */
 const POOL_LABEL: Record<string, string> = { '8': '通常', '8r': 'ランダム' };
