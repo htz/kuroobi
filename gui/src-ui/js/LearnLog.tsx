@@ -23,7 +23,7 @@ const lossOf = (c: LearnChange) => c.best - c.after;
 const logCols = (): Col[] => [
   { head: t('learn.col.game'), clip: true },
   { head: t('learn.col.discs'), w: 52, right: true, num: true },
-  { head: t('learn.col.positions'), w: 36, right: true, num: true },
+  { head: t('learn.col.positions'), w: 64, right: true, num: true },
 ];
 
 /** The worst move; absent if everything was best. */

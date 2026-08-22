@@ -65,6 +65,11 @@ function Field({ label, children, stretch }: { label: string; children: React.Re
        absorb the surplus — two fields once rendered 3x tall. */
     <label style={{ display: 'flex', flexDirection: 'column', gap: 'var(--sp-2)',
                     alignSelf: 'start',
+                    /* `alignSelf: start` sizes the field to its content, so
+                       without this cap a long option label widens the whole
+                       column — and `overflow-y: auto` turns that into a
+                       horizontal scrollbar. */
+                    maxWidth: '100%', minWidth: 0,
                     alignItems: stretch ? 'stretch' : 'flex-start' }}>
       <span style={{ fontSize: 'var(--fs-6)', color: 'var(--sub)' }}>{label}</span>
       {children}
@@ -570,7 +575,12 @@ function Row({ title, sub, tag, tagTone, alert, actions, onClick, title2 }: {
           <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{title}</span>
           {tag && <Tag tone={tagTone ?? 'accent'}>{tag}</Tag>}
         </span>
-        {sub && <span style={{ fontSize: 'var(--fs-6)', color: 'var(--sub)' }}>{sub}</span>}
+        {/* The row height is fixed, so the detail line must clip rather
+            than wrap — English details run longer than the Japanese
+            ones this row was measured against. */}
+        {sub && <span style={{ fontSize: 'var(--fs-6)', color: 'var(--sub)',
+                               overflow: 'hidden', textOverflow: 'ellipsis',
+                               whiteSpace: 'nowrap' }}>{sub}</span>}
       </span>
       {actions}
     </Tag_>
@@ -1601,8 +1611,10 @@ function GgsUsers({ snap, onNav, onKifu }: {
       ? [{ head: t('ggs.pool.random'), w: 104, right: true, num: true } as Col] : []),
     // Accepting = "would a request land"; playing players may still
     // accept (open > games in progress), so it is a separate column.
-    ...(mode === 'who' ? [{ head: t('ggs.users.col_open'), w: 56, right: true } as Col] : []),
-    { head: t('ggs.users.col_status'), w: 52, right: true },
+    // Widths hold the longest translation: cells never wrap (the row
+    // height is fixed), so a short column truncates instead.
+    ...(mode === 'who' ? [{ head: t('ggs.users.col_open'), w: 96, right: true } as Col] : []),
+    { head: t('ggs.users.col_status'), w: 64, right: true },
   ];
   /* The status column derives from snap.ongoing, which arrives only
      at login and every 60s — freshly connected, everyone shows blank.

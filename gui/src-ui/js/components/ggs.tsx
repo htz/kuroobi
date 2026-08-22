@@ -304,7 +304,10 @@ export function MatchRow({ m, active, onSelect, onClose }: {
           </span>
           {m.myTurn && <Dot />}
         </span>
-        <span style={{ fontSize: 'var(--fs-6)', color: 'var(--sub)' }}>
+        {/* Clip, never wrap: the row is a fixed two lines, and English
+            details run longer than the Japanese ones it was sized for. */}
+        <span style={{ fontSize: 'var(--fs-6)', color: 'var(--sub)',
+                       overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
           {m.kind}{m.boards > 1 && ' · ' + t('ggs.lobby.game_count', { n: m.boards })}
           {' · '}{t('ggs.match.ply', { n: m.ply })}
           {m.ended === 'adjourned'

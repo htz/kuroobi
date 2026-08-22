@@ -161,12 +161,17 @@ export function Select({ value, options, onChange, size = 'field', width, disabl
   return (
     <span className={cx('k-press', 'k-input', className)} style={{
       position: 'relative',            /* never drop this */
-      height: H[size], minWidth: width, padding: PAD[size], borderRadius: R[size],
+      /* Never let the chosen label set the column width: the label
+         ellipsises, but an inline-flex box still reports its content
+         width, and a long translation widened the whole column. */
+      height: H[size], minWidth: width, maxWidth: '100%',
+      padding: PAD[size], borderRadius: R[size],
       background: 'var(--bg)', border: '1px solid var(--border)',
       display: 'inline-flex', alignItems: 'center', gap: 'var(--sp-2)', fontSize: FS[size],
       opacity: disabled ? 0.4 : 1,
     }}>
-      <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{label}</span>
+      <span style={{ minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis',
+                     whiteSpace: 'nowrap' }}>{label}</span>
       <span style={{ marginLeft: 'auto', color: 'var(--sub)', flex: 'none' }}>▾</span>
       <select value={value} disabled={disabled} onChange={e => onChange?.(e.target.value)}
         style={{ position: 'absolute', inset: 0, opacity: 0, width: '100%', height: '100%' }}>

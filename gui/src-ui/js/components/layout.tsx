@@ -504,6 +504,10 @@ function cell(c: Col, head?: boolean): React.CSSProperties {
     ...(c.w === undefined ? { flex: 1, minWidth: 0 } : { width: c.w, flex: 'none' }),
     display: 'flex', alignItems: 'center', gap: 'var(--sp-0)',
     justifyContent: c.right ? 'flex-end' : 'flex-start',
+    // Rows are a fixed --h-row tall, so a wrap does not grow the row —
+    // it spills over the neighbours. A column too narrow for its
+    // longest translation must be widened, never wrapped.
+    whiteSpace: 'nowrap',
     ...(!head && c.num ? { fontVariantNumeric: 'tabular-nums' } : null),
   };
 }
