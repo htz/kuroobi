@@ -655,9 +655,10 @@ mod tests {
 
     #[test]
     fn kifu_from_a_drawn_opening() {
-        // GGS の抽選オープニングは初期局面から始まらない。着手列だけでは
-        // 別の対局に再生されてしまうので、開始局面を添えて復元する。
-        // 抽選のかわりに「常に最初の合法手」で 5 手進めた局面を開始局面にする
+        // GGS drawn openings do not start from the standard position, so a
+        // bare move list replays into a different game; the start position
+        // must accompany it. Stand in for the draw by advancing 5 plies with
+        // "always the first legal move".
         let mut drawn = Reversi::new();
         for _ in 0..5 {
             let p = drawn.board.movable_iter().next().unwrap();
@@ -666,7 +667,7 @@ mod tests {
         let start = drawn.board.to_string();
         let stones_at_start = (drawn.board.black | drawn.board.white).count_ones();
 
-        // その局面から 3 手進める
+        // Play 3 more plies from there.
         let mut played = String::new();
         for _ in 0..3 {
             let p = drawn.board.movable_iter().next().unwrap();
@@ -679,7 +680,7 @@ mod tests {
         assert_eq!(replayed.board.white, drawn.board.white);
         assert_eq!(replayed.board.player(), drawn.board.player());
 
-        // 開始局面を捨てて着手列だけで再生すると、打てないか別物になる
+        // Replaying the bare move list must either fail or diverge.
         match Reversi::from_kifu(&played) {
             Err(_) => {}
             Ok(naive) => assert_ne!(naive.board.black, drawn.board.black),
@@ -689,7 +690,7 @@ mod tests {
 
     #[test]
     fn kifu_with_start_defaults_to_standard_opening() {
-        // 標準の初期局面を渡したときは from_kifu と一致する
+        // Passing the standard start position must match from_kifu.
         let start = Board::new().to_string();
         let a = Reversi::from_kifu_with_start(&start, "f5d6c3").unwrap();
         let b = Reversi::from_kifu("f5d6c3").unwrap();

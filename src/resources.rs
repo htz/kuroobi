@@ -1,79 +1,71 @@
-//! エンジンが使うファイル (重み・定石) の置き場所を決める。
+//! Locates the files the engine needs (weights, opening book).
 //!
-//! 探し方は 3 段。設定ファイル → 環境変数 → 既定の探索。設定ファイルは
-//! GUI が書き、CLI からも同じものを読む。どれも見つからなければ、
-//! リポジトリ相対の `weights/` に落ちる (開発時はこれで足りる)。
+//! Lookup is three-tiered: config file, environment variable, default
+//! search. The GUI writes the config file and the CLI reads the same one.
+//! When nothing is found we fall back to the repo-relative `weights/`
+//! (sufficient during development).
 
 use std::path::{Path, PathBuf};
 
-/// 使うファイルの場所と、マシンごとの実行設定。空なら「既定に任せる」。
+/// File locations plus per-machine runtime settings. Empty means
+/// "use the defaults".
 ///
-/// 形式は `鍵=値` の 1 行ずつ。項目が数個しかないので、この程度のために
-/// エンジン本体へ serde を持ち込まない。
+/// The format is one `key=value` per line; with this few fields it is not
+/// worth pulling serde into the engine crate.
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct Resources {
-    /// 探す起点のディレクトリ。個別指定が無いものはここから引く。
+    /// Base directory; anything not set individually resolves from here.
     pub dir: Option<PathBuf>,
-    /// 線形評価の重み。
+    /// Linear evaluation weights.
     pub weights: Option<PathBuf>,
-    /// NNUE の重み。
+    /// NNUE weights.
     pub nnue: Option<PathBuf>,
-    /// 定石 book。
+    /// Opening book.
     pub book: Option<PathBuf>,
-    /// ローカル探索のスレッド数。未指定なら「コア数の半分」。
-    /// マシン依存の設定なので、ファイルの場所と同じこのファイルに置く。
+    /// Thread count for local search; defaults to half the cores.
+    /// Machine-specific, so it lives in this file next to the paths.
     pub threads: Option<usize>,
-    /// **較正した読切のノード毎秒を、スレッド数ごとに。** 持ち時間から
-    /// 読切の入り口を逆算するのに要る (`timectl`)。無いスレッド数は
-    /// 固定の階段に落ちる。
+    /// Calibrated endgame-solver nodes/sec, per thread count. `timectl`
+    /// needs it to derive the solve entry point from the clock; thread
+    /// counts without a value fall back to a fixed ladder.
     ///
-    /// **1 個で済ませられない。** nps はスレッド数で 4 倍動き
-    /// (実測 1T 24M / 5T 70M / 10T 103M)、しかも線形でない (1→5 が 2.9 倍、
-    /// 5→10 が 1.47 倍) ので、1 スレッドの値から掛け算では出せない。曲線
-    /// そのものが機械依存 (コア数とメモリ帯域) なので、**使うスレッド数で
-    /// 実測する**しかない。ローカル対局と GGS でスレッド数の設定が別なので、
-    /// 現実に 2 つ以上要る。
-    ///
-    /// 書式は `nps.<スレッド数>=<値>`。
+    /// One value is not enough: nps varies ~4x with threads and not
+    /// linearly, and the curve itself is machine-dependent, so each thread
+    /// count in actual use must be measured. Format: `nps.<threads>=<value>`.
     pub nps: Vec<(usize, f64)>,
-    /// 中盤置換表の大きさ (2^bits エントリ)。未指定なら既定 (22)。
-    ///
-    /// **機械のメモリ量で決まる設定**なので、重みの場所と同じここに置く。
+    /// Midgame transposition table size (2^bits entries), default 22.
+    /// Bounded by machine RAM, hence stored here with the paths.
     pub hash_mid: Option<u32>,
-    /// 終盤置換表の大きさ (2^bits エントリ)。未指定なら既定 (24)。
+    /// Endgame transposition table size (2^bits entries), default 24.
     ///
-    /// **既定を 22 から 24 へ上げた。** 対局が読む領域 (空き 26〜30、30 問、
-    /// 8 スレッド) で測ると、22 → 24 で**時間 -8.9% / ノード -5.9%**。
-    /// 26 まで上げても -10.1% で、24 の 4 倍のメモリ (403 MB → 1.6 GB) に
-    /// 対して +1.2% しかない。
-    ///
-    /// `solve_obf` の既定が 26 なのは 10 億ノード級 (FFO の最深部) の話で、
-    /// そこでは -23〜31% 出る。**対局の領域はそこまで表を溢れさせない。**
+    /// Default raised from 22: measured -8.9% time at game-relevant depths
+    /// (26-30 empties, 8 threads); 26 adds only +1.2% for 4x the memory.
+    /// `solve_obf` defaults to 26 because billion-node FFO problems do
+    /// overflow the table; game positions don't.
     pub hash_end: Option<u32>,
 }
 
-/// 置換表の大きさとして受け付ける範囲 (2^bits)。
+/// Accepted transposition table sizes (2^bits).
 ///
-/// 上は 26 で止める。中盤 26 は 1.1 GB、終盤 26 は 1.6 GB で、2 つ合わせて
-/// 2.7 GB。**エンジンを複数持つとその倍になる**ので、ここを青天井にすると
-/// 機械を止めてしまう。
+/// Capped at 26: midgame 26 is 1.1 GB and endgame 26 is 1.6 GB, and the
+/// GUI can hold several engines at once, so an uncapped setting could
+/// exhaust the machine.
 pub const HASH_BITS_MIN: u32 = 16;
 pub const HASH_BITS_MAX: u32 = 26;
 
-/// 中盤置換表が使うバイト数。1 バケット 64 バイトで、バケット数は 2^(bits-2)。
+/// Bytes used by the midgame table: 64-byte buckets, 2^(bits-2) of them.
 pub fn midgame_bytes(bits: u32) -> u64 {
     1u64 << (bits.clamp(HASH_BITS_MIN, HASH_BITS_MAX) + 4)
 }
 
-/// 終盤置換表が使うバイト数。1 エントリ 24 バイト。
+/// Bytes used by the endgame table: 24 bytes per entry.
 pub fn endgame_bytes(bits: u32) -> u64 {
     (1u64 << bits.clamp(HASH_BITS_MIN, HASH_BITS_MAX)) * 24
 }
 
-/// 既定の置き場所を探す。
-///
-/// `KUROOBI_WEIGHTS_DIR` があればそれ、無ければカレントから上へ `weights/`
-/// を辿る。`nnue-h16.bin` の有無で判定する (重みが揃っている印)。
+/// Default location: `KUROOBI_WEIGHTS_DIR` if set, else walk up from the
+/// current directory looking for a `weights/` that contains
+/// `nnue-h16.bin` (the marker that the weights are complete).
 pub fn default_dir() -> PathBuf {
     if let Ok(d) = std::env::var("KUROOBI_WEIGHTS_DIR") {
         return PathBuf::from(d);
@@ -88,7 +80,7 @@ pub fn default_dir() -> PathBuf {
 }
 
 impl Resources {
-    /// 設定ファイルを読む。無ければ既定 (すべて未指定)。
+    /// Load the config file; missing file means all-default.
     pub fn load(path: &Path) -> Resources {
         let Ok(text) = std::fs::read_to_string(path) else {
             return Resources::default();
@@ -155,23 +147,19 @@ impl Resources {
         std::fs::write(path, out).map_err(|e| e.to_string())
     }
 
-    /// **そのスレッド数で使ってよい nps。**
+    /// The nps to assume for this thread count.
     ///
-    /// 測ってあればその値。無ければ**別のスレッド数から低めに見積もる**。
+    /// Calibrated value if we have one; otherwise a conservative estimate
+    /// scaled linearly from another thread count. Linear scaling always
+    /// under-estimates (fewer threads are more efficient per thread), and
+    /// a low nps only makes the solve entry shallower — the safe side.
+    /// When several calibrations exist, take the lowest estimate.
     ///
-    /// 以前は測っていなければ `None` を返し、「代用するより固定の階段に
-    /// 落ちるほうが安全」と書いていた。**逆だった。** 階段は残り 60 秒を
-    /// 超えると設定値をそのまま通す — つまり「この機械なら読み切れる」と
-    /// 無条件に信じる。いちばん危ない側へ倒れていた。
-    ///
-    /// 実際に踏みかけた形はこう。8 スレッドと 5 スレッドを較正してあっても、
-    /// **同期対局は 1 ワーカー 4 スレッド**になるので一致する値が無い。
-    /// レート戦の主流は同期対局なので、いちばん外せない場面で階段に落ちる。
-    ///
-    /// 代用は「スレッド数に比例」で足りる。スレッドを減らすほど 1 本あたりの
-    /// 効率は上がるので、比例で割った値は**必ず実測より低い**。低い nps は
-    /// 「読切は遅い」という判断になり、入り口が浅くなるだけで済む。複数の
-    /// 較正値があるときは、いちばん低く出るものを採る。
+    /// Returning `None` here used to drop the caller to a fixed ladder;
+    /// that was the dangerous side, because the ladder passes the
+    /// configured depth through unchecked once the clock is comfortable.
+    /// Synchro games run 1 worker x 4 threads, which is exactly the count
+    /// that tends to be uncalibrated.
     pub fn nps_for(&self, threads: usize) -> Option<f64> {
         if let Some(n) = self
             .nps
@@ -188,7 +176,7 @@ impl Resources {
             .min_by(|a, b| a.total_cmp(b))
     }
 
-    /// 較正の結果を控える (同じスレッド数の値は差し替える)。
+    /// Record a calibration (replacing any value for the same count).
     pub fn set_nps(&mut self, threads: usize, nps: f64) {
         match self.nps.iter_mut().find(|(t, _)| *t == threads) {
             Some(e) => e.1 = nps,
@@ -199,21 +187,21 @@ impl Resources {
         }
     }
 
-    /// 中盤置換表の大きさ (2^bits)。範囲外の設定は既定へ倒す。
+    /// Midgame table size (2^bits); out-of-range settings fall back.
     pub fn hash_mid_bits(&self) -> u32 {
         self.hash_mid
             .filter(|b| (HASH_BITS_MIN..=HASH_BITS_MAX).contains(b))
             .unwrap_or(22)
     }
 
-    /// 終盤置換表の大きさ (2^bits)。範囲外の設定は既定へ倒す。
+    /// Endgame table size (2^bits); out-of-range settings fall back.
     pub fn hash_end_bits(&self) -> u32 {
         self.hash_end
             .filter(|b| (HASH_BITS_MIN..=HASH_BITS_MAX).contains(b))
             .unwrap_or(24)
     }
 
-    /// 起点のディレクトリ。未指定なら既定の探索。
+    /// Base directory, defaulting to the standard search.
     pub fn dir(&self) -> PathBuf {
         self.dir.clone().unwrap_or_else(default_dir)
     }
@@ -236,7 +224,7 @@ impl Resources {
             .unwrap_or_else(|| self.dir().join("book.txt"))
     }
 
-    /// 画面に出すための、実在するかどうかの一覧。
+    /// Existence summary for display.
     pub fn status(&self) -> Vec<(&'static str, PathBuf, bool)> {
         self.detailed()
             .into_iter()
@@ -244,11 +232,11 @@ impl Resources {
             .collect()
     }
 
-    /// 画面に出すための一覧 (名前・パス・実在・大きさ・中身の見分け)。
+    /// Display list: name, path, existence, size, and format tag.
     ///
-    /// **「ある」だけでは足りない。** 重みは差し替えて使うものなので、
-    /// いま読んでいるのがどれなのかが分からないと、指し手が変わった理由を
-    /// 追えない。大きさと形式まで出す。
+    /// Existence alone is not enough — weights get swapped around, and
+    /// without size/format you cannot tell which one is actually loaded
+    /// when the engine's play changes.
     pub fn detailed(&self) -> Vec<(&'static str, PathBuf, bool, u64, String)> {
         let items = [
             ("線形評価の重み", self.weights_path()),
@@ -260,8 +248,8 @@ impl Resources {
             .map(|(name, p)| {
                 let size = std::fs::metadata(&p).map(|m| m.len()).unwrap_or(0);
                 let ok = p.exists();
-                // 中身の見分けは頭だけ読んで済ませる。全部読むと、起動のたびに
-                // 数十 MB を無駄に舐めることになる
+                // Identify by header only; reading whole files would scan
+                // tens of MB on every startup.
                 let kind = if ok && name == "NNUE の重み" {
                     nnue_header(&p).unwrap_or_default()
                 } else {
@@ -273,8 +261,8 @@ impl Resources {
     }
 }
 
-/// NNUE ファイルの頭 16 バイトから「形式・隠れ層の幅」を読む。
-/// 形式が違うファイルを選んでも、読み込みで落ちるまで気付けないのを防ぐ。
+/// Read format and hidden width from the first bytes of an NNUE file, so
+/// picking a wrong-format file is visible before loading fails.
 fn nnue_header(p: &std::path::Path) -> Option<String> {
     use std::io::Read;
     let mut f = std::fs::File::open(p).ok()?;
@@ -292,26 +280,25 @@ fn nnue_header(p: &std::path::Path) -> Option<String> {
 mod tests {
     use super::*;
 
-    /// **測っていないスレッド数でも低めに見積もる。**
-    ///
-    /// 同期対局は 1 ワーカー 4 スレッドになるので、8 と 5 を較正して
-    /// あっても一致しない。ここで諦めると固定の階段に落ち、残り 60 秒を
-    /// 超える場面では設定値がそのまま通ってしまう。
+    /// Uncalibrated thread counts get a conservative estimate: synchro
+    /// games run 1 worker x 4 threads, which never matches the 5/8 that
+    /// tend to be calibrated, and giving up here would fall back to the
+    /// unchecked fixed ladder.
     #[test]
     fn borrows_a_conservative_nps_for_uncalibrated_threads() {
         let r = Resources {
             nps: vec![(5, 72_000_000.0), (8, 96_000_000.0)],
             ..Default::default()
         };
-        assert_eq!(r.nps_for(8), Some(96_000_000.0), "測ってあればその値");
-        let four = r.nps_for(4).expect("代用が出ない");
-        // 8 から割った 48M が、5 から割った 57.6M より低い。低いほうを採る
+        assert_eq!(r.nps_for(8), Some(96_000_000.0), "calibrated value wins");
+        let four = r.nps_for(4).expect("no substitute produced");
+        // 48M scaled from 8T is lower than 57.6M scaled from 5T; take it.
         assert!(
             (four - 48_000_000.0).abs() < 1.0,
-            "低いほうを採っていない: {four}"
+            "did not take the lower estimate: {four}"
         );
-        assert!(four < 72_000_000.0, "実測より高く見積もっている");
-        // 一つも測っていなければ諦める (階段へ)
+        assert!(four < 72_000_000.0, "estimate exceeds a measured value");
+        // With no calibration at all, give up (fixed ladder).
         assert_eq!(Resources::default().nps_for(4), None);
     }
 
@@ -333,7 +320,7 @@ mod tests {
             ..Default::default()
         };
         assert_eq!(r.book_path(), PathBuf::from("/other/opening.txt"));
-        // 指定のないものは起点から引く
+        // Unspecified entries resolve from the base directory.
         assert_eq!(r.weights_path(), PathBuf::from("/tmp/w/linear.bin"));
     }
 

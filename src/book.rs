@@ -1,11 +1,12 @@
-//! 定石 book。
+//! Opening book.
 //!
-//! 局面 → (最善手, 評価値) の表。**8 対称で正規化したキー**で引くので、
-//! 回転・鏡像で同じ局面は 1 エントリに畳まれる (人間の棋譜は f5 系に偏る
-//! ため、正規化しないと同型局面の大半を取りこぼす)。
+//! A position -> (best move, value) table keyed by the 8-symmetry
+//! normal form, so rotated/mirrored positions collapse into one entry
+//! (human game records skew toward f5 lines; without normalization most
+//! transpositions are missed).
 //!
-//! 値は**実戦より深い探索**で付ける前提。実戦深度で作った book には意味が
-//! ないので、生成側 (`bookgen`) は深さと読切開始を実戦設定より上げて回す。
+//! Values are assumed to come from deeper-than-game search; `bookgen`
+//! therefore runs with depth and solve entry above game settings.
 
 use std::collections::HashMap;
 use std::io::{BufRead, BufReader, Write};
@@ -13,26 +14,26 @@ use std::path::Path;
 
 use crate::{Board, Position};
 
-/// book の候補手 1 つ。
+/// One book candidate.
 #[derive(Clone, Copy, Debug)]
 pub struct Candidate {
-    /// 正規化した盤面での手。
+    /// Move in the normalized orientation.
     pub mv: Position,
-    /// 手番視点の評価値 (石差)。深い探索で付ける。
+    /// Value in discs from the mover's view, from deep search.
     pub value: f32,
-    /// この手が棋譜で選ばれた回数 (人間の採用頻度)。
+    /// How often game records chose this move.
     pub games: u32,
 }
 
-/// book の 1 エントリ。**候補手を全部持つ**ので、同一棋譜の反復を避けるため
-/// に「最善から許容幅以内の手」から選べる。
+/// One book entry. It keeps every candidate so play can pick among moves
+/// within a tolerance of best, avoiding repeated identical games.
 #[derive(Clone, Debug, Default)]
 pub struct Entry {
-    /// 評価値の高い順。空でない限り [0] が最善。
+    /// Sorted by value, descending; [0] is best when non-empty.
     pub moves: Vec<Candidate>,
-    /// 評価に使った探索深さ (0 = 棋譜頻度のみ)。
+    /// Search depth behind the values (0 = frequency only).
     pub depth: u8,
-    /// この局面が棋譜に現れた回数。
+    /// How often the position appeared in game records.
     pub games: u32,
 }
 
@@ -41,14 +42,14 @@ impl Entry {
         self.moves.first()
     }
 
-    /// 候補 `mv` を消す。取り込みの取り消しで、その手が元は無かった場合に使う。
+    /// Remove candidate `mv` (used when un-importing a move that did not exist before).
     pub fn remove_move(&mut self, mv: Position) {
         self.moves.retain(|c| c.mv != mv);
     }
 
-    /// 候補 `mv` (正規化空間の手) の値を付け替える。無ければ追加する。
-    /// 値の降順を保つので、付け替えで最善が入れ替わることがある
-    /// (実戦の帰結を書き戻す学習がこれを使う)。
+    /// Re-value candidate `mv` (normalized space), inserting if absent.
+    /// Descending order is preserved, so a re-value may change the best
+    /// move (game-outcome learning uses this).
     pub fn update_move(&mut self, mv: Position, value: f32) {
         match self.moves.iter_mut().find(|c| c.mv == mv) {
             Some(c) => c.value = value,
@@ -62,17 +63,17 @@ impl Entry {
     }
 }
 
-/// 盤面の 8 対称のうち辞書順で最小のものを正規化形とし、その変換 index を
-/// 返す。手を戻すときに逆変換で使う。
+/// Normal form = lexicographically smallest of the 8 symmetries; returns
+/// the transform index so moves can be mapped back.
 fn normalize(board: &Board) -> (u64, u64, u8) {
     let mut best = (board.player_bb(), board.opponent_bb());
     let mut best_i = 0u8;
     let mut p = board.player_bb();
     let mut o = board.opponent_bb();
-    // 8 対称: 転置・水平鏡像の組み合わせで全て作る
+    // All 8 symmetries from transpose + horizontal mirror.
     for i in 0..8u8 {
         if i > 0 {
-            // 4 回で 90 度回転一周、4 回目に鏡像へ切り替える
+            // Four rotations, then switch to the mirrored family.
             if i == 4 {
                 p = crate::bitboard::mirror_horizontal(board.player_bb());
                 o = crate::bitboard::mirror_horizontal(board.opponent_bb());
@@ -89,10 +90,10 @@ fn normalize(board: &Board) -> (u64, u64, u8) {
     (best.0, best.1, best_i)
 }
 
-/// 盤面の向きに戻した候補手 (マス, 手番視点の値, 実戦での採用回数)。
+/// Candidate mapped back to board orientation (square, mover-view value, adoption count).
 pub type BookMove = (Position, f32, u32);
 
-/// 変換 `i` をビットボード全体に適用する (`map_square` の 64 マス版)。
+/// Apply transform `i` to a whole bitboard (`map_square` for all 64 squares).
 fn transform_bb(bb: u64, i: u8) -> u64 {
     let mut b = bb;
     if i >= 4 {
@@ -108,8 +109,9 @@ fn transform_bb(bb: u64, i: u8) -> u64 {
     b
 }
 
-/// 盤面を変えない変換の一覧 (自己同型)。初期局面のように対称な盤面では
-/// 複数あり、そこでは 1 つの手が同値な手すべてを代表する。
+/// Transforms that leave the board unchanged (stabilizers). Symmetric
+/// boards (e.g. the opening) have several; there one stored move stands
+/// for every equivalent move.
 pub fn stabilizers(board: &Board) -> Vec<u8> {
     let (p, o) = (board.player_bb(), board.opponent_bb());
     (0..8u8)
@@ -117,7 +119,7 @@ pub fn stabilizers(board: &Board) -> Vec<u8> {
         .collect()
 }
 
-/// 正規化変換 `i` を 1 マスに適用する。
+/// Apply normalization transform `i` to one square.
 fn map_square(sq: u8, i: u8) -> u8 {
     let mut bit = 1u64 << sq;
     if i >= 4 {
@@ -133,9 +135,9 @@ fn map_square(sq: u8, i: u8) -> u8 {
     bit.trailing_zeros() as u8
 }
 
-/// 正規化変換 `i` の逆変換を 1 マスに適用する。
+/// Apply the inverse of transform `i` to one square.
 fn unmap_square(sq: u8, i: u8) -> u8 {
-    // 逆変換は「同じ変換を適用して元に戻る回数」を総当たりで探すのが確実
+    // Brute-force the inverse: apply until the square returns.
     for cand in 0..64u8 {
         if map_square(cand, i) == sq {
             return cand;
@@ -144,8 +146,8 @@ fn unmap_square(sq: u8, i: u8) -> u8 {
     sq
 }
 
-/// 正規化キー (player, opponent) から盤面を復元する。book のキーは常に
-/// 「手番側 = player」なので、黒番として組み立てれば手番視点が一致する。
+/// Rebuild a board from a normalized (player, opponent) key. Keys always
+/// have the mover as `player`, so building it as Black keeps the view.
 pub fn board_from_key(key: (u64, u64)) -> Board {
     let mut b = Board::new();
     b.black = key.0;
@@ -160,7 +162,7 @@ pub struct Book {
     map: HashMap<(u64, u64), Entry>,
 }
 
-/// 定石の候補手 1 つ: (マス, 手番視点の値, 棋譜での採用回数)。
+/// One candidate: (square, mover-view value, adoption count).
 pub type BookCandidate = (Position, f32, u32);
 
 impl Book {
@@ -178,17 +180,17 @@ impl Book {
         self.map.is_empty()
     }
 
-    /// 正規化キーで直接引く (生成ツール用)。
+    /// Direct lookup by normalized key (for the generator).
     pub fn get_raw(&self, key: (u64, u64)) -> Option<&Entry> {
         self.map.get(&key)
     }
 
-    /// 正規化キーで直接引く (学習の書き戻し用)。
+    /// Direct lookup by normalized key (for learning write-back).
     pub fn get_raw_mut(&mut self, key: (u64, u64)) -> Option<&mut Entry> {
         self.map.get_mut(&key)
     }
 
-    /// 正規化済みの鍵で消す (取り込みの取り消しで使う)。
+    /// Remove by normalized key (used when un-importing).
     pub fn remove_raw(&mut self, key: (u64, u64)) -> Option<Entry> {
         self.map.remove(&key)
     }
@@ -201,19 +203,20 @@ impl Book {
         self.map.iter()
     }
 
-    /// 局面を引いて最善手を返す (研究・検証用の決定的な選択)。
+    /// Look up the position and return the best move (deterministic; for study/verification).
     pub fn probe(&self, board: &Board) -> Option<(Position, f32, u8)> {
         let (cands, depth) = self.expand(board)?;
-        // 値の高い順に並んでいる
+        // Sorted by value, descending.
         cands.first().map(|(p, v, _)| (*p, *v, depth))
     }
 
-    /// 局面を引き、盤面の向きに戻した候補 (手, 値, 採用回数) と深さを返す。
+    /// Look up and return candidates mapped back to board orientation
+    /// (move, value, count) plus depth.
     ///
-    /// 対称な盤面 (初期局面など) では、記録された 1 手が同値な手すべてを
-    /// 代表している。自己同型で写した先も同じ候補として広げる。これを
-    /// しないと、互いに移り合うだけの手が抜け落ちる — 表示では手が欠け、
-    /// 乱択では同じ向きの手ばかり選ばれる。
+    /// On symmetric boards one stored move represents every equivalent
+    /// move, so candidates are expanded through the stabilizers;
+    /// otherwise equivalent moves would be missing from display and the
+    /// randomized pick would favor one orientation.
     fn expand(&self, board: &Board) -> Option<(Vec<BookMove>, u8)> {
         let (key, i) = Book::key(board);
         let e = self.map.get(&key)?;
@@ -240,11 +243,12 @@ impl Book {
         Some((out, e.depth))
     }
 
-    /// 局面を引き、**最善から `tolerance` 石以内**の候補から 1 手選ぶ。
+    /// Look up and pick one candidate within `tolerance` discs of best.
     ///
-    /// 同じ相手と同じ条件で戦ったときに毎回同じ棋譜になるのを避けるための
-    /// 選択。許容幅内は「実質互角」なので棋力はほぼ落ちない。候補の重みは
-    /// 人間の採用頻度 (+1) にしてあり、定石らしい手ほど出やすい。
+    /// Avoids replaying identical games against the same opponent; moves
+    /// within tolerance are effectively equal so strength is preserved.
+    /// Weighted by human adoption count (+1) so book-like moves appear
+    /// more often.
     pub fn probe_varied(
         &self,
         board: &Board,
@@ -253,7 +257,7 @@ impl Book {
     ) -> Option<(Position, f32, u8)> {
         let (all, depth) = self.expand(board)?;
         let best = all.first()?.1;
-        // 許容幅内の候補だけ集める
+        // Collect candidates within tolerance.
         let cands: Vec<(Position, f32, u64)> = all
             .into_iter()
             .filter(|(_, v, _)| *v >= best - tolerance)
@@ -274,46 +278,43 @@ impl Book {
         Some((p, v, depth))
     }
 
-    /// 局面の候補一覧を盤面の向きに戻して返す (合法手のみ、値の降順)。
-    /// 検討画面などの表示用。
+    /// Candidates in board orientation (legal only, by value desc); for display.
     pub fn candidates(&self, board: &Board) -> Option<Vec<(Position, f32)>> {
         let (out, _) = self.expand(board)?;
         Some(out.into_iter().map(|(p, v, _)| (p, v)).collect())
     }
 
-    /// 候補手を採用回数まで含めて返す (定石を眺めるための出し口)。
-    ///
-    /// `candidates` は対局で選ぶための一覧なので回数を落としているが、
-    /// 人が読むときは「何局で選ばれた手か」が枝の重みになる。
+    /// Candidates including adoption counts (for browsing the book);
+    /// `candidates` drops counts because play does not need them.
     pub fn candidates_detailed(&self, board: &Board) -> Option<Vec<BookCandidate>> {
         let (out, _) = self.expand(board)?;
         Some(out)
     }
 
-    /// この局面が定石にあるか (候補が 1 つも打てない場合でも true)。
+    /// Whether the position exists in the book (even with no playable candidate).
     pub fn has(&self, board: &Board) -> bool {
         self.map.contains_key(&Book::key(board).0)
     }
 
-    /// 正規化空間の手を元の盤面の向きへ戻す。
+    /// Map a normalized-space move back to board orientation.
     fn back(mv: Position, i: u8) -> Option<Position> {
         Position::from_index(unmap_square(mv.index(), i) as u32)
     }
 
-    /// 盤面を正規化キーにする (生成側と共用)。
+    /// Normalize a board into a key (shared with the generator).
     pub fn key(board: &Board) -> ((u64, u64), u8) {
         let (p, o, i) = normalize(board);
         ((p, o), i)
     }
 
-    /// 手を正規化空間へ写す。
+    /// Map a move into normalized space.
     pub fn map_move(pos: Position, i: u8) -> Position {
         Position(map_square(pos.index(), i))
     }
 
-    /// テキスト形式で保存する。1 行 =
+    /// Save as text. One line =
     /// `player_hex opponent_hex depth games | mv:value:games mv:value:games ...`
-    /// バイナリにしない理由: 差分を目視でき、途中経過をシェルで扱えるため。
+    /// Text rather than binary: diffs stay readable and shell tools work.
     pub fn save(&self, path: &Path) -> std::io::Result<()> {
         let tmp = path.with_extension("tmp");
         {
@@ -340,7 +341,7 @@ impl Book {
             if i == 0 {
                 match line.trim() {
                     "KUROOBI_BOOK_2" => {}
-                    "KUROOBI_BOOK_1" => v1 = true, // 旧形式 (最善手のみ)
+                    "KUROOBI_BOOK_1" => v1 = true, // legacy format (best move only)
                     _ => {
                         return Err(std::io::Error::new(
                             std::io::ErrorKind::InvalidData,
@@ -359,7 +360,7 @@ impl Book {
                 continue;
             };
             if v1 {
-                // 旧: best value depth games
+                // Legacy: best value depth games
                 let (Ok(best), Ok(value), Ok(depth), Ok(games)) = (
                     t[2].parse::<u8>(),
                     t[3].parse::<f32>(),
@@ -430,7 +431,7 @@ mod tests {
         }
     }
 
-    /// 対称な 4 手はすべて同じキーに畳まれる。
+    /// The four symmetric openings collapse into one key.
     #[test]
     fn opening_symmetries_collapse() {
         let b = Board::new();
@@ -441,14 +442,10 @@ mod tests {
             let (k, _) = Book::key(&c);
             keys.insert(k);
         }
-        assert_eq!(
-            keys.len(),
-            1,
-            "初期局面の 4 手は対称なので 1 キーに畳まれる"
-        );
+        assert_eq!(keys.len(), 1, "the 4 symmetric opening moves share one key");
     }
 
-    /// 正規化して入れた手が、任意の向きの同型局面で正しい手として返る。
+    /// A move stored normalized comes back correct for any orientation.
     #[test]
     fn probe_maps_move_back() {
         let b = Board::new();
@@ -464,20 +461,20 @@ mod tests {
             let mut c = b;
             c.make_move_bits(p);
             let got = book.probe(&c);
-            assert!(got.is_some(), "対称局面 {p:?} で book が引けない");
+            assert!(got.is_some(), "book lookup failed for symmetric {p:?}");
             let (mv, v, depth) = got.unwrap();
-            assert!(c.check(mv), "返った手が合法である");
+            assert!(c.check(mv), "returned move must be legal");
             assert_eq!(v, 1.5);
             assert_eq!(depth, 24);
         }
     }
 
-    /// 許容幅内の候補が散らばり、幅外の悪手は選ばれない。
+    /// Picks spread within tolerance; blunders outside it are never picked.
     #[test]
     fn varied_choice_stays_within_tolerance() {
         let b = Board::new();
         let (key, i) = Book::key(&b);
-        // 初期局面の 4 手は対称で 1 手に畳まれるので、2 手目の局面で試す
+        // The opening collapses to one move, so test from move two.
         let mut after = b;
         after.make_move_bits(Position::from_kifu("f5").unwrap());
         let (key2, i2) = Book::key(&after);
@@ -485,7 +482,7 @@ mod tests {
 
         let legal: Vec<Position> = after.movable_iter().collect();
         assert!(legal.len() >= 3);
-        // 先頭 2 手を互角 (0.0 / -0.5)、3 手目を明確な悪手 (-5.0) にする
+        // Two near-equal moves (0.0 / -0.5) and one clear blunder (-5.0).
         let moves: Vec<Candidate> = vec![
             Candidate {
                 mv: Book::map_move(legal[0], i2),
@@ -515,15 +512,15 @@ mod tests {
 
         let mut seen = std::collections::HashSet::new();
         for r in 0..200u64 {
-            let (mv, v, _) = book.probe_varied(&after, 1.0, r).expect("引ける");
+            let (mv, v, _) = book.probe_varied(&after, 1.0, r).expect("lookup succeeds");
             assert!(after.check(mv));
-            assert!(v >= -1.0, "許容幅外の悪手が選ばれた: {v}");
+            assert!(v >= -1.0, "picked a blunder outside tolerance: {v}");
             seen.insert(mv.index());
         }
-        assert!(seen.len() >= 2, "候補が散らばる (実際 {})", seen.len());
+        assert!(seen.len() >= 2, "picks should spread (got {})", seen.len());
         assert!(
             seen.len() <= 2,
-            "許容幅外は除外される (実際 {})",
+            "outside-tolerance moves must be excluded (got {})",
             seen.len()
         );
     }
@@ -569,27 +566,27 @@ mod tests {
 mod symmetry_tests {
     use super::*;
 
-    /// 初期局面は 4 通りの対称で不変 (90 度回すと黒白が入れ替わるので
-    /// 8 通りではない)。その 4 通りが 4 つの合法手を互いに移し合うので、
-    /// 定石は 1 手だけ持てば足り、引くときに残りへ広げられる。
+    /// The opening is invariant under 4 symmetries (not 8: a 90-degree
+    /// turn swaps the colors). Those 4 map the 4 legal moves onto each
+    /// other, so the book stores one and expands on lookup.
     #[test]
     fn the_opening_moves_are_all_equivalent() {
         let b = Board::new();
         let stab = stabilizers(&b);
-        assert_eq!(stab.len(), 4, "自己同型は 4 通り: {stab:?}");
+        assert_eq!(stab.len(), 4, "expected 4 stabilizers: {stab:?}");
 
         let mut moves: Vec<u8> = b.movable_iter().map(|p| p.index()).collect();
         moves.sort_unstable();
         assert_eq!(moves.len(), 4);
 
-        // 1 手を自己同型で写すと 4 手すべてに届く
+        // One move mapped through the stabilizers reaches all four.
         let mut reached: Vec<u8> = stab.iter().map(|&i| map_square(moves[0], i)).collect();
         reached.sort_unstable();
         reached.dedup();
-        assert_eq!(reached, moves, "1 手から 4 手すべてへ");
+        assert_eq!(reached, moves, "one move must reach all four");
     }
 
-    /// 対称な盤面では、記録されている 1 手から同値の手すべてを返す。
+    /// On a symmetric board one stored move yields every equivalent move.
     #[test]
     fn candidates_expand_over_the_symmetry() {
         let b = Board::new();
@@ -608,16 +605,19 @@ mod symmetry_tests {
                 games: 10,
             },
         );
-        let got = book.candidates(&b).expect("定石にある");
-        assert_eq!(got.len(), 4, "4 手すべて返る: {got:?}");
-        assert!(got.iter().all(|(_, v)| *v == -1.5), "値は同じ: {got:?}");
+        let got = book.candidates(&b).expect("position is in the book");
+        assert_eq!(got.len(), 4, "all four moves returned: {got:?}");
+        assert!(
+            got.iter().all(|(_, v)| *v == -1.5),
+            "values must match: {got:?}"
+        );
     }
 
-    /// 対称でない局面では広がらない (余計な手を作らない)。
+    /// Asymmetric positions must not expand (no fabricated moves).
     #[test]
     fn asymmetric_positions_are_untouched() {
         let mut b = Board::new();
         b.make_move(Position::from_index(26).unwrap()).unwrap(); // d3
-        assert_eq!(stabilizers(&b).len(), 1, "自己同型は恒等だけ");
+        assert_eq!(stabilizers(&b).len(), 1, "identity is the only stabilizer");
     }
 }

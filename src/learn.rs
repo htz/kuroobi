@@ -1,72 +1,73 @@
-//! 実戦の対局を定石へ取り込む学習。
+//! Learning: importing played games into the opening book.
 //!
-//! 自分の対局を**勝敗にかかわらず**取り込む。対局で通った各局面に
-//! 「実戦で指した手」と「それ以外の合法手の中の最善 (代替)」を評価して
-//! 持たせ、終局の石差 (終局していない棋譜は終端の探索値) を negamax で
-//! 根まで書き戻す。
+//! Own games are imported win or lose. Each position along the game gets
+//! the played move plus the best alternative among the other legal moves,
+//! and the final disc difference (or a search value for unfinished games)
+//! is backed up to the root with negamax.
 //!
-//! - 負けにつながった手は値が下がり、対局時の選択 (`probe_varied`) が
-//!   代替へ自然に分岐する。同じ負け方を繰り返さない
-//! - 各局面の値は「候補の最善」なので、負けの値は「代替でもまだ悪かった」
-//!   区間だけを遡り、良い代替が残っている地点 — 敗着 — で止まる。
-//!   序盤の正常な手に負けの値は付かない
-//! - 勝った対局も取り込む。代替の方が良かったのに相手のミスで勝てた
-//!   ラインを、良いと思い込み続けないため
+//! - Losing moves lose value, so `probe_varied` naturally branches to an
+//!   alternative next time — the same loss is not repeated.
+//! - Each position's value is the best of its candidates, so a losing
+//!   value only propagates through the span where even the alternatives
+//!   were bad, and stops at the losing move; normal opening moves keep
+//!   neutral values.
+//! - Wins are imported too, so a line won only through the opponent's
+//!   mistake does not stay overrated.
 //!
-//! 回避のための特別なロジックは持たない。「同じ負けを繰り返さない」は
-//! negamax の値がそうさせる性質であって、手を禁止する仕組みではない。
+//! There is no special avoidance logic: "don't repeat the loss" falls
+//! out of the negamax values; nothing forbids moves.
 //!
-//! 学習は 1 探索ずつ進む ([`BackupJob`])。対局の合間に少しずつ回すので、
-//! 思考やサーバーへの応答を分単位で待たせない。学習分は定石本体とは
-//! 別のファイルに保存し、起動時に重ねて選択に使う (bookgen が本体を
-//! 更新中でも衝突しない)。
+//! Import advances one search at a time ([`BackupJob`]) so it can run
+//! between games without stalling thinking or server replies. Learned
+//! entries are saved separately from the main book and overlaid at load
+//! (no conflict while bookgen rebuilds the base).
 
 use crate::book::{Book, Candidate, Entry};
 use crate::solver::final_score;
 use crate::{Board, Position};
 
-/// 書き換えた手 1 つ。
+/// One rewritten move.
 ///
-/// **旧→新を残すのは後から確かめるため。** 書き戻しは値を上書きするので、
-/// 変な対局が 1 局混ざると以後の手が変わる。何がどう変わったかが残って
-/// いないと、見つけることも戻すこともできない。
+/// The old and new values are kept for auditability: back-up overwrites
+/// values, so one bad game changes later play, and without a record it
+/// could be neither found nor reverted.
 #[derive(Debug, Clone, Copy)]
 pub struct BackupChange {
-    /// 棋譜の何手目か (パスを除いた 1 始まり)。
+    /// Move number in the game record (1-based, passes excluded).
     pub ply: usize,
-    /// 実戦で指した手 (盤の向きのまま。正規化空間の手ではない)。
+    /// The move actually played (board orientation, not normalized space).
     pub mv: Position,
-    /// 上書き前の値。定石に無かった手なら None。
+    /// Value before the overwrite; None if the move was not in the book.
     pub before: Option<f32>,
-    /// 上書き後の値。
+    /// Value after the overwrite.
     pub after: f32,
-    /// 書き換えたあとの、その局面の最善手の値。
-    /// `best - after` がその手で損した石差になる。
+    /// Best value of the position after the rewrite;
+    /// `best - after` is what the move cost in discs.
     pub best: f32,
-    /// この取り込みで学習分に新しく作った局面か。取り消すときに
-    /// 「値を戻す」のか「局面ごと消す」のかが変わる。
+    /// Whether this import created the entry; undo either restores the
+    /// value or deletes the whole entry accordingly.
     pub new_entry: bool,
 }
 
-/// 取り込みの結果。
+/// Import result.
 #[derive(Debug, Default, Clone)]
 pub struct BackupOutcome {
-    /// 値を付け替えた手の数。
+    /// Moves whose values changed.
     pub updated: usize,
-    /// 新たに学習分へ足した局面の数。
+    /// Positions newly added to the learned overlay.
     pub added: usize,
-    /// 書き換えの明細 (終局側から前へ向かう順)。
+    /// Rewrite details, ordered from the end of the game backwards.
     pub changes: Vec<BackupChange>,
 }
 
-/// 再生した手順。要素は (指す前の盤面, 指した手)。パスは `None`。
+/// Replayed line; each element is (board before the move, move), pass = `None`.
 pub type Line = Vec<(Board, Option<Position>)>;
 
-/// 棋譜 (f5d6… 形式) を、パスを補いながら (盤面, 手) の列にする。
-/// 戻り値の最後は終局 (または棋譜が尽きた) 時点の盤面。
+/// Turn a game record (f5d6...) into a (board, move) list, inserting
+/// passes; also returns the final board.
 pub fn replay(start: Option<&str>, kifu: &str) -> Result<(Line, Board), String> {
     let mut b = match start {
-        Some(s) => Board::from_string(s).map_err(|e| format!("開始局面: {e:?}"))?,
+        Some(s) => Board::from_string(s).map_err(|e| format!("start position: {e:?}"))?,
         None => Board::new(),
     };
     let mut seq = Vec::new();
@@ -74,14 +75,14 @@ pub fn replay(start: Option<&str>, kifu: &str) -> Result<(Line, Board), String> 
     let mut i = 0;
     while i + 2 <= chars.len() {
         let mv = Position::from_kifu(&chars[i..i + 2].iter().collect::<String>())
-            .map_err(|e| format!("棋譜の手 {}{}: {e}", chars[i], chars[i + 1]))?;
-        // 打てない手番はパスを 1 手として挟む
+            .map_err(|e| format!("kifu move {}{}: {e}", chars[i], chars[i + 1]))?;
+        // Insert a pass when the mover has no legal move.
         if !b.check(mv) && b.movable() == 0 {
             seq.push((b, None));
             b.pass();
         }
         if !b.check(mv) {
-            return Err(format!("打てない手 {mv:?}"));
+            return Err(format!("illegal move {mv:?}"));
         }
         seq.push((b, Some(mv)));
         b.make_move(mv).map_err(|e| format!("{e:?}"))?;
@@ -90,54 +91,57 @@ pub fn replay(start: Option<&str>, kifu: &str) -> Result<(Line, Board), String> 
     Ok((seq, b))
 }
 
-/// [`BackupJob::next`] が次にしてほしいこと。
+/// What [`BackupJob::next`] wants next.
 pub enum JobStep {
-    /// この盤面を評価してほしい。手番視点の値を [`BackupJob::feed`] で返す。
+    /// Evaluate this board; return the mover-view value via [`BackupJob::feed`].
     Search(Board),
-    /// 取り込みが終わった。
+    /// Import finished.
     Done(BackupOutcome),
 }
 
-/// 1 局ぶんの取り込みを 1 探索ずつ進める状態機械。
+/// State machine that advances one game's import one search at a time.
 ///
-/// 探索そのものは持たない。`next` が `Search(盤面)` を返したら呼び出し側が
-/// 評価して `feed` で値を渡す。この分割で、学習を対局の合間に少しずつ
-/// 進められるし、探索なしでロジックをテストできる。
+/// It owns no search: when `next` returns `Search(board)` the caller
+/// evaluates and passes the value back via `feed`. The split lets
+/// learning run in slices between games and lets the logic be tested
+/// without a search.
 pub struct BackupJob {
     line: Line,
-    /// 次に処理する局面 = `line[idx - 1]`。後ろ (終局側) から前へ。0 で完了。
+    /// Next position = `line[idx - 1]`, walking from the end; 0 = done.
     idx: usize,
-    /// 子側 (1 手先) の局面の手番視点の値。
+    /// Mover-view value of the child (one ply later) position.
     v_next: f32,
-    /// 終端局面 (終局していない棋譜では探索値を待つ)。
+    /// Terminal board (unfinished games wait for a search value).
     terminal: Board,
     awaiting_terminal: bool,
-    /// 評価待ちの代替手 (現在の局面の、実戦手以外の合法手)。
+    /// Alternatives pending evaluation (legal moves other than the played one).
     alt_queue: Vec<Position>,
-    /// 直前に `Search` へ出した代替手。`feed` が受けて `alt_best` を更新する。
+    /// Alternative last sent to `Search`; `feed` uses it to update `alt_best`.
     pending_alt: Option<Position>,
     alt_best: Option<(Position, f32)>,
-    /// 代替の評価中か (空の `alt_queue` と「未着手」を区別する)。
+    /// Whether alternatives are being evaluated (distinguishes an empty
+    /// `alt_queue` from "not started").
     evaluating: bool,
-    /// 新規エントリに記録する探索深さ。
+    /// Search depth recorded on new entries.
     new_depth: u8,
     out: BackupOutcome,
     done: bool,
 }
 
 impl BackupJob {
-    /// 対局 1 局ぶんの取り込みを用意する。終局している棋譜なら終端値は
-    /// 石差 (厳密)。終局していなければ最初の `next` が終端の評価を求める。
+    /// Prepare one game's import. Finished games use the exact disc
+    /// difference as the terminal value; otherwise the first `next` asks
+    /// for a terminal evaluation.
     pub fn new(start: Option<&str>, kifu: &str, new_depth: u8) -> Result<BackupJob, String> {
         let (line, terminal) = replay(start, kifu)?;
         if line.is_empty() {
-            return Err("棋譜が空です".into());
+            return Err("empty game record".into());
         }
         let over = terminal.is_game_over();
         let v_next = if over {
             final_score(&terminal) as f32
         } else {
-            f32::NAN // feed で入る
+            f32::NAN // filled by feed
         };
         Ok(BackupJob {
             idx: line.len(),
@@ -155,13 +159,13 @@ impl BackupJob {
         })
     }
 
-    /// 残りのおおよその仕事量 (未処理の局面数)。表示用。
+    /// Approximate remaining work (positions left); for display.
     pub fn remaining(&self) -> usize {
         self.idx
     }
 
-    /// 状態を進め、次にすべきことを返す。`Search` を返したら評価値を
-    /// `feed` してから再度呼ぶこと。
+    /// Advance and return the next step. After a `Search`, call `feed`
+    /// with the value before calling again.
     pub fn next(&mut self, learned: &mut Book, base: &mut Book) -> JobStep {
         loop {
             if self.done {
@@ -176,7 +180,7 @@ impl BackupJob {
             }
             let (board, mv) = self.line[self.idx - 1];
             let Some(mv) = mv else {
-                // パス: 盤は同じまま手番だけ替わる
+                // Pass: same board, only the mover flips.
                 self.v_next = -self.v_next;
                 self.idx -= 1;
                 continue;
@@ -185,13 +189,14 @@ impl BackupJob {
             let fresh = learned.get_raw(key).is_none();
             if fresh {
                 if let Some(b) = base.get_raw(key) {
-                    // 定石本体の候補一式 (深い値) を引き継いで学習を始める
+                    // Start from the base book's candidates (deep values).
                     learned.insert_raw(key, b.clone());
                 } else {
-                    // どこにも無い局面: 実戦手**以外**の合法手の最善を測って
-                    // 一緒に入れる。ここが負の伝播を止める壁になる。実戦手
-                    // (探索最善と一致しがち) だけでは候補が 1 本になり、
-                    // 負けの値が敗着を越えて序盤まで素通りしてしまう。
+                    // Unknown position: measure the best of the other
+                    // legal moves and store it too. This is the wall that
+                    // stops loss propagation — with only the played move
+                    // as candidate, a losing value would flow straight
+                    // past the losing move into the opening.
                     if !self.evaluating {
                         self.alt_queue = board.movable_iter().filter(|p| *p != mv).collect();
                         self.alt_best = None;
@@ -203,7 +208,7 @@ impl BackupJob {
                         self.pending_alt = Some(p);
                         return JobStep::Search(child);
                     }
-                    // 全代替を評価し終えた → エントリを作る
+                    // All alternatives evaluated: create the entry.
                     self.evaluating = false;
                     let e = Entry {
                         moves: self
@@ -223,14 +228,14 @@ impl BackupJob {
                     self.out.added += 1;
                 }
             }
-            let e = learned.get_raw_mut(key).expect("直前に挿入済み");
+            let e = learned.get_raw_mut(key).expect("inserted just above");
             let mapped = Book::map_move(mv, i);
             let before = e.moves.iter().find(|c| c.mv == mapped).map(|c| c.value);
             let after = -self.v_next;
             e.update_move(mapped, after);
             self.out.updated += 1;
             self.out.changes.push(BackupChange {
-                // パスは手数に数えない (棋譜の表と番号を合わせる)
+                // Passes don't count as moves (keeps numbers aligned with the record).
                 ply: self.line[..self.idx - 1]
                     .iter()
                     .filter(|(_, m)| m.is_some())
@@ -242,16 +247,16 @@ impl BackupJob {
                 best: e.best().map(|c| c.value).unwrap_or(after),
                 new_entry: fresh,
             });
-            // この局面の値は「更新後の最善」。実戦手より良い代替が残って
-            // いればそちらが親へ伝わる (敗着より根側へ負を遡らせない)
+            // The position's value is the post-update best; a better
+            // alternative propagates instead (no loss past the losing move).
             self.v_next = e.best().map(|c| c.value).unwrap_or(-self.v_next);
-            // 対局の選択に使うマージ済みの側にも常に反映する
+            // Mirror into the merged book used for play.
             base.insert_raw(key, e.clone());
             self.idx -= 1;
         }
     }
 
-    /// 直前の `Search` の結果 (渡した盤面の手番視点の値) を返す。
+    /// Return the result of the last `Search` (mover-view value).
     pub fn feed(&mut self, value: f32) {
         if self.awaiting_terminal {
             self.v_next = value;
@@ -259,7 +264,7 @@ impl BackupJob {
             return;
         }
         if let Some(p) = self.pending_alt.take() {
-            let v = -value; // 子の手番視点 → この局面の手番視点
+            let v = -value; // child's view -> this position's view
             if self.alt_best.is_none_or(|(_, bv)| v > bv) {
                 self.alt_best = Some((p, v));
             }
@@ -267,9 +272,9 @@ impl BackupJob {
     }
 }
 
-/// 学習分を定石本体へ重ねる (学習側を優先して丸ごと上書き)。
-/// 学習エントリは定石本体の候補一式を引き継いだ上で実戦の帰結を
-/// 上書きしたものなので、これで候補を失わずに値だけ新しくなる。
+/// Overlay learned entries onto the base book (learned side wins).
+/// Learned entries started from the base candidates before overwriting
+/// with game outcomes, so candidates survive and only values refresh.
 pub fn merge_learned(base: &mut Book, learned: &Book) {
     for (key, e) in learned.iter() {
         base.insert_raw(*key, e.clone());
@@ -284,7 +289,7 @@ mod tests {
         Position::from_kifu(s).unwrap()
     }
 
-    /// ジョブを最後まで回す。Search 要求には `eval` が答える。
+    /// Drive a job to completion; `eval` answers the Search requests.
     fn run_job(
         job: &mut BackupJob,
         learned: &mut Book,
@@ -302,8 +307,8 @@ mod tests {
         }
     }
 
-    /// f5d6 で負けた (終端で黒視点 -10) とき、初期局面の f5 の値が
-    /// 下がって次善だった d3 が最善に入れ替わる。
+    /// Losing after f5d6 (-10 for Black at the end) lowers f5 in the
+    /// opening and promotes the former runner-up d3.
     #[test]
     fn losing_move_gets_demoted() {
         let b0 = Board::new();
@@ -330,58 +335,58 @@ mod tests {
         );
         let mut learned = Book::new();
 
-        // 棋譜は途中まで (終局していない) → 終端は探索値 -10 (黒視点)。
-        // 最初の Search は必ず終端で、以降は代替の子局面。
-        let mut job = BackupJob::new(None, "f5d6", 14).expect("再生できる");
+        // Unfinished record: terminal value is a search value (-10,
+        // Black view). The first Search is the terminal, the rest are
+        // alternative children.
+        let mut job = BackupJob::new(None, "f5d6", 14).expect("replays");
         let mut first = true;
         let out = run_job(&mut job, &mut learned, &mut base, |_b| {
             if std::mem::take(&mut first) {
-                -10.0 // 終端 (f5d6 後、黒番)
+                -10.0 // terminal (after f5d6, Black to move)
             } else {
-                -0.1 // 代替の子 (相手視点) → 代替はどれも +0.1
+                -0.1 // alternative child (opponent view) -> all alts +0.1
             }
         });
-        assert_eq!(out.added, 1, "f5 後の局面が学習分に足される");
-        assert_eq!(out.updated, 2, "d6 と f5 の値が付け替わる");
+        assert_eq!(out.added, 1, "the position after f5 gets added");
+        assert_eq!(out.updated, 2, "both d6 and f5 get re-valued");
 
-        // d6 の値 = +10 (相手にとっての -10)。f5 = -(d6 局面の最善)。
-        // 初期局面では f5 が下がり d3 が最善になる
+        // d6 = +10 (the opponent's -10); f5 = -(best after d6).
+        // In the opening f5 drops and d3 becomes best.
         let e0 = base.get_raw(key0).unwrap();
         assert_eq!(
             e0.best().unwrap().mv.index(),
             Book::map_move(pos("d3"), i0).index(),
-            "f5 が下がって d3 が最善になる"
+            "f5 must drop and d3 become best"
         );
-        // 学習側にも同じエントリがあり、選択側 (base) にも常に反映される
+        // The learned overlay has the entry and the play-side book sees it.
         assert_eq!(learned.len(), 2);
-        assert_eq!(base.len(), 2, "学習した局面は選択側にも入る");
+        assert_eq!(base.len(), 2, "learned positions reach the play-side book");
     }
 
-    /// 敗着で伝播が止まる: 途中の局面に「まだ良かった代替」があれば、
-    /// それより根側 (序盤側) の手に負けの値が付かない。2 手目の正常な
-    /// 応手が「初手から負け」に巻き込まれないための要の性質。
+    /// Propagation stops at the losing move: with a good alternative en
+    /// route, rootward moves keep neutral values. This is what keeps a
+    /// normal second move from being marked "lost from move one".
     #[test]
     fn loss_stops_at_the_losing_move() {
         let mut base = Book::new();
         let mut learned = Book::new();
-        // f5(黒) d6(白) c3(黒) で黒が負けた (c3 後の白番視点 +20)。
-        // 敗着は c3 とし、その局面 (6 石) の代替だけ +1.5 (黒視点) ある。
+        // Black loses after f5 d6 c3 (+20 for White after c3). c3 is
+        // the losing move; only its position has a +1.5 alternative.
         let mut job = BackupJob::new(None, "f5d6c3", 14).unwrap();
         let mut first = true;
         let out = run_job(&mut job, &mut learned, &mut base, |b| {
             if std::mem::take(&mut first) {
-                return 20.0; // 終端 (c3 の後、白番視点で +20 = 黒の負け)
+                return 20.0; // terminal (after c3, +20 White view = Black loss)
             }
             match 64 - b.empty_count() {
-                7 => -1.5, // c3 の代替の子 (白視点) → 代替 = +1.5
-                _ => -0.1, // それ以外の代替の子 → 代替 = +0.1
+                7 => -1.5, // c3-alternative child (White view) -> alt = +1.5
+                _ => -0.1, // other alternative children -> alt = +0.1
             }
         });
         assert_eq!(out.updated, 3);
 
-        // 敗着 c3 には -20 が付き、その局面の値は代替の +1.5 に留まる。
-        // 根側: d6 = -1.5、f5 = -(d6 局面の最善 +0.1) = -0.1。
-        // 序盤の手はほぼ中立で、「初手から負け」にはならない。
+        // c3 gets -20 but its position keeps the +1.5 alternative.
+        // Rootward: d6 = -1.5, f5 = -0.1 — the opening stays neutral.
         let b0 = Board::new();
         let (key0, i0) = Book::key(&b0);
         let f5v = learned
@@ -394,7 +399,7 @@ mod tests {
             .value;
         assert!(
             f5v > -1.0,
-            "敗着 (c3) より根側の f5 に負けの値が付かない (実際 {f5v})"
+            "f5, rootward of the losing move, must stay neutral (got {f5v})"
         );
 
         let mut b2 = Board::new();
@@ -409,10 +414,13 @@ mod tests {
             .find(|c| c.mv.index() == Book::map_move(pos("c3"), i2).index())
             .unwrap()
             .value;
-        assert!((c3v + 20.0).abs() < 1e-6, "敗着 c3 = -20 (実際 {c3v})");
+        assert!(
+            (c3v + 20.0).abs() < 1e-6,
+            "losing move c3 = -20 (got {c3v})"
+        );
     }
 
-    /// 代替も悪い区間 (負けが確定した後) は、負の値がそのまま遡上する。
+    /// Where alternatives are also bad the losing value does propagate.
     #[test]
     fn loss_propagates_when_alternatives_are_also_bad() {
         let mut base = Book::new();
@@ -421,9 +429,9 @@ mod tests {
         let mut first = true;
         run_job(&mut job, &mut learned, &mut base, |_b| {
             if std::mem::take(&mut first) {
-                20.0 // 終端
+                20.0 // terminal
             } else {
-                15.0 // どの代替の子も相手が +15 = 代替は -15 で大差の負け
+                15.0 // every alt child gives the opponent +15 -> alts lose big
             }
         });
         let b0 = Board::new();
@@ -436,10 +444,13 @@ mod tests {
             .find(|c| c.mv.index() == Book::map_move(pos("f5"), i0).index())
             .unwrap()
             .value;
-        assert!(f5v < -10.0, "どこにも良い代替が無ければ負けが遡る ({f5v})");
+        assert!(
+            f5v < -10.0,
+            "with no good alternative the loss propagates ({f5v})"
+        );
     }
 
-    /// 勝った対局も取り込まれ、勝ちの値がそのまま入る。
+    /// Wins are imported too, with their values.
     #[test]
     fn winning_games_are_absorbed_too() {
         let mut base = Book::new();
@@ -448,9 +459,9 @@ mod tests {
         let mut first = true;
         let out = run_job(&mut job, &mut learned, &mut base, |_b| {
             if std::mem::take(&mut first) {
-                8.0 // 終端: 黒が勝っている
+                8.0 // terminal: Black is winning
             } else {
-                -0.1 // 代替の子 → 代替は +0.1
+                -0.1 // alternative child -> alt = +0.1
             }
         });
         assert_eq!(out.updated, 2);
@@ -464,16 +475,17 @@ mod tests {
             .find(|c| c.mv.index() == Book::map_move(pos("f5"), i0).index())
             .unwrap()
             .value;
-        // 終端 +8 (黒視点) → d6 = -8 → d6 局面の最善は代替 (+0.1)
-        // → f5 = -0.1。相手の悪手 (d6) のおかげの勝ちは f5 の値を
-        // 押し上げない (代替の方が良ければそちらが伝わる)
+        // Terminal +8 -> d6 = -8 -> best after d6 is the +0.1 alt ->
+        // f5 = -0.1. A win owed to the opponent's blunder does not
+        // inflate f5.
         assert!(
             (f5v + 0.1).abs() < 1e-6,
-            "勝ちでも代替経由の値になる ({f5v})"
+            "even a win propagates through the alternative ({f5v})"
         );
     }
 
-    /// 定石本体に元からある局面は候補一式を引き継ぎ、代替の評価をしない。
+    /// Positions already in the base book inherit candidates and skip
+    /// alternative evaluation.
     #[test]
     fn known_positions_reuse_book_candidates() {
         let b0 = Board::new();
@@ -498,21 +510,24 @@ mod tests {
             searches += 1;
             0.0
         });
-        // 終局していない棋譜なので終端評価の 1 回だけ。初期局面は
-        // 本体にあるので代替評価は走らない
-        assert_eq!(searches, 1, "既知の局面では代替を測り直さない");
+        // Unfinished record: one terminal evaluation only; the opening
+        // is in the base book so no alternative searches run.
+        assert_eq!(
+            searches, 1,
+            "known positions must not re-measure alternatives"
+        );
     }
 
-    /// パスを含む実対局の棋譜が終局まで再生できる。
+    /// A real game record containing passes replays to the end.
     #[test]
     fn replay_inserts_passes() {
         let kifu = "e6f4c3d6f6e7f5g5e3g4c7d3f3c4c6c5b4b6d7b5c2a3f8e8d8c8b8d2g3e2a6c1d1e1f2f1f7h3a5a7a8b7g2g8h8g1b3a4a2b2a1b1g7g6h6h7h5h4h2h1";
-        let (line, fin) = replay(None, kifu).expect("パス込みで再生できる");
-        assert!(fin.is_game_over(), "終局まで再生できる");
-        assert!(line.iter().any(|(_, m)| m.is_none()), "パスが補われている");
+        let (line, fin) = replay(None, kifu).expect("replays with passes");
+        assert!(fin.is_game_over(), "replays to game over");
+        assert!(line.iter().any(|(_, m)| m.is_none()), "passes are inserted");
     }
 
-    /// merge_learned は学習側を優先して丸ごと上書きする。
+    /// merge_learned overwrites wholesale, learned side first.
     #[test]
     fn merge_prefers_learned_entries() {
         let b0 = Board::new();
@@ -536,12 +551,12 @@ mod tests {
     }
 }
 
-/// 取り込みを 1 局ぶん取り消す。書き戻した値を控えの `before` へ戻し、
-/// この取り込みで作った局面は消す。戻せた手の数を返す。
+/// Undo one game's import: restore recorded `before` values and delete
+/// entries this import created. Returns how many moves were reverted.
 ///
-/// **定石本体 (`base`) はここでは触らない。** あちらは「ファイル + 学習分」を
-/// 重ねたものなので、学習分を直したら読み直すのが正しい (部分的に戻すと、
-/// 元のファイルに何が入っていたかを推測することになる)。
+/// The base book is left alone — it is file + overlay, so after fixing
+/// the overlay the right move is to reload, not to guess what the file
+/// originally contained.
 pub fn undo_backup(
     learned: &mut Book,
     start: Option<&str>,
@@ -549,14 +564,16 @@ pub fn undo_backup(
     changes: &[BackupChange],
 ) -> Result<usize, String> {
     let (line, _) = replay(start, kifu)?;
-    // 控えは手数 (パスを除く) で場所を指すので、同じ数え方で盤面を並べる
+    // Records address positions by move number (passes excluded); walk
+    // the boards with the same numbering.
     let boards: Vec<Board> = line
         .iter()
         .filter(|(_, m)| m.is_some())
         .map(|(b, _)| *b)
         .collect();
     let mut n = 0;
-    // 書き込んだ順の逆に戻す。同じ局面が 2 度出る棋譜でも元に戻る
+    // Revert in reverse write order; correct even when a position
+    // repeats within the game.
     for c in changes.iter().rev() {
         let Some(board) = boards.get(c.ply.wrapping_sub(1)) else {
             continue;
@@ -585,27 +602,27 @@ pub fn undo_backup(
 mod undo_tests {
     use super::*;
 
-    /// 取り込んで取り消すと、学習分が元に戻る。
+    /// Import followed by undo restores the overlay.
     #[test]
     fn undo_restores_learned() {
         let kifu = "f5d6c3d3c4f4c5b3c2e6";
         let mut learned = Book::new();
         let mut base = Book::new();
-        let mut job = BackupJob::new(None, kifu, 8).expect("作れること");
-        // 探索の代わりに 0 を返す (取り消しの検査に値の中身は要らない)
+        let mut job = BackupJob::new(None, kifu, 8).expect("job builds");
+        // Return 0 instead of searching; undo does not care about values.
         let out = loop {
             match job.next(&mut learned, &mut base) {
                 JobStep::Search(_) => job.feed(0.0),
                 JobStep::Done(o) => break o,
             }
         };
-        assert!(out.updated > 0, "何も書き換えていない");
+        assert!(out.updated > 0, "nothing was rewritten");
         assert!(!learned.is_empty());
-        let n = undo_backup(&mut learned, None, kifu, &out.changes).expect("戻せること");
+        let n = undo_backup(&mut learned, None, kifu, &out.changes).expect("undo succeeds");
         assert!(n > 0);
         assert!(
             learned.is_empty(),
-            "空の定石へ取り込んだので、戻せば空に戻る"
+            "imported into an empty book, so undo must empty it"
         );
     }
 }

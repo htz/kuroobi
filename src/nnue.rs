@@ -22,9 +22,10 @@
 //! Weights are f32 here for training/validation; a quantized int16/int8 path
 //! for search follows once this beats the linear floor.
 
-// 添字ループは走査順そのものが意味を持つ (連続領域の走査・SIMD 的な
-// 展開) ため、イテレータ化の助言は採らない。引数の多い探索関数も、
-// 構造体に束ねると呼び出しごとの構築が入るので現状の形を保つ。
+// Indexed loops here iterate in an order that matters (contiguous scans,
+// SIMD-style unrolling), so the iterator lints are not taken. Hot
+// functions keep their long argument lists: bundling them into a struct
+// would add per-call construction.
 #![allow(clippy::needless_range_loop)]
 
 use crate::board::Board;
@@ -43,26 +44,21 @@ pub const H: usize = 16;
 /// contiguous add/sub maintains the whole accumulator per feature change.
 const H2: usize = 2 * H;
 
-/// 学習中に feature transformer の重みを収める範囲。
+/// Clamp range for feature-transformer weights during training.
 ///
-/// **推論は int16 なので、外れ値 1 個が全体の分解能を食う。** `quantize` は
-/// `256 / |ft| の最大値` で倍率を決める (accumulator が i16 で、64 マスク分の
-/// 和が収まる必要があるため)。最大値だけ突出すると、典型的な重みが整数
-/// 1〜2 個ぶんの粒度しか持てなくなる。
-///
-/// H=64 を素から学習したとき、これで実際に事故った。lane 47 に ±200 級の
-/// **打ち消し合う**重みが育ち、f32 の val MSE は 28.19 と良いのに int16 では
-/// 13.98 石ずれ、同じ深さの直接対戦で H=16 に 0-12 で負けた。学習後に刈るの
-/// では直らない (釣り合いが崩れてかえって悪化する) ので、**育てる前に抑える**。
-///
-/// 境界は実測から決めた。健全なモデルの |ft| 最大は H=16 が 24.7、H=64 の
-/// 旧版が 14.3。32 ならどちらも素通しで、暴走だけを止める。
+/// Inference is int16, so a single outlier eats everyone's resolution:
+/// `quantize` scales by `256 / max|ft|` (the i16 accumulator must hold a
+/// 64-mask sum). An H=64 run once grew cancelling +/-200 weights in one
+/// lane — f32 MSE looked fine while int16 was 13.98 discs off and lost
+/// 0-12 head-to-head. Pruning after the fact makes it worse; clamp while
+/// training instead. Bound chosen from healthy models (max |ft| 24.7),
+/// so 32 passes them untouched and only stops runaways.
 const FT_CLAMP: f32 = 32.0;
 
-/// 石数表の幅 (0..=64 石)。線形評価の `NUM_TABLE_SIZE` と同じ。
+/// Disc-count table width (0..=64), same as the linear evaluator's.
 const NUM_TABLE_SIZE: usize = 65;
 
-/// 手番側の石数 = 石数表の添字。
+/// Mover's disc count = index into the disc-count table.
 #[inline]
 fn num_index(board: &Board) -> usize {
     board.player_bb().count_ones() as usize
@@ -129,12 +125,10 @@ unsafe fn accumulate_rows(
     #[cfg(all(target_arch = "aarch64", not(feature = "nnue-scalar")))]
     {
         use std::arch::aarch64::*;
-        /* 1 行 = H レーン = `VEC` 本の 128 bit ベクタ。**H を決め打ちにしない。**
-        以前は `[int16x8_t; 2]` (= 16 レーン) 固定で、H=64 にすると**先頭 16
-        レーンしか足されず残り 48 レーンが落ちた**。評価は静かに壊れるが、
-        val MSE を測る経路 (`eval` / 増分維持) はここを通らないので**数字は
-        健全なまま**で、直接対戦でしか現れない。実際 val 27.63 の H=64 が
-        深さ 1 で H=16 に 80% 負けた。 */
+        /* One row = H lanes = `VEC` 128-bit vectors. H must not be
+        hard-coded: a fixed `[int16x8_t; 2]` once summed only the first 16
+        lanes of an H=64 net. The corruption is silent — the MSE path does
+        not go through here — and showed up only head-to-head. */
         const VEC: usize = H.div_ceil(8);
         let mut p: [[int16x8_t; VEC]; 4] = [[vdupq_n_s16(0); VEC]; 4];
         const PREFETCH_AHEAD: usize = 8;
@@ -166,7 +160,7 @@ unsafe fn accumulate_rows(
             let a = vaddq_s16(vld1q_s16(acc.as_ptr().add(v * 8)), s);
             vst1q_s16(acc.as_mut_ptr().add(v * 8), a);
         }
-        // H が 8 の倍数でないときの端数レーンは、まとめて下のスカラーで拾う。
+        // Lanes beyond a multiple of 8 are handled by the scalar tail.
         if !H.is_multiple_of(8) {
             let done = (H / 8) * 8;
             for mm in 0..m {
@@ -197,8 +191,8 @@ unsafe fn accumulate_rows(
 
 /// `Σ_h relu(acc[h] + b[h]) · w[h]` (i64) over H int16 lanes, ReLU on the fly.
 ///
-/// **バイアスはここで足す。** ステージごとに違うので累算器には焼き込めない
-/// (1 手ごとにステージが変わる)。加算 1 本ぶんの増分で済む。
+/// Bias is added here: it differs per stage (which changes every ply),
+/// so it cannot be baked into the incrementally-maintained accumulator.
 /// NEON widening multiply on aarch64, scalar elsewhere. Called once per leaf.
 #[inline]
 fn readout_dot(acc: &[i16], b: &[i16], w: &[i16]) -> i64 {
@@ -264,19 +258,14 @@ pub struct NnueView {
 unsafe impl Send for NnueView {}
 unsafe impl Sync for NnueView {}
 
-/// Adam の 1 次・2 次モーメント。**素の SGD だと稀なセルが万年未学習になる**
-/// ため用意した。
+/// Adam first/second moments. Plain SGD leaves rare cells forever
+/// under-trained: the FT is a 610k x H sparse table where one position
+/// touches 64 rows, and Adam's second-moment scaling gives rarely-updated
+/// cells larger steps (the same reason Adagrad works on sparse
+/// embeddings).
 ///
-/// feature transformer は 61 万セル × H の巨大な疎表で、1 局面が触るのは
-/// 64 行だけ。素の SGD の歩幅は勾配そのものなので、**滅多に出ない盤面形は
-/// 滅多に更新されない**。Adam は 2 次モーメントで割るので、更新回数の少ない
-/// セルほど 1 回の歩幅が大きくなる (Adagrad 系が疎な埋め込みに効くのと同じ
-/// 理屈)。
-///
-/// **バイアス補正は入れていない。** 学習例が 13 億あるので、m/v がゼロ初期化
-/// から立ち上がる最初の数千歩の目減りは無視できる。線形側の [`AdamOptimizer`]
-/// はセルごとに歩数を持つが、こちらはセル数が 2 桁多く、歩数表だけで 39 MB
-/// 増えるので採らない。
+/// No bias correction: with 1.3B examples the warm-up shrinkage is
+/// negligible, and a per-cell step table here would cost 39 MB.
 ///
 /// [`AdamOptimizer`]: crate::evaluator::AdamOptimizer
 pub struct AdamState {
@@ -367,11 +356,11 @@ impl AdamView {
     }
 }
 
-/// 盤面ビットボードに対称変換 i (0..8) を掛ける。
+/// Apply symmetry transform i (0..8) to a whole bitboard.
 ///
-/// **学習時の水増しに使う。** 事後の重み平均 (`nnue_symmetrize`) は対称性を
-/// 射影で強制するだけだが、8 対称形を学習例として回せば**対称なまま当てはまり
-/// も良くなる**。推論コストはゼロ。
+/// Used for training augmentation: averaging weights afterwards only
+/// projects onto the symmetric subspace, while training on all 8 forms
+/// improves the fit while staying symmetric. Zero inference cost.
 pub fn sym_board(b: u64, i: u8) -> u64 {
     let mut b = b;
     if i >= 4 {
@@ -387,7 +376,7 @@ pub fn sym_board(b: u64, i: u8) -> u64 {
     b
 }
 
-/// 変換 i (0..8) を 1 マスに適用する。
+/// Apply transform i (0..8) to one square.
 fn sym_square(sq: u8, i: u8) -> u8 {
     let mut b = 1u64 << sq;
     if i >= 4 {
@@ -403,11 +392,11 @@ fn sym_square(sq: u8, i: u8) -> u8 {
     b.trailing_zeros() as u8
 }
 
-/// パターンの重み表に作用するインデックス置換の集合を求める。
+/// Compute the index permutations that act on a pattern's weight table.
 ///
-/// マスク m に対称変換 s を適用したセル列が、同じパターンの別マスク k と
-/// **集合として**一致するとき、両者の並びの差が「桁の置換」になる。
-/// 返すのは `perm[j] = j 桁目の移動先` の配列。
+/// When transform s maps mask m onto another mask k of the same pattern
+/// as a set, the difference in cell order becomes a digit permutation;
+/// returns arrays of `perm[j] = destination of digit j`.
 fn symmetry_index_perms(p: &Pattern) -> Vec<Vec<usize>> {
     let masks: Vec<&[u8]> = p.masks.to_vec();
     let mut out: Vec<Vec<usize>> = Vec::new();
@@ -425,7 +414,7 @@ fn symmetry_index_perms(p: &Pattern) -> Vec<Vec<usize>> {
                 if sorted_k != sorted_m {
                     continue;
                 }
-                // j 桁目 (mask m の j 番目のセル) が mask k の何番目に来るか
+                // Where digit j (cell j of mask m) lands within mask k.
                 let mut perm = vec![usize::MAX; mapped.len()];
                 let mut ok = true;
                 for (j, c) in mapped.iter().enumerate() {
@@ -444,12 +433,12 @@ fn symmetry_index_perms(p: &Pattern) -> Vec<Vec<usize>> {
             }
         }
     }
-    // 恒等置換は意味がないので落とす
+    // Drop identity permutations.
     out.retain(|perm| perm.iter().enumerate().any(|(j, &t)| j != t));
     out
 }
 
-/// インデックスに桁の置換を適用する。桁 j (最上位が 0) の値が perm[j] 桁目へ移る。
+/// Apply a digit permutation to an index; digit j (0 = most significant) moves to perm[j].
 fn apply_index_perm(index: usize, size: usize, perm: &[usize]) -> usize {
     let mut digits = vec![0usize; size];
     let mut x = index;
@@ -481,28 +470,23 @@ pub struct Nnue {
     /// Feature transformer: `ft[feature * H + h]`. Shared across stages.
     ft: Vec<f32>,
     /// Accumulator bias, added once: `[H]`.
-    /// ステージごとの accumulator バイアス: `ft_bias[stage * H + h]`。
+    /// Per-stage accumulator bias: `ft_bias[stage * H + h]`.
     ///
-    /// **ReLU の閾値を局面の進行度で変えるため。** 読み出し (`out_w`) は
-    /// 最初からステージ別なのに、非線形の閾値だけが全 61 ステージ共通だった。
-    /// 序盤と終盤では発火すべき隠れ次元が違うはずで、ここを分けるのは
-    /// 976 個 (61 x 16) で済む。
-    ///
-    /// **累算器にはバイアスを入れない。** 1 手ごとにステージが変わるので、
-    /// 増分維持している累算器に焼き込むと毎手つけ替えが要る。読み出しの
-    /// 直前に足す方が安く、増分の不変条件も壊れない。
+    /// Lets the ReLU threshold vary with game phase; the readout was
+    /// already per-stage while the nonlinearity threshold was shared.
+    /// Not baked into the accumulator — stage changes every ply, so bias
+    /// is added at readout, keeping the incremental invariant intact.
     ft_bias: Vec<f32>,
     /// Per-stage read-out weights: `out_w[stage * H + h]`.
     out_w: Vec<f32>,
     /// Per-stage read-out bias: `[STAGE_COUNT]`.
     out_b: Vec<f32>,
-    /// 手番側の石数ごとの補正: `num_w[stage * NUM_TABLE_SIZE + discs]`。
+    /// Per-disc-count correction: `num_w[stage * NUM_TABLE_SIZE + discs]`.
     ///
-    /// **局所パターンだけでは出せない大域情報を足す。** `stage` は
-    /// `60 - 空きマス数` なのでステージ内では総石数が固定で、手番側の石数は
-    /// **石差そのもの**を決める。線形評価は最初からこの表を持っていたが
-    /// (`evaluator::num_weights`)、NNUE には無く、16 次元の隠れ表現が自力で
-    /// 覚えるしかなかった。読み出しは表引き 1 回で、探索の速度に影響しない。
+    /// Adds global information local patterns cannot express: within a
+    /// stage the total disc count is fixed, so the mover's count encodes
+    /// the disc difference exactly. The linear evaluator always had this
+    /// table; NNUE lacked it. One table lookup, no search-speed cost.
     num_w: Vec<f32>,
 
     // Quantized inference copies (built by `quantize`).
@@ -589,16 +573,14 @@ impl Nnue {
     /// silently overflows those lanes and flips the sign of the score, so keep
     /// the margin — the lost precision is immaterial (see the f32/i16 MSE
     /// comparison: 0.05 disc² at 8x this resolution).
-    /// 重みを 8 対称で平均し、評価を対称不変にする。
+    /// Average weights across the 8 symmetries, making evaluation
+    /// symmetry-invariant.
     ///
-    /// パターンのマスクはセル集合としては 8 対称で閉じているが、**並び順が
-    /// 変わる**組み合わせがあるため、同一配置でも別インデックスを引いて評価が
-    /// わずかにずれる (実測 ~0.1 石)。探索はその差を並べ替え順とカット位置の
-    /// 違いに増幅するので、対称局面で答えが変わる。ここでインデックスの軌道
-    /// (対称変換で移り合う集合) ごとに重みを平均して根治する。
-    ///
-    /// 平均なので表現力は落ちず、モデルが本来持つべき対称性を課すだけ。
-    /// `quantize` の前に呼ぶこと (量子化表は f32 から作られるため)。
+    /// Mask cell-sets are closed under symmetry but their cell order is
+    /// not, so identical shapes can hit different indices and differ by
+    /// ~0.1 discs — which search amplifies into different move ordering
+    /// and cut points. Averaging over index orbits fixes it at the root.
+    /// Call before `quantize` (the quantized tables derive from f32).
     pub fn symmetrize(&mut self) {
         for (pi, p) in self.patterns.iter().enumerate() {
             let size = p.size;
@@ -613,7 +595,7 @@ impl Nnue {
                 if seen[x] {
                     continue;
                 }
-                // x の軌道を集める
+                // Collect x's orbit.
                 let mut orbit = vec![x];
                 seen[x] = true;
                 let mut i = 0;
@@ -631,7 +613,7 @@ impl Nnue {
                 if orbit.len() < 2 {
                     continue;
                 }
-                // 軌道内の FT 行 (H 次元) を平均
+                // Average the FT rows (H dims) within the orbit.
                 let inv = 1.0 / orbit.len() as f32;
                 for h in 0..H {
                     let mut sum = 0.0f32;
@@ -647,7 +629,7 @@ impl Nnue {
         }
     }
 
-    /// パターン `pi` の重み表の先頭オフセット (特徴セル単位)。
+    /// Offset of pattern `pi`'s weight table, in feature cells.
     fn pattern_offset(&self, pi: usize) -> usize {
         let mut off = 0usize;
         for p in self.patterns.iter().take(pi) {
@@ -660,19 +642,11 @@ impl Nnue {
         let ft_max = self.ft.iter().fold(1e-6f32, |m, &v| m.max(v.abs()));
         let w_max = self.out_w.iter().fold(1e-6f32, |m, &v| m.max(v.abs()));
 
-        /* **倍率は 2 の冪にする。** 固定小数点なので桁上げはビットシフトで
-        あるべきで、半端な小数倍にする理由が無い。復元も 2 の冪の掛け算に
-        なるので誤差が乗らない。
-
-        **上限は「累算器が i16 に収まること」から直に決める。** 以前は
-        `256 / |ft|最大` で、「量子化後の重みが 1 個 256 まで」という
-        保守的な仮定 (64 x 256 + bias = 16,640) から来ていた。本当の制約は
-        64 マスク分の和とバイアスが 32,767 に収まることなので、実測の
-        `ft_max` から収まる最大の 2 の冪を選べる。
-
-        現用モデル (ft_max 24.69) では 10.37 倍 → **16 倍**。1 単位が
-        0.0964 石から 0.0625 石になり、**分解能が 54% 上がる**。学習も
-        重みも変えず、量子化の取り方だけで得られる。 */
+        /* Power-of-two scale: fixed point should shift, and the inverse
+        multiply then adds no error. The bound comes directly from the
+        i16 accumulator (64-mask sum + bias must fit 32767), not from the
+        old conservative per-weight-256 assumption — that alone raised
+        resolution 54% on the current model without touching training. */
         let bias_max = self.ft_bias.iter().fold(0.0f32, |m, &v| m.max(v.abs()));
         let room = 32_000.0 / (self.n_masks as f32 * ft_max + bias_max);
         let ft_scale = (2.0f32).powi(room.log2().floor() as i32).max(1.0);
@@ -791,7 +765,7 @@ impl Nnue {
         for w in &mut self.out_w {
             *w = next() * 0.1;
         }
-        // positive so ReLU units start active (全ステージ同値から)
+        // Positive so ReLU units start active (same value across stages).
         self.ft_bias.fill(0.1);
     }
 
@@ -835,7 +809,7 @@ impl Nnue {
         } else {
             &self.ft_w_i16
         };
-        let mut acc = [0i16; H]; // バイアスは読み出しで足す
+        let mut acc = [0i16; H]; // bias is added at readout
                                  // SAFETY: indices stay inside their pattern's table (the invariant the
                                  // scalar sum relies on), so every base + H is in bounds.
         unsafe {
@@ -867,14 +841,14 @@ impl Nnue {
         self.forward(&feats, stage) + self.num_term(board, stage)
     }
 
-    /// 石数の補正項。`stage` 内では総石数が固定なので、手番側の石数は石差を
-    /// 一意に決める。
+    /// Disc-count correction; within a stage the mover's count uniquely
+    /// determines the disc difference.
     #[inline]
     fn num_term(&self, board: &Board, stage: usize) -> f32 {
         self.num_w[stage * NUM_TABLE_SIZE + num_index(board)]
     }
 
-    /// Forward from explicit features + stage (石数の補正は含まない)。
+    /// Forward from explicit features + stage (without the disc-count term).
     fn forward(&self, feats: &[u32; MAX_MASKS], stage: usize) -> f32 {
         let mut acc = [0.0f32; H];
         acc.copy_from_slice(&self.ft_bias[stage * H..stage * H + H]);
@@ -923,7 +897,7 @@ impl Nnue {
     /// leaf eval is O(H). Needs [`quantize`](Self::quantize).
     pub fn accumulator(&self, board: &Board) -> Accumulator {
         let indices = self.indexer.init(board.black, board.white);
-        // バイアスはステージ別なので、ここでは足さない (読み出しで足す)。
+        // Per-stage bias is added at readout, not here.
         let mut acc = [0i16; H2];
         for m in 0..self.n_masks {
             let raw = indices.raw()[m] as usize;
@@ -998,7 +972,7 @@ impl Nnue {
         };
         let ow = &self.out_w_i16[stage * H..stage * H + H];
         let fb = &self.ft_bias_i16[stage * H..stage * H + H];
-        // out = bias + scale · Σ relu(acc[h] + fb[h]) · out_w[h] + 石数の補正
+        // out = bias + scale * sum relu(acc[h] + fb[h]) * out_w[h] + disc term
         let sum = readout_dot(v, fb, ow);
         self.out_b[stage] + sum as f32 * self.out_scale + self.num_term(board, stage)
     }
@@ -1093,7 +1067,7 @@ impl Nnue {
 
         // Transformer gradients: d acc[h] / d ft_bias[h] = 1, likewise for each
         // active feature's row. Step = lr · err · delta[h].
-        // バイアスは今のステージの行だけが動く。
+        // Only the current stage's bias row moves.
         for h in 0..H {
             let i = stage * H + h;
             self.ft_bias[i] = (self.ft_bias[i] - g * delta[h]).clamp(-FT_CLAMP, FT_CLAMP);
@@ -1108,8 +1082,8 @@ impl Nnue {
         err * err
     }
 
-    /// 全パラメータを 1 本の平坦な配列として出す (SWA / 重み平均のため)。
-    /// 並びは [`save`](Self::save) と同じ。
+    /// All parameters as one flat array (for SWA / weight averaging);
+    /// same order as [`save`](Self::save).
     pub fn weights_flat(&self) -> Vec<f32> {
         let mut v = Vec::with_capacity(
             self.ft.len()
@@ -1126,7 +1100,7 @@ impl Nnue {
         v
     }
 
-    /// [`weights_flat`](Self::weights_flat) の逆。
+    /// Inverse of [`weights_flat`](Self::weights_flat).
     pub fn set_weights_flat(&mut self, v: &[f32]) {
         let mut o = 0;
         for dst in [
@@ -1143,18 +1117,17 @@ impl Nnue {
         assert_eq!(o, v.len(), "weights_flat length mismatch");
     }
 
-    /// 石数表を直に入れ替える。**最小二乗の閉じた解を外から流し込む**ため。
-    ///
-    /// ネットワークを固定すると、`num_w[stage][discs]` の最適値は
-    /// そのバケツの**残差の平均**そのものになる。学習で近づけるより、
-    /// 1 パスで数えて入れる方が速く、しかも**この入力から得られる利得の
-    /// 上限**が正確に出る。
+    /// Replace the disc-count table wholesale, to inject the closed-form
+    /// least-squares solution: with the network frozen, the optimum for
+    /// `num_w[stage][discs]` is exactly the mean residual of that bucket.
+    /// One counting pass beats training and also bounds the achievable
+    /// gain.
     pub fn set_num_w(&mut self, v: &[f32]) {
         assert_eq!(v.len(), self.num_w.len(), "num_w length mismatch");
         self.num_w.copy_from_slice(v);
     }
 
-    /// 石数表の長さ (STAGE_COUNT x NUM_TABLE_SIZE)。
+    /// Disc-count table length (STAGE_COUNT x NUM_TABLE_SIZE).
     pub fn num_w_len(&self) -> usize {
         self.num_w.len()
     }
@@ -1243,8 +1216,8 @@ impl Nnue {
     /// # Safety
     /// `view` / `adam` must come from this model and its [`AdamState`], and no
     /// `&mut` access to either may be live.
-    // 学習手は「モデル・モーメント・局面・ラベル・歩幅」を全部受ける必要が
-    // あり、構造体に束ねると 1 例ごとに構築が入る (13 億回走る)。
+    // The train step takes model, moments, position, label and step all
+    // at once; a bundling struct would be constructed 1.3B times.
     #[allow(clippy::too_many_arguments)]
     pub unsafe fn train_black_adam_shared(
         &self,
@@ -1279,9 +1252,9 @@ impl Nnue {
 
         let err = out - target;
 
-        /* **勾配は lr を掛ける前の生の値を渡す。** Adam は 2 次モーメントで
-        正規化するので、ここに lr を混ぜると正規化が壊れる (SGD 側の `g` は
-        lr 込みの歩幅で、意味が違う)。 */
+        /* Pass the raw gradient, without lr: Adam normalizes by the
+        second moment, and mixing lr in here breaks that normalization
+        (the SGD path's `g` is an lr-scaled step — different meaning). */
         let mut delta = [0.0f32; H];
         for h in 0..H {
             if acc[h] > 0.0 {
@@ -1319,9 +1292,9 @@ impl Nnue {
         let tmp = path.with_extension("tmp");
         {
             let mut w = std::io::BufWriter::new(std::fs::File::create(&tmp)?);
-            /* **形式 03 = ステージ別バイアス + 石数表。** 01/02 も読める
-            (バイアスは全ステージへ複製、石数表はゼロ埋め) ので、以前に
-            学習した重みはそのまま同じ評価値を返す。 */
+            /* Format 03 = per-stage bias + disc table. 01/02 still load
+            (bias replicated across stages, disc table zeroed), so older
+            weights evaluate identically. */
             w.write_all(b"BBRVNN03")?;
             w.write_all(&(H as u32).to_le_bytes())?;
             w.write_all(&(self.n_features as u32).to_le_bytes())?;
@@ -1347,9 +1320,9 @@ impl Nnue {
         let mut r = std::io::BufReader::new(std::fs::File::open(path)?);
         let mut magic = [0u8; 8];
         r.read_exact(&mut magic)?;
-        /* 01 = バイアス共通・石数表なし、02 = バイアス共通・石数表あり、
-        03 = 両方ステージ別。旧形式はバイアスを全ステージへ複製して読む
-        ので、評価値は以前と完全に一致する。 */
+        /* 01 = shared bias, no disc table; 02 = shared bias with table;
+        03 = both per-stage. Legacy formats replicate the bias so their
+        evaluations match exactly. */
         let (staged_bias, has_num) = match &magic {
             b"BBRVNN03" => (true, true),
             b"BBRVNN02" => (false, true),
@@ -1418,7 +1391,7 @@ macro_rules! quant_acc {
         impl Nnue {
             pub fn $build(&self, board: &Board) -> $Acc {
                 let indices = self.indexer.init(board.black, board.white);
-                // バイアスはステージ別なので読み出しで足す (i16 経路と同じ)。
+                // Per-stage bias is added at readout (same as the i16 path).
                 let mut acc = [<$T>::default(); H2];
                 for m in 0..self.n_masks {
                     let f = (self.mask_off[m] as usize + indices.raw()[m] as usize) * H2;

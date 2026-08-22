@@ -6,9 +6,10 @@
 //! terminal (game over) the exact score is used, scaled by SCORE_SCALE to
 //! dominate heuristic values.
 
-// 添字ループは走査順そのものが意味を持つ (連続領域の走査・SIMD 的な
-// 展開) ため、イテレータ化の助言は採らない。引数の多い探索関数も、
-// 構造体に束ねると呼び出しごとの構築が入るので現状の形を保つ。
+// Indexed loops here iterate in an order that matters (contiguous scans,
+// SIMD-style unrolling), so the iterator lints are not taken. Search
+// functions keep their long argument lists: bundling them into a struct
+// would add per-call construction on a hot path.
 #![allow(clippy::too_many_arguments)]
 
 use crate::board::Board;

@@ -5,9 +5,10 @@
 //! Scores are disc differences from the current player's perspective, with
 //! the empty-square bonus applied to the winner (Board::score semantics).
 
-// 添字ループは走査順そのものが意味を持つ (連続領域の走査・SIMD 的な
-// 展開) ため、イテレータ化の助言は採らない。引数の多い探索関数も、
-// 構造体に束ねると呼び出しごとの構築が入るので現状の形を保つ。
+// Indexed loops here iterate in an order that matters (contiguous scans,
+// SIMD-style unrolling), so the iterator lints are not taken. Search
+// functions keep their long argument lists: bundling them into a struct
+// would add per-call construction on a hot path.
 #![allow(clippy::too_many_arguments)]
 
 use crate::bitboard;
@@ -164,17 +165,15 @@ pub static CLEAR_NS: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64
 /// A young brother was offered to the pool and refused: no worker was idle.
 pub static REFUSED: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
 
-/// 打ち切り (カットオフ証明で兄弟を止めた) 回数と、それで潰れたタスク数。
-/// **経路を通っているかの確認に要る** — 通っていない集合で「値が一致した」と
-/// 言っても、その集合が検出力を持たないだけかもしれない。
+/// Number of abort events (siblings stopped after a proven cutoff) and
+/// tasks killed by them. Needed to verify a test set actually exercises
+/// this path — "values matched" is meaningless on a set that never aborts.
 pub static ABORT_FIRED: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
 
-/// **打ち切りを無理やり起こす** (`SOLVER_CHAOS=n` で n 回に 1 回)。
-///
-/// 競合でしか出ない不具合は、走るたびに出たり出なかったりする。**起こる条件を
-/// 濃くしてからでないと直したかどうかも分からない**ので、カットオフの有無に
-/// 関わらず打ち切りを撒く口を置く。
-/// カットオフでの打ち切りを行うか。**既定は行う** (`SOLVER_ABORT=0` で止める)。
+/// Force aborts (`SOLVER_CHAOS=n` fires one every n). Race-only bugs
+/// appear intermittently; without a way to make aborts dense you cannot
+/// even tell whether a fix worked.
+/// Whether proven cutoffs abort siblings; on by default (`SOLVER_ABORT=0` disables).
 fn solver_abort() -> bool {
     static V: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
     *V.get_or_init(|| std::env::var("SOLVER_ABORT").map_or(true, |v| v != "0"))
@@ -354,23 +353,20 @@ fn run_one_sibling(
         let re = -w.pvs(&mut child, m.hash, -upper, -val, false, ev);
         val = if re == -ABORTED { ABORTED } else { re };
     }
-    /* **零幅窓で沈んだ手の値は上界にすぎない。**
-
-    `(-cur-1, -cur)` で探索して `val <= cur` なら「cur 以下」しか分からず、
-    真値はもっと下かもしれない。それを窓 (`shared_lower`) に流すと以降の
-    兄弟が誤った窓で探索し、最善手の選定にも上界が混じる。**実測で 19 空きの
-    局面が並列だと -20 の手を +14 と称して選んだ** (1 スレッドでは正しく
-    +16 の手を返す)。超えた場合だけ真値として扱う。 */
+    /* A move that fails low in a null window only yields an upper bound:
+    after `(-cur-1, -cur)` with `val <= cur` the true value may be lower.
+    Feeding that into `shared_lower` gives siblings a wrong window and
+    lets bounds leak into best-move selection (observed: a 19-empties
+    position picked a -20 move labelled +14 in parallel). Only treat the
+    value as exact when it beats the window. */
     if val != ABORTED && val > cur {
         shared_lower.fetch_max(val, Ordering::Relaxed);
         if val >= upper {
-            /* **カットオフを証明したので、残りの兄弟は止めてよい。**
-
-            止めた兄弟の結果は捨てるが、**捨て方を間違えると値が壊れる**。
-            打ち切られたタスクは `ABORTED` を返し、回収側はそれを「悪い手」
-            ではなく「見ていない手」として扱う必要がある — 残りだけで最大を
-            採ると、止められた側が最善だったときに取りこぼす。
-            `SOLVER_ABORT=0` で止められる (切り分け用)。 */
+            /* Cutoff proven: stop the remaining siblings. Their results
+            are discarded, but the discard has to be careful — an aborted
+            task returns `ABORTED` and the collector must treat it as
+            "unseen", not "bad", or the best move can be lost.
+            `SOLVER_ABORT=0` disables this for bisection. */
             ABORT_FIRED.fetch_add(1, Ordering::Relaxed);
             if solver_abort() {
                 group.abort();
@@ -401,10 +397,11 @@ fn run_one_sibling(
 /// One handed-off sibling's result, written by whoever ran it.
 struct TaskSlot {
     done: std::sync::atomic::AtomicBool,
-    /// **投げた窓を超えたか。** 超えていない値は上界なので、手の候補には
-    /// できない。回収側で判じるには投げた時点の窓が要るが、それを
-    /// `handed` に持たせると分割ごとの `Vec` が倍の幅になる (分割は 250 万
-    /// 回あるので確保のぶんが効く)。書く側が判じてここに置く。
+    /// Whether the result beat the window it was handed. A value that
+    /// didn't is only an upper bound and cannot become the best move.
+    /// The writer records the verdict here because carrying the original
+    /// window in `handed` would double the per-split Vec width (2.5M
+    /// splits make the allocation visible).
     beat: std::sync::atomic::AtomicBool,
     value: std::sync::atomic::AtomicI32,
     nodes: std::sync::atomic::AtomicU64,
@@ -1405,7 +1402,7 @@ pub struct Solver {
     threads: usize,
     /// See [`NnueProbe`]; `None` keeps the linear probes.
     nnue: Option<NnueProbe>,
-    /// 外部 (UI) からの中断ハンドル。立つと探索を諦めて即座に戻る。
+    /// External (UI) stop handle; when set the search returns immediately.
     stop: Option<crate::midgame::StopHandle>,
 }
 
@@ -1415,7 +1412,7 @@ pub struct Solver {
 struct Worker<'a> {
     tt: &'a HashTable,
     neighbours: &'a NeighbourTable,
-    /// 外部からの中断 (UI)。ノードごとの abort 判定と併せて見る。
+    /// External stop (UI), checked together with the per-node abort flag.
     stop: Option<&'a crate::midgame::StopHandle>,
     nodes: u64,
     best: Option<Position>,
@@ -1559,7 +1556,7 @@ impl Solver {
     /// Set how many threads the root may split its siblings across.
     /// The transposition table is shared; every other piece of search state
     /// is per-thread.
-    /// 外部からの中断ハンドルを設定する (UI の停止ボタン用)。
+    /// Install the external stop handle (the UI stop button).
     pub fn set_stop(&mut self, stop: Option<crate::midgame::StopHandle>) {
         self.stop = stop;
     }
@@ -1690,8 +1687,7 @@ impl Solver {
         let tt = &self.hash_table;
         let neighbours = &self.neighbours;
         let stop_ref = self.stop.as_ref();
-        // 見張りスレッドから借りるので、スコープの外に置く (スコープ内の
-        // ローカルはスコープより長生きしないため借用できない)
+        // Borrowed by the watcher thread, so it must outlive the scope.
         let root_abort = AbortFlag::root();
         let watching = std::sync::atomic::AtomicBool::new(true);
         let (value, nodes, best) = std::thread::scope(|scope| {
@@ -1699,19 +1695,14 @@ impl Solver {
                 let b = &budget;
                 scope.spawn(move || b.pool.worker_loop());
             }
-            // 外からの停止を、兄弟打ち切りと同じ口へ流す。
-            //
-            // 並列に走るワーカー (spawn_worker) は停止ハンドルを持たない。
-            // 渡してもよいが、判定が 1 つ増えるぶん葉に近い層が重くなる。
-            // 打ち切りフラグは**もともと全ワーカーが毎ノード見ており**、
-            // `aborted()` は親をたどるので、根を立てれば全員に届く。
-            // 探索の内側には何も足さずに済む。
-            //
-            // 見張りは専用スレッド。探索の内側で停止ハンドルを読むと、
-            // 頻度を落とせば効きが鈍り、上げれば探索が遅くなる (中盤探索の
-            // 期限つき探索と同じ理屈)。
-            // 見張りは解が出たら黙って抜ける。立てっぱなしにするとスコープの
-            // join が返らないので、抜ける口は Drop で必ず通す
+            // Route the external stop through the sibling-abort flag.
+            // Workers don't carry the stop handle: every worker already
+            // polls the abort flag each node and `aborted()` walks up the
+            // parents, so raising the root reaches everyone without adding
+            // a check to the search inner loop. The watcher is a dedicated
+            // thread (polling inside the search either dulls the response
+            // or slows the search), and it must exit via Drop or the
+            // scoped join would never return.
             struct StopWatch<'a>(&'a std::sync::atomic::AtomicBool);
             impl Drop for StopWatch<'_> {
                 fn drop(&mut self) {
@@ -2087,10 +2078,10 @@ impl Worker<'_> {
             }
             let n0 = self.nodes;
             let val = self.pvs_root(board, lo, hi, ev);
-            /* **中断は値ではない。** `ABORTED` は `i32::MIN + 1` なので、
-            そのまま窓の計算に入れると `val - 8` のような式で桁があふれ、
-            次の窓が壊れる。期限切れでも同じ経路を通るので、実戦で誤った手を
-            指しうる。 */
+            /* ABORTED is not a value. It is `i32::MIN + 1`; letting it
+            into window arithmetic (`val - 8`) overflows and corrupts the
+            next window. Deadline expiry takes this same path, so this
+            could produce a wrong move in a real game. */
             if val == ABORTED {
                 return ABORTED;
             }
@@ -2148,11 +2139,11 @@ impl Worker<'_> {
             let n0 = self.nodes;
             let mut child = moves[0].child(board);
             max = -self.pvs(&mut child, moves[0].hash, -upper, -lower, false, ev);
-            /* **打ち切られた探索の値を使わない。** `ABORTED` は `i32::MIN + 1`
-            なので符号を反転すると `i32::MAX` になり、そのまま `max` に入って
-            置換表へ流れる (`i32::MAX as i8` は -1、つまり「下界 -1」という嘘)。
-            表が汚れると、後の窓で本当は +16 の手が +1 で沈む — 19 空きの実局面
-            でそれを踏み、-20 の手を最善として指した。 */
+            /* Never use an aborted search's value. `ABORTED` is
+            `i32::MIN + 1`; negation turns it into `i32::MAX`, which flows
+            through `max` into the table (`i32::MAX as i8` is -1, i.e. a
+            bogus lower bound of -1). A poisoned table later sank a true +16
+            move to +1 and the engine played a -20 move as best. */
             if max == -ABORTED {
                 return ABORTED;
             }
@@ -2178,8 +2169,9 @@ impl Worker<'_> {
                 }
                 if val > max {
                     max = val;
-                    // 手は真値が確定したものだけ。沈んだ手の上界で
-                    // 値が上がることはあるが、その手は最善ではない
+                    // Only moves with proven values become best; a
+                    // fail-low upper bound may raise the value but its
+                    // move must not be selected.
                     if let Some(p) = bpos {
                         best = p;
                     }
@@ -2197,7 +2189,7 @@ impl Worker<'_> {
             }
             let mut child = m.child(board);
             let mut val = -self.pvs(&mut child, m.hash, -lower - 1, -lower, false, ev);
-            // 打ち切りは値ではない (長兄と同じ理由)
+            // Aborts are not values (same reason as the eldest branch).
             if val == -ABORTED {
                 return ABORTED;
             }
@@ -2286,24 +2278,22 @@ impl Worker<'_> {
         let board = *parent;
 
         let mut handed: Vec<usize> = Vec::new();
-        /* **値と手は別々に積む。**
-
-        零幅窓で沈んだ手の値は上界で、節点の値 (fail-soft) には使えるが
-        **指し手には使えない**。同じ変数で両方を追うと、`max` だけ上がって
-        手が取り残され、実局面で -20 の手が +16 の顔で最善になった。 */
+        /* Track value and move separately. A fail-low upper bound feeds
+        the node value (fail-soft) but must never pick the move; tracking
+        both in one variable once made a -20 move look like a +16 best. */
         let mut max = i32::MIN;
         let mut best_val = i32::MIN;
         let mut best: Option<Position> = None;
         let mut unwound = false;
-        // 祖先の打ち切りで兄弟を見残したか
+        // Did an ancestor abort leave siblings unseen?
         let mut cut_short = false;
 
         for (i, m) in siblings.iter().enumerate() {
             if group.aborted() {
-                /* **祖先に止められた。** ここで抜けると見ていない兄弟が残る
-                ので、`max` は「全部見た結果」ではない。それを返すと呼び出し側
-                が確定値として置換表に書き、後の探索が誤る。並列でしか起きず、
-                走るたびに出たり出なかったりする。 */
+                /* Stopped by an ancestor: siblings remain unseen, so
+                `max` is not a full result. Returning it would let the
+                caller store it as exact and mislead later searches.
+                Parallel-only and intermittent. */
                 cut_short = true;
                 break;
             }
@@ -2371,13 +2361,9 @@ impl Worker<'_> {
                     (self.nodes - n0) / 1_000_000
                 );
             }
-            /* **値と手は別に扱う。**
-
-            零幅窓 `(cur, cur+1)` で沈んだ手の値は上界で、節点の値
-            (fail-soft) としては使ってよい。**指し手としては使えない** —
-            真値はもっと下かもしれず、実局面で -20 の手が +16 の顔で最善に
-            なった。値だけ直すと手が壊れ、手だけ直すと値が壊れるので、
-            条件を分ける。 */
+            /* Value and move are handled separately: a fail-low in
+            `(cur, cur+1)` is an upper bound — fine for the fail-soft node
+            value, never for move selection. */
             if val > max {
                 max = val;
                 shared_lower.fetch_max(val, Ordering::Relaxed);
@@ -2409,13 +2395,13 @@ impl Worker<'_> {
             }
             if dbg_asp() && parent.empty_count() >= 10 {
                 eprintln!(
-                    "[split e{}] handed {:?} -> {val} (超えた {beat}) ({}M)",
+                    "[split e{}] handed {:?} -> {val} (beat {beat}) ({}M)",
                     parent.empty_count(),
                     siblings[i].pos,
                     nodes / 1_000_000
                 );
             }
-            // 値と手を分ける (inline と同じ理由)
+            // Split value from move (same reason as the inline path).
             if val != ABORTED {
                 if val > max {
                     max = val;
@@ -2430,12 +2416,10 @@ impl Worker<'_> {
         if unwound {
             return Some((ABORTED, best));
         }
-        /* **打ち切られた兄弟がいるなら、残りだけで値を確定できない。**
-
-        カットオフを証明できた (`max >= upper`) ならその手で足りるが、そうで
-        ないうちに止められた兄弟は「見ていない手」であって「悪い手」ではない。
-        残りだけで最大を採ると、止められた側が最善だったときに取りこぼす。
-        実局面で +16 の手を落として +14 の手を最善として返した。 */
+        /* With aborted siblings the remainder cannot prove a value.
+        A proven cutoff (`max >= upper`) suffices, but an aborted sibling
+        is "unseen", not "bad": taking the max of what's left once dropped
+        a +16 move and returned +14 as best. */
         if (any_aborted || cut_short) && max < upper {
             return Some((ABORTED, best));
         }
@@ -2531,7 +2515,7 @@ impl Worker<'_> {
                 ev,
             );
             board.pass();
-            // 打ち切りは値ではない。表にも書かない
+            // Aborts are not values; keep them out of the table too.
             if val == -ABORTED {
                 return ABORTED;
             }
@@ -3040,9 +3024,9 @@ impl Worker<'_> {
         // even because !odd is false < true). The caller carries the parity
         // down the tree, so this level does not recompute it.
         //
-        // 全象限が偶数 (parity == 0) なら鍵が全部同じで、安定ソートは恒等
-        // 置換 — 象限引きごと飛ばす。4 空きの局面はかなりの割合がここに
-        // 落ちる (奇数象限が 1 つでもあると 4 空きまでに使い切られやすい)。
+        // With all quadrants even (parity == 0) every key ties and the
+        // stable sort is the identity — skip the whole quadrant lookup.
+        // A large share of 4-empty positions land here.
         let (p1, p2, p3, p4) = if parity != 0 {
             let odd = |sq: u8| parity & quadrant_id(sq) != 0;
             let mut arr = [p1, p2, p3, p4];
@@ -3122,11 +3106,9 @@ impl Worker<'_> {
         let mut arr = [p1, p2, p3];
         arr.sort_by_key(|&s| !odd(s));
         let [p1, p2, p3] = arr;
-        // parity == 0 でソートを飛ばす分岐は `last4` では 0.7% 効いたが、
-        // ここでは効果が消える (band22 で誤差内、むしろ負けの回もある)。
-        // last3 は last4 の内側で呼ばれ、奇数象限は 4 空きまでに使われて
-        // parity 0 が多いはずだが、ソート 3 要素は 4 要素より安いので
-        // 分岐の予測失敗と相殺する。last4 だけに置く。
+        // The parity==0 sort-skip helped 0.7% in `last4` but is a wash
+        // here (within noise on band22): a 3-element sort is cheap enough
+        // that the branch mispredict cancels the win. Keep it in last4 only.
 
         let mut alpha = alpha;
         let mut any = false;
