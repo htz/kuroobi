@@ -1129,6 +1129,22 @@ export function GgsSettings({ snap }: { snap: GgsSnapshot }) {
     say('反映しました');
   };
 
+  /* **触った時点で効かせる (適用ボタンは置かない)。**
+     他の設定はどれも即時反映なのに、ここだけ「適用」を押させていた。
+     押し忘れると効いていないことに気付けず、実際に先読みを切ったつもり
+     で対局してしまった。値を触ってから少し待って送る (数字の入力欄を
+     1 文字ごとに送らないため)。 */
+  const first = useRef(true);
+  useEffect(() => {
+    if (first.current) { first.current = false; return; }
+    if (!calibrated) return;
+    const t = setTimeout(() => void apply(), 400);
+    return () => clearTimeout(t);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [levels.depth, levels.solve, levels.band, ponder, pace,
+      maxMove, reserve, budgetUse, auto, watch, book]);
+
+
   return (
     <div className="k-scroll" style={{ flex: 1, minHeight: 0, padding: 'var(--sp-4) var(--sp-4) 0' }}>
       <div style={{ maxWidth: 720, display: 'flex', flexDirection: 'column' }}>
@@ -1240,8 +1256,6 @@ export function GgsSettings({ snap }: { snap: GgsSnapshot }) {
             }}>{saved}</span>
           )}
           <span style={{ marginLeft: 'auto' }} />
-          <Button variant="primary" disabled={!calibrated}
-                  onClick={() => void apply()}>適用</Button>
           {!calibrated && <Note>{CALIB_NOTE}</Note>}
         </div>
 
