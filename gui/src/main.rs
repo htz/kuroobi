@@ -1,6 +1,6 @@
-//! Kuroobi の GUI (Tauri)。エンジンはライブラリとして同一プロセスに
-//! リンクし、探索はブロッキングのままワーカースレッド (spawn_blocking) で
-//! 回す。フロントは gui/ui/ の静的ページ。
+//! Kuroobi's GUI (Tauri). The engine links into the same process; the
+//! blocking search runs on worker threads (spawn_blocking). The
+//! frontend is the static page under gui/ui/.
 
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
@@ -21,34 +21,36 @@ use kuroobi::{Board, Color, Position};
 struct App {
     game: Mutex<Reversi>,
     engine: Arc<Mutex<Option<Engine>>>,
-    /// 探索中でも触れるよう Engine の Mutex の外に置く停止ハンドル。
+    /// Stop handle kept outside the Engine mutex so it stays reachable
+    /// during a search.
     stop: Arc<Mutex<Option<kuroobi::midgame::StopHandle>>>,
-    /// GGS セッション (常駐スレッド)。
+    /// GGS session (resident thread).
     ggs: Mutex<Option<ggs::Handle>>,
-    /// ローカル対局を定石の学習に取り込むか。
+    /// Whether local games feed book learning.
     learn_on: Mutex<bool>,
-    /// いま CPU を使っている機能の記録 (画面の常時表示と、学習が譲る判断)。
+    /// Which feature currently uses the CPU (status display, and the
+    /// yield decision for learning).
     activity: Arc<Mutex<Activity>>,
-    /// CPU 使用率の前回サンプル (実時間, プロセスの CPU 時間)。
+    /// Previous CPU sample (wall time, process CPU time).
     cpu_meter: Mutex<Option<(std::time::Instant, std::time::Duration)>>,
-    /// ローカル対局の時計。**GGS と同じ形にする** — 持ち時間を意識して
-    /// 指す練習の場が無いと、本番でしか配り方を試せない。
+    /// Local game clock, shaped like GGS's — without a place to
+    /// practice under a clock, pacing could only be tried live.
     clocks: Mutex<Clocks>,
 }
 
-/// ローカル対局の時計。0 秒の持ち時間は「時間制でない」の意味。
+/// Local game clock; 0 seconds means untimed.
 #[derive(Default)]
 struct Clocks {
-    /// 1 人ぶんの持ち時間 (秒)。0 なら時計を使わない。
+    /// Time per player in seconds; 0 disables the clock.
     total: u64,
-    /// 残り (秒)。人と KUROOBI で別に持つ。
+    /// Remaining seconds, kept separately for the human and KUROOBI.
     black: f64,
     white: f64,
-    /// 時間切れした側。決まったら以降は動かさない。
+    /// Which side flagged; frozen once set.
     lost: Option<kuroobi::Color>,
-    /// いまの手番が始まった時刻。**着手のたびに引く** — 人と KUROOBI で
-    /// 計り方を分けない (`think` の実測だけを引くと、人の考慮時間が
-    /// どこにも計上されない)。
+    /// When the current turn started; charged on every move. Humans and
+    /// KUROOBI are timed the same way (charging only measured think time
+    /// would leave human deliberation uncounted).
     turn_started: Option<std::time::Instant>,
 }
 
@@ -65,7 +67,7 @@ impl Clocks {
         };
     }
 
-    /// 手番が終わったので経過を引き、次の手番を始める。
+    /// End the turn: charge the elapsed time, start the next turn.
     fn turn_done(&mut self, mover: kuroobi::Color) {
         if self.total == 0 {
             return;
@@ -82,7 +84,7 @@ impl Clocks {
             self.white
         }
     }
-    /// 使った時間を引く。**0 で止める** — 負にすると画面の桁が崩れる。
+    /// Charge used time, clamped at 0 (negatives break the display).
     fn spend(&mut self, c: kuroobi::Color, secs: f64) {
         let v = if c == kuroobi::Color::Black {
             &mut self.black
@@ -96,8 +98,7 @@ impl Clocks {
     }
 }
 
-/// このプロセスが使った CPU 時間 (user + sys)。自プロセスなので特別な
-/// 権限は要らない。
+/// CPU time used by this process (user + sys); no privileges needed.
 fn process_cpu_time() -> std::time::Duration {
     unsafe {
         let mut ru: libc::rusage = std::mem::zeroed();
@@ -108,12 +109,12 @@ fn process_cpu_time() -> std::time::Duration {
     }
 }
 
-/// このプロセスが今使っている物理メモリ (常駐サイズ)。ピーク値ではなく
-/// 現在値なので、置換表を張り直したときの増減がそのまま見える。
+/// Current resident memory of this process (not the peak, so table
+/// resizes show up directly).
 #[cfg(target_os = "macos")]
 fn process_memory() -> u64 {
-    // 構造体と定数は libc、タスクポートだけ mach2 から取る
-    // (libc の mach_task_self_ は非推奨になったため)
+    // Structs/constants from libc; only the task port from mach2
+    // (libc's mach_task_self_ is deprecated).
     unsafe {
         let mut info: libc::mach_task_basic_info = std::mem::zeroed();
         let mut count = (std::mem::size_of::<libc::mach_task_basic_info>()
@@ -138,7 +139,7 @@ fn process_memory() -> u64 {
     0
 }
 
-/// 積んでいる物理メモリの総量 (使用率の分母)。
+/// Total physical memory (the utilization denominator).
 #[cfg(target_os = "macos")]
 fn total_memory() -> u64 {
     let mut sz: u64 = 0;
@@ -163,19 +164,19 @@ fn total_memory() -> u64 {
     0
 }
 
-/// ローカルで CPU を使っている機能。探索は排他 (同時に 1 つ) なので
-/// local は 1 枠でよい。学習は裏で進むが、他が動いている間は譲って止まる。
+/// The local feature using the CPU. Searches are exclusive, so one slot
+/// suffices; learning runs in the background but yields to everything.
 #[derive(Default)]
 pub(crate) struct Activity {
-    /// 走っているローカル探索の種別 (思考 / 解析 / 分析)。
+    /// Kind of running local search (think / analyze / review).
     pub(crate) local: Option<&'static str>,
-    /// 学習の取り込み進捗 (済み, 総数)。ジョブが無ければ None。
+    /// Learning import progress (done, total); None without a job.
     learn: Option<(u32, u32)>,
-    /// 学習が他の機能に譲って止まっているか。
+    /// Whether learning is paused, yielding to another feature.
     learn_paused: bool,
 }
 
-/// ローカル探索の実行中マーク。スコープを抜けたら自動で消える。
+/// Running marker for a local search; clears itself on scope exit.
 struct ActivityGuard(Arc<Mutex<Activity>>);
 impl ActivityGuard {
     fn begin(slot: &Arc<Mutex<Activity>>, kind: &'static str) -> Self {
@@ -189,7 +190,7 @@ impl Drop for ActivityGuard {
     }
 }
 
-/// スレッド数の既定 (コア数の半分)。
+/// Default thread count (half the cores).
 fn auto_threads() -> usize {
     std::thread::available_parallelism()
         .map(|n| (n.get() / 2).max(1))
@@ -200,15 +201,16 @@ fn ggs_snap_arc(app: &State<App>) -> Option<Arc<Mutex<ggs::Snapshot>>> {
     app.ggs.lock().unwrap().as_ref().map(|h| h.snapshot.clone())
 }
 
-/// GGS で自分の対局が進行中か。時計のある実対局なので最優先で CPU を
-/// 渡す — この間ローカルの探索は開始を断り、学習も譲って止まる。
+/// Whether one of our GGS games is in progress. A clocked real game
+/// gets the CPU first: local searches refuse to start and learning
+/// yields.
 fn ggs_match_in(snap: &Option<Arc<Mutex<ggs::Snapshot>>>) -> bool {
     snap.as_ref().is_some_and(|s| {
         s.lock()
             .unwrap()
             .matches
             .iter()
-            // 終局した対局は一覧に残るので、進行中のものだけを見る
+            // Finished games stay listed; look only at ongoing ones.
             .any(|m| !m.my_color.is_empty() && !m.over)
     })
 }
@@ -221,7 +223,7 @@ fn same_board(a: &Board, b: &Board) -> bool {
     a.black == b.black && a.white == b.white && a.player() == b.player()
 }
 
-/// f32 の NaN/∞ は JSON で null になりフロントを壊すので、境界で有限値に丸める。
+/// NaN/inf become null in JSON and break the frontend; clamp at the boundary.
 fn finite(v: f32) -> f32 {
     if v.is_finite() {
         v
@@ -234,10 +236,10 @@ fn finite(v: f32) -> f32 {
     }
 }
 
-/// 盤面と対局状態のスナップショット (フロントへ渡す形)。
+/// Board and game-state snapshot (the shape sent to the frontend).
 #[derive(Serialize, Clone)]
 struct GameView {
-    /// 64 マス: 0 = 空き, 1 = 黒, 2 = 白 (A1=0 の file-major)。
+    /// 64 cells: 0 = empty, 1 = black, 2 = white (file-major, A1 = 0).
     cells: Vec<u8>,
     /// "black" | "white"
     player: String,
@@ -245,31 +247,31 @@ struct GameView {
     black: u8,
     white: u8,
     over: bool,
-    /// 直前の着手マス (パスなら null)。
+    /// Last move square (null on pass).
     last: Option<u8>,
-    /// f5d6... 形式の棋譜。
+    /// Game record in f5d6... form.
     kifu: String,
     move_count: usize,
-    /// 全手順 (undo で戻った先の手も含む)。null = パス。
+    /// Full move line (including undone moves); null = pass.
     moves: Vec<Option<u8>>,
-    /// 現在の局面が moves の何手目の後か。
+    /// Which move of `moves` the current position follows.
     cursor: usize,
 }
 
 #[derive(Serialize)]
 struct ThinkView {
-    /// 選んだマス (パスなら null)。局面はまだ動かしていない。
+    /// Chosen square (null = pass); the position has not moved yet.
     pos: Option<u8>,
-    /// 手番視点の評価値 (石差)。
+    /// Mover-view value in discs.
     value: f32,
     exact: bool,
-    /// 定石 book から返した手か。
+    /// Whether the move came from the book.
     from_book: bool,
-    /// 実戦から学習した局面の定石か (表示用)。
+    /// Whether it is a game-learned book entry (display only).
     learned: bool,
-    /// この手に使った時間 (秒)。定石から返した手はほぼ 0。
+    /// Seconds spent on this move (book moves ~0).
     secs: f32,
-    /// この手を選ぶまでに訪れたノード数。定石から返した手は 0。
+    /// Nodes visited for this move (0 for book moves).
     nodes: u64,
 }
 
@@ -278,27 +280,27 @@ struct HintView {
     pos: u8,
     value: f32,
     exact: bool,
-    /// 定石 book の値か (探索でなく)。
+    /// Whether the value came from the book, not search.
     from_book: bool,
-    /// この値を出した探索の深さ (読み切り・定石は 0)。
+    /// Search depth behind the value (0 for solves and book).
     depth: u32,
 }
 
 #[derive(Serialize)]
 struct EvalPoint {
     n: usize,
-    /// 黒視点の石差。
+    /// Disc difference from Black's view.
     value: f32,
     exact: bool,
-    /// 定石 book の値か (探索でなく)。
+    /// Whether the value came from the book, not search.
     from_book: bool,
 }
 
-/// 手順 (line) 上の n 手目直後の盤面。
+/// Board right after move n of the line.
 ///
-/// 初期配置から再生してはいけない。GGS の抽選オープニングは開始局面が
-/// 標準と違うので、そこから並べ直すと最初の手から打てなくなる。開始局面を
-/// 持っていないので、undo/redo で目的の手数まで動かして読み、元へ戻す。
+/// Never replay from the standard start: GGS drawn openings start
+/// elsewhere and would fail on the first move. Without the start
+/// position, walk with undo/redo to the target and back.
 fn board_at_line(game: &mut Reversi, n: usize) -> Result<Board, String> {
     if n > game.line().len() {
         return Err("out of range".into());
@@ -349,7 +351,7 @@ fn view(game: &Reversi) -> GameView {
     }
 }
 
-/// 手番側に合法手がなく対局も終わっていなければパスを消化する。
+/// Consume a pass when the mover has no legal move and the game continues.
 fn auto_pass(game: &mut Reversi) {
     while !game.is_game_over() && game.movable() == 0 {
         if game.pass().is_err() {
@@ -358,21 +360,20 @@ fn auto_pass(game: &mut Reversi) {
     }
 }
 
-/// 設定ファイルの場所。OS の設定ディレクトリに置く (配布時はここしかない)。
+/// Config file location, in the OS config directory (the only place
+/// available once packaged).
 fn resources_path() -> PathBuf {
     let base =
         dirs_config().unwrap_or_else(|| PathBuf::from(concat!(env!("CARGO_MANIFEST_DIR"), "/..")));
     base.join("kuroobi").join("resources.conf")
 }
 
-/// 取り込んだ対局の控え。定石ファイルの隣ではなく設定ディレクトリに置く —
-/// 定石は差し替えられるが、「自分が何を取り込んだか」は差し替えても残って
-/// ほしい記録なので、寿命の違うものを同じ場所に置かない。
+/// Import log. Lives in the config directory, not next to the book:
+/// books get swapped, but "what did I import" should survive a swap —
+/// different lifetimes, different homes.
 fn learn_log_path() -> PathBuf {
-    /* **場所を差し替えられるようにする** (`KUROOBI_LEARN_LOG`)。
-    この画面は実データしか出ないので、控えが 1 つも無いときや期間で
-    隠れたときの見た目を確かめる手が他にない。重みと定石は
-    `resources.conf` で差し替えられるのに、控えだけ固定だった。 */
+    /* Overridable via `KUROOBI_LEARN_LOG`: the screen only shows real
+    data, so empty/filtered states could not be exercised otherwise. */
     if let Ok(p) = std::env::var("KUROOBI_LEARN_LOG") {
         return PathBuf::from(p);
     }
@@ -397,10 +398,9 @@ fn resources() -> Resources {
     Resources::load(&resources_path())
 }
 
-/// エンジンが無ければ作る。Arc を受け取るのは、ワーカースレッド
-/// (spawn_blocking) からも使えるようにするため — 同期コマンドは
-/// メインスレッドで走るので、そこでエンジンのロックを待つと探索が
-/// 終わるまで UI 全体が固まる。
+/// Create the engine if absent. Takes an Arc so worker threads
+/// (spawn_blocking) can use it — sync commands run on the main thread,
+/// and waiting for the engine lock there freezes the whole UI.
 fn ensure_engine_in(
     engine_slot: &Arc<Mutex<Option<Engine>>>,
     stop_slot: &Arc<Mutex<Option<kuroobi::midgame::StopHandle>>>,
@@ -413,8 +413,8 @@ fn ensure_engine_in(
             nnue: res.nnue_path(),
             book: res.book_path(),
             threads: res.threads.unwrap_or_else(auto_threads),
-            // **置換表の大きさは起動時にしか効かない。** 中身は `Box::leak` で
-            // `'static` にしてあり、作り直すと古いぶんが解放されずに積み上がる
+            // Table sizes only apply at startup: the tables are leaked
+            // to 'static, so rebuilding stacks the old ones unfreed.
             midgame_hash_bits: res.hash_mid_bits(),
             solver_hash_bits: res.hash_end_bits(),
             ..Default::default()
@@ -426,17 +426,13 @@ fn ensure_engine_in(
     Ok(())
 }
 
-/// **未較正のスレッド数があれば、背景で測って控える。**
+/// Calibrate any uncalibrated thread counts in the background.
 ///
-/// 較正しないと `timectl` は固定の階段に落ちて機能しない。**測る仕組みが
-/// あるだけでは足りず、誰かが押すまで一度も測られない**ので、ここで自動で
-/// 済ませる。
-///
-/// 測るのは 1〜3 秒。**対局中は絶対に測らない** — CPU を食って探索が遅く
-/// なり、持ち時間対局では直接損になる。起動直後の、まだ何も走っていない
-/// ときだけ。
-///
-/// ローカルと GGS でスレッド数の設定が別なので、**両方を測る**。
+/// Without calibration `timectl` degrades to the fixed ladder, and a
+/// measurement button nobody presses measures nothing — so do it
+/// automatically. Takes 1-3 seconds, and never during a game (it would
+/// steal CPU from a clocked search); only right after startup while
+/// idle. Local and GGS thread settings differ, so measure both.
 fn calibrate_missing(
     app: tauri::AppHandle,
     engine_slot: Arc<Mutex<Option<Engine>>>,
@@ -462,7 +458,7 @@ fn calibrate_missing(
             return;
         }
         for t in missing {
-            // 途中で対局が始まっていたら残りは諦める (次の起動で測る)
+            // A game started meanwhile: skip the rest (next launch).
             if activity.lock().unwrap().local.is_some() {
                 return;
             }
@@ -480,9 +476,8 @@ fn calibrate_missing(
                 let mut r = resources();
                 r.set_nps(t, nps);
                 let _ = r.save(&resources_path());
-                /* **開いている設定画面へ報せる。** 画面は開いた時点の値を
-                取るだけなので、黙って書くと「未測定」のまま残る (実機で
-                そうなった)。 */
+                /* Notify an open settings screen: it reads once on open,
+                so silent writes would leave it showing "unmeasured". */
                 use tauri::Emitter;
                 let _ = app.emit("resources-changed", ());
             }
@@ -490,11 +485,9 @@ fn calibrate_missing(
     });
 }
 
-/// エンジンを用意できなかった理由を、画面に出す言葉へ直す。
-///
-/// ライブラリ側の文言は CLI と共用なので `nnue <path>: …` のように
-/// 内部の名前と英語のまま来る。**トーストに内部符丁と直し方の無い文は
-/// 出さない** (デザイン規則 34 / 61) ので、ここで言い換える。
+/// Translate engine-init failures into display language. The library
+/// messages are shared with the CLI (`nnue <path>: ...`); toasts must
+/// not show internal jargon without a fix suggestion, so rephrase here.
 fn setup_error(e: String) -> String {
     let what = if e.starts_with("nnue ") {
         "NNUE の重み"
@@ -540,7 +533,7 @@ fn play(app: State<App>, sq: u8) -> Result<GameView, String> {
 #[tauri::command]
 fn undo(app: State<App>) -> Result<GameView, String> {
     let mut game = app.game.lock().unwrap();
-    // パスも 1 手として積まれているので、直前の「石を置いた手」まで戻す
+    // Passes are stacked as moves too; rewind to the last stone placed.
     loop {
         game.undo().map_err(|e| format!("{e:?}"))?;
         let placed = game.history.last().map(|r| r.pos.is_some());
@@ -551,7 +544,8 @@ fn undo(app: State<App>) -> Result<GameView, String> {
     Ok(view(&game))
 }
 
-/// 手順上の n 手目の直後へ移動する (undo/redo で辿るので前後どちらへも動ける)。
+/// Jump to just after move n of the line (walked via undo/redo, so
+/// both directions work).
 #[tauri::command]
 fn goto(app: State<App>, n: usize) -> Result<GameView, String> {
     let mut game = app.game.lock().unwrap();
@@ -567,7 +561,8 @@ fn goto(app: State<App>, n: usize) -> Result<GameView, String> {
     Ok(view(&game))
 }
 
-/// 進行中の探索を中断する (思考・解析の両方)。結果はフロントが捨てる。
+/// Abort the running search (think and analysis); the frontend
+/// discards the result.
 #[tauri::command]
 fn stop_search(app: State<App>) -> Result<(), String> {
     if let Some(h) = app.stop.lock().unwrap().as_ref() {
@@ -576,10 +571,8 @@ fn stop_search(app: State<App>) -> Result<(), String> {
     Ok(())
 }
 
-/// 定石 book を使うかどうか。研究中は切って自力の手を見たいことがある。
-/// async + spawn_blocking なのはロック待ちを UI から切り離すため
-/// (同期コマンドはメインスレッドで走るので、探索がロックを持っていると
-/// 解放まで画面ごと固まる)。
+/// Toggle book use (off to study the engine's own moves).
+/// async + spawn_blocking keeps the lock wait off the main thread.
 #[tauri::command]
 async fn set_use_book(app: State<'_, App>, on: bool) -> Result<(), String> {
     let (eng, stop) = (app.engine.clone(), app.stop.clone());
@@ -596,80 +589,76 @@ async fn set_use_book(app: State<'_, App>, on: bool) -> Result<(), String> {
     .map_err(|e| e.to_string())?
 }
 
-/// 動作確認用: 起動直後に自動で始めたいこと (KUROOBI_AUTOPLAY)。
-/// 空なら何もしない。"vs" で対局、"both" でエンジン同士。":<レベル番号>"
-/// を付けると強さも指定できる (例: "both:11")。
+/// Smoke-test hook (KUROOBI_AUTOPLAY): start something right after
+/// launch. "vs" = a game, "both" = engine vs engine; ":<level>" sets
+/// strength (e.g. "both:11").
 #[tauri::command]
 fn autoplay() -> String {
     std::env::var("KUROOBI_AUTOPLAY").unwrap_or_default()
 }
 
-/// 画面確認用: テーマを固定する (`KUROOBI_THEME=light` / `dark`)。
-///
-/// テーマの切り替えは 設定 → 表示 のタブにしかなく、撮るたびに人が押す
-/// しかなかった。ライトの確認が後回しになる原因だったので、環境変数で
-/// 指定できるようにする。**保存はしない** — その起動の間だけ効く。
+/// Screenshot hook: pin the theme (`KUROOBI_THEME=light`/`dark`).
+/// The only toggle lives in Settings > Display, which made light-theme
+/// checks manual; not persisted — effective for this launch only.
 #[tauri::command]
 fn theme_override() -> String {
     std::env::var("KUROOBI_THEME").unwrap_or_default()
 }
 
-/// book を使えるか (画面の表示に使う)。エンジンの初期化は重いので、
-/// ファイルの有無だけで答える。
+/// Whether a book is available (for display); answered by file
+/// existence since engine init is expensive.
 #[tauri::command]
 fn has_book() -> bool {
     resources().book_path().exists()
 }
 
-/// ローカル対局を定石の学習に取り込むかどうか。
+/// Whether local games feed book learning.
 #[tauri::command]
 fn set_learn(app: State<App>, on: bool) {
     *app.learn_on.lock().unwrap() = on;
 }
 
-/// 取り込んだ対局 1 件。時刻は unix 秒のまま持つ — 書式は見る側の
-/// 時間帯と暦で決まるので、記録側で文字列にしてしまうと直せない。
+/// One imported game. Times stay as unix seconds — formatting belongs
+/// to the viewer's timezone and calendar, not the record.
 #[derive(Serialize, Deserialize, Clone)]
 pub struct LearnEntry {
     pub at: u64,
     pub kifu: String,
     pub black: u8,
     pub white: u8,
-    /// 書き戻した局面数。途中で諦めた取り込みは実際に進んだぶんだけになる。
+    /// Positions written back; an abandoned import records what it got through.
     pub positions: u32,
-    /// 抽選開局の開始局面 (盤面文字列)。標準の初期局面なら空。
-    /// これが無いと、抽選開局の対局を後から開いても別の対局になる。
+    /// Drawn-opening start position (board string); empty for the
+    /// standard start. Without it a drawn game reopens as a different game.
     #[serde(default)]
     pub start: String,
-    /// 書き換えの明細。何がどう変わったかが残っていないと、変な対局が
-    /// 混ざったときに見つけることも戻すこともできない。
+    /// Rewrite details; without them a bad game could be neither found
+    /// nor reverted.
     #[serde(default)]
     pub changes: Vec<LearnChange>,
-    /// GGS の対局なら相手の名前。ローカル対局は空。
-    /// **古い控えには無い項目なので既定を持たせる** — 無いと過去の行が
-    /// 丸ごと読めなくなる。
+    /// Opponent name for GGS games, empty for local. Defaults exist
+    /// because old log lines lack the field.
     #[serde(default)]
     pub opponent: String,
-    /// 自分がどちらの色だったか (`"b"` / `"w"`)。**これが無いと石数だけでは
-    /// 勝敗を判定できない** — 学習ログの「負けた対局」の絞り込みが作れない
-    /// (依頼 5-9)。古い控えには無いので既定は空で、そのときは絞り込みから
-    /// 外れる。
+    /// Which color we played ("b"/"w"); without it disc counts cannot
+    /// decide the result and the "lost games" filter breaks. Old lines
+    /// lack it — default empty, excluded from the filter.
     #[serde(default)]
     pub my_color: String,
 }
 
-/// 定石を 1 手ぶん書き換えた記録。
+/// One book-move rewrite record.
 #[derive(Serialize, Deserialize, Clone)]
 pub struct LearnChange {
-    /// 棋譜の何手目か (パスを除いた 1 始まり)。
+    /// Move number (1-based, passes excluded).
     pub ply: usize,
     pub mv: String,
-    /// 上書き前の値。定石に無かった手なら null。
+    /// Value before the overwrite; null if the move was absent.
     pub before: Option<f32>,
     pub after: f32,
-    /// 書き換えたあとのその局面の最善値。`best - after` が損した石差。
+    /// Best value after the rewrite; `best - after` = discs lost.
     pub best: f32,
-    /// この取り込みで学習分に新しく作った局面か。
+    /// Whether this import created the entry.
     #[serde(default)]
     pub new_entry: bool,
 }
@@ -687,7 +676,7 @@ impl LearnChange {
     }
 }
 
-/// いまの unix 秒。控えの時刻に使う。
+/// Current unix seconds, for log timestamps.
 pub fn now_secs() -> u64 {
     std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
@@ -695,8 +684,8 @@ pub fn now_secs() -> u64 {
         .unwrap_or(0)
 }
 
-/// 1 行 1 件で追記する。読みながら書いても壊れないので、途中で落ちても
-/// それまでの記録は残る (途中の 1 行だけが読めなくなる)。
+/// Append one line per record; crash-safe apart from the one line in
+/// flight.
 pub fn learn_log_append(e: &LearnEntry) {
     let path = learn_log_path();
     if let Some(dir) = path.parent() {
@@ -716,12 +705,12 @@ pub fn learn_log_append(e: &LearnEntry) {
     trim_learn_log(&path);
 }
 
-/// 控えの上限。書き換えの明細を持つので 1 行が 3〜4 KB になる。
-/// 200 件で 1 MB 弱に収まり、画面に出す件数とも一致する。
+/// Log cap. Lines carry rewrite details (3-4 KB each); 200 stays under
+/// 1 MB and matches what the screen shows.
 const LEARN_LOG_MAX: usize = 200;
 
-/// 伸びすぎた控えを新しい側だけ残して書き直す。
-/// 毎回書き直すと追記の意味が無いので、上限を超えたときだけ。
+/// Rewrite the log keeping the newest entries, only once over the cap
+/// (rewriting every time would defeat appending).
 fn trim_learn_log(path: &std::path::Path) {
     let Ok(text) = std::fs::read_to_string(path) else {
         return;
@@ -734,7 +723,7 @@ fn trim_learn_log(path: &std::path::Path) {
     let _ = std::fs::write(path, keep + "\n");
 }
 
-/// 取り込んだ対局の控え (新しい順)。読めない行は飛ばす。
+/// Imported games, newest first; unreadable lines skipped.
 #[tauri::command]
 fn learn_log() -> Vec<LearnEntry> {
     let Ok(text) = std::fs::read_to_string(learn_log_path()) else {
@@ -745,16 +734,14 @@ fn learn_log() -> Vec<LearnEntry> {
         .filter_map(|l| serde_json::from_str(l).ok())
         .collect();
     out.reverse();
-    // 画面に出すのは直近だけ。全部返すと、長く使うほど起動のたびに重くなる
+    // Only the recent slice; returning everything grows with age.
     out.truncate(200);
     out
 }
 
-/// 取り込みを 1 局ぶん取り消す。控えの行 (`at` と棋譜で 1 件に決まる) を
-/// 探し、定石を戻してから控えからも消す。
-///
-/// 控えを先に消さない — 定石を戻せなかったのに記録だけ消えると、
-/// 「取り消したはずなのに残っている」を確かめる手立てが無くなる。
+/// Undo one import: find the log line (keyed by `at` + record), revert
+/// the book, then remove the line. Never remove first — a failed revert
+/// with a deleted record would be unverifiable.
 #[tauri::command]
 async fn learn_undo(app: State<'_, App>, at: u64, kifu: String) -> Result<usize, String> {
     let log = learn_log();
@@ -798,7 +785,7 @@ async fn learn_undo(app: State<'_, App>, at: u64, kifu: String) -> Result<usize,
     Ok(n)
 }
 
-/// 控えから 1 件消す (取り消したあと)。
+/// Remove one log line (after the undo).
 fn learn_log_remove(at: u64, kifu: &str) {
     let path = learn_log_path();
     let Ok(text) = std::fs::read_to_string(&path) else {
@@ -815,15 +802,16 @@ fn learn_log_remove(at: u64, kifu: &str) {
     let _ = std::fs::write(&path, kept.join("\n") + "\n");
 }
 
-/// 終局したローカル対局を定石の学習に取り込む (learn.rs)。
-/// フロントが「手が指されて終局した」ときに呼ぶ。読み込んだだけの棋譜は
-/// 対象にしない。取り込みは裏で 1 探索ずつ進み、エンジンのロックを
-/// 探索ごとに手放すので、途中で思考を始めても 1 探索ぶんしか待たない。
+/// Import a finished local game into book learning (learn.rs). Called
+/// by the frontend when a played game ends; merely-loaded records don't
+/// qualify. The import advances one search at a time and releases the
+/// engine lock between searches, so starting a think waits at most one
+/// search.
 #[tauri::command]
-/// `my_color` は**人**がどちらの色だったか (`"b"` / `"w"`)。
-/// **画面しか知らない** — KUROOBI の担当は 黒 / 白 / 両方 / なし から
-/// 選べるので、その裏が人の色になる。控えに残さないと、あとから石数だけを
-/// 見ても勝敗が決まらない (依頼 5-9)。決められないときは空。
+/// `my_color` is the human's color ("b"/"w"), which only the screen
+/// knows (KUROOBI's side is configurable, the human is its complement).
+/// Without it, disc counts alone cannot decide the result. Empty when
+/// undecidable.
 fn learn_game(app: State<App>, my_color: String) -> Result<(), String> {
     if !*app.learn_on.lock().unwrap() {
         return Ok(());
@@ -835,8 +823,8 @@ fn learn_game(app: State<App>, my_color: String) -> Result<(), String> {
         }
         (game.to_kifu(), game.board)
     };
-    // 標準初期局面から再生できて最終盤面が一致する対局だけを取り込む
-    // (読み込んだ抽選開局の対局などを誤って学習しないため)
+    // Import only games that replay from the standard start to the
+    // final board (keeps loaded drawn-opening games out).
     let (_, fin) = kuroobi::learn::replay(None, &kifu)?;
     if fin.black != board.black || fin.white != board.white {
         return Err("初期局面から始まった対局ではないため取り込みません".into());
@@ -846,8 +834,8 @@ fn learn_game(app: State<App>, my_color: String) -> Result<(), String> {
     let act = app.activity.clone();
     let ggs_snap = ggs_snap_arc(&app);
     tauri::async_runtime::spawn_blocking(move || {
-        // エンジンの用意もここで行う (同期コマンド内でロックを待つと
-        // メインスレッドごと固まるため)
+        // Engine setup happens here too (waiting for the lock inside a
+        // sync command would freeze the main thread).
         if ensure_engine_in(&eng, &stop).is_err() {
             return;
         }
@@ -860,19 +848,17 @@ fn learn_game(app: State<App>, my_color: String) -> Result<(), String> {
             }
         };
         let total = job.remaining() as u32;
-        // 終わるまで空。途中で諦めた取り込みは明細を残さない
+        // Empty until finished; abandoned imports leave no details.
         let mut changes: Vec<kuroobi::learn::BackupChange> = Vec::new();
-        /* 直近で譲った時刻。**譲りは一瞬ずつ何度も起きる。**
-        分析は 1 局面ごとに探索の印を立てて外すので、その瞬間だけを
-        見ていると譲っている間隔が数十ミリ秒しか続かない。画面は
-        1 秒ごとにしか状態を取らないので、**実際には何度も譲っている
-        のに「譲り中」が一度も出ない**。少しのあいだ立てたままにして、
-        人の時間の刻みで正しくする (譲ったこと自体は本当に起きている)。 */
+        /* Last yield time. Yields are many and momentary (analysis
+        toggles the search marker per position), while the screen samples
+        once a second — so a real, frequent yield would never display.
+        Hold the flag briefly to make it true at human timescales. */
         let mut last_yield: Option<std::time::Instant> = None;
         const YIELD_HOLD: std::time::Duration = std::time::Duration::from_millis(1500);
         loop {
-            // 対局・検討・GGS 対局が動いている間は譲って止まる
-            // (裏の学習が CPU を奪わない)。空いたら続きから再開する
+            // Yield while games/study/GGS run (background learning must
+            // not steal CPU); resume where it left off.
             let busy = act.lock().unwrap().local.is_some() || ggs_match_in(&ggs_snap);
             if busy {
                 last_yield = Some(std::time::Instant::now());
@@ -889,7 +875,7 @@ fn learn_game(app: State<App>, my_color: String) -> Result<(), String> {
             }
             let step = {
                 let mut guard = eng.lock().unwrap();
-                // 設定変更でエンジンが作り直されたら、この取り込みは諦める
+                // Engine rebuilt by a settings change: abandon this import.
                 let Some(engine) = guard.as_mut() else { break };
                 engine.learn_step(&mut job, ggs::LEARN_DEPTH)
             };
@@ -901,20 +887,19 @@ fn learn_game(app: State<App>, my_color: String) -> Result<(), String> {
                 }
                 Err(_) => break,
             }
-            // ロックを取り直す前に一拍置く。すぐ取り直すと (Mutex は待った
-            // 順に渡るとは限らない)、強さ変更や思考の開始が何探索ぶんも
-            // 割り込めないことがある
+            // Pause before re-locking: mutexes are not FIFO, and an
+            // immediate re-lock can starve strength changes or thinks.
             std::thread::sleep(std::time::Duration::from_millis(50));
         }
-        // 控えは終わってから 1 行だけ書く。途中で諦めた取り込みも、進んだ
-        // ぶんだけを記録する (書き戻し自体はそこまで済んでいるため)
+        // One log line at the end; abandoned imports record their
+        // progress (the write-backs up to that point are real).
         learn_log_append(&LearnEntry {
             at: now_secs(),
             kifu,
             black: board.black.count_ones() as u8,
             white: board.white.count_ones() as u8,
             positions: total.saturating_sub(job.remaining() as u32),
-            // ローカル対局は初期局面から始まったものだけを取り込む
+            // Local games import only from the standard start.
             start: String::new(),
             changes: changes.iter().map(LearnChange::of).collect(),
             opponent: String::new(),
@@ -927,13 +912,13 @@ fn learn_game(app: State<App>, my_color: String) -> Result<(), String> {
     Ok(())
 }
 
-/// スレッド数の設定 (ローカルのエンジン)。set が None なら自動。
+/// Thread-count setting (local engine); None = auto.
 #[derive(Serialize)]
 struct ThreadsView {
     set: Option<u32>,
     auto: u32,
-    /// **今のスレッド数で**較正した読切の速度 (ノード毎秒)。未較正なら null。
-    /// 別のスレッド数の値は使わないので出さない (4 倍違う)。
+    /// Solve nps calibrated at the current thread count (null if not);
+    /// other counts' values differ 4x and are not shown.
     nps: Option<f64>,
 }
 
@@ -943,8 +928,8 @@ fn threads_view() -> ThreadsView {
     ThreadsView {
         set: r.threads.map(|n| n as u32),
         auto: auto_threads() as u32,
-        // **今のスレッド数の値だけを出す。** 別のスレッド数の値を見せると
-        // 較正済みに見えるが、実際には使われない (4 倍違う)
+        // Only the current count's value: another count's number looks
+        // calibrated but is never used (4x apart).
         nps: r.nps_for(now),
     }
 }
@@ -954,14 +939,14 @@ fn local_threads() -> ThreadsView {
     threads_view()
 }
 
-/// 置換表の大きさ (2^bits) と、それが使うメモリ量。
+/// Table sizes (2^bits) and the memory they use.
 #[derive(Serialize)]
 struct HashView {
     mid: u32,
     end: u32,
     min: u32,
     max: u32,
-    /// 2 つ合わせた実際のバイト数 (画面に出すため)。
+    /// Combined actual bytes (for display).
     bytes: u64,
 }
 
@@ -982,10 +967,9 @@ fn hash_sizes() -> HashView {
     hash_view()
 }
 
-/// 置換表の大きさを設定する。**効くのは次の起動から。**
-///
-/// 中身は `Box::leak` で `'static` にしてあり (探索が生涯参照を要求する)、
-/// 作り直すと古い表が解放されずに積み上がる。**今のエンジンには触らない**。
+/// Set table sizes, effective from the next launch. Tables are leaked
+/// to 'static (searches demand lifetime references); rebuilding stacks
+/// the old ones, so the current engine is left alone.
 #[tauri::command]
 fn set_hash_sizes(mid: u32, end: u32) -> Result<HashView, String> {
     let (lo, hi) = (
@@ -999,18 +983,13 @@ fn set_hash_sizes(mid: u32, end: u32) -> Result<HashView, String> {
     Ok(hash_view())
 }
 
-/// **この機械の読切速度を測って控える。**
+/// Measure this machine's solve speed and record it.
 ///
-/// 持ち時間から読切の入り口を逆算する (`timectl`) には、見積ったノード数を
-/// 秒へ直す係数が要る。3 層のうち**機械で変わるのはこれだけ**なので、
-/// 空き 22 の 3 問を実際に読み切って測る。1〜3 秒で終わる。
-///
-/// **効果は棋力ではなく破綻の回避に出る。** 自己対局 (計 1400 局) では
-/// 勝率は動かず、終局時の残り時間が増えた — 30 秒の対局で最悪の局の
-/// 残りが 5.0 秒 (固定の階段) から 8.9 秒へ。
-///
-/// スレッド数を変えると速度も変わるので、**測ったときのスレッド数も一緒に
-/// 控える** (食い違っていたら使わない)。
+/// `timectl` needs a nodes-to-seconds factor and it is the only
+/// machine-dependent layer; three 22-empty solves (1-3s) measure it.
+/// The benefit is avoided breakdowns, not strength (1400 self-play
+/// games: no win-rate change, worst-case leftover 5.0s -> 8.9s). The
+/// thread count is recorded with it — a mismatched value is unused.
 #[tauri::command]
 async fn calibrate_nps(app: State<'_, App>) -> Result<ThreadsView, String> {
     ensure_engine(&app)?;
@@ -1034,8 +1013,8 @@ async fn calibrate_nps(app: State<'_, App>) -> Result<ThreadsView, String> {
     Ok(threads_view())
 }
 
-/// ローカルのスレッド数を設定する (None で自動へ戻す)。resources.conf に
-/// 保存し、既存エンジンには次の探索から効かせる。
+/// Set the local thread count (None = auto). Saved to resources.conf;
+/// existing engines pick it up on the next search.
 #[tauri::command]
 async fn set_local_threads(
     app: State<'_, App>,
@@ -1057,13 +1036,13 @@ async fn set_local_threads(
     })
     .await
     .map_err(|e| e.to_string())?;
-    /* **GGS 側にも伝える。** スレッド数は全体設定に一本化してあるので、
-    ここで変えた値がそのまま GGS 対局のエンジンにも効く必要がある。 */
+    /* Tell the GGS side too: thread count is a single global setting
+    and must reach the GGS engines as well. */
     if let Ok(tx) = ggs_tx(&app) {
         let _ = tx.send(ggs::Cmd::ReloadThreads);
     }
-    // **新しいスレッド数の読切速度はまだ測っていない。** 測るまで持ち時間の
-    // 管理は固定の階段に落ちるので、背景で埋めておく
+    // The new count is uncalibrated; time management falls to the
+    // ladder until measured, so fill it in the background.
     calibrate_missing(
         handle,
         eng,
@@ -1074,31 +1053,31 @@ async fn set_local_threads(
     Ok(())
 }
 
-/// いま何が CPU を使っているか (ナビの常時表示用)。
+/// What currently uses the CPU (the nav's always-on display).
 #[derive(Serialize)]
 struct ActivityView {
-    /// ローカル探索の種別 (思考 / 解析 / 分析)。無ければ null。
+    /// Local search kind (think / analyze / review); null if none.
     local: Option<String>,
     local_threads: u32,
-    /// 学習の取り込み (済み, 総数)。
+    /// Learning import (done, total).
     learn: Option<(u32, u32)>,
     learn_paused: bool,
-    /// GGS の自分の対局が進行中か。
+    /// Whether our GGS game is in progress.
     ggs_match: bool,
     ggs_thinking: bool,
     ggs_threads: u32,
-    /// プロセス全体の CPU 使用率 (%)。100% = 1 コア相当。
+    /// Process CPU usage (%), 100% = one core.
     cpu: f32,
-    /// マシンのコア数 (使用率の上限 = cores × 100%)。
+    /// Core count (usage ceiling = cores x 100%).
     cores: u32,
-    /// 使用中の物理メモリと、積んでいる総量 (バイト)。
+    /// Resident memory and total physical memory (bytes).
     mem: u64,
     mem_total: u64,
 }
 
 #[tauri::command]
 fn activity_status(app: State<App>) -> ActivityView {
-    // 前回の呼び出しからの差分で CPU 使用率を出す (呼び出しは 1 秒間隔)
+    // CPU usage from the delta since the last call (1s cadence).
     let cpu = {
         let now = (std::time::Instant::now(), process_cpu_time());
         let mut meter = app.cpu_meter.lock().unwrap();
@@ -1139,11 +1118,9 @@ fn activity_status(app: State<App>) -> ActivityView {
     }
 }
 
-/// 使うファイルの一覧 (名前・パス・見つかったか・大きさ・中身の見分け)。
-///
-/// 大きさと形式まで返すのは、**「ある」だけでは足りない**から。重みは
-/// 差し替えて使うものなので、いま読んでいるのがどれか分からないと、
-/// 指し手が変わった理由を追えない。
+/// Files in use (name, path, found, size, format tag). Size and format
+/// matter because weights get swapped: without them you cannot tell
+/// which file explains a change in play.
 #[tauri::command]
 fn resource_status() -> Vec<(String, String, bool, u64, String)> {
     resources()
@@ -1153,13 +1130,13 @@ fn resource_status() -> Vec<(String, String, bool, u64, String)> {
         .collect()
 }
 
-/* 付属ウィンドウは廃止した (2026-08-08)。設定は主画面の覆いに戻っている。
- * 窓である値打ちは「表示」タブだけが持っていたのに、1240 幅の主画面では
- * 盤に重なるのを避けられず (置き場所を直しても 12%)、そのために
- * localStorage 越しの同期・窓の札・置き場所の計算まで抱えていた。
- * 窓が要るようになったら `WebviewWindowBuilder` で書き直す。 */
+/* Auxiliary windows were retired (2026-08-08); settings live in an
+ * overlay again. Only the Display tab benefited from a window, yet it
+ * kept overlapping the board and dragged in localStorage sync, window
+ * chrome and placement logic. If a window is ever needed again, use
+ * WebviewWindowBuilder. */
 
-/// ファイル選択ダイアログを開く。`kind` に応じて絞り込む。
+/// Open a file dialog, filtered by `kind`.
 #[tauri::command]
 async fn pick_resource(handle: tauri::AppHandle, kind: String) -> Result<Option<String>, String> {
     use tauri_plugin_dialog::DialogExt;
@@ -1178,8 +1155,8 @@ async fn pick_resource(handle: tauri::AppHandle, kind: String) -> Result<Option<
     Ok(picked)
 }
 
-/// 使うファイルを選び直す。`kind` は "dir" | "weights" | "nnue" | "book"。
-/// path が null なら指定を外して既定に戻す。エンジンは次回の思考で作り直す。
+/// Re-point a resource ("dir" | "weights" | "nnue" | "book"); null
+/// clears back to the default. The engine rebuilds on the next think.
 #[tauri::command]
 async fn set_resource(
     app: State<'_, App>,
@@ -1196,8 +1173,8 @@ async fn set_resource(
         other => return Err(format!("unknown resource: {other}")),
     }
     r.save(&resources_path())?;
-    // 読み直しは次のエンジン生成から。今のエンジンは捨てる。捨てるにも
-    // ロックが要るので、探索中でも UI が固まらないようワーカーで待つ。
+    // Reload happens on the next engine build; drop the current one.
+    // Dropping needs the lock, so wait on a worker to keep the UI live.
     let (eng, stop) = (app.engine.clone(), app.stop.clone());
     tauri::async_runtime::spawn_blocking(move || {
         *eng.lock().unwrap() = None;
@@ -1207,8 +1184,8 @@ async fn set_resource(
     .map_err(|e| e.to_string())
 }
 
-/// 強さの変更。set_use_book と同じ理由で async + spawn_blocking。
-/// 進行中の探索はそのまま走り切り、変更は次の探索から効く。
+/// Strength change; async + spawn_blocking as with set_use_book. The
+/// running search finishes as-is; the change applies to the next.
 #[tauri::command]
 async fn set_levels(
     app: State<'_, App>,
@@ -1230,20 +1207,21 @@ async fn set_levels(
     .map_err(|e| e.to_string())?
 }
 
-/// 画面に出す時計。**`GameView` には入れない** — 盤の更新は着手のたび
-/// だが、時計は毎秒動くので更新の周期が違う。混ぜると盤ごと描き直す。
+/// Display clock, deliberately outside `GameView`: boards update per
+/// move, clocks tick per second — mixing them would redraw the board
+/// every tick.
 #[derive(Serialize)]
 struct ClockView {
-    /// 1 人ぶんの持ち時間 (秒)。0 なら時計を使っていない。
+    /// Time per player (seconds); 0 = no clock.
     total: u64,
     black: f64,
     white: f64,
-    /// 時間切れした側 ("black" | "white")。まだなら null。
+    /// Which side flagged ("black"|"white"); null if none.
     lost: Option<String>,
 }
 
-/// 時計を読む。走っている手番のぶんは**その場で差し引いて**返す —
-/// 控えている値は着手のたびにしか動かないので、そのまま出すと止まって見える。
+/// Read the clock, subtracting the running turn's elapsed time on the
+/// fly — the stored values only move per move and would look frozen.
 #[tauri::command]
 fn clocks(app: State<App>) -> ClockView {
     let c = app.clocks.lock().unwrap();
@@ -1274,22 +1252,20 @@ fn clocks(app: State<App>) -> ClockView {
     }
 }
 
-/// 持ち時間を決めて時計を初期化する。**0 で時計なし**。
-///
-/// 対局を始めるたびに呼ぶ (新規対局と同時)。GGS と違って途中で変えられる
-/// 必要は無いので、設定を持ち回さず引数で受ける。
+/// Initialize the clock (0 = none). Called on every new game; unlike
+/// GGS it never changes mid-game, so it arrives as an argument.
 #[tauri::command]
 fn set_clock(app: State<App>, secs: u64) -> ClockView {
     app.clocks.lock().unwrap().reset(secs);
     clocks(app)
 }
 
-/// 現局面の最善手を計算する。**局面は動かさない** — 適用は `apply_move`。
-/// 分離してあるので、思考中に停止された場合はフロントが結果を捨てるだけで
-/// 「停止」が成立する。
+/// Compute the best move without moving the position (`apply_move`
+/// applies it). The split makes stop trivial: the frontend just
+/// discards the result.
 #[tauri::command]
 async fn think(app: State<'_, App>) -> Result<ThinkView, String> {
-    // GGS の対局が最優先。進行中はローカルの探索を始めない
+    // GGS games come first; no local search while one runs.
     if ggs_match_active(&app) {
         return Err("GGS 対局中はローカルの探索を控えます (終局までお待ちください)".into());
     }
@@ -1298,10 +1274,8 @@ async fn think(app: State<'_, App>) -> Result<ThinkView, String> {
     let eng = app.engine.clone();
     let act = app.activity.clone();
     let stop = app.stop.clone();
-    /* **時計があるときは期限つきで読む。** 配り方 (`timectl`) は GGS と
-    同じものを通す — ローカルだけ別の計算にすると、練習した感覚が本番で
-    通じない。配り方は `even` 固定 (選択肢を増やす前に、持ち時間から
-    自動で決める形を作るのが本筋)。 */
+    /* With a clock, search under a deadline through the same timectl
+    as GGS — a different local scheme would make practice misleading. */
     let (base, plan) = {
         let c = app.clocks.lock().unwrap();
         let e = app.engine.lock().unwrap();
@@ -1319,7 +1293,7 @@ async fn think(app: State<'_, App>) -> Result<ThinkView, String> {
                 kuroobi::timectl::Situation {
                     clock_secs: Some(c.left(board.player()) as u64),
                     empties: board.empty_count(),
-                    // 較正済みなら読切の入り口を残り時間から逆算する
+                    // Calibrated: derive the solve entry from the clock.
                     nps: resources().nps_for(threads),
                     threads,
                     ..Default::default()
@@ -1334,13 +1308,13 @@ async fn think(app: State<'_, App>) -> Result<ThinkView, String> {
         let _g = ActivityGuard::begin(&act, "思考");
         let mut guard = eng.lock().unwrap();
         let t0 = std::time::Instant::now();
-        // ノードは累計で持っているので、この 1 手ぶんは前後の差で取る
+        // Node counts are cumulative; diff for this move's share.
         let n0 = guard.as_ref().unwrap().nodes();
         let e = guard.as_mut().unwrap();
-        /* **この 1 手だけ強さを差し替える。** 読切の入り口は残り時間で動く
-        (`timectl`) が、設定画面に出る値まで動くと「勝手に変わった」ように
-        見える。**戻さないと次の計画の入力が今回の結果になり、設定が毎手
-        削られる** (`arena` で踏んだ。片側だけ壊れて効果に見えた)。 */
+        /* Swap strength for this one move only. Forgetting to restore
+        feeds this plan's output into the next plan's input and ratchets
+        the settings down every move (hit in `arena`; one side broke and
+        masqueraded as an effect). */
         if let Some(p) = plan {
             e.set_levels(p.depth, p.solve, p.band);
         }
@@ -1352,10 +1326,9 @@ async fn think(app: State<'_, App>) -> Result<ThinkView, String> {
             e.set_levels(base.depth, base.solve, base.band);
         }
         let nodes = guard.as_ref().unwrap().nodes() - n0;
-        // 停止された探索の値は不完全 (番兵が混じる)。呼び出し元へ返さない。
-        // ただし判定するのは**探索したときだけ** — 定石から返した手は探索を
-        // 呼ばないのでフラグを消す機会がなく、前に立った停止が残っていると
-        // 正しい手まで捨ててしまう (分析側で踏んだのと同じ形)
+        // Stopped searches return incomplete values; drop them. But only
+        // when a search actually ran — book moves never reset the stop
+        // flag, and a stale flag would discard correct moves.
         let aborted = nodes > 0
             && stop
                 .lock()
@@ -1369,7 +1342,7 @@ async fn think(app: State<'_, App>) -> Result<ThinkView, String> {
     if aborted {
         return Err("stopped".into());
     }
-    // 思考中に局面が動いていたら無効 (フロント側でも照合する)
+    // Invalid if the position moved during the think (frontend checks too).
     if !same_board(&app.game.lock().unwrap().board, &board) {
         return Err("position changed".into());
     }
@@ -1384,11 +1357,11 @@ async fn think(app: State<'_, App>) -> Result<ThinkView, String> {
     })
 }
 
-/// think の結果 (または任意の手) を現局面に適用する。sq が null ならパス。
+/// Apply a think result (or any move); null sq = pass.
 #[tauri::command]
 fn apply_move(app: State<App>, sq: Option<u8>) -> Result<GameView, String> {
     let mut game = app.game.lock().unwrap();
-    // 指した側の手番が終わったので、その経過を引く
+    // The mover's turn ended; charge its elapsed time.
     let mover = game.board.player();
     app.clocks.lock().unwrap().turn_done(mover);
     match sq {
@@ -1402,16 +1375,13 @@ fn apply_move(app: State<App>, sq: Option<u8>) -> Result<GameView, String> {
     Ok(view(&game))
 }
 
-/// 人の手番のあいだ、相手 (人) が指すと思う手の先を裏で読んでおく。
+/// Ponder the human's likely move during their turn.
 ///
-/// **ローカル対局は深さ固定**なので、効き方は「深く」ではなく「速く」。
-/// 実測で同じ深さへ **1/3 の時間**で着く (深さ 12 / 先読み 300ms / −62〜65%)。
-/// KUROOBI の応答が速くなるだけで、手の質は変わらない。
-///
-/// `analyze_live` (評価値の表示) とは**同じエンジンを取り合う**ので、
-/// 両方は走らせない。画面側が評価値を出していないときだけ呼ぶ。
-///
-/// 読む深さに達したら自分で止まるので、人が長考しても回し続けない。
+/// Local games are fixed-depth, so the benefit is speed, not depth:
+/// the same depth in 1/3 the time (measured -62 to -65%). Mutually
+/// exclusive with `analyze_live` (they contend for the engine); called
+/// only when the eval display is off. Stops itself at the target depth,
+/// so a long human think does not keep it spinning.
 #[tauri::command]
 async fn ponder_live(app: State<'_, App>) -> Result<(), String> {
     if ggs_match_active(&app) {
@@ -1429,16 +1399,16 @@ async fn ponder_live(app: State<'_, App>) -> Result<(), String> {
         let _g = ActivityGuard::begin(&act, "先読み");
         let mut guard = eng.lock().unwrap();
         let Some(e) = guard.as_mut() else { return };
-        /* 上限は 60 秒。**読む深さに達すれば自分で止まる**ので普段は
-        使われないが、人が席を外したときに回し続けないための蓋 */
+        /* 60-second lid; normally it stops at depth by itself — this
+        only guards against an absent human. */
         let until = std::time::Instant::now() + std::time::Duration::from_secs(60);
         e.ponder(&board, until);
     });
     Ok(())
 }
 
-/// 反復深化しながら評価値を出し続ける。段が終わるたびに画面へ送るので、
-/// 見ている間じわじわ深くなる。局面を変えるか止めるまで続く。
+/// Stream evaluations while deepening; each finished pass goes to the
+/// screen, deepening until the position changes or a stop.
 #[tauri::command]
 async fn analyze_live(app: State<'_, App>, handle: tauri::AppHandle) -> Result<(), String> {
     if ggs_match_active(&app) {
@@ -1456,8 +1426,8 @@ async fn analyze_live(app: State<'_, App>, handle: tauri::AppHandle) -> Result<(
         let _g = ActivityGuard::begin(&act, "分析");
         let mut guard = eng.lock().unwrap();
         let Some(e) = guard.as_mut() else { return };
-        // 分析では定石を引かない。定石の値は「どこかの時点の探索結果」で、
-        // 深めている探索値と混ざると手どうしを比べられなくなる
+        // No book during analysis: book values are past search results
+        // and would break comparability with the deepening values.
         let t0 = std::time::Instant::now();
         e.analyze_deepening(&board, 1, |depth, hints, nodes| {
             let view: Vec<HintView> = hints
@@ -1470,7 +1440,7 @@ async fn analyze_live(app: State<'_, App>, handle: tauri::AppHandle) -> Result<(
                     depth: ev.depth,
                 })
                 .collect();
-            // 働きぶり (ノード数と経過) も一緒に送る。速さは画面側で割る
+            // Send workload (nodes, elapsed) too; the screen derives speed.
             handle
                 .emit("hints", (depth, view, nodes, t0.elapsed().as_secs_f32()))
                 .is_ok()
@@ -1479,8 +1449,8 @@ async fn analyze_live(app: State<'_, App>, handle: tauri::AppHandle) -> Result<(
     Ok(())
 }
 
-/// 手順上の n 手目直後の局面を固定深さで評価する (評価値グラフ用)。
-/// 返す値は黒視点。
+/// Evaluate the position after move n at fixed depth (for the eval
+/// graph); Black's view.
 #[tauri::command]
 async fn eval_at(app: State<'_, App>, n: usize, depth: u32) -> Result<EvalPoint, String> {
     if ggs_match_active(&app) {
@@ -1492,9 +1462,8 @@ async fn eval_at(app: State<'_, App>, n: usize, depth: u32) -> Result<EvalPoint,
     let eng = app.engine.clone();
     let act = app.activity.clone();
     let stop = app.stop.clone();
-    // 前の停止を引きずらない。定石に当たった局面は探索を呼ばず、探索側の
-    // リセットも走らないので、ここで消しておかないと以降ずっと「停止済み」
-    // と誤判定して分析が 1 局面も進まなくなる
+    // Clear stale stops: book hits never invoke the search (or its
+    // reset), and a leftover stop would stall analysis entirely.
     if let Some(h) = stop.lock().unwrap().as_ref() {
         h.reset();
     }
@@ -1502,25 +1471,21 @@ async fn eval_at(app: State<'_, App>, n: usize, depth: u32) -> Result<EvalPoint,
         let _g = ActivityGuard::begin(&act, "分析");
         let mut guard = eng.lock().unwrap();
         let e = guard.as_mut().unwrap();
-        /* **定石を使ったときだけ金の点。** 印の意味は「分析がこの局面の値を
-        定石から取った」であって、「この局面が定石に載っている」では
-        ない。載っているだけで印を立てていたので、**定石を使わない設定
-        でも金の点が出ていた** (`book_node` は定石ブラウザ用で、意図的に
-        `use_book` を見ない)。`book_value` は `use_book` を見る。
+        /* Gold dot only when the book was actually used — the mark
+        means "analysis took this value from the book", not "the
+        position is in the book" (`book_node` ignores use_book by
+        design; `book_value` respects it).
 
-        **学習分は使わない。** 定石本体は深さ 26 の探索結果で探索の値と
-        並べられるが、学習分は「終局の石差を根まで書き戻した値」で
-        その局面の評価ではない。**空き 1 まで入っている**ので、混ぜると
-        終盤まで金の点が並び、しかも中身が自分の過去の対局になる。
-
-        **「学習分にも載っているか」で外してはいけない。** 序盤の局面は
-        実戦で必ず通るので学習分にも載っており、それで外すと本体に
-        載っている定石手まで印が消える (実際に消えた)。重ねる前の
-        本体だけを見る `book_base_value` を使う。 */
+        The learned overlay is excluded: base values are deep search and
+        comparable, learned values are backed-up game outcomes reaching
+        down to 1 empty — mixing them lines the whole endgame with gold
+        dots of one's own past games. And never filter by "also in the
+        overlay": openings live in both, and that filter erased genuine
+        base entries. Hence `book_base_value`. */
         let from_book = e.book_base_value(&board);
         if let Some(v) = from_book {
-            // **定石も探索も手番視点。**黒視点へ直すのはこの関数の出口 1 か所
-            // だけにする (両方で直すと定石の点だけ符号が反転する)
+            // Both book and search are mover-view; convert to Black's
+            // view once at the exit (converting twice flips the dots).
             return (v, false, true, false);
         }
         let mv = e.eval_position(&board, depth);
@@ -1528,8 +1493,8 @@ async fn eval_at(app: State<'_, App>, n: usize, depth: u32) -> Result<EvalPoint,
     })
     .await
     .map_err(|e| e.to_string())?;
-    // 停止された探索の値は不完全なので返さない (グラフに残ってしまう)。
-    // 探索していない (定石) ときは見ない
+    // Stopped searches return no value (it would linger in the graph);
+    // book paths skip the check.
     if searched
         && stop
             .lock()
@@ -1580,27 +1545,26 @@ async fn save_kifu(
         return Ok(None);
     };
     let p = path.into_path().map_err(|e| e.to_string())?;
-    // 書き分けは拡張子で決める。保存の窓で形式をもう一度聞くと、名前を
-    // 決めたばかりの人に同じことを二度考えさせることになる
+    // Format follows the extension; asking again in the dialog makes
+    // the user decide the same thing twice.
     let ggf_out = p.extension().is_some_and(|e| e.eq_ignore_ascii_case("ggf"));
     let body = if ggf_out { ggf } else { format!("{kifu}\n") };
     std::fs::write(&p, body).map_err(|e| e.to_string())?;
     Ok(Some(p.display().to_string()))
 }
 
-/* ---------------- GGF (他のソフトへ渡す形) ---------------- */
+/* ---------------- GGF (interchange format) ---------------- */
 
-/// 対局を GGF 1 局ぶんにする。
-///
-/// f5 の並びだけの形と違い、**どちらがどの色か・結果・開始局面**が入る。
-/// 抽選開局から始めた対局や、パスの入った対局を渡せるのはこちらだけ。
+/// Serialize a game as GGF. Unlike the bare f5 form it carries colors,
+/// result and start position — the only format that can convey drawn
+/// openings and passes.
 fn to_ggf(game: &Reversi, black: &str, white: &str) -> String {
     let start = start_board(game);
     let mut out = String::from("(;GM[Othello]PC[KUROOBI]");
     out.push_str(&format!("DT[{}]", ggf_now()));
     out.push_str(&format!("PB[{}]PW[{}]", ggf_text(black), ggf_text(white)));
-    // 結果は黒から見た石差。終局していない対局は「?」— 0 と書くと
-    // 引き分けで終わったことになってしまう
+    // Result is Black's disc difference; unfinished games write "?"
+    // (0 would claim a draw).
     if game.is_game_over() {
         let d = game.board.black.count_ones() as i32 - game.board.white.count_ones() as i32;
         out.push_str(&format!("RE[{d:+}]"));
@@ -1621,7 +1585,7 @@ fn to_ggf(game: &Reversi, black: &str, white: &str) -> String {
     for r in &game.history {
         let tag = if color == Color::Black { "B" } else { "W" };
         match r.pos {
-            // パスも残す。落とすと手番がずれた棋譜になる
+            // Keep passes; dropping them desyncs the turn order.
             None => out.push_str(&format!("{tag}[PA]")),
             Some(p) => out.push_str(&format!("{}[{}]", tag, p.to_kifu().to_uppercase())),
         }
@@ -1631,8 +1595,8 @@ fn to_ggf(game: &Reversi, black: &str, white: &str) -> String {
     out
 }
 
-/// 開始局面。いまの盤から着手を巻き戻して作る (開始局面そのものは
-/// 持っていないため)。返した石は `flipped` に残っているので厳密に戻せる。
+/// Start position, rebuilt by unwinding moves from the current board
+/// (the start itself is not stored); `flipped` makes the unwind exact.
 fn start_board(game: &Reversi) -> Board {
     let mut b = game.board;
     for r in game.history.iter().rev() {
@@ -1652,7 +1616,7 @@ fn start_board(game: &Reversi) -> Board {
     b
 }
 
-/// 64 マスを GGF の並び (a1..h1, a2..h2, …) で書く。
+/// Write 64 cells in GGF order (a1..h1, a2..h2, ...).
 fn ggf_squares(b: &Board) -> String {
     let mut s = String::with_capacity(64);
     for rank in 0..8 {
@@ -1670,17 +1634,17 @@ fn ggf_squares(b: &Board) -> String {
     s
 }
 
-/// `]` はタグの終わりなので入れられない。他のソフトが読めなくなる。
+/// `]` terminates a tag and would break other readers.
 fn ggf_text(s: &str) -> String {
     s.replace(']', ")")
 }
 
-/// GGF の DT。UTC で「YYYY-MM-DD HH:MM:SS GMT」。
-/// 暦は自前で出す — この 1 か所のために依存を 1 つ増やしたくない。
+/// GGF DT tag: UTC "YYYY-MM-DD HH:MM:SS GMT". Calendar math is done
+/// by hand rather than adding a dependency for one call site.
 fn ggf_now() -> String {
     let secs = now_secs() as i64;
     let (days, rem) = (secs.div_euclid(86_400), secs.rem_euclid(86_400));
-    // Howard Hinnant の civil_from_days。1970-01-01 からの日数を暦に直す
+    // Howard Hinnant's civil_from_days: days since 1970-01-01 to a date.
     let z = days + 719_468;
     let era = z.div_euclid(146_097);
     let doe = z.rem_euclid(146_097);
@@ -1702,18 +1666,15 @@ fn ggf_now() -> String {
     )
 }
 
-/// 貼り付け・ファイル内容から f5 形式の着手列だけを抽出する。
-/// 手番号 (`12.`) や空白・区切り文字が混ざっていても「英字 a-h + 数字 1-8」の
-/// ペアだけを拾うので壊れない。
-/// テキストから開始局面を拾う。
+/// Extract a start position from pasted text.
 ///
-/// 初期局面から始まらない対局 (GGS の抽選オープニング) は、着手列だけでは
-/// 再生できない。盤面 64 マス + 手番の 1 行、または GGF の `BO[8 ...]` を
-/// 開始局面として受け取る。見つからなければ初期局面から始める。
+/// Games not starting from the standard position (GGS drawn openings)
+/// cannot replay from moves alone; accept a 64-cell + mover line or a
+/// GGF `BO[8 ...]`. Fall back to the standard start.
 fn extract_start(text: &str) -> Option<String> {
     let cell = |c: char| matches!(c.to_ascii_lowercase(), '-' | '.' | 'x' | 'o' | '*');
     let side = |c: char| matches!(c.to_ascii_lowercase(), 'x' | 'o' | '*');
-    // GGF は BO[8 <64 マス> <手番>] に開始局面を持つ
+    // GGF stores the start as BO[8 <64 cells> <mover>].
     let ggf = text.find("BO[").map(|i| &text[i + 3..]).and_then(|rest| {
         let end = rest.find(']')?;
         let inner = rest[..end].trim_start_matches('8').trim();
@@ -1722,19 +1683,17 @@ fn extract_start(text: &str) -> Option<String> {
     for cand in ggf.into_iter().chain(text.lines().map(|l| l.to_string())) {
         let c: Vec<char> = cand.chars().filter(|c| !c.is_whitespace()).collect();
         if c.len() == 65 && c[..64].iter().all(|&x| cell(x)) && side(c[64]) {
-            // Board::from_string は 'x'/'*' を黒、'o' を白として読む
+            // Board::from_string reads 'x'/'*' as black, 'o' as white.
             return Some(c.into_iter().collect());
         }
     }
     None
 }
 
-/// GGF (Generic Game Format) を読む。
-///
-/// GGS が使う形式で、`(;` と `;)` で 1 局を囲み、`BO[8 <64 マス> <手番>]` に
-/// 開始局面、`B[F5/評価/時間]` / `W[D6//時間]` に着手を持つ。座標を本文から
-/// 拾うやり方だと `PB[player1]` のような名前から誤って手を作ってしまうので、
-/// 着手タグだけを見る。
+/// Parse GGF (Generic Game Format): `(;` ... `;)` wraps a game,
+/// `BO[8 <cells> <mover>]` is the start, `B[F5/eval/time]` /
+/// `W[D6//time]` are moves. Only move tags are read — scanning body
+/// text would fabricate moves from names like `PB[player1]`.
 fn parse_ggf(text: &str) -> Option<(Option<String>, String)> {
     let body = {
         let start = text.find("(;")?;
@@ -1742,7 +1701,7 @@ fn parse_ggf(text: &str) -> Option<(Option<String>, String)> {
         let end = rest.find(";)").unwrap_or(rest.len());
         &rest[..end]
     };
-    // タグを順に読む: 大文字の名前 + [ ... ]
+    // Read tags in order: uppercase name + [ ... ].
     let mut start_pos: Option<String> = None;
     let mut kifu = String::new();
     let bytes: Vec<char> = body.chars().collect();
@@ -1769,7 +1728,7 @@ fn parse_ggf(text: &str) -> Option<(Option<String>, String)> {
         i += 1;
         match name.as_str() {
             "BO" => {
-                // "8 <64 マス> <手番>" — 盤サイズを落として詰める
+                // "8 <64 cells> <mover>" — drop the size, pack the rest.
                 let c: Vec<char> = value
                     .trim_start_matches('8')
                     .chars()
@@ -1780,8 +1739,8 @@ fn parse_ggf(text: &str) -> Option<(Option<String>, String)> {
                 }
             }
             "B" | "W" => {
-                // "F5/評価/時間"。パスは PA / PASS で、棋譜には残さない
-                // (再生側が打てない手番を見て自動でパスする)。
+                // "F5/eval/time". Passes (PA/PASS) are not recorded;
+                // replay inserts them automatically.
                 let mv = value.split('/').next().unwrap_or("").trim().to_lowercase();
                 if mv.len() == 2 && mv != "pa" {
                     kifu.push_str(&mv);
@@ -1819,7 +1778,8 @@ fn load_kifu_into(app: &State<App>, text: &str) -> Result<GameView, String> {
         return Ok(view(&game));
     }
     let start = extract_start(text);
-    // 開始局面の行は座標に見える文字を含むので、棋譜を拾う前に取り除く
+    // Start-position lines contain coordinate-like chars; strip before
+    // scanning for moves.
     let body = match &start {
         Some(_) => text
             .lines()
@@ -1835,10 +1795,9 @@ fn load_kifu_into(app: &State<App>, text: &str) -> Result<GameView, String> {
     if s.is_empty() && start.is_none() {
         return Err("棋譜が見つかりません".into());
     }
-    /* **エンジンのエラーを素通しにしない。** `invalid KIFU: xx` が
-    そのままトーストに出ていた — すぐ上の「棋譜が見つかりません」は
-    日本語なのに、こちらだけ英語だった。原因はログに残して、画面には
-    直し方の分かる日本語だけを出す (設計 §9 の注記)。 */
+    /* Never pass engine errors through raw: `invalid KIFU: xx` used to
+    reach the toast in English next to Japanese messages. Log the cause;
+    show only actionable display-language text. */
     let loaded = match &start {
         Some(b) => Reversi::from_kifu_with_start(b, &s),
         None => Reversi::from_kifu(&s),
@@ -1871,29 +1830,29 @@ async fn load_kifu(
     load_kifu_into(&app, &s).map(Some)
 }
 
-/// 貼り付けテキストから棋譜を読み込む。
+/// Load a game record from pasted text.
 #[tauri::command]
 fn load_kifu_text(app: State<App>, text: String) -> Result<GameView, String> {
     load_kifu_into(&app, &text)
 }
 
-/// 棋譜を「1 手ごとの盤面」に開く。読むためではなく見るための形。
-/// 対局の状態は変えないので、履歴から盤面を確かめるのに使える。
+/// Expand a record into per-move boards — a viewing shape that leaves
+/// the game state untouched.
 #[derive(Serialize)]
 struct KifuFrame {
-    /// 64 マス: 0 空き / 1 黒 / 2 白。
+    /// 64 cells: 0 empty / 1 black / 2 white.
     cells: Vec<u8>,
-    /// この手で置いたマス (初期局面は null、パスも null)。
+    /// Square placed this move (null for the start and passes).
     last: Option<u8>,
     black: u8,
     white: u8,
-    /// 手番 ("black" | "white")。
+    /// Mover ("black" | "white").
     player: String,
 }
 
-/* ---------------- 定石を眺める ---------------- */
+/* ---------------- Book browsing ---------------- */
 
-/// 定石の 1 手。値は手番視点の石差、`games` は棋譜での採用回数。
+/// One book move; mover-view value, `games` = adoption count.
 #[derive(Serialize)]
 struct BookMoveView {
     pos: u8,
@@ -1901,33 +1860,31 @@ struct BookMoveView {
     games: u32,
 }
 
-/// 定石のある 1 局面。
+/// One book position.
 #[derive(Serialize)]
 struct BookNodeView {
-    /// 64 マス: 0 空き / 1 黒 / 2 白。
+    /// 64 cells: 0 empty / 1 black / 2 white.
     cells: Vec<u8>,
     /// "black" | "white"
     player: String,
     black: u8,
     white: u8,
-    /// 値の高い順。空なら「この局面は定石に無い」。
+    /// By value, descending; empty = not in the book.
     moves: Vec<BookMoveView>,
-    /// 実戦から学習して書き戻された局面か。
+    /// Whether the position was game-learned.
     learned: bool,
-    /// この局面の定石の値 (石差)。定石に無ければ null。
+    /// Book value in discs; null if absent.
     value: Option<f32>,
-    /// その値を付けたときの読み深さ。**値がどれくらい確かかの手がかり**。
+    /// Search depth behind the value — its trustworthiness hint.
     depth: Option<u8>,
-    /// 定石に載っている局面の総数 (見出しに出す)。
+    /// Total book positions (shown in the header).
     size: usize,
-    /// そのうち実戦から書き戻したぶん。
+    /// Of which game-learned.
     learned_size: usize,
 }
 
-/// 棋譜で指した局面の定石を返す。
-///
-/// **対局の状態は触らない。** 眺めるのと打つのは別の営みで、定石を辿って
-/// いる最中に対局の盤が動くと、どちらを見ているのか分からなくなる。
+/// Book data for a record's positions, never touching game state —
+/// browsing and playing are separate activities.
 #[tauri::command]
 async fn book_node(app: State<'_, App>, kifu: String) -> Result<BookNodeView, String> {
     let game = if kifu.trim().is_empty() {
@@ -1985,7 +1942,7 @@ async fn book_node(app: State<'_, App>, kifu: String) -> Result<BookNodeView, St
 fn preview_kifu(text: String) -> Result<Vec<KifuFrame>, String> {
     let mut game = game_from_text(&text).ok_or("棋譜を読めません")?;
     let line = game.line();
-    // 開始局面まで巻き戻す (抽選オープニングは初期配置と違う)
+    // Rewind to the start position (drawn openings differ from standard).
     while game.move_count() > 0 {
         game.undo().map_err(|e| format!("{e:?}"))?;
     }
@@ -2029,7 +1986,7 @@ fn preview_kifu(text: String) -> Result<Vec<KifuFrame>, String> {
     Ok(out)
 }
 
-/// 外部から渡された棋譜 (あれば読んで削除)。
+/// An externally handed-off record (read and delete if present).
 fn take_handoff_kifu() -> Option<String> {
     let path = std::env::temp_dir().join("kuroobi_handoff.txt");
     let s = std::fs::read_to_string(&path).ok()?;
@@ -2037,7 +1994,7 @@ fn take_handoff_kifu() -> Option<String> {
     (!s.trim().is_empty()).then_some(s)
 }
 
-/// 受け渡しテキスト (GGF・開始局面つき・素の棋譜) を対局に起こす。
+/// Materialize hand-off text (GGF / start+moves / bare record) into a game.
 fn game_from_text(text: &str) -> Option<Reversi> {
     if let Some((start, kifu)) = parse_ggf(text) {
         return match &start {
@@ -2075,9 +2032,9 @@ fn ggs_tx(app: &State<App>) -> Result<std::sync::mpsc::Sender<ggs::Cmd>, String>
         .ok_or_else(|| "GGS セッションが起動していません".into())
 }
 
-/// `.ggs_credentials` (repo 直下、name:pw) を探して読む。GUI のログインは
-/// キーチェーンに移したので、これは初回の取り込み元としてだけ残っている
-/// (ファイル自体は CLI 版 ggs が使うため消さない)。
+/// Read `.ggs_credentials` (repo root, name:pw). GUI login moved to the
+/// keychain; this remains only as the first-run migration source (the
+/// file stays for the CLI ggs).
 fn read_credentials() -> Option<(String, String)> {
     for c in [
         ".ggs_credentials",
@@ -2093,9 +2050,9 @@ fn read_credentials() -> Option<(String, String)> {
     None
 }
 
-/// 保存済みの認証情報。キーチェーンに項目が全く無い初回だけ旧ファイル
-/// から取り込む (次からはキーチェーンで完結する)。ログアウト済み
-/// (墓標あり) のときは取り込まない — 復活してしまうため。
+/// Stored credentials. The legacy file is imported only on a true first
+/// run (no keychain item at all); a logout tombstone blocks the import
+/// so credentials cannot resurrect.
 fn saved_credentials() -> Option<(String, String)> {
     if keychain::exists() {
         return keychain::load();
@@ -2120,8 +2077,8 @@ fn ggs_connect(app: State<App>, login: String, pw: String) -> Result<String, Str
     Ok(l)
 }
 
-/// フロントエンドの例外を拾うための診断コマンド。WebView のコンソールが
-/// 見えない環境でも /tmp のログで追える。
+/// Diagnostic command capturing frontend exceptions; traceable via the
+/// /tmp log even without WebView console access.
 #[tauri::command]
 fn js_log(msg: String) {
     use std::io::Write as _;
@@ -2134,9 +2091,9 @@ fn js_log(msg: String) {
     }
 }
 
-/// ログアウト。切断に加えて保存済みの認証情報も忘れる (この手のアプリの
-/// 通例に合わせる: アプリを閉じただけならログイン状態が続き、明示的な
-/// ログアウトで次回の自動ログインも止まる)。
+/// Logout: disconnect and forget stored credentials (the usual
+/// convention — closing the app keeps the session, explicit logout
+/// stops future auto-login).
 #[tauri::command]
 fn ggs_disconnect(app: State<App>) -> Result<(), String> {
     keychain::forget();
@@ -2152,14 +2109,10 @@ fn ggs_raw(app: State<App>, cmd: String) -> Result<(), String> {
         .map_err(|e| e.to_string())
 }
 
-/// **読切の速度を測っていなければ、時間の絡む操作を止める。**
-///
-/// 未較正だと持ち時間の管理が固定の階段に落ち、機械の速さを知らないまま
-/// 対局に入る。**GGS は時間切れがレートに直結する**ので、待ち受け・申し込み・
-/// 持ち時間の設定はここで止めて先に測らせる。
-///
-/// 較正は起動時に背景で走る (`calibrate_missing`) ので、ふつうは
-/// 数秒待てば通る。走っている最中に押したときも同じ文言でよい。
+/// Block clock-related actions until the solve speed is calibrated —
+/// uncalibrated time management degrades to the fixed ladder, and GGS
+/// flag falls cost rating. Calibration runs in the background at
+/// startup, so waiting a few seconds normally clears this.
 fn require_calibration() -> Result<(), String> {
     let t = resources().threads.unwrap_or_else(auto_threads);
     if resources().nps_for(t).is_none() {
@@ -2178,7 +2131,7 @@ fn ggs_ask(
     opponent: String,
     rated: bool,
 ) -> Result<(), String> {
-    // 時間切れはレートに直結する。持ち時間の管理が効く状態でだけ申し込む
+    // Flag falls cost rating; only offer with working time management.
     require_calibration()?;
     ggs_tx(&app)?
         .send(ggs::Cmd::Ask {
@@ -2230,7 +2183,7 @@ fn ggs_rank(app: State<App>, gtype: String, name: String) -> Result<(), String> 
         .map_err(|e| e.to_string())
 }
 
-/// 終局した対局を一覧から閉じる。
+/// Close a finished game from the list.
 #[tauri::command]
 fn ggs_close_match(app: State<App>, id: String) -> Result<(), String> {
     ggs_tx(&app)?
@@ -2248,10 +2201,8 @@ fn ggs_watch(app: State<App>, id: String, on: bool) -> Result<(), String> {
     ggs_tx(&app)?.send(cmd).map_err(|e| e.to_string())
 }
 
-/// 画面が受け取った一言と取り出した棋譜を消す。
-///
-/// **受け取った側が消す。** 出しっぱなしにすると、画面を開き直すたびに
-/// 同じ報せが出るし、次に取り出した棋譜と見分けが付かない。
+/// Clear the notice and the fetched record — the receiver clears them,
+/// or reopening the screen replays stale messages.
 #[tauri::command]
 fn ggs_ack(app: State<App>) -> Result<(), String> {
     let snap = ggs_snap_arc(&app).ok_or("GGS に接続していません")?;
@@ -2261,7 +2212,7 @@ fn ggs_ack(app: State<App>) -> Result<(), String> {
     Ok(())
 }
 
-/// 終わった対局の棋譜 (GGF) を GGS から取り出す。結果は snapshot に載る。
+/// Fetch a finished game's GGF from GGS; the result lands in the snapshot.
 #[tauri::command]
 fn ggs_look(app: State<App>, id: String) -> Result<(), String> {
     ggs_tx(&app)?
@@ -2282,7 +2233,7 @@ fn ggs_chat(app: State<App>, target: String, text: String) -> Result<(), String>
         .map_err(|e| e.to_string())
 }
 
-/// 対局操作。verb は undo / abort / resign / tell のいずれか。
+/// Match command; verb is undo / abort / resign / tell.
 #[tauri::command]
 fn ggs_match_cmd(app: State<App>, id: String, verb: String, arg: String) -> Result<(), String> {
     const ALLOWED: [&str; 4] = ["undo", "abort", "resign", "tell"];
@@ -2294,12 +2245,12 @@ fn ggs_match_cmd(app: State<App>, id: String, verb: String, arg: String) -> Resu
         .map_err(|e| e.to_string())
 }
 
-/// aform (自動受諾) / dform (自動拒否) の式をサーバーに設定する。
+/// Set the server-side aform (auto-accept) / dform (auto-decline) formulas.
 #[tauri::command]
 fn ggs_set_formula(app: State<App>, kind: String, expr: String) -> Result<(), String> {
     if kind != "aform" && kind != "dform" {
-        // 画面からは定数しか渡さないので普段は起きない。**それでも日本語で
-        // 返す** — この文字列はトーストに素通しで出る経路にいる
+        // The screen only passes constants, so this rarely fires — but
+        // the string reaches a toast verbatim, so keep it display-language.
         return Err(format!("申し込みの扱いの種別が不正です ({kind})"));
     }
     ggs_tx(&app)?
@@ -2335,7 +2286,7 @@ fn ggs_history(app: State<App>, name: String) -> Result<(), String> {
         .map_err(|e| e.to_string())
 }
 
-/// チャットの既読位置を進める (この時刻までは読んだ)。
+/// Advance the chat read marker (read up to this time).
 #[tauri::command]
 fn ggs_chat_seen(app: State<App>, at: u64) -> Result<(), String> {
     ggs_tx(&app)?
@@ -2361,7 +2312,7 @@ fn ggs_set_engine(
         .map_err(|e| e.to_string())
 }
 
-/// 持ち時間の使い方 (配り方・1 手の上限・予備)。
+/// Time-usage settings (pacing, per-move cap, reserve).
 #[tauri::command]
 fn ggs_set_pacing(
     app: State<App>,
@@ -2402,7 +2353,7 @@ fn ggs_set_use_book(app: State<App>, on: bool) -> Result<(), String> {
         .map_err(|e| e.to_string())
 }
 
-/// GGS の対局を定石の学習に取り込むかどうか。
+/// Whether GGS games feed book learning.
 #[tauri::command]
 fn ggs_set_learn(app: State<App>, on: bool) -> Result<(), String> {
     ggs_tx(&app)?
@@ -2412,7 +2363,7 @@ fn ggs_set_learn(app: State<App>, on: bool) -> Result<(), String> {
 
 #[tauri::command]
 fn ggs_set_standby(app: State<App>, cfg: ggs::StandbyCfg) -> Result<(), String> {
-    // **切るのは止めない。** 未較正で身動きが取れなくなるほうが困る
+    // Turning things off is never blocked; being stuck uncalibrated is worse.
     if cfg.enabled {
         require_calibration()?;
     }
@@ -2423,13 +2374,13 @@ fn ggs_set_standby(app: State<App>, cfg: ggs::StandbyCfg) -> Result<(), String> 
 
 #[tauri::command]
 fn ggs_snapshot(app: State<App>) -> Result<ggs::Snapshot, String> {
-    /* 画面確認用。**繋がずに GGS の画面を描かせる** — ロビー・プレイヤー・
-    対局結果は相手が要るので、一度も実機で確かめられていなかった。
-    操作は通らない (見た目を確かめるためだけ)。 */
+    /* Screenshot hook: render the GGS screens without connecting (lobby
+    and results need opponents and were never verifiable). Actions are
+    inert. */
     if let Ok(v) = std::env::var("KUROOBI_GGS_DEMO") {
         let mut s = ggs::demo_snapshot();
-        /* `=empty` で中身を空にする。**空状態は作り物にも対局が入っている
-        ので出せなかった** — 釦の並びを確かめるのに実機で撮れる道が要る */
+        /* `=empty` clears the fixtures — empty states were otherwise
+        unphotographable. */
         if v == "empty" {
             s.matches.clear();
             s.ongoing.clear();
@@ -2449,23 +2400,18 @@ fn ggs_snapshot(app: State<App>) -> Result<ggs::Snapshot, String> {
     Ok(s)
 }
 
-/// レート戦が禁じられているか (`KUROOBI_NO_RATED=1`)。画面はこれを見て
-/// 「する」を選べなくする。**送る側でも潰している**ので、画面が古くても
-/// レート戦は成立しない。
+/// Whether rated play is forbidden (`KUROOBI_NO_RATED=1`). The screen
+/// disables the toggle, and the sender enforces it too — a stale screen
+/// cannot start a rated game.
 #[tauri::command]
 fn ggs_no_rated() -> bool {
     ggs::no_rated()
 }
 
-/// **いま効いている環境変数の一覧。** 画面の下の帯に出す。
-///
-/// 環境変数を付けて起動すると、レート戦が禁じられていたり、繋ぐ先が
-/// 作り物だったり、控えの置き場所が違ったりする。**それを知らずに画面を
-/// 触ると、出ている絵が本物なのか確認用なのか区別が付かない。**
-/// 名前と値をそのまま返し、画面は「素の起動と違う」ことだけを示す。
-///
-/// 値そのものを隠す必要があるものは無い (認証情報を持つ変数は無く、
-/// `KUROOBI_KEYCHAIN_SERVICE` は項目の名前でしかない)。
+/// Active override environment variables, shown in the status strip.
+/// With overrides, what the screen shows may be fixture data or an
+/// altered configuration — the strip marks "not a plain launch".
+/// Nothing here needs masking (no variable carries credentials).
 #[tauri::command]
 fn env_overrides() -> Vec<(String, String)> {
     const NAMES: &[&str] = &[
@@ -2492,14 +2438,14 @@ fn env_overrides() -> Vec<(String, String)> {
         .collect()
 }
 
-/// 画面確認用: 起動直後に開く画面 (KUROOBI_GGS_AUTOVIEW)。
+/// Screenshot hook: screen to open at launch (KUROOBI_GGS_AUTOVIEW).
 #[tauri::command]
 fn ggs_autoview() -> String {
     std::env::var("KUROOBI_GGS_AUTOVIEW").unwrap_or_default()
 }
 
-/// 通信ログをファイルへ落とす。棋譜とは絞り込みも既定の名前も違うので
-/// `ggs_save_kifu` を使い回さない (「棋譜」の絞り込みでログを保存させない)。
+/// Save the protocol log to a file; separate from `ggs_save_kifu`
+/// (different filters and default names).
 #[tauri::command]
 async fn ggs_save_log(handle: tauri::AppHandle, text: String) -> Result<Option<String>, String> {
     use tauri_plugin_dialog::DialogExt;
@@ -2520,7 +2466,7 @@ async fn ggs_save_log(handle: tauri::AppHandle, text: String) -> Result<Option<S
     Ok(Some(p.display().to_string()))
 }
 
-/// GGS の棋譜 (文字列で渡される) をファイルに保存する。
+/// Save a GGS record (passed as a string) to a file.
 #[tauri::command]
 async fn ggs_save_kifu(
     handle: tauri::AppHandle,
@@ -2564,36 +2510,34 @@ fn main() {
             cpu_meter: Mutex::new(None),
         })
         .setup(|app| {
-            // GGS 側にはローカル探索の停止ハンドルと稼働記録を渡す。
-            // 自分の GGS 対局が始まったらローカルの探索を止めるため
+            // Hand GGS the local stop handle and activity record so a
+            // starting GGS game can halt local searches.
             let st = app.state::<App>();
-            /* 見た目を確かめるためだけの作り物 (`KUROOBI_GGS_DEMO`) では
-            **通信そのものを始めない。** 始めると「未接続」のスナップ
-            ショットを繰り返し流してきて、作り物を上書きしてしまう。 */
+            /* Fixture mode (`KUROOBI_GGS_DEMO`) never starts the
+            session — it would stream "disconnected" snapshots over the
+            fixtures. */
             if std::env::var("KUROOBI_GGS_DEMO").is_ok() {
                 return Ok(());
             }
-            /* **読切の速度を起動時に測っておく。** 未較正だと持ち時間の
-            管理が固定の階段に落ちる。対局が始まってからでは CPU を
-            奪えないので、まだ何も走っていないこの時点で済ませる。 */
+            /* Calibrate solve speed at startup; once a game runs the
+            CPU cannot be spared. */
             calibrate_missing(
                 app.handle().clone(),
                 st.engine.clone(),
                 st.stop.clone(),
                 st.activity.clone(),
-                // ローカルと GGS でスレッド数の設定が別。GGS の既定は
-                // ローカルと同じ「コア数の半分」なので、多くの場合 1 回で済む
+                // Local and GGS thread settings differ; their defaults
+                // coincide, so usually one measurement covers both.
                 vec![
                     resources().threads.unwrap_or_else(auto_threads),
                     auto_threads(),
                 ],
             );
             let handle = ggs::spawn(app.handle().clone(), st.stop.clone(), st.activity.clone());
-            // 保存済みの認証情報があれば起動時に自動ログインする。
-            // 画面確認の自動運転 (KUROOBI_AUTOPLAY) とデモ
-            // (KUROOBI_GGS_AUTOVIEW) では実サーバーに繋がない
-            // (KUROOBI_GGS_AUTOCONNECT=1 はその場合でも強制的に繋ぐ)。
-            // 別ウィンドウが接続中のときは黙って見送る (そちらを使う)。
+            // Auto-login with stored credentials at startup. Screenshot
+            // automation and demo modes skip the real server
+            // (KUROOBI_GGS_AUTOCONNECT=1 forces it); if another window
+            // is connected, silently defer to it.
             let force = std::env::var("KUROOBI_GGS_AUTOCONNECT").is_ok();
             let demo = std::env::var("KUROOBI_AUTOPLAY").is_ok()
                 || std::env::var("KUROOBI_GGS_AUTOVIEW").is_ok();
@@ -2603,8 +2547,8 @@ fn main() {
                 }
             }
             if force {
-                // KUROOBI_GGS_AUTOLOOK=<id> なら棋譜取得も試す
-                // (取得経路を UI 操作なしで確かめるため)。
+                // KUROOBI_GGS_AUTOLOOK=<id>: also fetch a record
+                // (exercises that path without UI interaction).
                 if let Ok(id) = std::env::var("KUROOBI_GGS_AUTOLOOK") {
                     let tx = handle.tx.clone();
                     std::thread::spawn(move || {
@@ -2612,14 +2556,14 @@ fn main() {
                         let _ = tx.send(ggs::Cmd::Look(id));
                     });
                 }
-                // KUROOBI_GGS_AUTOWATCH=<id>,… / auto なら観戦も始める。
+                // KUROOBI_GGS_AUTOWATCH=<ids>/auto: also start watching.
                 if let Ok(ids) = std::env::var("KUROOBI_GGS_AUTOWATCH") {
                     let tx = handle.tx.clone();
                     std::thread::spawn(move || {
                         std::thread::sleep(std::time::Duration::from_secs(12));
                         if ids.trim() == "auto" {
-                            // 一覧を取り直す。届いた時点でセッション側が
-                            // まとめて観戦する。
+                            // Refresh the list; the session watches the
+                            // batch when it arrives.
                             let _ = tx.send(ggs::Cmd::ListMatches);
                         } else {
                             for id in ids.split(',').filter(|s| !s.trim().is_empty()) {
@@ -2714,7 +2658,7 @@ fn main() {
 mod tests {
     use super::*;
 
-    /// 外部から渡される形: 1 行目が開始局面、2 行目が着手列。
+    /// Hand-off form: line 1 = start position, line 2 = moves.
     #[test]
     fn reads_start_position_and_kifu() {
         let start = Board::new().to_string();
@@ -2723,12 +2667,12 @@ mod tests {
             extract_start(&text).as_deref(),
             Some(start.replace(' ', "").as_str())
         );
-        // 開始局面の行を棋譜として拾ってしまわないこと
+        // The start-position line must not be scanned as moves.
         let g = game_from_text(&text).expect("読めること");
         assert_eq!(g.move_count(), 3);
     }
 
-    /// 開始局面が無ければ従来どおり初期局面から。
+    /// Without a start position, begin from the standard start.
     #[test]
     fn plain_kifu_still_works() {
         assert!(extract_start("f5d6c3").is_none());
@@ -2736,7 +2680,7 @@ mod tests {
         assert_eq!(g.move_count(), 3);
     }
 
-    /// GGF の BO タグからも開始局面を拾う。
+    /// The GGF BO tag also yields a start position.
     #[test]
     fn reads_start_from_ggf() {
         let start = Board::new().to_string();
@@ -2747,7 +2691,7 @@ mod tests {
         );
     }
 
-    /// 開始局面が抽選局面でも、着手列と合わせて元の対局に戻る。
+    /// A drawn start position plus moves reproduces the original game.
     #[test]
     fn drawn_opening_round_trips() {
         let mut drawn = Reversi::new();
@@ -2767,7 +2711,7 @@ mod tests {
         assert_eq!(g.board.white, drawn.board.white);
     }
 
-    /// GGS が使う GGF。開始局面を BO タグに持つので往復できる。
+    /// GGS-flavored GGF; the BO tag makes it round-trippable.
     #[test]
     fn reads_ggf() {
         let ggf = "(;GM[Othello]PC[GGS/os]PB[nyanyan]RB[2658.9]PW[egrcd]RW[2585.8]\
@@ -2780,7 +2724,7 @@ mod tests {
         assert_eq!(g.board.white, plain.board.white);
     }
 
-    /// 対局者名に座標に見える文字が入っていても手として拾わない。
+    /// Coordinate-like characters in player names must not become moves.
     #[test]
     fn ggf_ignores_coordinates_inside_names() {
         let ggf = "(;GM[Othello]PB[player1]PW[a1ice]\
@@ -2790,7 +2734,7 @@ mod tests {
         assert_eq!(g.move_count(), 1, "名前の a1 / r1 を手にしない");
     }
 
-    /// 抽選オープニングの GGF が元の対局に戻る。
+    /// A drawn-opening GGF reproduces the original game.
     #[test]
     fn ggf_round_trips_a_drawn_opening() {
         let mut drawn = Reversi::new();
@@ -2817,7 +2761,7 @@ mod tests {
         assert_eq!(g.board.white, drawn.board.white);
     }
 
-    /// GGS の `look` が返す実データ (評価値と消費時間つき) を読む。
+    /// Parse real `look` output (with evals and time spent).
     #[test]
     fn reads_ggf_from_ggs_archive() {
         let ggf = "(;GM[Othello]PC[GGS/os]DT[2026.07.30_17:36:36.MDT]PB[kuroobi]PW[fly]\
@@ -2826,19 +2770,19 @@ mod tests {
                    B[E6]W[f4/-25.99/0.20]B[C3]W[d6/-25.99/0.04]B[F6]W[e7/-25.99/0.02];)";
         let g = game_from_text(ggf).expect("読めること");
         assert_eq!(g.move_count(), 6);
-        // 大文字・小文字が混ざり、評価値と時間が付いていても手だけ拾う
+        // Mixed case, evals and times present — extract moves only.
         let plain = Reversi::from_kifu("e6f4c3d6f6e7").unwrap();
         assert_eq!(g.board.black, plain.board.black);
         assert_eq!(g.board.white, plain.board.white);
     }
 
-    /// GGS の `look` が返した実データ (パスを含む 1 局まるごと)。
+    /// Real `look` output: one full game including a pass.
     #[test]
     fn replays_a_whole_archived_game() {
         let ggf = "(;GM[Othello]PC[GGS/os]DT[2026.07.30_17:36:36.MDT]PB[kuroobi]PW[fly]RB[1720]RW[1438.62]TI[15:00//02:00]TY[8]RE[+54.000]BO[8 -------- -------- -------- ---O*--- ---*O--- -------- -------- -------- *]B[E6]W[f4/-25.99/0.20]B[C3]W[d6/-25.99/0.04]B[F6]W[e7/-25.99/0.02]B[F5]W[g5/-25.99]B[E3]W[g4/-28.23]B[C7]W[d3/24.23]B[F3]W[c4/0.23]B[C6]W[c5/-7.29]B[B4]W[b6/-7.81]B[D7]W[b5/-8.06]B[C2]W[a3/-7.84]B[F8]W[e8/-11.18]B[D8]W[c8/-15.07]B[B8]W[d2/-19.02]B[G3]W[e2/-19.46]B[A6]W[c1/-20.24]B[D1]W[e1/-20.44]B[F2]W[f1/-17.83]B[F7]W[h3/-18.89]B[A5]W[a7/-29.57]B[A8]W[b7/-35.51]B[G2]W[g8/-38.82]B[H8]W[g1/-45.44]B[B3]W[a4/-38.31]B[A2]W[b2]B[A1]W[b1]B[G7]W[g6]B[H6]W[h7]B[H5]W[h4]B[H2]W[pass]B[H1];)";
         let g = game_from_text(ggf).expect("読めること");
         assert!(g.board.is_game_over(), "終局まで再生できる");
-        // GGF の RE[+54.000] は黒 (kuroobi) から見た石差
+        // GGF RE[+54.000] is the disc difference from Black's view.
         let (b, w) = (
             g.board.black.count_ones() as i32,
             g.board.white.count_ones() as i32,
@@ -2847,9 +2791,9 @@ mod tests {
         assert!(ggf.contains("W[pass]"), "終盤にパスが入っている局");
     }
 
-    /* ---- GGF を書く側 ---- */
+    /* ---- GGF writing ---- */
 
-    /// 書いた GGF を読み直すと元の対局に戻る。
+    /// Written GGF reads back into the original game.
     #[test]
     fn writes_ggf_that_reads_back() {
         let g = Reversi::from_kifu("e6f4c3d6f6e7").unwrap();
@@ -2862,7 +2806,7 @@ mod tests {
         assert_eq!(back.board.white, g.board.white);
     }
 
-    /// パスを含む 1 局を書いて読み直しても手番がずれない。
+    /// A game with a pass round-trips without turn drift.
     #[test]
     fn writes_pass_and_result() {
         let src =
@@ -2882,7 +2826,7 @@ mod tests {
         assert_eq!(back.board.white, g.board.white);
     }
 
-    /// 抽選開局から始めた対局は BO に開始局面が入る (初期局面ではない)。
+    /// Drawn-opening games write their start into BO (not the standard).
     #[test]
     fn writes_drawn_opening_start() {
         let mut drawn = Reversi::new();
@@ -2908,7 +2852,7 @@ mod tests {
         assert_eq!(back.board.white, g.board.white);
     }
 
-    /// 名前に `]` が入ってもタグが壊れない。
+    /// A `]` in a name must not break the tag.
     #[test]
     fn ggf_escapes_bracket_in_names() {
         let g = Reversi::from_kifu("e6").unwrap();

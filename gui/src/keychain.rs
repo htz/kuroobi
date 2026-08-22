@@ -1,26 +1,25 @@
-//! GGS 認証情報の保存先 (macOS キーチェーン)。
+//! GGS credential storage (macOS Keychain).
 //!
-//! Keychain API をプロセスから直接叩くと、項目のアクセス許可がバイナリの
-//! 署名に紐づき、再ビルドのたびに許可ダイアログが出る (画面の自動確認も
-//! 止まる)。Apple 署名済みの /usr/bin/security コマンドを介せば、項目の
-//! 所有者が security になるためダイアログが出ず、.app 化前の開発ビルド
-//! でも同じに動く。
+//! Calling the Keychain API directly ties item ACLs to the binary
+//! signature, so every rebuild pops a permission dialog (and stalls
+//! automated screenshots). Going through the Apple-signed
+//! /usr/bin/security makes `security` the item owner: no dialogs, and
+//! dev builds behave like the packaged app.
 //!
-//! パスワードを引数に渡すと ps に一瞬映るので、書き込みは `security -i`
-//! (標準入力からコマンドを読むモード) で行う。
+//! Passwords passed as arguments flash in `ps`, so writes go through
+//! `security -i` (commands on stdin).
 
 use std::io::Write as _;
 use std::process::{Command, Stdio};
 
-/// キーチェーン上のサービス名。項目はこの名前で 1 つだけ持つ。
+/// Keychain service name; exactly one item is kept under it.
 const SERVICE_DEFAULT: &str = "kuroobi-ggs";
 
-/// サービス名。`KUROOBI_KEYCHAIN_SERVICE` で差し替えられる。
+/// Service name, overridable via `KUROOBI_KEYCHAIN_SERVICE`.
 ///
-/// **項目は 1 つしか持たない作りなので、既定のままでは 2 つの実体が
-/// 別々のアカウントを覚えられない** (後からログインしたほうが前の項目を
-/// 消す)。開発版と本番、あるいは旧版と現行版を同時に動かして別の
-/// アカウントで繋ぎたいときに、片方だけ名前を変える。
+/// Only one item is kept, so two instances cannot remember different
+/// accounts under the default (the later login evicts the earlier).
+/// Rename one side when running dev and production side by side.
 fn service() -> &'static str {
     static S: std::sync::OnceLock<String> = std::sync::OnceLock::new();
     S.get_or_init(|| {
@@ -31,14 +30,14 @@ fn service() -> &'static str {
     })
 }
 
-/// security -i のコマンド行に埋め込むための引用。
+/// Quote for embedding in a `security -i` command line.
 fn quote(s: &str) -> String {
     format!("\"{}\"", s.replace('\\', "\\\\").replace('"', "\\\""))
 }
 
-/// 同じサービス名の項目を全部消す。add の -U は「サービス+アカウントが
-/// 一致」した項目しか上書きせず、アカウントが違う項目が併存すると
-/// find が古い方を返し続けるため、書く前に必ず掃除する。
+/// Delete every item under the service name. `add -U` only replaces
+/// items whose service AND account match; with a different-account item
+/// around, find keeps returning the stale one — sweep before writing.
 fn clear() {
     loop {
         let deleted = Command::new("/usr/bin/security")
@@ -54,8 +53,8 @@ fn clear() {
     }
 }
 
-/// 保存する (既存の項目は入れ替え)。失敗しても呼び出し側の
-/// ログイン自体は成功しているので、黙って諦める。
+/// Save (replacing any existing item). Failure is silent — the login
+/// itself already succeeded.
 pub fn save(login: &str, pw: &str) {
     clear();
     let Ok(mut child) = Command::new("/usr/bin/security")
@@ -79,15 +78,15 @@ pub fn save(login: &str, pw: &str) {
     let _ = child.wait();
 }
 
-/// ログアウト。削除ではなく空パスワードで上書きする (墓標)。項目ごと
-/// 消すと「キーチェーンが空なら旧ファイルから取り込む」移行処理が次回
-/// 起動時に働き、自動ログインが復活してしまう。
+/// Logout: overwrite with an empty password (a tombstone) rather than
+/// delete. Deleting would re-trigger the legacy-file migration on next
+/// launch and resurrect auto-login.
 pub fn forget() {
     save("-", "");
 }
 
-/// 項目があるか (ログアウトの墓標も含む)。旧ファイルからの取り込みを
-/// 項目が全く無い初回だけに限るための照会。
+/// Whether any item exists (tombstones included); gates the legacy-file
+/// migration to the true first run.
 pub fn exists() -> bool {
     Command::new("/usr/bin/security")
         .args(["find-generic-password", "-s", service()])
@@ -98,10 +97,9 @@ pub fn exists() -> bool {
         .unwrap_or(false)
 }
 
-/// 保存済みの (ログイン名, パスワード) を読む。無ければ None。
-/// ログアウトの墓標 (空パスワード) も None。
+/// Read the stored (login, password); None if absent or a tombstone.
 pub fn load() -> Option<(String, String)> {
-    // 項目のメタデータからログイン名 (acct) を取り出す
+    // Pull the login (acct) from the item metadata.
     let meta = Command::new("/usr/bin/security")
         .args(["find-generic-password", "-s", service()])
         .output()
@@ -116,7 +114,7 @@ pub fn load() -> Option<(String, String)> {
             .strip_suffix('"')
             .map(str::to_string)
     })?;
-    // パスワード本体は -w で標準出力に出る
+    // The password itself comes out on stdout with -w.
     let pw = Command::new("/usr/bin/security")
         .args(["find-generic-password", "-s", service(), "-w"])
         .output()
