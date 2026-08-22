@@ -9,9 +9,8 @@ import { StoneDot } from './components/data';
 import { GgsSettings } from './GgsScreens';
 import type { GgsSnapshot } from './types';
 
-/* 確認と入力。現行がブラウザの confirm() / prompt() を使っているところを
- * 置き換える。ブラウザのダイアログはデザインに乗らないうえ、Tauri の
- * WebView では見た目が OS 任せになる。 */
+/* Confirmations and inputs, replacing browser confirm()/prompt()
+ * (which ignore the design and render OS-styled in the WebView). */
 
 export function Confirm({ title, body, ok = 'OK', danger, onOk, onCancel }: {
   title: string; body?: React.ReactNode; ok?: string; danger?: boolean;
@@ -28,7 +27,7 @@ export function Confirm({ title, body, ok = 'OK', danger, onOk, onCancel }: {
   );
 }
 
-/** 一覧から 1 つ選ぶ (チャットの「新しい相手」)。 */
+/** Pick one from a list (chat's new-conversation picker). */
 export function PickOne({ title, body, options, ok = '開く', onOk, onCancel }: {
   title: string; body?: React.ReactNode; options: [string, string][];
   ok?: string; onOk: (v: string) => void; onCancel: () => void;
@@ -50,22 +49,21 @@ export function PickOne({ title, body, options, ok = '開く', onOk, onCancel }:
   );
 }
 
-/** 棋譜を貼って読み込む。ファイルから選ぶ経路も同じ箱に置く。 */
+/** Paste-a-record loader; the file picker path shares the box. */
 export function PasteKifu({ onLoad, onFile, onCancel }: {
   onLoad: (text: string) => void; onFile: () => void; onCancel: () => void;
 }) {
   const [text, setText] = useState('');
-  /* 貼ったものが読めるかを、読み込む前に見せる。
-   *
-   * GGF・着手列・盤面つきのどれでも受けるので、**読めたかどうかが押すまで
-   * 分からない**のが困る。バックエンドに下読みだけさせる (対局の状態は
-   * 動かさない)。打鍵のたびに投げないよう少し待ってから。 */
+  /* Preview parseability before loading: GGF, move lists and
+   * board-prefixed forms are all accepted, so without a preview you
+   * cannot tell until you press. The backend dry-runs it (game state
+   * untouched), debounced. */
   const [peek, setPeek] = useState<{ frames: KifuFrame[]; err: string } | null>(null);
   useEffect(() => {
     const t = text.trim();
     let alive = true;
     if (!t) {
-      // 空にしたときも遅らせて消す。effect の中で直に状態を書かない
+      // Clearing is debounced too; never set state directly in the effect.
       const clear = setTimeout(() => { if (alive) setPeek(null); }, 0);
       return () => { alive = false; clearTimeout(clear); };
     }
@@ -77,7 +75,7 @@ export function PasteKifu({ onLoad, onFile, onCancel }: {
     return () => { alive = false; clearTimeout(id); };
   }, [text]);
 
-  // frames の 1 枚目は初期局面。2 枚以上なければ手が 1 つも読めていない
+  // frames[0] is the start; fewer than two means no move parsed.
   const ok = !!peek && !peek.err && peek.frames.length > 1;
   const last = ok ? peek!.frames[peek!.frames.length - 1] : null;
   return (
@@ -87,7 +85,7 @@ export function PasteKifu({ onLoad, onFile, onCancel }: {
              actions={<>
                <Button size="field" onClick={onFile}>ファイルから…</Button>
                <span style={{ marginLeft: 'auto' }} />
-               {/* 絵も「やめる」になった (2026-08-08 の更新で追従) */}
+               {/* The design caught up to this wording (2026-08-08). */}
                <Button size="field" onClick={onCancel}>やめる</Button>
                <Button size="field" variant="primary" disabled={!ok}
                        onClick={() => onLoad(text)}>読み込む</Button>
@@ -99,15 +97,13 @@ export function PasteKifu({ onLoad, onFile, onCancel }: {
             background: 'var(--bg)', border: '1px solid var(--border)',
             fontFamily: 'var(--ff-mono)', fontSize: 'var(--fs-6)', lineHeight: 1.6,
           }} />
-        {/* 下読みの結果。読めなければ理由、読めれば石数と手数。
-            先に実装へ入れて「絵にも入れてほしい」と投げていたもので、
-            **絵が追いついた** (2026-08-08)。寸法は絵の実測 —
-            盤 96 / 角丸 6 / 溝 6 / 石の点 13 / 数の間 10 / 点と数の間 6。 */}
+        {/* Preview result: the reason when unreadable, discs and move
+            count when readable. Dimensions from the design capture. */}
         <div style={{ display: 'flex', gap: 'var(--sp-4)', alignItems: 'center', minHeight: 96 }}>
           <div style={{
             width: 96, height: 96, flex: 'none',
-            // 盤の svg 自身の角丸 (viewBox 880 の rx 14) は 96px では 1.5px に
-            // しかならない。器で切って絵と同じ丸みにする
+            // The svg's own rx shrinks to 1.5px at 96px; clip with the
+            // container to match the design's rounding.
             borderRadius: 'var(--r-2)', overflow: 'hidden',
           }}>
             {last && <Board cells={last.cells as (0 | 1 | 2)[]} last={last.last} coords={false} grain={false} />}
@@ -122,9 +118,8 @@ export function PasteKifu({ onLoad, onFile, onCancel }: {
             {!peek && <span style={{ color: 'var(--sub)' }}>貼り付けると、ここに読み取り結果が出ます。</span>}
             {peek?.err && <span>{peek.err}</span>}
             {last && <>
-              {/* 石は数の外側に置く。ScoreRow は両方とも点が左だが、あちらは
-                  並べて差を読ませる帯で、こちらは 1 局の結果を「黒 対 白」と
-                  読ませる (絵もこの向き) */}
+              {/* Dots outside the numbers: this reads "black vs white"
+                  (one game's result), unlike ScoreRow's comparison row. */}
               <div style={{ display: 'flex', alignItems: 'center', gap: 'var(--sp-2h)' }}>
                 <span style={{ display: 'flex', alignItems: 'center', gap: 'var(--sp-0)' }}>
                   <StoneDot color="b" size={13} /><b style={{ fontWeight: 600 }}>{last.black}</b>
@@ -134,9 +129,9 @@ export function PasteKifu({ onLoad, onFile, onCancel }: {
                   <b style={{ fontWeight: 600 }}>{last.white}</b><StoneDot color="w" size={13} />
                 </span>
               </div>
-              {/* 絵は「42 手 ・ 終局図」。**盤が埋まっていないものまで終局図と
-                  呼ばない** — 途中で切れた棋譜も読めるので、そのときは
-                  最後の局面だと言う */}
+              {/* Never call an unfinished board the final position —
+                  truncated records load too, and then it is just the
+                  last position. */}
               <span style={{ color: 'var(--sub)' }}>
                 {peek!.frames.length - 1} 手 ・ {last.black + last.white === 64 ? '終局図' : '最後の局面'}
               </span>
@@ -149,26 +144,23 @@ export function PasteKifu({ onLoad, onFile, onCancel }: {
   );
 }
 
-/* ---------------- 設定 (歯車) ----------------
- *
- * エンジンが使うファイル・ローカル探索のスレッド数・学習の取り込み。
- * GGS 用のエンジン設定は GGS の画面が持つ (エンジンが別なので設定も別)。
- *
- * 設計では独立ウィンドウだが、窓を増やすのは段階 6 の後。まずは暗幕の中に置く。
- */
+/* ---------------- Settings (gear) ----------------
+ * Engine files, local thread count, learning import. GGS engine
+ * settings live in the GGS screens (separate engine, separate
+ * settings). */
 
-// 画面に出す名前は resource_status が返すものと同じにする
-// (食い違うと状態が引けず、パスも出なくなる)
-/* 並びは設計と同じ「NNUE → 線形評価 → 定石」。KUROOBI が主に読むものが上。
- * 3 つ目は**画面に出す名前**で、設計の絵の文言に合わせてある。
- * 2 つ目はバックエンドが返す名前なので、勝手に変えると状態が引けなくなる。 */
+// Display names must match resource_status's — a mismatch loses the
+// status lookup and the path display.
+/* Order per the design (NNUE, linear, book) — what KUROOBI reads most
+ * sits on top. The third field is the display name; the second is the
+ * backend's key and must not drift. */
 const KINDS: [string, string, string][] = [
   ['nnue', 'NNUE の重み', 'NNUE 重み'],
   ['weights', '線形評価の重み', '線形評価'],
   ['book', '定石', '定石'],
 ];
 
-/** ファイルの大きさ。桁が動くと読みにくいので、MB は小数 1 桁で止める。 */
+/** File size; MB capped at one decimal so digits stay put. */
 function fmtSize(n: number): string {
   if (n <= 0) return '';
   if (n < 1024) return n + ' B';
@@ -176,53 +168,47 @@ function fmtSize(n: number): string {
   return (n / 1024 / 1024).toFixed(1) + ' MB';
 }
 
-/* 足りないときは、無いことだけでなく**その先どうなるか**を言う。
- * 「ファイルがありません」だけだと、直さないと動かないのか、
- * 直さなくても済むのかが分からない。 */
+/* Missing files state the consequence, not just the absence —
+ * "missing" alone does not say whether anything breaks. */
 const NOT_FOUND: Record<string, string> = {
   weights: '見つかりません。KUROOBI は評価できません',
   nnue: '見つかりません。線形評価だけで指します',
   book: '見つかりません。実戦から育つ book_learn.txt だけを使います',
 };
 
-/* 設定は主画面の脇役ではないので**別の窓**に出す (規則 79)。覆いだと後ろの
- * 盤が見えているのに触れず、開いている間ずっと主画面が止まって見える。
- *
- * 窓が別なら React の状態は共有されないので、
- *   - 見え方 (Prefs) は localStorage 経由。書けば storage が飛んで主画面が追う
- *   - ファイルとスレッドはバックエンドが持つので、変えたら報せだけ送る
- * という分担にしてある。学習の取り込みはドックに操作があるので置かない
- * (同じ設定を 2 か所に出さない — 規則 58)。 */
+/* Settings once lived in a separate window; with no shared React
+ * state, prefs sync via localStorage and backend-owned values send
+ * change notifications. Learning import controls stay in the dock
+ * (one setting, one place). */
 export function Settings({ prefs, setPref, ggs, initialTab, onClose }: {
   prefs: Prefs; setPref: <K extends keyof Prefs>(k: K, v: Prefs[K]) => void;
-  /** GGS のスナップショット。GGS タブの中身に使う (未接続なら null)。 */
+  /** GGS snapshot for the GGS tab (null while disconnected). */
   ggs?: GgsSnapshot | null;
-  /** 最初に出すタブ (撮るためだけの入口。`KUROOBI_AUTOPLAY=settings:ggs`)。 */
+  /** Initial tab (screenshot entry, `KUROOBI_AUTOPLAY=settings:ggs`). */
   initialTab?: 'engine' | 'view' | 'ggs';
-  /** 閉じる (覆いの足の釦)。 */
+  /** Close (the overlay's footer button). */
   onClose?: () => void;
 }) {
   const [tab, setTab] = useState<'engine' | 'view' | 'ggs'>(initialTab ?? 'engine');
-  /* 撮るためだけの入口。`KUROOBI_AUTOPLAY=settings:ggs` のようにタブを
-     指定できる。タブはクリックでしか切り替えられず、確認が人手頼みだった。
-     **`settings:view:light` のように 3 つ目を渡すとテーマを実際に変える** —
-     押さずにテーマの切り替わりを撮るため */
+  /* Screenshot entry: tabs are click-only, so automation needs this.
+     A third segment (settings:view:light) actually switches the theme
+     so the change can be captured without clicking. */
   useEffect(() => {
     void api.autoplay().then((v) => {
       const [, t, arg] = (v ?? '').split(':');
       if (t === 'engine' || t === 'view' || t === 'ggs') setTab(t);
       if (arg === 'light' || arg === 'dark' || arg === 'os') {
-        // 撮る側が「変える前」を押さえられるよう、少し待ってから変える
+        // Delay so the capture can catch the before state.
         window.setTimeout(() => setPref('theme', arg), 5000);
       }
     }).catch(() => { /* Tauri 外では効かないだけ */ });
-    // setPref は窓が生きている間ずっと同じものなので、1 度だけでよい
+    // setPref is stable for the window's lifetime; run once.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
   const [reset, setReset] = useState(false);
   const [status, setStatus] = useState<[string, string, boolean, number, string][]>([]);
   const [th, setTh] = useState<ThreadsView | null>(null);
-  /** 読切速度の測定中 (数秒かかるので、押せないことを見せる)。 */
+  /** Solve-speed measurement in progress (seconds; shown as disabled). */
   const [calib, setCalib] = useState(false);
   const [hash, setHash] = useState<HashView | null>(null);
 
@@ -230,7 +216,7 @@ export function Settings({ prefs, setPref, ggs, initialTab, onClose }: {
     try { setStatus(await api.resourceStatus()); } catch { /* エンジン未初期化 */ }
   }, []);
 
-  // 開いた時点の状態を取る。閉じた後に届いても捨てる
+  // Fetch the state as of opening; discard replies after close.
   useEffect(() => {
     let alive = true;
     void (async () => {
@@ -247,9 +233,9 @@ export function Settings({ prefs, setPref, ggs, initialTab, onClose }: {
     return () => { alive = false; };
   }, []);
 
-  /* **較正は背景で走る。** 起動直後にこの窓を開くと、まだ測り終える前の
-     値 (未測定) を掴んだまま残る — 実機でそうなった。終わったら報せが
-     来るので取り直す。 */
+  /* Calibration runs in the background; opening this right after
+     launch once froze the "unmeasured" state. Re-fetch on the
+     completion notice. */
   useEffect(() => {
     let alive = true;
     const off = onApp('resources-changed', () => {
@@ -262,7 +248,7 @@ export function Settings({ prefs, setPref, ggs, initialTab, onClose }: {
   const change = async (kind: string, path: string | null) => {
     await api.setResource(kind, path);
     await load();
-    // 主画面は別の document なので自分では気付けない
+    // The main screen is another document and cannot notice itself.
     emitApp('resources-changed');
   };
   const setThreads = async (n: number | null) => {
@@ -275,11 +261,9 @@ export function Settings({ prefs, setPref, ggs, initialTab, onClose }: {
   return (
     <Modal title="設定" width="560px" onClose={onClose} scroll
            band={<>
-               {/* **タブは Segmented ではない。** 絵は囲みの枠を持たず、字を
-                   並べて選ばれているものだけを塗る形。Segmented の囲みは
-                   「並んだ選択肢の 1 つ」を示す部品で、画面を切り替えるタブとは
-                   役目が違う (規則 40 は選択肢の列の話)。
-                   **帯の器 (高さ 44・地 --card・下罫) は `Modal` が持つ。** */}
+               {/* Tabs are not Segmented: the design draws bare labels
+                   with only the selection filled. The strip container
+                   (44px, --card, bottom keyline) belongs to Modal. */}
                <div style={{
                  flex: 1, display: 'flex', alignItems: 'center',
                  justifyContent: 'center', gap: 'var(--sp-1)',
@@ -302,20 +286,15 @@ export function Settings({ prefs, setPref, ggs, initialTab, onClose }: {
            </>}>
       <div className="k-settings" style={{ display: 'flex', flexDirection: 'column' }}>
 
-        {/* 見え方だけの設定。エンジンの動きには関わらないので、
-            バックエンドに送らず localStorage に置く */}
+        {/* Display-only settings; localStorage, never the backend. */}
         {tab === 'view' && <ViewSettings prefs={prefs} setPref={setPref} />}
 
-        {/* 設計どおり GGS の設定もこの窓に入れる。左メニューの行き先は
-            落とした — 同じ設定へ行く道が 2 つあると、どちらが本物か
-            分からなくなる (規則 58) */}
-        {/* **未接続でもスナップショットは返る** (conn が "disconnected" の
-            既定値)。**繋がないと丸ごと出さない作りだったが、それは行き過ぎ
-            だった** — 強さ・持ち時間・定石・ふるまいは手元の設定で、
-            `ggs.rs` の未接続の待ち受け (1015〜1055 行) がちゃんと受け取る。
-            繋いでからでないと GGS 用の強さを決められないのはおかしい。
-            サーバーに置いてある「申し込みの扱い」と「接続」だけを
-            `GgsSettings` の中で畳む */}
+        {/* GGS settings live here per the design; the nav destination
+            was dropped (two roads to one setting compete). */}
+        {/* Snapshots exist even disconnected. Hiding the whole tab
+            until connect was overkill: strength/clock/book/behavior
+            are local settings the disconnected loop accepts fine; only
+            the server-side sections fold inside GgsSettings. */}
         {tab === 'ggs' && (ggs
           ? <GgsSettings snap={ggs} />
           : (
@@ -335,8 +314,8 @@ export function Settings({ prefs, setPref, ggs, initialTab, onClose }: {
             const info = byName.get(title);
             return (
               <div key={kind} style={{ display: 'flex', flexDirection: 'column', gap: 'var(--sp-1)' }}>
-                {/* パスは打ち込む欄に入れる。行の右端に押しやると、いま何を
-                    読んでいるかとその直し方が別の場所に散る */}
+                {/* The path lives in the input; pushed to the row edge
+                    it separates "what is read" from "how to change it". */}
                 <Row2 label={label}>
                   <TextField value={info?.p ?? ''} placeholder="未指定" invalid={!info?.ok} />
                   <Button size="field" onClick={async () => {
@@ -344,7 +323,8 @@ export function Settings({ prefs, setPref, ggs, initialTab, onClose }: {
                     if (p) await change(kind, p);
                   }}>選択…</Button>
                 </Row2>
-                {/* 良し悪しは欄の直下、**欄の列に揃える** (設計も 96px 空けている) */}
+                {/* Status goes right under the field, aligned to its
+                    column (the design leaves 96px too). */}
                 <div style={{
                   marginLeft: 'calc(var(--w-label) + var(--sp-3))',
                   display: 'flex', alignItems: 'center', gap: 'var(--sp-2)',
@@ -372,11 +352,10 @@ export function Settings({ prefs, setPref, ggs, initialTab, onClose }: {
         {th && (
           <Section title="ローカル探索のスレッド数">
             <Row2 label="スレッド">
-              {/* **「自動」を別項目にしない。** 数の列の外にもう 1 つ置くと、
-                  自動が幾つなのかが分かっていても列の中から探せない。
-                  該当する数に印を付けて 1 列にまとめる。
-                  **選んだときは未指定として保存する** — 数で保存すると、
-                  コア数の違う機械へ設定を移したときに自動が固定値に化ける */}
+              {/* Auto is not a separate item: it marks its number
+                  inside the one column, and selecting it saves "unset"
+                  — saving the number would freeze auto on a machine
+                  with different cores. */}
               <Select width={140} value={String(th.set ?? th.auto)}
                       onChange={(v) => void setThreads(+v === th.auto ? null : +v)}
                       options={Array.from({ length: th.auto * 2 }, (_, i) => {
@@ -384,19 +363,18 @@ export function Settings({ prefs, setPref, ggs, initialTab, onClose }: {
                         return [String(n), n === th.auto ? `${n} (自動)` : String(n)] as [string, string];
                       })} />
             </Row2>
-            {/* 説明は操作の下、節の幅いっぱい (設計の絵と同じ)。欄の列に
-                字下げすると、欄の補足なのか節の説明なのかが曖昧になる */}
+            {/* The description spans the section under the control;
+                indented to the field column it reads as a field hint. */}
             <Note>ローカル対局・検討・学習・GGS 対局が使う並列数です。</Note>
           </Section>
         )}
-        {/* **速さはスレッド数ごとの値**なので、スレッド数の節の直後に置く。
-            ただし別の節にする — 「スレッド数」の見出しの下に速度を入れると
-            見出しが内容と合わなくなる (規則 13: 節は見出しで区切るもの) */}
+        {/* Speed is per-thread-count, so it follows the threads
+            section — but as its own section, or the heading lies. */}
         {th && (
           <Section title="読切の速度">
             <Row2 label="この機械">
-              {/* 値の欄に幅を持たせる。上の「選択…」と同じ列にボタンが
-                  揃わないと、行ごとに押すものの位置が変わる */}
+              {/* Give the value field width so the buttons align with
+                  the column above. */}
               <span style={{
                 width: 200, flex: 'none',
                 fontSize: 'var(--fs-5)', fontVariantNumeric: 'tabular-nums',
@@ -416,9 +394,9 @@ export function Settings({ prefs, setPref, ggs, initialTab, onClose }: {
         )}
         {hash && (
           <Section title="置換表の大きさ">
-            {/* **終盤は既定 (22) では小さい。** 10 億ノード級の読切では表が
-                桁で溢れており、2^22 → 2^26 でノード -14〜16% / 時間 -23〜31%
-                という実測がある。GGS 対局はまさにその領域を読む */}
+            {/* The endgame default (22) is small: billion-node solves
+                overflow it, and 22 -> 26 measured -14-16% nodes /
+                -23-31% time — exactly the region GGS games read. */}
             <Row2 label="中盤">
                 <Select width={140} value={String(hash.mid)}
                         onChange={(v) => void (async () => {
@@ -444,14 +422,9 @@ export function Settings({ prefs, setPref, ggs, initialTab, onClose }: {
         )}
         </>}
 
-        {/* OK ボタンは置かない (変更は即時に反映される)。それが分からないと
-            「決定していないのでは」と不安になるので言い切る。
-            **帯ではなく中身の最後の行**にする — 設計も上に罫を引いた行。
-
-            **中身があるタブでだけ出す。** 「既定に戻す」はエンジンのタブの
-            ものなので、表示 と GGS では罫だけが引かれて下に何も無い行に
-            なっていた。空の罫は「何か足りない」としか読めない (規則 13 —
-            節は見出しと罫で区切るもので、飾りに使わない) */}
+        {/* No OK button (changes apply immediately — said explicitly,
+            or it feels unconfirmed). Shown only on tabs with content;
+            a bare keyline over nothing reads as something missing. */}
         {tab === 'engine' && (
           <div style={{
             display: 'flex', alignItems: 'center', gap: 'var(--sp-3)',
@@ -481,8 +454,8 @@ export function Settings({ prefs, setPref, ggs, initialTab, onClose }: {
   );
 }
 
-/* 設計の 4 枚目「詳細」は落とした。絵に中身が描かれておらず、仕様にも
- * 該当するものが無い。**空のタブを置くと、押した人が探し物をして戻ってくる。** */
+/* The design's fourth tab was dropped: no drawn content, no matching
+ * spec — an empty tab sends people searching. */
 const TABS: ['engine' | 'view' | 'ggs', string][] = [
   ['engine', 'エンジン'], ['view', '表示'], ['ggs', 'GGS'],
 ];
@@ -491,18 +464,18 @@ const THEMES: [Theme, string][] = [
   ['os', 'システムに合わせる'], ['dark', 'ダーク'], ['light', 'ライト'],
 ];
 
-/** テーマの見本。地の色だけを出す — 盤や文字まで描くと札が小さすぎて潰れる。
- *  「システムに合わせる」は 2 つが斜めに割れている絵にする。 */
+/** Theme swatches, ground color only (boards and text would crush at
+ *  this size); "system" splits the two diagonally. */
 function ThemeSwatch({ kind }: { kind: Theme }) {
-  /* **ここだけリテラルの色を書く (規則 1 の例外)。** 見本は「いま選んで
-     いないほうのテーマの地の色」を見せるものなので、`var(--bg)` では
-     いま効いているテーマの値になり、3 枚の札が全部同じ色になる。
-     値は tokens.css の `--bg` (ダーク / ライト) と揃えること。 */
+  /* Literal colors, deliberately: swatches show the OTHER theme's
+     ground, and var(--bg) would paint all three identically. Keep in
+     sync with tokens.css. */
   const dark = '#16191d', light = '#faf8f3';
   return (
     <span style={{
       display: 'block', height: 38, borderRadius: 'var(--r-1)', width: '100%',
-      // ダークは地と同じ色なので、内側に 1px 入れないと札の中で溶ける
+      // The dark swatch matches the ground; a 1px inner line keeps it
+      // visible.
       boxShadow: kind === 'dark' ? 'inset 0 0 0 1px var(--border)' : undefined,
       background: kind === 'dark' ? dark : kind === 'light' ? light
         : `linear-gradient(135deg, ${dark} 50%, ${light} 50%)`,
@@ -510,9 +483,8 @@ function ThemeSwatch({ kind }: { kind: Theme }) {
   );
 }
 
-/** 設定の 1 行。見出しの列を揃える。
- *  見出しは右揃え — 語の長さがまちまちなので、左揃えだと欄との間隔が
- *  行ごとに変わって、欄の列が揃っていても揃って見えない。 */
+/** One settings row with aligned label column; labels right-align so
+ *  varying lengths keep a constant gap to the fields. */
 function Row2({ label, children }: { label: string; children: ReactNode }) {
   return (
     <div style={{ display: 'flex', alignItems: 'center', gap: 'var(--sp-3)', minHeight: 'var(--h-field)' }}>
@@ -523,11 +495,8 @@ function Row2({ label, children }: { label: string; children: ReactNode }) {
   );
 }
 
-/** 設定の「表示」タブ。**見え方だけの設定**で、エンジンの動きには関わらない
- *  ので、バックエンドに送らず localStorage に置く。
- *
- *  `Settings` が 285 行あり、そのうち 83 行がここだった。3 つのタブは
- *  互いに何も共有していないので、切り出しても呼び出しは 1 行で済む。 */
+/** The Display tab: appearance only, localStorage only. Extracted
+ *  from Settings (the tabs share nothing). */
 function ViewSettings({ prefs, setPref }: {
   prefs: Prefs;
   setPref: <K extends keyof Prefs>(k: K, v: Prefs[K]) => void;
@@ -535,8 +504,8 @@ function ViewSettings({ prefs, setPref }: {
   return (
     <>
       <Section title="テーマ">
-        {/* 設計は見本つきの札 3 枚。**配色は言葉より見たほうが早い** —
-            「OS に従う」がどちらになるかも、札を見れば分かる */}
+        {/* Three swatch cards per the design — colors read faster than
+            words, including what "follow OS" resolves to. */}
         <div style={{ display: 'flex', gap: 'var(--sp-2h)' }}>
           {THEMES.map(([v, label]) => {
             const on = prefs.theme === v;
@@ -559,8 +528,8 @@ function ViewSettings({ prefs, setPref }: {
       </Section>
       <Section title="盤">
         <Row2 label="畳の色">
-          {/* 設計は 4 色の見本。色の選択に文字を使うと、選んでから盤を
-              見に行く往復が要る */}
+          {/* Four color swatches; words would require a round trip to
+              the board to see the choice. */}
           <span style={{ display: 'flex', gap: 'var(--sp-2)' }}>
             {TATAMI.map((t, i) => {
               const on = prefs.tatami === i;
@@ -571,8 +540,8 @@ function ViewSettings({ prefs, setPref }: {
                         style={{
                           width: 28, height: 28, borderRadius: 'var(--r-2)', padding: 0,
                           border: 0, background: t.board,
-                          // 選ばれているものは外に 2px の輪。地が濃い色なので
-                          // 枠を内側に取ると色が痩せて見える
+                          // Selection gets an outer 2px ring; an inner
+                          // frame would thin the dark swatch colors.
                           boxShadow: on
                             ? '0 0 0 2px var(--accent), inset 0 0 0 1px var(--border)'
                             : 'inset 0 0 0 1px var(--border)',
@@ -604,9 +573,9 @@ function ViewSettings({ prefs, setPref }: {
         </Row2>
       </Section>
       <Section title="数値">
-        {/* 設計の 単位 は置かない (石差しか無い)。**視点は「盤の向き」では
-            なく評価値の符号**で、絵も設定では黒固定にして検討の
-            ツールバーで切り替える形にしている (`9677afb` で入れた)。 */}
+        {/* No unit setting (discs are the only unit). Viewpoint is the
+            eval sign, not board orientation, and switches from the
+            study toolbar per the design. */}
         <Row2 label="小数">
           <Segmented value={String(prefs.decimals)}
                      onChange={(v) => setPref('decimals', +v as Prefs['decimals'])}
