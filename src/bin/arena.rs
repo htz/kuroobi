@@ -29,27 +29,27 @@ use kuroobi::{Board, Color, Position};
 use std::time::Instant;
 
 struct Args {
-    /// NNUE モード。両方指定すると Engine (実戦そのもの) で戦わせる。
+    /// NNUE mode; with both set, play through Engine (the real path).
     nnue_a: Option<PathBuf>,
     nnue_b: Option<PathBuf>,
-    /// **対局全体の持ち時間** (秒)。時間配分の良し悪しはこれでしか測れない。
+    /// Whole-game clock in seconds; allocation quality needs this.
     time_secs: u64,
-    /// 時間の配り方。片側だけ変えて配り方の差を測る。
+    /// Pacing scheme; vary one side to measure pacing differences.
     pace_a: String,
     pace_b: String,
-    /// **較正した読切速度** (ノード毎秒、`auto` でその場で実測)。渡した側
-    /// だけ、読切に入る空きを残り時間から逆算する。**片方だけに渡せば
-    /// 「較正あり 対 なし」を測れる** — 較正の効果はこれで見る。
+    /// Calibrated solve speed (nodes/sec; `auto` measures on the spot).
+    /// Only the side given one derives its solve entry from the clock,
+    /// so passing it to one side measures calibrated vs not.
     nps_a: Option<String>,
     nps_b: Option<String>,
-    /// 片側だけの持ち時間 (省略時は `--time`)。
+    /// Per-side clock override (defaults to `--time`).
     time_a: Option<u64>,
     time_b: Option<u64>,
-    /// 探索のスレッド数 (両側同じ)。較正した nps はスレッド数ごとの値
-    /// なので、測ったときと同じ数で戦わせないと意味がない。
+    /// Threads (same both sides); calibrated nps is per-thread-count,
+    /// so play must match the calibration.
     threads: usize,
-    /// 定石を使う。**実戦は使うのが既定**なので、時間の使われ方を測るなら
-    /// 揃えないと序盤の数手ぶんずれる。
+    /// Use the book (default in live play; time measurements skew by a
+    /// few opening moves without it).
     use_book: bool,
     weights_a: PathBuf,
     weights_b: PathBuf,
@@ -57,13 +57,13 @@ struct Args {
     random_plies: usize,
     depth: u8,
     solve_empties: u8,
-    /// 選択読みの帯: `None` は予算から自動、`Some(n)` は固定 (旧挙動との比較用)。
+    /// Selective band: `None` = budget-derived, `Some(n)` = fixed (legacy comparison).
     band_a: Option<u8>,
     band_b: Option<u8>,
-    /// 残り手数を数える読切の基準 (`timectl::Situation::solve_ref`)。
+    /// Move-count solve reference (`timectl::Situation::solve_ref`).
     solve_ref_a: Option<SolveRef>,
     solve_ref_b: Option<SolveRef>,
-    /// 持ち時間をどれだけ攻めて使うか (`timectl::Situation::budget_use`)。
+    /// Clock aggressiveness (`timectl::Situation::budget_use`).
     budget_use_a: Option<f64>,
     budget_use_b: Option<f64>,
     /// Per-side overrides; fall back to the shared values above.
@@ -207,7 +207,7 @@ fn parse_args() -> Result<Args, String> {
             }
             "--pace-a" => args.pace_a = value("--pace-a")?.to_string(),
             "--pace-b" => args.pace_b = value("--pace-b")?.to_string(),
-            // `auto` は実測 (エンジンを作ってから測るので後で埋める)
+            // `auto` measures later, once the engine exists.
             "--time-a" => {
                 args.time_a = Some(
                     value("--time-a")?
@@ -325,8 +325,8 @@ fn parse_args() -> Result<Args, String> {
         }
     }
 
-    // NNUE モードでは線形の重みは終盤の並べ替えにしか使わないので、
-    // 1 本を既定で共有する (両者で同じものを使うため差の原因にならない)
+    // In NNUE mode the linear weights only order endgame moves; share
+    // one set (identical for both sides, so never a source of difference).
     if args.nnue_a.is_some() && args.nnue_b.is_some() {
         args.weights_a = weights_a.unwrap_or_else(|| PathBuf::from("weights/linear.bin"));
         args.weights_b = weights_b.unwrap_or_else(|| args.weights_a.clone());
@@ -478,14 +478,13 @@ fn play(
     }
 }
 
-/// NNUE 同士を **実戦そのもの** (`Engine::choose`) で戦わせる。
+/// Play NNUE vs NNUE through the real path (`Engine::choose`).
 ///
-/// `Searcher` を使う線形の経路とは別に持つ。線形の `Evaluator` と NNUE は
-/// 探索の入口から違い (`NnueSearch` / 帯 / MPC)、`Engine` を通さないと
-/// 「実戦条件で測る」(CLAUDE.md 3) を満たせないため。
-///
-/// **定石は切る。** 両者が同じ定石を引くと序盤が完全に同一になり、
-/// 評価関数の差が出るのは定石を外れた後だけになる。
+/// Separate from the linear `Searcher` route: NNUE differs from the
+/// search entry on (NnueSearch / band / MPC), and only `Engine`
+/// satisfies "measure under game conditions". The book is disabled —
+/// a shared book makes the openings identical and hides the evaluator
+/// difference.
 fn play_nnue(start: &Board, black: &mut Engine, white: &mut Engine) -> i32 {
     let mut board = *start;
     loop {
@@ -510,47 +509,42 @@ fn play_nnue(start: &Board, black: &mut Engine, white: &mut Engine) -> i32 {
     }
 }
 
-/// **持ち時間制**で戦わせる。時間配分の良し悪しはこれでしか測れない。
+/// Timed match: the only way to measure allocation quality.
 ///
-/// 各手で `timectl::plan` に残り時間と空きを渡して 1 手の期限を決め、
-/// `choose_within` に渡す。**使った時間はその場の実測**なので、配り方が
-/// 下手なら本当に時間切れになる。
-///
-/// 時間切れは**負け**として扱う (GGS と同じ)。石差ではなく勝敗で数える
-/// ので、戻り値は「黒から見た石差」ではなく `Option` — `None` が時間切れ。
+/// Each move plans a deadline via `timectl::plan` and passes it to
+/// `choose_within`; elapsed time is real, so bad pacing genuinely
+/// flags. A flag is a loss (as on GGS); `None` = timeout.
 struct Clocks {
     black: f64,
     white: f64,
 }
 
-/// 1 局の結果。**残り時間まで返す。**
-///
-/// 時間切れの件数だけでは配り方を直せない。「余らせる前提」で組むなら
-/// **どれだけ余ったか**が要る — 余りすぎなら読む時間を増やせるし、
-/// 余りが薄いなら遅い機械で破綻する。
+/// One game's result, including remaining clock: timeout counts alone
+/// cannot tune pacing — the leftover says whether there is room to
+/// think longer or a slower machine would break.
 struct Timed {
-    /// 黒から見た石差 (時間切れなら 0)。
+    /// Disc difference from Black's view (0 on timeout).
     score: i32,
-    /// 時間切れした側。
+    /// Which side flagged.
     timeout: Option<Color>,
-    /// 終局時の残り時間 (秒)。
+    /// Remaining clock at game end (seconds).
     left_black: f64,
     left_white: f64,
 }
 
-/// 空きごとに「何段読めたか・どこから読み切ったか」を出す。
+/// Per-empties report of reached depth and solve entry.
 ///
-/// **持ち時間ごとの実力はこれで見る。** 勝率は相手との相対でしか出ないが、
-/// こちらは「この持ち時間なら空き 40 で 26 段、空き 26 から読切」と
-/// 絶対値で言える。レベル設定 (深さ・読切) が実際に届いているかも分かる。
+/// This is how per-clock strength is judged: win rate is only relative,
+/// while this states absolutes ("26 plies at 40 empties, solving from
+/// 26") and shows whether the configured levels are actually reached.
 fn report_moves(moves: &[MoveInfo]) {
     if moves.is_empty() {
         return;
     }
     println!("空きごとの到達 (両者ぶん、定石の手は除く)");
-    /* **中央値だけでは足りない。** 同じ空きでも局面によって使える時間が
-    違うので、「最大どこまで読めたか」と「時間が無いとき何段まで落ちたか」の
-    両端が要る。落ちた側がその持ち時間の実力の下限になる。 */
+    /* The median is not enough: available time varies per position, so
+    both extremes matter — the shallow end is the strength floor for
+    that clock. */
     println!("   空き | 手数 | 中盤の深さ 最浅/中央/最深 | 読切 | 打切 | 1 手の秒 中央/最大");
     println!("  ------+------+---------------------------+------+------+-------------------");
     for lo in (0..=60usize).rev().filter(|n| n % 4 == 0) {
@@ -592,38 +586,37 @@ fn report_moves(moves: &[MoveInfo]) {
     println!("  (定石で指した手 {book} / 読切を打ち切った手 {cut})");
 }
 
-/// 1 手ぶんの記録。**持ち時間ごとの実力を見るための計器。**
+/// One move's record; the per-clock strength instrument.
 #[derive(Clone, Copy)]
 struct MoveInfo {
     empties: u8,
-    /// 中盤探索が到達した深さ (読切と定石では 0)。
+    /// Midgame depth reached (0 for solves and book moves).
     depth: u32,
-    /// 読切で決めたか。
+    /// Whether a solve decided the move.
     exact: bool,
-    /// 読切が期限で打ち切られ、保険の手を指したか。
+    /// Whether the solve was cut and the backup move played.
     cut: bool,
     from_book: bool,
     secs: f64,
 }
 
-/// 片側の時間の使い方。**配り方と較正値は組で入れ替える** — 色を交換した
-/// 再戦で片方だけ付け替えると、測っているものが変わってしまう。
+/// One side's time policy. Pacing and calibration swap as a pair —
+/// swapping only one on the color-reversed rematch changes what is
+/// being measured.
 #[derive(Clone, Copy)]
 struct SideTime {
     pace: Pace,
-    /// 選択読みの帯を予算から決めるか。偽なら `band` をそのまま使う。
+    /// Whether the band derives from the budget; false uses `band` as-is.
     auto_band: bool,
-    /// 較正した読切速度。`None` なら固定の階段で読切に入る。
+    /// Calibrated solve speed; `None` = fixed ladder.
     nps: Option<f64>,
-    /// 残り手数を数える読切の基準。`None` は `timectl` の既定。
+    /// Move-count solve reference; `None` = timectl default.
     solve_ref: Option<SolveRef>,
-    /// 持ち時間をどれだけ攻めて使うか。`None` は `timectl` の既定。
+    /// Clock aggressiveness; `None` = timectl default.
     budget_use: Option<f64>,
-    /// **この側の持ち時間** (秒)。片側だけ潤沢にできる。
-    ///
-    /// **「時間制限で棋力を削っていないか」はこれでしか測れない。** 配り方
-    /// どうしを比べても「どの配り方でも同じ」しか出ず、時間制限そのものの
-    /// 損は見えない。潤沢な側に勝てるなら、その持ち時間では飽和している。
+    /// This side's clock (seconds); one side can be given plenty. The
+    /// only way to measure the cost of the time limit itself: beat the
+    /// well-funded side and the clock is saturated.
     total: f64,
 }
 
@@ -665,7 +658,7 @@ fn play_timed(
         let is_black = board.player() == Color::Black;
         let left = if is_black { clocks.black } else { clocks.white };
         if left <= 0.0 {
-            // 時間切れ。指した側の負け
+            // Timeout: the mover loses.
             return Timed {
                 score: 0,
                 timeout: Some(board.player()),
@@ -697,14 +690,12 @@ fn play_timed(
             base,
             t.pace,
         );
-        /* 計画した深さ・読切・帯を**その手だけ**効かせる。
-
-        **戻すのを忘れると設定が毎手削られる。** 次の手の `base` は
-        `eng.config()` から読むので、書きっぱなしにすると計画の結果が
-        次の計画の入力になる。読切の入り口を残り時間から決める側は
-        `solve_entry` の上限が `base.solve` なので、**ラチェットのように
-        下がり続けて 0 に落ちた** (10 秒の対局で勝率 7%)。階段側は
-        `min(14)` で止まるため無傷で、片側だけ壊れて差に見えていた。 */
+        /* Apply the planned depth/solve/band for this move only.
+        Forgetting to restore ratchets the settings down every move: the
+        next plan reads `base` from `eng.config()`, and the clock-derived
+        solve entry (capped by `base.solve`) once ratcheted to 0 (7% win
+        rate at 10s), while the ladder side was unharmed — a fake
+        difference. */
         eng.set_levels(plan.depth, plan.solve, plan.band);
         let t0 = Instant::now();
         let mv = match plan.cap {
@@ -713,9 +704,8 @@ fn play_timed(
         };
         let pos = mv.pos.expect("legal move exists");
         let used = t0.elapsed().as_secs_f64();
-        /* **その手が何をしたかを控える。** 「この持ち時間はどれくらいの
-        棋力で打てているか」は、勝率ではなく**空きごとに何段読めたか・
-        どこから読み切れたか**で見るのが直接的。 */
+        /* Record what the move did; per-clock strength reads directly
+        from depth-per-empties, not win rate. */
         moves.push(MoveInfo {
             empties: board.empty_count(),
             depth: mv.depth,
@@ -734,8 +724,8 @@ fn play_timed(
     }
 }
 
-/// NNUE モードの本体。開局・先後入れ替え・1 局ごとの表クリア・統計は
-/// 線形側と同じ形にしてある (結果を並べて読めるように)。
+/// NNUE-mode driver; openings, color swap, per-game table clears and
+/// stats mirror the linear side so results read side by side.
 fn run_nnue(args: &Args, a: &std::path::Path, b: &std::path::Path) -> ExitCode {
     let mk = |nnue: &std::path::Path, depth: u32, solve: u8, band: u8| -> Result<Engine, String> {
         Engine::new(EngCfg {
@@ -750,7 +740,7 @@ fn run_nnue(args: &Args, a: &std::path::Path, b: &std::path::Path) -> ExitCode {
             nnue: nnue.to_path_buf(),
             book: args.weights_a.with_file_name("book.txt"),
             use_book: args.use_book,
-            // 同じ棋譜の繰り返しを避ける (実戦と同じ)
+            // Avoid replaying identical games (same as live).
             book_tolerance: if args.use_book { 1.0 } else { 0.0 },
         })
     };
@@ -771,12 +761,12 @@ fn run_nnue(args: &Args, a: &std::path::Path, b: &std::path::Path) -> ExitCode {
     eng_a.set_use_book(args.use_book);
     eng_b.set_use_book(args.use_book);
 
-    // 片側だけ指定したときも持ち時間制に入る (`--time` の指定は要らない)
+    // A single-side clock also enables timed mode (no `--time` needed).
     let timed = args.time_secs > 0 || args.time_a.is_some() || args.time_b.is_some();
     let (pace_a, pace_b) = (Pace::parse(&args.pace_a), Pace::parse(&args.pace_b));
-    /* `--nps-* auto` はここで実測する。**A と B で別々に測らない** — 同じ
-    機械の同じスレッド数なので値は同じで、片側だけ 2 回測ると熱の分だけ
-    ずれ、較正の効果と区別がつかなくなる。 */
+    /* `--nps-* auto` measures here, once for both sides: same machine,
+    same threads — measuring twice would differ only by thermal drift
+    and masquerade as a calibration effect. */
     let mut measured: Option<f64> = None;
     let mut resolve = |v: &Option<String>, eng: &mut Engine| -> Option<f64> {
         match v.as_deref() {
@@ -810,7 +800,7 @@ fn run_nnue(args: &Args, a: &std::path::Path, b: &std::path::Path) -> ExitCode {
         total: args.time_b.unwrap_or(args.time_secs) as f64,
     };
     if timed {
-        // 較正の有無は結果の解釈を変えるので、見出しに出す
+        // Calibration changes how results read; put it in the header.
         let tag = |s: &SideTime| {
             format!(
                 "{}s, {}{}",
@@ -847,23 +837,21 @@ fn run_nnue(args: &Args, a: &std::path::Path, b: &std::path::Path) -> ExitCode {
     let mut rng = Rng::new(args.seed);
     let (mut a_wins, mut b_wins, mut draws) = (0usize, 0usize, 0usize);
     let mut a_disc_sum = 0i64;
-    // 時間切れは配り方の失敗そのものなので別に数える
+    // Timeouts are pacing failures; count them separately.
     let (mut a_timeouts, mut b_timeouts) = (0usize, 0usize);
-    /* **終局時に余った時間。** 配り方は「使い切らず余らせる」前提で組むので、
-    余りの平均と最小を出す。平均は「読む時間をまだ増やせるか」を、最小は
-    「遅い機械で破綻しないか」を見るためのもの。 */
-    // 空きごとに何段読めたか (両者ぶんまとめて。同じ設定なので分ける意味が薄い)
+    /* Leftover clock at game end: mean says whether there is room to
+    think longer, min says whether a slower machine would break. */
+    // Depth per empties, both sides pooled (same settings).
     let mut moves: Vec<MoveInfo> = Vec::new();
     let (mut a_left_sum, mut b_left_sum) = (0f64, 0f64);
     let (mut a_left_min, mut b_left_min) = (f64::MAX, f64::MAX);
     let mut left_n = 0usize;
     for pair in 0..args.games / 2 {
         let opening = random_opening(&mut rng, args.random_plies);
-        // 1 局ごとに表を捨てる (CLAUDE.md 4)。温まった表を持ち越すと
-        // 色を入れ替えた再戦が鏡にならない
+        // Clear tables per game; a warm table breaks the mirrored rematch.
         eng_a.clear_tables();
         eng_b.clear_tables();
-        // 1 局目: A が黒
+        // Game 1: A plays Black.
         let r1 = if timed {
             play_timed(
                 &opening,
@@ -882,7 +870,7 @@ fn run_nnue(args: &Args, a: &std::path::Path, b: &std::path::Path) -> ExitCode {
                 left_white: 0.0,
             }
         };
-        // 1 局目は A が黒
+        // Game 1: A was Black.
         if timed {
             a_left_sum += r1.left_black;
             b_left_sum += r1.left_white;
@@ -892,7 +880,7 @@ fn run_nnue(args: &Args, a: &std::path::Path, b: &std::path::Path) -> ExitCode {
         }
         let (s1, to1) = (r1.score, r1.timeout);
         match to1 {
-            // 時間切れは負け。石差は数えない (勝敗だけが意味を持つ)
+            // Timeout = loss; disc difference is meaningless there.
             Some(Color::Black) => {
                 b_wins += 1;
                 a_timeouts += 1;
@@ -912,7 +900,7 @@ fn run_nnue(args: &Args, a: &std::path::Path, b: &std::path::Path) -> ExitCode {
         }
         eng_a.clear_tables();
         eng_b.clear_tables();
-        // 2 局目: 色を入れ替える
+        // Game 2: colors swapped.
         let r2 = if timed {
             play_timed(
                 &opening,
@@ -931,7 +919,7 @@ fn run_nnue(args: &Args, a: &std::path::Path, b: &std::path::Path) -> ExitCode {
                 left_white: 0.0,
             }
         };
-        // 2 局目は B が黒
+        // Game 2: B was Black.
         if timed {
             b_left_sum += r2.left_black;
             a_left_sum += r2.left_white;
@@ -958,7 +946,7 @@ fn run_nnue(args: &Args, a: &std::path::Path, b: &std::path::Path) -> ExitCode {
                 }
             }
         }
-        // 長く回るので途中経過を出す (400 局で数時間規模)
+        // Long runs (hours at 400 games); print progress.
         if (pair + 1) % 10 == 0 {
             let n = (a_wins + b_wins + draws) as f64;
             let p = (a_wins as f64 + draws as f64 / 2.0) / n;
@@ -984,7 +972,7 @@ fn run_nnue(args: &Args, a: &std::path::Path, b: &std::path::Path) -> ExitCode {
     ExitCode::SUCCESS
 }
 
-/// 勝率と 95% 信頼区間。引き分けは 0.5 勝で数える。
+/// Win rate with 95% CI; draws count as half a win.
 fn report(a_wins: usize, b_wins: usize, draws: usize, a_disc_sum: i64) {
     let n = (a_wins + b_wins + draws) as f64;
     let p = (a_wins as f64 + draws as f64 / 2.0) / n;
@@ -1016,7 +1004,7 @@ fn main() -> ExitCode {
         }
     };
 
-    // 両方そろったときだけ NNUE モード (片方だけの指定は取り違えのもと)
+    // NNUE mode only with both given (a single one is likely a mistake).
     match (&args.nnue_a, &args.nnue_b) {
         (Some(a), Some(b)) => return run_nnue(&args, &a.clone(), &b.clone()),
         (Some(_), None) | (None, Some(_)) => {

@@ -1,15 +1,15 @@
-//! 定石 book の生成ツール。
+//! Opening-book generator.
 //!
-//! 2 段階で作る:
-//!   1. `--scan`  WTHOR (公式大会棋譜) を読み、序盤の頻出局面を候補として
-//!      book に積む (深さ 0 = 未評価、出現回数のみ)
-//!   2. `--deepen` 未評価・浅い評価のエントリを**実戦より深い探索**で解く。
-//!      途中で止めても保存済みの分は残るので、何度でも継ぎ足せる。
+//! Two stages:
+//!   1. `--scan`   read WTHOR (tournament records), collect frequent
+//!      opening positions as candidates (depth 0 = unevaluated)
+//!   2. `--deepen` solve unevaluated/shallow entries with
+//!      deeper-than-game search; interruptible, saved work persists.
 //!
-//! book の値は「実戦では届かない深さ」でなければ意味がないので、既定は
-//! 深さ 26 / 読切 30 / 帯 8 (実戦の GGS 設定は 22 / 26 / 6)。
+//! Book values must come from beyond game depth, so defaults are depth
+//! 26 / solve 30 / band 8 (live GGS runs 22 / 26 / 6).
 //!
-//! 使い方:
+//! Usage:
 //!   bookgen --scan train_data/wthor --max-ply 24 --min-games 3 --out book.txt
 //!   bookgen --deepen book.txt --depth 26 --solve 30 --band 8 [--limit 500]
 
@@ -31,7 +31,7 @@ struct Args {
     threads: usize,
     limit: usize,
     hash_bits: u32,
-    /// 1 局面あたり採点する人間の候補手の上限。
+    /// Max human candidate moves scored per position.
     max_cands: usize,
 }
 
@@ -81,9 +81,9 @@ fn parse_args() -> Result<Args, String> {
     Ok(a)
 }
 
-/// WTHOR の 1 ファイルを読み、各局の着手列を返す。
-/// 形式: 16 バイトのヘッダ + 68 バイト/局 (先頭 8 バイトがメタ、以降 60 手)。
-/// 着手は 10 進で `行*10 + 列` (1 始まり)、0 は終端。
+/// Read one WTHOR file, returning each game's move list.
+/// Format: 16-byte header + 68 bytes/game (8 meta + 60 moves); moves
+/// are decimal `row*10 + col` (1-based), 0 terminates.
 fn read_wtb(path: &Path) -> std::io::Result<Vec<Vec<u8>>> {
     let data = std::fs::read(path)?;
     if data.len() < 16 {
@@ -104,7 +104,7 @@ fn read_wtb(path: &Path) -> std::io::Result<Vec<Vec<u8>>> {
                 moves.clear();
                 break;
             }
-            // WTHOR は行優先、当方は file-major (bit = file*8 + rank)
+            // WTHOR is row-major; we are file-major (bit = file*8 + rank).
             moves.push((col - 1) * 8 + (row - 1));
         }
         if moves.len() >= 10 {
@@ -115,14 +115,14 @@ fn read_wtb(path: &Path) -> std::io::Result<Vec<Vec<u8>>> {
     Ok(games)
 }
 
-/// 棋譜を並べて、序盤 `max_ply` 手までの局面と「実際に指された手」を数える。
+/// Replay records, counting positions and played moves up to `max_ply`.
 fn scan(dir: &Path, max_ply: usize, min_games: u32, book: &mut Book) -> std::io::Result<()> {
     let mut files: Vec<PathBuf> = std::fs::read_dir(dir)?
         .filter_map(|e| e.ok().map(|e| e.path()))
         .filter(|p| p.extension().is_some_and(|e| e.eq_ignore_ascii_case("wtb")))
         .collect();
     files.sort();
-    // (正規化キー, 正規化した手) → 出現回数
+    // (normalized key, normalized move) -> occurrence count.
     let mut counts: std::collections::HashMap<((u64, u64), u8), u32> = Default::default();
     let mut total_games = 0usize;
     for f in &files {
@@ -137,11 +137,11 @@ fn scan(dir: &Path, max_ply: usize, min_games: u32, book: &mut Book) -> std::io:
                 let Some(pos) = Position::from_index(sq as u32) else {
                     break;
                 };
-                // パスの明示が無い形式なので、指せなければパスを入れて再挑戦
+                // The format has no explicit pass; insert one and retry.
                 if !b.check(pos) {
                     b.pass();
                     if !b.check(pos) {
-                        break; // 棋譜が壊れている
+                        break; // corrupt record
                     }
                 }
                 let (key, i) = Book::key(&b);
@@ -154,7 +154,7 @@ fn scan(dir: &Path, max_ply: usize, min_games: u32, book: &mut Book) -> std::io:
     }
     eprintln!();
 
-    // 局面ごとに最頻の手を採る
+    // Take the most frequent move per position.
     let mut by_pos: std::collections::HashMap<(u64, u64), Vec<(u8, u32)>> = Default::default();
     for ((key, mv), n) in counts {
         by_pos.entry(key).or_default().push((mv, n));
@@ -165,9 +165,9 @@ fn scan(dir: &Path, max_ply: usize, min_games: u32, book: &mut Book) -> std::io:
         if total < min_games {
             continue;
         }
-        // 出現頻度の高い順に候補手を全部持つ (深化前は評価値 0)
+        // Keep all candidates by frequency (value 0 before deepening).
         cands.sort_by_key(|(_, n)| std::cmp::Reverse(*n));
-        // 既存エントリ (深い評価済み) は壊さない
+        // Never clobber an existing (deep-evaluated) entry.
         if book.get_raw(key).is_some_and(|e| e.depth > 0) {
             continue;
         }
@@ -198,17 +198,16 @@ fn scan(dir: &Path, max_ply: usize, min_games: u32, book: &mut Book) -> std::io:
     Ok(())
 }
 
-/// 未評価・浅い評価のエントリを深い探索で解き直す。
+/// Re-solve unevaluated/shallow entries with deep search.
 ///
-/// **局面ごとの並列化**: 1 局面を多スレッドで解くより、局面を並べて
-/// 各ワーカーが 1 局面ずつ (少スレッドで) 解く方が総スループットが高い。
-/// 探索の並列効率は木の大きさで決まるので、序盤の小さい木を 10 並列しても
-/// 遊びが出るためである。
+/// Parallelism is per position: many workers each solving one position
+/// with few threads out-throughputs one many-threaded solve, because
+/// parallel efficiency scales with tree size and opening trees are small.
 fn deepen(book: &mut Book, out: &Path, a: &Args) -> Result<(), String> {
     use std::sync::atomic::{AtomicUsize, Ordering};
     use std::sync::Mutex;
 
-    // 出現回数の多い順に解く (実戦で当たりやすい局面から価値が乗る)
+    // Solve by frequency (likely-hit positions gain value first).
     let mut todo: Vec<((u64, u64), Entry)> = book
         .iter()
         .filter(|(_, e)| e.depth < a.depth as u8)
@@ -222,7 +221,7 @@ fn deepen(book: &mut Book, out: &Path, a: &Args) -> Result<(), String> {
         return Ok(());
     }
 
-    // ワーカー数 × 1 ワーカーあたりのスレッド数 ≒ 物理コア数
+    // workers x threads-per-worker ~= physical cores.
     let cores = std::thread::available_parallelism()
         .map(|n| n.get())
         .unwrap_or(8);
@@ -251,13 +250,12 @@ fn deepen(book: &mut Book, out: &Path, a: &Args) -> Result<(), String> {
                     solve_empties: a.solve,
                     band: a.band,
                     threads: per,
-                    // 序盤の木は小さいので表も小さくする。ソルバは 1 局面ごとに
-                    // 表を全消去するため、大きな表は消去コストがそのまま損になる。
+                    // Small trees, small tables: the solver clears per
+                    // position, and a big table pays its clear cost every time.
                     midgame_hash_bits: a.hash_bits,
                     solver_hash_bits: a.hash_bits,
-                    // 定石は引かない。引くと「これから評価する局面」が
-                    // 定石に当たり、探索せずに古い値 (未評価なら 0) を
-                    // そのまま書き戻してしまう
+                    // Book off: the position being evaluated would hit
+                    // the book and write its stale value straight back.
                     use_book: false,
                     ..Default::default()
                 };
@@ -270,9 +268,9 @@ fn deepen(book: &mut Book, out: &Path, a: &Args) -> Result<(), String> {
                     let (key, old) = &todo_ref[i];
                     let key = *key;
                     let board = kuroobi::book::board_from_key(key);
-                    // 採点するのは「人間が実際に打った手」+「エンジンの最善手」
-                    // だけ。全合法手を回すと 3 倍以上遅くなるうえ、誰も打たない
-                    // 手の正確な値は乱択にも棋力にも使わない。
+                    // Score only human-played moves plus the engine best:
+                    // all legal moves is 3x slower and nobody uses exact
+                    // values of never-played moves.
                     let best = engine.choose(&board);
                     let mut cands: Vec<(kuroobi::Position, u32)> = old
                         .moves

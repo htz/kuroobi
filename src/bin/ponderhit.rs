@@ -1,34 +1,29 @@
-//! ポンダリングの「予測手」がどれくらい当たるかを測る。
+//! Measures how often the ponder prediction hits.
 //!
-//! 相手の手番中に先読みする方式のうち、**予測手 1 本を追う形 (方式 1) の
-//! 値打ちはこの的中率でほぼ決まる。** 当たれば探索木がまるごと使えるが、
-//! 外すと置換表に残るぶんしか得をしない。全合法手に配る方式 (2) と
-//! どちらを採るかの判断材料にするために測る。
+//! The single-predicted-move scheme's value is mostly this hit rate:
+//! a hit reuses the whole tree, a miss keeps only table residue. The
+//! prediction comes from the table (`Engine::tt_best`), never a fresh
+//! search — live pondering has no better source, so measuring a better
+//! predictor would be meaningless.
 //!
-//! **予測手は探索し直して出さない。** 自分の手を指したあとの局面を
-//! 置換表に問い合わせる (`Engine::tt_best`) — 実際のポンダリングも
-//! そうするしかないので、そこより良い予測を測っても意味がない。
-//!
-//! 自己対戦で測るので、**相手も同じエンジン**という点は割り引いて読む。
-//! 相手の強さを変えられるようにしてあるのは、そのため:
-//!
-//! * 同じ設定どうし … 上限に近い値 (相手が自分と同じ読み筋を辿る)
-//! * 相手だけ浅い   … 人間や別のエンジンに近い、下振れした値
+//! Self-play caveat: the opponent is the same engine. Hence the
+//! adjustable opponent — equal settings give a near-upper-bound,
+//! a shallower opponent approximates humans/other engines.
 //!
 //! Usage:
 //!   ponderhit [OPTIONS]
 //!
 //! Options:
-//!   --games <n>          対局数 (default 20)
-//!   --depth <n>          自分の中盤深さ (default 8)
-//!   --solve-empties <n>  自分の完全読み開始 (default 14)
-//!   --opp-depth <n>      相手の中盤深さ (default = --depth)
-//!   --opp-solve <n>      相手の完全読み開始 (default = --solve-empties)
-//!   --threads <n>        スレッド数 (default 1)
-//!   --random-plies <n>   開幕の乱数手数 (default 8)
-//!   --seed <n>           乱数の種 (default 7)
-//!   --nnue <path>        NNUE の重み (default weights/nnue-h16.bin)
-//!   --weights <path>     線形評価の重み (default weights/linear.bin)
+//!   --games <n>          number of games (default 20)
+//!   --depth <n>          our midgame depth (default 8)
+//!   --solve-empties <n>  our solve entry (default 14)
+//!   --opp-depth <n>      opponent midgame depth (default = --depth)
+//!   --opp-solve <n>      opponent solve entry (default = --solve-empties)
+//!   --threads <n>        threads (default 1)
+//!   --random-plies <n>   random opening plies (default 8)
+//!   --seed <n>           RNG seed (default 7)
+//!   --nnue <path>        NNUE weights (default weights/nnue-h16.bin)
+//!   --weights <path>     linear weights (default weights/linear.bin)
 
 use std::path::PathBuf;
 use std::process::ExitCode;
@@ -93,7 +88,7 @@ fn parse_args() -> Result<Args, String> {
     Ok(a)
 }
 
-/// 乱数。開幕のばらしにしか使わないので xorshift で足りる。
+/// RNG; only diversifies openings, xorshift suffices.
 struct Rng(u64);
 impl Rng {
     fn next(&mut self) -> u64 {
@@ -107,21 +102,21 @@ impl Rng {
     }
 }
 
-/// 空きマス数を局面の進み具合として使う (60 → 0)。
+/// Empty count as game progress (60 -> 0).
 fn empties(b: &Board) -> u32 {
     64 - (b.player_bb() | b.opponent_bb()).count_ones()
 }
 
-/// 3 つの区間に分けて出す。**序盤だけ当たっても値打ちが薄い** —
-/// 定石を抜けたあとの中盤で当たるかが知りたい。
+/// Report in three phases: opening-only hits are cheap — the midgame
+/// after book exit is what matters.
 fn phase(e: u32) -> usize {
     match e {
-        45..=64 => 0, // 序盤
-        21..=44 => 1, // 中盤
-        _ => 2,       // 終盤
+        45..=64 => 0, // opening
+        21..=44 => 1, // midgame
+        _ => 2,       // endgame
     }
 }
-const PHASE_NAME: [&str; 3] = ["序盤 (空き 45+)", "中盤 (空き 21-44)", "終盤 (空き 20-)"];
+const PHASE_NAME: [&str; 3] = ["opening (45+ empty)", "midgame (21-44)", "endgame (20-)"];
 
 fn main() -> ExitCode {
     let args = match parse_args() {
@@ -138,8 +133,8 @@ fn main() -> ExitCode {
         threads: args.threads,
         nnue: args.nnue.clone(),
         weights: args.weights.clone(),
-        // **定石は切る。** 定石から返る手は探索を通らないので置換表に何も
-        // 残らず、予測できないのが当たり前になる。測りたいのは探索の予測力
+        // Book off: book moves leave nothing in the table, making
+        // no-prediction trivial; we measure the search's predictive power.
         use_book: false,
         ..EngineConfig::default()
     };
@@ -163,19 +158,19 @@ fn main() -> ExitCode {
     };
 
     let mut rng = Rng(args.seed | 1);
-    // [予測できた, そのうち当たった] を区間ごとに
+    // [predicted, hit] per phase.
     let mut got = [0u64; 3];
     let mut hit = [0u64; 3];
-    // 予測そのものが取れなかった回数 (置換表から溢れた)
+    // Times no prediction existed (evicted from the table).
     let mut miss_pred = [0u64; 3];
-    /* 相手の合法手の数。**方式 2 (全合法手に配る) の 1/N がこれ。**
-    オセロは狭いはずだが、見積もらずに測る */
+    /* Opponent's legal-move count: scheme 2's 1/N. Othello should be
+    narrow, but measure rather than assume. */
     let mut br_sum = [0u64; 3];
     let mut br_n = [0u64; 3];
 
     for g in 0..args.games {
         let mut b = Board::new();
-        // 開幕をばらす。**同じ手順を何十局も測っても 1 局ぶんの情報しかない**
+        // Diversify openings; repeating one line yields one game's info.
         for _ in 0..args.random_plies {
             if b.is_game_over() {
                 break;
@@ -189,7 +184,8 @@ fn main() -> ExitCode {
             b.make_move_unchecked(p);
         }
 
-        // 偶数局は自分が先に指す。色を入れ替えないと片方の手番だけを測る
+        // We move first on even games; without the swap only one side's
+        // turns get measured.
         let mut my_turn = g % 2 == 0;
         while !b.is_game_over() {
             if b.movable_count() == 0 {
@@ -202,11 +198,12 @@ fn main() -> ExitCode {
                 let Some(p) = ev.pos else { break };
                 let e = empties(&b);
                 b.make_move_unchecked(p);
-                // **指したあとの局面**の最善手が、相手が指すと思う手
+                // The post-move position's best = the predicted reply.
                 let pred = me.tt_best(&b);
                 my_turn = false;
 
-                // 相手の手番。パスを挟むと予測の相手が変わるので、その局は数えない
+                // Opponent's turn; a pass changes who the prediction is
+                // about, so skip those.
                 if b.is_game_over() || b.movable_count() == 0 {
                     continue;
                 }
@@ -293,7 +290,7 @@ fn main() -> ExitCode {
                 100.0 * t_hit as f64 / t_got as f64
             },
         );
-        // **予測が取れなかった回も外れとして数えた率**。方式 1 の期待値はこちら
+        // Rate counting no-prediction as a miss; scheme 1's true expectation.
         println!(
             "  実効の的中率 (予測できなかった回も外れに数える): {:.1}%",
             100.0 * t_hit as f64 / n as f64

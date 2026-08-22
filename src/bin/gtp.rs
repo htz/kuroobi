@@ -1,30 +1,26 @@
 //! GTP server around [`kuroobi::engine::Engine`], so this build can be driven
 //! as an external opponent by `roundrobin` (or any GTP driver).
 //!
-//! **なぜ要るか。** NNUE の accumulator 幅 `H` は**コンパイル時定数**なので、
-//! H の違う 2 つのモデルを 1 プロセスに同居させられない。`nnue_arena` は
-//! 1 プロセスで A と B を持つ作りなので、**H を変えた実験の採否を直接対戦で
-//! 決められなかった**。共通の相手 (線形評価) への勝率で間接比較する手も
-//! あるが、回りくどいうえに時間制で測れない。
-//!
-//! 別プロセスにすれば H でも特徴集合でも探索でも、何を変えたビルド同士でも
-//! 戦わせられる。`roundrobin` は既に GTP を話す口を持っているので、
-//! **こちらが GTP を話せばそれで足りる**。
+//! Why this exists: the NNUE accumulator width `H` is a compile-time
+//! constant, so two models with different H cannot share a process, and
+//! `nnue_arena` (single-process A vs B) could not judge H experiments
+//! head-to-head. Separate processes can pit any two builds against each
+//! other, and `roundrobin` already speaks GTP — so this speaks GTP too.
 //!
 //! ```sh
-//! cargo build --release --bin gtp                      # H=16 側
-//! (cd ../wt-h64 && cargo build --release --bin gtp)    # H=64 側
+//! cargo build --release --bin gtp                      # H=16 side
+//! (cd ../wt-h64 && cargo build --release --bin gtp)    # H=64 side
 //!
 //! ./target/release/roundrobin --games 400 --time-ms 300 \
 //!   --engine h16=kuroobi=./target/release/gtp \
 //!   --engine h64=kuroobi=../wt-h64/target/release/gtp
 //! ```
 //!
-//! **速度差を含めて測るなら `--time-ms` を使う。** 深さ固定は速度を無視する
-//! ので、遅くて賢いモデルを過大評価する (H=64 は H=16 より 8% 遅い)。
+//! Use `--time-ms` to include speed differences: fixed depth ignores
+//! them and overrates slow-but-smart models.
 //!
-//! Egaroucid と同じ綴りのフラグ (`-gtp -l <深さ> -t <スレッド> -nobook -q`)
-//! を受けるので、駆動側から見た扱いは既存の外部エンジンと変わらない。
+//! Accepts Egaroucid-spelled flags (`-gtp -l <depth> -t <threads>
+//! -nobook -q`) so the driver treats it like the existing engines.
 //!
 //! Usage:
 //!   gtp [-gtp] [-l <depth>] [-t <threads>] [-nobook] [-q]
@@ -39,7 +35,7 @@ use std::time::{Duration, Instant};
 use kuroobi::engine::{Engine, EngineConfig};
 use kuroobi::{Board, Color, Position};
 
-/// `a1`..`h8` を Position へ。`Position::index()` は file*8 + rank。
+/// Parse `a1`..`h8` into a Position (`index()` is file*8 + rank).
 fn parse_vertex(s: &str) -> Option<Position> {
     let b = s.as_bytes();
     if b.len() < 2 {
@@ -67,7 +63,7 @@ fn parse_color(s: &str) -> Option<Color> {
     }
 }
 
-/// GTP は `= 本文` の後に**空行**を置いて 1 応答の終わりとする。
+/// GTP responses end with a blank line after `= body`.
 fn ok(id: &str, body: &str) {
     let mut out = std::io::stdout().lock();
     let _ = writeln!(out, "={id} {body}\n");
@@ -82,7 +78,8 @@ fn err(id: &str, body: &str) {
 
 fn main() -> ExitCode {
     let mut cfg = EngineConfig {
-        // 計測用なので既定は定石なし。定石が出ると評価の比較にならない。
+        // Measurement tool: book off by default (book moves break the
+        // evaluator comparison).
         use_book: false,
         ..Default::default()
     };
@@ -92,7 +89,7 @@ fn main() -> ExitCode {
     let mut it = std::env::args().skip(1);
     while let Some(a) = it.next() {
         match a.as_str() {
-            // Egaroucid 綴り。駆動側を書き換えずに済ませるため受ける。
+            // Egaroucid spelling, accepted to leave the driver untouched.
             "-gtp" | "-q" | "--quiet" => {}
             "-nobook" | "--no-book" => cfg.use_book = false,
             "-l" | "--level" | "--depth" => {
@@ -124,9 +121,9 @@ fn main() -> ExitCode {
             }
         }
     }
-    /* 深さ N の全幅探索は空き N 以下をどのみち終局まで読む。読み切りの
-    入り口を深さに合わせておかないと、深さだけ揃えたつもりで終盤の深さが
-    engine ごとにずれる (Edax の level 表で踏んだのと同じ罠)。 */
+    /* A depth-N search reads N-or-fewer empties to the end anyway;
+    align the solve entry with depth or endgame depth silently diverges
+    between engines (the Edax level-table trap). */
     if !solve_set {
         cfg.solve_empties = cfg.depth.min(u8::MAX as u32) as u8;
     }
@@ -140,8 +137,8 @@ fn main() -> ExitCode {
     };
 
     let mut board = Board::new();
-    /* **NPS を測るための口。** 探索の外 (起動・棋譜の再生・入出力) を数から
-    外したいので、`genmove` の区間だけを足し込む。 */
+    /* NPS hook: only genmove spans count, excluding startup, replay
+    and I/O. */
     let mut tot_nodes = 0u64;
     let mut tot_secs = 0f64;
     let stdin = std::io::stdin();
@@ -153,7 +150,7 @@ fn main() -> ExitCode {
         }
         let mut parts = line.split_whitespace();
         let first = parts.next().unwrap_or("");
-        // GTP は先頭に任意の数値 id を置ける。付いていれば応答に写す。
+        // GTP allows a numeric id prefix; echo it in the response.
         let (id, cmd) = match first.parse::<u64>() {
             Ok(_) => (first.to_string(), parts.next().unwrap_or("").to_string()),
             Err(_) => (String::new(), first.to_string()),
@@ -196,8 +193,8 @@ fn main() -> ExitCode {
             "komi" => ok(&id, ""),
             "clear_board" => {
                 board = Board::new();
-                /* **1 局ごとに置換表を消す。** 温まった表が持ち越されると、
-                同一重み同士の自己対戦ですら 42% のような偏った結果が出る。 */
+                /* Clear tables per game; carried-over warmth skews even
+                same-weights self-play to 42%. */
                 engine.clear_tables();
                 ok(&id, "");
             }
@@ -209,10 +206,10 @@ fn main() -> ExitCode {
                     err(&id, "syntax error");
                     continue;
                 };
-                /* 手番が合わなければパスを挟む。GTP は強制パスを明示しない
-                ので色から復元するほかない。ただし**合法手がある側は飛ばさ
-                ない** — 無条件にパスすると、駆動側の手番ずれを黙って呑んで
-                盤面が静かに壊れる。 */
+                /* Insert a pass when the color mismatches: GTP has no
+                explicit forced pass. But never skip a side with legal
+                moves — swallowing a driver-side turn error would quietly
+                corrupt the board. */
                 if board.player() != color {
                     if board.movable() != 0 {
                         err(&id, "not your turn");
@@ -280,7 +277,7 @@ fn main() -> ExitCode {
     ExitCode::SUCCESS
 }
 
-/// 探索区間だけの合計を標準エラーへ。GTP の応答には混ぜない。
+/// Search-span totals to stderr, never mixed into GTP responses.
 fn report(nodes: u64, secs: f64) {
     if nodes > 0 {
         let nps = nodes as f64 / secs.max(1e-9);

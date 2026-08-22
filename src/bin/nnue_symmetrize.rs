@@ -1,10 +1,10 @@
-//! NNUE 重みを 8 対称で平均し、評価を対称不変にする。
+//! Average NNUE weights over the 8 symmetries, making evaluation
+//! symmetry-invariant. Mask cell order changes under symmetry, so
+//! identical shapes can hit different indices and drift 0.1-0.8 discs;
+//! orbit averaging fixes it at the root.
 //!
-//! パターンのマスクは並び順が対称変換で変わるため、同一配置でも別インデックス
-//! を引いて評価がずれる (実測 0.1-0.8 石)。軌道ごとに平均して根治する。
-//!
-//! 使い方: nnue_symmetrize <in.bin> <out.bin> [--val <file>]
-//! --val を渡すと対称化前後の検証 MSE を測って表示する (品質確認)。
+//! Usage: nnue_symmetrize <in.bin> <out.bin> [--val <file>]
+//! With --val, validation MSE is printed before and after.
 
 use kuroobi::nnue::Nnue;
 use kuroobi::pattern::EGAROUCID_PATTERNS;
@@ -57,18 +57,22 @@ fn main() -> std::process::ExitCode {
         Some(v)
     });
     if let Some(ex) = &examples {
-        println!("検証 {} 局面: 対称化前 MSE = {:.4}", ex.len(), mse(&nn, ex));
+        println!(
+            "validation {} positions: pre-symmetrize MSE = {:.4}",
+            ex.len(),
+            mse(&nn, ex)
+        );
     }
 
     nn.symmetrize();
 
     if let Some(ex) = &examples {
-        println!("                対称化後 MSE = {:.4}", mse(&nn, ex));
+        println!("                 post-symmetrize MSE = {:.4}", mse(&nn, ex));
     }
     if let Err(e) = nn.save(&out) {
         eprintln!("save {}: {e}", out.display());
         return std::process::ExitCode::FAILURE;
     }
-    println!("保存: {}", out.display());
+    println!("saved: {}", out.display());
     std::process::ExitCode::SUCCESS
 }

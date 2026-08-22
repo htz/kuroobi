@@ -1,20 +1,19 @@
-//! Kuroobi の GGS クライアント。
+//! Kuroobi's GGS client.
 //!
-//! skatgame.net:5000 (Generic Game Server) に接続し、リバーシのサービス
-//! `/os` で 8x8 を指す (`KUROOBI_NO_RATED=1` で非レートに固定)。プロトコルの要点はメモリ
-//! ggs-server-alive-protocol-notes を参照。
+//! Connects to skatgame.net:5000 (Generic Game Server) and plays 8x8 on
+//! the `/os` service (`KUROOBI_NO_RATED=1` pins unrated).
 //!
-//! 使い方:
-//!   ggs --play <相手> [--games N] [--login 名 --pw パス | --credentials .ggs_credentials]
+//! Usage:
+//!   ggs --play <opponent> [--games N]
+//!       [--login name --pw pass | --credentials .ggs_credentials]
 //!       [--depth N] [--solve-empties N] [--selective-band N] [--mpc]
 //!       [--threads N] [--weights path] [--nnue path]
-//!   ggs --console (stdin の 1 行をそのまま送り、受信を標準出力へ)
-//!   ggs --serve   (stdin で "<64面> <X|O>" を受け "= <座標>" を返すブリッジ)
+//!   ggs --console  (send stdin lines raw, print received lines)
+//!   ggs --serve    (stdin "<64 cells> <X|O>" -> "= <coord>" bridge)
 //!
-//! **動作確認では `KUROOBI_NO_RATED=1` を付ける。** レートが動くと以後の
-//! 測定条件が変わる。`--console` は `/os` の生のコマンドを投げられるので、
-//! 申し込み・受諾・観戦・チャット・一覧・待機モードの条件式まで、GUI が
-//! 持つ機能を一通り確かめられる。
+//! Always set `KUROOBI_NO_RATED=1` for testing — a moving rating changes
+//! every later measurement. `--console` can exercise everything the GUI
+//! does: offers, accepts, watching, chat, listings, formula settings.
 
 use std::path::PathBuf;
 use std::process::ExitCode;
@@ -33,10 +32,8 @@ struct Args {
     login: Option<String>,
     pw: Option<String>,
     credentials: PathBuf,
-    /// 生のコマンドを標準入力から送り、受信を標準出力へ出すモード。
-    /// **GGS の機能を一通り確かめるための口** — 対局だけでなく、
-    /// 申し込みの受諾・観戦・チャット・一覧・待機モードの条件式まで、
-    /// `/os` に投げられるものはすべてここから試せる。
+    /// Raw console mode: send stdin lines, print received lines — the
+    /// hatch for exercising everything `/os` accepts.
     console: bool,
     games: usize,
     time: String,
@@ -169,11 +166,10 @@ fn main() -> ExitCode {
     solver.set_nnue(nn, tt);
     solver.set_threads(args.threads);
 
-    // 与えられた局面の着手を、対局路と同じ選択則 (中盤探索 / 選択帯 / 完全読み)
-    // で決める。
-    // 残り時間 (秒) に応じて絞る: 60 秒で帯オフ + 深さ -2、20 秒で深さ 6、
-    // 8 秒で深さ 4。GGS のソフトタイムアウトは「切れたら勝ちが消える」なので
-    // 保険は厚めに。
+    // Choose a move with the same policy as play (midgame / band /
+    // solve), throttled by the clock: band off and depth -2 under 60s,
+    // depth 6 under 20s, depth 4 under 8s. GGS soft timeout forfeits
+    // the win, so the margins are generous.
     let pick = |board: &Board,
                 search: &mut NnueSearch,
                 solver: &mut Solver,
@@ -192,9 +188,9 @@ fn main() -> ExitCode {
         } else {
             (args.depth, args.band)
         };
-        /* **評価値も返す。** GGS の着手は `手/評価値/秒` を運べるので、
-        出さないと相手側の画面に「相手の読み」が一切出ない。デバッグ対局で
-        両者の読みを突き合わせたいときに、これが無いと片側しか見えない。 */
+        /* Also return the value: GGS moves carry `move/eval/time`, and
+        without it the opponent's screen shows none of our reading —
+        debug games need both sides visible. */
         if board.empty_count() <= args.solve_empties {
             let r = solver.solve_with_eval(EndSolverMode::Perfect, board, Some(&evaluator));
             (r.best_move, Some(r.value as f32))
@@ -203,16 +199,15 @@ fn main() -> ExitCode {
             (r.best_move, Some(r.value as f32))
         } else {
             let (mv, v) = search.best_move_valued(board, depth as u32);
-            /* **石差へ直してから申告する。** 中盤探索は読み切った局面を
-            ×1000 で返す (ヒューリスティック値より必ず優先させるため) ので、
-            生値のままだと `+10000` のような数字を相手へ送ってしまう。
-            GUI 側は `stone_scale` を通しているが、ここには無かった。 */
+            /* Convert to disc scale before reporting: solved-in-search
+            values are x1000, and the raw value would send +10000 to the
+            opponent. The GUI applies stone_scale; this path didn't. */
             let v = if v.abs() >= 999.0 { v / 1000.0 } else { v };
             (mv, v.is_finite().then_some(v.clamp(-64.0, 64.0)))
         }
     };
 
-    // ブリッジモード: stdin で盤面を受けて手を返すだけ。
+    // Bridge mode: board in on stdin, move out.
     if args.serve {
         use std::io::{BufRead, Write};
         let stdin = std::io::stdin();
@@ -225,7 +220,7 @@ fn main() -> ExitCode {
                 println!("= ERR bad board");
                 continue;
             };
-            // 解析用: 手と評価値 (手番視点) を返す。完全読み域は厳密値。
+            // Analysis: move and mover-view value; exact in the solve region.
             if board.empty_count() <= args.solve_empties {
                 let r = solver.solve_with_eval(EndSolverMode::Perfect, &board, Some(&evaluator));
                 match r.best_move {
@@ -244,7 +239,7 @@ fn main() -> ExitCode {
         return ExitCode::SUCCESS;
     }
 
-    // 対局モード。ログイン情報: --login/--pw か credentials ファイル (name:pw)。
+    // Play mode. Credentials: --login/--pw or a name:pw file.
     let (login, pw) = match (args.login.clone(), args.pw.clone()) {
         (Some(l), Some(p)) => (l, p),
         _ => match std::fs::read_to_string(&args.credentials) {
@@ -268,11 +263,11 @@ fn main() -> ExitCode {
 
     use std::io::{Read, Write};
 
-    // ============ 対局セッション ============
-    // 原則: 対局中 (in_match) はいかなる理由でも自発的に離脱しない。
-    // - idle タイムアウトは非対局時のみ
-    // - 致命的 ERR による終了も非対局時のみ
-    // - 接続断は再接続し、stored (中断) ゲームを自動再開する
+    // ============ Game session ============
+    // Principle: never leave voluntarily while in a match.
+    // - idle timeout applies only outside matches
+    // - fatal-ERR exits apply only outside matches
+    // - on disconnect, reconnect and auto-resume stored games
     let mut games_done = 0usize;
     let mut first_session = true;
 
@@ -289,9 +284,9 @@ fn main() -> ExitCode {
         stream
             .set_read_timeout(Some(std::time::Duration::from_millis(300)))
             .ok();
-        /* **パスワードは絶対に出さない。** 送った中身をそのまま印字して
-        いたので、ログイン時の 1 行が標準出力とログに平文で残っていた。
-        伏せる相手を送る側で指定する (`send_secret`)。 */
+        /* Never print the password. The sent line used to be echoed,
+        leaving it in plaintext in stdout and logs; the sender marks
+        secrets (`send_secret`). */
         let pw_for_mask = pw.clone();
         let mut send = {
             let mut w = stream.try_clone().expect("clone stream");
@@ -305,9 +300,8 @@ fn main() -> ExitCode {
             }
         };
 
-        /* `--console`: 標準入力の 1 行をそのまま送る。`/os` を頭に付けない
-        ので、`tell /os who 8` のように GGS の生のコマンドを書く。
-        スレッドは 1 度だけ起こし、再接続しても同じキューを使う。 */
+        /* --console: stdin lines are sent raw (no `/os` prefix added);
+        the reader thread starts once and survives reconnects. */
         let stdin_rx = if args.console {
             let (tx, rx) = std::sync::mpsc::channel::<String>();
             std::thread::spawn(move || {
@@ -346,10 +340,9 @@ fn main() -> ExitCode {
         let mut lost = false;
 
         loop {
-            /* 標準入力に届いた行をそのまま送る (--console)。
-            **ログインが済むまでは送らない** — 名前とパスワードを聞かれて
-            いる最中に割り込むと、コマンドがパスワードとして解釈されて
-            認証に失敗する (実際に踏んだ)。 */
+            /* Forward stdin lines (--console), but never before login
+            completes — a line sent during the password prompt gets
+            interpreted as the password (happened). */
             if logged_in {
                 if let Some(rx) = &stdin_rx {
                     while let Ok(cmd) = rx.try_recv() {
@@ -358,10 +351,10 @@ fn main() -> ExitCode {
                     }
                 }
             }
-            /* 非対局時のみの idle 退出。対局中は無期限に待つ (相手の長考・
-            中断復帰待ちを含む)。**`--console` では退出しない** — 人 (や
-            自動の検証) がコマンドを打つのを待つ場なので、黙って切れると
-            確かめている最中に接続が消える。 */
+            /* Idle exit only outside matches; in a match wait forever
+            (opponent thinks, adjournment returns). --console never idles
+            out — it is a prompt, and silently dropping the connection
+            mid-check is worse than lingering. */
             if !in_match && !args.console && last_activity.elapsed().as_secs() > 900 {
                 eprintln!("### idle timeout (not in match)");
                 send("quit");
@@ -418,10 +411,10 @@ fn main() -> ExitCode {
                     send("verbose -news -faq -help -ack");
                     send("tell /os client -");
                     send("tell /os trust +");
-                    /* **レート戦の可否。** `KUROOBI_NO_RATED=1` で禁じる
-                    (GUI 側の同名の口と揃えた)。動作確認や デバッグで
-                    自分どうしを戦わせるときは、必ずこちらを使う —
-                    レートが動くと以後の測定条件が変わってしまう。 */
+                    /* Rated-play switch, `KUROOBI_NO_RATED=1` forbids
+                    (same knob as the GUI). Always use it for self-play
+                    debugging — a moving rating changes later
+                    measurements. */
                     if std::env::var("KUROOBI_NO_RATED").is_ok() {
                         send("tell /os rated -");
                         eprintln!("### 非レート戦に固定 (KUROOBI_NO_RATED)");
@@ -430,7 +423,7 @@ fn main() -> ExitCode {
                     }
                     send("tell /os open 1");
                     if !first_session {
-                        // 再接続: 中断ゲームを探して自動再開する。
+                        // Reconnect: look for stored games and resume.
                         awaiting_stored = true;
                         send("tell /os stored");
                     }
@@ -546,7 +539,7 @@ fn main() -> ExitCode {
                                     Some(p) => coord(p),
                                     None => "pa".to_string(),
                                 };
-                                // `手/評価値/秒`。評価値が無いときは空欄にする
+                                // move/eval/time; eval empty when absent.
                                 let ev = val.map(|v| format!("{v:.2}")).unwrap_or_default();
                                 let secs = t0.elapsed().as_secs_f32();
                                 send(&format!("tell /os play {mid} {m}/{ev}/{secs:.2}"));
@@ -558,12 +551,11 @@ fn main() -> ExitCode {
                     continue;
                 }
                 if ln.starts_with("/os: ERR") {
-                    // 対局中は何があっても離脱しない。非対局時のみ、申し込みが
-                    // 受からない類の ERR で終了する。
-                    /* `--console` は人が打つ場なので、何が返っても落ちない。
-                    **`not registered` は致命ではない** — 正式登録をしていない
-                    ので非レート戦しかできない、という案内で、非レートなら
-                    対局できる (一覧系の命令だけが断られる)。 */
+                    // Never leave during a match; only non-match ERRs
+                    // (offer failures etc.) may exit.
+                    /* --console never exits on errors. `not registered`
+                    is not fatal — it only means unrated play (and some
+                    listing commands refused). */
                     let fatal = !in_match
                         && !args.console
                         && (ln.contains("formula")
@@ -592,7 +584,7 @@ fn main() -> ExitCode {
                     games_done += 1;
                     stored_ids.retain(|_| false);
                     println!("### game {games_done}/{} over: {ln}", args.games);
-                    // `--console` は人が打つ場。1 局終わっても抜けない
+                    // --console: stay after a game ends.
                     if !args.console && games_done >= args.games {
                         send("quit");
                         break 'session;
@@ -602,7 +594,7 @@ fn main() -> ExitCode {
 
             if let Some(t0) = ready_at {
                 if first_session && !in_match && asked_at.is_none() && t0.elapsed().as_secs() >= 4 {
-                    // `--console` は人が打つ場。勝手に申し込まない
+                    // --console: never offer games on its own.
                     if args.console {
                         continue;
                     }

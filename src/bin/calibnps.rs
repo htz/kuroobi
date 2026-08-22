@@ -1,20 +1,20 @@
-//! **この機械の読切速度を測って `resources.conf` へ書く。**
+//! Measure this machine's solve speed and write it to `resources.conf`.
 //!
-//! 持ち時間から読切の入り口を逆算する ([`kuroobi::timectl`]) には、見積った
-//! ノード数を秒へ直す係数が要る。3 層 (基準ノード数 × 並列の割増 ÷ nps) の
-//! うち **nps だけが機械依存**なので、ここで実測して控える。GUI の設定から
-//! も同じことができる (こちらは CLI だけで対局する人と、測り直しの確認用)。
+//! Deriving the solve entry from the clock ([`kuroobi::timectl`]) needs
+//! a nodes-to-seconds factor; of the three layers only nps is
+//! machine-dependent, so it is measured here. The GUI settings can do
+//! the same; this is for CLI-only use and re-measurement checks.
 //!
-//! **効果は棋力ではなく破綻の回避に出る。** 自己対局 (計 1400 局) では勝率
-//! は動かず、終局時の残り時間が増えた — 30 秒の対局で最悪の局の残りが
-//! 5.0 秒 (固定の階段) から 8.9 秒へ。
+//! The benefit shows as avoided breakdowns, not strength: 1400
+//! self-play games moved no win rate but raised the worst-case leftover
+//! clock from 5.0s to 8.9s in 30-second games.
 //!
 //! ```sh
-//! calibnps                      # 今の設定のスレッド数で測って保存
-//! calibnps --threads 8          # スレッド数を指定して測る
-//! calibnps --show               # 保存済みの値と、そこから出る入り口を見る
-//! calibnps --no-save            # 測るだけ (書かない)
-//! calibnps --depths             # 1 手の予算で届く深さも測る (数分かかる)
+//! calibnps                      # measure at the configured threads, save
+//! calibnps --threads 8          # measure at a given thread count
+//! calibnps --show               # show saved values and derived entries
+//! calibnps --no-save            # measure only (no write)
+//! calibnps --depths             # also measure budget-reachable depth (minutes)
 //! ```
 
 use std::path::PathBuf;
@@ -23,8 +23,8 @@ use std::process::ExitCode;
 use kuroobi::engine::{Engine, EngineConfig};
 use kuroobi::resources::Resources;
 
-/// 設定ファイルの場所。**GUI と同じ場所を見る** — 別々だと、GUI で測った
-/// 値が CLI に効かない。
+/// Config path — the same one the GUI uses, so either side's
+/// calibration serves both.
 fn resources_path() -> PathBuf {
     if let Ok(d) = std::env::var("XDG_CONFIG_HOME") {
         return PathBuf::from(d).join("kuroobi").join("resources.conf");
@@ -37,14 +37,14 @@ fn resources_path() -> PathBuf {
     base.join("kuroobi").join("resources.conf")
 }
 
-/// 既定のスレッド数 (GUI の `auto_threads` と同じ「コア数の半分」)。
+/// Default thread count (half the cores, same as the GUI's auto).
 fn auto_threads() -> usize {
     std::thread::available_parallelism()
         .map(|n| (n.get() / 2).max(1))
         .unwrap_or(1)
 }
 
-/// 1 手の予算と読切の入り口を、その持ち時間・その空きで出す。
+/// Move budget and solve entry for a given clock and empties.
 fn at(nps: f64, threads: usize, secs: u64, empties: u8, solve_cap: u8) -> (f64, u8) {
     let p = kuroobi::timectl::plan(
         kuroobi::timectl::Situation {
@@ -65,11 +65,9 @@ fn at(nps: f64, threads: usize, secs: u64, empties: u8, solve_cap: u8) -> (f64, 
     (p.cap.map_or(0.0, |c| c.as_secs_f64()), p.solve)
 }
 
-/// 較正した値から、持ち時間ごとの配り方を並べる。**数字 1 個より
-/// 「それで何が変わるか」のほうが読める。**
-///
-/// 読切の上限は 2 通り出す。**設定が枷になっているかが分かる** — 較正が
-/// もっと深く入れると言っていても、強さの設定を超えては入らない。
+/// Print per-clock allocations from the calibration — what it changes
+/// reads better than one number. Two solve caps are shown so a limiting
+/// strength setting is visible.
 fn report(nps: f64, threads: usize) {
     println!("読切 {:.1}M ノード/秒 ({threads} スレッド)", nps / 1e6);
     println!();
@@ -88,18 +86,15 @@ fn report(nps: f64, threads: usize) {
     }
 }
 
-/// **1 手の予算で中盤が何段まで読めるかを実測する。**
+/// Measure how deep a move budget actually reaches in the midgame.
 ///
-/// 「強さ」の深さは上限でしかなく、実際にどこまで行くかは時間が決める。
-/// **上限が予算に対して低すぎると時間が余り、高すぎると使い切って序盤に
-/// 厚くなる** (深さ 34 で残り 2.2 秒 → 0.5 秒まで削れて勝率 47%)。
-/// どこが釣り合うかは測らないと分からない。
-///
-/// 局面はランダム開局から作る。**空きを変えて測る** — 序盤ほど手が多く、
-/// 同じ予算でも到達深さが違う。
+/// The configured depth is only a cap; time decides the reach. Too low
+/// wastes budget, too high drains it (depth 34 once cut the leftover to
+/// 0.5s at 47% win rate) — the balance point must be measured. Positions
+/// come from random openings across several empties.
 fn depth_table(engine: &mut Engine, threads_list: &[usize]) {
     use kuroobi::{Board, Position};
-    // 決定的な擬似乱数 (開局を毎回同じにする)
+    // Deterministic PRNG (identical openings every run).
     let mut st = 0x9E37_79B9_7F4A_7C15u64;
     let mut next = move || {
         st ^= st >> 12;
@@ -207,8 +202,8 @@ fn main() -> ExitCode {
         nnue: res.nnue_path(),
         book: res.book_path(),
         threads,
-        // **設定した置換表で測る。** 既定のまま測ると、対局で使う表と違う
-        // 大きさの値を控えることになる (終盤 22 → 24 で読切が 8.9% 速い)
+        // Measure with the configured tables; defaults would record a
+        // value for the wrong table size (22 -> 24 is 8.9% faster).
         midgame_hash_bits: res.hash_mid_bits(),
         solver_hash_bits: res.hash_end_bits(),
         ..Default::default()
@@ -227,7 +222,7 @@ fn main() -> ExitCode {
     }
     report(nps, threads);
     if depths {
-        engine.set_levels(60, 0, 0); // 深さの上限を外して、時間だけで決めさせる
+        engine.set_levels(60, 0, 0); // uncap depth; let time decide
         engine.set_use_book(false);
         depth_table(&mut engine, &[1, 4, 8]);
     }

@@ -82,8 +82,8 @@ fn train_pass(
     sym_seed: u64,
 ) -> f64 {
     // Hogwild: workers share the model (and the moments) through raw pointers.
-    // 単一スレッドも同じ経路で回す — 更新則を 2 通り持つと、片方だけ直して
-    // もう片方が古いまま、という食い違いが起きる。
+    // Single-threaded runs use the same path; two update rules would
+    // inevitably drift apart.
     let av = adam.map(|a| a.view());
     let view = nn.view();
     let nn_ref = &*nn;
@@ -96,10 +96,10 @@ fn train_pass(
             let av = av.as_ref();
             handles.push(scope.spawn(move || {
                 let mut s = 0.0f64;
-                /* **学習時の対称化。** 例ごとに 8 対称形から 1 つを引く。
-                盤面を回しても評価値は変わらないはずなので、ラベルはそのまま
-                でよい。事後の重み平均と違い、対称性を保ったまま当てはまりが
-                良くなる。種はスレッドごとに変える (同じ変換ばかり引かない)。 */
+                /* Training-time symmetrization: draw one of the 8 forms
+                per example (labels unchanged — rotation preserves value).
+                Unlike post-hoc averaging this improves the fit while
+                staying symmetric. Per-thread seeds vary the draw. */
                 let mut rs = sym_seed ^ (0x9E37_79B9_7F4A_7C15u64.wrapping_mul(ti as u64 + 1));
                 for ex in part {
                     let ex = if sym_seed == 0 {
@@ -118,7 +118,8 @@ fn train_pass(
                     let ex = &ex;
                     let board = ex.board();
                     let stage = Evaluator::stage(&board);
-                    // 学習例は黒番に正規化済みなので、手番側の石数 = 黒石数。
+                    // Examples are normalized to Black to move, so the
+                    // mover's disc count = Black's.
                     let discs = ex.black.count_ones() as usize;
                     let ix = nn_ref.indices(ex.black, ex.white);
                     // SAFETY: `view` / `av` are from `nn` and its moments,
@@ -259,16 +260,14 @@ fn main() -> ExitCode {
     }
     println!("nnue: H={} features={}", kuroobi::nnue::H, nn.n_features());
 
-    /* **石数表だけを閉じた式で当てはめる。** ネットワークを固定すれば
-    `num_w[stage][discs]` の最適値はそのバケツの残差の平均そのもの。学習で
-    近づけるより正確で速く、**この入力から得られる利得の上限**が分かる。
-    既存の重みは最適点にいるので、同じ lr で一緒に動かすと両方が中途半端に
-    なる (実測 -0.007 しか動かなかった)。 */
+    /* Fit the disc-count table in closed form: with the network frozen
+    the optimum per bucket is its mean residual — exact, fast, and it
+    bounds the achievable gain. Joint training barely moved (-0.007). */
     if fit_num {
         let n_buckets = nn.num_w_len();
         let mut sum = vec![0.0f64; n_buckets];
         let mut cnt = vec![0u64; n_buckets];
-        // 表をゼロにしてから残差を数える (既存の値を二重に足さないため)
+        // Zero the table before counting residuals (no double-adding).
         nn.set_num_w(&vec![0.0f32; n_buckets]);
         for (fi, f) in data_files.iter().enumerate() {
             let mut ex = Vec::new();
@@ -288,10 +287,9 @@ fn main() -> ExitCode {
             }
             eprintln!("  fit-num: {}/{} files", fi + 1, data_files.len());
         }
-        /* **標本の少ないバケツはゼロへ縮める。** (`--fit-num-lambda` で強さを変える) 素の平均だと 1 件しかない
-        バケツが生の残差 (110 石!) をそのまま採り、val をむしろ汚す。
-        `sum / (cnt + LAMBDA)` は ridge と同じ縮小で、件数が LAMBDA を
-        大きく超えるバケツだけが素の平均に近づく。 */
+        /* Shrink sparse buckets toward zero (`--fit-num-lambda`): a raw
+        mean lets a 1-example bucket adopt its full residual (110 discs!)
+        and worsen val. `sum / (cnt + LAMBDA)` is ridge shrinkage. */
         let table: Vec<f32> = sum
             .iter()
             .zip(&cnt)
@@ -311,8 +309,8 @@ fn main() -> ExitCode {
         return ExitCode::SUCCESS;
     }
 
-    /* Adam のモーメントは重み 2 本ぶん (H=16 で 78 MB)。要求されたときだけ
-    確保する — 素の SGD で回すときに払う理由がない。 */
+    /* Adam moments cost two weight copies (78 MB at H=16); allocate
+    only on request. */
     let mut adam_state = adam.then(|| {
         println!(
             "adam: moments {} MB",
@@ -389,12 +387,10 @@ fn main() -> ExitCode {
                 examples.len() as f32 / ts.elapsed().as_secs_f32(),
             );
         }
-        /* **SWA: 一定 lr で雲を巡回した点を平均する。**
-        モデルは最適点の周りを lr に比例した半径で彷徨うので、鎖状に繋いだ
-        点列 (各段で lr を下げたもの) を平均しても意味がない — 古い点へ
-        引き戻されるだけで、実際 31.0437 が 31.0505 に悪化した。**同じ lr
-        で回した各エポックの重み**を平均して初めて中心に寄る。
-        `--swa N` で N エポック目以降を平均に取り込む。 */
+        /* SWA: average points orbiting at a constant lr. Averaging a
+        chain of decaying-lr points just drags toward stale weights
+        (31.0437 worsened to 31.0505); only same-lr epoch weights
+        average toward the center. `--swa N` includes epochs from N. */
         if swa_from > 0 && epoch >= swa_from {
             let w = nn.weights_flat();
             match &mut swa_sum {
@@ -427,23 +423,23 @@ fn main() -> ExitCode {
             println!("  saved {}", out.display());
         }
     }
-    // 平均そのものを評価する。個々の点より良ければ、それが答え。
+    // Evaluate the average itself; if it beats the points, it wins.
     if let Some((acc, n)) = swa_sum {
         let mean: Vec<f32> = acc.iter().map(|x| x / n as f32).collect();
         let mut avg = Nnue::new(EGAROUCID_PATTERNS);
         avg.set_weights_flat(&mean);
         let vm = val_mse(&avg, &val);
         println!("swa over {n} epochs: val {vm:.4}");
-        /* **平均は必ず保存する。** 起点が対称化済みだと、SWA の平均は対称
-        でないぶん (実測 0.006〜0.008) 不利に見える。改善時しか保存しないと
-        「対称化すれば起点に勝つ平均」を黙って捨てることになる。採否は
-        `nnue_symmetrize` を通してから決める。 */
+        /* Always save the average: against a symmetrized baseline the
+        raw SWA average looks worse by its asymmetry (0.006-0.008), and
+        save-on-improve would silently discard averages that win after
+        `nnue_symmetrize`. Decide after symmetrizing. */
         let p = out.with_extension("swa.bin");
         if let Err(e) = avg.save(&p) {
             eprintln!("save failed: {e}");
             return ExitCode::FAILURE;
         }
-        println!("  saved {} (対称化してから採否を決めること)", p.display());
+        println!("  saved {} (symmetrize before judging)", p.display());
         if vm < best {
             best = vm;
         }

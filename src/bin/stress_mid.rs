@@ -1,16 +1,13 @@
-//! 中盤の並列探索が**自己整合**しているかを見る。
+//! Checks that the parallel midgame search is self-consistent.
 //!
-//! **逐次と一致することは求めない。** Lazy SMP のヘルパーは
-//! `main_depth + ctz(idx+1)` と違う深さを読み、その結果を共有の表に置く。
-//! 本探索がそれを使うのは設計どおりで、深さ N の逐次と同じ答えになったら
-//! ヘルパーが働いていないことになる。同値の別解を選ぶのも普通に起こる。
+//! It does NOT require matching the sequential search: Lazy SMP helpers
+//! read other depths into the shared table by design, and equal-value
+//! alternatives are normal. What must hold is "the returned value came
+//! from the returned move" — the real-game accident broke exactly that
+//! (a fail-low upper bound reported as +16 for a -20 move). Play the
+//! returned move, re-search, and flag large mismatches.
 //!
-//! 見るのは「**返した値が、返した手から出た値か**」。実戦の事故はそこが
-//! 壊れていた — 零幅窓で沈んだ手の上界を値として返し、真値 -20 の手を
-//! 「+16」と称して指した。手を実際に打って読み直し、大きく食い違ったら
-//! 並列化の欠陥を疑う。
-//!
-//! Usage: stress_mid [局面数] [深さ] [スレッド]
+//! Usage: stress_mid [positions] [depth] [threads]
 use kuroobi::midgame::{NnueSearch, SharedTt};
 use kuroobi::nnue::Nnue;
 use kuroobi::pattern::EGAROUCID_PATTERNS;
@@ -76,16 +73,17 @@ fn main() {
             let tt: &'static SharedTt = Box::leak(Box::new(SharedTt::new(22)));
             let mut w = NnueSearch::new(nn, tt);
             w.threads = th;
-            /* **MPC は切る。** 確率的な枝刈りは探索順序で結果が動くので、
-            並列との差が「並列の欠陥」なのか「MPC の揺らぎ」なのか区別が
-            つかない。切れば同じ深さの答えは一意になる。 */
+            /* MPC off: probabilistic pruning varies with visit order,
+            making parallel defects indistinguishable from MPC jitter.
+            Without it, same-depth answers are unique. */
             w.mpc = std::env::var("MID_MPC").is_ok_and(|v| v != "0");
             w.best_move_valued(&b, depth)
         };
         let (p1, v1) = solve(1);
         let (pn, vn) = solve(threads);
-        /* **返した手を打って読み直す。** 中盤は近似なので多少はずれるが、
-        指し手と値が別物なら大きく開く。許容は 3 石 (`MID_TOL` で変えられる)。 */
+        /* Play the returned move and re-search: approximation drifts a
+        little, but a value belonging to another move opens wide.
+        Tolerance 3 discs (`MID_TOL`). */
         let tol: f32 = std::env::var("MID_TOL")
             .ok()
             .and_then(|v| v.parse().ok())
@@ -123,9 +121,8 @@ fn main() {
             }
             continue;
         }
-        /* **食い違ったら同じ局面を繰り返す。** 競合は毎回出るとは限らないの
-        で、1 回の食い違いだけでは「たまたま」なのか「必ず壊れる」のか分から
-        ない。`MID_REPEAT=n` で n 回まわして出方を見る。 */
+        /* On mismatch, repeat the position: races are intermittent, and
+        one hit cannot distinguish flake from certainty. `MID_REPEAT=n`. */
         if (v1 - vn).abs() > 0.001 || p1 != pn {
             if let Ok(r) = std::env::var("MID_REPEAT") {
                 let r: usize = r.parse().unwrap_or(5);
@@ -137,8 +134,8 @@ fn main() {
                 println!(" / 逐次 {}{v1:+.2}", p1.map(name).unwrap_or_default());
             }
         }
-        // 手が違うのは同値の別解かもしれないので、値の差だけを数える
-        // 逐次との差は参考。既定では数えない (`MID_STRICT=1` で数える)
+        // Different moves may be equal-value alternatives; count value
+        // gaps only. Sequential deltas are informational (`MID_STRICT=1`).
         let strict = std::env::var("MID_STRICT").is_ok_and(|v| v != "0");
         if strict && ((v1 - vn).abs() > 0.001 || p1 != pn) {
             bad += 1;

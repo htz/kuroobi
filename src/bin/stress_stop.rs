@@ -1,10 +1,10 @@
-//! 期限で打ち切られたときに、おかしな手を返さないかを見る。
+//! Checks that deadline cuts never return absurd moves.
 //!
-//! **GGS は毎手期限で打ち切る。** 打ち切りは実運用の主経路なのに、そこで
-//! 中断値が漏れて誤った手を指していないかを確かめていなかった。ランダムな
-//! 期限を与えて解き、返ってきた手が「まとも」かを厳密解と突き合わせる。
+//! GGS cuts every move on a deadline — the production main path — yet
+//! leaked abort values there were never checked. Solve with randomized
+//! deadlines and sanity-check returned moves against exact solutions.
 //!
-//! Usage: stress_stop [局面数] [空き] [スレッド]
+//! Usage: stress_stop [positions] [empties] [threads]
 use kuroobi::midgame::StopHandle;
 use kuroobi::solver::{EndSolverMode, Solver};
 use kuroobi::{Board, Position};
@@ -54,15 +54,15 @@ fn main() {
             continue;
         }
         done += 1;
-        // 期限なしの厳密解 (正解)
+        // Unbounded exact solve (the truth).
         let truth = {
             let mut sv = Solver::new(22);
             sv.set_threads(1);
             sv.solve(EndSolverMode::Perfect, &b).value
         };
-        /* **途中で止める。** 解き終わる前に止めたいので、別スレッドから
-        ばらついた時刻に落とす。止まったあとの答えを使うかどうかは呼ぶ側の
-        判断だが、**使うなら「その手を指して大丈夫か」が要る**。 */
+        /* Stop mid-solve from another thread at jittered times. Whether
+        to use the post-stop answer is the caller's call — but if used,
+        the move must be safe to play. */
         let stop = StopHandle::new();
         let ms = 1 + (rnd(&mut s) % 40);
         let st = stop.clone();
@@ -75,10 +75,10 @@ fn main() {
         sv.set_stop(Some(stop.clone()));
         let r = sv.solve(EndSolverMode::Perfect, &b);
         if !stop.is_stopped() {
-            continue; // 止まる前に解けた
+            continue; // solved before the stop
         }
         cut += 1;
-        // 打ち切られたときに手を返すなら、その手の厳密値を見る
+        // If a cut still returns a move, check its exact value.
         if let Some(p) = r.best_move {
             let mut c = b;
             c.make_move_bits(p);
@@ -92,7 +92,7 @@ fn main() {
             s2.set_threads(1);
             let v = s2.solve(EndSolverMode::Perfect, &c).value;
             let mv = if flip { -v } else { v };
-            // 打ち切りなので最善とは限らない。大きく外していないかだけ見る
+            // A cut move need not be best; only flag large misses.
             let tol: i32 = std::env::var("STOP_TOL")
                 .ok()
                 .and_then(|v| v.parse().ok())
@@ -100,13 +100,13 @@ fn main() {
             if truth - mv > tol {
                 bad += 1;
                 println!(
-                    "局面 {i}: 厳密 {truth} だが返した手は {mv} ({}ms で打ち切り)",
+                    "position {i}: exact {truth} but returned {mv} (cut at {}ms)",
                     ms
                 );
             }
         }
     }
-    println!("{done} 局面 (うち打ち切り {cut}) 中 {bad} 件がひどい手");
+    println!("{bad} of {done} positions ({cut} cut) returned terrible moves");
     if bad > 0 {
         std::process::exit(1);
     }

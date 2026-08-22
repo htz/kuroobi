@@ -1,19 +1,16 @@
-//! **NNUE で選択読みの σ を実測する。**
+//! Measures the selective-search sigma under NNUE.
 //!
-//! `mpc_sigma` は線形評価で測った値を、NNUE でもそのまま使っている
-//! (「NNUE のほうが正確だから安全側」という理屈)。**終盤 σ で同じことを
-//! して 2 倍過大だった**前例があるので、中盤も実測して確かめる。
+//! `mpc_sigma` was measured with the linear evaluator and reused for
+//! NNUE on a "safer anyway" argument — the endgame sigma did the same
+//! and turned out 2x too large, so the midgame gets measured too.
+//! An oversized sigma prunes less and loses depth per unit time.
 //!
-//! σ が実際より大きいと枝を刈れず、同じ時間で読める深さが落ちる。
+//! Each position is searched at several depths with cleared tables,
+//! emitted as CSV; sigma fitting happens downstream. Positions run in
+//! parallel, searches stay sequential (Lazy SMP changes the tree; we
+//! measure values, not speed).
 //!
-//! 局面ごとに、置換表を消しながら独立に深さを変えて探索し、CSV で
-//! 1 行ずつ出す。σ の当てはめは後段 (この出力を読む) で行う。
-//!
-//! **局面は並列に処理する。** 探索そのものを並列にすると木が変わって
-//! しまう (Lazy SMP は同じ深さでも別のノードを踏む) ので、**1 局面 1
-//! スレッドで、局面を並べて回す**。測るのは値であって速度ではない。
-//!
-//! 使い方:
+//! Usage:
 //!   mpccalib_nnue [--threads N] [--stride N] [--max N] [--depths a,b,c]
 //!                 <nnue.bin> <linear.bin> <data-file>...
 
@@ -29,7 +26,7 @@ use kuroobi::trainer::load_examples_binary;
 
 fn main() -> ExitCode {
     let mut paths: Vec<PathBuf> = Vec::new();
-    let mut stride = 997usize; // 素数の刻みでファイル順との相関を切る
+    let mut stride = 997usize; // prime stride decorrelates from file order
     let mut max_positions = 2000usize;
     let mut threads = std::thread::available_parallelism()
         .map(|n| n.get())
@@ -70,18 +67,18 @@ fn main() -> ExitCode {
         eprintln!("failed to load {}: {err}", nnue_path.display());
         return ExitCode::FAILURE;
     }
-    // **忘れると SIMD 経路が未初期化領域を読む。**
+    // Skipping this makes the SIMD path read uninitialized memory.
     nn.quantize();
     let nn: &'static Nnue = Box::leak(Box::new(nn));
 
-    // 深さ 0 の値だけは線形評価で出す (NNUE の生の出力と同じ石差の単位)
+    // Depth-0 values come from the linear evaluator (same disc units).
     let mut evaluator = Evaluator::new(EGAROUCID_PATTERNS);
     if let Err(err) = evaluator.load_weights(&linear_path) {
         eprintln!("failed to load {}: {err}", linear_path.display());
         return ExitCode::FAILURE;
     }
 
-    // 局面を先に集める (並列に配るため)
+    // Collect positions first for parallel dispatch.
     let mut boards = Vec::new();
     'outer: for path in &paths {
         let examples = match load_examples_binary(path) {
@@ -117,12 +114,12 @@ fn main() -> ExitCode {
             .map(|_| {
                 let (next, boards, depths, evaluator) = (&next, &boards, &depths, &evaluator);
                 s.spawn(move || {
-                    /* **スレッドごとに置換表を持つ。** 共有すると、ある局面の
-                    結果が別の局面の探索を助けてしまい、独立に測れない。
-                    18 bit は 1 スレッドあたり 4 MB 程度。 */
+                    /* Per-thread tables: sharing lets one position's
+                    results help another and breaks independence. 18 bits
+                    is ~4 MB per thread. */
                     let tt: &'static SharedTt = Box::leak(Box::new(SharedTt::new(18)));
                     let mut search = NnueSearch::new(nn, tt);
-                    search.threads = 1; // 木を変えないため探索は逐次
+                    search.threads = 1; // sequential search keeps the tree fixed
                     let mut out = Vec::new();
                     loop {
                         let i = next.fetch_add(1, Ordering::Relaxed);

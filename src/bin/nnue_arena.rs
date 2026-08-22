@@ -15,8 +15,8 @@ use kuroobi::pattern::EGAROUCID_PATTERNS;
 use kuroobi::{Board, Color, Position};
 
 /// An evaluator: score a board from the side-to-move's perspective.
-// 片方の変種が大きいだけで、アリーナでは高々 2 個しか作らないため
-// Box 化する意味がない。
+// One variant is just larger; the arena builds at most two, so boxing
+// buys nothing.
 #[allow(clippy::large_enum_variant)]
 enum Eval {
     Linear(Evaluator),
@@ -172,7 +172,7 @@ fn main() -> ExitCode {
     let mut plies = 6usize;
     let mut seed = 7u64;
     let mut a_path = PathBuf::from("weights/nnue-h16.bin"); // A = NNUE
-    let mut b_path = PathBuf::from("weights/linear.bin"); // B = linear (--nnue-b で NNUE に)
+    let mut b_path = PathBuf::from("weights/linear.bin"); // B = linear (--nnue-b makes it NNUE)
     let mut b_is_nnue = false;
     let mut it = std::env::args().skip(1);
     while let Some(a) = it.next() {
@@ -183,12 +183,10 @@ fn main() -> ExitCode {
             "--seed" => seed = it.next().unwrap().parse().unwrap(),
             "--nnue" => a_path = PathBuf::from(it.next().unwrap()),
             "--linear" => b_path = PathBuf::from(it.next().unwrap()),
-            /* **B 側にも NNUE を置けるようにする。**
-
-            元は「NNUE 対 線形」専用だった。学習し直した NNUE の採否は
-            **新旧の直接対戦**でしか決められない (val MSE と棋力は相関
-            しない — MSE 36.07 と 33.02 のモデルが 400 局で 52.5%、
-            95% CI 47.6..57.4 で有意差なし)。 */
+            /* Allow NNUE on the B side too: retrained models can only
+            be judged old-vs-new head-to-head (val MSE does not correlate
+            with strength — 36.07 vs 33.02 scored 52.5%, CI 47.6..57.4,
+            no significance over 400 games). */
             "--nnue-b" => {
                 b_path = PathBuf::from(it.next().unwrap());
                 b_is_nnue = true;

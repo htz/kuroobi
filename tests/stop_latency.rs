@@ -1,8 +1,8 @@
-//! 停止ハンドルを立ててから探索が抜けるまでの実時間。
-//! 重みファイルが必要なので #[ignore] (ローカルで cargo test -- --ignored)。
+//! Wall time from raising the stop handle to the search returning.
+//! Requires weights, hence #[ignore].
 //!
-//! 「止めたのに CPU が解放されない」の切り分け用。中盤探索と読み切りの
-//! それぞれで、止めてから返るまでを測る。
+//! For bisecting "stopped but CPU not released": measures stop-to-return
+//! for the midgame search and the solver separately.
 
 use std::time::{Duration, Instant};
 
@@ -27,21 +27,21 @@ fn replay_until_empties(kifu: &str, empties: u8) -> Board {
     board
 }
 
-/// 立ててから返るまでこの時間を超えたら、止まりが遅いとみなす。
+/// Stop-to-return beyond this counts as slow.
 const LIMIT: Duration = Duration::from_millis(300);
 
-/// 中盤探索だけは**まだこの水準に届いていない**。`negamax` は 512 ノード
-/// ごとに停止を見ているので理屈上は一瞬のはずだが、実測で 0.9〜1.8 秒
-/// かかる (Lazy SMP がヘルパーを段ごとに join する構造が疑わしい)。
-/// 原因を切り分けるまでは、悪化だけを捕まえる緩い線で置いておく。
+/// The midgame search has not reached this bar yet: negamax checks the
+/// stop every 512 nodes so it should be instant, but measures 0.9-1.8s
+/// (the per-iteration helper join in Lazy SMP is the suspect). Until
+/// bisected, the bound is loose and only catches regressions.
 const MIDGAME_LIMIT: Duration = Duration::from_millis(2500);
 
 #[test]
-#[ignore = "weights/ の実ファイルが必要 (git 管理外)"]
+#[ignore = "requires real files in weights/ (not in git)"]
 fn midgame_search_stops_promptly() {
     let cfg = EngineConfig {
         depth: 24,
-        solve_empties: 8, // 読み切りに逃げないよう浅く
+        solve_empties: 8, // shallow so it cannot escape into a solve
         threads: 8,
         ..Default::default()
     };
@@ -57,19 +57,19 @@ fn midgame_search_stops_promptly() {
     engine.eval_position(&board, 24);
     let took = t0.elapsed();
     let after_stop = took.saturating_sub(Duration::from_secs(2));
-    println!("中盤探索: 停止から {after_stop:?}");
+    println!("midgame: {after_stop:?} after stop");
     assert!(
         after_stop < MIDGAME_LIMIT,
-        "中盤探索: 停止から {after_stop:?} かかった"
+        "midgame took {after_stop:?} after stop"
     );
 }
 
 #[test]
-#[ignore = "weights/ の実ファイルが必要 (git 管理外)"]
+#[ignore = "requires real files in weights/ (not in git)"]
 fn endgame_solve_stops_promptly() {
     let cfg = EngineConfig {
         depth: 12,
-        solve_empties: 30, // 空き 26 を読み切りに入れる (長い)
+        solve_empties: 30, // puts 26 empties into the (long) solve
         threads: 8,
         ..Default::default()
     };
@@ -85,17 +85,14 @@ fn endgame_solve_stops_promptly() {
     engine.eval_position(&board, 12);
     let took = t0.elapsed();
     let after_stop = took.saturating_sub(Duration::from_secs(2));
-    println!("読み切り: 停止から {after_stop:?}");
-    assert!(
-        after_stop < LIMIT,
-        "読み切り: 停止から {after_stop:?} かかった"
-    );
+    println!("solve: {after_stop:?} after stop");
+    assert!(after_stop < LIMIT, "solve took {after_stop:?} after stop");
 }
 
-/// 停止を入れる前後で探索そのものが遅くなっていないかを見るための基準。
-/// 止めずに同じ局面を解いて時間を出す (CLAUDE.md「測ってから決める」)。
+/// Baseline for whether adding the stop slowed the search itself:
+/// solve the same position without stopping and print the time.
 #[test]
-#[ignore = "weights/ の実ファイルが必要 (git 管理外)"]
+#[ignore = "requires real files in weights/ (not in git)"]
 fn solve_speed_baseline() {
     let cfg = EngineConfig {
         depth: 12,
@@ -107,18 +104,18 @@ fn solve_speed_baseline() {
     let board = replay_until_empties(KIFU, 24);
     let t0 = Instant::now();
     let mv = engine.eval_position(&board, 12);
-    println!("空き 24 の読み切り: {:?} (値 {})", t0.elapsed(), mv.value);
+    println!("24-empties solve: {:?} (value {})", t0.elapsed(), mv.value);
 }
 
-/// 停止確認の頻度 (ABORT_CHECK_INTERVAL) が探索速度に効いているかを見る
-/// ための基準。固定深さで探索して nps を出す。
+/// Baseline for whether the stop-check frequency (ABORT_CHECK_INTERVAL)
+/// affects speed: fixed-depth search, print nps.
 #[test]
-#[ignore = "weights/ の実ファイルが必要 (git 管理外)"]
+#[ignore = "requires real files in weights/ (not in git)"]
 fn midgame_speed_baseline() {
     let cfg = EngineConfig {
         depth: 14,
         solve_empties: 8,
-        threads: 1, // 並列の揺れを避けて 1 スレッドで測る
+        threads: 1, // single thread to avoid parallel jitter
         ..Default::default()
     };
     let mut engine = Engine::new(cfg).expect("engine init");
@@ -128,7 +125,7 @@ fn midgame_speed_baseline() {
     engine.eval_position(&board, 14);
     let (el, nodes) = (t0.elapsed(), engine.nodes() - n0);
     println!(
-        "中盤 深さ14: {:?} / {} ノード / {:.2}M nps",
+        "midgame depth 14: {:?} / {} nodes / {:.2}M nps",
         el,
         nodes,
         nodes as f64 / el.as_secs_f64() / 1e6

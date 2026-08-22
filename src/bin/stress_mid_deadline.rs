@@ -1,9 +1,10 @@
-//! 期限つきの**中盤**探索が、中断値をそのまま返していないかを見る。
+//! Checks the deadline-bounded midgame search never returns abort values.
 //!
-//! 実戦の署名: 評価が `+0.00` (= 数でない値を丸めたもの)、深さが空きマス数を
-//! 超える、そして「打切」。この 3 つが揃った手が X 打ちだった。
+//! Live signature: value +0.00 (a rounded non-finite), depth beyond the
+//! empty count, and "cut" — the move carrying all three was an X-square
+//! blunder.
 //!
-//! Usage: stress_mid_deadline [局面数] [スレッド]
+//! Usage: stress_mid_deadline [positions] [threads]
 use kuroobi::engine::{Engine, EngineConfig};
 use kuroobi::{Board, Position};
 
@@ -38,7 +39,7 @@ fn main() {
     let mut s: u64 = 0xC0FF_EE12_3456_789A;
     let (mut bad, mut cut, mut done) = (0usize, 0usize, 0usize);
     for i in 0..n {
-        // 抽選開局の少し後 (実戦で出た空き 38-46) を作る
+        // Just past a drawn opening (the live incidents' 38-46 empties).
         let target = 38 + (rnd(&mut s) % 9) as u32;
         let mut b = Board::new();
         while b.empty_count() as u32 > target {
@@ -61,7 +62,7 @@ fn main() {
             continue;
         }
         done += 1;
-        // 実戦は 1 手 80〜150 秒。短くしても経路は同じ (段の途中で切られる)
+        // Live moves run 80-150s; shorter is the same path (cut mid-iteration).
         let ms = 200 + (rnd(&mut s) % 2800);
         let mv = eng.choose_within(
             &b,
@@ -74,14 +75,16 @@ fn main() {
         if !mv.value.is_finite() || mv.depth > empties {
             bad += 1;
             println!(
-                "局面 {i}: 空き {empties} 期限 {ms}ms → 手 {:?} 値 {} 深さ {}{}",
+                "position {i}: empties {empties} deadline {ms}ms -> move {:?} value {} depth {}{}",
                 mv.pos.map(|p| p.index()),
                 mv.value,
                 mv.depth,
-                if mv.cut { " 打切" } else { "" }
+                if mv.cut { " cut" } else { "" }
             );
         }
     }
     let nf = kuroobi::engine::NON_FINITE_VALUES.load(std::sync::atomic::Ordering::Relaxed);
-    println!("{done} 局面 (うち打切 {cut}) 中 {bad} 件が壊れた値/深さ、非数の丸め {nf} 件");
+    println!(
+        "{bad} of {done} positions ({cut} cut) had broken value/depth; {nf} non-finite roundings"
+    );
 }

@@ -188,7 +188,7 @@ fn main() -> ExitCode {
         // "0 nodes in 0.000s (NaNM nodes/s)" and exiting 0 reads as success.
         if solved == 0 {
             eprintln!(
-                "{}: 読めた問題がありません (0 / {} 行)",
+                "{}: no readable problems (0 / {} lines)",
                 file.display(),
                 content.lines().filter(|l| !l.trim().is_empty()).count()
             );

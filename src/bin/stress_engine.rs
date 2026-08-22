@@ -1,10 +1,10 @@
-//! **実戦の経路**で自己整合を見る。
+//! Self-consistency through the play path.
 //!
-//! `stress_par` は `Solver` を直に叩くので、ウォームアップ・評価順・定石を
-//! 通らない。実戦は `Engine` 経由なので、そちらでも「返した値が返した手から
-//! 出た値か」を確かめる。読切に入る空きで走らせる。
+//! `stress_par` drives the Solver directly, bypassing warmup, ordering
+//! and the book; live play goes through `Engine`, so verify "the value
+//! came from the returned move" there too. Run at solve-entry empties.
 //!
-//! Usage: stress_engine [局面数] [空き] [スレッド]
+//! Usage: stress_engine [positions] [empties] [threads]
 use kuroobi::engine::{Engine, EngineConfig};
 use kuroobi::solver::{EndSolverMode, Solver};
 use kuroobi::{Board, Position};
@@ -67,7 +67,7 @@ fn main() {
         e.clear_tables();
         let mv = e.choose(&b);
         let Some(p) = mv.pos else { continue };
-        // 厳密解と、返した手の厳密値
+        // The exact solution and the returned move's exact value.
         let truth = {
             let mut sv = Solver::new(22);
             sv.set_threads(1);
@@ -88,7 +88,7 @@ fn main() {
         if mine != truth {
             bad += 1;
             println!(
-                "局面 {i}: 厳密 {truth} だが選んだ手は {mine} (エンジンの値 {:+.1}, 厳密 {})",
+                "position {i}: exact {truth} but chose a {mine} move (engine value {:+.1}, exact {})",
                 mv.value, mv.exact
             );
             if bad >= 5 {
@@ -96,7 +96,7 @@ fn main() {
             }
         }
     }
-    println!("{done} 局面中 {bad} 件が最善を外した");
+    println!("{bad} of {done} positions missed the best move");
     if bad > 0 {
         std::process::exit(1);
     }

@@ -14,11 +14,10 @@
 //! `protocol` is one of `edax`, `zebra`, `egaroucid`, `kuroobi`, or `ours`.
 //! Exactly one `ours` entry is expected; its path is ignored.
 //!
-//! **`kuroobi` は自分自身を別プロセスとして立てる。** NNUE の accumulator
-//! 幅 `H` はコンパイル時定数なので、H の違うモデルは 1 プロセスに同居でき
-//! ない。worktree で別ビルドを建て、両方を `kuroobi` として登録すれば、
-//! **自分同士を直接対戦させられる** (`src/bin/gtp.rs` を見よ)。特徴集合や
-//! 探索を変えたビルドでも同じ。
+//! `kuroobi` runs itself as separate processes: the NNUE accumulator
+//! width `H` is a compile-time constant, so different-H models cannot
+//! share a process. Build variants in worktrees, register both as
+//! `kuroobi`, and they play each other directly (see `src/bin/gtp.rs`).
 //!
 //! ```sh
 //! roundrobin --games 400 --time-ms 300 \
@@ -26,9 +25,8 @@
 //!   --engine h64=kuroobi=../wt-h64/target/release/gtp
 //! ```
 //!
-//! **速度差を含めて測るなら `--time-ms` を使う。** 深さ固定は速度を無視する
-//! ので、遅くて賢い側を過大評価する。評価関数だけを比べたいときは深さ固定
-//! (既定) のままでよい。
+//! Use `--time-ms` to include speed differences; fixed depth (default)
+//! is fine when comparing evaluators only.
 
 use std::io::{BufRead, BufReader, Write};
 use std::path::PathBuf;
@@ -126,8 +124,8 @@ impl Engine {
                 "-nobook".into(),
                 "-q".into(),
             ],
-            // 自分自身 (src/bin/gtp.rs)。Egaroucid と同じ綴りを受けるので
-            // 並びは揃えてあり、時間制のときだけ --time-ms が増える。
+            // Ourselves (src/bin/gtp.rs); accepts Egaroucid-spelled
+            // flags, plus --time-ms in timed mode.
             "kuroobi" => {
                 let mut v = vec![
                     "-gtp".into(),
@@ -153,10 +151,10 @@ impl Engine {
                 "1".into(),
             ],
         };
-        /* `kuroobi` だけは path を空白で切り、2 語目以降を追加引数として
-        渡す。**ビルドごとに違う重みを指す必要がある**ため — H の違う NNUE は
-        読み込みに失敗するので、両者に同じ既定パスを引かせるわけにいかない。
-        作業ディレクトリも変えない (重みを相対パスで書けるように)。 */
+        /* Only `kuroobi` splits the path on spaces, passing later words
+        as extra args: each build must point at its own weights (a
+        different-H NNUE fails to load). The working directory is left
+        alone so weights can be relative. */
         let (program, extra): (PathBuf, Vec<String>) = if protocol == "kuroobi" {
             let s = path.to_string_lossy();
             let mut w = s.split_whitespace();

@@ -1,41 +1,36 @@
-//! ポンダリングの**効果**を測る。
+//! Measures the effect of pondering.
 //!
-//! 1 手あたりの持ち時間を揃えて A と B を戦わせ、**A だけが相手の手番中に
-//! 先読みする**。同じ局・同じ局面で 2 人を比べるので、別々に走らせるより
-//! ばらつきが小さい。
+//! A and B play with equal per-move time; only A ponders during the
+//! opponent's turn. Comparing the two within the same games gives less
+//! variance than separate runs.
 //!
-//! **方式は「予測手 1 本」だけ。** 全合法手に配る形と混合は測って捨てた
-//! (`notes/pondering.md`)。
+//! Only the single-predicted-move scheme exists; spreading over all
+//! legal replies was measured and rejected (`notes/pondering.md`).
 //!
-//! 見るのは 2 つ:
+//! Two outputs:
+//! * reached depth — the direct signal that the mechanism works
+//! * win rate — the only valid strength verdict, but needs many games,
+//!   so check depth first
 //!
-//! * **到達深さ** … 同じ持ち時間で何段まで読めたか。ポンダリングが効いて
-//!   いれば A のほうが深い。**仕組みが効いているかを直接見る数字**
-//! * **勝率** … 棋力の判定はこちらでしか行わない (CLAUDE.md の 2 番)。
-//!   ただし局数が要るので、深さで効きを確かめてから回す
-//!
-//! **深さ固定では差が出ない。** 探索がどのみち最後まで走るので、先に
-//! 読んでも得るものが無い。必ず `--ms` の持ち時間で測る。
-//!
-//! 1 局ごとに置換表を消す。温まった表の持ち越しは同一設定の自己対戦
-//! ですら偏った結果を出す (CLAUDE.md の 4 番)。
+//! Fixed depth shows no difference (the search runs to the end anyway);
+//! always measure with `--ms`. Tables are cleared per game.
 //!
 //! Usage:
 //!   ponderarena [OPTIONS]
 //!
 //! Options:
-//!   --games <n>          対局数 (default 10)
-//!   --ms <n>             1 手の持ち時間 (ミリ秒, default 200)
-//!   --ponder <on|off>    先読みするか (default on)。off は対照実験
-//!   --fixed-depth        深さ固定で測る (見るのは時間。深さは両者同じ)
-//!   --ponder-ms <n>      深さ固定のときの先読み時間 (default 300)
-//!   --depth <n>          中盤深さの上限 (default 20)
-//!   --solve-empties <n>  完全読み開始 (default 14)
-//!   --threads <n>        スレッド数 (default 1)
-//!   --random-plies <n>   開幕の乱数手数 (default 8)
-//!   --seed <n>           乱数の種 (default 7)
-//!   --nnue <path>        NNUE の重み (default weights/nnue-h16.bin)
-//!   --weights <path>     線形評価の重み (default weights/linear.bin)
+//!   --games <n>          number of games (default 10)
+//!   --ms <n>             time per move in ms (default 200)
+//!   --ponder <on|off>    whether A ponders (default on; off = control)
+//!   --fixed-depth        fixed-depth mode (measure time, not depth)
+//!   --ponder-ms <n>      ponder time in fixed-depth mode (default 300)
+//!   --depth <n>          midgame depth cap (default 20)
+//!   --solve-empties <n>  solve entry (default 14)
+//!   --threads <n>        threads (default 1)
+//!   --random-plies <n>   random opening plies (default 8)
+//!   --seed <n>           RNG seed (default 7)
+//!   --nnue <path>        NNUE weights (default weights/nnue-h16.bin)
+//!   --weights <path>     linear weights (default weights/linear.bin)
 
 use std::path::PathBuf;
 use std::process::ExitCode;
@@ -49,13 +44,13 @@ struct Args {
     games: usize,
     ms: u64,
     ponder: bool,
-    /// ProbCut (MPC) を切る。**確率的な枝刈りなので、置換表の中身で結果が
-    /// 変わり得る。**「深さ固定なら手は変わらないはず」を確かめる用。
+    /// Disable ProbCut: it prunes probabilistically, so table contents
+    /// can change results; used to verify fixed-depth moves are stable.
     no_mpc: bool,
-    /// 深さ固定で測る。**効き方が変わる** — 同じ深さへより速く着くので、
-    /// 見るのは到達深さではなく 1 手にかかった時間。
+    /// Fixed-depth mode: the benefit becomes speed, so measure per-move
+    /// time instead of reached depth.
     fixed: bool,
-    /// 深さ固定のときに先読みへ与える時間 (相手の考慮時間の見立て)。
+    /// Ponder time in fixed-depth mode (a stand-in for opponent think time).
     ponder_ms: u64,
     depth: u32,
     solve_empties: u8,
@@ -98,7 +93,7 @@ fn parse_args() -> Result<Args, String> {
                 a.ponder = match val()?.as_str() {
                     "on" => true,
                     "off" => false,
-                    m => return Err(format!("--ponder は on か off ({m})")),
+                    m => return Err(format!("--ponder must be on or off ({m})")),
                 }
             }
             "--no-mpc" => a.no_mpc = true,
@@ -134,8 +129,8 @@ impl Rng {
     }
 }
 
-/// 到達深さの集計。完全読みに入った手 (depth 0) は数えない — そこは
-/// 深さの概念が無く、混ぜると平均が下がるだけで比較にならない。
+/// Reached-depth stats; solved moves (depth 0) are excluded — depth is
+/// meaningless there and would only drag the mean down.
 #[derive(Default)]
 struct Depths {
     sum: u64,
@@ -172,8 +167,8 @@ fn main() -> ExitCode {
         threads: args.threads,
         nnue: args.nnue.clone(),
         weights: args.weights.clone(),
-        // 定石は切る。定石から返る手は探索を通らないので、ポンダリングの
-        // 効きも持ち時間の使われ方も測れなくなる
+        // Book off: book moves bypass the search, hiding both the
+        // ponder effect and the time usage.
         use_book: false,
         mpc: !args.no_mpc,
         ..EngineConfig::default()
@@ -197,16 +192,16 @@ fn main() -> ExitCode {
     let budget = Duration::from_millis(args.ms);
     let mut rng = Rng(args.seed | 1);
     let (mut da, mut db) = (Depths::default(), Depths::default());
-    // 深さ固定のときに見る数字。**同じ深さへ何ミリ秒で着いたか**
+    // Fixed-depth metric: milliseconds to the same depth.
     let (mut ta, mut tb) = (0u128, 0u128);
     let (mut na, mut nb) = (0u64, 0u64);
     let (mut wins, mut losses, mut draws) = (0u32, 0u32, 0u32);
     let mut ponder_nodes = 0u64;
-    // 完全読み域での先読みが何回・何ミリ秒走ったか
+    // How often/long pondering ran in the solve region.
     let (mut end_n, mut end_ms) = (0u64, 0u128);
 
     for g in 0..args.games {
-        // **1 局ごとに消す。**温まった表の持ち越しは同一設定でも結果を歪める
+        // Clear per game; a warm table skews even same-settings play.
         a.clear_tables();
         b.clear_tables();
 
@@ -223,12 +218,11 @@ fn main() -> ExitCode {
             let p = ms[rng.below(ms.len())];
             board.make_move_unchecked(p);
         }
-        // 開幕は 2 局で 1 組にして色を入れ替える (先後の差を消す)
+        // Openings come in color-swapped pairs (cancels the first-move edge).
         let mut a_turn = g % 2 == 0;
-        /* 1 局ぶんの記録。**定石なし・同じ開幕なら棋譜は一致するはず**
-        なので、指し手の並びを控えて 2 回の走行で突き合わせる。
-        ずれたら「先読みが手を変えている」ということで、そのときは
-        時間の比較そのものが成り立たない。 */
+        /* Per-game record: without a book and with equal openings the
+        move sequence should match across runs; a mismatch means ponder
+        changed the moves, invalidating the time comparison. */
         let mut line = String::new();
         let g_start = (ta, tb);
 
@@ -252,9 +246,9 @@ fn main() -> ExitCode {
                 let Some(p) = ev.pos else { break };
                 line.push_str(&format!("{},", p.index()));
                 board.make_move_unchecked(p);
-                /* **ここがポンダリング。** 実戦では相手が考えている間に
-                走るので、A の持ち時間は減らない。測定でも B の持ち時間と
-                同じ長さだけ回す */
+                /* The ponder itself. Live it runs on the opponent's
+                time, so A's clock is unaffected; here it runs for B's
+                allotment. */
                 if args.ponder && !board.is_game_over() && board.movable_count() > 0 {
                     let slice = if args.fixed {
                         Duration::from_millis(args.ponder_ms)
@@ -285,20 +279,19 @@ fn main() -> ExitCode {
             a_turn = !a_turn;
         }
 
-        // 石差。手番視点にならないよう、A の色から数え直す
+        // Disc difference recounted from A's color (not mover view).
         let (bl, wh) = (
             board.player_bb().count_ones() as i32,
             board.opponent_bb().count_ones() as i32,
         );
-        // `player_bb` はそのときの手番の石。終局後の手番は数え上げに関係
-        // しないので、A が最後に手番だったかで向きを決める
+        // `player_bb` is the mover's discs; orient by whether A moved last.
         let diff = if a_turn { bl - wh } else { wh - bl };
         match diff.cmp(&0) {
             std::cmp::Ordering::Greater => wins += 1,
             std::cmp::Ordering::Less => losses += 1,
             std::cmp::Ordering::Equal => draws += 1,
         }
-        // 1 局トータル。棋譜の指紋も一緒に出して、2 回の走行で突き合わせる
+        // Per-game totals plus a record fingerprint for cross-run checks.
         let mut h: u64 = 1469598103934665603;
         for b in line.bytes() {
             h ^= b as u64;
@@ -329,11 +322,11 @@ fn main() -> ExitCode {
             ta as f64 / na.max(1) as f64 / 1000.0,
             tb as f64 / nb.max(1) as f64 / 1000.0,
         );
-        /* **深さ固定の指標は総探索時間。** 勝率は意味を持たない (同じ深さ
-        まで読むので手は変わらない)。**A 対 B ではなく、同じ種で
-        「A の先読みあり」と「A の先読みなし」を並べる** — A と B は
-        持つ色も局面も違うので、そのまま比べると偏りが乗る。
-        B の数字は 2 回の走行で一致するはずで、それが対照になる。 */
+        /* Fixed-depth metric is total search time; win rate is
+        meaningless (same depth = same moves). Compare A-with-ponder vs
+        A-without across seeds, not A vs B — A and B hold different
+        colors and positions. B's totals should match across runs; that
+        is the control. */
         println!(
             "  探索の合計  A {:.2} s ({} 手 / 1 手 {:.1} ms)   B {:.2} s ({} 手 / 1 手 {:.1} ms)",
             ta as f64 / 1e6,
