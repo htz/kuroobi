@@ -138,8 +138,16 @@ export function Toolbar({ children, aux, dock, graph }: {
     <div style={{
       height: 'var(--h-bar)', flex: 'none', borderBottom: '1px solid var(--border-weak)',
       display: 'flex', alignItems: 'center', padding: '0 var(--sp-4)', gap: 'var(--sp-2)',
+      /* Contain the band: without this the controls kept their width in
+         a narrow window and painted over the dock beside them. Clipped
+         at the edge they are at least cut off inside the band, and the
+         groups below shrink before that happens. */
+      overflow: 'hidden', minWidth: 0,
     }}>
-      {children}
+      {/* The action group shrinks (and clips) rather than pushing the
+          rest out of the band. */}
+      <span style={{ display: 'flex', alignItems: 'center', gap: 'var(--sp-2)',
+                     minWidth: 0, overflow: 'hidden', flexShrink: 1 }}>{children}</span>
       {/* This spacer owns the push; putting marginLeft:auto on the
           disappearing aux makes everything jump left when it goes. */}
       <span style={{ flex: 1 }} />

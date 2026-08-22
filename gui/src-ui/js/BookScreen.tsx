@@ -218,7 +218,8 @@ export function BookDock({ b, decimals = 1 }: { b: BookBrowse; decimals?: number
         {n?.value != null && (
           <div style={{ display: 'flex', alignItems: 'center', fontSize: 'var(--fs-5)' }}>
             <span style={{ color: 'var(--sub)' }}>{t('book.position.source')}</span>
-            <span style={{ marginLeft: 'auto', color: n.learned ? 'var(--gold)' : undefined }}>
+            <span style={{ marginLeft: 'auto', flex: 'none', whiteSpace: 'nowrap',
+                           color: n.learned ? 'var(--gold)' : undefined }}>
               {n.learned ? t('book.source.learned') : 'book.txt'}
             </span>
           </div>
@@ -362,8 +363,10 @@ function BookRow({ r, open, onToggle, onGo, decimals = 1 }: {
                        color: 'var(--sub)', fontVariantNumeric: 'tabular-nums' }}>
           {r.games.toLocaleString()}
         </span>
-        {/* Source; game-learned branches are also color-coded. */}
-        <span style={{ marginLeft: 'auto', fontSize: 'var(--fs-7)',
+        {/* Source; game-learned branches are also color-coded. The row
+            is one --h-row tall, so this must clip, not wrap. */}
+        <span style={{ marginLeft: 'auto', fontSize: 'var(--fs-7)', flex: 'none',
+                       whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis',
                        color: r.child?.learned ? 'var(--gold)' : 'var(--sub)' }}>
           {r.child ? (r.child.learned ? t('book.src.learned') : t('book.src.book')) : ''}
         </span>

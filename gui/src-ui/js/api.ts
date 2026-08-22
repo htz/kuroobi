@@ -60,6 +60,8 @@ export const api = {
   themeOverride: () => call<string>('theme_override', {}),
   /** Screenshot hook: pinned UI language, or '' when unset. */
   langOverride: () => call<string>('lang_override', {}),
+  /** The machine's language (e.g. "ja-JP"), for the `auto` setting. */
+  systemLang: () => call<string>('system_lang', {}),
   /** Name, path, existence, size (bytes), format tag. */
   resourceStatus: () => call<[string, string, boolean, number, string][]>('resource_status', {}),
   pickResource: (kind: string) => call<string | null>('pick_resource', { kind }),

@@ -530,10 +530,13 @@ function ViewSettings({ prefs, setPref }: {
       {/* Language sits above the theme: both decide how the whole
           window reads, and this row is the one people hunt for. */}
       <Section title={t('settings.language.label')}>
-        {/* No row label: it would only repeat the section heading, and
-            the theme section below sets the same precedent. */}
-        <Segmented value={prefs.lang} onChange={(v) => setPref('lang', v as Prefs['lang'])}
-                   options={languages().map(([value, label]) => ({ value, label }))} />
+        {/* A dropdown, not a segmented row: the list grows with every
+            language added, and a row of chips stops fitting. No row
+            label either — it would repeat the section heading. */}
+        <span style={{ alignSelf: 'flex-start' }}>
+          <Select value={prefs.lang} onChange={(v) => setPref('lang', v as Prefs['lang'])}
+                  options={languages()} width={200} />
+        </span>
       </Section>
       <Section title={t('settings.theme.title')}>
         {/* Three swatch cards per the design — colors read faster than

@@ -230,7 +230,17 @@ button:disabled, button[aria-disabled="true"] { cursor:default; }
   /* With the text gone, icons are stranded at the left edge, so center them
      like the numbers */
   .k-nav .k-meter-head { justify-content:center; }
-  .k-nav .k-nav-row { justify-content:center; padding:0; }
+  .k-nav .k-nav-row { justify-content:center; padding:0; position:relative; }
+  /* Badges overlay the icon's corner here. Left in the flow they sit beside
+     the icon, and icon + gap + badge does not fit 32px — the row grew past
+     the 48px column and the count landed outside it. */
+  .k-nav .k-nav-n, .k-nav .k-nav-dot {
+    position:absolute; margin-left:0; top:2px; right:2px; z-index:1;
+  }
+  .k-nav .k-nav-n {
+    min-width:14px; height:14px; padding:0 3px; border-radius:7px;
+    font-size:9px; line-height:14px;
+  }
   /* Keep the bar even with the logo dropped — it holds the traffic lights
      and the drag region */
 }

@@ -105,13 +105,22 @@ export function usePrefs() {
       .catch(() => { /* inert outside Tauri or on older binaries */ });
   }, []);
 
+  /* The machine's language for `auto`. It has to come from the
+     backend — see `systemLang`. */
+  const [osLang, setOsLang] = useState('');
+  useEffect(() => {
+    void api.systemLang()
+      .then(setOsLang)
+      .catch(() => { /* falls back to the navigator values */ });
+  }, []);
+
   /* Apply the language before anything renders text, and hand the
      backend its subset (it owns OS notifications and native dialogs,
      which no frontend translation can reach). */
   useEffect(() => {
-    setLang(resolveLang(forcedLang || prefs.lang));
+    setLang(resolveLang(forcedLang || prefs.lang, osLang));
     void api.setBackendStrings(backendStrings()).catch(() => { /* older binaries */ });
-  }, [prefs.lang, forcedLang]);
+  }, [prefs.lang, forcedLang, osLang]);
 
   // Theme switches via a :root attribute; `os` removes it and defers
   // to prefers-color-scheme (tokens.css is written that way).

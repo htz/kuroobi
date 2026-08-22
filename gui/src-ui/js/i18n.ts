@@ -34,17 +34,29 @@ const TABLES: Record<Lang, Record<string, string>> = {
   ja: flatten(ja as Tree),
 };
 
-/** The machine's language, used when the preference is `auto`. */
-export function systemLang(): Lang {
-  const tags = navigator.languages?.length ? navigator.languages : [navigator.language];
+/** Pick a supported language from BCP 47 tags, most preferred first. */
+function pick(tags: readonly string[]): Lang | '' {
   for (const tag of tags) {
     const base = tag.toLowerCase().split('-')[0];
     if ((LANGS as readonly string[]).includes(base)) return base as Lang;
   }
-  return 'en';
+  return '';
 }
 
-export const resolveLang = (pref: LangPref): Lang => (pref === 'auto' ? systemLang() : pref);
+/** The machine's language, used when the preference is `auto`.
+ *
+ *  `osTag` comes from the backend and wins: `navigator.language`
+ *  follows the app bundle's localizations, not the system, so an
+ *  unlocalized build reports en-US on a Japanese machine. The
+ *  navigator values remain the fallback for when the backend cannot
+ *  answer (outside Tauri, or an older binary). */
+export function systemLang(osTag = ''): Lang {
+  return pick([osTag]) || pick(navigator.languages?.length
+    ? navigator.languages : [navigator.language]) || 'en';
+}
+
+export const resolveLang = (pref: LangPref, osTag = ''): Lang =>
+  (pref === 'auto' ? systemLang(osTag) : pref);
 
 let current: Lang = 'en';
 const listeners = new Set<() => void>();

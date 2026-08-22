@@ -615,6 +615,17 @@ fn lang_override() -> String {
     std::env::var("KUROOBI_LANG").unwrap_or_default()
 }
 
+/// The machine's language, for the default `auto` setting.
+///
+/// The WebView's `navigator.language` is not it: it follows the app
+/// bundle's localizations, so an unlocalized build reports `en-US`
+/// even on a Japanese system (observed — the UI came up English with
+/// AppleLanguages set to ja-JP). Ask the OS instead.
+#[tauri::command]
+fn system_lang() -> String {
+    sys_locale::get_locale().unwrap_or_default()
+}
+
 /// Whether a book is available (for display); answered by file
 /// existence since engine init is expensive.
 #[tauri::command]
@@ -2617,6 +2628,7 @@ fn main() {
             autoplay,
             theme_override,
             lang_override,
+            system_lang,
             resource_status,
             pick_resource,
             set_resource,
