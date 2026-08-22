@@ -1,11 +1,15 @@
-# このリポジトリで作業するときの約束
+# Working rules for this repository
 
-README は「何がどう作られているか」を読む人のための文書。ここには
-「どう手を動かすか」だけを置く。
+The README documents what is built and how; this file only covers how
+to work here.
 
-## 変更を入れる前に
+Everything in this repository is English — code, comments, commits,
+docs — except user-facing UI strings, which stay Japanese until they
+move into i18n YAML files.
 
-エンジンに手を入れたら、必ずこの 3 つを通す。CI がこれを見ている。
+## Before landing a change
+
+Any engine change must pass all three. CI checks exactly these.
 
 ```sh
 cargo fmt --all
@@ -13,129 +17,138 @@ cargo clippy --all-targets -- -D warnings
 cargo test --release
 ```
 
-`cargo fmt` は差分を作らない状態まで直す。clippy の指摘は、走査順そのもの
-に意味があるループと引数の多い探索関数だけモジュール単位で許可してある
-(理由はコード内のコメントに書いた)。それ以外は直す。
+`cargo fmt` must leave no diff. Clippy exceptions exist only for loops
+whose iteration order is meaningful and for wide-signature search
+functions, allowed per module with the reason commented in code; fix
+everything else.
 
-**`gui` は別のワークスペース。** ルートの `--all` は届かないので、GUI を
-触ったら同じ 3 つをあちらでも通す。CI は GUI のジョブでも書式を見ている。
+**`gui` is a separate workspace.** The root `--all` does not reach it,
+and CI checks formatting in the GUI job too. When you touch the GUI,
+run the same three there:
 
 ```sh
 cd gui && cargo fmt && cargo clippy --all-targets -- -D warnings && cargo test --release
 ```
 
-これを落としていたせいで、**手元は全部通るのに CI だけ 4 回続けて赤い**
-状態になっていた。しかも崩れていたのは触っていない古いコードだったので、
-自分の変更を疑っても見つからない。
+Missing this once produced four consecutive red CI runs while
+everything passed locally — and the stale formatting was in files the
+change never touched, so inspecting the diff found nothing.
 
-### 手元が通って CI が落ちたら、まず版を疑う
+### If CI fails but local passes, suspect the toolchain first
 
-CI は `rust-toolchain@stable` を使うので**常に最新の stable** が来る。
-手元が古いと、新しく入った clippy の指摘だけをすり抜ける。実際
-1.92 のまま 1.98 の指摘 4 件を見落として押し続けた。
+CI uses `rust-toolchain@stable`, i.e. always the latest stable. An
+older local toolchain silently misses newly added clippy lints (this
+happened: 1.92 locally missed four 1.98 lints).
 
 ```sh
-rustup update stable    # CI と同じ土俵に立ってから直す
+rustup update stable    # get on CI's footing before fixing
 ```
 
-## GUI を触るとき
+## Touching the GUI
 
-**Tauri はフロントをバイナリに埋め込む。** 順番を守らないと画面が更新
-されない。
+**Tauri embeds the frontend into the binary.** Build order matters or
+the screen simply never updates:
 
 ```sh
 cd gui
-npm run build    # 先にフロント
+npm run build    # frontend first
 cargo build --release
 ```
 
-逆順にすると、ビルドは通るのに変更が一切反映されない。半日ぶん失った
-ことがある。
+The reverse order builds fine and changes nothing — half a day was
+once lost to this.
 
-**反映されているかは推測せず確かめる。** `ui/index.html` が指す JS の名前が
-バイナリの中にあるかを見る (名前は中身のハッシュなので、一致していれば
-新しいものが焼けている)。
+**Verify the embed instead of guessing.** Check that the JS filename
+referenced by `ui/index.html` exists inside the binary (the name is a
+content hash, so a match proves freshness):
 
 ```sh
 W=$(grep -o 'index-[A-Za-z0-9_-]*\.js' ui/index.html)
-strings target/release/kuroobi-gui | grep -c "$W"    # 0 なら古いまま
+strings target/release/kuroobi-gui | grep -c "$W"    # 0 means stale
 ```
 
-中身そのもの (`grep デモの文字列`) は当てにならない。埋め込みは圧縮されて
-いるので `strings` に出ない。「動くはずのコードが動かない」と何度も探索側を
-疑ったが、毎回これだった。
+Grepping for content strings is useless — the embed is compressed and
+does not show up in `strings`. Every "working code doesn't work"
+incident traced back to this.
 
-**`src-ui/js/` に `.js` を残さない。** Vite は拡張子なしの import に対して
-`.js` を `.ts` より先に選ぶ。TypeScript 化したあとに古い `.js` が残ると、
-そちらが黙って束ねられ、以降の変更が画面に届かない。`npm run check` が
-検出して落ちるようにしてある。
+**Never leave `.js` files in `src-ui/js/`.** Vite resolves
+extension-less imports to `.js` before `.ts`, so a stale `.js` left
+after TypeScript conversion gets bundled silently and later changes
+never reach the screen. `npm run check` fails on this.
 
-**画面の確認はウィンドウ単体で撮る。** 画面全体や座標指定で撮ると、手前に
-ある無関係なウィンドウが写り込む。`window-screenshot` スキルを使う。
+**Take window-scoped screenshots.** Full-screen or coordinate captures
+pick up unrelated windows in front; use the `window-screenshot` skill.
 
-## 測ってから決める
+## Measure before deciding
 
-数字の読み方を何度も間違えた結果、この 8 つに落ち着いた。いずれも実際に
-判断を誤った事例がある。
+Eight rules distilled from repeated misreadings of numbers; each has a
+real incident behind it.
 
-1. **効果がなければ残さない。** 実装しても計測で改善が出なければ破棄し、
-   棄却理由を README に書く (再実装の無駄を防ぐため)
-2. **棋力は直接対戦でのみ判定する。** 学習誤差 (MSE) と棋力は相関しない。
-   MSE 36.07 と 33.02 のモデルを同一探索で 400 局戦わせて 52.5%
-   (95% CI 47.6..57.4)、有意差は出なかった
-3. **アリーナは実戦条件で行う** (`--depth N --solve-empties M`)。greedy 対戦
-   では終盤の打ち回ししか測れない
-4. **1 ゲームごとに置換表をクリアする。** 温まった表が持ち越されると、同一
-   重み同士の自己対戦ですら 42% のような偏った結果が出る
-5. **浅い群と深い群の両方で確認する。** 均衡局面だけで測ると、一方的な局面
-   で効く施策を誤って却下する (β 側確定石カットの実例)。逆に浅い局面で
-   -3% だった並べ替え項が深い局面では +18% だったこともある
-6. **外から持ち込む値は相対スケールごと写す。** マス種別タイブレーカーは
-   モビリティの 1/1000 以下のスケールなのに、同程度の重みで足して深い局面を
-   31% 悪化させた
-7. **厳密性は参照実装との一致で守る。** 全幅探索の根の値が参照 negamax と
-   一致することをテストしており、これが中盤 aspiration の不採用を検出した
-8. **症状に対処する前に容量を疑う。** 置換表が過飽和なだけの現象に対して
-   探索側の対症療法を積むと、容量を直した途端にそれが害に変わる
+1. **No measured improvement, no merge.** Discard the implementation
+   and record the rejection reason in the README (prevents wasteful
+   reimplementation).
+2. **Strength is judged only by head-to-head play.** Training loss
+   (MSE) does not correlate: models at MSE 36.07 vs 33.02 scored 52.5%
+   (95% CI 47.6..57.4) over 400 games at equal search — no significance.
+3. **Arena under game conditions** (`--depth N --solve-empties M`);
+   greedy matches only exercise endgame play.
+4. **Clear transposition tables every game.** A warm table carried over
+   skews even self-vs-self matches to results like 42%.
+5. **Check both shallow and deep position sets.** Balanced-only sets
+   rejected a measure that helped lopsided positions (the beta-side
+   stable-disc cut), and an ordering term that was -3% shallow was
+   +18% deep.
+6. **Imported values must carry their relative scale.** A square-type
+   tiebreaker at 1/1000 of mobility's scale, added at comparable
+   weight, degraded deep positions by 31%.
+7. **Exactness is guarded by reference-implementation agreement.** Root
+   values must match a reference negamax; this test caught and rejected
+   midgame aspiration.
+8. **Suspect capacity before treating symptoms.** Patching the search
+   for what was actually table oversaturation turns harmful the moment
+   capacity is fixed.
 
-### はまりやすいところ
+### Known traps
 
-- **`train` の MSE は 8 対称形の平均二乗誤差。** 平均絶対誤差ではない。
-  学習が進むと MAE が RMS より速く縮むので、平均絶対を二乗した値は真の MSE
-  と逆に動きうる (かつて「学習が悪化する」と誤認した)
-- **PGO の学習局面には深いものを必ず入れる。** 浅い問題だけで学習すると、
-  学習データ上は 3〜6% 速いのに全問では 0.1% しか変わらない。空き 30 の
-  問題を含めること
+- **`train`'s MSE is the mean squared error over 8 symmetric forms**,
+  not mean absolute. As training progresses MAE shrinks faster than
+  RMS, so a squared-MAE proxy can move opposite to true MSE (this was
+  once misread as training regressing).
+- **PGO training positions must include deep ones.** Shallow-only
+  profiles look 3-6% faster on the training set but 0.1% overall;
+  include 30-empties problems.
 
-## 重みと定石
+## Weights and the book
 
-`weights/` は容量の都合で git に入れていない。それを要するテストは
-`#[ignore]` にしてある。
+`weights/` is not in git (size); tests needing it are `#[ignore]`d.
 
-置き場所は `resources` が決める。設定ファイル (OS の設定ディレクトリ、
-macOS なら `~/Library/Application Support/kuroobi/resources.conf`) で
-指し直せる。無ければ `weights/` を上へ辿る。GUI の歯車からも選べる。
+Locations are resolved by `resources`: a config file (the OS config
+dir; on macOS `~/Library/Application Support/kuroobi/resources.conf`)
+can re-point them, otherwise `weights/` is found by walking up. The
+GUI gear menu can set it too.
 
-**NNUE を読んだら `quantize()` を呼ぶ。** 忘れると SIMD 経路で落ちる。
+**Call `quantize()` after loading NNUE weights**, or the SIMD path
+crashes.
 
-## 用語
+## Terminology (UI strings)
 
-画面に出す文言は日本語で統一する。英語を混ぜない。
+On-screen text is Japanese (until i18n YAML) and uses these terms
+consistently; do not mix in English:
 
-| 使う | 使わない |
+| Use | Not |
 |---|---|
-| 定石 | 定石 book、book |
+| 定石 | 定石 book, book |
 | 選択読み | 帯 |
-| 読切 | 完全読み (画面では) |
-| 分析 (棋譜を通して評価値を出す) | 採点、グラフ計算 |
-| KUROOBI (自分のエンジン) | エンジン |
+| 読切 | 完全読み (on screen) |
+| 分析 (running evals over a record) | 採点, グラフ計算 |
+| KUROOBI (our engine) | エンジン |
 
-コードの識別子 (`book`, `band` など) は英語のままでよい。
+Code identifiers (`book`, `band`, ...) stay English.
 
-## コミット
+## Commits
 
-- **メッセージは英語** (2026-08-22 に日本語から切り替えた。過去の履歴は
-  日本語のまま)。何を変えたかではなく、**なぜそうしたか**を書く
-- 効果を測ったものは数字を添える
-- 署名する (`commit.gpgsign` が有効)
-- `.git/hooks/commit-msg` が日本語のメッセージを機械的に弾く
+- **Messages are English** (switched 2026-08-22; older history stays
+  Japanese). Explain **why**, not what.
+- Include numbers for anything measured.
+- Sign commits (`commit.gpgsign` is on).
+- `.git/hooks/commit-msg` mechanically rejects Japanese messages.
