@@ -5,33 +5,26 @@ import { Board } from './components/board';
 import { Col, Empty, KeyValue, List, Section, TableHead, TableRow } from './components/layout';
 import { Button, Segmented, Select } from './components/primitives';
 
-/* 定石に取り込んだ対局の控え。設計 §8 の三面。
- *
- * 取り込みは裏で静かに進み、値を上書きする。変な対局が 1 局混ざるだけで
- * 以後の手が変わるので、**何がどう変わったか**まで辿れないと見つけられない。
- * 対局 → 敗着 → 書き換えた手 (旧→新) → 取り消し が一本で追える形にしてある。
- *
- * 左に対局の一覧、中央に敗着の局面、右にその対局の明細。行を開いて中身を
- * 出す形にしていたが、**盤を置く場所が無く**、どの手で損したのかを数字だけで
- * 読ませていた。
- *
- * **絵にあって作れないもの** (`notes/design-sync-from-impl.md` に数え上げた):
- * この対局の評価値グラフ (控えに 1 手ごとの評価値が無い) / 取り込みの状態
- * 「完了」/「対象外」の絞り込み / 勝敗 (自分がどちらの色だったかを控えが
- * 持っていないので石数だけ出す)。
- */
+/* Imported-game log, three panes. Imports silently overwrite book
+ * values, and one bad game changes later play — so the chain
+ * game -> losing move -> rewrites (old -> new) -> undo must be
+ * traceable in one line of sight. List left, losing position center,
+ * details right (the old expanding rows had nowhere for a board).
+ * Design items the data cannot support are listed in
+ * notes/design-sync-from-impl.md. */
 
-/** その手で損した石差。定石が「もっと良い手があった」と言っている量。 */
+/** Discs lost by the move — how much better the book says the
+ *  alternative was. */
 const lossOf = (c: LearnChange) => c.best - c.after;
 
-/** 学習ログの一覧の列。**見出しと行が同じ配列を見る。** */
+/** List columns; header and rows read the same array. */
 const LOG_COLS: Col[] = [
   { head: '対局', clip: true },
   { head: '石数', w: 52, right: true, num: true },
   { head: '局面', w: 36, right: true, num: true },
 ];
 
-/** いちばん損した手。全部が最善なら無し。 */
+/** The worst move; absent if everything was best. */
 function blunderOf(e: LearnEntry): LearnChange | undefined {
   let worst: LearnChange | undefined;
   for (const c of e.changes) {
@@ -45,30 +38,25 @@ const keyOf = (e: LearnEntry) => e.at + e.kifu;
 
 export function LearnLog({ items: all, onOpen, onUndo, onBook }: {
   items: LearnEntry[];
-  /** 検討で開く。ply を渡すとその手数まで進める */
+  /** Open in study; a ply jumps to that move. */
   onOpen: (e: LearnEntry, ply?: number) => void;
-  /** 取り込みを取り消す。 */
+  /** Undo the import. */
   onUndo: (e: LearnEntry) => void;
-  /** その手順を定石の枚で開く。 */
+  /** Open the line in the book pane. */
   onBook?: (kifu: string) => void;
 }) {
   const [sel, setSel] = useState('');
-  /* 設計 §8 の帯にある期間の絞り込み。**`▾` の中身は絵に書かれていない**
-     ので、こちらで すべて / 7 / 30 / 90 日 にした (依頼 14-2)。
-     **既定は「すべて」。** 絵は「直近 30 日」を描いているが、それは選択中の
-     例であって既定ではない、とデザイン側が答えた (2026-08-10) —
-     「取り込んだはずの対局が無い」と読まれるほうが、一覧が長いことより
-     高くつく。隠れているときは一覧の下にその旨を出す */
+  /* Period filter (all / 7 / 30 / 90 days; the design left the menu
+     contents open). Default is "all" — per the designer, the drawn
+     "30 days" was an example, and a seemingly missing import costs
+     more than a long list. A note appears when entries are hidden. */
   const [days, setDays] = useState('0');
-  /* 勝敗の絞り込み (依頼 5-9 / 14-1)。**自分の色が分からない控えは外す** —
-     古い控えと、担当が「両方 / なし」の対局には色が無い。 */
+  /* Result filter; entries without our color (old logs, both/none
+     games) are excluded. */
   const [only, setOnly] = useState<'all' | 'lost'>('all');
-  /* **`Date.now()` は描く途中で呼べない** (再描画のたびに値が動くので
-     React が止める)。`useState` の遅延初期化なら 1 回しか走らないので
-     ここで取る。effect で入れ直すのも駄目 — 同期の setState は
-     再描画の連鎖を招くとして同じく弾かれる。
-     画面を開きっぱなしにすると基準が古びるが、日をまたぐ間ずっと
-     学習ログを開いたままにする使い方は無いので、ここでは困らない */
+  /* Date.now() cannot run during render; lazy useState samples it
+     once. The baseline staling over days is harmless — nobody keeps
+     this screen open that long. */
   const [now] = useState(() => Date.now());
   const lostOf = (e: LearnEntry) =>
     e.my_color === 'b' ? e.black < e.white
@@ -82,8 +70,8 @@ export function LearnLog({ items: all, onOpen, onUndo, onBook }: {
   const cur = items.find((e) => keyOf(e) === sel) ?? items[0];
   const bad = cur ? blunderOf(cur) : undefined;
 
-  /* 敗着の局面を出すために棋譜を 1 手ずつ開く。盤の規則は JS に写さず、
-     バックエンドに再生させる (対局・検討・定石と同じ考え方)。 */
+  /* Expand the record via the backend to show the losing position —
+     board rules are never mirrored into JS. */
   const [frames, setFrames] = useState<{ text: string; f: KifuFrame[] }>({ text: '', f: [] });
   const text = cur ? (cur.start ? cur.start + '\n' + cur.kifu : cur.kifu) : '';
   useEffect(() => {
@@ -94,7 +82,7 @@ export function LearnLog({ items: all, onOpen, onUndo, onBook }: {
       .catch(() => { if (alive) setFrames({ text, f: [] }); });
     return () => { alive = false; };
   }, [text]);
-  // 前の対局の盤を出したままにしない (棋譜が変われば取り直すまで空)
+  // No stale boards: a changed record clears until re-fetched.
   const shown = frames.text === text ? frames.f : [];
   const frame = shown.length
     ? shown[Math.min(bad?.ply ?? shown.length - 1, shown.length - 1)]
@@ -103,8 +91,8 @@ export function LearnLog({ items: all, onOpen, onUndo, onBook }: {
   if (!items.length || !cur) {
     return (
       <Section title="取り込んだ対局">
-        {/* **絞り込んで 0 件になったときに期間を戻せないと詰む。**
-            控えが 1 つも無いときと違って、ここには戻す道が要る */}
+        {/* Zero results from a filter must keep the way back —
+            unlike a truly empty log. */}
         {hidden > 0 ? (
           <div style={{ display: 'flex', alignItems: 'center', gap: 'var(--sp-3)' }}>
             <Empty>この期間に取り込んだ対局はありません ({hidden} 局は期間の外)。</Empty>
@@ -119,13 +107,13 @@ export function LearnLog({ items: all, onOpen, onUndo, onBook }: {
 
   return (
     <div style={{ flex: 1, minHeight: 0, display: 'flex' }}>
-      {/* 左 — 対局の一覧。設計 §8 は 269px の表 */}
+      {/* Left: the game list (269px per the design). */}
       <div style={{
         width: 'var(--w-book-tree)', flex: 'none', minHeight: 0,
         borderRight: '1px solid var(--border)', display: 'flex', flexDirection: 'column',
       }}>
-        {/* 設計 §8 の帯。絵は「すべて / 負けた対局」も並べるが、そちらは
-            控えが自分の色を持たないので入れていない (依頼 5-9) */}
+        {/* The design also draws a results filter; omitted where the
+            log lacks our color. */}
         <div style={{
           height: 'var(--h-field)', flex: 'none', display: 'flex', alignItems: 'center',
           padding: '0 var(--sp-3)', borderBottom: '1px solid var(--border-weak)',
@@ -157,14 +145,14 @@ export function LearnLog({ items: all, onOpen, onUndo, onBook }: {
             })}
           </List>
         </div>
-        {/* 絵は一覧の下に合計を置く。定石が何局面ぶん動いたかが一目で分かる */}
+        {/* Totals under the list: how many positions the book moved. */}
         <div style={{
           flex: 'none', display: 'flex', alignItems: 'center', gap: 'var(--sp-2)',
           padding: 'var(--sp-2) var(--sp-3)', borderTop: '1px solid var(--border)',
           fontSize: 'var(--fs-6)', color: 'var(--sub)',
         }}>
-          {/* **隠れている控えがあることを言う。** 既定が 30 日なので、
-              黙って減らすと「取り込んだはずの対局が無い」と読まれる */}
+          {/* Say when entries are hidden — a silent shrink reads as a
+              lost import. */}
           <span>{items.length} 局の合計{hidden > 0 ? ` (他 ${hidden} 局)` : ''}</span>
           <span style={{
             marginLeft: 'auto', color: 'var(--text)', fontWeight: 600,
@@ -174,10 +162,10 @@ export function LearnLog({ items: all, onOpen, onUndo, onBook }: {
         </div>
       </div>
 
-      {/* 中央 — 敗着の局面。数字だけで「どの手で損したか」を読ませない */}
+      {/* Center: the losing position — never numbers alone. */}
       <BlunderPane cur={cur} bad={bad} frame={frame} onOpen={onOpen} />
 
-      {/* 右 — この対局の明細。設計 §8 は 291px (ドックと同じ幅) */}
+      {/* Right: this game's details (291px, dock width). */}
       <div className="k-scroll" style={{
         width: 'var(--w-dock)', flex: 'none', minHeight: 0,
         borderLeft: '1px solid var(--border)', padding: 'var(--sp-3) 0',
@@ -210,7 +198,7 @@ export function LearnLog({ items: all, onOpen, onUndo, onBook }: {
                   {c.ply}
                 </span>
                 <span style={{ width: 24, color: 'var(--text)', fontWeight: 600 }}>{c.mv}</span>
-                {/* 旧→新。定石に無かった手は「新規」 */}
+                {/* Old -> new; moves absent from the book are "new". */}
                 <span style={{ marginLeft: 'auto', fontVariantNumeric: 'tabular-nums' }}>
                   {c.before === null ? '新規' : sign(c.before)}
                   {' → '}
@@ -223,11 +211,10 @@ export function LearnLog({ items: all, onOpen, onUndo, onBook }: {
 
         <div style={{ display: 'flex', gap: 'var(--sp-2)', padding: '0 var(--sp-3)' }}>
           {onBook && <Button onClick={() => onBook(cur.kifu)}>定石で見る</Button>}
-          {/* 取り消しは対局単位。1 手だけ戻すと、その局面から根までの値が
-              その手を前提にしたままになる (書き戻しは連なっている)。
-              **書き換えの明細が無い対局は押せなくする** — 押しても
-              「戻せません」で返ってくるだけで、理由はすぐ上の
-              「更新した定石」が空なことで見えている (規則 61) */}
+          {/* Undo is per game: reverting one move would leave rootward
+              values assuming it (write-backs chain). Disabled without
+              rewrite details — pressing could only bounce, and the
+              empty list above already says why. */}
           <Button variant="danger" disabled={!cur.changes.length}
                   onClick={() => onUndo(cur)}>取り消す</Button>
         </div>
@@ -237,8 +224,8 @@ export function LearnLog({ items: all, onOpen, onUndo, onBook }: {
 }
 
 
-/** 取り込んだ時刻。今日のものは時刻だけ、それ以外は日付だけにする —
- *  並べたときに縦が揃い、かつ「さっき入ったもの」がすぐ分かる。 */
+/** Import time: today shows the clock, older shows the date — columns
+ *  align and fresh imports stand out. */
 function fmtWhen(secs: number): string {
   const d = new Date(secs * 1000);
   const now = new Date();
@@ -249,11 +236,9 @@ function fmtWhen(secs: number): string {
     : `${d.getMonth() + 1}/${p2(d.getDate())}`;
 }
 
-/** 学習ログの中央 — 敗着の局面。**数字だけで「どの手で損したか」を
- *  読ませない**ので、盤を出して赤い印を打つ。
- *
- *  `LearnLog` が 193 行あり、三面 (一覧 / この面 / 明細) がきれいに
- *  割れていたので切り出した。props は 4 つで済む。 */
+/** Center pane: the losing position, shown as a board with a red mark
+ *  rather than numbers alone. Extracted from LearnLog (clean 3-way
+ *  split, 4 props). */
 function BlunderPane({ cur, bad, frame, onOpen }: {
   cur: LearnEntry;
   bad: LearnChange | undefined;
@@ -298,7 +283,7 @@ function BlunderPane({ cur, bad, frame, onOpen }: {
           </span>
         </div>
       ) : (
-        /* 同上 (規則 91) */
+        /* Same as above. */
         <Empty>この対局に大きく損した手はありません。</Empty>
       )}
     </div>
