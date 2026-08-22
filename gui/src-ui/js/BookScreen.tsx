@@ -7,40 +7,38 @@ import { ScoreRow } from './components/data';
 import { Col, Empty, EmptyState, List, Section, TableHead } from './components/layout';
 import { Button } from './components/primitives';
 
-/* 定石を眺める。
+/* Book browsing.
  *
- * 対局・検討とは別の状態を持つ — 定石を辿っている最中に対局の盤が動くと、
- * どちらを見ているのか分からなくなる。手順はこちらだけが覚え、盤はその手順を
- * バックエンドで指し直したものを受け取る (JS 側に盤の規則を写さない)。
- *
- * 一覧は木にしてある。候補手を 1 段だけ出しても「その先どう分かれるか」が
- * 見えず、枝の広がりを見るには盤を進めては戻る往復が要る。
- */
+ * Holds its own state, separate from games — a game board moving while
+ * browsing would confuse which is which. Only the line is remembered
+ * here; boards come from the backend replaying it (board rules never
+ * mirror into JS). The list is a tree: a single level of candidates
+ * hides how lines branch. */
 
-/** 手順を「f5d6」の形にしたもの。木の節を指す鍵として使う。 */
+/** The line as "f5d6" text; keys tree nodes. */
 const keyOf = (line: number[]) => line.map(sqName).join('');
 
 export interface BookBrowse {
-  /** 初期局面からの手順。 */
+  /** The line from the start position. */
   line: number[];
-  /** いま見ている局面。 */
+  /** The position being viewed. */
   node: BookNode | null;
-  /** 取ってきた節 (鍵は手順の文字列)。木を描くのに使う。 */
+  /** Fetched nodes, keyed by line text; renders the tree. */
   nodes: Record<string, BookNode>;
-  /** 開いている節。 */
+  /** Expanded nodes. */
   open: ReadonlySet<string>;
   toggle: (key: string) => void;
   err: string;
   push: (sq: number) => void;
   back: () => void;
   reset: () => void;
-/** 手順を丸ごと入れ替える。木の行から飛ぶときと、動作確認用の入口。 */
+/** Replace the whole line (tree-row jumps and the smoke-test entry). */
   goto: (kifu: string) => void;
 }
 
-/** 定石の木の列。**見出しと行が同じ配列を見る。** 木の行は折りたたみの
- *  三角を持つので `TableRow` ではなく手で組むが、**幅はここから取る** —
- *  前は見出しと行の 2 か所に同じ 44 / 58 が書いてあった。 */
+/** Tree columns; header and rows read the same array. Rows are
+ *  hand-built (they carry the disclosure triangle) but take widths
+ *  from here — the 44/58 pair used to be written twice. */
 const TREE_COLS: Col[] = [
   { head: '手順' },
   { head: '評価', w: 44, right: true, num: true },
@@ -56,9 +54,9 @@ export function useBookBrowse(on: boolean): BookBrowse {
 
   const root = keyOf(line);
 
-  /* 要るのは「いまの節」と「開いている節」、それに**画面に出ている行の子**。
-   * 子まで取るのは出所 (定石ファイル / 実戦学習) の列を出すため — 節を
-   * 取ってこないと分からないので、開くまで空欄にすると列の意味が無い。 */
+  /* Fetch the current node, expanded nodes, and children of visible
+   * rows — the source column (file vs learned) needs the child node,
+   * and leaving it blank until expansion would defeat the column. */
   const want = useMemo(() => {
     const need = new Set<string>([root]);
     const addKids = (k: string) => {
@@ -109,16 +107,16 @@ export function useBookBrowse(on: boolean): BookBrowse {
   };
 }
 
-/** 盤。定石にある手だけを打てる — 定石の外へ出る道はここでは要らない。 */
+/** The board; only book moves are playable — leaving the book has no
+ *  place here. */
 export function BookPane({ b, coords, grain, flip, onSettings }: {
   b: BookBrowse; coords: boolean; grain: boolean; flip: boolean;
-  /** 定石ファイルが無いときの直し方への入口。 */
+  /** Entry to the fix when no book file exists. */
   onSettings: () => void;
 }) {
   const n = b.node;
-  /* 定石そのものが無いときは、空の盤を出しても嘘になる。
-   * 「この局面から先は定石にありません」と読めてしまい、局面のせいだと
-   * 思わせる。押せない状態と直し方は同時に出す (デザイン規則 61)。 */
+  /* With no book at all, an empty board would lie ("no book beyond
+   * this position") — show the disabled state with its remedy. */
   if (n && n.size === 0) {
     return (
       <EmptyState title="定石がありません"
@@ -126,30 +124,28 @@ export function BookPane({ b, coords, grain, flip, onSettings }: {
                   actions={<Button size="field" variant="primary" onClick={onSettings}>設定を開く</Button>} />
     );
   }
-  // 候補は評価値のマスとして出す。値の高いものが金の輪 (best)
+  // Candidates render as eval cells; the best gets the gold ring.
   const evals: Record<number, EvalInfo> = {};
   n?.moves.forEach((m, i) => {
     evals[m.pos] = { score: m.value, src: { book: true }, best: i === 0 };
   });
   return (
-    // 左右の余白は中の要素が持つ (石数の行の罫を端まで届かせる)。
-    // minWidth:0 が要る — 横並びの中に置くと、既定の auto では中身 (盤の
-    // 固有幅) より縮まず、隣の列を押し出す
+    // Children own the horizontal padding (the disc row's keyline
+    // must reach the edges). minWidth:0 is required — the default
+    // auto refuses to shrink below the board's intrinsic width.
     <div style={{ flex: 1, minWidth: 0, minHeight: 0, display: 'flex', flexDirection: 'column' }}>
-      {/* 行に minmax(0,1fr) を入れて**高さを確定させる**。既定の auto だと
-              行の高さが中身で決まり、中の height:100% の基準が定まらない
-              (基準が無いと auto 扱いになり、svg が固有の 880px で描かれて
-              下へはみ出す)。はみ出しは全部下に出るので、石数の行と手数の帯に
-              重なって初めて気付く (規則 77) */}
+      {/* minmax(0,1fr) pins the row height; auto sizes by content and
+          leaves height:100% without a basis, so the svg renders at its
+          intrinsic 880px and overflows downward — noticed only when it
+          covers the rows below. */}
           <div style={{
             flex: 1, minHeight: 0, display: 'grid', placeItems: 'center',
             gridTemplateRows: 'minmax(0, 1fr)', gridTemplateColumns: 'minmax(0, 1fr)',
             padding: 'var(--sp-2) var(--sp-4)',
           }}>
-        {/* maxHeight も要る。器が横長のときは maxWidth が効くが、**器が低く
-                  なると grid の行が中身の大きさで決まり**、svg が固有の大きさ
-                  (880px) で描かれて下へはみ出す。はみ出しは全部下に出るので
-                  石数の行と手数の帯に重なって初めて気付く (規則 77) */}
+        {/* maxHeight too: wide containers are caught by maxWidth, but
+            short ones let the grid row size to content and overflow
+            downward the same way. */}
               <div style={{ height: '100%', maxHeight: '100%', aspectRatio: '1 / 1', maxWidth: '100%' }}>
           <Board cells={(n?.cells ?? INITIAL) as (0 | 1 | 2)[]}
                  legal={n?.moves.map((m) => m.pos) ?? []}
@@ -158,8 +154,8 @@ export function BookPane({ b, coords, grain, flip, onSettings }: {
                  onPlay={(sq) => { if (n?.moves.some((m) => m.pos === sq)) b.push(sq); }} />
         </div>
       </div>
-      {/* 対局・検討と同じ 1 行。画面ごとに石数の置き場所が変わると、
-          同じものを探すのに毎回目が迷う */}
+      {/* The same disc row as play/study — moving it per screen makes
+          the eye hunt. */}
       <ScoreRow black={n?.black ?? 2} white={n?.white ?? 2}
                 turn={n?.player === 'white' ? 'w' : 'b'}
                 meta={b.err || (n && n.moves.length === 0 ? 'この局面から先は定石にありません' : undefined)} />
@@ -167,18 +163,18 @@ export function BookPane({ b, coords, grain, flip, onSettings }: {
   );
 }
 
-/** 木の 1 行ぶん。 */
+/** One tree row. */
 interface Row {
   key: string;
   depth: number;
   name: string;
   value: number;
   games: number;
-  /** その手を指した先の節。取れていなければ undefined */
+  /** The node after this move; undefined until fetched. */
   child?: BookNode;
 }
 
-/** いまの節から下を、開いている枝だけ展開して並べる。 */
+/** Flatten the tree below the current node, expanded branches only. */
 function rowsOf(b: BookBrowse, key: string, depth: number, out: Row[]): void {
   const n = b.nodes[key];
   if (!n) return;
@@ -189,7 +185,7 @@ function rowsOf(b: BookBrowse, key: string, depth: number, out: Row[]): void {
   }
 }
 
-/** 手順と、その先の木。 */
+/** The line and the tree below it. */
 export function BookDock({ b, decimals = 1 }: { b: BookBrowse; decimals?: number }) {
   const n = b.node;
 
@@ -199,9 +195,8 @@ export function BookDock({ b, decimals = 1 }: { b: BookBrowse; decimals?: number
         <div style={{ fontSize: 'var(--fs-6)', color: 'var(--sub)', lineHeight: 1.9, wordBreak: 'break-all' }}>
           {b.line.length ? b.line.map(sqName).join(' ') : '初期局面'}
         </div>
-        {/* この局面そのものの値。設計 §7 は「+2.0 / 石差 · 12 手読み」と
-            2 段で出す。**深さは値がどれくらい確かかの手がかり** — 浅い枝と
-            深く読んだ枝が同じ顔で並ぶと、どちらを信じるか決められない */}
+        {/* The position's own value, with its search depth — without
+            it, shallow and deep branches wear the same face. */}
         {n?.value != null && (
           <div style={{ display: 'flex', alignItems: 'baseline', gap: 'var(--sp-3)' }}>
             <b style={{ fontSize: 'var(--fs-1)', fontWeight: 700, fontVariantNumeric: 'tabular-nums' }}>
@@ -212,8 +207,8 @@ export function BookDock({ b, decimals = 1 }: { b: BookBrowse; decimals?: number
             </span>
           </div>
         )}
-        {/* 出所。元の定石ファイルの値か、自分の対局から書き戻した値かで
-            重みが違う。学習ぶんは数局しか根拠が無いこともある */}
+        {/* Source: file values and game-learned values carry different
+            weight (learned ones may rest on a handful of games). */}
         {n?.value != null && (
           <div style={{ display: 'flex', alignItems: 'center', fontSize: 'var(--fs-5)' }}>
             <span style={{ color: 'var(--sub)' }}>出所</span>
@@ -224,16 +219,16 @@ export function BookDock({ b, decimals = 1 }: { b: BookBrowse; decimals?: number
         )}
       </Section>
 
-      {/* 木は左の列が持つ (設計 §7)。ここは**次の 1 手だけ**を表にする。
-          同じ一覧を 2 か所に出すと、どちらが本物か分からなくなる */}
+      {/* The tree lives in the left column; this table shows only the
+          next move — two copies of one list compete. */}
       <Section title="次の手" aside={n ? <span>{n.moves.length}</span> : undefined}>
-        {/* **`n` が無いときも空状態を出す。** `n && …` で書いていたので、
-            定石に**無い**局面では節の見出しだけが出て中身が空のままだった
-            (何も説明されないので、読み込みに失敗したようにも見える)。
-            「先が無い」と「そもそも載っていない」は別の話なので文言も分ける */}
+        {/* Render the empty state even without `n` — `n && ...` left
+            not-in-book positions as a bare heading that looked like a
+            load failure. "No continuation" and "not in the book" get
+            distinct wording. */}
         {!n || n.moves.length === 0 ? (
-          /* 生の span で書かない (規則 91)。節の中が空なら Empty —
-             色も余白も部品が持つ */
+          /* Never a raw span; empty sections use Empty, which owns
+             its color and spacing. */
           <Empty>{n ? 'この局面から先は定石にありません。'
                     : 'この局面は定石に載っていません。'}</Empty>
         ) : (
@@ -265,17 +260,15 @@ export function BookDock({ b, decimals = 1 }: { b: BookBrowse; decimals?: number
   );
 }
 
-/* 左の列 — 定石の木。設計 §7 は 269px の独立した列で、見出しに
- * 手順 / 評価 / 出現 の 3 つを置き、24px の行を字下げで重ねる。
- * ドックに入れていたときは「この局面」と同じ枠に積まれ、枝の広がりが
- * 読めなかった。
- *
- * **絵は左メニューの無い独立ウィンドウを前提にしている。** 主画面では
- * 左メニュー 208 + この列 269 + ドック 290 が乗るので、盤に残るのは
- * 473px (絵は 560px)。それでも枝が読めるほうが効くと判断した。 */
+/* Left column: the book tree (269px, indented 24px rows). Inside the
+ * dock it shared a frame with the position pane and branches were
+ * unreadable. The design assumed a nav-less window; on the main
+ * screen the board keeps 473px instead of 560 — readable branches
+ * won. */
 export function BookTree({ b, decimals = 1, onStudy }: {
   b: BookBrowse; decimals?: number;
-  /** いま辿っている手順を検討で開く (設計 §7 は木の列の下端に置く)。 */
+  /** Open the current line in study (design puts this at the column
+   *  bottom). */
   onStudy?: (kifu: string) => void;
 }) {
   const root = keyOf(b.line);
@@ -287,8 +280,8 @@ export function BookTree({ b, decimals = 1, onStudy }: {
       width: 'var(--w-book-tree)', flex: 'none', minHeight: 0,
       borderRight: '1px solid var(--border)', display: 'flex', flexDirection: 'column',
     }}>
-      {/* 列の見出し。節の見出し (Section) と同じ 20px + 1px 罫だが、
-          ここは列名なので右の 2 つを数字の幅に合わせて右揃えにする */}
+      {/* Column header; same 20px + keyline as Section, with the two
+          numeric columns right-aligned. */}
       <TableHead cols={TREE_COLS} />
       <div className="k-scroll" style={{ flex: 1, minHeight: 0, padding: '0 var(--sp-3)' }}>
         {rows.length === 0 && <Empty>この局面から先は定石にありません。</Empty>}
@@ -298,10 +291,9 @@ export function BookTree({ b, decimals = 1, onStudy }: {
                    onGo={() => b.goto(r.key)} />
         ))}
       </div>
-      {/* 木の列の下端。設計 §7 の位置。**辿った手順をそのまま検討へ渡す** —
-          定石は「この手はどうなのか」を調べる場所で、腑に落ちない枝を
-          自分で読ませたくなるのが自然な流れ。1 手も辿っていなければ
-          渡すものが無いので押せなくする (規則 61) */}
+      {/* Column bottom: hand the traced line to study — questioning a
+          branch naturally leads to reading it yourself. Disabled with
+          nothing traced. */}
       {onStudy && (
         <div style={{
           flex: 'none', padding: 'var(--sp-2) var(--sp-3)',
@@ -319,21 +311,21 @@ export function BookTree({ b, decimals = 1, onStudy }: {
 function BookRow({ r, open, onToggle, onGo, decimals = 1 }: {
   r: Row; open: boolean; onToggle: () => void; onGo: () => void; decimals?: number;
 }) {
-  // 先があるかは節を取るまで分からない。取れていて 0 手なら三角を出さない
+  // Continuations are unknown until fetched; fetched-and-empty hides
+  // the triangle.
   const leaf = r.child && r.child.moves.length === 0;
   return (
-    // 行の本体と三角は兄弟にする (button の中に button は置けない)
-    // 字下げは設計の実測どおり 1 段 16px。12px だと 3 段目で親と子の頭が
-    // 揃って見え、木として読めない。行の下罫も設計にある — 24px の行を
-    // 罫なしで積むと、字下げの段差だけでは行の切れ目が分からない
+    // Row body and triangle are siblings (no button inside a button).
+    // Indent is 16px per level (12px made level 3 align with its
+    // parent); the bottom keyline separates the 24px rows.
     <div className="k-row" style={{
       display: 'flex', alignItems: 'center', height: 'var(--h-row)',
       paddingLeft: r.depth * 16, borderRadius: 'var(--r-2)',
       borderBottom: '1px solid var(--border-weak)',
     }}>
-      {/* 三角は当たりを行の高さいっぱいに取る。16px 角に fs-7 の記号だと
-          押す場所が分からないうえ、外しやすい。**記号自体も大きくする** —
-          当たりが足りていても、絵が小さいと「押せる」と思われない */}
+      {/* The triangle's hit area spans the row height, and the glyph
+          itself is enlarged — a big-enough target still reads as
+          unpressable when the drawing is tiny. */}
       {leaf ? (
         <span style={{ width: 22, flex: 'none' }} />
       ) : (
@@ -345,8 +337,8 @@ function BookRow({ r, open, onToggle, onGo, decimals = 1 }: {
                   fontSize: 'var(--fs-3)', lineHeight: 1, borderRadius: 'var(--r-1)',
                 }}>{open ? '▾' : '▸'}</button>
       )}
-      {/* **状態の層を付ける。**隣の三角は `k-press` で光るのに、名前のほうは
-          何も付いておらず、押せるのに触れても変わらなかった */}
+      {/* Attach the state layer: the triangle glowed on hover while
+          the name — equally pressable — did not react. */}
       <button type="button" onClick={onGo} className="k-row"
               title="押すとこの局面へ"
               style={{
@@ -358,13 +350,13 @@ function BookRow({ r, open, onToggle, onGo, decimals = 1 }: {
         <span style={{ width: C_VALUE.w, textAlign: 'right', fontVariantNumeric: 'tabular-nums' }}>
           {r.value > 0 ? '+' : ''}{r.value.toFixed(decimals)}
         </span>
-        {/* 桁区切りを入れる。5 桁を超える数を素で並べると桁が読めない
-            (設計の絵も 12,480 の形。下の帯の局面数も同じ書き方) */}
+        {/* Thousands separators — five-plus digits are unreadable raw
+            (the design writes 12,480 too). */}
         <span style={{ width: C_GAMES.w, textAlign: 'right', fontSize: 'var(--fs-7)',
                        color: 'var(--sub)', fontVariantNumeric: 'tabular-nums' }}>
           {r.games.toLocaleString()}
         </span>
-        {/* 出所。実戦から書き戻した枝は色でも分かるようにする */}
+        {/* Source; game-learned branches are also color-coded. */}
         <span style={{ marginLeft: 'auto', fontSize: 'var(--fs-7)',
                        color: r.child?.learned ? 'var(--gold)' : 'var(--sub)' }}>
           {r.child ? (r.child.learned ? '定石·学' : '定石') : ''}
@@ -377,7 +369,7 @@ function BookRow({ r, open, onToggle, onGo, decimals = 1 }: {
 const INITIAL = Array.from({ length: 64 }, (_, i) =>
   i === 3 * 8 + 4 || i === 4 * 8 + 3 ? 1 : i === 3 * 8 + 3 || i === 4 * 8 + 4 ? 2 : 0);
 
-/** "f5d6" を マス番号の並びにする。読めない字は捨てる。 */
+/** "f5d6" -> square indices; unreadable characters are dropped. */
 function parseLine(kifu: string): number[] {
   const out: number[] = [];
   const t = kifu.toLowerCase();
