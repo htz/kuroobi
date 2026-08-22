@@ -12,14 +12,15 @@ import { AppFrame, Body, BottomPanel, Busy, Divider, Dock, Main, Overlay, Status
 import { GgsChat, GgsConsole, GgsScreen } from './GgsScreens';
 import { Confirm, PasteKifu, Settings } from './Dialogs';
 import { Board } from './components/board';
-import { EvalGraph, MoveScrub, ScoreRow, StoneDot } from './components/data';
-import { GgsStatus, JobList, Meter, Nav, NAV_LOCAL, StatusChip, ggsNav, Toasts, type NavId, type Toast } from './components/ggs';
+import { EvalGraph, MoveScrub, ScoreRow, StoneDot, srcIsBook, srcLabel } from './components/data';
+import { GgsStatus, JobList, Meter, Nav, navLocal, StatusChip, ggsNav, Toasts, type NavId, type Toast } from './components/ggs';
 import { Button, Progress, Segmented, Toggle } from './components/primitives';
 import { Icon } from './components/Icons';
 import { BookDock, BookPane, BookTree, useBookBrowse } from './BookScreen';
 import { LearnLog } from './LearnLog';
 import { KifuViewer } from './KifuViewer';
 import { LEVELS } from './state';
+import { t, useLang, tErr } from './i18n';
 
 /* Play and study screens.
  *
@@ -30,18 +31,18 @@ import { LEVELS } from './state';
  * "KUROOBI takes white" with no extra words. Only "none" (human plays
  * both) has no stone — with one, it becomes indistinguishable from
  * "both". */
-const SIDES = [
-  { value: 'black' as const, label: <><StoneDot color="b" />黒</> },
-  { value: 'white' as const, label: <><StoneDot color="w" />白</> },
+const sides = () => [
+  { value: 'black' as const, label: <><StoneDot color="b" />{t('app.color.black')}</> },
+  { value: 'white' as const, label: <><StoneDot color="w" />{t('app.color.white')}</> },
   {
     // Never overlap the two stones: at 9px they merge into one black
     // blob, and in light theme the white stone's rim vanishes.
     value: 'both' as const,
     label: <><span style={{ display: 'flex', gap: 2 }}>
       <StoneDot color="b" /><StoneDot color="w" />
-    </span>両方</>,
+    </span>{t('app.side.both')}</>,
   },
-  { value: 'off' as const, label: 'なし' },
+  { value: 'off' as const, label: t('app.side.off') },
 ];
 
 
@@ -53,6 +54,9 @@ function reachable(raw: NavId, conn: ReturnType<typeof connOf>): NavId {
 }
 
 export function App() {
+  // The whole tree re-renders on a language change; t() is a plain
+  // function, so nothing below subscribes on its own.
+  useLang();
   const { prefs, set: setPref } = usePrefs();
   /* Clock settings live in prefs — a preference, not game state: it
      should survive restarts, and changing mid-game would jump the
@@ -72,11 +76,11 @@ export function App() {
   const study = nav === 'study';
   const isBook = nav === 'book';
   const isGgs = nav.startsWith('ggs');
-  const [tab, setTab] = useState('棋譜');
+  const [tab, setTab] = useState('record');
   /* The book destination holds two sheets — tree+board ("book") and
      the write-back ledger ("learn log") — behind one nav row. With
      separate windows abandoned, §7 and §8 live here. */
-  const [bookTab, setBookTab] = useState('定石');
+  const [bookTab, setBookTab] = useState('book');
   const [dockOpen, setDockOpen] = useState(false);
   /* Eval-graph band; collapses only <=620px (base.css). Wide windows
      ignore this value, so a graph closed while short reappears when
@@ -93,7 +97,7 @@ export function App() {
   const setHasBook = g.setHasBook;
   useEffect(() => {
     const off = onApp('resources-changed', () => {
-      void api.hasBook().then(setHasBook).catch(() => { /* エンジン未初期化 */ });
+      void api.hasBook().then(setHasBook).catch(() => { /* engine not started yet */ });
     });
     return () => { void off.then((f) => f()); };
   }, [setHasBook]);
@@ -163,9 +167,9 @@ export function App() {
   }, [setMode, navRaw, markChatRead]);
 
   // The dock's learning tab shows the position count too.
-  const book = useBookBrowse(isBook || tab === '学習');
+  const book = useBookBrowse(isBook || tab === 'learn');
   const { items: learnLog, reload: learnLogReload } = useLearnLog(
-    isBook && bookTab === '学習ログ', !!cpu?.learn);
+    isBook && bookTab === 'log', !!cpu?.learn);
 
   /* Record viewer (rule 71). pending is an archive id — games with
    * no local record open the overlay first and fill in on arrival. */
@@ -230,20 +234,20 @@ export function App() {
       if (who === 'overlay') {
         if (lv === 'paste') { setPaste(true); return; }
         if (lv === 'confirm') {
-          void confirm({ title: '27 手目まで戻します',
-                         body: '自分の手と KUROOBI の手を 1 手ずつ戻します。戻した先から指し直せます。',
-                         ok: '戻す' });
+          void confirm({ title: t('app.autoplay.undo_title'),
+                         body: t('app.autoplay.undo_body'),
+                         ok: t('app.autoplay.undo_ok') });
           return;
         }
         if (lv === 'toast') {
           // Capture two stacked (design §9 overlaps two with a 10px
           // gap).
-          g.say('GGS 対局中は分析を控えます', 'gold');
-          setTimeout(() => g.say('棋譜がありません'), 150);
+          g.say(t('app.autoplay.toast_ggs_busy'), 'gold');
+          setTimeout(() => g.say(t('app.study.no_record')), 150);
           return;
         }
         if (lv === 'viewer') {
-          setViewer({ title: 'saio との対局',
+          setViewer({ title: t('app.autoplay.viewer_title'),
                       kifu: 'e6f4c3d6f6e7f5g5e3g4c7d3f3c4c6c5b4b6d7b5c2a3f8e8d8c8b8d2g3e2' });
           return;
         }
@@ -256,9 +260,9 @@ export function App() {
          process: game ends -> import starts -> search starts again.
          Wait for the import, then overlay study analysis. */
       if (who === 'yield') {
-        setTab('学習');
+        setTab('learn');
         g.setSide('both');
-        g.setLevel(0);   // いちばん速い。早く終局させて取り込みを始めさせる
+        g.setLevel(0);   // Fastest: end the game early so the import starts
         g.setPlaying(true);
         void (async () => {
           for (let i = 0; i < 240; i++) {
@@ -290,7 +294,7 @@ export function App() {
       // opens the second sheet (learn log). Capture only.
       if (who === 'book') {
         setNavRaw('book');
-        if (lv === 'log') setBookTab('学習ログ');
+        if (lv === 'log') setBookTab('log');
         else if (lv) bookLine.current?.(lv);
         return;
       }
@@ -353,8 +357,8 @@ export function App() {
   const loadFromFile = async () => {
     try {
       const loaded = await api.loadKifu();
-      if (loaded) { applyLoaded(loaded); setPaste(false); }   // null = 選ばずに閉じた
-    } catch (e) { g.say('' + e); }
+      if (loaded) { applyLoaded(loaded); setPaste(false); }   // null = closed without choosing
+    } catch (e) { g.say(tErr(e)); }
   };
   /** Load and optionally advance to a ply (jumps from the ledger). */
   const loadFromText = async (text: string, ply?: number) => {
@@ -362,7 +366,7 @@ export function App() {
       applyLoaded(await api.loadKifuText(text));
       setPaste(false);
       if (ply !== undefined) await g.jumpTo(ply);
-    } catch (e) { g.say('' + e); }
+    } catch (e) { g.say(tErr(e)); }
   };
 
   /* Receive GGS notices and fetched records. The backend leaves both
@@ -373,7 +377,7 @@ export function App() {
   useEffect(() => {
     if (!notice) return;
     void (async () => {
-      g.say(notice);
+      g.say(tErr(notice));
       await ggsApi.ack().catch(() => {});
     })();
     // g is rebuilt every render; not a dep (runs on notice change).
@@ -398,7 +402,7 @@ export function App() {
         }
       } else {
         setViewer(null);
-        g.say(fetched.error || '棋譜を取り出せません');
+        g.say(fetched.error ? tErr(fetched.error) : t('app.ggs.fetch_failed'));
       }
       await ggsApi.ack().catch(() => {});
     })();
@@ -433,7 +437,7 @@ export function App() {
   const cur = v && v.cursor > 0 ? moves[v.cursor - 1] : undefined;
   const curMoveMeta = cur && cur.score !== undefined ? (
     <span style={{ display: 'flex', alignItems: 'center', gap: 'var(--sp-3)' }}>
-      この手の評価
+      {t('app.study.move_eval')}
       <b style={{
         fontSize: 'var(--fs-3)', fontWeight: 600, color: 'var(--text)',
         fontVariantNumeric: 'tabular-nums',
@@ -445,8 +449,8 @@ export function App() {
           ▼{cur.loss.toFixed(1)}
         </span>
       )}
-      <span>{cur.pass ? 'パス' : cur.move} · {cur.color === 'b' ? '黒' : '白'}</span>
-      {cur.src && <span style={{ color: cur.src.startsWith('定石') ? 'var(--gold)' : 'var(--sub)' }}>{cur.src}</span>}
+      <span>{cur.pass ? t('app.moves.pass') : cur.move} · {t(cur.color === 'b' ? 'app.color.black' : 'app.color.white')}</span>
+      {cur.src && <span style={{ color: srcIsBook(cur.src) ? 'var(--gold)' : 'var(--sub)' }}>{srcLabel(cur.src)}</span>}
     </span>
   ) : undefined;
 
@@ -455,8 +459,8 @@ export function App() {
    * Overlays own their keys (Esc etc.). */
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
-      const t = e.target as HTMLElement | null;
-      if (t && (t.tagName === 'INPUT' || t.tagName === 'TEXTAREA' || t.isContentEditable)) return;
+      const el = e.target as HTMLElement | null;
+      if (el && (el.tagName === 'INPUT' || el.tagName === 'TEXTAREA' || el.isContentEditable)) return;
       /* Any overlay disables keys. Checking only paste+confirm let
          arrows move the board behind the viewer and settings; count
          overlays in one place instead of appending per overlay. */
@@ -474,7 +478,7 @@ export function App() {
       if (cmd && key === 's' && !isGgs && !isBook) {
         e.preventDefault();
         if (v && v.moves.length > 0) {
-          void api.saveKifu(...ggfNames(g.side)).catch((err) => g.say('' + err));
+          void api.saveKifu(...ggfNames(g.side)).catch((err) => g.say(tErr(err)));
         }
         return;
       }
@@ -509,11 +513,12 @@ export function App() {
     return () => window.removeEventListener('keydown', onKey);
   }, [setNav, paste, ask, viewer, settings, isBook, isGgs, study, book, g, v]);
 
-  const toasts: Toast[] = g.toasts.map(t => ({ id: String(t.id), tone: t.tone, text: t.text }));
+  const toasts: Toast[] = g.toasts.map(x => ({ id: String(x.id), tone: x.tone, text: x.text }));
 
   const over = v?.over ?? false;
   const result = v?.over
-    ? (v.black === v.white ? '引き分け' : v.black > v.white ? '黒の勝ち' : '白の勝ち')
+    ? t(v.black === v.white ? 'app.result.draw'
+        : v.black > v.white ? 'app.result.black_wins' : 'app.result.white_wins')
     : undefined;
   const anyThink = g.thinkTotal.black > 0 || g.thinkTotal.white > 0;
   /** Clock for the disc row: remaining if timed, else cumulative
@@ -529,16 +534,17 @@ export function App() {
 
   const nodes = g.stat && g.stat.nodes > 0 ? g.stat.nodes : 0;
   const nps = nodes && g.stat && g.stat.secs > 0 ? nodes / g.stat.secs : 0;
-  const lv = g.level === 'custom' ? 'カスタム' : LEVELS[g.level].name;
+  const lv = g.level === 'custom' ? t('app.level.custom') : LEVELS[g.level].name;
   /* WindowBar's "what am I looking at": passive text (rule 75), and
    * the same names as the nav — two copies would drift. */
   const screenTitle =
-    [...NAV_LOCAL, ...ggsNav(conn)].find((i) => i.id === nav)?.label ?? 'KUROOBI';
+    [...navLocal(), ...ggsNav(conn)].find((i) => i.id === nav)?.label ?? 'KUROOBI';
   const screenSub = isGgs
     ? (conn === 'online' ? ggs.snap?.login : undefined)
     : isBook ? undefined
-    : `${lv} · ${g.side === 'both' ? '両方' : g.side === 'off' ? '担当なし'
-        : g.side === 'black' ? '黒' : '白'}`;
+    : `${lv} · ${t(g.side === 'both' ? 'app.side.both'
+        : g.side === 'off' ? 'app.side.none_assigned'
+        : g.side === 'black' ? 'app.color.black' : 'app.color.white')}`;
 
   // "Me at the bottom" = the color KUROOBI does NOT hold.
   const sideColor = g.side === 'black' ? 'white' : g.side === 'white' ? 'black' : '';
@@ -557,7 +563,7 @@ export function App() {
 
       <Body>
 
-      <Nav items={NAV_LOCAL} ggsItems={ggsNav(conn, navBadges(ggs.snap, chatUnread))} conn={conn}
+      <Nav items={navLocal()} ggsItems={ggsNav(conn, navBadges(ggs.snap, chatUnread))} conn={conn}
            active={nav} onSelect={setNav}
            footer={<>
              {cpu && <>
@@ -567,7 +573,7 @@ export function App() {
                     ratio={cpu.cpu / (cpu.cores * 100)} />
              {/* Flex collapses the space before the unit; use a
                  non-breaking one. */}
-             <Meter icon="memory" label="メモリ" value={(cpu.mem / 1e9).toFixed(1)} unit={'\u00a0GB'}
+             <Meter icon="memory" label={t('app.meter.memory')} value={(cpu.mem / 1e9).toFixed(1)} unit={'\u00a0GB'}
                     ratio={cpu.mem_total > 0 ? cpu.mem / cpu.mem_total : 0} />
              <JobList jobs={jobsOf(cpu)} />
              </>}
@@ -575,7 +581,8 @@ export function App() {
                  (not a destination). Not a gear icon — GGS settings
                  use the gear, and one glyph gets one meaning (rule
                  49). The 48px rail drops the label. */}
-             <button type="button" className="k-press k-nav-settings" title="設定 (⌘,)" aria-label="設定"
+             <button type="button" className="k-press k-nav-settings"
+                     title={t('app.nav.settings_title')} aria-label={t('app.nav.settings')}
                      onClick={() => setSettings(true)}
                      style={{
                        alignItems: 'center', justifyContent: 'center',
@@ -585,7 +592,7 @@ export function App() {
                        fontSize: 'var(--fs-6)', cursor: 'pointer', padding: 0,
                      }}>
                <Icon name="prefs" size={15} />
-               <span className="k-nav-label">設定</span>
+               <span className="k-nav-label">{t('app.nav.settings')}</span>
              </button>
            </>} />
 
@@ -600,8 +607,9 @@ export function App() {
              The row disappears when idle (rule 11). */
           aux={isBook
             ? (cpu?.learn
-              ? <Busy>取り込み中<span style={{ color: 'var(--sub)', fontVariantNumeric: 'tabular-nums' }}>
-                    局面 {cpu.learn[0].toLocaleString()} / {cpu.learn[1].toLocaleString()}
+              ? <Busy>{t('app.book.importing')}<span style={{ color: 'var(--sub)', fontVariantNumeric: 'tabular-nums' }}>
+                    {t('app.book.import_count', { done: cpu.learn[0].toLocaleString(),
+                                                  total: cpu.learn[1].toLocaleString() })}
                   </span>
                 </Busy>
               : undefined)
@@ -615,21 +623,21 @@ export function App() {
               {/* The sheet switch goes in children — aux dies at 940px
                   and would strand the learn log (rules 8/58). */}
               <Segmented value={bookTab} onChange={setBookTab}
-                         options={[{ value: '定石', label: '定石' },
-                                   { value: '学習ログ', label: '学習ログ' }]} />
-              {bookTab === '定石' && <>
+                         options={[{ value: 'book', label: t('app.book.tab_book') },
+                                   { value: 'log', label: t('app.book.tab_learn_log') }]} />
+              {bookTab === 'book' && <>
                 <Divider />
-                <Button disabled={!book.line.length} onClick={book.back}>戻る</Button>
-                <Button disabled={!book.line.length} onClick={book.reset}>最初へ</Button>
+                <Button disabled={!book.line.length} onClick={book.back}>{t('app.book.back')}</Button>
+                <Button disabled={!book.line.length} onClick={book.reset}>{t('app.book.reset')}</Button>
                 <span style={{ marginLeft: 'var(--sp-3)', fontSize: 'var(--fs-6)', color: 'var(--sub)' }}>
-                  {book.line.length ? book.line.length + ' 手目' : '初期局面'}
+                  {book.line.length ? t('app.book.ply', { n: book.line.length }) : t('app.book.initial')}
                 </span>
               </>}
             </>
           ) : isGgs ? (
             <span style={{ fontSize: 'var(--fs-5)', color: 'var(--sub)' }}>
-              {conn === 'online' ? <>接続中 <b style={{ color: 'var(--text)' }}>{ggs.snap?.login}</b></>
-                : conn === 'offline' ? '未接続' : 'ログインしています…'}
+              {conn === 'online' ? <>{t('app.ggs.connected')} <b style={{ color: 'var(--text)' }}>{ggs.snap?.login}</b></>
+                : t(conn === 'offline' ? 'app.ggs.offline' : 'app.ggs.logging_in')}
             </span>
           ) : study ? (
             // KUROOBI never moves in study. Step buttons moved to the
@@ -640,14 +648,16 @@ export function App() {
             // now (ledgered). */
             <>
               <Button variant="primary" disabled={graph.busy || !v?.moves.length}
-                      onClick={() => void graph.update()}>分析</Button>
-              <Button title="⌘O" onClick={() => setPaste(true)}>棋譜を読み込む</Button>
+                      onClick={() => void graph.update()}>{t('app.study.analyze')}</Button>
+              <Button title="⌘O" onClick={() => setPaste(true)}>{t('app.study.load_record')}</Button>
               <Divider />
               <Segmented value={pov} onChange={setPov}
-                         options={[{ value: 'b', label: '黒視点' },
-                                   { value: 'w', label: '白視点' }]} />
+                         options={[{ value: 'b', label: t('app.study.black_view') },
+                                   { value: 'w', label: t('app.study.white_view') }]} />
               <span style={{ fontSize: 'var(--fs-6)', color: 'var(--sub)' }}>
-                {v && v.moves.length ? `${v.cursor} / ${v.moves.length} 手` : '棋譜がありません'}
+                {v && v.moves.length
+                  ? t('app.study.ply_of', { n: v.cursor, total: v.moves.length })
+                  : t('app.study.no_record')}
               </span>
             </>
           ) : (
@@ -655,24 +665,24 @@ export function App() {
               <Button variant={g.playing ? 'danger' : 'primary'}
                       disabled={!g.playing && (over || g.thinking)}
                       onClick={startGame}>
-                {g.playing ? '対局停止' : '対局開始'}
+                {t(g.playing ? 'app.play.stop' : 'app.play.start')}
               </Button>
               {/* Shortcuts go on the button: clickability is visible,
                   the shortcut is not. */}
-              <Button title="⌘N" disabled={g.thinking} onClick={() => void g.newGame()}>新規対局</Button>
+              <Button title="⌘N" disabled={g.thinking} onClick={() => void g.newGame()}>{t('app.play.new_game')}</Button>
               <Button title="⌘Z" disabled={g.thinking || !v || v.move_count === 0}
-                      onClick={() => void g.undo()}>待った</Button>
+                      onClick={() => void g.undo()}>{t('app.play.undo')}</Button>
               {/* Rule between actions and game setup — without it "new
                   game" and "black" read as one row. */}
               <Divider />
               {/* Role must stay editable in narrow windows: children,
                   not aux (aux dies at 940px). */}
               <span style={{ fontSize: 'var(--fs-6)', color: 'var(--sub)' }}>KUROOBI</span>
-              <Segmented value={g.side} onChange={g.setSide} options={SIDES} />
+              <Segmented value={g.side} onChange={g.setSide} options={sides()} />
               {/* Eval display toggle likewise in children — in aux it
                   vanished entirely at 900px (verified live). */}
               <Divider />
-              <Toggle checked={g.autoHint} onChange={g.setAutoHint} label="評価値を表示" />
+              <Toggle checked={g.autoHint} onChange={g.setAutoHint} label={t('app.play.show_evals')} />
             </>
           )}
       </Toolbar>
@@ -694,7 +704,7 @@ export function App() {
                          }
                        }} />
          : isBook ? (
-          bookTab === '定石' ? (
+          bookTab === 'book' ? (
             /* Design §7 is three columns: tree / board / this
                position. The tree takes the left, "this position" and
                "next moves" take the right dock (290 ≈ the design's
@@ -715,18 +725,17 @@ export function App() {
                the parts (269 / center / 290). */
             <div style={{ flex: 1, minHeight: 0, display: 'flex' }}>
               <LearnLog items={learnLog}
-                onBook={(kifu) => { setBookTab('定石'); book.goto(kifu); }}
+                onBook={(kifu) => { setBookTab('book'); book.goto(kifu); }}
                 onUndo={(e) => void (async () => {
                   if (!await confirm({
-                    title: 'この対局の取り込みを取り消します',
-                    body: 'この対局で書き戻した定石の値を、取り込む前に戻します。ほかの対局で'
-                      + '書き戻したぶんは残ります。',
-                    ok: '取り消す', danger: true,
+                    title: t('app.learn.undo_title'),
+                    body: t('app.learn.undo_body'),
+                    ok: t('app.learn.undo_ok'), danger: true,
                   })) return;
                   try {
                     await api.learnUndo(e.at, e.kifu);
                     learnLogReload();
-                  } catch (err) { g.say('' + err); }
+                  } catch (err) { g.say(tErr(err)); }
                 })()}
                 onOpen={(e, ply) => {
                   setNav('study');
@@ -784,8 +793,8 @@ export function App() {
         {/* Bottom panel during GGS games; chat and console share it. */}
         {isGgs && panel && ggs.snap && (
           <BottomPanel
-            tabs={[{ id: 'chat', label: 'チャット', unread: panel === 'chat' ? 0 : chatUnread },
-                   { id: 'console', label: 'コンソール' }]}
+            tabs={[{ id: 'chat', label: t('app.panel.chat'), unread: panel === 'chat' ? 0 : chatUnread },
+                   { id: 'console', label: t('app.panel.console') }]}
             active={panel} onTab={(id) => showPanel(id as 'chat' | 'console')}
             onClose={() => showPanel('')}>
             {panel === 'chat' ? <GgsChat snap={ggs.snap} /> : <GgsConsole snap={ggs.snap} />}
@@ -816,7 +825,7 @@ export function App() {
                            remainder. */}
                        {graph.prog && (
                          <span style={{ display: 'flex', alignItems: 'center', gap: 'var(--sp-2)' }}>
-                           分析中 <b style={{ color: 'var(--text)' }}>{graph.prog.done}</b>/{graph.prog.total}
+                           {t('app.status.analyzing')} <b style={{ color: 'var(--text)' }}>{graph.prog.done}</b>/{graph.prog.total}
                            <span style={{ width: 72 }}>
                              <Progress value={graph.prog.total > 0 ? graph.prog.done / graph.prog.total : 0} />
                            </span>
@@ -827,7 +836,7 @@ export function App() {
                            for something idle. Start used to live in
                            this band, which vanishes below 620px. */}
                        {graph.busy && (
-                         <Button variant="danger" onClick={() => graph.stop()}>分析停止</Button>
+                         <Button variant="danger" onClick={() => graph.stop()}>{t('app.study.stop_analysis')}</Button>
                        )}
                      </>} />
         )}
@@ -836,8 +845,8 @@ export function App() {
 
       {/* GGS has no dock (its list docks left of the body). */}
       {/* No empty dock without a book (the board side explains). */}
-      {isBook && bookTab === '定石' && book.node?.size !== 0 && (
-        <Dock tabs={['定石']} active="定石" open={dockOpen}>
+      {isBook && bookTab === 'book' && book.node?.size !== 0 && (
+        <Dock tabs={[t('app.book.tab_book')]} active={t('app.book.tab_book')} open={dockOpen}>
           <BookDock b={book} decimals={prefs.decimals} />
         </Dock>
       )}
@@ -862,13 +871,13 @@ export function App() {
                 graph heading's progress is band-internal; machine
                 activity belongs to the status bar (rules 11/76). */}
             {graph.busy && (
-              <Busy>分析中</Busy>
+              <Busy>{t('app.status.analyzing')}</Busy>
             )}
             {/* The design separates the state dot from the seconds;
                 folding them into one "3.2s" leaves activity legible
                 only by the number's presence (rule 11). */}
             {g.thinking && (
-              <Busy>思考中</Busy>
+              <Busy>{t('app.status.thinking')}</Busy>
             )}
             {g.thinking && <StatusStat value={g.thinkSecs.toFixed(1)} unit="s" />}
             {nodes > 0 && <StatusStat label="nodes" value={fmtNodes(nodes)} />}
@@ -878,13 +887,14 @@ export function App() {
             ? <>
               {/* Game-time only; otherwise it just duplicates the nav. */}
               {ggsMatch && <>
-                <StatusChip label="チャット" unread={panel === 'chat' ? 0 : chatUnread}
+                <StatusChip label={t('app.panel.chat')} unread={panel === 'chat' ? 0 : chatUnread}
                             active={panel === 'chat'}
                             onClick={() => showPanel('chat')} />
-                <StatusChip label="コンソール" active={panel === 'console'}
+                <StatusChip label={t('app.panel.console')} active={panel === 'console'}
                             onClick={() => showPanel('console')} />
               </>}
-              <StatusStat label="GGS" value={conn === 'online' ? '接続中' : conn === 'offline' ? '未接続' : '接続しています…'} />
+              <StatusStat label="GGS" value={t(conn === 'online' ? 'app.ggs.connected'
+                : conn === 'offline' ? 'app.ggs.offline' : 'app.ggs.connecting')} />
             </>
             : isBook
             ? <>
@@ -893,19 +903,22 @@ export function App() {
                   screen before. The design repeats both in the
                   toolbar; we don't (same number twice per screen —
                   needs a push). */}
-              <StatusStat label="登録局面"
+              <StatusStat label={t('app.status.stored_positions')}
                           value={book.node ? book.node.size.toLocaleString() : '—'} />
-              <StatusStat label="うち学習"
+              <StatusStat label={t('app.status.of_which_learned')}
                           value={book.node ? book.node.learned_size.toLocaleString() : '—'} />
             </>
             : <>
               {/* Study needs the exact ply; the scrubber ticks every
                   10, so the precise number lives here (rule 58). */}
-              {study && v && <StatusStat label="棋譜" value={v.cursor} unit={`/ ${v.moves.length} 手`} />}
+              {study && v && <StatusStat label={t('app.status.record')} value={v.cursor}
+                                         unit={t('app.status.of_moves', { n: v.moves.length })} />}
               {/* Current viewpoint as state — the sign's meaning is
                   invisible in the numbers (§2 puts it here too). */}
-              {study && <StatusStat value={pov === 'b' ? '黒視点' : '白視点'} />}
-              <StatusStat label="定石" value={g.hasBook ? (g.useBook ? '有効' : '使わない') : 'なし'} />
+              {study && <StatusStat value={t(pov === 'b' ? 'app.study.black_view' : 'app.study.white_view')} />}
+              <StatusStat label={t('app.status.book')}
+                          value={t(g.hasBook ? (g.useBook ? 'app.status.book_on' : 'app.status.book_off')
+                            : 'app.status.book_none')} />
               <StatusStat label="KUROOBI" value={lv} />
             </>} />
 
@@ -954,22 +967,23 @@ export function App() {
 }
 
 /** Short display names for env vars. Raw variable names stay off
- *  screen — the UI is uniformly Japanese. Unlisted vars show their
- *  name minus KUROOBI_, so a missing entry never hides the badge. */
-const ENV_LABELS: Record<string, string> = {
-  KUROOBI_NO_RATED: '非レート',
-  KUROOBI_GGS_DEMO: 'GGS デモ',
-  KUROOBI_GGS_AUTOCONNECT: '自動接続',
-  KUROOBI_GGS_AUTOVIEW: '自動表示',
-  KUROOBI_GGS_AUTOWATCH: '自動観戦',
-  KUROOBI_GGS_AUTOLOOK: '自動棋譜',
-  KUROOBI_AUTOPLAY: '自動運転',
-  KUROOBI_THEME: 'テーマ',
-  KUROOBI_LEARN_LOG: '控え差替',
-  KUROOBI_KEYCHAIN_SERVICE: '鍵束差替',
-  KUROOBI_SESSION_LOCK: '錠差替',
-  KUROOBI_WEIGHTS_DIR: '重み差替',
-};
+ *  screen. Unlisted vars show their name minus KUROOBI_, so a missing
+ *  entry never hides the badge. Built per call: the names are
+ *  translated at render. */
+const envLabels = (): Record<string, string> => ({
+  KUROOBI_NO_RATED: t('app.env.no_rated'),
+  KUROOBI_GGS_DEMO: t('app.env.ggs_demo'),
+  KUROOBI_GGS_AUTOCONNECT: t('app.env.autoconnect'),
+  KUROOBI_GGS_AUTOVIEW: t('app.env.autoview'),
+  KUROOBI_GGS_AUTOWATCH: t('app.env.autowatch'),
+  KUROOBI_GGS_AUTOLOOK: t('app.env.autolook'),
+  KUROOBI_AUTOPLAY: t('app.env.autoplay'),
+  KUROOBI_THEME: t('app.env.theme'),
+  KUROOBI_LEARN_LOG: t('app.env.learn_log'),
+  KUROOBI_KEYCHAIN_SERVICE: t('app.env.keychain'),
+  KUROOBI_SESSION_LOCK: t('app.env.session_lock'),
+  KUROOBI_WEIGHTS_DIR: t('app.env.weights_dir'),
+});
 
 /** Env-var launch badges.
  *
@@ -983,10 +997,11 @@ const ENV_LABELS: Record<string, string> = {
 function EnvTags({ items }: { items: [string, string][] }) {
   if (!items.length) return null;
   const title = items.map(([k, v]) => `${k}=${v}`).join('\n');
+  const names = envLabels();
   return (
     <div className="k-env" title={title}>
       {items.map(([k, v]) => {
-        const label = ENV_LABELS[k] ?? k.replace(/^KUROOBI_/, '');
+        const label = names[k] ?? k.replace(/^KUROOBI_/, '');
         // Values containing / are path overrides; the name suffices.
         const val = v === '1' || v.includes('/') ? '' : v;
         return (
@@ -1018,10 +1033,13 @@ const fmtNodes = (n: number): string =>
  *  games use separate thread pools, hence separate rows. */
 function jobsOf(cpu: ActivityView) {
   const jobs: { label: string; threads?: number; yielded?: boolean }[] = [];
-  if (cpu.local) jobs.push({ label: cpu.local, threads: cpu.local_threads });
-  if (cpu.ggs_match) jobs.push({ label: 'GGS 対局', threads: cpu.ggs_thinking ? cpu.ggs_threads : undefined });
+  // cpu.local is a stable token from the backend (calibrating /
+  // thinking / pondering / analyzing), translated here.
+  if (cpu.local) jobs.push({ label: t('activity.' + cpu.local), threads: cpu.local_threads });
+  if (cpu.ggs_match) jobs.push({ label: t('app.jobs.ggs_game'), threads: cpu.ggs_thinking ? cpu.ggs_threads : undefined });
   if (cpu.learn) {
-    jobs.push({ label: `学習 ${cpu.learn[0]}/${cpu.learn[1]}`, yielded: cpu.learn_paused });
+    jobs.push({ label: t('app.jobs.learning', { done: cpu.learn[0], total: cpu.learn[1] }),
+                yielded: cpu.learn_paused });
   }
   return jobs;
 }

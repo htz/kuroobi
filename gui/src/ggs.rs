@@ -496,7 +496,7 @@ pub fn demo_snapshot() -> Snapshot {
     s.ongoing = vec![
         OngoingView {
             id: ".71.0".into(),
-            raw: "tamaki 対 edax-bot".into(),
+            raw: "tamaki vs edax-bot".into(),
             watching: true,
             names: vec!["tamaki".into(), "edax-bot".into()],
             ratings: vec!["2011.4".into(), "2280.1".into()],
@@ -505,7 +505,7 @@ pub fn demo_snapshot() -> Snapshot {
         },
         OngoingView {
             id: ".72.0".into(),
-            raw: "nara 対 kei".into(),
+            raw: "nara vs kei".into(),
             watching: false,
             names: vec!["nara".into(), "kei".into()],
             ratings: vec!["1688.2".into(), "1488.9".into()],
@@ -627,7 +627,7 @@ pub fn demo_snapshot() -> Snapshot {
     s.log = vec![
         LogLine {
             dir: "info".into(),
-            text: "接続しました (skatgame.net:5000)".into(),
+            text: "connected (skatgame.net:5000)".into(),
         },
         LogLine {
             dir: "out".into(),
@@ -669,7 +669,7 @@ pub fn demo_snapshot() -> Snapshot {
             ("decline".into(), "rated&or>2400".into()),
             ("play".into(), "0".into()),
             ("stored (+)".into(), "0".into()),
-            ("info".into(), "画面確認用の作り物".into()),
+            ("info".into(), "demo data for screen checks".into()),
             ("since".into(), "2026-01-15".into()),
         ],
         raw: vec![format!("{name} 1842.3@34.0")],
@@ -1670,7 +1670,7 @@ impl Ctx {
                     return Some(self.workers.len() - 1);
                 }
                 Err(e) => {
-                    self.log("info", &format!("探索ワーカーを作れません: {e}"));
+                    self.log("info", &format!("cannot spawn search worker: {e}"));
                     return None;
                 }
             }
@@ -1809,7 +1809,7 @@ impl EngineWorker {
                             .load(std::sync::atomic::Ordering::Relaxed);
                         if nf1 != nf0 {
                             eprintln!(
-                                "!! 探索が非数を返した (空き {} 深さ {} 打切 {})",
+                                "!! search returned a non-finite value (empties {} depth {} cut {})",
                                 board.empty_count(),
                                 mv.depth,
                                 mv.cut
@@ -1929,7 +1929,7 @@ impl Ctx {
                     .iter()
                     .map(|m| {
                         format!(
-                            " [{} {}石 開始{}石 手番={} 自分={} 解析={}]",
+                            " [{} {}discs start {}discs turn={} me={} eval={}]",
                             m.id,
                             m.cells.iter().filter(|&&c| c != 0).count(),
                             m.ggf
@@ -1938,7 +1938,7 @@ impl Ctx {
                                 .unwrap_or(0),
                             if m.turn.is_empty() { "-" } else { &m.turn },
                             if m.my_color.is_empty() {
-                                "観戦"
+                                "observe"
                             } else {
                                 &m.my_color
                             },
@@ -1950,9 +1950,9 @@ impl Ctx {
                     .collect::<String>();
                 let fetched = match &s.fetched_ggf {
                     Some(g) if !g.ggf.is_empty() => {
-                        format!(" 棋譜取得={} {}文字", g.id, g.ggf.len())
+                        format!(" fetched={} {}chars", g.id, g.ggf.len())
                     }
-                    Some(g) => format!(" 棋譜取得={} 失敗:{}", g.id, g.error),
+                    Some(g) => format!(" fetched={} error:{}", g.id, g.error),
                     None => String::new(),
                 };
                 let _ = writeln!(
@@ -2160,11 +2160,14 @@ pub fn run(
             ctx.log(
                 "info",
                 &format!(
-                    "別のウィンドウ (PID {pid}) が GGS に接続しています。\
-                     そちらを使うか、先に切断してください"
+                    "another window (PID {pid}) is connected to GGS; \
+                     use it, or disconnect there first"
                 ),
             );
-            ctx.notify("GGS: 接続できません", "別のウィンドウが接続中です");
+            ctx.notify(
+                &crate::i18n::t("backend.notify.connect_blocked_title"),
+                &crate::i18n::t("backend.notify.connect_blocked_body"),
+            );
             ctx.snap.lock().unwrap().conn = "disconnected".into();
             ctx.emit(true);
             continue 'outer;
@@ -2199,7 +2202,7 @@ pub fn run(
             let mut stream = match TcpStream::connect(("skatgame.net", 5000)) {
                 Ok(s) => s,
                 Err(e) => {
-                    ctx.log("info", &format!("接続失敗: {e} — 15 秒後に再試行"));
+                    ctx.log("info", &format!("connect failed: {e} — retrying in 15s"));
                     ctx.emit(true);
                     std::thread::sleep(Duration::from_secs(15));
                     continue 'session;
@@ -2453,7 +2456,7 @@ pub fn run(
                             send!(ctx, "tell /os match");
                         }
                         Cmd::ResumeStored(id) => {
-                            ctx.log("info", &format!("中断対局 {id} を再開します"));
+                            ctx.log("info", &format!("resuming adjourned game {id}"));
                             send!(ctx, format!("tell /os ask {id}"));
                         }
                         Cmd::History(name) => {
@@ -2466,7 +2469,7 @@ pub fn run(
                         }
                         Cmd::SetFormula { kind, expr } => {
                             send!(ctx, format!("tell /os {kind} {expr}"));
-                            ctx.log("info", &format!("{kind} を設定: {expr}"));
+                            ctx.log("info", &format!("set {kind}: {expr}"));
                         }
                         Cmd::MatchCmd { id, verb, arg } => {
                             if arg.is_empty() {
@@ -2498,7 +2501,10 @@ pub fn run(
                             };
                             drop(s);
                             if let Some(id) = take {
-                                ctx.log("info", &format!("待機モード: 届いていた {id} を受けます"));
+                                ctx.log(
+                                    "info",
+                                    &format!("waiting mode: accepting pending offer {id}"),
+                                );
                                 send!(ctx, format!("tell /os accept {id}"));
                             }
                             next_ask_at = Some(Instant::now() + Duration::from_secs(3));
@@ -2528,11 +2534,14 @@ pub fn run(
                         login_fails += 1;
                         ctx.log(
                             "info",
-                            "ログイン中にサーバーから切断されました。同じアカウントで\
-                             別のプロセスが接続していないか確認してください \
-                             (GGS は同名の二重ログインを弾きます)",
+                            "dropped by the server while logging in; check whether \
+                             another process is connected with the same account \
+                             (GGS rejects duplicate logins)",
                         );
-                        ctx.notify("GGS: ログインできません", "二重ログインの可能性があります");
+                        ctx.notify(
+                            &crate::i18n::t("backend.notify.login_failed_title"),
+                            &crate::i18n::t("backend.notify.duplicate_login_body"),
+                        );
                         if login_fails >= 2 {
                             let mut s = ctx.snap.lock().unwrap();
                             s.conn = "disconnected".into();
@@ -2544,8 +2553,14 @@ pub fn run(
                         std::thread::sleep(Duration::from_secs(3));
                         continue 'session;
                     }
-                    ctx.notify("GGS: 接続断", "10 秒後に自動再接続します");
-                    ctx.log("info", "接続断 — 10 秒後に再接続して対局を再開します");
+                    ctx.notify(
+                        &crate::i18n::t("backend.notify.disconnected_title"),
+                        &crate::i18n::t("backend.notify.disconnected_body"),
+                    );
+                    ctx.log(
+                        "info",
+                        "disconnected — reconnecting in 10s and resuming games",
+                    );
                     ctx.emit(true);
                     std::thread::sleep(Duration::from_secs(10));
                     continue 'session;
@@ -2564,12 +2579,13 @@ pub fn run(
                         login_warned = true;
                         ctx.log(
                             "info",
-                            "ログインが進みません。同じアカウントで他のプロセスが\
-                             接続していないか確認してください (GGS は二重ログインを弾きます)",
+                            "login is not progressing; check whether another process \
+                             is connected with the same account (GGS rejects \
+                             duplicate logins)",
                         );
                         ctx.notify(
-                            "GGS: ログインが進みません",
-                            "二重ログインの可能性があります",
+                            &crate::i18n::t("backend.notify.login_stalled_title"),
+                            &crate::i18n::t("backend.notify.duplicate_login_body"),
                         );
                         ctx.emit(true);
                     }
@@ -2787,7 +2803,10 @@ pub fn run(
                             if !id.is_empty() {
                                 let mine = mrest.contains(&login);
                                 if mine {
-                                    ctx.notify("GGS: 対局開始", mrest);
+                                    ctx.notify(
+                                        &crate::i18n::t("backend.notify.game_start_title"),
+                                        mrest,
+                                    );
                                 }
                                 let mut s = ctx.snap.lock().unwrap();
                                 s.ongoing.retain(|o| o.id != id);
@@ -2841,7 +2860,7 @@ pub fn run(
                             drop(s);
                             if let Some((true, id)) = incoming {
                                 if auto && !in_match {
-                                    ctx.log("info", &format!("待機モード: {id} を自動受諾"));
+                                    ctx.log("info", &format!("waiting mode: auto-accepting {id}"));
                                     send!(ctx, format!("tell /os accept {id}"));
                                 } else {
                                     let who = ctx
@@ -2852,7 +2871,10 @@ pub fn run(
                                         .last()
                                         .map(|o| o.names.join(" "))
                                         .unwrap_or_default();
-                                    ctx.notify("GGS: 対局の申し込み", &format!("{who} ({id})"));
+                                    ctx.notify(
+                                        &crate::i18n::t("backend.notify.match_request_title"),
+                                        &format!("{who} ({id})"),
+                                    );
                                 }
                             }
                         }
@@ -2923,17 +2945,22 @@ pub fn run(
                             let s = ctx.snap.lock().unwrap();
                             s.standby.enabled
                         };
-                        let what = if req.verb == "undo" {
-                            "待った"
-                        } else {
-                            "中断"
-                        };
+                        let undo = req.verb == "undo";
                         ctx.log(
                             "info",
-                            &format!("{} が {} を求めています ({})", req.who, what, req.id),
+                            &format!(
+                                "{} requests {} ({})",
+                                req.who,
+                                if undo { "undo" } else { "abort" },
+                                req.id
+                            ),
                         );
                         ctx.notify(
-                            &format!("GGS: {what}の申し出"),
+                            &crate::i18n::t(if undo {
+                                "backend.notify.undo_request_title"
+                            } else {
+                                "backend.notify.abort_request_title"
+                            }),
                             &format!("{} ({})", req.who, req.id),
                         );
                         if unattended {
@@ -2943,12 +2970,12 @@ pub fn run(
                             and the request id is not in the notice. */
                             ctx.log(
                                 "info",
-                                &format!("待機モード: 無人なので断ります ({})", req.who),
+                                &format!("waiting mode: unattended, declining ({})", req.who),
                             );
                             send!(ctx, format!("tell /os decline {}", req.who));
                         }
                     } else if ln.starts_with("/os: ERR") {
-                        ctx.log("info", &format!("サーバーエラー: {ln}"));
+                        ctx.log("info", &format!("server error: {ln}"));
                         /* Errors that merely raced the game end are
                         dropped: synchro boards end separately, so a move
                         can arrive after its game closed. Unavoidable and
@@ -2960,7 +2987,7 @@ pub fn run(
                         // must be reported on the spot.
                         let msg = ln.trim_start_matches("/os: ERR").trim();
                         ctx.snap.lock().unwrap().notice = if msg.is_empty() {
-                            "GGS がこの操作を受け付けませんでした".into()
+                            "err.ggs_action_refused".into()
                         } else {
                             format!("GGS: {msg}")
                         };
@@ -2994,7 +3021,7 @@ pub fn run(
                             );
                         }
                         if sb.enabled && !in_match && !outgoing && !sb.opponent.is_empty() && more {
-                            ctx.log("info", &format!("待機モード: {} に申し込み", sb.opponent));
+                            ctx.log("info", &format!("waiting mode: asking {}", sb.opponent));
                             // Align rated-ness right before the offer (as Cmd::Ask).
                             send!(
                                 ctx,
@@ -3093,18 +3120,11 @@ pub fn run(
                 if !stale.is_empty() {
                     for id in &stale {
                         ctx.pending_watch.remove(id);
-                        ctx.log(
-                            "info",
-                            &format!("{id} は観戦できませんでした (対局が終わっています)"),
-                        );
+                        ctx.log("info", &format!("cannot observe {id} (the game has ended)"));
                     }
                     let mut s = ctx.snap.lock().unwrap();
                     s.ongoing.retain(|o| !stale.contains(&o.id));
-                    s.notice = format!(
-                        "{} を観戦できませんでした。対局がすでに終わっているか、\
-                         参加できない対局です。",
-                        stale.join(" / ")
-                    );
+                    s.notice = format!("err.observe_failed|ids={}", stale.join(" / "));
                     drop(s);
                     ctx.emit(true);
                 }
@@ -3120,8 +3140,11 @@ pub fn run(
                         if let Some(h) = ctx.local_stop.lock().unwrap().as_ref() {
                             h.stop();
                         }
-                        ctx.notify("GGS: 対局開始", "ローカルの探索を停止しました");
-                        ctx.log("info", "GGS 対局開始 — ローカルの探索を停止しました");
+                        ctx.notify(
+                            &crate::i18n::t("backend.notify.game_start_title"),
+                            &crate::i18n::t("backend.notify.local_search_stopped_body"),
+                        );
+                        ctx.log("info", "GGS game started — stopped the local search");
                     }
                 }
                 had_own_match = own_match;
@@ -3256,9 +3279,9 @@ fn handle_block(
         ctx.log(
             "info",
             &format!(
-                "{mid}: ロスタイムに入りました。**この対局は時間切れ負けが確定** \
-                 しています (結果は最小差負けで頭打ち)。以降は全滅を避けるため \
-                 速く指し切ります"
+                "{mid}: in overtime. **this game is a decided loss on time** \
+                 (the result is capped at a minimal loss); playing out fast \
+                 from here to avoid a wipeout"
             ),
         );
     }
@@ -3290,7 +3313,7 @@ fn handle_block(
             } else {
                 m.opp_name.clone()
             };
-            ctx.notify("GGS: あなたの手番です", &who);
+            ctx.notify(&crate::i18n::t("backend.notify.your_turn_title"), &who);
         }
     } else if turn != m.my_color {
         // Re-arm the chime when the turn passes back.
@@ -3655,7 +3678,7 @@ fn think_and_play(
 ) {
     let m = matches.get_mut(mid).unwrap();
     let Some(board) = board_of(m, m.my_color.unwrap_or(' ')) else {
-        ctx.log("info", "盤面の解析に失敗しました");
+        ctx.log("info", "failed to parse the board");
         return;
     };
     /* Double-move protection, mixing in the move count: board-only
@@ -3684,7 +3707,7 @@ fn think_and_play(
         return;
     }
     if let Err(e) = ctx.ensure_engine() {
-        ctx.log("info", &format!("エンジン初期化失敗: {e}"));
+        ctx.log("info", &format!("engine init failed: {e}"));
         return;
     }
     let clock_secs = m.my_clock_secs;
@@ -3741,7 +3764,7 @@ fn think_and_play(
     }
     // Fallback when no worker could be built: search inline as before.
     if let Err(e) = ctx.ensure_engine() {
-        ctx.log("info", &format!("エンジン初期化失敗: {e}"));
+        ctx.log("info", &format!("engine init failed: {e}"));
         return;
     }
     let engine = ctx.engine.as_mut().unwrap();
@@ -3768,17 +3791,17 @@ fn think_and_play(
             it). */
             "{mid} {mstr}: {} {:+.2}{}{}",
             if mv.from_book && mv.learned {
-                "定石 (実戦の学習)"
+                "book (learned)"
             } else if mv.from_book {
-                "定石"
+                "book"
             } else {
-                "探索"
+                "search"
             },
             mv.value,
-            if mv.exact { " (完全読み)" } else { "" },
+            if mv.exact { " (solved)" } else { "" },
             // Solves and book moves carry no depth (0); omit it.
             if mv.depth > 0 {
-                format!(" 深さ {}", mv.depth)
+                format!(" depth {}", mv.depth)
             } else {
                 String::new()
             }
@@ -3817,7 +3840,7 @@ fn pump_worker(ctx: &mut Ctx, i: usize) {
     ctx.log(
         "info",
         &format!(
-            "投: 空き {empties} 手数 {movable} 期限 {:.1}s (深さ {} 読切 {} 帯 {})",
+            "dispatch: empties {empties} moves {movable} deadline {:.1}s (depth {} solve {} band {})",
             p.cap.map_or(-1.0, |c| c.as_secs_f32()),
             p.levels.0,
             p.levels.1,
@@ -3855,7 +3878,7 @@ fn collect_workers(ctx: &mut Ctx, matches: &mut HashMap<String, MatchState>) -> 
             ctx.log(
                 "info",
                 &format!(
-                    "探索が期限を大きく超えたので止めました ({:.1} 秒 / 期限 {:.1} 秒)",
+                    "stopped a search far past its deadline ({:.1}s / deadline {:.1}s)",
                     at.elapsed().as_secs_f32(),
                     cap.as_secs_f32()
                 ),
@@ -3881,9 +3904,12 @@ fn collect_workers(ctx: &mut Ctx, matches: &mut HashMap<String, MatchState>) -> 
         match EngineWorker::spawn(cfg) {
             Ok(w) => {
                 ctx.workers[i] = w;
-                ctx.log("info", "止まらない探索を見捨てて、ワーカーを作り直しました");
+                ctx.log(
+                    "info",
+                    "abandoned an unstoppable search and rebuilt the worker",
+                );
             }
-            Err(e) => ctx.log("info", &format!("ワーカーの作り直しに失敗: {e}")),
+            Err(e) => ctx.log("info", &format!("worker rebuild failed: {e}")),
         }
     }
     for i in 0..ctx.workers.len() {
@@ -3902,15 +3928,15 @@ fn collect_workers(ctx: &mut Ctx, matches: &mut HashMap<String, MatchState>) -> 
             ctx.log(
                 "info",
                 &format!(
-                    "着: {:.1}s{}{} {}",
+                    "reply: {:.1}s{}{} {}",
                     t.as_secs_f32(),
-                    if mv.cut { " (打切)" } else { "" },
+                    if mv.cut { " (cut)" } else { "" },
                     if mv.depth > 0 {
-                        format!(" 深さ {}", mv.depth)
+                        format!(" depth {}", mv.depth)
                     } else {
                         String::new()
                     },
-                    if mv.exact { "読切" } else { "探索" }
+                    if mv.exact { "solve" } else { "search" }
                 ),
             );
         }
@@ -3943,7 +3969,7 @@ fn collect_workers(ctx: &mut Ctx, matches: &mut HashMap<String, MatchState>) -> 
         if now_hash != Some(bh) {
             ctx.log(
                 "info",
-                &format!("{mid}: 読んだ局面と今の局面が違うので指しません (読み直します)"),
+                &format!("{mid}: searched position differs from the current one; not playing (will re-search)"),
             );
             continue;
         }
@@ -3964,14 +3990,14 @@ fn collect_workers(ctx: &mut Ctx, matches: &mut HashMap<String, MatchState>) -> 
             &format!(
                 "{mid} {mstr}: {} {:+.2}{}",
                 if mv.from_book && mv.learned {
-                    "定石 (実戦の学習)"
+                    "book (learned)"
                 } else if mv.from_book {
-                    "定石"
+                    "book"
                 } else {
-                    "探索"
+                    "search"
                 },
                 mv.value,
-                if mv.exact { " (完全読み)" } else { "" }
+                if mv.exact { " (solved)" } else { "" }
             ),
         );
         {
@@ -4317,13 +4343,19 @@ fn handle_match_end(
     drop(s);
     sync_matches(ctx, matches);
     let msg = match my_diff {
-        Some(d) if d > 0 => format!("勝ち +{d} (vs {opp2})", opp2 = opp_for_note),
-        Some(d) if d < 0 => format!("負け {d} (vs {opp_for_note})"),
-        Some(_) => format!("引き分け (vs {opp_for_note})"),
+        Some(d) if d > 0 => crate::i18n::tf(
+            "backend.notify.result_win",
+            &[("diff", &format!("+{d}")), ("opp", &opp_for_note)],
+        ),
+        Some(d) if d < 0 => crate::i18n::tf(
+            "backend.notify.result_loss",
+            &[("diff", &d.to_string()), ("opp", &opp_for_note)],
+        ),
+        Some(_) => crate::i18n::tf("backend.notify.result_draw", &[("opp", &opp_for_note)]),
         None => rest.to_string(),
     };
-    ctx.notify("GGS: 対局終了", &msg);
-    ctx.log("info", &format!("対局終了: {rest}"));
+    ctx.notify(&crate::i18n::t("backend.notify.game_over_title"), &msg);
+    ctx.log("info", &format!("game over: {rest}"));
     ctx.emit(true);
 
     // ---- Queue game imports (learning) ----
@@ -4355,7 +4387,7 @@ fn handle_match_end(
             Ok(job) => {
                 ctx.log(
                     "info",
-                    &format!("学習: {id} を取り込み待ちに追加 ({} 局面)", job.remaining()),
+                    &format!("learn: queued {id} ({} positions)", job.remaining()),
                 );
                 // Count the final discs by replaying — the match record
                 // is gone by the time the import finishes.
@@ -4382,7 +4414,7 @@ fn handle_match_end(
                 };
                 ctx.learn_jobs.push_back((id.clone(), job, entry));
             }
-            Err(e) => ctx.log("info", &format!("学習の準備に失敗 ({id}): {e}")),
+            Err(e) => ctx.log("info", &format!("learn setup failed ({id}): {e}")),
         }
     }
     ctx.emit(true);
@@ -4394,7 +4426,7 @@ fn learn_tick(ctx: &mut Ctx) {
     if ctx.learn_jobs.is_empty() || ctx.ensure_engine().is_err() {
         return;
     }
-    let (id, job, entry) = ctx.learn_jobs.front_mut().expect("非空を確認済み");
+    let (id, job, entry) = ctx.learn_jobs.front_mut().expect("checked non-empty");
     let id = id.clone();
     let entry = entry.clone();
     match ctx.engine.as_mut().unwrap().learn_step(job, LEARN_DEPTH) {
@@ -4408,7 +4440,7 @@ fn learn_tick(ctx: &mut Ctx) {
             ctx.log(
                 "info",
                 &format!(
-                    "学習: {id} を取り込んだ ({} 手の値を更新、{} 局面を追加。残り {} 局)",
+                    "learn: imported {id} ({} values updated, {} positions added, {} left)",
                     out.updated,
                     out.added,
                     ctx.learn_jobs.len()
@@ -4418,7 +4450,7 @@ fn learn_tick(ctx: &mut Ctx) {
         Ok(None) => {}
         Err(e) => {
             ctx.learn_jobs.pop_front();
-            ctx.log("info", &format!("学習に失敗 ({id}): {e}"));
+            ctx.log("info", &format!("learn failed ({id}): {e}"));
         }
     }
 }
@@ -4525,7 +4557,7 @@ fn finish_capture(ctx: &mut Ctx, kind: &str, buf: &[String], login: &str) {
                     ggf: String::new(),
                     parts: Vec::new(),
                     error: if err.is_empty() {
-                        "棋譜が見つかりません".into()
+                        "err.record_not_found".into()
                     } else {
                         err
                     },
@@ -5004,7 +5036,7 @@ mod tests {
             ".9.1".to_string(),
             mk(&[("", "e2"), ("", "g4"), ("", "g5")]),
         );
-        let h = mirror_hint(&ms, ".9.0").expect("借りられるはず");
+        let h = mirror_hint(&ms, ".9.0").expect("borrows the hint");
         assert_eq!(coord(h), "G5");
 
         // Nothing to borrow if the mirror is not ahead.
@@ -5015,7 +5047,10 @@ mod tests {
             ".9.1".to_string(),
             mk(&[("", "e2"), ("", "h4"), ("", "g5")]),
         );
-        assert!(mirror_hint(&ms, ".9.0").is_none(), "分岐後に借りた");
+        assert!(
+            mirror_hint(&ms, ".9.0").is_none(),
+            "borrowed after the boards diverged"
+        );
 
         // No partner board, nothing to borrow.
         ms.remove(".9.1");
@@ -5103,19 +5138,19 @@ mod tests {
 
         let mut m = MatchState::new();
         apply_block(&mut m, &with_clock("00:04,0:0"), "kuroobi");
-        assert!(!m.in_overtime, "まだ本時間");
+        assert!(!m.in_overtime, "still in main time");
         // Main time gone: the server adds the 2:00 grace.
         apply_block(&mut m, &with_clock("02:00,0:0"), "kuroobi");
-        assert!(m.in_overtime, "跳ね上がりを拾えていない");
+        assert!(m.in_overtime, "missed the jump");
         // The more common form: pinned at 00:00 while moves continue.
         let mut m2 = MatchState::new();
         apply_block(&mut m2, &with_clock("00:03,0:0"), "kuroobi");
         assert!(!m2.in_overtime);
         apply_block(&mut m2, &with_clock("00:00,0:0"), "kuroobi");
-        assert!(m2.in_overtime, "0 への張り付きを拾えていない");
+        assert!(m2.in_overtime, "missed the clock stuck at 0");
         // Never clears once set (the clock then just runs down).
         apply_block(&mut m, &with_clock("01:12,0:0"), "kuroobi");
-        assert!(m.in_overtime, "下ろしてしまった");
+        assert!(m.in_overtime, "cleared the overtime flag");
     }
 
     /// Chat survives crashes: appended per-login JSONL, read back at
@@ -5143,12 +5178,12 @@ mod tests {
                 .append(true)
                 .open(chat_path("kuroobi"))
                 .unwrap();
-            let _ = writeln!(f, "{{\"chan\": 切れた行");
+            let _ = writeln!(f, "{{\"chan\": truncated line");
         }
         let back = load_chat("kuroobi");
         std::env::set_current_dir(prev).unwrap();
         let _ = std::fs::remove_dir_all(&dir);
-        assert_eq!(back.len(), 1, "読み戻せていない");
+        assert_eq!(back.len(), 1, "cannot read the file back");
         assert_eq!(back[0].text, "hi");
         assert_eq!(back[0].thread, ".Harmony");
     }
@@ -5181,12 +5216,15 @@ mod tests {
         .collect();
         let mut m = MatchState::new();
         apply_block(&mut m, &join, "kuroobi");
-        assert!(m.moves.is_empty(), "0 番を着手として積んでいる");
+        assert!(m.moves.is_empty(), "move 0 was recorded as a played move");
         let ggf = m.ggf(".1", None);
-        let bo = ggf.split_once("BO[8 ").expect("BO が無い").1;
+        let bo = ggf.split_once("BO[8 ").expect("BO tag present").1;
         let discs = bo.chars().take(64).filter(|c| *c != '-').count();
-        assert_eq!(discs, 6, "抽選明けの盤を開始局面にできていない: {bo}");
-        assert!(!ggf.contains("B[PA]"), "棋譜の先頭にパスが入っている");
+        assert_eq!(
+            discs, 6,
+            "the post-draw board is not the start position: {bo}"
+        );
+        assert!(!ggf.contains("B[PA]"), "the record begins with a pass");
     }
 
     /// Clocks freeze after the game; updates still arrive.
@@ -5204,7 +5242,11 @@ mod tests {
         assert_eq!(m.my_clock_secs, Some(300));
         m.over = true;
         apply_block(&mut m, &with_clock("02:09,0:0"), "kuroobi");
-        assert_eq!(m.my_clock_secs, Some(300), "終局後に時計が動いた");
+        assert_eq!(
+            m.my_clock_secs,
+            Some(300),
+            "the clock moved after the game ended"
+        );
     }
 
     /// Our own games capture the start position too: only watch joins
@@ -5234,10 +5276,16 @@ mod tests {
         let mut m = MatchState::new();
         apply_block(&mut m, &dealt, "kuroobi");
         let ggf = m.ggf(".1", None);
-        let bo = ggf.split_once("BO[8 ").expect("BO が無い").1;
+        let bo = ggf.split_once("BO[8 ").expect("BO tag present").1;
         let discs = bo.chars().take(64).filter(|c| *c != '-').count();
-        assert_eq!(discs, 6, "抽選明けの 6 石が開始局面になっていない: {bo}");
-        assert!(bo[..66].ends_with(" O"), "手番が白になっていない: {bo}");
+        assert_eq!(
+            discs, 6,
+            "the 6-disc post-draw board is not the start position: {bo}"
+        );
+        assert!(
+            bo[..66].ends_with(" O"),
+            "the side to move is not White: {bo}"
+        );
     }
 
     /// A mid-game board must not become the start position (blocks
@@ -5265,9 +5313,9 @@ mod tests {
         let mut m = MatchState::new();
         apply_block(&mut m, &mid, "kuroobi");
         let ggf = m.ggf(".1", None);
-        let bo = ggf.split_once("BO[8 ").expect("BO が無い").1;
+        let bo = ggf.split_once("BO[8 ").expect("BO tag present").1;
         let discs = bo.chars().take(64).filter(|c| *c != '-').count();
-        assert_eq!(discs, 4, "途中の盤を開始局面にした: {bo}");
+        assert_eq!(discs, 4, "a mid-game board became the start position: {bo}");
     }
 
     /// Detect overtime even with time left at the overrun: grace is
@@ -5285,9 +5333,9 @@ mod tests {
         };
         let mut m = MatchState::new();
         apply_block(&mut m, &with_clock("00:50,0:0"), "kuroobi");
-        assert!(!m.in_overtime, "まだ本時間");
+        assert!(!m.in_overtime, "still in main time");
         apply_block(&mut m, &with_clock("01:30,0:0"), "kuroobi");
-        assert!(m.in_overtime, "40 秒の跳ね上がりを拾えていない");
+        assert!(m.in_overtime, "missed the 40-second jump");
     }
 
     /// Increment games must not mistake the increment for overtime.
@@ -5305,7 +5353,7 @@ mod tests {
         // 20s/move increment: spend 5s, gain 20s, net +15s.
         apply_block(&mut m, &with_clock2("05:00,0:0", "0:20"), "kuroobi");
         apply_block(&mut m, &with_clock2("05:15,0:0", "0:20"), "kuroobi");
-        assert!(!m.in_overtime, "加算をロスタイムと誤認した");
+        assert!(!m.in_overtime, "mistook an increment for overtime");
     }
 
     /// A zero before any move never triggers: the flag is sticky, and
@@ -5318,7 +5366,7 @@ mod tests {
             "|* to move".to_string(),
         ];
         apply_block(&mut m, &b, "kuroobi");
-        assert!(!m.in_overtime, "1 手も指していないのに立った");
+        assert!(!m.in_overtime, "set before any move was played");
     }
 
     /// A normally draining clock is not overtime.
@@ -5331,7 +5379,7 @@ mod tests {
                 "|* to move".to_string(),
             ];
             apply_block(&mut m, &b, "kuroobi");
-            assert!(!m.in_overtime, "{secs} でロスタイム扱いになった");
+            assert!(!m.in_overtime, "{secs} was treated as overtime");
         }
     }
 
@@ -5406,7 +5454,10 @@ mod tests {
         /* Move history (rows with eval/time too). Row 0 is never
         stacked — it is the no-moves-yet marker
         (`the_zero_move_marker_is_not_a_move`). */
-        assert!(!m.moves.contains_key(&0), "0 番を着手として積んでいる");
+        assert!(
+            !m.moves.contains_key(&0),
+            "move 0 was recorded as a played move"
+        );
         assert_eq!(m.moves.get(&1).map(|s| s.as_str()), Some("E6"));
         assert_eq!(m.moves.get(&2).map(|s| s.as_str()), Some("f4"));
         assert_eq!(m.kifu(), "e6f4");
@@ -5419,7 +5470,7 @@ mod tests {
         let block: Vec<String> = WATCH_JOIN_BLOCK.iter().map(|s| s.to_string()).collect();
         let mut m = MatchState::new();
         let (rows_ok, turn) = apply_block(&mut m, &block, "kuroobi");
-        assert!(rows_ok, "盤面が 2 枚でも読めること");
+        assert!(rows_ok, "parses even with two boards");
         assert_eq!(turn, Some('*'));
         // We are not a player: treat as watching.
         assert_eq!(m.my_color, None);
@@ -5434,15 +5485,18 @@ mod tests {
         // start would show 14.
         assert_eq!(m.moves.len(), 24);
         let stones = m.cells.iter().filter(|&&c| c != 0).count();
-        assert_eq!(stones, 38, "現在局面の石数");
+        assert_eq!(stones, 38, "disc count of the current position");
 
         // The first board is the drawn start; kept for reconstruction.
         assert_eq!(m.start_cells.iter().filter(|&&c| c != 0).count(), 14);
         let start = m.start_string();
-        assert_eq!(start.len(), 66, "盤面 64 + 空白 + 手番");
-        assert!(start.ends_with(" X"), "開始局面の手番は黒");
+        assert_eq!(start.len(), 66, "64 squares + space + side to move");
+        assert!(
+            start.ends_with(" X"),
+            "Black is to move in the start position"
+        );
         // kuroobi must parse the same format.
-        let board = kuroobi::Board::from_string(&start).expect("盤面文字列として読める");
+        let board = kuroobi::Board::from_string(&start).expect("parses as a board string");
         assert_eq!((board.black | board.white).count_ones(), 14);
     }
 
@@ -5457,8 +5511,8 @@ mod tests {
         let ggf = m.ggf(".45.0", Some("+4.00"));
         assert!(ggf.starts_with("(;GM[Othello]"));
         assert!(ggf.ends_with(";)"));
-        assert!(ggf.contains("PB[nyanyan]"), "黒は nyanyan");
-        assert!(ggf.contains("PW[egrcd]"), "白は egrcd");
+        assert!(ggf.contains("PB[nyanyan]"), "Black is nyanyan");
+        assert!(ggf.contains("PW[egrcd]"), "White is egrcd");
         assert!(ggf.contains("RE[+4.00]"));
         // BO carries '*'/'O', 64 cells + mover.
         let bo = ggf
@@ -5480,18 +5534,18 @@ mod tests {
             moves_part.matches("B[").count() + moves_part.matches("W[").count(),
             24
         );
-        assert!(ggf.contains("B[F3]"), "1 手目は黒の F3");
-        assert!(ggf.contains("W[D2]"), "2 手目は白の D2");
+        assert!(ggf.contains("B[F3]"), "move 1 is Black F3");
+        assert!(ggf.contains("W[D2]"), "move 2 is White D2");
 
         // Must read back as a kuroobi board string.
         let start = bo.replace('*', "X");
-        let board = kuroobi::Board::from_string(&start).expect("BO が読める");
+        let board = kuroobi::Board::from_string(&start).expect("BO parses");
         assert_eq!((board.black | board.white).count_ones(), 14);
 
         // The GGF-reconstructed position must match the watched one.
         let kifu: String = m.kifu();
         let replayed =
-            kuroobi::game::Reversi::from_kifu_with_start(&start, &kifu).expect("再生できる");
+            kuroobi::game::Reversi::from_kifu_with_start(&start, &kifu).expect("replays");
         for (i, &want) in m.cells.iter().enumerate() {
             let bit = 1u64 << i;
             let got = if replayed.board.black & bit != 0 {
@@ -5501,7 +5555,7 @@ mod tests {
             } else {
                 0
             };
-            assert_eq!(got, want, "マス {i} が一致しない");
+            assert_eq!(got, want, "square {i} does not match");
         }
     }
 
@@ -5542,7 +5596,7 @@ mod tests {
             let m = matches.entry(mid).or_insert_with(MatchState::new);
             apply_block(m, &block, "kuroobi");
         }
-        assert_eq!(matches.len(), 2, "2 局が別々に入る");
+        assert_eq!(matches.len(), 2, "the two games are stored separately");
         // C6 is file=2, rank=5; E6 is file=4, rank=5.
         assert_eq!(matches[".56.0"].cells[2 * 8 + 5], 1);
         assert_eq!(matches[".56.0"].cells[4 * 8 + 5], 0);
@@ -5564,10 +5618,10 @@ mod tests {
         matches.insert(".4.1".into(), MatchState::new());
         matches.insert(".9".into(), MatchState::new());
         let dropped = drop_match(&mut matches, ".4");
-        assert_eq!(dropped.len(), 2, "synchro の 2 局とも回収する");
+        assert_eq!(dropped.len(), 2, "both synchro games are collected");
         assert!(!matches.contains_key(".4.0"));
         assert!(!matches.contains_key(".4.1"));
-        assert!(matches.contains_key(".9"), "無関係な対局は残す");
+        assert!(matches.contains_key(".9"), "unrelated games are kept");
 
         // Non-synchro (exact match) still removes.
         let dropped = drop_match(&mut matches, ".9");
@@ -5605,7 +5659,7 @@ mod who_tests {
     fn rating_token() {
         assert_eq!(parse_rating_token("1720.0@350.0"), Some(1720.0));
         assert_eq!(parse_rating_token("1938.0@"), Some(1938.0));
-        assert_eq!(parse_rating_token("+33.6"), None); // 変動値は範囲外
+        assert_eq!(parse_rating_token("+33.6"), None); // a delta is out of range
         assert_eq!(parse_rating_token("71.7="), None);
     }
 }
@@ -5646,7 +5700,7 @@ mod budget_tests {
             "depth",
         );
         assert_eq!((d, solve, band), BASE);
-        assert!(c.is_none(), "期限なし");
+        assert!(c.is_none(), "no deadline");
     }
 
     #[test]
@@ -5656,7 +5710,7 @@ mod budget_tests {
         let c = cap(Some(60), 40, "fast", 0).unwrap();
         assert!(
             a > b && b > c,
-            "残りが減るほど 1 手が短い: {a:?} > {b:?} > {c:?}"
+            "less time left means a shorter move: {a:?} > {b:?} > {c:?}"
         );
     }
 
@@ -5670,13 +5724,16 @@ mod budget_tests {
         }
         // The equal-split formula survives as the baseline (thicker).
         let even = cap(Some(900), 50, "tail:1.0", 0).unwrap();
-        assert!(even > fast, "等分 {even:?} > 既定 {fast:?}");
+        assert!(even > fast, "even split {even:?} > default {fast:?}");
     }
 
     #[test]
     fn the_per_move_cap_is_honoured() {
         let c = cap(Some(3600), 50, "fast", 5).unwrap();
-        assert!(c <= Duration::from_secs(5), "上限 5 秒を超えない: {c:?}");
+        assert!(
+            c <= Duration::from_secs(5),
+            "stays within the 5-second cap: {c:?}"
+        );
     }
 
     #[test]
@@ -5706,7 +5763,10 @@ mod budget_tests {
         moves may exceed the clock. What must hold: one move's deadline
         never exceeds everything available minus the reserve. */
         let b = c.unwrap().as_secs_f64();
-        assert!(b <= 80.0, "1 手の期限が配れるぶん (80 秒) を超えた: {b:.1}");
+        assert!(
+            b <= 80.0,
+            "the per-move deadline exceeded the share available (80s): {b:.1}"
+        );
         assert!(b > 0.0);
     }
 }

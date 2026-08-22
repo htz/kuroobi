@@ -2,6 +2,7 @@ import React from 'react';
 import { Board, BoardDefs } from './board';
 import { Button, Dot, Segmented } from './primitives';
 import { IconButton } from './Icons';
+import { t } from '../i18n';
 // Assets are the single source (assets.d.ts policy): read contents
 // instead of <img src> so no screen-side copy can drift.
 import icon from '../../assets/icon.svg?raw';
@@ -149,14 +150,14 @@ export function Toolbar({ children, aux, dock, graph }: {
            be indistinguishable. */
         <span className="k-graph-toggle">
           <Button size="chip" variant={graph.open ? 'secondary' : 'ghost'}
-                  title="評価値グラフ" onClick={graph.onToggle}>グラフ</Button>
+                  title={t('ui.toolbar.graph_title')} onClick={graph.onToggle}>{t('ui.toolbar.graph')}</Button>
         </span>
       )}
       {dock && (
         <span className="k-dock-toggle">
           {/* panel = vertically split rectangle; reusing ggs-console's
               icon would give one glyph two meanings. */}
-          <IconButton name="panel" label={dock.label ?? (dock.open ? 'パネルを閉じる' : 'パネルを開く')}
+          <IconButton name="panel" label={dock.label ?? t(dock.open ? 'ui.panel.close' : 'ui.panel.open')}
                       onClick={dock.onToggle} />
         </span>
       )}
@@ -182,7 +183,7 @@ export function Dock({ tabs, active, onTab, children, open, scroll = true }: {
     }}>
       <div style={{ padding: 'var(--sp-2)', flex: 'none' }}>
         <Segmented fill value={active} onChange={onTab}
-                   options={tabs.map(t => ({ value: t, label: t }))} />
+                   options={tabs.map(name => ({ value: name, label: name }))} />
       </div>
       <div className={scroll ? 'k-scroll' : undefined} style={{
         flex: 1, minHeight: 0, display: scroll ? undefined : 'flex', flexDirection: 'column',
@@ -272,10 +273,10 @@ export function BottomPanel({ tabs, active, onTab, onClose, height = 240, childr
         height: 'var(--h-field)', flex: 'none', display: 'flex', alignItems: 'center', gap: 'var(--sp-2)',
         padding: '0 var(--sp-3)', borderBottom: '1px solid var(--border-weak)',
       }}>
-        {tabs.map(t => {
-          const on = active === t.id;
+        {tabs.map(tab => {
+          const on = active === tab.id;
           return (
-            <button key={t.id} type="button" onClick={() => onTab?.(t.id)}
+            <button key={tab.id} type="button" onClick={() => onTab?.(tab.id)}
               aria-pressed={on} className={'k-press' + (on ? ' k-on' : '')}
               style={{
                 height: 'var(--h-chip)', padding: '0 var(--sp-3)', border: 0, borderRadius: 'var(--r-1)', fontSize: 'var(--fs-6)',
@@ -283,14 +284,14 @@ export function BottomPanel({ tabs, active, onTab, onClose, height = 240, childr
                 color: on ? 'var(--text)' : 'var(--sub)', fontWeight: on ? 600 : 400,
                 display: 'flex', alignItems: 'center', gap: 'var(--sp-2)',
               }}>
-              {t.label}
-              {t.unread ? <span style={{ background: 'var(--bad)', color: 'var(--on-bad)', borderRadius: 'var(--r-pill)', padding: '0 var(--sp-1)', fontSize: 'var(--fs-7)' }}>{t.unread}</span> : null}
+              {tab.label}
+              {tab.unread ? <span style={{ background: 'var(--bad)', color: 'var(--on-bad)', borderRadius: 'var(--r-pill)', padding: '0 var(--sp-1)', fontSize: 'var(--fs-7)' }}>{tab.unread}</span> : null}
             </button>
           );
         })}
         {onClose && (
           <span style={{ marginLeft: 'auto' }}>
-            <IconButton name="close" label="パネルを閉じる" onClick={onClose} size={14} />
+            <IconButton name="close" label={t('ui.panel.close')} onClick={onClose} size={14} />
           </span>
         )}
       </div>
@@ -365,7 +366,7 @@ export function Modal({ title, sub, body, actions, width = 'var(--w-modal)', onC
           }}>{sub}</div>}
         </div>
         <span style={{ width: 32, flex: 'none', display: 'grid', placeItems: 'center' }}>
-          {onClose && <IconButton name="close" label="閉じる" onClick={onClose} />}
+          {onClose && <IconButton name="close" label={t('ui.close')} onClick={onClose} />}
         </span>
       </div>
 

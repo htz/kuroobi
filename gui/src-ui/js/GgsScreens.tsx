@@ -2,10 +2,11 @@ import React, { useEffect, useRef, useState } from 'react';
 import { api, ggsApi, jsLog, onApp } from './api';
 import type { ChatMsg, GameResult, GgsSnapshot, MatchView, UserRow } from './types';
 import {
-  CLOCK_CHOICES, GTYPE_CHOICES, clockOf, countDiscs, ggsMoveToIndex, gtypeLabel,
+  clockChoices, gtypeChoices, clockOf, countDiscs, ggsMoveToIndex, gtypeLabel,
   fingerGroups, fingerValue, hasJapanese, normKey, parseCond, translate, useClocks,
   type ClockSide, type ClockView,
 } from './ggs';
+import { t, useLang, tErr } from './i18n';
 import { Col, Empty, EmptyBoard, EmptyState, List, Modal, Note, Overlay, Section, TableHead, TableRow, picked } from './components/layout';
 import { Button, Segmented, Select, TextField, Toggle } from './components/primitives';
 import { Strength } from './components/strength';
@@ -31,8 +32,10 @@ export function GgsScreen({ nav, snap, onNav, prefs, onKifu }: {
    *  is no local copy. */
   onKifu: (title: string, kifu: string, archive?: string) => void;
 }) {
+  // Screen root: subscribe so a language switch re-renders the tree.
+  useLang();
   if (nav === 'ggs-login') return <GgsLogin />;
-  if (!snap) return <EmptyState title="GGS に接続していません" />;
+  if (!snap) return <EmptyState title={t('ggs.not_connected')} />;
 
   switch (nav) {
     case 'ggs-play': return <GgsPlay snap={snap} onNav={onNav} prefs={prefs} onKifu={onKifu} />;
@@ -82,12 +85,12 @@ function GgsLogin() {
   const [status, setStatus] = useState('');
 
   const connect = async () => {
-    setStatus('接続しています…');
+    setStatus(t('ggs.login.connecting'));
     try {
       await ggsApi.connect(user, pw);
       setStatus('');
     } catch (e) {
-      setStatus(String(e));
+      setStatus(tErr(e));
     }
   };
 
@@ -102,25 +105,25 @@ function GgsLogin() {
         border: '1px solid var(--border)', padding: 22,
         display: 'flex', flexDirection: 'column', gap: 'var(--sp-3h)',
       }}>
-        <div style={{ fontSize: 'var(--fs-3)', fontWeight: 600 }}>GGS へログイン</div>
+        <div style={{ fontSize: 'var(--fs-3)', fontWeight: 600 }}>{t('ggs.login.title')}</div>
         <Note>
           <span style={{ fontFamily: 'var(--ff-mono)' }}>skatgame.net:5000</span>
-          {' '}— ログインに成功するとキーチェーンに保存され、次回から自動ログインします
+          {' '}{t('ggs.login.note')}
         </Note>
         <div style={{ display: 'flex', flexDirection: 'column', gap: 'var(--sp-2)' }}>
-          <LoginField label="ログイン名">
+          <LoginField label={t('ggs.login.username')}>
             <TextField value={user} onChange={setUser} />
           </LoginField>
-          <LoginField label="パスワード">
+          <LoginField label={t('ggs.login.password')}>
             <TextField value={pw} password onChange={setPw} />
           </LoginField>
         </div>
         <Button size="field" variant="primary" className="k-wide"
-                onClick={() => void connect()}>ログイン</Button>
+                onClick={() => void connect()}>{t('ggs.login.submit')}</Button>
         {/* Reserve the line even when empty so nothing shifts. */}
         <div style={{
           fontSize: 'var(--fs-6)', minHeight: 16,
-          color: status.startsWith('接続') ? 'var(--sub)' : 'var(--bad)',
+          color: status === t('ggs.login.connecting') ? 'var(--sub)' : 'var(--bad)',
         }}>{status}</div>
       </div>
     </div>
@@ -152,7 +155,7 @@ export function GgsConsole({ snap }: { snap: GgsSnapshot }) {
   const [from, setFrom] = useState(0);
   /* One-line result (rule 34 — only failures and why-nothing-moved). */
   const [note, setNote] = useState('');
-  const say = (t: string) => { setNote(t); window.setTimeout(() => setNote(''), 2500); };
+  const say = (msg: string) => { setNote(msg); window.setTimeout(() => setNote(''), 2500); };
   const send = () => {
     const c = cmd.trim();
     if (!c) return;
@@ -167,19 +170,21 @@ export function GgsConsole({ snap }: { snap: GgsSnapshot }) {
   return (
     <div style={{ flex: 1, minHeight: 0, display: 'flex', flexDirection: 'column' }}>
       <div style={{ flex: 1, minHeight: 0, display: 'flex', flexDirection: 'column', padding: '0 var(--sp-4)' }}>
-        <Section title="通信ログ" aside={<>
+        <Section title={t('ggs.console.title')} aside={<>
           <Segmented value={dir} onChange={setDir} options={[
-            { value: 'all', label: 'すべて' },
-            { value: 'out', label: '送信' },
-            { value: 'in', label: '受信' },
+            { value: 'all', label: t('ggs.filter.all') },
+            { value: 'out', label: t('ggs.console.dir_out') },
+            { value: 'in', label: t('ggs.console.dir_in') },
           ]} />
-          <Button onClick={() => setFrom(all.length)} disabled={!all.length}>クリア</Button>
+          <Button onClick={() => setFrom(all.length)} disabled={!all.length}>{t('ggs.console.clear')}</Button>
           <Button disabled={!shown.length}
                   onClick={() => void ggsApi.saveLog(
                     shown.map((l) => (l.dir === 'out' ? '› ' : '') + l.text).join('\n') + '\n',
                   )
                     // Silence on success (rule 34).
-                    .catch((e) => say('保存できませんでした (' + e + ')'))}>保存</Button>
+                    .catch((e) => say(t('ggs.console.save_failed', { error: tErr(e) })))}>
+            {t('ggs.console.save')}
+          </Button>
           {note && <span style={{
             fontSize: 'var(--fs-6)', letterSpacing: 0, color: 'var(--bad)',
           }}>{note}</span>}
@@ -193,8 +198,8 @@ export function GgsConsole({ snap }: { snap: GgsSnapshot }) {
         {/* Enter sends here too — a raw-command loop shouldn't need
             the button each time. */}
         <TextField mono value={cmd} onChange={setCmd} onEnter={send}
-                   placeholder="コマンド (例: tell /os who 8。Enter で送信)" />
-        <Button size="field" onClick={send}>送信</Button>
+                   placeholder={t('ggs.console.placeholder')} />
+        <Button size="field" onClick={send}>{t('ggs.send')}</Button>
       </div>
     </div>
   );
@@ -265,20 +270,20 @@ export function GgsChat({ snap }: { snap: GgsSnapshot }) {
       if (key in trs || pending.current.has(key)) continue;
       pending.current.add(key);
       translate(c.text, 'ja')
-        .then((t) => setTrs((prev) => ({ ...prev, [key]: t && t !== c.text ? t : '' })))
+        .then((tr) => setTrs((prev) => ({ ...prev, [key]: tr && tr !== c.text ? tr : '' })))
         .catch(() => setTrs((prev) => ({ ...prev, [key]: '' })));
     }
   }, [msgs, autoJa, trs, login]);
 
   const send = async () => {
-    let t = text.trim();
-    if (!t) return;
+    let msg = text.trim();
+    if (!msg) return;
     setText('');
-    if (toEn && hasJapanese(t)) {
-      try { t = (await translate(t, 'en')) || t; } catch (e) { jsLog('翻訳失敗: ' + e); }
+    if (toEn && hasJapanese(msg)) {
+      try { msg = (await translate(msg, 'en')) || msg; } catch (e) { jsLog('translation failed: ' + e); }
     }
     // Recipient is the open conversation (global or a name).
-    ggsApi.chat(cur, t).catch((e) => jsLog(String(e)));
+    ggsApi.chat(cur, msg).catch((e) => jsLog(String(e)));
   };
 
   // Precompute date headers and same-speaker name elision.
@@ -306,10 +311,10 @@ export function GgsChat({ snap }: { snap: GgsSnapshot }) {
           padding: 'var(--sp-3) var(--sp-4)', borderBottom: '1px solid var(--border-weak)',
         }}>
           <span style={{ fontSize: 'var(--fs-3)', fontWeight: 600 }}>
-            {cur === '.chat' ? '全体チャット' : cur}
+            {cur === '.chat' ? t('ggs.chat.global') : cur}
           </span>
           <span style={{ fontSize: 'var(--fs-6)', color: 'var(--sub)' }}>
-            {cur === '.chat' ? 'ここにいる全員に届きます' : '本人にだけ届きます'}
+            {cur === '.chat' ? t('ggs.chat.to_everyone') : t('ggs.chat.to_person')}
           </span>
         </div>
         {/* Translation toggles get their own strip above the send row
@@ -320,8 +325,8 @@ export function GgsChat({ snap }: { snap: GgsSnapshot }) {
           flex: 'none', height: 'var(--h-field)', display: 'flex', alignItems: 'center',
           gap: 'var(--sp-4)', padding: '0 var(--sp-4)', borderBottom: '1px solid var(--border-weak)',
         }}>
-          <Toggle checked={autoJa} onChange={setAutoJa} label="和訳して表示" />
-          <Toggle checked={toEn} onChange={setToEn} label="英訳して送信" />
+          <Toggle checked={autoJa} onChange={setAutoJa} label={t('ggs.chat.translate_in')} />
+          <Toggle checked={toEn} onChange={setToEn} label={t('ggs.chat.translate_out')} />
         </div>
         <div className="k-scroll" ref={box} style={{
           flex: 1, minHeight: 0, padding: 'var(--sp-4)',
@@ -332,7 +337,7 @@ export function GgsChat({ snap }: { snap: GgsSnapshot }) {
           {/* Messages stack from the bottom; center only when empty. */}
           {!rows.length && (
             <span style={{ margin: 'auto' }}>
-              <Empty>{cur === '.chat' ? 'まだ発言はありません。' : 'まだやりとりはありません。'}</Empty>
+              <Empty>{cur === '.chat' ? t('ggs.chat.empty_global') : t('ggs.chat.empty_thread')}</Empty>
             </span>
           )}
           {rows.map(({ c, day, dayHead, head }, i) => (
@@ -350,14 +355,14 @@ export function GgsChat({ snap }: { snap: GgsSnapshot }) {
           padding: 'var(--sp-3) var(--sp-4)', borderTop: '1px solid var(--border-weak)',
         }}>
           <TextField value={text} onChange={setText} onEnter={() => void send()}
-                     placeholder="メッセージを入力 (Enter で送信)" />
-          <Button size="field" variant="primary" onClick={() => void send()}>送信</Button>
+                     placeholder={t('ggs.chat.placeholder')} />
+          <Button size="field" variant="primary" onClick={() => void send()}>{t('ggs.send')}</Button>
         </div>
       </div>
       {pick && (
-        <PickOne title="誰に話しかけますか?"
+        <PickOne title={t('ggs.chat.pick_title')}
                  body={<span style={{ fontSize: 'var(--fs-6)', color: 'var(--sub)' }}>
-                   接続中の人だけを出しています。
+                   {t('ggs.chat.pick_note')}
                  </span>}
                  options={snap.users.filter((u) => u.name !== login).map((u) => [u.name, u.name] as [string, string])}
                  onCancel={() => setPick(false)}
@@ -395,14 +400,15 @@ function GgsLobby({ snap, onNav }: { snap: GgsSnapshot; onNav: (id: NavId) => vo
   return (
     <div style={{ flex: 1, minHeight: 0, display: 'flex' }}>
       <div className="k-scroll" style={{ flex: 1, minWidth: 0, padding: 'var(--sp-4) var(--sp-2) 0' }}>
-        <Section title="対局中" aside={games.length ? `${games.length} 局` : undefined}>
-          {!games.length && <Empty>進行中の対局はありません。</Empty>}
+        <Section title={t('ggs.lobby.ongoing_title')}
+                 aside={games.length ? t('ggs.lobby.game_count', { n: games.length }) : undefined}>
+          {!games.length && <Empty>{t('ggs.lobby.no_ongoing')}</Empty>}
           {/* Rows stay tight; the section gap (12px) between rows
               reads as bullet points (hit before in book and log). */}
           <List>
           {games.map((o) => (
             <Row key={o.id}
-                 title={`${o.names[0] || '?'} 対 ${o.names[1] || '?'}`}
+                 title={t('ggs.vs', { a: o.names[0] || '?', b: o.names[1] || '?' })}
                  sub={gtypeLabel(o.gtype)}
                  actions={
                    <Button size="row" variant={o.watching ? 'danger' : 'primary'}
@@ -413,14 +419,14 @@ function GgsLobby({ snap, onNav }: { snap: GgsSnapshot; onNav: (id: NavId) => vo
                              // the game screen and show THAT game.
                              if (on) { focusMatch(o.id); onNav('ggs-play'); }
                            }}>
-                     {o.watching ? '観戦をやめる' : '観戦'}
+                     {o.watching ? t('ggs.stop_observing') : t('ggs.observe')}
                    </Button>} />
           ))}
           </List>
         </Section>
 
-        <Section title="対局の申し込み">
-          {!snap.offers.length && <Empty>対局の申し込みはありません。</Empty>}
+        <Section title={t('ggs.match_requests')}>
+          {!snap.offers.length && <Empty>{t('ggs.lobby.no_requests')}</Empty>}
           {/* Wrapped in List here too — the 12px section gap trap, hit
               for the fifth time. */}
           <List>
@@ -428,22 +434,22 @@ function GgsLobby({ snap, onNav }: { snap: GgsSnapshot; onNav: (id: NavId) => vo
             const who = o.names.filter((n) => n !== snap.login);
             return (
               <React.Fragment key={o.id}>
-              <Row title={who.join(' と ') || '?'}
+              <Row title={who.join(t('ggs.and_separator')) || '?'}
                    // Rule 27 — only addressed-to-me and unread get
                    // --bad; accent would blend with clickable blue.
-                   tag={o.incoming ? '自分宛' : undefined}
+                   tag={o.incoming ? t('ggs.tag.to_me') : undefined}
                    tagTone={o.incoming ? 'bad' : undefined}
                    alert={o.incoming}
-                   sub={`${gtypeLabel(o.gtype)} · ${o.time || '?'}${o.rated ? ' · レート戦' : ''}`}
+                   sub={`${gtypeLabel(o.gtype)} · ${o.time || '?'}${o.rated ? ' · ' + t('ggs.rated') : ''}`}
                    actions={<>
                      {/* Details exist on others' requests too: the
                          one-line summary drops color/komi/random-ply,
                          and you want the raw row before accepting. */}
-                     <Button size="row" onClick={() => setInfo(info === o.id ? '' : o.id)}>情報</Button>
+                     <Button size="row" onClick={() => setInfo(info === o.id ? '' : o.id)}>{t('ggs.lobby.raw_info')}</Button>
                      {o.incoming && <>
                        <Button size="row" variant="primary"
-                               onClick={() => { focusMatch(o.id); void ggsApi.accept(o.id); }}>受ける</Button>
-                       <Button size="row" variant="danger" onClick={() => void ggsApi.decline(o.id)}>断る</Button>
+                               onClick={() => { focusMatch(o.id); void ggsApi.accept(o.id); }}>{t('ggs.lobby.accept')}</Button>
+                       <Button size="row" variant="danger" onClick={() => void ggsApi.decline(o.id)}>{t('ggs.lobby.decline')}</Button>
                      </>}
                    </>} />
               {info === o.id && (
@@ -451,7 +457,7 @@ function GgsLobby({ snap, onNav }: { snap: GgsSnapshot; onNav: (id: NavId) => vo
                   padding: 'var(--sp-2) var(--sp-3)', borderBottom: '1px solid var(--border-weak)',
                   fontFamily: 'var(--ff-mono)', fontSize: 'var(--fs-7)', color: 'var(--sub)',
                   lineHeight: 1.7, wordBreak: 'break-all',
-                }}>{o.raw || '元の行がありません'}</div>
+                }}>{o.raw || t('ggs.lobby.no_raw')}</div>
               )}
               </React.Fragment>
             );
@@ -466,26 +472,26 @@ function GgsLobby({ snap, onNav }: { snap: GgsSnapshot; onNav: (id: NavId) => vo
         width: 'var(--w-dock)', flex: 'none', borderLeft: '1px solid var(--border)',
         padding: 'var(--sp-4) var(--sp-2) 0', minHeight: 0,
       }}>
-        <Section title="対局を申し込む">
-          <Field label="相手">
+        <Section title={t('ggs.lobby.request_title')}>
+          <Field label={t('ggs.field.opponent')}>
             <Select value={names.includes(opp) ? opp : ''} onChange={setOpp}
-                    options={[['', '指定しない (誰でも)'], ...names.map((n) => [n, n] as [string, string])]} />
+                    options={[['', t('ggs.opponent_any')], ...names.map((n) => [n, n] as [string, string])]} />
           </Field>
-          <Field label="形式"><Select value={gtype} onChange={setGtype} options={GTYPE_CHOICES} /></Field>
-          <Field label="持ち時間"><Select value={time} onChange={setTime} options={CLOCK_CHOICES} /></Field>
+          <Field label={t('ggs.field.format')}><Select value={gtype} onChange={setGtype} options={gtypeChoices()} /></Field>
+          <Field label={t('ggs.field.time_control')}><Select value={time} onChange={setTime} options={clockChoices()} /></Field>
           {/* Rated-ness is account-level in /os; the backend sends it
               before each request. This only holds the choice for this
               request. */}
           {/* Noun heading, verb chips — matching the other settings.
               "Rated" is the GGS term, so it heads the row as-is. */}
-          <Field label="レート戦">
+          <Field label={t('ggs.rated')}>
             {/* When banned: disabled with the reason in place (rule
                 61). The send path blocks too; this is presentation. */}
             <Segmented value={rated && !noRated ? 'on' : 'off'} disabled={noRated}
                        onChange={(v) => setRated(v === 'on')}
-                       options={[{ value: 'on', label: 'する' },
-                                 { value: 'off', label: 'しない' }]} />
-            {noRated && <Note>レート戦を禁じて起動しています (KUROOBI_NO_RATED)。</Note>}
+                       options={[{ value: 'on', label: t('ggs.on') },
+                                 { value: 'off', label: t('ggs.off') }]} />
+            {noRated && <Note>{t('ggs.no_rated_note')}</Note>}
           </Field>
           {/* An opponent-less request is an open invitation; /os ask
               supports that, so don't block it. */}
@@ -493,26 +499,23 @@ function GgsLobby({ snap, onNav }: { snap: GgsSnapshot; onNav: (id: NavId) => vo
               the fill-then-press sequence (as in login). */}
           <Button size="field" variant="primary" disabled={!calibrated}
                   onClick={() => void ggsApi.ask(gtype, time, opp, rated)}>
-            {opp ? '申し込む' : '募集する'}
+            {opp ? t('ggs.lobby.ask') : t('ggs.lobby.open_request')}
           </Button>
-          {!calibrated && <Note>{CALIB_NOTE}</Note>}
-          <Note>
-            同期対局は同じ開局を先後入れ替えて 2 局同時に行い、結果は合計で判定します。
-            レートは「ランダム開局」に反映されます。
-          </Note>
+          {!calibrated && <Note>{calibNote()}</Note>}
+          <Note>{t('ggs.lobby.synchro_note')}</Note>
         </Section>
 
         {/* Adjourned games arrive once at login; later adjournments
             require asking again. */}
-        <Section title="中断対局"
-                 aside={<Button onClick={() => void ggsApi.listStored()}>更新</Button>}>
-          {!snap.stored.length && <Empty>中断対局はありません。</Empty>}
+        <Section title={t('ggs.adjourned_games')}
+                 aside={<Button onClick={() => void ggsApi.listStored()}>{t('ggs.refresh')}</Button>}>
+          {!snap.stored.length && <Empty>{t('ggs.lobby.no_adjourned')}</Empty>}
           {/* Rows stay tight (the 12px section-gap trap). */}
           <List>
           {snap.stored.map((x) => (
             <Row key={x.id} title={x.opp || '?'} sub={gtypeLabel(x.gtype)}
                  actions={<Button size="row" variant="primary"
-                                  onClick={() => void ggsApi.resumeStored(x.id)}>再開</Button>} />
+                                  onClick={() => void ggsApi.resumeStored(x.id)}>{t('ggs.lobby.resume')}</Button>} />
           ))}
           </List>
         </Section>
@@ -608,8 +611,9 @@ function useCalibrated(): boolean {
   return ok;
 }
 
-/** Uncalibrated message — includes the remedy (rule 34). */
-const CALIB_NOTE = '読切の速度をまだ測っていません。設定 → エンジン の「読切の速度」で測ってください (数秒で終わります)。';
+/** Uncalibrated message — includes the remedy (rule 34). Read per
+ *  call so a language switch re-renders it. */
+const calibNote = (): string => t('ggs.calib_note');
 
 /* ---------------- Waiting mode ----------------
  *
@@ -634,7 +638,9 @@ function GgsStandby({ snap, onNav }: { snap: GgsSnapshot; onNav: (id: NavId) => 
      and counting them would leave "playing" stuck forever after one
      game (the backend's auto-accept uses the same test). */
   const playing = snap.matches.some((m) => !m.over);
-  const state = sb.enabled ? (playing ? '対局中' : '申し込み待ち') : '停止中';
+  const state = sb.enabled
+    ? (playing ? t('ggs.standby.state_playing') : t('ggs.standby.state_waiting'))
+    : t('ggs.standby.state_off');
 
   const toggle = () => void ggsApi.setStandby({
     // Banned means false no matter what; stale screens don't pass.
@@ -654,14 +660,14 @@ function GgsStandby({ snap, onNav }: { snap: GgsSnapshot; onNav: (id: NavId) => 
 
   return (
     <div className="k-scroll" style={{ flex: 1, minHeight: 0, padding: 'var(--sp-4) var(--sp-4) 0' }}>
-      <Section title="連戦の待機"
+      <Section title={t('ggs.standby.title')}
                aside={<span style={{ display: 'flex', alignItems: 'center', gap: 'var(--sp-3)' }}>
                  <Tag tone={sb.enabled ? 'ok' : 'sub'}>{state}</Tag>
-                 <Stat v={st.games} label="局" />
-                 <Stat v={st.wins} label="勝" color="var(--ok)" />
-                 <Stat v={st.losses} label="敗" color="var(--bad)" />
-                 <Stat v={st.draws} label="分" />
-                 <Stat v={`${st.diff_sum > 0 ? '+' : ''}${st.diff_sum}`} label="石差" />
+                 <Stat v={st.games} label={t('ggs.stat.games')} />
+                 <Stat v={st.wins} label={t('ggs.stat.wins')} color="var(--ok)" />
+                 <Stat v={st.losses} label={t('ggs.stat.losses')} color="var(--bad)" />
+                 <Stat v={st.draws} label={t('ggs.stat.draws')} />
+                 <Stat v={`${st.diff_sum > 0 ? '+' : ''}${st.diff_sum}`} label={t('ggs.stat.disc_diff')} />
                </span>}>
         {/* Three-column grid with no per-field widths — those cramp
             the format select and shrink number fields unevenly. Split
@@ -670,64 +676,58 @@ function GgsStandby({ snap, onNav }: { snap: GgsSnapshot; onNav: (id: NavId) => 
           display: 'grid', gap: 'var(--sp-4)',
           gridTemplateColumns: 'repeat(auto-fit, minmax(240px, 1fr))',
         }}>
-          <Field stretch label="相手">
+          <Field stretch label={t('ggs.field.opponent')}>
             <Select value={names.includes(opp) ? opp : ''} onChange={setOpp}
-                    options={[['', '指定しない (誰でも)'], ...names.map((n) => [n, n] as [string, string])]} />
+                    options={[['', t('ggs.opponent_any')], ...names.map((n) => [n, n] as [string, string])]} />
           </Field>
-          <Field stretch label="形式"><Select value={gtype} onChange={setGtype} options={GTYPE_CHOICES} /></Field>
-          <Field stretch label="持ち時間"><Select value={time} onChange={setTime} options={CLOCK_CHOICES} /></Field>
-          <Field stretch label="最大対局数 (0 = 無制限)">
+          <Field stretch label={t('ggs.field.format')}><Select value={gtype} onChange={setGtype} options={gtypeChoices()} /></Field>
+          <Field stretch label={t('ggs.field.time_control')}><Select value={time} onChange={setTime} options={clockChoices()} /></Field>
+          <Field stretch label={t('ggs.standby.max_games')}>
             <TextField numeric align="right" value={String(maxGames)}
                        onChange={(x) => setMaxGames(+x || 0)} />
           </Field>
-          <Field stretch label="対局の間隔 (秒)">
+          <Field stretch label={t('ggs.standby.interval')}>
             <TextField numeric align="right" value={String(interval)}
                        onChange={(x) => setInterval(+x || 0)} />
           </Field>
           {/* Rated-ness for outgoing requests (account-level; sent
               before each). Incoming requests' rated-ness is the
               asker's choice. */}
-          <Field label="レート戦">
+          <Field label={t('ggs.rated')}>
             {/* When banned: disabled with the reason in place (rule
                 61). The send path blocks too; this is presentation. */}
             <Segmented value={rated && !noRated ? 'on' : 'off'} disabled={noRated}
                        onChange={(v) => setRated(v === 'on')}
-                       options={[{ value: 'on', label: 'する' },
-                                 { value: 'off', label: 'しない' }]} />
-            {noRated && <Note>レート戦を禁じて起動しています (KUROOBI_NO_RATED)。</Note>}
+                       options={[{ value: 'on', label: t('ggs.on') },
+                                 { value: 'off', label: t('ggs.off') }]} />
+            {noRated && <Note>{t('ggs.no_rated_note')}</Note>}
           </Field>
         </div>
         {/* Toggle pushes its knob right; unconstrained it drifts to
             the screen edge. */}
         <span style={{ width: 300, display: 'block' }}>
-          <Toggle checked={autoAccept} onChange={setAutoAccept} label="届いた申し込みを自動で受ける" />
+          <Toggle checked={autoAccept} onChange={setAutoAccept} label={t('ggs.standby.auto_accept')} />
         </span>
         <div>
           {/* Stopping works even uncalibrated — never trap the user. */}
           <Button variant={sb.enabled ? 'danger' : 'primary'}
                   disabled={!sb.enabled && !calibrated} onClick={toggle}>
-            {sb.enabled ? '待機モードを停止' : '待機モードを開始'}
+            {sb.enabled ? t('ggs.standby.stop') : t('ggs.standby.start')}
           </Button>
-          {!sb.enabled && !calibrated && <Note>{CALIB_NOTE}</Note>}
+          {!sb.enabled && !calibrated && <Note>{calibNote()}</Note>}
         </div>
-        <Note>
-          対局終了 → 間隔待ち → 自動申し込みを繰り返します。切断時は自動で再接続し、
-          中断対局も自動再開します。相手を指定しないときは自分からは申し込まず、
-          届いた申し込みを受けるだけになります。
-        </Note>
+        <Note>{t('ggs.standby.note')}</Note>
       </Section>
 
       {/* Section name and description per §7. The old "two editable
           copies compete" note was builder's reasoning — rule 64 keeps
           that out of the UI. What the reader needs: it persists
           across restarts. */}
-      <Section title="申し込みの条件 (サーバー側)"
-               aside={<Button onClick={() => onNav('ggs-settings')}>条件を変える</Button>}>
-        <Note>
-          アプリを閉じてもサーバー側で有効な条件です。待機モードの保険になります。
-        </Note>
-        <FormulaRow label="自動で受ける条件" src={form('accept')} />
-        <FormulaRow label="自動で断る条件" src={form('decline')} />
+      <Section title={t('ggs.standby.formula_title')}
+               aside={<Button onClick={() => onNav('ggs-settings')}>{t('ggs.standby.edit_conditions')}</Button>}>
+        <Note>{t('ggs.standby.formula_note')}</Note>
+        <FormulaRow label={t('ggs.finger.accept')} src={form('accept')} />
+        <FormulaRow label={t('ggs.finger.decline')} src={form('decline')} />
       </Section>
     </div>
   );
@@ -736,7 +736,8 @@ function GgsStandby({ snap, onNav }: { snap: GgsSnapshot; onNav: (id: NavId) => 
 function Stat({ v, label, color }: { v: number | string; label: string; color?: string }) {
   return (
     <span style={{ fontSize: 'var(--fs-6)', color: 'var(--sub)', letterSpacing: 0 }}>
-      <b style={{ color: color ?? 'var(--text)', fontWeight: 600 }}>{v}</b>{label}
+      <b style={{ color: color ?? 'var(--text)', fontWeight: 600 }}>{v}</b>
+      <span style={{ marginLeft: 2 }}>{label}</span>
     </span>
   );
 }
@@ -747,7 +748,7 @@ function FormulaRow({ label, src }: { label: string; src: string }) {
     <div style={{ display: 'flex', gap: 'var(--sp-3)', alignItems: 'flex-start' }}>
       <span style={{ width: 'var(--w-label)', flex: 'none', fontSize: 'var(--fs-6)', color: 'var(--sub)' }}>{label}</span>
       {cond ? <FormulaView node={cond} top />
-            : <span style={{ fontSize: 'var(--fs-5)', color: 'var(--sub)' }}>指定なし</span>}
+            : <span style={{ fontSize: 'var(--fs-5)', color: 'var(--sub)' }}>{t('ggs.formula.unset')}</span>}
     </div>
   );
 }
@@ -793,17 +794,17 @@ function GgsPlay({ snap, onNav, prefs, onKifu }: {
 
   if (!groups.size) {
     return (
-      <EmptyState title="対局はまだありません"
+      <EmptyState title={t('ggs.play.empty_title')}
                   visual={<EmptyBoard />}
-                  body="ロビーで申し込むか、進行中の対局を観戦できます。"
+                  body={t('ggs.play.empty_body')}
                   actions={<>
-                    <Button variant="primary" onClick={() => onNav('ggs-lobby')}>ロビーへ</Button>
+                    <Button variant="primary" onClick={() => onNav('ggs-lobby')}>{t('ggs.play.to_lobby')}</Button>
                     {/* The design's second button: with no games,
                         auto-requesting is faster. */}
-                    <Button onClick={() => onNav('ggs-standby')}>待機モードへ</Button>
+                    <Button onClick={() => onNav('ggs-standby')}>{t('ggs.play.to_standby')}</Button>
                     {/* The list can be stale right after reconnect;
                         keep a re-ask path. */}
-                    <Button onClick={() => void ggsApi.listMatches()}>更新</Button>
+                    <Button onClick={() => void ggsApi.listMatches()}>{t('ggs.refresh')}</Button>
                   </>} />
     );
   }
@@ -874,9 +875,11 @@ function MatchBoard({ snap, m, clock, prefs, onKifu, face }: {
      diff, but a bare number reads as black's — worse in synchro pairs
      where own color flips per board. */
   const myEval = m.last_eval != null
-    ? '自分 ' + (m.last_from_book ? '定石 ' : '') + (m.last_eval > 0 ? '+' : '')
-      + (m.last_eval_exact ? m.last_eval.toFixed(0) : m.last_eval.toFixed(1))
-      + (m.last_eval_exact ? ' 読切' : '')
+    ? t('ggs.play.my_eval', {
+        v: (m.last_from_book ? t('ggs.play.book_mark') + ' ' : '') + (m.last_eval > 0 ? '+' : '')
+          + (m.last_eval_exact ? m.last_eval.toFixed(0) : m.last_eval.toFixed(1))
+          + (m.last_eval_exact ? ' ' + t('ggs.play.solve_mark') : ''),
+      })
     : undefined;
 
   /* Show the opponent's reported eval too. GGS move rows arrive as
@@ -885,8 +888,10 @@ function MatchBoard({ snap, m, clock, prefs, onKifu, face }: {
      so one line compares who misreads by how much. Absent when the
      opponent doesn't report. */
   const oppEval = !observer && m.opp_eval != null
-    ? '相手 ' + (m.opp_eval > 0 ? '+' : '') + m.opp_eval.toFixed(1)
-      + (m.opp_secs_used != null ? ` · ${m.opp_secs_used.toFixed(0)}s` : '')
+    ? t('ggs.play.opp_eval', {
+        v: (m.opp_eval > 0 ? '+' : '') + m.opp_eval.toFixed(1)
+          + (m.opp_secs_used != null ? ` · ${m.opp_secs_used.toFixed(0)}s` : ''),
+      })
     : undefined;
 
   /* Reported-eval trend. Move numbers as X leave holes (silent
@@ -955,8 +960,10 @@ function MatchBoard({ snap, m, clock, prefs, onKifu, face }: {
           height: 'var(--h-head)', display: 'flex', alignItems: 'center', gap: 'var(--sp-3)',
           fontSize: 'var(--fs-7)', color: 'var(--sub)',
         }}>
-          <span>{face} 面目</span>
-          {m.my_color && <span>自分が{m.my_color === 'black' ? '黒' : '白'}</span>}
+          <span>{t('ggs.play.board_n', { n: face })}</span>
+          {m.my_color && (
+            <span>{m.my_color === 'black' ? t('ggs.play.my_color_black') : t('ggs.play.my_color_white')}</span>
+          )}
         </div>
       )}
       <PlayerRow color={top.color === 'black' ? 'b' : 'w'} name={top.name || '?'}
@@ -992,12 +999,12 @@ function MatchBoard({ snap, m, clock, prefs, onKifu, face }: {
         fontSize: 'var(--fs-6)', color: 'var(--sub)',
       }}>
         <span style={{ color: 'var(--text)' }}>{black} – {white}</span>
-        <span>{m.moves.length} 手</span>
+        <span>{t('ggs.play.moves', { n: m.moves.length })}</span>
         {/* Observation analysis is stored black-view (ggs.rs); say
             whose view, or the sign is unmoored from the board. */}
         {observer && m.watch_eval != null && (
           <span style={{ display: 'inline-flex', alignItems: 'center', gap: 4 }}>
-            解析 <StoneDot color="b" />
+            {t('ggs.play.analysis')} <StoneDot color="b" />
             {m.watch_eval > 0 ? '+' : ''}{m.watch_eval.toFixed(1)}
             {m.watch_best ? ` (${m.watch_best})` : ''}
           </span>
@@ -1006,25 +1013,28 @@ function MatchBoard({ snap, m, clock, prefs, onKifu, face }: {
             show whether depth is moving. */}
         {m.busy === 'think' && (
           <span style={{ color: 'var(--accent)' }}>
-            思考中{m.busy_depth > 0 ? ` ${m.busy_depth} 手` : ''}
+            {m.busy_depth > 0
+              ? t('ggs.play.thinking_depth', { n: m.busy_depth })
+              : t('ggs.play.thinking')}
           </span>
         )}
-        {m.busy === 'solve' && <span style={{ color: 'var(--accent)' }}>読切中</span>}
-        {m.busy === 'select' && <span style={{ color: 'var(--accent)' }}>選択読み中</span>}
-        {m.busy === 'ponder' && <span style={{ color: 'var(--sub)' }}>先読み中</span>}
+        {m.busy === 'solve' && <span style={{ color: 'var(--accent)' }}>{t('ggs.play.solving')}</span>}
+        {m.busy === 'select' && <span style={{ color: 'var(--accent)' }}>{t('ggs.play.selecting')}</span>}
+        {m.busy === 'ponder' && <span style={{ color: 'var(--sub)' }}>{t('ggs.play.pondering')}</span>}
         {!m.busy && snap.thinking === m.id && (
-          <span style={{ color: 'var(--accent)' }}>思考中</span>
+          <span style={{ color: 'var(--accent)' }}>{t('ggs.play.thinking')}</span>
         )}
         {/* Adjournment is not a finish: no margin, so no result — say
             who left. Aborts (mutual) end without a result too. */}
         {m.ended === 'adjourned' && (
           <span style={{ color: 'var(--gold)' }}>
-            中断{m.left_by ? ` · ${m.left_by} が退室` : ''}
+            {t('ggs.state.adjourned')}
+            {m.left_by ? ' · ' + t('ggs.play.left_by', { who: m.left_by }) : ''}
           </span>
         )}
-        {m.ended === 'aborted' && <span style={{ color: 'var(--sub)' }}>中止</span>}
+        {m.ended === 'aborted' && <span style={{ color: 'var(--sub)' }}>{t('ggs.state.aborted')}</span>}
         {m.ended === 'finished' && m.result && (
-          <span style={{ color: 'var(--text)' }}>終局 {m.result}</span>
+          <span style={{ color: 'var(--text)' }}>{t('ggs.play.finished_result', { result: m.result })}</span>
         )}
         <span style={{ marginLeft: 'auto' }} />
         {/* Finished games stay listed and their records are
@@ -1033,17 +1043,21 @@ function MatchBoard({ snap, m, clock, prefs, onKifu, face }: {
             re-fetched (synchro brings both boards plus evals).
             Without it this dead-ended at "cannot read record". */}
         <Button
-                onClick={() => onKifu(m.opp_name ? `${m.opp_name} との対局` : '対局の棋譜',
-                                      m.ggf || m.moves.join(''), m.archive || undefined)}>棋譜</Button>
+                onClick={() => onKifu(m.opp_name
+                                        ? t('ggs.play.game_with', { name: m.opp_name })
+                                        : t('ggs.play.record_title'),
+                                      m.ggf || m.moves.join(''), m.archive || undefined)}>
+          {t('ggs.game_record')}
+        </Button>
         {!observer && !m.over && (
           <Button variant="danger"
-                  title="負けを認めて終わる (相手の承諾は要らない。レートが動く)"
-                  onClick={() => setResign(true)}>投了</Button>
+                  title={t('ggs.play.resign_hint')}
+                  onClick={() => setResign(true)}>{t('ggs.resign')}</Button>
         )}
       </div>
       {resign && (
-        <Confirm title="投了しますか?" ok="投了する" danger
-                 body={<>負けになり、レートが動きます。相手の承諾は要りません。</>}
+        <Confirm title={t('ggs.play.resign_confirm')} ok={t('ggs.play.resign_ok')} danger
+                 body={<>{t('ggs.play.resign_body')}</>}
                  onCancel={() => setResign(false)}
                  onOk={() => { setResign(false); void ggsApi.matchCmd(m.id, 'resign'); }} />
       )}
@@ -1066,9 +1080,10 @@ function bothRates(u: UserRow | undefined): string {
   const r8 = m ? m[1] : (u.rating != null ? u.rating.toFixed(1) : '');
   const d8 = m ? Math.round(parseFloat(m[2])) : null;
   const parts: string[] = [];
-  if (r8) parts.push(`通常 ${r8}${d8 != null ? ` ±${d8}` : ''}`);
+  if (r8) parts.push(`${t('ggs.pool.normal')} ${r8}${d8 != null ? ` ±${d8}` : ''}`);
   if (u.rating_r != null) {
-    parts.push(`ランダム ${u.rating_r.toFixed(1)}${u.dev_r != null ? ` ±${Math.round(u.dev_r)}` : ''}`);
+    parts.push(`${t('ggs.pool.random')} ${u.rating_r.toFixed(1)}`
+      + `${u.dev_r != null ? ` ±${Math.round(u.dev_r)}` : ''}`);
   }
   return parts.join(' · ');
 }
@@ -1078,7 +1093,7 @@ export function GgsSettings({ snap }: { snap: GgsSnapshot }) {
   const calibrated = useCalibrated();
   /* One-line result; success and failure share the spot. */
   const [saved, setSaved] = useState('');
-  const say = (t: string) => { setSaved(t); window.setTimeout(() => setSaved(''), 2500); };
+  const say = (msg: string) => { setSaved(msg); window.setTimeout(() => setSaved(''), 2500); };
   const [levels, setLevels] = useState({ depth: e.depth, solve: e.solve, band: e.band });
   // Values from global settings (view-only here).
   const threads = e.threads;
@@ -1109,7 +1124,7 @@ export function GgsSettings({ snap }: { snap: GgsSnapshot }) {
     try {
       await ggsApi.setFormula(kind, expr);
     } catch (e) {
-      say('条件を送れませんでした (' + e + ')');
+      say(t('ggs.settings.formula_failed', { error: tErr(e) }));
       return;
     }
     // Don't trust the send; re-fetch the server's value.
@@ -1127,10 +1142,10 @@ export function GgsSettings({ snap }: { snap: GgsSnapshot }) {
       await ggsApi.setWatchAnalysis(watch);
       await ggsApi.setUseBook(book);
     } catch (e) {
-      say('反映できませんでした (' + e + ')');
+      say(t('ggs.settings.apply_failed', { error: tErr(e) }));
       return;
     }
-    say('反映しました');
+    say(t('ggs.settings.applied'));
   };
 
   /* Apply on touch, no apply button. Everything else applies
@@ -1141,8 +1156,8 @@ export function GgsSettings({ snap }: { snap: GgsSnapshot }) {
   useEffect(() => {
     if (first.current) { first.current = false; return; }
     if (!calibrated) return;
-    const t = setTimeout(() => void apply(), 400);
-    return () => clearTimeout(t);
+    const timer = setTimeout(() => void apply(), 400);
+    return () => clearTimeout(timer);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [levels.depth, levels.solve, levels.band, ponder, pace,
       maxMove, reserve, budgetUse, auto, watch, book]);
@@ -1151,16 +1166,14 @@ export function GgsSettings({ snap }: { snap: GgsSnapshot }) {
   return (
     <div className="k-scroll" style={{ flex: 1, minHeight: 0, padding: 'var(--sp-4) var(--sp-4) 0' }}>
       <div style={{ maxWidth: 720, display: 'flex', flexDirection: 'column' }}>
-        <Section title="強さ">
-          <Field label="決め方">
+        <Section title={t('ggs.settings.strength')}>
+          <Field label={t('ggs.settings.mode')}>
             <Segmented value={pace} onChange={setPace}
-                       options={[{ value: 'fast', label: '持ち時間で決める' },
-                                 { value: 'depth', label: 'Lv で決める' }]} />
+                       options={[{ value: 'fast', label: t('ggs.settings.by_clock') },
+                                 { value: 'depth', label: t('ggs.settings.by_level') }]} />
           </Field>
           <Note>
-            {byClock
-              ? '深さ・読切・選択読みを、残り時間から毎手決めます。'
-              : '選んだ Lv のとおりに読みます。時間は見ません。'}
+            {byClock ? t('ggs.settings.by_clock_note') : t('ggs.settings.by_level_note')}
           </Note>
           {/* Clock-derived mode hides the dials — depth, solve and
               band all derive from time, so the dials would be inert. */}
@@ -1173,81 +1186,84 @@ export function GgsSettings({ snap }: { snap: GgsSnapshot }) {
               setting. Separate values would need two calibrations,
               and the uncalibrated one would drop time management to
               the fixed ladder. */}
-          <Field label="スレッド">
+          <Field label={t('ggs.settings.threads')}>
             <span style={{ fontSize: 'var(--fs-5)', color: 'var(--sub)' }}>
-              {threads === 0 ? `自動 (${Math.max(1, Math.floor(cores / 2)) || '—'})` : threads}
-              {' · '}設定 → エンジンで変えられます
+              {threads === 0
+                ? t('ggs.settings.threads_auto', { n: Math.max(1, Math.floor(cores / 2)) || '—' })
+                : threads}
+              {' · '}{t('ggs.settings.threads_hint')}
             </span>
           </Field>
           {/* Ponder works in fixed-depth mode too — it turns "deeper"
               into "faster" (same depth in 1/3 the time, measured). */}
-          <Field label="先読み">
+          <Field label={t('ggs.settings.ponder')}>
             <Segmented value={ponder ? 'on' : 'off'}
                        onChange={(v) => setPonder(v === 'on')}
-                       options={[{ value: 'on', label: 'する' },
-                                 { value: 'off', label: 'しない' }]} />
+                       options={[{ value: 'on', label: t('ggs.on') },
+                                 { value: 'off', label: t('ggs.off') }]} />
           </Field>
-          <Note>相手の手番中に先を読みます。自分の持ち時間は減りません。</Note>
+          <Note>{t('ggs.settings.ponder_note')}</Note>
         </Section>
 
         {/* Pacing is not a choice: measured, "slow" scored 0.0% in
             3s/8s games (−34 discs) and "fast" never lost to "even" —
             the menu was one right answer among traps, so it
             collapsed. The mode above is a different axis. */}
-        <Section title="持ち時間の使い方">
+        <Section title={t('ggs.settings.clock_use')}>
           {!byClock && (
             <Note>
-              <b style={{ color: 'var(--text)' }}>「Lv で決める」を選んでいるので、ここは効きません。</b>
+              <b style={{ color: 'var(--text)' }}>{t('ggs.settings.level_mode_note')}</b>
             </Note>
           )}
-          <Note>1 手の時間を残り時間と残り手数から決めます。序盤を短く、終盤に残します。</Note>
+          <Note>{t('ggs.settings.pacing_note')}</Note>
           {(
             <div style={{ display: 'flex', gap: 'var(--sp-4)' }}>
-              <Field label="1 手の上限 (秒、0 = なし)">
+              <Field label={t('ggs.settings.max_move')}>
                 <TextField numeric align="right" width={80} value={String(maxMove)}
                            onChange={(x) => setMaxMove(Math.max(0, +x || 0))} />
               </Field>
-              <Field label="読切に残す (秒)">
+              <Field label={t('ggs.settings.reserve')}>
                 <TextField numeric align="right" width={80} value={String(reserve)}
                            onChange={(x) => setReserve(Math.max(0, +x || 0))} />
               </Field>
-              <Field label="攻めて使う度合い">
+              <Field label={t('ggs.settings.budget_use')}>
                 <TextField numeric align="right" width={80} value={String(budgetUse)}
                            onChange={(x) => setBudgetUse(Math.max(0.1, +x || 2.5))} />
               </Field>
             </div>
           )}
-          <Note>「攻めて使う度合い」は 1.0 で配分どおり。大きいほど 1 手に長く使います。</Note>
+          <Note>{t('ggs.settings.budget_note')}</Note>
         </Section>
 
-        <Section title="定石">
+        <Section title={t('ggs.book')}>
           {e.book_loaded
             ? <div><Segmented value={book ? 'on' : 'off'} onChange={(v) => setBook(v === 'on')}
-                              options={[{ value: 'on', label: '使う' }, { value: 'off', label: '使わない' }]} /></div>
-            : <Note>ファイルがありません。左メニュー下の「設定」で指定してください。</Note>}
+                              options={[{ value: 'on', label: t('ggs.book_on') },
+                                        { value: 'off', label: t('ggs.book_off') }]} /></div>
+            : <Note>{t('ggs.settings.book_missing')}</Note>}
         </Section>
 
         {/* Only this section lives on the server and needs a
             connection; strength/clock/book/behavior above are local
             and the disconnected loop accepts them. */}
-        <Section title="申し込みの扱い">
-          <Note>申し込みを自動で受ける / 断る条件です。サーバー側に残ります。</Note>
+        <Section title={t('ggs.settings.requests_title')}>
+          <Note>{t('ggs.settings.requests_note')}</Note>
           {online ? <>
-            <FormulaField label="自動で受ける条件" src={myForm('accept')}
-                          onSave={(s) => void saveForm('aform', s)} />
-            <FormulaField label="自動で断る条件" src={myForm('decline')}
-                          onSave={(s) => void saveForm('dform', s)} />
+            <FormulaField label={t('ggs.finger.accept')} src={myForm('accept')}
+                          onSave={(x) => void saveForm('aform', x)} />
+            <FormulaField label={t('ggs.finger.decline')} src={myForm('decline')}
+                          onSave={(x) => void saveForm('dform', x)} />
           </> : (
-            <Note>繋いでいないあいだは読めません。ログインすると出ます。</Note>
+            <Note>{t('ggs.settings.offline_note')}</Note>
           )}
         </Section>
 
-        <Section title="ふるまい">
+        <Section title={t('ggs.settings.behavior')}>
           <span style={{ width: 300, display: 'block' }}>
-            <Toggle checked={auto} onChange={setAuto} label="自分の手番で自動的に指す" />
+            <Toggle checked={auto} onChange={setAuto} label={t('ggs.settings.auto_play')} />
           </span>
           <span style={{ width: 300, display: 'block' }}>
-            <Toggle checked={watch} onChange={setWatch} label="観戦中の対局も解析する" />
+            <Toggle checked={watch} onChange={setWatch} label={t('ggs.settings.watch_analysis')} />
           </span>
         </Section>
 
@@ -1255,20 +1271,18 @@ export function GgsSettings({ snap }: { snap: GgsSnapshot }) {
           {saved && (
             <span style={{
               fontSize: 'var(--fs-6)',
-              color: saved.startsWith('反映しました') ? 'var(--ok)' : 'var(--bad)',
+              color: saved === t('ggs.settings.applied') ? 'var(--ok)' : 'var(--bad)',
             }}>{saved}</span>
           )}
           <span style={{ marginLeft: 'auto' }} />
-          {!calibrated && <Note>{CALIB_NOTE}</Note>}
+          {!calibrated && <Note>{calibNote()}</Note>}
         </div>
 
         {/* Connected only; a disabled logout is pointless. */}
         {online && (
-          <Section title="接続">
-            <Note>
-              ログアウトすると保存済みの認証情報も消えます。次の起動では自動ログインしません。
-            </Note>
-            <div><Button variant="danger" onClick={() => void ggsApi.disconnect()}>ログアウト</Button></div>
+          <Section title={t('ggs.settings.connection')}>
+            <Note>{t('ggs.settings.logout_note')}</Note>
+            <div><Button variant="danger" onClick={() => void ggsApi.disconnect()}>{t('ggs.settings.logout')}</Button></div>
           </Section>
         )}
       </div>
@@ -1289,14 +1303,14 @@ function FormulaField({ label, src, onSave }: { label: string; src: string; onSa
       <Field label={label}>
         <div style={{ display: 'flex', flexDirection: 'column', gap: 'var(--sp-2)' }}>
           <TextField mono value={raw} onChange={setRaw}
-                     placeholder="例: rated & or>=1600 & !synchro" />
+                     placeholder={t('ggs.settings.formula_placeholder')} />
           <div style={{ display: 'flex', gap: 'var(--sp-2)' }}>
             <Button onClick={() => { setRaw(null); setCond(raw ? parseCond(raw) : null); }}>
-              木に戻す
+              {t('ggs.settings.back_to_tree')}
             </Button>
             <span style={{ flex: 1 }} />
             <Button variant="primary" onClick={() => { onSave(raw); setRaw(null); setCond(raw ? parseCond(raw) : null); }}>
-              反映する
+              {t('ggs.apply')}
             </Button>
           </div>
         </div>
@@ -1397,11 +1411,11 @@ function GgsResults({ snap, onKifu }: {
        away while you trace the correspondence. */
     <div style={{ flex: 1, minHeight: 0, display: 'flex', flexDirection: 'column',
                   padding: 'var(--sp-4) var(--sp-4) 0' }}>
-      <Section title="レートの推移"
+      <Section title={t('ggs.results.rating_trend')}
                aside={kinds.length > 1 ? (
                  <Segmented value={cur} onChange={setGtype}
                             options={[...kinds.map((k) => ({ value: k, label: poolLabel(k) })),
-                                      { value: 'all', label: 'すべて' }]} />
+                                      { value: 'all', label: t('ggs.filter.all') }]} />
                ) : undefined}>
         {/* Full-width, so the viewBox matches (at 300 the strokes
             stretch). This is the screen's star, so axes show —
@@ -1410,15 +1424,15 @@ function GgsResults({ snap, onKifu }: {
         {cur === 'all' ? (
           /* No combined rating exists — a line here would step at
              every pool switch. The list keeps its "all" option. */
-          <Note>レートは形式ごとに別です。推移は形式を選ぶと出ます。</Note>
+          <Note>{t('ggs.results.per_pool_note')}</Note>
         ) : (
           <RateChart points={rates} width={800} height={180} axes dates={rateDates}
                      labels={rateLabels} hover={hover} onHover={setHover} />
         )}
       </Section>
 
-      <Section title="終わった対局" aside={<span>{rows.length}</span>} grow>
-        {!rows.length && <Empty>まだ記録がありません。</Empty>}
+      <Section title={t('ggs.results.finished')} aside={<span>{rows.length}</span>} grow>
+        {!rows.length && <Empty>{t('ggs.no_records')}</Empty>}
         {/* Rows stay tight. Rebuild on format change: reusing the
             container left stale rows (14 drawn for 11 items, randoms
             squatting in the normal list). */}
@@ -1437,7 +1451,8 @@ function GgsResults({ snap, onKifu }: {
                      rating={r.my_rating}
                      // GGF includes the start position (random-opening
                      // games restore); with neither, fetch by id.
-                     onClick={() => onKifu(`${r.opp} との対局`, r.ggf || r.kifu, r.archive)}
+                     onClick={() => onKifu(t('ggs.play.game_with', { name: r.opp }),
+                                           r.ggf || r.kifu, r.archive)}
                      dim={!r.ggf && !r.kifu && !r.archive} />
         ))}
         </List>
@@ -1455,12 +1470,13 @@ const rowKey = (r: GameResult) => `${r.id}#${r.seq}`;
  * Formats vary (s8r16 / s8r14 / 8r16 ...) but ratings split only on
  * the r; this is the unit for history. */
 const poolOf = (base: string, raw?: string) => {
-  const t = baseType(base, raw);
-  if (!t) return '';
-  return t.includes('r') ? '8r' : '8';
+  const kind = baseType(base, raw);
+  if (!kind) return '';
+  return kind.includes('r') ? '8r' : '8';
 };
 
-const poolLabel = (p: string) => (p === '8r' ? 'ランダム開局' : p === '8' ? '通常' : p);
+const poolLabel = (p: string) =>
+  (p === '8r' ? t('ggs.gtype.rand_opening') : p === '8' ? t('ggs.pool.normal') : p);
 
 /** Game format. History results carry base like "s8r16.2024...", so
  * take the head. Results built from game-over notices have base like
@@ -1470,7 +1486,7 @@ const baseType = (base: string, raw?: string) => {
   /* Prefer the raw row's format: id-shaped bases fall through anyway,
      and even non-id bases can lie — the raw row is right in both
      cases. */
-  const fromRaw = raw?.split(/\s+/).find((t) => /^s?8(r\d+)?$/.test(t));
+  const fromRaw = raw?.split(/\s+/).find((x) => /^s?8(r\d+)?$/.test(x));
   if (fromRaw) return fromRaw;
   return base.split('.')[0] ?? '';
 };
@@ -1479,9 +1495,9 @@ const baseType = (base: string, raw?: string) => {
  * Unparseable input returns as-is — raw text beats a blank when the
  * server's format changes. */
 function fmtWhen(at: string): string {
-  const t = Date.parse(at);
-  if (!Number.isFinite(t)) return at;
-  const d = new Date(t);
+  const ms = Date.parse(at);
+  if (!Number.isFinite(ms)) return at;
+  const d = new Date(ms);
   const p2 = (n: number) => String(n).padStart(2, '0');
   return `${d.getMonth() + 1}/${p2(d.getDate())} ${p2(d.getHours())}:${p2(d.getMinutes())}`;
 }
@@ -1524,7 +1540,7 @@ function UserCard({ snap, name, onClose, onDetail, onAsk }: {
 
   /* Only the four non-formula request rows; formulas render as trees
      and don't fit a 340px card (details holds them). */
-  const facts = (fingerGroups(fields).find((g) => g.title === '対局の申し込み')?.rows ?? [])
+  const facts = (fingerGroups(fields).find((g) => g.id === 'request')?.rows ?? [])
     .filter((r) => !['accept', 'decline', 'request'].includes(normKey(r.key).replace(/\(.*\)/, '')));
 
   return (
@@ -1533,12 +1549,12 @@ function UserCard({ snap, name, onClose, onDetail, onAsk }: {
              sub={rates || undefined}
              scroll
              actions={<>
-               <Button size="field" onClick={onDetail}>詳しく見る</Button>
+               <Button size="field" onClick={onDetail}>{t('ggs.users.details')}</Button>
                <span style={{ marginLeft: 'auto' }} />
-               <Button size="field" variant="primary" onClick={onAsk}>申し込む</Button>
+               <Button size="field" variant="primary" onClick={onAsk}>{t('ggs.lobby.ask')}</Button>
              </>}>
-        <Section title="対局の申し込み">
-            {!facts.length && <Empty>読み込んでいます…</Empty>}
+        <Section title={t('ggs.match_requests')}>
+            {!facts.length && <Empty>{t('ggs.loading')}</Empty>}
             {facts.map((r) => (
               <div key={r.key} style={{ display: 'flex', alignItems: 'center',
                                         gap: 'var(--sp-3)', fontSize: 'var(--fs-5)' }}>
@@ -1577,14 +1593,16 @@ function GgsUsers({ snap, onNav, onKifu }: {
      places, one fix drifts the columns. */
   const userCols: Col[] = [
     ...(mode === 'top' ? [{ head: '#', w: 26, right: true, num: true } as Col] : []),
-    { head: '名前', clip: true },
+    { head: t('ggs.users.col_name'), clip: true },
     // The who-list is pool-less; show both 8 and 8r.
-    { head: mode === 'who' ? '通常' : 'レート', w: 96, right: true, num: true },
-    ...(mode === 'who' ? [{ head: 'ランダム', w: 104, right: true, num: true } as Col] : []),
+    { head: mode === 'who' ? t('ggs.pool.normal') : t('ggs.users.col_rating'),
+      w: 96, right: true, num: true },
+    ...(mode === 'who'
+      ? [{ head: t('ggs.pool.random'), w: 104, right: true, num: true } as Col] : []),
     // Accepting = "would a request land"; playing players may still
     // accept (open > games in progress), so it is a separate column.
-    ...(mode === 'who' ? [{ head: '受付', w: 56, right: true } as Col] : []),
-    { head: '状態', w: 52, right: true },
+    ...(mode === 'who' ? [{ head: t('ggs.users.col_open'), w: 56, right: true } as Col] : []),
+    { head: t('ggs.users.col_status'), w: 52, right: true },
   ];
   /* The status column derives from snap.ongoing, which arrives only
      at login and every 60s — freshly connected, everyone shows blank.
@@ -1611,7 +1629,7 @@ function GgsUsers({ snap, onNav, onKifu }: {
   // looking at".
   const [page, setPage] = useState(0);
   const [perPage, setPerPage] = useState(25);
-  const [tab, setTab] = useState('プロフィール');
+  const [tab, setTab] = useState('profile');
 
   if (sel) {
     return <UserDetail snap={snap} name={sel} tab={tab} onTab={setTab}
@@ -1632,11 +1650,11 @@ function GgsUsers({ snap, onNav, onKifu }: {
                   onDetail={() => { setSel(card); setCard(null); }}
                   onAsk={() => { setCard(null); onNav('ggs-lobby'); }} />
       )}
-      <Section title="自分のレート"
+      <Section title={t('ggs.users.my_rating')}
                aside={<Button onClick={() => {
-                 for (const t of ['8', '8r']) void ggsApi.rank(t, snap.login);
-               }}>更新</Button>}>
-        {!mine.length && <Empty>まだ記録がありません。</Empty>}
+                 for (const pool of ['8', '8r']) void ggsApi.rank(pool, snap.login);
+               }}>{t('ggs.refresh')}</Button>}>
+        {!mine.length && <Empty>{t('ggs.no_records')}</Empty>}
         {mine.map((r) => (
           <RateRow key={r.gtype} label={gtypeLabel(r.gtype)}
                    rate={{ value: r.rating, dev: r.dev, rank: r.rank,
@@ -1645,7 +1663,7 @@ function GgsUsers({ snap, onNav, onKifu }: {
         ))}
       </Section>
 
-      <Section title={mode === 'who' ? '接続中' : 'ランキング'}
+      <Section title={mode === 'who' ? t('ggs.users.online') : t('ggs.users.ranking')}
                aside={<>
                  {/* Pool select only in top mode; the who-list is the
                      same people regardless, so showing it would lie. */}
@@ -1653,15 +1671,17 @@ function GgsUsers({ snap, onNav, onKifu }: {
                    <Segmented value={pool} onChange={(p) => {
                      setPool(p);
                      void ggsApi.top(p, 100);
-                   }} options={[{ value: '8', label: '通常' }, { value: '8r', label: 'ランダム開局' }]} />
+                   }} options={[{ value: '8', label: t('ggs.pool.normal') },
+                                { value: '8r', label: t('ggs.gtype.rand_opening') }]} />
                  )}
                  <Segmented value={mode} onChange={(m) => {
                    setMode(m);
                    setPage(0);
                    if (m === 'who') void ggsApi.who(); else void ggsApi.top(pool, 100);
-                 }} options={[{ value: 'who', label: '接続中' }, { value: 'top', label: '上位' }]} />
+                 }} options={[{ value: 'who', label: t('ggs.users.online') },
+                              { value: 'top', label: t('ggs.users.top') }]} />
                </>}>
-        {!rows.length && <Empty>いません。</Empty>}
+        {!rows.length && <Empty>{t('ggs.users.nobody')}</Empty>}
         {/* §5 draws this as a TABLE — headers (#/name/rating/status)
             and 24px rows (rule 5). It used to be headerless 32px rows
             with drifting columns. '#' only in top mode. */}
@@ -1671,7 +1691,7 @@ function GgsUsers({ snap, onNav, onKifu }: {
         {/* Never bare headers; right after connect the list hasn't
             arrived. */}
         {!slice.length && (
-          <Empty>{mode === 'who' ? '接続中の人はいません。' : '順位をまだ受け取っていません。'}</Empty>
+          <Empty>{mode === 'who' ? t('ggs.users.none_online') : t('ggs.users.no_ranking')}</Empty>
         )}
         {/* Rows stay tight (the section-gap trap). */}
         <List>
@@ -1716,7 +1736,9 @@ function GgsUsers({ snap, onNav, onKifu }: {
                 color: u.open === '+' ? 'var(--accent)'
                   : u.open === 'x' ? 'var(--bad)' : 'var(--sub)',
               }}>
-                {u.open === '+' ? '受付中' : u.open === 'x' ? '切断' : u.open ? '受けない' : '—'}
+                {u.open === '+' ? t('ggs.users.open_yes')
+                  : u.open === 'x' ? t('ggs.users.open_ghost')
+                  : u.open ? t('ggs.users.open_no') : '—'}
               </span>
             )}
             {/* Status as colored text (badges change row height).
@@ -1724,7 +1746,7 @@ function GgsUsers({ snap, onNav, onKifu }: {
                 broken column (§5 draws the two values too). */}
             <span style={{
               fontSize: 'var(--fs-6)', color: playing ? 'var(--ok)' : 'var(--sub)',
-            }}>{playing ? '対局中' : '待機'}</span>
+            }}>{playing ? t('ggs.state.playing') : t('ggs.state.idle')}</span>
           </TableRow>
         );})}
         </List>
@@ -1735,10 +1757,10 @@ function GgsUsers({ snap, onNav, onKifu }: {
             display: 'flex', alignItems: 'center', gap: 'var(--sp-2)',
             padding: 'var(--sp-2) 0', fontSize: 'var(--fs-6)', color: 'var(--sub)',
           }}>
-            <Button disabled={cur === 0} onClick={() => setPage(cur - 1)}>前へ</Button>
+            <Button disabled={cur === 0} onClick={() => setPage(cur - 1)}>{t('ggs.prev')}</Button>
             <span style={{ fontVariantNumeric: 'tabular-nums' }}>{cur + 1} / {pages}</span>
-            <Button disabled={cur >= pages - 1} onClick={() => setPage(cur + 1)}>次へ</Button>
-            <span style={{ marginLeft: 'auto' }}>表示件数</span>
+            <Button disabled={cur >= pages - 1} onClick={() => setPage(cur + 1)}>{t('ggs.next')}</Button>
+            <span style={{ marginLeft: 'auto' }}>{t('ggs.users.per_page')}</span>
             <Select size="ctrl" value={String(perPage)}
                     options={[['25', '25'], ['50', '50'], ['100', '100']]}
                     onChange={(v) => { setPerPage(+v); setPage(0); }} />
@@ -1765,11 +1787,11 @@ function UserDetail({ snap, name, tab, onTab, onBack, onNav, onKifu }: {
   // request uses '').
   const rows = snap.history[name] ?? [];
   const histCols: Col[] = [
-    { head: '日時', w: 132 },
-    { head: '形式', w: 104 },
-    { head: '相手', clip: true },
-    { head: '手番', w: 44 },
-    { head: '石差', w: 64, right: true, num: true },
+    { head: t('ggs.users.col_when'), w: 132 },
+    { head: t('ggs.field.format'), w: 104 },
+    { head: t('ggs.field.opponent'), clip: true },
+    { head: t('ggs.users.col_side'), w: 44 },
+    { head: t('ggs.users.col_diff'), w: 64, right: true, num: true },
   ];
 
   return (
@@ -1780,25 +1802,25 @@ function UserDetail({ snap, name, tab, onTab, onBack, onNav, onKifu }: {
         padding: 'var(--sp-3) var(--sp-4)', borderBottom: '1px solid var(--border)',
         background: 'var(--panel)',
       }}>
-        <IconButton name="back" label="一覧へ戻る" onClick={onBack} />
+        <IconButton name="back" label={t('ggs.back_to_list')} onClick={onBack} />
         <span className="k-sel" style={{ fontSize: 'var(--fs-2)', fontWeight: 600 }}>{name}</span>
         {rates && (
           <span style={{ fontSize: 'var(--fs-6)', color: 'var(--sub)' }}>{rates}</span>
         )}
-        {playing && <Tag tone="ok">対局中</Tag>}
+        {playing && <Tag tone="ok">{t('ggs.state.playing')}</Tag>}
         <span style={{ marginLeft: 'auto' }} />
-        <Button variant="primary" onClick={() => onNav('ggs-lobby')}>対局を申し込む</Button>
+        <Button variant="primary" onClick={() => onNav('ggs-lobby')}>{t('ggs.lobby.request_title')}</Button>
       </div>
       <div style={{ flex: 'none', padding: 'var(--sp-2) var(--sp-4)' }}>
         <Segmented value={tab} onChange={onTab}
-                   options={[{ value: 'プロフィール', label: 'プロフィール' },
-                             { value: '対戦履歴', label: '対戦履歴' }]} />
+                   options={[{ value: 'profile', label: t('ggs.users.tab_profile') },
+                             { value: 'history', label: t('ggs.users.tab_history') }]} />
       </div>
 
       <div className="k-scroll" style={{ flex: 1, minHeight: 0, padding: '0 var(--sp-4) var(--sp-4)' }}>
-        {tab === 'プロフィール' ? (
+        {tab === 'profile' ? (
           <>
-            {!fields.length && <Empty>読み込んでいます…</Empty>}
+            {!fields.length && <Empty>{t('ggs.loading')}</Empty>}
             {/* 24 uniform rows bury what matters pre-request; grouping
                 and order come from ggs.ts's FINGER_GROUPS. */}
             {fingerGroups(fields).map((g) => (
@@ -1819,7 +1841,7 @@ function UserDetail({ snap, name, tab, onTab, onBack, onNav, onKifu }: {
                       }}>{r.label}</span>
                       <span style={{ flex: 1, minWidth: 0, fontSize: 'var(--fs-5)' }}>
                         {cond ? <FormulaView node={cond} top />
-                          : ['accept', 'decline', 'request'].includes(key) ? '指定なし'
+                          : ['accept', 'decline', 'request'].includes(key) ? t('ggs.formula.unset')
                           : fingerValue(r.key, r.value)}
                       </span>
                     </div>
@@ -1830,7 +1852,7 @@ function UserDetail({ snap, name, tab, onTab, onBack, onNav, onKifu }: {
           </>
         ) : (
           <>
-            {!rows.length && <Empty>対戦履歴はありません。</Empty>}
+            {!rows.length && <Empty>{t('ggs.users.no_history')}</Empty>}
             {/* As a table: dot-joined two-liners scatter date, format
                 and margin per row. Clicking opens the record overlay
                 (fetched by id — nothing local). */}
@@ -1844,11 +1866,13 @@ function UserDetail({ snap, name, tab, onTab, onBack, onNav, onKifu }: {
               const mine = Number.isFinite(d) ? (black ? d : -d) : null;
               return (
                 <TableRow key={h.id} cols={histCols}
-                          onClick={() => onKifu(`${h.black} 対 ${h.white}`, '', h.id)}>
+                          onClick={() => onKifu(t('ggs.vs', { a: h.black, b: h.white }), '', h.id)}>
                   <span style={{ color: 'var(--sub)' }}>{fmtWhen(h.at)}</span>
                   <span style={{ color: 'var(--sub)' }}>{gtypeLabel(h.gtype)}</span>
                   <span className="k-sel">{black ? h.white : h.black}</span>
-                  <span style={{ color: 'var(--sub)' }}>{black ? '黒' : '白'}</span>
+                  <span style={{ color: 'var(--sub)' }}>
+                    {black ? t('ggs.color.black') : t('ggs.color.white')}
+                  </span>
                   <span style={{
                     color: mine == null ? 'var(--sub)'
                       : mine > 0 ? 'var(--ok)' : mine < 0 ? 'var(--bad)' : 'var(--text)',
@@ -1892,9 +1916,9 @@ function ChatList({ sorted, cur, onThread, onPick }: {
         flex: 'none', height: 'var(--h-field)', display: 'flex', alignItems: 'center',
         gap: 'var(--sp-2)', padding: '0 var(--sp-3)', borderBottom: '1px solid var(--border-weak)',
       }}>
-        <span style={{ fontSize: 'var(--fs-7)', fontWeight: 600, letterSpacing: '.08em', color: 'var(--sub)' }}>会話</span>
+        <span style={{ fontSize: 'var(--fs-7)', fontWeight: 600, letterSpacing: '.08em', color: 'var(--sub)' }}>{t('ggs.chat.threads')}</span>
         <span style={{ marginLeft: 'auto' }} />
-        <Button size="chip" onClick={() => onPick(true)}>新しい相手</Button>
+        <Button size="chip" onClick={() => onPick(true)}>{t('ggs.chat.new_thread')}</Button>
       </div>
       <div className="k-scroll" style={{ flex: 1, minHeight: 0 }}>
       {sorted.map(([key, info]) => (
@@ -1908,7 +1932,7 @@ function ChatList({ sorted, cur, onThread, onPick }: {
             ...picked(key === cur),
           }}>
           <span style={{ display: 'flex', alignItems: 'center', gap: 'var(--sp-2)', fontSize: 'var(--fs-5)' }}>
-            {key === '.chat' ? '全体チャット' : key}
+            {key === '.chat' ? t('ggs.chat.global') : key}
             {info.last.at > 0 && (
               <span style={{ marginLeft: 'auto', fontSize: 'var(--fs-7)', color: 'var(--sub)' }}>
                 {clockOf(info.last.at)}

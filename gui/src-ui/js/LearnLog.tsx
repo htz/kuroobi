@@ -4,6 +4,7 @@ import type { LearnChange, LearnEntry } from './types';
 import { Board } from './components/board';
 import { Col, Empty, KeyValue, List, Section, TableHead, TableRow } from './components/layout';
 import { Button, Segmented, Select } from './components/primitives';
+import { t } from './i18n';
 
 /* Imported-game log, three panes. Imports silently overwrite book
  * values, and one bad game changes later play — so the chain
@@ -17,11 +18,12 @@ import { Button, Segmented, Select } from './components/primitives';
  *  alternative was. */
 const lossOf = (c: LearnChange) => c.best - c.after;
 
-/** List columns; header and rows read the same array. */
-const LOG_COLS: Col[] = [
-  { head: '対局', clip: true },
-  { head: '石数', w: 52, right: true, num: true },
-  { head: '局面', w: 36, right: true, num: true },
+/** List columns; header and rows read the same array. Built per
+ *  render, so a language switch reaches the captions. */
+const logCols = (): Col[] => [
+  { head: t('learn.col.game'), clip: true },
+  { head: t('learn.col.discs'), w: 52, right: true, num: true },
+  { head: t('learn.col.positions'), w: 36, right: true, num: true },
 ];
 
 /** The worst move; absent if everything was best. */
@@ -90,21 +92,22 @@ export function LearnLog({ items: all, onOpen, onUndo, onBook }: {
 
   if (!items.length || !cur) {
     return (
-      <Section title="取り込んだ対局">
+      <Section title={t('learn.section.imported')}>
         {/* Zero results from a filter must keep the way back —
             unlike a truly empty log. */}
         {hidden > 0 ? (
           <div style={{ display: 'flex', alignItems: 'center', gap: 'var(--sp-3)' }}>
-            <Empty>この期間に取り込んだ対局はありません ({hidden} 局は期間の外)。</Empty>
-            <Button size="ctrl" onClick={() => setDays('0')}>すべて出す</Button>
+            <Empty>{t('learn.empty.filtered', { n: hidden })}</Empty>
+            <Button size="ctrl" onClick={() => setDays('0')}>{t('learn.empty.show_all')}</Button>
           </div>
         ) : (
-          <Empty>まだありません。</Empty>
+          <Empty>{t('learn.empty.none')}</Empty>
         )}
       </Section>
     );
   }
 
+  const cols = logCols();
   return (
     <div style={{ flex: 1, minHeight: 0, display: 'flex' }}>
       {/* Left: the game list (269px per the design). */}
@@ -119,20 +122,21 @@ export function LearnLog({ items: all, onOpen, onUndo, onBook }: {
           padding: '0 var(--sp-3)', borderBottom: '1px solid var(--border-weak)',
         }}>
           <Segmented value={only} onChange={(v) => setOnly(v as 'all' | 'lost')}
-                     options={[{ value: 'all', label: 'すべて' },
-                               { value: 'lost', label: '負けた対局' }]} />
+                     options={[{ value: 'all', label: t('learn.filter.all') },
+                               { value: 'lost', label: t('learn.filter.lost') }]} />
           <span style={{ width: 'var(--sp-2)' }} />
           <Select size="ctrl" value={days} onChange={setDays} options={[
-            ['0', 'すべて'], ['7', '直近 7 日'], ['30', '直近 30 日'], ['90', '直近 90 日'],
+            ['0', t('learn.filter.all')], ['7', t('learn.filter.days_7')],
+            ['30', t('learn.filter.days_30')], ['90', t('learn.filter.days_90')],
           ]} />
         </div>
-        <TableHead cols={LOG_COLS} />
+        <TableHead cols={cols} />
         <div className="k-scroll" style={{ flex: 1, minHeight: 0, padding: '0 var(--sp-3)' }}>
           <List>
             {items.map((e) => {
               const on = keyOf(e) === keyOf(cur);
               return (
-                <TableRow key={keyOf(e)} cols={LOG_COLS} on={on} pad="var(--sp-1)" fs="var(--fs-6)"
+                <TableRow key={keyOf(e)} cols={cols} on={on} pad="var(--sp-1)" fs="var(--fs-6)"
                           onClick={() => setSel(keyOf(e))}>
                   <span>
                     <span style={{ color: 'var(--sub)' }}>{fmtWhen(e.at)}</span>
@@ -153,12 +157,13 @@ export function LearnLog({ items: all, onOpen, onUndo, onBook }: {
         }}>
           {/* Say when entries are hidden — a silent shrink reads as a
               lost import. */}
-          <span>{items.length} 局の合計{hidden > 0 ? ` (他 ${hidden} 局)` : ''}</span>
+          <span>{hidden > 0 ? t('learn.total.games_hidden', { n: items.length, hidden })
+            : t('learn.total.games', { n: items.length })}</span>
           <span style={{
             marginLeft: 'auto', color: 'var(--text)', fontWeight: 600,
             fontVariantNumeric: 'tabular-nums',
           }}>{items.reduce((n, e) => n + e.positions, 0).toLocaleString()}</span>
-          <span>局面</span>
+          <span>{t('learn.col.positions')}</span>
         </div>
       </div>
 
@@ -170,23 +175,24 @@ export function LearnLog({ items: all, onOpen, onUndo, onBook }: {
         width: 'var(--w-dock)', flex: 'none', minHeight: 0,
         borderLeft: '1px solid var(--border)', padding: 'var(--sp-3) 0',
       }}>
-        <Section title="この対局">
-          <KeyValue label="相手" value={cur.opponent || 'KUROOBI'} />
-          <KeyValue label="石数" value={`${cur.black} – ${cur.white}`} />
-          <KeyValue label="取り込み" value={`${cur.positions} 局面 · ${fmtWhen(cur.at)}`} />
+        <Section title={t('learn.section.game')}>
+          <KeyValue label={t('learn.game.opponent')} value={cur.opponent || 'KUROOBI'} />
+          <KeyValue label={t('learn.col.discs')} value={`${cur.black} – ${cur.white}`} />
+          <KeyValue label={t('learn.game.imported')}
+                    value={t('learn.game.imported_value', { n: cur.positions, when: fmtWhen(cur.at) })} />
         </Section>
 
-        <Section title="更新した定石" aside={<span>{cur.changes.length}</span>}>
+        <Section title={t('learn.section.changes')} aside={<span>{cur.changes.length}</span>}>
           {!cur.changes.length && (
             <span style={{ fontSize: 'var(--fs-6)', color: 'var(--sub)' }}>
-              明細の無い古い控えです。
+              {t('learn.changes.old_entry')}
             </span>
           )}
           <List>
             {cur.changes.map((c) => (
               <button key={c.ply} type="button" className="k-row"
                       onClick={() => onOpen(cur, c.ply)}
-                      title="その手の局面を検討で開く"
+                      title={t('learn.changes.open_move')}
                       style={{
                         display: 'flex', alignItems: 'center', gap: 'var(--sp-2)',
                         height: 'var(--h-row)', border: 0, background: 'transparent',
@@ -200,7 +206,7 @@ export function LearnLog({ items: all, onOpen, onUndo, onBook }: {
                 <span style={{ width: 24, color: 'var(--text)', fontWeight: 600 }}>{c.mv}</span>
                 {/* Old -> new; moves absent from the book are "new". */}
                 <span style={{ marginLeft: 'auto', fontVariantNumeric: 'tabular-nums' }}>
-                  {c.before === null ? '新規' : sign(c.before)}
+                  {c.before === null ? t('learn.changes.new') : sign(c.before)}
                   {' → '}
                   <b style={{ color: 'var(--text)' }}>{sign(c.after)}</b>
                 </span>
@@ -210,13 +216,13 @@ export function LearnLog({ items: all, onOpen, onUndo, onBook }: {
         </Section>
 
         <div style={{ display: 'flex', gap: 'var(--sp-2)', padding: '0 var(--sp-3)' }}>
-          {onBook && <Button onClick={() => onBook(cur.kifu)}>定石で見る</Button>}
+          {onBook && <Button onClick={() => onBook(cur.kifu)}>{t('learn.action.show_in_book')}</Button>}
           {/* Undo is per game: reverting one move would leave rootward
               values assuming it (write-backs chain). Disabled without
               rewrite details — pressing could only bounce, and the
               empty list above already says why. */}
           <Button variant="danger" disabled={!cur.changes.length}
-                  onClick={() => onUndo(cur)}>取り消す</Button>
+                  onClick={() => onUndo(cur)}>{t('learn.action.undo')}</Button>
         </div>
       </div>
     </div>
@@ -264,27 +270,25 @@ function BlunderPane({ cur, bad, frame, onOpen }: {
         <div style={{ display: 'flex', flexDirection: 'column', gap: 'var(--sp-2)' }}>
           <div style={{ display: 'flex', alignItems: 'baseline', gap: 'var(--sp-2)' }}>
             <span style={{ fontSize: 'var(--fs-3)', fontWeight: 600 }}>
-              {bad.ply} 手目 {bad.mv}
+              {t('learn.blunder.move', { n: bad.ply, move: bad.mv })}
             </span>
             <span style={{ color: 'var(--bad)', fontVariantNumeric: 'tabular-nums' }}>
               ▼{lossOf(bad).toFixed(1)}
             </span>
             <span style={{ marginLeft: 'auto' }}>
-              <Button onClick={() => onOpen(cur, bad.ply)}>検討で開く</Button>
+              <Button onClick={() => onOpen(cur, bad.ply)}>{t('learn.blunder.open_study')}</Button>
             </span>
           </div>
           <span style={{
             maxWidth: 'var(--w-text)', fontSize: 'var(--fs-6)',
             color: 'var(--sub)', lineHeight: 1.8,
           }}>
-            この局面の評価を終局の石差で上書きし、根まで書き戻しました。
-            定石は「もっと良い手があった」と言っています
-            ({sign(bad.best)} に対して {sign(bad.after)})。
+            {t('learn.blunder.note', { best: sign(bad.best), after: sign(bad.after) })}
           </span>
         </div>
       ) : (
         /* Same as above. */
-        <Empty>この対局に大きく損した手はありません。</Empty>
+        <Empty>{t('learn.blunder.none')}</Empty>
       )}
     </div>
   );

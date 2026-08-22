@@ -130,10 +130,26 @@ GUI gear menu can set it too.
 **Call `quantize()` after loading NNUE weights**, or the SIMD path
 crashes.
 
-## Terminology (UI strings)
+## UI strings live in the locale files
 
-On-screen text is Japanese (until i18n YAML) and uses these terms
-consistently; do not mix in English:
+**No implementation file carries display text.** Every user-visible
+string is a key in `gui/src-ui/locales/en.yaml` and `ja.yaml`; the
+screen calls `t('key')` (`gui/src-ui/js/i18n.ts`). English is the
+fallback for every language, so a key missing from `ja.yaml` still
+renders. The language follows the machine by default and is switchable
+in Settings > Display.
+
+Adding a string means adding the key to **both** files. `t()` must be
+called during render — a module-level constant holding translated text
+does not update when the language changes.
+
+Two places cannot use `t()` and are fed over IPC instead
+(`backend.*` keys, `set_backend_strings`): OS notifications and native
+file dialogs, both rendered from Rust. Rust commands never return a
+message; they return an `err.*` key (with `|name=value` for
+interpolation) that the frontend translates via `tErr()`.
+
+Japanese terms, used consistently in `ja.yaml`:
 
 | Use | Not |
 |---|---|
@@ -143,7 +159,8 @@ consistently; do not mix in English:
 | 分析 (running evals over a record) | 採点, グラフ計算 |
 | KUROOBI (our engine) | エンジン |
 
-Code identifiers (`book`, `band`, ...) stay English.
+Code identifiers (`book`, `band`, ...) and English UI text stay in the
+engine's own vocabulary: book, selective search, solve, analysis.
 
 ## Commits
 

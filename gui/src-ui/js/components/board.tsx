@@ -1,4 +1,5 @@
 import React from 'react';
+import { t } from '../i18n';
 
 /* KUROOBI board
  * The board is one SVG: viewBox 880, PAD 40, CELL 100 (same geometry
@@ -34,10 +35,10 @@ export function BoardDefs() {
       stroke="var(--grain)" strokeOpacity={GRAIN_OPACITY} strokeWidth={2.4} />);
 
   // The tile's four cells; vertical = (f + r) % 2 === 1.
-  d.forEach(v => push('a' + v, 0, v, CELL, v));                       // (0,0) 横目
-  d.forEach(v => push('b' + v, CELL + v, 0, CELL + v, CELL));         // (1,0) 縦目
-  d.forEach(v => push('c' + v, v, CELL, v, CELL * 2));                // (0,1) 縦目
-  d.forEach(v => push('d' + v, CELL, CELL + v, CELL * 2, CELL + v));  // (1,1) 横目
+  d.forEach(v => push('a' + v, 0, v, CELL, v));                       // (0,0) horizontal grain
+  d.forEach(v => push('b' + v, CELL + v, 0, CELL + v, CELL));         // (1,0) vertical grain
+  d.forEach(v => push('c' + v, v, CELL, v, CELL * 2));                // (0,1) vertical grain
+  d.forEach(v => push('d' + v, CELL, CELL + v, CELL * 2, CELL + v));  // (1,1) horizontal grain
 
   return (
     <svg width={0} height={0} style={{ position: 'absolute' }} aria-hidden>
@@ -61,13 +62,15 @@ export type EvalSource = { book: true } | { exact: true } | { depth: number };
 export type EvalInfo = { score: number; src: EvalSource; best?: boolean };
 
 const sourceLabel = (s: EvalSource) =>
-  'book' in s ? '定石' : 'exact' in s ? '読切' : `${s.depth} 手`;
+  'book' in s ? t('ui.board.src_book')
+  : 'exact' in s ? t('ui.board.src_solve')
+  : t('ui.board.src_depth', { n: s.depth });
 
 const cx = (i: number) => PAD + i * CELL + CELL / 2;
 const fr = (sq: number): [number, number] => [Math.floor(sq / 8), sq % 8];
 
 export function Board({ cells, legal = [], evals, last, next, coords = true, grain = true, flip = false, disabled, onPlay }: {
-  cells: Cell[];                                   // 64（sq = file*8 + rank）
+  cells: Cell[];                                   // 64 (sq = file*8 + rank)
   legal?: number[];
   evals?: Record<number, EvalInfo>;
   last?: number | null;
@@ -93,7 +96,7 @@ export function Board({ cells, legal = [], evals, last, next, coords = true, gra
        top-align the board, wide ones overflow it; 100%/100% centers
        in both cases. */
     <svg viewBox={`0 0 ${SIZE} ${SIZE}`} style={{ width: '100%', height: '100%', display: 'block' }}
-         role="img" aria-label="盤面">
+         role="img" aria-label={t('ui.board.aria')}>
       <rect x={0} y={0} width={SIZE} height={SIZE} rx={14} fill="var(--card)" />
       <rect x={PAD - 6} y={PAD - 6} width={812} height={812} rx={6} fill="var(--board-dark)" />
       <rect x={PAD} y={PAD} width={800} height={800} fill="var(--board)" />

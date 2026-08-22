@@ -1,6 +1,7 @@
 import React from 'react';
 import { Badge, Button, Dot } from './primitives';
 import { Col, Divider, Empty, TableHead, TableRow, picked as pickedStyle } from './layout';
+import { t } from '../i18n';
 
 /* KUROOBI data — move table, eval graph, player rows, ratings.
  * Table rows are --h-row; column widths fixed, values right-aligned.
@@ -8,7 +9,7 @@ import { Col, Divider, Empty, TableHead, TableRow, picked as pickedStyle } from 
 
 /** Stone color as drawn on screen. The engine's 1|2 is converted at
  *  the boundary and never reaches the UI (eases a future viewpoint
- *  toggle). GGS wire colors are ggs.ts's COLOR_CHOICES (* / O / ?) —
+ *  toggle). GGS wire colors are ggs.ts's colorChoices() (* / O / ?) —
  *  a different thing. */
 export type StoneColor = 'b' | 'w';
 export const toStoneColor = (n: 1 | 2): StoneColor => (n === 1 ? 'b' : 'w');
@@ -16,22 +17,41 @@ export const toStoneColor = (n: 1 | 2): StoneColor => (n === 1 ? 'b' : 'w');
 export type Move = {
   n: number; move: string; color: StoneColor;
   score?: number; loss?: number; secs?: number;
-  /** Source. "book-learned" marks branches learned from play — the
-   *  current table distinguishes it, so keep it. */
-  src?: '定石' | '定石·学' | '探索' | '読切';
+  /** Source token; see MoveSrc. "book_learned" marks branches learned
+   *  from play — the current table distinguishes it, so keep it. */
+  src?: string;
 /** A skipped turn with no legal move; move is unused. */
   pass?: boolean;
 };
 
-  /** Move-table columns — head and rows read the SAME array. Eval and
+/** Move sources adapt.ts produces. The table translates these four
+ *  and renders anything else verbatim, so an unknown token degrades to
+ *  its own text instead of a missing-key marker. */
+export type MoveSrc = 'book' | 'book_learned' | 'search' | 'solve';
+
+const SRC_KEY: Record<string, string> = {
+  book: 'data.src.book',
+  book_learned: 'data.src.book_learned',
+  search: 'data.src.search',
+  solve: 'data.src.solve',
+};
+
+/** Display text for a move source. */
+export const srcLabel = (src: string): string => (SRC_KEY[src] ? t(SRC_KEY[src]) : src);
+/** Book sources are gold; solved ones take plain text (rule 19). */
+export const srcIsBook = (src: string): boolean => src === 'book' || src === 'book_learned';
+export const srcIsSolve = (src: string): boolean => src === 'solve';
+
+/** Move-table columns — head and rows read the SAME array. Eval and
  *  time are vertically compared numbers (tabular); source takes the
- *  remainder. */
-const MOVE_COLS: Col[] = [
+ *  remainder. A function, not a constant: the heads are translated at
+ *  render, or a language switch never reaches them. */
+const moveCols = (): Col[] => [
   { head: '#', w: 22, right: true },
-  { head: '手', w: 58 },
-  { head: '評価', w: 56, right: true, num: true },
-  { head: '時間', w: 34, right: true, num: true },
-  { head: '出所', right: true },
+  { head: t('data.moves.header_move'), w: 58 },
+  { head: t('data.moves.header_eval'), w: 56, right: true, num: true },
+  { head: t('data.moves.header_time'), w: 34, right: true, num: true },
+  { head: t('data.moves.header_source'), right: true },
 ];
 
 export function KifuTable({ moves, current, onSelect, decimals = 1 }: {
@@ -51,15 +71,16 @@ export function KifuTable({ moves, current, onSelect, decimals = 1 }: {
     if (top < b.scrollTop) b.scrollTop = top;
     else if (bottom > b.scrollTop + b.clientHeight) b.scrollTop = bottom - b.clientHeight;
   }, [current, moves.length]);
+  const cols = moveCols();
   return (
     <div style={{ flex: 1, display: 'flex', flexDirection: 'column', minHeight: 0 }}>
-      <TableHead cols={MOVE_COLS} />
+      <TableHead cols={cols} />
       <div className="k-scroll" ref={box} style={{ flex: 1, minHeight: 0 }}>
         {/* Never show bare column headers with zero moves: pre-game
             this frame is always empty and read as broken-or-empty. */}
         {!moves.length && (
           <span style={{ display: 'block', padding: '0 var(--sp-3)' }}>
-            <Empty>まだ手がありません。</Empty>
+            <Empty>{t('data.moves.empty')}</Empty>
           </span>
         )}
         {moves.map(m => {
@@ -70,7 +91,7 @@ export function KifuTable({ moves, current, onSelect, decimals = 1 }: {
             // them, which requires the table to be focusable (a div
             // never enters the Tab ring). Eval/time are vertically
             // compared digit columns.
-            <TableRow key={m.n} cols={MOVE_COLS} on={isCurrent} muted={!played}
+            <TableRow key={m.n} cols={cols} on={isCurrent} muted={!played}
                       innerRef={isCurrent ? row : undefined}
                       onClick={() => onSelect?.(m.n)}>
               <span style={{ fontSize: 'var(--fs-7)', color: 'var(--sub)' }}>{m.n}</span>
@@ -79,7 +100,7 @@ export function KifuTable({ moves, current, onSelect, decimals = 1 }: {
                 {/* Pass is not a coordinate: drop the monospace, dim
                     with --sub, and don't try to align it. */}
                 {m.pass
-                  ? <span style={{ fontFamily: 'inherit', fontSize: 'var(--fs-6)', color: 'var(--sub)' }}>パス</span>
+                  ? <span style={{ fontFamily: 'inherit', fontSize: 'var(--fs-6)', color: 'var(--sub)' }}>{t('data.moves.pass')}</span>
                   : m.move}
               </span>
               <span style={{ display: 'flex', justifyContent: 'flex-end', gap: 5 }}>
@@ -87,7 +108,11 @@ export function KifuTable({ moves, current, onSelect, decimals = 1 }: {
                 <span>{m.score === undefined ? '' : (m.score > 0 ? '+' : '') + m.score.toFixed(decimals)}</span>
               </span>
               <span style={{ color: 'var(--sub)', fontSize: 'var(--fs-6)' }}>{m.secs?.toFixed(1) ?? ''}</span>
-              <span style={{ fontSize: 'var(--fs-6)', color: m.src?.startsWith('定石') ? 'var(--gold)' : m.src === '読切' ? 'var(--text)' : 'var(--sub)' }}>{m.src ?? ''}</span>
+              <span style={{
+                fontSize: 'var(--fs-6)',
+                color: m.src && srcIsBook(m.src) ? 'var(--gold)'
+                  : m.src && srcIsSolve(m.src) ? 'var(--text)' : 'var(--sub)',
+              }}>{m.src ? srcLabel(m.src) : ''}</span>
             </TableRow>
           );
         })}
@@ -164,9 +189,11 @@ export function EvalGraph({ points, plies, cursor, blunder, busy, pov = 'b', ext
 
   /* Viewpoint: the caller negates values (in one place, adapt) or the
      table and graph disagree on sign. */
-  const up = pov === 'b' ? '黒' : '白';
-  const down = pov === 'b' ? '白' : '黒';
-  const title = `評価値グラフ (${up}視点)`;
+  const black = pov === 'b';
+  const title = t(black ? 'data.graph.title_black_view' : 'data.graph.title_white_view');
+  /** Top edge is the viewpoint side ahead, bottom edge the other. */
+  const upLabel = t(black ? 'data.graph.black_ahead' : 'data.graph.white_ahead');
+  const downLabel = t(black ? 'data.graph.white_ahead' : 'data.graph.black_ahead');
   const W = 800, L = 44, R = 54, T = 18, B = 26, STEP = 8;
   /** Natural height and the floor below which we stop shrinking. */
   const NAT = 210, MIN = 120;
@@ -216,6 +243,7 @@ export function EvalGraph({ points, plies, cursor, blunder, busy, pov = 'b', ext
     return n >= 0 && n <= len ? n : null;
   };
   const shown = hover !== null ? points[hover] : undefined;
+  const shownMove = hover !== null ? moveName?.(hover) : undefined;
 
   return (
     /* No display here: the collapsed tier (max-height 620) toggles it,
@@ -238,19 +266,19 @@ export function EvalGraph({ points, plies, cursor, blunder, busy, pov = 'b', ext
         fontSize: 'var(--fs-6)', color: 'var(--sub)',
       }}>
         <span>{title}</span>
-        <Legend tone="gold">定石</Legend>
-        <Legend tone="text">読切</Legend>
-        <Legend tone="accent">探索</Legend>
+        <Legend tone="gold">{t('data.src.book')}</Legend>
+        <Legend tone="text">{t('data.src.solve')}</Legend>
+        <Legend tone="accent">{t('data.src.search')}</Legend>
         {/* Hover readout in a fixed-width slot; variable width shoves
             the legend around. */}
         <span style={{ minWidth: 132, color: 'var(--text)', whiteSpace: 'nowrap' }}>
           {hover !== null && shown && <>
-            {hover} 手{moveName?.(hover) ? ' ' + moveName(hover) : ''}
+            {shownMove ? t('data.ply_move', { n: hover, move: shownMove }) : t('data.ply', { n: hover })}
             {' '}<b style={{ fontWeight: 600 }}>
               {shown.value > 0 ? '+' : ''}{shown.value.toFixed(1)}
             </b>
             <span style={{ color: shown.book ? 'var(--gold)' : 'var(--sub)' }}>
-              {' '}{shown.book ? '定石' : shown.exact ? '読切' : '探索'}
+              {' '}{t(shown.book ? 'data.src.book' : shown.exact ? 'data.src.solve' : 'data.src.search')}
             </span>
           </>}
         </span>
@@ -267,14 +295,14 @@ export function EvalGraph({ points, plies, cursor, blunder, busy, pov = 'b', ext
         {/* Jump to the clicked ply; rescale from measured size. */}
         <svg viewBox={`0 0 ${W} ${H.toFixed(2)}`} preserveAspectRatio="none"
              style={{ width: '100%', height: '100%', display: 'block' }}
-             role="img" aria-label="評価値グラフ（縦軸 石差、横軸 手数）"
+             role="img" aria-label={t('data.graph.aria')}
              onMouseMove={(e) => setHover(plyAt(e))}
              onMouseLeave={() => setHover(null)}
              onClick={onJump && ((e) => { const n = plyAt(e); if (n !== null) onJump(n); })}>
           <rect x={0} y={0} width={W} height={H} rx={8} fill="var(--bg)" />
           {/* The unit escapes to the top-left (it collides with +16 in
               the tick column). */}
-          <text x={10} y={12} fill="var(--sub)" fontSize={10}>石差</text>
+          <text x={10} y={12} fill="var(--sub)" fontSize={10}>{t('data.graph.unit_discs')}</text>
 
           {rows.map(v => (
             <g key={'r' + v}>
@@ -288,9 +316,9 @@ export function EvalGraph({ points, plies, cursor, blunder, busy, pov = 'b', ext
           ))}
           {/* Edge labels swap with the viewpoint too; negating values
               alone makes white-view lines rise toward "black better". */}
-          <text x={W - R + 8} y={y(ymax) + 12} fill="var(--sub)" fontSize={11}>{up}有利</text>
-          <text x={W - R + 8} y={y(0) + 4} fill="var(--sub)" fontSize={11}>互角</text>
-          <text x={W - R + 8} y={y(-ymax) - 6} fill="var(--sub)" fontSize={11}>{down}有利</text>
+          <text x={W - R + 8} y={y(ymax) + 12} fill="var(--sub)" fontSize={11}>{upLabel}</text>
+          <text x={W - R + 8} y={y(0) + 4} fill="var(--sub)" fontSize={11}>{t('data.graph.even')}</text>
+          <text x={W - R + 8} y={y(-ymax) - 6} fill="var(--sub)" fontSize={11}>{downLabel}</text>
 
           {cols.map(n => (
             <g key={'c' + n}>
@@ -298,7 +326,7 @@ export function EvalGraph({ points, plies, cursor, blunder, busy, pov = 'b', ext
               <text x={x(n)} y={H - 8} textAnchor="middle" fill="var(--sub)" fontSize={11}>{n}</text>
             </g>
           ))}
-          <text x={W - R + 8} y={H - 8} fill="var(--sub)" fontSize={10}>手</text>
+          <text x={W - R + 8} y={H - 8} fill="var(--sub)" fontSize={10}>{t('data.graph.axis_moves')}</text>
 
           {d && <path d={d.trim()} fill="none" stroke="var(--accent)" strokeWidth={2} strokeLinejoin="round" />}
 
@@ -309,7 +337,7 @@ export function EvalGraph({ points, plies, cursor, blunder, busy, pov = 'b', ext
                 applied vertically. */}
             <text x={bRight ? bx - 7 : bx + 7} y={bHigh ? H - B - 6 : T + 11}
                   textAnchor={bRight ? 'end' : 'start'} fill="var(--bad)" fontSize={11}>
-              {blunder.at} 手 敗着 ▼{blunder.loss}
+              {t('data.blunder', { n: blunder.at, loss: blunder.loss })}
             </text>
           </>}
           {cursor !== undefined && (
@@ -335,7 +363,7 @@ export function EvalGraph({ points, plies, cursor, blunder, busy, pov = 'b', ext
           <div style={{
             position: 'absolute', inset: 0, display: 'grid', placeItems: 'center',
             fontSize: 'var(--fs-5)', color: 'var(--sub)',
-          }}>{busy ? '分析中…' : '「分析」で評価値を出します'}</div>
+          }}>{busy ? t('data.graph.analyzing') : t('data.graph.empty')}</div>
         )}
       </div>
     </div>
@@ -400,8 +428,8 @@ export function ScoreRow({ black, white, turn, meta, blackClock, whiteClock }: {
           counts too. */}
       {(blackClock || whiteClock) && (
         <span style={{ marginLeft: 'auto', display: 'flex', gap: 'var(--sp-4)', fontVariantNumeric: 'tabular-nums' }}>
-          {blackClock && <span>黒 <b style={{ color: 'var(--text)', fontWeight: 600 }}>{blackClock}</b></span>}
-          {whiteClock && <span>白 <b style={{ color: 'var(--text)', fontWeight: 600 }}>{whiteClock}</b></span>}
+          {blackClock && <span>{t('data.color.black')} <b style={{ color: 'var(--text)', fontWeight: 600 }}>{blackClock}</b></span>}
+          {whiteClock && <span>{t('data.color.white')} <b style={{ color: 'var(--text)', fontWeight: 600 }}>{whiteClock}</b></span>}
         </span>
       )}
     </div>
@@ -481,7 +509,7 @@ export function RateChart({ points, height = 74, width = 300, axes, dates, label
   if (points.length < 2) {
     return (
       <div style={{ height, display: 'grid', placeItems: 'center', fontSize: 'var(--fs-6)', color: 'var(--sub)' }}>
-        まだ記録がありません
+        {t('data.rate.empty')}
       </div>
     );
   }
@@ -500,7 +528,7 @@ export function RateChart({ points, height = 74, width = 300, axes, dates, label
   const ticks: number[] = [];
   if (axes) {
     const step = [1, 2, 5, 10, 25, 50, 100, 200, 500, 1000].find((v) => span / v <= 5) ?? 2000;
-    for (let t = Math.ceil(min / step) * step; t <= max; t += step) ticks.push(t);
+    for (let v = Math.ceil(min / step) * step; v <= max; v += step) ticks.push(v);
   }
   /* Hovered point from viewBox coords, rescaled from measured size —
      `meet` adds side margins when aspect ratios differ, so dividing
@@ -523,11 +551,11 @@ export function RateChart({ points, height = 74, width = 300, axes, dates, label
          style={{ width: '100%', height, display: 'block' }}
          onMouseMove={onHover ? (e) => onHover(pick(e)) : undefined}
          onMouseLeave={onHover ? () => onHover(null) : undefined}>
-      {ticks.map((t) => (
-        <g key={t}>
-          <line x1={padL} y1={y(t)} x2={w} y2={y(t)} stroke="var(--border-weak)" strokeWidth={1} />
-          <text x={padL - 6} y={y(t) + 3} textAnchor="end"
-                fontSize={10} fill="var(--sub)">{t}</text>
+      {ticks.map((tick) => (
+        <g key={tick}>
+          <line x1={padL} y1={y(tick)} x2={w} y2={y(tick)} stroke="var(--border-weak)" strokeWidth={1} />
+          <text x={padL - 6} y={y(tick) + 3} textAnchor="end"
+                fontSize={10} fill="var(--sub)">{tick}</text>
         </g>
       ))}
       {axes && dates && dates.length === points.length && dates.map((d, i) => (
@@ -585,7 +613,7 @@ export function ResultRow({ win, draw, opponent, discs, when, note, rating, dim,
 }) {
   const body = <>
     <span style={{ width: 24, flex: 'none', color: draw ? 'var(--sub)' : win ? 'var(--ok)' : 'var(--bad)' }}>
-      {draw ? '分' : win ? '勝' : '負'}
+      {t(draw ? 'data.result.draw' : win ? 'data.result.win' : 'data.result.loss')}
     </span>
     <span className="k-sel" style={{ flex: 1, minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
       {opponent}
@@ -622,7 +650,7 @@ export function ResultRow({ win, draw, opponent, discs, when, note, rating, dim,
     : {};
   // span when not clickable; a dead button still enters the Tab ring.
   return onClick && !dim
-    ? <button type="button" className="k-row" onClick={onClick} title="検討で開く" {...hov}
+    ? <button type="button" className="k-row" onClick={onClick} title={t('data.result.open_in_study')} {...hov}
               style={{ ...style, border: 0, background: 'transparent', cursor: 'pointer' }}>{body}</button>
     : <div style={{ ...style, opacity: dim ? 0.5 : 1 }} {...hov}>{body}</div>;
 }
@@ -677,13 +705,13 @@ export function MoveScrub({ plies, cursor, blunder, onSeek, nav = true }: {
     }}>
       {nav && (
         <span style={{ display: 'flex', gap: 4, flex: 'none' }}>
-          <Button square size="row" title="最初へ" disabled={cursor === 0} onClick={() => step(0)}>|◀</Button>
-          <Button square size="row" title="前の手" disabled={cursor === 0} onClick={() => step(cursor - 1)}>◀</Button>
-          <Button square size="row" title="次の手" disabled={cursor >= plies} onClick={() => step(cursor + 1)}>▶</Button>
-          <Button square size="row" title="最後へ" disabled={cursor >= plies} onClick={() => step(plies)}>▶|</Button>
+          <Button square size="row" title={t('data.scrub.first')} disabled={cursor === 0} onClick={() => step(0)}>|◀</Button>
+          <Button square size="row" title={t('data.scrub.prev')} disabled={cursor === 0} onClick={() => step(cursor - 1)}>◀</Button>
+          <Button square size="row" title={t('data.scrub.next')} disabled={cursor >= plies} onClick={() => step(cursor + 1)}>▶</Button>
+          <Button square size="row" title={t('data.scrub.last')} disabled={cursor >= plies} onClick={() => step(plies)}>▶|</Button>
         </span>
       )}
-      <div ref={box} role="slider" aria-label="手数" aria-valuemin={0}
+      <div ref={box} role="slider" aria-label={t('data.scrub.aria')} aria-valuemin={0}
            aria-valuemax={plies} aria-valuenow={cursor} tabIndex={0}
            onPointerDown={(e) => {
              (e.target as HTMLElement).setPointerCapture?.(e.pointerId);
@@ -720,7 +748,7 @@ export function MoveScrub({ plies, cursor, blunder, onSeek, nav = true }: {
 
         {/* Losing move: thicker, red, extended upward. */}
         {blunder && blunder.at <= plies && (
-          <div title={`${blunder.at} 手 敗着 ▼${blunder.loss}`} style={{
+          <div title={t('data.blunder', { n: blunder.at, loss: blunder.loss })} style={{
             position: 'absolute', left: at(blunder.at) + '%', top: 3,
             width: 2, height: 18, marginLeft: -1, background: 'var(--bad)',
           }} />
@@ -773,7 +801,7 @@ export function EvalTrend({ points, height = 96 }: {
         height, display: 'grid', placeItems: 'center',
         fontSize: 'var(--fs-7)', color: 'var(--sub)',
       }}>
-        まだ申告値がありません
+        {t('data.trend.empty')}
       </div>
     );
   }
@@ -785,7 +813,7 @@ export function EvalTrend({ points, height = 96 }: {
   const lim = Math.max(8, ...vals.map((v) => Math.abs(v)));
   const step = [2, 4, 8, 16, 32].find((v) => lim / v <= 2.5) ?? 32;
   const ticks: number[] = [];
-  for (let t = -Math.floor(lim / step) * step; t <= lim; t += step) ticks.push(t);
+  for (let v = -Math.floor(lim / step) * step; v <= lim; v += step) ticks.push(v);
 
   const span = Math.max(1, points.length - 1);
   const x = (i: number) => padL + (i / span) * (w - padL - pad);
@@ -827,22 +855,22 @@ export function EvalTrend({ points, height = 96 }: {
         display: 'flex', gap: 'var(--sp-3)', alignItems: 'center',
         fontSize: 'var(--fs-7)', color: 'var(--sub)', height: 'var(--h-head)',
       }}>
-        <span>申告値</span>
+        <span>{t('data.trend.title')}</span>
         <span style={{ marginLeft: 'auto', display: 'inline-flex', gap: 'var(--sp-3)' }}>
-          <span><span style={{ color: 'var(--accent)' }}>—</span> 自分 {cur ? fmt(cur.mine) : ''}</span>
-          <span><span style={{ color: 'var(--sub)' }}>—</span> 相手 {cur ? fmt(cur.opp) : ''}</span>
-          <span>{cur ? `${cur.x} 手` : '自分から見た石差'}</span>
+          <span><span style={{ color: 'var(--accent)' }}>—</span> {t('data.trend.mine')} {cur ? fmt(cur.mine) : ''}</span>
+          <span><span style={{ color: 'var(--sub)' }}>—</span> {t('data.trend.opp')} {cur ? fmt(cur.opp) : ''}</span>
+          <span>{cur ? t('data.ply', { n: cur.x }) : t('data.trend.hint')}</span>
         </span>
       </div>
       <svg viewBox={`0 0 ${w} ${height}`} preserveAspectRatio="none"
            style={{ width: '100%', height, display: 'block' }}
            onMouseMove={pickAt} onMouseLeave={() => setAt(null)}>
-        {ticks.map((t) => (
-          <g key={t}>
-            <line x1={padL} y1={y(t)} x2={w - pad} y2={y(t)}
-                  stroke={t === 0 ? 'var(--line)' : 'var(--border-weak)'} strokeWidth={1} />
-            <text x={padL - 4} y={y(t) + 3} textAnchor="end"
-                  fontSize={9} fill="var(--sub)">{t > 0 ? `+${t}` : t}</text>
+        {ticks.map((tick) => (
+          <g key={tick}>
+            <line x1={padL} y1={y(tick)} x2={w - pad} y2={y(tick)}
+                  stroke={tick === 0 ? 'var(--line)' : 'var(--border-weak)'} strokeWidth={1} />
+            <text x={padL - 4} y={y(tick) + 3} textAnchor="end"
+                  fontSize={9} fill="var(--sub)">{tick > 0 ? `+${tick}` : tick}</text>
           </g>
         ))}
         {/* X labels at ends and center only. */}

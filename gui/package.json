@@ -6,11 +6,12 @@
   "scripts": {
     "dev": "vite",
     "build": "tsc --noEmit && vite build",
-    "check": "test -z \"$(ls src-ui/js/*.js 2>/dev/null)\" && tsc --noEmit && eslint src-ui || (echo 'src-ui/js に .js が残っています (TypeScript 化前の残骸)。Vite はそちらを読むので消してください。' && exit 1)",
+    "check": "test -z \"$(ls src-ui/js/*.js 2>/dev/null)\" && tsc --noEmit && eslint src-ui || (echo 'stale .js files in src-ui/js (left from the TypeScript port); Vite prefers them, so delete them' && exit 1)",
     "lint": "eslint src-ui"
   },
   "devDependencies": {
     "@eslint/js": "^10.0.1",
+    "@rollup/plugin-yaml": "^5.0.0",
     "@types/react": "^19.2.18",
     "@types/react-dom": "^19.2.4",
     "@vitejs/plugin-react": "^6.0.5",

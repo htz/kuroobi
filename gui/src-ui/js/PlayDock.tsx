@@ -9,6 +9,23 @@ import type { BookBrowse } from './BookScreen';
 import type { NavId } from './components/ggs';
 import type { Move } from './components/data';
 import { LEVELS } from './state';
+import { t, tErr } from './i18n';
+
+/* Tab ids are stable English tokens, not the visible captions: the
+ * caption changes with the language, the id must not. Dock takes
+ * captions, so map both ways here. */
+const TABS = ['record', 'strength', 'learn'] as const;
+type TabId = (typeof TABS)[number];
+
+const tabLabel = (id: TabId): string =>
+  id === 'record' ? t('dock.tab.record')
+    : id === 'strength' ? t('dock.tab.strength')
+      : t('dock.tab.learning');
+
+/** Unknown ids (a caller still on the old captions) fall back to the
+ *  first tab rather than rendering an empty dock. */
+const tabOf = (id: string): TabId =>
+  (TABS as readonly string[]).includes(id) ? (id as TabId) : 'record';
 
 /* Right dock for play/study, extracted from App (was 117 inline
  * lines). Its three tabs (record / strength / learning) only display
@@ -23,10 +40,10 @@ export function PlayDock({
   cpu: ActivityView | null;
   prefs: Prefs;
   tab: string;
-  onTab: (t: string) => void;
+  onTab: (id: string) => void;
   open: boolean;
   onNav: (id: NavId) => void;
-  onBookTab: (t: string) => void;
+  onBookTab: (id: string) => void;
   onPaste: () => void;
   onLoadFile: () => void;
   study: boolean;
@@ -35,10 +52,13 @@ export function PlayDock({
   /** Builds the save filename (includes the played color); owned by App. */
   ggfNames: () => [string, string];
 }) {
+  const active = tabOf(tab);
+  const labels = TABS.map(tabLabel);
   return (
-    <Dock tabs={['棋譜', '強さ', '学習']} active={tab} onTab={onTab} open={open}
-          scroll={tab !== '棋譜'}>
-      {tab === '棋譜' && (
+    <Dock tabs={labels} active={tabLabel(active)}
+          onTab={(label) => onTab(TABS[labels.indexOf(label)] ?? 'record')}
+          open={open} scroll={active !== 'record'}>
+      {active === 'record' && (
         <>
           <div style={{ flex: 1, minHeight: 0, display: 'flex', flexDirection: 'column' }}>
             <KifuTable moves={moves} current={g.view?.cursor} decimals={prefs.decimals}
@@ -54,22 +74,22 @@ export function PlayDock({
             {/* Study hides this (the toolbar opens the same overlay);
                 never two copies of one action per screen. Play shows
                 the three buttons as designed. */}
-            {!study && <Button title="⌘O" onClick={() => onPaste()}>貼り付け</Button>}
-            <Button onClick={() => void onLoadFile()}>読込</Button>
+            {!study && <Button title="⌘O" onClick={() => onPaste()}>{t('dock.record.paste')}</Button>}
+            <Button onClick={() => void onLoadFile()}>{t('dock.record.load')}</Button>
             {/* .ggf saves colors, result and start position. Disabled
                 with no moves — pressing would only bounce, and the
                 table right above already says why. */}
             <Button title="⌘S" disabled={!moves.length}
-                    onClick={() => void api.saveKifu(...ggfNames()).catch((e: unknown) => g.say('' + e))}>
-              保存
+                    onClick={() => void api.saveKifu(...ggfNames()).catch((e: unknown) => g.say(tErr(e)))}>
+              {t('dock.record.save')}
             </Button>
           </div>
         </>
       )}
-      {tab === '強さ' && (
+      {active === 'strength' && (
         // In study the same three become analysis depth; only the
         // section title changes.
-        <Section title={study ? '解析の設定' : '強さ'}>
+        <Section title={study ? t('dock.strength.analysis_title') : t('dock.tab.strength')}>
           {/* Same Strength picker as the GGS settings — one learned
               interaction serves both. */}
           <Strength value={g.levels} onChange={(v) => {
@@ -83,26 +103,25 @@ export function PlayDock({
               and orphans the hint. */}
           <div style={{ display: 'flex', flexDirection: 'column', gap: 'var(--sp-2)' }}>
             <div style={{ display: 'flex', alignItems: 'baseline', gap: 'var(--sp-2)' }}>
-              <span style={{ fontSize: 'var(--fs-5)' }}>定石</span>
+              <span style={{ fontSize: 'var(--fs-5)' }}>{t('dock.book.label')}</span>
               {!g.hasBook && (
                 <span style={{ fontSize: 'var(--fs-6)', color: 'var(--gold)' }}>
-                  — ファイルがありません (設定から指定できます)
+                  {t('dock.book.missing')}
                 </span>
               )}
             </div>
             <Segmented fill value={g.useBook ? 'on' : 'off'} disabled={!g.hasBook}
                        onChange={(x) => g.setUseBook(x === 'on')}
-                       options={[{ value: 'on', label: '使う' }, { value: 'off', label: '使わない' }]} />
+                       options={[{ value: 'on', label: t('dock.book.use') },
+                                 { value: 'off', label: t('dock.book.dont_use') }]} />
           </div>
         </Section>
       )}
-      {tab === '学習' && (
+      {active === 'learn' && (
         <>
-          <Section title="定石への書き戻し">
-            <Toggle checked={g.learnOn} onChange={g.setLearnOn} label="終局した対局を取り込む" />
-            <Note>
-              勝敗にかかわらず取り込み、終局の石差を根まで書き戻します。同じ負け方をなぞらなくなります。
-            </Note>
+          <Section title={t('dock.learn.writeback_title')}>
+            <Toggle checked={g.learnOn} onChange={g.setLearnOn} label={t('dock.learn.import_toggle')} />
+            <Note>{t('dock.learn.writeback_note')}</Note>
           </Section>
           {/* Framed only while running (the sole nesting exception is
               an active job). No pause button — the engine has no stop
@@ -118,14 +137,17 @@ export function PlayDock({
               padding: 'var(--sp-3)', display: 'flex', flexDirection: 'column', gap: 'var(--sp-2)',
             }}>
               <div style={{ display: 'flex', alignItems: 'center', fontSize: 'var(--fs-5)' }}>
-                <Busy>取り込み中</Busy>
+                <Busy>{t('dock.learn.importing')}</Busy>
                 {/* Import advances per position; jittering digits would
                     shake the label too. */}
                 <span style={{
                   marginLeft: 'auto', fontSize: 'var(--fs-6)', color: 'var(--sub)',
                   fontVariantNumeric: 'tabular-nums',
                 }}>
-                  局面 {cpu.learn[0].toLocaleString()} / {cpu.learn[1].toLocaleString()}
+                  {t('dock.learn.progress', {
+                    done: cpu.learn[0].toLocaleString(),
+                    total: cpu.learn[1].toLocaleString(),
+                  })}
                 </span>
               </div>
               <Progress value={cpu.learn[1] > 0 ? cpu.learn[0] / cpu.learn[1] : 0} />
@@ -133,18 +155,18 @@ export function PlayDock({
                   designed); the engine offers no game-name hook. */}
               {cpu.learn_paused && (
                 <div style={{ display: 'flex', alignItems: 'center', fontSize: 'var(--fs-6)', color: 'var(--sub)' }}>
-                  <span>対局・検討が動いている間は譲ります</span>
-                  <span style={{ marginLeft: 'auto' }}>譲り中</span>
+                  <span>{t('dock.learn.yielding_note')}</span>
+                  <span style={{ marginLeft: 'auto' }}>{t('dock.learn.yielding')}</span>
                 </div>
               )}
             </div>
           )}
           {/* Details moved to the Book screen's second pane; a second
               copy here would compete with it. */}
-          <Section title="学習した定石">
-            <KeyValue big label="登録局面" value={book.node?.size} />
-            <KeyValue big label="うち学習" value={book.node?.learned_size} />
-            <Button onClick={() => { onNav('book'); onBookTab('学習ログ'); }}>学習ログを見る</Button>
+          <Section title={t('dock.learn.book_title')}>
+            <KeyValue big label={t('dock.learn.stored')} value={book.node?.size} />
+            <KeyValue big label={t('dock.learn.learned')} value={book.node?.learned_size} />
+            <Button onClick={() => { onNav('book'); onBookTab('log'); }}>{t('dock.learn.open_log')}</Button>
           </Section>
         </>
       )}

@@ -5,6 +5,7 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
 mod ggs;
+mod i18n;
 mod keychain;
 
 use std::path::PathBuf;
@@ -463,7 +464,7 @@ fn calibrate_missing(
                 return;
             }
             let nps = {
-                let _g = ActivityGuard::begin(&activity, "較正");
+                let _g = ActivityGuard::begin(&activity, "calibrating");
                 let mut guard = engine_slot.lock().unwrap();
                 let Some(e) = guard.as_mut() else { return };
                 let keep = e.config().threads;
@@ -485,14 +486,15 @@ fn calibrate_missing(
     });
 }
 
-/// Translate engine-init failures into display language. The library
-/// messages are shared with the CLI (`nnue <path>: ...`); toasts must
-/// not show internal jargon without a fix suggestion, so rephrase here.
+/// Turn engine-init failures into a key the frontend translates. The
+/// library messages are shared with the CLI (`nnue <path>: ...`); toasts
+/// must not show internal jargon without a fix suggestion, so map them
+/// to `err.*` keys and pass the path along as a parameter.
 fn setup_error(e: String) -> String {
-    let what = if e.starts_with("nnue ") {
-        "NNUE の重み"
+    let key = if e.starts_with("nnue ") {
+        "err.nnue_weights_missing"
     } else if e.starts_with("weights ") {
-        "線形評価の重み"
+        "err.linear_weights_missing"
     } else {
         return e;
     };
@@ -502,7 +504,7 @@ fn setup_error(e: String) -> String {
         .and_then(|(_, rest)| rest.split_once(": "))
         .map(|(p, _)| p)
         .unwrap_or("");
-    format!("{what}を読み込めません ({path})。設定でファイルの場所を指定してください。")
+    format!("{key}|path={path}")
 }
 
 fn ensure_engine(app: &State<App>) -> Result<(), String> {
@@ -603,6 +605,14 @@ fn autoplay() -> String {
 #[tauri::command]
 fn theme_override() -> String {
     std::env::var("KUROOBI_THEME").unwrap_or_default()
+}
+
+/// Screenshot hook: pin the UI language (`KUROOBI_LANG=en`/`ja`).
+/// Same reasoning as `theme_override` — the only switch is in
+/// Settings > Display, so captures could not cover both languages.
+#[tauri::command]
+fn lang_override() -> String {
+    std::env::var("KUROOBI_LANG").unwrap_or_default()
 }
 
 /// Whether a book is available (for display); answered by file
@@ -748,9 +758,9 @@ async fn learn_undo(app: State<'_, App>, at: u64, kifu: String) -> Result<usize,
     let e = log
         .into_iter()
         .find(|e| e.at == at && e.kifu == kifu)
-        .ok_or("その対局は控えにありません")?;
+        .ok_or("err.game_not_in_archive")?;
     if e.changes.is_empty() {
-        return Err("書き換えの明細が無いので戻せません".into());
+        return Err("err.no_change_detail".into());
     }
     let changes: Vec<kuroobi::learn::BackupChange> = e
         .changes
@@ -772,7 +782,7 @@ async fn learn_undo(app: State<'_, App>, at: u64, kifu: String) -> Result<usize,
     let n = tauri::async_runtime::spawn_blocking(move || {
         ensure_engine_in(&eng, &stop)?;
         let mut guard = eng.lock().unwrap();
-        let engine = guard.as_mut().ok_or("エンジンがまだありません")?;
+        let engine = guard.as_mut().ok_or("err.engine_not_ready")?;
         engine.undo_learn(
             (!start.is_empty()).then_some(start.as_str()),
             &kifu,
@@ -819,7 +829,7 @@ fn learn_game(app: State<App>, my_color: String) -> Result<(), String> {
     let (kifu, board) = {
         let game = app.game.lock().unwrap();
         if !game.is_game_over() {
-            return Err("終局していません".into());
+            return Err("err.game_not_over".into());
         }
         (game.to_kifu(), game.board)
     };
@@ -827,7 +837,7 @@ fn learn_game(app: State<App>, my_color: String) -> Result<(), String> {
     // final board (keeps loaded drawn-opening games out).
     let (_, fin) = kuroobi::learn::replay(None, &kifu)?;
     if fin.black != board.black || fin.white != board.white {
-        return Err("初期局面から始まった対局ではないため取り込みません".into());
+        return Err("err.not_from_standard_start".into());
     }
     let eng = app.engine.clone();
     let stop = app.stop.clone();
@@ -996,7 +1006,7 @@ async fn calibrate_nps(app: State<'_, App>) -> Result<ThreadsView, String> {
     let eng = app.engine.clone();
     let act = app.activity.clone();
     let (nps, threads) = tauri::async_runtime::spawn_blocking(move || {
-        let _g = ActivityGuard::begin(&act, "較正");
+        let _g = ActivityGuard::begin(&act, "calibrating");
         let mut guard = eng.lock().unwrap();
         let e = guard.as_mut().unwrap();
         let threads = e.config().threads;
@@ -1005,7 +1015,7 @@ async fn calibrate_nps(app: State<'_, App>) -> Result<ThreadsView, String> {
     .await
     .map_err(|e| e.to_string())?;
     if nps <= 0.0 {
-        return Err("読切の速度を測れませんでした".into());
+        return Err("err.solve_speed_unmeasurable".into());
     }
     let mut r = resources();
     r.set_nps(threads, nps);
@@ -1144,11 +1154,11 @@ async fn pick_resource(handle: tauri::AppHandle, kind: String) -> Result<Option<
     let picked = match kind.as_str() {
         "dir" => d.blocking_pick_folder().map(|p| p.to_string()),
         "book" => d
-            .add_filter("定石 book", &["txt"])
+            .add_filter(i18n::t("backend.filter.book"), &["txt"])
             .blocking_pick_file()
             .map(|p| p.to_string()),
         _ => d
-            .add_filter("重み", &["bin"])
+            .add_filter(i18n::t("backend.filter.weights"), &["bin"])
             .blocking_pick_file()
             .map(|p| p.to_string()),
     };
@@ -1267,7 +1277,7 @@ fn set_clock(app: State<App>, secs: u64) -> ClockView {
 async fn think(app: State<'_, App>) -> Result<ThinkView, String> {
     // GGS games come first; no local search while one runs.
     if ggs_match_active(&app) {
-        return Err("GGS 対局中はローカルの探索を控えます (終局までお待ちください)".into());
+        return Err("err.busy_ggs_search".into());
     }
     ensure_engine(&app)?;
     let board = app.game.lock().unwrap().board;
@@ -1305,7 +1315,7 @@ async fn think(app: State<'_, App>) -> Result<ThinkView, String> {
         (base, plan)
     };
     let (mv, secs, nodes, aborted) = tauri::async_runtime::spawn_blocking(move || {
-        let _g = ActivityGuard::begin(&act, "思考");
+        let _g = ActivityGuard::begin(&act, "thinking");
         let mut guard = eng.lock().unwrap();
         let t0 = std::time::Instant::now();
         // Node counts are cumulative; diff for this move's share.
@@ -1385,7 +1395,7 @@ fn apply_move(app: State<App>, sq: Option<u8>) -> Result<GameView, String> {
 #[tauri::command]
 async fn ponder_live(app: State<'_, App>) -> Result<(), String> {
     if ggs_match_active(&app) {
-        return Err("GGS 対局中は控えます".into());
+        return Err("err.busy_ggs".into());
     }
     ensure_engine(&app)?;
     let board = app.game.lock().unwrap().board;
@@ -1396,7 +1406,7 @@ async fn ponder_live(app: State<'_, App>) -> Result<(), String> {
         h.reset();
     }
     tauri::async_runtime::spawn_blocking(move || {
-        let _g = ActivityGuard::begin(&act, "先読み");
+        let _g = ActivityGuard::begin(&act, "pondering");
         let mut guard = eng.lock().unwrap();
         let Some(e) = guard.as_mut() else { return };
         /* 60-second lid; normally it stops at depth by itself — this
@@ -1412,7 +1422,7 @@ async fn ponder_live(app: State<'_, App>) -> Result<(), String> {
 #[tauri::command]
 async fn analyze_live(app: State<'_, App>, handle: tauri::AppHandle) -> Result<(), String> {
     if ggs_match_active(&app) {
-        return Err("GGS 対局中は分析を控えます".into());
+        return Err("err.busy_ggs_analysis".into());
     }
     ensure_engine(&app)?;
     let board = app.game.lock().unwrap().board;
@@ -1423,7 +1433,7 @@ async fn analyze_live(app: State<'_, App>, handle: tauri::AppHandle) -> Result<(
         h.reset();
     }
     tauri::async_runtime::spawn_blocking(move || {
-        let _g = ActivityGuard::begin(&act, "分析");
+        let _g = ActivityGuard::begin(&act, "analyzing");
         let mut guard = eng.lock().unwrap();
         let Some(e) = guard.as_mut() else { return };
         // No book during analysis: book values are past search results
@@ -1454,7 +1464,7 @@ async fn analyze_live(app: State<'_, App>, handle: tauri::AppHandle) -> Result<(
 #[tauri::command]
 async fn eval_at(app: State<'_, App>, n: usize, depth: u32) -> Result<EvalPoint, String> {
     if ggs_match_active(&app) {
-        return Err("GGS 対局中は分析を控えます".into());
+        return Err("err.busy_ggs_analysis".into());
     }
     ensure_engine(&app)?;
     let board = board_at_line(&mut app.game.lock().unwrap(), n)?;
@@ -1468,7 +1478,7 @@ async fn eval_at(app: State<'_, App>, n: usize, depth: u32) -> Result<EvalPoint,
         h.reset();
     }
     let (value, exact, from_book, searched) = tauri::async_runtime::spawn_blocking(move || {
-        let _g = ActivityGuard::begin(&act, "分析");
+        let _g = ActivityGuard::begin(&act, "analyzing");
         let mut guard = eng.lock().unwrap();
         let e = guard.as_mut().unwrap();
         /* Gold dot only when the book was actually used — the mark
@@ -1533,12 +1543,12 @@ async fn save_kifu(
         )
     };
     if kifu.is_empty() {
-        return Err("棋譜が空です".into());
+        return Err("err.record_empty".into());
     }
     let Some(path) = handle
         .dialog()
         .file()
-        .add_filter("棋譜", &["ggf", "txt", "kifu"])
+        .add_filter(i18n::t("backend.filter.record"), &["ggf", "txt", "kifu"])
         .set_file_name("kuroobi_game.ggf")
         .blocking_save_file()
     else {
@@ -1793,7 +1803,7 @@ fn load_kifu_into(app: &State<App>, text: &str) -> Result<GameView, String> {
     };
     let s = extract_kifu(&body);
     if s.is_empty() && start.is_none() {
-        return Err("棋譜が見つかりません".into());
+        return Err("err.record_not_found".into());
     }
     /* Never pass engine errors through raw: `invalid KIFU: xx` used to
     reach the toast in English next to Japanese messages. Log the cause;
@@ -1803,8 +1813,8 @@ fn load_kifu_into(app: &State<App>, text: &str) -> Result<GameView, String> {
         None => Reversi::from_kifu(&s),
     }
     .map_err(|e| {
-        eprintln!("棋譜を読み取れません: {e}");
-        "棋譜を読み取れません。手の並びが正しいか確かめてください".to_string()
+        eprintln!("cannot parse game record: {e}");
+        "err.record_unreadable".to_string()
     })?;
     let mut game = app.game.lock().unwrap();
     *game = loaded;
@@ -1820,7 +1830,7 @@ async fn load_kifu(
     let Some(path) = handle
         .dialog()
         .file()
-        .add_filter("棋譜", &["ggf", "txt", "kifu"])
+        .add_filter(i18n::t("backend.filter.record"), &["ggf", "txt", "kifu"])
         .blocking_pick_file()
     else {
         return Ok(None);
@@ -1890,14 +1900,14 @@ async fn book_node(app: State<'_, App>, kifu: String) -> Result<BookNodeView, St
     let game = if kifu.trim().is_empty() {
         Reversi::new()
     } else {
-        game_from_text(&kifu).ok_or("棋譜を読めません")?
+        game_from_text(&kifu).ok_or("err.record_parse_failed")?
     };
     let b = game.board;
     let player = game.player();
     let eng = app.engine.clone();
     tauri::async_runtime::spawn_blocking(move || {
         let mut guard = eng.lock().unwrap();
-        let e = guard.as_mut().ok_or("エンジンがまだありません")?;
+        let e = guard.as_mut().ok_or("err.engine_not_ready")?;
         let (moves, learned) = e.book_node(&b).unwrap_or((Vec::new(), false));
         let entry = e.book_entry(&b);
         let mut cells = vec![0u8; 64];
@@ -1940,7 +1950,7 @@ async fn book_node(app: State<'_, App>, kifu: String) -> Result<BookNodeView, St
 
 #[tauri::command]
 fn preview_kifu(text: String) -> Result<Vec<KifuFrame>, String> {
-    let mut game = game_from_text(&text).ok_or("棋譜を読めません")?;
+    let mut game = game_from_text(&text).ok_or("err.record_parse_failed")?;
     let line = game.line();
     // Rewind to the start position (drawn openings differ from standard).
     while game.move_count() > 0 {
@@ -2029,7 +2039,7 @@ fn ggs_tx(app: &State<App>) -> Result<std::sync::mpsc::Sender<ggs::Cmd>, String>
         .unwrap()
         .as_ref()
         .map(|h| h.tx.clone())
-        .ok_or_else(|| "GGS セッションが起動していません".into())
+        .ok_or_else(|| "err.ggs_session_not_started".into())
 }
 
 /// Read `.ggs_credentials` (repo root, name:pw). GUI login moved to the
@@ -2065,7 +2075,7 @@ fn saved_credentials() -> Option<(String, String)> {
 #[tauri::command]
 fn ggs_connect(app: State<App>, login: String, pw: String) -> Result<String, String> {
     if login.trim().is_empty() || pw.is_empty() {
-        return Err("ログイン名とパスワードを入力してください".into());
+        return Err("err.login_and_password_required".into());
     }
     let l = login.trim().to_string();
     ggs_tx(&app)?
@@ -2075,6 +2085,13 @@ fn ggs_connect(app: State<App>, login: String, pw: String) -> Result<String, Str
         })
         .map_err(|e| e.to_string())?;
     Ok(l)
+}
+
+/// Receive the strings the backend renders itself (see `i18n`). Sent at
+/// startup and on every language change.
+#[tauri::command]
+fn set_backend_strings(strings: std::collections::HashMap<String, String>) {
+    i18n::set(strings);
 }
 
 /// Diagnostic command capturing frontend exceptions; traceable via the
@@ -2116,9 +2133,7 @@ fn ggs_raw(app: State<App>, cmd: String) -> Result<(), String> {
 fn require_calibration() -> Result<(), String> {
     let t = resources().threads.unwrap_or_else(auto_threads);
     if resources().nps_for(t).is_none() {
-        return Err(format!(
-            "読切の速度をまだ測っていません ({t} スレッド)。設定 → エンジン の「読切の速度」で測ってから設定してください"
-        ));
+        return Err(format!("err.solve_speed_not_measured|threads={t}"));
     }
     Ok(())
 }
@@ -2205,7 +2220,7 @@ fn ggs_watch(app: State<App>, id: String, on: bool) -> Result<(), String> {
 /// or reopening the screen replays stale messages.
 #[tauri::command]
 fn ggs_ack(app: State<App>) -> Result<(), String> {
-    let snap = ggs_snap_arc(&app).ok_or("GGS に接続していません")?;
+    let snap = ggs_snap_arc(&app).ok_or("err.ggs_not_connected")?;
     let mut s = snap.lock().unwrap();
     s.notice.clear();
     s.fetched_ggf = None;
@@ -2223,7 +2238,7 @@ fn ggs_look(app: State<App>, id: String) -> Result<(), String> {
 #[tauri::command]
 fn ggs_chat(app: State<App>, target: String, text: String) -> Result<(), String> {
     if target.trim().is_empty() || text.trim().is_empty() {
-        return Err("宛先と本文が必要です".into());
+        return Err("err.chat_target_and_text_required".into());
     }
     ggs_tx(&app)?
         .send(ggs::Cmd::Chat {
@@ -2250,8 +2265,8 @@ fn ggs_match_cmd(app: State<App>, id: String, verb: String, arg: String) -> Resu
 fn ggs_set_formula(app: State<App>, kind: String, expr: String) -> Result<(), String> {
     if kind != "aform" && kind != "dform" {
         // The screen only passes constants, so this rarely fires — but
-        // the string reaches a toast verbatim, so keep it display-language.
-        return Err(format!("申し込みの扱いの種別が不正です ({kind})"));
+        // the string reaches a toast, so hand the frontend a key.
+        return Err(format!("err.bad_formula_kind|kind={kind}"));
     }
     ggs_tx(&app)?
         .send(ggs::Cmd::SetFormula { kind, expr })
@@ -2393,7 +2408,7 @@ fn ggs_snapshot(app: State<App>) -> Result<ggs::Snapshot, String> {
         let guard = app.ggs.lock().unwrap();
         let h = guard
             .as_ref()
-            .ok_or_else(|| "GGS セッションが起動していません".to_string())?;
+            .ok_or_else(|| "err.ggs_session_not_started".to_string())?;
         h.snapshot.clone()
     };
     let s = snap.lock().unwrap().clone();
@@ -2450,12 +2465,12 @@ fn ggs_autoview() -> String {
 async fn ggs_save_log(handle: tauri::AppHandle, text: String) -> Result<Option<String>, String> {
     use tauri_plugin_dialog::DialogExt;
     if text.is_empty() {
-        return Err("ログが空です".into());
+        return Err("err.log_empty".into());
     }
     let Some(path) = handle
         .dialog()
         .file()
-        .add_filter("ログ", &["log", "txt"])
+        .add_filter(i18n::t("backend.filter.log"), &["log", "txt"])
         .set_file_name("ggs-log.txt")
         .blocking_save_file()
     else {
@@ -2475,12 +2490,12 @@ async fn ggs_save_kifu(
 ) -> Result<Option<String>, String> {
     use tauri_plugin_dialog::DialogExt;
     if kifu.is_empty() {
-        return Err("棋譜が空です".into());
+        return Err("err.record_empty".into());
     }
     let Some(path) = handle
         .dialog()
         .file()
-        .add_filter("棋譜", &["ggf", "txt", "kifu"])
+        .add_filter(i18n::t("backend.filter.record"), &["ggf", "txt", "kifu"])
         .set_file_name(format!("{name}.txt"))
         .blocking_save_file()
     else {
@@ -2577,6 +2592,7 @@ fn main() {
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
+            set_backend_strings,
             clocks,
             set_clock,
             state,
@@ -2600,6 +2616,7 @@ fn main() {
             book_node,
             autoplay,
             theme_override,
+            lang_override,
             resource_status,
             pick_resource,
             set_resource,
@@ -2668,7 +2685,7 @@ mod tests {
             Some(start.replace(' ', "").as_str())
         );
         // The start-position line must not be scanned as moves.
-        let g = game_from_text(&text).expect("読めること");
+        let g = game_from_text(&text).expect("parses");
         assert_eq!(g.move_count(), 3);
     }
 
@@ -2676,7 +2693,7 @@ mod tests {
     #[test]
     fn plain_kifu_still_works() {
         assert!(extract_start("f5d6c3").is_none());
-        let g = game_from_text("f5d6c3").expect("読めること");
+        let g = game_from_text("f5d6c3").expect("parses");
         assert_eq!(g.move_count(), 3);
     }
 
@@ -2706,7 +2723,7 @@ mod tests {
             drawn.make_move(p).unwrap();
             kifu.push_str(&p.to_kifu().to_lowercase());
         }
-        let g = game_from_text(&format!("{start}\n{kifu}")).expect("読めること");
+        let g = game_from_text(&format!("{start}\n{kifu}")).expect("parses");
         assert_eq!(g.board.black, drawn.board.black);
         assert_eq!(g.board.white, drawn.board.white);
     }
@@ -2717,7 +2734,7 @@ mod tests {
         let ggf = "(;GM[Othello]PC[GGS/os]PB[nyanyan]RB[2658.9]PW[egrcd]RW[2585.8]\
                    BO[8 ---------------------------O*------*O--------------------------- *]\
                    B[F5]W[D6]B[C3];)";
-        let g = game_from_text(ggf).expect("読めること");
+        let g = game_from_text(ggf).expect("parses");
         assert_eq!(g.move_count(), 3);
         let plain = Reversi::from_kifu("f5d6c3").unwrap();
         assert_eq!(g.board.black, plain.board.black);
@@ -2730,8 +2747,8 @@ mod tests {
         let ggf = "(;GM[Othello]PB[player1]PW[a1ice]\
                    BO[8 ---------------------------O*------*O--------------------------- *]\
                    B[F5];)";
-        let g = game_from_text(ggf).expect("読めること");
-        assert_eq!(g.move_count(), 1, "名前の a1 / r1 を手にしない");
+        let g = game_from_text(ggf).expect("parses");
+        assert_eq!(g.move_count(), 1, "a1 / r1 in names are not moves");
     }
 
     /// A drawn-opening GGF reproduces the original game.
@@ -2756,7 +2773,7 @@ mod tests {
             black = !black;
         }
         let ggf = format!("(;GM[Othello]BO[8 {bo}]{tags};)");
-        let g = game_from_text(&ggf).expect("読めること");
+        let g = game_from_text(&ggf).expect("parses");
         assert_eq!(g.board.black, drawn.board.black);
         assert_eq!(g.board.white, drawn.board.white);
     }
@@ -2768,7 +2785,7 @@ mod tests {
                    RB[1720]RW[1438.62]TI[15:00//02:00]TY[8]RE[+54.000]\
                    BO[8 -------- -------- -------- ---O*--- ---*O--- -------- -------- -------- *]\
                    B[E6]W[f4/-25.99/0.20]B[C3]W[d6/-25.99/0.04]B[F6]W[e7/-25.99/0.02];)";
-        let g = game_from_text(ggf).expect("読めること");
+        let g = game_from_text(ggf).expect("parses");
         assert_eq!(g.move_count(), 6);
         // Mixed case, evals and times present — extract moves only.
         let plain = Reversi::from_kifu("e6f4c3d6f6e7").unwrap();
@@ -2780,15 +2797,18 @@ mod tests {
     #[test]
     fn replays_a_whole_archived_game() {
         let ggf = "(;GM[Othello]PC[GGS/os]DT[2026.07.30_17:36:36.MDT]PB[kuroobi]PW[fly]RB[1720]RW[1438.62]TI[15:00//02:00]TY[8]RE[+54.000]BO[8 -------- -------- -------- ---O*--- ---*O--- -------- -------- -------- *]B[E6]W[f4/-25.99/0.20]B[C3]W[d6/-25.99/0.04]B[F6]W[e7/-25.99/0.02]B[F5]W[g5/-25.99]B[E3]W[g4/-28.23]B[C7]W[d3/24.23]B[F3]W[c4/0.23]B[C6]W[c5/-7.29]B[B4]W[b6/-7.81]B[D7]W[b5/-8.06]B[C2]W[a3/-7.84]B[F8]W[e8/-11.18]B[D8]W[c8/-15.07]B[B8]W[d2/-19.02]B[G3]W[e2/-19.46]B[A6]W[c1/-20.24]B[D1]W[e1/-20.44]B[F2]W[f1/-17.83]B[F7]W[h3/-18.89]B[A5]W[a7/-29.57]B[A8]W[b7/-35.51]B[G2]W[g8/-38.82]B[H8]W[g1/-45.44]B[B3]W[a4/-38.31]B[A2]W[b2]B[A1]W[b1]B[G7]W[g6]B[H6]W[h7]B[H5]W[h4]B[H2]W[pass]B[H1];)";
-        let g = game_from_text(ggf).expect("読めること");
-        assert!(g.board.is_game_over(), "終局まで再生できる");
+        let g = game_from_text(ggf).expect("parses");
+        assert!(g.board.is_game_over(), "replays to the end of the game");
         // GGF RE[+54.000] is the disc difference from Black's view.
         let (b, w) = (
             g.board.black.count_ones() as i32,
             g.board.white.count_ones() as i32,
         );
-        assert_eq!(b - w, 54, "結果が RE と一致する");
-        assert!(ggf.contains("W[pass]"), "終盤にパスが入っている局");
+        assert_eq!(b - w, 54, "disc difference matches RE");
+        assert!(
+            ggf.contains("W[pass]"),
+            "this game contains an endgame pass"
+        );
     }
 
     /* ---- GGF writing ---- */
@@ -2799,9 +2819,12 @@ mod tests {
         let g = Reversi::from_kifu("e6f4c3d6f6e7").unwrap();
         let ggf = to_ggf(&g, "KUROOBI", "Player");
         assert!(ggf.contains("PB[KUROOBI]PW[Player]"), "{ggf}");
-        assert!(ggf.contains("RE[?]"), "終局していない対局は結果を書かない");
-        assert!(ggf.contains("B[E6]W[F4]"), "手は大文字・色つき: {ggf}");
-        let back = game_from_text(&ggf).expect("読めること");
+        assert!(ggf.contains("RE[?]"), "an unfinished game has no result");
+        assert!(
+            ggf.contains("B[E6]W[F4]"),
+            "moves are upper case and coloured: {ggf}"
+        );
+        let back = game_from_text(&ggf).expect("parses");
         assert_eq!(back.board.black, g.board.black);
         assert_eq!(back.board.white, g.board.white);
     }
@@ -2816,12 +2839,18 @@ mod tests {
                    B[G3]W[E2]B[A6]W[C1]B[D1]W[E1]B[F2]W[F1]B[F7]W[H3]B[A5]W[A7]B[A8]W[B7]\
                    B[G2]W[G8]B[H8]W[G1]B[B3]W[A4]B[A2]W[B2]B[A1]W[B1]B[G7]W[G6]B[H6]W[H7]\
                    B[H5]W[H4]B[H2]W[PASS]B[H1];)";
-        let g = game_from_text(src).expect("読めること");
+        let g = game_from_text(src).expect("parses");
         assert!(g.board.is_game_over());
         let ggf = to_ggf(&g, "a", "b");
-        assert!(ggf.contains("W[PA]"), "パスを落とすと手番がずれる: {ggf}");
-        assert!(ggf.contains("RE[+54]"), "終局した対局は石差を書く: {ggf}");
-        let back = game_from_text(&ggf).expect("読めること");
+        assert!(
+            ggf.contains("W[PA]"),
+            "dropping the pass would shift the side to move: {ggf}"
+        );
+        assert!(
+            ggf.contains("RE[+54]"),
+            "a finished game records the disc difference: {ggf}"
+        );
+        let back = game_from_text(&ggf).expect("parses");
         assert_eq!(back.board.black, g.board.black);
         assert_eq!(back.board.white, g.board.white);
     }
@@ -2845,9 +2874,9 @@ mod tests {
         let ggf = to_ggf(&g, "a", "b");
         assert!(
             ggf.contains(&format!("BO[8 {}", ggf_squares(&start))),
-            "開始局面が入っていない: {ggf}"
+            "the start position is missing: {ggf}"
         );
-        let back = game_from_text(&ggf).expect("読めること");
+        let back = game_from_text(&ggf).expect("parses");
         assert_eq!(back.board.black, g.board.black);
         assert_eq!(back.board.white, g.board.white);
     }
@@ -2857,7 +2886,10 @@ mod tests {
     fn ggf_escapes_bracket_in_names() {
         let g = Reversi::from_kifu("e6").unwrap();
         let ggf = to_ggf(&g, "a]b", "c");
-        assert!(!ggf.contains("a]b"), "そのまま入れるとタグが切れる");
+        assert!(
+            !ggf.contains("a]b"),
+            "an unescaped bracket would cut the tag short"
+        );
         assert_eq!(game_from_text(&ggf).unwrap().move_count(), 1);
     }
 }

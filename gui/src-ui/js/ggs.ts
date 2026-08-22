@@ -4,6 +4,7 @@
 
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { ggsApi, jsLog, onGgsSnapshot } from './api';
+import { t } from './i18n';
 import type { GgsSnapshot, MatchView, PlayerView } from './types';
 
 /* ---------------- Snapshot subscription ---------------- */
@@ -26,7 +27,7 @@ export function useGgs() {
         const s = await ggsApi.snapshot();
         if (alive) setSnap((prev) => prev ?? s);
       } catch (e) {
-        jsLog('GGS 購読の開始に失敗: ' + e);
+        jsLog('failed to subscribe to GGS: ' + e);
       }
     })();
     return () => {
@@ -97,10 +98,14 @@ function clockView(c: ClockBase | undefined, side: ClockSide, now: number): Cloc
      grace onto the single clock, so a healthy-looking `01:30` can be
      overtime. Only the engine-side `in_overtime` flag knows. */
   const mine = side === 'my' || (!!color && color === m.my_color);
-  if (mine && m.in_overtime && rem >= 0) return { text: `ロス ${fmtSecs(rem)}`, cls: 'ext' };
+  if (mine && m.in_overtime && rem >= 0) {
+    return { text: t('ggs.clock.overtime', { t: fmtSecs(rem) }), cls: 'ext' };
+  }
   if (rem >= 0) return { text: fmtSecs(rem), cls: active ? 'turn' : '' };
-  if (ext && ext + rem >= 0) return { text: `ロス ${fmtSecs(ext + rem)}`, cls: 'ext' };
-  return { text: '時間切れ', cls: 'dead' };
+  if (ext && ext + rem >= 0) {
+    return { text: t('ggs.clock.overtime', { t: fmtSecs(ext + rem) }), cls: 'ext' };
+  }
+  return { text: t('ggs.clock.timeout'), cls: 'dead' };
 }
 
 export function useClocks(matches: MatchView[]): (id: string, side: ClockSide) => ClockView {
@@ -119,8 +124,8 @@ export function useClocks(matches: MatchView[]): (id: string, side: ClockSide) =
     });
     // Show immediately on first render, without waiting for a tick.
     const t0 = window.setTimeout(sync, 0);
-    const t = window.setInterval(sync, 500);
-    return () => { clearTimeout(t0); clearInterval(t); };
+    const iv = window.setInterval(sync, 500);
+    return () => { clearTimeout(t0); clearInterval(iv); };
   }, [matches]);
 
   return useCallback(
@@ -139,32 +144,39 @@ export function fmtSecs(s: number): string {
   return h > 0 ? `${h}:${String(m).padStart(2, '0')}:${ss}` : `${m}:${ss}`;
 }
 
-const GTYPE: Record<string, string> = {
-  s8r16: '同期・ランダム16手', s8r18: '同期・ランダム18手', s8r20: '同期・ランダム20手',
-  s8r14: '同期・ランダム14手', s8: '同期・通常', '8': '通常', '8r16': 'ランダム16手',
+/* Evaluated per call so a language switch re-renders (rule: no
+ * module-level tables of display text). */
+const gtypeNames = (): Record<string, string> => ({
+  s8r16: t('ggs.gtype.synchro_rand16'),
+  s8r18: t('ggs.gtype.synchro_rand18'),
+  s8r20: t('ggs.gtype.synchro_rand20'),
+  s8r14: t('ggs.gtype.synchro_rand14'),
+  s8: t('ggs.gtype.synchro_std'),
+  '8': t('ggs.gtype.std'),
+  '8r16': t('ggs.gtype.rand16'),
   // Rating pools are coarser than game types (two of them), and a raw
   // "8r" means nothing on screen.
-  '8r': 'ランダム開局',
-};
-export const gtypeLabel = (t: string): string => GTYPE[t] ?? (t || '?');
+  '8r': t('ggs.gtype.rand_opening'),
+});
+export const gtypeLabel = (code: string): string => gtypeNames()[code] ?? (code || '?');
 
 /// Game types and clocks offerable from the lobby and standby. They
 /// used to be two diverging arrays (some types offerable in one place
 /// only); unified to the wider set in one place.
-export const GTYPE_CHOICES: [string, string][] = [
-  ['s8r16', '同期・ランダム16手 (推奨)'],
-  ['s8r18', '同期・ランダム18手'],
-  ['s8r20', '同期・ランダム20手'],
-  ['s8', '同期・通常開局'],
-  ['8', '通常 (1局)'],
-  ['8r16', '通常・ランダム16手'],
+export const gtypeChoices = (): [string, string][] => [
+  ['s8r16', t('ggs.gtype_choice.synchro_rand16')],
+  ['s8r18', t('ggs.gtype.synchro_rand18')],
+  ['s8r20', t('ggs.gtype.synchro_rand20')],
+  ['s8', t('ggs.gtype_choice.synchro_std')],
+  ['8', t('ggs.gtype_choice.std')],
+  ['8r16', t('ggs.gtype_choice.rand16')],
 ];
-export const CLOCK_CHOICES: [string, string][] = [
-  ['00:05:00', '5 分'],
-  ['00:10:00', '10 分'],
-  ['00:15:00', '15 分'],
-  ['00:20:00', '20 分'],
-  ['00:30:00', '30 分'],
+export const clockChoices = (): [string, string][] => [
+  ['00:05:00', t('ggs.clock_choice.minutes', { n: 5 })],
+  ['00:10:00', t('ggs.clock_choice.minutes', { n: 10 })],
+  ['00:15:00', t('ggs.clock_choice.minutes', { n: 15 })],
+  ['00:20:00', t('ggs.clock_choice.minutes', { n: 20 })],
+  ['00:30:00', t('ggs.clock_choice.minutes', { n: 30 })],
 ];
 
 /** Unix seconds -> "14:03". */
@@ -207,7 +219,10 @@ export async function translate(text: string, target: string): Promise<string> {
   return (j[0] ?? []).map((x) => x[0]).join('');
 }
 
-export const hasJapanese = (t: string): boolean => /[぀-ヿ一-鿿]/.test(t);
+/* Language detector, not display text: kana and CJK ranges spelled as
+ * escapes so the file itself carries no Japanese. */
+export const hasJapanese = (s: string): boolean =>
+  /[\u3040-\u30ff\u4e00-\u9fff]/.test(s);
 
 /* ---------------- Finger field rendering ---------------- */
 
@@ -215,26 +230,30 @@ export const hasJapanese = (t: string): boolean => /[぀-ヿ一-鿿]/.test(t);
 export const normKey = (k: string): string => k.replace(/\s+/g, '');
 
 /* Finger field labels. Raw server keys (dblen, vt100...) are
- * unreadable; screen text stays Japanese per the UI convention. */
-const FINGER_LABEL: Record<string, string> = {
+ * unreadable; built per call so a language switch re-renders. */
+const fingerLabels = (): Record<string, string> => ({
   // --- What you want to see before offering a game ---
-  open: '申し込み受付', accept: '自動で受ける条件', decline: '自動で断る条件',
-  'request(+)': '募集中の条件', 'request(-)': '募集中の条件',
-  rated: 'レート戦', play: '対局の状況',
-  'stored(+)': '中断中の対局', 'stored(-)': '中断中の対局',
+  open: t('ggs.finger.open'),
+  accept: t('ggs.finger.accept'),
+  decline: t('ggs.finger.decline'),
+  'request(+)': t('ggs.finger.request'), 'request(-)': t('ggs.finger.request'),
+  rated: t('ggs.rated'), play: t('ggs.finger.play'),
+  'stored(+)': t('ggs.finger.stored'), 'stored(-)': t('ggs.finger.stored'),
   // --- Identity ---
-  name: '登録名', info: '備考', email: 'メール', since: '接続開始',
-  idle: '無操作の時間', host: 'ホスト', dblen: '定石どおりの手',
+  name: t('ggs.finger.name'), info: t('ggs.finger.info'), email: t('ggs.finger.email'),
+  since: t('ggs.finger.since'), idle: t('ggs.finger.idle'), host: t('ggs.finger.host'),
+  dblen: t('ggs.finger.dblen'),
   // --- Settings and state ---
-  level: 'アクセス権限', trust: '信用', client: 'クライアント',
-  sock: '接続方式', bell: '通知を受け取るもの', hear: '発言の受信', vt100: 'VT100 表示',
-  'watch(+)': '観戦中の対局', 'watch(-)': '観戦中の対局',
-  'track(+)': '入退室を知らせる相手', 'track(-)': '入退室を知らせる相手',
-  'groups(+)': '所属グループ', 'groups(-)': '所属グループ',
-  'channs(+)': '参加チャンネル', 'channs(-)': '参加チャンネル',
-  'notify(+)': '通知を受け取る相手', 'notify(-)': '通知を受け取る相手',
-  'ignore(+)': '無視している相手', 'ignore(-)': '無視している相手',
-};
+  level: t('ggs.finger.level'), trust: t('ggs.finger.trust'), client: t('ggs.finger.client'),
+  sock: t('ggs.finger.sock'), bell: t('ggs.finger.bell'), hear: t('ggs.finger.hear'),
+  vt100: t('ggs.finger.vt100'),
+  'watch(+)': t('ggs.finger.watch'), 'watch(-)': t('ggs.finger.watch'),
+  'track(+)': t('ggs.finger.track'), 'track(-)': t('ggs.finger.track'),
+  'groups(+)': t('ggs.finger.groups'), 'groups(-)': t('ggs.finger.groups'),
+  'channs(+)': t('ggs.finger.channs'), 'channs(-)': t('ggs.finger.channs'),
+  'notify(+)': t('ggs.finger.notify'), 'notify(-)': t('ggs.finger.notify'),
+  'ignore(+)': t('ggs.finger.ignore'), 'ignore(-)': t('ggs.finger.ignore'),
+});
 
 /** Fields meaningless on screen (credentials, command echoes). */
 const FINGER_HIDDEN = ['passw', 'password', 'login', '/os', 'sock'];
@@ -244,16 +263,23 @@ const FINGER_ALWAYS = ['open', 'accept', 'decline', 'request(+)', 'request(-)'];
 
 /* Field groups; ordering is decided here too. Unlisted fields go to
  * the end of Settings — a uniform 24-row list buries what matters
- * before an offer. */
-const FINGER_GROUPS: { title: string; keys: string[] }[] = [
+ * before an offer. `id` is the stable handle (screens single out the
+ * request group); `title` is display text. */
+const fingerGroupDefs = (): { id: string; title: string; keys: string[] }[] => [
   {
-    title: '対局の申し込み',
+    id: 'request',
+    title: t('ggs.match_requests'),
     keys: ['open', 'accept', 'decline', 'request(+)', 'request(-)', 'rated',
            'play', 'stored(+)', 'stored(-)'],
   },
-  { title: '素性', keys: ['name', 'info', 'email', 'since', 'idle', 'host', 'dblen'] },
   {
-    title: '設定',
+    id: 'identity',
+    title: t('ggs.finger.group.identity'),
+    keys: ['name', 'info', 'email', 'since', 'idle', 'host', 'dblen'],
+  },
+  {
+    id: 'settings',
+    title: t('ggs.finger.group.settings'),
     keys: ['level', 'trust', 'client', 'vt100', 'hear', 'bell', 'groups(+)',
            'groups(-)', 'channs(+)', 'channs(-)', 'notify(+)', 'notify(-)',
            'watch(+)', 'watch(-)', 'track(+)', 'track(-)', 'ignore(+)', 'ignore(-)'],
@@ -265,7 +291,10 @@ const FINGER_GROUPS: { title: string; keys: string[] }[] = [
 export interface FingerRow { key: string; label: string; value: string }
 
 /** Regroup raw finger fields and attach display labels. */
-export function fingerGroups(fields: [string, string][]): { title: string; rows: FingerRow[] }[] {
+export function fingerGroups(
+  fields: [string, string][],
+): { id: string; title: string; rows: FingerRow[] }[] {
+  const labels = fingerLabels();
   const got = new Map(fields.map(([k, v]) => [normKey(k), v]));
   const used = new Set<string>();
   const row = (k: string): FingerRow | null => {
@@ -273,7 +302,7 @@ export function fingerGroups(fields: [string, string][]): { title: string; rows:
     const v = got.get(k);
     if (v === undefined && !FINGER_ALWAYS.includes(k)) return null;
     used.add(k);
-    return { key: k, label: FINGER_LABEL[k] ?? k, value: v ?? '' };
+    return { key: k, label: labels[k] ?? k, value: v ?? '' };
   };
   /* `foo(+)` and `foo(-)` share a label (the server returns both
    * spellings); keep only the one with a value. */
@@ -285,7 +314,8 @@ export function fingerGroups(fields: [string, string][]): { title: string; rows:
     }
     return [...seen.values()];
   };
-  const out = FINGER_GROUPS.map((g) => ({
+  const out = fingerGroupDefs().map((g) => ({
+    id: g.id,
     title: g.title,
     rows: dedupe(g.keys.map(row).filter((r): r is FingerRow => r !== null)),
   }));
@@ -293,7 +323,7 @@ export function fingerGroups(fields: [string, string][]): { title: string; rows:
   // vanishing when the server adds fields would be worse.
   const rest = [...got.entries()]
     .filter(([k]) => !used.has(k) && !FINGER_HIDDEN.includes(k.replace(/\(.*\)/, '')))
-    .map(([k, v]) => ({ key: k, label: FINGER_LABEL[k] ?? k, value: v }));
+    .map(([k, v]) => ({ key: k, label: labels[k] ?? k, value: v }));
   out[out.length - 1].rows.push(...dedupe(rest));
   return out.filter((g) => g.rows.length > 0);
 }
@@ -301,42 +331,62 @@ export function fingerGroups(fields: [string, string][]): { title: string; rows:
 // GGS symbols are unreadable raw; rephrase them.
 export function fingerValue(k: string, v: string): string {
   const key = normKey(k).replace(/\(.*\)/, '');
-  if (key === 'open') return v === '0' || v === '-' ? '受け付けていない' : '受け付ける';
-  if (key === 'rated' || key === 'trust') return v === '+' ? 'あり' : 'なし';
+  if (key === 'open') {
+    return v === '0' || v === '-'
+      ? t('ggs.finger.value.not_accepting') : t('ggs.finger.value.accepting');
+  }
+  if (key === 'rated' || key === 'trust') {
+    return v === '+' ? t('ggs.finger.value.yes') : t('ggs.finger.value.no');
+  }
   // accept/decline/request never reach here: they are formulas and
   // FingerValue renders them as trees.
-  if (key === 'notify') return v === '/os' ? 'リバーシサービス全体' : (v.trim() || 'なし');
-  if (key === 'play') return v === '-' || !v ? '対局していない' : `対局中 (${v})`;
-  if (key === 'client') return v === '+' ? '専用クライアント' : 'telnet など';
-  if (key === 'hear') return v === '+' ? '受け取る' : '受け取らない';
-  if (key === 'vt100') return v === '+' ? '対応' : '非対応';
-  if (key === 'level') return v === '1' ? '一般' : v;
+  if (key === 'notify') {
+    return v === '/os' ? t('ggs.finger.value.all_os') : (v.trim() || t('ggs.finger.value.none'));
+  }
+  if (key === 'play') {
+    return v === '-' || !v
+      ? t('ggs.finger.value.not_playing') : t('ggs.finger.value.playing_n', { v });
+  }
+  if (key === 'client') {
+    return v === '+'
+      ? t('ggs.finger.value.client_dedicated') : t('ggs.finger.value.client_telnet');
+  }
+  if (key === 'hear') {
+    return v === '+' ? t('ggs.finger.value.receiving') : t('ggs.finger.value.not_receiving');
+  }
+  if (key === 'vt100') {
+    return v === '+' ? t('ggs.finger.value.supported') : t('ggs.finger.value.unsupported');
+  }
+  if (key === 'level') return v === '1' ? t('ggs.finger.value.level_normal') : v;
   if (key === 'dblen') {
     // "100.0 = 2,862 / 2,862" = share of moves matching the public
     // game database.
     const m = /([\d.]+)\s*=\s*([\d,]+)\s*\/\s*([\d,]+)/.exec(v);
-    return m ? `${m[1]}% (${m[2]} / ${m[3]} 手が一致)` : v;
+    return m ? t('ggs.finger.value.dblen', { pct: m[1], n: m[2], total: m[3] }) : v;
   }
-  if (key === 'groups') return v === '_client' ? 'クライアント (対局プログラム)' : v;
+  if (key === 'groups') return v === '_client' ? t('ggs.finger.value.group_client') : v;
   if (key === 'bell') return readBell(v);
   if (key === 'since' || key === 'idle') return readTime(k, v);
   if (['track', 'watch', 'groups', 'channs', 'notify', 'ignore', 'stored'].includes(key)) {
-    return v.trim() || 'なし';
+    return v.trim() || t('ggs.finger.value.none');
   }
   return v;
 }
 
 /// Notification settings (`-r -p -w ...`) are symbol soup; list only
 /// the enabled ones.
-const BELL_LABEL: Record<string, string> = {
-  r: '対局の申し込み', p: '個人あての発言', w: '観戦中の対局', n: 'お知らせ',
-  ns: '対局開始', nn: '新しい対局', nt: '手番', ni: '中断', nr: '再開', nw: '観戦',
-  ta: '全体の発言', to: '対局中の発言', tp: '個人あて',
-};
+const bellLabels = (): Record<string, string> => ({
+  r: t('ggs.match_requests'), p: t('ggs.bell.private'), w: t('ggs.finger.watch'),
+  n: t('ggs.bell.notices'), ns: t('ggs.bell.game_start'), nn: t('ggs.bell.new_game'),
+  nt: t('ggs.bell.turn'), ni: t('ggs.state.adjourned'), nr: t('ggs.bell.resumed'),
+  nw: t('ggs.observe'), ta: t('ggs.bell.public_chat'), to: t('ggs.bell.game_chat'),
+  tp: t('ggs.bell.private_short'),
+});
 function readBell(v: string): string {
-  const on = v.split(/\s+/).filter((t) => t.startsWith('+')).map((t) => t.slice(1));
-  const names = on.map((k) => BELL_LABEL[k] || k).filter(Boolean);
-  return names.length ? names.join('、') : 'すべて切っている';
+  const labels = bellLabels();
+  const on = v.split(/\s+/).filter((x) => x.startsWith('+')).map((x) => x.slice(1));
+  const names = on.map((k) => labels[k] || k).filter(Boolean);
+  return names.length ? names.join(t('ggs.list_separator')) : t('ggs.bell.all_off');
 }
 
 /// Convert GGS time strings for display.
@@ -344,9 +394,9 @@ function readBell(v: string): string {
 /// "00:14:02, on line : 1.09:59:08".
 function readTime(k: string, v: string): string {
   if (k === 'since') {
-    const t = Date.parse(v.replace(/\s*[A-Z]{3}$/, ' GMT-0600'));
-    if (!Number.isNaN(t)) {
-      return new Date(t).toLocaleString('ja-JP', {
+    const at = Date.parse(v.replace(/\s*[A-Z]{3}$/, ' GMT-0600'));
+    if (!Number.isNaN(at)) {
+      return new Date(at).toLocaleString('ja-JP', {
         year: 'numeric', month: 'long', day: 'numeric',
         hour: '2-digit', minute: '2-digit', weekday: 'short',
       });
@@ -360,60 +410,67 @@ function readTime(k: string, v: string): string {
     const [d, hms] = x.includes('.') ? x.split('.') : ['0', x];
     const [h, mi] = hms.split(':').map(Number);
     const parts: string[] = [];
-    if (+d) parts.push(`${+d} 日`);
-    if (h) parts.push(`${h} 時間`);
-    parts.push(`${mi ?? 0} 分`);
+    if (+d) parts.push(t('ggs.duration.days', { n: +d }));
+    if (h) parts.push(t('ggs.duration.hours', { n: h }));
+    parts.push(t('ggs.duration.minutes', { n: mi ?? 0 }));
     return parts.join(' ');
   };
   const idle = span(m[1]);
-  return m[2] ? `${idle} (接続してから ${span(m[2])})` : idle;
+  return m[2] ? t('ggs.finger.idle_online', { idle, total: span(m[2]) }) : idle;
 }
 
 /* ---------------- Formula rendering ---------------- */
 // Render accept/decline formulas for display. Notation per
 // `tell /os help formula`; m* = us, o* = the opponent.
 
-const FORMULA_WORDS: [RegExp, string][] = [
-  [/\bsaved\b/g, '中断対局'],
-  [/\brated\b/g, 'レート戦'],
-  [/\brand\b/g, 'ランダム開局'],
-  [/\bsynchro\b/g, '同期対局'],
-  [/\bkomi\b/g, 'コミあり'],
-  [/\banti\b/g, 'アンチ (石が少ない方が勝ち)'],
-  [/\bdiscs\b/g, '開局の石数'],
-  [/\bsize\b/g, '盤の大きさ'],
-  [/\bstored\b/g, 'この相手との中断対局数'],
-  [/\bplaying\b/g, '自分の対局数'],
-  [/\bmc\b/g, '自分の色'],
-  [/\boc\b/g, '相手の色'],
-  [/\bmt1\b/g, '自分の持ち時間(秒)'],
-  [/\bot1\b/g, '相手の持ち時間(秒)'],
-  [/\bmt2\b/g, '自分の加算(秒)'],
-  [/\bot2\b/g, '相手の加算(秒)'],
-  [/\bmt3\b/g, '自分の延長(秒)'],
-  [/\bot3\b/g, '相手の延長(秒)'],
-  [/\bmm1\b/g, '自分の初期手数'],
-  [/\bom1\b/g, '相手の初期手数'],
-  [/\bml1\b/g, '自分は時間切れ負け'],
-  [/\bol1\b/g, '相手は時間切れ負け'],
-  [/\bmr\b/g, '自分のレート'],
-  [/\bor\b/g, '相手のレート'],
+/* Substituted in order, so a replacement must never contain another
+ * entry's identifier. */
+const formulaWords = (): [RegExp, string][] => [
+  [/\bsaved\b/g, t('ggs.formula.saved')],
+  [/\brated\b/g, t('ggs.formula.rated')],
+  [/\brand\b/g, t('ggs.formula.rand')],
+  [/\bsynchro\b/g, t('ggs.formula.synchro')],
+  [/\bkomi\b/g, t('ggs.formula.komi')],
+  [/\banti\b/g, t('ggs.formula.anti')],
+  [/\bdiscs\b/g, t('ggs.formula.discs')],
+  [/\bsize\b/g, t('ggs.formula.size')],
+  [/\bstored\b/g, t('ggs.formula.stored')],
+  [/\bplaying\b/g, t('ggs.formula.playing')],
+  [/\bmc\b/g, t('ggs.formula.mc')],
+  [/\boc\b/g, t('ggs.formula.oc')],
+  [/\bmt1\b/g, t('ggs.formula.mt1')],
+  [/\bot1\b/g, t('ggs.formula.ot1')],
+  [/\bmt2\b/g, t('ggs.formula.mt2')],
+  [/\bot2\b/g, t('ggs.formula.ot2')],
+  [/\bmt3\b/g, t('ggs.formula.mt3')],
+  [/\bot3\b/g, t('ggs.formula.ot3')],
+  [/\bmm1\b/g, t('ggs.formula.mm1')],
+  [/\bom1\b/g, t('ggs.formula.om1')],
+  [/\bml1\b/g, t('ggs.formula.ml1')],
+  [/\bol1\b/g, t('ggs.formula.ol1')],
+  [/\bmr\b/g, t('ggs.formula.mr')],
+  [/\bor\b/g, t('ggs.formula.or')],
 ];
 
 /// Render one leaf (`size!=8`, `!saved`); the tree stays intact, so
 /// `&`/`|` are not handled here.
+///
+/// Structure first, words last: an English label is several words, and
+/// substituting it before the `!x` rule left the negation attached to
+/// the first word only.
 function readAtom(src: string): string {
-  let t = ` ${src} `;
-  for (const [re, word] of FORMULA_WORDS) t = t.replace(re, word);
-  return t
-    .replace(/([^\s()!=<>]+)\s*==\s*F\b/g, '$1 ではない')   // ml1==F
-    .replace(/([^\s()!=<>]+)\s*==\s*T\b/g, '$1 である')
-    .replace(/!=\s*\?/g, ' がおまかせでない')                  // mc!=?
-    .replace(/!=/g, ' ≠ ')                                    // その他の比較
-    .replace(/!\s*([^\s()!]+)/g, '$1 ではない')                // !saved → 中断対局 ではない
-    .replace(/\s*(<=|>=|<|>)\s*/g, ' $1 ')
-    .replace(/\s+/g, ' ')
-    .trim();
+  let s = ` ${src} `
+    .replace(/([^\s()!=<>]+)\s*==\s*F\b/g,                   // ml1==F
+      (_m, x: string) => t('ggs.formula.is_false', { x }))
+    .replace(/([^\s()!=<>]+)\s*==\s*T\b/g,
+      (_m, x: string) => t('ggs.formula.is_true', { x }))
+    .replace(/!=\s*\?/g, ' ' + t('ggs.formula.not_any'))     // mc!=?
+    .replace(/!=/g, ' ≠ ')                              // other comparisons
+    .replace(/!\s*([^\s()!]+)/g,                             // !saved
+      (_m, x: string) => t('ggs.formula.is_false', { x }))
+    .replace(/\s*(<=|>=|<|>)\s*/g, ' $1 ');
+  for (const [re, word] of formulaWords()) s = s.replace(re, word);
+  return s.replace(/\s+/g, ' ').trim();
 }
 
 /** Formula tree; `all` = every condition (&), `any` = any (|). */
@@ -437,31 +494,31 @@ export interface FormulaVar {
 
 /// Available variables: the subset of `tell /os help formula` that
 /// matters for judging offers, in display order.
-export const FORMULA_VARS: FormulaVar[] = [
-  { name: 'rated', label: 'レート戦', type: 'bool' },
-  { name: 'rand', label: 'ランダム開局', type: 'bool' },
-  { name: 'synchro', label: '同期対局', type: 'bool' },
-  { name: 'saved', label: '中断対局', type: 'bool' },
-  { name: 'komi', label: 'コミあり', type: 'bool' },
-  { name: 'anti', label: 'アンチ (石が少ない方が勝ち)', type: 'bool' },
-  { name: 'ml1', label: '自分は時間切れ負け', type: 'bool' },
-  { name: 'ol1', label: '相手は時間切れ負け', type: 'bool' },
-  { name: 'size', label: '盤の大きさ', type: 'num', def: 8 },
-  { name: 'discs', label: '開局の石数', type: 'num', def: 16 },
-  { name: 'mr', label: '自分のレート', type: 'num', def: 2000 },
-  { name: 'or', label: '相手のレート', type: 'num', def: 2000 },
-  { name: 'mt1', label: '自分の持ち時間', type: 'num', unit: '秒', def: 600 },
-  { name: 'ot1', label: '相手の持ち時間', type: 'num', unit: '秒', def: 600 },
-  { name: 'mt2', label: '自分の加算', type: 'num', unit: '秒', def: 0 },
-  { name: 'ot2', label: '相手の加算', type: 'num', unit: '秒', def: 0 },
-  { name: 'mt3', label: '自分の延長', type: 'num', unit: '秒', def: 0 },
-  { name: 'ot3', label: '相手の延長', type: 'num', unit: '秒', def: 0 },
-  { name: 'mm1', label: '自分の初期手数', type: 'num', def: 0 },
-  { name: 'om1', label: '相手の初期手数', type: 'num', def: 0 },
-  { name: 'stored', label: 'この相手との中断対局数', type: 'num', def: 0 },
-  { name: 'playing', label: '自分の対局数', type: 'num', def: 0 },
-  { name: 'mc', label: '自分の色', type: 'color' },
-  { name: 'oc', label: '相手の色', type: 'color' },
+export const formulaVars = (): FormulaVar[] => [
+  { name: 'rated', label: t('ggs.formula.rated'), type: 'bool' },
+  { name: 'rand', label: t('ggs.formula.rand'), type: 'bool' },
+  { name: 'synchro', label: t('ggs.formula.synchro'), type: 'bool' },
+  { name: 'saved', label: t('ggs.formula.saved'), type: 'bool' },
+  { name: 'komi', label: t('ggs.formula.komi'), type: 'bool' },
+  { name: 'anti', label: t('ggs.formula.anti'), type: 'bool' },
+  { name: 'ml1', label: t('ggs.formula.ml1'), type: 'bool' },
+  { name: 'ol1', label: t('ggs.formula.ol1'), type: 'bool' },
+  { name: 'size', label: t('ggs.formula.size'), type: 'num', def: 8 },
+  { name: 'discs', label: t('ggs.formula.discs'), type: 'num', def: 16 },
+  { name: 'mr', label: t('ggs.formula.mr'), type: 'num', def: 2000 },
+  { name: 'or', label: t('ggs.formula.or'), type: 'num', def: 2000 },
+  { name: 'mt1', label: t('ggs.formula.var.mt1'), type: 'num', unit: t('ggs.unit.seconds'), def: 600 },
+  { name: 'ot1', label: t('ggs.formula.var.ot1'), type: 'num', unit: t('ggs.unit.seconds'), def: 600 },
+  { name: 'mt2', label: t('ggs.formula.var.mt2'), type: 'num', unit: t('ggs.unit.seconds'), def: 0 },
+  { name: 'ot2', label: t('ggs.formula.var.ot2'), type: 'num', unit: t('ggs.unit.seconds'), def: 0 },
+  { name: 'mt3', label: t('ggs.formula.var.mt3'), type: 'num', unit: t('ggs.unit.seconds'), def: 0 },
+  { name: 'ot3', label: t('ggs.formula.var.ot3'), type: 'num', unit: t('ggs.unit.seconds'), def: 0 },
+  { name: 'mm1', label: t('ggs.formula.mm1'), type: 'num', def: 0 },
+  { name: 'om1', label: t('ggs.formula.om1'), type: 'num', def: 0 },
+  { name: 'stored', label: t('ggs.formula.stored'), type: 'num', def: 0 },
+  { name: 'playing', label: t('ggs.formula.playing'), type: 'num', def: 0 },
+  { name: 'mc', label: t('ggs.formula.mc'), type: 'color' },
+  { name: 'oc', label: t('ggs.formula.oc'), type: 'color' },
 ];
 
 export const FORMULA_OPS = ['=', '≠', '<', '>', '≤', '≥'] as const;
@@ -481,17 +538,18 @@ export type Cond =
   | { kind: 'atom'; name: string; op: FormulaOp; val: string; neg: boolean };
 
 export const varOf = (name: string): FormulaVar | undefined =>
-  FORMULA_VARS.find((v) => v.name === name);
+  formulaVars().find((v) => v.name === name);
 
 /// Color options. GGS notation is `*` = black / `O` = white; `b`/`w`
 /// are rejected. Distinct from the screen's stone colors — never mix.
-export const COLOR_CHOICES: [string, string][] = [
-  ['?', 'おまかせ'], ['*', '黒'], ['O', '白'],
+export const colorChoices = (): [string, string][] => [
+  ['?', t('ggs.color.any')], ['*', t('ggs.color.black')], ['O', t('ggs.color.white')],
 ];
 
 /// Boolean options as [negated?, label], phrased to match the color
 /// options.
-export const BOOL_OPS: [boolean, string][] = [[false, 'である'], [true, 'ではない']];
+export const boolOps = (): [boolean, string][] =>
+  [[false, t('ggs.formula.bool_is')], [true, t('ggs.formula.bool_is_not')]];
 
 /** Bundles (`&`/`|`) vs leaves, split by type. */
 export const isGroup = (c: Cond): c is { kind: 'all' | 'any'; kids: Cond[] } =>
@@ -500,13 +558,15 @@ export const isGroup = (c: Cond): c is { kind: 'all' | 'any'; kids: Cond[] } =>
 /// Render one leaf (for the read-only tree); same vocabulary as
 /// `readAtom`, different entry point.
 export function condLabel(c: Cond): string {
-  if (isGroup(c)) return c.kind === 'all' ? 'すべて満たす' : '次のどれか';
+  if (isGroup(c)) return c.kind === 'all' ? t('ggs.formula.all_of') : t('ggs.formula.any_of');
   const v = varOf(c.name);
   const label = v?.label ?? c.name;
-  if (!v || v.type === 'bool') return label + (c.neg ? ' ではない' : '');
+  if (!v || v.type === 'bool') return c.neg ? t('ggs.formula.is_false', { x: label }) : label;
   if (v.type === 'color') {
-    const name = COLOR_CHOICES.find(([x]) => x === c.val)?.[1] ?? c.val;
-    return `${label} ${c.op === '≠' ? 'ではない' : 'である'} ${name}`;
+    const name = colorChoices().find(([x]) => x === c.val)?.[1] ?? c.val;
+    return c.op === '≠'
+      ? t('ggs.formula.color_is_not', { x: label, c: name })
+      : t('ggs.formula.color_is', { x: label, c: name });
   }
   return `${label} ${c.op} ${c.val}${v.unit ?? ''}`;
 }
@@ -560,7 +620,7 @@ function parseFormula(src: string): Formula {
   // Drop whitespace-only fragments — otherwise the space in `& (`
   // becomes a leaf and the following group renders as an empty card.
   const toks = (src.match(/\(|\)|&|\||[^()&|]+/g) ?? [])
-    .map((t) => t.trim()).filter(Boolean);
+    .map((x) => x.trim()).filter(Boolean);
   let i = 0;
   const atom = (): Formula => {
     if (toks[i] === '(') {
@@ -582,4 +642,3 @@ function parseFormula(src: string): Formula {
   const or = () => join('any', '|', and);
   return or();
 }
-

@@ -6,6 +6,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { api, jsLog } from './api';
 import type { ClockView, GameView, SearchStat } from './types';
+import { t, tErr } from './i18n';
 
 /// Internal engine codes, never displayed: each is the result of the
 /// user's own action (`stopped` after stop, `NotPlayable` on an
@@ -126,14 +127,14 @@ export function useGame(clockSecs = 0) {
   const levels: Levels = level === 'custom' ? custom : LEVELS[level];
 
   const engineSides = useCallback((): string[] => {
-    if (mode === 'study') return [];      // 検討モードではエンジンは打たない
+    if (mode === 'study') return [];      // the engine never plays in study
     if (side === 'both') return ['black', 'white'];
-    if (side === 'off') return [];        // 人が両方を打つ
+    if (side === 'off') return [];        // both sides are human
     return [side];
   }, [mode, side]);
 
   const dismiss = useCallback((id: number) => {
-    setToasts((t) => t.filter((x) => x.id !== id));
+    setToasts((list) => list.filter((x) => x.id !== id));
   }, []);
 
   const say = useCallback((s: string, tone: ToastTone = 'bad') => {
@@ -141,13 +142,13 @@ export function useGame(clockSecs = 0) {
     // self-dismiss, so it is vestigial.
     if (!s) return;
     if (INTERNAL.has(s) || INTERNAL_PREFIX.some((p) => s.startsWith(p))) {
-      jsLog('内部の符丁 (画面には出さない): ' + s);
+      jsLog('internal code (never shown on screen): ' + s);
       return;
     }
     const id = ++toastId.current;
     // The same text can repeat (same failure per move); replace
     // rather than stack.
-    setToasts((t) => [...t.filter((x) => x.text !== s), { id, text: s, tone }]);
+    setToasts((list) => [...list.filter((x) => x.text !== s), { id, text: s, tone }]);
     window.setTimeout(() => dismiss(id), TOAST_MS);
   }, [dismiss]);
 
@@ -162,7 +163,7 @@ export function useGame(clockSecs = 0) {
         setView(await api.state());
         setHasBook(await api.hasBook());
       } catch (e) {
-        say('' + e);
+        say(tErr(e));
       }
     })();
   }, [say]);
@@ -198,7 +199,7 @@ export function useGame(clockSecs = 0) {
       await pushLevels();
       await api.analyzeLive();
     } catch (e) {
-      say('' + e);
+      say(tErr(e));
     }
   }, [view, autoHint, thinking, playing, engineSides, pushLevels, say]);
 
@@ -234,7 +235,7 @@ export function useGame(clockSecs = 0) {
       const v = await api.play(sq);
       apply(v);
       maybeLearn(v);
-    } catch (e) { say('' + e); }
+    } catch (e) { say(tErr(e)); }
   }, [thinking, playing, view, engineSides, apply, maybeLearn, say]);
 
   /* Clock: 0 = none. Rust routes the same timectl as GGS; this side
@@ -252,7 +253,8 @@ export function useGame(clockSecs = 0) {
            under a frozen zero clock. */
         if (c.lost) {
           setPlaying(false);
-          say(c.lost === 'black' ? '黒の時間切れ' : '白の時間切れ', 'gold');
+          say(c.lost === 'black'
+            ? t('engine.toast.black_flagged') : t('engine.toast.white_flagged'), 'gold');
         }
       }).catch(() => {});
     }, 1000);
@@ -276,7 +278,7 @@ export function useGame(clockSecs = 0) {
   const undo = useCallback(async () => {
     if (thinking) return;
     hintSeq.current++;
-    try { apply(await api.undo()); } catch (e) { say('' + e); }
+    try { apply(await api.undo()); } catch (e) { say(tErr(e)); }
   }, [thinking, apply, say]);
 
   const jumpTo = useCallback(async (n: number) => {
@@ -284,7 +286,7 @@ export function useGame(clockSecs = 0) {
     hintSeq.current++;
     api.stopSearch().catch(() => {});
     if (playing) setPlaying(false);   // scrubbing the record ends the live game
-    try { apply(await api.goto(n)); } catch (e) { say('' + e); }
+    try { apply(await api.goto(n)); } catch (e) { say(tErr(e)); }
   }, [thinking, playing, apply, say]);
 
   const stop = useCallback(() => {

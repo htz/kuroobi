@@ -160,7 +160,7 @@ export function Select({ value, options, onChange, size = 'field', width, disabl
   const label = options.find(([v]) => v === value)?.[1] ?? value;
   return (
     <span className={cx('k-press', 'k-input', className)} style={{
-      position: 'relative',            /* ← 外さない */
+      position: 'relative',            /* never drop this */
       height: H[size], minWidth: width, padding: PAD[size], borderRadius: R[size],
       background: 'var(--bg)', border: '1px solid var(--border)',
       display: 'inline-flex', alignItems: 'center', gap: 'var(--sp-2)', fontSize: FS[size],

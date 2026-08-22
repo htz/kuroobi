@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useState, type ReactNode } from 'react';
 import { api, emitApp, onApp, type HashView, type KifuFrame, type ThreadsView } from './api';
 import { TATAMI, type Prefs, type Theme } from './prefs';
+import { t, useLang, tErr } from './i18n';
 import { Modal, Note, Overlay, Section } from './components/layout';
 import { Button, Segmented, Select, TextField } from './components/primitives';
 import { Icon } from './components/Icons';
@@ -20,7 +21,7 @@ export function Confirm({ title, body, ok = 'OK', danger, onOk, onCancel }: {
     <Overlay onClose={onCancel}>
       <Modal title={title} body={body} onClose={onCancel} actions={<>
         <span style={{ marginLeft: 'auto' }} />
-        <Button size="field" onClick={onCancel}>やめる</Button>
+        <Button size="field" onClick={onCancel}>{t('dialog.cancel')}</Button>
         <Button size="field" variant={danger ? 'danger' : 'primary'} onClick={onOk}>{ok}</Button>
       </>} />
     </Overlay>
@@ -28,7 +29,7 @@ export function Confirm({ title, body, ok = 'OK', danger, onOk, onCancel }: {
 }
 
 /** Pick one from a list (chat's new-conversation picker). */
-export function PickOne({ title, body, options, ok = '開く', onOk, onCancel }: {
+export function PickOne({ title, body, options, ok = t('dialog.open'), onOk, onCancel }: {
   title: string; body?: React.ReactNode; options: [string, string][];
   ok?: string; onOk: (v: string) => void; onCancel: () => void;
 }) {
@@ -42,7 +43,7 @@ export function PickOne({ title, body, options, ok = '開く', onOk, onCancel }:
              </div>}
              actions={<>
                <span style={{ marginLeft: 'auto' }} />
-               <Button size="field" onClick={onCancel}>やめる</Button>
+               <Button size="field" onClick={onCancel}>{t('dialog.cancel')}</Button>
                <Button size="field" variant="primary" disabled={!v} onClick={() => onOk(v)}>{ok}</Button>
              </>} />
     </Overlay>
@@ -60,17 +61,18 @@ export function PasteKifu({ onLoad, onFile, onCancel }: {
    * untouched), debounced. */
   const [peek, setPeek] = useState<{ frames: KifuFrame[]; err: string } | null>(null);
   useEffect(() => {
-    const t = text.trim();
+    // Not named `t`: that is the translation function.
+    const src = text.trim();
     let alive = true;
-    if (!t) {
+    if (!src) {
       // Clearing is debounced too; never set state directly in the effect.
       const clear = setTimeout(() => { if (alive) setPeek(null); }, 0);
       return () => { alive = false; clearTimeout(clear); };
     }
     const id = setTimeout(() => {
-      void api.previewKifu(t)
+      void api.previewKifu(src)
         .then((frames) => { if (alive) setPeek({ frames, err: '' }); })
-        .catch((e) => { if (alive) setPeek({ frames: [], err: '' + e }); });
+        .catch((e) => { if (alive) setPeek({ frames: [], err: tErr(e) }); });
     }, 250);
     return () => { alive = false; clearTimeout(id); };
   }, [text]);
@@ -80,15 +82,15 @@ export function PasteKifu({ onLoad, onFile, onCancel }: {
   const last = ok ? peek!.frames[peek!.frames.length - 1] : null;
   return (
     <Overlay onClose={onCancel}>
-      <Modal title="棋譜を読み込む" width="var(--w-modal-wide)" onClose={onCancel}
-             sub="GGF・f5d6… 形式・盤面つきのいずれでも読めます。"
+      <Modal title={t('dialog.kifu.title')} width="var(--w-modal-wide)" onClose={onCancel}
+             sub={t('dialog.kifu.sub')}
              actions={<>
-               <Button size="field" onClick={onFile}>ファイルから…</Button>
+               <Button size="field" onClick={onFile}>{t('dialog.kifu.from_file')}</Button>
                <span style={{ marginLeft: 'auto' }} />
                {/* The design caught up to this wording (2026-08-08). */}
-               <Button size="field" onClick={onCancel}>やめる</Button>
+               <Button size="field" onClick={onCancel}>{t('dialog.cancel')}</Button>
                <Button size="field" variant="primary" disabled={!ok}
-                       onClick={() => onLoad(text)}>読み込む</Button>
+                       onClick={() => onLoad(text)}>{t('dialog.kifu.load')}</Button>
              </>}>
         <textarea value={text} onChange={(e) => setText(e.target.value)}
           className="k-input"
@@ -114,8 +116,8 @@ export function PasteKifu({ onLoad, onFile, onCancel }: {
           }}>
             <span style={{
               fontSize: 'var(--fs-7)', fontWeight: 600, letterSpacing: '.08em', color: 'var(--sub)',
-            }}>下読み</span>
-            {!peek && <span style={{ color: 'var(--sub)' }}>貼り付けると、ここに読み取り結果が出ます。</span>}
+            }}>{t('dialog.kifu.preview')}</span>
+            {!peek && <span style={{ color: 'var(--sub)' }}>{t('dialog.kifu.preview_hint')}</span>}
             {peek?.err && <span>{peek.err}</span>}
             {last && <>
               {/* Dots outside the numbers: this reads "black vs white"
@@ -133,10 +135,12 @@ export function PasteKifu({ onLoad, onFile, onCancel }: {
                   truncated records load too, and then it is just the
                   last position. */}
               <span style={{ color: 'var(--sub)' }}>
-                {peek!.frames.length - 1} 手 ・ {last.black + last.white === 64 ? '終局図' : '最後の局面'}
+                {t(last.black + last.white === 64
+                  ? 'dialog.kifu.summary_final' : 'dialog.kifu.summary_last',
+                   { n: peek!.frames.length - 1 })}
               </span>
             </>}
-            {peek && !peek.err && !ok && <span style={{ color: 'var(--sub)' }}>手が 1 つも読み取れません。</span>}
+            {peek && !peek.err && !ok && <span style={{ color: 'var(--sub)' }}>{t('dialog.kifu.no_moves')}</span>}
           </div>
         </div>
       </Modal>
@@ -149,15 +153,16 @@ export function PasteKifu({ onLoad, onFile, onCancel }: {
  * settings live in the GGS screens (separate engine, separate
  * settings). */
 
-// Display names must match resource_status's — a mismatch loses the
-// status lookup and the path display.
 /* Order per the design (NNUE, linear, book) — what KUROOBI reads most
- * sits on top. The third field is the display name; the second is the
- * backend's key and must not drift. */
-const KINDS: [string, string, string][] = [
-  ['nnue', 'NNUE の重み', 'NNUE 重み'],
-  ['weights', '線形評価の重み', '線形評価'],
-  ['book', '定石', '定石'],
+ * sits on top. The first field is the backend's identifier, shared by
+ * `resource_status` and `pick_resource` (keep it in sync with
+ * `resources.rs`'s `detailed()`); the second is the row label, so this
+ * is a function, not a constant — translated text must be produced at
+ * render time. */
+const kinds = (): [string, string][] => [
+  ['nnue', t('settings.file.nnue')],
+  ['weights', t('settings.file.weights')],
+  ['book', t('settings.file.book')],
 ];
 
 /** File size; MB capped at one decimal so digits stay put. */
@@ -170,11 +175,10 @@ function fmtSize(n: number): string {
 
 /* Missing files state the consequence, not just the absence —
  * "missing" alone does not say whether anything breaks. */
-const NOT_FOUND: Record<string, string> = {
-  weights: '見つかりません。KUROOBI は評価できません',
-  nnue: '見つかりません。線形評価だけで指します',
-  book: '見つかりません。実戦から育つ book_learn.txt だけを使います',
-};
+const notFound = (kind: string): string =>
+  kind === 'nnue' ? t('settings.file.nnue_missing')
+  : kind === 'book' ? t('settings.file.book_missing')
+  : t('settings.file.weights_missing');
 
 /* Settings once lived in a separate window; with no shared React
  * state, prefs sync via localStorage and backend-owned values send
@@ -189,19 +193,23 @@ export function Settings({ prefs, setPref, ggs, initialTab, onClose }: {
   /** Close (the overlay's footer button). */
   onClose?: () => void;
 }) {
+  // Re-render the whole settings screen when the language changes
+  // (this screen is where the language is chosen).
+  useLang();
   const [tab, setTab] = useState<'engine' | 'view' | 'ggs'>(initialTab ?? 'engine');
   /* Screenshot entry: tabs are click-only, so automation needs this.
      A third segment (settings:view:light) actually switches the theme
      so the change can be captured without clicking. */
   useEffect(() => {
     void api.autoplay().then((v) => {
-      const [, t, arg] = (v ?? '').split(':');
-      if (t === 'engine' || t === 'view' || t === 'ggs') setTab(t);
+      // Not named `t`: that is the translation function.
+      const [, want, arg] = (v ?? '').split(':');
+      if (want === 'engine' || want === 'view' || want === 'ggs') setTab(want);
       if (arg === 'light' || arg === 'dark' || arg === 'os') {
         // Delay so the capture can catch the before state.
         window.setTimeout(() => setPref('theme', arg), 5000);
       }
-    }).catch(() => { /* Tauri 外では効かないだけ */ });
+    }).catch(() => { /* outside Tauri it simply does nothing */ });
     // setPref is stable for the window's lifetime; run once.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
@@ -213,7 +221,7 @@ export function Settings({ prefs, setPref, ggs, initialTab, onClose }: {
   const [hash, setHash] = useState<HashView | null>(null);
 
   const load = useCallback(async () => {
-    try { setStatus(await api.resourceStatus()); } catch { /* エンジン未初期化 */ }
+    try { setStatus(await api.resourceStatus()); } catch { /* engine not initialized yet */ }
   }, []);
 
   // Fetch the state as of opening; discard replies after close.
@@ -221,14 +229,14 @@ export function Settings({ prefs, setPref, ggs, initialTab, onClose }: {
     let alive = true;
     void (async () => {
       try {
-        const [st, t, h] = await Promise.all([
+        const [st, threads, h] = await Promise.all([
           api.resourceStatus(), api.localThreads(), api.hashSizes(),
         ]);
         if (!alive) return;
         setStatus(st);
-        setTh(t);
+        setTh(threads);
         setHash(h);
-      } catch { /* エンジン未初期化 */ }
+      } catch { /* engine not initialized yet */ }
     })();
     return () => { alive = false; };
   }, []);
@@ -239,7 +247,7 @@ export function Settings({ prefs, setPref, ggs, initialTab, onClose }: {
   useEffect(() => {
     let alive = true;
     const off = onApp('resources-changed', () => {
-      void api.localThreads().then((t) => { if (alive) setTh(t); }).catch(() => {});
+      void api.localThreads().then((v) => { if (alive) setTh(v); }).catch(() => {});
     });
     return () => { alive = false; void off.then((f) => f()); };
   }, []);
@@ -255,11 +263,11 @@ export function Settings({ prefs, setPref, ggs, initialTab, onClose }: {
     try {
       await api.setLocalThreads(n);
       setTh(await api.localThreads());
-    } catch { /* 保存失敗はそのまま */ }
+    } catch { /* leave it as is when the save fails */ }
   };
 
   return (
-    <Modal title="設定" width="560px" onClose={onClose} scroll
+    <Modal title={t('settings.title')} width="560px" onClose={onClose} scroll
            band={<>
                {/* Tabs are not Segmented: the design draws bare labels
                    with only the selection filled. The strip container
@@ -268,7 +276,7 @@ export function Settings({ prefs, setPref, ggs, initialTab, onClose }: {
                  flex: 1, display: 'flex', alignItems: 'center',
                  justifyContent: 'center', gap: 'var(--sp-1)',
                }}>
-                 {TABS.map(([v, label]) => {
+                 {tabs().map(([v, label]) => {
                    const on = tab === v;
                    return (
                      <button key={v} type="button" className={'k-press' + (on ? ' k-on' : '')}
@@ -299,29 +307,26 @@ export function Settings({ prefs, setPref, ggs, initialTab, onClose }: {
           ? <GgsSettings snap={ggs} />
           : (
             <Section title="GGS">
-              <Note>
-                GGS の設定を読み込めていません。申し込みの扱いなどは
-                サーバー側に残る設定なので、繋いでから読み書きします。
-              </Note>
+              <Note>{t('settings.ggs.unloaded')}</Note>
             </Section>
           )
         )}
 
 
         {tab === 'engine' && <>
-        <Section title="ファイル">
-          {KINDS.map(([kind, title, label]) => {
-            const info = byName.get(title);
+        <Section title={t('settings.files.title')}>
+          {kinds().map(([kind, label]) => {
+            const info = byName.get(kind);
             return (
               <div key={kind} style={{ display: 'flex', flexDirection: 'column', gap: 'var(--sp-1)' }}>
                 {/* The path lives in the input; pushed to the row edge
                     it separates "what is read" from "how to change it". */}
                 <Row2 label={label}>
-                  <TextField value={info?.p ?? ''} placeholder="未指定" invalid={!info?.ok} />
+                  <TextField value={info?.p ?? ''} placeholder={t('settings.file.unset')} invalid={!info?.ok} />
                   <Button size="field" onClick={async () => {
                     const p = await api.pickResource(kind);
                     if (p) await change(kind, p);
-                  }}>選択…</Button>
+                  }}>{t('settings.file.choose')}</Button>
                 </Row2>
                 {/* Status goes right under the field, aligned to its
                     column (the design leaves 96px too). */}
@@ -332,26 +337,27 @@ export function Settings({ prefs, setPref, ggs, initialTab, onClose }: {
                 }}>
                   <Icon name={info?.ok ? 'check' : 'alert'} size={12} />
                   {info?.ok
-                    ? ['読み込み済み', fmtSize(info.size), info.kind].filter(Boolean).join(' · ')
-                    : NOT_FOUND[kind]}
+                    ? [t('settings.file.loaded'), fmtSize(info.size), info.kind].filter(Boolean).join(' · ')
+                    : notFound(kind)}
                 </div>
               </div>
             );
           })}
         </Section>
 
-          <Section title="ローカル対局の持ち時間">
-            <Row2 label="持ち時間">
+          <Section title={t('settings.clock.title')}>
+            <Row2 label={t('settings.clock.label')}>
               <Select width={140} value={String(prefs.clockSecs)}
                       onChange={(v) => setPref('clockSecs', +v)}
-                      options={[['0', 'なし'], ['300', '5 分'], ['600', '10 分'],
-                                ['900', '15 分'], ['1200', '20 分'], ['1800', '30 分']]} />
+                      options={[['0', t('settings.clock.none')],
+                                ...[5, 10, 15, 20, 30].map((m) =>
+                                  [String(m * 60), t('settings.clock.minutes', { n: m })] as [string, string])]} />
             </Row2>
-            <Note>KUROOBI と自分の両方が持ちます。次の「新規対局」から効きます。切れた側の負けです。</Note>
+            <Note>{t('settings.clock.note')}</Note>
           </Section>
         {th && (
-          <Section title="ローカル探索のスレッド数">
-            <Row2 label="スレッド">
+          <Section title={t('settings.threads.title')}>
+            <Row2 label={t('settings.threads.label')}>
               {/* Auto is not a separate item: it marks its number
                   inside the one column, and selecting it saves "unset"
                   — saving the number would freeze auto on a machine
@@ -360,19 +366,19 @@ export function Settings({ prefs, setPref, ggs, initialTab, onClose }: {
                       onChange={(v) => void setThreads(+v === th.auto ? null : +v)}
                       options={Array.from({ length: th.auto * 2 }, (_, i) => {
                         const n = i + 1;
-                        return [String(n), n === th.auto ? `${n} (自動)` : String(n)] as [string, string];
+                        return [String(n), n === th.auto ? t('settings.threads.auto', { n }) : String(n)] as [string, string];
                       })} />
             </Row2>
             {/* The description spans the section under the control;
                 indented to the field column it reads as a field hint. */}
-            <Note>ローカル対局・検討・学習・GGS 対局が使う並列数です。</Note>
+            <Note>{t('settings.threads.note')}</Note>
           </Section>
         )}
         {/* Speed is per-thread-count, so it follows the threads
             section — but as its own section, or the heading lies. */}
         {th && (
-          <Section title="読切の速度">
-            <Row2 label="この機械">
+          <Section title={t('settings.nps.title')}>
+            <Row2 label={t('settings.nps.label')}>
               {/* Give the value field width so the buttons align with
                   the column above. */}
               <span style={{
@@ -380,44 +386,48 @@ export function Settings({ prefs, setPref, ggs, initialTab, onClose }: {
                 fontSize: 'var(--fs-5)', fontVariantNumeric: 'tabular-nums',
                 color: th.nps != null ? 'var(--text)' : 'var(--sub)',
               }}>
-                {th.nps == null ? '未測定' : `${(th.nps / 1e6).toFixed(1)}M ノード/秒`}
+                {th.nps == null
+                  ? t('settings.nps.unmeasured')
+                  : t('settings.nps.value', { n: (th.nps / 1e6).toFixed(1) })}
               </span>
               <Button size="field" disabled={calib}
                       onClick={() => void (async () => {
                         setCalib(true);
-                        try { setTh(await api.calibrateNps()); } catch { /* 測れなければ据え置き */ }
+                        try { setTh(await api.calibrateNps()); } catch { /* keep the old value when it cannot be measured */ }
                         setCalib(false);
-                      })()}>{calib ? '測定中…' : '測り直す'}</Button>
+                      })()}>{calib ? t('settings.nps.measuring') : t('settings.nps.remeasure')}</Button>
             </Row2>
-            <Note>持ち時間のある対局で読切に入る空きを決めるのに使います。起動時に自動で測ります。</Note>
+            <Note>{t('settings.nps.note')}</Note>
           </Section>
         )}
         {hash && (
-          <Section title="置換表の大きさ">
+          <Section title={t('settings.hash.title')}>
             {/* The endgame default (22) is small: billion-node solves
                 overflow it, and 22 -> 26 measured -14-16% nodes /
                 -23-31% time — exactly the region GGS games read. */}
-            <Row2 label="中盤">
+            <Row2 label={t('settings.hash.mid')}>
                 <Select width={140} value={String(hash.mid)}
                         onChange={(v) => void (async () => {
-                          try { setHash(await api.setHashSizes(+v, hash.end)); } catch { /* 保存失敗 */ }
+                          try { setHash(await api.setHashSizes(+v, hash.end)); } catch { /* the save failed */ }
                         })()}
                         options={Array.from({ length: hash.max - hash.min + 1 }, (_, i) => {
                           const b = hash.min + i;
-                          return [String(b), `${fmtSize(2 ** (b + 4))}${b === 22 ? ' (既定)' : ''}`] as [string, string];
+                          const size = fmtSize(2 ** (b + 4));
+                          return [String(b), b === 22 ? t('settings.hash.default', { size }) : size] as [string, string];
                         })} />
             </Row2>
-            <Row2 label="終盤">
+            <Row2 label={t('settings.hash.end')}>
               <Select width={140} value={String(hash.end)}
                       onChange={(v) => void (async () => {
-                        try { setHash(await api.setHashSizes(hash.mid, +v)); } catch { /* 保存失敗 */ }
+                        try { setHash(await api.setHashSizes(hash.mid, +v)); } catch { /* the save failed */ }
                       })()}
                       options={Array.from({ length: hash.max - hash.min + 1 }, (_, i) => {
                         const b = hash.min + i;
-                        return [String(b), `${fmtSize(2 ** b * 24)}${b === 24 ? ' (既定)' : ''}`] as [string, string];
+                        const size = fmtSize(2 ** b * 24);
+                        return [String(b), b === 24 ? t('settings.hash.default', { size }) : size] as [string, string];
                       })} />
             </Row2>
-            <Note>次の起動から効きます。増やしたら一度起動して確かめてください。</Note>
+            <Note>{t('settings.hash.note')}</Note>
           </Section>
         )}
         </>}
@@ -431,19 +441,19 @@ export function Settings({ prefs, setPref, ggs, initialTab, onClose }: {
             margin: '0 var(--sp-3)', paddingTop: 'var(--sp-4)',
             borderTop: '1px solid var(--border-weak)',
           }}>
-            <Button size="field" onClick={() => setReset(true)}>既定に戻す</Button>
+            <Button size="field" onClick={() => setReset(true)}>{t('settings.reset.button')}</Button>
           </div>
         )}
       </div>
       {reset && (
-        <Confirm title="ファイルの指定を既定に戻しますか？"
-                 body="選んだ重みと定石の場所を忘れ、既定の探し方に戻します。ファイルそのものは消えません。"
-                 ok="戻す"
+        <Confirm title={t('settings.reset.title')}
+                 body={t('settings.reset.body')}
+                 ok={t('settings.reset.ok')}
                  onCancel={() => setReset(false)}
                  onOk={() => {
                    setReset(false);
                    void (async () => {
-                     for (const [kind] of KINDS) await api.setResource(kind, null);
+                     for (const [kind] of kinds()) await api.setResource(kind, null);
                      await setThreads(null);
                      await load();
                      emitApp('resources-changed');
@@ -455,13 +465,27 @@ export function Settings({ prefs, setPref, ggs, initialTab, onClose }: {
 }
 
 /* The design's fourth tab was dropped: no drawn content, no matching
- * spec — an empty tab sends people searching. */
-const TABS: ['engine' | 'view' | 'ggs', string][] = [
-  ['engine', 'エンジン'], ['view', '表示'], ['ggs', 'GGS'],
+ * spec — an empty tab sends people searching.
+ *
+ * Labelled tables are functions, not constants: a module-level table
+ * would freeze the language it was first evaluated in. */
+const tabs = (): ['engine' | 'view' | 'ggs', string][] => [
+  ['engine', t('settings.tab.engine')],
+  ['view', t('settings.tab.view')],
+  ['ggs', t('settings.tab.ggs')],
 ];
 
-const THEMES: [Theme, string][] = [
-  ['os', 'システムに合わせる'], ['dark', 'ダーク'], ['light', 'ライト'],
+const themes = (): [Theme, string][] => [
+  ['os', t('settings.theme.os')],
+  ['dark', t('settings.theme.dark')],
+  ['light', t('settings.theme.light')],
+];
+
+/** UI language; `auto` follows the machine's. */
+const languages = (): [Prefs['lang'], string][] => [
+  ['auto', t('settings.language.auto')],
+  ['en', t('settings.language.en')],
+  ['ja', t('settings.language.ja')],
 ];
 
 /** Theme swatches, ground color only (boards and text would crush at
@@ -503,11 +527,19 @@ function ViewSettings({ prefs, setPref }: {
 }) {
   return (
     <>
-      <Section title="テーマ">
+      {/* Language sits above the theme: both decide how the whole
+          window reads, and this row is the one people hunt for. */}
+      <Section title={t('settings.language.label')}>
+        {/* No row label: it would only repeat the section heading, and
+            the theme section below sets the same precedent. */}
+        <Segmented value={prefs.lang} onChange={(v) => setPref('lang', v as Prefs['lang'])}
+                   options={languages().map(([value, label]) => ({ value, label }))} />
+      </Section>
+      <Section title={t('settings.theme.title')}>
         {/* Three swatch cards per the design — colors read faster than
             words, including what "follow OS" resolves to. */}
         <div style={{ display: 'flex', gap: 'var(--sp-2h)' }}>
-          {THEMES.map(([v, label]) => {
+          {themes().map(([v, label]) => {
             const on = prefs.theme === v;
             return (
               <button key={v} type="button" className="k-press" onClick={() => setPref('theme', v)}
@@ -526,20 +558,21 @@ function ViewSettings({ prefs, setPref }: {
           })}
         </div>
       </Section>
-      <Section title="盤">
-        <Row2 label="畳の色">
+      <Section title={t('settings.board.title')}>
+        <Row2 label={t('settings.board.tatami')}>
           {/* Four color swatches; words would require a round trip to
               the board to see the choice. */}
           <span style={{ display: 'flex', gap: 'var(--sp-2)' }}>
-            {TATAMI.map((t, i) => {
+            {TATAMI.map((mat, i) => {
               const on = prefs.tatami === i;
+              const label = t(mat.labelKey);
               return (
-                <button key={t.label} type="button" className="k-press"
+                <button key={mat.labelKey} type="button" className="k-press"
                         onClick={() => setPref('tatami', i as Prefs['tatami'])}
-                        title={t.label} aria-label={t.label} aria-pressed={on}
+                        title={label} aria-label={label} aria-pressed={on}
                         style={{
                           width: 28, height: 28, borderRadius: 'var(--r-2)', padding: 0,
-                          border: 0, background: t.board,
+                          border: 0, background: mat.board,
                           // Selection gets an outer 2px ring; an inner
                           // frame would thin the dark swatch colors.
                           boxShadow: on
@@ -550,33 +583,35 @@ function ViewSettings({ prefs, setPref }: {
             })}
           </span>
         </Row2>
-        <Row2 label="座標">
+        <Row2 label={t('settings.board.coords')}>
           <Segmented value={prefs.coords ? 'on' : 'off'} onChange={(v) => setPref('coords', v === 'on')}
-                     options={[{ value: 'on', label: '出す' }, { value: 'off', label: '出さない' }]} />
+                     options={[{ value: 'on', label: t('settings.show') },
+                               { value: 'off', label: t('settings.hide') }]} />
         </Row2>
-        <Row2 label="織り目">
+        <Row2 label={t('settings.board.grain')}>
           <Segmented value={prefs.grain ? 'on' : 'off'} onChange={(v) => setPref('grain', v === 'on')}
-                     options={[{ value: 'on', label: '出す' }, { value: 'off', label: '出さない' }]} />
+                     options={[{ value: 'on', label: t('settings.show') },
+                               { value: 'off', label: t('settings.hide') }]} />
         </Row2>
-        <Row2 label="石返し">
+        <Row2 label={t('settings.board.flip')}>
           <Segmented value={String(prefs.flipMs)} onChange={(v) => setPref('flipMs', +v as Prefs['flipMs'])}
-                     options={[{ value: '0', label: '動かさない' },
-                               { value: '120', label: '速い' },
-                               { value: '240', label: 'ゆっくり' }]} />
+                     options={[{ value: '0', label: t('settings.flip.none') },
+                               { value: '120', label: t('settings.flip.fast') },
+                               { value: '240', label: t('settings.flip.slow') }]} />
         </Row2>
-        <Row2 label="盤の向き">
+        <Row2 label={t('settings.board.facing')}>
           <Segmented value={prefs.facing} onChange={(v) => setPref('facing', v)} options={[
-            { value: 'black', label: '黒が下' },
-            { value: 'white', label: '白が下' },
-            { value: 'auto', label: '自分が下' },
+            { value: 'black', label: t('settings.facing.black') },
+            { value: 'white', label: t('settings.facing.white') },
+            { value: 'auto', label: t('settings.facing.auto') },
           ]} />
         </Row2>
       </Section>
-      <Section title="数値">
+      <Section title={t('settings.numbers.title')}>
         {/* No unit setting (discs are the only unit). Viewpoint is the
             eval sign, not board orientation, and switches from the
             study toolbar per the design. */}
-        <Row2 label="小数">
+        <Row2 label={t('settings.numbers.decimals')}>
           <Segmented value={String(prefs.decimals)}
                      onChange={(v) => setPref('decimals', +v as Prefs['decimals'])}
                      options={[{ value: '0', label: '0' },

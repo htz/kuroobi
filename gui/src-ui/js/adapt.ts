@@ -1,7 +1,7 @@
 import type { GameView, GgsSnapshot, LogLine as RawLog } from './types';
 import type { MoveInfo } from './state';
 import type { Cell, EvalInfo } from './components/board';
-import type { GraphPoint, Move, StoneColor } from './components/data';
+import type { GraphPoint, Move, MoveSrc, StoneColor } from './components/data';
 import type { LogLine } from './components/ggs';
 
 /* Engine state -> screen shapes.
@@ -51,9 +51,10 @@ export function movesOf(
       // A loss is a magnitude; the same from either view, never negated.
       loss: lossOf(i, value, prev),
       secs: rec?.secs,
+      // Source stays an English token; the table owns its wording.
       src: value === undefined ? undefined
-        : book ? (rec?.learned ? '定石·学' : '定石')
-        : exact ? '読切' : '探索',
+        : book ? ((rec?.learned ? 'book_learned' : 'book') satisfies MoveSrc)
+        : ((exact ? 'solve' : 'search') satisfies MoveSrc),
     };
   });
 }

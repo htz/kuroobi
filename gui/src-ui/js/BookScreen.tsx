@@ -6,6 +6,7 @@ import { Board, type EvalInfo } from './components/board';
 import { ScoreRow } from './components/data';
 import { Col, Empty, EmptyState, List, Section, TableHead } from './components/layout';
 import { Button } from './components/primitives';
+import { t, tErr } from './i18n';
 
 /* Book browsing.
  *
@@ -36,15 +37,17 @@ export interface BookBrowse {
   goto: (kifu: string) => void;
 }
 
-/** Tree columns; header and rows read the same array. Rows are
- *  hand-built (they carry the disclosure triangle) but take widths
+/** Tree column widths; header and rows read the same objects. Rows
+ *  are hand-built (they carry the disclosure triangle) but take widths
  *  from here — the 44/58 pair used to be written twice. */
-const TREE_COLS: Col[] = [
-  { head: '手順' },
-  { head: '評価', w: 44, right: true, num: true },
-  { head: '出現', w: 58, right: true, num: true },
+const C_VALUE = { w: 44 };
+const C_GAMES = { w: 58 };
+/** Built per render, so a language switch reaches the captions. */
+const treeCols = (): Col[] => [
+  { head: t('book.col.line') },
+  { head: t('book.col.value'), ...C_VALUE, right: true, num: true },
+  { head: t('book.col.games'), ...C_GAMES, right: true, num: true },
 ];
-const [, C_VALUE, C_GAMES] = TREE_COLS;
 
 export function useBookBrowse(on: boolean): BookBrowse {
   const [line, setLine] = useState<number[]>([]);
@@ -81,7 +84,7 @@ export function useBookBrowse(on: boolean): BookBrowse {
         setNodes((prev) => ({ ...prev, ...Object.fromEntries(pairs) }));
         setErr('');
       })
-      .catch((e) => { if (alive) setErr('' + e); });
+      .catch((e) => { if (alive) setErr(tErr(e)); });
     return () => { alive = false; };
   }, [on, want]);
 
@@ -119,9 +122,10 @@ export function BookPane({ b, coords, grain, flip, onSettings }: {
    * this position") — show the disabled state with its remedy. */
   if (n && n.size === 0) {
     return (
-      <EmptyState title="定石がありません"
-                  body="定石ファイルを読み込めていません。設定から場所を指定できます。"
-                  actions={<Button size="field" variant="primary" onClick={onSettings}>設定を開く</Button>} />
+      <EmptyState title={t('book.empty.no_book_title')}
+                  body={t('book.empty.no_book_body')}
+                  actions={<Button size="field" variant="primary"
+                                   onClick={onSettings}>{t('book.empty.open_settings')}</Button>} />
     );
   }
   // Candidates render as eval cells; the best gets the gold ring.
@@ -158,7 +162,7 @@ export function BookPane({ b, coords, grain, flip, onSettings }: {
           the eye hunt. */}
       <ScoreRow black={n?.black ?? 2} white={n?.white ?? 2}
                 turn={n?.player === 'white' ? 'w' : 'b'}
-                meta={b.err || (n && n.moves.length === 0 ? 'この局面から先は定石にありません' : undefined)} />
+                meta={b.err || (n && n.moves.length === 0 ? t('book.meta.end_of_line') : undefined)} />
     </div>
   );
 }
@@ -191,9 +195,10 @@ export function BookDock({ b, decimals = 1 }: { b: BookBrowse; decimals?: number
 
   return (
     <>
-      <Section title="この局面" aside={<span>{b.line.length} 手</span>}>
+      <Section title={t('book.section.position')}
+               aside={<span>{t('book.position.plies', { n: b.line.length })}</span>}>
         <div style={{ fontSize: 'var(--fs-6)', color: 'var(--sub)', lineHeight: 1.9, wordBreak: 'break-all' }}>
-          {b.line.length ? b.line.map(sqName).join(' ') : '初期局面'}
+          {b.line.length ? b.line.map(sqName).join(' ') : t('book.position.initial')}
         </div>
         {/* The position's own value, with its search depth — without
             it, shallow and deep branches wear the same face. */}
@@ -203,7 +208,8 @@ export function BookDock({ b, decimals = 1 }: { b: BookBrowse; decimals?: number
               {n.value > 0 ? '+' : ''}{n.value.toFixed(decimals)}
             </b>
             <span style={{ fontSize: 'var(--fs-6)', color: 'var(--sub)' }}>
-              石差{n.depth != null && ` · ${n.depth} 手読み`}
+              {n.depth != null ? t('book.position.disc_diff_depth', { n: n.depth })
+                : t('book.position.disc_diff')}
             </span>
           </div>
         )}
@@ -211,9 +217,9 @@ export function BookDock({ b, decimals = 1 }: { b: BookBrowse; decimals?: number
             weight (learned ones may rest on a handful of games). */}
         {n?.value != null && (
           <div style={{ display: 'flex', alignItems: 'center', fontSize: 'var(--fs-5)' }}>
-            <span style={{ color: 'var(--sub)' }}>出所</span>
+            <span style={{ color: 'var(--sub)' }}>{t('book.position.source')}</span>
             <span style={{ marginLeft: 'auto', color: n.learned ? 'var(--gold)' : undefined }}>
-              {n.learned ? '実戦の学習' : 'book.txt'}
+              {n.learned ? t('book.source.learned') : 'book.txt'}
             </span>
           </div>
         )}
@@ -221,7 +227,7 @@ export function BookDock({ b, decimals = 1 }: { b: BookBrowse; decimals?: number
 
       {/* The tree lives in the left column; this table shows only the
           next move — two copies of one list compete. */}
-      <Section title="次の手" aside={n ? <span>{n.moves.length}</span> : undefined}>
+      <Section title={t('book.section.next')} aside={n ? <span>{n.moves.length}</span> : undefined}>
         {/* Render the empty state even without `n` — `n && ...` left
             not-in-book positions as a bare heading that looked like a
             load failure. "No continuation" and "not in the book" get
@@ -229,13 +235,12 @@ export function BookDock({ b, decimals = 1 }: { b: BookBrowse; decimals?: number
         {!n || n.moves.length === 0 ? (
           /* Never a raw span; empty sections use Empty, which owns
              its color and spacing. */
-          <Empty>{n ? 'この局面から先は定石にありません。'
-                    : 'この局面は定石に載っていません。'}</Empty>
+          <Empty>{n ? t('book.empty.end_of_line') : t('book.empty.not_in_book')}</Empty>
         ) : (
           <List>
             {n?.moves.map((m) => (
               <button key={m.pos} type="button" className="k-row" onClick={() => b.push(m.pos)}
-                      title="押すとこの手へ進む"
+                      title={t('book.row.play_move')}
                       style={{
                         display: 'flex', alignItems: 'center', gap: 'var(--sp-2)',
                         height: 'var(--h-row)', border: 0, background: 'transparent',
@@ -282,9 +287,9 @@ export function BookTree({ b, decimals = 1, onStudy }: {
     }}>
       {/* Column header; same 20px + keyline as Section, with the two
           numeric columns right-aligned. */}
-      <TableHead cols={TREE_COLS} />
+      <TableHead cols={treeCols()} />
       <div className="k-scroll" style={{ flex: 1, minHeight: 0, padding: '0 var(--sp-3)' }}>
-        {rows.length === 0 && <Empty>この局面から先は定石にありません。</Empty>}
+        {rows.length === 0 && <Empty>{t('book.empty.end_of_line')}</Empty>}
         {rows.map((r) => (
           <BookRow key={r.key} r={r} open={b.open.has(r.key)} decimals={decimals}
                    onToggle={() => b.toggle(r.key)}
@@ -300,7 +305,7 @@ export function BookTree({ b, decimals = 1, onStudy }: {
           borderTop: '1px solid var(--border-weak)',
         }}>
           <Button disabled={!b.line.length}
-                  onClick={() => onStudy(b.line.map(sqName).join(''))}>検討で開く</Button>
+                  onClick={() => onStudy(b.line.map(sqName).join(''))}>{t('book.open_in_study')}</Button>
         </div>
       )}
     </div>
@@ -330,7 +335,8 @@ function BookRow({ r, open, onToggle, onGo, decimals = 1 }: {
         <span style={{ width: 22, flex: 'none' }} />
       ) : (
         <button type="button" className="k-press" onClick={onToggle}
-                title={open ? '閉じる' : '先を開く'} aria-label={open ? '閉じる' : '先を開く'}
+                title={open ? t('book.tree.collapse') : t('book.tree.expand')}
+                aria-label={open ? t('book.tree.collapse') : t('book.tree.expand')}
                 style={{
                   width: 22, height: 'var(--h-row)', flex: 'none', border: 0, padding: 0,
                   background: 'transparent', color: 'var(--sub)',
@@ -340,7 +346,7 @@ function BookRow({ r, open, onToggle, onGo, decimals = 1 }: {
       {/* Attach the state layer: the triangle glowed on hover while
           the name — equally pressable — did not react. */}
       <button type="button" onClick={onGo} className="k-row"
-              title="押すとこの局面へ"
+              title={t('book.row.goto')}
               style={{
                 flex: 1, minWidth: 0, display: 'flex', alignItems: 'center', gap: 'var(--sp-2)',
                 border: 0, background: 'transparent', padding: '0 var(--sp-1)',
@@ -359,7 +365,7 @@ function BookRow({ r, open, onToggle, onGo, decimals = 1 }: {
         {/* Source; game-learned branches are also color-coded. */}
         <span style={{ marginLeft: 'auto', fontSize: 'var(--fs-7)',
                        color: r.child?.learned ? 'var(--gold)' : 'var(--sub)' }}>
-          {r.child ? (r.child.learned ? '定石·学' : '定石') : ''}
+          {r.child ? (r.child.learned ? t('book.src.learned') : t('book.src.book')) : ''}
         </span>
       </button>
     </div>
@@ -372,10 +378,10 @@ const INITIAL = Array.from({ length: 64 }, (_, i) =>
 /** "f5d6" -> square indices; unreadable characters are dropped. */
 function parseLine(kifu: string): number[] {
   const out: number[] = [];
-  const t = kifu.toLowerCase();
-  for (let i = 0; i + 1 < t.length; i += 2) {
-    const f = 'abcdefgh'.indexOf(t[i]);
-    const r = +t[i + 1] - 1;
+  const s = kifu.toLowerCase();
+  for (let i = 0; i + 1 < s.length; i += 2) {
+    const f = 'abcdefgh'.indexOf(s[i]);
+    const r = +s[i + 1] - 1;
     if (f >= 0 && r >= 0 && r < 8) out.push(f * 8 + r);
   }
   return out;

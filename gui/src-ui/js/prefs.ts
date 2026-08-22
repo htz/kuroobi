@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useState } from 'react';
 import { api } from './api';
+import { backendStrings, resolveLang, setLang, type LangPref } from './i18n';
 
 /* Display preferences. They never affect the engine, so they live in
  * localStorage (per-machine, no round-trips). Every default matches
@@ -29,22 +30,24 @@ export interface Prefs {
   facing: Facing;
   /** Local game clock (seconds); 0 = none. Applies from the next new game. */
   clockSecs: number;
+  /** UI language; `auto` follows the machine's language. */
+  lang: LangPref;
 }
 
 const DEFAULTS: Prefs = {
   theme: 'os', tatami: 0, decimals: 1,
   coords: true, grain: true, flipMs: 120, facing: 'black',
-  clockSecs: 0,
+  clockSecs: 0, lang: 'auto',
 };
 
 /* Mat colors. The board's four tokens swap as a set — changing only
  * the ground leaves edges/lines/grain behind and muddies the board. */
-export const TATAMI: { label: string; board: string; dark: string; line: string; grain: string }[] = [
+export const TATAMI: { labelKey: string; board: string; dark: string; line: string; grain: string }[] = [
   // Swatch colors measured from the design; edges/lines/grain derived.
-  { label: '標準', board: '#77914e', dark: '#3f4f2c', line: '#3d5226', grain: '#33421d' },
-  { label: '枯草', board: '#8a8f5c', dark: '#474a2f', line: '#464a28', grain: '#3b3f1f' },
-  { label: '苔', board: '#6f7f6a', dark: '#3a4238', line: '#374033', grain: '#2f382c' },
-  { label: '深緑', board: '#3f4f2c', dark: '#232c18', line: '#212b14', grain: '#1b230f' },
+  { labelKey: 'settings.tatami.default', board: '#77914e', dark: '#3f4f2c', line: '#3d5226', grain: '#33421d' },
+  { labelKey: 'settings.tatami.straw', board: '#8a8f5c', dark: '#474a2f', line: '#464a28', grain: '#3b3f1f' },
+  { labelKey: 'settings.tatami.moss', board: '#6f7f6a', dark: '#3a4238', line: '#374033', grain: '#2f382c' },
+  { labelKey: 'settings.tatami.forest', board: '#3f4f2c', dark: '#232c18', line: '#212b14', grain: '#1b230f' },
 ];
 
 const KEY = 'kuroobi.prefs';
@@ -92,6 +95,23 @@ export function usePrefs() {
       .then((t) => { if (t === 'light' || t === 'dark') setForced(t); })
       .catch(() => { /* simply inert outside Tauri or on old binaries */ });
   }, []);
+
+  /* Screenshot pin (`KUROOBI_LANG=en`); not persisted, like the theme
+     override above. */
+  const [forcedLang, setForcedLang] = useState<LangPref | ''>('');
+  useEffect(() => {
+    void api.langOverride()
+      .then((l) => { if (l === 'en' || l === 'ja') setForcedLang(l); })
+      .catch(() => { /* inert outside Tauri or on older binaries */ });
+  }, []);
+
+  /* Apply the language before anything renders text, and hand the
+     backend its subset (it owns OS notifications and native dialogs,
+     which no frontend translation can reach). */
+  useEffect(() => {
+    setLang(resolveLang(forcedLang || prefs.lang));
+    void api.setBackendStrings(backendStrings()).catch(() => { /* older binaries */ });
+  }, [prefs.lang, forcedLang]);
 
   // Theme switches via a :root attribute; `os` removes it and defers
   // to prefers-color-scheme (tokens.css is written that way).

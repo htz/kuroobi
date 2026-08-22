@@ -5,6 +5,7 @@ import { MoveScrub, ScoreRow, StoneDot } from './components/data';
 import { Modal, Overlay } from './components/layout';
 import { Segmented } from './components/primitives';
 import { Button } from './components/primitives';
+import { t, tErr } from './i18n';
 
 /* Record viewer overlay. Raw records (GGF, f5d6...) are not for human
  * reading, so boards come first; copy/save/study follow once satisfied.
@@ -56,7 +57,7 @@ export function KifuViewer({ title, kifu, onClose, onStudy, onRefetch, parts, me
   /* Action feedback, one place for both outcomes; lives in the footer
      rather than a toast since it only speaks when pressed. */
   const [note, setNote] = useState('');
-  const say = (t: string) => { setNote(t); window.setTimeout(() => setNote(''), 2000); };
+  const say = (msg: string) => { setNote(msg); window.setTimeout(() => setNote(''), 2000); };
   const [playing, setPlaying] = useState(false);
 
   useEffect(() => {
@@ -70,7 +71,7 @@ export function KifuViewer({ title, kifu, onClose, onStudy, onRefetch, parts, me
            records from the era of lost drawn-opening starts cannot
            replay, but the archive has the real thing. */
         if (onRefetch) { onRefetch(); return; }
-        setGot({ kifu: shown, err: String(e) }); setAt(null);
+        setGot({ kifu: shown, err: tErr(e) }); setAt(null);
       });
     return () => { alive = false; };
     // onRefetch is rebuilt every render; keep it out of the deps.
@@ -109,10 +110,12 @@ export function KifuViewer({ title, kifu, onClose, onStudy, onRefetch, parts, me
                 player row below carries the colors. */
              band={parts && parts.length > 1 ? (
                <Segmented value={String(face)} onChange={(v) => setFace(Number(v))}
-                          options={parts.map((_, i) => ({ value: String(i), label: `${i + 1} 面目` }))} />
+                          options={parts.map((_, i) => ({
+                            value: String(i), label: t('kifu.board_tab', { n: i + 1 }),
+                          }))} />
              ) : undefined}
              actions={<>
-               <Button size="field" onClick={onClose}>閉じる</Button>
+               <Button size="field" onClick={onClose}>{t('kifu.close')}</Button>
                <span style={{
                  flex: 1, minWidth: 0, paddingLeft: 'var(--sp-3)',
                  fontSize: 'var(--fs-6)', color: 'var(--bad)',
@@ -124,21 +127,21 @@ export function KifuViewer({ title, kifu, onClose, onStudy, onRefetch, parts, me
                    unlike the save dialog closing. */}
                <Button size="field" disabled={!shown} onClick={() => {
                  void navigator.clipboard.writeText(shown)
-                   .then(() => say('コピーしました'))
-                   .catch(() => say('コピーできませんでした'));
-               }}>棋譜をコピー</Button>
+                   .then(() => say(t('kifu.copied')))
+                   .catch(() => say(t('kifu.copy_failed')));
+               }}>{t('kifu.copy')}</Button>
                {/* Silent by design: the closing dialog is the report —
                    the difference from copy above. */}
                <Button size="field" disabled={!shown}
                        onClick={() => void ggsApi.saveKifu(shown, 'kifu')
-                         .catch((e) => say('保存できませんでした (' + e + ')'))}>
-                 ファイルに保存
+                         .catch((e) => say(t('kifu.save_failed', { err: tErr(e) })))}>
+                 {t('kifu.save')}
                </Button>
                <Button size="field" variant="primary" disabled={!frames}
-                       onClick={() => { onStudy(shown); onClose(); }}>検討で開く</Button>
+                       onClick={() => { onStudy(shown); onClose(); }}>{t('kifu.open_in_study')}</Button>
              </>}>
         {!shown.trim() && (
-            <span style={{ fontSize: 'var(--fs-5)', color: 'var(--sub)' }}>取り出しています…</span>
+            <span style={{ fontSize: 'var(--fs-5)', color: 'var(--sub)' }}>{t('kifu.fetching')}</span>
           )}
           {err && <span style={{ fontSize: 'var(--fs-5)', color: 'var(--bad)' }}>{err}</span>}
 
@@ -163,7 +166,7 @@ export function KifuViewer({ title, kifu, onClose, onStudy, onRefetch, parts, me
                         <StoneDot color={c} size={11} />
                         <span className="k-sel">{n || '?'}</span>
                         {me && n === me && (
-                          <span style={{ color: 'var(--sub)', fontSize: 'var(--fs-6)' }}>自分</span>
+                          <span style={{ color: 'var(--sub)', fontSize: 'var(--fs-6)' }}>{t('kifu.me')}</span>
                         )}
                         <span style={{
                           marginLeft: 'auto', fontSize: 'var(--fs-2)', fontWeight: 700,
@@ -181,18 +184,18 @@ export function KifuViewer({ title, kifu, onClose, onStudy, onRefetch, parts, me
                     ended matters at every move. */}
                 {end && (
                   <div style={{ fontSize: 'var(--fs-6)', color: 'var(--sub)', fontVariantNumeric: 'tabular-nums' }}>
-                    最終 <b style={{ color: 'var(--text)', fontWeight: 600 }}>
+                    {t('kifu.final')} <b style={{ color: 'var(--text)', fontWeight: 600 }}>
                       {end.black - end.white > 0 ? '+' : ''}{end.black - end.white}
                     </b>
                   </div>
                 )}
-                <div style={{ fontSize: 'var(--fs-6)', color: 'var(--sub)' }}>この手</div>
+                <div style={{ fontSize: 'var(--fs-6)', color: 'var(--sub)' }}>{t('kifu.this_move')}</div>
                 <div style={{ fontSize: 'var(--fs-1)', fontWeight: 700, fontVariantNumeric: 'tabular-nums' }}>
-                  {cur === 0 ? '初期局面' : `${cur}. ${sqName(f.last)}`}
+                  {cur === 0 ? t('kifu.initial_position') : `${cur}. ${sqName(f.last)}`}
                 </div>
                 {/* Raw record text: shows what "copy" will hand over.
                     Both the move list and the GGF, readable one on top. */}
-                <Raw label="着手列" tone="text" text={moveList} />
+                <Raw label={t('kifu.raw.moves')} tone="text" text={moveList} />
                 {shown.startsWith('(;') && <Raw label="GGF" text={shown} scroll />}
               </div>
             </div>
@@ -203,11 +206,15 @@ export function KifuViewer({ title, kifu, onClose, onStudy, onRefetch, parts, me
             {/* Stepper row: the strip alone cannot step one move.
                 Names match the study toolbar. */}
             <div style={{ display: 'flex', alignItems: 'center', gap: 'var(--sp-2)' }}>
-              <Button size="field" square title="最初へ" disabled={cur === 0} onClick={() => seek(0)}>|◀</Button>
-              <Button size="field" square title="戻る" disabled={cur === 0} onClick={() => seek(cur - 1)}>◀</Button>
-              <Button size="field" square title="進む" disabled={cur >= last} onClick={() => seek(cur + 1)}>▶</Button>
-              <Button size="field" square title="最後へ" disabled={cur >= last} onClick={() => seek(last)}>▶|</Button>
-              <Button size="field" square title={running ? '止める' : '自動再生'}
+              <Button size="field" square title={t('kifu.nav.first')}
+                      disabled={cur === 0} onClick={() => seek(0)}>|◀</Button>
+              <Button size="field" square title={t('kifu.nav.prev')}
+                      disabled={cur === 0} onClick={() => seek(cur - 1)}>◀</Button>
+              <Button size="field" square title={t('kifu.nav.next')}
+                      disabled={cur >= last} onClick={() => seek(cur + 1)}>▶</Button>
+              <Button size="field" square title={t('kifu.nav.last')}
+                      disabled={cur >= last} onClick={() => seek(last)}>▶|</Button>
+              <Button size="field" square title={running ? t('kifu.nav.stop') : t('kifu.nav.autoplay')}
                       disabled={last === 0}
                       onClick={() => { if (running) { setPlaying(false); return; } if (cur >= last) setAt(0); setPlaying(true); }}>
                 {running ? '❚❚' : '▶▶'}
@@ -215,7 +222,7 @@ export function KifuViewer({ title, kifu, onClose, onStudy, onRefetch, parts, me
               <span style={{ flex: 1 }} />
               <span style={{ fontSize: 'var(--fs-6)', color: 'var(--sub)', fontVariantNumeric: 'tabular-nums' }}>
                 <b style={{ fontSize: 'var(--fs-1)', fontWeight: 600, color: 'var(--text)' }}>{cur}</b>
-                {' '}/ {last} 手
+                {' '}{t('kifu.of_plies', { n: last })}
               </span>
             </div>
             {/* The same strip as study, with its buttons suppressed —
@@ -252,4 +259,4 @@ function Raw({ label, text, tone, scroll }: {
 
 /** Square index -> a1 form; pass (null) renders as a word. */
 const sqName = (sq: number | null): string =>
-  sq == null ? 'パス' : 'abcdefgh'[Math.floor(sq / 8)] + (sq % 8 + 1);
+  sq == null ? t('kifu.pass') : 'abcdefgh'[Math.floor(sq / 8)] + (sq % 8 + 1);

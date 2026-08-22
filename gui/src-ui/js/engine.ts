@@ -2,6 +2,7 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import { api, ggsApi, onHints, type ActivityView } from './api';
 import type { Game } from './state';
 import type { GameView, LearnEntry } from './types';
+import { t, tErr } from './i18n';
 
 /* Engine interaction, screen-independent. Extracted from App.tsx so
  * both UIs could share it during the redesign; behavior deliberately
@@ -51,10 +52,10 @@ export function useHints(g: Game) {
 export function useActivity(): ActivityView | null {
   const [cpu, setCpu] = useState<ActivityView | null>(null);
   useEffect(() => {
-    const t = window.setInterval(() => {
+    const id = window.setInterval(() => {
       api.activity().then(setCpu).catch(() => {});
     }, 1000);
-    return () => clearInterval(t);
+    return () => clearInterval(id);
   }, []);
   return cpu;
 }
@@ -84,7 +85,7 @@ export function useEngineTurn(g: Game) {
     void (async () => {
       try {
         const r = await api.think();
-        setThinkTotal((t) => ({ ...t, [side]: t[side] + r.secs }));
+        setThinkTotal((tot) => ({ ...tot, [side]: tot[side] + r.secs }));
         const next = await api.applyMove(r.pos);
         // Record which move this was (for the table's source/eval
         // columns). next.cursor may sit past a forced pass, so count
@@ -106,7 +107,7 @@ export function useEngineTurn(g: Game) {
         setStat(r.nodes > 0 ? { nodes: r.nodes, secs: r.secs } : null);
         say('');
       } catch (e) {
-        say('' + e);
+        say(tErr(e));
         setPlaying(false);
       } finally {
         clearInterval(timer);
@@ -157,19 +158,18 @@ export function useGraph(g: Game, ggsMatch: boolean, ask: Ask = askDefault) {
   const update = useCallback(async () => {
     const v = g.view;
     // Never a dead button: always state why it cannot start.
-    if (!v) { g.say('棋譜がありません', 'gold'); return; }
+    if (!v) { g.say(t('engine.toast.no_record'), 'gold'); return; }
     // No double runs. The button reads "stop" while running so humans
     // cannot hit this; only the auto-start path can.
     if (busy) return;
     // CPU-hungry features never overlap: refuse during GGS games,
     // confirm-then-stop a local game.
-    if (ggsMatch) { g.say('GGS 対局中は分析を控えます', 'gold'); return; }
+    if (ggsMatch) { g.say(t('engine.toast.no_analysis_during_ggs'), 'gold'); return; }
     if (g.playing || g.thinking) {
       if (!await ask({
-        title: '対局を止めて分析します',
-        body: 'いま進んでいる対局を止めます。分析はいまの強さで全局面を測り直すので、'
-          + '終わるまで盤は動かせません。',
-        ok: '分析する',
+        title: t('engine.ask.stop_game_title'),
+        body: t('engine.ask.stop_game_body'),
+        ok: t('engine.ask.stop_game_ok'),
       })) return;
       g.stop();
     }
@@ -200,7 +200,7 @@ export function useGraph(g: Game, ggsMatch: boolean, ask: Ask = askDefault) {
         if (seq !== seqRef.current) break;
         if (Number.isFinite(p.value)) vals[n] = { value: p.value, exact: p.exact, book: p.from_book };
         setValues([...vals]);
-      } catch (e) { g.say('' + e); failed = true; break; }
+      } catch (e) { g.say(tErr(e)); failed = true; break; }
     }
     // Keep the failure reason; clearing it here looks like a dead button.
     if (!failed && seq === seqRef.current) g.say('');
@@ -233,12 +233,12 @@ export function useStartGame(
     // No toast for stopping — the user did it and the button reverts.
     if (g.playing) { g.stop(); g.say(''); return; }
     // GGS outranks; a running analysis stops after confirmation.
-    if (ggsMatch) { g.say('GGS 対局中はローカル対局を開始できません', 'gold'); return; }
+    if (ggsMatch) { g.say(t('engine.toast.no_local_during_ggs'), 'gold'); return; }
     if (graph.busy) {
       if (!await ask({
-        title: '分析を止めて対局を始めます',
-        body: '評価値グラフの分析を途中で止めます。測り終えたところまでの点は残ります。',
-        ok: '対局を始める',
+        title: t('engine.ask.stop_analysis_title'),
+        body: t('engine.ask.stop_analysis_body'),
+        ok: t('engine.ask.stop_analysis_ok'),
       })) return;
       graph.stop();
     }

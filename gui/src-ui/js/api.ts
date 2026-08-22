@@ -15,7 +15,7 @@ export function jsLog(msg: unknown): void {
 
 async function call<T = void>(cmd: string, args?: Record<string, unknown>): Promise<T> {
   const c = core();
-  if (!c) throw new Error('Tauri IPC が使えません');
+  if (!c) throw new Error('Tauri IPC unavailable');
   return c.invoke<T>(cmd, args);
 }
 
@@ -58,6 +58,8 @@ export const api = {
   autoplay: () => call<string>('autoplay', {}),
   /** Screenshot theme pin (KUROOBI_THEME); empty follows the preference. */
   themeOverride: () => call<string>('theme_override', {}),
+  /** Screenshot hook: pinned UI language, or '' when unset. */
+  langOverride: () => call<string>('lang_override', {}),
   /** Name, path, existence, size (bytes), format tag. */
   resourceStatus: () => call<[string, string, boolean, number, string][]>('resource_status', {}),
   pickResource: (kind: string) => call<string | null>('pick_resource', { kind }),
@@ -85,6 +87,10 @@ export const api = {
   hashSizes: () => call<HashView>('hash_sizes', {}),
   setHashSizes: (mid: number, end: number) => call<HashView>('set_hash_sizes', { mid, end }),
   activity: () => call<ActivityView>('activity_status', {}),
+  /** Hand the backend the strings it renders itself (OS notifications,
+   *  native file dialogs). Re-sent whenever the language changes. */
+  setBackendStrings: (strings: Record<string, string>) =>
+    call('set_backend_strings', { strings }),
 };
 
 /** The record expanded into per-move boards (viewing only). */
@@ -186,7 +192,7 @@ export async function onHints(
   fn: (depth: number, hints: HintView[], nodes: number, secs: number) => void,
 ): Promise<() => void> {
   const ev = window.__TAURI__?.event;
-  if (!ev) throw new Error('Tauri event が使えません');
+  if (!ev) throw new Error('Tauri events unavailable');
   return ev.listen<[number, HintView[], number, number]>(
     'hints',
     (e) => fn(e.payload[0], e.payload[1], e.payload[2], e.payload[3]),
@@ -196,6 +202,6 @@ export async function onHints(
 /** Subscribe to backend state updates; the return value unsubscribes. */
 export async function onGgsSnapshot(fn: (s: GgsSnapshot) => void): Promise<() => void> {
   const ev = window.__TAURI__?.event;
-  if (!ev) throw new Error('Tauri event が使えません');
+  if (!ev) throw new Error('Tauri events unavailable');
   return ev.listen<GgsSnapshot>('ggs', (e) => fn(e.payload));
 }

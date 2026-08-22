@@ -122,7 +122,7 @@ impl Resources {
         if let Some(parent) = path.parent() {
             std::fs::create_dir_all(parent).map_err(|e| e.to_string())?;
         }
-        let mut out = String::from("# Kuroobi が使うファイルの場所\n");
+        let mut out = String::from("# Locations of the files Kuroobi uses\n");
         let mut put = |k: &str, v: &Option<PathBuf>| {
             if let Some(p) = v {
                 out.push_str(&format!("{k}={}\n", p.display()));
@@ -238,10 +238,12 @@ impl Resources {
     /// without size/format you cannot tell which one is actually loaded
     /// when the engine's play changes.
     pub fn detailed(&self) -> Vec<(&'static str, PathBuf, bool, u64, String)> {
+        // Stable identifiers, not display text: the GUI matches on them
+        // and renders its own label (see `locales/*.yaml`).
         let items = [
-            ("線形評価の重み", self.weights_path()),
-            ("NNUE の重み", self.nnue_path()),
-            ("定石", self.book_path()),
+            ("weights", self.weights_path()),
+            ("nnue", self.nnue_path()),
+            ("book", self.book_path()),
         ];
         items
             .into_iter()
@@ -250,7 +252,7 @@ impl Resources {
                 let ok = p.exists();
                 // Identify by header only; reading whole files would scan
                 // tens of MB on every startup.
-                let kind = if ok && name == "NNUE の重み" {
+                let kind = if ok && name == "nnue" {
                     nnue_header(&p).unwrap_or_default()
                 } else {
                     String::new()
