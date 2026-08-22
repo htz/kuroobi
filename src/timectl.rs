@@ -1,49 +1,43 @@
-//! 持ち時間の配り方。
+//! Clock budgeting.
 //!
-//! **GUI (`gui/src/ggs.rs`) から出してここへ置いた。** 配り方の良し悪しは
-//! 持ち時間制の対局でしか測れないのに、GUI の中にあると CLI から呼べず、
-//! **自己対局で比べる道が無かった**。エンジン側にあれば `arena` からも
-//! GGS からも同じものを使える。
+//! Moved out of the GUI into the engine so the same allocator serves
+//! both `arena` self-play and GGS — allocation quality can only be
+//! measured in timed games, and inside the GUI it could not be.
 //!
-//! 方式を足すときは [`Pace`] に足して [`plan`] の分岐を増やす。**既存の
-//! 方式の数式は変えない** — 比較の基準が動くと、新しい方式が良くなったのか
-//! 基準が悪くなったのか分からなくなる。
+//! To add a scheme, extend [`Pace`] and branch in [`plan`]. Never change
+//! the existing formulas: they are the baselines all measurements
+//! compare against.
 
 use std::time::Duration;
 
-/// 持ち時間の配り方。
+/// Clock allocation scheme.
 ///
-/// **選ばせる意味がなかったので減らした。** 自己対局で `even` (残り手数で
-/// 等分) を基準に測ったところ、`slow` (序盤に厚く) は 3 秒・8 秒の対局で
-/// **勝率 0.0%・石差 −34** と壊滅し、30 秒では差が無い。逆に `fast` は
-/// 3 秒で **97.5%**、8 秒 51.2%、30 秒 47.5% と**全条件で `even` に劣らない**。
-/// つまり `fast` 一本でよく、持ち時間で切り替える必要すらない。
+/// Reduced to what measurement justified: against `even` (equal split
+/// over remaining moves), `slow` scored 0.0% at fast controls while
+/// `fast` never lost to `even` at any control — so `fast` is the only
+/// scheme worth offering.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum Pace {
-    /// 序盤を短く切り上げ、終盤に残す。**既定。**
+    /// Short early moves, saving time for the endgame. Default.
     Fast,
-    /// 時間を見ずに設定の深さまで読む。持ち時間の管理は指す側の責任。
-    ///
-    /// **研究用。** 持ち時間のある対局では時間切れが確定するので、GGS では
-    /// 選べないようにしてある。
+    /// Read to the configured depth, ignoring the clock; the caller owns
+    /// time management. Study only — guaranteed flag fall in timed games,
+    /// so GGS does not offer it.
     Depth,
-    /// **終盤に残す度合いを係数で直に指定する。** `a + (1-a)/√残り手数`。
-    ///
-    /// `a = 1.0` が「残り手数で等分」、`a = 0.6` が [`Pace::Fast`] と同じ式。
-    /// 小さいほど序盤を切り詰めて終盤に回す。**傾きをまた疑ったときに、
-    /// 既存の式と地続きで比べるため**に残してある (自己対局で端を探す)。
+    /// Direct tail coefficient: `a + (1-a)/sqrt(moves_left)`.
+    /// `a = 1.0` is the equal split, `a = 0.6` equals [`Pace::Fast`].
+    /// Kept so the slope can be re-examined against the same formula
+    /// family in self-play.
     Tail(f64),
 }
 
 impl Pace {
-    /// 画面と GGS が使う文字列から。知らない語は既定 ([`Pace::Fast`])。
-    ///
-    /// `FromStr` にしないのは**失敗しないため**。設定から来る値なので、
-    /// 知らない語で対局を止めるより既定へ倒すほうがよい。**落とした
-    /// `slow` / `even` もここへ落ちる** — 古い設定ファイルが残っていても、
-    /// 害のある配り方に戻らない。
+    /// Parse the GUI/GGS string; unknown words fall to the default
+    /// ([`Pace::Fast`]). Deliberately not `FromStr`, so it cannot fail —
+    /// this comes from settings, and the removed `slow`/`even` in an old
+    /// config file must not resurrect a harmful scheme.
     pub fn parse(s: &str) -> Pace {
-        // `tail:0.4` のように係数を渡せる (測定用)
+        // A coefficient may be passed as `tail:0.4` (measurement).
         if let Some(a) = s.strip_prefix("tail:") {
             if let Ok(v) = a.parse::<f64>() {
                 return Pace::Tail(v.clamp(0.0, 1.0));
@@ -64,100 +58,85 @@ impl Pace {
     }
 }
 
-/// 強さの設定 (中盤の深さ / 完全読みに入る空き / 選択読みの帯)。
+/// Strength settings (midgame depth / solve entry / selective band).
 #[derive(Debug, Clone, Copy)]
 pub struct Levels {
     pub depth: u32,
     pub solve: u8,
     pub band: u8,
-    /// **選択読みの帯を予算から決めるか。** 持ち時間で指すときは真。
-    /// 偽にすると `band` をそのまま使う (深さ固定と、旧挙動との比較用)。
+    /// Whether the selective band derives from the budget (true in
+    /// timed play); false uses `band` as-is (fixed depth, legacy comparison).
     pub auto_band: bool,
 }
 
-/// 1 手ぶんの計画。
+/// Plan for one move.
 #[derive(Debug, Clone, Copy)]
 pub struct Plan {
     pub depth: u32,
     pub solve: u8,
     pub band: u8,
-    /// 1 手の期限。`None` は「時間を見ない」(深さ固定)。
+    /// Deadline for this move; `None` = no clock (fixed depth).
     pub cap: Option<Duration>,
 }
 
-/// いま何を見て決めるか。
+/// Inputs for the decision.
 #[derive(Debug, Clone, Copy)]
 pub struct Situation {
-    /// 自分の残り持ち時間 (秒)。`None` は時間制でない対局。
-    ///
-    /// **ロスタイム中もここに出る。** GGS の時計は 1 本で、本時間を
-    /// 切らすと猶予ぶんが加算されて同じ欄が動き続ける。
+    /// Our remaining clock in seconds; `None` = untimed. Overtime shows
+    /// here too — GGS runs one clock and adds the grace onto it.
     pub clock_secs: Option<u64>,
-    /// **ロスタイムに入っているか。**
-    ///
-    /// 入っていたらその対局は既に負けが確定していて、残るのは全滅
-    /// (`timeout_hard`) を避けることだけ。`clock_secs` からは判定
-    /// できない (加算後は健全な残り時間と見分けが付かない) ので、
-    /// 時計が跳ね上がったことを見て呼び出し側が立てる。
+    /// Whether we are in overtime. Once there the game is already lost
+    /// and the only goal is avoiding the wipeout (`timeout_hard`). Not
+    /// derivable from `clock_secs` (post-addition it looks healthy);
+    /// the caller sets it after seeing the clock jump.
     pub in_overtime: bool,
-    /// 猶予時間の**設定値** (GGS の表示第 3 項)。残量ではない。
-    /// 0 なら本時間切れがそのまま全滅負けになる。
+    /// Grace time as configured (GGS display's third field), not the
+    /// remainder. 0 means main-time expiry is an immediate wipeout.
     pub grace_secs: u64,
-    /// 盤の空きマス数。
+    /// Empty squares on the board.
     pub empties: u8,
-    /// 1 手に使ってよい上限 (0 で無制限)。
+    /// Per-move cap in seconds (0 = none).
     pub max_move_secs: u64,
-    /// 完全読み用に取っておく秒数。
+    /// Seconds reserved for the perfect solve.
     pub reserve_secs: u64,
-    /// **持ち時間をどれだけ攻めて使うか。** 1.0 で「配分どおり」。
+    /// How aggressively to spend the clock; 1.0 = exactly as allocated.
     ///
-    /// 反復深化は期限まで粘らず、次の段が入らないと判断した時点で返る
-    /// (実測で期限の 47%)。1.0 だと配ったぶんの半分しか使わない。
-    ///
-    /// **既定 2.5 は実測で決めた** (15 分の同期対局、非レート)。
-    ///
-    /// | 係数 | 持ち時間の使用率 |
-    /// |---|---|
-    /// | 1.0 相当 (変更前) | 45% |
-    /// | 2.0 | 71〜77% |
-    /// | **2.5** | **84%** |
-    ///
-    /// 足した時間は深さになる — 同じ局面で 20 秒 d27 / 40 秒 d29 /
-    /// 60 秒 d30。相手 (Rhapsody) は 98〜99% 使ってくるので、74% では譲り
-    /// すぎだった。48 手すべてで期限を守り (最悪 1.00 倍)、時間切れは 0。
-    ///
-    /// **0 以下や NaN は既定へ倒す。** 設定から来る値なので、壊れた値で
-    /// 対局を止めるより既定で動くほうがよい。
+    /// Iterative deepening returns once the next iteration would not
+    /// fit, spending ~47% of its deadline, so 1.0 uses only about half
+    /// the allocation. Default 2.5 was measured in 15-minute synchro
+    /// games (45% -> 84% utilization); the added time turns into depth
+    /// and no deadline was exceeded. Non-positive or NaN falls back to
+    /// the default — this value comes from settings.
     pub budget_use: f64,
-    /// **較正した読切のノード毎秒**
-    /// ([`crate::engine::Engine::measure_solve_nps`] が測る)。
-    /// `None` なら読切の入り口は固定の階段で決める。
+    /// Calibrated solver nodes/sec
+    /// ([`crate::engine::Engine::measure_solve_nps`]); `None` drops the
+    /// solve entry to the fixed ladder.
     pub nps: Option<f64>,
-    /// 探索のスレッド数。並列で余分に踏むぶんを見込むのに要る。
+    /// Search threads; needed to estimate the parallel node overhead.
     pub threads: usize,
-    /// **残り手数を数えるときの読切の基準。**
-    ///
-    /// `(空き − これ) / 2` が「自分があと何手指すか」。既定は固定値で、
-    /// 機械から決める [`SolveRef::Auto`] は**まだ測っていないので選択制**。
+    /// Solve reference used to count remaining moves:
+    /// `(empties - this) / 2` is "how many more moves we make". Default
+    /// is fixed; the machine-derived [`SolveRef::Auto`] is opt-in until
+    /// measured.
     pub solve_ref: SolveRef,
 }
 
-/// 残り手数の基準の決め方。
+/// How the move-count reference is chosen.
 ///
-/// **既定は固定。** 較正から決める道 ([`SolveRef::Auto`]) は、同じ形の
-/// 変更が過去に 3 秒の対局で勝率を 20pt 落としているので
-/// (`calibration_does_not_move_the_move_budget` を参照)、自己対局で
-/// 確かめるまで既定にしない。
+/// Fixed by default: a similar calibration-driven change once cost 20pt
+/// of win rate at fast controls (see
+/// `calibration_does_not_move_the_move_budget`), so [`SolveRef::Auto`]
+/// stays opt-in until self-play confirms it.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum SolveRef {
-    /// 固定値 (既定は [`SOLVE_REF`])。
+    /// Fixed value (default [`SOLVE_REF`]).
     Fixed(u8),
-    /// 機械の速さ・スレッド数・持ち時間から決める ([`auto_solve_ref`])。
+    /// Derived from machine speed, threads and clock ([`auto_solve_ref`]).
     Auto,
 }
 
 impl SolveRef {
-    /// 画面や引数の文字から。知らない語は既定 (固定 [`SOLVE_REF`])。
+    /// Parse from UI/args; unknown words fall to the fixed default.
     pub fn parse(s: &str) -> SolveRef {
         if s == "auto" {
             return SolveRef::Auto;
@@ -168,11 +147,11 @@ impl SolveRef {
     }
 
     fn value(self, clock_secs: u64, nps: Option<f64>, threads: usize) -> u8 {
-        /* **実戦で試すための逃がし口。** 自己対局の台は実戦の条件を
-        写せない (終盤 1 手が持ち時間に占める割合が 50 倍違う) ので、
-        採否は GGS の対局でしか決められない。GUI に設定を生やす前に
-        `SOLVE_REF=auto` で切り替えられるようにしておく。
-        `budget_use` と同じ扱い。 */
+        /* Escape hatch for live trials: the self-play bench cannot
+        reproduce live conditions (endgame cost share differs 50x), so
+        adoption can only be judged in GGS games. `SOLVE_REF=auto`
+        toggles it before it earns a GUI setting; same treatment as
+        `budget_use`. */
         static ENV: std::sync::OnceLock<Option<SolveRef>> = std::sync::OnceLock::new();
         let env = *ENV.get_or_init(|| std::env::var("SOLVE_REF").ok().map(|v| SolveRef::parse(&v)));
         match env.unwrap_or(self) {
@@ -199,40 +178,33 @@ impl Default for Situation {
     }
 }
 
-/* ---- 読切に入る空きを残り時間から逆算する ------------------------------
+/* ---- Deriving the solve entry point from the clock --------------------
 
-**読切は途中で刻めない。** `Engine::choose_within` の期限は中盤の反復深化に
-しか効かず、完全読みに入ったら終わるまで返ってこない。だから「入ってから
-時間を見る」ことができず、**入る前に所要時間を当てる**しかない。
+A solve cannot be sliced: `Engine::choose_within`'s deadline only works
+on iterative deepening, so the cost must be predicted before entering.
+The fixed ladder knows nothing about machine speed — a value right for
+the dev box flags on one half as fast.
 
-固定の階段 (14 / 20 / 設定値) では**機械の速さを知らない**。開発機で
-ちょうど良い値は、半分の速さの機械では時間切れになる。
+The estimate is layered:
 
-見積りを 3 層に分けてある。
+    time = base_nodes(empties) x parallel_factor(threads, empties) / nps
 
-    所要時間 = 基準ノード数(空き) × 並列の割増(スレッド数, 空き) ÷ nps
+- base_nodes: single-thread measurement (110 positions), machine-invariant
+- parallel factor: tree growth per thread count
+- nps: the only machine-dependent part (`Engine::measure_solve_nps`)
 
-- **基準ノード数**は 1 スレッドの実測 (`bench/calib1030.obf` 110 問)。
-  機械が変わっても動かない量
-- **並列の割増**は探索木そのものが太るぶん。スレッド数ごとに持つ
-- **nps** だけが機械依存。`Engine::measure_solve_nps` が実測する
+Split so a machine change re-measures one number instead of the whole
+(empties x threads) grid. */
 
-分けたのは、**機械を変えるたびに測り直すのを nps 1 個で済ませる**ため。
-3 つを 1 本の表にすると (空き × スレッド数) の全格子を測り直すことになる。
------------------------------------------------------------------------- */
-
-/// 読切 1 回のノード数 (1 スレッド・中央値) `A · exp(B · 空き)` の係数。
-///
-/// 空き 14〜30 の 110 問を実測して当てた。`exp(B) = 1.999` — **分岐因子
-/// ちょうど 2.0** で、Edax の `BRANCHING_FACTOR 2.0` と一致する。
+/// Median solve nodes (1 thread) as `A * exp(B * empties)`, fitted to
+/// 110 measured positions at 14-30 empties; `exp(B) = 1.999`, i.e. a
+/// branching factor of exactly 2.0.
 const SOLVE_NODES_A: f64 = 2.82;
 const SOLVE_NODES_B: f64 = 0.693;
 
-/// 並列で余分に踏むノードの割増率。
-///
-/// 実測 (総ノード数の比、空き 22〜30): 2 スレッド 1.15 / 5 スレッド 1.22。
-/// `log2(スレッド数)` に比例させると 2T 1.09 / 5T 1.21 で合う。**浅いうちは
-/// 割増が出ない** (空き 16 では 1.02〜1.05) ので、空き 14〜22 で立ち上げる。
+/// Extra nodes searched in parallel. Measured 1.15 at 2T / 1.22 at 5T
+/// (22-30 empties); proportional to log2(threads) fits. Shallow
+/// positions show no overhead, so it ramps in over 14-22 empties.
 fn parallel_overhead(threads: usize, empties: u8) -> f64 {
     if threads <= 1 {
         return 1.0;
@@ -241,27 +213,22 @@ fn parallel_overhead(threads: usize, empties: u8) -> f64 {
     1.0 + 0.09 * (threads as f64).log2() * ramp
 }
 
-/// 較正した nps を**深い局面の nps** へ直す率。
-///
-/// 較正は空き 22 で測る (1 回 1 秒未満で終わる)。空きが増えるとハッシュが
-/// 溢れて nps は落ちる — 1 スレッドで 22 → 30 が 24.9M → 20.5M。
+/// Ratio converting calibrated nps to deep-position nps. Calibration
+/// runs at 22 empties (sub-second); deeper positions overflow the table
+/// and lose nps (24.9M -> 20.5M single-threaded, 22 -> 30 empties).
 const DEEP_NPS_RATIO: f64 = 0.9;
 
-/// 中央値からのばらつきを見込む安全率。
-///
-/// 同じ空きでも問題によって 5.7 倍まで散る (中央値の 90% 分位が 2.7 倍、
-/// 95% 分位が 3.5 倍)。**外したときの損が対称でない** — 早めに入り損ねても
-/// 選択読みで指すだけだが、入って読み切れなければ時間切れ負けになる。
+/// Safety factor over the median: same-empties positions spread up to
+/// 5.7x. The loss is asymmetric — entering late just means a selective
+/// move, entering and not finishing means a flag fall.
 const SOLVE_SAFETY: f64 = 3.0;
 
-/// 読切に入ってから終局までに使う総時間 / 最初の 1 回。
-///
-/// 空き `E` で入ると、以降 `E-2`, `E-4`, … も読み切る。分岐因子 2 なので
-/// 1 + 1/4 + 1/16 + … ≒ 4/3。**入るという判断は残り全部への約束**なので、
-/// 最初の 1 回ぶんだけで測らない。
+/// Total solve time through the end of the game over the first solve.
+/// Entering at E commits to E-2, E-4, ... too; with branching factor 2
+/// the series sums to ~4/3, so the decision is priced for all of them.
 const SOLVE_TOTAL_FACTOR: f64 = 4.0 / 3.0;
 
-/// 空き `empties` を読み切るのに要する秒数の見込み (安全率込み)。
+/// Estimated seconds to solve at `empties` (safety factor included).
 pub fn solve_secs(empties: u8, nps: f64, threads: usize) -> f64 {
     if nps <= 0.0 {
         return f64::INFINITY;
@@ -272,10 +239,8 @@ pub fn solve_secs(empties: u8, nps: f64, threads: usize) -> f64 {
         * SOLVE_TOTAL_FACTOR
 }
 
-/// `budget_secs` 秒で読み切れる空きの上限 (`max` を超えない)。
-///
-/// 見込みが予算に収まる最大の空きを返す。1 つも収まらなければ 0
-/// (= 読切に入らない)。
+/// Largest solvable empties within `budget_secs` (capped at `max`);
+/// 0 if none fits (= don't enter the solve).
 pub fn solve_entry(budget_secs: f64, nps: f64, threads: usize, max: u8) -> u8 {
     (0..=max)
         .rev()
@@ -283,87 +248,62 @@ pub fn solve_entry(budget_secs: f64, nps: f64, threads: usize, max: u8) -> u8 {
         .unwrap_or(0)
 }
 
-/// 持ち時間があるときに読切へ入れる空きの上限。
-///
-/// **設定の読切では頭打ちにしない。** 較正が「入れる」と判断したところまで
-/// 入る。ここは「これ以上は現実的な時間で解けない」という物理的な壁で、
-/// 空き 32 の読切は 1 スレッドで 10 分を超える。
+/// Upper bound on the timed-play solve entry. Not capped by the
+/// configured value — calibration decides; this is the physical wall
+/// (32 empties exceeds 10 minutes single-threaded).
 const SOLVE_CEILING: u8 = 32;
 
-/// 持ち時間があるときの中盤の深さ。
-///
-/// **上限を置かない。期限だけが探索を止める。** 反復深化は期限が来れば
-/// 直前の段で返し、読切と選択読みも期限で打ち切って保険の手を指すように
-/// したので (`Engine::choose_within`)、深さで止める理由が無くなった。
-///
-/// 上限を残すと持ち時間を使い切れない。**実測で 5 分・10 分の対局が
-/// どちらも 28 秒しか使わず、到達深さも同じ 24 段だった** — 深さ 24 で
-/// 頭打ちになり、予算の 9 割を捨てていた。
-///
-/// 弱く指したいときは**持ち時間を付けない** (`clock_secs: None`)。そちらは
-/// 設定した深さがそのまま効く。持ち時間を付けたら全力、と割り切る。
+/// Midgame depth in timed play: uncapped, the deadline is the only
+/// stopper. A cap wasted 90% of the budget (5- and 10-minute games both
+/// used 28 seconds, both stuck at depth 24). To play weaker, play
+/// untimed — a clock means full strength.
 const DEPTH_BY_CLOCK: u32 = 60;
 
-/// **残り手数を数えるための読切の基準。**
+/// Solve reference for counting remaining moves:
+/// `(empties - ref) / 2` = our moves left.
 ///
-/// 「自分があと何手指すか」は `(空き − 読切) / 2` で数える。ここに**時間で
-/// 動く読切を入れてはいけない** — 入り口を深くしただけで残り手数の見積りが
-/// 減り、1 手の予算まで厚くなる。3 秒の対局で予算が 9% 厚いだけで勝率が
-/// 20pt 落ちた。
-///
-/// **設定の読切でもない。** 持ち時間で指すなら深さも読切も時間が決めるので、
-/// 強さの設定を分母に持ち込むと「時間で決める」と言いながら Lv が予算を
-/// 動かすことになる。数える物差しは固定でよい (値は従来の既定と同じ)。
+/// Never the time-derived entry — deepening the entry would shrink the
+/// move count and fatten every budget (a 9% fatter budget cost 20pt at
+/// 3-second controls). Not the configured entry either, or the strength
+/// setting would leak into the budget. A fixed yardstick is fine.
 const SOLVE_REF: u8 = 18;
 
-/// **読切が「ただ同然」になる空き。** 残り手数の基準をここから決める。
+/// The empties where solving becomes effectively free; the move-count
+/// reference derives from here.
 ///
-/// 固定値 (18) は較正値ではなく従来の既定の引き写しで、**機械の速さも
-/// スレッド数も持ち時間も見ていなかった**。読切がいくらで済むかはその
-/// 3 つで決まる。実測した 2 つの条件では 50 倍違った:
-///
-/// | 条件 | 空き 24-27 の 1 手 | 持ち時間に占める割合 |
-/// |---|---|---|
-/// | GGS 15 分 / 8 スレ | 1.2 秒 | 0.13% |
-/// | 自己対局 60 秒 / 1 スレ | 4.0 秒 | 6.7% |
-///
-/// 固定 28 を両方に当てると、実戦では狙いどおり序盤が厚くなり、計測台
-/// では 120 局中 10 局が時間切れになった (勝率 46.2%)。**同じ数字が
-/// 条件によって正解にも誤りにもなる**ので、固定値では決められない。
-///
-/// 見込みは [`solve_secs`] が既に持っている (較正した nps と読切ノード数)。
-/// **持ち時間の [`SOLVE_REF_SHARE`] で収まる空き**を基準にすると、
-/// 15 分 8 スレで 28、60 秒 1 スレで 21 になる。
-///
-/// **下限は従来値。** 上げるほど 1 手が厚くなるので、機械が遅いときに
-/// 従来より薄くならないようにする。上限は [`SOLVE_REF_MAX`]。
+/// The fixed 18 was a legacy default that ignored machine speed,
+/// threads and clock, yet the measured solve cost differs 50x between
+/// live play (15 min / 8T: 0.13% of the clock) and the bench
+/// (60s / 1T: 6.7%) — the same number is right in one and wrong in the
+/// other (a fixed 28 flagged 10 of 120 bench games). So derive it:
+/// the largest empties whose estimated solve ([`solve_secs`]) fits
+/// [`SOLVE_REF_SHARE`] of the clock — 28 at 15min/8T, 21 at 60s/1T.
+/// Floor = the legacy value; ceiling = [`SOLVE_REF_MAX`].
 pub fn auto_solve_ref(clock_secs: u64, nps: Option<f64>, threads: usize) -> u8 {
     let Some(nps) = nps else {
-        // 未較正は機械の速さを知らない。当て推量より従来値のほうがまし
+        // Uncalibrated = unknown machine speed; the legacy value beats
+        // a guess.
         return SOLVE_REF;
     };
     let budget = clock_secs as f64 * SOLVE_REF_SHARE;
     solve_entry(budget, nps, threads, SOLVE_REF_MAX).max(SOLVE_REF)
 }
 
-/// 読切 1 回に許す持ち時間の割合 (基準を決めるためだけの値)。
-///
-/// **これは読切に入る判断ではない** (そちらは [`SOLVE_GREED`] と
-/// [`SOLVE_MAX_SHARE`])。「ここから先は予算を取り置かなくてよい」と
-/// 見なす境目。5% は 15 分なら 45 秒 — 1 手ぶんの予算としては大きいが、
-/// 読切は**残り全部を 1 手で読む**ので、この程度は取り置いてよい。
+/// Clock share allowed for one solve — only for picking the reference,
+/// not the entry decision (that is [`SOLVE_GREED`] / [`SOLVE_MAX_SHARE`]).
+/// 5% of 15 minutes is 45s; fine, since a solve reads the whole rest of
+/// the game in one move.
 const SOLVE_REF_SHARE: f64 = 0.05;
 
-/// 基準の上限。読切の物理的な壁 ([`SOLVE_CEILING`]) より手前に置く。
-/// 基準が空きに近づくと残り手数が 1 に潰れ、配り方の違いが消える。
+/// Reference ceiling, kept below the physical wall ([`SOLVE_CEILING`]):
+/// as the reference nears the empty count, the move count collapses to
+/// 1 and pacing differences vanish.
 const SOLVE_REF_MAX: u8 = 30;
 
-/// **選択読みの帯を 1 手の予算から決める。**
-///
-/// 帯は読切の入り口の手前どこまでを確率つきで終局まで読むか
-/// ([`crate::midgame::selective_band`]) で、入り口が時間から決まる以上、
-/// 帯も時間から決まるのが筋。段は従来の設定値をそのまま写した
-/// (Lv10〜12 が 6、Lv13 が 8)。
+/// Derive the selective band from the per-move budget. The band extends
+/// probabilistic solving above the entry point
+/// ([`crate::midgame::selective_band`]); with the entry derived from
+/// time, the band should be too. Steps mirror the legacy settings.
 fn band_for(budget: f64) -> u8 {
     if budget < 12.0 {
         0
@@ -374,36 +314,27 @@ fn band_for(budget: f64) -> u8 {
     }
 }
 
-/// 読切に使ってよい時間 / **その手の予算**。
+/// Solve time allowance as a multiple of the move budget.
 ///
-/// **読切に別の予算を持たせない。** 「残り時間の N% を投じてよい」という
-/// 独立した枠を持つと、中盤の配分 (取り置きは `残り/2` まで) と食い違う。
-/// 実際 30 秒の対局で「24 秒使える」と判断し、長引いた局で残り 0.9 秒まで
-/// 削られた (固定の階段は 5.1 秒残していた)。
-///
-/// その手の予算に連動させれば、残り時間が減れば判定も自動で厳しくなる。
-/// 倍率が 1 より大きいのは、**読切は 1 手で終局まで見える**ので普通の手より
-/// 多く使う価値があるため。
+/// The solve gets no separate budget: an independent "N% of remaining"
+/// once decided 24s was fine in a 30-second game and left 0.9s on the
+/// clock. Tied to the move budget, the decision tightens automatically
+/// as time runs down; the multiplier exceeds 1 because a solve sees the
+/// game to the end.
 const SOLVE_GREED: f64 = 10.0;
 
-/// **読切に投じてよい残り時間の上限。**
-///
-/// 予算に倍率を掛けるだけだと、終盤で残り手数が 1 になったときに予算が
-/// 跳ね、残り時間を超える見込みでも「入れる」と判断してしまう (空き 30・
-/// 残り 20 秒で 50 秒ぶんの予算が出た)。**取り置きの上限 (`残り/2`) と
-/// 同じ値**にして、判断と確保を一致させる。
+/// Cap on remaining time a solve may take. The multiplier alone let a
+/// 1-move-left budget balloon past the remaining time (a 50s allowance
+/// with 20s left); capping at the reserve limit (`remaining/2`) keeps
+/// the decision consistent with what is actually available.
 const SOLVE_MAX_SHARE: f64 = 0.5;
 
-/// **配分を実際の使い方へ合わせる係数。**
-///
-/// 反復深化は期限まで粘らない (次の段が入らないと判断したら返る)。実測で
-/// 期限の 47% しか使わないので、その逆数ぶん期限を伸ばして帳尻を合わせる。
-/// 2.0 は 47% を 94% 相当に戻す値。
-///
-/// **時間切れの危険は増えない。** 期限は見張りが守っており (実測 1.02 倍)、
-/// 読切用の取り置きも `SOLVE_MAX_SHARE` も残り時間に対して掛かるので、
-/// 残りが減れば自動で締まる。
-/// 設定値を検算して返す。**環境変数があればそちらが勝つ** (掃引用)。
+/// Correction matching allocation to actual usage. Deepening returns at
+/// ~47% of its deadline, so the deadline is stretched by the inverse;
+/// 2.0 turns 47% into ~94%. No added flag risk: the watcher enforces
+/// the deadline (measured 1.02x) and every reserve scales with the
+/// remaining clock.
+/// Validate the setting; the environment variable wins (for sweeps).
 fn effective_budget_use(from_setting: f64) -> f64 {
     static ENV: std::sync::OnceLock<Option<f64>> = std::sync::OnceLock::new();
     let env = *ENV.get_or_init(|| {
@@ -422,44 +353,36 @@ fn effective_budget_use(from_setting: f64) -> f64 {
     }
 }
 
-/* ---------- ロスタイム中の指し方 ----------
+/* ---------- Playing in overtime ----------
 
-**もう負けている対局を、全滅させずに終わらせるだけ。** 深さに投資する
-意味は無い (結果が `min(minimal_loss, board_score)` で頭打ちになる) ので、
-どの定数も「読む」ではなく「確実に指し切る」側に倒してある。 */
+The game is already lost; the only job is finishing it without a
+wipeout. Depth has no value (the result is capped at
+`min(minimal_loss, board_score)`), so every constant leans toward
+"reliably finish" over "read". */
 
-/// ロスタイム中に空けておく秒数。
-///
-/// 見積りの外れ・通信の往復・終局処理のぶん。ここを踏み越えると
-/// `timeout_hard` = 最大差負けなので、手数割りの前に引いておく。
+/// Seconds kept free in overtime — estimate misses, round-trips,
+/// game-end handling. Crossing it is `timeout_hard`, the maximal loss.
 const OVERTIME_RESERVE: u64 = 5;
 
-/// ロスタイム中の 1 手の上限。
-///
-/// 残り手数で割ったうえで更に頭を押さえる。終盤に近いほど手数割りは
-/// 大きな値を出すが、**そこで長考しても結果は変わらない**。
+/// Per-move cap in overtime, applied after the per-move split — a long
+/// think cannot change the outcome.
 const OVERTIME_MAX_SECS: f64 = 1.5;
 
-/// ロスタイム中に読切へ入ってよい空き。
-///
-/// 読切は「1 手で残り全部を読む」ので、外したときの超過が桁で違う。
-/// 最小差負け (-2 前後) と全滅 (-64) の差はここで決まる。
+/// Solve entry allowed in overtime. A missed estimate overruns by an
+/// order of magnitude, and this is exactly the difference between a
+/// minimal loss and a -64 wipeout.
 const OVERTIME_SOLVE: u8 = 12;
 
-/// 猶予の無い対局で取り置きを何倍にするか。
-///
-/// 猶予があれば本時間切れは最小差負け、無ければ全滅負け。**失うものが
-/// 60 石違う**ので、同じ取り置きでは釣り合わない。GGS の既定は 2 分の
-/// 猶予付きなので、これが効くのは猶予を外した対局だけ。
+/// Reserve multiplier for graceless games: without grace, main-time
+/// expiry is a wipeout rather than a minimal loss — 60 discs apart —
+/// so the same reserve is not balanced. Only matters when grace is off.
 const NO_GRACE_RESERVE_MUL: u64 = 2;
 
-/// 1 手ぶんの計画を立てる。
-///
-/// 自分が指す残り手数はおおよそ空きマスの半分 (パスがあるので下振れする)。
-/// 予算に対する深さの対応は実測ベースのざっくりした階段で、深い設定ほど
-/// 1 手のコストが跳ねるため安全側に倒してある。
+/// Plan one move. Our remaining moves are roughly half the empties
+/// (passes push it down); the budget-to-depth ladder is measured and
+/// leans safe because deeper settings cost sharply more per move.
 pub fn plan(s: Situation, base: Levels, pace: Pace) -> Plan {
-    // 深さで決める: 時間を見ずに設定どおり読む
+    // Fixed depth: read as configured, ignore the clock.
     if pace == Pace::Depth {
         return Plan {
             depth: base.depth,
@@ -476,60 +399,47 @@ pub fn plan(s: Situation, base: Levels, pace: Pace) -> Plan {
             cap: None,
         };
     };
-    /* ---------- ロスタイム (GGS の overtime) ----------
+    /* ---------- Overtime (GGS) ----------
 
-    **入った時点で、その対局はもう負けている。**
+    Entering overtime means the game is already lost. GGS runs a single
+    clock; on main-time expiry the server sets `timeout_soft` and adds
+    the grace back onto it. Othello is a soft-timeout game, so from that
+    point the result is capped at `min(minimal_loss, board_score)` — a
+    win is unreachable. Overtime is, per COsClock, "additional time to
+    avoid a wipeout"; exhausting it too is `timeout_hard`, the maximal
+    loss. The only job here is to reliably finish the remaining moves.
 
-    GGS の時計は 1 本しかない (`GAME_Clock.C::Update`)。本時間を切らすと
-    サーバーは `timeout_soft` を立て、そのうえで `now += ext` として時計を
-    戻す。オセロは soft-timeout の競技なので、そこから何をしても
-
-        score = min( minimal_loss, board_score )
-
-    で頭打ちになる。**勝ちには絶対に戻らない。** ロスタイムは挽回のための
-    持ち時間ではなく、`COsClock` の言葉どおり "additional time to avoid a
-    wipeout" — **全滅 (-64) を避けるためだけの時間**で、これも切らすと
-    `timeout_hard` = 最大差負けになる。
-
-    だからここでやることは 1 つしかない。**残りの手を確実に指し切る。**
-    深く読む価値は無く (結果は頭打ち)、読み過ぎは全滅に直結する。
-
-    なお **`ext_secs` は設定値であって残量ではない**。表示の第 3 項は
-    `ext_set` をそのまま出しているので、対局中ずっと `02:00` から動かない。
-    残量はロスタイム中も第 1 項 (`secs`) に出る。 */
+    Note `ext_secs` is the configured grace, not the remainder: the
+    display's third field never moves; the remainder shows in the first
+    field even during overtime. */
     if s.in_overtime {
         let moves = ((s.empties as f64 / 2.0).ceil() as u64).max(1);
         let pool = secs.saturating_sub(OVERTIME_RESERVE) as f64;
         let per = (pool / moves as f64).min(OVERTIME_MAX_SECS);
         return Plan {
             depth: DEPTH_BY_CLOCK,
-            // 読切は「1 手で残り全部」なので、ここで踏むと落ちるときに
-            // 全滅まで落ちる。浅い入り口に留める
+            // A solve reads everything at once; a miss here falls all
+            // the way to the wipeout. Keep the entry shallow.
             solve: base.solve.min(OVERTIME_SOLVE),
             band: 0,
             cap: Some(Duration::from_secs_f64(per.max(0.05))),
         };
     }
     let avail = secs;
-    /* 自分が指す残り手数 (最低 1)。終盤の完全読みは 1 手で全部読むので、
-    読切に入る手前までを予算配分の対象にする。
+    /* Our remaining moves (at least 1); the solve reads everything in
+    one move, so only the span above the entry gets budgeted.
 
-    **設定の読切から数える。時間で動く読切から数えてはいけない。** そう
-    すると読切の入り口を深くしただけで残り手数の見積りが減り、1 手の予算
-    まで厚くなる。3 秒の対局で**予算が 9% 厚いだけで勝率が 20pt 落ちた**
-    (`slow` = even の 1.18 倍が 0.0% だったのと同じ現象)。配分の傾きを
-    動かすのは [`Pace`] の仕事で、読切の入り口の判断が漏れてはいけない。
-
-    `reserve` も同じ理由で較正値を入れない。900 秒の対局なら取り置きが
-    20 秒から 183 秒に増え、中盤の配分が 2 割薄くなる。 */
+    Count from the fixed reference, never the time-derived entry:
+    deepening the entry would shrink the count and fatten every budget
+    (9% fatter cost 20pt at 3-second controls). Pacing slope belongs to
+    [`Pace`] alone. `reserve` stays uncalibrated for the same reason —
+    a calibrated reserve would thin the midgame allocation by 20% in a
+    900-second game. */
     let solve_ref = s.solve_ref.value(avail, s.nps, s.threads);
     let my_moves = ((s.empties.saturating_sub(solve_ref) as f64 / 2.0).ceil() as u64).max(1);
-    /* 完全読み 1 回分を確保したうえで中盤に配る。
-
-    **猶予の無い対局では厚く取る。** 猶予があれば本時間を切らしても
-    最小差負けで済むが (`min(minimal_loss, board_score)`)、無ければ
-    そのまま全滅負けになる。同じ 1 秒の超過で失うものが 60 石違うので、
-    同じ取り置きでは釣り合わない。 */
+    /* Reserve one solve's worth, then allocate the midgame. Graceless
+    games reserve more: the same one-second overrun costs 60 more discs
+    without grace. */
     let want = if s.grace_secs == 0 {
         s.reserve_secs * NO_GRACE_RESERVE_MUL
     } else {
@@ -538,64 +448,44 @@ pub fn plan(s: Situation, base: Levels, pace: Pace) -> Plan {
     let reserve = want.min(avail / 2);
     let pool = avail.saturating_sub(reserve) as f64;
     let even = pool / my_moves as f64;
-    /* 配り方。序盤は手数が多いので、厚くするほど 1 手が長くなる。
-
-    **`even` はもう選べないが、基準としては残す。** 係数はこれに掛かる形で
-    書いてあり、式を書き換えると過去の測定と比べられなくなる。 */
+    /* Pacing. `even` is no longer selectable but stays as the baseline
+    the coefficients multiply; rewriting the formula would orphan every
+    past measurement. */
     let root = (my_moves as f64).sqrt();
     let budget = match pace {
         Pace::Fast => even * (0.6 + 0.4 / root),
         Pace::Tail(a) => even * (a + (1.0 - a) / root),
-        // Depth は先に返している
+        // Depth returned earlier.
         _ => even,
     };
-    /* **反復深化が予算を使い切れないぶんを補う。**
-
-    ここまでの `budget` は「1 手にこれだけ使ってよい」という配分だが、
-    探索は期限まで粘れない。次の段が期限に収まらないと判断した時点で
-    返るためで、実測すると**期限の 47% しか使わない**。
-
-    結果、GGS のレート戦で 15 分のうち 6〜9 分を残して終わっていた
-    (実測: 自分 40〜46% に対し相手 98〜99%)。配分が薄いのではなく、
-    配ったぶんを使い切れていなかった。
-
-    期限を伸ばせば、その 47% が伸びたぶんに比例して増える。**深く読める
-    ようになるのであって、無駄に待つわけではない**。 */
+    /* Compensate for deepening's underspend: the search returns at
+    ~47% of its deadline, which left 6-9 of 15 minutes unused in rated
+    games (we 40-46%, opponents 98-99%). Stretching the deadline scales
+    that 47% proportionally — it buys depth, not waiting. */
     let budget = budget * effective_budget_use(s.budget_use);
-    /* **残っている以上は約束しない。**
-
-    `BUDGET_USE` で期限を伸ばすと、残り手数が 1 になったときに予算が
-    取り置きを除いた残り全部の 2 倍になる。使い切れば時間切れなので、
-    ここで頭を押さえる。
-
-    **割合 (`残り × 0.25` など) で押さえてはいけない。** 試したところ
-    10 分・空き 30 のような現実的な場面で上限が先に効いてしまい、配り方
-    (`Pace`) の違いが消えた。取り置きは別に確保してあるので、上限は
-    「配れるぶんの全部」でよい。 */
+    /* Never promise more than remains: with `BUDGET_USE`, one move
+    left could budget twice the available time. Cap at "everything
+    allocatable" — a fractional cap (remaining x 0.25) kicked in too
+    early in realistic games and erased the pacing differences. */
     let budget = budget.min(pool);
     let budget = if s.max_move_secs > 0 {
         budget.min(s.max_move_secs as f64)
     } else {
         budget
     };
-    // 深さは上限として渡す (実際にどこまで行けるかは期限が決める)。
-    // 読切だけは期限が効かないので、入り口を残り時間から決める
+    // Depth is passed as a cap (the deadline decides the reach); only
+    // the solve entry must be derived from the clock.
     let solve = match s.nps {
-        /* **較正済み: 残り時間で読み切れる空きを逆算する。**
-
-        設定の読切 (`base.solve`) では頭打ちにしない。深さと同じで、
-        **持ち時間があるときに人が決める値ではない** — 較正は「30 空きから
-        入れる」と判断しているのに設定が 26 だと、余力を捨てることになる。
-        実測で 30 分の対局でも入り口が 26 のままだった。
-
-        上限は盤の空き数 (`SOLVE_CEILING`)。弱く指したいときは持ち時間を
-        付けない (そちらは設定がそのまま効く)。 */
+        /* Calibrated: derive the solvable empties from the remaining
+        clock, uncapped by the configured value — with a clock, this is
+        not a human's number to set (a 30-minute game once stayed stuck
+        at the configured 26). Ceiling is the physical wall. */
         Some(nps) => {
             let b = (budget * SOLVE_GREED).min(avail as f64 * SOLVE_MAX_SHARE);
             solve_entry(b, nps, s.threads, SOLVE_CEILING)
         }
-        // **未較正: 固定の階段。** 機械の速さを知らないので当て推量になる。
-        // 遅い機械では設定の読切がそのまま通り、読み切れずに時間切れになる
+        // Uncalibrated: the fixed ladder. A guess — on slow machines
+        // the configured entry passes through and can flag.
         None if avail < 20 => base.solve.min(14),
         None if avail < 60 => base.solve.min(20),
         None => base.solve,
@@ -603,7 +493,7 @@ pub fn plan(s: Situation, base: Levels, pace: Pace) -> Plan {
     let band = if base.auto_band {
         band_for(budget)
     } else {
-        // 旧挙動: 設定の帯を、予算があるときだけ使う
+        // Legacy: the configured band, only when there is budget.
         if budget >= 12.0 {
             base.band
         } else {
@@ -611,7 +501,7 @@ pub fn plan(s: Situation, base: Levels, pace: Pace) -> Plan {
         }
     };
     Plan {
-        // **深さで止めない。** 期限が決める (読切も打ち切れるようにした)
+        // No depth cap: the deadline decides (solves are abortable now).
         depth: DEPTH_BY_CLOCK,
         solve,
         band,
@@ -646,7 +536,7 @@ mod tests {
         .as_secs_f64()
     }
 
-    /// 深さ固定は期限を持たない。
+    /// Fixed depth carries no deadline.
     #[test]
     fn depth_has_no_deadline() {
         let p = plan(
@@ -663,33 +553,33 @@ mod tests {
         assert_eq!(p.depth, BASE.depth);
     }
 
-    /// **既定は序盤を薄く配る。**
-    ///
-    /// 残り手数で等分する版 (`Tail(1.0)`) より短くなっていなければ、
-    /// 落とした `even` と同じものになってしまう。実測では厚くするほど
-    /// 弱く、3 秒の対局で 1.18 倍厚い `slow` が勝率 0.0% だった。
+    /// The default allocates thin early moves: it must stay below the
+    /// equal split (`Tail(1.0)`), or it would equal the removed `even`.
+    /// Thicker measured weaker (a 1.18x-thicker `slow` scored 0.0%).
     #[test]
     fn the_default_is_thin_in_the_opening() {
         let even = cap_secs(600, 60, Pace::Tail(1.0));
         let fast = cap_secs(600, 60, Pace::Fast);
-        assert!(fast < even, "既定 {fast} < 等分 {even}");
+        assert!(
+            fast < even,
+            "default {fast} must be below equal split {even}"
+        );
     }
 
-    /// **落とした語は既定へ落ちる。** 古い設定ファイルに `slow` が
-    /// 残っていても、害のある配り方へ戻らない。
+    /// Removed words fall to the default; an old config with `slow`
+    /// must not resurrect a harmful scheme.
     #[test]
     fn dropped_names_fall_back_to_the_default() {
-        for s in ["slow", "even", "", "なにか"] {
+        for s in ["slow", "even", "", "something"] {
             assert_eq!(Pace::parse(s), Pace::Fast, "{s:?}");
         }
         assert_eq!(Pace::parse("depth"), Pace::Depth);
         assert_eq!(Pace::parse("tail:0.4"), Pace::Tail(0.4));
     }
 
-    /// 時計が 0 を指していたら、猶予の設定があっても即座に指す。
-    ///
-    /// **猶予は自分で使うものではない。** サーバーが時計へ足してくれるまで
-    /// 待つ形になるので、ここで読むと足される前に全滅側へ倒れる。
+    /// At zero on the clock, move immediately even with grace
+    /// configured: grace is added by the server, and thinking here
+    /// falls toward the wipeout before it arrives.
     #[test]
     fn a_zero_clock_moves_at_once() {
         let p = plan(
@@ -705,8 +595,7 @@ mod tests {
         assert!(p.cap.unwrap() <= Duration::from_millis(100));
     }
 
-    /// **持ち時間が減っても予算は 0 にならない。** 0 だと反復深化が
-    /// 1 段も回らずに手が返らなくなる。
+    /// A shrinking clock never budgets zero — zero would return no move.
     #[test]
     fn budget_never_reaches_zero() {
         for secs in [1, 2, 5, 10] {
@@ -714,54 +603,54 @@ mod tests {
         }
     }
 
-    /// **`Tail(0.6)` は既定と同じ値になる。**
-    ///
-    /// 係数の式が既定と地続きであることを固定する — ずれると、傾きをまた
-    /// 疑ったときに過去の測定と比べられなくなる。`Tail(1.0)` は落とした
-    /// 「残り手数で等分」に相当し、これも基準として残っている。
+    /// `Tail(0.6)` must equal the default, pinning the coefficient
+    /// family to the same formula; `Tail(1.0)` remains the equal-split
+    /// baseline.
     #[test]
     fn tail_is_continuous_with_the_default() {
-        /* **空きが少ない側は外した。** `budget_use` を上げると、残り手数が
-        1〜2 になったところで「残っている以上は約束しない」上限が先に効き、
-        どの配り方も同じ値に潰れる。**式が壊れたのではなく上限が勝っている
-        だけ**なので、式の関係は上限が効かない範囲で見る。 */
+        /* Low-empties cases excluded: with 1-2 moves left the
+        never-promise-more-than-remains cap flattens every scheme to
+        the same value — the cap winning, not the formula breaking. */
         for empties in [60u8, 44] {
             let f = cap_secs(600, empties, Pace::Fast);
             assert!((cap_secs(600, empties, Pace::Tail(0.6)) - f).abs() < 1e-9);
-            // 等分は既定より厚い (落とした側の式が生きていることの確認)
+            // Equal split is thicker than the default (the removed
+            // baseline formula still works).
             assert!(cap_secs(600, empties, Pace::Tail(1.0)) > f);
         }
-        /* 残り 2 手では上限が勝つ (配り方によらず配れるぶん全部)。**空きは
-        `SOLVE_REF` から数える** — 残り手数の分母は設定ではなく固定の基準に
-        したので、ここも基準 + 4 空き = 2 手で見る。 */
+        /* With 2 moves left the cap wins regardless of scheme. Count
+        empties from SOLVE_REF (the fixed reference): reference + 4
+        empties = 2 moves. */
         let two_left = SOLVE_REF + 4;
         let late = cap_secs(600, two_left, Pace::Fast);
         assert!((cap_secs(600, two_left, Pace::Tail(1.0)) - late).abs() < 1e-9);
     }
 
-    /// **基準は機械と持ち時間から決まる。**
-    ///
-    /// 同じ数字が条件によって正解にも誤りにもなる。実測 (自己対局 120 局)
-    /// では、60 秒 1 スレに固定 28 を当てると 10 局が時間切れになった。
+    /// The reference derives from machine and clock; the same number is
+    /// right in one condition and wrong in another (a fixed 28 flagged
+    /// 10 of 120 bench games at 60s/1T).
     #[test]
     fn the_reference_follows_the_machine() {
-        // GGS の実戦: 15 分・8 スレ・130 M ノード/秒
+        // Live GGS: 15 min, 8 threads, 130M nodes/sec.
         let live = auto_solve_ref(900, Some(130e6), 8);
-        // 計測台: 60 秒・1 スレ・13.8 M ノード/秒
+        // Bench: 60s, 1 thread, 13.8M nodes/sec.
         let bench = auto_solve_ref(60, Some(13.8e6), 1);
         assert!(
             live > bench,
-            "実戦のほうが厚く取れるはず ({live} vs {bench})"
+            "live play should afford a deeper reference ({live} vs {bench})"
         );
-        assert!((26..=30).contains(&live), "実戦の基準が外れている: {live}");
+        assert!(
+            (26..=30).contains(&live),
+            "live reference out of range: {live}"
+        );
         assert!(
             (18..=24).contains(&bench),
-            "計測台の基準が外れている: {bench}"
+            "bench reference out of range: {bench}"
         );
     }
 
-    /// **従来より薄くしない。** 遅い機械や短い持ち時間で基準が下がると、
-    /// 1 手の予算が従来を下回る。下限は従来値に置く。
+    /// Never thinner than the legacy value: on slow machines a lower
+    /// reference would shrink every move budget below what it was.
     #[test]
     fn the_reference_never_goes_below_the_old_default() {
         for (clock, nps, threads) in [(3u64, 1e6, 1), (10, 5e5, 1), (60, 1e5, 2)] {
@@ -769,20 +658,20 @@ mod tests {
         }
     }
 
-    /// 較正していない機械は当て推量しない (従来値のまま)。
+    /// Uncalibrated machines get no guess (legacy value stands).
     #[test]
     fn without_calibration_the_reference_is_the_old_default() {
         assert_eq!(auto_solve_ref(900, None, 8), SOLVE_REF);
     }
 
-    /// 長い持ち時間ほど基準は上がるが、上限は超えない。
+    /// Longer clocks raise the reference, but never past the ceiling.
     #[test]
     fn the_reference_is_capped() {
         assert!(auto_solve_ref(60, Some(130e6), 8) <= auto_solve_ref(1800, Some(130e6), 8));
         assert!(auto_solve_ref(36_000, Some(130e6), 8) <= SOLVE_REF_MAX);
     }
 
-    /// 係数が小さいほど序盤は薄い。
+    /// Smaller coefficients allocate thinner early moves.
     #[test]
     fn smaller_tail_is_thinner_in_the_opening() {
         let a = cap_secs(600, 60, Pace::Tail(0.6));
@@ -790,11 +679,10 @@ mod tests {
         assert!(b < a, "0.25 {b} < 0.6 {a}");
     }
 
-    /// **較正が動かしてよいのは読切の入り口だけ。**
-    ///
-    /// 1 手の予算 (`cap`) にまで手が届くと配分の傾きが変わり、較正の効果と
-    /// 混ざる。**実測で混ざった** — 残り手数を較正後の読切から数えたら
-    /// 1 手が 9% 厚くなり、3 秒の対局で勝率が 20pt 落ちた。
+    /// Calibration may move only the solve entry. Reaching into the
+    /// move budget changes the pacing slope and contaminates the
+    /// measurement — it did: counting moves from the calibrated entry
+    /// fattened budgets 9% and cost 20pt at 3-second controls.
     #[test]
     fn calibration_does_not_move_the_move_budget() {
         for secs in [3u64, 10, 30, 600] {
@@ -809,17 +697,15 @@ mod tests {
                 assert_eq!(
                     plan(sit(None), BASE, Pace::Fast).cap,
                     plan(sit(Some(90e6)), BASE, Pace::Fast).cap,
-                    "{secs} 秒・空き {empties} で 1 手の予算が動いている"
+                    "move budget moved at {secs}s, {empties} empties"
                 );
             }
         }
     }
 
-    /// **読切の見込みが残り時間を超える判断をしない。**
-    ///
-    /// 目的は使い切りの防止なので、ここが破れると機能そのものが無意味に
-    /// なる。予算に倍率を掛けるだけの版はここで落ちた (空き 30・残り
-    /// 20 秒で 50 秒ぶんの予算が出た)。
+    /// Never approve a solve whose estimate exceeds the remaining
+    /// clock — that is the whole point. The multiplier-only version
+    /// failed here (a 50s allowance with 20s left).
     #[test]
     fn never_promises_more_than_the_clock() {
         for &nps in &[6e6, 23e6, 90e6] {
@@ -843,8 +729,8 @@ mod tests {
                         let need = solve_secs(p.solve, nps, threads);
                         assert!(
                             need <= secs as f64,
-                            "nps {nps:e}・{threads}T・{secs} 秒・空き {empties}: \
-                             空き {} の読切に {need:.1} 秒かかる見込みなのに入ろうとしている",
+                            "nps {nps:e}, {threads}T, {secs}s, {empties} empties: \
+                             entering a solve estimated at {need:.1}s for {} empties",
                             p.solve
                         );
                     }
@@ -853,7 +739,8 @@ mod tests {
         }
     }
 
-    /// **残り時間が減れば入り口は浅くなる。** 予算に連動している証拠。
+    /// The entry gets shallower as the clock shrinks — proof it tracks
+    /// the budget.
     #[test]
     fn the_entry_follows_the_clock() {
         let at = |secs| {
@@ -870,22 +757,21 @@ mod tests {
             )
             .solve
         };
-        assert!(at(3) <= at(10), "3 秒 {} <= 10 秒 {}", at(3), at(10));
-        assert!(at(10) <= at(60), "10 秒 {} <= 60 秒 {}", at(10), at(60));
-        // **設定の読切では頭打ちにしない。** 時間があれば設定より深く入る
+        assert!(at(3) <= at(10), "3s {} <= 10s {}", at(3), at(10));
+        assert!(at(10) <= at(60), "10s {} <= 60s {}", at(10), at(60));
+        // Not capped by the configured entry: with time, go deeper.
         assert!(
             at(600) > BASE.solve,
-            "600 秒 {} > 設定 {} (較正が決める)",
+            "600s {} > configured {} (calibration decides)",
             at(600),
             BASE.solve
         );
-        assert!(at(600) <= SOLVE_CEILING, "物理的な壁は超えない");
+        assert!(at(600) <= SOLVE_CEILING, "never past the physical wall");
     }
 
-    /// **持ち時間があれば深さの上限は外れる。**
-    ///
-    /// 期限だけが探索を止める。上限を残すと持ち時間を使い切れず、実測で
-    /// 5 分と 10 分の対局がどちらも 28 秒しか使わなかった。
+    /// With a clock the depth cap comes off; only the deadline stops
+    /// the search (a cap once left 5- and 10-minute games both using
+    /// 28 seconds).
     #[test]
     fn a_clock_lifts_the_depth_cap() {
         let timed = plan(
@@ -899,12 +785,12 @@ mod tests {
         );
         assert!(timed.depth > BASE.depth, "{} > {}", timed.depth, BASE.depth);
 
-        // 持ち時間なしは設定どおり (弱く指すための道)
+        // Untimed: as configured (the way to play weaker).
         let untimed = plan(Situation::default(), BASE, Pace::Fast);
         assert_eq!(untimed.depth, BASE.depth);
         assert!(untimed.cap.is_none());
 
-        // 深さ固定も設定どおり (研究用)
+        // Fixed depth: as configured (study).
         let fixed = plan(
             Situation {
                 clock_secs: Some(600),
@@ -916,7 +802,7 @@ mod tests {
         assert_eq!(fixed.depth, BASE.depth);
     }
 
-    /// 上限を渡したらそこで頭打ちになる。
+    /// A per-move cap caps the budget.
     #[test]
     fn max_move_caps_the_budget() {
         let p = plan(
@@ -932,7 +818,8 @@ mod tests {
         assert!(p.cap.unwrap() <= Duration::from_secs(3));
     }
 
-    /// ロスタイム中の 1 手 (残りは第 1 項に出る。第 3 項は設定値)。
+    /// One overtime move (the remainder shows in the clock's first
+    /// field; the third field is the configured grace).
     fn ot_plan(left: u64, empties: u8) -> Plan {
         plan(
             Situation {
@@ -947,9 +834,9 @@ mod tests {
         )
     }
 
-    /// **ロスタイム中は読まない。** 結果が `min(minimal_loss, board_score)`
-    /// で頭打ちなので、深さに投資しても勝ちには戻らない。同じ残り時間でも
-    /// 本時間なら遠慮なく使ってよく、そこがはっきり分かれる。
+    /// No deep thinking in overtime — the result is capped, depth buys
+    /// nothing. The same remaining seconds on main time may be spent
+    /// freely; the two must clearly differ.
     #[test]
     fn overtime_is_far_cheaper_than_main_time() {
         let ot = ot_plan(120, 40).cap.unwrap();
@@ -965,11 +852,11 @@ mod tests {
         .cap
         .unwrap();
         assert!(ot <= Duration::from_secs_f64(OVERTIME_MAX_SECS));
-        assert!(ot < main, "ロスタイムなのに本時間と同じだけ使っている");
+        assert!(ot < main, "overtime spends like main time");
     }
 
-    /// **設定から来る値を信じきらない。** 壊れた値で対局を止めるより、
-    /// 既定で動くほうがよい。
+    /// Never fully trust setting-sourced values; running on the default
+    /// beats stopping the game on a broken value.
     #[test]
     fn a_broken_budget_use_falls_back_to_the_default() {
         let with = |v: f64| {
@@ -987,14 +874,18 @@ mod tests {
             .unwrap()
         };
         let good = with(2.5);
-        assert_eq!(with(0.0), good, "0 が既定へ倒れていない");
-        assert_ne!(with(1.0), good, "1.0 が既定と同じになっている");
-        assert_eq!(with(-1.0), good, "負の値が既定へ倒れていない");
-        assert_eq!(with(f64::NAN), good, "NaN が既定へ倒れていない");
-        assert_eq!(with(f64::INFINITY), good, "∞ が既定へ倒れていない");
+        assert_eq!(with(0.0), good, "0 must fall to the default");
+        assert_ne!(with(1.0), good, "1.0 must differ from the default");
+        assert_eq!(with(-1.0), good, "negatives must fall to the default");
+        assert_eq!(with(f64::NAN), good, "NaN must fall to the default");
+        assert_eq!(
+            with(f64::INFINITY),
+            good,
+            "infinity must fall to the default"
+        );
     }
 
-    /// 大きくするほど 1 手を長く取る。
+    /// Larger values budget longer moves.
     #[test]
     fn a_larger_budget_use_thinks_longer() {
         let with = |v: f64| {
@@ -1015,23 +906,23 @@ mod tests {
         assert!(with(2.0) < with(3.0));
     }
 
-    /// **全滅させない。** 残りの手を全部指し切っても猶予を使い切らない。
-    /// 使い切ると `timeout_hard` = 最大差負けで、最小差負けとの差は 60 石。
+    /// No wipeout: playing out every remaining move must not exhaust
+    /// the grace (`timeout_hard` costs 60 discs more than a minimal loss).
     #[test]
     fn overtime_finishes_the_game_without_a_wipeout() {
         for grace in [120u64, 60, 30] {
             let mut left = grace as f64;
-            // 空き 60 から 1 手ずつ (自分の手番はおよそ半分だが、全部
-            // 自分が指す最悪の場合で見る)
+            // From 60 empties one move at a time, worst case: we play
+            // every move ourselves.
             for e in (0..=60u8).rev() {
                 let used = ot_plan(left.max(0.0) as u64, e).cap.unwrap().as_secs_f64();
                 left -= used;
-                assert!(left > 0.0, "猶予 {grace}s・空き {e} で使い切った");
+                assert!(left > 0.0, "grace {grace}s exhausted at {e} empties");
             }
         }
     }
 
-    /// 猶予が残り少なくなるほど 1 手も短くする。
+    /// Moves shorten as the grace runs down.
     #[test]
     fn overtime_shrinks_as_the_grace_runs_down() {
         let much = ot_plan(120, 40).cap.unwrap();
@@ -1039,8 +930,8 @@ mod tests {
         assert!(little < much);
     }
 
-    /// **猶予の無い対局では慎重に配る。** 本時間切れが最小差負けで
-    /// 済まず、そのまま全滅負けになるため。
+    /// Graceless games allocate cautiously: main-time expiry is a
+    /// wipeout, not a minimal loss.
     #[test]
     fn no_grace_means_a_thicker_reserve() {
         let budget = |grace: u64| {
@@ -1057,10 +948,13 @@ mod tests {
             .cap
             .unwrap()
         };
-        assert!(budget(0) < budget(120), "猶予の有無で配分が同じ");
+        assert!(
+            budget(0) < budget(120),
+            "grace on/off must change the allocation"
+        );
     }
 
-    /// 読切は 1 手で残り全部を読むので、ロスタイム中は浅い入り口に留める。
+    /// A solve reads everything at once; overtime keeps the entry shallow.
     #[test]
     fn overtime_keeps_the_solver_shallow() {
         let p = ot_plan(120, 20);
@@ -1080,21 +974,19 @@ mod clock_usage_tests {
         auto_band: false,
     };
 
-    /// **1 局を通して持ち時間をどれだけ使うか。**
-    ///
-    /// 反復深化は期限まで粘らず、実測で**期限の 47%** で返る。その率を当てて
-    /// 15 分の対局を最後まで進め、使用率と「尽きないこと」を見る。
-    ///
-    /// GGS のレート戦では 40〜46% しか使えておらず、相手 (98〜99%) に対して
-    /// 半分以下だった。`BUDGET_USE` はここを埋めるための係数。
+    /// Whole-game clock utilization. Deepening returns at ~47% of its
+    /// deadline; simulate a full 15-minute game at that rate and check
+    /// both utilization and that time never runs out (rated games used
+    /// to finish at 40-46% vs opponents' 98-99%; `BUDGET_USE` closes
+    /// that gap).
     fn play_out(use_ratio: f64) -> (f64, bool) {
         let mut left = 900.0_f64;
         let mut empties = 48u8;
         let mut spent = 0.0;
         let mut ran_out = false;
-        /* **読切に入る手前までを見る。** そこから先は 1 回読み切れば
-        以降はほぼ無料 (実戦でも 4〜22 秒だった)。`BUDGET_USE` が効くのも
-        この区間なので、ここでの使用率が問題になる。 */
+        /* Only the span above the solve entry matters: past it one
+        solve makes the rest nearly free, and BUDGET_USE only acts on
+        this span. */
         while empties > BASE.solve {
             let p = plan(
                 Situation {
@@ -1114,7 +1006,7 @@ mod clock_usage_tests {
                 ran_out = true;
                 break;
             }
-            // 自分と相手で 1 手ずつ進む
+            // One move each for us and the opponent.
             empties = empties.saturating_sub(2);
         }
         (spent / 900.0, ran_out)
@@ -1123,28 +1015,27 @@ mod clock_usage_tests {
     #[test]
     fn the_clock_is_actually_used() {
         let (rate, out) = play_out(0.47);
-        println!("  中盤で使う割合 (実測 47%):        {:.0}%", rate * 100.0);
+        println!("  midgame spend rate (measured 47%): {:.0}%", rate * 100.0);
         println!(
-            "  BUDGET_USE を入れる前の相当値:     {:.0}%",
+            "  equivalent before BUDGET_USE:      {:.0}%",
             play_out(0.235).0 * 100.0
         );
         println!(
-            "  期限どおり使い切った場合:          {:.0}%",
+            "  if deadlines were fully used:      {:.0}%",
             play_out(1.0).0 * 100.0
         );
-        assert!(!out, "持ち時間を使い切った");
+        assert!(!out, "ran out of clock");
         assert!(
             rate > 0.60,
-            "1 局で持ち時間の {:.0}% しか使えていない",
+            "only {:.0}% of the clock used over a game",
             rate * 100.0
         );
     }
 
-    /// **期限まで粘っても尽きない。** 見積りが外れて毎手いっぱいまで
-    /// 使った場合でも、時間切れにならないこと。
+    /// Even spending every deadline in full must not flag.
     #[test]
     fn even_full_use_does_not_run_out() {
         let (_, out) = play_out(1.0);
-        assert!(!out, "期限どおり使うと時間切れになる");
+        assert!(!out, "using full deadlines flags");
     }
 }

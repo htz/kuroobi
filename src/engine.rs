@@ -1,8 +1,9 @@
-//! GUI・CLI・プロトコル実装が共用するエンジンセッション層。
+//! Engine session layer shared by the GUI, CLI and protocol frontends.
 //!
-//! 対局路 (ggs) と同じ選択則 — 中盤 NNUE 探索 / 選択帯 / 完全読み — を
-//! 1 つの構造体にまとめ、局面を渡すと着手と評価値を返す。探索は同期実行
-//! なので、UI から使う側はワーカースレッドに載せて呼ぶこと。
+//! Bundles the same selection policy as play (midgame NNUE search /
+//! selective band / perfect solve) into one struct: give it a position,
+//! get a move and a value. Search runs synchronously; UI callers should
+//! invoke it on a worker thread.
 
 use std::path::PathBuf;
 
@@ -14,20 +15,18 @@ use crate::pattern::EGAROUCID_PATTERNS;
 use crate::solver::{final_score, EndSolverMode, Solver};
 use crate::{Board, Position};
 
-/// 中盤探索は「探索の途中で終局まで読み切った」ことを石差 × 1000 で
-/// 表す (ヒューリスティック評価より必ず優先されるように)。エンジンの
-/// 外へ返す値は石差のスケールへ戻す。学習 (learn.rs) が定石に書く値も
-/// この出口を通るので、スケールが混ざらない。
+/// Convert a search value to disc scale.
 ///
-/// あわせて石差の範囲 (±64) に収める。中断された探索は番兵 (i32 の極値)
-/// を返し、それが素通りすると「+2147483600 石」のような値が画面や定石に
-/// 出る。石差はどうやっても ±64 なので、外へ出る前にここで潰す。
-/// 探索の値を石差へ直す。
+/// The midgame search encodes "solved to the end mid-search" as discs x
+/// 1000 (so it always outranks heuristic values); everything leaving the
+/// engine returns to disc scale here, including values learn.rs writes
+/// into the book. Also clamps to +/-64: aborted searches return sentinel
+/// extremes that would otherwise surface as absurd on-screen values.
 ///
-/// **非数をここで 0 にするのは最後の砦であって、通ってよい道ではない。**
-/// 中断値 (`-inf`) が漏れてくると、画面には「+0.00」という**もっともらしい
-/// 数字**が出る。実戦でそれが起き、値と手が食い違ったまま X 打ちを指した
-/// (原因は反復深化が中断した段を採っていたこと)。**気付けるように数える。**
+/// Rounding non-finite values to 0 here is a last-resort guard, not an
+/// accepted path — a leaked abort sentinel shows up as a plausible
+/// "+0.00" (which happened in a rated game, paired with an X-square
+/// blunder). Hence the counter: it must stay at zero.
 fn stone_scale(v: f32) -> f32 {
     let v = if v.abs() >= 999.0 { v / 1000.0 } else { v };
     if v.is_finite() {
@@ -38,26 +37,23 @@ fn stone_scale(v: f32) -> f32 {
     }
 }
 
-/// `stone_scale` が非数を丸めた回数。**0 でなければどこかが壊れている。**
+/// Times `stone_scale` rounded a non-finite value. Non-zero means something is broken.
 pub static NON_FINITE_VALUES: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
 
-/// 先読みの深さの上限。**期限が決めるので実質無制限。**
-///
-/// 本番の探索が上限なしで走るのに、先読みだけ設定の深さで止めると、
-/// 置換表に浅い答えしか残らない。
+/// Ponder depth cap — effectively unlimited, the deadline decides.
+/// Capping ponder below the real search would leave only shallow
+/// answers in the table.
 const PONDER_DEPTH: u32 = 60;
 
-/// 読切が期限で切れたときに指す「保険の手」を取る深さ。
-///
-/// **浅くてよい。** 使われるのは見積りが外れたときだけで、そこで求められる
-/// のは「まともな手」であって最善手ではない。深くすると保険そのものが本命の
-/// 時間を食う。
+/// Depth of the backup move played when a solve hits the deadline.
+/// Shallow on purpose: it is only used when the estimate missed, a
+/// decent move suffices, and a deeper backup would eat the solve's time.
 const BACKUP_DEPTH: u32 = 8;
 
-/// 保険に使ってよい残り時間の割合。
+/// Fraction of the remaining budget the backup move may use.
 const BACKUP_SHARE: f32 = 0.05;
 
-/// 双方に合法手がない = 終局。
+/// No legal move for either side = game over.
 fn is_game_over(board: &Board) -> bool {
     if board.movable() != 0 {
         return false;
@@ -67,34 +63,35 @@ fn is_game_over(board: &Board) -> bool {
     b.movable() == 0
 }
 
-/// エンジンの探索条件と資源。既定値は GUI・ローカル解析向けの軽めの設定
-/// (対局向けの本気設定は呼び出し側で depth / solve_empties を上げる)。
+/// Search settings and resources. Defaults are light, tuned for the GUI
+/// and local analysis; play raises depth / solve_empties itself.
 #[derive(Clone, Debug)]
 pub struct EngineConfig {
-    /// 中盤探索の深さ (手数)。
+    /// Midgame search depth in plies.
     pub depth: u32,
-    /// この空きマス数以下は完全読み。
+    /// Perfect solve at and below this many empties.
     pub solve_empties: u8,
-    /// 選択帯の幅 (空きマス数)。0 で帯なし。
+    /// Selective band width in empties; 0 = none.
     pub band: u8,
-    /// 探索の並列スレッド数 (中盤・終盤とも)。
+    /// Search threads (midgame and endgame).
     pub threads: usize,
-    /// 中盤探索の ProbCut (MPC)。対局・解析とも通常はオン。
+    /// Midgame ProbCut (MPC); normally on for both play and analysis.
     pub mpc: bool,
-    /// 中盤共有置換表のサイズ (2^bits エントリ)。
+    /// Shared midgame table size (2^bits entries).
     pub midgame_hash_bits: u32,
-    /// 終盤置換表のサイズ (2^bits エントリ)。
+    /// Endgame table size (2^bits entries).
     pub solver_hash_bits: u32,
-    /// 線形評価の重み (終盤の並べ替えに使用)。
+    /// Linear evaluation weights (endgame move ordering).
     pub weights: PathBuf,
-    /// NNUE の重み (中盤探索・帯 probe に使用)。
+    /// NNUE weights (midgame search and band probes).
     pub nnue: PathBuf,
-    /// 定石 book (無ければ book なしで動く)。
+    /// Opening book (optional).
     pub book: PathBuf,
-    /// book を使うか。研究時に切りたいことがあるのでノブにしてある。
+    /// Whether to consult the book; a knob because study wants it off.
     pub use_book: bool,
-    /// book の乱択の許容幅 (石)。最善からこの差以内の手を候補にする。
-    /// 0 なら常に最善手 (決定的)。同じ相手と同じ棋譜を繰り返さないための設定。
+    /// Randomized-book tolerance in discs: candidates within this of
+    /// best. 0 = always best (deterministic). Prevents replaying the
+    /// same game against the same opponent.
     pub book_tolerance: f32,
 }
 
@@ -117,50 +114,44 @@ impl Default for EngineConfig {
     }
 }
 
-/// 1 手の判断結果。`value` は手番視点の石差 (exact なら厳密値)。
+/// One move decision; `value` is mover-view discs (exact when solved).
 #[derive(Clone, Copy, Debug, Default)]
 pub struct MoveEval {
     pub pos: Option<Position>,
     pub value: f32,
-    /// 完全読みによる厳密値かどうか。
+    /// Whether the value is exact (perfect solve).
     pub exact: bool,
-    /// 定石 book から返した手かどうか。
+    /// Whether the move came from the book.
     pub from_book: bool,
-    /// 実戦から学習した局面の定石から返した手か (表示用)。
+    /// Whether it came from a game-learned book entry (display only).
     pub learned: bool,
-    /// 中盤探索が到達した深さ。読み切りと定石では 0。
+    /// Depth the midgame search reached; 0 for solves and book moves.
     pub depth: u32,
-    /// **読切 (または選択読み) が期限で打ち切られ、保険の手を指した。**
-    ///
-    /// 入り口の判断が甘かったことの印。頻発するなら、入り口を浅くするか
-    /// 保険を厚くするかを決める材料になる。
+    /// The solve (or selective solve) hit the deadline and the backup
+    /// move was played — a sign the entry estimate was too optimistic.
     pub cut: bool,
 }
 
-/// 探索一式を束ねたセッション。生成コストが高い (重み読み込み +
-/// 置換表確保) ので、プロセスにつき 1 個作って使い回す。
-/// **探索の途中経過。** 反復深化が段を 1 つ終えるたびに書き換える。
+/// Live search progress, rewritten after each completed iteration.
 ///
-/// 対局中に「いま何を読んでいるか」を外から見るための唯一の口。読む側
-/// (GUI) は別スレッドなので、ロックを取らずに済むアトミックだけで持つ。
-/// **探索の挙動は変えない** — 書き込みは段の切れ目 (1 手につき十数回) で、
-/// 探索の内側には入らない。
+/// The only window into "what is it reading right now" during a game.
+/// The reader (GUI) is another thread, so everything is atomics — no
+/// locks. It never changes search behavior: writes happen at iteration
+/// boundaries (a dozen per move), never inside the search.
 #[derive(Debug, Default)]
 pub struct Progress {
-    /// いま何をしているか ([`Progress::IDLE`] / [`Progress::THINK`] /
+    /// Current activity ([`Progress::IDLE`] / [`Progress::THINK`] /
     /// [`Progress::PONDER`] / [`Progress::SOLVE`] / [`Progress::SELECT`])。
     pub kind: std::sync::atomic::AtomicU8,
-    /// 到達した深さ。読切・選択読みでは 0。
+    /// Reached depth; 0 during solves.
     pub depth: std::sync::atomic::AtomicU32,
-    /// いま最善と思っている手 (0..64)。64 以上は「まだ無い」。
+    /// Current best move (0..64); >= 64 means none yet.
     pub best: std::sync::atomic::AtomicU32,
-    /// その評価値の 1000 倍 (石差)。`i32::MIN` は「まだ無い」。
+    /// Its value x1000 in discs; `i32::MIN` means none yet.
     pub milli: std::sync::atomic::AtomicI32,
-    /// **符号を反転して記録するか。**
-    ///
-    /// 先読みは「自分が指した後の局面」を読む。その局面の手番は相手なので、
-    /// 探索が返す石差は**相手から見た値**になる。画面には常に自分から見た
-    /// 値を出したいので、先読みのあいだだけ反転して記録する。
+    /// Whether to negate values on write. Ponder reads the position
+    /// after our move, where the opponent is to move, so search values
+    /// are from their view; the display always wants ours.
     flip: std::sync::atomic::AtomicBool,
 }
 
@@ -171,17 +162,17 @@ impl Progress {
     pub const SOLVE: u8 = 3;
     pub const SELECT: u8 = 4;
 
-    /// 何をしているかだけを立てる (深さと手は据え置き)。
+    /// Set only the activity kind (depth and move untouched).
     pub fn set_kind(&self, kind: u8) {
         self.kind.store(kind, std::sync::atomic::Ordering::Relaxed);
     }
 
-    /// 何もしていない状態へ戻す。
+    /// Reset to idle.
     ///
-    /// **反転の指定も戻す。** ここを落としていたせいで、一度でも先読みを
-    /// した後の思考が**ずっと符号を反転して出ていた** (実戦で盤の途中経過
-    /// が −35、指した手の確定値が +35.3 と食い違って露見した)。先読みは
-    /// `clear()` の直後に自分で立て直すので、既定は倒しておいてよい。
+    /// This must also clear the negate flag: leaving it set once made
+    /// every post-ponder think display with inverted sign (exposed by a
+    /// -35 live value against a +35.3 final). Ponder re-raises the flag
+    /// itself right after `clear()`.
     pub fn clear(&self) {
         self.kind
             .store(Self::IDLE, std::sync::atomic::Ordering::Relaxed);
@@ -192,8 +183,8 @@ impl Progress {
         self.flip.store(false, std::sync::atomic::Ordering::Relaxed);
     }
 
-    /// 段を 1 つ終えた。**値は常に自分から見た石差にして置く** (先読みは
-    /// 相手の手番の局面を読んでいるので反転する)。
+    /// One iteration finished. Values are stored from our view (ponder
+    /// negates, since it reads an opponent-to-move position).
     pub fn reached(&self, depth: u32, best: Option<Position>, value: f32) {
         use std::sync::atomic::Ordering::Relaxed;
         self.depth.store(depth, Relaxed);
@@ -209,13 +200,13 @@ impl Progress {
         }
     }
 
-    /// 予測した相手の手を置く (先読み用)。
+    /// Record the predicted opponent move (ponder).
     pub fn predict(&self, pos: Position) {
         self.best
             .store(pos.index() as u32, std::sync::atomic::Ordering::Relaxed);
     }
 
-    /// 読む側が使う写し。
+    /// Snapshot for readers.
     pub fn snapshot(&self) -> (u8, u32, Option<u32>, Option<f32>) {
         use std::sync::atomic::Ordering::Relaxed;
         let b = self.best.load(Relaxed);
@@ -236,25 +227,24 @@ pub struct Engine {
     config: EngineConfig,
     stop: StopHandle,
     book: Option<Book>,
-    /// book の乱択用の乱数状態 (起動ごとに変わる)。
+    /// RNG state for randomized book picks (fresh per launch).
     book_rand: u64,
-    /// 実戦から取り込んだ学習分 (保存対象)。`book` には起動時と
-    /// 取り込み時に重ねてあり、選択は `book` 側で行う。
+    /// Game-learned overlay (persisted). It is merged into `book` at
+    /// startup and on import; move selection happens on `book`.
     learned: Book,
-    /// **学習分を重ねる前の定石本体。** 分析のグラフが「定石の値」として
-    /// 使ってよいのはこちらだけ — 本体は深い探索で付けた値だが、学習分は
-    /// 終局の石差を根まで書き戻したもので、その局面の評価ではない。
-    ///
-    /// `learned` との差分では代用できない。**序盤の局面は実戦で必ず通る
-    /// ので学習分にも載っており**、「学習分にあるか」で外すと本体に載って
-    /// いる定石手まで落ちる (実際に落ちた)。
+    /// The base book before the learned overlay. Analysis graphs may
+    /// only use this side: base values come from deep search while
+    /// learned values are backed-up game outcomes — not evaluations.
+    /// "Is it in the overlay?" is not a substitute filter: opening
+    /// positions appear in both, and filtering on the overlay once
+    /// dropped genuine base entries.
     book_base: Option<Book>,
-    /// 学習分の保存先 (book と同じディレクトリの book_learn.txt)。
+    /// Overlay save path (book_learn.txt next to the book).
     learn_path: std::path::PathBuf,
-    /// 読み切りが訪れたノードの累計。中盤探索は `search.nodes` が自分で
-    /// 積んでいるが、Solver は 1 回ぶんしか持たないのでここで足す。
+    /// Cumulative solver nodes; the midgame search tracks its own but
+    /// the Solver only keeps the last run's count.
     solver_nodes: u64,
-    /// 探索の途中経過 (外から覗くための口)。
+    /// Search progress (the external view hook).
     progress: std::sync::Arc<Progress>,
 }
 
@@ -267,10 +257,11 @@ impl Engine {
         let mut nn = Nnue::new(EGAROUCID_PATTERNS);
         nn.load(&config.nnue)
             .map_err(|e| format!("nnue {}: {e}", config.nnue.display()))?;
-        // int16 テーブルの構築。忘れると eval が未初期化領域を読む。
+        // Build the int16 tables; skipping this makes eval read
+        // uninitialized memory.
         nn.quantize();
-        // NnueSearch / Solver はプロセス寿命の参照を要求する。Engine 自体も
-        // プロセスに 1 個・使い回し前提なのでリークで満たす。
+        // NnueSearch / Solver want process-lifetime references; Engine
+        // itself is one-per-process, so leak to satisfy them.
         let nn: &'static Nnue = Box::leak(Box::new(nn));
         let tt: &'static SharedTt = Box::leak(Box::new(SharedTt::new(config.midgame_hash_bits)));
         let progress = std::sync::Arc::new(Progress::default());
@@ -284,20 +275,18 @@ impl Engine {
         let stop = StopHandle::new();
         search.set_stop(Some(stop.clone()));
         solver.set_stop(Some(stop.clone()));
-        // book は任意 (無くても動く)。深い探索で作った手をそのまま返すので、
-        // 実戦の思考時間を序盤で使わずに済む。
-        // 読み込みは常に試みる。`use_book` は参照するかどうかの切り替えで、
-        // 対局中に切っても読み直しが要らないようにしてある。
+        // The book is optional. Loading is always attempted; `use_book`
+        // only toggles consulting it, so switching mid-game needs no reload.
         let mut book = match Book::load(&config.book) {
             Ok(b) if !b.is_empty() => Some(b),
             _ => None,
         };
-        // 実戦から取り込んだ学習分 (learn.rs) を定石へ重ねる。学習分だけ
-        // でも定石として機能する (定石ファイルが無い環境でも実戦で通った
-        // 局面から「経験の定石」が育つ)。別ファイルなので bookgen が
-        // 定石本体を回している間も衝突しない。
+        // Overlay the game-learned entries (learn.rs). The overlay alone
+        // works as a book too — experience accumulates even without a
+        // book file — and being a separate file it never conflicts with
+        // a bookgen rebuild.
         let learn_path = config.book.with_file_name("book_learn.txt");
-        // **重ねる前の本体を控える。** 重ねると上書きされて区別できなくなる
+        // Keep the pre-overlay base; after merging they are inseparable.
         let book_base = match Book::load(&config.book) {
             Ok(b) if !b.is_empty() => Some(b),
             _ => None,
@@ -332,11 +321,10 @@ impl Engine {
         &self.config
     }
 
-    /// **期限の見張りを立てる。** 期限が来たら停止ハンドルを立てて、
-    /// 走っている読切を打ち切らせる。
-    ///
-    /// 中盤の反復深化は自前で期限を見られる (段の切れ目で戻れる) が、
-    /// 読切には切れ目が無い。外から止めるしかない。
+    /// Start the deadline watcher: it raises the stop handle when time
+    /// is up, aborting a running solve. Iterative deepening can watch
+    /// its own deadline at iteration boundaries; a solve has no
+    /// boundaries and can only be stopped from outside.
     fn watch_deadline(
         &self,
         deadline: Option<std::time::Instant>,
@@ -358,7 +346,7 @@ impl Engine {
         Some(done)
     }
 
-    /// 見張りを畳んで、**期限で切られたか**を返す。
+    /// Tear down the watcher and report whether the deadline fired.
     fn stop_watch_done(
         &mut self,
         watcher: Option<std::sync::Arc<std::sync::atomic::AtomicBool>>,
@@ -366,61 +354,59 @@ impl Engine {
         let Some(done) = watcher else { return false };
         done.store(true, std::sync::atomic::Ordering::Relaxed);
         let cut = self.stop.is_stopped();
-        // 次の探索のために戻す (`choose_within` の頭でも reset している)
+        // Reset for the next search (`choose_within` also resets).
         self.stop.reset();
         cut
     }
 
-    /// この Engine が生涯に訪れたノードの累計 (中盤探索 + 読み切り)。
-    /// 差分を取れば 1 回の探索ぶんが出る。表示専用。
+    /// Lifetime node count (midgame + solver); diff two readings for a
+    /// single search. Display only.
     pub fn nodes(&self) -> u64 {
         self.search.nodes + self.solver_nodes
     }
 
-    /// 読み込んだ book の局面数 (0 = book なし)。
+    /// Loaded book positions (0 = no book).
     pub fn book_size(&self) -> usize {
         self.book.as_ref().map_or(0, |b| b.len())
     }
 
-    /// 実戦から取り込んだ学習分の局面数。
+    /// Game-learned overlay positions.
     pub fn learned_size(&self) -> usize {
         self.learned.len()
     }
 
-    /// **次の探索で「この手を先に見ろ」と伝える。**
+    /// Tell the next search "try this move first".
     ///
-    /// 同期対局は 2 面が鏡像なので、相手が片方で指した手はこちらのもう
-    /// 片方の候補そのものになる。2650 の相手が長考して選んだ手を並べ替えの
-    /// 先頭に置ければ、同じ時間でより深く読める。
-    ///
-    /// **手の選択を委ねるわけではない。** 置換表には上下限を入れないので
-    /// 打ち切りには使われず、探索は今までどおり全部の手を評価する。効くのは
-    /// 順序だけ。
+    /// Synchro boards mirror each other, so the opponent's move on one
+    /// board is a candidate on the other — and a move a 2650 spent
+    /// minutes on is worth ordering first. This never delegates the
+    /// choice: no bounds are stored, so no cutoffs; only ordering changes.
     pub fn hint_move(&mut self, board: &Board, pos: Position) {
         let h = crate::zobrist::board_hash(board.player_bb(), board.opponent_bb());
         self.search.tt.seed_move(h, pos.index());
     }
 
-    /// 進行中の探索を中断させるためのハンドル (別スレッドから使う)。
-    /// 立てた後の結果は不完全なので捨てること。次の探索前に `reset` される。
+    /// Stop handle for the running search (used from other threads).
+    /// Results after raising it are incomplete — discard them.
     pub fn stop_handle(&self) -> StopHandle {
         self.stop.clone()
     }
 
-    /// 探索条件 (深さ・完全読み開始・帯) だけを差し替える。置換表と重みは
-    /// そのまま。
-    /// 定石 book を参照するかを切り替える。研究中に自力の手を見たいときに切る。
+    /// Swap search settings (depth / solve entry / band) only; tables
+    /// and weights stay.
+    /// Toggle book consultation (off to see the engine's own moves).
     pub fn set_use_book(&mut self, on: bool) {
         self.config.use_book = on;
     }
 
-    /// book を読み込めているか (画面に「book なし」と出すため)。
+    /// Whether a book is loaded (drives the "no book" indicator).
     pub fn has_book(&self) -> bool {
         self.book.is_some()
     }
 
-    /// 表示用: 局面が定石にあれば候補手の値の一覧 (盤面の向き・手番視点)
-    /// を返す。定石を使わない設定では返さない (対局の選択と揃える)。
+    /// Display: candidate values for a book position (board
+    /// orientation, mover view). Empty when the book is disabled, to
+    /// match play.
     pub fn book_hints(&self, board: &Board) -> Option<Vec<(Position, f32)>> {
         self.book
             .as_ref()
@@ -428,56 +414,49 @@ impl Engine {
             .candidates(board)
     }
 
-    /// 定石を眺めるための出し口。候補手 (値・採用回数) と、この局面が
-    /// 実戦学習で書き戻されたものかを返す。
-    ///
-    /// `book_hints` と違って `use_book` を見ない — 定石を切っていても
-    /// 中身は見たいことがあるし、切ったから消えるのは嘘になる。
+    /// Book browsing: candidates (value, adoption count) plus whether
+    /// the position was game-learned. Unlike `book_hints` this ignores
+    /// `use_book` — browsing while the book is off is legitimate.
     pub fn book_node(&self, board: &Board) -> Option<(Vec<BookCandidate>, bool)> {
         let moves = self.book.as_ref()?.candidates_detailed(board)?;
         Some((moves, self.learned.has(board)))
     }
 
-    /// 中盤の置換表を空にする。
+    /// Clear the midgame table.
     ///
-    /// **測定用。** 1 局ごとに消さないと、温まった表が次の局へ持ち越されて
-    /// 同一条件の対戦ですら偏った結果が出る (CLAUDE.md の 4 番)。
-    /// 対局中に呼ぶものではない — ポンダリングは表を持ち越すためにある。
+    /// For measurement: without a per-game clear, a warm table biases
+    /// even same-vs-same matches. Never call it mid-game — pondering
+    /// exists precisely to carry the table over.
     pub fn clear_tables(&mut self) {
         self.search.clear();
     }
 
-    /// **この機械の読切速度 (ノード毎秒) を測る。**
+    /// Measure this machine's solve speed (nodes/sec).
     ///
-    /// 持ち時間から読切の入り口を逆算する ([`crate::timectl::solve_entry`])
-    /// には、ノード数の見積りを秒へ直す係数が要る。**そこだけが機械依存**
-    /// なので、ここで実測して `resources.conf` に控える。
+    /// Deriving the solve entry point from the clock
+    /// ([`crate::timectl::solve_entry`]) needs a nodes-to-seconds
+    /// factor, and that factor alone is machine-dependent; measure here,
+    /// record in `resources.conf`.
     ///
-    /// 測るのは**この Engine 自身の Solver** — スレッド数も置換表の大きさも
-    /// NNUE の有無も対局と同じものが効く。別に組んだ計測器で測ると、対局で
-    /// 出る速度とずれる。
+    /// It measures this Engine's own Solver so thread count, table size
+    /// and NNUE match play. Three 22-empty positions keep it under ~2s
+    /// single-threaded — cheap enough to run at startup. Table-clear
+    /// time is subtracted (fixed cost, not proportional to nodes);
+    /// deeper positions lose ~10% nps to table overflow, absorbed by
+    /// `timectl`'s `DEEP_NPS_RATIO`.
     ///
-    /// 局面は空き 22 の 3 問 (`bench/calib1030.obf` から、その群の中央付近の
-    /// 所要時間のものを選んだ)。1 スレッドで 2 秒強、8 スレッドなら 1 秒を
-    /// 切る — **起動のたびに測っても待たされない**長さにしてある。
-    ///
-    /// 置換表を空にする時間は差し引く (毎回の固定費で、ノード数に比例
-    /// しない)。空きが深くなると表が溢れて nps は 1 割ほど落ちるが、その
-    /// ぶんは `timectl` 側の `DEEP_NPS_RATIO` が持つ。
-    ///
-    /// **2 周測って速いほうを採る。** 他のプロセスが CPU を使っていると
-    /// 値が落ちる — 実機で 5 スレッドが 4 スレッドより遅く出た。外乱は
-    /// **遅くする方向にしか効かない**ので、速いほうが真値に近い
-    /// (真値より速くは測れないので、過大評価にはならない)。
+    /// Two passes, keep the faster: interference only slows things down,
+    /// so the faster pass is closer to the truth and never an
+    /// overestimate.
     pub fn measure_solve_nps(&mut self) -> f64 {
         let a = self.measure_solve_nps_once();
         let b = self.measure_solve_nps_once();
         a.max(b)
     }
 
-    /// 1 周ぶんの実測。[`Engine::measure_solve_nps`] が 2 回呼ぶ。
+    /// One measurement pass; [`Engine::measure_solve_nps`] calls it twice.
     fn measure_solve_nps_once(&mut self) -> f64 {
-        /// 空き 22 の較正局面 (OBF)。
+        /// 22-empty calibration positions (OBF).
         const POSITIONS: [&str; 3] = [
             "--XOOO----XOOOOO-XXOOOOX-XXXOXXX-XXXOXXX-XOOOOXX--OO-O------O--- X",
             "----X-----OX-O---XXXXO--XXXXXO--OOXXXOO-OOOXOXOO-OOOOOX--XXXXXX- X",
@@ -505,37 +484,27 @@ impl Engine {
         nodes as f64 / secs
     }
 
-    /// 相手の手番中に先行して読む。**盤は動かさない。**
+    /// Ponder during the opponent's turn. Does not move the board.
     ///
-    /// `after_my_move` は自分が指し終えた局面 (= 相手の手番)。置換表が指す
-    /// **相手の最善手 1 本だけ**を反復深化し、期限か `stop` まで走って、
-    /// 訪れたノード数を返す。
+    /// `after_my_move` is the position after our move (opponent to
+    /// move). Deepens the single predicted reply from the table until
+    /// the deadline or `stop`, returning nodes visited.
     ///
-    /// **全合法手に配る形と混合は測って捨てた** (`notes/pondering.md`)。
-    /// 11 手に時間を配ると 1 手あたり 4〜6 段までしか届かず、17 段前後まで
-    /// 読む本番の探索では枝を刈れない。到達深さの差は
-    /// **予測手 1 本で +1.6〜1.8 段、全合法手では 0** だった。
-    /// **先に読んでおけば足しになる、は成り立たない** — 本番と同じ深さまで
-    /// 行けたものだけが役に立つ。
-    ///
-    /// **解析の経路 (`analyze` / `analyze_deepening`) は使えない。** あちらは
-    /// 手どうしを公平に比べるために各手の前後で置換表を消しており
-    /// (「解析でばらまいた浅いエントリを対局用の探索に引き継がない」)、
-    /// ポンダリングの目的と正反対になる。
-    ///
-    /// **深さを決め打ちしていても効く。** 効き方が変わるだけ —
-    /// 持ち時間で刻むなら同じ時間で **+1.25 段**深く、深さ固定なら同じ
-    /// 深さへ **1/3 の時間**で着く (実測 −62〜65%)。
-    /// 「深さ固定では無駄」と一度書いたが誤りだった。走り切る先が
-    /// 置換表に載っていれば、走り切ること自体が速くなる。
+    /// Spreading time across all legal replies was measured and
+    /// rejected: 11 moves reach only 4-6 plies each, useless against a
+    /// ~17-ply real search (+1.6-1.8 plies for single-move ponder, 0 for
+    /// spread). The analysis path is unusable here — it clears the table
+    /// around each move for fairness, the exact opposite of pondering's
+    /// purpose. Works with fixed depth too: same depth in 1/3 the time
+    /// (measured -62 to -65%).
     pub fn ponder(&mut self, after_my_move: &Board, deadline: std::time::Instant) -> u64 {
         let base = self.nodes();
         if is_game_over(after_my_move) || after_my_move.movable_count() == 0 {
             return 0;
         }
-        /* 予測が取れないことがある (終盤は完全読みが別の表を使うので中盤の
-        表に最善手が残らない。実測で終盤の 47%)。**そこで適当な手を選んで
-        読まない** — 当たる見込みが無いまま時間を使うだけになる。 */
+        /* The prediction may be missing (the endgame solver uses its
+        own table; measured 47% of endgame moves). Do not ponder a
+        made-up move — that just burns time with no chance of a hit. */
         let Some(pred) = self.tt_best(after_my_move) else {
             return 0;
         };
@@ -550,36 +519,29 @@ impl Engine {
         if is_game_over(&child) {
             return 0;
         }
-        /* **完全読み域は読まない。入れてみて、測って捨てた。**
-        予測手を先に解いておけば本番が表から即取れるはず、と考えて入れたが、
-        `solve 24 / depth 12 固定 / 16 局` で **A の 1 手あたりの探索時間が
-        121.8 → 122.6 ms** と変わらなかった。先読み自体は 188 回・計 23.6 秒
-        走っていたので動いてはいる。`Solver` は表を消していないので当たれば
-        効くはずだが、**効かない理由は突き止められていない**。
-        理由の分からない得は残さない (CLAUDE.md の 1 番)。期限で刻めない
-        ぶん、受信を数秒ふさぐ危険も抱えるので尚更。 */
+        /* No pondering in the solve region: tried, measured, rejected
+        (121.8 -> 122.6 ms per move — no change — despite the ponder
+        demonstrably running). Why it doesn't help is unresolved, and an
+        unexplained gain is not kept; a solve also cannot be sliced by
+        deadline, risking a blocked receive loop. */
         if child.empty_count() <= self.config.solve_empties {
             return 0;
         }
         self.stop.reset();
-        /* **期限は探索の中に渡す。** 自前で段ごとに見ていると、深い 1 段が
-        始まってしまったら止まらない — 実戦の待ち行列 (GGS の受信ループ)
-        を数秒ふさぐことになる。`best_move_deadline` は反復深化を内側に
-        持っていて、期限が来た段は捨てて直前の段まで返す。 */
-        /* **深さの上限を置かない。** 本番の探索が上限なしで走るのに先読みだけ
-        設定の深さで止めると、置換表に浅い答えしか残らず、本番はそこから
-        読み直すことになる。**先読みは本番と同じ深さまで行けたものだけが
-        役に立つ** (全合法手に配る形を測って捨てたのと同じ理由)。 */
+        /* Hand the deadline into the search: checking between
+        iterations cannot stop a long iteration already underway, which
+        would block the GGS receive loop for seconds. */
+        /* No depth cap: only ponder that reaches real-search depth is
+        useful (same reason the spread form was rejected). */
         self.search
             .best_move_deadline(&child, PONDER_DEPTH, Some(deadline));
         self.nodes() - base
     }
 
-    /// 置換表に載っているこの局面の最善手。**探索し直さない。**
-    ///
-    /// ポンダリングが「相手が指すと思う手」を取るための口。自分の手を
-    /// 指したあとの局面を渡すと、直前の探索が読んだ範囲での相手の最善手が
-    /// 返る (表から溢れていれば `None`)。
+    /// Best move stored for this position; never re-searches.
+    /// Pondering's prediction source: pass the position after our move,
+    /// get the opponent's best as far as the last search saw (None if
+    /// evicted).
     pub fn tt_best(&self, board: &Board) -> Option<Position> {
         let h = crate::zobrist::board_hash(board.player_bb(), board.opponent_bb());
         self.search
@@ -588,8 +550,8 @@ impl Engine {
             .and_then(|i| Position::from_index(i as u32))
     }
 
-    /// 表示用: 局面が定石にあれば (最善の値, 実戦学習由来か) を返す。
-    /// 評価値グラフが探索の代わりに使う。
+    /// Display: (best value, game-learned?) for a book position; the
+    /// eval graph uses it instead of searching.
     pub fn book_value(&self, board: &Board) -> Option<(f32, bool)> {
         let hints = self.book_hints(board)?;
         let best = hints
@@ -600,11 +562,9 @@ impl Engine {
         Some((best, learned))
     }
 
-    /// **定石本体**に載っているこの局面の最善の値 (手番視点)。
-    ///
-    /// 分析のグラフが使う。学習分は見ない — 値の性質が違う (本体は深い
-    /// 探索、学習分は終局の石差の書き戻し)。`use_book` を見るので、定石を
-    /// 使わない設定なら返さない (対局の選択と揃える)。
+    /// Best value from the base book only (mover view), for analysis
+    /// graphs. The learned overlay is excluded — its values are
+    /// backed-up game outcomes, not evaluations. Respects `use_book`.
     pub fn book_base_value(&self, board: &Board) -> Option<f32> {
         let hints = self
             .book_base
@@ -618,9 +578,8 @@ impl Engine {
             .into()
     }
 
-    /// 定石に載っているこの局面の (最善の値, 実戦学習由来か, 付けたときの
-    /// 読み深さ)。**深さは「その値がどれくらい確かか」を読む手がかり**で、
-    /// 定石の画面が「石差 · 12 手読み」と出すのに使う。
+    /// (best value, game-learned?, search depth) for a book position;
+    /// the depth tells the book screen how trustworthy the value is.
     pub fn book_entry(&self, board: &Board) -> Option<(f32, bool, u8)> {
         let book = self.book.as_ref()?;
         let (_, value, depth) = book.probe(board)?;
@@ -634,8 +593,8 @@ impl Engine {
         self.config.band = band;
     }
 
-    /// 探索の並列スレッド数 (中盤・終盤とも) を差し替える。実行中の探索には
-    /// 効かず、次の探索から効く。
+    /// Change the thread count (midgame and endgame); takes effect on
+    /// the next search.
     pub fn set_threads(&mut self, n: usize) {
         let n = n.max(1);
         self.config.threads = n;
@@ -643,25 +602,23 @@ impl Engine {
         self.solver.set_threads(n);
     }
 
-    /// 対局と同じ選択則で着手を決める。合法手がなければ `pos: None`
-    /// (パス)。値は手番視点の石差。
-    ///
-    /// 定石には実戦から学習した局面 (learn.rs) も重ねてあり、選択は
-    /// どちらも同じ乱択 (`probe_varied`) に乗る。負けた帰結で値が下がった
-    /// 手は自然に選ばれなくなる — 回避のための特別な判定は持たない。
+    /// Choose a move with the same policy as play; `pos: None` = pass.
+    /// Value is mover-view discs. The book includes the learned overlay
+    /// and both go through the same randomized pick, so moves devalued
+    /// by losses naturally stop being chosen — no special avoidance.
     pub fn choose(&mut self, board: &Board) -> MoveEval {
         self.choose_within(board, None)
     }
 
-    /// 期限つきの着手選択。中盤探索は反復深化なので、期限が来ても直前に
-    /// 完了した深さの答えを返せる。読み切りと定石は途中で刻めないので
-    /// 期限を見ない (読み切りに入る手前で残り時間を見て決めるのは
-    /// 呼び出し側の仕事)。
-    /// 探索の途中経過を覗く口 (別スレッドから読んでよい)。
+    /// Search progress hook (safe to read from other threads).
     pub fn progress(&self) -> std::sync::Arc<Progress> {
         self.progress.clone()
     }
 
+    /// Deadline-bounded move choice. Iterative deepening returns the
+    /// last completed depth when time runs out; solves and book moves
+    /// cannot be sliced, so the caller decides before entering whether
+    /// the clock allows them.
     pub fn choose_within(
         &mut self,
         board: &Board,
@@ -670,10 +627,10 @@ impl Engine {
         self.stop.reset();
         self.progress.clear();
         self.progress.set_kind(Progress::THINK);
-        // 定石 book: 実戦より深い探索で付けた答えなので、あれば即返す
+        // Book: answers come from deeper-than-game search; return immediately.
         if let Some(book) = self.book.as_ref().filter(|_| self.config.use_book) {
             let hit = if self.config.book_tolerance > 0.0 {
-                // 同一棋譜の反復を避けるため、互角の候補から選ぶ
+                // Pick among near-equal candidates to avoid repeats.
                 self.book_rand = self
                     .book_rand
                     .wrapping_mul(6364136223846793005)
@@ -683,7 +640,7 @@ impl Engine {
                 book.probe(board)
             };
             if let Some((pos, value, _depth)) = hit {
-                // 実戦から学習した局面か (画面の表示用)
+                // Whether it is game-learned (display only).
                 let learned = self.learned.get_raw(Book::key(board).0).is_some();
                 return MoveEval {
                     pos: Some(pos),
@@ -698,8 +655,8 @@ impl Engine {
         }
         let c = &self.config;
         if is_game_over(board) {
-            // 終局: 探索に聞くと 0 が返る。盤面の石差 (空きマスは勝者へ加算、
-            // FFO 規約) をそのまま厳密値として返す
+            // Game over: searching would return 0; return the board's
+            // disc difference (empties to the winner, FFO convention).
             return MoveEval {
                 pos: None,
                 value: final_score(board) as f32,
@@ -711,21 +668,17 @@ impl Engine {
             };
         }
         if board.empty_count() <= c.solve_empties {
-            /* **読切も期限で打ち切る。**
-
-            入る前に所要時間を見積もってはいるが (`timectl`)、見積りは必ず
-            外れる — 同じ空きでも局面によって中央値の 5 倍以上散る。外れた
-            ときに終わるまで返ってこないと、**時間切れで一発レートダウン**に
-            なる。打ち切って浅い答えを指すほうが、棋力の損は小さい。
-
-            打ち切ったときのために**保険の手を先に取る**。読切の途中で
-            止めた値は不完全 (番兵が混じる) ので使えない。 */
+            /* Solves get a deadline too. `timectl` estimates the entry
+            cost, but estimates miss (5x spread at the same empties), and
+            an unbounded solve means a flag fall. Aborting into a shallow
+            answer loses less. The backup move is taken first — a
+            half-aborted solve's value is unusable. */
             let backup = deadline.map(|_| {
                 let (pos, value, _) = self.search.best_move_deadline(
                     board,
                     BACKUP_DEPTH,
-                    // 保険に使ってよいのは予算のごく一部。ここで使いすぎると
-                    // 本命の読切に入る時間が無くなる
+                    // Only a sliver of the budget: overspending here
+                    // starves the actual solve.
                     deadline.map(|d| {
                         let now = std::time::Instant::now();
                         now + (d - now).mul_f32(BACKUP_SHARE)
@@ -763,7 +716,7 @@ impl Engine {
                 cut: false,
             }
         } else if let Some(t) = selective_band(board.empty_count(), c.solve_empties, c.band) {
-            // 選択読みも同じ。期限で切れたら保険の手を返す
+            // Selective solve: same policy, backup move on deadline.
             let backup = deadline.map(|_| {
                 let (pos, value, _) = self.search.best_move_deadline(
                     board,
@@ -803,36 +756,27 @@ impl Engine {
                 cut: false,
             }
         } else {
-            /* **中盤にも見張りを付ける。** 読切と選択読みには付けていたのに、
-            ここだけ「反復深化は段の切れ目で期限を見るから要らない」と思って
-            外していた。**足りなかった。**
-
-            段の頭で見ても、その段自体が長ければ止まらない。実戦 (15 分の
-            同期対局、空き 37) で**期限 43.5 秒の手が 132.6 秒**走り、
-            外側の保険が殺すまで返ってこなかった。
-
-            **単体では再現しない。** 同じ空き・同じ期限で 1 局面を読ませても
-            段の切れ目で素直に止まる。違いは**同期対局が CPU を取り合うこと**。
-            2 ワーカー × 4 スレッドに先読みが重なると、単独なら 30 秒の段が
-            3 倍に伸びる。段の頭で見る方式は「次の段がどれだけかかるか」を
-            知らないので、これを防ぎようがない。
-
-            見張りが停止を立てれば段の途中でも抜ける (保険がそれで止められた
-            のが証拠)。切られた段は捨てて直前の段を返す仕組みが
-            `lazy_smp` 側にあるので、手が消えることはない。 */
+            /* The midgame needs the watcher too. It was omitted here on
+            the theory that deepening checks the deadline between
+            iterations — insufficient: a single long iteration cannot be
+            stopped that way, and under synchro CPU contention a 43.5s
+            budget once ran 132.6s (not reproducible single-board). The
+            watcher's stop exits mid-iteration; lazy_smp discards the cut
+            iteration and returns the previous answer, so no move is
+            lost. */
             let watcher = self.watch_deadline(deadline);
             let (pos, value, reached) = self.search.best_move_deadline(board, c.depth, deadline);
             let cut = self.stop_watch_done(watcher);
-            /* 調べもの用: **最後の段の値と、実際に返す値を突き合わせる**ため
-            に返り値も出す。段の記録だけでは「報告された値が段のどれとも
-            合わない」ことを示せない (実戦で 2 度その形の食い違いを見た)。 */
+            /* Diagnostics: also print the returned value so it can be
+            cross-checked against the per-iteration log (the in-game
+            mismatches were exactly "value matches no iteration"). */
             if std::env::var("ROOT_TRACE").is_ok() {
                 let h = crate::zobrist::board_hash(board.player_bb(), board.opponent_bb());
                 eprintln!(
-                    "  返: [{h:016x}] {:+8.2} (素 {value:+.2}) 深さ {reached} {:?}{}",
+                    "  ret [{h:016x}] {:+8.2} (raw {value:+.2}) depth {reached} {:?}{}",
                     stone_scale(value),
                     pos,
-                    if cut { " 打切" } else { "" }
+                    if cut { " cut" } else { "" }
                 );
             }
             MoveEval {
@@ -847,8 +791,7 @@ impl Engine {
         }
     }
 
-    /// 対局の取り込み (learn.rs) を用意する。実行は `learn_step` で
-    /// 1 探索ずつ進める。
+    /// Prepare a game import (learn.rs); drive it with `learn_step`.
     pub fn learn_start(
         &self,
         start: Option<&str>,
@@ -858,13 +801,10 @@ impl Engine {
         crate::learn::BackupJob::new(start, kifu, learn_depth.min(u8::MAX as u32) as u8)
     }
 
-    /// 対局の取り込みを 1 探索ぶんだけ進める。完了したら結果を返し、
-    /// 学習分をファイルへ保存する。
-    ///
-    /// 1 回の呼び出しは高々 1 回の評価 (代替手の子局面 1 つ、または
-    /// 終局していない棋譜の終端) しかしないので、対局の合間に呼んでも
-    /// 応答性を壊さない。`learn_depth` は評価の深さ (実戦より浅い速報値。
-    /// 完全読みの開始も一時的に絞る)。
+    /// Advance the import by one search; on completion returns the
+    /// outcome and saves the overlay. Each call performs at most one
+    /// evaluation, so it can run between games without hurting
+    /// responsiveness. `learn_depth` is the (shallower) evaluation depth.
     pub fn learn_step(
         &mut self,
         job: &mut crate::learn::BackupJob,
@@ -872,13 +812,13 @@ impl Engine {
     ) -> Result<Option<crate::learn::BackupOutcome>, String> {
         use crate::learn::JobStep;
         self.stop.reset();
-        // learned/book を外してジョブに渡す (self は探索にだけ使う)
+        // Detach learned/book for the job; self is only used to search.
         let mut base = self.book.take().unwrap_or_default();
         let mut learned = std::mem::take(&mut self.learned);
         let done = match job.next(&mut learned, &mut base) {
             JobStep::Search(b) => {
-                // 学習は局面ごとに合法手の数だけ評価するので、完全読みの
-                // 開始を一時的に絞ってコストを抑える (速報値でよい)
+                // Learning evaluates every legal move per position;
+                // temporarily narrow the solve entry to keep it cheap.
                 let saved_solve = self.config.solve_empties;
                 self.config.solve_empties = saved_solve.min(20);
                 let v = self.eval_position_inner(&b, learn_depth);
@@ -895,16 +835,14 @@ impl Engine {
         };
         self.book = (!base.is_empty()).then_some(base);
         self.learned = learned;
-        save.map_err(|e| format!("学習の保存 {}: {e}", self.learn_path.display()))?;
+        save.map_err(|e| format!("saving learned book {}: {e}", self.learn_path.display()))?;
         Ok(done)
     }
 
-    /// 取り込みを 1 局ぶん取り消す。戻せた手の数を返す。
-    ///
-    /// 学習分を書き戻して保存したあと、**定石本体をファイルから読み直して
-    /// 重ね直す**。あちらは「ファイル + 学習分」なので、学習分を直したら
-    /// 作り直すのが正しい (部分的に戻すと、元のファイルに何が入っていたかを
-    /// 推測することになる)。
+    /// Undo one game's import; returns how many moves were reverted.
+    /// After restoring and saving the overlay, the base book is reloaded
+    /// from file and re-merged — it is file + overlay, so rebuild rather
+    /// than guess what the file contained.
     pub fn undo_learn(
         &mut self,
         start: Option<&str>,
@@ -914,7 +852,7 @@ impl Engine {
         let n = crate::learn::undo_backup(&mut self.learned, start, kifu, changes)?;
         self.learned
             .save(&self.learn_path)
-            .map_err(|e| format!("学習の保存 {}: {e}", self.learn_path.display()))?;
+            .map_err(|e| format!("saving learned book {}: {e}", self.learn_path.display()))?;
         let mut book = match Book::load(&self.config.book) {
             Ok(b) if !b.is_empty() => Some(b),
             _ => None,
@@ -927,15 +865,15 @@ impl Engine {
         Ok(n)
     }
 
-    /// 局面を指定深さで評価する (評価値グラフ・検討用)。完全読み域は厳密値。
-    /// 値は手番視点。
+    /// Evaluate a position at a given depth (eval graph / study); exact
+    /// in the solve region. Mover view.
     pub fn eval_position(&mut self, board: &Board, depth: u32) -> MoveEval {
         self.stop.reset();
         self.eval_position_inner(board, depth)
     }
 
-    /// `eval_position` の本体。停止ハンドルをリセットしないので、外から
-    /// 止められる長い処理 (学習の書き戻し) が繰り返し呼べる。
+    /// Body of `eval_position`; does not reset the stop handle so long
+    /// externally-stoppable jobs (learning) can call it repeatedly.
     fn eval_position_inner(&mut self, board: &Board, depth: u32) -> MoveEval {
         if is_game_over(board) {
             return MoveEval {
@@ -975,13 +913,11 @@ impl Engine {
         }
     }
 
-    /// 全合法手を採点する (WZebra 的なヒント表示用)。各手を打った子局面を
-    /// `depth - 1` (完全読み域は厳密) で評価し、親の手番視点の値で返す。
-    /// 値の大きい順にソート済み。
-    ///
-    /// 手の間の比較可能性を優先し、各子局面を**同一条件** (クリアした
-    /// 置換表・単一スレッド) で測る。共有の温まった表のままだと、先に測った
-    /// 手のエントリが後の手の探索に混ざり、対称局面ですら数石ずれる。
+    /// Score every legal move (WZebra-style hints): each child at
+    /// `depth - 1` (exact in the solve region), parent mover view,
+    /// sorted descending. Comparability first: each child is measured
+    /// under identical conditions (cleared table, single thread) —
+    /// a shared warm table skews even symmetric positions by discs.
     pub fn analyze(&mut self, board: &Board, depth: u32) -> Vec<(Position, MoveEval)> {
         self.stop.reset();
         let saved_threads = self.search.threads;
@@ -989,7 +925,7 @@ impl Engine {
         let mut out = Vec::new();
         for pos in board.movable_iter() {
             if self.stop.is_stopped() {
-                break; // 中断: ここまでの採点だけ返す
+                break; // stopped: return what has been scored
             }
             let mut child = *board;
             child.make_move_bits(pos);
@@ -1036,26 +972,20 @@ impl Engine {
             out.push((pos, ev));
         }
         self.search.threads = saved_threads;
-        // 解析でばらまいた浅いエントリを対局用の探索に引き継がない
+        // Don't carry analysis' shallow entries into play searches.
         self.search.clear();
         out.sort_by(|a, b| b.1.value.total_cmp(&a.1.value));
         out
     }
 
-    /// 深さを 1 ずつ上げながら全合法手を採点し、段ごとに結果を渡す。
+    /// Score all legal moves at increasing depth, reporting per pass.
     ///
-    /// 止めるまで深くし続ける (`on_pass` が false を返すか、停止ハンドルが
-    /// 立つまで)。深い答えが出るたびに前の答えを置き換えるので、途中で
-    /// 止めてもその時点の最良が手元に残る。
-    ///
-    /// 読み切りに届いた手はそこで確定するので、以後の段では測り直さない。
-    /// `on_pass` の第 3 引数は、この呼び出しが始まってから訪れたノードの数。
-    /// 画面に働きぶりを出すために渡す (探索の判断には使わない)。
-    ///
-    /// **強さの設定 (`solve_empties`) は見ない。** ここは「反復深化がいま
-    /// どこまで読めたか」をそのまま出す場所で、深さは止めるまで上がり続ける。
-    /// 読み切りに入るかは深さが残り空きマス数に届いたかだけで決まる。
-    /// 設定の読切は対局と評価値グラフ (固定の強さで測る側) に効く。
+    /// Deepens until `on_pass` returns false or the stop handle rises;
+    /// each pass replaces the last, so stopping keeps the best so far.
+    /// Solved moves stay fixed in later passes. `on_pass`'s third
+    /// argument is nodes visited (display only). `solve_empties` is
+    /// deliberately ignored: this reports how far deepening got, and a
+    /// move solves when depth reaches the empty count.
     pub fn analyze_deepening(
         &mut self,
         board: &Board,
@@ -1089,9 +1019,9 @@ impl Engine {
                         cut: false,
                     }
                 } else if u32::from(child.empty_count()) <= depth {
-                    // 深化がこの手の終局まで届いた。中盤探索は MPC で枝を
-                    // 刈るので深さが足りていても厳密ではない — ここだけは
-                    // ソルバに渡して厳密値にし、読み切りとして確定させる
+                    // Deepening reached this move's end. MPC makes the
+                    // midgame value inexact even at full depth, so hand
+                    // it to the solver and pin it as exact.
                     let r = self.solver.solve_with_eval(
                         EndSolverMode::Perfect,
                         &child,
@@ -1118,21 +1048,21 @@ impl Engine {
                         from_book: false,
                         learned: false,
                         depth: reached + 1,
-                        cut: false, // 子を d 読んだ = 親から見て d+1 手先まで
+                        cut: false, // child at d = d+1 plies from the parent
                     }
                 };
                 out.push((pos, ev));
             }
             out.sort_by(|a, b| b.1.value.total_cmp(&a.1.value));
             let go_on = on_pass(depth, &out, self.nodes() - base_nodes);
-            // 全部が読み切りなら、深くしても答えは変わらない
+            // All moves solved: deeper passes cannot change anything.
             if !go_on || all_exact || depth >= 60 {
                 break;
             }
             depth += 1;
         }
         self.search.threads = saved_threads;
-        // 解析でばらまいた浅いエントリを対局用の探索に引き継がない
+        // Don't carry analysis' shallow entries into play searches.
         self.search.clear();
     }
 }
@@ -1142,32 +1072,30 @@ mod progress_tests {
     use super::Progress;
     use crate::Position;
 
-    /// **`clear()` は反転の指定も戻す。**
+    /// `clear()` must reset the negate flag.
     ///
-    /// 先読みは「自分が指した後の局面」を読むので手番が相手になり、画面へ
-    /// 出す石差だけ符号を反転している。その指定を `clear()` が戻していな
-    /// かったため、**一度でも先読みをすると以降の思考が全部反転して**
-    /// 出ていた。実戦では盤の途中経過が −35、指した手の確定値が +35.3 と
-    /// 逆に並んで露見した (指す手そのものは正しく、表示だけの害)。
+    /// It once didn't, so a single ponder made every later think display
+    /// with inverted sign (a -35 live value against a +35.3 final; moves
+    /// themselves were fine — display-only damage).
     #[test]
     fn clear_drops_the_flip() {
         let p = Progress::default();
         let mv = Position::from_index(19);
 
-        // 先読み: 相手の手番の値なので反転して置く
+        // Ponder: opponent-view value, stored negated.
         p.set_kind(Progress::PONDER);
         p.flip.store(true, std::sync::atomic::Ordering::Relaxed);
         p.reached(6, mv, 4.0);
-        assert_eq!(p.snapshot().3, Some(-4.0), "先読みは反転して置く");
+        assert_eq!(p.snapshot().3, Some(-4.0), "ponder stores negated");
 
-        // 思考へ移る: clear() の後は反転しない
+        // Moving to think: no negation after clear().
         p.clear();
         p.set_kind(Progress::THINK);
         p.reached(6, mv, 4.0);
         assert_eq!(
             p.snapshot().3,
             Some(4.0),
-            "clear() の後は反転を持ち越さない"
+            "clear() must not carry the negate flag over"
         );
     }
 }

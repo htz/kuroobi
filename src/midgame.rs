@@ -6,9 +6,10 @@
 //! shallow depths, YBWC splits below, Multi-ProbCut with unpruned probes and
 //! a static-eval gate, and a 4-way shared transposition table.
 
-// 添字ループは走査順そのものが意味を持つ (連続領域の走査・SIMD 的な
-// 展開) ため、イテレータ化の助言は採らない。引数の多い探索関数も、
-// 構造体に束ねると呼び出しごとの構築が入るので現状の形を保つ。
+// Indexed loops here iterate in an order that matters (contiguous scans,
+// SIMD-style unrolling), so the iterator lints are not taken. Search
+// functions keep their long argument lists: bundling them into a struct
+// would add per-call construction on a hot path.
 #![allow(clippy::needless_range_loop)]
 #![allow(clippy::too_many_arguments)]
 
@@ -23,15 +24,12 @@ const PVS_EPS: f32 = 0.01;
 /// recomputes the flips), and the ordering key.
 type Kid = (Position, u64, i32);
 
-/// f32 の並べ替え鍵を、**順序を保ったまま** i32 へ写す。
+/// Map an f32 sort key to i32 while preserving order exactly.
 ///
-/// `f32::total_cmp` は比較のたびにこの変換をする。要素ごとに 1 回掛けて
-/// おけば n log n 回が n 回で済む。**並び順は 1 ビットも変わらない** —
-/// total_cmp の中身と同じ写像だから (テストで総当たり確認)。
-///
-/// **速度差は測っても分からなかった。** 同一バイナリでも巡ごとに 5.9%
-/// 動くので、この規模の変更は雑音に埋もれる。落ちていないことだけが
-/// 言える。順序が不変で費用も増えないので残す。
+/// This is the same mapping `f32::total_cmp` performs per comparison;
+/// doing it once per element turns n log n conversions into n. Order is
+/// bit-identical (exhaustively tested). The speed difference is below
+/// measurement noise; kept because it cannot regress order or cost.
 #[inline]
 fn order_key(x: f32) -> i32 {
     let b = x.to_bits() as i32;
@@ -60,13 +58,13 @@ fn eval_order_depth() -> u32 {
 /// so the caller knows to discard it rather than treat it as an evaluation.
 const ABORTED: f32 = f32::NEG_INFINITY;
 
-/// **`root_move` と置換表の食い違いを数える計器** (`ROOT_DIFF=1` のときだけ)。
+/// Instrument counting root_move vs transposition-table disagreements
+/// (only when `ROOT_DIFF=1`).
 ///
-/// 「根の手を表から読み直す」欠陥がどれだけ発火するかを測るために置いた。
-/// 実測 (40 局面・深さ 16): 逐次 0 件、4 スレッド 7 件 — **並列のときだけ
-/// 食い違う**。ただし食い違うのは段の途中で、**返す手は変わらなかった**
-/// (深さ 8/10/12/14 いずれも 0 件)。欠陥は実在するが、実戦の悪手の原因では
-/// ないと判じた根拠。
+/// Measured: 0 disagreements sequential, 7 with 4 threads — parallel
+/// only, and always mid-iteration; the returned move never changed.
+/// This is the evidence that the "re-read root move from the table"
+/// defect, while real, was not the cause of the in-game blunders.
 pub static ROOT_DIFF: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
 pub static ROOT_TOTAL: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
 
@@ -77,19 +75,16 @@ pub static ROOT_TOTAL: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU
 /// How much each step of `mpc_relax` widens the ProbCut margin.
 const MPC_RELAX_STEP: f32 = 1.18;
 
-/// 反復深化で「次の段」が前の段の何倍かかるかの見積もり。リバーシの中盤は
-/// 分岐が 8〜12 で、置換表と手順付けが効くぶん実測はこれより小さい。
-/// 大きく見るほど早めに切り上げる (時間切れで段を丸ごと捨てるより得)。
+/// Estimated cost ratio of the next iteration over the previous one.
+/// Midgame branching is 8-12 but tables and ordering make the real ratio
+/// smaller; a larger estimate bails out earlier (better than losing a
+/// whole iteration to the deadline).
 ///
-/// **3.0 は切り上げが早すぎた。** 期限に対する実際の使用率を測ると 34%
-/// しかなく、GGS のレート戦でも持ち時間の 40〜46% を残して終わっていた。
-/// 2.0 へ下げると 47%。1.5 でも 47% で変わらないので、余計に踏み込まない
-/// 2.0 を採る。
-///
-/// **47% が構造的な上限。** 1 段が前段の約 3 倍かかるので、完了した段までの
-/// 累計は最後の段の約 1.5 倍、次の段はその 3 倍 — 予算に収める条件が
-/// `4.5 × 最後の段 ≤ 予算` になり、使えるのは 3 分の 1 前後にしかならない。
-/// 残りは予算側で補う ([`crate::timectl`] の `BUDGET_USE`)。
+/// 3.0 bailed too early: measured budget utilization was 34%, and rated
+/// games ended with 40-46% of the clock unused. 2.0 gives 47%, and 1.5
+/// gives no more, so 2.0 stands. ~47% is a structural ceiling (the
+/// budget must hold ~4.5x the last iteration); the rest is compensated
+/// on the budget side ([`crate::timectl`]'s `BUDGET_USE`).
 fn next_pass_factor() -> f32 {
     static V: std::sync::OnceLock<f32> = std::sync::OnceLock::new();
     *V.get_or_init(|| {
@@ -299,8 +294,9 @@ impl SharedTt {
         }
     }
 
-    // 共有置換表は「&self から可変参照を返す」構造そのものが設計。競合は
-    // キー不一致 (= ミス) にしかならず、ロックの代わりにそれを許容している。
+    // The shared table hands out mutable references from &self by
+    // design: races can only produce key mismatches (= misses), which we
+    // accept instead of locking.
     #[allow(clippy::mut_from_ref)]
     #[inline]
     fn bucket(&self, hash: u64) -> &mut TtBucket {
@@ -319,16 +315,16 @@ impl SharedTt {
         unsafe { self.bucket(hash).0.get_unchecked_mut(i as usize) }
     }
 
-    /// **その行を先に引き寄せる。** 536 MB の表はほぼ必ず主記憶まで行くので、
-    /// 引く直前に呼んでも意味がない。**親が子の分を出す**ことで、残りの手の
-    /// 並べ替えにかかる時間を待ちに充てる。
+    /// Prefetch the bucket line. A 536 MB table nearly always misses to
+    /// main memory, so the parent issues the prefetch for its children
+    /// and the move-ordering work overlaps the fetch latency.
     #[inline]
     fn prefetch(&self, hash: u64) {
         #[cfg(target_arch = "aarch64")]
         {
             let p = self.bucket(hash) as *const TtBucket as *const u8;
-            // SAFETY: prfm は投機的な読みで、行が無効でも例外にならない。
-            // ここは `bucket` が返した正規のポインタ。
+            // SAFETY: prfm is a speculative read and cannot fault; the
+            // pointer is the valid one `bucket` returned.
             unsafe {
                 std::arch::asm!("prfm pldl2keep, [{0}]", in(reg) p, options(nostack, readonly));
             }
@@ -349,34 +345,32 @@ impl SharedTt {
         TtEntry::EMPTY
     }
 
-    /// 置換表に載っている最善手 (無ければ `None`)。
+    /// Best move stored in the table, if any.
     ///
-    /// **ポンダリングが「相手が指すと思う手」を取るための口。** 既に済んだ
-    /// 探索の結果を読むだけで、探索し直さない。表は上書きされるので、
-    /// 直前に読んだ局面でも消えていることがある — 予測が取れないときは
-    /// 「予測しない」で正しく、そこで探索し直すと本末転倒になる。
+    /// Pondering uses this to fetch the predicted reply from finished
+    /// search results without searching again. Entries get overwritten,
+    /// so even a just-searched position may be gone; when there is no
+    /// prediction the right answer is "don't predict".
     pub fn best_move(&self, hash: u64) -> Option<u8> {
         let e = self.get(hash);
         (e.flag != 0 && e.best < 64).then_some(e.best)
     }
 
-    /// **外から「この手を先に見ろ」と入れる口。**
+    /// External move-ordering hint: "try this move first".
     ///
-    /// 同期対局では 2 面が鏡像なので、相手が片方で指した手はこちらの
-    /// もう片方の候補そのものになる。強い相手が長考して選んだ手を並べ替えの
-    /// 先頭に置ければ、同じ時間でより深く読める。
+    /// In synchro games the two boards mirror each other, so the
+    /// opponent's move on one board is a candidate on the other; seeding
+    /// it first lets the same time reach greater depth.
     ///
-    /// **打ち切りには一切使わせない。** 上下限を `-∞ / +∞` で入れるので、
-    /// 探索が値として読む条件 (`upper <= alpha`, `beta <= lower`,
-    /// `upper == lower`) はどれも成り立たない。運ぶのは手だけ。
-    ///
-    /// 深さは 0 で入れる。実際の探索結果が来たら必ず上書きされる。
+    /// Never usable for cutoffs: bounds go in as -inf/+inf so none of
+    /// the value-read conditions can hold, and depth 0 guarantees any
+    /// real search result overwrites it. Only the move travels.
     pub fn seed_move(&self, hash: u64, best_move: u8) {
         if best_move >= 64 {
             return;
         }
         if self.best_move(hash).is_some() {
-            return; // 既に自前の答えがあるなら触らない
+            return; // never clobber a real entry
         }
         self.put(hash, 0, 0, f32::INFINITY, f32::NEG_INFINITY, 0.0, best_move);
     }
@@ -574,10 +568,10 @@ thread_local! {
 /// Without the chain a split subtree only ever sees the flag of the node that
 /// created it: when a grandparent cuts off, the grandchild keeps searching a
 /// tree nobody will read, and the parent sits blocked in `wait` for it.
-/// 外部 (UI 等) から探索を中断させるためのハンドル。
+/// Handle for external (UI) search interruption.
 ///
-/// 中盤探索・終盤ソルバはどちらもノードごとに参照する。立てた後は
-/// `reset` するまで新しい探索も即座に諦めるので、次の探索の前に必ず戻す。
+/// Both the midgame search and the endgame solver poll it per node.
+/// Once raised, new searches also give up immediately until `reset`.
 #[derive(Clone, Default)]
 pub struct StopHandle(std::sync::Arc<std::sync::atomic::AtomicBool>);
 
@@ -587,7 +581,7 @@ impl StopHandle {
             false,
         )))
     }
-    /// 進行中の探索を打ち切る。
+    /// Abort the search in progress.
     pub fn stop(&self) {
         self.0.store(true, std::sync::atomic::Ordering::Relaxed);
     }
@@ -829,8 +823,8 @@ impl Pool {
             // spinning worker that did not count itself would not be offered
             // anything.
             self.idle.fetch_add(1, Ordering::Relaxed);
-            // 外側は値を返すためのラベルで、実際には 1 周もしない (内側の
-            // 条件待ちループから `break 'get` で値を持ち出す形)。
+            // The outer loop is just a label to break a value out of the
+            // inner wait loop; it never actually iterates.
             #[allow(clippy::never_loop)]
             let task = 'get: loop {
                 // Sleep until woken,
@@ -887,22 +881,22 @@ pub struct NnueSearch {
     /// irrelevant; checked periodically so the worker can stop immediately
     /// instead of finishing work nobody will use.
     abort: Option<std::sync::Arc<AbortChain>>,
-    /// 外部からの中断ハンドル (UI の停止ボタン等)。
+    /// External stop handle (UI stop button etc.).
     stop: Option<StopHandle>,
-    /// **この探索が根で選んだ手。**
+    /// The move this search chose at its own root.
     ///
-    /// 置換表から読み直してはいけない。Lazy SMP のヘルパーは**同じ根を
-    /// 違う深さ・強い枝刈りで探索して同じ表に書く**ので、表の根エントリは
-    /// 「最後に書いた誰か」の手になる。値は主スレッドのものを返すのに手だけ
-    /// 他人のものになり、**値と手が別の探索から来る**。実戦で 15 手中 14 位の
-    /// X 打ちを 129 秒かけて選び、その手の真値 (-21) でも最善手の値 (-2) でも
-    /// ない -12.86 を報告した。
+    /// Never re-read it from the table: Lazy SMP helpers search the same
+    /// root at other depths with stronger pruning and write to the same
+    /// table, so the root entry belongs to "whoever wrote last" — value
+    /// and move would come from different searches. In a real game that
+    /// produced a 129-second X-square blunder reported at a value
+    /// belonging to neither move.
     root_move: Option<Position>,
-    /// 根の局面ハッシュ。**この探索自身の根**を見分けるために持つ
-    /// (0 = 根を持たない = ヘルパー)。
+    /// Root position hash, identifying this search's own root
+    /// (0 = no root = helper).
     root_hash: u64,
-    /// **段を 1 つ終えるたびに書き込む途中経過** (対局中に外から覗く口)。
-    /// 書き込みは 1 手につき十数回で、探索の内側には入らない。
+    /// Progress written after each completed iteration (the live-view
+    /// hook during games). A dozen writes per move, none inside the search.
     progress: Option<std::sync::Arc<crate::engine::Progress>>,
     abort_countdown: u64,
     /// Set once the main Lazy SMP thread has reached the target depth; helpers
@@ -990,7 +984,7 @@ impl NnueSearch {
             probcut_level: 0,
             abort: self.abort.clone(),
             stop: self.stop.clone(),
-            // 複製 (ヘルパー) の選んだ手は根へ返さない
+            // A helper clone's move never reaches the root.
             root_move: None,
             root_hash: 0,
             abort_countdown: ABORT_CHECK_INTERVAL,
@@ -998,8 +992,8 @@ impl NnueSearch {
             my_gen: self.my_gen,
             pool: self.pool,
             mpc_relax: self.mpc_relax,
-            // 途中経過を書くのは主スレッドだけ。手伝いが書くと、主が
-            // 到達していない深さが画面に出る
+            // Only the main thread writes progress; helpers would show
+            // depths the main search has not reached.
             progress: None,
         }
     }
@@ -1030,8 +1024,8 @@ impl NnueSearch {
         self.abort.as_ref().is_some_and(|f| f.stopped())
     }
 
-    /// 外部からの中断ハンドルを設定する。
-    /// 段の切れ目で途中経過を書き込む先を渡す (対局中だけ)。
+    /// Install the external stop handle.
+    /// Set the progress sink written at iteration boundaries (games only).
     pub fn set_progress(&mut self, p: Option<std::sync::Arc<crate::engine::Progress>>) {
         self.progress = p;
     }
@@ -1070,12 +1064,13 @@ impl NnueSearch {
         (p, v)
     }
 
-    /// 期限つきの探索。反復深化なので、期限が来たら**直前に完了した段**の
-    /// 答えを返せる (途中の段は捨てる)。戻り値の 3 つ目は到達した深さ。
+    /// Deadline-bounded search. Iterative deepening returns the last
+    /// completed iteration when time runs out (partial iterations are
+    /// discarded); the third return value is the reached depth.
     ///
-    /// 期限の見張りは専用スレッドに任せて停止ハンドルを立てさせる。探索の
-    /// 内側で時計を読むと、読む頻度を落とせば効きが鈍り、上げれば探索が
-    /// 遅くなる。停止ハンドルの確認はもともと一定ノードごとに走っている。
+    /// A dedicated watcher thread raises the stop handle: polling the
+    /// clock inside the search either dulls the response or slows the
+    /// search, while the stop-handle check already runs every N nodes.
     pub fn best_move_deadline(
         &mut self,
         b: &Board,
@@ -1091,7 +1086,7 @@ impl NnueSearch {
             let done = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
             let d2 = done.clone();
             std::thread::spawn(move || {
-                // 細かく起きて、探索が先に終わっていれば黙って抜ける
+                // Wake often; exit quietly if the search finished first.
                 while !d2.load(std::sync::atomic::Ordering::Relaxed) {
                     let now = std::time::Instant::now();
                     if now >= dl {
@@ -1121,10 +1116,9 @@ impl NnueSearch {
             // Lazy SMP runs its own iterative deepening on every worker; doing
             // the shallow passes here as well would just duplicate them.
             //
-            // **期限つきでもこちらへ来る。** 以前は `deadline.is_none()` を
-            // 条件に入れていたので、持ち時間のある対局では中盤が常に
-            // 1 スレッドだった (読切だけが並列)。スレッド数を上げても中盤が
-            // 速くならない、という状態を実機の CPU 使用率で見つけた。
+            // Deadline searches take this path too. It once required
+            // `deadline.is_none()`, which silently made every timed game
+            // single-threaded in the midgame; found via CPU utilization.
             return self.lazy_smp(b, depth, deadline);
         }
         let mut acc = self.nn.indices(b.black, b.white);
@@ -1140,8 +1134,9 @@ impl NnueSearch {
                 if now >= dl {
                     break;
                 }
-                // 次の段は前の段の数倍かかる。入っても終わらないなら始めない
-                // (始めれば見張りに切られ、その段はまるごと捨て札になる)
+                // The next iteration costs several times the last; don't
+                // start one that cannot finish (it would just be killed
+                // and discarded).
                 if reached > 0 && now + last_pass.mul_f32(next_pass_factor()) >= dl {
                     break;
                 }
@@ -1150,8 +1145,8 @@ impl NnueSearch {
             self.root_hash = zobrist::board_hash(b.player_bb(), b.opponent_bb());
             self.root_move = None;
             let v = self.negamax(b, &mut acc, d, f32::NEG_INFINITY, f32::INFINITY);
-            // 期限で切られた段は不完全。直前の段の答えを残す
-            // (中断値そのものを見る — 理由は `lazy_smp` 側のコメント)
+            // A cut iteration is incomplete; keep the previous answer
+            // (check the abort value itself — see lazy_smp for why).
             if v == ABORTED || self.stop.as_ref().is_some_and(|s| s.is_stopped()) {
                 break;
             }
@@ -1246,8 +1241,8 @@ impl NnueSearch {
         let nodes = AtomicU64::new(0);
         let mut acc = self.nn.indices(b.black, b.white);
         let mut value = f32::NAN;
-        // 期限つきのときは逐次経路と同じ扱い: 切られた段は捨て、直前の段の
-        // 答えを返す。到達した深さも返す (画面に出る「N 手」)
+        // Same policy as the sequential path: discard cut iterations,
+        // return the previous answer plus the reached depth.
         let mut best = None;
         let mut reached = 0;
         let mut last_pass = std::time::Duration::ZERO;
@@ -1265,8 +1260,8 @@ impl NnueSearch {
                     if now >= dl {
                         break;
                     }
-                    // 次の段は前の段の数倍かかる。入っても終わらないなら始めない
-                    // (始めれば見張りに切られ、その段はまるごと捨て札になる)
+                    // The next iteration costs several times the last;
+                    // don't start one that cannot finish.
                     if reached > 0 && now + last_pass.mul_f32(next_pass_factor()) >= dl {
                         break;
                     }
@@ -1312,28 +1307,26 @@ impl NnueSearch {
 
                 // Retire this iteration's helpers before starting the next, so
                 // stale passes do not keep cores away from the deeper search.
-                // **切られたときも必ず通す** — 引退させずに抜けるとヘルパーが
-                // 次の探索まで走り続け、コアを奪ったままになる。
+                // Must run even when cut — otherwise helpers keep
+                // running (and holding cores) until the next search.
                 gen.store(u32::MAX, Ordering::Relaxed);
                 for slot in slots {
                     pool.unwrap().wait(&slot);
                     nodes.fetch_add(slot.nodes.load(Ordering::Relaxed), Ordering::Relaxed);
                 }
 
-                /* 期限で切られた段は不完全。直前の段の答えを残す。
+                /* A cut iteration is incomplete; keep the previous
+                answer. Check the abort value itself: checking only the
+                external deadline once let iterations aborted for other
+                reasons (fan-out aborts reaching the root) be accepted as
+                complete — the value became a plausible-looking +0.00
+                (stone_scale rounds the non-finite sentinel) and the move
+                came from the table, i.e. from someone else. That exact
+                combination produced an in-game X-square blunder.
 
-                **中断値そのものを見る。** 外部の期限だけを見ていたので、
-                それ以外の理由で中断した段 (扇形展開の打ち切りが根まで届いた
-                等) を「完了した段」として採ってしまっていた。害は 2 つ:
-                値は `stone_scale` が非数を 0 に丸めるので**+0.00 と報告**
-                され、手は主探索が持たないぶん**表から読み直した別物**に
-                なる。実戦で空き 44・期限 128.7 秒の手が「+0.00」で X 打ちに
-                なった (同じ局面を同じ期限で読み直すと g4 −0.97)。
-
-                **深さが空きマス数を超えること自体は異常ではない。** MPC が
-                効くので名目の深さは空きを越えられ、越えた段は同じ木を
-                なぞるだけで即座に終わる。これを異常の印だと思って探すと
-                空振りする (一度そうした)。 */
+                Note: nominal depth exceeding the empty count is NOT a
+                bug sign — MPC lets iterations pass it, and such
+                iterations re-walk the same tree instantly. */
                 if v == ABORTED || self.stop.as_ref().is_some_and(|s| s.is_stopped()) {
                     break;
                 }
@@ -1344,16 +1337,14 @@ impl NnueSearch {
                 if let Some(p) = self.progress.as_ref() {
                     p.reached(main_depth, best, v);
                 }
-                /* 調べもの用: 段ごとの値の動き。**実戦で「深い段だけ値が
-                跳ねる」ことがあったか**を後から見るために置く。既定では
-                何もしない。 */
-                /* **どの探索の段かを添える。** 同期対局と先読みで複数の
-                探索が同時に走るので、標準エラーの行は混ざる。根の局面の
-                ハッシュを付けないと隣の探索の段と突き合わせてしまう
-                (一度それで「食い違い 91 件」と誤読した)。 */
+                /* Diagnostics: per-iteration values, tagged with the
+                root hash. Concurrent searches (synchro boards, ponder)
+                interleave on stderr, and without the tag lines from
+                neighboring searches get paired up wrongly. Off by
+                default. */
                 if std::env::var("ROOT_TRACE").is_ok() {
                     eprintln!(
-                        "  段 [{:016x}] {main_depth:2} {v:+8.2} {:?} {:.1}s",
+                        "  iter [{:016x}] {main_depth:2} {v:+8.2} {:?} {:.1}s",
                         self.root_hash,
                         best,
                         t0.elapsed().as_secs_f32()
@@ -1363,15 +1354,16 @@ impl NnueSearch {
         }
         self.nodes += nodes.load(Ordering::Relaxed);
         let out = best.or_else(|| self.root_best(b, &mut acc));
-        /* 調べもの用: **旧実装 (置換表から読み直す) なら違う手を指していたか**。
-        段の途中の食い違いは指し手に出ないので、返す直前に 1 回だけ見る。 */
+        /* Diagnostics: would the old implementation (re-reading the
+        table) have played a different move? Checked once just before
+        returning, since mid-iteration disagreements never surface. */
         if std::env::var("ROOT_DIFF").is_ok() {
             let from_tt = self.root_best(b, &mut acc);
             ROOT_TOTAL.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
             if from_tt != out {
                 ROOT_DIFF.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
                 eprintln!(
-                    "  返す手 {:?} / 置換表 {:?} (深さ {reached})",
+                    "  returning {:?} / table {:?} (depth {reached})",
                     out.map(|p| p.index()),
                     from_tt.map(|p| p.index())
                 );
@@ -1455,15 +1447,15 @@ impl NnueSearch {
                     k += (38.0 - potential_mobility(nb.opponent_bb(), empties) as f32) * w_pm;
                 }
                 if eval_order {
-                    // 葉と同じ理由で戻さず写す (`eval1_nws` のコメント参照)。
+                    // Copy instead of undo, as at the leaves (see eval1_nws).
                     let mut child = *acc;
                     self.nn.ix_apply(&mut child, pos, flipped, mover);
                     k += -self.nn.eval_from_indices(&child, &nb) * w_val;
                 }
                 k
             };
-            /* 子の行を先に引き寄せる。ここで出しておくと、残りの手を並べる
-            間に主記憶からの往復が終わる。 */
+            /* Prefetch the children's lines; the round-trip to main
+            memory completes while the remaining moves are ordered. */
             self.tt
                 .prefetch(zobrist::board_hash(nb.player_bb(), nb.opponent_bb()));
             out[n] = (pos, flipped, order_key(key));
@@ -1507,10 +1499,11 @@ impl NnueSearch {
                 let mut nb = *b;
                 let flipped = nb.make_move_bits(pos);
                 self.nodes += 1;
-                /* **葉では索引を戻さず複製する。** `ix_undo` は裏返った石ごとに
-                CSR を引き直す (置いた 1 マス + 裏返り分で 40 前後の更新) のに
-                対し、`PatternIndices` は 160 バイトの固定配列なので丸ごと写す
-                方が命令数が少なく、依存の鎖も切れる。 */
+                /* At the leaves, copy the indices instead of undoing:
+                ix_undo re-derives the CSR per flipped disc (~40 updates)
+                while `PatternIndices` is a fixed 160-byte array — the
+                copy is fewer instructions and breaks the dependency
+                chain. */
                 let mut child = *acc;
                 self.nn.ix_apply(&mut child, pos, flipped, mover);
                 let g = -self.nn.eval_from_indices(&child, &nb);
@@ -1596,27 +1589,25 @@ impl NnueSearch {
                 // deep and at least as accurately as this node needs.
                 tt_move = e.best;
                 tt_move2 = e.best2;
-                /* **根では表のカットを使わない。**
+                /* No table cutoffs at the root.
 
-                根の窓は (−∞, +∞) なので `e.upper == e.lower` の登録に
-                当たると、**探索を一切せずに表の値をそのまま返す**。
-                反復深化の全段がこれに当たり、37 段が 0.0 秒で終わって
-                全段同じ値になる (CLI 対戦 5 局で 1484 回中 178 回)。
+                The root window is (-inf, +inf), so an `upper == lower`
+                entry would return the stored value without searching at
+                all — every iteration hits it and 37 iterations finish in
+                0.0s with identical values (measured: 178 of 1484
+                searches across 5 games). As the comment above admits,
+                bounds stored under MPC are probabilistic, not sound:
+                helper threads, ponder and previous moves store values
+                under different conditions, and the same position was
+                observed returning -0.0, -0.0, -0.0, -15.1 across
+                searches. Matches the in-game "move right, value wrong"
+                reports (+0.00 / +35.9 / -4.66).
 
-                コメントが上で認めているとおり、**MPC のもとで登録された
-                「厳密」は本当は厳密ではない**。ヘルパースレッド・先読み・
-                前の手が別条件で入れた値が、そのまま根の答えとして出る。
-                同じ局面が探索ごとに違う値を返していた
-                (`-0.0 -0.0 -0.0 -15.1` のように)。
-
-                実戦で報告された `+0.00` / `+35.9` / `−4.66` は、いずれも
-                **手は正しいのに値だけ合わない**という形で、この筋と一致
-                する。手は表の最善手なので妥当なまま、値だけ素通しされる。
-
-                並べ替え用の手は引き続き使う (`tt_move`) — 速度に効いて
-                いるのはそちらで、値のカットは根では要らない。 */
+                The ordering move (`tt_move`) is still used — that is
+                where the speed lives; value cutoffs at the root are not
+                needed. */
                 if self.root_hash != 0 && h == self.root_hash {
-                    // 根: 値のカットはしない (手だけ使う)
+                    // Root: no value cutoff (moves only).
                 } else if e.depth as u32 >= depth && e.relax >= self.mpc_relax as u8 {
                     // Transposition cutoff.
                     if e.upper <= alpha || e.upper == e.lower {
@@ -1722,10 +1713,9 @@ impl NnueSearch {
         // Which of the two ordering weight sets to use. Null-window nodes
         // are most of the tree and get the cheap one.
         let mover = b.player();
-        /* **値と手は別に積む。** 零幅窓で沈んだ手の値は上界で、節点の値
-        (fail-soft) には使えるが指し手には使えない。同じ変数で追うと「値だけ
-        上がって手が取り残される」— 読切側で -20 の手が +16 の顔をして最善に
-        なったのと同じ形。 */
+        /* Track value and move separately: a fail-low is only an upper
+        bound — usable for the fail-soft node value, never for move
+        selection (the same shape as the solver's -20-move-as-+16 bug). */
         let mut best = f32::NEG_INFINITY;
         let mut best_val = f32::NEG_INFINITY;
         let mut best_move = 64u8;
@@ -1931,17 +1921,13 @@ impl NnueSearch {
                     let (nn, tt, mpc, relax) = (self.nn, self.tt, self.mpc, self.mpc_relax);
                     let (gen, my_gen) = (self.done.clone(), self.my_gen);
                     let stop = fan_stop.clone().unwrap();
-                    /* **外からの停止も渡す。渡さないと期限が効かない。**
-
-                    分割タスクは `NnueSearch::new` で作り直すので、`stop` が
-                    空のまま始まっていた。`abort` (兄弟が alpha を破った印) は
-                    渡していたが、それは木の中の都合であって、**期限・停止
-                    ボタン・時間切れの保険はどれも届かない**。
-
-                    結果、期限を過ぎても分割した部分木は最後まで走った。実測で
-                    **期限 5 秒に対して 13.1 秒** (空き 44・4 スレッド)。逐次
-                    (`threads: 1`) では守られるので並列のときだけ出る。Lazy SMP の
-                    ヘルパーは `worker()` 経由なので引き継げていた。 */
+                    /* Pass the external stop handle down — without it
+                    deadlines don't reach split tasks. They are rebuilt
+                    via `NnueSearch::new`, which left `stop` empty;
+                    `abort` (sibling beat alpha) was passed but that is
+                    tree-internal. Split subtrees then ran to completion
+                    past the deadline (13.1s against a 5s limit,
+                    parallel only). */
                     let ext_stop = self.stop.clone();
                     let (task_slot, child, a, d) = (slot.clone(), nb, alpha, depth - 1);
                     let pushed = pool.try_push(move || {
@@ -2094,7 +2080,8 @@ impl NnueSearch {
                 if g > best {
                     best = g;
                 }
-                // 全窓で読み直した値は真値なので、手の候補になる
+                // A full-window re-search yields a true value, so the
+                // move is a valid candidate.
                 if g > best_val {
                     best_val = g;
                     best_move = pos.index();
@@ -2119,8 +2106,8 @@ impl NnueSearch {
             return ABORTED;
         }
 
-        /* **自分の根で選んだ手を控える。** 置換表から読み直すと、同じ根を
-        違う深さ・強い枝刈りで探索しているヘルパーの手を掴む (`root_move`)。 */
+        /* Record the move chosen at our own root; re-reading the table
+        would pick up a helper's move (`root_move`). */
         if self.root_hash != 0 && h == self.root_hash && best_move < 64 {
             self.root_move = Position::from_index(best_move as u32);
         }
@@ -2141,13 +2128,13 @@ impl NnueSearch {
 mod deadline_tests {
     use super::*;
 
-    /// 期限を過ぎたら、そこまでに終わった深さの答えを返す。
-    /// (深い指定でも待たされない = 反復深化が段ごとに畳まれている)
+    /// Past the deadline, the answer from completed iterations returns
+    /// (a deep request does not block — deepening folds per iteration).
     #[test]
     fn deadline_cuts_the_search_short() {
-        // 重みは読まない (テストに weights/ を要求しない)。値は無意味だが、
-        // 段が畳まれるかどうかの確認には要らない。quantize は必須 (忘れると
-        // SIMD 経路が未初期化領域を読む)
+        // No weights loaded (tests must not require weights/); values
+        // are meaningless but iteration folding doesn't need them.
+        // quantize is mandatory or the SIMD path reads uninitialized data.
         let mut nn0 = Nnue::new(crate::pattern::EGAROUCID_PATTERNS);
         nn0.quantize();
         let nn: &'static Nnue = Box::leak(Box::new(nn0));
@@ -2158,27 +2145,28 @@ mod deadline_tests {
         let b = Board::new();
         let t0 = std::time::Instant::now();
         let dl = t0 + std::time::Duration::from_millis(120);
-        // 深さ 40 は本来数分かかる。期限で切り上がること
+        // Depth 40 would take minutes; the deadline must cut it.
         let (pos, _v, reached) = s.best_move_deadline(&b, 40, Some(dl));
         let el = t0.elapsed();
-        assert!(pos.is_some(), "浅くても手は返る");
-        assert!(reached >= 1, "少なくとも 1 段は終わっている");
-        assert!(reached < 40, "期限で切り上がる (到達 {reached})");
+        assert!(pos.is_some(), "a move returns even when shallow");
+        assert!(reached >= 1, "at least one iteration completes");
+        assert!(
+            reached < 40,
+            "the deadline cuts deepening (reached {reached})"
+        );
         assert!(
             el < std::time::Duration::from_secs(3),
-            "期限を大きく超えない ({el:?})"
+            "must not overshoot the deadline by much ({el:?})"
         );
     }
 
-    /// **並列でも切り上がるか。**
+    /// Deadline behavior with threads.
     ///
-    /// 上のテストは `threads = 1` だった。それだけを見ていたせいで、
-    /// **YBWC で分割した先に停止が届いていない**バグを通した (期限の 2.6 倍)。
-    ///
-    /// **ただしこれは砦であって、再現ではない。** 合成重みでは評価が退化して
-    /// 木が小さく、分割が起きる深さへ届く前に読み終わってしまう。落とすには
-    /// 実重みが要るので、再現は `tests/engine_smoke.rs` (要 weights) に置いた。
-    /// ここでは並列経路が期限内に手を返すことだけを見ている。
+    /// The test above ran threads=1 only, which let a bug through where
+    /// YBWC split tasks never received the stop (2.6x the deadline).
+    /// This is a bulwark, not a reproduction: synthetic weights make the
+    /// tree too small to split, so the real reproduction lives in
+    /// `tests/engine_smoke.rs` (requires weights).
     #[test]
     fn deadline_cuts_the_search_short_in_parallel() {
         let mut nn0 = Nnue::new(crate::pattern::EGAROUCID_PATTERNS);
@@ -2193,11 +2181,14 @@ mod deadline_tests {
         let dl = t0 + std::time::Duration::from_millis(200);
         let (pos, _v, reached) = s.best_move_deadline(&b, 40, Some(dl));
         let el = t0.elapsed();
-        assert!(pos.is_some(), "手は返る");
-        assert!(reached < 40, "期限で切り上がる (到達 {reached})");
+        assert!(pos.is_some(), "a move returns");
+        assert!(
+            reached < 40,
+            "the deadline cuts deepening (reached {reached})"
+        );
         assert!(
             el < std::time::Duration::from_secs(3),
-            "並列でも期限を大きく超えない ({el:?})"
+            "parallel search must not overshoot the deadline ({el:?})"
         );
     }
 }
@@ -2206,31 +2197,39 @@ mod deadline_tests {
 mod seed_tests {
     use super::*;
 
-    /// **入れた手が並べ替えに載り、値としては使われない。**
+    /// A seeded move participates in ordering but never as a value.
     ///
-    /// 同期対局の鏡像から借りた手を運ぶための口なので、**打ち切りに使われて
-    /// はいけない**。上下限が `-∞ / +∞` で入っていることを、表から読み直して
-    /// 確かめる。
+    /// It carries moves borrowed from the synchro mirror, so it must not
+    /// cause cutoffs; verify the stored bounds are -inf/+inf.
     #[test]
     fn a_seeded_move_carries_no_bounds() {
         let tt = SharedTt::new(16);
         let b = Board::new();
         let h = zobrist::board_hash(b.player_bb(), b.opponent_bb());
-        assert_eq!(tt.best_move(h), None, "最初は空");
+        assert_eq!(tt.best_move(h), None, "empty at first");
 
         tt.seed_move(h, 19);
-        assert_eq!(tt.best_move(h), Some(19), "手は載る");
+        assert_eq!(tt.best_move(h), Some(19), "the move is stored");
         let e = tt.get(h);
-        assert!(e.lower.is_infinite() && e.lower < 0.0, "下限が -∞ でない");
-        assert!(e.upper.is_infinite() && e.upper > 0.0, "上限が +∞ でない");
-        // 探索が値として読む 3 条件のどれも成り立たないこと
+        assert!(
+            e.lower.is_infinite() && e.lower < 0.0,
+            "lower bound must be -inf"
+        );
+        assert!(
+            e.upper.is_infinite() && e.upper > 0.0,
+            "upper bound must be +inf"
+        );
+        // None of the three value-read conditions may hold.
         let (alpha, beta) = (-5.0f32, 5.0f32);
-        assert!(e.upper > alpha, "上限で切られる");
-        assert!(beta < e.lower || e.lower.is_infinite(), "下限で切られる");
-        assert!(e.upper != e.lower, "確定値として読まれる");
+        assert!(e.upper > alpha, "would cut on the upper bound");
+        assert!(
+            beta < e.lower || e.lower.is_infinite(),
+            "would cut on the lower bound"
+        );
+        assert!(e.upper != e.lower, "would be read as exact");
     }
 
-    /// 自前の探索結果があるときは触らない (借り物で上書きしない)。
+    /// Never clobber a real search result with a borrowed hint.
     #[test]
     fn a_seed_never_overwrites_a_real_result() {
         let tt = SharedTt::new(16);
@@ -2239,10 +2238,10 @@ mod seed_tests {
         tt.put(h, 8, 0, -1.0, 1.0, 0.5, 20);
         assert_eq!(tt.best_move(h), Some(20));
         tt.seed_move(h, 19);
-        assert_eq!(tt.best_move(h), Some(20), "自前の答えが消えた");
+        assert_eq!(tt.best_move(h), Some(20), "the real entry was lost");
     }
 
-    /// 範囲外は黙って捨てる。
+    /// Out-of-range hints are silently dropped.
     #[test]
     fn an_out_of_range_seed_is_ignored() {
         let tt = SharedTt::new(16);
@@ -2257,9 +2256,9 @@ mod seed_tests {
 mod order_key_tests {
     use super::order_key;
 
-    /* **`order_key` は `f32::total_cmp` と同じ順序でなければならない。**
-    整数化したのは比較を軽くするためで、順序が変われば探索木が変わる
-    (速くなったのか手が変わったのか切り分けられなくなる)。 */
+    /* order_key must sort exactly like f32::total_cmp: the integer form
+    exists only to cheapen comparisons, and any order change would change
+    the search tree. */
 
     fn agrees(a: f32, b: f32) -> bool {
         a.total_cmp(&b) == order_key(a).cmp(&order_key(b))
@@ -2278,14 +2277,14 @@ mod order_key_tests {
         }
     }
 
-    /// 置換表の手は 1e9 / 1e8 という飛び離れた値で先頭に置かれる。
+    /// Table moves sort first via the outsized 1e9/1e8 keys.
     #[test]
     fn it_keeps_the_table_moves_on_top() {
         assert!(order_key(1.0e9) > order_key(1.0e8));
         assert!(order_key(1.0e8) > order_key(269.0));
     }
 
-    /// 評価値は負にもなる。符号をまたぐ比較が総当たりで一致すること。
+    /// Values can be negative; sign-crossing comparisons must agree exhaustively.
     #[test]
     fn it_handles_the_sign_boundary() {
         let mut x = -64.0f32;
