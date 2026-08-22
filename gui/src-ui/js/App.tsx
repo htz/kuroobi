@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { PlayDock } from './PlayDock';
-import { useGame } from './state';
+import { useGame, type EngineSide } from './state';
 import { useGgs } from './ggs';
 import { flipped, usePrefs } from './prefs';
 import type { GameView } from './types';
@@ -14,7 +14,7 @@ import { Confirm, PasteKifu, Settings } from './Dialogs';
 import { Board } from './components/board';
 import { EvalGraph, MoveScrub, ScoreRow, StoneDot, srcIsBook, srcLabel } from './components/data';
 import { GgsStatus, JobList, Meter, Nav, navLocal, StatusChip, ggsNav, Toasts, type NavId, type Toast } from './components/ggs';
-import { Button, Progress, Segmented, Toggle } from './components/primitives';
+import { Button, Progress, Segmented, Select, Toggle } from './components/primitives';
 import { Icon } from './components/Icons';
 import { BookDock, BookPane, BookTree, useBookBrowse } from './BookScreen';
 import { LearnLog } from './LearnLog';
@@ -31,6 +31,15 @@ import { t, useLang, tErr } from './i18n';
  * "KUROOBI takes white" with no extra words. Only "none" (human plays
  * both) has no stone — with one, it becomes indistinguishable from
  * "both". */
+/** The same choices as `sides()`, as plain text for the dropdown (a
+ *  native <option> cannot hold the stone dots). */
+const sideChoices = (): [string, string][] => [
+  ['black', t('app.color.black')],
+  ['white', t('app.color.white')],
+  ['both', t('app.side.both')],
+  ['off', t('app.side.off')],
+];
+
 const sides = () => [
   { value: 'black' as const, label: <><StoneDot color="b" />{t('app.color.black')}</> },
   { value: 'white' as const, label: <><StoneDot color="w" />{t('app.color.white')}</> },
@@ -677,8 +686,20 @@ export function App() {
               <Divider />
               {/* Role must stay editable in narrow windows: children,
                   not aux (aux dies at 940px). */}
-              <span style={{ fontSize: 'var(--fs-6)', color: 'var(--sub)' }}>KUROOBI</span>
-              <Segmented value={g.side} onChange={g.setSide} options={sides()} />
+              <span className="k-toolbar-cap"
+                    style={{ fontSize: 'var(--fs-6)', color: 'var(--sub)' }}>KUROOBI</span>
+              {/* Same choice twice: base.css shows the row while it fits
+                  and the dropdown once the band is crowded. Rendering
+                  both keeps the breakpoint in the stylesheet, where the
+                  other collapse tiers live. */}
+              <span className="k-role-wide">
+                <Segmented value={g.side} onChange={g.setSide} options={sides()} />
+              </span>
+              <span className="k-role-narrow">
+                <Select value={g.side} title={t('app.side.role')}
+                        onChange={(v) => g.setSide(v as EngineSide)}
+                        options={sideChoices()} width={116} />
+              </span>
               {/* Eval display toggle likewise in children — in aux it
                   vanished entirely at 900px (verified live). */}
               <Divider />

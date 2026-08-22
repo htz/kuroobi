@@ -78,6 +78,7 @@ app:
     both: "両方"
     none_assigned: "担当なし"
     off: "なし"
+    role: "KUROOBI の担当"
   status:
     analyzing: "分析中"
     book: "定石"

@@ -148,7 +148,7 @@ export function Toggle({ checked, onChange, label }: { checked: boolean; onChang
  * The wrapper MUST be position:relative with the select at inset:0;
  * without relative the select flies to the AppFrame corner, and with
  * zero size it has no hit area there either. */
-export function Select({ value, options, onChange, size = 'field', width, disabled, className }: {
+export function Select({ value, options, onChange, size = 'field', width, disabled, className, title }: {
   value: string;
   options: [string, string][];        // [value, label]
   onChange?: (v: string) => void;
@@ -156,6 +156,8 @@ export function Select({ value, options, onChange, size = 'field', width, disabl
   width?: number;                     // min width, for aligned columns
   disabled?: boolean;
   className?: string;
+  /** What the value means, for when the caption beside it is collapsed. */
+  title?: string;
 }) {
   const label = options.find(([v]) => v === value)?.[1] ?? value;
   return (
@@ -173,7 +175,8 @@ export function Select({ value, options, onChange, size = 'field', width, disabl
       <span style={{ minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis',
                      whiteSpace: 'nowrap' }}>{label}</span>
       <span style={{ marginLeft: 'auto', color: 'var(--sub)', flex: 'none' }}>▾</span>
-      <select value={value} disabled={disabled} onChange={e => onChange?.(e.target.value)}
+      <select value={value} disabled={disabled} title={title} aria-label={title}
+        onChange={e => onChange?.(e.target.value)}
         style={{ position: 'absolute', inset: 0, opacity: 0, width: '100%', height: '100%' }}>
         {options.map(([v, l]) => <option key={v} value={v}>{l}</option>)}
       </select>

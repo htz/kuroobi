@@ -82,6 +82,7 @@ app:
     both: "Both"
     none_assigned: "No side"
     off: "None"
+    role: "KUROOBI plays"
   status:
     analyzing: "Analyzing"
     book: "Book"
