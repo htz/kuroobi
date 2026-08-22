@@ -2,7 +2,7 @@ import React from 'react';
 import { Board, BoardDefs } from './board';
 import { Button, Dot, Segmented } from './primitives';
 import { IconButton } from './Icons';
-import { t } from '../i18n';
+import { t, useLang } from '../i18n';
 // Assets are the single source (assets.d.ts policy): read contents
 // instead of <img src> so no screen-side copy can drift.
 import icon from '../../assets/icon.svg?raw';
@@ -121,12 +121,63 @@ export function Main({ children, inset }: {
  * sits right of the body, so its entry point lives up here (mirror of
  * BottomPanel's onClose). graph likewise toggles the eval graph in
  * the lowest tier (<=620px), whose heading row collapses away. */
+/* Whether the band ran out of room and its content should use its
+ * compact form. Read with `useToolbarCompact` from anything the band
+ * renders. */
+const CompactContext = React.createContext(false);
+
+/** True while the toolbar cannot fit its full-size content. */
+export const useToolbarCompact = (): boolean => React.useContext(CompactContext);
+
 export function Toolbar({ children, aux, dock, graph }: {
   children: React.ReactNode;
   aux?: React.ReactNode;
   dock?: { open: boolean; onToggle: () => void; label?: string };
   graph?: { open: boolean; onToggle: () => void };
 }) {
+  /* Collapse by measurement, not by a breakpoint.
+   *
+   * A pixel threshold has to be re-tuned for every language — the same
+   * row of controls is far wider in English than in Japanese, and the
+   * next language would need its own number. So the band watches its
+   * own content: while the group is clipped it switches to the compact
+   * form, and it goes back only when the width the full form needs
+   * (remembered from when it last fit) is free again. The slack keeps
+   * it from oscillating on a one-pixel drag. */
+  const [group, setGroup] = React.useState<HTMLElement | null>(null);
+  const [spacer, setSpacer] = React.useState<HTMLElement | null>(null);
+  const [compact, setCompact] = React.useState(false);
+  const fullWidth = React.useRef(0);
+  const lang = useLang();
+
+  const seenLang = React.useRef(lang);
+
+  React.useEffect(() => {
+    if (!group || !spacer) return;
+    // A language change invalidates the remembered width. Only clear it
+    // when the language actually changed: this effect also re-runs on
+    // every collapse, and clearing it there would lose the memory that
+    // decides when to expand again.
+    if (seenLang.current !== lang) { seenLang.current = lang; fullWidth.current = 0; }
+    /* Measurement runs from the observer, never straight from the effect
+       body — a synchronous setState there cascades renders. Observing
+       fires once immediately, which covers the initial layout. */
+    const measure = () => {
+      if (!compact) {
+        fullWidth.current = group.scrollWidth;
+        if (group.scrollWidth > group.clientWidth + 1) setCompact(true);
+      } else if (!fullWidth.current) {
+        setCompact(false);            // no memory (new language): re-measure full
+      } else if (spacer.offsetWidth > fullWidth.current - group.scrollWidth + 12) {
+        setCompact(false);
+      }
+    };
+    const ro = new ResizeObserver(measure);
+    ro.observe(group);
+    ro.observe(spacer);
+    return () => ro.disconnect();
+  }, [group, spacer, compact, lang]);
+
   return (
     /* Also a window-drag strip: the nav's top edge alone gives only
        208px, and not over the logo (the attribute only works on the
@@ -145,12 +196,16 @@ export function Toolbar({ children, aux, dock, graph }: {
       overflow: 'hidden', minWidth: 0,
     }}>
       {/* The action group shrinks (and clips) rather than pushing the
-          rest out of the band. */}
-      <span style={{ display: 'flex', alignItems: 'center', gap: 'var(--sp-2)',
-                     minWidth: 0, overflow: 'hidden', flexShrink: 1 }}>{children}</span>
+          rest out of the band; being clipped is also what tells the
+          band to switch to the compact form. */}
+      <span ref={setGroup} style={{ display: 'flex', alignItems: 'center', gap: 'var(--sp-2)',
+                                    minWidth: 0, overflow: 'hidden', flexShrink: 1 }}>
+        <CompactContext.Provider value={compact}>{children}</CompactContext.Provider>
+      </span>
       {/* This spacer owns the push; putting marginLeft:auto on the
-          disappearing aux makes everything jump left when it goes. */}
-      <span style={{ flex: 1 }} />
+          disappearing aux makes everything jump left when it goes. Its
+          width is also the free space the measurement reads. */}
+      <span ref={setSpacer} style={{ flex: 1 }} />
       {/* display lives in .k-toolbar-aux (hidden at 940px). */}
       {aux && <span className="k-toolbar-aux" style={{ alignItems: 'center', gap: 'var(--sp-3)' }}>{aux}</span>}
       {graph && (

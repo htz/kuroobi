@@ -8,7 +8,7 @@ import { api, ggsApi, jsLog, onApp, type ActivityView } from './api';
 import { useActivity, useEngineSettings, useEngineTurn, useGraph, useHints, useLearnLog, useStartGame, type AskArgs } from './engine';
 import { fmtSecs } from './ggs';
 import { cellsOf, connOf, evalsOf, ggsPlaying, movesOf, navBadges, sqName } from './adapt';
-import { AppFrame, Body, BottomPanel, Busy, Divider, Dock, Main, Overlay, StatusBar, StatusStat, Toolbar, WindowBar } from './components/layout';
+import { AppFrame, Body, BottomPanel, Busy, Divider, Dock, Main, Overlay, StatusBar, StatusStat, Toolbar, WindowBar, useToolbarCompact } from './components/layout';
 import { GgsChat, GgsConsole, GgsScreen } from './GgsScreens';
 import { Confirm, PasteKifu, Settings } from './Dialogs';
 import { Board } from './components/board';
@@ -31,6 +31,25 @@ import { t, useLang, tErr } from './i18n';
  * "KUROOBI takes white" with no extra words. Only "none" (human plays
  * both) has no stone — with one, it becomes indistinguishable from
  * "both". */
+/** Who KUROOBI plays. The stone-marked row while the band has room,
+ *  a dropdown once it does not — the toolbar measures itself and says
+ *  which (see `Toolbar`), so no width is written per language. */
+function RolePicker({ value, onChange }: {
+  value: EngineSide;
+  onChange: (v: EngineSide) => void;
+}) {
+  if (useToolbarCompact()) {
+    return <Select value={value} title={t('app.side.role')} width={116}
+                   onChange={(v) => onChange(v as EngineSide)} options={sideChoices()} />;
+  }
+  return (
+    <>
+      <span style={{ fontSize: 'var(--fs-6)', color: 'var(--sub)' }}>KUROOBI</span>
+      <Segmented value={value} onChange={onChange} options={sides()} />
+    </>
+  );
+}
+
 /** The same choices as `sides()`, as plain text for the dropdown (a
  *  native <option> cannot hold the stone dots). */
 const sideChoices = (): [string, string][] => [
@@ -686,20 +705,7 @@ export function App() {
               <Divider />
               {/* Role must stay editable in narrow windows: children,
                   not aux (aux dies at 940px). */}
-              <span className="k-toolbar-cap"
-                    style={{ fontSize: 'var(--fs-6)', color: 'var(--sub)' }}>KUROOBI</span>
-              {/* Same choice twice: base.css shows the row while it fits
-                  and the dropdown once the band is crowded. Rendering
-                  both keeps the breakpoint in the stylesheet, where the
-                  other collapse tiers live. */}
-              <span className="k-role-wide">
-                <Segmented value={g.side} onChange={g.setSide} options={sides()} />
-              </span>
-              <span className="k-role-narrow">
-                <Select value={g.side} title={t('app.side.role')}
-                        onChange={(v) => g.setSide(v as EngineSide)}
-                        options={sideChoices()} width={116} />
-              </span>
+              <RolePicker value={g.side} onChange={g.setSide} />
               {/* Eval display toggle likewise in children — in aux it
                   vanished entirely at 900px (verified live). */}
               <Divider />

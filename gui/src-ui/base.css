@@ -244,15 +244,8 @@ button:disabled, button[aria-disabled="true"] { cursor:default; }
   /* Keep the bar even with the logo dropped — it holds the traffic lights
      and the drag region */
 }
-/* The role picker: a segmented row while it fits, a dropdown once the
-   band gets crowded. English labels are wider than the Japanese ones the
-   band was measured with, and the group must stay reachable — clipping it
-   hid "None" and the eval toggle. */
-.k-role-narrow { display:none; }
-@media (max-width: 1180px) {
-  .k-role-wide, .k-toolbar-cap { display:none; }
-  .k-role-narrow { display:inline-flex; }
-}
+/* The toolbar's own collapse is measured, not a breakpoint: a pixel
+   threshold would need re-tuning per language (see `Toolbar`). */
 @media (max-width: 940px) {
   .k-toolbar-aux { display:none; }
 }
