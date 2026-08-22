@@ -1,6 +1,5 @@
-// Vite の `?raw` インポート (ファイルの中身を文字列で受け取る)。
-// ロゴの SVG はこれで読む — アセットを唯一の出所にしておけば、
-// 画面用に写した複製とファイルが食い違う事故が起きない。
+// Vite `?raw` imports (file contents as a string). The logo SVG loads
+// this way — one source of truth prevents copy drift.
 declare module '*.svg?raw' {
   const content: string;
   export default content;

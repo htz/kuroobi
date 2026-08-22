@@ -1,36 +1,33 @@
 import { useCallback, useEffect, useState } from 'react';
 import { api } from './api';
 
-/* 見え方の好み。エンジンの動きには一切関わらないので、バックエンドには
- * 持たせず localStorage に置く (機械ごとの設定でよく、保存の往復も要らない)。
- *
- * 既定はすべて「いまの見え方」に揃えてある — 設定を足したせいで、何もして
- * いない人の画面が変わることがないように。
- */
+/* Display preferences. They never affect the engine, so they live in
+ * localStorage (per-machine, no round-trips). Every default matches
+ * the current look — adding a setting must not change anyone's screen. */
 
 export type Theme = 'os' | 'dark' | 'light';
-/** 盤の向き。`auto` は自分が持っている色を下にする (対局のときだけ効く)。 */
+/** Board facing; `auto` puts our color at the bottom (games only). */
 export type Facing = 'black' | 'white' | 'auto';
 
-/** 畳の色。設計の 表示 タブが 4 色の見本を並べている。 */
+/** Board mat color; the Display tab shows four swatches. */
 export type Tatami = 0 | 1 | 2 | 3;
-/** 評価値の小数桁。設計の 表示 タブが 0 / 1 / 2 を出している。 */
+/** Eval decimal places (0 / 1 / 2 per the Display tab). */
 export type Decimals = 0 | 1 | 2;
 
 export interface Prefs {
   theme: Theme;
-  /** 畳の色 (0 = 標準)。 */
+  /** Mat color (0 = default). */
   tatami: Tatami;
-  /** 評価値の小数桁。 */
+  /** Eval decimal places. */
   decimals: Decimals;
-  /** 盤の縁の a〜h / 1〜8。 */
+  /** Board edge coordinates a-h / 1-8. */
   coords: boolean;
-  /** 畳の藺草の目。薄いので普段は気にならないが、消したい人もいる。 */
+  /** The mat's grain texture; subtle, but some want it off. */
   grain: boolean;
-  /** 石が返るときの動き (ミリ秒)。0 で動かさない。 */
+  /** Disc-flip animation (ms); 0 disables. */
   flipMs: 0 | 120 | 240;
   facing: Facing;
-  /** ローカル対局の持ち時間 (秒)。0 で時計なし。**次の新規対局から効く** */
+  /** Local game clock (seconds); 0 = none. Applies from the next new game. */
   clockSecs: number;
 }
 
@@ -40,11 +37,10 @@ const DEFAULTS: Prefs = {
   clockSecs: 0,
 };
 
-/* 畳の色。**盤の 4 つのトークンを組で差し替える** — 地だけ変えると
- * 縁と罫と藺草の目が取り残されて、盤が濁って見える。
- * 色は設計の 表示 タブの見本から取った。 */
+/* Mat colors. The board's four tokens swap as a set — changing only
+ * the ground leaves edges/lines/grain behind and muddies the board. */
 export const TATAMI: { label: string; board: string; dark: string; line: string; grain: string }[] = [
-  // 見本の色は設計の実測値。縁・罫・藺草の目はそれに合わせて落とした
+  // Swatch colors measured from the design; edges/lines/grain derived.
   { label: '標準', board: '#77914e', dark: '#3f4f2c', line: '#3d5226', grain: '#33421d' },
   { label: '枯草', board: '#8a8f5c', dark: '#474a2f', line: '#464a28', grain: '#3b3f1f' },
   { label: '苔', board: '#6f7f6a', dark: '#3a4238', line: '#374033', grain: '#2f382c' },
@@ -57,8 +53,8 @@ function load(): Prefs {
   try {
     const raw = localStorage.getItem(KEY);
     if (!raw) return DEFAULTS;
-    // 知らないキーは捨て、足りないキーは既定で埋める。設定を足したときに
-    // 古い保存が読めなくなると、黙って全部が既定へ戻る
+    // Unknown keys dropped, missing keys defaulted — an unreadable old
+    // save must not silently reset everything.
     const got = JSON.parse(raw) as Partial<Prefs>;
     return { ...DEFAULTS, ...got };
   } catch {
@@ -72,14 +68,13 @@ export function usePrefs() {
   const set = useCallback(<K extends keyof Prefs>(k: K, v: Prefs[K]) => {
     setPrefs((p) => {
       const next = { ...p, [k]: v };
-      try { localStorage.setItem(KEY, JSON.stringify(next)); } catch { /* 保存できなくても続ける */ }
+      try { localStorage.setItem(KEY, JSON.stringify(next)); } catch { /* keep going even if the save fails */ }
       return next;
     });
   }, []);
 
-  /* 設定は別の窓で触るので、こちらは書き換えを聞いて追いかける。
-   * 同じ生成元の document どうしなら storage が飛ぶ (自分が書いたときは
-   * 飛ばないので、書いた側の setPrefs と二重にはならない)。 */
+  /* Track external writes via the storage event (it never fires for
+   * our own writes, so no doubling with setPrefs). */
   useEffect(() => {
     const onStorage = (e: StorageEvent) => {
       if (e.key !== null && e.key !== KEY) return;
@@ -89,18 +84,17 @@ export function usePrefs() {
     return () => window.removeEventListener('storage', onStorage);
   }, []);
 
-  /* 画面確認用の固定 (`KUROOBI_THEME=light`)。テーマの切り替えは
-     設定 → 表示 にしかなく、撮るたびに人が押すしかなかった。
-     **保存はしない**ので、次に普通に起動すれば好みどおりに戻る。 */
+  /* Screenshot pin (`KUROOBI_THEME=light`); not persisted, a plain
+     launch restores the preference. */
   const [forced, setForced] = useState<Theme | ''>('');
   useEffect(() => {
     void api.themeOverride()
       .then((t) => { if (t === 'light' || t === 'dark') setForced(t); })
-      .catch(() => { /* Tauri 外や古いバイナリでは効かないだけ */ });
+      .catch(() => { /* simply inert outside Tauri or on old binaries */ });
   }, []);
 
-  // テーマは :root の属性で切り替える。`os` のときは属性を外して
-  // prefers-color-scheme に任せる (tokens.css がその形で書いてある)
+  // Theme switches via a :root attribute; `os` removes it and defers
+  // to prefers-color-scheme (tokens.css is written that way).
   useEffect(() => {
     const el = document.documentElement;
     const t = forced || prefs.theme;
@@ -108,14 +102,14 @@ export function usePrefs() {
     else el.setAttribute('data-theme', t);
   }, [prefs.theme, forced]);
 
-  // 石返しの長さは CSS 変数。base.css の .k-flip がこれを見る
+  // Flip duration is a CSS variable read by base.css's .k-flip.
   useEffect(() => {
     document.documentElement.style.setProperty('--flip-dur', prefs.flipMs + 'ms');
   }, [prefs.flipMs]);
 
-  /* 畳の色。トークンを上書きするので、テーマを切り替えても選んだ色が残る。
-   * 標準 (0) のときは何も書かない — tokens.css の値をそのまま使わせる
-   * (ライトはライトの緑を持っているので、上書きすると台無しになる)。 */
+  /* Mat color overrides the tokens, surviving theme switches. Default
+   * (0) writes nothing — light mode has its own green and an override
+   * would ruin it. */
   useEffect(() => {
     const el = document.documentElement;
     const keys = ['--board', '--board-dark', '--line', '--grain'];
@@ -130,7 +124,7 @@ export function usePrefs() {
   return { prefs, set };
 }
 
-/** 盤を回すか。`auto` は自分の色が白のときだけ回す (自分を下に置く)。 */
+/** Whether to flip the board; `auto` flips only when we play White. */
 export const flipped = (facing: Facing, myColor: 'black' | 'white' | ''): boolean =>
   facing === 'white' || (facing === 'auto' && myColor === 'white');
 

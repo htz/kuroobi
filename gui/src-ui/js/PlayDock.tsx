@@ -10,12 +10,10 @@ import type { NavId } from './components/ggs';
 import type { Move } from './components/data';
 import { LEVELS } from './state';
 
-/* 対局・検討の右ドック。**`App` の中に 117 行あった**ものを切り出した。
- * 3 枚のタブ (棋譜 / 強さ / 学習) はどれも「いま何が起きているか」を
- * 出すだけで、画面の骨格とは関わらない。
- *
- * 棋譜のときだけ丸ごとスクロールさせない — 表が列の見出しを固定して
- * 行だけを流す作りになっている (操作も上に残す)。 */
+/* Right dock for play/study, extracted from App (was 117 inline
+ * lines). Its three tabs (record / strength / learning) only display
+ * current state. Only the record tab avoids whole-dock scrolling: the
+ * table pins its header and scrolls rows. */
 export function PlayDock({
   g, book, cpu, prefs, tab, onTab, open, onNav, onBookTab,
   onPaste, onLoadFile, study, moves, ggfNames,
@@ -32,9 +30,9 @@ export function PlayDock({
   onPaste: () => void;
   onLoadFile: () => void;
   study: boolean;
-  /** 棋譜表の行。`App` が控えから作る */
+  /** Record-table rows; App builds them from its records. */
   moves: Move[];
-  /** 保存のファイル名を作る (担当の色を含む)。`App` が持つ */
+  /** Builds the save filename (includes the played color); owned by App. */
   ggfNames: () => [string, string];
 }) {
   return (
@@ -46,22 +44,21 @@ export function PlayDock({
             <KifuTable moves={moves} current={g.view?.cursor} decimals={prefs.decimals}
                        onSelect={(n) => void g.jumpTo(n)} />
           </div>
-          {/* 棋譜の出し入れは列の**下**。上に置くと、表を見に来ただけの
-              ときにも操作が視線の先頭に来る。行は下へ伸びるので、
-              出来上がった棋譜を渡す操作は行の終わりにあるほうが近い */}
+          {/* Record I/O sits BELOW the column: on top it would lead
+              the eye even when only reading, and rows grow downward, so
+              hand-off actions belong at the end. */}
           <div style={{
             flex: 'none', display: 'flex', gap: 'var(--sp-2)',
             padding: 'var(--sp-2) var(--sp-3)', borderTop: '1px solid var(--border-weak)',
           }}>
-            {/* 検討ではツールバーの「棋譜を読み込む」が同じ覆いを開くので
-                出さない。同じ操作を 1 画面に 2 つ置かない (規則 58)。
-                対局では絵 (§1) どおりここに 3 つ並ぶ */}
+            {/* Study hides this (the toolbar opens the same overlay);
+                never two copies of one action per screen. Play shows
+                the three buttons as designed. */}
             {!study && <Button title="⌘O" onClick={() => onPaste()}>貼り付け</Button>}
             <Button onClick={() => void onLoadFile()}>読込</Button>
-            {/* .ggf で保存すると、どちらがどの色か・結果・開始局面まで入る。
-                **1 手も無いときは押せなくする。**押すと「棋譜が空です」で
-                返ってくるだけで、理由はすぐ上の表が「まだ手がありません」と
-                言っている (規則 61 — 直し方は操作のそばに) */}
+            {/* .ggf saves colors, result and start position. Disabled
+                with no moves — pressing would only bounce, and the
+                table right above already says why. */}
             <Button title="⌘S" disabled={!moves.length}
                     onClick={() => void api.saveKifu(...ggfNames()).catch((e: unknown) => g.say('' + e))}>
               保存
@@ -70,19 +67,20 @@ export function PlayDock({
         </>
       )}
       {tab === '強さ' && (
-        // 検討では同じ 3 つが解析の深さになる。値も操作も同じなので節の名前だけ変える
+        // In study the same three become analysis depth; only the
+        // section title changes.
         <Section title={study ? '解析の設定' : '強さ'}>
-          {/* 選び方は GGS の設定と共通 (Strength)。同じ 3 つを決めるのに
-              操作が違うと、片方で覚えたことがもう片方で通じない */}
+          {/* Same Strength picker as the GGS settings — one learned
+              interaction serves both. */}
           <Strength value={g.levels} onChange={(v) => {
             const i = LEVELS.findIndex((l) => l.depth === v.depth && l.solve === v.solve && l.band === v.band);
             if (i >= 0) { g.setLevel(i); return; }
             g.setCustom(v);
             g.setLevel('custom');
           }} />
-          {/* 名前と「なぜ押せないか」を 1 行に、選ぶものはその下に全幅で。
-              横に並べると 290px の枠では選択肢が中身の幅まで縮み、直し方の
-              文言だけが釦の下に離れて置かれて、対応が読めなくなる (規則 61) */}
+          {/* Label and disabled-reason on one line, the picker full
+              width below; side-by-side at 290px squeezes the options
+              and orphans the hint. */}
           <div style={{ display: 'flex', flexDirection: 'column', gap: 'var(--sp-2)' }}>
             <div style={{ display: 'flex', alignItems: 'baseline', gap: 'var(--sp-2)' }}>
               <span style={{ fontSize: 'var(--fs-5)' }}>定石</span>
@@ -106,15 +104,13 @@ export function PlayDock({
               勝敗にかかわらず取り込み、終局の石差を根まで書き戻します。同じ負け方をなぞらなくなります。
             </Note>
           </Section>
-          {/* 走っている間だけ枠を持つ (規則 13 の「箱を入れ子にしない」の
-              例外は進行中のジョブだけ)。**「一時停止」は置かない** —
-              止める口がエンジン側に無く、譲りは対局・検討が動くと自動で
-              かかる。押せない釦を描くより、譲っていることを言う */}
-          {/* 走っている間だけ出る枠。**節の見出しは付けない** — 設計 §4 は
-              見出しの無い枠を 書き戻しの節と 学習した定石の節の間に挟んでいる。
-              進行中のジョブだけが枠を持つ (規則 13 の「箱を入れ子にしない」の
-              唯一の例外)。**「一時停止」は置かない** — 止める口がエンジン側に
-              無く、譲りは対局・検討が動くと自動でかかる */}
+          {/* Framed only while running (the sole nesting exception is
+              an active job). No pause button — the engine has no stop
+              hook and yielding is automatic; say "yielding" instead of
+              drawing a dead button. */}
+          {/* Frame shown only while running, deliberately untitled per
+              the design. No pause button (no engine hook; yielding is
+              automatic). */}
           {cpu?.learn && (
             <div style={{
               border: '1px solid var(--border)', borderRadius: 'var(--r-2)',
@@ -123,7 +119,8 @@ export function PlayDock({
             }}>
               <div style={{ display: 'flex', alignItems: 'center', fontSize: 'var(--fs-5)' }}>
                 <Busy>取り込み中</Busy>
-                {/* 取り込みは 1 局面ずつ進む。桁が動くと「取り込み中」まで揺れる */}
+                {/* Import advances per position; jittering digits would
+                    shake the label too. */}
                 <span style={{
                   marginLeft: 'auto', fontSize: 'var(--fs-6)', color: 'var(--sub)',
                   fontVariantNumeric: 'tabular-nums',
@@ -132,9 +129,8 @@ export function PlayDock({
                 </span>
               </div>
               <Progress value={cpu.learn[1] > 0 ? cpu.learn[0] / cpu.learn[1] : 0} />
-              {/* 譲っている間だけ下の行に出す。設計 §4 もこの位置
-                  (絵は左に対局名、右に「譲り中」)。対局名を出す口は
-                  エンジン側に無い */}
+              {/* Shown on the lower row only while yielding (as
+                  designed); the engine offers no game-name hook. */}
               {cpu.learn_paused && (
                 <div style={{ display: 'flex', alignItems: 'center', fontSize: 'var(--fs-6)', color: 'var(--sub)' }}>
                   <span>対局・検討が動いている間は譲ります</span>
@@ -143,8 +139,8 @@ export function PlayDock({
               )}
             </div>
           )}
-          {/* 明細は「定石」の画面の 2 枚目へ移した。同じ一覧をドックにも
-              出すと、どちらが本物か分からなくなる (規則 58 と同じ話) */}
+          {/* Details moved to the Book screen's second pane; a second
+              copy here would compete with it. */}
           <Section title="学習した定石">
             <KeyValue big label="登録局面" value={book.node?.size} />
             <KeyValue big label="うち学習" value={book.node?.learned_size} />
