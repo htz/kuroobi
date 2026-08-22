@@ -1053,7 +1053,7 @@ struct MatchState {
     start_cells: Vec<u8>,
     /// Mover at the start position ('*'/'O').
     start_turn: char,
-    /// Game type ("s8r14" etc.).レートのプールを見分けるのに使う。
+    /// Game type ("s8r14" etc.); used to tell rating pools apart.
     gtype: String,
     turn: char, // '*' / 'O' / ' '
     my_color: Option<char>,
