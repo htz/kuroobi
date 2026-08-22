@@ -228,12 +228,12 @@ fn main() -> ExitCode {
                 my_turn = true;
             }
         }
-        eprint!("\r{}/{} 局", g + 1, args.games);
+        eprint!("\r{}/{} games", g + 1, args.games);
     }
     eprintln!();
 
     println!(
-        "ponderhit: 自分 depth {} solve {} / 相手 depth {} solve {} ({} 局, 乱数開幕 {} 手, 定石なし)",
+        "ponderhit: self depth {} solve {} / opponent depth {} solve {} ({} games, {} random opening plies, no book)",
         args.depth,
         args.solve_empties,
         args.opp_depth.unwrap_or(args.depth),
@@ -250,7 +250,7 @@ fn main() -> ExitCode {
             continue;
         }
         println!(
-            "  {:<18} 予測できた {:>5}/{:<5} ({:>4.1}%)   当たった {:>5}/{:<5} ({:>4.1}%)",
+            "  {:<18} predicted {:>5}/{:<5} ({:>4.1}%)   hit {:>5}/{:<5} ({:>4.1}%)",
             PHASE_NAME[i],
             got[i],
             n,
@@ -265,7 +265,7 @@ fn main() -> ExitCode {
         );
         if br_n[i] > 0 {
             println!(
-                "  {:<18} 相手の合法手 平均 {:.1} 手 (方式 2 の 1/N)",
+                "  {:<18} opponent legal moves avg {:.1} (the 1/N of scheme 2)",
                 "",
                 br_sum[i] as f64 / br_n[i] as f64
             );
@@ -277,8 +277,8 @@ fn main() -> ExitCode {
     let n = t_got + t_none;
     if n > 0 {
         println!(
-            "  {:<18} 予測できた {:>5}/{:<5} ({:>4.1}%)   当たった {:>5}/{:<5} ({:>4.1}%)",
-            "合計",
+            "  {:<18} predicted {:>5}/{:<5} ({:>4.1}%)   hit {:>5}/{:<5} ({:>4.1}%)",
+            "total",
             t_got,
             n,
             100.0 * t_got as f64 / n as f64,
@@ -292,7 +292,7 @@ fn main() -> ExitCode {
         );
         // Rate counting no-prediction as a miss; scheme 1's true expectation.
         println!(
-            "  実効の的中率 (予測できなかった回も外れに数える): {:.1}%",
+            "  effective hit rate (no prediction counted as a miss): {:.1}%",
             100.0 * t_hit as f64 / n as f64
         );
     }

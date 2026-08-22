@@ -417,7 +417,7 @@ fn main() -> ExitCode {
                     measurements. */
                     if std::env::var("KUROOBI_NO_RATED").is_ok() {
                         send("tell /os rated -");
-                        eprintln!("### 非レート戦に固定 (KUROOBI_NO_RATED)");
+                        eprintln!("### forced to unrated games (KUROOBI_NO_RATED)");
                     } else {
                         send("tell /os rated +");
                     }

@@ -541,11 +541,11 @@ fn report_moves(moves: &[MoveInfo]) {
     if moves.is_empty() {
         return;
     }
-    println!("空きごとの到達 (両者ぶん、定石の手は除く)");
+    println!("reach by empties (both sides, book moves excluded)");
     /* The median is not enough: available time varies per position, so
     both extremes matter — the shallow end is the strength floor for
     that clock. */
-    println!("   空き | 手数 | 中盤の深さ 最浅/中央/最深 | 読切 | 打切 | 1 手の秒 中央/最大");
+    println!("  empty | movs | midgame depth min/med/max | solv | cuts | sec/move   med/max");
     println!("  ------+------+---------------------------+------+------+-------------------");
     for lo in (0..=60usize).rev().filter(|n| n % 4 == 0) {
         let hi = lo + 3;
@@ -583,7 +583,7 @@ fn report_moves(moves: &[MoveInfo]) {
     }
     let book = moves.iter().filter(|m| m.from_book).count();
     let cut = moves.iter().filter(|m| m.cut).count();
-    println!("  (定石で指した手 {book} / 読切を打ち切った手 {cut})");
+    println!("  (moves played from book {book} / solves cut off {cut})");
 }
 
 /// One move's record; the per-clock strength instrument.
@@ -774,7 +774,7 @@ fn run_nnue(args: &Args, a: &std::path::Path, b: &std::path::Path) -> ExitCode {
             Some("auto") => Some(*measured.get_or_insert_with(|| {
                 let n = eng.measure_solve_nps();
                 println!(
-                    "較正: 読切 {:.1}M ノード/秒 ({} スレッド)",
+                    "calibration: solve {:.1}M nodes/s ({} threads)",
                     n / 1e6,
                     args.threads
                 );
@@ -806,15 +806,11 @@ fn run_nnue(args: &Args, a: &std::path::Path, b: &std::path::Path) -> ExitCode {
                 "{}s, {}{}",
                 s.total,
                 s.pace.as_str(),
-                if s.nps.is_some() {
-                    ", 較正あり"
-                } else {
-                    ""
-                }
+                if s.nps.is_some() { ", calibrated" } else { "" }
             )
         };
         println!(
-            "arena (持ち時間制, {} スレッド): A={} ({}) vs B={} ({})  ({} 局, 開局 {} 手ランダム, 定石なし)",
+            "arena (timed, {} threads): A={} ({}) vs B={} ({})  ({} games, {} random opening plies, no book)",
             args.threads,
             a.display(),
             tag(&side_a),
@@ -954,11 +950,11 @@ fn run_nnue(args: &Args, a: &std::path::Path, b: &std::path::Path) -> ExitCode {
         }
     }
     if timed {
-        println!("時間切れ: A {a_timeouts} / B {b_timeouts}");
+        println!("timeouts: A {a_timeouts} / B {b_timeouts}");
         report_moves(&moves);
         if left_n > 0 {
             println!(
-                "終局時の残り時間 (持ち時間 A {}s / B {}s): A 平均 {:.1}s 最小 {:.1}s / B 平均 {:.1}s 最小 {:.1}s",
+                "clock left at game end (total A {}s / B {}s): A avg {:.1}s min {:.1}s / B avg {:.1}s min {:.1}s",
                 side_a.total,
                 side_b.total,
                 a_left_sum / left_n as f64,
@@ -1008,7 +1004,7 @@ fn main() -> ExitCode {
     match (&args.nnue_a, &args.nnue_b) {
         (Some(a), Some(b)) => return run_nnue(&args, &a.clone(), &b.clone()),
         (Some(_), None) | (None, Some(_)) => {
-            eprintln!("--nnue-a と --nnue-b は両方まとめて指定してください");
+            eprintln!("--nnue-a and --nnue-b must be given together");
             return ExitCode::FAILURE;
         }
         (None, None) => {}

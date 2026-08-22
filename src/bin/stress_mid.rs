@@ -112,7 +112,7 @@ fn main() {
         if own.is_some_and(|o| (o - vn).abs() > tol) {
             bad += 1;
             println!(
-                "局面 {i}: {threads} スレッドは {:?} {vn:+.2} と言うが、その手を読み直すと {:+.2}",
+                "position {i}: {threads} threads report {:?} {vn:+.2}, but re-searching that move gives {:+.2}",
                 pn.map(name),
                 own.unwrap()
             );
@@ -126,12 +126,12 @@ fn main() {
         if (v1 - vn).abs() > 0.001 || p1 != pn {
             if let Ok(r) = std::env::var("MID_REPEAT") {
                 let r: usize = r.parse().unwrap_or(5);
-                print!("局面 {i} を {r} 回:");
+                print!("position {i}, {r} times:");
                 for _ in 0..r {
                     let (p, v) = solve(threads);
                     print!(" {}{v:+.2}", p.map(name).unwrap_or_default());
                 }
-                println!(" / 逐次 {}{v1:+.2}", p1.map(name).unwrap_or_default());
+                println!(" / sequential {}{v1:+.2}", p1.map(name).unwrap_or_default());
             }
         }
         // Different moves may be equal-value alternatives; count value
@@ -140,7 +140,7 @@ fn main() {
         if strict && ((v1 - vn).abs() > 0.001 || p1 != pn) {
             bad += 1;
             println!(
-                "局面 {i}: 1 スレッド {:?} {v1:+.2} 対 {threads} スレッド {:?} {vn:+.2}",
+                "position {i}: 1 thread {:?} {v1:+.2} vs {threads} threads {:?} {vn:+.2}",
                 p1.map(name),
                 pn.map(name)
             );
@@ -155,13 +155,13 @@ fn main() {
                     '-'
                 });
             }
-            println!("  obf: {obf} X  (空き {})", b.empty_count());
+            println!("  obf: {obf} X  (empties {})", b.empty_count());
             if bad >= 5 {
                 break;
             }
         }
     }
-    println!("{done} 局面中 {bad} 件が食い違い");
+    println!("{bad} of {done} positions disagreed");
     if bad > 0 {
         std::process::exit(1);
     }

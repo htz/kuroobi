@@ -1,154 +1,169 @@
-/* KUROOBI base — tokens.css の後に読む
+/* KUROOBI base — loaded after tokens.css
  *
- * ここに置くのは「インラインの style では書けないもの」だけ:
- *   1. リセットとフォーカスリング
- *   2. 状態の層（hover / active / selected）← 押せる面の定義は設計の一部
- *   3. 畳む段（media query）
- *   4. 畳む段が動かすプロパティ（インラインに書くと media query が届かない）
- *   5. 窓のドラッグ領域・スクロールバー・石返しアニメ
- * 見た目そのものは部品のインライン style が持つ。ここは「変化」だけを持つ。
+ * Only what inline styles cannot express belongs here:
+ *   1. reset and focus ring
+ *   2. state layers (hover / active / selected) — defining what a pressable
+ *      surface looks like is part of the design
+ *   3. collapse breakpoints (media queries)
+ *   4. properties the breakpoints move (inline styles are out of reach of
+ *      media queries)
+ *   5. window drag region, scrollbars, stone-flip animation
+ * Appearance itself lives in each component's inline style. This file owns
+ * only the changes.
  */
 * { box-sizing:border-box; }
 html, body, #root { height:100%; }
 body {
   margin:0; background:var(--bg); color:var(--text);
   font:var(--fs-4)/1.6 var(--ff);
-  font-feature-settings:"tnum";           /* 数値の桁を揃える。全画面で必須 */
+  font-feature-settings:"tnum";           /* align digit columns; required everywhere */
   -webkit-font-smoothing:antialiased;
-  overflow:hidden;                         /* デスクトップアプリ。窓の外にはスクロールさせない */
-  /* **画面の文字は選べない。** デスクトップアプリなので、盤や表の上で
-     ドラッグすると文字が青く反転するのは web ページの挙動で、ここでは
-     押し損ねただけに見える。**選べるのは「写して他所へ持っていくもの」
-     だけ** — 下の `.k-sel` を付けたところに戻す */
+  overflow:hidden;                         /* desktop app: never scroll outside the window */
+  /* **On-screen text is not selectable.** This is a desktop app; dragging
+     across the board or a table and turning the text blue is web-page
+     behaviour, and here it just looks like a missed click. **Only things you
+     copy and take elsewhere are selectable** — restored below via `.k-sel` */
   -webkit-user-select:none; user-select:none;
 }
 
-/* 選べるものだけに付ける。**器ではなく文字そのものに付ける** — 器に付けると
-   隣の余白からドラッグが始まって行ごと拾ってしまう。
-   いま戻しているのは 4 つ:
-     入力欄 (打った文字を選び直せないと直せない)
-     人の名前 (相手に言及するとき写す)
-     チャットの本文 (引用する)
-     通信ログ (不具合を報告するとき貼る) */
+/* Applied only to selectable things. **Put it on the text itself, not the
+   container** — on a container the drag starts from the adjacent padding and
+   picks up the whole row.
+   Four places are restored today:
+     input fields (you cannot fix a typo without reselecting it)
+     player names (copied when referring to an opponent)
+     chat bodies (quoted)
+     protocol logs (pasted into bug reports) */
 .k-sel, input, textarea {
   -webkit-user-select:text; user-select:text;
 }
-/* 入力欄は文字を打つ場所なので、指の形も文字カーソルに */
+/* Input fields are for typing, so use the text cursor */
 input, textarea { cursor:text; }
 a { color:var(--accent); text-decoration:none; }
 a:hover { color:var(--text); }
 button, input, select, textarea { font:inherit; color:inherit; }
-/* 押せるものは指の形にする。macOS の流儀では default だが、この画面は
- * 罫と余白で区切っていて枠の無い操作が多く、**押せる場所が見て分からない**
- * という指摘が実際に出た。押せないもの (disabled) は default のまま。 */
+/* Pressable things get the pointer cursor. macOS convention is default, but
+ * this screen is divided by rules and whitespace with many borderless
+ * controls, and users actually reported **not being able to tell what is
+ * clickable**. Non-pressable (disabled) stays default. */
 button:not(:disabled):not([aria-disabled="true"]) { cursor:pointer; }
 button:disabled, button[aria-disabled="true"] { cursor:default; }
 
-/* フォーカスリング — キーボード操作のときだけ */
+/* Focus ring — keyboard navigation only */
 :focus { outline:none; }
 :focus-visible { outline:2px solid var(--accent); outline-offset:2px; border-radius:var(--r-1); }
 
 
 /* ============================================================
- * 状態の層
+ * State layers
  *
- * インライン style では :hover / :active が書けないので、変化だけを
- * クラスで持つ。部品は className を受け取り、既定のクラスを付ける。
- * 色は必ず --hover / --accent 由来。ここで新しい色を作らない。
+ * Inline styles cannot express :hover / :active, so the changes live in
+ * classes. Components take a className and add the default class.
+ * Colors always derive from --hover / --accent. Do not invent colors here.
  *
- * 原則:
- *   hover  = --hover を重ねる（面の色は変えない）
- *   active = --hover を 1 段濃く（押し込みの transform はしない。
- *            密度が高い表で 1px 動くとちらつく）
- *   選ばれているもの = 部品側のインライン style が持つ（.k-on は
- *            hover の効き方を弱める役だけ）
- *   disabled / aria-disabled = 変化しない
+ * Principles:
+ *   hover  = overlay --hover (surface color unchanged)
+ *   active = --hover one step stronger (no press-down transform; a 1px shift
+ *            flickers in dense tables)
+ *   selected = owned by the component's inline style (.k-on only weakens
+ *            how hover applies)
+ *   disabled / aria-disabled = no change
  *
- * ⚠ ここだけ !important を使う。部品は面の色を `background:` の一括指定で
- * 書いており、一括指定は background-image を none に戻す。インラインは
- * どんな選択子より強いので、!important 無しだと **hover が一切効かない**
- * (実際にそうなっていて、押せる場所に乗せても何も起きなかった)。
- * 面の色は部品が持ち、重ねる層はここが持つ、という分担を保つための例外。
+ * !important is used here and only here. Components write surface colors with
+ * the `background:` shorthand, and the shorthand resets background-image to
+ * none. Inline styles beat any selector, so without !important **hover does
+ * nothing at all** (this actually happened: hovering a pressable area did
+ * nothing). The exception preserves the split: components own the surface
+ * color, this file owns the overlay.
  * ============================================================ */
 
-/* 押せる面すべての土台。Button / Segmented の駒 / IconButton / Select。
- * 重ねる層そのものは間を取らない (none ↔ 勾配は補間できないので、書いても
- * 段差になる)。滑らかにしたいのは枠の色だけ。 */
+/* Base for every pressable surface: Button / Segmented items / IconButton /
+ * Select. The overlay itself is not transitioned (none <-> gradient cannot be
+ * interpolated, so it steps regardless). Only the border color needs to be
+ * smooth. */
 .k-press { transition:border-color var(--dur) var(--ease); }
 .k-press:hover:not(:disabled):not([aria-disabled="true"]) { background-image:linear-gradient(var(--hover), var(--hover)) !important; }
 .k-press:active:not(:disabled):not([aria-disabled="true"]) { background-image:linear-gradient(var(--hover), var(--hover)), linear-gradient(var(--hover), var(--hover)) !important; }
-/* 選ばれている駒・主ボタンは既に濃いので、hover は控えめに */
+/* Selected items and primary buttons are already strong, so hover stays subtle */
 .k-press.k-on:hover { background-image:linear-gradient(var(--hover-on), var(--hover-on)) !important; }
 
-/* 一覧の行（棋譜・手合い・プレイヤー・ロビー・会話）。
- * 選ばれている行は部品側が背景と 2px の帯を持つので、ここは hover だけ。 */
+/* List rows (records, matches, players, lobby, chat).
+ * A selected row already has a background and a 2px bar from the component,
+ * so only hover belongs here. */
 .k-row { cursor:pointer; }
 .k-row:hover { background-image:linear-gradient(var(--hover), var(--hover)) !important; }
 .k-row[aria-current="true"]:hover, .k-row.k-on:hover { background-image:linear-gradient(var(--hover-on), var(--hover-on)) !important; }
 
-/* 盤のマス。合法手だけ反応する（押せない盤で手が動くと嘘になる）。
- * .k-cell が付くのは合法手かつ押せるときだけなので、指の形にしてよい */
+/* Board squares. Only legal moves react (a board that reacts but cannot be
+ * played on is a lie). `.k-cell` is set only when the square is a legal and
+ * pressable move, so the pointer cursor is safe here */
 .k-cell { cursor:pointer; }
 .k-cell circle { transition:opacity var(--dur) var(--ease), r var(--dur) var(--ease); }
 .k-cell:hover .k-legal { opacity:.75; }
 .k-cell:hover .k-eval { opacity:1; }
 
 
-/* Segmented の選ばれている駒。ダークは面の色だけで足りる (設計もそう) が、
- * **ライトは --card (#fff) と地の差がほとんど無い**ので内側に 1px 入れる。 */
+/* Selected Segmented item. In dark the surface color alone is enough (as
+ * designed), but **in light --card (#fff) barely differs from the ground**,
+ * so add a 1px inset. */
 :root[data-theme="light"] .k-seg-on { box-shadow:inset 0 0 0 1px var(--border); }
 @media (prefers-color-scheme: light) {
   :root:not([data-theme="dark"]) .k-seg-on { box-shadow:inset 0 0 0 1px var(--border); }
 }
 
-/* 箱いっぱいに伸ばす釦 (ログイン)。Button は inline-grid なので、
- * 呼び出し側で幅を決められるようにしておく */
+/* Full-width button (login). Button is inline-grid, so let the caller decide
+ * the width */
 .k-wide { width:100%; }
 
-/* 設定の窓は中身の地が --bg なので、欄も --bg のままだと面が消える。
- * 設計はここだけ欄を 1 段明るくしている。 */
-/* `.k-select` は誰も付けていない (Select は `k-input` を付ける)。
-   死んだ選択子を残すと、次に洗うときに「効いているつもり」の一覧が濁る */
+/* The settings window has --bg as its ground, so fields left at --bg lose
+ * their surface. The design brightens fields one step here only. */
+/* `.k-select` is set by nobody (Select applies `k-input`). Leaving dead
+   selectors around muddies the next cleanup with rules that only look live */
 .k-settings .k-input, .k-settings .k-seg { background:var(--panel) !important; }
 
-/* 入力。枠だけ明るくする（面は変えない — 打ち込む場所は静かなほうがよい） */
+/* Inputs. Brighten only the border (leave the surface — a place you type into
+   should stay quiet) */
 .k-input { transition:border-color var(--dur) var(--ease); }
 .k-input:hover:not([readonly]) { border-color:var(--sub); }
 .k-input:focus-within, .k-input:focus { border-color:var(--accent); }
 
-/* リンク風の文字（プレイヤー名など）。下線の濃さだけ変える */
+/* Link-like text (player names, etc). Only the underline strength changes */
 .k-link { cursor:pointer; transition:border-color var(--dur) var(--ease), color var(--dur) var(--ease); }
 .k-link:hover { color:var(--accent); border-bottom-color:var(--accent); }
 
-/* 掴める境目。今は使っていない — BottomPanel の高さは固定で、掴めるのに
- * 動かないのは無いより悪いので摘みを落とした。高さ変更を入れるときに戻す。 */
+/* Draggable divider. Unused today — BottomPanel has a fixed height, and a
+ * grip that looks draggable but does nothing is worse than none, so the grip
+ * was dropped. Restore this when resizing lands. */
 .k-grip { cursor:row-resize; }
 .k-grip:hover > span, .k-grip:active > span { background:var(--sub); }
 
 
 /* ============================================================
- * 畳む段
+ * Collapse breakpoints
  *
- * デスクトップアプリなので小さすぎる窓は考えない。狭くなったときに
- * 落とす順は「盤を最後まで残す」— 盤が読めなければ何もできない。
- *   1120px: 右ドックを畳む（ボタンで出し入れ）
- *   1040px: 左メニューをアイコンだけにする
- *    940px: ツールバーの補助情報（担当・評価値を表示）を落とす
- * 段の高さ（44 / 32 / 28 / 24 / 20）は変えない。密度は保つ。
+ * This is a desktop app, so very small windows are out of scope. As width
+ * shrinks, things drop in an order that **keeps the board to the last** —
+ * nothing works if the board is unreadable.
+ *   1120px: collapse the right dock (toggled by a button)
+ *   1040px: reduce the left menu to icons only
+ *    940px: drop the toolbar's auxiliary info (side to move, eval display)
+ * The height scale (44 / 32 / 28 / 24 / 20) never changes. Density is kept.
  * ============================================================ */
-/* ⚠ 畳む段が動かすプロパティは、ここが持つ。
- * インライン style は media query より強いので、部品側に書くと段が届かない。
- * 部品はこれらのプロパティを style に書かないこと。 */
+/* Properties the breakpoints move are owned here.
+ * Inline styles beat media queries, so a breakpoint cannot reach a property
+ * written on the component. Components must not put these in style. */
 .k-nav { width:var(--w-nav); }
 .k-dock { width:var(--w-dock); display:flex; }
 .k-nav-section, .k-meter-text, .k-toolbar-aux, .k-nav-jobs { display:flex; }
 .k-meter-bar { display:block; }
-.k-meter-mini { display:none; }      /* 畳んだ列でだけ出る */
-/* 環境変数で起動した印。**何が立っているかを札で出す** — 数だけでは
-   「素の起動ではない」しか伝わらず、どう違うかが分からない。
-   **金は使わない。** `--gold` は定石の色 (規則 19) なので、確認用の印にも
-   使うと金の意味が 2 つになる。枠だけの `--sub` にして、目立たせるのは
-   位置 (窓の帯の右端) に任せる */
+.k-meter-mini { display:none; }      /* shown only in the collapsed column */
+/* Marker for env-var overrides at startup. **Show which ones are set as
+   tags** — a count alone only says "not a plain launch" and not how it
+   differs.
+   **Do not use gold.** `--gold` is the book color (rule 19); using it for a
+   diagnostic marker too would give gold two meanings. Use an outline in
+   `--sub` and let position (right end of the window bar) do the standing
+   out */
 .k-env { display:flex; gap:var(--sp-1); }
 .k-env-tag {
   display:flex; align-items:center; height:var(--h-chip);
@@ -157,82 +172,93 @@ button:disabled, button[aria-disabled="true"] { cursor:default; }
   color:var(--sub); box-shadow:inset 0 0 0 1px var(--border);
 }
 .k-env-val { margin-left:var(--sp-1); font-weight:400; opacity:.85; }
-/* 畳んだ列でだけ出る区切り。広い窓では「● GGS」の見出しが区切りなので
-   要らない (見出しの上余白と二重に空けない) */
+/* Separator shown only in the collapsed column. In a wide window the
+   "● GGS" heading is the separator, so it is unnecessary (do not double up
+   with the heading's top margin) */
 .k-nav-rule { display:none; height:1px; background:var(--border); }
-/* 設定のボタン。広い窓は横いっぱい、48px の列では正方形にする
-   (width も display も畳む段が動かすので、ここが持つ) */
+/* Settings button. Full width in a wide window, square in the 48px column
+   (both width and display are moved by the breakpoints, so they live here) */
 .k-nav-settings { display:flex; width:100%; }
 .k-nav-foot { padding:var(--sp-3); }
 .k-nav-row { padding:0 10px; }
-/* 件数バッジと状態の点。広い窓は行の右端へ押し出し、48px の列では絵の角へ
-   重ねる (下の 1040px の段)。**置き場所も大きさも畳む段が動かすので、
-   部品の style に書かない** — インラインは media query より強い */
+/* Count badges and status dots. In a wide window they are pushed to the right
+   end of the row; in the 48px column they overlay the icon's corner (the
+   1040px block below). **Both placement and size are moved by the
+   breakpoints, so they must not be in the component's style** — inline beats
+   media queries */
 .k-nav-n, .k-nav-dot { margin-left:auto; }
 .k-nav-n {
   min-width:18px; height:18px; padding:0 5px;
   border-radius:9px; font-size:var(--fs-7);
 }
-/* Nav の上端のロゴ。SVG は放っておくと固有の大きさで描かれるので幅を決める。
-   display は畳む段が動かすので、ここが持つ (インラインに書くと届かない) */
+/* Logo at the top of Nav. Left alone, the SVG renders at its intrinsic size,
+   so fix the width. display is moved by the breakpoints, so it lives here
+   (inline would be out of reach) */
 .k-nav-logo { display:flex; align-items:center; justify-content:center; }
 .k-nav-logo > span { display:block; width:100px; }
 .k-nav-logo > span > svg { display:block; width:100%; height:auto; }
 
-/* Dock を開く入口は Toolbar の右端（k-dock-toggle）。
- * 広い窓では Dock が常に見えているので入口は出さない。 */
+/* The Dock is opened from the right end of the Toolbar (k-dock-toggle).
+ * In a wide window the Dock is always visible, so the toggle is hidden. */
 .k-dock-toggle { display:none; }
 @media (max-width: 1120px) {
   .k-dock { display:none; }
-  /* 基準は Body (position:relative)。全幅の帯の下には潜らせない —
-     上は画面のツールバーの下から、下は Body の底 (= StatusBar の上) まで */
+  /* Positioned against Body (position:relative). Do not slip under the
+     full-width bars — top starts below the screen toolbar, bottom ends at
+     the bottom of Body (= above the StatusBar) */
   .k-dock.k-open { display:flex; position:absolute; right:0; top:var(--h-bar); bottom:0; z-index:5; box-shadow:var(--sh-2); }
   .k-dock-toggle { display:inline-flex; }
-  /* 重ねて出した Dock の下に盤が潜らないようにする。盤は器の高さから
-     大きさを決める (規則 77) ので、器が Dock ぶん狭くならないと右の列が
-     隠れる — 畳む順は「盤を最後まで残す」(規則 7)。
-     ツールバー (最初の子) は Dock の上端より上にいるので動かさない。
-     padding ではなく margin を使う: 部品が padding を一括指定で書いており、
-     インラインは media query より強いので届かない */
+  /* Keep the board from sliding under the overlaid Dock. The board sizes
+     itself from its container's height (rule 77), so unless the container
+     narrows by the Dock's width the right column is hidden — the collapse
+     order keeps the board to the last (rule 7).
+     The toolbar (first child) sits above the Dock's top edge, so leave it.
+     Use margin, not padding: components write padding with the shorthand,
+     and inline beats media queries so padding would not reach */
   .k-dock-inset > :not(:first-child) { margin-right:var(--w-dock); }
 }
 @media (max-width: 1040px) {
-  /* アイコンだけの細い列。48px = 32px の当たり ＋ 左右 8px */
+  /* Narrow icon-only column. 48px = 32px hit target + 8px on each side */
   .k-nav { width:48px; }
-  /* 文字はすべて落とす。ロゴと仕事一覧も文字なので同じ扱い — メーターの
-     ラベルだけ消して他を残すと、48px の列で折り返して縦に伸びる */
+  /* Drop all text. The logo and job list are text too and get the same
+     treatment — hiding only the meter label and keeping the rest makes the
+     48px column wrap and grow vertically */
   .k-nav .k-nav-label, .k-nav .k-nav-section, .k-nav .k-meter-text,
   .k-nav .k-nav-logo, .k-nav .k-nav-jobs, .k-nav .k-meter-bar { display:none; }
-  /* 棒の代わりに数字、文字の代わりに 1px の罫 */
+  /* A number instead of the bar, a 1px rule instead of the text */
   .k-nav .k-meter-mini { display:block; }
-  /* 文字が消えたあとの絵は左端に取り残されるので、数字と同じ真ん中に置く */
+  /* With the text gone, icons are stranded at the left edge, so center them
+     like the numbers */
   .k-nav .k-meter-head { justify-content:center; }
   .k-nav .k-nav-row { justify-content:center; padding:0; }
-  /* ロゴを落としても帯は残す — 信号機の居場所とドラッグ領域なので */
+  /* Keep the bar even with the logo dropped — it holds the traffic lights
+     and the drag region */
 }
 @media (max-width: 940px) {
   .k-toolbar-aux { display:none; }
 }
 
 
-/* タイトルバーのドラッグ領域。
- * macOS の Tauri は WKWebView なので -webkit-app-region が効かない。窓を掴む
- * のは data-tauri-drag-region 属性で、Nav の上端がそれを持つ (Nav.tsx)。
- * この規則は WebView2 (Windows) 側のためだけに残してある。
- * 信号機ぶんの 78px の余白は titleBarStyle: "Overlay" が前提。 */
+/* Title bar drag region.
+ * Tauri on macOS uses WKWebView, where -webkit-app-region has no effect. The
+ * window is dragged via the data-tauri-drag-region attribute, which the top
+ * of Nav carries (Nav.tsx).
+ * This rule is kept only for WebView2 (Windows).
+ * The 78px inset for the traffic lights assumes titleBarStyle: "Overlay". */
 .k-drag { -webkit-app-region:drag; }
-/* 窓の帯には押せるものを 1 つも置かない (規則 75) ので、ドラッグ領域から
-   外す相手がいない。要るようになったら 1 行で戻せる:
+/* The window bar holds no pressable elements at all (rule 75), so there is
+   nothing to exclude from the drag region. One line brings it back when
+   needed:
    .k-nodrag { -webkit-app-region:no-drag; } */
 
-/* スクロール — ドックと表の中だけ */
+/* Scrolling — inside the dock and tables only */
 .k-scroll { overflow-y:auto; overscroll-behavior:contain; }
 .k-scroll::-webkit-scrollbar { width:9px; }
 .k-scroll::-webkit-scrollbar-thumb { background:var(--border); border-radius:9px; border:2px solid transparent; background-clip:content-box; }
 .k-scroll::-webkit-scrollbar-track { background:transparent; }
 .k-scroll:hover::-webkit-scrollbar-thumb { background:var(--sub); }
 
-/* 石返し。設定の「石返し」で --flip-dur を 0ms / 120ms / 240ms に差し替える */
+/* Stone flip. The "stone flip" setting swaps --flip-dur to 0ms / 120ms / 240ms */
 :root { --flip-dur:120ms; }
 @keyframes k-flip { from { transform:rotateY(180deg); } to { transform:rotateY(0); } }
 .k-flip { animation:k-flip var(--flip-dur) var(--ease); }
@@ -244,13 +270,15 @@ button:disabled, button[aria-disabled="true"] { cursor:default; }
 }
 
 
-/* いちばん狭い段 — 評価値グラフの帯を畳む (設計が採った答え)。
+/* The shortest breakpoint — collapse the eval graph strip (the design's
+ * chosen answer).
  *
- * **縮めるだけでは足りなかった。** グラフの高さを器から決めるようにして
- * 盤は 82 → 183px まで戻った (`75d1d23`) が、860×560 ではまだ小さい。
- * 畳めば盤は 330px 前後まで伸びる。**縮みと畳みは併用する** —
- * 中くらいの高さでは縮んで両方見え、いちばん低い段でだけ畳める。
- * 開閉は見出し行の釦が持つ (規則 7 — 盤を最後まで残す)。 */
+ * **Shrinking alone was not enough.** Sizing the graph from its container
+ * brought the board back from 82 to 183px (`75d1d23`), but at 860x560 it is
+ * still small. Collapsing gets the board to around 330px. **Shrinking and
+ * collapsing are used together** — at medium heights it shrinks and both stay
+ * visible; only at the shortest breakpoint can it be collapsed.
+ * The toggle lives on the heading row (rule 7 — keep the board to the last). */
 .k-graph { display:flex; }
 .k-graph-toggle { display:none; }
 @media (max-height: 620px) {

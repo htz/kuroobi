@@ -238,7 +238,7 @@ impl Reversi {
         let chars: Vec<char> = kifu.chars().collect();
 
         if !chars.len().is_multiple_of(2) {
-            return Err(format!("棋譜の長さが正しくありません: {kifu}"));
+            return Err(format!("KIFU length is not valid: {kifu}"));
         }
 
         for chunk in chars.chunks(2) {
@@ -250,7 +250,7 @@ impl Reversi {
                 self.pass().map_err(|e| format!("pass error: {}", e))?;
             }
             self.make_move(pos)
-                .map_err(|e| format!("棋譜の手を読み取れません ({s}): {e}"))?;
+                .map_err(|e| format!("cannot replay KIFU move ({s}): {e}"))?;
         }
 
         Ok(())

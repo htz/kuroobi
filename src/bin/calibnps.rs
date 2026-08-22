@@ -69,9 +69,9 @@ fn at(nps: f64, threads: usize, secs: u64, empties: u8, solve_cap: u8) -> (f64, 
 /// reads better than one number. Two solve caps are shown so a limiting
 /// strength setting is visible.
 fn report(nps: f64, threads: usize) {
-    println!("読切 {:.1}M ノード/秒 ({threads} スレッド)", nps / 1e6);
+    println!("solve {:.1}M nodes/s ({threads} threads)", nps / 1e6);
     println!();
-    println!("  持ち時間 |  1 手の予算 (空き 60 / 44 / 30) | 読切の入り口 (上限 26 / 30)");
+    println!("  clock    |  budget per move (empties 60 / 44 / 30) | solve entry (cap 26 / 30)");
     println!("  ---------+-------------------------------+---------------------------");
     for secs in [300u64, 600, 900, 1200, 1800] {
         let (b60, s26) = at(nps, threads, secs, 60, 26);
@@ -80,7 +80,7 @@ fn report(nps: f64, threads: usize) {
         let (_, s30) = at(nps, threads, secs, 60, 30);
         let t = kuroobi::timectl::solve_secs(s30, nps, threads);
         println!(
-            "  {:>4} 分 | {b60:>7.1}s {b44:>8.1}s {b30:>8.1}s | {s26:>7} {s30:>10}  (空き {s30} は {t:.0} 秒の見込み)",
+            "  {:>4} min | {b60:>7.1}s {b44:>8.1}s {b30:>8.1}s | {s26:>7} {s30:>10}  (empties {s30} projects to {t:.0}s)",
             secs / 60
         );
     }
@@ -121,13 +121,13 @@ fn depth_table(engine: &mut Engine, threads_list: &[usize]) {
     };
     let keep = engine.config().threads;
     println!();
-    println!("1 手の予算で届く中盤の深さとノード数 (局面 3 つの中央値)");
-    println!("  **同じ局面を同じ予算で、スレッド数だけ変えて測る。** 並列で深さが");
-    println!("  伸びないのに ノードが増えていれば、木が太っただけ (重複)。");
+    println!("midgame depth and nodes reached within one move's budget (median of 3 positions)");
+    println!("  **Same positions, same budget, varying only the thread count.** If depth does");
+    println!("  not grow with threads while nodes do, the tree merely got fatter (duplicates).");
     println!();
-    print!("  空き  予算 |");
+    print!("  empty  bdg |");
     for t in threads_list {
-        print!(" {t:>3}T 深さ  ノード");
+        print!(" {t:>3}T depth  nodes");
     }
     println!();
     println!("  -----------+{}", "-".repeat(threads_list.len() * 17));
@@ -183,7 +183,7 @@ fn main() -> ExitCode {
 
     if show {
         if res.nps.is_empty() {
-            println!("まだ較正していない ({} に nps が無い)", path.display());
+            println!("not calibrated yet (no nps in {})", path.display());
             return ExitCode::SUCCESS;
         }
         println!("{}", path.display());
@@ -192,7 +192,7 @@ fn main() -> ExitCode {
             println!();
         }
         if res.nps_for(threads).is_none() {
-            println!("(いま設定されているのは {threads} スレッド — その数では測っていない)");
+            println!("(configured for {threads} threads — no measurement exists at that count)");
         }
         return ExitCode::SUCCESS;
     }
@@ -211,13 +211,13 @@ fn main() -> ExitCode {
     let mut engine = match Engine::new(cfg) {
         Ok(e) => e,
         Err(e) => {
-            eprintln!("エンジンを用意できない: {e}");
+            eprintln!("cannot start the engine: {e}");
             return ExitCode::FAILURE;
         }
     };
     let nps = engine.measure_solve_nps();
     if nps <= 0.0 {
-        eprintln!("測れなかった (較正局面が解けていない)");
+        eprintln!("measurement failed (the calibration position was not solved)");
         return ExitCode::FAILURE;
     }
     report(nps, threads);
@@ -230,10 +230,10 @@ fn main() -> ExitCode {
     if save {
         res.set_nps(threads, nps);
         if let Err(e) = res.save(&path) {
-            eprintln!("保存できない {}: {e}", path.display());
+            eprintln!("cannot save {}: {e}", path.display());
             return ExitCode::FAILURE;
         }
-        println!("{} に保存した", path.display());
+        println!("saved to {}", path.display());
     }
     ExitCode::SUCCESS
 }

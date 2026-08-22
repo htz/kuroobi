@@ -1,5 +1,5 @@
-// React の書き方から外れたところを機械的に見つける。
-// 特に hooks の依存配列は、手で書くと必ず取りこぼす。
+// Mechanically catches deviations from React conventions.
+// Hook dependency arrays in particular are always incomplete when written by hand.
 import js from '@eslint/js';
 import tseslint from 'typescript-eslint';
 import reactHooks from 'eslint-plugin-react-hooks';

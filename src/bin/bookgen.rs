@@ -150,7 +150,7 @@ fn scan(dir: &Path, max_ply: usize, min_games: u32, book: &mut Book) -> std::io:
                 b.make_move_bits(pos);
             }
         }
-        eprint!("\r{} を読み込み中… 累計 {total_games} 局", f.display());
+        eprint!("\rreading {}... {total_games} games so far", f.display());
     }
     eprintln!();
 
@@ -194,7 +194,7 @@ fn scan(dir: &Path, max_ply: usize, min_games: u32, book: &mut Book) -> std::io:
         );
         kept += 1;
     }
-    eprintln!("局面 {kept} 件を候補として登録 (棋譜 {total_games} 局)");
+    eprintln!("registered {kept} positions as candidates (from {total_games} games)");
     Ok(())
 }
 
@@ -217,7 +217,7 @@ fn deepen(book: &mut Book, out: &Path, a: &Args) -> Result<(), String> {
     todo.truncate(a.limit);
     let total = todo.len();
     if total == 0 {
-        eprintln!("深化対象なし");
+        eprintln!("nothing to deepen");
         return Ok(());
     }
 
@@ -228,7 +228,7 @@ fn deepen(book: &mut Book, out: &Path, a: &Args) -> Result<(), String> {
     let per = a.threads.max(1);
     let workers = (cores / per).max(1).min(total);
     eprintln!(
-        "深化対象 {total} 局面 (深さ {} / 読切 {} / 帯 {}) — {workers} ワーカー × {per} スレッド",
+        "deepening {total} positions (depth {} / solve {} / band {}) - {workers} workers x {per} threads",
         a.depth, a.solve, a.band
     );
 
@@ -318,7 +318,7 @@ fn deepen(book: &mut Book, out: &Path, a: &Args) -> Result<(), String> {
                         let rate = n as f64 / el.max(0.001);
                         let remain = (todo_ref.len() - n) as f64 / rate.max(1e-9);
                         eprintln!(
-                            "{:.1}% ({n}/{}) 経過 {:.1} 分 / 残り 約 {:.1} 分 ({:.0} 局面/分)",
+                            "{:.1}% ({n}/{}) elapsed {:.1} min / about {:.1} min left ({:.0} positions/min)",
                             100.0 * n as f64 / todo_ref.len() as f64,
                             todo_ref.len(),
                             el / 60.0,
@@ -339,7 +339,7 @@ fn deepen(book: &mut Book, out: &Path, a: &Args) -> Result<(), String> {
         book.insert_raw(key, e);
     }
     book.save(out).map_err(|e| e.to_string())?;
-    eprintln!("完了: {:.1} 分", t0.elapsed().as_secs_f64() / 60.0);
+    eprintln!("done: {:.1} min", t0.elapsed().as_secs_f64() / 60.0);
     Ok(())
 }
 
@@ -352,7 +352,7 @@ fn main() -> std::process::ExitCode {
         }
     };
     let mut book = Book::load(&a.out).unwrap_or_else(|_| Book::new());
-    eprintln!("book: {} 局面 ({})", book.len(), a.out.display());
+    eprintln!("book: {} positions ({})", book.len(), a.out.display());
 
     if let Some(dir) = &a.scan {
         if let Err(e) = scan(dir, a.max_ply, a.min_games, &mut book) {
@@ -363,7 +363,7 @@ fn main() -> std::process::ExitCode {
             eprintln!("save failed: {e}");
             return std::process::ExitCode::FAILURE;
         }
-        eprintln!("保存: {} 局面 → {}", book.len(), a.out.display());
+        eprintln!("saved: {} positions -> {}", book.len(), a.out.display());
     }
 
     if a.deepen {
@@ -371,7 +371,7 @@ fn main() -> std::process::ExitCode {
             eprintln!("deepen failed: {e}");
             return std::process::ExitCode::FAILURE;
         }
-        eprintln!("保存: {} 局面 → {}", book.len(), a.out.display());
+        eprintln!("saved: {} positions -> {}", book.len(), a.out.display());
     }
     std::process::ExitCode::SUCCESS
 }

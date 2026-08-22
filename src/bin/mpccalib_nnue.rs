@@ -100,7 +100,7 @@ fn main() -> ExitCode {
             }
         }
     }
-    eprintln!("{} 局面を {threads} スレッドで測ります", boards.len());
+    eprintln!("measuring {} positions on {threads} threads", boards.len());
 
     print!("empties");
     for d in &depths {

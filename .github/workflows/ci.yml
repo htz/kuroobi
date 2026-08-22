@@ -8,42 +8,42 @@ on:
 
 env:
   CARGO_TERM_COLOR: always
-  # 依存の取得を速く・安定させる
+  # Faster, more reproducible dependency fetches
   CARGO_INCREMENTAL: 0
 
 jobs:
   engine:
-    name: エンジン (fmt / clippy / test)
+    name: Engine (fmt / clippy / test)
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
 
-      - name: Rust ツールチェイン
+      - name: Rust toolchain
         uses: dtolnay/rust-toolchain@stable
         with:
           components: rustfmt, clippy
 
       - uses: Swatinem/rust-cache@v2
 
-      - name: 書式
+      - name: Format
         run: cargo fmt --all -- --check
 
       - name: clippy
         run: cargo clippy --all-targets -- -D warnings
 
-      # 学習済みの重み (weights/) は容量の都合で git に入れていない。
-      # それを要するテストは #[ignore] 済みなので、ここでは走らない。
-      - name: テスト
+      # Trained weights (weights/) are out of git for size; the tests
+      # needing them are #[ignore]d, so they do not run here.
+      - name: Test
         run: cargo test --release
 
-      - name: feature の組み合わせをビルド
+      - name: Build feature combinations
         run: |
           cargo build --release --features node-accounting
           cargo build --release --features layer-profile
           cargo build --release --features nnue-scalar
 
   gui-ui:
-    name: 対局 GUI のフロント (型検査 / lint / ビルド)
+    name: GUI frontend (typecheck / lint / build)
     runs-on: ubuntu-latest
     defaults:
       run:
@@ -57,19 +57,19 @@ jobs:
           cache: npm
           cache-dependency-path: gui/package-lock.json
 
-      - name: 依存の取得
+      - name: Install dependencies
         run: npm ci
 
-      # 型検査に加えて eslint も走る (npm run check の中身)。
-      # React の hooks 依存や DOM の直接操作は、目で見ても取りこぼす。
-      - name: 型検査と lint
+      # npm run check is typecheck plus eslint: React hook deps and
+      # direct DOM access slip past review by eye.
+      - name: Typecheck and lint
         run: npm run check
 
-      - name: ビルド
+      - name: Build
         run: npm run build
 
   gui-app:
-    name: 対局 GUI のアプリ (fmt / clippy / test / ビルド)
+    name: GUI app (fmt / clippy / test / build)
     runs-on: macos-latest
     needs: gui-ui
     steps:
@@ -88,16 +88,16 @@ jobs:
           cache: npm
           cache-dependency-path: gui/package-lock.json
 
-      - name: フロントをビルド (Tauri が読む ui/ を作る)
+      - name: Build the frontend (produces the ui/ Tauri embeds)
         working-directory: gui
         run: |
           npm ci
           npm run build
 
-      # gui/ はルートとは別のクレート。ルートの job で回した fmt / clippy /
-      # test はこちらを見ない。ここで回さないと、不要キャストのような
-      # 指摘が素通りする (実際に 1 つ紛れたことがある)。
-      - name: 書式
+      # gui/ is a separate crate: the root job's fmt / clippy / test
+      # never reach it. Without this step lints like a needless cast
+      # sail through (one did).
+      - name: Format
         working-directory: gui
         run: cargo fmt --all -- --check
 
@@ -105,10 +105,10 @@ jobs:
         working-directory: gui
         run: cargo clippy --all-targets -- -D warnings
 
-      - name: テスト
+      - name: Test
         working-directory: gui
         run: cargo test --release
 
-      - name: アプリをビルド
+      - name: Build the app
         working-directory: gui
         run: cargo build --release

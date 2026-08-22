@@ -1,26 +1,27 @@
 /target
 /train_data
-# 生成物はディレクトリ単位で無視する。拡張子では無視しない —
-# ルートに落ちたら git status に出てほしいため。以前は *.bin を無視して
-# いて、そのせいでルートに重み 33 個が溜まっても誰も気づかなかった。
+# Ignore generated output by directory, never by extension — anything that
+# lands at the root should show up in git status. *.bin used to be ignored,
+# which is why 33 weight files piled up at the root unnoticed.
 #
-# weights/ — 学習済みの重み (11 GB)。中身の説明は weights/WEIGHTS.md
-#            (これも追跡しない。git に存在しないファイルの説明だから)
-# logs/    — 学習曲線の csv と実行ログ
+# weights/ — trained weights (11 GB). Described in weights/WEIGHTS.md
+#            (untracked as well, since it describes files git does not have)
+# logs/    — training-curve csv and run logs
 /weights/
 /logs/
-# アカウントごとに `.ggs_credentials.<名前>` を置くので、末尾まで含めて弾く。
-# 完全一致にしていたせいで 2 つめのアカウントのぶんが素通りし、公開リポジトリへ
-# push してしまった (パスワードを変えて履歴を書き換えた)。
+# Credentials are stored per account as `.ggs_credentials.<name>`, so match
+# the suffix too. An exact-match rule once let a second account's file through
+# and it was pushed to the public repo (password rotated, history rewritten).
 .ggs_credentials*
 /gui/target/
 /gui/gen/
 node_modules/
-# フロント (Vite) のビルド出力。index.html も含めて生成物なので追跡しない。
-# Tauri は frontendDist として ui/ を読むため、アプリを組む前に
-# `npm ci && npm run build` が要る (CI もその順で回している)。
+# Frontend (Vite) build output. Generated, index.html included, so untracked.
+# Tauri reads ui/ as frontendDist, so `npm ci && npm run build` must run
+# before building the app (CI uses that order too).
 /gui/ui/
 __pycache__/
-# 作業中の覚え書き。**追跡しない** — 手が動くたびに書き換わるメモで、
-# 履歴に残す値打ちが無い (一度入れてしまい、遡って落とした)。
+# Working notes. **Untracked** — they change with every edit and are not worth
+# keeping in history (they were committed once and removed retroactively).
 /notes/
+/tmp/

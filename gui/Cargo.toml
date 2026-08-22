@@ -1,5 +1,5 @@
-# エンジン本体とはビルドを完全に分離する (独立ワークスペース)。
-# root での cargo build/test は GUI と tauri 依存を一切巻き込まない。
+# Build is fully separated from the engine (independent workspace).
+# cargo build/test at the root pulls in neither the GUI nor any tauri dependency.
 [workspace]
 
 [package]
@@ -7,7 +7,7 @@ name = "kuroobi-gui"
 version = "0.1.0"
 edition = "2021"
 license = "MIT"
-description = "Kuroobi の GUI (Tauri)"
+description = "Kuroobi GUI (Tauri)"
 
 [dependencies]
 kuroobi = { path = ".." }
@@ -18,13 +18,13 @@ serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 libc = "0.2"
 
-# メモリ使用量 (常駐サイズ) の取得。libc の mach 系は非推奨になったため
+# Resident memory size lookup; libc's mach APIs are deprecated
 [target.'cfg(target_os = "macos")'.dependencies]
 mach2 = "0.4"
 
 [build-dependencies]
 tauri-build = { version = "2", features = [] }
 
-# GUI のデバッグ実行でも探索本体だけは最適化する (エンジンの速度が UX に直結)
+# Optimize the search even in GUI debug builds (engine speed is felt directly in the UI)
 [profile.dev.package.kuroobi]
 opt-level = 3

@@ -298,7 +298,7 @@ fn main() -> ExitCode {
             h = h.wrapping_mul(1099511628211);
         }
         println!(
-            "  局 {:>2}  A {:>8.3} s  B {:>8.3} s  棋譜 {:016x}",
+            "  game {:>2}  A {:>8.3} s  B {:>8.3} s  record {:016x}",
             g + 1,
             (ta - g_start.0) as f64 / 1e6,
             (tb - g_start.1) as f64 / 1e6,
@@ -307,16 +307,12 @@ fn main() -> ExitCode {
     }
     eprintln!();
 
-    let m = if args.ponder {
-        "する"
-    } else {
-        "しない (対照)"
-    };
+    let m = if args.ponder { "on" } else { "off (control)" };
     println!(
-        "ponderarena: 1 手 {} ms / depth 上限 {} / solve {} / {} スレッド / {} 局 (定石なし)",
+        "ponderarena: {} ms per move / depth cap {} / solve {} / {} threads / {} games (no book)",
         args.ms, args.depth, args.solve_empties, args.threads, args.games,
     );
-    println!("  A = ポンダリング {m} / B = しない");
+    println!("  A = pondering {m} / B = off");
     if args.fixed {
         let (aa, bb) = (
             ta as f64 / na.max(1) as f64 / 1000.0,
@@ -328,7 +324,7 @@ fn main() -> ExitCode {
         colors and positions. B's totals should match across runs; that
         is the control. */
         println!(
-            "  探索の合計  A {:.2} s ({} 手 / 1 手 {:.1} ms)   B {:.2} s ({} 手 / 1 手 {:.1} ms)",
+            "  search total  A {:.2} s ({} moves / {:.1} ms per move)   B {:.2} s ({} moves / {:.1} ms per move)",
             ta as f64 / 1e6,
             na,
             aa,
@@ -337,17 +333,17 @@ fn main() -> ExitCode {
             bb,
         );
         println!(
-            "  ※ 同じ種で --ponder off を回し、**A の合計どうし**を比べる。\n     B の合計が 2 回でずれていたら、その比較は使えない"
+            "  Note: run --ponder off with the same seed and compare **A total against A total**.\n     If B totals differ between the two runs, the comparison is unusable"
         );
     }
     println!(
-        "  到達深さ  A {:.2}  B {:.2}   差 {:+.2} 段",
+        "  depth reached  A {:.2}  B {:.2}   diff {:+.2} plies",
         da.avg(),
         db.avg(),
         da.avg() - db.avg()
     );
     println!(
-        "  先読みで訪れたノード {} ({:.0} / 手)",
+        "  nodes visited while pondering {} ({:.0} / move)",
         ponder_nodes,
         if da.n == 0 {
             0.0
@@ -355,15 +351,18 @@ fn main() -> ExitCode {
             ponder_nodes as f64 / da.n as f64
         }
     );
-    println!("  完全読み域の先読み {} 回 / 合計 {} ms", end_n, end_ms);
+    println!(
+        "  ponders in the solve range {} / {} ms total",
+        end_n, end_ms
+    );
     let total = (wins + losses + draws) as f64;
     println!(
-        "  A の成績  {}勝 {}敗 {}分 ({:.1}%)",
+        "  A record  {}W {}L {}D ({:.1}%)",
         wins,
         losses,
         draws,
         100.0 * (wins as f64 + 0.5 * draws as f64) / total.max(1.0)
     );
-    println!("  ※ 勝率はこの局数では判定に足りない。深さの差で効きを見る");
+    println!("  Note: the win rate is underpowered at this game count; judge the effect by the depth difference");
     ExitCode::SUCCESS
 }

@@ -1,114 +1,125 @@
 /* KUROOBI design tokens
- * gui/src-ui/style.css の :root を置き換える。
- * ダークが既定。data-theme="light" か OS 設定でライトに切り替わる。
- * これ以降、コンポーネント側で色・寸法の px 直書きは禁止。
+ * Replaces the :root block of gui/src-ui/style.css.
+ * Dark is the default; data-theme="light" or the OS setting switches to light.
+ * From here on, components must never hard-code colors or px dimensions.
  */
 :root {
-  /* 色 */
+  /* Colors */
   --bg:#16191d; --panel:#1e2329; --card:#252b33;
   --border:#313943; --border-weak:#232932;
   --text:#e8ebee; --sub:#8b96a2;
   --accent:#4d9fff; --accent-dim:#2d5f99; --hover:rgba(255,255,255,.10);
-  --hover-on:rgba(255,255,255,.05);   /* 選ばれているものの hover。すでに濃いので --hover より弱く */
-  --track:rgba(255,255,255,.09);      /* バーの溝。状態の色（--hover）を面に使わない */
+  --hover-on:rgba(255,255,255,.05);   /* hover on selected things; already strong, so weaker than --hover */
+  --track:rgba(255,255,255,.09);      /* bar groove; never use a state color (--hover) as a surface */
   --board:#77914e; --board-dark:#3f4f2c; --line:#3d5226; --grain:#33421d;
   --gold:#ffd479; --ok:#8bc34a; --bad:#ef7a7a;
-  /* accent / bad の面に載せる字と印。**面と一緒に動く色なのでトークンにする**
-     — リテラルの #fff を部品に書くと、accent を明るい色に変えた日に字が
-     消える。どの部品が壊れるかは書いた本人しか知らない。
-     いまはどちらのテーマでも白 (accent は明暗どちらも青のまま) */
+  /* Text and marks drawn on accent / bad surfaces. **They move with the
+     surface, so they are tokens** — a literal #fff in a component makes the
+     text vanish the day accent turns light, and only whoever wrote it knows
+     which components break.
+     Today both are white in either theme (accent stays blue in light and dark) */
   --on-accent:#ffffff; --on-bad:#ffffff;
-  --scrim:rgba(0,0,0,.45);   /* 暗幕。テーマに関わらず黒を敷く */
+  --scrim:rgba(0,0,0,.45);   /* scrim; black regardless of theme */
   --stone-black:#111213; --stone-black-edge:#2c2e30;
-  /* 盤の上に重ねるもの。ダークは白を重ねるが、ライトは畳が明るいので黒を重ねる
-     — リテラルで書くとライトで合法手の点と評価値マスが消える */
+  /* Overlays drawn on the board. Dark overlays white, but light overlays
+     black because the board is bright — written as literals, the legal-move
+     dots and eval squares disappear in light */
   --stone-shadow:rgba(0,0,0,.25);
   --board-hint:rgba(255,255,255,.30);
   --board-eval-bg:rgba(255,255,255,.06); --board-eval-edge:rgba(255,255,255,.25);
   --board-eval-text:#d9e6de; --board-eval-strong:#cfd8d2; --board-eval-weak:#9fb0a6;
-  /* 出所「定石」の文字。--gold をそのまま乗せるとライトで畳と同化して読めない
-     （面のほうは color-mix 14% なので --gold のままでよい — 文字は 100% で乗る） */
+  /* Text for the "book" source. Plain --gold blends into the light board and
+     becomes unreadable (the surface can stay --gold since it is color-mix 14%
+     — text lands at 100%) */
   --board-eval-book:#ffd479;
   --stone-white:#f1f1f1; --stone-white-edge:#c9cdd1;
 
-  /* 余白 */
+  /* Spacing */
   --sp-1:4px; --sp-2:8px; --sp-3:12px; --sp-4:16px; --sp-5:24px; --sp-6:32px;
-  --sp-0:6px;    /* 行の中の細かい溝 (石と名前、バッジと数字) */
-  --sp-2h:10px;  /* 一覧の行の左右。密度を落とさずに 8 より少し逃がす */
-  --sp-3h:14px;  /* 主ボタンの左右。--h-field の高さと釣り合う */
+  --sp-0:6px;    /* fine gaps inside a row (stone and name, badge and number) */
+  --sp-2h:10px;  /* left/right of list rows; a little more air than 8 without losing density */
+  --sp-3h:14px;  /* left/right of primary buttons; balances the --h-field height */
 
-  /* 高さ — これ以外の値を作らない */
-  --h-window:32px;   /* 窓の帯。信号機 (12px) の上下に 10px。28px だと下罫の
-                        1px ぶん下が詰まって、余白が揃って見えない */
-  --h-bar:44px;      /* 画面のツールバー / タブ帯 */
-  --h-status:28px;   /* ステータスバー */
-  --h-field:32px;    /* 入力・セレクト・モーダルのボタン */
-  --h-ctrl:28px;     /* ボタン・セグメント・アイコンボタン */
-  --h-row:24px;      /* 表の行・リストの行 */
-  /* 2 段の情報 (名前 + 補足) と釦を載せる行。ロビーの 対局中 / 申し込み /
-     中断対局。**24px の行とは別の型**として設計が分けている (絵の実測 40)。
-     トークンには無いので足した (要 push) */
+  /* Heights — do not invent values outside this set */
+  --h-window:32px;   /* window bar. Traffic lights (12px) with 10px above and
+                        below. At 28px the 1px bottom rule eats the space and
+                        the margins stop looking even */
+  --h-bar:44px;      /* screen toolbar / tab strip */
+  --h-status:28px;   /* status bar */
+  --h-field:32px;    /* inputs, selects, modal buttons */
+  --h-ctrl:28px;     /* buttons, segmented controls, icon buttons */
+  --h-row:24px;      /* table rows, list rows */
+  /* Rows carrying two lines (name + detail) plus a button: lobby's in-play /
+     invitations / adjourned games. The design treats this as **a separate
+     type from the 24px row** (measured 40 in the mockup).
+     Not in the design tokens, so added here (needs pushing back) */
   --h-row2:40px;
-  --h-head:20px;     /* 表と節の見出し */
-  --h-chip:20px;     /* ステータスバー内のボタン・バッジ */
-  --w-dock:290px;    /* 右ドック。3 画面で不変 */
-  --w-nav:208px;     /* 左メニュー */
-  --w-list:268px;    /* GGS 手合い一覧・棋譜列 */
-  --w-lobby:174px;   /* GGS 左カラム */
-  --w-book-tree:269px; /* 定石の木の列。設計 §7 の実測 */
-  --w-label:96px;    /* 設定の見出し列 */
-  --w-signals:78px;  /* 信号機ぶん。12×3 + gap 8×2 + 左 12 = 64、+ gap 14 */
-  --w-text:720px;    /* 読み物 (説明文) の折り返し幅。表・一覧・盤は窓いっぱいでよいが、
-                        文章の 1 行が 1500px になると目が行頭に戻れない */
-  --w-gtype:120px;   /* 対局形式の名前の列。「同期・ランダム20手」が 1 行で入る幅 */
-  /* 覆いの幅は 2 つだけ。**呼ぶ側に px を書かせない** — 同じ 520 が
-     棋譜ビューアと棋譜の読み込みに別々に書かれていた (規則 1・6) */
-  --w-modal:340px;      /* 確認・ログインの箱。字だけで足りるもの */
-  --w-modal-wide:520px; /* 中身の要る覆い (棋譜ビューア・棋譜の読み込み。規則 71) */
+  --h-head:20px;     /* table and section headings */
+  --h-chip:20px;     /* buttons and badges inside the status bar */
+  --w-dock:290px;    /* right dock; identical on all 3 screens */
+  --w-nav:208px;     /* left menu */
+  --w-list:268px;    /* GGS match list, record column */
+  --w-lobby:174px;   /* GGS left column */
+  --w-book-tree:269px; /* book tree column; measured from design §7 */
+  --w-label:96px;    /* settings label column */
+  --w-signals:78px;  /* traffic-light inset. 12x3 + gap 8x2 + 12 left = 64, + gap 14 */
+  --w-text:720px;    /* wrap width for prose. Tables, lists and the board may fill the
+                        window, but at 1500px per line the eye cannot find the next one */
+  --w-gtype:120px;   /* game-type name column; wide enough for the longest Japanese label (synchronous, random 20 moves) on one line */
+  /* Only two overlay widths. **Callers must not write px** — the same 520 was
+     written separately in the record viewer and the record importer
+     (rules 1 and 6) */
+  --w-modal:340px;      /* confirmation and login boxes; text alone is enough */
+  --w-modal-wide:520px; /* overlays with real content (record viewer, record import; rule 71) */
 
-  /* 角丸 */
-  --r-0:3px;   /* 4px の帯・細い棒。--r-1 の 5 は 4px の帯には使えない */
-  --r-1:5px;   /* 行・チップ・小さな面 */
-  --r-2:7px;   /* ボタン・セグメントの中身 */
-  --r-3:8px;   /* 入力・セグメントの外枠 */
-  --r-4:11px;  /* 浮く箱・ウィンドウ */
-  --r-5:14px;  /* EmptyState のアイコンの器 (64px)。11 だと角が立ちすぎる */
-  --r-bubble:9px; /* 吹き出し・トースト。--r-3 と --r-4 の間 */
+  /* Corner radii */
+  --r-0:3px;   /* 4px bars and thin strips; --r-1's 5 cannot be used on a 4px bar */
+  --r-1:5px;   /* rows, chips, small surfaces */
+  --r-2:7px;   /* buttons, segmented items */
+  --r-3:8px;   /* inputs, segmented outer frame */
+  --r-4:11px;  /* floating boxes, windows */
+  --r-5:14px;  /* EmptyState icon container (64px); 11 leaves the corners too sharp */
+  --r-bubble:9px; /* bubbles and toasts; between --r-3 and --r-4 */
   --r-pill:50px;
 
-  /* 影 — 浮くものだけが持つ。大きなぼかしは Modal / Popover / Toast だけ */
+  /* Shadows — only floating things have them. Large blurs are for Modal /
+     Popover / Toast only */
   --sh-1:0 1px 2px rgba(0,0,0,.28);
   --sh-2:0 20px 48px rgba(0,0,0,.6);
-  /* 石の影は CSS の box-shadow ではなく svg の円 (board.tsx) で描く。
-     色は --stone-shadow が持つので、ここに影のトークンは要らない */
+  /* Stone shadows are drawn as an svg circle (board.tsx), not a CSS
+     box-shadow. --stone-shadow owns the color, so no shadow token is needed
+     here */
 
-  /* 文字 */
+  /* Type */
   --ff:-apple-system,BlinkMacSystemFont,"Hiragino Sans","Helvetica Neue",sans-serif;
   --ff-mono:ui-monospace,SFMono-Regular,Menlo,monospace;
   --fs-1:20px; --fs-2:17px; --fs-3:15px; --fs-4:13px;
   --fs-5:12px; --fs-6:11px; --fs-7:10px;
-  --fs-tag:9.5px; /* Tag の字だけ。読ませる字の下限は --fs-7 (規則 20) で、
-                     これは分類の印なので例外 — ここ以外に使わない */
+  --fs-tag:9.5px; /* Tag text only. The floor for readable text is --fs-7
+                     (rule 20); this is a classification mark, hence the
+                     exception — never use it anywhere else */
 
   --dur:120ms;
   --ease:cubic-bezier(.2,.7,.3,1);
 }
 
-/* ライトの字の色は**地に対して 4.5:1 を満たすところまで暗くしてある**。
-   絵の値のままだと --sub が 3.2〜3.6:1 しかなく、fs-6 (11px) や fs-7 (10px)
-   で使うと読めない。--gold 3.4 / --bad 4.1 / --accent 4.3 (--panel の上) も
-   足りていなかった。**いちばん厳しいのは --panel (#f2efe8) の上**なので、
-   そこで 4.5 に届く最小の暗さにした (絵からのずれを小さくするため)。
-   ダークは全部 4.7 以上で足りている。要 push */
+/* Light text colors are **darkened until they meet 4.5:1 against their
+   ground**. Straight from the mockup, --sub only reaches 3.2-3.6:1 and is
+   unreadable at fs-6 (11px) or fs-7 (10px); --gold 3.4, --bad 4.1 and
+   --accent 4.3 (over --panel) fell short too. **The hardest ground is --panel
+   (#f2efe8)**, so each was darkened by the minimum that reaches 4.5 there (to
+   stay close to the mockup). Dark is fine everywhere at 4.7 or above.
+   Needs pushing back */
 :root[data-theme="light"] {
   --bg:#faf8f3; --panel:#f2efe8; --card:#ffffff;
   --border:#ddd8cd; --border-weak:#e8e3d9;
   --text:#1e2124; --sub:#656d78;
   --accent:#296bc9; --accent-dim:#296bc9; --hover:rgba(0,0,0,.075); --hover-on:rgba(0,0,0,.04); --track:rgba(0,0,0,.10);
   --board:#8fa661; --board-dark:#4a3323; --line:#3f5323; --grain:#5c6b38;
-  /* 白石の縁。ダークの #c9cdd1 のままだと --panel (#f2efe8) の上で 1.41:1、
-     面 (#f1f1f1) に至っては 1.007:1 で**石が見えない**。盤の上 (緑) では
-     問題ないが、名刺や一覧に置く小さい石が消える。3:1 まで濃くした */
+  /* White stone edge. Dark's #c9cdd1 gives only 1.41:1 over --panel
+     (#f2efe8), and 1.007:1 against the fill (#f1f1f1), so **the stone is
+     invisible**. It is fine on the (green) board, but the small stones on
+     name cards and lists disappear. Darkened to 3:1 */
   --stone-white-edge:#8b9198;
   --stone-shadow:rgba(0,0,0,.22);
   --board-hint:rgba(0,0,0,.34);
@@ -120,7 +131,7 @@
   --sh-2:0 20px 48px rgba(60,50,35,.28);
 }
 
-/* OS 追従。main.tsx で data-theme を書かない限りこれが効く */
+/* Follow the OS. This applies unless main.tsx writes data-theme */
 @media (prefers-color-scheme: light) {
   :root:not([data-theme="dark"]) {
     --bg:#faf8f3; --panel:#f2efe8; --card:#ffffff;
@@ -128,9 +139,10 @@
     --text:#1e2124; --sub:#656d78;
     --accent:#296bc9; --accent-dim:#296bc9; --hover:rgba(0,0,0,.075); --hover-on:rgba(0,0,0,.04); --track:rgba(0,0,0,.10);
     --board:#8fa661; --board-dark:#4a3323; --line:#3f5323; --grain:#5c6b38;
-    /* 白石の縁。ダークの #c9cdd1 のままだと --panel (#f2efe8) の上で 1.41:1、
-       面 (#f1f1f1) に至っては 1.007:1 で**石が見えない**。盤の上 (緑) では
-       問題ないが、名刺や一覧に置く小さい石が消える。3:1 まで濃くした */
+    /* White stone edge. Dark's #c9cdd1 gives only 1.41:1 over --panel
+       (#f2efe8), and 1.007:1 against the fill (#f1f1f1), so **the stone is
+       invisible**. It is fine on the (green) board, but the small stones on
+       name cards and lists disappear. Darkened to 3:1 */
     --stone-white-edge:#8b9198;
     --stone-shadow:rgba(0,0,0,.22);
     --board-hint:rgba(0,0,0,.34);

@@ -1,7 +1,7 @@
 {
   "$schema": "../gen/schemas/desktop-schema.json",
   "identifier": "default",
-  "description": "主画面に IPC (invoke/event) と窓の移動を許可する。\n窓を増やすときは札を足すこと — 足さないと invoke が一切通らず、画面は出るのに何も動かない",
+  "description": "Allows IPC (invoke/event) and window dragging on the main window.\nAdd a label here whenever you add a window \u2014 without it no invoke gets through at all, so the window appears but nothing works",
   "windows": ["main"],
   "permissions": [
     "core:default",
