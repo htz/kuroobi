@@ -1,15 +1,15 @@
-// バックエンドとの入出力。
+// Backend I/O.
 
 import type { BookNode, ClockView, EvalPoint, GameView, GgsSnapshot, HintView, LearnEntry, StandbyCfg, ThinkView } from './types';
 
 const core = () => window.__TAURI__?.core;
 
-/** JS の例外をバックエンドのログへ送る (WebView のコンソールが見えない環境用)。 */
+/** Send JS exceptions to the backend log (the WebView console is invisible). */
 export function jsLog(msg: unknown): void {
   try {
     void core()?.invoke('js_log', { msg: String(msg) });
   } catch {
-    /* ログ送信の失敗は無視する */
+    /* ignore log-send failures */
   }
 }
 
@@ -19,46 +19,46 @@ async function call<T = void>(cmd: string, args?: Record<string, unknown>): Prom
   return c.invoke<T>(cmd, args);
 }
 
-/* アプリ内の報せ。設定でファイルを差し替えたことを、盤の「定石」表示へ
- * 伝える (窓は 1 つに戻したが、状態を親まで持ち上げずに済むので残す)。 */
+/* In-app notifications: tells the board's book indicator about file
+ * swaps in settings (kept — it avoids lifting state to the parent). */
 export function emitApp(name: string): void {
-  void window.__TAURI__?.event.emit(name).catch(() => { /* 相手が居なくてもよい */ });
+  void window.__TAURI__?.event.emit(name).catch(() => { /* no listener is fine */ });
 }
 
 export function onApp(name: string, fn: () => void): Promise<() => void> {
   const ev = window.__TAURI__?.event;
-  if (!ev) return Promise.resolve(() => { /* Tauri 外 */ });
+  if (!ev) return Promise.resolve(() => { /* outside Tauri */ });
   return ev.listen(name, () => fn());
 }
 
 export const api = {
   state: () => call<GameView>('state'),
   newGame: () => call<GameView>('new_game'),
-  /** 時計を読む。走っている手番のぶんは Rust 側で差し引かれて返る */
+  /** Read the clock; the running turn's elapsed time is subtracted in Rust. */
   clocks: () => call<ClockView>('clocks'),
-  /** 持ち時間を決めて初期化する。0 で時計なし */
+  /** Initialize the clock; 0 = none. */
   setClock: (secs: number) => call<ClockView>('set_clock', { secs }),
   play: (sq: number) => call<GameView>('play', { sq }),
   undo: () => call<GameView>('undo'),
   goto: (n: number) => call<GameView>('goto', { n }),
   setUseBook: (on: boolean) => call<void>('set_use_book', { on }),
   setLearn: (on: boolean) => call<void>('set_learn', { on }),
-  /** `myColor` は**人**がどちらだったか (`'b'` / `'w'`)。両方や観るだけの
-   *  ときは空。控えに残さないと、あとで石数だけ見ても勝敗が決まらない。 */
-  /** いま効いている環境変数 (名前, 値)。素の起動なら空。 */
+  /** `myColor` = the human's color ('b'/'w'); empty for both/none.
+   *  Without it the log cannot decide results from disc counts. */
+  /** Active override env vars (name, value); empty on a plain launch. */
   envOverrides: () => call<[string, string][]>('env_overrides'),
   learnGame: (myColor: string) => call<void>('learn_game', { myColor }),
-  /** 取り込んだ対局の控え (新しい順)。 */
+  /** Imported-game log, newest first. */
   learnLog: () => call<LearnEntry[]>('learn_log', {}),
-  /** 取り込みを 1 局ぶん取り消す。戻せた手の数を返す。 */
+  /** Undo one import; returns how many moves reverted. */
   learnUndo: (at: number, kifu: string) => call<number>('learn_undo', { at, kifu }),
   hasBook: () => call<boolean>('has_book', {}),
-  /** 定石を眺める。kifu は初期局面からの手順 ("f5d6" 形式、空なら初期局面)。 */
+  /** Browse the book; kifu is moves from the start ("f5d6", empty = start). */
   bookNode: (kifu: string) => call<BookNode>('book_node', { kifu }),
   autoplay: () => call<string>('autoplay', {}),
-  /** 画面確認用のテーマ固定 (KUROOBI_THEME)。空なら好みに従う。 */
+  /** Screenshot theme pin (KUROOBI_THEME); empty follows the preference. */
   themeOverride: () => call<string>('theme_override', {}),
-  /** 名前・パス・実在・大きさ (byte)・中身の見分け。 */
+  /** Name, path, existence, size (bytes), format tag. */
   resourceStatus: () => call<[string, string, boolean, number, string][]>('resource_status', {}),
   pickResource: (kind: string) => call<string | null>('pick_resource', { kind }),
   setResource: (kind: string, path: string | null) =>
@@ -69,11 +69,11 @@ export const api = {
   think: () => call<ThinkView>('think'),
   applyMove: (sq: number | null) => call<GameView>('apply_move', { sq }),
   analyzeLive: () => call<void>('analyze_live'),
-  /** 人の手番のあいだ裏で読んでおく (深さ固定なので「速くなる」効き)。 */
+  /** Ponder during the human's turn (fixed depth: the gain is speed). */
   ponderLive: () => call<void>('ponder_live'),
   evalAt: (n: number, depth: number) => call<EvalPoint>('eval_at', { n, depth }),
-  /** 保存。名前は GGF に載る (拡張子が .ggf のときだけ書かれる)。 */
-  /** 棋譜を保存する。名前は GGF にだけ載る (拡張子が .ggf のとき)。 */
+  /** Save; names go into the GGF (written only for .ggf). */
+  /** Save the record; names only appear in GGF output. */
   saveKifu: (black: string, white: string) =>
     call<string | null>('save_kifu', { black, white }),
   loadKifu: () => call<GameView | null>('load_kifu'),
@@ -87,7 +87,7 @@ export const api = {
   activity: () => call<ActivityView>('activity_status', {}),
 };
 
-/** 棋譜を 1 手ごとに開いた盤面 (見るための形。対局の状態は変えない)。 */
+/** The record expanded into per-move boards (viewing only). */
 export interface KifuFrame {
   cells: number[];
   last: number | null;
@@ -96,8 +96,8 @@ export interface KifuFrame {
   player: string;
 }
 
-/** スレッド数の設定 (set が null なら自動 = auto の値)。 */
-/** 置換表の大きさ (2^bits) と、2 つ合わせて使うメモリ量。 */
+/** Thread setting (null set = auto). */
+/** Table sizes (2^bits) and their combined memory. */
 export interface HashView {
   mid: number; end: number; min: number; max: number; bytes: number;
 }
@@ -105,28 +105,28 @@ export interface HashView {
 export interface ThreadsView {
   set: number | null;
   auto: number;
-  /** 較正した読切の速度 (ノード毎秒)。未測定なら null。 */
+  /** Calibrated solve speed (nodes/sec); null if unmeasured. */
   nps: number | null;
-  /** 測ったときと今のスレッド数が食い違っている (古い値は使わない)。 */
+  /** Thread count changed since measurement (stale value unused). */
   nps_stale: boolean;
 }
 
-/** いま何が CPU を使っているか (ナビの常時表示)。 */
+/** What currently uses the CPU (nav display). */
 export interface ActivityView {
-  /** ローカル探索の種別 (思考 / 解析 / 分析)。無ければ null。 */
+  /** Local search kind; null if none. */
   local: string | null;
   local_threads: number;
-  /** 学習の取り込み [済み, 総数]。 */
+  /** Learning import [done, total]. */
   learn: [number, number] | null;
   learn_paused: boolean;
   ggs_match: boolean;
   ggs_thinking: boolean;
   ggs_threads: number;
-  /** プロセス全体の CPU 使用率 (%)。100% = 1 コア。 */
+  /** Process CPU usage (%); 100% = one core. */
   cpu: number;
-  /** マシンのコア数 (使用率の上限は cores × 100%)。 */
+  /** Core count (usage ceiling = cores x 100%). */
   cores: number;
-  /** 使用中の物理メモリと、積んでいる総量 (バイト)。 */
+  /** Resident and total physical memory (bytes). */
   mem: number;
   mem_total: number;
 }
@@ -149,10 +149,10 @@ export const ggsApi = {
   watch: (id: string, on: boolean) => call('ggs_watch', { id, on }),
   closeMatch: (id: string) => call('ggs_close_match', { id }),
   look: (id: string) => call('ggs_look', { id }),
-  /** 受け取った一言と棋譜を消す (出しっぱなしにしない)。 */
+  /** Clear the notice and fetched record (never leave them up). */
   ack: () => call('ggs_ack', {}),
   autoview: () => call<string>('ggs_autoview', {}),
-  /** レート戦が禁じられているか (KUROOBI_NO_RATED=1)。 */
+  /** Whether rated play is forbidden (KUROOBI_NO_RATED=1). */
   noRated: () => call<boolean>('ggs_no_rated', {}),
   chat: (target: string, text: string) => call('ggs_chat', { target, text }),
   matchCmd: (id: string, verb: 'undo' | 'abort' | 'resign' | 'tell', arg = '') =>
@@ -163,7 +163,7 @@ export const ggsApi = {
   listMatches: () => call('ggs_list_matches'),
   resumeStored: (id: string) => call('ggs_resume_stored', { id }),
   history: (name: string) => call('ggs_history', { name }),
-  /** チャットの既読位置を進める (UNIX 秒)。落としても未読が復活しない。 */
+  /** Advance the chat read marker (unix secs); survives restarts. */
   chatSeen: (at: number) => call('ggs_chat_seen', { at }),
   setEngine: (depth: number, solve: number, band: number, ponder: boolean) =>
     call('ggs_set_engine', { depth, solve, band, ponder }),
@@ -174,14 +174,14 @@ export const ggsApi = {
   setUseBook: (on: boolean) => call('ggs_set_use_book', { on }),
   setLearn: (on: boolean) => call('ggs_set_learn', { on }),
   setStandby: (cfg: StandbyCfg) => call('ggs_set_standby', { cfg }),
-  /** 保存。名前は GGF に載る (拡張子が .ggf のときだけ書かれる)。 */
+  /** Save; names go into the GGF (written only for .ggf). */
   saveKifu: (kifu: string, name: string) =>
     call<string | null>('ggs_save_kifu', { kifu, name }),
-  /** 通信ログを保存。棋譜とは絞り込みも既定の名前も違うので別の口 */
+  /** Save the wire log (separate from records: different filters/names). */
   saveLog: (text: string) => call<string | null>('ggs_save_log', { text }),
 };
 
-/** 分析の途中経過を購読する (深さ, 全合法手の評価, ノード数, 経過秒)。 */
+/** Subscribe to analysis progress (depth, all-move evals, nodes, seconds). */
 export async function onHints(
   fn: (depth: number, hints: HintView[], nodes: number, secs: number) => void,
 ): Promise<() => void> {
@@ -193,7 +193,7 @@ export async function onHints(
   );
 }
 
-/** バックエンドからの状態更新を購読する。戻り値で購読を解除できる。 */
+/** Subscribe to backend state updates; the return value unsubscribes. */
 export async function onGgsSnapshot(fn: (s: GgsSnapshot) => void): Promise<() => void> {
   const ev = window.__TAURI__?.event;
   if (!ev) throw new Error('Tauri event が使えません');
