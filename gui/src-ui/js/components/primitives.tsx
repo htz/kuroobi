@@ -1,17 +1,17 @@
 import React from 'react';
 
 /* KUROOBI primitives
- * 色と寸法は必ずトークン経由。size は規則 5 の段から取る (下の Size)。
+ * Colors and dimensions always go through tokens; sizes come from the
+ * design's ladder (Size below).
  *
- * 押せる感じ（hover / active）は base.css の状態の層が持つ。
- * インライン style では :hover が書けないので、部品は k-press / k-row /
- * k-input を付ける。見た目そのものはインライン、変化だけがクラス。
- * className を受け取れるようにしてあるので、画面側で足すこともできる。
+ * Hover/active states live in base.css (inline styles cannot express
+ * :hover), so components attach k-press / k-row / k-input: looks are
+ * inline, transitions are classes. className passes through.
  */
 
-/* 段は規則 5 の 44/32/28/24/20 から取る。`row` (24) は手数の帯の送りの釦
-   だけが使う — 帯そのものが 32px なので、28 だと上下に 2px しか残らない
-   (設計も 32 の帯に 24 の釦を置いている)。 */
+/* Sizes from the 44/32/28/24/20 ladder. `row` (24) exists only for
+   the move-strip stepper buttons — the strip is 32px, and 28 would
+   leave 2px of breathing room. */
 type Size = 'chip' | 'row' | 'ctrl' | 'field';
 const H: Record<Size, string> = { chip: 'var(--h-chip)', row: 'var(--h-row)', ctrl: 'var(--h-ctrl)', field: 'var(--h-field)' };
 const PAD: Record<Size, string> = { chip: '0 10px', row: '0 10px', ctrl: '0 12px', field: '0 14px' };
@@ -28,8 +28,8 @@ export type ButtonProps = {
   onClick?: () => void;
   title?: string;
   className?: string;
-  /** 正方形にする。記号 1 文字だけを載せる送りの釦 (棋譜ビューア) 用。
-   *  絵のあるものは Icons の IconButton を使う — こちらは記号の字を置く場合 */
+  /** Square variant for single-glyph stepper buttons (record viewer);
+   *  pictorial buttons use Icons' IconButton instead. */
   square?: boolean;
 };
 
@@ -42,11 +42,11 @@ export function Button({ variant = 'secondary', size = 'ctrl', disabled, childre
   return (
     <button
       type="button" onClick={onClick} disabled={disabled} title={title}
-      // primary は既に濃いので hover を控えめにする（k-on）
+      // primary is already saturated; keep hover subtle (k-on).
       className={cx('k-press', variant === 'primary' && 'k-on', className)}
       style={{
-        // 主ボタンだけ左右を 14px にする (設計の実測)。押させたいものは
-        // 面の色だけでなく幅でも他と差を付ける
+        // Primary gets 14px side padding (per the design): the call to
+        // action differs in width, not just color.
         height: H[size],
         width: square ? H[size] : undefined, flex: square ? 'none' : undefined,
         padding: square ? 0 : variant === 'primary' && size === 'ctrl' ? '0 14px' : PAD[size],
@@ -58,37 +58,37 @@ export function Button({ variant = 'secondary', size = 'ctrl', disabled, childre
   );
 }
 
-/* IconButton は Icons.tsx にある（絵だけのボタンは 32px 角の当たり・title と
- * aria-label 必須）。同名の部品を 2 か所に置くと import 元を間違えるので、
- * ここには置かない。任意の子を入れたいときも Icons 側を使う。 */
+/* IconButton lives in Icons.tsx (32px hit target, title and
+ * aria-label required). Not duplicated here — a same-named component
+ * in two places invites wrong imports. */
 
-/* 2〜4 個の短い選択肢。5 個以上は Select にする。
- * 「数枚から 1 枚を選ぶ」列はこれ 1 つ。Dock のタブもこれを使う（fill）。
- * 選択中は --card で浮かせる — 塗り（--accent-dim）は左メニューの現在地に
- * 取ってあるので、青地を画面に 2 か所出すと「いまどこにいるか」が薄まる。 */
+/* 2-4 short options; five or more become a Select. The dock tabs use
+ * this too (fill). Selection lifts with --card, not the accent fill —
+ * that is reserved for the nav's current location, and two blue
+ * patches would dilute "where am I". */
 export function Segmented<T extends string>({ value, options, onChange, size = 'ctrl', fill, disabled, solid, className }: {
   value: T;
-  /** label は文字とは限らない — 担当の駒には石を添える (規則 59)。 */
+  /** Labels need not be text — the side picker adds stone dots. */
   options: { value: T; label: React.ReactNode }[];
   onChange?: (v: T) => void;
   size?: Size;
-  /** 器の幅いっぱいに等分する（Dock のタブ） */
+  /** Fill the container evenly (dock tabs). */
   fill?: boolean;
-  /** 選べない状態（定石ファイルが無い、など）。押せないことを見た目でも示す */
+  /** Disabled (e.g. no book file); visibly unpressable. */
   disabled?: boolean;
-  /** 選択中を塗りで示す。**左メニューが無い窓 (設定) でだけ使う** —
-   *  主画面で使うと「いまどこにいるか」の青地が 2 か所になる (規則 40)。 */
+  /** Fill-style selection; only for windows without the nav (settings)
+   *  — on the main screen it would double the location accent. */
   solid?: boolean;
   className?: string;
 }) {
   return (
-    /* **size は器の高さ。** 一度「駒の高さ」に変えたが誤りだった
-       (`ac4883f` → 戻した)。古い写しの絵 (器 39.2 / 駒 31.2) を測って
-       いたためで、**いまの絵は 器 28 / 駒 22 / 内余白 2 / 角丸 7・5**
-       で実装と一致している。絵を測るときは取り直してから測ること。 */
+    /* size is the CONTAINER height. It was once changed to the chip
+       height based on a stale design capture and reverted; the current
+       design (28/22/2, radii 7/5) matches the implementation.
+       Re-capture before measuring. */
     <div role="radiogroup" aria-disabled={disabled || undefined} className={cx('k-seg', className)} style={{
-      // 外枠の角丸は --r-2 (7px)。中の駒が --r-1 (5px) なので、8px だと
-      // 外と中の差が 3px 開いて縁が太く見える (設計の実測は 7 / 5)
+      // Outer radius --r-2 (7px) vs inner --r-1 (5px); 8px would open
+      // a 3px gap and thicken the rim.
       height: H[size], display: fill ? 'flex' : 'inline-flex', gap: 2, padding: 2,
       background: 'var(--bg)', border: '1px solid var(--border)', borderRadius: 'var(--r-2)',
       opacity: disabled ? 0.4 : 1,
@@ -101,14 +101,10 @@ export function Segmented<T extends string>({ value, options, onChange, size = '
             className={cx('k-press', on && 'k-on', on && !solid && 'k-seg-on')}
             style={{
               flex: fill ? 1 : 'none', padding: '0 12px', borderRadius: 'var(--r-1)', fontSize: FS[size],
-              // ライトでは --card (#fff) と --bg (#faf8f3) の差がほとんど無く、
-              // 面の色だけでは選ばれている駒が見分けられない。**1px の罫で
-              // 縁取る** — 面の色を足すのではないので、状態の色を面に使わない
-              // 決まり (規則 44) にも触れない。選んでいない駒は同じ幅の
-              // 透明な罫を持たせて、切り替えで字が動かないようにする
-              // 選ばれている駒に罫は引かない (設計は面の色だけ)。ライトは
-              // --card と地の差が出ないので、base.css がライトのときだけ
-              // 内側に 1px 入れる (.k-seg-on)
+              // In light mode --card vs --bg barely differ, so the
+              // selected chip gets a 1px inner keyline via base.css
+              // (light only, .k-seg-on); unselected chips carry an
+              // equal-width transparent border so text never shifts.
               border: 0,
               background: on ? (solid ? 'var(--accent-dim)' : 'var(--card)') : 'transparent',
               color: on ? (solid ? 'var(--on-accent)' : 'var(--text)') : 'var(--sub)',
@@ -142,23 +138,22 @@ export function Toggle({ checked, onChange, label }: { checked: boolean; onChang
   );
 }
 
-/* Slider は落とした (2026-08-08)。規則 68 を撤回して強さのカスタムを
- * 3 列の `Select` にした時点で、押す場所がどこにも無くなっていた。
- * **カタログにしか無い部品は置かない** (規則 70) — 要るときに書き直す。 */
+/* Slider was removed (2026-08-08): once custom strength became three
+ * Selects, nothing used it. Catalog-only components are not kept. */
 
-/* 5 個以上の選択肢。ネイティブの <select> を透明にして重ね、見た目だけ自前で描く
- * （macOS のポップアップの見た目はテーマに合わないが、開いたときの挙動は
- *  ネイティブが正しい ＝ キーボード・スクロール・画面端の折り返し）。
+/* Five-plus options: a transparent native <select> overlays a custom
+ * face (native popup behavior — keyboard, scrolling, edge wrapping —
+ * is correct even if its look is not).
  *
- * ⚠ 外側に position:relative、重ねる select に inset:0 が必須。
- * relative が無いと absolute の基準が AppFrame になって select が画面の隅へ飛び、
- * width/height 0 だと飛んだ先でも当たりが無い（＝選べない）。 */
+ * The wrapper MUST be position:relative with the select at inset:0;
+ * without relative the select flies to the AppFrame corner, and with
+ * zero size it has no hit area there either. */
 export function Select({ value, options, onChange, size = 'field', width, disabled, className }: {
   value: string;
-  options: [string, string][];        // [値, 表示]
+  options: [string, string][];        // [value, label]
   onChange?: (v: string) => void;
   size?: Size;
-  width?: number;                     // 最小幅。揃えたい列で使う
+  width?: number;                     // min width, for aligned columns
   disabled?: boolean;
   className?: string;
 }) {
@@ -181,8 +176,8 @@ export function Select({ value, options, onChange, size = 'field', width, disabl
   );
 }
 
-/* 打ち込む欄。onChange を渡さなければ読むだけになる（readOnly が付く）ので、
- * 表示専用の使い方も同じ部品でできる。 */
+/* Text input; omitting onChange makes it readOnly, so display-only
+ * uses share the component. */
 export function TextField({ value, onChange, mono, invalid, placeholder, readOnly, numeric, password, align, width, className, title, onEnter }: {
   value?: string;
   onChange?: (v: string) => void;
@@ -190,14 +185,14 @@ export function TextField({ value, onChange, mono, invalid, placeholder, readOnl
   invalid?: boolean;
   placeholder?: string;
   readOnly?: boolean;
-  numeric?: boolean;                  // 数字だけ通す（条件式の値・秒数）
-  password?: boolean;                 // 伏せ字（GGS のログインだけ）
+  numeric?: boolean;                  // digits only (formula values, seconds)
+  password?: boolean;                 // masked (GGS login only)
   align?: 'left' | 'right';
   width?: number;
   className?: string;
-  /** 触れる範囲など、常時は出さない補足。 */
+  /** Occasional hints (ranges etc.), not always shown. */
   title?: string;
-  /** Enter で確定する欄 (チャット・コンソール)。押せる釦と同じことをさせる。 */
+  /** Enter-to-submit fields (chat, console); mirrors the send button. */
   onEnter?: () => void;
 }) {
   const ro = readOnly ?? !onChange;
@@ -210,9 +205,9 @@ export function TextField({ value, onChange, mono, invalid, placeholder, readOnl
       onChange={ro ? undefined : e => onChange?.(numeric ? e.target.value.replace(/[^\d-]/g, '') : e.target.value)}
       className={cx('k-input', className)}
       style={{
-        /* ⚠ `flex: 1` と書かない。一括指定は `flex-basis: 0%` を含むので、
-           **縦並びの中に置くと height が潰れる** (32px の欄が 20px になって
-           いた)。伸ばしたいのは横だけなので basis は auto のままにする。 */
+        /* Never `flex: 1`: the shorthand sets flex-basis: 0% and
+           crushes the height inside column layouts (32px fields
+           rendered at 20px). Only the width should grow. */
         flexGrow: width ? 0 : 1, flexShrink: 1, flexBasis: 'auto', width, minWidth: 0,
         height: 'var(--h-field)', padding: '0 var(--sp-3)', borderRadius: 'var(--r-3)',
         background: 'var(--bg)', border: '1px solid ' + (invalid ? 'var(--bad)' : 'var(--border)'),
@@ -234,7 +229,8 @@ export function Badge({ tone = 'sub', children }: { tone?: 'sub' | 'accent' | 'o
   );
 }
 
-/* 進行中を示す唯一の部品。％が分かるときだけ使い、分からないときは Dot で足りる */
+/* The sole progress component; only for known percentages (unknown
+ * progress is just a Dot). */
 export function Progress({ value }: { value: number }) {
   return (
     <div style={{ height: 4, borderRadius: 'var(--r-0)', background: 'var(--track)', overflow: 'hidden' }}>

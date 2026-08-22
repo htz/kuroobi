@@ -1,26 +1,28 @@
 import React from 'react';
 
 /* KUROOBI board
- * 盤は 1 枚の SVG。viewBox 880、PAD 40、CELL 100（現行 Board.tsx と同じ幾何）。
+ * The board is one SVG: viewBox 880, PAD 40, CELL 100 (same geometry
+ * as the previous Board.tsx).
  *
- * 地は畳。1 マスを縁なし半畳 1 枚と見て、市松に藺草の目の向きを変える
- * （琉球畳の敷き方）。目はマスの中で完結するので、盤の格子線とは干渉しない。
- * 薄くしてあるのは、石とヒントの数字より前に出てはいけないから。
+ * The ground is tatami: each cell is a borderless half-mat with grain
+ * direction alternating checkerboard-style (ryukyu layout). The grain
+ * stays within cells, never touching the grid, and is kept faint so it
+ * never competes with discs or hint numbers.
  *
- * 市松は CSS グラデーションでは描けない（線形勾配は 2 次元の交互配置を
- * 表せない）。かつマスごとに要素を置くと 448 本の線になるので、
- * 2×2 マス＝200×200 を 1 タイルにした <pattern> にまとめる → 28 本。
- * <pattern> は 1 回ラスタライズされるだけなので、盤が何面出ても軽い。
+ * A checkerboard cannot be a CSS gradient (linear gradients cannot
+ * alternate in 2D), and per-cell elements would mean 448 lines; a 2x2
+ * <pattern> tile reduces it to 28, rasterized once no matter how many
+ * boards are shown.
  */
 
 const CELL = 100;
 const PAD = 40;
-const PITCH = 12.5;          // 藺草の目の間隔。1 マスに 7 本
+const PITCH = 12.5;          // grain spacing; 7 lines per cell
 const GRAIN_OPACITY = 0.07;
 const SIZE = PAD * 2 + CELL * 8;   // 880
 
-/* 畳の pattern。AppFrame が自分で描くので、画面側で置く必要はない。
- * （運用の約束にしていたときは、置き忘れると静かに畳が消えていた） */
+/* The tatami pattern; AppFrame renders it itself (when placement was
+ * a convention, forgetting it silently lost the tatami). */
 const TATAMI_ID = 'kb-tatami';
 
 export function BoardDefs() {
@@ -31,7 +33,7 @@ export function BoardDefs() {
     lines.push(<line key={key} x1={x1} y1={y1} x2={x2} y2={y2}
       stroke="var(--grain)" strokeOpacity={GRAIN_OPACITY} strokeWidth={2.4} />);
 
-  // タイル内の 4 マス。vertical = (f + r) % 2 === 1
+  // The tile's four cells; vertical = (f + r) % 2 === 1.
   d.forEach(v => push('a' + v, 0, v, CELL, v));                       // (0,0) 横目
   d.forEach(v => push('b' + v, CELL + v, 0, CELL + v, CELL));         // (1,0) 縦目
   d.forEach(v => push('c' + v, v, CELL, v, CELL * 2));                // (0,1) 縦目
@@ -49,12 +51,12 @@ export function BoardDefs() {
   );
 }
 
-export type Cell = 0 | 1 | 2;            // 0 空 / 1 黒 / 2 白
+export type Cell = 0 | 1 | 2;            // 0 empty / 1 black / 2 white
 
-/* 反復深化で数字が育つので、出所は 3 種。
- * 定石 / 読切 / 「N 手」（いま何手先まで読めているか）。
- * 「N 手」が出ているときだけ値が動いている — この表示がないと
- * 確定した値なのか途中なのか分からない。string に逃がさない。 */
+/* Values grow under deepening, so sources are three-way: book / solve
+ * / "N plies" (current depth). Only "N plies" values are still moving
+ * — without the tag you cannot tell settled from provisional. Kept as
+ * a union, not a string. */
 export type EvalSource = { book: true } | { exact: true } | { depth: number };
 export type EvalInfo = { score: number; src: EvalSource; best?: boolean };
 
@@ -69,27 +71,27 @@ export function Board({ cells, legal = [], evals, last, next, coords = true, gra
   legal?: number[];
   evals?: Record<number, EvalInfo>;
   last?: number | null;
-  next?: number | null;                            // 棋譜上で次に指された手。金の破線
+  next?: number | null;                            // next move in the record; gold dashed ring
   coords?: boolean;
-  /** 畳の藺草の目。薄いので普段は気にならないが、消したい人もいる */
+  /** The tatami grain; subtle, but some want it off. */
   grain?: boolean;
-  /** 盤を回す (白を下にする)。マスの番号はそのまま、描く場所だけ入れ替える */
+  /** Flip the board (White at the bottom); indices stay, only render
+   *  positions swap. */
   flip?: boolean;
   disabled?: boolean;
   onPlay?: (sq: number) => void;
 }) {
   const legalSet = new Set(legal);
-  // 回すのは「どこに描くか」だけ。番号を裏返すと、打った手が別のマスになる
+  // Only render positions flip; flipping indices would move plays.
   const at = (sq: number): [number, number] => {
     const [f, r] = fr(flip ? 63 - sq : sq);
     return [cx(f), cx(r)];
   };
   return (
-    /* 幅も高さも器いっぱいに取り、比は preserveAspectRatio (既定の
-       xMidYMid meet) に守らせる。`height:'auto'` だと**幅だけで大きさが
-       決まる**ので、器が縦に長いとき盤が上に寄って下が空く (定石の画面を
-       3 列にしたときに出た)。逆に器が横に長いときは下へはみ出していた
-       (規則 77)。両方 100% にすると、どちらに余るときも中央に収まる。 */
+    /* Fill both dimensions and let preserveAspectRatio keep the
+       ratio. height:'auto' sizes by width alone — tall containers
+       top-align the board, wide ones overflow it; 100%/100% centers
+       in both cases. */
     <svg viewBox={`0 0 ${SIZE} ${SIZE}`} style={{ width: '100%', height: '100%', display: 'block' }}
          role="img" aria-label="盤面">
       <rect x={0} y={0} width={SIZE} height={SIZE} rx={14} fill="var(--card)" />
@@ -115,17 +117,17 @@ export function Board({ cells, legal = [], evals, last, next, coords = true, gra
 
       {cells.map((v, sq) => {
         const [x, y] = at(sq);
-        // key に色を混ぜると、返った石は別の要素として描き直される。
-        // .k-flip は animation なので、描き直された時点で 1 回だけ走る
-        // (前の局面を覚えて差分を取る必要がない)。
-        // 置いたばかりの石も同じように回る — 局面を飛ばしたときは盤全体が
-        // 返るので、置いた石だけ回らないほうがかえって不揃いになる。
-        // 動かしたくない人は設定の「石返し」で --flip-dur を 0 にできる
+        // Mixing color into the key makes flipped discs new elements,
+        // so the .k-flip animation runs exactly once on redraw — no
+        // previous-position diffing needed. Newly placed discs spin
+        // too (when jumping positions the whole board flips, so a
+        // non-spinning placement would look odd); the flip duration
+        // preference can zero it.
         if (v !== 0) return <Stone key={sq + ':' + v} x={x} y={y} color={v as 1 | 2} last={last === sq} />;
         if (!legalSet.has(sq)) return null;
         const ev = evals?.[sq];
         return (
-          // k-cell は base.css 側で hover を持つ。合法手のマスだけ反応する
+          // k-cell hover lives in base.css; only legal cells react.
           <g key={sq} className={disabled ? undefined : 'k-cell'}
              onClick={disabled ? undefined : () => onPlay?.(sq)}>
             <circle cx={x} cy={y} r={46} fill="transparent" />
@@ -140,12 +142,12 @@ export function Board({ cells, legal = [], evals, last, next, coords = true, gra
   );
 }
 
-/* フラットな円盤。薄い落ち影と細いリムだけ。最終手は輪で囲む */
+/* Flat discs: a faint shadow and thin rim; the last move gets a ring. */
 export function Stone({ x, y, color, last }: { x: number; y: number; color: 1 | 2; last?: boolean }) {
   const black = color === 1;
   return (
-    // 回転の軸はマスの中心。既定の transform-origin (SVG の原点) のままだと
-    // 石が画面の隅を中心に振り回される
+    // Rotate about the cell center; the default SVG origin would
+    // swing discs around the corner of the screen.
     <g className="k-flip" style={{ transformOrigin: `${x}px ${y}px` }}>
       <circle cx={x} cy={y + 2} r={40} fill="var(--stone-shadow)" />
       <circle cx={x} cy={y} r={40}
@@ -156,21 +158,22 @@ export function Stone({ x, y, color, last }: { x: number; y: number; color: 1 | 
   );
 }
 
-/* 数値（石差）が主、出所が副。最善だけ枠と --gold を持つ */
+/* The number (discs) is primary, the source secondary; only the best
+ * move gets a frame and --gold. */
 function EvalCell({ x, y, info }: { x: number; y: number; info: EvalInfo }) {
   const { score, src, best } = info;
   const label = sourceLabel(src);
-  // 「N 手」は途中の値なので、定石・読切より弱く出す。
-  // 定石は --gold ではなく盤専用の --board-eval-book を使う — 文字は 100% の
-  // 濃さで畳に乗るので、ライトでは --gold (#a07b1e) が地の緑と同化して読めない
+  // "N plies" is provisional and rendered weaker. Book values use the
+  // board-specific token instead of --gold, which sinks into the light
+  // theme's green.
   const srcColor = 'book' in src ? 'var(--board-eval-book)' : 'exact' in src ? 'var(--board-eval-strong)' : 'var(--board-eval-weak)';
   return (
     <g>
       <circle cx={x} cy={y} r={30}
               fill={best ? 'color-mix(in srgb, var(--gold) 14%, transparent)' : 'var(--board-eval-bg)'}
               stroke={best ? 'var(--gold)' : 'var(--board-eval-edge)'} strokeWidth={best ? 2 : 1} />
-      {/* 盤上の数字は整数。60px の円に収まる桁は 3 文字（±64）までで、
-          0.1 石の差はグラフと棋譜表で見れば足りる */}
+      {/* Board numbers are integers: a 60px disc fits 3 chars (±64),
+          and 0.1-disc differences belong to the graph and table. */}
       <text x={x} y={y + 2} textAnchor="middle" fontSize={24}
             fill={best ? 'var(--gold)' : score < 0 ? 'var(--bad)' : 'var(--board-eval-text)'}
             fontWeight={best ? 700 : 400}>
