@@ -1,12 +1,12 @@
-//! GGS (Generic Game Server, skatgame.net:5000) のセッションスレッド。
+//! GGS session thread (Generic Game Server, skatgame.net:5000).
 //!
-//! 1 本のスレッドが TCP 接続・プロトコル解析・エンジン思考・待機モードを
-//! すべて所有し、状態スナップショットを Tauri イベント "ggs" でフロントへ
-//! 流す。設計は src/bin/ggs.rs (CLI クライアント) を基にした常駐 UI 化:
-//! 対局中は絶対に自発離脱せず、切断は自動再接続する。**中断対局は自動で
-//! 再開しない** — GGS は中断中も時計を止めたまま保存するので、自動で戻ると
-//! 「不利になったら切断して解析してから再開する」相手に付き合うことになる。
-//! 一覧には出すので、戻るかどうかは人が決める。
+//! One thread owns the TCP connection, protocol parsing, engine
+//! thinking and standby mode, streaming state snapshots to the frontend
+//! via the "ggs" Tauri event. Derived from the CLI client
+//! (src/bin/ggs.rs) as a resident UI: never leaves voluntarily during a
+//! match, reconnects on disconnect. Adjourned games are NOT auto-resumed
+//! — GGS freezes their clocks, so auto-resume would indulge opponents
+//! who disconnect to analyze; they are listed and a human decides.
 
 use std::collections::{HashMap, VecDeque};
 use std::io::{Read, Write};
@@ -22,7 +22,7 @@ use tauri::Emitter;
 use kuroobi::engine::{Engine, EngineConfig};
 use kuroobi::{Board, Position};
 
-// ============================ 外部コマンド ============================
+// ============================ External commands ============================
 
 pub enum Cmd {
     Connect {
@@ -30,35 +30,35 @@ pub enum Cmd {
         pw: String,
     },
     Disconnect,
-    /// 終局した対局を一覧から閉じる (進行中のものは閉じない)。
+    /// Close a finished game from the list (never an ongoing one).
     CloseMatch(String),
     Raw(String),
     Ask {
         gtype: String,
         time: String,
         opponent: String,
-        /// レート戦にするか。GGS の `/os` ではレート有無は**アカウント単位の
-        /// 設定**なので、申し込みの直前に毎回 `/os rated +|-` を送って
-        /// 揃える。送らずに済ませると、前回の申し込みの設定が残る。
+        /// Whether the game is rated. On `/os` this is per-account
+        /// state, so `/os rated +|-` is sent right before every offer;
+        /// otherwise the previous offer's setting lingers.
         rated: bool,
     },
     Accept(String),
     Decline(String),
     Finger(String),
-    /// 接続中の一覧。**プールは取らない** — どちらのレートも出すので、
-    /// 常に通常 8 とランダム開局 8r の両方を取る。
+    /// Who list. Always fetches both pools (8 and random 8r) since
+    /// both ratings are displayed.
     Who,
     Top {
         gtype: String,
         n: u32,
     },
-    /// 指定プールでの順位・レートを取得する。
+    /// Fetch rank/rating in a given pool.
     Rank {
         gtype: String,
         name: String,
     },
     Watch(String),
-    /// 終わった対局の棋譜 (GGF) を取り出す。
+    /// Fetch a finished game's record (GGF).
     Look(String),
     Unwatch(String),
     Chat {
@@ -69,50 +69,50 @@ pub enum Cmd {
         depth: u32,
         solve: u8,
         band: u8,
-        /// 相手の手番中に先読みするか。
+        /// Whether to ponder during the opponent's turn.
         ponder: bool,
     },
-    /// **全体設定のスレッド数が変わった。** GGS 専用の欄は持たない —
-    /// 別々に持つと読切速度の較正が 2 つ要り、片方が未較正のまま
-    /// 気づかず対局に入る (`resources.conf` の `nps.<スレッド数>`)。
+    /// The global thread count changed. There is no GGS-specific
+    /// setting — separate ones would need two calibrations, with one
+    /// silently missing at game time.
     ReloadThreads,
-    /// 持ち時間の使い方 (配り方・1 手の上限・予備)。
+    /// Time-usage settings (pacing, per-move cap, reserve).
     SetPacing {
         pace: String,
         max_move_secs: u64,
         reserve_secs: u64,
-        /// 持ち時間をどれだけ攻めて使うか (`timectl::Situation::budget_use`)。
+        /// Clock aggressiveness (`timectl::Situation::budget_use`).
         budget_use: f64,
     },
     SetAutoPlay(bool),
     SetWatchAnalysis(bool),
-    /// 定石 book を使うか。研究や検証で自力の手を見たいときに切る。
+    /// Whether to use the book (off for study/verification).
     SetUseBook(bool),
-    /// 終わった対局を定石の学習に取り込むか。
+    /// Whether finished games feed book learning.
     SetLearn(bool),
-    /// 対局操作: undo / abort / resign / (対局内 tell)。
-    /// GGS 側の呼び名に合わせているので、enum 名との重なりは許す。
+    /// Match commands: undo / abort / resign / in-match tell. Named
+    /// after the GGS verbs, so the enum-name overlap is accepted.
     #[allow(clippy::enum_variant_names)]
     MatchCmd {
         id: String,
         verb: String,
         arg: String,
     },
-    /// サーバー側の自動受諾 (aform) / 自動拒否 (dform) 式を設定する。
+    /// Set server-side auto-accept (aform) / auto-decline (dform) formulas.
     SetFormula {
         kind: String,
         expr: String,
     },
-    /// 中断対局の一覧を取り直す。
+    /// Refresh the adjourned-games list.
     ListStored,
-    /// 進行中の全対局を取り直す (ロビーの「対局中」表示用)。
+    /// Refresh all ongoing games (the lobby's in-progress list).
     ListMatches,
-    /// 中断対局を再開する (ask <.stored>)。
+    /// Resume an adjourned game (ask <.stored>).
     ResumeStored(String),
-    /// 対戦履歴 (自分または相手)。
+    /// Game history (ours or an opponent's).
     History(String),
-    /// **チャットの既読位置を進める** (この時刻までは読んだ)。
-    /// ディスクに残すので、落として立ち上げ直しても未読が復活しない。
+    /// Advance the chat read marker (read up to this time). Persisted,
+    /// so restarts do not resurrect unread counts.
     ChatSeen(u64),
     SetStandby(StandbyCfg),
 }
@@ -121,7 +121,7 @@ pub enum Cmd {
 pub struct StandbyCfg {
     pub enabled: bool,
     pub auto_accept: bool,
-    /// 待機モードから申し込むときレート戦にするか。
+    /// Whether standby-mode offers are rated.
     pub rated: bool,
     pub opponent: String,
     pub gtype: String,
@@ -130,7 +130,7 @@ pub struct StandbyCfg {
     pub interval_secs: u64,
 }
 
-// ============================ スナップショット ============================
+// ============================ Snapshot ============================
 
 #[derive(Clone, Serialize, Default)]
 pub struct LogLine {
@@ -138,7 +138,7 @@ pub struct LogLine {
     pub text: String,
 }
 
-/// ランキング 1 行 (rank / top の出力)。
+/// One ranking row (rank / top output).
 #[derive(Clone, Serialize, serde::Deserialize, Default)]
 pub struct RankRow {
     pub gtype: String,
@@ -151,7 +151,7 @@ pub struct RankRow {
     pub losses: u64,
 }
 
-/// finger の解析結果 (見出しと値の組)。
+/// Parsed finger output (heading/value pairs).
 #[derive(Clone, Serialize, serde::Deserialize, Default)]
 pub struct FingerInfo {
     pub name: String,
@@ -163,54 +163,44 @@ pub struct FingerInfo {
 pub struct UserRow {
     pub name: String,
     pub rating: Option<f32>,
-    /// レートの偏差。`/os top` は返すが `/os who` は返さない。
+    /// Rating deviation; `/os top` provides it, `/os who` does not.
     pub dev: Option<f32>,
-    /// ランダム開局 (8r) のレートと偏差。**接続中の一覧だけが持つ** —
-    /// `/os who` を 2 プール分取って名前で重ねている。ランキングは
-    /// プールを選んで見るものなので、こちらは埋まらない。
+    /// Random-opening (8r) rating and deviation; only the who list has
+    /// it (two pool fetches merged by name). Rankings are per-pool, so
+    /// it stays empty there.
     pub rating_r: Option<f32>,
     pub dev_r: Option<f32>,
-    /// **受付状態。** `/os who` は名前の次に印を出す (`VAR_Client::print_who`)。
-    ///
-    /// | 印 | 意味 |
-    /// |---|---|
-    /// | `+` | まだ受けられる (`open > 対局中の数`) |
-    /// | `-` | 受けない (満杯か `open` が 0) |
-    /// | `x` | 幽霊 (接続が切れた残骸) |
-    ///
-    /// **対局中でも `+` はありうる。** 同時に持てる数を超えていなければ
-    /// 受けるので、「対局中」と「受付中」は排他ではない。
-    /// `/os top` にはこの印が無いので `None`。
+    /// Accepting flag. `/os who` marks each name: `+` = can accept
+    /// (`open > games in progress`), `-` = not accepting, `x` = ghost
+    /// (dead connection). Playing and accepting are not exclusive.
+    /// `/os top` has no flag, hence `None`.
     pub open: Option<char>,
     pub raw: String,
 }
 
-/// `tell` を付けずに送る命令。サーバーはこれらに「命令名: いまの値」で
-/// 返すので、**ダイレクト tell と見分けが付かない**。送る側で数え上げる。
+/// Commands sent without `tell`. The server answers "name: value",
+/// indistinguishable from a direct tell — the sender keeps count.
 const BARE_CMDS: [&str; 2] = ["verbose", "chann"];
 
 #[derive(Clone, Serialize, serde::Deserialize, Default)]
 pub struct ChatMsg {
-    /// チャンネル名 (".chat" 等)。ダイレクトは空文字。
+    /// Channel name (".chat" etc.); empty for directs.
     pub chan: String,
     pub from: String,
     pub text: String,
-    /// 受信時刻 (UNIX 秒)。会話として並べるのに要る。
+    /// Receive time (unix seconds); needed to order conversations.
     #[serde(default)]
     pub at: u64,
-    /// 会話のまとまり。チャンネルはチャンネル名、ダイレクトは相手の名前。
-    /// 画面はこれで会話を分ける。
+    /// Conversation key: the channel name, or the peer for directs.
     #[serde(default)]
     pub thread: String,
 }
 
-/// **レート戦を禁じる。** `KUROOBI_NO_RATED=1` で起動すると、申し込みも
-/// 待機モードも必ず `rated -` になり、画面からも「する」を選べなくなる。
-///
-/// **人が押し間違えないための蓋ではなく、自動で動かすときの蓋。**
-/// 画面確認を自動で回している最中に、既定が「する」のまま待機モードが
-/// 始まると本当にレート戦が成立してしまう。**画面側の見た目だけでは
-/// 足りない**ので、サーバーへ送る直前でも潰す。
+/// Forbid rated play. With `KUROOBI_NO_RATED=1`, offers and standby
+/// both force `rated -` and the UI disables the toggle. This guards
+/// automation, not fat fingers: a scripted screenshot run with standby
+/// defaulting to rated could start a real rated game, so the send path
+/// enforces it too.
 pub fn no_rated() -> bool {
     std::env::var("KUROOBI_NO_RATED").is_ok()
 }
@@ -247,12 +237,12 @@ pub struct OngoingView {
     pub id: String,
     pub raw: String,
     pub watching: bool,
-    /// 対局者名 (2 人)。
+    /// Player names (both).
     pub names: Vec<String>,
-    /// 対局者のレート (名前と同じ並び)。
+    /// Player ratings (same order as names).
     pub ratings: Vec<String>,
     pub gtype: String,
-    /// 自分の対局か。
+    /// Whether it is our game.
     pub mine: bool,
 }
 
@@ -277,14 +267,14 @@ pub struct Offer {
     pub rated: bool,
 }
 
-/// 申告値の推移の 1 点。
+/// One point of the reported-eval series.
 #[derive(Clone, Serialize, Default)]
 pub struct EvalPoint {
-    /// 手番号 (GGS の通し番号。パスも 1 手として数える)。
+    /// Move number (GGS numbering; passes count).
     pub n: u32,
-    /// 自分が指した手か。
+    /// Whether we played the move.
     pub mine: bool,
-    /// 申告値 (**指した側から見た石差**)。
+    /// Reported value (mover-view discs).
     pub eval: f32,
 }
 
@@ -292,30 +282,29 @@ pub struct EvalPoint {
 pub struct MatchView {
     pub id: String,
     pub base: String,
-    /// 終わったか (終局・中断・中止のいずれか)。終わっても一覧には残す。
+    /// Whether it ended (finished/adjourned/aborted); stays listed.
     pub over: bool,
-    /// **終わり方。** 空 = 進行中、`finished` = 終局、`adjourned` = 中断、
-    /// `aborted` = 中止。
-    ///
-    /// 中断を終局と同じに見せてはいけない。石差が付かないのに「終局」と
-    /// 出ると、時計の残りや ロスタイムの表示も道連れで嘘になる。
+    /// How it ended: empty = ongoing, `finished`, `adjourned`,
+    /// `aborted`. Adjournment must not display as finished — no disc
+    /// difference exists and the clock display would lie with it.
     pub ended: String,
-    /// 中断のとき、抜けた側の名前。
+    /// Who left, for adjournments.
     pub left_by: String,
-    /// 終局の結果 (石差の文字列)。
+    /// Final result (disc-difference string).
     pub result: String,
-    /// 書庫の番号 (終局後のみ)。**これがあれば棋譜をサーバーから取り直せる**
-    /// — 手元の記録より確かで、同期対局の 2 面と評価値も付いてくる。
+    /// Archive id (after the game only). With it the record can be
+    /// re-fetched from the server — more reliable than local state, and
+    /// synchro fetches include both boards and evals.
     pub archive: String,
-    /// **いまこの面で何をしているか。** 空 / `think` / `ponder` / `solve`
-    /// / `select`。画面は「思考中」「先読み中」の出し分けに使う。
+    /// Current activity on this board: "" / think / ponder / solve /
+    /// select; drives the status labels.
     pub busy: String,
-    /// 途中経過の到達深さ (読切・選択読みでは 0)。
+    /// Progress depth (0 during solves).
     pub busy_depth: u32,
-    /// いま最善と思っている手。**先読み中は予測している相手の手**。
-    /// file-major の 0..64。
+    /// Current best move (predicted reply while pondering);
+    /// file-major 0..64.
     pub busy_best: Option<u32>,
-    /// その評価値 (石差)。指す側から見た値。
+    /// Its value in discs, mover view.
     pub busy_eval: Option<f32>,
     pub cells: Vec<u8>, // 0 空 1 黒(*) 2 白(O)
     pub turn: String,   // "black" | "white" | ""
@@ -324,44 +313,43 @@ pub struct MatchView {
     pub opp_rating: String,
     pub opp_clock: String,
     pub my_clock: String,
-    /// 本時間の残り秒 (解析できた場合)。
+    /// Main-time seconds remaining (when parseable).
     pub my_secs: Option<u64>,
     pub opp_secs: Option<u64>,
-    /// ロスタイム (延長時間) の秒数。GGS の時計 "main/inc/ext" の第 3 要素。
+    /// Overtime (grace) seconds; the third field of GGS "main/inc/ext".
     pub my_ext: Option<u64>,
     pub opp_ext: Option<u64>,
-    /// **自分がロスタイムに入ったか。** 入ったらこの対局は時間切れ負けが
-    /// 確定していて、残るのは全滅 (`timeout_hard`) を避けることだけ。
-    /// 一度立てたら下ろさない (サーバー側も戻さない)。
+    /// Whether we entered overtime. The game is then already lost;
+    /// only the wipeout remains avoidable. Never cleared once set
+    /// (the server does not clear it either).
     pub in_overtime: bool,
-    /// 観戦用: 両プレイヤーの情報 (黒, 白 の順とは限らない)。
+    /// For watching: both players (not necessarily black-first).
     pub players: Vec<PlayerView>,
-    /// 対局の種別 ("s8r14" など)。
+    /// Game type ("s8r14" etc.).
     pub gtype: String,
     pub moves: Vec<String>,
-    /// GGF (Generic Game Format) の棋譜。開始局面を含むので、抽選
-    /// オープニングの対局もこれだけで再生できる。
+    /// GGF record; includes the start position, so drawn-opening games
+    /// replay from it alone.
     pub ggf: String,
     pub last_eval: Option<f32>,
     pub last_eval_exact: bool,
-    /// **相手が申告した直近の手の評価値。** GGS の着手行は
-    /// `3: C2/20.00/122.16` (手/評価値/秒) の形で届くので、相手が
-    /// 評価値を出す設定なら受け取れる。出さない相手では `None`。
-    /// 符号は**相手から見た石差**のまま (自分の値と並べて出す)。
+    /// Opponent's reported value for their last move. GGS move rows
+    /// arrive as `3: C2/20.00/122.16` (move/eval/time); `None` for
+    /// opponents that do not report. Sign stays opponent-view.
     pub opp_eval: Option<f32>,
-    /// 相手がその手に使った秒数 (同じく申告値)。
+    /// Seconds the opponent reported spending on the move.
     pub opp_secs_used: Option<f32>,
-    /// **両者の申告値の推移** (開局明けから、手の順)。値は申告したまま
-    /// (指した側から見た石差)。どちらが指した手かは `mine` が持つ。
+    /// Both players' reported evals over the game, in move order,
+    /// values as reported (mover view); `mine` marks whose move.
     pub eval_series: Vec<EvalPoint>,
-    /// 直前の自分の手が定石 book 由来か。
+    /// Whether our last move came from the book.
     pub last_from_book: bool,
-    /// 観戦解析の結果 (黒視点の評価値と最善手)。
+    /// Watch-analysis result (Black-view value and best move).
     pub watch_eval: Option<f32>,
     pub watch_best: Option<String>,
     pub watch_exact: bool,
     pub seen: u64,
-    /// 一覧に載った順 (大きいほど新しい)。並び替えにだけ使う。
+    /// Listing order (larger = newer); used only for sorting.
     pub order: u64,
 }
 
@@ -373,17 +361,17 @@ pub struct GameResult {
     pub my_diff: Option<i32>,
     pub opp: String,
     pub kifu: String,
-    /// GGF の棋譜 (開始局面つき)。
+    /// GGF record with start position.
     #[serde(default)]
     pub ggf: String,
-    /// GGS のアーカイブ番号。あとから `look` で棋譜を取り出せる。
+    /// GGS archive id; `look` can re-fetch the record later.
     #[serde(default)]
     pub archive: String,
     pub seq: u64,
-    /// 対局後の自分のレート (who で取得できた場合に後追いで埋まる)。
+    /// Our rating after the game (backfilled from who when available).
     #[serde(default)]
     pub my_rating: Option<f32>,
-    /// UNIX 秒。
+    /// Unix seconds.
     #[serde(default)]
     pub at: u64,
 }
@@ -401,11 +389,11 @@ pub struct StandbyStats {
 pub struct Snapshot {
     pub conn: String, // disconnected | connecting | logging_in | online
     pub login: String,
-    /// 直近に取れた自分のレート。**画面には出さない** (プールごとの
-    /// `my_ranks` が出す) が、終わった対局に後追いで刻むために持つ。
+    /// Latest own rating. Not displayed (per-pool `my_ranks` is) but
+    /// kept for backfilling finished games.
     #[serde(skip)]
     pub my_rating: Option<f32>,
-    /// プール別の自分のレート。
+    /// Our per-pool ratings.
     pub my_ranks: Vec<RankRow>,
     pub log: VecDeque<LogLine>,
     pub users: Vec<UserRow>,
@@ -414,36 +402,32 @@ pub struct Snapshot {
     pub offers: Vec<Offer>,
     pub matches: Vec<MatchView>,
     pub ongoing: Vec<OngoingView>,
-    /// 画面に出す一言 (観戦に失敗した等)。表示したら消える前提の短い文。
+    /// One-line notice (watch failed etc.); short and shown-once.
     pub notice: String,
     pub stored: Vec<StoredView>,
-    /// history の結果 (対象名 → 行)。
+    /// History results (name -> rows).
     pub history: HashMap<String, Vec<HistoryRow>>,
     pub chat: VecDeque<ChatMsg>,
-    /// **ここまでは読んだ** (UNIX 秒)。画面はこれより新しいものを未読と
-    /// 数える。件数で持つと、履歴を切り詰めたときにずれる。
+    /// Read-up-to marker (unix seconds); newer messages count as
+    /// unread. A count-based marker would drift when history is trimmed.
     pub chat_seen: u64,
     pub results: Vec<GameResult>,
     pub standby: StandbyCfg,
     pub standby_stats: StandbyStats,
     pub engine: EngineCfgView,
     pub auto_play: bool,
-    /// 観戦中の対局を裏で解析する。
+    /// Whether watched games are analyzed in the background.
     pub watch_analysis: bool,
     pub thinking: Option<String>,
-    /// 直近に取り出した棋譜 (GGF)。画面が受け取ったら消す。
+    /// Last fetched record (GGF); cleared once the screen takes it.
     pub fetched_ggf: Option<FetchedGgf>,
 }
 
-/// 画面確認用の作り物のスナップショット (`KUROOBI_GGS_DEMO=1`)。
+/// Fixture snapshot for screenshots (`KUROOBI_GGS_DEMO=1`).
 ///
-/// **GGS の画面は繋がないと何も出ない。** ロビー・プレイヤー・対局結果は
-/// 相手が要るので、寸法も配色も一度も実機で確かめられていなかった
-/// (台帳の「未検証」の大半がこれ)。繋ぐには許可が要り、しかも相手が
-/// 居るとは限らないので、**中身だけを作って画面を描かせる**口を用意する。
-///
-/// 打つ・申し込むといった操作は繋がっていないので通らない。**見た目を
-/// 確かめるためだけのもの。**
+/// GGS screens show nothing without a connection, and the lobby/player/
+/// results screens need opponents — so their look was unverifiable.
+/// This renders them from fixtures; actions are inert.
 pub fn demo_snapshot() -> Snapshot {
     let mut s = Snapshot {
         conn: "online".into(),
@@ -485,16 +469,16 @@ pub fn demo_snapshot() -> Snapshot {
         name: n.into(),
         rating: Some(r),
         dev: Some(d),
-        // デモでも 2 プール分出す (見た目の確認に要る)
+        // Fixtures cover both pools (needed to check the layout).
         rating_r: Some(r - 30.0),
         dev_r: Some(d + 8.0),
-        // デモは受付中と受付なしを混ぜる (見分けが付くかの確認に要る)
+        // Mix accepting and not-accepting (to check they read apart).
         open: Some(if r > 1700.0 { '+' } else { '-' }),
         raw: format!("{n} {r}@{d}"),
     })
     .collect();
-    /* **頁送り (規則 74) を出すには 25 人を超えないといけない。**
-    実サーバーは接続中が 10 件ほどしか居らず、一度も出せていなかった */
+    /* Pagination needs > 25 players; the live server rarely has 10,
+    so it was never renderable without fixtures. */
     for i in 0..26 {
         let r = 1900.0 - i as f32 * 21.0;
         users.push(UserRow {
@@ -555,8 +539,8 @@ pub fn demo_snapshot() -> Snapshot {
         opp: "tamaki".into(),
         gtype: "s8r16".into(),
     }];
-    /* ---- 同期対局の 2 面 (規則 28)。**面ごとに自分の色が逆**なので、
-    見出しが無いと並んだ 2 枚を見分けられない ---- */
+    /* ---- Synchro's two boards; our color flips per board, so the
+    headers are what tells them apart ---- */
     let cells = |mv: &[(usize, u8)]| {
         let mut c = vec![0u8; 64];
         c[27] = 2;
@@ -615,9 +599,9 @@ pub fn demo_snapshot() -> Snapshot {
         },
     ]
     .into();
-    /* レートは 1 局ごとに動かす — **同じ値を並べると推移の線が平らになり、
-    グラフが描けているのか壊れているのか分からない**。形式も入れる
-    (空だと「?」と出る) */
+    /* Vary the rating per game — identical values flatten the trend
+    line and hide whether the graph works. Include the game type
+    (empty shows "?"). */
     s.results = vec![
         (".70", "saio", 6i32, 1_754_003_000u64, 1842.3, "s8r16"),
         (".69", "tamaki", -4, 1_753_990_000, 1836.1, "8"),
@@ -629,8 +613,8 @@ pub fn demo_snapshot() -> Snapshot {
     .into_iter()
     .map(|(id, opp, d, at, rate, gt)| GameResult {
         id: id.into(),
-        /* **形式は `base` の頭から取り出される** (`base.split('.')[0]`)。
-        番号だけを入れると画面に「?」と出る */
+        /* The type is parsed from the head of `base`; a bare id
+        renders as "?". */
         base: format!("{gt}{id}"),
         raw: format!("{id} {opp} {d:+}"),
         my_diff: Some(d),
@@ -674,9 +658,8 @@ pub fn demo_snapshot() -> Snapshot {
         draws: 1,
         diff_sum: 38,
     };
-    /* finger の項目。**条件式の木 (`FormulaView`) はこれが無いと描けない** —
-    待機モードの「申し込みの条件」と、設定の「申し込みの扱い」の両方が
-    ここから来る。相手の名刺 (プロフィール) も同じ */
+    /* Finger fields; the formula tree (FormulaView) cannot render
+    without them, and player cards read from the same data. */
     let finger = |name: &str, accept: &str| FingerInfo {
         name: name.into(),
         fields: vec![
@@ -700,14 +683,14 @@ pub fn demo_snapshot() -> Snapshot {
     s
 }
 
-/// 終わった対局から取り出した棋譜。
+/// Record fetched from a finished game.
 #[derive(Clone, Serialize)]
 pub struct FetchedGgf {
     pub id: String,
-    /// 1 局目 (同期対局なら 1 面目)。**古い呼び出し側のために残す。**
+    /// First game (board 1 for synchro); kept for older callers.
     pub ggf: String,
-    /// **返ってきた全局。** 同期対局は 1 つの番号に 2 面が入っている
-    /// (`|2 (;…;)(;…;)`)。先頭だけ取ると片面しか見られない。
+    /// All returned games: a synchro archive holds two boards
+    /// (`|2 (;..;)(;..;)`); taking only the first loses one.
     pub parts: Vec<String>,
     pub error: String,
 }
@@ -719,29 +702,26 @@ pub struct EngineCfgView {
     pub band: u8,
     pub threads: usize,
     pub ready: bool,
-    /// 定石 book を参照するか。
+    /// Whether the book is consulted.
     pub use_book: bool,
-    /// book のファイルを読み込めているか。
+    /// Whether the book file loaded.
     pub book_loaded: bool,
-    /// 終わった対局を定石の学習に取り込むか。
+    /// Whether finished games feed book learning.
     pub learn: bool,
-    /// 相手の手番中に先読みするか。**「深さ固定」では効かない** —
-    /// 本番の探索がどのみち最後まで走るので、先に読んでも得るものが無い。
+    /// Whether to ponder on the opponent's turn. Ineffective under
+    /// fixed depth (the real search runs to the end anyway).
     pub ponder: bool,
-    /// 持ち時間の配り方 ("fast" 終盤に残す / "depth" 深さ固定)。
-    ///
-    /// **"slow" と "even" は落とした。** 自己対局で "slow" は 3 秒・8 秒の
-    /// 対局で勝率 0.0% (石差 −34)、"fast" は全条件で "even" に劣らなかった。
-    /// 古い設定に残っていても `Pace::parse` が既定 ("fast") へ倒す。
+    /// Pacing ("fast" = save for the endgame / "depth" = fixed).
+    /// "slow" and "even" were removed after measurement; old configs
+    /// fall back to "fast" via `Pace::parse`.
     pub pace: String,
-    /// 1 手に使う上限 (秒)。0 で上限なし。
+    /// Per-move cap (seconds); 0 = none.
     pub max_move_secs: u64,
-    /// 読み切り用に取っておく秒数。
+    /// Seconds reserved for the solve.
     pub reserve_secs: u64,
-    /// **持ち時間をどれだけ攻めて使うか。** 1.0 で「配分どおり」。
-    ///
-    /// 反復深化は期限まで粘らない (実測で 47%) ので、1.0 だと配ったぶんの
-    /// 半分しか使わない。既定 2.5 は実測 15 分の対局で使用率 45% → 84%。
+    /// Clock aggressiveness; 1.0 = as allocated. Deepening uses ~47%
+    /// of its deadline, so 1.0 spends half; the measured default 2.5
+    /// raised utilization 45% -> 84%.
     pub budget_use: f64,
 }
 
@@ -765,7 +745,7 @@ impl Default for EngineCfgView {
     }
 }
 
-// ============================ セッション ============================
+// ============================ Session ============================
 
 pub struct Handle {
     pub tx: Sender<Cmd>,
@@ -800,7 +780,7 @@ pub fn spawn(
     Handle { tx, snapshot }
 }
 
-/// 対局履歴の保存先 (リポジトリの ggs_games/history.jsonl)。
+/// Game-history path (ggs_games/history.jsonl in the repo).
 fn history_path() -> PathBuf {
     for c in ["ggs_games", "../ggs_games", "../../ggs_games"] {
         let p = PathBuf::from(c);
@@ -811,7 +791,7 @@ fn history_path() -> PathBuf {
     PathBuf::from("ggs_history.jsonl")
 }
 
-/// 起動時に履歴を読み込む (新しい順に最大 500 件)。
+/// Load history at startup (up to 500, newest first).
 fn load_history() -> Vec<GameResult> {
     let Ok(text) = std::fs::read_to_string(history_path()) else {
         return Vec::new();
@@ -838,11 +818,9 @@ fn append_history(r: &GameResult) {
     }
 }
 
-/// チャットの保存先 (`ggs_games/chat/<ログイン名>.jsonl`)。
-///
-/// **ログインごとに分ける。** 別のアカウントで繋いだときに会話が混ざると、
-/// 誰に何を言ったのか分からなくなる。名前はサーバー側で英数に限られるが、
-/// 念のため区切り文字だけ落とす。
+/// Chat path (`ggs_games/chat/<login>.jsonl`), split per login so
+/// conversations from different accounts never mix. Names are
+/// server-restricted to alphanumerics; separators are stripped anyway.
 fn chat_path(login: &str) -> PathBuf {
     let safe: String = login
         .chars()
@@ -862,14 +840,12 @@ fn chat_path(login: &str) -> PathBuf {
     dir.join(format!("{safe}.jsonl"))
 }
 
-/// **保存しておく件数。** 画面は直近 300 件しか出さないので、これは
-/// 「遡れる量」。1 日 100 件来ても 1 か月半ぶん残る。
+/// Retention count. The screen shows 300; this is how far back you
+/// can dig — ~6 weeks at 100 messages/day.
 const CHAT_KEEP: usize = 5000;
 
-/// 起動時にチャットを読み込む (古い順のまま、末尾 `CHAT_KEEP` 件)。
-///
-/// **読めない行は捨てる。** 書き込み中に落ちると最後の 1 行が切れるが、
-/// その 1 行のために全部を失うほうが悪い。
+/// Load chat at startup (oldest first, last `CHAT_KEEP`). Unreadable
+/// lines are dropped — losing everything over one torn line is worse.
 fn load_chat(login: &str) -> Vec<ChatMsg> {
     let Ok(text) = std::fs::read_to_string(chat_path(login)) else {
         return Vec::new();
@@ -884,7 +860,7 @@ fn load_chat(login: &str) -> Vec<ChatMsg> {
     out
 }
 
-/// GGS の設定の置き場 (履歴の隣)。
+/// GGS settings path (next to the history).
 fn settings_path() -> PathBuf {
     history_path()
         .parent()
@@ -892,11 +868,10 @@ fn settings_path() -> PathBuf {
         .join("ggs_settings.json")
 }
 
-/// **画面から変えられる設定を残す。**
-///
-/// これが無かったので、**立ち上げ直すたびに既定へ戻っていた**。先読みを
-/// 切って対局したつもりが次の起動では入っている、という形で実際に外した。
-/// 「反映」を押したのに次の起動で消えるのは、押していないのと同じ。
+/// Persist the screen-changeable settings. Absent, every restart reset
+/// to defaults — a ponder-off verification game was actually played
+/// ponder-on this way. A setting that vanishes on restart was never
+/// really applied.
 #[derive(Serialize, serde::Deserialize)]
 struct SavedSettings {
     depth: u32,
@@ -913,8 +888,8 @@ struct SavedSettings {
     learn: bool,
 }
 
-/// いまの設定を書き出す。**書けなくても対局は続ける** (次の起動で既定へ
-/// 戻るだけで、いま打っている手には影響しない)。
+/// Write the current settings; failure never interrupts play (it only
+/// means defaults after the next restart).
 fn save_settings(ctx: &Ctx) {
     let s = ctx.snap.lock().unwrap();
     let e = &s.engine;
@@ -938,25 +913,22 @@ fn save_settings(ctx: &Ctx) {
     }
 }
 
-/// 起動時に読む。無ければ既定のまま。
+/// Load at startup; absent file keeps the defaults.
 fn load_settings() -> Option<SavedSettings> {
     let text = std::fs::read_to_string(settings_path()).ok()?;
     serde_json::from_str(&text).ok()
 }
 
-/// 既読位置の置き場 (チャット本体の隣)。
-/// 一覧に載った順を配る通し番号。
+/// Read-marker path (next to the chat log).
 static MATCH_ORDER: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
 
 fn chat_seen_path(login: &str) -> PathBuf {
     chat_path(login).with_extension("seen")
 }
 
-/// 既読位置を読む。無ければ 0 (＝全部未読) ではなく**いまの時刻**を返す。
-///
-/// **初めて使う人に 5000 件の未読を見せない。** 印が無いということは、
-/// この仕組みより前から在るチャットということ。遡って読ませる意味は
-/// 薄いので、既読として始める。
+/// Read the marker; a missing marker returns the current time, not 0
+/// — first-time users must not face 5000 unread messages that predate
+/// the mechanism.
 fn load_chat_seen(login: &str) -> u64 {
     std::fs::read_to_string(chat_seen_path(login))
         .ok()
@@ -964,8 +936,8 @@ fn load_chat_seen(login: &str) -> u64 {
         .unwrap_or_else(now_secs)
 }
 
-/// 既読位置を書く。**戻さない** — 古い画面から遅れて届いた印で、
-/// 読んだはずのものが未読に戻るのを防ぐ。
+/// Write the marker, never backwards — a late write from a stale
+/// screen must not resurrect read messages as unread.
 fn save_chat_seen(login: &str, at: u64) {
     if login.is_empty() {
         return;
@@ -980,7 +952,7 @@ fn save_chat_seen(login: &str, at: u64) {
     }
 }
 
-/// 1 件書き足す。**溢れたら書き直して詰める** (追記だけでは減らせない)。
+/// Append one message; compact by rewriting once over the cap.
 fn append_chat(login: &str, m: &ChatMsg) {
     if login.is_empty() {
         return;
@@ -997,10 +969,10 @@ fn append_chat(login: &str, m: &ChatMsg) {
     {
         let _ = writeln!(f, "{line}");
     }
-    /* 毎回数えると 5000 行を毎発言ぶん読むことになるので、**十分に
-    増えたときだけ**詰める。2 割の余裕を持たせて書き直す。 */
+    /* Counting every append would re-read 5000 lines per message;
+    compact only past a 20% margin. */
     if let Ok(meta) = std::fs::metadata(&path) {
-        // 1 行 ~120 バイトとして、上限の 1.2 倍を超えたら詰める
+        // ~120 bytes/line; compact past 1.2x the cap.
         if meta.len() > (CHAT_KEEP as u64) * 120 * 12 / 10 {
             let kept = load_chat(login);
             let body: String = kept
@@ -1016,20 +988,19 @@ fn append_chat(login: &str, m: &ChatMsg) {
     }
 }
 
-/// 設定ファイル (エンジンが使う重み・定石の場所)。ローカル対局と同じものを読む。
+/// Resource config (weights/book locations); same file as local play.
 fn resources() -> kuroobi::resources::Resources {
     crate::resources()
 }
 
-/// GGS は同名の二重ログインを弾くため、複数ウィンドウから同時に接続すると
-/// 後から繋いだ方が必ず失敗する。接続時にロックファイルへ PID を書き、
-/// 生きている別プロセスが持っていれば繋ぎに行かない。
+/// GGS rejects duplicate logins, so a second window's connection always
+/// fails. A PID lock file prevents connecting while a live process
+/// holds the session.
 fn session_lock_path() -> PathBuf {
-    /* `KUROOBI_SESSION_LOCK` で差し替えられる。**このロックは 1 プロセス
-    しか GGS に繋がせない** ので、既定のままでは 2 つの実体を別々の
-    アカウントで同時に動かせない (後から起動したほうが黙って見送る)。
-    アカウントが違うなら二重ログインにはならないので、分けてよい。
-    キーチェーンの `KUROOBI_KEYCHAIN_SERVICE` と対で使う。 */
+    /* Overridable via `KUROOBI_SESSION_LOCK`: the default lock admits
+    one process, which also blocks two instances on different accounts
+    (no duplicate-login risk there). Pair with
+    `KUROOBI_KEYCHAIN_SERVICE`. */
     if let Ok(p) = std::env::var("KUROOBI_SESSION_LOCK") {
         if !p.is_empty() {
             return PathBuf::from(p);
@@ -1038,8 +1009,8 @@ fn session_lock_path() -> PathBuf {
     std::env::temp_dir().join("kuroobi_ggs.pid")
 }
 
-/// 別プロセスがセッションを掴んでいるか (ロックは取らない)。起動時の
-/// 自動ログインが、通知を出さずに見送るための照会用。
+/// Whether another process holds the session (without taking the
+/// lock); lets startup auto-login defer silently.
 pub fn session_locked_by_other() -> bool {
     let Ok(s) = std::fs::read_to_string(session_lock_path()) else {
         return false;
@@ -1050,12 +1021,12 @@ pub fn session_locked_by_other() -> bool {
     }
 }
 
-/// ロックを取る。別プロセスが接続中ならその PID を返す。
+/// Take the lock; returns the PID if another process is connected.
 fn try_lock_session() -> Result<(), i32> {
     let path = session_lock_path();
     if let Ok(s) = std::fs::read_to_string(&path) {
         if let Ok(pid) = s.trim().parse::<i32>() {
-            // シグナル 0 で生存確認 (自分自身は除く)
+            // Liveness check via signal 0 (excluding ourselves).
             if pid != std::process::id() as i32 && unsafe { libc::kill(pid, 0) } == 0 {
                 return Err(pid);
             }
@@ -1076,29 +1047,29 @@ fn unlock_session() {
 
 struct MatchState {
     cells: Vec<u8>,
-    /// 抽選オープニング (s8r14 など) の開始局面。着手列だけでは対局を
-    /// 復元できないので、観戦開始時に届く 1 枚目の盤面を控えておく。
-    /// 標準の初期局面から始まる対局では空のまま。
+    /// Drawn-opening start position (s8r14 etc.); captured from the
+    /// first board on join, since moves alone cannot reconstruct the
+    /// game. Empty for standard starts.
     start_cells: Vec<u8>,
-    /// 開始局面の手番 ('*' / 'O')。
+    /// Mover at the start position ('*'/'O').
     start_turn: char,
-    /// 対局の種別 ("s8r14" など)。レートのプールを見分けるのに使う。
+    /// Game type ("s8r14" etc.).レートのプールを見分けるのに使う。
     gtype: String,
     turn: char, // '*' / 'O' / ' '
     my_color: Option<char>,
-    /// この手番について報せたか。1 手のあいだに update が何度も来るので、
-    /// これが無いと同じ手番で何度も鳴る。
+    /// Whether this turn was announced; updates arrive repeatedly per
+    /// move and would chime every time.
     told_turn: bool,
     my_clock: String,
     my_clock_secs: Option<u64>,
     my_ext: Option<u64>,
-    /// ロスタイムに入ったか (`MatchView::in_overtime` を参照)。
+    /// Whether we entered overtime (see `MatchView::in_overtime`).
     in_overtime: bool,
-    /// 終わり方 (`MatchView::ended`)。
+    /// How it ended (`MatchView::ended`).
     ended: String,
-    /// 書庫の番号 (終局行の末尾)。**終局後にしか埋まらない。**
+    /// Archive id (tail of the game-over line); only set after the game.
     archive: String,
-    /// 中断のとき、抜けた側の名前。
+    /// Who left, for adjournments.
     left_by: String,
     opp_name: String,
     opp_rating: String,
@@ -1110,49 +1081,46 @@ struct MatchState {
     last_eval: Option<f32>,
     last_eval_exact: bool,
     last_from_book: bool,
-    /// 着手行が運んできた評価値と消費秒 (手番号 → 値)。**両者ぶん入る**。
+    /// Evals and seconds carried by move rows (move number -> values);
+    /// both players' moves included.
     move_evals: std::collections::BTreeMap<u32, (Option<f32>, Option<f32>)>,
-    /// 相手の直近の手の申告値。
+    /// Opponent's latest reported value.
     opp_eval: Option<f32>,
     opp_secs_used: Option<f32>,
-    /// **自分が指した手の番号の偶奇。** 手番の突き合わせで一度決まれば
-    /// 以降変わらないので控えておく。終局すると手番が空になり、その場では
-    /// 色を決められない (終局後の画面で申告値が消えていた)。
+    /// Parity of our move numbers. Determined once from the turn and
+    /// cached — after the game the turn is empty and the color could
+    /// not be derived (the post-game eval chart used to vanish).
     eval_parity: Option<u32>,
-    /// 観戦解析: 手番視点の評価値と最善手 (座標)。
+    /// Watch analysis: mover-view value and best move (coordinate).
     watch_eval: Option<f32>,
     watch_best: Option<String>,
     watch_exact: bool,
     watch_hash: u64,
     last_played_hash: u64, // 同一局面への二重着手防止
     seen: u64,
-    /// **一覧に載った順**。id では並べられない — GGS の番号は文字列で
-    /// `.23` < `.41` < `.8` となり、新しい対局が途中に挿し込まれる
-    /// (実際に「新しい順になっていない」と報告された)。
+    /// Listing order. Ids cannot sort — GGS numbers are strings
+    /// (`.23` < `.41` < `.8`) and get reused, which inserted new games
+    /// mid-list.
     order: u64,
-    /// 終局したか。終わっても一覧からは消さない (終局後の盤面から
-    /// 棋譜を見たり検討へ送ったりしたいため)。閉じるのは手動。
+    /// Whether it ended; finished games stay listed (for record viewing
+    /// and study hand-off) until closed manually.
     over: bool,
-    /// 終局の結果 ("+12.00" など)。表示用。
+    /// Final result ("+12.00" etc.); display only.
     result: String,
 }
 
 impl MatchState {
-    /// **両者の申告値の推移を組む。**
+    /// Build both players' reported-eval series.
     ///
-    /// どちらが指した手かは**手番の突き合わせだけで決まる**。パスも `PA` と
-    /// して番号付きで届くので、番号の偶奇がそのまま色に対応する。いま指す番
-    /// が自分なら直前の手は相手のもの — そこから遡って全部の色が決まる。
-    ///
-    /// 終局後は手番が空になるので、その時は最後に分かっていた色を使えない。
-    /// **終局した対局は書庫の棋譜のほうが確かなので、ここでは諦める**
-    /// (推移は対局中に見るもの)。
+    /// Whose move each one is follows from the turn alone: passes
+    /// arrive numbered (`PA`), so number parity maps to color. After
+    /// the game the turn is empty; the cached parity covers that.
     fn eval_series(&self) -> Vec<EvalPoint> {
         let Some(&last_n) = self.moves.keys().next_back() else {
             return Vec::new();
         };
-        /* **一度決めた色を控えて使う。** 終局すると手番が空になるので、
-        その場では色を決められない。控えが無いときだけ手番から求める。 */
+        /* Use the cached parity; derive from the turn only when the
+        cache is empty (the turn vanishes at game end). */
         let mine_parity = match self.eval_parity {
             Some(p) => p,
             None => {
@@ -1162,7 +1130,7 @@ impl MatchState {
                 if self.turn != '*' && self.turn != 'O' {
                     return Vec::new();
                 }
-                // 直前の手を指したのは「いま指す番でないほう」
+                // The previous move belongs to whoever is not to move.
                 if self.turn != mc {
                     last_n % 2
                 } else {
@@ -1182,8 +1150,8 @@ impl MatchState {
             .collect()
     }
 
-    /// 履歴と学習へ渡すための写し。終局後も一覧に本体を残すので、
-    /// 取り出す側には複製を渡す。
+    /// Copy for history/learning; the original stays listed after the
+    /// game, so consumers get a clone.
     fn snapshot(&self) -> MatchState {
         MatchState {
             cells: self.cells.clone(),
@@ -1267,16 +1235,15 @@ impl MatchState {
             result: String::new(),
         }
     }
-    /// 開始局面を盤面文字列にする。標準の初期局面から始まるなら空を返す。
-    ///
-    /// 形式は kuroobi の Board と同じ rank-major 64 マス + 空白 + 手番。
+    /// Start position as a board string (empty for the standard start);
+    /// same rank-major 64 cells + space + mover as kuroobi's Board.
     fn start_string(&self) -> String {
         if self.start_cells.len() != 64 {
             return String::new();
         }
         let mut out = String::with_capacity(66);
         for i in 0..64 {
-            // 画面の cells は file-major、盤面文字列は rank-major
+            // Screen cells are file-major; board strings rank-major.
             let (file, rank) = (i % 8, i / 8);
             out.push(match self.start_cells[file * 8 + rank] {
                 1 => 'X',
@@ -1289,11 +1256,10 @@ impl MatchState {
         out
     }
 
-    /// GGF (Generic Game Format) にする。GGS が使う形式で、開始局面を
-    /// `BO[8 ...]` に、着手を `B[]` / `W[]` に持つ。抽選オープニングの対局も
-    /// これ 1 つで往復できる。
+    /// Serialize to GGF: start in `BO[8 ...]`, moves in `B[]`/`W[]`.
+    /// Round-trips drawn-opening games.
     fn ggf(&self, id: &str, result: Option<&str>) -> String {
-        // BO は '*' (黒) と 'O' (白)。開始局面が無ければ標準の初期局面。
+        // BO uses '*' (black) and 'O' (white); default standard start.
         let board = match self.start_string() {
             s if s.len() == 66 => s.replace('X', "*"),
             _ => format!(
@@ -1320,7 +1286,7 @@ impl MatchState {
             out.push_str(&format!("RE[{r}]"));
         }
         out.push_str(&format!("BO[8 {board}]"));
-        // 着手は開始局面の手番から交互に。パスも 1 手として色を進める。
+        // Moves alternate from the start mover; passes advance color too.
         let mut black = !board.ends_with(" O");
         for mv in self.moves.values() {
             let tag = if black { "B" } else { "W" };
@@ -1345,20 +1311,19 @@ impl MatchState {
     }
 }
 
-/// GGS の時計表記を秒に分解する。実形式 (実測ログより):
-/// `15:00,0:0//02:00,0:0` = 本時間15分 / (加算なし) / 延長2分。
-/// `/` 区切りの各要素は `,` の後ろに副フィールドを持つので先頭だけ読む。
-/// **終局行の石差を自分視点に直す。**
+/// Parse a GGS clock string into seconds. Observed format:
+/// `15:00,0:0//02:00,0:0` = 15 min main / (no increment) / 2 min grace;
+/// each `/`-separated field has a `,` subfield — read only the head.
+///
+/// The game-over line's disc difference is relative to the first-named
+/// player, not our color:
 ///
 ///     - match .48 2639 kuroobi 2644 Rhapsody s8r16 R +2.00
-///                    ~~~~~~~ この人から見て +2
+///                    ~~~~~~~ +2 from this player's view
 ///
-/// 以前は自分の色 (`my_color == '*'`) で符号を決めていた。**同期対局では
-/// 面ごとに色が逆**なので、どちらの面を代表に選んだかで勝敗が反転する。
-/// 代表は「先に見た面」なので、届く順で結果が変わっていた。
-///
-/// 実際にレート戦の 1 局目 (+2.00 の勝ち) を「1 敗 −2 石差」と表示した。
-/// サーバーのレートは +85.3 動いており、画面だけが逆を向いていた。
+/// Deciding the sign from `my_color` once flipped a rated win into a
+/// displayed loss (synchro boards carry opposite colors, so the answer
+/// depended on which board arrived first).
 fn my_stone_diff(score: f32, first_name: &str, login: &str) -> i32 {
     let v = score.round() as i32;
     if first_name == login {
@@ -1368,33 +1333,28 @@ fn my_stone_diff(score: f32, first_name: &str, login: &str) -> i32 {
     }
 }
 
-/// **同期対局の鏡像から、相手が既に指した手を借りる。**
+/// Borrow the opponent's already-played move from the synchro mirror.
 ///
-/// `s8r16` は同じ開局を先後入れ替えて 2 面同時に打つので、2 面が同じ手順を
-/// たどっている間は**同一局面**になる。手番は原理的にずれるため、片方で
-/// 相手が指した手は、もう片方でこちらが指す局面の候補そのものになる。
-///
-/// **相手はこれをやっている。** 実測 (3 局) では、相手はこちらの着手を待って
-/// から同じ手を指し続け、より良い手を見つけたところで初めて分岐した。持ち時間
-/// の 7〜9 割を最初の 10 手に投じていたのは、この「待つ時間」だった。
-///
-/// こちら側は相手より速く指すため、鏡像が先に埋まるのは自分の手番の
-/// **29%** (24 手中 7 手) に留まる。それでも只で手に入る情報なので使う。
-///
-/// **手順が分岐したら使わない。** 分岐後は別の局面なので、借りた手は
-/// 合法とも限らない。
+/// `s8r16` plays the same opening color-swapped on two boards; while
+/// the move sequences match, the positions are identical, so a move the
+/// opponent played on one board is a candidate for us on the other.
+/// Opponents demonstrably do this (measured: they wait for our move,
+/// copy it, and diverge only on finding better). Because we move
+/// faster, the mirror is ahead on only ~29% of our turns — still free
+/// information. Never borrow after the sequences diverge (the borrowed
+/// move may not even be legal).
 fn mirror_hint(matches: &HashMap<String, MatchState>, mid: &str) -> Option<Position> {
     let (base, side) = mid.rsplit_once('.')?;
     let other = format!("{base}.{}", if side == "0" { "1" } else { "0" });
     let me = matches.get(mid)?;
     let you = matches.get(&other)?;
-    // 次に指す手数 = こちらの最大手数 + 1
+    // Next move number = our max + 1.
     let n = me.moves.keys().copied().max().unwrap_or(0) + 1;
-    // ここまでの手順が完全に一致している間だけ鏡像が成り立つ
+    // The mirror holds only while the sequences match exactly.
     if (1..n).any(|i| me.moves.get(&i) != you.moves.get(&i)) {
         return None;
     }
-    // 相手の面が既にその手数を埋めていれば借りられる
+    // Borrow if the other board already has that move number.
     let mv = you.moves.get(&n)?;
     let b = mv.as_bytes();
     if b.len() != 2 {
@@ -1405,18 +1365,16 @@ fn mirror_hint(matches: &HashMap<String, MatchState>, mid: &str) -> Option<Posit
     Position::from_file_rank(file, rank)
 }
 
-/// 相手からの待った (`undo`) / 中断 (`abort`) の申し出。
+/// Opponent's undo or abort request.
 struct Request {
     verb: &'static str,
     id: String,
     who: String,
 }
 
-/// `/os: undo .24 htz is asking` を読む。
-///
-/// **書式は実サーバーで採った。** 資料には `undo [.match]` という送る側の
-/// 形しか無く、届く側の形は書かれていない。自分が出した申し出も同じ形で
-/// 返ってくるので、名前で弾く。
+/// Parse `/os: undo .24 htz is asking`. Format captured from the live
+/// server (docs only describe the sending side); our own requests echo
+/// back in the same shape and are filtered by name.
 fn parse_request(ln: &str, login: &str) -> Option<Request> {
     let rest = ln.strip_prefix("/os: ")?;
     let verb = ["undo", "abort"]
@@ -1425,7 +1383,7 @@ fn parse_request(ln: &str, login: &str) -> Option<Request> {
     let mut it = rest[verb.len() + 1..].split_whitespace();
     let id = it.next()?;
     let who = it.next()?;
-    // 末尾は "is asking"。違う形なら知らない通知として見送る
+    // Must end in "is asking"; anything else is an unknown notice.
     if it.next() != Some("is") || who == login || !id.starts_with('.') {
         return None;
     }
@@ -1440,10 +1398,9 @@ fn parse_clock(s: &str) -> (Option<u64>, Option<u64>, Option<u64>) {
     let mut out = [None, None, None];
     for (i, part) in s.split('/').take(3).enumerate() {
         let p = part.trim().split(',').next().unwrap_or("").trim();
-        /* **負の残り時間は 0 として読む。** 使い切った直後に `-0:01` の
-        ような値が来ることがある。数字始まりだけを受けていると解析に失敗し、
-        「時間制でない対局」と同じ `None` に落ちる — その扱いは**期限なし**
-        なので、いちばん時間の無い場面でいちばん長く考えることになる。 */
+        /* Negative clocks read as 0. `-0:01` can arrive right after
+        exhaustion; failing to parse it falls to `None` = untimed = no
+        deadline — the longest think at the worst moment. */
         let (p, neg) = match p.strip_prefix('-') {
             Some(rest) => (rest.trim(), true),
             None => (p, false),
@@ -1475,14 +1432,13 @@ fn parse_clock(s: &str) -> (Option<u64>, Option<u64>, Option<u64>) {
     (out[0], out[1], out[2])
 }
 
-/// 学習 (実戦の取り込み) の評価深さ。「実戦手以外の合法手の最善」を
-/// 局面ごとに測るので、実戦 (22) より浅い速報値にしてある。1 回の
-/// 呼び出しは 1 評価だけなので、対局の合間に回しても応答を壊さない。
-/// ローカル対局の取り込み (main.rs) も同じ深さを使う。
+/// Learning evaluation depth: shallower than play (22) since every
+/// legal alternative gets measured per position. One evaluation per
+/// call keeps between-game responsiveness; local import uses the same.
 pub(crate) const LEARN_DEPTH: u32 = 18;
 
 fn base_id(id: &str) -> String {
-    // ".82726.1" → ".82726"、それ以外はそのまま
+    // ".82726.1" -> ".82726"; anything else unchanged.
     let parts: Vec<&str> = id.split('.').collect();
     if parts.len() >= 3 && parts.last().map(|s| s.len() == 1) == Some(true) {
         parts[..parts.len() - 1].join(".")
@@ -1491,11 +1447,9 @@ fn base_id(id: &str) -> String {
     }
 }
 
-/// 対局 ID に属する盤面をすべて取り除く。
-///
-/// synchro は 1 マッチが `.N.0` と `.N.1` の 2 局に分かれるが、開始と終了は
-/// 親の `.N` で通知される。完全一致だけで消すと親 ID の通知が空振りし、
-/// 終わった対局が盤面に残り続ける。
+/// Remove every board belonging to a match id. Synchro splits one
+/// match into `.N.0`/`.N.1` while start/end notify on the parent `.N`;
+/// exact-match removal would miss those and leave stale boards.
 fn drop_match(matches: &mut HashMap<String, MatchState>, id: &str) -> Vec<MatchState> {
     let keys: Vec<String> = matches
         .keys()
@@ -1505,9 +1459,8 @@ fn drop_match(matches: &mut HashMap<String, MatchState>, id: &str) -> Vec<MatchS
     keys.iter().filter_map(|k| matches.remove(k)).collect()
 }
 
-/// 終局しても一覧からは消さず、終わった印だけ付ける。終局後の盤面から
-/// 棋譜を取り出したり検討へ送ったりできるようにするため。閉じるのは手動。
-/// 戻り値は終局した対局の写し (履歴と学習に使う)。
+/// Mark games finished without removing them (records and study remain
+/// reachable; closing is manual). Returns copies for history/learning.
 fn finish_match(
     matches: &mut HashMap<String, MatchState>,
     id: &str,
@@ -1526,9 +1479,8 @@ fn finish_match(
         if let Some(m) = matches.get_mut(&k) {
             m.over = true;
             m.turn = ' ';
-            /* **書庫の番号を持たせる。** 終局後に棋譜を見たくなったとき、
-            手元の記録が読めなくてもサーバーから取り直せる (2 面と評価値も
-            付いてくる)。 */
+            /* Keep the archive id: even if local state is unreadable,
+            the record can be re-fetched (with both boards and evals). */
             if !archive.is_empty() {
                 m.archive = archive.to_string();
             }
@@ -1545,14 +1497,11 @@ fn finish_match(
     out
 }
 
-/// GGS へ送る着手文字列。**評価値と思考時間を添える。**
-///
-/// `tell /os play <id> D8/6/17.39` のように `手/評価値/秒` で送る。
-/// 省略してもよい仕様だが、**省くとサーバーが trust-violation を出す** —
-/// 時計の減りと申告が突き合わせられないため。GGS の管理者から
-/// 「付けてほしい」と指摘を受けて足した (2026-08-19)。
-///
-/// 評価値は手番側から見た石差。パスには評価値を付けない (値の意味がない)。
+/// Move string sent to GGS, with eval and think time attached
+/// (`tell /os play <id> D8/6/17.39` = move/eval/seconds). Nominally
+/// optional, but omitting them triggers server trust violations (the
+/// clock cannot be reconciled); added at the GGS admin's request.
+/// Eval is mover-view discs; passes carry no eval.
 fn play_arg(mstr: &str, value: f32, took: Option<std::time::Duration>) -> String {
     if mstr == "pa" {
         return mstr.to_string();
@@ -1570,70 +1519,66 @@ fn coord(p: Position) -> String {
     format!("{f}{r}")
 }
 
-/// **1 局ぶんの探索を持つワーカー。**
+/// Worker owning one game's search.
 ///
-/// 同期対局は 2 局が同時に進む。エンジンが 1 つだと、片方を読んでいる間
-/// もう片方は何もできない — 本探索なら時計を捨てているのと同じで、相手の
-/// 手番なら先読みの機会を捨てている (先読みは実測で +1.6〜1.8 段)。
-///
-/// **エンジンは使い回す。捨てない。** `Engine::new` は置換表を `Box::leak`
-/// で `'static` にするので、対局のたびに作り直すと解放されないまま積み上がる
-/// (1 つ 167 MB)。対局が終わっても割り当てを外すだけにして、次の対局で
-/// 同じワーカーを使う。
+/// Synchro runs two games at once; with a single engine, one board
+/// always waits — burning clock on our turns and ponder opportunity on
+/// theirs. Engines are reused, never dropped: `Engine::new` leaks its
+/// tables to 'static (167 MB each), so rebuilding per game accumulates
+/// unfreed memory. Game end only clears the assignment.
 struct EngineWorker {
     tx: std::sync::mpsc::Sender<Job>,
     rx: std::sync::mpsc::Receiver<Done>,
     stop: kuroobi::midgame::StopHandle,
-    /// いま探索中か (結果を受け取るまで次を投げない)。
+    /// Whether a search is in flight (nothing new until it returns).
     busy: bool,
-    /// 割り当てている対局。無ければ空き。
+    /// Assigned match; empty = free.
     mid: Option<String>,
-    /// 投げた探索の局面ハッシュ (返ってきたときに二重着手を防ぐ印を書くため)。
+    /// Hash of the searched position (marks double-move protection on return).
     pending_hash: u64,
-    /// **まだ投げられていない本探索。** 塞がっている間に自分の手番が来たら
-    /// ここへ控え、空いた瞬間に投げる。
+    /// A real search waiting to be dispatched; queued while busy,
+    /// thrown the moment the worker frees.
     pending: Option<Pending>,
-    /// いま走らせているのが先読みか (本探索が来たら捨てる)。
+    /// Whether the running job is a ponder (discarded when a real
+    /// search arrives).
     pondering: bool,
-    /// 本探索を投げた時刻と、そのとき渡した期限。**返ってこないことを
-    /// 検出する**ために持つ (期限を大きく過ぎたら停止を立てて拾い直す)。
+    /// When the real search was dispatched and its deadline; detects a
+    /// search that never returns (stop and re-collect well past it).
     sent_at: Option<(Instant, Duration)>,
-    /// 停止を立てた時刻。**返らないワーカーを見捨てる判断に使う。**
+    /// When the stop was raised; decides when to abandon the worker.
     stopped_at: Option<Instant>,
-    /// **探索の途中経過を覗く口。** 別スレッドで走っているエンジンが段の
-    /// 切れ目で書き、こちらは毎周読むだけ (ロックなし)。
+    /// Progress peek: the engine writes at iteration boundaries, this
+    /// side reads every loop, lock-free.
     progress: std::sync::Arc<kuroobi::engine::Progress>,
 }
 
-/// 停止を立ててからこれだけ待っても返らなければ、そのワーカーを捨てる。
-///
-/// 席は 2 つしかない。1 つ失うと同期対局が片肺になり、2 つ失うと対局が
-/// 止まる。**起きるべきでない経路だが、起きたときの損が大きすぎる。**
+/// Give up on a worker this long after raising its stop. There are
+/// only two seats; losing one cripples synchro, losing both halts the
+/// game. Should never happen — but the cost if it does is too high.
 const WORKER_GIVE_UP: Duration = Duration::from_secs(10);
 
-/// 投げ待ちの本探索。
+/// A real search awaiting dispatch.
 struct Pending {
     board: Board,
     levels: (u32, u8, u8),
     cap: Option<Duration>,
     hash: u64,
-    /// 鏡像から借りた手 (`mirror_hint`)。並べ替えの先頭に置くだけ。
+    /// Move borrowed from the mirror (`mirror_hint`); ordering only.
     hint: Option<Position>,
 }
 
-/// ワーカーへの指示。
+/// Worker instruction.
 enum Job {
-    /// 本探索。期限まで読んで着手を返す。
+    /// Real search: read until the deadline, return a move.
     Think {
         board: Board,
         levels: (u32, u8, u8),
         cap: Option<Duration>,
-        /// 鏡像から借りた手 (`mirror_hint`)。並べ替えの先頭に置くだけで、
-        /// 打ち切りには使われない。
+        /// Mirror-borrowed move; ordering only, never a cutoff.
         hint: Option<Position>,
     },
-    /// 先読み。**自分の時計は減らない**ので、空いていれば常に投げてよい。
-    /// 1 回で読むのは `slice` だけ (刻んで投げ直す)。
+    /// Ponder: costs none of our clock, so always safe when idle.
+    /// Runs one `slice` at a time (re-dispatched in slices).
     Ponder {
         board: Board,
         slice: Duration,
@@ -1642,11 +1587,8 @@ enum Job {
     SetThreads(usize),
 }
 
-/// ワーカーからの返事。
-///
-/// **学習の取り込みと観戦の解析はワーカーへ載せない。** どちらも対局が
-/// 空いているときだけ動く仕事で、従来どおり `Ctx.engine` が受け持つ。
-/// 対局を並行にすることと、余った時間の使い道を変えることは別の話。
+/// Worker reply. Learning and watch analysis never ride workers —
+/// both are idle-time jobs and stay on `Ctx.engine`.
 enum Done {
     Moved(Box<kuroobi::engine::MoveEval>),
     Pondered,
@@ -1654,7 +1596,7 @@ enum Done {
 
 struct Ctx {
     app: tauri::AppHandle,
-    /// エンジンの停止ハンドル (Engine 生成時に控える)。
+    /// Engine stop handle (captured at engine creation).
     stop: Option<kuroobi::midgame::StopHandle>,
     snap: Arc<Mutex<Snapshot>>,
     engine: Option<Engine>,
@@ -1662,59 +1604,50 @@ struct Ctx {
     seq: u64,
     last_emit: Instant,
     dirty: bool,
-    /// 検証用の自動観戦キュー (KUROOBI_GGS_AUTOWATCH=auto)。
+    /// Verification auto-watch queue (KUROOBI_GGS_AUTOWATCH=auto).
     auto_watch: Vec<String>,
-    /// 終わった対局の取り込み (学習) の残り。対局の合間に 1 探索ずつ進める。
-    /// 取り込み待ちの対局。控えに書く材料 (`LearnEntry`) を一緒に持つ —
-    /// 終わってから作ろうとしても、そのころには対局の記録が消えている。
+    /// Games awaiting learning import, advanced one search at a time
+    /// between games; each carries its `LearnEntry` material (the match
+    /// record is gone by the time the import finishes).
     learn_jobs: VecDeque<(String, kuroobi::learn::BackupJob, crate::LearnEntry)>,
-    /// ローカル側の探索の停止ハンドル (GGS の自分の対局を最優先にするため、
-    /// 対局が始まったらローカルの探索を止める)。
+    /// Local search stop handle (a starting GGS game halts local
+    /// searches — clocked games come first).
     local_stop: Arc<Mutex<Option<kuroobi::midgame::StopHandle>>>,
-    /// ローカル側の稼働記録 (何か走っているときだけ通知を出す)。
+    /// Local activity record (notifies only while something runs).
     local_activity: Arc<Mutex<crate::Activity>>,
-    /// 観戦を頼んだ対局と期限。盤面が届かないまま過ぎたら、その対局は
-    /// もう終わっている (GGS は watch の失敗を返さないことがある)。
+    /// Watch requests with deadlines; no board by the deadline means
+    /// the game already ended (GGS may not report watch failures).
     pending_watch: HashMap<String, Instant>,
-    /// 持ち時間の配り方と上限 (画面から変えられる)。
+    /// Pacing and caps (screen-changeable).
     engine_cfg_pace: String,
     engine_cfg_max_move: u64,
     engine_cfg_reserve: u64,
     engine_cfg_budget_use: f64,
-    /// 相手の手番中に先読みするか (画面から変えられる)。
-    ///
-    /// **時間制限があるときにしか効かない。** `pace` が「深さ固定」なら
-    /// 探索はどのみち最後まで走るので、先に読んでも得るものが無い。
+    /// Whether to ponder (screen-changeable). Only effective under a
+    /// clock — fixed depth runs to the end regardless.
     engine_cfg_ponder: bool,
-    /// 先読みの相手。**相手の手番になった対局の番号**を入れておき、
-    /// 受信の合間に少しずつ読む。自分の手番に戻したら空にする。
-    ///
-    /// **ワーカーを使うときは見ない** (対局ごとに割り当てたワーカーが
-    /// それぞれ先読みする)。ワーカーを作れなかったときの退路として残す。
+    /// Ponder target: the match whose turn is the opponent's, read in
+    /// slices between receives; cleared when our turn returns. Unused
+    /// when workers exist (each ponders its own game) — kept as the
+    /// fallback when workers cannot be built.
     ponder_at: Option<String>,
-    /// 対局ごとの探索ワーカー。**同期対局は 2 局が同時に進む**ので、
-    /// 1 つのエンジンを取り合うと片方は必ず待たされる。
-    ///
-    /// プールとして持ち、対局が終わっても捨てない (置換表のリークを避ける)。
+    /// Per-game search workers (synchro runs two games; sharing one
+    /// engine always starves a board). Pooled and never dropped — the
+    /// leaked tables must be reused.
     workers: Vec<EngineWorker>,
-    /// ワーカー 1 つあたりのスレッド数 (`share_threads` が決める)。
-    /// 較正した nps を引くのに要る。
+    /// Threads per worker (set by `share_threads`); needed to look up
+    /// the calibrated nps.
     worker_threads: usize,
 }
 
-/// ワーカーの上限。
-///
-/// 同期対局は 2 局なのでふつうは 2 で足りる。1 つ 167 MB (既定の置換表)
-/// なので、増やすほどメモリを食う。超える対局は既存のワーカーを共有する
-/// (従来どおり待たされるだけで、壊れはしない)。
+/// Worker cap. Synchro needs 2; each costs 167 MB of tables. Games
+/// beyond the cap share existing workers (they wait; nothing breaks).
 const MAX_WORKERS: usize = 2;
 
 impl Ctx {
-    /// `mid` の探索を受け持つワーカーの番号。無ければ用意する。
-    ///
-    /// 空いているワーカーを再利用し、無ければ上限まで新しく立てる。上限に
-    /// 達していたら**いちばん古い割り当てを奪う** (共有すると待たされるが、
-    /// 壊れはしない)。
+    /// Worker index serving `mid`, creating one if needed: reuse a free
+    /// worker, else build up to the cap, else steal the oldest
+    /// assignment (sharing waits but never breaks).
     fn worker_for(&mut self, mid: &str) -> Option<usize> {
         if let Some(i) = self
             .workers
@@ -1732,8 +1665,7 @@ impl Ctx {
                 Ok(mut w) => {
                     w.mid = Some(mid.to_string());
                     self.workers.push(w);
-                    // **スレッドを配り直す。** 2 つのエンジンが同時に走るので、
-                    // 片方が全部使うと取り合いになる
+                    // Redistribute threads; two engines run at once.
                     self.share_threads();
                     return Some(self.workers.len() - 1);
                 }
@@ -1743,13 +1675,11 @@ impl Ctx {
                 }
             }
         }
-        /* 上限に達した。**空いているワーカーを流用してはいけない** —
-        `pending` は 1 つしか持てないので、別の対局の手を上書きして消す。
-        消された対局は指されないまま時計だけ減り、時間切れになる
-        (実戦で踏んだ: 2 局同時に投げて 1 局しか返らなかった)。
-
-        **終わった対局を掴んだままのワーカーがあれば奪う。** それも無ければ
-        諦めて従来の同期経路へ落とす (待たされるが、指されないよりよい)。 */
+        /* At the cap. Never repurpose a busy worker: `pending` holds
+        one search, so overwriting kills another game's move — its clock
+        then runs down unplayed (happened live: two dispatches, one
+        return). Steal a worker still holding a finished game; else
+        fall back to the shared synchronous path. */
         if let Some(i) = self
             .workers
             .iter()
@@ -1761,16 +1691,14 @@ impl Ctx {
         None
     }
 
-    /// ワーカーの数でスレッドを分ける。
-    ///
-    /// **同時に走るので足し算で決まる。** 1 つが全部使うと、もう 1 つが
-    /// 立ち上がった瞬間に取り合いになる。較正 (`nps.<スレッド数>`) も
-    /// 分けた後の数で引く必要があるので、その数を控えておく。
+    /// Split threads across workers: they run simultaneously, so the
+    /// counts add. The calibrated nps must be looked up at the
+    /// post-split count, hence it is recorded.
     fn share_threads(&mut self) {
         let total = resolve_threads(self.engine_cfg.threads);
-        /* **割り当て中の数で割る。ワーカーの数ではない。** ワーカーは対局が
-        終わっても捨てない (置換表を抱えているため) ので、`workers.len()` で
-        割ると 2 局を戦った後は単独対局でも半分しか使わなくなる。 */
+        /* Divide by assigned workers, not `workers.len()`: workers
+        survive their games, so after one synchro match a lone game
+        would otherwise get half the threads forever. */
         let active = self
             .workers
             .iter()
@@ -1787,13 +1715,10 @@ impl Ctx {
         self.worker_threads = each;
     }
 
-    /// 定石を使うかの設定を、**ワーカーにも配る**。
-    ///
-    /// GGS の対局で実際に読んでいるのはワーカーで、`Ctx.engine` は解析と
-    /// 学習しか担っていない。ここを配り忘れると、画面で切り替えても対局の
-    /// 指し手は古い設定のまま — `Job::SetUseBook` は受け側だけ書かれていて
-    /// 送る側が無く、切り替えが対局に届いていなかった (CI の dead_code が
-    /// それを指していた)。
+    /// Propagate the book setting to workers too — they do the actual
+    /// game reading (`Ctx.engine` only analyzes/learns). The receiver
+    /// side of `Job::SetUseBook` once existed with no sender, so the
+    /// toggle never reached games (CI dead_code pointed at it).
     fn set_use_book(&mut self, b: bool) {
         self.engine_cfg.use_book = b;
         if let Some(e) = self.engine.as_mut() {
@@ -1805,31 +1730,27 @@ impl Ctx {
         self.snap.lock().unwrap().engine.use_book = b;
     }
 
-    /// 対局が終わったらワーカーの割り当てを外す (エンジンは残す)。
-    ///
-    /// **外したらスレッドを配り直す。** 残った対局が全部使えるようにする。
+    /// Release a worker's assignment at game end (keeping the engine),
+    /// then redistribute threads so remaining games get everything.
     fn release_worker(&mut self, mid: &str) {
         let mut hit = false;
         for w in &mut self.workers {
             if w.mid.as_deref() == Some(mid) {
                 w.mid = None;
-                /* **走っている探索と控えを捨てる。** 終わった対局の手を
-                指しても `ERR match not found` になるだけで、その間ワーカー
-                が塞がって別の対局が指されない。 */
+                /* Discard the running search and the queue: playing
+                into a finished match only yields `ERR match not found`
+                while blocking another game's moves. */
                 w.pending = None;
                 if w.busy {
                     w.stop.stop();
                 }
-                /* **前の対局の印を残さない。** ワーカーは使い回すので、
-                消さないと次の対局へそのまま持ち越す。
-
-                - `sent_at`: 見張りが「期限を大きく超えた」と誤って言い、
-                  こちらが**わざと止めた**探索を事故として扱う
-                - `stopped_at`: 止まるのを待つ時計。残っていると、次の
-                  対局に割り当てた直後のワーカーを見捨てて作り直しかねない
-                  (置換表を捨てて数百 ms 払う)
-                - `pending_hash`: 「もう読んでいる局面か」の判定に使う。
-                  次の対局の初手とたまたま一致すると**投げずに素通り**する */
+                /* Clear every per-game marker — workers are reused:
+                - sent_at: the watchdog would treat our own deliberate
+                  stop as an overdue search
+                - stopped_at: a stale abandon-timer could scrap a
+                  freshly reassigned worker (hundreds of ms + tables)
+                - pending_hash: an accidental match with the next game's
+                  first position would skip the dispatch */
                 w.sent_at = None;
                 w.stopped_at = None;
                 w.pending_hash = 0;
@@ -1843,8 +1764,8 @@ impl Ctx {
 }
 
 impl EngineWorker {
-    /// エンジンを 1 つ抱えたスレッドを立てる。**重みの読み込みが入るので
-    /// 数百 ms かかる。** 呼ぶのは対局が始まるときで、以後は使い回す。
+    /// Spawn a thread owning one engine (weights load: hundreds of
+    /// ms); called at game start, reused afterwards.
     fn spawn(mut cfg: EngineConfig) -> Result<EngineWorker, String> {
         let res = resources();
         cfg.threads = resolve_threads(cfg.threads);
@@ -1877,11 +1798,10 @@ impl EngineWorker {
                             engine.hint_move(&board, h);
                         }
                         let dl = cap.map(|c| Instant::now() + c);
-                        /* **非数が漏れたら気付く。** 中断値が外へ出ると
-                        `stone_scale` が静かに 0 へ丸め、画面には「+0.00」と
-                        いうもっともらしい数字が出る。実戦でそれが起き、値と
-                        手が食い違ったまま X 打ちを指した。0 でなければ探索の
-                        どこかが壊れている。 */
+                        /* Notice leaked non-finites: `stone_scale`
+                        silently rounds them to a plausible "+0.00" (a
+                        live X-square blunder shipped that way). Non-zero
+                        count = something in the search is broken. */
                         let nf0 = kuroobi::engine::NON_FINITE_VALUES
                             .load(std::sync::atomic::Ordering::Relaxed);
                         let mv = engine.choose_within(&board, dl);
@@ -1928,7 +1848,7 @@ impl EngineWorker {
         })
     }
 
-    /// 指示を投げる。**返事を待たない** — 待つとこの構造の意味が無い。
+    /// Dispatch without waiting (waiting would defeat the design).
     fn send(&mut self, job: Job) {
         let counts = matches!(job, Job::Think { .. } | Job::Ponder { .. });
         if self.tx.send(job).is_ok() && counts {
@@ -1938,7 +1858,8 @@ impl EngineWorker {
 }
 
 impl Ctx {
-    /// macOS 通知。放置運用中に気付くべきイベントだけに使う。
+    /// macOS notification; only for events worth interrupting an
+    /// unattended run.
     fn notify(&self, title: &str, body: &str) {
         use tauri_plugin_notification::NotificationExt;
         let _ = self
@@ -1950,9 +1871,9 @@ impl Ctx {
             .show();
     }
     fn log(&mut self, dir: &str, text: &str) {
-        /* 診断: 画面のログは 600 行で丸めるので、切り分け用に全量を残す。
-        **実戦でしか出ない不具合を追うので release でも要る** —
-        `KUROOBI_GGS_WIRE=<path>` を渡したときだけ書く。 */
+        /* Diagnostics: the screen log truncates at 600 lines; keep the
+        full wire when `KUROOBI_GGS_WIRE=<path>` is set. Needed in
+        release too — the bugs it chases only appear live. */
         {
             use std::io::Write as _;
             let path = std::env::var("KUROOBI_GGS_WIRE")
@@ -1991,7 +1912,7 @@ impl Ctx {
             return;
         }
         let s = self.snap.lock().unwrap().clone();
-        // emit の成否は下の診断ログでだけ見る (リリースでは未使用)
+        // Emit success is only visible in the diagnostics log.
         let _emit_ok = self.app.emit("ggs", &s).is_ok();
         // 診断: 状態と emit の成否をファイルに残す (UI が更新されない場合の
         // 切り分け用。デバッグビルドのみ)。
