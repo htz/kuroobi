@@ -203,7 +203,12 @@ fn main() -> ExitCode {
             (r.best_move, Some(r.value as f32))
         } else {
             let (mv, v) = search.best_move_valued(board, depth as u32);
-            (mv, v.is_finite().then_some(v))
+            /* **石差へ直してから申告する。** 中盤探索は読み切った局面を
+            ×1000 で返す (ヒューリスティック値より必ず優先させるため) ので、
+            生値のままだと `+10000` のような数字を相手へ送ってしまう。
+            GUI 側は `stone_scale` を通しているが、ここには無かった。 */
+            let v = if v.abs() >= 999.0 { v / 1000.0 } else { v };
+            (mv, v.is_finite().then_some(v.clamp(-64.0, 64.0)))
         }
     };
 
