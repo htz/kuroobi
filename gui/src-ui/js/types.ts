@@ -178,6 +178,8 @@ export interface MatchView {
   opp_secs_used: number | null;
   /** 両者の申告値の推移 (手の順)。値は**指した側から見た石差**。 */
   eval_series: { n: number; mine: boolean; eval: number }[];
+  /** 一覧に載った順 (大きいほど新しい)。並び替えにだけ使う。 */
+  order: number;
   last_from_book: boolean;
   watch_eval: number | null;
   watch_best: string | null;

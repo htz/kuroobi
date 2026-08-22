@@ -780,16 +780,13 @@ function GgsPlay({ snap, onNav, prefs, onKifu }: {
   // 手合いにまとめる。自分の対局を先に、次に観戦
   const groups = new Map<string, MatchView[]>();
   for (const m of snap.matches) groups.set(m.base, [...(groups.get(m.base) ?? []), m]);
-  /* **新しいものが上。** id は `.48` のような連番なので、数として比べる
-     (文字列だと `.100` が `.48` より前に来る)。番号を持たないものは
-     後ろへ回す。 */
-  const num = (k: string) => {
-    const n = parseInt(k.replace(/^\./, ''), 10);
-    return Number.isFinite(n) ? n : -1;
-  };
+  /* **新しいものが上。** id の数で並べていたが、**GGS の番号は使い回される**
+     ので、新しく始めた対局や観戦が小さい番号を取ると一覧の途中に挿し込ま
+     れていた (実際にそう報告された)。載った順の通し番号で並べる。 */
+  const fresh = (k: string) => Math.max(...groups.get(k)!.map((m) => m.order));
   const keys = [...groups.keys()].sort((a, b) => {
     const mine = (k: string) => (groups.get(k)!.some((m) => m.my_color) ? 0 : 1);
-    return mine(a) - mine(b) || num(b) - num(a) || b.localeCompare(a);
+    return mine(a) - mine(b) || fresh(b) - fresh(a);
   });
   const cur = groups.has(sel) ? sel : keys[0] ?? '';
   const pair = groups.get(cur);

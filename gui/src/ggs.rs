@@ -361,6 +361,8 @@ pub struct MatchView {
     pub watch_best: Option<String>,
     pub watch_exact: bool,
     pub seen: u64,
+    /// 一覧に載った順 (大きいほど新しい)。並び替えにだけ使う。
+    pub order: u64,
 }
 
 #[derive(Clone, Serialize, serde::Deserialize, Default)]
@@ -943,6 +945,9 @@ fn load_settings() -> Option<SavedSettings> {
 }
 
 /// 既読位置の置き場 (チャット本体の隣)。
+/// 一覧に載った順を配る通し番号。
+static MATCH_ORDER: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+
 fn chat_seen_path(login: &str) -> PathBuf {
     chat_path(login).with_extension("seen")
 }
@@ -1121,6 +1126,10 @@ struct MatchState {
     watch_hash: u64,
     last_played_hash: u64, // 同一局面への二重着手防止
     seen: u64,
+    /// **一覧に載った順**。id では並べられない — GGS の番号は文字列で
+    /// `.23` < `.41` < `.8` となり、新しい対局が途中に挿し込まれる
+    /// (実際に「新しい順になっていない」と報告された)。
+    order: u64,
     /// 終局したか。終わっても一覧からは消さない (終局後の盤面から
     /// 棋譜を見たり検討へ送ったりしたいため)。閉じるのは手動。
     over: bool,
@@ -1208,6 +1217,7 @@ impl MatchState {
             watch_hash: self.watch_hash,
             last_played_hash: self.last_played_hash,
             seen: self.seen,
+            order: self.order,
             over: self.over,
             ended: self.ended.clone(),
             archive: self.archive.clone(),
@@ -1252,6 +1262,7 @@ impl MatchState {
             watch_hash: 0,
             last_played_hash: 0,
             seen: 0,
+            order: MATCH_ORDER.fetch_add(1, std::sync::atomic::Ordering::Relaxed),
             over: false,
             result: String::new(),
         }
@@ -4246,9 +4257,13 @@ fn sync_matches(ctx: &mut Ctx, matches: &HashMap<String, MatchState>) {
             watch_best: m.watch_best.clone(),
             watch_exact: m.watch_exact,
             seen: m.seen,
+            order: m.order,
         })
         .collect();
-    view.sort_by(|a, b| a.id.cmp(&b.id));
+    /* **新しいものを上に。** id で並べていたので、`.23` < `.41` < `.8` と
+    文字列順になり、新しく始めた対局や観戦が一覧の途中に挿し込まれていた。
+    載った順の通し番号で降順に並べる。 */
+    view.sort_by_key(|v| std::cmp::Reverse(v.order));
     /* **走っているワーカーの途中経過を重ねる。** どの面を読んでいるかは
     ワーカーの割り当て (`mid`) が持っている。先読み中は「予測している相手の
     手」が入るので、`busy` で意味を出し分ける。 */
