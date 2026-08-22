@@ -2,28 +2,30 @@ import React from 'react';
 import { Badge, Button, Dot } from './primitives';
 import { Col, Divider, Empty, TableHead, TableRow, picked as pickedStyle } from './layout';
 
-/* KUROOBI data — 棋譜表・評価値グラフ・対局者行・レート
- * 表は 1 行 --h-row。列幅は固定で、値は右揃え。
- * 損失（▼n）は評価値の専用列。出所列には入れない。
- */
+/* KUROOBI data — move table, eval graph, player rows, ratings.
+ * Table rows are --h-row; column widths fixed, values right-aligned.
+ * Loss markers (▼n) live in the eval column, never the source column. */
 
-/** 画面に描く石の色。エンジンの 1|2 は境目で変換して、画面まで持ち込まない
- *  （視点切り替えを入れるときに楽になる）。GGS へ送る色は ggs.ts の
- *  COLOR_CHOICES（* / O / ?）で、こちらとは別物。 */
+/** Stone color as drawn on screen. The engine's 1|2 is converted at
+ *  the boundary and never reaches the UI (eases a future viewpoint
+ *  toggle). GGS wire colors are ggs.ts's COLOR_CHOICES (* / O / ?) —
+ *  a different thing. */
 export type StoneColor = 'b' | 'w';
 export const toStoneColor = (n: 1 | 2): StoneColor => (n === 1 ? 'b' : 'w');
 
 export type Move = {
   n: number; move: string; color: StoneColor;
   score?: number; loss?: number; secs?: number;
-  /** 出所。「定石·学」は実戦から学習した枝 — 現行の棋譜表が区別しているので落とさない */
+  /** Source. "book-learned" marks branches learned from play — the
+   *  current table distinguishes it, so keep it. */
   src?: '定石' | '定石·学' | '探索' | '読切';
-/** 打てる手がなくて飛んだ手番。move は使わない */
+/** A skipped turn with no legal move; move is unused. */
   pass?: boolean;
 };
 
-  /** 棋譜の表の列。**見出しと行が同じ配列を見る。** 評価と時間は縦に読み
- *  比べる数字なので桁を揃え、出所が余りを取る。 */
+  /** Move-table columns — head and rows read the SAME array. Eval and
+ *  time are vertically compared numbers (tabular); source takes the
+ *  remainder. */
 const MOVE_COLS: Col[] = [
   { head: '#', w: 22, right: true },
   { head: '手', w: 58 },
@@ -34,12 +36,12 @@ const MOVE_COLS: Col[] = [
 
 export function KifuTable({ moves, current, onSelect, decimals = 1 }: {
   moves: Move[]; current?: number; onSelect?: (n: number) => void;
-  /** 評価値の小数桁 (設定の 表示 タブ)。 */
+  /** Eval decimal places (settings, Display tab). */
   decimals?: number;
 }) {
-  // 現在手を追う。対局中は毎手増えるので、放っておくと下へ流れて見えなくなる。
-  // scrollIntoView は祖先ごと動かしてしまう (パネル全体が流れて上の操作が
-  // 画面外へ出る) ので、枠の中だけで計算する
+  // Follow the current move: rows grow every move during play and the
+  // current one drifts out of view. scrollIntoView moves ancestors too
+  // (the whole panel scrolled), so compute within the frame.
   const box = React.useRef<HTMLDivElement>(null);
   const row = React.useRef<HTMLButtonElement>(null);
   React.useEffect(() => {
@@ -53,9 +55,8 @@ export function KifuTable({ moves, current, onSelect, decimals = 1 }: {
     <div style={{ flex: 1, display: 'flex', flexDirection: 'column', minHeight: 0 }}>
       <TableHead cols={MOVE_COLS} />
       <div className="k-scroll" ref={box} style={{ flex: 1, minHeight: 0 }}>
-        {/* **1 手も無いときに列見出しだけを残さない。**対局を始める前の
-            画面はここが必ず空で、いちばん最初に目に入る枠が「壊れている
-            のか、まだ何も無いのか」判らなかった */}
+        {/* Never show bare column headers with zero moves: pre-game
+            this frame is always empty and read as broken-or-empty. */}
         {!moves.length && (
           <span style={{ display: 'block', padding: '0 var(--sp-3)' }}>
             <Empty>まだ手がありません。</Empty>
@@ -65,17 +66,18 @@ export function KifuTable({ moves, current, onSelect, decimals = 1 }: {
           const played = m.score !== undefined;
           const isCurrent = m.n === current;
           return (
-            // 行は選択肢なので button。検討中はここを ↑↓ で送り続けるので、
-            // 表に焦点が当たること自体が前提になる（div だと Tab で回ってこない）。
-            // 評価と時間は縦に並ぶ数字の列。桁が揃わないと読み比べられない
+            // Rows are choices, so button — study mode arrows through
+            // them, which requires the table to be focusable (a div
+            // never enters the Tab ring). Eval/time are vertically
+            // compared digit columns.
             <TableRow key={m.n} cols={MOVE_COLS} on={isCurrent} muted={!played}
                       innerRef={isCurrent ? row : undefined}
                       onClick={() => onSelect?.(m.n)}>
               <span style={{ fontSize: 'var(--fs-7)', color: 'var(--sub)' }}>{m.n}</span>
               <span style={{ fontFamily: 'var(--ff-mono)' }}>
                 <StoneDot color={m.color} />
-                {/* パスは座標ではないので等幅を外し、--sub で弱く出す
-                    （着手の列に日本語が混ざるので、桁を揃えようとしない） */}
+                {/* Pass is not a coordinate: drop the monospace, dim
+                    with --sub, and don't try to align it. */}
                 {m.pass
                   ? <span style={{ fontFamily: 'inherit', fontSize: 'var(--fs-6)', color: 'var(--sub)' }}>パス</span>
                   : m.move}
@@ -94,7 +96,8 @@ export function KifuTable({ moves, current, onSelect, decimals = 1 }: {
   );
 }
 
-/* 石の点。表の行・対局者行・凡例で使う。盤の石は board.tsx の Stone */
+/* Stone dot for table rows, player rows and legends. Board stones are
+ * board.tsx's Stone. */
 export function StoneDot({ color, size = 9 }: { color: StoneColor; size?: number }) {
   const black = color === 'b';
   return <span style={{
@@ -104,11 +107,11 @@ export function StoneDot({ color, size = 9 }: { color: StoneColor; size?: number
   }} />;
 }
 
-/* 箱に入れず、盤の下の帯として全幅に置く。
- * 縦軸は石差（0 が互角、上が黒有利、下が白有利）で 8 石ごとに破線、
- * 横軸は手数で 10 手ごとに罫線と目盛。どちらも省くと「何石差でどの手か」が読めない。
- * 点は出所で塗り分ける — 定石 --gold / 読切 --text / 探索 --accent。
- */
+/* Not boxed: a full-width band under the board.
+ * Y is disc difference (0 even, up = black better) with dashes every
+ * 8 discs; X is move number with rules every 10. Drop either and "how
+ * many discs at which move" becomes unreadable. Dots are colored by
+ * source — book --gold / solved --text / search --accent. */
 export type GraphPoint = { value: number; exact?: boolean; book?: boolean };
 
 export function EvalGraph({ points, plies, cursor, blunder, busy, pov = 'b', extra, onJump, moveName, open }: {
@@ -116,30 +119,34 @@ export function EvalGraph({ points, plies, cursor, blunder, busy, pov = 'b', ext
   plies?: number;
   cursor?: number;
   blunder?: { at: number; loss: number };
-  /** 分析中。未計算と区別するために中央の文言を変える */
+  /** Analyzing; changes the center message to distinguish from
+   *  not-yet-computed. */
   busy?: boolean;
-  /** 見る側。見出しと上下の名札が入れ替わる (値は呼ぶ側が反して渡す) */
+  /** Viewpoint; swaps the heading and edge labels (values arrive
+   *  already negated by the caller). */
   pov?: 'b' | 'w';
-  /** 見出し行の右端（分析の進み具合・停止ボタンなど） */
+  /** Right edge of the heading row (analysis progress, stop button). */
   extra?: React.ReactNode;
-  /** 押した手数へ飛ぶ。現行にある操作なので落とさない */
+  /** Jump to the clicked move; an existing affordance, keep it. */
   onJump?: (n: number) => void;
-  /** その手数に指された手の名前 ("f5")。見出し行の読み取りに添える。 */
+  /** Move name at that ply ("f5"), shown in the heading readout. */
   moveName?: (n: number) => string | undefined;
-  /** いちばん低い窓 (620px 以下) で開いているか。畳む段は base.css が持つ。
-   *  開閉の釦は Toolbar 側 — 畳むと見出し行ごと消えるので中には置けない。 */
+  /** Open state in the lowest tier (<=620px); the collapsing lives in
+   *  base.css. The toggle is in the Toolbar — the heading row itself
+   *  collapses away, so it cannot live here. */
   open?: boolean;
 }) {
-  /* 触れているところの手数。**押さなくても読める**ようにする —
-     点の位置だけでは何手目の何石差か分からず、いちいち押して盤を動かす
-     しかなかった。出す場所は見出し行 (規則 19 — 描画領域に重ねない)。 */
+  /* Hovered ply, readable without clicking — dot positions alone
+     forced click-and-check. Shown in the heading row (rule 19: never
+     overlay the plot area). */
   const [hover, setHover] = React.useState<number | null>(null);
-  /* 器の実寸。**viewBox の高さを器から決める** — 幅 100% / 高さ auto だと
-     縦横比が固定され、窓を低くしても帯が 266px のまま縮まず、盤が
-     82px まで潰れていた (規則 7 は盤を最後まで残すと決めている)。
-     幅の倍率 (実寸 / W) はそのままなので、**字も余白も大きさが変わらず**
-     描画に使う縦だけが減る。ResizeObserver は ref のコールバックで張る
-     (effect の中で setState すると React Compiler の lint が落ちる)。 */
+  /* Measured size: the viewBox height derives from the container.
+     With width 100% / height auto the aspect is fixed — the band
+     stayed 266px while the board crushed to 82px (rule 7 keeps the
+     board last). The width scale (px / W) is unchanged, so text and
+     padding keep their size; only the drawable height shrinks.
+     ResizeObserver attaches in the ref callback (setState in an
+     effect trips the React Compiler lint). */
   const [box, setBox] = React.useState({ w: 0, h: 0 });
   const obs = React.useRef<ResizeObserver | null>(null);
   const attach = React.useCallback((el: HTMLDivElement | null) => {
@@ -155,17 +162,18 @@ export function EvalGraph({ points, plies, cursor, blunder, busy, pov = 'b', ext
     obs.current = o;
   }, []);
 
-  /* 見る側。**値は呼ぶ側が反して渡す** — 反す場所を 1 か所 (adapt) に
-     まとめないと、棋譜表とグラフで符号がずれる */
+  /* Viewpoint: the caller negates values (in one place, adapt) or the
+     table and graph disagree on sign. */
   const up = pov === 'b' ? '黒' : '白';
   const down = pov === 'b' ? '白' : '黒';
   const title = `評価値グラフ (${up}視点)`;
   const W = 800, L = 44, R = 54, T = 18, B = 26, STEP = 8;
-  /** 自然な高さと、これ以上は潰さない下限 */
+  /** Natural height and the floor below which we stop shrinking. */
   const NAT = 210, MIN = 120;
   const scale = box.w > 0 ? box.w / W : 0;
-  /* 上限・下限は**器の側**に px で置く (倍率は幅だけで決まるので循環しない)。
-     H を後から丸めると縦横で倍率がずれて字が歪む */
+  /* Min/max live on the container in px (scale depends on width only,
+     so no cycle). Rounding H afterwards skews the x/y scales and
+     distorts text. */
   const H = scale > 0 ? box.h / scale : NAT;
   const len = Math.max(1, plies ?? points.length - 1);
   const defined = points.filter((p): p is GraphPoint => !!p).map(p => Math.abs(p.value));
@@ -174,8 +182,8 @@ export function EvalGraph({ points, plies, cursor, blunder, busy, pov = 'b', ext
   const x = (n: number) => L + (W - L - R) * n / len;
   const y = (v: number) => T + (H - T - B) * (1 - (v + ymax) / (2 * ymax));
 
-  /* 罫線の間隔。**帯が低いと 8 石ごとでは目盛が重なって読めない** —
-     字は倍率が同じで縮まないので、間隔のほうを間引く (16 → 32 → 64 石) */
+  /* Gridline spacing: in a short band 8-disc lines collide — text
+     never shrinks, so thin the spacing instead (16 -> 32 -> 64). */
   const rowStep = [1, 2, 4, 8].map(k => STEP * k)
     .find(s => (H - T - B) * s / (2 * ymax) >= 14) ?? STEP * 8;
   const rows: number[] = [];
@@ -190,16 +198,17 @@ export function EvalGraph({ points, plies, cursor, blunder, busy, pov = 'b', ext
     pen = true;
   });
 
-  // 敗着は終盤に出るほうが多い。ラベルは 90px 前後あるので、
-  // 右に寄ったら線の左側へ回す（そのままだと viewBox から切れる）。
+  // Losing moves cluster near the end; the ~90px label flips to the
+  // line's left when close to the right edge (else it clips).
   const bx = blunder ? x(blunder.at) : 0;
   const bRight = blunder ? bx > W - R - 100 : false;
-  // 敗着の手の値が上半分にあるなら、ラベルは下端へ回す (逆も同じ)。
-  // 敗着はたいてい形勢が大きく動いた所なので、線は端に寄っていることが多い
+  // If the losing move's value sits in the top half, the label goes to
+  // the bottom (and vice versa) — blunders usually hug an edge.
   const bVal = blunder ? points[blunder.at]?.value : undefined;
   const bHigh = bVal !== undefined && bVal > 0;
 
-  /** 器の中の x から手数を出す。viewBox は器より広いので実寸の比で数え直す */
+  /** Ply from container x; the viewBox is wider than the container,
+   *  so rescale by measured size. */
   const plyAt = (e: React.MouseEvent<SVGSVGElement>) => {
     const r = e.currentTarget.getBoundingClientRect();
     const px = ((e.clientX - r.left) / r.width) * W;
@@ -209,19 +218,20 @@ export function EvalGraph({ points, plies, cursor, blunder, busy, pov = 'b', ext
   const shown = hover !== null ? points[hover] : undefined;
 
   return (
-    /* display はここに書かない。畳む段 (max-height 620) が動かすので、
-       インラインに書くと media query が届かない — base.css の警告どおり、
-       実際に「入口は出るのにグラフが消えない」状態になった */
+    /* No display here: the collapsed tier (max-height 620) toggles it,
+       and inline styles escape the media query — exactly the bug
+       base.css warns about (toggle visible, graph stuck). */
     <div className={'k-graph' + (open ? ' k-open' : '')} style={{
-      /* 縮む。盤より先に畳む側なので `none` にしない (規則 7) */
+      /* Shrinkable; this collapses before the board does, so never
+         `none` (rule 7). */
       flex: '0 1 auto', minHeight: 0,
       borderTop: '1px solid var(--border)', background: 'var(--panel)',
       padding: 'var(--sp-3) var(--sp-4) var(--sp-4)', flexDirection: 'column', gap: 'var(--sp-2)',
     }}>
-      {/* 凡例は必ずグラフの外（見出し行）に置く — 描画領域に重ねると
-          データと衝突するし、縮小されて読めなくなる */}
-      {/* 操作が乗るときは帯を高くする。--h-head (20px) のままだと押せるものが
-          罫にめり込み、当たりも文字ぶんしか無くなる (Section の aside と同じ話) */}
+      {/* The legend stays outside the plot (heading row): overlaid it
+          collides with data and shrinks unreadable. */}
+      {/* Taller band when actions sit on it — at --h-head (20px) they
+          sink into the rule (same story as Section's aside). */}
       <div style={{
         minHeight: extra ? 'var(--h-field)' : 'var(--h-head)',
         display: 'flex', alignItems: 'center', gap: 'var(--sp-3)',
@@ -231,8 +241,8 @@ export function EvalGraph({ points, plies, cursor, blunder, busy, pov = 'b', ext
         <Legend tone="gold">定石</Legend>
         <Legend tone="text">読切</Legend>
         <Legend tone="accent">探索</Legend>
-        {/* 触れているところの読み取り。**幅の決まった枠に入れる** —
-            文字数で凡例が左右に動くと、目で追う先が毎回変わる */}
+        {/* Hover readout in a fixed-width slot; variable width shoves
+            the legend around. */}
         <span style={{ minWidth: 132, color: 'var(--text)', whiteSpace: 'nowrap' }}>
           {hover !== null && shown && <>
             {hover} 手{moveName?.(hover) ? ' ' + moveName(hover) : ''}
@@ -246,15 +256,15 @@ export function EvalGraph({ points, plies, cursor, blunder, busy, pov = 'b', ext
         </span>
         {extra && <span style={{ marginLeft: 'auto', display: 'flex', alignItems: 'center', gap: 'var(--sp-3)' }}>{extra}</span>}
       </div>
-      {/* 基準の高さを**明示する**。svg を height:100% にした時点で中身の高さが
-          0 になり、auto のままだと帯が最小のまま伸びなくなる (窓が広くても
-          グラフが潰れる)。基準 = 自然な高さ、下限まで縮む */}
+      {/* Explicit base height: with svg at height:100% the content's
+          height is 0, and auto keeps the band at minimum forever.
+          Base = natural height, shrinkable to the floor. */}
       <div ref={attach} style={{
         position: 'relative', flexGrow: 0, flexShrink: 1,
         flexBasis: (scale ? NAT * scale : NAT) + 'px',
         minHeight: scale ? MIN * scale : MIN,
       }}>
-        {/* 押した位置の手数へ飛ぶ。viewBox は器より広いので、実寸の比で数え直す */}
+        {/* Jump to the clicked ply; rescale from measured size. */}
         <svg viewBox={`0 0 ${W} ${H.toFixed(2)}`} preserveAspectRatio="none"
              style={{ width: '100%', height: '100%', display: 'block' }}
              role="img" aria-label="評価値グラフ（縦軸 石差、横軸 手数）"
@@ -262,7 +272,8 @@ export function EvalGraph({ points, plies, cursor, blunder, busy, pov = 'b', ext
              onMouseLeave={() => setHover(null)}
              onClick={onJump && ((e) => { const n = plyAt(e); if (n !== null) onJump(n); })}>
           <rect x={0} y={0} width={W} height={H} rx={8} fill="var(--bg)" />
-          {/* 単位は目盛の列に入れない（+16 と重なる）。左上に逃がす */}
+          {/* The unit escapes to the top-left (it collides with +16 in
+              the tick column). */}
           <text x={10} y={12} fill="var(--sub)" fontSize={10}>石差</text>
 
           {rows.map(v => (
@@ -275,8 +286,8 @@ export function EvalGraph({ points, plies, cursor, blunder, busy, pov = 'b', ext
               </text>
             </g>
           ))}
-          {/* 上下の名札も見る側で入れ替える。値だけ反して名札を残すと、
-              白視点で「上が黒有利なのに白が良いほど上へ伸びる」になる */}
+          {/* Edge labels swap with the viewpoint too; negating values
+              alone makes white-view lines rise toward "black better". */}
           <text x={W - R + 8} y={y(ymax) + 12} fill="var(--sub)" fontSize={11}>{up}有利</text>
           <text x={W - R + 8} y={y(0) + 4} fill="var(--sub)" fontSize={11}>互角</text>
           <text x={W - R + 8} y={y(-ymax) - 6} fill="var(--sub)" fontSize={11}>{down}有利</text>
@@ -293,8 +304,9 @@ export function EvalGraph({ points, plies, cursor, blunder, busy, pov = 'b', ext
 
           {blunder && <>
             <line x1={bx} y1={T} x2={bx} y2={H - B} stroke="var(--bad)" strokeWidth={1.5} />
-            {/* 上端に固定すると、線が上に張り付いている局面 (大差) でデータと
-                重なる。**線の反対側へ回す** — 規則 52 を縦にも当てはめる */}
+            {/* Pinned to the top it collides with hugging lines (big
+                leads); flip to the line's other side — rule 52,
+                applied vertically. */}
             <text x={bRight ? bx - 7 : bx + 7} y={bHigh ? H - B - 6 : T + 11}
                   textAnchor={bRight ? 'end' : 'start'} fill="var(--bad)" fontSize={11}>
               {blunder.at} 手 敗着 ▼{blunder.loss}
@@ -311,14 +323,14 @@ export function EvalGraph({ points, plies, cursor, blunder, busy, pov = 'b', ext
                     fill={p.book ? 'var(--gold)' : p.exact ? 'var(--text)' : 'var(--accent)'}
                     stroke="var(--bg)" strokeWidth={1} />
           ))}
-          {/* 触れているところの縦線。いまいる手数の線 (--accent-dim の破線) と
-              見分けが付くよう、細い実線にする */}
+          {/* Hover vline: thin solid, distinct from the current-move
+              dashed --accent-dim line. */}
           {hover !== null && shown && (
             <line x1={x(hover)} y1={T} x2={x(hover)} y2={H - B}
                   stroke="var(--sub)" strokeWidth={1} />
           )}
         </svg>
-        {/* 線が無いグラフをそのまま出すと、壊れているのか未計算なのか分からない */}
+        {/* A lineless graph must say why, or it reads as broken. */}
         {!d && (
           <div style={{
             position: 'absolute', inset: 0, display: 'grid', placeItems: 'center',
@@ -339,24 +351,26 @@ function Legend({ tone, children }: { tone: 'gold' | 'text' | 'accent'; children
   );
 }
 
-/* 対局者行。盤の上下に密着させる。人間・エンジン・GGS で同じ部品を使う。
- * 高さは --h-field（32px）で統一 — 対局画面と GGS で行の高さが変わらないように。
+/* Player row, flush against the board; shared by human, engine and
+ * GGS. Height is --h-field (32px) everywhere so rows match across
+ * screens.
  *
- * rate に添える dev（±偏差）は GGS のときだけ渡す。偏差が大きいと数字が
- * 意味を持たないので、GGS では省かないこと。
- * name を押せるようにするのは GGS だけ（プロフィールへ飛ぶ）。
- */
-/* 盤の下の 1 行。石数と持ち時間を左右に置く。
+ * dev (±deviation) accompanies rate only for GGS — and there it is
+ * mandatory, the number means nothing without it. Only GGS makes the
+ * name clickable (profile). */
+/* One row under the board with disc counts and clocks.
  *
- * **上下に 1 人ずつ置かない。** 盤を上下から挟むと、窓の高さから盤の大きさを
- * 決める (規則 77) ときに 2 行ぶん取られるうえ、視線が盤をまたいで往復する。
- * 数は並べたほうが差が読める。手番は石を明るくして示す。
+ * Never one player above and one below: sandwiching the board costs
+ * two rows of height (rule 77) and makes the eye cross the board.
+ * Side-by-side numbers compare better; the turn is shown by
+ * brightening the stone.
  *
- * 寸法は設計の実測 — 帯は --h-bar (44px)、上に --border-weak の罫、
- * 左右 --sp-4、要素の間 20px、石は 14px、数は --fs-1 の 700。 */
+ * Dimensions measured from the design — --h-bar (44px) band,
+ * --border-weak top rule, --sp-4 sides, 20px gaps, 14px stones,
+ * --fs-1 700 numbers. */
 export function ScoreRow({ black, white, turn, meta, blackClock, whiteClock }: {
   black: number; white: number;
-  /** 手番。終局後は undefined。 */
+  /** Side to move; undefined after the game. */
   turn?: 'b' | 'w';
   meta?: React.ReactNode;
   blackClock?: string; whiteClock?: string;
@@ -382,7 +396,8 @@ export function ScoreRow({ black, white, turn, meta, blackClock, whiteClock }: {
         <Divider />
         <span>{meta}</span>
       </>}
-      {/* 時計は 1 秒ごとに書き換わる。桁が動くと石数まで揺れる */}
+      {/* Clocks rewrite every second; shifting digits shake the disc
+          counts too. */}
       {(blackClock || whiteClock) && (
         <span style={{ marginLeft: 'auto', display: 'flex', gap: 'var(--sp-4)', fontVariantNumeric: 'tabular-nums' }}>
           {blackClock && <span>黒 <b style={{ color: 'var(--text)', fontWeight: 600 }}>{blackClock}</b></span>}
@@ -402,7 +417,8 @@ export function PlayerRow({ color, name, rate, dev, meta, clock, active, discs, 
   return (
     <div style={{ display: 'flex', alignItems: 'center', gap: 'var(--sp-3)', height: 'var(--h-field)', fontSize: 'var(--fs-5)' }}>
       <StoneDot color={color} size={14} />
-      {/* 押せないときは span。button のままだと Tab で回ってくるのに何も起きない */}
+      {/* span when not clickable; a dead button still enters the Tab
+          ring. */}
       {onName
         ? <button type="button" onClick={onName} className="k-link k-sel" style={{
             border: 0, background: 'transparent', padding: 0, fontSize: 'var(--fs-4)', fontWeight: 600, color: 'var(--text)',
@@ -414,8 +430,8 @@ export function PlayerRow({ color, name, rate, dev, meta, clock, active, discs, 
           {rate.toFixed(1)}{dev !== undefined && <span style={{ opacity: .7, marginLeft: 4 }}>±{dev}</span>}
         </span>
       )}
-      {/* 石数は名前の隣に固定する。**長さの変わる meta を左に置くと、常時
-          出ている石数が左右に動いて目障りになる。** meta は右へ回す */}
+      {/* Disc count stays pinned next to the name; variable-width meta
+          goes right, or the always-on count jitters. */}
       {discs !== undefined && <span style={{ fontSize: 'var(--fs-1)', fontWeight: 700 }}>{discs}</span>}
       <span style={{ flex: 1 }} />
       {meta && <span style={{ color: 'var(--sub)', fontSize: 'var(--fs-6)' }}>{meta}</span>}
@@ -429,38 +445,39 @@ export function PlayerRow({ color, name, rate, dev, meta, clock, active, discs, 
   );
 }
 
-/* レート推移。ポップオーバーの中だけに置き、常設しない。
+/* Rating history; popover-only, never permanent.
  *
- * ここは「上がっているか下がっているか」が分かれば足る場所なので、軸は省く。
- * 目盛を出すなら EvalGraph と同じ作りにすること（罫線 3 本で軸のつもりをするのは
- * 一番悪い）。現在値は隣の RateRow が出すものとしてここには置かない。
+ * Up-or-down is all this place needs, so no axes. If ticks are ever
+ * added, build them like EvalGraph (three bare gridlines pretending
+ * to be an axis is the worst option). The current value belongs to
+ * the adjacent RateRow.
  *
- * ⚠ viewBox の幅は、入れる器の実寸幅と同じかそれより狭くすること。
- * 広すぎると svg 全体が縮小され、font-size 10 が 6px になって読めなくなる
- * （トークンの下限は --fs-7 = 10px）。このグラフはドック幅 268 を前提に 300。
- */
+ * ⚠ Keep the viewBox width at or below the container's measured
+ * width: wider shrinks the whole svg and 10px text renders at 6px
+ * (the token floor is --fs-7 = 10px). This one assumes the 268px
+ * dock, hence 300. */
 export function RateChart({ points, height = 74, width = 300, axes, dates, labels, hover, onHover }: {
   points: number[];
   height?: number;
-  /** viewBox の幅。**器の実寸に合わせる** — 300 のまま広い器へ置くと、
-   *  preserveAspectRatio="none" で横に引き伸ばされて線の太さが崩れる。 */
+  /** viewBox width — match the container: at 300 in a wide container,
+   *  preserveAspectRatio="none" stretches the stroke widths. */
   width?: number;
-  /** 軸を出す (結果画面のような主役の場所)。既定は軸なし。
+  /** Show axes (starring roles like the results screen); default off.
    *
-   *  **部品は割らない。** 仕事は同じで読ませる深さだけが違うので、
-   *  `RateChartFull` を別に作ると線の色や空状態の文言を 2 か所で
-   *  直すことになる (規則 50・56。2026-08-10 にデザイン側と決着)。 */
+   *  One component, not two: only the reading depth differs, and a
+   *  separate RateChartFull would double-maintain colors and empty
+   *  states (rules 50/56; settled with design 2026-08-10). */
   axes?: boolean;
-  /** 横軸のラベル。`axes` のときだけ使う。点と同じ数だけ渡す。 */
+  /** X labels, axes mode only; one per point. */
   dates?: string[];
-  /** 点にかざしたときに出す一言 (「8/20 17:36 · piglet · +2」)。 */
+  /** Hover text per point ("8/20 17:36 · piglet · +2"). */
   labels?: string[];
-  /** かざしている点。**外から渡す** — 下の表と同じ行を指すため。 */
+  /** Hovered index, owned outside — it must match the table below. */
   hover?: number | null;
-  /** かざした点を報せる。表の行と対応付ける側が受け取る。 */
+  /** Hover callback for whoever links points to table rows. */
   onHover?: (i: number | null) => void;
 }) {
-  // 新規プレイヤーや初対局前は必ず空。点が 1 個だと線が引けない
+  // Always empty for new players; one point cannot make a line.
   if (points.length < 2) {
     return (
       <div style={{ height, display: 'grid', placeItems: 'center', fontSize: 'var(--fs-6)', color: 'var(--sub)' }}>
@@ -468,7 +485,8 @@ export function RateChart({ points, height = 74, width = 300, axes, dates, label
       </div>
     );
   }
-  /* 軸を出すときは目盛の字ぶんを空ける。左は 4 桁のレート、下は日付 */
+  /* Axes mode reserves label space: 4-digit ratings left, dates
+     below. */
   const padL = axes ? 34 : 0, padB = axes ? 16 : 0;
   const w = width, pad = 8;
   const min = Math.min(...points), max = Math.max(...points), span = Math.max(1, max - min);
@@ -477,17 +495,16 @@ export function RateChart({ points, height = 74, width = 300, axes, dates, label
   const x = (i: number) => padL + (i / (points.length - 1)) * (w - padL);
   const xy = points.map((p, i) => [x(i), y(p)] as const);
   const last = xy[xy.length - 1];
-  /* 縦軸の刻み。**幅を固定すると潰れる。** 25 刻みで固定していたので、
-     レートが 200 動いた頃には 9 本の目盛が 180px に重なって読めなかった。
-     目盛は 5 本前後に収まる刻みを選ぶ。 */
+  /* Y step: a fixed step collapses — at 25 a 200-point swing crammed
+     nine ticks into 180px. Pick a step yielding ~5 ticks. */
   const ticks: number[] = [];
   if (axes) {
     const step = [1, 2, 5, 10, 25, 50, 100, 200, 500, 1000].find((v) => span / v <= 5) ?? 2000;
     for (let t = Math.ceil(min / step) * step; t <= max; t += step) ticks.push(t);
   }
-  /* かざした点を viewBox の座標から拾う。**実寸から割り戻す** —
-     `meet` は器と縦横比が違うと左右に余白を作るので、器の幅で割ると
-     ずれる。 */
+  /* Hovered point from viewBox coords, rescaled from measured size —
+     `meet` adds side margins when aspect ratios differ, so dividing
+     by container width drifts. */
   const pick = (e: React.MouseEvent<SVGSVGElement>): number => {
     const r = e.currentTarget.getBoundingClientRect();
     const scale = axes ? Math.min(r.width / w, r.height / height) : r.width / w;
@@ -498,11 +515,9 @@ export function RateChart({ points, height = 74, width = 300, axes, dates, label
   };
   const at = hover != null && hover >= 0 && hover < points.length ? hover : null;
   return (
-    /* **罫線は引かない (規則 56)。** 「上がっているか下がっているか」が
-       分かれば足る場所なので軸は省くと決めてあり、規則は
-       「罫線 3 本で軸のつもりをするのが一番悪い」と名指ししている。
-       目盛の無い線は「読める気がするのに読めない」だけ。現在値は隣の
-       `RateRow` が出す。目盛を出すなら `EvalGraph` と同じ作りにすること。 */
+    /* No gridlines (rule 56): axes are deliberately omitted here, and
+       the rule names three bare gridlines as the worst pretense of an
+       axis. Unlabeled lines look readable without being readable. */
     <svg viewBox={'0 0 ' + w + ' ' + height}
          preserveAspectRatio={axes ? 'xMidYMid meet' : 'none'}
          style={{ width: '100%', height, display: 'block' }}
@@ -516,7 +531,7 @@ export function RateChart({ points, height = 74, width = 300, axes, dates, label
         </g>
       ))}
       {axes && dates && dates.length === points.length && dates.map((d, i) => (
-        // 端と中央だけ。全部出すと重なって読めない
+        // Ends and center only; all of them would collide.
         (i === 0 || i === dates.length - 1 || i === (dates.length >> 1)) ? (
           <text key={i} x={x(i)} y={height - 3}
                 textAnchor={i === 0 ? 'start' : i === dates.length - 1 ? 'end' : 'middle'}
@@ -528,15 +543,16 @@ export function RateChart({ points, height = 74, width = 300, axes, dates, label
       {at != null && (() => {
         const [hx, hy] = xy[at];
         const text = labels?.[at] ?? String(points[at]);
-        // 字幅は測れないので概算 (半角 6px / 全角 11px)。端では内側へ寄せる
+        // Text width is estimated (6px half / 11px full width); edge
+        // labels nudge inward.
         const tw = [...text].reduce((n, c) => n + (c.charCodeAt(0) < 256 ? 6 : 11), 0) + 12;
         const bx = Math.min(Math.max(hx - tw / 2, padL), w - tw);
         return (
           <g pointerEvents="none">
             <line x1={hx} y1={pad} x2={hx} y2={height - padB} stroke="var(--sub)" strokeWidth={1} strokeDasharray="2 2" />
             <circle cx={hx} cy={hy} r={3.5} fill="var(--bg)" stroke="var(--accent)" strokeWidth={2} />
-            {/* **地は --card、字は --text。** 変数名を間違えると (--fg は
-                無い) SVG の既定色 = 黒で描かれ、暗い面の上で読めなくなる */}
+            {/* Ground --card, text --text. A wrong var name (--fg does
+                not exist) falls back to SVG black on a dark ground. */}
             <rect x={bx} y={0} width={tw} height={18} rx={3} fill="var(--card)" stroke="var(--border)" />
             <text x={bx + 6} y={12.5} fontSize={11} fill="var(--text)">{text}</text>
           </g>
@@ -548,21 +564,22 @@ export function RateChart({ points, height = 74, width = 300, axes, dates, label
 
 export function ResultRow({ win, draw, opponent, discs, when, note, rating, dim, picked, onHover, onClick }: {
   win: boolean;
-  /** 引き分け。勝/負の 2 値に丸めると石差 0 の対局が「負」になる */
+  /** Draw; rounding to win/lose turns 0-disc games into losses. */
   draw?: boolean;
   opponent: string;
   discs: number;
-  /** 終わった時刻 (表示用の文字列)。 */
+  /** End time (display string). */
   when?: string;
-  /** 対局の形式など、名前の次に置く補足。 */
+  /** Secondary info after the name (game format etc.). */
   note?: string;
-  /** 対局後の自分のレート。 */
+  /** Own rating after the game. */
   rating?: number | null;
-  /** 棋譜がどこにも無くて開けない対局。押せないことを見た目でも言う。 */
+  /** A game with no record anywhere; visibly unclickable. */
   dim?: boolean;
-  /** グラフでかざしている対局。**表とグラフで同じ 1 局を指すため。** */
+  /** Game hovered in the graph — table and graph point at the same
+   *  one. */
   picked?: boolean;
-  /** この行にかざしたことを報せる (グラフ側の点を光らせる)。 */
+  /** Hover callback (lights the graph's dot). */
   onHover?: (on: boolean) => void;
   onClick?: () => void;
 }) {
@@ -597,13 +614,13 @@ export function ResultRow({ win, draw, opponent, discs, when, note, rating, dim,
     display: 'flex', gap: 'var(--sp-2)', height: 'var(--h-field)', alignItems: 'center',
     width: '100%', fontSize: 'var(--fs-5)', borderBottom: '1px solid var(--border-weak)',
     padding: '0 var(--sp-2)', textAlign: 'left', color: 'var(--text)',
-    // 選ばれている行の見せ方は 1 つに揃える (layout.tsx の picked)
+    // Selection styling is unified (layout.tsx's picked).
     ...(picked ? pickedStyle(true) : null),
   };
   const hov = onHover
     ? { onMouseEnter: () => onHover(true), onMouseLeave: () => onHover(false) }
     : {};
-  // 押せないときは span。button のままだと Tab で回ってくるのに何も起きない
+  // span when not clickable; a dead button still enters the Tab ring.
   return onClick && !dim
     ? <button type="button" className="k-row" onClick={onClick} title="検討で開く" {...hov}
               style={{ ...style, border: 0, background: 'transparent', cursor: 'pointer' }}>{body}</button>
@@ -612,35 +629,35 @@ export function ResultRow({ win, draw, opponent, discs, when, note, rating, dim,
 
 export { Badge, Dot };
 
-/* 手数を辿る帯。盤の下に全幅で置く。
+/* Move scrubber, full width under the board.
  *
- * 評価値グラフでも飛べるが、あれは**分析したあと**にしか点が無い。
- * 読み込んだだけの棋譜を辿る道が「戻る／進む」の連打しか無かった。
+ * The eval graph can jump too, but only after analysis; a freshly
+ * loaded record had nothing but back/forward mashing.
  *
- * 掴めるように見えるものは本当に掴めること (掴めるのに動かないのは
- * 無いより悪い) — 押しても掴んで滑らせても同じところへ行く。
- */
+ * What looks draggable must drag — click and drag both land on the
+ * same ply. */
 export function MoveScrub({ plies, cursor, blunder, onSeek, nav = true }: {
-  /** 全手数。0 なら帯は出さない */
+  /** Total plies; 0 hides the strip. */
   plies: number;
   cursor: number;
-  /** 敗着。盤に触らずに場所が分かるように赤い印を打つ */
+  /** Losing move, marked red so it is findable without touching the
+   *  board. */
   blunder?: { at: number; loss: number };
   onSeek: (n: number) => void;
-  /** 送りの釦を帯に出すか。**呼ぶ側が既に送りの行を持っているときは false**
-   *  — 棋譜ビューアは絵 (§9) が帯の上に 5 つ並べる形なので、そちらに任せる。
-   *  既定で出すのは、帯だけ置くと 1 手ずつ動かせなくなるため。 */
+  /** Show step buttons in the strip. false when the caller already
+   *  has a step row (the record viewer's §9 layout). Default on —
+   *  the strip alone loses single-step movement. */
   nav?: boolean;
 }) {
-  /* 送りの釦は**この帯の左端**。設計 §2 は 32px の帯に 24px の四角 4 つを
-     溝 4px で並べ、ツールバーからは外している。**辿る道具を 1 か所に
-     まとめる** — 帯で掴んで滑らせるのと 1 手ずつ送るのは同じ操作で、
-     離して置くと ▶ を押した結果が別の場所 (帯の丸) に出る。 */
+  /* Step buttons sit at this strip's left edge (design §2: four 24px
+     squares in the 32px strip, out of the toolbar). Navigation tools
+     stay together — dragging and stepping are the same operation, and
+     apart, ▶'s effect appears somewhere else. */
   const box = React.useRef<HTMLDivElement>(null);
   if (plies <= 0) return null;
 
   const at = (n: number) => (n / plies) * 100;
-  // 押した場所・滑らせた場所からいちばん近い手数へ。端は丸めずに 0 と plies
+  // Snap click/drag to the nearest ply; ends clamp to 0 and plies.
   const seekAt = (clientX: number) => {
     const r = box.current?.getBoundingClientRect();
     if (!r || r.width <= 0) return;
@@ -648,7 +665,7 @@ export function MoveScrub({ plies, cursor, blunder, onSeek, nav = true }: {
     onSeek(Math.round(t * plies));
   };
 
-  // 刻みは 1 手ごと。10 手ごとだけ長くして数字を添える
+  // Ticks every ply; every 10th is longer and numbered.
   const ticks = Array.from({ length: plies + 1 }, (_, i) => i);
 
   const step = (n: number) => onSeek(Math.max(0, Math.min(plies, n)));
@@ -674,12 +691,13 @@ export function MoveScrub({ plies, cursor, blunder, onSeek, nav = true }: {
            }}
            onPointerMove={(e) => { if (e.buttons & 1) seekAt(e.clientX); }}
            style={{
-             // 高さは 5 段のうちの --h-field。10 手ごとの数字は帯の外 (下の
-             // 12px の行) に置くので、32px でも刻みと掴む丸 (16px) は収まる
+             // Height is --h-field; the every-10 numbers live outside
+             // (the 12px row below), so ticks and the 16px thumb fit
+             // in 32px.
              position: 'relative', height: 'var(--h-field)', flex: 1, minWidth: 0,
              cursor: 'pointer', touchAction: 'none', userSelect: 'none',
            }}>
-        {/* 溝と、いまいるところまでの塗り */}
+        {/* The groove and the filled-so-far part. */}
         <div style={{
           position: 'absolute', left: 0, right: 0, top: 11, height: 2,
           background: 'var(--track)', borderRadius: 1,
@@ -700,7 +718,7 @@ export function MoveScrub({ plies, cursor, blunder, onSeek, nav = true }: {
           );
         })}
 
-        {/* 敗着。刻みより太く・赤く、上まで伸ばす */}
+        {/* Losing move: thicker, red, extended upward. */}
         {blunder && blunder.at <= plies && (
           <div title={`${blunder.at} 手 敗着 ▼${blunder.loss}`} style={{
             position: 'absolute', left: at(blunder.at) + '%', top: 3,
@@ -716,8 +734,8 @@ export function MoveScrub({ plies, cursor, blunder, onSeek, nav = true }: {
           }}>{i}</span>
         ))}
 
-        {/* 掴む丸。盤の石と同じ色づかいにすると盤面と読み違えるので、
-            面は --card・縁は --accent にして「操作するもの」に見せる */}
+        {/* The thumb: stone-like coloring would read as a board piece,
+            so --card fill + --accent ring says "control". */}
         <div style={{
           position: 'absolute', left: at(cursor) + '%', top: 4,
           width: 16, height: 16, marginLeft: -8, borderRadius: '50%',
@@ -729,27 +747,26 @@ export function MoveScrub({ plies, cursor, blunder, onSeek, nav = true }: {
   );
 }
 
-/* ---------------- 申告値の推移 ----------------
+/* ---------------- Reported-eval trend ----------------
  *
- * 対局中の 2 人が「自分は何石勝っていると思っているか」を並べる。
+ * Both players' "how many discs I think I'm winning by", side by side.
  *
- * **両方を自分から見た石差へ揃える。** 申告値は指した側から見た値なので、
- * 生のまま重ねると 2 本が鏡像になり、読むのに毎回頭の中で反転させることに
- * なる。揃えれば、2 本が離れているところがそのまま「読みが食い違っている
- * 場所」になる。
+ * Both lines are normalized to MY viewpoint: reported values are from
+ * the mover's side, and raw overlay makes mirror images you must flip
+ * in your head. Normalized, the gap between lines IS where the
+ * players disagree.
  *
- * **目盛を出す以上は読める形にする (規則 56)。** 罫線 3 本で軸のつもりを
- * するのが一番悪い。縦は石差の目盛、横は手数、かざせばその手の両者の値を
- * 出す。線 2 本だけの版を一度出してしまったので、ここは省かない。
- */
+ * If ticks exist they must be readable (rule 56). Y is disc-diff
+ * ticks, X is plies, hover shows both values at that move. A
+ * two-bare-lines version shipped once; never again. */
 export function EvalTrend({ points, height = 96 }: {
-  /** `{ x: 手数, mine: 自分の値 | null, opp: 相手の値 | null }` (自分視点)。 */
+  /** `{ x: ply, mine: value | null, opp: value | null }` (own view). */
   points: { x: number; mine: number | null; opp: number | null }[];
   height?: number;
 }) {
   const [at, setAt] = React.useState<number | null>(null);
   const has = points.some((p) => p.mine != null || p.opp != null);
-  // **1 点でも描く。** 点を打つようにしたので、2 点そろうまで待つ必要がない
+  // Draw even a single point; dots removed the two-point wait.
   if (!points.length || !has) {
     return (
       <div style={{
@@ -761,9 +778,9 @@ export function EvalTrend({ points, height = 96 }: {
     );
   }
   const w = 300, pad = 10, padL = 26, padB = 14;
-  /* **縦は必ず 0 を挟む。** 勝ち負けの境目が枠の外に出ると、線がどちら側に
-     居るのかが分からない。±8 石は最低限見せて、細かい揺れで縦に暴れるのも
-     防ぐ。目盛が 5 本前後に収まる刻みを選ぶ (`RateChart` と同じ考え)。 */
+  /* Y always brackets 0 — with the win/lose boundary off-frame you
+     cannot tell which side a line is on. Show at least ±8 discs to
+     damp jitter; pick a ~5-tick step (same idea as RateChart). */
   const vals = points.flatMap((p) => [p.mine, p.opp]).filter((v): v is number => v != null);
   const lim = Math.max(8, ...vals.map((v) => Math.abs(v)));
   const step = [2, 4, 8, 16, 32].find((v) => lim / v <= 2.5) ?? 32;
@@ -774,11 +791,11 @@ export function EvalTrend({ points, height = 96 }: {
   const x = (i: number) => padL + (i / span) * (w - padL - pad);
   const y = (v: number) => (height - padB) / 2 - (v / lim) * ((height - padB) / 2 - pad);
 
-  /** その人が申告した手だけを繋ぐ。
+  /** Connect only the plies that player reported.
    *
-   * **値の無い手で線を切ってはいけない。** 手番は交互なので、自分の値と
-   * 相手の値は 1 手おきにしか無い。切る作りにしたら**どの区間も繋がらず、
-   * 点だけが並んだ**。無い手は飛ばして、その人の申告どうしを繋ぐ。 */
+   * Never cut the line at missing values: turns alternate, so each
+   * side has values only every other ply — cutting left nothing but
+   * dots. Skip the gaps and connect that player's own reports. */
   const path = (pick: (p: (typeof points)[number]) => number | null) => {
     let d = '';
     let pen = false;
@@ -791,7 +808,7 @@ export function EvalTrend({ points, height = 96 }: {
     return d;
   };
 
-  /** かざした手を viewBox の座標から拾う (`preserveAspectRatio="none"`)。 */
+  /** Hovered ply from viewBox coords (preserveAspectRatio="none"). */
   const pickAt = (e: React.MouseEvent<SVGSVGElement>) => {
     const r = e.currentTarget.getBoundingClientRect();
     const vx = ((e.clientX - r.left) / r.width) * w;
@@ -804,7 +821,8 @@ export function EvalTrend({ points, height = 96 }: {
 
   return (
     <div>
-      {/* **凡例は要る。** 色だけで「自分」「相手」を当てさせない */}
+      {/* The legend is required; never make color alone say who is
+          who. */}
       <div style={{
         display: 'flex', gap: 'var(--sp-3)', alignItems: 'center',
         fontSize: 'var(--fs-7)', color: 'var(--sub)', height: 'var(--h-head)',
@@ -827,7 +845,7 @@ export function EvalTrend({ points, height = 96 }: {
                   fontSize={9} fill="var(--sub)">{t > 0 ? `+${t}` : t}</text>
           </g>
         ))}
-        {/* 横軸は端と中央だけ。全部出すと重なって読めない */}
+        {/* X labels at ends and center only. */}
         {[0, points.length >> 1, points.length - 1].map((i, k) => (
           <text key={k} x={x(i)} y={height - 3}
                 textAnchor={k === 0 ? 'start' : k === 2 ? 'end' : 'middle'}
@@ -837,10 +855,10 @@ export function EvalTrend({ points, height = 96 }: {
               strokeWidth={1.5} strokeLinejoin="round" vectorEffect="non-scaling-stroke" />
         <path d={path((p) => p.mine)} fill="none" stroke="var(--accent)"
               strokeWidth={1.5} strokeLinejoin="round" vectorEffect="non-scaling-stroke" />
-        {/* **点も打つ。** 線は 2 点そろって初めて現れるので、点だけだと
-            開局から数手のあいだ何も描かれない (自分の 2 手目が来るまで
-            自分の線が出ない = 実質 4 手目まで空っぽ)。1 つ目の申告値から
-            見えるようにする。 */}
+        {/* Dots too: a line needs two points, so the opening plies
+            would render nothing (own line absent until the second own
+            report = blank through ply 4). Dots show from the first
+            report. */}
         {points.map((p, i) => (
           <g key={i}>
             {p.opp != null && (
