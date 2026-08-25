@@ -190,6 +190,7 @@ fn main() {
     let mut nn = Nnue::new(EGAROUCID_PATTERNS);
     nn.load(&nnue_path).expect("load nnue");
     nn.quantize();
+    nn.build_incremental_table(); // the accumulator this bench times
     nn.build_precision_variants(); // i32/f32 tables for the comparison
 
     // MSE comparison: f32 forward vs i16 quantized accumulator, over val.

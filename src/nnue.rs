@@ -117,6 +117,17 @@ const H2: usize = 2 * H;
 /// so 32 passes them untouched and only stops runaways.
 const FT_CLAMP: f32 = 32.0;
 
+/// How much of the transformer `quantize` will let saturate int8 before it
+/// halves the scale instead.
+///
+/// The two bounds on the scale pull opposite ways — the int16 accumulator
+/// wants it fine, a byte per weight wants it coarse — and the tail is thin
+/// enough that clipping wins by an order of magnitude: on the current model
+/// the accumulator's scale clips 0.004% of 39M cells for 0.005 discs of
+/// held-out error, where the next scale down clips nothing and costs 0.047.
+/// A model whose tail outgrows this budget gets the coarser scale.
+const FT_CLIP_BUDGET: f32 = 1e-4;
+
 /// Disc-count table width (0..=64), same as the linear evaluator's.
 const NUM_TABLE_SIZE: usize = 65;
 
@@ -159,6 +170,29 @@ const HALF: usize = H / 2;
 /// than every other parameter's and warm-start fine-tuning diverges
 /// (val 35.5 → 66 in two epochs at lr 5e-4).
 const PROD_CLAMP: f32 = 16.0;
+
+/// Steps per disc in the int8 activations the head's first layer reads.
+///
+/// This sets both the resolution and where the lanes pin: the step is
+/// `1 / ACT_UNITS` discs and anything past `255 / ACT_UNITS` saturates. Both
+/// matter and they trade directly against each other, because their product
+/// is the byte. Measured against solved values on the first epoch's model,
+/// where the f32 head scores 5.751 discs, reading the lanes as 0..127:
+///
+/// | steps/disc | step | pin | MAE |
+/// |---:|---:|---:|---:|
+/// | 1 | 1.0 | 127 | 9.500 |
+/// | 4 | 0.25 | 31.75 | 6.327 |
+/// | 8 | 0.125 | 15.9 | 5.868 |
+/// | 16 | 0.0625 | 7.94 | 7.092 |
+///
+/// Resolution dominates until the pin cuts into the distribution (positive
+/// lanes: p50 4.0 / p90 11.6 / p99 26.2 discs), and the optimum is where the
+/// two costs meet. Reading the lanes as 0..255 instead — which the ReLU
+/// makes free, see [`activations_i8`] — doubles the pin at no cost in step,
+/// so the meeting point moves and 8 keeps an eighth-disc step with the pin
+/// out at 31.9.
+const ACT_UNITS: f32 = 16.0;
 
 /// Mover's disc count = index into the disc-count table.
 #[inline]
@@ -203,34 +237,40 @@ unsafe fn acc_row_addsub(acc: &mut [i16; H2], new: *const i16, old: *const i16) 
 /// associative, so the result is bit-identical — and the rows for later masks
 /// are prefetched while the current ones are being added.
 ///
+/// Rows are int8 and the accumulator int16: what a leaf costs is the number
+/// of cache lines it drags in, not the arithmetic on them, so a byte per
+/// weight is worth an extra widening instruction per vector. `vaddw` widens
+/// and adds in one op, so the arithmetic is the same count as int16 rows
+/// against half the loads.
+///
 /// # Safety
 /// Every `mask_off[m] + raw[m]` must index a valid feature, i.e.
 /// `(mask_off[m] + raw[m]) * H + H <= ft_len`.
 #[inline]
 unsafe fn accumulate_rows(
     acc: &mut [i16; H],
-    ft: *const i16,
+    ft: *const i8,
     mask_off: &[u32],
     raw: &[u16; MAX_MASKS],
     n: usize,
 ) {
     #[inline(always)]
-    unsafe fn row(
-        ft: *const i16,
-        mask_off: &[u32],
-        raw: &[u16; MAX_MASKS],
-        m: usize,
-    ) -> *const i16 {
+    unsafe fn row(ft: *const i8, mask_off: &[u32], raw: &[u16; MAX_MASKS], m: usize) -> *const i8 {
         ft.add((*mask_off.get_unchecked(m) as usize + *raw.get_unchecked(m) as usize) * H)
     }
 
     #[cfg(all(target_arch = "aarch64", not(feature = "nnue-scalar")))]
     {
         use std::arch::aarch64::*;
-        /* One row = H lanes = `VEC` 128-bit vectors. H must not be
-        hard-coded: a fixed `[int16x8_t; 2]` once summed only the first 16
-        lanes of an H=64 net. The corruption is silent — the MSE path does
-        not go through here — and showed up only head-to-head. */
+        /* One row = H lanes = `VEC` int16 accumulator vectors, loaded as
+        `VEC / 2` 128-bit byte vectors. H must not be hard-coded: a fixed
+        `[int16x8_t; 2]` once summed only the first 16 lanes of an H=64 net.
+        The corruption is silent — the MSE path does not go through here —
+        and showed up only head-to-head. Every selectable width is a whole
+        number of byte vectors, which is what lets the loop below have no
+        lane tail; the assertion is here so adding one that is not fails to
+        compile rather than quietly dropping its last lanes. */
+        const _: () = assert!(H.is_multiple_of(16), "H must be a multiple of 16");
         const VEC: usize = H.div_ceil(8);
         /* Independent partial accumulators break the dependency chain, but
         they cost registers: `PARTS * VEC` of the 32 the machine has, and the
@@ -239,6 +279,8 @@ unsafe fn accumulate_rows(
         this has always used), two at 64. Letting it grow instead spills the
         partials, and then every row load pays for a reload. */
         const PARTS: usize = if 16 / VEC == 0 { 1 } else { 16 / VEC };
+        /* 16-byte loads per row. */
+        const CHUNKS: usize = H / 16;
         let mut p: [[int16x8_t; VEC]; PARTS] = [[vdupq_n_s16(0); VEC]; PARTS];
         const PREFETCH_AHEAD: usize = 8;
 
@@ -249,7 +291,7 @@ unsafe fn accumulate_rows(
                     let ptr = row(ft, mask_off, raw, m + PREFETCH_AHEAD + k) as *const u8;
                     // One prefetch per cache line the row spans.
                     let mut off = 0usize;
-                    while off < H * 2 {
+                    while off < H {
                         let q = ptr.add(off);
                         std::arch::asm!("prfm pldl1keep, [{p}]", p = in(reg) q, options(nostack, readonly));
                         off += 64;
@@ -258,19 +300,16 @@ unsafe fn accumulate_rows(
             }
             for (k, part) in p.iter_mut().enumerate() {
                 let r = row(ft, mask_off, raw, m + k);
-                for (v, slot) in part.iter_mut().enumerate() {
-                    if (v + 1) * 8 <= H {
-                        *slot = vaddq_s16(*slot, vld1q_s16(r.add(v * 8)));
-                    }
+                for c in 0..CHUNKS {
+                    let v = vld1q_s8(r.add(c * 16));
+                    part[2 * c] = vaddw_s8(part[2 * c], vget_low_s8(v));
+                    part[2 * c + 1] = vaddw_high_s8(part[2 * c + 1], v);
                 }
             }
             m += PARTS;
         }
         // Fold the partials, then the tail masks.
         for v in 0..VEC {
-            if (v + 1) * 8 > H {
-                break;
-            }
             let mut s = p[0][v];
             for part in p.iter().skip(1) {
                 s = vaddq_s16(s, part[v]);
@@ -278,20 +317,10 @@ unsafe fn accumulate_rows(
             let a = vaddq_s16(vld1q_s16(acc.as_ptr().add(v * 8)), s);
             vst1q_s16(acc.as_mut_ptr().add(v * 8), a);
         }
-        // Lanes beyond a multiple of 8 are handled by the scalar tail.
-        if !H.is_multiple_of(8) {
-            let done = (H / 8) * 8;
-            for mm in 0..m {
-                let r = row(ft, mask_off, raw, mm);
-                for h in done..H {
-                    *acc.get_unchecked_mut(h) = (*acc.get_unchecked(h)).wrapping_add(*r.add(h));
-                }
-            }
-        }
         while m < n {
             let r = row(ft, mask_off, raw, m);
             for h in 0..H {
-                *acc.get_unchecked_mut(h) = (*acc.get_unchecked(h)).wrapping_add(*r.add(h));
+                *acc.get_unchecked_mut(h) = (*acc.get_unchecked(h)).wrapping_add(*r.add(h) as i16);
             }
             m += 1;
         }
@@ -301,7 +330,7 @@ unsafe fn accumulate_rows(
         for m in 0..n {
             let r = row(ft, mask_off, raw, m);
             for h in 0..H {
-                *acc.get_unchecked_mut(h) = (*acc.get_unchecked(h)).wrapping_add(*r.add(h));
+                *acc.get_unchecked_mut(h) = (*acc.get_unchecked(h)).wrapping_add(*r.add(h) as i16);
             }
         }
     }
@@ -531,39 +560,57 @@ impl AdamView {
     }
 }
 
-/// Post-ReLU accumulator lanes in disc units, from the quantized state the
-/// read-out already holds (`acc` without bias, `fb` the per-stage bias).
+/// Post-ReLU accumulator lanes packed to int8, `ACT_UNITS` per disc, for the
+/// head's first layer.
+///
+/// The layer is sixteen dot products of H against a matrix, sixteen times the
+/// read-out's one, and it is the largest single arithmetic block on the leaf
+/// path — 24% of search speed once the head carries weight. int8 on both
+/// sides is what unlocks `sdot`, which lands sixteen products per instruction
+/// where f32 lands four.
+///
+/// The lanes are non-negative after the ReLU, so a byte holds 0..255 rather
+/// than 0..127 — twice the range for the same step. `sdot` needs signed
+/// bytes, so they are stored biased by -128 (the saturating *unsigned*
+/// narrow clamps at 255, and flipping the top bit is the subtraction). The
+/// bias is a constant per row of the layer, undone there with one multiply
+/// against that row's weight sum; see [`Nnue::mlp_l1_rowsum`].
+///
+/// Anything past `255 / ACT_UNITS` discs pins.
 #[inline]
-fn activations_q(acc: &[i16], fb: &[i16], ft_scale: f32) -> [f32; H] {
-    let inv = 1.0 / ft_scale;
-    let mut a = [0.0f32; H];
+fn activations_i8(acc: &[i16], fb: &[i16], shift: i16) -> [i8; H] {
+    let mut a = [0i8; H];
     #[cfg(all(target_arch = "aarch64", not(feature = "nnue-scalar")))]
     // SAFETY: `acc` and `fb` are both at least H long (callers slice them to
-    // exactly H), and every load below stays under H.
+    // exactly H), and every load and store below stays under H.
     unsafe {
         use std::arch::aarch64::*;
         // i16 add, as in `readout_dot`: the accumulator invariant keeps the
         // biased sum inside i16, so the narrow add cannot wrap.
-        let inv4 = vdupq_n_f32(inv);
         let zero = vdupq_n_s16(0);
-        let mut h = 0;
-        while h + 8 <= H {
+        let sh = vdupq_n_s16(-shift);
+        let flip = vdupq_n_u8(0x80);
+        let relu_shift = |o: usize| {
             let s = vaddq_s16(
-                vld1q_s16(acc.as_ptr().add(h)),
-                vld1q_s16(fb.as_ptr().add(h)),
+                vld1q_s16(acc.as_ptr().add(o)),
+                vld1q_s16(fb.as_ptr().add(o)),
             );
-            let r = vmaxq_s16(s, zero); // ReLU
-            let lo = vcvtq_f32_s32(vmovl_s16(vget_low_s16(r)));
-            let hi = vcvtq_f32_s32(vmovl_high_s16(r));
-            vst1q_f32(a.as_mut_ptr().add(h), vmulq_f32(lo, inv4));
-            vst1q_f32(a.as_mut_ptr().add(h + 4), vmulq_f32(hi, inv4));
-            h += 8;
+            vshlq_s16(vmaxq_s16(s, zero), sh)
+        };
+        let mut h = 0;
+        while h + 16 <= H {
+            let lo = vqmovun_s16(relu_shift(h));
+            let hi = vqmovun_s16(relu_shift(h + 8));
+            let u = vcombine_u8(lo, hi);
+            vst1q_s8(
+                a.as_mut_ptr().add(h),
+                vreinterpretq_s8_u8(veorq_u8(u, flip)),
+            );
+            h += 16;
         }
         while h < H {
-            let v = *acc.get_unchecked(h) as i32 + *fb.get_unchecked(h) as i32;
-            if v > 0 {
-                *a.get_unchecked_mut(h) = v as f32 * inv;
-            }
+            let v = (*acc.get_unchecked(h) as i32 + *fb.get_unchecked(h) as i32).max(0);
+            *a.get_unchecked_mut(h) = ((v >> shift).min(255) - 128) as i8;
             h += 1;
         }
         a
@@ -571,12 +618,49 @@ fn activations_q(acc: &[i16], fb: &[i16], ft_scale: f32) -> [f32; H] {
     #[cfg(any(not(target_arch = "aarch64"), feature = "nnue-scalar"))]
     {
         for (h, x) in a.iter_mut().enumerate() {
-            let v = acc[h] as i32 + fb[h] as i32;
-            if v > 0 {
-                *x = v as f32 * inv;
-            }
+            let v = (acc[h] as i32 + fb[h] as i32).max(0);
+            *x = ((v >> shift).min(255) - 128) as i8;
         }
         a
+    }
+}
+
+/// `Σ row[h] · x[h]` over H int8 lanes, into i32.
+///
+/// `sdot` multiplies sixteen byte pairs and accumulates them into four i32
+/// lanes in one instruction, so a row of H costs H/16 of them. Both sides are
+/// bounded by 127 and H is at most 128, so the sum cannot leave i32.
+#[inline(always)]
+fn dot_i8(row: &[i8], x: &[i8; H]) -> i32 {
+    debug_assert!(row.len() >= H);
+    #[cfg(all(target_arch = "aarch64", not(feature = "nnue-scalar")))]
+    // SAFETY: the assert above bounds every load by H, and `x` is exactly H.
+    unsafe {
+        use std::arch::aarch64::*;
+        let mut s = vdupq_n_s32(0);
+        let mut h = 0;
+        while h + 16 <= H {
+            s = vdotq_s32(
+                s,
+                vld1q_s8(x.as_ptr().add(h)),
+                vld1q_s8(row.as_ptr().add(h)),
+            );
+            h += 16;
+        }
+        let mut acc = vaddvq_s32(s);
+        while h < H {
+            acc += *x.get_unchecked(h) as i32 * *row.get_unchecked(h) as i32;
+            h += 1;
+        }
+        acc
+    }
+    #[cfg(any(not(target_arch = "aarch64"), feature = "nnue-scalar"))]
+    {
+        let mut acc = 0i32;
+        for h in 0..H {
+            acc += x[h] as i32 * row[h] as i32;
+        }
+        acc
     }
 }
 
@@ -877,10 +961,28 @@ pub struct Nnue {
     /// maintains both perspectives, halving the loads in the hot loop.
     ftc_i16: Vec<i16>,
     /// Split (non-interleaved) copies for the leaf-rebuild path, which reads
-    /// only the side to move: `ft_b_i16[feature*H..]` / `ft_w_i16[feature*H..]`.
-    /// Halves the bytes touched per mask versus striding the interleaved table.
-    ft_b_i16: Vec<i16>,
-    ft_w_i16: Vec<i16>,
+    /// only the side to move: `ft_b_i8[feature*H..]` / `ft_w_i8[feature*H..]`.
+    /// Halves the bytes touched per mask versus striding the interleaved
+    /// table, and a byte per weight halves them again: at H=64 a row is then
+    /// one cache line, which is what H=32 already was.
+    ft_b_i8: Vec<i8>,
+    ft_w_i8: Vec<i8>,
+    /// Cells of the transformer that saturated int8 at the chosen scale, and
+    /// the total, so a training run can see what its weights cost in the
+    /// table the search reads (see [`Nnue::ft_clipped`]).
+    ft_clipped: usize,
+    /// Whether the optional read-out terms carry any weight at all. Set by
+    /// `quantize`; see [`Nnue::extras`] for what they cost when they do.
+    has_pw: bool,
+    has_head: bool,
+    /// The head's first layer in int8, with the right shift that packs the
+    /// accumulator into the matching scale and the factor that takes the i32
+    /// dot product back to disc units.
+    mlp_l1_w_i8: Vec<i8>,
+    /// Per-row weight sums, which undo the -128 bias the activations carry.
+    mlp_l1_rowsum: Vec<i32>,
+    mlp_l1_dequant: f32,
+    act_shift: i16,
     ft_bias_i16: Vec<i16>,
     out_w_i16: Vec<i16>,
     pw_i16: Vec<i16>,
@@ -951,8 +1053,15 @@ impl Nnue {
             mlp_out_w: vec![0.0; STAGE_COUNT * MLP_H2],
             pw: vec![0.0; STAGE_COUNT * HALF],
             ftc_i16: Vec::new(),
-            ft_b_i16: Vec::new(),
-            ft_w_i16: Vec::new(),
+            ft_b_i8: Vec::new(),
+            ft_w_i8: Vec::new(),
+            ft_clipped: 0,
+            has_pw: false,
+            has_head: false,
+            mlp_l1_w_i8: Vec::new(),
+            mlp_l1_rowsum: vec![0; MLP_H1],
+            mlp_l1_dequant: 0.0,
+            act_shift: 0,
             ft_bias_i16: vec![0; STAGE_COUNT * H],
             out_w_i16: vec![0; STAGE_COUNT * H],
             pw_i16: vec![0; STAGE_COUNT * HALF],
@@ -1051,6 +1160,11 @@ impl Nnue {
     }
 
     pub fn quantize(&mut self) {
+        // A term whose weights are all zero contributes nothing; see
+        // [`Nnue::extras`] for what skipping it is worth.
+        self.has_pw = self.pw.iter().any(|&v| v != 0.0);
+        self.has_head = self.mlp_out_w.iter().any(|&v| v != 0.0);
+
         let ft_max = self.ft.iter().fold(1e-6f32, |m, &v| m.max(v.abs()));
         let w_max = self.out_w.iter().fold(1e-6f32, |m, &v| m.max(v.abs()));
 
@@ -1061,8 +1175,33 @@ impl Nnue {
         resolution 54% on the current model without touching training. */
         let bias_max = self.ft_bias.iter().fold(0.0f32, |m, &v| m.max(v.abs()));
         let room = 32_000.0 / (self.n_masks as f32 * ft_max + bias_max);
-        let ft_scale = (2.0f32).powi(room.log2().floor() as i32).max(1.0);
-        let acc_max = (self.n_masks as f32 * ft_max + bias_max) * ft_scale;
+        let mut ft_scale = (2.0f32).powi(room.log2().floor() as i32).max(1.0);
+
+        /* The table is int8, so the same scale also decides how many weights
+        saturate. Those two bounds pull opposite ways: the accumulator wants
+        the finest scale it can hold, a byte per weight wants the coarsest
+        the tail of the distribution needs. Clipping a few extreme cells is
+        much the cheaper of the two -- on the current model, scale 16 clips
+        0.004% of 39M cells and costs 0.005 discs of held-out error, where
+        dropping to scale 8 to clip nothing costs 0.047 -- so keep the
+        accumulator's scale and back off only if the tail is fat enough to
+        matter. */
+        let clip_fraction = |s: f32| {
+            let n = self
+                .ft
+                .iter()
+                .filter(|&&v| (v * s).round().abs() > 127.0)
+                .count();
+            n as f32 / self.ft.len().max(1) as f32
+        };
+        while ft_scale > 1.0 && clip_fraction(ft_scale) > FT_CLIP_BUDGET {
+            ft_scale *= 0.5;
+        }
+        self.ft_clipped = (clip_fraction(ft_scale) * self.ft.len() as f32) as usize;
+
+        // Saturation caps a cell at 127, so the accumulator's real bound is
+        // that, not the unclipped weight's.
+        let acc_max = self.n_masks as f32 * (ft_max * ft_scale).min(127.0) + bias_max * ft_scale;
         let w_limit = (i32::MAX as f32 / (acc_max * H as f32)).min(32_000.0);
         let w_scale = w_limit / w_max;
         self.out_scale = 1.0 / (ft_scale * w_scale);
@@ -1070,13 +1209,6 @@ impl Nnue {
 
         let q = |v: f32, s: f32| (v * s).round().clamp(-32768.0, 32767.0) as i16;
 
-        // Black rows first (interleaved White filled in below).
-        self.ftc_i16 = vec![0; self.n_features * H2];
-        for f in 0..self.n_features {
-            for h in 0..H {
-                self.ftc_i16[f * H2 + h] = q(self.ft[f * H + h], ft_scale);
-            }
-        }
         for i in 0..STAGE_COUNT * H {
             self.ft_bias_i16[i] = q(self.ft_bias[i], ft_scale);
         }
@@ -1091,13 +1223,87 @@ impl Nnue {
         self.prod_scale = 1.0 / (ft_scale * ft_scale * pw_scale * PROD_CLAMP);
         self.prod_clamp_q = ((PROD_CLAMP * ft_scale) as i32).min(32_767);
 
-        // Fill the White half of each i16 feature from its digit-swapped index.
-        // Orientations of one pattern share a table (rewritten identically).
-        // Every transformer copy needs this: skipping the outer loop leaves
-        // the White rows of every copy but the first at zero, which no
-        // Black-to-move measurement can see -- the position sets used to score
-        // accuracy are all Black to move, so the model looks perfect while the
-        // search scores half its leaves off an empty accumulator.
+        /* The head's first layer, int8 on both sides so `sdot` can run it.
+        The activation side is a right shift of the accumulator the read-out
+        already holds, so the shift has to leave `ACT_UNITS` steps per disc;
+        the weight side takes whatever scale fills int8. */
+        self.act_shift = (ft_scale / ACT_UNITS).max(1.0).log2().round() as i16;
+        let l1_max = self.mlp_l1_w.iter().fold(1e-6f32, |m, &v| m.max(v.abs()));
+        let l1_scale = 127.0 / l1_max;
+        self.mlp_l1_w_i8 = self
+            .mlp_l1_w
+            .iter()
+            .map(|&v| (v * l1_scale).round().clamp(-127.0, 127.0) as i8)
+            .collect();
+        self.mlp_l1_rowsum = (0..MLP_H1)
+            .map(|i| {
+                self.mlp_l1_w_i8[i * H..i * H + H]
+                    .iter()
+                    .map(|&w| w as i32)
+                    .sum()
+            })
+            .collect();
+        // One activation step is `2^act_shift / ft_scale` discs.
+        let act_units = ft_scale / (1 << self.act_shift) as f32;
+        self.mlp_l1_dequant = 1.0 / (act_units * l1_scale);
+
+        // One stream per perspective, so a leaf touches H bytes per mask and
+        // no stride.
+        self.ft_b_i8 = vec![0; self.n_features * H];
+        self.ft_w_i8 = vec![0; self.n_features * H];
+        for (i, &v) in self.ft.iter().enumerate() {
+            self.ft_b_i8[i] = (v * ft_scale).round().clamp(-127.0, 127.0) as i8;
+        }
+        // The White table is the Black one read through each mask's
+        // digit-swapped index. Orientations of one pattern share a table
+        // (rewritten identically). Every transformer copy needs this:
+        // skipping the outer loop leaves the White rows of every copy but the
+        // first at zero, which no Black-to-move measurement can see -- the
+        // position sets used to score accuracy are all Black to move, so the
+        // model looks perfect while the search scores half its leaves off an
+        // empty accumulator.
+        for bucket in 0..FT_BUCKETS {
+            let bucket_base = bucket * self.n_feat_bucket;
+            for m in 0..self.n_masks {
+                let base = bucket_base + self.mask_off[m] as usize;
+                let size = self.patterns[self.indexer.mask_patterns()[m] as usize].table_size();
+                for i in 0..size {
+                    let src = (base + self.indexer.swapped_index(m, i)) * H;
+                    let dst = (base + i) * H;
+                    self.ft_w_i8[dst..dst + H].copy_from_slice(&self.ft_b_i8[src..src + H]);
+                }
+            }
+        }
+    }
+
+    /// How many transformer cells saturated int8, and how many there are.
+    /// A training run that pushes this past a fraction of a percent is
+    /// spending accuracy in the table the search reads, not in the one the
+    /// loss sees; [`FT_CLIP_BUDGET`] is where `quantize` starts backing the
+    /// scale off instead.
+    pub fn ft_clipped(&self) -> (usize, usize) {
+        (self.ft_clipped, self.ft.len())
+    }
+
+    /// Build the interleaved both-perspectives table the incremental
+    /// [`Accumulator`] rides on (`n_features * 2H` int16, 157 MB at H=64).
+    ///
+    /// Not part of [`quantize`](Self::quantize): the search rebuilds every
+    /// leaf from `eval_from_indices` and never touches this, so building it
+    /// unconditionally doubled the engine's resident tables for nothing.
+    /// Only `nnue_bench`, which times the incremental path against the
+    /// rebuild, needs it.
+    pub fn build_incremental_table(&mut self) {
+        // Clipped exactly as the int8 table clips, so the two paths agree
+        // cell for cell and `nnue_bench`'s incremental-vs-rebuild check still
+        // means what it says.
+        let q = |v: f32| (v * self.ft_scale).round().clamp(-127.0, 127.0) as i16;
+        self.ftc_i16 = vec![0; self.n_features * H2];
+        for f in 0..self.n_features {
+            for h in 0..H {
+                self.ftc_i16[f * H2 + h] = q(self.ft[f * H + h]);
+            }
+        }
         for bucket in 0..FT_BUCKETS {
             let bucket_base = bucket * self.n_feat_bucket;
             for m in 0..self.n_masks {
@@ -1111,17 +1317,6 @@ impl Nnue {
                     }
                 }
             }
-        }
-
-        // Split copies for the leaf-rebuild path: one stream per perspective,
-        // so a leaf touches H (not 2H) bytes per mask.
-        self.ft_b_i16 = vec![0; self.n_features * H];
-        self.ft_w_i16 = vec![0; self.n_features * H];
-        for f in 0..self.n_features {
-            let src = f * H2;
-            let dst = f * H;
-            self.ft_b_i16[dst..dst + H].copy_from_slice(&self.ftc_i16[src..src + H]);
-            self.ft_w_i16[dst..dst + H].copy_from_slice(&self.ftc_i16[src + H..src + H2]);
         }
     }
 
@@ -1186,8 +1381,8 @@ impl Nnue {
     /// whether every row straddles two lines).
     pub fn table_addrs(&self) -> Vec<(&'static str, usize)> {
         vec![
-            ("ft_b_i16", self.ft_b_i16.as_ptr() as usize),
-            ("ft_w_i16", self.ft_w_i16.as_ptr() as usize),
+            ("ft_b_i8", self.ft_b_i8.as_ptr() as usize),
+            ("ft_w_i8", self.ft_w_i8.as_ptr() as usize),
             ("ftc_i16", self.ftc_i16.as_ptr() as usize),
         ]
     }
@@ -1285,9 +1480,9 @@ impl Nnue {
     pub fn eval_from_indices(&self, indices: &PatternIndices, board: &Board) -> f32 {
         let stage = crate::evaluator::Evaluator::stage(board);
         let ft = if board.player() == Color::Black {
-            &self.ft_b_i16
+            &self.ft_b_i8
         } else {
-            &self.ft_w_i16
+            &self.ft_w_i8
         };
         let mut acc = [0i16; H]; // bias is added at readout
                                  // The stage picks which transformer copy to read; the row offsets
@@ -1308,29 +1503,100 @@ impl Nnue {
         let ow = &self.out_w_i16[stage * H..stage * H + H];
         let fb = &self.ft_bias_i16[stage * H..stage * H + H];
         let sum = readout_dot(&acc, fb, ow);
-        let ps = self.prod_sum_q(&acc, fb, stage);
         self.out_b[stage]
             + sum as f32 * self.out_scale
-            + ps as f32 * self.prod_scale
             + self.num_term(board, stage)
             + self.mob_term(board, stage)
-            + self.mlp_term(&activations_q(&acc, fb, self.ft_scale), stage)
+            + self.extras(&acc, fb, stage)
+    }
+
+    /// The two optional read-out terms — the product gate and the additive
+    /// head — skipped whole when the model does not carry them.
+    ///
+    /// Both are dense per-leaf work on top of a read-out that is one dot
+    /// product, and the head is by far the larger: sixteen dots of H against
+    /// the read-out's one. Measured in place at H=64 (band29 depth 13), the
+    /// head costs 25% of search speed and the gate 4%. A model whose
+    /// corresponding weights are all zero was paying that for a term that
+    /// evaluates to zero, which is what every model trained so far has done
+    /// with the head. The flags are set once in `quantize`, so the branch is
+    /// perfectly predicted and a live term pays only itself.
+    #[inline]
+    fn extras(&self, acc: &[i16; H], fb: &[i16], stage: usize) -> f32 {
+        let mut out = 0.0;
+        if self.has_pw {
+            out += self.prod_sum_q(acc, fb, stage) as f32 * self.prod_scale;
+        }
+        if self.has_head {
+            out += self.mlp_term_i8(&activations_i8(acc, fb, self.act_shift), stage);
+        }
+        out
     }
 
     /// Quantized product-gate sum over `HALF` lane pairs. `acc` carries the
     /// side-to-move accumulator *without* bias (the bias rides in `fb`,
     /// exactly as `readout_dot` consumes it).
+    ///
+    /// Both factors clamp into `[0, prod_clamp_q]`, which is inside i16, so
+    /// the pairwise product is an i32 widening multiply and only the weighted
+    /// sum needs i64. The narrow add mirrors `readout_dot` and rests on the
+    /// same invariant: the biased accumulator fits i16.
     #[inline]
     fn prod_sum_q(&self, acc: &[i16], fb: &[i16], stage: usize) -> i64 {
         let pq = &self.pw_i16[stage * HALF..stage * HALF + HALF];
         let ci = self.prod_clamp_q;
-        let mut ps: i64 = 0;
-        for i in 0..HALF {
-            let pa = (acc[i] as i32 + fb[i] as i32).clamp(0, ci);
-            let pb = (acc[i + HALF] as i32 + fb[i + HALF] as i32).clamp(0, ci);
-            ps += pq[i] as i64 * (pa * pb) as i64;
+        #[cfg(all(target_arch = "aarch64", not(feature = "nnue-scalar")))]
+        // SAFETY: `acc` and `fb` are at least `H` = `2 * HALF` long and `pq`
+        // is exactly `HALF`; every load below stays inside those.
+        unsafe {
+            use std::arch::aarch64::*;
+            let zero = vdupq_n_s16(0);
+            let cap = vdupq_n_s16(ci as i16);
+            let (mut s0, mut s1) = (vdupq_n_s64(0), vdupq_n_s64(0));
+            let mut i = 0;
+            let gate = |o: usize| {
+                let s = vaddq_s16(
+                    vld1q_s16(acc.as_ptr().add(o)),
+                    vld1q_s16(fb.as_ptr().add(o)),
+                );
+                vminq_s16(vmaxq_s16(s, zero), cap)
+            };
+            while i + 8 <= HALF {
+                let a = gate(i);
+                let b = gate(i + HALF);
+                let w = vld1q_s16(pq.as_ptr().add(i));
+                for (p, ww) in [
+                    (
+                        vmull_s16(vget_low_s16(a), vget_low_s16(b)),
+                        vmovl_s16(vget_low_s16(w)),
+                    ),
+                    (vmull_high_s16(a, b), vmovl_high_s16(w)),
+                ] {
+                    s0 = vaddq_s64(s0, vmull_s32(vget_low_s32(p), vget_low_s32(ww)));
+                    s1 = vaddq_s64(s1, vmull_high_s32(p, ww));
+                }
+                i += 8;
+            }
+            let mut ps = vaddvq_s64(vaddq_s64(s0, s1));
+            while i < HALF {
+                let pa = (*acc.get_unchecked(i) as i32 + *fb.get_unchecked(i) as i32).clamp(0, ci);
+                let pb = (*acc.get_unchecked(i + HALF) as i32 + *fb.get_unchecked(i + HALF) as i32)
+                    .clamp(0, ci);
+                ps += *pq.get_unchecked(i) as i64 * (pa * pb) as i64;
+                i += 1;
+            }
+            ps
         }
-        ps
+        #[cfg(any(not(target_arch = "aarch64"), feature = "nnue-scalar"))]
+        {
+            let mut ps: i64 = 0;
+            for i in 0..HALF {
+                let pa = (acc[i] as i32 + fb[i] as i32).clamp(0, ci);
+                let pb = (acc[i + HALF] as i32 + fb[i + HALF] as i32).clamp(0, ci);
+                ps += pq[i] as i64 * (pa * pb) as i64;
+            }
+            ps
+        }
     }
 
     /// Evaluate a board from scratch (rebuilds indices). Convenience for
@@ -1362,6 +1628,29 @@ impl Nnue {
         for (i, x) in x1.iter_mut().enumerate() {
             *x = (self.mlp_l1_b[i] + dot_f32(&self.mlp_l1_w[i * H..], a, H)).max(0.0);
         }
+        self.mlp_tail(x1, stage)
+    }
+
+    /// The head's first layer over int8 activations, then the same tail.
+    ///
+    /// Only this layer is quantized. It is `MLP_H1 * H` products against the
+    /// tail's `MLP_H2 * MLP_H1 + MLP_H2`, so at H=64 it is 79% of the head's
+    /// arithmetic and the rest is not worth the accuracy.
+    #[inline]
+    fn mlp_term_i8(&self, a: &[i8; H], stage: usize) -> f32 {
+        let mut x1 = [0.0f32; MLP_H1];
+        for (i, x) in x1.iter_mut().enumerate() {
+            // `a` carries the activations biased by -128 (see
+            // `activations_i8`); the row's weight sum puts that back.
+            let d = dot_i8(&self.mlp_l1_w_i8[i * H..], a) + 128 * self.mlp_l1_rowsum[i];
+            *x = (self.mlp_l1_b[i] + d as f32 * self.mlp_l1_dequant).max(0.0);
+        }
+        self.mlp_tail(x1, stage)
+    }
+
+    /// Second layer and read-out, shared by both first-layer paths.
+    #[inline]
+    fn mlp_tail(&self, x1: [f32; MLP_H1], stage: usize) -> f32 {
         let mut x2 = [0.0f32; MLP_H2];
         for (j, x) in x2.iter_mut().enumerate() {
             *x = (self.mlp_l2_b[j] + dot_f32(&self.mlp_l2_w[j * MLP_H1..], &x1, MLP_H1)).max(0.0);
@@ -2093,8 +2382,13 @@ impl Nnue {
     /// White-to-move position is scored from the colour-swapped view. Two
     /// accumulators are kept — `black` over absolute features, `white` over
     /// swap-indexed features — both updated incrementally so either side's
-    /// leaf eval is O(H). Needs [`quantize`](Self::quantize).
+    /// leaf eval is O(H). Needs [`quantize`](Self::quantize) and
+    /// [`build_incremental_table`](Self::build_incremental_table).
     pub fn accumulator(&self, board: &Board) -> Accumulator {
+        assert!(
+            !self.ftc_i16.is_empty(),
+            "the incremental accumulator needs build_incremental_table()"
+        );
         let indices = self.indexer.init(board.black, board.white);
         // Per-stage bias is added at readout, not here.
         let mut acc = [0i16; H2];
@@ -2176,22 +2470,21 @@ impl Nnue {
         if FT_BUCKETS > 1 && ft_bucket(stage) != 0 {
             return self.eval_from_indices(&acc.indices, board);
         }
-        let v = if board.player() == Color::Black {
+        let mut v = [0i16; H];
+        v.copy_from_slice(if board.player() == Color::Black {
             &acc.acc[0..H]
         } else {
             &acc.acc[H..H2]
-        };
+        });
         let ow = &self.out_w_i16[stage * H..stage * H + H];
         let fb = &self.ft_bias_i16[stage * H..stage * H + H];
         // out = bias + scale * sum relu(acc[h] + fb[h]) * out_w[h] + disc term
-        let sum = readout_dot(v, fb, ow);
-        let ps = self.prod_sum_q(v, fb, stage);
+        let sum = readout_dot(&v, fb, ow);
         self.out_b[stage]
             + sum as f32 * self.out_scale
-            + ps as f32 * self.prod_scale
             + self.num_term(board, stage)
             + self.mob_term(board, stage)
-            + self.mlp_term(&activations_q(v, fb, self.ft_scale), stage)
+            + self.extras(&v, fb, stage)
     }
 
     /// i32-precision read-out (finer quantization than i16).
@@ -2958,6 +3251,8 @@ mod tests {
             *v = ((s >> 40) as i32 as f32) / 2.0e7;
         }
         nn.quantize();
+        // The incremental path is one of the paths under test here.
+        nn.build_incremental_table();
 
         /* Play far enough to leave the opening.
 

@@ -105,7 +105,8 @@ fn main() {
     }
     let secs = t0.elapsed().as_secs_f64();
     let evals = (positions * reps) as f64;
-    let table_mb = nn.n_features() as f64 * H as f64 * 2.0 * 2.0 * replicas as f64 / 1.048_576e6;
+    // One int8 byte per weight, one table per perspective.
+    let table_mb = nn.n_features() as f64 * H as f64 * 2.0 * replicas as f64 / 1.048_576e6;
     println!(
         "{which}: masks={} H={} features={} replicas={replicas} tables={table_mb:.0}MB  \
          {:.0} evals/s  ({:.1} ns/eval)  [checksum {:.1}]",
