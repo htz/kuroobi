@@ -41,13 +41,14 @@ const D7_R4: u64 = 0xFFFF_FFFF_0F0F_0F0F;
 /// Squares whose full line (in one direction) is completely occupied.
 #[inline]
 fn full_lines(occ: u64) -> (u64, u64, u64, u64) {
-    // Horizontal (rank) lines: AND-reduce the 8 file bytes; bit r of the
-    // result is set iff rank r is occupied in every file. Broadcast back.
+    // Horizontal (rank) lines: AND-reduce the 8 file bytes. Rotating rather
+    // than shifting wraps each fold back over the whole board, so the result
+    // arrives already broadcast — no final mask-and-multiply.
     let mut h = occ;
-    h &= h >> 32;
-    h &= h >> 16;
-    h &= h >> 8;
-    let full_h = (h & 0xFF) * RANK0;
+    h &= h.rotate_right(8);
+    h &= h.rotate_right(16);
+    h &= h.rotate_left(32);
+    let full_h = h;
 
     // Vertical (file) lines: AND-reduce the 8 bits inside each byte down
     // to bit 0, then broadcast each byte.

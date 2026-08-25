@@ -162,10 +162,22 @@ ordering is raised in stages according to the empty count**:
 
 | Empties | Ordering |
 |---|---|
-| 21 or more | evaluation + **4-ply lookahead** (with pruning) |
-| 16 or more | evaluation + **2-ply lookahead** |
+| 28 or more | evaluation + **3-ply lookahead** (with pruning) |
+| 19 or more | evaluation + **2-ply lookahead** |
+| 16 or more | evaluation + **1-ply lookahead** |
 | 14 or more | evaluation (0 ply) |
 | below 14 | static heuristics (opponent mobility + corner stable discs) |
+
+**This ladder is a two-sided optimum, measured from both directions.**
+Stepping it up two empties earlier (14/17/26 instead of 16/19/28) buys
+a smaller tree everywhere — 5.8% fewer nodes at band22, 6.3% on
+FFO40-49, 7.6% at 26 empties — and loses on the clock every time:
++5.6%, +10.9%, +11.4%. Stepping it later, so that no lookahead runs
+below 20 empties and the second ply waits until 29, costs +10.3% time
+on FFO40-49 for a 19.9% larger tree. Note what the second case does to
+nodes/s: it *rises* from 19.90 to 21.63 M/s while the solve gets slower
+— the ladder is exactly the kind of change that buys throughput by
+doing more of the cheap work.
 
 The key to the ordering is not to order by the evaluation alone.
 Adding the opponent's mobility **at the same weight** as the
@@ -202,11 +214,58 @@ nodes 44-71% worse).
 **Odd-depth lookahead is not used** — measurements confirm that tempo
 parity makes the ordering quality worse instead.
 
+**Scoring the ordering candidates with the NNUE instead of the linear
+pattern sum was rejected.** The exact pass's depth-0 ordering value came
+from `eval_order_bb` (i8 flat pattern tables); the experiment replaced it
+with the NNUE readout over the *same* incremental pattern indices, at the
+same disc-difference scale and the same (child's) point of view, in the
+exact pass only. Measured on the exact pass alone, one thread, alternating
+runs, minima, solutions identical everywhere:
+
+| Ordering evaluation | band22 time | tree | FFO40-49 time | tree |
+|---|---|---|---|---|
+| NNUE, band 14 (unchanged) | +1.0% | -2.0% | +2.0% | -1.6% |
+| NNUE, band 12 | +11.5% | -10.6% | +18.2% | -9.1% |
+| NNUE, band 10 | +54.2% | -12.4% | +65.6% | -11.2% |
+| NNUE, band 8 | +148.4% | -9.8% | +168.1% | -11.1% |
+| linear, band 12 | +5.1% | -8.2% | +11.9% | -6.4% |
+| linear, band 10 | +39.3% | -8.6% | +47.4% | -7.8% |
+
+Three things this settles. The straight swap costs only the 1-2% of wall
+clock the cost estimate predicted, but the tree shrinks by less than that,
+so it does not pay for itself. **There is no knee lower down**: the clock
+gets monotonically worse all the way to 8 empties while the tree bottoms
+out around 10-12 and then gets worse again — 99.8% of exact-pass nodes sit
+at 13 empties or fewer, so each step down multiplies the call count far
+faster than it shrinks the tree. And holding the band fixed isolates
+ordering quality: **the NNUE buys 2.6-2.8% fewer nodes and charges
+5.7-6.1% more time**. Its ordering really is better, by about a tenth of
+what it costs.
+
+Read together with the ladder measurements above, this makes the 14-empty
+step a two-sided optimum like the rest: 16 (+9.1%) and 18 (+29.9%) lose
+from above, 12 and 10 lose from below, with the evaluator held fixed. The
+tempting argument — "degrading the ordering costs 17% of tree, so improving
+it should pay" — reads the derivative in the wrong currency. The tree does
+respond in both directions; the price responds several times harder.
+
 The square-type table and potential mobility are not part of the
 ordering. Both were pure tiebreakers expected to be under 1/1000 of
 mobility, a scale our integer key cannot represent. Indeed, adding
 them while ignoring the relative ratio improved shallow positions but
 made deep ones 4-31% worse.
+
+**Generating the legal moves before ordering the 5-6 empties band was
+a wash.** That band walks every empty square and calls a zero flip
+illegal; the alternative is one mobility call and then iterating only
+legal squares. The tree is bit-identical and so is the clock (-0.2% to
++0.4% across four sets) — the mobility costs what the wasted flips
+cost. Splitting that mobility further into parity x corner subsets, so
+corners are tried first inside each parity class, does order better —
+1.9% fewer nodes at band22, 3.9% on FFO40-49, 2.5% at 26 empties — but
+the extra masking and passes eat exactly that much time. This is the
+whole of what a doubly-linked empty-square list would buy here: the
+O(1) quadrant parity it also maintains we already keep incrementally.
 
 ### Quadrant parity
 
@@ -215,6 +274,41 @@ an odd number of empties are tried first** (`parity_of` /
 `odd_quadrant_mask`). A standard endgame ordering rule, tied directly
 to the fight over the last move. It is built into `last4` / `last3`
 as well.
+
+Within one parity class the four squares stay in board-index order.
+Sorting them by strategic value as a second key — corners first, X
+squares last, the order the ordering tables already encode — does
+shrink the tree, by 0.4-1.6%, and loses on the clock every time:
++0.6% to +2.6% across four sets, whether or not the all-even case is
+sorted too. A four-empty subtree is too small to repay any ordering
+work beyond the parity key, the same reason the parity-by-corner
+four-way split lost at five and six empties.
+
+### The stability cut, and where it stops paying
+
+A node whose stable discs already bound the result past the window can
+return without searching. Two guards keep the bound cheap: the window
+must be extreme enough for the empty count (`STABILITY_THRESHOLD`),
+and a popcount must show enough discs of the right colour before
+`stable_count` runs at all. That popcount gate carries a margin of 8
+discs; requiring the slack is band22 -4.4%, FFO40-49 -2.0%, fix24
+-6.8%, 26 empties -2.5%. A larger margin looks better on the shallow
+sets (12 beats 8 on band22 and fix24) but grows the FFO tree by 9.1%
+and, at 16, loses on the clock outright — the deep set holds the veto.
+
+**Below five empties the cut is not attempted.** In the layer profile
+it took 13.0% of wall clock, 6.1 points of that at four empties alone,
+where the subtree it can prune is four plies deep. Skipping it there
+is band22 -2.9%, fix22 -2.8%, fix24 -3.0%, and free on the two sets
+whose trees grow most (fix20 +0.2% for +17.0% nodes, FFO40-49 +0.1%
+for +24.7%): it pays where it prunes little and is neutral where it
+prunes a lot.
+
+Raising that floor further is a clean demonstration that **nodes/s is
+not the objective**. Skipping the cut below six and below seven takes
+FFO40-49 from 20.5M nodes/s to 27.8M and 29.2M, while wall clock moves
+*up* by 1.7% and 3.1%. The rate improves only because the nodes left
+behind are the cheap ones.
 
 ### Immediate wipeout detection
 
@@ -378,10 +472,61 @@ conclude it is **architecturally incompatible** with our design.
 ### Separate tables
 
 - Main table (variable size, 2^26 = 2.1GB by default)
-- **Shallow-region table** (5-6 empties, 2^16): transpositions are
-  dense in this region, but under empty-count-based replacement it
+- **Shallow-region table** (5-6 empties, 2^13 = 192KB): transpositions
+  are dense in this region, but under empty-count-based replacement it
   always loses the fight for slots in the main table, so it was split
-  out
+  out. It was 2^16 (1.57MB) until it was measured: **sized for latency
+  rather than hit rate it is worth 7-10%.** Going 2^16 -> 2^13 costs
+  about 1% more nodes and returns band22 -10.1%, FFO40-49 -7.1%, 24
+  empties -8.3%, 26 empties -7.5%. The curve is monotone down to 2^13
+  and flat below (2^12 is another 0.3-0.7%, inside the spread). The
+  effect grows with cache pressure — on an idle machine the same step
+  measured -2.7% / -0.5%, so quote it with the background load
+- Extending the *mid* private table (7-9 empties) up to 12 empties, as
+  a second cache in front of the main table, was measured and
+  rejected: at 3MB it is band22 -2.6% but FFO40-49 +0.6%, 24 empties
+  +2.0% and 26 empties +2.5%; at 12.6MB it is a wash on all four
+- **Shrinking the mid table on its own, from 12.6MB (2^19) to 3.1MB
+  (2^17) with its band left at 10 empties, was also rejected.** An
+  earlier round had it at FFO40-49 -2.2% with a 0.2% spread while the
+  other three sets were flat, which is one set outside spread and not
+  enough to act on; re-run on its own over four sets and four rounds,
+  judged on the exact pass, **it does not reproduce** — band22 +2.8%
+  (tree +9.5%, spread 1.8-2.3%), FFO40-49 -0.7% (tree +1.7%), 24
+  empties +0.4% (tree +2.9%), 26 empties +0.0% (tree +2.6%). The tree
+  grows on all four sets and only one of them is faster, marginally.
+  The mid table stays at 12.6MB. Unlike the shallow table two bullets
+  up, this one is not latency-bound: at 7-9 empties the entries it
+  loses are ones the main table then has to re-derive
+- **Seven and eight empties consult no table at all.** They are the
+  busiest layers of the exact pass, and their probe reached the 12.6MB
+  mid table — 3.1% and 1.9% of wall clock in the layer profile.
+  Searching them without probing or storing is band22 -4.5%, fix22
+  -5.6%, fix24 -3.9%, FFO40-49 -4.7%, for trees only 0.6-2.9% larger:
+  almost none of the probe's value was in the cutoffs it produced.
+  Nine still earns its probe (dropping it too costs 2.3-13.2%), and
+  moving the whole ordered stage up a layer instead loses everywhere
+  at +22-30% nodes. Re-shrinking the mid table afterwards, now that it
+  serves one layer, was measured again and still fails: the sets
+  disagree on the direction (band22 wants 2^19, FFO40-49 marginally
+  prefers 2^15)
+- **Move generation prefetches the table the child will actually
+  probe**, not the mid table unconditionally. The unconditional form
+  was the best-measuring shape while seven and eight still probed —
+  gating it cost 8% then. Once they stopped, it was fetching lines
+  nobody reads at the hottest layer: retargeting is band22 -2.4%,
+  fix22 -2.0%, FFO40-49 -0.7% with **identical trees**. Gating without
+  retargeting gains nothing (+0.5%, +0.9%, -0.5%), so the value is in
+  fetching the right line rather than in fetching less
+- **Giving seven and eight a leaner table instead was measured two ways
+  and rejected both times.** Sharing the 192KB shallow table with them
+  is band22 +4.2%, fix22 +5.1%, FFO40-49 +3.7% — and the tree *grows*
+  8.5-10.3%, because their entries evict the five- and six-empty ones
+  that were earning their keep. Giving them a table of their own (7-9
+  served by the mid table at 2^13 / 2^15 / 2^17) loses on every set and
+  size, from +0.4% to +9.6%: shrinking it far enough to be cheap starves
+  the nine-empty layer that depends on it. Probing at nine and above,
+  and nowhere below, is an extremum along all three axes
 - The midgame search's table is separate per evaluation function
 
 The **capacity** of the transposition table strongly governs endgame

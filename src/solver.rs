@@ -21,6 +21,18 @@ use crate::zobrist;
 /// Search depth thresholds (empties remaining) for switching strategies.
 const PVS_LIMIT: u8 = 12;
 const MOVE_ORDERING_LIMIT: u8 = 7;
+/// Lowest empty count at which the ordered stage consults a transposition
+/// table at all. Below it the stage searches without probing or storing.
+///
+/// Seven and eight empties are the busiest layers of the exact pass, and a
+/// probe there reaches the 12.6 MB mid table — a cache miss whose latency
+/// the hit rate does not repay, the same trade that made shrinking the
+/// shallow table a win. Skipping both: band22 -4.5%, fix22 -5.6%,
+/// fix24 -3.9%, ffo40-49 -4.7%, for trees only 0.6-2.9% larger. Nine still
+/// earns its probe (skipping it too costs 2.3-13.2% against this), and
+/// pushing the whole ordered stage up one layer instead
+/// (`MOVE_ORDERING_LIMIT` 8) loses on every set, at +22-30% nodes.
+const TT_MIN_EMPTIES: u8 = 9;
 /// Below this many empties the ordered search goes to a cache-resident
 /// table instead of the main one. The main table holds 2^26 entries of 24
 /// bytes, so a probe there is a guaranteed DRAM round trip; at these
@@ -29,6 +41,46 @@ const MOVE_ORDERING_LIMIT: u8 = 7;
 const MID_TT_EMPTIES: u8 = 10;
 /// Entry count of that table, as a power of two. 2^19 * 24 B = 12.6 MB.
 const MID_TT_BITS: u32 = 19;
+/// Entry count of the 5-6 empties table, as a power of two.
+/// 2^13 * 24 B = 192 KB. The 1.57 MB it used to be was chosen for hit rate;
+/// hit rate is not what this table is for. Shrinking it costs ~1% more nodes
+/// and buys far more than that back in latency, on every set measured
+/// (band22 -9.7%, FFO40-49 -6.7%, 24 empties -8.5%, 26 empties -7.4%, two
+/// rounds each, minima, with a steady six-thread job on the other cores).
+/// The curve is monotone from 16 down to 13 and flat below: 2^12 is another
+/// 0.3-0.7%, inside the run-to-run spread.
+const SHALLOW_TT_BITS: u32 = 13;
+
+/// Highest empty count still served by the private mid table, exclusive.
+/// `TT_MID_EMPTIES` overrides it for sweeps.
+#[inline(always)]
+fn mid_tt_empties() -> u8 {
+    static V: std::sync::OnceLock<u8> = std::sync::OnceLock::new();
+    *V.get_or_init(|| {
+        std::env::var("TT_MID_EMPTIES")
+            .ok()
+            .and_then(|v| v.parse().ok())
+            .unwrap_or(MID_TT_EMPTIES)
+    })
+}
+
+/// Sizes of the two private tables, in entries as a power of two.
+/// `TT_SHALLOW_BITS` / `TT_MID_BITS` override them for sweeps.
+fn private_tt_bits() -> (u32, u32) {
+    static V: std::sync::OnceLock<(u32, u32)> = std::sync::OnceLock::new();
+    *V.get_or_init(|| {
+        let read = |k: &str, d: u32| {
+            std::env::var(k)
+                .ok()
+                .and_then(|v| v.parse().ok())
+                .unwrap_or(d)
+        };
+        (
+            read("TT_SHALLOW_BITS", SHALLOW_TT_BITS),
+            read("TT_MID_BITS", MID_TT_BITS),
+        )
+    })
+}
 /// From this many empties upward, an evaluator (when provided) orders
 /// moves instead of the static heuristic.
 const EVAL_ORDER_EMPTIES: u8 = 14;
@@ -80,17 +132,75 @@ const STABILITY_THRESHOLD: [i32; 64] = [
     99, 99, 99, 99, 99, 99, 99, 99,
 ];
 
+/// Extra discs the popcount gate demands beyond the bare minimum, so the
+/// stable-disc sweep is skipped where the surplus is too thin to cut.
+///
+/// `stable_count` returns far fewer stable discs than the raw disc count, so
+/// a position that only just clears `need` almost never proves the bound and
+/// the whole sweep is wasted. Charging eight discs of headroom pays for
+/// itself on every set measured (exact pass, one thread, alternating runs,
+/// minima, solutions identical, against margin 0):
+///
+/// | set | time | tree |
+/// |---|---|---|
+/// | band22 | -4.4% | +0.5% |
+/// | FFO40-49 | -2.0% | +1.9% |
+/// | fix24 | -6.8% | +0.5% |
+/// | deep26 | -2.5% | +0.4% |
+///
+/// Swept over 0/4/8/12/16. Eight is the largest margin that still leaves the
+/// tree essentially untouched. Twelve and sixteen are a shade faster on
+/// band22 and fix24, but they buy that time by giving up cuts rather than by
+/// skipping futile sweeps: on FFO40-49 the tree grows 9.1% at twelve and
+/// 26.2% at sixteen, and sixteen is already 2.4% slower there outright.
+///
+/// **Do not re-tune this on a subset.** band22 and fix24 on their own would
+/// have chosen twelve or sixteen; FFO40-49 is the set that vetoes them, and
+/// the tree trend says the loss keeps growing as positions get deeper. Same
+/// trap as the ordering-band and sort-ladder step points before it.
+const STABILITY_CUT_MARGIN: i32 = 8;
+/// Lowest empty count at which a stability cut is attempted. At four
+/// empties the cut is reached on every node of the busiest layer and costs
+/// 6.1% of wall clock there, but the subtree it prunes is four plies deep —
+/// far too small to pay for a `stable_count` on both colours. Measured with
+/// the cut disabled below 5: band22 -2.9%, fix22 -2.8%, fix24 -3.0%, and
+/// neutral on the two sets where the tree grows most (fix20 +0.2% for +17%
+/// nodes, ffo40-49 +0.1% for +24.7%). Disabling it below 6 or 7 raises
+/// nodes/s further still — to 29.2M/s on ffo40-49 against 20.5M/s here —
+/// while wall clock gets worse by 1.7% and 3.1%; the rate rises only
+/// because the nodes left behind are the cheap ones.
+const STAB_MIN_EMPTIES: u8 = 5;
+
 /// Stability cutoff precondition: the bound 64 - 2*S can only cut when the
 /// opponent has at least ceil((64-alpha)/2) stable discs, so their total
 /// disc count (cheap popcount) must reach that first.
 #[inline]
 fn stability_cut(board: &Board, alpha: i32, beta: i32) -> Option<i32> {
-    let threshold = STABILITY_THRESHOLD[board.empty_count() as usize];
+    stability_cut_bb(
+        board.player_bb(),
+        board.opponent_bb(),
+        board.empty_count(),
+        alpha,
+        beta,
+    )
+}
+
+/// The same cut from raw bitboards, for callers that hold a child's occupancy
+/// but never build the `Board` — the 5-empty move loop, which hands its
+/// children straight to the 4-empty routine.
+#[inline]
+fn stability_cut_bb(player: u64, opponent: u64, empties: u8, alpha: i32, beta: i32) -> Option<i32> {
+    if empties < STAB_MIN_EMPTIES {
+        return None;
+    }
+    let threshold = STABILITY_THRESHOLD[empties as usize];
     // Upper bound via the opponent's stable discs (fail low)
     let need = (64 - alpha + 1) / 2;
-    if alpha >= threshold && need <= 32 && (board.opponent_bb().count_ones() as i32) >= need {
-        let bound =
-            64 - 2 * crate::stability::stable_count(board.opponent_bb(), board.player_bb()) as i32;
+    if alpha >= threshold
+        && need <= 32
+        && (opponent.count_ones() as i32) >= need + STABILITY_CUT_MARGIN
+    {
+        let bound = 64 - 2 * crate::stability::stable_count(opponent, player) as i32;
         if bound <= alpha {
             return Some(bound);
         }
@@ -101,9 +211,11 @@ fn stability_cut(board: &Board, alpha: i32, beta: i32) -> Option<i32> {
     // Mirror of the guard above, with the threshold test flipped to the
     // beta side.
     let need = (64 + beta + 1) / 2;
-    if beta <= -threshold && need <= 32 && (board.player_bb().count_ones() as i32) >= need {
-        let bound =
-            2 * crate::stability::stable_count(board.player_bb(), board.opponent_bb()) as i32 - 64;
+    if beta <= -threshold
+        && need <= 32
+        && (player.count_ones() as i32) >= need + STABILITY_CUT_MARGIN
+    {
+        let bound = 2 * crate::stability::stable_count(player, opponent) as i32 - 64;
         if bound >= beta {
             return Some(bound);
         }
@@ -112,6 +224,8 @@ fn stability_cut(board: &Board, alpha: i32, beta: i32) -> Option<i32> {
 }
 /// From this many empties upward, ordering uses a two-ply lookahead.
 const DEEP2_ORDER_EMPTIES: u8 = 19;
+/// From this many empties upward, ordering uses a three-ply lookahead.
+const DEEP3_ORDER_EMPTIES: u8 = 28;
 /// Enhanced transposition cutoff: from this many empties upward, probe
 /// every child's hash entry before searching — a proven fail-high there
 /// cuts this node without any search.
@@ -296,11 +410,14 @@ impl ThreadBudget {
                 }
                 s
             }
-            None => Scratch {
-                shallow: HashTable::new(16),
-                mid: HashTable::new(MID_TT_BITS),
-                tag,
-            },
+            None => {
+                let (sb, mb) = private_tt_bits();
+                Scratch {
+                    shallow: HashTable::new(sb),
+                    mid: HashTable::new(mb),
+                    tag,
+                }
+            }
         }
     }
 
@@ -668,7 +785,42 @@ fn selective_min_empties() -> u8 {
     })
 }
 /// Depth of the evaluation probe used by a warm-up pass.
-const SELECTIVE_PROBE_DEPTH: u8 = 4;
+///
+/// 2, not the 4 this used to be. A warm-up rung exists to fill the table, not
+/// to answer, so the probe only has to order moves and bound them well enough
+/// for the exact pass that follows; at depth 4 it was spending 4.7x as many
+/// nodes per probe as the answer needed. Probe searches alone sampled at 12.2%
+/// of wall clock on FFO40-49 and 29.2% on a 22-empty set.
+///
+/// Sweep of 2/3/4 at one thread, minima of alternating runs (negative is
+/// faster than the old 4):
+///
+/// ```text
+///   set              pd2      pd3
+///   18 empties      0.0%     0.0%
+///   20 empties     +1.4%    +2.9%
+///   22 empties    -27.7%   -25.9%
+///   24 empties    -14.3%   -19.5%
+///   26 empties     -2.4%    -7.5%
+///   band22        -17.1%   -15.5%
+///   FFO40-49      -12.4%    +1.8%
+/// ```
+///
+/// Why 2 and not 3: 3 is the better value on the 24- and 26-empty sets, but it
+/// is *slower than the old 4* on FFO40-49, the set closest to real work. The
+/// knob is not monotone — probe parity matters, so these must be swept rather
+/// than interpolated — and 3 wins or loses by set rather than being better.
+/// 2's worst case anywhere is +1.4% (20 empties) while it wins the sets that
+/// matter, so a flat 2 is the honest choice; a depth that varies with the
+/// empty count may beat it but is a structural change needing its own case.
+///
+/// This does not touch exactness: the rungs only warm the table and the exact
+/// pass still decides. It is also inside the `selective_sigma` fit (2-10
+/// plies), and the depth-2 margins measure *more* conservative than depth 4's
+/// against exact solves (14.4% of probes outside 1.1 sigma against 16.7%, on
+/// a 90-position sample), so the shallower probe is not buying its speed by
+/// pruning harder than the calibration supports.
+const SELECTIVE_PROBE_DEPTH: u8 = 2;
 
 /// Standard deviation of `exact - probe` for a warm-up probe of `pc` plies at
 /// `empties` empty squares — *measured*, not extrapolated.
@@ -797,15 +949,19 @@ const SELECTIVE_LADDER: [f32; 2] = [1.1, 1.8];
 
 /// Plies of ordering lookahead by empty count, stepped one ply at a time
 /// as the position opens up.
-const SORT_DEPTH_LADDER: [u8; 64] = {
+const SORT_DEPTH_LADDER: [u8; 64] =
+    build_sort_ladder([DEEP_ORDER_EMPTIES, DEEP2_ORDER_EMPTIES, DEEP3_ORDER_EMPTIES]);
+
+/// Empty counts at which the lookahead gains its first, second and third ply.
+const fn build_sort_ladder(steps: [u8; 3]) -> [u8; 64] {
     let mut t = [0u8; 64];
     let mut e = 0usize;
     while e < 64 {
-        t[e] = if e >= 28 {
+        t[e] = if e >= steps[2] as usize {
             3
-        } else if e >= DEEP2_ORDER_EMPTIES as usize {
+        } else if e >= steps[1] as usize {
             2
-        } else if e >= DEEP_ORDER_EMPTIES as usize {
+        } else if e >= steps[0] as usize {
             1
         } else {
             0
@@ -813,7 +969,24 @@ const SORT_DEPTH_LADDER: [u8; 64] = {
         e += 1;
     }
     t
-};
+}
+
+/// `SORT_LADDER=<a>,<b>,<c>` replaces the three step points for sweeps.
+fn sort_depth_ladder() -> &'static [u8; 64] {
+    static V: std::sync::OnceLock<[u8; 64]> = std::sync::OnceLock::new();
+    V.get_or_init(|| {
+        let Ok(spec) = std::env::var("SORT_LADDER") else {
+            return SORT_DEPTH_LADDER;
+        };
+        let mut steps = [DEEP_ORDER_EMPTIES, DEEP2_ORDER_EMPTIES, DEEP3_ORDER_EMPTIES];
+        for (slot, field) in steps.iter_mut().zip(spec.split(',')) {
+            if let Ok(v) = field.trim().parse() {
+                *slot = v;
+            }
+        }
+        build_sort_ladder(steps)
+    })
+}
 
 /// Squares adjacent to each square (used to skip moves that cannot flip:
 /// a legal move must touch at least one opponent disc).
@@ -1441,6 +1614,8 @@ struct Worker<'a> {
     /// probe into the multi-gigabyte main table is a cold miss; a table
     /// that fits in cache trades a little hit rate for a lot of latency.
     mid_table: HashTable,
+    /// Highest empty count still served by `mid_table`, exclusive.
+    mid_empties: u8,
     /// See [`NnueProbe`]; copied from the solver into every worker.
     nnue: Option<NnueProbe>,
     /// Margin multiplier for the selective cuts. 1.0 for exact solves; a
@@ -1463,13 +1638,14 @@ impl<'a> Worker<'a> {
         budget: &'a ThreadBudget,
         abort: &'a AbortFlag<'a>,
     ) -> Worker<'a> {
+        let (sb, mb) = private_tt_bits();
         Worker::with_tables(
             tt,
             neighbours,
             budget,
             abort,
-            HashTable::new(16),
-            HashTable::new(MID_TT_BITS),
+            HashTable::new(sb),
+            HashTable::new(mb),
         )
     }
 
@@ -1494,6 +1670,7 @@ impl<'a> Worker<'a> {
             selective_t: None,
             shallow_table,
             mid_table,
+            mid_empties: mid_tt_empties(),
             nnue: None,
             sigma_scale: 1.0,
             budget,
@@ -1505,7 +1682,7 @@ impl<'a> Worker<'a> {
     /// cache-resident one below `MID_TT_EMPTIES`, the main one above.
     #[inline(always)]
     fn table(&self, empties: u8) -> &HashTable {
-        if empties < MID_TT_EMPTIES {
+        if empties < self.mid_empties {
             &self.mid_table
         } else {
             self.tt
@@ -2741,9 +2918,14 @@ impl Worker<'_> {
         }
 
         // Single probe, reused for the ordering move below (see `pvs`).
+        let use_tt = board.empty_count() >= TT_MIN_EMPTIES;
         let entry = {
             let _p = layer_profile::Scope::new(layer_profile::TT, board.empty_count());
-            self.table(board.empty_count()).get(board, hash)
+            if use_tt {
+                self.table(board.empty_count()).get(board, hash)
+            } else {
+                None
+            }
         };
         let mut narrowed = false;
         if let Some(v) = entry {
@@ -2849,8 +3031,10 @@ impl Worker<'_> {
             }
         }
 
-        self.table(board.empty_count())
-            .update(board, hash, orig_alpha, beta, alpha, best);
+        if use_tt {
+            self.table(board.empty_count())
+                .update(board, hash, orig_alpha, beta, alpha, best);
+        }
         alpha
     }
 
@@ -2865,6 +3049,30 @@ impl Worker<'_> {
         passed: bool,
         parity: u8,
     ) -> i32 {
+        // A 4-empty entry is a tail dispatch on the *same* position: `last4`
+        // counts it, so counting it here as well counted one position twice —
+        // 6.4% of the FFO40-49 node total, 8.3% of band22. Run the two guards
+        // (they prune, so dropping them grows the tree) but count only when
+        // one of them returns, which is exactly the case `last4` never sees,
+        // and skip the rest of the prologue, which a 4-empty node has no use
+        // for. The hot caller — the 5-empty move loop below — bypasses this
+        // entry entirely via `search4`; what reaches here is the rare
+        // shallow-root path through `descend`.
+        if board.empty_count() == 4 {
+            if let Some(v) = wipeout_score(board) {
+                self.nodes += 1;
+                return v;
+            }
+            {
+                let _p = layer_profile::Scope::new(layer_profile::STAB, 4);
+                if let Some(bound) = stability_cut(board, alpha, beta) {
+                    self.nodes += 1;
+                    return bound;
+                }
+            }
+            return self.last4_board(board, alpha, beta, passed, parity);
+        }
+
         let _prof = layer_profile::Scope::new(layer_profile::SEARCH, board.empty_count());
         self.nodes += 1;
 
@@ -2877,29 +3085,6 @@ impl Worker<'_> {
             if let Some(bound) = stability_cut(board, alpha, beta) {
                 return bound;
             }
-        }
-
-        if board.empty_count() == 4 {
-            let mut e = board.empty();
-            let p1 = e.trailing_zeros() as u8;
-            e &= e - 1;
-            let p2 = e.trailing_zeros() as u8;
-            e &= e - 1;
-            let p3 = e.trailing_zeros() as u8;
-            e &= e - 1;
-            let p4 = e.trailing_zeros() as u8;
-            return self.last4(
-                board.player_bb(),
-                board.opponent_bb(),
-                p1,
-                p2,
-                p3,
-                p4,
-                alpha,
-                beta,
-                passed,
-                parity,
-            );
         }
 
         let mut lower = alpha;
@@ -2930,12 +3115,23 @@ impl Worker<'_> {
         let opponent_bb = board.opponent_bb();
         // Children of a 5-empty node dispatch to last4 and never probe, so
         // their hashes are only needed one level up.
-        let need_child_hash = board.empty_count() > 5;
+        let five_empty = board.empty_count() == 5;
+        let need_child_hash = !five_empty;
 
         // Odd-quadrant moves first (quadrant parity: filling the last
         // empty of a region tends to keep the tempo).
         let empties = board.empty();
         let odd = PARITY_ODD_MASK[parity as usize];
+        // Walking every empty square and treating a zero flip as illegal,
+        // rather than generating the legal moves first. Both were measured.
+        // Paying for one mobility here and iterating only legal squares is a
+        // wash at a bit-identical tree (band22 -0.2%, FFO40-49 -0.2%, 24
+        // empties +0.4%, 26 empties +0.3%): the mobility costs what the
+        // wasted flips cost. Splitting that mobility further into
+        // parity x corner subsets does order better - 1.9% fewer nodes on
+        // band22, 3.9% on FFO40-49, 2.5% at 26 empties - but the masking and
+        // the extra passes eat exactly that much time (-0.5% to +0.9%, all
+        // inside the spread), so the plain scan stays.
         'passes: for pass_mask in [empties & odd, empties & !odd] {
             let mut e = pass_mask;
             while e != 0 {
@@ -2953,21 +3149,41 @@ impl Worker<'_> {
                 }
 
                 any = true;
-                let mut child = *board;
-                child.apply_flips(pos, flips);
-                let child_hash = if need_child_hash {
-                    zobrist::board_hash(opponent_bb ^ flips, player_bb | flips | pos_bit)
+                let child_parity = parity ^ quadrant_id(sq);
+                // A 5-empty node's children have four empties, which is
+                // `last4`'s territory. Routing them back through this
+                // function's entry counted the same position twice and paid
+                // for a prologue a leaf routine cannot use. `search4` keeps
+                // the two guards that prune and drops the rest; the child
+                // board is never materialized either, because the four
+                // remaining empties come straight off the parent's mask and
+                // the hash is unused below 6 empties.
+                let val = if five_empty {
+                    -self.search4(
+                        opponent_bb ^ flips,
+                        player_bb | flips | pos_bit,
+                        empties & !pos_bit,
+                        -upper,
+                        -best.max(orig_lower),
+                        child_parity,
+                    )
                 } else {
-                    0
+                    let mut child = *board;
+                    child.apply_flips(pos, flips);
+                    let child_hash = if need_child_hash {
+                        zobrist::board_hash(opponent_bb ^ flips, player_bb | flips | pos_bit)
+                    } else {
+                        0
+                    };
+                    -self.alpha_beta(
+                        &mut child,
+                        child_hash,
+                        -upper,
+                        -best.max(orig_lower),
+                        false,
+                        child_parity,
+                    )
                 };
-                let val = -self.alpha_beta(
-                    &mut child,
-                    child_hash,
-                    -upper,
-                    -best.max(orig_lower),
-                    false,
-                    parity ^ quadrant_id(sq),
-                );
 
                 if val > best {
                     best = val;
@@ -3000,6 +3216,86 @@ impl Worker<'_> {
         self.shallow_table
             .update(board, hash, orig_lower, upper, best, None);
         best
+    }
+
+    /// A 4-empty child of a 5-empty node, straight from the parent's
+    /// registers.
+    ///
+    /// This is what the tail dispatch through `alpha_beta` used to do, minus
+    /// the node count (`last4` counts the position itself) and minus a
+    /// prologue whose transposition probe and move loop a 4-empty node never
+    /// reaches. The two guards below stay: they prune, and dropping them
+    /// grows the tree.
+    fn search4(
+        &mut self,
+        player: u64,
+        opponent: u64,
+        empties: u64,
+        alpha: i32,
+        beta: i32,
+        parity: u8,
+    ) -> i32 {
+        // The opponent always holds the disc just played, so only the player
+        // side can be wiped out here.
+        //
+        // The counting rule is one node per position entered, so the two
+        // early returns below have to count: they are the entries that never
+        // reach `last4`, which counts the rest. Leaving them out undercounted
+        // FFO40-49 by 11.5M nodes (2.8%) — lopsided positions cut here far
+        // more often than balanced ones, so the bias is set-dependent.
+        if player == 0 {
+            self.nodes += 1;
+            return -64;
+        }
+        {
+            let _p = layer_profile::Scope::new(layer_profile::STAB, 4);
+            if let Some(bound) = stability_cut_bb(player, opponent, 4, alpha, beta) {
+                self.nodes += 1;
+                return bound;
+            }
+        }
+        let mut e = empties;
+        let p1 = e.trailing_zeros() as u8;
+        e &= e - 1;
+        let p2 = e.trailing_zeros() as u8;
+        e &= e - 1;
+        let p3 = e.trailing_zeros() as u8;
+        e &= e - 1;
+        let p4 = e.trailing_zeros() as u8;
+        self.last4(player, opponent, p1, p2, p3, p4, alpha, beta, false, parity)
+    }
+
+    /// `last4` from a `Board`, unpacking the four empty squares. Hot callers
+    /// carry the squares themselves and call `last4` directly.
+    #[inline]
+    fn last4_board(
+        &mut self,
+        board: &Board,
+        alpha: i32,
+        beta: i32,
+        passed: bool,
+        parity: u8,
+    ) -> i32 {
+        let mut e = board.empty();
+        let p1 = e.trailing_zeros() as u8;
+        e &= e - 1;
+        let p2 = e.trailing_zeros() as u8;
+        e &= e - 1;
+        let p3 = e.trailing_zeros() as u8;
+        e &= e - 1;
+        let p4 = e.trailing_zeros() as u8;
+        self.last4(
+            board.player_bb(),
+            board.opponent_bb(),
+            p1,
+            p2,
+            p3,
+            p4,
+            alpha,
+            beta,
+            passed,
+            parity,
+        )
     }
 
     /// Specialized 4-empties search with quadrant-parity move ordering.
@@ -3040,20 +3336,24 @@ impl Worker<'_> {
         let mut alpha = alpha;
         let mut any = false;
 
-        for (a, rest) in [
-            (p1, [p2, p3, p4]),
-            (p2, [p1, p3, p4]),
-            (p3, [p1, p2, p4]),
-            (p4, [p1, p2, p3]),
+        // All four flips up front, sharing one board broadcast. A non-zero
+        // flip already implies an adjacent opponent disc, so the neighbour
+        // guard the loop used to carry is subsumed by `flips == 0` and the
+        // node count is unchanged. Eager flips lose against a scalar flip
+        // routine (the cut-off moves are computed for nothing); against the
+        // vector one they win 1.5% on band22.
+        let (f1, f2, f3, f4) = bitboard::flippable4(player, opponent, p1, p2, p3, p4);
+
+        for (a, rest, flips) in [
+            (p1, [p2, p3, p4], f1),
+            (p2, [p1, p3, p4], f2),
+            (p3, [p1, p2, p4], f3),
+            (p4, [p1, p2, p3], f4),
         ] {
-            if self.neighbours.get(a) & opponent == 0 {
-                continue;
-            }
-            let pos_bit = 1u64 << a;
-            let flips = bitboard::flippable(player, opponent, pos_bit);
             if flips == 0 {
                 continue;
             }
+            let pos_bit = 1u64 << a;
             any = true;
             let val = -self.last3(
                 opponent ^ flips,
@@ -3113,15 +3413,13 @@ impl Worker<'_> {
         let mut alpha = alpha;
         let mut any = false;
 
-        for (a, rest) in [(p1, [p2, p3]), (p2, [p1, p3]), (p3, [p1, p2])] {
-            if self.neighbours.get(a) & opponent == 0 {
-                continue;
-            }
-            let pos_bit = 1u64 << a;
-            let flips = bitboard::flippable(player, opponent, pos_bit);
+        let (f1, f2, f3) = bitboard::flippable3(player, opponent, p1, p2, p3);
+
+        for (a, rest, flips) in [(p1, [p2, p3], f1), (p2, [p1, p3], f2), (p3, [p1, p2], f3)] {
             if flips == 0 {
                 continue;
             }
+            let pos_bit = 1u64 << a;
             any = true;
             let val = -self.last2(
                 opponent ^ flips,
@@ -3166,15 +3464,13 @@ impl Worker<'_> {
         let mut alpha = alpha;
         let mut any = false;
 
-        for (a, b) in [(p1, p2), (p2, p1)] {
-            if self.neighbours.get(a) & opponent == 0 {
-                continue;
-            }
-            let pos_bit = 1u64 << a;
-            let flips = bitboard::flippable(player, opponent, pos_bit);
+        let (f1, f2) = bitboard::flippable2(player, opponent, p1, p2);
+
+        for (a, b, flips) in [(p1, p2, f1), (p2, p1, f2)] {
             if flips == 0 {
                 continue;
             }
+            let pos_bit = 1u64 << a;
             any = true;
             let val = -self.last1(opponent ^ flips, player | flips | pos_bit, b);
             if val >= beta {
@@ -3198,25 +3494,29 @@ impl Worker<'_> {
     /// Exactly one empty square left: resolve without recursion.
     fn last1(&mut self, player: u64, opponent: u64, p1: u8) -> i32 {
         let _prof = layer_profile::Scope::new(layer_profile::SEARCH, 1);
-        let pos_bit = 1u64 << p1;
-        let diff = player.count_ones() as i32 - opponent.count_ones() as i32;
+        debug_assert_eq!(
+            player | opponent | (1u64 << p1),
+            !0u64,
+            "last1 requires a board full but for p1"
+        );
+        // The board is full but for `p1`, so the two sides hold 63 discs
+        // between them and one popcount gives the difference:
+        // `p - (63 - p)`.
+        let diff = 2 * player.count_ones() as i32 - 63;
+        // Both sides' counts share the four line gathers, so the pass branch
+        // below costs nothing extra to have ready.
+        let (mine, theirs) = bitboard::count_last_flips(player, p1);
 
         self.nodes += 1;
         // Current player fills the last square
-        if self.neighbours.get(p1) & opponent != 0 {
-            let n = bitboard::flippable(player, opponent, pos_bit).count_ones() as i32;
-            if n > 0 {
-                return diff + 2 * n + 1;
-            }
+        if mine > 0 {
+            return diff + 2 * mine as i32 + 1;
         }
 
         self.nodes += 1;
         // Current player passes; opponent fills the last square
-        if self.neighbours.get(p1) & player != 0 {
-            let n = bitboard::flippable(opponent, player, pos_bit).count_ones() as i32;
-            if n > 0 {
-                return diff - 2 * n - 1;
-            }
+        if theirs > 0 {
+            return diff - 2 * theirs as i32 - 1;
         }
 
         // Nobody can play the last square: empty goes to the winner
@@ -3345,7 +3645,26 @@ impl Worker<'_> {
                 board.opponent_bb() ^ flipped,
                 board.player_bb() | flipped | pos.to_bit(),
             );
-            self.table(board.empty_count() - 1).prefetch(child_hash);
+            // Prefetching every generated move, not just the ones the node
+            // reaches, is the shape that measured best: gating it on
+            // `empties >= ETC_EMPTIES` (its stated purpose) cost 8%, and
+            // gating it only where the target is the main table cost 1.5%.
+            // The shallow layers consume it too, through the ordinary probe.
+            // Prefetch the entry this child will actually probe. Which
+            // table that is depends on the child's own layer: the ordered
+            // stage below `TT_MIN_EMPTIES` consults none, and the plain
+            // stage has its own small table. Prefetching every child into
+            // the mid table regardless — the shape that measured best while
+            // seven and eight still probed it — now fetches lines nobody
+            // reads and evicts ones somebody does. Trees are identical;
+            // band22 -2.4%, fix22 -2.0%, ffo40-49 -0.7% over four rounds,
+            // and the same signs over three earlier ones.
+            let child_empties = board.empty_count() - 1;
+            if child_empties >= TT_MIN_EMPTIES {
+                self.table(child_empties).prefetch(child_hash);
+            } else if child_empties < MOVE_ORDERING_LIMIT {
+                self.shallow_table.prefetch(child_hash);
+            }
             out.push(ScoredMove {
                 pos,
                 flipped,
@@ -3401,7 +3720,7 @@ impl Worker<'_> {
         // pruned search costs several times the previous one, the deep
         // problems drowned in
         // ordering work: on FFO56 the lookahead alone was 17% of the solve.
-        let sort_depth = SORT_DEPTH_LADDER[(board.empty_count() as usize).min(63)];
+        let sort_depth = sort_depth_ladder()[(board.empty_count() as usize).min(63)];
         let player_bb = board.player_bb();
         let opponent_bb = board.opponent_bb();
         for sm in moves.iter_mut() {
@@ -3725,24 +4044,30 @@ const SQUARE_VALUE: [u8; 64] = [
 ];
 
 /// Corner stability count: corners owned plus adjacent edge discs.
+///
+/// Branchless: each shift moves the owned corners of one board edge onto
+/// their two neighbours, so a neighbour survives the final `& bb` only when
+/// both it and its corner are ours. The loop form this replaces ran up to
+/// twelve dependent test-and-branch pairs on a value the ordering needs for
+/// every move; this is four shifts, five ORs, one AND and one popcount.
+/// Layout is file-major, so `<< 1` steps a rank and `<< 8` steps a file.
+#[inline]
 fn corner_stability_bb(bb: u64) -> i32 {
-    use crate::pattern::sq::*;
+    // Corners grouped by the board edge whose neighbour they own:
+    // rank 1 (A1, H1), rank 8 (A8, H8), file A (A1, A8), file H (H1, H8).
+    const RANK1_CORNERS: u64 = 0x0100_0000_0000_0001;
+    const RANK8_CORNERS: u64 = 0x8000_0000_0000_0080;
+    const FILE_A_CORNERS: u64 = 0x0000_0000_0000_0081;
+    const FILE_H_CORNERS: u64 = 0x8100_0000_0000_0000;
+    const CORNERS: u64 = 0x8100_0000_0000_0081;
 
-    let has = |s: u8| bb & (1u64 << s) != 0;
-
-    let mut count = 0;
-    for (corner, edge1, edge2) in [(A1, B1, A2), (A8, B8, A7), (H1, G1, H2), (H8, G8, H7)] {
-        if has(corner) {
-            count += 1;
-            if has(edge1) {
-                count += 1;
-            }
-            if has(edge2) {
-                count += 1;
-            }
-        }
-    }
-    count
+    let stable = (((RANK1_CORNERS & bb) << 1)
+        | ((RANK8_CORNERS & bb) >> 1)
+        | ((FILE_A_CORNERS & bb) << 8)
+        | ((FILE_H_CORNERS & bb) >> 8)
+        | CORNERS)
+        & bb;
+    stable.count_ones() as i32
 }
 
 /// Where the search spends its time, split by empty count and by phase.
@@ -3889,6 +4214,134 @@ pub mod node_accounting {
 mod tests {
     use super::*;
     use crate::board::Board;
+
+    /// The 5-6 band walks every empty square and calls a zero flip illegal.
+    /// Generating the legal moves instead was measured (see the comment on
+    /// that loop) and was a wash, but the equivalence it rests on is worth
+    /// pinning: mobility must agree with the flip scan square for square,
+    /// and the parity x corner subsets must partition it.
+    #[test]
+    fn shallow_subsets_cover_the_same_moves_as_the_scan() {
+        let neighbours = NeighbourTable::new();
+        let mut seed = 0x1234_5678_9abc_def1u64;
+        let mut rand = move || {
+            seed ^= seed << 13;
+            seed ^= seed >> 7;
+            seed ^= seed << 17;
+            seed
+        };
+        for _ in 0..20_000 {
+            // A full board minus a handful of squares, split between the
+            // two sides: the shape this band actually sees.
+            let mut empty = 0u64;
+            while empty.count_ones() < 6 {
+                empty |= 1u64 << (rand() % 64);
+            }
+            let player = !empty & rand();
+            let opponent = !empty & !player;
+            if player == 0 || opponent == 0 {
+                continue;
+            }
+
+            let mut scanned = 0u64;
+            let mut e = empty;
+            while e != 0 {
+                let sq = e.trailing_zeros() as u8;
+                e &= e - 1;
+                if neighbours.get(sq) & opponent == 0 {
+                    continue;
+                }
+                if bitboard::flippable(player, opponent, 1u64 << sq) != 0 {
+                    scanned |= 1u64 << sq;
+                }
+            }
+
+            let moves = bitboard::mobility(player, opponent, empty);
+            assert_eq!(moves, scanned, "mobility disagrees with the flip scan");
+
+            for parity in 0..16u8 {
+                const CORNERS: u64 = 0x8100_0000_0000_0081;
+                let odd = PARITY_ODD_MASK[parity as usize];
+                let (om, em) = (moves & odd, moves & !odd);
+                let subsets = [om & CORNERS, om & !CORNERS, em & CORNERS, em & !CORNERS];
+                let mut union = 0u64;
+                let mut total = 0u32;
+                for m in subsets {
+                    union |= m;
+                    total += m.count_ones();
+                }
+                assert_eq!(union, moves, "subsets lose a move");
+                assert_eq!(total, moves.count_ones(), "subsets repeat a move");
+            }
+        }
+    }
+
+    /// The ladder builder must reproduce the hand-written shape it replaced.
+    #[test]
+    fn sort_ladder_steps_one_ply_at_a_time() {
+        for (e, &d) in SORT_DEPTH_LADDER.iter().enumerate() {
+            let want = if e >= 28 {
+                3
+            } else if e >= 19 {
+                2
+            } else if e >= 16 {
+                1
+            } else {
+                0
+            };
+            assert_eq!(d, want, "sort depth at {e} empties");
+        }
+    }
+
+    /// The branch-per-corner form `corner_stability_bb` replaced.
+    fn corner_stability_loop(bb: u64) -> i32 {
+        use crate::pattern::sq::*;
+        let has = |s: u8| bb & (1u64 << s) != 0;
+        let mut count = 0;
+        for (corner, edge1, edge2) in [(A1, B1, A2), (A8, B8, A7), (H1, G1, H2), (H8, G8, H7)] {
+            if has(corner) {
+                count += 1;
+                if has(edge1) {
+                    count += 1;
+                }
+                if has(edge2) {
+                    count += 1;
+                }
+            }
+        }
+        count
+    }
+
+    #[test]
+    fn corner_stability_matches_the_loop() {
+        // Only twelve squares can contribute, so enumerate all of them
+        // exhaustively and let random noise fill the rest of the board.
+        const RELEVANT: [u8; 12] = [0, 1, 8, 7, 6, 15, 56, 57, 48, 63, 62, 55];
+        let mut state = 0x2545_F491_4F6C_DD1Du64;
+        let mut next = || {
+            state ^= state << 13;
+            state ^= state >> 7;
+            state ^= state << 17;
+            state
+        };
+        let relevant_mask: u64 = RELEVANT.iter().fold(0, |m, s| m | (1u64 << s));
+        for pattern in 0..4096u32 {
+            let mut bits = 0u64;
+            for (i, sq) in RELEVANT.iter().enumerate() {
+                if pattern >> i & 1 != 0 {
+                    bits |= 1u64 << sq;
+                }
+            }
+            for _ in 0..64 {
+                let bb = bits | (next() & !relevant_mask);
+                assert_eq!(
+                    corner_stability_bb(bb),
+                    corner_stability_loop(bb),
+                    "bb={bb:#018x}"
+                );
+            }
+        }
+    }
 
     /// Brute-force negamax over full boards for cross-checking the solver.
     fn negamax(board: &Board, passed: bool) -> i32 {
