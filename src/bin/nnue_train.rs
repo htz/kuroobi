@@ -15,7 +15,7 @@ use std::time::Instant;
 
 use kuroobi::evaluator::{Evaluator, STAGE_COUNT};
 use kuroobi::nnue::{sym_board, AdamState, Nnue};
-use kuroobi::pattern::EGAROUCID_PATTERNS;
+use kuroobi::pattern::{COMPACT_PATTERNS, EGAROUCID_PATTERNS};
 use kuroobi::trainer::{count_examples_binary, load_examples_binary_into, Example};
 
 fn val_mse(nn: &Nnue, val: &[Example]) -> f64 {
@@ -246,10 +246,12 @@ fn main() -> ExitCode {
     let mut max_examples = DEFAULT_MAX_EXAMPLES;
     let mut val_cap: Option<usize> = None;
     let mut init: Option<PathBuf> = None;
+    let mut which_patterns = String::from("egaroucid");
 
     let mut it = std::env::args().skip(1);
     while let Some(a) = it.next() {
         match a.as_str() {
+            "--patterns" => which_patterns = it.next().unwrap(),
             "--epochs" => epochs = it.next().unwrap().parse().unwrap(),
             "--lr" => lr = it.next().unwrap().parse().unwrap(),
             "--decay" => decay = it.next().unwrap().parse().unwrap(),
@@ -325,7 +327,18 @@ fn main() -> ExitCode {
         val.len()
     );
 
-    let mut nn = Nnue::new(EGAROUCID_PATTERNS);
+    /* A weight file belongs to the pattern set it was trained on -- the
+    feature space is a different size and a different shape -- so `--init`
+    across sets cannot work and is not worth a fallback. */
+    let patterns = match which_patterns.as_str() {
+        "compact" => COMPACT_PATTERNS,
+        "egaroucid" => EGAROUCID_PATTERNS,
+        other => {
+            eprintln!("unknown pattern set {other} (egaroucid | compact)");
+            return ExitCode::FAILURE;
+        }
+    };
+    let mut nn = Nnue::new(patterns);
     match &init {
         // Warm start: keep training a model instead of starting over.
         Some(p) => match nn.load(p) {
@@ -337,7 +350,12 @@ fn main() -> ExitCode {
         },
         None => nn.init_weights(),
     }
-    println!("nnue: H={} features={}", kuroobi::nnue::H, nn.n_features());
+    println!(
+        "nnue: patterns={which_patterns} masks={} H={} features={}",
+        patterns.iter().map(|p| p.masks.len()).sum::<usize>(),
+        kuroobi::nnue::H,
+        nn.n_features()
+    );
 
     /* Fit the disc-count table in closed form: with the network frozen
     the optimum per bucket is its mean residual — exact, fast, and it
@@ -552,7 +570,7 @@ fn main() -> ExitCode {
     // Evaluate the average itself; if it beats the points, it wins.
     if let Some((acc, n)) = swa_sum {
         let mean: Vec<f32> = acc.iter().map(|x| x / n as f32).collect();
-        let mut avg = Nnue::new(EGAROUCID_PATTERNS);
+        let mut avg = Nnue::new(patterns);
         avg.set_weights_flat(&mean);
         let vm = val_mse(&avg, &val);
         println!("swa over {n} epochs: val {vm:.4}");

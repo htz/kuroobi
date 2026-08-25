@@ -48,7 +48,7 @@ use crate::position::Position;
 /// Selected by cargo feature so a width can be built and measured without
 /// editing the source out from under a running trainer:
 /// `cargo build --release --features h64 --target-dir target-h64`.
-#[cfg(not(any(feature = "h16", feature = "h64", feature = "h128")))]
+#[cfg(not(any(feature = "h16", feature = "h64", feature = "h128", feature = "h256")))]
 pub const H: usize = 32;
 #[cfg(feature = "h16")]
 pub const H: usize = 16;
@@ -56,6 +56,8 @@ pub const H: usize = 16;
 pub const H: usize = 64;
 #[cfg(feature = "h128")]
 pub const H: usize = 128;
+#[cfg(feature = "h256")]
+pub const H: usize = 256;
 
 /// How many independent copies of the feature transformer the model keeps,
 /// one per slice of the game.

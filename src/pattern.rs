@@ -453,6 +453,117 @@ pub const EGAROUCID_PLUS_PATTERNS: &[Pattern] = &[
     DIAGONAL4,
 ];
 
+/// A smaller pattern library: 8 shapes, 32 masks, no shape wider than 9
+/// squares.
+///
+/// What a leaf costs is set by how many rows it pulls in and from how large
+/// a table, not by the arithmetic on them, and [`EGAROUCID_PATTERNS`] is
+/// expensive on both counts: 64 masks, and nine 10-square shapes whose
+/// 3^10 tables are 87% of its 612,360 rows. This set halves the reads and
+/// leaves 74,358 rows -- 12% of the table -- which is small enough to sit
+/// in L2 rather than stream from memory. Measured on band29 at depth 13
+/// over an identical tree: 7.25M nodes/s to 10.68M at H=64.
+///
+/// The shapes are ones a stronger evaluator is known to use, transcribed
+/// into this repo's convention where orientations of a shape share one
+/// table. **That convention is worth keeping.** The alternative is a
+/// table per orientation instead (297,432 rows), and copying that was
+/// measured and rejected: it made training error *worse* (42.66 to 45.75
+/// over three epochs) while running 1.32x slower. Reversi is symmetric and
+/// `--sym-train` already turns every position eight ways, so separate
+/// tables re-learn one function four times over a quarter of the data
+/// each.
+///
+/// **Weight files are not interchangeable with `EGAROUCID_PATTERNS`** --
+/// the feature space is a different size and a different shape, so a model
+/// has to be trained from scratch against whichever set it will be
+/// evaluated with.
+pub const COMPACT_PATTERNS: &[Pattern] = &[
+    Pattern {
+        name: "Inner2x4",
+        size: 8,
+        masks: &[
+            &[C2, D2, E2, F2, C3, D3, E3, F3],
+            &[C7, D7, E7, F7, C6, D6, E6, F6],
+            &[B3, B4, B5, B6, C3, C4, C5, C6],
+            &[G3, G4, G5, G6, F3, F4, F5, F6],
+        ],
+    },
+    Pattern {
+        name: "Diagonal8",
+        size: 8,
+        masks: &[
+            &[A1, B2, C3, D4, E5, F6, G7, H8],
+            &[H1, G2, F3, E4, D5, C6, B7, A8],
+        ],
+    },
+    Pattern {
+        name: "Center2x4",
+        size: 8,
+        masks: &[
+            &[C4, D4, E4, F4, C5, D5, E5, F5],
+            &[D3, E3, D4, E4, D5, E5, D6, E6],
+        ],
+    },
+    Pattern {
+        name: "Line1",
+        size: 8,
+        masks: &[
+            &[A1, B1, C1, D1, E1, F1, G1, H1],
+            &[A8, B8, C8, D8, E8, F8, G8, H8],
+            &[A1, A2, A3, A4, A5, A6, A7, A8],
+            &[H1, H2, H3, H4, H5, H6, H7, H8],
+        ],
+    },
+    /* Eight masks, because each edge contributes the shape and its
+    mirror: the block is not symmetric about the edge's midpoint, so the
+    two readings of one edge are genuinely different features. */
+    Pattern {
+        name: "Edge2x4",
+        size: 8,
+        masks: &[
+            &[B1, C1, D1, E1, B2, C2, D2, E2],
+            &[G1, F1, E1, D1, G2, F2, E2, D2],
+            &[B8, C8, D8, E8, B7, C7, D7, E7],
+            &[G8, F8, E8, D8, G7, F7, E7, D7],
+            &[A2, A3, A4, A5, B2, B3, B4, B5],
+            &[A7, A6, A5, A4, B7, B6, B5, B4],
+            &[H2, H3, H4, H5, G2, G3, G4, G5],
+            &[H7, H6, H5, H4, G7, G6, G5, G4],
+        ],
+    },
+    Pattern {
+        name: "Corner3x3",
+        size: 9,
+        masks: &[
+            &[A1, B1, C1, A2, B2, C2, A3, B3, C3],
+            &[H1, G1, F1, H2, G2, F2, H3, G3, F3],
+            &[A8, B8, C8, A7, B7, C7, A6, B6, C6],
+            &[H8, G8, F8, H7, G7, F7, H6, G6, F6],
+        ],
+    },
+    Pattern {
+        name: "Center3x3",
+        size: 9,
+        masks: &[
+            &[B2, C2, D2, B3, C3, D3, B4, C4, D4],
+            &[G2, F2, E2, G3, F3, E3, G4, F4, E4],
+            &[B7, C7, D7, B6, C6, D6, B5, C5, D5],
+            &[G7, F7, E7, G6, F6, E6, G5, F5, E5],
+        ],
+    },
+    Pattern {
+        name: "Diagonal7",
+        size: 7,
+        masks: &[
+            &[B1, C2, D3, E4, F5, G6, H7],
+            &[A2, B3, C4, D5, E6, F7, G8],
+            &[G1, F2, E3, D4, C5, B6, A7],
+            &[H2, G3, F4, E5, D6, C7, B8],
+        ],
+    },
+];
+
 /// Convenience holder pairing both pattern libraries.
 #[derive(Debug, Clone, Copy)]
 pub struct PatternSet {
@@ -520,6 +631,41 @@ mod tests {
     fn test_pattern_counts() {
         assert_eq!(EGAROUCID_PATTERNS.len(), 16, "Egaroucid has 16 patterns");
         assert_eq!(EDAX_PATTERNS.len(), 12, "Edax has 12 patterns");
+    }
+
+    /// The point of [`COMPACT_PATTERNS`] is a smaller, cheaper feature
+    /// space, so the two numbers that make it cheaper are pinned here. A
+    /// transcription slip that duplicated a mask or widened a shape would
+    /// otherwise show up only as an unexplained slowdown, months later.
+    #[test]
+    fn compact_patterns_are_the_size_they_are_for() {
+        let masks: usize = COMPACT_PATTERNS.iter().map(|p| p.masks.len()).sum();
+        let rows: usize = COMPACT_PATTERNS.iter().map(|p| p.table_size()).sum();
+        assert_eq!(masks, 32, "row reads per evaluation");
+        assert_eq!(rows, 74_358, "weight rows, orientations sharing a table");
+        assert!(
+            COMPACT_PATTERNS.iter().all(|p| p.size <= 9),
+            "a 10-square shape costs 3^10 rows, which is what this set exists to avoid"
+        );
+    }
+
+    /// Every mask must name distinct squares on the board. A repeat would
+    /// waste a ternary digit and make two different positions share an
+    /// index; a stray value would read outside the board.
+    #[test]
+    fn compact_pattern_masks_are_well_formed() {
+        for p in COMPACT_PATTERNS {
+            for (m, mask) in p.masks.iter().enumerate() {
+                assert_eq!(mask.len(), p.size, "{} mask {m} length", p.name);
+                let mut seen = 0u64;
+                for &sq in mask.iter() {
+                    assert!(sq < 64, "{} mask {m} square {sq} off the board", p.name);
+                    let bit = 1u64 << sq;
+                    assert_eq!(seen & bit, 0, "{} mask {m} repeats square {sq}", p.name);
+                    seen |= bit;
+                }
+            }
+        }
     }
 
     #[test]

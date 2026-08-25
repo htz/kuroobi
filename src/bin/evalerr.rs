@@ -10,7 +10,7 @@
 //! Usage: evalerr [--nnue path] [--linear] <file.data>...
 use kuroobi::evaluator::Evaluator;
 use kuroobi::nnue::Nnue;
-use kuroobi::pattern::EGAROUCID_PATTERNS;
+use kuroobi::pattern::{COMPACT_PATTERNS, EGAROUCID_PATTERNS};
 use kuroobi::{Board, Color};
 
 fn main() {
@@ -18,10 +18,12 @@ fn main() {
     let mut linear = false;
     let mut no_mlp = false;
     let mut files: Vec<String> = Vec::new();
+    let mut which = String::from("egaroucid");
     let mut it = std::env::args().skip(1);
     while let Some(a) = it.next() {
         match a.as_str() {
             "--nnue" => nnue_path = it.next().unwrap_or(nnue_path),
+            "--patterns" => which = it.next().unwrap_or(which),
             "--linear" => linear = true,
             // Zero the additive head, to separate what it contributes from
             // what the training recipe did.
@@ -30,7 +32,14 @@ fn main() {
             other => files.push(other.to_string()),
         }
     }
-    let mut nn = Nnue::new(EGAROUCID_PATTERNS);
+    // A weight file belongs to the set it was trained on; loading it under
+    // the wrong one is a size mismatch, not a silent misread.
+    let patterns = match which.as_str() {
+        "compact" => COMPACT_PATTERNS,
+        "egaroucid" => EGAROUCID_PATTERNS,
+        other => panic!("unknown pattern set {other}"),
+    };
+    let mut nn = Nnue::new(patterns);
     nn.load(std::path::Path::new(&nnue_path)).expect("nnue");
     if no_mlp {
         nn.set_mlp(

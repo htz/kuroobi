@@ -6,10 +6,20 @@
 //! the same depth can be compared on time directly. A change that leaves the
 //! node count untouched changed no decision, only speed.
 //!
-//! Usage: nnue_obf --depth <n> [--threads <n>] [--nnue <file>] <file.obf>
+//! `--patterns compact` swaps the feature set, and `--random` fills the
+//! transformer with noise instead of loading a file. Together they answer
+//! "what would a different feature set cost per node" before anything is
+//! trained against it -- a weight file belongs to the pattern set it was
+//! trained on, so there is no other way to time a set that has no model
+//! yet. Read only the nodes/s from such a run: the tree a random model
+//! walks is not the tree a real one walks, so the node count is
+//! meaningless and the seconds with it.
+//!
+//! Usage: nnue_obf --depth <n> [--threads <n>] [--nnue <file>]
+//!                 [--patterns egaroucid|compact] [--random] <file.obf>
 use kuroobi::midgame::{NnueSearch, SharedTt};
 use kuroobi::nnue::Nnue;
-use kuroobi::pattern::EGAROUCID_PATTERNS;
+use kuroobi::pattern::{COMPACT_PATTERNS, EGAROUCID_PATTERNS};
 use kuroobi::Board;
 use std::time::Instant;
 
@@ -17,6 +27,8 @@ fn main() {
     let mut depth: u32 = 15;
     let mut threads: usize = 1;
     let mut nnue_path = String::from("weights/nnue-h16.bin");
+    let mut which = String::from("egaroucid");
+    let mut random = false;
     let mut files: Vec<String> = Vec::new();
     let mut it = std::env::args().skip(1);
     while let Some(a) = it.next() {
@@ -24,11 +36,33 @@ fn main() {
             "--depth" => depth = it.next().and_then(|v| v.parse().ok()).unwrap_or(depth),
             "--threads" => threads = it.next().and_then(|v| v.parse().ok()).unwrap_or(threads),
             "--nnue" => nnue_path = it.next().unwrap_or(nnue_path),
+            "--patterns" => which = it.next().unwrap_or(which),
+            "--random" => random = true,
             other => files.push(other.to_string()),
         }
     }
-    let mut nn = Nnue::new(EGAROUCID_PATTERNS);
-    nn.load(std::path::Path::new(&nnue_path)).expect("nnue");
+    let patterns = match which.as_str() {
+        "compact" => COMPACT_PATTERNS,
+        "egaroucid" => EGAROUCID_PATTERNS,
+        other => panic!("unknown pattern set {other}"),
+    };
+    let mut nn = Nnue::new(patterns);
+    if random {
+        // Spread over roughly the range a trained transformer occupies, so
+        // quantisation picks the scale it would pick in earnest.
+        let mut s: u64 = 0x2545_F491_4F6C_DD1D;
+        let mut w = nn.weights_flat();
+        let n = nn.ft_len();
+        for x in w[..n].iter_mut() {
+            s ^= s << 13;
+            s ^= s >> 7;
+            s ^= s << 17;
+            *x = ((s >> 40) as i32 as f32) / 2.0e6;
+        }
+        nn.set_weights_flat(&w);
+    } else {
+        nn.load(std::path::Path::new(&nnue_path)).expect("nnue");
+    }
     nn.quantize();
     let nn: &'static Nnue = Box::leak(Box::new(nn));
     let tt: &'static SharedTt = Box::leak(Box::new(SharedTt::new(22)));
@@ -73,7 +107,9 @@ fn main() {
             );
         }
         println!(
-            "{f}: {total_nodes} nodes in {total_time:.3}s ({:.2}M nodes/s)",
+            "{f}: [{which}, {} masks, {} rows] {total_nodes} nodes in {total_time:.3}s ({:.2}M nodes/s)",
+            patterns.iter().map(|p| p.masks.len()).sum::<usize>(),
+            patterns.iter().map(|p| p.table_size()).sum::<usize>(),
             total_nodes as f64 / total_time / 1e6
         );
     }

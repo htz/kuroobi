@@ -31,6 +31,7 @@ nnue-scalar = []
 h16 = []
 h64 = []
 h128 = []
+h256 = []
 # Independent copies of the feature transformer, one per slice of the game.
 # Default (no feature) is a single shared copy. Buckets add parameters without
 # adding row reads, and cost only the footprint; see `nnue::FT_BUCKETS`.
