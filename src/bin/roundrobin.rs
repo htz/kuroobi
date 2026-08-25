@@ -11,8 +11,15 @@
 //!   roundrobin --games <n> --depth <n> [--time-ms <n>] [--threads <n>]
 //!              [--engine name=protocol=path]...
 //!
-//! `protocol` is one of `edax`, `zebra`, `egaroucid`, `kuroobi`, or `ours`.
-//! Exactly one `ours` entry is expected; its path is ignored.
+//! `protocol` is one of `edax`, `zebra`, `egaroucid`, `kuroobi`, `extgtp`,
+//! or `ours`. Exactly one `ours` entry is expected; its path is ignored.
+//!
+//! `extgtp` is for an engine this file knows nothing about: the whole command
+//! line is passed through untouched and the clock is handed over in-band with
+//! GTP `time_settings`, so no dialect has to be guessed. GTP states time in
+//! whole seconds, which puts a one-second floor on `--time-ms` for such an
+//! engine. Engines that pass by themselves are accommodated too -- see the
+//! replay loop in `best_move`.
 //!
 //! `kuroobi` runs itself as separate processes: the NNUE accumulator
 //! width `H` is a compile-time constant, so different-H models cannot
@@ -142,6 +149,12 @@ impl Engine {
                 }
                 v
             }
+            /* An outside engine invoked exactly as written, with its own
+            flags. Nothing is added, because there is no dialect to guess:
+            the whole command line comes from the caller. Time control
+            reaches it over GTP instead (see `time_settings` below), which
+            is the only channel a stranger is guaranteed to understand. */
+            "extgtp" => Vec::new(),
             _ => vec![
                 "-book-usage".into(),
                 "off".into(),
@@ -155,17 +168,18 @@ impl Engine {
         as extra args: each build must point at its own weights (a
         different-H NNUE fails to load). The working directory is left
         alone so weights can be relative. */
-        let (program, extra): (PathBuf, Vec<String>) = if protocol == "kuroobi" {
-            let s = path.to_string_lossy();
-            let mut w = s.split_whitespace();
-            let p = PathBuf::from(w.next().unwrap_or_default());
-            (p, w.map(str::to_string).collect())
-        } else {
-            (path.to_path_buf(), Vec::new())
-        };
+        let (program, extra): (PathBuf, Vec<String>) =
+            if protocol == "kuroobi" || protocol == "extgtp" {
+                let s = path.to_string_lossy();
+                let mut w = s.split_whitespace();
+                let p = PathBuf::from(w.next().unwrap_or_default());
+                (p, w.map(str::to_string).collect())
+            } else {
+                (path.to_path_buf(), Vec::new())
+            };
         let mut cmd = Command::new(&program);
         cmd.args(args).args(extra);
-        if protocol != "kuroobi" {
+        if protocol != "kuroobi" && protocol != "extgtp" {
             cmd.current_dir(dir);
         }
         let mut child = cmd
@@ -178,7 +192,7 @@ impl Engine {
             .spawn()?;
         let stdin = child.stdin.take().unwrap();
         let stdout = BufReader::new(child.stdout.take().unwrap());
-        Ok(Engine {
+        let mut e = Engine {
             name: name.into(),
             protocol: protocol.into(),
             child: Some(child),
@@ -187,7 +201,19 @@ impl Engine {
             history: Vec::new(),
             ours: None,
             depth,
-        })
+        };
+        /* Our own builds take the clock as a flag; an outside engine gets it
+        over GTP. `0 <n> 0` is the spelling for "n seconds per move" -- main
+        time zero, byo-yomi with no stone count. GTP counts in whole seconds,
+        so a sub-second budget cannot be expressed and rounds up to one.
+        Not sent to `kuroobi`, which answers `?` to an unknown command, and
+        `read_gtp` turns that into a failed match. */
+        if protocol == "extgtp" && time_ms > 0 {
+            let sec = time_ms.div_ceil(1000).max(1);
+            e.send(&format!("time_settings 0 {sec} 0"))?;
+            e.read_gtp()?;
+        }
+        Ok(e)
     }
 
     fn send(&mut self, cmd: &str) -> std::io::Result<()> {
@@ -253,12 +279,23 @@ impl Engine {
                     Ok(searcher.search(board, evaluator, depth).best_move)
                 }
             }
-            "egaroucid" | "kuroobi" => {
+            "egaroucid" | "kuroobi" | "extgtp" => {
                 self.send("clear_board").map_err(|e| e.to_string())?;
                 self.read_gtp().map_err(|e| e.to_string())?;
                 let hist = std::mem::take(&mut self.history);
                 for (i, mv) in hist.iter().enumerate() {
+                    /* A pass still counts as a ply, so the colour keeps
+                    alternating with the index whether or not the move is
+                    replayed. */
                     let c = if i % 2 == 0 { "B" } else { "W" };
+                    /* An outside engine may pass on its own the moment the
+                    side to move has nothing legal, and then a `play <c> pass`
+                    advances the turn a second time -- the replay desynchronises
+                    and the engine rejects the next move with "wrong color".
+                    Skipping it leaves both sides on the same ply. */
+                    if proto == "extgtp" && mv == "pass" {
+                        continue;
+                    }
                     self.send(&format!("play {c} {mv}"))
                         .map_err(|e| e.to_string())?;
                     self.read_gtp().map_err(|e| e.to_string())?;
