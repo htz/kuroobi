@@ -24,6 +24,21 @@ layer-profile = []
 # Force the scalar NNUE accumulator path even on aarch64 (to measure the
 # NEON speedup). Off by default; NEON is used automatically on aarch64.
 nnue-scalar = []
+# Accumulator width. Default (no feature) is H=32. Pick one at most; they are
+# mutually exclusive and a weight file is only loadable by the width that
+# wrote it. Build a second width beside the default with its own target dir:
+#   cargo build --release --features h64 --target-dir target-h64
+h16 = []
+h64 = []
+h128 = []
+# Independent copies of the feature transformer, one per slice of the game.
+# Default (no feature) is a single shared copy. Buckets add parameters without
+# adding row reads, and cost only the footprint; see `nnue::FT_BUCKETS`.
+# A weight file records the whole table, so widths and bucket counts are not
+# interchangeable -- build each beside the default with its own target dir.
+ftb2 = []
+ftb4 = []
+ftb6 = []
 
 [[bench]]
 name = "core"
