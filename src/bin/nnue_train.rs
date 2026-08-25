@@ -73,6 +73,76 @@ fn shards(counts: &[usize], order: &[usize], max: usize) -> Vec<Shard> {
     out
 }
 
+/// Synchronous minibatch AdamW: threads accumulate gradients into private
+/// sinks, one optimizer step per batch. No Hogwild races, so Adam's moments
+/// stay coherent (the async variant diverged).
+#[allow(clippy::too_many_arguments)]
+fn train_pass_minibatch(
+    nn: &mut Nnue,
+    adam: &mut AdamState,
+    sinks: &mut Vec<kuroobi::nnue::GradSink>,
+    examples: &[Example],
+    threads: usize,
+    batch: usize,
+    lr_for_step: &mut impl FnMut() -> f32,
+    wd: f32,
+    sym_seed: u64,
+) -> f64 {
+    let threads = threads.max(1);
+    while sinks.len() < threads {
+        sinks.push(kuroobi::nnue::GradSink::new(threads));
+    }
+    let mut sq_total = 0.0f64;
+    for (bno, chunk) in examples.chunks(batch.max(1)).enumerate() {
+        let bno = bno as u64;
+        let per = chunk.len().div_ceil(threads).max(1);
+        let nn_ref = &*nn;
+        let mut used = 0usize;
+        std::thread::scope(|scope| {
+            let mut handles = Vec::new();
+            for (ti, (part, sink)) in chunk.chunks(per).zip(sinks.iter_mut()).enumerate() {
+                used += 1;
+                handles.push(scope.spawn(move || {
+                    sink.clear();
+                    let mut s = 0.0f64;
+                    let mut rs = sym_seed
+                        ^ (0x9E37_79B9_7F4A_7C15u64
+                            .wrapping_mul((ti as u64 + 1) * 0x1000 + bno + 1));
+                    for ex in part {
+                        let ex = if sym_seed == 0 {
+                            *ex
+                        } else {
+                            rs ^= rs >> 12;
+                            rs ^= rs << 25;
+                            rs ^= rs >> 27;
+                            let i = (rs.wrapping_mul(0x2545_F491_4F6C_DD1D) >> 61) as u8;
+                            Example {
+                                black: sym_board(ex.black, i),
+                                white: sym_board(ex.white, i),
+                                score: ex.score,
+                            }
+                        };
+                        let board = ex.board();
+                        let stage = Evaluator::stage(&board);
+                        let discs = ex.black.count_ones() as usize;
+                        let mob = kuroobi::nnue::Nnue::mob_index(&board);
+                        let ix = nn_ref.indices(ex.black, ex.white);
+                        s += nn_ref.grad_black_into(&ix, stage, discs, mob, ex.score as f32, sink)
+                            as f64;
+                    }
+                    s
+                }));
+            }
+            for h in handles {
+                sq_total += h.join().unwrap();
+            }
+        });
+        let lr = lr_for_step();
+        nn.apply_adamw_batch(&mut sinks[..used], adam, lr, wd, 1.0 / chunk.len() as f32);
+    }
+    sq_total
+}
+
 fn train_pass(
     nn: &mut Nnue,
     adam: Option<&mut AdamState>,
@@ -121,6 +191,7 @@ fn train_pass(
                     // Examples are normalized to Black to move, so the
                     // mover's disc count = Black's.
                     let discs = ex.black.count_ones() as usize;
+                    let mob = kuroobi::nnue::Nnue::mob_index(&board);
                     let ix = nn_ref.indices(ex.black, ex.white);
                     // SAFETY: `view` / `av` are from `nn` and its moments,
                     // both borrowed immutably here.
@@ -132,6 +203,7 @@ fn train_pass(
                                 &ix,
                                 stage,
                                 discs,
+                                mob,
                                 ex.score as f32,
                                 lr,
                             ),
@@ -140,6 +212,7 @@ fn train_pass(
                                 &ix,
                                 stage,
                                 discs,
+                                mob,
                                 ex.score as f32,
                                 lr,
                             ),
@@ -157,6 +230,9 @@ fn main() -> ExitCode {
     let mut epochs = 10usize;
     let mut lr = 0.02f32;
     let mut decay = 1.0f32;
+    let mut cosine = false;
+    let mut wd = 0.0f32;
+    let mut minibatch = 0usize;
     let mut adam = false;
     let mut sym_train = false;
     let mut fit_num = false;
@@ -177,6 +253,9 @@ fn main() -> ExitCode {
             "--epochs" => epochs = it.next().unwrap().parse().unwrap(),
             "--lr" => lr = it.next().unwrap().parse().unwrap(),
             "--decay" => decay = it.next().unwrap().parse().unwrap(),
+            "--cosine" => cosine = true,
+            "--wd" => wd = it.next().unwrap().parse().unwrap(),
+            "--minibatch" => minibatch = it.next().unwrap().parse().unwrap(),
             "--adam" => adam = true,
             "--sym-train" => sym_train = true,
             "--fit-num" => fit_num = true,
@@ -311,12 +390,20 @@ fn main() -> ExitCode {
 
     /* Adam moments cost two weight copies (78 MB at H=16); allocate
     only on request. */
+    let mut sinks: Vec<kuroobi::nnue::GradSink> = Vec::new();
+    let mut mb_step: u64 = 0;
+    let base_lr = lr;
+    // Total optimizer steps for the cosine sweep (estimated from the first
+    // epoch's example count; refined after epoch 1).
+    let mut mb_total_steps: u64 = 0;
     let mut adam_state = adam.then(|| {
         println!(
             "adam: moments {} MB",
             (nn.ft_len() + STAGE_COUNT * kuroobi::nnue::H) * 2 * 4 / 1_000_000
         );
-        AdamState::new(&nn)
+        let mut st = AdamState::new(&nn);
+        st.wd = wd;
+        st
     });
 
     let mut swa_sum: Option<(Vec<f32>, usize)> = None;
@@ -338,7 +425,19 @@ fn main() -> ExitCode {
     }
     for epoch in 1..=epochs {
         let t = Instant::now();
-        let cur_lr = lr * decay.powi(epoch as i32 - 1);
+        // Cosine annealing over the run (`--cosine`): lr0 -> ~0 in one sweep,
+        // replacing hand-tuned lr ladders. Otherwise geometric `--decay`.
+        if minibatch > 0 && epoch == 1 && mb_total_steps == 0 {
+            // Not yet known; provisional value so the first epoch's lr stays
+            // near base_lr (cos(0)=1) until seen==total is measured.
+            mb_total_steps = u64::MAX;
+        }
+        let cur_lr = if cosine {
+            let t = (epoch as f32 - 1.0) / epochs as f32;
+            lr * 0.5 * (1.0 + (std::f32::consts::PI * t).cos())
+        } else {
+            lr * decay.powi(epoch as i32 - 1)
+        };
 
         // Fresh file order each epoch, so shard membership keeps changing.
         let mut order: Vec<usize> = (0..data_files.len()).collect();
@@ -367,14 +466,36 @@ fn main() -> ExitCode {
             }
             let ts = Instant::now();
             let sym_seed = if sym_train { rand() | 1 } else { 0 };
-            let sq: f64 = train_pass(
-                &mut nn,
-                adam_state.as_mut(),
-                &examples,
-                threads,
-                cur_lr,
-                sym_seed,
-            );
+            let sq: f64 = if minibatch > 0 {
+                let ad = adam_state
+                    .as_mut()
+                    .expect("--minibatch requires --adam (moments)");
+                // Per-step cosine inside the shard as well, indexed by the
+                // global optimizer step so the sweep stays smooth.
+                let mut lr_fn = || {
+                    let lr = if cosine {
+                        let t = mb_step as f32 / mb_total_steps.max(1) as f32;
+                        base_lr * 0.5 * (1.0 + (std::f32::consts::PI * t.min(1.0)).cos())
+                    } else {
+                        cur_lr
+                    };
+                    mb_step += 1;
+                    lr
+                };
+                train_pass_minibatch(
+                    &mut nn, ad, &mut sinks, &examples, threads, minibatch, &mut lr_fn, wd,
+                    sym_seed,
+                )
+            } else {
+                train_pass(
+                    &mut nn,
+                    adam_state.as_mut(),
+                    &examples,
+                    threads,
+                    cur_lr,
+                    sym_seed,
+                )
+            };
             sq_total += sq;
             seen += examples.len();
             println!(
@@ -404,6 +525,11 @@ fn main() -> ExitCode {
             }
         }
 
+        if minibatch > 0 && epoch == 1 {
+            // First epoch measured the real step count; pin the cosine sweep
+            // to the remaining schedule.
+            mb_total_steps = mb_step * epochs as u64;
+        }
         let train_mse = sq_total / seen.max(1) as f64;
         let vm = val_mse(&nn, &val);
         let is_best = vm < best;

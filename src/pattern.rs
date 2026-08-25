@@ -251,6 +251,32 @@ pub const EGAROUCID_PATTERNS: &[Pattern] = &[
 // Edax pattern set (12)
 // ---------------------------------------------------------------------------
 
+/// Eight shapes (32 masks) instead of sixteen (64), for pairing with a
+/// wider accumulator.
+///
+/// What an evaluation costs here is set by the number of **random row
+/// loads**, not by arithmetic: widening the accumulator from 16 to 32 lanes
+/// doubled the work per row and cost only 12% of search speed, because the
+/// row stayed inside one cache line and the load count never changed.
+/// Halving the masks halves the loads, which buys enough room to make each
+/// row much wider — more capacity per position for less latency.
+///
+/// The eight kept here still cover the board: rows two through four, the
+/// corner 3x3, the long diagonal with its corners, the edge with its X
+/// squares, the corner block and the centre cross. Weights are not
+/// transferable from the sixteen-shape set — the feature space is different,
+/// so a model on this set has to be trained from scratch.
+pub const WIDE8_PATTERNS: &[Pattern] = &[
+    EGAROUCID_PATTERNS[0],  // Line2
+    EGAROUCID_PATTERNS[1],  // Line3
+    EGAROUCID_PATTERNS[2],  // Line4
+    EGAROUCID_PATTERNS[3],  // Corner3x3
+    EGAROUCID_PATTERNS[7],  // Diagonal8+2C
+    EGAROUCID_PATTERNS[8],  // Edge+2x
+    EGAROUCID_PATTERNS[10], // Corner + Block
+    EGAROUCID_PATTERNS[11], // Cross
+];
+
 pub const EDAX_PATTERNS: &[Pattern] = &[
     Pattern {
         name: "Corner3x3",
