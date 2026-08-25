@@ -92,10 +92,28 @@ fn main() {
                 v
             }
         });
-        if truth != got || move_val.is_some_and(|v| v != truth) {
+        /* An abort that did not follow a cut returns `ABORTED` for the
+        whole node and leaves the decision to the caller, by design, and
+        the move that comes back with it is the best among the siblings
+        that finished — not a proven best. Under `SOLVER_ABORT` /
+        `SOLVER_CHAOS` both are expected, so neither is a mismatch.
+        Counting them as one made chaos mode report five failures on every
+        run (it stops at five) whether or not anything was wrong: a check
+        that cannot pass proves as little as one that cannot fail.
+        What chaos mode does test, once those are excluded, is the
+        invariant that matters — *a result the solver does not mark
+        aborted is correct*, so a race must never turn a live value wrong. */
+        const ABORTED: i32 = i32::MIN + 1;
+        let aborted = got == ABORTED;
+        if !aborted && (truth != got || move_val.is_some_and(|v| v != truth)) {
             bad += 1;
             println!(
-                "position {i}: sequential {truth} vs {threads}T {got} / returned move value {:?}",
+                "position {i}: sequential {truth} vs {threads}T {} / returned move value {:?}",
+                if aborted {
+                    "ABORTED".to_string()
+                } else {
+                    got.to_string()
+                },
                 move_val
             );
             // Print mismatches as OBF for standalone follow-up.
@@ -117,7 +135,18 @@ fn main() {
             }
         }
     }
-    println!("{bad} of {done} positions mismatched");
+    /* Report how often an abort actually fired. Without this the run
+    cannot distinguish "aborts are handled correctly" from "no abort
+    happened", and the second is what a quiet set silently reports.
+    `solver.rs` says as much where the counter is declared; the verifier
+    just never printed it. */
+    use std::sync::atomic::Ordering;
+    let fired = kuroobi::solver::ABORT_FIRED.load(Ordering::Relaxed);
+    let killed = kuroobi::solver::TASK_ABORTED.load(Ordering::Relaxed);
+    println!("{bad} of {done} positions mismatched (aborts fired {fired}, tasks killed {killed})");
+    if fired == 0 {
+        println!("  WARNING: no abort fired — this run says nothing about abort handling");
+    }
     if bad > 0 {
         std::process::exit(1);
     }
