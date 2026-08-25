@@ -4,20 +4,36 @@ The commands used for training, measurement and playing. They run as
 `cargo run --release --bin <name> -- <args>` (what follows spells out
 the direct call to the binary in `target/release/`).
 
-Argument parsing is hand-rolled, and **`arena` is the only one that
-implements `--help`**. Called without arguments the others either print
-their usage or start straight away on their defaults (the benchmarks do
-the latter).
+Argument parsing is hand-rolled. Called without arguments they either
+print their usage or start straight away on their defaults (the
+benchmarks do the latter).
 
 | Purpose | Command |
 |---|---|
 | Training | [`train`](#train) [`nnue_train`](#nnue_train) [`selfplay`](#selfplay) |
-| Comparing strength | [`arena`](#arena) [`nnue_arena`](#nnue_arena) [`lab`](#lab) [`roundrobin`](#roundrobin) |
-| Measuring accuracy | [`valmse`](#valmse) [`phase_mse`](#phase_mse) [`wstats`](#wstats) |
-| Measuring speed | [`solve_obf`](#solve_obf) [`flipbench`](#flipbench) [`mpbench`](#mpbench) [`nnue_bench`](#nnue_bench) |
-| Data and the book | [`kifu2data`](#kifu2data) [`bookgen`](#bookgen) [`mpccalib`](#mpccalib) [`nnue_symmetrize`](#nnue_symmetrize) |
+| Comparing strength | [`roundrobin`](#roundrobin) |
+| Measuring accuracy | [`evalerr`](#evalerr) [`gen_exact`](#gen_exact--checkdata) [`checkdata`](#gen_exact--checkdata) [`data2obf`](#data2obf) |
+| Measuring speed | [`nnue_obf`](#nnue_obf) [`solve_obf`](#solve_obf) [`mpbench`](#mpbench) [`nnue_bench`](#nnue_bench) |
+| Data and the book | [`kifu2data`](#kifu2data) [`bookgen`](#bookgen) [`mpccalib`](#mpccalib) [`nnue_symmetrize`](#nnue_symmetrize) [`widen_h`](#widen_h--bucketize) [`bucketize`](#widen_h--bucketize) |
 | Online play | [`ggs`](#ggs) |
 | Verifying correctness | [`stress_par`](#stress_par--stress_mid--stress_engine--stress_stop) [`stress_mid`](#stress_par--stress_mid--stress_engine--stress_stop) [`stress_engine`](#stress_par--stress_mid--stress_engine--stress_stop) [`stress_stop`](#stress_par--stress_mid--stress_engine--stress_stop) |
+
+## What is not here any more
+
+A measurement tool earns a place in the tree by being needed *again* --
+to re-run a decision, or to reproduce a number somebody will question.
+One that answered its question is finished, and `git log` keeps it
+reachable. These were removed on that basis; the numbers they produced
+live on in `benchmarks.md` and in the commits that cite them.
+
+| Removed | Why |
+|---|---|
+| `arena` `nnue_arena` `lab` | Three ways to play a match, all narrower than `roundrobin`, which now speaks every dialect they did plus outside engines (`extgtp`) |
+| `headfit` `fit_pw` `accstats` | Built to answer one question each -- how much the head could reach, what the product gate was worth, where to clamp it. All three answered |
+| `evalcmp` `aligncheck` `check_eval` | One-off inspections, quicker to rewrite than to keep working |
+| `valmse` `phase_mse` | Error against the *training labels*, which turned out not to track accuracy. `evalerr` scores against solved values instead, and takes a per-band file when the band is the question |
+| `flipbench` `evalbench` | Isolated benchmarks. Both misled: they do not reproduce the branch prediction or the locality of a real search, and a pessimistic microbenchmark is the dangerous kind -- it becomes a rejection nobody revisits. Judge on `nnue_obf` and the full suite |
+| `wstats` | Weight-file statistics, trivial to write when a specific question comes up |
 
 ---
 
@@ -110,162 +126,6 @@ selfplay [OPTIONS]
 
 ## Comparing strength
 
-### arena
-
-**Plays two weight files directly against each other.** Each opening is
-played twice with the colours swapped, and A's win rate is reported with
-a 95% confidence interval. **The only tool with `--help`.**
-
-```sh
-arena --a <weights-A> --b <weights-B> [OPTIONS]
-```
-
-| Option | Default | Meaning |
-|---|---|---|
-| `--games <n>` | 1000 | Total games (rounded up to even) |
-| `--random-plies <n>` | 6 | Random opening plies |
-| `--depth <n>` | 1 | Midgame depth for both sides (`1` = greedy) |
-| `--solve-empties <n>` | 0 | Both sides solve exactly from this empty count (`0` = off) |
-| `--depth-a` / `--depth-b` | `--depth` | Depth for one side only |
-| `--solve-a` / `--solve-b` | `--solve-empties` | Solve entry for one side only |
-| `--patterns <set>` | `egaroucid` | `egaroucid` / `edax` / `egaroucid-plus` |
-| `--patterns-a` / `--patterns-b` | `--patterns` | Patterns for one side only |
-| `--seed <n>` | 7 | RNG seed |
-| `--mpc-a` / `--mpc-b` | — | Enable probabilistic pruning (ProbCut) for one side only |
-| `--mpc-t <f>` | 1.1 | ProbCut threshold (multiples of σ). Smaller prunes more |
-| `--nnue-a <path>` | — | **NNUE mode**: A's weights (pair it with `--nnue-b`) |
-| `--nnue-b <path>` | — | **NNUE mode**: B's weights |
-
-**The point is being able to set one side only.** Making depth, solve
-entry or patterns asymmetric separates out which difference in
-conditions did the work.
-
-```sh
-# 400 games under game conditions
-arena --a weights/linear.bin --b weights/exp/new.bin \
-      --games 400 --depth 8 --solve-empties 12
-```
-
-**NNUE against NNUE goes through `--nnue-a` / `--nnue-b`.** That is a
-different path from the linear `--a` / `--b`: it stands up two
-`Engine`s (the real game path) and has them fight — NNUE differs from
-the entry of the search onwards (`NnueSearch` / band / MPC), so the
-linear path through `Searcher` does not reproduce game conditions.
-**The opening book is turned off** (with both sides pulling the same
-book the opening becomes identical, and the evaluators only differ once
-the book runs out). The linear weights are used only for endgame move
-ordering, so a single file is shared unless one is given.
-
-```sh
-arena --nnue-a weights/nnue-h16.bin --nnue-b weights/archive/nnue-h16-sym.bin \
-      --games 400 --depth 16 --solve-empties 20
-```
-
-#### Comparing time-allocation schemes
-
-With `--time` the games run on a clock, so **the allocation scheme
-itself can be A/B tested**. How time is spent cannot be measured in
-fixed-depth games (both sides search to the same depth, so nothing
-differs).
-
-| Option | Default | Meaning |
-|---|---|---|
-| `--time <seconds>` | — | Time control for a whole game (running out loses) |
-| `--time-a` / `--time-b` | `--time` | Time control for one side only |
-| `--pace-a` / `--pace-b` | `fast` | `fast` / `depth` / `tail:<a>` |
-| `--nps-a` / `--nps-b` | — | Calibrated solve speed (`auto` measures it on the spot) |
-| `--budget-use-a` / `--budget-use-b` | 2.5 | How aggressively to spend the clock |
-| `--solve-ref-a` / `--solve-ref-b` | 18 | Denominator for the remaining move count, `(empties − n) / 2`. `auto` derives it from the machine |
-| `--band-a` / `--band-b` | derived from the budget | Fix the selective-search band (comparison against the old behaviour) |
-
-The output carries **the time left at the end of the game and the
-number of timeouts**. A change to the allocation usually shows up in
-whether things break down rather than in the win rate, so look there
-first.
-
-```sh
-# Compare deriving the remaining-move denominator from the machine
-# against the current fixed 18
-arena --a weights/linear.bin --b weights/linear.bin \
-      --nnue-a weights/nnue-h16.bin --nnue-b weights/nnue-h16.bin \
-      --games 30 --time 60 --random-plies 16 \
-      --nps-a auto --nps-b auto --solve-ref-b auto --threads 1 --seed 201
-```
-
-**Check first that the test rig mirrors real games.** At 60 seconds and
-1 thread, a single move at 24-27 empties eats 6.7% of the time control,
-but in a real game (900 seconds, 8 threads) it is only 0.13%. Trim the
-endgame reserve on a rig whose endgame weighs differently and you get
-timeouts that never happen in a real game (measured:
-[where it stands](benchmarks.md#ab-on-raising-the-denominator)).
-
-### nnue_arena
-
-**Plays NNUE against the linear evaluator with the same search at the
-same depth.** Search effort is equal, so the difference falls entirely
-on the evaluator (speed is irrelevant — NNUE recomputes at every node).
-
-```sh
-nnue_arena --nnue <nnue.bin> --linear <weights.bin> [OPTIONS]
-```
-
-| Option | Meaning |
-|---|---|
-| `--depth <n>` | Fixed depth for both sides |
-| `--games <n>` | Total games |
-| `--random-plies <n>` | Random opening plies |
-| `--seed <n>` | RNG seed |
-
-### lab
-
-**Head-to-head against an external engine.** Three dialects are
-supported.
-
-| `--protocol` | Opponent | Exchange |
-|---|---|---|
-| `edax` (default) | Edax's console | `setboard <board>` / `go` → `Edax plays XX` |
-| `zebra` | Zebra's engine mode | `setboard` / `go` → `move xx` |
-| `egaroucid` | GTP | Replays the move list instead of sending a board (GTP has no position command) |
-
-We own the progress of the game and hand the opponent only a position
-and `go`. **Passes and move echoes never need to be synchronized.**
-
-```sh
-lab --edax <path-to-edax-binary> [OPTIONS]
-```
-
-| Option | Default | Meaning |
-|---|---|---|
-| `--weights <path>` | `weights/linear.bin` | Our weights |
-| `--patterns <set>` | `egaroucid` | Pattern library |
-| `--depth <n>` | 6 | Our midgame depth |
-| `--solve-empties <n>` | 14 | Our solve entry |
-| `--edax-level <n>` | 5 | The opponent's level / depth |
-| `--protocol <p>` | `edax` | The table above |
-| `--threads <n>` | 1 | Threads for both sides. **We only parallelise the endgame, so this favours the opponent** |
-| `--games <n>` | 200 | Total games (rounded up to even) |
-| `--random-plies <n>` | 6 | Random opening plies |
-| `--seed <n>` | 7 | RNG seed |
-| `--per-game` | — | One line per game (`game <pair> <B\|W> <disc-diff>`). Two runs over the same seed can then be paired and compared |
-
-**Besides playing external engines, the same binary carries paths meant
-for measurement.** Each runs only when asked for, and plays no games.
-
-| Option | What it does |
-|---|---|
-| `--mpc-calib <out>` | Emit ProbCut calibration data. **Measured with the very evaluator that searches** — a model borrowed from a less accurate evaluator overestimates the error and widens the pruning too far |
-| `--mid-sigma-calib <out>` | Measure the midgame σ. Meant to replace the linear evaluator's values, which were carried over on the assumption that "a more accurate evaluator would be on the safe side", with measurements |
-| `--sigma-calib <out>` | Match exact-solve values against probes at each depth and report the spread of `exact - probe` per (empty count, probe depth) |
-| `--calib-stride <n>` / `--calib-max <n>` | Thinning and cap on the positions collected for calibration |
-| `--band-probe <n>` | Measure the selective-search band. **Scored by disc difference lost, not by win or loss**, so two branches can be compared on the same position with low variance (40 positions by default) |
-| `--band-empties <n>` | Empty count at which to measure the band |
-| `--gen-obf <out>` | Write out a position set in OBF format |
-| `--obf <path>` | Read and use a position set that was written out |
-| `--self-vs <threads>` | **Play parallel directly against sequential.** Same weights, same depth, same solve entry with only the thread count changed, so anything away from 50% means parallelism is changing the result |
-| `--nnue-b <path>` | Give the opposing side a different NNUE in the match above |
-| `--verify-parallel` | **Check that the parallel search picks the same move as the sequential one.** A small degradation is invisible in the win rate (buried even over 200 games), so the moves themselves are compared |
-| `--edax-threads <n>` | Set the opponent's (Edax's) thread count separately |
-
 ### roundrobin
 
 **Round-robin between several engines.** Every pair plays the same set
@@ -278,8 +138,8 @@ so the endgame needs no setting).
 roundrobin --games <n> --depth <n> [--engine name=protocol=path]...
 ```
 
-`protocol` is `edax` / `zebra` / `egaroucid` / `kuroobi` / `ours`.
-**Exactly one `ours`** is required, and its path is ignored.
+`protocol` is `edax` / `zebra` / `egaroucid` / `kuroobi` / `extgtp` /
+`ours`. **Exactly one `ours`** is required, and its path is ignored.
 
 ```sh
 roundrobin --games 100 --depth 8 \
@@ -299,119 +159,70 @@ roundrobin --games 400 --time-ms 300 \
   --engine h64=kuroobi=../wt-h64/target/release/gtp
 ```
 
-### ponderhit
-
-**Measures how often the pondering prediction is right.** The worth of
-the single-predicted-move scheme is essentially decided by this hit
-rate. **The prediction is not a fresh search: it asks the transposition
-table about the position after our own move** — live pondering has no
-other option, so measuring a better prediction would be meaningless.
+`extgtp` is for an engine this repo knows nothing about: the command
+line is passed through untouched and the clock is handed over in-band
+with GTP `time_settings`, so no dialect has to be guessed. GTP states
+time in whole seconds, which puts a one-second floor on `--time-ms` for
+such an engine.
 
 ```sh
-ponderhit [OPTIONS]
+roundrobin --games 100 --depth 21 --time-ms 1000 \
+  --engine ours=kuroobi="./target/release/gtp --nnue w.bin --solve-empties 28" \
+  --engine other=extgtp="/path/to/engine gtp --level 21 --threads 1"
 ```
 
-| Option | Default | Meaning |
-|---|---|---|
-| `--games <n>` | 20 | Number of games |
-| `--depth <n>` | 8 | Our midgame depth |
-| `--solve-empties <n>` | 14 | Our exact-solve entry |
-| `--opp-depth <n>` | `--depth` | The opponent's midgame depth |
-| `--opp-solve <n>` | `--solve-empties` | The opponent's exact-solve entry |
-| `--threads <n>` | 1 | Thread count |
-| `--random-plies <n>` | 8 | Random opening plies |
-| `--seed <n>` | 7 | RNG seed |
-| `--nnue` / `--weights` | `weights/nnue-h16.bin` / `weights/linear.bin` | Weights |
-
-**`--opp-depth` weakens the opponent alone.** It is there to see how
-much the prediction depends on the opponent's strength; in practice a
-drastic weakening cost only 4 points of hit rate.
-
-```sh
-# Equal strength, then a weaker opponent only
-ponderhit --games 14 --depth 12 --solve-empties 18
-ponderhit --games 12 --depth 12 --solve-empties 18 --opp-depth 4
-```
-
-### ponderarena
-
-**Measures the effect of pondering.** It runs twice, with and without
-pondering, and compares the totals for the same player. **The shape
-where A and B fight and the two are compared cannot be used** — they
-hold different colours and face different positions, so bias creeps in
-(a control experiment once showed a 24.5% difference).
-
-```sh
-ponderarena [OPTIONS]
-```
-
-| Option | Default | Meaning |
-|---|---|---|
-| `--games <n>` | 10 | Number of games |
-| `--ms <n>` | 200 | Time per move (milliseconds) |
-| `--ponder <on\|off>` | `on` | Whether to ponder. `off` is the control |
-| `--fixed-depth` | — | Measure at fixed depth. **What to look at is search time, not the win rate** |
-| `--ponder-ms <n>` | 300 | Ponder time in fixed-depth mode |
-| `--no-mpc` | — | Turn off probabilistic pruning |
-| `--depth <n>` | 20 | Midgame depth cap |
-| `--solve-empties <n>` | 14 | Exact-solve entry |
-| `--threads <n>` | 1 | Thread count |
-| `--random-plies <n>` | 8 | Random opening plies |
-| `--seed <n>` | 7 | RNG seed |
-| `--nnue` / `--weights` | `weights/nnue-h16.bin` / `weights/linear.bin` | Weights |
-
-**At fixed depth, run on one thread.** Parallel search (Lazy SMP) is
-non-deterministic, so even under identical conditions the moves change
-and the games diverge. On one thread not a single move changes with or
-without pondering, so the game records can be matched by fingerprint.
-
-The transposition table is cleared every game (rule 4 in CLAUDE.md).
-
-```sh
-# Fixed depth. Run twice on the same seed and compare the totals
-ponderarena --games 14 --fixed-depth --depth 13 --solve-empties 20 --ponder on
-ponderarena --games 14 --fixed-depth --depth 13 --solve-empties 20 --ponder off
-```
-
----
+**Line the settings up by hand.** Another engine's "level" is usually a
+table entry that sets midgame depth and endgame entry together, and
+`-l N` sets *our* solve entry to N as well -- so a plain `-l 60` quietly
+means "attempt a solve from move one". Pass `--solve-empties` explicitly
+to match whatever the opponent's level implies.
 
 ## Measuring accuracy
 
-### valmse
+### evalerr
 
-Measures the MSE on a validation set without updating the weights. It
-exists to decide when to stop `train` early, and reports **per stage**.
-
-```sh
-valmse [--patterns <set>] <weights.bin> <data-file>...
-```
-
-### phase_mse
-
-The NNUE counterpart of `valmse`, bucketed **by empty count** (CSV) —
-that is the axis the depth-ladder experiments vary along. It also has a
-text export so an external evaluation function can score the same
-positions.
+**Score a model's static evaluation against solved values.** Reports
+mean absolute error, RMS, bias, and the share of positions called within
+1 and within 3 discs. This is the number that decides whether a model is
+more accurate; training loss is against the training labels and the two
+do not move together.
 
 ```sh
-phase_mse <nnue.bin> <data-file>...              # per-empties MSE (CSV)
-phase_mse --dump-text <out.txt> <data-file>...   # "board score" lines
+evalerr --nnue weights/nnue.bin bench/exact/val22.data
+evalerr --nnue weights/nnue.bin --no-mlp bench/exact/val22.data
 ```
 
-### wstats
+### gen_exact / checkdata
 
-**Statistics of a weight file.** Per stage band and pattern, it reports
-the fraction of nonzero cells (SGD/Adam only ever touch visited cells,
-so nonzero = visited) and their RMS scaled by the orientation count — a
-rough scale for the contribution per position.
+**Build a ground-truth set, then check it.** `gen_exact` reaches
+positions at a fixed empty count and labels each with its exact value
+from the solver, writing both the training format and OBF so another
+engine can be measured on the same positions. `checkdata` re-solves them
+and confirms the file says what it claims.
 
 ```sh
-wstats [--patterns egaroucid|edax] <weights.bin>
+gen_exact --empties 22 --count 1500 --out bench/exact/val22
+checkdata bench/exact/val22.data
 ```
 
----
+### data2obf
+
+**Turn a label file into plain OBF lines**, so another engine can be
+scored on exactly the positions we score ourselves.
 
 ## Measuring speed
+
+### nnue_obf
+
+**Fixed-depth midgame search over an OBF file**, with the NNUE search
+the engine actually plays with. The fixed depth is the point: the tree
+is then a property of the move ordering alone, so two builds searching
+the same positions to the same depth compare on time directly. A change
+that leaves the node count untouched changed no decision, only speed.
+
+```sh
+nnue_obf --depth 13 --nnue weights/nnue.bin bench/band29.obf
+```
 
 ### solve_obf
 
@@ -445,17 +256,6 @@ solve_obf bench/ffo40-59.obf
 `calib1030`, four sets.** The FFO positions are left out for size, so
 reproducing the README's FFO numbers locally requires obtaining them
 yourself.
-
-### flipbench
-
-Microbenchmark of disc flipping and move generation. No arguments.
-
-**The results mark where cost might be, and are not grounds for a
-decision.** Random squares defeat branch prediction and random
-positions lengthen the fill chains, so it comes out pessimistic in both
-directions relative to the real search (flipping through a function
-table takes 14.3 ns here, about 2.6 ns in real solving). Adoption is
-decided on FFO40-59.
 
 ### mpbench
 
@@ -605,6 +405,26 @@ nnue_symmetrize <in.bin> <out.bin> [--val <file>]
 
 Passing `--val` measures and prints the validation MSE before and after
 symmetrization (a quality check).
+
+### widen_h / bucketize
+
+**Reshape a trained model instead of starting over.** `widen_h` reads a
+weight file of a smaller accumulator width and writes one for the width
+this binary was compiled with, duplicating each lane and dividing the
+read-out so the widened model evaluates almost identically -- fine-tuning
+then starts from the source's optimum rather than from scratch.
+`bucketize` does the same for phase buckets, replicating one transformer
+copy into one per slice of the game.
+
+```sh
+widen_h --in nnue-h32.bin --out nnue-h64.bin [--noise 1e-3]
+bucketize --in one-copy.bin --out replicated.bin
+```
+
+Both must be built at the *target* shape (`--features h64`,
+`--features ftb4`) with their own `--target-dir`, since a weight file
+records its own width and bucket count and the two are not
+interchangeable.
 
 ---
 
