@@ -272,6 +272,9 @@ fn tt_level(depth: u8, relax: u8) -> u32 {
 pub struct SharedTt {
     buckets: std::cell::UnsafeCell<Vec<TtBucket>>,
     mask: u64,
+    /// Which round of use an entry belongs to. Emptying the table is a
+    /// generation bump, not a walk: see `clear`.
+    epoch: std::sync::atomic::AtomicU8,
 }
 // SAFETY: see the note above — entries are self-validating.
 unsafe impl Sync for SharedTt {}
@@ -291,7 +294,17 @@ impl SharedTt {
         SharedTt {
             buckets: std::cell::UnsafeCell::new(vec![TtBucket([TtEntry::EMPTY; TT_WAYS]); n]),
             mask: (n - 1) as u64,
+            // `TtEntry::EMPTY` carries epoch 0, so starting at 1 makes a
+            // freshly allocated table already empty by the same test that
+            // `clear` uses.
+            epoch: std::sync::atomic::AtomicU8::new(1),
         }
+    }
+
+    /// The generation an entry must carry to be readable.
+    #[inline]
+    fn epoch(&self) -> u8 {
+        self.epoch.load(std::sync::atomic::Ordering::Relaxed)
     }
 
     // The shared table hands out mutable references from &self by
@@ -337,8 +350,9 @@ impl SharedTt {
     #[inline]
     fn get(&self, hash: u64) -> TtEntry {
         let b = self.bucket(hash);
+        let now = self.epoch();
         for e in b.0.iter() {
-            if e.key == hash && e.flag != 0 {
+            if e.key == hash && e.flag != 0 && e.epoch == now {
                 return *e;
             }
         }
@@ -405,9 +419,10 @@ impl SharedTt {
         } else {
             f32::NEG_INFINITY
         };
+        let now = self.epoch();
         for i in 0..TT_WAYS {
             let slot = self.slot(hash, i as u64);
-            if slot.key == hash && slot.flag != 0 {
+            if slot.key == hash && slot.flag != 0 && slot.epoch == now {
                 let slot_level = tt_level(slot.depth, slot.relax);
                 if slot_level > level {
                     return;
@@ -451,7 +466,9 @@ impl SharedTt {
         }
         for i in 0..TT_WAYS {
             let slot = self.slot(hash, i as u64);
-            if slot.flag == 0 || tt_level(slot.depth, slot.relax) <= level {
+            // A slot left behind by an earlier generation is free space:
+            // nothing can read it any more, so it never has to be outbid.
+            if slot.flag == 0 || slot.epoch != now || tt_level(slot.depth, slot.relax) <= level {
                 *slot = TtEntry {
                     key: hash,
                     lower,
@@ -466,21 +483,38 @@ impl SharedTt {
                     depth,
                     flag: 1,
                     relax,
+                    epoch: now,
                 };
                 return;
             }
         }
     }
 
+    /// Empty the table by opening a new generation: every entry still
+    /// carries the old one and no read can reach it again.
+    ///
+    /// The walk this replaces wrote one byte per entry, which pulls in — and
+    /// dirties — every cache line of the table. At the 22-bit size the
+    /// endgame benchmark uses that is 134 MB per call, and `solve_obf` calls
+    /// it once per position: 0.96 s of the 12.5 s an FFO40-49 run takes,
+    /// none of it search, and none of it visible in the reported per-position
+    /// times. A `u8` wraps after 255 rounds, and an entry that old would be
+    /// readable again, so the wrap does the real wipe once.
     pub fn clear(&self) {
+        let next = self.epoch().wrapping_add(1);
+        if next != 0 {
+            self.epoch.store(next, std::sync::atomic::Ordering::Relaxed);
+            return;
+        }
         // SAFETY: called between games, with no workers running.
         unsafe {
             for b in (*self.buckets.get()).iter_mut() {
                 for e in b.0.iter_mut() {
-                    e.flag = 0;
+                    *e = TtEntry::EMPTY;
                 }
             }
         }
+        self.epoch.store(1, std::sync::atomic::Ordering::Relaxed);
     }
 }
 
@@ -512,6 +546,9 @@ struct TtEntry {
     /// the main search's answer — which reads as a speedup (fewer nodes) but is
     /// really a strength loss.
     relax: u8,
+    /// The generation this entry was written in; see `SharedTt::clear`.
+    /// It rides in padding the struct already had.
+    epoch: u8,
 }
 
 impl TtEntry {
@@ -524,6 +561,7 @@ impl TtEntry {
         depth: 0,
         flag: 0,
         relax: 0,
+        epoch: 0,
     };
 }
 
