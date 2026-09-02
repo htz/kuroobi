@@ -20,6 +20,22 @@ use crate::zobrist;
 
 /// Search depth thresholds (empties remaining) for switching strategies.
 const PVS_LIMIT: u8 = 12;
+
+/// `PVS_MIN` overrides [`PVS_LIMIT`] for sweeps.
+#[cfg(feature = "tunable")]
+fn pvs_limit() -> u8 {
+    static V: std::sync::OnceLock<u8> = std::sync::OnceLock::new();
+    *V.get_or_init(|| {
+        std::env::var("PVS_MIN")
+            .ok()
+            .and_then(|v| v.parse().ok())
+            .unwrap_or(PVS_LIMIT)
+    })
+}
+#[cfg(not(feature = "tunable"))]
+const fn pvs_limit() -> u8 {
+    PVS_LIMIT
+}
 const MOVE_ORDERING_LIMIT: u8 = 7;
 /// Lowest empty count at which the ordered stage consults a transposition
 /// table at all. Below it the stage searches without probing or storing.
@@ -2694,16 +2710,16 @@ fn exact_proof() -> bool {
 }
 
 /// The layer below which a selective probe can never fire: probes run only in
-/// `pvs` (>= `PVS_LIMIT` empties) and only at `selective_min_empties` or more,
+/// `pvs` (>= `pvs_limit()` empties) and only at `selective_min_empties` or more,
 /// so every entry below this depth is probe-free by construction.
 #[cfg(feature = "tunable")]
 fn structural_proof_floor() -> u8 {
     static V: std::sync::OnceLock<u8> = std::sync::OnceLock::new();
-    *V.get_or_init(|| PVS_LIMIT.max(selective_min_empties()))
+    *V.get_or_init(|| pvs_limit().max(selective_min_empties()))
 }
 #[cfg(not(feature = "tunable"))]
 fn structural_proof_floor() -> u8 {
-    PVS_LIMIT.max(SELECTIVE_MIN_EMPTIES)
+    pvs_limit().max(SELECTIVE_MIN_EMPTIES)
 }
 
 /// Layout probe: where the hot fields actually sit. `repr(Rust)` orders by
@@ -4900,7 +4916,7 @@ impl Worker<'_> {
         cut_node: bool,
         ev: Option<&Evaluator>,
     ) -> i32 {
-        if child.empty_count() >= PVS_LIMIT {
+        if child.empty_count() >= pvs_limit() {
             let dbg = dbg_asp() && child.empty_count() >= 23;
             let n0 = self.nodes;
             let v = self.pvs(child, hash, alpha, beta, false, cut_node, ev);

@@ -1351,6 +1351,32 @@ time back, so the trade is priced where it sits.
   positions that is 0.4% of the run, under the floor; it grows with the
   number of positions.
 
+**With the same search shape the per-node cost is at parity, and the whole
+remaining gap is the tree.** Setting every band boundary, cache size and
+ordering threshold to the implementation this is measured against - PVS
+from thirteen empties, no shared table below thirteen, a 4 MiB bound cache,
+ETC from fourteen, a 128 KiB shallow cache, evaluation ordering from
+thirteen, no ordering lookahead and no parity ordering at three empties -
+gives 473.1 M nodes in 13.42 s. That is **28.3 ns per node against 27.6**:
+three percent. The other engine reaches the same positions in 321.6 M
+nodes, so at a shared shape our tree is 47% larger.
+
+Broken down, one term dominates. Removing the ordering lookahead alone is
++25.5% nodes; PVS from thirteen is +3.1%, ETC from fourteen +1.8%, the
+band split +1.1%, no parity ordering at three empties +0.7%, the smaller
+shallow cache +0.2%, and evaluation ordering from thirteen is -3.1%. The
+lookahead is a search, and it is there because the static evaluation that
+orders moves is not sharp enough on its own; the comparison implementation
+runs one network evaluation per child and needs no lookahead at all.
+
+Using our own network for that instead is not open at this feature set: a
+position's features are the 64 pattern-mask indices, a move changes about
+35 of them, and one evaluation reads 4 KiB of transformer rows against the
+linear sum's 64 bytes. An incremental accumulator saves nothing when that
+many features move. **This is the evaluation-function conclusion the
+"Remaining work" section already reaches, now with the endgame's own
+number on it: the ordering evaluation is worth 25% of the tree.**
+
 **What did not.** All measured, all at an identical tree unless the tree
 column says otherwise:
 
