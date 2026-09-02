@@ -16,9 +16,11 @@
 /// Rank-boundary masks (file-major: rank 0 bits are 0,8,16,…; rank 7 bits
 /// are 7,15,23,…).
 const RANK0: u64 = 0x0101_0101_0101_0101;
+#[cfg(test)]
 const RANK7: u64 = 0x8080_8080_8080_8080;
-const NOT_RANK0: u64 = !RANK0;
-const NOT_RANK7: u64 = !RANK7;
+/// Squares off the border: propagation can only add these, because the edge
+/// table already decides the border exactly.
+const INTERIOR: u64 = 0x007e_7e7e_7e7e_7e00;
 
 /// Masks for the diagonal full-line cascade, for our file-major layout
 /// (bit = file*8 + rank).
@@ -96,11 +98,9 @@ fn full_lines(occ: u64) -> (u64, u64, u64, u64) {
 // 64 KiB table: index = own_byte << 8 | opp_byte, value = stable own mask.
 // ---------------------------------------------------------------------------
 
-use std::sync::OnceLock;
-
 /// 1-D placement with mandatory flips: `mover` places at empty square `s`.
 /// Returns (new_mover_bits, new_other_bits).
-fn place_1d(mover: u8, other: u8, s: u8) -> (u8, u8) {
+const fn place_1d(mover: u8, other: u8, s: u8) -> (u8, u8) {
     let mut flipped = 0u8;
     // Left of s
     let mut run = 0u8;
@@ -135,29 +135,48 @@ fn place_1d(mover: u8, other: u8, s: u8) -> (u8, u8) {
     (mover | (1 << s) | flipped, other & !flipped)
 }
 
-/// Greatest-fixpoint edge-stability table.
-fn build_edge_table() -> Box<[u8; 65536]> {
-    let mut stable = vec![0u8; 65536].into_boxed_slice();
+/// Greatest-fixpoint edge-stability table, built at compile time.
+///
+/// It used to be built on first use behind a `OnceLock<Box<..>>`. That put an
+/// acquire load, a branch and a pointer chase in front of every edge lookup,
+/// which is once per stability query — the hottest thing the endgame does
+/// after flips. A `static` costs none of the three: the address is an
+/// immediate. Aligned to a cache line so a lookup never straddles two.
+#[repr(align(64))]
+struct Align64<T>(T);
+
+static EDGE_TABLE: Align64<[u8; 65536]> = Align64(build_edge_table());
+
+const fn build_edge_table() -> [u8; 65536] {
+    let mut stable = [0u8; 65536];
     // Initialize: every own disc assumed stable (invalid configs stay 0)
-    for own in 0..256usize {
-        for opp in 0..256usize {
+    let mut own = 0usize;
+    while own < 256 {
+        let mut opp = 0usize;
+        while opp < 256 {
             if own & opp == 0 {
                 stable[(own << 8) | opp] = own as u8;
             }
+            opp += 1;
         }
+        own += 1;
     }
     // Iterate: a disc stays stable only if every single placement keeps it
     // unflipped and stable in the successor configuration.
     loop {
         let mut changed = false;
-        for own in 0..256usize {
-            for opp in 0..256usize {
+        let mut own = 0usize;
+        while own < 256 {
+            let mut opp = 0usize;
+            while opp < 256 {
                 if own & opp != 0 {
+                    opp += 1;
                     continue;
                 }
                 let idx = (own << 8) | opp;
                 let mut s_mask = stable[idx];
                 if s_mask == 0 {
+                    opp += 1;
                     continue;
                 }
                 let empty = !(own | opp) as u8;
@@ -180,18 +199,20 @@ fn build_edge_table() -> Box<[u8; 65536]> {
                     stable[idx] = s_mask;
                     changed = true;
                 }
+                opp += 1;
             }
+            own += 1;
         }
         if !changed {
             break;
         }
     }
-    stable.try_into().expect("size 65536")
+    stable
 }
 
+#[inline(always)]
 fn edge_table() -> &'static [u8; 65536] {
-    static TABLE: OnceLock<Box<[u8; 65536]>> = OnceLock::new();
-    TABLE.get_or_init(build_edge_table)
+    &EDGE_TABLE.0
 }
 
 /// Multiplier that folds one bit per byte into the top byte: a bit at
@@ -253,19 +274,61 @@ pub fn stable_discs(own: u64, opp: u64) -> u64 {
     let occ = own | opp;
     let (full_h, full_v, full_d9, full_d7) = full_lines(occ);
 
-    // Seed: exact edge stability + interior discs on four full lines
+    // Seed: exact edge stability + interior discs on four full lines. The
+    // edge table is exact for the border, so propagation only ever has to
+    // add interior discs — which is what makes the loop below cheap.
+    let interior = own & INTERIOR;
     let mut stable = edge_stable_all(own, opp);
-    stable |= own & full_h & full_v & full_d9 & full_d7;
+    stable |= interior & full_h & full_v & full_d9 & full_d7;
 
-    // Propagate: a friendly disc shielded in all four directions is stable
+    // Propagate: a friendly disc shielded in all four directions is stable.
+    //
+    // The shifts are deliberately unmasked. A shift by 1, 7 or 9 can carry a
+    // bit across a line boundary, but only onto a border square, and the
+    // result is intersected with `interior` — so the eight AND operations
+    // that used to guard the shifts were paying to clear bits the final mask
+    // clears anyway.
     loop {
         let safe_h = full_h | (stable << 8) | (stable >> 8);
-        let safe_v = full_v | ((stable & NOT_RANK7) << 1) | ((stable & NOT_RANK0) >> 1);
-        let safe_d9 = full_d9 | ((stable & NOT_RANK7) << 9) | ((stable & NOT_RANK0) >> 9);
-        let safe_d7 = full_d7 | ((stable & NOT_RANK0) << 7) | ((stable & NOT_RANK7) >> 7);
-        let next = stable | (own & safe_h & safe_v & safe_d9 & safe_d7);
+        let safe_v = full_v | (stable << 1) | (stable >> 1);
+        let safe_d9 = full_d9 | (stable << 9) | (stable >> 9);
+        let safe_d7 = full_d7 | (stable << 7) | (stable >> 7);
+        let next = stable | (interior & safe_h & safe_v & safe_d9 & safe_d7);
         if next == stable {
             return stable;
+        }
+        stable = next;
+    }
+}
+
+/// Stable discs for `own`, stopping as soon as `need` of them are known.
+///
+/// The cutoff that uses this asks whether `64 - 2*S <= alpha`, i.e. whether
+/// `S >= need` - the exact count is never read. The propagation loop only
+/// ever adds discs, so the seed and every intermediate set are valid lower
+/// bounds: once one reaches `need` the answer is settled and the remaining
+/// iterations only sharpen a number nobody looks at. The bound returned
+/// from an early exit is looser than the full one but still on the correct
+/// side of `alpha`, so the cut it licenses is the same cut.
+#[inline]
+pub fn stable_count_at_least(own: u64, opp: u64, need: u32) -> u32 {
+    let occ = own | opp;
+    let (full_h, full_v, full_d9, full_d7) = full_lines(occ);
+    let interior = own & INTERIOR;
+    let mut stable = edge_stable_all(own, opp);
+    stable |= interior & full_h & full_v & full_d9 & full_d7;
+    loop {
+        let c = stable.count_ones();
+        if c >= need {
+            return c;
+        }
+        let safe_h = full_h | (stable << 8) | (stable >> 8);
+        let safe_v = full_v | (stable << 1) | (stable >> 1);
+        let safe_d9 = full_d9 | (stable << 9) | (stable >> 9);
+        let safe_d7 = full_d7 | (stable << 7) | (stable >> 7);
+        let next = stable | (interior & safe_h & safe_v & safe_d9 & safe_d7);
+        if next == stable {
+            return c;
         }
         stable = next;
     }
