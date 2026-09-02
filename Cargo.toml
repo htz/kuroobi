@@ -15,6 +15,62 @@ criterion = "0.5"
 
 [features]
 default = []
+# Read the solver's tuning knobs from environment variables at first use
+# instead of compiling their defaults in. Sweeps need this; the default
+# build folds the knobs to constants so dead regimes cost nothing.
+tunable = []
+# Layout of the shared bound-pair cache entry (4/5-6/7-8/9 empties). Default
+# is packed (19 bytes); these two build the other arms of that comparison,
+# which neither implementation has measured. Mutually exclusive.
+entry-align32 = []
+entry-natural = []
+# Arms that decompose one claim both this engine and the one it is measured
+# against recorded as a single number: that batching the leaf flips beats
+# scalar calls "even when a cutoff would have skipped the tail". Three
+# separate effects hide in that: paying for flips a cutoff never needs
+# (default vs flip-lazy), the adjacency guard (flip-lazy vs flip-guard), and
+# sharing the board broadcast (flip-guard vs flip-noshare). All four arms
+# must produce identical node counts; that is the check that they are wired
+# correctly. Measurement only - the default is the shipping path.
+flip-lazy = []
+flip-guard = []
+flip-noshare = []
+# Control for the shared-table capacity sweep: probe only the low 2^23
+# entries while still allocating - and wiping - the full table. Separates
+# "probes reach less memory" from "the per-position wipe evicts less".
+tt-probe-clamp = []
+# How far down the generated move list to issue table prefetches. The
+# default prefetches every move; these price that against stopping early,
+# which the original measurement never tested. Trees are identical.
+gen-no-prefetch = []
+gen-prefetch-2 = []
+gen-prefetch-4 = []
+# Restore the eager per-move child hash. Deferring it where no prefetch is
+# issued (7-9 empties) is the default and measured -0.85%, 10/10 rounds.
+gen-eager-hash = []
+# Restore zero-initialisation of `gen_moves`' scratch arrays (306 bytes of
+# memset per node). Leaving them uninitialised is the default.
+gen-zeroed-scratch = []
+# An alternative band split: nothing below 13 empties touches a
+# transposition table, and 7-12 share one thread-private direct-mapped
+# bound-only cache of 4 MiB. Ours draws the line at 9.
+ec-band = []
+# Drop the quadrant-parity ordering at three empties.
+last3-noorder = []
+# Run the bound cache over 7-12 empties *beside* the transposition table
+# rather than only below it. One design covers that band with a cache
+# instead of a table; this covers it with both.
+l78-wide = []
+# Restore the fail-high half of the stability cutoff. Off by default: it
+# was 26.7M of the 66.7M full stability sweeps and cost 3.2% of the clock
+# for 0.5-2.4% of the tree.
+stab-fail-high = []
+# Drop the one-ahead four-empty cache prefetch. On by default; measured a
+# wash either way (total -0.07% over four sets).
+l4-no-prefetch = []
+# Find the 5-6 band's legal squares with one mobility smear instead of a
+# flip kernel per empty square. Same visit order, same tree.
+shallow-mobility = []
 random = ["rand"]
 # Count move-ordering and ETC probes as nodes, the way Edax does, so node
 # totals are comparable with `edax -solve`. Costs a few percent of search time.

@@ -32,7 +32,21 @@ const MOVE_ORDERING_LIMIT: u8 = 7;
 /// earns its probe (skipping it too costs 2.3-13.2% against this), and
 /// pushing the whole ordered stage up one layer instead
 /// (`MOVE_ORDERING_LIMIT` 8) loses on every set, at +22-30% nodes.
+/// Lowest empty count that consults a transposition table proper.
+///
+/// Below this the bands have their own direct-mapped bound caches. The
+/// reference draws this line at 13 and gives seven-to-twelve a single
+/// thread-private bound-only cache, never touching the main table there;
+/// `ec-band` builds that shape. The 9 is what this engine grew instead,
+/// with 9 on the private mid table and 10-12 on the shared one.
+#[cfg(feature = "ec-band")]
+const TT_MIN_EMPTIES: u8 = 13;
+#[cfg(not(feature = "ec-band"))]
 const TT_MIN_EMPTIES: u8 = 9;
+
+/// Highest empty count the bound cache covers under `l78-wide`.
+#[cfg(feature = "l78-wide")]
+const TT_MID_WIDE: u8 = 13;
 /// Below this many empties the ordered search goes to a cache-resident
 /// table instead of the main one. The main table holds 2^26 entries of 24
 /// bytes, so a probe there is a guaranteed DRAM round trip; at these
@@ -54,6 +68,7 @@ const SHALLOW_TT_BITS: u32 = 13;
 /// Highest empty count still served by the private mid table, exclusive.
 /// `TT_MID_EMPTIES` overrides it for sweeps.
 #[inline(always)]
+#[cfg(feature = "tunable")]
 fn mid_tt_empties() -> u8 {
     static V: std::sync::OnceLock<u8> = std::sync::OnceLock::new();
     *V.get_or_init(|| {
@@ -62,6 +77,10 @@ fn mid_tt_empties() -> u8 {
             .and_then(|v| v.parse().ok())
             .unwrap_or(MID_TT_EMPTIES)
     })
+}
+#[cfg(not(feature = "tunable"))]
+fn mid_tt_empties() -> u8 {
+    MID_TT_EMPTIES
 }
 
 /// Sizes of the two private tables, in entries as a power of two.
@@ -159,6 +178,7 @@ const STABILITY_THRESHOLD: [i32; 64] = [
 /// the tree trend says the loss keeps growing as positions get deeper. Same
 /// trap as the ordering-band and sort-ladder step points before it.
 const STABILITY_CUT_MARGIN: i32 = 8;
+
 /// Lowest empty count at which a stability cut is attempted. At four
 /// empties the cut is reached on every node of the busiest layer and costs
 /// 6.1% of wall clock there, but the subtree it prunes is four plies deep —
@@ -169,7 +189,26 @@ const STABILITY_CUT_MARGIN: i32 = 8;
 /// nodes/s further still — to 29.2M/s on ffo40-49 against 20.5M/s here —
 /// while wall clock gets worse by 1.7% and 3.1%; the rate rises only
 /// because the nodes left behind are the cheap ones.
-const STAB_MIN_EMPTIES: u8 = 5;
+/// 4, not the 5 it was while wall clock was the KPI: cutting at four
+/// empties shrinks the tree by ~19% on FFO40-49 (the four-empty cache and
+/// the cut compound - fresh subtrees die to the cut, revisits to the
+/// cache), at some per-node cost. `EXACT_STAB_MIN` overrides for sweeps.
+const STAB_MIN_EMPTIES: u8 = 4;
+
+#[cfg(feature = "tunable")]
+fn stab_min_empties() -> u8 {
+    static V: std::sync::OnceLock<u8> = std::sync::OnceLock::new();
+    *V.get_or_init(|| {
+        std::env::var("EXACT_STAB_MIN")
+            .ok()
+            .and_then(|v| v.parse().ok())
+            .unwrap_or(STAB_MIN_EMPTIES)
+    })
+}
+#[cfg(not(feature = "tunable"))]
+fn stab_min_empties() -> u8 {
+    STAB_MIN_EMPTIES
+}
 
 /// Stability cutoff precondition: the bound 64 - 2*S can only cut when the
 /// opponent has at least ceil((64-alpha)/2) stable discs, so their total
@@ -190,32 +229,53 @@ fn stability_cut(board: &Board, alpha: i32, beta: i32) -> Option<i32> {
 /// children straight to the 4-empty routine.
 #[inline]
 fn stability_cut_bb(player: u64, opponent: u64, empties: u8, alpha: i32, beta: i32) -> Option<i32> {
-    if empties < STAB_MIN_EMPTIES {
+    if empties < stab_min_empties() {
         return None;
     }
     let threshold = STABILITY_THRESHOLD[empties as usize];
     // Upper bound via the opponent's stable discs (fail low)
     let need = (64 - alpha + 1) / 2;
+    #[cfg(feature = "layer-profile")]
+    ab_stats::STAB_GATE_A.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
     if alpha >= threshold
         && need <= 32
         && (opponent.count_ones() as i32) >= need + STABILITY_CUT_MARGIN
     {
-        let bound = 64 - 2 * crate::stability::stable_count(opponent, player) as i32;
+        #[cfg(feature = "layer-profile")]
+        ab_stats::STAB_FULL.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        let bound =
+            64 - 2 * crate::stability::stable_count_at_least(opponent, player, need as u32) as i32;
         if bound <= alpha {
             return Some(bound);
         }
     }
-    // Lower bound via our own stable discs (fail high). Nearly free on
-    // balanced positions thanks to the popcount gate, and it collapses
-    // one-sided positions (e.g. FFO#59) that otherwise explode.
-    // Mirror of the guard above, with the threshold test flipped to the
-    // beta side.
+    // The fail-high half - a lower bound from our own stable discs - is
+    // off. It ran 26.7M of the 66.7M full stability computations and bought
+    // 0.5% to 2.4% of the tree for 2% to 4% of the clock: measured over four
+    // sets, six shuffled rounds each, hard20 -3.26%, band22 -2.12%,
+    // 18-empty roots -4.44%, FFO40-49 -3.30%, total -3.17%. Dropping
+    // the branch entirely is the cheaper shape.
+    //
+    // It was adopted on the argument that the popcount gate makes it nearly
+    // free and that it collapses one-sided positions like FFO#59. The gate
+    // is indeed cheap; what it does not gate is that a position passing it
+    // still pays the full stable-disc sweep, and the sweep is the cost.
+    // `stab-fail-high` restores it.
+    #[cfg(not(feature = "stab-fail-high"))]
+    let _ = beta;
+    #[cfg(feature = "stab-fail-high")]
     let need = (64 + beta + 1) / 2;
+    #[cfg(feature = "layer-profile")]
+    ab_stats::STAB_GATE_B.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    #[cfg(feature = "stab-fail-high")]
     if beta <= -threshold
         && need <= 32
         && (player.count_ones() as i32) >= need + STABILITY_CUT_MARGIN
     {
-        let bound = 2 * crate::stability::stable_count(player, opponent) as i32 - 64;
+        #[cfg(feature = "layer-profile")]
+        ab_stats::STAB_BETA.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        let bound =
+            2 * crate::stability::stable_count_at_least(player, opponent, need as u32) as i32 - 64;
         if bound >= beta {
             return Some(bound);
         }
@@ -236,6 +296,24 @@ const MOBILITY_ORDER_WEIGHT: i32 = 12;
 /// Splitting only pays off when each sibling subtree is substantial: below
 /// this many empties the hand-off costs more than the subtree.
 const PARALLEL_MIN_EMPTIES: u8 = 16;
+
+/// `PAR_MIN=<n>` overrides [`PARALLEL_MIN_EMPTIES`] for sweeps: the floor
+/// was tuned for momentary hand-offs, and persistent split points change
+/// what a shallow split is worth.
+#[cfg(feature = "tunable")]
+fn parallel_min_empties() -> u8 {
+    static V: std::sync::OnceLock<u8> = std::sync::OnceLock::new();
+    *V.get_or_init(|| {
+        std::env::var("PAR_MIN")
+            .ok()
+            .and_then(|v| v.parse().ok())
+            .unwrap_or(PARALLEL_MIN_EMPTIES)
+    })
+}
+#[cfg(not(feature = "tunable"))]
+fn parallel_min_empties() -> u8 {
+    PARALLEL_MIN_EMPTIES
+}
 
 /// How many nodes split, and how many young brothers that handed to the pool.
 pub static SPLITS: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
@@ -288,11 +366,17 @@ pub static ABORT_FIRED: std::sync::atomic::AtomicU64 = std::sync::atomic::Atomic
 /// appear intermittently; without a way to make aborts dense you cannot
 /// even tell whether a fix worked.
 /// Whether proven cutoffs abort siblings; on by default (`SOLVER_ABORT=0` disables).
+#[cfg(feature = "tunable")]
 fn solver_abort() -> bool {
     static V: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
     *V.get_or_init(|| std::env::var("SOLVER_ABORT").map_or(true, |v| v != "0"))
 }
+#[cfg(not(feature = "tunable"))]
+fn solver_abort() -> bool {
+    true
+}
 
+#[cfg(feature = "tunable")]
 fn chaos_every() -> u64 {
     static V: std::sync::OnceLock<u64> = std::sync::OnceLock::new();
     *V.get_or_init(|| {
@@ -302,6 +386,11 @@ fn chaos_every() -> u64 {
             .unwrap_or(0)
     })
 }
+#[cfg(not(feature = "tunable"))]
+fn chaos_every() -> u64 {
+    0
+}
+
 pub static TASK_ABORTED: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
 /// Thread-nanoseconds spent inside handed-off tasks.
 pub static TASK_NS: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
@@ -383,6 +472,9 @@ struct ThreadBudget {
 struct Scratch {
     shallow: HashTable,
     mid: HashTable,
+    l4: Vec<L4Entry>,
+    l56: Vec<L4Entry>,
+    l78: Vec<L4Entry>,
     /// `selective_t` bits (0 = exact). Entries are keyed by the full board, so
     /// a recycled table can only be hit by a search of the very same position
     /// — and for those, a selective pass's bounds must not be read as exact.
@@ -406,6 +498,9 @@ impl ThreadBudget {
                 if s.tag != tag {
                     s.shallow.clear(1);
                     s.mid.clear(1);
+                    s.l4.fill(L4_EMPTY);
+                    s.l56.fill(L4_EMPTY);
+                    s.l78.fill(L4_EMPTY);
                     s.tag = tag;
                 }
                 s
@@ -415,6 +510,9 @@ impl ThreadBudget {
                 Scratch {
                     shallow: HashTable::new(sb),
                     mid: HashTable::new(mb),
+                    l4: Vec::new(),
+                    l56: Vec::new(),
+                    l78: Vec::new(),
                     tag,
                 }
             }
@@ -435,7 +533,6 @@ impl ThreadBudget {
 #[allow(clippy::too_many_arguments)]
 fn run_one_sibling(
     tt: &HashTable,
-    neighbours: &NeighbourTable,
     budget: &ThreadBudget,
     group: &AbortFlag<'_>,
     selective_t: Option<f32>,
@@ -456,18 +553,29 @@ fn run_one_sibling(
         return;
     }
     let tag = selective_t.map_or(0, f32::to_bits);
-    let s = budget.take_scratch(tag);
-    let mut w = Worker::with_tables(tt, neighbours, budget, group, s.shallow, s.mid);
+    let mut s = budget.take_scratch(tag);
+    let mut w = Worker::with_tables(tt, budget, group, s.shallow, s.mid);
+    if !s.l4.is_empty() {
+        w.l4 = std::mem::take(&mut s.l4);
+    }
+    if !s.l56.is_empty() {
+        w.l56 = std::mem::take(&mut s.l56);
+    }
+    if !s.l78.is_empty() {
+        w.l78 = std::mem::take(&mut s.l78);
+    }
     w.selective_t = selective_t;
     w.nnue = nnue;
     w.sigma_scale = sigma_scale;
 
     let mut child = m.child(parent);
-    let mut val = -w.pvs(&mut child, m.hash, -cur - 1, -cur, false, ev);
+    let ch = child_hash_of(&child);
+    let mut val = -w.pvs(&mut child, ch, -cur - 1, -cur, false, true, ev);
     if val == -ABORTED {
         val = ABORTED;
     } else if cur < val && val < upper {
-        let re = -w.pvs(&mut child, m.hash, -upper, -val, false, ev);
+        let ch = child_hash_of(&child);
+        let re = -w.pvs(&mut child, ch, -upper, -val, false, false, ev);
         val = if re == -ABORTED { ABORTED } else { re };
     }
     /* A move that fails low in a null window only yields an upper bound:
@@ -505,10 +613,193 @@ fn run_one_sibling(
     budget.give_scratch(Scratch {
         shallow: w.shallow_table,
         mid: w.mid_table,
+        l4: w.l4,
+        l56: w.l56,
+        l78: w.l78,
         tag,
     });
     TASK_NS.fetch_add(t_live.elapsed().as_nanos() as u64, Ordering::Relaxed);
     slot.finish(val, nodes, val != ABORTED && val > cur);
+}
+
+/// A published split point: one node's remaining siblings, claimable move
+/// by move by any worker until the cursor drains (late join). The owner
+/// registers it, competes for moves like everyone else, and returns only
+/// after every joined helper has left, so the borrows behind the raw
+/// pointers outlive every use. `SPLIT_V2=0` restores the task-queue path.
+struct SplitPoint {
+    board: Board,
+    moves: *const ScoredMove,
+    n_moves: usize,
+    upper: i32,
+    selective_t: Option<f32>,
+    nnue: Option<NnueProbe>,
+    sigma_scale: f32,
+    tt: *const HashTable,
+    /// `Option<&Evaluator>` with the lifetime erased; null = `None`.
+    ev: *const (),
+    /// `&AbortFlag` with the lifetime erased.
+    group: *const (),
+    /// `&ThreadBudget` with the lifetime erased.
+    budget: *const (),
+    cursor: std::sync::atomic::AtomicUsize,
+    shared_lower: std::sync::atomic::AtomicI32,
+    /// Helpers currently joined (plus one per claim in flight).
+    active: std::sync::atomic::AtomicUsize,
+    merge: std::sync::Mutex<SplitMerge>,
+    nodes: std::sync::atomic::AtomicU64,
+    waiter: std::thread::Thread,
+}
+
+// SAFETY: every raw pointer targets the owner's frame or longer-lived
+// state, and the owner does not return before `active` drains and the
+// registry guard clears (see `unregister_split`).
+unsafe impl Send for SplitPoint {}
+unsafe impl Sync for SplitPoint {}
+
+#[derive(Clone, Copy)]
+struct SplitMerge {
+    max: i32,
+    best_val: i32,
+    best: Option<Position>,
+    aborted: bool,
+}
+
+/// `SPLIT_V2=0` restores the momentary task-queue hand-off.
+#[cfg(feature = "tunable")]
+fn split_v2() -> bool {
+    static V: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *V.get_or_init(|| std::env::var("SPLIT_V2").map_or(true, |v| v != "0"))
+}
+#[cfg(not(feature = "tunable"))]
+fn split_v2() -> bool {
+    true
+}
+
+/// Fold one finished sibling into the split's running result. The rules are
+/// the task-queue path's, verbatim: an aborted sibling is unseen, not bad;
+/// a fail-low bound may raise the value but never picks the move.
+fn split_merge(sp: &SplitPoint, val: i32, cur: i32, pos: Position) {
+    let mut m = sp.merge.lock().unwrap();
+    if val == ABORTED {
+        m.aborted = true;
+        TASK_ABORTED.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        return;
+    }
+    if val > m.max {
+        m.max = val;
+    }
+    if val > cur && val > m.best_val {
+        m.best_val = val;
+        m.best = Some(pos);
+    }
+}
+
+/// Claim and run moves from a published split point until it drains, cuts
+/// or aborts. Returns whether at least one move was searched. The caller
+/// has already reserved its presence in `sp.active`.
+///
+/// # Safety
+/// `sp` and everything behind its pointers must stay alive; the owner's
+/// wait on `active` guarantees it as long as the caller's reservation
+/// stands.
+unsafe fn help_split(sp: &SplitPoint) -> bool {
+    use std::sync::atomic::Ordering;
+    let t_live = std::time::Instant::now();
+    // SAFETY: owner-frame borrows, alive per the function contract.
+    let (tt, group, budget) = unsafe {
+        (
+            &*sp.tt,
+            &*(sp.group as *const AbortFlag<'static>),
+            &*(sp.budget as *const ThreadBudget),
+        )
+    };
+    let ev: Option<&Evaluator> = if sp.ev.is_null() {
+        None
+    } else {
+        // SAFETY: same contract.
+        Some(unsafe { &*(sp.ev as *const Evaluator) })
+    };
+    // SAFETY: same contract.
+    let moves = unsafe { std::slice::from_raw_parts(sp.moves, sp.n_moves) };
+    let tag = sp.selective_t.map_or(0, f32::to_bits);
+    let mut scratch: Option<Scratch> = None;
+    let mut nodes = 0u64;
+    loop {
+        if group.aborted() {
+            break;
+        }
+        let cur = sp.shared_lower.load(Ordering::Relaxed);
+        if cur >= sp.upper {
+            break;
+        }
+        let idx = sp.cursor.fetch_add(1, Ordering::Relaxed);
+        if idx >= sp.n_moves {
+            break;
+        }
+        HANDED.fetch_add(1, Ordering::Relaxed);
+        let m = moves[idx];
+        let mut sc = scratch.take().unwrap_or_else(|| budget.take_scratch(tag));
+        let mut w = Worker::with_tables(tt, budget, group, sc.shallow, sc.mid);
+        if !sc.l4.is_empty() {
+            w.l4 = std::mem::take(&mut sc.l4);
+        }
+        if !sc.l56.is_empty() {
+            w.l56 = std::mem::take(&mut sc.l56);
+        }
+        if !sc.l78.is_empty() {
+            w.l78 = std::mem::take(&mut sc.l78);
+        }
+        w.selective_t = sp.selective_t;
+        w.nnue = sp.nnue;
+        w.sigma_scale = sp.sigma_scale;
+        let mut child = m.child(&sp.board);
+        let ch = child_hash_of(&child);
+        let mut val = -w.pvs(&mut child, ch, -cur - 1, -cur, false, true, ev);
+        if val == -ABORTED {
+            val = ABORTED;
+        } else if cur < val && val < sp.upper {
+            let ch = child_hash_of(&child);
+            let re = -w.pvs(&mut child, ch, -sp.upper, -val, false, false, ev);
+            val = if re == -ABORTED { ABORTED } else { re };
+        }
+        if val != ABORTED && val > cur {
+            sp.shared_lower.fetch_max(val, Ordering::Relaxed);
+            if val >= sp.upper {
+                ABORT_FIRED.fetch_add(1, Ordering::Relaxed);
+                if solver_abort() {
+                    group.abort();
+                }
+            }
+        }
+        if chaos_every() > 0
+            && TASK_ABORTED
+                .fetch_add(0, Ordering::Relaxed)
+                .is_multiple_of(7)
+        {
+            let n = ABORT_FIRED.fetch_add(1, Ordering::Relaxed);
+            if n.is_multiple_of(chaos_every()) {
+                group.abort();
+            }
+        }
+        nodes += w.nodes;
+        scratch = Some(Scratch {
+            shallow: w.shallow_table,
+            mid: w.mid_table,
+            l4: w.l4,
+            l56: w.l56,
+            l78: w.l78,
+            tag,
+        });
+        split_merge(sp, val, cur, m.pos);
+    }
+    if let Some(sc) = scratch {
+        budget.give_scratch(sc);
+        sp.nodes.fetch_add(nodes, Ordering::Relaxed);
+        TASK_NS.fetch_add(t_live.elapsed().as_nanos() as u64, Ordering::Relaxed);
+        return true;
+    }
+    false
 }
 
 /// One handed-off sibling's result, written by whoever ran it.
@@ -585,9 +876,91 @@ impl TaskSlot {
 /// siblings alone even while workers elsewhere go idle. Here a worker rejoins
 /// the idle set after a single subtree and is free to serve any node in the
 /// tree.
+const SPLIT_SLOTS: usize = 32;
+
+/// Ceiling for the speculative All-node fan-out (24): above
+/// it a mispredicted All node wastes too large a subtree.
+const SPEC_SPLIT_MAX_EMPTIES: u8 = 24;
+
+/// `SPEC_MAX=<n>` overrides [`SPEC_SPLIT_MAX_EMPTIES`] for sweeps.
+#[cfg(feature = "tunable")]
+fn spec_split_max() -> u8 {
+    static V: std::sync::OnceLock<u8> = std::sync::OnceLock::new();
+    *V.get_or_init(|| {
+        std::env::var("SPEC_MAX")
+            .ok()
+            .and_then(|v| v.parse().ok())
+            .unwrap_or(SPEC_SPLIT_MAX_EMPTIES)
+    })
+}
+#[cfg(not(feature = "tunable"))]
+fn spec_split_max() -> u8 {
+    SPEC_SPLIT_MAX_EMPTIES
+}
+
+/// Split-scan order: default prefers the biggest remaining subtree (a
+/// helper buys the most work per join, and joins fewest times per second -
+/// measured -3.8% against index order, while smallest-first measured +12%).
+/// `JOIN_DEEP=0` restores index order, `1` smallest-first, for sweeps.
+#[cfg(feature = "tunable")]
+fn join_deepest() -> bool {
+    static V: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *V.get_or_init(|| std::env::var("JOIN_DEEP").map_or(true, |v| v != "0"))
+}
+#[cfg(not(feature = "tunable"))]
+fn join_deepest() -> bool {
+    true
+}
+
+#[cfg(feature = "tunable")]
+fn join_deepest_big() -> bool {
+    static V: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *V.get_or_init(|| std::env::var("JOIN_DEEP").map_or(true, |v| v != "1"))
+}
+#[cfg(not(feature = "tunable"))]
+fn join_deepest_big() -> bool {
+    true
+}
+
+/// `MAX_JOIN=<n>` caps how many helpers may crowd one split point
+/// (0 = unlimited; 5 is a reasonable cap).
+#[cfg(feature = "tunable")]
+fn max_join() -> usize {
+    static V: std::sync::OnceLock<usize> = std::sync::OnceLock::new();
+    *V.get_or_init(|| {
+        std::env::var("MAX_JOIN")
+            .ok()
+            .and_then(|v| v.parse().ok())
+            .unwrap_or(0)
+    })
+}
+#[cfg(not(feature = "tunable"))]
+fn max_join() -> usize {
+    0
+}
+
+/// The speculative All-node fan-out (`SPEC_SPLIT=0` disables). A loaded
+/// window measured it neutral; the quiet-window judgment run has it a
+/// consistent -2.3% at 8 threads (minima 3.136s vs 3.210s over four
+/// alternating rounds), so it is on.
+#[cfg(feature = "tunable")]
+fn spec_split() -> bool {
+    static V: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *V.get_or_init(|| std::env::var("SPEC_SPLIT").map_or(true, |v| v != "0"))
+}
+#[cfg(not(feature = "tunable"))]
+fn spec_split() -> bool {
+    true
+}
+
 struct EndPool {
     q: std::sync::Mutex<std::collections::VecDeque<Box<dyn FnOnce() + Send + 'static>>>,
     cv: std::sync::Condvar,
+    /// Published split points, scanned by idle workers (late join). The
+    /// guard counter brackets the load-and-reserve window so an owner can
+    /// prove no worker still holds a just-unregistered pointer.
+    split_ptr: [std::sync::atomic::AtomicPtr<SplitPoint>; SPLIT_SLOTS],
+    split_guard: [std::sync::atomic::AtomicUsize; SPLIT_SLOTS],
     /// Workers blocked waiting for work.
     idle: std::sync::atomic::AtomicUsize,
     /// Queue length, readable without the lock. Nearly every hand-off attempt
@@ -603,6 +976,9 @@ impl EndPool {
         EndPool {
             q: std::sync::Mutex::new(std::collections::VecDeque::new()),
             cv: std::sync::Condvar::new(),
+            split_ptr: [const { std::sync::atomic::AtomicPtr::new(std::ptr::null_mut()) };
+                SPLIT_SLOTS],
+            split_guard: [const { std::sync::atomic::AtomicUsize::new(0) }; SPLIT_SLOTS],
             idle: std::sync::atomic::AtomicUsize::new(0),
             queued: std::sync::atomic::AtomicUsize::new(0),
             workers,
@@ -642,6 +1018,98 @@ impl EndPool {
         drop(q);
         self.cv.notify_one();
         true
+    }
+
+    /// Publish a split point for late joiners; wakes every parked worker.
+    fn register_split(&self, sp: &SplitPoint) -> Option<usize> {
+        use std::sync::atomic::Ordering;
+        let p = sp as *const SplitPoint as *mut SplitPoint;
+        for i in 0..SPLIT_SLOTS {
+            if self.split_ptr[i]
+                .compare_exchange(std::ptr::null_mut(), p, Ordering::AcqRel, Ordering::Relaxed)
+                .is_ok()
+            {
+                // Taking the queue lock orders this against a worker that is
+                // about to park: it either sees the slot or gets the notify.
+                drop(self.q.lock().unwrap());
+                self.cv.notify_all();
+                return Some(i);
+            }
+        }
+        None
+    }
+
+    /// Retract a split point. On return no worker holds the pointer without
+    /// also holding a reservation in `sp.active`.
+    fn unregister_split(&self, i: usize, sp: &SplitPoint) {
+        use std::sync::atomic::Ordering;
+        let p = sp as *const SplitPoint as *mut SplitPoint;
+        let _ = self.split_ptr[i].compare_exchange(
+            p,
+            std::ptr::null_mut(),
+            Ordering::AcqRel,
+            Ordering::Relaxed,
+        );
+        while self.split_guard[i].load(Ordering::Acquire) != 0 {
+            std::hint::spin_loop();
+        }
+    }
+
+    /// Join a published split point and work it until it drains. Returns
+    /// whether any search work was done. Slots are tried shallowest board
+    /// first (fewest empties): those subtrees finish soonest, so less
+    /// in-flight work is thrown away when a cutoff lands (`JOIN_DEEP=0`
+    /// restores index order).
+    fn try_help_splits(&self) -> bool {
+        use std::sync::atomic::Ordering;
+        let mut order: [(u8, u8); SPLIT_SLOTS] = [(u8::MAX, 0); SPLIT_SLOTS];
+        if join_deepest() {
+            for (i, o) in order.iter_mut().enumerate() {
+                self.split_guard[i].fetch_add(1, Ordering::AcqRel);
+                let p = self.split_ptr[i].load(Ordering::Acquire);
+                if !p.is_null() {
+                    // SAFETY: the guard keeps the owner from freeing the
+                    // split point while this peek dereferences it.
+                    let e = unsafe { (*p).board.empty_count() };
+                    let key = if join_deepest_big() { 64 - e } else { e };
+                    *o = (key, i as u8);
+                }
+                self.split_guard[i].fetch_sub(1, Ordering::Release);
+            }
+            order.sort_unstable();
+        } else {
+            for (i, o) in order.iter_mut().enumerate() {
+                *o = (0, i as u8);
+            }
+        }
+        for &(_, slot) in order.iter() {
+            let i = slot as usize;
+            self.split_guard[i].fetch_add(1, Ordering::AcqRel);
+            let p = self.split_ptr[i].load(Ordering::Acquire);
+            if p.is_null() {
+                self.split_guard[i].fetch_sub(1, Ordering::Release);
+                continue;
+            }
+            // SAFETY: the guard keeps the owner from freeing `sp` between
+            // the load above and the `active` reservation below.
+            let sp = unsafe { &*p };
+            let cap = max_join();
+            if cap != 0 && sp.active.load(Ordering::Relaxed) >= cap {
+                self.split_guard[i].fetch_sub(1, Ordering::Release);
+                continue;
+            }
+            sp.active.fetch_add(1, Ordering::AcqRel);
+            self.split_guard[i].fetch_sub(1, Ordering::Release);
+            // SAFETY: the reservation keeps `sp` alive until released.
+            let ran = unsafe { help_split(sp) };
+            if sp.active.fetch_sub(1, Ordering::AcqRel) == 1 {
+                sp.waiter.unpark();
+            }
+            if ran {
+                return true;
+            }
+        }
+        false
     }
 
     /// Run one queued task if there is one. Used by a thread that is waiting
@@ -695,6 +1163,22 @@ impl EndPool {
                     self.idle.fetch_sub(1, Ordering::Relaxed);
                     return;
                 }
+                // A published split point is work too; only park when
+                // neither the queue nor the registry has any. The register
+                // path takes the queue lock before notifying, so a slot
+                // published after this scan cannot slip past the wait.
+                drop(q);
+                self.idle.fetch_sub(1, Ordering::Relaxed);
+                let helped = self.try_help_splits();
+                self.idle.fetch_add(1, Ordering::Relaxed);
+                q = self.q.lock().unwrap();
+                if helped || !q.is_empty() {
+                    continue;
+                }
+                if self.stop.load(Ordering::Relaxed) {
+                    self.idle.fetch_sub(1, Ordering::Relaxed);
+                    return;
+                }
                 q = self.cv.wait(q).unwrap();
             }
             let t = q.pop_front().unwrap();
@@ -732,6 +1216,23 @@ fn dbg_asp() -> bool {
 /// Half-width used by the warm-up passes, whose centre is only an
 /// evaluation estimate rather than a searched score.
 const WARM_ASPIRATION_WIDTH: i32 = 6;
+
+/// `WARM_ASP_WIDTH=<n>` overrides [`WARM_ASPIRATION_WIDTH`] for sweeps.
+#[cfg(feature = "tunable")]
+fn warm_aspiration_width() -> i32 {
+    static V: std::sync::OnceLock<i32> = std::sync::OnceLock::new();
+    *V.get_or_init(|| {
+        std::env::var("WARM_ASP_WIDTH")
+            .ok()
+            .and_then(|v| v.parse().ok())
+            .unwrap_or(WARM_ASPIRATION_WIDTH)
+    })
+}
+#[cfg(not(feature = "tunable"))]
+fn warm_aspiration_width() -> i32 {
+    WARM_ASPIRATION_WIDTH
+}
+
 /// Depth of the evaluation search that centres the first warm-up window.
 const ESTIMATE_DEPTH: u8 = 6;
 /// Warm-up passes only prune at this many empties or more.
@@ -765,6 +1266,7 @@ fn selective_ladder() -> Vec<f32> {
     .clone()
 }
 
+#[cfg(feature = "tunable")]
 fn selective_pass_min_empties() -> u8 {
     static V: std::sync::OnceLock<u8> = std::sync::OnceLock::new();
     *V.get_or_init(|| {
@@ -774,7 +1276,12 @@ fn selective_pass_min_empties() -> u8 {
             .unwrap_or(SELECTIVE_PASS_MIN_EMPTIES)
     })
 }
+#[cfg(not(feature = "tunable"))]
+fn selective_pass_min_empties() -> u8 {
+    SELECTIVE_PASS_MIN_EMPTIES
+}
 
+#[cfg(feature = "tunable")]
 fn selective_min_empties() -> u8 {
     static V: std::sync::OnceLock<u8> = std::sync::OnceLock::new();
     *V.get_or_init(|| {
@@ -784,6 +1291,11 @@ fn selective_min_empties() -> u8 {
             .unwrap_or(SELECTIVE_MIN_EMPTIES)
     })
 }
+#[cfg(not(feature = "tunable"))]
+fn selective_min_empties() -> u8 {
+    SELECTIVE_MIN_EMPTIES
+}
+
 /// Depth of the evaluation probe used by a warm-up pass.
 ///
 /// 2, not the 4 this used to be. A warm-up rung exists to fill the table, not
@@ -854,9 +1366,14 @@ fn selective_sigma(empties: u8, pc: u8) -> f32 {
     s.max(1.0)
 }
 
+#[cfg(feature = "tunable")]
 fn legacy_sigma() -> bool {
     static V: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
     *V.get_or_init(|| std::env::var("SEL_SIGMA").is_ok_and(|v| v == "old"))
+}
+#[cfg(not(feature = "tunable"))]
+fn legacy_sigma() -> bool {
+    false
 }
 
 /// Depth of a warm-up pass's probe, optionally scaled with the position.
@@ -877,6 +1394,29 @@ fn selective_probe_depth(empties: u8) -> u8 {
     }) {
         return d;
     }
+    // SEL_PROBE_STEP=<empties>:<depth> probes deeper from that many empties
+    // up, keeping the flat depth below (sweep switch: a deep node's flat
+    // probe is guessing, but paying scaled depth everywhere loses on time).
+    static S: std::sync::OnceLock<Option<(u8, u8)>> = std::sync::OnceLock::new();
+    if let Some((at, d)) = *S.get_or_init(|| {
+        std::env::var("SEL_PROBE_STEP").ok().and_then(|v| {
+            let (a, b) = v.split_once(':')?;
+            Some((a.parse().ok()?, b.parse().ok()?))
+        })
+    }) {
+        if empties >= at {
+            return d;
+        }
+        return SELECTIVE_PROBE_DEPTH;
+    }
+    // Per-solve step, armed by `solve_impl` for deep roots (`SEL_DEEP_ROOT`).
+    let step = PROBE_STEP.load(std::sync::atomic::Ordering::Relaxed);
+    if step != 0 {
+        if empties >= (step >> 8) as u8 {
+            return (step & 0xff) as u8;
+        }
+        return SELECTIVE_PROBE_DEPTH;
+    }
     if selective_probe_scaled() {
         ((empties / 3) & !1) + (empties & 1)
     } else {
@@ -884,10 +1424,17 @@ fn selective_probe_depth(empties: u8) -> u8 {
     }
 }
 
+/// Per-solve probe-depth step (`at << 8 | depth`, 0 = off), armed by
+/// `solve_impl` when the root is at least `SEL_DEEP_ROOT` empties: a flat
+/// depth-2 probe pays everywhere except on deep solves, whose upper region
+/// needs a deeper question to cut anything.
+static PROBE_STEP: std::sync::atomic::AtomicU16 = std::sync::atomic::AtomicU16::new(0);
+
 /// `u8::MAX` until resolved: the environment supplies the default, and a caller
 /// scoring both probe shapes on one position overrides it between solves.
 static PROBE_SCALED: std::sync::atomic::AtomicU8 = std::sync::atomic::AtomicU8::new(u8::MAX);
 
+#[cfg(feature = "tunable")]
 fn selective_probe_scaled() -> bool {
     use std::sync::atomic::Ordering::Relaxed;
     let mut v = PROBE_SCALED.load(Relaxed);
@@ -896,6 +1443,10 @@ fn selective_probe_scaled() -> bool {
         PROBE_SCALED.store(v, Relaxed);
     }
     v == 1
+}
+#[cfg(not(feature = "tunable"))]
+fn selective_probe_scaled() -> bool {
+    false
 }
 
 /// Choose the probe shape for the solves that follow, overriding the
@@ -932,7 +1483,13 @@ fn selective_gate_offset() -> Option<f32> {
 /// run it (without it, 22-23-empty FFO problems were 3x its node count).
 /// FFO40-49 is unchanged (5.33s vs 5.45s minima over five rounds). Measured
 /// with the fitted `selective_sigma`; the FFO1-19 numbers above predate it.
-const SELECTIVE_PASS_MIN_EMPTIES: u8 = 22;
+///
+/// 18 rather than 22 (2026-08-27): the floor above was set with *linear*
+/// probes. With the NNUE lent to the warm-up the ladder pays two rungs
+/// lower — fixed-20-empty positions: -24% nodes, -15% wall; fixed-18:
+/// -32% nodes, -3.9% wall (quiet window, alternating minima). The FFO1-19
+/// numbers above predate the NNUE probes; 16 has not been re-measured.
+const SELECTIVE_PASS_MIN_EMPTIES: u8 = 18;
 /// Confidence levels (standard deviations) of the warm-up passes, from
 /// most selective to least. Each pass is aspirated around the previous
 /// pass's score, so the estimate handed to the exact search converges —
@@ -988,9 +1545,68 @@ fn sort_depth_ladder() -> &'static [u8; 64] {
     })
 }
 
-/// Squares adjacent to each square (used to skip moves that cannot flip:
-/// a legal move must touch at least one opponent disc).
-/// Index = file-major square; built at first use.
+/// One square's flip under the selected arm.
+///
+/// The two modifiers are orthogonal, so the features compose rather than
+/// naming arms: `flip-noshare` drops the shared board broadcast and pays
+/// `BoardCtx::new` per square, `flip-guard` adds back the adjacency test a
+/// non-empty flip implies anyway. Against the batched default that gives
+/// five points, and the fifth is what makes the decomposition checkable:
+///
+/// | arm | features | setup | timing | guard |
+/// |---|---|---|---|---|
+/// | A | (none) | shared | eager | no |
+/// | D | `flip-lazy` | shared | lazy | no |
+/// | E | `flip-noshare` | per square | lazy | no |
+/// | B | `flip-guard` | shared | lazy | yes |
+/// | C | `flip-guard,flip-noshare` | per square | lazy | yes |
+///
+/// `A - D` is the cost of computing flips a cutoff never needs, `D - B` the
+/// guard's, and sharing the setup is worth `D - E` without the guard and
+/// `B - C` with it. Those last two agreeing is what says the three effects
+/// are additive - and a single recorded number for all three only
+/// generalizes if they are.
+#[cfg(all(
+    any(
+        feature = "flip-lazy",
+        feature = "flip-guard",
+        feature = "flip-noshare"
+    ),
+    not(feature = "flip-noshare")
+))]
+#[inline(always)]
+fn arm_flip(ctx: &bitboard::FlipCtx, _p: u64, o: u64, sq: u8) -> u64 {
+    if cfg!(feature = "flip-guard") && o & bitboard::neighbours(sq) == 0 {
+        return 0;
+    }
+    ctx.flip(sq)
+}
+
+#[cfg(feature = "flip-noshare")]
+#[inline(always)]
+fn arm_flip(_ctx: &bitboard::FlipCtx, p: u64, o: u64, sq: u8) -> u64 {
+    if cfg!(feature = "flip-guard") && o & bitboard::neighbours(sq) == 0 {
+        return 0;
+    }
+    bitboard::flippable(p, o, 1u64 << sq)
+}
+
+/// The child's hash, computed now if `gen_moves` deferred it.
+///
+/// Deferring is the default: the eager hash exists to feed a prefetch, and
+/// at seven, eight and nine empties there is none to feed. Measured on
+/// FFO40-49 at one thread, ten shuffled rounds, tree byte-identical:
+/// -0.85%, and the deferred build was faster in all ten. `gen-eager-hash`
+/// restores the old shape for re-measurement.
+#[inline(always)]
+fn child_hash_of(child: &Board) -> u64 {
+    zobrist::board_hash(child.player_bb(), child.opponent_bb())
+}
+
+/// Squares adjacent to each square. The 5-6 loop's prefilter that used
+/// this is gone (batched flips subsume it); the test below keeps the mask
+/// definition honest for any future reader.
+#[cfg(test)]
 fn neighbour_bit(sq: u8) -> u64 {
     // Compute the 8-neighbourhood mask in file-major layout.
     // (Small enough to compute on the fly; the compiler folds it well.)
@@ -1010,24 +1626,6 @@ fn neighbour_bit(sq: u8) -> u64 {
         }
     }
     mask
-}
-
-/// Precomputed neighbour masks for all 64 squares.
-struct NeighbourTable([u64; 64]);
-
-impl NeighbourTable {
-    fn new() -> Self {
-        let mut t = [0u64; 64];
-        for (sq, slot) in t.iter_mut().enumerate() {
-            *slot = neighbour_bit(sq as u8);
-        }
-        NeighbourTable(t)
-    }
-
-    #[inline]
-    fn get(&self, sq: u8) -> u64 {
-        self.0[sq as usize]
-    }
 }
 
 // ---------------------------------------------------------------------------
@@ -1065,14 +1663,15 @@ fn parity_of_bb(occupied: u64) -> u8 {
 
 #[inline]
 fn quadrant_id(sq: u8) -> u8 {
-    let file = sq / 8;
-    let rank = sq % 8;
-    match (file < 4, rank < 4) {
-        (true, true) => 1,
-        (false, true) => 2,
-        (true, false) => 4,
-        (false, false) => 8,
-    }
+    // Branchless: the file crosses the middle exactly when bit 5 of the
+    // square is set (file = sq >> 3, so file >= 4 is sq >= 32), and the
+    // rank exactly when bit 2 is. The pair indexes the four quadrant bits
+    // in the order the old match spelled out: (near, near) = 1,
+    // (far, near) = 2, (near, far) = 4, (far, far) = 8. Called on every
+    // descent through the last four layers and again inside their parity
+    // permutations, so the divide, the modulo and the four-way match were
+    // all on the hottest path in the search.
+    1u8 << (((sq >> 5) & 1) | (((sq >> 2) & 1) << 1))
 }
 
 /// Board mask of each quadrant (file-major), indexed by quadrant_id bit.
@@ -1124,6 +1723,7 @@ const VALUE_INF: i32 = i32::MAX / 2;
 /// the position — no separate hash key is needed (the hash only picks the
 /// bucket). Scores are stored as i8 with MIN/MAX as -/+infinity sentinels.
 #[derive(Clone, Copy)]
+#[repr(C, align(32))]
 struct HashEntry {
     black: u64,
     white: u64,
@@ -1142,13 +1742,16 @@ struct HashEntry {
 }
 
 impl HashEntry {
+    /// All-zero, so a fresh table is calloc's lazily-zeroed pages instead
+    /// of a 12 MB pattern fill per solve. Safe because every read is gated
+    /// on `used()` / a board match, and every write fills the whole entry.
     const EMPTY: HashEntry = HashEntry {
         black: 0,
         white: 0,
-        lower8: i8::MIN,
-        upper8: i8::MAX,
+        lower8: 0,
+        upper8: 0,
         depth: 0,
-        best8: 255,
+        best8: 0,
         flags: 0,
         date: 0,
         _pad: [0; 2],
@@ -1164,7 +1767,31 @@ impl HashEntry {
     /// never cut the exact search.
     #[inline]
     fn is_seed(&self, now: u8) -> bool {
-        self.flags & 4 != 0 || self.date != now
+        if self.flags & 4 != 0 {
+            return true;
+        }
+        if self.date == now {
+            return false;
+        }
+        // A bound whose subtree never took a probabilistic cut is an exact
+        // alpha-beta fact, so generation demotion may spare it: either the
+        // whole layer is structurally probe-free (`exact_keep_floor`) or the
+        // search proved this entry clean (`PROVEN`, see `EXACT_PROOF`).
+        if self.flags & Self::PROVEN != 0 {
+            return false;
+        }
+        self.depth >= exact_keep_floor()
+    }
+
+    /// Flag bit: the stored bounds come from a subtree in which no selective
+    /// probe fired and no unproven table bound was consumed.
+    const PROVEN: u8 = 8;
+
+    /// Whether this entry's bounds are exact facts independent of the rung
+    /// that produced them: proven dynamically, or below the layer where the
+    /// selective probes can fire at all.
+    fn proven_entry(&self) -> bool {
+        self.flags & Self::PROVEN != 0 || self.depth < structural_proof_floor()
     }
 
     #[inline]
@@ -1192,10 +1819,11 @@ impl HashEntry {
 
     #[inline]
     fn matches(&self, board: &Board) -> bool {
-        self.used()
-            && self.black == board.black
-            && self.white == board.white
-            && (self.flags >> 1) & 1 == board.player as u8
+        // Branchless: fold both board words and the used/colour bits into
+        // one comparison, so a probe is three loads and a single test
+        // instead of a chain of compares.
+        let want = 1 | ((board.player as u8) << 1);
+        ((self.black ^ board.black) | (self.white ^ board.white)) == 0 && (self.flags & 3) == want
     }
 }
 
@@ -1266,11 +1894,26 @@ impl HashTable {
         let size = 1usize << bit_size;
         let mut locks = Vec::with_capacity(HASH_LOCK_STRIPES);
         locks.resize_with(HASH_LOCK_STRIPES, SpinLock::new);
+        // Probing is confined to the low part of the table while the
+        // allocation - and therefore the per-position wipe - stays full
+        // size. This is the control that separates the two things a
+        // smaller table does at once: probes land in less memory (a real
+        // win) and the wipe touches less memory (which evicts less of
+        // everything else, and lands on the *next* position's timed run
+        // rather than this one's). Shrinking the table gets both; this
+        // gets only the first. If it reproduces the whole gain, capacity
+        // is what to cut; if it does not, the wipe is, and the fix is to
+        // stop wiping - `HashEntry` already carries a generation.
+        #[cfg(feature = "tt-probe-clamp")]
+        const CLAMP_BUCKET_BITS: u32 = 22;
         HashTable {
+            #[cfg(feature = "tt-probe-clamp")]
+            mask: (((size >> 1) - 1) as u64).min((1u64 << CLAMP_BUCKET_BITS) - 1),
+            #[cfg(not(feature = "tt-probe-clamp"))]
             mask: ((size >> 1) - 1) as u64,
             date: std::sync::atomic::AtomicU8::new(1),
             shared: std::sync::atomic::AtomicBool::new(false),
-            entries: std::cell::UnsafeCell::new(vec![HashEntry::EMPTY; size]),
+            entries: std::cell::UnsafeCell::new(zeroed_vec::<HashEntry>(size)),
             locks,
         }
     }
@@ -1394,7 +2037,13 @@ impl HashTable {
         beta: i32,
         value: i32,
         best: Option<Position>,
+        proven: bool,
     ) {
+        let proven_bit = if proven && exact_proof() {
+            HashEntry::PROVEN
+        } else {
+            0
+        };
         let best8 = best.map_or(255, |p| p.index());
         let now = self.date();
         let base = ((hash & self.mask) as usize) << 1;
@@ -1421,7 +2070,7 @@ impl HashTable {
                     upper8: if value < beta { value as i8 } else { i8::MAX },
                     depth: board.empty_count(),
                     best8,
-                    flags: 1 | ((board.player as u8) << 1),
+                    flags: 1 | ((board.player as u8) << 1) | proven_bit,
                     date: self.date(),
                     _pad: [0; 2],
                 };
@@ -1434,10 +2083,15 @@ impl HashTable {
             entry.lower8 = if value > alpha { value as i8 } else { i8::MIN };
             entry.upper8 = if value < beta { value as i8 } else { i8::MAX };
             entry.depth = board.empty_count();
-            entry.flags = 1 | ((board.player as u8) << 1);
+            entry.flags = 1 | ((board.player as u8) << 1) | proven_bit;
             entry.best8 = best8;
             entry.date = now;
             return;
+        }
+        // Tightening mixes the stored bounds with the new ones, so the entry
+        // stays proven only when both sides are.
+        if proven_bit == 0 {
+            entry.flags &= !HashEntry::PROVEN;
         }
         if value < beta && (value as i8) < entry.upper8 {
             entry.upper8 = value as i8;
@@ -1445,7 +2099,12 @@ impl HashTable {
         if value > alpha && (value as i8) > entry.lower8 {
             entry.lower8 = value as i8;
         }
-        entry.best8 = best8;
+        // A fail-low store carries no move; keep the one already there
+        // rather than erasing it (a stale-but-real move orders better than
+        // none).
+        if best8 != 255 {
+            entry.best8 = best8;
+        }
         entry.date = now;
     }
 
@@ -1557,17 +2216,413 @@ pub type NnueProbe = (
 /// 66.7s — the probe is both a little more accurate (sigma ~0.9x) and much
 /// cheaper per call. Deeper NNUE probes (5/6/8/depth-3) all lose on time.
 /// `SEL_NNUE_PROBE=0` restores the linear probes.
+#[cfg(feature = "tunable")]
 fn sel_nnue_probe() -> bool {
     static V: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
     *V.get_or_init(|| std::env::var("SEL_NNUE_PROBE").map_or(true, |v| v != "0"))
 }
+#[cfg(not(feature = "tunable"))]
+fn sel_nnue_probe() -> bool {
+    true
+}
+
+/// The exact solve's warm-up ladder probes with the NNUE too (`SEL_NNUE_WARM=0`
+/// restores the linear probes). This lost under the H=16 model; re-measured
+/// under H=32 it wins on wall clock (quiet window, alternating minima):
+/// band22 -13.2%, fix20 -15.1%, fix24 -4.7%, FFO40-49 -5.9%, with fix22 +4.1%
+/// the one loss. The probe depth question is separate — see `SEL_DEEP_ROOT`.
+#[cfg(feature = "tunable")]
+fn sel_nnue_warm() -> bool {
+    static V: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *V.get_or_init(|| std::env::var("SEL_NNUE_WARM").map_or(true, |v| v != "0"))
+}
+#[cfg(not(feature = "tunable"))]
+fn sel_nnue_warm() -> bool {
+    true
+}
+
+/// Entries below the structural probe floor are spared the between-rung
+/// demotion: a probe can only fire in `pvs` at `selective_min_empties` or
+/// more, so bounds proved below that are selectivity-independent facts the
+/// exact pass may reuse. Worth -1% (FFO) to -8% (deep26) of the total tree
+/// on top of the NNUE warm-up probes. `EXACT_KEEP_SHALLOW=0` restores the
+/// blanket demotion.
+#[cfg(feature = "tunable")]
+fn exact_keep_floor() -> u8 {
+    static V: std::sync::OnceLock<u8> = std::sync::OnceLock::new();
+    *V.get_or_init(|| {
+        if std::env::var("EXACT_KEEP_SHALLOW").is_ok_and(|v| v == "0") {
+            return 0;
+        }
+        structural_proof_floor()
+    })
+}
+#[cfg(not(feature = "tunable"))]
+fn exact_keep_floor() -> u8 {
+    structural_proof_floor()
+}
+
+/// `EXACT_REOPEN_CLAMP=<d>` caps the exact pass's reopened aspiration window
+/// at `warm score +/- d` (sweep switch; unset keeps the full converged
+/// window).
+fn exact_reopen_clamp() -> Option<i32> {
+    static V: std::sync::OnceLock<Option<i32>> = std::sync::OnceLock::new();
+    *V.get_or_init(|| {
+        std::env::var("EXACT_REOPEN_CLAMP")
+            .ok()
+            .and_then(|v| v.parse().ok())
+            .filter(|d: &i32| *d > 0)
+    })
+}
+
+/// Probe/store a dedicated four-empty cache in the five-empty loop
+/// (`EXACT_L4_CACHE=0` disables). Dedicated because the shallow table's
+/// depth-preferred replacement never lets a four-empty entry evict a 5-6
+/// one, so routing them there measured zero hits. This one is direct-mapped,
+/// overwrites on position mismatch, and merges a (lower, upper) pair per
+/// board so one entry serves many windows. FFO40-49 nodes -7.3% alone;
+/// combined with the revived four-empty stability cut, total -26% against
+/// the pre-cache tree (solutions identical on all seven sets).
+#[cfg(feature = "tunable")]
+fn l4_cache() -> bool {
+    static V: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *V.get_or_init(|| std::env::var("EXACT_L4_CACHE").map_or(true, |v| v != "0"))
+}
+#[cfg(not(feature = "tunable"))]
+fn l4_cache() -> bool {
+    true
+}
+
+/// One four-empty cache entry: the position (side-to-move relative, like
+/// every board below the colour boundary) and its proven bound pair.
+/// Packed to its 19 content bytes rather than padded out to a 32-byte
+/// slot. The slot used to be aligned so that an entry never straddled a
+/// cache line, on the theory that a straddle doubles a random probe's
+/// latency. That buys single-line probes at the price of 40% of the
+/// table: at 19 bytes the same footprint holds 1.68x the entries, and
+/// this band is footprint-bound, not latency-bound - the 7-8 layer
+/// measured 256KB beating 2MB because the larger table's stores evicted
+/// everything around them. Fewer bytes for the same entries pushes on
+/// exactly that axis. Unaligned loads are cheap on aarch64.
+/// Three layouts, because this is a two-sided question and neither side has
+/// measured it: `entry-align32` restores the padded slot, `entry-natural`
+/// takes the 24-byte natural alignment as a middle arm, and the default is
+/// packed. Build all three and sweep; do not assume.
+#[derive(Clone, Copy)]
+#[cfg_attr(feature = "entry-align32", repr(C, align(32)))]
+#[cfg_attr(feature = "entry-natural", repr(C))]
+#[cfg_attr(
+    not(any(feature = "entry-align32", feature = "entry-natural")),
+    repr(C, packed)
+)]
+struct L4Entry {
+    player: u64,
+    opponent: u64,
+    lower: i8,
+    upper: i8,
+    /// Best move + 1; 0 = none, so calloc's zero pages decode as "none".
+    best8: u8,
+}
+
+/// The whole point of each layout is its byte count, so state it where a
+/// stray field or a repr change would trip over it.
+///
+/// The table sizes are knobs in *entries* (`l4_bits` and friends), and the
+/// index is a mask, so an entry count is always a power of two. That fixes
+/// what a comparison between these layouts means: at equal `bits` the arms
+/// hold the same entries and differ only in footprint (packed is 59% of
+/// the padded slot). The other reading - equal footprint, 1.68x the
+/// entries - is not reachable by a mask-indexed table, since 1.68x is not
+/// a power of two; it needs the byte-budget-plus-multiply-index shape, and
+/// that changes the index function too, which moves the tree. Keep the two
+/// questions apart: sweep `bits` per layout, and read the curves against
+/// each other rather than reading one point.
+const ENTRY_BYTES: usize = std::mem::size_of::<L4Entry>();
+const _: () = assert!(if cfg!(feature = "entry-align32") {
+    ENTRY_BYTES == 32
+} else if cfg!(feature = "entry-natural") {
+    ENTRY_BYTES == 24
+} else {
+    ENTRY_BYTES == 19
+});
+
+/// A zeroed slot matches no real position (both sides empty), and its bound
+/// bytes are never read before a store rewrites the whole entry - so the
+/// table can come straight from calloc's zero pages.
+#[allow(dead_code)]
+/// Composition counters for the 5-6 band (layer-profile builds only):
+/// how many of each unit a node pays for, to divide the band's ns/node.
+#[cfg(feature = "layer-profile")]
+pub mod ab_stats {
+    use std::sync::atomic::AtomicU64;
+    pub static NODES: AtomicU64 = AtomicU64::new(0);
+    pub static L4_PROBE: AtomicU64 = AtomicU64::new(0);
+    pub static L4_HIT: AtomicU64 = AtomicU64::new(0);
+    pub static L4_STORE: AtomicU64 = AtomicU64::new(0);
+    pub static L56_PROBE: AtomicU64 = AtomicU64::new(0);
+    pub static L56_HIT: AtomicU64 = AtomicU64::new(0);
+    pub static CHILD: AtomicU64 = AtomicU64::new(0);
+    pub static STAB4: AtomicU64 = AtomicU64::new(0);
+    pub static STAB4_CUT: AtomicU64 = AtomicU64::new(0);
+    pub static STAB_FULL: AtomicU64 = AtomicU64::new(0);
+    pub static STAB_BETA: AtomicU64 = AtomicU64::new(0);
+    pub static STAB_GATE_A: AtomicU64 = AtomicU64::new(0);
+    pub static STAB_GATE_B: AtomicU64 = AtomicU64::new(0);
+    // 7-11 band (alpha_beta_ordered)
+    pub static O_NODES: AtomicU64 = AtomicU64::new(0);
+    pub static O_GEN_MOVES: AtomicU64 = AtomicU64::new(0);
+    pub static O_SCORED: AtomicU64 = AtomicU64::new(0);
+    pub static O_TT_PROBE: AtomicU64 = AtomicU64::new(0);
+    pub static O_TT_CUT: AtomicU64 = AtomicU64::new(0);
+    pub static O_CHILD: AtomicU64 = AtomicU64::new(0);
+    pub static O_STAB: AtomicU64 = AtomicU64::new(0);
+}
+#[cfg(feature = "layer-profile")]
+macro_rules! abst {
+    ($c:ident) => {
+        ab_stats::$c.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
+    };
+}
+#[cfg(not(feature = "layer-profile"))]
+macro_rules! abst {
+    ($c:ident) => {
+        ()
+    };
+}
+
+const L4_EMPTY: L4Entry = L4Entry {
+    player: 0,
+    opponent: 0,
+    lower: 0,
+    upper: 0,
+    best8: 0,
+};
+
+/// An all-zero-initialised Vec straight from `alloc_zeroed`: the kernel
+/// hands back zero pages lazily, so a table the search only partially
+/// touches never pays a full memset.
+fn zeroed_vec<T: Copy>(len: usize) -> Vec<T> {
+    let layout = std::alloc::Layout::array::<T>(len).expect("table size overflow");
+    // SAFETY: T is Copy (no drop), the layout matches len elements, and
+    // alloc_zeroed's bytes are a valid all-zero T for the entry types used
+    // here (plain integers behind repr(C)).
+    unsafe {
+        let p = std::alloc::alloc_zeroed(layout) as *mut T;
+        assert!(!p.is_null(), "table allocation failed");
+        Vec::from_raw_parts(p, len, len)
+    }
+}
+
+/// Index bits of the four-empty cache (2^16 x 24 B = 1.5 MiB per worker;
+/// `EXACT_L4_BITS` overrides for sweeps. 14 gives back ~1% of the nodes).
+
+#[cfg(feature = "tunable")]
+fn l4_bits() -> u32 {
+    static V: std::sync::OnceLock<u32> = std::sync::OnceLock::new();
+    *V.get_or_init(|| {
+        std::env::var("EXACT_L4_BITS")
+            .ok()
+            .and_then(|v| v.parse().ok())
+            // 2^14 x 32 B = 512 KiB. 2^16 held 0.64% more of the tree but
+            // the extra misses cost more than the nodes: FFO40-49 -2.1%
+            // wall clock, deep26 -4.6% at this size. The thread scaling
+            // below still clamps 8 threads to 2^13, so only 1-4 threads
+            // change.
+            .unwrap_or(14)
+    })
+}
+#[cfg(not(feature = "tunable"))]
+fn l4_bits() -> u32 {
+    14
+}
+
+/// Also probe/store the overwrite-always cache at 5-6 empty entries: the
+/// shallow table's depth-preferred replacement never lets a 5 evict a 6
+/// either (`EXACT_L56_CACHE=0` disables).
+/// `NO_SHALLOW56=1` drops the shallow table's probe and store at 5-6
+/// empties, leaving the unified overwrite cache as the band's only layer
+/// (consolidation experiment; pass condition is no node increase).
+#[cfg(feature = "tunable")]
+fn no_shallow56() -> bool {
+    static V: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *V.get_or_init(|| std::env::var("NO_SHALLOW56").is_ok_and(|v| v != "0"))
+}
+#[cfg(not(feature = "tunable"))]
+fn no_shallow56() -> bool {
+    false
+}
+
+/// `NEW_SHALLOW=1` swaps the 5-6 band's depth-preferred 2-way shallow table
+/// for a direct-mapped overwrite cache with merged bound pairs (the shape
+/// that won at four empties).
+#[cfg(feature = "tunable")]
+fn new_shallow() -> bool {
+    static V: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *V.get_or_init(|| std::env::var("NEW_SHALLOW").map_or(true, |v| v != "0"))
+}
+#[cfg(not(feature = "tunable"))]
+fn new_shallow() -> bool {
+    true
+}
+
+/// `NEW_MID=1` swaps the 9-empty layer's 2-way mid table for the same
+/// direct-mapped overwrite shape (experiment; node ceiling applies).
+#[cfg(feature = "tunable")]
+fn new_mid() -> bool {
+    static V: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *V.get_or_init(|| std::env::var("NEW_MID").is_ok_and(|v| v != "0"))
+}
+#[cfg(not(feature = "tunable"))]
+fn new_mid() -> bool {
+    false
+}
+
+/// Index bits of the 9-empty cache (`NEW_MID_BITS`, default 18 = 8 MiB).
+#[cfg(feature = "tunable")]
+fn new_mid_bits() -> u32 {
+    static V: std::sync::OnceLock<u32> = std::sync::OnceLock::new();
+    *V.get_or_init(|| {
+        std::env::var("NEW_MID_BITS")
+            .ok()
+            .and_then(|v| v.parse().ok())
+            .unwrap_or(18)
+    })
+}
+#[cfg(not(feature = "tunable"))]
+fn new_mid_bits() -> u32 {
+    18
+}
+
+/// `NEW_78=1` (default): give the 7-8 layers the same one-way pair table
+/// the 5-6 band has. They sit below `TT_MIN_EMPTIES` and had no
+/// transposition reuse at all; probing a cache at every NWS depth
+/// instead shrinks the per-empties node counts at 7-11 by ~1.5x
+/// on the positions where the node count is worst (FFO#44).
+#[cfg(feature = "tunable")]
+fn new_78() -> bool {
+    static V: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *V.get_or_init(|| std::env::var("NEW_78").map_or(true, |v| v != "0"))
+}
+#[cfg(not(feature = "tunable"))]
+fn new_78() -> bool {
+    true
+}
+
+/// Index bits of the 7-8 cache (`L78_BITS`, default 13 = 256 KiB). Small on
+/// purpose: at 2^16 the sweep found 1.7x the node savings but +5.8% wall
+/// clock - the store traffic evicts the L2 lines the leaf machinery lives
+/// on. 256 KiB keeps most of the node win at none of that cost (the
+/// reference sizes its shallow cache at 128 KiB for the same reason).
+#[cfg(feature = "tunable")]
+fn l78_bits() -> u32 {
+    static V: std::sync::OnceLock<u32> = std::sync::OnceLock::new();
+    *V.get_or_init(|| {
+        std::env::var("L78_BITS")
+            .ok()
+            .and_then(|v| v.parse().ok())
+            .unwrap_or(13)
+    })
+}
+#[cfg(all(not(feature = "tunable"), feature = "ec-band"))]
+fn l78_bits() -> u32 {
+    // Six layers to cover instead of two, so 4 MiB rather
+    // than the 256 KiB that suits 7-8 alone.
+    18
+}
+#[cfg(all(not(feature = "tunable"), not(feature = "ec-band")))]
+fn l78_bits() -> u32 {
+    13
+}
+
+/// Index bits of the 5-6 cache (`NEW_SHALLOW_BITS`, default 14 = 512 KiB).
+#[cfg(feature = "tunable")]
+fn new_shallow_bits() -> u32 {
+    static V: std::sync::OnceLock<u32> = std::sync::OnceLock::new();
+    *V.get_or_init(|| {
+        std::env::var("NEW_SHALLOW_BITS")
+            .ok()
+            .and_then(|v| v.parse().ok())
+            .unwrap_or(14)
+    })
+}
+#[cfg(not(feature = "tunable"))]
+fn new_shallow_bits() -> u32 {
+    14
+}
+
+#[cfg(feature = "tunable")]
+fn l56_cache() -> bool {
+    static V: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    // Default off since the four-empty table shrank to 512 KiB: 5-6 entries
+    // rooming in it evict the four-empty entries that earn more, so the
+    // shared tenancy now *adds* nodes (-0.27% FFO40-49, -0.17% fix22,
+    // -0.15% deep26 without it) and its entry probe was paid at every 5-6
+    // node. The dedicated NEW_SHALLOW table keeps covering 5-6.
+    *V.get_or_init(|| std::env::var("EXACT_L56_CACHE").is_ok_and(|v| v != "0"))
+}
+#[cfg(not(feature = "tunable"))]
+fn l56_cache() -> bool {
+    false
+}
+
+/// `EXACT_PROOF=1` tracks, per warm-up node, whether any selective cut (or
+/// any bound derived from one) entered its subtree; untainted results are
+/// stored with [`HashEntry::PROVEN`] and survive the between-rung demotion
+/// as exact facts. Off by default (sweep switch).
+#[cfg(feature = "tunable")]
+fn exact_proof() -> bool {
+    static V: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *V.get_or_init(|| std::env::var("EXACT_PROOF").is_ok_and(|v| v != "0"))
+}
+#[cfg(not(feature = "tunable"))]
+fn exact_proof() -> bool {
+    false
+}
+
+/// The layer below which a selective probe can never fire: probes run only in
+/// `pvs` (>= `PVS_LIMIT` empties) and only at `selective_min_empties` or more,
+/// so every entry below this depth is probe-free by construction.
+#[cfg(feature = "tunable")]
+fn structural_proof_floor() -> u8 {
+    static V: std::sync::OnceLock<u8> = std::sync::OnceLock::new();
+    *V.get_or_init(|| PVS_LIMIT.max(selective_min_empties()))
+}
+#[cfg(not(feature = "tunable"))]
+fn structural_proof_floor() -> u8 {
+    PVS_LIMIT.max(SELECTIVE_MIN_EMPTIES)
+}
+
+/// Layout probe: where the hot fields actually sit. `repr(Rust)` orders by
+/// size and alignment, not by how often a field is touched, so the node
+/// counter and the bound caches can end up behind the two inline hash
+/// tables - and every access is then a large offset from one base pointer.
+#[cfg(feature = "layer-profile")]
+pub fn worker_layout() -> Vec<(&'static str, usize)> {
+    let tt = HashTable::new(10);
+    let budget = ThreadBudget::new(0);
+    let abort = AbortFlag::root();
+    let w = Worker::new(&tt, &budget, &abort);
+    let base = &w as *const _ as usize;
+    vec![
+        ("size_of", std::mem::size_of::<Worker>()),
+        ("nodes", (&w.nodes as *const _ as usize) - base),
+        ("l4", (&w.l4 as *const _ as usize) - base),
+        ("l56", (&w.l56 as *const _ as usize) - base),
+        ("l78", (&w.l78 as *const _ as usize) - base),
+        (
+            "shallow_table",
+            (&w.shallow_table as *const _ as usize) - base,
+        ),
+        ("mid_table", (&w.mid_table as *const _ as usize) - base),
+        ("tt", (&w.tt as *const _ as usize) - base),
+        ("g_l4_cache", (&w.g_l4_cache as *const _ as usize) - base),
+    ]
+}
 
 pub struct Solver {
     /// Shared between all search threads: the transposition table (its
-    /// entries are guarded by striped locks) and the read-only neighbour
-    /// masks.
+    /// entries are guarded by striped locks).
     hash_table: HashTable,
-    neighbours: NeighbourTable,
     /// Results of the last solve, copied back from the worker.
     nodes: u64,
     best: Option<Position>,
@@ -1575,6 +2630,16 @@ pub struct Solver {
     threads: usize,
     /// See [`NnueProbe`]; `None` keeps the linear probes.
     nnue: Option<NnueProbe>,
+    /// The root worker's private tables, kept across solves so their
+    /// allocation and per-solve clearing sit outside the timed search — the
+    /// same convention as the main table (and as the engines we compare
+    /// against, which allocate their thread-local caches once at startup).
+    scratch: Option<(HashTable, HashTable, Vec<L4Entry>)>,
+    /// The worker pool, spawned once and woken per solve, so neither thread
+    /// creation nor teardown is billed to (or serialised into) a solve.
+    budget: Option<std::sync::Arc<ThreadBudget>>,
+    budget_threads: usize,
+    budget_handles: Vec<std::thread::JoinHandle<()>>,
     /// External (UI) stop handle; when set the search returns immediately.
     stop: Option<crate::midgame::StopHandle>,
 }
@@ -1582,12 +2647,40 @@ pub struct Solver {
 /// One search thread's private state plus borrows of the shared tables.
 /// Every search routine lives here, so spawning another thread is just
 /// another `Worker` over the same `HashTable`.
+/// Field order here is not the layout: `repr(Rust)` sorts by size and
+/// alignment, which puts the node counter at offset 272 and the cache flags
+/// at 322, behind two inline hash tables the exact search barely touches.
+///
+/// Pinning the layout with `repr(C)` and hoisting the hot fields to the
+/// front was measured and is worse: it moved `nodes` to 0 and `l4` to 8,
+/// but grew the struct from 328 to 336 bytes, and the four sets came out
+/// +4.46%, +0.79%, +0.61%, +0.58% (total +0.90%). The packing `repr(Rust)`
+/// finds is worth more than the smaller offsets.
 struct Worker<'a> {
+    nodes: u64,
+    /// Four-empty cache (`EXACT_L4_CACHE`), empty when the switch is off.
+    l4: Vec<L4Entry>,
+    /// Direct-mapped overwrite cache for 5-6-empty entries (`NEW_SHALLOW`),
+    /// replacing the depth-preferred shallow table's probe there.
+    l56: Vec<L4Entry>,
+    l78: Vec<L4Entry>,
+    /// Env-gate snapshots. The `OnceLock` getters cost an acquire load and
+    /// an init-check branch per call; the hot paths read these plain bools
+    /// instead (several per node at 5-6 empties).
+    g_l4_cache: bool,
+    g_l56_cache: bool,
+    g_new_shallow: bool,
+    g_no_shallow56: bool,
+    g_new_mid: bool,
+    /// Highest empty count still served by `mid_table`, exclusive.
+    mid_empties: u8,
     tt: &'a HashTable,
-    neighbours: &'a NeighbourTable,
+    /// Cutoff signal for the split this worker is searching under.
+    abort: &'a AbortFlag<'a>,
+    /// Spare threads this search may recruit when splitting a node.
+    budget: &'a ThreadBudget,
     /// External stop (UI), checked together with the per-node abort flag.
     stop: Option<&'a crate::midgame::StopHandle>,
-    nodes: u64,
     best: Option<Position>,
     /// Score returned by the warm-up pass, used to centre the exact
     /// search's aspiration window (carrying the score between passes —
@@ -1614,10 +2707,15 @@ struct Worker<'a> {
     /// probe into the multi-gigabyte main table is a cold miss; a table
     /// that fits in cache trades a little hit rate for a lot of latency.
     mid_table: HashTable,
-    /// Highest empty count still served by `mid_table`, exclusive.
-    mid_empties: u8,
     /// See [`NnueProbe`]; copied from the solver into every worker.
     nnue: Option<NnueProbe>,
+    /// Bumped whenever a warm-up node takes a selective cut or consumes an
+    /// unproven table bound; a subtree whose search left it unchanged is an
+    /// exact alpha-beta fact (see `EXACT_PROOF`).
+    taint: u64,
+    /// Same shape one band up (`NEW_MID`): the 9-empty layer, bounds plus a
+    /// best-move byte, replacing the 2-way mid table's probe there.
+    l9: Vec<L4Entry>,
     /// Margin multiplier for the selective cuts. 1.0 for exact solves; a
     /// selective *answer* runs at 0.6 — calibrated-sigma margins turned out
     /// to buy far more certainty than the answer needs (measured on two
@@ -1625,35 +2723,18 @@ struct Worker<'a> {
     /// Egaroucid's 93% answer error at 0.85-0.94x their time, while 1.0 is
     /// 4x slower for 1-4 discs less error). `SEL_SIGMA_SCALE` overrides.
     sigma_scale: f32,
-    /// Spare threads this search may recruit when splitting a node.
-    budget: &'a ThreadBudget,
-    /// Cutoff signal for the split this worker is searching under.
-    abort: &'a AbortFlag<'a>,
 }
 
 impl<'a> Worker<'a> {
-    fn new(
-        tt: &'a HashTable,
-        neighbours: &'a NeighbourTable,
-        budget: &'a ThreadBudget,
-        abort: &'a AbortFlag<'a>,
-    ) -> Worker<'a> {
+    fn new(tt: &'a HashTable, budget: &'a ThreadBudget, abort: &'a AbortFlag<'a>) -> Worker<'a> {
         let (sb, mb) = private_tt_bits();
-        Worker::with_tables(
-            tt,
-            neighbours,
-            budget,
-            abort,
-            HashTable::new(sb),
-            HashTable::new(mb),
-        )
+        Worker::with_tables(tt, budget, abort, HashTable::new(sb), HashTable::new(mb))
     }
 
     /// Build a worker over tables it does not own the allocation of, so a
     /// helper thread can adopt a recycled pair instead of zero-filling 14 MB.
     fn with_tables(
         tt: &'a HashTable,
-        neighbours: &'a NeighbourTable,
         budget: &'a ThreadBudget,
         abort: &'a AbortFlag<'a>,
         shallow_table: HashTable,
@@ -1661,7 +2742,6 @@ impl<'a> Worker<'a> {
     ) -> Worker<'a> {
         Worker {
             tt,
-            neighbours,
             stop: None,
             nodes: 0,
             best: None,
@@ -1672,9 +2752,339 @@ impl<'a> Worker<'a> {
             mid_table,
             mid_empties: mid_tt_empties(),
             nnue: None,
+            taint: 0,
+            l56: if new_shallow() {
+                zeroed_vec::<L4Entry>(1usize << new_shallow_bits())
+            } else {
+                Vec::new()
+            },
+            l9: if new_mid() {
+                zeroed_vec::<L4Entry>(1usize << new_mid_bits())
+            } else {
+                Vec::new()
+            },
+            l78: if new_78() {
+                zeroed_vec::<L4Entry>(1usize << l78_bits())
+            } else {
+                Vec::new()
+            },
+            l4: if l4_cache() || l56_cache() {
+                // The budget lesson: per-worker caches share one
+                // L2, so divide the table by the thread count. 2^16 x 32 B at
+                // one thread; 8 threads at 2^16 measured 3.35s on FFO40-49
+                // against 2.83s at 2^13 (-15.5%).
+                let threads = budget.pool.workers + 1;
+                let bits = l4_bits().saturating_sub(threads.ilog2()).max(13);
+                zeroed_vec::<L4Entry>(1usize << bits)
+            } else {
+                Vec::new()
+            },
             sigma_scale: 1.0,
+            g_l4_cache: l4_cache(),
+            g_l56_cache: l56_cache(),
+            g_new_shallow: new_shallow(),
+            g_no_shallow56: no_shallow56(),
+            g_new_mid: new_mid(),
             budget,
             abort,
+        }
+    }
+
+    /// Warm the 7-12 cache slot a child will probe.
+    #[inline(always)]
+    fn l78_prefetch(&self, hash: u64) {
+        if self.l78.is_empty() {
+            return;
+        }
+        let idx = (hash as usize) & (self.l78.len() - 1);
+        #[cfg(target_arch = "aarch64")]
+        // SAFETY: `idx` is masked into the table, and a prefetch of a valid
+        // address has no architectural effect.
+        unsafe {
+            std::arch::asm!("prfm pldl1keep, [{0}]", in(reg) self.l78.as_ptr().add(idx), options(nostack, preserves_flags));
+        }
+        #[cfg(not(target_arch = "aarch64"))]
+        let _ = idx;
+    }
+
+    /// Warm the four-empty cache line for `hash` (no-op off aarch64).
+    #[inline]
+    fn l4_prefetch(&self, hash: u64) {
+        if self.l4.is_empty() {
+            return;
+        }
+        let idx = (hash as usize) & (self.l4.len() - 1);
+        // SAFETY: in-range index; a prefetch has no effect beyond the cache.
+        unsafe {
+            let p = self.l4.as_ptr().add(idx);
+            #[cfg(target_arch = "aarch64")]
+            std::arch::asm!("prfm pldl1keep, [{p}]", p = in(reg) p, options(nostack, preserves_flags));
+            #[cfg(not(target_arch = "aarch64"))]
+            let _ = p;
+        }
+    }
+
+    /// Probe the 7-8 cache: same one-way (lower, upper, best) shape as the
+    /// 9-empty cache, for the two layers below `TT_MIN_EMPTIES` that had no
+    /// transposition reuse at all.
+    #[inline]
+    #[allow(clippy::type_complexity)]
+    fn l78_probe(
+        &self,
+        hash: u64,
+        player: u64,
+        opponent: u64,
+    ) -> Option<(i32, i32, Option<Position>)> {
+        // SAFETY: the table length is a power of two (it comes from
+        // `zeroed_vec(1 << bits)`), so the mask lands inside it. The
+        // reference indexes its cache the same way; a checked index
+        // here is a branch on every probe.
+        let e = unsafe {
+            self.l78
+                .get_unchecked((hash as usize) & (self.l78.len() - 1))
+        };
+        if e.player == player && e.opponent == opponent {
+            let lo = if e.lower == i8::MIN {
+                -VALUE_INF
+            } else {
+                e.lower as i32
+            };
+            let hi = if e.upper == i8::MAX {
+                VALUE_INF
+            } else {
+                e.upper as i32
+            };
+            let best = if e.best8 == 0 {
+                None
+            } else {
+                Some(Position(e.best8 - 1))
+            };
+            return Some((lo, hi, best));
+        }
+        None
+    }
+
+    #[inline]
+    fn l78_store(
+        &mut self,
+        hash: u64,
+        player: u64,
+        opponent: u64,
+        alpha: i32,
+        beta: i32,
+        score: i32,
+        best: Option<Position>,
+    ) {
+        let idx = (hash as usize) & (self.l78.len() - 1);
+        // SAFETY: `idx` is masked into a power-of-two length table.
+        let e = unsafe { self.l78.get_unchecked_mut(idx) };
+        if e.player != player || e.opponent != opponent {
+            *e = L4Entry {
+                player,
+                opponent,
+                lower: i8::MIN,
+                upper: i8::MAX,
+                best8: 0,
+            };
+        }
+        if score > alpha {
+            e.lower = e.lower.max(score as i8);
+        }
+        if score < beta {
+            e.upper = e.upper.min(score as i8);
+        }
+        if let Some(b) = best {
+            e.best8 = b.index() + 1;
+        }
+    }
+
+    /// Probe the 9-empty cache: bounds handled like a table entry, plus the
+    /// stored best move for ordering. `None` = no matching entry.
+    #[inline]
+    #[allow(clippy::type_complexity)]
+    fn l9_probe(
+        &self,
+        hash: u64,
+        player: u64,
+        opponent: u64,
+    ) -> Option<(i32, i32, Option<Position>)> {
+        // SAFETY: masked into a power-of-two length table, as above.
+        let e = unsafe { self.l9.get_unchecked((hash as usize) & (self.l9.len() - 1)) };
+        if e.player == player && e.opponent == opponent {
+            let lo = if e.lower == i8::MIN {
+                -VALUE_INF
+            } else {
+                e.lower as i32
+            };
+            let hi = if e.upper == i8::MAX {
+                VALUE_INF
+            } else {
+                e.upper as i32
+            };
+            let best = if e.best8 == 0 {
+                None
+            } else {
+                Some(Position(e.best8 - 1))
+            };
+            return Some((lo, hi, best));
+        }
+        None
+    }
+
+    #[inline]
+    fn l9_store(
+        &mut self,
+        hash: u64,
+        player: u64,
+        opponent: u64,
+        alpha: i32,
+        beta: i32,
+        score: i32,
+        best: Option<Position>,
+    ) {
+        let idx = (hash as usize) & (self.l9.len() - 1);
+        // SAFETY: `idx` is masked into a power-of-two length table.
+        let e = unsafe { self.l9.get_unchecked_mut(idx) };
+        if e.player != player || e.opponent != opponent {
+            *e = L4Entry {
+                player,
+                opponent,
+                lower: i8::MIN,
+                upper: i8::MAX,
+                best8: 0,
+            };
+        }
+        if score > alpha {
+            e.lower = e.lower.max(score as i8);
+        }
+        if score < beta {
+            e.upper = e.upper.min(score as i8);
+        }
+        if let Some(b) = best {
+            e.best8 = b.index() + 1;
+        }
+    }
+
+    /// Cut from the 5-6 cache, or `None`.
+    #[inline]
+    fn l56_probe(
+        &self,
+        hash: u64,
+        player: u64,
+        opponent: u64,
+        alpha: i32,
+        beta: i32,
+    ) -> Option<i32> {
+        // SAFETY: the table length is a power of two (it comes from
+        // `zeroed_vec(1 << bits)`), so the mask lands inside it. The
+        // reference indexes its cache the same way; a checked index
+        // here is a branch on every probe.
+        let e = unsafe {
+            self.l56
+                .get_unchecked((hash as usize) & (self.l56.len() - 1))
+        };
+        if e.player == player && e.opponent == opponent {
+            if (e.lower as i32) >= beta {
+                return Some(e.lower as i32);
+            }
+            if (e.upper as i32) <= alpha {
+                return Some(e.upper as i32);
+            }
+        }
+        None
+    }
+
+    #[inline]
+    fn l56_store(
+        &mut self,
+        hash: u64,
+        player: u64,
+        opponent: u64,
+        alpha: i32,
+        beta: i32,
+        score: i32,
+    ) {
+        let idx = (hash as usize) & (self.l56.len() - 1);
+        // SAFETY: `idx` is masked into a power-of-two length table.
+        let e = unsafe { self.l56.get_unchecked_mut(idx) };
+        if e.player != player || e.opponent != opponent {
+            *e = L4Entry {
+                player,
+                opponent,
+                lower: i8::MIN,
+                upper: i8::MAX,
+                best8: 0,
+            };
+        }
+        if score > alpha {
+            e.lower = e.lower.max(score as i8);
+        }
+        if score < beta {
+            e.upper = e.upper.min(score as i8);
+        }
+    }
+
+    /// Cut from the four-empty cache, or `None`. `alpha`/`beta` are the
+    /// child's own window.
+    #[inline]
+    fn l4_probe(
+        &self,
+        hash: u64,
+        player: u64,
+        opponent: u64,
+        alpha: i32,
+        beta: i32,
+    ) -> Option<i32> {
+        // SAFETY: the table length is a power of two (it comes from
+        // `zeroed_vec(1 << bits)`), so the mask lands inside it. The
+        // reference indexes its cache the same way; a checked index
+        // here is a branch on every probe.
+        let e = unsafe { self.l4.get_unchecked((hash as usize) & (self.l4.len() - 1)) };
+        if e.player == player && e.opponent == opponent {
+            if (e.lower as i32) >= beta {
+                return Some(e.lower as i32);
+            }
+            if (e.upper as i32) <= alpha {
+                return Some(e.upper as i32);
+            }
+        }
+        None
+    }
+
+    /// Merge a solved four-empty result into the cache: same position
+    /// tightens the pair, a different one overwrites unconditionally.
+    #[inline]
+    fn l4_store(
+        &mut self,
+        hash: u64,
+        player: u64,
+        opponent: u64,
+        alpha: i32,
+        beta: i32,
+        score: i32,
+    ) {
+        // Overwrite a stale slot, then fold the score into the bounds -
+        // rather than assembling the whole entry and storing it once, which
+        // measured +0.47% over four sets. The move generator gains from a
+        // single store because every entry there is new; here the common
+        // case is a hit, and a hit only has to write the two bound bytes.
+        let idx = (hash as usize) & (self.l4.len() - 1);
+        // SAFETY: `idx` is masked into a power-of-two length table.
+        let e = unsafe { self.l4.get_unchecked_mut(idx) };
+        if e.player != player || e.opponent != opponent {
+            *e = L4Entry {
+                player,
+                opponent,
+                lower: i8::MIN,
+                upper: i8::MAX,
+                best8: 0,
+            };
+        }
+        if score > alpha {
+            e.lower = e.lower.max(score as i8);
+        }
+        if score < beta {
+            e.upper = e.upper.min(score as i8);
         }
     }
 
@@ -1706,19 +3116,56 @@ impl<'a> Worker<'a> {
     }
 }
 
+impl Drop for Solver {
+    fn drop(&mut self) {
+        self.drop_budget();
+    }
+}
+
 impl Solver {
     /// `bit_size`: transposition table has 2^bit_size entries
     /// (each entry is ~48 bytes; 20 -> ~50 MB).
     pub fn new(bit_size: u32) -> Solver {
         Solver {
             hash_table: HashTable::new(bit_size),
-            neighbours: NeighbourTable::new(),
             nodes: 0,
             best: None,
             threads: 1,
             nnue: None,
+            scratch: None,
+            budget: None,
+            budget_threads: 0,
+            budget_handles: Vec::new(),
             stop: None,
         }
+    }
+
+    /// The persistent pool with `extra` workers, (re)spawned only when the
+    /// thread count changes.
+    fn ensure_budget(&mut self, extra: usize) -> std::sync::Arc<ThreadBudget> {
+        if self.budget.is_none() || self.budget_threads != extra {
+            self.drop_budget();
+            let b = std::sync::Arc::new(ThreadBudget::new(extra));
+            for _ in 0..extra {
+                let bc = std::sync::Arc::clone(&b);
+                self.budget_handles
+                    .push(std::thread::spawn(move || bc.pool.worker_loop()));
+            }
+            self.budget = Some(b);
+            self.budget_threads = extra;
+        }
+        std::sync::Arc::clone(self.budget.as_ref().unwrap())
+    }
+
+    fn drop_budget(&mut self) {
+        if let Some(b) = self.budget.take() {
+            b.pool.shutdown();
+            for h in self.budget_handles.drain(..) {
+                let _ = h.join();
+            }
+            drop(b);
+        }
+        self.budget_threads = 0;
     }
 
     /// Lend the NNUE searcher to the selective probes (see `NnueProbe`).
@@ -1804,11 +3251,187 @@ impl Solver {
         ))
     }
 
+    /// Paired-harness bench of the static move scoring: ns per scored move
+    /// (generation + the 5-term ordering value, the 7-13-empty path).
+    pub fn bench_order(cases: &[(u64, u64)], rounds: usize) -> (f64, u64) {
+        let mut best = f64::INFINITY;
+        let mut moves_total = 0u64;
+        let mut sink = 0u64;
+        for _ in 0..5 {
+            moves_total = 0;
+            let t0 = std::time::Instant::now();
+            for _ in 0..rounds {
+                for &(p, o) in cases {
+                    let parity = {
+                        let mut e = !(p | o);
+                        let mut par = 0u8;
+                        while e != 0 {
+                            let sq = e.trailing_zeros() as u8;
+                            e &= e - 1;
+                            par ^= quadrant_id(sq);
+                        }
+                        par
+                    };
+                    let mut m = bitboard::mobility(p, o, !(p | o));
+                    while m != 0 {
+                        let sq = m.trailing_zeros() as u8;
+                        m &= m - 1;
+                        let f = bitboard::flippable(p, o, 1u64 << sq);
+                        let cp = o ^ f;
+                        let co = p | f | (1u64 << sq);
+                        sink ^=
+                            move_ordering_value(Position(sq), cp, co, parity, order_pot()) as u64;
+                        moves_total += 1;
+                    }
+                }
+            }
+            let ns = t0.elapsed().as_nanos() as f64 / moves_total as f64;
+            best = best.min(ns);
+        }
+        std::hint::black_box(sink);
+        (best, moves_total / rounds as u64)
+    }
+
+    /// Paired-harness bench of the main table: (store, hit, miss) ns/op.
+    /// A transposition-table bench: one store per case, then a
+    /// hit probe and a probed miss on a disturbed board.
+    /// Times the leaf solvers over a shared corpus, so a second
+    /// implementation can reproduce the same work and the ratio can be read
+    /// from paired numbers rather than from sampling attribution - which
+    /// moves with inlining and has twice overstated a gap here.
+    ///
+    /// Each case is played down to `n` empties by the corpus generator, so
+    /// the squares handed in are the position's own empties.
+    pub fn bench_leaves(cases: &[(u64, u64)], rounds: usize) -> (f64, f64, f64, u64) {
+        let tt = HashTable::new(16);
+        let budget = ThreadBudget::new(0);
+        let root_abort = AbortFlag::root();
+        let mut out = [0f64; 3];
+        let mut sink = 0i64;
+        let mut n_cases = 0u64;
+        for (slot, n_empty) in [2usize, 3, 4].into_iter().enumerate() {
+            let cs: Vec<(u64, u64, [u8; 4])> = cases
+                .iter()
+                .filter_map(|&(p, o)| {
+                    let mut e = !(p | o);
+                    if e.count_ones() as usize != n_empty {
+                        return None;
+                    }
+                    let mut sq = [0u8; 4];
+                    for s in sq.iter_mut().take(n_empty) {
+                        *s = e.trailing_zeros() as u8;
+                        e &= e - 1;
+                    }
+                    Some((p, o, sq))
+                })
+                .collect();
+            if cs.is_empty() {
+                continue;
+            }
+            if slot == 0 {
+                n_cases = cs.len() as u64;
+            }
+            // The worker owns two private tables; building one per round
+            // would time their allocation, not the leaves.
+            let mut w = Worker::new(&tt, &budget, &root_abort);
+            let mut best = f64::INFINITY;
+            for _ in 0..5 {
+                let t0 = std::time::Instant::now();
+                for _ in 0..rounds {
+                    for &(p, o, sq) in &cs {
+                        sink = sink.wrapping_add(match n_empty {
+                            // Null window, as the search itself uses and as the paired
+                            // implementation's `solve*` build internally: a full
+                            // window would search every child and time work
+                            // neither engine actually does.
+                            2 => w.last2(p, o, sq[0], sq[1], 0, 1, false) as i64,
+                            3 => w.last3(p, o, sq[0], sq[1], sq[2], 0, 1, false, 0) as i64,
+                            _ => w.last4(p, o, sq[0], sq[1], sq[2], sq[3], 0, 1, false, 0) as i64,
+                        });
+                    }
+                }
+                let ns = t0.elapsed().as_nanos() as f64 / (rounds * cs.len()) as f64;
+                best = best.min(ns);
+            }
+            out[slot] = best;
+        }
+        std::hint::black_box(sink);
+        (out[0], out[1], out[2], n_cases)
+    }
+
+    pub fn bench_tt(cases: &[(u64, u64)], rounds: usize) -> (f64, f64, f64) {
+        let table = HashTable::new(22);
+        let time = |f: &mut dyn FnMut() -> u64, n: usize| -> f64 {
+            let mut best = f64::INFINITY;
+            let mut sink = 0u64;
+            for _ in 0..5 {
+                let t0 = std::time::Instant::now();
+                for _ in 0..rounds {
+                    sink ^= f();
+                }
+                best = best.min(t0.elapsed().as_nanos() as f64 / (rounds * n) as f64);
+            }
+            std::hint::black_box(sink);
+            best
+        };
+        let boards: Vec<(Board, u64)> = cases
+            .iter()
+            .map(|&(p, o)| {
+                let b = Board {
+                    black: p,
+                    white: o,
+                    player: crate::color::Color::Black,
+                    empty_count: (64 - (p | o).count_ones()) as u8,
+                };
+                let h = zobrist::board_hash(p, o);
+                (b, h)
+            })
+            .collect();
+        let store = time(
+            &mut || {
+                let mut acc = 0u64;
+                for (b, h) in &boards {
+                    table.update(b, *h, -3, 3, 1, None, true);
+                    acc ^= *h;
+                }
+                acc
+            },
+            boards.len(),
+        );
+        let hit = time(
+            &mut || {
+                let mut acc = 0u64;
+                for (b, h) in &boards {
+                    if let Some(e) = table.get(b, *h) {
+                        acc ^= e.lower() as u64;
+                    }
+                }
+                acc
+            },
+            boards.len(),
+        );
+        let miss = time(
+            &mut || {
+                let mut acc = 0u64;
+                for (b, h) in &boards {
+                    let hb = h ^ 0x9e37_79b9;
+                    if let Some(e) = table.get(b, hb) {
+                        acc ^= e.upper() as u64;
+                    }
+                    acc = acc.wrapping_add(1);
+                }
+                acc
+            },
+            boards.len(),
+        );
+        (store, hit, miss)
+    }
+
     pub fn probe_value(&mut self, board: &Board, ev: &Evaluator, depth: u8) -> f32 {
         let tt = &self.hash_table;
         let budget = ThreadBudget::new(0);
         let root_abort = AbortFlag::root();
-        let mut w = Worker::new(tt, &self.neighbours, &budget, &root_abort);
+        let mut w = Worker::new(tt, &budget, &root_abort);
         let ix = ev.indexer();
         let mut indices = ix.init(board.black, board.white);
         let hash = zobrist::board_hash(board.player_bb(), board.opponent_bb());
@@ -1844,12 +3467,58 @@ impl Solver {
             };
         }
 
+        // The exact solve's probe-depth shape, chosen per root. Flat 3 from
+        // 18-24 empties (-0.7% nodes against flat 2); from 25 up, 6 at
+        // 20+-empty nodes and 2 below (`SEL_DEEP_ROOT=<n>` moves the switch,
+        // 0 disables) - a deep root's flat probe stops cutting and the
+        // warm-up degrades to re-search. Selective answers keep the
+        // selective tuning untouched.
+        {
+            static DEEP_ROOT: std::sync::OnceLock<u8> = std::sync::OnceLock::new();
+            let n = *DEEP_ROOT.get_or_init(|| {
+                std::env::var("SEL_DEEP_ROOT")
+                    .ok()
+                    .and_then(|v| v.parse().ok())
+                    .unwrap_or(25)
+            });
+            let step = if selective.is_some() {
+                0
+            } else if n != 0 && board.empty_count() >= n {
+                (20 << 8) | 6
+            } else {
+                3
+            };
+            PROBE_STEP.store(step, std::sync::atomic::Ordering::Relaxed);
+        }
+
         // A single-threaded solve owns the table outright and can skip every
         // lock; with helpers in play the probes must synchronize.
         self.hash_table.set_shared(self.threads > 1);
 
         let t_clear = std::time::Instant::now();
         self.hash_table.clear(self.threads);
+        // The root worker's private tables are cleared here, inside the
+        // subtracted interval like the main table, and reused across solves:
+        // neither their allocation nor their wiping is billed to the search.
+        // Positions stay independent - the tables are empty either way.
+        let (mut r_shallow, mut r_mid, mut r_l4) = self.scratch.take().unwrap_or_else(|| {
+            let (sb, mb) = private_tt_bits();
+            let l4 = if l4_cache() || l56_cache() {
+                zeroed_vec::<L4Entry>(1usize << l4_bits())
+            } else {
+                Vec::new()
+            };
+            (HashTable::new(sb), HashTable::new(mb), l4)
+        });
+        r_shallow.clear(1);
+        r_mid.clear(1);
+        r_l4.fill(L4_EMPTY);
+        // The helper scratch pool persists with the budget now; drop its
+        // contents here (outside the timed interval) so positions stay
+        // independent, like every other table. Fresh ones are lazy pages.
+        if let Some(b) = self.budget.as_ref() {
+            b.scratch.lock().unwrap().clear();
+        }
         CLEAR_NS.fetch_add(
             t_clear.elapsed().as_nanos() as u64,
             std::sync::atomic::Ordering::Relaxed,
@@ -1860,148 +3529,153 @@ impl Solver {
         // further; one per solve is close enough at seconds per move and
         // keeps the borrows scoped.
         let extra = self.threads.saturating_sub(1);
-        let budget = ThreadBudget::new(extra);
+        let budget_arc = self.ensure_budget(extra);
+        let budget: &ThreadBudget = &budget_arc;
         let tt = &self.hash_table;
-        let neighbours = &self.neighbours;
         let stop_ref = self.stop.as_ref();
         // Borrowed by the watcher thread, so it must outlive the scope.
         let root_abort = AbortFlag::root();
         let watching = std::sync::atomic::AtomicBool::new(true);
-        let (value, nodes, best) = std::thread::scope(|scope| {
-            for _ in 0..extra {
-                let b = &budget;
-                scope.spawn(move || b.pool.worker_loop());
-            }
-            // Route the external stop through the sibling-abort flag.
-            // Workers don't carry the stop handle: every worker already
-            // polls the abort flag each node and `aborted()` walks up the
-            // parents, so raising the root reaches everyone without adding
-            // a check to the search inner loop. The watcher is a dedicated
-            // thread (polling inside the search either dulls the response
-            // or slows the search), and it must exit via Drop or the
-            // scoped join would never return.
-            struct StopWatch<'a>(&'a std::sync::atomic::AtomicBool);
-            impl Drop for StopWatch<'_> {
-                fn drop(&mut self) {
-                    self.0.store(false, std::sync::atomic::Ordering::Relaxed);
-                }
-            }
-            let _watch = StopWatch(&watching);
-            if stop_ref.is_some() {
-                let (stop, abort, watching) = (stop_ref, &root_abort, &watching);
-                scope.spawn(move || {
-                    while watching.load(std::sync::atomic::Ordering::Relaxed) {
-                        if stop.is_some_and(|s| s.is_stopped()) {
-                            abort.abort();
-                            return;
-                        }
-                        std::thread::sleep(std::time::Duration::from_millis(5));
+        let (value, nodes, best, r_shallow_back, r_mid_back, r_l4_back) =
+            std::thread::scope(|scope| {
+                // Route the external stop through the sibling-abort flag.
+                // Workers don't carry the stop handle: every worker already
+                // polls the abort flag each node and `aborted()` walks up the
+                // parents, so raising the root reaches everyone without adding
+                // a check to the search inner loop. The watcher is a dedicated
+                // thread (polling inside the search either dulls the response
+                // or slows the search), and it must exit via Drop or the
+                // scoped join would never return.
+                struct StopWatch<'a>(&'a std::sync::atomic::AtomicBool);
+                impl Drop for StopWatch<'_> {
+                    fn drop(&mut self) {
+                        self.0.store(false, std::sync::atomic::Ordering::Relaxed);
                     }
-                });
-            }
-            let mut w = Worker::new(tt, neighbours, &budget, &root_abort);
-            w.stop = stop_ref;
-            // NNUE probes pay off only where the selective pass *is* the
-            // answer (the band): -30% there, but +10% on an exact solve's
-            // warm-up ladder, whose rungs exist for ordering rather than
-            // answers (measured on FFO40-49: 4.9-5.2s -> 5.4-5.6s).
-            w.nnue = if selective.is_some() { self.nnue } else { None };
-            w.sigma_scale = std::env::var("SEL_SIGMA_SCALE")
-                .ok()
-                .and_then(|v| v.parse().ok())
-                .unwrap_or(if selective.is_some() { 0.6 } else { 1.0 });
-            let mut b = *board;
-
-            // Warm-up ladder (iterative selectivity): solve the same
-            // full-depth endgame selectively first, leaving real full-depth
-            // best moves in the table for the exact pass that follows.
-            let t_warm = std::time::Instant::now();
-            // The rungs to climb. A selective solve still walks the cheaper
-            // rungs first — they cost little and leave the table ordered for
-            // the one that answers ([[warmup-rung-value-is-the-table]]: the
-            // value of a rung is the table it leaves, not its score).
-            let mut rungs: Vec<f32> = selective_ladder();
-            if let Some(t) = selective {
-                // A selective solve answers with its top rung, so the cheaper
-                // ones below it are pure ordering warm-up — and their bounds
-                // are demoted between rungs, so ordering is *all* they leave.
-                if !std::env::var("SEL_ONE_RUNG").is_ok_and(|v| v != "0") {
-                    rungs.retain(|&r| r < t);
-                    // For a selective *answer* only the cheapest rung earns its
-                    // keep: a second rung near t re-searches nearly the same
-                    // tree (measured at 29 empties: [1.1,1.8]+t 67.8s,
-                    // [1.1]+t 62.3s, [1.4]+t 72.9s, t alone 89.3s). The exact
-                    // solve's warm-up keeps the full ladder — there the rungs
-                    // exist for ordering and the second one pays (2.1x).
-                    rungs.truncate(1);
+                }
+                let _watch = StopWatch(&watching);
+                if stop_ref.is_some() {
+                    let (stop, abort, watching) = (stop_ref, &root_abort, &watching);
+                    scope.spawn(move || {
+                        while watching.load(std::sync::atomic::Ordering::Relaxed) {
+                            if stop.is_some_and(|s| s.is_stopped()) {
+                                abort.abort();
+                                return;
+                            }
+                            std::thread::sleep(std::time::Duration::from_millis(5));
+                        }
+                    });
+                }
+                let mut w = Worker::with_tables(tt, budget, &root_abort, r_shallow, r_mid);
+                w.l4 = r_l4;
+                w.stop = stop_ref;
+                // The NNUE probes serve both the selective answer (-30% there)
+                // and, since 2026-08-27, the exact solve's warm-up ladder (see
+                // `sel_nnue_warm` — the earlier +10% loss was the H=16 model).
+                w.nnue = if selective.is_some() || sel_nnue_warm() {
+                    self.nnue
                 } else {
-                    rungs.clear();
-                }
-                rungs.push(t);
-            }
-            let mut last_selective: Option<i32> = None;
-            if let Some(e) = ev {
-                if selective.is_some() || board.empty_count() >= selective_pass_min_empties() {
-                    let mut guess = w.estimate_score(board, Some(e));
-                    if dbg_asp() {
-                        eprintln!("[warm] estimate {guess}");
-                    }
-                    for t in rungs {
-                        w.selective_t = Some(t);
-                        let mut sb = *board;
-                        let n0 = w.nodes;
-                        let s = w.aspiration_width(&mut sb, guess, WARM_ASPIRATION_WIDTH, Some(e));
-                        if dbg_asp() {
-                            eprintln!(
-                                "[warm] rung t={t} -> {s}, best={:?} ({}M nodes)",
-                                w.best,
-                                (w.nodes - n0) / 1_000_000
-                            );
-                        }
-                        w.selective_t = None;
-                        guess = s - (s & 1);
-                        last_selective = Some(s);
-                        // Each rung must re-derive its own bounds: an entry
-                        // stored by a more aggressive (less reliable) pass
-                        // would otherwise be taken at face value, and the
-                        // ladder would just re-confirm the first pass's error
-                        // instead of converging. Best moves survive demotion.
-                        w.tt.demote_to_seed_shared();
-                        w.warm_score = Some(s - (s & 1));
-                    }
-                    w.tt.demote_to_seed_shared();
-                }
-            }
+                    None
+                };
+                w.sigma_scale = std::env::var("SEL_SIGMA_SCALE")
+                    .ok()
+                    .and_then(|v| v.parse().ok())
+                    .unwrap_or(if selective.is_some() { 0.6 } else { 1.0 });
+                let mut b = *board;
 
-            WARMUP_NS.fetch_add(
-                t_warm.elapsed().as_nanos() as u64,
-                std::sync::atomic::Ordering::Relaxed,
-            );
-            // Helper nodes are folded into `w.nodes` by the split that waited
-            // for them, so this running total already covers the whole phase.
-            let warm_nodes = w.nodes;
-            WARMUP_NODES.fetch_add(warm_nodes, std::sync::atomic::Ordering::Relaxed);
-            if let Some(v) = last_selective.filter(|_| selective.is_some()) {
-                budget.pool.shutdown();
-                return (v, w.nodes, w.best);
-            }
-            let t_exact = std::time::Instant::now();
-            let v = match mode {
-                EndSolverMode::WinLossDraw => w.pvs_root(&mut b, -1, 1, ev),
-                EndSolverMode::WinDraw => w.pvs_root(&mut b, 0, 1, ev),
-                EndSolverMode::DrawLoss => w.pvs_root(&mut b, -1, 0, ev),
-                EndSolverMode::Perfect => w.perfect(&mut b, ev),
-            };
-            EXACT_NS.fetch_add(
-                t_exact.elapsed().as_nanos() as u64,
-                std::sync::atomic::Ordering::Relaxed,
-            );
-            EXACT_NODES.fetch_add(w.nodes - warm_nodes, std::sync::atomic::Ordering::Relaxed);
-            // Every task has been waited for by the split that queued it, so
-            // the queue is empty here and the workers only need releasing.
-            budget.pool.shutdown();
-            (v, w.nodes, w.best)
-        });
+                // Warm-up ladder (iterative selectivity): solve the same
+                // full-depth endgame selectively first, leaving real full-depth
+                // best moves in the table for the exact pass that follows.
+                let t_warm = std::time::Instant::now();
+                // The rungs to climb. A selective solve still walks the cheaper
+                // rungs first — they cost little and leave the table ordered for
+                // the one that answers ([[warmup-rung-value-is-the-table]]: the
+                // value of a rung is the table it leaves, not its score).
+                let mut rungs: Vec<f32> = selective_ladder();
+                if let Some(t) = selective {
+                    // A selective solve answers with its top rung, so the cheaper
+                    // ones below it are pure ordering warm-up — and their bounds
+                    // are demoted between rungs, so ordering is *all* they leave.
+                    if !std::env::var("SEL_ONE_RUNG").is_ok_and(|v| v != "0") {
+                        rungs.retain(|&r| r < t);
+                        // For a selective *answer* only the cheapest rung earns its
+                        // keep: a second rung near t re-searches nearly the same
+                        // tree (measured at 29 empties: [1.1,1.8]+t 67.8s,
+                        // [1.1]+t 62.3s, [1.4]+t 72.9s, t alone 89.3s). The exact
+                        // solve's warm-up keeps the full ladder — there the rungs
+                        // exist for ordering and the second one pays (2.1x).
+                        rungs.truncate(1);
+                    } else {
+                        rungs.clear();
+                    }
+                    rungs.push(t);
+                }
+                let mut last_selective: Option<i32> = None;
+                if let Some(e) = ev {
+                    if selective.is_some() || board.empty_count() >= selective_pass_min_empties() {
+                        let mut guess = w.estimate_score(board, Some(e));
+                        if dbg_asp() {
+                            eprintln!("[warm] estimate {guess}");
+                        }
+                        for t in rungs {
+                            w.selective_t = Some(t);
+                            let mut sb = *board;
+                            let n0 = w.nodes;
+                            let s = w.aspiration_width(
+                                &mut sb,
+                                guess,
+                                warm_aspiration_width(),
+                                Some(e),
+                            );
+                            if dbg_asp() {
+                                eprintln!(
+                                    "[warm] rung t={t} -> {s}, best={:?} ({}M nodes)",
+                                    w.best,
+                                    (w.nodes - n0) / 1_000_000
+                                );
+                            }
+                            w.selective_t = None;
+                            guess = s - (s & 1);
+                            last_selective = Some(s);
+                            // Each rung must re-derive its own bounds: an entry
+                            // stored by a more aggressive (less reliable) pass
+                            // would otherwise be taken at face value, and the
+                            // ladder would just re-confirm the first pass's error
+                            // instead of converging. Best moves survive demotion.
+                            w.tt.demote_to_seed_shared();
+                            w.warm_score = Some(s - (s & 1));
+                        }
+                        w.tt.demote_to_seed_shared();
+                    }
+                }
+
+                WARMUP_NS.fetch_add(
+                    t_warm.elapsed().as_nanos() as u64,
+                    std::sync::atomic::Ordering::Relaxed,
+                );
+                // Helper nodes are folded into `w.nodes` by the split that waited
+                // for them, so this running total already covers the whole phase.
+                let warm_nodes = w.nodes;
+                WARMUP_NODES.fetch_add(warm_nodes, std::sync::atomic::Ordering::Relaxed);
+                if let Some(v) = last_selective.filter(|_| selective.is_some()) {
+                    return (v, w.nodes, w.best, w.shallow_table, w.mid_table, w.l4);
+                }
+                let t_exact = std::time::Instant::now();
+                let v = match mode {
+                    EndSolverMode::WinLossDraw => w.pvs_root(&mut b, -1, 1, ev),
+                    EndSolverMode::WinDraw => w.pvs_root(&mut b, 0, 1, ev),
+                    EndSolverMode::DrawLoss => w.pvs_root(&mut b, -1, 0, ev),
+                    EndSolverMode::Perfect => w.perfect(&mut b, ev),
+                };
+                EXACT_NS.fetch_add(
+                    t_exact.elapsed().as_nanos() as u64,
+                    std::sync::atomic::Ordering::Relaxed,
+                );
+                EXACT_NODES.fetch_add(w.nodes - warm_nodes, std::sync::atomic::Ordering::Relaxed);
+                // Every task has been waited for by the split that queued it, so
+                // the queue is empty here and the workers only need releasing.
+                (v, w.nodes, w.best, w.shallow_table, w.mid_table, w.l4)
+            });
+        self.scratch = Some((r_shallow_back, r_mid_back, r_l4_back));
         self.nodes = nodes;
         self.best = best;
 
@@ -2163,8 +3837,16 @@ impl Worker<'_> {
             // shifted window fights the seed ordering instead of using it.
             // `SEL_ASP_RECENTER=1` restores the old re-centring for A/B runs.
             let recenter = std::env::var("SEL_ASP_RECENTER").is_ok_and(|v| v != "0");
-            if let Some((lo, hi)) = self.warm_window.filter(|_| !recenter) {
+            if let Some((mut lo, mut hi)) = self.warm_window.filter(|_| !recenter) {
                 if lo < score && score < hi {
+                    // `EXACT_REOPEN_CLAMP=<d>` narrows the reopened window to
+                    // score +/- d (an edge result falls into `aspiration`).
+                    // The rung's converged window can be wide after fail
+                    // doublings; the score is a better centre than its span.
+                    if let Some(d) = exact_reopen_clamp() {
+                        lo = lo.max(score - d);
+                        hi = hi.min(score + d);
+                    }
                     if dbg_asp() {
                         eprintln!("[exact] reopening warm window [{lo},{hi}]");
                     }
@@ -2315,7 +3997,8 @@ impl Worker<'_> {
         {
             let n0 = self.nodes;
             let mut child = moves[0].child(board);
-            max = -self.pvs(&mut child, moves[0].hash, -upper, -lower, false, ev);
+            let ch = child_hash_of(&child);
+            max = -self.pvs(&mut child, ch, -upper, -lower, false, false, ev);
             /* Never use an aborted search's value. `ABORTED` is
             `i32::MIN + 1`; negation turns it into `i32::MAX`, which flows
             through `max` into the table (`i32::MAX as i8` is -1, i.e. a
@@ -2339,7 +4022,7 @@ impl Worker<'_> {
         // Young Brothers Wait: the eldest child above has proved a bound, so
         // the remaining siblings are independent enough to share out. Only
         // worth the hand-off when the subtrees are large.
-        if moves.len() > 2 && board.empty_count() >= PARALLEL_MIN_EMPTIES && lower < upper {
+        if moves.len() > 2 && board.empty_count() >= parallel_min_empties() && lower < upper {
             if let Some((val, bpos)) = self.split_siblings(board, &moves[1..], lower, upper, ev) {
                 if val == ABORTED {
                     return ABORTED;
@@ -2353,7 +4036,9 @@ impl Worker<'_> {
                         best = p;
                     }
                 }
-                self.tt.update(board, hash, alpha, beta, max, Some(best));
+                let clean = self.selective_t.is_none();
+                self.tt
+                    .update(board, hash, alpha, beta, max, Some(best), clean);
                 self.best = Some(best);
                 return max;
             }
@@ -2365,13 +4050,15 @@ impl Worker<'_> {
                 break;
             }
             let mut child = m.child(board);
-            let mut val = -self.pvs(&mut child, m.hash, -lower - 1, -lower, false, ev);
+            let ch = child_hash_of(&child);
+            let mut val = -self.pvs(&mut child, ch, -lower - 1, -lower, false, true, ev);
             // Aborts are not values (same reason as the eldest branch).
             if val == -ABORTED {
                 return ABORTED;
             }
             if lower < val && val < upper {
-                val = -self.pvs(&mut child, m.hash, -upper, -val, false, ev);
+                let ch = child_hash_of(&child);
+                val = -self.pvs(&mut child, ch, -upper, -val, false, false, ev);
                 if val == -ABORTED {
                     return ABORTED;
                 }
@@ -2385,7 +4072,9 @@ impl Worker<'_> {
             }
         }
 
-        self.tt.update(board, hash, alpha, beta, max, Some(best));
+        let clean = self.selective_t.is_none();
+        self.tt
+            .update(board, hash, alpha, beta, max, Some(best), clean);
         self.best = Some(best);
         max
     }
@@ -2420,6 +4109,119 @@ impl Worker<'_> {
     /// schemes are identical at null-window nodes (there `val > lower` *is* the
     /// cutoff), so the whole difference is the wide-window nodes at the top of
     /// the tree, which are exactly the expensive ones to redo.
+    /// Publish the siblings as a persistent split point and work it like
+    /// any helper; late-idle workers join through the registry until the
+    /// cursor drains. Same window/merge semantics as the task-queue path.
+    fn split_siblings_v2(
+        &mut self,
+        parent: &Board,
+        siblings: &[ScoredMove],
+        lower: i32,
+        upper: i32,
+        ev: Option<&Evaluator>,
+    ) -> Option<(i32, Option<Position>)> {
+        use std::sync::atomic::{AtomicI32, AtomicU64, AtomicUsize, Ordering};
+
+        let pool = &self.budget.pool;
+        SPLITS.fetch_add(1, Ordering::Relaxed);
+        let group = AbortFlag::child(self.abort);
+        let sp = SplitPoint {
+            board: *parent,
+            moves: siblings.as_ptr(),
+            n_moves: siblings.len(),
+            upper,
+            selective_t: self.selective_t,
+            nnue: self.nnue,
+            sigma_scale: self.sigma_scale,
+            tt: self.tt as *const HashTable,
+            ev: ev.map_or(std::ptr::null(), |e| e as *const Evaluator as *const ()),
+            group: &group as *const AbortFlag as *const (),
+            budget: self.budget as *const ThreadBudget as *const (),
+            cursor: AtomicUsize::new(0),
+            shared_lower: AtomicI32::new(lower),
+            active: AtomicUsize::new(0),
+            merge: std::sync::Mutex::new(SplitMerge {
+                max: i32::MIN,
+                best_val: i32::MIN,
+                best: None,
+                aborted: false,
+            }),
+            nodes: AtomicU64::new(0),
+            waiter: std::thread::current(),
+        };
+        let slot = pool.register_split(&sp);
+
+        let mut unwound = false;
+        let mut cut_short = false;
+        loop {
+            if group.aborted() {
+                cut_short = true;
+                break;
+            }
+            let cur = sp.shared_lower.load(Ordering::Relaxed);
+            if cur >= upper {
+                break;
+            }
+            let idx = sp.cursor.fetch_add(1, Ordering::Relaxed);
+            if idx >= sp.n_moves {
+                break;
+            }
+            let m = siblings[idx];
+            let mut child = m.child(parent);
+            let ch = child_hash_of(&child);
+            let mut val = -self.pvs(&mut child, ch, -cur - 1, -cur, false, true, ev);
+            if val == -ABORTED {
+                unwound = true;
+                break;
+            }
+            if cur < val && val < upper {
+                let ch = child_hash_of(&child);
+                val = -self.pvs(&mut child, ch, -upper, -val, false, false, ev);
+                if val == -ABORTED {
+                    unwound = true;
+                    break;
+                }
+            }
+            if val > cur {
+                sp.shared_lower.fetch_max(val, Ordering::Relaxed);
+            }
+            split_merge(&sp, val, cur, m.pos);
+            if val >= upper {
+                // Helpers may still be inside their siblings; the proven
+                // cutoff makes their results moot, so stop them the same
+                // way a helper's own cutoff would.
+                ABORT_FIRED.fetch_add(1, Ordering::Relaxed);
+                if solver_abort() {
+                    group.abort();
+                }
+                break;
+            }
+        }
+        // Close the cursor so nothing joins what the owner has abandoned.
+        sp.cursor.store(sp.n_moves, Ordering::Release);
+        if let Some(i) = slot {
+            pool.unregister_split(i, &sp);
+        }
+        let t_wait = std::time::Instant::now();
+        // Helping other split points while waiting here measured neutral
+        // (8T FFO minima 6.62s vs 6.55s): after the registry the wait is
+        // already only ~8% of thread time. Park and keep the stack flat.
+        while sp.active.load(Ordering::Acquire) != 0 {
+            std::thread::park();
+        }
+        WAIT_NS.fetch_add(t_wait.elapsed().as_nanos() as u64, Ordering::Relaxed);
+
+        self.nodes += sp.nodes.load(Ordering::Relaxed);
+        let mg = *sp.merge.lock().unwrap();
+        if unwound {
+            return Some((ABORTED, mg.best));
+        }
+        if (mg.aborted || cut_short) && mg.max < upper {
+            return Some((ABORTED, mg.best));
+        }
+        Some((mg.max, mg.best))
+    }
+
     fn split_siblings(
         &mut self,
         parent: &Board,
@@ -2434,11 +4236,13 @@ impl Worker<'_> {
         if pool.workers == 0 {
             return None;
         }
+        if split_v2() {
+            return self.split_siblings_v2(parent, siblings, lower, upper, ev);
+        }
         SPLITS.fetch_add(1, Ordering::Relaxed);
 
         let shared_lower = AtomicI32::new(lower);
         let tt = self.tt;
-        let neighbours = self.neighbours;
         let budget = self.budget;
         let selective_t = self.selective_t;
         let nnue = self.nnue;
@@ -2493,7 +4297,6 @@ impl Worker<'_> {
                     pool.try_push(move || {
                         run_one_sibling(
                             tt,
-                            neighbours,
                             budget,
                             group,
                             selective_t,
@@ -2518,13 +4321,15 @@ impl Worker<'_> {
             // Refused, or the youngest brother: search it here.
             let n0 = self.nodes;
             let mut child = m.child(parent);
-            let mut val = -self.pvs(&mut child, m.hash, -cur - 1, -cur, false, ev);
+            let ch = child_hash_of(&child);
+            let mut val = -self.pvs(&mut child, ch, -cur - 1, -cur, false, true, ev);
             if val == -ABORTED {
                 unwound = true;
                 break;
             }
             if cur < val && val < upper {
-                val = -self.pvs(&mut child, m.hash, -upper, -val, false, ev);
+                let ch = child_hash_of(&child);
+                val = -self.pvs(&mut child, ch, -upper, -val, false, false, ev);
                 if val == -ABORTED {
                     unwound = true;
                     break;
@@ -2611,6 +4416,7 @@ impl Worker<'_> {
         alpha: i32,
         beta: i32,
         passed: bool,
+        cut_node: bool,
         ev: Option<&Evaluator>,
     ) -> i32 {
         let _prof = layer_profile::Scope::new(layer_profile::SEARCH, board.empty_count());
@@ -2621,6 +4427,9 @@ impl Worker<'_> {
         if self.should_abort() {
             return ABORTED;
         }
+        // Everything the taint counter moves past this point makes the
+        // node's result rung-dependent (see `EXACT_PROOF`).
+        let taint0 = self.taint;
 
         if let Some(v) = wipeout_score(board) {
             return v;
@@ -2635,6 +4444,9 @@ impl Worker<'_> {
         };
         if let Some(v) = entry {
             if !v.is_seed(self.tt.date()) {
+                if self.selective_t.is_some() && !v.proven_entry() {
+                    self.taint += 1;
+                }
                 if v.lower() >= v.upper() {
                     return v.lower();
                 }
@@ -2667,6 +4479,7 @@ impl Worker<'_> {
         if let (Some(t), Some(e)) = (self.selective_t, ev) {
             if board.empty_count() >= selective_min_empties() && upper - lower <= 1 {
                 if let Some(v) = self.selective_cut(board, hash, e, t, lower, upper) {
+                    self.taint += 1;
                     return v;
                 }
             }
@@ -2683,12 +4496,14 @@ impl Worker<'_> {
                 return final_score(board);
             }
             board.pass();
+            // The child of an expected All node is a Cut node.
             let val = -self.pvs(
                 board,
                 zobrist::board_hash(board.opponent_bb(), board.player_bb()),
                 -upper,
                 -lower,
                 true,
+                !cut_node,
                 ev,
             );
             board.pass();
@@ -2696,14 +4511,15 @@ impl Worker<'_> {
             if val == -ABORTED {
                 return ABORTED;
             }
-            self.tt.update(board, hash, alpha, beta, val, None);
+            let clean = self.selective_t.is_none() || self.taint == taint0;
+            self.tt.update(board, hash, alpha, beta, val, None, clean);
             return val;
         }
 
         // A move that wipes out the opponent ends the game at exactly +64,
         // which is the maximum possible score — so it *is* this node's value.
         if moves.iter().any(|m| m.child(board).player_bb() == 0) {
-            self.tt.update(board, hash, alpha, beta, 64, None);
+            self.tt.update(board, hash, alpha, beta, 64, None, true);
             return 64;
         }
 
@@ -2717,8 +4533,12 @@ impl Worker<'_> {
             let mut probed = 0u64;
             for m in moves.iter() {
                 probed += 1;
-                if let Some(e) = self.tt.get(&m.child(board), m.hash) {
+                let probe_child = m.child(board);
+                if let Some(e) = self.tt.get(&probe_child, child_hash_of(&probe_child)) {
                     if !e.is_seed(self.tt.date()) && -e.upper() >= upper {
+                        if self.selective_t.is_some() && !e.proven_entry() {
+                            self.taint += 1;
+                        }
                         node_accounting::etc(probed);
                         return -e.upper();
                     }
@@ -2730,27 +4550,61 @@ impl Worker<'_> {
         let mut max = i32::MIN;
         let mut best = None;
 
+        let tt_best = entry.and_then(|e| e.best());
+
+        // Speculative fan-out at an expected All node: every child gets
+        // searched whatever the order, so serialising the eldest to prove a
+        // bound first buys nothing - publish the whole list at once. Null
+        // windows only (a wide-window fan-out re-derives the rejected wide
+        // split), and only where the subtrees are big enough to feed on
+        // (`SPEC_SPLIT=0` disables).
+        if spec_split()
+            && !cut_node
+            && upper - lower == 1
+            && board.empty_count() >= parallel_min_empties()
+            && board.empty_count() <= spec_split_max()
+            && moves.len() > 2
+            && self.budget.pool.workers > 0
+        {
+            self.score_moves(board, &mut moves, tt_best, ev, lower, parity_of(board));
+            // Unstable: helpers only need an order, and the stable sort
+            // allocates a scratch `Vec` to get a tie-break nothing reads.
+            moves.sort_unstable_by_key(|m| m.value);
+            if let Some((val, bpos)) = self.split_siblings(board, &moves, lower, upper, ev) {
+                if val == ABORTED {
+                    return ABORTED;
+                }
+                if self.selective_t.is_some() {
+                    self.taint += 1;
+                }
+                let clean = self.selective_t.is_none() || self.taint == taint0;
+                self.tt.update(board, hash, alpha, beta, val, bpos, clean);
+                return val;
+            }
+        }
+
         // Stage 1: the transposition-table move, searched before any
         // ordering work is done. Most cut nodes end here.
-        let tt_best = entry.and_then(|e| e.best());
         if let Some(bpos) = tt_best {
             if let Some(idx) = moves.iter().position(|m| m.pos == bpos) {
                 let m = moves.swap_remove(idx);
                 let mut child = m.child(board);
-                max = self.descend(&mut child, m.hash, -upper, -lower, ev);
+                let ch = child_hash_of(&child);
+                max = self.descend(&mut child, ch, -upper, -lower, !cut_node, ev);
                 best = Some(m.pos);
                 if max > lower {
                     lower = max;
                 }
                 if lower >= upper {
-                    self.tt.update(board, hash, alpha, beta, max, best);
+                    let clean = self.selective_t.is_none() || self.taint == taint0;
+                    self.tt.update(board, hash, alpha, beta, max, best, clean);
                     return max;
                 }
             }
         }
 
         // Stage 2: the rest, now ordered properly.
-        self.score_moves(board, &mut moves, None, ev, lower);
+        self.score_moves(board, &mut moves, None, ev, lower, parity_of(board));
 
         let mut next = 0usize;
         if max == i32::MIN {
@@ -2759,7 +4613,8 @@ impl Worker<'_> {
             let m = moves[0];
             next = 1;
             let mut child = m.child(board);
-            max = self.descend(&mut child, m.hash, -upper, -lower, ev);
+            let ch = child_hash_of(&child);
+            max = self.descend(&mut child, ch, -upper, -lower, !cut_node, ev);
             if max == ABORTED {
                 return ABORTED;
             }
@@ -2773,10 +4628,11 @@ impl Worker<'_> {
         // rest are independent enough to share out. Splitting at any node
         // deep enough, not only at the root, is what
         // keeps every core busy when one subtree dominates.
-        if moves.len() - next > 1 && board.empty_count() >= PARALLEL_MIN_EMPTIES && lower < upper {
+        if moves.len() - next > 1 && board.empty_count() >= parallel_min_empties() && lower < upper
+        {
             // Helpers take the siblings in order, so this path pays for the
             // full sort that the sequential path avoids.
-            moves[next..].sort_by_key(|m| m.value);
+            moves[next..].sort_unstable_by_key(|m| m.value);
             if let Some((val, bpos)) = self.split_siblings(board, &moves[next..], lower, upper, ev)
             {
                 // A truncated search proves nothing: its bound must not reach
@@ -2790,7 +4646,13 @@ impl Worker<'_> {
                         best = Some(p);
                     }
                 }
-                self.tt.update(board, hash, alpha, beta, max, best);
+                // Helper taint is invisible from here, so a split result is
+                // never proven during a warm-up rung.
+                if self.selective_t.is_some() {
+                    self.taint += 1;
+                }
+                let clean = self.selective_t.is_none() || self.taint == taint0;
+                self.tt.update(board, hash, alpha, beta, max, best, clean);
                 return max;
             }
         }
@@ -2804,7 +4666,10 @@ impl Worker<'_> {
             let m = moves[next];
             next += 1;
             let mut child = m.child(board);
-            let val = self.descend_null_window(&mut child, m.hash, lower, upper, ev);
+            let val = {
+                let ch = child_hash_of(&child);
+                self.descend_null_window(&mut child, ch, lower, upper, true, ev)
+            };
             if val == ABORTED {
                 return ABORTED;
             }
@@ -2819,24 +4684,32 @@ impl Worker<'_> {
 
         // A truncated search proves nothing, so its bound must never reach
         // the table — a wrong bound there would corrupt later searches.
-        self.tt.update(board, hash, alpha, beta, max, best);
+        let clean = self.selective_t.is_none() || self.taint == taint0;
+        self.tt.update(board, hash, alpha, beta, max, best, clean);
         max
     }
 
     /// Full-window recursive descent picking the right strategy by depth.
-    #[inline]
+    ///
+    /// Forced inline: the call graph showed this between every pair of `pvs`
+    /// frames, so the search paid two calls a ply where one is enough
+    /// - dispatching the same choice through a monomorphized strategy
+    /// type, which leaves no frame at all.
+    #[inline(always)]
+    #[allow(clippy::too_many_arguments)]
     fn descend(
         &mut self,
         child: &mut Board,
         hash: u64,
         alpha: i32,
         beta: i32,
+        cut_node: bool,
         ev: Option<&Evaluator>,
     ) -> i32 {
         if child.empty_count() >= PVS_LIMIT {
             let dbg = dbg_asp() && child.empty_count() >= 23;
             let n0 = self.nodes;
-            let v = self.pvs(child, hash, alpha, beta, false, ev);
+            let v = self.pvs(child, hash, alpha, beta, false, cut_node, ev);
             if dbg {
                 eprintln!(
                     "[d{}] h{:04x} [{alpha},{beta}] -> {v} ({}M)",
@@ -2851,30 +4724,34 @@ impl Worker<'_> {
                 return ABORTED;
             }
             -v
-        } else if child.empty_count() >= MOVE_ORDERING_LIMIT {
-            -self.alpha_beta_ordered(child, hash, alpha, beta, false, ev)
         } else {
             let parity = parity_of(child);
-            -self.alpha_beta(child, hash, alpha, beta, false, parity)
+            if child.empty_count() >= MOVE_ORDERING_LIMIT {
+                -self.alpha_beta_ordered(child, hash, alpha, beta, false, parity, ev)
+            } else {
+                -self.alpha_beta(child, hash, alpha, beta, false, parity)
+            }
         }
     }
 
     /// Null-window probe then re-search, at the strategy for this depth.
-    #[inline]
+    /// Forced inline for the reason given on `descend`.
+    #[inline(always)]
     fn descend_null_window(
         &mut self,
         child: &mut Board,
         hash: u64,
         lower: i32,
         upper: i32,
+        cut_node: bool,
         ev: Option<&Evaluator>,
     ) -> i32 {
-        let mut val = self.descend(child, hash, -lower - 1, -lower, ev);
+        let mut val = self.descend(child, hash, -lower - 1, -lower, cut_node, ev);
         if val == ABORTED {
             return ABORTED;
         }
         if lower < val && val < upper {
-            val = self.descend(child, hash, -upper, -val, ev);
+            val = self.descend(child, hash, -upper, -val, false, ev);
             if val == ABORTED {
                 return ABORTED;
             }
@@ -2883,6 +4760,11 @@ impl Worker<'_> {
     }
 
     #[allow(clippy::too_many_arguments)]
+    /// `parity` is the quadrant parity of this position, carried down
+    /// rather than recomputed. Every node needs it - the static ordering
+    /// reads it, and so does every child that lands in the 5-6 band - and
+    /// deriving it costs four masked popcounts against the single XOR that
+    /// updates it across a move.
     fn alpha_beta_ordered(
         &mut self,
         board: &mut Board,
@@ -2890,9 +4772,16 @@ impl Worker<'_> {
         alpha: i32,
         beta: i32,
         passed: bool,
+        parity: u8,
         ev: Option<&Evaluator>,
     ) -> i32 {
         let _prof = layer_profile::Scope::new(layer_profile::SEARCH, board.empty_count());
+        // The move loops below test `val >= beta` rather than re-testing
+        // `alpha >= beta` after every update, which is the same cutoff only
+        // while the window is non-empty. An empty window here would make the
+        // old order break on the first child and this one run the list out,
+        // so pin the precondition: if the tree ever moves, look here first.
+        debug_assert!(alpha < beta, "alpha_beta_ordered needs a non-empty window");
         let mut alpha = alpha;
         let mut beta = beta;
 
@@ -2917,18 +4806,57 @@ impl Worker<'_> {
             }
         }
 
+        abst!(O_NODES);
         // Single probe, reused for the ordering move below (see `pvs`).
         let use_tt = board.empty_count() >= TT_MIN_EMPTIES;
+        let use_l9 = use_tt && self.g_new_mid && board.empty_count() < self.mid_empties;
+        // The bound cache runs beside the transposition table rather than
+        // instead of it. Moving the band wholesale to 7-12 (the other
+        // split) cost 2.7% of the tree, because 10-12 lost the shared table
+        // - but that measured a replacement, not an addition. A cut here is
+        // worth far more tree than one at four empties, and the two lookups
+        // answer different questions: the table remembers a proven window,
+        // the cache remembers a bound pair keyed on the position alone.
+        #[cfg(feature = "l78-wide")]
+        let use_l78 = board.empty_count() < TT_MID_WIDE && !self.l78.is_empty();
+        #[cfg(not(feature = "l78-wide"))]
+        let use_l78 = !use_tt && !self.l78.is_empty();
+        let mut l9_best: Option<Position> = None;
+        let mut l78_best: Option<Position> = None;
         let entry = {
             let _p = layer_profile::Scope::new(layer_profile::TT, board.empty_count());
-            if use_tt {
+            if use_tt && !use_l9 {
+                abst!(O_TT_PROBE);
                 self.table(board.empty_count()).get(board, hash)
             } else {
                 None
             }
         };
         let mut narrowed = false;
-        if let Some(v) = entry {
+        if use_l9 {
+            if let Some((lo, hi, best)) =
+                self.l9_probe(hash, board.player_bb(), board.opponent_bb())
+            {
+                l9_best = best;
+                if lo >= hi {
+                    return lo;
+                }
+                if beta > hi {
+                    beta = hi;
+                    narrowed = true;
+                    if beta <= alpha {
+                        return beta;
+                    }
+                }
+                if alpha < lo {
+                    alpha = lo;
+                    narrowed = true;
+                    if alpha >= beta {
+                        return alpha;
+                    }
+                }
+            }
+        } else if let Some(v) = entry {
             if !v.is_seed(self.table(board.empty_count()).date()) {
                 if v.lower() >= v.upper() {
                     return v.lower();
@@ -2942,6 +4870,31 @@ impl Worker<'_> {
                 }
                 if alpha < v.lower() {
                     alpha = v.lower();
+                    narrowed = true;
+                    if alpha >= beta {
+                        return alpha;
+                    }
+                }
+            }
+        }
+
+        if use_l78 {
+            if let Some((lo, hi, best)) =
+                self.l78_probe(hash, board.player_bb(), board.opponent_bb())
+            {
+                l78_best = best;
+                if lo >= hi {
+                    return lo;
+                }
+                if beta > hi {
+                    beta = hi;
+                    narrowed = true;
+                    if beta <= alpha {
+                        return beta;
+                    }
+                }
+                if alpha < lo {
+                    alpha = lo;
                     narrowed = true;
                     if alpha >= beta {
                         return alpha;
@@ -2977,11 +4930,20 @@ impl Worker<'_> {
                 -beta,
                 -alpha,
                 true,
+                parity,
                 ev,
             );
             board.pass();
-            self.table(board.empty_count())
-                .update(board, hash, orig_alpha, beta, val, None);
+            if use_l9 {
+                let (p, o) = (board.player_bb(), board.opponent_bb());
+                self.l9_store(hash, p, o, orig_alpha, beta, val, None);
+            } else if use_tt {
+                self.table(board.empty_count())
+                    .update(board, hash, orig_alpha, beta, val, None, true);
+            } else if use_l78 {
+                let (p, o) = (board.player_bb(), board.opponent_bb());
+                self.l78_store(hash, p, o, orig_alpha, beta, val, None);
+            }
             return val;
         }
 
@@ -2991,49 +4953,111 @@ impl Worker<'_> {
         if moves.len() == 1 {
             let m = moves[0];
             let mut child = m.child(board);
+            let cp = parity ^ quadrant_id(m.pos.index());
+            let ch = child_hash_of(&child);
             return if child.empty_count() >= MOVE_ORDERING_LIMIT {
-                -self.alpha_beta_ordered(&mut child, m.hash, -beta, -alpha, false, ev)
+                -self.alpha_beta_ordered(&mut child, ch, -beta, -alpha, false, cp, ev)
             } else {
-                {
-                    let cp = parity_of(&child);
-                    -self.alpha_beta(&mut child, m.hash, -beta, -alpha, false, cp)
-                }
+                -self.alpha_beta(&mut child, ch, -beta, -alpha, false, cp)
             };
         }
 
+        // Stage 1: the table move, searched before any ordering work - the
+        // ordering below puts it first anyway, so the searched order (and
+        // the tree) is identical; a cut here just skips the scoring. Same
+        // shape as `pvs`.
+        let tt_best = if use_l9 {
+            l9_best
+        } else {
+            entry.and_then(|e| e.best())
+        }
+        .or(l78_best);
+        let mut best = None;
+        let mut scored_from = 0usize;
+        if let Some(bpos) = tt_best {
+            if let Some(idx) = moves.iter().position(|m| m.pos == bpos) {
+                abst!(O_CHILD);
+                moves.swap(0, idx);
+                scored_from = 1;
+                let m = moves[0];
+                let mut child = m.child(board);
+                let cp = parity ^ quadrant_id(m.pos.index());
+                let ch = child_hash_of(&child);
+                let val = if child.empty_count() >= MOVE_ORDERING_LIMIT {
+                    -self.alpha_beta_ordered(&mut child, ch, -beta, -alpha, false, cp, ev)
+                } else {
+                    -self.alpha_beta(&mut child, ch, -beta, -alpha, false, cp)
+                };
+                // Fail-high first, as in the 5-6 band and the leaf routines:
+                // the cutoff test predicts not-taken, and the alpha update
+                // drops off the cutoff path. `val >= beta` implies
+                // `val > alpha` (the window is never empty), so assigning
+                // here is the same store the old order made.
+                if val >= beta {
+                    alpha = val;
+                    abst!(O_TT_CUT);
+                    best = Some(m.pos);
+                    if use_l9 {
+                        let (p, o) = (board.player_bb(), board.opponent_bb());
+                        self.l9_store(hash, p, o, orig_alpha, beta, alpha, best);
+                    } else if use_tt {
+                        self.table(board.empty_count())
+                            .update(board, hash, orig_alpha, beta, alpha, best, true);
+                    } else if use_l78 {
+                        let (p, o) = (board.player_bb(), board.opponent_bb());
+                        self.l78_store(hash, p, o, orig_alpha, beta, alpha, best);
+                    }
+                    return alpha;
+                }
+                // Branchless off the cutoff path: this layer sets `best`
+                // only on a fail high, so nothing else depends on knowing
+                // whether alpha moved.
+                alpha = alpha.max(val);
+            }
+        }
+
+        for _ in scored_from..moves.len() {
+            abst!(O_SCORED);
+        }
         self.score_moves(
             board,
-            &mut moves,
-            entry.and_then(|e| e.best()),
+            &mut moves[scored_from..],
+            None,
             ev,
             i32::MIN / 2,
+            parity,
         );
 
-        let mut best = None;
-        for i in 0..moves.len() {
+        for i in scored_from..moves.len() {
             Self::select_next(&mut moves, i);
             let m = moves[i];
             let mut child = m.child(board);
+            let cp = parity ^ quadrant_id(m.pos.index());
+            let ch = child_hash_of(&child);
             let val = if child.empty_count() >= MOVE_ORDERING_LIMIT {
-                -self.alpha_beta_ordered(&mut child, m.hash, -beta, -alpha, false, ev)
+                -self.alpha_beta_ordered(&mut child, ch, -beta, -alpha, false, cp, ev)
             } else {
                 {
-                    let cp = parity_of(&child);
-                    -self.alpha_beta(&mut child, m.hash, -beta, -alpha, false, cp)
+                    -self.alpha_beta(&mut child, ch, -beta, -alpha, false, cp)
                 }
             };
-            if val > alpha {
+            if val >= beta {
                 alpha = val;
-            }
-            if alpha >= beta {
                 best = Some(m.pos);
                 break;
             }
+            alpha = alpha.max(val);
         }
 
-        if use_tt {
+        if use_l9 {
+            let (p, o) = (board.player_bb(), board.opponent_bb());
+            self.l9_store(hash, p, o, orig_alpha, beta, alpha, best);
+        } else if use_tt {
             self.table(board.empty_count())
-                .update(board, hash, orig_alpha, beta, alpha, best);
+                .update(board, hash, orig_alpha, beta, alpha, best, true);
+        } else if use_l78 {
+            let (p, o) = (board.player_bb(), board.opponent_bb());
+            self.l78_store(hash, p, o, orig_alpha, beta, alpha, best);
         }
         alpha
     }
@@ -3089,20 +5113,38 @@ impl Worker<'_> {
 
         let mut lower = alpha;
         let mut upper = beta;
-        if let Some(v) = self.shallow_table.get(board, hash) {
-            if v.lower() >= v.upper() {
-                return v.lower();
+        if self.g_l56_cache {
+            if let Some(v) =
+                self.l4_probe(hash, board.player_bb(), board.opponent_bb(), lower, upper)
+            {
+                return v;
             }
-            if upper > v.upper() {
-                upper = v.upper();
-                if upper <= lower {
-                    return upper;
+        }
+        abst!(NODES);
+        if self.g_new_shallow {
+            abst!(L56_PROBE);
+            if let Some(v) =
+                self.l56_probe(hash, board.player_bb(), board.opponent_bb(), lower, upper)
+            {
+                abst!(L56_HIT);
+                return v;
+            }
+        } else if !self.g_no_shallow56 {
+            if let Some(v) = self.shallow_table.get(board, hash) {
+                if v.lower() >= v.upper() {
+                    return v.lower();
                 }
-            }
-            if lower < v.lower() {
-                lower = v.lower();
-                if lower >= upper {
-                    return lower;
+                if upper > v.upper() {
+                    upper = v.upper();
+                    if upper <= lower {
+                        return upper;
+                    }
+                }
+                if lower < v.lower() {
+                    lower = v.lower();
+                    if lower >= upper {
+                        return lower;
+                    }
                 }
             }
         }
@@ -3132,23 +5174,61 @@ impl Worker<'_> {
         // band22, 3.9% on FFO40-49, 2.5% at 26 empties - but the masking and
         // the extra passes eat exactly that much time (-0.5% to +0.9%, all
         // inside the spread), so the plain scan stays.
-        'passes: for pass_mask in [empties & odd, empties & !odd] {
-            let mut e = pass_mask;
-            while e != 0 {
-                let sq = e.trailing_zeros() as u8;
-                e &= e - 1;
-
-                if self.neighbours.get(sq) & opponent_bb == 0 {
-                    continue;
+        // Flips for every empty square in two batch calls: the batch
+        // kernels share one board broadcast, so this is cheaper than 5-6
+        // scalar `flippable` calls even when a cutoff would have skipped
+        // the tail, and it makes the neighbour prefilter redundant (a zero
+        // flip is skipped below). Values, order and tree are unchanged.
+        // Uninitialised, like `gen_moves`' scratch: both are written in
+        // full for `0..n_empty` before anything reads them, and zeroing
+        // them first is 54 bytes of `memset` on every node of the band
+        // that carries the most nodes in the search.
+        // Legal moves as a bitboard, split into the four visit classes by
+        // masking - no index arrays, no per-square legality probe.
+        //
+        // The scan this replaces built `sqs`, `fls` and `ord` and walked the
+        // empties four times: once to split corners from the rest, once per
+        // square to find a flip (a zero flip meaning illegal), and twice
+        // more to bucket by parity. Two of those passes exist only to
+        // produce an order that four AND masks give directly, and the flips
+        // for squares a cutoff never reaches are computed either way.
+        //
+        // Both halves of this were measured before, each bolted onto the
+        // array machinery, and each came out a wash - "the masking and the
+        // extra passes eat exactly what the better order buys". They are
+        // not extra passes when they *are* the iteration.
+        //
+        // The order is unchanged: odd-parity corners, odd-parity rest,
+        // even-parity corners, even-parity rest, which is exactly what the
+        // corner-first `sqs` split fed to the two parity passes.
+        let legal = bitboard::mobility(player_bb, opponent_bb, empties);
+        let odd_moves = legal & odd;
+        let even_moves = legal & !odd;
+        let classes = [
+            odd_moves & CORNER_MASK,
+            odd_moves & !CORNER_MASK,
+            even_moves & CORNER_MASK,
+            even_moves & !CORNER_MASK,
+        ];
+        let mut class_ix = 0usize;
+        let mut cur = classes[0];
+        'passes: loop {
+            {
+                while cur == 0 {
+                    class_ix += 1;
+                    if class_ix == 4 {
+                        break 'passes;
+                    }
+                    cur = classes[class_ix];
                 }
+                let sq = cur.trailing_zeros() as u8;
+                cur &= cur - 1;
                 let pos = Position(sq);
                 let pos_bit = pos.to_bit();
                 let flips = bitboard::flippable(player_bb, opponent_bb, pos_bit);
-                if flips == 0 {
-                    continue;
-                }
 
                 any = true;
+                abst!(CHILD);
                 let child_parity = parity ^ quadrant_id(sq);
                 // A 5-empty node's children have four empties, which is
                 // `last4`'s territory. Routing them back through this
@@ -3159,14 +5239,83 @@ impl Worker<'_> {
                 // remaining empties come straight off the parent's mask and
                 // the hash is unused below 6 empties.
                 let val = if five_empty {
-                    -self.search4(
-                        opponent_bb ^ flips,
-                        player_bb | flips | pos_bit,
-                        empties & !pos_bit,
-                        -upper,
-                        -best.max(orig_lower),
-                        child_parity,
-                    )
+                    // `EXACT_L4_CACHE=1`: probe the four-empty cache before
+                    // solving the child — a hit resolves the whole subtree
+                    // (its 1-3-empty expansion is where the tree exceeds
+                    // the estimate) for one counted node, the same charge
+                    // the solve would have made.
+                    if self.g_l4_cache {
+                        let ca = -upper;
+                        let cb = -best.max(orig_lower);
+                        let cp = opponent_bb ^ flips;
+                        let co = player_bb | flips | pos_bit;
+                        let child_hash = zobrist::board_hash(cp, co);
+                        // Warm the next legal child's slot while this one
+                        // solves: the probe is a random load into a table
+                        // bigger than L1, and one-ahead wastes at most one
+                        // hash per node (the all-up-front variant wasted
+                        // 3-4 and measured -1.2%).
+                        // Warm the next legal child's slot while this one
+                        // solves. `cur` already has this move cleared, so
+                        // its low bit is the next square of this class; the
+                        // class boundary is not crossed, which only changes
+                        // when a prefetch is issued, never what is searched.
+                        // Warming the next child's slot needs that child's
+                        // hash, and the hash needs its flip - a whole kernel
+                        // and a Zobrist per child, paid to hide the latency
+                        // of one probe. It was nearly free when the flips
+                        // for every empty square were already computed in a
+                        // batch; the bitboard iteration that replaced those
+                        // arrays left this recomputing them.
+                        //
+                        // Priced afterwards, it still breaks even: four sets,
+                        // six shuffled rounds, dropping it is +0.12%, +0.74%,
+                        // -0.62%, -0.25%, total -0.07%. The recomputed flip
+                        // costs what the hidden latency saves, so the shape
+                        // stays as it was. `l4-no-prefetch` drops it.
+                        #[cfg(not(feature = "l4-no-prefetch"))]
+                        if cur != 0 {
+                            let jb = cur.isolate_lowest_one();
+                            let jf = bitboard::flippable(player_bb, opponent_bb, jb);
+                            if jf != 0 {
+                                self.l4_prefetch(zobrist::board_hash(
+                                    opponent_bb ^ jf,
+                                    player_bb | jf | jb,
+                                ));
+                            }
+                        }
+                        abst!(L4_PROBE);
+                        if let Some(h) = self.l4_probe(child_hash, cp, co, ca, cb) {
+                            abst!(L4_HIT);
+                            self.nodes += 1;
+                            -h
+                        } else {
+                            let mut trivial = false;
+                            let r = self.search4_t(
+                                cp,
+                                co,
+                                empties & !pos_bit,
+                                ca,
+                                cb,
+                                child_parity,
+                                &mut trivial,
+                            );
+                            if !trivial {
+                                abst!(L4_STORE);
+                                self.l4_store(child_hash, cp, co, ca, cb, r);
+                            }
+                            -r
+                        }
+                    } else {
+                        -self.search4(
+                            opponent_bb ^ flips,
+                            player_bb | flips | pos_bit,
+                            empties & !pos_bit,
+                            -upper,
+                            -best.max(orig_lower),
+                            child_parity,
+                        )
+                    }
                 } else {
                     let mut child = *board;
                     child.apply_flips(pos, flips);
@@ -3185,12 +5334,15 @@ impl Worker<'_> {
                     )
                 };
 
-                if val > best {
+                // Fail-high first: the cutoff test is the predicted-not-
+                // taken branch, and the max drops off the cutoff path.
+                if val >= upper {
                     best = val;
-                }
-                if best >= upper {
                     cut = true;
                     break 'passes;
+                }
+                if val > best {
+                    best = val;
                 }
             }
         }
@@ -3213,8 +5365,29 @@ impl Worker<'_> {
             return val;
         }
 
-        self.shallow_table
-            .update(board, hash, orig_lower, upper, best, None);
+        if self.g_l56_cache {
+            self.l4_store(
+                hash,
+                board.player_bb(),
+                board.opponent_bb(),
+                orig_lower,
+                upper,
+                best,
+            );
+        }
+        if self.g_new_shallow {
+            self.l56_store(
+                hash,
+                board.player_bb(),
+                board.opponent_bb(),
+                orig_lower,
+                upper,
+                best,
+            );
+        } else if !self.g_no_shallow56 {
+            self.shallow_table
+                .update(board, hash, orig_lower, upper, best, None, true);
+        }
         best
     }
 
@@ -3235,6 +5408,24 @@ impl Worker<'_> {
         beta: i32,
         parity: u8,
     ) -> i32 {
+        let mut trivial = false;
+        self.search4_t(player, opponent, empties, alpha, beta, parity, &mut trivial)
+    }
+
+    /// `search4` that also reports whether a guard resolved the child in a
+    /// single node - such results are not worth a cache store (measured
+    /// 5.1% hit rate; a 1-node subtree cannot repay the store).
+    #[allow(clippy::too_many_arguments)]
+    fn search4_t(
+        &mut self,
+        player: u64,
+        opponent: u64,
+        empties: u64,
+        alpha: i32,
+        beta: i32,
+        parity: u8,
+        trivial: &mut bool,
+    ) -> i32 {
         // The opponent always holds the disc just played, so only the player
         // side can be wiped out here.
         //
@@ -3244,12 +5435,16 @@ impl Worker<'_> {
         // FFO40-49 by 11.5M nodes (2.8%) — lopsided positions cut here far
         // more often than balanced ones, so the bias is set-dependent.
         if player == 0 {
+            *trivial = true;
             self.nodes += 1;
             return -64;
         }
         {
             let _p = layer_profile::Scope::new(layer_profile::STAB, 4);
+            abst!(STAB4);
             if let Some(bound) = stability_cut_bb(player, opponent, 4, alpha, beta) {
+                abst!(STAB4_CUT);
+                *trivial = true;
                 self.nodes += 1;
                 return bound;
             }
@@ -3324,11 +5519,25 @@ impl Worker<'_> {
         // stable sort is the identity — skip the whole quadrant lookup.
         // A large share of 4-empty positions land here.
         let (p1, p2, p3, p4) = if parity != 0 {
-            let odd = |sq: u8| parity & quadrant_id(sq) != 0;
-            let mut arr = [p1, p2, p3, p4];
-            arr.sort_by_key(|&s| !odd(s));
-            let [a, b, c, d] = arr;
-            (a, b, c, d)
+            // Stable partition via a permutation match, as in `last3`.
+            let m = ((parity & quadrant_id(p1) != 0) as u8)
+                | (((parity & quadrant_id(p2) != 0) as u8) << 1)
+                | (((parity & quadrant_id(p3) != 0) as u8) << 2)
+                | (((parity & quadrant_id(p4) != 0) as u8) << 3);
+            match m {
+                0b0010 => (p2, p1, p3, p4),
+                0b0100 => (p3, p1, p2, p4),
+                0b0101 => (p1, p3, p2, p4),
+                0b0110 => (p2, p3, p1, p4),
+                0b1000 => (p4, p1, p2, p3),
+                0b1001 => (p1, p4, p2, p3),
+                0b1010 => (p2, p4, p1, p3),
+                0b1011 => (p1, p2, p4, p3),
+                0b1100 => (p3, p4, p1, p2),
+                0b1101 => (p1, p3, p4, p2),
+                0b1110 => (p2, p3, p4, p1),
+                _ => (p1, p2, p3, p4),
+            }
         } else {
             (p1, p2, p3, p4)
         };
@@ -3342,29 +5551,37 @@ impl Worker<'_> {
         // node count is unchanged. Eager flips lose against a scalar flip
         // routine (the cut-off moves are computed for nothing); against the
         // vector one they win 1.5% on band22.
+        #[cfg(not(any(
+            feature = "flip-lazy",
+            feature = "flip-guard",
+            feature = "flip-noshare"
+        )))]
         let (f1, f2, f3, f4) = bitboard::flippable4(player, opponent, p1, p2, p3, p4);
+        #[cfg(any(
+            feature = "flip-lazy",
+            feature = "flip-guard",
+            feature = "flip-noshare"
+        ))]
+        let fctx = bitboard::FlipCtx::new(player, opponent);
 
-        for (a, rest, flips) in [
-            (p1, [p2, p3, p4], f1),
-            (p2, [p1, p3, p4], f2),
-            (p3, [p1, p2, p4], f3),
-            (p4, [p1, p2, p3], f4),
-        ] {
-            if flips == 0 {
-                continue;
-            }
-            let pos_bit = 1u64 << a;
+        #[cfg(any(
+            feature = "flip-lazy",
+            feature = "flip-guard",
+            feature = "flip-noshare"
+        ))]
+        let f1 = arm_flip(&fctx, player, opponent, p1);
+        if f1 != 0 {
             any = true;
             let val = -self.last3(
-                opponent ^ flips,
-                player | flips | pos_bit,
-                rest[0],
-                rest[1],
-                rest[2],
+                opponent ^ f1,
+                player | f1 | (1u64 << p1),
+                p2,
+                p3,
+                p4,
                 -beta,
                 -alpha,
                 false,
-                parity ^ quadrant_id(a),
+                parity ^ quadrant_id(p1),
             );
             if val >= beta {
                 return val;
@@ -3372,6 +5589,80 @@ impl Worker<'_> {
             if val > alpha {
                 alpha = val;
             }
+        }
+        #[cfg(any(
+            feature = "flip-lazy",
+            feature = "flip-guard",
+            feature = "flip-noshare"
+        ))]
+        let f2 = arm_flip(&fctx, player, opponent, p2);
+        if f2 != 0 {
+            any = true;
+            let val = -self.last3(
+                opponent ^ f2,
+                player | f2 | (1u64 << p2),
+                p1,
+                p3,
+                p4,
+                -beta,
+                -alpha,
+                false,
+                parity ^ quadrant_id(p2),
+            );
+            if val >= beta {
+                return val;
+            }
+            if val > alpha {
+                alpha = val;
+            }
+        }
+        #[cfg(any(
+            feature = "flip-lazy",
+            feature = "flip-guard",
+            feature = "flip-noshare"
+        ))]
+        let f3 = arm_flip(&fctx, player, opponent, p3);
+        if f3 != 0 {
+            any = true;
+            let val = -self.last3(
+                opponent ^ f3,
+                player | f3 | (1u64 << p3),
+                p1,
+                p2,
+                p4,
+                -beta,
+                -alpha,
+                false,
+                parity ^ quadrant_id(p3),
+            );
+            if val >= beta {
+                return val;
+            }
+            if val > alpha {
+                alpha = val;
+            }
+        }
+        #[cfg(any(
+            feature = "flip-lazy",
+            feature = "flip-guard",
+            feature = "flip-noshare"
+        ))]
+        let f4 = arm_flip(&fctx, player, opponent, p4);
+        // Last move: no cutoff left to prove, so the answer is the better
+        // of the two either way.
+        if f4 != 0 {
+            let val = -self.last3(
+                opponent ^ f4,
+                player | f4 | (1u64 << p4),
+                p1,
+                p2,
+                p3,
+                -beta,
+                -alpha,
+                false,
+                parity ^ quadrant_id(p4),
+            );
+            return alpha.max(val);
         }
 
         if !any {
@@ -3386,6 +5677,11 @@ impl Worker<'_> {
         alpha
     }
 
+    /// Folded into its caller: the leaf chain is four routines deep and a
+    /// node here costs tens of nanoseconds, so the call itself is a
+    /// measurable share. `solve2` disappears into
+    /// `solve3_eager` the same way.
+    #[inline(always)]
     #[allow(clippy::too_many_arguments)]
     fn last3(
         &mut self,
@@ -3402,30 +5698,60 @@ impl Worker<'_> {
         let _prof = layer_profile::Scope::new(layer_profile::SEARCH, 3);
         self.nodes += 1;
 
-        let odd = |sq: u8| parity & quadrant_id(sq) != 0;
-        let mut arr = [p1, p2, p3];
-        arr.sort_by_key(|&s| !odd(s));
-        let [p1, p2, p3] = arr;
-        // The parity==0 sort-skip helped 0.7% in `last4` but is a wash
-        // here (within noise on band22): a 3-element sort is cheap enough
-        // that the branch mispredict cancels the win. Keep it in last4 only.
+        // Stable partition (odd quadrants first, original order within each
+        // class) via an explicit permutation: the same order the stable
+        // 3-sort produced, without the sort. This runs 47M times per
+        // FFO40-49; the generic sort and its key closure were measurable.
+        // One option is no ordering at three empties at all, where
+        // `solve3` takes the squares in the order the caller hands them
+        // over. `last3-noorder` prices ours: the permutation match runs
+        // 45M times on FFO40-49, and this layer measured 2.0x the
+        // reference's per-node cost.
+        #[cfg(not(feature = "last3-noorder"))]
+        let (p1, p2, p3) = {
+            let m = ((parity & quadrant_id(p1) != 0) as u8)
+                | (((parity & quadrant_id(p2) != 0) as u8) << 1)
+                | (((parity & quadrant_id(p3) != 0) as u8) << 2);
+            match m {
+                0b010 => (p2, p1, p3),
+                0b100 => (p3, p1, p2),
+                0b101 => (p1, p3, p2),
+                0b110 => (p2, p3, p1),
+                _ => (p1, p2, p3),
+            }
+        };
 
         let mut alpha = alpha;
         let mut any = false;
 
+        // Straight-line children (the tuple-array loop built its rest-arrays
+        // on the stack every entry; unrolling avoids that).
+        #[cfg(not(any(
+            feature = "flip-lazy",
+            feature = "flip-guard",
+            feature = "flip-noshare"
+        )))]
         let (f1, f2, f3) = bitboard::flippable3(player, opponent, p1, p2, p3);
+        #[cfg(any(
+            feature = "flip-lazy",
+            feature = "flip-guard",
+            feature = "flip-noshare"
+        ))]
+        let fctx = bitboard::FlipCtx::new(player, opponent);
 
-        for (a, rest, flips) in [(p1, [p2, p3], f1), (p2, [p1, p3], f2), (p3, [p1, p2], f3)] {
-            if flips == 0 {
-                continue;
-            }
-            let pos_bit = 1u64 << a;
+        #[cfg(any(
+            feature = "flip-lazy",
+            feature = "flip-guard",
+            feature = "flip-noshare"
+        ))]
+        let f1 = arm_flip(&fctx, player, opponent, p1);
+        if f1 != 0 {
             any = true;
             let val = -self.last2(
-                opponent ^ flips,
-                player | flips | pos_bit,
-                rest[0],
-                rest[1],
+                opponent ^ f1,
+                player | f1 | (1u64 << p1),
+                p2,
+                p3,
                 -beta,
                 -alpha,
                 false,
@@ -3436,6 +5762,49 @@ impl Worker<'_> {
             if val > alpha {
                 alpha = val;
             }
+        }
+        #[cfg(any(
+            feature = "flip-lazy",
+            feature = "flip-guard",
+            feature = "flip-noshare"
+        ))]
+        let f2 = arm_flip(&fctx, player, opponent, p2);
+        if f2 != 0 {
+            any = true;
+            let val = -self.last2(
+                opponent ^ f2,
+                player | f2 | (1u64 << p2),
+                p1,
+                p3,
+                -beta,
+                -alpha,
+                false,
+            );
+            if val >= beta {
+                return val;
+            }
+            if val > alpha {
+                alpha = val;
+            }
+        }
+        #[cfg(any(
+            feature = "flip-lazy",
+            feature = "flip-guard",
+            feature = "flip-noshare"
+        ))]
+        let f3 = arm_flip(&fctx, player, opponent, p3);
+        // Last move: see `last2`.
+        if f3 != 0 {
+            let val = -self.last2(
+                opponent ^ f3,
+                player | f3 | (1u64 << p3),
+                p1,
+                p2,
+                -beta,
+                -alpha,
+                false,
+            );
+            return alpha.max(val);
         }
 
         if !any {
@@ -3448,6 +5817,11 @@ impl Worker<'_> {
         alpha
     }
 
+    /// Folded into its caller: the leaf chain is four routines deep and a
+    /// node here costs tens of nanoseconds, so the call itself is a
+    /// measurable share. `solve2` disappears into
+    /// `solve3_eager` the same way.
+    #[inline(always)]
     fn last2(
         &mut self,
         player: u64,
@@ -3465,20 +5839,34 @@ impl Worker<'_> {
         let mut any = false;
 
         let (f1, f2) = bitboard::flippable2(player, opponent, p1, p2);
-
-        for (a, b, flips) in [(p1, p2, f1), (p2, p1, f2)] {
-            if flips == 0 {
-                continue;
-            }
-            let pos_bit = 1u64 << a;
+        if f1 != 0 {
             any = true;
-            let val = -self.last1(opponent ^ flips, player | flips | pos_bit, b);
+            let (v, c) = Self::last1_value(opponent ^ f1, p2);
+            self.nodes += c;
+            let val = -v;
             if val >= beta {
                 return val;
             }
             if val > alpha {
                 alpha = val;
             }
+        }
+        #[cfg(any(
+            feature = "flip-lazy",
+            feature = "flip-guard",
+            feature = "flip-noshare"
+        ))]
+        let f2 = arm_flip(&fctx, player, opponent, p2);
+        // The last move has nothing left to cut off: whether `val` clears
+        // beta or not, the node's answer is the better of the two. The
+        // reference drops the test on its final move for the same reason.
+        // Measured neutral on its own (four sets, six shuffled rounds:
+        // -0.45%, -0.66%, -0.38%, +0.36%, total +0.05%) - kept because the
+        // branch is genuinely dead, not because it pays.
+        if f2 != 0 {
+            let (v, c) = Self::last1_value(opponent ^ f2, p1);
+            self.nodes += c;
+            return alpha.max(-v);
         }
 
         if !any {
@@ -3491,14 +5879,19 @@ impl Worker<'_> {
         alpha
     }
 
-    /// Exactly one empty square left: resolve without recursion.
-    fn last1(&mut self, player: u64, opponent: u64, p1: u8) -> i32 {
+    /// Exactly one empty square left, as a value and the rule-U count it
+    /// owes.
+    ///
+    /// Free-standing rather than a method, which splits
+    /// a pure kernel from its counting wrapper: a `&mut self` call in the
+    /// middle of the hottest move loop in the search carries a store the
+    /// optimizer must assume can alias anything the loop holds. On its own
+    /// this measured neutral (12.417s against 12.432s); it is kept because
+    /// the shape is a precondition for the other leaf changes, not because
+    /// it pays by itself.
+    #[inline(always)]
+    fn last1_value(player: u64, p1: u8) -> (i32, u64) {
         let _prof = layer_profile::Scope::new(layer_profile::SEARCH, 1);
-        debug_assert_eq!(
-            player | opponent | (1u64 << p1),
-            !0u64,
-            "last1 requires a board full but for p1"
-        );
         // The board is full but for `p1`, so the two sides hold 63 discs
         // between them and one popcount gives the difference:
         // `p - (63 - p)`.
@@ -3507,24 +5900,21 @@ impl Worker<'_> {
         // below costs nothing extra to have ready.
         let (mine, theirs) = bitboard::count_last_flips(player, p1);
 
-        self.nodes += 1;
-        // Current player fills the last square
+        // Current player fills the last square: one node.
         if mine > 0 {
-            return diff + 2 * mine as i32 + 1;
+            return (diff + 2 * mine as i32 + 1, 1);
         }
-
-        self.nodes += 1;
-        // Current player passes; opponent fills the last square
+        // Current player passes; the pass re-entry is the second node.
         if theirs > 0 {
-            return diff - 2 * theirs as i32 - 1;
+            return (diff - 2 * theirs as i32 - 1, 2);
         }
-
-        // Nobody can play the last square: empty goes to the winner
-        match diff.cmp(&0) {
+        // Nobody can play the last square: empty goes to the winner.
+        let v = match diff.cmp(&0) {
             std::cmp::Ordering::Greater => diff + 1,
             std::cmp::Ordering::Less => diff - 1,
             std::cmp::Ordering::Equal => 0,
-        }
+        };
+        (v, 2)
     }
 
     /// Probable cutoff for a warm-up pass: a shallow evaluation search that
@@ -3624,7 +6014,7 @@ impl Worker<'_> {
         out: &mut MoveBuf,
     ) {
         self.gen_moves(board, out);
-        self.score_moves(board, out, tt_best, ev, i32::MIN / 2);
+        self.score_moves(board, out, tt_best, ev, i32::MIN / 2, parity_of(board));
     }
 
     /// Generate children with their incremental hashes but WITHOUT the
@@ -3632,45 +6022,108 @@ impl Worker<'_> {
     /// the game at +64, so a node that has one needs no search at all.
     fn gen_moves(&self, board: &Board, out: &mut MoveBuf) {
         let _prof = layer_profile::Scope::new(layer_profile::GEN, board.empty_count());
+        let p = board.player_bb();
+        let o = board.opponent_bb();
         out.len = 0;
+        // `board.movable()` re-derives `p` and `o` through the colour select
+        // and rebuilds the empty mask, but passing the ones already in hand
+        // measured +0.15% over four sets - the optimizer had removed the
+        // duplication already. The choice disappears entirely if the
+        // board stores the side-to-move pair directly, with no colour field
+        // to select on.
         let mut m = board.movable();
+        let mut n = 0usize;
         while m != 0 {
-            let sq = m.trailing_zeros() as u8;
+            let s0 = m.trailing_zeros() as u8;
             m &= m - 1;
-            let pos = Position(sq);
-            let flipped = bitboard::flippable(board.player_bb(), board.opponent_bb(), pos.to_bit());
-            // The child's bitboards, without materializing a Board: the
-            // mover gains the flipped discs plus the square it played.
-            let child_hash = zobrist::board_hash(
-                board.opponent_bb() ^ flipped,
-                board.player_bb() | flipped | pos.to_bit(),
-            );
-            // Prefetching every generated move, not just the ones the node
-            // reaches, is the shape that measured best: gating it on
-            // `empties >= ETC_EMPTIES` (its stated purpose) cost 8%, and
-            // gating it only where the target is the main table cost 1.5%.
-            // The shallow layers consume it too, through the ordinary probe.
-            // Prefetch the entry this child will actually probe. Which
-            // table that is depends on the child's own layer: the ordered
-            // stage below `TT_MIN_EMPTIES` consults none, and the plain
-            // stage has its own small table. Prefetching every child into
-            // the mid table regardless — the shape that measured best while
-            // seven and eight still probed it — now fetches lines nobody
-            // reads and evicts ones somebody does. Trees are identical;
-            // band22 -2.4%, fix22 -2.0%, ffo40-49 -0.7% over four rounds,
-            // and the same signs over three earlier ones.
-            let child_empties = board.empty_count() - 1;
-            if child_empties >= TT_MIN_EMPTIES {
-                self.table(child_empties).prefetch(child_hash);
-            } else if child_empties < MOVE_ORDERING_LIMIT {
-                self.shallow_table.prefetch(child_hash);
+            if m == 0 {
+                out.buf[n].write(ScoredMove {
+                    pos: Position(s0),
+                    flipped: bitboard::flippable(p, o, 1u64 << s0),
+                    value: 0,
+                });
+                n += 1;
+                break;
             }
-            out.push(ScoredMove {
-                pos,
-                flipped,
-                hash: child_hash,
-                value: 0,
-            });
+            let s1 = m.trailing_zeros() as u8;
+            m &= m - 1;
+            if m == 0 {
+                let (f0, f1) = bitboard::flippable2(p, o, s0, s1);
+                out.buf[n].write(ScoredMove {
+                    pos: Position(s0),
+                    flipped: f0,
+                    value: 0,
+                });
+                out.buf[n + 1].write(ScoredMove {
+                    pos: Position(s1),
+                    flipped: f1,
+                    value: 0,
+                });
+                n += 2;
+                break;
+            }
+            let s2 = m.trailing_zeros() as u8;
+            m &= m - 1;
+            if m == 0 {
+                let (f0, f1) = bitboard::flippable2(p, o, s0, s1);
+                let f2 = bitboard::flippable(p, o, 1u64 << s2);
+                for (k, (sq, fl)) in [(s0, f0), (s1, f1), (s2, f2)].into_iter().enumerate() {
+                    out.buf[n + k].write(ScoredMove {
+                        pos: Position(sq),
+                        flipped: fl,
+                        value: 0,
+                    });
+                }
+                n += 3;
+                break;
+            }
+            let s3 = m.trailing_zeros() as u8;
+            m &= m - 1;
+            // Padding the tail out to four so this kernel could run
+            // unconditionally measured +0.30% over four sets: at an average
+            // of 4.4 moves a node the padded flips are a large share, and
+            // they cost more than the three-way branch they replace.
+            let (f0, f1, f2, f3) = bitboard::flippable4(p, o, s0, s1, s2, s3);
+            for (k, (sq, fl)) in [(s0, f0), (s1, f1), (s2, f2), (s3, f3)]
+                .into_iter()
+                .enumerate()
+            {
+                out.buf[n + k].write(ScoredMove {
+                    pos: Position(sq),
+                    flipped: fl,
+                    value: 0,
+                });
+            }
+            n += 4;
+        }
+        out.len = n;
+        // The prefetch below only fires for children at or above
+        // `TT_MIN_EMPTIES` - the 5-6 band has its own cache and the ordered
+        // stage below nine consults no main table - so a node with seven,
+        // eight or nine empties issues none at all, and the hash it would
+        // compute per move exists only to feed a prefetch that never
+        // happens. Those layers skip this pass entirely and let the descent
+        // that needs a hash compute it. The condition is the same for every
+        // move, so it is tested once, not per move.
+        let child_empties = board.empty_count() - 1;
+        #[cfg(not(feature = "gen-eager-hash"))]
+        let eager = child_empties >= MOVE_ORDERING_LIMIT.min(TT_MIN_EMPTIES);
+        #[cfg(feature = "gen-eager-hash")]
+        let eager = true;
+        if eager {
+            for i in 0..n {
+                let m = out[i];
+                let child_hash = zobrist::board_hash(o ^ m.flipped, p | m.flipped | m.pos.to_bit());
+                // Prefetching every generated move, not just the ones the
+                // node reaches, is the shape that measured best: gating it
+                // by position in the move list costs 1.8% at four, 3.1% at
+                // two and 5.1% with none at all.
+                if child_empties >= TT_MIN_EMPTIES {
+                    self.table(child_empties).prefetch(child_hash);
+                } else if child_empties >= MOVE_ORDERING_LIMIT {
+                    self.l78_prefetch(child_hash);
+                }
+            }
         }
     }
 
@@ -3678,6 +6131,65 @@ impl Worker<'_> {
     /// pruned lookaheads). Split from generation so that a node whose
     /// transposition-table move already cuts never pays for it. Callers
     /// either sort the result or draw from it with `select_next`.
+    /// The static half of `score_moves`, split out so the layers that use
+    /// it do not carry the other half's frame.
+    ///
+    /// The evaluator path keeps 160 bytes of pattern indices plus its
+    /// snapshot alive across the loop, and LLVM reserves that space in the
+    /// prologue whether or not the branch is taken - 496 bytes of locals on
+    /// every call, including the seven-to-thirteen-empty nodes that never
+    /// touch them and are most of the nodes in the search. Splitting the
+    /// two gives that band a frame it actually uses.
+    fn score_moves_static(
+        &self,
+        board: &Board,
+        moves: &mut [ScoredMove],
+        tt_best: Option<Position>,
+        parity: u8,
+    ) {
+        let _prof = layer_profile::Scope::new(layer_profile::ORDER, board.empty_count());
+        node_accounting::sorted(moves.len() as u64);
+        let pot = order_pot();
+        let player_bb = board.player_bb();
+        let opponent_bb = board.opponent_bb();
+        // Split on the table move instead of testing for it per move. Most
+        // nodes reach here without one - the staged table move is searched
+        // and cut before any scoring happens - so the comparison is a
+        // branch every scored move pays to answer "no". Splitting
+        // the same way avoids it. The wipeout test stays: it is a compare
+        // against a value already in hand.
+        match tt_best {
+            None => {
+                for sm in moves.iter_mut() {
+                    let pos = sm.pos;
+                    let flipped = sm.flipped;
+                    let cp = opponent_bb ^ flipped;
+                    let co = player_bb | flipped | pos.to_bit();
+                    sm.value = if cp == 0 {
+                        i32::MIN
+                    } else {
+                        move_ordering_value(pos, cp, co, parity, pot)
+                    };
+                }
+            }
+            Some(best) => {
+                for sm in moves.iter_mut() {
+                    let pos = sm.pos;
+                    let flipped = sm.flipped;
+                    let cp = opponent_bb ^ flipped;
+                    let co = player_bb | flipped | pos.to_bit();
+                    sm.value = if cp == 0 {
+                        i32::MIN
+                    } else if pos == best {
+                        i32::MIN + 1
+                    } else {
+                        move_ordering_value(pos, cp, co, parity, pot)
+                    };
+                }
+            }
+        }
+    }
+
     fn score_moves(
         &self,
         board: &Board,
@@ -3685,10 +6197,15 @@ impl Worker<'_> {
         tt_best: Option<Position>,
         ev: Option<&Evaluator>,
         alpha: i32,
+        parity: u8,
     ) {
         let _prof = layer_profile::Scope::new(layer_profile::ORDER, board.empty_count());
         node_accounting::sorted(moves.len() as u64);
+        let pot = order_pot();
         let eval_order = board.empty_count() >= EVAL_ORDER_EMPTIES;
+        if !eval_order || ev.is_none() {
+            return self.score_moves_static(board, moves, tt_best, parity);
+        }
         // Incremental pattern indices for ordering evaluation: initialized
         // once per node, then updated per candidate move — far cheaper than
         // recomputing every pattern from scratch inside the lookahead.
@@ -3697,10 +6214,6 @@ impl Worker<'_> {
         } else {
             None
         };
-        // Only the static path consults the parity, and computing it walks
-        // every empty square — pure waste at the deep nodes that use the
-        // evaluator instead.
-        let parity = if eval_order { 0 } else { parity_of(board) };
         let mover = board.player();
         // The ordering lookahead only has to distinguish moves that could
         // matter at this node, so it is bounded from below by the node's own
@@ -3776,7 +6289,7 @@ impl Worker<'_> {
                 (v * 8.0) as i32 + weighted_mobility(cp, co) * MOBILITY_ORDER_WEIGHT
                     - edge * EDGE_STABILITY_ORDER_WEIGHT
             } else {
-                move_ordering_value(pos, cp, co, parity)
+                move_ordering_value(pos, cp, co, parity, pot)
             };
         }
     }
@@ -3798,6 +6311,11 @@ impl Worker<'_> {
     }
 }
 
+/// 16 bytes, not 24: the child hash used to live here so a prefetch could
+/// be issued for it, but that prefetch only fires above `TT_MIN_EMPTIES`
+/// and the layers that carry most of the moves defer the hash to the
+/// descent anyway. Carrying it for all of them cost a third of the move
+/// buffer's width - and the buffer is the hottest structure in the search.
 #[derive(Clone, Copy)]
 struct ScoredMove {
     pos: Position,
@@ -3805,7 +6323,6 @@ struct ScoredMove {
     /// recoloured, so storing the mask instead of a whole `Board` keeps the
     /// move list — and therefore every `pvs` stack frame — much smaller.
     flipped: u64,
-    hash: u64,
     value: i32,
 }
 
@@ -3839,12 +6356,6 @@ impl MoveBuf {
             buf: unsafe { std::mem::MaybeUninit::uninit().assume_init() },
             len: 0,
         }
-    }
-
-    #[inline]
-    fn push(&mut self, m: ScoredMove) {
-        self.buf[self.len].write(m);
-        self.len += 1;
     }
 
     /// Remove by index, moving the last element into the hole. `ScoredMove`
@@ -4005,12 +6516,43 @@ fn weighted_mobility(cp: u64, co: u64) -> i32 {
 /// tie-breaks. An earlier version blended the same ingredients on a flat
 /// scale, which
 /// let a corner-stability difference outweigh a reply.
-fn move_ordering_value(pos: Position, cp: u64, co: u64, parity: u8) -> i32 {
+/// `ORDER_POT=0` switches the static ordering to its 3 terms.
+#[cfg(feature = "tunable")]
+fn order_pot() -> bool {
+    static V: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *V.get_or_init(|| std::env::var("ORDER_POT").is_ok_and(|v| v != "0"))
+}
+#[cfg(not(feature = "tunable"))]
+fn order_pot() -> bool {
+    false
+}
+
+fn move_ordering_value(pos: Position, cp: u64, co: u64, parity: u8, pot: bool) -> i32 {
     const W_MOBILITY: i32 = 1 << 15;
     const W_CORNER_STABILITY: i32 = 1 << 11;
     const W_POTENTIAL: i32 = 1 << 5;
     const W_PARITY: i32 = 1 << 3;
 
+    // The potential-mobility and parity terms are off by default now:
+    // `ORDER_POT=1` restores them. The shared-corpus bench prices them at
+    // 2.83 ns of the 12.51 ns a scored move costs (a 3-term
+    // value is 9.69 ns on the same corpus, so the rest is at parity), and
+    // they buy 0.05-0.94% of the tree. Timed over four sets, six shuffled
+    // rounds each: hard20 -0.75%, band22 -1.69%, 18-empty roots -0.80%,
+    // FFO40-49 -1.54%, total -1.45%.
+    //
+    // An earlier round judged this on FFO40-49 alone and called it a wash
+    // (-0.07%); it was measured before the move generator stopped writing
+    // each entry two and three times, which is what made the ordering the
+    // dominant term. The gate is hoisted to the caller: this runs 185M
+    // times per FFO40-49 and the OnceLock read paid its acquire load on
+    // every one of them.
+    if !pot {
+        let mut score = SQUARE_VALUE[pos.index() as usize] as i32;
+        score += corner_stability_bb(co) * W_CORNER_STABILITY;
+        score += (36 - weighted_mobility(cp, co)) * W_MOBILITY;
+        return -score;
+    }
     let empty = !(cp | co);
     // Potential mobility counts the *opponent's* potential moves: the empty
     // squares next to
@@ -4028,6 +6570,9 @@ fn move_ordering_value(pos: Position, cp: u64, co: u64, parity: u8) -> i32 {
     // value first, hence the negation.
     -score
 }
+
+/// The four corner squares, used by the shallow visit order.
+const CORNER_MASK: u64 = 0x8100_0000_0000_0081;
 
 /// JCW square values. The table is
 /// symmetric in both axes, so it needs no transposing for our file-major
@@ -4222,7 +6767,6 @@ mod tests {
     /// and the parity x corner subsets must partition it.
     #[test]
     fn shallow_subsets_cover_the_same_moves_as_the_scan() {
-        let neighbours = NeighbourTable::new();
         let mut seed = 0x1234_5678_9abc_def1u64;
         let mut rand = move || {
             seed ^= seed << 13;
@@ -4248,9 +6792,6 @@ mod tests {
             while e != 0 {
                 let sq = e.trailing_zeros() as u8;
                 e &= e - 1;
-                if neighbours.get(sq) & opponent == 0 {
-                    continue;
-                }
                 if bitboard::flippable(player, opponent, 1u64 << sq) != 0 {
                     scanned |= 1u64 << sq;
                 }
@@ -4468,11 +7009,10 @@ mod tests {
 
     #[test]
     fn test_neighbour_table() {
-        let t = NeighbourTable::new();
         // A1 (corner, sq 0): neighbours are A2(1), B1(8), B2(9)
-        assert_eq!(t.get(0), (1u64 << 1) | (1u64 << 8) | (1u64 << 9));
+        assert_eq!(neighbour_bit(0), (1u64 << 1) | (1u64 << 8) | (1u64 << 9));
         // Center square E5 (sq 36) has 8 neighbours
-        assert_eq!(t.get(36).count_ones(), 8);
+        assert_eq!(neighbour_bit(36).count_ones(), 8);
     }
 
     #[test]
@@ -4481,5 +7021,26 @@ mod tests {
         // 60 empties, 15 per quadrant (each quadrant has 16 squares, minus
         // one initial disc each) -> every quadrant parity is odd
         assert_eq!(parity_of(&b), 0b1111);
+    }
+}
+
+#[cfg(test)]
+mod quadrant_id_tests {
+    use super::quadrant_id;
+
+    /// The branchless form must agree with the file/rank split it replaced
+    /// on every square, not just the ones a game happens to reach.
+    #[test]
+    fn matches_the_file_rank_split() {
+        for sq in 0u8..64 {
+            let (file, rank) = (sq / 8, sq % 8);
+            let want = match (file < 4, rank < 4) {
+                (true, true) => 1,
+                (false, true) => 2,
+                (true, false) => 4,
+                (false, false) => 8,
+            };
+            assert_eq!(quadrant_id(sq), want, "square {sq}");
+        }
     }
 }
