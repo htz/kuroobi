@@ -1312,6 +1312,14 @@ time back, so the trade is priced where it sits.
   Fourteen, sixteen and seventeen bits are all worse than fifteen, and
   re-sweeping the two boundaries at the new size leaves them where they
   are.
+- *Only the shared table is worth warming.* Move generation computed a
+  child hash and issued a prefetch for every generated move, for both the
+  shared table and the bound cache below it. With the cache at a megabyte
+  it sits in L2, where the load the prefetch would hide costs less than the
+  hash it needs: warming only the shared table is **+0.35% +/- 0.11%** at
+  an identical tree. Dropping the pass entirely is still -2.30%, so the
+  half that remains is earning its keep (it was -7% before the boundary
+  moved).
 - *PGO is worth 1.8%* (paired rounds, +1.83% +/- 0.20%, trained on band22
   and band29 - never on the set being measured). It is not applied by the
   default build; `tools/pgo-build.sh` already exists.
@@ -1360,6 +1368,17 @@ column says otherwise:
   are both within noise now - they were +1.2% and neutral before the bands
   moved to bitboards, which is the shape of every arm here: an arm that
   lost once is worth re-running after the code around it changes
+- the three ordering terms at wildly different scales - square value at 128 instead
+  of 1, mobility at 16384 instead of 32768: **not one node changes**. The
+  terms are in strict priority order as they stand, because one unit of
+  mobility outweighs the whole range of the corner-stability term, which
+  outweighs the whole range of the square table. Their exact scales are
+  free inside that range, and only the priority matters
+- 32-byte alignment or natural layout for the bound-cache entry, which the
+  feature list had carried as unmeasured: -0.97% and -0.11%. The packed
+  19-byte entry stays
+- clamping the exact pass's reopened aspiration window to +/-1 instead of
+  the warm rung's converged span: 0.6% fewer nodes and no time
 - the dead `need <= 32` test in the stability gate, which the threshold
   test above it already implies: -0.25%. Summing the two population counts
   the ordering needs in one vector instead of two: also a loss. Below this

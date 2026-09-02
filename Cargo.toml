@@ -48,6 +48,9 @@ tt-probe-clamp = []
 # wired to anything, so both reported "no difference" for as long as they
 # existed; they are gone rather than left to be measured again.
 gen-no-prefetch = []
+# Warm the bound cache below the shared table as well, not just the shared
+# table itself.
+gen-prefetch-all = []
 # Restore the eager per-move child hash. Deferring it where no prefetch is
 # issued (7-9 empties) is the default and measured -0.85%, 10/10 rounds.
 gen-eager-hash = []

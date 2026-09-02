@@ -6439,7 +6439,13 @@ impl Worker<'_> {
         // that needs a hash compute it. The condition is the same for every
         // move, so it is tested once, not per move.
         let child_empties = n_empties - 1;
-        #[cfg(not(feature = "gen-eager-hash"))]
+        // Only the shared table is worth warming: the band below it now
+        // fits a megabyte and sits in L2, where the load the prefetch would
+        // hide costs less than the hash it needs. `gen-prefetch-all` keeps
+        // the old shape, which warmed both.
+        #[cfg(all(not(feature = "gen-eager-hash"), not(feature = "gen-prefetch-all")))]
+        let eager = child_empties >= tt_min_empties();
+        #[cfg(all(not(feature = "gen-eager-hash"), feature = "gen-prefetch-all"))]
         let eager = child_empties >= MOVE_ORDERING_LIMIT.min(tt_min_empties());
         #[cfg(feature = "gen-eager-hash")]
         let eager = true;
