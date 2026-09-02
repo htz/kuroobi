@@ -135,6 +135,22 @@ fn private_tt_bits() -> (u32, u32) {
 /// From this many empties upward, an evaluator (when provided) orders
 /// moves instead of the static heuristic.
 const EVAL_ORDER_EMPTIES: u8 = 14;
+
+/// `EVAL_ORDER_MIN` overrides [`EVAL_ORDER_EMPTIES`] for sweeps.
+#[cfg(feature = "tunable")]
+fn eval_order_empties() -> u8 {
+    static V: std::sync::OnceLock<u8> = std::sync::OnceLock::new();
+    *V.get_or_init(|| {
+        std::env::var("EVAL_ORDER_MIN")
+            .ok()
+            .and_then(|v| v.parse().ok())
+            .unwrap_or(EVAL_ORDER_EMPTIES)
+    })
+}
+#[cfg(not(feature = "tunable"))]
+const fn eval_order_empties() -> u8 {
+    EVAL_ORDER_EMPTIES
+}
 /// From this many empties upward, ordering refines the evaluation with a
 /// one-ply lookahead (max over the opponent's replies).
 const DEEP_ORDER_EMPTIES: u8 = 16;
@@ -2766,6 +2782,14 @@ struct Worker<'a> {
     g_new_mid: bool,
     /// Highest empty count still served by `mid_table`, exclusive.
     mid_empties: u8,
+    /// Pattern indices for the evaluation-based move ordering, carried down
+    /// the tree instead of rebuilt at every node. Building them from the
+    /// bitboards reads every cell of all 64 masks and measured 333 ns, once
+    /// per node of the band that orders by evaluation - more than the
+    /// ordering evaluation it feeds. A move changes them by the same CSR
+    /// walk the ordering already does per candidate, so carrying them is a
+    /// snapshot and a restore around each child that needs them.
+    order_ix: crate::pattern_index::PatternIndices,
     tt: &'a HashTable,
     /// Cutoff signal for the split this worker is searching under.
     abort: &'a AbortFlag<'a>,
@@ -2843,6 +2867,7 @@ impl<'a> Worker<'a> {
             shallow_table,
             mid_table,
             mid_empties: mid_tt_empties(),
+            order_ix: crate::pattern_index::PatternIndices::ZERO,
             nnue: None,
             taint: 0,
             l56: if new_shallow() {
@@ -4071,6 +4096,13 @@ impl Worker<'_> {
 
         self.nodes += 1;
 
+        // Seed the carried ordering indices once. Every node below rebuilt
+        // them from the bitboards before this; see `Worker::order_ix`.
+        if let Some(e) = ev.filter(|_| board.empty_count() >= eval_order_empties()) {
+            self.order_ix = e.indexer().init(board.black, board.white);
+        }
+        let root_mover = board.player();
+
         let mut moves = MoveBuf::new();
         let tt_best = self.tt.get(board, hash).and_then(|e| e.best());
         self.scored_moves(board, tt_best, ev, &mut moves);
@@ -4085,9 +4117,10 @@ impl Worker<'_> {
         // First move: full window
         {
             let n0 = self.nodes;
-            let mut child = moves[0].child(board);
+            let m0 = moves[0];
+            let mut child = m0.child(board);
             let ch = child_hash_of(&child);
-            max = -self.pvs(&mut child, ch, -upper, -lower, false, false, ev);
+            max = -self.pvs_ordered(&mut child, ch, -upper, -lower, false, ev, m0, root_mover);
             /* Never use an aborted search's value. `ABORTED` is
             `i32::MIN + 1`; negation turns it into `i32::MAX`, which flows
             through `max` into the table (`i32::MAX as i8` is -1, i.e. a
@@ -4140,14 +4173,15 @@ impl Worker<'_> {
             }
             let mut child = m.child(board);
             let ch = child_hash_of(&child);
-            let mut val = -self.pvs(&mut child, ch, -lower - 1, -lower, false, true, ev);
+            let mut val =
+                -self.pvs_ordered(&mut child, ch, -lower - 1, -lower, true, ev, *m, root_mover);
             // Aborts are not values (same reason as the eldest branch).
             if val == -ABORTED {
                 return ABORTED;
             }
             if lower < val && val < upper {
                 let ch = child_hash_of(&child);
-                val = -self.pvs(&mut child, ch, -upper, -val, false, false, ev);
+                val = -self.pvs_ordered(&mut child, ch, -upper, -val, false, ev, *m, root_mover);
                 if val == -ABORTED {
                     return ABORTED;
                 }
@@ -4516,6 +4550,9 @@ impl Worker<'_> {
         if self.should_abort() {
             return ABORTED;
         }
+        // The side to move, for advancing the carried ordering indices
+        // across a child's move.
+        let mover = board.player();
         // Everything the taint counter moves past this point makes the
         // node's result rung-dependent (see `EXACT_PROOF`).
         let taint0 = self.taint;
@@ -4679,7 +4716,7 @@ impl Worker<'_> {
                 let m = moves.swap_remove(idx);
                 let mut child = m.child(board);
                 let ch = child_hash_of(&child);
-                max = self.descend(&mut child, ch, -upper, -lower, !cut_node, ev);
+                max = self.descend_ordered(&mut child, ch, -upper, -lower, !cut_node, ev, m, mover);
                 best = Some(m.pos);
                 if max > lower {
                     lower = max;
@@ -4703,7 +4740,7 @@ impl Worker<'_> {
             next = 1;
             let mut child = m.child(board);
             let ch = child_hash_of(&child);
-            max = self.descend(&mut child, ch, -upper, -lower, !cut_node, ev);
+            max = self.descend_ordered(&mut child, ch, -upper, -lower, !cut_node, ev, m, mover);
             if max == ABORTED {
                 return ABORTED;
             }
@@ -4757,7 +4794,17 @@ impl Worker<'_> {
             let mut child = m.child(board);
             let val = {
                 let ch = child_hash_of(&child);
-                self.descend_null_window(&mut child, ch, lower, upper, true, ev)
+                match ev.filter(|_| child.empty_count() >= eval_order_empties()) {
+                    Some(e) => {
+                        let saved = self.order_ix;
+                        e.indexer()
+                            .apply(&mut self.order_ix, m.pos, m.flipped, mover);
+                        let v = self.descend_null_window(&mut child, ch, lower, upper, true, ev);
+                        self.order_ix = saved;
+                        v
+                    }
+                    None => self.descend_null_window(&mut child, ch, lower, upper, true, ev),
+                }
             };
             if val == ABORTED {
                 return ABORTED;
@@ -4776,6 +4823,60 @@ impl Worker<'_> {
         let clean = self.selective_t.is_none() || self.taint == taint0;
         self.tt.update(board, hash, alpha, beta, max, best, clean);
         max
+    }
+
+    /// `pvs`, with the carried ordering indices advanced across `m` first
+    /// and restored after. See `descend_ordered`.
+    #[allow(clippy::too_many_arguments)]
+    fn pvs_ordered(
+        &mut self,
+        child: &mut Board,
+        hash: u64,
+        alpha: i32,
+        beta: i32,
+        cut_node: bool,
+        ev: Option<&Evaluator>,
+        m: ScoredMove,
+        mover: crate::color::Color,
+    ) -> i32 {
+        let Some(e) = ev.filter(|_| child.empty_count() >= eval_order_empties()) else {
+            return self.pvs(child, hash, alpha, beta, false, cut_node, ev);
+        };
+        let saved = self.order_ix;
+        e.indexer()
+            .apply(&mut self.order_ix, m.pos, m.flipped, mover);
+        let v = self.pvs(child, hash, alpha, beta, false, cut_node, ev);
+        self.order_ix = saved;
+        v
+    }
+
+    /// `descend`, with the carried ordering indices advanced across `m`
+    /// first and restored after.
+    ///
+    /// Only the band that orders by evaluation reads them, so the snapshot
+    /// is skipped for a child below it: the field is left as the parent had
+    /// it, which is what the parent will find on the way back up anyway.
+    #[allow(clippy::too_many_arguments)]
+    fn descend_ordered(
+        &mut self,
+        child: &mut Board,
+        hash: u64,
+        alpha: i32,
+        beta: i32,
+        cut_node: bool,
+        ev: Option<&Evaluator>,
+        m: ScoredMove,
+        mover: crate::color::Color,
+    ) -> i32 {
+        let Some(e) = ev.filter(|_| child.empty_count() >= eval_order_empties()) else {
+            return self.descend(child, hash, alpha, beta, cut_node, ev);
+        };
+        let saved = self.order_ix;
+        e.indexer()
+            .apply(&mut self.order_ix, m.pos, m.flipped, mover);
+        let v = self.descend(child, hash, alpha, beta, cut_node, ev);
+        self.order_ix = saved;
+        v
     }
 
     /// Full-window recursive descent picking the right strategy by depth.
@@ -4952,7 +5053,16 @@ impl Worker<'_> {
         // instead of stalling the node. The parent prefetched this line
         // during its own move generation, but for every child except the
         // first that prefetch is long evicted by the sibling subtrees.
-        self.table(n_empties).prefetch(hash);
+        //
+        // Only above `TT_MIN_EMPTIES`: the band below it reads a megabyte
+        // of bound cache that stays in L2, and warming the shared table
+        // instead - which is what this used to do at every depth - pulled in
+        // a line the node never touches. Warming the right one measured
+        // -0.02% +/- 0.14%, so the cache does not need warming at all.
+        let use_tt = n_empties >= tt_min_empties();
+        if use_tt {
+            self.table(n_empties).prefetch(hash);
+        }
 
         {
             let _p = layer_profile::Scope::new(layer_profile::STAB, n_empties);
@@ -4963,7 +5073,6 @@ impl Worker<'_> {
 
         abst!(O_NODES);
         // Single probe, reused for the ordering move below (see `pvs`).
-        let use_tt = n_empties >= tt_min_empties();
         let use_l9 = use_tt && self.g_new_mid && n_empties < self.mid_empties;
         // The bound cache runs beside the transposition table rather than
         // instead of it. Moving the band wholesale to 7-12 cost 2.7% of the
@@ -5200,7 +5309,7 @@ impl Worker<'_> {
         // This band sits entirely below `EVAL_ORDER_EMPTIES`, so the
         // scoring is always the static one; going straight to it is what
         // lets the whole node run without a `Board`.
-        if n_empties >= EVAL_ORDER_EMPTIES {
+        if n_empties >= eval_order_empties() {
             let scratch = board_of(player, opponent, to_move);
             self.score_moves(
                 &scratch,
@@ -6560,15 +6669,17 @@ impl Worker<'_> {
         let _prof = layer_profile::Scope::new(layer_profile::ORDER, board.empty_count());
         node_accounting::sorted(moves.len() as u64);
         let pot = order_pot();
-        let eval_order = board.empty_count() >= EVAL_ORDER_EMPTIES;
+        let eval_order = board.empty_count() >= eval_order_empties();
         if !eval_order || ev.is_none() {
             return self.score_moves_static(board, moves, tt_best, parity);
         }
-        // Incremental pattern indices for ordering evaluation: initialized
-        // once per node, then updated per candidate move — far cheaper than
-        // recomputing every pattern from scratch inside the lookahead.
+        // The carried pattern indices (see `Worker::order_ix`), updated per
+        // candidate move and restored after. Building them here from the
+        // bitboards - which is what this did - reads every cell of all 64
+        // masks once per node, and measured more than the evaluation it
+        // feeds.
         let mut order_ix = if eval_order {
-            ev.map(|e| (e.indexer(), e.indexer().init(board.black, board.white)))
+            ev.map(|e| (e.indexer(), self.order_ix))
         } else {
             None
         };

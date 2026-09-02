@@ -1320,6 +1320,21 @@ time back, so the trade is priced where it sits.
   an identical tree. Dropping the pass entirely is still -2.30%, so the
   half that remains is earning its keep (it was -7% before the boundary
   moved).
+- *The move ordering rebuilt its pattern indices at every node.* From
+  fourteen empties up, ordering evaluates each child, and it kept the
+  ternary pattern indices incrementally across the candidates of one node -
+  then threw them away and rebuilt them from the bitboards at the next.
+  Building them reads every cell of all 64 masks and measured **333 ns,
+  once per node**: at 44% of the ordering routine's self time it cost more
+  than the evaluation it feeds, which is 202 ns of table reads spread over
+  a whole move list. Carrying them down the tree instead - a snapshot and a
+  restore around each child that needs them, which is 160 bytes against
+  the walk it replaces - is **+1.98% +/- 0.18%** at an identical tree.
+  It also changes what the threshold is worth: ordering by evaluation from
+  thirteen empties instead of fourteen went from 4.7% worse to 2.6% worse,
+  and from twelve, where the tree matches the implementation this is
+  measured against, from 12.7% to 6.5%. Still not free, but the balance
+  moved.
 - *PGO is worth 1.8%* (paired rounds, +1.83% +/- 0.20%, trained on band22
   and band29 - never on the set being measured). It is not applied by the
   default build; `tools/pgo-build.sh` already exists.

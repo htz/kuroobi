@@ -36,6 +36,13 @@ pub struct PatternIndices {
 }
 
 impl PatternIndices {
+    /// All-zero indices. Only valid once `init` or a chain of `apply`s from
+    /// one has filled them in; the search uses it as the resting value of
+    /// the carried set at depths that do not order by evaluation.
+    pub const ZERO: PatternIndices = PatternIndices {
+        idx: [0u16; MAX_MASKS],
+    };
+
     /// The per-mask ternary indices (absolute colors). Used by the NNUE
     /// feature transformer, which reads the same indices the linear sum does.
     #[inline]
