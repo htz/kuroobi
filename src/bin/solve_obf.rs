@@ -28,6 +28,7 @@ fn main() -> ExitCode {
     let mut mpc_t: Option<f32> = None;
     let mut weights: Option<PathBuf> = None;
     let mut nnue_path: Option<PathBuf> = Some(PathBuf::from("weights/nnue-h16.bin"));
+    let mut patterns_name = String::from("egaroucid");
     let mut files: Vec<PathBuf> = Vec::new();
 
     let mut grand_time = 0.0f64;
@@ -43,6 +44,7 @@ fn main() -> ExitCode {
             "--mpc-t" => mpc_t = it.next().and_then(|v| v.parse().ok()),
             "--weights" => weights = it.next().map(PathBuf::from),
             "--nnue" => nnue_path = it.next().map(PathBuf::from),
+            "--patterns" => patterns_name = it.next().unwrap_or(patterns_name),
             other => files.push(PathBuf::from(other)),
         }
     }
@@ -62,16 +64,24 @@ fn main() -> ExitCode {
 
     let mut solver = Solver::new(hash_bits);
     solver.set_threads(threads);
+    // The probe search's midgame table; cleared before every position, like
+    // every other table, so the problems stay independent.
+    let mut probe_tt: Option<&'static kuroobi::midgame::SharedTt> = None;
     // The selective probes prefer the NNUE (see solver::sel_nnue_probe);
     // load it so the benchmark matches the match configuration.
     if let Some(p) = &nnue_path {
-        let mut nn = kuroobi::nnue::Nnue::new(kuroobi::pattern::EGAROUCID_PATTERNS);
+        let patterns = match patterns_name.as_str() {
+            "compact" => kuroobi::pattern::COMPACT_PATTERNS,
+            _ => kuroobi::pattern::EGAROUCID_PATTERNS,
+        };
+        let mut nn = kuroobi::nnue::Nnue::new(patterns);
         if nn.load(p).is_ok() {
             nn.quantize();
             let nn: &'static kuroobi::nnue::Nnue = Box::leak(Box::new(nn));
             let mtt: &'static kuroobi::midgame::SharedTt =
                 Box::leak(Box::new(kuroobi::midgame::SharedTt::new(22)));
             solver.set_nnue(nn, mtt);
+            probe_tt = Some(mtt);
         } else {
             eprintln!("note: nnue {} not found, linear probes", p.display());
         }
@@ -141,6 +151,9 @@ fn main() -> ExitCode {
                 }
             };
 
+            if let Some(t) = probe_tt {
+                t.clear();
+            }
             let (value, nodes, secs) = match depth {
                 None => {
                     // Emptying the table is what makes the positions
@@ -193,6 +206,41 @@ fn main() -> ExitCode {
                 content.lines().filter(|l| !l.trim().is_empty()).count()
             );
             return ExitCode::FAILURE;
+        }
+        #[cfg(feature = "layer-profile")]
+        {
+            use kuroobi::solver::ab_stats as a;
+            for (name, off) in kuroobi::solver::worker_layout() {
+                println!("layout {name} {off}");
+            }
+            use std::sync::atomic::Ordering::Relaxed;
+            println!(
+                "ab56: nodes {} l56probe {} l56hit {} child {} l4probe {} l4hit {} l4store {} stab4 {}",
+                a::NODES.load(Relaxed),
+                a::L56_PROBE.load(Relaxed),
+                a::L56_HIT.load(Relaxed),
+                a::CHILD.load(Relaxed),
+                a::L4_PROBE.load(Relaxed),
+                a::L4_HIT.load(Relaxed),
+                a::L4_STORE.load(Relaxed),
+                a::STAB4.load(Relaxed),
+            );
+            println!(
+                "stab: cut4 {} alphaside {} betaside {} gateA {} gateB {}",
+                a::STAB4_CUT.load(Relaxed),
+                a::STAB_FULL.load(Relaxed),
+                a::STAB_BETA.load(Relaxed),
+                a::STAB_GATE_A.load(Relaxed),
+                a::STAB_GATE_B.load(Relaxed),
+            );
+            println!(
+                "ab711: nodes {} ttprobe {} stage1 {} stage1cut {} scored {}",
+                a::O_NODES.load(Relaxed),
+                a::O_TT_PROBE.load(Relaxed),
+                a::O_CHILD.load(Relaxed),
+                a::O_TT_CUT.load(Relaxed),
+                a::O_SCORED.load(Relaxed),
+            );
         }
         println!("---+---------+-------+----------+-------------+----------");
         println!(
