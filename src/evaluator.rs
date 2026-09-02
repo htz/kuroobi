@@ -68,6 +68,20 @@ pub struct Evaluator {
     flat_i8_white: Vec<Vec<i8>>,
     /// num_weights[stage][player disc count]
     num_weights: Vec<[f32; NUM_TABLE_SIZE]>,
+    /// Appearance counts shaped like `weights`, built by
+    /// [`Evaluator::count_appearances`]. Empty until then.
+    appear: Vec<Vec<Vec<u32>>>,
+    /// The same counts for `num_weights`. Without it the disc-count term keeps
+    /// taking the raw rate while every pattern cell takes a scaled one, and at
+    /// the rate per-cell scaling calls for that single term diverges on its
+    /// own -- measured here as NaN inside one epoch at alpha 1, 10 and 100.
+    appear_num: Vec<[u32; NUM_TABLE_SIZE]>,
+    /// Cells seen at most this many times are left alone. A cell with two
+    /// examples behind it is fitting noise, and under per-cell scaling it is
+    /// exactly the cell that gets the largest step. Egaroucid drops these
+    /// too (`ADJ_IGNORE_N_APPEAR`), keeping them only in the earliest phases
+    /// where nothing is sampled well. Zero means "only skip cells never seen".
+    min_appear: u32,
     /// Lookup tables for incremental index maintenance during search.
     indexer: PatternIndexer,
 }
@@ -87,6 +101,18 @@ pub struct Evaluator {
 pub struct WeightView {
     stages: Vec<Vec<*mut f32>>,
     num: Vec<*mut f32>,
+    /// How often each cell appeared in the training data, laid out exactly
+    /// like `stages`. Empty when counts were never built.
+    ///
+    /// A cell seen a hundred times and a cell seen a hundred thousand times
+    /// both get the same step from a shared rate, so one is starved while
+    /// the other overshoots -- and the rate that suits neither ends up
+    /// halved over and over. Dividing by the count gives every cell the same
+    /// total movement per epoch, which is what scaling the rate by the
+    /// appearance count does (`lr = alpha / n_appear[cell]`).
+    counts: Vec<Vec<*const u32>>,
+    /// Counts for `num`, laid out like it. Empty alongside `counts`.
+    counts_num: Vec<*const u32>,
 }
 
 // SAFETY: the pointers address plain `f32` cells that outlive the view, and
@@ -105,7 +131,16 @@ impl Evaluator {
         self.flat_i16_white.clear();
         self.flat_i8.clear();
         self.flat_i8_white.clear();
+        let counts = if self.appear.is_empty() {
+            Vec::new()
+        } else {
+            self.appear
+                .iter()
+                .map(|st| st.iter().map(|t| t.as_ptr()).collect())
+                .collect()
+        };
         WeightView {
+            counts,
             stages: self
                 .weights
                 .iter_mut()
@@ -116,6 +151,7 @@ impl Evaluator {
                 .iter_mut()
                 .map(|t| t.as_mut_ptr())
                 .collect(),
+            counts_num: self.appear_num.iter().map(|t| t.as_ptr()).collect(),
         }
     }
 
@@ -152,13 +188,38 @@ impl Evaluator {
 
             let error = target - prediction;
             let delta = lr * error;
-            for (pi, p) in self.patterns.iter().enumerate() {
-                let table = view.stages[stage][pi];
-                for idx in p.indices(sym.black, sym.white, sym.player()) {
-                    *table.add(idx) += delta;
+            let min_appear = self.min_appear;
+            if view.counts.is_empty() {
+                for (pi, p) in self.patterns.iter().enumerate() {
+                    let table = view.stages[stage][pi];
+                    for idx in p.indices(sym.black, sym.white, sym.player()) {
+                        *table.add(idx) += delta;
+                    }
+                }
+            } else {
+                // Per-cell rate: a cell that the data shows a thousand times
+                // takes a thousandth of the step a cell shown once does, so
+                // every cell moves about as far per epoch regardless of how
+                // often it comes up.
+                for (pi, p) in self.patterns.iter().enumerate() {
+                    let table = view.stages[stage][pi];
+                    let counts = view.counts[stage][pi];
+                    for idx in p.indices(sym.black, sym.white, sym.player()) {
+                        let n = *counts.add(idx);
+                        if n > min_appear {
+                            *table.add(idx) += delta / n as f32;
+                        }
+                    }
                 }
             }
-            *view.num[stage].add(num_idx) += delta;
+            if view.counts_num.is_empty() {
+                *view.num[stage].add(num_idx) += delta;
+            } else {
+                let n = *view.counts_num[stage].add(num_idx);
+                if n > min_appear {
+                    *view.num[stage].add(num_idx) += delta / n as f32;
+                }
+            }
             total += error * error;
         }
         total / 8.0
@@ -295,6 +356,9 @@ impl Evaluator {
             flat_i8: Vec::new(),
             flat_i8_white: Vec::new(),
             num_weights: vec![[0.0f32; NUM_TABLE_SIZE]; STAGE_COUNT],
+            appear: Vec::new(),
+            appear_num: Vec::new(),
+            min_appear: 0,
             indexer: PatternIndexer::new(patterns),
         }
     }
@@ -315,6 +379,91 @@ impl Evaluator {
         60usize
             .saturating_sub(board.empty_count() as usize)
             .min(STAGE_COUNT - 1)
+    }
+
+    /// Count how often each pattern cell appears, for per-cell rate scaling.
+    ///
+    /// Counts every symmetry, matching what training touches. Cells that
+    /// never appear keep a count of zero and are then skipped entirely: a
+    /// cell the data never shows cannot be estimated from it, and stepping
+    /// it only moves noise.
+    pub fn count_appearances(&mut self, boards: impl Iterator<Item = Board>) {
+        if self.appear.is_empty() {
+            self.appear = self
+                .weights
+                .iter()
+                .map(|st| st.iter().map(|t| vec![0u32; t.len()]).collect())
+                .collect();
+            self.appear_num = vec![[0u32; NUM_TABLE_SIZE]; STAGE_COUNT];
+        }
+        for b in boards {
+            for sym in b.symmetries() {
+                let stage = Self::stage(&sym);
+                let ni = self.num_index(&sym);
+                for (pi, p) in self.patterns.iter().enumerate() {
+                    for idx in p.indices(sym.black, sym.white, sym.player()) {
+                        self.appear[stage][pi][idx] += 1;
+                    }
+                }
+                self.appear_num[stage][ni] += 1;
+            }
+        }
+    }
+
+    /// Percentiles of the nonzero appearance counts on one stage, plus how
+    /// many cells were never seen. Per-cell scaling divides by these, so the
+    /// spread between them is the spread of effective rates across the model:
+    /// print it before choosing a rate rather than guessing at one.
+    pub fn appearance_spread(&self, stage: usize) -> Option<(usize, usize, [u32; 5])> {
+        let st = self.appear.get(stage)?;
+        let mut seen: Vec<u32> = st.iter().flatten().copied().filter(|&n| n > 0).collect();
+        let unseen = st.iter().flatten().filter(|&&n| n == 0).count();
+        if seen.is_empty() {
+            return None;
+        }
+        seen.sort_unstable();
+        let at = |f: f64| seen[((seen.len() - 1) as f64 * f) as usize];
+        Some((
+            seen.len(),
+            unseen,
+            [at(0.0), at(0.01), at(0.5), at(0.99), at(1.0)],
+        ))
+    }
+
+    /// Cells seen at most `n` times stop being updated. Takes effect only
+    /// where per-cell counts exist.
+    pub fn set_min_appear(&mut self, n: u32) {
+        self.min_appear = n;
+    }
+
+    /// Whether per-cell counts have been built.
+    pub fn has_appearances(&self) -> bool {
+        !self.appear.is_empty()
+    }
+
+    /// Copy one stage's trainable parameters out.
+    ///
+    /// The stages are fully independent -- a position only ever reads and
+    /// only ever updates `weights[stage]` -- so the epoch that suits one
+    /// stage need not be the epoch that suits another. Training can keep the
+    /// best epoch *per stage* and assemble a model out of 61 different
+    /// epochs, which a single pooled val number cannot express: one stage
+    /// improving while another rots nets out to "no change".
+    ///
+    /// Derived tables (`flat_weights` and the quantized ones) are not
+    /// touched here; training and `eval` read `weights` directly, and the
+    /// flat forms are rebuilt on load.
+    pub fn stage_weights(&self, stage: usize) -> (Vec<Vec<f32>>, Vec<f32>) {
+        (
+            self.weights[stage].clone(),
+            self.num_weights[stage].to_vec(),
+        )
+    }
+
+    /// Put a snapshot from [`Evaluator::stage_weights`] back.
+    pub fn set_stage_weights(&mut self, stage: usize, w: &[Vec<f32>], num: &[f32]) {
+        self.weights[stage].clone_from_slice(w);
+        self.num_weights[stage].copy_from_slice(num);
     }
 
     /// Evaluate the board from the current player's perspective.
@@ -1124,6 +1273,79 @@ mod tests {
                 "incremental eval diverged for the passing side"
             );
         }
+    }
+
+    /// One training step through the path training actually uses. The
+    /// `update_weights` family does not consult the counts -- only
+    /// `train_shared`, which is what the trainer calls.
+    fn step(e: &mut Evaluator, b: &Board) {
+        let view = e.weight_view();
+        unsafe { e.train_shared(&view, b, 10.0, 0.005) };
+    }
+
+    #[test]
+    fn test_cell_lr_shrinks_the_step_and_skips_unseen() {
+        // Every cell this position touches is seen several times over, so the
+        // scaled step must land the same way but far shorter -- and a cell
+        // the position never touches must not move under either. The exact
+        // ratio is not 1/n: the eight symmetries update inside one call, so
+        // the error the later ones see already reflects the earlier ones.
+        let b = Board::new();
+        let mut plain = Evaluator::new(EGAROUCID_PATTERNS);
+        step(&mut plain, &b);
+
+        let mut scaled = Evaluator::new(EGAROUCID_PATTERNS);
+        scaled.count_appearances(std::iter::once(b));
+        assert!(scaled.has_appearances());
+        step(&mut scaled, &b);
+
+        let st = Evaluator::stage(&b);
+        let (pw, _) = plain.stage_weights(st);
+        let (sw, _) = scaled.stage_weights(st);
+        let mut moved = 0usize;
+        for (pi, table) in pw.iter().enumerate() {
+            for (ci, &v) in table.iter().enumerate() {
+                let scaled_v = sw[pi][ci];
+                if v == 0.0 {
+                    assert_eq!(scaled_v, 0.0, "unseen cell must stay put");
+                    continue;
+                }
+                moved += 1;
+                assert!(
+                    scaled_v * v > 0.0,
+                    "scaled step must keep the sign: {v} vs {scaled_v}"
+                );
+                assert!(
+                    scaled_v.abs() < v.abs(),
+                    "a cell seen many times must take a shorter step: \
+                     {v} vs {scaled_v}"
+                );
+            }
+        }
+        assert!(moved > 0, "the step must have moved something");
+    }
+
+    #[test]
+    fn test_min_appear_freezes_thin_cells() {
+        // A threshold above every count freezes the model outright; without
+        // one the same step goes through. That is the knob that keeps a cell
+        // with a handful of examples from taking the largest step of all
+        // once the rate is divided by the count.
+        let b = Board::new();
+        let mut e = Evaluator::new(EGAROUCID_PATTERNS);
+        e.count_appearances(std::iter::once(b));
+        e.set_min_appear(u32::MAX);
+        let before = e.eval(&b);
+        step(&mut e, &b);
+        assert_eq!(
+            e.eval(&b),
+            before,
+            "cells under the threshold must not move"
+        );
+
+        e.set_min_appear(0);
+        step(&mut e, &b);
+        assert_ne!(e.eval(&b), before, "cells over the threshold must move");
     }
 
     #[test]

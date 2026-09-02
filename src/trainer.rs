@@ -326,95 +326,29 @@ impl<O: Optimizer> Trainer<O> {
         stats
     }
 
-    /// One pass over `examples` spread across `threads` workers sharing the
-    /// weights. Like `train_pass`, this does not advance the optimizer's
-    /// epoch schedule — the caller passes `lr` for the epoch explicitly.
+    /// One epoch over one stage, on this thread.
     ///
-    /// Each worker takes a contiguous slice of the examples and updates the
-    /// shared tables without locking. Updates are sparse — one cell per
-    /// pattern per symmetry — so collisions are rare and a lost update costs
-    /// one small step, not correctness. Only plain SGD is supported: Adam
-    /// keeps per-cell moments that racing threads would corrupt in ways the
-    /// sparsity argument does not cover.
-    pub fn train_epoch_parallel(
+    /// There is no threaded variant and no multi-stage variant on purpose.
+    /// The stages are independent tables, so a run aimed at one of them only
+    /// ever has one stage's work to do -- measured here, a single stage held
+    /// the machine at 39% of one core out of ten. Eight stages therefore want
+    /// eight processes (`stage_sweep.sh`), not eight threads, and each of
+    /// those reads only its own stage's file.
+    ///
+    /// Keeping a second, threaded path cost more than it bought: it read the
+    /// per-stage rates and the per-cell appearance counts, the sequential one
+    /// read neither, and anything added to the first was silently inert under
+    /// `--threads 1`. Per-cell scaling was, and the raw rate it then trained
+    /// at read as the scaling diverging.
+    ///
+    /// Examples from other stages are skipped rather than rejected: a corpus
+    /// split by stage has none, but a mixed file stays usable.
+    pub fn train_stage_epoch(
         &mut self,
         examples: &[Example],
+        stage: usize,
         lr: f32,
-        threads: usize,
         mut progress: impl FnMut(usize, usize),
-    ) -> EpochStats {
-        let total = examples.len();
-        if threads <= 1 || total == 0 {
-            let stats = self.train_epoch_seq_lr(examples, lr, &mut progress);
-            return stats;
-        }
-
-        use std::sync::atomic::{AtomicUsize, Ordering};
-
-        let view = self.evaluator.weight_view();
-        let ev = &self.evaluator;
-        let done = AtomicUsize::new(0);
-        let running = AtomicUsize::new(0);
-        let chunk = total.div_ceil(threads);
-
-        let parts: Vec<EpochStats> = std::thread::scope(|scope| {
-            let mut handles = Vec::new();
-            for part in examples.chunks(chunk) {
-                let view = &view;
-                let done = &done;
-                let running = &running;
-                running.fetch_add(1, Ordering::SeqCst);
-                handles.push(scope.spawn(move || {
-                    let mut st = EpochStats::default();
-                    for (i, ex) in part.iter().enumerate() {
-                        let board = ex.board();
-                        let stage = Evaluator::stage(&board);
-                        // SAFETY: the view came from `ev`, which is borrowed
-                        // immutably for the whole scope, so no other kind of
-                        // access to the weights is live.
-                        // train_shared returns MSE already; see train_pass.
-                        let mse = unsafe { ev.train_shared(view, &board, ex.score as f32, lr) };
-                        st.loss_sum[stage] += mse as f64;
-                        st.samples[stage] += 1;
-                        if (i + 1) & ((1 << 16) - 1) == 0 {
-                            done.fetch_add(1 << 16, Ordering::Relaxed);
-                        }
-                    }
-                    running.fetch_sub(1, Ordering::SeqCst);
-                    st
-                }));
-            }
-            // `progress` is not Sync, so the workers cannot call it; poll the
-            // shared counter here instead. Without this the bar sits frozen
-            // for the whole pass, which on this dataset is many minutes.
-            while running.load(Ordering::SeqCst) > 0 {
-                progress(done.load(Ordering::Relaxed).min(total), total);
-                std::thread::sleep(std::time::Duration::from_millis(200));
-            }
-            let mut out = Vec::new();
-            for h in handles {
-                out.push(h.join().unwrap());
-            }
-            out
-        });
-
-        let mut stats = EpochStats::default();
-        for p in parts {
-            for i in 0..stats.loss_sum.len() {
-                stats.loss_sum[i] += p.loss_sum[i];
-                stats.samples[i] += p.samples[i];
-            }
-        }
-        progress(total, total);
-        stats
-    }
-
-    /// The sequential fallback, at an explicit learning rate.
-    fn train_epoch_seq_lr(
-        &mut self,
-        examples: &[Example],
-        lr: f32,
-        progress: &mut impl FnMut(usize, usize),
     ) -> EpochStats {
         let view = self.evaluator.weight_view();
         let ev = &self.evaluator;
@@ -422,9 +356,12 @@ impl<O: Optimizer> Trainer<O> {
         let mut stats = EpochStats::default();
         for (i, ex) in examples.iter().enumerate() {
             let board = ex.board();
-            let stage = Evaluator::stage(&board);
-            // SAFETY: single-threaded here; see `train_epoch_parallel`.
-            // train_shared returns MSE already; see train_pass.
+            if Evaluator::stage(&board) != stage {
+                continue;
+            }
+            // SAFETY: single-threaded, and the view came from `ev`, borrowed
+            // immutably for the rest of the call. train_shared returns MSE
+            // already; see train_pass.
             let mse = unsafe { ev.train_shared(&view, &board, ex.score as f32, lr) };
             stats.loss_sum[stage] += mse as f64;
             stats.samples[stage] += 1;

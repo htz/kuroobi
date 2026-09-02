@@ -10,8 +10,8 @@ use std::path::PathBuf;
 use crate::book::{Book, BookCandidate};
 use crate::evaluator::Evaluator;
 use crate::midgame::{selective_band, NnueSearch, SharedTt, StopHandle};
-use crate::nnue::Nnue;
-use crate::pattern::EGAROUCID_PATTERNS;
+use crate::nnue::{Nnue, ACT_UNITS};
+use crate::pattern::{Pattern, EGAROUCID_PATTERNS};
 use crate::solver::{final_score, EndSolverMode, Solver};
 use crate::{Board, Position};
 
@@ -85,6 +85,16 @@ pub struct EngineConfig {
     pub weights: PathBuf,
     /// NNUE weights (midgame search and band probes).
     pub nnue: PathBuf,
+    /// Which feature set the NNUE weights were trained against. A weight
+    /// file belongs to its set -- the feature space is a different size and
+    /// a different shape -- so this has to match or the load fails.
+    pub nnue_patterns: &'static [Pattern],
+    /// Run the head's first layer in f32 instead of int8. The int8 form
+    /// saturates the activation at `127 / ACT_UNITS` discs, which a
+    /// mid-game accumulator passes; this trades speed for that ceiling.
+    pub head_f32: bool,
+    /// Steps per disc on the head's int8 activation; see `Nnue::act_units`.
+    pub act_units: f32,
     /// Opening book (optional).
     pub book: PathBuf,
     /// Whether to consult the book; a knob because study wants it off.
@@ -99,6 +109,8 @@ impl Default for EngineConfig {
     fn default() -> Self {
         EngineConfig {
             depth: 12,
+            head_f32: false,
+            act_units: ACT_UNITS,
             solve_empties: 18,
             band: 0,
             threads: 4,
@@ -107,6 +119,7 @@ impl Default for EngineConfig {
             solver_hash_bits: 22,
             weights: PathBuf::from("weights/linear.bin"),
             nnue: PathBuf::from("weights/nnue-h16.bin"),
+            nnue_patterns: EGAROUCID_PATTERNS,
             book: PathBuf::from("weights/book.txt"),
             use_book: true,
             book_tolerance: 1.0,
@@ -254,12 +267,14 @@ impl Engine {
         evaluator
             .load_weights(&config.weights)
             .map_err(|e| format!("weights {}: {e}", config.weights.display()))?;
-        let mut nn = Nnue::new(EGAROUCID_PATTERNS);
+        let mut nn = Nnue::new(config.nnue_patterns);
         nn.load(&config.nnue)
             .map_err(|e| format!("nnue {}: {e}", config.nnue.display()))?;
         // Build the int16 tables; skipping this makes eval read
         // uninitialized memory.
+        nn.act_units = config.act_units;
         nn.quantize();
+        nn.head_f32 = config.head_f32;
         // NnueSearch / Solver want process-lifetime references; Engine
         // itself is one-per-process, so leak to satisfy them.
         let nn: &'static Nnue = Box::leak(Box::new(nn));
@@ -427,6 +442,16 @@ impl Engine {
     /// For measurement: without a per-game clear, a warm table biases
     /// even same-vs-same matches. Never call it mid-game — pondering
     /// exists precisely to carry the table over.
+    /// Drop the stop handle from the solver.
+    ///
+    /// The solver spawns a watcher thread per solve to poll that handle, and
+    /// a caller that never stops a search pays for the thread and for the
+    /// tail of its 5 ms sleep on every solve. A generator playing twenty
+    /// endgames a game pays it twenty times.
+    pub fn drop_solver_stop(&mut self) {
+        self.solver.set_stop(None);
+    }
+
     pub fn clear_tables(&mut self) {
         self.search.clear();
     }

@@ -63,6 +63,18 @@ pub struct PatternIndexer {
     n_masks: usize,
     /// mask -> owning pattern index (masks flattened in pattern order).
     mask_pattern: [u8; MAX_MASKS],
+    /// The same information as `entries`, transposed: for each square, the
+    /// `pow3` weight of every mask, zero where the mask does not cover it.
+    ///
+    /// The CSR walk touches only the 9.2 masks a square belongs to, which
+    /// sounds like the cheaper shape, but each touch is a scattered
+    /// read-modify-write on `PatternIndices` and the compiler has to assume
+    /// two entries may alias the same slot. Dense, the whole update is
+    /// `idx += digit_diff * pow3[sq]` over 80 lanes with no indirection and
+    /// no aliasing: 128 bytes of index and one 160-byte row, both of which
+    /// stay in registers for the whole move. Zero lanes add zero, so the
+    /// wasted lanes cost nothing but issue slots.
+    dense_pow3: Vec<[u16; MAX_MASKS]>,
     /// CSR layout: entries for square `sq` live at
     /// `entries[offsets[sq]..offsets[sq + 1]]`.
     offsets: [u32; 65],
@@ -116,6 +128,12 @@ impl PatternIndexer {
             entries.extend_from_slice(&per_square[sq]);
         }
         offsets[64] = entries.len() as u32;
+        let mut dense_pow3 = vec![[0u16; MAX_MASKS]; 64];
+        for (sq, row) in dense_pow3.iter_mut().enumerate() {
+            for e in &per_square[sq] {
+                row[e.mask as usize] = e.pow3;
+            }
+        }
 
         // Digit-swap tables per distinct pattern size.
         let mut swap_tables: [Vec<u16>; 11] = Default::default();
@@ -148,6 +166,7 @@ impl PatternIndexer {
             mask_pattern,
             offsets,
             entries,
+            dense_pow3,
             swap_tables,
         }
     }
@@ -233,18 +252,10 @@ impl PatternIndexer {
     /// because every true result stays within 0..3^size.
     #[inline]
     fn update_square(&self, indices: &mut PatternIndices, sq: u8, digit_diff: u16) {
-        // SAFETY: `offsets` has 65 entries and `sq < 64`, so both reads are in
-        // range and `start <= end <= entries.len()` by construction. Every
-        // `e.mask` was assigned in `new` from `0..n_masks`, and `n_masks` is
-        // asserted to be at most `MAX_MASKS`, the length of `indices.idx`.
-        unsafe {
-            let start = *self.offsets.get_unchecked(sq as usize) as usize;
-            let end = *self.offsets.get_unchecked(sq as usize + 1) as usize;
-            for e in self.entries.get_unchecked(start..end) {
-                let delta = digit_diff.wrapping_mul(e.pow3);
-                let slot = indices.idx.get_unchecked_mut(e.mask as usize);
-                *slot = slot.wrapping_add(delta);
-            }
+        // SAFETY: `dense_pow3` has 64 rows and `sq < 64`.
+        let row = unsafe { self.dense_pow3.get_unchecked(sq as usize) };
+        for (slot, &p) in indices.idx.iter_mut().zip(row.iter()) {
+            *slot = slot.wrapping_add(digit_diff.wrapping_mul(p));
         }
     }
 
@@ -296,27 +307,12 @@ impl PatternIndexer {
         score
     }
 
-    /// `eval_sum_flat` over 16-bit weights. Halving the table halves the
-    /// cache footprint of the one array the ordering touches millions of
-    /// times.
-    /// `eval_sum_i16` over 8-bit weights: a stage's table is a quarter of the
-    /// f32 one, which is what the ordering walks millions of times.
+    /// `eval_sum_flat` over 8-bit weights: a stage's table is a quarter of
+    /// the size the exact path walks. The White table has the digit swap
+    /// already applied, so both colours take this one path.
     pub fn eval_sum_i8(&self, indices: &PatternIndices, flat: &[i8], mask_off: &[u32]) -> i32 {
         let mut score = 0i32;
         // SAFETY: same invariant as `eval_sum_flat`.
-        unsafe {
-            for m in 0..self.n_masks {
-                let off = *mask_off.get_unchecked(m) as usize;
-                score += *flat.get_unchecked(off + *indices.idx.get_unchecked(m) as usize) as i32;
-            }
-        }
-        score
-    }
-
-    pub fn eval_sum_i16(&self, indices: &PatternIndices, flat: &[i16], mask_off: &[u32]) -> i32 {
-        let mut score = 0i32;
-        // SAFETY: same invariant as `eval_sum_flat`. The White table has the
-        // digit swap already applied, so both colours take this one path.
         unsafe {
             for m in 0..self.n_masks {
                 let off = *mask_off.get_unchecked(m) as usize;

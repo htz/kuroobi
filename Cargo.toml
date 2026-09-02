@@ -111,6 +111,19 @@ h16 = []
 h64 = []
 h128 = []
 h256 = []
+# Input layer twice the working width, folded to it by multiplying lane i
+# with lane i+H. Second-order interaction at the input instead of as a
+# read-out correction; see `nnue::ACC_DIMS`. Doubles the table, so a weight
+# file is not interchangeable with a build without it.
+pairmul = []
+# Per-stage multi-layer read-out in place of the per-stage linear one plus
+# the shared head: L1 over the accumulator and mobility, its output paired
+# with its square, L2, then a final layer that also sees the accumulator
+# directly. Two hidden layers per stage; see `nnue::SO_L1`.
+stackedout = []
+# A phase-adaptive input: a second sparse layer, six copies
+# selected by phase, concatenated with the base rather than replacing it.
+pa128 = ["stackedout"]
 # Independent copies of the feature transformer, one per slice of the game.
 # Default (no feature) is a single shared copy. Buckets add parameters without
 # adding row reads, and cost only the footprint; see `nnue::FT_BUCKETS`.
@@ -134,3 +147,13 @@ codegen-units = 1
 [profile.bench]
 lto = true
 codegen-units = 1
+
+# Checks this model against independently computed numbers. Needs the
+# stack, since that is the thing being checked.
+[[bin]]
+name = "stack_check"
+required-features = ["stackedout"]
+
+[[bin]]
+name = "nr_train_check"
+required-features = ["stackedout"]

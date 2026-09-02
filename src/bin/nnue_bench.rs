@@ -10,7 +10,7 @@ use std::time::Instant;
 
 use kuroobi::evaluator::Evaluator;
 use kuroobi::nnue::{Accumulator, Nnue};
-use kuroobi::pattern::EGAROUCID_PATTERNS;
+use kuroobi::pattern::{COMPACT_PATTERNS, EGAROUCID_PATTERNS, NNUE_PATTERNS};
 use kuroobi::pattern_index::{PatternIndexer, PatternIndices};
 use kuroobi::{Board, Position};
 
@@ -115,6 +115,10 @@ macro_rules! walk_variant {
         }
     };
 }
+// The i32/f32 precision variants read a per-stage accumulator bias, which
+// the stacked read-out does not have -- there the comparison is meaningless
+// and the tables do not exist.
+#[cfg(not(feature = "stackedout"))]
 walk_variant!(
     walk_i32,
     kuroobi::nnue::Accumulator32,
@@ -123,6 +127,7 @@ walk_variant!(
     acc_undo_i32,
     eval_acc_i32
 );
+#[cfg(not(feature = "stackedout"))]
 walk_variant!(
     walk_f32,
     kuroobi::nnue::AccumulatorF,
@@ -177,23 +182,38 @@ fn main() {
     let mut nnue_path = PathBuf::from("weights/nnue-h16.bin");
     let mut depth = 8u32;
     let mut val_files: Vec<PathBuf> = Vec::new();
+    let mut which = String::from("egaroucid");
+    let mut head_f32 = false;
     let mut it = std::env::args().skip(1);
     while let Some(a) = it.next() {
         match a.as_str() {
             "--nnue" => nnue_path = PathBuf::from(it.next().unwrap()),
             "--depth" => depth = it.next().unwrap().parse().unwrap(),
             "--val" => val_files.push(PathBuf::from(it.next().unwrap())),
+            // The model under test decides the pattern set; a file belongs
+            // to the set it was trained on.
+            "--patterns" => which = it.next().unwrap(),
+            // Run the head's first layer in f32 rather than int8.
+            "--head-f32" => head_f32 = true,
             _ => {}
         }
     }
 
-    let mut nn = Nnue::new(EGAROUCID_PATTERNS);
+    let patterns = match which.as_str() {
+        "compact" => COMPACT_PATTERNS,
+        "nnue" => NNUE_PATTERNS,
+        "egaroucid" => EGAROUCID_PATTERNS,
+        other => panic!("unknown pattern set {other}"),
+    };
+    let mut nn = Nnue::new(patterns);
     nn.load(&nnue_path).expect("load nnue");
     nn.quantize();
+    nn.head_f32 = head_f32;
     nn.build_incremental_table(); // the accumulator this bench times
     nn.build_precision_variants(); // i32/f32 tables for the comparison
 
     // MSE comparison: f32 forward vs i16 quantized accumulator, over val.
+    #[cfg(not(feature = "stackedout"))]
     if !val_files.is_empty() {
         use kuroobi::trainer::load_examples_binary_into;
         let mut val = Vec::new();
@@ -217,6 +237,11 @@ fn main() {
         println!("  f32: {:.4}", sq_f32 / n);
         println!("  i32: {:.4}", sq_i32 / n);
         println!("  i16: {:.4}", sq_i16 / n);
+        return;
+    }
+    #[cfg(feature = "stackedout")]
+    if !val_files.is_empty() {
+        eprintln!("the i32/f32 precision comparison needs a per-stage bias; skipping");
         return;
     }
     let mut lin = Evaluator::new(EGAROUCID_PATTERNS);
@@ -298,7 +323,10 @@ fn main() {
     walk_nnue(&b, &nn, &mut acc, depth, &mut nn_nodes);
     let sec_n = t.elapsed().as_secs_f64();
 
-    // i32 and f32 accumulator throughput (macro-generated methods).
+    // i32 and f32 accumulator throughput (macro-generated methods). Absent
+    // with the stacked read-out, which has no per-stage accumulator bias for
+    // them to read.
+    #[cfg(not(feature = "stackedout"))]
     let sec_32 = {
         let mut a = nn.accumulator_i32(&b);
         let mut nodes = 0u64;
@@ -306,6 +334,9 @@ fn main() {
         walk_i32(&b, &nn, &mut a, depth, &mut nodes);
         t.elapsed().as_secs_f64()
     };
+    #[cfg(feature = "stackedout")]
+    let sec_32 = f64::NAN;
+    #[cfg(not(feature = "stackedout"))]
     let sec_f = {
         let mut a = nn.accumulator_f32(&b);
         let mut nodes = 0u64;
@@ -313,6 +344,8 @@ fn main() {
         walk_f32(&b, &nn, &mut a, depth, &mut nodes);
         t.elapsed().as_secs_f64()
     };
+    #[cfg(feature = "stackedout")]
+    let sec_f = f64::NAN;
 
     // Leaf-rebuild variant (no per-node accumulator upkeep).
     let sec_s = {

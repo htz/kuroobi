@@ -15,7 +15,7 @@ use std::time::Instant;
 
 use kuroobi::evaluator::{Evaluator, STAGE_COUNT};
 use kuroobi::nnue::{sym_board, AdamState, Nnue};
-use kuroobi::pattern::{COMPACT_PATTERNS, EGAROUCID_PATTERNS};
+use kuroobi::pattern::{COMPACT_PATTERNS, EGAROUCID_PATTERNS, NNUE_PATTERNS};
 use kuroobi::trainer::{count_examples_binary, load_examples_binary_into, Example};
 
 fn val_mse(nn: &Nnue, val: &[Example]) -> f64 {
@@ -231,10 +231,15 @@ fn main() -> ExitCode {
     let mut lr = 0.02f32;
     let mut decay = 1.0f32;
     let mut cosine = false;
+    let mut plateau = 0usize;
+    let mut plateau_factor = 0.5f32;
+    let mut plateau_min = 1e-6f32;
     let mut wd = 0.0f32;
     let mut minibatch = 0usize;
     let mut adam = false;
     let mut sym_train = false;
+    let mut lookahead = 0u32;
+    let mut legacy_optimizer = false;
     let mut fit_num = false;
     let mut fit_lambda = 1000.0f64;
     let mut swa_from = 0usize;
@@ -256,10 +261,20 @@ fn main() -> ExitCode {
             "--lr" => lr = it.next().unwrap().parse().unwrap(),
             "--decay" => decay = it.next().unwrap().parse().unwrap(),
             "--cosine" => cosine = true,
+            "--plateau" => plateau = it.next().unwrap().parse().unwrap(),
+            "--plateau-factor" => plateau_factor = it.next().unwrap().parse().unwrap(),
+            "--plateau-min" => plateau_min = it.next().unwrap().parse().unwrap(),
             "--wd" => wd = it.next().unwrap().parse().unwrap(),
             "--minibatch" => minibatch = it.next().unwrap().parse().unwrap(),
             "--adam" => adam = true,
             "--sym-train" => sym_train = true,
+            // The recipe wraps AdamW in Lookahead(k=6,
+            // alpha=0.5). It rewrites every weight every k steps, which on a
+            // CPU is not free -- hence a flag rather than always on.
+            "--lookahead" => lookahead = 6,
+            // Reproduce the optimizer as it was before a numeric
+            // comparison; see `AdamState::legacy_optimizer`.
+            "--legacy-optimizer" => legacy_optimizer = true,
             "--fit-num" => fit_num = true,
             "--fit-num-lambda" => fit_lambda = it.next().unwrap().parse().unwrap(),
             "--swa" => swa_from = it.next().unwrap().parse().unwrap(),
@@ -279,7 +294,7 @@ fn main() -> ExitCode {
     }
     if data_files.is_empty() {
         eprintln!(
-            "usage: nnue_train [--epochs n] [--lr f] [--limit n] [--val f]... [--out p] <data>..."
+            "usage: nnue_train [--epochs n] [--lr f] [--plateau n] [--limit n] [--val f]... [--out p] <data>..."
         );
         return ExitCode::FAILURE;
     }
@@ -332,6 +347,7 @@ fn main() -> ExitCode {
     across sets cannot work and is not worth a fallback. */
     let patterns = match which_patterns.as_str() {
         "compact" => COMPACT_PATTERNS,
+        "nnue" => NNUE_PATTERNS,
         "egaroucid" => EGAROUCID_PATTERNS,
         other => {
             eprintln!("unknown pattern set {other} (egaroucid | compact)");
@@ -421,6 +437,14 @@ fn main() -> ExitCode {
         );
         let mut st = AdamState::new(&nn);
         st.wd = wd;
+        st.legacy_optimizer = legacy_optimizer;
+        if legacy_optimizer {
+            println!("adam: legacy (no bias correction, zero-gradient cells skipped)");
+        }
+        if lookahead > 0 {
+            st.set_lookahead(lookahead, 0.5);
+            println!("adam: lookahead k={lookahead} alpha=0.5");
+        }
         st
     });
 
@@ -441,6 +465,19 @@ fn main() -> ExitCode {
     if best.is_finite() {
         println!("starting val {best:.4}");
     }
+    /* `--plateau n`: hold the rate while the model improves and halve it
+    after n epochs without a new best, all inside one process.
+
+    The same ladder run as a shell loop -- train, stop, restart from the
+    best weights at half the rate -- measurably does not work, because
+    `--init` restores weights but not Adam's moments. Rebuilding them
+    from zero throws the model off its converged point at the start of
+    every restart: at H=64 the first epoch after a restart cost +0.8
+    regardless of whether the rate was 0.003 or 0.0015, so halving the
+    rate bought nothing. Lowering it in place keeps the moments and the
+    step size falls without the model being moved first. */
+    let mut plateau_lr = lr;
+    let mut stale = 0usize;
     for epoch in 1..=epochs {
         let t = Instant::now();
         // Cosine annealing over the run (`--cosine`): lr0 -> ~0 in one sweep,
@@ -450,7 +487,9 @@ fn main() -> ExitCode {
             // near base_lr (cos(0)=1) until seen==total is measured.
             mb_total_steps = u64::MAX;
         }
-        let cur_lr = if cosine {
+        let cur_lr = if plateau > 0 {
+            plateau_lr
+        } else if cosine {
             let t = (epoch as f32 - 1.0) / epochs as f32;
             lr * 0.5 * (1.0 + (std::f32::consts::PI * t).cos())
         } else {
@@ -493,7 +532,13 @@ fn main() -> ExitCode {
                 let mut lr_fn = || {
                     let lr = if cosine {
                         let t = mb_step as f32 / mb_total_steps.max(1) as f32;
-                        base_lr * 0.5 * (1.0 + (std::f32::consts::PI * t.min(1.0)).cos())
+                        // The schedule floors at 1e-8 rather
+                        // than at zero.
+                        const ETA_MIN: f32 = 1e-8;
+                        ETA_MIN
+                            + (base_lr - ETA_MIN)
+                                * 0.5
+                                * (1.0 + (std::f32::consts::PI * t.min(1.0)).cos())
                     } else {
                         cur_lr
                     };
@@ -560,11 +605,41 @@ fn main() -> ExitCode {
         // Save only the best-by-val model (val overfits after a few epochs).
         if is_best {
             best = vm;
+            /* Settle the deferred decay first. The sparse update leaves a
+            row's weight decay owing until the row is next touched, which
+            costs nothing during training and is wrong in a file: rows that
+            went quiet early would be saved holding a value the schedule had
+            long since shrunk.
+
+            Applies to every shape. It was held back from the shipped one
+            at first, on the theory that its tuning depended on the sparse
+            update as it stood; that theory was tested and wrong -- removing
+            the settling changed the shipped model's held-out error by 0.06
+            discs, well inside the run-to-run spread. */
+            if let Some(ad) = adam_state.as_mut() {
+                nn.settle_adam(ad, cur_lr, wd);
+            }
             if let Err(e) = nn.save(&out) {
                 eprintln!("save failed: {e}");
                 return ExitCode::FAILURE;
             }
             println!("  saved {}", out.display());
+        }
+        if plateau > 0 {
+            if is_best {
+                stale = 0;
+            } else {
+                stale += 1;
+                if stale >= plateau {
+                    plateau_lr *= plateau_factor;
+                    stale = 0;
+                    println!("  {plateau} epochs without a best -> lr {plateau_lr:.8}");
+                    if plateau_lr < plateau_min {
+                        println!("  rate floor reached; stopping");
+                        break;
+                    }
+                }
+            }
         }
     }
     // Evaluate the average itself; if it beats the points, it wins.

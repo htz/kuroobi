@@ -25,7 +25,8 @@
 //! Usage:
 //!   gtp [-gtp] [-l <depth>] [-t <threads>] [-nobook] [-q]
 //!       [--solve-empties <n>] [--time-ms <n>] [--band <n>] [--no-mpc]
-//!       [--weights <path>] [--nnue <path>] [--book <path>]
+//!       [--weights <path>] [--nnue <path>] [--patterns egaroucid|compact]
+//!       [--book <path>]
 
 use std::io::{BufRead, Write};
 use std::path::PathBuf;
@@ -108,9 +109,30 @@ fn main() -> ExitCode {
             }
             "--band" => cfg.band = it.next().and_then(|v| v.parse().ok()).unwrap_or(0),
             "--no-mpc" => cfg.mpc = false,
+            // Head's first layer in f32; see `EngineConfig::head_f32`.
+            "--head-f32" => cfg.head_f32 = true,
+            // Steps per disc on the head's int8 activation; see
+            // `EngineConfig::act_units`.
+            "--act-units" => {
+                cfg.act_units = it
+                    .next()
+                    .and_then(|v| v.parse().ok())
+                    .unwrap_or(cfg.act_units)
+            }
             "--time-ms" => time_ms = it.next().and_then(|v| v.parse().ok()).unwrap_or(0),
             "--weights" => cfg.weights = PathBuf::from(it.next().unwrap_or_default()),
             "--nnue" => cfg.nnue = PathBuf::from(it.next().unwrap_or_default()),
+            "--patterns" => {
+                cfg.nnue_patterns = match it.next().as_deref() {
+                    Some("compact") => kuroobi::pattern::COMPACT_PATTERNS,
+                    Some("nnue") => kuroobi::pattern::NNUE_PATTERNS,
+                    Some("egaroucid") | None => kuroobi::pattern::EGAROUCID_PATTERNS,
+                    Some(other) => {
+                        eprintln!("unknown pattern set {other}");
+                        std::process::exit(1);
+                    }
+                }
+            }
             "--book" => {
                 cfg.book = PathBuf::from(it.next().unwrap_or_default());
                 cfg.use_book = true;

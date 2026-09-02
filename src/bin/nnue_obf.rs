@@ -19,7 +19,7 @@
 //!                 [--patterns egaroucid|compact] [--random] <file.obf>
 use kuroobi::midgame::{NnueSearch, SharedTt};
 use kuroobi::nnue::Nnue;
-use kuroobi::pattern::{COMPACT_PATTERNS, EGAROUCID_PATTERNS};
+use kuroobi::pattern::{COMPACT_PATTERNS, EGAROUCID_PATTERNS, NNUE_PATTERNS};
 use kuroobi::Board;
 use std::time::Instant;
 
@@ -43,6 +43,7 @@ fn main() {
     }
     let patterns = match which.as_str() {
         "compact" => COMPACT_PATTERNS,
+        "nnue" => NNUE_PATTERNS,
         "egaroucid" => EGAROUCID_PATTERNS,
         other => panic!("unknown pattern set {other}"),
     };

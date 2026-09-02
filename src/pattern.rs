@@ -563,6 +563,188 @@ pub const COMPACT_PATTERNS: &[Pattern] = &[
     },
 ];
 
+// ---------------------------------------------------------------------------
+// The unshared pattern set (32)
+// ---------------------------------------------------------------------------
+
+/// A 32-feature set in which every orientation keeps its own table, taken
+/// square for square from a published shape list.
+///
+/// Every orientation is its **own** pattern with its own weight table -- the
+/// top edge and its mirror do not share weights, and neither do the four
+/// corners. That is why there are 32 entries of one mask each rather than
+/// eight patterns of four masks: sharing across orientations is a different
+/// model, and the point of this set is to be the same one.
+///
+/// 20 patterns of 8 squares, 8 of 9 and 4 of 7, for 297,432 rows.
+///
+/// The square order inside each mask is fixed by the file format the weights
+/// are serialised in. A permutation of rows would train the same, so the order
+/// is not required for the model to be equivalent -- keeping it costs nothing
+/// and makes two weight tables comparable entry by entry.
+pub const NNUE_PATTERNS: &[Pattern] = &[
+    Pattern {
+        name: "InnerTop",
+        size: 8,
+        masks: &[&[C2, D2, E2, F2, C3, D3, E3, F3]],
+    },
+    Pattern {
+        name: "InnerBottom",
+        size: 8,
+        masks: &[&[C7, D7, E7, F7, C6, D6, E6, F6]],
+    },
+    Pattern {
+        name: "InnerLeft",
+        size: 8,
+        masks: &[&[B3, B4, B5, B6, C3, C4, C5, C6]],
+    },
+    Pattern {
+        name: "InnerRight",
+        size: 8,
+        masks: &[&[G3, G4, G5, G6, F3, F4, F5, F6]],
+    },
+    Pattern {
+        name: "DiagA1H8",
+        size: 8,
+        masks: &[&[A1, B2, C3, D4, E5, F6, G7, H8]],
+    },
+    Pattern {
+        name: "DiagH1A8",
+        size: 8,
+        masks: &[&[H1, G2, F3, E4, D5, C6, B7, A8]],
+    },
+    Pattern {
+        name: "Center2x4H",
+        size: 8,
+        masks: &[&[C4, D4, E4, F4, C5, D5, E5, F5]],
+    },
+    Pattern {
+        name: "Center2x4V",
+        size: 8,
+        masks: &[&[D3, E3, D4, E4, D5, E5, D6, E6]],
+    },
+    Pattern {
+        name: "Row1",
+        size: 8,
+        masks: &[&[A1, B1, C1, D1, E1, F1, G1, H1]],
+    },
+    Pattern {
+        name: "Row8",
+        size: 8,
+        masks: &[&[A8, B8, C8, D8, E8, F8, G8, H8]],
+    },
+    Pattern {
+        name: "ColA",
+        size: 8,
+        masks: &[&[A1, A2, A3, A4, A5, A6, A7, A8]],
+    },
+    Pattern {
+        name: "ColH",
+        size: 8,
+        masks: &[&[H1, H2, H3, H4, H5, H6, H7, H8]],
+    },
+    Pattern {
+        name: "EdgeTop",
+        size: 8,
+        masks: &[&[B1, C1, D1, E1, B2, C2, D2, E2]],
+    },
+    Pattern {
+        name: "EdgeTopMirror",
+        size: 8,
+        masks: &[&[G1, F1, E1, D1, G2, F2, E2, D2]],
+    },
+    Pattern {
+        name: "EdgeBottom",
+        size: 8,
+        masks: &[&[B8, C8, D8, E8, B7, C7, D7, E7]],
+    },
+    Pattern {
+        name: "EdgeBottomMirror",
+        size: 8,
+        masks: &[&[G8, F8, E8, D8, G7, F7, E7, D7]],
+    },
+    Pattern {
+        name: "EdgeLeft",
+        size: 8,
+        masks: &[&[A2, A3, A4, A5, B2, B3, B4, B5]],
+    },
+    Pattern {
+        name: "EdgeLeftMirror",
+        size: 8,
+        masks: &[&[A7, A6, A5, A4, B7, B6, B5, B4]],
+    },
+    Pattern {
+        name: "EdgeRight",
+        size: 8,
+        masks: &[&[H2, H3, H4, H5, G2, G3, G4, G5]],
+    },
+    Pattern {
+        name: "EdgeRightMirror",
+        size: 8,
+        masks: &[&[H7, H6, H5, H4, G7, G6, G5, G4]],
+    },
+    Pattern {
+        name: "CornerA1",
+        size: 9,
+        masks: &[&[A1, B1, C1, A2, B2, C2, A3, B3, C3]],
+    },
+    Pattern {
+        name: "CornerH1",
+        size: 9,
+        masks: &[&[H1, G1, F1, H2, G2, F2, H3, G3, F3]],
+    },
+    Pattern {
+        name: "CornerA8",
+        size: 9,
+        masks: &[&[A8, B8, C8, A7, B7, C7, A6, B6, C6]],
+    },
+    Pattern {
+        name: "CornerH8",
+        size: 9,
+        masks: &[&[H8, G8, F8, H7, G7, F7, H6, G6, F6]],
+    },
+    Pattern {
+        name: "Center3x3NW",
+        size: 9,
+        masks: &[&[B2, C2, D2, B3, C3, D3, B4, C4, D4]],
+    },
+    Pattern {
+        name: "Center3x3NE",
+        size: 9,
+        masks: &[&[G2, F2, E2, G3, F3, E3, G4, F4, E4]],
+    },
+    Pattern {
+        name: "Center3x3SW",
+        size: 9,
+        masks: &[&[B7, C7, D7, B6, C6, D6, B5, C5, D5]],
+    },
+    Pattern {
+        name: "Center3x3SE",
+        size: 9,
+        masks: &[&[G7, F7, E7, G6, F6, E6, G5, F5, E5]],
+    },
+    Pattern {
+        name: "DiagB1H7",
+        size: 7,
+        masks: &[&[B1, C2, D3, E4, F5, G6, H7]],
+    },
+    Pattern {
+        name: "DiagA2G8",
+        size: 7,
+        masks: &[&[A2, B3, C4, D5, E6, F7, G8]],
+    },
+    Pattern {
+        name: "DiagG1A7",
+        size: 7,
+        masks: &[&[G1, F2, E3, D4, C5, B6, A7]],
+    },
+    Pattern {
+        name: "DiagH2B8",
+        size: 7,
+        masks: &[&[H2, G3, F4, E5, D6, C7, B8]],
+    },
+];
+
 /// Convenience holder pairing both pattern libraries.
 #[derive(Debug, Clone, Copy)]
 pub struct PatternSet {
