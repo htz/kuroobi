@@ -1997,9 +1997,9 @@ impl Nnue {
         weight moves (pass 2). Measuring after a partial apply would clip
         against a norm that no longer matches the step being taken.
 
-        Lookahead (the other stabiliser in the recipe) is not worth
-        it here: it rewrites every parameter every k steps, and sweeping a
-        20M-cell sparse table costs more than the batch that earned the step.
+        Lookahead is not worth it here: it rewrites every parameter every k
+        steps, and sweeping a 20M-cell sparse table costs more than the batch
+        that earned the step.
         It pays on a GPU, where the sweep hides under the batch. */
         let parts = sinks.first().map_or(1, |s| s.ft_rows.len());
         adam.stamp_cur = adam.stamp_cur.wrapping_add(1);
