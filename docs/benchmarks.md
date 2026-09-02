@@ -1351,6 +1351,33 @@ time back, so the trade is priced where it sits.
   positions that is 0.4% of the run, under the floor; it grows with the
   number of positions.
 
+**Where the ordering's cost actually goes** (`microbench run`, 20-empty
+corpus, per call):
+
+| | ns |
+|---|---|
+| `ix.apply` - advance the pattern indices over one move | **34** |
+| `eval_order_bb` - the linear readout over 64 masks | **23** |
+| snapshotting the indices (160 bytes) | 0.75 |
+| the network's readout from the same indices, for scale | 64 |
+| building the indices from the bitboards | 401 |
+
+The library is 64 masks and 9.2 masks per square, and **both costs are
+linear in it**: the walk is (squares a move changes) x (masks per square),
+about 48 scattered updates; the readout is one table read per mask. So the
+ordering pays 34 ns to maintain the input and 23 ns to read it - the
+maintenance costs half again what the evaluation does - and halving the
+library roughly halves both. The linear readout is 2.8x cheaper than the
+network's on the same input, so the network is not the cheaper option here
+either.
+
+That fixes what an evaluation change is worth from the endgame's side.
+Halving the ordering cost makes evaluation ordering from twelve empties
+affordable, which is 355.4 M nodes down to 325.3 M - the size the
+comparison implementation reaches - against +6.5% time today. Sharpening
+the ordering instead moves the lookahead ladder out, worth 1.2% a rung, or
+retires it, which is 20.3% of the tree.
+
 **With the same search shape the per-node cost is at parity, and the whole
 remaining gap is the tree.** Setting every band boundary, cache size and
 ordering threshold to the implementation this is measured against - PVS

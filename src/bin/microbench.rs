@@ -151,10 +151,128 @@ fn bench(label: &str, n: usize, rounds: usize, trials: usize, mut f: impl FnMut(
     println!("{label:24} {best:7.3} ns/op   checksum {sink:016x}");
 }
 
+/// What one move-ordering evaluation costs, for each evaluator, from the
+/// same prebuilt pattern indices.
+///
+/// The indices are the shared input: the linear readout sums one weight per
+/// mask, the network accumulates one transformer row per mask and then runs
+/// its head. Building the indices is excluded from both - the search carries
+/// them - so this is the readout alone, which is what the ordering pays per
+/// candidate move.
+fn eval_bench(c: &[Case], rounds: usize, trials: usize) {
+    use kuroobi::evaluator::Evaluator;
+    use kuroobi::pattern::EGAROUCID_PATTERNS;
+    let wpath = std::env::var("BENCH_WEIGHTS").unwrap_or_else(|_| "weights/linear.bin".into());
+    let mut ev = Evaluator::new(EGAROUCID_PATTERNS);
+    if ev.load_weights(std::path::Path::new(&wpath)).is_err() {
+        println!("(no {wpath}: skipping the evaluation benches)");
+        return;
+    }
+    let ixr = ev.indexer();
+    let boards: Vec<(Board, kuroobi::pattern_index::PatternIndices)> = c
+        .iter()
+        .map(|k| {
+            let mut b = Board::new();
+            b.black = k.player;
+            b.white = k.opponent;
+            b.player = kuroobi::color::Color::Black;
+            b.empty_count = (!(k.player | k.opponent)).count_ones() as u8;
+            let ix = ixr.init(b.black, b.white);
+            (b, ix)
+        })
+        .collect();
+    let nn = std::env::var("BENCH_NNUE").ok().and_then(|p| {
+        let mut nn = kuroobi::nnue::Nnue::new(EGAROUCID_PATTERNS);
+        nn.load(std::path::Path::new(&p)).ok()?;
+        nn.quantize();
+        Some(nn)
+    });
+    let nb = boards.len();
+    bench("eval_linear", nb, rounds, trials, || {
+        let mut a = 0u64;
+        for (b, ix) in &boards {
+            a ^= ev
+                .eval_order_bb(b.player_bb(), b.opponent_bb(), b.player(), ix)
+                .to_bits() as u64;
+        }
+        a
+    });
+    if let Some(nn) = &nn {
+        bench("eval_nnue", nb, rounds, trials, || {
+            let mut a = 0u64;
+            for (b, ix) in &boards {
+                a ^= nn.eval_from_indices(ix, b).to_bits() as u64;
+            }
+            a
+        });
+    } else {
+        println!("(BENCH_NNUE unset: skipping eval_nnue)");
+    }
+    // What the search actually pays per candidate move: snapshot, advance
+    // the indices over the move, evaluate, restore.
+    bench("order_step_linear", nb, rounds, trials, || {
+        let mut a = 0u64;
+        for (k, (b, ix)) in c.iter().zip(boards.iter()) {
+            let pos = Position(k.sq);
+            let flipped = bitboard::flippable(b.player_bb(), b.opponent_bb(), 1u64 << k.sq);
+            let mut cur = *ix;
+            ixr.apply(&mut cur, pos, flipped, b.player());
+            let cp = b.opponent_bb() ^ flipped;
+            let co = b.player_bb() | flipped | (1u64 << k.sq);
+            a ^= ev
+                .eval_order_bb(cp, co, b.player().opponent(), &cur)
+                .to_bits() as u64;
+        }
+        a
+    });
+    // The two halves of what a candidate move costs before its evaluation:
+    // the snapshot that lets the next candidate start from the parent, and
+    // the CSR walk that advances the indices over the move. `apply` is
+    // timed with its exact inverse so the loop is stateless, so one walk is
+    // half of what it reports.
+    bench("index_copy", nb, rounds, trials, || {
+        let mut a = 0u64;
+        for (_, ix) in &boards {
+            let cur = *ix;
+            a ^= cur.raw()[0] as u64;
+        }
+        a
+    });
+    bench("index_apply_undo", nb, rounds, trials, || {
+        let mut a = 0u64;
+        for (k, (b, ix)) in c.iter().zip(boards.iter()) {
+            let pos = Position(k.sq);
+            let flipped = bitboard::flippable(b.player_bb(), b.opponent_bb(), 1u64 << k.sq);
+            let mut cur = *ix;
+            ixr.apply(&mut cur, pos, flipped, b.player());
+            ixr.undo(&mut cur, pos, flipped, b.player());
+            a ^= cur.raw()[0] as u64;
+        }
+        a
+    });
+    // The shape of the pattern library, which is what both costs scale
+    // with: the walk is proportional to the masks a square belongs to, the
+    // readout to the masks there are.
+    println!(
+        "pattern set              {} masks, {:.1} masks per square",
+        ixr.n_masks_pub(),
+        ixr.entries_pub() as f64 / 64.0
+    );
+    // The index build the search used to do at every node, for scale.
+    bench("index_init", nb, rounds, trials, || {
+        let mut a = 0u64;
+        for (b, _) in &boards {
+            a ^= ixr.init(b.black, b.white).raw()[0] as u64;
+        }
+        a
+    });
+}
+
 fn run(path: &str, rounds: usize, trials: usize) {
     let c = read(path);
     let n = c.len();
     println!("corpus {path}  {n} cases  rounds {rounds}  trials {trials}");
+    eval_bench(&c, rounds, trials);
 
     bench("flip", n, rounds, trials, || {
         let mut a = 0u64;

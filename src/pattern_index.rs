@@ -326,6 +326,18 @@ impl PatternIndexer {
         score
     }
 
+    /// Number of masks in the library, and the total CSR entries across all
+    /// squares. Both cost models in the search scale with these: the
+    /// incremental walk with entries per square, the readout with masks.
+    pub fn n_masks_pub(&self) -> usize {
+        self.n_masks
+    }
+
+    /// See `n_masks_pub`.
+    pub fn entries_pub(&self) -> usize {
+        self.entries.len()
+    }
+
     /// Index that mask `m`'s entry would have from White's perspective.
     pub fn swapped_index(&self, m: usize, idx: usize) -> usize {
         let pi = self.mask_pattern[m] as usize;
