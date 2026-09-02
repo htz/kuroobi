@@ -38,27 +38,45 @@ flip-noshare = []
 # entries while still allocating - and wiping - the full table. Separates
 # "probes reach less memory" from "the per-position wipe evicts less".
 tt-probe-clamp = []
-# How far down the generated move list to issue table prefetches. The
-# default prefetches every move; these price that against stopping early,
-# which the original measurement never tested. Trees are identical.
+# Drop the per-move child hash and table prefetch that move generation
+# issues after building the list. Measured +7% on FFO40-49: the pass is a
+# large share of generation and it earns far more than it costs. Trees are
+# identical.
+#
+# Two sibling features (`gen-prefetch-2`, `gen-prefetch-4`) used to sit
+# here to price prefetching only the head of the list. Neither was ever
+# wired to anything, so both reported "no difference" for as long as they
+# existed; they are gone rather than left to be measured again.
 gen-no-prefetch = []
-gen-prefetch-2 = []
-gen-prefetch-4 = []
 # Restore the eager per-move child hash. Deferring it where no prefetch is
 # issued (7-9 empties) is the default and measured -0.85%, 10/10 rounds.
 gen-eager-hash = []
 # Restore zero-initialisation of `gen_moves`' scratch arrays (306 bytes of
 # memset per node). Leaving them uninitialised is the default.
 gen-zeroed-scratch = []
-# An alternative band split: nothing below 13 empties touches a
+# The alternative band split: nothing below 13 empties touches a
 # transposition table, and 7-12 share one thread-private direct-mapped
-# bound-only cache of 4 MiB. Ours draws the line at 9.
+# bound-only cache (4 MiB). The default draws the line at 9.
 ec-band = []
 # Drop the quadrant-parity ordering at three empties.
 last3-noorder = []
+# Order the empties with a nested if-chain over the parity bits instead of
+# a match on their packed mask. Same permutation; the match does compile to
+# a data-dependent jump table, and replacing it measured within noise at
+# four empties and +1.2% at three.
+last4-ifsort = []
+# Run the stable-disc fixpoint to convergence and count once, instead of
+# testing `need` with a popcount on every iteration. Measured +1.4%.
+stab-no-early = []
+# Generate the move list with one flip kernel per square instead of the
+# batched two/four-square kernels.
+gen-scalar = []
+# Force the four-empty routine into its callers, so the whole 1-4 leaf
+# chain becomes one straight-line body. Measured within noise.
+last4-inline = []
+last3-ifsort = []
 # Run the bound cache over 7-12 empties *beside* the transposition table
-# rather than only below it. One design covers that band with a cache
-# instead of a table; this covers it with both.
+# rather than only below it, so the band is covered by both.
 l78-wide = []
 # Restore the fail-high half of the stability cutoff. Off by default: it
 # was 26.7M of the 66.7M full stability sweeps and cost 3.2% of the clock

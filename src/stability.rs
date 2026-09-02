@@ -317,6 +317,26 @@ pub fn stable_count_at_least(own: u64, opp: u64, need: u32) -> u32 {
     let interior = own & INTERIOR;
     let mut stable = edge_stable_all(own, opp);
     stable |= interior & full_h & full_v & full_d9 & full_d7;
+    // Run to the fixpoint and count once. The per-iteration `need` test
+    // costs a popcount, and on aarch64 that is a round trip through a vector
+    // register; the loop it shortens is one to three iterations of shifts
+    // and masks.
+    #[cfg(feature = "stab-no-early")]
+    {
+        let _ = need;
+        loop {
+            let safe_h = full_h | (stable << 8) | (stable >> 8);
+            let safe_v = full_v | (stable << 1) | (stable >> 1);
+            let safe_d9 = full_d9 | (stable << 9) | (stable >> 9);
+            let safe_d7 = full_d7 | (stable << 7) | (stable >> 7);
+            let next = stable | (interior & safe_h & safe_v & safe_d9 & safe_d7);
+            if next == stable {
+                return stable.count_ones();
+            }
+            stable = next;
+        }
+    }
+    #[cfg(not(feature = "stab-no-early"))]
     loop {
         let c = stable.count_ones();
         if c >= need {
