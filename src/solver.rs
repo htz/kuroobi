@@ -34,11 +34,11 @@ const MOVE_ORDERING_LIMIT: u8 = 7;
 /// (`MOVE_ORDERING_LIMIT` 8) loses on every set, at +22-30% nodes.
 /// Lowest empty count that consults a transposition table proper.
 ///
-/// Below this the bands have their own direct-mapped bound caches. The
-/// reference draws this line at 13 and gives seven-to-twelve a single
-/// thread-private bound-only cache, never touching the main table there;
-/// `ec-band` builds that shape. The 9 is what this engine grew instead,
-/// with 9 on the private mid table and 10-12 on the shared one.
+/// Below this the bands have their own direct-mapped bound caches. `9` is
+/// what this engine grew: 9 on the private mid table, 10-12 on the shared
+/// one. `ec-band` builds the alternative where nothing below 13 touches the
+/// main table and 7-12 share one thread-private bound-only cache; it costs
+/// 2.6% of the tree, so it is not the default.
 #[cfg(feature = "ec-band")]
 const TT_MIN_EMPTIES: u8 = 13;
 #[cfg(not(feature = "ec-band"))]
@@ -878,8 +878,8 @@ impl TaskSlot {
 /// tree.
 const SPLIT_SLOTS: usize = 32;
 
-/// Ceiling for the speculative All-node fan-out (24): above
-/// it a mispredicted All node wastes too large a subtree.
+/// Ceiling for the speculative All-node fan-out: above it a mispredicted
+/// All node wastes too large a subtree.
 const SPEC_SPLIT_MAX_EMPTIES: u8 = 24;
 
 /// `SPEC_MAX=<n>` overrides [`SPEC_SPLIT_MAX_EMPTIES`] for sweeps.
@@ -923,7 +923,7 @@ fn join_deepest_big() -> bool {
 }
 
 /// `MAX_JOIN=<n>` caps how many helpers may crowd one split point
-/// (0 = unlimited; 5 is a reasonable cap).
+/// (0 = unlimited).
 #[cfg(feature = "tunable")]
 fn max_join() -> usize {
     static V: std::sync::OnceLock<usize> = std::sync::OnceLock::new();
@@ -2100,8 +2100,8 @@ impl HashTable {
             entry.lower8 = value as i8;
         }
         // A fail-low store carries no move; keep the one already there
-        // rather than erasing it (a stale-but-real move orders better than
-        // none).
+        // rather than erasing it: a stale-but-real move orders better than
+        // none.
         if best8 != 255 {
             entry.best8 = best8;
         }
@@ -2495,9 +2495,8 @@ fn new_mid_bits() -> u32 {
 
 /// `NEW_78=1` (default): give the 7-8 layers the same one-way pair table
 /// the 5-6 band has. They sit below `TT_MIN_EMPTIES` and had no
-/// transposition reuse at all; probing a cache at every NWS depth
-/// instead shrinks the per-empties node counts at 7-11 by ~1.5x
-/// on the positions where the node count is worst (FFO#44).
+/// transposition reuse at all, which showed up as a swollen 7-11 layer on
+/// the positions with the worst node ratio (FFO#44).
 #[cfg(feature = "tunable")]
 fn new_78() -> bool {
     static V: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
@@ -2511,8 +2510,7 @@ fn new_78() -> bool {
 /// Index bits of the 7-8 cache (`L78_BITS`, default 13 = 256 KiB). Small on
 /// purpose: at 2^16 the sweep found 1.7x the node savings but +5.8% wall
 /// clock - the store traffic evicts the L2 lines the leaf machinery lives
-/// on. 256 KiB keeps most of the node win at none of that cost (the
-/// reference sizes its shallow cache at 128 KiB for the same reason).
+/// on. 256 KiB keeps most of the node win at none of that cost.
 #[cfg(feature = "tunable")]
 fn l78_bits() -> u32 {
     static V: std::sync::OnceLock<u32> = std::sync::OnceLock::new();
@@ -2525,8 +2523,8 @@ fn l78_bits() -> u32 {
 }
 #[cfg(all(not(feature = "tunable"), feature = "ec-band"))]
 fn l78_bits() -> u32 {
-    // Six layers to cover instead of two, so 4 MiB rather
-    // than the 256 KiB that suits 7-8 alone.
+    // Six layers to cover instead of two, so 4 MiB rather than the 256 KiB
+    // that suits 7-8 alone.
     18
 }
 #[cfg(all(not(feature = "tunable"), not(feature = "ec-band")))]
@@ -2769,8 +2767,8 @@ impl<'a> Worker<'a> {
                 Vec::new()
             },
             l4: if l4_cache() || l56_cache() {
-                // The budget lesson: per-worker caches share one
-                // L2, so divide the table by the thread count. 2^16 x 32 B at
+                // Per-worker caches share one L2, so divide the table by
+                // the thread count. 2^16 x 32 B at
                 // one thread; 8 threads at 2^16 measured 3.35s on FFO40-49
                 // against 2.83s at 2^13 (-15.5%).
                 let threads = budget.pool.workers + 1;
@@ -2836,9 +2834,8 @@ impl<'a> Worker<'a> {
         opponent: u64,
     ) -> Option<(i32, i32, Option<Position>)> {
         // SAFETY: the table length is a power of two (it comes from
-        // `zeroed_vec(1 << bits)`), so the mask lands inside it. The
-        // reference indexes its cache the same way; a checked index
-        // here is a branch on every probe.
+        // `zeroed_vec(1 << bits)`), so the mask lands inside it; a
+        // checked index here is a branch on every probe.
         let e = unsafe {
             self.l78
                 .get_unchecked((hash as usize) & (self.l78.len() - 1))
@@ -2976,9 +2973,8 @@ impl<'a> Worker<'a> {
         beta: i32,
     ) -> Option<i32> {
         // SAFETY: the table length is a power of two (it comes from
-        // `zeroed_vec(1 << bits)`), so the mask lands inside it. The
-        // reference indexes its cache the same way; a checked index
-        // here is a branch on every probe.
+        // `zeroed_vec(1 << bits)`), so the mask lands inside it; a
+        // checked index here is a branch on every probe.
         let e = unsafe {
             self.l56
                 .get_unchecked((hash as usize) & (self.l56.len() - 1))
@@ -3036,9 +3032,8 @@ impl<'a> Worker<'a> {
         beta: i32,
     ) -> Option<i32> {
         // SAFETY: the table length is a power of two (it comes from
-        // `zeroed_vec(1 << bits)`), so the mask lands inside it. The
-        // reference indexes its cache the same way; a checked index
-        // here is a branch on every probe.
+        // `zeroed_vec(1 << bits)`), so the mask lands inside it; a
+        // checked index here is a branch on every probe.
         let e = unsafe { self.l4.get_unchecked((hash as usize) & (self.l4.len() - 1)) };
         if e.player == player && e.opponent == opponent {
             if (e.lower as i32) >= beta {
@@ -3293,8 +3288,8 @@ impl Solver {
     }
 
     /// Paired-harness bench of the main table: (store, hit, miss) ns/op.
-    /// A transposition-table bench: one store per case, then a
-    /// hit probe and a probed miss on a disturbed board.
+    /// One store per case, then a hit probe and a probed miss on a
+    /// disturbed board.
     /// Times the leaf solvers over a shared corpus, so a second
     /// implementation can reproduce the same work and the ratio can be read
     /// from paired numbers rather than from sampling attribution - which
@@ -4692,9 +4687,7 @@ impl Worker<'_> {
     /// Full-window recursive descent picking the right strategy by depth.
     ///
     /// Forced inline: the call graph showed this between every pair of `pvs`
-    /// frames, so the search paid two calls a ply where one is enough
-    /// - dispatching the same choice through a monomorphized strategy
-    /// type, which leaves no frame at all.
+    /// frames, so the search paid two calls a ply for one dispatch.
     #[inline(always)]
     #[allow(clippy::too_many_arguments)]
     fn descend(
@@ -4765,6 +4758,11 @@ impl Worker<'_> {
     /// reads it, and so does every child that lands in the 5-6 band - and
     /// deriving it costs four masked popcounts against the single XOR that
     /// updates it across a move.
+    ///
+    /// `&mut Board` entry point; the band runs on raw bitboards below, for
+    /// the reason `alpha_beta` gives. Only the shared transposition table
+    /// still wants a `Board`, and it gets one built on the spot at the two
+    /// places that touch it.
     fn alpha_beta_ordered(
         &mut self,
         board: &mut Board,
@@ -5241,9 +5239,9 @@ impl Worker<'_> {
                 let val = if five_empty {
                     // `EXACT_L4_CACHE=1`: probe the four-empty cache before
                     // solving the child — a hit resolves the whole subtree
-                    // (its 1-3-empty expansion is where the tree exceeds
-                    // the estimate) for one counted node, the same charge
-                    // the solve would have made.
+                    // (its 1-3-empty expansion is where the tree is widest)
+                    // for one counted node, the same charge the solve would
+                    // have made.
                     if self.g_l4_cache {
                         let ca = -upper;
                         let cb = -best.max(orig_lower);
@@ -5679,8 +5677,7 @@ impl Worker<'_> {
 
     /// Folded into its caller: the leaf chain is four routines deep and a
     /// node here costs tens of nanoseconds, so the call itself is a
-    /// measurable share. `solve2` disappears into
-    /// `solve3_eager` the same way.
+    /// measurable share.
     #[inline(always)]
     #[allow(clippy::too_many_arguments)]
     fn last3(
@@ -5702,11 +5699,9 @@ impl Worker<'_> {
         // class) via an explicit permutation: the same order the stable
         // 3-sort produced, without the sort. This runs 47M times per
         // FFO40-49; the generic sort and its key closure were measurable.
-        // One option is no ordering at three empties at all, where
-        // `solve3` takes the squares in the order the caller hands them
-        // over. `last3-noorder` prices ours: the permutation match runs
-        // 45M times on FFO40-49, and this layer measured 2.0x the
-        // reference's per-node cost.
+        // `last3-noorder` prices the ordering itself: the permutation match
+        // runs 45M times on FFO40-49, and this layer is the most expensive
+        // per node of the leaf chain.
         #[cfg(not(feature = "last3-noorder"))]
         let (p1, p2, p3) = {
             let m = ((parity & quadrant_id(p1) != 0) as u8)
@@ -5724,8 +5719,8 @@ impl Worker<'_> {
         let mut alpha = alpha;
         let mut any = false;
 
-        // Straight-line children (the tuple-array loop built its rest-arrays
-        // on the stack every entry; unrolling avoids that).
+        // Straight-line children: the tuple-array loop this replaces built
+        // its rest-arrays on the stack on every entry.
         #[cfg(not(any(
             feature = "flip-lazy",
             feature = "flip-guard",
@@ -5819,8 +5814,7 @@ impl Worker<'_> {
 
     /// Folded into its caller: the leaf chain is four routines deep and a
     /// node here costs tens of nanoseconds, so the call itself is a
-    /// measurable share. `solve2` disappears into
-    /// `solve3_eager` the same way.
+    /// measurable share.
     #[inline(always)]
     fn last2(
         &mut self,
@@ -5858,8 +5852,7 @@ impl Worker<'_> {
         ))]
         let f2 = arm_flip(&fctx, player, opponent, p2);
         // The last move has nothing left to cut off: whether `val` clears
-        // beta or not, the node's answer is the better of the two. The
-        // reference drops the test on its final move for the same reason.
+        // beta or not, the node's answer is the better of the two.
         // Measured neutral on its own (four sets, six shuffled rounds:
         // -0.45%, -0.66%, -0.38%, +0.36%, total +0.05%) - kept because the
         // branch is genuinely dead, not because it pays.
@@ -5882,8 +5875,8 @@ impl Worker<'_> {
     /// Exactly one empty square left, as a value and the rule-U count it
     /// owes.
     ///
-    /// Free-standing rather than a method, which splits
-    /// a pure kernel from its counting wrapper: a `&mut self` call in the
+    /// Free-standing rather than a method, splitting the pure kernel from
+    /// its counting wrapper: a `&mut self` call in the
     /// middle of the hottest move loop in the search carries a store the
     /// optimizer must assume can alias anything the loop holds. On its own
     /// this measured neutral (12.417s against 12.432s); it is kept because
@@ -6516,7 +6509,7 @@ fn weighted_mobility(cp: u64, co: u64) -> i32 {
 /// tie-breaks. An earlier version blended the same ingredients on a flat
 /// scale, which
 /// let a corner-stability difference outweigh a reply.
-/// `ORDER_POT=0` switches the static ordering to its 3 terms.
+/// `ORDER_POT=0` drops the ordering to its three strongest terms.
 #[cfg(feature = "tunable")]
 fn order_pot() -> bool {
     static V: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
@@ -6535,9 +6528,8 @@ fn move_ordering_value(pos: Position, cp: u64, co: u64, parity: u8, pot: bool) -
 
     // The potential-mobility and parity terms are off by default now:
     // `ORDER_POT=1` restores them. The shared-corpus bench prices them at
-    // 2.83 ns of the 12.51 ns a scored move costs (a 3-term
-    // value is 9.69 ns on the same corpus, so the rest is at parity), and
-    // they buy 0.05-0.94% of the tree. Timed over four sets, six shuffled
+    // 2.83 ns of the 12.51 ns a scored move costs, and they buy 0.05-0.94%
+    // of the tree. Timed over four sets, six shuffled
     // rounds each: hard20 -0.75%, band22 -1.69%, 18-empty roots -0.80%,
     // FFO40-49 -1.54%, total -1.45%.
     //

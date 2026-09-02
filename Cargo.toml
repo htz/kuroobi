@@ -24,9 +24,8 @@ tunable = []
 # which neither implementation has measured. Mutually exclusive.
 entry-align32 = []
 entry-natural = []
-# Arms that decompose one claim both this engine and the one it is measured
-# against recorded as a single number: that batching the leaf flips beats
-# scalar calls "even when a cutoff would have skipped the tail". Three
+# Arms that decompose a single recorded claim: that batching the leaf flips
+# beats scalar calls "even when a cutoff would have skipped the tail". Three
 # separate effects hide in that: paying for flips a cutoff never needs
 # (default vs flip-lazy), the adjacency guard (flip-lazy vs flip-guard), and
 # sharing the board broadcast (flip-guard vs flip-noshare). All four arms

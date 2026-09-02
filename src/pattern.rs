@@ -464,11 +464,10 @@ pub const EGAROUCID_PLUS_PATTERNS: &[Pattern] = &[
 /// in L2 rather than stream from memory. Measured on band29 at depth 13
 /// over an identical tree: 7.25M nodes/s to 10.68M at H=64.
 ///
-/// The shapes are ones a stronger evaluator is known to use, transcribed
-/// into this repo's convention where orientations of a shape share one
-/// table. **That convention is worth keeping.** The alternative is a
-/// table per orientation instead (297,432 rows), and copying that was
-/// measured and rejected: it made training error *worse* (42.66 to 45.75
+/// The shapes are transcribed into this repo's convention, where the
+/// orientations of a shape share one table. **That convention is worth
+/// keeping.** A table per orientation (297,432 rows) was measured and
+/// rejected: it made training error *worse* (42.66 to 45.75
 /// over three epochs) while running 1.32x slower. Reversi is symmetric and
 /// `--sym-train` already turns every position eight ways, so separate
 /// tables re-learn one function four times over a quarter of the data

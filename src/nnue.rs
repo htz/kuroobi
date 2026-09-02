@@ -947,9 +947,9 @@ pub struct Nnue {
     /// Patterns are local, so nothing in the feature set expresses "how many
     /// moves does the side to move have" — a global quantity that carries
     /// most of the tempo advantage. Measured against exact values, the
-    /// evaluation underestimated the mover by 2.04 discs on average where a
-    /// reference implementation (which feeds mobility into its network) was
-    /// off by 0.76. One table lookup, no search-speed cost.
+    /// evaluation underestimated the mover by 2.04 discs on average; feeding
+    /// mobility in as its own term brings that to 0.76. One table lookup, no
+    /// search-speed cost.
     mob_w: Vec<f32>,
     /// Product-gate readout weights: `pw[stage * HALF + i]` scales
     /// `φ(acc[i]) · φ(acc[i + HALF])` (see [`PROD_CLAMP`]). Zero-initialised,
