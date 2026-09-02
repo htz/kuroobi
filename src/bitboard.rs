@@ -764,97 +764,272 @@ static COUNT_LAST_FLIP_PAIR: [[u16; 256]; PAIR_ROWS] = {
 /// squares, the shift that drops its first square to bit 0, the shift that
 /// takes the multiply's top byte (and, for a reversed gather, drops the empty
 /// high slots), and the [`COUNT_LAST_FLIP_PAIR`] row for the result.
+/// Both diagonals of a square, reduced to as few gathers as the geometry
+/// allows.
+///
+/// A last-empty-square flip runs outward from `sq` along one arm at a time,
+/// and an arm shorter than two cells can never flip anything: it has no room
+/// for a flipped disc plus the anchor beyond it. Dropping those, most squares
+/// are left with at most one live arm on each side, and the two arms — one
+/// from each diagonal — form a single line through `sq` that one lookup
+/// scores. Only the 16 squares whose four arms are all live still need two.
+///
+/// Two gathers can express that single line, and which one applies is
+/// geometry, not choice:
+///
+/// * when the cells sit at distinct positions *within* their bytes, summing
+///   the bytes is an OR and the line falls out intact;
+/// * when they sit one per byte instead, `addend` first raises each byte's
+///   top bit to say "this cell is the mover's", and the multiply gathers
+///   those eight bits.
+///
+/// Storing the addend, the post-mask and the multiplier per square lets both
+/// run through one expression, so the hot path branches only on whether a
+/// second line is needed at all. 48 squares of 64 take the single-gather
+/// path.
+#[repr(align(64))]
 #[derive(Clone, Copy)]
-struct DiagGather {
-    mask: u64,
-    start: u8,
-    take: u8,
-    class: u8,
+/// One cache line of extraction data per square.
+///
+/// The content is 44 bytes, which at its natural 8-byte alignment gives a
+/// 48-byte stride - and 48 does not divide 64, so most squares' entries
+/// straddled two cache lines and paid two loads for one gather. Padding to
+/// 64 costs 1KB of table (4KB total, L1-resident either way) and makes
+/// every square exactly one line.
+///
+/// This is the opposite call from `L4Entry`, and deliberately so: that one
+/// is a large randomly-probed table where the entry count decides the hit
+/// rate, so bytes per entry are worth more than alignment. This one is
+/// small, hot and fully resident, so a straddle is pure loss with nothing
+/// bought back.
+#[repr(C, align(64))]
+struct LastDiag {
+    m0: u64,
+    a0: u64,
+    pm0: u64,
+    mul0: u64,
+    m1: u64,
+    s0: u8,
+    s1: u8,
+    c0: u8,
+    c1: u8,
 }
 
-/// Both diagonals for every square. `REVERSED` marks the ±7 line, whose
-/// multiply-gather delivers the line back-to-front (see [`GATHER_MUL_7`]).
-/// Reversing a line does not change how many discs it flips, so the reversed
-/// form only has to name the empty square's slot from the other end.
-const fn build_diag(dr: i32, reversed: bool) -> [DiagGather; 64] {
-    let mut t = [DiagGather {
-        mask: 0,
-        start: 0,
-        take: 56,
-        class: 0,
+const _: () = assert!(std::mem::size_of::<LastDiag>() == 64);
+const _: () = assert!(std::mem::align_of::<LastDiag>() == 64);
+
+/// Sums the bytes of a word into its top byte.
+const MUL_BYTES: u64 = 0x0101_0101_0101_0101;
+/// Gathers the top bit of every byte into the top byte.
+const MUL_TOPBITS: u64 = 0x0002_0408_1020_4081;
+const TOPBITS: u64 = 0x8080_8080_8080_8080;
+
+/// Bits of `sq` plus two arms.
+const fn line_mask(sq: i32, cu: [i32; 8], nu: usize, cd: [i32; 8], nd: usize) -> u64 {
+    let mut mask = 1u64 << sq;
+    let mut i = 0;
+    while i < nu {
+        mask |= 1u64 << cu[i];
+        i += 1;
+    }
+    i = 0;
+    while i < nd {
+        mask |= 1u64 << cd[i];
+        i += 1;
+    }
+    mask
+}
+
+/// Lowest and highest in-byte position occupied by `mask`.
+const fn span_in_byte(mask: u64) -> (i32, i32) {
+    let mut lo = 8i32;
+    let mut hi = -1i32;
+    let mut b = 0i32;
+    while b < 64 {
+        if mask & (1u64 << b) != 0 {
+            let k = b % 8;
+            if k < lo {
+                lo = k;
+            }
+            if k > hi {
+                hi = k;
+            }
+        }
+        b += 1;
+    }
+    (lo, hi)
+}
+
+/// One arm: the cells beyond `sq` in direction `(df, dr)`, lowest first.
+const fn arm(sq: i32, df: i32, dr: i32) -> ([i32; 8], usize) {
+    let mut cells = [0i32; 8];
+    let mut n = 0;
+    let mut f = sq / 8 + df;
+    let mut r = sq % 8 + dr;
+    while f >= 0 && f < 8 && r >= 0 && r < 8 {
+        cells[n] = f * 8 + r;
+        n += 1;
+        f += df;
+        r += dr;
+    }
+    (cells, n)
+}
+
+const fn build_last_diag() -> [LastDiag; 64] {
+    let mut t = [LastDiag {
+        m0: 0,
+        a0: 0,
+        pm0: !0,
+        mul0: MUL_BYTES,
+        m1: 0,
+        s0: 56,
+        s1: 56,
+        c0: 0,
+        c1: 0,
     }; 64];
     let mut sq = 0i32;
     while sq < 64 {
-        let f0 = sq / 8;
-        let r0 = sq % 8;
-        // Walk back to the line's first square (always its lowest index).
-        let mut f = f0;
-        let mut r = r0;
-        while f > 0 && r - dr >= 0 && r - dr < 8 {
-            f -= 1;
-            r -= dr;
-        }
-        let start = f * 8 + r;
-        let mut mask = 0u64;
-        let mut len = 0i32;
-        let mut p = 0i32;
-        while f < 8 && r >= 0 && r < 8 {
-            let s = f * 8 + r;
-            mask |= 1u64 << s;
-            if s == sq {
-                p = len;
+        // The four arms, and which of them can flip at all.
+        let (c9u, n9u) = arm(sq, 1, 1);
+        let (c9d, n9d) = arm(sq, -1, -1);
+        let (c7u, n7u) = arm(sq, 1, -1);
+        let (c7d, n7d) = arm(sq, -1, 1);
+        let l9u = n9u >= 2;
+        let l9d = n9d >= 2;
+        let l7u = n7u >= 2;
+        let l7d = n7d >= 2;
+        // Merge form A wants at most one live arm moving each way inside the
+        // byte; form B wants at most one moving each way across bytes.
+        let up_r = (l9u as u32) + (l7d as u32);
+        let dn_r = (l9d as u32) + (l7u as u32);
+        let up_f = (l9u as u32) + (l7u as u32);
+        let dn_f = (l9d as u32) + (l7d as u32);
+        let form_a = up_r <= 1 && dn_r <= 1;
+        let form_b = up_f <= 1 && dn_f <= 1;
+
+        if form_a || form_b {
+            // Collect the live arms and the square itself into one line.
+            let mut mask = 1u64 << sq;
+            let mut i = 0;
+            while i < n9u {
+                if l9u {
+                    mask |= 1u64 << c9u[i];
+                }
+                i += 1;
             }
-            len += 1;
-            f += 1;
-            r += dr;
-        }
-        // The reversed gather leaves the line in slots `8 - len ..= 7`; taking
-        // eight bits lower puts it in `0 ..= len - 1` like the forward one, so
-        // both share a single class numbering.
-        let (pos, take) = if reversed {
-            (len - 1 - p, 64 - len)
+            i = 0;
+            while i < n9d {
+                if l9d {
+                    mask |= 1u64 << c9d[i];
+                }
+                i += 1;
+            }
+            i = 0;
+            while i < n7u {
+                if l7u {
+                    mask |= 1u64 << c7u[i];
+                }
+                i += 1;
+            }
+            i = 0;
+            while i < n7d {
+                if l7d {
+                    mask |= 1u64 << c7d[i];
+                }
+                i += 1;
+            }
+            // The gathered byte indexes cells by their in-byte position
+            // (form A) or by their byte (form B); either way the line lands
+            // in one contiguous window.
+            let by_byte = !form_a;
+            let mut lo = 8i32;
+            let mut hi = -1i32;
+            let mut b = 0i32;
+            while b < 64 {
+                if mask & (1u64 << b) != 0 {
+                    let k = if by_byte { b / 8 } else { b % 8 };
+                    if k < lo {
+                        lo = k;
+                    }
+                    if k > hi {
+                        hi = k;
+                    }
+                }
+                b += 1;
+            }
+            let own = if by_byte { sq / 8 } else { sq % 8 };
+            let (a0, pm0, mul0) = if by_byte {
+                // One cell per byte: raise that cell to the byte's top bit.
+                let mut a = 0u64;
+                let mut b = 0i32;
+                while b < 64 {
+                    if mask & (1u64 << b) != 0 {
+                        a |= (0x80u64 - (1u64 << (b % 8))) << ((b / 8) * 8);
+                    }
+                    b += 1;
+                }
+                (a, TOPBITS, MUL_TOPBITS)
+            } else {
+                (0u64, !0u64, MUL_BYTES)
+            };
+            t[sq as usize] = LastDiag {
+                m0: mask,
+                a0,
+                pm0,
+                mul0,
+                m1: 0,
+                s0: (56 + lo) as u8,
+                s1: 56,
+                c0: pair_class((own - lo) as usize, (hi - lo + 1) as usize) as u8,
+                c1: 0,
+            };
         } else {
-            (p, 56)
-        };
-        t[sq as usize] = DiagGather {
-            mask,
-            start: start as u8,
-            take: take as u8,
-            class: pair_class(pos as usize, len as usize) as u8,
-        };
+            // All four arms live: score the two diagonals separately. A
+            // single diagonal always has its cells at distinct in-byte
+            // positions, so both take form A.
+            let m9 = line_mask(sq, c9u, n9u, c9d, n9d);
+            let m7 = line_mask(sq, c7u, n7u, c7d, n7d);
+            let (lo9, hi9) = span_in_byte(m9);
+            let (lo7, hi7) = span_in_byte(m7);
+            let own = sq % 8;
+            t[sq as usize] = LastDiag {
+                m0: m9,
+                a0: 0,
+                pm0: !0,
+                mul0: MUL_BYTES,
+                m1: m7,
+                s0: (56 + lo9) as u8,
+                s1: (56 + lo7) as u8,
+                c0: pair_class((own - lo9) as usize, (hi9 - lo9 + 1) as usize) as u8,
+                c1: pair_class((own - lo7) as usize, (hi7 - lo7 + 1) as usize) as u8,
+            };
+        }
         sq += 1;
     }
     t
 }
 
-/// Diagonals stepping (+1 file, +1 rank), i.e. +9 in bit index.
-const DIAG_9: [DiagGather; 64] = build_diag(1, false);
-/// Diagonals stepping (+1 file, -1 rank), i.e. +7 in bit index.
-const DIAG_7: [DiagGather; 64] = build_diag(-1, true);
+static LAST_DIAG: [LastDiag; 64] = build_last_diag();
+
+/// Every class index the table can hand out is a real row of
+/// [`COUNT_LAST_FLIP_PAIR`], proven here rather than clamped in the hot
+/// path. It holds by construction - a class is `pair_class(own - lo, hi -
+/// lo + 1)` with `lo <= own <= hi`, and a gathered line is at most eight
+/// cells wide - but stating it is what lets the lookup drop the guard, and
+/// a geometry change that broke it would fail to compile instead of
+/// silently reading the wrong row.
+const _: () = {
+    let t = build_last_diag();
+    let mut sq = 0;
+    while sq < 64 {
+        assert!((t[sq].c0 as usize) < PAIR_ROWS);
+        assert!((t[sq].c1 as usize) < PAIR_ROWS);
+        sq += 1;
+    }
+};
 
 /// Collects bits at stride 8 (the file axis) into the top byte.
 const GATHER_MUL_8: u64 = 0x0102_0408_1020_4080;
-/// Collects bits at stride 9 into the top byte, in line order.
-const GATHER_MUL_9: u64 = 0x0101_0101_0101_0101;
-/// Collects bits at stride 7 into the top byte. The in-order multiplier
-/// (0x0104104104104000) makes element 6 land on element 0, so this one
-/// reverses the line instead — with the reversal every partial product sits
-/// at its own bit, which is what keeps the gather carry-free.
-const GATHER_MUL_7: u64 = 0x8080_8080_8080_8080;
-
-/// Forward gather: the line already lands in slots `0 ..= len - 1`, so the
-/// take is the fixed 56 and the shift stays an immediate.
-#[inline(always)]
-fn gather_diag_fwd(player: u64, g: &DiagGather, mul: u64) -> u8 {
-    (((player & g.mask) >> g.start).wrapping_mul(mul) >> 56) as u8
-}
-
-/// Reversed gather: the line lands in the top `len` slots, so the take also
-/// has to shift it down.
-#[inline(always)]
-fn gather_diag_rev(player: u64, g: &DiagGather, mul: u64) -> u8 {
-    (((player & g.mask) >> g.start).wrapping_mul(mul) >> (g.take & 63)) as u8
-}
 
 /// Discs each side would flip by playing `sq`, the board's only empty square.
 ///
@@ -872,19 +1047,26 @@ pub fn count_last_flips(player: u64, sq: u8) -> (u32, u32) {
     let i1 = (((player >> (s & 7)) & 0x0101_0101_0101_0101).wrapping_mul(GATHER_MUL_8) >> 56) as u8;
     let c1 = pair_class(s >> 3, 8);
 
-    let g2 = &DIAG_9[s];
-    let i2 = gather_diag_fwd(player, g2, GATHER_MUL_9);
-    let c2 = (g2.class as usize).min(PAIR_ROWS - 1);
-    let g3 = &DIAG_7[s];
-    let i3 = gather_diag_rev(player, g3, GATHER_MUL_7);
-    let c3 = (g3.class as usize).min(PAIR_ROWS - 1);
+    // Diagonals: one gather where the geometry allows it, two otherwise.
+    let g = &LAST_DIAG[s];
+    let i2 =
+        (((player & g.m0).wrapping_add(g.a0) & g.pm0).wrapping_mul(g.mul0) >> (g.s0 & 63)) as u8;
 
     // Both sides in one sum: the low bytes are the mover's, the high bytes
     // the opponent's, and neither carries into the other.
-    let packed = COUNT_LAST_FLIP_PAIR[c0][i0 as usize] as u32
+    // The class indices are proven in range at build time (see the const
+    // block under `build_last_diag`), so the row lookups take them raw. They
+    // used to be clamped with a `min`, which put a data-dependent
+    // instruction immediately before the dependent load, in the most
+    // frequently executed routine of the search - for a bound the
+    // construction already guarantees.
+    let mut packed = COUNT_LAST_FLIP_PAIR[c0][i0 as usize] as u32
         + COUNT_LAST_FLIP_PAIR[c1][i1 as usize] as u32
-        + COUNT_LAST_FLIP_PAIR[c2][i2 as usize] as u32
-        + COUNT_LAST_FLIP_PAIR[c3][i3 as usize] as u32;
+        + COUNT_LAST_FLIP_PAIR[g.c0 as usize][i2 as usize] as u32;
+    if g.m1 != 0 {
+        let i3 = ((player & g.m1).wrapping_mul(MUL_BYTES) >> (g.s1 & 63)) as u8;
+        packed += COUNT_LAST_FLIP_PAIR[g.c1 as usize][i3 as usize] as u32;
+    }
     (packed & 0xFF, packed >> 8)
 }
 
@@ -917,7 +1099,12 @@ pub fn count_last_flips(player: u64, sq: u8) -> (u32, u32) {
 #[derive(Clone, Copy)]
 struct MaskLr([u64; 8]);
 
-const MASK_LR: [MaskLr; 66] = {
+/// `static`, not `const`: a `const` array is a value, so every use site is
+/// free to materialize its own copy, and this one is 4224 bytes read by the
+/// hottest kernel in the search. One shared instance is what the alignment
+/// above is for. (`RAY_UP` and `RAY_DOWN_REV` stay `const` - the
+/// initializer below reads them, which a `static` cannot serve.)
+static MASK_LR: [MaskLr; 66] = {
     let mut out = [MaskLr([0u64; 8]); 66];
     let mut sq = 0usize;
     while sq < 66 {
@@ -1115,6 +1302,117 @@ pub fn flippable2(player_bb: u64, opponent_bb: u64, a: u8, b: u8) -> (u64, u64) 
         flippable(player_bb, opponent_bb, 1u64 << b),
     )
 }
+
+/// The board broadcast on its own, so a caller can share one setup across
+/// squares *without* committing to computing every square's flip.
+///
+/// This exists to decompose a claim neither this implementation nor the one
+/// it is measured against has ever taken apart. Both say "batching the
+/// flips beats scalar calls even when a cutoff would have skipped the
+/// tail", and both measured it as a single step - so the number folds two
+/// separate effects together: sharing the setup (`BoardCtx::new` is five
+/// broadcasts, two of them bit-reversals, and it is paid even when the
+/// first square cuts) and dropping the adjacency guard that used to skip
+/// squares no disc borders. Which one carries the win decides where the
+/// batching stops paying, and that boundary is exactly what the two-empty
+/// leaf turns on.
+///
+/// Sharing the setup while flipping lazily is the arm that separates them.
+#[derive(Clone, Copy)]
+pub struct FlipCtx {
+    #[cfg(target_arch = "aarch64")]
+    ctx: BoardCtx,
+    #[cfg(not(target_arch = "aarch64"))]
+    player: u64,
+    #[cfg(not(target_arch = "aarch64"))]
+    opponent: u64,
+}
+
+impl FlipCtx {
+    #[inline]
+    pub fn new(player_bb: u64, opponent_bb: u64) -> Self {
+        #[cfg(target_arch = "aarch64")]
+        {
+            // SAFETY: NEON is part of the aarch64 baseline.
+            Self {
+                ctx: unsafe { BoardCtx::new(player_bb, opponent_bb) },
+            }
+        }
+        #[cfg(not(target_arch = "aarch64"))]
+        Self {
+            player: player_bb,
+            opponent: opponent_bb,
+        }
+    }
+
+    /// One square's flip off the shared setup.
+    #[inline]
+    pub fn flip(&self, sq: u8) -> u64 {
+        #[cfg(target_arch = "aarch64")]
+        {
+            // SAFETY: NEON is baseline; the index is masked into 0..64.
+            unsafe { self.ctx.flip1((sq & 63) as usize) }
+        }
+        #[cfg(not(target_arch = "aarch64"))]
+        flippable_scalar(self.player, self.opponent, 1u64 << (sq & 63))
+    }
+}
+
+/// The eight squares around `sq`, for the adjacency guard the batched
+/// kernels made redundant. A flip can only be non-empty where the opponent
+/// holds a bordering disc, so testing this first skips the kernel entirely.
+/// That is worth nothing when every square's flip is computed anyway, and
+/// worth something as soon as a cutoff can skip the tail.
+#[inline]
+pub fn neighbours(sq: u8) -> u64 {
+    NEIGHBOURS[(sq & 63) as usize]
+}
+
+static NEIGHBOURS: [u64; 64] = {
+    let mut t = [0u64; 64];
+    let mut sq = 0usize;
+    while sq < 64 {
+        // File-major, matching the board layout: bit index = file * 8 + rank.
+        let file = (sq / 8) as i32;
+        let rank = (sq % 8) as i32;
+        let mut mask = 0u64;
+        let mut df = -1i32;
+        while df <= 1 {
+            let mut dr = -1i32;
+            while dr <= 1 {
+                let (f, r) = (file + df, rank + dr);
+                if !(df == 0 && dr == 0) && f >= 0 && f < 8 && r >= 0 && r < 8 {
+                    mask |= 1u64 << (f * 8 + r);
+                }
+                dr += 1;
+            }
+            df += 1;
+        }
+        t[sq] = mask;
+        sq += 1;
+    }
+    t
+};
+
+/// A square has 3 neighbours in a corner, 5 along an edge and 8 inside, so
+/// the popcounts pin the layout: get file and rank the wrong way round and
+/// the mask is still 8 bits in the middle but wrong at the borders, which
+/// no popcount-free check would catch.
+const _: () = {
+    let mut sq = 0usize;
+    while sq < 64 {
+        let file = sq / 8;
+        let rank = sq % 8;
+        let edges = ((file == 0 || file == 7) as u32) + ((rank == 0 || rank == 7) as u32);
+        let want = match edges {
+            2 => 3,
+            1 => 5,
+            _ => 8,
+        };
+        assert!(NEIGHBOURS[sq].count_ones() == want);
+        sq += 1;
+    }
+};
 
 /// Flips for three squares of the same board, sharing the board broadcast.
 #[inline]
