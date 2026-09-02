@@ -1232,6 +1232,116 @@ win rate in 3-second games
 will not become the default until it is confirmed under real game
 conditions.
 
+### Endgame cost structure, and what moved it (2026-09-02, one thread)
+
+FFO40-49, one thread, `--hash-bits 24`. Node counts are identical across
+every change recorded here unless stated otherwise.
+
+The changes below are worth **6.9% of the solve together** (11.68 s to
+10.87 s, FFO40-49, one thread), at a bit-identical tree.
+
+**A baseline binary has to be built somewhere `cargo test` cannot reach.**
+`cargo test --release` builds bin targets too, so it silently replaced
+`target/release/solve_obf` with the working tree's version halfway through
+this work and three comparisons measured a build against itself. Build the
+baseline with `--target-dir`.
+
+**How the numbers were taken.** At this machine's noise level a single
+interleaved round separates nothing below about 1%: the same binary drifted
+11.42 to 11.62 s between sessions. Differences of that size have to be
+measured as paired rounds - A B B A, one difference per round - and reported
+with a standard error. A 1% "win" measured as a minimum over four rounds did
+not survive that treatment and was withdrawn.
+
+**Where the time goes.** Sampling profile, self time attributed to the band
+that called it:
+
+| empties | share of nodes | ns/node |
+|---|---|---|
+| 1-4 | 63% | 9.7 |
+| 5-6 | 15% | 54.6 |
+| 7-12 | 13% | 112 |
+| 13+ | 0.5% | 1290 |
+
+**17% of the solve is spent on 0.5% of the nodes**, in the evaluation-based
+ordering and its lookahead at 13 empties and up. Weakening that ladder
+(18,21,28 / 20,23,28 / off) costs 8% / 18% / 29% of the tree and gives no
+time back, so the trade is priced where it sits.
+
+**What moved the clock.**
+
+- *A `Board` carries a colour field, so every read of the side to move is a
+  select and the struct spills and reloads around the child searches.* The
+  leaf routines had taken raw bitboards for a while; extending that through
+  the 5-6 and 7-11 bands, and letting the ordered stage hand over the child
+  it already holds as two words instead of building a `Board` for it, is
+  **+2.64% +/- 0.13%** at an identical tree. The shared transposition table
+  still folds the colour into its match, so it is carried down as a value
+  rather than derived from a struct.
+- *The ordering lookahead collected its legal squares into a stack array and
+  sorted them.* The priority weights are a compile-time partition of the
+  board, so walking one class at a time gives the same order with no array,
+  no `memset` and no sort: **+0.83% +/- 0.31%**.
+- *The move buffer is `MaybeUninit`, but `MaybeUninit::uninit()
+  .assume_init()` on the whole array builds an `undef` aggregate the backend
+  materializes*: every node of the 7-11 band called `_bzero` on all 552
+  bytes right before move generation filled `0..len`. Per-element
+  `[const { MaybeUninit::uninit() }; N]` emits nothing. Paired rounds put it
+  at +0.08% +/- 0.20%, i.e. under this set's floor, but it is strictly less
+  work and it is kept.
+- *Bounds checks on the hot path.* Thirteen `panic` call sites sat inside
+  the five busiest routines: the square-value and stability-threshold tables
+  indexed by a `u8` the type system does not bound, the four visit classes,
+  the selection sort's inner comparison, and every write into the move
+  buffer. Masking the two table indices and going unchecked where the
+  invariant is real is **+0.79% +/- 0.20%**; taking the move list's own
+  accessors unchecked is a further +0.14% +/- 0.17%.
+- *PGO is worth 1.8%* (paired rounds, +1.83% +/- 0.20%, trained on band22
+  and band29 - never on the set being measured). It is not applied by the
+  default build; `tools/pgo-build.sh` already exists.
+- *Emptying the midgame probe table walked it one byte per entry*, which
+  pulls in and dirties all 134 MB. It is a generation bump now. At ten
+  positions that is 0.4% of the run, under the floor; it grows with the
+  number of positions.
+
+**What did not.** All measured, all at an identical tree unless the tree
+column says otherwise:
+
+- the parity permutation as an if-chain instead of a match (the match does
+  compile to a jump table): within noise at four empties, +1.2% at three
+- `panic = "abort"`, and a newer toolchain: both within noise
+- `-C target-cpu=native`: -0.5% alone, and it does not compose with PGO
+- moving nothing below 13 empties to a bound-only cache (`ec-band`): tree
+  +2.6%, time +2.0%
+- running the stable-disc fixpoint to convergence and counting once instead
+  of testing `need` with a popcount every iteration: +1.4%
+- splitting the stability gate from its sweep so the gate inlines at all
+  seven call sites (127.6 M gate evaluations, 29.0 M sweeps): within noise,
+  before and after the bitboard conversion
+- guarded, lazy flips at two empties: within noise
+- one flip kernel per square instead of the batched two/four-square kernels
+  (`gen-scalar`): within noise
+- forcing the four-empty routine into its callers so the leaf chain is one
+  straight-line body: within noise. Moving the pass re-entry of the 2/3/4
+  empty routines out of line and marking it `#[cold]` is -0.22% +/- 0.15%.
+  Code layout in the leaf band is not a lever in either direction
+- carrying the child hash in the move list so the search loop does not
+  recompute what generation already had for its prefetch: -0.99%. The eight
+  bytes it adds to every entry cost more than the hash it saves
+- ordering the four empties corner-first instead of in bit order: tree
+  -0.46%, time -0.74%
+- table size from 2^20 to 2^26 entries: the search time does not move at all
+  on this set; only the clearing cost does
+- dropping the four-empty cache: time unchanged for 3.5% more nodes, alone
+  and combined with PGO
+- the stability cutoff floor at five or six empties: +2.2% / +5.4%
+
+**The child-hash and prefetch pass in move generation is worth 7%.** It is
+most of what makes generation expensive, and removing it costs far more than
+it saves. The `gen-prefetch-*` features that were supposed to price it were
+declared but never wired to anything, so they had been measuring nothing;
+`gen-no-prefetch` is wired now and the other two are gone.
+
 ### Remaining work
 
 The balance holds with **a search tree half the size of Edax's (0.50) and
