@@ -115,14 +115,22 @@ h256 = []
 # with lane i+H. Second-order interaction at the input instead of as a
 # read-out correction; see `nnue::ACC_DIMS`. Doubles the table, so a weight
 # file is not interchangeable with a build without it.
+# Square the read-out's clipped activation instead of leaving it linear:
+# `phi(x) = clamp(x, 0, C)^2 / C`. A different model, not a different
+# encoding of the same one, so a weight file belongs to one or the other.
+# Off by default because the deployed weights were trained against the plain
+# clipped ReLU; turning it on for them reads the same numbers through the
+# wrong shape and the search degrades (measured: FFO40-49 went 355M nodes to
+# 677M, slower with the net than without it).
+screlu = []
 pairmul = []
 # Per-stage multi-layer read-out in place of the per-stage linear one plus
 # the shared head: L1 over the accumulator and mobility, its output paired
 # with its square, L2, then a final layer that also sees the accumulator
-# directly. Two hidden layers per stage; see `nnue::SO_L1`.
+# directly; see `nnue::SO_L1`.
 stackedout = []
-# A phase-adaptive input: a second sparse layer, six copies
-# selected by phase, concatenated with the base rather than replacing it.
+# Phase-adaptive input: a second sparse layer, six copies selected by phase,
+# concatenated with the base rather than replacing it.
 pa128 = ["stackedout"]
 # Independent copies of the feature transformer, one per slice of the game.
 # Default (no feature) is a single shared copy. Buckets add parameters without
@@ -148,12 +156,12 @@ codegen-units = 1
 lto = true
 codegen-units = 1
 
-# Checks this model against independently computed numbers. Needs the
-# stack, since that is the thing being checked.
+# Check the stacked read-out against an external dump, position by position
+# and step by step. Needs the stack, since that is the thing being checked.
 [[bin]]
 name = "stack_check"
 required-features = ["stackedout"]
 
 [[bin]]
-name = "nr_train_check"
+name = "stack_train_check"
 required-features = ["stackedout"]

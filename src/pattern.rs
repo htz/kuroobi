@@ -567,14 +567,13 @@ pub const COMPACT_PATTERNS: &[Pattern] = &[
 // The unshared pattern set (32)
 // ---------------------------------------------------------------------------
 
-/// A 32-feature set in which every orientation keeps its own table, taken
-/// square for square from a published shape list.
+/// A 32-feature set where every orientation is its **own** pattern with its
+/// own weight table.
 ///
-/// Every orientation is its **own** pattern with its own weight table -- the
-/// top edge and its mirror do not share weights, and neither do the four
+/// The top edge and its mirror do not share weights, and neither do the four
 /// corners. That is why there are 32 entries of one mask each rather than
 /// eight patterns of four masks: sharing across orientations is a different
-/// model, and the point of this set is to be the same one.
+/// model, and the point of this set is to be the unshared one.
 ///
 /// 20 patterns of 8 squares, 8 of 9 and 4 of 7, for 297,432 rows.
 ///

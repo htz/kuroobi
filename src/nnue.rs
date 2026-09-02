@@ -392,8 +392,12 @@ fn mob_input(mob: usize) -> f32 {
 #[inline]
 #[cfg_attr(feature = "stackedout", allow(dead_code))]
 fn screlu(x: f32) -> f32 {
+    #[cfg(not(feature = "screlu"))]
+    return x.max(0.0);
+    #[cfg(feature = "screlu")]
     let c = x.clamp(0.0, ACT_CLAMP);
-    c * c * (1.0 / ACT_CLAMP)
+    #[cfg(feature = "screlu")]
+    return c * c * (1.0 / ACT_CLAMP);
 }
 
 /// `dφ/dx` for [`screlu`]. Zero outside the clamp, where the activation is
@@ -401,6 +405,9 @@ fn screlu(x: f32) -> f32 {
 #[inline]
 #[cfg_attr(feature = "stackedout", allow(dead_code))]
 fn screlu_grad(x: f32) -> f32 {
+    #[cfg(not(feature = "screlu"))]
+    return if x > 0.0 { 1.0 } else { 0.0 };
+    #[cfg(feature = "screlu")]
     if x > 0.0 && x < ACT_CLAMP {
         2.0 * x * (1.0 / ACT_CLAMP)
     } else {
@@ -632,23 +639,37 @@ fn fold_pairs(acc: &[i16; ACC_DIMS], cap: i16, shift: i16) -> [i16; H] {
 /// NEON on aarch64, scalar elsewhere. Called once per leaf.
 #[inline]
 #[cfg_attr(feature = "stackedout", allow(dead_code))]
+/// The read-out's dot product, with the activation applied on the fly.
+///
+/// `cap` and `shift` describe the squared form and are ignored without the
+/// `screlu` feature: the deployed weights were trained against the plain
+/// clipped ReLU, and reading them through the squared shape is a different
+/// model, not a rescaling of the same one.
 fn readout_dot(acc: &[i16], b: &[i16], w: &[i16], cap: i16, shift: i16) -> i64 {
+    let _ = (cap, shift);
     #[cfg(all(target_arch = "aarch64", not(feature = "nnue-scalar")))]
     unsafe {
         use std::arch::aarch64::*;
         let zero = vdupq_n_s16(0);
+        #[cfg(feature = "screlu")]
         let capv = vdupq_n_s16(cap);
+        #[cfg(feature = "screlu")]
         let sh = vdupq_n_s32(-(shift as i32));
         let mut sum = vdupq_n_s32(0);
         let mut h = 0;
         while h + 8 <= H {
             let s = vaddq_s16(vld1q_s16(acc.as_ptr().add(h)), vld1q_s16(b.as_ptr().add(h)));
-            let a = vminq_s16(vmaxq_s16(s, zero), capv);
-            // a² needs int32 to compute; a²>>shift is bounded by `cap` and
-            // so returns to int16 exactly, with no saturation possible.
-            let lo = vshlq_s32(vmull_s16(vget_low_s16(a), vget_low_s16(a)), sh);
-            let hi = vshlq_s32(vmull_high_s16(a, a), sh);
-            let phi = vcombine_s16(vmovn_s32(lo), vmovn_s32(hi));
+            #[cfg(not(feature = "screlu"))]
+            let phi = vmaxq_s16(s, zero);
+            #[cfg(feature = "screlu")]
+            let phi = {
+                let a = vminq_s16(vmaxq_s16(s, zero), capv);
+                // a² needs int32 to compute; a²>>shift is bounded by `cap`
+                // and so returns to int16 exactly, with no saturation.
+                let lo = vshlq_s32(vmull_s16(vget_low_s16(a), vget_low_s16(a)), sh);
+                let hi = vshlq_s32(vmull_high_s16(a, a), sh);
+                vcombine_s16(vmovn_s32(lo), vmovn_s32(hi))
+            };
             let ww = vld1q_s16(w.as_ptr().add(h));
             sum = vmlal_s16(sum, vget_low_s16(phi), vget_low_s16(ww));
             sum = vmlal_high_s16(sum, phi, ww);
@@ -656,10 +677,15 @@ fn readout_dot(acc: &[i16], b: &[i16], w: &[i16], cap: i16, shift: i16) -> i64 {
         }
         let mut acc64 = vaddvq_s32(sum) as i64;
         while h < H {
-            let a = (*acc.get_unchecked(h))
-                .wrapping_add(*b.get_unchecked(h))
-                .clamp(0, cap) as i32;
-            acc64 += ((a * a) >> shift) as i64 * *w.get_unchecked(h) as i64;
+            let x = (*acc.get_unchecked(h)).wrapping_add(*b.get_unchecked(h));
+            #[cfg(not(feature = "screlu"))]
+            let phi = x.max(0) as i64;
+            #[cfg(feature = "screlu")]
+            let phi = {
+                let a = x.clamp(0, cap) as i32;
+                ((a * a) >> shift) as i64
+            };
+            acc64 += phi * *w.get_unchecked(h) as i64;
             h += 1;
         }
         acc64
@@ -668,8 +694,15 @@ fn readout_dot(acc: &[i16], b: &[i16], w: &[i16], cap: i16, shift: i16) -> i64 {
     {
         let mut sum: i64 = 0;
         for h in 0..H {
-            let a = acc[h].wrapping_add(b[h]).clamp(0, cap) as i32;
-            sum += ((a * a) >> shift) as i64 * w[h] as i64;
+            let x = acc[h].wrapping_add(b[h]);
+            #[cfg(not(feature = "screlu"))]
+            let phi = x.max(0) as i64;
+            #[cfg(feature = "screlu")]
+            let phi = {
+                let a = x.clamp(0, cap) as i32;
+                ((a * a) >> shift) as i64
+            };
+            sum += phi * w[h] as i64;
         }
         sum
     }
