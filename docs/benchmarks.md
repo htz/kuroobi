@@ -1237,8 +1237,9 @@ conditions.
 FFO40-49, one thread, `--hash-bits 24`. Node counts are identical across
 every change recorded here unless stated otherwise.
 
-The changes below are worth **6.9% of the solve together** (11.68 s to
-10.87 s, FFO40-49, one thread), at a bit-identical tree.
+The changes below are worth **9.1% of the solve together** (11.68 s to
+10.62 s, FFO40-49, one thread). Every one of them keeps the solutions; the
+last group also moves the tree, and says by how much.
 
 **A baseline binary has to be built somewhere `cargo test` cannot reach.**
 `cargo test --release` builds bin targets too, so it silently replaced
@@ -1296,6 +1297,21 @@ time back, so the trade is priced where it sits.
   buffer. Masking the two table indices and going unchecked where the
   invariant is real is **+0.79% +/- 0.20%**; taking the move list's own
   accessors unchecked is a further +0.14% +/- 0.17%.
+- *The band boundaries were in the wrong place, and they moved together.*
+  Cost per empty count, taken from both this engine's sampling layer
+  profile and the same measurement on the implementation it is compared
+  with, put seven and eight empties at parity and nine through twelve at
+  1.5x to 3.3x on an identical tree - which is exactly where the search
+  starts consulting the shared transposition table. Raising that floor from
+  nine to eleven is 1.1%, and raising the enhanced-transposition-cutoff
+  floor from twelve to thirteen is another 1.1%; **together they are 2.22%
+  +/- 0.10%** for 2.1% more nodes, more than either alone. Ten and twelve
+  are worse on the first, twelve and fourteen on the second. The bound
+  cache then covers four layers instead of two, so its size moved with it:
+  256 KiB to 1 MiB is a further **0.47% +/- 0.13%** and 0.6% *fewer* nodes.
+  Fourteen, sixteen and seventeen bits are all worse than fifteen, and
+  re-sweeping the two boundaries at the new size leaves them where they
+  are.
 - *PGO is worth 1.8%* (paired rounds, +1.83% +/- 0.20%, trained on band22
   and band29 - never on the set being measured). It is not applied by the
   default build; `tools/pgo-build.sh` already exists.
@@ -1335,6 +1351,19 @@ column says otherwise:
 - dropping the four-empty cache: time unchanged for 3.5% more nodes, alone
   and combined with PGO
 - the stability cutoff floor at five or six empties: +2.2% / +5.4%
+- moving the private mid table's boundary up with the shared table's, so
+  eleven empties lands on the 12.6 MB table instead of the 402 MB one:
+  -0.01% +/- 0.11%
+- dropping the quadrant-parity ordering at three empties, where the cost
+  per node is twice what the layer below it costs: -0.46% for 0.66% more
+  nodes. The if-chain form of that ordering, and of the four-empty one,
+  are both within noise now - they were +1.2% and neutral before the bands
+  moved to bitboards, which is the shape of every arm here: an arm that
+  lost once is worth re-running after the code around it changes
+- the dead `need <= 32` test in the stability gate, which the threshold
+  test above it already implies: -0.25%. Summing the two population counts
+  the ordering needs in one vector instead of two: also a loss. Below this
+  size the scheduler decides, not the instruction count
 
 **The child-hash and prefetch pass in move generation is worth 7%.** It is
 most of what makes generation expensive, and removing it costs far more than
