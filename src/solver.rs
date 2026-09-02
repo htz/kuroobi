@@ -40,9 +40,41 @@ const MOVE_ORDERING_LIMIT: u8 = 7;
 /// main table and 7-12 share one thread-private bound-only cache; it costs
 /// 2.6% of the tree, so it is not the default.
 #[cfg(feature = "ec-band")]
-const TT_MIN_EMPTIES: u8 = 13;
+const TT_MIN_EMPTIES_DEFAULT: u8 = 13;
 #[cfg(not(feature = "ec-band"))]
-const TT_MIN_EMPTIES: u8 = 9;
+const TT_MIN_EMPTIES_DEFAULT: u8 = 11;
+
+/// `TT_MIN` overrides the boundary for sweeps.
+#[cfg(feature = "tunable")]
+fn tt_min_empties() -> u8 {
+    static V: std::sync::OnceLock<u8> = std::sync::OnceLock::new();
+    *V.get_or_init(|| {
+        std::env::var("TT_MIN")
+            .ok()
+            .and_then(|v| v.parse().ok())
+            .unwrap_or(TT_MIN_EMPTIES_DEFAULT)
+    })
+}
+#[cfg(not(feature = "tunable"))]
+const fn tt_min_empties() -> u8 {
+    TT_MIN_EMPTIES_DEFAULT
+}
+
+/// `ETC_MIN` overrides the enhanced-transposition-cutoff floor for sweeps.
+#[cfg(feature = "tunable")]
+fn etc_empties() -> u8 {
+    static V: std::sync::OnceLock<u8> = std::sync::OnceLock::new();
+    *V.get_or_init(|| {
+        std::env::var("ETC_MIN")
+            .ok()
+            .and_then(|v| v.parse().ok())
+            .unwrap_or(ETC_EMPTIES)
+    })
+}
+#[cfg(not(feature = "tunable"))]
+const fn etc_empties() -> u8 {
+    ETC_EMPTIES
+}
 
 /// Highest empty count the bound cache covers under `l78-wide`.
 #[cfg(feature = "l78-wide")]
@@ -347,7 +379,7 @@ const DEEP3_ORDER_EMPTIES: u8 = 28;
 /// Enhanced transposition cutoff: from this many empties upward, probe
 /// every child's hash entry before searching — a proven fail-high there
 /// cuts this node without any search.
-const ETC_EMPTIES: u8 = 12;
+const ETC_EMPTIES: u8 = 13;
 /// Ordering weight of one opponent reply, in eighths of a disc (the same
 /// scale the evaluation term uses).
 const MOBILITY_ORDER_WEIGHT: i32 = 12;
@@ -2552,7 +2584,7 @@ fn new_mid_bits() -> u32 {
 }
 
 /// `NEW_78=1` (default): give the 7-8 layers the same one-way pair table
-/// the 5-6 band has. They sit below `TT_MIN_EMPTIES` and had no
+/// the 5-6 band has. They sit below `tt_min_empties()` and had no
 /// transposition reuse at all, which showed up as a swollen 7-11 layer on
 /// the positions with the worst node ratio (FFO#44).
 #[cfg(feature = "tunable")]
@@ -2565,10 +2597,14 @@ fn new_78() -> bool {
     true
 }
 
-/// Index bits of the 7-8 cache (`L78_BITS`, default 13 = 256 KiB). Small on
-/// purpose: at 2^16 the sweep found 1.7x the node savings but +5.8% wall
-/// clock - the store traffic evicts the L2 lines the leaf machinery lives
-/// on. 256 KiB keeps most of the node win at none of that cost.
+/// Index bits of the bound cache below `TT_MIN_EMPTIES` (`L78_BITS`,
+/// default 15 = 1 MiB).
+///
+/// It was 13 while the cache covered two layers, where 2^16 found 1.7x the
+/// node savings for +5.8% wall clock - the store traffic evicted the L2
+/// lines the leaf machinery lives on. The band now runs to ten empties, so
+/// four layers share it, and the sweep moved with them: 15 is -1.0% and
+/// -0.6% nodes against 13, with 14, 16 and 17 all worse.
 #[cfg(feature = "tunable")]
 fn l78_bits() -> u32 {
     static V: std::sync::OnceLock<u32> = std::sync::OnceLock::new();
@@ -2576,7 +2612,7 @@ fn l78_bits() -> u32 {
         std::env::var("L78_BITS")
             .ok()
             .and_then(|v| v.parse().ok())
-            .unwrap_or(13)
+            .unwrap_or(15)
     })
 }
 #[cfg(all(not(feature = "tunable"), feature = "ec-band"))]
@@ -2587,7 +2623,7 @@ fn l78_bits() -> u32 {
 }
 #[cfg(all(not(feature = "tunable"), not(feature = "ec-band")))]
 fn l78_bits() -> u32 {
-    13
+    15
 }
 
 /// Index bits of the 5-6 cache (`NEW_SHALLOW_BITS`, default 14 = 512 KiB).
@@ -2881,7 +2917,7 @@ impl<'a> Worker<'a> {
     }
 
     /// Probe the 7-8 cache: same one-way (lower, upper, best) shape as the
-    /// 9-empty cache, for the two layers below `TT_MIN_EMPTIES` that had no
+    /// 9-empty cache, for the two layers below `tt_min_empties()` that had no
     /// transposition reuse at all.
     #[inline]
     #[allow(clippy::type_complexity)]
@@ -4578,7 +4614,7 @@ impl Worker<'_> {
 
         // Enhanced transposition cutoff: a child whose stored upper bound
         // already proves our value >= upper ends this node for free.
-        if board.empty_count() >= ETC_EMPTIES {
+        if board.empty_count() >= etc_empties() {
             let _p = layer_profile::Scope::new(layer_profile::ETC, board.empty_count());
             // The comparison accounting counts each ETC probe as a node;
             // tallied locally so the instrumentation costs one atomic per
@@ -4927,7 +4963,7 @@ impl Worker<'_> {
 
         abst!(O_NODES);
         // Single probe, reused for the ordering move below (see `pvs`).
-        let use_tt = n_empties >= TT_MIN_EMPTIES;
+        let use_tt = n_empties >= tt_min_empties();
         let use_l9 = use_tt && self.g_new_mid && n_empties < self.mid_empties;
         // The bound cache runs beside the transposition table rather than
         // instead of it. Moving the band wholesale to 7-12 cost 2.7% of the
@@ -5299,6 +5335,11 @@ impl Worker<'_> {
             return v;
         }
 
+        // The stability cut runs before the cache probe by default: it is
+        // arithmetic on values already in registers, where the probe is a
+        // random load. `stab-after-probe` runs them the other way, which
+        // saves the sweep on a hit and pays a miss on every cut.
+        #[cfg(not(feature = "stab-after-probe"))]
         {
             let _p = layer_profile::Scope::new(layer_profile::STAB, n_empties);
             if let Some(bound) = stability_cut_bb(player, opponent, n_empties, alpha, beta) {
@@ -5340,6 +5381,14 @@ impl Worker<'_> {
                         return lower;
                     }
                 }
+            }
+        }
+
+        #[cfg(feature = "stab-after-probe")]
+        {
+            let _p = layer_profile::Scope::new(layer_profile::STAB, n_empties);
+            if let Some(bound) = stability_cut_bb(player, opponent, n_empties, lower, upper) {
+                return bound;
             }
         }
 
@@ -6382,7 +6431,7 @@ impl Worker<'_> {
 
         out.len = n;
         // The prefetch below only fires for children at or above
-        // `TT_MIN_EMPTIES` - the 5-6 band has its own cache and the ordered
+        // `tt_min_empties()` - the 5-6 band has its own cache and the ordered
         // stage below nine consults no main table - so a node with seven,
         // eight or nine empties issues none at all, and the hash it would
         // compute per move exists only to feed a prefetch that never
@@ -6391,7 +6440,7 @@ impl Worker<'_> {
         // move, so it is tested once, not per move.
         let child_empties = n_empties - 1;
         #[cfg(not(feature = "gen-eager-hash"))]
-        let eager = child_empties >= MOVE_ORDERING_LIMIT.min(TT_MIN_EMPTIES);
+        let eager = child_empties >= MOVE_ORDERING_LIMIT.min(tt_min_empties());
         #[cfg(feature = "gen-eager-hash")]
         let eager = true;
         if eager && !cfg!(feature = "gen-no-prefetch") {
@@ -6402,7 +6451,7 @@ impl Worker<'_> {
                 // node reaches, is the shape that measured best: gating it
                 // by position in the move list costs 1.8% at four, 3.1% at
                 // two and 5.1% with none at all.
-                if child_empties >= TT_MIN_EMPTIES {
+                if child_empties >= tt_min_empties() {
                     self.table(child_empties).prefetch(child_hash);
                 } else if child_empties >= MOVE_ORDERING_LIMIT {
                     self.l78_prefetch(child_hash);
@@ -6621,7 +6670,7 @@ impl Worker<'_> {
 }
 
 /// 16 bytes, not 24: the child hash used to live here so a prefetch could
-/// be issued for it, but that prefetch only fires above `TT_MIN_EMPTIES`
+/// be issued for it, but that prefetch only fires above `tt_min_empties()`
 /// and the layers that carry most of the moves defer the hash to the
 /// descent anyway. Carrying it for all of them cost a third of the move
 /// buffer's width - and the buffer is the hottest structure in the search.

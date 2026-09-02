@@ -71,6 +71,9 @@ stab-no-early = []
 # Generate the move list with one flip kernel per square instead of the
 # batched two/four-square kernels.
 gen-scalar = []
+# Probe the 5-6 band's cache before attempting the stability cutoff,
+# instead of after.
+stab-after-probe = []
 # Force the four-empty routine into its callers, so the whole 1-4 leaf
 # chain becomes one straight-line body. Measured within noise.
 last4-inline = []
