@@ -16,7 +16,6 @@ use std::io::{self, BufReader, BufWriter, Read, Write};
 use std::path::Path;
 
 /// Fixed-point scale of the ordering-grade 16-bit weights.
-const I16_SCALE: f32 = 256.0;
 /// Fixed-point scale of the 8-bit ordering weights. Measured optimum: coarser
 /// steps beat a tighter range, because clipping the few large weights hurts
 /// the order more than rounding the many small ones.
@@ -56,14 +55,13 @@ pub struct Evaluator {
     flat_weights: Vec<Vec<f32>>,
     /// Start of each mask instance's table inside a `flat_weights` stage.
     mask_off: Vec<u32>,
-    /// `flat_weights` quantized to 16 bits, used by the search's ordering
-    /// where a fraction of a disc never changes the order but the halved
-    /// cache footprint shows up in the profile.
-    flat_i16: Vec<Vec<i16>>,
-    /// The same, with the White digit swap baked in, so evaluation never
-    /// pays for the swap lookup.
-    flat_i16_white: Vec<Vec<i16>>,
-    /// The ordering-grade tables, quantized once more to 8 bits.
+    /// The ordering-grade tables, quantized to 8 bits.
+    ///
+    /// There used to be a 16-bit pair here as well. Nothing read it: the
+    /// ordering moved to 8 bits and the only remaining reader of `flat_i16`
+    /// was the loop that built `flat_i16_white`, which nothing read at all.
+    /// Two dead copies of the weights is 600 MB resident and 37,000 pages
+    /// of address space that the live tables then have to share a TLB with.
     flat_i8: Vec<Vec<i8>>,
     flat_i8_white: Vec<Vec<i8>>,
     /// num_weights[stage][player disc count]
@@ -78,9 +76,8 @@ pub struct Evaluator {
     appear_num: Vec<[u32; NUM_TABLE_SIZE]>,
     /// Cells seen at most this many times are left alone. A cell with two
     /// examples behind it is fitting noise, and under per-cell scaling it is
-    /// exactly the cell that gets the largest step. Egaroucid drops these
-    /// too (`ADJ_IGNORE_N_APPEAR`), keeping them only in the earliest phases
-    /// where nothing is sampled well. Zero means "only skip cells never seen".
+    /// exactly the cell that gets the largest step. Zero means "only skip
+    /// cells never seen".
     min_appear: u32,
     /// Lookup tables for incremental index maintenance during search.
     indexer: PatternIndexer,
@@ -108,7 +105,7 @@ pub struct WeightView {
     /// both get the same step from a shared rate, so one is starved while
     /// the other overshoots -- and the rate that suits neither ends up
     /// halved over and over. Dividing by the count gives every cell the same
-    /// total movement per epoch, which is what scaling the rate by the
+    /// total movement per epoch
     /// appearance count does (`lr = alpha / n_appear[cell]`).
     counts: Vec<Vec<*const u32>>,
     /// Counts for `num`, laid out like it. Empty alongside `counts`.
@@ -127,8 +124,6 @@ impl Evaluator {
     /// update, and rebuilding them mid-epoch is neither needed nor safe.
     pub fn weight_view(&mut self) -> WeightView {
         self.flat_weights.clear();
-        self.flat_i16.clear();
-        self.flat_i16_white.clear();
         self.flat_i8.clear();
         self.flat_i8_white.clear();
         let counts = if self.appear.is_empty() {
@@ -351,8 +346,6 @@ impl Evaluator {
             weights: vec![stage_weights; STAGE_COUNT],
             flat_weights: Vec::new(),
             mask_off: Vec::new(),
-            flat_i16: Vec::new(),
-            flat_i16_white: Vec::new(),
             flat_i8: Vec::new(),
             flat_i8_white: Vec::new(),
             num_weights: vec![[0.0f32; NUM_TABLE_SIZE]; STAGE_COUNT],
@@ -528,16 +521,6 @@ impl Evaluator {
             .iter()
             .map(|stage| stage.iter().flat_map(|t| t.iter().copied()).collect())
             .collect();
-        self.flat_i16 = self
-            .flat_weights
-            .iter()
-            .map(|stage| {
-                stage
-                    .iter()
-                    .map(|&w| (w * I16_SCALE).clamp(-32768.0, 32767.0) as i16)
-                    .collect()
-            })
-            .collect();
         // White's table: entry m,i holds the weight the swapped index selects.
         let n_masks = self.indexer.n_masks();
         self.flat_i8 = self
@@ -548,21 +531,6 @@ impl Evaluator {
                     .iter()
                     .map(|&w| (w * I8_SCALE).clamp(-128.0, 127.0) as i8)
                     .collect()
-            })
-            .collect();
-        self.flat_i16_white = self
-            .flat_i16
-            .iter()
-            .map(|stage| {
-                let mut out = stage.clone();
-                for m in 0..n_masks {
-                    let off = self.mask_off[m] as usize;
-                    let size = self.patterns[self.indexer.mask_patterns()[m] as usize].table_size();
-                    for i in 0..size {
-                        out[off + i] = stage[off + self.indexer.swapped_index(m, i)];
-                    }
-                }
-                out
             })
             .collect();
         self.flat_i8_white = self
@@ -586,15 +554,13 @@ impl Evaluator {
     /// tables until it is rebuilt.
     fn invalidate_flat(&mut self) {
         self.flat_weights.clear();
-        self.flat_i16.clear();
         self.flat_i8.clear();
         self.flat_i8_white.clear();
-        self.flat_i16_white.clear();
         self.mask_off.clear();
     }
 
-    /// Ordering-grade evaluation from raw bitboards: 16-bit weights, so a
-    /// stage's table is half the size the exact path walks.
+    /// Ordering-grade evaluation from raw bitboards: 8-bit weights, so a
+    /// stage's table is a quarter of the size the exact path walks.
     #[inline(never)]
     pub fn eval_order_bb(
         &self,
@@ -605,7 +571,7 @@ impl Evaluator {
     ) -> f32 {
         let empties = 64 - (player | opponent).count_ones() as usize;
         let stage = 60usize.saturating_sub(empties).min(STAGE_COUNT - 1);
-        if self.flat_i16.is_empty() {
+        if self.flat_i8.is_empty() {
             // Weights were mutated since the last rebuild; fall back.
             let mut b = Board::new();
             b.black = if matches!(color, Color::Black) {

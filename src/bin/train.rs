@@ -126,7 +126,7 @@ Options:
                     epochs. A start point that was moved by hand -- a merge,
                     a smoothing pass -- sits off its own minimum, so the
                     first step is large exactly where the model is already
-                    good. Egaroucid warms up for the same reason
+                    good
   --patience <n>    Stop a stage after n epochs that neither beat its
                     incumbent nor improved on the epoch before. A descent
                     that has not yet reached the incumbent still counts as
@@ -139,8 +139,7 @@ Options:
                     A shared rate starves the rare cells and overshoots the
                     common ones, and the rate that suits neither gets halved
                     again and again -- 16 halvings in 29 epochs here without
-                    the stage converging. This is what Egaroucid does
-                    (`lr = alpha / n_appear[cell]`)
+                    the stage converging
   --restore-on-halve  On a halving, put the stage back on the weights that
                     scored its best before continuing. Halving alone only
                     slows a drift: training resumes from the weights that
@@ -150,7 +149,7 @@ Options:
                     once returning
   --min-appear N    With --cell-lr, leave cells seen N times or fewer alone.
                     Their step is the largest under per-cell scaling and the
-                    least supported by data (Egaroucid's ADJ_IGNORE_N_APPEAR)
+                    least supported by data
   --lr-smooth       After each halving pass, replace every stage's rate with
                     the geometric mean of itself (weighted double) and its two
                     neighbours. Adjacent stages differ by one ply and want
