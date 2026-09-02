@@ -153,7 +153,13 @@ const fn eval_order_empties() -> u8 {
 }
 /// From this many empties upward, ordering refines the evaluation with a
 /// one-ply lookahead (max over the opponent's replies).
-const DEEP_ORDER_EMPTIES: u8 = 16;
+///
+/// The three rungs moved out by one when the pattern indices stopped being
+/// rebuilt at every node: the lookahead's own per-move snapshot did not get
+/// cheaper, so the evaluation it competes with did, and the balance moved
+/// against it. 17/20/29 is -2.1% against 16/19/28 for 2.6% more nodes;
+/// 15/18/27, 18/20/29 and 17/21/29 are all worse.
+const DEEP_ORDER_EMPTIES: u8 = 17;
 /// Terminal score with the empty-square bonus awarded to the winner
 /// (FFO convention; also what the game pipeline records). The old
 /// plain disc difference disagreed whenever a game ended with empties left
@@ -389,9 +395,9 @@ fn stability_cut_high(player: u64, opponent: u64, empties: u8, beta: i32) -> Opt
 }
 
 /// From this many empties upward, ordering uses a two-ply lookahead.
-const DEEP2_ORDER_EMPTIES: u8 = 19;
+const DEEP2_ORDER_EMPTIES: u8 = 20;
 /// From this many empties upward, ordering uses a three-ply lookahead.
-const DEEP3_ORDER_EMPTIES: u8 = 28;
+const DEEP3_ORDER_EMPTIES: u8 = 29;
 /// Enhanced transposition cutoff: from this many empties upward, probe
 /// every child's hash entry before searching — a proven fail-high there
 /// cuts this node without any search.
@@ -7339,21 +7345,26 @@ mod tests {
         }
     }
 
-    /// The ladder builder must reproduce the hand-written shape it replaced.
+    /// The ladder builder must gain exactly one ply at each of its three
+    /// steps, wherever those steps are set.
     #[test]
     fn sort_ladder_steps_one_ply_at_a_time() {
         for (e, &d) in SORT_DEPTH_LADDER.iter().enumerate() {
-            let want = if e >= 28 {
+            let e = e as u8;
+            let want = if e >= DEEP3_ORDER_EMPTIES {
                 3
-            } else if e >= 19 {
+            } else if e >= DEEP2_ORDER_EMPTIES {
                 2
-            } else if e >= 16 {
+            } else if e >= DEEP_ORDER_EMPTIES {
                 1
             } else {
                 0
             };
             assert_eq!(d, want, "sort depth at {e} empties");
         }
+        // The steps are ordered and distinct, so each one is worth a ply.
+        const _: () = assert!(DEEP_ORDER_EMPTIES < DEEP2_ORDER_EMPTIES);
+        const _: () = assert!(DEEP2_ORDER_EMPTIES < DEEP3_ORDER_EMPTIES);
     }
 
     /// The branch-per-corner form `corner_stability_bb` replaced.

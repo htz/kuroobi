@@ -1335,6 +1335,14 @@ time back, so the trade is priced where it sits.
   and from twelve, where the tree matches the implementation this is
   measured against, from 12.7% to 6.5%. Still not free, but the balance
   moved.
+- *The ordering lookahead's ladder moved out by one rung* once the indices
+  were carried: 17/20/29 against 16/19/28 is **+1.23% +/- 0.41%** for 2.6%
+  more nodes. The lookahead's own per-move snapshot did not get cheaper, so
+  the evaluation it competes against did, and the balance moved. 15/18/27,
+  18/20/29 and 17/21/29 are all worse, and re-sweeping the table
+  boundaries, the ordering threshold, the cache size, the stability floor
+  and the four-empty cache at the new point leaves every one of them where
+  it is.
 - *PGO is worth 1.8%* (paired rounds, +1.83% +/- 0.20%, trained on band22
   and band29 - never on the set being measured). It is not applied by the
   default build; `tools/pgo-build.sh` already exists.
