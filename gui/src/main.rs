@@ -554,6 +554,15 @@ fn state(app: State<App>) -> GameView {
 fn new_game(app: State<App>) -> GameView {
     let mut game = app.game.lock().unwrap();
     *game = Reversi::new();
+    /* Start the game on empty tables. A table carried over from the
+    previous game -- or from the startup calibration -- answers positions
+    this game never searched, so the same opening gives different moves
+    from one launch to the next. The CLI clears on `clear_board` for the
+    same reason; a self-play game there is reproducible and one here was
+    not. */
+    if let Some(e) = app.engine.lock().unwrap().as_mut() {
+        e.clear_tables();
+    }
     view(&game)
 }
 

@@ -349,6 +349,10 @@ export function App() {
       }
       if (who === 'both') g.setSide('both');
       if (lv !== undefined && Number.isFinite(+lv)) g.setLevel(+lv);
+      // Start from a new game, which empties the tables. Without it the
+      // capture inherits whatever the startup calibration left in them
+      // and the same launch line gives a different game each time.
+      await g.newGame();
       // A dock tab may follow; the import status shows only while
       // learning runs post-game, and this captures that window.
       if (extra) setTab(extra);
