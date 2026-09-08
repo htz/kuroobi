@@ -162,13 +162,3 @@ codegen-units = 1
 lto = true
 codegen-units = 1
 
-# Check the stacked read-out against an external dump, position by position
-# and step by step. Needs the stack, since that is the thing being checked.
-[[bin]]
-name = "stack_check"
-required-features = ["stackedout"]
-
-[[bin]]
-name = "stack_train_check"
-required-features = ["stackedout"]
-
