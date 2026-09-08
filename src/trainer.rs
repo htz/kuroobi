@@ -84,6 +84,27 @@ pub fn load_examples_filtered_into(
     Ok(n)
 }
 
+/// Append the examples of records `[start, start + len)` of a record file
+/// that pass `filter` to `out`.
+pub fn load_examples_range_into(
+    path: &Path,
+    out: &mut Vec<Example>,
+    start: usize,
+    len: usize,
+    filter: &Filter,
+) -> io::Result<usize> {
+    out.reserve(len);
+    let mut n = 0usize;
+    record::for_each_range(path, start, len, |r| {
+        if filter.keeps(&r) {
+            out.push(r.example());
+            n += 1;
+        }
+        true
+    })?;
+    Ok(n)
+}
+
 /// Per-stage loss statistics for one epoch.
 #[derive(Debug, Clone)]
 pub struct EpochStats {

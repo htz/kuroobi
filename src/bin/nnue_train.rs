@@ -34,7 +34,9 @@ use kuroobi::evaluator::{Evaluator, STAGE_COUNT};
 use kuroobi::nnue::{sym_board, AdamState, Nnue};
 use kuroobi::pattern::{COMPACT_PATTERNS, EGAROUCID_PATTERNS, NNUE_PATTERNS};
 use kuroobi::record::Filter;
-use kuroobi::trainer::{count_examples_binary, load_examples_filtered_into, Example};
+use kuroobi::trainer::{
+    count_examples_binary, load_examples_filtered_into, load_examples_range_into, Example,
+};
 
 /// Per-stage `[count, sum_sq, sum_abs, sum_err]` over a held-out set.
 ///
@@ -166,39 +168,78 @@ fn val_mse(nn: &mut Nnue, base: Option<&Evaluator>, val: &[Example]) -> f64 {
 /// error next to the gradient work, so nothing is lost by not caching.
 const DEFAULT_MAX_EXAMPLES: usize = 48_000_000;
 
-/// A group of whole files that fit in the budget together.
+/// A group of record ranges that fit in the budget together; each part is
+/// `(file, first record, records)`.
 struct Shard {
-    files: Vec<usize>,
+    parts: Vec<(usize, usize, usize)>,
     examples: usize,
 }
 
-/// Group files into shards no larger than `max` examples. `order` varies which
-/// files share a shard between epochs, so a fixed grouping does not turn into a
-/// fixed correlation in the data.
+/// Group whole files into shards no larger than `max` examples. `order`
+/// varies which files share a shard between epochs, so a fixed grouping does
+/// not turn into a fixed correlation in the data.
 fn shards(counts: &[usize], order: &[usize], max: usize) -> Vec<Shard> {
     let mut out: Vec<Shard> = Vec::new();
     let mut cur = Shard {
-        files: Vec::new(),
+        parts: Vec::new(),
         examples: 0,
     };
     for &i in order {
         let n = counts[i];
-        if !cur.files.is_empty() && cur.examples + n > max {
+        if !cur.parts.is_empty() && cur.examples + n > max {
             out.push(std::mem::replace(
                 &mut cur,
                 Shard {
-                    files: Vec::new(),
+                    parts: Vec::new(),
                     examples: 0,
                 },
             ));
         }
-        cur.files.push(i);
+        cur.parts.push((i, 0, n));
         cur.examples += n;
     }
-    if !cur.files.is_empty() {
+    if !cur.parts.is_empty() {
         out.push(cur);
     }
     out
+}
+
+/// Cut every file into the same number of slices and build each shard from
+/// one slice of every file, so every shard carries the corpus's mix rather
+/// than that of the few files that happened to land in it. The files are
+/// split by how many random opening plies their games have, which makes a
+/// file's stage mix anything from full-range to endgame-only. Shuffling the
+/// whole corpus onto disk first would avoid it too, at the cost of a second
+/// copy of the data. `rot`
+/// rotates each file's slice boundaries per epoch so shard membership keeps
+/// changing; a slice that wraps past the end becomes two parts.
+fn interleaved_shards(counts: &[usize], rot: &[usize], max: usize) -> Vec<Shard> {
+    let total: usize = counts.iter().sum();
+    let s = total.div_ceil(max).max(1);
+    (0..s)
+        .map(|k| {
+            let mut shard = Shard {
+                parts: Vec::new(),
+                examples: 0,
+            };
+            for (i, &n) in counts.iter().enumerate() {
+                let (lo, hi) = (k * n / s, (k + 1) * n / s);
+                let len = hi - lo;
+                if len == 0 {
+                    continue;
+                }
+                let start = (lo + rot[i]) % n;
+                if start + len <= n {
+                    shard.parts.push((i, start, len));
+                } else {
+                    shard.parts.push((i, start, n - start));
+                    shard.parts.push((i, 0, len - (n - start)));
+                }
+                shard.examples += len;
+            }
+            shard
+        })
+        .collect()
 }
 
 /// Synchronous minibatch AdamW: threads accumulate gradients into private
@@ -419,6 +460,7 @@ fn main() -> ExitCode {
     let mut val_files: Vec<PathBuf> = Vec::new();
     let mut data_files: Vec<PathBuf> = Vec::new();
     let mut max_examples = DEFAULT_MAX_EXAMPLES;
+    let mut interleave = false;
     let mut val_cap: Option<usize> = None;
     let mut init: Option<PathBuf> = None;
     let mut which_patterns = String::from("egaroucid");
@@ -483,6 +525,7 @@ fn main() -> ExitCode {
             "--out" => out = PathBuf::from(it.next().unwrap()),
             "--val" => val_files.push(PathBuf::from(it.next().unwrap())),
             "--max-examples" => max_examples = it.next().unwrap().parse().unwrap(),
+            "--interleave" => interleave = true,
             "--val-cap" => val_cap = Some(it.next().unwrap().parse().unwrap()),
             "--init" => init = Some(PathBuf::from(it.next().unwrap())),
             "--base" => base_path = Some(PathBuf::from(it.next().unwrap())),
@@ -504,6 +547,13 @@ fn main() -> ExitCode {
         let mut v = Vec::new();
         for f in files {
             load_examples_filtered_into(f, &mut v, limit, &filter)?;
+        }
+        Ok(v)
+    };
+    let load_parts = |parts: &[(usize, usize, usize)]| -> std::io::Result<Vec<Example>> {
+        let mut v = Vec::new();
+        for &(i, start, len) in parts {
+            load_examples_range_into(&data_files[i], &mut v, start, len, &filter)?;
         }
         Ok(v)
     };
@@ -748,19 +798,27 @@ fn main() -> ExitCode {
             lr * decay.powi(epoch as i32 - 1)
         };
 
-        // Fresh file order each epoch, so shard membership keeps changing.
-        let mut order: Vec<usize> = (0..data_files.len()).collect();
-        for i in (1..order.len()).rev() {
-            let j = (rand() % (i as u64 + 1)) as usize;
-            order.swap(i, j);
-        }
-        let plan = shards(&counts, &order, max_examples);
+        // Fresh file order (or slice rotation) each epoch, so shard
+        // membership keeps changing.
+        let plan = if interleave {
+            let rot: Vec<usize> = counts
+                .iter()
+                .map(|&n| (rand() % n.max(1) as u64) as usize)
+                .collect();
+            interleaved_shards(&counts, &rot, max_examples)
+        } else {
+            let mut order: Vec<usize> = (0..data_files.len()).collect();
+            for i in (1..order.len()).rev() {
+                let j = (rand() % (i as u64 + 1)) as usize;
+                order.swap(i, j);
+            }
+            shards(&counts, &order, max_examples)
+        };
 
         let mut sq_total = 0.0f64;
         let mut seen = 0usize;
         for (si, shard) in plan.iter().enumerate() {
-            let files: Vec<PathBuf> = shard.files.iter().map(|&i| data_files[i].clone()).collect();
-            let mut examples = match load(&files) {
+            let mut examples = match load_parts(&shard.parts) {
                 Ok(v) => v,
                 Err(e) => {
                     eprintln!("load failed: {e}");
@@ -969,4 +1027,35 @@ fn main() -> ExitCode {
         println!("best val {best:.4}");
     }
     ExitCode::SUCCESS
+}
+
+#[cfg(test)]
+mod shard_tests {
+    use super::*;
+
+    #[test]
+    fn interleaving_gives_every_shard_a_slice_of_every_file() {
+        let counts = [1_000usize, 250, 7, 400];
+        let rot = [999usize, 0, 5, 123];
+        let plan = interleaved_shards(&counts, &rot, 600);
+        assert_eq!(plan.len(), 3);
+        let mut seen = [vec![0u8; 1_000], vec![0; 250], vec![0; 7], vec![0; 400]];
+        for shard in &plan {
+            assert!(shard.examples <= 600);
+            let mut n = 0;
+            for &(i, start, len) in &shard.parts {
+                assert!(start + len <= counts[i]);
+                for c in &mut seen[i][start..start + len] {
+                    *c += 1;
+                }
+                n += len;
+            }
+            assert_eq!(n, shard.examples);
+            // The big files land in every shard, in corpus proportion.
+            let big: usize = shard.parts.iter().filter(|p| p.0 == 0).map(|p| p.2).sum();
+            assert!((333..=334).contains(&big));
+        }
+        // Every record exactly once per epoch.
+        assert!(seen.iter().flatten().all(|&c| c == 1));
+    }
 }

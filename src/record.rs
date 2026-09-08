@@ -20,7 +20,7 @@
 //! happens here and nowhere else.
 
 use std::fs::File;
-use std::io::{self, BufWriter, Read, Write};
+use std::io::{self, BufWriter, Read, Seek, SeekFrom, Write};
 use std::path::Path;
 
 use crate::bitboard;
@@ -251,6 +251,46 @@ pub fn for_each(path: &Path, mut f: impl FnMut(Record) -> bool) -> io::Result<()
     }
 }
 
+/// Like [`for_each`] over the records `[start, start + len)` only, so a
+/// slice of every file can be read without paying for the rest.
+pub fn for_each_range(
+    path: &Path,
+    start: usize,
+    len: usize,
+    mut f: impl FnMut(Record) -> bool,
+) -> io::Result<()> {
+    const BLOCK: usize = SIZE * 4096;
+    let mut file = File::open(path)?;
+    file.seek(SeekFrom::Start((start * SIZE) as u64))?;
+    let mut buf = vec![0u8; BLOCK];
+    let mut left = len;
+    let mut carry = 0usize;
+    while left > 0 {
+        let want = (left * SIZE).min(BLOCK);
+        let mut filled = carry;
+        while filled < want {
+            match file.read(&mut buf[filled..want])? {
+                0 => break,
+                got => filled += got,
+            }
+        }
+        let eof = filled < want;
+        for rec in buf[..filled].as_chunks::<SIZE>().0 {
+            if left == 0 || !f(Record::from_bytes(rec)) {
+                return Ok(());
+            }
+            left -= 1;
+        }
+        let used = (filled / SIZE) * SIZE;
+        carry = filled - used;
+        buf.copy_within(used..filled, 0);
+        if eof {
+            return Ok(());
+        }
+    }
+    Ok(())
+}
+
 /// All records of a file.
 pub fn read_all(path: &Path) -> io::Result<Vec<Record>> {
     let mut v = Vec::with_capacity(count(path)?);
@@ -387,6 +427,39 @@ mod tests {
         assert_eq!(v.len(), 2);
         assert_eq!(v[0], sample());
         assert_eq!(v[1].ply, 0);
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn range_reads_exactly_the_records_asked_for() {
+        let dir = std::env::temp_dir().join(format!("kuroobi-range-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("t.data");
+        let mut w = Writer::create(&path).unwrap();
+        // More than one read block, so a range can straddle a block edge.
+        for ply in 0..10_000u32 {
+            w.write(&Record {
+                ply: (ply % 60) as u8,
+                game_id: ply as u16,
+                ..sample()
+            })
+            .unwrap();
+        }
+        w.finish().unwrap();
+        let ids = |start: usize, len: usize| {
+            let mut v = Vec::new();
+            for_each_range(&path, start, len, |r| {
+                v.push(r.game_id as usize);
+                true
+            })
+            .unwrap();
+            v
+        };
+        assert_eq!(ids(0, 3), vec![0, 1, 2]);
+        assert_eq!(ids(4_090, 12), (4_090..4_102).collect::<Vec<_>>());
+        assert_eq!(ids(9_998, 10), vec![9_998, 9_999]);
+        assert_eq!(ids(0, 0), Vec::<usize>::new());
+        assert_eq!(ids(0, 10_000).len(), 10_000);
         std::fs::remove_dir_all(&dir).unwrap();
     }
 }
