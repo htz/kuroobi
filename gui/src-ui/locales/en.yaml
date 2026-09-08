@@ -281,6 +281,7 @@ err:
   log_empty: "The log is empty"
   login_and_password_required: "Enter a login name and a password"
   nnue_weights_missing: "Cannot load the NNUE weights ({path}). Set the file location in the settings."
+  nnue_weights_shape: "The NNUE weights ({path}) do not fit this build: a weight file carries its own accumulator width and feature set, and this one disagrees. Pick the file the build was made for."
   no_change_detail: "No record of the changes, so they cannot be undone"
   not_from_standard_start: "Not imported: the game did not begin from the standard start position"
   observe_failed: "Cannot observe {ids}. The game has already ended, or it cannot be joined."

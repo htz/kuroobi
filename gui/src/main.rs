@@ -491,8 +491,18 @@ fn calibrate_missing(
 /// must not show internal jargon without a fix suggestion, so map them
 /// to `err.*` keys and pass the path along as a parameter.
 fn setup_error(e: String) -> String {
+    // A file that cannot be read carries the OS error; one that reads but does
+    // not fit this build fails validation, which never does. Two `weights/`
+    // networks of different shapes now sit side by side, so the file picker
+    // can hand us a readable file the build cannot use, and "not found" would
+    // be the wrong thing to say about a file the user just picked.
+    let shape = !e.contains("(os error");
     let key = if e.starts_with("nnue ") {
-        "err.nnue_weights_missing"
+        if shape {
+            "err.nnue_weights_shape"
+        } else {
+            "err.nnue_weights_missing"
+        }
     } else if e.starts_with("weights ") {
         "err.linear_weights_missing"
     } else {
@@ -2686,6 +2696,27 @@ fn main() {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A file the build cannot use is not a missing file: the picker just
+    /// handed it to us, so saying "not found" would send the user looking
+    /// for it. Validation failures carry no OS error; I/O failures do.
+    #[test]
+    fn shape_and_absence_are_different_errors() {
+        assert_eq!(
+            setup_error("nnue weights/nnue-h64.bin: accumulator width mismatch".into()),
+            "err.nnue_weights_shape|path=weights/nnue-h64.bin"
+        );
+        assert_eq!(
+            setup_error("nnue weights/x.bin: No such file or directory (os error 2)".into()),
+            "err.nnue_weights_missing|path=weights/x.bin"
+        );
+        assert_eq!(
+            setup_error(
+                "weights weights/linear.bin: No such file or directory (os error 2)".into()
+            ),
+            "err.linear_weights_missing|path=weights/linear.bin"
+        );
+    }
 
     /// Hand-off form: line 1 = start position, line 2 = moves.
     #[test]

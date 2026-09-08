@@ -277,6 +277,7 @@ err:
   log_empty: "ログが空です"
   login_and_password_required: "ログイン名とパスワードを入力してください"
   nnue_weights_missing: "NNUE の重みを読み込めません ({path})。設定でファイルの場所を指定してください。"
+  nnue_weights_shape: "この NNUE の重み ({path}) はこのビルドと形が合いません。重みファイルは自身の accumulator 幅と特徴集合を持っており、それが一致していません。このビルド向けのファイルを選んでください。"
   no_change_detail: "書き換えの明細が無いので戻せません"
   not_from_standard_start: "初期局面から始まった対局ではないため取り込みません"
   observe_failed: "{ids} を観戦できませんでした。対局がすでに終わっているか、参加できない対局です。"
