@@ -624,7 +624,7 @@ mod tests {
         nn.quantize();
         walk_game(&nn, |board, ply| {
             let ix = nn.indices(board.black, board.white);
-            let q = nn.net_from_indices(&ix, board);
+            let q = nn.eval_from_indices(&ix, board);
             let s = scalar_discs(&nn, board);
             assert!(
                 (q - s).abs() < 1e-6,
@@ -657,8 +657,8 @@ mod tests {
         let mut worst = 0.0f32;
         walk_game(&nn, |board, _| {
             let ix = nn.indices(board.black, board.white);
-            let f = nn.net_indices(board, &ix);
-            let q = nn.net_from_indices(&ix, board);
+            let f = nn.eval_indices(board, &ix);
+            let q = nn.eval_from_indices(&ix, board);
             eprintln!("{} empty: f32 {f:.3} int {q:.3}", board.empty_count());
             worst = worst.max((q - f).abs() / f.abs().max(4.0));
         });
@@ -666,5 +666,132 @@ mod tests {
             worst < 5e-2,
             "integer stack drifts {worst} (relative) from f32"
         );
+    }
+}
+
+#[cfg(test)]
+mod probe {
+    use super::*;
+    use crate::board::Board;
+    use crate::nnue::SO_SCORE;
+    use crate::position::Position;
+
+    /// Per-stage range of every layer of a trained model, and of the
+    /// activations it produces on random games, against the integer grid.
+    #[test]
+    #[ignore]
+    fn stage_ranges() {
+        let path = std::env::var("KUROOBI_STACK_WEIGHTS").expect("KUROOBI_STACK_WEIGHTS");
+        let mut nn = Nnue::new(crate::pattern::NNUE_PATTERNS);
+        nn.load(std::path::Path::new(&path)).expect("weights load");
+        nn.quantize();
+        const S: usize = crate::nnue::SO_STAGES;
+        // [stage][what]: max |l1 pre|, max |l2 pre|, n
+        let mut l1max = vec![0f32; S];
+        let mut l1pos = vec![0f32; S];
+        let mut l2max = vec![0f32; S];
+        // Mean |contribution| to the output, in discs: hidden path, skip path.
+        let mut hid = vec![0f64; S];
+        let mut skip = vec![0f64; S];
+        let mut n = vec![0usize; S];
+        let mut seed: u64 = 0x9e37_79b9_7f4a_7c15;
+        let mut rnd = move || {
+            seed ^= seed << 13;
+            seed ^= seed >> 7;
+            seed ^= seed << 17;
+            seed
+        };
+        for _ in 0..200 {
+            let mut board = Board::new();
+            loop {
+                let stage = crate::evaluator::Evaluator::stage(&board);
+                let st = so_stage(stage);
+                let ix = nn.indices(board.black, board.white);
+                let feats = nn.features_player(&ix, board.player(), stage);
+                let mut raw = [0.0f32; ACC_DIMS];
+                for &f in feats.iter().take(nn.n_masks) {
+                    let row = &nn.ft[f as usize * ACC_DIMS..(f as usize + 1) * ACC_DIMS];
+                    for h in 0..ACC_DIMS {
+                        raw[h] += row[h];
+                    }
+                }
+                for h in 0..ACC_DIMS {
+                    raw[h] += nn.ft_bias[h];
+                }
+                let acc = crate::nnue::fold_pairs_f32(&raw);
+                let (pa, _) = nn.pa_forward(&feats, stage);
+                let xin = crate::nnue::stack_inputs(&acc, &pa);
+                let mob = crate::nnue::mob_unit(Nnue::mob_index(&board));
+                let mut a1 = [0f32; SO_L1 * 2];
+                for i in 0..SO_L1 {
+                    let row = &nn.so_l1_w[(st * SO_L1 + i) * crate::nnue::SO_L1_IN..];
+                    let mut x = nn.so_l1_b[st * SO_L1 + i];
+                    for (k, &v) in xin.iter().enumerate() {
+                        x += row[k] * v;
+                    }
+                    x += row[SO_SKIP] * mob;
+                    l1max[st] = l1max[st].max(x.abs());
+                    l1pos[st] = l1pos[st].max(x);
+                    a1[i] = (x * x * crate::nnue::ACT_SCALE).clamp(0.0, 1.0);
+                    a1[SO_L1 + i] = x.clamp(0.0, 1.0);
+                }
+                let ow = &nn.so_out_w[st * OUT_IN..];
+                let mut h = 0f32;
+                for j in 0..SO_L2 {
+                    let row = &nn.so_l2_w[(st * SO_L2 + j) * (SO_L1 * 2)..];
+                    let mut x = nn.so_l2_b[st * SO_L2 + j];
+                    for (i, a) in a1.iter().enumerate() {
+                        x += row[i] * a;
+                    }
+                    l2max[st] = l2max[st].max(x);
+                    let c = x.clamp(0.0, 1.0);
+                    h += ow[j] * c * c * crate::nnue::ACT_SCALE;
+                }
+                let mut s = 0f32;
+                for (k, &v) in xin.iter().enumerate() {
+                    s += ow[SO_L2 + k] * v;
+                }
+                hid[st] += (h * SO_SCORE).abs() as f64;
+                skip[st] += (s * SO_SCORE).abs() as f64;
+                n[st] += 1;
+                let moves = board.movable();
+                if moves == 0 {
+                    board.pass();
+                    if board.movable() == 0 {
+                        break;
+                    }
+                    continue;
+                }
+                let cnt = moves.count_ones() as u64;
+                let pick = (rnd() % cnt) as u32;
+                let mut m = moves;
+                for _ in 0..pick {
+                    m &= m - 1;
+                }
+                board.make_move_bits(Position::from_index(m.trailing_zeros()).unwrap());
+            }
+        }
+        eprintln!("st   n   |l1w|max  |l1b|max  |l2w|max  |l2b|max  |ow|max  l1pre_max l1pre_pos l2pre_max  |hid|  |skip|  ob");
+        for st in 0..S {
+            let amax = |v: &[f32]| v.iter().fold(0f32, |m, x| m.max(x.abs()));
+            let l1w = amax(
+                &nn.so_l1_w
+                    [st * SO_L1 * crate::nnue::SO_L1_IN..(st + 1) * SO_L1 * crate::nnue::SO_L1_IN],
+            );
+            let l1b = amax(&nn.so_l1_b[st * SO_L1..(st + 1) * SO_L1]);
+            let l2w = amax(&nn.so_l2_w[st * SO_L2 * SO_L1 * 2..(st + 1) * SO_L2 * SO_L1 * 2]);
+            let l2b = amax(&nn.so_l2_b[st * SO_L2..(st + 1) * SO_L2]);
+            let ow = amax(&nn.so_out_w[st * OUT_IN..(st + 1) * OUT_IN]);
+            eprintln!(
+                "{st:2} {:4} {l1w:9.5} {l1b:9.5} {l2w:9.5} {l2b:9.5} {ow:8.5} {:9.4} {:9.4} {:9.4} {:6.2} {:6.2} {:6.2}",
+                n[st],
+                l1max[st],
+                l1pos[st],
+                l2max[st],
+                hid[st] / n[st].max(1) as f64,
+                skip[st] / n[st].max(1) as f64,
+                nn.so_out_b[st] * SO_SCORE,
+            );
+        }
     }
 }

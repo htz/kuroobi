@@ -7,13 +7,16 @@
 //!
 //! Usage:
 //!   nnue_train [--epochs n] [--lr f] [--limit n] [--val f]... [--out path]
-//!              [--select-by mse|mae|spread] [--val-by-stage]
+//!              [--select-by mse|mae|spread] [--val-by-stage] [--grid]
 //!              <data-file>...
 //!
 //! `--select-by` chooses which held-out number keeps a snapshot. The default
 //! stays `mse`; `spread` is the error with each stage's constant offset
 //! removed, which is what move ordering sees. `--val-by-stage` prints the
-//! breakdown behind those numbers, one row per stage.
+//! breakdown behind those numbers, one row per stage. The `grid` column is
+//! how far the engine's integer evaluation sits from the f32 model on the
+//! same positions; `--grid` trains with the rounding the engine will apply
+//! in the forward pass (see `Nnue::set_so_grid`).
 
 use std::path::PathBuf;
 use std::process::ExitCode;
@@ -59,26 +62,33 @@ use kuroobi::trainer::{count_examples_binary, load_examples_binary_into, Example
 /// `quantize` fills the integer tables from the current weights and leaves
 /// the f32 side alone, so calling it here costs one pass over the weights
 /// per epoch and does not disturb training.
-fn val_by_stage(nn: &mut Nnue, val: &[Example]) -> Vec<[f64; 4]> {
+fn val_by_stage(nn: &mut Nnue, val: &[Example]) -> Vec<[f64; 5]> {
     nn.quantize();
-    let mut acc = vec![[0.0f64; 4]; STAGE_COUNT];
+    let mut acc = vec![[0.0f64; 5]; STAGE_COUNT];
     for ex in val {
         let board = ex.board();
         let ix = nn.indices(ex.black, ex.white);
         // Prediction minus truth, so a positive mean reads as "this model
         // scores positions high".
-        let e = nn.eval_from_indices(&ix, &board) as f64 - ex.score as f64;
+        let q = nn.eval_from_indices(&ix, &board);
+        let e = q as f64 - ex.score as f64;
         let a = &mut acc[Evaluator::stage(&board)];
         a[0] += 1.0;
         a[1] += e * e;
         a[2] += e.abs();
         a[3] += e;
+        /* How far the integer path is from the f32 weights it was derived
+        from. With the stacked read-out this is the grid the hidden layers
+        were rounded onto: a stage whose weights all sit below one step
+        rounds to nothing, and the engine then plays a different model
+        from the one the loss was measured on. */
+        a[4] += (q - nn.eval_indices(&board, &ix)).abs() as f64;
     }
     acc
 }
 
 /// `(mse, mae, bias, spread)` from one stage's sums, or from a pooled row.
-fn stats_of(a: &[f64; 4]) -> (f64, f64, f64, f64) {
+fn stats_of(a: &[f64; 5]) -> (f64, f64, f64, f64) {
     let n = a[0];
     if n == 0.0 {
         return (f64::NAN, f64::NAN, f64::NAN, f64::NAN);
@@ -88,8 +98,8 @@ fn stats_of(a: &[f64; 4]) -> (f64, f64, f64, f64) {
 }
 
 /// Sums over every stage, so the pooled numbers weigh a position once each.
-fn pooled(acc: &[[f64; 4]]) -> [f64; 4] {
-    let mut t = [0.0f64; 4];
+fn pooled(acc: &[[f64; 5]]) -> [f64; 5] {
+    let mut t = [0.0f64; 5];
     for a in acc {
         for (d, s) in t.iter_mut().zip(a) {
             *d += s;
@@ -98,7 +108,7 @@ fn pooled(acc: &[[f64; 4]]) -> [f64; 4] {
     t
 }
 
-fn select_score(which: &str, a: &[f64; 4]) -> f64 {
+fn select_score(which: &str, a: &[f64; 5]) -> f64 {
     let (mse, mae, _, sd) = stats_of(a);
     match which {
         "mae" => mae,
@@ -324,6 +334,14 @@ fn main() -> ExitCode {
     let mut minibatch = 0usize;
     let mut adam = false;
     let mut sym_train = false;
+    // Training on the engine's integer grid (see `Nnue::set_so_grid`). Off
+    // by default: measured against the plain f32 run under the same
+    // conditions (4 epochs, 25.5M positions) it changed nothing -- val MSE
+    // 43.23 against 43.30, grid 0.096 against 0.102 discs -- because the
+    // rounding error the grid adds to a layer that sits inside its clamps
+    // is already small; the disc-sized disagreements came from stages whose
+    // hidden layers had collapsed, and those were an initialisation fault.
+    let mut so_grid = false;
     let mut lookahead = 0u32;
     let mut legacy_optimizer = false;
     let mut fit_num = false;
@@ -356,6 +374,7 @@ fn main() -> ExitCode {
             "--minibatch" => minibatch = it.next().unwrap().parse().unwrap(),
             "--adam" => adam = true,
             "--sym-train" => sym_train = true,
+            "--grid" => so_grid = true,
             // The recipe wraps AdamW in Lookahead(k=6,
             // alpha=0.5). It rewrites every weight every k steps, which on a
             // CPU is not free -- hence a flag rather than always on.
@@ -454,6 +473,7 @@ fn main() -> ExitCode {
         },
         None => nn.init_weights(),
     }
+    nn.set_so_grid(so_grid);
     println!(
         "nnue: patterns={which_patterns} masks={} H={} features={}",
         patterns.iter().map(|p| p.masks.len()).sum::<usize>(),
@@ -689,31 +709,33 @@ fn main() -> ExitCode {
         let acc = val_by_stage(&mut nn, &val);
         let tot = pooled(&acc);
         let (vmse, vmae, vbias, vsd) = stats_of(&tot);
+        let vgrid = tot[4] / tot[0].max(1.0);
         let vm = select_score(&select_by, &tot);
         let is_best = vm < best;
         let marker = if is_best { " *best" } else { "" };
         println!(
             "epoch {epoch:>2}/{epochs}: train {train_mse:.4}  val mse {vmse:.4} mae {vmae:.4} \
-             bias {vbias:+.4} spread {vsd:.4}{marker}  ({:.1}s, {:.0} pos/s)",
+             bias {vbias:+.4} spread {vsd:.4} grid {vgrid:.3}{marker}  ({:.1}s, {:.0} pos/s)",
             t.elapsed().as_secs_f32(),
             seen as f32 / t.elapsed().as_secs_f32(),
         );
         if val_by_stage_report {
-            println!("  stage  empties       n      MSE      MAE     bias   spread");
+            println!("  stage  empties       n      MSE      MAE     bias   spread     grid");
             for (st, a) in acc.iter().enumerate() {
                 if a[0] == 0.0 {
                     continue;
                 }
                 let (mse, mae, bias, sd) = stats_of(a);
                 println!(
-                    "  {:>5}  {:>7}  {:>6}  {:>7.3}  {:>7.3}  {:>+7.3}  {:>7.3}",
+                    "  {:>5}  {:>7}  {:>6}  {:>7.3}  {:>7.3}  {:>+7.3}  {:>7.3}  {:>7.3}",
                     st,
                     60 - st,
                     a[0] as u64,
                     mse,
                     mae,
                     bias,
-                    sd
+                    sd,
+                    a[4] / a[0]
                 );
             }
         }

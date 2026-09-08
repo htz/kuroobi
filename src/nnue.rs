@@ -1584,6 +1584,21 @@ pub struct Nnue {
     so_l2_b: Vec<f32>,
     so_out_w: Vec<f32>,
     so_out_b: Vec<f32>,
+    /// What training's forward pass reads in place of `so_l1_w` and
+    /// `so_l2_w`: the same weights on the int8 grid the engine will run
+    /// (`round(w * 64) / 64`, as `quantize` rounds them) when `so_grid` is
+    /// set, a plain copy otherwise. Gradients still land on the f32
+    /// originals -- the rounding is stepped through as if it were the
+    /// identity -- so the loss sees the grid and the optimizer keeps the
+    /// resolution it needs to move across it. Rebuilt by `refresh_so_grid`
+    /// after every write to the originals.
+    so_l1_wq: Vec<f32>,
+    so_l2_wq: Vec<f32>,
+    /// Whether training rounds weights and activations to the engine's
+    /// integer grid. Off by default: the f32 model's own gradient stays
+    /// exact for the finite-difference tests, and on the full data the
+    /// grid made no measurable difference (see `--grid` in `nnue_train`).
+    so_grid: bool,
 
     /// Per-(stage, mobility) tempo correction: `mob_w[stage * MOB_BUCKETS + n]`.
     ///
@@ -1724,6 +1739,9 @@ impl Nnue {
             so_l2_b: vec![0.0; SO_SIZES.3],
             so_out_w: vec![0.0; SO_SIZES.4],
             so_out_b: vec![0.0; SO_SIZES.5],
+            so_l1_wq: vec![0.0; SO_SIZES.0],
+            so_l2_wq: vec![0.0; SO_SIZES.2],
+            so_grid: false,
             pw: vec![0.0; STAGE_COUNT * HALF],
             ftc_i16: Vec::new(),
             ft_b_i8: Vec::new(),
@@ -2230,9 +2248,17 @@ impl Nnue {
             Drawn once and copied across every stage, which is why it
             copies its first stack over all the others. Sixty-one
             independent draws are sixty-one different models, each trained
-            on the 1/61 of the data that lands in its stage. */
-            let b1 = 1.0 / ((H + 1) as f32).sqrt();
-            for i in 0..SO_L1 * (H + 1) {
+            on the 1/61 of the data that lands in its stage (val MSE 51.2
+            against 43.3 at four epochs).
+
+            The block sizes here must be the layers' real per-stage sizes.
+            They once were the accumulator half's alone, which sliced a
+            period-2064 draw every 4112 values: every stage got a
+            phase-shifted start rather than a copy, and stages 31-35 then
+            trained into a regime the integer grid cannot resolve (integer
+            drift 0.85-1.56 discs against 0.09-0.11 elsewhere). */
+            let b1 = 1.0 / (SO_L1_IN as f32).sqrt();
+            for i in 0..SO_L1 * SO_L1_IN {
                 self.so_l1_w[i] = next() * b1;
             }
             for i in 0..SO_L1 {
@@ -2245,17 +2271,18 @@ impl Nnue {
             for i in 0..SO_L2 {
                 self.so_l2_b[i] = next() * b2;
             }
-            let bo = 1.0 / ((SO_L2 + H) as f32).sqrt();
-            for i in 0..SO_L2 + H {
+            let bo = 1.0 / (SO_OUT_IN as f32).sqrt();
+            for i in 0..SO_OUT_IN {
                 self.so_out_w[i] = next() * bo;
             }
             self.so_out_b[0] = 0.0;
-            replicate_stage0(&mut self.so_l1_w, SO_L1 * (H + 1));
+            replicate_stage0(&mut self.so_l1_w, SO_L1 * SO_L1_IN);
             replicate_stage0(&mut self.so_l1_b, SO_L1);
             replicate_stage0(&mut self.so_l2_w, SO_L2 * (SO_L1 * 2));
             replicate_stage0(&mut self.so_l2_b, SO_L2);
-            replicate_stage0(&mut self.so_out_w, SO_L2 + H);
+            replicate_stage0(&mut self.so_out_w, SO_OUT_IN);
             replicate_stage0(&mut self.so_out_b, 1);
+            self.refresh_so_grid();
         }
     }
 
@@ -3071,12 +3098,26 @@ impl Nnue {
         let _ = discs;
         let st = so_stage(stage);
         let m = mob_unit(mob);
-        let xin = stack_inputs(acc, pa);
+        let mut xin = stack_inputs(acc, pa);
+        /* Activations on the engine's byte grid when asked (see `so_grid`):
+        `floor(a * 256)`, capped at 255, is what the integer stack stores.
+        A stage whose layers sit well inside the clamps -- pre-activations
+        of 0.3, weights of 0.1 -- runs on a few dozen of the 256 steps and
+        a handful of the 127 weight steps; nothing in an f32 loss objects,
+        but the engine then disagrees with the trained model by discs. */
+        let grid = |a: f32| (a * 256.0).floor().min(255.0) / 256.0;
+        let act = |a: f32| if self.so_grid { grid(a) } else { a };
+        if self.so_grid {
+            for x in xin.iter_mut() {
+                *x = grid(*x);
+            }
+        }
 
         // ---- forward, keeping every pre-activation for the way back ----
+        debug_assert_eq!(self.so_l1_wq.len(), self.so_l1_w.len());
         let mut l1 = [0.0f32; SO_L1];
         for (i, v) in l1.iter_mut().enumerate() {
-            let row = &self.so_l1_w[(st * SO_L1 + i) * SO_L1_IN..];
+            let row = &self.so_l1_wq[(st * SO_L1 + i) * SO_L1_IN..];
             let mut x = self.so_l1_b[st * SO_L1 + i];
             for (k, &xv) in xin.iter().enumerate() {
                 x += row[k] * xv;
@@ -3085,20 +3126,20 @@ impl Nnue {
         }
         let mut a1 = [0.0f32; SO_L1 * 2];
         for i in 0..SO_L1 {
-            a1[i] = (l1[i] * l1[i] * ACT_SCALE).clamp(0.0, 1.0);
-            a1[SO_L1 + i] = l1[i].clamp(0.0, 1.0);
+            a1[i] = act((l1[i] * l1[i] * ACT_SCALE).clamp(0.0, 1.0));
+            a1[SO_L1 + i] = act(l1[i].clamp(0.0, 1.0));
         }
         let mut l2 = [0.0f32; SO_L2];
         let mut v2 = [0.0f32; SO_L2];
         for j in 0..SO_L2 {
-            let row = &self.so_l2_w[(st * SO_L2 + j) * (SO_L1 * 2)..];
+            let row = &self.so_l2_wq[(st * SO_L2 + j) * (SO_L1 * 2)..];
             let mut x = self.so_l2_b[st * SO_L2 + j];
             for (i, a) in a1.iter().enumerate() {
                 x += row[i] * a;
             }
             l2[j] = x;
             let c = x.clamp(0.0, 1.0);
-            v2[j] = c * c * ACT_SCALE;
+            v2[j] = act(c * c * ACT_SCALE);
         }
         let ow = &self.so_out_w[st * SO_OUT_IN..];
         let mut unit = self.so_out_b[st];
@@ -3147,7 +3188,7 @@ impl Nnue {
             }
             sink.so_l2_b[st * SO_L2 + j] += dl2;
             let woff = (st * SO_L2 + j) * (SO_L1 * 2);
-            let row = &self.so_l2_w[woff..woff + SO_L1 * 2];
+            let row = &self.so_l2_wq[woff..woff + SO_L1 * 2];
             for i in 0..SO_L1 * 2 {
                 sink.so_l2_w[woff + i] += dl2 * a1[i];
                 da1[i] += dl2 * row[i];
@@ -3167,7 +3208,7 @@ impl Nnue {
             }
             sink.so_l1_b[st * SO_L1 + i] += dl1;
             let woff = (st * SO_L1 + i) * SO_L1_IN;
-            let row = &self.so_l1_w[woff..woff + SO_L1_IN];
+            let row = &self.so_l1_wq[woff..woff + SO_L1_IN];
             for (k, &xv) in xin.iter().enumerate() {
                 sink.so_l1_w[woff + k] += dl1 * xv;
                 dxin[k] += dl1 * row[k];
@@ -3618,6 +3659,7 @@ impl Nnue {
                     }
                 }
             }
+            self.refresh_so_grid();
         }
 
         for i in 0..self.mlp_mob_w.len() {
@@ -3873,7 +3915,31 @@ impl Nnue {
                 "reference dump is longer than this build's tables",
             ));
         }
+        self.refresh_so_grid();
         Ok(())
+    }
+
+    /// Whether training's forward pass runs on the engine's integer grid.
+    /// See `so_grid`.
+    pub fn set_so_grid(&mut self, on: bool) {
+        self.so_grid = on;
+        self.refresh_so_grid();
+    }
+
+    /// Rebuild the forward-pass copies of the hidden layers' weights.
+    /// Must follow every write to `so_l1_w` / `so_l2_w`.
+    fn refresh_so_grid(&mut self) {
+        let round = |w: f32| {
+            if self.so_grid {
+                (w * 64.0).round() / 64.0
+            } else {
+                w
+            }
+        };
+        self.so_l1_wq.clear();
+        self.so_l1_wq.extend(self.so_l1_w.iter().map(|&w| round(w)));
+        self.so_l2_wq.clear();
+        self.so_l2_wq.extend(self.so_l2_w.iter().map(|&w| round(w)));
     }
 
     /// Bring every row up to date before the weights are read.
@@ -4002,6 +4068,7 @@ impl Nnue {
                 *w = *sw;
             }
         }
+        self.refresh_so_grid();
     }
 
     /// Replace every trainable table at once (widening / conversion tools).
@@ -4897,6 +4964,7 @@ impl Nnue {
             read_into(&mut r, &mut self.pa)?;
             read_into(&mut r, &mut self.pa_bias)?;
         }
+        self.refresh_so_grid();
         Ok(())
     }
 }
@@ -5282,6 +5350,57 @@ mod tests {
     The loss is `((out - target)/SO_SCORE)^2`, which is what `grad_stacked`
     accumulates into the sink -- the squared error on the /64
     scale. */
+    /// With the grid on, training's forward pass is the rounded model and
+    /// not the f32 one: on freshly initialised weights (uniform within
+    /// 1/sqrt(257), so a good share of them under one grid step of 1/64)
+    /// the two must give different losses, the hidden weights read must be
+    /// on the grid, and the originals must not be.
+    #[cfg(feature = "stackedout")]
+    #[test]
+    fn stacked_grid_rounds_the_forward_pass() {
+        let mut nn = Nnue::new(crate::pattern::NNUE_PATTERNS);
+        nn.init_weights();
+        let mut board = Board::new();
+        for _ in 0..12 {
+            let m = board.movable();
+            let pos = Position::from_index(m.trailing_zeros()).unwrap();
+            board.make_move(pos).unwrap();
+        }
+        let ix = nn.indices(board.black, board.white);
+        let stage = crate::evaluator::Evaluator::stage(&board);
+        let discs = board.black.count_ones() as usize;
+        let mob = Nnue::mob_index(&board);
+        let loss_of = |nn: &mut Nnue, on: bool| {
+            nn.set_so_grid(on);
+            let mut sink = GradSink::new(1);
+            nn.grad_black_into(&ix, stage, discs, mob, 7.0, &mut sink)
+        };
+        let off = loss_of(&mut nn, false);
+        let on = loss_of(&mut nn, true);
+        assert!(
+            (on - off).abs() > 1e-6,
+            "grid on and off gave the same loss {on}; the forward pass is not rounding"
+        );
+        let on_grid = |w: f32| ((w * 64.0).round() / 64.0 - w).abs() < 1e-7;
+        assert!(
+            nn.so_l1_wq.iter().all(|&w| on_grid(w)),
+            "L1 read off the grid"
+        );
+        assert!(
+            nn.so_l2_wq.iter().all(|&w| on_grid(w)),
+            "L2 read off the grid"
+        );
+        assert!(
+            nn.so_l1_w.iter().any(|&w| !on_grid(w)),
+            "the originals were rounded; the optimizer would have nothing to move"
+        );
+        nn.set_so_grid(false);
+        assert!(
+            nn.so_l1_wq == nn.so_l1_w,
+            "grid off must read the originals"
+        );
+    }
+
     #[cfg(feature = "stackedout")]
     #[test]
     fn stacked_gradient_matches_finite_differences() {
@@ -5327,6 +5446,7 @@ mod tests {
         for v in nn.so_out_b.iter_mut() {
             *v = rnd() * 0.5;
         }
+        nn.refresh_so_grid();
 
         let mut board = Board::new();
         for _ in 0..17 {
@@ -5423,11 +5543,16 @@ mod tests {
             };
             // SAFETY: the pointer is used before any other borrow of `nn`.
             let orig = unsafe { *cell(nn, sel, i) };
+            // The forward pass reads the hidden weights through their
+            // grid copies; a direct write has to be followed through.
             unsafe { *cell(nn, sel, i) = orig + h };
+            nn.refresh_so_grid();
             let up = loss(nn);
             unsafe { *cell(nn, sel, i) = orig - h };
+            nn.refresh_so_grid();
             let down = loss(nn);
             unsafe { *cell(nn, sel, i) = orig };
+            nn.refresh_so_grid();
             let numeric = (up - down) / (2.0 * h);
             /* Absolute floor before the relative comparison. A central
             difference on f32 with h=1e-3 carries a few times 1e-5 of noise,
