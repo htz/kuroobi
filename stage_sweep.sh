@@ -48,7 +48,7 @@ for st in "$@"; do
     --stage "$st" --patience 6 \
     $RATE_OPTS \
     --weights "$D/linear.bin" --per-stage-best \
-    --val bench/val_allstage.data \
+    --val bench/val61.data \
     --patterns egaroucid --max-examples 0 \
     "$DATA" > "$D/train.log" 2>&1 &
 done
@@ -64,5 +64,5 @@ for st in "$@"; do
   [ -f "$F" ] && INPUTS="$INPUTS $F"
 done
 # shellcheck disable=SC2086
-./target/release/stage_merge --val bench/val_allstage.data --out "$OUT" $INPUTS
+./target/release/stage_merge --val bench/val61.data --out "$OUT" $INPUTS
 echo "merged into $OUT"

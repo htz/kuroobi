@@ -7,7 +7,13 @@
 //!
 //! Usage:
 //!   nnue_train [--epochs n] [--lr f] [--limit n] [--val f]... [--out path]
+//!              [--select-by mse|mae|spread] [--val-by-stage]
 //!              <data-file>...
+//!
+//! `--select-by` chooses which held-out number keeps a snapshot. The default
+//! stays `mse`; `spread` is the error with each stage's constant offset
+//! removed, which is what move ordering sees. `--val-by-stage` prints the
+//! breakdown behind those numbers, one row per stage.
 
 use std::path::PathBuf;
 use std::process::ExitCode;
@@ -18,18 +24,79 @@ use kuroobi::nnue::{sym_board, AdamState, Nnue};
 use kuroobi::pattern::{COMPACT_PATTERNS, EGAROUCID_PATTERNS, NNUE_PATTERNS};
 use kuroobi::trainer::{count_examples_binary, load_examples_binary_into, Example};
 
+/// Per-stage `[count, sum_sq, sum_abs, sum_err]` over a held-out set.
+///
+/// The signed sum is what the pooled MSE has always thrown away, and it is
+/// the half that decides how a model should be judged. A stage's mean error
+/// is a constant offset on every position in that stage. Move ordering never
+/// sees it -- the moves compared at a node are all one ply deeper, hence all
+/// in the same stage, so a per-stage constant cancels in the argmax -- while
+/// the spread around it is the part that can reorder moves.
+///
+/// Measured on the same positions, the H=64 network scores MAE 5.493 against
+/// the linear model's 4.621 and loses on that number, yet it carries a +3.75
+/// offset: take the offset out and its spread is 5.356 against 6.131, and it
+/// wins 63-28 over the board. Ranked by spread, five evaluators came out in
+/// exactly their head-to-head order; ranked by MAE, the strongest placed
+/// fourth.
+///
+/// The offset is still worth removing, which is why it is reported rather
+/// than discarded: a midgame score meets an exact endgame value at the
+/// solver boundary, aspiration windows carry a bound across depths, and the
+/// selective-search margins are calibrated in discs. All three compare
+/// numbers a per-stage offset does move.
+fn val_by_stage(nn: &Nnue, val: &[Example]) -> Vec<[f64; 4]> {
+    let mut acc = vec![[0.0f64; 4]; STAGE_COUNT];
+    for ex in val {
+        let board = ex.board();
+        let ix = nn.indices(ex.black, ex.white);
+        // Prediction minus truth, so a positive mean reads as "this model
+        // scores positions high".
+        let e = nn.eval_indices(&board, &ix) as f64 - ex.score as f64;
+        let a = &mut acc[Evaluator::stage(&board)];
+        a[0] += 1.0;
+        a[1] += e * e;
+        a[2] += e.abs();
+        a[3] += e;
+    }
+    acc
+}
+
+/// `(mse, mae, bias, spread)` from one stage's sums, or from a pooled row.
+fn stats_of(a: &[f64; 4]) -> (f64, f64, f64, f64) {
+    let n = a[0];
+    if n == 0.0 {
+        return (f64::NAN, f64::NAN, f64::NAN, f64::NAN);
+    }
+    let (mse, mae, bias) = (a[1] / n, a[2] / n, a[3] / n);
+    (mse, mae, bias, (mse - bias * bias).max(0.0).sqrt())
+}
+
+/// Sums over every stage, so the pooled numbers weigh a position once each.
+fn pooled(acc: &[[f64; 4]]) -> [f64; 4] {
+    let mut t = [0.0f64; 4];
+    for a in acc {
+        for (d, s) in t.iter_mut().zip(a) {
+            *d += s;
+        }
+    }
+    t
+}
+
+fn select_score(which: &str, a: &[f64; 4]) -> f64 {
+    let (mse, mae, _, sd) = stats_of(a);
+    match which {
+        "mae" => mae,
+        "spread" => sd,
+        _ => mse,
+    }
+}
+
 fn val_mse(nn: &Nnue, val: &[Example]) -> f64 {
     if val.is_empty() {
         return f64::NAN;
     }
-    let mut sum = 0.0f64;
-    for ex in val {
-        let board = ex.board();
-        let ix = nn.indices(ex.black, ex.white);
-        let e = ex.score as f64 - nn.eval_indices(&board, &ix) as f64;
-        sum += e * e;
-    }
-    sum / val.len() as f64
+    stats_of(&pooled(&val_by_stage(nn, val))).0
 }
 
 /// How many examples may be resident at once. The full corpus is far larger
@@ -232,6 +299,10 @@ fn main() -> ExitCode {
     let mut decay = 1.0f32;
     let mut cosine = false;
     let mut plateau = 0usize;
+    // Which held-out number decides the best snapshot, and whether to print
+    // the per-stage breakdown. See `val_by_stage`.
+    let mut select_by = String::from("mse");
+    let mut val_by_stage_report = false;
     let mut plateau_factor = 0.5f32;
     let mut plateau_min = 1e-6f32;
     let mut wd = 0.0f32;
@@ -262,6 +333,8 @@ fn main() -> ExitCode {
             "--decay" => decay = it.next().unwrap().parse().unwrap(),
             "--cosine" => cosine = true,
             "--plateau" => plateau = it.next().unwrap().parse().unwrap(),
+            "--select-by" => select_by = it.next().unwrap(),
+            "--val-by-stage" => val_by_stage_report = true,
             "--plateau-factor" => plateau_factor = it.next().unwrap().parse().unwrap(),
             "--plateau-min" => plateau_min = it.next().unwrap().parse().unwrap(),
             "--wd" => wd = it.next().unwrap().parse().unwrap(),
@@ -460,10 +533,14 @@ fn main() -> ExitCode {
     let mut best = if val.is_empty() {
         f64::INFINITY
     } else {
-        val_mse(&nn, &val)
+        select_score(&select_by, &pooled(&val_by_stage(&nn, &val)))
     };
     if best.is_finite() {
-        println!("starting val {best:.4}");
+        let (m, a, b, sd) = stats_of(&pooled(&val_by_stage(&nn, &val)));
+        println!(
+            "starting val mse {m:.4} mae {a:.4} bias {b:+.4} spread {sd:.4}  \
+             (selecting on {select_by})"
+        );
     }
     /* `--plateau n`: hold the rate while the model improves and halve it
     after n epochs without a new best, all inside one process.
@@ -594,14 +671,37 @@ fn main() -> ExitCode {
             mb_total_steps = mb_step * epochs as u64;
         }
         let train_mse = sq_total / seen.max(1) as f64;
-        let vm = val_mse(&nn, &val);
+        let acc = val_by_stage(&nn, &val);
+        let tot = pooled(&acc);
+        let (vmse, vmae, vbias, vsd) = stats_of(&tot);
+        let vm = select_score(&select_by, &tot);
         let is_best = vm < best;
         let marker = if is_best { " *best" } else { "" };
         println!(
-            "epoch {epoch:>2}/{epochs}: train {train_mse:.4}  val {vm:.4}{marker}  ({:.1}s, {:.0} pos/s)",
+            "epoch {epoch:>2}/{epochs}: train {train_mse:.4}  val mse {vmse:.4} mae {vmae:.4} \
+             bias {vbias:+.4} spread {vsd:.4}{marker}  ({:.1}s, {:.0} pos/s)",
             t.elapsed().as_secs_f32(),
             seen as f32 / t.elapsed().as_secs_f32(),
         );
+        if val_by_stage_report {
+            println!("  stage  empties       n      MSE      MAE     bias   spread");
+            for (st, a) in acc.iter().enumerate() {
+                if a[0] == 0.0 {
+                    continue;
+                }
+                let (mse, mae, bias, sd) = stats_of(a);
+                println!(
+                    "  {:>5}  {:>7}  {:>6}  {:>7.3}  {:>7.3}  {:>+7.3}  {:>7.3}",
+                    st,
+                    60 - st,
+                    a[0] as u64,
+                    mse,
+                    mae,
+                    bias,
+                    sd
+                );
+            }
+        }
         // Save only the best-by-val model (val overfits after a few epochs).
         if is_best {
             best = vm;

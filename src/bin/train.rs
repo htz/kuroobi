@@ -56,6 +56,7 @@ struct Args {
     swa: bool,
     swa_start: usize,
     per_stage_best: bool,
+    select_by: String,
     cell_lr: bool,
     restore_on_halve: bool,
     min_appear: u32,
@@ -160,6 +161,9 @@ Options:
                     stall, however many stages crept
   --plateau-factor <f>  Multiplier applied on a stall (default 0.5)
   --plateau-min <f>     Rate floor; the run ends below it (default 1e-6)
+  --select-by M     Which per-stage number decides a snapshot: mae
+                    (default), mse, or spread -- the error with the stage's
+                    constant offset taken out. See `stage_stats`
   --per-stage-best  Score the val set separately for each of the 61 stages
                     every epoch, keep each stage's best-scoring weights, and
                     save the assembled model to <weights>.stagebest. The
@@ -188,6 +192,7 @@ fn parse_args() -> Result<Args, String> {
         log_path: None,
         swa: false,
         per_stage_best: false,
+        select_by: String::from("mae"),
         cell_lr: false,
         restore_on_halve: false,
         min_appear: 0,
@@ -262,6 +267,7 @@ fn parse_args() -> Result<Args, String> {
             "--val" => args.val_files.push(PathBuf::from(value("--val")?)),
             "--swa" => args.swa = true,
             "--per-stage-best" => args.per_stage_best = true,
+            "--select-by" => args.select_by = it.next().unwrap_or_default(),
             "--lr-smooth" => args.lr_smooth = true,
             "--cell-lr" => args.cell_lr = true,
             "--restore-on-halve" => args.restore_on_halve = true,
@@ -724,17 +730,57 @@ type StageSnapshot = (Vec<Vec<f32>>, Vec<f32>);
 /// The stages are independent tables, so a single pooled number can hide one
 /// stage improving while another rots -- they net out. Scoring each stage on
 /// its own is what lets the best epoch be chosen per stage.
-fn val_by_stage(evaluator: &Evaluator, val: &[Example]) -> Vec<[f64; 3]> {
-    let mut acc = vec![[0.0f64; 3]; STAGE_COUNT];
+fn val_by_stage(evaluator: &Evaluator, val: &[Example]) -> Vec<[f64; 4]> {
+    let mut acc = vec![[0.0f64; 4]; STAGE_COUNT];
     for ex in val {
         let board = ex.board();
-        let e = ex.score as f64 - evaluator.eval(&board) as f64;
+        // Prediction minus truth, so a positive mean reads as "this model
+        // scores positions high".
+        let e = evaluator.eval(&board) as f64 - ex.score as f64;
         let a = &mut acc[Evaluator::stage(&board)];
         a[0] += 1.0;
         a[1] += e * e;
         a[2] += e.abs();
+        a[3] += e;
     }
     acc
+}
+
+/// What a stage's error looks like once its constant part is separated out.
+///
+/// A stage's mean error is a constant offset on every position it scores.
+/// Move ordering never sees it: the moves compared at a node are all one
+/// ply deeper, hence all in the same stage, so a per-stage constant cancels
+/// in the argmax. What is left -- the spread around that constant -- is the
+/// part that can reorder moves.
+///
+/// Measured, the difference is not academic. Against the same positions the
+/// H=64 network scores MAE 5.493 to the linear model's 4.621 and *loses* on
+/// that number, yet it carries a +3.75 offset: take the offset out and its
+/// spread is 5.356 against 6.131, and it wins 63-28 over the board. Ranked
+/// by spread, five evaluators came out in exactly their head-to-head order;
+/// ranked by MAE, the strongest of them placed fourth.
+///
+/// The offset is not free everywhere, which is why it is reported rather
+/// than discarded: a midgame score meets an exact endgame value at the
+/// solver boundary, aspiration windows carry a bound across depths, and the
+/// selective-search margins are calibrated in discs. All three compare
+/// numbers that a per-stage offset does move.
+fn select_score(which: &str, a: &[f64; 4]) -> f64 {
+    let (mse, mae, _, sd) = stage_stats(a);
+    match which {
+        "mse" => mse,
+        "spread" => sd,
+        _ => mae,
+    }
+}
+
+fn stage_stats(a: &[f64; 4]) -> (f64, f64, f64, f64) {
+    let n = a[0];
+    let mse = a[1] / n;
+    let mae = a[2] / n;
+    let bias = a[3] / n;
+    (mse, mae, bias, (mse - bias * bias).max(0.0).sqrt())
 }
 
 /// Mean squared error of `evaluator` over a held-out set, sharded across
@@ -909,23 +955,29 @@ fn run_epochs<O: Optimizer>(
             if a[0] == 0.0 {
                 continue;
             }
-            stage_best[st] = a[2] / a[0];
+            stage_best[st] = select_score(&args.select_by, a);
             stage_snap[st] = Some(trainer.evaluator.stage_weights(st));
             seeded += 1;
         }
         println!("baseline: {seeded} stages seeded from the starting weights");
-        println!("  stage  empties       n      MSE      MAE");
+        println!(
+            "  stage  empties       n      MSE      MAE     bias   spread  (selecting on {})",
+            args.select_by
+        );
         for (st, a) in acc.iter().enumerate() {
             if a[0] == 0.0 || st < args.stages_lo || st > args.stages_hi {
                 continue;
             }
+            let (mse, mae, bias, sd) = stage_stats(a);
             println!(
-                "  {:>5}  {:>7}  {:>6}  {:>7.3}  {:>7.3}",
+                "  {:>5}  {:>7}  {:>6}  {:>7.3}  {:>7.3}  {:>+7.3}  {:>7.3}",
                 st,
                 60 - st,
                 a[0] as u64,
-                a[1] / a[0],
-                a[2] / a[0]
+                mse,
+                mae,
+                bias,
+                sd
             );
         }
     }
@@ -1111,7 +1163,7 @@ fn run_epochs<O: Optimizer>(
         let mut stages_seen = 0usize;
         if args.per_stage_best && !val.is_empty() {
             let acc = val_by_stage(&trainer.evaluator, val);
-            println!("  stage  empties       n      MSE      MAE");
+            println!("  stage  empties       n      MSE      MAE     bias   spread");
             for (st, a) in acc.iter().enumerate() {
                 if a[0] == 0.0 {
                     continue;
@@ -1123,14 +1175,16 @@ fn run_epochs<O: Optimizer>(
                 if reported {
                     stages_seen += 1;
                 }
-                let mse = a[1] / a[0];
-                // Select on MAE, not MSE. Squared error is dominated by the
-                // thinly-sampled opening stages (empties 40-50 sit at 70-90
-                // where the endgame sits at 8-40), so a lucky epoch there
-                // outweighs a real loss elsewhere: measured over 11 epochs
-                // the MSE-selected assembly scored *worse* on stage-balanced
-                // MAE than a single epoch of it did.
-                let score = a[2] / a[0];
+                let (mse, mae, bias, sd) = stage_stats(a);
+                // The default is MAE, not MSE. Squared error is dominated by
+                // the thinly-sampled opening stages (empties 40-50 sit at
+                // 70-90 where the endgame sits at 8-40), so a lucky epoch
+                // there outweighs a real loss elsewhere: measured over 11
+                // epochs the MSE-selected assembly scored *worse* on
+                // stage-balanced MAE than a single epoch of it did.
+                // `--select-by spread` is for a model that carries an offset;
+                // see `stage_stats`.
+                let score = select_score(&args.select_by, a);
                 let mut restored = false;
                 let better = score < stage_best[st];
                 if better {
@@ -1240,12 +1294,14 @@ fn run_epochs<O: Optimizer>(
                 stage_prev[st] = if restored { stage_best[st] } else { score };
                 if reported {
                     println!(
-                        "  {:>5}  {:>7}  {:>6}  {:>7.3}  {:>7.3}{}",
+                        "  {:>5}  {:>7}  {:>6}  {:>7.3}  {:>7.3}  {:>+7.3}  {:>7.3}{}",
                         st,
                         60 - st,
                         a[0] as u64,
                         mse,
-                        a[2] / a[0],
+                        mae,
+                        bias,
+                        sd,
                         if better { " *" } else { "" }
                     );
                 }
