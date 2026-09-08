@@ -69,7 +69,7 @@ fn name_of(sq: usize) -> String {
 }
 
 fn main() -> ExitCode {
-    let mut which = String::from("egaroucid");
+    let mut which = String::from("nnue");
     let mut corpus: Option<PathBuf> = None;
     let mut it = std::env::args().skip(1);
     while let Some(a) = it.next() {

@@ -11,7 +11,7 @@ use crate::book::{Book, BookCandidate};
 use crate::evaluator::Evaluator;
 use crate::midgame::{selective_band, NnueSearch, SharedTt, StopHandle};
 use crate::nnue::{Nnue, ACT_UNITS};
-use crate::pattern::{Pattern, EGAROUCID_PATTERNS};
+use crate::pattern::{Pattern, EGAROUCID_PATTERNS, NNUE_PATTERNS};
 use crate::solver::{final_score, EndSolverMode, Solver};
 use crate::{Board, Position};
 
@@ -123,7 +123,7 @@ impl Default for EngineConfig {
             weights: PathBuf::from("weights/linear.bin"),
             nnue: PathBuf::from("weights/nnue.bin"),
             nnue_base: PathBuf::new(),
-            nnue_patterns: EGAROUCID_PATTERNS,
+            nnue_patterns: NNUE_PATTERNS,
             book: PathBuf::from("weights/book.txt"),
             use_book: true,
             book_tolerance: 1.0,

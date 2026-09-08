@@ -21,7 +21,7 @@ fn main() {
     let mut linear_path = String::from("weights/linear.bin");
     let mut no_mlp = false;
     let mut files: Vec<String> = Vec::new();
-    let mut which = String::from("egaroucid");
+    let mut which = String::from("nnue");
     // Which of the three read-out precisions to score. The model is one
     // model; `quantize` is the only thing between them, so scoring both
     // says how much of the held-out error is the model and how much is the

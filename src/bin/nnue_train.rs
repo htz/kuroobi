@@ -463,7 +463,7 @@ fn main() -> ExitCode {
     let mut interleave = false;
     let mut val_cap: Option<usize> = None;
     let mut init: Option<PathBuf> = None;
-    let mut which_patterns = String::from("egaroucid");
+    let mut which_patterns = String::from("nnue");
     /* A frozen linear evaluator under the net.
 
     The net has to spend capacity learning the level of the score before it

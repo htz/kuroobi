@@ -27,7 +27,7 @@ fn main() {
     let mut depth: u32 = 15;
     let mut threads: usize = 1;
     let mut nnue_path = String::from("weights/nnue.bin");
-    let mut which = String::from("egaroucid");
+    let mut which = String::from("nnue");
     let mut random = false;
     let mut files: Vec<String> = Vec::new();
     let mut it = std::env::args().skip(1);

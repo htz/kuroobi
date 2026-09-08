@@ -25,7 +25,7 @@
 //! Usage:
 //!   gtp [-gtp] [-l <depth>] [-t <threads>] [-nobook] [-q]
 //!       [--solve-empties <n>] [--time-ms <n>] [--band <n>] [--no-mpc]
-//!       [--weights <path>] [--nnue <path>] [--patterns egaroucid|compact]
+//!       [--weights <path>] [--nnue <path>] [--patterns nnue|egaroucid|compact]
 //!       [--book <path>]
 
 use std::io::{BufRead, Write};

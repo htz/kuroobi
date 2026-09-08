@@ -17,7 +17,7 @@ rand = "0.8"
 criterion = "0.5"
 
 [features]
-default = []
+default = ["h128", "pairmul", "pa128", "stackedout"]
 # Train the stacked-read-out model on the GPU (`nnue_train --gpu`). Needs
 # `h128,pairmul,pa128,stackedout`; the kernels are written for that shape.
 gpu = ["dep:wgpu", "dep:bytemuck"]

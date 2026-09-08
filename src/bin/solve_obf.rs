@@ -29,7 +29,7 @@ fn main() -> ExitCode {
     let mut weights: Option<PathBuf> = None;
     let mut nnue_path: Option<PathBuf> = Some(PathBuf::from("weights/nnue.bin"));
     let mut nnue_base: Option<PathBuf> = None;
-    let mut patterns_name = String::from("egaroucid");
+    let mut patterns_name = String::from("nnue");
     let mut files: Vec<PathBuf> = Vec::new();
 
     let mut grand_time = 0.0f64;

@@ -183,7 +183,7 @@ fn main() {
     let mut nnue_path = PathBuf::from("weights/nnue.bin");
     let mut depth = 8u32;
     let mut val_files: Vec<PathBuf> = Vec::new();
-    let mut which = String::from("egaroucid");
+    let mut which = String::from("nnue");
     let mut head_f32 = false;
     let mut it = std::env::args().skip(1);
     while let Some(a) = it.next() {
