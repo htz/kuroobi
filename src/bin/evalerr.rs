@@ -29,6 +29,7 @@ fn main() {
     let mut head_f32 = false;
     let mut no_pw = false;
     let mut reps = 0usize;
+    let mut hot = false;
     let mut act_units = kuroobi::nnue::ACT_UNITS;
     let mut it = std::env::args().skip(1);
     while let Some(a) = it.next() {
@@ -53,6 +54,10 @@ fn main() {
             // int = int8 transformer + int16 read-out (what the search uses)
             // f32 = the trained weights, unconverted
             "--precision" => path = it.next().unwrap_or(path),
+            "--time-hot" => {
+                hot = true;
+                reps = it.next().and_then(|v| v.parse().ok()).unwrap_or(1);
+            }
             // Run the head's first layer in f32; see `Nnue::head_f32`.
             "--head-f32" => head_f32 = true,
             "--no-pw" => no_pw = true,
@@ -106,6 +111,14 @@ fn main() {
             127,
             clipped as f64 / total.max(1) as f64 * 100.0,
         );
+        #[cfg(feature = "stackedout")]
+        {
+            let (c, t) = nn.stack_clipped();
+            eprintln!(
+                "quant: stack clipped {c}/{t} ({:.4}%)",
+                c as f64 / t.max(1) as f64 * 100.0
+            );
+        }
     }
     let mut lin = Evaluator::new(EGAROUCID_PATTERNS);
     if linear {
@@ -163,6 +176,12 @@ fn main() {
                 lin.eval_order_bb(board.player_bb(), board.opponent_bb(), Color::Black, &ix)
             } else if path == "f32" {
                 nn.eval(&board)
+            } else if path == "diff" {
+                // Not an error against the label: the gap between the two
+                // paths themselves, so the conversion's cost can be seen
+                // without the model's own error in the way.
+                let ix = nn.indices(black, white);
+                truth + nn.eval_from_indices(&ix, &board) - nn.eval(&board)
             } else {
                 let ix = nn.indices(black, white);
                 nn.eval_from_indices(&ix, &board)
@@ -226,6 +245,13 @@ fn main() {
                 .iter()
                 .map(|b| nn.indices(b.black, b.white))
                 .collect();
+            // `--time-hot`: the first position only, every row in cache,
+            // which is how an evaluator is timed on its own.
+            let take = if hot { 1 } else { n };
+            let boards = &boards[..take];
+            let ixs = &ixs[..take];
+            let reps = if hot { reps * n } else { reps };
+            let n = take;
             let t = std::time::Instant::now();
             let mut sink = 0.0f32;
             for _ in 0..reps {

@@ -83,6 +83,7 @@ fn walk_nnue(b: &Board, nn: &Nnue, acc: &mut Accumulator, depth: u32, nodes: &mu
 }
 
 // i32 / f32 accumulator traversals (mirror walk_nnue for the precision bench).
+#[cfg(not(feature = "stackedout"))]
 macro_rules! walk_variant {
     ($name:ident, $AccTy:ty, $build:ident, $apply:ident, $undo:ident, $eval:ident) => {
         fn $name(b: &Board, nn: &Nnue, acc: &mut $AccTy, depth: u32, nodes: &mut u64) -> f32 {

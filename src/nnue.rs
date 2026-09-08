@@ -35,6 +35,9 @@ use crate::pattern::Pattern;
 use crate::pattern_index::{PatternIndexer, PatternIndices, MAX_MASKS};
 use crate::position::Position;
 
+#[cfg(feature = "stackedout")]
+mod stack_q;
+
 /// Accumulator width (feature-transformer output dimension). Smaller H means
 /// a proportionally cheaper incremental update (the search hot path); the
 /// non-linearity survives well below 64.
@@ -1665,6 +1668,9 @@ pub struct Nnue {
     ft_scale: f32,
     /// ft scale of the i32 comparison path (bench only; see `eval_acc_i32`).
     ft_scale32_for_bench: f32,
+    /// The stacked read-out in its integer form; see `stack_q`.
+    #[cfg(feature = "stackedout")]
+    sq: stack_q::StackQ,
 }
 
 impl Nnue {
@@ -1722,6 +1728,8 @@ impl Nnue {
             ftc_i16: Vec::new(),
             ft_b_i8: Vec::new(),
             ft_w_i8: Vec::new(),
+            #[cfg(feature = "stackedout")]
+            sq: stack_q::StackQ::default(),
             ft_clipped: 0,
             has_pw: false,
             has_head: false,
@@ -1988,6 +1996,10 @@ impl Nnue {
                 }
             }
         }
+        #[cfg(feature = "stackedout")]
+        {
+            self.sq = stack_q::StackQ::build(self);
+        }
     }
 
     /// How many transformer cells saturated int8, and how many there are.
@@ -2016,6 +2028,15 @@ impl Nnue {
 
     pub fn ft_clipped(&self) -> (usize, usize) {
         (self.ft_clipped, self.ft.len())
+    }
+
+    /// Weights of the stacked read-out's integer tables that saturated
+    /// their type at the fixed scales, and how many there are.
+    /// Not a tuning knob: a model that clips here was trained outside the
+    /// range the integer network can represent.
+    #[cfg(feature = "stackedout")]
+    pub fn stack_clipped(&self) -> (usize, usize) {
+        (self.sq.clipped, self.sq.total)
     }
 
     /// Build the interleaved both-perspectives table the incremental
@@ -2329,24 +2350,11 @@ impl Nnue {
         }
         #[cfg(feature = "stackedout")]
         {
-            /* The stacked read-out runs in f32, as the head already does.
-            Its layers are dense and small next to the 32 random row reads
-            that dominate a leaf, and quantising them is an optimisation to
-            make once the shape has earned its place.
-
-            The fold happens here rather than on the int16 lanes, so that
-            the activation scale and the clamp are the same arithmetic the
-            trainer used. Only the accumulator is quantized. */
-            let inv = 1.0 / self.ft_scale;
-            let mut raw = [0.0f32; ACC_DIMS];
-            for i in 0..ACC_DIMS {
-                raw[i] = raw_acc[i] as f32 * inv + self.ft_bias[i];
-            }
-            let acc = fold_pairs_f32(&raw);
-            let ix = self.indexer.init(board.black, board.white);
-            let feats = self.features_player(&ix, board.player(), stage);
-            let (pa, _) = self.pa_forward(&feats, stage);
-            return self.stacked_readout(&acc, &pa, Self::mob_index(board), stage);
+            // The rows just summed are the int8 ones the shared read-out
+            // uses; the stack reads its own int16 copy (see `stack_q`).
+            let _ = raw_acc;
+            self.sq
+                .eval(self, indices, board.player(), stage, Self::mob_index(board))
         }
         #[cfg(not(feature = "stackedout"))]
         {
@@ -2497,6 +2505,7 @@ impl Nnue {
     /// Disc-count correction; within a stage the mover's count uniquely
     /// determines the disc difference.
     #[inline]
+    #[cfg_attr(feature = "stackedout", allow(dead_code))]
     fn num_term(&self, board: &Board, stage: usize) -> f32 {
         self.num_w[stage * NUM_TABLE_SIZE + num_index(board)]
     }
@@ -2663,6 +2672,7 @@ impl Nnue {
 
     /// Tempo correction for the side to move (see [`Nnue::mob_w`]).
     #[inline]
+    #[cfg_attr(feature = "stackedout", allow(dead_code))]
     fn mob_term(&self, board: &Board, stage: usize) -> f32 {
         self.mob_w[stage * MOB_BUCKETS + Self::mob_index(board)]
     }
@@ -4794,7 +4804,14 @@ impl Nnue {
             + self.so_l2_b.len()
             + self.so_out_w.len()
             + self.so_out_b.len();
-        if so_len != want_so {
+        /* Files written when the stack had a set per stage rather than per
+        ply carry one more set: the finished board's, which nothing reaches.
+        Read it and drop it, so those models still load. */
+        #[cfg(feature = "stackedout")]
+        let extra_stage = so_len == want_so + want_so / SO_STAGES;
+        #[cfg(not(feature = "stackedout"))]
+        let extra_stage = false;
+        if so_len != want_so && !extra_stage {
             return Err(std::io::Error::new(
                 std::io::ErrorKind::InvalidData,
                 "stacked read-out mismatch: this build and the file disagree on whether the \
@@ -4861,12 +4878,20 @@ impl Nnue {
             self.init_mlp_hidden();
         }
         if so_len > 0 {
-            read_into(&mut r, &mut self.so_l1_w)?;
-            read_into(&mut r, &mut self.so_l1_b)?;
-            read_into(&mut r, &mut self.so_l2_w)?;
-            read_into(&mut r, &mut self.so_l2_b)?;
-            read_into(&mut r, &mut self.so_out_w)?;
-            read_into(&mut r, &mut self.so_out_b)?;
+            let read_stages = |r: &mut dyn Read, dst: &mut [f32]| -> std::io::Result<()> {
+                read_into(r, dst)?;
+                if extra_stage {
+                    let mut tail = vec![0.0f32; dst.len() * (so_len - want_so) / want_so];
+                    read_into(r, &mut tail)?;
+                }
+                Ok(())
+            };
+            read_stages(&mut r, &mut self.so_l1_w)?;
+            read_stages(&mut r, &mut self.so_l1_b)?;
+            read_stages(&mut r, &mut self.so_l2_w)?;
+            read_stages(&mut r, &mut self.so_l2_b)?;
+            read_stages(&mut r, &mut self.so_out_w)?;
+            read_stages(&mut r, &mut self.so_out_b)?;
         }
         if pa_len > 0 {
             read_into(&mut r, &mut self.pa)?;
@@ -5112,6 +5137,13 @@ mod tests {
                 board.player(),
                 board.empty_count()
             );
+            /* Not with the stack: there `eval_from_indices` is the integer
+            network (`stack_q`), and on this synthetic model the f32 read-out
+            is fully saturated -- its output does not move when the
+            transformer is replaced by noise -- so the two saturate
+            differently and agree on nothing. The integer network is checked
+            in `stack_q::tests`, on trained weights. */
+            #[cfg(not(feature = "stackedout"))]
             assert!(
                 (from_ix - inc).abs() < 1e-3 * from_ix.abs().max(1.0),
                 "from_indices {from_ix} vs incremental {inc} ({} empty, player {:?}): \
@@ -5119,6 +5151,8 @@ mod tests {
                 board.empty_count(),
                 board.player()
             );
+            #[cfg(feature = "stackedout")]
+            let _ = from_ix;
 
             let moves = board.movable();
             if moves == 0 {
