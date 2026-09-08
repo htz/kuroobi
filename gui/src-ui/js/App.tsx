@@ -1062,7 +1062,13 @@ function jobsOf(cpu: ActivityView) {
   const jobs: { label: string; threads?: number; yielded?: boolean }[] = [];
   // cpu.local is a stable token from the backend (calibrating /
   // thinking / pondering / analyzing), translated here.
-  if (cpu.local) jobs.push({ label: t('activity.' + cpu.local), threads: cpu.local_threads });
+  // Reading the weights is one thread's work; only searches use the pool, so
+  // a thread count next to the load would be a number about nothing.
+  if (cpu.local)
+    jobs.push({
+      label: t('activity.' + cpu.local),
+      threads: cpu.local === 'loading' ? undefined : cpu.local_threads,
+    });
   if (cpu.ggs_match) jobs.push({ label: t('app.jobs.ggs_game'), threads: cpu.ggs_thinking ? cpu.ggs_threads : undefined });
   if (cpu.learn) {
     jobs.push({ label: t('app.jobs.learning', { done: cpu.learn[0], total: cpu.learn[1] }),

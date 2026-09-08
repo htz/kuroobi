@@ -1177,3 +1177,48 @@ mod progress_tests {
         );
     }
 }
+
+#[cfg(test)]
+mod assets_tests {
+    use super::*;
+
+    /// The network is over a gigabyte, and the search and the solver each hold
+    /// a handle to it. Both live in the Engine, so when the Engine goes the
+    /// network must go with it -- a weight swap in the GUI drops one Engine and
+    /// builds the next, and this is what keeps that from costing a network
+    /// every time.
+    #[test]
+    #[ignore = "requires weights/"]
+    fn dropping_an_engine_frees_the_network() {
+        let config = EngineConfig::default();
+        let assets = EngineAssets::load(&config).expect("assets");
+        let net = assets.nnue.clone();
+        let engine = Engine::with_assets(assets, config).expect("engine");
+        assert!(
+            std::sync::Arc::strong_count(&net) > 1,
+            "the engine should hold the network it was given"
+        );
+        drop(engine);
+        assert_eq!(
+            std::sync::Arc::strong_count(&net),
+            1,
+            "dropping the engine must leave no handle behind"
+        );
+    }
+
+    /// What `with_assets` costs is what a caller cannot preload. Point it at
+    /// paths that do not exist: if it still builds, nothing it does reads disk,
+    /// so the wait belongs entirely to `EngineAssets::load` and a caller can
+    /// take it whenever it likes.
+    #[test]
+    #[ignore = "requires weights/"]
+    fn building_on_loaded_assets_reads_no_files() {
+        let assets = EngineAssets::load(&EngineConfig::default()).expect("assets");
+        let config = EngineConfig {
+            weights: PathBuf::from("/nonexistent/linear.bin"),
+            nnue: PathBuf::from("/nonexistent/nnue.bin"),
+            ..Default::default()
+        };
+        Engine::with_assets(assets, config).expect("built without touching disk");
+    }
+}

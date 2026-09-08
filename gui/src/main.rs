@@ -1230,13 +1230,20 @@ async fn set_resource(
     r.save(&resources_path())?;
     // Reload happens on the next engine build; drop the current one.
     // Dropping needs the lock, so wait on a worker to keep the UI live.
-    let (eng, stop) = (app.engine.clone(), app.stop.clone());
-    tauri::async_runtime::spawn_blocking(move || {
-        *eng.lock().unwrap() = None;
-        *stop.lock().unwrap() = None;
+    let (eng, stop, act) = (app.engine.clone(), app.stop.clone(), app.activity.clone());
+    let dropped = tauri::async_runtime::spawn_blocking({
+        let (eng, stop) = (eng.clone(), stop.clone());
+        move || {
+            *eng.lock().unwrap() = None;
+            *stop.lock().unwrap() = None;
+        }
     })
     .await
-    .map_err(|e| e.to_string())
+    .map_err(|e| e.to_string());
+    // Read the new file now, for the same reason it is read at launch: the
+    // next move must not be the one that waits for it.
+    preload_engine(eng, stop, act);
+    dropped
 }
 
 /// Strength change; async + spawn_blocking as with set_use_book. The
