@@ -17,8 +17,8 @@
 //!    vectors, one thread per parameter, each summing over the examples of
 //!    its stage (examples arrive sorted by stage).
 //! 4. `finalize`: the global gradient norm, hence the clip factor.
-//! 5. `step_rows` (twice) and `step_dense`: AdamW over every cell.
-//! 6. `lookahead` every k steps, when asked for.
+//! 5. `step_rows` (twice) and `step_dense`: AdamW over every cell; every
+//!    k-th step also folds the result into the Lookahead slow copy.
 //!
 //! The weights live on the GPU for the whole epoch and come back for the
 //! held-out pass and the save. wgpu, so the same binary runs on Metal and
@@ -73,7 +73,9 @@ const PART: usize = ACC_DIMS + PA_BUCKETS * PA_DIMS;
 
 const WG: usize = 256;
 /// Examples one `K_ROW_GRAD` workgroup sums; longer rows are split so no
-/// single workgroup's serial loop bounds the kernel.
+/// single workgroup's serial loop bounds the kernel. 128 and 512 measured
+/// within the run-to-run noise of 256 (row kernels sit 0.4 ms over their
+/// bandwidth floor) while moving val in its fifth digit, so 256 stays.
 const SEG: u32 = 256;
 const NO_PART: u32 = u32::MAX;
 /// Fields of the uniform block every kernel reads; see `Params` in the
@@ -760,7 +762,10 @@ fn main(@builtin(local_invocation_id) lid: vec3<u32>) {
 
 /// AdamW over every cell of a sparse table; a row the batch touched reads
 /// its gradient through `slot`, every other row steps with a zero gradient
-/// -- decay and momentum still move it, as in a dense optimizer.
+/// -- decay and momentum still move it, as in a dense optimizer. On a
+/// Lookahead sync (`P.flags & 1`) the stepped weight is folded into the
+/// slow copy in the same pass, after the step, exactly as `lookahead_sync`
+/// does it -- saves reading and writing the table a second time.
 const K_STEP_ROWS: &str = r#"
 @group(0) @binding(0) var<storage, read_write> w: array<f32>;
 @group(0) @binding(1) var<storage, read_write> m: array<f32>;
@@ -768,7 +773,8 @@ const K_STEP_ROWS: &str = r#"
 @group(0) @binding(3) var<storage, read> slot: array<u32>;
 @group(0) @binding(4) var<storage, read> grad: array<f32>;
 @group(0) @binding(5) var<storage, read> step: array<f32>;
-@group(0) @binding(6) var<uniform> P: Params;
+@group(0) @binding(6) var<storage, read_write> slow: array<f32>;
+@group(0) @binding(7) var<uniform> P: Params;
 
 @compute @workgroup_size(256)
 fn main(@builtin(local_invocation_id) lid: vec3<u32>,
@@ -789,19 +795,27 @@ fn main(@builtin(local_invocation_id) lid: vec3<u32>,
     let vv = P.b2 * v[i] + (1.0 - P.b2) * g * g;
     m[i] = mm;
     v[i] = vv;
-    w[i] = w[i] * (1.0 - P.wd * P.lr) - (P.lr / P.bc1) * mm / (sqrt(vv) / P.bc2s + P.eps);
+    var nw = w[i] * (1.0 - P.wd * P.lr) - (P.lr / P.bc1) * mm / (sqrt(vv) / P.bc2s + P.eps);
+    if ((P.flags & 1u) != 0u) {
+        let s = slow[i] + P.alpha * (nw - slow[i]);
+        slow[i] = s;
+        nw = s;
+    }
+    w[i] = nw;
 }
 "#;
 
 /// AdamW over the dense vector. Decay on the three 2-D read-out tables,
-/// the int8 clip on the two hidden ones, neither on any bias.
+/// the int8 clip on the two hidden ones, neither on any bias. Lookahead
+/// folds in as in `K_STEP_ROWS`.
 const K_STEP_DENSE: &str = r#"
 @group(0) @binding(0) var<storage, read_write> w: array<f32>;
 @group(0) @binding(1) var<storage, read_write> m: array<f32>;
 @group(0) @binding(2) var<storage, read_write> v: array<f32>;
 @group(0) @binding(3) var<storage, read> grad: array<f32>;
 @group(0) @binding(4) var<storage, read> step: array<f32>;
-@group(0) @binding(5) var<uniform> P: Params;
+@group(0) @binding(5) var<storage, read_write> slow: array<f32>;
+@group(0) @binding(6) var<uniform> P: Params;
 
 @compute @workgroup_size(256)
 fn main(@builtin(local_invocation_id) lid: vec3<u32>,
@@ -826,27 +840,12 @@ fn main(@builtin(local_invocation_id) lid: vec3<u32>,
     if (hidden) {
         nw = clamp(nw, -SO_MAX_W, SO_MAX_W);
     }
-    w[i] = nw;
-}
-"#;
-
-/// `slow += alpha (fast - slow); fast = slow`.
-const K_LOOKAHEAD: &str = r#"
-@group(0) @binding(0) var<storage, read_write> w: array<f32>;
-@group(0) @binding(1) var<storage, read_write> slow: array<f32>;
-@group(0) @binding(2) var<uniform> P: Params;
-
-@compute @workgroup_size(256)
-fn main(@builtin(local_invocation_id) lid: vec3<u32>,
-        @builtin(workgroup_id) wg: vec3<u32>,
-        @builtin(num_workgroups) nwg: vec3<u32>) {
-    let i = linear_wg(wg, nwg) * 256u + lid.x;
-    if (i >= P.n_items) {
-        return;
+    if ((P.flags & 1u) != 0u) {
+        let s = slow[i] + P.alpha * (nw - slow[i]);
+        slow[i] = s;
+        nw = s;
     }
-    let s = slow[i] + P.alpha * (w[i] - slow[i]);
-    slow[i] = s;
-    w[i] = s;
+    w[i] = nw;
 }
 "#;
 
@@ -1059,9 +1058,15 @@ const PROF_NAMES: [&str; PROF_N] = [
     "step_ft",
     "step_pa",
     "step_dense",
-    "lookahead",
+    "step_ft_la",
+    "step_pa_la",
+    "step_dense_la",
 ];
-const PROF_N: usize = 12;
+const PROF_N: usize = 14;
+/// Pass index of the first step kernel, and the offset to its
+/// Lookahead-sync twin.
+const PROF_STEP: usize = 8;
+const PROF_LA: usize = 3;
 
 pub struct GpuTrainer {
     device: wgpu::Device,
@@ -1075,7 +1080,6 @@ pub struct GpuTrainer {
     k_finalize: Kernel,
     k_step_rows: Kernel,
     k_step_dense: Kernel,
-    k_lookahead: Kernel,
 
     n_masks: usize,
     nfb: usize,
@@ -1093,7 +1097,7 @@ pub struct GpuTrainer {
     b_dense: wgpu::Buffer,
     b_dense_m: wgpu::Buffer,
     b_dense_v: wgpu::Buffer,
-    la_slow: Option<[wgpu::Buffer; 3]>,
+    la_slow: [wgpu::Buffer; 3],
     // Per-batch inputs and scratch.
     b_inp: wgpu::Buffer,
     b_rec: wgpu::Buffer,
@@ -1131,7 +1135,6 @@ pub struct GpuTrainer {
     u_step_ft: wgpu::Buffer,
     u_step_pa: wgpu::Buffer,
     u_step_dense: wgpu::Buffer,
-    u_la: [wgpu::Buffer; 3],
     // Readback staging for the epoch-end download.
     rb_ft: wgpu::Buffer,
     rb_pa: wgpu::Buffer,
@@ -1264,7 +1267,6 @@ impl GpuTrainer {
         let k_finalize = make(K_FINALIZE, "finalize");
         let k_step_rows = make(K_STEP_ROWS, "step_rows");
         let k_step_dense = make(K_STEP_DENSE, "step_dense");
-        let k_lookahead = make(K_LOOKAHEAD, "lookahead");
 
         let n_masks = nn.n_masks;
         let nfb = nn.n_feat_bucket;
@@ -1307,14 +1309,20 @@ impl GpuTrainer {
         let b_pa_v = zeros("pa_v", nn.pa.len(), st);
         let b_dense_m = zeros("dense_m", N_DENSE, st);
         let b_dense_v = zeros("dense_v", N_DENSE, st);
+        // Without Lookahead the step kernels still bind a slow copy; a
+        // one-cell stand-in they never read.
         let la_slow = if lookahead.0 > 0 {
-            Some([
+            [
                 zeros("ft_slow", nn.ft.len(), st | wgpu::BufferUsages::COPY_DST),
                 zeros("pa_slow", nn.pa.len(), st | wgpu::BufferUsages::COPY_DST),
                 zeros("dense_slow", N_DENSE, st | wgpu::BufferUsages::COPY_DST),
-            ])
+            ]
         } else {
-            None
+            [
+                zeros("ft_slow", 1, st),
+                zeros("pa_slow", 1, st),
+                zeros("dense_slow", 1, st),
+            ]
         };
 
         let in_stride = n_masks + 3;
@@ -1387,7 +1395,6 @@ impl GpuTrainer {
             ft: Csr::new(ft_rows),
             pa: Csr::new(pa_rows),
         };
-        let u_la = [uni(), uni(), uni()];
         let (u_fwd, u_row_ft, u_row_pa, u_fin_ft, u_fin_pa, u_bias, u_dense, u_fin) =
             (uni(), uni(), uni(), uni(), uni(), uni(), uni(), uni());
         let (u_step_ft, u_step_pa, u_step_dense) = (uni(), uni(), uni());
@@ -1416,7 +1423,7 @@ impl GpuTrainer {
                 samples: [0; PROF_N],
             }
         });
-        let tr = GpuTrainer {
+        GpuTrainer {
             device,
             prof,
             queue,
@@ -1428,7 +1435,6 @@ impl GpuTrainer {
             k_finalize,
             k_step_rows,
             k_step_dense,
-            k_lookahead,
             n_masks,
             nfb,
             ft_rows,
@@ -1479,7 +1485,6 @@ impl GpuTrainer {
             u_step_ft,
             u_step_pa,
             u_step_dense,
-            u_la,
             rb_ft,
             rb_pa,
             rb_dense,
@@ -1494,18 +1499,7 @@ impl GpuTrainer {
             pending: Default::default(),
             batches: [mk_batch(), mk_batch()],
             scratch: vec![0; batch * in_stride],
-        };
-        // Lookahead's sizes never change; write those uniforms once.
-        let sizes = [nn.ft.len(), nn.pa.len(), N_DENSE];
-        for (u, n) in tr.u_la.iter().zip(sizes) {
-            let p = Params {
-                n_items: n as u32,
-                alpha: tr.la_alpha,
-                ..Default::default()
-            };
-            tr.queue.write_buffer(u, 0, &p.bytes());
         }
-        tr
     }
 
     /// Optimizer steps taken so far.
@@ -1630,6 +1624,18 @@ impl GpuTrainer {
         q.write_buffer(&self.b_pa_slot, 0, u32s(&b.pa.slot));
 
         self.t += 1;
+        // Lookahead, mirroring `lookahead_sync`: the first sync only takes
+        // the slow copy; every later one folds into the step kernels.
+        let mut la_prime = false;
+        let mut la_fold = false;
+        if self.la_k > 0 {
+            self.la_step = self.la_step.wrapping_add(1);
+            if self.la_step.is_multiple_of(self.la_k) {
+                la_prime = !self.la_primed;
+                la_fold = self.la_primed;
+                self.la_primed = true;
+            }
+        }
         let bc1 = 1.0 - self.beta1.powi(self.t as i32);
         let bc2s = (1.0 - self.beta2.powi(self.t as i32)).sqrt();
         let scale = 1.0 / n as f32;
@@ -1706,13 +1712,18 @@ impl GpuTrainer {
             }
             .bytes(),
         );
+        let step_base = Params {
+            flags: la_fold as u32,
+            alpha: self.la_alpha,
+            ..base
+        };
         q.write_buffer(
             &self.u_step_ft,
             0,
             &Params {
                 n_items: (self.ft_rows * ACC_DIMS) as u32,
                 width: ACC_DIMS as u32,
-                ..base
+                ..step_base
             }
             .bytes(),
         );
@@ -1722,11 +1733,11 @@ impl GpuTrainer {
             &Params {
                 n_items: (self.pa_rows * PA_DIMS) as u32,
                 width: PA_DIMS as u32,
-                ..base
+                ..step_base
             }
             .bytes(),
         );
-        q.write_buffer(&self.u_step_dense, 0, &base.bytes());
+        q.write_buffer(&self.u_step_dense, 0, &step_base.bytes());
 
         let bg_fwd = self.bind(
             &self.k_fwd_bwd,
@@ -1825,6 +1836,7 @@ impl GpuTrainer {
                 &self.b_ft_slot,
                 &self.b_ft_grad,
                 &self.b_step,
+                &self.la_slow[0],
                 &self.u_step_ft,
             ],
         );
@@ -1837,6 +1849,7 @@ impl GpuTrainer {
                 &self.b_pa_slot,
                 &self.b_pa_grad,
                 &self.b_step,
+                &self.la_slow[1],
                 &self.u_step_pa,
             ],
         );
@@ -1848,6 +1861,7 @@ impl GpuTrainer {
                 &self.b_dense_v,
                 &self.b_dense_grad,
                 &self.b_step,
+                &self.la_slow[2],
                 &self.u_step_dense,
             ],
         );
@@ -1891,50 +1905,26 @@ impl GpuTrainer {
             run(5, &self.k_bias_part, &bg_bias, n_chunks);
             run(6, &self.k_dense_grad, &bg_dense, n_dense_wg);
             run(7, &self.k_finalize, &bg_fin, 1);
+            // A sync batch's step passes are timed under their own names.
+            let st = PROF_STEP + if la_fold { PROF_LA } else { 0 };
             run(
-                8,
+                st,
                 &self.k_step_rows,
                 &bg_step_ft,
                 (self.ft_rows * ACC_DIMS).div_ceil(WG),
             );
             run(
-                9,
+                st + 1,
                 &self.k_step_rows,
                 &bg_step_pa,
                 (self.pa_rows * PA_DIMS).div_ceil(WG),
             );
-            run(10, &self.k_step_dense, &bg_step_dense, n_dense_wg);
+            run(st + 2, &self.k_step_dense, &bg_step_dense, n_dense_wg);
         }
-        let mut la_ran = false;
-        // Lookahead, mirroring `lookahead_sync`: the first sync only takes
-        // the slow copy.
-        if self.la_k > 0 {
-            self.la_step = self.la_step.wrapping_add(1);
-            if self.la_step.is_multiple_of(self.la_k) {
-                let slow = self.la_slow.as_ref().unwrap();
-                let fast = [&self.b_ft, &self.b_pa, &self.b_dense];
-                if !self.la_primed {
-                    for (f, s) in fast.iter().zip(slow.iter()) {
-                        enc.copy_buffer_to_buffer(f, 0, s, 0, None);
-                    }
-                    self.la_primed = true;
-                } else {
-                    let sizes = [self.ft_rows * ACC_DIMS, self.pa_rows * PA_DIMS, N_DENSE];
-                    let bgs: Vec<wgpu::BindGroup> = (0..3)
-                        .map(|i| self.bind(&self.k_lookahead, &[fast[i], &slow[i], &self.u_la[i]]))
-                        .collect();
-                    let mut pass = enc.begin_compute_pass(&wgpu::ComputePassDescriptor {
-                        label: Some("lookahead"),
-                        timestamp_writes: timestamps(PROF_N - 1),
-                    });
-                    pass.set_pipeline(&self.k_lookahead.pipeline);
-                    for (bg, n) in bgs.iter().zip(sizes) {
-                        let (x, y) = dispatch_dims(n.div_ceil(WG));
-                        pass.set_bind_group(0, bg, &[]);
-                        pass.dispatch_workgroups(x, y, 1);
-                    }
-                    la_ran = true;
-                }
+        if la_prime {
+            let fast = [&self.b_ft, &self.b_pa, &self.b_dense];
+            for (f, s) in fast.iter().zip(self.la_slow.iter()) {
+                enc.copy_buffer_to_buffer(f, 0, s, 0, None);
             }
         }
         if sampled {
@@ -1947,7 +1937,7 @@ impl GpuTrainer {
         if sampled {
             self.pending.push_back(idx.clone());
             self.drain(0);
-            self.take_prof_sample(la_ran);
+            self.take_prof_sample(la_fold);
             // Row-length spread: a row's gradient is one workgroup's serial
             // loop, so the longest row bounds `row_grad`.
             for (name, c) in [
@@ -1970,7 +1960,7 @@ impl GpuTrainer {
     }
 
     /// Read the sampled batch's timestamps into the running sums.
-    fn take_prof_sample(&mut self, la_ran: bool) {
+    fn take_prof_sample(&mut self, la_fold: bool) {
         let p = self.prof.as_mut().unwrap();
         let bytes = 8 * 2 * PROF_N as u64;
         let (tx, rx) = mpsc::channel();
@@ -1992,7 +1982,8 @@ impl GpuTrainer {
         }
         p.rb.unmap();
         for i in 0..PROF_N {
-            if i == PROF_N - 1 && !la_ran {
+            // The step passes ran under one of their two names.
+            if i >= PROF_STEP && (i >= PROF_STEP + PROF_LA) != la_fold {
                 continue;
             }
             p.acc[i] += ts[2 * i + 1].wrapping_sub(ts[2 * i]) as f64 * p.period_ns as f64;
@@ -2010,9 +2001,13 @@ impl GpuTrainer {
                 continue;
             }
             let ms = p.acc[i] / p.samples[i] as f64 / 1e6;
-            // Lookahead runs every k batches; charge its share per batch.
-            let per_batch = if i == PROF_N - 1 {
-                ms / self.la_k.max(1) as f64
+            // A step pass runs in its Lookahead form one batch in k; charge
+            // each form its share per batch.
+            let k = self.la_k.max(1) as f64;
+            let per_batch = if i >= PROF_STEP + PROF_LA {
+                ms / k
+            } else if i >= PROF_STEP && self.la_k > 0 {
+                ms * (k - 1.0) / k
             } else {
                 ms
             };
