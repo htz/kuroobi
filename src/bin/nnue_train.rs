@@ -45,14 +45,29 @@ use kuroobi::trainer::{count_examples_binary, load_examples_binary_into, Example
 /// solver boundary, aspiration windows carry a bound across depths, and the
 /// selective-search margins are calibrated in discs. All three compare
 /// numbers a per-stage offset does move.
-fn val_by_stage(nn: &Nnue, val: &[Example]) -> Vec<[f64; 4]> {
+/// Scored through the quantized read-out, which is the one that plays.
+///
+/// `eval_indices` reads the f32 weights the optimizer is updating;
+/// `eval_from_indices` reads the int8 tables `quantize` derives from them,
+/// and that is what the search calls. The two are not close enough to
+/// substitute: on the same positions H=16 scores MAE 3.937 in f32 and 8.798
+/// after conversion, and it was chosen as the best snapshot on the first
+/// number while playing on the second -- it lost to the linear evaluator
+/// 41-54 at one ply. H=64 converts almost losslessly (5.556 -> 5.493), so
+/// which path a run is judged on decides which of the two looks better.
+///
+/// `quantize` fills the integer tables from the current weights and leaves
+/// the f32 side alone, so calling it here costs one pass over the weights
+/// per epoch and does not disturb training.
+fn val_by_stage(nn: &mut Nnue, val: &[Example]) -> Vec<[f64; 4]> {
+    nn.quantize();
     let mut acc = vec![[0.0f64; 4]; STAGE_COUNT];
     for ex in val {
         let board = ex.board();
         let ix = nn.indices(ex.black, ex.white);
         // Prediction minus truth, so a positive mean reads as "this model
         // scores positions high".
-        let e = nn.eval_indices(&board, &ix) as f64 - ex.score as f64;
+        let e = nn.eval_from_indices(&ix, &board) as f64 - ex.score as f64;
         let a = &mut acc[Evaluator::stage(&board)];
         a[0] += 1.0;
         a[1] += e * e;
@@ -92,7 +107,7 @@ fn select_score(which: &str, a: &[f64; 4]) -> f64 {
     }
 }
 
-fn val_mse(nn: &Nnue, val: &[Example]) -> f64 {
+fn val_mse(nn: &mut Nnue, val: &[Example]) -> f64 {
     if val.is_empty() {
         return f64::NAN;
     }
@@ -485,7 +500,7 @@ fn main() -> ExitCode {
         let mx = table.iter().fold(0.0f32, |m, &v| m.max(v.abs()));
         println!("fit-num: {filled}/{n_buckets} buckets, max |correction| {mx:.3} discs");
         nn.set_num_w(&table);
-        let vm = val_mse(&nn, &val);
+        let vm = val_mse(&mut nn, &val);
         println!("fit-num: val {vm:.4}");
         if let Err(e) = nn.save(&out) {
             eprintln!("save failed: {e}");
@@ -533,10 +548,10 @@ fn main() -> ExitCode {
     let mut best = if val.is_empty() {
         f64::INFINITY
     } else {
-        select_score(&select_by, &pooled(&val_by_stage(&nn, &val)))
+        select_score(&select_by, &pooled(&val_by_stage(&mut nn, &val)))
     };
     if best.is_finite() {
-        let (m, a, b, sd) = stats_of(&pooled(&val_by_stage(&nn, &val)));
+        let (m, a, b, sd) = stats_of(&pooled(&val_by_stage(&mut nn, &val)));
         println!(
             "starting val mse {m:.4} mae {a:.4} bias {b:+.4} spread {sd:.4}  \
              (selecting on {select_by})"
@@ -671,7 +686,7 @@ fn main() -> ExitCode {
             mb_total_steps = mb_step * epochs as u64;
         }
         let train_mse = sq_total / seen.max(1) as f64;
-        let acc = val_by_stage(&nn, &val);
+        let acc = val_by_stage(&mut nn, &val);
         let tot = pooled(&acc);
         let (vmse, vmae, vbias, vsd) = stats_of(&tot);
         let vm = select_score(&select_by, &tot);
@@ -747,7 +762,7 @@ fn main() -> ExitCode {
         let mean: Vec<f32> = acc.iter().map(|x| x / n as f32).collect();
         let mut avg = Nnue::new(patterns);
         avg.set_weights_flat(&mean);
-        let vm = val_mse(&avg, &val);
+        let vm = val_mse(&mut avg, &val);
         println!("swa over {n} epochs: val {vm:.4}");
         /* Always save the average: against a symmetrized baseline the
         raw SWA average looks worse by its asymmetry (0.006-0.008), and

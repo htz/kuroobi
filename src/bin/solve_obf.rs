@@ -81,6 +81,10 @@ fn main() -> ExitCode {
             let mtt: &'static kuroobi::midgame::SharedTt =
                 Box::leak(Box::new(kuroobi::midgame::SharedTt::new(22)));
             solver.set_nnue(nn, mtt);
+            // Measurement arm: with KUROOBI_NNUE_ORDER set, move ordering
+            // reads the network instead of the linear 8-bit tables. See
+            // `solver::order_nnue`.
+            let _ = kuroobi::solver::ORDER_NNUE.set(nn);
             probe_tt = Some(mtt);
         } else {
             eprintln!("note: nnue {} not found, linear probes", p.display());

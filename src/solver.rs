@@ -2333,6 +2333,26 @@ pub struct EndSolverResult {
 
 /// The NNUE midgame searcher lent to the endgame for its selective probes:
 /// the network and the shared midgame table it searches through.
+/// Move ordering through the network instead of the linear table, for
+/// measurement only.
+///
+/// Ordering calls the evaluator once per child, so its cost is multiplied by
+/// the branching factor -- which is why it reads the 8-bit ordering tables
+/// and not the full evaluation. Whether the network would order *better* is
+/// a separate question from whether it could afford to, and node counts
+/// answer the first one on its own. Gated on an environment variable so one
+/// binary measures both arms; nothing reads it unless it is set.
+pub static ORDER_NNUE: std::sync::OnceLock<&'static crate::nnue::Nnue> = std::sync::OnceLock::new();
+
+pub fn order_nnue() -> Option<&'static crate::nnue::Nnue> {
+    static ON: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    if *ON.get_or_init(|| std::env::var("KUROOBI_NNUE_ORDER").is_ok()) {
+        ORDER_NNUE.get().copied()
+    } else {
+        None
+    }
+}
+
 pub type NnueProbe = (
     &'static crate::nnue::Nnue,
     &'static crate::midgame::SharedTt,
@@ -6761,6 +6781,8 @@ impl Worker<'_> {
                         f32::NEG_INFINITY,
                         sort_hi,
                     )
+                } else if let Some(nn) = order_nnue() {
+                    nn.eval_from_indices(indices, &child)
                 } else {
                     e.eval_order_bb(cp, co, mover.opponent(), indices)
                 };
@@ -6977,6 +6999,9 @@ fn shallow_search(
     let _prof = layer_profile::Scope::new(layer_profile::LOOKAHEAD, board.empty_count());
     node_accounting::lookahead();
     if depth == 0 {
+        if let Some(nn) = order_nnue() {
+            return nn.eval_from_indices(indices, board);
+        }
         return ev.eval_order_bb(
             board.player_bb(),
             board.opponent_bb(),
