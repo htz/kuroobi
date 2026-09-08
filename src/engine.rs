@@ -85,6 +85,9 @@ pub struct EngineConfig {
     pub weights: PathBuf,
     /// NNUE weights (midgame search and band probes).
     pub nnue: PathBuf,
+    /// A linear evaluator held under the net; see `Nnue::base`. Empty for a
+    /// net trained against the label directly.
+    pub nnue_base: PathBuf,
     /// Which feature set the NNUE weights were trained against. A weight
     /// file belongs to its set -- the feature space is a different size and
     /// a different shape -- so this has to match or the load fails.
@@ -119,6 +122,7 @@ impl Default for EngineConfig {
             solver_hash_bits: 22,
             weights: PathBuf::from("weights/linear.bin"),
             nnue: PathBuf::from("weights/nnue-h16.bin"),
+            nnue_base: PathBuf::new(),
             nnue_patterns: EGAROUCID_PATTERNS,
             book: PathBuf::from("weights/book.txt"),
             use_book: true,
@@ -272,6 +276,12 @@ impl Engine {
             .map_err(|e| format!("nnue {}: {e}", config.nnue.display()))?;
         // Build the int16 tables; skipping this makes eval read
         // uninitialized memory.
+        if !config.nnue_base.as_os_str().is_empty() {
+            let mut b = Evaluator::new(config.nnue_patterns);
+            b.load_weights(&config.nnue_base)
+                .map_err(|e| format!("nnue base {}: {e}", config.nnue_base.display()))?;
+            nn.set_base(b);
+        }
         nn.act_units = config.act_units;
         nn.quantize();
         nn.head_f32 = config.head_f32;

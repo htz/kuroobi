@@ -1,33 +1,26 @@
-//! Kifu/example-based training: load labeled positions and run epoch-style
-//! training with symmetry augmentation (the Go trainer's workflow).
+//! Record-based training: load positions and run epoch-style training with
+//! symmetry augmentation (the Go trainer's workflow).
 //!
-//! Two input formats are supported:
-//! - Text: one position per line, `<64 board chars> <score>` where the board
-//!   uses 'X' (black), 'O' (white), anything else = empty, in **rank-major**
-//!   order (the classic kifu dump layout, same as the Go converter input)
-//! - Binary: packed `Example` records (black u64, white u64, score i8,
-//!   little-endian, 17 bytes each) — rank-major bit layout for compatibility
-//!   with data produced by the Go converter
-//!
-//! Scores are from **Black's perspective** with Black to move (the Go
-//! pipeline stores positions normalized that way).
+//! The one input format is the record of [`crate::record`], from which the
+//! teacher value is derived by the record's rule. In memory an example
+//! is the mover's discs as Black, the opponent's as White, and the teacher
+//! value from the mover's view.
 
-use std::fs::File;
-use std::io::{self, BufRead, BufReader, BufWriter, Read, Write};
+use std::io;
 use std::path::Path;
 
-use crate::bitboard;
 use crate::board::Board;
 use crate::color::Color;
 use crate::evaluator::{AdamOptimizer, Evaluator, Optimizer, STAGE_COUNT};
+use crate::record::{self, Filter};
 
-/// One labeled training position: bitboards plus the final-score label.
+/// One training position: bitboards plus the teacher value in discs.
 /// Bit layout in memory is this crate's file-major; converters translate.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct Example {
     pub black: u64,
     pub white: u64,
-    pub score: i8,
+    pub score: f32,
 }
 
 impl Example {
@@ -42,90 +35,7 @@ impl Example {
     }
 }
 
-/// Parse one text line: 64 board characters (rank-major), whitespace, score.
-fn parse_text_line(line: &str) -> Option<Example> {
-    let line = line.trim();
-    if line.len() < 65 {
-        return None;
-    }
-    let (board_part, score_part) = line.split_at(64);
-
-    let mut black_rank_major = 0u64;
-    let mut white_rank_major = 0u64;
-    for (i, ch) in board_part.chars().enumerate() {
-        match ch {
-            'X' | 'x' | '*' => black_rank_major |= 1u64 << i,
-            'O' | 'o' => white_rank_major |= 1u64 << i,
-            _ => {}
-        }
-    }
-
-    let score: i8 = score_part.trim().parse().ok()?;
-    Some(Example {
-        // transpose converts rank-major -> file-major
-        black: bitboard::transpose(black_rank_major),
-        white: bitboard::transpose(white_rank_major),
-        score,
-    })
-}
-
-/// Load examples from a text file (one `<board> <score>` per line).
-/// Empty lines are skipped; malformed lines are an error.
-pub fn load_examples_text(path: &Path) -> io::Result<Vec<Example>> {
-    let mut examples = Vec::new();
-    load_examples_text_into(path, &mut examples, None)?;
-    Ok(examples)
-}
-
-/// Append a text file's examples to `out`, stopping after `limit` of them.
-///
-/// The appending form exists so a caller can fill one buffer from several
-/// files without an intermediate `Vec` per file — with multi-gigabyte
-/// datasets that temporary is the difference between fitting in RAM and not.
-pub fn load_examples_text_into(
-    path: &Path,
-    out: &mut Vec<Example>,
-    limit: Option<usize>,
-) -> io::Result<usize> {
-    let reader = BufReader::new(File::open(path)?);
-    let mut n = 0;
-    for (no, line) in reader.lines().enumerate() {
-        if limit.is_some_and(|l| n >= l) {
-            break;
-        }
-        let line = line?;
-        if line.trim().is_empty() {
-            continue;
-        }
-        let ex = parse_text_line(&line).ok_or_else(|| {
-            io::Error::new(
-                io::ErrorKind::InvalidData,
-                format!("bad training line {}", no + 1),
-            )
-        })?;
-        out.push(ex);
-        n += 1;
-    }
-    Ok(n)
-}
-
-/// Binary record: black u64 LE, white u64 LE, score i8 (17 bytes).
-/// Bit layout on disk is rank-major (Go-converter compatible).
-const BIN_RECORD_SIZE: usize = 17;
-
-/// Save examples in the packed binary format.
-pub fn save_examples_binary(path: &Path, examples: &[Example]) -> io::Result<()> {
-    let mut w = BufWriter::new(File::create(path)?);
-    for ex in examples {
-        // file-major (memory) -> rank-major (disk)
-        w.write_all(&bitboard::transpose(ex.black).to_le_bytes())?;
-        w.write_all(&bitboard::transpose(ex.white).to_le_bytes())?;
-        w.write_all(&[ex.score as u8])?;
-    }
-    w.flush()
-}
-
-/// Load examples from the packed binary format.
+/// Load examples from a record file.
 pub fn load_examples_binary(path: &Path) -> io::Result<Vec<Example>> {
     let mut examples = Vec::new();
     load_examples_binary_into(path, &mut examples, None)?;
@@ -137,75 +47,41 @@ pub fn load_examples_binary(path: &Path) -> io::Result<Vec<Example>> {
 /// The format is fixed-width, so this is exact, which lets a caller plan how
 /// many files fit in a memory budget before touching the data.
 pub fn count_examples_binary(path: &Path) -> io::Result<usize> {
-    Ok(std::fs::metadata(path)?.len() as usize / BIN_RECORD_SIZE)
+    record::count(path)
 }
 
-/// Append a binary file's examples to `out`, stopping after `limit` of them.
-///
-/// Reads in whole blocks rather than one 17-byte record at a time: with the
-/// data re-read every epoch, per-record `read_exact` calls are a measurable
-/// share of the wall clock.
+/// Append a record file's examples to `out`, stopping after `limit` of them.
 pub fn load_examples_binary_into(
     path: &Path,
     out: &mut Vec<Example>,
     limit: Option<usize>,
 ) -> io::Result<usize> {
-    // A multiple of the record size, so a full buffer never splits a record.
-    const BLOCK: usize = BIN_RECORD_SIZE * 4096;
-
-    let mut f = File::open(path)?;
-    let want = match limit {
-        Some(l) => l.min(count_examples_binary(path)?),
-        None => count_examples_binary(path)?,
-    };
-    out.reserve(want);
-
-    let mut buf = vec![0u8; BLOCK];
-    let mut carry = 0usize; // bytes of a split record held over from last block
-    let mut n = 0usize;
-    loop {
-        // Fill the buffer past the carried-over prefix, or until EOF.
-        let mut filled = carry;
-        while filled < BLOCK {
-            match f.read(&mut buf[filled..])? {
-                0 => break,
-                got => filled += got,
-            }
-        }
-        let eof = filled < BLOCK;
-
-        for rec in buf[..filled].as_chunks::<BIN_RECORD_SIZE>().0 {
-            if n >= want {
-                return Ok(n);
-            }
-            let black = u64::from_le_bytes(rec[0..8].try_into().unwrap());
-            let white = u64::from_le_bytes(rec[8..16].try_into().unwrap());
-            out.push(Example {
-                // rank-major (disk) -> file-major (memory)
-                black: bitboard::transpose(black),
-                white: bitboard::transpose(white),
-                score: rec[16] as i8,
-            });
-            n += 1;
-        }
-
-        let used = (filled / BIN_RECORD_SIZE) * BIN_RECORD_SIZE;
-        carry = filled - used;
-        buf.copy_within(used..filled, 0);
-        if eof {
-            // A trailing partial record means a truncated file; ignore it,
-            // matching the previous loader's EOF handling.
-            return Ok(n);
-        }
-    }
+    load_examples_filtered_into(path, out, limit, &Filter::NONE)
 }
 
-/// Convert a text training file to the binary format (Go's
-/// traindata_converter). Returns the number of examples written.
-pub fn convert_text_to_binary(text_path: &Path, bin_path: &Path) -> io::Result<usize> {
-    let examples = load_examples_text(text_path)?;
-    save_examples_binary(bin_path, &examples)?;
-    Ok(examples.len())
+/// Append the examples of a record file that pass `filter` to `out`,
+/// stopping after `limit` of them.
+pub fn load_examples_filtered_into(
+    path: &Path,
+    out: &mut Vec<Example>,
+    limit: Option<usize>,
+    filter: &Filter,
+) -> io::Result<usize> {
+    let in_file = record::count(path)?;
+    let want = limit.map_or(in_file, |l| l.min(in_file));
+    out.reserve(want);
+    let mut n = 0usize;
+    record::for_each(path, |r| {
+        if n >= want {
+            return false;
+        }
+        if filter.keeps(&r) {
+            out.push(r.example());
+            n += 1;
+        }
+        true
+    })?;
+    Ok(n)
 }
 
 /// Per-stage loss statistics for one epoch.
@@ -312,9 +188,7 @@ impl<O: Optimizer> Trainer<O> {
             // `train` already returns the mean squared error over the eight
             // symmetries, so accumulate it directly — squaring it again gives
             // (MSE)², which drifts away from the true loss as the model fits.
-            let mse = self
-                .evaluator
-                .train(&board, ex.score as f32, &mut self.optimizer);
+            let mse = self.evaluator.train(&board, ex.score, &mut self.optimizer);
             stats.loss_sum[stage] += mse as f64;
             stats.samples[stage] += 1;
 
@@ -362,7 +236,7 @@ impl<O: Optimizer> Trainer<O> {
             // SAFETY: single-threaded, and the view came from `ev`, borrowed
             // immutably for the rest of the call. train_shared returns MSE
             // already; see train_pass.
-            let mse = unsafe { ev.train_shared(&view, &board, ex.score as f32, lr) };
+            let mse = unsafe { ev.train_shared(&view, &board, ex.score, lr) };
             stats.loss_sum[stage] += mse as f64;
             stats.samples[stage] += 1;
             if (i + 1) & ((1 << 16) - 1) == 0 {
@@ -384,6 +258,7 @@ mod tests {
     use super::*;
     use crate::pattern::EGAROUCID_PATTERNS;
     use crate::position::Position;
+    use crate::record::Record;
 
     fn temp_path(name: &str) -> std::path::PathBuf {
         let dir = std::env::temp_dir().join("bbrv_trainer_test");
@@ -391,80 +266,87 @@ mod tests {
         dir.join(name)
     }
 
-    /// A rank-major board string for the standard initial position.
-    fn initial_board_text() -> String {
-        // Same layout as BOARD_INIT_STRING's board part
-        "---------------------------OX------XO---------------------------".replace('\u{0}', "")
+    /// A record whose teacher value is its result, at a ply past the
+    /// opening's forced zero.
+    fn searched(mover: u64, opponent: u64, result: i8) -> Record {
+        Record {
+            mover,
+            opponent,
+            score: f32::from(result),
+            game_score: result,
+            ply: 20,
+            random: false,
+            sq: record::NO_SQUARE,
+            black_to_move: true,
+            game_id: 0,
+        }
+    }
+
+    fn write_records(path: &Path, records: &[Record]) {
+        let mut w = record::Writer::create(path).unwrap();
+        for r in records {
+            w.write(r).unwrap();
+        }
+        w.finish().unwrap();
     }
 
     #[test]
-    fn test_parse_text_line_roundtrips_board() {
-        let line = format!("{} -12", initial_board_text());
-        let ex = parse_text_line(&line).expect("valid line");
-        assert_eq!(ex.score, -12);
+    fn test_example_is_the_record_in_this_crates_layout() {
+        // On disk bits are rank-major (A1 = bit 0, B1 = bit 1); in memory an
+        // example is file-major (B1 = bit 8), the mover as Black.
+        let bin_path = temp_path("layout.data");
+        let mut raw = searched(0, 0, 5).to_bytes();
+        raw[0..8].copy_from_slice(&(1u64 << 1).to_le_bytes());
+        std::fs::write(&bin_path, raw).unwrap();
 
-        let board = ex.board();
-        // The initial position: D4/E5 white, E4/D5 black in this crate's
-        // coordinates (matches Board::new modulo player)
-        let reference = Board::new();
-        assert_eq!(board.black, reference.black, "black bits map correctly");
-        assert_eq!(board.white, reference.white, "white bits map correctly");
-        assert_eq!(board.empty_count(), 60);
-    }
+        let ex = load_examples_binary(&bin_path).unwrap();
+        assert_eq!(ex.len(), 1);
+        assert_eq!(ex[0].black, 1u64 << 8, "B1 on disk is bit 8 in memory");
+        assert_eq!(ex[0].white, 0);
+        assert_eq!(ex[0].score, 5.0);
+        assert_eq!(ex[0].board().player, Color::Black);
 
-    #[test]
-    fn test_parse_text_line_rejects_garbage() {
-        assert!(parse_text_line("short 3").is_none());
-        let bad_score = format!("{} notanumber", initial_board_text());
-        assert!(parse_text_line(&bad_score).is_none());
-    }
-
-    #[test]
-    fn test_text_and_binary_roundtrip() {
-        let text_path = temp_path("examples.txt");
-        let bin_path = temp_path("examples.data");
-
-        let mut content = String::new();
-        content.push_str(&format!("{} 8\n", initial_board_text()));
-        content.push_str(&format!("{} -30\n", initial_board_text()));
-        content.push('\n'); // blank line is skipped
-        std::fs::write(&text_path, content).unwrap();
-
-        let n = convert_text_to_binary(&text_path, &bin_path).unwrap();
-        assert_eq!(n, 2);
-
-        let from_text = load_examples_text(&text_path).unwrap();
-        let from_bin = load_examples_binary(&bin_path).unwrap();
-        assert_eq!(from_text, from_bin, "binary roundtrip preserves examples");
-        assert_eq!(from_bin[0].score, 8);
-        assert_eq!(from_bin[1].score, -30);
-
-        std::fs::remove_file(&text_path).ok();
         std::fs::remove_file(&bin_path).ok();
     }
 
     #[test]
-    fn test_binary_format_is_go_compatible_layout() {
-        // The on-disk record must be exactly 17 bytes with rank-major bits:
-        // A1 = bit 0, B1 = bit 1 (rank-major) even though memory layout is
-        // file-major (B1 = bit 8).
-        let bin_path = temp_path("layout.data");
-        let ex = Example {
-            black: 1u64 << 8, // B1 in file-major memory layout
-            white: 0,
-            score: 5,
+    fn test_binary_load_applies_teacher_rule_and_filter() {
+        let bin_path = temp_path("rule.data");
+        let base = Record {
+            mover: 0x0000_0008_1000_0000,
+            opponent: 0x0000_0010_0800_0000,
+            score: 3.0,
+            game_score: 10,
+            ply: 20,
+            random: false,
+            sq: record::NO_SQUARE,
+            black_to_move: true,
+            game_id: 1,
         };
-        save_examples_binary(&bin_path, &[ex]).unwrap();
+        let mut w = record::Writer::create(&bin_path).unwrap();
+        w.write(&base).unwrap(); // searched: teacher = result
+        w.write(&Record {
+            random: true,
+            ..base
+        })
+        .unwrap(); // random: teacher = search value; dropped by the filter
+        w.write(&Record {
+            game_score: 30,
+            ..base
+        })
+        .unwrap(); // disagrees with the search by 27: dropped
+        w.write(&Record { ply: 5, ..base }).unwrap(); // before min ply: dropped
+        w.finish().unwrap();
 
-        let raw = std::fs::read(&bin_path).unwrap();
-        assert_eq!(raw.len(), 17);
-        let disk_black = u64::from_le_bytes(raw[0..8].try_into().unwrap());
+        let all = load_examples_binary(&bin_path).unwrap();
         assert_eq!(
-            disk_black,
-            1u64 << 1,
-            "B1 must be bit 1 in rank-major on disk"
+            all.iter().map(|e| e.score).collect::<Vec<_>>(),
+            [10.0, 3.0, 30.0, 10.0]
         );
-        assert_eq!(raw[16] as i8, 5);
+        let mut kept = Vec::new();
+        let n = load_examples_filtered_into(&bin_path, &mut kept, None, &Filter::TRAINING).unwrap();
+        assert_eq!(n, 1);
+        assert_eq!(kept[0].score, 10.0);
 
         std::fs::remove_file(&bin_path).ok();
     }
@@ -474,14 +356,17 @@ mod tests {
         // More records than the loader's read block holds, so the multi-block
         // path (and its record-boundary bookkeeping) is exercised.
         let bin_path = temp_path("multiblock.data");
-        let written: Vec<Example> = (0..10_000u64)
-            .map(|i| Example {
-                black: i.wrapping_mul(0x9E3779B97F4A7C15),
-                white: i.wrapping_mul(0xC2B2AE3D27D4EB4F),
-                score: (i % 128) as i8 - 64,
+        let records: Vec<Record> = (0..10_000u64)
+            .map(|i| {
+                searched(
+                    i.wrapping_mul(0x9E3779B97F4A7C15),
+                    i.wrapping_mul(0xC2B2AE3D27D4EB4F),
+                    (i % 128) as i8 - 64,
+                )
             })
             .collect();
-        save_examples_binary(&bin_path, &written).unwrap();
+        write_records(&bin_path, &records);
+        let written: Vec<Example> = records.iter().map(Record::example).collect();
 
         assert_eq!(count_examples_binary(&bin_path).unwrap(), written.len());
         assert_eq!(load_examples_binary(&bin_path).unwrap(), written);
@@ -508,27 +393,6 @@ mod tests {
     }
 
     #[test]
-    fn test_text_load_honours_limit_and_appends() {
-        let text_path = temp_path("limited.txt");
-        let mut content = String::new();
-        for score in 0..10 {
-            content.push_str(&format!("{} {}\n", initial_board_text(), score));
-        }
-        std::fs::write(&text_path, content).unwrap();
-
-        let mut out = Vec::new();
-        let n = load_examples_text_into(&text_path, &mut out, Some(3)).unwrap();
-        assert_eq!(n, 3);
-        assert_eq!(out.len(), 3);
-        assert_eq!(out[2].score, 2);
-
-        load_examples_text_into(&text_path, &mut out, Some(2)).unwrap();
-        assert_eq!(out.len(), 5, "second load appends");
-
-        std::fs::remove_file(&text_path).ok();
-    }
-
-    #[test]
     fn test_train_pass_does_not_advance_lr_schedule() {
         // An epoch split across shards is several passes but one schedule
         // step; if a pass advanced the schedule, lr would decay per shard.
@@ -538,7 +402,7 @@ mod tests {
         let examples = [Example {
             black: b.black,
             white: b.white,
-            score: 2,
+            score: 2.0,
         }];
         let mut trainer = Trainer::new(
             Evaluator::new(EGAROUCID_PATTERNS),
@@ -573,7 +437,7 @@ mod tests {
             examples.push(Example {
                 black,
                 white,
-                score,
+                score: f32::from(score),
             });
         }
 
@@ -594,7 +458,7 @@ mod tests {
         let examples = [Example {
             black: b.black,
             white: b.white,
-            score: 2,
+            score: 2.0,
         }];
         let mut trainer =
             Trainer::new(Evaluator::new(EGAROUCID_PATTERNS), AdamOptimizer::new(0.01));

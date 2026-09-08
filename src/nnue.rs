@@ -35,6 +35,8 @@ use crate::pattern::Pattern;
 use crate::pattern_index::{PatternIndexer, PatternIndices, MAX_MASKS};
 use crate::position::Position;
 
+#[cfg(feature = "gpu")]
+pub mod gpu;
 #[cfg(feature = "stackedout")]
 mod stack_q;
 
@@ -1527,6 +1529,21 @@ fn apply_index_perm(index: usize, size: usize, perm: &[usize]) -> usize {
 
 /// One NNUE model over a fixed pattern library.
 pub struct Nnue {
+    /// A trained linear evaluator held underneath the net, its score added
+    /// to the read-out's. The net is then trained on what the linear model
+    /// leaves over rather than on the label itself.
+    ///
+    /// This is Stockfish's PSQT column in the shape this engine already has
+    /// one: that column exists because "nets have a hard time learning high
+    /// material imbalance, or even representing high evaluations at all",
+    /// and here the deployed pattern evaluator reads the same rows out of
+    /// the same `PatternIndices` the net computes, so it costs one extra sum
+    /// over indices that are already in hand.
+    ///
+    /// `None` for a net trained against the label directly; the two are not
+    /// interchangeable, and loading a residual net without its base reads
+    /// numbers that mean something else.
+    base: Option<Box<crate::evaluator::Evaluator>>,
     patterns: &'static [Pattern],
     indexer: PatternIndexer,
     n_masks: usize,
@@ -1713,6 +1730,7 @@ impl Nnue {
             .collect();
 
         Nnue {
+            base: None,
             patterns,
             indexer,
             n_masks,
@@ -2353,6 +2371,26 @@ impl Nnue {
     /// Requires [`quantize`](Self::quantize).
     #[inline]
     pub fn eval_from_indices(&self, indices: &PatternIndices, board: &Board) -> f32 {
+        self.net_from_indices(indices, board) + self.base_score(board, indices)
+    }
+
+    /// The base's contribution, zero when no base is held.
+    #[inline]
+    fn base_score(&self, board: &Board, indices: &PatternIndices) -> f32 {
+        match &self.base {
+            Some(e) => e.eval_indices(board, indices),
+            None => 0.0,
+        }
+    }
+
+    /// Install a linear evaluator as the base; see [`Nnue::base`].
+    pub fn set_base(&mut self, e: crate::evaluator::Evaluator) {
+        self.base = Some(Box::new(e));
+    }
+
+    /// The net's own output, without the base.
+    #[inline]
+    pub fn net_from_indices(&self, indices: &PatternIndices, board: &Board) -> f32 {
         let stage = crate::evaluator::Evaluator::stage(board);
         let ft = if board.player() == Color::Black {
             &self.ft_b_i8
@@ -2516,6 +2554,11 @@ impl Nnue {
 
     /// Forward pass to a scalar score (disc-difference units).
     pub fn eval_indices(&self, board: &Board, indices: &PatternIndices) -> f32 {
+        self.net_indices(board, indices) + self.base_score(board, indices)
+    }
+
+    /// The net's own f32 output, without the base.
+    pub fn net_indices(&self, board: &Board, indices: &PatternIndices) -> f32 {
         let stage = crate::evaluator::Evaluator::stage(board);
         let feats = self.features_player(indices, board.player(), stage);
         let base = self.forward(&feats, Self::mob_index(board), stage);
@@ -2757,6 +2800,12 @@ impl Nnue {
             }
             out + self.mlp_term(&a, mob, stage)
         }
+    }
+
+    /// The indexer of this net's own pattern set, for callers that carry
+    /// indices incrementally on the net's behalf (the ordering arm).
+    pub fn indexer(&self) -> &PatternIndexer {
+        &self.indexer
     }
 
     /// Build the pattern indices for a Black-to-move position (training path).
@@ -3928,6 +3977,88 @@ impl Nnue {
 
     /// Rebuild the forward-pass copies of the hidden layers' weights.
     /// Must follow every write to `so_l1_w` / `so_l2_w`.
+    /// Copy stage `from`'s stacked read-out (all six tables) of `src` into
+    /// stage `to` of `self`. A probe for taking the stacks apart: which stage's
+    /// read-out a position runs through is the only thing that changes.
+    #[cfg(feature = "stackedout")]
+    pub fn copy_so_stage(&mut self, src: &Nnue, from: usize, to: usize) {
+        fn cp(dst: &mut [f32], src: &[f32], per: usize, from: usize, to: usize) {
+            dst[to * per..(to + 1) * per].copy_from_slice(&src[from * per..(from + 1) * per]);
+        }
+        cp(&mut self.so_l1_w, &src.so_l1_w, SO_L1 * SO_L1_IN, from, to);
+        cp(&mut self.so_l1_b, &src.so_l1_b, SO_L1, from, to);
+        cp(
+            &mut self.so_l2_w,
+            &src.so_l2_w,
+            SO_L2 * (SO_L1 * 2),
+            from,
+            to,
+        );
+        cp(&mut self.so_l2_b, &src.so_l2_b, SO_L2, from, to);
+        cp(&mut self.so_out_w, &src.so_out_w, SO_OUT_IN, from, to);
+        cp(&mut self.so_out_b, &src.so_out_b, 1, from, to);
+        self.refresh_so_grid();
+    }
+
+    /// Relative change of one stage's stacked read-out between two models:
+    /// `||self - other|| / ||other||` over all six tables, and the same
+    /// for the output layer alone.
+    #[cfg(feature = "stackedout")]
+    pub fn so_stage_delta(&self, other: &Nnue, st: usize) -> (f64, f64) {
+        fn acc(a: &[f32], b: &[f32], per: usize, st: usize, d: &mut f64, n: &mut f64) {
+            for i in st * per..(st + 1) * per {
+                let x = (a[i] - b[i]) as f64;
+                *d += x * x;
+                *n += (b[i] as f64) * (b[i] as f64);
+            }
+        }
+        let (mut d, mut n) = (0.0, 0.0);
+        acc(
+            &self.so_l1_w,
+            &other.so_l1_w,
+            SO_L1 * SO_L1_IN,
+            st,
+            &mut d,
+            &mut n,
+        );
+        acc(&self.so_l1_b, &other.so_l1_b, SO_L1, st, &mut d, &mut n);
+        acc(
+            &self.so_l2_w,
+            &other.so_l2_w,
+            SO_L2 * (SO_L1 * 2),
+            st,
+            &mut d,
+            &mut n,
+        );
+        acc(&self.so_l2_b, &other.so_l2_b, SO_L2, st, &mut d, &mut n);
+        let (mut od, mut on) = (0.0, 0.0);
+        acc(
+            &self.so_out_w,
+            &other.so_out_w,
+            SO_OUT_IN,
+            st,
+            &mut od,
+            &mut on,
+        );
+        acc(&self.so_out_b, &other.so_out_b, 1, st, &mut od, &mut on);
+        ((d + od).sqrt() / (n + on).sqrt(), od.sqrt() / on.sqrt())
+    }
+
+    /// Relative change of the shared trunk (ft rows, pa rows) between two
+    /// models.
+    pub fn trunk_delta(&self, other: &Nnue) -> (f64, f64) {
+        fn rel(a: &[f32], b: &[f32]) -> f64 {
+            let (mut d, mut n) = (0.0f64, 0.0f64);
+            for (x, y) in a.iter().zip(b) {
+                let e = (*x - *y) as f64;
+                d += e * e;
+                n += (*y as f64) * (*y as f64);
+            }
+            d.sqrt() / n.sqrt().max(1e-30)
+        }
+        (rel(&self.ft, &other.ft), rel(&self.pa, &other.pa))
+    }
+
     fn refresh_so_grid(&mut self) {
         let round = |w: f32| {
             if self.so_grid {
@@ -4807,6 +4938,117 @@ impl Nnue {
     }
 
     /// Load weights previously written by [`save`](Self::save).
+    /// Take a network in the packed integer serialisation, decompressed,
+    /// as this model's weights.
+    ///
+    /// The file holds integers -- sparse rows in 1/512, dense weights in
+    /// 1/64, output weights in 1/4096, biases in the matching products --
+    /// and every one of them divides back out to the unit this model trains
+    /// in, so [`Nnue::quantize`] restores the same integers. The layout is:
+    /// base input (bias, rows), six phase-adaptive inputs (bias, rows each),
+    /// then sixty stacks of L1, L2 and output, each as bias then weights,
+    /// the dense weights row-major over a padded input.
+    ///
+    /// Feature rows line up without a permutation: the file numbers a
+    /// pattern's configurations as a ternary word with the first listed
+    /// square most significant and mover 0, opponent 1, empty 2, and
+    /// `NNUE_PATTERNS` lists the same squares in the same order.
+    #[cfg(all(feature = "pairmul", feature = "pa128", feature = "stackedout"))]
+    pub fn import_packed(&mut self, raw: &[u8]) -> std::io::Result<()> {
+        use std::io::{Error, ErrorKind};
+        const L1_PAD_IN: usize = 288;
+        const L2_PAD_IN: usize = SO_L1 * 2;
+        const OUT_PAD_IN: usize = 320;
+        let mut at = 0usize;
+        let mut take = |n: usize| -> std::io::Result<&[u8]> {
+            if at + n > raw.len() {
+                return Err(Error::new(
+                    ErrorKind::UnexpectedEof,
+                    "packed weights truncated",
+                ));
+            }
+            let s = &raw[at..at + n];
+            at += n;
+            Ok(s)
+        };
+        let i16s = |b: &[u8]| -> Vec<i16> {
+            b.as_chunks::<2>()
+                .0
+                .iter()
+                .map(|c| i16::from_le_bytes(*c))
+                .collect()
+        };
+        let i32s = |b: &[u8]| -> Vec<i32> {
+            b.as_chunks::<4>()
+                .0
+                .iter()
+                .map(|c| i32::from_le_bytes(*c))
+                .collect()
+        };
+        let nf = self.n_features;
+        if self.n_masks != 32 || nf != 297_432 || self.pa.len() != PA_BUCKETS * nf * PA_DIMS {
+            return Err(Error::new(
+                ErrorKind::InvalidData,
+                "import_packed wants the unshared pattern set (--patterns nnue)",
+            ));
+        }
+        // Base input: bias then rows, both in 1/512.
+        for (dst, v) in self.ft_bias.iter_mut().zip(i16s(take(ACC_DIMS * 2)?)) {
+            *dst = v as f32 / 512.0;
+        }
+        for (dst, v) in self.ft.iter_mut().zip(i16s(take(nf * ACC_DIMS * 2)?)) {
+            *dst = v as f32 / 512.0;
+        }
+        // Phase-adaptive inputs, one bucket after another.
+        for b in 0..PA_BUCKETS {
+            let bias = &mut self.pa_bias[b * PA_DIMS..(b + 1) * PA_DIMS];
+            for (dst, v) in bias.iter_mut().zip(i16s(take(PA_DIMS * 2)?)) {
+                *dst = v as f32 / 512.0;
+            }
+            let rows = &mut self.pa[b * nf * PA_DIMS..(b + 1) * nf * PA_DIMS];
+            for (dst, v) in rows.iter_mut().zip(i16s(take(nf * PA_DIMS * 2)?)) {
+                *dst = v as f32 / 512.0;
+            }
+        }
+        // The stacks. Dense weights are stored `[out][padded in]`; the
+        // padding lanes are dropped.
+        for st in 0..SO_STAGES {
+            for (o, v) in i32s(take(SO_L1 * 4)?).into_iter().enumerate() {
+                self.so_l1_b[st * SO_L1 + o] = v as f32 / (1u32 << 14) as f32;
+            }
+            let w = take(L1_PAD_IN * SO_L1)?;
+            for o in 0..SO_L1 {
+                for k in 0..SO_L1_IN {
+                    self.so_l1_w[(st * SO_L1 + o) * SO_L1_IN + k] =
+                        w[o * L1_PAD_IN + k] as i8 as f32 / 64.0;
+                }
+            }
+            for (o, v) in i32s(take(SO_L2 * 4)?).into_iter().enumerate() {
+                self.so_l2_b[st * SO_L2 + o] = v as f32 / (1u32 << 14) as f32;
+            }
+            let w = take(L2_PAD_IN * SO_L2)?;
+            for o in 0..SO_L2 {
+                for k in 0..SO_L1 * 2 {
+                    self.so_l2_w[(st * SO_L2 + o) * (SO_L1 * 2) + k] =
+                        w[o * L2_PAD_IN + k] as i8 as f32 / 64.0;
+                }
+            }
+            let b = i32s(take(4)?)[0];
+            self.so_out_b[st] = b as f32 / (1u32 << 20) as f32;
+            let w = i16s(take(OUT_PAD_IN * 2)?);
+            for k in 0..SO_OUT_IN {
+                self.so_out_w[st * SO_OUT_IN + k] = w[k] as f32 / 4096.0;
+            }
+        }
+        if at != raw.len() {
+            return Err(Error::new(
+                ErrorKind::InvalidData,
+                format!("packed weights: {} bytes left over", raw.len() - at),
+            ));
+        }
+        Ok(())
+    }
+
     pub fn load(&mut self, path: &std::path::Path) -> std::io::Result<()> {
         use std::io::Read;
         let mut r = std::io::BufReader::new(std::fs::File::open(path)?);

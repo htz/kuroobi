@@ -9,8 +9,9 @@
 //! `nnue_train --dedup` does the same thing in memory, but pays for it on
 //! every run. Doing it once, here, leaves files that need no further care.
 //!
-//! No sort and no temporary files: a hash of the board is enough, at 17
-//! bytes per distinct position (500M positions in 17 GB).
+//! No sort and no temporary files: a hash of the board is enough, at 16
+//! bytes per distinct position (500M positions in 16 GB). The first record
+//! of a position is the one kept, whole.
 //!
 //! The key is the raw board, not the smallest of its eight symmetries.
 //! `--sym-train` picks one symmetry at random per example, so two records
@@ -25,8 +26,7 @@ use std::io::Write;
 use std::path::PathBuf;
 
 use kuroobi::nnue::sym_board;
-
-const RECORD: usize = 17;
+use kuroobi::record::{Record, SIZE as RECORD};
 
 fn main() -> std::process::ExitCode {
     let mut out_dir: Option<PathBuf> = None;
@@ -93,12 +93,11 @@ fn main() -> std::process::ExitCode {
         }
         for r in bytes.as_chunks::<RECORD>().0 {
             read += 1;
-            let black = u64::from_le_bytes(r[0..8].try_into().unwrap());
-            let white = u64::from_le_bytes(r[8..16].try_into().unwrap());
+            let rec = Record::from_bytes(r);
             let key = if symmetric {
-                canonical(black, white)
+                canonical(rec.mover, rec.opponent)
             } else {
-                (black, white)
+                (rec.mover, rec.opponent)
             };
             if !seen.insert(key) {
                 continue;

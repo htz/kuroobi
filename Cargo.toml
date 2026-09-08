@@ -8,6 +8,9 @@ description = "Ultra-fast Reversi bitboard library using 2x uint64"
 [dependencies]
 rand = { version = "0.8", optional = true }
 libc = "0.2"
+# GPU training path (`gpu` feature): one code base for Metal and Vulkan.
+wgpu = { version = "29", optional = true, default-features = false, features = ["metal", "vulkan", "wgsl", "std"] }
+bytemuck = { version = "1", optional = true }
 
 [dev-dependencies]
 rand = "0.8"
@@ -15,6 +18,9 @@ criterion = "0.5"
 
 [features]
 default = []
+# Train the stacked-read-out model on the GPU (`nnue_train --gpu`). Needs
+# `h128,pairmul,pa128,stackedout`; the kernels are written for that shape.
+gpu = ["dep:wgpu", "dep:bytemuck"]
 # Read the solver's tuning knobs from environment variables at first use
 # instead of compiling their defaults in. Sweeps need this; the default
 # build folds the knobs to constants so dead regimes cost nothing.
@@ -165,3 +171,4 @@ required-features = ["stackedout"]
 [[bin]]
 name = "stack_train_check"
 required-features = ["stackedout"]
+

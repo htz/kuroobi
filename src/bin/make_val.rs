@@ -30,19 +30,25 @@
 //! training has also seen. A stage covered that way is measuring fit, not
 //! generalisation, and the output says so per stage.
 //!
+//! Records are copied whole, so the set keeps every field of its sources;
+//! the trainer's filter flags (`--min-ply`, `--max-score-diff`,
+//! `--drop-random`, `--keep-above-ply`) apply here too, so a set holds only
+//! positions a run with the same flags would train on.
+//!
 //! Usage:
 //!   make_val --out <file.data> [--per-stage N] [--overlap-upto N]
-//!            [--exclude <dir-or-file>]... <source.data>...
+//!            [--exclude <dir-or-file>]... [filter flags] <source.data>...
 use kuroobi::evaluator::STAGE_COUNT;
+use kuroobi::record::{self, Filter, Record};
 use std::collections::HashSet;
 use std::fs::File;
 use std::io::{BufWriter, Read, Write};
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 
-const REC: usize = 17;
+const REC: usize = record::SIZE;
 
-/// Read a file as whole 17-byte records, calling `f` for each.
+/// Read a file as whole records, calling `f` for each.
 fn for_each_record(path: &Path, mut f: impl FnMut(&[u8; REC])) -> std::io::Result<u64> {
     let mut file = File::open(path)?;
     let mut buf = vec![0u8; REC * 1024 * 64];
@@ -65,11 +71,10 @@ fn for_each_record(path: &Path, mut f: impl FnMut(&[u8; REC])) -> std::io::Resul
 }
 
 /// Stage of a record, read the same way the trainer reads it.
-fn stage_of(r: &[u8; REC]) -> usize {
-    let black = u64::from_le_bytes(r[0..8].try_into().unwrap());
-    let white = u64::from_le_bytes(r[8..16].try_into().unwrap());
-    let empties = 64 - (black | white).count_ones() as usize;
-    60usize.saturating_sub(empties).min(STAGE_COUNT - 1)
+fn stage_of(r: &Record) -> usize {
+    60usize
+        .saturating_sub(usize::from(r.empties()))
+        .min(STAGE_COUNT - 1)
 }
 
 /// Every `.data` file under `path`, or `path` itself if it is one.
@@ -95,8 +100,17 @@ fn main() -> ExitCode {
     let mut overlap_upto: i64 = -1;
     let mut excludes: Vec<PathBuf> = Vec::new();
     let mut sources: Vec<PathBuf> = Vec::new();
+    let mut filter = Filter::NONE;
     let mut it = std::env::args().skip(1);
     while let Some(a) = it.next() {
+        match filter.take_flag(&a, &mut it) {
+            Ok(true) => continue,
+            Ok(false) => {}
+            Err(e) => {
+                eprintln!("{e}");
+                return ExitCode::FAILURE;
+            }
+        }
         match a.as_str() {
             "--out" => out = it.next().map(PathBuf::from),
             "--per-stage" => match it.next().map(|v| v.parse()) {
@@ -143,12 +157,18 @@ fn main() -> ExitCode {
     let mut by_stage: Vec<Vec<[u8; REC]>> = vec![Vec::new(); STAGE_COUNT];
     let mut seen: HashSet<[u8; 16]> = HashSet::new();
     let mut dup = 0u64;
+    let mut filtered = 0u64;
     for p in &sources {
         let mut kept = 0u64;
         let total = match for_each_record(p, |r| {
+            let rec = Record::from_bytes(r);
+            if !filter.keeps(&rec) {
+                filtered += 1;
+                return;
+            }
             let key: [u8; 16] = r[..16].try_into().unwrap();
             if seen.insert(key) {
-                by_stage[stage_of(r)].push(*r);
+                by_stage[stage_of(&rec)].push(*r);
                 kept += 1;
             } else {
                 dup += 1;
@@ -162,6 +182,7 @@ fn main() -> ExitCode {
         };
         println!("source {}: {total} records, {kept} new", p.display());
     }
+    println!("filter {}: {filtered} records dropped", filter.describe());
     println!("{dup} duplicate boards dropped");
 
     // Pass 2: drop anything that appears in the excluded corpora. Done after
@@ -227,7 +248,7 @@ fn main() -> ExitCode {
             return ExitCode::FAILURE;
         }
     };
-    println!("| stage | 空き | 母数 | 採用 | held-out |");
+    println!("| stage | empties | available | taken | held-out |");
     println!("|---:|---:|---:|---:|---|");
     let mut short: Vec<(usize, usize)> = Vec::new();
     let mut written = 0u64;
@@ -254,9 +275,9 @@ fn main() -> ExitCode {
             bucket.len(),
             take,
             if st as i64 <= overlap_upto {
-                "重複許容"
+                "overlap allowed"
             } else {
-                "はい"
+                "yes"
             }
         );
     }

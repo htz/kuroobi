@@ -2344,6 +2344,17 @@ pub struct EndSolverResult {
 /// binary measures both arms; nothing reads it unless it is set.
 pub static ORDER_NNUE: std::sync::OnceLock<&'static crate::nnue::Nnue> = std::sync::OnceLock::new();
 
+/// The indexer the carried ordering indices follow: the network's own
+/// pattern set when the ordering arm reads the network, else the linear
+/// evaluator's. The two sets differ, so feeding one's indices to the other
+/// would score noise.
+fn order_indexer(e: &crate::evaluator::Evaluator) -> &crate::pattern_index::PatternIndexer {
+    match order_nnue() {
+        Some(nn) => nn.indexer(),
+        None => e.indexer(),
+    }
+}
+
 pub fn order_nnue() -> Option<&'static crate::nnue::Nnue> {
     static ON: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
     if *ON.get_or_init(|| std::env::var("KUROOBI_NNUE_ORDER").is_ok()) {
@@ -4141,7 +4152,7 @@ impl Worker<'_> {
         // Seed the carried ordering indices once. Every node below rebuilt
         // them from the bitboards before this; see `Worker::order_ix`.
         if let Some(e) = ev.filter(|_| board.empty_count() >= eval_order_empties()) {
-            self.order_ix = e.indexer().init(board.black, board.white);
+            self.order_ix = order_indexer(e).init(board.black, board.white);
         }
         let root_mover = board.player();
 
@@ -4766,6 +4777,7 @@ impl Worker<'_> {
                 if lower >= upper {
                     let clean = self.selective_t.is_none() || self.taint == taint0;
                     self.tt.update(board, hash, alpha, beta, max, best, clean);
+                    node_accounting::cut_at(board.empty_count(), Some(0));
                     return max;
                 }
             }
@@ -4775,6 +4787,9 @@ impl Worker<'_> {
         self.score_moves(board, &mut moves, None, ev, lower, parity_of(board));
 
         let mut next = 0usize;
+        // Whether the table move was searched (accounting only): it left
+        // `moves`, so it is not in `next`.
+        let tt_searched = max != i32::MIN;
         if max == i32::MIN {
             // No table move: the best-ordered child takes the full window.
             Self::select_next(&mut moves, 0);
@@ -4839,8 +4854,7 @@ impl Worker<'_> {
                 match ev.filter(|_| child.empty_count() >= eval_order_empties()) {
                     Some(e) => {
                         let saved = self.order_ix;
-                        e.indexer()
-                            .apply(&mut self.order_ix, m.pos, m.flipped, mover);
+                        order_indexer(e).apply(&mut self.order_ix, m.pos, m.flipped, mover);
                         let v = self.descend_null_window(&mut child, ch, lower, upper, true, ev);
                         self.order_ix = saved;
                         v
@@ -4858,6 +4872,14 @@ impl Worker<'_> {
                     lower = max;
                 }
             }
+        }
+
+        if moves.len() + usize::from(tt_searched) >= 2 {
+            let searched = next + usize::from(tt_searched);
+            node_accounting::cut_at(
+                board.empty_count(),
+                (lower >= upper).then_some(searched.saturating_sub(1)),
+            );
         }
 
         // A truncated search proves nothing, so its bound must never reach
@@ -4885,8 +4907,7 @@ impl Worker<'_> {
             return self.pvs(child, hash, alpha, beta, false, cut_node, ev);
         };
         let saved = self.order_ix;
-        e.indexer()
-            .apply(&mut self.order_ix, m.pos, m.flipped, mover);
+        order_indexer(e).apply(&mut self.order_ix, m.pos, m.flipped, mover);
         let v = self.pvs(child, hash, alpha, beta, false, cut_node, ev);
         self.order_ix = saved;
         v
@@ -4914,8 +4935,7 @@ impl Worker<'_> {
             return self.descend(child, hash, alpha, beta, cut_node, ev);
         };
         let saved = self.order_ix;
-        e.indexer()
-            .apply(&mut self.order_ix, m.pos, m.flipped, mover);
+        order_indexer(e).apply(&mut self.order_ix, m.pos, m.flipped, mover);
         let v = self.descend(child, hash, alpha, beta, cut_node, ev);
         self.order_ix = saved;
         v
@@ -5331,6 +5351,7 @@ impl Worker<'_> {
                 if val >= beta {
                     alpha = val;
                     abst!(O_TT_CUT);
+                    node_accounting::cut_at(n_empties, Some(0));
                     best = Some(m.pos);
                     self.ordered_store(
                         use_l9, use_tt, use_l78, n_empties, to_move, hash, player, opponent,
@@ -5398,9 +5419,13 @@ impl Worker<'_> {
             if val >= beta {
                 alpha = val;
                 best = Some(m.pos);
+                node_accounting::cut_at(n_empties, Some(i));
                 break;
             }
             alpha = alpha.max(val);
+        }
+        if best.is_none() {
+            node_accounting::cut_at(n_empties, None);
         }
 
         self.ordered_store(
@@ -6721,7 +6746,7 @@ impl Worker<'_> {
         // masks once per node, and measured more than the evaluation it
         // feeds.
         let mut order_ix = if eval_order {
-            ev.map(|e| (e.indexer(), self.order_ix))
+            ev.map(|e| (order_indexer(e), self.order_ix))
         } else {
             None
         };
@@ -7279,6 +7304,40 @@ pub mod node_accounting {
     static ETC: AtomicU64 = AtomicU64::new(0);
     #[cfg(feature = "node-accounting")]
     static LOOKAHEAD: AtomicU64 = AtomicU64::new(0);
+    /// Per empties: which searched child produced the cut at nodes with
+    /// two or more moves — first, second, later, or none (fail low).
+    #[cfg(feature = "node-accounting")]
+    static CUT_AT: [[AtomicU64; 4]; 64] = [const { [const { AtomicU64::new(0) }; 4] }; 64];
+
+    /// Record where a multi-move node cut: `Some(i)` = the i-th child
+    /// searched, `None` = no cut.
+    #[inline(always)]
+    pub(crate) fn cut_at(empties: u8, at: Option<usize>) {
+        let _ = (empties, at);
+        #[cfg(feature = "node-accounting")]
+        {
+            let slot = at.map_or(3, |i| i.min(2));
+            CUT_AT[(empties as usize) & 63][slot].fetch_add(1, Relaxed);
+        }
+    }
+
+    /// The cut distribution per empties, `[first, second, later, none]`.
+    pub fn cut_dist() -> Vec<(u8, [u64; 4])> {
+        #[cfg(feature = "node-accounting")]
+        {
+            (0..64u8)
+                .map(|e| {
+                    let c = &CUT_AT[e as usize];
+                    (e, [0, 1, 2, 3].map(|i| c[i].load(Relaxed)))
+                })
+                .filter(|(_, c)| c.iter().sum::<u64>() > 0)
+                .collect()
+        }
+        #[cfg(not(feature = "node-accounting"))]
+        {
+            Vec::new()
+        }
+    }
 
     /// Moves scored for ordering at one node.
     #[inline(always)]

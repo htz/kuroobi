@@ -11,12 +11,12 @@
 //!
 //! Usage: split_by_stage --out <dir> <data.bin>...
 use kuroobi::evaluator::STAGE_COUNT;
+use kuroobi::record::{Record, SIZE as REC};
 use std::fs::File;
 use std::io::{BufWriter, Read, Write};
 use std::path::PathBuf;
 use std::process::ExitCode;
 
-const REC: usize = 17;
 /// Records buffered per stage before hitting the disk. 64 Ki records is a
 /// megabyte a stage, so all 61 open writers together stay well inside cache.
 const FLUSH_AT: usize = 64 * 1024;
@@ -85,9 +85,7 @@ fn main() -> ExitCode {
             };
             let whole = n / REC * REC;
             for r in chunk[..whole].as_chunks::<REC>().0 {
-                let black = u64::from_le_bytes(r[0..8].try_into().unwrap());
-                let white = u64::from_le_bytes(r[8..16].try_into().unwrap());
-                let empties = 64 - (black | white).count_ones() as usize;
+                let empties = usize::from(Record::from_bytes(r).empties());
                 let st = 60usize.saturating_sub(empties).min(STAGE_COUNT - 1);
                 bufs[st].extend_from_slice(r);
                 counts[st] += 1;

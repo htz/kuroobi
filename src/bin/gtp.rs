@@ -122,6 +122,7 @@ fn main() -> ExitCode {
             "--time-ms" => time_ms = it.next().and_then(|v| v.parse().ok()).unwrap_or(0),
             "--weights" => cfg.weights = PathBuf::from(it.next().unwrap_or_default()),
             "--nnue" => cfg.nnue = PathBuf::from(it.next().unwrap_or_default()),
+            "--nnue-base" => cfg.nnue_base = PathBuf::from(it.next().unwrap_or_default()),
             "--patterns" => {
                 cfg.nnue_patterns = match it.next().as_deref() {
                     Some("compact") => kuroobi::pattern::COMPACT_PATTERNS,

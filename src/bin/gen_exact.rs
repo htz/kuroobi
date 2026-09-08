@@ -7,9 +7,10 @@
 //! early band). A model can only be scored honestly against values that are
 //! actually true of the position, which is what this produces.
 //!
-//! Writes two files: `<out>.data` in the 17-byte training format (so the
-//! existing tooling can score against it) and `<out>.obf` so other engines
-//! can be measured on the same positions.
+//! Writes two files: `<out>.data` in the training record format (so the
+//! existing tooling can score against it; the solved value is stored as
+//! the game result, with no game behind it) and `<out>.obf` so other
+//! engines can be measured on the same positions.
 //!
 //! How the positions are reached matters as much as how they are labelled.
 //! By default every move is uniformly random, which is diverse but is not
@@ -26,9 +27,11 @@ use kuroobi::evaluator::Evaluator;
 use kuroobi::midgame::{NnueSearch, SharedTt};
 use kuroobi::nnue::Nnue;
 use kuroobi::pattern::EGAROUCID_PATTERNS;
+use kuroobi::record::{Record, Writer, NO_SQUARE};
 use kuroobi::solver::{EndSolverMode, Solver};
 use kuroobi::{Board, Color, Position};
 use std::io::Write;
+use std::path::Path;
 
 fn main() {
     let mut empties: u8 = 22;
@@ -159,12 +162,12 @@ fn main() {
         t0.elapsed().as_secs_f64()
     );
 
-    // 17-byte records, normalized to Black to move (the training convention).
-    let mut data = std::fs::File::create(format!("{out}.data")).expect("create data");
+    // Records with the mover as Black (the training convention).
+    let mut data = Writer::create(Path::new(&format!("{out}.data"))).expect("create data");
     let mut obf = std::fs::File::create(format!("{out}.obf")).expect("create obf");
     for (b, v) in &results {
-        let (black, white, score) = if b.player() == Color::Black {
-            (b.black, b.white, *v)
+        let (mover, opponent) = if b.player() == Color::Black {
+            (b.black, b.white)
         } else {
             /* Relabel the mover's discs as the record's "Black".
 
@@ -176,16 +179,27 @@ fn main() {
             an even count, which is how 0.5% of the sets that every accuracy
             number in this project is measured against came to be inverted.
             `checkdata` re-solves a set and catches exactly this. */
-            (b.white, b.black, *v)
+            (b.white, b.black)
         };
-        data.write_all(&black.to_le_bytes()).unwrap();
-        data.write_all(&white.to_le_bytes()).unwrap();
-        data.write_all(&[score.clamp(-64, 64) as i8 as u8]).unwrap();
+        let score = (*v).clamp(-64, 64) as i8;
+        data.write(&Record {
+            mover,
+            opponent,
+            score: f32::from(score),
+            game_score: score,
+            ply: 60 - b.empty_count(),
+            random: false,
+            sq: NO_SQUARE,
+            black_to_move: true,
+            game_id: 0,
+        })
+        .unwrap();
 
-        // obf: 64 board chars then the side to move, as the bench files use.
+        // obf: 64 board chars in rank-major order, then the side to move, as
+        // the bench files use.
         let mut line = String::with_capacity(70);
-        for sq in 0..64u8 {
-            let bit = 1u64 << sq;
+        for idx in 0..64u8 {
+            let bit = Position::from_file_rank(idx % 8, idx / 8).unwrap().to_bit();
             line.push(if b.black & bit != 0 {
                 'X'
             } else if b.white & bit != 0 {
@@ -198,5 +212,6 @@ fn main() {
         line.push(if b.player() == Color::Black { 'X' } else { 'O' });
         writeln!(obf, "{line}; exact {v}").unwrap();
     }
+    data.finish().expect("flush data");
     eprintln!("wrote {out}.data and {out}.obf");
 }

@@ -45,10 +45,14 @@ separate save is in practice the deliverable.
 What `train` returns is the mean squared error over the 8 symmetric
 forms.
 
-The data format is a fixed-length 17-byte binary (`black u64 LE, white
-u64 LE, score i8`). On disk it is rank-major, and it is `transpose`d on
-read and write. Positions are normalised to **black to move, score from
-black's view**.
+The data format is `kuroobi::record` (27 bytes): mover's discs, opponent's discs, search
+value, final disc difference, ply, random-move flag, move played, side to
+move, game id. On disk the bitboards are rank-major and are `transpose`d
+on read and write. The teacher value is derived on load by the record's
+rule: the first two plies teach 0, a random-move position
+teaches its search value, every other position teaches the game's final
+disc difference. In memory an example is the mover's discs as Black with
+the teacher value from the mover's view.
 
 #### Sharded loading (large data)
 

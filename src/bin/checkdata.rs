@@ -5,14 +5,15 @@
 //! yardstick every model is scored by -- so a wrong one does not show up as
 //! an error, it shows up as a model that looks bad, or good, for no reason.
 //! The check has to be independent of any model: read the record exactly as
-//! the scorer reads it (side to move is Black, by the format's convention),
-//! solve that position, and require the answer to match.
+//! the trainer reads it (the mover's discs as Black), solve that position,
+//! and require the answer to match the teacher value.
 //!
 //! Usage: checkdata [--threads n] [--limit n] <file.data>...
 use kuroobi::evaluator::Evaluator;
 use kuroobi::pattern::EGAROUCID_PATTERNS;
+use kuroobi::record;
 use kuroobi::solver::{EndSolverMode, Solver};
-use kuroobi::{Board, Color};
+use kuroobi::Board;
 
 fn main() {
     let mut threads = 6usize;
@@ -34,32 +35,22 @@ fn main() {
     let ev = &ev;
 
     for f in &files {
-        let bytes = std::fs::read(f).unwrap_or_else(|e| panic!("read {f}: {e}"));
+        let path = std::path::Path::new(f);
+        let records = record::read_all(path).unwrap_or_else(|e| panic!("read {f}: {e}"));
         // Refuse a file that is not a whole number of records rather than
         // checking the prefix that happens to fit: a checker that silently
         // covers a subset is the failure mode it exists to prevent.
+        let len = std::fs::metadata(path).map(|m| m.len()).unwrap_or(0);
         assert_eq!(
-            bytes.len() % 17,
+            len % record::SIZE as u64,
             0,
-            "{f}: {} bytes is not a whole number of 17-byte records",
-            bytes.len()
+            "{f}: {len} bytes is not a whole number of {}-byte records",
+            record::SIZE
         );
-        let n = (bytes.len() / 17).min(limit);
-        let boards: Vec<(Board, i32)> = (0..n)
-            .map(|i| {
-                let r = &bytes[i * 17..i * 17 + 17];
-                let black = u64::from_le_bytes(r[0..8].try_into().unwrap());
-                let white = u64::from_le_bytes(r[8..16].try_into().unwrap());
-                (
-                    Board {
-                        black,
-                        white,
-                        player: Color::Black,
-                        empty_count: 64 - (black | white).count_ones() as u8,
-                    },
-                    r[16] as i8 as i32,
-                )
-            })
+        let n = records.len().min(limit);
+        let boards: Vec<(Board, i32)> = records[..n]
+            .iter()
+            .map(|r| (r.example().board(), r.teacher() as i32))
             .collect();
 
         let next = std::sync::atomic::AtomicUsize::new(0);

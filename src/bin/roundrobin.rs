@@ -9,6 +9,7 @@
 //!
 //! Usage:
 //!   roundrobin --games <n> --depth <n> [--time-ms <n>] [--threads <n>]
+//!              [--record <file>]
 //!              [--engine name=protocol=path]...
 //!
 //! `protocol` is one of `edax`, `zebra`, `egaroucid`, `kuroobi`, `extgtp`,
@@ -428,6 +429,7 @@ fn main() -> ExitCode {
     let mut plies = 6usize;
     let mut threads = 1usize;
     let mut time_ms = 0u64;
+    let mut record: Option<PathBuf> = None;
     let mut specs: Vec<(String, String, PathBuf)> = Vec::new();
     let mut it = std::env::args().skip(1);
     while let Some(a) = it.next() {
@@ -438,6 +440,7 @@ fn main() -> ExitCode {
             "--random-plies" => plies = it.next().unwrap().parse().unwrap(),
             "--threads" => threads = it.next().unwrap().parse().unwrap(),
             "--time-ms" => time_ms = it.next().unwrap().parse().unwrap(),
+            "--record" => record = Some(PathBuf::from(it.next().unwrap())),
             "--engine" => {
                 let v = it.next().unwrap();
                 let p: Vec<&str> = v.splitn(3, '=').collect();
@@ -457,6 +460,23 @@ fn main() -> ExitCode {
         eprintln!("need at least two --engine entries");
         return ExitCode::FAILURE;
     }
+
+    // One line per game: "<first> <second> <B|W of first> <first's score> <moves...>",
+    // so a finished match can be replayed and scored at any ply.
+    let mut record = match record {
+        Some(p) => match std::fs::OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open(&p)
+        {
+            Ok(f) => Some(std::io::BufWriter::new(f)),
+            Err(e) => {
+                eprintln!("open {}: {e}", p.display());
+                return ExitCode::FAILURE;
+            }
+        },
+        None => None,
+    };
 
     let mut evaluator = Evaluator::new(EGAROUCID_PATTERNS);
     if let Err(e) = evaluator.load_weights(std::path::Path::new("weights/linear.bin")) {
@@ -529,11 +549,25 @@ fn main() -> ExitCode {
                 }
                 for a_black in [true, false] {
                     match play(&mut ea, &mut eb, &board, &moves, a_black, &evaluator) {
-                        Ok(s) => match s.cmp(&0) {
-                            std::cmp::Ordering::Greater => w += 1,
-                            std::cmp::Ordering::Less => l += 1,
-                            std::cmp::Ordering::Equal => d += 1,
-                        },
+                        Ok(s) => {
+                            if let Some(r) = record.as_mut() {
+                                use std::io::Write;
+                                let _ = writeln!(
+                                    r,
+                                    "{} {} {} {s} {}",
+                                    specs[i].0,
+                                    specs[j].0,
+                                    if a_black { 'B' } else { 'W' },
+                                    ea.history.join(" ")
+                                );
+                                let _ = r.flush();
+                            }
+                            match s.cmp(&0) {
+                                std::cmp::Ordering::Greater => w += 1,
+                                std::cmp::Ordering::Less => l += 1,
+                                std::cmp::Ordering::Equal => d += 1,
+                            }
+                        }
                         Err(e) => {
                             eprintln!("game {} vs {}: {e}", specs[i].0, specs[j].0);
                             return ExitCode::FAILURE;

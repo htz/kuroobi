@@ -28,6 +28,7 @@ fn main() -> ExitCode {
     let mut mpc_t: Option<f32> = None;
     let mut weights: Option<PathBuf> = None;
     let mut nnue_path: Option<PathBuf> = Some(PathBuf::from("weights/nnue-h16.bin"));
+    let mut nnue_base: Option<PathBuf> = None;
     let mut patterns_name = String::from("egaroucid");
     let mut files: Vec<PathBuf> = Vec::new();
 
@@ -44,6 +45,10 @@ fn main() -> ExitCode {
             "--mpc-t" => mpc_t = it.next().and_then(|v| v.parse().ok()),
             "--weights" => weights = it.next().map(PathBuf::from),
             "--nnue" => nnue_path = it.next().map(PathBuf::from),
+            // A linear evaluator held under the net; see `Nnue::base`. A net
+            // trained as a residual is meaningless without the one it was
+            // trained against.
+            "--nnue-base" => nnue_base = it.next().map(PathBuf::from),
             "--patterns" => patterns_name = it.next().unwrap_or(patterns_name),
             other => files.push(PathBuf::from(other)),
         }
@@ -72,10 +77,21 @@ fn main() -> ExitCode {
     if let Some(p) = &nnue_path {
         let patterns = match patterns_name.as_str() {
             "compact" => kuroobi::pattern::COMPACT_PATTERNS,
+            "nnue" => kuroobi::pattern::NNUE_PATTERNS,
             _ => kuroobi::pattern::EGAROUCID_PATTERNS,
         };
         let mut nn = kuroobi::nnue::Nnue::new(patterns);
         if nn.load(p).is_ok() {
+            if let Some(bp) = &nnue_base {
+                let mut ev = kuroobi::evaluator::Evaluator::new(patterns);
+                match ev.load_weights(bp) {
+                    Ok(()) => nn.set_base(ev),
+                    Err(e) => {
+                        eprintln!("nnue base {}: {e}", bp.display());
+                        return std::process::ExitCode::FAILURE;
+                    }
+                }
+            }
             nn.quantize();
             let nn: &'static kuroobi::nnue::Nnue = Box::leak(Box::new(nn));
             let mtt: &'static kuroobi::midgame::SharedTt =
@@ -308,6 +324,20 @@ fn main() -> ExitCode {
                 total_nodes + ordering,
                 (total_nodes + ordering) as f64 / total_time / 1e6
             );
+            // Where multi-move nodes cut, per empties: a first-move cut
+            // rate is the ordering's quality, a "none" share is the
+            // fraction of fail-low (all-)nodes.
+            for (e, c) in kuroobi::solver::node_accounting::cut_dist() {
+                let t = c.iter().sum::<u64>() as f64;
+                println!(
+                    "cutdist {e} first {:.1} second {:.1} later {:.1} none {:.1} total {}",
+                    c[0] as f64 / t * 100.0,
+                    c[1] as f64 / t * 100.0,
+                    c[2] as f64 / t * 100.0,
+                    c[3] as f64 / t * 100.0,
+                    t as u64
+                );
+            }
         }
     }
     if kuroobi::solver::layer_profile::ENABLED {

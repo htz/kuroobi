@@ -1,16 +1,24 @@
 //! Trainer for the NNUE-style evaluator ([`kuroobi::nnue`]).
 //!
-//! Loads Black-to-move-normalized examples (same 17-byte format as `train`),
-//! runs plain SGD through the single-hidden-layer network, and reports both
-//! the training MSE and a held-out val MSE each epoch. The held-out MSE is the
-//! honest signal to compare against the linear evaluator's ~39 floor.
+//! Loads training records (`kuroobi::record`; the teacher value is the
+//! game's final disc difference by the record's rule), runs SGD through
+//! the network, and reports both the training MSE and a held-out val MSE
+//! each epoch. The held-out MSE is the honest signal to compare against the
+//! linear evaluator's ~39 floor.
 //!
 //! Usage:
 //!   nnue_train [--epochs n] [--lr f] [--limit n] [--val f]... [--out path]
 //!              [--select-by mse|mae|spread] [--val-by-stage] [--grid]
-//!              <data-file>...
+//!              [--min-ply n] [--max-score-diff d] [--drop-random]
+//!              [--keep-above-ply n] <data-file>...
 //!
-//! `--select-by` chooses which held-out number keeps a snapshot. The default
+//! The four filter flags are `kuroobi::record::Filter` and apply to
+//! training and held-out data alike; none of them is on by default, and the
+//! filter in force is printed at startup. `Filter::TRAINING` is
+//! `--min-ply 8 --max-score-diff 12 --drop-random --keep-above-ply 50`.
+//!
+//! `--select-by` chooses which held-out number keeps a snapshot in `--out`;
+//! `<out>.last.bin` holds the weights after every epoch regardless. The default
 //! stays `mse`; `spread` is the error with each stage's constant offset
 //! removed, which is what move ordering sees. `--val-by-stage` prints the
 //! breakdown behind those numbers, one row per stage. The `grid` column is
@@ -25,7 +33,8 @@ use std::time::Instant;
 use kuroobi::evaluator::{Evaluator, STAGE_COUNT};
 use kuroobi::nnue::{sym_board, AdamState, Nnue};
 use kuroobi::pattern::{COMPACT_PATTERNS, EGAROUCID_PATTERNS, NNUE_PATTERNS};
-use kuroobi::trainer::{count_examples_binary, load_examples_binary_into, Example};
+use kuroobi::record::Filter;
+use kuroobi::trainer::{count_examples_binary, load_examples_filtered_into, Example};
 
 /// Per-stage `[count, sum_sq, sum_abs, sum_err]` over a held-out set.
 ///
@@ -62,16 +71,20 @@ use kuroobi::trainer::{count_examples_binary, load_examples_binary_into, Example
 /// `quantize` fills the integer tables from the current weights and leaves
 /// the f32 side alone, so calling it here costs one pass over the weights
 /// per epoch and does not disturb training.
-fn val_by_stage(nn: &mut Nnue, val: &[Example]) -> Vec<[f64; 5]> {
+fn val_by_stage(nn: &mut Nnue, base: Option<&Evaluator>, val: &[Example]) -> Vec<[f64; 5]> {
     nn.quantize();
     let mut acc = vec![[0.0f64; 5]; STAGE_COUNT];
     for ex in val {
         let board = ex.board();
         let ix = nn.indices(ex.black, ex.white);
+        /* With a frozen base the model is the sum, so that is what is
+        scored -- the net alone is a residual and its error against the
+        label means nothing. */
+        let b = base.map_or(0.0, |e| e.eval_indices(&board, &ix));
         // Prediction minus truth, so a positive mean reads as "this model
         // scores positions high".
         let q = nn.eval_from_indices(&ix, &board);
-        let e = q as f64 - ex.score as f64;
+        let e = (q + b) as f64 - ex.score as f64;
         let a = &mut acc[Evaluator::stage(&board)];
         a[0] += 1.0;
         a[1] += e * e;
@@ -108,6 +121,29 @@ fn pooled(acc: &[[f64; 5]]) -> [f64; 5] {
     t
 }
 
+/// One row per stage that has validation positions: the error of the
+/// f32 model at that stage and how far the integer path sits from it.
+fn print_stage_table(acc: &[[f64; 5]]) {
+    println!("  stage  empties       n      MSE      MAE     bias   spread     grid");
+    for (st, a) in acc.iter().enumerate() {
+        if a[0] == 0.0 {
+            continue;
+        }
+        let (mse, mae, bias, sd) = stats_of(a);
+        println!(
+            "  {:>5}  {:>7}  {:>6}  {:>7.3}  {:>7.3}  {:>+7.3}  {:>7.3}  {:>7.3}",
+            st,
+            60 - st,
+            a[0] as u64,
+            mse,
+            mae,
+            bias,
+            sd,
+            a[4] / a[0]
+        );
+    }
+}
+
 fn select_score(which: &str, a: &[f64; 5]) -> f64 {
     let (mse, mae, _, sd) = stats_of(a);
     match which {
@@ -117,11 +153,11 @@ fn select_score(which: &str, a: &[f64; 5]) -> f64 {
     }
 }
 
-fn val_mse(nn: &mut Nnue, val: &[Example]) -> f64 {
+fn val_mse(nn: &mut Nnue, base: Option<&Evaluator>, val: &[Example]) -> f64 {
     if val.is_empty() {
         return f64::NAN;
     }
-    stats_of(&pooled(&val_by_stage(nn, val))).0
+    stats_of(&pooled(&val_by_stage(nn, base, val))).0
 }
 
 /// How many examples may be resident at once. The full corpus is far larger
@@ -171,6 +207,7 @@ fn shards(counts: &[usize], order: &[usize], max: usize) -> Vec<Shard> {
 #[allow(clippy::too_many_arguments)]
 fn train_pass_minibatch(
     nn: &mut Nnue,
+    base: Option<&Evaluator>,
     adam: &mut AdamState,
     sinks: &mut Vec<kuroobi::nnue::GradSink>,
     examples: &[Example],
@@ -187,40 +224,66 @@ fn train_pass_minibatch(
     let mut sq_total = 0.0f64;
     for (bno, chunk) in examples.chunks(batch.max(1)).enumerate() {
         let bno = bno as u64;
-        let per = chunk.len().div_ceil(threads).max(1);
+        /* Hand the batch out in small pieces through a shared counter
+        rather than splitting it into one equal part per thread.
+
+        This machine is eight performance cores plus two efficiency cores,
+        and an equal split gives the same count of examples to a core that
+        runs them at roughly a third of the speed. Every batch then ends when
+        the slowest share ends: measured, an equal ten-way split of two
+        million examples took 2.1s where a seven-way split -- small enough to
+        stay off the slow cores -- took 1.7s, against 11.1s on one core. Small
+        pieces let each core take as many as it can finish. */
+        const PIECE: usize = 256;
+        let pieces = chunk.len().div_ceil(PIECE);
+        let next = std::sync::atomic::AtomicUsize::new(0);
+        let next = &next;
         let nn_ref = &*nn;
-        let mut used = 0usize;
+        let used = threads;
         std::thread::scope(|scope| {
             let mut handles = Vec::new();
-            for (ti, (part, sink)) in chunk.chunks(per).zip(sinks.iter_mut()).enumerate() {
-                used += 1;
+            for sink in sinks[..threads].iter_mut() {
                 handles.push(scope.spawn(move || {
                     sink.clear();
                     let mut s = 0.0f64;
-                    let mut rs = sym_seed
-                        ^ (0x9E37_79B9_7F4A_7C15u64
-                            .wrapping_mul((ti as u64 + 1) * 0x1000 + bno + 1));
-                    for ex in part {
-                        let ex = if sym_seed == 0 {
-                            *ex
-                        } else {
-                            rs ^= rs >> 12;
-                            rs ^= rs << 25;
-                            rs ^= rs >> 27;
-                            let i = (rs.wrapping_mul(0x2545_F491_4F6C_DD1D) >> 61) as u8;
-                            Example {
-                                black: sym_board(ex.black, i),
-                                white: sym_board(ex.white, i),
-                                score: ex.score,
-                            }
-                        };
-                        let board = ex.board();
-                        let stage = Evaluator::stage(&board);
-                        let discs = ex.black.count_ones() as usize;
-                        let mob = kuroobi::nnue::Nnue::mob_index(&board);
-                        let ix = nn_ref.indices(ex.black, ex.white);
-                        s += nn_ref.grad_black_into(&ix, stage, discs, mob, ex.score as f32, sink)
-                            as f64;
+                    loop {
+                        let k = next.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                        if k >= pieces {
+                            break;
+                        }
+                        let lo = k * PIECE;
+                        let hi = ((k + 1) * PIECE).min(chunk.len());
+                        let mut rs = sym_seed
+                            ^ (0x9E37_79B9_7F4A_7C15u64
+                                .wrapping_mul((k as u64 + 1) * 0x1000 + bno + 1));
+                        for ex in &chunk[lo..hi] {
+                            let ex = if sym_seed == 0 {
+                                *ex
+                            } else {
+                                rs ^= rs >> 12;
+                                rs ^= rs << 25;
+                                rs ^= rs >> 27;
+                                let i = (rs.wrapping_mul(0x2545_F491_4F6C_DD1D) >> 61) as u8;
+                                Example {
+                                    black: sym_board(ex.black, i),
+                                    white: sym_board(ex.white, i),
+                                    score: ex.score,
+                                }
+                            };
+                            let board = ex.board();
+                            let stage = Evaluator::stage(&board);
+                            let discs = ex.black.count_ones() as usize;
+                            let mob = kuroobi::nnue::Nnue::mob_index(&board);
+                            let ix = nn_ref.indices(ex.black, ex.white);
+                            s += nn_ref.grad_black_into(
+                                &ix,
+                                stage,
+                                discs,
+                                mob,
+                                ex.score as f32 - base.map_or(0.0, |e| e.eval_indices(&board, &ix)),
+                                sink,
+                            ) as f64;
+                        }
                     }
                     s
                 }));
@@ -344,11 +407,14 @@ fn main() -> ExitCode {
     let mut so_grid = false;
     let mut lookahead = 0u32;
     let mut legacy_optimizer = false;
+    // Run the optimizer step on the GPU (`gpu` feature); see `nnue::gpu`.
+    let mut gpu = false;
     let mut fit_num = false;
     let mut fit_lambda = 1000.0f64;
     let mut swa_from = 0usize;
     let mut threads = 1usize;
     let mut limit: Option<usize> = None;
+    let mut filter = Filter::NONE;
     let mut out = PathBuf::from("weights/nnue.bin");
     let mut val_files: Vec<PathBuf> = Vec::new();
     let mut data_files: Vec<PathBuf> = Vec::new();
@@ -356,9 +422,35 @@ fn main() -> ExitCode {
     let mut val_cap: Option<usize> = None;
     let mut init: Option<PathBuf> = None;
     let mut which_patterns = String::from("egaroucid");
+    /* A frozen linear evaluator under the net.
+
+    The net has to spend capacity learning the level of the score before it
+    can learn its shape, and it does that badly: over eleven epochs the bias
+    on val61 went +1.34, -0.61, -0.02, -0.70, -2.04 while the spread fell
+    steadily, so the run kept discarding weights that were better shaped
+    because the level had drifted. Stockfish's answer is a PSQT column read
+    straight out of the feature transformer to the output, added because
+    "nets have a hard time learning high material imbalance, or even
+    representing high evaluations at all".
+
+    Here that column already exists as a trained model: the deployed pattern
+    evaluator, which reads the same rows from the same `PatternIndices` this
+    net computes. Frozen under the net, it fixes the level, and the net is
+    trained on what is left over. It also floors the result -- a stage the
+    net cannot learn (stage 4 has 282 training positions) still gets the
+    linear evaluator's answer rather than noise. */
+    let mut base_path: Option<PathBuf> = None;
 
     let mut it = std::env::args().skip(1);
     while let Some(a) = it.next() {
+        match filter.take_flag(&a, &mut it) {
+            Ok(true) => continue,
+            Ok(false) => {}
+            Err(e) => {
+                eprintln!("{e}");
+                return ExitCode::FAILURE;
+            }
+        }
         match a.as_str() {
             "--patterns" => which_patterns = it.next().unwrap(),
             "--epochs" => epochs = it.next().unwrap().parse().unwrap(),
@@ -375,13 +467,14 @@ fn main() -> ExitCode {
             "--adam" => adam = true,
             "--sym-train" => sym_train = true,
             "--grid" => so_grid = true,
-            // The recipe wraps AdamW in Lookahead(k=6,
-            // alpha=0.5). It rewrites every weight every k steps, which on a
-            // CPU is not free -- hence a flag rather than always on.
+            // Wrap AdamW in Lookahead(k=6, alpha=0.5). It rewrites every
+            // weight every k steps, which on a CPU is not free -- hence a
+            // flag rather than always on.
             "--lookahead" => lookahead = 6,
-            // Reproduce the optimizer as it was before a numeric
-            // comparison; see `AdamState::legacy_optimizer`.
+            // Reproduce the optimizer as it was before this recipe; see
+            // `AdamState::legacy_optimizer`.
             "--legacy-optimizer" => legacy_optimizer = true,
+            "--gpu" => gpu = true,
             "--fit-num" => fit_num = true,
             "--fit-num-lambda" => fit_lambda = it.next().unwrap().parse().unwrap(),
             "--swa" => swa_from = it.next().unwrap().parse().unwrap(),
@@ -392,6 +485,7 @@ fn main() -> ExitCode {
             "--max-examples" => max_examples = it.next().unwrap().parse().unwrap(),
             "--val-cap" => val_cap = Some(it.next().unwrap().parse().unwrap()),
             "--init" => init = Some(PathBuf::from(it.next().unwrap())),
+            "--base" => base_path = Some(PathBuf::from(it.next().unwrap())),
             other if other.starts_with('-') => {
                 eprintln!("unknown option {other}");
                 return ExitCode::FAILURE;
@@ -409,7 +503,7 @@ fn main() -> ExitCode {
     let load = |files: &[PathBuf]| -> std::io::Result<Vec<Example>> {
         let mut v = Vec::new();
         for f in files {
-            load_examples_binary_into(f, &mut v, limit)?;
+            load_examples_filtered_into(f, &mut v, limit, &filter)?;
         }
         Ok(v)
     };
@@ -442,11 +536,12 @@ fn main() -> ExitCode {
         val = val.iter().step_by(step).copied().collect();
     }
     println!(
-        "train {} examples in {} files (shard budget {}) / val {}",
+        "train {} records in {} files (shard budget {}) / val {} / filter {}",
         total,
         data_files.len(),
         max_examples,
-        val.len()
+        val.len(),
+        filter.describe()
     );
 
     /* A weight file belongs to the pattern set it was trained on -- the
@@ -461,6 +556,19 @@ fn main() -> ExitCode {
             return ExitCode::FAILURE;
         }
     };
+    let base = match &base_path {
+        Some(p) => {
+            let mut e = Evaluator::new(patterns);
+            if let Err(err) = e.load_weights(p) {
+                eprintln!("base {}: {err}", p.display());
+                return ExitCode::FAILURE;
+            }
+            println!("base: frozen linear evaluator from {}", p.display());
+            Some(e)
+        }
+        None => None,
+    };
+
     let mut nn = Nnue::new(patterns);
     match &init {
         // Warm start: keep training a model instead of starting over.
@@ -492,7 +600,7 @@ fn main() -> ExitCode {
         nn.set_num_w(&vec![0.0f32; n_buckets]);
         for (fi, f) in data_files.iter().enumerate() {
             let mut ex = Vec::new();
-            if let Err(e) = load_examples_binary_into(f, &mut ex, limit) {
+            if let Err(e) = load_examples_filtered_into(f, &mut ex, limit, &filter) {
                 eprintln!("load failed: {e}");
                 return ExitCode::FAILURE;
             }
@@ -520,7 +628,7 @@ fn main() -> ExitCode {
         let mx = table.iter().fold(0.0f32, |m, &v| m.max(v.abs()));
         println!("fit-num: {filled}/{n_buckets} buckets, max |correction| {mx:.3} discs");
         nn.set_num_w(&table);
-        let vm = val_mse(&mut nn, &val);
+        let vm = val_mse(&mut nn, base.as_ref(), &val);
         println!("fit-num: val {vm:.4}");
         if let Err(e) = nn.save(&out) {
             eprintln!("save failed: {e}");
@@ -556,6 +664,29 @@ fn main() -> ExitCode {
         st
     });
 
+    #[cfg(not(feature = "gpu"))]
+    if gpu {
+        eprintln!("--gpu needs a build with `--features gpu`");
+        return ExitCode::FAILURE;
+    }
+    #[cfg(feature = "gpu")]
+    let mut gpu_trainer = gpu.then(|| {
+        if base.is_some() {
+            eprintln!("--gpu does not take --base");
+            std::process::exit(2);
+        }
+        let ad = adam_state
+            .as_ref()
+            .expect("--gpu requires --adam --minibatch N");
+        assert!(minibatch > 0, "--gpu requires --minibatch N");
+        let la = if lookahead > 0 {
+            (lookahead, 0.5)
+        } else {
+            (0, 0.0)
+        };
+        kuroobi::nnue::gpu::GpuTrainer::new(&nn, minibatch, ad, la)
+    });
+
     let mut swa_sum: Option<(Vec<f32>, usize)> = None;
 
     let mut state = 0x9E3779B97F4A7C15u64;
@@ -568,14 +699,23 @@ fn main() -> ExitCode {
     let mut best = if val.is_empty() {
         f64::INFINITY
     } else {
-        select_score(&select_by, &pooled(&val_by_stage(&mut nn, &val)))
+        select_score(
+            &select_by,
+            &pooled(&val_by_stage(&mut nn, base.as_ref(), &val)),
+        )
     };
     if best.is_finite() {
-        let (m, a, b, sd) = stats_of(&pooled(&val_by_stage(&mut nn, &val)));
+        let acc = val_by_stage(&mut nn, base.as_ref(), &val);
+        let (m, a, b, sd) = stats_of(&pooled(&acc));
         println!(
             "starting val mse {m:.4} mae {a:.4} bias {b:+.4} spread {sd:.4}  \
              (selecting on {select_by})"
         );
+        // The same breakdown as after each epoch, so the first epoch's
+        // table has something to be read against.
+        if val_by_stage_report {
+            print_stage_table(&acc);
+        }
     }
     /* `--plateau n`: hold the rate while the model improves and halve it
     after n epochs without a new best, all inside one process.
@@ -644,8 +784,7 @@ fn main() -> ExitCode {
                 let mut lr_fn = || {
                     let lr = if cosine {
                         let t = mb_step as f32 / mb_total_steps.max(1) as f32;
-                        // The schedule floors at 1e-8 rather
-                        // than at zero.
+                        // The schedule floors at 1e-8 rather than at zero.
                         const ETA_MIN: f32 = 1e-8;
                         ETA_MIN
                             + (base_lr - ETA_MIN)
@@ -657,8 +796,40 @@ fn main() -> ExitCode {
                     mb_step += 1;
                     lr
                 };
+                #[cfg(feature = "gpu")]
+                if let Some(g) = gpu_trainer.as_mut() {
+                    let sq = g.train_shard(&nn, &examples, threads, &mut lr_fn, wd, sym_seed);
+                    // The next shard only needs the indexer, but val and the
+                    // save need the tables.
+                    if si + 1 == plan.len() {
+                        g.download(&mut nn);
+                    }
+                    sq
+                } else {
+                    train_pass_minibatch(
+                        &mut nn,
+                        base.as_ref(),
+                        ad,
+                        &mut sinks,
+                        &examples,
+                        threads,
+                        minibatch,
+                        &mut lr_fn,
+                        wd,
+                        sym_seed,
+                    )
+                }
+                #[cfg(not(feature = "gpu"))]
                 train_pass_minibatch(
-                    &mut nn, ad, &mut sinks, &examples, threads, minibatch, &mut lr_fn, wd,
+                    &mut nn,
+                    base.as_ref(),
+                    ad,
+                    &mut sinks,
+                    &examples,
+                    threads,
+                    minibatch,
+                    &mut lr_fn,
+                    wd,
                     sym_seed,
                 )
             } else {
@@ -706,7 +877,7 @@ fn main() -> ExitCode {
             mb_total_steps = mb_step * epochs as u64;
         }
         let train_mse = sq_total / seen.max(1) as f64;
-        let acc = val_by_stage(&mut nn, &val);
+        let acc = val_by_stage(&mut nn, base.as_ref(), &val);
         let tot = pooled(&acc);
         let (vmse, vmae, vbias, vsd) = stats_of(&tot);
         let vgrid = tot[4] / tot[0].max(1.0);
@@ -720,42 +891,36 @@ fn main() -> ExitCode {
             seen as f32 / t.elapsed().as_secs_f32(),
         );
         if val_by_stage_report {
-            println!("  stage  empties       n      MSE      MAE     bias   spread     grid");
-            for (st, a) in acc.iter().enumerate() {
-                if a[0] == 0.0 {
-                    continue;
-                }
-                let (mse, mae, bias, sd) = stats_of(a);
-                println!(
-                    "  {:>5}  {:>7}  {:>6}  {:>7.3}  {:>7.3}  {:>+7.3}  {:>7.3}  {:>7.3}",
-                    st,
-                    60 - st,
-                    a[0] as u64,
-                    mse,
-                    mae,
-                    bias,
-                    sd,
-                    a[4] / a[0]
-                );
-            }
+            print_stage_table(&acc);
         }
-        // Save only the best-by-val model (val overfits after a few epochs).
+        /* Settle the deferred decay before any save. The sparse update
+        leaves a row's weight decay owing until the row is next touched,
+        which costs nothing during training and is wrong in a file: rows
+        that went quiet early would be saved holding a value the schedule
+        had long since shrunk.
+
+        Applies to every shape. It was held back from the shipped one at
+        first, on the theory that its tuning depended on the sparse update
+        as it stood; that theory was tested and wrong -- removing the
+        settling changed the shipped model's held-out error by 0.06 discs,
+        well inside the run-to-run spread. */
+        // The GPU steps every row every batch; nothing is owed.
+        if let Some(ad) = adam_state.as_mut().filter(|_| !gpu) {
+            nn.settle_adam(ad, cur_lr, wd);
+        }
+        /* The weights as they stand go to `<out>.last.bin` every epoch,
+        whether or not val improved. A run that never beats its starting
+        val used to leave nothing on disk, so stopping it -- to change the
+        data, the rate, anything -- threw away every epoch it had run
+        (three epochs, a night, once). `--out` itself still holds only the
+        best-by-val model, since val overfits after a few epochs. */
+        let last = out.with_extension("last.bin");
+        if let Err(e) = nn.save(&last) {
+            eprintln!("save failed: {e}");
+            return ExitCode::FAILURE;
+        }
         if is_best {
             best = vm;
-            /* Settle the deferred decay first. The sparse update leaves a
-            row's weight decay owing until the row is next touched, which
-            costs nothing during training and is wrong in a file: rows that
-            went quiet early would be saved holding a value the schedule had
-            long since shrunk.
-
-            Applies to every shape. It was held back from the shipped one
-            at first, on the theory that its tuning depended on the sparse
-            update as it stood; that theory was tested and wrong -- removing
-            the settling changed the shipped model's held-out error by 0.06
-            discs, well inside the run-to-run spread. */
-            if let Some(ad) = adam_state.as_mut() {
-                nn.settle_adam(ad, cur_lr, wd);
-            }
             if let Err(e) = nn.save(&out) {
                 eprintln!("save failed: {e}");
                 return ExitCode::FAILURE;
@@ -784,7 +949,7 @@ fn main() -> ExitCode {
         let mean: Vec<f32> = acc.iter().map(|x| x / n as f32).collect();
         let mut avg = Nnue::new(patterns);
         avg.set_weights_flat(&mean);
-        let vm = val_mse(&mut avg, &val);
+        let vm = val_mse(&mut avg, base.as_ref(), &val);
         println!("swa over {n} epochs: val {vm:.4}");
         /* Always save the average: against a symmetrized baseline the
         raw SWA average looks worse by its asymmetry (0.006-0.008), and

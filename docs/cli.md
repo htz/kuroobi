@@ -49,9 +49,8 @@ not fit is trained in shards** — whole files are grouped up to
 train [OPTIONS] <data-file>...
 ```
 
-Input is `.data` (fixed 17-byte records) or `.txt` (one
-`<64 board chars> <disc difference>` per line). The extension decides
-which.
+Input is `.data` files in the training record format (see
+[learning.md](learning.md)).
 
 | Option | Default | Meaning |
 |---|---|---|
@@ -72,7 +71,7 @@ train --epochs 20 --lr 0.008 --weights weights/linear.bin train_data/*.data
 
 ### nnue_train
 
-NNUE (one hidden layer) training. Reads the same 17-byte format as
+NNUE (one hidden layer) training. Reads the same record files as
 `train`. **Every epoch it freezes the weights, measures the validation
 MSE and prints it** — that number, not the training MSE, is the one to
 compare against the linear evaluator.
@@ -93,6 +92,14 @@ nnue_train [OPTIONS] <data-file>...
 | `--out <path>` | Where to save. **The best-val weights are kept separately in `<out>.best`** |
 | `--init <path>` | Initial weights (continue training from them) |
 | `--max-examples <n>` | Examples held in RAM at once |
+| `--min-ply <n>` | Drop positions before ply n |
+| `--max-score-diff <d>` | Drop positions whose search value and final result differ by more than d |
+| `--drop-random` | Drop positions reached by random opening moves |
+| `--keep-above-ply <n>` | Exempt positions at ply n and later from the two drops above |
+
+The last four are `kuroobi::record::Filter`; none is on by default,
+and the filter in force is printed at startup. `Filter::TRAINING` is
+`--min-ply 8 --max-score-diff 12 --drop-random --keep-above-ply 50`.
 
 ```sh
 nnue_train --epochs 30 --lr 0.002 --val val.data \
@@ -334,24 +341,26 @@ Escape hatches through environment variables:
 
 ### kifu2data
 
-**Converts game records (`f5d6…`) into training data.** Every position
-gets the game's final disc difference as its label (empties awarded to
-the winner). Games containing an illegal move are skipped and counted.
-The output is the 17-byte format `train` reads (black u64 LE, white u64
-LE, score i8; **normalized to Black to move**, with the score from
-Black's perspective).
+**Converts game records into training data.** Inputs are transcript
+files (`f5d6…`, one game per line) or WTHOR archives (`.wtb`). Every
+position becomes one training record: board, move played, side to move,
+the game's final disc difference (empties awarded to the winner), and
+the random-opening flag. A game that did not run to the end, or contains
+an illegal move, has no result and is skipped and counted; a WTHOR game
+must also agree with the archive's own score.
 
 ```sh
-kifu2data [OPTIONS] <transcript>...
+kifu2data [OPTIONS] <transcript.txt | archive.wtb>...
 ```
 
 | Option | Meaning |
 |---|---|
 | `--limit-games <n>` | Cap on the games converted per input file |
 | `--skip-games <n>` | Skip the first n games (**to carve out a validation set disjoint from training**) |
-| `--skip-plies <k>` | Do not record the first k positions of each game (in data whose openings are random, their outcome labels are noise) |
+| `--random-plies <k>` | Flag the first k positions of each game as reached by random moves (datasets whose openings are random) |
 | `--out <file>` | Concatenate everything into one file |
 | `--out-dir <dir>` | One output per input (`<dir>/<input name>.data`) |
+| `--min-ply`, `--max-score-diff`, `--drop-random`, `--keep-above-ply` | The record filter (as in `nnue_train`), applied while writing so that positions the trainer would drop never reach the disk |
 
 ### bookgen
 

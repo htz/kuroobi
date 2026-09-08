@@ -1,6 +1,6 @@
 //! Score a model's static evaluation against ground-truth values.
 //!
-//! Takes a `.data` file written by `gen_exact` (17-byte records whose label
+//! Takes a `.data` file written by `gen_exact` (records whose teacher value
 //! is the position's exact solved value, not a noisy game outcome) and
 //! reports mean absolute error, RMS and the error distribution. This is the
 //! honest measure of evaluation quality: the training corpus's own val set
@@ -11,6 +11,7 @@
 use kuroobi::evaluator::Evaluator;
 use kuroobi::nnue::Nnue;
 use kuroobi::pattern::{COMPACT_PATTERNS, EGAROUCID_PATTERNS, NNUE_PATTERNS};
+use kuroobi::record;
 use kuroobi::{Board, Color};
 
 fn main() {
@@ -127,31 +128,31 @@ fn main() {
     }
 
     for f in &files {
-        let bytes = std::fs::read(f).expect("read data");
+        let path = std::path::Path::new(f);
+        let records = record::read_all(path).expect("read data");
         // Records are fixed-width, so a file that is not a whole number of
         // them is truncated or misaligned, and dividing would silently score
         // whatever prefix happened to fit. Refuse instead: a scorer that
         // quietly measures a subset reads exactly like one that measured
         // everything.
+        let len = std::fs::metadata(path).map(|m| m.len()).unwrap_or(0);
         assert_eq!(
-            bytes.len() % 17,
+            len % record::SIZE as u64,
             0,
-            "{f}: {} bytes is not a whole number of 17-byte records",
-            bytes.len()
+            "{f}: {len} bytes is not a whole number of {}-byte records",
+            record::SIZE
         );
-        // A disc difference cannot exceed the board, so a label outside ±64
-        // is the file being wrong, not the model. Cheap enough to check on
-        // every run, and it is the check that would have caught the
+        // A disc difference cannot exceed the board, so a teacher outside
+        // ±64 is the file being wrong, not the model. Cheap enough to check
+        // on every run, and it is the check that would have caught the
         // sign-flipped labels years earlier than the mean did: the average
         // moved 0.37 while the worst case sat at 87.5, which is impossible.
         // `checkdata` is the thorough version (it re-solves every position).
-        let impossible = (0..bytes.len() / 17)
-            .filter(|i| (bytes[i * 17 + 16] as i8).unsigned_abs() > 64)
-            .count();
+        let impossible = records.iter().filter(|r| r.teacher().abs() > 64.0).count();
         if impossible > 0 {
             eprintln!("{f}: WARNING {impossible} labels are outside +-64 discs; run checkdata");
         }
-        let n = bytes.len() / 17;
+        let n = records.len();
         let mut sum = 0.0f64;
         let mut abs_sum = 0.0f64;
         let mut sq_sum = 0.0f64;
@@ -160,17 +161,10 @@ fn main() {
         let mut worst = 0.0f32;
         // [n, abs_sum, sq_sum, signed_sum] per stage.
         let mut per_stage = vec![[0.0f64; 4]; kuroobi::evaluator::STAGE_COUNT];
-        for i in 0..n {
-            let r = &bytes[i * 17..i * 17 + 17];
-            let black = u64::from_le_bytes(r[0..8].try_into().unwrap());
-            let white = u64::from_le_bytes(r[8..16].try_into().unwrap());
-            let truth = r[16] as i8 as f32;
-            let board = Board {
-                black,
-                white,
-                player: Color::Black,
-                empty_count: 64 - (black | white).count_ones() as u8,
-            };
+        for r in &records {
+            let (black, white) = (r.mover, r.opponent);
+            let truth = r.teacher();
+            let board = r.example().board();
             let pred = if linear {
                 let ix = lin.indexer().init(black, white);
                 lin.eval_order_bb(board.player_bb(), board.opponent_bb(), Color::Black, &ix)
@@ -226,19 +220,7 @@ fn main() {
             }
         }
         if reps > 0 {
-            let boards: Vec<Board> = (0..n)
-                .map(|i| {
-                    let r = &bytes[i * 17..i * 17 + 17];
-                    let black = u64::from_le_bytes(r[0..8].try_into().unwrap());
-                    let white = u64::from_le_bytes(r[8..16].try_into().unwrap());
-                    Board {
-                        black,
-                        white,
-                        player: Color::Black,
-                        empty_count: 64 - (black | white).count_ones() as u8,
-                    }
-                })
-                .collect();
+            let boards: Vec<Board> = records.iter().map(|r| r.example().board()).collect();
             // Indices built once, as a search holds them; what is timed is
             // the evaluation itself.
             let ixs: Vec<_> = boards

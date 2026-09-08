@@ -3,8 +3,7 @@
 //! Usage:
 //!   train [OPTIONS] <data-file>...
 //!
-//! Data files may be binary (.data, 17-byte records) or text (.txt,
-//! "<64 board chars> <score>" per line); the format is chosen by extension.
+//! Data files are `kuroobi::record` files (kifu2data and gendata output).
 //!
 //! Options:
 //!   --epochs <n>      Number of passes over all examples (default 10)
@@ -29,8 +28,7 @@ use std::time::Instant;
 use kuroobi::evaluator::{AdamOptimizer, Evaluator, Optimizer, SgdOptimizer, STAGE_COUNT};
 use kuroobi::pattern::{EDAX_PATTERNS, EGAROUCID_PATTERNS, EGAROUCID_PLUS_PATTERNS};
 use kuroobi::trainer::{
-    count_examples_binary, load_examples_binary_into, load_examples_text_into, EpochStats, Example,
-    Trainer,
+    count_examples_binary, load_examples_binary_into, EpochStats, Example, Trainer,
 };
 
 /// Examples kept in RAM at once when `--max-examples` is not given.
@@ -82,9 +80,8 @@ enum OptimizerKind {
 const USAGE: &str = "\
 Usage: train [OPTIONS] <data-file>...
 
-Train the pattern evaluator on labeled positions (kifu-derived data).
-Files ending in .txt are parsed as text; anything else as 17-byte binary
-records (kifu-converter output).
+Train the pattern evaluator on `kuroobi::record` files (kifu2data and
+gendata output).
 
 Options:
   --epochs <n>      Passes over all examples (default 10)
@@ -371,26 +368,18 @@ fn parse_args() -> Result<Args, String> {
     Ok(args)
 }
 
-fn is_text(path: &Path) -> bool {
-    path.extension().is_some_and(|e| e == "txt")
-}
-
 /// Append one file's examples to `out`, returning how many were added.
 fn load_file_into(
     path: &Path,
     limit: Option<usize>,
     out: &mut Vec<Example>,
 ) -> std::io::Result<usize> {
-    if is_text(path) {
-        load_examples_text_into(path, out, limit)
-    } else {
-        load_examples_binary_into(path, out, limit)
-    }
+    load_examples_binary_into(path, out, limit)
 }
 
 /// The dataset, sized but not loaded.
 ///
-/// Counts start as size-derived estimates so shards can be planned without
+/// Counts come from file sizes so shards can be planned without
 /// reading 16 GB first; each file's entry is replaced by the true count once
 /// that file has actually been loaded.
 struct DataPlan {
@@ -408,15 +397,8 @@ impl DataPlan {
     fn new(files: Vec<PathBuf>, limit: Option<usize>) -> std::io::Result<DataPlan> {
         let mut counts = Vec::with_capacity(files.len());
         for f in &files {
-            // Binary records are fixed-width so the count is exact. A text
-            // line is 64 board chars + separator + score + newline, i.e. at
-            // least 67 bytes, so dividing by 67 over-estimates — the safe
-            // direction for a memory budget.
-            let est = if is_text(f) {
-                std::fs::metadata(f)?.len() as usize / 67
-            } else {
-                count_examples_binary(f)?
-            };
+            // Records are fixed-width so the count is exact.
+            let est = count_examples_binary(f)?;
             counts.push(limit.map_or(est, |l| est.min(l)));
         }
         Ok(DataPlan { files, counts })

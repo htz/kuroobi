@@ -1,10 +1,25 @@
-//! Generate training positions by self-play, labelled with the search value
-//! the engine actually assigns them.
+//! Generate training positions by self-play, in `kuroobi::record`'s format:
+//! every position carries both the value the search assigned it and the
+//! final disc difference of the game it came from.
 //!
-//! The corpus this replaces labels every position with the final disc
-//! difference of the game it came from, which carries real noise: the same
-//! position gets a different label depending on how the game continued. A
-//! search value is a property of the position itself.
+//! The first version of this tool wrote only the search value, in the
+//! 17-byte format the trainer then read, on the reasoning that a search
+//! value is a property of the position while the final result depends on
+//! how the game went on. That threw the final result away, and it is the
+//! final result the trainer fits (searched positions take `game_score`;
+//! the search value is kept for filtering games whose result disagrees
+//! with it by more than a threshold). 33
+//! million positions generated that way could not be repaired, because
+//! nothing else was kept. So this writes every field the record has,
+//! plus the games themselves as transcripts, and the trainer reads this
+//! record directly; the choice of teacher value is made there.
+//!
+//! The record is `kuroobi::record`: mover's discs, opponent's discs, search value (mover's
+//! view), final disc difference (mover's view, empties to the winner), ply,
+//! random-move flag, move played, side to move, game id. Positions reached
+//! by the opening's random moves are recorded too, flagged, with the search
+//! value the engine gives them, so the filter can drop or keep them by
+//! that flag.
 //!
 //! **Openings are randomised, and the amount of randomness rotates.** A
 //! self-play game between two copies of the same engine is deterministic, so
@@ -15,7 +30,6 @@
 //! Each game opens with a random number of random plies, drawn in turn from
 //! `--random-plies`, so stopping the run at any moment leaves the counts
 //! within one game of each other.
-
 //!
 //! **Shards are self-contained, and none of the work is thrown away.** A
 //! worker writes to `.part` and renames to `.data` when the shard fills or
@@ -38,7 +52,12 @@
 //!   gendata --out-dir DIR [--jobs N] [--positions N] [--games N]
 //!           [--random-plies 4,6,8,10,12] [--depth N] [--solve-empties N]
 //!           [--band N] [--shard-size N] [--seed N] [--nnue PATH]
-//!           [--threads N]
+//!           [--patterns nnue|egaroucid|compact] [--threads N]
+//!
+//! Output: `shard_WW_NNNN.data` (records) and `games_WW.txt`, one
+//! game per line: the moves in `f5d6` notation (passes are not written; a
+//! replay infers them), the final disc difference for Black with empties to
+//! the winner, and the number of random opening plies.
 //!
 //! `--seed` is for reproducing a run. Left out, one is drawn from the OS, so
 //! two machines started with the same command line still generate different
@@ -53,12 +72,10 @@ use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::Arc;
 
+use kuroobi::datagen::{adopt_leftovers, record, Pending, Shard};
 use kuroobi::engine::{Engine, EngineConfig};
 use kuroobi::pattern::{COMPACT_PATTERNS, EGAROUCID_PATTERNS, NNUE_PATTERNS};
 use kuroobi::{Board, Color, Position};
-
-/// One training record: both bitboards and the label, Black to move.
-const RECORD: usize = 17;
 
 struct Args {
     out_dir: PathBuf,
@@ -218,136 +235,6 @@ impl Rng {
     }
 }
 
-/// A record, normalised to Black to move.
-///
-/// The label is the value from the mover's point of view, and renaming the
-/// mover's discs to "Black" does not change who is to move -- so the value
-/// carries over untouched. Negating it here would make every White-to-move
-/// record the opposite of the truth.
-fn record(b: &Board, value: f32) -> [u8; RECORD] {
-    let (black, white) = if b.player() == Color::Black {
-        (b.black, b.white)
-    } else {
-        (b.white, b.black)
-    };
-    let mut r = [0u8; RECORD];
-    r[0..8].copy_from_slice(&black.to_le_bytes());
-    r[8..16].copy_from_slice(&white.to_le_bytes());
-    r[16] = (value.round().clamp(-64.0, 64.0) as i8) as u8;
-    r
-}
-
-/// A shard being written. Renamed into place only once full, so a reader can
-/// take any `.data` in the directory as complete.
-struct Shard {
-    dir: PathBuf,
-    worker: usize,
-    index: usize,
-    file: Option<std::fs::File>,
-    written: usize,
-    cap: usize,
-}
-
-impl Shard {
-    fn new(dir: PathBuf, worker: usize, cap: usize) -> Shard {
-        Shard {
-            dir,
-            worker,
-            index: 0,
-            file: None,
-            written: 0,
-            cap,
-        }
-    }
-
-    fn tmp_path(&self) -> PathBuf {
-        self.dir
-            .join(format!("shard_{:02}_{:04}.part", self.worker, self.index))
-    }
-
-    fn final_path(&self) -> PathBuf {
-        self.dir
-            .join(format!("shard_{:02}_{:04}.data", self.worker, self.index))
-    }
-
-    fn push(&mut self, rec: &[u8; RECORD]) -> std::io::Result<()> {
-        if self.file.is_none() {
-            self.file = Some(std::fs::File::create(self.tmp_path())?);
-            self.written = 0;
-        }
-        self.file.as_mut().unwrap().write_all(rec)?;
-        self.written += 1;
-        if self.written >= self.cap {
-            self.close()?;
-        }
-        Ok(())
-    }
-
-    fn close(&mut self) -> std::io::Result<()> {
-        if let Some(mut f) = self.file.take() {
-            f.flush()?;
-            drop(f);
-            std::fs::rename(self.tmp_path(), self.final_path())?;
-            self.index += 1;
-            self.written = 0;
-        }
-        Ok(())
-    }
-
-    /// Close whatever is in flight and keep it.
-    ///
-    /// A short shard is not a broken one. Records are fixed width and
-    /// written whole, so a file cut off at any point holds nothing but
-    /// complete records -- it is simply a smaller shard, and every reader
-    /// takes it as such. Deleting it (which this used to do) threw away
-    /// every position since the last full shard, which at a million
-    /// positions per shard was most of a day's work.
-    fn finish(&mut self) {
-        if self.written > 0 {
-            let _ = self.close();
-        } else if self.file.take().is_some() {
-            // Opened but empty: nothing to keep.
-            let _ = std::fs::remove_file(self.tmp_path());
-        }
-    }
-}
-
-/// Rename any `.part` left by an earlier run into `.data`.
-///
-/// A `.part` is a shard that was being written when the process ended, and
-/// its contents are complete: records are fixed width and written whole, so
-/// the file holds nothing but whole records. It is simply a smaller shard.
-///
-/// Doing this at startup rather than asking for it in a README matters
-/// because the next run starts numbering shards from zero again -- so a
-/// leftover `shard_00_0000.part` would be overwritten by the new worker 0.
-/// The moment that made this necessary is the one nobody controls: the
-/// machine shutting down.
-///
-/// Names that would collide with an existing `.data` are given the next free
-/// index instead of overwriting it.
-fn adopt_leftovers(dir: &std::path::Path) -> std::io::Result<usize> {
-    let mut n = 0;
-    for e in std::fs::read_dir(dir)? {
-        let p = e?.path();
-        if p.extension().and_then(|s| s.to_str()) != Some("part") {
-            continue;
-        }
-        let stem = p.file_stem().and_then(|s| s.to_str()).unwrap_or_default();
-        let mut target = dir.join(format!("{stem}.data"));
-        // `shard_00_0000` from an old run and one from this run are
-        // different shards that happen to share a name.
-        let mut bump = 0u32;
-        while target.exists() {
-            bump += 1;
-            target = dir.join(format!("{stem}_prev{bump}.data"));
-        }
-        std::fs::rename(&p, &target)?;
-        n += 1;
-    }
-    Ok(n)
-}
-
 fn main() {
     let a = parse_args();
     std::fs::create_dir_all(&a.out_dir).expect("create out dir");
@@ -475,7 +362,23 @@ fn worker(w: usize, a: &Args, stop: &AtomicBool, positions: &AtomicU64, games: &
     let mut rot = w % a.random_plies.len();
     // Measurement only: what the per-game table clear costs.
     let skip_clear = std::env::var_os("KUROOBI_NO_CLEAR").is_some();
-    let mut buf: Vec<[u8; RECORD]> = Vec::with_capacity(64);
+    let mut buf: Vec<Pending> = Vec::with_capacity(64);
+    // The games themselves, one per line, appended so a restart continues
+    // the same file. Everything in a `.data` can be rebuilt from this.
+    let games_path = a.out_dir.join(format!("games_{w:02}.txt"));
+    let mut games_out = match std::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(&games_path)
+    {
+        Ok(f) => std::io::BufWriter::new(f),
+        Err(e) => {
+            eprintln!("worker {w}: cannot open {}: {e}", games_path.display());
+            stop.store(true, Ordering::Relaxed);
+            return;
+        }
+    };
+    let mut game_id: u16 = 0;
 
     while !stop.load(Ordering::Relaxed) {
         if a.positions > 0 && positions.load(Ordering::Relaxed) >= a.positions {
@@ -504,39 +407,56 @@ fn worker(w: usize, a: &Args, stop: &AtomicBool, positions: &AtomicU64, games: &
                     break;
                 }
             }
-            /* Nothing is recorded while the opening is still random.
-
-            The label would be correct -- it is this position's search value
-            either way -- but the position would not be one the engine would
-            ever reach. A corpus of positions arrived at by random play
-            teaches the evaluator about a distribution it will not meet.
-            A million generated records agree: exactly one of them
-            sits above 50 empties, so it too plays its opening blind and
-            starts recording afterwards. */
-            if ply < n_random {
-                let pos = rng.pick(b.movable());
-                let _ = b.make_move(pos);
-                ply += 1;
-                continue;
-            }
+            /* The opening's random moves are recorded as well, flagged, with
+            the value the search gives the position (`is_random`), so what to
+            do with them is decided at filter time; the earlier version of
+            this tool skipped them, which left
+            nothing at all for the stages the opening covers. */
+            let random = ply < n_random;
             let ev = engine.choose(&b);
-            let Some(pos) = ev.pos else { break };
-            // Record before the move: the label belongs to the position the
+            let Some(best) = ev.pos else { break };
+            let mv = if random { rng.pick(b.movable()) } else { best };
+            // Record before the move: the value belongs to the position the
             // search was run on.
-            buf.push(record(&b, ev.value));
-            let _ = b.make_move(pos);
+            buf.push(Pending {
+                board: b,
+                value: ev.value,
+                ply: ply as u8,
+                random,
+                mv,
+            });
+            let _ = b.make_move(mv);
             ply += 1;
+        }
+
+        // The result every position is judged by: the final disc
+        // difference, empties to the winner, from Black's side.
+        let final_black = kuroobi::datagen::final_black(&b);
+
+        let moves: String = buf.iter().map(|p| p.mv.to_kifu()).collect();
+        if let Err(e) = writeln!(games_out, "{moves} {final_black:+} {n_random}")
+            .and_then(|()| games_out.flush())
+        {
+            eprintln!("worker {w}: write failed: {e}");
+            stop.store(true, Ordering::Relaxed);
+            break;
         }
 
         // The game is written as a unit, so a stop between games never
         // leaves half of one in the file.
-        for r in &buf {
-            if let Err(e) = shard.push(r) {
+        for p in &buf {
+            let final_mover = if p.board.player() == Color::Black {
+                final_black
+            } else {
+                -final_black
+            };
+            if let Err(e) = shard.push(&record(p, final_mover, game_id)) {
                 eprintln!("worker {w}: write failed: {e}");
                 stop.store(true, Ordering::Relaxed);
                 break;
             }
         }
+        game_id = game_id.wrapping_add(1);
         positions.fetch_add(buf.len() as u64, Ordering::Relaxed);
         games.fetch_add(1, Ordering::Relaxed);
     }

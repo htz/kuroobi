@@ -17,7 +17,7 @@ use std::path::{Path, PathBuf};
 
 use kuroobi::book::{Book, Candidate, Entry};
 use kuroobi::engine::{Engine, EngineConfig};
-use kuroobi::{Board, Position};
+use kuroobi::{wthor, Board, Position};
 
 struct Args {
     scan: Option<PathBuf>,
@@ -81,40 +81,6 @@ fn parse_args() -> Result<Args, String> {
     Ok(a)
 }
 
-/// Read one WTHOR file, returning each game's move list.
-/// Format: 16-byte header + 68 bytes/game (8 meta + 60 moves); moves
-/// are decimal `row*10 + col` (1-based), 0 terminates.
-fn read_wtb(path: &Path) -> std::io::Result<Vec<Vec<u8>>> {
-    let data = std::fs::read(path)?;
-    if data.len() < 16 {
-        return Ok(Vec::new());
-    }
-    let mut games = Vec::new();
-    let mut off = 16;
-    while off + 68 <= data.len() {
-        let rec = &data[off..off + 68];
-        let mut moves = Vec::new();
-        for &v in &rec[8..68] {
-            if v == 0 {
-                break;
-            }
-            let row = v / 10;
-            let col = v % 10;
-            if !(1..=8).contains(&row) || !(1..=8).contains(&col) {
-                moves.clear();
-                break;
-            }
-            // WTHOR is row-major; we are file-major (bit = file*8 + rank).
-            moves.push((col - 1) * 8 + (row - 1));
-        }
-        if moves.len() >= 10 {
-            games.push(moves);
-        }
-        off += 68;
-    }
-    Ok(games)
-}
-
 /// Replay records, counting positions and played moves up to `max_ply`.
 fn scan(dir: &Path, max_ply: usize, min_games: u32, book: &mut Book) -> std::io::Result<()> {
     let mut files: Vec<PathBuf> = std::fs::read_dir(dir)?
@@ -126,17 +92,16 @@ fn scan(dir: &Path, max_ply: usize, min_games: u32, book: &mut Book) -> std::io:
     let mut counts: std::collections::HashMap<((u64, u64), u8), u32> = Default::default();
     let mut total_games = 0usize;
     for f in &files {
-        let games = read_wtb(f)?;
-        total_games += games.len();
-        for moves in games {
+        // Short records are abandoned or corrupt games; the old reader
+        // asked for ten moves before it believed one.
+        let games = wthor::read(f)?.into_iter().filter(|g| g.moves.len() >= 10);
+        for game in games {
+            total_games += 1;
             let mut b = Board::new();
-            for (ply, &sq) in moves.iter().enumerate() {
+            for (ply, &pos) in game.moves.iter().enumerate() {
                 if ply >= max_ply {
                     break;
                 }
-                let Some(pos) = Position::from_index(sq as u32) else {
-                    break;
-                };
                 // The format has no explicit pass; insert one and retry.
                 if !b.check(pos) {
                     b.pass();
