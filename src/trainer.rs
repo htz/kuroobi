@@ -227,7 +227,7 @@ impl<O: Optimizer> Trainer<O> {
     /// The stages are independent tables, so a run aimed at one of them only
     /// ever has one stage's work to do -- measured here, a single stage held
     /// the machine at 39% of one core out of ten. Eight stages therefore want
-    /// eight processes (`stage_sweep.sh`), not eight threads, and each of
+    /// eight processes, not eight threads, and each of
     /// those reads only its own stage's file.
     ///
     /// Keeping a second, threaded path cost more than it bought: it read the

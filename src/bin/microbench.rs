@@ -2,11 +2,12 @@
 //! endgame positions, in a form a second implementation can reproduce
 //! exactly.
 //!
-//! Two things make this different from `flipbench`, and both matter:
+//! Two things make this different from an isolated micro-benchmark, and
+//! both matter:
 //!
 //! * **The positions and squares come from play, not from a generator.**
 //!   Random bitboards and random squares defeat the branch predictor and
-//!   stretch the fill chains, which is why `flipbench` measures 14.3 ns for
+//!   stretch the fill chains, which is why an isolated bench measured 14.3 ns for
 //!   a dispatched flip that costs about 2.6 ns inside a solve. Cases here
 //!   are sampled by playing legal moves down to a target empty count, and
 //!   the square is always one of that position's legal moves.

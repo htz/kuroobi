@@ -2546,7 +2546,7 @@ impl Nnue {
     }
 
     /// Evaluate a board from scratch (rebuilds indices). Convenience for
-    /// non-incremental callers (arena / validation).
+    /// non-incremental callers (validation and the like).
     pub fn eval(&self, board: &Board) -> f32 {
         let ix = self.indexer.init(board.black, board.white);
         self.eval_indices(board, &ix)

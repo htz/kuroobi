@@ -10,7 +10,7 @@
 //! 26 / solve 30 / band 8 (live GGS runs 22 / 26 / 6).
 //!
 //! Usage:
-//!   bookgen --scan train_data/wthor --max-ply 24 --min-games 3 --out book.txt
+//!   bookgen --scan data/source/wthor --max-ply 24 --min-games 3 --out book.txt
 //!   bookgen --deepen book.txt --depth 26 --solve 30 --band 8 [--limit 500]
 
 use std::path::{Path, PathBuf};

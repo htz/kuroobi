@@ -18,23 +18,6 @@ benchmarks do the latter).
 | Online play | [`ggs`](#ggs) |
 | Verifying correctness | [`stress_par`](#stress_par--stress_mid--stress_engine--stress_stop) [`stress_mid`](#stress_par--stress_mid--stress_engine--stress_stop) [`stress_engine`](#stress_par--stress_mid--stress_engine--stress_stop) [`stress_stop`](#stress_par--stress_mid--stress_engine--stress_stop) |
 
-## What is not here any more
-
-A measurement tool earns a place in the tree by being needed *again* --
-to re-run a decision, or to reproduce a number somebody will question.
-One that answered its question is finished, and `git log` keeps it
-reachable. These were removed on that basis; the numbers they produced
-live on in `benchmarks.md` and in the commits that cite them.
-
-| Removed | Why |
-|---|---|
-| `arena` `nnue_arena` `lab` | Three ways to play a match, all narrower than `roundrobin`, which now speaks every dialect they did plus outside engines (`extgtp`) |
-| `headfit` `fit_pw` `accstats` | Built to answer one question each -- how much the head could reach, what the product gate was worth, where to clamp it. All three answered |
-| `evalcmp` `aligncheck` `check_eval` | One-off inspections, quicker to rewrite than to keep working |
-| `valmse` `phase_mse` | Error against the *training labels*, which turned out not to track accuracy. `evalerr` scores against solved values instead, and takes a per-band file when the band is the question |
-| `flipbench` `evalbench` | Isolated benchmarks. Both misled: they do not reproduce the branch prediction or the locality of a real search, and a pessimistic microbenchmark is the dangerous kind -- it becomes a rejection nobody revisits. Judge on `nnue_obf` and the full suite |
-| `wstats` | Weight-file statistics, trivial to write when a specific question comes up |
-
 ---
 
 ## Training
@@ -66,7 +49,8 @@ Input is `.data` files in the training record format (see
 | `--swa-start <n>` | 2 | Epoch at which averaging starts |
 
 ```sh
-train --epochs 20 --lr 0.008 --weights weights/linear.bin train_data/*.data
+train --epochs 20 --lr 0.008 --weights weights/linear.bin \
+      data/records/egaroucid_v0002/train/*.data
 ```
 
 ### nnue_train
@@ -102,8 +86,8 @@ and the filter in force is printed at startup. `Filter::TRAINING` is
 `--min-ply 8 --max-score-diff 12 --drop-random --keep-above-ply 50`.
 
 ```sh
-nnue_train --epochs 30 --lr 0.002 --val val.data \
-           --out weights/nnue.bin train_data/*.data
+nnue_train --epochs 30 --lr 0.002 --val data/val/val_v0002.data \
+           --out weights/nnue.bin data/records/egaroucid_v0002/train/*.data
 ```
 
 ### selfplay
@@ -369,7 +353,7 @@ kifu2data [OPTIONS] <transcript.txt | archive.wtb>...
 ```sh
 # 1. Collect frequent opening positions from WTHOR (official tournament
 #    records) as candidates (unevaluated)
-bookgen --scan train_data/wthor --max-ply 24 --min-games 3 --out book.txt
+bookgen --scan data/source/wthor --max-ply 24 --min-games 3 --out book.txt
 
 # 2. Solve unevaluated and shallowly evaluated entries with a search
 #    deeper than a real game

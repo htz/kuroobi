@@ -1,7 +1,7 @@
 //! Clock budgeting.
 //!
 //! Moved out of the GUI into the engine so the same allocator serves
-//! both `arena` self-play and GGS — allocation quality can only be
+//! both self-play and GGS — allocation quality can only be
 //! measured in timed games, and inside the GUI it could not be.
 //!
 //! To add a scheme, extend [`Pace`] and branch in [`plan`]. Never change

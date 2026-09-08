@@ -3,7 +3,7 @@
 //!
 //! Why this exists: the NNUE accumulator width `H` is a compile-time
 //! constant, so two models with different H cannot share a process, and
-//! `nnue_arena` (single-process A vs B) could not judge H experiments
+//! a single-process A-vs-B harness could not judge H experiments
 //! head-to-head. Separate processes can pit any two builds against each
 //! other, and `roundrobin` already speaks GTP — so this speaks GTP too.
 //!

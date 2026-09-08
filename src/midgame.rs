@@ -1,6 +1,6 @@
 //! Midgame NNUE search — the engine that plays matches.
 //!
-//! Extracted from the match harness (`lab`) so that
+//! Extracted from the match harness so that
 //! other binaries (the GGS client, future frontends) can drive the same
 //! engine. Structure: iterative deepening + Lazy SMP at
 //! shallow depths, YBWC splits below, Multi-ProbCut with unpruned probes and

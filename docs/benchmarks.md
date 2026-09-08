@@ -152,7 +152,7 @@ Things learned as a by-product:
   averaged over the 8 symmetric forms, but the weights themselves do not
   stay symmetric. Symmetrising also lowers the MSE slightly (31.99 →
   31.94)
-* `nnue_arena` is sequential, so 1600 games take about 7 hours. Split into
+* A sequential match driver needs about 7 hours for 1600 games. Split into
   8 processes with different seeds it takes just under 2 hours
 
 ### FFO benchmark (endgame exact solve)

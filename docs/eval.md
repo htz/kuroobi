@@ -240,8 +240,8 @@ strength is measured directly instead.
 Win rates against an external engine cannot detect it. Even at 200 games the
 95% confidence interval is ±7%, and this measurement was repeatedly used to
 conclude, wrongly, that "parallelization has not weakened play".
-`lab --self-vs <threads>` plays self-play games **with the same net, the same
-depth and the same endgame threshold, varying only the thread count**. At
+Self-play games **with the same net, the same depth and the same endgame
+threshold, varying only the thread count** are what detects it. At
 equal depth it should be 50%; anything below that is a loss of strength.
 
 Defects found with this measurement. Both show up as "fewer nodes", so
@@ -308,9 +308,8 @@ implementation** — Egaroucid is under the same constraint.
 #### Measure the reachable parallelism first
 
 Looking only at our own speed ratio does not tell whether it is the limit of
-the implementation or of the hardware. `lab --edax-threads <n>` **keeps us
-pinned to 1 thread and varies only the opponent's thread count**, so it
-yields Egaroucid's parallel efficiency directly, on the same machine (10
+the implementation or of the hardware. **Pinning ourselves to 1 thread and
+varying only the opponent's thread count** yields Egaroucid's parallel efficiency directly, on the same machine (10
 physical cores, minimum of 3 rounds):
 
 | Egaroucid threads | 1 | 2 | 4 | 6 | 8 | 10 |

@@ -683,7 +683,7 @@ impl Evaluator {
     /// sample teaches eight — this is the single biggest convergence win for
     /// pattern-based Reversi evaluators. Returns the mean **squared** error
     /// over the eight variants (each measured before its own update), so a
-    /// trainer summing the return gets a true MSE, comparable to `valmse`.
+    /// trainer summing the return gets a true MSE.
     ///
     /// (It must be squared error, not mean-abs: with zero weights all eight
     /// variants predict 0 and the two agree, but as the model fits, the eight

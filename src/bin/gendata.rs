@@ -103,7 +103,7 @@ struct Args {
 impl Default for Args {
     fn default() -> Self {
         Args {
-            out_dir: PathBuf::from("train_data/gen"),
+            out_dir: PathBuf::from("data/records/gen"),
             // Independent games, one search thread each. Measured on a
             // 10-core machine: eight of these run 6.9x faster than one,
             // where giving a single game eight threads reaches only 1.55x.

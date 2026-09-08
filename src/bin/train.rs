@@ -87,7 +87,7 @@ Options:
   --epochs <n>      Passes over all examples (default 10)
   --stage <n>       The one stage this run trains. Required for sgd: a run
                     covers one stage, and several stages means several
-                    processes (stage_sweep.sh), not several threads
+                    processes, not several threads
   --threads <n>     Workers for scoring the val set, and for adam's pass.
                     Sgd trains one stage on one thread; see --stage
   --optimizer <o>   sgd | adam (default sgd; sgd's error-proportional step
@@ -356,11 +356,11 @@ fn parse_args() -> Result<Args, String> {
         // -- and it is worse than several processes: the rate schedule, the
         // stall counters and the retirement clock all advance on whichever
         // stage happens to finish an epoch, and every epoch re-reads examples
-        // for stages it is not training. `stage_sweep.sh` runs eight.
+        // for stages it is not training.
         if args.stages_lo != args.stages_hi {
             return Err(format!(
                 "one run trains one stage: pass --stage N (got {}-{}). \
-                 To cover several, run several processes -- see stage_sweep.sh",
+                 To cover several, run one process per stage.",
                 args.stages_lo, args.stages_hi
             ));
         }
@@ -866,7 +866,7 @@ fn run_epochs<O: Optimizer>(
     // scaling was, and the raw rate it then trained at read as the scaling
     // diverging. Parallelism belongs between processes here anyway: a run
     // aimed at one stage only ever wakes one worker, so eight stages want
-    // eight processes, not eight threads (`stage_sweep.sh`).
+    // eight processes, not eight threads.
     let parallel = args.optimizer == OptimizerKind::Sgd;
     // One buffer for the whole run: after the first shard it already holds
     // enough capacity, so later shards reuse the allocation instead of
