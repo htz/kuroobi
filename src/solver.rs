@@ -879,7 +879,7 @@ unsafe fn help_split(sp: &SplitPoint) -> bool {
             w.l78 = std::mem::take(&mut sc.l78);
         }
         w.selective_t = sp.selective_t;
-        w.nnue = sp.nnue;
+        w.nnue = sp.nnue.clone();
         w.sigma_scale = sp.sigma_scale;
         let mut child = m.child(&sp.board);
         let ch = child_hash_of(&child);
@@ -2342,7 +2342,8 @@ pub struct EndSolverResult {
 /// a separate question from whether it could afford to, and node counts
 /// answer the first one on its own. Gated on an environment variable so one
 /// binary measures both arms; nothing reads it unless it is set.
-pub static ORDER_NNUE: std::sync::OnceLock<&'static crate::nnue::Nnue> = std::sync::OnceLock::new();
+pub static ORDER_NNUE: std::sync::OnceLock<std::sync::Arc<crate::nnue::Nnue>> =
+    std::sync::OnceLock::new();
 
 /// The indexer the carried ordering indices follow: the network's own
 /// pattern set when the ordering arm reads the network, else the linear
@@ -2358,15 +2359,18 @@ fn order_indexer(e: &crate::evaluator::Evaluator) -> &crate::pattern_index::Patt
 pub fn order_nnue() -> Option<&'static crate::nnue::Nnue> {
     static ON: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
     if *ON.get_or_init(|| std::env::var("KUROOBI_NNUE_ORDER").is_ok()) {
-        ORDER_NNUE.get().copied()
+        // The cell is `static`, so what it holds outlives the process and a
+        // plain reference to it does too: the ordering path reads a reference
+        // per node and must not pay for a handle it would drop again.
+        ORDER_NNUE.get().map(|nn| &**nn)
     } else {
         None
     }
 }
 
 pub type NnueProbe = (
-    &'static crate::nnue::Nnue,
-    &'static crate::midgame::SharedTt,
+    std::sync::Arc<crate::nnue::Nnue>,
+    std::sync::Arc<crate::midgame::SharedTt>,
 );
 
 /// The selective probes run an (unpruned) NNUE search instead of the linear
@@ -3338,8 +3342,8 @@ impl Solver {
     /// Lend the NNUE searcher to the selective probes (see `NnueProbe`).
     pub fn set_nnue(
         &mut self,
-        nn: &'static crate::nnue::Nnue,
-        tt: &'static crate::midgame::SharedTt,
+        nn: std::sync::Arc<crate::nnue::Nnue>,
+        tt: std::sync::Arc<crate::midgame::SharedTt>,
     ) {
         self.nnue = Some((nn, tt));
     }
@@ -3406,9 +3410,9 @@ impl Solver {
     /// position to find out which is true.
     /// NNUE probe value at `depth`, for sigma calibration (None if no NNUE).
     pub fn probe_value_nnue(&mut self, board: &Board, depth: u8) -> Option<f32> {
-        let (nn, mtt) = self.nnue?;
-        let mut ms = crate::midgame::NnueSearch::new(nn, mtt);
+        let (nn, mtt) = self.nnue.clone()?;
         let mut acc = nn.indices(board.black, board.white);
+        let mut ms = crate::midgame::NnueSearch::new(nn, mtt);
         Some(ms.negamax(
             board,
             &mut acc,
@@ -3739,7 +3743,7 @@ impl Solver {
                 // and, since 2026-08-27, the exact solve's warm-up ladder (see
                 // `sel_nnue_warm` — the earlier +10% loss was the H=16 model).
                 w.nnue = if selective.is_some() || sel_nnue_warm() {
-                    self.nnue
+                    self.nnue.clone()
                 } else {
                     None
                 };
@@ -4307,7 +4311,7 @@ impl Worker<'_> {
             n_moves: siblings.len(),
             upper,
             selective_t: self.selective_t,
-            nnue: self.nnue,
+            nnue: self.nnue.clone(),
             sigma_scale: self.sigma_scale,
             tt: self.tt as *const HashTable,
             ev: ev.map_or(std::ptr::null(), |e| e as *const Evaluator as *const ()),
@@ -4421,7 +4425,7 @@ impl Worker<'_> {
         let tt = self.tt;
         let budget = self.budget;
         let selective_t = self.selective_t;
-        let nnue = self.nnue;
+        let nnue = self.nnue.clone();
         let sigma_scale = self.sigma_scale;
         // Cutting off this node must also stop work already under way in the
         // siblings, so the tasks search under a flag chained to ours.
@@ -4465,6 +4469,8 @@ impl Worker<'_> {
                 let m = *m;
                 let slot = &slots[i];
                 let shared = &shared_lower;
+                // One handle per task: the tasks outlive this iteration.
+                let nnue = nnue.clone();
                 // SAFETY: the task borrows `group`, `shared_lower` and `slot`,
                 // all locals of this frame. The `help_until` loop below waits
                 // for every task in `handed` before this frame returns, so the
@@ -6395,12 +6401,12 @@ impl Worker<'_> {
         // (unpruned) midgame NNUE engine instead of the linear seed search.
         // Off by default until its own sigma is calibrated.
         if sel_nnue_probe() {
-            if let Some((nn, mtt)) = self.nnue {
+            if let Some((nn, mtt)) = self.nnue.clone() {
                 const EPS: f32 = 0.01;
-                let mut ms = crate::midgame::NnueSearch::new(nn, mtt);
                 let mut acc = nn.indices(board.black, board.white);
                 let gate = selective_gate_offset()
                     .map(|off| (nn.eval_from_indices(&acc, board), (error - off).max(1.0)));
+                let mut ms = crate::midgame::NnueSearch::new(nn, mtt);
                 let hi = upper as f32 + error;
                 if hi < 64.0 && gate.is_none_or(|(d0, e0)| d0 >= upper as f32 + e0) {
                     let v = ms.negamax(board, &mut acc, pd as u32, hi - EPS, hi);

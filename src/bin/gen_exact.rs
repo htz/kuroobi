@@ -65,14 +65,14 @@ fn main() {
     }
 
     // The engine that plays the non-random part, if any.
-    let searcher: Option<(&'static Nnue, &'static SharedTt)> = if play_depth > 0 {
+    let searcher: Option<(std::sync::Arc<Nnue>, std::sync::Arc<SharedTt>)> = if play_depth > 0 {
         let mut nn = Nnue::new(EGAROUCID_PATTERNS);
         nn.load(std::path::Path::new(&nnue_path)).expect("nnue");
         nn.quantize();
         eprintln!("playing plies past {random_plies} with {nnue_path} at depth {play_depth}");
         Some((
-            Box::leak(Box::new(nn)),
-            Box::leak(Box::new(SharedTt::new(20))),
+            std::sync::Arc::new(nn),
+            std::sync::Arc::new(SharedTt::new(20)),
         ))
     } else {
         None
@@ -104,10 +104,10 @@ fn main() {
             // Random for the opening (diversity), then the engine (realism).
             // The table is cleared per move: a warm table carried between
             // playouts makes the games correlate with each other.
-            let chosen = match searcher {
+            let chosen = match &searcher {
                 Some((nn, tt)) if ply >= random_plies => {
                     tt.clear();
-                    let mut se = NnueSearch::new(nn, tt);
+                    let mut se = NnueSearch::new(nn.clone(), tt.clone());
                     se.threads = 1;
                     se.best_move_deadline(&b, play_depth, None).0
                 }

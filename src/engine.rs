@@ -265,8 +265,26 @@ pub struct Engine {
     progress: std::sync::Arc<Progress>,
 }
 
-impl Engine {
-    pub fn new(config: EngineConfig) -> Result<Engine, String> {
+/// What an [`Engine`] reads from disk, separated from the Engine so a caller
+/// can pay for it before it is needed.
+///
+/// The network is the expensive part: over a gigabyte, a couple of seconds to
+/// read and quantize. Building it inside `Engine::new` meant a UI that creates
+/// its engine on the first move stalls on that move. Load this while the user
+/// is still looking at the board, hand it to [`Engine::with_assets`], and the
+/// move costs nothing but the search.
+///
+pub struct EngineAssets {
+    evaluator: Evaluator,
+    nnue: std::sync::Arc<Nnue>,
+}
+
+impl EngineAssets {
+    /// Read the evaluator and the network named by `config`. The fields it
+    /// reads are `weights`, `nnue`, `nnue_base`, `act_units` and `head_f32`;
+    /// the rest of the config does not touch disk and may still change before
+    /// [`Engine::with_assets`].
+    pub fn load(config: &EngineConfig) -> Result<EngineAssets, String> {
         let mut evaluator = Evaluator::new(EGAROUCID_PATTERNS);
         evaluator
             .load_weights(&config.weights)
@@ -274,8 +292,6 @@ impl Engine {
         let mut nn = Nnue::new(config.nnue_patterns);
         nn.load(&config.nnue)
             .map_err(|e| format!("nnue {}: {e}", config.nnue.display()))?;
-        // Build the int16 tables; skipping this makes eval read
-        // uninitialized memory.
         if !config.nnue_base.as_os_str().is_empty() {
             let mut b = Evaluator::new(config.nnue_patterns);
             b.load_weights(&config.nnue_base)
@@ -283,14 +299,41 @@ impl Engine {
             nn.set_base(b);
         }
         nn.act_units = config.act_units;
+        // Build the int16 tables; skipping this makes eval read
+        // uninitialized memory.
         nn.quantize();
         nn.head_f32 = config.head_f32;
-        // NnueSearch / Solver want process-lifetime references; Engine
-        // itself is one-per-process, so leak to satisfy them.
-        let nn: &'static Nnue = Box::leak(Box::new(nn));
-        let tt: &'static SharedTt = Box::leak(Box::new(SharedTt::new(config.midgame_hash_bits)));
+        Ok(EngineAssets {
+            evaluator,
+            nnue: std::sync::Arc::new(nn),
+        })
+    }
+
+    /// The network these assets hold, for a caller that wants to check what it
+    /// loaded (the stage count, the width) before building an engine.
+    pub fn nnue(&self) -> &Nnue {
+        &self.nnue
+    }
+}
+
+impl Engine {
+    pub fn new(config: EngineConfig) -> Result<Engine, String> {
+        let assets = EngineAssets::load(&config)?;
+        Engine::with_assets(assets, config)
+    }
+
+    /// Build on a network someone else already loaded. `config`'s
+    /// disk-reading fields are ignored -- the assets settled those.
+    pub fn with_assets(assets: EngineAssets, config: EngineConfig) -> Result<Engine, String> {
+        let evaluator = assets.evaluator;
+        // The search and the solver each keep a handle; both live in this
+        // Engine, so the network and the table are freed when it is dropped.
+        // They used to be leaked to satisfy a `&'static` bound, which cost a
+        // whole network every time an Engine was rebuilt -- 1.2 GB now.
+        let nn = assets.nnue;
+        let tt = std::sync::Arc::new(SharedTt::new(config.midgame_hash_bits));
         let progress = std::sync::Arc::new(Progress::default());
-        let mut search = NnueSearch::new(nn, tt);
+        let mut search = NnueSearch::new(nn.clone(), tt.clone());
         search.set_progress(Some(progress.clone()));
         search.threads = config.threads;
         search.mpc = config.mpc;

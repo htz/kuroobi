@@ -4,6 +4,7 @@
 # 英語のまま出る。実装ファイルに画面文字列は置かない。
 activity:
   analyzing: "分析"
+  loading: "評価関数の読み込み"
   calibrating: "較正"
   pondering: "先読み"
   thinking: "思考"

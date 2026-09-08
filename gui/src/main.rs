@@ -434,6 +434,30 @@ fn ensure_engine_in(
 /// automatically. Takes 1-3 seconds, and never during a game (it would
 /// steal CPU from a clocked search); only right after startup while
 /// idle. Local and GGS thread settings differ, so measure both.
+/// Build the engine before anything asks for a move.
+///
+/// The network is over a gigabyte and takes a couple of seconds to read and
+/// quantize. `ensure_engine_in` does that work on whichever call finds the
+/// slot empty -- which, without this, is the first move of the first game,
+/// with the user waiting on it. Doing it at launch moves the cost to a moment
+/// where nothing is blocked on it, and the jobs row says what is running.
+///
+/// It is a plain preload, not a second path: the same `ensure_engine_in` fills
+/// the same slot, so a move that still arrives first is served by the loader it
+/// would have run anyway rather than waiting for a second one.
+fn preload_engine(
+    engine_slot: Arc<Mutex<Option<Engine>>>,
+    stop_slot: Arc<Mutex<Option<kuroobi::midgame::StopHandle>>>,
+    activity: Arc<Mutex<Activity>>,
+) {
+    std::thread::spawn(move || {
+        let _guard = ActivityGuard::begin(&activity, "loading");
+        // A failure here is not worth a toast: nothing asked for the engine
+        // yet. The first move reports it, through the same path as before.
+        let _ = ensure_engine_in(&engine_slot, &stop_slot);
+    });
+}
+
 fn calibrate_missing(
     app: tauri::AppHandle,
     engine_slot: Arc<Mutex<Option<Engine>>>,
@@ -2555,6 +2579,10 @@ fn main() {
             if std::env::var("KUROOBI_GGS_DEMO").is_ok() {
                 return Ok(());
             }
+            /* Read the weights now rather than on the first move: the
+            network is over a gigabyte, and a game must not start by
+            waiting for it. */
+            preload_engine(st.engine.clone(), st.stop.clone(), st.activity.clone());
             /* Calibrate solve speed at startup; once a game runs the
             CPU cannot be spared. */
             calibrate_missing(

@@ -71,7 +71,7 @@ fn main() -> ExitCode {
     solver.set_threads(threads);
     // The probe search's midgame table; cleared before every position, like
     // every other table, so the problems stay independent.
-    let mut probe_tt: Option<&'static kuroobi::midgame::SharedTt> = None;
+    let mut probe_tt: Option<std::sync::Arc<kuroobi::midgame::SharedTt>> = None;
     // The selective probes prefer the NNUE (see solver::sel_nnue_probe);
     // load it so the benchmark matches the match configuration.
     if let Some(p) = &nnue_path {
@@ -93,10 +93,9 @@ fn main() -> ExitCode {
                 }
             }
             nn.quantize();
-            let nn: &'static kuroobi::nnue::Nnue = Box::leak(Box::new(nn));
-            let mtt: &'static kuroobi::midgame::SharedTt =
-                Box::leak(Box::new(kuroobi::midgame::SharedTt::new(22)));
-            solver.set_nnue(nn, mtt);
+            let nn = std::sync::Arc::new(nn);
+            let mtt = std::sync::Arc::new(kuroobi::midgame::SharedTt::new(22));
+            solver.set_nnue(nn.clone(), mtt.clone());
             // Measurement arm: with KUROOBI_NNUE_ORDER set, move ordering
             // reads the network instead of the linear 8-bit tables. See
             // `solver::order_nnue`.
@@ -171,7 +170,7 @@ fn main() -> ExitCode {
                 }
             };
 
-            if let Some(t) = probe_tt {
+            if let Some(t) = &probe_tt {
                 t.clear();
             }
             let (value, nodes, secs) = match depth {

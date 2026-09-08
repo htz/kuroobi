@@ -42,7 +42,7 @@ fn main() {
     nn.load(std::path::Path::new("weights/nnue.bin"))
         .expect("nnue");
     nn.quantize();
-    let nn: &'static Nnue = Box::leak(Box::new(nn));
+    let nn = std::sync::Arc::new(nn);
 
     let mut s: u64 = 0xDEAD_BEEF_1234_5678;
     let (mut bad, mut done) = (0usize, 0usize);
@@ -70,8 +70,8 @@ fn main() {
         }
         done += 1;
         let solve = |th: usize| {
-            let tt: &'static SharedTt = Box::leak(Box::new(SharedTt::new(22)));
-            let mut w = NnueSearch::new(nn, tt);
+            let tt = std::sync::Arc::new(SharedTt::new(22));
+            let mut w = NnueSearch::new(nn.clone(), tt);
             w.threads = th;
             /* MPC off: probabilistic pruning varies with visit order,
             making parallel defects indistinguishable from MPC jitter.
@@ -98,8 +98,8 @@ fn main() {
             } else {
                 true
             };
-            let tt: &'static SharedTt = Box::leak(Box::new(SharedTt::new(22)));
-            let mut w = NnueSearch::new(nn, tt);
+            let tt = std::sync::Arc::new(SharedTt::new(22));
+            let mut w = NnueSearch::new(nn.clone(), tt);
             w.threads = 1;
             w.mpc = false;
             let (_, v) = w.best_move_valued(&nb, depth.saturating_sub(1));

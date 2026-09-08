@@ -157,9 +157,9 @@ fn main() -> ExitCode {
         return ExitCode::FAILURE;
     }
     nn.quantize();
-    let nn: &'static Nnue = Box::leak(Box::new(nn));
-    let tt: &'static SharedTt = Box::leak(Box::new(SharedTt::new(24)));
-    let mut search = NnueSearch::new(nn, tt);
+    let nn = std::sync::Arc::new(nn);
+    let tt = std::sync::Arc::new(SharedTt::new(24));
+    let mut search = NnueSearch::new(nn.clone(), tt.clone());
     search.threads = args.threads;
     search.mpc = args.mpc;
     let mut solver = Solver::new(args.solver_hash);

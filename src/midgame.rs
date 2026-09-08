@@ -905,8 +905,8 @@ impl Pool {
 /// ordering — the pieces a real engine has, and what keeps the wall-clock
 /// competitive (a naive search without them explodes).
 pub struct NnueSearch {
-    pub nn: &'static Nnue,
-    pub tt: &'static SharedTt,
+    pub nn: std::sync::Arc<Nnue>,
+    pub tt: std::sync::Arc<SharedTt>,
     /// Workers for the root split (1 = sequential).
     pub threads: usize,
     /// Nodes visited, to diagnose ordering quality (effective branching).
@@ -959,7 +959,7 @@ pub struct NnueSearch {
 }
 
 impl NnueSearch {
-    pub fn new(nn: &'static Nnue, tt: &'static SharedTt) -> Self {
+    pub fn new(nn: std::sync::Arc<Nnue>, tt: std::sync::Arc<SharedTt>) -> Self {
         NnueSearch {
             nn,
             tt,
@@ -1014,8 +1014,8 @@ impl NnueSearch {
 
     fn worker(&self) -> NnueSearch {
         NnueSearch {
-            nn: self.nn,
-            tt: self.tt,
+            nn: self.nn.clone(),
+            tt: self.tt.clone(),
             threads: 1,
             nodes: 0,
             mpc: self.mpc,
@@ -1956,7 +1956,8 @@ impl NnueSearch {
                 if split_ok && !is_last {
                     let pool = self.pool.unwrap();
                     let slot = std::sync::Arc::new(Slot::new());
-                    let (nn, tt, mpc, relax) = (self.nn, self.tt, self.mpc, self.mpc_relax);
+                    let (nn, tt, mpc, relax) =
+                        (self.nn.clone(), self.tt.clone(), self.mpc, self.mpc_relax);
                     let (gen, my_gen) = (self.done.clone(), self.my_gen);
                     let stop = fan_stop.clone().unwrap();
                     /* Pass the external stop handle down — without it
@@ -2175,8 +2176,8 @@ mod deadline_tests {
         // quantize is mandatory or the SIMD path reads uninitialized data.
         let mut nn0 = Nnue::new(crate::pattern::EGAROUCID_PATTERNS);
         nn0.quantize();
-        let nn: &'static Nnue = Box::leak(Box::new(nn0));
-        let tt: &'static SharedTt = Box::leak(Box::new(SharedTt::new(18)));
+        let nn = std::sync::Arc::new(nn0);
+        let tt = std::sync::Arc::new(SharedTt::new(18));
         let mut s = NnueSearch::new(nn, tt);
         s.threads = 1;
         s.set_stop(Some(StopHandle::new()));
@@ -2209,8 +2210,8 @@ mod deadline_tests {
     fn deadline_cuts_the_search_short_in_parallel() {
         let mut nn0 = Nnue::new(crate::pattern::EGAROUCID_PATTERNS);
         nn0.quantize();
-        let nn: &'static Nnue = Box::leak(Box::new(nn0));
-        let tt: &'static SharedTt = Box::leak(Box::new(SharedTt::new(18)));
+        let nn = std::sync::Arc::new(nn0);
+        let tt = std::sync::Arc::new(SharedTt::new(18));
         let mut s = NnueSearch::new(nn, tt);
         s.threads = 4;
         s.set_stop(Some(StopHandle::new()));

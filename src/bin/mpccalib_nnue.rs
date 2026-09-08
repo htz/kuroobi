@@ -69,7 +69,7 @@ fn main() -> ExitCode {
     }
     // Skipping this makes the SIMD path read uninitialized memory.
     nn.quantize();
-    let nn: &'static Nnue = Box::leak(Box::new(nn));
+    let nn = std::sync::Arc::new(nn);
 
     // Depth-0 values come from the linear evaluator (same disc units).
     let mut evaluator = Evaluator::new(EGAROUCID_PATTERNS);
@@ -113,12 +113,13 @@ fn main() -> ExitCode {
         let handles: Vec<_> = (0..threads)
             .map(|_| {
                 let (next, boards, depths, evaluator) = (&next, &boards, &depths, &evaluator);
+                let nn = nn.clone();
                 s.spawn(move || {
                     /* Per-thread tables: sharing lets one position's
                     results help another and breaks independence. 18 bits
                     is ~4 MB per thread. */
-                    let tt: &'static SharedTt = Box::leak(Box::new(SharedTt::new(18)));
-                    let mut search = NnueSearch::new(nn, tt);
+                    let tt = std::sync::Arc::new(SharedTt::new(18));
+                    let mut search = NnueSearch::new(nn, tt.clone());
                     search.threads = 1; // sequential search keeps the tree fixed
                     let mut out = Vec::new();
                     loop {

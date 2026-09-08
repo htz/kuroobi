@@ -65,8 +65,8 @@ fn main() {
         nn.load(std::path::Path::new(&nnue_path)).expect("nnue");
     }
     nn.quantize();
-    let nn: &'static Nnue = Box::leak(Box::new(nn));
-    let tt: &'static SharedTt = Box::leak(Box::new(SharedTt::new(22)));
+    let nn = std::sync::Arc::new(nn);
+    let tt = std::sync::Arc::new(SharedTt::new(22));
 
     for f in files {
         let content = std::fs::read_to_string(&f).expect("read obf");
@@ -88,7 +88,7 @@ fn main() {
                 }
             };
             tt.clear();
-            let mut se = NnueSearch::new(nn, tt);
+            let mut se = NnueSearch::new(nn.clone(), tt.clone());
             se.mpc = true;
             se.threads = threads;
             let t0 = Instant::now();
