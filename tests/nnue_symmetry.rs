@@ -79,7 +79,7 @@ fn symmetrize_makes_eval_invariant() {
 #[test]
 #[ignore = "requires weights/"]
 fn shipped_weights_are_symmetric() {
-    let path = std::path::Path::new("weights/nnue-h16.bin");
+    let path = std::path::Path::new("weights/nnue.bin");
     let mut nn = Nnue::new(EGAROUCID_PATTERNS);
     nn.load(path).expect("nnue");
     nn.quantize();

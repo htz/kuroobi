@@ -27,7 +27,7 @@ fn main() -> ExitCode {
     let mut threads: usize = 1;
     let mut mpc_t: Option<f32> = None;
     let mut weights: Option<PathBuf> = None;
-    let mut nnue_path: Option<PathBuf> = Some(PathBuf::from("weights/nnue-h16.bin"));
+    let mut nnue_path: Option<PathBuf> = Some(PathBuf::from("weights/nnue.bin"));
     let mut nnue_base: Option<PathBuf> = None;
     let mut patterns_name = String::from("egaroucid");
     let mut files: Vec<PathBuf> = Vec::new();

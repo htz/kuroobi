@@ -22,7 +22,7 @@
 //!   --threads <n>        threads (default 1)
 //!   --random-plies <n>   random opening plies (default 8)
 //!   --seed <n>           RNG seed (default 7)
-//!   --nnue <path>        NNUE weights (default weights/nnue-h16.bin)
+//!   --nnue <path>        NNUE weights (default weights/nnue.bin)
 //!   --weights <path>     linear weights (default weights/linear.bin)
 
 use std::path::PathBuf;
@@ -56,7 +56,7 @@ impl Default for Args {
             threads: 1,
             random_plies: 8,
             seed: 7,
-            nnue: PathBuf::from("weights/nnue-h16.bin"),
+            nnue: PathBuf::from("weights/nnue.bin"),
             weights: PathBuf::from("weights/linear.bin"),
         }
     }

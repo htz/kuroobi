@@ -103,7 +103,7 @@ and the filter in force is printed at startup. `Filter::TRAINING` is
 
 ```sh
 nnue_train --epochs 30 --lr 0.002 --val val.data \
-           --out weights/nnue-h16.bin train_data/*.data
+           --out weights/nnue.bin train_data/*.data
 ```
 
 ### selfplay

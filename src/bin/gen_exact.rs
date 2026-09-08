@@ -41,7 +41,7 @@ fn main() {
     let mut out = String::from("exact22");
     let mut random_plies: u32 = 8;
     let mut play_depth: u32 = 0;
-    let mut nnue_path = String::from("weights/nnue-h16.bin");
+    let mut nnue_path = String::from("weights/nnue.bin");
     let mut it = std::env::args().skip(1);
     while let Some(a) = it.next() {
         match a.as_str() {

@@ -65,14 +65,14 @@ pub fn endgame_bytes(bits: u32) -> u64 {
 
 /// Default location: `KUROOBI_WEIGHTS_DIR` if set, else walk up from the
 /// current directory looking for a `weights/` that contains
-/// `nnue-h16.bin` (the marker that the weights are complete).
+/// `nnue.bin` (the marker that the weights are complete).
 pub fn default_dir() -> PathBuf {
     if let Ok(d) = std::env::var("KUROOBI_WEIGHTS_DIR") {
         return PathBuf::from(d);
     }
     for c in ["weights", "../weights", "../../weights"] {
         let p = PathBuf::from(c);
-        if p.join("nnue-h16.bin").exists() {
+        if p.join("nnue.bin").exists() {
             return p;
         }
     }
@@ -215,7 +215,7 @@ impl Resources {
     pub fn nnue_path(&self) -> PathBuf {
         self.nnue
             .clone()
-            .unwrap_or_else(|| self.dir().join("nnue-h16.bin"))
+            .unwrap_or_else(|| self.dir().join("nnue.bin"))
     }
 
     pub fn book_path(&self) -> PathBuf {
@@ -310,7 +310,7 @@ mod tests {
             dir: Some(PathBuf::from("/tmp/w")),
             ..Default::default()
         };
-        assert_eq!(r.nnue_path(), PathBuf::from("/tmp/w/nnue-h16.bin"));
+        assert_eq!(r.nnue_path(), PathBuf::from("/tmp/w/nnue.bin"));
         assert_eq!(r.book_path(), PathBuf::from("/tmp/w/book.txt"));
     }
 

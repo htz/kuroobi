@@ -32,7 +32,7 @@ fn main() {
         use_book: false,
         ..Default::default()
     };
-    cfg.nnue = std::path::PathBuf::from("weights/nnue-h16.bin");
+    cfg.nnue = std::path::PathBuf::from("weights/nnue.bin");
     cfg.weights = std::path::PathBuf::from("weights/linear.bin");
     let mut eng = Engine::new(cfg).expect("engine");
 

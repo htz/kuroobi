@@ -180,7 +180,7 @@ fn walk_scratch(
 }
 
 fn main() {
-    let mut nnue_path = PathBuf::from("weights/nnue-h16.bin");
+    let mut nnue_path = PathBuf::from("weights/nnue.bin");
     let mut depth = 8u32;
     let mut val_files: Vec<PathBuf> = Vec::new();
     let mut which = String::from("egaroucid");

@@ -121,7 +121,7 @@ impl Default for EngineConfig {
             midgame_hash_bits: 22,
             solver_hash_bits: 22,
             weights: PathBuf::from("weights/linear.bin"),
-            nnue: PathBuf::from("weights/nnue-h16.bin"),
+            nnue: PathBuf::from("weights/nnue.bin"),
             nnue_base: PathBuf::new(),
             nnue_patterns: EGAROUCID_PATTERNS,
             book: PathBuf::from("weights/book.txt"),

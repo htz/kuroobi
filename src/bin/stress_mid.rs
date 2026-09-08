@@ -39,7 +39,7 @@ fn main() {
         .unwrap_or(8);
 
     let mut nn = Nnue::new(EGAROUCID_PATTERNS);
-    nn.load(std::path::Path::new("weights/nnue-h16.bin"))
+    nn.load(std::path::Path::new("weights/nnue.bin"))
         .expect("nnue");
     nn.quantize();
     let nn: &'static Nnue = Box::leak(Box::new(nn));

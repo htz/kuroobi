@@ -129,7 +129,7 @@ fn all_views(kifu: &str, plies: usize) -> Vec<(String, Board)> {
 #[ignore = "requires weights/ (not in git)"]
 fn eval_is_the_same_from_every_view() {
     let mut nn = Nnue::new(EGAROUCID_PATTERNS);
-    nn.load(std::path::Path::new("weights/nnue-h16.bin"))
+    nn.load(std::path::Path::new("weights/nnue.bin"))
         .expect("nnue");
     nn.quantize();
 

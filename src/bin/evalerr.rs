@@ -15,7 +15,7 @@ use kuroobi::record;
 use kuroobi::{Board, Color};
 
 fn main() {
-    let mut nnue_path = String::from("weights/nnue-h16.bin");
+    let mut nnue_path = String::from("weights/nnue.bin");
     let mut linear = false;
     let mut by_stage = false;
     let mut linear_path = String::from("weights/linear.bin");
