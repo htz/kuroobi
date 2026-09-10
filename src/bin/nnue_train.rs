@@ -10,7 +10,9 @@
 //!   nnue_train [--epochs n] [--lr f] [--limit n] [--val f]... [--out path]
 //!              [--select-by mse|mae|spread] [--val-by-stage] [--grid]
 //!              [--min-ply n] [--max-score-diff d] [--drop-random]
-//!              [--keep-above-ply n] [--search-value-to-ply n] <data-file>...
+//!              [--keep-above-ply n] [--search-value-to-ply n]
+//!              [--checkpoint path] [--resume path] [--keep-every n]
+//!              <data-file>...
 //!
 //! The four filter flags are `kuroobi::record::Filter` and apply to
 //! training and held-out data alike; none of them is on by default, and the
@@ -22,6 +24,18 @@
 //! right everywhere: against a perfect solve the game's result is 2.67 discs
 //! off at 28 empties and 0.04 at 24, while a depth-4 search is 2.69 and 2.17.
 //! The teacher in force is printed at startup alongside the filter.
+//!
+//! `--checkpoint <path>` writes weights, Adam moments and the loop's own
+//! state after every epoch, and `--resume <path>` picks one up. `--init`
+//! restores weights only, which is not the same thing: the moments start
+//! from zero and the model is thrown off its converged point for an epoch
+//! (+0.8 val at H=64, whatever the rate). A resumed run is
+//! indistinguishable from an uninterrupted one -- 1+1 epochs against 2
+//! straight through landed at val 173645.7401 and 173645.7407, inside the
+//! 0.0047 two uninterrupted runs differ by. `--resume` keeps writing to
+//! the file it came from unless `--checkpoint` says otherwise, and
+//! `--keep-every n` also parks a copy every n epochs. One checkpoint of
+//! the deployed shape is about 3.4 GB.
 //!
 //! `--select-by` chooses which held-out number keeps a snapshot in `--out`;
 //! `<out>.last.bin` holds the weights after every epoch regardless. The default
@@ -428,6 +442,142 @@ fn train_pass(
     })
 }
 
+/// Everything a resumed run needs that is neither a weight nor a moment.
+///
+/// Kept as plain `key value` lines at the head of the file so that
+/// `head -c 512 run.ckpt` says what a 5 GB blob is. Unknown keys are
+/// ignored and missing ones keep their default, so a checkpoint written by
+/// an older build still resumes -- the alternative, refusing it, throws
+/// away the run this whole feature exists to protect.
+#[derive(Default)]
+struct CkptHeader {
+    epoch: usize,
+    mb_step: u64,
+    mb_total_steps: u64,
+    plateau_lr: f32,
+    stale: usize,
+    best: f64,
+    rng: u64,
+    swa_n: usize,
+}
+
+/// Magic and version. Bumped only when the *layout* changes; a new header
+/// key does not need it, because unknown keys are skipped.
+const CKPT_MAGIC: &[u8; 8] = b"BBRVCK01";
+/// The header is a fixed-size block so the payload starts at a known
+/// offset and the file can be inspected without parsing anything.
+const CKPT_HEADER_LEN: usize = 512;
+
+/// Write weights, moments and loop state as one file.
+///
+/// One file, not three: a resume has to pair the moments with the exact
+/// weights they were computed against, and three paths can be updated
+/// out of step. Written to `.part` and renamed, because the machine dying
+/// mid-write is the event this guards against, and a half-written
+/// checkpoint that looks complete is worse than none.
+fn write_checkpoint(
+    path: &std::path::Path,
+    nn: &Nnue,
+    adam: &AdamState,
+    h: &CkptHeader,
+    swa: Option<&(Vec<f32>, usize)>,
+) -> std::io::Result<()> {
+    use std::io::Write;
+    let tmp = path.with_extension("part");
+    {
+        let f = std::fs::File::create(&tmp)?;
+        let mut w = std::io::BufWriter::with_capacity(1 << 20, f);
+        let text = format!(
+            "epoch {}\nmb_step {}\nmb_total_steps {}\nplateau_lr {}\nstale {}\nbest {}\n\
+             rng {}\nswa_n {}\n",
+            h.epoch, h.mb_step, h.mb_total_steps, h.plateau_lr, h.stale, h.best, h.rng, h.swa_n
+        );
+        let mut head = [b' '; CKPT_HEADER_LEN];
+        let bytes = text.as_bytes();
+        if bytes.len() > CKPT_HEADER_LEN {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::InvalidData,
+                "checkpoint header does not fit",
+            ));
+        }
+        head[..bytes.len()].copy_from_slice(bytes);
+        w.write_all(CKPT_MAGIC)?;
+        w.write_all(&head)?;
+        // The weights inline, in `.bin` format, so the checkpoint is
+        // self-contained and can be read by anything that reads weights.
+        let mut bin: Vec<u8> = Vec::new();
+        nn.write_to(&mut bin)?;
+        w.write_all(&(bin.len() as u64).to_le_bytes())?;
+        w.write_all(&bin)?;
+        adam.write_state(&mut w)?;
+        let (acc, _) = match swa {
+            Some((a, n)) => (a.as_slice(), *n),
+            None => (&[][..], 0),
+        };
+        w.write_all(&(acc.len() as u64).to_le_bytes())?;
+        for x in acc {
+            w.write_all(&x.to_le_bytes())?;
+        }
+        w.flush()?;
+    }
+    std::fs::rename(&tmp, path)
+}
+
+/// Read back what [`write_checkpoint`] wrote.
+fn read_checkpoint(
+    path: &std::path::Path,
+    nn: &mut Nnue,
+    adam: &mut AdamState,
+) -> std::io::Result<(CkptHeader, Vec<f32>)> {
+    use std::io::Read;
+    let f = std::fs::File::open(path)?;
+    let mut r = std::io::BufReader::with_capacity(1 << 20, f);
+    let mut magic = [0u8; 8];
+    r.read_exact(&mut magic)?;
+    if &magic != CKPT_MAGIC {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::InvalidData,
+            "not a checkpoint",
+        ));
+    }
+    let mut head = [0u8; CKPT_HEADER_LEN];
+    r.read_exact(&mut head)?;
+    let mut h = CkptHeader::default();
+    for line in String::from_utf8_lossy(&head).lines() {
+        let mut it = line.split_whitespace();
+        let (Some(k), Some(v)) = (it.next(), it.next()) else {
+            continue;
+        };
+        match k {
+            "epoch" => h.epoch = v.parse().unwrap_or(0),
+            "mb_step" => h.mb_step = v.parse().unwrap_or(0),
+            "mb_total_steps" => h.mb_total_steps = v.parse().unwrap_or(0),
+            "plateau_lr" => h.plateau_lr = v.parse().unwrap_or(0.0),
+            "stale" => h.stale = v.parse().unwrap_or(0),
+            "best" => h.best = v.parse().unwrap_or(f64::INFINITY),
+            "rng" => h.rng = v.parse().unwrap_or(0),
+            "swa_n" => h.swa_n = v.parse().unwrap_or(0),
+            _ => {}
+        }
+    }
+    let mut u8b = [0u8; 8];
+    r.read_exact(&mut u8b)?;
+    let bin_len = u64::from_le_bytes(u8b) as usize;
+    let mut bin = vec![0u8; bin_len];
+    r.read_exact(&mut bin)?;
+    nn.read_from(&mut &bin[..])?;
+    adam.read_state(&mut r)?;
+    r.read_exact(&mut u8b)?;
+    let n = u64::from_le_bytes(u8b) as usize;
+    let mut swa = vec![0.0f32; n];
+    let mut b4 = [0u8; 4];
+    for x in swa.iter_mut() {
+        r.read_exact(&mut b4)?;
+        *x = f32::from_le_bytes(b4);
+    }
+    Ok((h, swa))
+}
+
 fn main() -> ExitCode {
     let mut epochs = 10usize;
     let mut lr = 0.02f32;
@@ -472,6 +622,16 @@ fn main() -> ExitCode {
     let mut interleave = false;
     let mut val_cap: Option<usize> = None;
     let mut init: Option<PathBuf> = None;
+    /* Where to leave a resumable state, and where to pick one up.
+    Separate from `--init`, which restores weights and nothing else: a run
+    restarted that way begins with zeroed Adam moments, and the first epoch
+    after such a restart cost +0.8 val at H=64 whatever the rate. */
+    let mut checkpoint: Option<PathBuf> = None;
+    let mut resume: Option<PathBuf> = None;
+    /* Keep every Nth epoch's checkpoint under its own name. Off by
+    default: one of these is the weights plus two moments plus a slow copy,
+    which for the deployed shape is about 5 GB. */
+    let mut keep_every = 0usize;
     let mut which_patterns = String::from("nnue");
     /* A frozen linear evaluator under the net.
 
@@ -540,6 +700,9 @@ fn main() -> ExitCode {
             "--interleave" => interleave = true,
             "--val-cap" => val_cap = Some(it.next().unwrap().parse().unwrap()),
             "--init" => init = Some(PathBuf::from(it.next().unwrap())),
+            "--checkpoint" => checkpoint = Some(PathBuf::from(it.next().unwrap())),
+            "--resume" => resume = Some(PathBuf::from(it.next().unwrap())),
+            "--keep-every" => keep_every = it.next().unwrap().parse().unwrap(),
             "--base" => base_path = Some(PathBuf::from(it.next().unwrap())),
             other if other.starts_with('-') => {
                 eprintln!("unknown option {other}");
@@ -632,6 +795,24 @@ fn main() -> ExitCode {
         None => None,
     };
 
+    /* A run resumed without `--checkpoint` would stop being resumable at
+    the moment it was resumed, which is the opposite of what was asked
+    for. Keep writing to the file it came from. */
+    if checkpoint.is_none() {
+        checkpoint.clone_from(&resume);
+    }
+    if resume.is_some() && init.is_some() {
+        eprintln!("--resume and --init both restore weights; pass one");
+        return ExitCode::FAILURE;
+    }
+    if resume.is_some() && !adam {
+        eprintln!("--resume restores Adam moments, so it needs --adam");
+        return ExitCode::FAILURE;
+    }
+    if resume.is_some() && gpu {
+        eprintln!("--resume does not cover the GPU trainer's own moments");
+        return ExitCode::FAILURE;
+    }
     let mut nn = Nnue::new(patterns);
     match &init {
         // Warm start: keep training a model instead of starting over.
@@ -758,11 +939,17 @@ fn main() -> ExitCode {
 
     let mut swa_sum: Option<(Vec<f32>, usize)> = None;
 
-    let mut state = 0x9E3779B97F4A7C15u64;
-    let mut rand = move || {
+    /* The shuffle's generator, in a cell rather than captured by value, so
+    a checkpoint can record where it had got to. Resuming with a fresh
+    generator would re-walk the shard order the run already used, which is
+    not the same run continued. */
+    let rng_state = std::cell::Cell::new(0x9E3779B97F4A7C15u64);
+    let rand = || {
+        let mut state = rng_state.get();
         state ^= state >> 12;
         state ^= state << 25;
         state ^= state >> 27;
+        rng_state.set(state);
         state.wrapping_mul(0x2545F4914F6CDD1D)
     };
     let mut best = if val.is_empty() {
@@ -799,7 +986,42 @@ fn main() -> ExitCode {
     step size falls without the model being moved first. */
     let mut plateau_lr = lr;
     let mut stale = 0usize;
-    for epoch in 1..=epochs {
+    let mut first_epoch = 1usize;
+    if let Some(path) = &resume {
+        let Some(ad) = adam_state.as_mut() else {
+            eprintln!("--resume needs --adam");
+            return ExitCode::FAILURE;
+        };
+        match read_checkpoint(path, &mut nn, ad) {
+            Ok((h, swa)) => {
+                first_epoch = h.epoch + 1;
+                mb_step = h.mb_step;
+                mb_total_steps = h.mb_total_steps;
+                plateau_lr = h.plateau_lr;
+                stale = h.stale;
+                best = h.best;
+                rng_state.set(h.rng);
+                if h.swa_n > 0 && !swa.is_empty() {
+                    swa_sum = Some((swa, h.swa_n));
+                }
+                nn.set_so_grid(so_grid);
+                println!(
+                    "resumed {} at epoch {} (next {first_epoch}), best {best:.4}, lr {plateau_lr:.8}",
+                    path.display(),
+                    h.epoch
+                );
+                if first_epoch > epochs {
+                    println!("nothing left to do: --epochs {epochs} already reached");
+                    return ExitCode::SUCCESS;
+                }
+            }
+            Err(e) => {
+                eprintln!("resume {} failed: {e}", path.display());
+                return ExitCode::FAILURE;
+            }
+        }
+    }
+    for epoch in first_epoch..=epochs {
         let t = Instant::now();
         // Cosine annealing over the run (`--cosine`): lr0 -> ~0 in one sweep,
         // replacing hand-tuned lr ladders. Otherwise geometric `--decay`.
@@ -995,6 +1217,31 @@ fn main() -> ExitCode {
         if let Err(e) = nn.save(&last) {
             eprintln!("save failed: {e}");
             return ExitCode::FAILURE;
+        }
+        /* The checkpoint goes out after the weights, so a crash between
+        the two leaves a checkpoint one epoch behind rather than one that
+        claims an epoch it does not hold. */
+        if let (Some(path), Some(ad)) = (&checkpoint, adam_state.as_ref()) {
+            let h = CkptHeader {
+                epoch,
+                mb_step,
+                mb_total_steps,
+                plateau_lr,
+                stale,
+                best: if is_best { vm } else { best },
+                rng: rng_state.get(),
+                swa_n: swa_sum.as_ref().map_or(0, |(_, n)| *n),
+            };
+            if let Err(e) = write_checkpoint(path, &nn, ad, &h, swa_sum.as_ref()) {
+                eprintln!("checkpoint failed: {e}");
+                return ExitCode::FAILURE;
+            }
+            if keep_every > 0 && epoch.is_multiple_of(keep_every) {
+                let kept = path.with_extension(format!("e{epoch}.ckpt"));
+                if let Err(e) = std::fs::copy(path, &kept) {
+                    eprintln!("keeping {}: {e}", kept.display());
+                }
+            }
         }
         if is_best {
             best = vm;

@@ -845,7 +845,209 @@ pub struct AdamState {
     touched: Vec<Vec<u32>>,
 }
 
+/// Every `Vec<f32>` moment table in [`AdamState`], in one fixed order.
+///
+/// A macro rather than two hand-written lists: the two sides of a
+/// checkpoint have to agree table for table, and a list that can drift out
+/// of step with its twin is a corruption bug that only shows up as a
+/// resumed run training slightly wrong.
+macro_rules! adam_flat_tables {
+    ($s:ident, $f:ident) => {
+        $f!($s.m_ft);
+        $f!($s.v_ft);
+        $f!($s.m_ft_bias);
+        $f!($s.v_ft_bias);
+        $f!($s.m_out_w);
+        $f!($s.v_out_w);
+        $f!($s.m_out_b);
+        $f!($s.v_out_b);
+        $f!($s.m_num_w);
+        $f!($s.v_num_w);
+        $f!($s.m_pw);
+        $f!($s.v_pw);
+        $f!($s.m_mob_w);
+        $f!($s.v_mob_w);
+        $f!($s.m_mlp_l1_w);
+        $f!($s.v_mlp_l1_w);
+        $f!($s.m_mlp_l1_b);
+        $f!($s.v_mlp_l1_b);
+        $f!($s.m_mlp_l2_w);
+        $f!($s.v_mlp_l2_w);
+        $f!($s.m_mlp_l2_b);
+        $f!($s.v_mlp_l2_b);
+        $f!($s.m_mlp_out_w);
+        $f!($s.v_mlp_out_w);
+        $f!($s.m_mlp_mob_w);
+        $f!($s.v_mlp_mob_w);
+        $f!($s.m_pa);
+        $f!($s.v_pa);
+        $f!($s.m_pa_bias);
+        $f!($s.v_pa_bias);
+    };
+}
+
+/// Every `Vec<Vec<f32>>` in [`AdamState`], same contract as
+/// [`adam_flat_tables`].
+macro_rules! adam_nested_tables {
+    ($s:ident, $f:ident) => {
+        $f!($s.m_so);
+        $f!($s.v_so);
+        $f!($s.la_slow);
+    };
+}
+
 impl AdamState {
+    /// Write everything a resumed run needs, and nothing it does not.
+    ///
+    /// In: the moments, the step counter behind Adam's bias correction, the
+    /// per-row last-step stamps the sparse catch-up replays from, the
+    /// Lookahead slow copy, and the hyperparameters -- because a resume
+    /// under different ones is a different optimizer wearing the same
+    /// moments.
+    ///
+    /// Out: `grad_scratch`, `row_stamp`, `pa_scratch`, `pa_stamp`,
+    /// `pa_touched` and `touched`. All six are rebuilt from scratch inside
+    /// one batch, so writing them would add gigabytes that say nothing.
+    pub fn write_state(&self, w: &mut impl std::io::Write) -> std::io::Result<()> {
+        for v in [self.beta1, self.beta2, self.eps, self.wd, self.la_alpha] {
+            w.write_all(&v.to_le_bytes())?;
+        }
+        for v in [self.t, self.la_k, self.la_step, self.stamp_cur] {
+            w.write_all(&v.to_le_bytes())?;
+        }
+        w.write_all(&[u8::from(self.legacy_optimizer)])?;
+        let me = self;
+        macro_rules! put {
+            ($t:expr) => {{
+                w.write_all(&($t.len() as u64).to_le_bytes())?;
+                for x in $t.iter() {
+                    w.write_all(&x.to_le_bytes())?;
+                }
+            }};
+        }
+        adam_flat_tables!(me, put);
+        put!(me.ft_last);
+        put!(me.pa_last);
+        macro_rules! put_nested {
+            ($t:expr) => {{
+                w.write_all(&($t.len() as u64).to_le_bytes())?;
+                for inner in $t.iter() {
+                    put!(inner);
+                }
+            }};
+        }
+        adam_nested_tables!(me, put_nested);
+        Ok(())
+    }
+
+    /// Read back what [`write_state`](Self::write_state) wrote.
+    ///
+    /// Lengths are checked against the tables this state was built with,
+    /// so a checkpoint from a different model shape is refused rather than
+    /// resized into something that trains on nonsense.
+    pub fn read_state(&mut self, r: &mut impl std::io::Read) -> std::io::Result<()> {
+        use std::io::{Error, ErrorKind, Read};
+        let r = &mut *r;
+        let mut f4 = [0u8; 4];
+        let mut f32_of = |r: &mut dyn Read| -> std::io::Result<f32> {
+            r.read_exact(&mut f4)?;
+            Ok(f32::from_le_bytes(f4))
+        };
+        self.beta1 = f32_of(r)?;
+        self.beta2 = f32_of(r)?;
+        self.eps = f32_of(r)?;
+        self.wd = f32_of(r)?;
+        self.la_alpha = f32_of(r)?;
+        let mut u4 = [0u8; 4];
+        let mut u32_of = |r: &mut dyn Read| -> std::io::Result<u32> {
+            r.read_exact(&mut u4)?;
+            Ok(u32::from_le_bytes(u4))
+        };
+        self.t = u32_of(r)?;
+        self.la_k = u32_of(r)?;
+        self.la_step = u32_of(r)?;
+        self.stamp_cur = u32_of(r)?;
+        let mut b1 = [0u8; 1];
+        r.read_exact(&mut b1)?;
+        self.legacy_optimizer = b1[0] != 0;
+
+        fn take_len(r: &mut dyn Read) -> std::io::Result<usize> {
+            let mut b = [0u8; 8];
+            r.read_exact(&mut b)?;
+            Ok(u64::from_le_bytes(b) as usize)
+        }
+        fn fill_f32(r: &mut dyn Read, dst: &mut [f32]) -> std::io::Result<()> {
+            let n = take_len(r)?;
+            if n != dst.len() {
+                return Err(Error::new(
+                    ErrorKind::InvalidData,
+                    format!(
+                        "checkpoint table is {n} cells, this model wants {}",
+                        dst.len()
+                    ),
+                ));
+            }
+            let mut b = [0u8; 4];
+            for x in dst.iter_mut() {
+                r.read_exact(&mut b)?;
+                *x = f32::from_le_bytes(b);
+            }
+            Ok(())
+        }
+        fn fill_u32(r: &mut dyn Read, dst: &mut [u32]) -> std::io::Result<()> {
+            let n = take_len(r)?;
+            if n != dst.len() {
+                return Err(Error::new(
+                    ErrorKind::InvalidData,
+                    format!(
+                        "checkpoint table is {n} cells, this model wants {}",
+                        dst.len()
+                    ),
+                ));
+            }
+            let mut b = [0u8; 4];
+            for x in dst.iter_mut() {
+                r.read_exact(&mut b)?;
+                *x = u32::from_le_bytes(b);
+            }
+            Ok(())
+        }
+
+        let me = self;
+        macro_rules! get {
+            ($t:expr) => {
+                fill_f32(r, &mut $t)?
+            };
+        }
+        adam_flat_tables!(me, get);
+        fill_u32(r, &mut me.ft_last)?;
+        fill_u32(r, &mut me.pa_last)?;
+        macro_rules! get_nested {
+            ($t:expr) => {{
+                let outer = take_len(r)?;
+                /* Lookahead's slow copy is allocated on the first sync, so
+                an empty one here is not a mismatch -- it is a run that had
+                not reached step k yet. Grow to match and read on. */
+                if $t.len() != outer {
+                    $t.resize(outer, Vec::new());
+                }
+                for inner in $t.iter_mut() {
+                    let n = take_len(r)?;
+                    if inner.len() != n {
+                        inner.resize(n, 0.0);
+                    }
+                    let mut b = [0u8; 4];
+                    for x in inner.iter_mut() {
+                        r.read_exact(&mut b)?;
+                        *x = f32::from_le_bytes(b);
+                    }
+                }
+            }};
+        }
+        adam_nested_tables!(me, get_nested);
+        Ok(())
+    }
+
     /// Turn Lookahead on with the trained settings (`k = 6`,
     /// `alpha = 0.5`). `k = 0` leaves it off.
     pub fn set_lookahead(&mut self, k: u32, alpha: f32) {
@@ -4951,10 +5153,23 @@ impl Nnue {
 
     /// Serialize weights to a simple little-endian file.
     pub fn save(&self, path: &std::path::Path) -> std::io::Result<()> {
-        use std::io::Write;
         let tmp = path.with_extension("tmp");
         {
             let mut w = std::io::BufWriter::new(std::fs::File::create(&tmp)?);
+            self.write_to(&mut w)?;
+            std::io::Write::flush(&mut w)?;
+        }
+        std::fs::rename(&tmp, path)
+    }
+
+    /// The bytes [`save`](Self::save) would write, to any sink.
+    ///
+    /// Split out so a checkpoint can hold the weights inline rather than
+    /// beside a file that could be replaced under it: a resumed run must
+    /// get the weights the moments were computed against, not whatever
+    /// happens to sit at the same path later.
+    pub fn write_to(&self, w: &mut impl std::io::Write) -> std::io::Result<()> {
+        {
             /* Format 07 = 06 + the head's mobility input. Older formats
             still load (missing tables zeroed / replicated), so their
             evaluations are unchanged -- a zero head is exactly "no head",
@@ -5026,9 +5241,8 @@ impl Nnue {
             {
                 w.write_all(&v.to_le_bytes())?;
             }
-            w.flush()?;
         }
-        std::fs::rename(&tmp, path)
+        Ok(())
     }
 
     /// Load weights previously written by [`save`](Self::save).
@@ -5147,8 +5361,16 @@ impl Nnue {
     }
 
     pub fn load(&mut self, path: &std::path::Path) -> std::io::Result<()> {
-        use std::io::Read;
         let mut r = std::io::BufReader::new(std::fs::File::open(path)?);
+        self.read_from(&mut r)
+    }
+
+    /// Take weights from any source in [`save`](Self::save)'s format.
+    /// Counterpart to [`write_to`](Self::write_to); see it for why a
+    /// checkpoint reads the weights from inside itself.
+    pub fn read_from(&mut self, r: &mut impl std::io::Read) -> std::io::Result<()> {
+        use std::io::Read;
+        let mut r = &mut *r;
         let mut magic = [0u8; 8];
         r.read_exact(&mut magic)?;
         /* 01 = shared bias, no disc table; 02 = shared bias with table;
@@ -5251,41 +5473,41 @@ impl Nnue {
             }
             Ok(())
         };
-        read_into(&mut r, &mut self.ft)?;
+        read_into(r, &mut self.ft)?;
         if staged_bias {
-            read_into(&mut r, &mut self.ft_bias)?;
+            read_into(r, &mut self.ft_bias)?;
         } else {
             let mut one = vec![0.0f32; H];
-            read_into(&mut r, &mut one)?;
+            read_into(r, &mut one)?;
             for st in 0..STAGE_COUNT {
                 self.ft_bias[st * H..st * H + H].copy_from_slice(&one);
             }
         }
-        read_into(&mut r, &mut self.out_w)?;
-        read_into(&mut r, &mut self.out_b)?;
+        read_into(r, &mut self.out_w)?;
+        read_into(r, &mut self.out_b)?;
         self.num_w.fill(0.0);
         if has_num {
-            read_into(&mut r, &mut self.num_w)?;
+            read_into(r, &mut self.num_w)?;
         }
         self.pw.fill(0.0);
         if has_pw {
-            read_into(&mut r, &mut self.pw)?;
+            read_into(r, &mut self.pw)?;
         }
         self.mob_w.fill(0.0);
         if has_mob {
-            read_into(&mut r, &mut self.mob_w)?;
+            read_into(r, &mut self.mob_w)?;
         }
         self.mlp_out_w.fill(0.0);
         if has_mlp {
-            read_into(&mut r, &mut self.mlp_l1_w)?;
-            read_into(&mut r, &mut self.mlp_l1_b)?;
-            read_into(&mut r, &mut self.mlp_l2_w)?;
-            read_into(&mut r, &mut self.mlp_l2_b)?;
-            read_into(&mut r, &mut self.mlp_out_w)?;
+            read_into(r, &mut self.mlp_l1_w)?;
+            read_into(r, &mut self.mlp_l1_b)?;
+            read_into(r, &mut self.mlp_l2_w)?;
+            read_into(r, &mut self.mlp_l2_b)?;
+            read_into(r, &mut self.mlp_out_w)?;
         }
         self.mlp_mob_w.fill(0.0);
         if has_mlp_mob {
-            read_into(&mut r, &mut self.mlp_mob_w)?;
+            read_into(r, &mut self.mlp_mob_w)?;
         }
         /* A zero hidden layer is a dead subnetwork: the read-out's gradient is
         `err * activation`, that activation is zero, so the read-out never
@@ -5319,8 +5541,8 @@ impl Nnue {
             read_stages(&mut r, &mut self.so_out_b)?;
         }
         if pa_len > 0 {
-            read_into(&mut r, &mut self.pa)?;
-            read_into(&mut r, &mut self.pa_bias)?;
+            read_into(r, &mut self.pa)?;
+            read_into(r, &mut self.pa_bias)?;
         }
         self.refresh_so_grid();
         Ok(())
@@ -5449,6 +5671,50 @@ mod tests {
 
         std::fs::remove_file(&path).ok();
         std::fs::remove_dir(&dir).ok();
+    }
+
+    /// A checkpoint's moments survive the round trip, and a mismatched one
+    /// is refused rather than resized.
+    ///
+    /// The refusal is the half worth testing: moments read into the wrong
+    /// shape do not crash, they train -- badly, for hours, on numbers that
+    /// belong to another model.
+    #[test]
+    fn adam_moments_survive_a_round_trip_and_a_mismatch_does_not() {
+        let mut nn = Nnue::new(EGAROUCID_PATTERNS);
+        nn.init_weights();
+        let mut a = AdamState::new(&nn);
+        a.wd = 0.0125;
+        a.t = 4321;
+        a.stamp_cur = 77;
+        for (i, x) in a.m_ft.iter_mut().enumerate().take(64) {
+            *x = i as f32 * 0.5;
+        }
+        for (i, x) in a.v_out_w.iter_mut().enumerate().take(16) {
+            *x = 1.0 / (i as f32 + 2.0);
+        }
+        a.ft_last[3] = 99;
+        let mut buf: Vec<u8> = Vec::new();
+        a.write_state(&mut buf).unwrap();
+
+        let mut b = AdamState::new(&nn);
+        b.read_state(&mut &buf[..]).unwrap();
+        assert_eq!(b.t, 4321);
+        assert_eq!(b.stamp_cur, 77);
+        assert_eq!(b.wd, 0.0125);
+        assert_eq!(b.ft_last[3], 99);
+        assert_eq!(&b.m_ft[..64], &a.m_ft[..64]);
+        assert_eq!(&b.v_out_w[..16], &a.v_out_w[..16]);
+
+        // A state built for a different feature set has different table
+        // lengths, so the same bytes must not load into it.
+        let mut other = Nnue::new(crate::pattern::COMPACT_PATTERNS);
+        other.init_weights();
+        let mut c = AdamState::new(&other);
+        assert!(
+            c.read_state(&mut &buf[..]).is_err(),
+            "moments from another model shape must be refused"
+        );
     }
 
     /// The margin never goes below a disc, however far the quadratic is
