@@ -12,7 +12,7 @@ use std::path::Path;
 use crate::board::Board;
 use crate::color::Color;
 use crate::evaluator::{AdamOptimizer, Evaluator, Optimizer, STAGE_COUNT};
-use crate::record::{self, Filter};
+use crate::record::{self, Filter, TeacherPolicy};
 
 /// One training position: bitboards plus the teacher value in discs.
 /// Bit layout in memory is this crate's file-major; converters translate.
@@ -56,7 +56,7 @@ pub fn load_examples_binary_into(
     out: &mut Vec<Example>,
     limit: Option<usize>,
 ) -> io::Result<usize> {
-    load_examples_filtered_into(path, out, limit, &Filter::NONE)
+    load_examples_filtered_into(path, out, limit, &Filter::NONE, &TeacherPolicy::DEFAULT)
 }
 
 /// Append the examples of a record file that pass `filter` to `out`,
@@ -66,6 +66,7 @@ pub fn load_examples_filtered_into(
     out: &mut Vec<Example>,
     limit: Option<usize>,
     filter: &Filter,
+    policy: &TeacherPolicy,
 ) -> io::Result<usize> {
     let in_file = record::count(path)?;
     let want = limit.map_or(in_file, |l| l.min(in_file));
@@ -76,7 +77,7 @@ pub fn load_examples_filtered_into(
             return false;
         }
         if filter.keeps(&r) {
-            out.push(r.example());
+            out.push(r.example_with(policy));
             n += 1;
         }
         true
@@ -92,12 +93,13 @@ pub fn load_examples_range_into(
     start: usize,
     len: usize,
     filter: &Filter,
+    policy: &TeacherPolicy,
 ) -> io::Result<usize> {
     out.reserve(len);
     let mut n = 0usize;
     record::for_each_range(path, start, len, |r| {
         if filter.keeps(&r) {
-            out.push(r.example());
+            out.push(r.example_with(policy));
             n += 1;
         }
         true
@@ -365,7 +367,14 @@ mod tests {
             [10.0, 3.0, 30.0, 10.0]
         );
         let mut kept = Vec::new();
-        let n = load_examples_filtered_into(&bin_path, &mut kept, None, &Filter::TRAINING).unwrap();
+        let n = load_examples_filtered_into(
+            &bin_path,
+            &mut kept,
+            None,
+            &Filter::TRAINING,
+            &TeacherPolicy::DEFAULT,
+        )
+        .unwrap();
         assert_eq!(n, 1);
         assert_eq!(kept[0].score, 10.0);
 

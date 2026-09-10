@@ -1,5 +1,5 @@
 /target
-/train_data
+/data
 # Ignore generated output by directory, never by extension — anything that
 # lands at the root should show up in git status. *.bin used to be ignored,
 # which is why 33 weight files piled up at the root unnoticed.

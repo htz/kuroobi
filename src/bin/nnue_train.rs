@@ -10,12 +10,18 @@
 //!   nnue_train [--epochs n] [--lr f] [--limit n] [--val f]... [--out path]
 //!              [--select-by mse|mae|spread] [--val-by-stage] [--grid]
 //!              [--min-ply n] [--max-score-diff d] [--drop-random]
-//!              [--keep-above-ply n] <data-file>...
+//!              [--keep-above-ply n] [--search-value-to-ply n] <data-file>...
 //!
 //! The four filter flags are `kuroobi::record::Filter` and apply to
 //! training and held-out data alike; none of them is on by default, and the
 //! filter in force is printed at startup. `Filter::TRAINING` is
 //! `--min-ply 8 --max-score-diff 12 --drop-random --keep-above-ply 50`.
+//!
+//! `--search-value-to-ply n` reads the search value rather than the game's
+//! final disc difference up to ply n. A record carries both, and neither is
+//! right everywhere: against a perfect solve the game's result is 2.67 discs
+//! off at 28 empties and 0.04 at 24, while a depth-4 search is 2.69 and 2.17.
+//! The teacher in force is printed at startup alongside the filter.
 //!
 //! `--select-by` chooses which held-out number keeps a snapshot in `--out`;
 //! `<out>.last.bin` holds the weights after every epoch regardless. The default
@@ -33,7 +39,7 @@ use std::time::Instant;
 use kuroobi::evaluator::{Evaluator, STAGE_COUNT};
 use kuroobi::nnue::{sym_board, AdamState, Nnue};
 use kuroobi::pattern::{COMPACT_PATTERNS, EGAROUCID_PATTERNS, NNUE_PATTERNS};
-use kuroobi::record::Filter;
+use kuroobi::record::{Filter, TeacherPolicy};
 use kuroobi::trainer::{
     count_examples_binary, load_examples_filtered_into, load_examples_range_into, Example,
 };
@@ -456,6 +462,9 @@ fn main() -> ExitCode {
     let mut threads = 1usize;
     let mut limit: Option<usize> = None;
     let mut filter = Filter::NONE;
+    // The corpus carries both a search value and the game's result; which one
+    // teaches which stage is a decision for the run, not for the data.
+    let mut policy = TeacherPolicy::DEFAULT;
     let mut out = PathBuf::from("weights/nnue.bin");
     let mut val_files: Vec<PathBuf> = Vec::new();
     let mut data_files: Vec<PathBuf> = Vec::new();
@@ -507,6 +516,9 @@ fn main() -> ExitCode {
             "--wd" => wd = it.next().unwrap().parse().unwrap(),
             "--minibatch" => minibatch = it.next().unwrap().parse().unwrap(),
             "--adam" => adam = true,
+            "--search-value-to-ply" => {
+                policy.search_value_to_ply = it.next().and_then(|v| v.parse().ok());
+            }
             "--sym-train" => sym_train = true,
             "--grid" => so_grid = true,
             // Wrap AdamW in Lookahead(k=6, alpha=0.5). It rewrites every
@@ -546,14 +558,14 @@ fn main() -> ExitCode {
     let load = |files: &[PathBuf]| -> std::io::Result<Vec<Example>> {
         let mut v = Vec::new();
         for f in files {
-            load_examples_filtered_into(f, &mut v, limit, &filter)?;
+            load_examples_filtered_into(f, &mut v, limit, &filter, &policy)?;
         }
         Ok(v)
     };
     let load_parts = |parts: &[(usize, usize, usize)]| -> std::io::Result<Vec<Example>> {
         let mut v = Vec::new();
         for &(i, start, len) in parts {
-            load_examples_range_into(&data_files[i], &mut v, start, len, &filter)?;
+            load_examples_range_into(&data_files[i], &mut v, start, len, &filter, &policy)?;
         }
         Ok(v)
     };
@@ -586,12 +598,13 @@ fn main() -> ExitCode {
         val = val.iter().step_by(step).copied().collect();
     }
     println!(
-        "train {} records in {} files (shard budget {}) / val {} / filter {}",
+        "train {} records in {} files (shard budget {}) / val {} / filter {} / teacher {}",
         total,
         data_files.len(),
         max_examples,
         val.len(),
-        filter.describe()
+        filter.describe(),
+        policy.describe()
     );
 
     /* A weight file belongs to the pattern set it was trained on -- the
@@ -656,7 +669,7 @@ fn main() -> ExitCode {
         nn.set_num_w(&vec![0.0f32; n_buckets]);
         for (fi, f) in data_files.iter().enumerate() {
             let mut ex = Vec::new();
-            if let Err(e) = load_examples_filtered_into(f, &mut ex, limit, &filter) {
+            if let Err(e) = load_examples_filtered_into(f, &mut ex, limit, &filter, &policy) {
                 eprintln!("load failed: {e}");
                 return ExitCode::FAILURE;
             }

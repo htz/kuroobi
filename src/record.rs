@@ -107,6 +107,16 @@ impl Record {
         }
     }
 
+    /// The position as the trainer sees it, with `policy` deciding which of
+    /// the two values the record carries becomes the teacher.
+    pub fn example_with(&self, policy: &TeacherPolicy) -> Example {
+        Example {
+            black: self.mover,
+            white: self.opponent,
+            score: policy.value(self),
+        }
+    }
+
     /// The position as the trainer sees it: mover as Black, teacher as score.
     pub fn example(&self) -> Example {
         Example {
@@ -215,6 +225,52 @@ impl Filter {
 }
 
 /// Number of records in a file, from its size alone.
+/// Which of the two values a record carries becomes the teacher.
+///
+/// A record holds both the game's final disc difference and a search value,
+/// and neither is right everywhere. Measured against a perfect solve, the
+/// final disc difference is 2.67 discs off at 28 empties and 0.04 at 24,
+/// while a depth-4 search is 2.69 and 2.17: the opening wants the search
+/// value, the endgame wants the game's result, and the crossover sits between
+/// ply 32 and 34.
+///
+/// Where to switch is a training decision, not a property of the position, so
+/// it lives here rather than as a flag byte on disk -- the record keeps saying
+/// what the game said and a later run can read it the other way.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct TeacherPolicy {
+    /// Up to and including this ply, take the search value even when the game
+    /// has a result. `None` is the rule the corpus was written under.
+    pub search_value_to_ply: Option<u8>,
+}
+
+impl TeacherPolicy {
+    /// Read every record the way [`Record::teacher`] does.
+    pub const DEFAULT: TeacherPolicy = TeacherPolicy {
+        search_value_to_ply: None,
+    };
+
+    /// How the policy reads a record, for the run's own log.
+    pub fn describe(&self) -> String {
+        match self.search_value_to_ply {
+            None => String::from("game result"),
+            Some(t) => format!("search value to ply {t}, game result after"),
+        }
+    }
+
+    /// The teacher for `r` under this policy.
+    pub fn value(&self, r: &Record) -> f32 {
+        // The first two plies stay 0 by symmetry either way.
+        if r.ply <= 1 {
+            return 0.0;
+        }
+        match self.search_value_to_ply {
+            Some(t) if r.ply <= t => r.score,
+            _ => r.teacher(),
+        }
+    }
+}
+
 pub fn count(path: &Path) -> io::Result<usize> {
     Ok(std::fs::metadata(path)?.len() as usize / SIZE)
 }
@@ -370,6 +426,25 @@ mod tests {
         assert_eq!(b[20] as i8, -6);
         assert_eq!(f32::from_le_bytes(b[16..20].try_into().unwrap()), -3.5);
         assert_eq!(u16::from_le_bytes([b[25], b[26]]), 0xBEEF);
+    }
+
+    #[test]
+    fn a_policy_can_prefer_the_search_value() {
+        let mut r = sample();
+        r.ply = 20;
+        r.random = false;
+        // Without a policy the game's result wins.
+        assert_eq!(TeacherPolicy::DEFAULT.value(&r), -6.0);
+        let p = TeacherPolicy {
+            search_value_to_ply: Some(32),
+        };
+        assert_eq!(p.value(&r), -3.5);
+        // Past the threshold the game's result wins again.
+        r.ply = 33;
+        assert_eq!(p.value(&r), -6.0);
+        // The first two plies stay 0 either way.
+        r.ply = 1;
+        assert_eq!(p.value(&r), 0.0);
     }
 
     #[test]
