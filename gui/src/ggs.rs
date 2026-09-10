@@ -3269,6 +3269,14 @@ fn apply_threads(ctx: &mut Ctx) {
         e.set_threads(n);
     }
     ctx.snap.lock().unwrap().engine.threads = n;
+    /* The workers play the games; `ctx.engine` only analyzes and
+    learns. Without this the setting reached the analysis engine and
+    the screen and stopped there, so a game already running kept the
+    count it started with while the screen said otherwise -- the same
+    defect `set_use_book` carries a note about, in the same file. It
+    only looked like it worked because `share_threads` runs again when
+    the next game is assigned. */
+    ctx.share_threads();
 }
 
 /// Parse an update/join block, refresh board state, and think+play if
