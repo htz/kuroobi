@@ -163,7 +163,7 @@ export const ggsApi = {
   /** Whether rated play is forbidden (KUROOBI_NO_RATED=1). */
   noRated: () => call<boolean>('ggs_no_rated', {}),
   chat: (target: string, text: string) => call('ggs_chat', { target, text }),
-  matchCmd: (id: string, verb: 'undo' | 'abort' | 'resign' | 'tell', arg = '') =>
+  matchCmd: (id: string, verb: 'undo' | 'abort' | 'break' | 'resign' | 'tell', arg = '') =>
     call('ggs_match_cmd', { id, verb, arg }),
   setFormula: (kind: 'aform' | 'dform', expr: string) =>
     call('ggs_set_formula', { kind, expr }),

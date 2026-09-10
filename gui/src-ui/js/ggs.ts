@@ -421,64 +421,56 @@ function readTime(k: string, v: string): string {
 
 /* ---------------- Formula rendering ---------------- */
 // Render accept/decline formulas for display. Notation per
-// `tell /os help formula`; m* = us, o* = the opponent.
-
-/* Substituted in order, so a replacement must never contain another
- * entry's identifier. */
-const formulaWords = (): [RegExp, string][] => [
-  [/\bsaved\b/g, t('ggs.formula.saved')],
-  [/\brated\b/g, t('ggs.formula.rated')],
-  [/\brand\b/g, t('ggs.formula.rand')],
-  [/\bsynchro\b/g, t('ggs.formula.synchro')],
-  [/\bkomi\b/g, t('ggs.formula.komi')],
-  [/\banti\b/g, t('ggs.formula.anti')],
-  [/\bdiscs\b/g, t('ggs.formula.discs')],
-  [/\bsize\b/g, t('ggs.formula.size')],
-  [/\bstored\b/g, t('ggs.formula.stored')],
-  [/\bplaying\b/g, t('ggs.formula.playing')],
-  [/\bmc\b/g, t('ggs.formula.mc')],
-  [/\boc\b/g, t('ggs.formula.oc')],
-  [/\bmt1\b/g, t('ggs.formula.mt1')],
-  [/\bot1\b/g, t('ggs.formula.ot1')],
-  [/\bmt2\b/g, t('ggs.formula.mt2')],
-  [/\bot2\b/g, t('ggs.formula.ot2')],
-  [/\bmt3\b/g, t('ggs.formula.mt3')],
-  [/\bot3\b/g, t('ggs.formula.ot3')],
-  [/\bmm1\b/g, t('ggs.formula.mm1')],
-  [/\bom1\b/g, t('ggs.formula.om1')],
-  [/\bml1\b/g, t('ggs.formula.ml1')],
-  [/\bol1\b/g, t('ggs.formula.ol1')],
-  [/\bmr\b/g, t('ggs.formula.mr')],
-  [/\bor\b/g, t('ggs.formula.or')],
-];
-
-/// Render one leaf (`size!=8`, `!saved`); the tree stays intact, so
-/// `&`/`|` are not handled here.
-///
-/// Structure first, words last: an English label is several words, and
-/// substituting it before the `!x` rule left the negation attached to
-/// the first word only.
-function readAtom(src: string): string {
-  let s = ` ${src} `
-    .replace(/([^\s()!=<>]+)\s*==\s*F\b/g,                   // ml1==F
-      (_m, x: string) => t('ggs.formula.is_false', { x }))
-    .replace(/([^\s()!=<>]+)\s*==\s*T\b/g,
-      (_m, x: string) => t('ggs.formula.is_true', { x }))
-    .replace(/!=\s*\?/g, ' ' + t('ggs.formula.not_any'))     // mc!=?
-    .replace(/!=/g, ' ≠ ')                              // other comparisons
-    .replace(/!\s*([^\s()!]+)/g,                             // !saved
-      (_m, x: string) => t('ggs.formula.is_false', { x }))
-    .replace(/\s*(<=|>=|<|>)\s*/g, ' $1 ');
-  for (const [re, word] of formulaWords()) s = s.replace(re, word);
-  return s.replace(/\s+/g, ' ').trim();
-}
+// `tell /os help formula`.
+//
+// `m*` is whoever wrote the formula and `o*` is the other side, so the
+// same source reads differently depending on whose profile it sits on.
+// Rendering both as "me" and "the opponent" regardless -- which this did
+// until 2026-09-10 -- tells a reader looking at someone else's profile
+// the exact opposite of what the condition says.
 
 /** Formula tree; `all` = every condition (&), `any` = any (|). */
-export type Formula =
+type Formula =
   | { kind: 'all' | 'any'; kids: Formula[] }
-  | { kind: 'atom'; text: string; src: string };
+  | { kind: 'atom'; src: string };
 
 /* ---- Vocabulary for building formulas ---- */
+
+/// Which side `m*` and `o*` name. Editing one's own formula, `m*` is
+/// "me"; reading someone else's, `m*` is them and `o*` is us.
+export interface Who {
+  me: string;
+  them: string;
+}
+
+export const defaultWho = (): Who => ({
+  me: t('ggs.formula.who.me'),
+  them: t('ggs.formula.who.them'),
+});
+
+/// Variables that exist once per side. The `m`/`o` prefix picks the
+/// side; the rest of the name picks the wording, so the two can never
+/// drift apart.
+const SIDED: Record<string, string> = {
+  mc: 'c', oc: 'c',
+  ml1: 'l1', ol1: 'l1',
+  mm1: 'm1', om1: 'm1',
+  mr: 'r', or: 'r',
+  mt1: 't1', ot1: 't1',
+  mt2: 't2', ot2: 't2',
+  mt3: 't3', ot3: 't3',
+};
+
+/// The display name of one variable, from whoever's point of view.
+export function varLabel(name: string, who: Who = defaultWho()): string {
+  const side = SIDED[name];
+  if (side) {
+    return t(`ggs.formula.side.${side}`, { who: name.startsWith('m') ? who.me : who.them });
+  }
+  // `playing` has no counterpart: it is always the formula's owner.
+  if (name === 'playing') return t('ggs.formula.side.playing', { who: who.me });
+  return t(`ggs.formula.${name}`);
+}
 
 /** Variables usable in conditions; the editor picks input widgets by `type`. */
 export interface FormulaVar {
@@ -494,32 +486,23 @@ export interface FormulaVar {
 
 /// Available variables: the subset of `tell /os help formula` that
 /// matters for judging offers, in display order.
-export const formulaVars = (): FormulaVar[] => [
-  { name: 'rated', label: t('ggs.formula.rated'), type: 'bool' },
-  { name: 'rand', label: t('ggs.formula.rand'), type: 'bool' },
-  { name: 'synchro', label: t('ggs.formula.synchro'), type: 'bool' },
-  { name: 'saved', label: t('ggs.formula.saved'), type: 'bool' },
-  { name: 'komi', label: t('ggs.formula.komi'), type: 'bool' },
-  { name: 'anti', label: t('ggs.formula.anti'), type: 'bool' },
-  { name: 'ml1', label: t('ggs.formula.ml1'), type: 'bool' },
-  { name: 'ol1', label: t('ggs.formula.ol1'), type: 'bool' },
-  { name: 'size', label: t('ggs.formula.size'), type: 'num', def: 8 },
-  { name: 'discs', label: t('ggs.formula.discs'), type: 'num', def: 16 },
-  { name: 'mr', label: t('ggs.formula.mr'), type: 'num', def: 2000 },
-  { name: 'or', label: t('ggs.formula.or'), type: 'num', def: 2000 },
-  { name: 'mt1', label: t('ggs.formula.var.mt1'), type: 'num', unit: t('ggs.unit.seconds'), def: 600 },
-  { name: 'ot1', label: t('ggs.formula.var.ot1'), type: 'num', unit: t('ggs.unit.seconds'), def: 600 },
-  { name: 'mt2', label: t('ggs.formula.var.mt2'), type: 'num', unit: t('ggs.unit.seconds'), def: 0 },
-  { name: 'ot2', label: t('ggs.formula.var.ot2'), type: 'num', unit: t('ggs.unit.seconds'), def: 0 },
-  { name: 'mt3', label: t('ggs.formula.var.mt3'), type: 'num', unit: t('ggs.unit.seconds'), def: 0 },
-  { name: 'ot3', label: t('ggs.formula.var.ot3'), type: 'num', unit: t('ggs.unit.seconds'), def: 0 },
-  { name: 'mm1', label: t('ggs.formula.mm1'), type: 'num', def: 0 },
-  { name: 'om1', label: t('ggs.formula.om1'), type: 'num', def: 0 },
-  { name: 'stored', label: t('ggs.formula.stored'), type: 'num', def: 0 },
-  { name: 'playing', label: t('ggs.formula.playing'), type: 'num', def: 0 },
-  { name: 'mc', label: t('ggs.formula.mc'), type: 'color' },
-  { name: 'oc', label: t('ggs.formula.oc'), type: 'color' },
-];
+export const formulaVars = (who: Who = defaultWho()): FormulaVar[] => {
+  const sec = t('ggs.unit.seconds');
+  const v = (name: string, type: FormulaVar['type'], rest: Partial<FormulaVar> = {}): FormulaVar =>
+    ({ name, label: varLabel(name, who), type, ...rest });
+  return [
+    v('rated', 'bool'), v('rand', 'bool'), v('synchro', 'bool'), v('saved', 'bool'),
+    v('komi', 'bool'), v('anti', 'bool'), v('ml1', 'bool'), v('ol1', 'bool'),
+    v('size', 'num', { def: 8 }), v('discs', 'num', { def: 16 }),
+    v('mr', 'num', { def: 2000 }), v('or', 'num', { def: 2000 }),
+    v('mt1', 'num', { unit: sec, def: 600 }), v('ot1', 'num', { unit: sec, def: 600 }),
+    v('mt2', 'num', { unit: sec, def: 0 }), v('ot2', 'num', { unit: sec, def: 0 }),
+    v('mt3', 'num', { unit: sec, def: 0 }), v('ot3', 'num', { unit: sec, def: 0 }),
+    v('mm1', 'num', { def: 0 }), v('om1', 'num', { def: 0 }),
+    v('stored', 'num', { def: 0 }), v('playing', 'num', { def: 0 }),
+    v('mc', 'color'), v('oc', 'color'),
+  ];
+};
 
 export const FORMULA_OPS = ['=', '≠', '<', '>', '≤', '≥'] as const;
 export type FormulaOp = (typeof FORMULA_OPS)[number];
@@ -537,8 +520,8 @@ export type Cond =
   | { kind: 'all' | 'any'; kids: Cond[] }
   | { kind: 'atom'; name: string; op: FormulaOp; val: string; neg: boolean };
 
-export const varOf = (name: string): FormulaVar | undefined =>
-  formulaVars().find((v) => v.name === name);
+export const varOf = (name: string, who: Who = defaultWho()): FormulaVar | undefined =>
+  formulaVars(who).find((v) => v.name === name);
 
 /// Color options. GGS notation is `*` = black / `O` = white; `b`/`w`
 /// are rejected. Distinct from the screen's stone colors — never mix.
@@ -555,20 +538,30 @@ export const boolOps = (): [boolean, string][] =>
 export const isGroup = (c: Cond): c is { kind: 'all' | 'any'; kids: Cond[] } =>
   c.kind !== 'atom';
 
-/// Render one leaf (for the read-only tree); same vocabulary as
-/// `readAtom`, different entry point.
-export function condLabel(c: Cond): string {
+/// Render one leaf, from `who`'s point of view.
+export function condLabel(c: Cond, who: Who = defaultWho()): string {
   if (isGroup(c)) return c.kind === 'all' ? t('ggs.formula.all_of') : t('ggs.formula.any_of');
-  const v = varOf(c.name);
-  const label = v?.label ?? c.name;
-  if (!v || v.type === 'bool') return c.neg ? t('ggs.formula.is_false', { x: label }) : label;
+  const v = varOf(c.name, who);
+  /* An unrecognised name is shown as written and marked. Rendering it
+     as a bare word made `md` look like a condition the screen had read
+     and understood, when nothing here knows what it means. */
+  if (!v) return t('ggs.formula.unknown', { x: condToSrc(c) });
+  const label = v.label;
+  if (v.type === 'bool') {
+    return c.neg ? t('ggs.formula.is_false', { x: label }) : t('ggs.formula.is_true', { x: label });
+  }
   if (v.type === 'color') {
     const name = colorChoices().find(([x]) => x === c.val)?.[1] ?? c.val;
     return c.op === '≠'
       ? t('ggs.formula.color_is_not', { x: label, c: name })
       : t('ggs.formula.color_is', { x: label, c: name });
   }
-  return `${label} ${c.op} ${c.val}${v.unit ?? ''}`;
+  /* The right-hand side can be another variable (`mt1!=ot1` = "the two
+     clocks differ"). Left raw it printed as `≠ ot1秒`, which names an
+     identifier and glues a unit onto it. */
+  const other = varOf(c.val, who);
+  const rhs = other ? other.label : `${c.val}${v.unit ?? ''}`;
+  return `${label} ${c.op} ${rhs}`;
 }
 
 /// Parse one leaf into editable form. Unknown spellings keep their
@@ -630,7 +623,7 @@ function parseFormula(src: string): Formula {
       return inner;
     }
     const raw = toks[i++] ?? '';
-    return { kind: 'atom', text: readAtom(raw), src: raw };
+    return { kind: 'atom', src: raw };
   };
   const join = (kind: 'all' | 'any', sep: string, next: () => Formula): Formula => {
     const kids = [next()];

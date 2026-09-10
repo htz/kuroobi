@@ -140,6 +140,12 @@ export interface MatchView {
   ended: '' | 'finished' | 'adjourned' | 'aborted';
   /** Who left, for adjournments. */
   left_by: string;
+  /**
+   * Rated / unrated / not seen. GGS keeps an adjourned game only when
+   * it is rated, so adjourning means something different in each case
+   * and the third state must not be guessed away.
+   */
+  rated: boolean | null;
   /** Archive id (post-game); used to re-fetch the record. */
   archive: string;
   /** Current activity: '' / 'think' / 'ponder' / 'solve' / 'select'. */

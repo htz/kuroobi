@@ -282,6 +282,13 @@ pub struct EvalPoint {
 pub struct MatchView {
     pub id: String,
     pub base: String,
+    /// Rated, unrated, or not seen. Three states on purpose: GGS keeps
+    /// an adjourned game only when it is rated (measured 2026-09-10 --
+    /// `break` on an unrated synchro match ended both boards and left
+    /// `stored 0`), so "adjourn" means something different in each
+    /// case, and guessing on a missing `+ match` line would promise a
+    /// record that is not kept.
+    pub rated: Option<bool>,
     /// Whether it ended (finished/adjourned/aborted); stays listed.
     pub over: bool,
     /// How it ended: empty = ongoing, `finished`, `adjourned`,
@@ -553,6 +560,9 @@ pub fn demo_snapshot() -> Snapshot {
         c
     };
     let face = |id: &str, my: &str, turn: &str, mine: u64, opp: u64| MatchView {
+        // Unrated, so the demo shows the adjourn wording that warns the
+        // record is not kept -- the case worth seeing.
+        rated: Some(false),
         id: id.into(),
         base: ".71".into(),
         over: false,
@@ -1606,6 +1616,10 @@ struct Ctx {
     dirty: bool,
     /// Verification auto-watch queue (KUROOBI_GGS_AUTOWATCH=auto).
     auto_watch: Vec<String>,
+    /// Rated flag per match, keyed by the parent id. It arrives on the
+    /// `+ match` line, which precedes the board state, so it cannot
+    /// live on `MatchState`.
+    rated_by_base: HashMap<String, bool>,
     /// Games awaiting learning import, advanced one search at a time
     /// between games; each carries its `LearnEntry` material (the match
     /// record is gone by the time the import finishes).
@@ -2024,6 +2038,7 @@ pub fn run(
         last_emit: Instant::now(),
         dirty: true,
         auto_watch: Vec::new(),
+        rated_by_base: HashMap::new(),
         learn_jobs: VecDeque::new(),
         local_stop,
         local_activity,
@@ -2801,6 +2816,13 @@ pub fn run(
                         if let Some(mrest) = rest.strip_prefix("match ") {
                             let id = mrest.split_whitespace().next().unwrap_or("").to_string();
                             if !id.is_empty() {
+                                /* The line ends in `R` or `U`. Nothing
+                                later carries it, so catch it here. */
+                                if let Some(f) = mrest.split_whitespace().last() {
+                                    if f == "R" || f == "U" {
+                                        ctx.rated_by_base.insert(base_id(&id), f == "R");
+                                    }
+                                }
                                 let mine = mrest.contains(&login);
                                 if mine {
                                     ctx.notify(
@@ -4057,6 +4079,7 @@ fn sync_matches(ctx: &mut Ctx, matches: &HashMap<String, MatchState>) {
         .map(|(id, m)| MatchView {
             id: id.clone(),
             base: base_id(id),
+            rated: ctx.rated_by_base.get(&base_id(id)).copied(),
             ended: m.ended.clone(),
             left_by: m.left_by.clone(),
             archive: m.archive.clone(),

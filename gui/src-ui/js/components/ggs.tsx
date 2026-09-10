@@ -12,7 +12,7 @@ import logo from '../../assets/kuroobi.svg?raw';
 // (level table, formula variables and colors all diverged once).
 import {
   colorChoices, boolOps, FORMULA_OPS, formulaVars, varOf, condToSrc, condLabel,
-  isGroup, type Cond as SharedCond, type FormulaOp,
+  isGroup, type Cond as SharedCond, type FormulaOp, type Who,
 } from '../ggs';
 
 /* GGS-specific components: left nav, resource meters, match list,
@@ -339,12 +339,13 @@ export function Tag({ tone = 'sub', children }: { tone?: 'sub' | 'accent' | 'ok'
  * them as a tree, not as text. Read-only places use FormulaView. */
 
 export type Cond = SharedCond;
+export type { Who };
 export { isGroup };
 
 /* Read-only tree. Groups (all-of / any-of) are shown by a 2px vertical
  * rule plus indent; --accent outermost, --border inside. */
-export function FormulaView({ node, top }: { node: Cond; top?: boolean }) {
-  if (node.kind === 'atom') return <CondChip c={node} />;
+export function FormulaView({ node, top, who }: { node: Cond; top?: boolean; who?: Who }) {
+  if (node.kind === 'atom') return <CondChip c={node} who={who} />;
   return (
     <div style={{
       borderLeft: '2px solid var(--' + (top ? 'accent' : 'border') + ')',
@@ -356,19 +357,24 @@ export function FormulaView({ node, top }: { node: Cond; top?: boolean }) {
       }}>{node.kind === 'all' ? t('ggs.formula.all_of') : t('ggs.formula.any_of')}</div>
       <div style={{ display: 'flex', flexWrap: 'wrap', gap: 5, alignItems: 'flex-start' }}>
         {node.kids.map((n, i) => isGroup(n)
-          ? <FormulaView key={i} node={n} />
-          : <CondChip key={i} c={n} />)}
+          ? <FormulaView key={i} node={n} who={who} />
+          : <CondChip key={i} c={n} who={who} />)}
       </div>
     </div>
   );
 }
 
-function CondChip({ c }: { c: Cond }) {
+function CondChip({ c, who }: { c: Cond; who?: Who }) {
+  // A name the vocabulary does not cover gets a dashed edge, so a
+  // reader can tell "this is what the formula says" from "this is what
+  // the screen could read".
+  const known = c.kind !== 'atom' || !!varOf(c.name, who);
   return (
     <span style={{
       padding: '2px var(--sp-2)', borderRadius: 'var(--r-1)', background: 'var(--panel)',
-      border: '1px solid var(--border)', fontSize: 'var(--fs-6)', color: 'var(--text)', fontFamily: 'var(--ff-mono)',
-    }}>{condLabel(c)}</span>
+      border: `1px ${known ? 'solid' : 'dashed'} var(--border)`, fontSize: 'var(--fs-6)',
+      color: known ? 'var(--text)' : 'var(--sub)', fontFamily: 'var(--ff-mono)',
+    }}>{condLabel(c, who)}</span>
   );
 }
 

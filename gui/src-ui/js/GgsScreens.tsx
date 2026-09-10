@@ -837,6 +837,7 @@ function GgsPlay({ snap, onNav, prefs, onKifu }: {
       </aside>
 
       <div className="k-scroll" style={{ flex: 1, minWidth: 0, minHeight: 0, padding: 'var(--sp-3)' }}>
+        {pair && <MatchActions id={cur} pair={pair} />}
         {/* Synchro pairs sit side by side, wrapping when narrow. */}
         <div style={{ display: 'flex', gap: 'var(--sp-3)', flexWrap: 'wrap', justifyContent: 'center' }}>
           {pair?.map((m, i) => (
@@ -847,6 +848,54 @@ function GgsPlay({ snap, onNav, prefs, onKifu }: {
           ))}
         </div>
       </div>
+    </div>
+  );
+}
+
+/// Resign and adjourn, for the match rather than for a board.
+///
+/// GGS splits a synchro match into `.N.0` and `.N.1` for moves and
+/// board state, but starts and ends it on the parent `.N` -- one
+/// `+ match .20`, one `- match .20 ... R -1.00` carrying the pair's
+/// combined result. So both verbs take the parent, and putting them on
+/// a board offered to end half a match, which is not a thing GGS can
+/// do. `resign` used to send the board id from here.
+///
+/// The record button stays per board: records are per board.
+function MatchActions({ id, pair }: { id: string; pair: MatchView[] }) {
+  const [ask, setAsk] = useState<'' | 'resign' | 'break'>('');
+  const mine = pair.some((m) => m.my_color);
+  const live = !pair.every((m) => m.over);
+  if (!mine || !live) return null;
+  const send = (verb: 'resign' | 'break') => { setAsk(''); void ggsApi.matchCmd(id, verb); };
+  /* What adjourning actually does here. GGS keeps the record only for
+     a rated game, so the same button either parks the match or throws
+     it away, and the reader has to be told which before pressing. */
+  const rated = pair.find((m) => m.rated != null)?.rated ?? null;
+  const adjournBody = rated === true ? t('ggs.play.adjourn_body_rated')
+    : rated === false ? t('ggs.play.adjourn_body_unrated')
+    : t('ggs.play.adjourn_body_unknown');
+  return (
+    <div style={{
+      display: 'flex', gap: 'var(--sp-2)', justifyContent: 'flex-end',
+      paddingBottom: 'var(--sp-3)',
+    }}>
+      {/* Not `danger`: adjourning is undone by resuming, and two red
+          buttons side by side invite the wrong one. */}
+      <Button title={t('ggs.play.adjourn_hint')}
+              onClick={() => setAsk('break')}>{t('ggs.adjourn')}</Button>
+      <Button variant="danger" title={t('ggs.play.resign_hint')}
+              onClick={() => setAsk('resign')}>{t('ggs.resign')}</Button>
+      {ask === 'break' && (
+        <Confirm title={t('ggs.play.adjourn_confirm')} ok={t('ggs.play.adjourn_ok')}
+                 body={<>{adjournBody}</>}
+                 onCancel={() => setAsk('')} onOk={() => send('break')} />
+      )}
+      {ask === 'resign' && (
+        <Confirm title={t('ggs.play.resign_confirm')} ok={t('ggs.play.resign_ok')} danger
+                 body={<>{t('ggs.play.resign_body')}</>}
+                 onCancel={() => setAsk('')} onOk={() => send('resign')} />
+      )}
     </div>
   );
 }
@@ -874,7 +923,6 @@ function MatchBoard({ snap, m, clock, prefs, onKifu, face }: {
   /** Board index in a synchro pair (1-based); omit for single games. */
   face?: number;
 }) {
-  const [resign, setResign] = useState(false);
   const observer = !m.my_color;
   const { black, white } = countDiscs(m.cells);
   // Mark the last placed stone (passes place none; skip them).
@@ -1059,18 +1107,7 @@ function MatchBoard({ snap, m, clock, prefs, onKifu, face }: {
                                       m.ggf || m.moves.join(''), m.archive || undefined)}>
           {t('ggs.game_record')}
         </Button>
-        {!observer && !m.over && (
-          <Button variant="danger"
-                  title={t('ggs.play.resign_hint')}
-                  onClick={() => setResign(true)}>{t('ggs.resign')}</Button>
-        )}
       </div>
-      {resign && (
-        <Confirm title={t('ggs.play.resign_confirm')} ok={t('ggs.play.resign_ok')} danger
-                 body={<>{t('ggs.play.resign_body')}</>}
-                 onCancel={() => setResign(false)}
-                 onOk={() => { setResign(false); void ggsApi.matchCmd(m.id, 'resign'); }} />
-      )}
     </div>
   );
 }
@@ -1795,6 +1832,10 @@ function UserDetail({ snap, name, tab, onTab, onBack, onNav, onKifu }: {
   const rates = bothRates(u);
   const playing = snap.ongoing.some((o) => o.names.includes(name));
   const fields = snap.fingers[name]?.fields ?? [];
+  /* A formula is written from its owner's side: `m*` is this player and
+     `o*` is whoever offers them a game. Showing both as "me" and "the
+     opponent" here reversed every side-dependent condition. */
+  const who = { me: name, them: t('ggs.formula.who.me') };
   // Own history sits under the login key like everyone's (only the
   // request uses '').
   const rows = snap.history[name] ?? [];
@@ -1852,7 +1893,7 @@ function UserDetail({ snap, name, tab, onTab, onBack, onNav, onKifu }: {
                         width: 'var(--w-label)', flex: 'none', fontSize: 'var(--fs-6)', color: 'var(--sub)',
                       }}>{r.label}</span>
                       <span style={{ flex: 1, minWidth: 0, fontSize: 'var(--fs-5)' }}>
-                        {cond ? <FormulaView node={cond} top />
+                        {cond ? <FormulaView node={cond} top who={who} />
                           : ['accept', 'decline', 'request'].includes(key) ? t('ggs.formula.unset')
                           : fingerValue(r.key, r.value)}
                       </span>
