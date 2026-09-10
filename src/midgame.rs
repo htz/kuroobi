@@ -162,22 +162,6 @@ pub fn mpc_reduced_depth(depth: u32) -> u32 {
     2 * (depth / 4) + (depth & 1)
 }
 
-/// Standard deviation of the error between a `pc_depth` search and a `depth`
-/// search at `empties` empties. Fitted from measurements for this pattern
-/// evaluator (see `search::mpc_sigma`); the NNUE output is in the same
-/// disc-difference units, and it is *more* accurate, so this is a safe
-/// (slightly conservative) model to prune against.
-fn mpc_sigma(empties: u32, depth: u32, pc_depth: u32) -> f32 {
-    const A: f32 = -0.068941;
-    const B: f32 = 0.368775;
-    const C: f32 = -0.713476;
-    const QA: f32 = 0.010223;
-    const QB: f32 = 0.647219;
-    const QC: f32 = 4.050545;
-    let s = A * empties as f32 + B * depth as f32 + C * pc_depth as f32;
-    QA * s * s + QB * s + QC
-}
-
 /// Confidence to read the rest of the game with, or `None` to search the
 /// midgame instead. The schedule, anchored at an exact solve from 24 empties,
 /// reads to the end at 93% from 30 empties, 98% from 28, 99% from 26
@@ -1685,13 +1669,24 @@ impl NnueSearch {
         //   to MPC_MAX_LEVEL deep, which recursively degrades the very
         //   values the margins are calibrated for.
         // `MPC_OLD=1` restores the old behaviour for A/B runs.
-        if self.mpc
+        /* The margins come from the loaded weights, and a model that was
+        never calibrated has none. It then searches unpruned, which costs
+        real strength -- 300 games at 200 ms/move scored 37.7% against the
+        same weights with a measured sigma. That is deliberate: an
+        uncalibrated model should be obviously slow rather than quietly
+        pruned against numbers nobody measured for it. */
+        let sigma = if self.mpc
             && depth >= mpc_min_depth()
             && self.probcut_level < MPC_MAX_LEVEL
             && alpha.is_finite()
             && beta.is_finite()
             && beta - alpha <= PVS_EPS * 1.5
         {
+            self.nn.mpc_sigma()
+        } else {
+            None
+        };
+        if let Some(sigma) = sigma {
             let pd = mpc_reduced_depth(depth);
             if pd >= 1 && pd < depth {
                 // Helpers widen the margin (prune less) so same-depth workers
@@ -1699,7 +1694,7 @@ impl NnueSearch {
                 // tightening, is what makes a helper's entry safe for the main
                 // thread to reuse.
                 let t = mpc_t() * MPC_RELAX_STEP.powi(self.mpc_relax as i32);
-                let margin = t * mpc_sigma(b.empty_count() as u32, depth, pd);
+                let margin = t * sigma.value(b.empty_count() as u32, depth, pd);
                 let old_style = mpc_old();
                 let (try_high, try_low) = if old_style {
                     (true, true)

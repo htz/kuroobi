@@ -1528,6 +1528,68 @@ fn apply_index_perm(index: usize, size: usize, perm: &[usize]) -> usize {
 }
 
 /// One NNUE model over a fixed pattern library.
+/// The six coefficients of the ProbCut margin model, measured for one
+/// particular set of weights.
+///
+/// Sigma belongs to the evaluator, not to the search: it is the standard
+/// deviation of `search(depth) - search(pc_depth)`, and a model that
+/// evaluates differently misses by a different amount. Carrying it inside
+/// the weights file is what makes the two switch together.
+///
+/// Between 2026-07-20 and 2026-09-10 the NNUE searcher pruned against
+/// constants fitted for the linear evaluator. Measuring them turned out to
+/// cost little: the borrowed numbers ran 1.15-1.28x wide, and a 300-game
+/// match at 200 ms/move put the measured sigma at 50.5% against them
+/// (95% CI 44.8..56.2) -- no detectable difference. So this is not a fix
+/// for a known loss; it is a rule that keeps the margins and the weights
+/// from drifting apart in the future, when the gap may not be so small.
+///
+/// What the same match did show is that ProbCut itself is worth 62.3%
+/// (+87 Elo) against searching unpruned, which is why "no sigma" has to
+/// be a loud state and not a quiet one.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct MpcSigma {
+    /// `s = a*empties + b*depth + c*pc_depth`, read out as `qa*s^2 + qb*s + qc`.
+    pub a: f32,
+    pub b: f32,
+    pub c: f32,
+    pub qa: f32,
+    pub qb: f32,
+    pub qc: f32,
+}
+
+impl MpcSigma {
+    /// Coefficient count, which is also the file's field count.
+    pub const LEN: usize = 6;
+
+    pub fn from_array(v: [f32; MpcSigma::LEN]) -> MpcSigma {
+        MpcSigma {
+            a: v[0],
+            b: v[1],
+            c: v[2],
+            qa: v[3],
+            qb: v[4],
+            qc: v[5],
+        }
+    }
+
+    pub fn to_array(self) -> [f32; MpcSigma::LEN] {
+        [self.a, self.b, self.c, self.qa, self.qb, self.qc]
+    }
+
+    /// Standard deviation, in discs, of the error a `pc_depth` probe makes
+    /// against a `depth` search at `empties` empties.
+    ///
+    /// Floored at a disc for the same reason `solver::selective_sigma` is:
+    /// the fit is a quadratic, so outside the measured range it can turn
+    /// down and even go negative, and a negative margin prunes everything.
+    #[inline]
+    pub fn value(&self, empties: u32, depth: u32, pc_depth: u32) -> f32 {
+        let s = self.a * empties as f32 + self.b * depth as f32 + self.c * pc_depth as f32;
+        (self.qa * s * s + self.qb * s + self.qc).max(1.0)
+    }
+}
+
 pub struct Nnue {
     /// A trained linear evaluator held underneath the net, its score added
     /// to the read-out's. The net is then trained on what the linear model
@@ -1703,6 +1765,11 @@ pub struct Nnue {
     /// The stacked read-out in its integer form; see `stack_q`.
     #[cfg(feature = "stackedout")]
     sq: stack_q::StackQ,
+
+    /// ProbCut margins measured against *these* weights, or `None` when the
+    /// model has never been calibrated. See [`MpcSigma`]; a `None` here
+    /// turns ProbCut off rather than falling back to a constant.
+    mpc_sigma: Option<MpcSigma>,
 }
 
 impl Nnue {
@@ -1793,7 +1860,22 @@ impl Nnue {
             ft_bias_f32: vec![0.0; FT_BIAS_LEN],
             ft_scale: 1.0,
             ft_scale32_for_bench: 1.0,
+            // Only a calibration run puts a sigma here; training never does.
+            mpc_sigma: None,
         }
+    }
+
+    /// The ProbCut margins measured for these weights, if any were.
+    pub fn mpc_sigma(&self) -> Option<MpcSigma> {
+        self.mpc_sigma
+    }
+
+    /// Record a calibration result. Only `mpccalib_nnue` should call this:
+    /// a sigma that was not measured against the weights it travels with is
+    /// worse than none at all, because the search then prunes confidently
+    /// against a number that means nothing.
+    pub fn set_mpc_sigma(&mut self, sigma: Option<MpcSigma>) {
+        self.mpc_sigma = sigma;
     }
 
     /// Build the int16 inference copies from the trained f32 weights. Call
@@ -4884,7 +4966,11 @@ impl Nnue {
             old model loads without error and evaluates wrongly. Retrain
             rather than convert; the weights were fitted to the other
             curve. */
-            w.write_all(b"BBRVNN09")?;
+            /* Format 10 = 09 + the ProbCut sigma this model was measured
+            with. It is written unconditionally, as a present flag and six
+            coefficients, so "never calibrated" is a state the file can
+            state rather than one a reader has to infer. */
+            w.write_all(b"BBRVNN10")?;
             // The accumulator width, which is what sizes `ft` -- twice the
             // model's working width under `pairmul`. A file written by one
             // build is rejected by the other on this field.
@@ -4906,6 +4992,14 @@ impl Nnue {
                 + self.so_out_w.len()
                 + self.so_out_b.len();
             w.write_all(&(so_len as u32).to_le_bytes())?;
+            w.write_all(&u32::from(self.mpc_sigma.is_some()).to_le_bytes())?;
+            for &v in &self
+                .mpc_sigma
+                .unwrap_or(MpcSigma::from_array([0.0; 6]))
+                .to_array()
+            {
+                w.write_all(&v.to_le_bytes())?;
+            }
             for &v in self
                 .ft
                 .iter()
@@ -4956,6 +5050,9 @@ impl Nnue {
     #[cfg(all(feature = "pairmul", feature = "pa128", feature = "stackedout"))]
     pub fn import_packed(&mut self, raw: &[u8]) -> std::io::Result<()> {
         use std::io::{Error, ErrorKind};
+        // An imported net has never been calibrated here, whatever it was
+        // calibrated with elsewhere.
+        self.mpc_sigma = None;
         const L1_PAD_IN: usize = 288;
         const L2_PAD_IN: usize = SO_L1 * 2;
         const OUT_PAD_IN: usize = 320;
@@ -5058,7 +5155,9 @@ impl Nnue {
         03 = both per-stage. Legacy formats replicate the bias so their
         evaluations match exactly. */
         let (staged_bias, has_num, has_pw, has_mob, has_mlp, has_mlp_mob) = match &magic {
-            b"BBRVNN09" | b"BBRVNN08" | b"BBRVNN07" => (true, true, true, true, true, true),
+            b"BBRVNN10" | b"BBRVNN09" | b"BBRVNN08" | b"BBRVNN07" => {
+                (true, true, true, true, true, true)
+            }
             b"BBRVNN06" => (true, true, true, true, true, false),
             b"BBRVNN05" => (true, true, true, true, false, false),
             b"BBRVNN04" => (true, true, true, false, false, false),
@@ -5088,7 +5187,7 @@ impl Nnue {
             ));
         }
         r.read_exact(&mut u)?;
-        let pa_len = if &magic == b"BBRVNN09" {
+        let pa_len = if &magic == b"BBRVNN10" || &magic == b"BBRVNN09" {
             r.read_exact(&mut u)?;
             u32::from_le_bytes(u) as usize
         } else {
@@ -5101,12 +5200,29 @@ impl Nnue {
                  the accumulator has a phase-adaptive half",
             ));
         }
-        let so_len = if &magic == b"BBRVNN09" || &magic == b"BBRVNN08" {
+        let so_len = if &magic == b"BBRVNN10" || &magic == b"BBRVNN09" || &magic == b"BBRVNN08" {
             r.read_exact(&mut u)?;
             u32::from_le_bytes(u) as usize
         } else {
             0
         };
+        /* Everything written before format 10 predates the rule that a
+        model carries its own ProbCut margins, so it has none -- which
+        turns ProbCut off for it. That is the intended outcome: those files
+        were pruned against the linear evaluator's numbers. */
+        self.mpc_sigma = None;
+        if &magic == b"BBRVNN10" {
+            r.read_exact(&mut u)?;
+            let present = u32::from_le_bytes(u) != 0;
+            let mut coef = [0.0f32; MpcSigma::LEN];
+            for c in coef.iter_mut() {
+                r.read_exact(&mut u)?;
+                *c = f32::from_le_bytes(u);
+            }
+            if present {
+                self.mpc_sigma = Some(MpcSigma::from_array(coef));
+            }
+        }
         let want_so = self.so_l1_w.len()
             + self.so_l1_b.len()
             + self.so_l2_w.len()
@@ -5303,6 +5419,46 @@ quant_acc!(
 mod tests {
     use super::*;
     use crate::pattern::EGAROUCID_PATTERNS;
+
+    /// A sigma survives a save/load round trip, and its absence survives
+    /// too. The second half is the one that matters: "no measurement" has
+    /// to reach the search as `None`, because the search treats it as
+    /// "do not prune". A reader that quietly turned it into zeros would
+    /// prune against a margin of one disc at every node.
+    #[test]
+    fn a_file_carries_the_sigma_it_was_measured_with_or_says_it_has_none() {
+        let dir = std::env::temp_dir().join(format!("kuroobi-sigma-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("m.bin");
+
+        let mut nn = Nnue::new(EGAROUCID_PATTERNS);
+        nn.init_weights();
+        assert_eq!(nn.mpc_sigma(), None, "a fresh model has no measurement");
+        nn.save(&path).unwrap();
+        let mut back = Nnue::new(EGAROUCID_PATTERNS);
+        back.load(&path).unwrap();
+        assert_eq!(back.mpc_sigma(), None);
+
+        let s = MpcSigma::from_array([-0.05, 0.3, -0.6, 0.011, 0.5, 3.25]);
+        nn.set_mpc_sigma(Some(s));
+        nn.save(&path).unwrap();
+        let mut back = Nnue::new(EGAROUCID_PATTERNS);
+        back.load(&path).unwrap();
+        assert_eq!(back.mpc_sigma(), Some(s));
+        assert_eq!(back.mpc_sigma().unwrap().value(30, 8, 4), s.value(30, 8, 4));
+
+        std::fs::remove_file(&path).ok();
+        std::fs::remove_dir(&dir).ok();
+    }
+
+    /// The margin never goes below a disc, however far the quadratic is
+    /// pushed outside the range it was fitted on. A negative margin does
+    /// not prune conservatively -- it cuts every node.
+    #[test]
+    fn the_margin_has_a_floor() {
+        let s = MpcSigma::from_array([-1.0, 0.0, 0.0, 0.0, 1.0, 0.0]);
+        assert_eq!(s.value(60, 8, 4), 1.0);
+    }
 
     /// The product-gate backward pass must actually descend: repeated steps
     /// on one example drive the error toward the target, through all three

@@ -631,6 +631,12 @@ fn main() -> ExitCode {
         },
         None => nn.init_weights(),
     }
+    /* Training never carries a ProbCut sigma forward. Even one gradient
+    step makes the model evaluate differently, so the margins measured for
+    the model `--init` came from no longer describe this one; inheriting
+    them would leave a file that claims to be calibrated and is not.
+    `mpccalib_nnue` is the only writer. */
+    nn.set_mpc_sigma(None);
     nn.set_so_grid(so_grid);
     println!(
         "nnue: patterns={which_patterns} masks={} H={} features={}",
