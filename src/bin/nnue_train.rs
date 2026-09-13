@@ -51,11 +51,13 @@ use std::process::ExitCode;
 use std::time::Instant;
 
 use kuroobi::evaluator::{Evaluator, STAGE_COUNT};
-use kuroobi::nnue::{sym_board, AdamState, Nnue};
-use kuroobi::pattern::{COMPACT_PATTERNS, EGAROUCID_PATTERNS, NNUE_PATTERNS};
+use kuroobi::nnue::{AdamState, Nnue};
+use kuroobi::pattern::{
+    self, COMPACT_PATTERNS, EGAROUCID_PATTERNS, KUROOBI_PATTERNS, NNUE_PATTERNS,
+};
 use kuroobi::record::{Filter, TeacherPolicy};
 use kuroobi::trainer::{
-    count_examples_binary, load_examples_filtered_into, load_examples_range_into, Example,
+    count_examples_binary, load_examples_filtered_into, load_examples_range_into, Example, SymPlan,
 };
 
 /// Per-stage `[count, sum_sq, sum_abs, sum_err]` over a held-out set.
@@ -276,7 +278,7 @@ fn train_pass_minibatch(
     batch: usize,
     lr_for_step: &mut impl FnMut() -> f32,
     wd: f32,
-    sym_seed: u64,
+    sym: SymPlan,
 ) -> f64 {
     let threads = threads.max(1);
     while sinks.len() < threads {
@@ -314,23 +316,9 @@ fn train_pass_minibatch(
                         }
                         let lo = k * PIECE;
                         let hi = ((k + 1) * PIECE).min(chunk.len());
-                        let mut rs = sym_seed
-                            ^ (0x9E37_79B9_7F4A_7C15u64
-                                .wrapping_mul((k as u64 + 1) * 0x1000 + bno + 1));
+                        let mut rs = sym.stream((k as u64 + 1) * 0x1000 + bno + 1);
                         for ex in &chunk[lo..hi] {
-                            let ex = if sym_seed == 0 {
-                                *ex
-                            } else {
-                                rs ^= rs >> 12;
-                                rs ^= rs << 25;
-                                rs ^= rs >> 27;
-                                let i = (rs.wrapping_mul(0x2545_F491_4F6C_DD1D) >> 61) as u8;
-                                Example {
-                                    black: sym_board(ex.black, i),
-                                    white: sym_board(ex.white, i),
-                                    score: ex.score,
-                                }
-                            };
+                            let ex = sym.apply(ex, &mut rs);
                             let board = ex.board();
                             let stage = Evaluator::stage(&board);
                             let discs = ex.black.count_ones() as usize;
@@ -341,7 +329,7 @@ fn train_pass_minibatch(
                                 stage,
                                 discs,
                                 mob,
-                                ex.score as f32 - base.map_or(0.0, |e| e.eval_indices(&board, &ix)),
+                                ex.score - base.map_or(0.0, |e| e.eval_indices(&board, &ix)),
                                 sink,
                             ) as f64;
                         }
@@ -365,7 +353,7 @@ fn train_pass(
     examples: &[Example],
     threads: usize,
     lr: f32,
-    sym_seed: u64,
+    sym: SymPlan,
 ) -> f64 {
     // Hogwild: workers share the model (and the moments) through raw pointers.
     // Single-threaded runs use the same path; two update rules would
@@ -386,21 +374,9 @@ fn train_pass(
                 per example (labels unchanged — rotation preserves value).
                 Unlike post-hoc averaging this improves the fit while
                 staying symmetric. Per-thread seeds vary the draw. */
-                let mut rs = sym_seed ^ (0x9E37_79B9_7F4A_7C15u64.wrapping_mul(ti as u64 + 1));
+                let mut rs = sym.stream(ti as u64 + 1);
                 for ex in part {
-                    let ex = if sym_seed == 0 {
-                        *ex
-                    } else {
-                        rs ^= rs >> 12;
-                        rs ^= rs << 25;
-                        rs ^= rs >> 27;
-                        let i = (rs.wrapping_mul(0x2545_F491_4F6C_DD1D) >> 61) as u8;
-                        Example {
-                            black: sym_board(ex.black, i),
-                            white: sym_board(ex.white, i),
-                            score: ex.score,
-                        }
-                    };
+                    let ex = sym.apply(ex, &mut rs);
                     let ex = &ex;
                     let board = ex.board();
                     let stage = Evaluator::stage(&board);
@@ -414,24 +390,10 @@ fn train_pass(
                     s += unsafe {
                         match av {
                             Some(a) => nn_ref.train_black_adam_shared(
-                                view,
-                                a,
-                                &ix,
-                                stage,
-                                discs,
-                                mob,
-                                ex.score as f32,
-                                lr,
+                                view, a, &ix, stage, discs, mob, ex.score, lr,
                             ),
-                            None => nn_ref.train_black_shared(
-                                view,
-                                &ix,
-                                stage,
-                                discs,
-                                mob,
-                                ex.score as f32,
-                                lr,
-                            ),
+                            None => nn_ref
+                                .train_black_shared(view, &ix, stage, discs, mob, ex.score, lr),
                         }
                     } as f64;
                 }
@@ -594,6 +556,7 @@ fn main() -> ExitCode {
     let mut minibatch = 0usize;
     let mut adam = false;
     let mut sym_train = false;
+    let mut sym_all = false;
     // Training on the engine's integer grid (see `Nnue::set_so_grid`). Off
     // by default: measured against the plain f32 run under the same
     // conditions (4 epochs, 25.5M positions) it changed nothing -- val MSE
@@ -633,6 +596,8 @@ fn main() -> ExitCode {
     which for the deployed shape is about 5 GB. */
     let mut keep_every = 0usize;
     let mut which_patterns = String::from("nnue");
+    let mut patterns_file: Option<PathBuf> = None;
+    let mut patterns_share = false;
     /* A frozen linear evaluator under the net.
 
     The net has to spend capacity learning the level of the score before it
@@ -664,6 +629,14 @@ fn main() -> ExitCode {
         }
         match a.as_str() {
             "--patterns" => which_patterns = it.next().unwrap(),
+            // A spec file carries one base mask per shape; the eight
+            // symmetries are generated on load. Racing a few dozen
+            // candidate sets needs this -- one `const` each would be
+            // a recompile per candidate.
+            "--patterns-file" => patterns_file = Some(PathBuf::from(it.next().unwrap())),
+            // Orientations share one table. Cuts the rows 4-8x, so it
+            // is never the default.
+            "--patterns-share" => patterns_share = true,
             "--epochs" => epochs = it.next().unwrap().parse().unwrap(),
             "--lr" => lr = it.next().unwrap().parse().unwrap(),
             "--decay" => decay = it.next().unwrap().parse().unwrap(),
@@ -680,6 +653,10 @@ fn main() -> ExitCode {
                 policy.search_value_to_ply = it.next().and_then(|v| v.parse().ok());
             }
             "--sym-train" => sym_train = true,
+            /* Every example in all eight forms each epoch, instead of one
+            drawn at random. Eight times the work per epoch, so the epoch
+            count has to come down to match. */
+            "--sym-all" => sym_all = true,
             "--grid" => so_grid = true,
             // Wrap AdamW in Lookahead(k=6, alpha=0.5). It rewrites every
             // weight every k steps, which on a CPU is not free -- hence a
@@ -773,14 +750,36 @@ fn main() -> ExitCode {
     /* A weight file belongs to the pattern set it was trained on -- the
     feature space is a different size and a different shape -- so `--init`
     across sets cannot work and is not worth a fallback. */
-    let patterns = match which_patterns.as_str() {
-        "compact" => COMPACT_PATTERNS,
-        "nnue" => NNUE_PATTERNS,
-        "egaroucid" => EGAROUCID_PATTERNS,
-        other => {
-            eprintln!("unknown pattern set {other} (egaroucid | compact)");
-            return ExitCode::FAILURE;
+    let patterns = match &patterns_file {
+        Some(path) => {
+            let text = match std::fs::read_to_string(path) {
+                Ok(t) => t,
+                Err(e) => {
+                    eprintln!("patterns-file {}: {e}", path.display());
+                    return ExitCode::FAILURE;
+                }
+            };
+            match pattern::from_spec(&text, patterns_share) {
+                Ok(p) => {
+                    which_patterns = path.display().to_string();
+                    p
+                }
+                Err(e) => {
+                    eprintln!("patterns-file {}: {e}", path.display());
+                    return ExitCode::FAILURE;
+                }
+            }
         }
+        None => match which_patterns.as_str() {
+            "compact" => COMPACT_PATTERNS,
+            "kuroobi" => KUROOBI_PATTERNS,
+            "nnue" => NNUE_PATTERNS,
+            "egaroucid" => EGAROUCID_PATTERNS,
+            other => {
+                eprintln!("unknown pattern set {other} (egaroucid | compact)");
+                return ExitCode::FAILURE;
+            }
+        },
     };
     let base = match &base_path {
         Some(p) => {
@@ -1074,37 +1073,77 @@ fn main() -> ExitCode {
             }
             let ts = Instant::now();
             let sym_seed = if sym_train { rand() | 1 } else { 0 };
-            let sq: f64 = if minibatch > 0 {
-                let ad = adam_state
-                    .as_mut()
-                    .expect("--minibatch requires --adam (moments)");
-                // Per-step cosine inside the shard as well, indexed by the
-                // global optimizer step so the sweep stays smooth.
-                let mut lr_fn = || {
-                    let lr = if cosine {
-                        let t = mb_step as f32 / mb_total_steps.max(1) as f32;
-                        // The schedule floors at 1e-8 rather than at zero.
-                        const ETA_MIN: f32 = 1e-8;
-                        ETA_MIN
-                            + (base_lr - ETA_MIN)
-                                * 0.5
-                                * (1.0 + (std::f32::consts::PI * t.min(1.0)).cos())
-                    } else {
-                        cur_lr
-                    };
-                    mb_step += 1;
-                    lr
+            /* `--sym-all` trains every example in all eight forms. They are
+            separate passes, not eight copies inside one minibatch: a batch
+            holding one position eight times over correlates its own
+            gradient, and the pass structure leaves batch size, step count
+            and memory exactly as they were. */
+            let forms: Vec<Option<u8>> = if sym_all {
+                (0..8u8).map(Some).collect()
+            } else {
+                vec![None]
+            };
+            let mut sq = 0.0f64;
+            let mut rows = 0usize;
+            for (fi, &fixed) in forms.iter().enumerate() {
+                let sym = SymPlan {
+                    seed: sym_seed,
+                    fixed,
                 };
-                #[cfg(feature = "gpu")]
-                if let Some(g) = gpu_trainer.as_mut() {
-                    let sq = g.train_shard(&nn, &examples, threads, &mut lr_fn, wd, sym_seed);
-                    // The next shard only needs the indexer, but val and the
-                    // save need the tables.
-                    if si + 1 == plan.len() {
-                        g.download(&mut nn);
+                if fi > 0 {
+                    // A fresh order per form, or the eight passes present
+                    // the same sequence of positions eight times.
+                    for i in (1..examples.len()).rev() {
+                        let j = (rand() % (i as u64 + 1)) as usize;
+                        examples.swap(i, j);
                     }
-                    sq
-                } else {
+                }
+                rows += examples.len();
+                sq += if minibatch > 0 {
+                    let ad = adam_state
+                        .as_mut()
+                        .expect("--minibatch requires --adam (moments)");
+                    // Per-step cosine inside the shard as well, indexed by the
+                    // global optimizer step so the sweep stays smooth.
+                    let mut lr_fn = || {
+                        let lr = if cosine {
+                            let t = mb_step as f32 / mb_total_steps.max(1) as f32;
+                            // The schedule floors at 1e-8 rather than at zero.
+                            const ETA_MIN: f32 = 1e-8;
+                            ETA_MIN
+                                + (base_lr - ETA_MIN)
+                                    * 0.5
+                                    * (1.0 + (std::f32::consts::PI * t.min(1.0)).cos())
+                        } else {
+                            cur_lr
+                        };
+                        mb_step += 1;
+                        lr
+                    };
+                    #[cfg(feature = "gpu")]
+                    if let Some(g) = gpu_trainer.as_mut() {
+                        let sq = g.train_shard(&nn, &examples, threads, &mut lr_fn, wd, sym);
+                        // The next shard only needs the indexer, but val and the
+                        // save need the tables.
+                        if si + 1 == plan.len() {
+                            g.download(&mut nn);
+                        }
+                        sq
+                    } else {
+                        train_pass_minibatch(
+                            &mut nn,
+                            base.as_ref(),
+                            ad,
+                            &mut sinks,
+                            &examples,
+                            threads,
+                            minibatch,
+                            &mut lr_fn,
+                            wd,
+                            sym,
+                        )
+                    }
+                    #[cfg(not(feature = "gpu"))]
                     train_pass_minibatch(
                         &mut nn,
                         base.as_ref(),
@@ -1115,42 +1154,29 @@ fn main() -> ExitCode {
                         minibatch,
                         &mut lr_fn,
                         wd,
-                        sym_seed,
+                        sym,
                     )
-                }
-                #[cfg(not(feature = "gpu"))]
-                train_pass_minibatch(
-                    &mut nn,
-                    base.as_ref(),
-                    ad,
-                    &mut sinks,
-                    &examples,
-                    threads,
-                    minibatch,
-                    &mut lr_fn,
-                    wd,
-                    sym_seed,
-                )
-            } else {
-                train_pass(
-                    &mut nn,
-                    adam_state.as_mut(),
-                    &examples,
-                    threads,
-                    cur_lr,
-                    sym_seed,
-                )
-            };
+                } else {
+                    train_pass(
+                        &mut nn,
+                        adam_state.as_mut(),
+                        &examples,
+                        threads,
+                        cur_lr,
+                        sym,
+                    )
+                };
+            }
             sq_total += sq;
-            seen += examples.len();
+            seen += rows;
             println!(
                 "  epoch {epoch} shard {}/{}: {} examples, train {:.4}  ({:.1}s, {:.0} pos/s)",
                 si + 1,
                 plan.len(),
                 examples.len(),
-                sq / examples.len() as f64,
+                sq / rows as f64,
                 ts.elapsed().as_secs_f32(),
-                examples.len() as f32 / ts.elapsed().as_secs_f32(),
+                rows as f32 / ts.elapsed().as_secs_f32(),
             );
         }
         /* SWA: average points orbiting at a constant lr. Averaging a

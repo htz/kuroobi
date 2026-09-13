@@ -37,7 +37,7 @@ use std::sync::mpsc;
 use wgpu::util::DeviceExt;
 
 use super::*;
-use crate::trainer::Example;
+use crate::trainer::{Example, SymPlan};
 
 /// Per-example record the forward/backward kernel writes, in f32 slots.
 const R_DRAW: usize = 0;
@@ -1531,7 +1531,7 @@ impl GpuTrainer {
         examples: &[Example],
         slot: usize,
         threads: usize,
-        sym_seed: u64,
+        sym: SymPlan,
         bno: u64,
     ) {
         let n = examples.len();
@@ -1547,23 +1547,9 @@ impl GpuTrainer {
                 .enumerate()
             {
                 scope.spawn(move || {
-                    let mut rs = sym_seed
-                        ^ (0x9E37_79B9_7F4A_7C15u64
-                            .wrapping_mul((ti as u64 + 1) * 0x1000 + bno + 1));
+                    let mut rs = sym.stream((ti as u64 + 1) * 0x1000 + bno + 1);
                     for (ex, o) in exs.iter().zip(out.chunks_mut(stride)) {
-                        let ex = if sym_seed == 0 {
-                            *ex
-                        } else {
-                            rs ^= rs >> 12;
-                            rs ^= rs << 25;
-                            rs ^= rs >> 27;
-                            let i = (rs.wrapping_mul(0x2545_F491_4F6C_DD1D) >> 61) as u8;
-                            Example {
-                                black: sym_board(ex.black, i),
-                                white: sym_board(ex.white, i),
-                                score: ex.score,
-                            }
-                        };
+                        let ex = sym.apply(ex, &mut rs);
                         let board = ex.board();
                         let stage = crate::evaluator::Evaluator::stage(&board);
                         let ix = nn.indices(ex.black, ex.white);
@@ -2043,7 +2029,7 @@ impl GpuTrainer {
         threads: usize,
         lr_for_step: &mut impl FnMut() -> f32,
         wd: f32,
-        sym_seed: u64,
+        sym: SymPlan,
     ) -> f64 {
         self.queue.write_buffer(&self.b_stats, 0, &[0u8; 16]);
         let mut slot = 0;
@@ -2058,7 +2044,7 @@ impl GpuTrainer {
             let t0 = std::time::Instant::now();
             self.drain(1);
             let t1 = std::time::Instant::now();
-            self.prepare(nn, chunk, slot, threads, sym_seed, bno as u64);
+            self.prepare(nn, chunk, slot, threads, sym, bno as u64);
             let t2 = std::time::Instant::now();
             let lr = lr_for_step();
             let idx = self.submit(slot, lr, wd);

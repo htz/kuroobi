@@ -23,6 +23,52 @@ pub struct Example {
     pub score: f32,
 }
 
+/// Which symmetric form an example is trained in.
+///
+/// Rotation and reflection preserve a position's value, so the eight forms
+/// are eight true training examples -- but under unshared tables they land
+/// in different rows, so which form is used is a real choice and not a
+/// bookkeeping detail.
+#[derive(Clone, Copy, Default)]
+pub struct SymPlan {
+    /// Nonzero draws one of the eight forms per example (`--sym-train`);
+    /// zero trains the board as stored.
+    pub seed: u64,
+    /// A form pinned for a whole pass. `--sym-all` walks 0..8 so every
+    /// example is seen in all eight within one epoch.
+    pub fixed: Option<u8>,
+}
+
+impl SymPlan {
+    /// The form to train `ex` in. `rs` is the caller's per-thread random
+    /// stream, advanced only when a draw is actually needed.
+    pub fn apply(&self, ex: &Example, rs: &mut u64) -> Example {
+        let i = match self.fixed {
+            Some(i) => i,
+            None if self.seed == 0 => return *ex,
+            None => {
+                *rs ^= *rs >> 12;
+                *rs ^= *rs << 25;
+                *rs ^= *rs >> 27;
+                (rs.wrapping_mul(0x2545_F491_4F6C_DD1D) >> 61) as u8
+            }
+        };
+        if i == 0 {
+            return *ex;
+        }
+        Example {
+            black: crate::nnue::sym_board(ex.black, i),
+            white: crate::nnue::sym_board(ex.white, i),
+            score: ex.score,
+        }
+    }
+
+    /// The per-thread stream a pass starts from.
+    pub fn stream(&self, salt: u64) -> u64 {
+        self.seed ^ 0x9E37_79B9_7F4A_7C15u64.wrapping_mul(salt)
+    }
+}
+
 impl Example {
     /// Reconstruct the Board (Black to move, per the data convention).
     pub fn board(&self) -> Board {
@@ -278,6 +324,50 @@ impl<O: Optimizer> Trainer<O> {
 
 #[cfg(test)]
 mod tests {
+
+    /// `--sym-all` has to walk eight genuinely different boards, or the
+    /// eight passes it costs buy nothing. Under unshared tables the forms
+    /// land in different rows, so this is what makes them real examples.
+    #[test]
+    fn sym_plan_fixed_walks_eight_distinct_forms() {
+        // Off both diagonals and both mid-lines, or the board maps onto
+        // itself under some of the eight and the test proves nothing.
+        let ex = Example {
+            black: 1 << 1,
+            white: 1 << 10,
+            score: 3.0,
+        };
+        let mut rs = 0u64;
+        let mut seen: Vec<(u64, u64)> = Vec::new();
+        for i in 0..8u8 {
+            let p = SymPlan {
+                seed: 0,
+                fixed: Some(i),
+            };
+            let e = p.apply(&ex, &mut rs);
+            assert_eq!(e.score, ex.score, "rotation must not touch the label");
+            assert_eq!(e.black.count_ones(), ex.black.count_ones());
+            seen.push((e.black, e.white));
+        }
+        seen.sort_unstable();
+        seen.dedup();
+        assert_eq!(seen.len(), 8, "the eight forms must differ");
+    }
+
+    /// No plan at all is the identity, and the stream is left alone --
+    /// a run without `--sym-train` must train the board as stored.
+    #[test]
+    fn sym_plan_default_is_the_identity() {
+        let ex = Example {
+            black: 0x0000_0008_1000_0000,
+            white: 0x0000_0010_0800_0000,
+            score: -2.0,
+        };
+        let mut rs = 12345u64;
+        let e = SymPlan::default().apply(&ex, &mut rs);
+        assert_eq!((e.black, e.white), (ex.black, ex.white));
+        assert_eq!(rs, 12345, "no draw, no advance");
+    }
     use super::*;
     use crate::pattern::EGAROUCID_PATTERNS;
     use crate::position::Position;
