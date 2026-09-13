@@ -6,7 +6,7 @@
 //! Midgame mode (--depth n): fixed-depth midgame search instead (for
 //! search-speed comparison on identical positions).
 //!
-//! Usage: solve_obf [--depth <n>] [--weights <path>] <file.obf>...
+//! Usage: solve_obf [--depth <n>] [--weights <path>] [--patterns-file <spec>] <file.obf>...
 
 use std::path::PathBuf;
 use std::process::ExitCode;
@@ -30,6 +30,7 @@ fn main() -> ExitCode {
     let mut nnue_path: Option<PathBuf> = Some(PathBuf::from("weights/nnue.bin"));
     let mut nnue_base: Option<PathBuf> = None;
     let mut patterns_name = String::from("nnue");
+    let mut patterns_spec: Option<PathBuf> = None;
     let mut files: Vec<PathBuf> = Vec::new();
 
     let mut grand_time = 0.0f64;
@@ -50,11 +51,12 @@ fn main() -> ExitCode {
             // trained against.
             "--nnue-base" => nnue_base = it.next().map(PathBuf::from),
             "--patterns" => patterns_name = it.next().unwrap_or(patterns_name),
+            "--patterns-file" => patterns_spec = it.next().map(PathBuf::from),
             other => files.push(PathBuf::from(other)),
         }
     }
     if files.is_empty() {
-        eprintln!("usage: solve_obf [--depth <n>] [--mpc] [--hash-bits <n>] [--threads <n>] [--weights <path>] <file.obf>...");
+        eprintln!("usage: solve_obf [--depth <n>] [--mpc] [--hash-bits <n>] [--threads <n>] [--weights <path>] [--patterns-file <spec>] <file.obf>...");
         return ExitCode::FAILURE;
     }
 
@@ -75,10 +77,12 @@ fn main() -> ExitCode {
     // The selective probes prefer the NNUE (see solver::sel_nnue_probe);
     // load it so the benchmark matches the match configuration.
     if let Some(p) = &nnue_path {
-        let patterns = match patterns_name.as_str() {
-            "compact" => kuroobi::pattern::COMPACT_PATTERNS,
-            "nnue" => kuroobi::pattern::NNUE_PATTERNS,
-            _ => kuroobi::pattern::EGAROUCID_PATTERNS,
+        let patterns = match kuroobi::pattern::resolve(&patterns_name, patterns_spec.as_deref()) {
+            Ok(p) => p,
+            Err(e) => {
+                eprintln!("{e}");
+                return std::process::ExitCode::FAILURE;
+            }
         };
         let mut nn = kuroobi::nnue::Nnue::new(patterns);
         if nn.load(p).is_ok() {

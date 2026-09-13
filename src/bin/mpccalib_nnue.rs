@@ -28,7 +28,7 @@
 //!
 //! Usage:
 //!   mpccalib_nnue [--threads N] [--stride N] [--max N] [--max-depth 12]
-//!                 [--depths a,b,c] [--patterns nnue|egaroucid|compact]
+//!                 [--depths a,b,c] [--patterns nnue|kuroobi|egaroucid|compact] [--patterns-file <spec>]
 //!                 [--min-empties 20] [--max-empties 58] [--min-cell 8] [--csv out.csv] [--write]
 //!                 <nnue.bin> <data-file>...
 
@@ -38,7 +38,6 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 
 use kuroobi::midgame::{mpc_reduced_depth, NnueSearch, SharedTt};
 use kuroobi::nnue::{MpcSigma, Nnue};
-use kuroobi::pattern::{COMPACT_PATTERNS, EGAROUCID_PATTERNS, NNUE_PATTERNS};
 use kuroobi::trainer::load_examples_binary;
 
 /// Values above this are the solver's terminal encoding, not a disc
@@ -246,11 +245,13 @@ fn main() -> ExitCode {
     // The tool predates the 297,432-row set; a weight file belongs to the
     // pattern set it was trained on, so the set has to be selectable.
     let mut which = String::from("nnue");
+    let mut spec: Option<PathBuf> = None;
 
     let mut it = std::env::args().skip(1);
     while let Some(arg) = it.next() {
         match arg.as_str() {
             "--patterns" => which = it.next().unwrap_or(which),
+            "--patterns-file" => spec = it.next().map(PathBuf::from),
             "--threads" => threads = it.next().and_then(|v| v.parse().ok()).unwrap_or(threads),
             "--stride" => stride = it.next().and_then(|v| v.parse().ok()).unwrap_or(stride),
             "--max" => {
@@ -301,7 +302,7 @@ fn main() -> ExitCode {
     if paths.is_empty() || (want_data && paths.len() < 2) {
         eprintln!(
             "usage: mpccalib_nnue [--threads N] [--stride N] [--max N] [--max-depth 12] \
-             [--depths a,b,c] [--patterns nnue|egaroucid|compact] [--min-empties 20] [--max-empties 58] \
+             [--depths a,b,c] [--patterns nnue|kuroobi|egaroucid|compact] [--patterns-file <spec>] [--min-empties 20] [--max-empties 58] \
              [--min-cell 20] [--empties-bin 3] [--csv out.csv] [--cells] [--write] \
              <nnue.bin> <data-file>..."
         );
@@ -310,12 +311,10 @@ fn main() -> ExitCode {
     let nnue_path = paths.remove(0);
 
     if legacy_sigma {
-        let patterns = match which.as_str() {
-            "compact" => COMPACT_PATTERNS,
-            "nnue" => NNUE_PATTERNS,
-            "egaroucid" => EGAROUCID_PATTERNS,
-            other => {
-                eprintln!("unknown pattern set {other}");
+        let patterns = match kuroobi::pattern::resolve(&which, spec.as_deref()) {
+            Ok(p) => p,
+            Err(e) => {
+                eprintln!("{e}");
                 return ExitCode::FAILURE;
             }
         };
@@ -364,12 +363,10 @@ fn main() -> ExitCode {
         return ExitCode::FAILURE;
     }
 
-    let patterns = match which.as_str() {
-        "compact" => COMPACT_PATTERNS,
-        "nnue" => NNUE_PATTERNS,
-        "egaroucid" => EGAROUCID_PATTERNS,
-        other => {
-            eprintln!("unknown pattern set {other}");
+    let patterns = match kuroobi::pattern::resolve(&which, spec.as_deref()) {
+        Ok(p) => p,
+        Err(e) => {
+            eprintln!("{e}");
             return ExitCode::FAILURE;
         }
     };

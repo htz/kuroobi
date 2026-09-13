@@ -26,6 +26,7 @@
 //!   gtp [-gtp] [-l <depth>] [-t <threads>] [-nobook] [-q]
 //!       [--solve-empties <n>] [--time-ms <n>] [--band <n>] [--no-mpc]
 //!       [--weights <path>] [--nnue <path>] [--patterns nnue|egaroucid|compact]
+//!       [--patterns-file <spec>]
 //!       [--book <path>]
 
 use std::io::{BufRead, Write};
@@ -124,12 +125,22 @@ fn main() -> ExitCode {
             "--nnue" => cfg.nnue = PathBuf::from(it.next().unwrap_or_default()),
             "--nnue-base" => cfg.nnue_base = PathBuf::from(it.next().unwrap_or_default()),
             "--patterns" => {
-                cfg.nnue_patterns = match it.next().as_deref() {
-                    Some("compact") => kuroobi::pattern::COMPACT_PATTERNS,
-                    Some("nnue") => kuroobi::pattern::NNUE_PATTERNS,
-                    Some("egaroucid") | None => kuroobi::pattern::EGAROUCID_PATTERNS,
-                    Some(other) => {
-                        eprintln!("unknown pattern set {other}");
+                let name = it.next().unwrap_or_else(|| "egaroucid".to_string());
+                cfg.nnue_patterns = match kuroobi::pattern::resolve(&name, None) {
+                    Ok(p) => p,
+                    Err(e) => {
+                        eprintln!("{e}");
+                        std::process::exit(1);
+                    }
+                }
+            }
+            // A candidate set lives in a spec file, not in a `const`.
+            "--patterns-file" => {
+                let path = PathBuf::from(it.next().unwrap_or_default());
+                cfg.nnue_patterns = match kuroobi::pattern::resolve("", Some(&path)) {
+                    Ok(p) => p,
+                    Err(e) => {
+                        eprintln!("{e}");
                         std::process::exit(1);
                     }
                 }

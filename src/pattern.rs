@@ -744,6 +744,143 @@ pub const NNUE_PATTERNS: &[Pattern] = &[
     },
 ];
 
+// ---------------------------------------------------------------------------
+// kuroobi's own set (7 shapes, 34 masks)
+// ---------------------------------------------------------------------------
+
+/// Seven shapes, 34 masks, 54,675 shared rows.
+///
+/// Orientations of a shape share one table. Reversi is symmetric and
+/// `--sym-train` presents every position eight ways, so a per-orientation
+/// table re-learns one function several times on a fraction of the data
+/// each.
+///
+/// **The shape of the coverage is the point.** Counting how many masks
+/// contain each square, the set this replaces came out
+///
+/// ```text
+///     4  4  3  3  3  3  4  4      corner 4
+///     4  5  5  4  4  5  5  4      edge middle 3
+///     3  5  5  4  4  5  5  3      centre 5
+///     3  4  4  5  5  4  4  3
+/// ```
+///
+/// -- the centre covered more heavily than the corners, which is backwards
+/// for a game whose corners cannot be flipped. Published sets run the other
+/// way by a factor of 1.5 to 2.5. This set restores the order:
+///
+/// ```text
+///     6  6  4  4  4  4  6  6      corner 6
+///     6  6  4  3  3  4  6  6      edge middle 4
+///     4  4  4  3  3  4  4  4      centre 4
+///     4  3  3  4  4  3  3  4      minimum 3
+/// ```
+///
+/// Why each shape is here:
+///
+/// - `CornerWing2x4` carries the corner, its X square, both C squares and
+///   half an edge in **one** table. "Playing the X square loses the corner"
+///   is a relation between squares, and a relation is only expressible when
+///   the squares share a feature. Eight masks -- four corners, each read
+///   along the row and along the column -- which is the largest single
+///   spend in the set, and deliberately so.
+/// - `EdgeBlock2x4` covers the middle of an edge with its second rank, the
+///   shape wings and blocks live in.
+/// - `Edge8` is the whole edge as one line, which is what decides whether
+///   its discs are stable. The block above cannot see that; a line of eight
+///   cannot see the second rank. Both are needed and neither is redundant.
+/// - `Corner3x3` is the only nine-square shape. Its 19,683 rows are 36% of
+///   the set on their own, which is why there is exactly one.
+/// - `Diagonal8` and `Diagonal7` reach corner to corner; a flip runs along
+///   a line, so diagonals are not decoration.
+/// - `Inner2x4` is the only shape not touching an edge. Interior discs are
+///   cheap to flip, so one is enough -- the set this replaces spent three
+///   shapes there.
+///
+/// Every shape is a contiguous block or line. A shape with a hole in it
+/// cannot represent the flip that crosses the hole.
+///
+/// Not covered here, and covered elsewhere in the model: parity, and the
+/// mobility count the read-out takes as a separate input.
+pub const KUROOBI_PATTERNS: &[Pattern] = &[
+    Pattern {
+        name: "CornerWing2x4",
+        size: 8,
+        masks: &[
+            &[A1, B1, C1, D1, A2, B2, C2, D2],
+            &[A8, B8, C8, D8, A7, B7, C7, D7],
+            &[H1, G1, F1, E1, H2, G2, F2, E2],
+            &[H8, G8, F8, E8, H7, G7, F7, E7],
+            &[A1, A2, A3, A4, B1, B2, B3, B4],
+            &[A8, A7, A6, A5, B8, B7, B6, B5],
+            &[H1, H2, H3, H4, G1, G2, G3, G4],
+            &[H8, H7, H6, H5, G8, G7, G6, G5],
+        ],
+    },
+    Pattern {
+        name: "EdgeBlock2x4",
+        size: 8,
+        masks: &[
+            &[B1, C1, D1, E1, B2, C2, D2, E2],
+            &[B8, C8, D8, E8, B7, C7, D7, E7],
+            &[G1, F1, E1, D1, G2, F2, E2, D2],
+            &[G8, F8, E8, D8, G7, F7, E7, D7],
+            &[A2, A3, A4, A5, B2, B3, B4, B5],
+            &[A7, A6, A5, A4, B7, B6, B5, B4],
+            &[H2, H3, H4, H5, G2, G3, G4, G5],
+            &[H7, H6, H5, H4, G7, G6, G5, G4],
+        ],
+    },
+    Pattern {
+        name: "Edge8",
+        size: 8,
+        masks: &[
+            &[A1, B1, C1, D1, E1, F1, G1, H1],
+            &[A8, B8, C8, D8, E8, F8, G8, H8],
+            &[A1, A2, A3, A4, A5, A6, A7, A8],
+            &[H1, H2, H3, H4, H5, H6, H7, H8],
+        ],
+    },
+    Pattern {
+        name: "Corner3x3",
+        size: 9,
+        masks: &[
+            &[A1, B1, C1, A2, B2, C2, A3, B3, C3],
+            &[A8, B8, C8, A7, B7, C7, A6, B6, C6],
+            &[H1, G1, F1, H2, G2, F2, H3, G3, F3],
+            &[H8, G8, F8, H7, G7, F7, H6, G6, F6],
+        ],
+    },
+    Pattern {
+        name: "Diagonal8",
+        size: 8,
+        masks: &[
+            &[A1, B2, C3, D4, E5, F6, G7, H8],
+            &[A8, B7, C6, D5, E4, F3, G2, H1],
+        ],
+    },
+    Pattern {
+        name: "Diagonal7",
+        size: 7,
+        masks: &[
+            &[B1, C2, D3, E4, F5, G6, H7],
+            &[B8, C7, D6, E5, F4, G3, H2],
+            &[G1, F2, E3, D4, C5, B6, A7],
+            &[G8, F7, E6, D5, C4, B3, A2],
+        ],
+    },
+    Pattern {
+        name: "Inner2x4",
+        size: 8,
+        masks: &[
+            &[C3, D3, E3, F3, C4, D4, E4, F4],
+            &[C6, D6, E6, F6, C5, D5, E5, F5],
+            &[C3, C4, C5, C6, D3, D4, D5, D6],
+            &[F3, F4, F5, F6, E3, E4, E5, E6],
+        ],
+    },
+];
+
 /// Convenience holder pairing both pattern libraries.
 #[derive(Debug, Clone, Copy)]
 pub struct PatternSet {
@@ -799,6 +936,144 @@ impl PatternWeights {
             }
         }
         score
+    }
+}
+
+/// One mask under the eight symmetries of the board.
+///
+/// Deduplicated on the set of squares: two masks covering the same squares
+/// are the same feature up to a permutation of its table, so keeping both
+/// would give that feature twice the weight for no new information.
+fn orbit(base: &[u8]) -> Vec<Vec<u8>> {
+    let transpose = |m: &[u8]| -> Vec<u8> { m.iter().map(|&s| (s % 8) * 8 + s / 8).collect() };
+    let flip_file = |m: &[u8]| -> Vec<u8> { m.iter().map(|&s| (7 - s / 8) * 8 + s % 8).collect() };
+    let flip_rank =
+        |m: &[u8]| -> Vec<u8> { m.iter().map(|&s| (s / 8) * 8 + (7 - s % 8)).collect() };
+
+    let mut out: Vec<Vec<u8>> = Vec::with_capacity(8);
+    let mut seen: Vec<Vec<u8>> = Vec::with_capacity(8);
+    for root in [base.to_vec(), transpose(base)] {
+        for a in [false, true] {
+            for b in [false, true] {
+                let mut m = root.clone();
+                if b {
+                    m = flip_rank(&m);
+                }
+                if a {
+                    m = flip_file(&m);
+                }
+                let mut key = m.clone();
+                key.sort_unstable();
+                if !seen.contains(&key) {
+                    seen.push(key);
+                    out.push(m);
+                }
+            }
+        }
+    }
+    out
+}
+
+/// Read a pattern set from a text spec, one shape per line:
+///
+/// ```text
+/// # comment
+/// CornerWing2x4: A1 B1 C1 D1 A2 B2 C2 D2
+/// ```
+///
+/// Only the base mask is written; the eight symmetries are generated here.
+/// That keeps a spec file identical to what the design figures show, and
+/// makes it impossible for the file and the figure to drift apart.
+///
+/// `share_orientations` decides how much capacity the set gets, and the
+/// difference is large enough to dominate any change of shape. A shared
+/// shape holds one table that all eight orientations index, so a 9-square
+/// shape costs 19,683 rows however many masks it has; unshared, the same
+/// shape costs that per mask. `COMPACT_PATTERNS` and `NNUE_PATTERNS` differ
+/// in nothing else, and unshared is 4x the rows. Default is unshared,
+/// because that is what the row counts in the design work quote and what
+/// the deployed set uses; sharing has to be asked for.
+///
+/// The result is leaked, because a `Pattern` borrows for `'static` and a
+/// pattern set outlives every evaluator built on it. One leak per process.
+pub fn from_spec(text: &str, share_orientations: bool) -> Result<&'static [Pattern], String> {
+    let mut pats: Vec<Pattern> = Vec::new();
+    for (n, line) in text.lines().enumerate() {
+        let line = line.split('#').next().unwrap_or("").trim();
+        if line.is_empty() {
+            continue;
+        }
+        let (name, cells) = line
+            .split_once(':')
+            .ok_or_else(|| format!("line {}: expected `Name: A1 B1 ...`", n + 1))?;
+        let name = name.trim();
+        if name.is_empty() {
+            return Err(format!("line {}: empty shape name", n + 1));
+        }
+        let mut base: Vec<u8> = Vec::new();
+        for cell in cells.split_whitespace() {
+            let bytes = cell.as_bytes();
+            let file = match bytes.first() {
+                Some(c @ b'A'..=b'H') => c - b'A',
+                _ => return Err(format!("line {}: bad square {cell}", n + 1)),
+            };
+            let rank = match (bytes.len(), bytes.get(1)) {
+                (2, Some(c @ b'1'..=b'8')) => c - b'1',
+                _ => return Err(format!("line {}: bad square {cell}", n + 1)),
+            };
+            let s = file * 8 + rank;
+            if base.contains(&s) {
+                return Err(format!("line {}: {cell} appears twice", n + 1));
+            }
+            base.push(s);
+        }
+        if base.is_empty() {
+            return Err(format!("line {}: shape {name} has no squares", n + 1));
+        }
+        let size = base.len();
+        let masks: Vec<&'static [u8]> = orbit(&base)
+            .into_iter()
+            .map(|m| &*Box::leak(m.into_boxed_slice()))
+            .collect();
+        if share_orientations {
+            pats.push(Pattern {
+                name: Box::leak(name.to_string().into_boxed_str()),
+                size,
+                masks: Box::leak(masks.into_boxed_slice()),
+            });
+        } else {
+            for (i, mask) in masks.into_iter().enumerate() {
+                pats.push(Pattern {
+                    name: Box::leak(format!("{name}#{i}").into_boxed_str()),
+                    size,
+                    masks: Box::leak(vec![mask].into_boxed_slice()),
+                });
+            }
+        }
+    }
+    if pats.is_empty() {
+        return Err("spec defines no patterns".to_string());
+    }
+    Ok(Box::leak(pats.into_boxed_slice()))
+}
+
+/// The set named on the command line, or the one a spec file describes.
+///
+/// Every tool that touches a weight file needs the same choice, and a
+/// weight file belongs to the pattern set it was trained on, so getting
+/// this wrong is silent: the tables line up by size and the numbers come
+/// out wrong. One place to resolve it keeps the tools in step.
+pub fn resolve(name: &str, spec: Option<&std::path::Path>) -> Result<&'static [Pattern], String> {
+    if let Some(path) = spec {
+        let text = std::fs::read_to_string(path).map_err(|e| format!("{}: {e}", path.display()))?;
+        return from_spec(&text, false);
+    }
+    match name {
+        "compact" => Ok(COMPACT_PATTERNS),
+        "kuroobi" => Ok(KUROOBI_PATTERNS),
+        "nnue" => Ok(NNUE_PATTERNS),
+        "egaroucid" => Ok(EGAROUCID_PATTERNS),
+        other => Err(format!("unknown pattern set {other}")),
     }
 }
 
@@ -966,5 +1241,112 @@ mod tests {
             black_view, white_view,
             "swapping perspective must swap player/opponent digits"
         );
+    }
+
+    /// The new set's masks are well formed and its coverage still leans on
+    /// the corners.
+    ///
+    /// The coverage *shape* is the design, not a side effect: the set this
+    /// replaced covered the centre more heavily than the corners, which is
+    /// backwards for a game whose corners cannot be flipped. A shape added
+    /// or a mask mistyped can quietly undo that, and nothing else in the
+    /// build would notice.
+    #[test]
+    fn the_kuroobi_set_is_well_formed_and_corner_weighted() {
+        let mut cov = [0usize; 64];
+        let (mut masks, mut rows) = (0usize, 0usize);
+        for p in KUROOBI_PATTERNS {
+            assert!(p.size <= 9, "{}: nothing wider than nine squares", p.name);
+            rows += p.table_size();
+            for m in p.masks {
+                assert_eq!(m.len(), p.size, "{}: mask length must equal size", p.name);
+                let mut seen = [false; 64];
+                for &sqi in *m {
+                    assert!(sqi < 64, "{}: square out of range", p.name);
+                    assert!(!seen[sqi as usize], "{}: a mask repeats a square", p.name);
+                    seen[sqi as usize] = true;
+                    cov[sqi as usize] += 1;
+                }
+                masks += 1;
+            }
+        }
+        assert_eq!((masks, rows), (34, 54_675));
+
+        let mean = |g: &[usize]| g.iter().map(|&s| cov[s]).sum::<usize>() as f64 / g.len() as f64;
+        let corners = mean(&[A1 as usize, H1 as usize, A8 as usize, H8 as usize]);
+        let centre = mean(&[D4 as usize, E4 as usize, D5 as usize, E5 as usize]);
+        assert!(
+            corners > centre,
+            "corners {corners} must outweigh the centre {centre}"
+        );
+        assert!(
+            *cov.iter().min().unwrap() >= 3,
+            "no square may be left with fewer than three masks"
+        );
+    }
+
+    /// A spec built from a set's own base masks must rebuild that set: the
+    /// orbit generated here is the one the hand-written tables were written
+    /// from, so a drift between the two would silently change every row
+    /// count a design figure claims.
+    #[test]
+    fn from_spec_rebuilds_a_hand_written_set() {
+        for set in [KUROOBI_PATTERNS, COMPACT_PATTERNS] {
+            let spec: String = set
+                .iter()
+                .map(|p| {
+                    let cells: Vec<String> = p.masks[0]
+                        .iter()
+                        .map(|&s| format!("{}{}", (b'A' + s / 8) as char, s % 8 + 1))
+                        .collect();
+                    format!("{}: {}\n", p.name, cells.join(" "))
+                })
+                .collect();
+            let built = from_spec(&spec, true).expect("spec parses");
+            assert_eq!(built.len(), set.len());
+            for (b, p) in built.iter().zip(set.iter()) {
+                assert_eq!(b.name, p.name);
+                assert_eq!(b.size, p.size);
+                assert_eq!(b.masks.len(), p.masks.len(), "{}", p.name);
+                let key = |ms: &[&[u8]]| {
+                    let mut v: Vec<Vec<u8>> = ms
+                        .iter()
+                        .map(|m| {
+                            let mut m = m.to_vec();
+                            m.sort_unstable();
+                            m
+                        })
+                        .collect();
+                    v.sort();
+                    v
+                };
+                assert_eq!(key(b.masks), key(p.masks), "{}", p.name);
+            }
+        }
+    }
+
+    #[test]
+    fn from_spec_rejects_malformed_input() {
+        assert!(from_spec("A1 B1", false).is_err(), "no name");
+        assert!(from_spec("x: A1 A1", false).is_err(), "square twice");
+        assert!(from_spec("x: I1", false).is_err(), "file out of range");
+        assert!(from_spec("x: A9", false).is_err(), "rank out of range");
+        assert!(from_spec("# only a comment", false).is_err(), "no patterns");
+    }
+
+    /// The two ways of writing the same shapes differ only in capacity, and
+    /// the gap is the one that has already cost a full training run: v1 was
+    /// trained shared and reached 19.71 where the deployed unshared set sits
+    /// at 14.89. A spec must default to the unshared reading.
+    #[test]
+    fn from_spec_defaults_to_unshared_tables() {
+        let spec = "Corner3x3: A1 B1 C1 A2 B2 C2 A3 B3 C3\nDiagonal8: A1 B2 C3 D4 E5 F6 G7 H8\n";
+        let shared = from_spec(spec, true).unwrap();
+        let unshared = from_spec(spec, false).unwrap();
+        let rows = |ps: &[Pattern]| -> usize { ps.iter().map(|p| p.table_size()).sum() };
+        assert_eq!(shared.len(), 2);
+        assert_eq!(unshared.len(), 6, "4 corner masks + 2 diagonal masks");
+        assert_eq!(rows(shared), 19_683 + 6_561);
+        assert_eq!(rows(unshared), 4 * 19_683 + 2 * 6_561);
     }
 }
