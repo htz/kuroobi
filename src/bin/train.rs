@@ -14,6 +14,14 @@
 //!   --limit <n>       Use at most n examples per file (default all)
 //!   --max-examples <n> Examples held in RAM at once (default 64M, 0 = all)
 //!   --log <path>      Append per-epoch stage losses as CSV
+//!   --gpu             Train on the GPU (build with --features gpu)
+//!   --minibatch <n>   Positions per GPU step (default 8192)
+//!   --cosine          Anneal the rate to ~0 over the run, stepped per shard
+//!   --search-value-to-ply <n>  Take the search value up to ply n, the
+//!                     game's result after (the NNUE corpus's teacher)
+//!   --drop-random     Drop positions whose move was random
+//!   --keep-above-ply <n>  From this ply on, keep everything
+//!   --min-ply <n>     Drop positions before this ply
 //!
 //! Data too large to fit in RAM is trained in **shards**: whole files are
 //! grouped up to `--max-examples`, and each epoch walks every shard, loading
@@ -27,8 +35,9 @@ use std::time::Instant;
 
 use kuroobi::evaluator::{AdamOptimizer, Evaluator, Optimizer, SgdOptimizer, STAGE_COUNT};
 use kuroobi::pattern::{EDAX_PATTERNS, EGAROUCID_PATTERNS, EGAROUCID_PLUS_PATTERNS};
+use kuroobi::record::{Filter, TeacherPolicy};
 use kuroobi::trainer::{
-    count_examples_binary, load_examples_binary_into, EpochStats, Example, Trainer,
+    count_examples_binary, load_examples_filtered_into, EpochStats, Example, Trainer,
 };
 
 /// Examples kept in RAM at once when `--max-examples` is not given.
@@ -51,6 +60,13 @@ struct Args {
     max_examples: Option<usize>,
     log_path: Option<PathBuf>,
     threads: usize,
+    cosine: bool,
+    gpu: bool,
+    minibatch: usize,
+    search_value_to_ply: Option<u8>,
+    drop_random: bool,
+    keep_above_ply: Option<u8>,
+    min_ply: u8,
     swa: bool,
     swa_start: usize,
     per_stage_best: bool,
@@ -102,6 +118,24 @@ Options:
                     Datasets larger than this are split into shards of whole
                     files; every epoch walks all shards, loading one at a time
   --log <path>      Append per-epoch stage losses as CSV
+  --gpu             Train on the GPU (needs a build with --features gpu).
+                    Minibatch Adam instead of the CPU path's per-example
+                    steps, which is what makes the work parallel.
+  --minibatch <n>   Positions per GPU step (default 8192). Each is eight
+                    rows, one per symmetric form.
+  --cosine          Anneal the rate from --lr to ~0 across the whole run,
+                    stepped once per shard. Matches the NNUE trainer's
+                    schedule, which is what makes the two comparable.
+  --search-value-to-ply <n>
+                    Up to and including ply n take the record's search
+                    value; past it take the game's final disc difference.
+                    Without it every record reads as the game result,
+                    a different target from the one the NNUE was fitted
+                    to on the same files.
+  --drop-random     Drop positions whose move was chosen at random
+  --keep-above-ply <n>
+                    From this ply on, keep everything the two above drop
+  --min-ply <n>     Drop positions before this ply
   --val <path>      Held-out file scored after every epoch (repeatable).
                     The in-epoch training MSE is measured while the weights
                     are still moving, so it is a poor stopping signal; the
@@ -188,6 +222,13 @@ fn parse_args() -> Result<Args, String> {
         max_examples: Some(DEFAULT_MAX_EXAMPLES),
         log_path: None,
         swa: false,
+        cosine: false,
+        gpu: false,
+        minibatch: 8192,
+        search_value_to_ply: None,
+        drop_random: false,
+        keep_above_ply: None,
+        min_ply: 0,
         per_stage_best: false,
         select_by: String::from("mae"),
         cell_lr: false,
@@ -262,6 +303,42 @@ fn parse_args() -> Result<Args, String> {
             }
             "--log" => args.log_path = Some(PathBuf::from(value("--log")?)),
             "--val" => args.val_files.push(PathBuf::from(value("--val")?)),
+            /* The NNUE runs anneal the rate to zero over the whole run
+            rather than decaying it geometrically, and a linear model
+            trained beside one has to be on the same schedule for the two
+            to be comparable. */
+            "--cosine" => args.cosine = true,
+            /* The CPU path applies 512 sequential Adam steps per position
+            on one core; the GPU sums a batch's touches of a cell and takes
+            one step, which is the only shape of this work a GPU can run. */
+            "--gpu" => args.gpu = true,
+            "--minibatch" => {
+                args.minibatch = value("--minibatch")?
+                    .parse()
+                    .map_err(|e| format!("--minibatch: {e}"))?
+            }
+            // The teacher the NNUE corpus is read under; without these the
+            // two models fit different targets on the same files.
+            "--search-value-to-ply" => {
+                args.search_value_to_ply = Some(
+                    value("--search-value-to-ply")?
+                        .parse()
+                        .map_err(|e| format!("--search-value-to-ply: {e}"))?,
+                )
+            }
+            "--drop-random" => args.drop_random = true,
+            "--keep-above-ply" => {
+                args.keep_above_ply = Some(
+                    value("--keep-above-ply")?
+                        .parse()
+                        .map_err(|e| format!("--keep-above-ply: {e}"))?,
+                )
+            }
+            "--min-ply" => {
+                args.min_ply = value("--min-ply")?
+                    .parse()
+                    .map_err(|e| format!("--min-ply: {e}"))?
+            }
             "--swa" => args.swa = true,
             "--per-stage-best" => args.per_stage_best = true,
             "--select-by" => args.select_by = it.next().unwrap_or_default(),
@@ -368,13 +445,32 @@ fn parse_args() -> Result<Args, String> {
     Ok(args)
 }
 
+/// The records to keep, from the run's flags.
+fn filter_of(args: &Args) -> Filter {
+    Filter {
+        min_ply: args.min_ply,
+        max_score_diff: None,
+        drop_random: args.drop_random,
+        keep_above_ply: args.keep_above_ply,
+    }
+}
+
+/// Which teacher to read, from the run's flags.
+fn policy_of(args: &Args) -> TeacherPolicy {
+    TeacherPolicy {
+        search_value_to_ply: args.search_value_to_ply,
+    }
+}
+
 /// Append one file's examples to `out`, returning how many were added.
 fn load_file_into(
     path: &Path,
     limit: Option<usize>,
     out: &mut Vec<Example>,
+    filter: &Filter,
+    policy: &TeacherPolicy,
 ) -> std::io::Result<usize> {
-    load_examples_binary_into(path, out, limit)
+    load_examples_filtered_into(path, out, limit, filter, policy)
 }
 
 /// The dataset, sized but not loaded.
@@ -580,9 +676,15 @@ fn main() -> ExitCode {
     // Held-out set for an honest per-epoch signal, loaded once and kept
     // resident (it is small relative to training). The in-epoch training MSE
     // is measured on moving weights and is a poor stopping signal.
+    /* The corpus holds both a search value and the game's result per
+    record; which one is the teacher, and which records are dropped, has to
+    be the same for val as for training or the number measures nothing. */
+    let filter = filter_of(&args);
+    let policy = policy_of(&args);
+    println!("teacher: {}", policy.describe());
     let mut val: Vec<Example> = Vec::new();
     for f in &args.val_files {
-        if let Err(e) = load_file_into(f, None, &mut val) {
+        if let Err(e) = load_file_into(f, None, &mut val, &filter, &policy) {
             eprintln!("failed to load val {}: {e}", f.display());
             return ExitCode::FAILURE;
         }
@@ -851,6 +953,20 @@ impl SwaAccumulator {
     }
 }
 
+/// The rate for one shard under `--cosine`, or the flat rate without it.
+///
+/// Stepped per shard rather than per epoch: with seventeen shards an epoch,
+/// a per-epoch step would hold one rate for hours and then jump.
+fn cosine_lr(args: &Args, epoch: usize, si: usize, n_shards: usize) -> f32 {
+    if !args.cosine {
+        return args.learning_rate;
+    }
+    const ETA_MIN: f32 = 1e-8;
+    let t = (epoch as f32 - 1.0 + si as f32 / n_shards as f32) / args.epochs as f32;
+    ETA_MIN
+        + (args.learning_rate - ETA_MIN) * 0.5 * (1.0 + (std::f32::consts::PI * t.min(1.0)).cos())
+}
+
 fn run_epochs<O: Optimizer>(
     mut trainer: Trainer<O>,
     args: &Args,
@@ -868,6 +984,19 @@ fn run_epochs<O: Optimizer>(
     // aimed at one stage only ever wakes one worker, so eight stages want
     // eight processes, not eight threads.
     let parallel = args.optimizer == OptimizerKind::Sgd;
+    let filter = filter_of(args);
+    let policy = policy_of(args);
+    #[cfg(feature = "gpu")]
+    let mut gpu = args
+        .gpu
+        .then(|| kuroobi::linear_gpu::LinearGpu::new(&trainer.evaluator, args.minibatch));
+    #[cfg(not(feature = "gpu"))]
+    let gpu: Option<()> = None;
+    #[cfg(not(feature = "gpu"))]
+    if args.gpu {
+        eprintln!("--gpu needs a build with `--features gpu`");
+        return ExitCode::FAILURE;
+    }
     // One buffer for the whole run: after the first shard it already holds
     // enough capacity, so later shards reuse the allocation instead of
     // handing the allocator a multi-gigabyte free/alloc pair every time.
@@ -1003,7 +1132,7 @@ fn run_epochs<O: Optimizer>(
             examples.clear();
             for &fi in &shard.files {
                 let before = examples.len();
-                match load_file_into(&plan.files[fi], args.limit, &mut examples) {
+                match load_file_into(&plan.files[fi], args.limit, &mut examples, &filter, &policy) {
                     // Replace the size-derived estimate with the true count,
                     // so the progress bar stops guessing from epoch 2 on.
                     Ok(_) => plan.counts[fi] = examples.len() - before,
@@ -1074,7 +1203,35 @@ fn run_epochs<O: Optimizer>(
                     lr *= 0.2 + 0.8 * (epoch as f32 / args.warmup as f32);
                 }
                 trainer.train_stage_epoch(&examples, st, lr, progress)
+            } else if gpu.is_some() {
+                #[cfg(feature = "gpu")]
+                {
+                    let g = gpu.as_mut().unwrap();
+                    let mut lr_fn = || cosine_lr(args, epoch, si, shards.len());
+                    let sq = g.train_shard(&examples, &mut lr_fn);
+                    // The evaluator's own tables are stale until this; val
+                    // and the save both read them, so pull them back every
+                    // shard.
+                    g.download(&mut trainer.evaluator);
+                    let mut st = EpochStats::default();
+                    // Eight rows per position, so the row count is what the
+                    // sum of squares was taken over.
+                    st.loss_sum[0] = sq;
+                    st.samples[0] = (examples.len() * kuroobi::linear_gpu::FORMS) as u64;
+                    st
+                }
+                #[cfg(not(feature = "gpu"))]
+                unreachable!("the flag is refused without the feature")
             } else {
+                /* Anneal across the whole run, stepped per shard rather
+                than per epoch: with fifteen shards an epoch, a per-epoch
+                step would hold one rate for two hours and then jump. The
+                floor matches nnue_train's so the two sweeps end alike. */
+                if args.cosine {
+                    trainer
+                        .optimizer
+                        .set_lr(cosine_lr(args, epoch, si, shards.len()));
+                }
                 // `train_pass`, not `train_stage_epoch`: the lr schedule
                 // advances once per epoch, not once per shard.
                 trainer.train_pass(&examples, progress)

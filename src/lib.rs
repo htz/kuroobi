@@ -32,6 +32,9 @@ pub mod engine;
 pub mod evaluator;
 pub mod game;
 pub mod learn;
+/// GPU training for the linear evaluator (`train --gpu`).
+#[cfg(feature = "gpu")]
+pub mod linear_gpu;
 pub mod midgame;
 pub mod nnue;
 pub mod pattern;

@@ -35,7 +35,7 @@ const WEIGHT_MAGIC: &[u8; 8] = b"BBRVWT02";
 const WEIGHT_MAGIC_V1: &[u8; 8] = b"BBRVWT01";
 
 /// Cells in the per-stage disc-count table (player disc count 0..=64).
-const NUM_TABLE_SIZE: usize = 65;
+pub const NUM_TABLE_SIZE: usize = 65;
 
 /// Stage-based evaluator over a static pattern library.
 ///
@@ -236,6 +236,10 @@ pub trait Optimizer {
 
     /// Called once per epoch by trainers that support schedules.
     fn next_epoch(&mut self) {}
+
+    /// Set the rate directly. A schedule the caller drives (an annealing
+    /// sweep) needs this; `next_epoch` can only step its own.
+    fn set_lr(&mut self, _lr: f32) {}
 }
 
 /// Plain SGD with optional per-epoch learning-rate decay. Stateless per
@@ -271,6 +275,10 @@ impl Optimizer for SgdOptimizer {
 
     fn next_epoch(&mut self) {
         self.learning_rate *= self.decay;
+    }
+
+    fn set_lr(&mut self, lr: f32) {
+        self.learning_rate = lr;
     }
 }
 
@@ -331,6 +339,10 @@ impl Optimizer for AdamOptimizer {
         let m_hat = *m / (1.0 - self.beta1.powi(*t as i32));
         let v_hat = *v / (1.0 - self.beta2.powi(*t as i32));
         self.learning_rate * m_hat / (v_hat.sqrt() + self.epsilon)
+    }
+
+    fn set_lr(&mut self, lr: f32) {
+        self.learning_rate = lr;
     }
 }
 
@@ -471,6 +483,39 @@ impl Evaluator {
             }
         }
         score + self.num_weights[stage][self.num_index(board)]
+    }
+
+    /// Every weight as one vector, stage-major: for each stage, each
+    /// pattern's table in `patterns` order, then the disc-count table.
+    ///
+    /// The GPU trainer numbers cells in exactly this layout, so a mismatch
+    /// here trains cells the search reads somewhere else.
+    pub fn flat_all(&self) -> Vec<f32> {
+        let stride: usize =
+            self.patterns.iter().map(|p| p.table_size()).sum::<usize>() + NUM_TABLE_SIZE;
+        let mut out = Vec::with_capacity(stride * STAGE_COUNT);
+        for s in 0..STAGE_COUNT {
+            for t in &self.weights[s] {
+                out.extend_from_slice(t);
+            }
+            out.extend_from_slice(&self.num_weights[s]);
+        }
+        out
+    }
+
+    /// Write back what [`flat_all`](Self::flat_all) produced.
+    pub fn set_flat_all(&mut self, v: &[f32]) {
+        let mut k = 0usize;
+        for s in 0..STAGE_COUNT {
+            for t in self.weights[s].iter_mut() {
+                let n = t.len();
+                t.copy_from_slice(&v[k..k + n]);
+                k += n;
+            }
+            self.num_weights[s].copy_from_slice(&v[k..k + NUM_TABLE_SIZE]);
+            k += NUM_TABLE_SIZE;
+        }
+        self.flat_weights.clear();
     }
 
     /// Disc-count feature index: the current player's disc count.
