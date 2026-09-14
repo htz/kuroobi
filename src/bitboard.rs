@@ -1095,6 +1095,12 @@ pub fn count_last_flips(player: u64, sq: u8) -> (u32, u32) {
 ///
 /// Entries 64 and 65 are zero-ray sentinels, so `flippable` on an empty
 /// `pos_bit` (`trailing_zeros() == 64`) stays in bounds and returns 0.
+///
+/// Only the NEON kernel reads it, so the definition carries the same gate
+/// as its reader: on any other target it is dead, and the repository
+/// builds with warnings denied. Missed once because this machine is
+/// arm64 and CI is not.
+#[cfg(target_arch = "aarch64")]
 #[repr(align(64))]
 #[derive(Clone, Copy)]
 struct MaskLr([u64; 8]);
@@ -1104,6 +1110,7 @@ struct MaskLr([u64; 8]);
 /// hottest kernel in the search. One shared instance is what the alignment
 /// above is for. (`RAY_UP` and `RAY_DOWN_REV` stay `const` - the
 /// initializer below reads them, which a `static` cannot serve.)
+#[cfg(target_arch = "aarch64")]
 static MASK_LR: [MaskLr; 66] = {
     let mut out = [MaskLr([0u64; 8]); 66];
     let mut sq = 0usize;
