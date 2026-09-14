@@ -379,15 +379,25 @@ function CondChip({ c, who }: { c: Cond; who?: Who }) {
 }
 
 /* Never hide what goes to the server; raw formula input stays as the
- * escape hatch. */
+ * escape hatch.
+ *
+ * The formula wraps rather than being cut. It used to sit on one line
+ * with an ellipsis, which hid the tail of exactly the string this row
+ * exists to show -- and hid it badly: a flex item's `min-width` is
+ * `auto`, so the line never shrank to its box, the ellipsis never
+ * appeared, and the overflow pushed the settings modal wide enough to
+ * grow a horizontal scrollbar. */
 function FormulaWire({ text }: { text: string }) {
   return (
     <div style={{
-      display: 'flex', alignItems: 'center', gap: 'var(--sp-3)', padding: '9px var(--sp-3)',
+      display: 'flex', alignItems: 'baseline', gap: 'var(--sp-3)', padding: '9px var(--sp-3)',
       borderRadius: 'var(--r-3)', background: 'var(--panel)', border: '1px solid var(--border)',
     }}>
       <span style={{ fontSize: 'var(--fs-7)', fontWeight: 600, letterSpacing: '.08em', color: 'var(--sub)', flex: 'none' }}>{t('ggs.formula.wire')}</span>
-      <code style={{ fontFamily: 'var(--ff-mono)', fontSize: 'var(--fs-6)', color: 'var(--text)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{text}</code>
+      <code className="k-sel" style={{
+        fontFamily: 'var(--ff-mono)', fontSize: 'var(--fs-6)', color: 'var(--text)',
+        minWidth: 0, whiteSpace: 'pre-wrap', overflowWrap: 'anywhere', lineHeight: 1.6,
+      }}>{text}</code>
     </div>
   );
 }
