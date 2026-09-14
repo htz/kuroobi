@@ -521,6 +521,8 @@ ggs:
     opp_eval: "相手 {v}"
     opp_left: "相手が退室"
     pondering: "先読み中"
+    pondering_reply: "先読み中 相手 {m} と読む"
+    pondering_line: "先読み中 相手 {m} なら {v}"
     record_title: "対局の棋譜"
     adjourn_body_rated: "棋譜と時計を残して中断します。あとでロビーの中断対局から再開できます。同期対局は 2 局とも中断されます。"
     adjourn_body_unknown: "この対局を中断します。レート戦なら棋譜が残り、あとで再開できます。非レートなら棋譜は残りません (レート戦かどうかを取得できていません)。同期対局は 2 局とも中断されます。"

@@ -6,6 +6,7 @@ import {
   fingerGroups, fingerValue, hasJapanese, normKey, parseCond, translate, useClocks,
   type ClockSide, type ClockView,
 } from './ggs';
+import { sqName } from './adapt';
 import { t, useLang, tErr } from './i18n';
 import { Col, Empty, EmptyBoard, EmptyState, List, Modal, Note, Overlay, Section, TableHead, TableRow, picked } from './components/layout';
 import { Button, Segmented, Select, TextField, Toggle } from './components/primitives';
@@ -972,8 +973,13 @@ function MatchBoard({ snap, m, clock, prefs, onKifu, face }: {
      board rendered as "even". Ponder reads the opponent's position
      and is recorded sign-flipped (Progress::flip), so it displays
      directly as own-view disc diff. */
+  /* Not while pondering: `busy_best` is then the best answer to the
+     assumed reply, a square in a position one ply past the board on
+     screen. The assumed reply is marked instead, and the value it
+     belongs to is spelled out in the status line below, where the
+     assumption can be named. */
   const busyEval: Record<number, EvalInfo> | undefined =
-    m.busy && m.busy_best != null
+    m.busy && m.busy !== 'ponder' && m.busy_best != null
       ? {
           [m.busy_best]: {
             score: m.busy_eval ?? 0,
@@ -1033,10 +1039,18 @@ function MatchBoard({ snap, m, clock, prefs, onKifu, face }: {
           actually known. */}
       <Board cells={m.cells as Cell[]} last={last} disabled
              evals={busyEval}
+             /* Pondering marks the reply it assumes -- a ring, not a
+                value: the number belongs to the line after it, not to
+                this square. */
+             next={m.busy === 'ponder' ? m.busy_predict : null}
              /* The marked square must also enter `legal`: the board
                 draws only on squares passed as legal, and the game
-                screen normally passes none — so pass just this one. */
-             legal={busyEval ? Object.keys(busyEval).map(Number) : []}
+                screen normally passes none — so pass just this one.
+                That covers the pondered reply too, which is drawn as a
+                ring rather than a value. */
+             legal={busyEval ? Object.keys(busyEval).map(Number)
+                    : m.busy === 'ponder' && m.busy_predict != null ? [m.busy_predict]
+                    : []}
              coords={prefs.coords} grain={prefs.grain}
              flip={flipped(prefs.facing, m.my_color)} />
       <PlayerRow color={bottom.color === 'black' ? 'b' : 'w'} name={bottom.name || '?'}
@@ -1074,7 +1088,18 @@ function MatchBoard({ snap, m, clock, prefs, onKifu, face }: {
         )}
         {m.busy === 'solve' && <span style={{ color: 'var(--accent)' }}>{t('ggs.play.solving')}</span>}
         {m.busy === 'select' && <span style={{ color: 'var(--accent)' }}>{t('ggs.play.selecting')}</span>}
-        {m.busy === 'ponder' && <span style={{ color: 'var(--sub)' }}>{t('ggs.play.pondering')}</span>}
+        {m.busy === 'ponder' && (
+          <span style={{ color: 'var(--sub)' }}>
+            {m.busy_predict != null && m.busy_eval != null
+              ? t('ggs.play.pondering_line', {
+                  m: sqName(m.busy_predict),
+                  v: (m.busy_eval > 0 ? '+' : '') + m.busy_eval.toFixed(1),
+                })
+              : m.busy_predict != null
+                ? t('ggs.play.pondering_reply', { m: sqName(m.busy_predict) })
+                : t('ggs.play.pondering')}
+          </span>
+        )}
         {!m.busy && snap.thinking === m.id && (
           <span style={{ color: 'var(--accent)' }}>{t('ggs.play.thinking')}</span>
         )}

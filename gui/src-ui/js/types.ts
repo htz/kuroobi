@@ -156,6 +156,8 @@ export interface MatchView {
   busy_best: number | null;
   /** Its value in discs, mover view. */
   busy_eval: number | null;
+  /** The reply a ponder assumes; null unless `busy` is 'ponder'. */
+  busy_predict: number | null;
   /** Final result (disc difference). */
   result: string;
   /** 64 cells: 0 empty / 1 black / 2 white (file-major). */

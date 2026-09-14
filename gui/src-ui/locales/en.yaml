@@ -525,6 +525,8 @@ ggs:
     opp_eval: "Opponent {v}"
     opp_left: "Opponent left"
     pondering: "Pondering"
+    pondering_reply: "Pondering, expecting {m}"
+    pondering_line: "Pondering, {v} if {m}"
     record_title: "Game record"
     adjourn_body_rated: "The record and the clocks are kept; resume later from the lobby's adjourned list. A synchro match adjourns both boards."
     adjourn_body_unknown: "Adjourn this match. A rated game keeps its record and can be resumed; an unrated one is not kept (which this is has not been seen). A synchro match adjourns both boards."

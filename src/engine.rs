@@ -166,6 +166,13 @@ pub struct Progress {
     pub best: std::sync::atomic::AtomicU32,
     /// Its value x1000 in discs; `i32::MIN` means none yet.
     pub milli: std::sync::atomic::AtomicI32,
+    /// The reply pondering assumes (0..64; >= 64 means none).
+    ///
+    /// Kept apart from `best`. It used to share it, so the first
+    /// finished iteration replaced the assumed reply with the best move
+    /// *after* it -- a square one ply beyond the board on screen, shown
+    /// with the value of a line that square has nothing to do with.
+    predicted: std::sync::atomic::AtomicU32,
     /// Whether to negate values on write. Ponder reads the position
     /// after our move, where the opponent is to move, so search values
     /// are from their view; the display always wants ours.
@@ -197,6 +204,8 @@ impl Progress {
         self.best.store(64, std::sync::atomic::Ordering::Relaxed);
         self.milli
             .store(i32::MIN, std::sync::atomic::Ordering::Relaxed);
+        self.predicted
+            .store(64, std::sync::atomic::Ordering::Relaxed);
         self.flip.store(false, std::sync::atomic::Ordering::Relaxed);
     }
 
@@ -219,20 +228,23 @@ impl Progress {
 
     /// Record the predicted opponent move (ponder).
     pub fn predict(&self, pos: Position) {
-        self.best
+        self.predicted
             .store(pos.index() as u32, std::sync::atomic::Ordering::Relaxed);
     }
 
-    /// Snapshot for readers.
-    pub fn snapshot(&self) -> (u8, u32, Option<u32>, Option<f32>) {
+    /// Snapshot for readers: kind, depth, best move, value, and the
+    /// reply a ponder assumes.
+    pub fn snapshot(&self) -> (u8, u32, Option<u32>, Option<f32>, Option<u32>) {
         use std::sync::atomic::Ordering::Relaxed;
         let b = self.best.load(Relaxed);
         let m = self.milli.load(Relaxed);
+        let p = self.predicted.load(Relaxed);
         (
             self.kind.load(Relaxed),
             self.depth.load(Relaxed),
             (b < 64).then_some(b),
             (m != i32::MIN).then(|| m as f32 / 1000.0),
+            (p < 64).then_some(p),
         )
     }
 }
@@ -1137,6 +1149,32 @@ impl Engine {
 mod progress_tests {
     use super::Progress;
     use crate::Position;
+
+    /// The assumed reply survives the iterations that follow it.
+    ///
+    /// It used to be stored in the same slot as the best move, so the
+    /// first finished iteration replaced it with the best move one ply
+    /// further on. The screen draws the assumed reply on the board it
+    /// is showing, where that later square is not even the same
+    /// position -- a value pinned to a move nothing explains.
+    #[test]
+    fn pondering_keeps_the_reply_it_assumed() {
+        let p = Progress::default();
+        p.clear();
+        p.set_kind(Progress::PONDER);
+        p.predict(Position::from_index(19).unwrap());
+        assert_eq!(p.snapshot().4, Some(19), "the assumed reply is readable");
+
+        // An iteration of the search that follows it reports its own
+        // best move; the assumption must not move with it.
+        p.reached(6, Position::from_index(42), 4.0);
+        assert_eq!(p.snapshot().2, Some(42), "best move is the search's");
+        assert_eq!(p.snapshot().4, Some(19), "the assumption is unchanged");
+
+        // Leaving ponder drops it, so a think never shows a stale one.
+        p.clear();
+        assert_eq!(p.snapshot().4, None);
+    }
 
     /// `clear()` must reset the negate flag.
     ///

@@ -315,6 +315,10 @@ pub struct MatchView {
     pub busy_best: Option<u32>,
     /// Its value in discs, mover view.
     pub busy_eval: Option<f32>,
+    /// The reply a ponder assumes; the board marks this square, since
+    /// it is the only one of the two that exists in the position on
+    /// screen.
+    pub busy_predict: Option<u32>,
     pub cells: Vec<u8>, // 0 empty, 1 black (*), 2 white (O)
     pub turn: String,   // "black" | "white" | ""
     pub my_color: String,
@@ -4101,6 +4105,7 @@ fn sync_matches(ctx: &mut Ctx, matches: &HashMap<String, MatchState>) {
             busy_depth: 0,
             busy_best: None,
             busy_eval: None,
+            busy_predict: None,
             cells: m.cells.clone(),
             turn: match m.turn {
                 '*' => "black".into(),
@@ -4144,8 +4149,9 @@ fn sync_matches(ctx: &mut Ctx, matches: &HashMap<String, MatchState>) {
     `.8`) and inserted new games mid-list; sort by arrival order. */
     view.sort_by_key(|v| std::cmp::Reverse(v.order));
     /* Overlay running workers' progress; the assignment (`mid`) says
-    which board. During ponder the move is the predicted reply, so
-    `busy` disambiguates. */
+    which board. A ponder reports two squares -- the reply it assumes
+    and its best answer to that reply -- and only the first exists in
+    the position on screen. */
     for v in &mut view {
         let Some(w) = ctx.workers.iter().find(|w| w.mid.as_deref() == Some(&v.id)) else {
             continue;
@@ -4153,7 +4159,7 @@ fn sync_matches(ctx: &mut Ctx, matches: &HashMap<String, MatchState>) {
         if !w.busy {
             continue;
         }
-        let (kind, depth, best, eval) = w.progress.snapshot();
+        let (kind, depth, best, eval, predict) = w.progress.snapshot();
         v.busy = match kind {
             kuroobi::engine::Progress::THINK => "think",
             kuroobi::engine::Progress::PONDER => "ponder",
@@ -4165,6 +4171,7 @@ fn sync_matches(ctx: &mut Ctx, matches: &HashMap<String, MatchState>) {
         v.busy_depth = depth;
         v.busy_best = best;
         v.busy_eval = eval;
+        v.busy_predict = predict;
     }
     ctx.snap.lock().unwrap().matches = view;
     ctx.dirty = true;
