@@ -289,6 +289,15 @@ fn main() -> ExitCode {
                 phase(&s::WARMUP_NS, &s::WARMUP_NODES),
                 phase(&s::EXACT_NS, &s::EXACT_NODES)
             );
+            let mism = kuroobi::solver::ORDER_MISMATCH.load(Relaxed);
+            if mism > 0 {
+                println!(
+                    "  ordering indices did not match the board at {mism} nodes \
+                     ({} on a worker that never seeded, {} still all-zero)",
+                    kuroobi::solver::ORDER_MISMATCH_UNSEEDED.load(Relaxed),
+                    kuroobi::solver::ORDER_MISMATCH_ZERO.load(Relaxed)
+                );
+            }
             let sp = kuroobi::solver::SPLITS.load(Relaxed);
             if sp > 0 {
                 let live = s::TASK_NS.load(Relaxed) as f64 / 1e9;

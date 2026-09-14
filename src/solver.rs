@@ -148,6 +148,15 @@ fn private_tt_bits() -> (u32, u32) {
         )
     })
 }
+/// Nodes whose carried ordering indices did not match the board, counted
+/// only under `KUROOBI_ORDER_CHECK`.
+pub static ORDER_MISMATCH: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+/// Mismatches at a worker that never seeded its indices at all.
+pub static ORDER_MISMATCH_UNSEEDED: std::sync::atomic::AtomicU64 =
+    std::sync::atomic::AtomicU64::new(0);
+/// Mismatches where the carried set is all zero (never seeded, never moved).
+pub static ORDER_MISMATCH_ZERO: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+
 /// From this many empties upward, an evaluator (when provided) orders
 /// moves instead of the static heuristic.
 const EVAL_ORDER_EMPTIES: u8 = 14;
@@ -697,6 +706,16 @@ fn run_one_sibling(
     w.sigma_scale = sigma_scale;
 
     let mut child = m.child(parent);
+    /* A helper starts in the middle of the tree, so the carried ordering
+    indices have to be built here: `pvs_root` seeds them for the thread
+    that owns the root, and a fresh `Worker` starts at `ZERO`. Without
+    this the ordering below a split reads rows belonging to no position
+    at all, and the pruning it is there to enable stops happening --
+    measured on FFO47, 10.2M nodes at one thread against 173M at two. */
+    if let Some(e) = ev.filter(|_| child.empty_count() >= eval_order_empties()) {
+        w.order_ix = order_indexer(e).init(child.black, child.white);
+        w.order_seeded = true;
+    }
     let ch = child_hash_of(&child);
     let mut val = -w.pvs(&mut child, ch, -cur - 1, -cur, false, true, ev);
     if val == -ABORTED {
@@ -882,6 +901,11 @@ unsafe fn help_split(sp: &SplitPoint) -> bool {
         w.nnue = sp.nnue.clone();
         w.sigma_scale = sp.sigma_scale;
         let mut child = m.child(&sp.board);
+        // Same seeding as the other helper path; see the comment there.
+        if let Some(e) = ev.filter(|_| child.empty_count() >= eval_order_empties()) {
+            w.order_ix = order_indexer(e).init(child.black, child.white);
+            w.order_seeded = true;
+        }
         let ch = child_hash_of(&child);
         let mut val = -w.pvs(&mut child, ch, -cur - 1, -cur, false, true, ev);
         if val == -ABORTED {
@@ -2847,6 +2871,8 @@ struct Worker<'a> {
     /// walk the ordering already does per candidate, so carrying them is a
     /// snapshot and a restore around each child that needs them.
     order_ix: crate::pattern_index::PatternIndices,
+    /// Whether `order_ix` was ever built from a board on this worker.
+    order_seeded: bool,
     tt: &'a HashTable,
     /// Cutoff signal for the split this worker is searching under.
     abort: &'a AbortFlag<'a>,
@@ -2925,6 +2951,7 @@ impl<'a> Worker<'a> {
             mid_table,
             mid_empties: mid_tt_empties(),
             order_ix: crate::pattern_index::PatternIndices::ZERO,
+            order_seeded: false,
             nnue: None,
             taint: 0,
             l56: if new_shallow() {
@@ -4157,6 +4184,7 @@ impl Worker<'_> {
         // them from the bitboards before this; see `Worker::order_ix`.
         if let Some(e) = ev.filter(|_| board.empty_count() >= eval_order_empties()) {
             self.order_ix = order_indexer(e).init(board.black, board.white);
+            self.order_seeded = true;
         }
         let root_mover = board.player();
 
@@ -4349,14 +4377,23 @@ impl Worker<'_> {
             let m = siblings[idx];
             let mut child = m.child(parent);
             let ch = child_hash_of(&child);
-            let mut val = -self.pvs(&mut child, ch, -cur - 1, -cur, false, true, ev);
+            /* The owner searches siblings here itself, and went down
+            through `pvs` rather than `pvs_ordered`: the carried
+            ordering indices stayed on the parent while the search was
+            a ply below it, so every node under a split scored its
+            moves off the wrong rows. One thread never takes this
+            path, which is why the node count matched there and only
+            there. Measured on FFO47, 9.6M nodes at one thread against
+            139M at two. */
+            let mover = parent.player();
+            let mut val = -self.pvs_ordered(&mut child, ch, -cur - 1, -cur, true, ev, m, mover);
             if val == -ABORTED {
                 unwound = true;
                 break;
             }
             if cur < val && val < upper {
                 let ch = child_hash_of(&child);
-                val = -self.pvs(&mut child, ch, -upper, -val, false, false, ev);
+                val = -self.pvs_ordered(&mut child, ch, -upper, -val, false, ev, m, mover);
                 if val == -ABORTED {
                     unwound = true;
                     break;
@@ -4504,14 +4541,17 @@ impl Worker<'_> {
             let n0 = self.nodes;
             let mut child = m.child(parent);
             let ch = child_hash_of(&child);
-            let mut val = -self.pvs(&mut child, ch, -cur - 1, -cur, false, true, ev);
+            // Same as the v2 owner loop: advance the carried indices
+            // across the sibling's move before searching under it.
+            let mover = parent.player();
+            let mut val = -self.pvs_ordered(&mut child, ch, -cur - 1, -cur, true, ev, *m, mover);
             if val == -ABORTED {
                 unwound = true;
                 break;
             }
             if cur < val && val < upper {
                 let ch = child_hash_of(&child);
-                val = -self.pvs(&mut child, ch, -upper, -val, false, false, ev);
+                val = -self.pvs_ordered(&mut child, ch, -upper, -val, false, ev, *m, mover);
                 if val == -ABORTED {
                     unwound = true;
                     break;
@@ -6751,6 +6791,25 @@ impl Worker<'_> {
         // bitboards - which is what this did - reads every cell of all 64
         // masks once per node, and measured more than the evaluation it
         // feeds.
+        /* `KUROOBI_ORDER_CHECK=1` asserts the carried indices really do
+        describe this node. They are a mutable field threaded through the
+        recursion, so a path that reaches a node without seeding them --
+        a helper starting mid-tree, say -- scores every move off rows
+        belonging to no position at all, and nothing else notices. */
+        if std::env::var_os("KUROOBI_ORDER_CHECK").is_some() {
+            if let Some(e) = ev {
+                let want = order_indexer(e).init(board.black, board.white);
+                if want != self.order_ix {
+                    ORDER_MISMATCH.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                    if !self.order_seeded {
+                        ORDER_MISMATCH_UNSEEDED.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                    }
+                    if self.order_ix == crate::pattern_index::PatternIndices::ZERO {
+                        ORDER_MISMATCH_ZERO.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                    }
+                }
+            }
+        }
         let mut order_ix = if eval_order {
             ev.map(|e| (order_indexer(e), self.order_ix))
         } else {

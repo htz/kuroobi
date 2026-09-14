@@ -30,7 +30,7 @@ pub struct UpdateEntry {
 
 /// The per-mask ternary indices of one position (absolute colors).
 /// Copy-sized so search can snapshot it cheaply if ever needed.
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, PartialEq, Eq)]
 pub struct PatternIndices {
     idx: [u16; MAX_MASKS],
 }
