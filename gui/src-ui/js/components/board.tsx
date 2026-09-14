@@ -58,13 +58,27 @@ export type Cell = 0 | 1 | 2;            // 0 empty / 1 black / 2 white
  * / "N plies" (current depth). Only "N plies" values are still moving
  * — without the tag you cannot tell settled from provisional. Kept as
  * a union, not a string. */
-export type EvalSource = { book: true } | { exact: true } | { depth: number };
+export type EvalSource = { book: true } | { exact: true } | { select: true } | { depth: number };
 export type EvalInfo = { score: number; src: EvalSource; best?: boolean };
 
 const sourceLabel = (s: EvalSource) =>
   'book' in s ? t('ui.board.src_book')
   : 'exact' in s ? t('ui.board.src_solve')
+  : 'select' in s ? t('ui.board.src_select')
   : t('ui.board.src_depth', { n: s.depth });
+
+/** Disc-count text: whole for an exact solve, a tenth otherwise.
+ *
+ * `toFixed` keeps the sign on a value that rounds to zero, and a
+ * board reading "-0.0" says the move loses when it does not. */
+const evalText = (score: number, exact: boolean) => {
+  const body = exact ? String(Math.round(score)) : score.toFixed(1);
+  const zero = Number(body) === 0;
+  return (Number(body) > 0 ? '+' : '') + (zero ? body.replace('-', '') : body);
+};
+
+/** Step the type down so the longest form still fits inside the disc. */
+const numSize = (s: string) => (s.length <= 3 ? 24 : s.length === 4 ? 21 : 17);
 
 const cx = (i: number) => PAD + i * CELL + CELL / 2;
 const fr = (sq: number): [number, number] => [Math.floor(sq / 8), sq % 8];
@@ -166,21 +180,30 @@ export function Stone({ x, y, color, last }: { x: number; y: number; color: 1 | 
 function EvalCell({ x, y, info }: { x: number; y: number; info: EvalInfo }) {
   const { score, src, best } = info;
   const label = sourceLabel(src);
+  const num = evalText(score, 'exact' in src);
   // "N plies" is provisional and rendered weaker. Book values use the
   // board-specific token instead of --gold, which sinks into the light
   // theme's green.
-  const srcColor = 'book' in src ? 'var(--board-eval-book)' : 'exact' in src ? 'var(--board-eval-strong)' : 'var(--board-eval-weak)';
+  /* Settled values read strong, still-moving ones weak. A selective
+     solve is settled -- it reads to the end, just not exhaustively --
+     so it belongs with the exact one, not with "N plies". */
+  const srcColor = 'book' in src ? 'var(--board-eval-book)'
+    : 'exact' in src || 'select' in src ? 'var(--board-eval-strong)'
+    : 'var(--board-eval-weak)';
   return (
     <g>
       <circle cx={x} cy={y} r={30}
               fill={best ? 'color-mix(in srgb, var(--gold) 14%, transparent)' : 'var(--board-eval-bg)'}
               stroke={best ? 'var(--gold)' : 'var(--board-eval-edge)'} strokeWidth={best ? 2 : 1} />
-      {/* Board numbers are integers: a 60px disc fits 3 chars (±64),
-          and 0.1-disc differences belong to the graph and table. */}
-      <text x={x} y={y + 2} textAnchor="middle" fontSize={24}
+      {/* An exact solve counts whole discs, so it prints whole. Every
+          other value is a mean the search is still narrowing, where a
+          tenth separates moves the integer form ties. Five characters
+          do not fit a 60px disc at the whole-number size, so the type
+          steps down with the string rather than overflowing. */}
+      <text x={x} y={y + 2} textAnchor="middle" fontSize={numSize(num)}
             fill={best ? 'var(--gold)' : score < 0 ? 'var(--bad)' : 'var(--board-eval-text)'}
             fontWeight={best ? 700 : 400}>
-        {(score > 0 ? '+' : '') + Math.round(score)}
+        {num}
       </text>
       <text x={x} y={y + 22} textAnchor="middle" fontSize={13} fill={srcColor}>{label}</text>
     </g>

@@ -978,7 +978,7 @@ function MatchBoard({ snap, m, clock, prefs, onKifu, face }: {
           [m.busy_best]: {
             score: m.busy_eval ?? 0,
             src: m.busy === 'solve' ? { exact: true }
-              : m.busy === 'select' ? { exact: true }
+              : m.busy === 'select' ? { select: true }
               : { depth: m.busy_depth },
             best: true,
           },

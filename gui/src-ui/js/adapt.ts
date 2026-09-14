@@ -82,8 +82,14 @@ export function evalsOf(
   for (const [sq, h] of Object.entries(hints)) {
     out[+sq] = {
       score: h.value * flip,
-      // Three sources; only "N plies" is provisional and still growing.
-      src: h.book ? { book: true } : h.exact ? { exact: true } : { depth: h.depth },
+      /* Four sources; only "N plies" is provisional and still growing.
+         A selective solve reports no depth (`MoveEval::depth` is 0 for
+         solves and book moves), so depth 0 with neither flag set is
+         one -- it used to render as "0 手". */
+      src: h.book ? { book: true }
+        : h.exact ? { exact: true }
+        : h.depth === 0 ? { select: true }
+        : { depth: h.depth },
       best: h.value === best,
     };
   }

@@ -810,6 +810,7 @@ ui:
     src_book: "Book"
     src_depth: "{n} ply"
     src_solve: "Solved"
+    src_select: "Selective"
   close: "Close"
   panel:
     close: "Close panel"

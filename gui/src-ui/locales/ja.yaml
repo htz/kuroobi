@@ -806,6 +806,7 @@ ui:
     src_book: "定石"
     src_depth: "{n} 手"
     src_solve: "読切"
+    src_select: "選択読み"
   close: "閉じる"
   panel:
     close: "パネルを閉じる"
