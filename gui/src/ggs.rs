@@ -929,6 +929,26 @@ fn save_settings(ctx: &Ctx) {
     }
 }
 
+/// Wire log path (next to the history).
+fn wire_path() -> PathBuf {
+    history_path()
+        .parent()
+        .unwrap_or(&PathBuf::from("."))
+        .join("ggs_wire.log")
+}
+
+/// Keep one previous generation and start over past this size.
+///
+/// A session left running for days would otherwise grow without bound.
+/// Two files means the log always covers at least the last `CAP` bytes,
+/// which is more than a game's worth of traffic.
+fn roll_if_large(p: &std::path::Path) {
+    const CAP: u64 = 8 * 1024 * 1024;
+    if std::fs::metadata(p).is_ok_and(|m| m.len() > CAP) {
+        let _ = std::fs::rename(p, p.with_extension("log.1"));
+    }
+}
+
 /// Load at startup; absent file keeps the defaults.
 fn load_settings() -> Option<SavedSettings> {
     let text = std::fs::read_to_string(settings_path()).ok()?;
@@ -1893,26 +1913,25 @@ impl Ctx {
             .show();
     }
     fn log(&mut self, dir: &str, text: &str) {
-        /* Diagnostics: the screen log truncates at 600 lines; keep the
-        full wire when `KUROOBI_GGS_WIRE=<path>` is set. Needed in
-        release too — the bugs it chases only appear live. */
+        /* Diagnostics: the screen log keeps 600 lines and dies with the
+        process, so the wire also goes to a file -- always, not behind a
+        switch. The bugs it chases only appear live, and by the time one
+        is noticed the session that produced it is over: a log you have
+        to have turned on beforehand is a log you never have. Passwords
+        never reach here (`send!(.., secret)` logs `********`).
+        `KUROOBI_GGS_WIRE=<path>` only moves the file. */
         {
             use std::io::Write as _;
-            let path = std::env::var("KUROOBI_GGS_WIRE")
-                .ok()
-                .or(if cfg!(debug_assertions) {
-                    Some("/tmp/ggs_session_wire.log".to_string())
-                } else {
-                    None
-                });
-            if let Some(p) = path {
-                if let Ok(mut f) = std::fs::OpenOptions::new()
-                    .create(true)
-                    .append(true)
-                    .open(p)
-                {
-                    let _ = writeln!(f, "{dir} {text}");
-                }
+            let p = std::env::var("KUROOBI_GGS_WIRE")
+                .map(PathBuf::from)
+                .unwrap_or_else(|_| wire_path());
+            roll_if_large(&p);
+            if let Ok(mut f) = std::fs::OpenOptions::new()
+                .create(true)
+                .append(true)
+                .open(&p)
+            {
+                let _ = writeln!(f, "{dir} {text}");
             }
         }
         let mut s = self.snap.lock().unwrap();
