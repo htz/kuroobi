@@ -590,17 +590,31 @@ mod tests {
 
 /// Ray masks out of every square, `[square][axis]`, towards higher bit
 /// indices. Axis order matches [`LINE_DELTAS`].
-const RAY_UP: [[u64; 4]; 64] = build_ray_masks(true);
+///
+/// Entry 64 is an all-zero sentinel, as in the NEON table: an empty
+/// `pos_bit` has `trailing_zeros() == 64` and must flip nothing rather
+/// than index out of bounds.
+const RAY_UP: [[u64; 4]; 65] = {
+    let src = build_ray_masks(true);
+    let mut t = [[0u64; 4]; 65];
+    let mut sq = 0usize;
+    while sq < 64 {
+        t[sq] = src[sq];
+        sq += 1;
+    }
+    t
+};
 /// Same, towards lower bit indices, stored bit-reversed so one routine
 /// handles both halves (`reverse_bits` is a single `rbit` on aarch64).
-const RAY_DOWN_REV: [[u64; 4]; 64] = {
+/// Indexed by the square itself, so the same sentinel at 64 covers it.
+const RAY_DOWN_REV: [[u64; 4]; 65] = {
     let src = build_ray_masks(false);
-    let mut t = [[0u64; 4]; 64];
+    let mut t = [[0u64; 4]; 65];
     let mut sq = 0usize;
     while sq < 64 {
         let mut a = 0usize;
         while a < 4 {
-            t[63 - sq][a] = src[sq][a].reverse_bits();
+            t[sq][a] = src[sq][a].reverse_bits();
             a += 1;
         }
         sq += 1;
@@ -670,7 +684,7 @@ pub fn flippable_scalar(player_bb: u64, opponent_bb: u64, pos_bit: u64) -> u64 {
         | ray_run(player_bb, opponent_bb, up[2])
         | ray_run(player_bb, opponent_bb, up[3]);
 
-    let down = &RAY_DOWN_REV[63 - sq];
+    let down = &RAY_DOWN_REV[sq];
     let rp = player_bb.reverse_bits();
     let ro = opponent_bb.reverse_bits();
     let g = ray_run(rp, ro, down[0])
@@ -1119,7 +1133,7 @@ static MASK_LR: [MaskLr; 66] = {
             let mut j = 0usize;
             while j < 4 {
                 out[sq].0[j] = RAY_UP[sq][j];
-                out[sq].0[j + 4] = RAY_DOWN_REV[63 - sq][j];
+                out[sq].0[j + 4] = RAY_DOWN_REV[sq][j];
                 j += 1;
             }
         }
