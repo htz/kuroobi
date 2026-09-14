@@ -235,18 +235,20 @@ midgame search** (for when only search speed on identical positions is
 to be compared).
 
 ```sh
-# The position sets that ship with the repo
+# The sets our own measurements use
 solve_obf problems/band22.obf
 
-# FFO40-59 (the source of the README numbers). **Not shipped**, so
-# obtain it separately
-solve_obf problems/ffo40-59.obf
+# FFO40-59, the source of the README's endgame numbers
+solve_obf problems/fforum-40-59.obf
 ```
 
-**What `problems/` contains is `band22` / `band29` / `band29v2` /
-`calib1030`, four sets.** The FFO positions are left out for size, so
-reproducing the README's FFO numbers locally requires obtaining them
-yourself.
+**`problems/` holds two kinds of set.** `band22` / `band29` /
+`band29v2` / `calib1030` are ours, built by `gen_exact` for sigma
+calibration and the selective-search checks. `fforum-1-19`
+through `fforum-60-79` are the public FFO suite in OBF form; each line
+carries the position, the side to move and every move's exact value,
+so a solver can be checked on the move it picks and not only on the
+score it reports.
 
 ### mpbench
 

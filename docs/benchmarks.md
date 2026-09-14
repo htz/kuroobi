@@ -194,9 +194,8 @@ alternately in the same session every time you compare.
 | **FFO40-59 (20-34 empties)** | **535.1 s** | **542.99 s** | **0.97** | **12.62G** | **25.39G** | **0.50** | **23.6M** | **46.7M** |
 | **FFO1-59 total** | **538.7 s** | **552.8 s** | **0.97** | **12.72G** | **25.50G** | **0.50** | **23.6M** | **46.1M** |
 
-> **The FFO40-59 position set is not bundled** (for size reasons). To
-> reproduce this locally, obtain it separately. What is in `problems/` is
-> `band22` / `band29` / `band29v2` / `calib1030`.
+> The position set is `problems/fforum-40-59.obf`, which ships with the
+> repo along with the rest of the FFO suite.
 
 **Speed per node is about half of Edax's (23.6M against 46.1M NPS).** We
 still come out ahead on total time because the search tree is exactly half
