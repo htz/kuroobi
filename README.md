@@ -198,8 +198,8 @@ directions at once instead of looping. Details in
 
 The board is cut into **16 kinds of square groups (patterns) × 4
 orientations**, and the weights matching each arrangement are summed. The
-choice of which squares form a group is not ours: it is a **published set,
-adopted as-is** rather than designed here. In the figure
+choice of which squares form a group is not ours: we use the **Egaroucid
+pattern set** as-is. In the figure
 above, the dark green is the first orientation and the pale green the
 other three.
 

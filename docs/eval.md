@@ -7,7 +7,7 @@ groups of squares (patterns), and the NNUE that replaced it.
 
 ![Evaluation patterns](img/patterns.svg)
 
-*The linear evaluator's set (16 kinds × 4 orientations). Dark green is the first orientation, pale green the other 3.*
+*The linear evaluator's set -- the Egaroucid patterns (16 kinds × 4 orientations). Dark green is the first orientation, pale green the other 3.*
 
 ### Pattern evaluation
 
@@ -23,10 +23,10 @@ use. Two sets are kept:
 
 | Set | Patterns | Masks incl. orientations | Notes |
 |---|---|---|---|
-| `LINEAR_PATTERNS` | 16 | 64 | The linear evaluator, which the endgame solver orders moves with |
+| `LINEAR_PATTERNS` | 16 | 64 | The linear evaluator, which the endgame solver orders moves with. The shapes are Egaroucid's |
 | `NNUE_PATTERNS` | 32 | 32 | The NNUE's feature set: every orientation its own table |
 
-Sets that were tried and dropped: a 12-shape published family, an 18-shape
+Sets that were tried and dropped: the 12-shape Edax family, an 18-shape
 extension of the 16 (`Diagonal4` small enough to be fully learned in the
 opening -- it did not beat the 16 in league play), a shared-table 8-shape
 set, and a 7-shape corner-weighted one. None of them beat what is
