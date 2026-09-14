@@ -189,11 +189,6 @@ impl EpochStats {
         }
     }
 
-    /// Total number of examples seen.
-    pub fn total_samples(&self) -> u64 {
-        self.samples.iter().sum()
-    }
-
     pub fn stage_mse(&self, stage: usize) -> f64 {
         if self.samples[stage] == 0 {
             0.0

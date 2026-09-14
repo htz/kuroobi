@@ -256,7 +256,7 @@ src/
 ├── resources.rs       where weights and the book live (configurable)
 ├── timectl.rs         time allocation and the entrance to the solve (derived from machine speed)
 ├── engine.rs          session layer shared by the GUI and the CLI (move choice, analysis)
-├── trainer.rs         training data I/O, TD(λ)
+├── trainer.rs         training data I/O, symmetric expansion, epoch stats
 └── bin/               CLI tools (training, measurement, matches, correctness)
 gui/                   GUI (Tauri + Vite/TypeScript)
 docs/                  implementation notes (linked from this README)

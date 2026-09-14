@@ -2431,10 +2431,6 @@ struct L4Entry {
 const ENTRY_BYTES: usize = std::mem::size_of::<L4Entry>();
 const _: () = assert!(ENTRY_BYTES == 19);
 
-/// A zeroed slot matches no real position (both sides empty), and its bound
-/// bytes are never read before a store rewrites the whole entry - so the
-/// table can come straight from calloc's zero pages.
-#[allow(dead_code)]
 /// Composition counters for the 5-6 band (layer-profile builds only):
 /// how many of each unit a node pays for, to divide the band's ns/node.
 #[cfg(feature = "layer-profile")]

@@ -221,7 +221,7 @@ src/
 ├── resources.rs       重み・定石の在り処 (設定ファイルで指定できる)
 ├── timectl.rs         持ち時間の配り方・読切の入り口 (機械の速さから逆算)
 ├── engine.rs          GUI と CLI が共用するセッション層 (着手選択・解析)
-├── trainer.rs         学習データ入出力・TD(λ)
+├── trainer.rs         学習データ入出力・対称展開・エポック統計
 └── bin/               CLI ツール群 (学習・計測・対戦・正しさの検証)
 gui/                   GUI (Tauri + Vite/TypeScript)
 docs/                  実装の解説 (この README から辿る)

@@ -341,7 +341,7 @@ const ACT_CLAMP: f32 = 16.0;
 /// Resolution dominates until the pin cuts into the distribution (positive
 /// lanes: p50 4.0 / p90 11.6 / p99 26.2 discs), and the optimum is where the
 /// two costs meet. Reading the lanes as 0..255 instead — which the ReLU
-/// makes free, see [`activations_i8`] — doubles the pin at no cost in step,
+/// makes free — doubles the pin at no cost in step,
 /// so the meeting point moves and 8 keeps an eighth-disc step with the pin
 /// out at 31.9.
 pub const ACT_UNITS: f32 = 16.0;
@@ -939,7 +939,7 @@ impl AdamView {
     }
 }
 
-/// The f32 twin of [`fold_pairs`], for the training paths.
+/// The f32 twin of the integer pairwise fold, for the training paths.
 ///
 /// Returns the folded lanes. `raw` carries the accumulated transformer
 /// output, `ACC_DIMS` wide; the result is `H` wide and is what the read-out,
@@ -1500,7 +1500,7 @@ pub struct Nnue {
     /// table the search reads (see [`Nnue::ft_clipped`]).
     ft_clipped: usize,
     /// Whether the optional read-out terms carry any weight at all. Set by
-    /// `quantize`; see [`Nnue::extras`] for what they cost when they do.
+    /// `quantize`; the comment on each says what it costs when it does.
     has_pw: bool,
     has_head: bool,
     /// The head's first layer in int8, with the right shift that packs the
@@ -1523,9 +1523,7 @@ pub struct Nnue {
     /// the squaring's scale (see `readout_dot`).
     act_clamp_q: i16,
     act_shift_q: i16,
-    /// Clamp and shift for the pairwise fold (see `fold_pairs`). Both are
-    /// derived from `ft_scale`, so they travel with the quantisation.
-    /// Run the head's first layer in f32 instead of int8. See `extras`.
+    /// Run the head's first layer in f32 instead of int8.
     pub head_f32: bool,
     /// Steps per disc on the head's int8 activation, chosen before
     /// `quantize`. Finer steps resolve small activations but saturate
@@ -1731,7 +1729,7 @@ impl Nnue {
 
     pub fn quantize(&mut self) {
         // A term whose weights are all zero contributes nothing; see
-        // [`Nnue::extras`] for what skipping it is worth.
+        // what skipping it is worth.
         self.has_pw = self.pw.iter().any(|&v| v != 0.0);
         self.has_head = self.mlp_out_w.iter().any(|&v| v != 0.0);
 
@@ -2188,7 +2186,6 @@ impl Nnue {
         feats: &[u32; MAX_MASKS],
         stage: usize,
     ) -> ([f32; PA_DIMS], [f32; PA_DIMS]) {
-        #[allow(unused_mut)]
         let mut z = [0.0f32; PA_DIMS];
         {
             let bucket = pa_bucket(stage);
@@ -2297,8 +2294,7 @@ impl Nnue {
         for h in 0..ACC_DIMS {
             raw[h] += self.ft_bias[h];
         }
-        #[allow(unused_mut)]
-        let mut acc = fold_pairs_f32(&raw);
+        let acc = fold_pairs_f32(&raw);
         {
             // The stacked read-out replaces the linear one, the product gate
             // and the head all at once -- it is the whole score from the
@@ -2347,8 +2343,7 @@ impl Nnue {
         for h in 0..ACC_DIMS {
             raw[h] += self.ft_bias[h];
         }
-        #[allow(unused_mut)]
-        let mut acc = fold_pairs_f32(&raw);
+        let acc = fold_pairs_f32(&raw);
         {
             let (pa, pa_z) = self.pa_forward(&feats, stage);
             let (sq, draw, dpa) =
@@ -2669,7 +2664,6 @@ impl Nnue {
         /* The phase-adaptive rows, coalesced the same way. Its own stamp
         array and scratch: the row numbers index a different table, so they
         would collide with the base layer's. */
-        #[allow(unused_mut)]
         let mut pa_sq = 0.0f64;
         {
             while adam.pa_touched.len() < parts {
@@ -3598,7 +3592,7 @@ impl Nnue {
         }
     }
 
-    /// Hogwild SGD step through a shared `view`; mirrors [`train_black`],
+    /// Hogwild SGD step through a shared `view`; mirrors [`Nnue::train_black`],
     /// including its blind spot: the `view` carries no head pointers, so this
     /// path is only sound while the head is identically zero.
     ///
@@ -3682,7 +3676,7 @@ impl Nnue {
         err * err
     }
 
-    /// Hogwild Adam step; same forward/backward as [`train_black_shared`],
+    /// Hogwild Adam step; same forward/backward as [`Nnue::train_black_shared`],
     /// only the weight update differs.
     ///
     /// # Safety

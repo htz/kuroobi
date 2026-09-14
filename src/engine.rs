@@ -495,16 +495,6 @@ impl Engine {
     /// For measurement: without a per-game clear, a warm table biases
     /// even same-vs-same matches. Never call it mid-game — pondering
     /// exists precisely to carry the table over.
-    /// Drop the stop handle from the solver.
-    ///
-    /// The solver spawns a watcher thread per solve to poll that handle, and
-    /// a caller that never stops a search pays for the thread and for the
-    /// tail of its 5 ms sleep on every solve. A generator playing twenty
-    /// endgames a game pays it twenty times.
-    pub fn drop_solver_stop(&mut self) {
-        self.solver.set_stop(None);
-    }
-
     pub fn clear_tables(&mut self) {
         self.search.clear();
     }
