@@ -587,8 +587,6 @@ ggs:
     pacing_note: "The time per move follows from the time left and the moves left: short in the opening, saved for the endgame."
     ponder: "Ponder"
     ponder_note: "Searches ahead during the opponent's turn. It does not spend your clock."
-    requests_note: "Conditions for accepting or declining requests automatically. They stay on the server."
-    requests_title: "Handling requests"
     reserve: "Solve reserve (s)"
     strength: "Strength"
     threads: "Threads"
@@ -597,7 +595,6 @@ ggs:
     watch_analysis: "Analyze observed games too"
   standby:
     auto_accept: "Accept incoming requests automatically"
-    edit_conditions: "Change the conditions"
     formula_note: "These conditions hold on the server even with the app closed. They back up waiting mode."
     formula_title: "Request conditions (on the server)"
     interval: "Interval between games (sec)"

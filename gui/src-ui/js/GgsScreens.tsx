@@ -9,7 +9,7 @@ import {
 import { sqName } from './adapt';
 import { t, useLang, tErr } from './i18n';
 import { Col, Empty, EmptyBoard, EmptyState, List, Modal, Note, Overlay, Section, TableHead, TableRow, picked } from './components/layout';
-import { Button, Segmented, Select, TextField, Toggle } from './components/primitives';
+import { Button, Segmented, Select, TextArea, TextField, Toggle } from './components/primitives';
 import { Strength } from './components/strength';
 import { Confirm, PickOne } from './Dialogs';
 import { IconButton } from './components/Icons';
@@ -44,7 +44,7 @@ export function GgsScreen({ nav, snap, onNav, prefs, onKifu }: {
     case 'ggs-players': return <GgsUsers snap={snap} onNav={onNav} onKifu={onKifu} />;
     case 'ggs-results': return <GgsResults snap={snap} onKifu={onKifu} />;
     case 'ggs-chat': return <GgsChat snap={snap} />;
-    case 'ggs-standby': return <GgsStandby snap={snap} onNav={onNav} />;
+    case 'ggs-standby': return <GgsStandby snap={snap} />;
     case 'ggs-console': return <GgsConsole snap={snap} />;
     case 'ggs-settings': return <GgsSettings snap={snap} />;
     default: return null;
@@ -629,9 +629,13 @@ const calibNote = (): string => t('ggs.calib_note');
 /* ---------------- Waiting mode ----------------
  *
  * Game end -> interval -> auto-request, repeated. The server-side
- * request formula is view-only here; editing lives in GGS settings —
- * two editable copies compete for authority. */
-function GgsStandby({ snap, onNav }: { snap: GgsSnapshot; onNav: (id: NavId) => void }) {
+ * request formula is edited here, beside the loop that runs against
+ * it. It used to be view-only with a road to GGS settings, but that
+ * put the one setting in this whole app that lives on the server --
+ * and needs a connection to read or write -- inside a modal of local
+ * ones, which made every other setting there look connection-bound
+ * too. One editable copy, on a screen that already assumes GGS. */
+function GgsStandby({ snap }: { snap: GgsSnapshot }) {
   const sb = snap.standby;
   const st = snap.standby_stats;
   const [opp, setOpp] = useState(sb.opponent);
@@ -669,8 +673,33 @@ function GgsStandby({ snap, onNav }: { snap: GgsSnapshot; onNav: (id: NavId) => 
       .find(([k]) => k.replace(/\s+/g, '').replace(/\(.*\)/, '') === key)?.[1] ?? '')
       .replace(/^\s*:\s*/, '').trim();
 
+  /* The server holds these, so read them from it rather than trusting
+     anything cached: on open, and again after every save. */
+  const online = snap.conn === 'online';
+  const login = snap.login;
+  useEffect(() => { if (online && login) ggsApi.finger(login).catch(() => {}); }, [online, login]);
+  const [formSaid, setFormSaid] = useState('');
+  const saveForm = async (kind: 'aform' | 'dform', expr: string) => {
+    try {
+      await ggsApi.setFormula(kind, expr);
+    } catch (e) {
+      setFormSaid(t('ggs.settings.formula_failed', { error: tErr(e) }));
+      window.setTimeout(() => setFormSaid(''), 2500);
+      return;
+    }
+    if (login) ggsApi.finger(login).catch(() => {});
+  };
+
   return (
     <div className="k-scroll" style={{ flex: 1, minHeight: 0, padding: 'var(--sp-4) var(--sp-4) 0' }}>
+      {/* Start/stop rides the section band, with the state it changes.
+          It used to close the body, which read as "apply the fields
+          above" -- and once the server-side conditions moved onto this
+          screen, it sat between two blocks of settings with more to
+          fill in below it. An action belongs either at the end of
+          everything it governs or on the band of the section it
+          governs; the band keeps it beside the state chip, which is
+          the other half of the same control. */}
       <Section title={t('ggs.standby.title')}
                aside={<span style={{ display: 'flex', alignItems: 'center', gap: 'var(--sp-3)' }}>
                  <Tag tone={sb.enabled ? 'ok' : 'sub'}>{state}</Tag>
@@ -679,6 +708,13 @@ function GgsStandby({ snap, onNav }: { snap: GgsSnapshot; onNav: (id: NavId) => 
                  <Stat v={st.losses} label={t('ggs.stat.losses')} color="var(--bad)" />
                  <Stat v={st.draws} label={t('ggs.stat.draws')} />
                  <Stat v={`${st.diff_sum > 0 ? '+' : ''}${st.diff_sum}`} label={t('ggs.stat.disc_diff')} />
+                 {/* Stopping works even uncalibrated — never trap the
+                     user. The reason for a disabled start is spelled
+                     out in the body, where prose fits. */}
+                 <Button variant={sb.enabled ? 'danger' : 'primary'}
+                         disabled={!sb.enabled && !calibrated} onClick={toggle}>
+                   {sb.enabled ? t('ggs.standby.stop') : t('ggs.standby.start')}
+                 </Button>
                </span>}>
         {/* Three-column grid with no per-field widths — those cramp
             the format select and shrink number fields unevenly. Split
@@ -719,26 +755,35 @@ function GgsStandby({ snap, onNav }: { snap: GgsSnapshot; onNav: (id: NavId) => 
         <span style={{ width: 300, display: 'block' }}>
           <Toggle checked={autoAccept} onChange={setAutoAccept} label={t('ggs.standby.auto_accept')} />
         </span>
-        <div>
-          {/* Stopping works even uncalibrated — never trap the user. */}
-          <Button variant={sb.enabled ? 'danger' : 'primary'}
-                  disabled={!sb.enabled && !calibrated} onClick={toggle}>
-            {sb.enabled ? t('ggs.standby.stop') : t('ggs.standby.start')}
-          </Button>
-          {!sb.enabled && !calibrated && <Note>{calibNote()}</Note>}
-        </div>
         <Note>{t('ggs.standby.note')}</Note>
+        {!sb.enabled && !calibrated && <Note>{calibNote()}</Note>}
       </Section>
 
       {/* Section name and description per §7. The old "two editable
           copies compete" note was builder's reasoning — rule 64 keeps
           that out of the UI. What the reader needs: it persists
           across restarts. */}
-      <Section title={t('ggs.standby.formula_title')}
-               aside={<Button onClick={() => onNav('ggs-settings')}>{t('ggs.standby.edit_conditions')}</Button>}>
+      <Section title={t('ggs.standby.formula_title')}>
         <Note>{t('ggs.standby.formula_note')}</Note>
-        <FormulaRow label={t('ggs.finger.accept')} src={form('accept')} />
-        <FormulaRow label={t('ggs.finger.decline')} src={form('decline')} />
+        {online ? <>
+          {/* Keyed on the server's value: it arrives from `finger`
+              after this screen is already up, and the editor reads
+              `src` once, when it mounts. Without the key it kept the
+              empty tree it started with and the formula looked lost --
+              every time on a fresh connection, since nothing has
+              fingered us yet. The key also rebuilds from the server's
+              echo after a save, which is what `saveForm` re-fetches
+              for. */}
+          <FormulaField key={'a:' + form('accept')}
+                        label={t('ggs.finger.accept')} src={form('accept')}
+                        onSave={(x) => void saveForm('aform', x)} />
+          <FormulaField key={'d:' + form('decline')}
+                        label={t('ggs.finger.decline')} src={form('decline')}
+                        onSave={(x) => void saveForm('dform', x)} />
+        </> : (
+          <Note>{t('ggs.settings.offline_note')}</Note>
+        )}
+        {formSaid && <Note>{formSaid}</Note>}
       </Section>
     </div>
   );
@@ -750,17 +795,6 @@ function Stat({ v, label, color }: { v: number | string; label: string; color?: 
       <b style={{ color: color ?? 'var(--text)', fontWeight: 600 }}>{v}</b>
       <span style={{ marginLeft: 2 }}>{label}</span>
     </span>
-  );
-}
-
-function FormulaRow({ label, src }: { label: string; src: string }) {
-  const cond = src ? parseCond(src) : null;
-  return (
-    <div style={{ display: 'flex', gap: 'var(--sp-3)', alignItems: 'flex-start' }}>
-      <span style={{ width: 'var(--w-label)', flex: 'none', fontSize: 'var(--fs-6)', color: 'var(--sub)' }}>{label}</span>
-      {cond ? <FormulaView node={cond} top />
-            : <span style={{ fontSize: 'var(--fs-5)', color: 'var(--sub)' }}>{t('ggs.formula.unset')}</span>}
-    </div>
   );
 }
 
@@ -1182,22 +1216,6 @@ export function GgsSettings({ snap }: { snap: GgsSnapshot }) {
   useEffect(() => { api.activity().then((a) => setCores(a.cores)).catch(() => {}); }, []);
 
   const online = snap.conn === 'online';
-  // The server holds the request formula; re-fetch on open.
-  const login = snap.login;
-  useEffect(() => { if (login) ggsApi.finger(login).catch(() => {}); }, [login]);
-  const myForm = (key: 'accept' | 'decline'): string =>
-    snap.fingers[login]?.fields
-      .find(([k]) => k.replace(/\s+/g, '').replace(/\(.*\)/, '') === key)?.[1] ?? '';
-  const saveForm = async (kind: 'aform' | 'dform', expr: string) => {
-    try {
-      await ggsApi.setFormula(kind, expr);
-    } catch (e) {
-      say(t('ggs.settings.formula_failed', { error: tErr(e) }));
-      return;
-    }
-    // Don't trust the send; re-fetch the server's value.
-    if (login) ggsApi.finger(login).catch(() => {});
-  };
 
   /* Never swallow failures and claim success (rule 34): all five
      calls used to .catch(() => {}) and report success even
@@ -1311,21 +1329,6 @@ export function GgsSettings({ snap }: { snap: GgsSnapshot }) {
             : <Note>{t('ggs.settings.book_missing')}</Note>}
         </Section>
 
-        {/* Only this section lives on the server and needs a
-            connection; strength/clock/book/behavior above are local
-            and the disconnected loop accepts them. */}
-        <Section title={t('ggs.settings.requests_title')}>
-          <Note>{t('ggs.settings.requests_note')}</Note>
-          {online ? <>
-            <FormulaField label={t('ggs.finger.accept')} src={myForm('accept')}
-                          onSave={(x) => void saveForm('aform', x)} />
-            <FormulaField label={t('ggs.finger.decline')} src={myForm('decline')}
-                          onSave={(x) => void saveForm('dform', x)} />
-          </> : (
-            <Note>{t('ggs.settings.offline_note')}</Note>
-          )}
-        </Section>
-
         <Section title={t('ggs.settings.behavior')}>
           <span style={{ width: 300, display: 'block' }}>
             <Toggle checked={auto} onChange={setAuto} label={t('ggs.settings.auto_play')} />
@@ -1370,8 +1373,8 @@ function FormulaField({ label, src, onSave }: { label: string; src: string; onSa
     return (
       <Field label={label}>
         <div style={{ display: 'flex', flexDirection: 'column', gap: 'var(--sp-2)' }}>
-          <TextField mono value={raw} onChange={setRaw}
-                     placeholder={t('ggs.settings.formula_placeholder')} />
+          <TextArea mono rows={4} value={raw} onChange={setRaw}
+                    placeholder={t('ggs.settings.formula_placeholder')} />
           <div style={{ display: 'flex', gap: 'var(--sp-2)' }}>
             <Button onClick={() => { setRaw(null); setCond(raw ? parseCond(raw) : null); }}>
               {t('ggs.settings.back_to_tree')}

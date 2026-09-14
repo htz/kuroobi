@@ -186,6 +186,41 @@ export function Select({ value, options, onChange, size = 'field', width, disabl
 
 /* Text input; omitting onChange makes it readOnly, so display-only
  * uses share the component. */
+/** Multi-line input.
+ *
+ * `TextField` is one line by design -- fields sit in rows beside their
+ * labels. Text that needs reading rather than glancing at (a pasted
+ * record, a GGS formula long enough that the tree gave up on it) needs
+ * the box to hold it instead of scrolling it sideways past the edge.
+ */
+export function TextArea({ value, onChange, mono, invalid, placeholder, rows = 4, className }: {
+  value?: string;
+  onChange?: (v: string) => void;
+  mono?: boolean;
+  invalid?: boolean;
+  placeholder?: string;
+  /** Visible lines; the box can still be dragged taller. */
+  rows?: number;
+  className?: string;
+}) {
+  const ro = !onChange;
+  return (
+    <textarea
+      value={value} placeholder={placeholder} readOnly={ro} rows={rows}
+      /* Formulas and records are not prose; the squiggles are noise. */
+      spellCheck={false} autoCapitalize="off" autoCorrect="off"
+      onChange={ro ? undefined : (e) => onChange?.(e.target.value)}
+      className={cx('k-input', className)}
+      style={{
+        width: '100%', minWidth: 0, resize: 'vertical',
+        padding: 'var(--sp-3)', borderRadius: 'var(--r-3)',
+        background: 'var(--bg)', border: '1px solid ' + (invalid ? 'var(--bad)' : 'var(--border)'),
+        fontFamily: mono ? 'var(--ff-mono)' : 'var(--ff)', fontSize: 'var(--fs-6)',
+        lineHeight: 1.6,
+      }} />
+  );
+}
+
 export function TextField({ value, onChange, mono, invalid, placeholder, readOnly, numeric, password, align, width, className, title, onEnter }: {
   value?: string;
   onChange?: (v: string) => void;

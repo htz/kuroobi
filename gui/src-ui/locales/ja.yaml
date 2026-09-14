@@ -583,8 +583,6 @@ ggs:
     pacing_note: "1 手の時間を残り時間と残り手数から決めます。序盤を短く、終盤に残します。"
     ponder: "先読み"
     ponder_note: "相手の手番中に先を読みます。自分の持ち時間は減りません。"
-    requests_note: "申し込みを自動で受ける / 断る条件です。サーバー側に残ります。"
-    requests_title: "申し込みの扱い"
     reserve: "読切に残す (秒)"
     strength: "強さ"
     threads: "スレッド"
@@ -593,7 +591,6 @@ ggs:
     watch_analysis: "観戦中の対局も解析する"
   standby:
     auto_accept: "届いた申し込みを自動で受ける"
-    edit_conditions: "条件を変える"
     formula_note: "アプリを閉じてもサーバー側で有効な条件です。待機モードの保険になります。"
     formula_title: "申し込みの条件 (サーバー側)"
     interval: "対局の間隔 (秒)"
