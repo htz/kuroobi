@@ -491,10 +491,17 @@ impl Evaluator {
     /// The GPU trainer numbers cells in exactly this layout, so a mismatch
     /// here trains cells the search reads somewhere else.
     pub fn flat_all(&self) -> Vec<f32> {
+        self.flat_stages(0, STAGE_COUNT - 1)
+    }
+
+    /// The same layout, for stages `lo..=hi` only. A run aimed at one
+    /// stage carries one stage's tables, not all sixty-one: on the GPU
+    /// that is 12 MB against 712, and eight of them fit where one did.
+    pub fn flat_stages(&self, lo: usize, hi: usize) -> Vec<f32> {
         let stride: usize =
             self.patterns.iter().map(|p| p.table_size()).sum::<usize>() + NUM_TABLE_SIZE;
-        let mut out = Vec::with_capacity(stride * STAGE_COUNT);
-        for s in 0..STAGE_COUNT {
+        let mut out = Vec::with_capacity(stride * (hi + 1 - lo));
+        for s in lo..=hi {
             for t in &self.weights[s] {
                 out.extend_from_slice(t);
             }
@@ -505,8 +512,13 @@ impl Evaluator {
 
     /// Write back what [`flat_all`](Self::flat_all) produced.
     pub fn set_flat_all(&mut self, v: &[f32]) {
+        self.set_flat_stages(0, STAGE_COUNT - 1, v)
+    }
+
+    /// Write back what [`flat_stages`](Self::flat_stages) produced.
+    pub fn set_flat_stages(&mut self, lo: usize, hi: usize, v: &[f32]) {
         let mut k = 0usize;
-        for s in 0..STAGE_COUNT {
+        for s in lo..=hi {
             for t in self.weights[s].iter_mut() {
                 let n = t.len();
                 t.copy_from_slice(&v[k..k + n]);

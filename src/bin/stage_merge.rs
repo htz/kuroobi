@@ -26,7 +26,8 @@
 //!                    [--select-by mae|mse|spread] <weights.bin>...
 use kuroobi::evaluator::{Evaluator, STAGE_COUNT};
 use kuroobi::pattern::EGAROUCID_PATTERNS;
-use kuroobi::trainer::load_examples_binary_into;
+use kuroobi::record::{Filter, TeacherPolicy};
+use kuroobi::trainer::load_examples_filtered_into;
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 
@@ -50,14 +51,26 @@ fn score_of(which: &str, a: &[f64; 4]) -> f64 {
 }
 
 fn main() -> ExitCode {
-    let mut val_path: Option<PathBuf> = None;
+    let mut val_paths: Vec<PathBuf> = Vec::new();
+    let mut search_value_to_ply: Option<u8> = None;
+    let mut drop_random = false;
+    let mut keep_above_ply: Option<u8> = None;
+    let mut min_ply = 0u8;
     let mut out: Option<PathBuf> = None;
     let mut inputs: Vec<PathBuf> = Vec::new();
     let mut select_by = String::from("mae");
     let mut it = std::env::args().skip(1);
     while let Some(a) = it.next() {
         match a.as_str() {
-            "--val" => val_path = it.next().map(PathBuf::from),
+            "--val" => val_paths.extend(it.next().map(PathBuf::from)),
+            /* The same teacher the inputs were fitted to. Without these
+            every record reads as the game's result, and stages trained
+            against a depth-4 search value would be picked on a target
+            nothing was aiming at. */
+            "--search-value-to-ply" => search_value_to_ply = it.next().and_then(|v| v.parse().ok()),
+            "--drop-random" => drop_random = true,
+            "--keep-above-ply" => keep_above_ply = it.next().and_then(|v| v.parse().ok()),
+            "--min-ply" => min_ply = it.next().and_then(|v| v.parse().ok()).unwrap_or(0),
             "--out" => out = it.next().map(PathBuf::from),
             "--select-by" => select_by = it.next().unwrap_or_default(),
             other if other.starts_with("--") => {
@@ -67,21 +80,46 @@ fn main() -> ExitCode {
             file => inputs.push(PathBuf::from(file)),
         }
     }
-    let (Some(val_path), Some(out)) = (val_path, out) else {
-        eprintln!("usage: stage_merge --val <file.data> --out <path> <weights.bin>...");
+    let Some(out) = out else {
+        eprintln!(
+            "usage: stage_merge --val <file.data> [--val ...] --out <path>\n\
+             [--select-by mae|mse|spread] [--search-value-to-ply <n>]\n\
+             [--drop-random] [--keep-above-ply <n>] [--min-ply <n>]\n\
+             <weights.bin>..."
+        );
         return ExitCode::FAILURE;
     };
+    if val_paths.is_empty() {
+        eprintln!("no --val given");
+        return ExitCode::FAILURE;
+    }
     if inputs.is_empty() {
         eprintln!("no input weights given");
         return ExitCode::FAILURE;
     }
 
+    let filter = Filter {
+        min_ply,
+        max_score_diff: None,
+        drop_random,
+        keep_above_ply,
+    };
+    let policy = TeacherPolicy {
+        search_value_to_ply,
+    };
     let mut val = Vec::new();
-    if let Err(e) = load_examples_binary_into(&val_path, &mut val, None) {
-        eprintln!("failed to read {}: {e}", val_path.display());
-        return ExitCode::FAILURE;
+    for path in &val_paths {
+        if let Err(e) = load_examples_filtered_into(path, &mut val, None, &filter, &policy) {
+            eprintln!("failed to read {}: {e}", path.display());
+            return ExitCode::FAILURE;
+        }
     }
-    println!("val: {} positions from {}", val.len(), val_path.display());
+    println!(
+        "val: {} positions from {} file(s), teacher: {}",
+        val.len(),
+        val_paths.len(),
+        policy.describe()
+    );
 
     // [count, sum_abs, sum_sq, sum_err] per stage, per input.
     let mut scores: Vec<Vec<[f64; 4]>> = Vec::with_capacity(inputs.len());

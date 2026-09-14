@@ -119,6 +119,9 @@ Options:
                     files; every epoch walks all shards, loading one at a time
   --log <path>      Append per-epoch stage losses as CSV
   --gpu             Train on the GPU (needs a build with --features gpu).
+                    Honours --stage / --stages: a run aimed at one stage
+                    carries only that stage's tables, 12 MB against 712,
+                    so eight of them share a device comfortably.
                     Minibatch Adam instead of the CPU path's per-example
                     steps, which is what makes the work parallel.
   --minibatch <n>   Positions per GPU step (default 8192). Each is eight
@@ -427,6 +430,11 @@ fn parse_args() -> Result<Args, String> {
     if args.data_files.is_empty() {
         return Err(format!("no data files given\n\n{USAGE}"));
     }
+    if args.gpu && args.optimizer == OptimizerKind::Sgd {
+        return Err(String::from(
+            "--gpu is the Adam path; pass --optimizer adam (the GPU sums a\n             batch's touches of a cell, which sgd's per-example step is not)",
+        ));
+    }
     if args.optimizer == OptimizerKind::Sgd {
         // One run, one stage, one thread. The stages are independent tables,
         // so a run aimed at several of them is several runs sharing a process
@@ -688,6 +696,24 @@ fn main() -> ExitCode {
             eprintln!("failed to load val {}: {e}", f.display());
             return ExitCode::FAILURE;
         }
+    }
+    /* A run aimed at part of the board scores only that part, but the
+    held-out set covers all sixty-one stages and every epoch walked all of
+    it. On the opening stages that was the whole epoch: fourteen training
+    positions against 211k scored ones. */
+    if args.stages_lo > 0 || args.stages_hi < STAGE_COUNT - 1 {
+        let before = val.len();
+        val.retain(|e| {
+            let st = Evaluator::stage(&e.board());
+            st >= args.stages_lo && st <= args.stages_hi
+        });
+        println!(
+            "val: {} of {} held-out examples are in stages {}-{}",
+            fmt_count(val.len()),
+            fmt_count(before),
+            args.stages_lo,
+            args.stages_hi
+        );
     }
     if !args.val_files.is_empty() {
         println!("val: {} held-out examples", fmt_count(val.len()));
@@ -987,9 +1013,13 @@ fn run_epochs<O: Optimizer>(
     let filter = filter_of(args);
     let policy = policy_of(args);
     #[cfg(feature = "gpu")]
-    let mut gpu = args
-        .gpu
-        .then(|| kuroobi::linear_gpu::LinearGpu::new(&trainer.evaluator, args.minibatch));
+    let mut gpu = args.gpu.then(|| {
+        kuroobi::linear_gpu::LinearGpu::new(
+            &trainer.evaluator,
+            args.minibatch,
+            (args.stages_lo, args.stages_hi),
+        )
+    });
     #[cfg(not(feature = "gpu"))]
     let gpu: Option<()> = None;
     #[cfg(not(feature = "gpu"))]
@@ -1207,7 +1237,19 @@ fn run_epochs<O: Optimizer>(
                 #[cfg(feature = "gpu")]
                 {
                     let g = gpu.as_mut().unwrap();
-                    let mut lr_fn = || cosine_lr(args, epoch, si, shards.len());
+                    /* Under --plateau the rate is the stage's own, cut
+                    when its held-out score stops moving and restored to
+                    its best if asked. A run aimed at one stage has one
+                    such rate, which is the whole point of aiming at one
+                    stage: the middlegame is still descending long after
+                    the endgame has finished. */
+                    let mut lr_fn = || {
+                        if args.plateau > 0 {
+                            stage_lr[args.stages_lo]
+                        } else {
+                            cosine_lr(args, epoch, si, shards.len())
+                        }
+                    };
                     let sq = g.train_shard(&examples, &mut lr_fn);
                     // The evaluator's own tables are stale until this; val
                     // and the save both read them, so pull them back every

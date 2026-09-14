@@ -109,6 +109,7 @@ pub struct LinearGpu {
     b_stats_read: wgpu::Buffer,
     b_par: wgpu::Buffer,
     n_cells: usize,
+    stages: (usize, usize),
     cells_per_row: usize,
     max_rows: usize,
     /// Scratch reused between batches so a multi-gigabyte alloc/free pair
@@ -141,14 +142,20 @@ fn pollster_lite<F: std::future::Future>(mut fut: F) -> F::Output {
 }
 
 /// Fixed-point scale for the accumulated gradient. The worst case is a
-/// whole batch's rows on one cell at the largest disc difference:
-/// 524,288 x 64 x 16 is 5.4e8, inside i32's 2.1e9.
-const SCALE: f32 = 16.0;
+/// whole batch's rows on one cell at the largest disc difference -- the
+/// disc-count cell of a stage is touched once by every row -- so
+/// 524,288 x 64 x 32 is 1.07e9, inside i32's 2.1e9.
+const SCALE: f32 = 32.0;
 
-fn shader_prelude(cells_per_row: usize, stride: usize, numoff: u32) -> String {
+fn shader_prelude(
+    cells_per_row: usize,
+    stride: usize,
+    numoff: u32,
+    stlo: usize,
+    nst: usize,
+) -> String {
     let scale_f = SCALE;
     let forms = FORMS;
-    let nst = STAGE_COUNT;
     format!(
         "const WG: u32 = {WG}u;
 const CELLS: u32 = {cells_per_row}u;
@@ -158,6 +165,7 @@ const EPS: f32 = {EPSILON};
 const SCALE: f32 = {scale_f};
 const FORMS: u32 = {forms}u;
 const NST: u32 = {nst}u;
+const STLO: u32 = {stlo}u;
 const STRIDE: u32 = {stride}u;
 const NUMOFF: u32 = {numoff}u;
 
@@ -205,8 +213,11 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
   // Evaluator::stage: 60 - empties, floored at zero, capped at the last.
   var stage = 0u;
   if (empties < 60u) { stage = 60u - empties; }
-  stage = min(stage, NST - 1u);
-  let base = stage * STRIDE;
+  stage = min(stage, STLO + NST - 1u);
+  // A run aimed at part of the board carries only those stages, so the
+  // cell space starts at its first one. The host drops anything outside
+  // the window before the batch, so the subtraction cannot wrap.
+  let base = (stage - STLO) * STRIDE;
 
   let out = r * CELLS;
   for (var k = 0u; k < CELLS - 1u; k = k + 1u) {
@@ -272,7 +283,10 @@ const SCATTER_SRC: &str = r#"
 fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
   let r = gid.x;
   if (r >= par.n_rows) { return; }
-  let q = i32(err[r] * SCALE);
+  // Rounded, not truncated: WGSL's f32-to-i32 conversion goes toward
+  // zero, which shrinks every term of the sum rather than scattering it,
+  // and near convergence the true sum is small enough for that to matter.
+  let q = i32(round(err[r] * SCALE));
   let base = r * CELLS;
   for (var i = 0u; i < CELLS; i = i + 1u) {
     atomicAdd(&grad[cells[base + i]], q);
@@ -353,7 +367,10 @@ fn main(@builtin(local_invocation_id) lid: vec3<u32>) {
 
 impl LinearGpu {
     /// `batch` is examples per step; a step trains `FORMS * batch` rows.
-    pub fn new(ev: &Evaluator, batch: usize) -> LinearGpu {
+    pub fn new(ev: &Evaluator, batch: usize, stages: (usize, usize)) -> LinearGpu {
+        let (st_lo, st_hi) = stages;
+        assert!(st_lo <= st_hi && st_hi < STAGE_COUNT, "stage window");
+        let n_stages = st_hi + 1 - st_lo;
         let patterns = ev.patterns();
         let mut pat_off = Vec::with_capacity(patterns.len() + 2);
         let mut off = 0u32;
@@ -364,7 +381,7 @@ impl LinearGpu {
         pat_off.push(off); // the disc-count table
         off += NUM_TABLE_SIZE as u32;
         let stage_stride = off as usize;
-        let n_cells = stage_stride * STAGE_COUNT;
+        let n_cells = stage_stride * n_stages;
         let max_rows = batch * FORMS;
         let cells_per_row = patterns.iter().map(|p| p.masks.len()).sum::<usize>() + 1;
         // Mask tables, one set per symmetric form, with the transform
@@ -421,7 +438,13 @@ impl LinearGpu {
         }))
         .expect("GPU device");
 
-        let pre = shader_prelude(cells_per_row, stage_stride, pat_off[patterns.len()]);
+        let pre = shader_prelude(
+            cells_per_row,
+            stage_stride,
+            pat_off[patterns.len()],
+            st_lo,
+            n_stages,
+        );
         let make = |src: &str, label: &str| -> Kernel {
             let module = device.create_shader_module(wgpu::ShaderModuleDescriptor {
                 label: Some(label),
@@ -455,7 +478,7 @@ impl LinearGpu {
         };
         let b_w = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
             label: Some("weights"),
-            contents: bytemuck::cast_slice(&ev.flat_all()),
+            contents: bytemuck::cast_slice(&ev.flat_stages(st_lo, st_hi)),
             usage: st | wgpu::BufferUsages::COPY_SRC,
         });
         let b_m = zeros(n_cells, "adam m");
@@ -497,6 +520,7 @@ impl LinearGpu {
         });
 
         LinearGpu {
+            stages,
             device,
             queue,
             index,
@@ -528,16 +552,26 @@ impl LinearGpu {
     }
 
     /// Pack the batch as five words a position. The kernel does the rest.
-    fn prepare(&mut self, batch: &[Example]) {
+    fn prepare(&mut self, batch: &[Example]) -> usize {
         self.ex_words.clear();
         self.ex_words.reserve(batch.len() * 5);
+        let (lo, hi) = self.stages;
+        let mut n = 0usize;
         for ex in batch {
+            // The kernel indexes into this run's stages only; a position
+            // from another stage would land on the wrong table.
+            let st = Evaluator::stage(&ex.board());
+            if st < lo || st > hi {
+                continue;
+            }
+            n += 1;
             self.ex_words.push(ex.black as u32);
             self.ex_words.push((ex.black >> 32) as u32);
             self.ex_words.push(ex.white as u32);
             self.ex_words.push((ex.white >> 32) as u32);
             self.ex_words.push(ex.score.to_bits());
         }
+        n
     }
 
     fn bind(&self, k: &Kernel, bufs: &[&wgpu::Buffer]) -> wgpu::BindGroup {
@@ -576,9 +610,12 @@ impl LinearGpu {
             // the device is still reading.
             self.drain(1);
             let t0 = std::time::Instant::now();
-            self.prepare(batch);
+            let kept = self.prepare(batch);
             let t1 = std::time::Instant::now();
-            let n_rows = batch.len() * FORMS;
+            if kept == 0 {
+                continue;
+            }
+            let n_rows = kept * FORMS;
             let t2 = t1;
             t_prep += (t1 - t0).as_secs_f64();
             let par = Params {
@@ -739,7 +776,7 @@ impl LinearGpu {
         });
         rx.recv().unwrap().unwrap();
         let view = staging.slice(..).get_mapped_range();
-        ev.set_flat_all(bytemuck::cast_slice(&view));
+        ev.set_flat_stages(self.stages.0, self.stages.1, bytemuck::cast_slice(&view));
         drop(view);
         staging.unmap();
     }
