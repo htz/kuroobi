@@ -17,9 +17,8 @@ rand = "0.8"
 criterion = "0.5"
 
 [features]
-default = ["h128", "pairmul", "pa128", "stackedout"]
-# Train the stacked-read-out model on the GPU (`nnue_train --gpu`). Needs
-# `h128,pairmul,pa128,stackedout`; the kernels are written for that shape.
+default = []
+# Train the stacked-read-out model on the GPU (`nnue_train --gpu`).
 gpu = ["dep:wgpu", "dep:bytemuck"]
 # Read the solver's tuning knobs from environment variables at first use
 # instead of compiling their defaults in. Sweeps need this; the default
@@ -109,44 +108,6 @@ layer-profile = []
 # Force the scalar NNUE accumulator path even on aarch64 (to measure the
 # NEON speedup). Off by default; NEON is used automatically on aarch64.
 nnue-scalar = []
-# Accumulator width. Default (no feature) is H=32. Pick one at most; they are
-# mutually exclusive and a weight file is only loadable by the width that
-# wrote it. Build a second width beside the default with its own target dir:
-#   cargo build --release --features h64 --target-dir target-h64
-h16 = []
-h64 = []
-h128 = []
-h256 = []
-# Input layer twice the working width, folded to it by multiplying lane i
-# with lane i+H. Second-order interaction at the input instead of as a
-# read-out correction; see `nnue::ACC_DIMS`. Doubles the table, so a weight
-# file is not interchangeable with a build without it.
-# Square the read-out's clipped activation instead of leaving it linear:
-# `phi(x) = clamp(x, 0, C)^2 / C`. A different model, not a different
-# encoding of the same one, so a weight file belongs to one or the other.
-# Off by default because the deployed weights were trained against the plain
-# clipped ReLU; turning it on for them reads the same numbers through the
-# wrong shape and the search degrades (measured: FFO40-49 went 355M nodes to
-# 677M, slower with the net than without it).
-screlu = []
-pairmul = []
-# Per-stage multi-layer read-out in place of the per-stage linear one plus
-# the shared head: L1 over the accumulator and mobility, its output paired
-# with its square, L2, then a final layer that also sees the accumulator
-# directly; see `nnue::SO_L1`.
-stackedout = []
-# Phase-adaptive input: a second sparse layer, six copies selected by phase,
-# concatenated with the base rather than replacing it.
-pa128 = ["stackedout"]
-# Independent copies of the feature transformer, one per slice of the game.
-# Default (no feature) is a single shared copy. Buckets add parameters without
-# adding row reads, and cost only the footprint; see `nnue::FT_BUCKETS`.
-# A weight file records the whole table, so widths and bucket counts are not
-# interchangeable -- build each beside the default with its own target dir.
-ftb2 = []
-ftb4 = []
-ftb6 = []
-
 [[bench]]
 name = "core"
 harness = false

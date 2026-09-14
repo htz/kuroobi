@@ -85,24 +85,12 @@ pub(super) struct StackQ {
     l2_b: Vec<i32>,
     out_w: Vec<i16>,
     out_b: Vec<i32>,
-    /// Weights that did not fit their integer type, and how many there were.
-    pub clipped: usize,
-    pub total: usize,
 }
 
 impl StackQ {
     pub(super) fn build(net: &Nnue) -> StackQ {
-        use std::cell::Cell;
-        let clipped = Cell::new(0usize);
-        let total = Cell::new(0usize);
-        let qi16 = |v: f32, scale: f32| -> i16 {
-            let r = (v * scale).round();
-            total.set(total.get() + 1);
-            if r > 32767.0 || r < -32768.0 {
-                clipped.set(clipped.get() + 1);
-            }
-            r.clamp(-32768.0, 32767.0) as i16
-        };
+        let qi16 =
+            |v: f32, scale: f32| -> i16 { (v * scale).round().clamp(-32768.0, 32767.0) as i16 };
 
         let n_feat = net.n_features;
         let mut ft_b = vec![0i16; n_feat * ACC_DIMS];
@@ -149,14 +137,7 @@ impl StackQ {
             }
         }
 
-        let qi8 = |v: f32| -> i8 {
-            let r = (v * 64.0).round();
-            total.set(total.get() + 1);
-            if r.abs() > 127.0 {
-                clipped.set(clipped.get() + 1);
-            }
-            r.clamp(-127.0, 127.0) as i8
-        };
+        let qi8 = |v: f32| -> i8 { (v * 64.0).round().clamp(-127.0, 127.0) as i8 };
         let mut l1_w = vec![0i8; SO_STAGES * L1_CHUNKS * 4 * SO_L1];
         let mut l1_b = vec![0i32; SO_STAGES * SO_L1];
         let mut l2_w = vec![0i8; SO_STAGES * L2_CHUNKS * 4 * SO_L2];
@@ -213,8 +194,6 @@ impl StackQ {
             l2_b,
             out_w,
             out_b,
-            clipped: clipped.get(),
-            total: total.get(),
         }
     }
 

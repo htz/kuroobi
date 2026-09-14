@@ -37,7 +37,6 @@ use crate::position::Position;
 
 #[cfg(feature = "gpu")]
 pub mod gpu;
-#[cfg(feature = "stackedout")]
 mod stack_q;
 
 /// Accumulator width (feature-transformer output dimension). Smaller H means
@@ -50,19 +49,9 @@ mod stack_q;
 /// slower than the width. Weight files record their own H and are not
 /// interchangeable across builds; `widen_h` converts one upwards.
 ///
-/// Selected by cargo feature so a width can be built and measured without
-/// editing the source out from under a running trainer:
-/// `cargo build --release --features h64 --target-dir target-h64`.
-#[cfg(not(any(feature = "h16", feature = "h64", feature = "h128", feature = "h256")))]
-pub const H: usize = 32;
-#[cfg(feature = "h16")]
-pub const H: usize = 16;
-#[cfg(feature = "h64")]
-pub const H: usize = 64;
-#[cfg(feature = "h128")]
+/// H=64 was measured against this: twice the parameters for 1.8x the
+/// evaluation and 1.41x the search, both in place.
 pub const H: usize = 128;
-#[cfg(feature = "h256")]
-pub const H: usize = 256;
 
 /// How many independent copies of the feature transformer the model keeps,
 /// one per slice of the game.
@@ -93,14 +82,7 @@ pub const H: usize = 256;
 /// for 1.8x the evaluation and 1.41x the search, both measured in place.
 ///
 /// Selected by cargo feature; 1 (the default) is byte-for-byte today's model.
-#[cfg(not(any(feature = "ftb2", feature = "ftb4", feature = "ftb6")))]
 pub const FT_BUCKETS: usize = 1;
-#[cfg(feature = "ftb2")]
-pub const FT_BUCKETS: usize = 2;
-#[cfg(feature = "ftb4")]
-pub const FT_BUCKETS: usize = 4;
-#[cfg(feature = "ftb6")]
-pub const FT_BUCKETS: usize = 6;
 
 /// Which transformer copy a stage reads. Stages are split into equal runs,
 /// so the boundaries move with `FT_BUCKETS` and no bucket is ever empty.
@@ -111,8 +93,8 @@ pub const fn ft_bucket(stage: usize) -> usize {
 
 /// Lanes the transformer actually sums into, before the read-out sees them.
 ///
-/// With `pairmul` the input layer is twice as wide as the model's working
-/// width: it accumulates `2 * H` lanes and folds them to `H` by multiplying
+/// The input layer is twice as wide as the model's working width: it
+/// accumulates `2 * H` lanes and folds them to `H` by multiplying
 /// lane `i` with lane `i + H`. Second-order interaction enters at the input
 /// rather than as a correction bolted onto the read-out, which is where a
 /// a wider input layer puts it -- 256 lanes clamped and multiplied
@@ -120,17 +102,13 @@ pub const fn ft_bucket(stage: usize) -> usize {
 ///
 /// Everything downstream is unchanged: the read-out, the head and the
 /// product gate all still see `H` values. Only the table doubles.
-#[cfg(feature = "pairmul")]
 pub const ACC_DIMS: usize = 2 * H;
-#[cfg(not(feature = "pairmul"))]
-pub const ACC_DIMS: usize = H;
 
 /// Both perspectives' rows stored and updated together (Black then White),
 /// so one contiguous add/sub maintains the whole accumulator per feature
 /// change.
 ///
-/// Twice `ACC_DIMS`
-/// rather than twice `H`: under `pairmul` a single perspective is already
+/// Twice `ACC_DIMS` rather than twice `H`: a single perspective is already
 /// `2H` wide before the fold, and sizing this on `H` left the White half
 /// overlapping the Black one -- the incremental path then disagreed with a
 /// rebuild from scratch, which is exactly what `test_eval_paths_agree` saw.
@@ -142,22 +120,16 @@ const H2: usize = 2 * ACC_DIMS;
 /// there are `STAGE_COUNT * H` of them. The stack biases the sparse
 /// layer, which is before the fold and has one set for the whole game, so
 /// with the stacked read-out there are `ACC_DIMS`.
-#[cfg(feature = "stackedout")]
 const FT_BIAS_LEN: usize = ACC_DIMS;
-#[cfg(not(feature = "stackedout"))]
-const FT_BIAS_LEN: usize = STAGE_COUNT * H;
 
 /// Clamp bound for each factor of the pairwise product, in accumulator
 /// units before scaling. A quantized form clamps at 510 with an 8-bit-ish
 /// shift after; this keeps the same shape, expressed in disc units so it
 /// travels with `ft_scale`.
-#[cfg(all(feature = "pairmul", not(feature = "stackedout")))]
-const PAIR_CLAMP: f32 = 32.0;
 /* With the stacked read-out the whole network works on [0,1], as the
 reference does: each factor of the product is clamped at 1 and the product
 is scaled by 255/256. The 32-disc clamp belongs to the shared read-out,
 where the accumulator carries disc units all the way to the score. */
-#[cfg(all(feature = "pairmul", feature = "stackedout"))]
 const PAIR_CLAMP: f32 = 1.0;
 
 /// What a squared or paired activation is multiplied by.
@@ -166,11 +138,7 @@ const PAIR_CLAMP: f32 = 1.0;
 /// 256 with a shift where the algebra calls for 255, and training carries
 /// the same factor so the two agree. Without the stack there is no such
 /// division to compensate for, and the factor is one.
-#[cfg(feature = "stackedout")]
 const ACT_SCALE: f32 = 255.0 / 256.0;
-#[cfg_attr(not(feature = "stackedout"), allow(dead_code))]
-#[cfg(not(feature = "stackedout"))]
-const ACT_SCALE: f32 = 1.0;
 
 /// Clamp range for feature-transformer weights during training.
 ///
@@ -224,25 +192,20 @@ const MLP_H2: usize = 16;
 /// Sixty, not `STAGE_COUNT`: a ply runs 0..59, while a stage here runs
 /// 0..60 -- the extra one is the finished board, which no
 /// training example reaches. Stage 60 shares the last stack.
-#[cfg(feature = "stackedout")]
 const SO_STAGES: usize = 60;
 
 /// Which stack a stage reads.
-#[cfg(feature = "stackedout")]
 #[inline]
 fn so_stage(stage: usize) -> usize {
     stage.min(SO_STAGES - 1)
 }
 
-#[cfg(feature = "stackedout")]
 const SO_L1: usize = 16;
-#[cfg(feature = "stackedout")]
 const SO_L2: usize = 64;
 /// Discs per unit of the stacked read-out's output. Training against
 /// targets divided by 64 puts the output weights on the same
 /// order as the rest of the network; this does the division here instead so
 /// the trainer keeps working in discs.
-#[cfg(feature = "stackedout")]
 const SO_SCORE: f32 = 64.0;
 
 /// Element counts for the stacked read-out's tables, all zero when the
@@ -254,17 +217,10 @@ const SO_SCORE: f32 = 64.0;
 /// It is not the same thing as `FT_BUCKETS`, which makes phase copies of the
 /// base layer and *replaces* it. Here the base stays one shared layer and
 /// this is added beside it.
-#[cfg(feature = "pa128")]
 const PA_DIMS: usize = 128;
-#[cfg(not(feature = "pa128"))]
-const PA_DIMS: usize = 0;
-#[cfg(feature = "pa128")]
 const PA_BUCKETS: usize = 6;
-#[cfg(not(feature = "pa128"))]
-const PA_BUCKETS: usize = 1;
 
 /// Which phase copy of the adaptive input a stage reads.
-#[cfg(feature = "pa128")]
 #[inline]
 fn pa_bucket(stage: usize) -> usize {
     // `ply / (60 / buckets)`, counted on plies -- not
@@ -276,14 +232,10 @@ fn pa_bucket(stage: usize) -> usize {
 /// Width of what the stack sees directly: the folded accumulator and the
 /// phase-adaptive output, side by side. It feeds L1 (with mobility appended)
 /// and the output layer (after L2) -- two skip paths.
-#[cfg(feature = "stackedout")]
 const SO_SKIP: usize = H + PA_DIMS;
-#[cfg(feature = "stackedout")]
 const SO_L1_IN: usize = SO_SKIP + 1;
-#[cfg(feature = "stackedout")]
 const SO_OUT_IN: usize = SO_L2 + SO_SKIP;
 
-#[cfg(feature = "stackedout")]
 const SO_SIZES: (usize, usize, usize, usize, usize, usize) = (
     SO_STAGES * SO_L1 * SO_L1_IN,
     SO_STAGES * SO_L1,
@@ -292,20 +244,14 @@ const SO_SIZES: (usize, usize, usize, usize, usize, usize) = (
     SO_STAGES * SO_OUT_IN,
     SO_STAGES,
 );
-#[cfg(not(feature = "stackedout"))]
-const SO_SIZES: (usize, usize, usize, usize, usize, usize) = (0, 0, 0, 0, 0, 0);
 
 /// The fold's clamp as an f32, for paths that normalise by it. Equal to
 /// `PAIR_CLAMP` when that exists and to the activation clamp otherwise, so
 /// the stacked read-out has a sane scale either way.
-#[cfg(all(feature = "stackedout", feature = "pairmul"))]
 const PAIR_CLAMP_F32: f32 = PAIR_CLAMP;
-#[cfg(all(feature = "stackedout", not(feature = "pairmul")))]
-const PAIR_CLAMP_F32: f32 = ACT_CLAMP;
 
 /// Mobility on `[0, 1]`, the scale the stacked read-out works in. The
 /// reference multiplies the raw count by 7/255 and caps it at one.
-#[cfg(feature = "stackedout")]
 #[inline]
 fn mob_unit(mob: usize) -> f32 {
     (mob as f32 * (7.0 / 255.0)).min(1.0)
@@ -377,49 +323,6 @@ const PROD_CLAMP: f32 = 16.0;
 /// no ceiling lets one loud lane dominate the sum.
 const ACT_CLAMP: f32 = 16.0;
 
-/// The side to move's legal-move count as the head reads it.
-///
-/// Scaled to roughly the range the accumulator's activations occupy, so
-/// one input does not arrive an order of magnitude louder than the H it
-/// sits beside and swamp the first layer before training can balance it.
-/// The count itself is already clamped to [`MOB_BUCKETS`] by
-/// [`Nnue::mob_index`].
-#[inline]
-/* The stacked read-out uses neither: it clamps inline against its own
-[0,1] range and scales mobility by 7/255 rather than 0.5. Kept for the
-shared read-out, which is still the shipped shape. */
-#[cfg_attr(feature = "stackedout", allow(dead_code))]
-fn mob_input(mob: usize) -> f32 {
-    mob as f32 * 0.5
-}
-
-/// `clamp(x, 0, C)² / C` -- the read-out's activation, in disc units.
-#[inline]
-#[cfg_attr(feature = "stackedout", allow(dead_code))]
-fn screlu(x: f32) -> f32 {
-    #[cfg(not(feature = "screlu"))]
-    return x.max(0.0);
-    #[cfg(feature = "screlu")]
-    let c = x.clamp(0.0, ACT_CLAMP);
-    #[cfg(feature = "screlu")]
-    return c * c * (1.0 / ACT_CLAMP);
-}
-
-/// `dφ/dx` for [`screlu`]. Zero outside the clamp, where the activation is
-/// flat and no gradient should flow.
-#[inline]
-#[cfg_attr(feature = "stackedout", allow(dead_code))]
-fn screlu_grad(x: f32) -> f32 {
-    #[cfg(not(feature = "screlu"))]
-    return if x > 0.0 { 1.0 } else { 0.0 };
-    #[cfg(feature = "screlu")]
-    if x > 0.0 && x < ACT_CLAMP {
-        2.0 * x * (1.0 / ACT_CLAMP)
-    } else {
-        0.0
-    }
-}
-
 /// Steps per disc in the int8 activations the head's first layer reads.
 ///
 /// This sets both the resolution and where the lanes pin: the step is
@@ -442,12 +345,6 @@ fn screlu_grad(x: f32) -> f32 {
 /// so the meeting point moves and 8 keeps an eighth-disc step with the pin
 /// out at 31.9.
 pub const ACT_UNITS: f32 = 16.0;
-
-/// Mover's disc count = index into the disc-count table.
-#[inline]
-fn num_index(board: &Board) -> usize {
-    board.player_bb().count_ones() as usize
-}
 
 /// `acc[i] += new[i] - old[i]` over `H2` int16 lanes (both perspectives).
 /// NEON on aarch64 (int16x8, so H2=32 is four vector ops), scalar elsewhere.
@@ -588,131 +485,6 @@ unsafe fn accumulate_rows(
     }
 }
 
-/// Fold the accumulator to `H` lanes.
-///
-/// Without `pairmul` there is nothing to fold. With it, lane `i` and lane
-/// `i + H` are clamped and multiplied, which is this
-/// input layer: interaction between two learned lanes before the read-out
-/// ever sees them, rather than a correction added afterwards.
-///
-/// The clamp bounds each factor so the product stays inside i16 after the
-/// shift, and bounds the gradient -- an unbounded product blows up the
-/// moment two lanes co-fire, which is the same reason the product gate
-/// clamps.
-#[inline]
-#[cfg_attr(feature = "stackedout", allow(dead_code))]
-fn fold_pairs(acc: &[i16; ACC_DIMS], cap: i16, shift: i16) -> [i16; H] {
-    #[cfg(not(feature = "pairmul"))]
-    {
-        let _ = (cap, shift);
-        *acc
-    }
-    #[cfg(feature = "pairmul")]
-    {
-        let mut out = [0i16; H];
-        for i in 0..H {
-            let a = acc[i].clamp(0, cap) as i32;
-            let b = acc[i + H].clamp(0, cap) as i32;
-            out[i] = ((a * b) >> shift) as i16;
-        }
-        out
-    }
-}
-
-/// `Σ_h φ(acc[h] + b[h]) · w[h]` (i64) over H int16 lanes, where `φ` is the
-/// squared clipped activation of [`screlu`], applied on the fly.
-///
-/// Bias is added here: it differs per stage (which changes every ply),
-/// so it cannot be baked into the incrementally-maintained accumulator.
-///
-/// The quantized form of `clamp(x,0,C)²/C` is a multiply and a shift.
-/// Clamping at `cap = C · ft_scale` bounds the square by `cap²`, and
-/// dividing by `cap` -- the shift, since both `C` and `ft_scale` are powers
-/// of two -- lands the result back in `[0, cap]`, exactly the range the
-/// linear activation occupied. So `out_scale` is unchanged and the
-/// read-out weights keep their meaning.
-///
-/// **That range is why this is not much dearer than the ReLU it replaced.**
-/// The square needs int32 to be computed, but the shifted result is bounded
-/// by `cap` and so fits back in int16 with nothing lost -- which puts the
-/// weighted sum back on `vmlal_s16`, four lanes per instruction into int32,
-/// instead of widening everything to int64. Squaring in int32 and
-/// accumulating in int64 cost 8.64M nodes/s against 7.30M when first
-/// written; narrowing costs two instructions per eight lanes and buys the
-/// rest back.
-///
-/// NEON on aarch64, scalar elsewhere. Called once per leaf.
-#[inline]
-#[cfg_attr(feature = "stackedout", allow(dead_code))]
-/// The read-out's dot product, with the activation applied on the fly.
-///
-/// `cap` and `shift` describe the squared form and are ignored without the
-/// `screlu` feature: the deployed weights were trained against the plain
-/// clipped ReLU, and reading them through the squared shape is a different
-/// model, not a rescaling of the same one.
-fn readout_dot(acc: &[i16], b: &[i16], w: &[i16], cap: i16, shift: i16) -> i64 {
-    let _ = (cap, shift);
-    #[cfg(all(target_arch = "aarch64", not(feature = "nnue-scalar")))]
-    unsafe {
-        use std::arch::aarch64::*;
-        let zero = vdupq_n_s16(0);
-        #[cfg(feature = "screlu")]
-        let capv = vdupq_n_s16(cap);
-        #[cfg(feature = "screlu")]
-        let sh = vdupq_n_s32(-(shift as i32));
-        let mut sum = vdupq_n_s32(0);
-        let mut h = 0;
-        while h + 8 <= H {
-            let s = vaddq_s16(vld1q_s16(acc.as_ptr().add(h)), vld1q_s16(b.as_ptr().add(h)));
-            #[cfg(not(feature = "screlu"))]
-            let phi = vmaxq_s16(s, zero);
-            #[cfg(feature = "screlu")]
-            let phi = {
-                let a = vminq_s16(vmaxq_s16(s, zero), capv);
-                // a² needs int32 to compute; a²>>shift is bounded by `cap`
-                // and so returns to int16 exactly, with no saturation.
-                let lo = vshlq_s32(vmull_s16(vget_low_s16(a), vget_low_s16(a)), sh);
-                let hi = vshlq_s32(vmull_high_s16(a, a), sh);
-                vcombine_s16(vmovn_s32(lo), vmovn_s32(hi))
-            };
-            let ww = vld1q_s16(w.as_ptr().add(h));
-            sum = vmlal_s16(sum, vget_low_s16(phi), vget_low_s16(ww));
-            sum = vmlal_high_s16(sum, phi, ww);
-            h += 8;
-        }
-        let mut acc64 = vaddvq_s32(sum) as i64;
-        while h < H {
-            let x = (*acc.get_unchecked(h)).wrapping_add(*b.get_unchecked(h));
-            #[cfg(not(feature = "screlu"))]
-            let phi = x.max(0) as i64;
-            #[cfg(feature = "screlu")]
-            let phi = {
-                let a = x.clamp(0, cap) as i32;
-                ((a * a) >> shift) as i64
-            };
-            acc64 += phi * *w.get_unchecked(h) as i64;
-            h += 1;
-        }
-        acc64
-    }
-    #[cfg(any(not(target_arch = "aarch64"), feature = "nnue-scalar"))]
-    {
-        let mut sum: i64 = 0;
-        for h in 0..H {
-            let x = acc[h].wrapping_add(b[h]);
-            #[cfg(not(feature = "screlu"))]
-            let phi = x.max(0) as i64;
-            #[cfg(feature = "screlu")]
-            let phi = {
-                let a = x.clamp(0, cap) as i32;
-                ((a * a) >> shift) as i64
-            };
-            sum += phi * w[h] as i64;
-        }
-        sum
-    }
-}
-
 /// Incrementally-maintained network input for search: the pattern indices
 /// plus both perspectives' H-dim accumulators. Updated on make/unmake so a
 /// leaf eval is O(H) instead of an O(features·H) rebuild.
@@ -788,9 +560,7 @@ pub struct AdamState {
     /// Adam moments for the stacked read-out, one entry per table. Empty
     /// when the build has no stack, which is why they are read only under
     /// the feature.
-    #[cfg_attr(not(feature = "stackedout"), allow(dead_code))]
     m_so: Vec<Vec<f32>>,
-    #[cfg_attr(not(feature = "stackedout"), allow(dead_code))]
     v_so: Vec<Vec<f32>>,
     /// Scratch for the batched apply: per-row gradient accumulation with a
     /// stamp array instead of sorting (the 1M-pair sort of 132-byte elements
@@ -799,23 +569,15 @@ pub struct AdamState {
     row_stamp: Vec<u32>,
     /// The same three for the phase-adaptive layer, whose rows are a
     /// separate table with a separate width.
-    #[cfg_attr(not(feature = "pa128"), allow(dead_code))]
     /// Last step each row of the transformer / phase-adaptive layer moved.
     ft_last: Vec<u32>,
     pa_last: Vec<u32>,
-    #[cfg_attr(not(feature = "pa128"), allow(dead_code))]
     m_pa: Vec<f32>,
-    #[cfg_attr(not(feature = "pa128"), allow(dead_code))]
     v_pa: Vec<f32>,
-    #[cfg_attr(not(feature = "pa128"), allow(dead_code))]
     m_pa_bias: Vec<f32>,
-    #[cfg_attr(not(feature = "pa128"), allow(dead_code))]
     v_pa_bias: Vec<f32>,
-    #[cfg_attr(not(feature = "pa128"), allow(dead_code))]
     pa_scratch: Vec<f32>,
-    #[cfg_attr(not(feature = "pa128"), allow(dead_code))]
     pa_stamp: Vec<u32>,
-    #[cfg_attr(not(feature = "pa128"), allow(dead_code))]
     pa_touched: Vec<Vec<u32>>,
     /* Lookahead, the other stabiliser in the recipe: keep a slow
     copy of every weight, and every `k` steps pull both toward each other by
@@ -1177,112 +939,6 @@ impl AdamView {
     }
 }
 
-/// Post-ReLU accumulator lanes packed to int8, `ACT_UNITS` per disc, for the
-/// head's first layer.
-///
-/// The layer is sixteen dot products of H against a matrix, sixteen times the
-/// read-out's one, and it is the largest single arithmetic block on the leaf
-/// path — 24% of search speed once the head carries weight. int8 on both
-/// sides is what unlocks `sdot`, which lands sixteen products per instruction
-/// where f32 lands four.
-///
-/// The lanes are non-negative after the ReLU, so a byte holds 0..255 rather
-/// than 0..127 — twice the range for the same step. `sdot` needs signed
-/// bytes, so they are stored biased by -128 (the saturating *unsigned*
-/// narrow clamps at 255, and flipping the top bit is the subtraction). The
-/// bias is a constant per row of the layer, undone there with one multiply
-/// against that row's weight sum; see [`Nnue::mlp_l1_rowsum`].
-///
-/// Anything past `255 / ACT_UNITS` discs pins.
-#[inline]
-#[cfg_attr(feature = "stackedout", allow(dead_code))]
-fn activations_i8(acc: &[i16], fb: &[i16], shift: i16) -> [i8; H] {
-    let mut a = [0i8; H];
-    #[cfg(all(target_arch = "aarch64", not(feature = "nnue-scalar")))]
-    // SAFETY: `acc` and `fb` are both at least H long (callers slice them to
-    // exactly H), and every load and store below stays under H.
-    unsafe {
-        use std::arch::aarch64::*;
-        // i16 add, as in `readout_dot`: the accumulator invariant keeps the
-        // biased sum inside i16, so the narrow add cannot wrap.
-        let zero = vdupq_n_s16(0);
-        let sh = vdupq_n_s16(-shift);
-        let flip = vdupq_n_u8(0x80);
-        let relu_shift = |o: usize| {
-            let s = vaddq_s16(
-                vld1q_s16(acc.as_ptr().add(o)),
-                vld1q_s16(fb.as_ptr().add(o)),
-            );
-            vshlq_s16(vmaxq_s16(s, zero), sh)
-        };
-        let mut h = 0;
-        while h + 16 <= H {
-            let lo = vqmovun_s16(relu_shift(h));
-            let hi = vqmovun_s16(relu_shift(h + 8));
-            let u = vcombine_u8(lo, hi);
-            vst1q_s8(
-                a.as_mut_ptr().add(h),
-                vreinterpretq_s8_u8(veorq_u8(u, flip)),
-            );
-            h += 16;
-        }
-        while h < H {
-            let v = (*acc.get_unchecked(h) as i32 + *fb.get_unchecked(h) as i32).max(0);
-            *a.get_unchecked_mut(h) = ((v >> shift).min(255) - 128) as i8;
-            h += 1;
-        }
-        a
-    }
-    #[cfg(any(not(target_arch = "aarch64"), feature = "nnue-scalar"))]
-    {
-        for (h, x) in a.iter_mut().enumerate() {
-            let v = (acc[h] as i32 + fb[h] as i32).max(0);
-            *x = ((v >> shift).min(255) - 128) as i8;
-        }
-        a
-    }
-}
-
-/// `Σ row[h] · x[h]` over H int8 lanes, into i32.
-///
-/// `sdot` multiplies sixteen byte pairs and accumulates them into four i32
-/// lanes in one instruction, so a row of H costs H/16 of them. Both sides are
-/// bounded by 127 and H is at most 128, so the sum cannot leave i32.
-#[inline(always)]
-#[cfg_attr(feature = "stackedout", allow(dead_code))]
-fn dot_i8(row: &[i8], x: &[i8; H]) -> i32 {
-    debug_assert!(row.len() >= H);
-    #[cfg(all(target_arch = "aarch64", not(feature = "nnue-scalar")))]
-    // SAFETY: the assert above bounds every load by H, and `x` is exactly H.
-    unsafe {
-        use std::arch::aarch64::*;
-        let mut s = vdupq_n_s32(0);
-        let mut h = 0;
-        while h + 16 <= H {
-            s = vdotq_s32(
-                s,
-                vld1q_s8(x.as_ptr().add(h)),
-                vld1q_s8(row.as_ptr().add(h)),
-            );
-            h += 16;
-        }
-        let mut acc = vaddvq_s32(s);
-        while h < H {
-            acc += *x.get_unchecked(h) as i32 * *row.get_unchecked(h) as i32;
-            h += 1;
-        }
-        acc
-    }
-    #[cfg(any(not(target_arch = "aarch64"), feature = "nnue-scalar"))]
-    {
-        let mut acc = 0i32;
-        for h in 0..H {
-            acc += x[h] as i32 * row[h] as i32;
-        }
-        acc
-    }
-}
-
 /// The f32 twin of [`fold_pairs`], for the training paths.
 ///
 /// Returns the folded lanes. `raw` carries the accumulated transformer
@@ -1296,7 +952,6 @@ Left unclamped the starting validation error was 1.03e6.
 dividing by it puts a saturated accumulator exactly at 1. */
 /// The stack's direct inputs: the folded accumulator, activated, followed by
 /// the phase-adaptive output, which arrives already activated.
-#[cfg(feature = "stackedout")]
 #[inline]
 fn stack_inputs(acc: &[f32; H], pa: &[f32; PA_DIMS]) -> [f32; SO_SKIP] {
     let mut xin = [0.0f32; SO_SKIP];
@@ -1308,7 +963,6 @@ fn stack_inputs(acc: &[f32; H], pa: &[f32; PA_DIMS]) -> [f32; SO_SKIP] {
 }
 
 /// Copy a per-stage table's first stage over all the others.
-#[cfg(feature = "stackedout")]
 fn replicate_stage0(t: &mut [f32], per_stage: usize) {
     for st in 1..SO_STAGES {
         let (head, tail) = t.split_at_mut(st * per_stage);
@@ -1316,14 +970,12 @@ fn replicate_stage0(t: &mut [f32], per_stage: usize) {
     }
 }
 
-#[cfg(feature = "stackedout")]
 #[inline]
 fn so_act(a: f32) -> f32 {
     (a * (1.0 / PAIR_CLAMP_F32)).clamp(0.0, 1.0)
 }
 
 /// Derivative of [`so_act`]: flat inside the clamp, dead outside it.
-#[cfg(feature = "stackedout")]
 #[inline]
 fn so_act_grad(a: f32) -> f32 {
     let x = a * (1.0 / PAIR_CLAMP_F32);
@@ -1337,11 +989,6 @@ fn so_act_grad(a: f32) -> f32 {
 /// the head and the product gate all consume.
 #[inline]
 fn fold_pairs_f32(raw: &[f32; ACC_DIMS]) -> [f32; H] {
-    #[cfg(not(feature = "pairmul"))]
-    {
-        *raw
-    }
-    #[cfg(feature = "pairmul")]
     {
         let mut out = [0.0f32; H];
         for i in 0..H {
@@ -1355,17 +1002,10 @@ fn fold_pairs_f32(raw: &[f32; ACC_DIMS]) -> [f32; H] {
 
 /// Push a gradient on the folded lanes back to the raw ones.
 ///
-/// Without `pairmul` the fold is the identity and the gradient passes
-/// straight through. With it, `d(a*b/C)/da = b/C` and symmetrically -- zero
-/// outside the clamp, where the fold is flat.
+/// `d(a*b/C)/da = b/C` and symmetrically -- zero outside the clamp, where
+/// the fold is flat.
 #[inline]
 fn fold_pairs_back(raw: &[f32; ACC_DIMS], dfolded: &[f32; H]) -> [f32; ACC_DIMS] {
-    #[cfg(not(feature = "pairmul"))]
-    {
-        let _ = raw;
-        *dfolded
-    }
-    #[cfg(feature = "pairmul")]
     {
         let mut d = [0.0f32; ACC_DIMS];
         for i in 0..H {
@@ -1381,57 +1021,6 @@ fn fold_pairs_back(raw: &[f32; ACC_DIMS], dfolded: &[f32; H]) -> [f32; ACC_DIMS]
             }
         }
         d
-    }
-}
-
-/// `Σ row[i] · x[i]` over the first `n` lanes of both. NEON on aarch64,
-/// scalar elsewhere. Two accumulators, so the multiply latency overlaps.
-#[inline(always)]
-#[cfg_attr(feature = "stackedout", allow(dead_code))]
-fn dot_f32(row: &[f32], x: &[f32], n: usize) -> f32 {
-    debug_assert!(row.len() >= n && x.len() >= n);
-    #[cfg(all(target_arch = "aarch64", not(feature = "nnue-scalar")))]
-    // SAFETY: the assert above bounds every load by `n`.
-    unsafe {
-        use std::arch::aarch64::*;
-        let mut s0 = vdupq_n_f32(0.0);
-        let mut s1 = vdupq_n_f32(0.0);
-        let mut i = 0;
-        while i + 8 <= n {
-            s0 = vfmaq_f32(
-                s0,
-                vld1q_f32(row.as_ptr().add(i)),
-                vld1q_f32(x.as_ptr().add(i)),
-            );
-            s1 = vfmaq_f32(
-                s1,
-                vld1q_f32(row.as_ptr().add(i + 4)),
-                vld1q_f32(x.as_ptr().add(i + 4)),
-            );
-            i += 8;
-        }
-        while i + 4 <= n {
-            s0 = vfmaq_f32(
-                s0,
-                vld1q_f32(row.as_ptr().add(i)),
-                vld1q_f32(x.as_ptr().add(i)),
-            );
-            i += 4;
-        }
-        let mut sum = vaddvq_f32(vaddq_f32(s0, s1));
-        while i < n {
-            sum += *row.get_unchecked(i) * *x.get_unchecked(i);
-            i += 1;
-        }
-        sum
-    }
-    #[cfg(any(not(target_arch = "aarch64"), feature = "nnue-scalar"))]
-    {
-        let mut sum = 0.0f32;
-        for i in 0..n {
-            sum += row[i] * x[i];
-        }
-        sum
     }
 }
 
@@ -1592,7 +1181,6 @@ impl GradSink {
         self.ft_rows[p].push((row, *vals));
     }
 
-    #[cfg(feature = "pa128")]
     #[inline]
     fn push_pa(&mut self, row: u32, vals: &[f32; PA_DIMS]) {
         let p = row as usize % self.parts;
@@ -1830,7 +1418,7 @@ pub struct Nnue {
     /// is added at readout, keeping the incremental invariant intact.
     ft_bias: Vec<f32>,
     /// Phase-adaptive input layer: `pa[(bucket * n_feat_bucket + row) *
-    /// PA_DIMS + j]`, with its own bias per bucket. Empty without `pa128`.
+    /// PA_DIMS + j]`, with its own bias per bucket.
     pub pa: Vec<f32>,
     pub pa_bias: Vec<f32>,
     /// Per-stage read-out weights: `out_w[stage * H + h]`.
@@ -1857,8 +1445,7 @@ pub struct Nnue {
     /// instead of only being added at the end (`mob_w`, which stays: a
     /// per-bucket table says things a single weight cannot).
     mlp_mob_w: Vec<f32>,
-    /// The stacked read-out's weights, one set per stage. Unused (and
-    /// empty) unless the `stackedout` feature is on.
+    /// The stacked read-out's weights, one set per stage.
     so_l1_w: Vec<f32>,
     so_l1_b: Vec<f32>,
     so_l2_w: Vec<f32>,
@@ -1944,28 +1531,15 @@ pub struct Nnue {
     /// `quantize`. Finer steps resolve small activations but saturate
     /// sooner: int8 tops out at `127 / act_units` discs.
     pub act_units: f32,
-    #[cfg_attr(feature = "stackedout", allow(dead_code))]
-    pair_clamp_q: i16,
-    #[cfg_attr(feature = "stackedout", allow(dead_code))]
-    pair_shift_q: i16,
     /// Scale back the i64 read-out accumulation into disc-difference f32:
     /// `1 / (ft_scale * w_scale)`.
     out_scale: f32,
 
     // Precision-comparison paths (i32 and interleaved f32), built by quantize.
-    ftc_i32: Vec<i32>,
-    ft_bias_i32: Vec<i32>,
-    out_w_i32: Vec<i32>,
-    out_scale_i32: f32,
-    ftc_f32: Vec<f32>,
-    ft_bias_f32: Vec<f32>,
     /// Accumulator scale of the int16 path, so the head can read the
     /// quantized accumulator back in disc units.
     ft_scale: f32,
-    /// ft scale of the i32 comparison path (bench only; see `eval_acc_i32`).
-    ft_scale32_for_bench: f32,
     /// The stacked read-out in its integer form; see `stack_q`.
-    #[cfg(feature = "stackedout")]
     sq: stack_q::StackQ,
 
     /// ProbCut margins measured against *these* weights, or `None` when the
@@ -2033,7 +1607,6 @@ impl Nnue {
             ftc_i16: Vec::new(),
             ft_b_i8: Vec::new(),
             ft_w_i8: Vec::new(),
-            #[cfg(feature = "stackedout")]
             sq: stack_q::StackQ::default(),
             ft_clipped: 0,
             has_pw: false,
@@ -2051,17 +1624,8 @@ impl Nnue {
             act_shift_q: 0,
             head_f32: false,
             act_units: ACT_UNITS,
-            pair_clamp_q: 0,
-            pair_shift_q: 0,
             out_scale: 0.0,
-            ftc_i32: Vec::new(),
-            ft_bias_i32: vec![0; FT_BIAS_LEN],
-            out_w_i32: vec![0; STAGE_COUNT * H],
-            out_scale_i32: 0.0,
-            ftc_f32: Vec::new(),
-            ft_bias_f32: vec![0.0; FT_BIAS_LEN],
             ft_scale: 1.0,
-            ft_scale32_for_bench: 1.0,
             // Only a calibration run puts a sigma here; training never does.
             mpc_sigma: None,
         }
@@ -2248,17 +1812,6 @@ impl Nnue {
         let cap = (ACT_CLAMP * ft_scale).min(32_767.0);
         self.act_clamp_q = cap as i16;
         self.act_shift_q = cap.log2().round() as i16;
-        /* The pairwise fold, when the input layer is doubled. Same shape as
-        the squared activation: clamp both factors, multiply, shift by the
-        clamp so the result lands back in the range a single lane occupied
-        and every downstream scale keeps its meaning. */
-        #[cfg(feature = "pairmul")]
-        {
-            let pc = (PAIR_CLAMP * ft_scale).min(32_767.0);
-            self.pair_clamp_q = pc as i16;
-            self.pair_shift_q = pc.log2().round() as i16;
-        }
-
         /* The head's first layer, int8 on both sides so `sdot` can run it.
         The activation side is a right shift of the accumulator the read-out
         already holds, so the shift has to leave `ACT_UNITS` steps per disc;
@@ -2316,47 +1869,13 @@ impl Nnue {
                 }
             }
         }
-        #[cfg(feature = "stackedout")]
         {
             self.sq = stack_q::StackQ::build(self);
         }
     }
 
-    /// How many transformer cells saturated int8, and how many there are.
-    /// A training run that pushes this past a fraction of a percent is
-    /// spending accuracy in the table the search reads, not in the one the
-    /// loss sees; [`FT_CLIP_BUDGET`] is where `quantize` starts backing the
-    /// scale off instead.
-    /// The scales `quantize` chose, for reporting how coarse the conversion
-    /// the search reads actually is: transformer scale, read-out scale, and
-    /// the largest transformer weight it had to fit.
-    /// Drop the product-gate term, to see what its quantization costs.
-    pub fn zero_pw(&mut self) {
-        self.pw.fill(0.0);
-        self.pw_i16.fill(0);
-        self.has_pw = false;
-    }
-
-    pub fn quant_scales(&self) -> (f32, f32, f32) {
-        let ft_max = self.ft.iter().fold(0.0f32, |m, &v| m.max(v.abs()));
-        (
-            self.ft_scale,
-            1.0 / (self.out_scale * self.ft_scale),
-            ft_max,
-        )
-    }
-
     pub fn ft_clipped(&self) -> (usize, usize) {
         (self.ft_clipped, self.ft.len())
-    }
-
-    /// Weights of the stacked read-out's integer tables that saturated
-    /// their type at the fixed scales, and how many there are.
-    /// Not a tuning knob: a model that clips here was trained outside the
-    /// range the integer network can represent.
-    #[cfg(feature = "stackedout")]
-    pub fn stack_clipped(&self) -> (usize, usize) {
-        (self.sq.clipped, self.sq.total)
     }
 
     /// Build the interleaved both-perspectives table the incremental
@@ -2394,70 +1913,6 @@ impl Nnue {
         }
     }
 
-    /// Build the i32/f32 comparison tables (78 MB each). Bench only — the
-    /// search uses just the i16 path built by [`quantize`](Self::quantize).
-    pub fn build_precision_variants(&mut self) {
-        let ft_max = self.ft.iter().fold(1e-6f32, |m, &v| m.max(v.abs()));
-        let w_max = self.out_w.iter().fold(1e-6f32, |m, &v| m.max(v.abs()));
-        // i32 path: 8x finer scale than i16 (near-f32 precision).
-        let ft_scale32 = 2048.0 / ft_max;
-        let w_scale32 = 262144.0 / w_max;
-        self.out_scale_i32 = 1.0 / (ft_scale32 * w_scale32);
-        self.ft_scale32_for_bench = ft_scale32;
-        self.ftc_i32 = vec![0; self.n_features * H2];
-        for f in 0..self.n_features {
-            for h in 0..ACC_DIMS {
-                self.ftc_i32[f * H2 + h] = (self.ft[f * ACC_DIMS + h] * ft_scale32).round() as i32;
-            }
-        }
-        // f32 path: interleaved, no quantization (reference precision).
-        self.ftc_f32 = vec![0.0; self.n_features * H2];
-        for f in 0..self.n_features {
-            for h in 0..ACC_DIMS {
-                self.ftc_f32[f * H2 + h] = self.ft[f * ACC_DIMS + h];
-            }
-        }
-        for i in 0..FT_BIAS_LEN {
-            self.ft_bias_i32[i] = (self.ft_bias[i] * ft_scale32).round() as i32;
-            self.ft_bias_f32[i] = self.ft_bias[i];
-        }
-        self.out_w_i32 = self
-            .out_w
-            .iter()
-            .map(|&v| (v * w_scale32).round() as i32)
-            .collect();
-
-        // Fill the White halves from digit-swapped indices (both variants),
-        // once per transformer copy.
-        for bucket in 0..FT_BUCKETS {
-            let bucket_base = bucket * self.n_feat_bucket;
-            for m in 0..self.n_masks {
-                let base = bucket_base + self.mask_off[m] as usize;
-                let size = self.patterns[self.indexer.mask_patterns()[m] as usize].table_size();
-                for i in 0..size {
-                    let src = (base + self.indexer.swapped_index(m, i)) * H2;
-                    let dst = (base + i) * H2 + ACC_DIMS;
-                    for h in 0..ACC_DIMS {
-                        self.ftc_i32[dst + h] = self.ftc_i32[src + h];
-                        self.ftc_f32[dst + h] = self.ftc_f32[src + h];
-                    }
-                }
-            }
-        }
-    }
-
-    /// Base addresses of the int16 inference tables, for checking that rows
-    /// start on cache-line boundaries (a row is `H * 2` bytes and sits at a
-    /// multiple of that from the base, so the base's alignment decides
-    /// whether every row straddles two lines).
-    pub fn table_addrs(&self) -> Vec<(&'static str, usize)> {
-        vec![
-            ("ft_b_i8", self.ft_b_i8.as_ptr() as usize),
-            ("ft_w_i8", self.ft_w_i8.as_ptr() as usize),
-            ("ftc_i16", self.ftc_i16.as_ptr() as usize),
-        ]
-    }
-
     pub fn n_features(&self) -> usize {
         self.n_features
     }
@@ -2482,13 +1937,10 @@ impl Nnue {
         It starts at zero instead, and with the stacked
         read-out there is no ReLU here to keep active -- the accumulator
         feeds a product whose factors are clamped at zero either way. */
-        #[cfg(feature = "stackedout")]
         self.ft_bias.fill(0.0);
-        #[cfg(not(feature = "stackedout"))]
-        self.ft_bias.fill(0.1);
         self.init_mlp_hidden();
         /* A product layer cannot start from zero.
-        With `pairmul` a lane's output is `a * b`, so its gradients are
+        A lane's output is `a * b`, so its gradients are
         `d/da = b` and `d/db = a`: an all-zero table produces zero output
         *and* zero gradient, and the layer never leaves the origin. That is
         exactly what a first attempt did -- training error stuck at 374
@@ -2510,7 +1962,6 @@ impl Nnue {
         Signed, not positive-only: a lane pair should be able to learn
         either direction, and the clamp at zero prunes the half it does not
         want. */
-        #[cfg(feature = "pairmul")]
         {
             let bound = (6.0 / ACC_DIMS as f32).sqrt() * 0.25;
             for w in &mut self.ft {
@@ -2521,7 +1972,6 @@ impl Nnue {
         every phase copy starts from the first one. Six
         independent draws would be six different sub-models each seeing a
         sixth of the data. */
-        #[cfg(feature = "pa128")]
         {
             let bound = (6.0 / (PA_DIMS * PA_BUCKETS) as f32).sqrt() * 0.25;
             let rows = self.n_feat_bucket;
@@ -2541,7 +1991,6 @@ impl Nnue {
         anything downstream multiplies: L1's output is squared before L2
         sees it, so an all-zero L1 gives L2 nothing to differentiate. The
         final layer's bias starts at zero. */
-        #[cfg(feature = "stackedout")]
         {
             /* The usual dense-layer default, which is what these
             stacks get: weight and bias both uniform on +/-1/sqrt(fan_in),
@@ -2647,7 +2096,7 @@ impl Nnue {
         f
     }
 
-    #[cfg_attr(feature = "stackedout", allow(clippy::needless_return))]
+    #[allow(clippy::needless_return)]
     /// Evaluate from pattern indices the caller already maintains (the search
     /// keeps these incrementally). Recomputes the H accumulator from scratch
     /// rather than threading it through make/unmake — so integrating into an
@@ -2697,135 +2146,12 @@ impl Nnue {
                 self.n_masks,
             );
         }
-        #[cfg(feature = "stackedout")]
         {
             // The rows just summed are the int8 ones the shared read-out
             // uses; the stack reads its own int16 copy (see `stack_q`).
             let _ = raw_acc;
             self.sq
                 .eval(self, indices, board.player(), stage, Self::mob_index(board))
-        }
-        #[cfg(not(feature = "stackedout"))]
-        {
-            let acc = fold_pairs(&raw_acc, self.pair_clamp_q, self.pair_shift_q);
-            let fb = &self.ft_bias_i16[stage * H..stage * H + H];
-            let ow = &self.out_w_i16[stage * H..stage * H + H];
-            let sum = readout_dot(&acc, fb, ow, self.act_clamp_q, self.act_shift_q);
-            self.out_b[stage]
-                + sum as f32 * self.out_scale
-                + self.num_term(board, stage)
-                + self.mob_term(board, stage)
-                + self.extras(&acc, fb, Self::mob_index(board), stage)
-        }
-    }
-
-    /// The two optional read-out terms — the product gate and the additive
-    /// head — skipped whole when the model does not carry them.
-    ///
-    /// Both are dense per-leaf work on top of a read-out that is one dot
-    /// product, and the head is by far the larger: sixteen dots of H against
-    /// the read-out's one. Measured in place at H=64 (band29 depth 13), the
-    /// head costs 25% of search speed and the gate 4%. A model whose
-    /// corresponding weights are all zero was paying that for a term that
-    /// evaluates to zero, which is what every model trained so far has done
-    /// with the head. The flags are set once in `quantize`, so the branch is
-    /// perfectly predicted and a live term pays only itself.
-    #[inline]
-    #[cfg_attr(feature = "stackedout", allow(dead_code))]
-    fn extras(&self, acc: &[i16; H], fb: &[i16], mob: usize, stage: usize) -> f32 {
-        let mut out = 0.0;
-        if self.has_pw {
-            out += self.prod_sum_q(acc, fb, stage) as f32 * self.prod_scale;
-        }
-        if self.has_head {
-            /* The head's first layer in f32 rather than int8, when asked.
-            The int8 form was measured against a model whose head was a
-            correction on top of a read-out that already carried the score;
-            on a model where the head *is* most of the score, the same
-            conversion costs 1.3 discs of held-out error -- the whole gap
-            between this model's trained accuracy and what the search
-            reads. Off by default until the speed side is measured. */
-            if self.head_f32 {
-                // Plain ReLU with no ceiling, which is what `forward` feeds
-                // the head. The int8 form saturates at 127 after its shift;
-                // that ceiling is the thing under test here.
-                let mut a = [0.0f32; H];
-                let inv = 1.0 / self.ft_scale;
-                for h in 0..H {
-                    a[h] = (acc[h].wrapping_add(fb[h])).max(0) as f32 * inv;
-                }
-                out += self.mlp_term(&a, mob, stage);
-            } else {
-                out += self.mlp_term_i8(&activations_i8(acc, fb, self.act_shift), mob, stage);
-            }
-        }
-        out
-    }
-
-    /// Quantized product-gate sum over `HALF` lane pairs. `acc` carries the
-    /// side-to-move accumulator *without* bias (the bias rides in `fb`,
-    /// exactly as `readout_dot` consumes it).
-    ///
-    /// Both factors clamp into `[0, prod_clamp_q]`, which is inside i16, so
-    /// the pairwise product is an i32 widening multiply and only the weighted
-    /// sum needs i64. The narrow add mirrors `readout_dot` and rests on the
-    /// same invariant: the biased accumulator fits i16.
-    #[inline]
-    #[cfg_attr(feature = "stackedout", allow(dead_code))]
-    fn prod_sum_q(&self, acc: &[i16], fb: &[i16], stage: usize) -> i64 {
-        let pq = &self.pw_i16[stage * HALF..stage * HALF + HALF];
-        let ci = self.prod_clamp_q;
-        #[cfg(all(target_arch = "aarch64", not(feature = "nnue-scalar")))]
-        // SAFETY: `acc` and `fb` are at least `H` = `2 * HALF` long and `pq`
-        // is exactly `HALF`; every load below stays inside those.
-        unsafe {
-            use std::arch::aarch64::*;
-            let zero = vdupq_n_s16(0);
-            let cap = vdupq_n_s16(ci as i16);
-            let (mut s0, mut s1) = (vdupq_n_s64(0), vdupq_n_s64(0));
-            let mut i = 0;
-            let gate = |o: usize| {
-                let s = vaddq_s16(
-                    vld1q_s16(acc.as_ptr().add(o)),
-                    vld1q_s16(fb.as_ptr().add(o)),
-                );
-                vminq_s16(vmaxq_s16(s, zero), cap)
-            };
-            while i + 8 <= HALF {
-                let a = gate(i);
-                let b = gate(i + HALF);
-                let w = vld1q_s16(pq.as_ptr().add(i));
-                for (p, ww) in [
-                    (
-                        vmull_s16(vget_low_s16(a), vget_low_s16(b)),
-                        vmovl_s16(vget_low_s16(w)),
-                    ),
-                    (vmull_high_s16(a, b), vmovl_high_s16(w)),
-                ] {
-                    s0 = vaddq_s64(s0, vmull_s32(vget_low_s32(p), vget_low_s32(ww)));
-                    s1 = vaddq_s64(s1, vmull_high_s32(p, ww));
-                }
-                i += 8;
-            }
-            let mut ps = vaddvq_s64(vaddq_s64(s0, s1));
-            while i < HALF {
-                let pa = (*acc.get_unchecked(i) as i32 + *fb.get_unchecked(i) as i32).clamp(0, ci);
-                let pb = (*acc.get_unchecked(i + HALF) as i32 + *fb.get_unchecked(i + HALF) as i32)
-                    .clamp(0, ci);
-                ps += *pq.get_unchecked(i) as i64 * (pa * pb) as i64;
-                i += 1;
-            }
-            ps
-        }
-        #[cfg(any(not(target_arch = "aarch64"), feature = "nnue-scalar"))]
-        {
-            let mut ps: i64 = 0;
-            for i in 0..HALF {
-                let pa = (acc[i] as i32 + fb[i] as i32).clamp(0, ci);
-                let pb = (acc[i + HALF] as i32 + fb[i + HALF] as i32).clamp(0, ci);
-                ps += pq[i] as i64 * (pa * pb) as i64;
-            }
-            ps
         }
     }
 
@@ -2846,68 +2172,9 @@ impl Nnue {
         let stage = crate::linear::Linear::stage(board);
         let feats = self.features_player(indices, board.player(), stage);
         let base = self.forward(&feats, Self::mob_index(board), stage);
-        #[cfg(feature = "stackedout")]
         {
             base
         }
-        #[cfg(not(feature = "stackedout"))]
-        {
-            base + self.num_term(board, stage) + self.mob_term(board, stage)
-        }
-    }
-
-    /// Disc-count correction; within a stage the mover's count uniquely
-    /// determines the disc difference.
-    #[inline]
-    #[cfg_attr(feature = "stackedout", allow(dead_code))]
-    fn num_term(&self, board: &Board, stage: usize) -> f32 {
-        self.num_w[stage * NUM_TABLE_SIZE + num_index(board)]
-    }
-
-    /// Run the additive head over already-activated accumulator lanes.
-    /// `a[h]` is `relu(acc[h] + bias[h])` in disc units.
-    #[inline]
-    #[cfg_attr(feature = "stackedout", allow(dead_code))]
-    fn mlp_term(&self, a: &[f32; H], mob: usize, stage: usize) -> f32 {
-        let m = mob_input(mob);
-        let mut x1 = [0.0f32; MLP_H1];
-        for (i, x) in x1.iter_mut().enumerate() {
-            let v =
-                self.mlp_l1_b[i] + self.mlp_mob_w[i] * m + dot_f32(&self.mlp_l1_w[i * H..], a, H);
-            *x = v.max(0.0);
-        }
-        self.mlp_tail(x1, stage)
-    }
-
-    /// The head's first layer over int8 activations, then the same tail.
-    ///
-    /// Only this layer is quantized. It is `MLP_H1 * H` products against the
-    /// tail's `MLP_H2 * MLP_H1 + MLP_H2`, so at H=64 it is 79% of the head's
-    /// arithmetic and the rest is not worth the accuracy.
-    #[inline]
-    #[cfg_attr(feature = "stackedout", allow(dead_code))]
-    fn mlp_term_i8(&self, a: &[i8; H], mob: usize, stage: usize) -> f32 {
-        let m = mob_input(mob);
-        let mut x1 = [0.0f32; MLP_H1];
-        for (i, x) in x1.iter_mut().enumerate() {
-            // `a` carries the activations biased by -128 (see
-            // `activations_i8`); the row's weight sum puts that back.
-            let d = dot_i8(&self.mlp_l1_w_i8[i * H..], a) + 128 * self.mlp_l1_rowsum[i];
-            let v = self.mlp_l1_b[i] + self.mlp_mob_w[i] * m + d as f32 * self.mlp_l1_dequant;
-            *x = v.max(0.0);
-        }
-        self.mlp_tail(x1, stage)
-    }
-
-    /// Second layer and read-out, shared by both first-layer paths.
-    #[inline]
-    #[cfg_attr(feature = "stackedout", allow(dead_code))]
-    fn mlp_tail(&self, x1: [f32; MLP_H1], stage: usize) -> f32 {
-        let mut x2 = [0.0f32; MLP_H2];
-        for (j, x) in x2.iter_mut().enumerate() {
-            *x = (self.mlp_l2_b[j] + dot_f32(&self.mlp_l2_w[j * MLP_H1..], &x1, MLP_H1)).max(0.0);
-        }
-        dot_f32(&self.mlp_out_w[stage * MLP_H2..], &x2, MLP_H2)
     }
 
     /// The phase-adaptive layer for one position: a sparse sum over the same
@@ -2916,7 +2183,6 @@ impl Nnue {
     ///
     /// Returns the activation and its input; the backward pass needs the
     /// latter and recomputing it there would mean summing the rows twice.
-    #[cfg(feature = "stackedout")]
     fn pa_forward(
         &self,
         feats: &[u32; MAX_MASKS],
@@ -2924,7 +2190,6 @@ impl Nnue {
     ) -> ([f32; PA_DIMS], [f32; PA_DIMS]) {
         #[allow(unused_mut)]
         let mut z = [0.0f32; PA_DIMS];
-        #[cfg(feature = "pa128")]
         {
             let bucket = pa_bucket(stage);
             z.copy_from_slice(&self.pa_bias[bucket * PA_DIMS..bucket * PA_DIMS + PA_DIMS]);
@@ -2937,8 +2202,6 @@ impl Nnue {
                 }
             }
         }
-        #[cfg(not(feature = "pa128"))]
-        let _ = (feats, stage);
         let mut a = [0.0f32; PA_DIMS];
         for (j, av) in a.iter_mut().enumerate() {
             let c = z[j].clamp(0.0, 1.0);
@@ -2959,7 +2222,6 @@ impl Nnue {
     /// hands the next both a linear and a quadratic view of the same
     /// sixteen values. The final layer takes `L2` *and* the stack's inputs,
     /// a short path from the input alongside the deep one.
-    #[cfg(feature = "stackedout")]
     fn stacked_readout(
         &self,
         acc: &[f32; H],
@@ -3014,24 +2276,12 @@ impl Nnue {
         distinguishable. Rounding into a 24-wide bucket first threw away the
         12 counts above it. The bucketed form is what `mob_w` indexes, and
         that table only exists in the other shape. */
-        #[cfg(feature = "stackedout")]
         {
             board.movable_count() as usize
         }
-        #[cfg(not(feature = "stackedout"))]
-        {
-            (board.movable_count() as usize).min(MOB_BUCKETS - 1)
-        }
     }
 
-    /// Tempo correction for the side to move (see [`Nnue::mob_w`]).
-    #[inline]
-    #[cfg_attr(feature = "stackedout", allow(dead_code))]
-    fn mob_term(&self, board: &Board, stage: usize) -> f32 {
-        self.mob_w[stage * MOB_BUCKETS + Self::mob_index(board)]
-    }
-
-    #[cfg_attr(feature = "stackedout", allow(clippy::needless_return))]
+    #[allow(clippy::needless_return)]
     /// Forward from explicit features + stage (without the disc-count term).
     fn forward(&self, feats: &[u32; MAX_MASKS], mob: usize, stage: usize) -> f32 {
         let mut raw = [0.0f32; ACC_DIMS];
@@ -3044,45 +2294,17 @@ impl Nnue {
         }
         // Before the fold with the stacked read-out, after it otherwise --
         // see `FT_BIAS_LEN`.
-        #[cfg(feature = "stackedout")]
         for h in 0..ACC_DIMS {
             raw[h] += self.ft_bias[h];
         }
         #[allow(unused_mut)]
         let mut acc = fold_pairs_f32(&raw);
-        #[cfg(not(feature = "stackedout"))]
-        for (h, b) in self.ft_bias[stage * H..stage * H + H].iter().enumerate() {
-            acc[h] += b;
-        }
-        #[cfg(feature = "stackedout")]
         {
             // The stacked read-out replaces the linear one, the product gate
             // and the head all at once -- it is the whole score from the
             // folded lanes, so none of the terms below apply.
             let (pa, _) = self.pa_forward(feats, stage);
             return self.stacked_readout(&acc, &pa, mob, stage);
-        }
-        #[cfg(not(feature = "stackedout"))]
-        let ow = &self.out_w[stage * H..stage * H + H];
-        #[cfg(not(feature = "stackedout"))]
-        let mut out = self.out_b[stage];
-        #[cfg(not(feature = "stackedout"))]
-        for h in 0..H {
-            out += ow[h] * screlu(acc[h]);
-        }
-        #[cfg(not(feature = "stackedout"))]
-        {
-            let pw = &self.pw[stage * HALF..stage * HALF + HALF];
-            for i in 0..HALF {
-                let pa = acc[i].clamp(0.0, PROD_CLAMP);
-                let pb = acc[i + HALF].clamp(0.0, PROD_CLAMP);
-                out += pw[i] * pa * pb * (1.0 / PROD_CLAMP);
-            }
-            let mut a = [0.0f32; H];
-            for (h, x) in a.iter_mut().enumerate() {
-                *x = acc[h].max(0.0);
-            }
-            out + self.mlp_term(&a, mob, stage)
         }
     }
 
@@ -3097,126 +2319,7 @@ impl Nnue {
         self.indexer.init(black, white)
     }
 
-    /// Product features and residual of a Black-to-move training example,
-    /// for the closed-form `pw` fit (`fit_pw`): returns
-    /// `(stage, z, target - current_output)` where
-    /// `z[i] = φ(acc_i)·φ(acc_{i+HALF}) / PROD_CLAMP` and the output uses
-    /// the model's current `pw`.
-    pub fn product_features_black(
-        &self,
-        black: u64,
-        white: u64,
-        target: f32,
-    ) -> (usize, [f32; HALF], f32) {
-        let ix = self.indexer.init(black, white);
-        let board = Board {
-            black,
-            white,
-            player: Color::Black,
-            empty_count: 64 - (black | white).count_ones() as u8,
-        };
-        let stage = crate::linear::Linear::stage(&board);
-        let feats = self.features_black(&ix, stage);
-        let mut acc = [0.0f32; H];
-        /* Diagnostic paths, and the bias they want does not exist with the
-        stacked read-out: there it sits on the raw lanes and is not indexed
-        by stage. Leaving it out beats indexing past the end of the table. */
-        #[cfg(not(feature = "stackedout"))]
-        acc.copy_from_slice(&self.ft_bias[stage * H..stage * H + H]);
-        for &f in feats.iter().take(self.n_masks) {
-            let base = f as usize * H;
-            for h in 0..H {
-                acc[h] += self.ft[base + h];
-            }
-        }
-        let mut z = [0.0f32; HALF];
-        for i in 0..HALF {
-            let pa = acc[i].clamp(0.0, PROD_CLAMP);
-            let pb = acc[i + HALF].clamp(0.0, PROD_CLAMP);
-            z[i] = pa * pb * (1.0 / PROD_CLAMP);
-        }
-        let mut out = self.out_b[stage] + self.num_w[stage * NUM_TABLE_SIZE + num_index(&board)];
-        let ow = &self.out_w[stage * H..stage * H + H];
-        for h in 0..H {
-            if acc[h] > 0.0 {
-                out += ow[h] * acc[h];
-            }
-        }
-        let pw = &self.pw[stage * HALF..stage * HALF + HALF];
-        for i in 0..HALF {
-            out += pw[i] * z[i];
-        }
-        (stage, z, target - out)
-    }
-
-    /// Evaluate a Black-to-move position with and without the product-gate
-    /// term (f32 path), for measuring the closed-form fit's gain.
-    pub fn eval_black_with_without_pw(&self, black: u64, white: u64) -> (f32, f32) {
-        let ix = self.indexer.init(black, white);
-        let board = Board {
-            black,
-            white,
-            player: Color::Black,
-            empty_count: 64 - (black | white).count_ones() as u8,
-        };
-        let stage = crate::linear::Linear::stage(&board);
-        let feats = self.features_black(&ix, stage);
-        let mut acc = [0.0f32; H];
-        /* Diagnostic paths, and the bias they want does not exist with the
-        stacked read-out: there it sits on the raw lanes and is not indexed
-        by stage. Leaving it out beats indexing past the end of the table. */
-        #[cfg(not(feature = "stackedout"))]
-        acc.copy_from_slice(&self.ft_bias[stage * H..stage * H + H]);
-        for &f in feats.iter().take(self.n_masks) {
-            let base = f as usize * H;
-            for h in 0..H {
-                acc[h] += self.ft[base + h];
-            }
-        }
-        let mut out = self.out_b[stage] + self.num_w[stage * NUM_TABLE_SIZE + num_index(&board)];
-        let ow = &self.out_w[stage * H..stage * H + H];
-        for h in 0..H {
-            if acc[h] > 0.0 {
-                out += ow[h] * acc[h];
-            }
-        }
-        let pw = &self.pw[stage * HALF..stage * HALF + HALF];
-        let mut prod = 0.0f32;
-        for i in 0..HALF {
-            let pa = acc[i].clamp(0.0, PROD_CLAMP);
-            let pb = acc[i + HALF].clamp(0.0, PROD_CLAMP);
-            prod += pw[i] * pa * pb * (1.0 / PROD_CLAMP);
-        }
-        (out, out + prod)
-    }
-
-    /// Clone the trainable tables (ft, ft_bias, out_w, out_b, num_w), for
-    /// external trainers that seed from an engine model.
-    #[allow(clippy::type_complexity)]
-    pub fn export_f32(&self) -> (Vec<f32>, Vec<f32>, Vec<f32>, Vec<f32>, Vec<f32>) {
-        (
-            self.ft.clone(),
-            self.ft_bias.clone(),
-            self.out_w.clone(),
-            self.out_b.clone(),
-            self.num_w.clone(),
-        )
-    }
-
-    /// Global feature-table rows activated by a Black-to-move position
-    /// (`mask_off[m] + index[m]` for each mask), for external trainers that
-    /// need the same sparse rows this model's forward pass reads.
-    pub fn feature_rows_black(
-        &self,
-        black: u64,
-        white: u64,
-        stage: usize,
-    ) -> ([u32; MAX_MASKS], usize) {
-        let ix = self.indexer.init(black, white);
-        (self.features_black(&ix, stage), self.n_masks)
-    }
-
-    #[cfg_attr(feature = "stackedout", allow(clippy::needless_return))]
+    #[allow(clippy::needless_return)]
     /// Forward pass + per-example gradient pieces for synchronous minibatch
     /// training: returns the squared error and writes the example's
     /// contributions into `sink` (dense small tables directly, feature rows
@@ -3241,17 +2344,11 @@ impl Nnue {
                 raw[h] += self.ft[base + h];
             }
         }
-        #[cfg(feature = "stackedout")]
         for h in 0..ACC_DIMS {
             raw[h] += self.ft_bias[h];
         }
         #[allow(unused_mut)]
         let mut acc = fold_pairs_f32(&raw);
-        #[cfg(not(feature = "stackedout"))]
-        for (h, b) in self.ft_bias[stage * H..stage * H + H].iter().enumerate() {
-            acc[h] += b;
-        }
-        #[cfg(feature = "stackedout")]
         {
             let (pa, pa_z) = self.pa_forward(&feats, stage);
             let (sq, draw, dpa) =
@@ -3259,145 +2356,13 @@ impl Nnue {
             for &f in feats.iter().take(self.n_masks) {
                 sink.push_ft(f, &draw);
             }
-            #[cfg(feature = "pa128")]
             {
                 let base_row = (pa_bucket(stage) * self.n_feat_bucket) as u32;
                 for &f in feats.iter().take(self.n_masks) {
                     sink.push_pa(base_row + f, &dpa);
                 }
             }
-            #[cfg(not(feature = "pa128"))]
-            let _ = dpa;
             return sq;
-        }
-        #[cfg(not(feature = "stackedout"))]
-        {
-            let num_off = stage * NUM_TABLE_SIZE + discs;
-            let mob_off = stage * MOB_BUCKETS + mob.min(MOB_BUCKETS - 1);
-            let ow_off = stage * H;
-            let pw_off = stage * HALF;
-            let mut out = self.out_b[stage] + self.num_w[num_off] + self.mob_w[mob_off];
-            for h in 0..H {
-                out += self.out_w[ow_off + h] * screlu(acc[h]);
-            }
-            let mut pa = [0.0f32; HALF];
-            let mut pb = [0.0f32; HALF];
-            for i in 0..HALF {
-                pa[i] = acc[i].clamp(0.0, PROD_CLAMP);
-                pb[i] = acc[i + HALF].clamp(0.0, PROD_CLAMP);
-                out += self.pw[pw_off + i] * pa[i] * pb[i] * (1.0 / PROD_CLAMP);
-            }
-            // Additive head. Its output is part of the score, so it has to be
-            // inside `out` before the error is taken. Left out, the head chases a
-            // residual it has itself already cancelled while the read-out fits
-            // the same target beside it, and the two sum to roughly twice the
-            // signal -- which is what a live head did to the held-out error
-            // (59.13 -> 66.53 in one epoch) before this was found.
-            // Pre-activations are kept for the backward pass below.
-            let mut a_act = [0.0f32; H];
-            for (h, x) in a_act.iter_mut().enumerate() {
-                *x = acc[h].max(0.0);
-            }
-            let mob_in = mob_input(mob);
-            let mut z1 = [0.0f32; MLP_H1];
-            let mut x1 = [0.0f32; MLP_H1];
-            for i in 0..MLP_H1 {
-                let row = &self.mlp_l1_w[i * H..i * H + H];
-                let mut v = self.mlp_l1_b[i] + self.mlp_mob_w[i] * mob_in;
-                for h in 0..H {
-                    v += row[h] * a_act[h];
-                }
-                z1[i] = v;
-                x1[i] = v.max(0.0);
-            }
-            let mut z2 = [0.0f32; MLP_H2];
-            let mut x2 = [0.0f32; MLP_H2];
-            for j in 0..MLP_H2 {
-                let row = &self.mlp_l2_w[j * MLP_H1..j * MLP_H1 + MLP_H1];
-                let mut v = self.mlp_l2_b[j];
-                for i in 0..MLP_H1 {
-                    v += row[i] * x1[i];
-                }
-                z2[j] = v;
-                x2[j] = v.max(0.0);
-            }
-            let mlp_off = stage * MLP_H2;
-            for j in 0..MLP_H2 {
-                out += self.mlp_out_w[mlp_off + j] * x2[j];
-            }
-
-            let err = out - target;
-
-            let mut delta = [0.0f32; H];
-            for h in 0..H {
-                // d(out)/d(acc) through the squared clipped activation, and the
-                // read-out weight's own gradient against the activation itself.
-                delta[h] = self.out_w[ow_off + h] * screlu_grad(acc[h]);
-                sink.out_w[ow_off + h] += err * screlu(acc[h]);
-            }
-            for i in 0..HALF {
-                let w = self.pw[pw_off + i] * (1.0 / PROD_CLAMP);
-                if acc[i] > 0.0 && acc[i] < PROD_CLAMP {
-                    delta[i] += w * pb[i];
-                }
-                if acc[i + HALF] > 0.0 && acc[i + HALF] < PROD_CLAMP {
-                    delta[i + HALF] += w * pa[i];
-                }
-                sink.pw[pw_off + i] += err * pa[i] * pb[i] * (1.0 / PROD_CLAMP);
-            }
-
-            let mut dz2 = [0.0f32; MLP_H2];
-            for j in 0..MLP_H2 {
-                sink.mlp_out_w[mlp_off + j] += err * x2[j];
-                if z2[j] > 0.0 {
-                    dz2[j] = self.mlp_out_w[mlp_off + j];
-                }
-            }
-            let mut dx1 = [0.0f32; MLP_H1];
-            for j in 0..MLP_H2 {
-                if dz2[j] == 0.0 {
-                    continue;
-                }
-                let row = &self.mlp_l2_w[j * MLP_H1..j * MLP_H1 + MLP_H1];
-                sink.mlp_l2_b[j] += err * dz2[j];
-                for i in 0..MLP_H1 {
-                    sink.mlp_l2_w[j * MLP_H1 + i] += err * dz2[j] * x1[i];
-                    dx1[i] += dz2[j] * row[i];
-                }
-            }
-            for i in 0..MLP_H1 {
-                if z1[i] <= 0.0 || dx1[i] == 0.0 {
-                    continue;
-                }
-                let dz1 = dx1[i];
-                sink.mlp_l1_b[i] += err * dz1;
-                sink.mlp_mob_w[i] += err * dz1 * mob_in;
-                let row = &self.mlp_l1_w[i * H..i * H + H];
-                for h in 0..H {
-                    sink.mlp_l1_w[i * H + h] += err * dz1 * a_act[h];
-                    if acc[h] > 0.0 {
-                        delta[h] += dz1 * row[h];
-                    }
-                }
-            }
-
-            sink.out_b[stage] += err;
-            sink.num_w[num_off] += err;
-            sink.mob_w[mob_off] += err;
-            for h in 0..H {
-                sink.ft_bias[stage * H + h] += err * delta[h];
-            }
-            // `delta` is on the folded lanes; the table lives on the raw ones.
-            // Without `pairmul` the fold is the identity and this is a copy.
-            let draw = fold_pairs_back(&raw, &delta);
-            for &f in feats.iter().take(self.n_masks) {
-                let mut row = [0.0f32; ACC_DIMS];
-                for h in 0..ACC_DIMS {
-                    row[h] = err * draw[h];
-                }
-                sink.push_ft(f, &row);
-            }
-            err * err
         }
     }
 
@@ -3413,7 +2378,6 @@ impl Nnue {
     /// loss in discs while the network is normalised would multiply every
     /// gradient by 64², and no rate tuned on the normalised scale would
     /// transfer.
-    #[cfg(feature = "stackedout")]
     #[allow(clippy::too_many_arguments)]
     #[allow(clippy::too_many_arguments)]
     fn grad_stacked(
@@ -3571,7 +2535,6 @@ impl Nnue {
         for h in 0..ACC_DIMS {
             sink.ft_bias[h] += draw[h];
         }
-        #[cfg(feature = "pa128")]
         {
             let off = pa_bucket(stage) * PA_DIMS;
             for j in 0..PA_DIMS {
@@ -3708,7 +2671,6 @@ impl Nnue {
         would collide with the base layer's. */
         #[allow(unused_mut)]
         let mut pa_sq = 0.0f64;
-        #[cfg(feature = "pa128")]
         {
             while adam.pa_touched.len() < parts {
                 adam.pa_touched.push(Vec::new());
@@ -3814,7 +2776,6 @@ impl Nnue {
         the clip fires at the wrong threshold -- the
         first step matched and the second did not, because that was the step
         where the norm first crossed one. */
-        #[cfg(feature = "stackedout")]
         for sel in 0..6usize {
             let len = match sel {
                 0 => self.so_l1_w.len(),
@@ -3946,7 +2907,6 @@ impl Nnue {
         to the range quantisation can represent, which this shape
         does (127/64) -- without it a weight can drift somewhere int8 cannot
         follow and the quantised model diverges from the trained one. */
-        #[cfg(feature = "stackedout")]
         {
             const SO_MAX_W: f32 = 127.0 / 64.0;
             /* Two separate flags. Decay follows the usual rule --
@@ -4030,13 +2990,8 @@ impl Nnue {
             } else {
                 self.ft_bias[i] - (lr / bc1) * *m / ((*v).sqrt() / bc2s + eps)
             };
-            #[cfg(feature = "stackedout")]
             {
                 self.ft_bias[i] = nb;
-            }
-            #[cfg(not(feature = "stackedout"))]
-            {
-                self.ft_bias[i] = nb.clamp(-FT_CLAMP, FT_CLAMP);
             }
         }
         for i in 0..self.pw.len() {
@@ -4110,13 +3065,8 @@ impl Nnue {
                                         // layer; the bound exists to protect
                                         // an int16 accumulator's resolution,
                                         // and here it is read in f32.
-                                        #[cfg(feature = "stackedout")]
                                         {
                                             *w = nw;
-                                        }
-                                        #[cfg(not(feature = "stackedout"))]
-                                        {
-                                            *w = nw.clamp(-FT_CLAMP, FT_CLAMP);
                                         }
                                     }
                                 }
@@ -4129,7 +3079,6 @@ impl Nnue {
         // The phase-adaptive rows take the same step. No `FT_CLAMP`: that
         // bound exists so the base layer's int16 accumulator keeps its
         // resolution, and this layer is read in f32.
-        #[cfg(feature = "pa128")]
         {
             let cells = FtCells {
                 scratch: adam.pa_scratch.as_mut_ptr(),
@@ -4212,135 +3161,11 @@ impl Nnue {
         self.lookahead_sync(adam);
     }
 
-    /// Load every table from a flat f32 dump, in the order
-    /// `tmp/table_dump_check.py` writes them.
-    ///
-    /// Exists so the model can be checked against independent numbers
-    /// rather than against a reading of its source. Not a save format --
-    /// there is no header and no versioning, on purpose: it is only ever
-    /// written and read by that one script and this one function.
-    #[cfg(feature = "stackedout")]
-    pub fn load_reference_tables(&mut self, path: &std::path::Path) -> std::io::Result<()> {
-        use std::io::Read;
-        let mut r = std::io::BufReader::new(std::fs::File::open(path)?);
-        let mut read = |dst: &mut [f32]| -> std::io::Result<()> {
-            let mut b = [0u8; 4];
-            for x in dst.iter_mut() {
-                r.read_exact(&mut b)?;
-                *x = f32::from_le_bytes(b);
-            }
-            Ok(())
-        };
-        read(&mut self.ft)?;
-        read(&mut self.ft_bias)?;
-        read(&mut self.pa)?;
-        read(&mut self.pa_bias)?;
-        read(&mut self.so_l1_w)?;
-        read(&mut self.so_l1_b)?;
-        read(&mut self.so_l2_w)?;
-        read(&mut self.so_l2_b)?;
-        read(&mut self.so_out_w)?;
-        read(&mut self.so_out_b)?;
-        let mut extra = [0u8; 1];
-        if r.read(&mut extra)? != 0 {
-            return Err(std::io::Error::new(
-                std::io::ErrorKind::InvalidData,
-                "reference dump is longer than this build's tables",
-            ));
-        }
-        self.refresh_so_grid();
-        Ok(())
-    }
-
     /// Whether training's forward pass runs on the engine's integer grid.
     /// See `so_grid`.
     pub fn set_so_grid(&mut self, on: bool) {
         self.so_grid = on;
         self.refresh_so_grid();
-    }
-
-    /// Rebuild the forward-pass copies of the hidden layers' weights.
-    /// Must follow every write to `so_l1_w` / `so_l2_w`.
-    /// Copy stage `from`'s stacked read-out (all six tables) of `src` into
-    /// stage `to` of `self`. A probe for taking the stacks apart: which stage's
-    /// read-out a position runs through is the only thing that changes.
-    #[cfg(feature = "stackedout")]
-    pub fn copy_so_stage(&mut self, src: &Nnue, from: usize, to: usize) {
-        fn cp(dst: &mut [f32], src: &[f32], per: usize, from: usize, to: usize) {
-            dst[to * per..(to + 1) * per].copy_from_slice(&src[from * per..(from + 1) * per]);
-        }
-        cp(&mut self.so_l1_w, &src.so_l1_w, SO_L1 * SO_L1_IN, from, to);
-        cp(&mut self.so_l1_b, &src.so_l1_b, SO_L1, from, to);
-        cp(
-            &mut self.so_l2_w,
-            &src.so_l2_w,
-            SO_L2 * (SO_L1 * 2),
-            from,
-            to,
-        );
-        cp(&mut self.so_l2_b, &src.so_l2_b, SO_L2, from, to);
-        cp(&mut self.so_out_w, &src.so_out_w, SO_OUT_IN, from, to);
-        cp(&mut self.so_out_b, &src.so_out_b, 1, from, to);
-        self.refresh_so_grid();
-    }
-
-    /// Relative change of one stage's stacked read-out between two models:
-    /// `||self - other|| / ||other||` over all six tables, and the same
-    /// for the output layer alone.
-    #[cfg(feature = "stackedout")]
-    pub fn so_stage_delta(&self, other: &Nnue, st: usize) -> (f64, f64) {
-        fn acc(a: &[f32], b: &[f32], per: usize, st: usize, d: &mut f64, n: &mut f64) {
-            for i in st * per..(st + 1) * per {
-                let x = (a[i] - b[i]) as f64;
-                *d += x * x;
-                *n += (b[i] as f64) * (b[i] as f64);
-            }
-        }
-        let (mut d, mut n) = (0.0, 0.0);
-        acc(
-            &self.so_l1_w,
-            &other.so_l1_w,
-            SO_L1 * SO_L1_IN,
-            st,
-            &mut d,
-            &mut n,
-        );
-        acc(&self.so_l1_b, &other.so_l1_b, SO_L1, st, &mut d, &mut n);
-        acc(
-            &self.so_l2_w,
-            &other.so_l2_w,
-            SO_L2 * (SO_L1 * 2),
-            st,
-            &mut d,
-            &mut n,
-        );
-        acc(&self.so_l2_b, &other.so_l2_b, SO_L2, st, &mut d, &mut n);
-        let (mut od, mut on) = (0.0, 0.0);
-        acc(
-            &self.so_out_w,
-            &other.so_out_w,
-            SO_OUT_IN,
-            st,
-            &mut od,
-            &mut on,
-        );
-        acc(&self.so_out_b, &other.so_out_b, 1, st, &mut od, &mut on);
-        ((d + od).sqrt() / (n + on).sqrt(), od.sqrt() / on.sqrt())
-    }
-
-    /// Relative change of the shared trunk (ft rows, pa rows) between two
-    /// models.
-    pub fn trunk_delta(&self, other: &Nnue) -> (f64, f64) {
-        fn rel(a: &[f32], b: &[f32]) -> f64 {
-            let (mut d, mut n) = (0.0f64, 0.0f64);
-            for (x, y) in a.iter().zip(b) {
-                let e = (*x - *y) as f64;
-                d += e * e;
-                n += (*y as f64) * (*y as f64);
-            }
-            d.sqrt() / n.sqrt().max(1e-30)
-        }
-        (rel(&self.ft, &other.ft), rel(&self.pa, &other.pa))
     }
 
     fn refresh_so_grid(&mut self) {
@@ -4412,24 +3237,6 @@ impl Nnue {
         }
     }
 
-    /// Every table, in the order the check script writes
-    /// them. Read-only counterpart to `load_reference_tables`.
-    #[cfg(feature = "stackedout")]
-    pub fn reference_tables(&self) -> Vec<&[f32]> {
-        vec![
-            &self.ft,
-            &self.ft_bias,
-            &self.pa,
-            &self.pa_bias,
-            &self.so_l1_w,
-            &self.so_l1_b,
-            &self.so_l2_w,
-            &self.so_l2_b,
-            &self.so_out_w,
-            &self.so_out_b,
-        ]
-    }
-
     /// Every trainable table, in one list.
     ///
     /// Lookahead has to touch all of them or it smooths some parameters and
@@ -4484,76 +3291,6 @@ impl Nnue {
             }
         }
         self.refresh_so_grid();
-    }
-
-    /// Replace every trainable table at once (widening / conversion tools).
-    /// `pw` is reset to zero — lane pairing is H-dependent.
-    pub fn set_all_weights(
-        &mut self,
-        ft: &[f32],
-        ft_bias: &[f32],
-        out_w: &[f32],
-        out_b: &[f32],
-        num_w: &[f32],
-    ) {
-        assert_eq!(ft.len(), self.ft.len());
-        assert_eq!(ft_bias.len(), self.ft_bias.len());
-        assert_eq!(out_w.len(), self.out_w.len());
-        assert_eq!(out_b.len(), self.out_b.len());
-        assert_eq!(num_w.len(), self.num_w.len());
-        self.ft.copy_from_slice(ft);
-        self.ft_bias.copy_from_slice(ft_bias);
-        self.out_w.copy_from_slice(out_w);
-        self.out_b.copy_from_slice(out_b);
-        self.num_w.copy_from_slice(num_w);
-        self.pw.fill(0.0);
-    }
-
-    /// Replace the mobility table wholesale (conversion tools).
-    pub fn set_mob_w(&mut self, v: &[f32]) {
-        assert_eq!(v.len(), self.mob_w.len(), "mob_w length mismatch");
-        self.mob_w.copy_from_slice(v);
-    }
-
-    /// Replace the additive head wholesale (conversion tools).
-    pub fn set_mlp(&mut self, l1_w: &[f32], l1_b: &[f32], l2_w: &[f32], l2_b: &[f32], ow: &[f32]) {
-        assert_eq!(l1_w.len(), self.mlp_l1_w.len(), "mlp l1_w length mismatch");
-        assert_eq!(l1_b.len(), self.mlp_l1_b.len(), "mlp l1_b length mismatch");
-        assert_eq!(l2_w.len(), self.mlp_l2_w.len(), "mlp l2_w length mismatch");
-        assert_eq!(l2_b.len(), self.mlp_l2_b.len(), "mlp l2_b length mismatch");
-        assert_eq!(ow.len(), self.mlp_out_w.len(), "mlp out_w length mismatch");
-        self.mlp_l1_w.copy_from_slice(l1_w);
-        self.mlp_l1_b.copy_from_slice(l1_b);
-        self.mlp_l2_w.copy_from_slice(l2_w);
-        self.mlp_l2_b.copy_from_slice(l2_b);
-        self.mlp_out_w.copy_from_slice(ow);
-    }
-
-    /// Replace the product-gate weights wholesale (closed-form fit).
-    pub fn set_pw(&mut self, v: &[f32]) {
-        assert_eq!(v.len(), self.pw.len(), "pw length mismatch");
-        self.pw.copy_from_slice(v);
-    }
-
-    /// Pre-ReLU accumulator (acc + per-stage bias) of `board`, for offline
-    /// analysis of the activation distribution (clamp-bound selection).
-    pub fn acc_pre_relu(&self, board: &Board) -> [f32; H] {
-        let indices = self.indexer.init(board.black, board.white);
-        let stage = crate::linear::Linear::stage(board);
-        let feats = self.features_player(&indices, board.player(), stage);
-        let mut acc = [0.0f32; H];
-        /* Diagnostic paths, and the bias they want does not exist with the
-        stacked read-out: there it sits on the raw lanes and is not indexed
-        by stage. Leaving it out beats indexing past the end of the table. */
-        #[cfg(not(feature = "stackedout"))]
-        acc.copy_from_slice(&self.ft_bias[stage * H..stage * H + H]);
-        for &f in feats.iter().take(self.n_masks) {
-            let base = f as usize * H;
-            for h in 0..H {
-                acc[h] += self.ft[base + h];
-            }
-        }
-        acc
     }
 
     /// Maintain the caller's pattern indices across a move — the cheap 2-byte
@@ -4611,20 +3348,6 @@ impl Nnue {
         }
     }
 
-    /// Exact inverse of [`acc_apply`](Self::acc_apply).
-    #[inline]
-    pub fn acc_undo(&self, acc: &mut Accumulator, pos: Position, flipped: u64, mover: Color) {
-        let md = mover.index() as u16;
-        self.acc_square(acc, pos.index(), 2u16.wrapping_sub(md));
-        let flip_diff = (1 - md).wrapping_sub(md);
-        let mut f = flipped;
-        while f != 0 {
-            let sq = f.trailing_zeros() as u8;
-            f &= f - 1;
-            self.acc_square(acc, sq, flip_diff);
-        }
-    }
-
     /// One square's colour change: shift every affected mask's index and swap
     /// its feature vector into both accumulators (add new row, subtract old).
     #[inline]
@@ -4648,7 +3371,7 @@ impl Nnue {
         }
     }
 
-    #[cfg_attr(feature = "stackedout", allow(clippy::needless_return))]
+    #[allow(clippy::needless_return)]
     /// Evaluate from the incremental accumulator (side-to-move perspective).
     #[inline]
     pub fn eval_acc(&self, acc: &Accumulator, board: &Board) -> f32 {
@@ -4671,7 +3394,6 @@ impl Nnue {
         } else {
             &acc.acc[ACC_DIMS..H2]
         });
-        #[cfg(feature = "stackedout")]
         {
             let inv = 1.0 / self.ft_scale;
             let mut raw = [0.0f32; ACC_DIMS];
@@ -4683,89 +3405,6 @@ impl Nnue {
             let folded = fold_pairs_f32(&raw);
             return self.stacked_readout(&folded, &pa, Self::mob_index(board), stage);
         }
-        #[cfg(not(feature = "stackedout"))]
-        {
-            // The pairwise fold, which `eval_from_indices` also applies.
-            // Missing here, this path read the first half of the accumulator
-            // raw and called it the activation.
-            let v = fold_pairs(&v, self.pair_clamp_q, self.pair_shift_q);
-            let fb = &self.ft_bias_i16[stage * H..stage * H + H];
-            let ow = &self.out_w_i16[stage * H..stage * H + H];
-            // out = bias + scale * sum phi(acc+fb) * out_w + disc term
-            let sum = readout_dot(&v, fb, ow, self.act_clamp_q, self.act_shift_q);
-            self.out_b[stage]
-                + sum as f32 * self.out_scale
-                + self.num_term(board, stage)
-                + self.mob_term(board, stage)
-                + self.extras(&v, fb, Self::mob_index(board), stage)
-        }
-    }
-
-    /// i32-precision read-out (finer quantization than i16).
-    #[inline]
-    /* Bench-only precision comparison, and it indexes the bias per
-    stage -- which the stacked read-out does not have. */
-    #[cfg(not(feature = "stackedout"))]
-    pub fn eval_acc_i32(&self, acc: &Accumulator32, board: &Board) -> f32 {
-        let stage = crate::linear::Linear::stage(board);
-        let v = if board.player() == Color::Black {
-            &acc.acc[0..ACC_DIMS]
-        } else {
-            &acc.acc[ACC_DIMS..H2]
-        };
-        let ow = &self.out_w_i32[stage * H..stage * H + H];
-        let fb = &self.ft_bias_i32[stage * H..stage * H + H];
-        let mut sum: i64 = 0;
-        for h in 0..H {
-            sum += (v[h] + fb[h]).max(0) as i64 * ow[h] as i64;
-        }
-        // Product terms at this path's precision: dequantize the activations
-        // (ft_scale32 is recoverable from the stored scales) and use the f32
-        // weights — the point of this path is accumulator precision, not
-        // read-out weight precision.
-        let ft_scale32 = self.ft_scale32_for_bench;
-        let pw = &self.pw[stage * HALF..stage * HALF + HALF];
-        let mut psum = 0.0f32;
-        for i in 0..HALF {
-            let pa = ((v[i] + fb[i]) as f32 / ft_scale32).clamp(0.0, PROD_CLAMP);
-            let pb = ((v[i + HALF] + fb[i + HALF]) as f32 / ft_scale32).clamp(0.0, PROD_CLAMP);
-            psum += pw[i] * pa * pb * (1.0 / PROD_CLAMP);
-        }
-        self.out_b[stage]
-            + sum as f32 * self.out_scale_i32
-            + psum
-            + self.num_term(board, stage)
-            + self.mob_term(board, stage)
-    }
-
-    /// f32-precision read-out (reference, no quantization).
-    #[inline]
-    /* Bench-only precision comparison, and it indexes the bias per
-    stage -- which the stacked read-out does not have. */
-    #[cfg(not(feature = "stackedout"))]
-    pub fn eval_acc_f32(&self, acc: &AccumulatorF, board: &Board) -> f32 {
-        let stage = crate::linear::Linear::stage(board);
-        let v = if board.player() == Color::Black {
-            &acc.acc[0..ACC_DIMS]
-        } else {
-            &acc.acc[ACC_DIMS..H2]
-        };
-        let ow = &self.out_w[stage * H..stage * H + H];
-        let fb = &self.ft_bias_f32[stage * H..stage * H + H];
-        let mut sum = 0.0f32;
-        for h in 0..H {
-            let a = v[h] + fb[h];
-            if a > 0.0 {
-                sum += a * ow[h];
-            }
-        }
-        let pw = &self.pw[stage * HALF..stage * HALF + HALF];
-        for i in 0..HALF {
-            let pa = (v[i] + fb[i]).clamp(0.0, PROD_CLAMP);
-            let pb = (v[i + HALF] + fb[i + HALF]).clamp(0.0, PROD_CLAMP);
-            sum += pw[i] * pa * pb * (1.0 / PROD_CLAMP);
-        }
-        self.out_b[stage] + sum + self.num_term(board, stage) + self.mob_term(board, stage)
     }
 
     /// One SGD step on a Black-to-move example at `stage`. Returns squared error.
@@ -4798,8 +3437,6 @@ impl Nnue {
         /* Diagnostic paths, and the bias they want does not exist with the
         stacked read-out: there it sits on the raw lanes and is not indexed
         by stage. Leaving it out beats indexing past the end of the table. */
-        #[cfg(not(feature = "stackedout"))]
-        acc.copy_from_slice(&self.ft_bias[stage * H..stage * H + H]);
         for &f in feats.iter().take(self.n_masks) {
             let base = f as usize * H;
             for h in 0..H {
@@ -5187,8 +3824,8 @@ impl Nnue {
             state rather than one a reader has to infer. */
             w.write_all(b"BBRVNN10")?;
             // The accumulator width, which is what sizes `ft` -- twice the
-            // model's working width under `pairmul`. A file written by one
-            // build is rejected by the other on this field.
+            // model's working width. A file written by a build of another
+            // width is rejected on this field.
             w.write_all(&(ACC_DIMS as u32).to_le_bytes())?;
             w.write_all(&(self.n_features as u32).to_le_bytes())?;
             w.write_all(&(STAGE_COUNT as u32).to_le_bytes())?;
@@ -5261,7 +3898,6 @@ impl Nnue {
     /// pattern's configurations as a ternary word with the first listed
     /// square most significant and mover 0, opponent 1, empty 2, and
     /// `NNUE_PATTERNS` lists the same squares in the same order.
-    #[cfg(all(feature = "pairmul", feature = "pa128", feature = "stackedout"))]
     pub fn import_packed(&mut self, raw: &[u8]) -> std::io::Result<()> {
         use std::io::{Error, ErrorKind};
         // An imported net has never been calibrated here, whatever it was
@@ -5454,10 +4090,7 @@ impl Nnue {
         /* Files written when the stack had a set per stage rather than per
         ply carry one more set: the finished board's, which nothing reaches.
         Read it and drop it, so those models still load. */
-        #[cfg(feature = "stackedout")]
         let extra_stage = so_len == want_so + want_so / SO_STAGES;
-        #[cfg(not(feature = "stackedout"))]
-        let extra_stage = false;
         if so_len != want_so && !extra_stage {
             return Err(std::io::Error::new(
                 std::io::ErrorKind::InvalidData,
@@ -5548,94 +4181,6 @@ impl Nnue {
         Ok(())
     }
 }
-
-/// Generate an incremental accumulator + update methods for a non-wrapping
-/// element type (i32 or f32), mirroring the i16 path. Used only to compare
-/// precision/speed; the i16 path stays the production one.
-macro_rules! quant_acc {
-    ($Acc:ident, $T:ty, $build:ident, $apply:ident, $undo:ident, $sq:ident, $ftc:ident, $bias:ident) => {
-        #[derive(Clone)]
-        pub struct $Acc {
-            indices: PatternIndices,
-            acc: [$T; H2],
-        }
-        impl Nnue {
-            pub fn $build(&self, board: &Board) -> $Acc {
-                let indices = self.indexer.init(board.black, board.white);
-                // Per-stage bias is added at readout (same as the i16 path).
-                let mut acc = [<$T>::default(); H2];
-                for m in 0..self.n_masks {
-                    let f = (self.mask_off[m] as usize + indices.raw()[m] as usize) * H2;
-                    for i in 0..H2 {
-                        acc[i] += self.$ftc[f + i];
-                    }
-                }
-                $Acc { indices, acc }
-            }
-            pub fn $apply(&self, acc: &mut $Acc, pos: Position, flipped: u64, mover: Color) {
-                let md = mover.index() as u16;
-                self.$sq(acc, pos.index(), md.wrapping_sub(2));
-                let fd = md.wrapping_sub(1 - md);
-                let mut f = flipped;
-                while f != 0 {
-                    let s = f.trailing_zeros() as u8;
-                    f &= f - 1;
-                    self.$sq(acc, s, fd);
-                }
-            }
-            pub fn $undo(&self, acc: &mut $Acc, pos: Position, flipped: u64, mover: Color) {
-                let md = mover.index() as u16;
-                self.$sq(acc, pos.index(), 2u16.wrapping_sub(md));
-                let fd = (1 - md).wrapping_sub(md);
-                let mut f = flipped;
-                while f != 0 {
-                    let s = f.trailing_zeros() as u8;
-                    f &= f - 1;
-                    self.$sq(acc, s, fd);
-                }
-            }
-            #[inline]
-            fn $sq(&self, acc: &mut $Acc, sq: u8, digit_diff: u16) {
-                let ftc = &self.$ftc;
-                let raw = acc.indices.raw_mut();
-                let vec = &mut acc.acc;
-                for e in self.indexer.square_entries(sq) {
-                    let mask = e.mask as usize;
-                    let delta = digit_diff.wrapping_mul(e.pow3);
-                    let old = raw[mask] as usize;
-                    let new = raw[mask].wrapping_add(delta) as usize;
-                    raw[mask] = new as u16;
-                    let base = self.mask_off[mask] as usize;
-                    let no = (base + new) * H2;
-                    let oo = (base + old) * H2;
-                    for i in 0..H2 {
-                        vec[i] += ftc[no + i] - ftc[oo + i];
-                    }
-                }
-            }
-        }
-    };
-}
-quant_acc!(
-    Accumulator32,
-    i32,
-    accumulator_i32,
-    acc_apply_i32,
-    acc_undo_i32,
-    acc_square_i32,
-    ftc_i32,
-    ft_bias_i32
-);
-quant_acc!(
-    AccumulatorF,
-    f32,
-    accumulator_f32,
-    acc_apply_f32,
-    acc_undo_f32,
-    acc_square_f32,
-    ftc_f32,
-    ft_bias_f32
-);
 
 /// A pattern set small enough for tests to build a whole model and its
 /// optimiser state.
@@ -5863,10 +4408,7 @@ mod tests {
         /* Zero without the stacked read-out: there the read-out is linear
         in the accumulator, so quantization error is bounded by the disc
         floor alone and any drift is a real disagreement. */
-        #[cfg(feature = "stackedout")]
         const QUANT_TOL_REL: f32 = 1e-3;
-        #[cfg(not(feature = "stackedout"))]
-        const QUANT_TOL_REL: f32 = 0.0;
 
         let mut board = Board::new();
         let mut acc = nn.accumulator(&board);
@@ -5899,15 +4441,6 @@ mod tests {
             transformer is replaced by noise -- so the two saturate
             differently and agree on nothing. The integer network is checked
             in `stack_q::tests`, on trained weights. */
-            #[cfg(not(feature = "stackedout"))]
-            assert!(
-                (from_ix - inc).abs() < 1e-3 * from_ix.abs().max(1.0),
-                "from_indices {from_ix} vs incremental {inc} ({} empty, player {:?}): \
-                 both are the same quantized computation and must match exactly",
-                board.empty_count(),
-                board.player()
-            );
-            #[cfg(feature = "stackedout")]
             let _ = from_ix;
 
             let moves = board.movable();
@@ -5999,13 +4532,8 @@ mod tests {
 
         let evaluated = {
             let f = nn.forward(&nn.features_black(&ix, stage), mob, stage);
-            #[cfg(feature = "stackedout")]
             {
                 f
-            }
-            #[cfg(not(feature = "stackedout"))]
-            {
-                f + nn.num_w[stage * NUM_TABLE_SIZE + discs] + nn.mob_w[stage * MOB_BUCKETS + mob]
             }
         };
 
@@ -6043,7 +4571,6 @@ mod tests {
     /// 1/sqrt(257), so a good share of them under one grid step of 1/64)
     /// the two must give different losses, the hidden weights read must be
     /// on the grid, and the originals must not be.
-    #[cfg(feature = "stackedout")]
     #[test]
     fn stacked_grid_rounds_the_forward_pass() {
         let mut nn = Nnue::new(crate::pattern::NNUE_PATTERNS);
@@ -6089,7 +4616,6 @@ mod tests {
         );
     }
 
-    #[cfg(feature = "stackedout")]
     #[test]
     fn stacked_gradient_matches_finite_differences() {
         let mut nn = Nnue::new(test_patterns());
@@ -6164,7 +4690,6 @@ mod tests {
 
         // (table selector, index, gradient the sink holds)
         let row = feats[0] as usize;
-        #[cfg(feature = "pa128")]
         let pa_row = pa_bucket(stage) * nn.n_feat_bucket + row;
         let mut cases: Vec<(&str, usize, f32)> = Vec::new();
         for i in [0usize, 1, 7] {
@@ -6205,7 +4730,6 @@ mod tests {
             .map(|(_, v)| vec![(0usize, v[0]), (3usize, v[3])])
             .unwrap_or_default();
         assert!(!ft_grad.is_empty(), "no gradient was pushed for row {row}");
-        #[cfg(feature = "pa128")]
         let pa_grad: Vec<(usize, f32)> = sink.pa_rows[0]
             .iter()
             .find(|(r, _)| *r as usize == pa_row)
@@ -6280,7 +4804,6 @@ mod tests {
         for (j, g) in ft_grad {
             check(&mut nn, "ft", 7, row * ACC_DIMS + j, g);
         }
-        #[cfg(feature = "pa128")]
         for (j, g) in pa_grad {
             check(&mut nn, "pa", 8, pa_row * PA_DIMS + j, g);
         }
