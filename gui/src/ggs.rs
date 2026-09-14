@@ -274,8 +274,10 @@ pub struct EvalPoint {
     pub n: u32,
     /// Whether we played the move.
     pub mine: bool,
-    /// Reported value (mover-view discs).
-    pub eval: f32,
+    /// Reported value (mover-view discs); `None` when the mover did not
+    /// report one -- a pass, a silent opponent, or a move this client
+    /// only ever saw in a join list, which carries no values.
+    pub eval: Option<f32>,
 }
 
 #[derive(Clone, Serialize, Default)]
@@ -1148,14 +1150,16 @@ impl MatchState {
                 }
             }
         };
-        self.move_evals
-            .iter()
-            .filter_map(|(&n, &(ev, _))| {
-                ev.map(|eval| EvalPoint {
-                    n,
-                    mine: (n % 2) == mine_parity,
-                    eval,
-                })
+        /* Every move, reported or not. Dropping the unreported ones
+        used to shorten the series, and the chart plots by position in
+        it, so a silent stretch shrank the axis instead of showing as a
+        gap -- a 48-move game drew an axis reading 0..18. */
+        self.moves
+            .keys()
+            .map(|&n| EvalPoint {
+                n,
+                mine: (n % 2) == mine_parity,
+                eval: self.move_evals.get(&n).and_then(|&(ev, _)| ev),
             })
             .collect()
     }
@@ -5044,6 +5048,38 @@ mod tests {
         let (main, _, ext) = parse_clock("00:07");
         assert_eq!(main, Some(7));
         assert_eq!(ext, None);
+    }
+
+    /// A move nobody reported a value for still takes its place in the
+    /// series.
+    ///
+    /// The chart spaces points by position in this vector, so dropping
+    /// the silent ones shortened the axis instead of leaving a gap: a
+    /// resumed game, whose earlier moves reach this client only through
+    /// a join list (which carries no values), drew an axis ending long
+    /// before the game did.
+    #[test]
+    fn the_eval_series_keeps_the_moves_nobody_reported() {
+        use std::collections::BTreeMap;
+        let mut m = MatchState::new();
+        m.moves = (1..=6u32)
+            .map(|n| (n, "f5".to_string()))
+            .collect::<BTreeMap<_, _>>();
+        m.eval_parity = Some(1);
+        // Only moves 1 and 2 carry a reported value.
+        m.move_evals.insert(1, (Some(1.5), None));
+        m.move_evals.insert(2, (Some(-2.0), None));
+
+        let series = m.eval_series();
+        assert_eq!(series.len(), 6, "one point per move, reported or not");
+        assert_eq!(series[0].eval, Some(1.5));
+        assert_eq!(series[1].eval, Some(-2.0));
+        assert!(
+            series[2..].iter().all(|p| p.eval.is_none()),
+            "unreported moves stay in the series with no value"
+        );
+        assert_eq!(series[0].n, 1, "numbering is GGS's, not the index");
+        assert!(series[0].mine, "odd moves are ours at this parity");
     }
 
     /// Mirror-borrow conditions: the boards coincide only while the

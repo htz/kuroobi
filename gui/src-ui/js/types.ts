@@ -182,8 +182,9 @@ export interface MatchView {
   opp_eval: number | null;
   /** Seconds the opponent reported spending. */
   opp_secs_used: number | null;
-  /** Both players' reported evals in move order (mover-view discs). */
-  eval_series: { n: number; mine: boolean; eval: number }[];
+  /** Both players' reported evals in move order (mover-view discs);
+   *  `eval` is null where the mover reported none. */
+  eval_series: { n: number; mine: boolean; eval: number | null }[];
   /** Listing order (larger = newer); sorting only. */
   order: number;
   last_from_book: boolean;

@@ -952,21 +952,17 @@ function MatchBoard({ snap, m, clock, prefs, onKifu, face }: {
       })
     : undefined;
 
-  /* Reported-eval trend. Move numbers as X leave holes (silent
-     opponents gap one side), so use sequence indices for a shared
-     scale; opponent values negate to own view. */
-  const trend = (() => {
-    const by = new Map(m.eval_series.map((p) => [p.n, p]));
-    const ns = [...by.keys()].sort((a, b) => a - b);
-    return ns.map((n, i) => {
-      const p = by.get(n)!;
-      return {
-        x: i,
-        mine: p.mine ? p.eval : null,
-        opp: p.mine ? null : -p.eval,
-      };
-    });
-  })();
+  /* Reported-eval trend, one entry per move played -- including the
+     moves nobody reported a value for, which carry null. The chart
+     spaces points by position in this array, so leaving them out made
+     a silent stretch shrink the axis rather than show as a gap; the
+     line is drawn straight across such a stretch. Opponent values
+     negate to own view. */
+  const trend = m.eval_series.map((p) => ({
+    x: p.n,
+    mine: p.mine ? p.eval : null,
+    opp: p.mine || p.eval == null ? null : -p.eval,
+  }));
 
   /* Search progress; it moves only at iteration boundaries, so the
      marker steps with depth. Solve and selective phases show no depth
