@@ -3,9 +3,7 @@
 
 use criterion::{black_box, criterion_group, criterion_main, Criterion, Throughput};
 
-use kuroobi::{
-    bitboard, Board, EndSolverMode, Linear, Position, Searcher, Solver, LINEAR_PATTERNS,
-};
+use kuroobi::{bitboard, Board, EndSolverMode, Linear, Position, Solver, LINEAR_PATTERNS};
 
 /// Deterministic mid-game position (see tests/solver_integration.rs).
 fn position_with_empties(empties: u8, seed: u64) -> Board {
@@ -140,31 +138,6 @@ fn bench_eval(c: &mut Criterion) {
     group.finish();
 }
 
-/// Midgame search NPS: nodes/sec at depths 4/6/8 from a ~30-empties position.
-/// The TT is cleared before every search so node counts are deterministic;
-/// throughput (Elements) = nodes of one cold-TT search -> criterion reports
-/// NPS directly as Kelem/s / Melem/s.
-fn bench_search_nps(c: &mut Criterion) {
-    let e = bench_evaluator();
-    let board = position_with_empties(30, 3);
-
-    let mut group = c.benchmark_group("search_nps");
-    for depth in [4u8, 6, 8] {
-        let mut s = Searcher::new(14);
-        s.clear();
-        let nodes = s.search(&board, &e, depth).nodes;
-        group.throughput(Throughput::Elements(nodes));
-        group.bench_function(format!("depth_{depth}"), |b| {
-            b.iter(|| {
-                s.clear();
-                s.search(black_box(&board), &e, depth)
-            })
-        });
-    }
-    group.finish();
-}
-
-/// Endgame solver NPS at 14/16/18 empties (solve() clears its TT itself).
 fn bench_solver_nps(c: &mut Criterion) {
     let mut group = c.benchmark_group("solver_nps");
     group.sample_size(10);
@@ -186,7 +159,6 @@ criterion_group!(
     bench_perft,
     bench_solver,
     bench_eval,
-    bench_search_nps,
     bench_solver_nps
 );
 criterion_main!(benches);

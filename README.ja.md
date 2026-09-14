@@ -212,7 +212,6 @@ src/
 ├── nnue.rs            NNUE 評価関数 (int16 量子化 + NEON)
 ├── record.rs          学習レコード形式
 ├── wthor.rs           WTHOR 棋譜書庫 (.wtb) の読み取り
-├── search.rs          中盤探索: PVS + ETC + ProbCut
 ├── midgame.rs         対局用 NNUE 中盤探索: YBWC + Lazy SMP
 ├── solver.rs          終盤完全読みソルバ + 選択読み
 ├── stability.rs       確定石

@@ -247,7 +247,6 @@ src/
 ├── nnue.rs            NNUE evaluation (int16 quantization + NEON)
 ├── record.rs          training record format
 ├── wthor.rs           WTHOR archive reader (.wtb)
-├── search.rs          midgame search: PVS + ETC + ProbCut
 ├── midgame.rs         NNUE midgame search for games: YBWC + Lazy SMP
 ├── solver.rs          endgame exact solver + selective search
 ├── stability.rs       stable discs

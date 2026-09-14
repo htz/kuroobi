@@ -7,8 +7,14 @@ transposition table that both of them share.
 
 ![What each search covers](img/search-flow.svg)
 
-`src/search.rs`. Iterative-deepening αβ (negamax) on top of the
-pattern evaluation.
+The search that plays games is `src/midgame.rs`, covered below. What
+follows first is the αβ skeleton every version of this engine has had,
+written up against the linear-evaluator search that came before it
+(`src/search.rs`, removed once nothing but a benchmark called it). PVS,
+iterative deepening and the ProbCut fit below carried over to the NNUE
+search; **ETC, the killer/history ordering and the leaf quantisation did
+not** -- they are recorded because each was measured, not because the
+current engine runs them.
 
 ### Basic structure
 

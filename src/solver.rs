@@ -1461,9 +1461,9 @@ const SELECTIVE_PROBE_DEPTH: u8 = 2;
 /// `empties` empty squares — *measured*, not extrapolated.
 ///
 /// The margin a warm-up pass prunes against is `t * sigma`, so sigma decides
-/// whether a selective solve is selective at all. It used to borrow
-/// `search::mpc_sigma`, which is fitted on midgame searches of a fixed depth
-/// and grows about a quarter of a disc per ply without bound. Extended to an
+/// whether a selective solve is selective at all. It used to borrow the
+/// midgame fit ([`legacy_mpc_sigma`]), which is fitted on searches of a fixed
+/// depth and grows about a quarter of a disc per ply without bound. Extended to an
 /// endgame search, where the depth *is* the empty count, that model is wrong in
 /// both directions: at 30 empties it claimed 8.4 against a measured 4.2, so the
 /// margin was 15 discs and essentially nothing was ever cut (2.8 G nodes for
@@ -1476,7 +1476,7 @@ const SELECTIVE_PROBE_DEPTH: u8 = 2;
 /// it is clamped rather than extrapolated.
 fn selective_sigma(empties: u8, pc: u8) -> f32 {
     if legacy_sigma() {
-        return crate::search::mpc_sigma(empties as u32, empties, pc);
+        return legacy_mpc_sigma(empties as u32, empties, pc);
     }
 
     let e = (empties as f32).clamp(14.0, 30.0);
@@ -1487,6 +1487,22 @@ fn selective_sigma(empties: u8, pc: u8) -> f32 {
     // A margin cannot sensibly go below a disc, and the fit is only linear-ish
     // near its edges.
     s.max(1.0)
+}
+
+/// The midgame fit this used to borrow, kept only so `SEL_SIGMA=old` can put
+/// the two side by side. Standard deviation (in discs) of
+/// `search(depth) - search(pc_depth)` against empties, fitted on the training
+/// corpus with the linear evaluator; `pc_depth = 0` gives the static error.
+#[inline]
+fn legacy_mpc_sigma(empties: u32, depth: u8, pc_depth: u8) -> f32 {
+    const A: f32 = -0.068941;
+    const B: f32 = 0.368775;
+    const C: f32 = -0.713476;
+    const QA: f32 = 0.010223;
+    const QB: f32 = 0.647219;
+    const QC: f32 = 4.050545;
+    let s = A * empties as f32 + B * depth as f32 + C * pc_depth as f32;
+    QA * s * s + QB * s + QC
 }
 
 #[cfg(feature = "tunable")]
