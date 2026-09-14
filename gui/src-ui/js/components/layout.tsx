@@ -768,14 +768,33 @@ export function Overlay({ onClose, children }: { onClose?: () => void; children:
     return () => { window.removeEventListener('keydown', on); back?.focus?.(); };
   }, []);
 
+  /* Close on a press that both starts and ends on the scrim.
+   *
+   * This used to be a `click` on the scrim, and `click` fires on the
+   * common ancestor of the press and the release -- so selecting text
+   * in the dialog and releasing the button past its edge counted as a
+   * click on the scrim and shut the dialog mid-drag, losing whatever
+   * was being typed. Watching the two ends separately also declines
+   * the reverse drag (press outside, release inside), which no dialog
+   * should read as "dismiss". */
+  const pressedScrim = React.useRef(false);
+
   return (
-    <div onClick={onClose} style={{
-      position: 'absolute', inset: 0, zIndex: 30,
-      background: 'var(--scrim)', display: 'grid', placeItems: 'center',
-      padding: 'var(--sp-5)',
-    }}>
-      {/* Clicks on the content do not close. */}
-      <div ref={box} tabIndex={-1} onClick={(e) => e.stopPropagation()}>{children}</div>
+    <div
+      onMouseDown={(e) => { pressedScrim.current = e.target === e.currentTarget; }}
+      onMouseUp={(e) => {
+        const upOnScrim = e.target === e.currentTarget;
+        if (pressedScrim.current && upOnScrim) onClose?.();
+        pressedScrim.current = false;
+      }}
+      style={{
+        position: 'absolute', inset: 0, zIndex: 30,
+        background: 'var(--scrim)', display: 'grid', placeItems: 'center',
+        padding: 'var(--sp-5)',
+      }}>
+      {/* No click guard needed: the scrim only answers to presses that
+          land on the scrim itself. */}
+      <div ref={box} tabIndex={-1}>{children}</div>
     </div>
   );
 }
