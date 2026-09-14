@@ -52,9 +52,7 @@ use std::time::Instant;
 
 use kuroobi::linear::{Linear, STAGE_COUNT};
 use kuroobi::nnue::{AdamState, Nnue};
-use kuroobi::pattern::{
-    self, COMPACT_PATTERNS, EGAROUCID_PATTERNS, KUROOBI_PATTERNS, NNUE_PATTERNS,
-};
+use kuroobi::pattern::{self, LINEAR_PATTERNS, NNUE_PATTERNS};
 use kuroobi::record::{Filter, TeacherPolicy};
 use kuroobi::trainer::{
     count_examples_binary, load_examples_filtered_into, load_examples_range_into, Example, SymPlan,
@@ -771,12 +769,10 @@ fn main() -> ExitCode {
             }
         }
         None => match which_patterns.as_str() {
-            "compact" => COMPACT_PATTERNS,
-            "kuroobi" => KUROOBI_PATTERNS,
             "nnue" => NNUE_PATTERNS,
-            "egaroucid" => EGAROUCID_PATTERNS,
+            "linear" => LINEAR_PATTERNS,
             other => {
-                eprintln!("unknown pattern set {other} (egaroucid | compact)");
+                eprintln!("unknown pattern set {other} (nnue | linear)");
                 return ExitCode::FAILURE;
             }
         },

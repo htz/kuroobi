@@ -28,7 +28,7 @@
 //!
 //! Usage:
 //!   nnue_mpccalib [--threads N] [--stride N] [--max N] [--max-depth 12]
-//!                 [--depths a,b,c] [--patterns nnue|kuroobi|egaroucid|compact] [--patterns-file <spec>]
+//!                 [--depths a,b,c] [--patterns nnue|linear] [--patterns-file <spec>]
 //!                 [--min-empties 20] [--max-empties 58] [--min-cell 8] [--csv out.csv] [--write]
 //!                 <nnue.bin> <data-file>...
 
@@ -302,7 +302,7 @@ fn main() -> ExitCode {
     if paths.is_empty() || (want_data && paths.len() < 2) {
         eprintln!(
             "usage: nnue_mpccalib [--threads N] [--stride N] [--max N] [--max-depth 12] \
-             [--depths a,b,c] [--patterns nnue|kuroobi|egaroucid|compact] [--patterns-file <spec>] [--min-empties 20] [--max-empties 58] \
+             [--depths a,b,c] [--patterns nnue|linear] [--patterns-file <spec>] [--min-empties 20] [--max-empties 58] \
              [--min-cell 20] [--empties-bin 3] [--csv out.csv] [--cells] [--write] \
              <nnue.bin> <data-file>..."
         );

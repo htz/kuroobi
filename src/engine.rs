@@ -11,7 +11,7 @@ use crate::book::{Book, BookCandidate};
 use crate::linear::Linear;
 use crate::midgame::{selective_band, NnueSearch, SharedTt, StopHandle};
 use crate::nnue::{Nnue, ACT_UNITS};
-use crate::pattern::{Pattern, EGAROUCID_PATTERNS, NNUE_PATTERNS};
+use crate::pattern::{Pattern, LINEAR_PATTERNS, NNUE_PATTERNS};
 use crate::solver::{final_score, EndSolverMode, Solver};
 use crate::{Board, Position};
 
@@ -285,7 +285,7 @@ impl EngineAssets {
     /// the rest of the config does not touch disk and may still change before
     /// [`Engine::with_assets`].
     pub fn load(config: &EngineConfig) -> Result<EngineAssets, String> {
-        let mut linear = Linear::new(EGAROUCID_PATTERNS);
+        let mut linear = Linear::new(LINEAR_PATTERNS);
         linear
             .load_weights(&config.weights)
             .map_err(|e| format!("weights {}: {e}", config.weights.display()))?;

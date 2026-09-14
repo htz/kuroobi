@@ -790,8 +790,8 @@ mod tests {
     /// evaluator reads somewhere else entirely.
     #[test]
     fn flat_layout_round_trips() {
-        use crate::pattern::EGAROUCID_PATTERNS;
-        let mut ev = Linear::new(EGAROUCID_PATTERNS);
+        use crate::pattern::LINEAR_PATTERNS;
+        let mut ev = Linear::new(LINEAR_PATTERNS);
         let mut flat = ev.flat_all();
         for (i, w) in flat.iter_mut().enumerate() {
             *w = (i % 997) as f32;
@@ -804,8 +804,8 @@ mod tests {
     /// returns; the GPU forward is exactly that sum.
     #[test]
     fn flat_cells_sum_to_the_evaluation() {
-        use crate::pattern::EGAROUCID_PATTERNS;
-        let mut ev = Linear::new(EGAROUCID_PATTERNS);
+        use crate::pattern::LINEAR_PATTERNS;
+        let mut ev = Linear::new(LINEAR_PATTERNS);
         let mut flat = ev.flat_all();
         let mut k = 0u32;
         for w in flat.iter_mut() {

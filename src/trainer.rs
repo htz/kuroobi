@@ -366,7 +366,7 @@ mod tests {
         assert_eq!(rs, 12345, "no draw, no advance");
     }
     use super::*;
-    use crate::pattern::EGAROUCID_PATTERNS;
+    use crate::pattern::LINEAR_PATTERNS;
     use crate::position::Position;
     use crate::record::Record;
 
@@ -521,10 +521,7 @@ mod tests {
             white: b.white,
             score: 2.0,
         }];
-        let mut trainer = Trainer::new(
-            Linear::new(EGAROUCID_PATTERNS),
-            SgdOptimizer::new(0.01, 0.5),
-        );
+        let mut trainer = Trainer::new(Linear::new(LINEAR_PATTERNS), SgdOptimizer::new(0.01, 0.5));
         let before = trainer.optimizer.learning_rate;
         trainer.train_pass(&examples, |_, _| {});
         assert_eq!(trainer.optimizer.learning_rate, before, "pass holds lr");
@@ -558,7 +555,7 @@ mod tests {
             });
         }
 
-        let mut trainer = Trainer::new(Linear::new(EGAROUCID_PATTERNS), AdamOptimizer::new(0.01));
+        let mut trainer = Trainer::new(Linear::new(LINEAR_PATTERNS), AdamOptimizer::new(0.01));
         let stats = trainer.run(60, &examples);
         let first = stats.first().unwrap().mse();
         let last = stats.last().unwrap().mse();
@@ -576,7 +573,7 @@ mod tests {
             white: b.white,
             score: 2.0,
         }];
-        let mut trainer = Trainer::new(Linear::new(EGAROUCID_PATTERNS), AdamOptimizer::new(0.01));
+        let mut trainer = Trainer::new(Linear::new(LINEAR_PATTERNS), AdamOptimizer::new(0.01));
         let stats = trainer.train_epoch(&examples);
         assert_eq!(stats.samples[0], 1, "initial position is stage 0");
         assert_eq!(stats.samples[1..].iter().sum::<u64>(), 0);

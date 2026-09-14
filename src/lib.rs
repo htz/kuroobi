@@ -27,7 +27,6 @@ pub mod bitboard;
 pub mod board;
 pub mod book;
 pub mod color;
-pub mod datagen;
 pub mod engine;
 pub mod game;
 pub mod learn;
@@ -56,9 +55,7 @@ pub use color::Color;
 pub use game::MoveRecord;
 pub use game::Reversi;
 pub use linear::{AdamOptimizer, Linear, Optimizer, SgdOptimizer, STAGE_COUNT};
-pub use pattern::{
-    Pattern, PatternSet, PatternWeights, EDAX_PATTERNS, EGAROUCID_PATTERNS, EGAROUCID_PLUS_PATTERNS,
-};
+pub use pattern::{Pattern, LINEAR_PATTERNS, NNUE_PATTERNS};
 pub use pattern_index::{PatternIndexer, PatternIndices};
 pub use position::Position;
 pub use search::{SearchResult, Searcher};

@@ -565,7 +565,7 @@ impl StackQ {
 mod tests {
     use super::*;
     use crate::board::Board;
-    use crate::pattern::COMPACT_PATTERNS;
+    use crate::pattern::NNUE_PATTERNS;
     use crate::position::Position;
 
     /// Plays a game and hands every position to `f`, alternating colours.
@@ -619,7 +619,7 @@ mod tests {
     /// needs trained weights, see below.
     #[test]
     fn vector_kernel_matches_scalar() {
-        let mut nn = Nnue::new(COMPACT_PATTERNS);
+        let mut nn = Nnue::new(NNUE_PATTERNS);
         nn.init_weights();
         nn.quantize();
         walk_game(&nn, |board, ply| {
@@ -651,7 +651,7 @@ mod tests {
     fn integer_stack_matches_f32_on_trained_weights() {
         let path = std::env::var("KUROOBI_STACK_WEIGHTS")
             .expect("KUROOBI_STACK_WEIGHTS must name a stacked-read-out weight file");
-        let mut nn = Nnue::new(crate::pattern::NNUE_PATTERNS);
+        let mut nn = Nnue::new(NNUE_PATTERNS);
         nn.load(std::path::Path::new(&path)).expect("weights load");
         nn.quantize();
         let mut worst = 0.0f32;
@@ -674,6 +674,7 @@ mod probe {
     use super::*;
     use crate::board::Board;
     use crate::nnue::SO_SCORE;
+    use crate::pattern::NNUE_PATTERNS;
     use crate::position::Position;
 
     /// Per-stage range of every layer of a trained model, and of the
@@ -682,7 +683,7 @@ mod probe {
     #[ignore]
     fn stage_ranges() {
         let path = std::env::var("KUROOBI_STACK_WEIGHTS").expect("KUROOBI_STACK_WEIGHTS");
-        let mut nn = Nnue::new(crate::pattern::NNUE_PATTERNS);
+        let mut nn = Nnue::new(NNUE_PATTERNS);
         nn.load(std::path::Path::new(&path)).expect("weights load");
         nn.quantize();
         const S: usize = crate::nnue::SO_STAGES;

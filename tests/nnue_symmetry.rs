@@ -3,7 +3,7 @@
 
 use kuroobi::bitboard;
 use kuroobi::nnue::Nnue;
-use kuroobi::pattern::EGAROUCID_PATTERNS;
+use kuroobi::pattern::LINEAR_PATTERNS;
 use kuroobi::Board;
 
 fn sym_board(b: &Board, i: u8) -> Board {
@@ -36,7 +36,7 @@ fn sym_board(b: &Board, i: u8) -> Board {
 #[ignore = "requires weights/"]
 fn shipped_weights_are_symmetric() {
     let path = std::path::Path::new("weights/nnue.bin");
-    let mut nn = Nnue::new(EGAROUCID_PATTERNS);
+    let mut nn = Nnue::new(LINEAR_PATTERNS);
     nn.load(path).expect("nnue");
     nn.quantize();
 

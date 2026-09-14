@@ -466,7 +466,7 @@ pub fn demo_snapshot() -> Snapshot {
     let mut users: Vec<UserRow> = vec![
         ("saio", 2245.8, 34.0),
         ("tamaki", 2011.4, 46.0),
-        ("edax-bot", 2280.1, 22.0),
+        ("momo-bot", 2280.1, 22.0),
         ("nara", 1688.2, 91.0),
         ("kei", 1488.9, 216.0),
         ("newbie", 1200.0, 350.0),
@@ -503,9 +503,9 @@ pub fn demo_snapshot() -> Snapshot {
     s.ongoing = vec![
         OngoingView {
             id: ".71.0".into(),
-            raw: "tamaki vs edax-bot".into(),
+            raw: "tamaki vs momo-bot".into(),
             watching: true,
-            names: vec!["tamaki".into(), "edax-bot".into()],
+            names: vec!["tamaki".into(), "momo-bot".into()],
             ratings: vec!["2011.4".into(), "2280.1".into()],
             gtype: "s8r14".into(),
             mine: false,
@@ -617,7 +617,7 @@ pub fn demo_snapshot() -> Snapshot {
         (".69", "tamaki", -4, 1_753_990_000, 1836.1, "8"),
         (".68", "nobu", 12, 1_753_900_000, 1840.0, "s8r16"),
         (".67", "kei", 18, 1_753_820_000, 1828.4, "8r16"),
-        (".66", "edax-bot", -18, 1_753_740_000, 1812.9, "s8"),
+        (".66", "momo-bot", -18, 1_753_740_000, 1812.9, "s8"),
         (".65", "nara", 0, 1_753_650_000, 1825.5, "8"),
     ]
     .into_iter()

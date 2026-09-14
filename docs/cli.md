@@ -41,7 +41,6 @@ Input is `.data` files in the training record format (see
 | `--epochs <n>` | 10 | How many passes over all the data |
 | `--lr <f>` | 0.01 | Adam learning rate |
 | `--weights <path>` | `weights.bin` | Where to load from (if it exists) and where to save. **Saved every epoch** |
-| `--patterns <set>` | `egaroucid` | `egaroucid` / `edax` |
 | `--limit <n>` | all | Cap on the examples used per file |
 | `--max-examples <n>` | 64M | Examples held in RAM at once (`0` = all) |
 | `--log <path>` | — | Append per-epoch, per-stage loss as CSV |

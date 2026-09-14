@@ -21,7 +21,7 @@ use std::process::ExitCode;
 use kuroobi::linear::Linear;
 use kuroobi::midgame::{selective_band, NnueSearch, SharedTt};
 use kuroobi::nnue::Nnue;
-use kuroobi::pattern::EGAROUCID_PATTERNS;
+use kuroobi::pattern::LINEAR_PATTERNS;
 use kuroobi::solver::{EndSolverMode, Solver};
 use kuroobi::{Board, Position};
 
@@ -146,12 +146,12 @@ fn main() -> ExitCode {
         }
     };
 
-    let mut linear = Linear::new(EGAROUCID_PATTERNS);
+    let mut linear = Linear::new(LINEAR_PATTERNS);
     if let Err(e) = linear.load_weights(&args.weights) {
         eprintln!("failed to load {}: {e}", args.weights.display());
         return ExitCode::FAILURE;
     }
-    let mut nn = Nnue::new(EGAROUCID_PATTERNS);
+    let mut nn = Nnue::new(LINEAR_PATTERNS);
     if let Err(e) = nn.load(&args.nnue) {
         eprintln!("failed to load nnue {}: {e}", args.nnue.display());
         return ExitCode::FAILURE;

@@ -1015,12 +1015,12 @@ impl Searcher {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::pattern::EGAROUCID_PATTERNS;
+    use crate::pattern::LINEAR_PATTERNS;
 
     fn trained_evaluator() -> Linear {
         // A tiny hand-trained evaluator: reward corner ownership so the
         // search has a real signal to optimize.
-        let mut e = Linear::new(EGAROUCID_PATTERNS);
+        let mut e = Linear::new(LINEAR_PATTERNS);
         let b = Board::new();
         // Train stages 0..8 lightly toward positive for the initial-ish
         // positions so eval() is non-degenerate.

@@ -10,7 +10,6 @@
 //!   --lr <f>          Adam learning rate (default 0.01)
 //!   --weights <path>  Weight file to load (if it exists) and save
 //!                     (default weights.bin, saved after every epoch)
-//!   --patterns <set>  Pattern library: egaroucid | edax (default egaroucid)
 //!   --limit <n>       Use at most n examples per file (default all)
 //!   --max-examples <n> Examples held in RAM at once (default 64M, 0 = all)
 //!   --log <path>      Append per-epoch stage losses as CSV
@@ -34,7 +33,7 @@ use std::sync::Arc;
 use std::time::Instant;
 
 use kuroobi::linear::{AdamOptimizer, Linear, Optimizer, SgdOptimizer, STAGE_COUNT};
-use kuroobi::pattern::{EDAX_PATTERNS, EGAROUCID_PATTERNS, EGAROUCID_PLUS_PATTERNS};
+use kuroobi::pattern::LINEAR_PATTERNS;
 use kuroobi::record::{Filter, TeacherPolicy};
 use kuroobi::trainer::{
     count_examples_binary, load_examples_filtered_into, EpochStats, Example, Trainer,
@@ -55,7 +54,6 @@ struct Args {
     decay: f32,
     optimizer: OptimizerKind,
     weights_path: PathBuf,
-    patterns: &'static str,
     limit: Option<usize>,
     max_examples: Option<usize>,
     log_path: Option<PathBuf>,
@@ -111,7 +109,6 @@ Options:
   --lr <f>          Learning rate (default: sgd 0.002, adam 0.01)
   --decay <f>       SGD per-epoch lr decay factor (default 0.95)
   --weights <path>  Weight file to load/save (default weights.bin)
-  --patterns <set>  egaroucid | edax | egaroucid-plus (default egaroucid)
   --limit <n>       Max examples per file
   --max-examples <n>
                     Examples held in RAM at once (default 64000000, 0 = all).
@@ -220,7 +217,6 @@ fn parse_args() -> Result<Args, String> {
         optimizer: OptimizerKind::Sgd,
         threads: 1,
         weights_path: PathBuf::from("weights/weights.bin"),
-        patterns: "egaroucid",
         limit: None,
         max_examples: Some(DEFAULT_MAX_EXAMPLES),
         log_path: None,
@@ -282,15 +278,6 @@ fn parse_args() -> Result<Args, String> {
                 };
             }
             "--weights" => args.weights_path = PathBuf::from(value("--weights")?),
-            "--patterns" => {
-                let v = value("--patterns")?;
-                match v.as_str() {
-                    "egaroucid" => args.patterns = "egaroucid",
-                    "egaroucid-plus" => args.patterns = "egaroucid-plus",
-                    "edax" => args.patterns = "edax",
-                    other => return Err(format!("unknown pattern set: {other}")),
-                }
-            }
             "--limit" => {
                 args.limit = Some(
                     value("--limit")?
@@ -633,11 +620,7 @@ fn main() -> ExitCode {
         }
     };
 
-    let patterns = match args.patterns {
-        "edax" => EDAX_PATTERNS,
-        "egaroucid-plus" => EGAROUCID_PLUS_PATTERNS,
-        _ => EGAROUCID_PATTERNS,
-    };
+    let patterns = LINEAR_PATTERNS;
 
     // Size the dataset from file metadata only. Loading it all up front used
     // to be the "read once, reuse across epochs" optimization, but at 16 GB

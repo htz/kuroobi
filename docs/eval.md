@@ -7,7 +7,7 @@ groups of squares (patterns), and the NNUE that replaced it.
 
 ![Evaluation patterns](img/patterns.svg)
 
-*The default **Egaroucid patterns** (16 kinds × 4 orientations). Dark green is the first orientation, pale green the other 3.*
+*The linear evaluator's set (16 kinds × 4 orientations). Dark green is the first orientation, pale green the other 3.*
 
 ### Pattern evaluation
 
@@ -19,21 +19,19 @@ The index is base-3 with `0 = own, 1 = opponent, 2 = empty` (the leading
 square is the most significant digit), and the table size is `3^size`.
 
 Which squares form a group is taken directly from what the public engines
-use. Implemented are 3 sets: the 2 families **Egaroucid patterns** and
-**Edax patterns**, plus an experimental set that extends the former:
+use. Two sets are kept:
 
 | Set | Patterns | Masks incl. orientations | Notes |
 |---|---|---|---|
-| `EGAROUCID_PATTERNS` (Egaroucid patterns) | 16 | 64 | Default. The strongest at present |
-| `EDAX_PATTERNS` (Edax patterns) | 12 | 46 | — |
-| `EGAROUCID_PLUS_PATTERNS` | 18 | 72 | Egaroucid patterns + `ANGLE_X` + `DIAGONAL4` |
+| `LINEAR_PATTERNS` | 16 | 64 | The linear evaluator, which the endgame solver orders moves with |
+| `NNUE_PATTERNS` | 32 | 32 | The NNUE's feature set: every orientation its own table |
 
-`EGAROUCID_PLUS` is an experimental set that adds a shape small enough to be
-learned completely even in the opening (`Diagonal4` = 81 cells), motivated by
-the measurement that "statistical analysis of the trained weights shows the
-opening-stage tables of the 10-cell patterns are visited less than 6% of the
-time even with 25 million training positions". In league play, however, it
-did not beat the default Egaroucid 16.
+Sets that were tried and dropped: a 12-shape published family, an 18-shape
+extension of the 16 (`Diagonal4` small enough to be fully learned in the
+opening -- it did not beat the 16 in league play), a shared-table 8-shape
+set, and a 7-shape corner-weighted one. None of them beat what is
+here, and `pattern::from_spec` reads a set from a text file, so trying
+another needs no code.
 
 ### Stage split and the disc-count feature
 
@@ -174,6 +172,13 @@ cost of building a 20MB table, so the code was deleted outright.
 > leaf reconstruction — agree, and it caught this overflow.
 
 ### Choosing H (the accumulator width)
+
+The shipped width is **H=128**, reached with the stacked read-out and the
+doubled (pairwise-folded) input layer. It is a constant in `nnue.rs`: the
+cargo features that used to build 16/32/64/256 beside it are gone, and a
+weight file records its own width, so another width means editing that
+constant and training from scratch. What follows is how the width was
+argued up, kept because each step says what the next one has to beat.
 
 **Measured under the incrementally maintained scheme** (2026-07-27):
 

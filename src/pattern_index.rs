@@ -17,7 +17,7 @@ use crate::pattern::Pattern;
 use crate::position::Position;
 
 /// Upper bound on total orientations across a pattern library
-/// (Egaroucid: 16 patterns x 4 masks = 64; Edax: 46; Egaroucid-plus: 72).
+/// (the linear set: 16 patterns x 4 masks = 64; the NNUE set: 32).
 pub const MAX_MASKS: usize = 80;
 
 /// One differential update: mask `mask`'s index changes by
@@ -234,19 +234,6 @@ impl PatternIndexer {
         &self.entries[start..end]
     }
 
-    /// For each mask containing `sq`, call `f(mask, delta)` where `delta` is
-    /// the (wrapping) index change `digit_diff * pow3`. Lets an NNUE
-    /// accumulator update its H-vector alongside the scalar index, sharing the
-    /// same CSR of affected masks that `update_square` walks.
-    #[inline]
-    pub fn for_square_updates(&self, sq: u8, digit_diff: u16, mut f: impl FnMut(usize, u16)) {
-        let start = self.offsets[sq as usize] as usize;
-        let end = self.offsets[sq as usize + 1] as usize;
-        for e in &self.entries[start..end] {
-            f(e.mask as usize, digit_diff.wrapping_mul(e.pow3));
-        }
-    }
-
     /// Add `digit_diff * pow3` to every mask index containing `sq`.
     /// `digit_diff` is a two's-complement u16; wrapping arithmetic is exact
     /// because every true result stays within 0..3^size.
@@ -322,18 +309,6 @@ impl PatternIndexer {
         score
     }
 
-    /// Number of masks in the library, and the total CSR entries across all
-    /// squares. Both cost models in the search scale with these: the
-    /// incremental walk with entries per square, the readout with masks.
-    pub fn n_masks_pub(&self) -> usize {
-        self.n_masks
-    }
-
-    /// See `n_masks_pub`.
-    pub fn entries_pub(&self) -> usize {
-        self.entries.len()
-    }
-
     /// Index that mask `m`'s entry would have from White's perspective.
     pub fn swapped_index(&self, m: usize, idx: usize) -> usize {
         let pi = self.mask_pattern[m] as usize;
@@ -372,7 +347,7 @@ impl PatternIndexer {
 mod tests {
     use super::*;
     use crate::board::Board;
-    use crate::pattern::{EDAX_PATTERNS, EGAROUCID_PATTERNS, EGAROUCID_PLUS_PATTERNS};
+    use crate::pattern::{LINEAR_PATTERNS, NNUE_PATTERNS};
 
     /// Expected indices via the existing per-position recomputation, in
     /// `player`'s perspective.
@@ -434,8 +409,8 @@ mod tests {
     }
 
     #[test]
-    fn test_init_matches_reference_both_libraries() {
-        for patterns in [EGAROUCID_PATTERNS, EDAX_PATTERNS, EGAROUCID_PLUS_PATTERNS] {
+    fn test_init_matches_reference_both_sets() {
+        for patterns in [LINEAR_PATTERNS, NNUE_PATTERNS] {
             let ix = PatternIndexer::new(patterns);
             let b = Board::new();
             let indices = ix.init(b.black, b.white);
@@ -450,7 +425,7 @@ mod tests {
 
     #[test]
     fn test_apply_tracks_full_games() {
-        for patterns in [EGAROUCID_PATTERNS, EDAX_PATTERNS, EGAROUCID_PLUS_PATTERNS] {
+        for patterns in [LINEAR_PATTERNS, NNUE_PATTERNS] {
             let ix = PatternIndexer::new(patterns);
             for seed in 1..=5u64 {
                 let game = deterministic_game(seed);
@@ -474,7 +449,7 @@ mod tests {
 
     #[test]
     fn test_undo_restores_exactly() {
-        let ix = PatternIndexer::new(EGAROUCID_PATTERNS);
+        let ix = PatternIndexer::new(LINEAR_PATTERNS);
         for seed in 1..=3u64 {
             let game = deterministic_game(seed);
             let first = &game[0].0;
@@ -493,7 +468,7 @@ mod tests {
 
     #[test]
     fn test_swap_tables_are_involutions() {
-        let ix = PatternIndexer::new(EGAROUCID_PATTERNS);
+        let ix = PatternIndexer::new(LINEAR_PATTERNS);
         for (size, table) in ix.swap_tables.iter().enumerate() {
             for (idx, &swapped) in table.iter().enumerate() {
                 assert_eq!(

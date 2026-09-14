@@ -198,8 +198,8 @@ directions at once instead of looping. Details in
 
 The board is cut into **16 kinds of square groups (patterns) × 4
 orientations**, and the weights matching each arrangement are summed. The
-choice of which squares form a group is not ours: we use the **Egaroucid
-pattern set** as-is (the Edax set is implemented too). In the figure
+choice of which squares form a group is not ours: it is a **published set,
+adopted as-is** rather than designed here. In the figure
 above, the dark green is the first orientation and the pale green the
 other three.
 
@@ -241,10 +241,12 @@ src/
 ├── game.rs            game progress, history, records (KIFU)
 ├── bitboard.rs        bit operations for flipping and legal moves
 ├── zobrist.rs         position hashing (CRC32C)
-├── pattern.rs         evaluation pattern definitions (3 sets)
+├── pattern.rs         evaluation pattern definitions (2 sets)
 ├── pattern_index.rs   incremental pattern indices
-├── evaluator.rs       linear pattern evaluation + supervised learning
+├── linear.rs          linear pattern evaluation + supervised learning
 ├── nnue.rs            NNUE evaluation (int16 quantization + NEON)
+├── record.rs          training record format
+├── wthor.rs           WTHOR archive reader (.wtb)
 ├── search.rs          midgame search: PVS + ETC + ProbCut
 ├── midgame.rs         NNUE midgame search for games: YBWC + Lazy SMP
 ├── solver.rs          endgame exact solver + selective search
@@ -288,8 +290,8 @@ leave after a stop is raised.
 
 **Matching values is not enough.** A parallel-search defect that returned
 "the right value" with "the wrong move" passed the exact-solution tests
-and every FFO position, and lost 36 discs in a real game. Verifiers that
-play the returned move and check it live in `src/bin/stress_*.rs`
+and every FFO position, and lost 36 discs in a real game. It was caught
+by playing the returned move and checking it, not by comparing values
 (aborts happen once in a few thousand moves in real play, so
 `SOLVER_CHAOS` makes them dense on purpose). Details in
 [Search](docs/search.md#parallel-search-correctness).

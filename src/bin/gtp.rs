@@ -19,13 +19,13 @@
 //! Use `--time-ms` to include speed differences: fixed depth ignores
 //! them and overrates slow-but-smart models.
 //!
-//! Accepts Egaroucid-spelled flags (`-gtp -l <depth> -t <threads>
-//! -nobook -q`) so the driver treats it like the existing engines.
+//! Accepts the match driver's flag spelling (`-gtp -l <depth> -t <threads>
+//! -nobook -q`) so it needs no special case there.
 //!
 //! Usage:
 //!   gtp [-gtp] [-l <depth>] [-t <threads>] [-nobook] [-q]
 //!       [--solve-empties <n>] [--time-ms <n>] [--band <n>] [--no-mpc]
-//!       [--weights <path>] [--nnue <path>] [--patterns nnue|egaroucid|compact]
+//!       [--weights <path>] [--nnue <path>] [--patterns nnue|linear]
 //!       [--patterns-file <spec>]
 //!       [--book <path>]
 
@@ -91,7 +91,7 @@ fn main() -> ExitCode {
     let mut it = std::env::args().skip(1);
     while let Some(a) = it.next() {
         match a.as_str() {
-            // Egaroucid spelling, accepted to leave the driver untouched.
+            // The driver's spelling, accepted to leave the driver untouched.
             "-gtp" | "-q" | "--quiet" => {}
             "-nobook" | "--no-book" => cfg.use_book = false,
             "-l" | "--level" | "--depth" => {
@@ -125,7 +125,7 @@ fn main() -> ExitCode {
             "--nnue" => cfg.nnue = PathBuf::from(it.next().unwrap_or_default()),
             "--nnue-base" => cfg.nnue_base = PathBuf::from(it.next().unwrap_or_default()),
             "--patterns" => {
-                let name = it.next().unwrap_or_else(|| "egaroucid".to_string());
+                let name = it.next().unwrap_or_else(|| "linear".to_string());
                 cfg.nnue_patterns = match kuroobi::pattern::resolve(&name, None) {
                     Ok(p) => p,
                     Err(e) => {
@@ -157,7 +157,7 @@ fn main() -> ExitCode {
     }
     /* A depth-N search reads N-or-fewer empties to the end anyway;
     align the solve entry with depth or endgame depth silently diverges
-    between engines (the Edax level-table trap). */
+    between engines (a level table that sets the two apart is the trap). */
     if !solve_set {
         cfg.solve_empties = cfg.depth.min(u8::MAX as u32) as u8;
     }

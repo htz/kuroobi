@@ -1,5 +1,6 @@
-//! Pattern definitions for AI evaluation: the Egaroucid pattern set (16)
-//! and the Edax pattern set (12).
+//! Pattern definitions for AI evaluation: the linear evaluator's set (16
+//! shapes, orientations sharing a table) and the NNUE's (32 shapes, one
+//! table each). Both sets are named for what reads them.
 //!
 //! Each pattern has several masks (board orientations). A mask is an ordered
 //! list of squares; evaluating a mask yields a base-3 index (digit per square:
@@ -81,10 +82,10 @@ impl Pattern {
 }
 
 // ---------------------------------------------------------------------------
-// Egaroucid pattern set (16)
+// The linear evaluator's set (16)
 // ---------------------------------------------------------------------------
 
-pub const EGAROUCID_PATTERNS: &[Pattern] = &[
+pub const LINEAR_PATTERNS: &[Pattern] = &[
     Pattern {
         name: "Line2",
         size: 8,
@@ -243,322 +244,6 @@ pub const EGAROUCID_PATTERNS: &[Pattern] = &[
             &[C3, C4, B4, A4, A3, A6, A5, B5, C5, C6],
             &[F3, E3, E2, E1, F1, C1, D1, D2, D3, C3],
             &[F6, F5, G5, H5, H6, H3, H4, G4, F4, F3],
-        ],
-    },
-];
-
-// ---------------------------------------------------------------------------
-// Edax pattern set (12)
-// ---------------------------------------------------------------------------
-
-/// Eight shapes (32 masks) instead of sixteen (64), for pairing with a
-/// wider accumulator.
-///
-/// What an evaluation costs here is set by the number of **random row
-/// loads**, not by arithmetic: widening the accumulator from 16 to 32 lanes
-/// doubled the work per row and cost only 12% of search speed, because the
-/// row stayed inside one cache line and the load count never changed.
-/// Halving the masks halves the loads, which buys enough room to make each
-/// row much wider — more capacity per position for less latency.
-///
-/// The eight kept here still cover the board: rows two through four, the
-/// corner 3x3, the long diagonal with its corners, the edge with its X
-/// squares, the corner block and the centre cross. Weights are not
-/// transferable from the sixteen-shape set — the feature space is different,
-/// so a model on this set has to be trained from scratch.
-pub const WIDE8_PATTERNS: &[Pattern] = &[
-    EGAROUCID_PATTERNS[0],  // Line2
-    EGAROUCID_PATTERNS[1],  // Line3
-    EGAROUCID_PATTERNS[2],  // Line4
-    EGAROUCID_PATTERNS[3],  // Corner3x3
-    EGAROUCID_PATTERNS[7],  // Diagonal8+2C
-    EGAROUCID_PATTERNS[8],  // Edge+2x
-    EGAROUCID_PATTERNS[10], // Corner + Block
-    EGAROUCID_PATTERNS[11], // Cross
-];
-
-pub const EDAX_PATTERNS: &[Pattern] = &[
-    Pattern {
-        name: "Corner3x3",
-        size: 9,
-        masks: &[
-            &[A1, B1, A2, B2, C1, A3, C2, B3, C3],
-            &[H1, G1, H2, G2, F1, H3, F2, G3, F3],
-            &[A8, A7, B8, B7, A6, C8, B6, C7, C6],
-            &[H8, H7, G8, G7, H6, F8, G6, F7, F6],
-        ],
-    },
-    Pattern {
-        name: "Angle+X",
-        size: 10,
-        masks: &[
-            &[A5, A4, A3, A2, A1, B2, B1, C1, D1, E1],
-            &[H5, H4, H3, H2, H1, G2, G1, F1, E1, D1],
-            &[A4, A5, A6, A7, A8, B7, B8, C8, D8, E8],
-            &[H4, H5, H6, H7, H8, G7, G8, F8, E8, D8],
-        ],
-    },
-    Pattern {
-        name: "Edge+2x",
-        size: 10,
-        masks: &[
-            &[B2, A1, B1, C1, D1, E1, F1, G1, H1, G2],
-            &[B7, A8, B8, C8, D8, E8, F8, G8, H8, G7],
-            &[B2, A1, A2, A3, A4, A5, A6, A7, A8, B7],
-            &[G2, H1, H2, H3, H4, H5, H6, H7, H8, G7],
-        ],
-    },
-    Pattern {
-        name: "Corner+Block",
-        size: 10,
-        masks: &[
-            &[A1, C1, D1, C2, D2, E2, F2, E1, F1, H1],
-            &[A8, C8, D8, C7, D7, E7, F7, E8, F8, H8],
-            &[A1, A3, A4, B3, B4, B5, B6, A5, A6, A8],
-            &[H1, H3, H4, G3, G4, G5, G6, H5, H6, H8],
-        ],
-    },
-    Pattern {
-        name: "Line2",
-        size: 8,
-        masks: &[
-            &[A2, B2, C2, D2, E2, F2, G2, H2],
-            &[A7, B7, C7, D7, E7, F7, G7, H7],
-            &[B1, B2, B3, B4, B5, B6, B7, B8],
-            &[G1, G2, G3, G4, G5, G6, G7, G8],
-        ],
-    },
-    Pattern {
-        name: "Line3",
-        size: 8,
-        masks: &[
-            &[A3, B3, C3, D3, E3, F3, G3, H3],
-            &[A6, B6, C6, D6, E6, F6, G6, H6],
-            &[C1, C2, C3, C4, C5, C6, C7, C8],
-            &[F1, F2, F3, F4, F5, F6, F7, F8],
-        ],
-    },
-    Pattern {
-        name: "Line4",
-        size: 8,
-        masks: &[
-            &[A4, B4, C4, D4, E4, F4, G4, H4],
-            &[A5, B5, C5, D5, E5, F5, G5, H5],
-            &[D1, D2, D3, D4, D5, D6, D7, D8],
-            &[E1, E2, E3, E4, E5, E6, E7, E8],
-        ],
-    },
-    Pattern {
-        name: "Diagonal8",
-        size: 8,
-        masks: &[
-            &[A1, B2, C3, D4, E5, F6, G7, H8],
-            &[A8, B7, C6, D5, E4, F3, G2, H1],
-        ],
-    },
-    Pattern {
-        name: "Diagonal7",
-        size: 7,
-        masks: &[
-            &[B1, C2, D3, E4, F5, G6, H7],
-            &[H2, G3, F4, E5, D6, C7, B8],
-            &[A2, B3, C4, D5, E6, F7, G8],
-            &[G1, F2, E3, D4, C5, B6, A7],
-        ],
-    },
-    Pattern {
-        name: "Diagonal6",
-        size: 6,
-        masks: &[
-            &[C1, D2, E3, F4, G5, H6],
-            &[A3, B4, C5, D6, E7, F8],
-            &[F1, E2, D3, C4, B5, A6],
-            &[H3, G4, F5, E6, D7, C8],
-        ],
-    },
-    Pattern {
-        name: "Diagonal5",
-        size: 5,
-        masks: &[
-            &[D1, E2, F3, G4, H5],
-            &[A4, B5, C6, D7, E8],
-            &[E1, D2, C3, B4, A5],
-            &[H4, G5, F6, E7, D8],
-        ],
-    },
-    Pattern {
-        name: "Diagonal4",
-        size: 4,
-        masks: &[
-            &[D1, C2, B3, A4],
-            &[A5, B6, C7, D8],
-            &[E1, F2, G3, H4],
-            &[H5, G6, F7, E8],
-        ],
-    },
-];
-
-// ---------------------------------------------------------------------------
-// Egaroucid-plus (18): the full Egaroucid set extended with the two Edax
-// patterns it lacks. Motivation (weight statistics of an evaluator trained
-// on the Egaroucid set): opening-stage tables of 10-cell patterns are <6%
-// visited on 25M teacher positions, so small/extra shapes give the early
-// stages dense, fully-trained features while stage-wise weights let later
-// stages keep relying on the big patterns.
-// ---------------------------------------------------------------------------
-
-/// Angle+X (corner region + X square), from the Edax pattern set.
-const ANGLE_X: Pattern = Pattern {
-    name: "Angle+X",
-    size: 10,
-    masks: &[
-        &[A5, A4, A3, A2, A1, B2, B1, C1, D1, E1],
-        &[H5, H4, H3, H2, H1, G2, G1, F1, E1, D1],
-        &[A4, A5, A6, A7, A8, B7, B8, C8, D8, E8],
-        &[H4, H5, H6, H7, H8, G7, G8, F8, E8, D8],
-    ],
-};
-
-/// Diagonal4 (3^4 = 81 cells: fully trainable even in the opening), from
-/// the Edax pattern set.
-const DIAGONAL4: Pattern = Pattern {
-    name: "Diagonal4",
-    size: 4,
-    masks: &[
-        &[D1, C2, B3, A4],
-        &[A5, B6, C7, D8],
-        &[E1, F2, G3, H4],
-        &[H5, G6, F7, E8],
-    ],
-};
-
-pub const EGAROUCID_PLUS_PATTERNS: &[Pattern] = &[
-    EGAROUCID_PATTERNS[0],
-    EGAROUCID_PATTERNS[1],
-    EGAROUCID_PATTERNS[2],
-    EGAROUCID_PATTERNS[3],
-    EGAROUCID_PATTERNS[4],
-    EGAROUCID_PATTERNS[5],
-    EGAROUCID_PATTERNS[6],
-    EGAROUCID_PATTERNS[7],
-    EGAROUCID_PATTERNS[8],
-    EGAROUCID_PATTERNS[9],
-    EGAROUCID_PATTERNS[10],
-    EGAROUCID_PATTERNS[11],
-    EGAROUCID_PATTERNS[12],
-    EGAROUCID_PATTERNS[13],
-    EGAROUCID_PATTERNS[14],
-    EGAROUCID_PATTERNS[15],
-    ANGLE_X,
-    DIAGONAL4,
-];
-
-/// A smaller pattern library: 8 shapes, 32 masks, no shape wider than 9
-/// squares.
-///
-/// What a leaf costs is set by how many rows it pulls in and from how large
-/// a table, not by the arithmetic on them, and [`EGAROUCID_PATTERNS`] is
-/// expensive on both counts: 64 masks, and nine 10-square shapes whose
-/// 3^10 tables are 87% of its 612,360 rows. This set halves the reads and
-/// leaves 74,358 rows -- 12% of the table -- which is small enough to sit
-/// in L2 rather than stream from memory. Measured on band29 at depth 13
-/// over an identical tree: 7.25M nodes/s to 10.68M at H=64.
-///
-/// The shapes are transcribed into this repo's convention, where the
-/// orientations of a shape share one table. **That convention is worth
-/// keeping.** A table per orientation (297,432 rows) was measured and
-/// rejected: it made training error *worse* (42.66 to 45.75
-/// over three epochs) while running 1.32x slower. Reversi is symmetric and
-/// `--sym-train` already turns every position eight ways, so separate
-/// tables re-learn one function four times over a quarter of the data
-/// each.
-///
-/// **Weight files are not interchangeable with `EGAROUCID_PATTERNS`** --
-/// the feature space is a different size and a different shape, so a model
-/// has to be trained from scratch against whichever set it will be
-/// evaluated with.
-pub const COMPACT_PATTERNS: &[Pattern] = &[
-    Pattern {
-        name: "Inner2x4",
-        size: 8,
-        masks: &[
-            &[C2, D2, E2, F2, C3, D3, E3, F3],
-            &[C7, D7, E7, F7, C6, D6, E6, F6],
-            &[B3, B4, B5, B6, C3, C4, C5, C6],
-            &[G3, G4, G5, G6, F3, F4, F5, F6],
-        ],
-    },
-    Pattern {
-        name: "Diagonal8",
-        size: 8,
-        masks: &[
-            &[A1, B2, C3, D4, E5, F6, G7, H8],
-            &[H1, G2, F3, E4, D5, C6, B7, A8],
-        ],
-    },
-    Pattern {
-        name: "Center2x4",
-        size: 8,
-        masks: &[
-            &[C4, D4, E4, F4, C5, D5, E5, F5],
-            &[D3, E3, D4, E4, D5, E5, D6, E6],
-        ],
-    },
-    Pattern {
-        name: "Line1",
-        size: 8,
-        masks: &[
-            &[A1, B1, C1, D1, E1, F1, G1, H1],
-            &[A8, B8, C8, D8, E8, F8, G8, H8],
-            &[A1, A2, A3, A4, A5, A6, A7, A8],
-            &[H1, H2, H3, H4, H5, H6, H7, H8],
-        ],
-    },
-    /* Eight masks, because each edge contributes the shape and its
-    mirror: the block is not symmetric about the edge's midpoint, so the
-    two readings of one edge are genuinely different features. */
-    Pattern {
-        name: "Edge2x4",
-        size: 8,
-        masks: &[
-            &[B1, C1, D1, E1, B2, C2, D2, E2],
-            &[G1, F1, E1, D1, G2, F2, E2, D2],
-            &[B8, C8, D8, E8, B7, C7, D7, E7],
-            &[G8, F8, E8, D8, G7, F7, E7, D7],
-            &[A2, A3, A4, A5, B2, B3, B4, B5],
-            &[A7, A6, A5, A4, B7, B6, B5, B4],
-            &[H2, H3, H4, H5, G2, G3, G4, G5],
-            &[H7, H6, H5, H4, G7, G6, G5, G4],
-        ],
-    },
-    Pattern {
-        name: "Corner3x3",
-        size: 9,
-        masks: &[
-            &[A1, B1, C1, A2, B2, C2, A3, B3, C3],
-            &[H1, G1, F1, H2, G2, F2, H3, G3, F3],
-            &[A8, B8, C8, A7, B7, C7, A6, B6, C6],
-            &[H8, G8, F8, H7, G7, F7, H6, G6, F6],
-        ],
-    },
-    Pattern {
-        name: "Center3x3",
-        size: 9,
-        masks: &[
-            &[B2, C2, D2, B3, C3, D3, B4, C4, D4],
-            &[G2, F2, E2, G3, F3, E3, G4, F4, E4],
-            &[B7, C7, D7, B6, C6, D6, B5, C5, D5],
-            &[G7, F7, E7, G6, F6, E6, G5, F5, E5],
-        ],
-    },
-    Pattern {
-        name: "Diagonal7",
-        size: 7,
-        masks: &[
-            &[B1, C2, D3, E4, F5, G6, H7],
-            &[A2, B3, C4, D5, E6, F7, G8],
-            &[G1, F2, E3, D4, C5, B6, A7],
-            &[H2, G3, F4, E5, D6, C7, B8],
         ],
     },
 ];
@@ -744,201 +429,6 @@ pub const NNUE_PATTERNS: &[Pattern] = &[
     },
 ];
 
-// ---------------------------------------------------------------------------
-// kuroobi's own set (7 shapes, 34 masks)
-// ---------------------------------------------------------------------------
-
-/// Seven shapes, 34 masks, 54,675 shared rows.
-///
-/// Orientations of a shape share one table. Reversi is symmetric and
-/// `--sym-train` presents every position eight ways, so a per-orientation
-/// table re-learns one function several times on a fraction of the data
-/// each.
-///
-/// **The shape of the coverage is the point.** Counting how many masks
-/// contain each square, the set this replaces came out
-///
-/// ```text
-///     4  4  3  3  3  3  4  4      corner 4
-///     4  5  5  4  4  5  5  4      edge middle 3
-///     3  5  5  4  4  5  5  3      centre 5
-///     3  4  4  5  5  4  4  3
-/// ```
-///
-/// -- the centre covered more heavily than the corners, which is backwards
-/// for a game whose corners cannot be flipped. Published sets run the other
-/// way by a factor of 1.5 to 2.5. This set restores the order:
-///
-/// ```text
-///     6  6  4  4  4  4  6  6      corner 6
-///     6  6  4  3  3  4  6  6      edge middle 4
-///     4  4  4  3  3  4  4  4      centre 4
-///     4  3  3  4  4  3  3  4      minimum 3
-/// ```
-///
-/// Why each shape is here:
-///
-/// - `CornerWing2x4` carries the corner, its X square, both C squares and
-///   half an edge in **one** table. "Playing the X square loses the corner"
-///   is a relation between squares, and a relation is only expressible when
-///   the squares share a feature. Eight masks -- four corners, each read
-///   along the row and along the column -- which is the largest single
-///   spend in the set, and deliberately so.
-/// - `EdgeBlock2x4` covers the middle of an edge with its second rank, the
-///   shape wings and blocks live in.
-/// - `Edge8` is the whole edge as one line, which is what decides whether
-///   its discs are stable. The block above cannot see that; a line of eight
-///   cannot see the second rank. Both are needed and neither is redundant.
-/// - `Corner3x3` is the only nine-square shape. Its 19,683 rows are 36% of
-///   the set on their own, which is why there is exactly one.
-/// - `Diagonal8` and `Diagonal7` reach corner to corner; a flip runs along
-///   a line, so diagonals are not decoration.
-/// - `Inner2x4` is the only shape not touching an edge. Interior discs are
-///   cheap to flip, so one is enough -- the set this replaces spent three
-///   shapes there.
-///
-/// Every shape is a contiguous block or line. A shape with a hole in it
-/// cannot represent the flip that crosses the hole.
-///
-/// Not covered here, and covered elsewhere in the model: parity, and the
-/// mobility count the read-out takes as a separate input.
-pub const KUROOBI_PATTERNS: &[Pattern] = &[
-    Pattern {
-        name: "CornerWing2x4",
-        size: 8,
-        masks: &[
-            &[A1, B1, C1, D1, A2, B2, C2, D2],
-            &[A8, B8, C8, D8, A7, B7, C7, D7],
-            &[H1, G1, F1, E1, H2, G2, F2, E2],
-            &[H8, G8, F8, E8, H7, G7, F7, E7],
-            &[A1, A2, A3, A4, B1, B2, B3, B4],
-            &[A8, A7, A6, A5, B8, B7, B6, B5],
-            &[H1, H2, H3, H4, G1, G2, G3, G4],
-            &[H8, H7, H6, H5, G8, G7, G6, G5],
-        ],
-    },
-    Pattern {
-        name: "EdgeBlock2x4",
-        size: 8,
-        masks: &[
-            &[B1, C1, D1, E1, B2, C2, D2, E2],
-            &[B8, C8, D8, E8, B7, C7, D7, E7],
-            &[G1, F1, E1, D1, G2, F2, E2, D2],
-            &[G8, F8, E8, D8, G7, F7, E7, D7],
-            &[A2, A3, A4, A5, B2, B3, B4, B5],
-            &[A7, A6, A5, A4, B7, B6, B5, B4],
-            &[H2, H3, H4, H5, G2, G3, G4, G5],
-            &[H7, H6, H5, H4, G7, G6, G5, G4],
-        ],
-    },
-    Pattern {
-        name: "Edge8",
-        size: 8,
-        masks: &[
-            &[A1, B1, C1, D1, E1, F1, G1, H1],
-            &[A8, B8, C8, D8, E8, F8, G8, H8],
-            &[A1, A2, A3, A4, A5, A6, A7, A8],
-            &[H1, H2, H3, H4, H5, H6, H7, H8],
-        ],
-    },
-    Pattern {
-        name: "Corner3x3",
-        size: 9,
-        masks: &[
-            &[A1, B1, C1, A2, B2, C2, A3, B3, C3],
-            &[A8, B8, C8, A7, B7, C7, A6, B6, C6],
-            &[H1, G1, F1, H2, G2, F2, H3, G3, F3],
-            &[H8, G8, F8, H7, G7, F7, H6, G6, F6],
-        ],
-    },
-    Pattern {
-        name: "Diagonal8",
-        size: 8,
-        masks: &[
-            &[A1, B2, C3, D4, E5, F6, G7, H8],
-            &[A8, B7, C6, D5, E4, F3, G2, H1],
-        ],
-    },
-    Pattern {
-        name: "Diagonal7",
-        size: 7,
-        masks: &[
-            &[B1, C2, D3, E4, F5, G6, H7],
-            &[B8, C7, D6, E5, F4, G3, H2],
-            &[G1, F2, E3, D4, C5, B6, A7],
-            &[G8, F7, E6, D5, C4, B3, A2],
-        ],
-    },
-    Pattern {
-        name: "Inner2x4",
-        size: 8,
-        masks: &[
-            &[C3, D3, E3, F3, C4, D4, E4, F4],
-            &[C6, D6, E6, F6, C5, D5, E5, F5],
-            &[C3, C4, C5, C6, D3, D4, D5, D6],
-            &[F3, F4, F5, F6, E3, E4, E5, E6],
-        ],
-    },
-];
-
-/// Convenience holder pairing both pattern libraries.
-#[derive(Debug, Clone, Copy)]
-pub struct PatternSet {
-    pub egaroucid: &'static [Pattern],
-    pub edax: &'static [Pattern],
-}
-
-impl PatternSet {
-    pub fn all() -> Self {
-        PatternSet {
-            egaroucid: EGAROUCID_PATTERNS,
-            edax: EDAX_PATTERNS,
-        }
-    }
-}
-
-/// Weight tables for one pattern library: `weights[pattern][ternary_index]`.
-#[derive(Debug, Clone)]
-pub struct PatternWeights {
-    patterns: &'static [Pattern],
-    weights: Vec<Vec<i32>>,
-}
-
-impl PatternWeights {
-    /// Zero-initialized weights sized 3^size per pattern.
-    pub fn zeros(patterns: &'static [Pattern]) -> Self {
-        let weights = patterns
-            .iter()
-            .map(|p| vec![0i32; p.table_size()])
-            .collect();
-        PatternWeights { patterns, weights }
-    }
-
-    pub fn patterns(&self) -> &'static [Pattern] {
-        self.patterns
-    }
-
-    /// Set a single weight entry.
-    pub fn set(&mut self, pattern_idx: usize, index: usize, value: i32) {
-        self.weights[pattern_idx][index] = value;
-    }
-
-    pub fn get(&self, pattern_idx: usize, index: usize) -> i32 {
-        self.weights[pattern_idx][index]
-    }
-
-    /// Evaluate a position: sum of weights over every pattern orientation.
-    pub fn evaluate(&self, black: u64, white: u64, player: Color) -> i32 {
-        let mut score = 0i32;
-        for (p, table) in self.patterns.iter().zip(&self.weights) {
-            for idx in p.indices(black, white, player) {
-                score += table[idx];
-            }
-        }
-        score
-    }
-}
-
 /// One mask under the eight symmetries of the board.
 ///
 /// Deduplicated on the set of squares: two masks covering the same squares
@@ -989,10 +479,9 @@ fn orbit(base: &[u8]) -> Vec<Vec<u8>> {
 /// difference is large enough to dominate any change of shape. A shared
 /// shape holds one table that all eight orientations index, so a 9-square
 /// shape costs 19,683 rows however many masks it has; unshared, the same
-/// shape costs that per mask. `COMPACT_PATTERNS` and `NNUE_PATTERNS` differ
-/// in nothing else, and unshared is 4x the rows. Default is unshared,
-/// because that is what the row counts in the design work quote and what
-/// the deployed set uses; sharing has to be asked for.
+/// shape costs that per mask -- unshared is 4x the rows. Default is
+/// unshared, because that is what the row counts in the design work quote
+/// and what the deployed set uses; sharing has to be asked for.
 ///
 /// The result is leaked, because a `Pattern` borrows for `'static` and a
 /// pattern set outlives every evaluator built on it. One leak per process.
@@ -1069,10 +558,8 @@ pub fn resolve(name: &str, spec: Option<&std::path::Path>) -> Result<&'static [P
         return from_spec(&text, false);
     }
     match name {
-        "compact" => Ok(COMPACT_PATTERNS),
-        "kuroobi" => Ok(KUROOBI_PATTERNS),
         "nnue" => Ok(NNUE_PATTERNS),
-        "egaroucid" => Ok(EGAROUCID_PATTERNS),
+        "linear" => Ok(LINEAR_PATTERNS),
         other => Err(format!("unknown pattern set {other}")),
     }
 }
@@ -1084,48 +571,13 @@ mod tests {
 
     #[test]
     fn test_pattern_counts() {
-        assert_eq!(EGAROUCID_PATTERNS.len(), 16, "Egaroucid has 16 patterns");
-        assert_eq!(EDAX_PATTERNS.len(), 12, "Edax has 12 patterns");
-    }
-
-    /// The point of [`COMPACT_PATTERNS`] is a smaller, cheaper feature
-    /// space, so the two numbers that make it cheaper are pinned here. A
-    /// transcription slip that duplicated a mask or widened a shape would
-    /// otherwise show up only as an unexplained slowdown, months later.
-    #[test]
-    fn compact_patterns_are_the_size_they_are_for() {
-        let masks: usize = COMPACT_PATTERNS.iter().map(|p| p.masks.len()).sum();
-        let rows: usize = COMPACT_PATTERNS.iter().map(|p| p.table_size()).sum();
-        assert_eq!(masks, 32, "row reads per evaluation");
-        assert_eq!(rows, 74_358, "weight rows, orientations sharing a table");
-        assert!(
-            COMPACT_PATTERNS.iter().all(|p| p.size <= 9),
-            "a 10-square shape costs 3^10 rows, which is what this set exists to avoid"
-        );
-    }
-
-    /// Every mask must name distinct squares on the board. A repeat would
-    /// waste a ternary digit and make two different positions share an
-    /// index; a stray value would read outside the board.
-    #[test]
-    fn compact_pattern_masks_are_well_formed() {
-        for p in COMPACT_PATTERNS {
-            for (m, mask) in p.masks.iter().enumerate() {
-                assert_eq!(mask.len(), p.size, "{} mask {m} length", p.name);
-                let mut seen = 0u64;
-                for &sq in mask.iter() {
-                    assert!(sq < 64, "{} mask {m} square {sq} off the board", p.name);
-                    let bit = 1u64 << sq;
-                    assert_eq!(seen & bit, 0, "{} mask {m} repeats square {sq}", p.name);
-                    seen |= bit;
-                }
-            }
-        }
+        assert_eq!(LINEAR_PATTERNS.len(), 16, "the linear set has 16 patterns");
+        assert_eq!(NNUE_PATTERNS.len(), 32, "the unshared set has 32 patterns");
     }
 
     #[test]
     fn test_mask_sizes_match_declared_size() {
-        for p in EGAROUCID_PATTERNS.iter().chain(EDAX_PATTERNS) {
+        for p in LINEAR_PATTERNS.iter().chain(NNUE_PATTERNS) {
             assert!(!p.masks.is_empty(), "{}: needs at least one mask", p.name);
             for (i, mask) in p.masks.iter().enumerate() {
                 assert_eq!(
@@ -1143,7 +595,7 @@ mod tests {
 
     #[test]
     fn test_no_duplicate_squares_within_mask() {
-        for p in EGAROUCID_PATTERNS.iter().chain(EDAX_PATTERNS) {
+        for p in LINEAR_PATTERNS.iter().chain(NNUE_PATTERNS) {
             for (i, mask) in p.masks.iter().enumerate() {
                 let mut seen = 0u64;
                 for &s in mask.iter() {
@@ -1166,7 +618,7 @@ mod tests {
     #[test]
     fn test_empty_board_index_is_all_twos() {
         // Every square empty -> every ternary digit is 2 -> index = 3^size - 1
-        for p in EGAROUCID_PATTERNS.iter().chain(EDAX_PATTERNS) {
+        for p in LINEAR_PATTERNS.iter().chain(NNUE_PATTERNS) {
             for mask in p.masks.iter() {
                 let idx = Pattern::mask_index(mask, 0, 0, Color::Black);
                 assert_eq!(idx, p.table_size() - 1, "{}: empty-board index", p.name);
@@ -1191,7 +643,7 @@ mod tests {
         // colors swapped. Corner3x3 doesn't touch the center, so all four
         // orientations must give the identical (all-empty) index.
         let b = Board::new();
-        let corner = &EGAROUCID_PATTERNS[3];
+        let corner = &LINEAR_PATTERNS[3];
         assert_eq!(corner.name, "Corner3x3");
         let indices: Vec<usize> = corner.indices(b.black, b.white, b.player()).collect();
         assert!(indices.windows(2).all(|w| w[0] == w[1]));
@@ -1203,7 +655,7 @@ mod tests {
         // Line4's rank-4/rank-5 and file-D/file-E masks each cross exactly
         // two initial center discs, so their indices must differ from empty.
         let b = Board::new();
-        let line4 = &EGAROUCID_PATTERNS[2];
+        let line4 = &LINEAR_PATTERNS[2];
         assert_eq!(line4.name, "Line4");
         for idx in line4.indices(b.black, b.white, b.player()) {
             assert_ne!(idx, line4.table_size() - 1, "Line4 must see center discs");
@@ -1211,77 +663,14 @@ mod tests {
     }
 
     #[test]
-    fn test_weights_zeros_and_evaluate() {
-        let mut w = PatternWeights::zeros(EGAROUCID_PATTERNS);
-        for (i, p) in EGAROUCID_PATTERNS.iter().enumerate() {
-            assert_eq!(w.weights[i].len(), p.table_size());
-        }
-
-        let b = Board::new();
-        assert_eq!(
-            w.evaluate(b.black, b.white, b.player()),
-            0,
-            "all-zero weights"
-        );
-
-        // Set the weight for Line2's current (all-empty) index; Line2 has 4
-        // orientations, all all-empty on the initial board -> score = 4 * 7.
-        let line2 = &EGAROUCID_PATTERNS[0];
-        w.set(0, line2.table_size() - 1, 7);
-        assert_eq!(w.evaluate(b.black, b.white, b.player()), 28);
-    }
-
-    #[test]
     fn test_player_perspective_flips_digits() {
         let b = Board::new();
-        let line4 = &EGAROUCID_PATTERNS[2];
+        let line4 = &LINEAR_PATTERNS[2];
         let black_view: Vec<usize> = line4.indices(b.black, b.white, Color::Black).collect();
         let white_view: Vec<usize> = line4.indices(b.black, b.white, Color::White).collect();
         assert_ne!(
             black_view, white_view,
             "swapping perspective must swap player/opponent digits"
-        );
-    }
-
-    /// The new set's masks are well formed and its coverage still leans on
-    /// the corners.
-    ///
-    /// The coverage *shape* is the design, not a side effect: the set this
-    /// replaced covered the centre more heavily than the corners, which is
-    /// backwards for a game whose corners cannot be flipped. A shape added
-    /// or a mask mistyped can quietly undo that, and nothing else in the
-    /// build would notice.
-    #[test]
-    fn the_kuroobi_set_is_well_formed_and_corner_weighted() {
-        let mut cov = [0usize; 64];
-        let (mut masks, mut rows) = (0usize, 0usize);
-        for p in KUROOBI_PATTERNS {
-            assert!(p.size <= 9, "{}: nothing wider than nine squares", p.name);
-            rows += p.table_size();
-            for m in p.masks {
-                assert_eq!(m.len(), p.size, "{}: mask length must equal size", p.name);
-                let mut seen = [false; 64];
-                for &sqi in *m {
-                    assert!(sqi < 64, "{}: square out of range", p.name);
-                    assert!(!seen[sqi as usize], "{}: a mask repeats a square", p.name);
-                    seen[sqi as usize] = true;
-                    cov[sqi as usize] += 1;
-                }
-                masks += 1;
-            }
-        }
-        assert_eq!((masks, rows), (34, 54_675));
-
-        let mean = |g: &[usize]| g.iter().map(|&s| cov[s]).sum::<usize>() as f64 / g.len() as f64;
-        let corners = mean(&[A1 as usize, H1 as usize, A8 as usize, H8 as usize]);
-        let centre = mean(&[D4 as usize, E4 as usize, D5 as usize, E5 as usize]);
-        assert!(
-            corners > centre,
-            "corners {corners} must outweigh the centre {centre}"
-        );
-        assert!(
-            *cov.iter().min().unwrap() >= 3,
-            "no square may be left with fewer than three masks"
         );
     }
 
@@ -1291,7 +680,7 @@ mod tests {
     /// count a design figure claims.
     #[test]
     fn from_spec_rebuilds_a_hand_written_set() {
-        for set in [KUROOBI_PATTERNS, COMPACT_PATTERNS] {
+        for set in [LINEAR_PATTERNS] {
             let spec: String = set
                 .iter()
                 .map(|p| {
