@@ -195,7 +195,7 @@ alternately in the same session every time you compare.
 | **FFO1-59 total** | **538.7 s** | **552.8 s** | **0.97** | **12.72G** | **25.50G** | **0.50** | **23.6M** | **46.1M** |
 
 > **The FFO40-59 position set is not bundled** (for size reasons). To
-> reproduce this locally, obtain it separately. What is in `bench/` is
+> reproduce this locally, obtain it separately. What is in `problems/` is
 > `band22` / `band29` / `band29v2` / `calib1030`.
 
 **Speed per node is about half of Edax's (23.6M against 46.1M NPS).** We
@@ -989,7 +989,7 @@ than "strength".
 ### Transposition table size — endgame default from 22 to 24 bits
 
 **Decided by measuring in the region games actually search.** 30 problems
-with 26-30 empties pulled out of `bench/calib1030.obf`, 8 threads.
+with 26-30 empties pulled out of `problems/calib1030.obf`, 8 threads.
 
 | bits | Endgame table | Time | Nodes | vs 22 |
 |---:|---:|---:|---:|---:|

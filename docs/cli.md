@@ -179,8 +179,8 @@ more accurate; training loss is against the training labels and the two
 do not move together.
 
 ```sh
-evalerr --nnue weights/nnue.bin bench/exact/val22.data
-evalerr --nnue weights/nnue.bin --no-mlp bench/exact/val22.data
+evalerr --nnue weights/nnue.bin problems/val22.data
+evalerr --nnue weights/nnue.bin --no-mlp problems/val22.data
 ```
 
 ### gen_exact / checkdata
@@ -192,8 +192,8 @@ engine can be measured on the same positions. `checkdata` re-solves them
 and confirms the file says what it claims.
 
 ```sh
-gen_exact --empties 22 --count 1500 --out bench/exact/val22
-checkdata bench/exact/val22.data
+gen_exact --empties 22 --count 1500 --out problems/val22
+checkdata problems/val22.data
 ```
 
 ### data2obf
@@ -212,7 +212,7 @@ the same positions to the same depth compare on time directly. A change
 that leaves the node count untouched changed no decision, only speed.
 
 ```sh
-nnue_obf --depth 13 --nnue weights/nnue.bin bench/band29.obf
+nnue_obf --depth 13 --nnue weights/nnue.bin problems/band29.obf
 ```
 
 ### solve_obf
@@ -236,14 +236,14 @@ to be compared).
 
 ```sh
 # The position sets that ship with the repo
-solve_obf bench/band22.obf
+solve_obf problems/band22.obf
 
 # FFO40-59 (the source of the README numbers). **Not shipped**, so
 # obtain it separately
-solve_obf bench/ffo40-59.obf
+solve_obf problems/ffo40-59.obf
 ```
 
-**What `bench/` contains is `band22` / `band29` / `band29v2` /
+**What `problems/` contains is `band22` / `band29` / `band29v2` /
 `calib1030`, four sets.** The FFO positions are left out for size, so
 reproducing the README's FFO numbers locally requires obtaining them
 yourself.

@@ -11,7 +11,7 @@
 | | |
 |---|---|
 | **棋力** | Edax 4.5.5 (level 13) に **53.9%** で勝ち越し (800 局)<br><sub>GGS のランダム開局プールで 2315〜2337 (2026-08-21)</sub> |
-| **終盤** | FFO40-59 を **535 秒** (1 スレッド) / **143 秒** (8 スレッド) で解き切る<br><sub>局面集は容量の都合で同梱していない (`bench/` にあるのは `band*` と `calib*`)</sub> |
+| **終盤** | FFO40-59 を **310 秒** (1 スレッド) / **56 秒** (10 スレッド) で解き切る<br><sub>局面集は容量の都合で同梱していない (`problems/` にあるのは `band*` と `calib*`)</sub> |
 | **評価関数** | 8 手読み固定の総当たりで Edax・Zebra に勝ち越し、Egaroucid には届かない |
 | **実装** | Rust。エンジン本体に外部クレート依存なし |
 | **GUI** | Tauri + TypeScript。対局・検討・定石・GGS 接続 |
@@ -225,7 +225,7 @@ gui/                   GUI (Tauri + Vite/TypeScript)
 docs/                  実装の解説 (この README から辿る)
 tests/                 perft 網羅・ソルバ統合テスト・停止までの時間
 benches/               マイクロベンチ (criterion)
-bench/                 σ 較正・選択読み判定の基準局面 (OBF) と較正データ
+problems/              σ 較正・選択読み判定の基準局面 (OBF) と較正データ
 tools/pgo-build.sh     プロファイル誘導最適化ビルド
 tools/book-loop.sh     定石の評価付けを止めるまで続けるループ
 .github/workflows/     CI (書式・clippy・テスト・GUI ビルド)

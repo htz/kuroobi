@@ -157,7 +157,7 @@ fn main() -> ExitCode {
             }
             // OBF: "<64 chars> <X|O>; MOVE:+SCORE; ..."
             //
-            // A line without `;` is still a position: `bench/band*.obf` holds
+            // A line without `;` is still a position: `problems/band*.obf` holds
             // just "<64 chars> <X|O>" with no move list. Skipping those made
             // the whole file vanish and the run print "0 nodes" with exit code
             // 0 — a success that measured nothing. Take the line as-is and let

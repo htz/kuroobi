@@ -15,7 +15,7 @@ online server GGS.
 | | |
 |---|---|
 | **Strength** | **53.9%** against Edax 4.5.5 (level 13) over 800 games<br><sub>2315-2337 in the GGS random-opening pool (2026-08-21)</sub> |
-| **Endgame** | Solves FFO40-59 in **535 s** (1 thread) / **143 s** (8 threads)<br><sub>The position set is not bundled, for size; `bench/` holds only `band*` and `calib*`</sub> |
+| **Endgame** | Solves FFO40-59 in **310 s** (1 thread) / **56 s** (10 threads)<br><sub>The position set is not bundled, for size; `problems/` holds only `band*` and `calib*`</sub> |
 | **Evaluation** | Beats Edax and Zebra in a fixed 8-ply round robin; does not reach Egaroucid |
 | **Implementation** | Rust. The engine itself pulls in no external crates |
 | **GUI** | Tauri + TypeScript. Play, study, book, GGS |
@@ -260,7 +260,7 @@ gui/                   GUI (Tauri + Vite/TypeScript)
 docs/                  implementation notes (linked from this README)
 tests/                 perft coverage, solver integration tests, time to stop
 benches/               micro-benchmarks (criterion)
-bench/                 reference positions (OBF) for σ calibration and selective-search checks
+problems/              reference positions (OBF) for σ calibration and selective-search checks
 tools/pgo-build.sh     profile-guided optimization build
 tools/book-loop.sh     loop that keeps scoring book entries until stopped
 .github/workflows/     CI (format, clippy, tests, GUI build)
