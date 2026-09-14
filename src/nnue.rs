@@ -5637,10 +5637,32 @@ quant_acc!(
     ft_bias_f32
 );
 
+/// A pattern set small enough for tests to build a whole model and its
+/// optimiser state.
+///
+/// Nothing a test checks here depends on which shapes the model reads, only
+/// on the code paths every shape goes through, so a full set is not needed
+/// -- and it is expensive: every table scales with the feature rows, and on
+/// a full set the moment round trip alone peaked at 17.9 GB, over the 16 GB
+/// a CI runner has. Two shapes keep what does matter: a 10-square shape,
+/// the widest index any set uses, and several orientations reading one
+/// table, as the full sets the tests used before do.
+#[cfg(test)]
+pub(crate) fn test_patterns() -> &'static [crate::pattern::Pattern] {
+    static SET: std::sync::OnceLock<&'static [crate::pattern::Pattern]> =
+        std::sync::OnceLock::new();
+    SET.get_or_init(|| {
+        crate::pattern::from_spec(
+            "Edge2X: A1 B1 C1 D1 E1 F1 G1 H1 B2 G2\nCorner3x3: A1 B1 C1 A2 B2 C2 A3 B3 C3\n",
+            true,
+        )
+        .expect("test spec parses")
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::pattern::EGAROUCID_PATTERNS;
 
     /// A sigma survives a save/load round trip, and its absence survives
     /// too. The second half is the one that matters: "no measurement" has
@@ -5653,18 +5675,18 @@ mod tests {
         std::fs::create_dir_all(&dir).unwrap();
         let path = dir.join("m.bin");
 
-        let mut nn = Nnue::new(EGAROUCID_PATTERNS);
+        let mut nn = Nnue::new(test_patterns());
         nn.init_weights();
         assert_eq!(nn.mpc_sigma(), None, "a fresh model has no measurement");
         nn.save(&path).unwrap();
-        let mut back = Nnue::new(EGAROUCID_PATTERNS);
+        let mut back = Nnue::new(test_patterns());
         back.load(&path).unwrap();
         assert_eq!(back.mpc_sigma(), None);
 
         let s = MpcSigma::from_array([-0.05, 0.3, -0.6, 0.011, 0.5, 3.25]);
         nn.set_mpc_sigma(Some(s));
         nn.save(&path).unwrap();
-        let mut back = Nnue::new(EGAROUCID_PATTERNS);
+        let mut back = Nnue::new(test_patterns());
         back.load(&path).unwrap();
         assert_eq!(back.mpc_sigma(), Some(s));
         assert_eq!(back.mpc_sigma().unwrap().value(30, 8, 4), s.value(30, 8, 4));
@@ -5681,7 +5703,7 @@ mod tests {
     /// belong to another model.
     #[test]
     fn adam_moments_survive_a_round_trip_and_a_mismatch_does_not() {
-        let mut nn = Nnue::new(EGAROUCID_PATTERNS);
+        let mut nn = Nnue::new(test_patterns());
         nn.init_weights();
         let mut a = AdamState::new(&nn);
         a.wd = 0.0125;
@@ -5708,7 +5730,9 @@ mod tests {
 
         // A state built for a different feature set has different table
         // lengths, so the same bytes must not load into it.
-        let mut other = Nnue::new(crate::pattern::COMPACT_PATTERNS);
+        let corner_only = crate::pattern::from_spec("Corner3x3: A1 B1 C1 A2 B2 C2 A3 B3 C3", true)
+            .expect("test spec parses");
+        let mut other = Nnue::new(corner_only);
         other.init_weights();
         let mut c = AdamState::new(&other);
         assert!(
@@ -5733,7 +5757,7 @@ mod tests {
     #[test]
     fn product_gate_training_descends() {
         let make = || {
-            let mut nn = Nnue::new(EGAROUCID_PATTERNS);
+            let mut nn = Nnue::new(test_patterns());
             nn.init_weights();
             let mut s: u64 = 0x9E37_79B9;
             for v in nn.ft.iter_mut() {
@@ -5804,7 +5828,7 @@ mod tests {
     /// for both colours to move.
     #[test]
     fn test_eval_paths_agree() {
-        let mut nn = Nnue::new(EGAROUCID_PATTERNS);
+        let mut nn = Nnue::new(test_patterns());
         nn.init_weights();
         // Give the transformer some structure so the paths can disagree if the
         // layouts (interleaving, digit swap) are wrong.
@@ -5922,7 +5946,7 @@ mod tests {
     /// doubled it. One epoch took the held-out error from 59.13 to 66.53.
     #[test]
     fn training_forward_matches_eval() {
-        let mut nn = Nnue::new(EGAROUCID_PATTERNS);
+        let mut nn = Nnue::new(test_patterns());
         nn.init_weights();
         // Every part has to be non-zero, or a term missing from one side
         // cannot show up as a difference.
@@ -6068,7 +6092,7 @@ mod tests {
     #[cfg(feature = "stackedout")]
     #[test]
     fn stacked_gradient_matches_finite_differences() {
-        let mut nn = Nnue::new(EGAROUCID_PATTERNS);
+        let mut nn = Nnue::new(test_patterns());
         nn.init_weights();
         let mut s: u64 = 0x0BAD_C0DE_1234_5678;
         let mut rnd = move || {

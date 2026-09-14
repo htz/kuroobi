@@ -2169,7 +2169,7 @@ mod deadline_tests {
         // No weights loaded (tests must not require weights/); values
         // are meaningless but iteration folding doesn't need them.
         // quantize is mandatory or the SIMD path reads uninitialized data.
-        let mut nn0 = Nnue::new(crate::pattern::EGAROUCID_PATTERNS);
+        let mut nn0 = Nnue::new(crate::nnue::test_patterns());
         nn0.quantize();
         let nn = std::sync::Arc::new(nn0);
         let tt = std::sync::Arc::new(SharedTt::new(18));
@@ -2203,7 +2203,7 @@ mod deadline_tests {
     /// `tests/engine_smoke.rs` (requires weights).
     #[test]
     fn deadline_cuts_the_search_short_in_parallel() {
-        let mut nn0 = Nnue::new(crate::pattern::EGAROUCID_PATTERNS);
+        let mut nn0 = Nnue::new(crate::nnue::test_patterns());
         nn0.quantize();
         let nn = std::sync::Arc::new(nn0);
         let tt = std::sync::Arc::new(SharedTt::new(18));
