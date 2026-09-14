@@ -1,6 +1,6 @@
 //! Incremental (differential) pattern-index maintenance.
 //!
-//! `Evaluator::eval` recomputes every pattern orientation's ternary index
+//! `Linear::eval` recomputes every pattern orientation's ternary index
 //! from the bitboards on each call (~64 masks x ~9 squares). During search
 //! successive positions differ by one placed disc plus a few flips, so the
 //! indices can instead be updated square-by-square from the move's flip
@@ -262,7 +262,7 @@ impl PatternIndexer {
     /// Sum pattern weights for the maintained indices from `player`'s
     /// perspective. `weights[pattern][ternary_index]` must match this
     /// indexer's pattern library. Summation order (patterns, then masks)
-    /// is identical to `Evaluator::eval` so results are bit-exact.
+    /// is identical to `Linear::eval` so results are bit-exact.
     #[inline]
     /// Pattern id of each mask instance, in mask order.
     pub fn mask_patterns(&self) -> &[u8] {

@@ -27,7 +27,7 @@
 //! only reported.
 //!
 //! Usage:
-//!   mpccalib_nnue [--threads N] [--stride N] [--max N] [--max-depth 12]
+//!   nnue_mpccalib [--threads N] [--stride N] [--max N] [--max-depth 12]
 //!                 [--depths a,b,c] [--patterns nnue|kuroobi|egaroucid|compact] [--patterns-file <spec>]
 //!                 [--min-empties 20] [--max-empties 58] [--min-cell 8] [--csv out.csv] [--write]
 //!                 <nnue.bin> <data-file>...
@@ -301,7 +301,7 @@ fn main() -> ExitCode {
     let want_data = !legacy_sigma && from_csv.is_none();
     if paths.is_empty() || (want_data && paths.len() < 2) {
         eprintln!(
-            "usage: mpccalib_nnue [--threads N] [--stride N] [--max N] [--max-depth 12] \
+            "usage: nnue_mpccalib [--threads N] [--stride N] [--max N] [--max-depth 12] \
              [--depths a,b,c] [--patterns nnue|kuroobi|egaroucid|compact] [--patterns-file <spec>] [--min-empties 20] [--max-empties 58] \
              [--min-cell 20] [--empties-bin 3] [--csv out.csv] [--cells] [--write] \
              <nnue.bin> <data-file>..."
@@ -329,7 +329,7 @@ fn main() -> ExitCode {
             return ExitCode::FAILURE;
         }
         println!(
-            "wrote the linear evaluator's constants into {} -- for A/B only, \
+            "wrote the linear linear's constants into {} -- for A/B only, \
              this is not a measurement of this model",
             nnue_path.display()
         );

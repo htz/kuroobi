@@ -11,7 +11,7 @@ use std::path::Path;
 
 use crate::board::Board;
 use crate::color::Color;
-use crate::evaluator::{AdamOptimizer, Evaluator, Optimizer, STAGE_COUNT};
+use crate::linear::{AdamOptimizer, Linear, Optimizer, STAGE_COUNT};
 use crate::record::{self, Filter, TeacherPolicy};
 
 /// One training position: bitboards plus the teacher value in discs.
@@ -206,16 +206,13 @@ impl EpochStats {
 /// Epoch trainer over labeled examples (kifu-derived positions),
 /// generic over the optimizer (SgdOptimizer or AdamOptimizer).
 pub struct Trainer<O: Optimizer = AdamOptimizer> {
-    pub evaluator: Evaluator,
+    pub linear: Linear,
     pub optimizer: O,
 }
 
 impl<O: Optimizer> Trainer<O> {
-    pub fn new(evaluator: Evaluator, optimizer: O) -> Trainer<O> {
-        Trainer {
-            evaluator,
-            optimizer,
-        }
+    pub fn new(linear: Linear, optimizer: O) -> Trainer<O> {
+        Trainer { linear, optimizer }
     }
 
     /// Train one epoch over the examples (single pass, in order — shuffle
@@ -253,11 +250,11 @@ impl<O: Optimizer> Trainer<O> {
         let mut stats = EpochStats::default();
         for (i, ex) in examples.iter().enumerate() {
             let board = ex.board();
-            let stage = Evaluator::stage(&board);
+            let stage = Linear::stage(&board);
             // `train` already returns the mean squared error over the eight
             // symmetries, so accumulate it directly — squaring it again gives
             // (MSE)², which drifts away from the true loss as the model fits.
-            let mse = self.evaluator.train(&board, ex.score, &mut self.optimizer);
+            let mse = self.linear.train(&board, ex.score, &mut self.optimizer);
             stats.loss_sum[stage] += mse as f64;
             stats.samples[stage] += 1;
 
@@ -293,13 +290,13 @@ impl<O: Optimizer> Trainer<O> {
         lr: f32,
         mut progress: impl FnMut(usize, usize),
     ) -> EpochStats {
-        let view = self.evaluator.weight_view();
-        let ev = &self.evaluator;
+        let view = self.linear.weight_view();
+        let ev = &self.linear;
         let total = examples.len();
         let mut stats = EpochStats::default();
         for (i, ex) in examples.iter().enumerate() {
             let board = ex.board();
-            if Evaluator::stage(&board) != stage {
+            if Linear::stage(&board) != stage {
                 continue;
             }
             // SAFETY: single-threaded, and the view came from `ev`, borrowed
@@ -516,7 +513,7 @@ mod tests {
     fn test_train_pass_does_not_advance_lr_schedule() {
         // An epoch split across shards is several passes but one schedule
         // step; if a pass advanced the schedule, lr would decay per shard.
-        use crate::evaluator::SgdOptimizer;
+        use crate::linear::SgdOptimizer;
 
         let b = Board::new();
         let examples = [Example {
@@ -525,7 +522,7 @@ mod tests {
             score: 2.0,
         }];
         let mut trainer = Trainer::new(
-            Evaluator::new(EGAROUCID_PATTERNS),
+            Linear::new(EGAROUCID_PATTERNS),
             SgdOptimizer::new(0.01, 0.5),
         );
         let before = trainer.optimizer.learning_rate;
@@ -561,8 +558,7 @@ mod tests {
             });
         }
 
-        let mut trainer =
-            Trainer::new(Evaluator::new(EGAROUCID_PATTERNS), AdamOptimizer::new(0.01));
+        let mut trainer = Trainer::new(Linear::new(EGAROUCID_PATTERNS), AdamOptimizer::new(0.01));
         let stats = trainer.run(60, &examples);
         let first = stats.first().unwrap().mse();
         let last = stats.last().unwrap().mse();
@@ -580,8 +576,7 @@ mod tests {
             white: b.white,
             score: 2.0,
         }];
-        let mut trainer =
-            Trainer::new(Evaluator::new(EGAROUCID_PATTERNS), AdamOptimizer::new(0.01));
+        let mut trainer = Trainer::new(Linear::new(EGAROUCID_PATTERNS), AdamOptimizer::new(0.01));
         let stats = trainer.train_epoch(&examples);
         assert_eq!(stats.samples[0], 1, "initial position is stage 0");
         assert_eq!(stats.samples[1..].iter().sum::<u64>(), 0);

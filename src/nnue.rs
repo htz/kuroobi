@@ -1,6 +1,6 @@
 //! NNUE-style non-linear evaluator built on the existing pattern features.
 //!
-//! The linear evaluator ([`crate::evaluator`]) sums one scalar weight per
+//! The linear evaluator ([`crate::linear`]) sums one scalar weight per
 //! active pattern cell. Its held-out MSE floors around 39 disc² because a
 //! linear model cannot represent feature interactions. This module reuses the
 //! *same* incrementally-maintained pattern indices but routes them through a
@@ -30,7 +30,7 @@
 
 use crate::board::Board;
 use crate::color::Color;
-use crate::evaluator::STAGE_COUNT;
+use crate::linear::STAGE_COUNT;
 use crate::pattern::Pattern;
 use crate::pattern_index::{PatternIndexer, PatternIndices, MAX_MASKS};
 use crate::position::Position;
@@ -739,7 +739,7 @@ pub struct NnueView {
 }
 // SAFETY: the workers only ever add to disjoint-ish sparse cells; racing
 // updates cost at most a lost step, never memory unsafety (same argument as
-// the linear trainer's `WeightView`).
+// the linear trainer's `LinearView`).
 unsafe impl Send for NnueView {}
 unsafe impl Sync for NnueView {}
 
@@ -752,7 +752,7 @@ unsafe impl Sync for NnueView {}
 /// No bias correction: with 1.3B examples the warm-up shrinkage is
 /// negligible, and a per-cell step table here would cost 39 MB.
 ///
-/// [`AdamOptimizer`]: crate::evaluator::AdamOptimizer
+/// [`AdamOptimizer`]: crate::linear::AdamOptimizer
 pub struct AdamState {
     pub beta1: f32,
     pub beta2: f32,
@@ -1807,7 +1807,7 @@ pub struct Nnue {
     /// `None` for a net trained against the label directly; the two are not
     /// interchangeable, and loading a residual net without its base reads
     /// numbers that mean something else.
-    base: Option<Box<crate::evaluator::Evaluator>>,
+    base: Option<Box<crate::linear::Linear>>,
     patterns: &'static [Pattern],
     indexer: PatternIndexer,
     n_masks: usize,
@@ -1981,7 +1981,7 @@ impl Nnue {
 
         // Flat feature layout: concatenate each pattern's 3^size table; a
         // mask maps to its owning pattern's base (orientations share a table),
-        // exactly as `Evaluator::rebuild_flat` builds `mask_off`.
+        // exactly as `Linear::rebuild_flat` builds `mask_off`.
         let mut pattern_off = Vec::with_capacity(patterns.len());
         let mut off = 0u32;
         for p in patterns {
@@ -2072,7 +2072,7 @@ impl Nnue {
         self.mpc_sigma
     }
 
-    /// Record a calibration result. Only `mpccalib_nnue` should call this:
+    /// Record a calibration result. Only `nnue_mpccalib` should call this:
     /// a sigma that was not measured against the weights it travels with is
     /// worse than none at all, because the search then prunes confidently
     /// against a number that means nothing.
@@ -2668,14 +2668,14 @@ impl Nnue {
     }
 
     /// Install a linear evaluator as the base; see [`Nnue::base`].
-    pub fn set_base(&mut self, e: crate::evaluator::Evaluator) {
+    pub fn set_base(&mut self, e: crate::linear::Linear) {
         self.base = Some(Box::new(e));
     }
 
     /// The net's own output, without the base.
     #[inline]
     pub fn net_from_indices(&self, indices: &PatternIndices, board: &Board) -> f32 {
-        let stage = crate::evaluator::Evaluator::stage(board);
+        let stage = crate::linear::Linear::stage(board);
         let ft = if board.player() == Color::Black {
             &self.ft_b_i8
         } else {
@@ -2843,7 +2843,7 @@ impl Nnue {
 
     /// The net's own f32 output, without the base.
     pub fn net_indices(&self, board: &Board, indices: &PatternIndices) -> f32 {
-        let stage = crate::evaluator::Evaluator::stage(board);
+        let stage = crate::linear::Linear::stage(board);
         let feats = self.features_player(indices, board.player(), stage);
         let base = self.forward(&feats, Self::mob_index(board), stage);
         #[cfg(feature = "stackedout")]
@@ -3115,7 +3115,7 @@ impl Nnue {
             player: Color::Black,
             empty_count: 64 - (black | white).count_ones() as u8,
         };
-        let stage = crate::evaluator::Evaluator::stage(&board);
+        let stage = crate::linear::Linear::stage(&board);
         let feats = self.features_black(&ix, stage);
         let mut acc = [0.0f32; H];
         /* Diagnostic paths, and the bias they want does not exist with the
@@ -3159,7 +3159,7 @@ impl Nnue {
             player: Color::Black,
             empty_count: 64 - (black | white).count_ones() as u8,
         };
-        let stage = crate::evaluator::Evaluator::stage(&board);
+        let stage = crate::linear::Linear::stage(&board);
         let feats = self.features_black(&ix, stage);
         let mut acc = [0.0f32; H];
         /* Diagnostic paths, and the bias they want does not exist with the
@@ -4539,7 +4539,7 @@ impl Nnue {
     /// analysis of the activation distribution (clamp-bound selection).
     pub fn acc_pre_relu(&self, board: &Board) -> [f32; H] {
         let indices = self.indexer.init(board.black, board.white);
-        let stage = crate::evaluator::Evaluator::stage(board);
+        let stage = crate::linear::Linear::stage(board);
         let feats = self.features_player(&indices, board.player(), stage);
         let mut acc = [0.0f32; H];
         /* Diagnostic paths, and the bias they want does not exist with the
@@ -4652,7 +4652,7 @@ impl Nnue {
     /// Evaluate from the incremental accumulator (side-to-move perspective).
     #[inline]
     pub fn eval_acc(&self, acc: &Accumulator, board: &Board) -> f32 {
-        let stage = crate::evaluator::Evaluator::stage(board);
+        let stage = crate::linear::Linear::stage(board);
         /* The incremental accumulator tracks the first transformer copy only.
 
         Which copy a position reads is a function of its stage, and a stage
@@ -4707,7 +4707,7 @@ impl Nnue {
     stage -- which the stacked read-out does not have. */
     #[cfg(not(feature = "stackedout"))]
     pub fn eval_acc_i32(&self, acc: &Accumulator32, board: &Board) -> f32 {
-        let stage = crate::evaluator::Evaluator::stage(board);
+        let stage = crate::linear::Linear::stage(board);
         let v = if board.player() == Color::Black {
             &acc.acc[0..ACC_DIMS]
         } else {
@@ -4744,7 +4744,7 @@ impl Nnue {
     stage -- which the stacked read-out does not have. */
     #[cfg(not(feature = "stackedout"))]
     pub fn eval_acc_f32(&self, acc: &AccumulatorF, board: &Board) -> f32 {
-        let stage = crate::evaluator::Evaluator::stage(board);
+        let stage = crate::linear::Linear::stage(board);
         let v = if board.player() == Color::Black {
             &acc.acc[0..ACC_DIMS]
         } else {
@@ -5431,7 +5431,7 @@ impl Nnue {
         /* Everything written before format 10 predates the rule that a
         model carries its own ProbCut margins, so it has none -- which
         turns ProbCut off for it. That is the intended outcome: those files
-        were pruned against the linear evaluator's numbers. */
+        were pruned against the linear linear's numbers. */
         self.mpc_sigma = None;
         if &magic == b"BBRVNN10" {
             r.read_exact(&mut u)?;
@@ -5756,7 +5756,7 @@ mod tests {
         // Plain SGD.
         let mut nn = make();
         let ix = nn.indices(board.black, board.white);
-        let stage = crate::evaluator::Evaluator::stage(&board);
+        let stage = crate::linear::Linear::stage(&board);
         let discs = board.player_bb().count_ones() as usize;
         let first = nn.train_black(&ix, stage, discs, 0, target, 0.01);
         let mut last = first;
@@ -5853,7 +5853,7 @@ mod tests {
             let inc = nn.eval_acc(&acc, &board);
             let ix = nn.indices(board.black, board.white);
             let from_ix = nn.eval_from_indices(&ix, &board);
-            buckets_seen[ft_bucket(crate::evaluator::Evaluator::stage(&board))] = true;
+            buckets_seen[ft_bucket(crate::linear::Linear::stage(&board))] = true;
             plies += 1;
 
             /* The gap here is quantization, not a path disagreement: the
@@ -5969,7 +5969,7 @@ mod tests {
 
         let board = Board::new();
         let ix = nn.indices(board.black, board.white);
-        let stage = crate::evaluator::Evaluator::stage(&board);
+        let stage = crate::linear::Linear::stage(&board);
         let discs = board.player_bb().count_ones() as usize;
         let mob = 3usize;
 
@@ -6031,7 +6031,7 @@ mod tests {
             board.make_move(pos).unwrap();
         }
         let ix = nn.indices(board.black, board.white);
-        let stage = crate::evaluator::Evaluator::stage(&board);
+        let stage = crate::linear::Linear::stage(&board);
         let discs = board.black.count_ones() as usize;
         let mob = Nnue::mob_index(&board);
         let loss_of = |nn: &mut Nnue, on: bool| {
@@ -6123,7 +6123,7 @@ mod tests {
             board.make_move(pos).unwrap();
         }
         let ix = nn.indices(board.black, board.white);
-        let stage = crate::evaluator::Evaluator::stage(&board);
+        let stage = crate::linear::Linear::stage(&board);
         let discs = board.black.count_ones() as usize;
         let mob = Nnue::mob_index(&board);
         let target = 7.0f32;

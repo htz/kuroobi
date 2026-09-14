@@ -18,7 +18,7 @@
 use std::path::PathBuf;
 use std::process::ExitCode;
 
-use kuroobi::evaluator::Evaluator;
+use kuroobi::linear::Linear;
 use kuroobi::midgame::{selective_band, NnueSearch, SharedTt};
 use kuroobi::nnue::Nnue;
 use kuroobi::pattern::EGAROUCID_PATTERNS;
@@ -146,8 +146,8 @@ fn main() -> ExitCode {
         }
     };
 
-    let mut evaluator = Evaluator::new(EGAROUCID_PATTERNS);
-    if let Err(e) = evaluator.load_weights(&args.weights) {
+    let mut linear = Linear::new(EGAROUCID_PATTERNS);
+    if let Err(e) = linear.load_weights(&args.weights) {
         eprintln!("failed to load {}: {e}", args.weights.display());
         return ExitCode::FAILURE;
     }
@@ -192,10 +192,10 @@ fn main() -> ExitCode {
         without it the opponent's screen shows none of our reading —
         debug games need both sides visible. */
         if board.empty_count() <= args.solve_empties {
-            let r = solver.solve_with_eval(EndSolverMode::Perfect, board, Some(&evaluator));
+            let r = solver.solve_with_eval(EndSolverMode::Perfect, board, Some(&linear));
             (r.best_move, Some(r.value as f32))
         } else if let Some(t) = selective_band(board.empty_count(), args.solve_empties, band) {
-            let r = solver.solve_selective(board, Some(&evaluator), t);
+            let r = solver.solve_selective(board, Some(&linear), t);
             (r.best_move, Some(r.value as f32))
         } else {
             let (mv, v) = search.best_move_valued(board, depth as u32);
@@ -222,7 +222,7 @@ fn main() -> ExitCode {
             };
             // Analysis: move and mover-view value; exact in the solve region.
             if board.empty_count() <= args.solve_empties {
-                let r = solver.solve_with_eval(EndSolverMode::Perfect, &board, Some(&evaluator));
+                let r = solver.solve_with_eval(EndSolverMode::Perfect, &board, Some(&linear));
                 match r.best_move {
                     Some(p) => println!("= {} {}", coord(p), r.value),
                     None => println!("= pa {}", r.value),

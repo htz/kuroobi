@@ -1,7 +1,7 @@
-//! Kifu-based training CLI (the Rust counterpart of Go's cmd/train).
+//! Trainer for the linear pattern evaluator ([`kuroobi::linear`]).
 //!
 //! Usage:
-//!   train [OPTIONS] <data-file>...
+//!   linear_train [OPTIONS] <data-file>...
 //!
 //! Data files are `kuroobi::record` files (kifu2data and gendata output).
 //!
@@ -33,7 +33,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::time::Instant;
 
-use kuroobi::evaluator::{AdamOptimizer, Evaluator, Optimizer, SgdOptimizer, STAGE_COUNT};
+use kuroobi::linear::{AdamOptimizer, Linear, Optimizer, SgdOptimizer, STAGE_COUNT};
 use kuroobi::pattern::{EDAX_PATTERNS, EGAROUCID_PATTERNS, EGAROUCID_PLUS_PATTERNS};
 use kuroobi::record::{Filter, TeacherPolicy};
 use kuroobi::trainer::{
@@ -94,9 +94,9 @@ enum OptimizerKind {
 }
 
 const USAGE: &str = "\
-Usage: train [OPTIONS] <data-file>...
+Usage: linear_train [OPTIONS] <data-file>...
 
-Train the pattern evaluator on `kuroobi::record` files (kifu2data and
+Train the pattern linear on `kuroobi::record` files (kifu2data and
 gendata output).
 
 Options:
@@ -704,7 +704,7 @@ fn main() -> ExitCode {
     if args.stages_lo > 0 || args.stages_hi < STAGE_COUNT - 1 {
         let before = val.len();
         val.retain(|e| {
-            let st = Evaluator::stage(&e.board());
+            let st = Linear::stage(&e.board());
             st >= args.stages_lo && st <= args.stages_hi
         });
         println!(
@@ -719,10 +719,10 @@ fn main() -> ExitCode {
         println!("val: {} held-out examples", fmt_count(val.len()));
     }
 
-    // Evaluator: resume from an existing weight file when present
-    let mut evaluator = Evaluator::new(patterns);
+    // Linear: resume from an existing weight file when present
+    let mut linear = Linear::new(patterns);
     if args.weights_path.exists() {
-        match evaluator.load_weights(&args.weights_path) {
+        match linear.load_weights(&args.weights_path) {
             Ok(()) => println!("resumed weights from {}", args.weights_path.display()),
             Err(e) => {
                 eprintln!("failed to load {}: {e}", args.weights_path.display());
@@ -755,13 +755,12 @@ fn main() -> ExitCode {
                 "optimizer: sgd (lr {}, decay {})",
                 args.learning_rate, args.decay
             );
-            let trainer =
-                Trainer::new(evaluator, SgdOptimizer::new(args.learning_rate, args.decay));
+            let trainer = Trainer::new(linear, SgdOptimizer::new(args.learning_rate, args.decay));
             run_epochs(trainer, &args, &mut plan, &val, &interrupted)
         }
         OptimizerKind::Adam => {
             println!("optimizer: adam (lr {})", args.learning_rate);
-            let trainer = Trainer::new(evaluator, AdamOptimizer::new(args.learning_rate));
+            let trainer = Trainer::new(linear, AdamOptimizer::new(args.learning_rate));
             run_epochs(trainer, &args, &mut plan, &val, &interrupted)
         }
     }
@@ -832,7 +831,7 @@ fn draw_progress(
 }
 
 /// One stage's trainable parameters: the pattern tables and the disc-count
-/// table, as [`Evaluator::stage_weights`] hands them over.
+/// table, as [`Linear::stage_weights`] hands them over.
 type StageSnapshot = (Vec<Vec<f32>>, Vec<f32>);
 
 /// Held-out error broken down by game stage: `[count, sum_sq, sum_abs]`.
@@ -840,14 +839,14 @@ type StageSnapshot = (Vec<Vec<f32>>, Vec<f32>);
 /// The stages are independent tables, so a single pooled number can hide one
 /// stage improving while another rots -- they net out. Scoring each stage on
 /// its own is what lets the best epoch be chosen per stage.
-fn val_by_stage(evaluator: &Evaluator, val: &[Example]) -> Vec<[f64; 4]> {
+fn val_by_stage(linear: &Linear, val: &[Example]) -> Vec<[f64; 4]> {
     let mut acc = vec![[0.0f64; 4]; STAGE_COUNT];
     for ex in val {
         let board = ex.board();
         // Prediction minus truth, so a positive mean reads as "this model
         // scores positions high".
-        let e = evaluator.eval(&board) as f64 - ex.score as f64;
-        let a = &mut acc[Evaluator::stage(&board)];
+        let e = linear.eval(&board) as f64 - ex.score as f64;
+        let a = &mut acc[Linear::stage(&board)];
         a[0] += 1.0;
         a[1] += e * e;
         a[2] += e.abs();
@@ -896,7 +895,7 @@ fn stage_stats(a: &[f64; 4]) -> (f64, f64, f64, f64) {
 /// Mean squared error of `evaluator` over a held-out set, sharded across
 /// `threads`. This scores the frozen weights (no updates), so unlike the
 /// in-epoch training MSE it is a clean early-stopping signal.
-fn val_mse(evaluator: &Evaluator, val: &[Example], threads: usize) -> f64 {
+fn val_mse(linear: &Linear, val: &[Example], threads: usize) -> f64 {
     if val.is_empty() {
         return f64::NAN;
     }
@@ -909,7 +908,7 @@ fn val_mse(evaluator: &Evaluator, val: &[Example], threads: usize) -> f64 {
                     scope.spawn(move || {
                         part.iter()
                             .map(|ex| {
-                                let e = ex.score as f64 - evaluator.eval(&ex.board()) as f64;
+                                let e = ex.score as f64 - linear.eval(&ex.board()) as f64;
                                 e * e
                             })
                             .sum::<f64>()
@@ -921,7 +920,7 @@ fn val_mse(evaluator: &Evaluator, val: &[Example], threads: usize) -> f64 {
     } else {
         val.iter()
             .map(|ex| {
-                let e = ex.score as f64 - evaluator.eval(&ex.board()) as f64;
+                let e = ex.score as f64 - linear.eval(&ex.board()) as f64;
                 e * e
             })
             .sum()
@@ -1014,8 +1013,8 @@ fn run_epochs<O: Optimizer>(
     let policy = policy_of(args);
     #[cfg(feature = "gpu")]
     let mut gpu = args.gpu.then(|| {
-        kuroobi::linear_gpu::LinearGpu::new(
-            &trainer.evaluator,
+        kuroobi::linear::gpu::LinearGpu::new(
+            &trainer.linear,
             args.minibatch,
             (args.stages_lo, args.stages_hi),
         )
@@ -1090,14 +1089,14 @@ fn run_epochs<O: Optimizer>(
     // at least as good as the start point *in every stage*, and there is
     // nothing left to check globally.
     if args.per_stage_best && !val.is_empty() {
-        let acc = val_by_stage(&trainer.evaluator, val);
+        let acc = val_by_stage(&trainer.linear, val);
         let mut seeded = 0usize;
         for (st, a) in acc.iter().enumerate() {
             if a[0] == 0.0 {
                 continue;
             }
             stage_best[st] = select_score(&args.select_by, a);
-            stage_snap[st] = Some(trainer.evaluator.stage_weights(st));
+            stage_snap[st] = Some(trainer.linear.stage_weights(st));
             seeded += 1;
         }
         println!("baseline: {seeded} stages seeded from the starting weights");
@@ -1186,12 +1185,12 @@ fn run_epochs<O: Optimizer>(
             // diverging.
             if args.cell_lr && !counted_shards.contains(&si) {
                 trainer
-                    .evaluator
+                    .linear
                     .count_appearances(examples.iter().map(|e| e.board()));
                 counted_shards.push(si);
-                trainer.evaluator.set_min_appear(args.min_appear);
+                trainer.linear.set_min_appear(args.min_appear);
                 for st in args.stages_lo..=args.stages_hi.min(STAGE_COUNT - 1) {
-                    if let Some((seen, unseen, q)) = trainer.evaluator.appearance_spread(st) {
+                    if let Some((seen, unseen, q)) = trainer.linear.appearance_spread(st) {
                         println!(
                             "  cell counts stage {st}: {seen} seen, {unseen} unseen, \
                              min {} p1 {} median {} p99 {} max {}",
@@ -1218,7 +1217,7 @@ fn run_epochs<O: Optimizer>(
                 if !stage_lr_seeded {
                     stage_counts[st] += examples
                         .iter()
-                        .filter(|e| Evaluator::stage(&e.board()) == st)
+                        .filter(|e| Linear::stage(&e.board()) == st)
                         .count();
                 }
                 let mut lr = if args.plateau > 0 {
@@ -1254,12 +1253,12 @@ fn run_epochs<O: Optimizer>(
                     // The evaluator's own tables are stale until this; val
                     // and the save both read them, so pull them back every
                     // shard.
-                    g.download(&mut trainer.evaluator);
+                    g.download(&mut trainer.linear);
                     let mut st = EpochStats::default();
                     // Eight rows per position, so the row count is what the
                     // sum of squares was taken over.
                     st.loss_sum[0] = sq;
-                    st.samples[0] = (examples.len() * kuroobi::linear_gpu::FORMS) as u64;
+                    st.samples[0] = (examples.len() * kuroobi::linear::gpu::FORMS) as u64;
                     st
                 }
                 #[cfg(not(feature = "gpu"))]
@@ -1283,7 +1282,7 @@ fn run_epochs<O: Optimizer>(
 
             if interrupted.load(Ordering::SeqCst) {
                 eprint!("\r{:width$}\r", "", width = 90);
-                if let Err(e) = trainer.evaluator.save_weights(&args.weights_path) {
+                if let Err(e) = trainer.linear.save_weights(&args.weights_path) {
                     eprintln!("failed to save {}: {e}", args.weights_path.display());
                     return ExitCode::FAILURE;
                 }
@@ -1309,7 +1308,7 @@ fn run_epochs<O: Optimizer>(
         let vm = if val.is_empty() {
             f64::NAN
         } else {
-            val_mse(&trainer.evaluator, val, args.threads)
+            val_mse(&trainer.linear, val, args.threads)
         };
         let is_best = vm < best_val; // false when vm is NaN (no val set)
         if !stage_lr_seeded && args.plateau > 0 {
@@ -1343,7 +1342,7 @@ fn run_epochs<O: Optimizer>(
         let mut improved = 0usize;
         let mut stages_seen = 0usize;
         if args.per_stage_best && !val.is_empty() {
-            let acc = val_by_stage(&trainer.evaluator, val);
+            let acc = val_by_stage(&trainer.linear, val);
             println!("  stage  empties       n      MSE      MAE     bias   spread");
             for (st, a) in acc.iter().enumerate() {
                 if a[0] == 0.0 {
@@ -1370,7 +1369,7 @@ fn run_epochs<O: Optimizer>(
                 let better = score < stage_best[st];
                 if better {
                     stage_best[st] = score;
-                    stage_snap[st] = Some(trainer.evaluator.stage_weights(st));
+                    stage_snap[st] = Some(trainer.linear.stage_weights(st));
                     if reported {
                         improved += 1;
                     }
@@ -1431,7 +1430,7 @@ fn run_epochs<O: Optimizer>(
                         // best before retiring it, so the live model and the
                         // assembly agree from here on.
                         if let Some((w, num)) = &stage_snap[st] {
-                            trainer.evaluator.set_stage_weights(st, w, num);
+                            trainer.linear.set_stage_weights(st, w, num);
                         }
                         stage_done[st] = true;
                         println!("  stage {st} (空き {}) 収束、学習終了", 60 - st);
@@ -1461,7 +1460,7 @@ fn run_epochs<O: Optimizer>(
                                 stage_age_at_halve[st] = stage_age[st];
                                 if args.restore_on_halve {
                                     if let Some((w, num)) = &stage_snap[st] {
-                                        trainer.evaluator.set_stage_weights(st, w, num);
+                                        trainer.linear.set_stage_weights(st, w, num);
                                         restored = true;
                                     }
                                 }
@@ -1558,18 +1557,18 @@ fn run_epochs<O: Optimizer>(
                 // on from where it was and not from an assembly no epoch
                 // produced.
                 let live: Vec<StageSnapshot> = (0..STAGE_COUNT)
-                    .map(|st| trainer.evaluator.stage_weights(st))
+                    .map(|st| trainer.linear.stage_weights(st))
                     .collect();
                 for (st, snap) in stage_snap.iter().enumerate() {
                     if let Some((w, num)) = snap {
-                        trainer.evaluator.set_stage_weights(st, w, num);
+                        trainer.linear.set_stage_weights(st, w, num);
                     }
                 }
-                if let Err(e) = trainer.evaluator.save_weights(&stagebest_path) {
+                if let Err(e) = trainer.linear.save_weights(&stagebest_path) {
                     eprintln!("failed to save {}: {e}", stagebest_path.display());
                 }
                 for (st, (w, num)) in live.iter().enumerate() {
-                    trainer.evaluator.set_stage_weights(st, w, num);
+                    trainer.linear.set_stage_weights(st, w, num);
                 }
             }
         }
@@ -1648,7 +1647,7 @@ fn run_epochs<O: Optimizer>(
 
         // Save after every epoch (atomic replace) so long runs are
         // interruption-safe: a kill mid-epoch loses at most that epoch.
-        if let Err(e) = trainer.evaluator.save_weights(&args.weights_path) {
+        if let Err(e) = trainer.linear.save_weights(&args.weights_path) {
             eprintln!("failed to save {}: {e}", args.weights_path.display());
             return ExitCode::FAILURE;
         }
@@ -1656,7 +1655,7 @@ fn run_epochs<O: Optimizer>(
         // necessarily the best, and this run overwrites `weights_path`.
         if is_best {
             best_val = vm;
-            if let Err(e) = trainer.evaluator.save_weights(&best_path) {
+            if let Err(e) = trainer.linear.save_weights(&best_path) {
                 eprintln!("failed to save {}: {e}", best_path.display());
                 return ExitCode::FAILURE;
             }
@@ -1701,12 +1700,12 @@ fn run_epochs<O: Optimizer>(
         let mut kept = 0usize;
         for (st, snap) in stage_snap.iter().enumerate() {
             if let Some((w, num)) = snap {
-                trainer.evaluator.set_stage_weights(st, w, num);
+                trainer.linear.set_stage_weights(st, w, num);
                 kept += 1;
             }
         }
         let p = stagebest_path.clone();
-        match trainer.evaluator.save_weights(&p) {
+        match trainer.linear.save_weights(&p) {
             Ok(()) => {
                 let pooled: f64 = stage_best
                     .iter()

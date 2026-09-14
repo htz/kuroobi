@@ -590,7 +590,7 @@ mod tests {
     /// The scalar kernel's result for the position, in discs.
     fn scalar_discs(nn: &Nnue, board: &Board) -> f32 {
         let ix = nn.indices(board.black, board.white);
-        let stage = crate::evaluator::Evaluator::stage(board);
+        let stage = crate::linear::Linear::stage(board);
         let rows = StackQ::rows(nn, &ix);
         let (ft, pa) = if board.player() == Color::Black {
             (&nn.sq.ft_b, &nn.sq.pa_b)
@@ -704,7 +704,7 @@ mod probe {
         for _ in 0..200 {
             let mut board = Board::new();
             loop {
-                let stage = crate::evaluator::Evaluator::stage(&board);
+                let stage = crate::linear::Linear::stage(&board);
                 let st = so_stage(stage);
                 let ix = nn.indices(board.black, board.white);
                 let feats = nn.features_player(&ix, board.player(), stage);

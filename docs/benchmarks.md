@@ -171,7 +171,7 @@ ratio cannot be computed.
 |---|---|
 | CPU / RAM | Apple M1 Max (8 performance + 2 efficiency = 10 cores) / 64 GB |
 | OS | macOS 26.5.1 |
-| KUROOBI | Rust 1.92.0, native arm64, `solve_obf --hash-bits 25 --threads 1`, built with `tools/pgo-build.sh` |
+| KUROOBI | Rust 1.92.0, native arm64, `solve_obf --hash-bits 25 --threads 1`, PGO build |
 | Edax | 4.6 made native arm64 with `make build ARCH=native OS=osx COMP=clang`, `-solve -level 60 -n 1 -h 26` |
 | Transposition table | **2^26 entries on both sides**. Ours 24 B/entry 2-way, Edax 24 B/entry 4-way |
 
@@ -922,7 +922,7 @@ The only part where a deadline does not work is the exact solve, so the
 time it will take is predicted before entering it. The estimate has 3
 layers, `reference node count(empties) × parallel markup(threads) ÷ nps`,
 and the only machine-dependent part is nps
-(`Engine::measure_solve_nps` / `calibnps`).
+(`Engine::measure_solve_nps`).
 
 At identical time control and identical settings, the calibrated side was
 played against the fixed staircase (14 / 20 / the configured value) (200
@@ -1029,7 +1029,7 @@ under NNUE. The reasoning is "NNUE is more accurate, so this is on the
 safe side", but there is a precedent of **the same extrapolation on the
 endgame σ being 2x too large**, so the midgame was measured too.
 
-Measuring with `mpccalib_nnue` — NNUE search, 10 threads, 3000 positions
+Measuring with `nnue_mpccalib` — NNUE search, 10 threads, 3000 positions
 (2667 after excluding the 333 that were solved outright) — and comparing
 20 combinations of (empties, depth, probe depth):
 
@@ -1048,7 +1048,7 @@ empties at depth 12 jumps to 1.76 times, because positions within reach of
 an exact solve are mixed in, and in real games that region enters the
 solve.
 
-**σ is not changed.** The measurement tool (`mpccalib_nnue`) is kept — the
+**σ is not changed.** The measurement tool (`nnue_mpccalib`) is kept — the
 same verification can be redone in minutes when the evaluation function is
 replaced (5 minutes for 3000 positions).
 
@@ -1344,7 +1344,7 @@ time back, so the trade is priced where it sits.
   it is.
 - *PGO is worth 1.8%* (paired rounds, +1.83% +/- 0.20%, trained on band22
   and band29 - never on the set being measured). It is not applied by the
-  default build; `tools/pgo-build.sh` already exists.
+  default build. The script that did it is no longer shipped.
 - *Emptying the midgame probe table walked it one byte per entry*, which
   pulls in and dirties all 134 MB. It is a generation bump now. At ten
   positions that is 0.4% of the run, under the floor; it grows with the
@@ -1531,7 +1531,7 @@ case; speed was the reason):
 Measurements showing scalar move generation to be faster on armv8 have
 been reported by public engines too, and scalar is chosen by default.
 
-**Profile-guided optimisation (PGO) works** (`tools/pgo-build.sh`, -5% on
+**Profile-guided optimisation (PGO) works** (-5% on
 FFO40-59). The search has extremely skewed branches, and simply handing
 those frequencies to the optimiser makes it faster. The behaviour of the
 search is unchanged and both the solutions and the node counts are

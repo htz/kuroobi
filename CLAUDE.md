@@ -110,7 +110,7 @@ real incident behind it.
 
 ### Known traps
 
-- **`train`'s MSE is the mean squared error over 8 symmetric forms**,
+- **`linear_train`'s MSE is the mean squared error over 8 symmetric forms**,
   not mean absolute. As training progresses MAE shrinks faster than
   RMS, so a squared-MAE proxy can move opposite to true MSE (this was
   once misread as training regressing).

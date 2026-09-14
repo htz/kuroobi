@@ -50,7 +50,7 @@ use std::path::PathBuf;
 use std::process::ExitCode;
 use std::time::Instant;
 
-use kuroobi::evaluator::{Evaluator, STAGE_COUNT};
+use kuroobi::linear::{Linear, STAGE_COUNT};
 use kuroobi::nnue::{AdamState, Nnue};
 use kuroobi::pattern::{
     self, COMPACT_PATTERNS, EGAROUCID_PATTERNS, KUROOBI_PATTERNS, NNUE_PATTERNS,
@@ -95,7 +95,7 @@ use kuroobi::trainer::{
 /// `quantize` fills the integer tables from the current weights and leaves
 /// the f32 side alone, so calling it here costs one pass over the weights
 /// per epoch and does not disturb training.
-fn val_by_stage(nn: &mut Nnue, base: Option<&Evaluator>, val: &[Example]) -> Vec<[f64; 5]> {
+fn val_by_stage(nn: &mut Nnue, base: Option<&Linear>, val: &[Example]) -> Vec<[f64; 5]> {
     nn.quantize();
     let mut acc = vec![[0.0f64; 5]; STAGE_COUNT];
     for ex in val {
@@ -109,7 +109,7 @@ fn val_by_stage(nn: &mut Nnue, base: Option<&Evaluator>, val: &[Example]) -> Vec
         // scores positions high".
         let q = nn.eval_from_indices(&ix, &board);
         let e = (q + b) as f64 - ex.score as f64;
-        let a = &mut acc[Evaluator::stage(&board)];
+        let a = &mut acc[Linear::stage(&board)];
         a[0] += 1.0;
         a[1] += e * e;
         a[2] += e.abs();
@@ -177,7 +177,7 @@ fn select_score(which: &str, a: &[f64; 5]) -> f64 {
     }
 }
 
-fn val_mse(nn: &mut Nnue, base: Option<&Evaluator>, val: &[Example]) -> f64 {
+fn val_mse(nn: &mut Nnue, base: Option<&Linear>, val: &[Example]) -> f64 {
     if val.is_empty() {
         return f64::NAN;
     }
@@ -270,7 +270,7 @@ fn interleaved_shards(counts: &[usize], rot: &[usize], max: usize) -> Vec<Shard>
 #[allow(clippy::too_many_arguments)]
 fn train_pass_minibatch(
     nn: &mut Nnue,
-    base: Option<&Evaluator>,
+    base: Option<&Linear>,
     adam: &mut AdamState,
     sinks: &mut Vec<kuroobi::nnue::GradSink>,
     examples: &[Example],
@@ -320,7 +320,7 @@ fn train_pass_minibatch(
                         for ex in &chunk[lo..hi] {
                             let ex = sym.apply(ex, &mut rs);
                             let board = ex.board();
-                            let stage = Evaluator::stage(&board);
+                            let stage = Linear::stage(&board);
                             let discs = ex.black.count_ones() as usize;
                             let mob = kuroobi::nnue::Nnue::mob_index(&board);
                             let ix = nn_ref.indices(ex.black, ex.white);
@@ -379,7 +379,7 @@ fn train_pass(
                     let ex = sym.apply(ex, &mut rs);
                     let ex = &ex;
                     let board = ex.board();
-                    let stage = Evaluator::stage(&board);
+                    let stage = Linear::stage(&board);
                     // Examples are normalized to Black to move, so the
                     // mover's disc count = Black's.
                     let discs = ex.black.count_ones() as usize;
@@ -598,7 +598,7 @@ fn main() -> ExitCode {
     let mut which_patterns = String::from("nnue");
     let mut patterns_file: Option<PathBuf> = None;
     let mut patterns_share = false;
-    /* A frozen linear evaluator under the net.
+    /* A frozen linear linear under the net.
 
     The net has to spend capacity learning the level of the score before it
     can learn its shape, and it does that badly: over eleven epochs the bias
@@ -610,11 +610,11 @@ fn main() -> ExitCode {
     representing high evaluations at all".
 
     Here that column already exists as a trained model: the deployed pattern
-    evaluator, which reads the same rows from the same `PatternIndices` this
+    linear, which reads the same rows from the same `PatternIndices` this
     net computes. Frozen under the net, it fixes the level, and the net is
     trained on what is left over. It also floors the result -- a stage the
     net cannot learn (stage 4 has 282 training positions) still gets the
-    linear evaluator's answer rather than noise. */
+    linear linear's answer rather than noise. */
     let mut base_path: Option<PathBuf> = None;
 
     let mut it = std::env::args().skip(1);
@@ -783,12 +783,12 @@ fn main() -> ExitCode {
     };
     let base = match &base_path {
         Some(p) => {
-            let mut e = Evaluator::new(patterns);
+            let mut e = Linear::new(patterns);
             if let Err(err) = e.load_weights(p) {
                 eprintln!("base {}: {err}", p.display());
                 return ExitCode::FAILURE;
             }
-            println!("base: frozen linear evaluator from {}", p.display());
+            println!("base: frozen linear linear from {}", p.display());
             Some(e)
         }
         None => None,
@@ -828,7 +828,7 @@ fn main() -> ExitCode {
     step makes the model evaluate differently, so the margins measured for
     the model `--init` came from no longer describe this one; inheriting
     them would leave a file that claims to be calibrated and is not.
-    `mpccalib_nnue` is the only writer. */
+    `nnue_mpccalib` is the only writer. */
     nn.set_mpc_sigma(None);
     nn.set_so_grid(so_grid);
     println!(
@@ -855,7 +855,7 @@ fn main() -> ExitCode {
             }
             for e in &ex {
                 let board = e.board();
-                let stage = Evaluator::stage(&board);
+                let stage = Linear::stage(&board);
                 let discs = e.black.count_ones() as usize;
                 let ix = nn.indices(e.black, e.white);
                 let r = e.score as f64 - nn.eval_indices(&board, &ix) as f64;

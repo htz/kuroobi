@@ -149,7 +149,7 @@ The reference node count follows an exponential in the empties
 between machines. The parallel overhead depends only on the thread count.
 **Only nps is machine-dependent**, so only nps is measured — solving
 three positions at 22 empties, which takes 1-3 seconds. Measure it from
-the GUI's settings or with `calibnps`; the result is stored in
+the GUI's settings; the result is stored in
 `resources.conf` (re-measure after changing the thread count).
 
 **The solve gets no budget of its own.** A separate "you may spend N% of
@@ -261,8 +261,6 @@ docs/                  implementation notes (linked from this README)
 tests/                 perft coverage, solver integration tests, time to stop
 benches/               micro-benchmarks (criterion)
 problems/              reference positions (OBF) for σ calibration and selective-search checks
-tools/pgo-build.sh     profile-guided optimization build
-tools/book-loop.sh     loop that keeps scoring book entries until stopped
 .github/workflows/     CI (format, clippy, tests, GUI build)
 CLAUDE.md              how to work in this repository
 weights/ logs/ train_data/   trained weights, logs, training data (not in git)

@@ -8,7 +8,7 @@
 use std::path::PathBuf;
 
 use crate::book::{Book, BookCandidate};
-use crate::evaluator::Evaluator;
+use crate::linear::Linear;
 use crate::midgame::{selective_band, NnueSearch, SharedTt, StopHandle};
 use crate::nnue::{Nnue, ACT_UNITS};
 use crate::pattern::{Pattern, EGAROUCID_PATTERNS, NNUE_PATTERNS};
@@ -238,7 +238,7 @@ impl Progress {
 }
 
 pub struct Engine {
-    evaluator: Evaluator,
+    linear: Linear,
     search: NnueSearch,
     solver: Solver,
     config: EngineConfig,
@@ -275,7 +275,7 @@ pub struct Engine {
 /// move costs nothing but the search.
 ///
 pub struct EngineAssets {
-    evaluator: Evaluator,
+    linear: Linear,
     nnue: std::sync::Arc<Nnue>,
 }
 
@@ -285,15 +285,15 @@ impl EngineAssets {
     /// the rest of the config does not touch disk and may still change before
     /// [`Engine::with_assets`].
     pub fn load(config: &EngineConfig) -> Result<EngineAssets, String> {
-        let mut evaluator = Evaluator::new(EGAROUCID_PATTERNS);
-        evaluator
+        let mut linear = Linear::new(EGAROUCID_PATTERNS);
+        linear
             .load_weights(&config.weights)
             .map_err(|e| format!("weights {}: {e}", config.weights.display()))?;
         let mut nn = Nnue::new(config.nnue_patterns);
         nn.load(&config.nnue)
             .map_err(|e| format!("nnue {}: {e}", config.nnue.display()))?;
         if !config.nnue_base.as_os_str().is_empty() {
-            let mut b = Evaluator::new(config.nnue_patterns);
+            let mut b = Linear::new(config.nnue_patterns);
             b.load_weights(&config.nnue_base)
                 .map_err(|e| format!("nnue base {}: {e}", config.nnue_base.display()))?;
             nn.set_base(b);
@@ -304,7 +304,7 @@ impl EngineAssets {
         nn.quantize();
         nn.head_f32 = config.head_f32;
         Ok(EngineAssets {
-            evaluator,
+            linear,
             nnue: std::sync::Arc::new(nn),
         })
     }
@@ -325,7 +325,7 @@ impl Engine {
     /// Build on a network someone else already loaded. `config`'s
     /// disk-reading fields are ignored -- the assets settled those.
     pub fn with_assets(assets: EngineAssets, config: EngineConfig) -> Result<Engine, String> {
-        let evaluator = assets.evaluator;
+        let linear = assets.linear;
         // The search and the solver each keep a handle; both live in this
         // Engine, so the network and the table are freed when it is dropped.
         // They used to be leaked to satisfy a `&'static` bound, which cost a
@@ -370,7 +370,7 @@ impl Engine {
             .unwrap_or(0x9e3779b97f4a7c15)
             | 1;
         Ok(Engine {
-            evaluator,
+            linear,
             search,
             solver,
             config,
@@ -548,9 +548,9 @@ impl Engine {
             let Ok(board) = Board::from_string(p) else {
                 continue;
             };
-            let r =
-                self.solver
-                    .solve_with_eval(EndSolverMode::Perfect, &board, Some(&self.evaluator));
+            let r = self
+                .solver
+                .solve_with_eval(EndSolverMode::Perfect, &board, Some(&self.linear));
             nodes += r.nodes;
         }
         self.solver_nodes += nodes;
@@ -766,9 +766,9 @@ impl Engine {
             });
             self.progress.set_kind(Progress::SOLVE);
             let watcher = self.watch_deadline(deadline);
-            let r =
-                self.solver
-                    .solve_with_eval(EndSolverMode::Perfect, board, Some(&self.evaluator));
+            let r = self
+                .solver
+                .solve_with_eval(EndSolverMode::Perfect, board, Some(&self.linear));
             self.solver_nodes += r.nodes;
             let cut = self.stop_watch_done(watcher);
             if cut {
@@ -808,7 +808,7 @@ impl Engine {
             });
             self.progress.set_kind(Progress::SELECT);
             let watcher = self.watch_deadline(deadline);
-            let r = self.solver.solve_selective(board, Some(&self.evaluator), t);
+            let r = self.solver.solve_selective(board, Some(&self.linear), t);
             self.solver_nodes += r.nodes;
             let cut = self.stop_watch_done(watcher);
             if cut {
@@ -965,9 +965,9 @@ impl Engine {
             };
         }
         if board.empty_count() <= self.config.solve_empties {
-            let r =
-                self.solver
-                    .solve_with_eval(EndSolverMode::Perfect, board, Some(&self.evaluator));
+            let r = self
+                .solver
+                .solve_with_eval(EndSolverMode::Perfect, board, Some(&self.linear));
             MoveEval {
                 pos: r.best_move,
                 value: stone_scale(r.value as f32),
@@ -1018,11 +1018,9 @@ impl Engine {
                     cut: false,
                 }
             } else if child.empty_count() <= self.config.solve_empties {
-                let r = self.solver.solve_with_eval(
-                    EndSolverMode::Perfect,
-                    &child,
-                    Some(&self.evaluator),
-                );
+                let r =
+                    self.solver
+                        .solve_with_eval(EndSolverMode::Perfect, &child, Some(&self.linear));
                 self.solver_nodes += r.nodes;
                 MoveEval {
                     pos: Some(pos),
@@ -1103,7 +1101,7 @@ impl Engine {
                     let r = self.solver.solve_with_eval(
                         EndSolverMode::Perfect,
                         &child,
-                        Some(&self.evaluator),
+                        Some(&self.linear),
                     );
                     self.solver_nodes += r.nodes;
                     MoveEval {

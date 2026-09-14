@@ -13,7 +13,7 @@
 
 use crate::bitboard;
 use crate::board::Board;
-use crate::evaluator::Evaluator;
+use crate::linear::Linear;
 use crate::pattern_index::{PatternIndexer, PatternIndices};
 use crate::position::Position;
 use crate::zobrist;
@@ -680,7 +680,7 @@ fn run_one_sibling(
     upper: i32,
     shared_lower: &std::sync::atomic::AtomicI32,
     slot: &TaskSlot,
-    ev: Option<&Evaluator>,
+    ev: Option<&Linear>,
 ) {
     use std::sync::atomic::Ordering;
     let t_live = std::time::Instant::now();
@@ -783,7 +783,7 @@ struct SplitPoint {
     nnue: Option<NnueProbe>,
     sigma_scale: f32,
     tt: *const HashTable,
-    /// `Option<&Evaluator>` with the lifetime erased; null = `None`.
+    /// `Option<&Linear>` with the lifetime erased; null = `None`.
     ev: *const (),
     /// `&AbortFlag` with the lifetime erased.
     group: *const (),
@@ -861,11 +861,11 @@ unsafe fn help_split(sp: &SplitPoint) -> bool {
             &*(sp.budget as *const ThreadBudget),
         )
     };
-    let ev: Option<&Evaluator> = if sp.ev.is_null() {
+    let ev: Option<&Linear> = if sp.ev.is_null() {
         None
     } else {
         // SAFETY: same contract.
-        Some(unsafe { &*(sp.ev as *const Evaluator) })
+        Some(unsafe { &*(sp.ev as *const Linear) })
     };
     // SAFETY: same contract.
     let moves = unsafe { std::slice::from_raw_parts(sp.moves, sp.n_moves) };
@@ -2373,7 +2373,7 @@ pub static ORDER_NNUE: std::sync::OnceLock<std::sync::Arc<crate::nnue::Nnue>> =
 /// pattern set when the ordering arm reads the network, else the linear
 /// evaluator's. The two sets differ, so feeding one's indices to the other
 /// would score noise.
-fn order_indexer(e: &crate::evaluator::Evaluator) -> &crate::pattern_index::PatternIndexer {
+fn order_indexer(e: &crate::linear::Linear) -> &crate::pattern_index::PatternIndexer {
     match order_nnue() {
         Some(nn) => nn.indexer(),
         None => e.indexer(),
@@ -3399,7 +3399,7 @@ impl Solver {
         &mut self,
         mode: EndSolverMode,
         board: &Board,
-        ev: Option<&Evaluator>,
+        ev: Option<&Linear>,
     ) -> EndSolverResult {
         self.solve_impl(mode, board, ev, None)
     }
@@ -3419,7 +3419,7 @@ impl Solver {
     pub fn solve_selective(
         &mut self,
         board: &Board,
-        ev: Option<&Evaluator>,
+        ev: Option<&Linear>,
         t: f32,
     ) -> EndSolverResult {
         self.solve_impl(EndSolverMode::Perfect, board, ev, Some(t))
@@ -3625,7 +3625,7 @@ impl Solver {
         (store, hit, miss)
     }
 
-    pub fn probe_value(&mut self, board: &Board, ev: &Evaluator, depth: u8) -> f32 {
+    pub fn probe_value(&mut self, board: &Board, ev: &Linear, depth: u8) -> f32 {
         let tt = &self.hash_table;
         let budget = ThreadBudget::new(0);
         let root_abort = AbortFlag::root();
@@ -3650,7 +3650,7 @@ impl Solver {
         &mut self,
         mode: EndSolverMode,
         board: &Board,
-        ev: Option<&Evaluator>,
+        ev: Option<&Linear>,
         selective: Option<f32>,
     ) -> EndSolverResult {
         self.nodes = 0;
@@ -3896,7 +3896,7 @@ impl Worker<'_> {
         &mut self,
         board: &Board,
         hash: u64,
-        ev: &Evaluator,
+        ev: &Linear,
         ix: &PatternIndexer,
         indices: &mut PatternIndices,
         depth: u8,
@@ -4022,7 +4022,7 @@ impl Worker<'_> {
     /// aspiration around it, widened only
     /// on the side that failed. Without one, fall back to the win/loss
     /// probe and a +-8 band.
-    fn perfect(&mut self, board: &mut Board, ev: Option<&Evaluator>) -> i32 {
+    fn perfect(&mut self, board: &mut Board, ev: Option<&Linear>) -> i32 {
         // Experiment knob: run the exact pass on the full window and let
         // PVS narrow it from the seeds; no aspiration to mis-centre.
         if std::env::var("SEL_EXACT_FULLWIN").is_ok_and(|v| v != "0") && self.warm_score.is_some() {
@@ -4089,7 +4089,7 @@ impl Worker<'_> {
 
     /// Cheap evaluation-based guess of the final score, on the even grid
     /// that terminal scores live on.
-    fn estimate_score(&mut self, board: &Board, ev: Option<&Evaluator>) -> i32 {
+    fn estimate_score(&mut self, board: &Board, ev: Option<&Linear>) -> i32 {
         let Some(e) = ev else { return 0 };
         let ix = e.indexer();
         let mut indices = ix.init(board.black, board.white);
@@ -4112,7 +4112,7 @@ impl Worker<'_> {
 
     /// Aspiration around a prior score: search a narrow window, and on a
     /// failure re-centre on the failing bound and double that side only.
-    fn aspiration(&mut self, board: &mut Board, score: i32, ev: Option<&Evaluator>) -> i32 {
+    fn aspiration(&mut self, board: &mut Board, score: i32, ev: Option<&Linear>) -> i32 {
         self.aspiration_width(board, score, ASPIRATION_WIDTH, ev)
     }
 
@@ -4123,7 +4123,7 @@ impl Worker<'_> {
         board: &mut Board,
         mut score: i32,
         width: i32,
-        ev: Option<&Evaluator>,
+        ev: Option<&Linear>,
     ) -> i32 {
         let mut left = width;
         let mut right = width;
@@ -4165,13 +4165,7 @@ impl Worker<'_> {
         self.pvs_root(board, -64, 64, ev)
     }
 
-    fn pvs_root(
-        &mut self,
-        board: &mut Board,
-        alpha: i32,
-        beta: i32,
-        ev: Option<&Evaluator>,
-    ) -> i32 {
+    fn pvs_root(&mut self, board: &mut Board, alpha: i32, beta: i32, ev: Option<&Linear>) -> i32 {
         let mut lower = alpha;
         let upper = beta;
         // Root computes the hash from scratch once; children update it
@@ -4326,7 +4320,7 @@ impl Worker<'_> {
         siblings: &[ScoredMove],
         lower: i32,
         upper: i32,
-        ev: Option<&Evaluator>,
+        ev: Option<&Linear>,
     ) -> Option<(i32, Option<Position>)> {
         use std::sync::atomic::{AtomicI32, AtomicU64, AtomicUsize, Ordering};
 
@@ -4342,7 +4336,7 @@ impl Worker<'_> {
             nnue: self.nnue.clone(),
             sigma_scale: self.sigma_scale,
             tt: self.tt as *const HashTable,
-            ev: ev.map_or(std::ptr::null(), |e| e as *const Evaluator as *const ()),
+            ev: ev.map_or(std::ptr::null(), |e| e as *const Linear as *const ()),
             group: &group as *const AbortFlag as *const (),
             budget: self.budget as *const ThreadBudget as *const (),
             cursor: AtomicUsize::new(0),
@@ -4445,7 +4439,7 @@ impl Worker<'_> {
         siblings: &[ScoredMove],
         lower: i32,
         upper: i32,
-        ev: Option<&Evaluator>,
+        ev: Option<&Linear>,
     ) -> Option<(i32, Option<Position>)> {
         use std::sync::atomic::{AtomicI32, Ordering};
 
@@ -4639,7 +4633,7 @@ impl Worker<'_> {
         beta: i32,
         passed: bool,
         cut_node: bool,
-        ev: Option<&Evaluator>,
+        ev: Option<&Linear>,
     ) -> i32 {
         let _prof = layer_profile::Scope::new(layer_profile::SEARCH, board.empty_count());
         let mut lower = alpha;
@@ -4945,7 +4939,7 @@ impl Worker<'_> {
         alpha: i32,
         beta: i32,
         cut_node: bool,
-        ev: Option<&Evaluator>,
+        ev: Option<&Linear>,
         m: ScoredMove,
         mover: crate::color::Color,
     ) -> i32 {
@@ -4973,7 +4967,7 @@ impl Worker<'_> {
         alpha: i32,
         beta: i32,
         cut_node: bool,
-        ev: Option<&Evaluator>,
+        ev: Option<&Linear>,
         m: ScoredMove,
         mover: crate::color::Color,
     ) -> i32 {
@@ -5000,7 +4994,7 @@ impl Worker<'_> {
         alpha: i32,
         beta: i32,
         cut_node: bool,
-        ev: Option<&Evaluator>,
+        ev: Option<&Linear>,
     ) -> i32 {
         if child.empty_count() >= pvs_limit() {
             let dbg = dbg_asp() && child.empty_count() >= 23;
@@ -5040,7 +5034,7 @@ impl Worker<'_> {
         lower: i32,
         upper: i32,
         cut_node: bool,
-        ev: Option<&Evaluator>,
+        ev: Option<&Linear>,
     ) -> i32 {
         let mut val = self.descend(child, hash, -lower - 1, -lower, cut_node, ev);
         if val == ABORTED {
@@ -5074,7 +5068,7 @@ impl Worker<'_> {
         beta: i32,
         passed: bool,
         parity: u8,
-        ev: Option<&Evaluator>,
+        ev: Option<&Linear>,
     ) -> i32 {
         self.alpha_beta_ordered_bb(
             board.player_bb(),
@@ -5137,7 +5131,7 @@ impl Worker<'_> {
         beta: i32,
         passed: bool,
         parity: u8,
-        ev: Option<&Evaluator>,
+        ev: Option<&Linear>,
     ) -> i32 {
         let _prof = layer_profile::Scope::new(layer_profile::SEARCH, n_empties);
         // The move loops below test `val >= beta` rather than re-testing
@@ -6428,7 +6422,7 @@ impl Worker<'_> {
         &mut self,
         board: &Board,
         hash: u64,
-        ev: &Evaluator,
+        ev: &Linear,
         t: f32,
         lower: i32,
         upper: i32,
@@ -6514,7 +6508,7 @@ impl Worker<'_> {
         &self,
         board: &Board,
         tt_best: Option<Position>,
-        ev: Option<&Evaluator>,
+        ev: Option<&Linear>,
         out: &mut MoveBuf,
     ) {
         self.gen_moves(board, out);
@@ -6775,7 +6769,7 @@ impl Worker<'_> {
         board: &Board,
         moves: &mut [ScoredMove],
         tt_best: Option<Position>,
-        ev: Option<&Evaluator>,
+        ev: Option<&Linear>,
         alpha: i32,
         parity: u8,
     ) {
@@ -7079,7 +7073,7 @@ const SHALLOW_TIERS: [u64; 13] = {
 #[allow(clippy::too_many_arguments)]
 fn shallow_search(
     board: &Board,
-    ev: &Evaluator,
+    ev: &Linear,
     ix: &PatternIndexer,
     indices: &mut PatternIndices,
     depth: u8,

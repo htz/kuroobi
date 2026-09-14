@@ -13,7 +13,7 @@
 #![allow(clippy::too_many_arguments)]
 
 use crate::board::Board;
-use crate::evaluator::Evaluator;
+use crate::linear::Linear;
 use crate::pattern_index::PatternIndices;
 use crate::position::Position;
 use crate::zobrist;
@@ -176,7 +176,7 @@ impl TtEntry {
 #[derive(Debug, Clone, Copy)]
 pub struct SearchResult {
     pub best_move: Option<Position>,
-    /// Evaluator-scale score from the side to move.
+    /// Linear-scale score from the side to move.
     pub value: f32,
     pub nodes: u64,
     /// Depth actually completed.
@@ -287,7 +287,7 @@ impl Searcher {
     /// Search to `depth` plies with iterative deepening (better move
     /// ordering from shallower passes via the transposition table).
     /// Returns None best_move if the side to move must pass.
-    pub fn search(&mut self, board: &Board, evaluator: &Evaluator, depth: u8) -> SearchResult {
+    pub fn search(&mut self, board: &Board, linear: &Linear, depth: u8) -> SearchResult {
         self.nodes = 0;
         self.probcut_level = 0;
 
@@ -311,7 +311,7 @@ impl Searcher {
         // Helpers run the same deepening on their own stacks, skewed so the
         // threads are not all proving the same iteration at the same moment.
         // Everything they learn reaches this thread through the table.
-        self.deepen(board, evaluator, depth)
+        self.deepen(board, linear, depth)
     }
 
     /// One root iteration, split across threads.
@@ -330,11 +330,11 @@ impl Searcher {
     fn root_split(
         &mut self,
         board: &Board,
-        evaluator: &Evaluator,
+        linear: &Linear,
         depth: u8,
         hash: u64,
     ) -> (f32, Option<Position>) {
-        let indexer = evaluator.indexer();
+        let indexer = linear.indexer();
         let mover = board.player();
         let tt_move = self.tt_probe(board, hash).and_then(|e| e.best);
 
@@ -350,7 +350,7 @@ impl Searcher {
                 i64::MIN
             } else {
                 let ix = indexer.init(child.black, child.white);
-                (evaluator.eval_indices(&child, &ix) * 256.0) as i64
+                (linear.eval_indices(&child, &ix) * 256.0) as i64
             };
             kids.push((pos, child, child_hash, key));
         }
@@ -360,7 +360,7 @@ impl Searcher {
         let mut ix = indexer.init(kids[0].1.black, kids[0].1.white);
         let alpha0 = -self.alpha_beta(
             &kids[0].1,
-            evaluator,
+            linear,
             &mut ix,
             kids[0].2,
             depth - 1,
@@ -400,7 +400,7 @@ impl Searcher {
                         let mut ix = indexer.init(k.1.black, k.1.white);
                         let probe = -w.alpha_beta(
                             &k.1,
-                            evaluator,
+                            linear,
                             &mut ix,
                             k.2,
                             depth - 1,
@@ -411,17 +411,7 @@ impl Searcher {
                         );
                         let v = if probe > a {
                             let mut ix = indexer.init(k.1.black, k.1.white);
-                            -w.alpha_beta(
-                                &k.1,
-                                evaluator,
-                                &mut ix,
-                                k.2,
-                                depth - 1,
-                                1,
-                                -INF,
-                                -a,
-                                false,
-                            )
+                            -w.alpha_beta(&k.1, linear, &mut ix, k.2, depth - 1, 1, -INF, -a, false)
                         } else {
                             probe
                         };
@@ -450,7 +440,7 @@ impl Searcher {
     fn split_children(
         &mut self,
         board: &Board,
-        evaluator: &Evaluator,
+        linear: &Linear,
         children: &[(Position, u64, u64, i64)],
         hash: u64,
         depth: u8,
@@ -459,7 +449,7 @@ impl Searcher {
         beta: f32,
     ) -> (f32, Option<Position>) {
         let _ = hash;
-        let indexer = evaluator.indexer();
+        let indexer = linear.indexer();
         // Children are rebuilt from the flip mask here too; the array the
         // caller hands over deliberately carries no boards.
         let kid = |k: &(Position, u64, u64, i64)| {
@@ -472,7 +462,7 @@ impl Searcher {
         let mut ix = indexer.init(first_board.black, first_board.white);
         let mut best_val = -self.alpha_beta(
             &first_board,
-            evaluator,
+            linear,
             &mut ix,
             first.1,
             depth - 1,
@@ -514,7 +504,7 @@ impl Searcher {
                         let mut ix = indexer.init(kb.black, kb.white);
                         let probe = -w.alpha_beta(
                             &kb,
-                            evaluator,
+                            linear,
                             &mut ix,
                             k.1,
                             depth - 1,
@@ -527,7 +517,7 @@ impl Searcher {
                             let mut ix = indexer.init(kb.black, kb.white);
                             -w.alpha_beta(
                                 &kb,
-                                evaluator,
+                                linear,
                                 &mut ix,
                                 k.1,
                                 depth - 1,
@@ -578,8 +568,8 @@ impl Searcher {
     }
 
     /// Iterative deepening on one thread.
-    fn deepen(&mut self, board: &Board, evaluator: &Evaluator, depth: u8) -> SearchResult {
-        let mut indices = evaluator.indexer().init(board.black, board.white);
+    fn deepen(&mut self, board: &Board, linear: &Linear, depth: u8) -> SearchResult {
+        let mut indices = linear.indexer().init(board.black, board.white);
         let mut best_move = None;
         let mut value = 0.0f32;
         let mut completed = 0u8;
@@ -593,10 +583,9 @@ impl Searcher {
             }
             let hash = zobrist::compute_hash(board.black, board.white, board.player());
             let (v, mv) = if self.threads > 1 && d >= 3 {
-                self.root_split(board, evaluator, d, hash)
+                self.root_split(board, linear, d, hash)
             } else {
-                let v =
-                    self.alpha_beta(board, evaluator, &mut indices, hash, d, 0, -INF, INF, false);
+                let v = self.alpha_beta(board, linear, &mut indices, hash, d, 0, -INF, INF, false);
                 // Root best move comes from the TT entry just stored
                 (v, self.tt_probe(board, hash).and_then(|e| e.best))
             };
@@ -663,7 +652,7 @@ impl Searcher {
     fn probcut(
         &mut self,
         board: &Board,
-        evaluator: &Evaluator,
+        linear: &Linear,
         indices: &mut PatternIndices,
         hash: u64,
         depth: u8,
@@ -679,7 +668,7 @@ impl Searcher {
         // points past the window (average of both prediction errors).
         let eval_error =
             t * 0.5 * (mpc_sigma(empties, depth, 0) + mpc_sigma(empties, depth, pc_depth));
-        let eval_score = evaluator.eval_indices(board, indices);
+        let eval_score = linear.eval_indices(board, indices);
 
         // Probable fail-high
         let pc_beta = beta + pc_error;
@@ -687,7 +676,7 @@ impl Searcher {
             self.probcut_level += 1;
             let v = self.alpha_beta(
                 board,
-                evaluator,
+                linear,
                 indices,
                 hash,
                 pc_depth,
@@ -708,7 +697,7 @@ impl Searcher {
             self.probcut_level += 1;
             let v = self.alpha_beta(
                 board,
-                evaluator,
+                linear,
                 indices,
                 hash,
                 pc_depth,
@@ -729,7 +718,7 @@ impl Searcher {
     fn alpha_beta(
         &mut self,
         board: &Board,
-        evaluator: &Evaluator,
+        linear: &Linear,
         indices: &mut PatternIndices,
         hash: u64,
         depth: u8,
@@ -747,7 +736,7 @@ impl Searcher {
         let moves = board.movable();
         if depth == 0 {
             if moves != 0 {
-                return quantize_leaf(evaluator.eval_indices(board, indices));
+                return quantize_leaf(linear.eval_indices(board, indices));
             }
             let mut child = *board;
             child.pass();
@@ -756,7 +745,7 @@ impl Searcher {
                 return final_score_discs(board) as f32 * SCORE_SCALE;
             }
             self.nodes += 1; // the pass "node", as the recursion counted it
-            return -quantize_leaf(evaluator.eval_indices(&child, indices));
+            return -quantize_leaf(linear.eval_indices(&child, indices));
         }
 
         let orig_alpha = alpha;
@@ -786,12 +775,12 @@ impl Searcher {
             let child_hash = zobrist::update_hash_on_pass(hash);
             // A pass changes no discs, so `indices` carries over unchanged.
             return -self.alpha_beta(
-                &child, evaluator, indices, child_hash, depth, ply, -beta, -alpha, true,
+                &child, linear, indices, child_hash, depth, ply, -beta, -alpha, true,
             );
         }
 
         if depth == 0 {
-            return evaluator.eval_indices(board, indices);
+            return linear.eval_indices(board, indices);
         }
 
         // ProbCut: only at null-window nodes (PVS probes), never on the PV.
@@ -801,8 +790,7 @@ impl Searcher {
             && ply > 0
             && beta - alpha <= PVS_EPSILON * 1.5
         {
-            if let Some(v) = self.probcut(board, evaluator, indices, hash, depth, ply, alpha, beta)
-            {
+            if let Some(v) = self.probcut(board, linear, indices, hash, depth, ply, alpha, beta) {
                 return v;
             }
         }
@@ -812,7 +800,7 @@ impl Searcher {
         // subtrees: precision pays). Shallow nodes use cheap heuristics:
         // killers, opponent mobility, history credit and corner/X bias —
         // evaluating every child there cost more than it cut.
-        let indexer = evaluator.indexer();
+        let indexer = linear.indexer();
         let mover = board.player();
         let use_eval_order = depth >= EVAL_ORDER_MIN_DEPTH;
         let [killer0, killer1] = self.killers[ply as usize];
@@ -856,7 +844,7 @@ impl Searcher {
                 // cache misses, and the i8 table is a quarter the size. The
                 // endgame solver already ordered this way; the midgame was
                 // still paying full precision for a comparison key.
-                let v = evaluator.eval_order_bb(
+                let v = linear.eval_order_bb(
                     child.player_bb(),
                     child.opponent_bb(),
                     child.player(),
@@ -907,7 +895,7 @@ impl Searcher {
         if self.threads > 1 && ply < SPLIT_MAX_PLY && depth >= SPLIT_MIN_DEPTH && n_children > 2 {
             let (v, mv) = self.split_children(
                 board,
-                evaluator,
+                linear,
                 &children[..n_children],
                 hash,
                 depth,
@@ -951,7 +939,7 @@ impl Searcher {
             let v = if i == 0 || alpha >= beta {
                 -self.alpha_beta(
                     child,
-                    evaluator,
+                    linear,
                     indices,
                     *child_hash,
                     depth - 1,
@@ -963,7 +951,7 @@ impl Searcher {
             } else {
                 let probe = -self.alpha_beta(
                     child,
-                    evaluator,
+                    linear,
                     indices,
                     *child_hash,
                     depth - 1,
@@ -977,7 +965,7 @@ impl Searcher {
                     // lower bound is unsound under TT-induced instability
                     -self.alpha_beta(
                         child,
-                        evaluator,
+                        linear,
                         indices,
                         *child_hash,
                         depth - 1,
@@ -1029,14 +1017,14 @@ mod tests {
     use super::*;
     use crate::pattern::EGAROUCID_PATTERNS;
 
-    fn trained_evaluator() -> Evaluator {
+    fn trained_evaluator() -> Linear {
         // A tiny hand-trained evaluator: reward corner ownership so the
         // search has a real signal to optimize.
-        let mut e = Evaluator::new(EGAROUCID_PATTERNS);
+        let mut e = Linear::new(EGAROUCID_PATTERNS);
         let b = Board::new();
         // Train stages 0..8 lightly toward positive for the initial-ish
         // positions so eval() is non-degenerate.
-        let mut opt = crate::evaluator::SgdOptimizer::new(0.001, 1.0);
+        let mut opt = crate::linear::SgdOptimizer::new(0.001, 1.0);
         for _ in 0..20 {
             e.update_weights_with(&b, 4.0, &mut opt);
         }
@@ -1145,7 +1133,7 @@ mod tests {
     /// no windows. Alpha-beta must return exactly this value at the root
     /// regardless of move ordering — the invariant that keeps ordering
     /// changes honest.
-    fn reference_negamax(board: &Board, evaluator: &Evaluator, depth: u8, passed: bool) -> f32 {
+    fn reference_negamax(board: &Board, linear: &Linear, depth: u8, passed: bool) -> f32 {
         let moves = board.movable();
         if moves == 0 {
             if passed {
@@ -1153,10 +1141,10 @@ mod tests {
             }
             let mut child = *board;
             child.pass();
-            return -reference_negamax(&child, evaluator, depth, true);
+            return -reference_negamax(&child, linear, depth, true);
         }
         if depth == 0 {
-            return quantize_leaf(evaluator.eval(board));
+            return quantize_leaf(linear.eval(board));
         }
         let mut best = -INF;
         let mut m = moves;
@@ -1165,7 +1153,7 @@ mod tests {
             m &= m - 1;
             let mut child = *board;
             child.make_move_bits(pos);
-            let v = -reference_negamax(&child, evaluator, depth - 1, false);
+            let v = -reference_negamax(&child, linear, depth - 1, false);
             if v > best {
                 best = v;
             }

@@ -29,12 +29,9 @@ pub mod book;
 pub mod color;
 pub mod datagen;
 pub mod engine;
-pub mod evaluator;
 pub mod game;
 pub mod learn;
-/// GPU training for the linear evaluator (`train --gpu`).
-#[cfg(feature = "gpu")]
-pub mod linear_gpu;
+pub mod linear;
 pub mod midgame;
 pub mod nnue;
 pub mod pattern;
@@ -56,9 +53,9 @@ pub use board::MoveError;
 pub use board::ParseError;
 pub use board::BOARD_INIT_STRING;
 pub use color::Color;
-pub use evaluator::{AdamOptimizer, Evaluator, Optimizer, SgdOptimizer, STAGE_COUNT};
 pub use game::MoveRecord;
 pub use game::Reversi;
+pub use linear::{AdamOptimizer, Linear, Optimizer, SgdOptimizer, STAGE_COUNT};
 pub use pattern::{
     Pattern, PatternSet, PatternWeights, EDAX_PATTERNS, EGAROUCID_PATTERNS, EGAROUCID_PLUS_PATTERNS,
 };

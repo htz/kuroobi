@@ -22,9 +22,9 @@
 //! opening stages, where it runs 70-90 against 8-40 in the endgame, so an
 //! outlier there outweighs a real loss elsewhere.
 //!
-//! Usage: stage_merge --val <file.data> --out <path>
+//! Usage: linear_stage_merge --val <file.data> --out <path>
 //!                    [--select-by mae|mse|spread] <weights.bin>...
-use kuroobi::evaluator::{Evaluator, STAGE_COUNT};
+use kuroobi::linear::{Linear, STAGE_COUNT};
 use kuroobi::pattern::EGAROUCID_PATTERNS;
 use kuroobi::record::{Filter, TeacherPolicy};
 use kuroobi::trainer::load_examples_filtered_into;
@@ -82,7 +82,7 @@ fn main() -> ExitCode {
     }
     let Some(out) = out else {
         eprintln!(
-            "usage: stage_merge --val <file.data> [--val ...] --out <path>\n\
+            "usage: linear_stage_merge --val <file.data> [--val ...] --out <path>\n\
              [--select-by mae|mse|spread] [--search-value-to-ply <n>]\n\
              [--drop-random] [--keep-above-ply <n>] [--min-ply <n>]\n\
              <weights.bin>..."
@@ -123,9 +123,9 @@ fn main() -> ExitCode {
 
     // [count, sum_abs, sum_sq, sum_err] per stage, per input.
     let mut scores: Vec<Vec<[f64; 4]>> = Vec::with_capacity(inputs.len());
-    let mut evs: Vec<Evaluator> = Vec::with_capacity(inputs.len());
+    let mut evs: Vec<Linear> = Vec::with_capacity(inputs.len());
     for p in &inputs {
-        let mut ev = Evaluator::new(EGAROUCID_PATTERNS);
+        let mut ev = Linear::new(EGAROUCID_PATTERNS);
         if let Err(e) = ev.load_weights(Path::new(p)) {
             eprintln!("failed to load {}: {e}", p.display());
             return ExitCode::FAILURE;
@@ -136,7 +136,7 @@ fn main() -> ExitCode {
             // Prediction minus truth, so a positive mean reads as "this
             // model scores positions high".
             let e = ev.eval(&board) as f64 - ex.score as f64;
-            let a = &mut acc[Evaluator::stage(&board)];
+            let a = &mut acc[Linear::stage(&board)];
             a[0] += 1.0;
             a[1] += e.abs();
             a[2] += e * e;
@@ -148,7 +148,7 @@ fn main() -> ExitCode {
 
     // Build into a copy of the first input so untouched stages keep something
     // valid rather than whatever an empty evaluator would hold.
-    let mut merged = Evaluator::new(EGAROUCID_PATTERNS);
+    let mut merged = Linear::new(EGAROUCID_PATTERNS);
     if let Err(e) = merged.load_weights(Path::new(&inputs[0])) {
         eprintln!("failed to load {}: {e}", inputs[0].display());
         return ExitCode::FAILURE;

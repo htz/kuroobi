@@ -1182,7 +1182,7 @@ impl GpuTrainer {
             !nn.so_grid,
             "the GPU path trains the f32 model, not the grid"
         );
-        assert!(nn.base.is_none(), "the GPU path has no base evaluator");
+        assert!(nn.base.is_none(), "the GPU path has no base linear");
         assert!(
             !adam.legacy_optimizer,
             "the GPU path is the corrected optimizer only"
@@ -1551,7 +1551,7 @@ impl GpuTrainer {
                     for (ex, o) in exs.iter().zip(out.chunks_mut(stride)) {
                         let ex = sym.apply(ex, &mut rs);
                         let board = ex.board();
-                        let stage = crate::evaluator::Evaluator::stage(&board);
+                        let stage = crate::linear::Linear::stage(&board);
                         let ix = nn.indices(ex.black, ex.white);
                         let f = nn.features_black(&ix, stage);
                         o[..nm].copy_from_slice(&f[..nm]);

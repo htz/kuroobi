@@ -11,6 +11,10 @@
 //!   trains all rotations/mirrors, an 8x effective sample multiplier
 //! - TD(λ)-style whole-game credit assignment (`train_game`)
 
+/// GPU training for this evaluator (`linear_train --gpu`).
+#[cfg(feature = "gpu")]
+pub mod gpu;
+
 use std::fs::File;
 use std::io::{self, BufReader, BufWriter, Read, Write};
 use std::path::Path;
@@ -43,7 +47,7 @@ pub const NUM_TABLE_SIZE: usize = 65;
 /// feature: a per-stage table indexed by the current player's disc count.
 /// Since the total disc count is fixed within a stage, this is effectively
 /// the disc differential — information the local patterns don't provide.
-pub struct Evaluator {
+pub struct Linear {
     patterns: &'static [Pattern],
     /// weights[stage][pattern][ternary_index]
     weights: Vec<Vec<Vec<f32>>>,
@@ -67,7 +71,7 @@ pub struct Evaluator {
     /// num_weights[stage][player disc count]
     num_weights: Vec<[f32; NUM_TABLE_SIZE]>,
     /// Appearance counts shaped like `weights`, built by
-    /// [`Evaluator::count_appearances`]. Empty until then.
+    /// [`Linear::count_appearances`]. Empty until then.
     appear: Vec<Vec<Vec<u32>>>,
     /// The same counts for `num_weights`. Without it the disc-count term keeps
     /// taking the raw rate while every pattern cell takes a scaled one, and at
@@ -95,7 +99,7 @@ pub struct Evaluator {
 /// The type is only sound while nothing else holds a mutable borrow of the
 /// evaluator, which `train_epoch_parallel` guarantees by owning it for the
 /// duration of the epoch.
-pub struct WeightView {
+pub struct LinearView {
     stages: Vec<Vec<*mut f32>>,
     num: Vec<*mut f32>,
     /// How often each cell appeared in the training data, laid out exactly
@@ -114,15 +118,15 @@ pub struct WeightView {
 
 // SAFETY: the pointers address plain `f32` cells that outlive the view, and
 // the races on them are intended (see the type comment).
-unsafe impl Send for WeightView {}
-unsafe impl Sync for WeightView {}
+unsafe impl Send for LinearView {}
+unsafe impl Sync for LinearView {}
 
-impl Evaluator {
+impl Linear {
     /// Hand out a shared view of the weights for parallel training.
     ///
     /// Invalidates the flattened caches: they would be stale after the first
     /// update, and rebuilding them mid-epoch is neither needed nor safe.
-    pub fn weight_view(&mut self) -> WeightView {
+    pub fn weight_view(&mut self) -> LinearView {
         self.flat_weights.clear();
         self.flat_i8.clear();
         self.flat_i8_white.clear();
@@ -134,7 +138,7 @@ impl Evaluator {
                 .map(|st| st.iter().map(|t| t.as_ptr()).collect())
                 .collect()
         };
-        WeightView {
+        LinearView {
             counts,
             stages: self
                 .weights
@@ -163,7 +167,7 @@ impl Evaluator {
     /// weights may be live.
     pub unsafe fn train_shared(
         &self,
-        view: &WeightView,
+        view: &LinearView,
         board: &Board,
         target: f32,
         lr: f32,
@@ -346,14 +350,14 @@ impl Optimizer for AdamOptimizer {
     }
 }
 
-impl Evaluator {
+impl Linear {
     /// Create an evaluator with zero-initialized weights.
-    pub fn new(patterns: &'static [Pattern]) -> Evaluator {
+    pub fn new(patterns: &'static [Pattern]) -> Linear {
         let stage_weights: Vec<Vec<f32>> = patterns
             .iter()
             .map(|p| vec![0.0f32; p.table_size()])
             .collect();
-        Evaluator {
+        Linear {
             patterns,
             weights: vec![stage_weights; STAGE_COUNT],
             flat_weights: Vec::new(),
@@ -465,7 +469,7 @@ impl Evaluator {
         )
     }
 
-    /// Put a snapshot from [`Evaluator::stage_weights`] back.
+    /// Put a snapshot from [`Linear::stage_weights`] back.
     pub fn set_stage_weights(&mut self, stage: usize, w: &[Vec<f32>], num: &[f32]) {
         self.weights[stage].clone_from_slice(w);
         self.num_weights[stage].copy_from_slice(num);
@@ -922,17 +926,17 @@ mod tests {
     #[test]
     fn test_stage() {
         let b = Board::new();
-        assert_eq!(Evaluator::stage(&b), 0, "initial board is stage 0");
+        assert_eq!(Linear::stage(&b), 0, "initial board is stage 0");
 
         let mut b = Board::new();
         let first = b.movable().trailing_zeros();
         b.make_move_unchecked(Position::from_index(first).unwrap());
-        assert_eq!(Evaluator::stage(&b), 1, "one move played -> stage 1");
+        assert_eq!(Linear::stage(&b), 1, "one move played -> stage 1");
     }
 
     #[test]
     fn test_eval_zero_weights() {
-        let e = Evaluator::new(EGAROUCID_PATTERNS);
+        let e = Linear::new(EGAROUCID_PATTERNS);
         let b = Board::new();
         assert_eq!(e.eval(&b), 0.0);
     }
@@ -963,7 +967,7 @@ mod tests {
 
     #[test]
     fn test_update_weights_reduces_error() {
-        let mut e = Evaluator::new(EGAROUCID_PATTERNS);
+        let mut e = Linear::new(EGAROUCID_PATTERNS);
         let b = Board::new();
 
         let err0 = e.update_weights(&b, 10.0, LR);
@@ -980,7 +984,7 @@ mod tests {
     fn test_update_weights_converges_to_target() {
         // Repeated steps on one position must converge to the exact target
         // (the position is always representable by a linear model).
-        let mut e = Evaluator::new(EGAROUCID_PATTERNS);
+        let mut e = Linear::new(EGAROUCID_PATTERNS);
         let b = Board::new();
         for _ in 0..200 {
             e.update_weights(&b, 8.0, LR);
@@ -1017,7 +1021,7 @@ mod tests {
                 );
             }
 
-            let mut e = Evaluator::new(EGAROUCID_PATTERNS);
+            let mut e = Linear::new(EGAROUCID_PATTERNS);
             let target = 1.0f32;
             e.update_weights(&b, target, LR);
             let expected = LR * target * multiplier;
@@ -1032,15 +1036,15 @@ mod tests {
     #[test]
     fn test_update_only_touches_current_stage() {
         // Training a stage-0 position must leave every other stage at zero.
-        let mut e = Evaluator::new(EGAROUCID_PATTERNS);
+        let mut e = Linear::new(EGAROUCID_PATTERNS);
         let b = Board::new();
-        assert_eq!(Evaluator::stage(&b), 0);
+        assert_eq!(Linear::stage(&b), 0);
         e.update_weights(&b, 5.0, LR);
 
         let mut later = b;
         let pos = crate::position::Position::from_index(later.movable().trailing_zeros()).unwrap();
         later.make_move_unchecked(pos); // now stage 1
-        assert_eq!(Evaluator::stage(&later), 1);
+        assert_eq!(Linear::stage(&later), 1);
         assert_eq!(e.eval(&later), 0.0, "stage-1 weights must be untouched");
     }
 
@@ -1048,7 +1052,7 @@ mod tests {
     fn test_perspective_antisymmetry_after_training() {
         // Weights trained from one side apply to "player", so the same
         // position from the opponent's view uses different table cells.
-        let mut e = Evaluator::new(EGAROUCID_PATTERNS);
+        let mut e = Linear::new(EGAROUCID_PATTERNS);
         let b = Board::new();
         for _ in 0..300 {
             e.update_weights(&b, 8.0, LR);
@@ -1071,7 +1075,7 @@ mod tests {
         let pos = crate::position::Position::from_index(b.movable().trailing_zeros()).unwrap();
         b.make_move_unchecked(pos);
 
-        let mut e = Evaluator::new(EGAROUCID_PATTERNS);
+        let mut e = Linear::new(EGAROUCID_PATTERNS);
         for _ in 0..300 {
             e.update_weights(&b, 8.0, LR);
         }
@@ -1094,7 +1098,7 @@ mod tests {
         let target = 8.0f32;
         let lr = 0.02f32;
 
-        let mut sgd = Evaluator::new(EGAROUCID_PATTERNS);
+        let mut sgd = Linear::new(EGAROUCID_PATTERNS);
         for _ in 0..30 {
             sgd.update_weights(&b, target, lr);
         }
@@ -1104,7 +1108,7 @@ mod tests {
             "SGD at lr=0.02 must diverge on the symmetric position, residual {sgd_residual}"
         );
 
-        let mut adam_eval = Evaluator::new(EGAROUCID_PATTERNS);
+        let mut adam_eval = Linear::new(EGAROUCID_PATTERNS);
         let mut opt = AdamOptimizer::new(lr);
         for _ in 0..100 {
             adam_eval.update_weights_adam(&b, target, &mut opt);
@@ -1129,7 +1133,7 @@ mod tests {
 
         // Small lr: Adam's steady-state oscillation is ~lr * active cells,
         // so lr = 0.01 keeps the residual band at ~0.64.
-        let mut e = Evaluator::new(EGAROUCID_PATTERNS);
+        let mut e = Linear::new(EGAROUCID_PATTERNS);
         let mut opt = AdamOptimizer::new(0.01);
         for _ in 0..300 {
             e.train(&b, 6.0, &mut opt);
@@ -1177,7 +1181,7 @@ mod tests {
         // lr sizing: Adam's steady-state swing is ~(active cells + 8 num
         // steps) * lr = 72 * lr per position; 0.03 keeps it inside the
         // ±3.0 tolerance below.
-        let mut e = Evaluator::new(EGAROUCID_PATTERNS);
+        let mut e = Linear::new(EGAROUCID_PATTERNS);
         let mut opt = AdamOptimizer::new(0.03);
         let mut last_err = f32::MAX;
         for _ in 0..200 {
@@ -1195,7 +1199,7 @@ mod tests {
             assert!(
                 (v - expected).abs() < 3.0,
                 "position (stage {}) evaluates {v}, expected ~{expected}",
-                Evaluator::stage(b)
+                Linear::stage(b)
             );
         }
     }
@@ -1216,7 +1220,7 @@ mod tests {
             history.push(board);
         }
 
-        let mut e = Evaluator::new(EGAROUCID_PATTERNS);
+        let mut e = Linear::new(EGAROUCID_PATTERNS);
         let mut opt = AdamOptimizer::new(0.05);
         for _ in 0..60 {
             e.train_game(&history, 12.0, 0.0, &mut opt);
@@ -1238,7 +1242,7 @@ mod tests {
         // The incremental path must return the *bit-identical* f32 as the
         // recomputing path (same weights summed in the same order), for both
         // sides to move, at every position of a random game.
-        let mut e = Evaluator::new(EGAROUCID_PATTERNS);
+        let mut e = Linear::new(EGAROUCID_PATTERNS);
         let mut state = 0x2545f4914f6cdd1du64;
         for stage in 0..STAGE_COUNT {
             for (pi, p) in EGAROUCID_PATTERNS.iter().enumerate() {
@@ -1286,7 +1290,7 @@ mod tests {
                 e.eval_indices(&board, &indices),
                 e.eval(&board),
                 "incremental eval diverged at stage {}",
-                Evaluator::stage(&board)
+                Linear::stage(&board)
             );
             let mut swapped = board;
             swapped.pass();
@@ -1301,7 +1305,7 @@ mod tests {
     /// One training step through the path training actually uses. The
     /// `update_weights` family does not consult the counts -- only
     /// `train_shared`, which is what the trainer calls.
-    fn step(e: &mut Evaluator, b: &Board) {
+    fn step(e: &mut Linear, b: &Board) {
         let view = e.weight_view();
         unsafe { e.train_shared(&view, b, 10.0, 0.005) };
     }
@@ -1314,15 +1318,15 @@ mod tests {
         // ratio is not 1/n: the eight symmetries update inside one call, so
         // the error the later ones see already reflects the earlier ones.
         let b = Board::new();
-        let mut plain = Evaluator::new(EGAROUCID_PATTERNS);
+        let mut plain = Linear::new(EGAROUCID_PATTERNS);
         step(&mut plain, &b);
 
-        let mut scaled = Evaluator::new(EGAROUCID_PATTERNS);
+        let mut scaled = Linear::new(EGAROUCID_PATTERNS);
         scaled.count_appearances(std::iter::once(b));
         assert!(scaled.has_appearances());
         step(&mut scaled, &b);
 
-        let st = Evaluator::stage(&b);
+        let st = Linear::stage(&b);
         let (pw, _) = plain.stage_weights(st);
         let (sw, _) = scaled.stage_weights(st);
         let mut moved = 0usize;
@@ -1355,7 +1359,7 @@ mod tests {
         // with a handful of examples from taking the largest step of all
         // once the rate is divided by the count.
         let b = Board::new();
-        let mut e = Evaluator::new(EGAROUCID_PATTERNS);
+        let mut e = Linear::new(EGAROUCID_PATTERNS);
         e.count_appearances(std::iter::once(b));
         e.set_min_appear(u32::MAX);
         let before = e.eval(&b);
@@ -1377,12 +1381,12 @@ mod tests {
         std::fs::create_dir_all(&dir).unwrap();
         let path = dir.join("weights.bin");
 
-        let mut e = Evaluator::new(EGAROUCID_PATTERNS);
+        let mut e = Linear::new(EGAROUCID_PATTERNS);
         e.set_weight(0, 0, 42, 1.25);
         e.set_weight(60, 15, 7, -3.5);
         e.save_weights(&path).unwrap();
 
-        let mut e2 = Evaluator::new(EGAROUCID_PATTERNS);
+        let mut e2 = Linear::new(EGAROUCID_PATTERNS);
         e2.load_weights(&path).unwrap();
         assert_eq!(e2.weight(0, 0, 42), 1.25);
         assert_eq!(e2.weight(60, 15, 7), -3.5);
@@ -1398,14 +1402,14 @@ mod tests {
         let path = dir.join("weights_v2.bin");
 
         // Train one step so the disc-count cell becomes nonzero.
-        let mut e = Evaluator::new(EGAROUCID_PATTERNS);
+        let mut e = Linear::new(EGAROUCID_PATTERNS);
         let b = Board::new();
         e.update_weights(&b, 10.0, 0.005);
         let expected = e.eval(&b);
         e.save_weights(&path).unwrap();
 
         // v2 roundtrip preserves the disc-count contribution exactly.
-        let mut e2 = Evaluator::new(EGAROUCID_PATTERNS);
+        let mut e2 = Linear::new(EGAROUCID_PATTERNS);
         e2.load_weights(&path).unwrap();
         assert_eq!(e2.eval(&b), expected, "v2 roundtrip must be lossless");
 
@@ -1417,7 +1421,7 @@ mod tests {
         let v1_path = dir.join("weights_v1.bin");
         std::fs::write(&v1_path, bytes).unwrap();
 
-        let mut e3 = Evaluator::new(EGAROUCID_PATTERNS);
+        let mut e3 = Linear::new(EGAROUCID_PATTERNS);
         e3.load_weights(&v1_path).unwrap();
         let delta = expected - e3.eval(&b);
         // Difference is exactly the (single) trained disc-count cell.
@@ -1440,13 +1444,13 @@ mod tests {
         std::fs::create_dir_all(&dir).unwrap();
         let path = dir.join("weights_egaroucid.bin");
 
-        let e = Evaluator::new(EGAROUCID_PATTERNS);
+        let e = Linear::new(EGAROUCID_PATTERNS);
         e.save_weights(&path).unwrap();
 
-        let mut edax = Evaluator::new(crate::pattern::EDAX_PATTERNS);
+        let mut edax = Linear::new(crate::pattern::EDAX_PATTERNS);
         assert!(
             edax.load_weights(&path).is_err(),
-            "loading Egaroucid weights into an Edax evaluator must fail"
+            "loading Egaroucid weights into an Edax linear must fail"
         );
 
         std::fs::remove_file(&path).ok();

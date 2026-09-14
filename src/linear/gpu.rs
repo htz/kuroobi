@@ -29,7 +29,7 @@ use std::sync::mpsc;
 use wgpu::util::DeviceExt;
 
 use crate::board::Board;
-use crate::evaluator::{Evaluator, NUM_TABLE_SIZE, STAGE_COUNT};
+use crate::linear::{Linear, NUM_TABLE_SIZE, STAGE_COUNT};
 use crate::trainer::Example;
 
 /// Threads per workgroup, for both kernels.
@@ -210,7 +210,7 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
 
   let discs = countOneBits(blo) + countOneBits(bhi) + countOneBits(wlo) + countOneBits(whi);
   let empties = 64u - discs;
-  // Evaluator::stage: 60 - empties, floored at zero, capped at the last.
+  // Linear::stage: 60 - empties, floored at zero, capped at the last.
   var stage = 0u;
   if (empties < 60u) { stage = 60u - empties; }
   stage = min(stage, STLO + NST - 1u);
@@ -367,7 +367,7 @@ fn main(@builtin(local_invocation_id) lid: vec3<u32>) {
 
 impl LinearGpu {
     /// `batch` is examples per step; a step trains `FORMS * batch` rows.
-    pub fn new(ev: &Evaluator, batch: usize, stages: (usize, usize)) -> LinearGpu {
+    pub fn new(ev: &Linear, batch: usize, stages: (usize, usize)) -> LinearGpu {
         let (st_lo, st_hi) = stages;
         assert!(st_lo <= st_hi && st_hi < STAGE_COUNT, "stage window");
         let n_stages = st_hi + 1 - st_lo;
@@ -560,7 +560,7 @@ impl LinearGpu {
         for ex in batch {
             // The kernel indexes into this run's stages only; a position
             // from another stage would land on the wrong table.
-            let st = Evaluator::stage(&ex.board());
+            let st = Linear::stage(&ex.board());
             if st < lo || st > hi {
                 continue;
             }
@@ -754,7 +754,7 @@ impl LinearGpu {
     }
 
     /// Copy the trained weights back into `ev`.
-    pub fn download(&self, ev: &mut Evaluator) {
+    pub fn download(&self, ev: &mut Linear) {
         let staging = self.device.create_buffer(&wgpu::BufferDescriptor {
             label: Some("weight readback"),
             size: (self.n_cells * 4) as u64,
@@ -791,7 +791,7 @@ mod tests {
     #[test]
     fn flat_layout_round_trips() {
         use crate::pattern::EGAROUCID_PATTERNS;
-        let mut ev = Evaluator::new(EGAROUCID_PATTERNS);
+        let mut ev = Linear::new(EGAROUCID_PATTERNS);
         let mut flat = ev.flat_all();
         for (i, w) in flat.iter_mut().enumerate() {
             *w = (i % 997) as f32;
@@ -805,7 +805,7 @@ mod tests {
     #[test]
     fn flat_cells_sum_to_the_evaluation() {
         use crate::pattern::EGAROUCID_PATTERNS;
-        let mut ev = Evaluator::new(EGAROUCID_PATTERNS);
+        let mut ev = Linear::new(EGAROUCID_PATTERNS);
         let mut flat = ev.flat_all();
         let mut k = 0u32;
         for w in flat.iter_mut() {
@@ -829,7 +829,7 @@ mod tests {
         }
         pat_off.push(off);
         let stage_stride = off + NUM_TABLE_SIZE as u32;
-        let base = Evaluator::stage(&b) as u32 * stage_stride;
+        let base = Linear::stage(&b) as u32 * stage_stride;
         let mut sum = 0.0f32;
         for (pi, p) in patterns.iter().enumerate() {
             for idx in p.indices(b.black, b.white, b.player()) {

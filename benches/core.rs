@@ -4,7 +4,7 @@
 use criterion::{black_box, criterion_group, criterion_main, Criterion, Throughput};
 
 use kuroobi::{
-    bitboard, Board, EndSolverMode, Evaluator, Position, Searcher, Solver, EGAROUCID_PATTERNS,
+    bitboard, Board, EndSolverMode, Linear, Position, Searcher, Solver, EGAROUCID_PATTERNS,
 };
 
 /// Deterministic mid-game position (see tests/solver_integration.rs).
@@ -111,10 +111,10 @@ fn bench_solver(c: &mut Criterion) {
     });
 }
 
-/// Evaluator with random-ish nonzero weights: eval cost is weight-independent
+/// Linear with random-ish nonzero weights: eval cost is weight-independent
 /// but nonzero weights keep move ordering realistic in the search benches.
-fn bench_evaluator() -> Evaluator {
-    let mut e = Evaluator::new(EGAROUCID_PATTERNS);
+fn bench_evaluator() -> Linear {
+    let mut e = Linear::new(EGAROUCID_PATTERNS);
     let mut state = 0x9e3779b97f4a7c15u64;
     for stage in 0..kuroobi::STAGE_COUNT {
         for (pi, p) in EGAROUCID_PATTERNS.iter().enumerate() {
