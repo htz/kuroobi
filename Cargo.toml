@@ -24,90 +24,17 @@ gpu = ["dep:wgpu", "dep:bytemuck"]
 # instead of compiling their defaults in. Sweeps need this; the default
 # build folds the knobs to constants so dead regimes cost nothing.
 tunable = []
-# Layout of the shared bound-pair cache entry (4/5-6/7-8/9 empties). Default
-# is packed (19 bytes); these two build the other arms of that comparison,
-# which neither implementation has measured. Mutually exclusive.
-entry-align32 = []
-entry-natural = []
-# Arms that decompose a single recorded claim: that batching the leaf flips
-# beats scalar calls "even when a cutoff would have skipped the tail". Three
-# separate effects hide in that: paying for flips a cutoff never needs
-# (default vs flip-lazy), the adjacency guard (flip-lazy vs flip-guard), and
-# sharing the board broadcast (flip-guard vs flip-noshare). All four arms
-# must produce identical node counts; that is the check that they are wired
-# correctly. Measurement only - the default is the shipping path.
-flip-lazy = []
-flip-guard = []
-flip-noshare = []
-# Control for the shared-table capacity sweep: probe only the low 2^23
-# entries while still allocating - and wiping - the full table. Separates
-# "probes reach less memory" from "the per-position wipe evicts less".
-tt-probe-clamp = []
-# Drop the per-move child hash and table prefetch that move generation
-# issues after building the list. Measured +7% on FFO40-49: the pass is a
-# large share of generation and it earns far more than it costs. Trees are
-# identical.
-#
-# Two sibling features (`gen-prefetch-2`, `gen-prefetch-4`) used to sit
-# here to price prefetching only the head of the list. Neither was ever
-# wired to anything, so both reported "no difference" for as long as they
-# existed; they are gone rather than left to be measured again.
-gen-no-prefetch = []
-# Warm the bound cache below the shared table as well, not just the shared
-# table itself.
-gen-prefetch-all = []
-# Restore the eager per-move child hash. Deferring it where no prefetch is
-# issued (7-9 empties) is the default and measured -0.85%, 10/10 rounds.
-gen-eager-hash = []
-# Restore zero-initialisation of `gen_moves`' scratch arrays (306 bytes of
-# memset per node). Leaving them uninitialised is the default.
-gen-zeroed-scratch = []
-# The alternative band split: nothing below 13 empties touches a
-# transposition table, and 7-12 share one thread-private direct-mapped
-# bound-only cache (4 MiB). The default draws the line at 9.
-ec-band = []
-# Drop the quadrant-parity ordering at three empties.
-last3-noorder = []
-# Order the empties with a nested if-chain over the parity bits instead of
-# a match on their packed mask. Same permutation; the match does compile to
-# a data-dependent jump table, and replacing it measured within noise at
-# four empties and +1.2% at three.
-last4-ifsort = []
-# Run the stable-disc fixpoint to convergence and count once, instead of
-# testing `need` with a popcount on every iteration. Measured +1.4%.
-stab-no-early = []
-# Generate the move list with one flip kernel per square instead of the
-# batched two/four-square kernels.
-gen-scalar = []
-# Probe the 5-6 band's cache before attempting the stability cutoff,
-# instead of after.
-stab-after-probe = []
-# Force the four-empty routine into its callers, so the whole 1-4 leaf
-# chain becomes one straight-line body. Measured within noise.
-last4-inline = []
-last3-ifsort = []
-# Run the bound cache over 7-12 empties *beside* the transposition table
-# rather than only below it, so the band is covered by both.
-l78-wide = []
-# Restore the fail-high half of the stability cutoff. Off by default: it
-# was 26.7M of the 66.7M full stability sweeps and cost 3.2% of the clock
-# for 0.5-2.4% of the tree.
-stab-fail-high = []
-# Drop the one-ahead four-empty cache prefetch. On by default; measured a
-# wash either way (total -0.07% over four sets).
-l4-no-prefetch = []
-# Find the 5-6 band's legal squares with one mobility smear instead of a
-# flip kernel per empty square. Same visit order, same tree.
-shallow-mobility = []
 random = ["rand"]
-# Count move-ordering and ETC probes as nodes, the way Edax does, so node
-# totals are comparable with `edax -solve`. Costs a few percent of search time.
+# Count move-ordering and ETC probes as nodes, the wider convention, so node
+# totals are comparable with engines that use it. Costs a few percent of
+# search time.
 node-accounting = []
 # Sample where search time goes, by empty count and phase. Measurement only.
 layer-profile = []
 # Force the scalar NNUE accumulator path even on aarch64 (to measure the
 # NEON speedup). Off by default; NEON is used automatically on aarch64.
 nnue-scalar = []
+
 [[bench]]
 name = "core"
 harness = false
