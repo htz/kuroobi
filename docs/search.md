@@ -411,15 +411,13 @@ sentinel has to be a value that survives negation.
 
 ### Verifiers — checking the move played, not the value
 
-Outside `cargo test` there are tools that actually make the engine
-play and check the result (`src/bin/stress_*.rs`).
-
-| Tool | What it checks |
-|---|---|
-| `stress_par` | **actually plays the move returned** by the parallel search and checks the disc difference against the sequential exact solve |
-| `stress_mid` | self-consistency of the midgame search (does it return the same move for the same position and settings?) |
-| `stress_engine` | the same thing through the real game path (`Engine::choose_within`) |
-| `stress_stop` | that the fallback move is returned correctly when the search exits on a deadline |
+The defect below was caught by verifiers that actually made the engine
+play and checked the result, rather than comparing values: the move the
+parallel search returned against the sequential exact solve, the midgame
+search against itself, the same through `Engine::choose_within`, and the
+fallback move on a deadline. They were throwaway binaries and are no
+longer in the tree; what they established is recorded here, and
+`SOLVER_CHAOS` (below) is still in the solver.
 
 **The midgame does not match between parallel and sequential** (Lazy
 SMP searches in a non-deterministic order; that is the kind of

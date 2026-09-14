@@ -328,9 +328,8 @@ both the selective and the exact solve).
 > **Agreeing values are not enough.** A defect that got "the move to
 > return" wrong survived for a long time, and while FFO and the exactness
 > tests all passed it lost 36 discs in a real game. Its nature and the fix
-> are in [search](search.md#parallel-search-correctness); the verification tools are
-> collected in
-> [CLI tools](cli.md#stress_par--stress_mid--stress_engine--stress_stop).
+> are in [search](search.md#parallel-search-correctness), together with how
+> it was caught.
 
 FFO40-49 (474M nodes, values deterministic, minimum of 5 runs).
 **Clearing the transposition table is not included in the measurement** —
