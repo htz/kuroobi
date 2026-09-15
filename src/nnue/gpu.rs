@@ -140,7 +140,9 @@ struct Params {{
     n_b: u32,
     n_c: u32,
     flags: u32,
-    pad0: u32,
+    /// The optimizer step this batch is; `K_STEP_SPARSE` replays the
+    /// gap between it and each row's `last`.
+    t_now: u32,
     scale: f32,
     lr: f32,
     wd: f32,
@@ -805,6 +807,87 @@ fn main(@builtin(local_invocation_id) lid: vec3<u32>,
 }
 "#;
 
+/// AdamW over the rows this batch touched, catching each up over the steps
+/// since it last moved.
+///
+/// The dense form above walks the whole table every batch so that a quiet
+/// row still decays and still coasts on its momentum. That is correct and
+/// it is most of the step's cost: 11% of the phase-adaptive table's rows
+/// are touched in a batch, and the other 89% are read and written for a
+/// zero gradient. Replaying the gap when a row comes back gives the same
+/// arithmetic for a ninth of the traffic -- the CPU trainer has always done
+/// it this way (`nnue::catch_up`), and this is that routine in WGSL.
+///
+/// Per cell rather than per row: the CPU keeps replaying while any lane of
+/// a row still carries momentum, this stops when its own does. A lane that
+/// stops early still owes the remaining decay, which it takes in one power
+/// exactly as the CPU's tail does.
+///
+/// `last[row]` is the step the row last moved on; `P.t_now` is this one.
+/// Lookahead does not fold in here -- a sync touches every row, quiet ones
+/// included, so it stays a dense pass on the steps that sync.
+const K_STEP_SPARSE: &str = r#"
+@group(0) @binding(0) var<storage, read_write> w: array<f32>;
+@group(0) @binding(1) var<storage, read_write> m: array<f32>;
+@group(0) @binding(2) var<storage, read_write> v: array<f32>;
+@group(0) @binding(3) var<storage, read> touched: array<u32>;
+@group(0) @binding(4) var<storage, read> grad: array<f32>;
+@group(0) @binding(5) var<storage, read> step: array<f32>;
+@group(0) @binding(6) var<storage, read_write> last: array<u32>;
+@group(0) @binding(7) var<uniform> P: Params;
+
+@compute @workgroup_size(256)
+fn main(@builtin(local_invocation_id) lid: vec3<u32>,
+        @builtin(workgroup_id) wg: vec3<u32>,
+        @builtin(num_workgroups) nwg: vec3<u32>) {
+    let i = linear_wg(wg, nwg) * 256u + lid.x;
+    if (i >= P.n_items) {
+        return;
+    }
+    let idx = i / P.width;          // position in the touched list
+    let h = i - idx * P.width;
+    let row = touched[idx];
+    let cell = row * P.width + h;
+
+    var mm = m[cell];
+    var vv = v[cell];
+    var ww = w[cell];
+
+    // Replay the steps this cell sat out.
+    let lastv = last[row];
+    var miss = 0u;
+    if (P.t_now > lastv + 1u) {
+        miss = P.t_now - lastv - 1u;
+    }
+    var k = 0u;
+    loop {
+        if (k >= miss || abs(mm) <= 1e-12) { break; }
+        k = k + 1u;
+        let st = f32(lastv + k);
+        let bc1 = 1.0 - pow(P.b1, st);
+        let bc2s = sqrt(1.0 - pow(P.b2, st));
+        mm = mm * P.b1;
+        vv = vv * P.b2;
+        ww = ww * (1.0 - P.wd * P.lr) - (P.lr / bc1) * mm / (sqrt(vv) / bc2s + P.eps);
+    }
+    if (k < miss && P.wd != 0.0) {
+        ww = ww * pow(1.0 - P.wd * P.lr, f32(miss - k));
+    }
+
+    // This step's real gradient.
+    let g = grad[idx * P.width + h] * step[0];
+    mm = P.b1 * mm + (1.0 - P.b1) * g;
+    vv = P.b2 * vv + (1.0 - P.b2) * g * g;
+    m[cell] = mm;
+    v[cell] = vv;
+    w[cell] = ww * (1.0 - P.wd * P.lr) - (P.lr / P.bc1) * mm / (sqrt(vv) / P.bc2s + P.eps);
+
+    if (h == 0u) {
+        last[row] = P.t_now;
+    }
+}
+"#;
+
 /// AdamW over the dense vector. Decay on the three 2-D read-out tables,
 /// the int8 clip on the two hidden ones, neither on any bias. Lookahead
 /// folds in as in `K_STEP_ROWS`.
@@ -863,7 +946,7 @@ struct Params {
     n_b: u32,
     n_c: u32,
     flags: u32,
-    pad0: u32,
+    t_now: u32,
     scale: f32,
     lr: f32,
     wd: f32,
@@ -893,7 +976,7 @@ impl Params {
             self.n_b,
             self.n_c,
             self.flags,
-            self.pad0,
+            self.t_now,
             self.scale.to_bits(),
             self.lr.to_bits(),
             self.wd.to_bits(),
@@ -932,6 +1015,9 @@ struct Csr {
     /// `slot[row]` is one past the row's index in the touched list, zero for
     /// an untouched row.
     slot: Vec<u32>,
+    /// The inverse of `slot`: `touched[slot[row] - 1] == row`. The step
+    /// walks this rather than the whole table.
+    touched: Vec<u32>,
     n_touched: usize,
 }
 
@@ -946,6 +1032,7 @@ impl Csr {
             n_segs: 0,
             n_multi: 0,
             slot: vec![0; n_rows],
+            touched: Vec::new(),
             n_touched: 0,
         }
     }
@@ -960,17 +1047,30 @@ impl Csr {
         n_masks: usize,
         row_off: impl Fn(usize) -> u32,
     ) {
-        self.counts.fill(0);
+        /* Clear only what the last batch left behind: the table is 1.78M
+        rows for the phase-adaptive layer and a batch lights up 11% of
+        them, so `fill(0)` spent most of its time writing zeros over
+        zeros. `touched` already names the rows that are dirty. */
+        for &r in &self.touched {
+            self.counts[r as usize] = 0;
+        }
         for e in 0..n_ex {
             let off = row_off(e);
             for m in 0..n_masks {
                 self.counts[(rows[e * stride + m] + off) as usize] += 1;
             }
         }
+        /* The sweep that follows stays a sweep. Collecting the touched
+        rows from the pairs and sorting them was measured instead -- 200k
+        elements against 1.78M rows -- and came out slower (csr 0.77s to
+        1.09s): a row of this loop is a load and a branch, a row of the
+        sort is a comparison and a move. The count ratio said one thing
+        and the work per row another. */
         self.rowptr.clear();
         self.rowptr.push(0);
         let mut total = 0u32;
         let mut t = 0u32;
+        self.touched.clear();
         for r in 0..self.counts.len() {
             let c = self.counts[r];
             if c == 0 {
@@ -979,6 +1079,7 @@ impl Csr {
             }
             t += 1;
             self.slot[r] = t;
+            self.touched.push(r as u32);
             total += c;
             self.rowptr.push(total);
             // Reuse `counts` as the fill cursor: start of this row's span.
@@ -1079,7 +1180,12 @@ pub struct GpuTrainer {
     k_dense_grad: Kernel,
     k_finalize: Kernel,
     k_step_rows: Kernel,
+    k_step_sparse: Kernel,
     k_step_dense: Kernel,
+    /// Force the dense step (measurement; see the dispatch).
+    dense_step: bool,
+    /// Seconds spent building the CSRs (measurement).
+    t_csr: f64,
 
     n_masks: usize,
     nfb: usize,
@@ -1107,6 +1213,8 @@ pub struct GpuTrainer {
     b_ft_part: wgpu::Buffer,
     b_ft_exids: wgpu::Buffer,
     b_ft_slot: wgpu::Buffer,
+    b_ft_touch: wgpu::Buffer,
+    b_ft_last: wgpu::Buffer,
     b_ft_grad: wgpu::Buffer,
     b_ft_sq: wgpu::Buffer,
     b_pa_segs: wgpu::Buffer,
@@ -1114,6 +1222,8 @@ pub struct GpuTrainer {
     b_pa_part: wgpu::Buffer,
     b_pa_exids: wgpu::Buffer,
     b_pa_slot: wgpu::Buffer,
+    b_pa_touch: wgpu::Buffer,
+    b_pa_last: wgpu::Buffer,
     b_pa_grad: wgpu::Buffer,
     b_pa_sq: wgpu::Buffer,
     b_part: wgpu::Buffer,
@@ -1266,6 +1376,7 @@ impl GpuTrainer {
         let k_dense_grad = make(K_DENSE_GRAD, "dense_grad");
         let k_finalize = make(K_FINALIZE, "finalize");
         let k_step_rows = make(K_STEP_ROWS, "step_rows");
+        let k_step_sparse = make(K_STEP_SPARSE, "step_sparse");
         let k_step_dense = make(K_STEP_DENSE, "step_dense");
 
         let n_masks = nn.n_masks;
@@ -1343,6 +1454,8 @@ impl GpuTrainer {
         let b_ft_part = zeros("ft_part", part_max * ACC_DIMS, st);
         let b_ft_exids = zeros("ft_exids", max_occ, sd);
         let b_ft_slot = zeros("ft_slot", ft_rows, sd);
+        let b_ft_touch = zeros("ft_touch", ft_touch_max, sd);
+        let b_ft_last = zeros("ft_last", ft_rows, sd);
         let b_ft_grad = zeros("ft_grad", ft_touch_max * ACC_DIMS, st);
         let b_ft_sq = zeros("ft_sq", ft_touch_max, st);
         let b_pa_segs = zeros("pa_segs", 4 * seg_max(pa_touch_max), sd);
@@ -1350,6 +1463,8 @@ impl GpuTrainer {
         let b_pa_part = zeros("pa_part", part_max * PA_DIMS, st);
         let b_pa_exids = zeros("pa_exids", max_occ, sd);
         let b_pa_slot = zeros("pa_slot", pa_rows, sd);
+        let b_pa_touch = zeros("pa_touch", pa_touch_max, sd);
+        let b_pa_last = zeros("pa_last", pa_rows, sd);
         let b_pa_grad = zeros("pa_grad", pa_touch_max * PA_DIMS, st);
         let b_pa_sq = zeros("pa_sq", pa_touch_max, st);
         let n_chunks_max = batch.div_ceil(CHUNK);
@@ -1434,7 +1549,10 @@ impl GpuTrainer {
             k_dense_grad,
             k_finalize,
             k_step_rows,
+            k_step_sparse,
             k_step_dense,
+            dense_step: std::env::var_os("KUROOBI_GPU_DENSE_STEP").is_some(),
+            t_csr: 0.0,
             n_masks,
             nfb,
             ft_rows,
@@ -1458,6 +1576,8 @@ impl GpuTrainer {
             b_ft_part,
             b_ft_exids,
             b_ft_slot,
+            b_ft_touch,
+            b_ft_last,
             b_ft_grad,
             b_ft_sq,
             b_pa_segs,
@@ -1465,6 +1585,8 @@ impl GpuTrainer {
             b_pa_part,
             b_pa_exids,
             b_pa_slot,
+            b_pa_touch,
+            b_pa_last,
             b_pa_grad,
             b_pa_sq,
             b_part,
@@ -1582,11 +1704,15 @@ impl GpuTrainer {
                 .copy_from_slice(&scratch[e * stride..e * stride + stride]);
         }
         let inp = &b.inp[..n * stride];
+        let t_csr = std::time::Instant::now();
         b.ft.build(inp, n, stride, nm, |_| 0);
         let nfb = self.nfb as u32;
         b.pa.build(inp, n, stride, nm, |e| {
             pa_bucket(inp[e * stride + nm] as usize) as u32 * nfb
         });
+        if std::env::var_os("KUROOBI_GPU_PROF").is_some() {
+            self.t_csr += t_csr.elapsed().as_secs_f64();
+        }
     }
 
     /// Upload `batches[slot]` and record one optimizer step.
@@ -1603,11 +1729,11 @@ impl GpuTrainer {
         q.write_buffer(&self.b_ft_segs, 0, u32s(&b.ft.segs));
         q.write_buffer(&self.b_ft_multi, 0, u32s(&b.ft.multi));
         q.write_buffer(&self.b_ft_exids, 0, u32s(&b.ft.exids));
-        q.write_buffer(&self.b_ft_slot, 0, u32s(&b.ft.slot));
+        q.write_buffer(&self.b_ft_touch, 0, u32s(&b.ft.touched));
         q.write_buffer(&self.b_pa_segs, 0, u32s(&b.pa.segs));
         q.write_buffer(&self.b_pa_multi, 0, u32s(&b.pa.multi));
         q.write_buffer(&self.b_pa_exids, 0, u32s(&b.pa.exids));
-        q.write_buffer(&self.b_pa_slot, 0, u32s(&b.pa.slot));
+        q.write_buffer(&self.b_pa_touch, 0, u32s(&b.pa.touched));
 
         self.t += 1;
         // Lookahead, mirroring `lookahead_sync`: the first sync only takes
@@ -1701,13 +1827,32 @@ impl GpuTrainer {
         let step_base = Params {
             flags: la_fold as u32,
             alpha: self.la_alpha,
+            t_now: self.t,
             ..base
+        };
+        /* The sparse pass is sized by what the batch touched; the dense
+        one by the table. Both read the same uniform, so it carries
+        whichever this step will run. */
+        let dense_now = la_fold || self.dense_step;
+        /* `slot` is the dense step's own index -- one word per row of the
+        table, 7 MB for the phase-adaptive one -- and it used to ride up
+        with every batch. Only the steps that run the dense pass read it,
+        and with `k = 6` that is one batch in six. The sparse step walks
+        `touched` instead, which is the rows this batch lit up: 0.8 MB. */
+        if dense_now {
+            q.write_buffer(&self.b_ft_slot, 0, u32s(&b.ft.slot));
+            q.write_buffer(&self.b_pa_slot, 0, u32s(&b.pa.slot));
+        }
+        let (ft_items, pa_items) = if dense_now {
+            (self.ft_rows * ACC_DIMS, self.pa_rows * PA_DIMS)
+        } else {
+            (b.ft.n_touched * ACC_DIMS, b.pa.n_touched * PA_DIMS)
         };
         q.write_buffer(
             &self.u_step_ft,
             0,
             &Params {
-                n_items: (self.ft_rows * ACC_DIMS) as u32,
+                n_items: ft_items as u32,
                 width: ACC_DIMS as u32,
                 ..step_base
             }
@@ -1717,7 +1862,7 @@ impl GpuTrainer {
             &self.u_step_pa,
             0,
             &Params {
-                n_items: (self.pa_rows * PA_DIMS) as u32,
+                n_items: pa_items as u32,
                 width: PA_DIMS as u32,
                 ..step_base
             }
@@ -1839,6 +1984,32 @@ impl GpuTrainer {
                 &self.u_step_pa,
             ],
         );
+        let bg_sparse_ft = self.bind(
+            &self.k_step_sparse,
+            &[
+                &self.b_ft,
+                &self.b_ft_m,
+                &self.b_ft_v,
+                &self.b_ft_touch,
+                &self.b_ft_grad,
+                &self.b_step,
+                &self.b_ft_last,
+                &self.u_step_ft,
+            ],
+        );
+        let bg_sparse_pa = self.bind(
+            &self.k_step_sparse,
+            &[
+                &self.b_pa,
+                &self.b_pa_m,
+                &self.b_pa_v,
+                &self.b_pa_touch,
+                &self.b_pa_grad,
+                &self.b_step,
+                &self.b_pa_last,
+                &self.u_step_pa,
+            ],
+        );
         let bg_step_dense = self.bind(
             &self.k_step_dense,
             &[
@@ -1893,18 +2064,40 @@ impl GpuTrainer {
             run(7, &self.k_finalize, &bg_fin, 1);
             // A sync batch's step passes are timed under their own names.
             let st = PROF_STEP + if la_fold { PROF_LA } else { 0 };
-            run(
-                st,
-                &self.k_step_rows,
-                &bg_step_ft,
-                (self.ft_rows * ACC_DIMS).div_ceil(WG),
-            );
-            run(
-                st + 1,
-                &self.k_step_rows,
-                &bg_step_pa,
-                (self.pa_rows * PA_DIMS).div_ceil(WG),
-            );
+            /* A lookahead sync has to reach every row, quiet ones
+            included, so it keeps the dense pass; every other step walks
+            only what the batch touched and replays each row's gap. */
+            /* `KUROOBI_GPU_DENSE_STEP=1` forces the old dense pass, so the
+            two can be timed against each other on one binary -- the
+            machine drifts with heat, and building twice would confound
+            that with the change. Measurement only. */
+            if dense_now {
+                run(
+                    st,
+                    &self.k_step_rows,
+                    &bg_step_ft,
+                    (self.ft_rows * ACC_DIMS).div_ceil(WG),
+                );
+                run(
+                    st + 1,
+                    &self.k_step_rows,
+                    &bg_step_pa,
+                    (self.pa_rows * PA_DIMS).div_ceil(WG),
+                );
+            } else {
+                run(
+                    st,
+                    &self.k_step_sparse,
+                    &bg_sparse_ft,
+                    (b.ft.n_touched * ACC_DIMS).div_ceil(WG),
+                );
+                run(
+                    st + 1,
+                    &self.k_step_sparse,
+                    &bg_sparse_pa,
+                    (b.pa.n_touched * PA_DIMS).div_ceil(WG),
+                );
+            }
             run(st + 2, &self.k_step_dense, &bg_step_dense, n_dense_wg);
         }
         if la_prime {
@@ -2036,6 +2229,7 @@ impl GpuTrainer {
         // `KUROOBI_GPU_PROF=1` prints where the shard's time went: waiting
         // on the GPU, building the batch on the CPU, or uploading it.
         let prof = std::env::var_os("KUROOBI_GPU_PROF").is_some();
+        let t_all = std::time::Instant::now();
         let (mut t_wait, mut t_prep, mut t_submit) = (0.0f64, 0.0f64, 0.0f64);
         for (bno, chunk) in examples.chunks(self.batch).enumerate() {
             // The slot's previous batch must have been consumed by the
@@ -2059,7 +2253,12 @@ impl GpuTrainer {
         self.drain(0);
         t_wait += t0.elapsed().as_secs_f64();
         if prof {
-            eprintln!("gpu prof: wait {t_wait:.2}s prep {t_prep:.2}s submit {t_submit:.2}s");
+            eprintln!(
+                "gpu prof: total {:.2}s = wait {t_wait:.2}s prep {t_prep:.2}s (csr {:.2}s) submit {t_submit:.2}s",
+                t_all.elapsed().as_secs_f64(),
+                self.t_csr
+            );
+            self.t_csr = 0.0;
             self.report_prof();
         }
         let mut out = [0f32; 4];
@@ -2113,5 +2312,259 @@ impl GpuTrainer {
         nn.ft_bias.copy_from_slice(&dense[D_FTB..D_PAB]);
         nn.pa_bias.copy_from_slice(&dense[D_PAB..N_DENSE]);
         nn.refresh_so_grid();
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::nnue::{AdamState, GradSink, Nnue};
+    use crate::trainer::{Example, SymPlan};
+
+    /// A deterministic batch: positions from one played-out game, scored by
+    /// a cheap function of the board so the target is fixed.
+    fn batch(n: usize) -> Vec<Example> {
+        let mut out = Vec::new();
+        let mut b = crate::board::Board::new();
+        let mut rs = 0x2545_F491_4F6C_DD1Du64;
+        while out.len() < n {
+            if b.movable() == 0 {
+                b.pass();
+                if b.movable() == 0 {
+                    b = crate::board::Board::new();
+                    continue;
+                }
+            }
+            out.push(Example {
+                black: b.black,
+                white: b.white,
+                score: ((b.black.count_ones() as i32 - b.white.count_ones() as i32) as f32) * 0.5,
+            });
+            let mv = b.movable();
+            rs ^= rs >> 12;
+            rs ^= rs << 25;
+            rs ^= rs >> 27;
+            let k = (rs.wrapping_mul(0x2545_F491_4F6C_DD1D) >> 59) % mv.count_ones() as u64;
+            let mut m = mv;
+            for _ in 0..k {
+                m &= m - 1;
+            }
+            let p = crate::position::Position::from_index(m.trailing_zeros()).unwrap();
+            b.make_move(p).unwrap();
+        }
+        out
+    }
+
+    /// One CPU minibatch, the way `nnue_train`'s `train_pass_minibatch`
+    /// does it: gradients into sinks, then one `apply_adamw_batch`.
+    fn cpu_step(nn: &mut Nnue, adam: &mut AdamState, exs: &[Example], lr: f32, wd: f32) {
+        let mut sink = GradSink::new(1);
+        sink.clear();
+        for ex in exs {
+            let board = ex.board();
+            let stage = crate::linear::Linear::stage(&board);
+            let ix = nn.indices(ex.black, ex.white);
+            nn.grad_black_into(
+                &ix,
+                stage,
+                ex.black.count_ones() as usize,
+                Nnue::mob_index(&board),
+                ex.score,
+                &mut sink,
+            );
+        }
+        let mut sinks = [sink];
+        nn.apply_adamw_batch(&mut sinks, adam, lr, wd, 1.0 / exs.len() as f32);
+    }
+
+    /// Compare both tables after `steps` batches, each side taking the
+    /// same batches in the same order.
+    fn agree_over(chunks: &[&[Example]], lr: f32, wd: f32, la: (u32, f32)) -> (f32, f32) {
+        let pats = crate::nnue::test_patterns();
+        let mut a = Nnue::new(pats);
+        a.init_weights();
+        let mut b = Nnue::new(pats);
+        b.init_weights();
+        let mut ad_a = AdamState::new(&a);
+        let ad_b = AdamState::new(&b);
+        if la.0 > 0 {
+            // The CPU syncs from inside `apply_adamw_batch`; the GPU takes
+            // the same pair through `GpuTrainer::new`.
+            ad_a.set_lookahead(la.0, la.1);
+        }
+
+        let batch = chunks.iter().map(|c| c.len()).max().unwrap_or(1);
+        let mut g = GpuTrainer::new(&b, batch, &ad_b, la);
+        let mut lr_fn = || lr;
+        let plain = SymPlan {
+            seed: 0,
+            fixed: None,
+        };
+        for c in chunks {
+            cpu_step(&mut a, &mut ad_a, c, lr, wd);
+            g.train_shard(&b, c, 1, &mut lr_fn, wd, plain);
+        }
+        g.download(&mut b);
+        let worst = |x: &[f32], y: &[f32]| {
+            x.iter()
+                .zip(y.iter())
+                .map(|(p, q)| (p - q).abs())
+                .fold(0.0f32, f32::max)
+        };
+        (worst(&a.ft, &b.ft), worst(&a.pa, &b.pa))
+    }
+
+    /// One test on the GPU at a time.
+    ///
+    /// `cargo test` runs these in parallel by default, and three
+    /// `GpuTrainer`s on one device corrupt each other's results: the
+    /// catch-up test failed only when run beside the others, which reads
+    /// exactly like a bug in whatever was last edited. It is not -- it is
+    /// the harness. Every test here takes this first.
+    fn gpu_lock() -> std::sync::MutexGuard<'static, ()> {
+        static L: std::sync::Mutex<()> = std::sync::Mutex::new(());
+        L.lock().unwrap_or_else(|e| e.into_inner())
+    }
+
+    /// A row that sits out a batch must come back where the CPU has it.
+    ///
+    /// The sparse step only walks rows the batch touched, so a quiet row
+    /// stops decaying and stops coasting on its momentum unless the gap is
+    /// replayed when it returns (`nnue::catch_up`, and `K_STEP_SPARSE` in
+    /// WGSL). One batch never exercises that -- every row's `last` is still
+    /// zero and there is no gap -- so this runs three, with the first and
+    /// third touching one set of rows and the second another. Whatever rows
+    /// the two sets do not share sit out step 2 and are replayed at step 3.
+    ///
+    /// Needs a GPU, so it does not run unless asked for.
+    #[test]
+    #[ignore = "requires a GPU"]
+    fn a_row_that_sat_out_a_batch_catches_up() {
+        let _gpu = gpu_lock();
+        let exs = batch(6144);
+        let (a, b) = (&exs[..2048], &exs[2048..4096]);
+        let (lr, wd) = (0.001f32, 0.01f32);
+        let (ft, pa) = agree_over(&[a, b, a], lr, wd, (0, 0.0));
+        let tol = lr * 0.05;
+        assert!(
+            ft <= tol,
+            "ft diverges by {ft} after a gap (tolerance {tol})"
+        );
+        assert!(
+            pa <= tol,
+            "pa diverges by {pa} after a gap (tolerance {tol})"
+        );
+    }
+
+    /// A lookahead sync must land where the CPU's does.
+    ///
+    /// A sync reaches every row, quiet ones included, so the sparse step
+    /// cannot carry it -- those batches fall back to the dense pass. The
+    /// two paths are sized differently, and getting that wrong updates
+    /// only the head of each table: caught once by hand, where a forced
+    /// dense run scored val 238.75 against 6.58. Nothing else here takes
+    /// that branch, since every other test runs with lookahead off.
+    ///
+    /// `k = 2` so a sync falls inside four batches: step 2 primes the slow
+    /// copy, step 4 folds into it.
+    ///
+    /// **This currently fails, and it failed before the sparse step
+    /// existed** -- forcing the dense pass fails it wider (0.00067 against
+    /// 0.00034), so the gap is in the fold, not in which rows the step
+    /// walks. The first sync agrees to 5e-8; every later one adds about
+    /// 2.6e-4:
+    ///
+    /// ```text
+    /// syncs 1: ft 0.00000005   syncs 3: ft 0.00059299
+    /// syncs 2: ft 0.00033513   syncs 4: ft 0.00081643
+    /// ```
+    ///
+    /// The first sync only primes the slow copy; the second is the first
+    /// to fold. So the priming agrees and the folding does not. Both sides
+    /// cover the same tables (`trainable_tables` against the three slow
+    /// buffers), which leaves the arithmetic or the order. Unresolved.
+    #[test]
+    #[ignore = "known GPU/CPU divergence across a lookahead fold; predates the sparse step"]
+    fn a_lookahead_sync_lands_where_the_cpu_puts_it() {
+        let _gpu = gpu_lock();
+        let exs = batch(8192);
+        let (a, b) = (&exs[..2048], &exs[2048..4096]);
+        let (lr, wd) = (0.001f32, 0.01f32);
+        let (ft, pa) = agree_over(&[a, b, a, b], lr, wd, (2, 0.5));
+        let tol = lr * 0.05;
+        assert!(
+            ft <= tol,
+            "ft diverges by {ft} across a sync (tolerance {tol})"
+        );
+        assert!(
+            pa <= tol,
+            "pa diverges by {pa} across a sync (tolerance {tol})"
+        );
+    }
+
+    /// The GPU trainer must move the weights where the CPU trainer moves
+    /// them.
+    ///
+    /// The two run different code for the same optimizer -- the CPU walks
+    /// touched rows and catches up the gap since each last moved, the GPU
+    /// sweeps the table -- and nothing compared them. Without this, a
+    /// change to either one is a change to what the shipped model is
+    /// trained by, checked only by whether a 29-hour run looks reasonable
+    /// afterwards.
+    ///
+    /// Needs a GPU, so it does not run unless asked for.
+    #[test]
+    #[ignore = "requires a GPU"]
+    fn gpu_and_cpu_take_the_same_step() {
+        let _gpu = gpu_lock();
+        let pats = crate::nnue::test_patterns();
+        let exs = batch(4096);
+        let (lr, wd) = (0.001f32, 0.01f32);
+
+        /* Both sides start from the same weights. `init_weights` is
+        deterministic, so building twice is the same as cloning. */
+        let mut a = Nnue::new(pats);
+        a.init_weights();
+        let mut b = Nnue::new(pats);
+        b.init_weights();
+        assert_eq!(a.ft, b.ft, "init_weights must be deterministic");
+
+        let mut ad_a = AdamState::new(&a);
+        let ad_b = AdamState::new(&b);
+
+        cpu_step(&mut a, &mut ad_a, &exs, lr, wd);
+
+        let mut g = GpuTrainer::new(&b, exs.len(), &ad_b, (0, 0.0));
+        let mut lr_fn = || lr;
+        g.train_shard(
+            &b,
+            &exs,
+            1,
+            &mut lr_fn,
+            wd,
+            SymPlan {
+                seed: 0,
+                fixed: None,
+            },
+        );
+        g.download(&mut b);
+
+        /* Reproduction noise, not equality: the two sum a row's gradients
+        in different orders, and float addition is not associative. The
+        bound is the scale of one step (lr) rather than a guess. */
+        let tol = lr * 0.05;
+        let mut worst = 0.0f32;
+        let mut at = 0usize;
+        for (i, (x, y)) in a.ft.iter().zip(b.ft.iter()).enumerate() {
+            let d = (x - y).abs();
+            if d > worst {
+                worst = d;
+                at = i;
+            }
+        }
+        assert!(
+            worst <= tol,
+            "ft diverges by {worst} at cell {at} (tolerance {tol})"
+        );
     }
 }
