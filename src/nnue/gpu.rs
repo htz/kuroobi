@@ -888,6 +888,33 @@ fn main(@builtin(local_invocation_id) lid: vec3<u32>,
 }
 "#;
 
+/// Fold the fast weights into the slow copy, and nothing else.
+///
+/// A lookahead sync reaches every row, so it used to drag the whole Adam
+/// step back to its dense form on those batches: `step_pa` measured 2.1 ms
+/// when it walked the touched rows and 20.1 ms when a sync made it walk
+/// the table. The step has no reason to be dense -- only the fold does.
+/// Splitting them lets the step stay sparse every batch and the fold cost
+/// one sweep of its own.
+const K_LA_FOLD: &str = r#"
+@group(0) @binding(0) var<storage, read_write> w: array<f32>;
+@group(0) @binding(1) var<storage, read_write> slow: array<f32>;
+@group(0) @binding(2) var<uniform> P: Params;
+
+@compute @workgroup_size(256)
+fn main(@builtin(local_invocation_id) lid: vec3<u32>,
+        @builtin(workgroup_id) wg: vec3<u32>,
+        @builtin(num_workgroups) nwg: vec3<u32>) {
+    let i = linear_wg(wg, nwg) * 256u + lid.x;
+    if (i >= P.n_items) {
+        return;
+    }
+    let s = slow[i] + P.alpha * (w[i] - slow[i]);
+    slow[i] = s;
+    w[i] = s;
+}
+"#;
+
 /// AdamW over the dense vector. Decay on the three 2-D read-out tables,
 /// the int8 clip on the two hidden ones, neither on any bias. Lookahead
 /// folds in as in `K_STEP_ROWS`.
@@ -1051,6 +1078,8 @@ impl Csr {
         rows for the phase-adaptive layer and a batch lights up 11% of
         them, so `fill(0)` spent most of its time writing zeros over
         zeros. `touched` already names the rows that are dirty. */
+        let tm = std::env::var_os("KUROOBI_CSR_PROF").is_some();
+        let t0 = std::time::Instant::now();
         for &r in &self.touched {
             self.counts[r as usize] = 0;
         }
@@ -1066,6 +1095,7 @@ impl Csr {
         1.09s): a row of this loop is a load and a branch, a row of the
         sort is a comparison and a move. The count ratio said one thing
         and the work per row another. */
+        let t1 = std::time::Instant::now();
         self.rowptr.clear();
         self.rowptr.push(0);
         let mut total = 0u32;
@@ -1086,6 +1116,7 @@ impl Csr {
             self.counts[r] = total - c;
         }
         self.n_touched = t as usize;
+        let t2 = std::time::Instant::now();
         self.segs.clear();
         self.multi.clear();
         let mut n_part = 0u32;
@@ -1105,6 +1136,7 @@ impl Csr {
         }
         self.n_segs = self.segs.len() / 4;
         self.n_multi = self.multi.len() / 3;
+        let t3 = std::time::Instant::now();
         self.exids.resize(total as usize, 0);
         for e in 0..n_ex {
             let off = row_off(e);
@@ -1114,6 +1146,17 @@ impl Csr {
                 self.exids[k] = e as u32;
                 self.counts[r] += 1;
             }
+        }
+        if tm {
+            eprintln!(
+                "csr: clear+count {:.0}us sweep {:.0}us segs {:.0}us fill {:.0}us  (rows {} touched {})",
+                (t1 - t0).as_secs_f64() * 1e6,
+                (t2 - t1).as_secs_f64() * 1e6,
+                (t3 - t2).as_secs_f64() * 1e6,
+                t3.elapsed().as_secs_f64() * 1e6,
+                self.counts.len(),
+                self.n_touched
+            );
         }
     }
 }
@@ -1181,6 +1224,7 @@ pub struct GpuTrainer {
     k_finalize: Kernel,
     k_step_rows: Kernel,
     k_step_sparse: Kernel,
+    k_la_fold: Kernel,
     k_step_dense: Kernel,
     /// Force the dense step (measurement; see the dispatch).
     dense_step: bool,
@@ -1244,6 +1288,10 @@ pub struct GpuTrainer {
     u_fin_pa: wgpu::Buffer,
     u_step_ft: wgpu::Buffer,
     u_step_pa: wgpu::Buffer,
+    /// The fold sweeps whole tables, so it cannot share the step's sizes.
+    u_fold_ft: wgpu::Buffer,
+    u_fold_pa: wgpu::Buffer,
+    u_fold_dense: wgpu::Buffer,
     u_step_dense: wgpu::Buffer,
     // Readback staging for the epoch-end download.
     rb_ft: wgpu::Buffer,
@@ -1377,6 +1425,7 @@ impl GpuTrainer {
         let k_finalize = make(K_FINALIZE, "finalize");
         let k_step_rows = make(K_STEP_ROWS, "step_rows");
         let k_step_sparse = make(K_STEP_SPARSE, "step_sparse");
+        let k_la_fold = make(K_LA_FOLD, "la_fold");
         let k_step_dense = make(K_STEP_DENSE, "step_dense");
 
         let n_masks = nn.n_masks;
@@ -1555,6 +1604,7 @@ impl GpuTrainer {
         let (u_fwd, u_row_ft, u_row_pa, u_fin_ft, u_fin_pa, u_bias, u_dense, u_fin) =
             (uni(), uni(), uni(), uni(), uni(), uni(), uni(), uni());
         let (u_step_ft, u_step_pa, u_step_dense) = (uni(), uni(), uni());
+        let (u_fold_ft, u_fold_pa, u_fold_dense) = (uni(), uni(), uni());
         let prof = with_ts.then(|| {
             let n = 2 * PROF_N as u32;
             Prof {
@@ -1592,6 +1642,7 @@ impl GpuTrainer {
             k_finalize,
             k_step_rows,
             k_step_sparse,
+            k_la_fold,
             k_step_dense,
             dense_step: std::env::var_os("KUROOBI_GPU_DENSE_STEP").is_some(),
             t_csr: 0.0,
@@ -1648,6 +1699,9 @@ impl GpuTrainer {
             u_fin_pa,
             u_step_ft,
             u_step_pa,
+            u_fold_ft,
+            u_fold_pa,
+            u_fold_dense,
             u_step_dense,
             rb_ft,
             rb_pa,
@@ -1742,20 +1796,39 @@ impl GpuTrainer {
             cnt[s + 1] += cnt[s];
         }
         b.stage_off.copy_from_slice(&cnt);
-        let mut cur = cnt;
-        for e in 0..n {
-            let st = so_stage(scratch[e * stride + nm] as usize);
-            let k = cur[st] as usize;
-            cur[st] += 1;
+        /* Within a stage, order by the first pattern indices. Where an
+        example sits in a batch does not change the step -- the gradients
+        are summed over the whole batch -- but it decides how often a
+        feature row comes from memory instead of cache: a batch touches 82k
+        rows across 2.1M reads, so the average row is read 25 times. */
+        let mut order: Vec<u32> = (0..n as u32).collect();
+        order.sort_unstable_by_key(|&e| {
+            let o = e as usize * stride;
+            (
+                so_stage(scratch[o + nm] as usize) as u32,
+                scratch[o],
+                scratch[o + 1],
+                scratch[o + 2],
+            )
+        });
+        for (k, &e) in order.iter().enumerate() {
+            let e = e as usize;
             b.inp[k * stride..k * stride + stride]
                 .copy_from_slice(&scratch[e * stride..e * stride + stride]);
         }
         let inp = &b.inp[..n * stride];
         let t_csr = std::time::Instant::now();
-        b.ft.build(inp, n, stride, nm, |_| 0);
         let nfb = self.nfb as u32;
-        b.pa.build(inp, n, stride, nm, |e| {
-            pa_bucket(inp[e * stride + nm] as usize) as u32 * nfb
+        /* The two CSRs share only the input they read, so they build side
+        by side. Serially they were 57% of preparing a batch, and preparing
+        was 53% of it -- the larger of the two (the phase-adaptive table,
+        six times the rows) sets the pace either way. */
+        let (ft, pa) = (&mut b.ft, &mut b.pa);
+        std::thread::scope(|scope| {
+            scope.spawn(|| ft.build(inp, n, stride, nm, |_| 0));
+            pa.build(inp, n, stride, nm, |e| {
+                pa_bucket(inp[e * stride + nm] as usize) as u32 * nfb
+            });
         });
         if std::env::var_os("KUROOBI_GPU_PROF").is_some() {
             self.t_csr += t_csr.elapsed().as_secs_f64();
@@ -1872,7 +1945,8 @@ impl GpuTrainer {
             .bytes(),
         );
         let step_base = Params {
-            flags: la_fold as u32,
+            // The fold is a pass of its own now; the step never does it.
+            flags: 0,
             alpha: self.la_alpha,
             t_now: self.t,
             ..base
@@ -1880,7 +1954,7 @@ impl GpuTrainer {
         /* The sparse pass is sized by what the batch touched; the dense
         one by the table. Both read the same uniform, so it carries
         whichever this step will run. */
-        let dense_now = la_fold || self.dense_step;
+        let dense_now = self.dense_step;
         /* `slot` is the dense step's own index -- one word per row of the
         table, 7 MB for the phase-adaptive one -- and it used to ride up
         with every batch. Only the steps that run the dense pass read it,
@@ -1916,6 +1990,24 @@ impl GpuTrainer {
             .bytes(),
         );
         q.write_buffer(&self.u_step_dense, 0, &step_base.bytes());
+        if la_fold {
+            for (u, n, w) in [
+                (&self.u_fold_ft, self.ft_rows * ACC_DIMS, ACC_DIMS),
+                (&self.u_fold_pa, self.pa_rows * PA_DIMS, PA_DIMS),
+                (&self.u_fold_dense, N_DENSE, 1),
+            ] {
+                q.write_buffer(
+                    u,
+                    0,
+                    &Params {
+                        n_items: n as u32,
+                        width: w as u32,
+                        ..step_base
+                    }
+                    .bytes(),
+                );
+            }
+        }
 
         let bg_fwd = self.bind(
             &self.k_fwd_bwd,
@@ -2057,6 +2149,20 @@ impl GpuTrainer {
                 &self.u_step_pa,
             ],
         );
+        let bg_fold = [
+            self.bind(
+                &self.k_la_fold,
+                &[&self.b_ft, &self.la_slow[0], &self.u_fold_ft],
+            ),
+            self.bind(
+                &self.k_la_fold,
+                &[&self.b_pa, &self.la_slow[1], &self.u_fold_pa],
+            ),
+            self.bind(
+                &self.k_la_fold,
+                &[&self.b_dense, &self.la_slow[2], &self.u_fold_dense],
+            ),
+        ];
         let bg_step_dense = self.bind(
             &self.k_step_dense,
             &[
@@ -2146,6 +2252,24 @@ impl GpuTrainer {
                 );
             }
             run(st + 2, &self.k_step_dense, &bg_step_dense, n_dense_wg);
+            /* The fold is its own sweep now. The step above stayed sparse
+            even on a sync, which is the whole point: a sync used to make
+            it walk the table (20.1 ms against 2.1). */
+            if la_fold {
+                run(
+                    st,
+                    &self.k_la_fold,
+                    &bg_fold[0],
+                    (self.ft_rows * ACC_DIMS).div_ceil(WG),
+                );
+                run(
+                    st + 1,
+                    &self.k_la_fold,
+                    &bg_fold[1],
+                    (self.pa_rows * PA_DIMS).div_ceil(WG),
+                );
+                run(st + 2, &self.k_la_fold, &bg_fold[2], n_dense_wg);
+            }
         }
         if la_prime {
             let fast = [&self.b_ft, &self.b_pa, &self.b_dense];
