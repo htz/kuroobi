@@ -593,6 +593,7 @@ fn main() -> ExitCode {
     default: one of these is the weights plus two moments plus a slow copy,
     which for the deployed shape is about 5 GB. */
     let mut keep_every = 0usize;
+    let mut start_epoch = 1usize;
     let mut which_patterns = String::from("nnue");
     let mut patterns_file: Option<PathBuf> = None;
     let mut patterns_share = false;
@@ -678,6 +679,7 @@ fn main() -> ExitCode {
             "--checkpoint" => checkpoint = Some(PathBuf::from(it.next().unwrap())),
             "--resume" => resume = Some(PathBuf::from(it.next().unwrap())),
             "--keep-every" => keep_every = it.next().unwrap().parse().unwrap(),
+            "--start-epoch" => start_epoch = it.next().unwrap().parse().unwrap(),
             "--base" => base_path = Some(PathBuf::from(it.next().unwrap())),
             other if other.starts_with('-') => {
                 eprintln!("unknown option {other}");
@@ -963,6 +965,30 @@ fn main() -> ExitCode {
     let mut plateau_lr = lr;
     let mut stale = 0usize;
     let mut first_epoch = 1usize;
+    /* Epochs `--start-epoch` skipped. They were never run, so there are no
+    steps behind them; once the first epoch measures what an epoch costs,
+    the sweep is credited with what they would have taken. Continuing
+    trained weights wants to enter the cosine below its peak, and without
+    this the only way in is a checkpoint the earlier run may never have
+    written. */
+    let mut virtual_done = 0usize;
+    if start_epoch > 1 {
+        if resume.is_some() {
+            eprintln!("--start-epoch and --resume both set the schedule's position; pick one");
+            return ExitCode::FAILURE;
+        }
+        if start_epoch > epochs {
+            eprintln!("--start-epoch {start_epoch} is past --epochs {epochs}");
+            return ExitCode::FAILURE;
+        }
+        first_epoch = start_epoch;
+        virtual_done = start_epoch - 1;
+        let f = 0.5 * (1.0 + (std::f32::consts::PI * virtual_done as f32 / epochs as f32).cos());
+        println!(
+            "entering the schedule at epoch {start_epoch}/{epochs}: lr {:.8} ({f:.3} of {lr:.8})",
+            lr * f
+        );
+    }
     if let Some(path) = &resume {
         let Some(ad) = adam_state.as_mut() else {
             eprintln!("--resume needs --adam");
@@ -1026,8 +1052,8 @@ fn main() -> ExitCode {
         // Cosine annealing over the run (`--cosine`): lr0 -> ~0 in one sweep,
         // replacing hand-tuned lr ladders. Otherwise geometric `--decay`.
         if minibatch > 0 && epoch == first_epoch && mb_total_steps <= mb_step_done {
-            // Not yet known; provisional value so the first epoch's lr stays
-            // near base_lr (cos(0)=1) until seen==total is measured.
+            // Not yet known; provisional value so the first epoch's lr holds
+            // at the sweep's entry point until seen==total is measured.
             mb_total_steps = u64::MAX;
         }
         let cur_lr = if plateau > 0 {
@@ -1122,9 +1148,16 @@ fn main() -> ExitCode {
                         .expect("--minibatch requires --adam (moments)");
                     // Per-step cosine inside the shard as well, indexed by the
                     // global optimizer step so the sweep stays smooth.
+                    let entry_t = virtual_done as f32 / epochs as f32;
                     let mut lr_fn = || {
                         let lr = if cosine {
-                            let t = mb_step as f32 / mb_total_steps.max(1) as f32;
+                            // Until the step count is known the rate holds at
+                            // the entry point rather than sweeping from it.
+                            let t = if mb_total_steps == u64::MAX {
+                                entry_t
+                            } else {
+                                mb_step as f32 / mb_total_steps.max(1) as f32
+                            };
                             // The schedule floors at 1e-8 rather than at zero.
                             const ETA_MIN: f32 = 1e-8;
                             ETA_MIN
@@ -1231,6 +1264,11 @@ fn main() -> ExitCode {
             first epoch actually run scales it by the epochs this run will
             do, which is what `--epochs` means to a resumed run. */
             let per_epoch = mb_step - mb_step_done;
+            if virtual_done > 0 {
+                let skipped = per_epoch * virtual_done as u64;
+                mb_step_done += skipped;
+                mb_step += skipped;
+            }
             mb_total_steps = mb_step_done + per_epoch * (epochs - first_epoch + 1) as u64;
         }
         let train_mse = sq_total / seen.max(1) as f64;
