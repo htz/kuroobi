@@ -1391,6 +1391,13 @@ impl GpuTrainer {
                 usage,
             })
         };
+        let upload_u32 = |label: &str, data: &[u32], usage: wgpu::BufferUsages| {
+            device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+                label: Some(label),
+                contents: bytemuck::cast_slice(data),
+                usage,
+            })
+        };
         let zeros = |label: &str, n: usize, usage: wgpu::BufferUsages| {
             device.create_buffer(&wgpu::BufferDescriptor {
                 label: Some(label),
@@ -1414,19 +1421,54 @@ impl GpuTrainer {
         let b_ft = upload("ft", &nn.ft, wu);
         let b_pa = upload("pa", &nn.pa, wu);
         let b_dense = upload("dense", &dense, wu);
-        let b_ft_m = zeros("ft_m", nn.ft.len(), st);
-        let b_ft_v = zeros("ft_v", nn.ft.len(), st);
-        let b_pa_m = zeros("pa_m", nn.pa.len(), st);
-        let b_pa_v = zeros("pa_v", nn.pa.len(), st);
-        let b_dense_m = zeros("dense_m", N_DENSE, st);
-        let b_dense_v = zeros("dense_v", N_DENSE, st);
+        /* Resuming: the moments come up with the weights and go back down
+        for a checkpoint, so they need both copy directions. A fresh
+        `AdamState` is all zeros, so this is also the from-scratch path --
+        one upload either way rather than a branch that only one of them
+        exercises. */
+        let sr = st | wgpu::BufferUsages::COPY_SRC | wgpu::BufferUsages::COPY_DST;
+        let b_ft_m = upload("ft_m", &adam.m_ft, sr);
+        let b_ft_v = upload("ft_v", &adam.v_ft, sr);
+        let b_pa_m = upload("pa_m", &adam.m_pa, sr);
+        let b_pa_v = upload("pa_v", &adam.v_pa, sr);
+        let pack = |so: &[Vec<f32>], bft: &[f32], bpa: &[f32]| {
+            let mut v: Vec<f32> = Vec::with_capacity(N_DENSE);
+            for t in so {
+                v.extend_from_slice(t);
+            }
+            v.extend_from_slice(bft);
+            v.extend_from_slice(bpa);
+            v.resize(N_DENSE, 0.0);
+            v
+        };
+        let b_dense_m = upload(
+            "dense_m",
+            &pack(&adam.m_so, &adam.m_ft_bias, &adam.m_pa_bias),
+            sr,
+        );
+        let b_dense_v = upload(
+            "dense_v",
+            &pack(&adam.v_so, &adam.v_ft_bias, &adam.v_pa_bias),
+            sr,
+        );
         // Without Lookahead the step kernels still bind a slow copy; a
         // one-cell stand-in they never read.
         let la_slow = if lookahead.0 > 0 {
+            let dst = st | wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::COPY_SRC;
+            /* A resume brings the slow copy with it; from scratch these are
+            zeros and the first sync primes them from the fast weights. */
+            let have = adam.la_slow.len() == 3;
+            let take = |i: usize, n: usize| -> Vec<f32> {
+                if have && adam.la_slow[i].len() == n {
+                    adam.la_slow[i].clone()
+                } else {
+                    vec![0.0; n]
+                }
+            };
             [
-                zeros("ft_slow", nn.ft.len(), st | wgpu::BufferUsages::COPY_DST),
-                zeros("pa_slow", nn.pa.len(), st | wgpu::BufferUsages::COPY_DST),
-                zeros("dense_slow", N_DENSE, st | wgpu::BufferUsages::COPY_DST),
+                upload("ft_slow", &take(0, nn.ft.len()), dst),
+                upload("pa_slow", &take(1, nn.pa.len()), dst),
+                upload("dense_slow", &take(2, N_DENSE), dst),
             ]
         } else {
             [
@@ -1455,7 +1497,7 @@ impl GpuTrainer {
         let b_ft_exids = zeros("ft_exids", max_occ, sd);
         let b_ft_slot = zeros("ft_slot", ft_rows, sd);
         let b_ft_touch = zeros("ft_touch", ft_touch_max, sd);
-        let b_ft_last = zeros("ft_last", ft_rows, sd);
+        let b_ft_last = upload_u32("ft_last", &adam.ft_last, sd | wgpu::BufferUsages::COPY_SRC);
         let b_ft_grad = zeros("ft_grad", ft_touch_max * ACC_DIMS, st);
         let b_ft_sq = zeros("ft_sq", ft_touch_max, st);
         let b_pa_segs = zeros("pa_segs", 4 * seg_max(pa_touch_max), sd);
@@ -1464,7 +1506,7 @@ impl GpuTrainer {
         let b_pa_exids = zeros("pa_exids", max_occ, sd);
         let b_pa_slot = zeros("pa_slot", pa_rows, sd);
         let b_pa_touch = zeros("pa_touch", pa_touch_max, sd);
-        let b_pa_last = zeros("pa_last", pa_rows, sd);
+        let b_pa_last = upload_u32("pa_last", &adam.pa_last, sd | wgpu::BufferUsages::COPY_SRC);
         let b_pa_grad = zeros("pa_grad", pa_touch_max * PA_DIMS, st);
         let b_pa_sq = zeros("pa_sq", pa_touch_max, st);
         let n_chunks_max = batch.div_ceil(CHUNK);
@@ -1613,11 +1655,16 @@ impl GpuTrainer {
             beta1: adam.beta1,
             beta2: adam.beta2,
             eps: adam.eps,
-            t: 0,
+            /* Resuming carries the step counter: Adam's bias correction
+            reads it, and restarting it at zero would scale the first
+            batches after a resume as if the run had just begun. */
+            t: adam.t,
             la_k: lookahead.0,
             la_alpha: lookahead.1,
-            la_step: 0,
-            la_primed: false,
+            la_step: adam.la_step,
+            // A restored slow copy is already primed; priming again would
+            // throw away the average it holds.
+            la_primed: !adam.la_slow.is_empty(),
             pending: Default::default(),
             batches: [mk_batch(), mk_batch()],
             scratch: vec![0; batch * in_stride],
@@ -2297,6 +2344,98 @@ impl GpuTrainer {
 
     /// Bring the trained tables back into `nn` (for the held-out pass and
     /// the save). The optimizer's moments stay on the GPU.
+    /// Read a `u32` buffer back through a staging buffer of its size.
+    fn read_back_u32(&self, src: &wgpu::Buffer, out: &mut [u32]) {
+        let bytes = (out.len() * 4) as u64;
+        let staging = self.device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("u32 readback"),
+            size: bytes,
+            usage: wgpu::BufferUsages::MAP_READ | wgpu::BufferUsages::COPY_DST,
+            mapped_at_creation: false,
+        });
+        let mut enc = self
+            .device
+            .create_command_encoder(&wgpu::CommandEncoderDescriptor { label: None });
+        enc.copy_buffer_to_buffer(src, 0, &staging, 0, bytes);
+        let idx = self.queue.submit([enc.finish()]);
+        let (tx, rx) = mpsc::channel();
+        staging
+            .slice(..bytes)
+            .map_async(wgpu::MapMode::Read, move |r| {
+                let _ = tx.send(r);
+            });
+        let _ = self.device.poll(wgpu::PollType::Wait {
+            submission_index: Some(idx),
+            timeout: None,
+        });
+        let _ = rx.recv();
+        out.copy_from_slice(bytemuck::cast_slice(
+            &staging.slice(..bytes).get_mapped_range(),
+        ));
+        staging.unmap();
+    }
+
+    /// Bring the optimizer's own state back, not just the weights.
+    ///
+    /// A checkpoint that holds weights and zeroed moments cannot resume
+    /// anything, which is why `--gpu` used to refuse both `--checkpoint`
+    /// and `--resume`. Everything the device carries has a field waiting
+    /// for it in `AdamState`; this fills them. One pass moves about 3.4 GB,
+    /// so it belongs at an epoch boundary, not in the batch loop.
+    pub fn download_state(&mut self, nn: &mut Nnue, adam: &mut AdamState) {
+        self.download(nn);
+        self.read_back(&self.b_ft_m, &self.rb_ft, &mut adam.m_ft);
+        self.read_back(&self.b_ft_v, &self.rb_ft, &mut adam.v_ft);
+        self.read_back(&self.b_pa_m, &self.rb_pa, &mut adam.m_pa);
+        self.read_back(&self.b_pa_v, &self.rb_pa, &mut adam.v_pa);
+        // The stamps the sparse step replays from: without them a resumed
+        // run would think every row moved last step and skip the gap.
+        self.read_back_u32(&self.b_ft_last, &mut adam.ft_last);
+        self.read_back_u32(&self.b_pa_last, &mut adam.pa_last);
+        let mut d = vec![0f32; N_DENSE];
+        for (src, so, bias_ft, bias_pa) in [
+            (
+                &self.b_dense_m,
+                &mut adam.m_so,
+                &mut adam.m_ft_bias,
+                &mut adam.m_pa_bias,
+            ),
+            (
+                &self.b_dense_v,
+                &mut adam.v_so,
+                &mut adam.v_ft_bias,
+                &mut adam.v_pa_bias,
+            ),
+        ] {
+            self.read_back(src, &self.rb_dense, &mut d);
+            for (t, (lo, hi)) in [
+                (D_L1W, D_L1B),
+                (D_L1B, D_L2W),
+                (D_L2W, D_L2B),
+                (D_L2B, D_OW),
+                (D_OW, D_OB),
+                (D_OB, D_FTB),
+            ]
+            .into_iter()
+            .enumerate()
+            {
+                so[t].copy_from_slice(&d[lo..hi]);
+            }
+            bias_ft.copy_from_slice(&d[D_FTB..D_PAB]);
+            bias_pa.copy_from_slice(&d[D_PAB..N_DENSE]);
+        }
+        if self.la_k > 0 {
+            let mut ft = vec![0f32; nn.ft.len()];
+            let mut pa = vec![0f32; nn.pa.len()];
+            self.read_back(&self.la_slow[0], &self.rb_ft, &mut ft);
+            self.read_back(&self.la_slow[1], &self.rb_pa, &mut pa);
+            self.read_back(&self.la_slow[2], &self.rb_dense, &mut d);
+            adam.la_slow = vec![ft, pa, d.clone()];
+        }
+        adam.t = self.t;
+        adam.la_step = self.la_step;
+    }
+
     pub fn download(&mut self, nn: &mut Nnue) {
         self.drain(0);
         self.read_back(&self.b_ft, &self.rb_ft, &mut nn.ft);
