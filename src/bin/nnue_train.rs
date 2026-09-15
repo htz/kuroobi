@@ -804,6 +804,15 @@ fn main() -> ExitCode {
         eprintln!("--resume restores Adam moments, so it needs --adam");
         return ExitCode::FAILURE;
     }
+    /* The GPU keeps its own moments on the device and `download` brings
+    back weights only, so a checkpoint written from a GPU run holds zeroed
+    moments -- 3.7 GB that cannot resume anything. Refuse to write one
+    rather than hand back a file that looks complete; the same reason
+    `--resume` is refused below. */
+    if checkpoint.is_some() && gpu {
+        eprintln!("--checkpoint cannot hold the GPU trainer's moments; see --out's .last.bin");
+        return ExitCode::FAILURE;
+    }
     if resume.is_some() && gpu {
         eprintln!("--resume does not cover the GPU trainer's own moments");
         return ExitCode::FAILURE;
@@ -1053,7 +1062,13 @@ fn main() -> ExitCode {
 
         let mut sq_total = 0.0f64;
         let mut seen = 0usize;
+        // `KUROOBI_TRAIN_PROF=1` splits an epoch into the parts the GPU
+        // profiler cannot see: reading a shard, shuffling it, and the
+        // held-out pass.
+        let tprof = std::env::var_os("KUROOBI_TRAIN_PROF").is_some();
+        let (mut t_load, mut t_shuf, mut t_pass) = (0.0f64, 0.0f64, 0.0f64);
         for (si, shard) in plan.iter().enumerate() {
+            let t_l = Instant::now();
             let mut examples = match load_parts(&shard.parts) {
                 Ok(v) => v,
                 Err(e) => {
@@ -1061,13 +1076,17 @@ fn main() -> ExitCode {
                     return ExitCode::FAILURE;
                 }
             };
+            t_load += t_l.elapsed().as_secs_f64();
             // Shuffle within the shard: file order alone leaves each file's
             // games adjacent, which correlates consecutive updates.
+            let t_s = Instant::now();
             for i in (1..examples.len()).rev() {
                 let j = (rand() % (i as u64 + 1)) as usize;
                 examples.swap(i, j);
             }
+            t_shuf += t_s.elapsed().as_secs_f64();
             let ts = Instant::now();
+            let t_p = Instant::now();
             let sym_seed = if sym_train { rand() | 1 } else { 0 };
             /* `--sym-all` trains every example in all eight forms. They are
             separate passes, not eight copies inside one minibatch: a batch
@@ -1089,10 +1108,12 @@ fn main() -> ExitCode {
                 if fi > 0 {
                     // A fresh order per form, or the eight passes present
                     // the same sequence of positions eight times.
+                    let t_s = Instant::now();
                     for i in (1..examples.len()).rev() {
                         let j = (rand() % (i as u64 + 1)) as usize;
                         examples.swap(i, j);
                     }
+                    t_shuf += t_s.elapsed().as_secs_f64();
                 }
                 rows += examples.len();
                 sq += if minibatch > 0 {
@@ -1174,6 +1195,7 @@ fn main() -> ExitCode {
                 ts.elapsed().as_secs_f32(),
                 rows as f32 / ts.elapsed().as_secs_f32(),
             );
+            t_pass += t_p.elapsed().as_secs_f64();
         }
         /* SWA: average points orbiting at a constant lr. Averaging a
         chain of decaying-lr points just drags toward stale weights
@@ -1198,7 +1220,14 @@ fn main() -> ExitCode {
             mb_total_steps = mb_step * epochs as u64;
         }
         let train_mse = sq_total / seen.max(1) as f64;
+        let t_v = Instant::now();
         let acc = val_by_stage(&mut nn, base.as_ref(), &val);
+        if tprof {
+            eprintln!(
+                "train prof: load {t_load:.2}s shuffle {t_shuf:.2}s pass {t_pass:.2}s val {:.2}s",
+                t_v.elapsed().as_secs_f64()
+            );
+        }
         let tot = pooled(&acc);
         let (vmse, vmae, vbias, vsd) = stats_of(&tot);
         let vgrid = tot[4] / tot[0].max(1.0);
