@@ -40,8 +40,10 @@ use super::*;
 use crate::trainer::{Example, SymPlan};
 
 /// Per-example record the forward/backward kernel writes, in f32 slots.
+/// The two accumulator gradients ride packed as a pair of halves, so the
+/// region is half the lanes wide; likewise the phase-adaptive one.
 const R_DRAW: usize = 0;
-const R_DPA: usize = R_DRAW + ACC_DIMS;
+const R_DPA: usize = R_DRAW + ACC_DIMS / 2;
 /// `xin` followed by the mobility input, so L1's 257 inputs are contiguous.
 const R_XIN: usize = R_DPA + PA_DIMS;
 const R_A1: usize = R_XIN + SO_L1_IN;
@@ -414,8 +416,12 @@ fn main(@builtin(local_invocation_id) lid: vec3<u32>,
         if (b > 0.0 && b < 1.0) {
             d1 = dacc * ca * ACT_SCALE;
         }
-        rec[rb + R_DRAW + h] = d0;
-        rec[rb + R_DRAW + HH + h] = d1;
+        /* Lane `h` and lane `h + HH` travel as a pair of halves. The row
+        kernel reads this region once per (example, feature) pair -- 2.1M
+        times a batch, 2.9 ms of it waiting on memory -- and the gradients
+        are summed back in f32, so the halved precision does not reach the
+        step. */
+        rec[rb + R_DRAW + h] = bitcast<f32>(pack2x16float(vec2<f32>(d0, d1)));
     } else if (h < HH + PAD) {
         let j = h - HH;
         let z = paz[j];
@@ -423,6 +429,9 @@ fn main(@builtin(local_invocation_id) lid: vec3<u32>,
         if (z > 0.0 && z < 1.0) {
             d = dx * 2.0 * z * ACT_SCALE;
         }
+        /* Not packed: lane `j` and its partner sit in different threads,
+        so pairing them needs a barrier, and that barrier cost `fwd_bwd`
+        2.5 ms against the 1.1 the halved reads saved. */
         rec[rb + R_DPA + j] = d;
     }
     if (h < SKIP) {
@@ -466,39 +475,64 @@ fn main(@builtin(local_invocation_id) lid: vec3<u32>,
         @builtin(subgroup_id) sg_id: u32,
         @builtin(subgroup_invocation_id) sg_inv: u32,
         @builtin(num_subgroups) n_sg: u32) {
-    let t = linear_wg(wg, nwg);
-    if (t >= P.n_items) {
-        return;
-    }
-    let h = lid.x;
-    let row = segs[4u * t];
-    let lo = segs[4u * t + 1u];
-    let hi = segs[4u * t + 2u];
-    let pi = segs[4u * t + 3u];
-    var s = 0.0;
-    if (h < P.width) {
-        for (var e = lo; e < hi; e++) {
-            s += rec[exids[e] * REC + P.rec_off + h];
+    /* `PER` and `W` come in as constants so each width compiles to its
+    own kernel: reading the width from the uniform instead left the
+    transformer's own path 0.30 ms slower for work it never does. */
+    let sub = lid.x / W;
+    let h = lid.x - sub * W;
+    let t = linear_wg(wg, nwg) * PER + sub;
+    let live = t < P.n_items;
+    var row = 0u;
+    var pi = NO_PART;
+    var g = 0.0;
+    if (live) {
+        row = segs[4u * t];
+        let lo = segs[4u * t + 1u];
+        let hi = segs[4u * t + 2u];
+        pi = segs[4u * t + 3u];
+        // The accumulator gradients ride as pairs of halves (see
+        // `K_FWD_BWD`); the phase-adaptive ones do not.
+        let half = W / 2u;
+        let slot = h % half;
+        let lo_half = h < half;
+        var s = 0.0;
+        if (W == ACC) {
+            for (var e = lo; e < hi; e++) {
+                let v = unpack2x16float(bitcast<u32>(rec[exids[e] * REC + P.rec_off + slot]));
+                s += select(v.y, v.x, lo_half);
+            }
+        } else {
+            for (var e = lo; e < hi; e++) {
+                s += rec[exids[e] * REC + P.rec_off + h];
+            }
+        }
+        if (pi != NO_PART) {
+            part[pi * W + h] = s;
+        } else {
+            g = s * P.scale;
+            grad[row * W + h] = g;
         }
     }
-    if (pi != NO_PART) {
-        if (h < P.width) {
-            part[pi * P.width + h] = s;
-        }
+    /* A full-width workgroup serves a single segment, so all of it agrees
+    here and can leave before the reduction, the way it always did. Only
+    the paired case has to stay in for a uniform barrier. */
+    if (PER == 1u && (!live || pi != NO_PART)) {
         return;
     }
-    let g = s * P.scale;
-    if (h < P.width) {
-        grad[row * P.width + h] = g;
-    }
+    /* A subgroup is narrower than a segment, so it never straddles two of
+    them and `subgroupAdd` still holds; each segment then gathers only the
+    subgroups that are its own. A plain tree over the slice instead cost
+    `row_ft` 0.57 ms against the 0.22 the pairing saved. No thread leaves
+    before the barrier -- it has to stay uniform. */
     let gs = subgroupAdd(g * g);
     if (sg_inv == 0u) {
         red[sg_id] = gs;
     }
     workgroupBarrier();
-    if (h == 0u) {
+    if (h == 0u && live && pi == NO_PART) {
+        let mine = n_sg / PER;
         var sum = 0.0;
-        for (var i = 0u; i < n_sg; i++) {
+        for (var i = sub * mine; i < (sub + 1u) * mine; i++) {
             sum += red[i];
         }
         sq[row] = sum;
@@ -575,9 +609,12 @@ fn main(@builtin(local_invocation_id) lid: vec3<u32>,
     let h = lid.x;
     let lo = c * CHUNK;
     let hi = min(lo + CHUNK, P.n_ex);
+    let slot = h % HH;
+    let lo_half = h < HH;
     var s = 0.0;
     for (var e = lo; e < hi; e++) {
-        s += rec[e * REC + R_DRAW + h];
+        let v = unpack2x16float(bitcast<u32>(rec[e * REC + R_DRAW + slot]));
+        s += select(v.y, v.x, lo_half);
     }
     part[c * PART + h] = s;
     if (h < PAD) {
@@ -1218,6 +1255,7 @@ pub struct GpuTrainer {
     queue: wgpu::Queue,
     k_fwd_bwd: Kernel,
     k_row_grad: Kernel,
+    k_row_grad_pair: Kernel,
     k_row_finish: Kernel,
     k_bias_part: Kernel,
     k_dense_grad: Kernel,
@@ -1418,7 +1456,14 @@ impl GpuTrainer {
             Kernel { pipeline, layout }
         };
         let k_fwd_bwd = make(K_FWD_BWD, "fwd_bwd");
-        let k_row_grad = make(K_ROW_GRAD, "row_grad");
+        let row_grad_src = |per: u32| {
+            format!(
+                "const PER: u32 = {per}u;\nconst W: u32 = {}u;\n{K_ROW_GRAD}",
+                256 / per
+            )
+        };
+        let k_row_grad = make(&row_grad_src(1), "row_grad");
+        let k_row_grad_pair = make(&row_grad_src(2), "row_grad_pair");
         let k_row_finish = make(K_ROW_FINISH, "row_finish");
         let k_bias_part = make(K_BIAS_PART, "bias_part");
         let k_dense_grad = make(K_DENSE_GRAD, "dense_grad");
@@ -1636,6 +1681,7 @@ impl GpuTrainer {
             queue,
             k_fwd_bwd,
             k_row_grad,
+            k_row_grad_pair,
             k_row_finish,
             k_bias_part,
             k_dense_grad,
@@ -2043,7 +2089,7 @@ impl GpuTrainer {
             ],
         );
         let bg_row_pa = self.bind(
-            &self.k_row_grad,
+            &self.k_row_grad_pair,
             &[
                 &self.b_rec,
                 &self.b_pa_segs,
@@ -2205,7 +2251,13 @@ impl GpuTrainer {
             };
             run(0, &self.k_fwd_bwd, &bg_fwd, n);
             run(1, &self.k_row_grad, &bg_row_ft, b.ft.n_segs);
-            run(2, &self.k_row_grad, &bg_row_pa, b.pa.n_segs);
+            // Two segments to a workgroup, since PA_DIMS is half the width.
+            run(
+                2,
+                &self.k_row_grad_pair,
+                &bg_row_pa,
+                b.pa.n_segs.div_ceil(WG / PA_DIMS),
+            );
             if b.ft.n_multi > 0 {
                 run(3, &self.k_row_finish, &bg_fin_ft, b.ft.n_multi);
             }
