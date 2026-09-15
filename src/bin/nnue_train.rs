@@ -804,19 +804,6 @@ fn main() -> ExitCode {
         eprintln!("--resume restores Adam moments, so it needs --adam");
         return ExitCode::FAILURE;
     }
-    /* The GPU keeps its own moments on the device and `download` brings
-    back weights only, so a checkpoint written from a GPU run holds zeroed
-    moments -- 3.7 GB that cannot resume anything. Refuse to write one
-    rather than hand back a file that looks complete; the same reason
-    `--resume` is refused below. */
-    if checkpoint.is_some() && gpu {
-        eprintln!("--checkpoint cannot hold the GPU trainer's moments; see --out's .last.bin");
-        return ExitCode::FAILURE;
-    }
-    if resume.is_some() && gpu {
-        eprintln!("--resume does not cover the GPU trainer's own moments");
-        return ExitCode::FAILURE;
-    }
     let mut nn = Nnue::new(patterns);
     match &init {
         // Warm start: keep training a model instead of starting over.
@@ -896,6 +883,9 @@ fn main() -> ExitCode {
     only on request. */
     let mut sinks: Vec<kuroobi::nnue::GradSink> = Vec::new();
     let mut mb_step: u64 = 0;
+    // Steps a resumed run inherits, so the cosine sweep spans the whole run
+    // rather than only what is left of it.
+    let mut mb_step_done: u64 = 0;
     let base_lr = lr;
     // Total optimizer steps for the cosine sweep (estimated from the first
     // epoch's example count; refined after epoch 1).
@@ -923,24 +913,6 @@ fn main() -> ExitCode {
         eprintln!("--gpu needs a build with `--features gpu`");
         return ExitCode::FAILURE;
     }
-    #[cfg(feature = "gpu")]
-    let mut gpu_trainer = gpu.then(|| {
-        if base.is_some() {
-            eprintln!("--gpu does not take --base");
-            std::process::exit(2);
-        }
-        let ad = adam_state
-            .as_ref()
-            .expect("--gpu requires --adam --minibatch N");
-        assert!(minibatch > 0, "--gpu requires --minibatch N");
-        let la = if lookahead > 0 {
-            (lookahead, 0.5)
-        } else {
-            (0, 0.0)
-        };
-        kuroobi::nnue::gpu::GpuTrainer::new(&nn, minibatch, ad, la)
-    });
-
     let mut swa_sum: Option<(Vec<f32>, usize)> = None;
 
     /* The shuffle's generator, in a cell rather than captured by value, so
@@ -1000,6 +972,7 @@ fn main() -> ExitCode {
             Ok((h, swa)) => {
                 first_epoch = h.epoch + 1;
                 mb_step = h.mb_step;
+                mb_step_done = h.mb_step;
                 mb_total_steps = h.mb_total_steps;
                 plateau_lr = h.plateau_lr;
                 stale = h.stale;
@@ -1025,11 +998,34 @@ fn main() -> ExitCode {
             }
         }
     }
+
+    /* Built after the checkpoint is read, not before: the device gets the
+    moments, the per-row stamps and the lookahead copy at construction, and
+    reading them from an `AdamState` that `--resume` had not filled yet
+    uploaded zeros over a restored run. */
+    #[cfg(feature = "gpu")]
+    let mut gpu_trainer = gpu.then(|| {
+        if base.is_some() {
+            eprintln!("--gpu does not take --base");
+            std::process::exit(2);
+        }
+        let ad = adam_state
+            .as_ref()
+            .expect("--gpu requires --adam --minibatch N");
+        assert!(minibatch > 0, "--gpu requires --minibatch N");
+        let la = if lookahead > 0 {
+            (lookahead, 0.5)
+        } else {
+            (0, 0.0)
+        };
+        kuroobi::nnue::gpu::GpuTrainer::new(&nn, minibatch, ad, la)
+    });
+
     for epoch in first_epoch..=epochs {
         let t = Instant::now();
         // Cosine annealing over the run (`--cosine`): lr0 -> ~0 in one sweep,
         // replacing hand-tuned lr ladders. Otherwise geometric `--decay`.
-        if minibatch > 0 && epoch == 1 && mb_total_steps == 0 {
+        if minibatch > 0 && epoch == first_epoch && mb_total_steps <= mb_step_done {
             // Not yet known; provisional value so the first epoch's lr stays
             // near base_lr (cos(0)=1) until seen==total is measured.
             mb_total_steps = u64::MAX;
@@ -1066,6 +1062,10 @@ fn main() -> ExitCode {
         // profiler cannot see: reading a shard, shuffling it, and the
         // held-out pass.
         let tprof = std::env::var_os("KUROOBI_TRAIN_PROF").is_some();
+        // Bringing the optimizer state back costs ~3.4 GB of transfer, so
+        // only do it when something will write it out.
+        #[cfg(feature = "gpu")]
+        let want_ckpt = checkpoint.is_some();
         let (mut t_load, mut t_shuf, mut t_pass) = (0.0f64, 0.0f64, 0.0f64);
         for (si, shard) in plan.iter().enumerate() {
             let t_l = Instant::now();
@@ -1140,10 +1140,15 @@ fn main() -> ExitCode {
                     #[cfg(feature = "gpu")]
                     if let Some(g) = gpu_trainer.as_mut() {
                         let sq = g.train_shard(&nn, &examples, threads, &mut lr_fn, wd, sym);
-                        // The next shard only needs the indexer, but val and the
-                        // save need the tables.
+                        /* The next shard only needs the indexer, but val and
+                        the save need the tables -- and a checkpoint needs
+                        the optimizer's own state, which lives on the
+                        device until asked for. */
                         if si + 1 == plan.len() {
-                            g.download(&mut nn);
+                            match adam_state.as_mut().filter(|_| want_ckpt) {
+                                Some(ad) => g.download_state(&mut nn, ad),
+                                None => g.download(&mut nn),
+                            }
                         }
                         sq
                     } else {
@@ -1214,10 +1219,19 @@ fn main() -> ExitCode {
             }
         }
 
-        if minibatch > 0 && epoch == 1 {
-            // First epoch measured the real step count; pin the cosine sweep
-            // to the remaining schedule.
-            mb_total_steps = mb_step * epochs as u64;
+        if minibatch > 0 && epoch == first_epoch {
+            /* The first epoch measured the real step count; pin the cosine
+            sweep to the whole schedule.
+
+            `epoch == first_epoch`, not `epoch == 1`: a run stopped after
+            one epoch of an intended ten pinned the sweep to one epoch's
+            worth of steps, wrote that into its checkpoint, and the resumed
+            run -- never seeing epoch 1 again -- kept it. The rate then sat
+            at the floor for every epoch that followed. Re-pinning on the
+            first epoch actually run scales it by the epochs this run will
+            do, which is what `--epochs` means to a resumed run. */
+            let per_epoch = mb_step - mb_step_done;
+            mb_total_steps = mb_step_done + per_epoch * (epochs - first_epoch + 1) as u64;
         }
         let train_mse = sq_total / seen.max(1) as f64;
         let t_v = Instant::now();
