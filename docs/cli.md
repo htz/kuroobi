@@ -55,42 +55,73 @@ linear_train --epochs 20 --lr 0.008 --weights weights/linear.bin \
 
 ### nnue_train
 
-NNUE (one hidden layer) training. Reads the same record files as
-`linear_train`. **Every epoch it freezes the weights, measures the validation
-MSE and prints it** — that number, not the training MSE, is the one to
-compare against the linear evaluator.
+NNUE training. Reads the same record files as `linear_train`. **Every epoch it
+freezes the weights, measures the validation MSE and prints it** — that number,
+not the training MSE, is the one to compare against the linear evaluator.
 
 ```sh
-nnue_linear_train [OPTIONS] <data-file>...
+nnue_train [OPTIONS] <data-file>...
 ```
+
+**Data and filters**
 
 | Option | Meaning |
 |---|---|
-| `--epochs <n>` | Number of passes |
-| `--lr <f>` | SGD learning rate |
-| `--decay <f>` | Learning-rate decay |
-| `--threads <n>` | Training parallelism |
-| `--limit <n>` | Cap on the examples used |
-| `--val <file>` | Validation set (may be passed more than once) |
-| `--val-cap <n>` | Cap on the examples used for validation |
-| `--out <path>` | Where to save. **The best-val weights are kept separately in `<out>.best`** |
-| `--init <path>` | Initial weights (continue training from them) |
+| `--limit <n>` | Cap on the examples used per file |
 | `--max-examples <n>` | Examples held in RAM at once |
+| `--interleave` | Draw each shard from every file rather than file by file |
 | `--min-ply <n>` | Drop positions before ply n |
 | `--max-score-diff <d>` | Drop positions whose search value and final result differ by more than d |
 | `--drop-random` | Drop positions reached by random opening moves |
 | `--keep-above-ply <n>` | Exempt positions at ply n and later from the two drops above |
+| `--search-value-to-ply <n>` | Use the search value rather than the final disc difference up to ply n |
+| `--sym-train` | Draw one of the eight symmetric forms per example per epoch |
+| `--sym-all` | Train every example in all eight forms, as eight separate passes |
 
-The last four are `kuroobi::record::Filter`; none is on by default,
-and the filter in force is printed at startup. `Filter::TRAINING` is
-`--min-ply 8 --max-score-diff 12 --drop-random --keep-above-ply 50`.
+**Model**
 
-```sh
-nnue_train --epochs 30 --lr 0.002 --val data/val/val_v0002.data \
-           --out weights/nnue.bin data/records/egaroucid_v0002/train/*.data
-```
+| Option | Meaning |
+|---|---|
+| `--patterns <name>` | `nnue` or `linear` |
+| `--patterns-file <path>` | Pattern set from a spec file |
+| `--patterns-share` | Share one weight block across a shape's symmetric forms |
 
-## Assembling a model
+**Optimizer**
+
+| Option | Meaning |
+|---|---|
+| `--lr <f>` | Learning rate |
+| `--wd <f>` | Weight decay (AdamW) |
+| `--adam` | Adam rather than SGD |
+| `--minibatch <n>` | Minibatch size (required by `--gpu`) |
+| `--lookahead` | Lookahead on top of Adam (k=6, alpha=0.5) |
+| `--cosine` | Anneal the rate over the run in one cosine sweep |
+| `--decay <f>` | Geometric per-epoch decay, when `--cosine` is off (1.0 = fixed rate) |
+| `--plateau <n>` | Halve the rate after n epochs without improvement |
+| `--plateau-factor <f>` | What to multiply by on a plateau (default 0.5) |
+| `--plateau-min <f>` | Floor for the plateau ladder |
+| `--gpu` | Run the step on the GPU (`gpu` feature) |
+| `--threads <n>` | Training parallelism |
+
+**Schedule and saving**
+
+| Option | Meaning |
+|---|---|
+| `--epochs <n>` | Number of passes |
+| `--start-epoch <n>` | Enter the cosine schedule at epoch n, for continuing trained weights |
+| `--out <path>` | Where the best-val weights go. `<out>.last.bin` holds the latest epoch regardless |
+| `--init <path>` | Initial weights. Restores weights only — Adam starts cold |
+| `--checkpoint <path>` | Write weights, moments and loop state every epoch. The best epoch is parked alongside as `<path>.best.ckpt` |
+| `--resume <path>` | Pick a checkpoint up. Indistinguishable from an uninterrupted run |
+
+**Reporting**
+
+| Option | Meaning |
+|---|---|
+| `--val <file>` | Validation set (may be passed more than once) |
+| `--val-cap <n>` | Cap on the examples used for validation |
+| `--val-by-stage` | Print the per-stage breakdown behind the val numbers |
+| `--select-by <k>` | Which held-out number keeps a snapshot in `--out`: `mse` / `mae` / `spread` |
 
 ### linear_stage_merge
 

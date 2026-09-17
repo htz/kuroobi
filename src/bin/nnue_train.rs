@@ -8,10 +8,10 @@
 //!
 //! Usage:
 //!   nnue_train [--epochs n] [--lr f] [--limit n] [--val f]... [--out path]
-//!              [--select-by mse|mae|spread] [--val-by-stage] [--grid]
+//!              [--select-by mse|mae|spread] [--val-by-stage]
 //!              [--min-ply n] [--max-score-diff d] [--drop-random]
 //!              [--keep-above-ply n] [--search-value-to-ply n]
-//!              [--checkpoint path] [--resume path] [--keep-every n]
+//!              [--checkpoint path] [--resume path] [--start-epoch n]
 //!              <data-file>...
 //!
 //! The four filter flags are `kuroobi::record::Filter` and apply to
@@ -33,9 +33,13 @@
 //! indistinguishable from an uninterrupted one -- 1+1 epochs against 2
 //! straight through landed at val 173645.7401 and 173645.7407, inside the
 //! 0.0047 two uninterrupted runs differ by. `--resume` keeps writing to
-//! the file it came from unless `--checkpoint` says otherwise, and
-//! `--keep-every n` also parks a copy every n epochs. One checkpoint of
-//! the deployed shape is about 3.4 GB.
+//! the file it came from unless `--checkpoint` says otherwise. The epoch
+//! `--out` keeps is parked alongside as `<checkpoint>.best.ckpt`, so the
+//! model a run is there to produce can be continued without restarting
+//! Adam cold. One checkpoint of the deployed shape is about 4.9 GB.
+//!
+//! `--start-epoch n` enters the cosine schedule partway, for continuing
+//! trained weights without a checkpoint to resume from.
 //!
 //! `--select-by` chooses which held-out number keeps a snapshot in `--out`;
 //! `<out>.last.bin` holds the weights after every epoch regardless. The default
@@ -43,8 +47,7 @@
 //! removed, which is what move ordering sees. `--val-by-stage` prints the
 //! breakdown behind those numbers, one row per stage. The `grid` column is
 //! how far the engine's integer evaluation sits from the f32 model on the
-//! same positions; `--grid` trains with the rounding the engine will apply
-//! in the forward pass (see `Nnue::set_so_grid`).
+//! same positions.
 
 use std::path::PathBuf;
 use std::process::ExitCode;
@@ -562,14 +565,10 @@ fn main() -> ExitCode {
     // rounding error the grid adds to a layer that sits inside its clamps
     // is already small; the disc-sized disagreements came from stages whose
     // hidden layers had collapsed, and those were an initialisation fault.
-    let mut so_grid = false;
     let mut lookahead = 0u32;
-    let mut legacy_optimizer = false;
     // Run the optimizer step on the GPU (`gpu` feature); see `nnue::gpu`.
     let mut gpu = false;
-    let mut fit_num = false;
-    let mut fit_lambda = 1000.0f64;
-    let mut swa_from = 0usize;
+    let swa_from = 0usize;
     let mut threads = 1usize;
     let mut limit: Option<usize> = None;
     let mut filter = Filter::NONE;
@@ -592,7 +591,6 @@ fn main() -> ExitCode {
     /* Keep every Nth epoch's checkpoint under its own name. Off by
     default: one of these is the weights plus two moments plus a slow copy,
     which for the deployed shape is about 5 GB. */
-    let mut keep_every = 0usize;
     let mut start_epoch = 1usize;
     let mut which_patterns = String::from("nnue");
     let mut patterns_file: Option<PathBuf> = None;
@@ -614,7 +612,6 @@ fn main() -> ExitCode {
     trained on what is left over. It also floors the result -- a stage the
     net cannot learn (stage 4 has 282 training positions) still gets the
     linear linear's answer rather than noise. */
-    let mut base_path: Option<PathBuf> = None;
 
     let mut it = std::env::args().skip(1);
     while let Some(a) = it.next() {
@@ -656,18 +653,13 @@ fn main() -> ExitCode {
             drawn at random. Eight times the work per epoch, so the epoch
             count has to come down to match. */
             "--sym-all" => sym_all = true,
-            "--grid" => so_grid = true,
             // Wrap AdamW in Lookahead(k=6, alpha=0.5). It rewrites every
             // weight every k steps, which on a CPU is not free -- hence a
             // flag rather than always on.
             "--lookahead" => lookahead = 6,
             // Reproduce the optimizer as it was before this recipe; see
             // `AdamState::legacy_optimizer`.
-            "--legacy-optimizer" => legacy_optimizer = true,
             "--gpu" => gpu = true,
-            "--fit-num" => fit_num = true,
-            "--fit-num-lambda" => fit_lambda = it.next().unwrap().parse().unwrap(),
-            "--swa" => swa_from = it.next().unwrap().parse().unwrap(),
             "--threads" => threads = it.next().unwrap().parse().unwrap(),
             "--limit" => limit = Some(it.next().unwrap().parse().unwrap()),
             "--out" => out = PathBuf::from(it.next().unwrap()),
@@ -678,9 +670,7 @@ fn main() -> ExitCode {
             "--init" => init = Some(PathBuf::from(it.next().unwrap())),
             "--checkpoint" => checkpoint = Some(PathBuf::from(it.next().unwrap())),
             "--resume" => resume = Some(PathBuf::from(it.next().unwrap())),
-            "--keep-every" => keep_every = it.next().unwrap().parse().unwrap(),
             "--start-epoch" => start_epoch = it.next().unwrap().parse().unwrap(),
-            "--base" => base_path = Some(PathBuf::from(it.next().unwrap())),
             other if other.starts_with('-') => {
                 eprintln!("unknown option {other}");
                 return ExitCode::FAILURE;
@@ -779,18 +769,6 @@ fn main() -> ExitCode {
             }
         },
     };
-    let base = match &base_path {
-        Some(p) => {
-            let mut e = Linear::new(patterns);
-            if let Err(err) = e.load_weights(p) {
-                eprintln!("base {}: {err}", p.display());
-                return ExitCode::FAILURE;
-            }
-            println!("base: frozen linear linear from {}", p.display());
-            Some(e)
-        }
-        None => None,
-    };
 
     /* A run resumed without `--checkpoint` would stop being resumable at
     the moment it was resumed, which is the opposite of what was asked
@@ -824,7 +802,6 @@ fn main() -> ExitCode {
     them would leave a file that claims to be calibrated and is not.
     `nnue_mpccalib` is the only writer. */
     nn.set_mpc_sigma(None);
-    nn.set_so_grid(so_grid);
     println!(
         "nnue: patterns={which_patterns} masks={} H={} features={}",
         patterns.iter().map(|p| p.masks.len()).sum::<usize>(),
@@ -835,51 +812,6 @@ fn main() -> ExitCode {
     /* Fit the disc-count table in closed form: with the network frozen
     the optimum per bucket is its mean residual — exact, fast, and it
     bounds the achievable gain. Joint training barely moved (-0.007). */
-    if fit_num {
-        let n_buckets = nn.num_w_len();
-        let mut sum = vec![0.0f64; n_buckets];
-        let mut cnt = vec![0u64; n_buckets];
-        // Zero the table before counting residuals (no double-adding).
-        nn.set_num_w(&vec![0.0f32; n_buckets]);
-        for (fi, f) in data_files.iter().enumerate() {
-            let mut ex = Vec::new();
-            if let Err(e) = load_examples_filtered_into(f, &mut ex, limit, &filter, &policy) {
-                eprintln!("load failed: {e}");
-                return ExitCode::FAILURE;
-            }
-            for e in &ex {
-                let board = e.board();
-                let stage = Linear::stage(&board);
-                let discs = e.black.count_ones() as usize;
-                let ix = nn.indices(e.black, e.white);
-                let r = e.score as f64 - nn.eval_indices(&board, &ix) as f64;
-                let b = stage * 65 + discs;
-                sum[b] += r;
-                cnt[b] += 1;
-            }
-            eprintln!("  fit-num: {}/{} files", fi + 1, data_files.len());
-        }
-        /* Shrink sparse buckets toward zero (`--fit-num-lambda`): a raw
-        mean lets a 1-example bucket adopt its full residual (110 discs!)
-        and worsen val. `sum / (cnt + LAMBDA)` is ridge shrinkage. */
-        let table: Vec<f32> = sum
-            .iter()
-            .zip(&cnt)
-            .map(|(s, c)| (*s / (*c as f64 + fit_lambda)) as f32)
-            .collect();
-        let filled = cnt.iter().filter(|&&c| c > 0).count();
-        let mx = table.iter().fold(0.0f32, |m, &v| m.max(v.abs()));
-        println!("fit-num: {filled}/{n_buckets} buckets, max |correction| {mx:.3} discs");
-        nn.set_num_w(&table);
-        let vm = val_mse(&mut nn, base.as_ref(), &val);
-        println!("fit-num: val {vm:.4}");
-        if let Err(e) = nn.save(&out) {
-            eprintln!("save failed: {e}");
-            return ExitCode::FAILURE;
-        }
-        println!("  saved {}", out.display());
-        return ExitCode::SUCCESS;
-    }
 
     /* Adam moments cost two weight copies (78 MB at H=16); allocate
     only on request. */
@@ -899,10 +831,6 @@ fn main() -> ExitCode {
         );
         let mut st = AdamState::new(&nn);
         st.wd = wd;
-        st.legacy_optimizer = legacy_optimizer;
-        if legacy_optimizer {
-            println!("adam: legacy (no bias correction, zero-gradient cells skipped)");
-        }
         if lookahead > 0 {
             st.set_lookahead(lookahead, 0.5);
             println!("adam: lookahead k={lookahead} alpha=0.5");
@@ -933,13 +861,10 @@ fn main() -> ExitCode {
     let mut best = if val.is_empty() {
         f64::INFINITY
     } else {
-        select_score(
-            &select_by,
-            &pooled(&val_by_stage(&mut nn, base.as_ref(), &val)),
-        )
+        select_score(&select_by, &pooled(&val_by_stage(&mut nn, None, &val)))
     };
     if best.is_finite() {
-        let acc = val_by_stage(&mut nn, base.as_ref(), &val);
+        let acc = val_by_stage(&mut nn, None, &val);
         let (m, a, b, sd) = stats_of(&pooled(&acc));
         println!(
             "starting val mse {m:.4} mae {a:.4} bias {b:+.4} spread {sd:.4}  \
@@ -1007,7 +932,6 @@ fn main() -> ExitCode {
                 if h.swa_n > 0 && !swa.is_empty() {
                     swa_sum = Some((swa, h.swa_n));
                 }
-                nn.set_so_grid(so_grid);
                 println!(
                     "resumed {} at epoch {} (next {first_epoch}), best {best:.4}, lr {plateau_lr:.8}",
                     path.display(),
@@ -1031,10 +955,6 @@ fn main() -> ExitCode {
     uploaded zeros over a restored run. */
     #[cfg(feature = "gpu")]
     let mut gpu_trainer = gpu.then(|| {
-        if base.is_some() {
-            eprintln!("--gpu does not take --base");
-            std::process::exit(2);
-        }
         let ad = adam_state
             .as_ref()
             .expect("--gpu requires --adam --minibatch N");
@@ -1186,30 +1106,14 @@ fn main() -> ExitCode {
                         sq
                     } else {
                         train_pass_minibatch(
-                            &mut nn,
-                            base.as_ref(),
-                            ad,
-                            &mut sinks,
-                            &examples,
-                            threads,
-                            minibatch,
-                            &mut lr_fn,
-                            wd,
-                            sym,
+                            &mut nn, None, ad, &mut sinks, &examples, threads, minibatch,
+                            &mut lr_fn, wd, sym,
                         )
                     }
                     #[cfg(not(feature = "gpu"))]
                     train_pass_minibatch(
-                        &mut nn,
-                        base.as_ref(),
-                        ad,
-                        &mut sinks,
-                        &examples,
-                        threads,
-                        minibatch,
-                        &mut lr_fn,
-                        wd,
-                        sym,
+                        &mut nn, None, ad, &mut sinks, &examples, threads, minibatch, &mut lr_fn,
+                        wd, sym,
                     )
                 } else {
                     train_pass(
@@ -1273,7 +1177,7 @@ fn main() -> ExitCode {
         }
         let train_mse = sq_total / seen.max(1) as f64;
         let t_v = Instant::now();
-        let acc = val_by_stage(&mut nn, base.as_ref(), &val);
+        let acc = val_by_stage(&mut nn, None, &val);
         if tprof {
             eprintln!(
                 "train prof: load {t_load:.2}s shuffle {t_shuf:.2}s pass {t_pass:.2}s val {:.2}s",
@@ -1339,10 +1243,17 @@ fn main() -> ExitCode {
                 eprintln!("checkpoint failed: {e}");
                 return ExitCode::FAILURE;
             }
-            if keep_every > 0 && epoch.is_multiple_of(keep_every) {
-                let kept = path.with_extension(format!("e{epoch}.ckpt"));
-                if let Err(e) = std::fs::copy(path, &kept) {
-                    eprintln!("keeping {}: {e}", kept.display());
+            /* The epoch `--out` keeps gets its optimizer state kept too.
+            Without this the two never line up: `--out` holds the best
+            epoch and no moments, the rolling checkpoint holds the latest
+            epoch's moments and weights the run already discarded. So the
+            one model a run is there to produce was the one model it could
+            not resume from -- continuing it meant restarting Adam cold,
+            which cost this very run 1.62 val MSE in its first epoch. */
+            if is_best {
+                let b = path.with_extension("best.ckpt");
+                if let Err(e) = std::fs::copy(path, &b) {
+                    eprintln!("keeping {}: {e}", b.display());
                 }
             }
         }
@@ -1376,7 +1287,7 @@ fn main() -> ExitCode {
         let mean: Vec<f32> = acc.iter().map(|x| x / n as f32).collect();
         let mut avg = Nnue::new(patterns);
         avg.set_weights_flat(&mean);
-        let vm = val_mse(&mut avg, base.as_ref(), &val);
+        let vm = val_mse(&mut avg, None, &val);
         println!("swa over {n} epochs: val {vm:.4}");
         /* Always save the average: against a symmetrized baseline the
         raw SWA average looks worse by its asymmetry (0.006-0.008), and
