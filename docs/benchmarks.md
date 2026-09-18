@@ -1350,7 +1350,8 @@ time back, so the trade is priced where it sits.
   number of positions.
 
 **Where the ordering's cost actually goes** (`microbench run`, 20-empty
-corpus, per call):
+corpus, per call; that tool was moved out of `src/bin` on 2026-09-14 and
+is not in the build, so these are a record, not something to re-run):
 
 | | ns |
 |---|---|

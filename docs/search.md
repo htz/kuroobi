@@ -117,8 +117,10 @@ Calibration is measurement-based. 3000 positions were extracted from
 validation games and searched at depths 0/2/4/6/8/10 as **independent
 searches with the transposition table cleared for every position** to
 collect the error distribution, and a quadratic model
-`σ(empties, depth, reduced depth)` was fitted to it (calibration tool
-`mpccalib` plus a fitting script).
+`σ(empties, depth, reduced depth)` was fitted to it. The calibration tool
+is `nnue_mpccalib`, which measures and writes the six coefficients back
+into the weights file it was given (`--write`); an older `mpccalib` fitted
+the linear evaluator and is no longer in the build.
 
 - The reduced depth is `2*(d/4) + (d&1)` — roughly a quarter, but
   **parity-preserving** (tempo parity has a strong effect on the
