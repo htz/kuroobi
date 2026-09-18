@@ -203,7 +203,7 @@ the production path, alternating with the linear baseline 3 times each:
 
 **4x the width is about 2x slower.** Widening does improve the
 evaluation (MSE −3.4), but that edge is washed out by depth. Results of
-head-to-head play (`gtp` + `roundrobin`):
+head-to-head play:
 
 | Condition | Games | H=64 win rate |
 |---|---:|---|

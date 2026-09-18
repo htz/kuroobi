@@ -4,6 +4,12 @@ Game results, the FFO benchmark, and parallelism measurements. Measures
 that were not adopted are kept here too, each with the reason it was
 rejected.
 
+> **The drivers named below are no longer in `src/bin`.** `solve_obf`,
+> `roundrobin`, `arena`, `lab` and `microbench` were moved out on
+> 2026-09-14. Everything here is a record of what they measured, with the
+> flags and conditions they were given; none of it can be re-run as
+> written without restoring them from `c89d9ba^` first.
+
 ## Level reached
 
 ![FFO40-59 by thread count](img/bench-threads.svg)
@@ -83,8 +89,6 @@ On building the opponents:
 * **Egaroucid** officially has ARM options and builds unmodified with
   `-DHAS_ARM_PROCESSOR=ON -DHAS_NO_AVX2=ON`. It speaks GTP as standard, so
   it connects as is.
-
-The match driver is `src/bin/roundrobin.rs`.
 
 ### NNUE fine-tuning — part of the MSE drop turns into strength and part does not
 
@@ -1131,7 +1135,7 @@ not pay for itself in strength, and it does not cost anything either.
 It stays because the values it removes are wrong, not because it is
 faster.
 
-**`--depth` defaults to 8 in `roundrobin`, and a fixed depth makes
+**A fixed depth makes
 `--time-ms` inert.** The first attempt at this measurement ran 400 games
 in two minutes (2 ms per move) and compared two engines at depth 8,
 where the defect barely occurs. Pass a game-like depth so that time is
@@ -1350,8 +1354,7 @@ time back, so the trade is priced where it sits.
   number of positions.
 
 **Where the ordering's cost actually goes** (`microbench run`, 20-empty
-corpus, per call; that tool was moved out of `src/bin` on 2026-09-14 and
-is not in the build, so these are a record, not something to re-run):
+corpus, per call):
 
 | | ns |
 |---|---|
