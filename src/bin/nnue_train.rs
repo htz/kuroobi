@@ -178,13 +178,6 @@ fn select_score(which: &str, a: &[f64; 5]) -> f64 {
     }
 }
 
-fn val_mse(nn: &mut Nnue, base: Option<&Linear>, val: &[Example]) -> f64 {
-    if val.is_empty() {
-        return f64::NAN;
-    }
-    stats_of(&pooled(&val_by_stage(nn, base, val))).0
-}
-
 /// How many examples may be resident at once. The full corpus is far larger
 /// than RAM, so an epoch is run as a sequence of shards: whole files grouped
 /// up to this budget, loaded, trained on, and dropped. Reading is a rounding
@@ -421,7 +414,6 @@ struct CkptHeader {
     stale: usize,
     best: f64,
     rng: u64,
-    swa_n: usize,
 }
 
 /// Magic and version. Bumped only when the *layout* changes; a new header
@@ -443,7 +435,6 @@ fn write_checkpoint(
     nn: &Nnue,
     adam: &AdamState,
     h: &CkptHeader,
-    swa: Option<&(Vec<f32>, usize)>,
 ) -> std::io::Result<()> {
     use std::io::Write;
     let tmp = path.with_extension("part");
@@ -452,8 +443,8 @@ fn write_checkpoint(
         let mut w = std::io::BufWriter::with_capacity(1 << 20, f);
         let text = format!(
             "epoch {}\nmb_step {}\nmb_total_steps {}\nplateau_lr {}\nstale {}\nbest {}\n\
-             rng {}\nswa_n {}\n",
-            h.epoch, h.mb_step, h.mb_total_steps, h.plateau_lr, h.stale, h.best, h.rng, h.swa_n
+             rng {}\n",
+            h.epoch, h.mb_step, h.mb_total_steps, h.plateau_lr, h.stale, h.best, h.rng
         );
         let mut head = [b' '; CKPT_HEADER_LEN];
         let bytes = text.as_bytes();
@@ -473,14 +464,6 @@ fn write_checkpoint(
         w.write_all(&(bin.len() as u64).to_le_bytes())?;
         w.write_all(&bin)?;
         adam.write_state(&mut w)?;
-        let (acc, _) = match swa {
-            Some((a, n)) => (a.as_slice(), *n),
-            None => (&[][..], 0),
-        };
-        w.write_all(&(acc.len() as u64).to_le_bytes())?;
-        for x in acc {
-            w.write_all(&x.to_le_bytes())?;
-        }
         w.flush()?;
     }
     std::fs::rename(&tmp, path)
@@ -491,7 +474,7 @@ fn read_checkpoint(
     path: &std::path::Path,
     nn: &mut Nnue,
     adam: &mut AdamState,
-) -> std::io::Result<(CkptHeader, Vec<f32>)> {
+) -> std::io::Result<CkptHeader> {
     use std::io::Read;
     let f = std::fs::File::open(path)?;
     let mut r = std::io::BufReader::with_capacity(1 << 20, f);
@@ -519,7 +502,6 @@ fn read_checkpoint(
             "stale" => h.stale = v.parse().unwrap_or(0),
             "best" => h.best = v.parse().unwrap_or(f64::INFINITY),
             "rng" => h.rng = v.parse().unwrap_or(0),
-            "swa_n" => h.swa_n = v.parse().unwrap_or(0),
             _ => {}
         }
     }
@@ -530,15 +512,7 @@ fn read_checkpoint(
     r.read_exact(&mut bin)?;
     nn.read_from(&mut &bin[..])?;
     adam.read_state(&mut r)?;
-    r.read_exact(&mut u8b)?;
-    let n = u64::from_le_bytes(u8b) as usize;
-    let mut swa = vec![0.0f32; n];
-    let mut b4 = [0u8; 4];
-    for x in swa.iter_mut() {
-        r.read_exact(&mut b4)?;
-        *x = f32::from_le_bytes(b4);
-    }
-    Ok((h, swa))
+    Ok(h)
 }
 
 fn main() -> ExitCode {
@@ -568,7 +542,6 @@ fn main() -> ExitCode {
     let mut lookahead = 0u32;
     // Run the optimizer step on the GPU (`gpu` feature); see `nnue::gpu`.
     let mut gpu = false;
-    let swa_from = 0usize;
     let mut threads = 1usize;
     let mut limit: Option<usize> = None;
     let mut filter = Filter::NONE;
@@ -843,7 +816,6 @@ fn main() -> ExitCode {
         eprintln!("--gpu needs a build with `--features gpu`");
         return ExitCode::FAILURE;
     }
-    let mut swa_sum: Option<(Vec<f32>, usize)> = None;
 
     /* The shuffle's generator, in a cell rather than captured by value, so
     a checkpoint can record where it had got to. Resuming with a fresh
@@ -920,7 +892,7 @@ fn main() -> ExitCode {
             return ExitCode::FAILURE;
         };
         match read_checkpoint(path, &mut nn, ad) {
-            Ok((h, swa)) => {
+            Ok(h) => {
                 first_epoch = h.epoch + 1;
                 mb_step = h.mb_step;
                 mb_step_done = h.mb_step;
@@ -929,9 +901,6 @@ fn main() -> ExitCode {
                 stale = h.stale;
                 best = h.best;
                 rng_state.set(h.rng);
-                if h.swa_n > 0 && !swa.is_empty() {
-                    swa_sum = Some((swa, h.swa_n));
-                }
                 println!(
                     "resumed {} at epoch {} (next {first_epoch}), best {best:.4}, lr {plateau_lr:.8}",
                     path.display(),
@@ -1139,23 +1108,6 @@ fn main() -> ExitCode {
             );
             t_pass += t_p.elapsed().as_secs_f64();
         }
-        /* SWA: average points orbiting at a constant lr. Averaging a
-        chain of decaying-lr points just drags toward stale weights
-        (31.0437 worsened to 31.0505); only same-lr epoch weights
-        average toward the center. `--swa N` includes epochs from N. */
-        if swa_from > 0 && epoch >= swa_from {
-            let w = nn.weights_flat();
-            match &mut swa_sum {
-                None => swa_sum = Some((w, 1usize)),
-                Some((acc, n)) => {
-                    for (a, x) in acc.iter_mut().zip(&w) {
-                        *a += x;
-                    }
-                    *n += 1;
-                }
-            }
-        }
-
         if minibatch > 0 && epoch == first_epoch {
             /* The first epoch measured the real step count; pin the cosine
             sweep to the whole schedule.
@@ -1237,9 +1189,8 @@ fn main() -> ExitCode {
                 stale,
                 best: if is_best { vm } else { best },
                 rng: rng_state.get(),
-                swa_n: swa_sum.as_ref().map_or(0, |(_, n)| *n),
             };
-            if let Err(e) = write_checkpoint(path, &nn, ad, &h, swa_sum.as_ref()) {
+            if let Err(e) = write_checkpoint(path, &nn, ad, &h) {
                 eprintln!("checkpoint failed: {e}");
                 return ExitCode::FAILURE;
             }
@@ -1280,27 +1231,6 @@ fn main() -> ExitCode {
                     }
                 }
             }
-        }
-    }
-    // Evaluate the average itself; if it beats the points, it wins.
-    if let Some((acc, n)) = swa_sum {
-        let mean: Vec<f32> = acc.iter().map(|x| x / n as f32).collect();
-        let mut avg = Nnue::new(patterns);
-        avg.set_weights_flat(&mean);
-        let vm = val_mse(&mut avg, None, &val);
-        println!("swa over {n} epochs: val {vm:.4}");
-        /* Always save the average: against a symmetrized baseline the
-        raw SWA average looks worse by its asymmetry (0.006-0.008), and
-        save-on-improve would silently discard averages that win after
-        `nnue_symmetrize`. Decide after symmetrizing. */
-        let p = out.with_extension("swa.bin");
-        if let Err(e) = avg.save(&p) {
-            eprintln!("save failed: {e}");
-            return ExitCode::FAILURE;
-        }
-        println!("  saved {} (symmetrize before judging)", p.display());
-        if vm < best {
-            best = vm;
         }
     }
     if best.is_finite() && !val.is_empty() {
