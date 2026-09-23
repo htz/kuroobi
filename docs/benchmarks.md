@@ -1145,6 +1145,33 @@ Not covered here: pondering. `gtp` does not ponder, so the path where a
 ponder result leaks into the root is only closed by construction, not
 measured. That needs rated play to confirm.
 
+### Opening book — a partial entry is not a best move
+
+**Adopted.** `bookgen --deepen` scores the moves the game records played
+plus the engine's own pick; scoring every legal move is three times
+slower. The top of that partial list was being returned as the book's
+answer and played without searching, which makes it **the best of a
+sample rather than of the position**.
+
+Sampling 30 midgame entries: the scored candidates ran **1-4 against
+4-13 legal moves**, and a deep search beat the book's move in **5 of the
+30, by 1.17 discs on average**.
+
+`Entry.complete` records whether every legal move was scored. A complete
+entry is played as-is; a partial one is withheld from `probe` and only
+seeds the move ordering. Learned entries are complete by construction,
+`--all-moves` makes generated ones so, and `--min-empties` keeps that
+cost where it pays: **entries below ~48 empties are four fifths of the
+file and 4% of the recorded visits**.
+
+After completing the 742 entries at 54+ empties (5 h 16 min), the book's
+move **matches a 30-second depth-32 search in 24 of 25 positions**, and
+the one disagreement is 0.06 discs.
+
+The file format moved to `KUROOBI_BOOK_3` and older files are rejected:
+without the flag, every entry would have to be assumed complete (the bug)
+or partial (the book silently disabled).
+
 ### GGS rated games
 
 We take part in the 8x8 rated games on GGS (skatgame.net:5000) as

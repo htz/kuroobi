@@ -128,7 +128,11 @@ are in [Where it stands](docs/benchmarks.md).
 ![What each search covers](docs/img/search-flow.svg)
 
 Responsibility changes with the number of empties. **While the position
-is in the book, nothing is searched.** Once out of book, the midgame
+is in the book and every legal move there was scored, nothing is
+searched.** An entry that only scored the moves the records played names
+the best of a sample rather than of the position, so it is treated as a
+hint: the search runs, with the book's move first in the ordering. Once
+out of book, the midgame
 search runs to a depth limit; as the end comes into view it switches to a
 selective search that prunes probabilistically; finally it solves without
 pruning and returns the exact disc difference.

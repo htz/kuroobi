@@ -114,6 +114,10 @@ nnue_train [OPTIONS] <data-file>...
 | `--checkpoint <path>` | Write weights, moments and loop state every epoch. The best epoch is parked alongside as `<path>.best.ckpt` |
 | `--resume <path>` | Pick a checkpoint up. Indistinguishable from an uninterrupted run |
 
+A GPU run checkpoints and resumes like any other: the device hands back
+Adam's moments, the per-row stamps the sparse step replays from and the
+lookahead copy, and takes them all again at construction.
+
 **Reporting**
 
 | Option | Meaning |
@@ -171,7 +175,7 @@ gtp -gtp -l 12 -t 4 --nnue weights/nnue.bin
 
 ### bookgen
 
-**Generates the opening book.** Built in two stages.
+**Generates the opening book.** Built in three stages.
 
 ```sh
 # 1. Collect frequent opening positions from WTHOR (official tournament
@@ -181,6 +185,9 @@ bookgen --scan data/source/wthor --max-ply 24 --min-games 3 --out book.txt
 # 2. Solve unevaluated and shallowly evaluated entries with a search
 #    deeper than a real game
 bookgen --deepen book.txt --depth 26 --solve 30 --band 8 [--limit 500]
+
+# 3. Score every legal move, so the shallow entries can name a best move
+bookgen --deepen book.txt --all-moves --min-empties 54 --depth 26 --solve 30
 ```
 
 | Option | Default | Meaning |
@@ -188,12 +195,29 @@ bookgen --deepen book.txt --depth 26 --solve 30 --band 8 [--limit 500]
 | `--book <path>` | — | Another name for `--out` |
 | `--hash-bits <n>` | 19 | Midgame transposition table size (2^n entries) |
 | `--max-cands <n>` | 4 | How many candidate moves to expand per position. Raising it fattens the tree |
+| `--all-moves` | — | Score every legal move, not only the ones records played. Marks the entry complete |
+| `--min-empties <n>` | 0 | Only work on entries at n empties or more |
+| `--threads <n>` | cores | Search threads **per position**; `cores / n` positions run at a time |
 
 **Book values are worthless unless they come from a depth a real game
 cannot reach**, hence the defaults of depth 26 / solve 30 / band 8 (the
 live GGS settings are 22 / 26 / 6). Stopping partway keeps what has
 been saved, so it can be topped up any number of times. The loop that
 keeps going until stopped is a loop around it; one is not shipped.
+
+**Only an entry whose every legal move was scored names a best move.**
+`--deepen` on its own scores the moves the records played plus the
+engine's own pick, which is three times cheaper and enough to prune a
+search, but the top of that list is the best of a sample rather than of
+the position. `Entry.complete` records which kind an entry is: a
+complete one is played without searching, a partial one only seeds the
+move ordering. `--all-moves` makes entries complete, and `--min-empties`
+keeps that cost on the shallow part that is actually played from —
+entries below ~48 empties are four fifths of the file and 4% of the
+recorded visits.
+
+The format is `KUROOBI_BOOK_3`; older files are rejected rather than
+guessed at. Rebuild with `--scan` and top up with `--deepen --all-moves`.
 
 ### ggs
 

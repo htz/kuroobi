@@ -195,6 +195,35 @@ record, down to **both sides' evaluations and time spent**. A game that
 has a number is now opened from there. A synchro match packs two boards
 into one number, so an overlay switches between them.
 
+### A synchro pair reports its margin twice, and one of them is the mean
+
+The end of a match arrives on two kinds of line. `/os: end .N.B ( A vs.
+B ) ±X` carries **that board's own margin**, once per board; the
+`/os: - match` line that closes the pair carries **the mean of the two**.
+Filling both boards from the `- match` line is the obvious thing to do
+and it is wrong: every board then shows the same number and neither
+shows its own (a pair that won by 4 on one board and drew on the other
+showed +2.00 on both). The per-board line fills `result`, and the match
+line only fills boards that have none of their own.
+
+An adjourned game has no result of either kind. Left as "a loss by 0",
+which is what an empty result renders as; it is marked as adjourned
+instead.
+
+### An update block carries only the latest move
+
+`update` and `join` hand over the move that was just played, not the
+whole record, so a block that is missed leaves a hole in the move map.
+Anything built by walking the **keys** of that map — an evaluation
+series, for instance — then drops that ply entirely, and every later
+point shifts by one. A chart that spaces points by position ends where
+the holes begin: one board reached ply 51 with 44 moves recorded and
+drew two thirds of the game.
+
+Build the series over `1..=last` instead, holes included, and let the
+drawing bridge the gaps. The axis then stays honest about where the game
+got to.
+
 ### There are only two rating pools
 
 Formats split into `s8r16` / `s8r14` / `8r16` and so on, but ratings

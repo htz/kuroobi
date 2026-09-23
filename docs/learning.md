@@ -85,6 +85,48 @@ Peak RSS therefore does not depend on the size of the dataset and tops
 out at `--max-examples × 24 bytes + the 150 MB weight table`
 (255 MB measured with a budget of 4M).
 
+#### The NNUE step on the GPU (`--gpu`)
+
+`nnue_train --gpu` runs the optimizer step in WGSL (wgpu, Metal on this
+machine). The interesting part is not the forward pass: the two feature
+tables are sparse, and a batch touches **196k of the phase-adaptive
+table's 1.78M rows (11%)**. Walking all of them every batch moved 5.5 GB
+per batch to apply a zero gradient — bandwidth was never the limit
+(158 GB/s measured of the M1 Max's 400), the volume was.
+
+`K_STEP_SPARSE` walks the touched rows and replays what each one missed
+since it last moved, which is what the CPU trainer has always done
+(`nnue::catch_up`). Measured on 6M examples with the same binary either
+way (`KUROOBI_GPU_DENSE_STEP=1` forces the old path):
+
+| Step | Epoch | Throughput |
+|---|---:|---:|
+| Dense | 41.3 s | 1.16M pos/s |
+| **Sparse** | **29.8 s** | **1.61M pos/s** |
+
+**1.39x**, with val moving 0.006 either way — what two runs of the same
+configuration differ by. On the deployed corpus that is 2.88 h/epoch
+down to 2.07.
+
+A lookahead sync has to reach every row, so those batches keep a dense
+sweep; it is a pass of its own rather than a branch inside the step,
+which took the sync batch from 26.8 ms to 9.1. Three more kernel-level
+changes are in `nnue/gpu.rs`: ordering a batch by stage and leading
+pattern index, packing the accumulator gradients as pairs of halves
+(`row_ft` 4.98 → 3.68 ms), and taking two segments per workgroup on the
+narrower table (`row_pa` 2.95 → 2.09 ms).
+
+**Kernel time is not a proxy for wall clock.** One step kernel held 52%
+of the kernel total, and removing its work entirely did not move the
+epoch. Decide on epoch time.
+
+**The balance has since moved back to the CPU.** With the step sparse, a
+batch splits into GPU wait 1.05 s, CPU prep 1.79 s (1.50 of it building
+the CSR, single-threaded) and submit 0.52 s — the prep is 53%.
+
+`KUROOBI_GPU_PROF=1` prints the per-kernel breakdown; `KUROOBI_TRAIN_PROF=1`
+splits an epoch into load / shuffle / pass / val.
+
 ### Self-play reinforcement learning
 
 `train_game` does TD(λ)-style credit assignment over every position. The
