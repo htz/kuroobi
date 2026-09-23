@@ -1,19 +1,4 @@
 //! Kuroobi's GGS client.
-//!
-//! Connects to skatgame.net:5000 (Generic Game Server) and plays 8x8 on
-//! the `/os` service (`KUROOBI_NO_RATED=1` pins unrated).
-//!
-//! Usage:
-//!   ggs --play <opponent> [--games N]
-//!       [--login name --pw pass | --credentials .ggs_credentials]
-//!       [--depth N] [--solve-empties N] [--selective-band N] [--mpc]
-//!       [--threads N] [--weights path] [--nnue path]
-//!   ggs --console  (send stdin lines raw, print received lines)
-//!   ggs --serve    (stdin "<64 cells> <X|O>" -> "= <coord>" bridge)
-//!
-//! Always set `KUROOBI_NO_RATED=1` for testing — a moving rating changes
-//! every later measurement. `--console` can exercise everything the GUI
-//! does: offers, accepts, watching, chat, listings, formula settings.
 
 use std::path::PathBuf;
 use std::process::ExitCode;
@@ -32,8 +17,6 @@ struct Args {
     login: Option<String>,
     pw: Option<String>,
     credentials: PathBuf,
-    /// Raw console mode: send stdin lines, print received lines — the
-    /// hatch for exercising everything `/os` accepts.
     console: bool,
     games: usize,
     time: String,
@@ -137,6 +120,380 @@ fn coord(p: Position) -> String {
     format!("{}{}", (b'A' + i / 8) as char, i % 8 + 1)
 }
 
+enum SessionEnd {
+    Stop,
+    Retry,
+}
+
+#[allow(clippy::too_many_arguments)]
+fn run_session(
+    args: &Args,
+    login: &str,
+    pw: &str,
+    opponent: &str,
+    games_done: &mut usize,
+    first_session: &mut bool,
+    search: &mut NnueSearch,
+    solver: &mut Solver,
+    pick: impl Fn(&Board, &mut NnueSearch, &mut Solver, Option<u64>) -> (Option<Position>, Option<f32>),
+) -> SessionEnd {
+    use std::io::{Read, Write};
+    let mut stream = dial();
+    let pw_for_mask = pw.to_string();
+    let mut send = {
+        let mut w = stream.try_clone().expect("clone stream");
+        move |cmd: &str| {
+            if !pw_for_mask.is_empty() && cmd == pw_for_mask {
+                println!(">>> ********");
+            } else {
+                println!(">>> {cmd}");
+            }
+            let _ = w.write_all(cmd.as_bytes()).and_then(|_| w.write_all(b"\n"));
+        }
+    };
+
+    let stdin_rx = args.console.then(stdin_lines);
+
+    let mut raw = Vec::<u8>::new();
+    let mut lines = std::collections::VecDeque::<String>::new();
+    let mut block = Vec::<String>::new();
+    let mut in_block = false;
+    let mut logged_in = false;
+    let mut my_color: Option<char> = None;
+    let mut my_clock_secs: Option<u64> = None;
+    let mut in_match = false;
+    let mut asked_at: Option<std::time::Instant> = None;
+    let mut ready_at: Option<std::time::Instant> = None;
+    let mut awaiting_stored = false;
+    let mut stored_ids: Vec<String> = Vec::new();
+    let mut last_activity = std::time::Instant::now();
+    let mut lost = false;
+
+    loop {
+        if logged_in {
+            if let Some(rx) = &stdin_rx {
+                while let Ok(cmd) = rx.try_recv() {
+                    send(&cmd);
+                    last_activity = std::time::Instant::now();
+                }
+            }
+        }
+        if !in_match && !args.console && last_activity.elapsed().as_secs() > 900 {
+            eprintln!("### idle timeout (not in match)");
+            send("quit");
+            return SessionEnd::Stop;
+        }
+        let mut chunk = [0u8; 4096];
+        match stream.read(&mut chunk) {
+            Ok(0) => {
+                lost = true;
+            }
+            Ok(n) => raw.extend_from_slice(&chunk[..n]),
+            Err(e)
+                if e.kind() == std::io::ErrorKind::WouldBlock
+                    || e.kind() == std::io::ErrorKind::TimedOut => {}
+            Err(_) => {
+                lost = true;
+            }
+        }
+        if lost {
+            eprintln!("### connection lost (in_match={in_match}); reconnecting");
+            std::thread::sleep(std::time::Duration::from_secs(10));
+            *first_session = false;
+            return SessionEnd::Retry;
+        }
+        while let Some(nl) = raw.iter().position(|&b| b == b'\n') {
+            let mut line: Vec<u8> = raw.drain(..=nl).collect();
+            while line.last() == Some(&b'\n') || line.last() == Some(&b'\r') {
+                line.pop();
+            }
+            let line = String::from_utf8_lossy(&line).into_owned();
+            println!("{line}");
+            lines.push_back(line);
+        }
+        if !logged_in {
+            let tail = String::from_utf8_lossy(&raw).to_lowercase();
+            let tail2 = lines
+                .iter()
+                .rev()
+                .take(3)
+                .map(|l| l.to_lowercase())
+                .collect::<Vec<_>>()
+                .join(" ");
+            if tail.contains("enter login") || tail2.contains("enter login") {
+                send(login);
+                lines.clear();
+                raw.clear();
+            } else if tail.contains("password") || tail2.contains("password") {
+                send(pw);
+                lines.clear();
+                raw.clear();
+                logged_in = true;
+                ready_at = Some(std::time::Instant::now());
+                last_activity = std::time::Instant::now();
+                for cmd in [
+                    "verbose -news -faq -help -ack",
+                    "tell /os client -",
+                    "tell /os trust +",
+                    rated_cmd(),
+                    "tell /os open 1",
+                ] {
+                    send(cmd);
+                }
+                if !(*first_session) {
+                    awaiting_stored = true;
+                    send("tell /os stored");
+                }
+            }
+            continue;
+        }
+
+        while let Some(ln) = lines.pop_front() {
+            if awaiting_stored {
+                if let Some(rest) = ln.strip_prefix('|') {
+                    let id = rest.split_whitespace().next().unwrap_or("");
+                    if id.starts_with('.') && rest.contains(login) {
+                        stored_ids.push(id.to_string());
+                    }
+                }
+                if ln == "READY" {
+                    awaiting_stored = false;
+                    if let Some(id) = stored_ids.first().cloned() {
+                        eprintln!("### resuming stored {id}");
+                        send(&format!("tell /os ask {id}"));
+                        asked_at = Some(std::time::Instant::now());
+                    }
+                }
+            }
+            if ln.starts_with("/os: update") || ln.starts_with("/os: join") {
+                last_activity = std::time::Instant::now();
+                in_block = true;
+                block.clear();
+                block.push(ln);
+                continue;
+            }
+            if in_block {
+                if ln == "READY" {
+                    in_block = false;
+                    let u = parse_update(&block, login);
+                    if let Some(c) = u.color {
+                        my_color = Some(c);
+                        in_match = true;
+                    }
+                    if u.clock.is_some() {
+                        my_clock_secs = u.clock;
+                    }
+                    if u.turn.is_some() && u.turn == my_color {
+                        if let Some(board) = board_of(&u.rows, my_color) {
+                            let t0 = std::time::Instant::now();
+                            let (mv, val) = pick(&board, search, solver, my_clock_secs);
+                            let m = match mv {
+                                Some(p) => coord(p),
+                                None => "pa".to_string(),
+                            };
+                            let ev = val.map(|v| format!("{v:.2}")).unwrap_or_default();
+                            let secs = t0.elapsed().as_secs_f32();
+                            send(&format!("tell /os play {} {m}/{ev}/{secs:.2}", u.mid));
+                        }
+                    }
+                } else {
+                    block.push(ln);
+                }
+                continue;
+            }
+            if ln.starts_with("/os: ERR") {
+                let fatal = !in_match
+                    && !args.console
+                    && (ln.contains("formula")
+                        || ln.contains("not accepting")
+                        || ln.contains("variable mismatch")
+                        || (ln.contains("not found")
+                            && !opponent.is_empty()
+                            && ln.contains(opponent)));
+                if fatal {
+                    eprintln!("### request rejected: {ln}");
+                    send("quit");
+                    return SessionEnd::Stop;
+                }
+                eprintln!("### ignored: {ln}");
+                continue;
+            }
+            if ln.starts_with("/os: + match") && ln.contains(login) {
+                in_match = true;
+                last_activity = std::time::Instant::now();
+            }
+            if ln.starts_with("/os: - match") && ln.contains(login) {
+                in_match = false;
+                my_color = None;
+                my_clock_secs = None;
+                asked_at = None;
+                *games_done += 1;
+                stored_ids.retain(|_| false);
+                println!("### game {}/{} over: {ln}", *games_done, args.games);
+                if !args.console && (*games_done) >= args.games {
+                    send("quit");
+                    return SessionEnd::Stop;
+                }
+            }
+        }
+
+        if let Some(t0) = ready_at {
+            if (*first_session) && !in_match && asked_at.is_none() && t0.elapsed().as_secs() >= 4 {
+                if args.console {
+                    continue;
+                }
+                asked_at = Some(std::time::Instant::now());
+                if let Some(id) = &args.resume {
+                    send(&format!("tell /os ask {id}"));
+                } else {
+                    send(&format!(
+                        "tell /os ask {} {} {opponent}",
+                        args.gtype, args.time
+                    ));
+                }
+            }
+        }
+    }
+}
+
+fn dial() -> std::net::TcpStream {
+    let stream = loop {
+        match std::net::TcpStream::connect(("skatgame.net", 5000)) {
+            Ok(s) => break s,
+            Err(e) => {
+                eprintln!("### connect failed: {e}; retry in 15s");
+                std::thread::sleep(std::time::Duration::from_secs(15));
+            }
+        }
+    };
+    stream
+        .set_read_timeout(Some(std::time::Duration::from_millis(300)))
+        .ok();
+    stream
+}
+
+fn stdin_lines() -> std::sync::mpsc::Receiver<String> {
+    let (tx, rx) = std::sync::mpsc::channel::<String>();
+    std::thread::spawn(move || {
+        let mut line = String::new();
+        loop {
+            line.clear();
+            match std::io::stdin().read_line(&mut line) {
+                Ok(0) | Err(_) => break,
+                Ok(_) => {
+                    let t = line.trim_end_matches(['\r', '\n']).to_string();
+                    if !t.is_empty() && tx.send(t).is_err() {
+                        break;
+                    }
+                }
+            }
+        }
+    });
+    rx
+}
+
+fn rated_cmd() -> &'static str {
+    if std::env::var("KUROOBI_NO_RATED").is_ok() {
+        eprintln!("### forced to unrated games (KUROOBI_NO_RATED)");
+        return "tell /os rated -";
+    }
+    "tell /os rated +"
+}
+
+struct Update {
+    mid: String,
+    rows: Vec<Vec<char>>,
+    turn: Option<char>,
+    color: Option<char>,
+    clock: Option<u64>,
+}
+
+fn parse_update(block: &[String], login: &str) -> Update {
+    let mut u = Update {
+        mid: block[0]
+            .split_whitespace()
+            .nth(2)
+            .unwrap_or_default()
+            .to_string(),
+        rows: Vec::new(),
+        turn: None,
+        color: None,
+        clock: None,
+    };
+    for l in block {
+        let b = l.strip_prefix('|').unwrap_or(l);
+        if b.starts_with(&format!("{login} ")) {
+            read_seat(b, &mut u);
+        }
+        let t = b.trim_start();
+        if let Some(rest) = t.strip_prefix(|c: char| c.is_ascii_digit()) {
+            let cells: Vec<char> = rest
+                .split_whitespace()
+                .take(8)
+                .filter(|&w| w.len() == 1 && matches!(w.as_bytes()[0], b'-' | b'*' | b'O'))
+                .map(|w| w.chars().next().unwrap())
+                .collect();
+            if cells.len() == 8 {
+                u.rows.push(cells);
+            }
+        }
+        if t.starts_with("* to move") {
+            u.turn = Some('*');
+        } else if t.starts_with("O to move") {
+            u.turn = Some('O');
+        }
+    }
+    u
+}
+
+/// `kuroobi (1720.0 *) 05:00,0:0//02:00,0:0` -- our colour and clock.
+fn read_seat(b: &str, u: &mut Update) {
+    let Some(open) = b.find('(') else { return };
+    let Some(close) = b[open..].find(')') else {
+        return;
+    };
+    let inner = &b[open + 1..open + close];
+    if let Some(c @ ('*' | 'O')) = inner.trim().chars().last() {
+        u.color = Some(c);
+    }
+    let after = b[open + close..].trim_start_matches(')').trim_start();
+    let head: String = after
+        .chars()
+        .take_while(|c| c.is_ascii_digit() || *c == ':')
+        .collect();
+    if head.is_empty() {
+        return;
+    }
+    let mut secs = 0u64;
+    for part in head.split(':') {
+        if let Ok(v) = part.parse::<u64>() {
+            secs = secs * 60 + v;
+        }
+    }
+    u.clock = Some(secs);
+}
+
+fn board_of(rows: &[Vec<char>], color: Option<char>) -> Option<Board> {
+    if rows.len() != 8 {
+        return None;
+    }
+    let mut s = String::with_capacity(66);
+    for r in rows {
+        for &c in r {
+            s.push(if c == '*' {
+                'X'
+            } else if c == 'O' {
+                'O'
+            } else {
+                '-'
+            });
+        }
+    }
+    s.push(' ');
+    s.push(if color == Some('*') { 'X' } else { 'O' });
+    Board::from_string(&s).ok()
+}
+
 fn main() -> ExitCode {
     let args = match parse_args() {
         Ok(a) => a,
@@ -166,10 +523,6 @@ fn main() -> ExitCode {
     solver.set_nnue(nn, tt);
     solver.set_threads(args.threads);
 
-    // Choose a move with the same policy as play (midgame / band /
-    // solve), throttled by the clock: band off and depth -2 under 60s,
-    // depth 6 under 20s, depth 4 under 8s. GGS soft timeout forfeits
-    // the win, so the margins are generous.
     let pick = |board: &Board,
                 search: &mut NnueSearch,
                 solver: &mut Solver,
@@ -188,9 +541,6 @@ fn main() -> ExitCode {
         } else {
             (args.depth, args.band)
         };
-        /* Also return the value: GGS moves carry `move/eval/time`, and
-        without it the opponent's screen shows none of our reading —
-        debug games need both sides visible. */
         if board.empty_count() <= args.solve_empties {
             let r = solver.solve_with_eval(EndSolverMode::Perfect, board, Some(&linear));
             (r.best_move, Some(r.value as f32))
@@ -199,15 +549,11 @@ fn main() -> ExitCode {
             (r.best_move, Some(r.value as f32))
         } else {
             let (mv, v) = search.best_move_valued(board, depth as u32);
-            /* Convert to disc scale before reporting: solved-in-search
-            values are x1000, and the raw value would send +10000 to the
-            opponent. The GUI applies stone_scale; this path didn't. */
             let v = if v.abs() >= 999.0 { v / 1000.0 } else { v };
             (mv, v.is_finite().then_some(v.clamp(-64.0, 64.0)))
         }
     };
 
-    // Bridge mode: board in on stdin, move out.
     if args.serve {
         use std::io::{BufRead, Write};
         let stdin = std::io::stdin();
@@ -220,7 +566,6 @@ fn main() -> ExitCode {
                 println!("= ERR bad board");
                 continue;
             };
-            // Analysis: move and mover-view value; exact in the solve region.
             if board.empty_count() <= args.solve_empties {
                 let r = solver.solve_with_eval(EndSolverMode::Perfect, &board, Some(&linear));
                 match r.best_move {
@@ -239,7 +584,6 @@ fn main() -> ExitCode {
         return ExitCode::SUCCESS;
     }
 
-    // Play mode. Credentials: --login/--pw or a name:pw file.
     let (login, pw) = match (args.login.clone(), args.pw.clone()) {
         (Some(l), Some(p)) => (l, p),
         _ => match std::fs::read_to_string(&args.credentials) {
@@ -261,354 +605,23 @@ fn main() -> ExitCode {
     };
     let opponent = args.play.clone().unwrap_or_default();
 
-    use std::io::{Read, Write};
-
-    // ============ Game session ============
-    // Principle: never leave voluntarily while in a match.
-    // - idle timeout applies only outside matches
-    // - fatal-ERR exits apply only outside matches
-    // - on disconnect, reconnect and auto-resume stored games
     let mut games_done = 0usize;
     let mut first_session = true;
 
-    'session: loop {
-        let mut stream = loop {
-            match std::net::TcpStream::connect(("skatgame.net", 5000)) {
-                Ok(s) => break s,
-                Err(e) => {
-                    eprintln!("### connect failed: {e}; retry in 15s");
-                    std::thread::sleep(std::time::Duration::from_secs(15));
-                }
-            }
-        };
-        stream
-            .set_read_timeout(Some(std::time::Duration::from_millis(300)))
-            .ok();
-        /* Never print the password. The sent line used to be echoed,
-        leaving it in plaintext in stdout and logs; the sender marks
-        secrets (`send_secret`). */
-        let pw_for_mask = pw.clone();
-        let mut send = {
-            let mut w = stream.try_clone().expect("clone stream");
-            move |cmd: &str| {
-                if !pw_for_mask.is_empty() && cmd == pw_for_mask {
-                    println!(">>> ********");
-                } else {
-                    println!(">>> {cmd}");
-                }
-                let _ = w.write_all(cmd.as_bytes()).and_then(|_| w.write_all(b"\n"));
-            }
-        };
-
-        /* --console: stdin lines are sent raw (no `/os` prefix added);
-        the reader thread starts once and survives reconnects. */
-        let stdin_rx = if args.console {
-            let (tx, rx) = std::sync::mpsc::channel::<String>();
-            std::thread::spawn(move || {
-                let mut line = String::new();
-                loop {
-                    line.clear();
-                    match std::io::stdin().read_line(&mut line) {
-                        Ok(0) | Err(_) => break,
-                        Ok(_) => {
-                            let t = line.trim_end_matches(['\r', '\n']).to_string();
-                            if !t.is_empty() && tx.send(t).is_err() {
-                                break;
-                            }
-                        }
-                    }
-                }
-            });
-            Some(rx)
-        } else {
-            None
-        };
-
-        let mut raw = Vec::<u8>::new();
-        let mut lines = std::collections::VecDeque::<String>::new();
-        let mut block = Vec::<String>::new();
-        let mut in_block = false;
-        let mut logged_in = false;
-        let mut my_color: Option<char> = None;
-        let mut my_clock_secs: Option<u64> = None;
-        let mut in_match = false;
-        let mut asked_at: Option<std::time::Instant> = None;
-        let mut ready_at: Option<std::time::Instant> = None;
-        let mut awaiting_stored = false;
-        let mut stored_ids: Vec<String> = Vec::new();
-        let mut last_activity = std::time::Instant::now();
-        let mut lost = false;
-
-        loop {
-            /* Forward stdin lines (--console), but never before login
-            completes — a line sent during the password prompt gets
-            interpreted as the password (happened). */
-            if logged_in {
-                if let Some(rx) = &stdin_rx {
-                    while let Ok(cmd) = rx.try_recv() {
-                        send(&cmd);
-                        last_activity = std::time::Instant::now();
-                    }
-                }
-            }
-            /* Idle exit only outside matches; in a match wait forever
-            (opponent thinks, adjournment returns). --console never idles
-            out — it is a prompt, and silently dropping the connection
-            mid-check is worse than lingering. */
-            if !in_match && !args.console && last_activity.elapsed().as_secs() > 900 {
-                eprintln!("### idle timeout (not in match)");
-                send("quit");
-                break 'session;
-            }
-            let mut chunk = [0u8; 4096];
-            match stream.read(&mut chunk) {
-                Ok(0) => {
-                    lost = true;
-                }
-                Ok(n) => raw.extend_from_slice(&chunk[..n]),
-                Err(e)
-                    if e.kind() == std::io::ErrorKind::WouldBlock
-                        || e.kind() == std::io::ErrorKind::TimedOut => {}
-                Err(_) => {
-                    lost = true;
-                }
-            }
-            if lost {
-                eprintln!("### connection lost (in_match={in_match}); reconnecting");
-                std::thread::sleep(std::time::Duration::from_secs(10));
-                first_session = false;
-                continue 'session;
-            }
-            while let Some(nl) = raw.iter().position(|&b| b == b'\n') {
-                let mut line: Vec<u8> = raw.drain(..=nl).collect();
-                while line.last() == Some(&b'\n') || line.last() == Some(&b'\r') {
-                    line.pop();
-                }
-                let line = String::from_utf8_lossy(&line).into_owned();
-                println!("{line}");
-                lines.push_back(line);
-            }
-            if !logged_in {
-                let tail = String::from_utf8_lossy(&raw).to_lowercase();
-                let tail2 = lines
-                    .iter()
-                    .rev()
-                    .take(3)
-                    .map(|l| l.to_lowercase())
-                    .collect::<Vec<_>>()
-                    .join(" ");
-                if tail.contains("enter login") || tail2.contains("enter login") {
-                    send(&login);
-                    lines.clear();
-                    raw.clear();
-                } else if tail.contains("password") || tail2.contains("password") {
-                    send(&pw);
-                    lines.clear();
-                    raw.clear();
-                    logged_in = true;
-                    ready_at = Some(std::time::Instant::now());
-                    last_activity = std::time::Instant::now();
-                    send("verbose -news -faq -help -ack");
-                    send("tell /os client -");
-                    send("tell /os trust +");
-                    /* Rated-play switch, `KUROOBI_NO_RATED=1` forbids
-                    (same knob as the GUI). Always use it for self-play
-                    debugging — a moving rating changes later
-                    measurements. */
-                    if std::env::var("KUROOBI_NO_RATED").is_ok() {
-                        send("tell /os rated -");
-                        eprintln!("### forced to unrated games (KUROOBI_NO_RATED)");
-                    } else {
-                        send("tell /os rated +");
-                    }
-                    send("tell /os open 1");
-                    if !first_session {
-                        // Reconnect: look for stored games and resume.
-                        awaiting_stored = true;
-                        send("tell /os stored");
-                    }
-                }
-                continue;
-            }
-
-            while let Some(ln) = lines.pop_front() {
-                if awaiting_stored {
-                    // "|.82726   30 Jul 2026 ... kuroobi  opponent s8r16:l"
-                    if let Some(rest) = ln.strip_prefix('|') {
-                        let id = rest.split_whitespace().next().unwrap_or("");
-                        if id.starts_with('.') && rest.contains(&login) {
-                            stored_ids.push(id.to_string());
-                        }
-                    }
-                    if ln == "READY" {
-                        awaiting_stored = false;
-                        if let Some(id) = stored_ids.first().cloned() {
-                            eprintln!("### resuming stored {id}");
-                            send(&format!("tell /os ask {id}"));
-                            asked_at = Some(std::time::Instant::now());
-                        }
-                    }
-                }
-                if ln.starts_with("/os: update") || ln.starts_with("/os: join") {
-                    last_activity = std::time::Instant::now();
-                    in_block = true;
-                    block.clear();
-                    block.push(ln);
-                    continue;
-                }
-                if in_block {
-                    if ln == "READY" {
-                        in_block = false;
-                        let mut rows = Vec::<Vec<char>>::new();
-                        let mut turn: Option<char> = None;
-                        let mut mid = String::new();
-                        if let Some(id) = block[0].split_whitespace().nth(2) {
-                            mid = id.to_string();
-                        }
-                        for l in &block {
-                            let b = l.strip_prefix('|').unwrap_or(l);
-                            if b.starts_with(&format!("{login} ")) {
-                                if let Some(open) = b.find('(') {
-                                    if let Some(close) = b[open..].find(')') {
-                                        let inner = &b[open + 1..open + close];
-                                        if let Some(c) = inner.trim().chars().last() {
-                                            if c == '*' || c == 'O' {
-                                                my_color = Some(c);
-                                                in_match = true;
-                                            }
-                                        }
-                                        let after =
-                                            b[open + close..].trim_start_matches(')').trim_start();
-                                        let head: String = after
-                                            .chars()
-                                            .take_while(|c| c.is_ascii_digit() || *c == ':')
-                                            .collect();
-                                        let mut secs = 0u64;
-                                        for part in head.split(':') {
-                                            if let Ok(v) = part.parse::<u64>() {
-                                                secs = secs * 60 + v;
-                                            }
-                                        }
-                                        if !head.is_empty() {
-                                            my_clock_secs = Some(secs);
-                                        }
-                                    }
-                                }
-                            }
-                            let t = b.trim_start();
-                            if let Some(rest) = t.strip_prefix(|c: char| c.is_ascii_digit()) {
-                                let cells: Vec<char> = rest
-                                    .split_whitespace()
-                                    .take(8)
-                                    .filter(|&w| {
-                                        w.len() == 1
-                                            && matches!(w.as_bytes()[0], b'-' | b'*' | b'O')
-                                    })
-                                    .map(|w| w.chars().next().unwrap())
-                                    .collect();
-                                if cells.len() == 8 {
-                                    rows.push(cells);
-                                }
-                            }
-                            if t.starts_with("* to move") {
-                                turn = Some('*');
-                            } else if t.starts_with("O to move") {
-                                turn = Some('O');
-                            }
-                        }
-                        if rows.len() == 8 && turn.is_some() && turn == my_color {
-                            let mut sboard = String::with_capacity(66);
-                            for r in &rows {
-                                for &c in r {
-                                    sboard.push(if c == '*' {
-                                        'X'
-                                    } else if c == 'O' {
-                                        'O'
-                                    } else {
-                                        '-'
-                                    });
-                                }
-                            }
-                            sboard.push(' ');
-                            sboard.push(if my_color == Some('*') { 'X' } else { 'O' });
-                            if let Ok(board) = Board::from_string(&sboard) {
-                                let t0 = std::time::Instant::now();
-                                let (mv, val) =
-                                    pick(&board, &mut search, &mut solver, my_clock_secs);
-                                let m = match mv {
-                                    Some(p) => coord(p),
-                                    None => "pa".to_string(),
-                                };
-                                // move/eval/time; eval empty when absent.
-                                let ev = val.map(|v| format!("{v:.2}")).unwrap_or_default();
-                                let secs = t0.elapsed().as_secs_f32();
-                                send(&format!("tell /os play {mid} {m}/{ev}/{secs:.2}"));
-                            }
-                        }
-                    } else {
-                        block.push(ln);
-                    }
-                    continue;
-                }
-                if ln.starts_with("/os: ERR") {
-                    // Never leave during a match; only non-match ERRs
-                    // (offer failures etc.) may exit.
-                    /* --console never exits on errors. `not registered`
-                    is not fatal — it only means unrated play (and some
-                    listing commands refused). */
-                    let fatal = !in_match
-                        && !args.console
-                        && (ln.contains("formula")
-                            || ln.contains("not accepting")
-                            || ln.contains("variable mismatch")
-                            || (ln.contains("not found")
-                                && !opponent.is_empty()
-                                && ln.contains(&opponent)));
-                    if fatal {
-                        eprintln!("### request rejected: {ln}");
-                        send("quit");
-                        break 'session;
-                    }
-                    eprintln!("### ignored: {ln}");
-                    continue;
-                }
-                if ln.starts_with("/os: + match") && ln.contains(&login) {
-                    in_match = true;
-                    last_activity = std::time::Instant::now();
-                }
-                if ln.starts_with("/os: - match") && ln.contains(&login) {
-                    in_match = false;
-                    my_color = None;
-                    my_clock_secs = None;
-                    asked_at = None;
-                    games_done += 1;
-                    stored_ids.retain(|_| false);
-                    println!("### game {games_done}/{} over: {ln}", args.games);
-                    // --console: stay after a game ends.
-                    if !args.console && games_done >= args.games {
-                        send("quit");
-                        break 'session;
-                    }
-                }
-            }
-
-            if let Some(t0) = ready_at {
-                if first_session && !in_match && asked_at.is_none() && t0.elapsed().as_secs() >= 4 {
-                    // --console: never offer games on its own.
-                    if args.console {
-                        continue;
-                    }
-                    asked_at = Some(std::time::Instant::now());
-                    if let Some(id) = &args.resume {
-                        send(&format!("tell /os ask {id}"));
-                    } else {
-                        send(&format!(
-                            "tell /os ask {} {} {opponent}",
-                            args.gtype, args.time
-                        ));
-                    }
-                }
-            }
+    loop {
+        match run_session(
+            &args,
+            &login,
+            &pw,
+            &opponent,
+            &mut games_done,
+            &mut first_session,
+            &mut search,
+            &mut solver,
+            pick,
+        ) {
+            SessionEnd::Stop => break,
+            SessionEnd::Retry => continue,
         }
     }
     ExitCode::SUCCESS
