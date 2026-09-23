@@ -1174,13 +1174,18 @@ impl MatchState {
                 }
             }
         };
-        /* Every move, reported or not. Dropping the unreported ones
-        used to shorten the series, and the chart plots by position in
-        it, so a silent stretch shrank the axis instead of showing as a
-        gap -- a 48-move game drew an axis reading 0..18. */
-        self.moves
-            .keys()
-            .map(|&n| EvalPoint {
+        /* Every ply from 1 to the last, reported or not — and whether
+        or not the move itself was seen.
+
+        `update` carries only the latest move, so a missed one leaves a
+        hole in `moves`; walking its keys then skips that ply entirely.
+        The chart plots by position in the series, so a hole shifts
+        every later point left and the line stops where the holes
+        start: `.4.1` reached ply 51 with 44 moves recorded and drew
+        two thirds of the game. Indexing by ply keeps the axis honest
+        and leaves a gap the chart bridges. */
+        (1..=last_n)
+            .map(|n| EvalPoint {
                 n,
                 mine: (n % 2) == mine_parity,
                 eval: self.move_evals.get(&n).and_then(|&(ev, _)| ev),
@@ -1528,7 +1533,10 @@ fn finish_match(
             if !archive.is_empty() {
                 m.archive = archive.to_string();
             }
-            if !result.is_empty() {
+            /* Only when the board has none of its own. `/os: end`
+            gives each board its margin; `result` here comes from the
+            `- match` line, which is the mean of the two. */
+            if !result.is_empty() && m.result.is_empty() {
                 m.result = result.to_string();
             }
             if !ended.is_empty() {
@@ -2930,6 +2938,27 @@ pub fn run(
                                         &crate::i18n::t("backend.notify.match_request_title"),
                                         &format!("{who} ({id})"),
                                     );
+                                }
+                            }
+                        }
+                    } else if let Some(rest) = ln.strip_prefix("/os: end ") {
+                        /* Per-board result. The `- match` line that
+                        follows carries the MEAN of the two boards, so
+                        showing it on each board reports the same number
+                        twice and neither is that board's margin (`.4`
+                        ended +10 and -18 and both boards read -4).
+                        Format: `end .4.1 ( kuroobi vs. piglet ) -18.00` */
+                        let mut it = rest.split_whitespace();
+                        if let (Some(id), Some(score)) = (it.next(), rest.rsplit(' ').next()) {
+                            if let Ok(v) = score.trim().parse::<f32>() {
+                                if let Some(m) = matches.get_mut(id) {
+                                    // Mover view is the first-named player's.
+                                    let mine = rest
+                                        .split('(')
+                                        .nth(1)
+                                        .and_then(|t| t.split_whitespace().next())
+                                        .is_some_and(|first| first == login);
+                                    m.result = format!("{:+.2}", if mine { v } else { -v });
                                 }
                             }
                         }
@@ -5115,6 +5144,68 @@ mod tests {
         );
         assert_eq!(series[0].n, 1, "numbering is GGS's, not the index");
         assert!(series[0].mine, "odd moves are ours at this parity");
+    }
+
+    /// A move that never arrived still takes its place in the series.
+    ///
+    /// `update` carries only the latest move, so a missed one leaves a
+    /// hole in `moves`. Walking its keys skipped that ply, which shifts
+    /// every later point left and stops the line where the holes start:
+    /// `.4.1` reached ply 51 with 44 moves recorded and drew two thirds
+    /// of the game.
+    #[test]
+    fn the_eval_series_spans_every_ply_even_the_missing_ones() {
+        use std::collections::BTreeMap;
+        let mut m = MatchState::new();
+        // Moves 3 and 4 never arrived.
+        m.moves = [1u32, 2, 5, 6]
+            .into_iter()
+            .map(|n| (n, "f5".to_string()))
+            .collect::<BTreeMap<_, _>>();
+        m.eval_parity = Some(1);
+        m.move_evals.insert(1, (Some(1.5), None));
+        m.move_evals.insert(6, (Some(-2.0), None));
+
+        let series = m.eval_series();
+        assert_eq!(series.len(), 6, "the axis spans plies 1..6, holes included");
+        assert_eq!(
+            series.iter().map(|p| p.n).collect::<Vec<_>>(),
+            vec![1, 2, 3, 4, 5, 6]
+        );
+        assert_eq!(series[0].eval, Some(1.5));
+        assert_eq!(
+            series[5].eval,
+            Some(-2.0),
+            "the last ply keeps its own value"
+        );
+        assert!(
+            series[2].eval.is_none(),
+            "a missing move leaves a gap, not a shift"
+        );
+    }
+
+    /// Each synchro board reports its own margin; the `- match` line
+    /// that follows carries the mean of the two and must not overwrite
+    /// it (`.4` ended +10 and -18, and both boards read -4).
+    #[test]
+    fn a_per_board_result_survives_the_match_line() {
+        let mut ms: HashMap<String, MatchState> = HashMap::new();
+        let mut a = MatchState::new();
+        a.result = "+10.00".into();
+        ms.insert(".4.0".into(), a);
+        let mut b = MatchState::new();
+        b.result = "-18.00".into();
+        ms.insert(".4.1".into(), b);
+
+        finish_match(&mut ms, ".4", "-4.00", "finished", "", ".85929");
+        assert_eq!(ms[".4.0"].result, "+10.00");
+        assert_eq!(ms[".4.1"].result, "-18.00");
+
+        // A board with no result of its own still takes the match line.
+        let mut ms2: HashMap<String, MatchState> = HashMap::new();
+        ms2.insert(".9.0".into(), MatchState::new());
+        finish_match(&mut ms2, ".9", "+2.00", "finished", "", "");
+        assert_eq!(ms2[".9.0"].result, "+2.00");
     }
 
     /// Mirror-borrow conditions: the boards coincide only while the
