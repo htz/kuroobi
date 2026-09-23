@@ -1,8 +1,4 @@
 //! Wall time from raising the stop handle to the search returning.
-//! Requires weights, hence #[ignore].
-//!
-//! For bisecting "stopped but CPU not released": measures stop-to-return
-//! for the midgame search and the solver separately.
 
 use std::time::{Duration, Instant};
 
@@ -27,13 +23,8 @@ fn replay_until_empties(kifu: &str, empties: u8) -> Board {
     board
 }
 
-/// Stop-to-return beyond this counts as slow.
 const LIMIT: Duration = Duration::from_millis(300);
 
-/// The midgame search has not reached this bar yet: negamax checks the
-/// stop every 512 nodes so it should be instant, but measures 0.9-1.8s
-/// (the per-iteration helper join in Lazy SMP is the suspect). Until
-/// bisected, the bound is loose and only catches regressions.
 const MIDGAME_LIMIT: Duration = Duration::from_millis(2500);
 
 #[test]
@@ -89,8 +80,6 @@ fn endgame_solve_stops_promptly() {
     assert!(after_stop < LIMIT, "solve took {after_stop:?} after stop");
 }
 
-/// Baseline for whether adding the stop slowed the search itself:
-/// solve the same position without stopping and print the time.
 #[test]
 #[ignore = "requires real files in weights/ (not in git)"]
 fn solve_speed_baseline() {
@@ -107,8 +96,6 @@ fn solve_speed_baseline() {
     println!("24-empties solve: {:?} (value {})", t0.elapsed(), mv.value);
 }
 
-/// Baseline for whether the stop-check frequency (ABORT_CHECK_INTERVAL)
-/// affects speed: fixed-depth search, print nps.
 #[test]
 #[ignore = "requires real files in weights/ (not in git)"]
 fn midgame_speed_baseline() {

@@ -1,15 +1,7 @@
-//! Pattern definitions for AI evaluation: the linear evaluator's set (16
-//! shapes, orientations sharing a table) and the NNUE's (32 shapes, one
-//! table each). Both sets are named for what reads them.
-//!
-//! Each pattern has several masks (board orientations). A mask is an ordered
-//! list of squares; evaluating a mask yields a base-3 index (digit per square:
-//! 0=player, 1=opponent, 2=empty, consumed in mask order) into a weight table
-//! of size 3^size.
+//! Pattern definitions for AI evaluation: the linear evaluator's set (16 shapes, orientations sharing a table) and the NNUE's (32 shapes, one table each).
 
 use crate::color::Color;
 
-/// Square constants in this crate's file-major indexing (file*8 + rank).
 #[rustfmt::skip]
 pub mod sq {
     pub const A1: u8 = 0;  pub const A2: u8 = 1;  pub const A3: u8 = 2;  pub const A4: u8 = 3;
@@ -32,8 +24,6 @@ pub mod sq {
 
 use sq::*;
 
-/// A single evaluation pattern: `size` squares per mask, several masks
-/// (board orientations). Fully static — no allocation.
 #[derive(Debug, Clone, Copy)]
 pub struct Pattern {
     pub name: &'static str,
@@ -42,13 +32,10 @@ pub struct Pattern {
 }
 
 impl Pattern {
-    /// Number of weight entries this pattern needs (3^size).
     pub fn table_size(&self) -> usize {
         3usize.pow(self.size as u32)
     }
 
-    /// Ternary index for one mask: squares consumed in mask order,
-    /// digit 0=player, 1=opponent, 2=empty.
     pub fn mask_index(mask: &[u8], black: u64, white: u64, player: Color) -> usize {
         let player_bb = [black, white][player.index()];
         let opponent_bb = [black, white][player.opponent().index()];
@@ -68,7 +55,6 @@ impl Pattern {
         index
     }
 
-    /// Indices for all orientations of this pattern.
     pub fn indices(
         &self,
         black: u64,
@@ -80,10 +66,6 @@ impl Pattern {
             .map(move |mask| Self::mask_index(mask, black, white, player))
     }
 }
-
-// ---------------------------------------------------------------------------
-// The linear evaluator's set (16)
-// ---------------------------------------------------------------------------
 
 pub const LINEAR_PATTERNS: &[Pattern] = &[
     Pattern {
@@ -248,24 +230,6 @@ pub const LINEAR_PATTERNS: &[Pattern] = &[
     },
 ];
 
-// ---------------------------------------------------------------------------
-// The unshared pattern set (32)
-// ---------------------------------------------------------------------------
-
-/// A 32-feature set where every orientation is its **own** pattern with its
-/// own weight table.
-///
-/// The top edge and its mirror do not share weights, and neither do the four
-/// corners. That is why there are 32 entries of one mask each rather than
-/// eight patterns of four masks: sharing across orientations is a different
-/// model, and the point of this set is to be the unshared one.
-///
-/// 20 patterns of 8 squares, 8 of 9 and 4 of 7, for 297,432 rows.
-///
-/// The square order inside each mask is fixed by the file format the weights
-/// are serialised in. A permutation of rows would train the same, so the order
-/// is not required for the model to be equivalent -- keeping it costs nothing
-/// and makes two weight tables comparable entry by entry.
 pub const NNUE_PATTERNS: &[Pattern] = &[
     Pattern {
         name: "InnerTop",
@@ -429,11 +393,6 @@ pub const NNUE_PATTERNS: &[Pattern] = &[
     },
 ];
 
-/// One mask under the eight symmetries of the board.
-///
-/// Deduplicated on the set of squares: two masks covering the same squares
-/// are the same feature up to a permutation of its table, so keeping both
-/// would give that feature twice the weight for no new information.
 fn orbit(base: &[u8]) -> Vec<Vec<u8>> {
     let transpose = |m: &[u8]| -> Vec<u8> { m.iter().map(|&s| (s % 8) * 8 + s / 8).collect() };
     let flip_file = |m: &[u8]| -> Vec<u8> { m.iter().map(|&s| (7 - s / 8) * 8 + s % 8).collect() };
@@ -464,27 +423,6 @@ fn orbit(base: &[u8]) -> Vec<Vec<u8>> {
     out
 }
 
-/// Read a pattern set from a text spec, one shape per line:
-///
-/// ```text
-/// # comment
-/// CornerWing2x4: A1 B1 C1 D1 A2 B2 C2 D2
-/// ```
-///
-/// Only the base mask is written; the eight symmetries are generated here.
-/// That keeps a spec file identical to what the design figures show, and
-/// makes it impossible for the file and the figure to drift apart.
-///
-/// `share_orientations` decides how much capacity the set gets, and the
-/// difference is large enough to dominate any change of shape. A shared
-/// shape holds one table that all eight orientations index, so a 9-square
-/// shape costs 19,683 rows however many masks it has; unshared, the same
-/// shape costs that per mask -- unshared is 4x the rows. Default is
-/// unshared, because that is what the row counts in the design work quote
-/// and what the deployed set uses; sharing has to be asked for.
-///
-/// The result is leaked, because a `Pattern` borrows for `'static` and a
-/// pattern set outlives every evaluator built on it. One leak per process.
 pub fn from_spec(text: &str, share_orientations: bool) -> Result<&'static [Pattern], String> {
     let mut pats: Vec<Pattern> = Vec::new();
     for (n, line) in text.lines().enumerate() {
@@ -546,12 +484,6 @@ pub fn from_spec(text: &str, share_orientations: bool) -> Result<&'static [Patte
     Ok(Box::leak(pats.into_boxed_slice()))
 }
 
-/// The set named on the command line, or the one a spec file describes.
-///
-/// Every tool that touches a weight file needs the same choice, and a
-/// weight file belongs to the pattern set it was trained on, so getting
-/// this wrong is silent: the tables line up by size and the numbers come
-/// out wrong. One place to resolve it keeps the tools in step.
 pub fn resolve(name: &str, spec: Option<&std::path::Path>) -> Result<&'static [Pattern], String> {
     if let Some(path) = spec {
         let text = std::fs::read_to_string(path).map_err(|e| format!("{}: {e}", path.display()))?;
@@ -617,7 +549,6 @@ mod tests {
 
     #[test]
     fn test_empty_board_index_is_all_twos() {
-        // Every square empty -> every ternary digit is 2 -> index = 3^size - 1
         for p in LINEAR_PATTERNS.iter().chain(NNUE_PATTERNS) {
             for mask in p.masks.iter() {
                 let idx = Pattern::mask_index(mask, 0, 0, Color::Black);
@@ -628,8 +559,6 @@ mod tests {
 
     #[test]
     fn test_mask_index_respects_order_and_colors() {
-        // Mask [A1, B1]: A1=player -> digit 0, B1=opponent -> digit 1.
-        // Index = 0*3 + 1 = 1 for Black; swapped for White = 1*3 + 0 = 3.
         let black = 1u64 << sq::A1;
         let white = 1u64 << sq::B1;
         let mask: &[u8] = &[sq::A1, sq::B1];
@@ -639,9 +568,6 @@ mod tests {
 
     #[test]
     fn test_orientation_symmetry_on_initial_board() {
-        // The initial position is 180-degree rotationally symmetric with
-        // colors swapped. Corner3x3 doesn't touch the center, so all four
-        // orientations must give the identical (all-empty) index.
         let b = Board::new();
         let corner = &LINEAR_PATTERNS[3];
         assert_eq!(corner.name, "Corner3x3");
@@ -652,8 +578,6 @@ mod tests {
 
     #[test]
     fn test_line4_sees_initial_pieces() {
-        // Line4's rank-4/rank-5 and file-D/file-E masks each cross exactly
-        // two initial center discs, so their indices must differ from empty.
         let b = Board::new();
         let line4 = &LINEAR_PATTERNS[2];
         assert_eq!(line4.name, "Line4");
@@ -674,10 +598,6 @@ mod tests {
         );
     }
 
-    /// A spec built from a set's own base masks must rebuild that set: the
-    /// orbit generated here is the one the hand-written tables were written
-    /// from, so a drift between the two would silently change every row
-    /// count a design figure claims.
     #[test]
     fn from_spec_rebuilds_a_hand_written_set() {
         for set in [LINEAR_PATTERNS] {
@@ -723,10 +643,6 @@ mod tests {
         assert!(from_spec("# only a comment", false).is_err(), "no patterns");
     }
 
-    /// The two ways of writing the same shapes differ only in capacity, and
-    /// the gap is the one that has already cost a full training run: v1 was
-    /// trained shared and reached 19.71 where the deployed unshared set sits
-    /// at 14.89. A spec must default to the unshared reading.
     #[test]
     fn from_spec_defaults_to_unshared_tables() {
         let spec = "Corner3x3: A1 B1 C1 A2 B2 C2 A3 B3 C3\nDiagonal8: A1 B2 C3 D4 E5 F6 G7 H8\n";

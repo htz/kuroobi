@@ -1,37 +1,24 @@
 //! WTHOR game files (`.wtb`), the tournament-record archive.
-//!
-//! Layout: a 16-byte file header, then 68 bytes per game -- tournament
-//! (u16), Black (u16), White (u16), Black's real disc count (u8), Black's
-//! theoretical disc count (u8), then 60 move bytes. A move is decimal
-//! `row * 10 + col`, both 1-based (`f5` is 56); 0 ends the list. The real
-//! disc count already gives the empties to the winner.
 
 use std::path::Path;
 
 use crate::Position;
 
-/// One game: the moves as played, and Black's final disc count as the
-/// archive records it (empties to the winner).
 pub struct Game {
     pub moves: Vec<Position>,
     pub black_discs: u8,
 }
 
 impl Game {
-    /// The moves in `f5d6` notation, the form every other tool reads.
     pub fn transcript(&self) -> String {
         self.moves.iter().map(|p| p.to_kifu()).collect()
     }
 
-    /// Final disc difference for Black, empties to the winner.
     pub fn score_black(&self) -> i32 {
         2 * i32::from(self.black_discs) - 64
     }
 }
 
-/// Every game in one file. A game with a move outside the board is
-/// dropped; the caller decides what to do with games that did not run to
-/// the end.
 pub fn read(path: &Path) -> std::io::Result<Vec<Game>> {
     let data = std::fs::read(path)?;
     let mut games = Vec::new();

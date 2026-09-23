@@ -1,50 +1,27 @@
 //! Incremental (differential) pattern-index maintenance.
-//!
-//! `Linear::eval` recomputes every pattern orientation's ternary index
-//! from the bitboards on each call (~64 masks x ~9 squares). During search
-//! successive positions differ by one placed disc plus a few flips, so the
-//! indices can instead be updated square-by-square from the move's flip
-//! bitboard at a fraction of the cost.
-//!
-//! Representation: indices are kept in **absolute colors** (digit 0 = black,
-//! 1 = white, 2 = empty), which makes apply/undo independent of the side to
-//! move. Evaluation from White's perspective maps each index through a
-//! precomputed digit-swap table (0 <-> 1), giving exactly the player-relative
-//! index that `Pattern::mask_index` computes.
 
 use crate::color::Color;
 use crate::pattern::Pattern;
 use crate::position::Position;
 
-/// Upper bound on total orientations across a pattern library
-/// (the linear set: 16 patterns x 4 masks = 64; the NNUE set: 32).
 pub const MAX_MASKS: usize = 80;
 
-/// One differential update: mask `mask`'s index changes by
-/// `digit_diff * pow3` when the square owning this entry changes color.
 #[derive(Clone, Copy)]
 pub struct UpdateEntry {
     pub mask: u16,
     pub pow3: u16,
 }
 
-/// The per-mask ternary indices of one position (absolute colors).
-/// Copy-sized so search can snapshot it cheaply if ever needed.
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub struct PatternIndices {
     idx: [u16; MAX_MASKS],
 }
 
 impl PatternIndices {
-    /// All-zero indices. Only valid once `init` or a chain of `apply`s from
-    /// one has filled them in; the search uses it as the resting value of
-    /// the carried set at depths that do not order by evaluation.
     pub const ZERO: PatternIndices = PatternIndices {
         idx: [0u16; MAX_MASKS],
     };
 
-    /// The per-mask ternary indices (absolute colors). Used by the NNUE
-    /// feature transformer, which reads the same indices the linear sum does.
     #[inline]
     pub fn raw(&self) -> &[u16; MAX_MASKS] {
         &self.idx
@@ -56,35 +33,16 @@ impl PatternIndices {
     }
 }
 
-/// Static lookup tables for one pattern library: square -> affected masks,
-/// plus digit-swap tables for White-perspective evaluation.
 pub struct PatternIndexer {
     patterns: &'static [Pattern],
     n_masks: usize,
-    /// mask -> owning pattern index (masks flattened in pattern order).
     mask_pattern: [u8; MAX_MASKS],
-    /// The same information as `entries`, transposed: for each square, the
-    /// `pow3` weight of every mask, zero where the mask does not cover it.
-    ///
-    /// The CSR walk touches only the 9.2 masks a square belongs to, which
-    /// sounds like the cheaper shape, but each touch is a scattered
-    /// read-modify-write on `PatternIndices` and the compiler has to assume
-    /// two entries may alias the same slot. Dense, the whole update is
-    /// `idx += digit_diff * pow3[sq]` over 80 lanes with no indirection and
-    /// no aliasing: 128 bytes of index and one 160-byte row, both of which
-    /// stay in registers for the whole move. Zero lanes add zero, so the
-    /// wasted lanes cost nothing but issue slots.
     dense_pow3: Vec<[u16; MAX_MASKS]>,
-    /// CSR layout: entries for square `sq` live at
-    /// `entries[offsets[sq]..offsets[sq + 1]]`.
     offsets: [u32; 65],
     entries: Vec<UpdateEntry>,
-    /// swap_tables[size][index] = index with digits 0 and 1 swapped.
-    /// Shared across patterns of the same size; unused sizes stay empty.
     swap_tables: [Vec<u16>; 11],
 }
 
-/// Ternary digit for a square in absolute colors.
 #[inline]
 fn absolute_digit(black: u64, white: u64, sq: u8) -> u16 {
     let bit = 1u64 << sq;
@@ -102,7 +60,6 @@ impl PatternIndexer {
         let n_masks: usize = patterns.iter().map(|p| p.masks.len()).sum();
         assert!(n_masks <= MAX_MASKS, "pattern library exceeds MAX_MASKS");
 
-        // Flatten masks in pattern order and build the square -> mask lists.
         let mut mask_pattern = [0u8; MAX_MASKS];
         let mut per_square: Vec<Vec<UpdateEntry>> = vec![Vec::new(); 64];
         let mut mask_id = 0u16;
@@ -110,7 +67,6 @@ impl PatternIndexer {
             for mask in p.masks {
                 mask_pattern[mask_id as usize] = pi as u8;
                 for (j, &sq) in mask.iter().enumerate() {
-                    // First square in the mask carries the highest power.
                     let pow3 = 3u16.pow((p.size - 1 - j) as u32);
                     per_square[sq as usize].push(UpdateEntry {
                         mask: mask_id,
@@ -135,7 +91,6 @@ impl PatternIndexer {
             }
         }
 
-        // Digit-swap tables per distinct pattern size.
         let mut swap_tables: [Vec<u16>; 11] = Default::default();
         for p in patterns {
             let size = p.size;
@@ -175,7 +130,6 @@ impl PatternIndexer {
         self.patterns
     }
 
-    /// Compute all mask indices from scratch (absolute colors).
     pub fn init(&self, black: u64, white: u64) -> PatternIndices {
         let mut indices = PatternIndices {
             idx: [0u16; MAX_MASKS],
@@ -194,14 +148,10 @@ impl PatternIndexer {
         indices
     }
 
-    /// Update `indices` for a move by `mover` placing on `pos` and flipping
-    /// `flipped`. Must mirror `Board::make_move_bits` exactly.
     #[inline]
     pub fn apply(&self, indices: &mut PatternIndices, pos: Position, flipped: u64, mover: Color) {
         let mover_digit = mover.index() as u16; // Black = 0, White = 1
-                                                // Placed disc: empty (2) -> mover.
         self.update_square(indices, pos.index(), mover_digit.wrapping_sub(2));
-        // Flipped discs: opponent (1 - mover) -> mover.
         let flip_diff = mover_digit.wrapping_sub(1 - mover_digit);
         let mut f = flipped;
         while f != 0 {
@@ -211,7 +161,6 @@ impl PatternIndexer {
         }
     }
 
-    /// Exact inverse of [`apply`](Self::apply).
     #[inline]
     pub fn undo(&self, indices: &mut PatternIndices, pos: Position, flipped: u64, mover: Color) {
         let mover_digit = mover.index() as u16;
@@ -225,8 +174,6 @@ impl PatternIndexer {
         }
     }
 
-    /// The update entries for square `sq` (mask + pow3), for callers that
-    /// want to drive the loop themselves (NNUE accumulator) without a closure.
     #[inline]
     pub fn square_entries(&self, sq: u8) -> &[UpdateEntry] {
         let start = self.offsets[sq as usize] as usize;
@@ -234,36 +181,23 @@ impl PatternIndexer {
         &self.entries[start..end]
     }
 
-    /// Add `digit_diff * pow3` to every mask index containing `sq`.
-    /// `digit_diff` is a two's-complement u16; wrapping arithmetic is exact
-    /// because every true result stays within 0..3^size.
     #[inline]
     fn update_square(&self, indices: &mut PatternIndices, sq: u8, digit_diff: u16) {
-        // SAFETY: `dense_pow3` has 64 rows and `sq < 64`.
         let row = unsafe { self.dense_pow3.get_unchecked(sq as usize) };
         for (slot, &p) in indices.idx.iter_mut().zip(row.iter()) {
             *slot = slot.wrapping_add(digit_diff.wrapping_mul(p));
         }
     }
 
-    /// Sum pattern weights for the maintained indices from `player`'s
-    /// perspective. `weights[pattern][ternary_index]` must match this
-    /// indexer's pattern library. Summation order (patterns, then masks)
-    /// is identical to `Linear::eval` so results are bit-exact.
     #[inline]
-    /// Pattern id of each mask instance, in mask order.
     pub fn mask_patterns(&self) -> &[u8] {
         &self.mask_pattern[..self.n_masks]
     }
 
-    /// Number of mask instances.
     pub fn n_masks(&self) -> usize {
         self.n_masks
     }
 
-    /// `eval_sum` over weights laid end to end, with `mask_off[m]` giving the
-    /// start of mask `m`'s pattern table. One dependent load per mask instead
-    /// of the pointer-then-weight pair a `Vec<Vec<f32>>` forces.
     pub fn eval_sum_flat(
         &self,
         indices: &PatternIndices,
@@ -272,9 +206,6 @@ impl PatternIndexer {
         mask_off: &[u32],
     ) -> f32 {
         let mut score = 0.0f32;
-        // SAFETY: `mask_off` is built with one entry per mask, each pointing
-        // at a table of `3^size` inside `flat`, and the maintained indices
-        // stay inside that range (same invariant `eval_sum` relies on).
         unsafe {
             if player == Color::Black {
                 for m in 0..self.n_masks {
@@ -294,12 +225,8 @@ impl PatternIndexer {
         score
     }
 
-    /// `eval_sum_flat` over 8-bit weights: a stage's table is a quarter of
-    /// the size the exact path walks. The White table has the digit swap
-    /// already applied, so both colours take this one path.
     pub fn eval_sum_i8(&self, indices: &PatternIndices, flat: &[i8], mask_off: &[u32]) -> i32 {
         let mut score = 0i32;
-        // SAFETY: same invariant as `eval_sum_flat`.
         unsafe {
             for m in 0..self.n_masks {
                 let off = *mask_off.get_unchecked(m) as usize;
@@ -309,7 +236,6 @@ impl PatternIndexer {
         score
     }
 
-    /// Index that mask `m`'s entry would have from White's perspective.
     pub fn swapped_index(&self, m: usize, idx: usize) -> usize {
         let pi = self.mask_pattern[m] as usize;
         self.swap_tables[self.patterns[pi].size][idx] as usize
@@ -317,11 +243,6 @@ impl PatternIndexer {
 
     pub fn eval_sum(&self, indices: &PatternIndices, player: Color, weights: &[Vec<f32>]) -> f32 {
         let mut score = 0.0f32;
-        // SAFETY: `m < n_masks <= MAX_MASKS` bounds `mask_pattern` and
-        // `indices.idx`; `mask_pattern` holds pattern ids, and `weights` is
-        // checked on load to have one table per pattern sized `3^size`, which
-        // is exactly the range the maintained indices live in. The swap
-        // tables are built with one entry per index of their size.
         unsafe {
             if player == Color::Black {
                 for m in 0..self.n_masks {
@@ -349,8 +270,6 @@ mod tests {
     use crate::board::Board;
     use crate::pattern::{LINEAR_PATTERNS, NNUE_PATTERNS};
 
-    /// Expected indices via the existing per-position recomputation, in
-    /// `player`'s perspective.
     fn reference_indices(patterns: &[Pattern], b: &Board, player: Color) -> Vec<usize> {
         patterns
             .iter()
@@ -358,7 +277,6 @@ mod tests {
             .collect()
     }
 
-    /// Indexer view of the same thing: absolute indices, swapped for White.
     fn indexer_view(ix: &PatternIndexer, indices: &PatternIndices, player: Color) -> Vec<usize> {
         (0..ix.n_masks)
             .map(|m| {
@@ -374,7 +292,6 @@ mod tests {
     }
 
     fn deterministic_game(seed: u64) -> Vec<(Board, Position, u64, Color)> {
-        // (board BEFORE move, pos, flipped, mover) for a full random game
         let mut board = Board::new();
         let mut state = seed.wrapping_mul(6364136223846793005).wrapping_add(1);
         let mut moves = Vec::new();
@@ -459,7 +376,6 @@ mod tests {
                 ix.apply(&mut indices, *pos, *flipped, *mover);
                 ix.undo(&mut indices, *pos, *flipped, *mover);
                 assert_eq!(indices.idx, snapshot, "undo must restore indices");
-                // Advance for the next iteration
                 let _ = before;
                 ix.apply(&mut indices, *pos, *flipped, *mover);
             }

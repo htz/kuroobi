@@ -1,23 +1,4 @@
-//! The training record: one position with everything the game that produced
-//! it can say about it. The layout is fixed byte for byte, so a corpus
-//! outlives the code that wrote it.
-//!
-//! The previous format kept a board and one teacher value, and nothing else.
-//! That lost the distinction training needs: a position's teacher
-//! is the **final disc difference** of the game (a search value is only kept
-//! to filter games whose result disagrees with it), and the positions
-//! reached by the opening's random moves are flagged so a filter can drop
-//! them. 33 million positions written in the old format with search values
-//! as the teacher could not be repaired, because nothing else was there.
-//!
-//! On disk (27 bytes, little-endian): mover's discs u64, opponent's discs
-//! u64, search value f32 (mover's view), final disc difference i8 (mover's
-//! view, empties to the winner, [`NO_GAME_SCORE`] when unknown), ply u8
-//! (60 - empties), random-move flag u8, move played u8 ([`NO_SQUARE`] when
-//! unknown), side to move u8 (0 = Black), game id u16. Bitboards and the
-//! square are rank-major on disk (A1 = 0, B1 = 1); in memory they are this
-//! crate's file-major, and the conversion
-//! happens here and nowhere else.
+//! The training record: one position with everything the game that produced it can say about it.
 
 use std::fs::File;
 use std::io::{self, BufWriter, Read, Seek, SeekFrom, Write};
@@ -26,35 +7,24 @@ use std::path::Path;
 use crate::bitboard;
 use crate::trainer::Example;
 
-/// Bytes per record on disk.
 pub const SIZE: usize = 27;
-/// `sq` of a record whose move is not known.
 pub const NO_SQUARE: u8 = 64;
-/// `game_score` of a record whose game has no final result.
 pub const NO_GAME_SCORE: i8 = i8::MIN;
 
-/// One position of one game. Bitboards file-major, the mover's discs first.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct Record {
     pub mover: u64,
     pub opponent: u64,
-    /// The value the search assigned, mover's view, in discs.
     pub score: f32,
-    /// Final disc difference of the game, mover's view, empties to the
-    /// winner; [`NO_GAME_SCORE`] when the position has no game.
     pub game_score: i8,
-    /// Moves played so far, i.e. 60 - empties.
     pub ply: u8,
-    /// The move played from here was chosen at random, not by search.
     pub random: bool,
-    /// The move played from here (this crate's index), or [`NO_SQUARE`].
     pub sq: u8,
     pub black_to_move: bool,
     pub game_id: u16,
 }
 
 impl Record {
-    /// Decode one on-disk record.
     pub fn from_bytes(b: &[u8; SIZE]) -> Record {
         let sq = b[23];
         Record {
@@ -74,7 +44,6 @@ impl Record {
         }
     }
 
-    /// Encode for disk.
     pub fn to_bytes(&self) -> [u8; SIZE] {
         let mut b = [0u8; SIZE];
         b[0..8].copy_from_slice(&bitboard::transpose(self.mover).to_le_bytes());
@@ -93,10 +62,6 @@ impl Record {
         b
     }
 
-    /// The value the trainer fits: the first two plies are 0 by symmetry, a
-    /// position whose move was random takes the search value (its game
-    /// went on at random, so its result says nothing about it), every other
-    /// position takes the game's final disc difference.
     pub fn teacher(&self) -> f32 {
         if self.ply <= 1 {
             0.0
@@ -107,8 +72,6 @@ impl Record {
         }
     }
 
-    /// The position as the trainer sees it, with `policy` deciding which of
-    /// the two values the record carries becomes the teacher.
     pub fn example_with(&self, policy: &TeacherPolicy) -> Example {
         Example {
             black: self.mover,
@@ -117,7 +80,6 @@ impl Record {
         }
     }
 
-    /// The position as the trainer sees it: mover as Black, teacher as score.
     pub fn example(&self) -> Example {
         Example {
             black: self.mover,
@@ -131,22 +93,15 @@ impl Record {
     }
 }
 
-/// Which records to train on.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct Filter {
-    /// Drop positions before this ply.
     pub min_ply: u8,
-    /// Drop positions whose search value and game result disagree by more
-    /// than this many discs (skipped when the result is unknown).
     pub max_score_diff: Option<f32>,
-    /// Drop positions whose move was random.
     pub drop_random: bool,
-    /// From this ply on, keep everything regardless of the two above.
     pub keep_above_ply: Option<u8>,
 }
 
 impl Filter {
-    /// Keep every record.
     pub const NONE: Filter = Filter {
         min_ply: 0,
         max_score_diff: None,
@@ -154,8 +109,6 @@ impl Filter {
         keep_above_ply: None,
     };
 
-    /// The training filter: `--min-ply 8 --max-score-diff 12 --drop-random
-    /// --keep-above-ply 50`.
     pub const TRAINING: Filter = Filter {
         min_ply: 8,
         max_score_diff: Some(12.0),
@@ -163,10 +116,6 @@ impl Filter {
         keep_above_ply: Some(50),
     };
 
-    /// Consume one of the filter's command-line flags (`--min-ply N`,
-    /// `--max-score-diff D`, `--drop-random`, `--keep-above-ply N`). Returns
-    /// `Ok(false)` when `flag` is not one of them, `Err` when its value is
-    /// missing or malformed.
     pub fn take_flag(
         &mut self,
         flag: &str,
@@ -190,7 +139,6 @@ impl Filter {
         Ok(true)
     }
 
-    /// The flags that would reproduce this filter, for a run's log.
     pub fn describe(&self) -> String {
         let mut s = format!("--min-ply {}", self.min_ply);
         if let Some(d) = self.max_score_diff {
@@ -224,33 +172,16 @@ impl Filter {
     }
 }
 
-/// Number of records in a file, from its size alone.
-/// Which of the two values a record carries becomes the teacher.
-///
-/// A record holds both the game's final disc difference and a search value,
-/// and neither is right everywhere. Measured against a perfect solve, the
-/// final disc difference is 2.67 discs off at 28 empties and 0.04 at 24,
-/// while a depth-4 search is 2.69 and 2.17: the opening wants the search
-/// value, the endgame wants the game's result, and the crossover sits between
-/// ply 32 and 34.
-///
-/// Where to switch is a training decision, not a property of the position, so
-/// it lives here rather than as a flag byte on disk -- the record keeps saying
-/// what the game said and a later run can read it the other way.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct TeacherPolicy {
-    /// Up to and including this ply, take the search value even when the game
-    /// has a result. `None` is the rule the corpus was written under.
     pub search_value_to_ply: Option<u8>,
 }
 
 impl TeacherPolicy {
-    /// Read every record the way [`Record::teacher`] does.
     pub const DEFAULT: TeacherPolicy = TeacherPolicy {
         search_value_to_ply: None,
     };
 
-    /// How the policy reads a record, for the run's own log.
     pub fn describe(&self) -> String {
         match self.search_value_to_ply {
             None => String::from("game result"),
@@ -258,9 +189,7 @@ impl TeacherPolicy {
         }
     }
 
-    /// The teacher for `r` under this policy.
     pub fn value(&self, r: &Record) -> f32 {
-        // The first two plies stay 0 by symmetry either way.
         if r.ply <= 1 {
             return 0.0;
         }
@@ -275,10 +204,6 @@ pub fn count(path: &Path) -> io::Result<usize> {
     Ok(std::fs::metadata(path)?.len() as usize / SIZE)
 }
 
-/// Read a file front to back, handing each record to `f`; stops early when
-/// `f` returns false. A trailing partial record (a file cut short) is
-/// ignored. Reads in blocks: the trainer re-reads its data every epoch, and
-/// per-record reads were a measurable share of the wall clock.
 pub fn for_each(path: &Path, mut f: impl FnMut(Record) -> bool) -> io::Result<()> {
     const BLOCK: usize = SIZE * 4096;
     let mut file = File::open(path)?;
@@ -307,8 +232,6 @@ pub fn for_each(path: &Path, mut f: impl FnMut(Record) -> bool) -> io::Result<()
     }
 }
 
-/// Like [`for_each`] over the records `[start, start + len)` only, so a
-/// slice of every file can be read without paying for the rest.
 pub fn for_each_range(
     path: &Path,
     start: usize,
@@ -347,7 +270,6 @@ pub fn for_each_range(
     Ok(())
 }
 
-/// All records of a file.
 pub fn read_all(path: &Path) -> io::Result<Vec<Record>> {
     let mut v = Vec::with_capacity(count(path)?);
     for_each(path, |r| {
@@ -357,7 +279,6 @@ pub fn read_all(path: &Path) -> io::Result<Vec<Record>> {
     Ok(v)
 }
 
-/// A file being written, one record at a time.
 pub struct Writer {
     w: BufWriter<File>,
     n: usize,
@@ -376,7 +297,6 @@ impl Writer {
         self.w.write_all(&r.to_bytes())
     }
 
-    /// Records written so far.
     pub fn written(&self) -> usize {
         self.n
     }
@@ -417,8 +337,6 @@ mod tests {
     #[test]
     fn disk_layout_is_fixed() {
         let b = sample().to_bytes();
-        // Boards are stored rank-major: file-major bit 27 (d4) is rank-major bit 27
-        // too, but c4 (file 2, rank 3) is 2*8+3 = 19 here and 3*8+2 = 26 there.
         assert_eq!(b[23], 26);
         assert_eq!(b[24], 1);
         assert_eq!(b[22], 1);
@@ -433,16 +351,13 @@ mod tests {
         let mut r = sample();
         r.ply = 20;
         r.random = false;
-        // Without a policy the game's result wins.
         assert_eq!(TeacherPolicy::DEFAULT.value(&r), -6.0);
         let p = TeacherPolicy {
             search_value_to_ply: Some(32),
         };
         assert_eq!(p.value(&r), -3.5);
-        // Past the threshold the game's result wins again.
         r.ply = 33;
         assert_eq!(p.value(&r), -6.0);
-        // The first two plies stay 0 either way.
         r.ply = 1;
         assert_eq!(p.value(&r), 0.0);
     }
@@ -511,7 +426,6 @@ mod tests {
         std::fs::create_dir_all(&dir).unwrap();
         let path = dir.join("t.data");
         let mut w = Writer::create(&path).unwrap();
-        // More than one read block, so a range can straddle a block edge.
         for ply in 0..10_000u32 {
             w.write(&Record {
                 ply: (ply % 60) as u8,

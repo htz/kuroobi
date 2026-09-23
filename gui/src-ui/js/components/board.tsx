@@ -1,20 +1,6 @@
 import React from 'react';
 import { t } from '../i18n';
 
-/* KUROOBI board
- * The board is one SVG: viewBox 880, PAD 40, CELL 100 (same geometry
- * as the previous Board.tsx).
- *
- * The ground is tatami: each cell is a borderless half-mat with grain
- * direction alternating checkerboard-style (ryukyu layout). The grain
- * stays within cells, never touching the grid, and is kept faint so it
- * never competes with discs or hint numbers.
- *
- * A checkerboard cannot be a CSS gradient (linear gradients cannot
- * alternate in 2D), and per-cell elements would mean 448 lines; a 2x2
- * <pattern> tile reduces it to 28, rasterized once no matter how many
- * boards are shown.
- */
 
 const CELL = 100;
 const PAD = 40;
@@ -22,8 +8,6 @@ const PITCH = 12.5;          // grain spacing; 7 lines per cell
 const GRAIN_OPACITY = 0.07;
 const SIZE = PAD * 2 + CELL * 8;   // 880
 
-/* The tatami pattern; AppFrame renders it itself (when placement was
- * a convention, forgetting it silently lost the tatami). */
 const TATAMI_ID = 'kb-tatami';
 
 export function BoardDefs() {
@@ -34,7 +18,6 @@ export function BoardDefs() {
     lines.push(<line key={key} x1={x1} y1={y1} x2={x2} y2={y2}
       stroke="var(--grain)" strokeOpacity={GRAIN_OPACITY} strokeWidth={2.4} />);
 
-  // The tile's four cells; vertical = (f + r) % 2 === 1.
   d.forEach(v => push('a' + v, 0, v, CELL, v));                       // (0,0) horizontal grain
   d.forEach(v => push('b' + v, CELL + v, 0, CELL + v, CELL));         // (1,0) vertical grain
   d.forEach(v => push('c' + v, v, CELL, v, CELL * 2));                // (0,1) vertical grain
@@ -54,10 +37,6 @@ export function BoardDefs() {
 
 export type Cell = 0 | 1 | 2;            // 0 empty / 1 black / 2 white
 
-/* Values grow under deepening, so sources are three-way: book / solve
- * / "N plies" (current depth). Only "N plies" values are still moving
- * — without the tag you cannot tell settled from provisional. Kept as
- * a union, not a string. */
 export type EvalSource = { book: true } | { exact: true } | { select: true } | { depth: number };
 export type EvalInfo = { score: number; src: EvalSource; best?: boolean };
 
@@ -67,17 +46,12 @@ const sourceLabel = (s: EvalSource) =>
   : 'select' in s ? t('ui.board.src_select')
   : t('ui.board.src_depth', { n: s.depth });
 
-/** Disc-count text: whole for an exact solve, a tenth otherwise.
- *
- * `toFixed` keeps the sign on a value that rounds to zero, and a
- * board reading "-0.0" says the move loses when it does not. */
 const evalText = (score: number, exact: boolean) => {
   const body = exact ? String(Math.round(score)) : score.toFixed(1);
   const zero = Number(body) === 0;
   return (Number(body) > 0 ? '+' : '') + (zero ? body.replace('-', '') : body);
 };
 
-/** Step the type down so the longest form still fits inside the disc. */
 const numSize = (s: string) => (s.length <= 3 ? 24 : s.length === 4 ? 21 : 17);
 
 const cx = (i: number) => PAD + i * CELL + CELL / 2;
@@ -90,25 +64,17 @@ export function Board({ cells, legal = [], evals, last, next, coords = true, gra
   last?: number | null;
   next?: number | null;                            // next move in the record; gold dashed ring
   coords?: boolean;
-  /** The tatami grain; subtle, but some want it off. */
   grain?: boolean;
-  /** Flip the board (White at the bottom); indices stay, only render
-   *  positions swap. */
   flip?: boolean;
   disabled?: boolean;
   onPlay?: (sq: number) => void;
 }) {
   const legalSet = new Set(legal);
-  // Only render positions flip; flipping indices would move plays.
   const at = (sq: number): [number, number] => {
     const [f, r] = fr(flip ? 63 - sq : sq);
     return [cx(f), cx(r)];
   };
   return (
-    /* Fill both dimensions and let preserveAspectRatio keep the
-       ratio. height:'auto' sizes by width alone — tall containers
-       top-align the board, wide ones overflow it; 100%/100% centers
-       in both cases. */
     <svg viewBox={`0 0 ${SIZE} ${SIZE}`} style={{ width: '100%', height: '100%', display: 'block' }}
          role="img" aria-label={t('ui.board.aria')}>
       <rect x={0} y={0} width={SIZE} height={SIZE} rx={14} fill="var(--card)" />
@@ -134,17 +100,10 @@ export function Board({ cells, legal = [], evals, last, next, coords = true, gra
 
       {cells.map((v, sq) => {
         const [x, y] = at(sq);
-        // Mixing color into the key makes flipped discs new elements,
-        // so the .k-flip animation runs exactly once on redraw — no
-        // previous-position diffing needed. Newly placed discs spin
-        // too (when jumping positions the whole board flips, so a
-        // non-spinning placement would look odd); the flip duration
-        // preference can zero it.
         if (v !== 0) return <Stone key={sq + ':' + v} x={x} y={y} color={v as 1 | 2} last={last === sq} />;
         if (!legalSet.has(sq)) return null;
         const ev = evals?.[sq];
         return (
-          // k-cell hover lives in base.css; only legal cells react.
           <g key={sq} className={disabled ? undefined : 'k-cell'}
              onClick={disabled ? undefined : () => onPlay?.(sq)}>
             <circle cx={x} cy={y} r={46} fill="transparent" />
@@ -159,12 +118,9 @@ export function Board({ cells, legal = [], evals, last, next, coords = true, gra
   );
 }
 
-/* Flat discs: a faint shadow and thin rim; the last move gets a ring. */
 export function Stone({ x, y, color, last }: { x: number; y: number; color: 1 | 2; last?: boolean }) {
   const black = color === 1;
   return (
-    // Rotate about the cell center; the default SVG origin would
-    // swing discs around the corner of the screen.
     <g className="k-flip" style={{ transformOrigin: `${x}px ${y}px` }}>
       <circle cx={x} cy={y + 2} r={40} fill="var(--stone-shadow)" />
       <circle cx={x} cy={y} r={40}
@@ -175,18 +131,10 @@ export function Stone({ x, y, color, last }: { x: number; y: number; color: 1 | 
   );
 }
 
-/* The number (discs) is primary, the source secondary; only the best
- * move gets a frame and --gold. */
 function EvalCell({ x, y, info }: { x: number; y: number; info: EvalInfo }) {
   const { score, src, best } = info;
   const label = sourceLabel(src);
   const num = evalText(score, 'exact' in src);
-  // "N plies" is provisional and rendered weaker. Book values use the
-  // board-specific token instead of --gold, which sinks into the light
-  // theme's green.
-  /* Settled values read strong, still-moving ones weak. A selective
-     solve is settled -- it reads to the end, just not exhaustively --
-     so it belongs with the exact one, not with "N plies". */
   const srcColor = 'book' in src ? 'var(--board-eval-book)'
     : 'exact' in src || 'select' in src ? 'var(--board-eval-strong)'
     : 'var(--board-eval-weak)';
@@ -195,11 +143,6 @@ function EvalCell({ x, y, info }: { x: number; y: number; info: EvalInfo }) {
       <circle cx={x} cy={y} r={30}
               fill={best ? 'color-mix(in srgb, var(--gold) 14%, transparent)' : 'var(--board-eval-bg)'}
               stroke={best ? 'var(--gold)' : 'var(--board-eval-edge)'} strokeWidth={best ? 2 : 1} />
-      {/* An exact solve counts whole discs, so it prints whole. Every
-          other value is a mean the search is still narrowing, where a
-          tenth separates moves the integer form ties. Five characters
-          do not fit a 60px disc at the whole-number size, so the type
-          steps down with the string rather than overflowing. */}
       <text x={x} y={y + 2} textAnchor="middle" fontSize={numSize(num)}
             fill={best ? 'var(--gold)' : score < 0 ? 'var(--bad)' : 'var(--board-eval-text)'}
             fontWeight={best ? 700 : 400}>

@@ -1,17 +1,6 @@
 import React from 'react';
 
-/* KUROOBI primitives
- * Colors and dimensions always go through tokens; sizes come from the
- * design's ladder (Size below).
- *
- * Hover/active states live in base.css (inline styles cannot express
- * :hover), so components attach k-press / k-row / k-input: looks are
- * inline, transitions are classes. className passes through.
- */
 
-/* Sizes from the 44/32/28/24/20 ladder. `row` (24) exists only for
-   the move-strip stepper buttons — the strip is 32px, and 28 would
-   leave 2px of breathing room. */
 type Size = 'chip' | 'row' | 'ctrl' | 'field';
 const H: Record<Size, string> = { chip: 'var(--h-chip)', row: 'var(--h-row)', ctrl: 'var(--h-ctrl)', field: 'var(--h-field)' };
 const PAD: Record<Size, string> = { chip: '0 10px', row: '0 10px', ctrl: '0 12px', field: '0 14px' };
@@ -28,8 +17,6 @@ export type ButtonProps = {
   onClick?: () => void;
   title?: string;
   className?: string;
-  /** Square variant for single-glyph stepper buttons (record viewer);
-   *  pictorial buttons use Icons' IconButton instead. */
   square?: boolean;
 };
 
@@ -42,11 +29,8 @@ export function Button({ variant = 'secondary', size = 'ctrl', disabled, childre
   return (
     <button
       type="button" onClick={onClick} disabled={disabled} title={title}
-      // primary is already saturated; keep hover subtle (k-on).
       className={cx('k-press', variant === 'primary' && 'k-on', className)}
       style={{
-        // Primary gets 14px side padding (per the design): the call to
-        // action differs in width, not just color.
         height: H[size],
         width: square ? H[size] : undefined, flex: square ? 'none' : undefined,
         padding: square ? 0 : variant === 'primary' && size === 'ctrl' ? '0 14px' : PAD[size],
@@ -58,37 +42,19 @@ export function Button({ variant = 'secondary', size = 'ctrl', disabled, childre
   );
 }
 
-/* IconButton lives in Icons.tsx (32px hit target, title and
- * aria-label required). Not duplicated here — a same-named component
- * in two places invites wrong imports. */
 
-/* 2-4 short options; five or more become a Select. The dock tabs use
- * this too (fill). Selection lifts with --card, not the accent fill —
- * that is reserved for the nav's current location, and two blue
- * patches would dilute "where am I". */
 export function Segmented<T extends string>({ value, options, onChange, size = 'ctrl', fill, disabled, solid, className }: {
   value: T;
-  /** Labels need not be text — the side picker adds stone dots. */
   options: { value: T; label: React.ReactNode }[];
   onChange?: (v: T) => void;
   size?: Size;
-  /** Fill the container evenly (dock tabs). */
   fill?: boolean;
-  /** Disabled (e.g. no book file); visibly unpressable. */
   disabled?: boolean;
-  /** Fill-style selection; only for windows without the nav (settings)
-   *  — on the main screen it would double the location accent. */
   solid?: boolean;
   className?: string;
 }) {
   return (
-    /* size is the CONTAINER height. It was once changed to the chip
-       height based on a stale design capture and reverted; the current
-       design (28/22/2, radii 7/5) matches the implementation.
-       Re-capture before measuring. */
     <div role="radiogroup" aria-disabled={disabled || undefined} className={cx('k-seg', className)} style={{
-      // Outer radius --r-2 (7px) vs inner --r-1 (5px); 8px would open
-      // a 3px gap and thicken the rim.
       height: H[size], display: fill ? 'flex' : 'inline-flex', gap: 2, padding: 2,
       background: 'var(--bg)', border: '1px solid var(--border)', borderRadius: 'var(--r-2)',
       opacity: disabled ? 0.4 : 1,
@@ -101,10 +67,6 @@ export function Segmented<T extends string>({ value, options, onChange, size = '
             className={cx('k-press', on && 'k-on', on && !solid && 'k-seg-on')}
             style={{
               flex: fill ? 1 : 'none', padding: '0 12px', borderRadius: 'var(--r-1)', fontSize: FS[size],
-              // In light mode --card vs --bg barely differ, so the
-              // selected chip gets a 1px inner keyline via base.css
-              // (light only, .k-seg-on); unselected chips carry an
-              // equal-width transparent border so text never shifts.
               border: 0,
               background: on ? (solid ? 'var(--accent-dim)' : 'var(--card)') : 'transparent',
               color: on ? (solid ? 'var(--on-accent)' : 'var(--text)') : 'var(--sub)',
@@ -138,16 +100,7 @@ export function Toggle({ checked, onChange, label }: { checked: boolean; onChang
   );
 }
 
-/* Slider was removed (2026-08-08): once custom strength became three
- * Selects, nothing used it. Catalog-only components are not kept. */
 
-/* Five-plus options: a transparent native <select> overlays a custom
- * face (native popup behavior — keyboard, scrolling, edge wrapping —
- * is correct even if its look is not).
- *
- * The wrapper MUST be position:relative with the select at inset:0;
- * without relative the select flies to the AppFrame corner, and with
- * zero size it has no hit area there either. */
 export function Select({ value, options, onChange, size = 'field', width, disabled, className, title }: {
   value: string;
   options: [string, string][];        // [value, label]
@@ -156,16 +109,12 @@ export function Select({ value, options, onChange, size = 'field', width, disabl
   width?: number;                     // min width, for aligned columns
   disabled?: boolean;
   className?: string;
-  /** What the value means, for when the caption beside it is collapsed. */
   title?: string;
 }) {
   const label = options.find(([v]) => v === value)?.[1] ?? value;
   return (
     <span className={cx('k-press', 'k-input', className)} style={{
       position: 'relative',            /* never drop this */
-      /* Never let the chosen label set the column width: the label
-         ellipsises, but an inline-flex box still reports its content
-         width, and a long translation widened the whole column. */
       height: H[size], minWidth: width, maxWidth: '100%',
       padding: PAD[size], borderRadius: R[size],
       background: 'var(--bg)', border: '1px solid var(--border)',
@@ -184,22 +133,12 @@ export function Select({ value, options, onChange, size = 'field', width, disabl
   );
 }
 
-/* Text input; omitting onChange makes it readOnly, so display-only
- * uses share the component. */
-/** Multi-line input.
- *
- * `TextField` is one line by design -- fields sit in rows beside their
- * labels. Text that needs reading rather than glancing at (a pasted
- * record, a GGS formula long enough that the tree gave up on it) needs
- * the box to hold it instead of scrolling it sideways past the edge.
- */
 export function TextArea({ value, onChange, mono, invalid, placeholder, rows = 4, className }: {
   value?: string;
   onChange?: (v: string) => void;
   mono?: boolean;
   invalid?: boolean;
   placeholder?: string;
-  /** Visible lines; the box can still be dragged taller. */
   rows?: number;
   className?: string;
 }) {
@@ -207,7 +146,6 @@ export function TextArea({ value, onChange, mono, invalid, placeholder, rows = 4
   return (
     <textarea
       value={value} placeholder={placeholder} readOnly={ro} rows={rows}
-      /* Formulas and records are not prose; the squiggles are noise. */
       spellCheck={false} autoCapitalize="off" autoCorrect="off"
       onChange={ro ? undefined : (e) => onChange?.(e.target.value)}
       className={cx('k-input', className)}
@@ -233,9 +171,7 @@ export function TextField({ value, onChange, mono, invalid, placeholder, readOnl
   align?: 'left' | 'right';
   width?: number;
   className?: string;
-  /** Occasional hints (ranges etc.), not always shown. */
   title?: string;
-  /** Enter-to-submit fields (chat, console); mirrors the send button. */
   onEnter?: () => void;
 }) {
   const ro = readOnly ?? !onChange;
@@ -248,9 +184,6 @@ export function TextField({ value, onChange, mono, invalid, placeholder, readOnl
       onChange={ro ? undefined : e => onChange?.(numeric ? e.target.value.replace(/[^\d-]/g, '') : e.target.value)}
       className={cx('k-input', className)}
       style={{
-        /* Never `flex: 1`: the shorthand sets flex-basis: 0% and
-           crushes the height inside column layouts (32px fields
-           rendered at 20px). Only the width should grow. */
         flexGrow: width ? 0 : 1, flexShrink: 1, flexBasis: 'auto', width, minWidth: 0,
         height: 'var(--h-field)', padding: '0 var(--sp-3)', borderRadius: 'var(--r-3)',
         background: 'var(--bg)', border: '1px solid ' + (invalid ? 'var(--bad)' : 'var(--border)'),
@@ -272,8 +205,6 @@ export function Badge({ tone = 'sub', children }: { tone?: 'sub' | 'accent' | 'o
   );
 }
 
-/* The sole progress component; only for known percentages (unknown
- * progress is just a Dot). */
 export function Progress({ value }: { value: number }) {
   return (
     <div style={{ height: 4, borderRadius: 'var(--r-0)', background: 'var(--track)', overflow: 'hidden' }}>

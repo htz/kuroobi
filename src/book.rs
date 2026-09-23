@@ -1,12 +1,4 @@
 //! Opening book.
-//!
-//! A position -> (best move, value) table keyed by the 8-symmetry
-//! normal form, so rotated/mirrored positions collapse into one entry
-//! (human game records skew toward f5 lines; without normalization most
-//! transpositions are missed).
-//!
-//! Values are assumed to come from deeper-than-game search; `bookgen`
-//! therefore runs with depth and solve entry above game settings.
 
 use std::collections::HashMap;
 use std::io::{BufRead, BufReader, Write};
@@ -14,36 +6,18 @@ use std::path::Path;
 
 use crate::{Board, Position};
 
-/// One book candidate.
 #[derive(Clone, Copy, Debug)]
 pub struct Candidate {
-    /// Move in the normalized orientation.
     pub mv: Position,
-    /// Value in discs from the mover's view, from deep search.
     pub value: f32,
-    /// How often game records chose this move.
     pub games: u32,
 }
 
-/// One book entry. It keeps every candidate so play can pick among moves
-/// within a tolerance of best, avoiding repeated identical games.
 #[derive(Clone, Debug, Default)]
 pub struct Entry {
-    /// Sorted by value, descending; [0] is best when non-empty.
     pub moves: Vec<Candidate>,
-    /// Search depth behind the values (0 = frequency only).
     pub depth: u8,
-    /// How often the position appeared in game records.
     pub games: u32,
-    /// Whether `moves` covers *every* legal move of the position.
-    ///
-    /// Without this the top of a partial list passed for "best": `bookgen`
-    /// scores only the moves that appeared in game records plus the engine's
-    /// own pick, so an entry can name one move out of thirteen and play would
-    /// take it without searching. Measured over 30 sampled midgame entries:
-    /// candidates ran 1-4 against 4-13 legal moves, and a deep search beat
-    /// the book's move in 5 of them by 1.17 discs on average. Only a complete
-    /// entry can claim a best move; a partial one is a hint.
     pub complete: bool,
 }
 
@@ -52,14 +26,10 @@ impl Entry {
         self.moves.first()
     }
 
-    /// Remove candidate `mv` (used when un-importing a move that did not exist before).
     pub fn remove_move(&mut self, mv: Position) {
         self.moves.retain(|c| c.mv != mv);
     }
 
-    /// Re-value candidate `mv` (normalized space), inserting if absent.
-    /// Descending order is preserved, so a re-value may change the best
-    /// move (game-outcome learning uses this).
     pub fn update_move(&mut self, mv: Position, value: f32) {
         match self.moves.iter_mut().find(|c| c.mv == mv) {
             Some(c) => c.value = value,
@@ -73,17 +43,13 @@ impl Entry {
     }
 }
 
-/// Normal form = lexicographically smallest of the 8 symmetries; returns
-/// the transform index so moves can be mapped back.
 fn normalize(board: &Board) -> (u64, u64, u8) {
     let mut best = (board.player_bb(), board.opponent_bb());
     let mut best_i = 0u8;
     let mut p = board.player_bb();
     let mut o = board.opponent_bb();
-    // All 8 symmetries from transpose + horizontal mirror.
     for i in 0..8u8 {
         if i > 0 {
-            // Four rotations, then switch to the mirrored family.
             if i == 4 {
                 p = crate::bitboard::mirror_horizontal(board.player_bb());
                 o = crate::bitboard::mirror_horizontal(board.opponent_bb());
@@ -100,10 +66,8 @@ fn normalize(board: &Board) -> (u64, u64, u8) {
     (best.0, best.1, best_i)
 }
 
-/// Candidate mapped back to board orientation (square, mover-view value, adoption count).
 pub type BookMove = (Position, f32, u32);
 
-/// Apply transform `i` to a whole bitboard (`map_square` for all 64 squares).
 fn transform_bb(bb: u64, i: u8) -> u64 {
     let mut b = bb;
     if i >= 4 {
@@ -119,9 +83,6 @@ fn transform_bb(bb: u64, i: u8) -> u64 {
     b
 }
 
-/// Transforms that leave the board unchanged (stabilizers). Symmetric
-/// boards (e.g. the opening) have several; there one stored move stands
-/// for every equivalent move.
 pub fn stabilizers(board: &Board) -> Vec<u8> {
     let (p, o) = (board.player_bb(), board.opponent_bb());
     (0..8u8)
@@ -129,7 +90,6 @@ pub fn stabilizers(board: &Board) -> Vec<u8> {
         .collect()
 }
 
-/// Apply normalization transform `i` to one square.
 fn map_square(sq: u8, i: u8) -> u8 {
     let mut bit = 1u64 << sq;
     if i >= 4 {
@@ -145,9 +105,7 @@ fn map_square(sq: u8, i: u8) -> u8 {
     bit.trailing_zeros() as u8
 }
 
-/// Apply the inverse of transform `i` to one square.
 fn unmap_square(sq: u8, i: u8) -> u8 {
-    // Brute-force the inverse: apply until the square returns.
     for cand in 0..64u8 {
         if map_square(cand, i) == sq {
             return cand;
@@ -156,8 +114,6 @@ fn unmap_square(sq: u8, i: u8) -> u8 {
     sq
 }
 
-/// Rebuild a board from a normalized (player, opponent) key. Keys always
-/// have the mover as `player`, so building it as Black keeps the view.
 pub fn board_from_key(key: (u64, u64)) -> Board {
     let mut b = Board::new();
     b.black = key.0;
@@ -172,7 +128,6 @@ pub struct Book {
     map: HashMap<(u64, u64), Entry>,
 }
 
-/// One candidate: (square, mover-view value, adoption count).
 pub type BookCandidate = (Position, f32, u32);
 
 impl Book {
@@ -190,17 +145,14 @@ impl Book {
         self.map.is_empty()
     }
 
-    /// Direct lookup by normalized key (for the generator).
     pub fn get_raw(&self, key: (u64, u64)) -> Option<&Entry> {
         self.map.get(&key)
     }
 
-    /// Direct lookup by normalized key (for learning write-back).
     pub fn get_raw_mut(&mut self, key: (u64, u64)) -> Option<&mut Entry> {
         self.map.get_mut(&key)
     }
 
-    /// Remove by normalized key (used when un-importing).
     pub fn remove_raw(&mut self, key: (u64, u64)) -> Option<Entry> {
         self.map.remove(&key)
     }
@@ -213,34 +165,18 @@ impl Book {
         self.map.iter()
     }
 
-    /// The position's best move, or `None` when the book cannot claim one.
-    ///
-    /// A partial entry (`complete == false`) holds the moves that appeared in
-    /// game records plus whatever the generator's own search picked, so the
-    /// top of that list is not the position's best — it is the best of a
-    /// sample. Returning it here made play take it without searching.
-    /// Use [`Book::candidates`] to get a partial entry as a search hint.
     pub fn probe(&self, board: &Board) -> Option<(Position, f32, u8)> {
         let (cands, depth, complete) = self.expand(board)?;
         if !complete {
             return None;
         }
-        // Sorted by value, descending.
         cands.first().map(|(p, v, _)| (*p, *v, depth))
     }
 
-    /// Whether the entry for `board` scores every legal move.
     pub fn is_complete(&self, board: &Board) -> bool {
         self.expand(board).is_some_and(|(_, _, c)| c)
     }
 
-    /// Look up and return candidates mapped back to board orientation
-    /// (move, value, count) plus depth.
-    ///
-    /// On symmetric boards one stored move represents every equivalent
-    /// move, so candidates are expanded through the stabilizers;
-    /// otherwise equivalent moves would be missing from display and the
-    /// randomized pick would favor one orientation.
     fn expand(&self, board: &Board) -> Option<(Vec<BookMove>, u8, bool)> {
         let (key, i) = Book::key(board);
         let e = self.map.get(&key)?;
@@ -267,12 +203,6 @@ impl Book {
         Some((out, e.depth, e.complete))
     }
 
-    /// Look up and pick one candidate within `tolerance` discs of best.
-    ///
-    /// Avoids replaying identical games against the same opponent; moves
-    /// within tolerance are effectively equal so strength is preserved.
-    /// Weighted by human adoption count (+1) so book-like moves appear
-    /// more often.
     pub fn probe_varied(
         &self,
         board: &Board,
@@ -284,7 +214,6 @@ impl Book {
             return None;
         }
         let best = all.first()?.1;
-        // Collect candidates within tolerance.
         let cands: Vec<(Position, f32, u64)> = all
             .into_iter()
             .filter(|(_, v, _)| *v >= best - tolerance)
@@ -305,44 +234,33 @@ impl Book {
         Some((p, v, depth))
     }
 
-    /// Candidates in board orientation (legal only, by value desc); for display.
     pub fn candidates(&self, board: &Board) -> Option<Vec<(Position, f32)>> {
         let (out, _, _) = self.expand(board)?;
         Some(out.into_iter().map(|(p, v, _)| (p, v)).collect())
     }
 
-    /// Candidates including adoption counts (for browsing the book);
-    /// `candidates` drops counts because play does not need them.
     pub fn candidates_detailed(&self, board: &Board) -> Option<Vec<BookCandidate>> {
         let (out, _, _) = self.expand(board)?;
         Some(out)
     }
 
-    /// Whether the position exists in the book (even with no playable candidate).
     pub fn has(&self, board: &Board) -> bool {
         self.map.contains_key(&Book::key(board).0)
     }
 
-    /// Map a normalized-space move back to board orientation.
     fn back(mv: Position, i: u8) -> Option<Position> {
         Position::from_index(unmap_square(mv.index(), i) as u32)
     }
 
-    /// Normalize a board into a key (shared with the generator).
     pub fn key(board: &Board) -> ((u64, u64), u8) {
         let (p, o, i) = normalize(board);
         ((p, o), i)
     }
 
-    /// Map a move into normalized space.
     pub fn map_move(pos: Position, i: u8) -> Position {
         Position(map_square(pos.index(), i))
     }
 
-    /// Save as text. One line =
-    /// `player_hex opponent_hex depth games complete mv:value:games ...`
-    /// (`complete` = 1 when every legal move is scored).
-    /// Text rather than binary: diffs stay readable and shell tools work.
     pub fn save(&self, path: &Path) -> std::io::Result<()> {
         let tmp = path.with_extension("tmp");
         {
@@ -366,10 +284,6 @@ impl Book {
         std::fs::rename(tmp, path)
     }
 
-    /// Read a v3 book. Older files carry no `complete` flag, so there is no
-    /// honest way to read them: every entry would have to be assumed partial
-    /// (silently disabling the book) or complete (the bug the flag fixes).
-    /// Rebuild instead — `bookgen --scan` then `--deepen --all-moves`.
     pub fn load(path: &Path) -> std::io::Result<Book> {
         let f = BufReader::new(std::fs::File::open(path)?);
         let mut book = Book::new();
@@ -451,7 +365,6 @@ mod tests {
         }
     }
 
-    /// The four symmetric openings collapse into one key.
     #[test]
     fn opening_symmetries_collapse() {
         let b = Board::new();
@@ -465,7 +378,6 @@ mod tests {
         assert_eq!(keys.len(), 1, "the 4 symmetric opening moves share one key");
     }
 
-    /// A move stored normalized comes back correct for any orientation.
     #[test]
     fn probe_maps_move_back() {
         let b = Board::new();
@@ -489,12 +401,10 @@ mod tests {
         }
     }
 
-    /// Picks spread within tolerance; blunders outside it are never picked.
     #[test]
     fn varied_choice_stays_within_tolerance() {
         let b = Board::new();
         let (key, i) = Book::key(&b);
-        // The opening collapses to one move, so test from move two.
         let mut after = b;
         after.make_move_bits(Position::from_kifu("f5").unwrap());
         let (key2, i2) = Book::key(&after);
@@ -502,7 +412,6 @@ mod tests {
 
         let legal: Vec<Position> = after.movable_iter().collect();
         assert!(legal.len() >= 3);
-        // Two near-equal moves (0.0 / -0.5) and one clear blunder (-5.0).
         let moves: Vec<Candidate> = vec![
             Candidate {
                 mv: Book::map_move(legal[0], i2),
@@ -588,9 +497,6 @@ mod tests {
 mod symmetry_tests {
     use super::*;
 
-    /// The opening is invariant under 4 symmetries (not 8: a 90-degree
-    /// turn swaps the colors). Those 4 map the 4 legal moves onto each
-    /// other, so the book stores one and expands on lookup.
     #[test]
     fn the_opening_moves_are_all_equivalent() {
         let b = Board::new();
@@ -601,14 +507,12 @@ mod symmetry_tests {
         moves.sort_unstable();
         assert_eq!(moves.len(), 4);
 
-        // One move mapped through the stabilizers reaches all four.
         let mut reached: Vec<u8> = stab.iter().map(|&i| map_square(moves[0], i)).collect();
         reached.sort_unstable();
         reached.dedup();
         assert_eq!(reached, moves, "one move must reach all four");
     }
 
-    /// On a symmetric board one stored move yields every equivalent move.
     #[test]
     fn candidates_expand_over_the_symmetry() {
         let b = Board::new();
@@ -636,7 +540,6 @@ mod symmetry_tests {
         );
     }
 
-    /// Asymmetric positions must not expand (no fabricated moves).
     #[test]
     fn asymmetric_positions_are_untouched() {
         let mut b = Board::new();

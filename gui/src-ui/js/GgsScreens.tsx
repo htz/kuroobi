@@ -22,18 +22,11 @@ import { EvalTrend, RateChart, ResultRow, StoneDot } from './components/data';
 import { flipped, type Prefs } from './prefs';
 import { logLinesOf } from './adapt';
 
-/* GGS screens, one per nav destination.
- *
- * Disconnected, the nav shows only the login row, so login is the
- * only reachable screen; the rest swap in as they are built. */
 
 export function GgsScreen({ nav, snap, onNav, prefs, onKifu }: {
   nav: NavId; snap: GgsSnapshot | null; onNav: (id: NavId) => void; prefs: Prefs;
-  /** Show a record in the overlay, fetching from `archive` when there
-   *  is no local copy. */
   onKifu: (title: string, kifu: string, archive?: string) => void;
 }) {
-  // Screen root: subscribe so a language switch re-renders the tree.
   useLang();
   if (nav === 'ggs-login') return <GgsLogin />;
   if (!snap) return <EmptyState title={t('ggs.not_connected')} />;
@@ -51,25 +44,10 @@ export function GgsScreen({ nav, snap, onNav, prefs, onKifu }: {
   }
 }
 
-/* Input label inside a floating box. Sections (1px-ruled headings)
- * belong to the content area; in a 340px box the rule crosses the box
- * and reads as a heading. */
-/* In a column, alignItems: flex-start shrinks children to their own
- * width (TextField's flex:1 becomes a height matter). Fine for
- * content-sized choices, but text inputs stretch to the box — a
- * half-width input does not look like a place to type. */
 function Field({ label, children, stretch }: { label: string; children: React.ReactNode; stretch?: boolean }) {
   return (
-    /* alignSelf: 'start' is required: grid children stretch to the
-       row height by default, so a tall sibling (the rated toggle with
-       its description) stretched this too and flexGrow made the input
-       absorb the surplus — two fields once rendered 3x tall. */
     <label style={{ display: 'flex', flexDirection: 'column', gap: 'var(--sp-2)',
                     alignSelf: 'start',
-                    /* `alignSelf: start` sizes the field to its content, so
-                       without this cap a long option label widens the whole
-                       column — and `overflow-y: auto` turns that into a
-                       horizontal scrollbar. */
                     maxWidth: '100%', minWidth: 0,
                     alignItems: stretch ? 'stretch' : 'flex-start' }}>
       <span style={{ fontSize: 'var(--fs-6)', color: 'var(--sub)' }}>{label}</span>
@@ -78,13 +56,6 @@ function Field({ label, children, stretch }: { label: string; children: React.Re
   );
 }
 
-/* ---------------- Login ----------------
- *
- * Saved credentials feed the startup auto-login, so this screen shows
- * only when nothing is saved, auto-login failed, or after logout.
- *
- * Rounded boxes are banned for content, except here — the screen's
- * single entry point, with nothing beside it, reads better floated. */
 function GgsLogin() {
   const [user, setUser] = useState('');
   const [pw, setPw] = useState('');
@@ -102,10 +73,6 @@ function GgsLogin() {
 
   return (
     <div style={{ flex: 1, display: 'grid', placeItems: 'center', padding: 'var(--sp-5)' }}>
-      {/* Measured from the design: 340px box, --r-4, --panel ground,
-          22px padding, 14px gaps. Fields are 32px on --bg. The button
-          spans the box with the status line below, so fields and
-          button read as one column. Headings match section type. */}
       <div style={{
         width: 'var(--w-modal)', borderRadius: 'var(--r-4)', background: 'var(--panel)',
         border: '1px solid var(--border)', padding: 22,
@@ -126,7 +93,6 @@ function GgsLogin() {
         </div>
         <Button size="field" variant="primary" className="k-wide"
                 onClick={() => void connect()}>{t('ggs.login.submit')}</Button>
-        {/* Reserve the line even when empty so nothing shifts. */}
         <div style={{
           fontSize: 'var(--fs-6)', minHeight: 16,
           color: status === t('ggs.login.connecting') ? 'var(--sub)' : 'var(--bad)',
@@ -136,7 +102,6 @@ function GgsLogin() {
   );
 }
 
-/** Login field; heading in section type (the design's .fld). */
 function LoginField({ label, children }: { label: string; children: React.ReactNode }) {
   return (
     <label style={{ display: 'flex', flexDirection: 'column', gap: 5, alignItems: 'stretch' }}>
@@ -148,18 +113,10 @@ function LoginField({ label, children }: { label: string; children: React.ReactN
   );
 }
 
-/* ---------------- Console ----------------
- *
- * Protocol log and raw commands. GGS has many features the UI never
- * surfaces; a direct-typing escape hatch always stays. */
 export function GgsConsole({ snap }: { snap: GgsSnapshot }) {
   const [cmd, setCmd] = useState('');
-  /* Filter and clear, per §6's heading. Clear is display-only — it
-     marks "show from here", like a terminal clear, without touching
-     the server traffic. Remembered as a count, so growth is safe. */
   const [dir, setDir] = useState<'all' | 'out' | 'in'>('all');
   const [from, setFrom] = useState(0);
-  /* One-line result (rule 34 — only failures and why-nothing-moved). */
   const [note, setNote] = useState('');
   const say = (msg: string) => { setNote(msg); window.setTimeout(() => setNote(''), 2500); };
   const send = () => {
@@ -170,8 +127,6 @@ export function GgsConsole({ snap }: { snap: GgsSnapshot }) {
   };
   const all = logLinesOf(snap.log);
   const shown = all.slice(Math.min(from, all.length))
-    // Sent/received are ours and theirs; app notes are neither and
-    // drop when filtered.
     .filter((l) => dir === 'all' || l.dir === dir);
   return (
     <div style={{ flex: 1, minHeight: 0, display: 'flex', flexDirection: 'column' }}>
@@ -187,7 +142,6 @@ export function GgsConsole({ snap }: { snap: GgsSnapshot }) {
                   onClick={() => void ggsApi.saveLog(
                     shown.map((l) => (l.dir === 'out' ? '› ' : '') + l.text).join('\n') + '\n',
                   )
-                    // Silence on success (rule 34).
                     .catch((e) => say(t('ggs.console.save_failed', { error: tErr(e) })))}>
             {t('ggs.console.save')}
           </Button>
@@ -201,8 +155,6 @@ export function GgsConsole({ snap }: { snap: GgsSnapshot }) {
         flex: 'none', display: 'flex', gap: 'var(--sp-2)', alignItems: 'center',
         padding: 'var(--sp-3) var(--sp-4)', borderTop: '1px solid var(--border-weak)',
       }}>
-        {/* Enter sends here too — a raw-command loop shouldn't need
-            the button each time. */}
         <TextField mono value={cmd} onChange={setCmd} onEnter={send}
                    placeholder={t('ggs.console.placeholder')} />
         <Button size="field" onClick={send}>{t('ggs.send')}</Button>
@@ -211,26 +163,9 @@ export function GgsConsole({ snap }: { snap: GgsSnapshot }) {
   );
 }
 
-/* ---------------- Chat ----------------
- *
- * Conversation list left (global + per correspondent), the selected
- * one right. English messages get an automatic Japanese translation;
- * Japanese messages can be sent translated to English. */
 
-/** Ratings with deviation above this are still moving = provisional.
- *
- * GGS never says "provisional" directly: the raw rank row
- * (2184.2@180.8=) has a marker-like character, but two known
- * provisionals (6 and 5 games) both showed '=', so deviation is the
- * only usable signal.
- *
- * Why 100 — the design (§5) draws 1795.1±112 as provisional, and
- * live data splits the same way: newcomers ±350 (initial), few-game
- * players ±125-216, regulars ±44/±75/±91. TO CONFIRM (based on one
- * design example; the threshold deserves a discussion). */
 const PROVISIONAL_DEV = 100;
 
-/** Whether to attach a translation (others' English messages only). */
 const wantsTranslation = (c: ChatMsg, login: string): boolean =>
   c.from !== login && !hasJapanese(c.text) && /[a-zA-Z]{2,}/.test(c.text);
 
@@ -242,12 +177,10 @@ export function GgsChat({ snap }: { snap: GgsSnapshot }) {
   const [autoJa, setAutoJa] = useState(true);
   const [pick, setPick] = useState(false);
   const [toEn, setToEn] = useState(false);
-  // Translation ('' = none: same as original, or fetch failed).
   const [trs, setTrs] = useState<Record<string, string>>({});
   const pending = useRef<Set<string>>(new Set());
   const box = useRef<HTMLDivElement>(null);
 
-  // Conversation list: global chat pinned first, then newest first.
   const threads = new Map<string, { last: ChatMsg; n: number }>();
   threads.set('.chat', { last: { chan: '.chat', from: '', text: '', at: 0, thread: '.chat' }, n: 0 });
   for (const c of snap.chat) {
@@ -266,8 +199,6 @@ export function GgsChat({ snap }: { snap: GgsSnapshot }) {
     if (b) b.scrollTop = b.scrollHeight;
   }, [count, cur]);
 
-  // Attach translations to English messages (fetched in the
-  // background, re-render on arrival).
   useEffect(() => {
     if (!autoJa) return;
     for (const c of msgs) {
@@ -288,11 +219,9 @@ export function GgsChat({ snap }: { snap: GgsSnapshot }) {
     if (toEn && hasJapanese(msg)) {
       try { msg = (await translate(msg, 'en')) || msg; } catch (e) { jsLog('translation failed: ' + e); }
     }
-    // Recipient is the open conversation (global or a name).
     ggsApi.chat(cur, msg).catch((e) => jsLog(String(e)));
   };
 
-  // Precompute date headers and same-speaker name elision.
   const rows: { c: ChatMsg; day: string; dayHead: boolean; head: boolean }[] = [];
   let lastFrom = '', lastDay = '';
   for (const c of msgs) {
@@ -310,8 +239,6 @@ export function GgsChat({ snap }: { snap: GgsSnapshot }) {
       <ChatList sorted={sorted} cur={cur} onThread={setThread} onPick={setPick} />
 
       <div style={{ flex: 1, minWidth: 0, display: 'flex', flexDirection: 'column' }}>
-        {/* Header says which conversation and WHO receives — the
-            list's selected row alone gives no last-second check. */}
         <div style={{
           flex: 'none', display: 'flex', alignItems: 'baseline', gap: 'var(--sp-3)',
           padding: 'var(--sp-3) var(--sp-4)', borderBottom: '1px solid var(--border-weak)',
@@ -323,10 +250,6 @@ export function GgsChat({ snap }: { snap: GgsSnapshot }) {
             {cur === '.chat' ? t('ggs.chat.to_everyone') : t('ggs.chat.to_person')}
           </span>
         </div>
-        {/* Translation toggles get their own strip above the send row
-            (as designed): in the send row they crowd the input, and
-            both are per-conversation view settings, not per-message
-            ones. */}
         <div style={{
           flex: 'none', height: 'var(--h-field)', display: 'flex', alignItems: 'center',
           gap: 'var(--sp-4)', padding: '0 var(--sp-4)', borderBottom: '1px solid var(--border-weak)',
@@ -338,9 +261,6 @@ export function GgsChat({ snap }: { snap: GgsSnapshot }) {
           flex: 1, minHeight: 0, padding: 'var(--sp-4)',
           display: 'flex', flexDirection: 'column', gap: 'var(--sp-3)',
         }}>
-          {/* Empty must say so — global chat is often quiet, and blank
-              reads as broken. */}
-          {/* Messages stack from the bottom; center only when empty. */}
           {!rows.length && (
             <span style={{ margin: 'auto' }}>
               <Empty>{cur === '.chat' ? t('ggs.chat.empty_global') : t('ggs.chat.empty_thread')}</Empty>
@@ -378,14 +298,6 @@ export function GgsChat({ snap }: { snap: GgsSnapshot }) {
   );
 }
 
-/* ---------------- Lobby ----------------
- *
- * Running games (observable), match requests, the request form, and
- * adjourned games. Lists left, "start something" right.
- *
- * The right column is --w-dock (290px). The design's --w-lobby
- * (174px) is unused — the format select wraps at 174px, and
- * per-screen widths make the body jump when switching. */
 function GgsLobby({ snap, onNav }: { snap: GgsSnapshot; onNav: (id: NavId) => void }) {
   const [opp, setOpp] = useState('');
   const [gtype, setGtype] = useState('s8r16');
@@ -393,11 +305,7 @@ function GgsLobby({ snap, onNav }: { snap: GgsSnapshot; onNav: (id: NavId) => vo
   const noRated = useNoRated();
   const calibrated = useCalibrated();
   const [rated, setRated] = useState(true);
-  /** The one request id whose details are expanded. */
   const [info, setInfo] = useState('');
-  /* The "in progress" section also derives from the running list,
-     which arrives at login and every 60s — so re-ask on open (same
-     reason as the player list). */
   useEffect(() => { void ggsApi.listMatches().catch(() => {}); }, []);
 
   const games = snap.ongoing.filter((o) => !o.mine);
@@ -409,8 +317,6 @@ function GgsLobby({ snap, onNav }: { snap: GgsSnapshot; onNav: (id: NavId) => vo
         <Section title={t('ggs.lobby.ongoing_title')}
                  aside={games.length ? t('ggs.lobby.game_count', { n: games.length }) : undefined}>
           {!games.length && <Empty>{t('ggs.lobby.no_ongoing')}</Empty>}
-          {/* Rows stay tight; the section gap (12px) between rows
-              reads as bullet points (hit before in book and log). */}
           <List>
           {games.map((o) => (
             <Row key={o.id}
@@ -421,8 +327,6 @@ function GgsLobby({ snap, onNav }: { snap: GgsSnapshot; onNav: (id: NavId) => vo
                            onClick={() => {
                              const on = !o.watching;
                              void ggsApi.watch(o.id, on);
-                             // Observing means wanting the board: go to
-                             // the game screen and show THAT game.
                              if (on) { focusMatch(o.id); onNav('ggs-play'); }
                            }}>
                      {o.watching ? t('ggs.stop_observing') : t('ggs.observe')}
@@ -433,24 +337,17 @@ function GgsLobby({ snap, onNav }: { snap: GgsSnapshot; onNav: (id: NavId) => vo
 
         <Section title={t('ggs.match_requests')}>
           {!snap.offers.length && <Empty>{t('ggs.lobby.no_requests')}</Empty>}
-          {/* Wrapped in List here too — the 12px section gap trap, hit
-              for the fifth time. */}
           <List>
           {snap.offers.map((o) => {
             const who = o.names.filter((n) => n !== snap.login);
             return (
               <React.Fragment key={o.id}>
               <Row title={who.join(t('ggs.and_separator')) || '?'}
-                   // Rule 27 — only addressed-to-me and unread get
-                   // --bad; accent would blend with clickable blue.
                    tag={o.incoming ? t('ggs.tag.to_me') : undefined}
                    tagTone={o.incoming ? 'bad' : undefined}
                    alert={o.incoming}
                    sub={`${gtypeLabel(o.gtype)} · ${o.time || '?'}${o.rated ? ' · ' + t('ggs.rated') : ''}`}
                    actions={<>
-                     {/* Details exist on others' requests too: the
-                         one-line summary drops color/komi/random-ply,
-                         and you want the raw row before accepting. */}
                      <Button size="row" onClick={() => setInfo(info === o.id ? '' : o.id)}>{t('ggs.lobby.raw_info')}</Button>
                      {o.incoming && <>
                        <Button size="row" variant="primary"
@@ -473,8 +370,6 @@ function GgsLobby({ snap, onNav }: { snap: GgsSnapshot; onNav: (id: NavId) => vo
       </div>
 
       <aside className="k-scroll" style={{
-        // The right column matches the dock width; per-screen widths
-        // make the body jump.
         width: 'var(--w-dock)', flex: 'none', borderLeft: '1px solid var(--border)',
         padding: 'var(--sp-4) var(--sp-2) 0', minHeight: 0,
       }}>
@@ -485,24 +380,13 @@ function GgsLobby({ snap, onNav }: { snap: GgsSnapshot; onNav: (id: NavId) => vo
           </Field>
           <Field label={t('ggs.field.format')}><Select value={gtype} onChange={setGtype} options={gtypeChoices()} /></Field>
           <Field label={t('ggs.field.time_control')}><Select value={time} onChange={setTime} options={clockChoices()} /></Field>
-          {/* Rated-ness is account-level in /os; the backend sends it
-              before each request. This only holds the choice for this
-              request. */}
-          {/* Noun heading, verb chips — matching the other settings.
-              "Rated" is the GGS term, so it heads the row as-is. */}
           <Field label={t('ggs.rated')}>
-            {/* When banned: disabled with the reason in place (rule
-                61). The send path blocks too; this is presentation. */}
             <Segmented value={rated && !noRated ? 'on' : 'off'} disabled={noRated}
                        onChange={(v) => setRated(v === 'on')}
                        options={[{ value: 'on', label: t('ggs.on') },
                                  { value: 'off', label: t('ggs.off') }]} />
             {noRated && <Note>{t('ggs.no_rated_note')}</Note>}
           </Field>
-          {/* An opponent-less request is an open invitation; /os ask
-              supports that, so don't block it. */}
-          {/* Same 32px as the fields above; a shorter button breaks
-              the fill-then-press sequence (as in login). */}
           <Button size="field" variant="primary" disabled={!calibrated}
                   onClick={() => void ggsApi.ask(gtype, time, opp, rated)}>
             {opp ? t('ggs.lobby.ask') : t('ggs.lobby.open_request')}
@@ -511,12 +395,9 @@ function GgsLobby({ snap, onNav }: { snap: GgsSnapshot; onNav: (id: NavId) => vo
           <Note>{t('ggs.lobby.synchro_note')}</Note>
         </Section>
 
-        {/* Adjourned games arrive once at login; later adjournments
-            require asking again. */}
         <Section title={t('ggs.adjourned_games')}
                  aside={<Button onClick={() => void ggsApi.listStored()}>{t('ggs.refresh')}</Button>}>
           {!snap.stored.length && <Empty>{t('ggs.lobby.no_adjourned')}</Empty>}
-          {/* Rows stay tight (the 12px section-gap trap). */}
           <List>
           {snap.stored.map((x) => (
             <Row key={x.id} title={x.opp || '?'} sub={gtypeLabel(x.gtype)}
@@ -530,55 +411,33 @@ function GgsLobby({ snap, onNav }: { snap: GgsSnapshot; onNav: (id: NavId) => vo
   );
 }
 
-/** A list row: name and detail left, actions right; the row itself is
- *  not clickable. */
 function Row({ title, sub, tag, tagTone, alert, actions, onClick, title2 }: {
   title: string; sub?: string; tag?: string;
-  /** Dot color; default accent (rule 27 — only addressed/unread get
-   *  --bad). */
   tagTone?: 'sub' | 'accent' | 'ok' | 'bad';
-  /** Addressed to me; --bad left bar (design §4). */
   alert?: boolean;
   actions?: React.ReactNode;
-  /** Make the row clickable; never with other clickables inside
-   *  (rule 46). */
   onClick?: () => void;
-  /** Clickable-row hint (title attribute). */
   title2?: string;
 }) {
-  /* Clickable means a clickable element (rule 41): div + onClick
-     skips the Tab ring and ignores Enter/Space. */
   const Tag_ = onClick && !actions ? 'button' : 'div';
   return (
     <Tag_ {...(onClick && !actions
       ? { type: 'button' as const, className: 'k-row', onClick, title: title2 }
       : {})} style={{
       display: 'flex', alignItems: 'center', gap: 'var(--sp-2)', width: '100%',
-      /* Fixed height (measured 40): content-sized rows vary with and
-         without details. A different type from the 24px rows. */
       height: 'var(--h-row2)', flex: 'none', padding: '0 var(--sp-4)',
-      // Shorthand border first — written after, it erases
-      // borderBottom, and the loss is invisible without a GGS
-      // connection.
       border: 0, borderRadius: 0,
       borderBottom: '1px solid var(--border-weak)',
-      /* Addressed marker (§4): inset shadow + tint, same shape as
-         picked — a border would shift the content 3px. Color per
-         rule 27. */
       background: alert ? 'color-mix(in srgb, var(--bad) 8%, transparent)' : 'transparent',
       boxShadow: alert ? 'inset 2px 0 0 var(--bad)' : undefined,
       textAlign: 'left',
       color: 'var(--text)', cursor: onClick && !actions ? 'pointer' : undefined,
     }}>
-      {/* 2px between the two lines; sp-1 (4) overflows 40px. */}
       <span style={{ flex: 1, minWidth: 0, display: 'flex', flexDirection: 'column', gap: 2 }}>
         <span style={{ display: 'flex', alignItems: 'center', gap: 'var(--sp-2)', fontSize: 'var(--fs-5)' }}>
           <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{title}</span>
           {tag && <Tag tone={tagTone ?? 'accent'}>{tag}</Tag>}
         </span>
-        {/* The row height is fixed, so the detail line must clip rather
-            than wrap — English details run longer than the Japanese
-            ones this row was measured against. */}
         {sub && <span style={{ fontSize: 'var(--fs-6)', color: 'var(--sub)',
                                overflow: 'hidden', textOverflow: 'ellipsis',
                                whiteSpace: 'nowrap' }}>{sub}</span>}
@@ -588,25 +447,12 @@ function Row({ title, sub, tag, tagTone, alert, actions, onClick, title2 }: {
   );
 }
 
-/** Whether rated play is banned — the lid for automated runs
- *  (KUROOBI_NO_RATED=1). The send path blocks too; this value only
- *  shows the unavailability. */
 function useNoRated(): boolean {
   const [no, setNo] = useState(false);
   useEffect(() => { ggsApi.noRated().then(setNo).catch(() => {}); }, []);
   return no;
 }
 
-/* Whether solve speed is calibrated.
- *
- * Uncalibrated, time management falls back to a fixed ladder —
- * entering games blind to the machine's speed, where timeouts hit
- * the rating directly. So every time-touching action (requests,
- * waiting mode, clock settings) stops here. The backend enforces the
- * same check — UI-only gates leak through stale screens.
- *
- * Defaults to "calibrated" to avoid a flash of disabled while
- * fetching (the backend still blocks). */
 function useCalibrated(): boolean {
   const [ok, setOk] = useState(true);
   useEffect(() => {
@@ -615,26 +461,14 @@ function useCalibrated(): boolean {
       .then((t) => { if (alive) setOk(t.nps != null); })
       .catch(() => {});
     load();
-    // Startup calibration runs in the background; a notice follows.
     const off = onApp('resources-changed', load);
     return () => { alive = false; void off.then((f) => f()); };
   }, []);
   return ok;
 }
 
-/** Uncalibrated message — includes the remedy (rule 34). Read per
- *  call so a language switch re-renders it. */
 const calibNote = (): string => t('ggs.calib_note');
 
-/* ---------------- Waiting mode ----------------
- *
- * Game end -> interval -> auto-request, repeated. The server-side
- * request formula is edited here, beside the loop that runs against
- * it. It used to be view-only with a road to GGS settings, but that
- * put the one setting in this whole app that lives on the server --
- * and needs a connection to read or write -- inside a modal of local
- * ones, which made every other setting there look connection-bound
- * too. One editable copy, on a screen that already assumes GGS. */
 function GgsStandby({ snap }: { snap: GgsSnapshot }) {
   const sb = snap.standby;
   const st = snap.standby_stats;
@@ -649,21 +483,16 @@ function GgsStandby({ snap }: { snap: GgsSnapshot }) {
   const [rated, setRated] = useState(sb.rated);
 
   const names = snap.users.filter((u) => u.name !== snap.login).map((u) => u.name);
-  /* Finished games don't count: they stay listed for their records,
-     and counting them would leave "playing" stuck forever after one
-     game (the backend's auto-accept uses the same test). */
   const playing = snap.matches.some((m) => !m.over);
   const state = sb.enabled
     ? (playing ? t('ggs.standby.state_playing') : t('ggs.standby.state_waiting'))
     : t('ggs.standby.state_off');
 
   const toggle = () => void ggsApi.setStandby({
-    // Banned means false no matter what; stale screens don't pass.
     enabled: !sb.enabled, auto_accept: autoAccept, rated: rated && !noRated, opponent: opp.trim(),
     gtype, time, max_games: maxGames, interval_secs: interval,
   });
 
-  // Re-fetch own settings (the server holds the formula).
   useEffect(() => {
     if (snap.login) ggsApi.finger(snap.login).catch(() => {});
   }, [snap.login]);
@@ -673,8 +502,6 @@ function GgsStandby({ snap }: { snap: GgsSnapshot }) {
       .find(([k]) => k.replace(/\s+/g, '').replace(/\(.*\)/, '') === key)?.[1] ?? '')
       .replace(/^\s*:\s*/, '').trim();
 
-  /* The server holds these, so read them from it rather than trusting
-     anything cached: on open, and again after every save. */
   const online = snap.conn === 'online';
   const login = snap.login;
   useEffect(() => { if (online && login) ggsApi.finger(login).catch(() => {}); }, [online, login]);
@@ -692,14 +519,6 @@ function GgsStandby({ snap }: { snap: GgsSnapshot }) {
 
   return (
     <div className="k-scroll" style={{ flex: 1, minHeight: 0, padding: 'var(--sp-4) var(--sp-4) 0' }}>
-      {/* Start/stop rides the section band, with the state it changes.
-          It used to close the body, which read as "apply the fields
-          above" -- and once the server-side conditions moved onto this
-          screen, it sat between two blocks of settings with more to
-          fill in below it. An action belongs either at the end of
-          everything it governs or on the band of the section it
-          governs; the band keeps it beside the state chip, which is
-          the other half of the same control. */}
       <Section title={t('ggs.standby.title')}
                aside={<span style={{ display: 'flex', alignItems: 'center', gap: 'var(--sp-3)' }}>
                  <Tag tone={sb.enabled ? 'ok' : 'sub'}>{state}</Tag>
@@ -708,17 +527,11 @@ function GgsStandby({ snap }: { snap: GgsSnapshot }) {
                  <Stat v={st.losses} label={t('ggs.stat.losses')} color="var(--bad)" />
                  <Stat v={st.draws} label={t('ggs.stat.draws')} />
                  <Stat v={`${st.diff_sum > 0 ? '+' : ''}${st.diff_sum}`} label={t('ggs.stat.disc_diff')} />
-                 {/* Stopping works even uncalibrated — never trap the
-                     user. The reason for a disabled start is spelled
-                     out in the body, where prose fits. */}
                  <Button variant={sb.enabled ? 'danger' : 'primary'}
                          disabled={!sb.enabled && !calibrated} onClick={toggle}>
                    {sb.enabled ? t('ggs.standby.stop') : t('ggs.standby.start')}
                  </Button>
                </span>}>
-        {/* Three-column grid with no per-field widths — those cramp
-            the format select and shrink number fields unevenly. Split
-            the container in thirds. */}
         <div style={{
           display: 'grid', gap: 'var(--sp-4)',
           gridTemplateColumns: 'repeat(auto-fit, minmax(240px, 1fr))',
@@ -737,12 +550,7 @@ function GgsStandby({ snap }: { snap: GgsSnapshot }) {
             <TextField numeric align="right" value={String(interval)}
                        onChange={(x) => setInterval(+x || 0)} />
           </Field>
-          {/* Rated-ness for outgoing requests (account-level; sent
-              before each). Incoming requests' rated-ness is the
-              asker's choice. */}
           <Field label={t('ggs.rated')}>
-            {/* When banned: disabled with the reason in place (rule
-                61). The send path blocks too; this is presentation. */}
             <Segmented value={rated && !noRated ? 'on' : 'off'} disabled={noRated}
                        onChange={(v) => setRated(v === 'on')}
                        options={[{ value: 'on', label: t('ggs.on') },
@@ -750,8 +558,6 @@ function GgsStandby({ snap }: { snap: GgsSnapshot }) {
             {noRated && <Note>{t('ggs.no_rated_note')}</Note>}
           </Field>
         </div>
-        {/* Toggle pushes its knob right; unconstrained it drifts to
-            the screen edge. */}
         <span style={{ width: 300, display: 'block' }}>
           <Toggle checked={autoAccept} onChange={setAutoAccept} label={t('ggs.standby.auto_accept')} />
         </span>
@@ -759,21 +565,9 @@ function GgsStandby({ snap }: { snap: GgsSnapshot }) {
         {!sb.enabled && !calibrated && <Note>{calibNote()}</Note>}
       </Section>
 
-      {/* Section name and description per §7. The old "two editable
-          copies compete" note was builder's reasoning — rule 64 keeps
-          that out of the UI. What the reader needs: it persists
-          across restarts. */}
       <Section title={t('ggs.standby.formula_title')}>
         <Note>{t('ggs.standby.formula_note')}</Note>
         {online ? <>
-          {/* Keyed on the server's value: it arrives from `finger`
-              after this screen is already up, and the editor reads
-              `src` once, when it mounts. Without the key it kept the
-              empty tree it started with and the formula looked lost --
-              every time on a fresh connection, since nothing has
-              fingered us yet. The key also rebuilds from the server's
-              echo after a save, which is what `saveForm` re-fetches
-              for. */}
           <FormulaField key={'a:' + form('accept')}
                         label={t('ggs.finger.accept')} src={form('accept')}
                         onSave={(x) => void saveForm('aform', x)} />
@@ -798,37 +592,18 @@ function Stat({ v, label, color }: { v: number | string; label: string; color?: 
   );
 }
 
-/* Show the explicitly opened game first.
- *
- * Defaulting to the list head kept showing some other game after
- * starting an observation or landing a match. Record the id at the
- * click and pick it up when the game screen mounts.
- *
- * It crosses screens, but React state would mean lifting to App; as
- * a one-shot handoff, a slot that is read-then-cleared suffices. */
 let wantedMatch = '';
 export function focusMatch(id: string) { wantedMatch = id; }
 
-/* ---------------- Play / observe ----------------
- *
- * Synchro games are pairs; a pair is one row with boards on the
- * right. No undo/abort buttons — both need the opponent's consent,
- * and GGS opponents are mostly programs. Only resignation is one's
- * own decision. */
 function GgsPlay({ snap, onNav, prefs, onKifu }: {
   snap: GgsSnapshot; onNav: (id: NavId) => void; prefs: Prefs;
   onKifu: (title: string, kifu: string, archive?: string) => void;
 }) {
-  /* Show the clicked-through game, then clear — kept around, it
-     reverts later reselections. */
   const [sel, setSel] = useState(() => { const w = wantedMatch; wantedMatch = ''; return w; });
   const clock = useClocks(snap.matches);
 
-  // Group into matches: own games first, then observed.
   const groups = new Map<string, MatchView[]>();
   for (const m of snap.matches) groups.set(m.base, [...(groups.get(m.base) ?? []), m]);
-  /* Newest first — by arrival order, not id: GGS reuses ids, so a
-     new game with a small id landed mid-list (reported live). */
   const fresh = (k: string) => Math.max(...groups.get(k)!.map((m) => m.order));
   const keys = [...groups.keys()].sort((a, b) => {
     const mine = (k: string) => (groups.get(k)!.some((m) => m.my_color) ? 0 : 1);
@@ -844,11 +619,7 @@ function GgsPlay({ snap, onNav, prefs, onKifu }: {
                   body={t('ggs.play.empty_body')}
                   actions={<>
                     <Button variant="primary" onClick={() => onNav('ggs-lobby')}>{t('ggs.play.to_lobby')}</Button>
-                    {/* The design's second button: with no games,
-                        auto-requesting is faster. */}
                     <Button onClick={() => onNav('ggs-standby')}>{t('ggs.play.to_standby')}</Button>
-                    {/* The list can be stale right after reconnect;
-                        keep a re-ask path. */}
                     <Button onClick={() => void ggsApi.listMatches()}>{t('ggs.refresh')}</Button>
                   </>} />
     );
@@ -862,8 +633,6 @@ function GgsPlay({ snap, onNav, prefs, onKifu }: {
         {keys.map((key) => (
           <MatchRow key={key} m={matchRowOf(groups.get(key)!, key)}
                     active={key === cur} onSelect={() => setSel(key)}
-                    // Finished games used to linger; results keep a
-                    // copy, so closing here loses nothing.
                     onClose={() => {
                       void ggsApi.closeMatch(key);
                       if (key === sel) setSel('');
@@ -873,12 +642,9 @@ function GgsPlay({ snap, onNav, prefs, onKifu }: {
 
       <div className="k-scroll" style={{ flex: 1, minWidth: 0, minHeight: 0, padding: 'var(--sp-3)' }}>
         {pair && <MatchActions id={cur} pair={pair} />}
-        {/* Synchro pairs sit side by side, wrapping when narrow. */}
         <div style={{ display: 'flex', gap: 'var(--sp-3)', flexWrap: 'wrap', justifyContent: 'center' }}>
           {pair?.map((m, i) => (
             <MatchBoard key={m.id} snap={snap} m={m} clock={clock} prefs={prefs} onKifu={onKifu}
-                        // A synchro pair is unreadable without "which
-                        // board am I which color on" (design §2).
                         face={(pair?.length ?? 1) > 1 ? i + 1 : undefined} />
           ))}
         </div>
@@ -887,25 +653,12 @@ function GgsPlay({ snap, onNav, prefs, onKifu }: {
   );
 }
 
-/// Resign and adjourn, for the match rather than for a board.
-///
-/// GGS splits a synchro match into `.N.0` and `.N.1` for moves and
-/// board state, but starts and ends it on the parent `.N` -- one
-/// `+ match .20`, one `- match .20 ... R -1.00` carrying the pair's
-/// combined result. So both verbs take the parent, and putting them on
-/// a board offered to end half a match, which is not a thing GGS can
-/// do. `resign` used to send the board id from here.
-///
-/// The record button stays per board: records are per board.
 function MatchActions({ id, pair }: { id: string; pair: MatchView[] }) {
   const [ask, setAsk] = useState<'' | 'resign' | 'break'>('');
   const mine = pair.some((m) => m.my_color);
   const live = !pair.every((m) => m.over);
   if (!mine || !live) return null;
   const send = (verb: 'resign' | 'break') => { setAsk(''); void ggsApi.matchCmd(id, verb); };
-  /* What adjourning actually does here. GGS keeps the record only for
-     a rated game, so the same button either parks the match or throws
-     it away, and the reader has to be told which before pressing. */
   const rated = pair.find((m) => m.rated != null)?.rated ?? null;
   const adjournBody = rated === true ? t('ggs.play.adjourn_body_rated')
     : rated === false ? t('ggs.play.adjourn_body_unrated')
@@ -915,8 +668,6 @@ function MatchActions({ id, pair }: { id: string; pair: MatchView[] }) {
       display: 'flex', gap: 'var(--sp-2)', justifyContent: 'flex-end',
       paddingBottom: 'var(--sp-3)',
     }}>
-      {/* Not `danger`: adjourning is undone by resuming, and two red
-          buttons side by side invite the wrong one. */}
       <Button title={t('ggs.play.adjourn_hint')}
               onClick={() => setAsk('break')}>{t('ggs.adjourn')}</Button>
       <Button variant="danger" title={t('ggs.play.resign_hint')}
@@ -935,7 +686,6 @@ function MatchActions({ id, pair }: { id: string; pair: MatchView[] }) {
   );
 }
 
-/** One match as a list row; finished matches stay listed. */
 function matchRowOf(g: MatchView[], key: string): Match {
   const m = g[0];
   const mine = g.some((x) => x.my_color);
@@ -946,7 +696,6 @@ function matchRowOf(g: MatchView[], key: string): Match {
     kind: gtypeLabel(m.gtype), boards: g.length,
     ply: Math.max(...g.map((x) => x.moves.length)),
     result: g.map((x) => x.result).find(Boolean) || undefined,
-    // Adjournment is not "finished, no result"; say who left.
     ended: g.map((x) => x.ended).find(Boolean) || undefined,
     leftBy: g.map((x) => x.left_by).find(Boolean) || undefined,
   };
@@ -955,18 +704,12 @@ function matchRowOf(g: MatchView[], key: string): Match {
 function MatchBoard({ snap, m, clock, prefs, onKifu, face }: {
   snap: GgsSnapshot; m: MatchView; clock: (id: string, side: ClockSide) => ClockView; prefs: Prefs;
   onKifu: (title: string, kifu: string, archive?: string) => void;
-  /** Board index in a synchro pair (1-based); omit for single games. */
   face?: number;
 }) {
   const observer = !m.my_color;
   const { black, white } = countDiscs(m.cells);
-  // Mark the last placed stone (passes place none; skip them).
   const last = [...m.moves].reverse().map(ggsMoveToIndex).find((x) => x !== null) ?? null;
-  // Show own rating too; what you read mid-game is the gap.
   const myRate = snap.my_ranks.find((r) => r.gtype === (m.gtype.includes('r') ? '8r' : '8'))?.rating;
-  /* Say whose viewpoint: the engine returns mover-side (own) disc
-     diff, but a bare number reads as black's — worse in synchro pairs
-     where own color flips per board. */
   const myEval = m.last_eval != null
     ? t('ggs.play.my_eval', {
         v: (m.last_from_book ? t('ggs.play.book_mark') + ' ' : '') + (m.last_eval > 0 ? '+' : '')
@@ -975,11 +718,6 @@ function MatchBoard({ snap, m, clock, prefs, onKifu, face }: {
       })
     : undefined;
 
-  /* Show the opponent's reported eval too. GGS move rows arrive as
-     `3: C2/20.00/122.16` (move/eval/time), so opponents who report
-     are readable. The sign stays opponent-side — opposite to ours,
-     so one line compares who misreads by how much. Absent when the
-     opponent doesn't report. */
   const oppEval = !observer && m.opp_eval != null
     ? t('ggs.play.opp_eval', {
         v: (m.opp_eval > 0 ? '+' : '') + m.opp_eval.toFixed(1)
@@ -987,31 +725,12 @@ function MatchBoard({ snap, m, clock, prefs, onKifu, face }: {
       })
     : undefined;
 
-  /* Reported-eval trend, one entry per move played -- including the
-     moves nobody reported a value for, which carry null. The chart
-     spaces points by position in this array, so leaving them out made
-     a silent stretch shrink the axis rather than show as a gap; the
-     line is drawn straight across such a stretch. Opponent values
-     negate to own view. */
   const trend = m.eval_series.map((p) => ({
     x: p.n,
     mine: p.mine ? p.eval : null,
     opp: p.mine || p.eval == null ? null : -p.eval,
   }));
 
-  /* Search progress; it moves only at iteration boundaries, so the
-     marker steps with depth. Solve and selective phases show no depth
-     (no iterations).
-
-     Ponder values show too. They used to be squashed to 0, which the
-     board rendered as "even". Ponder reads the opponent's position
-     and is recorded sign-flipped (Progress::flip), so it displays
-     directly as own-view disc diff. */
-  /* Not while pondering: `busy_best` is then the best answer to the
-     assumed reply, a square in a position one ply past the board on
-     screen. The assumed reply is marked instead, and the value it
-     belongs to is spelled out in the status line below, where the
-     assumption can be named. */
   const busyEval: Record<number, EvalInfo> | undefined =
     m.busy && m.busy !== 'ponder' && m.busy_best != null
       ? {
@@ -1033,22 +752,11 @@ function MatchBoard({ snap, m, clock, prefs, onKifu, face }: {
     : { name: snap.login, rate: myRate != null ? myRate.toFixed(1) : '', color: m.my_color as 'black' | 'white', side: 'my' as const };
 
   return (
-    // Synchro boards sit side by side; fixed widths always wrap at
-    // two, so they share the container and shrink (460px cap for one).
-    //
-    // A width-only cap overflows short windows: boards are square, so
-    // width becomes height, and at 860x560 row 8 and the clocks fell
-    // off screen. Cap by window height too (280px is the non-board
-    // share — toolbar 44 + status 28 + strips/rows/buttons ~130 +
-    // padding).
     <div style={{
       flex: '1 1 300px', minWidth: 260, maxWidth: 'min(460px, calc(100vh - 280px))',
       display: 'flex', flexDirection: 'column',
-      // The design frames each board (--panel, radius 11, padding 12);
-      // unframed, the two boards read as one.
       background: 'var(--panel)', borderRadius: 'var(--r-4)', padding: 'var(--sp-3)',
     }}>
-      {/* Synchro only; own color flips per board. */}
       {face !== undefined && (
         <div style={{
           height: 'var(--h-head)', display: 'flex', alignItems: 'center', gap: 'var(--sp-3)',
@@ -1064,24 +772,9 @@ function MatchBoard({ snap, m, clock, prefs, onKifu, face }: {
                  rate={top.rate ? +top.rate : undefined}
                  meta={oppEval}
                  clock={clock(m.id, top.side).text} active={clock(m.id, top.side).cls === 'turn'} />
-      {/* "Me at the bottom" uses own color; observing has no my_color,
-          so black sits at the bottom. */}
-      {/* Thinking/pondering shows on the board, styled like eval
-          display: the single move currently believed best (the
-          predicted reply while pondering). In-game αβ shares windows,
-          so all-square values cannot exist — only this one move is
-          actually known. */}
       <Board cells={m.cells as Cell[]} last={last} disabled
              evals={busyEval}
-             /* Pondering marks the reply it assumes -- a ring, not a
-                value: the number belongs to the line after it, not to
-                this square. */
              next={m.busy === 'ponder' ? m.busy_predict : null}
-             /* The marked square must also enter `legal`: the board
-                draws only on squares passed as legal, and the game
-                screen normally passes none — so pass just this one.
-                That covers the pondered reply too, which is drawn as a
-                ring rather than a value. */
              legal={busyEval ? Object.keys(busyEval).map(Number)
                     : m.busy === 'ponder' && m.busy_predict != null ? [m.busy_predict]
                     : []}
@@ -1091,10 +784,6 @@ function MatchBoard({ snap, m, clock, prefs, onKifu, face }: {
                  rate={bottom.rate ? +bottom.rate : undefined}
                  meta={myEval}
                  clock={clock(m.id, bottom.side).text} active={clock(m.id, bottom.side).cls === 'turn'} />
-      {/* Reported-eval trend: what both sides thought they were
-          winning by, from move one. Raw reports are mover-side, so
-          the opponent's negate to own view — unnormalized, the lines
-          mirror and disagreements vanish. */}
       {!observer && <EvalTrend points={trend} />}
       <div style={{
         display: 'flex', alignItems: 'center', gap: 'var(--sp-3)', height: 'var(--h-field)',
@@ -1102,8 +791,6 @@ function MatchBoard({ snap, m, clock, prefs, onKifu, face }: {
       }}>
         <span style={{ color: 'var(--text)' }}>{black} – {white}</span>
         <span>{t('ggs.play.moves', { n: m.moves.length })}</span>
-        {/* Observation analysis is stored black-view (ggs.rs); say
-            whose view, or the sign is unmoored from the board. */}
         {observer && m.watch_eval != null && (
           <span style={{ display: 'inline-flex', alignItems: 'center', gap: 4 }}>
             {t('ggs.play.analysis')} <StoneDot color="b" />
@@ -1111,8 +798,6 @@ function MatchBoard({ snap, m, clock, prefs, onKifu, face }: {
             {m.watch_best ? ` (${m.watch_best})` : ''}
           </span>
         )}
-        {/* Say the activity in words too; the board mark alone cannot
-            show whether depth is moving. */}
         {m.busy === 'think' && (
           <span style={{ color: 'var(--accent)' }}>
             {m.busy_depth > 0
@@ -1137,8 +822,6 @@ function MatchBoard({ snap, m, clock, prefs, onKifu, face }: {
         {!m.busy && snap.thinking === m.id && (
           <span style={{ color: 'var(--accent)' }}>{t('ggs.play.thinking')}</span>
         )}
-        {/* Adjournment is not a finish: no margin, so no result — say
-            who left. Aborts (mutual) end without a result too. */}
         {m.ended === 'adjourned' && (
           <span style={{ color: 'var(--gold)' }}>
             {t('ggs.state.adjourned')}
@@ -1150,11 +833,6 @@ function MatchBoard({ snap, m, clock, prefs, onKifu, face }: {
           <span style={{ color: 'var(--text)' }}>{t('ggs.play.finished_result', { result: m.result })}</span>
         )}
         <span style={{ marginLeft: 'auto' }} />
-        {/* Finished games stay listed and their records are
-            fetchable; restored from the old GUI (rule 71). */}
-        {/* Pass the archive id too: unreadable local records can be
-            re-fetched (synchro brings both boards plus evals).
-            Without it this dead-ended at "cannot read record". */}
         <Button
                 onClick={() => onKifu(m.opp_name
                                         ? t('ggs.play.game_with', { name: m.opp_name })
@@ -1167,17 +845,8 @@ function MatchBoard({ snap, m, clock, prefs, onKifu, face }: {
   );
 }
 
-/* ---------------- GGS settings ----------------
- *
- * Strength and behavior for GGS play, separate from local games. The
- * request formula lives on the server, so it works with the app
- * closed. */
-/** Both pool ratings (8 and 8r) side by side; pool-less screens
-    (cards, details, who-list) always show both. */
 function bothRates(u: UserRow | undefined): string {
   if (!u) return '';
-  // Pull "rating@deviation" from raw finger rows (more precise than
-  // the list).
   const m = /(\d+(?:\.\d+)?)@\s*(\d+(?:\.\d+)?)/.exec(u.raw || '');
   const r8 = m ? m[1] : (u.rating != null ? u.rating.toFixed(1) : '');
   const d8 = m ? Math.round(parseFloat(m[2])) : null;
@@ -1193,20 +862,14 @@ function bothRates(u: UserRow | undefined): string {
 export function GgsSettings({ snap }: { snap: GgsSnapshot }) {
   const e = snap.engine;
   const calibrated = useCalibrated();
-  /* One-line result; success and failure share the spot. */
   const [saved, setSaved] = useState('');
   const say = (msg: string) => { setSaved(msg); window.setTimeout(() => setSaved(''), 2500); };
   const [levels, setLevels] = useState({ depth: e.depth, solve: e.solve, band: e.band });
-  // Values from global settings (view-only here).
   const threads = e.threads;
   const [ponder, setPonder] = useState(e.ponder);
   const [auto, setAuto] = useState(snap.auto_play);
   const [watch, setWatch] = useState(snap.watch_analysis);
   const [book, setBook] = useState(e.use_book);
-  /* Strength mode is a 2-way choice: derive per move from the clock,
-     or read at the fixed level. Pacing (slow/even/fast) is a separate
-     axis, measured and collapsed to fast — folding this choice in
-     with it was a mistake. */
   const [pace, setPace] = useState(e.pace === 'depth' ? 'depth' : 'fast');
   const byClock = pace !== 'depth';
   const [maxMove, setMaxMove] = useState(e.max_move_secs);
@@ -1217,9 +880,6 @@ export function GgsSettings({ snap }: { snap: GgsSnapshot }) {
 
   const online = snap.conn === 'online';
 
-  /* Never swallow failures and claim success (rule 34): all five
-     calls used to .catch(() => {}) and report success even
-     disconnected. */
   const apply = async () => {
     try {
       await ggsApi.setEngine(levels.depth, levels.solve, levels.band, ponder);
@@ -1234,17 +894,12 @@ export function GgsSettings({ snap }: { snap: GgsSnapshot }) {
     say(t('ggs.settings.applied'));
   };
 
-  /* Apply on touch, no apply button. Everything else applies
-     immediately; this alone required a press, and a forgotten press
-     once sent a game out with ponder still on. Debounced so number
-     fields don't send per keystroke. */
   const first = useRef(true);
   useEffect(() => {
     if (first.current) { first.current = false; return; }
     if (!calibrated) return;
     const timer = setTimeout(() => void apply(), 400);
     return () => clearTimeout(timer);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [levels.depth, levels.solve, levels.band, ponder, pace,
       maxMove, reserve, budgetUse, auto, watch, book]);
 
@@ -1261,17 +916,11 @@ export function GgsSettings({ snap }: { snap: GgsSnapshot }) {
           <Note>
             {byClock ? t('ggs.settings.by_clock_note') : t('ggs.settings.by_level_note')}
           </Note>
-          {/* Clock-derived mode hides the dials — depth, solve and
-              band all derive from time, so the dials would be inert. */}
           {!byClock && (
             <span style={{ maxWidth: 340, display: 'block' }}>
               <Strength value={levels} onChange={setLevels} />
             </span>
           )}
-          {/* Thread count is NOT here: GGS uses the global engine
-              setting. Separate values would need two calibrations,
-              and the uncalibrated one would drop time management to
-              the fixed ladder. */}
           <Field label={t('ggs.settings.threads')}>
             <span style={{ fontSize: 'var(--fs-5)', color: 'var(--sub)' }}>
               {threads === 0
@@ -1280,8 +929,6 @@ export function GgsSettings({ snap }: { snap: GgsSnapshot }) {
               {' · '}{t('ggs.settings.threads_hint')}
             </span>
           </Field>
-          {/* Ponder works in fixed-depth mode too — it turns "deeper"
-              into "faster" (same depth in 1/3 the time, measured). */}
           <Field label={t('ggs.settings.ponder')}>
             <Segmented value={ponder ? 'on' : 'off'}
                        onChange={(v) => setPonder(v === 'on')}
@@ -1291,10 +938,6 @@ export function GgsSettings({ snap }: { snap: GgsSnapshot }) {
           <Note>{t('ggs.settings.ponder_note')}</Note>
         </Section>
 
-        {/* Pacing is not a choice: measured, "slow" scored 0.0% in
-            3s/8s games (−34 discs) and "fast" never lost to "even" —
-            the menu was one right answer among traps, so it
-            collapsed. The mode above is a different axis. */}
         <Section title={t('ggs.settings.clock_use')}>
           {!byClock && (
             <Note>
@@ -1349,7 +992,6 @@ export function GgsSettings({ snap }: { snap: GgsSnapshot }) {
           {!calibrated && <Note>{calibNote()}</Note>}
         </div>
 
-        {/* Connected only; a disabled logout is pointless. */}
         {online && (
           <Section title={t('ggs.settings.connection')}>
             <Note>{t('ggs.settings.logout_note')}</Note>
@@ -1361,13 +1003,8 @@ export function GgsSettings({ snap }: { snap: GgsSnapshot }) {
   );
 }
 
-/* Prose wraps at --w-text (720px) (rule 73); only prose — tables,
- * lists and boards may fill the window. */
-/** One formula, edited as a tree, serialized only on save. */
 function FormulaField({ label, src, onSave }: { label: string; src: string; onSave: (s: string) => void }) {
   const [cond, setCond] = useState<Cond | null>(() => (src ? parseCond(src) : null));
-  /* Keep the escape hatch (rule 30): formulas beyond the tree exist,
-   * and without onRaw the component hides the raw editor. */
   const [raw, setRaw] = useState<string | null>(null);
   if (raw !== null) {
     return (
@@ -1396,40 +1033,17 @@ function FormulaField({ label, src, onSave }: { label: string; src: string; onSa
   );
 }
 
-/* ---------------- Results ----------------
- *
- * The backend keeps 200 finished games across restarts; until now
- * they accumulated with nowhere to be read.
- *
- * Rating history on top, game list below. Rows open in study — this
- * screen exists to reread lost games, so the list means little
- * without that path. */
 function GgsResults({ snap, onKifu }: {
   snap: GgsSnapshot;
   onKifu: (title: string, kifu: string, archive?: string) => void;
 }) {
-  /* Never default to "all": ratings live in per-pool spaces with no
-     combined value, and a mixed line jumps 150 points at each 8/8r
-     switch. Default to the most-played format. */
   const [gtype, setGtype] = useState('');
-  /* Import server history too: local records only cover games ended
-   * in this app, so other machines' games were wholly missing (blank
-   * screen). GGS returns everything via /os history. */
   const login = snap.login;
-  // Request with '' (= self); the stored key is the login — the
-  // backend shares the map with others' histories.
   useEffect(() => { if (login) void ggsApi.history('').catch(() => {}); }, [login]);
-  /* Split by rating pool: GGS has exactly two (8 and 8r) — 16- and
-     14-ply randoms share 8r (finger's Type table has two rows). A
-     per-format split would break one rating line in two. */
   const kinds = [...new Set([
     ...snap.results.map((r) => poolOf(r.base, r.raw)),
     ...(snap.history[snap.login] ?? []).map((h) => poolOf(h.gtype)),
   ])].filter(Boolean);
-  /* Fill gaps from server history, matching on ARCHIVE id: local id
-     is the game number (.64), history returns archive numbers
-     (.84058) — matching those never hit and every game listed twice,
-     skewing format and win counts. */
   const known = new Set(snap.results.flatMap((r) => [r.archive, r.id].filter(Boolean)));
   const fromServer: GameResult[] = (snap.history[snap.login] ?? [])
     .filter((h) => !known.has(h.id))
@@ -1441,17 +1055,10 @@ function GgsResults({ snap, onKifu }: {
         my_diff: Number.isFinite(diff) ? (iAmBlack ? diff : -diff) : null,
         my_rating: parseFloat(iAmBlack ? h.black_rating : h.white_rating) || null,
         at: Date.parse(h.at) / 1000 || 0,
-        // No local record, but fetchable by id (the rule-71 overlay
-        // handles it).
         kifu: '', ggf: '', archive: h.id,
       } as GameResult;
     });
-  /* Re-sort by time: concatenating local + server keeps each sorted
-     but rewinds at the seam (the graph's x ran 8/16 -> 8/15).
-     Timeless entries go last. */
   const all = [...snap.results, ...fromServer].sort((x, y) => (y.at ?? 0) - (x.at ?? 0));
-  /* Default (unselected) is the most-played format; never "all" —
-     no combined rating exists. */
   let most = '';
   let mostN = -1;
   for (const k of kinds) {
@@ -1460,26 +1067,18 @@ function GgsResults({ snap, onKifu }: {
   }
   const cur = gtype || most || 'all';
   const rows = all.filter((r) => cur === 'all' || poolOf(r.base, r.raw) === cur);
-  // The graph runs oldest-first; results stack newest-first.
   const rated = rows.filter((r) => r.my_rating != null).reverse();
   const rates = rated.map((r) => r.my_rating as number);
-  // X labels; only ends and center render, so pass all.
   const rateDates = rated.map((r) => fmtDay(r.at ?? 0));
-  /* Hover text: "which game is this rating" was asked — date,
-     opponent and margin identify the table row. */
   const rateLabels = rated.map((r) => {
     const d = r.my_diff;
     const sign = d == null ? '' : d > 0 ? `+${d}` : `${d}`;
     return `${fmtDay(r.at ?? 0)} · ${r.opp} · ${sign} · ${Math.round(r.my_rating as number)}`;
   });
-  /* Graph-table linking matches on the game itself, not the point
-     index (table newest-first, graph oldest-first). */
   const [hover, setHover] = useState<number | null>(null);
   const hoverKey = hover != null && rated[hover] ? rowKey(rated[hover]) : '';
 
   return (
-    /* Only the list scrolls; whole-screen scrolling floats the graph
-       away while you trace the correspondence. */
     <div style={{ flex: 1, minHeight: 0, display: 'flex', flexDirection: 'column',
                   padding: 'var(--sp-4) var(--sp-4) 0' }}>
       <Section title={t('ggs.results.rating_trend')}
@@ -1488,13 +1087,7 @@ function GgsResults({ snap, onKifu }: {
                             options={[...kinds.map((k) => ({ value: k, label: poolLabel(k) })),
                                       { value: 'all', label: t('ggs.filter.all') }]} />
                ) : undefined}>
-        {/* Full-width, so the viewBox matches (at 300 the strokes
-            stretch). This is the screen's star, so axes show —
-            "when was I at what" is the point (settled 2026-08-10;
-            dock charts stay axis-less). */}
         {cur === 'all' ? (
-          /* No combined rating exists — a line here would step at
-             every pool switch. The list keeps its "all" option. */
           <Note>{t('ggs.results.per_pool_note')}</Note>
         ) : (
           <RateChart points={rates} width={800} height={180} axes dates={rateDates}
@@ -1504,27 +1097,19 @@ function GgsResults({ snap, onKifu }: {
 
       <Section title={t('ggs.results.finished')} aside={<span>{rows.length}</span>} grow>
         {!rows.length && <Empty>{t('ggs.no_records')}</Empty>}
-        {/* Rows stay tight. Rebuild on format change: reusing the
-            container left stale rows (14 drawn for 11 items, randoms
-            squatting in the normal list). */}
         <List key={cur}>
         {rows.map((r) => (
           <ResultRow key={rowKey(r)} opponent={r.opp}
-                     // Light the game hovered in the graph.
                      picked={!!hoverKey && rowKey(r) === hoverKey}
                      onHover={(on) => {
                        const i = rated.findIndex((x) => rowKey(x) === rowKey(r));
                        setHover(on ? (i < 0 ? null : i) : null);
                      }}
                      win={(r.my_diff ?? 0) > 0} draw={r.my_diff === 0}
-                     // No score at all (opponent left): neither a win
-                     // nor a draw, so it used to render as "loss, 0".
                      adjourned={r.my_diff == null}
                      discs={r.my_diff ?? 0} when={fmtDay(r.at)}
                      note={cur === 'all' ? gtypeLabel(baseType(r.base, r.raw)) : undefined}
                      rating={r.my_rating}
-                     // GGF includes the start position (random-opening
-                     // games restore); with neither, fetch by id.
                      onClick={() => onKifu(t('ggs.play.game_with', { name: r.opp }),
                                            r.ggf || r.kifu, r.archive)}
                      dim={!r.ggf && !r.kifu && !r.archive} />
@@ -1535,14 +1120,8 @@ function GgsResults({ snap, onKifu }: {
   );
 }
 
-/** List row key. Plain concatenation collides: '.6'+'86' and
- * '.68'+'6' both make '.686', and duplicate keys leave stale DOM rows
- * when the filter changes (counts vs rendered rows diverged). */
 const rowKey = (r: GameResult) => `${r.id}#${r.seq}`;
 
-/** Rating pool — GGS has exactly two: normal (8) and random (8r).
- * Formats vary (s8r16 / s8r14 / 8r16 ...) but ratings split only on
- * the r; this is the unit for history. */
 const poolOf = (base: string, raw?: string) => {
   const kind = baseType(base, raw);
   if (!kind) return '';
@@ -1552,22 +1131,12 @@ const poolOf = (base: string, raw?: string) => {
 const poolLabel = (p: string) =>
   (p === '8r' ? t('ggs.gtype.rand_opening') : p === '8' ? t('ggs.pool.normal') : p);
 
-/** Game format. History results carry base like "s8r16.2024...", so
- * take the head. Results built from game-over notices have base like
- * ".11" (a game id) which yields nothing ('?' appeared on screen);
- * their raw row carries the format instead. */
 const baseType = (base: string, raw?: string) => {
-  /* Prefer the raw row's format: id-shaped bases fall through anyway,
-     and even non-id bases can lie — the raw row is right in both
-     cases. */
   const fromRaw = raw?.split(/\s+/).find((x) => /^s?8(r\d+)?$/.test(x));
   if (fromRaw) return fromRaw;
   return base.split('.')[0] ?? '';
 };
 
-/** History timestamp (`30 Jul 2026 17:36:36`) to `7/30 17:36`.
- * Unparseable input returns as-is — raw text beats a blank when the
- * server's format changes. */
 function fmtWhen(at: string): string {
   const ms = Date.parse(at);
   if (!Number.isFinite(ms)) return at;
@@ -1576,7 +1145,6 @@ function fmtWhen(at: string): string {
   return `${d.getMonth() + 1}/${p2(d.getDate())} ${p2(d.getHours())}:${p2(d.getMinutes())}`;
 }
 
-/** End date; time only if today. */
 function fmtDay(secs: number): string {
   if (!secs) return '';
   const d = new Date(secs * 1000);
@@ -1587,19 +1155,6 @@ function fmtDay(secs: number): string {
 }
 
 
-/* Player card (design §6's floating one).
- *
- * A preview before the full-screen detail, not a replacement —
- * "details" hands over. Its value is checking an opponent without
- * leaving the board.
- *
- * The design once drew presence / last game / recent 10 / rating
- * history / head-to-head / observe; all dropped once told neither
- * engine nor server exposes them. What remains is finger's four
- * request rows.
- *
- * No match history here: three items per row overflow 340px, and a
- * table has no room. History lives in "details". */
 function UserCard({ snap, name, onClose, onDetail, onAsk }: {
   snap: GgsSnapshot; name: string;
   onClose: () => void;
@@ -1612,8 +1167,6 @@ function UserCard({ snap, name, onClose, onDetail, onAsk }: {
   const rates = bothRates(u);
   const fields = snap.fingers[name]?.fields ?? [];
 
-  /* Only the four non-formula request rows; formulas render as trees
-     and don't fit a 340px card (details holds them). */
   const facts = (fingerGroups(fields).find((g) => g.id === 'request')?.rows ?? [])
     .filter((r) => !['accept', 'decline', 'request'].includes(normKey(r.key).replace(/\(.*\)/, '')));
 
@@ -1633,9 +1186,6 @@ function UserCard({ snap, name, onClose, onDetail, onAsk }: {
               <div key={r.key} style={{ display: 'flex', alignItems: 'center',
                                         gap: 'var(--sp-3)', fontSize: 'var(--fs-5)' }}>
                 <span style={{ color: 'var(--sub)' }}>{r.label}</span>
-                {/* Values read out too: the server returns 1 / + / 0,
-                    unreadable raw. Details always went through
-                    fingerValue; the card alone showed raw. */}
                 <span style={{ marginLeft: 'auto', overflow: 'hidden',
                                textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
                   {fingerValue(r.key, r.value) || '—'}
@@ -1648,61 +1198,31 @@ function UserCard({ snap, name, onClose, onDetail, onAsk }: {
   );
 }
 
-/* ---------------- Players ----------------
- *
- * Who-list plus a selected player's detail. The detail header carries
- * rating and game status, not just the name — losing what the list
- * showed forces a round trip before requesting. */
 function GgsUsers({ snap, onNav, onKifu }: {
   snap: GgsSnapshot; onNav: (id: NavId) => void;
   onKifu: (title: string, kifu: string, archive?: string) => void;
 }) {
-  /* Three tiers: list -> card -> full detail (§6). Never jump list to
-     full — losing the list for a quick look is heavy. card = card,
-     sel = full screen. */
   const [card, setCard] = useState<string | null>(null);
   const [mode, setMode] = useState<'who' | 'top'>('who');
-  /* Player-list columns; head and rows read the SAME array. '#' is
-     rank, present only in top mode — with the condition in two
-     places, one fix drifts the columns. */
   const userCols: Col[] = [
     ...(mode === 'top' ? [{ head: '#', w: 26, right: true, num: true } as Col] : []),
     { head: t('ggs.users.col_name'), clip: true },
-    // The who-list is pool-less; show both 8 and 8r.
     { head: mode === 'who' ? t('ggs.pool.normal') : t('ggs.users.col_rating'),
       w: 96, right: true, num: true },
     ...(mode === 'who'
       ? [{ head: t('ggs.pool.random'), w: 104, right: true, num: true } as Col] : []),
-    // Accepting = "would a request land"; playing players may still
-    // accept (open > games in progress), so it is a separate column.
-    // Widths hold the longest translation: cells never wrap (the row
-    // height is fixed), so a short column truncates instead.
     ...(mode === 'who' ? [{ head: t('ggs.users.col_open'), w: 96, right: true } as Col] : []),
     { head: t('ggs.users.col_status'), w: 64, right: true },
   ];
-  /* The status column derives from snap.ongoing, which arrives only
-     at login and every 60s — freshly connected, everyone shows blank.
-     Re-ask on open; `tell /os match` is a pure query (rule 61: never
-     make people wait for what asking solves). */
   useEffect(() => { void ggsApi.listMatches().catch(() => {}); }, []);
-  /* Capture entry (KUROOBI_GGS_AUTOVIEW=users:card): the card frame
-     without a connection — empty content is fine; the 340px box,
-     three tiers and two footer buttons are what's checked. */
   useEffect(() => {
     void ggsApi.autoview().then((v) => {
-      /* The first segment must spell the destination id: after the
-         ggs-users -> ggs-players rename this stayed stale, users:card
-         missed, and the body went blank on a navless destination. */
       if (v === 'players:card') setCard(snap.login || '—');
       if (v === 'players:top') setMode('top');
     }).catch(() => {});
   }, [snap.login]);
   const [sel, setSel] = useState<string | null>(null);
-  // Rankings are per-pool (mixed ranks mean nothing); the pool is
-  // selectable, and own rating shows both.
   const [pool, setPool] = useState('8');
-  // Paged, not scrolled (rule 74) — scrolling loses "what rank am I
-  // looking at".
   const [page, setPage] = useState(0);
   const [perPage, setPerPage] = useState(25);
   const [tab, setTab] = useState('profile');
@@ -1741,8 +1261,6 @@ function GgsUsers({ snap, onNav, onKifu }: {
 
       <Section title={mode === 'who' ? t('ggs.users.online') : t('ggs.users.ranking')}
                aside={<>
-                 {/* Pool select only in top mode; the who-list is the
-                     same people regardless, so showing it would lie. */}
                  {mode === 'top' && (
                    <Segmented value={pool} onChange={(p) => {
                      setPool(p);
@@ -1758,18 +1276,12 @@ function GgsUsers({ snap, onNav, onKifu }: {
                               { value: 'top', label: t('ggs.users.top') }]} />
                </>}>
         {!rows.length && <Empty>{t('ggs.users.nobody')}</Empty>}
-        {/* §5 draws this as a TABLE — headers (#/name/rating/status)
-            and 24px rows (rule 5). It used to be headerless 32px rows
-            with drifting columns. '#' only in top mode. */}
         {!!rows.length && (
           <TableHead cols={userCols} pad="var(--sp-4)" />
         )}
-        {/* Never bare headers; right after connect the list hasn't
-            arrived. */}
         {!slice.length && (
           <Empty>{mode === 'who' ? t('ggs.users.none_online') : t('ggs.users.no_ranking')}</Empty>
         )}
-        {/* Rows stay tight (the section-gap trap). */}
         <List>
         {slice.map((u, i) => {
         const playing = snap.ongoing.some((o) => o.names.includes(u.name));
@@ -1781,10 +1293,6 @@ function GgsUsers({ snap, onNav, onKifu }: {
               </span>
             )}
             <span className="k-sel">{u.name}</span>
-            {/* Deviation always accompanies ratings (rule 29). /os t
-                returns it, /os who does not — the who-list shows bare
-                numbers. Who-list shows both pools; rankings use the
-                selected one. */}
             <span>
               {u.rating != null && <>
                 {u.rating.toFixed(1)}
@@ -1803,9 +1311,6 @@ function GgsUsers({ snap, onNav, onKifu }: {
                 </>}
               </span>
             )}
-            {/* Accepting status: who marks names with + / - / x
-                (ghost). Idle players may still refuse, and not
-                knowing wastes a request. */}
             {mode === 'who' && (
               <span style={{
                 fontSize: 'var(--fs-6)',
@@ -1817,17 +1322,12 @@ function GgsUsers({ snap, onNav, onKifu }: {
                   : u.open ? t('ggs.users.open_no') : '—'}
               </span>
             )}
-            {/* Status as colored text (badges change row height).
-                Non-playing players say "idle" — blanks read as a
-                broken column (§5 draws the two values too). */}
             <span style={{
               fontSize: 'var(--fs-6)', color: playing ? 'var(--ok)' : 'var(--sub)',
             }}>{playing ? t('ggs.state.playing') : t('ggs.state.idle')}</span>
           </TableRow>
         );})}
         </List>
-        {/* Paging sits outside the list — flush below, it reads as a
-            row. */}
         {rows.length > perPage && (
           <div style={{
             display: 'flex', alignItems: 'center', gap: 'var(--sp-2)',
@@ -1859,12 +1359,7 @@ function UserDetail({ snap, name, tab, onTab, onBack, onNav, onKifu }: {
   const rates = bothRates(u);
   const playing = snap.ongoing.some((o) => o.names.includes(name));
   const fields = snap.fingers[name]?.fields ?? [];
-  /* A formula is written from its owner's side: `m*` is this player and
-     `o*` is whoever offers them a game. Showing both as "me" and "the
-     opponent" here reversed every side-dependent condition. */
   const who = { me: name, them: t('ggs.formula.who.me') };
-  // Own history sits under the login key like everyone's (only the
-  // request uses '').
   const rows = snap.history[name] ?? [];
   const histCols: Col[] = [
     { head: t('ggs.users.col_when'), w: 132 },
@@ -1876,7 +1371,6 @@ function UserDetail({ snap, name, tab, onTab, onBack, onNav, onKifu }: {
 
   return (
     <div style={{ flex: 1, minHeight: 0, display: 'flex', flexDirection: 'column' }}>
-      {/* Header band: name, rating, status and request in one row. */}
       <div style={{
         flex: 'none', display: 'flex', alignItems: 'center', gap: 'var(--sp-3)',
         padding: 'var(--sp-3) var(--sp-4)', borderBottom: '1px solid var(--border)',
@@ -1901,14 +1395,10 @@ function UserDetail({ snap, name, tab, onTab, onBack, onNav, onKifu }: {
         {tab === 'profile' ? (
           <>
             {!fields.length && <Empty>{t('ggs.loading')}</Empty>}
-            {/* 24 uniform rows bury what matters pre-request; grouping
-                and order come from ggs.ts's FINGER_GROUPS. */}
             {fingerGroups(fields).map((g) => (
               <Section key={g.title} title={g.title}>
                 {g.rows.map((r) => {
                   const key = normKey(r.key).replace(/\(.*\)/, '');
-                  // Formulas render as trees, never flattened — the
-                  // structure is the meaning.
                   const cond = ['accept', 'decline', 'request'].includes(key)
                     ? parseCond(r.value) : null;
                   return (
@@ -1933,16 +1423,11 @@ function UserDetail({ snap, name, tab, onTab, onBack, onNav, onKifu }: {
         ) : (
           <>
             {!rows.length && <Empty>{t('ggs.users.no_history')}</Empty>}
-            {/* As a table: dot-joined two-liners scatter date, format
-                and margin per row. Clicking opens the record overlay
-                (fetched by id — nothing local). */}
             {!!rows.length && <TableHead cols={histCols} />}
             <List>
             {rows.map((h) => {
               const black = h.black === name;
               const d = parseFloat(h.score);
-              // Margin from this player's view; black-side records
-              // arrive black-view.
               const mine = Number.isFinite(d) ? (black ? d : -d) : null;
               return (
                 <TableRow key={h.id} cols={histCols}
@@ -1970,9 +1455,6 @@ function UserDetail({ snap, name, tab, onTab, onBack, onNav, onKifu }: {
   );
 }
 
-/** Chat's left column — the conversation list, at --w-lobby (174px),
- *  never borrowing the match list's --w-list (rule 6). Extracted from
- *  the 187-line GgsChat; four props suffice. */
 function ChatList({ sorted, cur, onThread, onPick }: {
   sorted: [string, { last: ChatMsg; n: number }][];
   cur: string;
@@ -1981,17 +1463,10 @@ function ChatList({ sorted, cur, onThread, onPick }: {
 }) {
   return (
     <>
-    {/* --w-lobby (174px), not the match list's --w-list (rule 6).
-        §6 draws this column at 173px — the token's "GGS left column"
-        description meant here (the lobby has no 174px column). Names
-        clip with ellipsis. */}
     <aside style={{
       width: 'var(--w-lobby)', flex: 'none', borderRight: '1px solid var(--border)',
       minHeight: 0, display: 'flex', flexDirection: 'column',
     }}>
-      {/* Heading button is chip (20px) — a 28px one fights the title
-          in 174px. The design's 21px band sinks buttons into the
-          rule, so this band alone is 32px. Needs a push. */}
       <div style={{
         flex: 'none', height: 'var(--h-field)', display: 'flex', alignItems: 'center',
         gap: 'var(--sp-2)', padding: '0 var(--sp-3)', borderBottom: '1px solid var(--border-weak)',

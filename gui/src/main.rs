@@ -1,6 +1,4 @@
-//! Kuroobi's GUI (Tauri). The engine links into the same process; the
-//! blocking search runs on worker threads (spawn_blocking). The
-//! frontend is the static page under gui/ui/.
+//! Kuroobi's GUI (Tauri).
 
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
@@ -22,36 +20,20 @@ use kuroobi::{Board, Color, Position};
 struct App {
     game: Mutex<Reversi>,
     engine: Arc<Mutex<Option<Engine>>>,
-    /// Stop handle kept outside the Engine mutex so it stays reachable
-    /// during a search.
     stop: Arc<Mutex<Option<kuroobi::midgame::StopHandle>>>,
-    /// GGS session (resident thread).
     ggs: Mutex<Option<ggs::Handle>>,
-    /// Whether local games feed book learning.
     learn_on: Mutex<bool>,
-    /// Which feature currently uses the CPU (status display, and the
-    /// yield decision for learning).
     activity: Arc<Mutex<Activity>>,
-    /// Previous CPU sample (wall time, process CPU time).
     cpu_meter: Mutex<Option<(std::time::Instant, std::time::Duration)>>,
-    /// Local game clock, shaped like GGS's — without a place to
-    /// practice under a clock, pacing could only be tried live.
     clocks: Mutex<Clocks>,
 }
 
-/// Local game clock; 0 seconds means untimed.
 #[derive(Default)]
 struct Clocks {
-    /// Time per player in seconds; 0 disables the clock.
     total: u64,
-    /// Remaining seconds, kept separately for the human and KUROOBI.
     black: f64,
     white: f64,
-    /// Which side flagged; frozen once set.
     lost: Option<kuroobi::Color>,
-    /// When the current turn started; charged on every move. Humans and
-    /// KUROOBI are timed the same way (charging only measured think time
-    /// would leave human deliberation uncounted).
     turn_started: Option<std::time::Instant>,
 }
 
@@ -68,7 +50,6 @@ impl Clocks {
         };
     }
 
-    /// End the turn: charge the elapsed time, start the next turn.
     fn turn_done(&mut self, mover: kuroobi::Color) {
         if self.total == 0 {
             return;
@@ -85,7 +66,6 @@ impl Clocks {
             self.white
         }
     }
-    /// Charge used time, clamped at 0 (negatives break the display).
     fn spend(&mut self, c: kuroobi::Color, secs: f64) {
         let v = if c == kuroobi::Color::Black {
             &mut self.black
@@ -99,7 +79,6 @@ impl Clocks {
     }
 }
 
-/// CPU time used by this process (user + sys); no privileges needed.
 fn process_cpu_time() -> std::time::Duration {
     unsafe {
         let mut ru: libc::rusage = std::mem::zeroed();
@@ -110,12 +89,8 @@ fn process_cpu_time() -> std::time::Duration {
     }
 }
 
-/// Current resident memory of this process (not the peak, so table
-/// resizes show up directly).
 #[cfg(target_os = "macos")]
 fn process_memory() -> u64 {
-    // Structs/constants from libc; only the task port from mach2
-    // (libc's mach_task_self_ is deprecated).
     unsafe {
         let mut info: libc::mach_task_basic_info = std::mem::zeroed();
         let mut count = (std::mem::size_of::<libc::mach_task_basic_info>()
@@ -140,7 +115,6 @@ fn process_memory() -> u64 {
     0
 }
 
-/// Total physical memory (the utilization denominator).
 #[cfg(target_os = "macos")]
 fn total_memory() -> u64 {
     let mut sz: u64 = 0;
@@ -165,19 +139,13 @@ fn total_memory() -> u64 {
     0
 }
 
-/// The local feature using the CPU. Searches are exclusive, so one slot
-/// suffices; learning runs in the background but yields to everything.
 #[derive(Default)]
 pub(crate) struct Activity {
-    /// Kind of running local search (think / analyze / review).
     pub(crate) local: Option<&'static str>,
-    /// Learning import progress (done, total); None without a job.
     learn: Option<(u32, u32)>,
-    /// Whether learning is paused, yielding to another feature.
     learn_paused: bool,
 }
 
-/// Running marker for a local search; clears itself on scope exit.
 struct ActivityGuard(Arc<Mutex<Activity>>);
 impl ActivityGuard {
     fn begin(slot: &Arc<Mutex<Activity>>, kind: &'static str) -> Self {
@@ -191,7 +159,6 @@ impl Drop for ActivityGuard {
     }
 }
 
-/// Default thread count (half the cores).
 fn auto_threads() -> usize {
     std::thread::available_parallelism()
         .map(|n| (n.get() / 2).max(1))
@@ -202,16 +169,12 @@ fn ggs_snap_arc(app: &State<App>) -> Option<Arc<Mutex<ggs::Snapshot>>> {
     app.ggs.lock().unwrap().as_ref().map(|h| h.snapshot.clone())
 }
 
-/// Whether one of our GGS games is in progress. A clocked real game
-/// gets the CPU first: local searches refuse to start and learning
-/// yields.
 fn ggs_match_in(snap: &Option<Arc<Mutex<ggs::Snapshot>>>) -> bool {
     snap.as_ref().is_some_and(|s| {
         s.lock()
             .unwrap()
             .matches
             .iter()
-            // Finished games stay listed; look only at ongoing ones.
             .any(|m| !m.my_color.is_empty() && !m.over)
     })
 }
@@ -224,7 +187,6 @@ fn same_board(a: &Board, b: &Board) -> bool {
     a.black == b.black && a.white == b.white && a.player() == b.player()
 }
 
-/// NaN/inf become null in JSON and break the frontend; clamp at the boundary.
 fn finite(v: f32) -> f32 {
     if v.is_finite() {
         v
@@ -237,42 +199,29 @@ fn finite(v: f32) -> f32 {
     }
 }
 
-/// Board and game-state snapshot (the shape sent to the frontend).
 #[derive(Serialize, Clone)]
 struct GameView {
-    /// 64 cells: 0 = empty, 1 = black, 2 = white (file-major, A1 = 0).
     cells: Vec<u8>,
-    /// "black" | "white"
     player: String,
     legal: Vec<u8>,
     black: u8,
     white: u8,
     over: bool,
-    /// Last move square (null on pass).
     last: Option<u8>,
-    /// Game record in f5d6... form.
     kifu: String,
     move_count: usize,
-    /// Full move line (including undone moves); null = pass.
     moves: Vec<Option<u8>>,
-    /// Which move of `moves` the current position follows.
     cursor: usize,
 }
 
 #[derive(Serialize)]
 struct ThinkView {
-    /// Chosen square (null = pass); the position has not moved yet.
     pos: Option<u8>,
-    /// Mover-view value in discs.
     value: f32,
     exact: bool,
-    /// Whether the move came from the book.
     from_book: bool,
-    /// Whether it is a game-learned book entry (display only).
     learned: bool,
-    /// Seconds spent on this move (book moves ~0).
     secs: f32,
-    /// Nodes visited for this move (0 for book moves).
     nodes: u64,
 }
 
@@ -281,27 +230,18 @@ struct HintView {
     pos: u8,
     value: f32,
     exact: bool,
-    /// Whether the value came from the book, not search.
     from_book: bool,
-    /// Search depth behind the value (0 for solves and book).
     depth: u32,
 }
 
 #[derive(Serialize)]
 struct EvalPoint {
     n: usize,
-    /// Disc difference from Black's view.
     value: f32,
     exact: bool,
-    /// Whether the value came from the book, not search.
     from_book: bool,
 }
 
-/// Board right after move n of the line.
-///
-/// Never replay from the standard start: GGS drawn openings start
-/// elsewhere and would fail on the first move. Without the start
-/// position, walk with undo/redo to the target and back.
 fn board_at_line(game: &mut Reversi, n: usize) -> Result<Board, String> {
     if n > game.line().len() {
         return Err("out of range".into());
@@ -352,7 +292,6 @@ fn view(game: &Reversi) -> GameView {
     }
 }
 
-/// Consume a pass when the mover has no legal move and the game continues.
 fn auto_pass(game: &mut Reversi) {
     while !game.is_game_over() && game.movable() == 0 {
         if game.pass().is_err() {
@@ -361,20 +300,13 @@ fn auto_pass(game: &mut Reversi) {
     }
 }
 
-/// Config file location, in the OS config directory (the only place
-/// available once packaged).
 fn resources_path() -> PathBuf {
     let base =
         dirs_config().unwrap_or_else(|| PathBuf::from(concat!(env!("CARGO_MANIFEST_DIR"), "/..")));
     base.join("kuroobi").join("resources.conf")
 }
 
-/// Import log. Lives in the config directory, not next to the book:
-/// books get swapped, but "what did I import" should survive a swap —
-/// different lifetimes, different homes.
 fn learn_log_path() -> PathBuf {
-    /* Overridable via `KUROOBI_LEARN_LOG`: the screen only shows real
-    data, so empty/filtered states could not be exercised otherwise. */
     if let Ok(p) = std::env::var("KUROOBI_LEARN_LOG") {
         return PathBuf::from(p);
     }
@@ -383,7 +315,6 @@ fn learn_log_path() -> PathBuf {
     base.join("kuroobi").join("learn_log.jsonl")
 }
 
-/// $XDG_CONFIG_HOME / ~/Library/Application Support / %APPDATA%。
 fn dirs_config() -> Option<PathBuf> {
     if let Ok(d) = std::env::var("XDG_CONFIG_HOME") {
         return Some(PathBuf::from(d));
@@ -399,9 +330,6 @@ fn resources() -> Resources {
     Resources::load(&resources_path())
 }
 
-/// Create the engine if absent. Takes an Arc so worker threads
-/// (spawn_blocking) can use it — sync commands run on the main thread,
-/// and waiting for the engine lock there freezes the whole UI.
 fn ensure_engine_in(
     engine_slot: &Arc<Mutex<Option<Engine>>>,
     stop_slot: &Arc<Mutex<Option<kuroobi::midgame::StopHandle>>>,
@@ -414,8 +342,6 @@ fn ensure_engine_in(
             nnue: res.nnue_path(),
             book: res.book_path(),
             threads: res.threads.unwrap_or_else(auto_threads),
-            // Table sizes only apply at startup: the tables are leaked
-            // to 'static, so rebuilding stacks the old ones unfreed.
             midgame_hash_bits: res.hash_mid_bits(),
             solver_hash_bits: res.hash_end_bits(),
             ..Default::default()
@@ -427,24 +353,6 @@ fn ensure_engine_in(
     Ok(())
 }
 
-/// Calibrate any uncalibrated thread counts in the background.
-///
-/// Without calibration `timectl` degrades to the fixed ladder, and a
-/// measurement button nobody presses measures nothing — so do it
-/// automatically. Takes 1-3 seconds, and never during a game (it would
-/// steal CPU from a clocked search); only right after startup while
-/// idle. Local and GGS thread settings differ, so measure both.
-/// Build the engine before anything asks for a move.
-///
-/// The network is over a gigabyte and takes a couple of seconds to read and
-/// quantize. `ensure_engine_in` does that work on whichever call finds the
-/// slot empty -- which, without this, is the first move of the first game,
-/// with the user waiting on it. Doing it at launch moves the cost to a moment
-/// where nothing is blocked on it, and the jobs row says what is running.
-///
-/// It is a plain preload, not a second path: the same `ensure_engine_in` fills
-/// the same slot, so a move that still arrives first is served by the loader it
-/// would have run anyway rather than waiting for a second one.
 fn preload_engine(
     engine_slot: Arc<Mutex<Option<Engine>>>,
     stop_slot: Arc<Mutex<Option<kuroobi::midgame::StopHandle>>>,
@@ -452,8 +360,6 @@ fn preload_engine(
 ) {
     std::thread::spawn(move || {
         let _guard = ActivityGuard::begin(&activity, "loading");
-        // A failure here is not worth a toast: nothing asked for the engine
-        // yet. The first move reports it, through the same path as before.
         let _ = ensure_engine_in(&engine_slot, &stop_slot);
     });
 }
@@ -483,7 +389,6 @@ fn calibrate_missing(
             return;
         }
         for t in missing {
-            // A game started meanwhile: skip the rest (next launch).
             if activity.lock().unwrap().local.is_some() {
                 return;
             }
@@ -501,8 +406,6 @@ fn calibrate_missing(
                 let mut r = resources();
                 r.set_nps(t, nps);
                 let _ = r.save(&resources_path());
-                /* Notify an open settings screen: it reads once on open,
-                so silent writes would leave it showing "unmeasured". */
                 use tauri::Emitter;
                 let _ = app.emit("resources-changed", ());
             }
@@ -510,16 +413,7 @@ fn calibrate_missing(
     });
 }
 
-/// Turn engine-init failures into a key the frontend translates. The
-/// library messages are shared with the CLI (`nnue <path>: ...`); toasts
-/// must not show internal jargon without a fix suggestion, so map them
-/// to `err.*` keys and pass the path along as a parameter.
 fn setup_error(e: String) -> String {
-    // A file that cannot be read carries the OS error; one that reads but does
-    // not fit this build fails validation, which never does. Two `weights/`
-    // networks of different shapes now sit side by side, so the file picker
-    // can hand us a readable file the build cannot use, and "not found" would
-    // be the wrong thing to say about a file the user just picked.
     let shape = !e.contains("(os error");
     let key = if e.starts_with("nnue ") {
         if shape {
@@ -532,7 +426,6 @@ fn setup_error(e: String) -> String {
     } else {
         return e;
     };
-    // "nnue /path/to/x.bin: No such file or directory (os error 2)"
     let path = e
         .split_once(' ')
         .and_then(|(_, rest)| rest.split_once(": "))
@@ -554,12 +447,6 @@ fn state(app: State<App>) -> GameView {
 fn new_game(app: State<App>) -> GameView {
     let mut game = app.game.lock().unwrap();
     *game = Reversi::new();
-    /* Start the game on empty tables. A table carried over from the
-    previous game -- or from the startup calibration -- answers positions
-    this game never searched, so the same opening gives different moves
-    from one launch to the next. The CLI clears on `clear_board` for the
-    same reason; a self-play game there is reproducible and one here was
-    not. */
     if let Some(e) = app.engine.lock().unwrap().as_mut() {
         e.clear_tables();
     }
@@ -578,7 +465,6 @@ fn play(app: State<App>, sq: u8) -> Result<GameView, String> {
 #[tauri::command]
 fn undo(app: State<App>) -> Result<GameView, String> {
     let mut game = app.game.lock().unwrap();
-    // Passes are stacked as moves too; rewind to the last stone placed.
     loop {
         game.undo().map_err(|e| format!("{e:?}"))?;
         let placed = game.history.last().map(|r| r.pos.is_some());
@@ -589,8 +475,6 @@ fn undo(app: State<App>) -> Result<GameView, String> {
     Ok(view(&game))
 }
 
-/// Jump to just after move n of the line (walked via undo/redo, so
-/// both directions work).
 #[tauri::command]
 fn goto(app: State<App>, n: usize) -> Result<GameView, String> {
     let mut game = app.game.lock().unwrap();
@@ -606,8 +490,6 @@ fn goto(app: State<App>, n: usize) -> Result<GameView, String> {
     Ok(view(&game))
 }
 
-/// Abort the running search (think and analysis); the frontend
-/// discards the result.
 #[tauri::command]
 fn stop_search(app: State<App>) -> Result<(), String> {
     if let Some(h) = app.stop.lock().unwrap().as_ref() {
@@ -616,8 +498,6 @@ fn stop_search(app: State<App>) -> Result<(), String> {
     Ok(())
 }
 
-/// Toggle book use (off to study the engine's own moves).
-/// async + spawn_blocking keeps the lock wait off the main thread.
 #[tauri::command]
 async fn set_use_book(app: State<'_, App>, on: bool) -> Result<(), String> {
     let (eng, stop) = (app.engine.clone(), app.stop.clone());
@@ -634,95 +514,60 @@ async fn set_use_book(app: State<'_, App>, on: bool) -> Result<(), String> {
     .map_err(|e| e.to_string())?
 }
 
-/// Smoke-test hook (KUROOBI_AUTOPLAY): start something right after
-/// launch. "vs" = a game, "both" = engine vs engine; ":<level>" sets
-/// strength (e.g. "both:11").
 #[tauri::command]
 fn autoplay() -> String {
     std::env::var("KUROOBI_AUTOPLAY").unwrap_or_default()
 }
 
-/// Screenshot hook: pin the theme (`KUROOBI_THEME=light`/`dark`).
-/// The only toggle lives in Settings > Display, which made light-theme
-/// checks manual; not persisted — effective for this launch only.
 #[tauri::command]
 fn theme_override() -> String {
     std::env::var("KUROOBI_THEME").unwrap_or_default()
 }
 
-/// Screenshot hook: pin the UI language (`KUROOBI_LANG=en`/`ja`).
-/// Same reasoning as `theme_override` — the only switch is in
-/// Settings > Display, so captures could not cover both languages.
 #[tauri::command]
 fn lang_override() -> String {
     std::env::var("KUROOBI_LANG").unwrap_or_default()
 }
 
-/// The machine's language, for the default `auto` setting.
-///
-/// The WebView's `navigator.language` is not it: it follows the app
-/// bundle's localizations, so an unlocalized build reports `en-US`
-/// even on a Japanese system (observed — the UI came up English with
-/// AppleLanguages set to ja-JP). Ask the OS instead.
 #[tauri::command]
 fn system_lang() -> String {
     sys_locale::get_locale().unwrap_or_default()
 }
 
-/// Whether a book is available (for display); answered by file
-/// existence since engine init is expensive.
 #[tauri::command]
 fn has_book() -> bool {
     resources().book_path().exists()
 }
 
-/// Whether local games feed book learning.
 #[tauri::command]
 fn set_learn(app: State<App>, on: bool) {
     *app.learn_on.lock().unwrap() = on;
 }
 
-/// One imported game. Times stay as unix seconds — formatting belongs
-/// to the viewer's timezone and calendar, not the record.
 #[derive(Serialize, Deserialize, Clone)]
 pub struct LearnEntry {
     pub at: u64,
     pub kifu: String,
     pub black: u8,
     pub white: u8,
-    /// Positions written back; an abandoned import records what it got through.
     pub positions: u32,
-    /// Drawn-opening start position (board string); empty for the
-    /// standard start. Without it a drawn game reopens as a different game.
     #[serde(default)]
     pub start: String,
-    /// Rewrite details; without them a bad game could be neither found
-    /// nor reverted.
     #[serde(default)]
     pub changes: Vec<LearnChange>,
-    /// Opponent name for GGS games, empty for local. Defaults exist
-    /// because old log lines lack the field.
     #[serde(default)]
     pub opponent: String,
-    /// Which color we played ("b"/"w"); without it disc counts cannot
-    /// decide the result and the "lost games" filter breaks. Old lines
-    /// lack it — default empty, excluded from the filter.
     #[serde(default)]
     pub my_color: String,
 }
 
-/// One book-move rewrite record.
 #[derive(Serialize, Deserialize, Clone)]
 pub struct LearnChange {
-    /// Move number (1-based, passes excluded).
     pub ply: usize,
     pub mv: String,
-    /// Value before the overwrite; null if the move was absent.
     pub before: Option<f32>,
     pub after: f32,
-    /// Best value after the rewrite; `best - after` = discs lost.
     pub best: f32,
-    /// Whether this import created the entry.
     #[serde(default)]
     pub new_entry: bool,
 }
@@ -740,7 +585,6 @@ impl LearnChange {
     }
 }
 
-/// Current unix seconds, for log timestamps.
 pub fn now_secs() -> u64 {
     std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
@@ -748,8 +592,6 @@ pub fn now_secs() -> u64 {
         .unwrap_or(0)
 }
 
-/// Append one line per record; crash-safe apart from the one line in
-/// flight.
 pub fn learn_log_append(e: &LearnEntry) {
     let path = learn_log_path();
     if let Some(dir) = path.parent() {
@@ -769,12 +611,8 @@ pub fn learn_log_append(e: &LearnEntry) {
     trim_learn_log(&path);
 }
 
-/// Log cap. Lines carry rewrite details (3-4 KB each); 200 stays under
-/// 1 MB and matches what the screen shows.
 const LEARN_LOG_MAX: usize = 200;
 
-/// Rewrite the log keeping the newest entries, only once over the cap
-/// (rewriting every time would defeat appending).
 fn trim_learn_log(path: &std::path::Path) {
     let Ok(text) = std::fs::read_to_string(path) else {
         return;
@@ -787,7 +625,6 @@ fn trim_learn_log(path: &std::path::Path) {
     let _ = std::fs::write(path, keep + "\n");
 }
 
-/// Imported games, newest first; unreadable lines skipped.
 #[tauri::command]
 fn learn_log() -> Vec<LearnEntry> {
     let Ok(text) = std::fs::read_to_string(learn_log_path()) else {
@@ -798,14 +635,10 @@ fn learn_log() -> Vec<LearnEntry> {
         .filter_map(|l| serde_json::from_str(l).ok())
         .collect();
     out.reverse();
-    // Only the recent slice; returning everything grows with age.
     out.truncate(200);
     out
 }
 
-/// Undo one import: find the log line (keyed by `at` + record), revert
-/// the book, then remove the line. Never remove first — a failed revert
-/// with a deleted record would be unverifiable.
 #[tauri::command]
 async fn learn_undo(app: State<'_, App>, at: u64, kifu: String) -> Result<usize, String> {
     let log = learn_log();
@@ -849,7 +682,6 @@ async fn learn_undo(app: State<'_, App>, at: u64, kifu: String) -> Result<usize,
     Ok(n)
 }
 
-/// Remove one log line (after the undo).
 fn learn_log_remove(at: u64, kifu: &str) {
     let path = learn_log_path();
     let Ok(text) = std::fs::read_to_string(&path) else {
@@ -866,16 +698,7 @@ fn learn_log_remove(at: u64, kifu: &str) {
     let _ = std::fs::write(&path, kept.join("\n") + "\n");
 }
 
-/// Import a finished local game into book learning (learn.rs). Called
-/// by the frontend when a played game ends; merely-loaded records don't
-/// qualify. The import advances one search at a time and releases the
-/// engine lock between searches, so starting a think waits at most one
-/// search.
 #[tauri::command]
-/// `my_color` is the human's color ("b"/"w"), which only the screen
-/// knows (KUROOBI's side is configurable, the human is its complement).
-/// Without it, disc counts alone cannot decide the result. Empty when
-/// undecidable.
 fn learn_game(app: State<App>, my_color: String) -> Result<(), String> {
     if !*app.learn_on.lock().unwrap() {
         return Ok(());
@@ -887,8 +710,6 @@ fn learn_game(app: State<App>, my_color: String) -> Result<(), String> {
         }
         (game.to_kifu(), game.board)
     };
-    // Import only games that replay from the standard start to the
-    // final board (keeps loaded drawn-opening games out).
     let (_, fin) = kuroobi::learn::replay(None, &kifu)?;
     if fin.black != board.black || fin.white != board.white {
         return Err("err.not_from_standard_start".into());
@@ -898,8 +719,6 @@ fn learn_game(app: State<App>, my_color: String) -> Result<(), String> {
     let act = app.activity.clone();
     let ggs_snap = ggs_snap_arc(&app);
     tauri::async_runtime::spawn_blocking(move || {
-        // Engine setup happens here too (waiting for the lock inside a
-        // sync command would freeze the main thread).
         if ensure_engine_in(&eng, &stop).is_err() {
             return;
         }
@@ -912,17 +731,10 @@ fn learn_game(app: State<App>, my_color: String) -> Result<(), String> {
             }
         };
         let total = job.remaining() as u32;
-        // Empty until finished; abandoned imports leave no details.
         let mut changes: Vec<kuroobi::learn::BackupChange> = Vec::new();
-        /* Last yield time. Yields are many and momentary (analysis
-        toggles the search marker per position), while the screen samples
-        once a second — so a real, frequent yield would never display.
-        Hold the flag briefly to make it true at human timescales. */
         let mut last_yield: Option<std::time::Instant> = None;
         const YIELD_HOLD: std::time::Duration = std::time::Duration::from_millis(1500);
         loop {
-            // Yield while games/study/GGS run (background learning must
-            // not steal CPU); resume where it left off.
             let busy = act.lock().unwrap().local.is_some() || ggs_match_in(&ggs_snap);
             if busy {
                 last_yield = Some(std::time::Instant::now());
@@ -939,7 +751,6 @@ fn learn_game(app: State<App>, my_color: String) -> Result<(), String> {
             }
             let step = {
                 let mut guard = eng.lock().unwrap();
-                // Engine rebuilt by a settings change: abandon this import.
                 let Some(engine) = guard.as_mut() else { break };
                 engine.learn_step(&mut job, ggs::LEARN_DEPTH)
             };
@@ -951,19 +762,14 @@ fn learn_game(app: State<App>, my_color: String) -> Result<(), String> {
                 }
                 Err(_) => break,
             }
-            // Pause before re-locking: mutexes are not FIFO, and an
-            // immediate re-lock can starve strength changes or thinks.
             std::thread::sleep(std::time::Duration::from_millis(50));
         }
-        // One log line at the end; abandoned imports record their
-        // progress (the write-backs up to that point are real).
         learn_log_append(&LearnEntry {
             at: now_secs(),
             kifu,
             black: board.black.count_ones() as u8,
             white: board.white.count_ones() as u8,
             positions: total.saturating_sub(job.remaining() as u32),
-            // Local games import only from the standard start.
             start: String::new(),
             changes: changes.iter().map(LearnChange::of).collect(),
             opponent: String::new(),
@@ -976,13 +782,10 @@ fn learn_game(app: State<App>, my_color: String) -> Result<(), String> {
     Ok(())
 }
 
-/// Thread-count setting (local engine); None = auto.
 #[derive(Serialize)]
 struct ThreadsView {
     set: Option<u32>,
     auto: u32,
-    /// Solve nps calibrated at the current thread count (null if not);
-    /// other counts' values differ 4x and are not shown.
     nps: Option<f64>,
 }
 
@@ -992,8 +795,6 @@ fn threads_view() -> ThreadsView {
     ThreadsView {
         set: r.threads.map(|n| n as u32),
         auto: auto_threads() as u32,
-        // Only the current count's value: another count's number looks
-        // calibrated but is never used (4x apart).
         nps: r.nps_for(now),
     }
 }
@@ -1003,14 +804,12 @@ fn local_threads() -> ThreadsView {
     threads_view()
 }
 
-/// Table sizes (2^bits) and the memory they use.
 #[derive(Serialize)]
 struct HashView {
     mid: u32,
     end: u32,
     min: u32,
     max: u32,
-    /// Combined actual bytes (for display).
     bytes: u64,
 }
 
@@ -1031,9 +830,6 @@ fn hash_sizes() -> HashView {
     hash_view()
 }
 
-/// Set table sizes, effective from the next launch. Tables are leaked
-/// to 'static (searches demand lifetime references); rebuilding stacks
-/// the old ones, so the current engine is left alone.
 #[tauri::command]
 fn set_hash_sizes(mid: u32, end: u32) -> Result<HashView, String> {
     let (lo, hi) = (
@@ -1047,13 +843,6 @@ fn set_hash_sizes(mid: u32, end: u32) -> Result<HashView, String> {
     Ok(hash_view())
 }
 
-/// Measure this machine's solve speed and record it.
-///
-/// `timectl` needs a nodes-to-seconds factor and it is the only
-/// machine-dependent layer; three 22-empty solves (1-3s) measure it.
-/// The benefit is avoided breakdowns, not strength (1400 self-play
-/// games: no win-rate change, worst-case leftover 5.0s -> 8.9s). The
-/// thread count is recorded with it — a mismatched value is unused.
 #[tauri::command]
 async fn calibrate_nps(app: State<'_, App>) -> Result<ThreadsView, String> {
     ensure_engine(&app)?;
@@ -1077,8 +866,6 @@ async fn calibrate_nps(app: State<'_, App>) -> Result<ThreadsView, String> {
     Ok(threads_view())
 }
 
-/// Set the local thread count (None = auto). Saved to resources.conf;
-/// existing engines pick it up on the next search.
 #[tauri::command]
 async fn set_local_threads(
     app: State<'_, App>,
@@ -1100,13 +887,9 @@ async fn set_local_threads(
     })
     .await
     .map_err(|e| e.to_string())?;
-    /* Tell the GGS side too: thread count is a single global setting
-    and must reach the GGS engines as well. */
     if let Ok(tx) = ggs_tx(&app) {
         let _ = tx.send(ggs::Cmd::ReloadThreads);
     }
-    // The new count is uncalibrated; time management falls to the
-    // ladder until measured, so fill it in the background.
     calibrate_missing(
         handle,
         eng,
@@ -1117,31 +900,23 @@ async fn set_local_threads(
     Ok(())
 }
 
-/// What currently uses the CPU (the nav's always-on display).
 #[derive(Serialize)]
 struct ActivityView {
-    /// Local search kind (think / analyze / review); null if none.
     local: Option<String>,
     local_threads: u32,
-    /// Learning import (done, total).
     learn: Option<(u32, u32)>,
     learn_paused: bool,
-    /// Whether our GGS game is in progress.
     ggs_match: bool,
     ggs_thinking: bool,
     ggs_threads: u32,
-    /// Process CPU usage (%), 100% = one core.
     cpu: f32,
-    /// Core count (usage ceiling = cores x 100%).
     cores: u32,
-    /// Resident memory and total physical memory (bytes).
     mem: u64,
     mem_total: u64,
 }
 
 #[tauri::command]
 fn activity_status(app: State<App>) -> ActivityView {
-    // CPU usage from the delta since the last call (1s cadence).
     let cpu = {
         let now = (std::time::Instant::now(), process_cpu_time());
         let mut meter = app.cpu_meter.lock().unwrap();
@@ -1182,9 +957,6 @@ fn activity_status(app: State<App>) -> ActivityView {
     }
 }
 
-/// Files in use (name, path, found, size, format tag). Size and format
-/// matter because weights get swapped: without them you cannot tell
-/// which file explains a change in play.
 #[tauri::command]
 fn resource_status() -> Vec<(String, String, bool, u64, String)> {
     resources()
@@ -1194,13 +966,6 @@ fn resource_status() -> Vec<(String, String, bool, u64, String)> {
         .collect()
 }
 
-/* Auxiliary windows were retired (2026-08-08); settings live in an
- * overlay again. Only the Display tab benefited from a window, yet it
- * kept overlapping the board and dragged in localStorage sync, window
- * chrome and placement logic. If a window is ever needed again, use
- * WebviewWindowBuilder. */
-
-/// Open a file dialog, filtered by `kind`.
 #[tauri::command]
 async fn pick_resource(handle: tauri::AppHandle, kind: String) -> Result<Option<String>, String> {
     use tauri_plugin_dialog::DialogExt;
@@ -1219,8 +984,6 @@ async fn pick_resource(handle: tauri::AppHandle, kind: String) -> Result<Option<
     Ok(picked)
 }
 
-/// Re-point a resource ("dir" | "weights" | "nnue" | "book"); null
-/// clears back to the default. The engine rebuilds on the next think.
 #[tauri::command]
 async fn set_resource(
     app: State<'_, App>,
@@ -1237,8 +1000,6 @@ async fn set_resource(
         other => return Err(format!("unknown resource: {other}")),
     }
     r.save(&resources_path())?;
-    // Reload happens on the next engine build; drop the current one.
-    // Dropping needs the lock, so wait on a worker to keep the UI live.
     let (eng, stop, act) = (app.engine.clone(), app.stop.clone(), app.activity.clone());
     let dropped = tauri::async_runtime::spawn_blocking({
         let (eng, stop) = (eng.clone(), stop.clone());
@@ -1249,14 +1010,10 @@ async fn set_resource(
     })
     .await
     .map_err(|e| e.to_string());
-    // Read the new file now, for the same reason it is read at launch: the
-    // next move must not be the one that waits for it.
     preload_engine(eng, stop, act);
     dropped
 }
 
-/// Strength change; async + spawn_blocking as with set_use_book. The
-/// running search finishes as-is; the change applies to the next.
 #[tauri::command]
 async fn set_levels(
     app: State<'_, App>,
@@ -1278,21 +1035,14 @@ async fn set_levels(
     .map_err(|e| e.to_string())?
 }
 
-/// Display clock, deliberately outside `GameView`: boards update per
-/// move, clocks tick per second — mixing them would redraw the board
-/// every tick.
 #[derive(Serialize)]
 struct ClockView {
-    /// Time per player (seconds); 0 = no clock.
     total: u64,
     black: f64,
     white: f64,
-    /// Which side flagged ("black"|"white"); null if none.
     lost: Option<String>,
 }
 
-/// Read the clock, subtracting the running turn's elapsed time on the
-/// fly — the stored values only move per move and would look frozen.
 #[tauri::command]
 fn clocks(app: State<App>) -> ClockView {
     let c = app.clocks.lock().unwrap();
@@ -1323,20 +1073,14 @@ fn clocks(app: State<App>) -> ClockView {
     }
 }
 
-/// Initialize the clock (0 = none). Called on every new game; unlike
-/// GGS it never changes mid-game, so it arrives as an argument.
 #[tauri::command]
 fn set_clock(app: State<App>, secs: u64) -> ClockView {
     app.clocks.lock().unwrap().reset(secs);
     clocks(app)
 }
 
-/// Compute the best move without moving the position (`apply_move`
-/// applies it). The split makes stop trivial: the frontend just
-/// discards the result.
 #[tauri::command]
 async fn think(app: State<'_, App>) -> Result<ThinkView, String> {
-    // GGS games come first; no local search while one runs.
     if ggs_match_active(&app) {
         return Err("err.busy_ggs_search".into());
     }
@@ -1345,8 +1089,6 @@ async fn think(app: State<'_, App>) -> Result<ThinkView, String> {
     let eng = app.engine.clone();
     let act = app.activity.clone();
     let stop = app.stop.clone();
-    /* With a clock, search under a deadline through the same timectl
-    as GGS — a different local scheme would make practice misleading. */
     let (base, plan) = {
         let c = app.clocks.lock().unwrap();
         let e = app.engine.lock().unwrap();
@@ -1364,7 +1106,6 @@ async fn think(app: State<'_, App>) -> Result<ThinkView, String> {
                 kuroobi::timectl::Situation {
                     clock_secs: Some(c.left(board.player()) as u64),
                     empties: board.empty_count(),
-                    // Calibrated: derive the solve entry from the clock.
                     nps: resources().nps_for(threads),
                     threads,
                     ..Default::default()
@@ -1379,13 +1120,8 @@ async fn think(app: State<'_, App>) -> Result<ThinkView, String> {
         let _g = ActivityGuard::begin(&act, "thinking");
         let mut guard = eng.lock().unwrap();
         let t0 = std::time::Instant::now();
-        // Node counts are cumulative; diff for this move's share.
         let n0 = guard.as_ref().unwrap().nodes();
         let e = guard.as_mut().unwrap();
-        /* Swap strength for this one move only. Forgetting to restore
-        feeds this plan's output into the next plan's input and ratchets
-        the settings down every move (hit in `arena`; one side broke and
-        masqueraded as an effect). */
         if let Some(p) = plan {
             e.set_levels(p.depth, p.solve, p.band);
         }
@@ -1397,9 +1133,6 @@ async fn think(app: State<'_, App>) -> Result<ThinkView, String> {
             e.set_levels(base.depth, base.solve, base.band);
         }
         let nodes = guard.as_ref().unwrap().nodes() - n0;
-        // Stopped searches return incomplete values; drop them. But only
-        // when a search actually ran — book moves never reset the stop
-        // flag, and a stale flag would discard correct moves.
         let aborted = nodes > 0
             && stop
                 .lock()
@@ -1413,7 +1146,6 @@ async fn think(app: State<'_, App>) -> Result<ThinkView, String> {
     if aborted {
         return Err("stopped".into());
     }
-    // Invalid if the position moved during the think (frontend checks too).
     if !same_board(&app.game.lock().unwrap().board, &board) {
         return Err("position changed".into());
     }
@@ -1428,11 +1160,9 @@ async fn think(app: State<'_, App>) -> Result<ThinkView, String> {
     })
 }
 
-/// Apply a think result (or any move); null sq = pass.
 #[tauri::command]
 fn apply_move(app: State<App>, sq: Option<u8>) -> Result<GameView, String> {
     let mut game = app.game.lock().unwrap();
-    // The mover's turn ended; charge its elapsed time.
     let mover = game.board.player();
     app.clocks.lock().unwrap().turn_done(mover);
     match sq {
@@ -1446,13 +1176,6 @@ fn apply_move(app: State<App>, sq: Option<u8>) -> Result<GameView, String> {
     Ok(view(&game))
 }
 
-/// Ponder the human's likely move during their turn.
-///
-/// Local games are fixed-depth, so the benefit is speed, not depth:
-/// the same depth in 1/3 the time (measured -62 to -65%). Mutually
-/// exclusive with `analyze_live` (they contend for the engine); called
-/// only when the eval display is off. Stops itself at the target depth,
-/// so a long human think does not keep it spinning.
 #[tauri::command]
 async fn ponder_live(app: State<'_, App>) -> Result<(), String> {
     if ggs_match_active(&app) {
@@ -1470,16 +1193,12 @@ async fn ponder_live(app: State<'_, App>) -> Result<(), String> {
         let _g = ActivityGuard::begin(&act, "pondering");
         let mut guard = eng.lock().unwrap();
         let Some(e) = guard.as_mut() else { return };
-        /* 60-second lid; normally it stops at depth by itself — this
-        only guards against an absent human. */
         let until = std::time::Instant::now() + std::time::Duration::from_secs(60);
         e.ponder(&board, until);
     });
     Ok(())
 }
 
-/// Stream evaluations while deepening; each finished pass goes to the
-/// screen, deepening until the position changes or a stop.
 #[tauri::command]
 async fn analyze_live(app: State<'_, App>, handle: tauri::AppHandle) -> Result<(), String> {
     if ggs_match_active(&app) {
@@ -1497,8 +1216,6 @@ async fn analyze_live(app: State<'_, App>, handle: tauri::AppHandle) -> Result<(
         let _g = ActivityGuard::begin(&act, "analyzing");
         let mut guard = eng.lock().unwrap();
         let Some(e) = guard.as_mut() else { return };
-        // No book during analysis: book values are past search results
-        // and would break comparability with the deepening values.
         let t0 = std::time::Instant::now();
         e.analyze_deepening(&board, 1, |depth, hints, nodes| {
             let view: Vec<HintView> = hints
@@ -1511,7 +1228,6 @@ async fn analyze_live(app: State<'_, App>, handle: tauri::AppHandle) -> Result<(
                     depth: ev.depth,
                 })
                 .collect();
-            // Send workload (nodes, elapsed) too; the screen derives speed.
             handle
                 .emit("hints", (depth, view, nodes, t0.elapsed().as_secs_f32()))
                 .is_ok()
@@ -1520,8 +1236,6 @@ async fn analyze_live(app: State<'_, App>, handle: tauri::AppHandle) -> Result<(
     Ok(())
 }
 
-/// Evaluate the position after move n at fixed depth (for the eval
-/// graph); Black's view.
 #[tauri::command]
 async fn eval_at(app: State<'_, App>, n: usize, depth: u32) -> Result<EvalPoint, String> {
     if ggs_match_active(&app) {
@@ -1533,8 +1247,6 @@ async fn eval_at(app: State<'_, App>, n: usize, depth: u32) -> Result<EvalPoint,
     let eng = app.engine.clone();
     let act = app.activity.clone();
     let stop = app.stop.clone();
-    // Clear stale stops: book hits never invoke the search (or its
-    // reset), and a leftover stop would stall analysis entirely.
     if let Some(h) = stop.lock().unwrap().as_ref() {
         h.reset();
     }
@@ -1542,21 +1254,8 @@ async fn eval_at(app: State<'_, App>, n: usize, depth: u32) -> Result<EvalPoint,
         let _g = ActivityGuard::begin(&act, "analyzing");
         let mut guard = eng.lock().unwrap();
         let e = guard.as_mut().unwrap();
-        /* Gold dot only when the book was actually used — the mark
-        means "analysis took this value from the book", not "the
-        position is in the book" (`book_node` ignores use_book by
-        design; `book_value` respects it).
-
-        The learned overlay is excluded: base values are deep search and
-        comparable, learned values are backed-up game outcomes reaching
-        down to 1 empty — mixing them lines the whole endgame with gold
-        dots of one's own past games. And never filter by "also in the
-        overlay": openings live in both, and that filter erased genuine
-        base entries. Hence `book_base_value`. */
         let from_book = e.book_base_value(&board);
         if let Some(v) = from_book {
-            // Both book and search are mover-view; convert to Black's
-            // view once at the exit (converting twice flips the dots).
             return (v, false, true, false);
         }
         let mv = e.eval_position(&board, depth);
@@ -1564,8 +1263,6 @@ async fn eval_at(app: State<'_, App>, n: usize, depth: u32) -> Result<EvalPoint,
     })
     .await
     .map_err(|e| e.to_string())?;
-    // Stopped searches return no value (it would linger in the graph);
-    // book paths skip the check.
     if searched
         && stop
             .lock()
@@ -1616,26 +1313,17 @@ async fn save_kifu(
         return Ok(None);
     };
     let p = path.into_path().map_err(|e| e.to_string())?;
-    // Format follows the extension; asking again in the dialog makes
-    // the user decide the same thing twice.
     let ggf_out = p.extension().is_some_and(|e| e.eq_ignore_ascii_case("ggf"));
     let body = if ggf_out { ggf } else { format!("{kifu}\n") };
     std::fs::write(&p, body).map_err(|e| e.to_string())?;
     Ok(Some(p.display().to_string()))
 }
 
-/* ---------------- GGF (interchange format) ---------------- */
-
-/// Serialize a game as GGF. Unlike the bare f5 form it carries colors,
-/// result and start position — the only format that can convey drawn
-/// openings and passes.
 fn to_ggf(game: &Reversi, black: &str, white: &str) -> String {
     let start = start_board(game);
     let mut out = String::from("(;GM[Othello]PC[KUROOBI]");
     out.push_str(&format!("DT[{}]", ggf_now()));
     out.push_str(&format!("PB[{}]PW[{}]", ggf_text(black), ggf_text(white)));
-    // Result is Black's disc difference; unfinished games write "?"
-    // (0 would claim a draw).
     if game.is_game_over() {
         let d = game.board.black.count_ones() as i32 - game.board.white.count_ones() as i32;
         out.push_str(&format!("RE[{d:+}]"));
@@ -1656,7 +1344,6 @@ fn to_ggf(game: &Reversi, black: &str, white: &str) -> String {
     for r in &game.history {
         let tag = if color == Color::Black { "B" } else { "W" };
         match r.pos {
-            // Keep passes; dropping them desyncs the turn order.
             None => out.push_str(&format!("{tag}[PA]")),
             Some(p) => out.push_str(&format!("{}[{}]", tag, p.to_kifu().to_uppercase())),
         }
@@ -1666,8 +1353,6 @@ fn to_ggf(game: &Reversi, black: &str, white: &str) -> String {
     out
 }
 
-/// Start position, rebuilt by unwinding moves from the current board
-/// (the start itself is not stored); `flipped` makes the unwind exact.
 fn start_board(game: &Reversi) -> Board {
     let mut b = game.board;
     for r in game.history.iter().rev() {
@@ -1687,7 +1372,6 @@ fn start_board(game: &Reversi) -> Board {
     b
 }
 
-/// Write 64 cells in GGF order (a1..h1, a2..h2, ...).
 fn ggf_squares(b: &Board) -> String {
     let mut s = String::with_capacity(64);
     for rank in 0..8 {
@@ -1705,17 +1389,13 @@ fn ggf_squares(b: &Board) -> String {
     s
 }
 
-/// `]` terminates a tag and would break other readers.
 fn ggf_text(s: &str) -> String {
     s.replace(']', ")")
 }
 
-/// GGF DT tag: UTC "YYYY-MM-DD HH:MM:SS GMT". Calendar math is done
-/// by hand rather than adding a dependency for one call site.
 fn ggf_now() -> String {
     let secs = now_secs() as i64;
     let (days, rem) = (secs.div_euclid(86_400), secs.rem_euclid(86_400));
-    // Howard Hinnant's civil_from_days: days since 1970-01-01 to a date.
     let z = days + 719_468;
     let era = z.div_euclid(146_097);
     let doe = z.rem_euclid(146_097);
@@ -1737,15 +1417,9 @@ fn ggf_now() -> String {
     )
 }
 
-/// Extract a start position from pasted text.
-///
-/// Games not starting from the standard position (GGS drawn openings)
-/// cannot replay from moves alone; accept a 64-cell + mover line or a
-/// GGF `BO[8 ...]`. Fall back to the standard start.
 fn extract_start(text: &str) -> Option<String> {
     let cell = |c: char| matches!(c.to_ascii_lowercase(), '-' | '.' | 'x' | 'o' | '*');
     let side = |c: char| matches!(c.to_ascii_lowercase(), 'x' | 'o' | '*');
-    // GGF stores the start as BO[8 <64 cells> <mover>].
     let ggf = text.find("BO[").map(|i| &text[i + 3..]).and_then(|rest| {
         let end = rest.find(']')?;
         let inner = rest[..end].trim_start_matches('8').trim();
@@ -1754,17 +1428,12 @@ fn extract_start(text: &str) -> Option<String> {
     for cand in ggf.into_iter().chain(text.lines().map(|l| l.to_string())) {
         let c: Vec<char> = cand.chars().filter(|c| !c.is_whitespace()).collect();
         if c.len() == 65 && c[..64].iter().all(|&x| cell(x)) && side(c[64]) {
-            // Board::from_string reads 'x'/'*' as black, 'o' as white.
             return Some(c.into_iter().collect());
         }
     }
     None
 }
 
-/// Parse GGF (Generic Game Format): `(;` ... `;)` wraps a game,
-/// `BO[8 <cells> <mover>]` is the start, `B[F5/eval/time]` /
-/// `W[D6//time]` are moves. Only move tags are read — scanning body
-/// text would fabricate moves from names like `PB[player1]`.
 fn parse_ggf(text: &str) -> Option<(Option<String>, String)> {
     let body = {
         let start = text.find("(;")?;
@@ -1772,7 +1441,6 @@ fn parse_ggf(text: &str) -> Option<(Option<String>, String)> {
         let end = rest.find(";)").unwrap_or(rest.len());
         &rest[..end]
     };
-    // Read tags in order: uppercase name + [ ... ].
     let mut start_pos: Option<String> = None;
     let mut kifu = String::new();
     let bytes: Vec<char> = body.chars().collect();
@@ -1799,7 +1467,6 @@ fn parse_ggf(text: &str) -> Option<(Option<String>, String)> {
         i += 1;
         match name.as_str() {
             "BO" => {
-                // "8 <64 cells> <mover>" — drop the size, pack the rest.
                 let c: Vec<char> = value
                     .trim_start_matches('8')
                     .chars()
@@ -1810,8 +1477,6 @@ fn parse_ggf(text: &str) -> Option<(Option<String>, String)> {
                 }
             }
             "B" | "W" => {
-                // "F5/eval/time". Passes (PA/PASS) are not recorded;
-                // replay inserts them automatically.
                 let mv = value.split('/').next().unwrap_or("").trim().to_lowercase();
                 if mv.len() == 2 && mv != "pa" {
                     kifu.push_str(&mv);
@@ -1849,8 +1514,6 @@ fn load_kifu_into(app: &State<App>, text: &str) -> Result<GameView, String> {
         return Ok(view(&game));
     }
     let start = extract_start(text);
-    // Start-position lines contain coordinate-like chars; strip before
-    // scanning for moves.
     let body = match &start {
         Some(_) => text
             .lines()
@@ -1866,9 +1529,6 @@ fn load_kifu_into(app: &State<App>, text: &str) -> Result<GameView, String> {
     if s.is_empty() && start.is_none() {
         return Err("err.record_not_found".into());
     }
-    /* Never pass engine errors through raw: `invalid KIFU: xx` used to
-    reach the toast in English next to Japanese messages. Log the cause;
-    show only actionable display-language text. */
     let loaded = match &start {
         Some(b) => Reversi::from_kifu_with_start(b, &s),
         None => Reversi::from_kifu(&s),
@@ -1901,29 +1561,20 @@ async fn load_kifu(
     load_kifu_into(&app, &s).map(Some)
 }
 
-/// Load a game record from pasted text.
 #[tauri::command]
 fn load_kifu_text(app: State<App>, text: String) -> Result<GameView, String> {
     load_kifu_into(&app, &text)
 }
 
-/// Expand a record into per-move boards — a viewing shape that leaves
-/// the game state untouched.
 #[derive(Serialize)]
 struct KifuFrame {
-    /// 64 cells: 0 empty / 1 black / 2 white.
     cells: Vec<u8>,
-    /// Square placed this move (null for the start and passes).
     last: Option<u8>,
     black: u8,
     white: u8,
-    /// Mover ("black" | "white").
     player: String,
 }
 
-/* ---------------- Book browsing ---------------- */
-
-/// One book move; mover-view value, `games` = adoption count.
 #[derive(Serialize)]
 struct BookMoveView {
     pos: u8,
@@ -1931,31 +1582,20 @@ struct BookMoveView {
     games: u32,
 }
 
-/// One book position.
 #[derive(Serialize)]
 struct BookNodeView {
-    /// 64 cells: 0 empty / 1 black / 2 white.
     cells: Vec<u8>,
-    /// "black" | "white"
     player: String,
     black: u8,
     white: u8,
-    /// By value, descending; empty = not in the book.
     moves: Vec<BookMoveView>,
-    /// Whether the position was game-learned.
     learned: bool,
-    /// Book value in discs; null if absent.
     value: Option<f32>,
-    /// Search depth behind the value — its trustworthiness hint.
     depth: Option<u8>,
-    /// Total book positions (shown in the header).
     size: usize,
-    /// Of which game-learned.
     learned_size: usize,
 }
 
-/// Book data for a record's positions, never touching game state —
-/// browsing and playing are separate activities.
 #[tauri::command]
 async fn book_node(app: State<'_, App>, kifu: String) -> Result<BookNodeView, String> {
     let game = if kifu.trim().is_empty() {
@@ -2013,7 +1653,6 @@ async fn book_node(app: State<'_, App>, kifu: String) -> Result<BookNodeView, St
 fn preview_kifu(text: String) -> Result<Vec<KifuFrame>, String> {
     let mut game = game_from_text(&text).ok_or("err.record_parse_failed")?;
     let line = game.line();
-    // Rewind to the start position (drawn openings differ from standard).
     while game.move_count() > 0 {
         game.undo().map_err(|e| format!("{e:?}"))?;
     }
@@ -2057,7 +1696,6 @@ fn preview_kifu(text: String) -> Result<Vec<KifuFrame>, String> {
     Ok(out)
 }
 
-/// An externally handed-off record (read and delete if present).
 fn take_handoff_kifu() -> Option<String> {
     let path = std::env::temp_dir().join("kuroobi_handoff.txt");
     let s = std::fs::read_to_string(&path).ok()?;
@@ -2065,7 +1703,6 @@ fn take_handoff_kifu() -> Option<String> {
     (!s.trim().is_empty()).then_some(s)
 }
 
-/// Materialize hand-off text (GGF / start+moves / bare record) into a game.
 fn game_from_text(text: &str) -> Option<Reversi> {
     if let Some((start, kifu)) = parse_ggf(text) {
         return match &start {
@@ -2092,8 +1729,6 @@ fn game_from_text(text: &str) -> Option<Reversi> {
     }
 }
 
-// ============================ GGS ============================
-
 fn ggs_tx(app: &State<App>) -> Result<std::sync::mpsc::Sender<ggs::Cmd>, String> {
     app.ggs
         .lock()
@@ -2103,9 +1738,6 @@ fn ggs_tx(app: &State<App>) -> Result<std::sync::mpsc::Sender<ggs::Cmd>, String>
         .ok_or_else(|| "err.ggs_session_not_started".into())
 }
 
-/// Read `.ggs_credentials` (repo root, name:pw). GUI login moved to the
-/// keychain; this remains only as the first-run migration source (the
-/// file stays for the CLI ggs).
 fn read_credentials() -> Option<(String, String)> {
     for c in [
         ".ggs_credentials",
@@ -2121,9 +1753,6 @@ fn read_credentials() -> Option<(String, String)> {
     None
 }
 
-/// Stored credentials. The legacy file is imported only on a true first
-/// run (no keychain item at all); a logout tombstone blocks the import
-/// so credentials cannot resurrect.
 fn saved_credentials() -> Option<(String, String)> {
     if keychain::exists() {
         return keychain::load();
@@ -2148,15 +1777,11 @@ fn ggs_connect(app: State<App>, login: String, pw: String) -> Result<String, Str
     Ok(l)
 }
 
-/// Receive the strings the backend renders itself (see `i18n`). Sent at
-/// startup and on every language change.
 #[tauri::command]
 fn set_backend_strings(strings: std::collections::HashMap<String, String>) {
     i18n::set(strings);
 }
 
-/// Diagnostic command capturing frontend exceptions; traceable via the
-/// /tmp log even without WebView console access.
 #[tauri::command]
 fn js_log(msg: String) {
     use std::io::Write as _;
@@ -2169,9 +1794,6 @@ fn js_log(msg: String) {
     }
 }
 
-/// Logout: disconnect and forget stored credentials (the usual
-/// convention — closing the app keeps the session, explicit logout
-/// stops future auto-login).
 #[tauri::command]
 fn ggs_disconnect(app: State<App>) -> Result<(), String> {
     keychain::forget();
@@ -2187,10 +1809,6 @@ fn ggs_raw(app: State<App>, cmd: String) -> Result<(), String> {
         .map_err(|e| e.to_string())
 }
 
-/// Block clock-related actions until the solve speed is calibrated —
-/// uncalibrated time management degrades to the fixed ladder, and GGS
-/// flag falls cost rating. Calibration runs in the background at
-/// startup, so waiting a few seconds normally clears this.
 fn require_calibration() -> Result<(), String> {
     let t = resources().threads.unwrap_or_else(auto_threads);
     if resources().nps_for(t).is_none() {
@@ -2207,7 +1825,6 @@ fn ggs_ask(
     opponent: String,
     rated: bool,
 ) -> Result<(), String> {
-    // Flag falls cost rating; only offer with working time management.
     require_calibration()?;
     ggs_tx(&app)?
         .send(ggs::Cmd::Ask {
@@ -2259,7 +1876,6 @@ fn ggs_rank(app: State<App>, gtype: String, name: String) -> Result<(), String> 
         .map_err(|e| e.to_string())
 }
 
-/// Close a finished game from the list.
 #[tauri::command]
 fn ggs_close_match(app: State<App>, id: String) -> Result<(), String> {
     ggs_tx(&app)?
@@ -2277,8 +1893,6 @@ fn ggs_watch(app: State<App>, id: String, on: bool) -> Result<(), String> {
     ggs_tx(&app)?.send(cmd).map_err(|e| e.to_string())
 }
 
-/// Clear the notice and the fetched record — the receiver clears them,
-/// or reopening the screen replays stale messages.
 #[tauri::command]
 fn ggs_ack(app: State<App>) -> Result<(), String> {
     let snap = ggs_snap_arc(&app).ok_or("err.ggs_not_connected")?;
@@ -2288,7 +1902,6 @@ fn ggs_ack(app: State<App>) -> Result<(), String> {
     Ok(())
 }
 
-/// Fetch a finished game's GGF from GGS; the result lands in the snapshot.
 #[tauri::command]
 fn ggs_look(app: State<App>, id: String) -> Result<(), String> {
     ggs_tx(&app)?
@@ -2309,7 +1922,6 @@ fn ggs_chat(app: State<App>, target: String, text: String) -> Result<(), String>
         .map_err(|e| e.to_string())
 }
 
-/// Match command; verb is undo / abort / resign / tell.
 #[tauri::command]
 fn ggs_match_cmd(app: State<App>, id: String, verb: String, arg: String) -> Result<(), String> {
     const ALLOWED: [&str; 4] = ["undo", "abort", "resign", "tell"];
@@ -2321,12 +1933,9 @@ fn ggs_match_cmd(app: State<App>, id: String, verb: String, arg: String) -> Resu
         .map_err(|e| e.to_string())
 }
 
-/// Set the server-side aform (auto-accept) / dform (auto-decline) formulas.
 #[tauri::command]
 fn ggs_set_formula(app: State<App>, kind: String, expr: String) -> Result<(), String> {
     if kind != "aform" && kind != "dform" {
-        // The screen only passes constants, so this rarely fires — but
-        // the string reaches a toast, so hand the frontend a key.
         return Err(format!("err.bad_formula_kind|kind={kind}"));
     }
     ggs_tx(&app)?
@@ -2362,7 +1971,6 @@ fn ggs_history(app: State<App>, name: String) -> Result<(), String> {
         .map_err(|e| e.to_string())
 }
 
-/// Advance the chat read marker (read up to this time).
 #[tauri::command]
 fn ggs_chat_seen(app: State<App>, at: u64) -> Result<(), String> {
     ggs_tx(&app)?
@@ -2388,7 +1996,6 @@ fn ggs_set_engine(
         .map_err(|e| e.to_string())
 }
 
-/// Time-usage settings (pacing, per-move cap, reserve).
 #[tauri::command]
 fn ggs_set_pacing(
     app: State<App>,
@@ -2429,7 +2036,6 @@ fn ggs_set_use_book(app: State<App>, on: bool) -> Result<(), String> {
         .map_err(|e| e.to_string())
 }
 
-/// Whether GGS games feed book learning.
 #[tauri::command]
 fn ggs_set_learn(app: State<App>, on: bool) -> Result<(), String> {
     ggs_tx(&app)?
@@ -2439,7 +2045,6 @@ fn ggs_set_learn(app: State<App>, on: bool) -> Result<(), String> {
 
 #[tauri::command]
 fn ggs_set_standby(app: State<App>, cfg: ggs::StandbyCfg) -> Result<(), String> {
-    // Turning things off is never blocked; being stuck uncalibrated is worse.
     if cfg.enabled {
         require_calibration()?;
     }
@@ -2450,13 +2055,8 @@ fn ggs_set_standby(app: State<App>, cfg: ggs::StandbyCfg) -> Result<(), String> 
 
 #[tauri::command]
 fn ggs_snapshot(app: State<App>) -> Result<ggs::Snapshot, String> {
-    /* Screenshot hook: render the GGS screens without connecting (lobby
-    and results need opponents and were never verifiable). Actions are
-    inert. */
     if let Ok(v) = std::env::var("KUROOBI_GGS_DEMO") {
         let mut s = ggs::demo_snapshot();
-        /* `=empty` clears the fixtures — empty states were otherwise
-        unphotographable. */
         if v == "empty" {
             s.matches.clear();
             s.ongoing.clear();
@@ -2476,18 +2076,11 @@ fn ggs_snapshot(app: State<App>) -> Result<ggs::Snapshot, String> {
     Ok(s)
 }
 
-/// Whether rated play is forbidden (`KUROOBI_NO_RATED=1`). The screen
-/// disables the toggle, and the sender enforces it too — a stale screen
-/// cannot start a rated game.
 #[tauri::command]
 fn ggs_no_rated() -> bool {
     ggs::no_rated()
 }
 
-/// Active override environment variables, shown in the status strip.
-/// With overrides, what the screen shows may be fixture data or an
-/// altered configuration — the strip marks "not a plain launch".
-/// Nothing here needs masking (no variable carries credentials).
 #[tauri::command]
 fn env_overrides() -> Vec<(String, String)> {
     const NAMES: &[&str] = &[
@@ -2514,14 +2107,11 @@ fn env_overrides() -> Vec<(String, String)> {
         .collect()
 }
 
-/// Screenshot hook: screen to open at launch (KUROOBI_GGS_AUTOVIEW).
 #[tauri::command]
 fn ggs_autoview() -> String {
     std::env::var("KUROOBI_GGS_AUTOVIEW").unwrap_or_default()
 }
 
-/// Save the protocol log to a file; separate from `ggs_save_kifu`
-/// (different filters and default names).
 #[tauri::command]
 async fn ggs_save_log(handle: tauri::AppHandle, text: String) -> Result<Option<String>, String> {
     use tauri_plugin_dialog::DialogExt;
@@ -2542,7 +2132,6 @@ async fn ggs_save_log(handle: tauri::AppHandle, text: String) -> Result<Option<S
     Ok(Some(p.display().to_string()))
 }
 
-/// Save a GGS record (passed as a string) to a file.
 #[tauri::command]
 async fn ggs_save_kifu(
     handle: tauri::AppHandle,
@@ -2586,38 +2175,22 @@ fn main() {
             cpu_meter: Mutex::new(None),
         })
         .setup(|app| {
-            // Hand GGS the local stop handle and activity record so a
-            // starting GGS game can halt local searches.
             let st = app.state::<App>();
-            /* Fixture mode (`KUROOBI_GGS_DEMO`) never starts the
-            session — it would stream "disconnected" snapshots over the
-            fixtures. */
             if std::env::var("KUROOBI_GGS_DEMO").is_ok() {
                 return Ok(());
             }
-            /* Read the weights now rather than on the first move: the
-            network is over a gigabyte, and a game must not start by
-            waiting for it. */
             preload_engine(st.engine.clone(), st.stop.clone(), st.activity.clone());
-            /* Calibrate solve speed at startup; once a game runs the
-            CPU cannot be spared. */
             calibrate_missing(
                 app.handle().clone(),
                 st.engine.clone(),
                 st.stop.clone(),
                 st.activity.clone(),
-                // Local and GGS thread settings differ; their defaults
-                // coincide, so usually one measurement covers both.
                 vec![
                     resources().threads.unwrap_or_else(auto_threads),
                     auto_threads(),
                 ],
             );
             let handle = ggs::spawn(app.handle().clone(), st.stop.clone(), st.activity.clone());
-            // Auto-login with stored credentials at startup. Screenshot
-            // automation and demo modes skip the real server
-            // (KUROOBI_GGS_AUTOCONNECT=1 forces it); if another window
-            // is connected, silently defer to it.
             let force = std::env::var("KUROOBI_GGS_AUTOCONNECT").is_ok();
             let demo = std::env::var("KUROOBI_AUTOPLAY").is_ok()
                 || std::env::var("KUROOBI_GGS_AUTOVIEW").is_ok();
@@ -2627,8 +2200,6 @@ fn main() {
                 }
             }
             if force {
-                // KUROOBI_GGS_AUTOLOOK=<id>: also fetch a record
-                // (exercises that path without UI interaction).
                 if let Ok(id) = std::env::var("KUROOBI_GGS_AUTOLOOK") {
                     let tx = handle.tx.clone();
                     std::thread::spawn(move || {
@@ -2636,14 +2207,11 @@ fn main() {
                         let _ = tx.send(ggs::Cmd::Look(id));
                     });
                 }
-                // KUROOBI_GGS_AUTOWATCH=<ids>/auto: also start watching.
                 if let Ok(ids) = std::env::var("KUROOBI_GGS_AUTOWATCH") {
                     let tx = handle.tx.clone();
                     std::thread::spawn(move || {
                         std::thread::sleep(std::time::Duration::from_secs(12));
                         if ids.trim() == "auto" {
-                            // Refresh the list; the session watches the
-                            // batch when it arrives.
                             let _ = tx.send(ggs::Cmd::ListMatches);
                         } else {
                             for id in ids.split(',').filter(|s| !s.trim().is_empty()) {
@@ -2741,9 +2309,6 @@ fn main() {
 mod tests {
     use super::*;
 
-    /// A file the build cannot use is not a missing file: the picker just
-    /// handed it to us, so saying "not found" would send the user looking
-    /// for it. Validation failures carry no OS error; I/O failures do.
     #[test]
     fn shape_and_absence_are_different_errors() {
         assert_eq!(
@@ -2762,7 +2327,6 @@ mod tests {
         );
     }
 
-    /// Hand-off form: line 1 = start position, line 2 = moves.
     #[test]
     fn reads_start_position_and_kifu() {
         let start = Board::new().to_string();
@@ -2771,12 +2335,10 @@ mod tests {
             extract_start(&text).as_deref(),
             Some(start.replace(' ', "").as_str())
         );
-        // The start-position line must not be scanned as moves.
         let g = game_from_text(&text).expect("parses");
         assert_eq!(g.move_count(), 3);
     }
 
-    /// Without a start position, begin from the standard start.
     #[test]
     fn plain_kifu_still_works() {
         assert!(extract_start("f5d6c3").is_none());
@@ -2784,7 +2346,6 @@ mod tests {
         assert_eq!(g.move_count(), 3);
     }
 
-    /// The GGF BO tag also yields a start position.
     #[test]
     fn reads_start_from_ggf() {
         let start = Board::new().to_string();
@@ -2795,7 +2356,6 @@ mod tests {
         );
     }
 
-    /// A drawn start position plus moves reproduces the original game.
     #[test]
     fn drawn_opening_round_trips() {
         let mut drawn = Reversi::new();
@@ -2815,7 +2375,6 @@ mod tests {
         assert_eq!(g.board.white, drawn.board.white);
     }
 
-    /// GGS-flavored GGF; the BO tag makes it round-trippable.
     #[test]
     fn reads_ggf() {
         let ggf = "(;GM[Othello]PC[GGS/os]PB[nyanyan]RB[2658.9]PW[egrcd]RW[2585.8]\
@@ -2828,7 +2387,6 @@ mod tests {
         assert_eq!(g.board.white, plain.board.white);
     }
 
-    /// Coordinate-like characters in player names must not become moves.
     #[test]
     fn ggf_ignores_coordinates_inside_names() {
         let ggf = "(;GM[Othello]PB[player1]PW[a1ice]\
@@ -2838,7 +2396,6 @@ mod tests {
         assert_eq!(g.move_count(), 1, "a1 / r1 in names are not moves");
     }
 
-    /// A drawn-opening GGF reproduces the original game.
     #[test]
     fn ggf_round_trips_a_drawn_opening() {
         let mut drawn = Reversi::new();
@@ -2865,7 +2422,6 @@ mod tests {
         assert_eq!(g.board.white, drawn.board.white);
     }
 
-    /// Parse real `look` output (with evals and time spent).
     #[test]
     fn reads_ggf_from_ggs_archive() {
         let ggf = "(;GM[Othello]PC[GGS/os]DT[2026.07.30_17:36:36.MDT]PB[kuroobi]PW[fly]\
@@ -2874,19 +2430,16 @@ mod tests {
                    B[E6]W[f4/-25.99/0.20]B[C3]W[d6/-25.99/0.04]B[F6]W[e7/-25.99/0.02];)";
         let g = game_from_text(ggf).expect("parses");
         assert_eq!(g.move_count(), 6);
-        // Mixed case, evals and times present — extract moves only.
         let plain = Reversi::from_kifu("e6f4c3d6f6e7").unwrap();
         assert_eq!(g.board.black, plain.board.black);
         assert_eq!(g.board.white, plain.board.white);
     }
 
-    /// Real `look` output: one full game including a pass.
     #[test]
     fn replays_a_whole_archived_game() {
         let ggf = "(;GM[Othello]PC[GGS/os]DT[2026.07.30_17:36:36.MDT]PB[kuroobi]PW[fly]RB[1720]RW[1438.62]TI[15:00//02:00]TY[8]RE[+54.000]BO[8 -------- -------- -------- ---O*--- ---*O--- -------- -------- -------- *]B[E6]W[f4/-25.99/0.20]B[C3]W[d6/-25.99/0.04]B[F6]W[e7/-25.99/0.02]B[F5]W[g5/-25.99]B[E3]W[g4/-28.23]B[C7]W[d3/24.23]B[F3]W[c4/0.23]B[C6]W[c5/-7.29]B[B4]W[b6/-7.81]B[D7]W[b5/-8.06]B[C2]W[a3/-7.84]B[F8]W[e8/-11.18]B[D8]W[c8/-15.07]B[B8]W[d2/-19.02]B[G3]W[e2/-19.46]B[A6]W[c1/-20.24]B[D1]W[e1/-20.44]B[F2]W[f1/-17.83]B[F7]W[h3/-18.89]B[A5]W[a7/-29.57]B[A8]W[b7/-35.51]B[G2]W[g8/-38.82]B[H8]W[g1/-45.44]B[B3]W[a4/-38.31]B[A2]W[b2]B[A1]W[b1]B[G7]W[g6]B[H6]W[h7]B[H5]W[h4]B[H2]W[pass]B[H1];)";
         let g = game_from_text(ggf).expect("parses");
         assert!(g.board.is_game_over(), "replays to the end of the game");
-        // GGF RE[+54.000] is the disc difference from Black's view.
         let (b, w) = (
             g.board.black.count_ones() as i32,
             g.board.white.count_ones() as i32,
@@ -2898,9 +2451,6 @@ mod tests {
         );
     }
 
-    /* ---- GGF writing ---- */
-
-    /// Written GGF reads back into the original game.
     #[test]
     fn writes_ggf_that_reads_back() {
         let g = Reversi::from_kifu("e6f4c3d6f6e7").unwrap();
@@ -2916,7 +2466,6 @@ mod tests {
         assert_eq!(back.board.white, g.board.white);
     }
 
-    /// A game with a pass round-trips without turn drift.
     #[test]
     fn writes_pass_and_result() {
         let src =
@@ -2942,7 +2491,6 @@ mod tests {
         assert_eq!(back.board.white, g.board.white);
     }
 
-    /// Drawn-opening games write their start into BO (not the standard).
     #[test]
     fn writes_drawn_opening_start() {
         let mut drawn = Reversi::new();
@@ -2968,7 +2516,6 @@ mod tests {
         assert_eq!(back.board.white, g.board.white);
     }
 
-    /// A `]` in a name must not break the tag.
     #[test]
     fn ggf_escapes_bracket_in_names() {
         let g = Reversi::from_kifu("e6").unwrap();

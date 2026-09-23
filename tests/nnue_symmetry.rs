@@ -1,5 +1,4 @@
 //! Verifies NNUE evaluation symmetry invariance.
-//! cargo test --release --test nnue_symmetry -- --ignored --nocapture
 
 use kuroobi::bitboard;
 use kuroobi::nnue::Nnue;
@@ -28,10 +27,6 @@ fn sym_board(b: &Board, i: u8) -> Board {
     out
 }
 
-/// The shipped weights themselves must already be symmetric.
-///
-/// Asymmetric weights spread the opening's equal moves (seen as -1.3/-1.9/-2.1/-2.1 before the 2026-08-10 swap).
-/// Search is deterministic, so symmetric eval implies symmetric search.
 #[test]
 #[ignore = "requires weights/"]
 fn shipped_weights_are_symmetric() {

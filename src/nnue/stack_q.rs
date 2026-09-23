@@ -1,28 +1,4 @@
 //! The stacked read-out in integers, the form the search runs.
-//!
-//! Every scale here is fixed rather than chosen from the model, so that the
-//! arithmetic is defined by the format alone and a model trained against
-//! these numbers evaluates the same wherever the file is loaded:
-//!
-//! | quantity              | type | one unit is        |
-//! |-----------------------|------|--------------------|
-//! | transformer, PA rows  | i16  | 1/512              |
-//! | activations           | u8   | 1/256              |
-//! | L1, L2 weights        | i8   | 1/64               |
-//! | L1, L2 biases         | i32  | 1/2^14 (= 256·64)  |
-//! | output weights        | i16  | 1/4096             |
-//! | output bias, sum      | i32  | 1/2^20             |
-//!
-//! Activations are stored shifted by -128 as i8, not as u8: the dot-product
-//! instruction this machine has multiplies signed by signed, and the
-//! usual way around that -- splitting the input into a low seven bits
-//! and a sign bit and running the dot twice -- costs twice the multiplies.
-//! Shifting instead is exact once each row's weight sum, times 128, is
-//! folded into its bias.
-//!
-//! The dense layers are 257→16, 32→64 and 320→1 per stage: a few kilobytes
-//! against the 32 random rows of 512 bytes the transformer reads, so the
-//! row reads still set the pace and this file's job is to not add to it.
 
 use super::{
     ft_bucket, pa_bucket, so_stage, Nnue, ACC_DIMS, H, PA_BUCKETS, PA_DIMS, SO_L1, SO_L2,
@@ -33,11 +9,9 @@ use crate::pattern_index::{PatternIndices, MAX_MASKS};
 
 /// Rows are scaled so that `1.0` is this many steps.
 const ROW_ONE: i32 = 512;
-/// A row lane is clamped at this before the product, one step short of
-/// `ROW_ONE` so the product of two clamped lanes fits a byte.
+/// A row lane is clamped at this before the product, one step short of `ROW_ONE` so the product of two clamped lanes fits a byte.
 const ROW_CLAMP: i16 = 510;
-/// `L1`'s input, padded to whole 16-byte groups plus one extra chunk of
-/// four so the mobility lane (index 256) has a home.
+/// `L1`'s input, padded to whole 16-byte groups plus one extra chunk of four so the mobility lane (index 256) has a home.
 const L1_IN: usize = SO_SKIP + 8;
 const L1_CHUNKS: usize = L1_IN / 4;
 /// `L2`'s input is `L1`'s output twice: squared and plain.
@@ -56,20 +30,16 @@ const _: () = assert!(
 const _: () = assert!(SO_L1 == 16 && SO_L2 == 64);
 const _: () = assert!(OUT_IN == SO_L2 + SO_SKIP && OUT_IN.is_multiple_of(16));
 
-/// Weights packed for `vdotq_laneq_s32`: for input chunk `c` (four inputs)
-/// and output `o`, the four bytes `w[o][4c..4c+4]` sit at
-/// `(c * OUT + o) * 4`. One 16-byte load then holds four outputs by four
-/// inputs, which is exactly what one `sdot` consumes.
+/// Weights packed for `vdotq_laneq_s32`: for input chunk `c` (four inputs) and output `o`, the four bytes `w[o][4c..4c+4]` sit at `(c * OUT + o) * 4`.
 #[inline]
 fn packed_index(out: usize, inp: usize, n_out: usize) -> usize {
     (inp / 4 * n_out + out) * 4 + inp % 4
 }
 
-/// The quantized tables of the stacked read-out. Built by [`Nnue::quantize`].
+/// The quantized tables of the stacked read-out.
 #[derive(Default)]
 pub(super) struct StackQ {
-    /// Transformer rows per perspective, `[feature][ACC_DIMS]`, the White
-    /// copy pre-swapped like `ft_w_i8`.
+    /// Transformer rows per perspective, `[feature][ACC_DIMS]`, the White copy pre-swapped like `ft_w_i8`.
     ft_b: Vec<i16>,
     ft_w: Vec<i16>,
     ft_bias: Vec<i16>,
@@ -112,8 +82,6 @@ impl StackQ {
             .map(|&v| qi16(v, ROW_ONE as f32))
             .collect();
 
-        // The White copies: each mask's rows read through the digit-swapped
-        // index, in every transformer copy (see `quantize` for why every).
         let mut ft_w = vec![0i16; ft_b.len()];
         let mut pa_w = vec![0i16; pa_b.len()];
         let n_bucket = net.n_feat_bucket;
@@ -228,8 +196,6 @@ impl StackQ {
         let pa_base = pa_bucket(stage) * net.n_feat_bucket;
         let st = so_stage(stage);
         #[cfg(all(target_arch = "aarch64", not(feature = "nnue-scalar")))]
-        // SAFETY: row ids stay inside their pattern's table, so every row
-        // read is in bounds, and the buffers below are sized for the layers.
         let sum = unsafe {
             self.eval_neon(
                 ft.as_ptr().add(ft_base * ACC_DIMS),
@@ -254,8 +220,7 @@ impl StackQ {
         sum as f32 / OUT_PER_DISC
     }
 
-    /// The same arithmetic, one integer at a time. What the vector kernel is
-    /// checked against, and the path of machines without one.
+    /// The same arithmetic, one integer at a time.
     #[cfg_attr(
         all(target_arch = "aarch64", not(feature = "nnue-scalar")),
         allow(dead_code)
@@ -281,11 +246,8 @@ impl StackQ {
                 *a += v as i32;
             }
         }
-        // Shifted input to the stack: x - 128, as the kernel stores it.
         let mut xin = [0i8; L1_IN];
         for i in 0..H {
-            // The vector form: `lo` clamped and shifted up by 5, `hi` capped,
-            // a doubling multiply-high (>> 15), then narrowed to a byte.
             let lo = (acc[i] as i16).clamp(0, ROW_CLAMP) as i32;
             let hi = (acc[i + H] as i16).min(ROW_CLAMP) as i32;
             let p = ((lo << 5) * hi) >> 15;
@@ -381,14 +343,6 @@ impl StackQ {
             acc
         }
 
-        /* Ask for every line of the rows the second and third passes will
-        read before the first pass starts. The three passes walk the same
-        32 rows, and the first is already waiting on memory; getting the
-        other two rows' lines moving in the same shadow is worth a quarter
-        of the cold-row cost (1980 -> 1500 ns over val22's 1500 positions).
-        One line per row
-        recovers only half of that: the hardware prefetcher does not carry
-        on from a single touch. */
         for m in 0..n {
             let r = *rows.get_unchecked(m) as usize;
             let hp = ft.add(r * ACC_DIMS + H) as *const u8;
@@ -405,7 +359,6 @@ impl StackQ {
         let clamp = vdupq_n_s16(ROW_CLAMP);
         let shift = vdupq_n_s8(-128);
 
-        // The base layer, low then high half, folded to a byte per pair.
         let lo = sum128(ft, ACC_DIMS, self.ft_bias.as_ptr(), rows, n);
         let hi = sum128(ft.add(H), ACC_DIMS, self.ft_bias.as_ptr().add(H), rows, n);
         for r in 0..16 {
@@ -417,7 +370,6 @@ impl StackQ {
                 vadd_s8(vreinterpret_s8_u8(p), vget_low_s8(shift)),
             );
         }
-        // The phase-adaptive layer, squared.
         let bucket = pa_bucket(stage);
         let pz = sum128(
             pa,
@@ -439,7 +391,6 @@ impl StackQ {
         }
         *x.add(SO_SKIP) = ((mob as i32 * 7).min(255) - 128) as i8;
 
-        // L1: 257 -> 16, four accumulators of four outputs each.
         let l1w = self.l1_w.as_ptr().add(st * L1_CHUNKS * 4 * SO_L1);
         let mut acc1: [int32x4_t; 4] = [vdupq_n_s32(0); 4];
         for j in 0..4 {
@@ -455,7 +406,6 @@ impl StackQ {
                 acc1[j] = vdotq_laneq_s32::<3>(acc1[j], vld1q_s8(wp.add(192 + j * 16)), xv);
             }
         }
-        // The chunk holding mobility (the rest of the padding is zero weight).
         {
             let c = SO_SKIP / 4;
             let xb =
@@ -465,7 +415,6 @@ impl StackQ {
                 acc1[j] = vdotq_s32(acc1[j], vld1q_s8(wp.add(j * 16)), xb);
             }
         }
-        // Squared and plain, each to a byte, shifted.
         let mut a1 = Buf::<L2_IN>([0; L2_IN]);
         let s0 = vcombine_s16(vqmovn_s32(acc1[0]), vqmovn_s32(acc1[1]));
         let s1 = vcombine_s16(vqmovn_s32(acc1[2]), vqmovn_s32(acc1[3]));
@@ -480,7 +429,6 @@ impl StackQ {
             vaddq_s8(vreinterpretq_s8_u8(re), shift),
         );
 
-        // L2: 32 -> 64, sixteen accumulators.
         let l2w = self.l2_w.as_ptr().add(st * L2_CHUNKS * 4 * SO_L2);
         let mut acc2: [int32x4_t; 16] = [vdupq_n_s32(0); 16];
         for j in 0..16 {
@@ -496,7 +444,6 @@ impl StackQ {
                 acc2[j] = vdotq_laneq_s32::<3>(acc2[j], vld1q_s8(wp.add(768 + j * 16)), xv);
             }
         }
-        // Squared clipped, to a byte, shifted; then the stack's inputs follow.
         let mut xo = Buf::<OUT_IN>([0; OUT_IN]);
         let top = vdupq_n_s32(255 << 6);
         let zero = vdupq_n_s32(0);
@@ -512,7 +459,6 @@ impl StackQ {
         }
         std::ptr::copy_nonoverlapping(x, xo.0.as_mut_ptr().add(SO_L2), SO_SKIP);
 
-        // Output: 320 -> 1, in eight widening accumulators.
         let ow = self.out_w.as_ptr().add(st * OUT_IN);
         let xp = xo.0.as_ptr();
         let mut o: [int32x4_t; 8] = [vdupq_n_s32(0); 8];
@@ -588,14 +534,7 @@ mod tests {
             / OUT_PER_DISC
     }
 
-    /// The vector kernel against the scalar one, exactly, for both colours
-    /// along a game.
-    ///
-    /// Only the two integer kernels are compared: on the synthetic model the
-    /// f32 read-out sits fully saturated (its output does not move when the
-    /// transformer is replaced by noise), and a saturated f32 network and a
-    /// saturated byte network agree on nothing. The comparison against f32
-    /// needs trained weights, see below.
+    /// The vector kernel against the scalar one, exactly, for both colours along a game.
     #[test]
     fn vector_kernel_matches_scalar() {
         let mut nn = Nnue::new(NNUE_PATTERNS);
@@ -612,19 +551,7 @@ mod tests {
         });
     }
 
-    /// The integer stack against the f32 network it was converted from, on
-    /// trained weights (`KUROOBI_STACK_WEIGHTS` names the file).
-    ///
-    /// The 255/256 factors and the byte rounding, compounded over the fold
-    /// and three activations, come to 0.4% of the score. What the bound
-    /// really guards is the training: a stage whose L1 weights are all
-    /// smaller than 1/64 rounds to an all-zero layer here, and the f32 net
-    /// it was converted from does not. The first stacked model trained
-    /// without that constraint fails
-    /// exactly so -- stage 34's largest L1 weight is 0.0033, and the game
-    /// drifts by 15..19 discs from 24 to 29 empties while agreeing to 0.5%
-    /// elsewhere. A model this kernel can run has to be trained on the
-    /// grid, and this is the test that says whether it was.
+    /// The integer stack against the f32 network it was converted from, on trained weights (`KUROOBI_STACK_WEIGHTS` names the file).
     #[test]
     #[ignore]
     fn integer_stack_matches_f32_on_trained_weights() {
@@ -656,8 +583,7 @@ mod probe {
     use crate::pattern::NNUE_PATTERNS;
     use crate::position::Position;
 
-    /// Per-stage range of every layer of a trained model, and of the
-    /// activations it produces on random games, against the integer grid.
+    /// Per-stage range of every layer of a trained model, and of the activations it produces on random games, against the integer grid.
     #[test]
     #[ignore]
     fn stage_ranges() {
@@ -666,11 +592,9 @@ mod probe {
         nn.load(std::path::Path::new(&path)).expect("weights load");
         nn.quantize();
         const S: usize = crate::nnue::SO_STAGES;
-        // [stage][what]: max |l1 pre|, max |l2 pre|, n
         let mut l1max = vec![0f32; S];
         let mut l1pos = vec![0f32; S];
         let mut l2max = vec![0f32; S];
-        // Mean |contribution| to the output, in discs: hidden path, skip path.
         let mut hid = vec![0f64; S];
         let mut skip = vec![0f64; S];
         let mut n = vec![0usize; S];

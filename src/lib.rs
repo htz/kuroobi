@@ -1,26 +1,19 @@
-//! # Kuroobi
 //! Ultra-fast Reversi board processing using 2x uint64 bitboards.
 //!
-//! ## Quick Start
 //! ```rust
 //! use kuroobi::{Board, Reversi, Color, Position};
 //!
-//! // Create initial board
 //! let mut board = Board::new();
 //! assert_eq!(board.piece_count(), (2, 2));
 //! assert_eq!(board.movable_count(), 4);
 //!
-//! // Check and make a move (Black places 1 stone and flips 1 White stone)
-//! let movable = board.movable();
-//! let first = movable.trailing_zeros();
-//! let pos = Position::from_index(first).unwrap();
+//! let pos = Position::from_index(board.movable().trailing_zeros()).unwrap();
 //! board.make_move(pos).unwrap();
 //! assert_eq!(board.piece_count(), (4, 1));
 //!
-//! // Full game with history
 //! let mut game = Reversi::new();
 //! game.make_move(pos).unwrap();
-//! assert_eq!(game.to_kifu().len(), 2); // "c4" etc.
+//! assert_eq!(game.to_kifu().len(), 2);
 //! ```
 
 pub mod bitboard;

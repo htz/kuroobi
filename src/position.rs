@@ -1,5 +1,4 @@
 //! Board position: A1=0, B1=1, ..., H8=63.
-//! Supports KIFU notation conversion (e.g., "f5").
 
 use std::fmt;
 
@@ -7,13 +6,9 @@ use std::fmt;
 pub struct Position(pub u8);
 
 impl Position {
-    /// Minimum position index (A1).
     pub const MIN: u8 = 0;
-    /// Maximum position index (H8).
     pub const MAX: u8 = 63;
 
-    /// Creates a Position from a raw index (0..63).
-    /// Returns None if out of range.
     #[inline]
     pub const fn from_index(i: u32) -> Option<Position> {
         if i <= Self::MAX as u32 {
@@ -23,8 +18,6 @@ impl Position {
         }
     }
 
-    /// Creates a Position from file (0=A, 7=H) and rank (0=1, 7=8).
-    /// Returns None if either is out of range.
     #[inline]
     pub const fn from_file_rank(file: u8, rank: u8) -> Option<Position> {
         if file < 8 && rank < 8 {
@@ -34,40 +27,32 @@ impl Position {
         }
     }
 
-    /// Returns the raw index (0..63).
     #[inline]
     pub const fn index(self) -> u8 {
         self.0
     }
 
-    /// Returns the file (column) as 0..7 (A..H).
-    /// Position stores file-major (file*8+rank).
     #[inline]
     pub const fn file(self) -> u8 {
         self.0 / 8
     }
 
-    /// Returns the rank (row) as 0..7 (1..8).
-    /// Position stores file-major (file*8+rank).
     #[inline]
     pub const fn rank(self) -> u8 {
         self.0 % 8
     }
 
-    /// Returns the bitboard bit for this position.
     #[inline]
     pub const fn to_bit(self) -> u64 {
         1u64 << self.0
     }
 
-    /// Converts to KIFU notation (e.g., "f5").
     pub fn to_kifu(self) -> String {
         let col = (b'a' + self.file()) as char;
         let row = (b'1' + self.rank()) as char;
         format!("{}{}", col, row)
     }
 
-    /// Parses KIFU notation (e.g., "f5") to Position.
     pub fn from_kifu(s: &str) -> Result<Position, String> {
         let bytes = s.as_bytes();
         if bytes.len() != 2 {
@@ -88,7 +73,6 @@ impl fmt::Display for Position {
     }
 }
 
-/// Parse a pair of KIFU strings (e.g., "f5g5" -> (Position, Position)).
 pub fn kifu_pair(s: &str) -> Result<(Position, Position), String> {
     if s.len() != 4 {
         return Err(format!("invalid KIFU pair: {}", s));

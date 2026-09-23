@@ -2,35 +2,22 @@ import { useCallback, useEffect, useState } from 'react';
 import { api } from './api';
 import { backendStrings, resolveLang, setLang, type LangPref } from './i18n';
 
-/* Display preferences. They never affect the engine, so they live in
- * localStorage (per-machine, no round-trips). Every default matches
- * the current look — adding a setting must not change anyone's screen. */
 
 export type Theme = 'os' | 'dark' | 'light';
-/** Board facing; `auto` puts our color at the bottom (games only). */
 export type Facing = 'black' | 'white' | 'auto';
 
-/** Board mat color; the Display tab shows four swatches. */
 export type Tatami = 0 | 1 | 2 | 3;
-/** Eval decimal places (0 / 1 / 2 per the Display tab). */
 export type Decimals = 0 | 1 | 2;
 
 export interface Prefs {
   theme: Theme;
-  /** Mat color (0 = default). */
   tatami: Tatami;
-  /** Eval decimal places. */
   decimals: Decimals;
-  /** Board edge coordinates a-h / 1-8. */
   coords: boolean;
-  /** The mat's grain texture; subtle, but some want it off. */
   grain: boolean;
-  /** Disc-flip animation (ms); 0 disables. */
   flipMs: 0 | 120 | 240;
   facing: Facing;
-  /** Local game clock (seconds); 0 = none. Applies from the next new game. */
   clockSecs: number;
-  /** UI language; `auto` follows the machine's language. */
   lang: LangPref;
 }
 
@@ -40,10 +27,7 @@ const DEFAULTS: Prefs = {
   clockSecs: 0, lang: 'auto',
 };
 
-/* Mat colors. The board's four tokens swap as a set — changing only
- * the ground leaves edges/lines/grain behind and muddies the board. */
 export const TATAMI: { labelKey: string; board: string; dark: string; line: string; grain: string }[] = [
-  // Swatch colors measured from the design; edges/lines/grain derived.
   { labelKey: 'settings.tatami.default', board: '#77914e', dark: '#3f4f2c', line: '#3d5226', grain: '#33421d' },
   { labelKey: 'settings.tatami.straw', board: '#8a8f5c', dark: '#474a2f', line: '#464a28', grain: '#3b3f1f' },
   { labelKey: 'settings.tatami.moss', board: '#6f7f6a', dark: '#3a4238', line: '#374033', grain: '#2f382c' },
@@ -56,8 +40,6 @@ function load(): Prefs {
   try {
     const raw = localStorage.getItem(KEY);
     if (!raw) return DEFAULTS;
-    // Unknown keys dropped, missing keys defaulted — an unreadable old
-    // save must not silently reset everything.
     const got = JSON.parse(raw) as Partial<Prefs>;
     return { ...DEFAULTS, ...got };
   } catch {
@@ -76,8 +58,6 @@ export function usePrefs() {
     });
   }, []);
 
-  /* Track external writes via the storage event (it never fires for
-   * our own writes, so no doubling with setPrefs). */
   useEffect(() => {
     const onStorage = (e: StorageEvent) => {
       if (e.key !== null && e.key !== KEY) return;
@@ -87,8 +67,6 @@ export function usePrefs() {
     return () => window.removeEventListener('storage', onStorage);
   }, []);
 
-  /* Screenshot pin (`KUROOBI_THEME=light`); not persisted, a plain
-     launch restores the preference. */
   const [forced, setForced] = useState<Theme | ''>('');
   useEffect(() => {
     void api.themeOverride()
@@ -96,8 +74,6 @@ export function usePrefs() {
       .catch(() => { /* simply inert outside Tauri or on old binaries */ });
   }, []);
 
-  /* Screenshot pin (`KUROOBI_LANG=en`); not persisted, like the theme
-     override above. */
   const [forcedLang, setForcedLang] = useState<LangPref | ''>('');
   useEffect(() => {
     void api.langOverride()
@@ -105,8 +81,6 @@ export function usePrefs() {
       .catch(() => { /* inert outside Tauri or on older binaries */ });
   }, []);
 
-  /* The machine's language for `auto`. It has to come from the
-     backend — see `systemLang`. */
   const [osLang, setOsLang] = useState('');
   useEffect(() => {
     void api.systemLang()
@@ -114,16 +88,11 @@ export function usePrefs() {
       .catch(() => { /* falls back to the navigator values */ });
   }, []);
 
-  /* Apply the language before anything renders text, and hand the
-     backend its subset (it owns OS notifications and native dialogs,
-     which no frontend translation can reach). */
   useEffect(() => {
     setLang(resolveLang(forcedLang || prefs.lang, osLang));
     void api.setBackendStrings(backendStrings()).catch(() => { /* older binaries */ });
   }, [prefs.lang, forcedLang, osLang]);
 
-  // Theme switches via a :root attribute; `os` removes it and defers
-  // to prefers-color-scheme (tokens.css is written that way).
   useEffect(() => {
     const el = document.documentElement;
     const t = forced || prefs.theme;
@@ -131,14 +100,10 @@ export function usePrefs() {
     else el.setAttribute('data-theme', t);
   }, [prefs.theme, forced]);
 
-  // Flip duration is a CSS variable read by base.css's .k-flip.
   useEffect(() => {
     document.documentElement.style.setProperty('--flip-dur', prefs.flipMs + 'ms');
   }, [prefs.flipMs]);
 
-  /* Mat color overrides the tokens, surviving theme switches. Default
-   * (0) writes nothing — light mode has its own green and an override
-   * would ruin it. */
   useEffect(() => {
     const el = document.documentElement;
     const keys = ['--board', '--board-dark', '--line', '--grain'];
@@ -153,7 +118,6 @@ export function usePrefs() {
   return { prefs, set };
 }
 
-/** Whether to flip the board; `auto` flips only when we play White. */
 export const flipped = (facing: Facing, myColor: 'black' | 'white' | ''): boolean =>
   facing === 'white' || (facing === 'auto' && myColor === 'white');
 

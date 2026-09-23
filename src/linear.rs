@@ -1,17 +1,5 @@
 //! Stage-based pattern evaluator with training support.
-//!
-//! Weights are indexed `[stage][pattern][ternary_index]` where
-//! stage = 64 - empty - 4 (0..=60): the number of moves played so far.
-//! Weight files use a simple little-endian binary format (magic, stage count,
-//! per-pattern table sizes, then f32 tables) — portable and dependency-free.
-//!
-//! Training features for fast reinforcement-learning convergence:
-//! - Adam optimizer (per-cell adaptive step) alongside plain SGD
-//! - 8-fold symmetry data augmentation (`train`) — one labeled position
-//!   trains all rotations/mirrors, an 8x effective sample multiplier
-//! - TD(λ)-style whole-game credit assignment (`train_game`)
 
-/// GPU training for this evaluator (`linear_train --gpu`).
 #[cfg(feature = "gpu")]
 pub mod gpu;
 
@@ -19,10 +7,6 @@ use std::fs::File;
 use std::io::{self, BufReader, BufWriter, Read, Write};
 use std::path::Path;
 
-/// Fixed-point scale of the ordering-grade 16-bit weights.
-/// Fixed-point scale of the 8-bit ordering weights. Measured optimum: coarser
-/// steps beat a tighter range, because clipping the few large weights hurts
-/// the order more than rounding the many small ones.
 const I8_SCALE: f32 = 4.0;
 
 use crate::board::Board;
@@ -30,102 +14,38 @@ use crate::color::Color;
 use crate::pattern::Pattern;
 use crate::pattern_index::{PatternIndexer, PatternIndices};
 
-/// Number of game stages (moves played: 0..=60).
 pub const STAGE_COUNT: usize = 61;
 
-/// Magic bytes identifying a weight file (v2: adds disc-count tables).
 const WEIGHT_MAGIC: &[u8; 8] = b"BBRVWT02";
-/// v1 format: pattern tables only. Still loadable (disc-count weights zero).
 const WEIGHT_MAGIC_V1: &[u8; 8] = b"BBRVWT01";
 
-/// Cells in the per-stage disc-count table (player disc count 0..=64).
 pub const NUM_TABLE_SIZE: usize = 65;
 
-/// Stage-based evaluator over a static pattern library.
-///
-/// Besides the pattern features it carries one extra
-/// feature: a per-stage table indexed by the current player's disc count.
-/// Since the total disc count is fixed within a stage, this is effectively
-/// the disc differential — information the local patterns don't provide.
 pub struct Linear {
     patterns: &'static [Pattern],
-    /// weights[stage][pattern][ternary_index]
     weights: Vec<Vec<Vec<f32>>>,
-    /// The same weights, per stage, with the pattern tables laid end to end.
-    /// Evaluation walks one mask at a time, and reading them out of a
-    /// `Vec<Vec<f32>>` costs a pointer load before every weight load; a flat
-    /// array plus a small offset table (see `PatternIndexer::mask_offsets`)
-    /// leaves a single dependent load per mask.
     flat_weights: Vec<Vec<f32>>,
-    /// Start of each mask instance's table inside a `flat_weights` stage.
     mask_off: Vec<u32>,
-    /// The ordering-grade tables, quantized to 8 bits.
-    ///
-    /// There used to be a 16-bit pair here as well. Nothing read it: the
-    /// ordering moved to 8 bits and the only remaining reader of `flat_i16`
-    /// was the loop that built `flat_i16_white`, which nothing read at all.
-    /// Two dead copies of the weights is 600 MB resident and 37,000 pages
-    /// of address space that the live tables then have to share a TLB with.
     flat_i8: Vec<Vec<i8>>,
     flat_i8_white: Vec<Vec<i8>>,
-    /// num_weights[stage][player disc count]
     num_weights: Vec<[f32; NUM_TABLE_SIZE]>,
-    /// Appearance counts shaped like `weights`, built by
-    /// [`Linear::count_appearances`]. Empty until then.
     appear: Vec<Vec<Vec<u32>>>,
-    /// The same counts for `num_weights`. Without it the disc-count term keeps
-    /// taking the raw rate while every pattern cell takes a scaled one, and at
-    /// the rate per-cell scaling calls for that single term diverges on its
-    /// own -- measured here as NaN inside one epoch at alpha 1, 10 and 100.
     appear_num: Vec<[u32; NUM_TABLE_SIZE]>,
-    /// Cells seen at most this many times are left alone. A cell with two
-    /// examples behind it is fitting noise, and under per-cell scaling it is
-    /// exactly the cell that gets the largest step. Zero means "only skip
-    /// cells never seen".
     min_appear: u32,
-    /// Lookup tables for incremental index maintenance during search.
     indexer: PatternIndexer,
 }
 
-/// Per-cell weight update rule used by the training entry points.
-/// A view of the weight tables that several threads may update at once.
-///
-/// Training touches only the cells named by the current position — about a
-/// hundred out of millions — so two threads collide vanishingly rarely, and
-/// when they do the loser of the race just misses one small step. That is
-/// the Hogwild! observation: for a sparse linear model, dropping the
-/// synchronisation costs a little convergence and buys the whole machine.
-///
-/// The type is only sound while nothing else holds a mutable borrow of the
-/// evaluator, which `train_epoch_parallel` guarantees by owning it for the
-/// duration of the epoch.
 pub struct LinearView {
     stages: Vec<Vec<*mut f32>>,
     num: Vec<*mut f32>,
-    /// How often each cell appeared in the training data, laid out exactly
-    /// like `stages`. Empty when counts were never built.
-    ///
-    /// A cell seen a hundred times and a cell seen a hundred thousand times
-    /// both get the same step from a shared rate, so one is starved while
-    /// the other overshoots -- and the rate that suits neither ends up
-    /// halved over and over. Dividing by the count gives every cell the same
-    /// total movement per epoch
-    /// appearance count does (`lr = alpha / n_appear[cell]`).
     counts: Vec<Vec<*const u32>>,
-    /// Counts for `num`, laid out like it. Empty alongside `counts`.
     counts_num: Vec<*const u32>,
 }
 
-// SAFETY: the pointers address plain `f32` cells that outlive the view, and
-// the races on them are intended (see the type comment).
 unsafe impl Send for LinearView {}
 unsafe impl Sync for LinearView {}
 
 impl Linear {
-    /// Hand out a shared view of the weights for parallel training.
-    ///
-    /// Invalidates the flattened caches: they would be stale after the first
-    /// update, and rebuilding them mid-epoch is neither needed nor safe.
     pub fn weight_view(&mut self) -> LinearView {
         self.flat_weights.clear();
         self.flat_i8.clear();
@@ -154,17 +74,9 @@ impl Linear {
         }
     }
 
-    /// One training step against a shared weight view.
-    ///
-    /// Mirrors `update_weights_with` for plain SGD: the step is
-    /// `lr * (target - prediction)` on every active cell, with no per-cell
-    /// optimizer state to keep consistent between threads. Returns the mean
-    /// squared error over the eight variants — see `train` for why it must be
-    /// squared error and not mean-abs.
-    ///
     /// # Safety
-    /// `view` must come from this evaluator and no mutable borrow of the
-    /// weights may be live.
+    ///
+    /// Callers must not write the same weight cell concurrently.
     pub unsafe fn train_shared(
         &self,
         view: &LinearView,
@@ -196,10 +108,6 @@ impl Linear {
                     }
                 }
             } else {
-                // Per-cell rate: a cell that the data shows a thousand times
-                // takes a thousandth of the step a cell shown once does, so
-                // every cell moves about as far per epoch regardless of how
-                // often it comes up.
                 for (pi, p) in self.patterns.iter().enumerate() {
                     let table = view.stages[stage][pi];
                     let counts = view.counts[stage][pi];
@@ -226,9 +134,6 @@ impl Linear {
 }
 
 pub trait Optimizer {
-    /// Weight delta for one active cell. `grad` is the (positive-direction)
-    /// error `target - prediction`; `table_size` is the pattern's 3^size
-    /// (for optimizers that allocate per-cell state lazily).
     fn step(
         &mut self,
         stage: usize,
@@ -238,18 +143,11 @@ pub trait Optimizer {
         grad: f32,
     ) -> f32;
 
-    /// Called once per epoch by trainers that support schedules.
     fn next_epoch(&mut self) {}
 
-    /// Set the rate directly. A schedule the caller drives (an annealing
-    /// sweep) needs this; `next_epoch` can only step its own.
     fn set_lr(&mut self, _lr: f32) {}
 }
 
-/// Plain SGD with optional per-epoch learning-rate decay. Stateless per
-/// cell, and the step is proportional to the error — on a linear model this
-/// makes early training (large errors) converge much faster than Adam,
-/// whose normalized step is capped near `lr` regardless of error size.
 pub struct SgdOptimizer {
     pub learning_rate: f32,
     pub decay: f32,
@@ -286,20 +184,14 @@ impl Optimizer for SgdOptimizer {
     }
 }
 
-/// One Adam moment cell: (first moment m, second moment v, step count t).
 type MomentCell = (f32, f32, u32);
-/// Lazily-allocated moment table for one (stage, pattern) pair.
 type MomentTable = Option<Box<[MomentCell]>>;
 
-/// Adam optimizer state: first/second moment per touched weight cell.
 pub struct AdamOptimizer {
     pub learning_rate: f32,
     pub beta1: f32,
     pub beta2: f32,
     pub epsilon: f32,
-    /// Per-(stage, pattern) moment tables, allocated lazily on first touch.
-    /// Dense storage: full-corpus training touches most cells, where a
-    /// HashMap's hashing and node overhead dominates.
     moments: Vec<Vec<MomentTable>>,
 }
 
@@ -316,7 +208,6 @@ impl AdamOptimizer {
 }
 
 impl Optimizer for AdamOptimizer {
-    /// Bias-corrected Adam step for one cell.
     #[inline]
     fn step(
         &mut self,
@@ -351,7 +242,6 @@ impl Optimizer for AdamOptimizer {
 }
 
 impl Linear {
-    /// Create an evaluator with zero-initialized weights.
     pub fn new(patterns: &'static [Pattern]) -> Linear {
         let stage_weights: Vec<Vec<f32>> = patterns
             .iter()
@@ -376,26 +266,16 @@ impl Linear {
         self.patterns
     }
 
-    /// Lookup tables for incremental pattern-index maintenance.
     pub fn indexer(&self) -> &PatternIndexer {
         &self.indexer
     }
 
-    /// Game stage for a board: moves played so far, clamped to [0, 60].
-    /// saturating_sub guards artificial positions with more than 60 empties
-    /// (fewer than 4 discs).
     pub fn stage(board: &Board) -> usize {
         60usize
             .saturating_sub(board.empty_count() as usize)
             .min(STAGE_COUNT - 1)
     }
 
-    /// Count how often each pattern cell appears, for per-cell rate scaling.
-    ///
-    /// Counts every symmetry, matching what training touches. Cells that
-    /// never appear keep a count of zero and are then skipped entirely: a
-    /// cell the data never shows cannot be estimated from it, and stepping
-    /// it only moves noise.
     pub fn count_appearances(&mut self, boards: impl Iterator<Item = Board>) {
         if self.appear.is_empty() {
             self.appear = self
@@ -419,10 +299,6 @@ impl Linear {
         }
     }
 
-    /// Percentiles of the nonzero appearance counts on one stage, plus how
-    /// many cells were never seen. Per-cell scaling divides by these, so the
-    /// spread between them is the spread of effective rates across the model:
-    /// print it before choosing a rate rather than guessing at one.
     pub fn appearance_spread(&self, stage: usize) -> Option<(usize, usize, [u32; 5])> {
         let st = self.appear.get(stage)?;
         let mut seen: Vec<u32> = st.iter().flatten().copied().filter(|&n| n > 0).collect();
@@ -439,29 +315,14 @@ impl Linear {
         ))
     }
 
-    /// Cells seen at most `n` times stop being updated. Takes effect only
-    /// where per-cell counts exist.
     pub fn set_min_appear(&mut self, n: u32) {
         self.min_appear = n;
     }
 
-    /// Whether per-cell counts have been built.
     pub fn has_appearances(&self) -> bool {
         !self.appear.is_empty()
     }
 
-    /// Copy one stage's trainable parameters out.
-    ///
-    /// The stages are fully independent -- a position only ever reads and
-    /// only ever updates `weights[stage]` -- so the epoch that suits one
-    /// stage need not be the epoch that suits another. Training can keep the
-    /// best epoch *per stage* and assemble a model out of 61 different
-    /// epochs, which a single pooled val number cannot express: one stage
-    /// improving while another rots nets out to "no change".
-    ///
-    /// Derived tables (`flat_weights` and the quantized ones) are not
-    /// touched here; training and `eval` read `weights` directly, and the
-    /// flat forms are rebuilt on load.
     pub fn stage_weights(&self, stage: usize) -> (Vec<Vec<f32>>, Vec<f32>) {
         (
             self.weights[stage].clone(),
@@ -469,13 +330,11 @@ impl Linear {
         )
     }
 
-    /// Put a snapshot from [`Linear::stage_weights`] back.
     pub fn set_stage_weights(&mut self, stage: usize, w: &[Vec<f32>], num: &[f32]) {
         self.weights[stage].clone_from_slice(w);
         self.num_weights[stage].copy_from_slice(num);
     }
 
-    /// Evaluate the board from the current player's perspective.
     pub fn eval(&self, board: &Board) -> f32 {
         let stage = Self::stage(board);
         let weights = &self.weights[stage];
@@ -489,18 +348,10 @@ impl Linear {
         score + self.num_weights[stage][self.num_index(board)]
     }
 
-    /// Every weight as one vector, stage-major: for each stage, each
-    /// pattern's table in `patterns` order, then the disc-count table.
-    ///
-    /// The GPU trainer numbers cells in exactly this layout, so a mismatch
-    /// here trains cells the search reads somewhere else.
     pub fn flat_all(&self) -> Vec<f32> {
         self.flat_stages(0, STAGE_COUNT - 1)
     }
 
-    /// The same layout, for stages `lo..=hi` only. A run aimed at one
-    /// stage carries one stage's tables, not all sixty-one: on the GPU
-    /// that is 12 MB against 712, and eight of them fit where one did.
     pub fn flat_stages(&self, lo: usize, hi: usize) -> Vec<f32> {
         let stride: usize =
             self.patterns.iter().map(|p| p.table_size()).sum::<usize>() + NUM_TABLE_SIZE;
@@ -514,12 +365,10 @@ impl Linear {
         out
     }
 
-    /// Write back what [`flat_all`](Self::flat_all) produced.
     pub fn set_flat_all(&mut self, v: &[f32]) {
         self.set_flat_stages(0, STAGE_COUNT - 1, v)
     }
 
-    /// Write back what [`flat_stages`](Self::flat_stages) produced.
     pub fn set_flat_stages(&mut self, lo: usize, hi: usize, v: &[f32]) {
         let mut k = 0usize;
         for s in lo..=hi {
@@ -534,16 +383,11 @@ impl Linear {
         self.flat_weights.clear();
     }
 
-    /// Disc-count feature index: the current player's disc count.
     #[inline]
     fn num_index(&self, board: &Board) -> usize {
         board.player_bb().count_ones() as usize
     }
 
-    /// Evaluate from incrementally-maintained pattern indices (see
-    /// [`PatternIndexer`]). `board` supplies only stage and side to move;
-    /// `indices` must correspond to `board`'s discs. Bit-exact with
-    /// [`eval`](Self::eval): same weights are summed in the same order.
     #[inline]
     pub fn eval_indices(&self, board: &Board, indices: &PatternIndices) -> f32 {
         let stage = Self::stage(board);
@@ -561,9 +405,6 @@ impl Linear {
         patterns + self.num_weights[stage][self.num_index(board)]
     }
 
-    /// Rebuild the flat evaluation copy of the weights. Every mutation
-    /// invalidates it (see `invalidate_flat`); search paths rebuild once
-    /// after loading and then only read.
     fn rebuild_flat(&mut self) {
         let mut pattern_off = Vec::with_capacity(self.patterns.len());
         let mut off = 0u32;
@@ -582,7 +423,6 @@ impl Linear {
             .iter()
             .map(|stage| stage.iter().flat_map(|t| t.iter().copied()).collect())
             .collect();
-        // White's table: entry m,i holds the weight the swapped index selects.
         let n_masks = self.indexer.n_masks();
         self.flat_i8 = self
             .flat_weights
@@ -611,8 +451,6 @@ impl Linear {
             .collect();
     }
 
-    /// Drop the flat copy; the next evaluation falls back to the nested
-    /// tables until it is rebuilt.
     fn invalidate_flat(&mut self) {
         self.flat_weights.clear();
         self.flat_i8.clear();
@@ -620,8 +458,6 @@ impl Linear {
         self.mask_off.clear();
     }
 
-    /// Ordering-grade evaluation from raw bitboards: 8-bit weights, so a
-    /// stage's table is a quarter of the size the exact path walks.
     #[inline(never)]
     pub fn eval_order_bb(
         &self,
@@ -633,7 +469,6 @@ impl Linear {
         let empties = 64 - (player | opponent).count_ones() as usize;
         let stage = 60usize.saturating_sub(empties).min(STAGE_COUNT - 1);
         if self.flat_i8.is_empty() {
-            // Weights were mutated since the last rebuild; fall back.
             let mut b = Board::new();
             b.black = if matches!(color, Color::Black) {
                 player
@@ -658,7 +493,6 @@ impl Linear {
         sum as f32 / I8_SCALE + self.num_weights[stage][player.count_ones() as usize]
     }
 
-    /// Direct access to one weight entry (for training).
     pub fn weight(&self, stage: usize, pattern: usize, index: usize) -> f32 {
         self.weights[stage][pattern][index]
     }
@@ -668,17 +502,6 @@ impl Linear {
         self.weights[stage][pattern][index] = value;
     }
 
-    /// One SGD step toward `target`. Returns the prediction error
-    /// (target - prediction) BEFORE the update.
-    ///
-    /// The model is linear: prediction = Σ w[active cell]. For squared loss
-    /// L = ½(target - pred)², the gradient wrt each active weight is -error,
-    /// so the update is `w += lr * error` per active cell (a cell hit by k
-    /// orientations receives the update k times = its true gradient). With
-    /// N active cells
-    /// the prediction moves by ≥ N*lr*error per step, so lr must be < 2/N
-    /// for convergence (the 16-pattern set has N = 64 → lr ≲ 0.03; training
-    /// here uses lr = 0.01).
     pub fn update_weights(&mut self, board: &Board, target: f32, learning_rate: f32) -> f32 {
         let prediction = self.eval(board);
         let error = target - prediction;
@@ -697,7 +520,6 @@ impl Linear {
         error
     }
 
-    /// One optimizer step toward `target`. Returns the pre-update error.
     pub fn update_weights_with(
         &mut self,
         board: &Board,
@@ -716,15 +538,12 @@ impl Linear {
                 self.flat_weights.clear();
             }
         }
-        // Disc-count cell: registered with the optimizer as a virtual
-        // pattern one past the last real one.
         let num_idx = self.num_index(board);
         let delta = opt.step(stage, self.patterns.len(), num_idx, NUM_TABLE_SIZE, error);
         self.num_weights[stage][num_idx] += delta;
         error
     }
 
-    /// Backwards-compatible alias for Adam-based single updates.
     pub fn update_weights_adam(
         &mut self,
         board: &Board,
@@ -734,18 +553,6 @@ impl Linear {
         self.update_weights_with(board, target, opt)
     }
 
-    /// Train on one labeled position with 8-fold symmetry augmentation:
-    /// every rotation/mirror of the position shares the same value, so one
-    /// sample teaches eight — this is the single biggest convergence win for
-    /// pattern-based Reversi evaluators. Returns the mean **squared** error
-    /// over the eight variants (each measured before its own update), so a
-    /// trainer summing the return gets a true MSE.
-    ///
-    /// (It must be squared error, not mean-abs: with zero weights all eight
-    /// variants predict 0 and the two agree, but as the model fits, the eight
-    /// predictions diverge and mean-abs shrinks faster than the RMS — squaring
-    /// after averaging the abs errors gives a number that can *rise* while the
-    /// real MSE keeps falling.)
     pub fn train(&mut self, board: &Board, target: f32, opt: &mut impl Optimizer) -> f32 {
         let mut total_sq_err = 0.0f32;
         for sym in board.symmetries() {
@@ -755,18 +562,6 @@ impl Linear {
         total_sq_err / 8.0
     }
 
-    /// Train from a finished self-play game with TD(λ)-style targets.
-    ///
-    /// `history` is the sequence of positions from the first move to the
-    /// final position; `final_score` is the game outcome from **Black's**
-    /// perspective (disc difference). Each position's target blends the
-    /// final outcome with the (bootstrapped) evaluation of the next
-    /// position, geometrically weighted by `lambda`:
-    ///   λ = 1  -> pure Monte-Carlo (every position labeled with the outcome)
-    ///   λ = 0  -> pure TD(0) (each position pulls toward the next eval)
-    /// Positions are trained late-to-early so bootstrap targets use
-    /// already-updated (fresher) weights. Returns the mean over positions of
-    /// each position's mean squared error (see `train`).
     pub fn train_game(
         &mut self,
         history: &[Board],
@@ -779,12 +574,9 @@ impl Linear {
         }
 
         let mut total_sq_err = 0.0f32;
-        // Value seen from the position *after* each board, in that
-        // position's own perspective. Start from the terminal outcome.
         let mut next_value_black_view = final_score;
 
         for board in history.iter().rev() {
-            // Convert the successor value into this board's perspective
             let outcome_here = if board.player() == crate::color::Color::Black {
                 final_score
             } else {
@@ -799,8 +591,6 @@ impl Linear {
             let target = lambda * outcome_here + (1.0 - lambda) * bootstrap_here;
             total_sq_err += self.train(board, target, opt);
 
-            // The freshly-trained evaluation of this position becomes the
-            // bootstrap for its predecessor (stored in Black's view).
             let v = self.eval(board);
             next_value_black_view = if board.player() == crate::color::Color::Black {
                 v
@@ -812,14 +602,6 @@ impl Linear {
         total_sq_err / history.len() as f32
     }
 
-    /// Save all stage weights to one binary file, atomically: data is
-    /// written to a sibling temp file and renamed into place, so an
-    /// interruption mid-write can never corrupt an existing weight file.
-    ///
-    /// Layout (little-endian):
-    ///   magic [8] | stage_count u32 | pattern_count u32 |
-    ///   table_size u32 per pattern | f32 tables in [stage][pattern] order |
-    ///   (v2 only) f32 disc-count tables, 65 per stage
     pub fn save_weights(&self, path: &Path) -> io::Result<()> {
         let tmp_path = path.with_extension("tmp");
         {
@@ -848,9 +630,6 @@ impl Linear {
         std::fs::rename(&tmp_path, path)
     }
 
-    /// Load weights previously written by `save_weights`. The file must match
-    /// this evaluator's pattern library exactly. v1 files (pattern tables
-    /// only) load with zeroed disc-count weights.
     pub fn load_weights(&mut self, path: &Path) -> io::Result<()> {
         let mut r = BufReader::new(File::open(path)?);
 
@@ -936,13 +715,6 @@ mod tests {
         assert_eq!(e.eval(&b), 0.0);
     }
 
-    /// Effective gradient multiplier for one position: Σ k² over distinct
-    /// active cells, where k = number of orientations hitting that cell,
-    /// plus 1 for the disc-count cell (hit exactly once). A cell hit k
-    /// times is updated k times and read back k times, so the prediction
-    /// moves by lr * error * (Σk² + 1) per step. On asymmetric positions
-    /// Σk² = 64 (all cells distinct); the color/rotation-symmetric initial
-    /// position collapses many cells (Σk² = 216 there).
     fn gradient_multiplier(board: &Board) -> f32 {
         use std::collections::HashMap;
         let mut counts: HashMap<(usize, usize), u32> = HashMap::new();
@@ -954,10 +726,6 @@ mod tests {
         counts.values().map(|&k| (k * k) as f32).sum::<f32>() + 1.0
     }
 
-    /// Learning rate safe for repeated single-position training on any
-    /// position: lr * (Σk² + 1) < 2 with Σk² ≤ 216 → lr < 0.009. The Go
-    /// trainer's lr = 0.01 is safe in its regime (SGD over many mostly-
-    /// asymmetric examples), but not for this stress pattern.
     const LR: f32 = 0.005;
 
     #[test]
@@ -977,8 +745,6 @@ mod tests {
 
     #[test]
     fn test_update_weights_converges_to_target() {
-        // Repeated steps on one position must converge to the exact target
-        // (the position is always representable by a linear model).
         let mut e = Linear::new(LINEAR_PATTERNS);
         let b = Board::new();
         for _ in 0..200 {
@@ -993,9 +759,6 @@ mod tests {
 
     #[test]
     fn test_update_gradient_magnitude_matches_linear_model() {
-        // One step from zero weights must move the prediction by exactly
-        // lr * error * Σk² (see gradient_multiplier). Check on both the
-        // symmetric initial position and an asymmetric one.
         for plies in [0, 1] {
             let mut b = Board::new();
             for _ in 0..plies {
@@ -1006,10 +769,8 @@ mod tests {
 
             let multiplier = gradient_multiplier(&b);
             if plies == 0 {
-                // 8-fold symmetry of the start position collapses many cells
                 assert_eq!(multiplier, 217.0, "symmetric start: Σk² + 1 = 217");
             } else {
-                // Any first move retains one diagonal mirror symmetry
                 assert_eq!(
                     multiplier, 193.0,
                     "first move keeps a mirror: Σk² + 1 = 193"
@@ -1030,7 +791,6 @@ mod tests {
 
     #[test]
     fn test_update_only_touches_current_stage() {
-        // Training a stage-0 position must leave every other stage at zero.
         let mut e = Linear::new(LINEAR_PATTERNS);
         let b = Board::new();
         assert_eq!(Linear::stage(&b), 0);
@@ -1045,8 +805,6 @@ mod tests {
 
     #[test]
     fn test_perspective_antisymmetry_after_training() {
-        // Weights trained from one side apply to "player", so the same
-        // position from the opponent's view uses different table cells.
         let mut e = Linear::new(LINEAR_PATTERNS);
         let b = Board::new();
         for _ in 0..300 {
@@ -1057,15 +815,11 @@ mod tests {
         let own = e.eval(&b);
         let other = e.eval(&swapped);
         assert!(own > 4.0, "trained side evaluates high, got {own}");
-        // The initial position is color-symmetric, so the swapped view hits
-        // the *same* ternary indices -> identical score. Verify that.
         assert_eq!(own, other, "color-symmetric position evaluates equally");
     }
 
     #[test]
     fn test_asymmetric_position_perspectives_differ() {
-        // After one real move the position is no longer color-symmetric:
-        // training black's view must not equally train white's view.
         let mut b = Board::new();
         let pos = crate::position::Position::from_index(b.movable().trailing_zeros()).unwrap();
         b.make_move_unchecked(pos);
@@ -1084,11 +838,6 @@ mod tests {
 
     #[test]
     fn test_adam_robust_where_sgd_diverges() {
-        // Adam's practical advantage is robustness to the learning rate.
-        // On the symmetric start position Σk² = 216, so SGD with lr = 0.02
-        // has contraction factor |1 - 0.02*216| = 3.3 > 1: it diverges.
-        // Adam with the same lr stays bounded (per-cell steps are capped at
-        // ~lr regardless of gradient scale) and converges.
         let b = Board::new();
         let target = 8.0f32;
         let lr = 0.02f32;
@@ -1109,7 +858,6 @@ mod tests {
             adam_eval.update_weights_adam(&b, target, &mut opt);
         }
         let adam_residual = (target - adam_eval.eval(&b)).abs();
-        // Adam's steady-state oscillation is bounded by ~(active cells * lr)
         let band = 65.0 * lr * 2.0;
         assert!(
             adam_residual < band,
@@ -1119,15 +867,10 @@ mod tests {
 
     #[test]
     fn test_symmetry_augmented_training_generalizes() {
-        // Training with `train` (8 symmetries) must make the evaluator score
-        // a rotated variant identically to the original — without ever
-        // having seen the rotation as a separate sample.
         let mut b = Board::new();
         let pos = Position::from_index(b.movable().trailing_zeros()).unwrap();
         b.make_move_unchecked(pos);
 
-        // Small lr: Adam's steady-state oscillation is ~lr * active cells,
-        // so lr = 0.01 keeps the residual band at ~0.64.
         let mut e = Linear::new(LINEAR_PATTERNS);
         let mut opt = AdamOptimizer::new(0.01);
         for _ in 0..300 {
@@ -1140,8 +883,6 @@ mod tests {
             (6.0 - base).abs() < 1.0,
             "training target reached, got {base}"
         );
-        // The 8 views are updated sequentially inside `train`, so at any
-        // instant they differ by at most Adam's steady-state oscillation.
         for (i, sym) in syms.iter().enumerate() {
             let v = e.eval(sym);
             assert!(
@@ -1158,9 +899,6 @@ mod tests {
 
     #[test]
     fn test_train_game_monte_carlo_labels_all_stages() {
-        // λ=1 labels every recorded position with the final outcome
-        // (sign-adjusted per side to move). After training, each recorded
-        // position must evaluate toward ±score in its own perspective.
         let mut board = Board::new();
         let mut history = vec![board];
         for _ in 0..6 {
@@ -1173,9 +911,6 @@ mod tests {
         }
         let final_score = 10.0f32; // pretend Black wins by 10
 
-        // lr sizing: Adam's steady-state swing is ~(active cells + 8 num
-        // steps) * lr = 72 * lr per position; 0.03 keeps it inside the
-        // ±3.0 tolerance below.
         let mut e = Linear::new(LINEAR_PATTERNS);
         let mut opt = AdamOptimizer::new(0.03);
         let mut last_err = f32::MAX;
@@ -1201,9 +936,6 @@ mod tests {
 
     #[test]
     fn test_train_game_td_bootstrap_direction() {
-        // λ=0 (pure TD): early positions bootstrap from later evaluations.
-        // With a winning outcome, all positions must still drift positive
-        // for Black because credit flows backward through the chain.
         let mut board = Board::new();
         let mut history = vec![board];
         for _ in 0..4 {
@@ -1221,8 +953,6 @@ mod tests {
             e.train_game(&history, 12.0, 0.0, &mut opt);
         }
 
-        // The first position is Black to move; its value must have moved
-        // clearly positive via bootstrap alone.
         let first = &history[0];
         assert_eq!(first.player(), crate::color::Color::Black);
         assert!(
@@ -1234,9 +964,6 @@ mod tests {
 
     #[test]
     fn test_eval_indices_bit_exact_with_eval() {
-        // The incremental path must return the *bit-identical* f32 as the
-        // recomputing path (same weights summed in the same order), for both
-        // sides to move, at every position of a random game.
         let mut e = Linear::new(LINEAR_PATTERNS);
         let mut state = 0x2545f4914f6cdd1du64;
         for stage in 0..STAGE_COUNT {
@@ -1297,9 +1024,6 @@ mod tests {
         }
     }
 
-    /// One training step through the path training actually uses. The
-    /// `update_weights` family does not consult the counts -- only
-    /// `train_shared`, which is what the trainer calls.
     fn step(e: &mut Linear, b: &Board) {
         let view = e.weight_view();
         unsafe { e.train_shared(&view, b, 10.0, 0.005) };
@@ -1307,11 +1031,6 @@ mod tests {
 
     #[test]
     fn test_cell_lr_shrinks_the_step_and_skips_unseen() {
-        // Every cell this position touches is seen several times over, so the
-        // scaled step must land the same way but far shorter -- and a cell
-        // the position never touches must not move under either. The exact
-        // ratio is not 1/n: the eight symmetries update inside one call, so
-        // the error the later ones see already reflects the earlier ones.
         let b = Board::new();
         let mut plain = Linear::new(LINEAR_PATTERNS);
         step(&mut plain, &b);
@@ -1349,10 +1068,6 @@ mod tests {
 
     #[test]
     fn test_min_appear_freezes_thin_cells() {
-        // A threshold above every count freezes the model outright; without
-        // one the same step goes through. That is the knob that keeps a cell
-        // with a handful of examples from taking the largest step of all
-        // once the rate is divided by the count.
         let b = Board::new();
         let mut e = Linear::new(LINEAR_PATTERNS);
         e.count_appearances(std::iter::once(b));
@@ -1396,20 +1111,16 @@ mod tests {
         std::fs::create_dir_all(&dir).unwrap();
         let path = dir.join("weights_v2.bin");
 
-        // Train one step so the disc-count cell becomes nonzero.
         let mut e = Linear::new(LINEAR_PATTERNS);
         let b = Board::new();
         e.update_weights(&b, 10.0, 0.005);
         let expected = e.eval(&b);
         e.save_weights(&path).unwrap();
 
-        // v2 roundtrip preserves the disc-count contribution exactly.
         let mut e2 = Linear::new(LINEAR_PATTERNS);
         e2.load_weights(&path).unwrap();
         assert_eq!(e2.eval(&b), expected, "v2 roundtrip must be lossless");
 
-        // A v1 file is the same bytes minus the trailing disc-count tables
-        // and with the old magic; it must load with zeroed num weights.
         let mut bytes = std::fs::read(&path).unwrap();
         bytes[..8].copy_from_slice(b"BBRVWT01");
         bytes.truncate(bytes.len() - STAGE_COUNT * 65 * 4);
@@ -1419,7 +1130,6 @@ mod tests {
         let mut e3 = Linear::new(LINEAR_PATTERNS);
         e3.load_weights(&v1_path).unwrap();
         let delta = expected - e3.eval(&b);
-        // Difference is exactly the (single) trained disc-count cell.
         assert!(
             delta.abs() > 0.0,
             "v1 load must zero the disc-count weights"

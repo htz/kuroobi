@@ -1,24 +1,4 @@
 //! Opening-book generator.
-//!
-//! Two stages:
-//!   1. `--scan`   read WTHOR (tournament records), collect frequent
-//!      opening positions as candidates (depth 0 = unevaluated)
-//!   2. `--deepen` solve unevaluated/shallow entries with
-//!      deeper-than-game search; interruptible, saved work persists.
-//!
-//! Book values must come from beyond game depth, so defaults are depth
-//! 26 / solve 30 / band 8 (live GGS runs 22 / 26 / 6).
-//!
-//! `--deepen` scores the moves game records played plus the engine's own
-//! pick, which is ~3x cheaper than every legal move but leaves entries
-//! *partial*: the move they name is the best of a sample, not of the
-//! position, and play treats such entries as hints rather than answers.
-//! `--all-moves` scores every legal move and marks entries complete.
-//!
-//! Usage:
-//!   bookgen --scan data/source/wthor --max-ply 24 --min-games 3 --out book.txt
-//!   bookgen --deepen book.txt --depth 26 --solve 30 --band 8 [--all-moves]
-//!           [--min-empties 54] [--limit 500]
 
 use std::path::{Path, PathBuf};
 
@@ -38,17 +18,8 @@ struct Args {
     threads: usize,
     limit: usize,
     hash_bits: u32,
-    /// Max human candidate moves scored per position (ignored with
-    /// `--all-moves`).
     max_cands: usize,
-    /// Score every legal move, so entries may claim a best move.
     all_moves: bool,
-    /// Only touch positions with at least this many empty squares.
-    ///
-    /// Completing the whole file is not worth it: entries below ~48
-    /// empties are 4/5 of the file but 4% of the recorded visits, and a
-    /// deep entry is material for the search rather than a move to play,
-    /// so it does not need a best move at all.
     min_empties: u8,
 }
 
@@ -102,19 +73,15 @@ fn parse_args() -> Result<Args, String> {
     Ok(a)
 }
 
-/// Replay records, counting positions and played moves up to `max_ply`.
 fn scan(dir: &Path, max_ply: usize, min_games: u32, book: &mut Book) -> std::io::Result<()> {
     let mut files: Vec<PathBuf> = std::fs::read_dir(dir)?
         .filter_map(|e| e.ok().map(|e| e.path()))
         .filter(|p| p.extension().is_some_and(|e| e.eq_ignore_ascii_case("wtb")))
         .collect();
     files.sort();
-    // (normalized key, normalized move) -> occurrence count.
     let mut counts: std::collections::HashMap<((u64, u64), u8), u32> = Default::default();
     let mut total_games = 0usize;
     for f in &files {
-        // Short records are abandoned or corrupt games; the old reader
-        // asked for ten moves before it believed one.
         let games = wthor::read(f)?.into_iter().filter(|g| g.moves.len() >= 10);
         for game in games {
             total_games += 1;
@@ -123,7 +90,6 @@ fn scan(dir: &Path, max_ply: usize, min_games: u32, book: &mut Book) -> std::io:
                 if ply >= max_ply {
                     break;
                 }
-                // The format has no explicit pass; insert one and retry.
                 if !b.check(pos) {
                     b.pass();
                     if !b.check(pos) {
@@ -140,7 +106,6 @@ fn scan(dir: &Path, max_ply: usize, min_games: u32, book: &mut Book) -> std::io:
     }
     eprintln!();
 
-    // Take the most frequent move per position.
     let mut by_pos: std::collections::HashMap<(u64, u64), Vec<(u8, u32)>> = Default::default();
     for ((key, mv), n) in counts {
         by_pos.entry(key).or_default().push((mv, n));
@@ -151,9 +116,7 @@ fn scan(dir: &Path, max_ply: usize, min_games: u32, book: &mut Book) -> std::io:
         if total < min_games {
             continue;
         }
-        // Keep all candidates by frequency (value 0 before deepening).
         cands.sort_by_key(|(_, n)| std::cmp::Reverse(*n));
-        // Never clobber an existing (deep-evaluated) entry.
         if book.get_raw(key).is_some_and(|e| e.depth > 0) {
             continue;
         }
@@ -176,7 +139,6 @@ fn scan(dir: &Path, max_ply: usize, min_games: u32, book: &mut Book) -> std::io:
                 moves,
                 depth: 0,
                 games: total,
-                // Frequency only: nothing was searched, let alone all of it.
                 complete: false,
             },
         );
@@ -186,22 +148,10 @@ fn scan(dir: &Path, max_ply: usize, min_games: u32, book: &mut Book) -> std::io:
     Ok(())
 }
 
-/// Re-solve unevaluated/shallow entries with deep search.
-///
-/// Parallelism is per position: many workers each solving one position
-/// with few threads out-throughputs one many-threaded solve, because
-/// parallel efficiency scales with tree size and opening trees are small.
 fn deepen(book: &mut Book, out: &Path, a: &Args) -> Result<(), String> {
     use std::sync::atomic::{AtomicUsize, Ordering};
     use std::sync::Mutex;
 
-    /* An entry whose scored moves already cover every legal move is
-    complete as it stands: the values came from a real search (`depth > 0`)
-    and there is nothing left to compare against. Recognising those costs
-    no search. It happens naturally where many different moves were played
-    in the records, which is exactly the frequent openings - 86 entries
-    carrying 24% of all recorded visits. A single-legal-move position is
-    the degenerate case of the same rule. */
     if a.all_moves {
         let ready: Vec<(u64, u64)> = book
             .iter()
@@ -225,11 +175,6 @@ fn deepen(book: &mut Book, out: &Path, a: &Args) -> Result<(), String> {
             eprintln!("{n} entries already cover every legal move - complete without searching");
         }
     }
-    /* Solve by frequency (likely-hit positions gain value first).
-    With `--all-moves` a deep-but-partial entry still needs work: its
-    values came from a sample of the legal moves, so it cannot name a
-    best move however deep those values are. Depth alone used to decide,
-    which left every already-deepened entry untouchable. */
     let mut todo: Vec<((u64, u64), Entry)> = book
         .iter()
         .filter(|(k, e)| {
@@ -246,12 +191,9 @@ fn deepen(book: &mut Book, out: &Path, a: &Args) -> Result<(), String> {
     let total = todo.len();
     if total == 0 {
         eprintln!("nothing to deepen");
-        // The completeness pass above may still have changed entries;
-        // returning without saving silently discarded that work.
         return book.save(out).map_err(|e| format!("{e}"));
     }
 
-    // workers x threads-per-worker ~= physical cores.
     let cores = std::thread::available_parallelism()
         .map(|n| n.get())
         .unwrap_or(8);
@@ -280,12 +222,8 @@ fn deepen(book: &mut Book, out: &Path, a: &Args) -> Result<(), String> {
                     solve_empties: a.solve,
                     band: a.band,
                     threads: per,
-                    // Small trees, small tables: the solver clears per
-                    // position, and a big table pays its clear cost every time.
                     midgame_hash_bits: a.hash_bits,
                     solver_hash_bits: a.hash_bits,
-                    // Book off: the position being evaluated would hit
-                    // the book and write its stale value straight back.
                     use_book: false,
                     ..Default::default()
                 };
@@ -299,12 +237,6 @@ fn deepen(book: &mut Book, out: &Path, a: &Args) -> Result<(), String> {
                     let key = *key;
                     let board = kuroobi::book::board_from_key(key);
                     let best = engine.choose(&board);
-                    /* With `--all-moves` every legal move is scored and the
-                    entry may claim a best. Without it only recorded moves
-                    plus the engine's own pick get values, which is ~3x
-                    cheaper but leaves the entry a hint: the move it names
-                    is the top of a partial list, and a deep search beat it
-                    in 5 of 30 sampled entries (1.17 discs on average). */
                     let mut cands: Vec<(kuroobi::Position, u32)> = if a.all_moves {
                         board
                             .movable_iter()

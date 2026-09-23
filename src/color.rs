@@ -1,4 +1,4 @@
-//! Board piece color. Black=0, White=1. Opponent is XOR with 1.
+//! Board piece color.
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 #[repr(u8)]
@@ -8,7 +8,6 @@ pub enum Color {
 }
 
 impl Color {
-    /// Returns the opponent color. Black <-> White.
     #[inline]
     pub const fn opponent(self) -> Color {
         match self {
@@ -17,13 +16,11 @@ impl Color {
         }
     }
 
-    /// Returns the numeric index (0 or 1).
     #[inline]
     pub const fn index(self) -> usize {
         self as usize
     }
 
-    /// Creates a Color from a numeric index.
     #[inline]
     pub const fn from_usize(u: usize) -> Option<Color> {
         match u {

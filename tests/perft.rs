@@ -1,14 +1,7 @@
 //! Perft (move-path counting) validation against known Reversi values.
-//!
-//! Reference sequence (leaf counts from the standard initial position,
-//! where a forced pass does not consume a ply):
-//! depth 1..=9: 4, 12, 56, 244, 1396, 8200, 55092, 390216, 3005288
 
 use kuroobi::{bitboard, Board};
 
-/// Count leaf nodes at `depth` plies. A player with no moves passes without
-/// consuming a ply; if both players have no moves the game is over and the
-/// position itself is the leaf.
 fn perft(board: &Board, depth: u32) -> u64 {
     if depth == 0 {
         return 1;
@@ -16,7 +9,6 @@ fn perft(board: &Board, depth: u32) -> u64 {
 
     let moves = board.movable();
     if moves == 0 {
-        // Pass: opponent to move on the same depth
         let mut passed = *board;
         passed.pass();
         if passed.movable() == 0 {
@@ -56,12 +48,8 @@ fn perft_deeper() {
     assert_eq!(perft(&board, 8), 390216, "perft(8)");
 }
 
-/// flippable() must agree with mobility(): every square mobility reports
-/// must flip at least one disc, and no other empty square may flip any.
 #[test]
 fn mobility_matches_flippable_exhaustive() {
-    // Walk a few hundred random-ish games deterministically and check the
-    // invariant at every position.
     let mut board = Board::new();
     let mut steps = 0;
     loop {
@@ -91,7 +79,6 @@ fn mobility_matches_flippable_exhaustive() {
             continue;
         }
 
-        // Deterministic move selection: alternate lowest/highest set bit
         let bit = if steps % 2 == 0 {
             moves.trailing_zeros()
         } else {

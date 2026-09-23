@@ -1,25 +1,16 @@
 import React from 'react';
-/* IconButton comes from Icons.tsx (the primitives copy was removed).
- * props are {name, label, onClick, size} — label fills both title and
- * aria-label; onClick takes no arguments. */
 import { Icon, IconButton, type IconName } from './Icons';
 import type { GgsSnapshot } from '../types';
 import { Badge, Dot, Button, Select, TextField } from './primitives';
 import { Note, picked } from './layout';
 import { t } from '../i18n';
 import logo from '../../assets/kuroobi.svg?raw';
-// Single source of truth; a copy in the design-side state.ts drifted
-// (level table, formula variables and colors all diverged once).
 import {
   colorChoices, boolOps, FORMULA_OPS, formulaVars, varOf, condToSrc, condLabel,
   isGroup, type Cond as SharedCond, type FormulaOp, type Who,
 } from '../ggs';
 
-/* GGS-specific components: left nav, resource meters, match list,
- * ratings, formula tree, translated chat bubbles, protocol log,
- * toasts. */
 
-/* ============ Left nav ============ */
 
 export type NavId =
   | 'play' | 'study' | 'book'
@@ -33,9 +24,6 @@ export type NavItem = {
   count?: number;    // count badge
   alert?: boolean;   // addressed to me / unread; painted --bad
   dot?: 'ok' | 'gold' | 'bad';  // state badge (waiting mode on, my turn, ...)
-  /** Shortcut key, surfaced via title (like the play button's
-   *  `title="⌘N"`) — invisible otherwise, and worth more in the
-   *  collapsed 48px rail where labels disappear. */
   hint?: string;
 };
 
@@ -51,7 +39,6 @@ export const navLocal = (): NavItem[] => [
   { id: 'book', label: t('ggs.book'), icon: 'book', hint: '⌘B' },
 ];
 
-/* While disconnected, show a single login row instead of all seven. */
 export function ggsNav(conn: Conn, badges?: Partial<Record<NavId, Pick<NavItem, 'count' | 'alert' | 'dot'>>>): NavItem[] {
   if (conn !== 'online') return [{ id: 'ggs-login', label: t('ggs.nav.login'), icon: 'login' }];
   const base: NavItem[] = [
@@ -62,8 +49,6 @@ export function ggsNav(conn: Conn, badges?: Partial<Record<NavId, Pick<NavItem, 
     { id: 'ggs-chat', label: t('ggs.nav.chat'), icon: 'ggs-chat' },
     { id: 'ggs-standby', label: t('ggs.waiting_mode'), icon: 'ggs-standby' },
     { id: 'ggs-console', label: t('ggs.nav.console'), icon: 'ggs-console' },
-    // GGS settings moved to the settings window's GGS tab; two
-    // destinations compete for authority (rule 58).
   ];
   return base.map(i => ({ ...i, ...(badges?.[i.id] ?? {}) }));
 }
@@ -73,23 +58,16 @@ export function Nav({ items, ggsItems, conn, active, onSelect, footer }: {
   active: NavId; onSelect?: (id: NavId) => void; footer?: React.ReactNode;
 }) {
   return (
-    // Width lives in base.css's .k-nav (collapses at 1040px; inline
-    // styles are out of the media query's reach).
     <nav className="k-nav" style={{
       flex: 'none', background: 'var(--panel)',
       borderRight: '1px solid var(--border)', display: 'flex', flexDirection: 'column', minHeight: 0,
     }}>
-      {/* Logo strip. The traffic-light 78px belongs to the window
-          band; dropped entirely in the collapsed rail. */}
       <div className="k-nav-logo" style={{ height: 'var(--h-bar)', flex: 'none' }}>
         <span aria-label="KUROOBI" dangerouslySetInnerHTML={{ __html: logo }} />
       </div>
       <div style={{ padding: 'var(--sp-1) var(--sp-2) 0', display: 'flex', flexDirection: 'column', gap: 1 }}>
         {items.map(i => <NavRow key={i.id} item={i} active={active === i.id} onSelect={onSelect} />)}
       </div>
-      {/* display lives in .k-nav-section (hidden at 1040px). */}
-      {/* Keep the separator when collapsed: labels go, but the 1px
-          rule keeps the two destination groups distinct (.k-nav-rule). */}
       <div className="k-nav-rule" />
       <div className="k-nav-section" style={{
         margin: 'var(--sp-4) 0 6px', padding: '0 18px', alignItems: 'center', gap: 'var(--sp-2)',
@@ -100,8 +78,6 @@ export function Nav({ items, ggsItems, conn, active, onSelect, footer }: {
       <div style={{ padding: '0 var(--sp-2)', display: 'flex', flexDirection: 'column', gap: 1 }}>
         {ggsItems.map(i => <NavRow key={i.id} item={i} active={active === i.id} onSelect={onSelect} />)}
       </div>
-      {/* Padding lives in .k-nav-foot; 12px sides in a 48px rail leave
-          24px for a 32px hit target. */}
       {footer && <div className="k-nav-foot" style={{
         marginTop: 'auto', display: 'flex', flexDirection: 'column',
         gap: 'var(--sp-3)', borderTop: '1px solid var(--border)',
@@ -115,22 +91,16 @@ function NavRow({ item, active, onSelect }: { item: NavItem; active: boolean; on
     <button type="button" onClick={() => onSelect?.(item.id)} aria-current={active || undefined}
       title={item.hint ? `${item.label} (${item.hint})` : item.label}
       className={'k-nav-row k-row' + (active ? ' k-on' : '')}
-      // padding/justify-content live in .k-nav-row (centered at 1040px).
       style={{
         height: 'var(--h-field)', display: 'flex', alignItems: 'center', gap: 'var(--sp-3)',
         border: 0, borderRadius: 'var(--r-2)', fontSize: 'var(--fs-4)',
         background: active ? 'var(--accent-dim)' : 'transparent',
         color: active ? 'var(--on-accent)' : 'var(--text)', fontWeight: active ? 600 : 400,
       }}>
-      {/* Never let the icon shrink: 16 + 12 + 18 = 46 overflows the
-          32px target and flex crushed the icon to zero, leaving an
-          unidentifiable badge. */}
       <span style={{ flex: 'none', display: 'grid', placeItems: 'center' }}>
         <Icon name={item.icon} size={16} />
       </span>
       <span className="k-nav-label">{item.label}</span>
-      {/* Position and size live in base.css (the collapsed rail moves
-          and shrinks it); only color and weight belong here. */}
       {item.count != null && (
         <span className="k-nav-n" style={{
           fontWeight: item.alert ? 700 : 600, display: 'grid', placeItems: 'center',
@@ -146,18 +116,12 @@ function NavRow({ item, active, onSelect }: { item: NavItem; active: boolean; on
   );
 }
 
-/* ============ Resource meters ============
- * Local search and GGS games run on separate thread pools; you cannot
- * triage without seeing what is running. */
 
 export function Meter({ icon, label, value, unit, ratio, note }: {
   icon: IconName; label: string; value: React.ReactNode; unit?: string; ratio: number; note?: string;
 }) {
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: 'var(--sp-1)' }}>
-      {/* The rail keeps only the icon and the 4px bar; text drops at
-          1040px. The icon sits outside that wrapper or it vanishes
-          with the text, leaving two anonymous bars. */}
       <div className="k-meter-head" style={{ display: 'flex', alignItems: 'center', gap: 'var(--sp-0)', fontSize: 'var(--fs-6)', color: 'var(--sub)' }}>
         <Icon name={icon} size={13} />
         <span className="k-meter-text">{label}</span>
@@ -165,15 +129,12 @@ export function Meter({ icon, label, value, unit, ratio, note }: {
           <b style={{ fontWeight: 600 }}>{value}</b>{unit && <span style={{ color: 'var(--sub)' }}>{unit}</span>}
         </span>
       </div>
-      {/* The bar drops in the rail (.k-meter-bar); at 4px it only says
-          more-or-less, and the number matters more. */}
       <div className="k-meter-bar" style={{ height: 4, borderRadius: 'var(--r-0)', background: 'var(--track)', overflow: 'hidden' }}>
         <span style={{
           display: 'block', width: Math.min(100, Math.round(ratio * 100)) + '%', height: '100%',
           background: ratio > 0.75 ? 'var(--gold)' : 'var(--accent)',
         }} />
       </div>
-      {/* Rail-only view: one number under the icon. */}
       <div className="k-meter-mini" style={{
         fontSize: 'var(--fs-7)', color: 'var(--text)', textAlign: 'center',
         fontVariantNumeric: 'tabular-nums',
@@ -183,15 +144,12 @@ export function Meter({ icon, label, value, unit, ratio, note }: {
   );
 }
 
-/* Running jobs, including "yielding" (learning paused for a GGS game). */
 export function JobList({ jobs }: { jobs: { label: string; threads?: number; yielded?: boolean }[] }) {
-  // Text-only content; dropped entirely in the rail (.k-nav-jobs).
   if (!jobs.length) {
     return <div className="k-nav-jobs" style={{ fontSize: 'var(--fs-7)', color: 'var(--sub)' }}>
       {t('ggs.jobs.idle')}
     </div>;
   }
-  // display lives in .k-nav-jobs (hidden at 1040px).
   return (
     <div className="k-nav-jobs" style={{ flexDirection: 'column', gap: 3, fontSize: 'var(--fs-7)', color: 'var(--text)' }}>
       {jobs.map((j, i) => (
@@ -203,16 +161,12 @@ export function JobList({ jobs }: { jobs: { label: string; threads?: number; yie
   );
 }
 
-/* ============ Ratings ============ */
 
 export type Rate = { value: number; dev: number; rank?: number; w: number; l: number; d: number; provisional?: boolean };
 
-/* Always show the ±n deviation; a GGS rating means nothing without it. */
 export function RateRow({ label, rate }: { label: string; rate: Rate }) {
   return (
     <div style={{ display: 'flex', alignItems: 'baseline', gap: 'var(--sp-3)', fontVariantNumeric: 'tabular-nums' }}>
-      {/* Format names outgrow --w-label and would wrap, breaking row
-          heights. */}
       <span style={{
         width: 'var(--w-gtype)', flex: 'none', whiteSpace: 'nowrap',
         fontSize: 'var(--fs-6)', color: 'var(--sub)',
@@ -237,17 +191,11 @@ export function RateRow({ label, rate }: { label: string; rate: Rate }) {
   );
 }
 
-/* PlayerRow / StoneDot live in data.tsx. Duplicating them here caused
- * wrong imports and a 1|2 vs 'b'|'w' color-type split; UI colors are
- * 'b' | 'w'. */
 export { PlayerRow, StoneDot, toStoneColor, type StoneColor } from './data';
 
-/* ============ Match list ============
- * Synchro games come in pairs; a pair is one row. */
 
 export type Match = {
   id: string; mine: boolean; live: boolean;
-  /** Opponent name for own games; black/white for observed ones. */
   opponent?: string;
   black: string; white: string;
   kind: string;      // "Synchro, random 16" / "Standard"
@@ -255,9 +203,7 @@ export type Match = {
   ply: number;
   myTurn?: boolean;
   result?: string;   // "+8" and the like, once finished
-  /** How it ended: 'finished' / 'adjourned' / 'aborted'. */
   ended?: string;
-  /** Who left, for adjourned games. */
   leftBy?: string;
 };
 
@@ -270,18 +216,11 @@ export function MatchRow({ m, active, onSelect, onClose }: {
   m: Match; active?: boolean; onSelect?: () => void; onClose?: () => void;
 }) {
   const closable = !m.live && !!onClose;
-  // Row body and close button are siblings: nested buttons are invalid
-  // HTML and would force reimplementing IconButton's a11y. Hover lives
-  // on the outer .k-row; no overlap, so no stopPropagation.
   return (
     <div className={'k-row' + (active ? ' k-on' : '')} style={{
       position: 'relative', borderBottom: '1px solid var(--border-weak)',
       ...picked(!!active),
     }}>
-      {/* Reserve 36px for the close button or long names slide under
-          it. */}
-      {/* k-row makes it read as clickable; without it the selection
-          color shows but hover gives nothing. */}
       <button type="button" onClick={onSelect} className="k-row"
               aria-current={active || undefined} style={{
         width: '100%', border: 0, background: 'transparent', textAlign: 'left',
@@ -292,8 +231,6 @@ export function MatchRow({ m, active, onSelect, onClose }: {
           <Tag tone={m.mine ? 'accent' : 'sub'}>
             {m.mine ? t('ggs.tag.mine') : t('ggs.tag.observing')}
           </Tag>
-          {/* Three endings; labeling an adjournment "finished" implies
-              a decided result with no margin. */}
           <Tag tone={m.live ? 'ok' : m.ended === 'adjourned' ? 'bad' : 'sub'}>
             {m.live ? t('ggs.state.playing')
               : m.ended === 'adjourned' ? t('ggs.state.adjourned')
@@ -304,8 +241,6 @@ export function MatchRow({ m, active, onSelect, onClose }: {
           </span>
           {m.myTurn && <Dot />}
         </span>
-        {/* Clip, never wrap: the row is a fixed two lines, and English
-            details run longer than the Japanese ones it was sized for. */}
         <span style={{ fontSize: 'var(--fs-6)', color: 'var(--sub)',
                        overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
           {m.kind}{m.boards > 1 && ' · ' + t('ggs.lobby.game_count', { n: m.boards })}
@@ -334,16 +269,11 @@ export function Tag({ tone = 'sub', children }: { tone?: 'sub' | 'accent' | 'ok'
   }}>{children}</span>;
 }
 
-/* ============ Formula tree ============
- * GGS /os formulas are nested logic where structure is meaning; build
- * them as a tree, not as text. Read-only places use FormulaView. */
 
 export type Cond = SharedCond;
 export type { Who };
 export { isGroup };
 
-/* Read-only tree. Groups (all-of / any-of) are shown by a 2px vertical
- * rule plus indent; --accent outermost, --border inside. */
 export function FormulaView({ node, top, who }: { node: Cond; top?: boolean; who?: Who }) {
   if (node.kind === 'atom') return <CondChip c={node} who={who} />;
   return (
@@ -365,9 +295,6 @@ export function FormulaView({ node, top, who }: { node: Cond; top?: boolean; who
 }
 
 function CondChip({ c, who }: { c: Cond; who?: Who }) {
-  // A name the vocabulary does not cover gets a dashed edge, so a
-  // reader can tell "this is what the formula says" from "this is what
-  // the screen could read".
   const known = c.kind !== 'atom' || !!varOf(c.name, who);
   return (
     <span style={{
@@ -378,15 +305,6 @@ function CondChip({ c, who }: { c: Cond; who?: Who }) {
   );
 }
 
-/* Never hide what goes to the server; raw formula input stays as the
- * escape hatch.
- *
- * The formula wraps rather than being cut. It used to sit on one line
- * with an ellipsis, which hid the tail of exactly the string this row
- * exists to show -- and hid it badly: a flex item's `min-width` is
- * `auto`, so the line never shrank to its box, the ellipsis never
- * appeared, and the overflow pushed the settings modal wide enough to
- * grow a horizontal scrollbar. */
 function FormulaWire({ text }: { text: string }) {
   return (
     <div style={{
@@ -402,19 +320,11 @@ function FormulaWire({ text }: { text: string }) {
   );
 }
 
-/* The builder. The third slot depends on the variable's type: boolean
- * (is / is-not), color (black / white / either), numeric (six
- * comparators + value + unit). Edits keep the tree; condToSrc
- * serializes only on save.
- *
- * value can be null — the no-condition state. This component renders
- * the "unset" and "add condition" UI itself (no branching in parents). */
 export function FormulaEditor({ value, onChange, onSave, onClear, onRaw }: {
   value: Cond | null;
   onChange: (c: Cond) => void;
   onSave?: (src: string) => void;
   onClear?: () => void;
-  /** Escape hatch: raw GGS formula (expressible beyond the tree). */
   onRaw?: (src: string) => void;
 }) {
   if (!value) {
@@ -449,8 +359,6 @@ export function FormulaEditor({ value, onChange, onSave, onClear, onRaw }: {
 }
 
 const newAtom = (): Cond => ({ kind: 'atom', name: 'rated', op: '=', val: '', neg: false });
-/* New groups start with one condition inside; an empty frame gives no
- * next action. */
 const newGroup = (op: 'all' | 'any' = 'all'): Cond => ({ kind: op, kids: [newAtom()] });
 
 function CondNode({ node, top, onChange, onRemove }: {
@@ -509,8 +417,6 @@ function AtomRow({ c, onChange, onRemove }: {
                 const nv = varOf(name);
                 onChange({
                   ...c, name,
-                  // A type change rebuilds comparator and value (the
-                  // variable carries the numeric default).
                   op: nv?.type === 'num' ? '≥' : '=',
                   val: nv?.type === 'num' ? String(nv.def ?? 0) : nv?.type === 'color' ? '?' : '',
                 });
@@ -521,8 +427,6 @@ function AtomRow({ c, onChange, onRemove }: {
                 onChange={s => onChange({ ...c, neg: s === '1' })} />
       )}
       {type === 'color' && <>
-        {/* Same wording as the boolean case; the bare particles don't
-            read on their own. */}
         <Select value={c.op} width={88} size="ctrl"
                 options={[['=', t('ggs.formula.bool_is')], ['≠', t('ggs.formula.bool_is_not')]]}
                 onChange={op => onChange({ ...c, op: op as FormulaOp })} />
@@ -546,12 +450,9 @@ function AtomRow({ c, onChange, onRemove }: {
   );
 }
 
-/* ============ Chat ============ */
 
 export type Msg = { from: string; mine?: boolean; at: string; body: string; ja?: string };
 
-/* English messages carry a Japanese translation (small, under a 1px
- * rule). */
 export function Bubble({ m, showName }: { m: Msg; showName?: boolean }) {
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: 3, alignItems: m.mine ? 'flex-end' : 'flex-start' }}>
@@ -567,7 +468,6 @@ export function Bubble({ m, showName }: { m: Msg; showName?: boolean }) {
         maxWidth: 320, padding: '6px 10px', borderRadius: 'var(--r-bubble)', fontSize: 'var(--fs-5)', lineHeight: 1.5,
         background: m.mine ? 'var(--accent-dim)' : 'var(--panel)', color: m.mine ? 'var(--on-accent)' : 'var(--text)',
       }}>
-        {/* Selectable (k-sel) for quoting; the translation too. */}
         <span className="k-sel">{m.body}</span>
         {m.ja && <div className="k-sel" style={{
           marginTop: 4, paddingTop: 4, borderTop: '1px solid var(--border)',
@@ -585,15 +485,10 @@ export function DayMark({ children }: { children: React.ReactNode }) {
   }}>{children}</div>;
 }
 
-/* ============ Protocol log ============
- * Sent lines get › and --accent; received lines align the indent to
- * keep monospace columns. */
 
 export type LogLine = { dir: 'out' | 'in' | 'app'; text: string };
 
 export function ConsoleLog({ lines }: { lines: LogLine[] }) {
-  // Follow the tail only while viewing near it; never yank while the
-  // user scrolls back.
   const box = React.useRef<HTMLDivElement>(null);
   const stick = React.useRef(true);
   React.useEffect(() => {
@@ -616,7 +511,6 @@ export function ConsoleLog({ lines }: { lines: LogLine[] }) {
           color: l.dir === 'out' ? 'var(--accent)' : l.dir === 'app' ? 'var(--sub)' : 'var(--text)',
         }}>
           <span style={{ flex: 'none', width: 8 }}>{l.dir === 'out' ? '›' : ''}</span>
-          {/* Selectable (k-sel) for pasting into bug reports. */}
           <span className="k-sel">{l.text}</span>
         </div>
       ))}
@@ -624,10 +518,6 @@ export function ConsoleLog({ lines }: { lines: LogLine[] }) {
   );
 }
 
-/* ============ Toasts ============
- * Only failures and why-nothing-happened messages. No progress
- * notices, no restating what the user can see, no engine-internal
- * codes ("stopped" etc.). */
 
 export type Toast = { id: string; tone: 'bad' | 'gold'; text: string };
 
@@ -639,8 +529,6 @@ export function Toasts({ items, onDismiss }: { items: Toast[]; onDismiss?: (id: 
     }}>
       {items.map(item => (
         <button key={item.id} type="button" onClick={() => onDismiss?.(item.id)} className="k-press" style={{
-          // Floating element: --r-4 radius and shadow (rule 13); no
-          // bare px (rule 1).
           maxWidth: 340, padding: 'var(--sp-3)', borderRadius: 'var(--r-4)', textAlign: 'left',
           background: 'var(--card)', border: '1px solid var(--border)', boxShadow: 'var(--sh-2)',
           fontSize: 'var(--fs-5)', lineHeight: 1.6, color: 'var(--text)',
@@ -654,8 +542,6 @@ export function Toasts({ items, onDismiss }: { items: Toast[]; onDismiss?: (id: 
   );
 }
 
-/* ============ Status-bar right edge ============
- * Chat / console appear only during a GGS game. */
 
 export function StatusChip({ label, unread, active, onClick }: {
   label: string; unread?: number; active?: boolean; onClick?: () => void;
@@ -673,15 +559,8 @@ export function StatusChip({ label, unread, active, onClick }: {
   );
 }
 
-/* ============ GGS status band ============
- * The design's GGS screen tops with name, both pool ratings, current
- * strength and waiting mode — the four things you want while playing,
- * previously scattered across screens. Lives in the toolbar's aux, so
- * it drops below 940px; it is display-only, nothing lost (rule 8). */
 export function GgsStatus({ snap, showStrength = true }: {
   snap: GgsSnapshot;
-  /** Whether to show strength. Hidden on the GGS settings screen —
-   *  the control that changes it sits right below (rule 58). */
   showStrength?: boolean;
 }) {
   const e = snap.engine;
@@ -693,7 +572,6 @@ export function GgsStatus({ snap, showStrength = true }: {
           <b style={{ color: 'var(--text)', fontWeight: 600, fontVariantNumeric: 'tabular-nums' }}>
             {r.rating.toFixed(0)}
           </b>
-          {/* Ratings always carry the deviation (rule 29). */}
           <span style={{ opacity: .7, marginLeft: 3 }}>±{Math.round(r.dev)}</span>
         </span>
       ))}
@@ -710,6 +588,5 @@ export function GgsStatus({ snap, showStrength = true }: {
   );
 }
 
-/** Short pool names; GGS has only 8 and 8r. */
 const poolLabel = (pool: string): string =>
   pool === '8' ? t('ggs.pool.normal') : pool === '8r' ? t('ggs.pool.random') : pool;

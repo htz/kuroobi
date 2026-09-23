@@ -1,28 +1,4 @@
 //! GPU training for the linear pattern evaluator.
-//!
-//! The linear model is the NNUE's feature transformer with one output and no
-//! hidden layer: a prediction is the sum of 64 pattern cells plus one
-//! disc-count cell, and every cell's gradient is the same error. That makes
-//! the whole model a sparse gather-sum forward and a scatter-add backward,
-//! which is what a GPU is for. On one core the CPU trainer manages 32k
-//! positions a second, because each position applies 512 sequential Adam
-//! steps (eight symmetric forms times sixty-four cells).
-//!
-//! What changes against the CPU path, and why:
-//!
-//! - **Minibatch, not per-example.** The CPU applies one Adam step per cell
-//!   touch, in order; a batch sums the touches of a cell and applies one
-//!   step. This is the same change `nnue_train --minibatch` made, and it is
-//!   what makes the work parallel at all.
-//! - **The eight symmetric forms stay.** They are not redundant here: the
-//!   mask lists carry four of each shape's eight ordered images, so the
-//!   eight forms read partly different rows and predict slightly different
-//!   values. Each form is its own row of the batch, exactly as the CPU
-//!   trains it.
-//!
-//! The flat cell numbering is stage-major: stage `s`, pattern `p`, index
-//! `i` is cell `s * stage_stride + pat_off[p] + i`, and the disc-count table
-//! follows the patterns as `pat_off[n_patterns]`.
 
 use std::sync::mpsc;
 
@@ -40,8 +16,7 @@ const BETA1: f32 = 0.9;
 const BETA2: f32 = 0.999;
 const EPSILON: f32 = 1e-8;
 
-/// The eight symmetric forms of every position are trained, so a batch of
-/// `n` examples is `8 * n` rows.
+/// The eight symmetric forms of every position are trained, so a batch of `n` examples is `8 * n` rows.
 pub const FORMS: usize = 8;
 
 /// Uniform block shared by the kernels.
@@ -54,12 +29,7 @@ struct Params {
     lr: f32,
 }
 
-/// `back[f][s]` is the square of the original board that symmetric form
-/// `f` shows at square `s`.
-///
-/// Read out of `Board::symmetries` itself, one single-disc board per
-/// square, rather than restated here: a second copy of the transform
-/// would be a second thing to keep in step.
+/// `back[f][s]` is the square of the original board that symmetric form `f` shows at square `s`.
 fn square_maps() -> [[u8; 64]; FORMS] {
     let mut back = [[0u8; 64]; FORMS];
     for s in 0..64u8 {
@@ -94,8 +64,7 @@ pub struct LinearGpu {
     b_m: wgpu::Buffer,
     b_v: wgpu::Buffer,
     b_t: wgpu::Buffer,
-    /// Two of each per-batch buffer: the device is still reading one while
-    /// the host builds the next, which is what keeps both busy.
+    /// Two of each per-batch buffer: the device is still reading one while the host builds the next, which is what keeps both busy.
     b_ex: [wgpu::Buffer; 2],
     b_msq: wgpu::Buffer,
     b_mptr: wgpu::Buffer,
@@ -112,9 +81,7 @@ pub struct LinearGpu {
     stages: (usize, usize),
     cells_per_row: usize,
     max_rows: usize,
-    /// Scratch reused between batches so a multi-gigabyte alloc/free pair
-    /// does not happen 20,000 times an epoch.
-    /// Five words a position: the two bitboards and the label.
+    /// Scratch reused between batches so a multi-gigabyte alloc/free pair does not happen 20,000 times an epoch.
     ex_words: Vec<u32>,
 }
 
@@ -141,10 +108,7 @@ fn pollster_lite<F: std::future::Future>(mut fut: F) -> F::Output {
     }
 }
 
-/// Fixed-point scale for the accumulated gradient. The worst case is a
-/// whole batch's rows on one cell at the largest disc difference -- the
-/// disc-count cell of a stage is touched once by every row -- so
-/// 524,288 x 64 x 32 is 1.07e9, inside i32's 2.1e9.
+/// Fixed-point scale for the accumulated gradient.
 const SCALE: f32 = 32.0;
 
 fn shader_prelude(
@@ -188,14 +152,6 @@ const INDEX_SRC: &str = r#"
 @group(0) @binding(5) var<storage, read_write> tgt: array<f32>;
 @group(0) @binding(6) var<uniform> par: Params;
 
-// One thread per row, building that row's cell numbers from the board.
-//
-// The symmetry is folded into the mask tables instead of the board: form
-// `f` reading mask `m` is the same as the original board reading `m`
-// mapped back through `f`, so the tables carry the eight mapped copies and
-// the kernel never rotates anything. That keeps the host's upload to the
-// twenty bytes of a position, against the 136 MB of pre-built indices a
-// batch used to carry.
 @compute @workgroup_size(256)
 fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
   let r = gid.x;
@@ -210,13 +166,9 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
 
   let discs = countOneBits(blo) + countOneBits(bhi) + countOneBits(wlo) + countOneBits(whi);
   let empties = 64u - discs;
-  // Linear::stage: 60 - empties, floored at zero, capped at the last.
   var stage = 0u;
   if (empties < 60u) { stage = 60u - empties; }
   stage = min(stage, STLO + NST - 1u);
-  // A run aimed at part of the board carries only those stages, so the
-  // cell space starts at its first one. The host drops anything outside
-  // the window before the batch, so the subtraction cannot wrap.
   let base = (stage - STLO) * STRIDE;
 
   let out = r * CELLS;
@@ -239,7 +191,6 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
     }
     cells[out + k] = base + mbase[k] + idx;
   }
-  // The disc-count cell: the side to move is Black in every example.
   cells[out + CELLS - 1u] = base + NUMOFF + countOneBits(blo) + countOneBits(bhi);
 }
 "#;
@@ -260,8 +211,6 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
   for (var i = 0u; i < CELLS; i = i + 1u) {
     s = s + w[cells[base + i]];
   }
-  // The trainer's error is target - prediction, and every cell's gradient
-  // is that error unchanged: the model is a plain sum of its cells.
   err[r] = tgt[r] - s;
 }
 "#;
@@ -272,20 +221,10 @@ const SCATTER_SRC: &str = r#"
 @group(0) @binding(2) var<storage, read_write> grad: array<atomic<i32>>;
 @group(0) @binding(3) var<uniform> par: Params;
 
-// One thread per row, adding its error into each cell it touched.
-//
-// Fixed point, because WGSL has no float atomic and a compare-exchange
-// loop would serialise the hot cells (the disc-count cell of a stage is
-// touched by every row of that stage). SCALE is chosen so the worst case
-// -- every row of a batch on one cell, at the largest error a disc
-// difference can hold -- stays inside i32.
 @compute @workgroup_size(256)
 fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
   let r = gid.x;
   if (r >= par.n_rows) { return; }
-  // Rounded, not truncated: WGSL's f32-to-i32 conversion goes toward
-  // zero, which shrinks every term of the sum rather than scattering it,
-  // and near convergence the true sum is small enough for that to matter.
   let q = i32(round(err[r] * SCALE));
   let base = r * CELLS;
   for (var i = 0u; i < CELLS; i = i + 1u) {
@@ -302,14 +241,6 @@ const BWD_SRC: &str = r#"
 @group(0) @binding(4) var<storage, read_write> tc: array<u32>;
 @group(0) @binding(5) var<uniform> par: Params;
 
-// Sweeps every cell and steps the ones the batch touched, then clears the
-// accumulator for the next batch. Reading 37 million counters is 150 MB of
-// device bandwidth, which at 400 GB/s costs less than building a sparse
-// map on the host and shipping it across.
-//
-// A cell whose errors cancel to exactly zero is skipped rather than
-// stepped with a zero gradient. That leaves its moments and step count
-// alone, which is the same thing an untouched cell gets.
 @compute @workgroup_size(256)
 fn main(@builtin(global_invocation_id) gid: vec3<u32>,
         @builtin(num_workgroups) nwg: vec3<u32>) {
@@ -329,7 +260,6 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>,
       v[c] = vv;
       let mh = mm / (1.0 - pow(B1, f32(step)));
       let vh = vv / (1.0 - pow(B2, f32(step)));
-      // Plus, not minus: g is the positive-direction error.
       w[c] = w[c] + par.lr * mh / (sqrt(vh) + EPS);
     }
     c = c + stride;
@@ -344,8 +274,6 @@ const REDUCE_SRC: &str = r#"
 
 var<workgroup> red: array<f32, 256>;
 
-// One workgroup, grid-striding the batch: the sum of squares is a scalar
-// the host reads once a shard, not a hot path.
 @compute @workgroup_size(256)
 fn main(@builtin(local_invocation_id) lid: vec3<u32>) {
   var s = 0.0;
@@ -384,9 +312,6 @@ impl LinearGpu {
         let n_cells = stage_stride * n_stages;
         let max_rows = batch * FORMS;
         let cells_per_row = patterns.iter().map(|p| p.masks.len()).sum::<usize>() + 1;
-        // Mask tables, one set per symmetric form, with the transform
-        // folded in. `mbase` carries each slot's pattern offset so the
-        // kernel needs no pattern structure of its own.
         let back = square_maps();
         let n_slots = cells_per_row - 1;
         let mut msq: Vec<u32> = Vec::new();
@@ -408,14 +333,6 @@ impl LinearGpu {
             }
             assert_eq!(k, n_slots);
         }
-        /* 384 of the 512 (form, mask) pairs repeat an earlier one -- a
-        pattern's mask list carries four of its shape's eight ordered
-        images -- so only 128 of them need the base-3 walk. Computing the
-        128 and copying the rest was tried and made no difference (2.15M
-        against 2.13M positions a second): the index walk is not what this
-        kernel waits on. What it waits on is the random access into the
-        149 MB weight table, 520 reads and 520 atomic adds a position,
-        which only training fewer forms would cut. */
         let instance = wgpu::Instance::new(wgpu::InstanceDescriptor::new_without_display_handle());
         let adapter = block_on(instance.request_adapter(&wgpu::RequestAdapterOptions {
             power_preference: wgpu::PowerPreference::HighPerformance,
@@ -551,15 +468,13 @@ impl LinearGpu {
         }
     }
 
-    /// Pack the batch as five words a position. The kernel does the rest.
+    /// Pack the batch as five words a position.
     fn prepare(&mut self, batch: &[Example]) -> usize {
         self.ex_words.clear();
         self.ex_words.reserve(batch.len() * 5);
         let (lo, hi) = self.stages;
         let mut n = 0usize;
         for ex in batch {
-            // The kernel indexes into this run's stages only; a position
-            // from another stage would land on the wrong table.
             let st = Linear::stage(&ex.board());
             if st < lo || st > hi {
                 continue;
@@ -590,24 +505,18 @@ impl LinearGpu {
         })
     }
 
-    /// One pass over `examples`, one optimizer step per batch. Returns the
-    /// sum of squared errors over all rows (examples times forms).
+    /// One pass over `examples`, one optimizer step per batch.
     pub fn train_shard(
         &mut self,
         examples: &[Example],
         lr_for_step: &mut impl FnMut() -> f32,
     ) -> f64 {
         self.queue.write_buffer(&self.b_stats, 0, &[0u8; 16]);
-        // `KUROOBI_GPU_PROF=1` splits the shard's time two ways: building
-        // the rows on the host, and uploading plus running them. Which one
-        // leads decides what is worth optimising next.
         let prof = std::env::var_os("KUROOBI_GPU_PROF").is_some();
         let (mut t_prep, mut t_dev) = (0.0f64, 0.0f64);
         let per_batch = self.max_rows / FORMS;
         let mut slot = 0usize;
         for batch in examples.chunks(per_batch) {
-            // Two batches may be in flight; a third would overwrite a slot
-            // the device is still reading.
             self.drain(1);
             let t0 = std::time::Instant::now();
             let kept = self.prepare(batch);
@@ -697,9 +606,6 @@ impl LinearGpu {
                 p.dispatch_workgroups((n_rows as u32).div_ceil(WG), 1, 1);
                 p.set_pipeline(&self.bwd.pipeline);
                 p.set_bind_group(0, &g_bwd, &[]);
-                // A grid-stride sweep: 37 million cells is past the
-                // per-dimension workgroup limit, and a fixed grid keeps
-                // the dispatch one-dimensional.
                 p.dispatch_workgroups(2048, 1, 1);
             }
             self.pending.push_back(self.queue.submit([enc.finish()]));
@@ -786,8 +692,7 @@ impl LinearGpu {
 mod tests {
     use super::*;
 
-    /// The flat numbering has to round-trip, or the GPU trains cells the
-    /// evaluator reads somewhere else entirely.
+    /// The flat numbering has to round-trip, or the GPU trains cells the evaluator reads somewhere else entirely.
     #[test]
     fn flat_layout_round_trips() {
         use crate::pattern::LINEAR_PATTERNS;
@@ -800,8 +705,7 @@ mod tests {
         assert_eq!(ev.flat_all(), flat);
     }
 
-    /// A board's cells under the flat numbering must sum to what `eval`
-    /// returns; the GPU forward is exactly that sum.
+    /// A board's cells under the flat numbering must sum to what `eval` returns; the GPU forward is exactly that sum.
     #[test]
     fn flat_cells_sum_to_the_evaluation() {
         use crate::pattern::LINEAR_PATTERNS;

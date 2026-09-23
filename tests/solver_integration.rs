@@ -2,9 +2,6 @@
 
 use kuroobi::{Board, EndSolverMode, Position, Solver};
 
-/// Play a deterministic pseudo-random game until `empties` squares remain.
-/// A simple LCG picks among legal moves so different seeds give different
-/// positions without needing the rand crate.
 fn position_with_empties(empties: u8, seed: u64) -> Board {
     let mut board = Board::new();
     let mut state = seed.wrapping_mul(6364136223846793005).wrapping_add(1);
@@ -35,7 +32,6 @@ fn position_with_empties(empties: u8, seed: u64) -> Board {
     board
 }
 
-/// Reference negamax with no pruning, no tables (slow but obviously correct).
 fn negamax(board: &Board, passed: bool) -> i32 {
     let moves = board.movable();
     if moves == 0 {
@@ -88,12 +84,8 @@ fn solver_deep_endgame_16_empties() {
     let best = perfect.best_move.expect("legal move must exist");
     assert!(board.movable() & best.to_bit() != 0);
 
-    // Score is a reachable Reversi score: |score| <= 64 and parity matches
-    // the board size (both players' discs + empties sum to 64).
     assert!(perfect.value.abs() <= 64);
 
-    // Playing the returned best move must not make the score better for the
-    // opponent than promised: re-solve the child and negate.
     let mut child = board;
     child.make_move_unchecked(best);
     let reply = solver.solve(EndSolverMode::Perfect, &child);
