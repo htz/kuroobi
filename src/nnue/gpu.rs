@@ -1,36 +1,4 @@
 //! The stacked-read-out model's training step on the GPU.
-//!
-//! Same model, same optimizer, same numbers as `apply_adamw_batch` up to
-//! float summation order -- with one deliberate difference: the sparse
-//! tables take a dense AdamW step every batch, which is what AdamW means
-//! and what `catch_up` on the CPU only approximates. A batch
-//! is one command buffer of eight kernels:
-//!
-//! 1. `fwd_bwd`: one workgroup per example runs the forward pass and the
-//!    backward pass down to the two sparse layers, leaving a record per
-//!    example (input-lane gradients, activations, layer deltas, error).
-//! 2. `row_grad` (twice, transformer and phase-adaptive rows): one
-//!    workgroup per row the batch touched sums that row's gradient over the
-//!    examples that used it, from a CSR the CPU builds while the previous
-//!    batch runs.
-//! 3. `bias_part` then `dense_grad`: the read-out stacks and the two bias
-//!    vectors, one thread per parameter, each summing over the examples of
-//!    its stage (examples arrive sorted by stage).
-//! 4. `finalize`: the global gradient norm, hence the clip factor.
-//! 5. `step_rows` (twice) and `step_dense`: AdamW over every cell; every
-//!    k-th step also folds the result into the Lookahead slow copy.
-//!
-//! The weights live on the GPU for the whole epoch and come back for the
-//! held-out pass and the save. wgpu, so the same binary runs on Metal and
-//! Vulkan; there is no CUDA-only path to maintain beside it.
-//!
-//! Checked against the CPU path with `settle_adam` forced after every step
-//! (which makes it the same dense optimizer): 16 steps of 512 examples with
-//! Lookahead, 305M parameters, one cell differs by more than 1e-5 (1.2e-5)
-//! and the training loss agrees to four decimals. Against the CPU path as
-//! it stands the two drift apart from the third step, because the lazy
-//! update lets a forward pass read rows still owing momentum from a batch
-//! that did not touch them; that is the CPU's approximation, not this one's.
 
 use std::sync::mpsc;
 
@@ -40,8 +8,6 @@ use super::*;
 use crate::trainer::{Example, SymPlan};
 
 /// Per-example record the forward/backward kernel writes, in f32 slots.
-/// The two accumulator gradients ride packed as a pair of halves, so the
-/// region is half the lanes wide; likewise the phase-adaptive one.
 const R_DRAW: usize = 0;
 const R_DPA: usize = R_DRAW + ACC_DIMS / 2;
 /// `xin` followed by the mobility input, so L1's 257 inputs are contiguous.
@@ -54,9 +20,7 @@ const R_ERR: usize = R_DL2 + SO_L2;
 const R_SQ: usize = R_ERR + 1;
 const REC: usize = (R_SQ + 1).div_ceil(16) * 16;
 
-/// The dense parameter vector: the six read-out tables in
-/// `apply_adamw_batch`'s order, then the transformer bias, then the
-/// phase-adaptive biases.
+/// The dense parameter vector: the six read-out tables in `apply_adamw_batch`'s order, then the transformer bias, then the phase-adaptive biases.
 const D_L1W: usize = 0;
 const D_L1B: usize = D_L1W + SO_SIZES.0;
 const D_L2W: usize = D_L1B + SO_SIZES.1;
@@ -67,21 +31,15 @@ const D_FTB: usize = D_OB + SO_SIZES.5;
 const D_PAB: usize = D_FTB + ACC_DIMS;
 const N_DENSE: usize = D_PAB + PA_BUCKETS * PA_DIMS;
 
-/// Examples per workgroup in the bias-partial kernel, and the width of one
-/// chunk's partial sums (transformer lanes, then the phase-adaptive lanes
-/// per bucket).
+/// Examples per workgroup in the bias-partial kernel, and the width of one chunk's partial sums (transformer lanes, then the phase-adaptive lanes per bucket).
 const CHUNK: usize = 256;
 const PART: usize = ACC_DIMS + PA_BUCKETS * PA_DIMS;
 
 const WG: usize = 256;
-/// Examples one `K_ROW_GRAD` workgroup sums; longer rows are split so no
-/// single workgroup's serial loop bounds the kernel. 128 and 512 measured
-/// within the run-to-run noise of 256 (row kernels sit 0.4 ms over their
-/// bandwidth floor) while moving val in its fifth digit, so 256 stays.
+/// Examples one `K_ROW_GRAD` workgroup sums; longer rows are split so no single workgroup's serial loop bounds the kernel.
 const SEG: u32 = 256;
 const NO_PART: u32 = u32::MAX;
-/// Fields of the uniform block every kernel reads; see `Params` in the
-/// shader prelude.
+/// Fields of the uniform block every kernel reads; see `Params` in the shader prelude.
 const N_PARAMS: usize = 24;
 
 /// Workgroups per dispatch dimension a conforming device must accept.
@@ -91,8 +49,6 @@ fn prelude() -> String {
     format!(
         r#"
 const ACC: u32 = {acc}u;
-// Per-subgroup partials for a cross-workgroup sum; sized for subgroups of
-// 8 lanes or more.
 const NSG_MAX: u32 = 32u;
 const HH: u32 = {h}u;
 const PAD: u32 = {pad}u;
@@ -142,8 +98,7 @@ struct Params {{
     n_b: u32,
     n_c: u32,
     flags: u32,
-    /// The optimizer step this batch is; `K_STEP_SPARSE` replays the
-    /// gap between it and each row's `last`.
+    /// The optimizer step this batch is; `K_STEP_SPARSE` replays the gap between it and each row's `last`.
     t_now: u32,
     scale: f32,
     lr: f32,
@@ -201,10 +156,7 @@ fn linear_wg(wg: vec3<u32>, nwg: vec3<u32>) -> u32 {{
     )
 }
 
-/// Forward and backward for one example per workgroup. Thread `h` owns
-/// accumulator lane `h`; the read-out's first layer and the output sum are
-/// products on every lane added up across subgroups, the small middle
-/// layer uses the first 64 threads.
+/// Forward and backward for one example per workgroup.
 const K_FWD_BWD: &str = r#"
 @group(0) @binding(0) var<storage, read> inp: array<u32>;
 @group(0) @binding(1) var<storage, read> ft: array<f32>;
@@ -246,7 +198,6 @@ fn main(@builtin(local_invocation_id) lid: vec3<u32>,
     let bucket = min(stage / (NST / PAB), PAB - 1u);
     let rb = ex * REC;
 
-    // Sparse layers: every thread one lane.
     var s = dense[D_FTB + h];
     for (var m = 0u; m < P.n_masks; m++) {
         s += ft[inp[ib + m] * ACC + h];
@@ -271,9 +222,6 @@ fn main(@builtin(local_invocation_id) lid: vec3<u32>,
         xin[HH + h] = zc * zc * ACT_SCALE;
     }
     workgroupBarrier();
-    // L1: lane `h` multiplies its input by each output's weight (adjacent
-    // threads read adjacent weights), subgroups add up, the first 16
-    // threads finish.
     var xh = 0.0;
     if (h < SKIP) {
         xh = xin[h];
@@ -296,8 +244,6 @@ fn main(@builtin(local_invocation_id) lid: vec3<u32>,
         a1[L1 + h] = clamp(x, 0.0, 1.0);
     }
     workgroupBarrier();
-    // L2: 64 outputs x 32 inputs; each thread takes an eighth of one
-    // output's inputs, the first 64 threads add the eighths up.
     {
         let o = h % L2;
         let q = h / L2;
@@ -319,7 +265,6 @@ fn main(@builtin(local_invocation_id) lid: vec3<u32>,
         v2[h] = c * c * ACT_SCALE;
     }
     workgroupBarrier();
-    // Output: one term per thread, added up across subgroups.
     let ow = D_OW + st * OUTIN;
     var t = 0.0;
     if (h < SKIP) {
@@ -347,7 +292,6 @@ fn main(@builtin(local_invocation_id) lid: vec3<u32>,
     workgroupBarrier();
     let err = sh_err;
 
-    // Backward through the stack.
     if (h < L2) {
         let dv2 = err * dense[ow + h];
         var d = 0.0;
@@ -357,7 +301,6 @@ fn main(@builtin(local_invocation_id) lid: vec3<u32>,
         dl2[h] = d;
     }
     workgroupBarrier();
-    // da1: 32 inputs x 64 outputs, eight threads per input.
     {
         let i = h % (L1 * 2u);
         let q = h / (L1 * 2u);
@@ -389,7 +332,6 @@ fn main(@builtin(local_invocation_id) lid: vec3<u32>,
         dl1[h] = d;
     }
     workgroupBarrier();
-    // Gradient on the stack's input lane `h`.
     var dx = 0.0;
     if (h < SKIP) {
         dx = err * dense[ow + L2 + h];
@@ -398,7 +340,6 @@ fn main(@builtin(local_invocation_id) lid: vec3<u32>,
         }
     }
     if (h < HH) {
-        // Through the clamp, then the fold.
         let a = raw[h];
         let b = raw[h + HH];
         let ca = clamp(a, 0.0, 1.0);
@@ -416,11 +357,6 @@ fn main(@builtin(local_invocation_id) lid: vec3<u32>,
         if (b > 0.0 && b < 1.0) {
             d1 = dacc * ca * ACT_SCALE;
         }
-        /* Lane `h` and lane `h + HH` travel as a pair of halves. The row
-        kernel reads this region once per (example, feature) pair -- 2.1M
-        times a batch, 2.9 ms of it waiting on memory -- and the gradients
-        are summed back in f32, so the halved precision does not reach the
-        step. */
         rec[rb + R_DRAW + h] = bitcast<f32>(pack2x16float(vec2<f32>(d0, d1)));
     } else if (h < HH + PAD) {
         let j = h - HH;
@@ -429,9 +365,6 @@ fn main(@builtin(local_invocation_id) lid: vec3<u32>,
         if (z > 0.0 && z < 1.0) {
             d = dx * 2.0 * z * ACT_SCALE;
         }
-        /* Not packed: lane `j` and its partner sit in different threads,
-        so pairing them needs a barrier, and that barrier cost `fwd_bwd`
-        2.5 ms against the 1.1 the halved reads saved. */
         rec[rb + R_DPA + j] = d;
     }
     if (h < SKIP) {
@@ -453,10 +386,7 @@ fn main(@builtin(local_invocation_id) lid: vec3<u32>,
 }
 "#;
 
-/// One row segment per workgroup: sum the lane gradients of up to `SEG`
-/// examples that used the row (CSR order). A row that fits one segment is
-/// finished here, scaled to a mean with its squared norm; a longer row's
-/// segments leave raw partial sums for `K_ROW_FINISH`.
+/// One row segment per workgroup: sum the lane gradients of up to `SEG` examples that used the row (CSR order).
 const K_ROW_GRAD: &str = r#"
 @group(0) @binding(0) var<storage, read> rec: array<f32>;
 @group(0) @binding(1) var<storage, read> segs: array<u32>;
@@ -475,9 +405,6 @@ fn main(@builtin(local_invocation_id) lid: vec3<u32>,
         @builtin(subgroup_id) sg_id: u32,
         @builtin(subgroup_invocation_id) sg_inv: u32,
         @builtin(num_subgroups) n_sg: u32) {
-    /* `PER` and `W` come in as constants so each width compiles to its
-    own kernel: reading the width from the uniform instead left the
-    transformer's own path 0.30 ms slower for work it never does. */
     let sub = lid.x / W;
     let h = lid.x - sub * W;
     let t = linear_wg(wg, nwg) * PER + sub;
@@ -490,8 +417,6 @@ fn main(@builtin(local_invocation_id) lid: vec3<u32>,
         let lo = segs[4u * t + 1u];
         let hi = segs[4u * t + 2u];
         pi = segs[4u * t + 3u];
-        // The accumulator gradients ride as pairs of halves (see
-        // `K_FWD_BWD`); the phase-adaptive ones do not.
         let half = W / 2u;
         let slot = h % half;
         let lo_half = h < half;
@@ -513,17 +438,9 @@ fn main(@builtin(local_invocation_id) lid: vec3<u32>,
             grad[row * W + h] = g;
         }
     }
-    /* A full-width workgroup serves a single segment, so all of it agrees
-    here and can leave before the reduction, the way it always did. Only
-    the paired case has to stay in for a uniform barrier. */
     if (PER == 1u && (!live || pi != NO_PART)) {
         return;
     }
-    /* A subgroup is narrower than a segment, so it never straddles two of
-    them and `subgroupAdd` still holds; each segment then gathers only the
-    subgroups that are its own. A plain tree over the slice instead cost
-    `row_ft` 0.57 ms against the 0.22 the pairing saved. No thread leaves
-    before the barrier -- it has to stay uniform. */
     let gs = subgroupAdd(g * g);
     if (sg_inv == 0u) {
         red[sg_id] = gs;
@@ -589,8 +506,7 @@ fn main(@builtin(local_invocation_id) lid: vec3<u32>,
 }
 "#;
 
-/// Per chunk of `CHUNK` examples: the bias gradients' partial sums and the
-/// chunk's squared error.
+/// Per chunk of `CHUNK` examples: the bias gradients' partial sums and the chunk's squared error.
 const K_BIAS_PART: &str = r#"
 @group(0) @binding(0) var<storage, read> rec: array<f32>;
 @group(0) @binding(1) var<storage, read> inp: array<u32>;
@@ -641,8 +557,7 @@ fn main(@builtin(local_invocation_id) lid: vec3<u32>,
 }
 "#;
 
-/// One thread per dense parameter: its gradient summed over the examples of
-/// its stage (the read-out) or over the chunk partials (the biases).
+/// One thread per dense parameter: its gradient summed over the examples of its stage (the read-out) or over the chunk partials (the biases).
 const K_DENSE_GRAD: &str = r#"
 @group(0) @binding(0) var<storage, read> rec: array<f32>;
 @group(0) @binding(1) var<storage, read> stage_off: array<u32>;
@@ -735,9 +650,7 @@ fn main(@builtin(local_invocation_id) lid: vec3<u32>,
 }
 "#;
 
-/// Global gradient norm from the three partial-sum arrays; the clip factor
-/// every step kernel multiplies by. Also folds the batch's squared error
-/// into the running shard total.
+/// Global gradient norm from the three partial-sum arrays; the clip factor every step kernel multiplies by.
 const K_FINALIZE: &str = r#"
 @group(0) @binding(0) var<storage, read> sq_a: array<f32>;
 @group(0) @binding(1) var<storage, read> sq_b: array<f32>;
@@ -799,12 +712,7 @@ fn main(@builtin(local_invocation_id) lid: vec3<u32>) {
 }
 "#;
 
-/// AdamW over every cell of a sparse table; a row the batch touched reads
-/// its gradient through `slot`, every other row steps with a zero gradient
-/// -- decay and momentum still move it, as in a dense optimizer. On a
-/// Lookahead sync (`P.flags & 1`) the stepped weight is folded into the
-/// slow copy in the same pass, after the step, exactly as `lookahead_sync`
-/// does it -- saves reading and writing the table a second time.
+/// AdamW over every cell of a sparse table; a row the batch touched reads its gradient through `slot`, every other row steps with a zero gradient -- decay and momentum still move it, as in a dense optimizer.
 const K_STEP_ROWS: &str = r#"
 @group(0) @binding(0) var<storage, read_write> w: array<f32>;
 @group(0) @binding(1) var<storage, read_write> m: array<f32>;
@@ -844,25 +752,7 @@ fn main(@builtin(local_invocation_id) lid: vec3<u32>,
 }
 "#;
 
-/// AdamW over the rows this batch touched, catching each up over the steps
-/// since it last moved.
-///
-/// The dense form above walks the whole table every batch so that a quiet
-/// row still decays and still coasts on its momentum. That is correct and
-/// it is most of the step's cost: 11% of the phase-adaptive table's rows
-/// are touched in a batch, and the other 89% are read and written for a
-/// zero gradient. Replaying the gap when a row comes back gives the same
-/// arithmetic for a ninth of the traffic -- the CPU trainer has always done
-/// it this way (`nnue::catch_up`), and this is that routine in WGSL.
-///
-/// Per cell rather than per row: the CPU keeps replaying while any lane of
-/// a row still carries momentum, this stops when its own does. A lane that
-/// stops early still owes the remaining decay, which it takes in one power
-/// exactly as the CPU's tail does.
-///
-/// `last[row]` is the step the row last moved on; `P.t_now` is this one.
-/// Lookahead does not fold in here -- a sync touches every row, quiet ones
-/// included, so it stays a dense pass on the steps that sync.
+/// AdamW over the rows this batch touched, catching each up over the steps since it last moved.
 const K_STEP_SPARSE: &str = r#"
 @group(0) @binding(0) var<storage, read_write> w: array<f32>;
 @group(0) @binding(1) var<storage, read_write> m: array<f32>;
@@ -890,7 +780,6 @@ fn main(@builtin(local_invocation_id) lid: vec3<u32>,
     var vv = v[cell];
     var ww = w[cell];
 
-    // Replay the steps this cell sat out.
     let lastv = last[row];
     var miss = 0u;
     if (P.t_now > lastv + 1u) {
@@ -911,7 +800,6 @@ fn main(@builtin(local_invocation_id) lid: vec3<u32>,
         ww = ww * pow(1.0 - P.wd * P.lr, f32(miss - k));
     }
 
-    // This step's real gradient.
     let g = grad[idx * P.width + h] * step[0];
     mm = P.b1 * mm + (1.0 - P.b1) * g;
     vv = P.b2 * vv + (1.0 - P.b2) * g * g;
@@ -926,13 +814,6 @@ fn main(@builtin(local_invocation_id) lid: vec3<u32>,
 "#;
 
 /// Fold the fast weights into the slow copy, and nothing else.
-///
-/// A lookahead sync reaches every row, so it used to drag the whole Adam
-/// step back to its dense form on those batches: `step_pa` measured 2.1 ms
-/// when it walked the touched rows and 20.1 ms when a sync made it walk
-/// the table. The step has no reason to be dense -- only the fold does.
-/// Splitting them lets the step stay sparse every batch and the fold cost
-/// one sweep of its own.
 const K_LA_FOLD: &str = r#"
 @group(0) @binding(0) var<storage, read_write> w: array<f32>;
 @group(0) @binding(1) var<storage, read_write> slow: array<f32>;
@@ -952,9 +833,7 @@ fn main(@builtin(local_invocation_id) lid: vec3<u32>,
 }
 "#;
 
-/// AdamW over the dense vector. Decay on the three 2-D read-out tables,
-/// the int8 clip on the two hidden ones, neither on any bias. Lookahead
-/// folds in as in `K_STEP_ROWS`.
+/// AdamW over the dense vector.
 const K_STEP_DENSE: &str = r#"
 @group(0) @binding(0) var<storage, read_write> w: array<f32>;
 @group(0) @binding(1) var<storage, read_write> m: array<f32>;
@@ -1061,26 +940,20 @@ impl Params {
     }
 }
 
-/// A CSR over one sparse table for one batch: which rows the batch touched,
-/// and which examples touched each.
+/// A CSR over one sparse table for one batch: which rows the batch touched, and which examples touched each.
 struct Csr {
     counts: Vec<u32>,
     rowptr: Vec<u32>,
     exids: Vec<u32>,
-    /// Row segments of at most `SEG` examples, four words each: touched
-    /// row, span start and end in `exids`, and the partial-sum slot or
-    /// `NO_PART` when the row is one segment.
+    /// Row segments of at most `SEG` examples, four words each: touched row, span start and end in `exids`, and the partial-sum slot or `NO_PART` when the row is one segment.
     segs: Vec<u32>,
-    /// Rows of more than one segment, three words each: touched row and
-    /// its partial-sum slot range.
+    /// Rows of more than one segment, three words each: touched row and its partial-sum slot range.
     multi: Vec<u32>,
     n_segs: usize,
     n_multi: usize,
-    /// `slot[row]` is one past the row's index in the touched list, zero for
-    /// an untouched row.
+    /// `slot[row]` is one past the row's index in the touched list, zero for an untouched row.
     slot: Vec<u32>,
-    /// The inverse of `slot`: `touched[slot[row] - 1] == row`. The step
-    /// walks this rather than the whole table.
+    /// The inverse of `slot`: `touched[slot[row] - 1] == row`.
     touched: Vec<u32>,
     n_touched: usize,
 }
@@ -1101,8 +974,7 @@ impl Csr {
         }
     }
 
-    /// Build from `(row, example)` pairs given as a row per `(example,
-    /// mask)` cell of `rows`, `stride` per example.
+    /// Build from `(row, example)` pairs given as a row per `(example, mask)` cell of `rows`, `stride` per example.
     fn build(
         &mut self,
         rows: &[u32],
@@ -1111,10 +983,6 @@ impl Csr {
         n_masks: usize,
         row_off: impl Fn(usize) -> u32,
     ) {
-        /* Clear only what the last batch left behind: the table is 1.78M
-        rows for the phase-adaptive layer and a batch lights up 11% of
-        them, so `fill(0)` spent most of its time writing zeros over
-        zeros. `touched` already names the rows that are dirty. */
         let tm = std::env::var_os("KUROOBI_CSR_PROF").is_some();
         let t0 = std::time::Instant::now();
         for &r in &self.touched {
@@ -1126,12 +994,6 @@ impl Csr {
                 self.counts[(rows[e * stride + m] + off) as usize] += 1;
             }
         }
-        /* The sweep that follows stays a sweep. Collecting the touched
-        rows from the pairs and sorting them was measured instead -- 200k
-        elements against 1.78M rows -- and came out slower (csr 0.77s to
-        1.09s): a row of this loop is a load and a branch, a row of the
-        sort is a comparison and a move. The count ratio said one thing
-        and the work per row another. */
         let t1 = std::time::Instant::now();
         self.rowptr.clear();
         self.rowptr.push(0);
@@ -1149,7 +1011,6 @@ impl Csr {
             self.touched.push(r as u32);
             total += c;
             self.rowptr.push(total);
-            // Reuse `counts` as the fill cursor: start of this row's span.
             self.counts[r] = total - c;
         }
         self.n_touched = t as usize;
@@ -1207,15 +1068,43 @@ struct Batch {
     pa: Csr,
 }
 
+struct Binds {
+    fwd: wgpu::BindGroup,
+    row_ft: wgpu::BindGroup,
+    fin_ft: wgpu::BindGroup,
+    row_pa: wgpu::BindGroup,
+    fin_pa: wgpu::BindGroup,
+    bias: wgpu::BindGroup,
+    dense: wgpu::BindGroup,
+    fin: wgpu::BindGroup,
+    step_ft: wgpu::BindGroup,
+    step_pa: wgpu::BindGroup,
+    sparse_ft: wgpu::BindGroup,
+    sparse_pa: wgpu::BindGroup,
+    fold: [wgpu::BindGroup; 3],
+    step_dense: wgpu::BindGroup,
+}
+
+#[derive(Clone, Copy)]
+struct Dims {
+    n: usize,
+    chunks: usize,
+    dense_wg: usize,
+}
+
+#[derive(Clone, Copy)]
+struct Steps {
+    dense_now: bool,
+    la_fold: bool,
+    la_prime: bool,
+}
+
 struct Kernel {
     pipeline: wgpu::ComputePipeline,
     layout: wgpu::BindGroupLayout,
 }
 
-/// Per-kernel GPU time under `KUROOBI_GPU_PROF=1`: every `PROF_EVERY`th
-/// batch runs each kernel in its own pass bracketed by timestamps and is
-/// drained on the spot, so the sampled batches cost a little extra and
-/// the rest run untouched.
+/// Per-kernel GPU time under `KUROOBI_GPU_PROF=1`: every `PROF_EVERY`th batch runs each kernel in its own pass bracketed by timestamps and is drained on the spot, so the sampled batches cost a little extra and the rest run untouched.
 struct Prof {
     qs: wgpu::QuerySet,
     resolve: wgpu::Buffer,
@@ -1244,8 +1133,7 @@ const PROF_NAMES: [&str; PROF_N] = [
     "step_dense_la",
 ];
 const PROF_N: usize = 14;
-/// Pass index of the first step kernel, and the offset to its
-/// Lookahead-sync twin.
+/// Pass index of the first step kernel, and the offset to its Lookahead-sync twin.
 const PROF_STEP: usize = 8;
 const PROF_LA: usize = 3;
 
@@ -1275,7 +1163,6 @@ pub struct GpuTrainer {
     pa_rows: usize,
     batch: usize,
 
-    // Weights and moments.
     b_ft: wgpu::Buffer,
     b_ft_m: wgpu::Buffer,
     b_ft_v: wgpu::Buffer,
@@ -1286,7 +1173,6 @@ pub struct GpuTrainer {
     b_dense_m: wgpu::Buffer,
     b_dense_v: wgpu::Buffer,
     la_slow: [wgpu::Buffer; 3],
-    // Per-batch inputs and scratch.
     b_inp: wgpu::Buffer,
     b_rec: wgpu::Buffer,
     b_stage_off: wgpu::Buffer,
@@ -1315,7 +1201,6 @@ pub struct GpuTrainer {
     b_step: wgpu::Buffer,
     b_stats: wgpu::Buffer,
     b_stats_read: wgpu::Buffer,
-    // Uniforms, one per dispatch that needs its own values.
     u_fwd: wgpu::Buffer,
     u_row_ft: wgpu::Buffer,
     u_row_pa: wgpu::Buffer,
@@ -1331,7 +1216,6 @@ pub struct GpuTrainer {
     u_fold_pa: wgpu::Buffer,
     u_fold_dense: wgpu::Buffer,
     u_step_dense: wgpu::Buffer,
-    // Readback staging for the epoch-end download.
     rb_ft: wgpu::Buffer,
     rb_pa: wgpu::Buffer,
     rb_dense: wgpu::Buffer,
@@ -1345,7 +1229,6 @@ pub struct GpuTrainer {
     la_step: u32,
     la_primed: bool,
     pending: std::collections::VecDeque<wgpu::SubmissionIndex>,
-    // Double-buffered CPU preparation.
     batches: [Batch; 2],
     scratch: Vec<u32>,
 }
@@ -1370,9 +1253,7 @@ fn dispatch_dims(n_wg: usize) -> (u32, u32) {
 }
 
 impl GpuTrainer {
-    /// Take the model's tables onto the GPU. `batch` is the largest batch
-    /// `train_shard` will be handed; `lookahead` is `(k, alpha)`, `k = 0`
-    /// for none.
+    /// Take the model's tables onto the GPU.
     pub fn new(nn: &Nnue, batch: usize, adam: &AdamState, lookahead: (u32, f32)) -> GpuTrainer {
         assert!(
             !nn.so_grid,
@@ -1515,11 +1396,6 @@ impl GpuTrainer {
         let b_ft = upload("ft", &nn.ft, wu);
         let b_pa = upload("pa", &nn.pa, wu);
         let b_dense = upload("dense", &dense, wu);
-        /* Resuming: the moments come up with the weights and go back down
-        for a checkpoint, so they need both copy directions. A fresh
-        `AdamState` is all zeros, so this is also the from-scratch path --
-        one upload either way rather than a branch that only one of them
-        exercises. */
         let sr = st | wgpu::BufferUsages::COPY_SRC | wgpu::BufferUsages::COPY_DST;
         let b_ft_m = upload("ft_m", &adam.m_ft, sr);
         let b_ft_v = upload("ft_v", &adam.v_ft, sr);
@@ -1545,12 +1421,8 @@ impl GpuTrainer {
             &pack(&adam.v_so, &adam.v_ft_bias, &adam.v_pa_bias),
             sr,
         );
-        // Without Lookahead the step kernels still bind a slow copy; a
-        // one-cell stand-in they never read.
         let la_slow = if lookahead.0 > 0 {
             let dst = st | wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::COPY_SRC;
-            /* A resume brings the slow copy with it; from scratch these are
-            zeros and the first sync primes them from the fast weights. */
             let have = adam.la_slow.len() == 3;
             let take = |i: usize, n: usize| -> Vec<f32> {
                 if have && adam.la_slow[i].len() == n {
@@ -1580,9 +1452,6 @@ impl GpuTrainer {
         let b_inp = zeros("inp", batch * in_stride, sd);
         let b_rec = zeros("rec", batch * REC, st);
         let b_stage_off = zeros("stage_off", SO_STAGES + 1, sd);
-        // A row of c examples takes at most c / SEG + 1 segments; the
-        // partial slots belong to rows longer than SEG, so at most twice
-        // max_occ / SEG of them.
         let seg_max = |touch_max: usize| touch_max + max_occ / SEG as usize;
         let part_max = 2 * max_occ / SEG as usize;
         let b_ft_segs = zeros("ft_segs", 4 * seg_max(ft_touch_max), sd);
@@ -1755,15 +1624,10 @@ impl GpuTrainer {
             beta1: adam.beta1,
             beta2: adam.beta2,
             eps: adam.eps,
-            /* Resuming carries the step counter: Adam's bias correction
-            reads it, and restarting it at zero would scale the first
-            batches after a resume as if the run had just begun. */
             t: adam.t,
             la_k: lookahead.0,
             la_alpha: lookahead.1,
             la_step: adam.la_step,
-            // A restored slow copy is already primed; priming again would
-            // throw away the average it holds.
             la_primed: !adam.la_slow.is_empty(),
             pending: Default::default(),
             batches: [mk_batch(), mk_batch()],
@@ -1792,8 +1656,7 @@ impl GpuTrainer {
         })
     }
 
-    /// Fill `batches[slot]` from `examples`: symmetry draw, feature rows,
-    /// stage sort, both CSRs.
+    /// Fill `batches[slot]` from `examples`: symmetry draw, feature rows, stage sort, both CSRs.
     fn prepare(
         &mut self,
         nn: &Nnue,
@@ -1831,7 +1694,6 @@ impl GpuTrainer {
                 });
             }
         });
-        // Counting sort by read-out stage.
         let b = &mut self.batches[slot];
         b.n = n;
         let mut cnt = [0u32; SO_STAGES + 1];
@@ -1842,11 +1704,6 @@ impl GpuTrainer {
             cnt[s + 1] += cnt[s];
         }
         b.stage_off.copy_from_slice(&cnt);
-        /* Within a stage, order by the first pattern indices. Where an
-        example sits in a batch does not change the step -- the gradients
-        are summed over the whole batch -- but it decides how often a
-        feature row comes from memory instead of cache: a batch touches 82k
-        rows across 2.1M reads, so the average row is read 25 times. */
         let mut order: Vec<u32> = (0..n as u32).collect();
         order.sort_unstable_by_key(|&e| {
             let o = e as usize * stride;
@@ -1865,10 +1722,6 @@ impl GpuTrainer {
         let inp = &b.inp[..n * stride];
         let t_csr = std::time::Instant::now();
         let nfb = self.nfb as u32;
-        /* The two CSRs share only the input they read, so they build side
-        by side. Serially they were 57% of preparing a batch, and preparing
-        was 53% of it -- the larger of the two (the phase-adaptive table,
-        six times the rows) sets the pace either way. */
         let (ft, pa) = (&mut b.ft, &mut b.pa);
         std::thread::scope(|scope| {
             scope.spawn(|| ft.build(inp, n, stride, nm, |_| 0));
@@ -1902,8 +1755,6 @@ impl GpuTrainer {
         q.write_buffer(&self.b_pa_touch, 0, u32s(&b.pa.touched));
 
         self.t += 1;
-        // Lookahead, mirroring `lookahead_sync`: the first sync only takes
-        // the slow copy; every later one folds into the step kernels.
         let mut la_prime = false;
         let mut la_fold = false;
         if self.la_k > 0 {
@@ -1913,6 +1764,29 @@ impl GpuTrainer {
                 la_fold = self.la_primed;
                 self.la_primed = true;
             }
+        }
+        let n_chunks = n.div_ceil(CHUNK);
+        let (n_dense_wg, dense_now) = self.upload_uniforms(slot, lr, wd, la_fold);
+        let bg = self.binds();
+        let dims = Dims {
+            n,
+            chunks: n_chunks,
+            dense_wg: n_dense_wg,
+        };
+        let steps = Steps {
+            dense_now,
+            la_fold,
+            la_prime,
+        };
+        self.encode(slot, &bg, dims, steps)
+    }
+
+    fn upload_uniforms(&self, slot: usize, lr: f32, wd: f32, la_fold: bool) -> (usize, bool) {
+        let b = &self.batches[slot];
+        let n = b.n;
+        let q = &self.queue;
+        fn u32s(v: &[u32]) -> &[u8] {
+            bytemuck::cast_slice(v)
         }
         let bc1 = 1.0 - self.beta1.powi(self.t as i32);
         let bc2s = (1.0 - self.beta2.powi(self.t as i32)).sqrt();
@@ -1991,21 +1865,12 @@ impl GpuTrainer {
             .bytes(),
         );
         let step_base = Params {
-            // The fold is a pass of its own now; the step never does it.
             flags: 0,
             alpha: self.la_alpha,
             t_now: self.t,
             ..base
         };
-        /* The sparse pass is sized by what the batch touched; the dense
-        one by the table. Both read the same uniform, so it carries
-        whichever this step will run. */
         let dense_now = self.dense_step;
-        /* `slot` is the dense step's own index -- one word per row of the
-        table, 7 MB for the phase-adaptive one -- and it used to ride up
-        with every batch. Only the steps that run the dense pass read it,
-        and with `k = 6` that is one batch in six. The sparse step walks
-        `touched` instead, which is the rows this batch lit up: 0.8 MB. */
         if dense_now {
             q.write_buffer(&self.b_ft_slot, 0, u32s(&b.ft.slot));
             q.write_buffer(&self.b_pa_slot, 0, u32s(&b.pa.slot));
@@ -2054,180 +1919,201 @@ impl GpuTrainer {
                 );
             }
         }
+        (n_dense_wg, dense_now)
+    }
 
-        let bg_fwd = self.bind(
-            &self.k_fwd_bwd,
-            &[
-                &self.b_inp,
-                &self.b_ft,
-                &self.b_pa,
-                &self.b_dense,
-                &self.b_rec,
-                &self.u_fwd,
-            ],
-        );
-        let bg_row_ft = self.bind(
-            &self.k_row_grad,
-            &[
-                &self.b_rec,
-                &self.b_ft_segs,
-                &self.b_ft_exids,
-                &self.b_ft_grad,
-                &self.b_ft_sq,
-                &self.b_ft_part,
-                &self.u_row_ft,
-            ],
-        );
-        let bg_fin_ft = self.bind(
-            &self.k_row_finish,
-            &[
-                &self.b_ft_multi,
-                &self.b_ft_part,
-                &self.b_ft_grad,
-                &self.b_ft_sq,
-                &self.u_fin_ft,
-            ],
-        );
-        let bg_row_pa = self.bind(
-            &self.k_row_grad_pair,
-            &[
-                &self.b_rec,
-                &self.b_pa_segs,
-                &self.b_pa_exids,
-                &self.b_pa_grad,
-                &self.b_pa_sq,
-                &self.b_pa_part,
-                &self.u_row_pa,
-            ],
-        );
-        let bg_fin_pa = self.bind(
-            &self.k_row_finish,
-            &[
-                &self.b_pa_multi,
-                &self.b_pa_part,
-                &self.b_pa_grad,
-                &self.b_pa_sq,
-                &self.u_fin_pa,
-            ],
-        );
-        let bg_bias = self.bind(
-            &self.k_bias_part,
-            &[
-                &self.b_rec,
-                &self.b_inp,
-                &self.b_part,
-                &self.b_sqe,
-                &self.u_bias,
-            ],
-        );
-        let bg_dense = self.bind(
-            &self.k_dense_grad,
-            &[
-                &self.b_rec,
-                &self.b_stage_off,
-                &self.b_part,
-                &self.b_dense_grad,
-                &self.b_dense_sq,
-                &self.u_dense,
-            ],
-        );
-        let bg_fin = self.bind(
-            &self.k_finalize,
-            &[
-                &self.b_ft_sq,
-                &self.b_pa_sq,
-                &self.b_dense_sq,
-                &self.b_sqe,
-                &self.b_step,
-                &self.b_stats,
-                &self.u_fin,
-            ],
-        );
-        let bg_step_ft = self.bind(
-            &self.k_step_rows,
-            &[
-                &self.b_ft,
-                &self.b_ft_m,
-                &self.b_ft_v,
-                &self.b_ft_slot,
-                &self.b_ft_grad,
-                &self.b_step,
-                &self.la_slow[0],
-                &self.u_step_ft,
-            ],
-        );
-        let bg_step_pa = self.bind(
-            &self.k_step_rows,
-            &[
-                &self.b_pa,
-                &self.b_pa_m,
-                &self.b_pa_v,
-                &self.b_pa_slot,
-                &self.b_pa_grad,
-                &self.b_step,
-                &self.la_slow[1],
-                &self.u_step_pa,
-            ],
-        );
-        let bg_sparse_ft = self.bind(
-            &self.k_step_sparse,
-            &[
-                &self.b_ft,
-                &self.b_ft_m,
-                &self.b_ft_v,
-                &self.b_ft_touch,
-                &self.b_ft_grad,
-                &self.b_step,
-                &self.b_ft_last,
-                &self.u_step_ft,
-            ],
-        );
-        let bg_sparse_pa = self.bind(
-            &self.k_step_sparse,
-            &[
-                &self.b_pa,
-                &self.b_pa_m,
-                &self.b_pa_v,
-                &self.b_pa_touch,
-                &self.b_pa_grad,
-                &self.b_step,
-                &self.b_pa_last,
-                &self.u_step_pa,
-            ],
-        );
-        let bg_fold = [
-            self.bind(
-                &self.k_la_fold,
-                &[&self.b_ft, &self.la_slow[0], &self.u_fold_ft],
+    fn binds(&self) -> Binds {
+        Binds {
+            fwd: self.bind(
+                &self.k_fwd_bwd,
+                &[
+                    &self.b_inp,
+                    &self.b_ft,
+                    &self.b_pa,
+                    &self.b_dense,
+                    &self.b_rec,
+                    &self.u_fwd,
+                ],
             ),
-            self.bind(
-                &self.k_la_fold,
-                &[&self.b_pa, &self.la_slow[1], &self.u_fold_pa],
+            row_ft: self.bind(
+                &self.k_row_grad,
+                &[
+                    &self.b_rec,
+                    &self.b_ft_segs,
+                    &self.b_ft_exids,
+                    &self.b_ft_grad,
+                    &self.b_ft_sq,
+                    &self.b_ft_part,
+                    &self.u_row_ft,
+                ],
             ),
-            self.bind(
-                &self.k_la_fold,
-                &[&self.b_dense, &self.la_slow[2], &self.u_fold_dense],
+            fin_ft: self.bind(
+                &self.k_row_finish,
+                &[
+                    &self.b_ft_multi,
+                    &self.b_ft_part,
+                    &self.b_ft_grad,
+                    &self.b_ft_sq,
+                    &self.u_fin_ft,
+                ],
             ),
-        ];
-        let bg_step_dense = self.bind(
-            &self.k_step_dense,
-            &[
-                &self.b_dense,
-                &self.b_dense_m,
-                &self.b_dense_v,
-                &self.b_dense_grad,
-                &self.b_step,
-                &self.la_slow[2],
-                &self.u_step_dense,
+            row_pa: self.bind(
+                &self.k_row_grad_pair,
+                &[
+                    &self.b_rec,
+                    &self.b_pa_segs,
+                    &self.b_pa_exids,
+                    &self.b_pa_grad,
+                    &self.b_pa_sq,
+                    &self.b_pa_part,
+                    &self.u_row_pa,
+                ],
+            ),
+            fin_pa: self.bind(
+                &self.k_row_finish,
+                &[
+                    &self.b_pa_multi,
+                    &self.b_pa_part,
+                    &self.b_pa_grad,
+                    &self.b_pa_sq,
+                    &self.u_fin_pa,
+                ],
+            ),
+            bias: self.bind(
+                &self.k_bias_part,
+                &[
+                    &self.b_rec,
+                    &self.b_inp,
+                    &self.b_part,
+                    &self.b_sqe,
+                    &self.u_bias,
+                ],
+            ),
+            dense: self.bind(
+                &self.k_dense_grad,
+                &[
+                    &self.b_rec,
+                    &self.b_stage_off,
+                    &self.b_part,
+                    &self.b_dense_grad,
+                    &self.b_dense_sq,
+                    &self.u_dense,
+                ],
+            ),
+            fin: self.bind(
+                &self.k_finalize,
+                &[
+                    &self.b_ft_sq,
+                    &self.b_pa_sq,
+                    &self.b_dense_sq,
+                    &self.b_sqe,
+                    &self.b_step,
+                    &self.b_stats,
+                    &self.u_fin,
+                ],
+            ),
+            step_ft: self.bind(
+                &self.k_step_rows,
+                &[
+                    &self.b_ft,
+                    &self.b_ft_m,
+                    &self.b_ft_v,
+                    &self.b_ft_slot,
+                    &self.b_ft_grad,
+                    &self.b_step,
+                    &self.la_slow[0],
+                    &self.u_step_ft,
+                ],
+            ),
+            step_pa: self.bind(
+                &self.k_step_rows,
+                &[
+                    &self.b_pa,
+                    &self.b_pa_m,
+                    &self.b_pa_v,
+                    &self.b_pa_slot,
+                    &self.b_pa_grad,
+                    &self.b_step,
+                    &self.la_slow[1],
+                    &self.u_step_pa,
+                ],
+            ),
+            sparse_ft: self.bind(
+                &self.k_step_sparse,
+                &[
+                    &self.b_ft,
+                    &self.b_ft_m,
+                    &self.b_ft_v,
+                    &self.b_ft_touch,
+                    &self.b_ft_grad,
+                    &self.b_step,
+                    &self.b_ft_last,
+                    &self.u_step_ft,
+                ],
+            ),
+            sparse_pa: self.bind(
+                &self.k_step_sparse,
+                &[
+                    &self.b_pa,
+                    &self.b_pa_m,
+                    &self.b_pa_v,
+                    &self.b_pa_touch,
+                    &self.b_pa_grad,
+                    &self.b_step,
+                    &self.b_pa_last,
+                    &self.u_step_pa,
+                ],
+            ),
+            fold: [
+                self.bind(
+                    &self.k_la_fold,
+                    &[&self.b_ft, &self.la_slow[0], &self.u_fold_ft],
+                ),
+                self.bind(
+                    &self.k_la_fold,
+                    &[&self.b_pa, &self.la_slow[1], &self.u_fold_pa],
+                ),
+                self.bind(
+                    &self.k_la_fold,
+                    &[&self.b_dense, &self.la_slow[2], &self.u_fold_dense],
+                ),
             ],
-        );
+            step_dense: self.bind(
+                &self.k_step_dense,
+                &[
+                    &self.b_dense,
+                    &self.b_dense_m,
+                    &self.b_dense_v,
+                    &self.b_dense_grad,
+                    &self.b_step,
+                    &self.la_slow[2],
+                    &self.u_step_dense,
+                ],
+            ),
+        }
+    }
 
+    fn encode(
+        &mut self,
+        slot: usize,
+        bg: &Binds,
+        Dims {
+            n,
+            chunks: n_chunks,
+            dense_wg: n_dense_wg,
+        }: Dims,
+        Steps {
+            dense_now,
+            la_fold,
+            la_prime,
+        }: Steps,
+    ) -> wgpu::SubmissionIndex {
+        let b = &self.batches[slot];
         let mut enc = self
             .device
             .create_command_encoder(&wgpu::CommandEncoderDescriptor {
                 label: Some("step"),
             });
-        // A sampled batch brackets every pass with timestamps.
         let sampled = self.prof.is_some() && self.t.is_multiple_of(PROF_EVERY);
         let qs = self.prof.as_ref().map(|p| &p.qs);
         let timestamps = |i: usize| {
@@ -2249,78 +2135,66 @@ impl GpuTrainer {
                 pass.set_bind_group(0, bg, &[]);
                 pass.dispatch_workgroups(x, y, 1);
             };
-            run(0, &self.k_fwd_bwd, &bg_fwd, n);
-            run(1, &self.k_row_grad, &bg_row_ft, b.ft.n_segs);
-            // Two segments to a workgroup, since PA_DIMS is half the width.
+            run(0, &self.k_fwd_bwd, &bg.fwd, n);
+            run(1, &self.k_row_grad, &bg.row_ft, b.ft.n_segs);
             run(
                 2,
                 &self.k_row_grad_pair,
-                &bg_row_pa,
+                &bg.row_pa,
                 b.pa.n_segs.div_ceil(WG / PA_DIMS),
             );
             if b.ft.n_multi > 0 {
-                run(3, &self.k_row_finish, &bg_fin_ft, b.ft.n_multi);
+                run(3, &self.k_row_finish, &bg.fin_ft, b.ft.n_multi);
             }
             if b.pa.n_multi > 0 {
-                run(4, &self.k_row_finish, &bg_fin_pa, b.pa.n_multi);
+                run(4, &self.k_row_finish, &bg.fin_pa, b.pa.n_multi);
             }
-            run(5, &self.k_bias_part, &bg_bias, n_chunks);
-            run(6, &self.k_dense_grad, &bg_dense, n_dense_wg);
-            run(7, &self.k_finalize, &bg_fin, 1);
-            // A sync batch's step passes are timed under their own names.
+            run(5, &self.k_bias_part, &bg.bias, n_chunks);
+            run(6, &self.k_dense_grad, &bg.dense, n_dense_wg);
+            run(7, &self.k_finalize, &bg.fin, 1);
             let st = PROF_STEP + if la_fold { PROF_LA } else { 0 };
-            /* A lookahead sync has to reach every row, quiet ones
-            included, so it keeps the dense pass; every other step walks
-            only what the batch touched and replays each row's gap. */
-            /* `KUROOBI_GPU_DENSE_STEP=1` forces the old dense pass, so the
-            two can be timed against each other on one binary -- the
-            machine drifts with heat, and building twice would confound
-            that with the change. Measurement only. */
             if dense_now {
                 run(
                     st,
                     &self.k_step_rows,
-                    &bg_step_ft,
+                    &bg.step_ft,
                     (self.ft_rows * ACC_DIMS).div_ceil(WG),
                 );
                 run(
                     st + 1,
                     &self.k_step_rows,
-                    &bg_step_pa,
+                    &bg.step_pa,
                     (self.pa_rows * PA_DIMS).div_ceil(WG),
                 );
             } else {
                 run(
                     st,
                     &self.k_step_sparse,
-                    &bg_sparse_ft,
+                    &bg.sparse_ft,
                     (b.ft.n_touched * ACC_DIMS).div_ceil(WG),
                 );
                 run(
                     st + 1,
                     &self.k_step_sparse,
-                    &bg_sparse_pa,
+                    &bg.sparse_pa,
                     (b.pa.n_touched * PA_DIMS).div_ceil(WG),
                 );
             }
-            run(st + 2, &self.k_step_dense, &bg_step_dense, n_dense_wg);
-            /* The fold is its own sweep now. The step above stayed sparse
-            even on a sync, which is the whole point: a sync used to make
-            it walk the table (20.1 ms against 2.1). */
+            run(st + 2, &self.k_step_dense, &bg.step_dense, n_dense_wg);
             if la_fold {
                 run(
                     st,
                     &self.k_la_fold,
-                    &bg_fold[0],
+                    &bg.fold[0],
                     (self.ft_rows * ACC_DIMS).div_ceil(WG),
                 );
                 run(
                     st + 1,
                     &self.k_la_fold,
-                    &bg_fold[1],
+                    &bg.fold[1],
                     (self.pa_rows * PA_DIMS).div_ceil(WG),
                 );
-                run(st + 2, &self.k_la_fold, &bg_fold[2], n_dense_wg);
+                run(st + 2, &self.k_la_fold, &bg.fold[2], n_dense_wg);
             }
         }
         if la_prime {
@@ -2340,8 +2214,6 @@ impl GpuTrainer {
             self.pending.push_back(idx.clone());
             self.drain(0);
             self.take_prof_sample(la_fold);
-            // Row-length spread: a row's gradient is one workgroup's serial
-            // loop, so the longest row bounds `row_grad`.
             for (name, c) in [
                 ("ft", &self.batches[slot].ft),
                 ("pa", &self.batches[slot].pa),
@@ -2384,7 +2256,6 @@ impl GpuTrainer {
         }
         p.rb.unmap();
         for i in 0..PROF_N {
-            // The step passes ran under one of their two names.
             if i >= PROF_STEP && (i >= PROF_STEP + PROF_LA) != la_fold {
                 continue;
             }
@@ -2403,8 +2274,6 @@ impl GpuTrainer {
                 continue;
             }
             let ms = p.acc[i] / p.samples[i] as f64 / 1e6;
-            // A step pass runs in its Lookahead form one batch in k; charge
-            // each form its share per batch.
             let k = self.la_k.max(1) as f64;
             let per_batch = if i >= PROF_STEP + PROF_LA {
                 ms / k
@@ -2435,9 +2304,7 @@ impl GpuTrainer {
         }
     }
 
-    /// One pass over `examples` in batches, one optimizer step each. Returns
-    /// the sum of squared errors. `nn` supplies the feature indexer only;
-    /// its tables are stale until `download`.
+    /// One pass over `examples` in batches, one optimizer step each.
     pub fn train_shard(
         &mut self,
         nn: &Nnue,
@@ -2449,15 +2316,10 @@ impl GpuTrainer {
     ) -> f64 {
         self.queue.write_buffer(&self.b_stats, 0, &[0u8; 16]);
         let mut slot = 0;
-        // `KUROOBI_GPU_PROF=1` prints where the shard's time went: waiting
-        // on the GPU, building the batch on the CPU, or uploading it.
         let prof = std::env::var_os("KUROOBI_GPU_PROF").is_some();
         let t_all = std::time::Instant::now();
         let (mut t_wait, mut t_prep, mut t_submit) = (0.0f64, 0.0f64, 0.0f64);
         for (bno, chunk) in examples.chunks(self.batch).enumerate() {
-            // The slot's previous batch must have been consumed by the
-            // queue: `write_buffer` copies at submit, so two batches in
-            // flight is the limit on reuse.
             let t0 = std::time::Instant::now();
             self.drain(1);
             let t1 = std::time::Instant::now();
@@ -2518,9 +2380,7 @@ impl GpuTrainer {
         staging.unmap();
     }
 
-    /// Bring the trained tables back into `nn` (for the held-out pass and
-    /// the save). The optimizer's moments stay on the GPU.
-    /// Read a `u32` buffer back through a staging buffer of its size.
+    /// Bring the trained tables back into `nn` (for the held-out pass and the save).
     fn read_back_u32(&self, src: &wgpu::Buffer, out: &mut [u32]) {
         let bytes = (out.len() * 4) as u64;
         let staging = self.device.create_buffer(&wgpu::BufferDescriptor {
@@ -2552,20 +2412,12 @@ impl GpuTrainer {
     }
 
     /// Bring the optimizer's own state back, not just the weights.
-    ///
-    /// A checkpoint that holds weights and zeroed moments cannot resume
-    /// anything, which is why `--gpu` used to refuse both `--checkpoint`
-    /// and `--resume`. Everything the device carries has a field waiting
-    /// for it in `AdamState`; this fills them. One pass moves about 3.4 GB,
-    /// so it belongs at an epoch boundary, not in the batch loop.
     pub fn download_state(&mut self, nn: &mut Nnue, adam: &mut AdamState) {
         self.download(nn);
         self.read_back(&self.b_ft_m, &self.rb_ft, &mut adam.m_ft);
         self.read_back(&self.b_ft_v, &self.rb_ft, &mut adam.v_ft);
         self.read_back(&self.b_pa_m, &self.rb_pa, &mut adam.m_pa);
         self.read_back(&self.b_pa_v, &self.rb_pa, &mut adam.v_pa);
-        // The stamps the sparse step replays from: without them a resumed
-        // run would think every row moved last step and skip the gap.
         self.read_back_u32(&self.b_ft_last, &mut adam.ft_last);
         self.read_back_u32(&self.b_pa_last, &mut adam.pa_last);
         let mut d = vec![0f32; N_DENSE];
@@ -2636,8 +2488,7 @@ mod tests {
     use crate::nnue::{AdamState, GradSink, Nnue};
     use crate::trainer::{Example, SymPlan};
 
-    /// A deterministic batch: positions from one played-out game, scored by
-    /// a cheap function of the board so the target is fixed.
+    /// A deterministic batch: positions from one played-out game, scored by a cheap function of the board so the target is fixed.
     fn batch(n: usize) -> Vec<Example> {
         let mut out = Vec::new();
         let mut b = crate::board::Board::new();
@@ -2670,8 +2521,7 @@ mod tests {
         out
     }
 
-    /// One CPU minibatch, the way `nnue_train`'s `train_pass_minibatch`
-    /// does it: gradients into sinks, then one `apply_adamw_batch`.
+    /// One CPU minibatch, the way `nnue_train`'s `train_pass_minibatch` does it: gradients into sinks, then one `apply_adamw_batch`.
     fn cpu_step(nn: &mut Nnue, adam: &mut AdamState, exs: &[Example], lr: f32, wd: f32) {
         let mut sink = GradSink::new(1);
         sink.clear();
@@ -2692,8 +2542,7 @@ mod tests {
         nn.apply_adamw_batch(&mut sinks, adam, lr, wd, 1.0 / exs.len() as f32);
     }
 
-    /// Compare both tables after `steps` batches, each side taking the
-    /// same batches in the same order.
+    /// Compare both tables after `steps` batches, each side taking the same batches in the same order.
     fn agree_over(chunks: &[&[Example]], lr: f32, wd: f32, la: (u32, f32)) -> (f32, f32) {
         let pats = crate::nnue::test_patterns();
         let mut a = Nnue::new(pats);
@@ -2703,8 +2552,6 @@ mod tests {
         let mut ad_a = AdamState::new(&a);
         let ad_b = AdamState::new(&b);
         if la.0 > 0 {
-            // The CPU syncs from inside `apply_adamw_batch`; the GPU takes
-            // the same pair through `GpuTrainer::new`.
             ad_a.set_lookahead(la.0, la.1);
         }
 
@@ -2730,28 +2577,12 @@ mod tests {
     }
 
     /// One test on the GPU at a time.
-    ///
-    /// `cargo test` runs these in parallel by default, and three
-    /// `GpuTrainer`s on one device corrupt each other's results: the
-    /// catch-up test failed only when run beside the others, which reads
-    /// exactly like a bug in whatever was last edited. It is not -- it is
-    /// the harness. Every test here takes this first.
     fn gpu_lock() -> std::sync::MutexGuard<'static, ()> {
         static L: std::sync::Mutex<()> = std::sync::Mutex::new(());
         L.lock().unwrap_or_else(|e| e.into_inner())
     }
 
     /// A row that sits out a batch must come back where the CPU has it.
-    ///
-    /// The sparse step only walks rows the batch touched, so a quiet row
-    /// stops decaying and stops coasting on its momentum unless the gap is
-    /// replayed when it returns (`nnue::catch_up`, and `K_STEP_SPARSE` in
-    /// WGSL). One batch never exercises that -- every row's `last` is still
-    /// zero and there is no gap -- so this runs three, with the first and
-    /// third touching one set of rows and the second another. Whatever rows
-    /// the two sets do not share sit out step 2 and are replayed at step 3.
-    ///
-    /// Needs a GPU, so it does not run unless asked for.
     #[test]
     #[ignore = "requires a GPU"]
     fn a_row_that_sat_out_a_batch_catches_up() {
@@ -2772,32 +2603,6 @@ mod tests {
     }
 
     /// A lookahead sync must land where the CPU's does.
-    ///
-    /// A sync reaches every row, quiet ones included, so the sparse step
-    /// cannot carry it -- those batches fall back to the dense pass. The
-    /// two paths are sized differently, and getting that wrong updates
-    /// only the head of each table: caught once by hand, where a forced
-    /// dense run scored val 238.75 against 6.58. Nothing else here takes
-    /// that branch, since every other test runs with lookahead off.
-    ///
-    /// `k = 2` so a sync falls inside four batches: step 2 primes the slow
-    /// copy, step 4 folds into it.
-    ///
-    /// **This currently fails, and it failed before the sparse step
-    /// existed** -- forcing the dense pass fails it wider (0.00067 against
-    /// 0.00034), so the gap is in the fold, not in which rows the step
-    /// walks. The first sync agrees to 5e-8; every later one adds about
-    /// 2.6e-4:
-    ///
-    /// ```text
-    /// syncs 1: ft 0.00000005   syncs 3: ft 0.00059299
-    /// syncs 2: ft 0.00033513   syncs 4: ft 0.00081643
-    /// ```
-    ///
-    /// The first sync only primes the slow copy; the second is the first
-    /// to fold. So the priming agrees and the folding does not. Both sides
-    /// cover the same tables (`trainable_tables` against the three slow
-    /// buffers), which leaves the arithmetic or the order. Unresolved.
     #[test]
     #[ignore = "known GPU/CPU divergence across a lookahead fold; predates the sparse step"]
     fn a_lookahead_sync_lands_where_the_cpu_puts_it() {
@@ -2817,17 +2622,7 @@ mod tests {
         );
     }
 
-    /// The GPU trainer must move the weights where the CPU trainer moves
-    /// them.
-    ///
-    /// The two run different code for the same optimizer -- the CPU walks
-    /// touched rows and catches up the gap since each last moved, the GPU
-    /// sweeps the table -- and nothing compared them. Without this, a
-    /// change to either one is a change to what the shipped model is
-    /// trained by, checked only by whether a 29-hour run looks reasonable
-    /// afterwards.
-    ///
-    /// Needs a GPU, so it does not run unless asked for.
+    /// The GPU trainer must move the weights where the CPU trainer moves them.
     #[test]
     #[ignore = "requires a GPU"]
     fn gpu_and_cpu_take_the_same_step() {
@@ -2836,8 +2631,6 @@ mod tests {
         let exs = batch(4096);
         let (lr, wd) = (0.001f32, 0.01f32);
 
-        /* Both sides start from the same weights. `init_weights` is
-        deterministic, so building twice is the same as cloning. */
         let mut a = Nnue::new(pats);
         a.init_weights();
         let mut b = Nnue::new(pats);
@@ -2864,9 +2657,6 @@ mod tests {
         );
         g.download(&mut b);
 
-        /* Reproduction noise, not equality: the two sum a row's gradients
-        in different orders, and float addition is not associative. The
-        bound is the scale of one step (lr) rather than a guess. */
         let tol = lr * 0.05;
         let mut worst = 0.0f32;
         let mut at = 0usize;
