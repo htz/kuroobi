@@ -1,15 +1,5 @@
 //! Midgame NNUE search — the engine that plays matches.
-//!
-//! Extracted from the match harness so that
-//! other binaries (the GGS client, future frontends) can drive the same
-//! engine. Structure: iterative deepening + Lazy SMP at
-//! shallow depths, YBWC splits below, Multi-ProbCut with unpruned probes and
-//! a static-eval gate, and a 4-way shared transposition table.
 
-// Indexed loops here iterate in an order that matters (contiguous scans,
-// SIMD-style unrolling), so the iterator lints are not taken. Search
-// functions keep their long argument lists: bundling them into a struct
-// would add per-call construction on a hot path.
 #![allow(clippy::needless_range_loop)]
 #![allow(clippy::too_many_arguments)]
 
@@ -20,30 +10,16 @@ use crate::{Board, Position};
 
 const PVS_EPS: f32 = 0.01;
 
-/// One ordered child: move, its flip mask (reused so the search never
-/// recomputes the flips), and the ordering key.
 type Kid = (Position, u64, i32);
 
-/// Map an f32 sort key to i32 while preserving order exactly.
-///
-/// This is the same mapping `f32::total_cmp` performs per comparison;
-/// doing it once per element turns n log n conversions into n. Order is
-/// bit-identical (exhaustively tested). The speed difference is below
-/// measurement noise; kept because it cannot regress order or cost.
 #[inline]
 fn order_key(x: f32) -> i32 {
     let b = x.to_bits() as i32;
     b ^ (((b >> 31) as u32) >> 1) as i32
 }
 
-/// Upper bound on legal moves in a Reversi position.
 const MAX_KIDS: usize = 34;
 
-/// From this remaining depth upward, order children by a full NNUE eval;
-/// shallower nodes use cheap mobility ordering (see `ordered`).
-/// Tunable so it can be swept: work below `ybwc_min_depth` cannot be split, so
-/// in a parallel search a second of it costs as much wall-clock as six seconds
-/// of splittable work. The sequential optimum is not the parallel optimum.
 fn eval_order_depth() -> u32 {
     static V: std::sync::OnceLock<u32> = std::sync::OnceLock::new();
     *V.get_or_init(|| {
@@ -54,37 +30,13 @@ fn eval_order_depth() -> u32 {
     })
 }
 
-/// A worker whose subtree became irrelevant returns this instead of a score,
-/// so the caller knows to discard it rather than treat it as an evaluation.
 const ABORTED: f32 = f32::NEG_INFINITY;
 
-/// Instrument counting root_move vs transposition-table disagreements
-/// (only when `ROOT_DIFF=1`).
-///
-/// Measured: 0 disagreements sequential, 7 with 4 threads — parallel
-/// only, and always mid-iteration; the returned move never changed.
-/// This is the evidence that the "re-read root move from the table"
-/// defect, while real, was not the cause of the in-game blunders.
 pub static ROOT_DIFF: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
 pub static ROOT_TOTAL: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
 
-/// Nodes between abort checks: the flag is shared, so reading it every node
-/// would put a contended load in the hot path.
-/// Below `ybwc_min_depth` a subtree is cheaper to
-/// search than to hand off.
-/// How much each step of `mpc_relax` widens the ProbCut margin.
 const MPC_RELAX_STEP: f32 = 1.18;
 
-/// Estimated cost ratio of the next iteration over the previous one.
-/// Midgame branching is 8-12 but tables and ordering make the real ratio
-/// smaller; a larger estimate bails out earlier (better than losing a
-/// whole iteration to the deadline).
-///
-/// 3.0 bailed too early: measured budget utilization was 34%, and rated
-/// games ended with 40-46% of the clock unused. 2.0 gives 47%, and 1.5
-/// gives no more, so 2.0 stands. ~47% is a structural ceiling (the
-/// budget must hold ~4.5x the last iteration); the rest is compensated
-/// on the budget side ([`crate::timectl`]'s `BUDGET_USE`).
 fn next_pass_factor() -> f32 {
     static V: std::sync::OnceLock<f32> = std::sync::OnceLock::new();
     *V.get_or_init(|| {
@@ -95,9 +47,6 @@ fn next_pass_factor() -> f32 {
     })
 }
 
-/// Minimum remaining depth for a YBWC split. Overridable so the split can be
-/// switched off (set it above the search depth) when isolating which half of
-/// the parallel scheme costs strength.
 fn ybwc_min_depth() -> u32 {
     static V: std::sync::OnceLock<u32> = std::sync::OnceLock::new();
     *V.get_or_init(|| {
@@ -109,18 +58,10 @@ fn ybwc_min_depth() -> u32 {
 }
 const ABORT_CHECK_INTERVAL: u64 = 512;
 
-/// Multi-ProbCut: from this remaining depth up, a shallow search decides
-/// whether the node lies far enough outside the window to skip entirely.
-/// Strong engines prune this way at deep settings, so a fair deep comparison
-/// needs it on both sides.
 const MPC_MIN_DEPTH: u32 = 4;
 
-/// Confidence in standard deviations of the shallow search's prediction error.
-/// The same knob is often expressed as a selectivity percentage (74% ~ 1.13σ).
 const MPC_T: f32 = 1.1;
 
-/// Experiment overrides (strength decomposition): `MPC_T` rescales the margin,
-/// `MPC_MIN_DEPTH` moves the depth ProbCut starts firing at. Defaults above.
 pub fn mpc_t() -> f32 {
     static V: std::sync::OnceLock<f32> = std::sync::OnceLock::new();
     *V.get_or_init(|| {
@@ -141,32 +82,19 @@ pub fn mpc_min_depth() -> u32 {
     })
 }
 
-/// Static-eval gate offset, in discs.
 const MPC_D0_OFFSET: f32 = 4.0;
 
-/// `MPC_OLD=1` restores the pre-2026-07-30 ProbCut: pruned probes, no
-/// static-eval gate, both sides probed.
 fn mpc_old() -> bool {
     static V: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
     *V.get_or_init(|| std::env::var("MPC_OLD").is_ok_and(|v| v != "0"))
 }
 
-/// How deeply ProbCut may nest. A single level leaves the deep tree barely
-/// pruned; letting the probe itself prune is what makes MPC "multi".
 const MPC_MAX_LEVEL: u32 = 3;
 
-/// Probe depth for a node at `depth`, mirroring the linear searcher's rule
-/// (keeps the parity of `depth`, which matters because odd and even plies
-/// evaluate from opposite sides).
 pub fn mpc_reduced_depth(depth: u32) -> u32 {
     2 * (depth / 4) + (depth & 1)
 }
 
-/// Confidence to read the rest of the game with, or `None` to search the
-/// midgame instead. The schedule, anchored at an exact solve from 24 empties,
-/// reads to the end at 93% from 30 empties, 98% from 28, 99% from 26
-/// and exactly from 24. The sigma multipliers are the two-sided z-scores for
-/// those percentages, the same scale `MPC_T` uses.
 pub fn selective_band(empties: u8, solve_empties: u8, width: u8) -> Option<f32> {
     if empties <= solve_empties || empties > solve_empties + width {
         return None;
@@ -179,10 +107,6 @@ pub fn selective_band(empties: u8, solve_empties: u8, width: u8) -> Option<f32> 
     }
 }
 
-/// Static square priority for cheap ordering: corner, box, block, then
-/// X and C squares. The four centre squares are missing from the union, which is
-/// safe — they are occupied from the opening position on and can never be a
-/// legal move.
 const STATIC_CELL_PRIORITY: [u64; 4] = [
     0x8100000000000081, // corner
     0x00003C24243C0000, // box
@@ -190,13 +114,8 @@ const STATIC_CELL_PRIORITY: [u64; 4] = [
     0x42C300000000C342, // X, C
 ];
 
-/// Corner mask: a legal move into a corner counts one
-/// extra in the weighted mobility.
 const CORNERS: u64 = 0x8100000000000081;
 
-/// Potential mobility: empty squares next to an opponent disc.
-/// A move that leaves the opponent few of those is good even when it does not
-/// reduce their legal moves yet.
 #[inline]
 fn potential_mobility(discs: u64, empties: u64) -> u32 {
     let hmask = discs & 0x7E7E7E7E7E7E7E7E;
@@ -213,10 +132,6 @@ fn potential_mobility(discs: u64, empties: u64) -> u32 {
     (res & empties).count_ones()
 }
 
-/// How many tasks may be queued beyond the workers that are idle right now.
-/// Measured here (d16, 20 games, min of 3):
-/// 0 -> 2.25x, 2 -> 2.39x, 8 -> 2.43x, 32 -> 2.20x. Two is the robust choice —
-/// it is the best of the four at 8 threads and within noise of the best at 6.
 fn pool_slack() -> usize {
     static V: std::sync::OnceLock<usize> = std::sync::OnceLock::new();
     *V.get_or_init(|| {
@@ -227,47 +142,20 @@ fn pool_slack() -> usize {
     })
 }
 
-/// Slots probed per position.
-///
-/// The comment here used to claim that four 16-byte entries fit exactly in one
-/// 64-byte cache line. That was never true: `TtEntry` is 24 B (u64 key, two
-/// f32 bounds, four u8 tags, padded to 8), so a bucket is **128 B — two cache
-/// lines**. Measured, not assumed.
-///
-/// Packing the bucket into a single line was tried and rejected: 2-way at the
-/// real settings (depth 22 / solve 26) came out at -0.7%, inside the noise, and
-/// shrinking the entry to 16 B has the same ceiling while risking key
-/// collisions and rounding. See `docs/benchmarks.md`.
 const TT_WAYS: usize = 4;
 
-/// How valuable an entry is: depth first,
-/// accuracy as the tie-break.
 #[inline]
 fn tt_level(depth: u8, relax: u8) -> u32 {
     ((depth as u32) << 8) | relax as u32
 }
 
-/// A transposition table shared by the root-split workers.
-///
-/// Writes race, but every entry carries the position key and is compared
-/// exactly, so a torn read can only produce a *mismatch* (recomputed), never a
-/// wrong value for another position. This is the same argument the linear
-/// searcher's shared table relies on.
 pub struct SharedTt {
     buckets: std::cell::UnsafeCell<Vec<TtBucket>>,
     mask: u64,
-    /// Which round of use an entry belongs to. Emptying the table is a
-    /// generation bump, not a walk: see `clear`.
     epoch: std::sync::atomic::AtomicU8,
 }
-// SAFETY: see the note above — entries are self-validating.
 unsafe impl Sync for SharedTt {}
 
-/// One cache line of the table. Probing *consecutive*
-/// slots from the hash would straddle two lines whenever the
-/// hash lands near a boundary — every probe then costs two memory transactions
-/// instead of one, and every store dirties two lines that other threads may
-/// hold. Aligning the group instead makes the whole probe one line.
 #[repr(C, align(64))]
 #[derive(Clone, Copy)]
 struct TtBucket([TtEntry; TT_WAYS]);
@@ -278,27 +166,18 @@ impl SharedTt {
         SharedTt {
             buckets: std::cell::UnsafeCell::new(vec![TtBucket([TtEntry::EMPTY; TT_WAYS]); n]),
             mask: (n - 1) as u64,
-            // `TtEntry::EMPTY` carries epoch 0, so starting at 1 makes a
-            // freshly allocated table already empty by the same test that
-            // `clear` uses.
             epoch: std::sync::atomic::AtomicU8::new(1),
         }
     }
 
-    /// The generation an entry must carry to be readable.
     #[inline]
     fn epoch(&self) -> u8 {
         self.epoch.load(std::sync::atomic::Ordering::Relaxed)
     }
 
-    // The shared table hands out mutable references from &self by
-    // design: races can only produce key mismatches (= misses), which we
-    // accept instead of locking.
     #[allow(clippy::mut_from_ref)]
     #[inline]
     fn bucket(&self, hash: u64) -> &mut TtBucket {
-        // SAFETY: index is masked into range; a racing write can only make the
-        // key mismatch, which the caller treats as a miss.
         unsafe {
             let v = &mut *self.buckets.get();
             v.get_unchecked_mut((hash & self.mask) as usize)
@@ -308,20 +187,14 @@ impl SharedTt {
     #[allow(clippy::mut_from_ref)]
     #[inline]
     fn slot(&self, hash: u64, i: u64) -> &mut TtEntry {
-        // SAFETY: `i` is always below TT_WAYS.
         unsafe { self.bucket(hash).0.get_unchecked_mut(i as usize) }
     }
 
-    /// Prefetch the bucket line. A 536 MB table nearly always misses to
-    /// main memory, so the parent issues the prefetch for its children
-    /// and the move-ordering work overlaps the fetch latency.
     #[inline]
     fn prefetch(&self, hash: u64) {
         #[cfg(target_arch = "aarch64")]
         {
             let p = self.bucket(hash) as *const TtBucket as *const u8;
-            // SAFETY: prfm is a speculative read and cannot fault; the
-            // pointer is the valid one `bucket` returned.
             unsafe {
                 std::arch::asm!("prfm pldl2keep, [{0}]", in(reg) p, options(nostack, readonly));
             }
@@ -330,7 +203,6 @@ impl SharedTt {
         let _ = hash;
     }
 
-    /// Scan the bucket for this position.
     #[inline]
     fn get(&self, hash: u64) -> TtEntry {
         let b = self.bucket(hash);
@@ -343,26 +215,11 @@ impl SharedTt {
         TtEntry::EMPTY
     }
 
-    /// Best move stored in the table, if any.
-    ///
-    /// Pondering uses this to fetch the predicted reply from finished
-    /// search results without searching again. Entries get overwritten,
-    /// so even a just-searched position may be gone; when there is no
-    /// prediction the right answer is "don't predict".
     pub fn best_move(&self, hash: u64) -> Option<u8> {
         let e = self.get(hash);
         (e.flag != 0 && e.best < 64).then_some(e.best)
     }
 
-    /// External move-ordering hint: "try this move first".
-    ///
-    /// In synchro games the two boards mirror each other, so the
-    /// opponent's move on one board is a candidate on the other; seeding
-    /// it first lets the same time reach greater depth.
-    ///
-    /// Never usable for cutoffs: bounds go in as -inf/+inf so none of
-    /// the value-read conditions can hold, and depth 0 guarantees any
-    /// real search result overwrites it. Only the move travels.
     pub fn seed_move(&self, hash: u64, best_move: u8) {
         if best_move >= 64 {
             return;
@@ -373,18 +230,7 @@ impl SharedTt {
         self.put(hash, 0, 0, f32::INFINITY, f32::NEG_INFINITY, 0.0, best_move);
     }
 
-    /// Store: walk the bucket and take the first slot that is worth
-    /// no more than what is being stored, where worth is `(depth, accuracy)`.
-    /// If all three hold deeper or more accurate results, store nothing.
-    ///
-    /// A one-way table cannot express that: every store evicts whatever was
-    /// there, so a shallow probe near a leaf throws away the deep entry the
-    /// iteration above it will ask for. Under six threads the shallow stores
-    /// arrive from every worker at once and the deep entries barely survive.
     #[inline]
-    /// `alpha` / `beta` are the window the node *started* with, not the one the
-    /// table narrowed it to. Registering against the narrowed window would claim
-    /// a bound the search never established.
     #[allow(clippy::too_many_arguments)]
     fn put(
         &self,
@@ -412,15 +258,6 @@ impl SharedTt {
                     return;
                 }
                 if slot_level == level {
-                    // Same level: the same node searched again
-                    // through a different window, so the two bounds combine —
-                    // *and each assignment repairs the other end if it would
-                    // cross it*. ProbCut makes every stored value probabilistic
-                    // and two threads at the same level can disagree, so
-                    // `lower > upper` really does happen; leaving those repair
-                    // clauses out cost 20% more nodes than a single tagged
-                    // value, which is what made this look like a bad idea the
-                    // first time it was tried.
                     if value < beta && value < slot.upper {
                         slot.upper = value;
                         if value > alpha && value < slot.lower {
@@ -434,8 +271,6 @@ impl SharedTt {
                         }
                     }
                 } else {
-                    // Deeper result: the old bounds no
-                    // longer apply and are replaced outright.
                     slot.lower = lower;
                     slot.upper = upper;
                     slot.depth = depth;
@@ -450,18 +285,11 @@ impl SharedTt {
         }
         for i in 0..TT_WAYS {
             let slot = self.slot(hash, i as u64);
-            // A slot left behind by an earlier generation is free space:
-            // nothing can read it any more, so it never has to be outbid.
             if slot.flag == 0 || slot.epoch != now || tt_level(slot.depth, slot.relax) <= level {
                 *slot = TtEntry {
                     key: hash,
                     lower,
                     upper,
-                    // The move is dropped when the search
-                    // failed low, since nothing was proven about it. That was
-                    // ruinous while the ordering fell back to bit order without
-                    // a table move; with the scored ordering pass in place it
-                    // costs only the head start.
                     best: best_move,
                     best2: 64,
                     depth,
@@ -474,23 +302,12 @@ impl SharedTt {
         }
     }
 
-    /// Empty the table by opening a new generation: every entry still
-    /// carries the old one and no read can reach it again.
-    ///
-    /// The walk this replaces wrote one byte per entry, which pulls in — and
-    /// dirties — every cache line of the table. At the 22-bit size the
-    /// endgame benchmark uses that is 134 MB per call, and `solve_obf` calls
-    /// it once per position: 0.96 s of the 12.5 s an FFO40-49 run takes,
-    /// none of it search, and none of it visible in the reported per-position
-    /// times. A `u8` wraps after 255 rounds, and an entry that old would be
-    /// readable again, so the wrap does the real wipe once.
     pub fn clear(&self) {
         let next = self.epoch().wrapping_add(1);
         if next != 0 {
             self.epoch.store(next, std::sync::atomic::Ordering::Relaxed);
             return;
         }
-        // SAFETY: called between games, with no workers running.
         unsafe {
             for b in (*self.buckets.get()).iter_mut() {
                 for e in b.0.iter_mut() {
@@ -502,36 +319,16 @@ impl SharedTt {
     }
 }
 
-/// One transposition-table slot for the NNUE search. `flag`: 0 empty,
-/// 1 exact, 2 lower bound, 3 upper bound.
 #[derive(Clone, Copy)]
 struct TtEntry {
     key: u64,
-    /// The entry keeps a **pair of bounds** rather than one value
-    /// plus a lower/upper/exact tag. A tagged value answers only half the
-    /// questions asked of it: a node that failed low here leaves an upper bound,
-    /// and the next visit — arriving with a window that needs a lower bound —
-    /// learns nothing and searches again. Both ends accumulate into
-    /// the same entry over successive visits and the table hands out
-    /// whichever end the caller can use.
     lower: f32,
     upper: f32,
     best: u8,
-    /// The move the current best displaced, kept as the
-    /// runner-up for ordering.
     best2: u8,
     depth: u8,
     flag: u8,
-    /// How *accurately* this entry was searched: 0 is the main thread's
-    /// selectivity, higher means a wider ProbCut margin and therefore fewer
-    /// cuts. The table refuses
-    /// to hand out bounds unless `(depth, relax)` both meet what the asking
-    /// node needs. Without that gate a helper's aggressive cut silently becomes
-    /// the main search's answer — which reads as a speedup (fewer nodes) but is
-    /// really a strength loss.
     relax: u8,
-    /// The generation this entry was written in; see `SharedTt::clear`.
-    /// It rides in padding the struct already had.
     epoch: u8,
 }
 
@@ -549,33 +346,14 @@ impl TtEntry {
     };
 }
 
-/// How often a split was attempted and how often the pool accepted it. A large
-/// gap means the workers are saturated; a small `SPLIT_TRIED` means the search
-/// is not offering them work in the first place.
 pub static SPLIT_TRIED: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
-/// Nanoseconds pool workers spent inside tasks. Against (workers x our search
-/// time) this is worker utilisation: it separates "the workers are idle" from
-/// "the workers are busy but contending".
 pub static WORKER_BUSY_NS: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
 pub static POOL_WORKERS: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
 pub static SPLIT_DONE: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
-/// Nanoseconds a splitting thread spent inside `Pool::wait` with nothing left
-/// to steal, split by who was waiting. This is the part of the machine that
-/// YBWC is *paying* for and not using: the parent is blocked on a child while
-/// the queue is empty. Separating it from real search time is the only way to
-/// tell "the workers are starved" from "the work is there but redundant".
 pub static WAIT_IDLE_MAIN_NS: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
 pub static WAIT_IDLE_WORKER_NS: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
-/// How often the pool was seen with k workers busy, sampled on a timer. The
-/// averages cannot tell "steadily half loaded" from "alternately saturated and
-/// empty", and the two call for opposite fixes: the first needs more split
-/// points, the second needs the bursts smoothed out.
 pub static BUSY_HIST: [std::sync::atomic::AtomicU64; 17] =
     [const { std::sync::atomic::AtomicU64::new(0) }; 17];
-/// Raised only while the NNUE midgame search is running. Without it the sampler
-/// also counts the opponent's turns and the endgame solver, where the pool idles
-/// by construction — three quarters of the samples, which made the pool look
-/// empty when it was simply not in use.
 pub static SEARCH_ACTIVE: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
 
 thread_local! {
@@ -583,17 +361,6 @@ thread_local! {
     static SPLIT_TRIED_LOCAL: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
 }
 
-/// A node's own "stop the fan-out"
-/// flag chained to every ancestor's. A task carries the whole chain, so an
-/// abort raised anywhere above it reaches it — `is_searching` walks the vector.
-///
-/// Without the chain a split subtree only ever sees the flag of the node that
-/// created it: when a grandparent cuts off, the grandchild keeps searching a
-/// tree nobody will read, and the parent sits blocked in `wait` for it.
-/// Handle for external (UI) search interruption.
-///
-/// Both the midgame search and the endgame solver poll it per node.
-/// Once raised, new searches also give up immediately until `reset`.
 #[derive(Clone, Default)]
 pub struct StopHandle(std::sync::Arc<std::sync::atomic::AtomicBool>);
 
@@ -603,7 +370,6 @@ impl StopHandle {
             false,
         )))
     }
-    /// Abort the search in progress.
     pub fn stop(&self) {
         self.0.store(true, std::sync::atomic::Ordering::Relaxed);
     }
@@ -645,7 +411,6 @@ impl AbortChain {
     }
 }
 
-/// Where a split-off null-window search leaves its answer.
 struct Slot {
     done: std::sync::atomic::AtomicBool,
     bits: std::sync::atomic::AtomicU32,
@@ -669,23 +434,12 @@ impl Slot {
     }
 }
 
-/// Task pool shared by both forms of parallelism — one pool serves both the
-/// Lazy SMP helpers and the YBWC splits.
-///
-/// The lifetime is the scope the workers were spawned in, so tasks may borrow
-/// the net and the table instead of forcing everything to be `'static`.
 struct Pool {
     q: std::sync::Mutex<std::collections::VecDeque<Box<dyn FnOnce() + Send + 'static>>>,
     cv: std::sync::Condvar,
-    /// Workers currently blocked waiting for work.
     idle: std::sync::atomic::AtomicUsize,
-    /// Queue length, readable without taking the lock. A thread waiting on a
-    /// split polls for work; if that poll locks the mutex every iteration it
-    /// serialises every worker against the waiters and throughput collapses.
     queued: std::sync::atomic::AtomicUsize,
     workers: usize,
-    /// Set at shutdown; the workers only look at it when woken, so raising it
-    /// has to be followed by `cv.notify_all()`.
     #[allow(dead_code)]
     stop: std::sync::atomic::AtomicBool,
 }
@@ -703,18 +457,11 @@ impl Pool {
         }
     }
 
-    /// Queue a task if a worker can take it. Returns false when the pool is
-    /// saturated — the caller then does the work itself, which is what keeps
-    /// the split decision cheap.
     fn try_push(&self, f: impl FnOnce() + Send + 'static) -> bool {
         use std::sync::atomic::Ordering;
         if self.workers == 0 {
             return false;
         }
-        // Counted thread-locally and flushed in batches: a shared atomic
-        // incremented on every split *attempt* is a contended cache line hit
-        // hundreds of thousands of times a second, which would be measurement
-        // that costs what it measures.
         SPLIT_TRIED_LOCAL.with(|c| {
             let n = c.get() + 1;
             if n >= 4096 {
@@ -724,28 +471,6 @@ impl Pool {
                 c.set(n);
             }
         });
-        // Only hand work over when a worker is actually free to start it now,
-        // reporting the failure to the caller, which then searches the child
-        // itself. Queueing beyond that looks like handing work off but really
-        // parks it: the task waits in line while the parent blocks on it.
-        //
-        // The test runs *unlocked* first, and only
-        // then takes the lock to re-check. Nearly every split attempt is a
-        // rejection — the pool is busy — and taking the mutex to discover that
-        // funnels every searching thread through one lock several hundred
-        // thousand times a second.
-        // Handing work over only when a worker is idle *now* (zero slack) was
-        // the rule here once before; queueing beyond it was measured as a loss:
-        // the table said 1.87x the sequential node count, and
-        // parking a task behind a full queue while its parent blocks on it is
-        // exactly how that happens.
-        //
-        // That node blow-up is gone (1.03x now that aborts propagate through
-        // the whole ancestor chain), so the trade is worth re-measuring. The
-        // reason to want a queue: a node with nine young brothers and five idle
-        // workers hands out five and then searches the other four itself, one
-        // after another — and the five tasks finish long before it is done, so
-        // the workers sit idle through the rest of the fan-out.
         let slack = pool_slack();
         let free = |queued: usize| self.idle.load(Ordering::Relaxed) + slack > queued;
         if !free(self.queued.load(Ordering::Relaxed)) {
@@ -763,12 +488,8 @@ impl Pool {
         true
     }
 
-    /// Run one queued task if there is one. Used both by the workers and by a
-    /// thread waiting on a split, so waiting never wastes a core.
     fn run_one(&self) -> bool {
         use std::sync::atomic::Ordering;
-        // Cheap reject first: taking the lock just to find the queue empty is
-        // what makes polling expensive for everyone else.
         if self.queued.load(Ordering::Relaxed) == 0 {
             return false;
         }
@@ -789,8 +510,6 @@ impl Pool {
         }
     }
 
-    /// Block until `slot` is filled, running other queued tasks in the
-    /// meantime rather than idling.
     fn wait(&self, slot: &Slot) {
         use std::sync::atomic::Ordering;
         let mut idle = 0u32;
@@ -808,11 +527,6 @@ impl Pool {
                 }
                 continue;
             }
-            // Nothing to steal. `run_one` reads `queued`, and that line is
-            // written by every push and every pop — spinning on it in a tight
-            // loop does not just waste this core, it slows down the threads
-            // that are actually searching. Back off geometrically so a waiter
-            // touches the line rarely once it is clear no work is coming.
             if starved.is_none() {
                 starved = Some(std::time::Instant::now());
             }
@@ -840,26 +554,9 @@ impl Pool {
         use std::sync::atomic::Ordering;
         IS_POOL_WORKER.with(|c| c.set(true));
         loop {
-            // The worker counts as idle for the whole time it is looking for
-            // work, spinning included — the split gate is `idle > queued`, so a
-            // spinning worker that did not count itself would not be offered
-            // anything.
             self.idle.fetch_add(1, Ordering::Relaxed);
-            // The outer loop is just a label to break a value out of the
-            // inner wait loop; it never actually iterates.
             #[allow(clippy::never_loop)]
             let task = 'get: loop {
-                // Sleep until woken,
-                // with no timeout. A 200us poll instead had all the idle workers
-                // waking twenty-five thousand times a second to take the queue
-                // mutex, find nothing, and go back to sleep — every one of those
-                // acquisitions serialises against a thread trying to hand work
-                // over.
-                //
-                // Spinning before parking to hide the measured 9us handoff was
-                // tried and is not here: it only pays when tasks are small
-                // enough for 9us to matter, and splitting that shallow loses
-                // more than the latency costs (see `ybwc_min_depth`).
                 let mut q = self.q.lock().unwrap();
                 loop {
                     if let Some(t) = q.pop_front() {
@@ -885,60 +582,22 @@ impl Pool {
     }
 }
 
-/// Fixed-depth NNUE alpha-beta with a transposition table and NNUE-eval move
-/// ordering — the pieces a real engine has, and what keeps the wall-clock
-/// competitive (a naive search without them explodes).
 pub struct NnueSearch {
     pub nn: std::sync::Arc<Nnue>,
     pub tt: std::sync::Arc<SharedTt>,
-    /// Workers for the root split (1 = sequential).
     pub threads: usize,
-    /// Nodes visited, to diagnose ordering quality (effective branching).
     pub nodes: u64,
-    /// Enable ProbCut (selective pruning).
     pub mpc: bool,
-    /// How many ProbCut probes are nested above this node.
     probcut_level: u32,
-    /// Set by the root when a sibling's result makes this worker's subtree
-    /// irrelevant; checked periodically so the worker can stop immediately
-    /// instead of finishing work nobody will use.
     abort: Option<std::sync::Arc<AbortChain>>,
-    /// External stop handle (UI stop button etc.).
     stop: Option<StopHandle>,
-    /// The move this search chose at its own root.
-    ///
-    /// Never re-read it from the table: Lazy SMP helpers search the same
-    /// root at other depths with stronger pruning and write to the same
-    /// table, so the root entry belongs to "whoever wrote last" — value
-    /// and move would come from different searches. In a real game that
-    /// produced a 129-second X-square blunder reported at a value
-    /// belonging to neither move.
     root_move: Option<Position>,
-    /// Root position hash, identifying this search's own root
-    /// (0 = no root = helper).
     root_hash: u64,
-    /// Progress written after each completed iteration (the live-view
-    /// hook during games). A dozen writes per move, none inside the search.
     progress: Option<std::sync::Arc<crate::engine::Progress>>,
     abort_countdown: u64,
-    /// Set once the main Lazy SMP thread has reached the target depth; helpers
-    /// stop as soon as they notice, since their results are no longer needed.
-    /// Shared iteration counter, and the iteration this worker is serving.
-    /// Helpers are spawned once per move and loop over iterations themselves,
-    /// so the main thread never has to join them mid-search; it just bumps the
-    /// counter and a helper notices its pass is stale on the next check.
     done: Option<std::sync::Arc<std::sync::atomic::AtomicU32>>,
     my_gen: u32,
-    /// Pool used to split null-window child searches (YBWC). Workers split
-    /// their own subtrees too — without that a worker handed a large subtree
-    /// becomes the critical path and the speedup collapses to the size of the
-    /// largest single task. It is deadlock-free because a thread waiting on a
-    /// split runs queued tasks while it waits, so no task can be stranded
-    /// behind the thread that needs it.
     pool: Option<&'static Pool>,
-    /// Extra ProbCut aggressiveness for Lazy SMP helpers: shrinks the margin so
-    /// two helpers at the same depth explore differently instead of re-deriving
-    /// the same entries.
     mpc_relax: u32,
 }
 
@@ -964,15 +623,8 @@ impl NnueSearch {
         }
     }
 
-    /// A worker sharing this search's model and table, with its own counters.
-    /// The process-wide task pool, built on first use. A
-    /// single global pool is the point: workers that live
-    /// across moves cost nothing per search, and both Lazy SMP and YBWC draw
-    /// from the same set of cores instead of oversubscribing them.
     fn shared_pool(&self, workers: usize) -> Option<&'static Pool> {
         if workers == 0 {
-            // Checked before the cell, not inside it: a sequential searcher
-            // must not inherit a pool that a parallel one happened to build.
             return None;
         }
         static POOL: std::sync::OnceLock<Option<&'static Pool>> = std::sync::OnceLock::new();
@@ -1006,7 +658,6 @@ impl NnueSearch {
             probcut_level: 0,
             abort: self.abort.clone(),
             stop: self.stop.clone(),
-            // A helper clone's move never reaches the root.
             root_move: None,
             root_hash: 0,
             abort_countdown: ABORT_CHECK_INTERVAL,
@@ -1014,13 +665,10 @@ impl NnueSearch {
             my_gen: self.my_gen,
             pool: self.pool,
             mpc_relax: self.mpc_relax,
-            // Only the main thread writes progress; helpers would show
-            // depths the main search has not reached.
             progress: None,
         }
     }
 
-    /// Whether a Lazy SMP helper should stop looping.
     #[inline]
     fn stopped(&self) -> bool {
         self.done
@@ -1028,8 +676,6 @@ impl NnueSearch {
             .is_some_and(|g| g.load(std::sync::atomic::Ordering::Relaxed) != self.my_gen)
     }
 
-    /// Whether this worker has been told to stop. Checked once every
-    /// `ABORT_CHECK_INTERVAL` nodes.
     #[inline]
     fn should_stop(&mut self) -> bool {
         if self.abort.is_none() && self.stop.is_none() {
@@ -1046,8 +692,6 @@ impl NnueSearch {
         self.abort.as_ref().is_some_and(|f| f.stopped())
     }
 
-    /// Install the external stop handle.
-    /// Set the progress sink written at iteration boundaries (games only).
     pub fn set_progress(&mut self, p: Option<std::sync::Arc<crate::engine::Progress>>) {
         self.progress = p;
     }
@@ -1056,8 +700,6 @@ impl NnueSearch {
         self.stop = stop;
     }
 
-    /// Periodic check that also honours the Lazy SMP done flag, so helpers
-    /// unwind promptly instead of finishing a deep pass nobody will read.
     #[inline]
     fn should_stop_or_done(&mut self) -> bool {
         if self.should_stop() {
@@ -1070,29 +712,15 @@ impl NnueSearch {
         self.tt.clear();
     }
 
-    /// Best move at `depth`, via iterative deepening: each pass seeds the TT
-    /// so the next pass orders by the prior best move — this is what lets the
-    /// deep pass skip the expensive per-node eval ordering (only new nodes pay
-    /// for it), the way real engines avoid a full 1-ply scan everywhere.
     pub fn best_move(&mut self, b: &Board, depth: u32) -> Option<Position> {
         self.best_move_valued(b, depth).0
     }
 
-    /// Best move *and* the root value, so a caller can check that a parallel
-    /// search reproduces the sequential one exactly — the move alone can
-    /// coincide while the value diverges.
     pub fn best_move_valued(&mut self, b: &Board, depth: u32) -> (Option<Position>, f32) {
         let (p, v, _) = self.best_move_deadline(b, depth, None);
         (p, v)
     }
 
-    /// Deadline-bounded search. Iterative deepening returns the last
-    /// completed iteration when time runs out (partial iterations are
-    /// discarded); the third return value is the reached depth.
-    ///
-    /// A dedicated watcher thread raises the stop handle: polling the
-    /// clock inside the search either dulls the response or slows the
-    /// search, while the stop-handle check already runs every N nodes.
     pub fn best_move_deadline(
         &mut self,
         b: &Board,
@@ -1108,7 +736,6 @@ impl NnueSearch {
             let done = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
             let d2 = done.clone();
             std::thread::spawn(move || {
-                // Wake often; exit quietly if the search finished first.
                 while !d2.load(std::sync::atomic::Ordering::Relaxed) {
                     let now = std::time::Instant::now();
                     if now >= dl {
@@ -1135,17 +762,9 @@ impl NnueSearch {
         deadline: Option<std::time::Instant>,
     ) -> (Option<Position>, f32, u32) {
         if self.threads > 1 && depth >= 2 {
-            // Lazy SMP runs its own iterative deepening on every worker; doing
-            // the shallow passes here as well would just duplicate them.
-            //
-            // Deadline searches take this path too. It once required
-            // `deadline.is_none()`, which silently made every timed game
-            // single-threaded in the midgame; found via CPU utilization.
             return self.lazy_smp(b, depth, deadline);
         }
         let mut acc = self.nn.indices(b.black, b.white);
-        // Iterative deepening: each pass seeds the table so the next orders by
-        // the prior best move.
         let mut value = f32::NAN;
         let mut best = None;
         let mut reached = 0;
@@ -1156,9 +775,6 @@ impl NnueSearch {
                 if now >= dl {
                     break;
                 }
-                // The next iteration costs several times the last; don't
-                // start one that cannot finish (it would just be killed
-                // and discarded).
                 if reached > 0 && now + last_pass.mul_f32(next_pass_factor()) >= dl {
                     break;
                 }
@@ -1167,8 +783,6 @@ impl NnueSearch {
             self.root_hash = zobrist::board_hash(b.player_bb(), b.opponent_bb());
             self.root_move = None;
             let v = self.negamax(b, &mut acc, d, f32::NEG_INFINITY, f32::INFINITY);
-            // A cut iteration is incomplete; keep the previous answer
-            // (check the abort value itself — see lazy_smp for why).
             if v == ABORTED || self.stop.as_ref().is_some_and(|s| s.is_stopped()) {
                 break;
             }
@@ -1183,7 +797,6 @@ impl NnueSearch {
         (best.or_else(|| self.root_best(b, &mut acc)), value, reached)
     }
 
-    /// The move the table records for `b`, falling back to a 1-ply ordering.
     fn root_best(&self, b: &Board, acc: &mut PatternIndices) -> Option<Position> {
         let h = zobrist::board_hash(b.player_bb(), b.opponent_bb());
         let e = self.tt.get(h);
@@ -1195,27 +808,6 @@ impl NnueSearch {
         (n > 0).then(|| kids[0].0)
     }
 
-    /// Lazy SMP.
-    ///
-    /// The main thread owns the iterative deepening. **Helpers are launched and
-    /// joined inside each iteration**, not once for the whole search: their job
-    /// is to fill the table for the iteration the main thread is about to run,
-    /// and a helper still running a stale iteration is wasted work.
-    ///
-    /// Helpers diverge along two axes:
-    ///
-    /// - **depth** `main_depth + ctz(idx + 1)`: helper 0 shares the main depth,
-    ///   1 goes one deeper, 2 shares again, 3 goes two deeper... so the search
-    ///   effort stays concentrated near the current iteration while a few
-    ///   threads scout ahead. A flat 0..2 spread (what this used to do) puts
-    ///   too much work on plies the main thread will not reach this iteration.
-    /// - **selectivity**: when several helpers land on the same depth, each
-    ///   subsequent one prunes harder (`sub_mpc_level` increments). Two threads
-    ///   searching the same depth with the same selectivity just re-derive the
-    ///   same entries.
-    ///
-    /// Helpers are also only worth launching while the iteration is cheap
-    /// (see `smp_max_depth`).
     fn lazy_smp(
         &mut self,
         b: &Board,
@@ -1223,9 +815,6 @@ impl NnueSearch {
         deadline: Option<std::time::Instant>,
     ) -> (Option<Position>, f32, u32) {
         use std::sync::atomic::{AtomicU64, Ordering};
-        // Tuning knobs read once from the environment, so a sweep does not need
-        // one build per point (thermal drift makes serial rebuild-and-measure
-        // unreliable — see the measurement protocol).
         fn env_u32(key: &'static str, default: u32) -> u32 {
             std::env::var(key)
                 .ok()
@@ -1245,16 +834,6 @@ impl NnueSearch {
             *V.get_or_init(|| env_u32("SMP_SHARPEN_MAX", 2))
         }
 
-        /// Above this iteration Lazy SMP is switched off and the whole pool
-        /// goes into YBWC instead.
-        ///
-        /// The two are not interchangeable. Lazy SMP buys nothing but table
-        /// entries: every helper searches the same tree, so its value decays
-        /// as soon as the table is warm, and on a machine with c cores it can
-        /// never exceed a small constant. YBWC divides the actual work. Cheap
-        /// early iterations are where redundant searches are affordable and
-        /// where a split would cost more than the subtree; deep iterations are
-        /// the opposite.
         fn smp_max_depth() -> u32 {
             static V: std::sync::OnceLock<u32> = std::sync::OnceLock::new();
             *V.get_or_init(|| env_u32("SMP_MAX_DEPTH", 10))
@@ -1263,15 +842,10 @@ impl NnueSearch {
         let nodes = AtomicU64::new(0);
         let mut acc = self.nn.indices(b.black, b.white);
         let mut value = f32::NAN;
-        // Same policy as the sequential path: discard cut iterations,
-        // return the previous answer plus the reached depth.
         let mut best = None;
         let mut reached = 0;
         let mut last_pass = std::time::Duration::ZERO;
 
-        // One pool for both kinds of parallel work, so a core
-        // freed by one is immediately usable by the other. It is built once and
-        // outlives every search, which is also what lets tasks be `'static`.
         let workers = self.threads - 1;
         let pool = self.shared_pool(workers);
 
@@ -1282,16 +856,12 @@ impl NnueSearch {
                     if now >= dl {
                         break;
                     }
-                    // The next iteration costs several times the last;
-                    // don't start one that cannot finish.
                     if reached > 0 && now + last_pass.mul_f32(next_pass_factor()) >= dl {
                         break;
                     }
                 }
                 let t0 = std::time::Instant::now();
                 let lazy = main_depth >= smp_min_depth() && main_depth <= smp_max_depth();
-                // Helpers are retired at the end of the iteration by this flag;
-                // the generation counter doubles as their stop signal.
                 let gen = std::sync::Arc::new(std::sync::atomic::AtomicU32::new(main_depth));
                 let mut slots = Vec::new();
                 if let Some(pool) = pool.filter(|_| lazy) {
@@ -1300,10 +870,7 @@ impl NnueSearch {
                         let mut w = self.worker();
                         w.done = Some(gen.clone());
                         w.my_gen = main_depth;
-                        // ctz(idx+1): half the helpers share the main depth,
-                        // the rest scout progressively further ahead.
                         let ahead = (idx as u32 + 1).trailing_zeros() * smp_spread();
-                        // Same depth => prune harder, so they do not duplicate.
                         w.mpc_relax = (idx as u32 / 2).min(smp_sharpen_max());
                         let d = (main_depth + ahead).min(depth);
                         let task_slot = slot.clone();
@@ -1317,8 +884,6 @@ impl NnueSearch {
                         }
                     }
                 } else {
-                    // No redundant helpers to compete with: let the main search
-                    // hand its younger brothers to the pool.
                     self.pool = pool;
                 }
 
@@ -1327,28 +892,12 @@ impl NnueSearch {
                 let v = self.negamax(b, &mut acc, main_depth, f32::NEG_INFINITY, f32::INFINITY);
                 self.pool = None;
 
-                // Retire this iteration's helpers before starting the next, so
-                // stale passes do not keep cores away from the deeper search.
-                // Must run even when cut — otherwise helpers keep
-                // running (and holding cores) until the next search.
                 gen.store(u32::MAX, Ordering::Relaxed);
                 for slot in slots {
                     pool.unwrap().wait(&slot);
                     nodes.fetch_add(slot.nodes.load(Ordering::Relaxed), Ordering::Relaxed);
                 }
 
-                /* A cut iteration is incomplete; keep the previous
-                answer. Check the abort value itself: checking only the
-                external deadline once let iterations aborted for other
-                reasons (fan-out aborts reaching the root) be accepted as
-                complete — the value became a plausible-looking +0.00
-                (stone_scale rounds the non-finite sentinel) and the move
-                came from the table, i.e. from someone else. That exact
-                combination produced an in-game X-square blunder.
-
-                Note: nominal depth exceeding the empty count is NOT a
-                bug sign — MPC lets iterations pass it, and such
-                iterations re-walk the same tree instantly. */
                 if v == ABORTED || self.stop.as_ref().is_some_and(|s| s.is_stopped()) {
                     break;
                 }
@@ -1359,11 +908,6 @@ impl NnueSearch {
                 if let Some(p) = self.progress.as_ref() {
                     p.reached(main_depth, best, v);
                 }
-                /* Diagnostics: per-iteration values, tagged with the
-                root hash. Concurrent searches (synchro boards, ponder)
-                interleave on stderr, and without the tag lines from
-                neighboring searches get paired up wrongly. Off by
-                default. */
                 if std::env::var("ROOT_TRACE").is_ok() {
                     eprintln!(
                         "  iter [{:016x}] {main_depth:2} {v:+8.2} {:?} {:.1}s",
@@ -1376,9 +920,6 @@ impl NnueSearch {
         }
         self.nodes += nodes.load(Ordering::Relaxed);
         let out = best.or_else(|| self.root_best(b, &mut acc));
-        /* Diagnostics: would the old implementation (re-reading the
-        table) have played a different move? Checked once just before
-        returning, since mid-iteration disagreements never surface. */
         if std::env::var("ROOT_DIFF").is_ok() {
             let from_tt = self.root_best(b, &mut acc);
             ROOT_TOTAL.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
@@ -1398,32 +939,6 @@ impl NnueSearch {
         )
     }
 
-    /// Children with their flip masks, best-first.
-    ///
-    /// The shape matters more than the numbers. *Every* move is scored
-    /// as a weighted sum and the table move wins on a huge constant;
-    /// the ordering is never skipped. And the two
-    /// signals are weighted differently by node type: at a PV node the
-    /// evaluation dominates (269 against 35 for mobility), at a null-window
-    /// node it barely counts (7 against 17). Null-window nodes
-    /// are most of the tree, so most of the tree is ordered by mobility.
-    ///
-    /// That split matters all the more with this evaluator: a full NNUE eval
-    /// per child is by far the most expensive thing this search does — it is
-    /// not even counted as a node — where a pattern evaluator would pay only a
-    /// table lookup. Ordering every null-window node by NNUE eval, which is
-    /// what this used to do from remaining depth 3 upward, spends the budget in
-    /// exactly the wrong place.
-    ///
-    /// Mobility is weighted moves (moves counted double,
-    /// corner moves once more) plus potential mobility (empties adjacent
-    /// to opponent discs) at PV nodes only, matching which weights are non-zero
-    /// in each variant.
-    ///
-    /// Fills `out` and returns how many children there are. Writing into a
-    /// caller-owned stack array keeps this off the heap — returning a `Vec`
-    /// meant one allocation per interior node, which at ~60k nodes a move is
-    /// pure overhead.
     fn ordered_into(
         &self,
         b: &Board,
@@ -1436,7 +951,6 @@ impl NnueSearch {
         tt_move2: u8,
     ) -> usize {
         let mover = b.player();
-        // Ordering weights, scaled so the eval term stays in disc units.
         let (w_mob, w_pm, w_val) = if null_window {
             (17.0 / 7.0, 0.0, 1.0)
         } else {
@@ -1450,18 +964,12 @@ impl NnueSearch {
             m &= m - 1;
             let mut nb = *b;
             let flipped = nb.make_move_bits(pos);
-            // The table's moves are
-            // scored so far above everything else that the sort puts them first
-            // and second. Doing it with the score rather than by swapping them
-            // to the front matters — two swaps do not land the runner-up in
-            // second place, they displace whatever the ordering had chosen.
             let key = if pos.index() == tt_move {
                 1.0e9
             } else if pos.index() == tt_move2 {
                 1.0e8
             } else {
                 let legal = nb.movable();
-                // Offset minus weighted moves, so fewer replies scores higher.
                 let mob = 38.0 - (legal.count_ones() * 2 + (legal & CORNERS).count_ones()) as f32;
                 let mut k = mob * w_mob;
                 if w_pm != 0.0 {
@@ -1469,15 +977,12 @@ impl NnueSearch {
                     k += (38.0 - potential_mobility(nb.opponent_bb(), empties) as f32) * w_pm;
                 }
                 if eval_order {
-                    // Copy instead of undo, as at the leaves (see eval1_nws).
                     let mut child = *acc;
                     self.nn.ix_apply(&mut child, pos, flipped, mover);
                     k += -self.nn.eval_from_indices(&child, &nb) * w_val;
                 }
                 k
             };
-            /* Prefetch the children's lines; the round-trip to main
-            memory completes while the remaining moves are ordered. */
             self.tt
                 .prefetch(zobrist::board_hash(nb.player_bb(), nb.opponent_bb()));
             out[n] = (pos, flipped, order_key(key));
@@ -1487,8 +992,6 @@ impl NnueSearch {
         n
     }
 
-    /// Depth-1 null-window fast path. No table, no move list, no ordering
-    /// pass — the children are leaves, so their eval *is* the ordering.
     fn eval1_nws(&mut self, b: &Board, acc: &mut PatternIndices, alpha: f32) -> f32 {
         self.nodes += 1;
         let moves = b.movable();
@@ -1521,11 +1024,6 @@ impl NnueSearch {
                 let mut nb = *b;
                 let flipped = nb.make_move_bits(pos);
                 self.nodes += 1;
-                /* At the leaves, copy the indices instead of undoing:
-                ix_undo re-derives the CSR per flipped disc (~40 updates)
-                while `PatternIndices` is a fixed 160-byte array — the
-                copy is fewer instructions and breaks the dependency
-                chain. */
                 let mut child = *acc;
                 self.nn.ix_apply(&mut child, pos, flipped, mover);
                 let g = -self.nn.eval_from_indices(&child, &nb);
@@ -1540,6 +1038,187 @@ impl NnueSearch {
         v
     }
 
+    /// Hands one child to the pool at a null window; `None` when it is full.
+    fn spawn_kid(
+        &self,
+        child: Board,
+        depth: u32,
+        alpha: f32,
+        stop: std::sync::Arc<AbortChain>,
+    ) -> Option<std::sync::Arc<Slot>> {
+        let pool = self.pool.unwrap();
+        let slot = std::sync::Arc::new(Slot::new());
+        let (nn, tt, mpc, relax) = (self.nn.clone(), self.tt.clone(), self.mpc, self.mpc_relax);
+        let (gen, my_gen) = (self.done.clone(), self.my_gen);
+        let ext_stop = self.stop.clone();
+        let task_slot = slot.clone();
+        let pushed = pool.try_push(move || {
+            if stop.stopped() {
+                task_slot.set(ABORTED, 0);
+                return;
+            }
+            let mut w = NnueSearch::new(nn, tt);
+            w.mpc = mpc;
+            w.mpc_relax = relax;
+            w.pool = Some(pool);
+            w.abort = Some(stop.clone());
+            w.stop = ext_stop;
+            w.abort_countdown = 1;
+            w.done = gen;
+            w.my_gen = my_gen;
+            let mut cacc = w.nn.indices(child.black, child.white);
+            let v = w.negamax(&child, &mut cacc, depth, -(alpha + PVS_EPS), -alpha);
+            if v != ABORTED && -v > alpha {
+                stop.raise();
+            }
+            task_slot.set(v, w.nodes);
+        });
+        pushed.then_some(slot)
+    }
+
+    /// Pass, or the final score when neither side can move.
+    #[inline(always)]
+    fn after_pass(
+        &mut self,
+        b: &Board,
+        acc: &mut PatternIndices,
+        depth: u32,
+        alpha: f32,
+        beta: f32,
+    ) -> f32 {
+        let mut nb = *b;
+        nb.pass();
+        if nb.movable() == 0 {
+            let p = b.player_bb().count_ones() as i32;
+            let o = b.opponent_bb().count_ones() as i32;
+            let e = 64 - p - o;
+            let diff = if p > o {
+                p - o + e
+            } else if o > p {
+                p - o - e
+            } else {
+                0
+            };
+            return diff as f32 * 1000.0;
+        }
+        if depth == 0 {
+            return self.nn.eval_from_indices(acc, b);
+        }
+        let raw = self.negamax(&nb, acc, depth, -beta, -alpha);
+        if raw == ABORTED {
+            ABORTED
+        } else {
+            -raw
+        }
+    }
+
+    /// Narrows the window from the table; `Some` is an immediate cutoff.
+    /// Also returns the entry's two best moves (64 for none).
+    #[inline(always)]
+    fn tt_probe(
+        &self,
+        h: u64,
+        depth: u32,
+        alpha: &mut f32,
+        beta: &mut f32,
+    ) -> (Option<f32>, u8, u8) {
+        let e = self.tt.get(h);
+        if e.key != h || e.flag == 0 {
+            return (None, 64, 64);
+        }
+        let usable = !(self.root_hash != 0 && h == self.root_hash)
+            && e.depth as u32 >= depth
+            && e.relax >= self.mpc_relax as u8;
+        let mut cut = None;
+        if usable {
+            if e.upper <= *alpha || e.upper == e.lower {
+                cut = Some(e.upper);
+            } else if *beta <= e.lower {
+                cut = Some(e.lower);
+            } else {
+                if *alpha < e.lower {
+                    *alpha = e.lower;
+                }
+                if e.upper < *beta {
+                    *beta = e.upper;
+                }
+            }
+        }
+        (cut, e.best, e.best2)
+    }
+
+    /// Multi-ProbCut: `Some` is a cutoff, or `ABORTED`.
+    #[inline(always)]
+    fn mpc_cut(
+        &mut self,
+        b: &Board,
+        acc: &mut PatternIndices,
+        depth: u32,
+        alpha: f32,
+        beta: f32,
+    ) -> Option<f32> {
+        if !(self.mpc
+            && depth >= mpc_min_depth()
+            && self.probcut_level < MPC_MAX_LEVEL
+            && alpha.is_finite()
+            && beta.is_finite()
+            && beta - alpha <= PVS_EPS * 1.5)
+        {
+            return None;
+        }
+        let sigma = self.nn.mpc_sigma()?;
+        let pd = mpc_reduced_depth(depth);
+        if pd < 1 || pd >= depth {
+            return None;
+        }
+        let t = mpc_t() * MPC_RELAX_STEP.powi(self.mpc_relax as i32);
+        let margin = t * sigma.value(b.empty_count() as u32, depth, pd);
+        let old_style = mpc_old();
+        let (try_high, try_low) = if old_style {
+            (true, true)
+        } else {
+            let d0 = self.nn.eval_from_indices(acc, b);
+            let gate = (margin - MPC_D0_OFFSET).max(1.0);
+            (d0 >= beta + gate, d0 <= alpha - gate)
+        };
+        if try_high || try_low {
+            self.probcut_level += 1;
+            let saved_mpc = self.mpc;
+            if !old_style {
+                self.mpc = false;
+            }
+            let mut cut = None;
+            let mut aborted = false;
+            if try_high {
+                let hi = beta + margin;
+                let high = self.negamax(b, acc, pd, hi - PVS_EPS, hi);
+                if high == ABORTED {
+                    aborted = true;
+                } else if high >= hi {
+                    cut = Some(beta);
+                }
+            }
+            if !aborted && cut.is_none() && try_low {
+                let lo = alpha - margin;
+                let low = self.negamax(b, acc, pd, lo, lo + PVS_EPS);
+                if low == ABORTED {
+                    aborted = true;
+                } else if low <= lo {
+                    cut = Some(alpha);
+                }
+            }
+            self.mpc = saved_mpc;
+            self.probcut_level -= 1;
+            if aborted {
+                return Some(ABORTED);
+            }
+            if cut.is_some() {
+                return cut;
+            }
+        }
+        None
+    }
+
     pub fn negamax(
         &mut self,
         b: &Board,
@@ -1552,213 +1231,36 @@ impl NnueSearch {
         if self.should_stop_or_done() {
             return ABORTED;
         }
-        // One move generation per node. `is_game_over()` generates moves for
-        // both sides internally, and the pass check and child loop each
-        // generated them again — three or four generations where one suffices.
         let moves = b.movable();
         if moves == 0 {
-            let mut nb = *b;
-            nb.pass();
-            if nb.movable() == 0 {
-                let p = b.player_bb().count_ones() as i32;
-                let o = b.opponent_bb().count_ones() as i32;
-                let e = 64 - p - o;
-                let diff = if p > o {
-                    p - o + e
-                } else if o > p {
-                    p - o - e
-                } else {
-                    0
-                };
-                return diff as f32 * 1000.0;
-            }
-            if depth == 0 {
-                return self.nn.eval_from_indices(acc, b);
-            }
-            let raw = self.negamax(&nb, acc, depth, -beta, -alpha);
-            return if raw == ABORTED { ABORTED } else { -raw };
+            return self.after_pass(b, acc, depth, alpha, beta);
         }
         if depth == 0 {
             return self.nn.eval_from_indices(acc, b);
         }
 
-        // Depth-1 fast path: a null-window node one ply from
-        // the leaves touches no transposition table and builds no move list. It
-        // walks the legal moves in static square-priority order and returns the
-        // moment one beats alpha.
-        //
-        // These are the most numerous interior nodes in the tree, and they sit
-        // below the depth where a subtree can be split — so the two probes into
-        // a 400 MB table that the general path does here are paid entirely out
-        // of the sequential part of the search.
         if depth == 1 && beta - alpha <= PVS_EPS * 1.5 {
             return self.eval1_nws(b, acc, alpha);
         }
 
         let h = zobrist::board_hash(b.player_bb(), b.opponent_bb());
-        // The window this node was *asked* about. The table may narrow the
-        // working window below, but what gets registered has to be measured
-        // against this one.
         let (first_alpha, first_beta) = (alpha, beta);
         let mut beta = beta;
-        let mut tt_move = 64u8;
-        let mut tt_move2 = 64u8;
-        {
-            let e = self.tt.get(h);
-            if e.key == h && e.flag != 0 {
-                // The stored moves are always worth having for ordering; the
-                // stored *bounds* only if the entry was searched at least as
-                // deep and at least as accurately as this node needs.
-                tt_move = e.best;
-                tt_move2 = e.best2;
-                /* No table cutoffs at the root.
-
-                The root window is (-inf, +inf), so an `upper == lower`
-                entry would return the stored value without searching at
-                all — every iteration hits it and 37 iterations finish in
-                0.0s with identical values (measured: 178 of 1484
-                searches across 5 games). As the comment above admits,
-                bounds stored under MPC are probabilistic, not sound:
-                helper threads, ponder and previous moves store values
-                under different conditions, and the same position was
-                observed returning -0.0, -0.0, -0.0, -15.1 across
-                searches. Matches the in-game "move right, value wrong"
-                reports (+0.00 / +35.9 / -4.66).
-
-                The ordering move (`tt_move`) is still used — that is
-                where the speed lives; value cutoffs at the root are not
-                needed. */
-                if self.root_hash != 0 && h == self.root_hash {
-                    // Root: no value cutoff (moves only).
-                } else if e.depth as u32 >= depth && e.relax >= self.mpc_relax as u8 {
-                    // Transposition cutoff.
-                    if e.upper <= alpha || e.upper == e.lower {
-                        return e.upper;
-                    }
-                    if beta <= e.lower {
-                        return e.lower;
-                    }
-                    // Narrow the working window to what the table already
-                    // knows. Measured worth having (36.1M nodes against 37.2M
-                    // without) even though ProbCut makes the stored bounds
-                    // probabilistic rather than sound.
-                    if alpha < e.lower {
-                        alpha = e.lower;
-                    }
-                    if e.upper < beta {
-                        beta = e.upper;
-                    }
-                }
-            }
+        let (cut, tt_move, tt_move2) = self.tt_probe(h, depth, &mut alpha, &mut beta);
+        if let Some(v) = cut {
+            return v;
         }
 
-        // Multi-ProbCut: a reduced-depth null-window probe decides whether this
-        // node lies so far outside [alpha, beta] that a full search cannot
-        // change the parent's decision. The margin is T sigma of the shallow
-        // search's error. Only at null-window nodes (never on the PV).
-        //
-        // Two safeguards that the sigma cannot substitute for
-        // (missing them measured ~3pt of win rate even
-        // though the sigma itself calibrates correctly on unpruned probes):
-        // - the *static* eval must already sit outside the window by
-        //   margin - 4 before a probe runs, and it picks which side to try
-        //   (`MPC_D0_OFFSET`) — a cheap second opinion, and half the
-        //   probes never run at all;
-        // - the probe itself searches **unpruned**; this
-        //   used to keep cutting inside the probe up
-        //   to MPC_MAX_LEVEL deep, which recursively degrades the very
-        //   values the margins are calibrated for.
-        // `MPC_OLD=1` restores the old behaviour for A/B runs.
-        /* The margins come from the loaded weights, and a model that was
-        never calibrated has none. It then searches unpruned, which costs
-        real strength -- 300 games at 200 ms/move scored 37.7% against the
-        same weights with a measured sigma. That is deliberate: an
-        uncalibrated model should be obviously slow rather than quietly
-        pruned against numbers nobody measured for it. */
-        let sigma = if self.mpc
-            && depth >= mpc_min_depth()
-            && self.probcut_level < MPC_MAX_LEVEL
-            && alpha.is_finite()
-            && beta.is_finite()
-            && beta - alpha <= PVS_EPS * 1.5
-        {
-            self.nn.mpc_sigma()
-        } else {
-            None
-        };
-        if let Some(sigma) = sigma {
-            let pd = mpc_reduced_depth(depth);
-            if pd >= 1 && pd < depth {
-                // Helpers widen the margin (prune less) so same-depth workers
-                // diverge; the main thread always uses MPC_T. Widening, not
-                // tightening, is what makes a helper's entry safe for the main
-                // thread to reuse.
-                let t = mpc_t() * MPC_RELAX_STEP.powi(self.mpc_relax as i32);
-                let margin = t * sigma.value(b.empty_count() as u32, depth, pd);
-                let old_style = mpc_old();
-                let (try_high, try_low) = if old_style {
-                    (true, true)
-                } else {
-                    let d0 = self.nn.eval_from_indices(acc, b);
-                    let gate = (margin - MPC_D0_OFFSET).max(1.0);
-                    (d0 >= beta + gate, d0 <= alpha - gate)
-                };
-                if try_high || try_low {
-                    self.probcut_level += 1;
-                    let saved_mpc = self.mpc;
-                    if !old_style {
-                        self.mpc = false;
-                    }
-                    let mut cut = None;
-                    let mut aborted = false;
-                    if try_high {
-                        let hi = beta + margin;
-                        let high = self.negamax(b, acc, pd, hi - PVS_EPS, hi);
-                        if high == ABORTED {
-                            // Aborted probe: no information. Bail out of the
-                            // node rather than mistake -inf for "far below".
-                            aborted = true;
-                        } else if high >= hi {
-                            cut = Some(beta);
-                        }
-                    }
-                    if !aborted && cut.is_none() && try_low {
-                        let lo = alpha - margin;
-                        let low = self.negamax(b, acc, pd, lo, lo + PVS_EPS);
-                        if low == ABORTED {
-                            aborted = true;
-                        } else if low <= lo {
-                            cut = Some(alpha);
-                        }
-                    }
-                    self.mpc = saved_mpc;
-                    self.probcut_level -= 1;
-                    if aborted {
-                        return ABORTED;
-                    }
-                    if let Some(v) = cut {
-                        return v;
-                    }
-                }
-            }
+        if let Some(v) = self.mpc_cut(b, acc, depth, alpha, beta) {
+            return v;
         }
 
-        // Which of the two ordering weight sets to use. Null-window nodes
-        // are most of the tree and get the cheap one.
         let mover = b.player();
-        /* Track value and move separately: a fail-low is only an upper
-        bound — usable for the fail-soft node value, never for move
-        selection (the same shape as the solver's -20-move-as-+16 bug). */
         let mut best = f32::NEG_INFINITY;
         let mut best_val = f32::NEG_INFINITY;
         let mut best_move = 64u8;
         let mut moves = moves;
 
-        // Search the table's move on its own *before* the ordering
-        // pass. If it cuts, the pass never
-        // happens — and here that pass costs a full NNUE evaluation per child,
-        // so on a cut node it is the single most expensive thing avoided. About
-        // half the interior nodes of an alpha-beta tree are cut nodes.
         let mut pre_searched = false;
         if tt_move < 64 && depth >= 2 && moves.count_ones() > 1 && moves >> tt_move & 1 == 1 {
             let pos = Position::from_index(tt_move as u32).unwrap();
@@ -1790,20 +1292,8 @@ impl NnueSearch {
             }
             pre_searched = true;
         }
-        // After that search alpha may have moved, and the updated alpha is
-        // what decides the weight set.
         let null_window = beta - alpha <= PVS_EPS * 1.5;
 
-        // Score every move, and let the table
-        // move win on a constant rather than skip the scoring.
-        // Skipping it — which is what this used to do whenever the table had a
-        // move — left every child but the first in bit order, and those are
-        // exactly the young brothers the pool searches. An unordered young
-        // brother that beats alpha stops the fan-out and forces a re-search of
-        // everything behind it.
-        //
-        // The work is also skipped when there is nothing to order
-        // (a single legal move).
         let mut kids: [Kid; MAX_KIDS] = [(Position(0), 0, 0); MAX_KIDS];
         let will_split = self.pool.is_some() && depth >= ybwc_min_depth();
         let ordered = depth >= 2 && moves.count_ones() > 1;
@@ -1821,82 +1311,26 @@ impl NnueSearch {
             }
             n
         };
-        // The scored path already put the table moves first; the
-        // unscored path (one legal move, or depth below 2) still needs the swap.
         if !ordered && tt_move < 64 {
             if let Some(i) = kids[..n_kids].iter().position(|k| k.0.index() == tt_move) {
                 kids.swap(0, i);
             }
         }
 
-        // PVS / NegaScout: full window for the best-ordered child, a null
-        // window for later siblings, re-searched only when one beats alpha.
-        // Same value as plain alpha-beta. (Measured: no node reduction here —
-        // the eval-based ordering already gets the effective branching to ~3,
-        // near the sqrt(b) ideal, so there is nothing left for PVS to prune.
-        // Kept because it costs nothing and helps when ordering degrades.)
-        // YBWC (Young Brothers Wait Concept): the eldest child is searched
-        // sequentially to establish the window, and only then are the younger
-        // siblings' null-window searches handed to idle workers. Splitting
-        // before the window is known would parallelise work that a cutoff was
-        // about to make unnecessary.
-        //
-        // Every non-eldest child is searched with a null window whatever kind
-        // of node its parent is, so PV nodes have young brothers to give away
-        // too — and being at the top of the tree, theirs are the largest
-        // subtrees there are. Both kinds split here;
-        // restricting this to null-window *parents*
-        // excluded the whole PV spine and left the workers idle 68% of the
-        // time.
-        //
-        // Splits start at `ybwc_min_depth`; below that a
-        // subtree is cheaper than the handoff.
         let split_ok = will_split;
 
         let mut aborted = false;
-        // Which children already have a final answer.
         let mut settled = [false; MAX_KIDS];
         let mut n_settled = 0usize;
-        // The table move already fixed the window, so the rest are young
-        // brothers even though none of them has been searched here yet.
         let mut first = !pre_searched;
 
-        // Fan the young brothers out
-        // against the alpha in force *now*, and the moment one of them beats
-        // it, stop the fan-out, re-search the winners with the real window, and
-        // fan the rest out again against the improved alpha.
-        //
-        // Letting the fan-out run to completion instead — which is what this
-        // used to do — leaves every sibling searching against an alpha that is
-        // known to be too low, and the extra nodes are what eats the parallel
-        // gain (1.87x the sequential node count at 6 threads).
-        // Only split-eligible nodes ever swap `self.abort`, so only they need a
-        // copy of the enclosing chain. Cloning it at *every* interior node put
-        // an atomic increment on one shared refcount in the hot path — and
-        // under six threads that line is being incremented by all of them.
         let outer = if split_ok { self.abort.clone() } else { None };
         'fanout: loop {
-            // The fan-out flag, with the polarity this codebase uses
-            // for aborts: raised by whoever beats alpha, which ends this
-            // fan-out (not the node). It is handed to the tasks as their abort
-            // flag, so it *must* start clear — initialising it the other way
-            // round made every task stop the instant it started, leaving the
-            // node to be decided by its eldest child alone (28% in self-play).
-            //
-            // Only nodes that can actually split get one. The flag is heap
-            // allocated, and allocating it at every interior node cost 13% of
-            // single-thread throughput for a flag nobody could ever raise.
             let fan_stop = if split_ok {
                 Some(AbortChain::child(outer.clone()))
             } else {
                 None
             };
-            // The loop control is a plain local, never the shared flag: a node
-            // that cannot split has no flag, and gating the break on the flag
-            // meant a fail-high stopped nothing — every remaining brother was
-            // still probed against an alpha already known to be too low. That
-            // is the fan-out flag losing its only job, and it cost 4x
-            // the nodes single-threaded.
             let mut stop_fanout = false;
             let mut pending: Vec<(usize, std::sync::Arc<Slot>)> = Vec::new();
             let mut research: Vec<usize> = Vec::new();
@@ -1910,19 +1344,13 @@ impl NnueSearch {
                     break;
                 }
                 let (pos, flipped, _) = kids[i];
-                // The flips are already known from the ordering pass; applying
-                // them directly avoids recomputing a full flip per child.
                 let mut nb = *b;
                 nb.apply_flips(pos, flipped);
 
-                // The eldest brother fixes the window before anything is given
-                // away, and is always searched here with the full window.
                 if first {
                     let mut child = *acc;
                     self.nn.ix_apply(&mut child, pos, flipped, mover);
                     let raw = self.negamax(&nb, &mut child, depth - 1, -beta, -alpha);
-                    // Inspect the child's own return value: negating it would
-                    // turn the ABORTED sentinel into +inf and hide the abort.
                     if raw == ABORTED {
                         aborted = true;
                         break;
@@ -1945,69 +1373,15 @@ impl NnueSearch {
                     continue;
                 }
 
-                // The last unsettled young brother is never split, it is what
-                // the splitting thread does while the others run.
                 let is_last = (i + 1..n_kids).all(|j| settled[j]);
                 if split_ok && !is_last {
-                    let pool = self.pool.unwrap();
-                    let slot = std::sync::Arc::new(Slot::new());
-                    let (nn, tt, mpc, relax) =
-                        (self.nn.clone(), self.tt.clone(), self.mpc, self.mpc_relax);
-                    let (gen, my_gen) = (self.done.clone(), self.my_gen);
                     let stop = fan_stop.clone().unwrap();
-                    /* Pass the external stop handle down — without it
-                    deadlines don't reach split tasks. They are rebuilt
-                    via `NnueSearch::new`, which left `stop` empty;
-                    `abort` (sibling beat alpha) was passed but that is
-                    tree-internal. Split subtrees then ran to completion
-                    past the deadline (13.1s against a 5s limit,
-                    parallel only). */
-                    let ext_stop = self.stop.clone();
-                    let (task_slot, child, a, d) = (slot.clone(), nb, alpha, depth - 1);
-                    let pushed = pool.try_push(move || {
-                        // Check before doing anything. A task that waited in the
-                        // queue may have been made irrelevant while it sat
-                        // there — a brother beat alpha and the fan-out stopped —
-                        // and the periodic check inside the search only fires
-                        // every ABORT_CHECK_INTERVAL nodes, so without this the
-                        // task searches half a thousand nodes of a tree nobody
-                        // will read. That waste is exactly what made a queue
-                        // unprofitable: nodes grew 30% at a queue depth of 32.
-                        if stop.stopped() {
-                            task_slot.set(ABORTED, 0);
-                            return;
-                        }
-                        let mut w = NnueSearch::new(nn, tt);
-                        w.mpc = mpc;
-                        w.mpc_relax = relax;
-                        w.pool = Some(pool);
-                        // The fan-out flag doubles as the task's abort signal:
-                        // once someone has beaten alpha every other subtree is
-                        // about to be restarted against a better window.
-                        w.abort = Some(stop.clone());
-                        w.stop = ext_stop;
-                        // Look at the flag on the first node too, not only after
-                        // the first full interval.
-                        w.abort_countdown = 1;
-                        w.done = gen;
-                        w.my_gen = my_gen;
-                        let mut cacc = w.nn.indices(child.black, child.white);
-                        let v = w.negamax(&child, &mut cacc, d, -(a + PVS_EPS), -a);
-                        if v != ABORTED && -v > a {
-                            stop.raise();
-                        }
-                        task_slot.set(v, w.nodes);
-                    });
-                    if pushed {
+                    if let Some(slot) = self.spawn_kid(nb, depth - 1, alpha, stop) {
                         pending.push((i, slot));
                         continue;
                     }
                 }
 
-                // No worker free: search this young brother here. It runs under
-                // the fan-out flag — so a sibling task that beats
-                // alpha cuts this search short too instead of letting the
-                // splitting thread finish a probe against a stale window.
                 if split_ok {
                     self.abort = fan_stop.clone();
                 }
@@ -2018,11 +1392,6 @@ impl NnueSearch {
                     self.abort = outer.clone();
                 }
                 if raw == ABORTED {
-                    // Told to stop by an ancestor: the node is dead. Told to
-                    // stop by *this* fan-out: only the probe is dead, and the
-                    // move stays unsettled for the next round. A node that
-                    // cannot split has no fan-out of its own, so any abort
-                    // reaching it came from above.
                     if !split_ok || outer.as_ref().is_some_and(|o| o.stopped()) {
                         aborted = true;
                     }
@@ -2049,8 +1418,6 @@ impl NnueSearch {
                 }
             }
 
-            // Collect this fan-out. Tasks that were stopped stay unsettled and
-            // go into the next round against the improved alpha.
             for (i, slot) in pending {
                 self.pool.unwrap().wait(&slot);
                 self.nodes += slot.nodes.load(std::sync::atomic::Ordering::Relaxed);
@@ -2075,9 +1442,6 @@ impl NnueSearch {
                 }
             }
 
-            // An ancestor cut off while this fan-out was running: every task
-            // came back ABORTED, so there is nothing to restart and nothing
-            // worth storing.
             if outer.as_ref().is_some_and(|o| o.stopped()) {
                 aborted = true;
             }
@@ -2085,17 +1449,12 @@ impl NnueSearch {
                 break 'fanout;
             }
             if research.is_empty() {
-                // Nobody beat alpha: either every child is settled, or the
-                // eldest already produced a cutoff.
                 break 'fanout;
             }
             if next_alpha >= beta {
                 break 'fanout;
             }
 
-            // A null-window probe that beat its alpha is only a lower bound, so
-            // the winners are re-searched with the real window before the rest
-            // are fanned out again.
             alpha = next_alpha;
             for &i in &research {
                 let (pos, flipped, _) = kids[i];
@@ -2114,8 +1473,6 @@ impl NnueSearch {
                 if g > best {
                     best = g;
                 }
-                // A full-window re-search yields a true value, so the
-                // move is a valid candidate.
                 if g > best_val {
                     best_val = g;
                     best_move = pos.index();
@@ -2133,15 +1490,9 @@ impl NnueSearch {
         }
 
         if aborted {
-            // A truncated subtree carries no value. Returning here — and
-            // crucially *not* writing the table — keeps the abort from
-            // poisoning entries that other threads will trust. (Storing it
-            // was measured as a total collapse: 0% score, -59 discs.)
             return ABORTED;
         }
 
-        /* Record the move chosen at our own root; re-reading the table
-        would pick up a helper's move (`root_move`). */
         if self.root_hash != 0 && h == self.root_hash && best_move < 64 {
             self.root_move = Position::from_index(best_move as u32);
         }
@@ -2162,13 +1513,8 @@ impl NnueSearch {
 mod deadline_tests {
     use super::*;
 
-    /// Past the deadline, the answer from completed iterations returns
-    /// (a deep request does not block — deepening folds per iteration).
     #[test]
     fn deadline_cuts_the_search_short() {
-        // No weights loaded (tests must not require weights/); values
-        // are meaningless but iteration folding doesn't need them.
-        // quantize is mandatory or the SIMD path reads uninitialized data.
         let mut nn0 = Nnue::new(crate::nnue::test_patterns());
         nn0.quantize();
         let nn = std::sync::Arc::new(nn0);
@@ -2179,7 +1525,6 @@ mod deadline_tests {
         let b = Board::new();
         let t0 = std::time::Instant::now();
         let dl = t0 + std::time::Duration::from_millis(120);
-        // Depth 40 would take minutes; the deadline must cut it.
         let (pos, _v, reached) = s.best_move_deadline(&b, 40, Some(dl));
         let el = t0.elapsed();
         assert!(pos.is_some(), "a move returns even when shallow");
@@ -2194,13 +1539,6 @@ mod deadline_tests {
         );
     }
 
-    /// Deadline behavior with threads.
-    ///
-    /// The test above ran threads=1 only, which let a bug through where
-    /// YBWC split tasks never received the stop (2.6x the deadline).
-    /// This is a bulwark, not a reproduction: synthetic weights make the
-    /// tree too small to split, so the real reproduction lives in
-    /// `tests/engine_smoke.rs` (requires weights).
     #[test]
     fn deadline_cuts_the_search_short_in_parallel() {
         let mut nn0 = Nnue::new(crate::nnue::test_patterns());
@@ -2231,10 +1569,6 @@ mod deadline_tests {
 mod seed_tests {
     use super::*;
 
-    /// A seeded move participates in ordering but never as a value.
-    ///
-    /// It carries moves borrowed from the synchro mirror, so it must not
-    /// cause cutoffs; verify the stored bounds are -inf/+inf.
     #[test]
     fn a_seeded_move_carries_no_bounds() {
         let tt = SharedTt::new(16);
@@ -2253,7 +1587,6 @@ mod seed_tests {
             e.upper.is_infinite() && e.upper > 0.0,
             "upper bound must be +inf"
         );
-        // None of the three value-read conditions may hold.
         let (alpha, beta) = (-5.0f32, 5.0f32);
         assert!(e.upper > alpha, "would cut on the upper bound");
         assert!(
@@ -2263,7 +1596,6 @@ mod seed_tests {
         assert!(e.upper != e.lower, "would be read as exact");
     }
 
-    /// Never clobber a real search result with a borrowed hint.
     #[test]
     fn a_seed_never_overwrites_a_real_result() {
         let tt = SharedTt::new(16);
@@ -2275,7 +1607,6 @@ mod seed_tests {
         assert_eq!(tt.best_move(h), Some(20), "the real entry was lost");
     }
 
-    /// Out-of-range hints are silently dropped.
     #[test]
     fn an_out_of_range_seed_is_ignored() {
         let tt = SharedTt::new(16);
@@ -2289,10 +1620,6 @@ mod seed_tests {
 #[cfg(test)]
 mod order_key_tests {
     use super::order_key;
-
-    /* order_key must sort exactly like f32::total_cmp: the integer form
-    exists only to cheapen comparisons, and any order change would change
-    the search tree. */
 
     fn agrees(a: f32, b: f32) -> bool {
         a.total_cmp(&b) == order_key(a).cmp(&order_key(b))
@@ -2311,14 +1638,12 @@ mod order_key_tests {
         }
     }
 
-    /// Table moves sort first via the outsized 1e9/1e8 keys.
     #[test]
     fn it_keeps_the_table_moves_on_top() {
         assert!(order_key(1.0e9) > order_key(1.0e8));
         assert!(order_key(1.0e8) > order_key(269.0));
     }
 
-    /// Values can be negative; sign-crossing comparisons must agree exhaustively.
     #[test]
     fn it_handles_the_sign_boundary() {
         let mut x = -64.0f32;
