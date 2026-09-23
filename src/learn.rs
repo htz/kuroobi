@@ -223,6 +223,10 @@ impl BackupJob {
                             .collect(),
                         depth: self.new_depth,
                         games: 0,
+                        /* Every alternative was searched above (`alt_queue`
+                        walks `movable_iter`), so this entry's best really is
+                        the position's best. */
+                        complete: true,
                     };
                     learned.insert_raw(key, e);
                     self.out.added += 1;
@@ -331,6 +335,7 @@ mod tests {
                 ],
                 depth: 26,
                 games: 15,
+                complete: true,
             },
         );
         let mut learned = Book::new();
@@ -501,6 +506,7 @@ mod tests {
                 }],
                 depth: 26,
                 games: 1,
+                complete: true,
             },
         );
         let mut learned = Book::new();
@@ -540,6 +546,7 @@ mod tests {
             }],
             depth: 20,
             games: 0,
+            complete: true,
         };
         let mut base = Book::new();
         base.insert_raw(key0, mk(1.0));

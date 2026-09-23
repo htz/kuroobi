@@ -35,6 +35,16 @@ pub struct Entry {
     pub depth: u8,
     /// How often the position appeared in game records.
     pub games: u32,
+    /// Whether `moves` covers *every* legal move of the position.
+    ///
+    /// Without this the top of a partial list passed for "best": `bookgen`
+    /// scores only the moves that appeared in game records plus the engine's
+    /// own pick, so an entry can name one move out of thirteen and play would
+    /// take it without searching. Measured over 30 sampled midgame entries:
+    /// candidates ran 1-4 against 4-13 legal moves, and a deep search beat
+    /// the book's move in 5 of them by 1.17 discs on average. Only a complete
+    /// entry can claim a best move; a partial one is a hint.
+    pub complete: bool,
 }
 
 impl Entry {
@@ -157,7 +167,7 @@ pub fn board_from_key(key: (u64, u64)) -> Board {
     b
 }
 
-#[derive(Default)]
+#[derive(Clone, Default)]
 pub struct Book {
     map: HashMap<(u64, u64), Entry>,
 }
@@ -203,11 +213,25 @@ impl Book {
         self.map.iter()
     }
 
-    /// Look up the position and return the best move (deterministic; for study/verification).
+    /// The position's best move, or `None` when the book cannot claim one.
+    ///
+    /// A partial entry (`complete == false`) holds the moves that appeared in
+    /// game records plus whatever the generator's own search picked, so the
+    /// top of that list is not the position's best — it is the best of a
+    /// sample. Returning it here made play take it without searching.
+    /// Use [`Book::candidates`] to get a partial entry as a search hint.
     pub fn probe(&self, board: &Board) -> Option<(Position, f32, u8)> {
-        let (cands, depth) = self.expand(board)?;
+        let (cands, depth, complete) = self.expand(board)?;
+        if !complete {
+            return None;
+        }
         // Sorted by value, descending.
         cands.first().map(|(p, v, _)| (*p, *v, depth))
+    }
+
+    /// Whether the entry for `board` scores every legal move.
+    pub fn is_complete(&self, board: &Board) -> bool {
+        self.expand(board).is_some_and(|(_, _, c)| c)
     }
 
     /// Look up and return candidates mapped back to board orientation
@@ -217,7 +241,7 @@ impl Book {
     /// move, so candidates are expanded through the stabilizers;
     /// otherwise equivalent moves would be missing from display and the
     /// randomized pick would favor one orientation.
-    fn expand(&self, board: &Board) -> Option<(Vec<BookMove>, u8)> {
+    fn expand(&self, board: &Board) -> Option<(Vec<BookMove>, u8, bool)> {
         let (key, i) = Book::key(board);
         let e = self.map.get(&key)?;
         let stab = stabilizers(board);
@@ -240,7 +264,7 @@ impl Book {
             return None;
         }
         out.sort_by(|a, b| b.1.total_cmp(&a.1));
-        Some((out, e.depth))
+        Some((out, e.depth, e.complete))
     }
 
     /// Look up and pick one candidate within `tolerance` discs of best.
@@ -255,7 +279,10 @@ impl Book {
         tolerance: f32,
         rand: u64,
     ) -> Option<(Position, f32, u8)> {
-        let (all, depth) = self.expand(board)?;
+        let (all, depth, complete) = self.expand(board)?;
+        if !complete {
+            return None;
+        }
         let best = all.first()?.1;
         // Collect candidates within tolerance.
         let cands: Vec<(Position, f32, u64)> = all
@@ -280,14 +307,14 @@ impl Book {
 
     /// Candidates in board orientation (legal only, by value desc); for display.
     pub fn candidates(&self, board: &Board) -> Option<Vec<(Position, f32)>> {
-        let (out, _) = self.expand(board)?;
+        let (out, _, _) = self.expand(board)?;
         Some(out.into_iter().map(|(p, v, _)| (p, v)).collect())
     }
 
     /// Candidates including adoption counts (for browsing the book);
     /// `candidates` drops counts because play does not need them.
     pub fn candidates_detailed(&self, board: &Board) -> Option<Vec<BookCandidate>> {
-        let (out, _) = self.expand(board)?;
+        let (out, _, _) = self.expand(board)?;
         Some(out)
     }
 
@@ -313,15 +340,22 @@ impl Book {
     }
 
     /// Save as text. One line =
-    /// `player_hex opponent_hex depth games | mv:value:games mv:value:games ...`
+    /// `player_hex opponent_hex depth games complete mv:value:games ...`
+    /// (`complete` = 1 when every legal move is scored).
     /// Text rather than binary: diffs stay readable and shell tools work.
     pub fn save(&self, path: &Path) -> std::io::Result<()> {
         let tmp = path.with_extension("tmp");
         {
             let mut f = std::io::BufWriter::new(std::fs::File::create(&tmp)?);
-            writeln!(f, "KUROOBI_BOOK_2")?;
+            writeln!(f, "KUROOBI_BOOK_3")?;
             for ((p, o), e) in &self.map {
-                write!(f, "{p:016x} {o:016x} {} {}", e.depth, e.games)?;
+                write!(
+                    f,
+                    "{p:016x} {o:016x} {} {} {}",
+                    e.depth,
+                    e.games,
+                    u8::from(e.complete)
+                )?;
                 for c in &e.moves {
                     write!(f, " {}:{:.3}:{}", c.mv.index(), c.value, c.games)?;
                 }
@@ -332,61 +366,45 @@ impl Book {
         std::fs::rename(tmp, path)
     }
 
+    /// Read a v3 book. Older files carry no `complete` flag, so there is no
+    /// honest way to read them: every entry would have to be assumed partial
+    /// (silently disabling the book) or complete (the bug the flag fixes).
+    /// Rebuild instead — `bookgen --scan` then `--deepen --all-moves`.
     pub fn load(path: &Path) -> std::io::Result<Book> {
         let f = BufReader::new(std::fs::File::open(path)?);
         let mut book = Book::new();
-        let mut v1 = false;
         for (i, line) in f.lines().enumerate() {
             let line = line?;
             if i == 0 {
-                match line.trim() {
-                    "KUROOBI_BOOK_2" => {}
-                    "KUROOBI_BOOK_1" => v1 = true, // legacy format (best move only)
-                    _ => {
-                        return Err(std::io::Error::new(
-                            std::io::ErrorKind::InvalidData,
-                            "bad book magic",
-                        ))
-                    }
+                if line.trim() != "KUROOBI_BOOK_3" {
+                    return Err(std::io::Error::new(
+                        std::io::ErrorKind::InvalidData,
+                        format!(
+                            "{}: expected KUROOBI_BOOK_3, found {:?} \
+                             (rebuild it with `bookgen --scan` and \
+                             `--deepen --all-moves`)",
+                            path.display(),
+                            line.trim()
+                        ),
+                    ));
                 }
                 continue;
             }
             let t: Vec<&str> = line.split_whitespace().collect();
-            if t.len() < 4 {
+            if t.len() < 5 {
                 continue;
             }
             let (Ok(p), Ok(o)) = (u64::from_str_radix(t[0], 16), u64::from_str_radix(t[1], 16))
             else {
                 continue;
             };
-            if v1 {
-                // Legacy: best value depth games
-                let (Ok(best), Ok(value), Ok(depth), Ok(games)) = (
-                    t[2].parse::<u8>(),
-                    t[3].parse::<f32>(),
-                    t.get(4).unwrap_or(&"0").parse::<u8>(),
-                    t.get(5).unwrap_or(&"0").parse::<u32>(),
-                ) else {
-                    continue;
-                };
-                let Some(mv) = Position::from_index(best as u32) else {
-                    continue;
-                };
-                book.map.insert(
-                    (p, o),
-                    Entry {
-                        moves: vec![Candidate { mv, value, games }],
-                        depth,
-                        games,
-                    },
-                );
-                continue;
-            }
-            let (Ok(depth), Ok(games)) = (t[2].parse::<u8>(), t[3].parse::<u32>()) else {
+            let (Ok(depth), Ok(games), Ok(complete)) =
+                (t[2].parse::<u8>(), t[3].parse::<u32>(), t[4].parse::<u8>())
+            else {
                 continue;
             };
             let mut moves = Vec::new();
-            for tok in &t[4..] {
+            for tok in &t[5..] {
                 let mut it = tok.split(':');
                 let (Some(m), Some(v), Some(g)) = (it.next(), it.next(), it.next()) else {
                     continue;
@@ -411,6 +429,7 @@ impl Book {
                     moves,
                     depth,
                     games,
+                    complete: complete != 0,
                 },
             );
         }
@@ -428,6 +447,7 @@ mod tests {
             moves: vec![Candidate { mv, value, games }],
             depth: 24,
             games,
+            complete: true,
         }
     }
 
@@ -507,6 +527,7 @@ mod tests {
                 moves,
                 depth: 26,
                 games: 85,
+                complete: true,
             },
         );
 
@@ -547,6 +568,7 @@ mod tests {
                 ],
                 depth: 26,
                 games: 10,
+                complete: true,
             },
         );
         let path = std::env::temp_dir().join("kuroobi_book_test.txt");
@@ -603,6 +625,7 @@ mod symmetry_tests {
                 }],
                 depth: 26,
                 games: 10,
+                complete: true,
             },
         );
         let got = book.candidates(&b).expect("position is in the book");

@@ -255,7 +255,7 @@ pub struct Engine {
     solver: Solver,
     config: EngineConfig,
     stop: StopHandle,
-    book: Option<Book>,
+    book: Option<std::sync::Arc<Book>>,
     /// RNG state for randomized book picks (fresh per launch).
     book_rand: u64,
     /// Game-learned overlay (persisted). It is merged into `book` at
@@ -376,6 +376,7 @@ impl Engine {
             let base = book.get_or_insert_with(Book::new);
             crate::learn::merge_learned(base, &learned);
         }
+        let book = book.map(std::sync::Arc::new);
         let book_rand = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
             .map(|d| d.as_nanos() as u64)
@@ -660,11 +661,22 @@ impl Engine {
 
     /// (best value, game-learned?, search depth) for a book position;
     /// the depth tells the book screen how trustworthy the value is.
+    ///
+    /// Browsing, so it reports partial entries too — `probe` withholds
+    /// those because play must not take them unsearched, but the screen
+    /// should still show what the book holds.
     pub fn book_entry(&self, board: &Board) -> Option<(f32, bool, u8)> {
         let book = self.book.as_ref()?;
-        let (_, value, depth) = book.probe(board)?;
+        let value = book.candidates(board)?.first()?.1;
+        let depth = book.get_raw(Book::key(board).0).map_or(0, |e| e.depth);
         let learned = self.learned.get_raw(Book::key(board).0).is_some();
         Some((value, learned, depth))
+    }
+
+    /// Whether the book scores every legal move here — the difference
+    /// between an answer and a hint.
+    pub fn book_is_complete(&self, board: &Board) -> bool {
+        self.book.as_ref().is_some_and(|b| b.is_complete(board))
     }
 
     pub fn set_levels(&mut self, depth: u32, solve_empties: u8, band: u8) {
@@ -707,7 +719,15 @@ impl Engine {
         self.stop.reset();
         self.progress.clear();
         self.progress.set_kind(Progress::THINK);
-        // Book: answers come from deeper-than-game search; return immediately.
+        /* Book: answers come from deeper-than-game search, so a complete
+        entry is played immediately. `probe` returns nothing for a partial
+        entry — one that scores only the moves game records played plus the
+        generator's own pick — because the top of that list is the best of a
+        sample, not of the position. Taking it unsearched cost 1.17 discs on
+        average across 5 of 30 sampled midgame entries. A partial entry still
+        knows something, so its move seeds the move ordering and we search
+        normally. */
+        let mut hint = None;
         if let Some(book) = self.book.as_ref().filter(|_| self.config.use_book) {
             let hit = if self.config.book_tolerance > 0.0 {
                 // Pick among near-equal candidates to avoid repeats.
@@ -732,6 +752,12 @@ impl Engine {
                     cut: false,
                 };
             }
+            hint = book
+                .candidates(board)
+                .and_then(|v| v.first().map(|(p, _)| *p));
+        }
+        if let Some(p) = hint {
+            self.hint_move(board, p);
         }
         let c = &self.config;
         if is_game_over(board) {
@@ -892,8 +918,14 @@ impl Engine {
     ) -> Result<Option<crate::learn::BackupOutcome>, String> {
         use crate::learn::JobStep;
         self.stop.reset();
-        // Detach learned/book for the job; self is only used to search.
-        let mut base = self.book.take().unwrap_or_default();
+        /* Detach learned/book for the job; self is only used to search.
+        The book is shared with the search (ordering), so take the Arc and
+        unwrap it — the search's clone is refreshed below. */
+        let mut base = self
+            .book
+            .take()
+            .map(|b| std::sync::Arc::try_unwrap(b).unwrap_or_else(|a| (*a).clone()))
+            .unwrap_or_default();
         let mut learned = std::mem::take(&mut self.learned);
         let done = match job.next(&mut learned, &mut base) {
             JobStep::Search(b) => {
@@ -913,7 +945,7 @@ impl Engine {
         } else {
             Ok(())
         };
-        self.book = (!base.is_empty()).then_some(base);
+        self.book = (!base.is_empty()).then(|| std::sync::Arc::new(base));
         self.learned = learned;
         save.map_err(|e| format!("saving learned book {}: {e}", self.learn_path.display()))?;
         Ok(done)
@@ -941,7 +973,7 @@ impl Engine {
             let base = book.get_or_insert_with(Book::new);
             crate::learn::merge_learned(base, &self.learned);
         }
-        self.book = book;
+        self.book = book.map(std::sync::Arc::new);
         Ok(n)
     }
 

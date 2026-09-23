@@ -9,9 +9,16 @@
 //! Book values must come from beyond game depth, so defaults are depth
 //! 26 / solve 30 / band 8 (live GGS runs 22 / 26 / 6).
 //!
+//! `--deepen` scores the moves game records played plus the engine's own
+//! pick, which is ~3x cheaper than every legal move but leaves entries
+//! *partial*: the move they name is the best of a sample, not of the
+//! position, and play treats such entries as hints rather than answers.
+//! `--all-moves` scores every legal move and marks entries complete.
+//!
 //! Usage:
 //!   bookgen --scan data/source/wthor --max-ply 24 --min-games 3 --out book.txt
-//!   bookgen --deepen book.txt --depth 26 --solve 30 --band 8 [--limit 500]
+//!   bookgen --deepen book.txt --depth 26 --solve 30 --band 8 [--all-moves]
+//!           [--min-empties 54] [--limit 500]
 
 use std::path::{Path, PathBuf};
 
@@ -31,8 +38,18 @@ struct Args {
     threads: usize,
     limit: usize,
     hash_bits: u32,
-    /// Max human candidate moves scored per position.
+    /// Max human candidate moves scored per position (ignored with
+    /// `--all-moves`).
     max_cands: usize,
+    /// Score every legal move, so entries may claim a best move.
+    all_moves: bool,
+    /// Only touch positions with at least this many empty squares.
+    ///
+    /// Completing the whole file is not worth it: entries below ~48
+    /// empties are 4/5 of the file but 4% of the recorded visits, and a
+    /// deep entry is material for the search rather than a move to play,
+    /// so it does not need a best move at all.
+    min_empties: u8,
 }
 
 fn parse_args() -> Result<Args, String> {
@@ -51,6 +68,8 @@ fn parse_args() -> Result<Args, String> {
         limit: usize::MAX,
         hash_bits: 19,
         max_cands: 4,
+        all_moves: false,
+        min_empties: 0,
     };
     let argv: Vec<String> = std::env::args().skip(1).collect();
     let mut i = 0;
@@ -74,6 +93,8 @@ fn parse_args() -> Result<Args, String> {
             "--limit" => a.limit = val(&mut i)?.parse().map_err(|e| format!("{e}"))?,
             "--hash-bits" => a.hash_bits = val(&mut i)?.parse().map_err(|e| format!("{e}"))?,
             "--max-cands" => a.max_cands = val(&mut i)?.parse().map_err(|e| format!("{e}"))?,
+            "--all-moves" => a.all_moves = true,
+            "--min-empties" => a.min_empties = val(&mut i)?.parse().map_err(|e| format!("{e}"))?,
             other => return Err(format!("unknown option {other}")),
         }
         i += 1;
@@ -155,6 +176,8 @@ fn scan(dir: &Path, max_ply: usize, min_games: u32, book: &mut Book) -> std::io:
                 moves,
                 depth: 0,
                 games: total,
+                // Frequency only: nothing was searched, let alone all of it.
+                complete: false,
             },
         );
         kept += 1;
@@ -172,10 +195,50 @@ fn deepen(book: &mut Book, out: &Path, a: &Args) -> Result<(), String> {
     use std::sync::atomic::{AtomicUsize, Ordering};
     use std::sync::Mutex;
 
-    // Solve by frequency (likely-hit positions gain value first).
+    /* An entry whose scored moves already cover every legal move is
+    complete as it stands: the values came from a real search (`depth > 0`)
+    and there is nothing left to compare against. Recognising those costs
+    no search. It happens naturally where many different moves were played
+    in the records, which is exactly the frequent openings - 86 entries
+    carrying 24% of all recorded visits. A single-legal-move position is
+    the degenerate case of the same rule. */
+    if a.all_moves {
+        let ready: Vec<(u64, u64)> = book
+            .iter()
+            .filter(|(k, e)| {
+                if e.complete || e.depth == 0 {
+                    return false;
+                }
+                let b = kuroobi::book::board_from_key(**k);
+                let scored = e.moves.iter().filter(|c| b.check(c.mv)).count();
+                scored >= b.movable_iter().count()
+            })
+            .map(|(k, _)| *k)
+            .collect();
+        let n = ready.len();
+        for k in ready {
+            if let Some(e) = book.get_raw_mut(k) {
+                e.complete = true;
+            }
+        }
+        if n > 0 {
+            eprintln!("{n} entries already cover every legal move - complete without searching");
+        }
+    }
+    /* Solve by frequency (likely-hit positions gain value first).
+    With `--all-moves` a deep-but-partial entry still needs work: its
+    values came from a sample of the legal moves, so it cannot name a
+    best move however deep those values are. Depth alone used to decide,
+    which left every already-deepened entry untouchable. */
     let mut todo: Vec<((u64, u64), Entry)> = book
         .iter()
-        .filter(|(_, e)| e.depth < a.depth as u8)
+        .filter(|(k, e)| {
+            if a.min_empties > 0 && kuroobi::book::board_from_key(**k).empty_count() < a.min_empties
+            {
+                return false;
+            }
+            e.depth < a.depth as u8 || (a.all_moves && !e.complete)
+        })
         .map(|(k, e)| (*k, e.clone()))
         .collect();
     todo.sort_by_key(|(_, e)| std::cmp::Reverse(e.games));
@@ -183,7 +246,9 @@ fn deepen(book: &mut Book, out: &Path, a: &Args) -> Result<(), String> {
     let total = todo.len();
     if total == 0 {
         eprintln!("nothing to deepen");
-        return Ok(());
+        // The completeness pass above may still have changed entries;
+        // returning without saving silently discarded that work.
+        return book.save(out).map_err(|e| format!("{e}"));
     }
 
     // workers x threads-per-worker ~= physical cores.
@@ -233,17 +298,34 @@ fn deepen(book: &mut Book, out: &Path, a: &Args) -> Result<(), String> {
                     let (key, old) = &todo_ref[i];
                     let key = *key;
                     let board = kuroobi::book::board_from_key(key);
-                    // Score only human-played moves plus the engine best:
-                    // all legal moves is 3x slower and nobody uses exact
-                    // values of never-played moves.
                     let best = engine.choose(&board);
-                    let mut cands: Vec<(kuroobi::Position, u32)> = old
-                        .moves
-                        .iter()
-                        .filter(|c| board.check(c.mv))
-                        .map(|c| (c.mv, c.games))
-                        .take(a.max_cands)
-                        .collect();
+                    /* With `--all-moves` every legal move is scored and the
+                    entry may claim a best. Without it only recorded moves
+                    plus the engine's own pick get values, which is ~3x
+                    cheaper but leaves the entry a hint: the move it names
+                    is the top of a partial list, and a deep search beat it
+                    in 5 of 30 sampled entries (1.17 discs on average). */
+                    let mut cands: Vec<(kuroobi::Position, u32)> = if a.all_moves {
+                        board
+                            .movable_iter()
+                            .map(|p| {
+                                let games = old
+                                    .moves
+                                    .iter()
+                                    .find(|c| c.mv == p)
+                                    .map(|c| c.games)
+                                    .unwrap_or(0);
+                                (p, games)
+                            })
+                            .collect()
+                    } else {
+                        old.moves
+                            .iter()
+                            .filter(|c| board.check(c.mv))
+                            .map(|c| (c.mv, c.games))
+                            .take(a.max_cands)
+                            .collect()
+                    };
                     if let Some(bp) = best.pos {
                         if !cands.iter().any(|(p, _)| *p == bp) {
                             cands.push((bp, 0));
@@ -272,6 +354,7 @@ fn deepen(book: &mut Book, out: &Path, a: &Args) -> Result<(), String> {
                             key,
                             Entry {
                                 moves,
+                                complete: a.all_moves,
                                 depth: a.depth as u8,
                                 games: old.games,
                             },
