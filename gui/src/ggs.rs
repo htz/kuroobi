@@ -1362,8 +1362,14 @@ impl MatchState {
 /// Deciding the sign from `my_color` once flipped a rated win into a
 /// displayed loss (synchro boards carry opposite colors, so the answer
 /// depended on which board arrived first).
-fn my_stone_diff(score: f32, first_name: &str, login: &str) -> i32 {
-    let v = score.round() as i32;
+///
+/// For synchro the server reports the MEAN of the two boards, not the
+/// sum: `.69` ended -18 and -2 on its boards and the line read -10.00.
+/// The pair is one game and its margin is the sum, so double it —
+/// every displayed margin was half its true value (measured over 12
+/// matches: sum / line == 2.00 in all of them).
+fn my_stone_diff(score: f32, first_name: &str, login: &str, synchro: bool) -> i32 {
+    let v = (if synchro { score * 2.0 } else { score }).round() as i32;
     if first_name == login {
         v
     } else {
@@ -4338,7 +4344,10 @@ fn handle_match_end(
     Deciding by our color once flipped a rated +2.00 win into a
     displayed -2 loss (synchro boards carry opposite colors, and the
     representative depended on arrival order). */
-    let my_diff = score.map(|s| my_stone_diff(s, first_name, login));
+    // Synchro game types start with `s` (`s8r16`, `s8`); their score
+    // line is a per-board mean.
+    let synchro = toks.iter().any(|t| t.starts_with("s8"));
+    let my_diff = score.map(|s| my_stone_diff(s, first_name, login, synchro));
     let opp_for_note = if opp.is_empty() {
         "?".to_string()
     } else {
@@ -5156,17 +5165,31 @@ mod tests {
     #[test]
     fn the_stone_diff_follows_the_first_name() {
         // We are listed first: as-is.
-        assert_eq!(my_stone_diff(2.0, "kuroobi", "kuroobi"), 2);
-        assert_eq!(my_stone_diff(-10.0, "kuroobi", "kuroobi"), -10);
-        assert_eq!(my_stone_diff(-5.0, "kuroobi", "kuroobi"), -5);
-        assert_eq!(my_stone_diff(-7.0, "kuroobi", "kuroobi"), -7);
+        assert_eq!(my_stone_diff(2.0, "kuroobi", "kuroobi", false), 2);
+        assert_eq!(my_stone_diff(-10.0, "kuroobi", "kuroobi", false), -10);
+        assert_eq!(my_stone_diff(-5.0, "kuroobi", "kuroobi", false), -5);
+        assert_eq!(my_stone_diff(-7.0, "kuroobi", "kuroobi", false), -7);
         // Opponent first: negate.
         // ".18 1720 htz 2580 kuroobi s8r16 U -6.00" = kuroobi wins by 6.
-        assert_eq!(my_stone_diff(-6.0, "htz", "kuroobi"), 6);
-        assert_eq!(my_stone_diff(2.0, "htz", "kuroobi"), -2);
+        assert_eq!(my_stone_diff(-6.0, "htz", "kuroobi", false), 6);
+        assert_eq!(my_stone_diff(2.0, "htz", "kuroobi", false), -2);
         // A draw is 0 either way.
-        assert_eq!(my_stone_diff(0.0, "kuroobi", "kuroobi"), 0);
-        assert_eq!(my_stone_diff(0.0, "htz", "kuroobi"), 0);
+        assert_eq!(my_stone_diff(0.0, "kuroobi", "kuroobi", false), 0);
+        assert_eq!(my_stone_diff(0.0, "htz", "kuroobi", false), 0);
+    }
+
+    /// Synchro lines carry the per-board mean; the pair is one game and
+    /// its margin is the sum. Values from real matches: `.69` boards
+    /// -18/-2 with the line at -10.00, `.40` boards +34/-2 at +16.00.
+    #[test]
+    fn a_synchro_margin_is_the_sum_of_both_boards() {
+        assert_eq!(my_stone_diff(-10.0, "kuroobi", "kuroobi", true), -20);
+        assert_eq!(my_stone_diff(16.0, "kuroobi", "kuroobi", true), 32);
+        assert_eq!(my_stone_diff(7.0, "kuroobi", "kuroobi", true), 14);
+        // Sign still follows the first name.
+        assert_eq!(my_stone_diff(-1.0, "piglet", "kuroobi", true), 2);
+        // Halves round away from zero, as the server halved an integer.
+        assert_eq!(my_stone_diff(0.5, "kuroobi", "kuroobi", true), 1);
     }
 
     /// Undo/abort requests; format captured live (undocumented).

@@ -602,10 +602,13 @@ export function RateChart({ points, height = 74, width = 300, axes, dates, label
   );
 }
 
-export function ResultRow({ win, draw, opponent, discs, when, note, rating, dim, picked, onHover, onClick }: {
+export function ResultRow({ win, draw, adjourned, opponent, discs, when, note, rating, dim, picked, onHover, onClick }: {
   win: boolean;
   /** Draw; rounding to win/lose turns 0-disc games into losses. */
   draw?: boolean;
+  /** No result at all (opponent left). Without this an adjourned game
+   *  is neither a win nor a draw, so it rendered as "loss, 0 discs". */
+  adjourned?: boolean;
   opponent: string;
   discs: number;
   /** End time (display string). */
@@ -624,8 +627,10 @@ export function ResultRow({ win, draw, opponent, discs, when, note, rating, dim,
   onClick?: () => void;
 }) {
   const body = <>
-    <span style={{ width: 24, flex: 'none', color: draw ? 'var(--sub)' : win ? 'var(--ok)' : 'var(--bad)' }}>
-      {t(draw ? 'data.result.draw' : win ? 'data.result.win' : 'data.result.loss')}
+    <span style={{ width: 24, flex: 'none',
+                   color: adjourned || draw ? 'var(--sub)' : win ? 'var(--ok)' : 'var(--bad)' }}>
+      {t(adjourned ? 'data.result.adjourned'
+         : draw ? 'data.result.draw' : win ? 'data.result.win' : 'data.result.loss')}
     </span>
     <span className="k-sel" style={{ flex: 1, minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
       {opponent}
@@ -637,7 +642,7 @@ export function ResultRow({ win, draw, opponent, discs, when, note, rating, dim,
     )}
     <span style={{ width: 44, flex: 'none', textAlign: 'right', color: 'var(--sub)',
                    fontVariantNumeric: 'tabular-nums' }}>
-      {discs > 0 ? '+' + discs : discs}
+      {adjourned ? '\u2014' : discs > 0 ? '+' + discs : discs}
     </span>
     {rating != null && (
       <span style={{ width: 60, flex: 'none', textAlign: 'right', color: 'var(--sub)',

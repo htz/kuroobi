@@ -190,6 +190,7 @@ data:
   rate:
     empty: "No history yet"
   result:
+    adjourned: "A"
     draw: "D"
     loss: "L"
     open_in_study: "Open in study"

@@ -186,6 +186,7 @@ data:
   rate:
     empty: "まだ記録がありません"
   result:
+    adjourned: "断"
     draw: "分"
     loss: "負"
     open_in_study: "検討で開く"

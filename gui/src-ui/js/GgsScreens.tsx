@@ -1517,6 +1517,9 @@ function GgsResults({ snap, onKifu }: {
                        setHover(on ? (i < 0 ? null : i) : null);
                      }}
                      win={(r.my_diff ?? 0) > 0} draw={r.my_diff === 0}
+                     // No score at all (opponent left): neither a win
+                     // nor a draw, so it used to render as "loss, 0".
+                     adjourned={r.my_diff == null}
                      discs={r.my_diff ?? 0} when={fmtDay(r.at)}
                      note={cur === 'all' ? gtypeLabel(baseType(r.base, r.raw)) : undefined}
                      rating={r.my_rating}
