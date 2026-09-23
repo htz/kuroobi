@@ -1,33 +1,4 @@
-//! GTP server around [`kuroobi::engine::Engine`], so this build can be driven
-//! as an external opponent by `roundrobin` (or any GTP driver).
-//!
-//! Why this exists: the NNUE accumulator width `H` is a compile-time
-//! constant, so two models with different H cannot share a process, and
-//! a single-process A-vs-B harness could not judge H experiments
-//! head-to-head. Separate processes can pit any two builds against each
-//! other, and `roundrobin` already speaks GTP — so this speaks GTP too.
-//!
-//! ```sh
-//! cargo build --release --bin gtp                      # H=16 side
-//! (cd ../wt-h64 && cargo build --release --bin gtp)    # H=64 side
-//!
-//! ./target/release/roundrobin --games 400 --time-ms 300 \
-//!   --engine h16=kuroobi=./target/release/gtp \
-//!   --engine h64=kuroobi=../wt-h64/target/release/gtp
-//! ```
-//!
-//! Use `--time-ms` to include speed differences: fixed depth ignores
-//! them and overrates slow-but-smart models.
-//!
-//! Accepts the match driver's flag spelling (`-gtp -l <depth> -t <threads>
-//! -nobook -q`) so it needs no special case there.
-//!
-//! Usage:
-//!   gtp [-gtp] [-l <depth>] [-t <threads>] [-nobook] [-q]
-//!       [--solve-empties <n>] [--time-ms <n>] [--band <n>] [--no-mpc]
-//!       [--weights <path>] [--nnue <path>] [--patterns nnue|linear]
-//!       [--patterns-file <spec>]
-//!       [--book <path>]
+//! GTP server around [`kuroobi::engine::Engine`], so this build can be driven as an external opponent by `roundrobin` (or any GTP driver).
 
 use std::io::{BufRead, Write};
 use std::path::PathBuf;
@@ -37,7 +8,6 @@ use std::time::{Duration, Instant};
 use kuroobi::engine::{Engine, EngineConfig};
 use kuroobi::{Board, Color, Position};
 
-/// Parse `a1`..`h8` into a Position (`index()` is file*8 + rank).
 fn parse_vertex(s: &str) -> Option<Position> {
     let b = s.as_bytes();
     if b.len() < 2 {
@@ -65,7 +35,6 @@ fn parse_color(s: &str) -> Option<Color> {
     }
 }
 
-/// GTP responses end with a blank line after `= body`.
 fn ok(id: &str, body: &str) {
     let mut out = std::io::stdout().lock();
     let _ = writeln!(out, "={id} {body}\n");
@@ -78,10 +47,8 @@ fn err(id: &str, body: &str) {
     let _ = out.flush();
 }
 
-fn main() -> ExitCode {
+fn parse_args() -> Result<(EngineConfig, u64), ExitCode> {
     let mut cfg = EngineConfig {
-        // Measurement tool: book off by default (book moves break the
-        // evaluator comparison).
         use_book: false,
         ..Default::default()
     };
@@ -91,7 +58,6 @@ fn main() -> ExitCode {
     let mut it = std::env::args().skip(1);
     while let Some(a) = it.next() {
         match a.as_str() {
-            // The driver's spelling, accepted to leave the driver untouched.
             "-gtp" | "-q" | "--quiet" => {}
             "-nobook" | "--no-book" => cfg.use_book = false,
             "-l" | "--level" | "--depth" => {
@@ -99,7 +65,7 @@ fn main() -> ExitCode {
                     Some(v) => v,
                     None => {
                         eprintln!("-l wants a depth");
-                        return ExitCode::FAILURE;
+                        return Err(ExitCode::FAILURE);
                     }
                 }
             }
@@ -110,10 +76,7 @@ fn main() -> ExitCode {
             }
             "--band" => cfg.band = it.next().and_then(|v| v.parse().ok()).unwrap_or(0),
             "--no-mpc" => cfg.mpc = false,
-            // Head's first layer in f32; see `EngineConfig::head_f32`.
             "--head-f32" => cfg.head_f32 = true,
-            // Steps per disc on the head's int8 activation; see
-            // `EngineConfig::act_units`.
             "--act-units" => {
                 cfg.act_units = it
                     .next()
@@ -134,7 +97,6 @@ fn main() -> ExitCode {
                     }
                 }
             }
-            // A candidate set lives in a spec file, not in a `const`.
             "--patterns-file" => {
                 let path = PathBuf::from(it.next().unwrap_or_default());
                 cfg.nnue_patterns = match kuroobi::pattern::resolve("", Some(&path)) {
@@ -151,16 +113,21 @@ fn main() -> ExitCode {
             }
             other => {
                 eprintln!("unknown argument {other}");
-                return ExitCode::FAILURE;
+                return Err(ExitCode::FAILURE);
             }
         }
     }
-    /* A depth-N search reads N-or-fewer empties to the end anyway;
-    align the solve entry with depth or endgame depth silently diverges
-    between engines (a level table that sets the two apart is the trap). */
     if !solve_set {
         cfg.solve_empties = cfg.depth.min(u8::MAX as u32) as u8;
     }
+    Ok((cfg, time_ms))
+}
+
+fn main() -> ExitCode {
+    let (cfg, time_ms) = match parse_args() {
+        Ok(v) => v,
+        Err(code) => return code,
+    };
 
     let mut engine = match Engine::new(cfg) {
         Ok(e) => e,
@@ -171,8 +138,6 @@ fn main() -> ExitCode {
     };
 
     let mut board = Board::new();
-    /* NPS hook: only genmove spans count, excluding startup, replay
-    and I/O. */
     let mut tot_nodes = 0u64;
     let mut tot_secs = 0f64;
     let stdin = std::io::stdin();
@@ -184,7 +149,6 @@ fn main() -> ExitCode {
         }
         let mut parts = line.split_whitespace();
         let first = parts.next().unwrap_or("");
-        // GTP allows a numeric id prefix; echo it in the response.
         let (id, cmd) = match first.parse::<u64>() {
             Ok(_) => (first.to_string(), parts.next().unwrap_or("").to_string()),
             Err(_) => (String::new(), first.to_string()),
@@ -227,8 +191,6 @@ fn main() -> ExitCode {
             "komi" => ok(&id, ""),
             "clear_board" => {
                 board = Board::new();
-                /* Clear tables per game; carried-over warmth skews even
-                same-weights self-play to 42%. */
                 engine.clear_tables();
                 ok(&id, "");
             }
@@ -240,10 +202,6 @@ fn main() -> ExitCode {
                     err(&id, "syntax error");
                     continue;
                 };
-                /* Insert a pass when the color mismatches: GTP has no
-                explicit forced pass. But never skip a side with legal
-                moves — swallowing a driver-side turn error would quietly
-                corrupt the board. */
                 if board.player() != color {
                     if board.movable() != 0 {
                         err(&id, "not your turn");
@@ -311,7 +269,6 @@ fn main() -> ExitCode {
     ExitCode::SUCCESS
 }
 
-/// Search-span totals to stderr, never mixed into GTP responses.
 fn report(nodes: u64, secs: f64) {
     if nodes > 0 {
         let nps = nodes as f64 / secs.max(1e-9);

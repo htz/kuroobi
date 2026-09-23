@@ -1,30 +1,4 @@
 //! Trainer for the linear pattern evaluator ([`kuroobi::linear`]).
-//!
-//! Usage:
-//!   linear_train [OPTIONS] <data-file>...
-//!
-//! Data files are `kuroobi::record` files (kifu2data and gendata output).
-//!
-//! Options:
-//!   --epochs <n>      Number of passes over all examples (default 10)
-//!   --lr <f>          Adam learning rate (default 0.01)
-//!   --weights <path>  Weight file to load (if it exists) and save
-//!                     (default weights.bin, saved after every epoch)
-//!   --limit <n>       Use at most n examples per file (default all)
-//!   --max-examples <n> Examples held in RAM at once (default 64M, 0 = all)
-//!   --log <path>      Append per-epoch stage losses as CSV
-//!   --gpu             Train on the GPU (build with --features gpu)
-//!   --minibatch <n>   Positions per GPU step (default 8192)
-//!   --cosine          Anneal the rate to ~0 over the run, stepped per shard
-//!   --search-value-to-ply <n>  Take the search value up to ply n, the
-//!                     game's result after (the NNUE corpus's teacher)
-//!   --drop-random     Drop positions whose move was random
-//!   --keep-above-ply <n>  From this ply on, keep everything
-//!   --min-ply <n>     Drop positions before this ply
-//!
-//! Data too large to fit in RAM is trained in **shards**: whole files are
-//! grouped up to `--max-examples`, and each epoch walks every shard, loading
-//! and dropping one at a time.
 
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
@@ -39,13 +13,8 @@ use kuroobi::trainer::{
     count_examples_binary, load_examples_filtered_into, EpochStats, Example, Trainer,
 };
 
-/// Examples kept in RAM at once when `--max-examples` is not given.
-/// An `Example` is 24 bytes, so this caps the sample buffer at ~1.5 GB —
-/// small enough to leave room for the 150 MB weight tables and the OS, and
-/// large enough that a shard is many minutes of training, not seconds.
 const DEFAULT_MAX_EXAMPLES: usize = 64_000_000;
 
-/// Bytes per `Example` in memory, for the reported budget.
 const EXAMPLE_BYTES: usize = std::mem::size_of::<Example>();
 
 struct Args {
@@ -293,22 +262,13 @@ fn parse_args() -> Result<Args, String> {
             }
             "--log" => args.log_path = Some(PathBuf::from(value("--log")?)),
             "--val" => args.val_files.push(PathBuf::from(value("--val")?)),
-            /* The NNUE runs anneal the rate to zero over the whole run
-            rather than decaying it geometrically, and a linear model
-            trained beside one has to be on the same schedule for the two
-            to be comparable. */
             "--cosine" => args.cosine = true,
-            /* The CPU path applies 512 sequential Adam steps per position
-            on one core; the GPU sums a batch's touches of a cell and takes
-            one step, which is the only shape of this work a GPU can run. */
             "--gpu" => args.gpu = true,
             "--minibatch" => {
                 args.minibatch = value("--minibatch")?
                     .parse()
                     .map_err(|e| format!("--minibatch: {e}"))?
             }
-            // The teacher the NNUE corpus is read under; without these the
-            // two models fit different targets on the same files.
             "--search-value-to-ply" => {
                 args.search_value_to_ply = Some(
                     value("--search-value-to-ply")?
@@ -402,11 +362,6 @@ fn parse_args() -> Result<Args, String> {
         }
     }
 
-    // Optimizer-appropriate default learning rate.
-    // SGD: each of the 64 active cells moves by lr*err and is read back, so
-    // the per-step contraction is (1 - 64*lr); lr = 0.002 gives a stable,
-    // fast 12.8%/step pull. (This matches the Go trainer's regime: lr 0.01
-    // there is applied WITHOUT symmetry-augmented repeat visits per sample.)
     if args.learning_rate.is_nan() {
         args.learning_rate = match args.optimizer {
             OptimizerKind::Sgd => 0.002,
@@ -422,25 +377,16 @@ fn parse_args() -> Result<Args, String> {
             "--gpu is the Adam path; pass --optimizer adam (the GPU sums a\n             batch's touches of a cell, which sgd's per-example step is not)",
         ));
     }
-    if args.optimizer == OptimizerKind::Sgd {
-        // One run, one stage, one thread. The stages are independent tables,
-        // so a run aimed at several of them is several runs sharing a process
-        // -- and it is worse than several processes: the rate schedule, the
-        // stall counters and the retirement clock all advance on whichever
-        // stage happens to finish an epoch, and every epoch re-reads examples
-        // for stages it is not training.
-        if args.stages_lo != args.stages_hi {
-            return Err(format!(
-                "one run trains one stage: pass --stage N (got {}-{}). \
-                 To cover several, run one process per stage.",
-                args.stages_lo, args.stages_hi
-            ));
-        }
+    if args.optimizer == OptimizerKind::Sgd && args.stages_lo != args.stages_hi {
+        return Err(format!(
+            "one run trains one stage: pass --stage N (got {}-{}). \
+             To cover several, run one process per stage.",
+            args.stages_lo, args.stages_hi
+        ));
     }
     Ok(args)
 }
 
-/// The records to keep, from the run's flags.
 fn filter_of(args: &Args) -> Filter {
     Filter {
         min_ply: args.min_ply,
@@ -450,14 +396,12 @@ fn filter_of(args: &Args) -> Filter {
     }
 }
 
-/// Which teacher to read, from the run's flags.
 fn policy_of(args: &Args) -> TeacherPolicy {
     TeacherPolicy {
         search_value_to_ply: args.search_value_to_ply,
     }
 }
 
-/// Append one file's examples to `out`, returning how many were added.
 fn load_file_into(
     path: &Path,
     limit: Option<usize>,
@@ -468,17 +412,11 @@ fn load_file_into(
     load_examples_filtered_into(path, out, limit, filter, policy)
 }
 
-/// The dataset, sized but not loaded.
-///
-/// Counts come from file sizes so shards can be planned without
-/// reading 16 GB first; each file's entry is replaced by the true count once
-/// that file has actually been loaded.
 struct DataPlan {
     files: Vec<PathBuf>,
     counts: Vec<usize>,
 }
 
-/// A group of whole files that fit in the memory budget together.
 struct Shard {
     files: Vec<usize>,
     examples: usize,
@@ -488,7 +426,6 @@ impl DataPlan {
     fn new(files: Vec<PathBuf>, limit: Option<usize>) -> std::io::Result<DataPlan> {
         let mut counts = Vec::with_capacity(files.len());
         for f in &files {
-            // Records are fixed-width so the count is exact.
             let est = count_examples_binary(f)?;
             counts.push(limit.map_or(est, |l| est.min(l)));
         }
@@ -499,10 +436,6 @@ impl DataPlan {
         self.counts.iter().sum()
     }
 
-    /// Group files into shards no larger than `max` examples.
-    ///
-    /// `order` lets the caller vary which files share a shard between epochs,
-    /// so a fixed grouping does not become a fixed correlation in the data.
     fn shards(&self, order: &[usize], max: Option<usize>) -> Vec<Shard> {
         let mut shards: Vec<Shard> = Vec::new();
         let mut cur = Shard {
@@ -530,13 +463,10 @@ impl DataPlan {
     }
 }
 
-/// xorshift64* — a deterministic stream, seeded per epoch and shard so runs
-/// reproduce exactly while the ordering still differs between passes.
 struct Rng(u64);
 
 impl Rng {
     fn new(seed: u64) -> Rng {
-        // Any nonzero state works; mixing in a constant keeps seed 0 usable.
         Rng(seed ^ 0x9E37_79B9_7F4A_7C15)
     }
 
@@ -547,7 +477,6 @@ impl Rng {
         self.0.wrapping_mul(0x2545_F491_4F6C_DD1D)
     }
 
-    /// In-place Fisher-Yates.
     fn shuffle<T>(&mut self, items: &mut [T]) {
         for i in (1..items.len()).rev() {
             let j = (self.next() % (i as u64 + 1)) as usize;
@@ -605,10 +534,6 @@ fn append_log(
     Ok(())
 }
 
-/// The stage size the default rates were tuned at, used to normalise the
-/// rate for stages holding more or fewer examples. A midgame stage of this
-/// corpus; nothing about the number matters except that it is fixed, so that
-/// a rate means the same amount of movement whichever stage a run is given.
 const REFERENCE_EXAMPLES: f64 = 12_500_000.0;
 
 fn main() -> ExitCode {
@@ -622,10 +547,6 @@ fn main() -> ExitCode {
 
     let patterns = LINEAR_PATTERNS;
 
-    // Size the dataset from file metadata only. Loading it all up front used
-    // to be the "read once, reuse across epochs" optimization, but at 16 GB
-    // on disk (and ~1.4x that in RAM) the machine dies before epoch 1; past
-    // a few GB the re-read is a rounding error next to the training itself.
     let mut plan = match DataPlan::new(args.data_files.clone(), args.limit) {
         Ok(p) => p,
         Err(e) => {
@@ -649,7 +570,6 @@ fn main() -> ExitCode {
         ),
         _ => println!("shards: 1 (whole dataset fits the budget)"),
     }
-    // A file bigger than the budget cannot be split — shards are whole files.
     if let Some(max) = args.max_examples {
         for (f, &n) in plan.files.iter().zip(&plan.counts) {
             if n > max {
@@ -664,12 +584,6 @@ fn main() -> ExitCode {
         }
     }
 
-    // Held-out set for an honest per-epoch signal, loaded once and kept
-    // resident (it is small relative to training). The in-epoch training MSE
-    // is measured on moving weights and is a poor stopping signal.
-    /* The corpus holds both a search value and the game's result per
-    record; which one is the teacher, and which records are dropped, has to
-    be the same for val as for training or the number measures nothing. */
     let filter = filter_of(&args);
     let policy = policy_of(&args);
     println!("teacher: {}", policy.describe());
@@ -680,10 +594,6 @@ fn main() -> ExitCode {
             return ExitCode::FAILURE;
         }
     }
-    /* A run aimed at part of the board scores only that part, but the
-    held-out set covers all sixty-one stages and every epoch walked all of
-    it. On the opening stages that was the whole epoch: fourteen training
-    positions against 211k scored ones. */
     if args.stages_lo > 0 || args.stages_hi < STAGE_COUNT - 1 {
         let before = val.len();
         val.retain(|e| {
@@ -702,7 +612,6 @@ fn main() -> ExitCode {
         println!("val: {} held-out examples", fmt_count(val.len()));
     }
 
-    // Linear: resume from an existing weight file when present
     let mut linear = Linear::new(patterns);
     if args.weights_path.exists() {
         match linear.load_weights(&args.weights_path) {
@@ -716,8 +625,6 @@ fn main() -> ExitCode {
         println!("starting from zero weights");
     }
 
-    // Ctrl-C requests a graceful stop: the current epoch finishes, weights
-    // are saved, and the loop exits cleanly. A second Ctrl-C force-quits.
     let interrupted = Arc::new(AtomicBool::new(false));
     {
         let flag = interrupted.clone();
@@ -749,11 +656,6 @@ fn main() -> ExitCode {
     }
 }
 
-/// Render an in-place progress bar on stderr:
-/// `epoch 3/100 shard 2/15 [=====>    ]  45.2%  12.3M/25.5M  33k pos/s  ETA 6m32s`
-///
-/// `done`/`total` count the whole epoch, not the current shard, so the bar
-/// advances monotonically across shard boundaries.
 fn draw_progress(
     epoch: usize,
     epochs: usize,
@@ -764,7 +666,6 @@ fn draw_progress(
 ) {
     const BAR_WIDTH: usize = 24;
 
-    // Text-file counts are estimates, so `done` can overshoot `total`.
     let frac = if total == 0 {
         1.0
     } else {
@@ -813,21 +714,12 @@ fn draw_progress(
     let _ = std::io::Write::flush(&mut std::io::stderr());
 }
 
-/// One stage's trainable parameters: the pattern tables and the disc-count
-/// table, as [`Linear::stage_weights`] hands them over.
 type StageSnapshot = (Vec<Vec<f32>>, Vec<f32>);
 
-/// Held-out error broken down by game stage: `[count, sum_sq, sum_abs]`.
-///
-/// The stages are independent tables, so a single pooled number can hide one
-/// stage improving while another rots -- they net out. Scoring each stage on
-/// its own is what lets the best epoch be chosen per stage.
 fn val_by_stage(linear: &Linear, val: &[Example]) -> Vec<[f64; 4]> {
     let mut acc = vec![[0.0f64; 4]; STAGE_COUNT];
     for ex in val {
         let board = ex.board();
-        // Prediction minus truth, so a positive mean reads as "this model
-        // scores positions high".
         let e = linear.eval(&board) as f64 - ex.score as f64;
         let a = &mut acc[Linear::stage(&board)];
         a[0] += 1.0;
@@ -838,26 +730,6 @@ fn val_by_stage(linear: &Linear, val: &[Example]) -> Vec<[f64; 4]> {
     acc
 }
 
-/// What a stage's error looks like once its constant part is separated out.
-///
-/// A stage's mean error is a constant offset on every position it scores.
-/// Move ordering never sees it: the moves compared at a node are all one
-/// ply deeper, hence all in the same stage, so a per-stage constant cancels
-/// in the argmax. What is left -- the spread around that constant -- is the
-/// part that can reorder moves.
-///
-/// Measured, the difference is not academic. Against the same positions the
-/// H=64 network scores MAE 5.493 to the linear model's 4.621 and *loses* on
-/// that number, yet it carries a +3.75 offset: take the offset out and its
-/// spread is 5.356 against 6.131, and it wins 63-28 over the board. Ranked
-/// by spread, five evaluators came out in exactly their head-to-head order;
-/// ranked by MAE, the strongest of them placed fourth.
-///
-/// The offset is not free everywhere, which is why it is reported rather
-/// than discarded: a midgame score meets an exact endgame value at the
-/// solver boundary, aspiration windows carry a bound across depths, and the
-/// selective-search margins are calibrated in discs. All three compare
-/// numbers that a per-stage offset does move.
 fn select_score(which: &str, a: &[f64; 4]) -> f64 {
     let (mse, mae, _, sd) = stage_stats(a);
     match which {
@@ -875,9 +747,6 @@ fn stage_stats(a: &[f64; 4]) -> (f64, f64, f64, f64) {
     (mse, mae, bias, (mse - bias * bias).max(0.0).sqrt())
 }
 
-/// Mean squared error of `evaluator` over a held-out set, sharded across
-/// `threads`. This scores the frozen weights (no updates), so unlike the
-/// in-epoch training MSE it is a clean early-stopping signal.
 fn val_mse(linear: &Linear, val: &[Example], threads: usize) -> f64 {
     if val.is_empty() {
         return f64::NAN;
@@ -911,10 +780,6 @@ fn val_mse(linear: &Linear, val: &[Example], threads: usize) -> f64 {
     sum / val.len() as f64
 }
 
-/// Running mean of the per-epoch weight files, for Stochastic Weight
-/// Averaging. Folds each epoch's serialized weights (the `save_weights`
-/// output) so it never has to reach into the evaluator's internals: the
-/// header is captured once and the f32 payload is averaged in f64.
 struct SwaAccumulator {
     header: Vec<u8>,
     sum: Vec<f64>,
@@ -923,12 +788,9 @@ struct SwaAccumulator {
 }
 
 impl SwaAccumulator {
-    /// Fold the current `weights_path` file into the mean.
     fn fold(&mut self, weights_path: &Path) -> std::io::Result<()> {
         let bytes = std::fs::read(weights_path)?;
         if self.header.is_empty() {
-            // Header = magic(8) + stage u32 + pattern u32 + table_size u32
-            // each; capture it once and average the f32 payload thereafter.
             let pattern_count = u32::from_le_bytes(bytes[12..16].try_into().unwrap()) as usize;
             let header_len = 16 + 4 * pattern_count;
             self.header = bytes[..header_len].to_vec();
@@ -943,7 +805,6 @@ impl SwaAccumulator {
         Ok(())
     }
 
-    /// Write the mean to `<weights>.swa`. Returns false if nothing was folded.
     fn write(&self) -> std::io::Result<bool> {
         if self.count == 0 {
             return Ok(false);
@@ -961,10 +822,6 @@ impl SwaAccumulator {
     }
 }
 
-/// The rate for one shard under `--cosine`, or the flat rate without it.
-///
-/// Stepped per shard rather than per epoch: with seventeen shards an epoch,
-/// a per-epoch step would hold one rate for hours and then jump.
 fn cosine_lr(args: &Args, epoch: usize, si: usize, n_shards: usize) -> f32 {
     if !args.cosine {
         return args.learning_rate;
@@ -974,6 +831,57 @@ fn cosine_lr(args: &Args, epoch: usize, si: usize, n_shards: usize) -> f32 {
     ETA_MIN
         + (args.learning_rate - ETA_MIN) * 0.5 * (1.0 + (std::f32::consts::PI * t.min(1.0)).cos())
 }
+struct StageState {
+    lr: Vec<f32>,
+    stale: Vec<usize>,
+    done: [bool; STAGE_COUNT],
+    since_best: Vec<usize>,
+    age: Vec<usize>,
+    age_at_halve: Vec<usize>,
+    prev: Vec<f64>,
+    counts: Vec<usize>,
+    best: Vec<f64>,
+    snap: Vec<Option<StageSnapshot>>,
+}
+
+impl StageState {
+    fn new(lr: f32) -> Self {
+        StageState {
+            lr: vec![lr; STAGE_COUNT],
+            stale: vec![0; STAGE_COUNT],
+            done: [false; STAGE_COUNT],
+            since_best: vec![0; STAGE_COUNT],
+            age: vec![0; STAGE_COUNT],
+            age_at_halve: vec![0; STAGE_COUNT],
+            prev: vec![f64::INFINITY; STAGE_COUNT],
+            counts: vec![0; STAGE_COUNT],
+            best: vec![f64::INFINITY; STAGE_COUNT],
+            snap: vec![None; STAGE_COUNT],
+        }
+    }
+}
+fn load_shard(
+    shard: &Shard,
+    plan: &mut DataPlan,
+    args: &Args,
+    filter: &Filter,
+    policy: &TeacherPolicy,
+    examples: &mut Vec<Example>,
+) -> Result<(), PathBuf> {
+    examples.clear();
+    for &fi in &shard.files {
+        let before = examples.len();
+        let path = &plan.files[fi];
+        match load_file_into(path, args.limit, examples, filter, policy) {
+            Ok(_) => plan.counts[fi] = examples.len() - before,
+            Err(e) => {
+                eprintln!("{e}");
+                return Err(path.clone());
+            }
+        }
+    }
+    Ok(())
+}
 
 fn run_epochs<O: Optimizer>(
     mut trainer: Trainer<O>,
@@ -982,15 +890,6 @@ fn run_epochs<O: Optimizer>(
     val: &[Example],
     interrupted: &AtomicBool,
 ) -> ExitCode {
-    // SGD always goes through the per-stage path, one thread, one stage.
-    //
-    // There used to be two: a threaded one that read per-stage rates and
-    // per-cell counts, and a single-threaded one that read neither. Anything
-    // added to the first was silently inert under `--threads 1` -- per-cell
-    // scaling was, and the raw rate it then trained at read as the scaling
-    // diverging. Parallelism belongs between processes here anyway: a run
-    // aimed at one stage only ever wakes one worker, so eight stages want
-    // eight processes, not eight threads.
     let parallel = args.optimizer == OptimizerKind::Sgd;
     let filter = filter_of(args);
     let policy = policy_of(args);
@@ -1009,100 +908,15 @@ fn run_epochs<O: Optimizer>(
         eprintln!("--gpu needs a build with `--features gpu`");
         return ExitCode::FAILURE;
     }
-    // One buffer for the whole run: after the first shard it already holds
-    // enough capacity, so later shards reuse the allocation instead of
-    // handing the allocator a multi-gigabyte free/alloc pair every time.
     let mut examples: Vec<Example> = Vec::new();
-    // Best val MSE seen and where its weights live (<weights>.best).
     let mut best_val = f64::INFINITY;
-    // Best held-out MSE seen per stage, and the weights that scored it.
-    // Assembling these at the end gives a model whose every stage is the
-    // best that stage reached, which no single epoch need be.
-    // Running rate for `--plateau`: held while the model still moves and
-    // halved when it stops, rather than decayed on a schedule that has no
-    // way of knowing whether there was anything left to learn.
     let mut cur_lr = args.learning_rate;
     let mut stale = 0usize;
-    // One rate and one stall counter per stage. A stage that stopped moving
-    // has finished with its rate whether or not the others have: they are
-    // independent tables fed by different numbers of examples, and a single
-    // shared rate is necessarily wrong for most of them.
-    let mut stage_lr = vec![args.learning_rate; STAGE_COUNT];
-    let mut stage_stale = vec![0usize; STAGE_COUNT];
-    // Stages that have stopped improving for `--patience` epochs. They keep
-    // the weights that scored their best and take no further updates.
-    let mut stage_done = [false; STAGE_COUNT];
-    let mut stage_since_best = vec![0usize; STAGE_COUNT];
-    // Epochs since the best moved, never reset by anything but a new best.
-    // `stage_since_best` forgives a descent; this one does not, so a score
-    // that merely wobbles still runs the clock down.
-    let mut stage_age = vec![0usize; STAGE_COUNT];
-    // `stage_age` when the rate was last halved, so the ceiling below fires
-    // once per interval rather than every epoch after it is first crossed.
-    let mut stage_age_at_halve = vec![0usize; STAGE_COUNT];
-    // Last epoch's score per stage, for deciding whether the rate is still
-    // doing work.
-    let mut stage_prev = vec![f64::INFINITY; STAGE_COUNT];
+    let mut stage = StageState::new(args.learning_rate);
     let mut counted_shards: Vec<usize> = Vec::new();
-    // Scale each stage's rate by how many examples it gets.
-    //
-    // One SGD epoch moves a stage by roughly (examples * rate), and the
-    // stages differ by orders of magnitude in how many examples they see --
-    // a corpus opened with N random plies has nothing before stage N, and
-    // the opening stages exist in only a handful of distinct positions. A
-    // shared rate therefore overshoots the thin stages and barely moves the
-    // thick ones, which is exactly what the logs showed: empties 47 swinging
-    // 5.1 -> 8.5 while empties 3 crept by 0.03 an epoch. Normalising by the
-    // count equalises the per-epoch movement, so the rates start in the
-    // right place instead of being searched for by halving.
     let mut stage_lr_seeded = false;
-    // Stage counts accumulated over a whole epoch. One shard cannot show the
-    // imbalance -- every shard holds roughly the same mix -- so the rates are
-    // seeded at the end of epoch 1, once the full corpus has been counted.
-    let mut stage_counts = vec![0usize; STAGE_COUNT];
-    let mut stage_best = vec![f64::INFINITY; STAGE_COUNT];
-    let mut stage_snap: Vec<Option<StageSnapshot>> = vec![None; STAGE_COUNT];
-    // Enter the starting weights as each stage's incumbent.
-    //
-    // Without this the first epoch wins every stage by default, however much
-    // worse it is, and the assembly can only be compared to where it started
-    // by pooling the stages back into one number -- which is the comparison
-    // per-stage selection exists to get away from. Seeded this way a stage
-    // keeps what it had unless an epoch actually beats it, so the assembly is
-    // at least as good as the start point *in every stage*, and there is
-    // nothing left to check globally.
     if args.per_stage_best && !val.is_empty() {
-        let acc = val_by_stage(&trainer.linear, val);
-        let mut seeded = 0usize;
-        for (st, a) in acc.iter().enumerate() {
-            if a[0] == 0.0 {
-                continue;
-            }
-            stage_best[st] = select_score(&args.select_by, a);
-            stage_snap[st] = Some(trainer.linear.stage_weights(st));
-            seeded += 1;
-        }
-        println!("baseline: {seeded} stages seeded from the starting weights");
-        println!(
-            "  stage  empties       n      MSE      MAE     bias   spread  (selecting on {})",
-            args.select_by
-        );
-        for (st, a) in acc.iter().enumerate() {
-            if a[0] == 0.0 || st < args.stages_lo || st > args.stages_hi {
-                continue;
-            }
-            let (mse, mae, bias, sd) = stage_stats(a);
-            println!(
-                "  {:>5}  {:>7}  {:>6}  {:>7.3}  {:>7.3}  {:>+7.3}  {:>7.3}",
-                st,
-                60 - st,
-                a[0] as u64,
-                mse,
-                mae,
-                bias,
-                sd
-            );
-        }
+        seed_stage_best(&trainer.linear, args, val, &mut stage);
     }
     let best_path = {
         let mut p = args.weights_path.clone().into_os_string();
@@ -1128,9 +942,6 @@ fn run_epochs<O: Optimizer>(
     for epoch in 1..=args.epochs {
         let t = Instant::now();
 
-        // Vary which files share a shard between epochs: within a shard the
-        // examples are shuffled, but a fixed grouping would still mean two
-        // files never mix, and these sources differ systematically.
         let mut order: Vec<usize> = (0..plan.files.len()).collect();
         if epoch > 1 {
             Rng::new(epoch as u64).shuffle(&mut order);
@@ -1141,46 +952,15 @@ fn run_epochs<O: Optimizer>(
         let mut stats = EpochStats::default();
         let mut done = 0usize;
         for (si, shard) in shards.iter().enumerate() {
-            examples.clear();
-            for &fi in &shard.files {
-                let before = examples.len();
-                match load_file_into(&plan.files[fi], args.limit, &mut examples, &filter, &policy) {
-                    // Replace the size-derived estimate with the true count,
-                    // so the progress bar stops guessing from epoch 2 on.
-                    Ok(_) => plan.counts[fi] = examples.len() - before,
-                    Err(e) => {
-                        eprintln!("\nfailed to load {}: {e}", plan.files[fi].display());
-                        return ExitCode::FAILURE;
-                    }
-                }
+            if let Err(path) = load_shard(shard, plan, args, &filter, &policy, &mut examples) {
+                eprintln!("\nfailed to load {}", path.display());
+                return ExitCode::FAILURE;
             }
-            // SGD assumes IID sample order, but these datasets are grossly
-            // ordered (per-opening-depth files, per-source directories);
-            // training in file order makes the model drift toward whichever
-            // source came last and the epoch loss creep upward.
             Rng::new((epoch as u64) << 32 | si as u64).shuffle(&mut examples);
 
-            // Counts belong to the data, not to a threading mode: the
-            // single-threaded path calls the same `train_shared`. Counting
-            // only inside the parallel branch left `--threads 1 --cell-lr`
-            // silently training at the raw rate -- which is what turned a
-            // rate of 0.1 into NaN and looked like per-cell scaling
-            // diverging.
             if args.cell_lr && !counted_shards.contains(&si) {
-                trainer
-                    .linear
-                    .count_appearances(examples.iter().map(|e| e.board()));
                 counted_shards.push(si);
-                trainer.linear.set_min_appear(args.min_appear);
-                for st in args.stages_lo..=args.stages_hi.min(STAGE_COUNT - 1) {
-                    if let Some((seen, unseen, q)) = trainer.linear.appearance_spread(st) {
-                        println!(
-                            "  cell counts stage {st}: {seen} seen, {unseen} unseen, \
-                             min {} p1 {} median {} p99 {} max {}",
-                            q[0], q[1], q[2], q[3], q[4]
-                        );
-                    }
-                }
+                count_cells(&mut trainer, args, &examples);
             }
 
             let progress = |n: usize, _total: usize| {
@@ -1194,52 +974,29 @@ fn run_epochs<O: Optimizer>(
                 );
             };
             let shard_stats = if parallel {
-                // One stage, this thread. `--stage` is required for sgd, so
-                // `stages_lo` is the stage and nothing else is touched.
                 let st = args.stages_lo;
                 if !stage_lr_seeded {
-                    stage_counts[st] += examples
+                    stage.counts[st] += examples
                         .iter()
                         .filter(|e| Linear::stage(&e.board()) == st)
                         .count();
                 }
-                let mut lr = if args.plateau > 0 {
-                    stage_lr[st]
-                } else {
-                    args.learning_rate * args.decay.powi(epoch as i32 - 1)
-                };
-                if stage_done[st] {
-                    lr = 0.0;
-                } else if args.warmup > 0 && epoch <= args.warmup {
-                    // Climb from a fifth of the rate to all of it.
-                    lr *= 0.2 + 0.8 * (epoch as f32 / args.warmup as f32);
-                }
+                let lr = stage_lr(args, &stage, epoch, st);
                 trainer.train_stage_epoch(&examples, st, lr, progress)
             } else if gpu.is_some() {
                 #[cfg(feature = "gpu")]
                 {
                     let g = gpu.as_mut().unwrap();
-                    /* Under --plateau the rate is the stage's own, cut
-                    when its held-out score stops moving and restored to
-                    its best if asked. A run aimed at one stage has one
-                    such rate, which is the whole point of aiming at one
-                    stage: the middlegame is still descending long after
-                    the endgame has finished. */
                     let mut lr_fn = || {
                         if args.plateau > 0 {
-                            stage_lr[args.stages_lo]
+                            stage.lr[args.stages_lo]
                         } else {
                             cosine_lr(args, epoch, si, shards.len())
                         }
                     };
                     let sq = g.train_shard(&examples, &mut lr_fn);
-                    // The evaluator's own tables are stale until this; val
-                    // and the save both read them, so pull them back every
-                    // shard.
                     g.download(&mut trainer.linear);
                     let mut st = EpochStats::default();
-                    // Eight rows per position, so the row count is what the
-                    // sum of squares was taken over.
                     st.loss_sum[0] = sq;
                     st.samples[0] = (examples.len() * kuroobi::linear::gpu::FORMS) as u64;
                     st
@@ -1247,17 +1004,11 @@ fn run_epochs<O: Optimizer>(
                 #[cfg(not(feature = "gpu"))]
                 unreachable!("the flag is refused without the feature")
             } else {
-                /* Anneal across the whole run, stepped per shard rather
-                than per epoch: with fifteen shards an epoch, a per-epoch
-                step would hold one rate for two hours and then jump. The
-                floor matches nnue_train's so the two sweeps end alike. */
                 if args.cosine {
                     trainer
                         .optimizer
                         .set_lr(cosine_lr(args, epoch, si, shards.len()));
                 }
-                // `train_pass`, not `train_stage_epoch`: the lr schedule
-                // advances once per epoch, not once per shard.
                 trainer.train_pass(&examples, progress)
             };
             stats.add(&shard_stats);
@@ -1282,12 +1033,9 @@ fn run_epochs<O: Optimizer>(
             trainer.optimizer.next_epoch();
         }
 
-        // Clear the progress line before printing the epoch summary
         eprint!("\r{:width$}\r", "", width = 90);
         let elapsed = t.elapsed().as_secs_f32();
         let per_sec = done as f32 / elapsed;
-        // The held-out score, if a val set was given. This is the honest
-        // signal; `stats.mse()` (train MSE) is measured on moving weights.
         let vm = if val.is_empty() {
             f64::NAN
         } else {
@@ -1295,269 +1043,26 @@ fn run_epochs<O: Optimizer>(
         };
         let is_best = vm < best_val; // false when vm is NaN (no val set)
         if !stage_lr_seeded && args.plateau > 0 {
-            // Scale the rate against a fixed reference, not against the other
-            // stages in this run -- there are none. One SGD epoch moves a
-            // stage by roughly (examples * rate), and the stages differ by
-            // several times in how many examples they hold: measured here,
-            // stage 19 has 12.5M and stage 51 has 44M. At one shared rate the
-            // endgame stages take three times the step, which is what sent
-            // empties 15 and 14 from 6.192 and 6.087 up to 6.300 and 6.361 in
-            // their first epoch while empties 21 came down.
-            //
-            // This used to normalise against the median stage of the run,
-            // which said something only because a run covered many stages.
-            // One stage per run makes that median the stage itself and the
-            // whole step a no-op.
             let st = args.stages_lo;
-            let c = stage_counts[st];
+            let c = stage.counts[st];
             if c > 0 {
-                // Clamp the ratio: a stage seen a hundred times must not be
-                // handed a rate a thousand times the base.
                 let ratio = (REFERENCE_EXAMPLES / c as f64).clamp(0.05, 20.0);
-                stage_lr[st] = args.learning_rate * ratio as f32;
+                stage.lr[st] = args.learning_rate * ratio as f32;
                 println!(
                     "stage {st} lr seeded from {c} examples: {} x{:.2} -> {}",
-                    args.learning_rate, ratio, stage_lr[st]
+                    args.learning_rate, ratio, stage.lr[st]
                 );
             }
             stage_lr_seeded = true;
         }
-        let mut improved = 0usize;
-        let mut stages_seen = 0usize;
-        if args.per_stage_best && !val.is_empty() {
-            let acc = val_by_stage(&trainer.linear, val);
-            println!("  stage  empties       n      MSE      MAE     bias   spread");
-            for (st, a) in acc.iter().enumerate() {
-                if a[0] == 0.0 {
-                    continue;
-                }
-                // Only the stages this run is training are worth printing or
-                // counting: the rest are pinned to the weights they loaded
-                // with and cannot move.
-                let reported = st >= args.stages_lo && st <= args.stages_hi;
-                if reported {
-                    stages_seen += 1;
-                }
-                let (mse, mae, bias, sd) = stage_stats(a);
-                // The default is MAE, not MSE. Squared error is dominated by
-                // the thinly-sampled opening stages (empties 40-50 sit at
-                // 70-90 where the endgame sits at 8-40), so a lucky epoch
-                // there outweighs a real loss elsewhere: measured over 11
-                // epochs the MSE-selected assembly scored *worse* on
-                // stage-balanced MAE than a single epoch of it did.
-                // `--select-by spread` is for a model that carries an offset;
-                // see `stage_stats`.
-                let score = select_score(&args.select_by, a);
-                let mut restored = false;
-                let better = score < stage_best[st];
-                if better {
-                    stage_best[st] = score;
-                    stage_snap[st] = Some(trainer.linear.stage_weights(st));
-                    if reported {
-                        improved += 1;
-                    }
-                    stage_stale[st] = 0;
-                    stage_since_best[st] = 0;
-                    stage_age[st] = 0;
-                    stage_age_at_halve[st] = 0;
-                } else {
-                    stage_since_best[st] += 1;
-                    stage_age[st] += 1;
-                    // A stage still coming down has not finished, whatever
-                    // the count says. Retiring on "epochs since the best" cuts
-                    // off a descent that has not reached the incumbent yet:
-                    // measured here, a stage went 6.995 -> 6.085 -> 5.929
-                    // against an incumbent of 5.634, closing to 0.295 with
-                    // the clock about to run out. Only a rise is evidence
-                    // that the stage is done.
-                    //
-                    // But the reset cannot be unconditional. A score that
-                    // oscillates falls against the previous epoch about half
-                    // the time, so an unconditional reset stops the clock
-                    // from ever running: measured here, eight stages sat past
-                    // 30 epochs with `--patience 6` and a best that had not
-                    // moved in twenty, because every other epoch happened to
-                    // tick down. Credit a descent only while the stage is
-                    // still above its own best -- that is the approach the
-                    // reset exists for. Once it has been there, oscillating
-                    // around it is not progress.
-                    if score < stage_prev[st] && score > stage_best[st] {
-                        stage_since_best[st] = 0;
-                    }
-                    // And a hard ceiling regardless: however the score wobbles,
-                    // a best that has not moved in this many epochs is done.
-                    let stalled_out = stage_age[st] >= args.patience * 3;
-                    // Still descending? Then the rate is doing its job.
-                    //
-                    // Halving on "did not beat the incumbent" cuts the rate
-                    // in the middle of a descent: measured here, a stage went
-                    // 7.787 -> 5.797 in one epoch -- two discs of progress --
-                    // and was halved anyway because it had not yet passed a
-                    // start point that was already good, then bounced back to
-                    // 7.811. The rate is only wrong when the step stops
-                    // buying anything, which is what a rise over the previous
-                    // epoch shows.
-                    // An identical score is not evidence either way. It
-                    // means the epoch moved the weights nowhere the held-out
-                    // set can see -- not that the rate is too large. Counting
-                    // it as a rise spends a halving on nothing; the stale
-                    // clock simply holds.
-                    let flat = score == stage_prev[st];
-                    let descending = score < stage_prev[st];
-                    if reported
-                        && args.patience > 0
-                        && (stage_since_best[st] >= args.patience || stalled_out)
-                        && !stage_done[st]
-                    {
-                        // Put the stage back on the weights that scored its
-                        // best before retiring it, so the live model and the
-                        // assembly agree from here on.
-                        if let Some((w, num)) = &stage_snap[st] {
-                            trainer.linear.set_stage_weights(st, w, num);
-                        }
-                        stage_done[st] = true;
-                        println!("  stage {st} (空き {}) 収束、学習終了", 60 - st);
-                    }
-                    if args.plateau > 0 {
-                        if descending {
-                            stage_stale[st] = 0;
-                        } else if !flat {
-                            stage_stale[st] += 1;
-                            // The descent reset above is as blind to
-                            // oscillation as the retirement clock was: a
-                            // score that wobbles falls against the previous
-                            // epoch about every other epoch, so stale never
-                            // reaches the threshold and the rate never moves.
-                            // Measured here, empties 11 and 9 sat five epochs
-                            // at the rate that put them 0.11 above their own
-                            // best, alternating rise and fall the whole time.
-                            // So halve on the same unforgiving clock too:
-                            // whatever the score does between epochs, a best
-                            // that has not moved this long says the step is
-                            // too large.
-                            let ceiling = args.plateau * 3;
-                            let overdue = stage_age[st] >= stage_age_at_halve[st] + ceiling;
-                            if stage_stale[st] >= args.plateau || overdue {
-                                stage_lr[st] *= args.plateau_factor;
-                                stage_stale[st] = 0;
-                                stage_age_at_halve[st] = stage_age[st];
-                                if args.restore_on_halve {
-                                    if let Some((w, num)) = &stage_snap[st] {
-                                        trainer.linear.set_stage_weights(st, w, num);
-                                        restored = true;
-                                    }
-                                }
-                            }
-                        }
-                    }
-                }
-                // After a restore the next epoch starts from the best, so
-                // that is the score it has to be compared against -- not the
-                // one belonging to the weights just thrown away.
-                stage_prev[st] = if restored { stage_best[st] } else { score };
-                if reported {
-                    println!(
-                        "  {:>5}  {:>7}  {:>6}  {:>7.3}  {:>7.3}  {:>+7.3}  {:>7.3}{}",
-                        st,
-                        60 - st,
-                        a[0] as u64,
-                        mse,
-                        mae,
-                        bias,
-                        sd,
-                        if better { " *" } else { "" }
-                    );
-                }
-            }
-            if args.plateau > 0 && args.lr_smooth {
-                // Neighbouring stages differ by one ply, so the rate that
-                // suits one should nearly suit the next -- and the seeded
-                // rates are smooth by construction. Independent halving
-                // breaks that: one epoch's worth of val noise decides
-                // whether a stage halves, and a single such decision leaves
-                // it at twice or half its neighbour for good. Averaging in
-                // log space keeps the ladder continuous while still letting
-                // a genuinely different stage drift away over several
-                // epochs.
-                let src = stage_lr.clone();
-                for st in 0..STAGE_COUNT {
-                    if !stage_best[st].is_finite() {
-                        continue;
-                    }
-                    let mut acc = 0.0f64;
-                    let mut n = 0.0f64;
-                    for d in [-1i64, 0, 1] {
-                        let j = st as i64 + d;
-                        if j < 0 || j as usize >= STAGE_COUNT {
-                            continue;
-                        }
-                        let j = j as usize;
-                        if !stage_best[j].is_finite() || src[j] <= 0.0 {
-                            continue;
-                        }
-                        // Weight the stage itself double so smoothing pulls
-                        // towards the neighbours without erasing the stage's
-                        // own decisions.
-                        let w = if d == 0 { 2.0 } else { 1.0 };
-                        acc += w * (src[j] as f64).ln();
-                        n += w;
-                    }
-                    if n > 0.0 {
-                        stage_lr[st] = (acc / n).exp() as f32;
-                    }
-                }
-            }
-            println!(
-                "  per-stage: {improved}/{stages_seen} stages beat their incumbent this epoch"
-            );
-            if args.plateau > 0 {
-                println!("  per-stage lr");
-                for (st, best) in stage_best.iter().enumerate() {
-                    if best.is_finite() && st >= args.stages_lo && st <= args.stages_hi {
-                        println!(
-                            "  lr {:>5} {:>7} {:.9} stale {}",
-                            st,
-                            60 - st,
-                            stage_lr[st],
-                            stage_stale[st]
-                        );
-                    }
-                }
-            }
-            // Every epoch, improvement or not. Gating this on `improved > 0`
-            // means a run that never beats its start point leaves no
-            // `.stagebest` at all, and `stage_merge` then silently takes
-            // fewer inputs than it was given: measured here, four of the
-            // fourteen files a sweep should have produced were simply
-            // absent. Nothing is lost by writing it -- the incumbent is
-            // seeded as each stage's best before the first epoch -- but the
-            // file's absence is indistinguishable from a crash.
-            {
-                // Write the assembly now rather than only at the end: a run
-                // this long is normally stopped by hand, and a file that only
-                // appears on a clean exit is a file that never appears. The
-                // live weights are put back afterwards, so training carries
-                // on from where it was and not from an assembly no epoch
-                // produced.
-                let live: Vec<StageSnapshot> = (0..STAGE_COUNT)
-                    .map(|st| trainer.linear.stage_weights(st))
-                    .collect();
-                for (st, snap) in stage_snap.iter().enumerate() {
-                    if let Some((w, num)) = snap {
-                        trainer.linear.set_stage_weights(st, w, num);
-                    }
-                }
-                if let Err(e) = trainer.linear.save_weights(&stagebest_path) {
-                    eprintln!("failed to save {}: {e}", stagebest_path.display());
-                }
-                for (st, (w, num)) in live.iter().enumerate() {
-                    trainer.linear.set_stage_weights(st, w, num);
-                }
-            }
-        }
+        let (improved, stages_seen) = if args.per_stage_best && !val.is_empty() {
+            per_stage_epoch(&mut trainer, args, val, &mut stage, &stagebest_path)
+        } else {
+            (0, 0)
+        };
         if args.patience > 0 {
             let live = (args.stages_lo..=args.stages_hi)
-                .filter(|&st| stage_best[st].is_finite() && !stage_done[st])
+                .filter(|&st| stage.best[st].is_finite() && !stage.done[st])
                 .count();
             if live == 0 {
                 println!("  全ステージ収束、終了");
@@ -1565,45 +1070,13 @@ fn run_epochs<O: Optimizer>(
             }
         }
         if args.plateau > 0 {
-            // "Did this epoch help" is a per-stage question when the stages
-            // are kept separately: an epoch that moved even one of them left
-            // the assembled model better than it found it. Only when nothing
-            // moved at all has this rate finished its work.
             let progressed = if args.per_stage_best && !val.is_empty() {
-                // A handful of stages still creeping is not the model
-                // learning -- measured here, the count fell 50, 45, 14, 10,
-                // 9, 4 while the training MSE never left 33.37..33.51 and
-                // the val bounced between 47.8 and 50.8. That is a rate too
-                // large for the surface, carried along by whichever few
-                // stages happened to land well. Require a real share of the
-                // model to move before calling the epoch progress.
-                // Both conditions, because either alone misreads this run.
-                // Stage count alone: a band that collapsed one epoch and
-                // recovered the next counts as "improved" and resets the
-                // stall, so the rate never falls (11 epochs, 0 reductions).
-                // Val alone: it is one pooled number over stages that move
-                // independently, which is what per-stage selection exists to
-                // avoid trusting.
                 (improved as f64) >= args.plateau_frac * (stages_seen as f64) && is_best
             } else {
                 is_best
             };
-            if progressed {
-                stale = 0;
-            } else {
-                stale += 1;
-                if stale >= args.plateau {
-                    cur_lr *= args.plateau_factor;
-                    stale = 0;
-                    println!(
-                        "  {} epochs without progress -> lr {cur_lr:.8}",
-                        args.plateau
-                    );
-                    if cur_lr < args.plateau_min {
-                        println!("  rate floor reached; stopping");
-                        break;
-                    }
-                }
+            if global_plateau(args, &mut cur_lr, &mut stale, progressed) {
+                break;
             }
         }
         let val_line = if val.is_empty() {
@@ -1621,52 +1094,23 @@ fn run_epochs<O: Optimizer>(
             per_sec
         );
 
-        if let Some(log) = &args.log_path {
-            if let Err(e) = append_log(log, epoch, &stats) {
-                eprintln!("failed to write log {}: {e}", log.display());
-                return ExitCode::FAILURE;
-            }
-        }
-
-        // Save after every epoch (atomic replace) so long runs are
-        // interruption-safe: a kill mid-epoch loses at most that epoch.
-        if let Err(e) = trainer.linear.save_weights(&args.weights_path) {
-            eprintln!("failed to save {}: {e}", args.weights_path.display());
+        if persist_epoch(
+            &trainer,
+            args,
+            epoch,
+            &stats,
+            is_best.then_some(best_path.as_path()),
+            &mut swa,
+        )
+        .is_err()
+        {
             return ExitCode::FAILURE;
         }
-        // Keep the best-by-val weights separately: the last epoch is not
-        // necessarily the best, and this run overwrites `weights_path`.
         if is_best {
             best_val = vm;
-            if let Err(e) = trainer.linear.save_weights(&best_path) {
-                eprintln!("failed to save {}: {e}", best_path.display());
-                return ExitCode::FAILURE;
-            }
         }
-        // Fold this epoch into the SWA mean (past the warmup) and refresh the
-        // .swa file so it is available even if the run is interrupted.
-        if let Some(acc) = &mut swa {
-            if epoch >= args.swa_start {
-                if let Err(e) = acc
-                    .fold(&args.weights_path)
-                    .and_then(|_| acc.write().map(|_| ()))
-                {
-                    eprintln!("failed to update SWA: {e}");
-                    return ExitCode::FAILURE;
-                }
-            }
-        }
-
         if interrupted.load(Ordering::SeqCst) {
-            if let Some(acc) = &swa {
-                if acc.count > 0 {
-                    println!(
-                        "SWA mean of {} epochs saved to {}",
-                        acc.count,
-                        acc.out.display()
-                    );
-                }
-            }
+            report_swa(&swa);
             println!(
                 "stopped after epoch {epoch}; weights saved to {}",
                 args.weights_path.display()
@@ -1675,38 +1119,11 @@ fn run_epochs<O: Optimizer>(
         }
     }
 
-    // Assemble the per-stage best into one model. Done last, and only into
-    // the extra file, so the run's own weights are left as training ended
-    // them -- restoring 61 stages in place would make a resumed run continue
-    // from a model no epoch ever produced.
-    if args.per_stage_best && stage_snap.iter().any(|x| x.is_some()) {
-        let mut kept = 0usize;
-        for (st, snap) in stage_snap.iter().enumerate() {
-            if let Some((w, num)) = snap {
-                trainer.linear.set_stage_weights(st, w, num);
-                kept += 1;
-            }
-        }
-        let p = stagebest_path.clone();
-        match trainer.linear.save_weights(&p) {
-            Ok(()) => {
-                let pooled: f64 = stage_best
-                    .iter()
-                    .zip(0..STAGE_COUNT)
-                    .filter(|(m, _)| m.is_finite())
-                    .map(|(m, _)| *m)
-                    .sum::<f64>()
-                    / stage_best.iter().filter(|m| m.is_finite()).count().max(1) as f64;
-                println!(
-                    "per-stage best: {kept} stages assembled (mean of per-stage best MSE {pooled:.4}) saved to {}",
-                    p.display()
-                );
-            }
-            Err(e) => {
-                eprintln!("failed to save {}: {e}", p.display());
-                return ExitCode::FAILURE;
-            }
-        }
+    if args.per_stage_best
+        && stage.snap.iter().any(|x| x.is_some())
+        && !write_stage_best(&mut trainer.linear, &stage, &stagebest_path)
+    {
+        return ExitCode::FAILURE;
     }
     println!("weights saved to {}", args.weights_path.display());
     if best_val.is_finite() {
@@ -1728,14 +1145,11 @@ fn run_epochs<O: Optimizer>(
     ExitCode::SUCCESS
 }
 
-/// Minimal SIGINT handler installation without external crates.
 fn ctrlc_handler<F: FnMut() + Send + 'static>(handler: F) -> std::io::Result<()> {
     use std::sync::Mutex;
     static HANDLER: Mutex<Option<Box<dyn FnMut() + Send>>> = Mutex::new(None);
 
     extern "C" fn trampoline(_: libc::c_int) {
-        // Best-effort: if the lock is contended we skip (async-signal safety
-        // is approximated; acceptable for a training CLI).
         if let Ok(mut guard) = HANDLER.try_lock() {
             if let Some(h) = guard.as_mut() {
                 h();
@@ -1744,10 +1158,320 @@ fn ctrlc_handler<F: FnMut() + Send + 'static>(handler: F) -> std::io::Result<()>
     }
 
     *HANDLER.lock().unwrap() = Some(Box::new(handler));
-    // SAFETY: installing a signal handler with a valid extern "C" fn.
     let prev = unsafe { libc::signal(libc::SIGINT, trampoline as *const () as libc::sighandler_t) };
     if prev == libc::SIG_ERR {
         return Err(std::io::Error::last_os_error());
     }
     Ok(())
+}
+
+fn seed_stage_best(lin: &Linear, args: &Args, val: &[Example], stage: &mut StageState) {
+    let acc = val_by_stage(lin, val);
+    let mut seeded = 0usize;
+    for (st, a) in acc.iter().enumerate() {
+        if a[0] == 0.0 {
+            continue;
+        }
+        stage.best[st] = select_score(&args.select_by, a);
+        stage.snap[st] = Some(lin.stage_weights(st));
+        seeded += 1;
+    }
+    println!("baseline: {seeded} stages seeded from the starting weights");
+    println!(
+        "  stage  empties       n      MSE      MAE     bias   spread  (selecting on {})",
+        args.select_by
+    );
+    for (st, a) in acc.iter().enumerate() {
+        if a[0] == 0.0 || st < args.stages_lo || st > args.stages_hi {
+            continue;
+        }
+        let (mse, mae, bias, sd) = stage_stats(a);
+        println!(
+            "  {:>5}  {:>7}  {:>6}  {:>7.3}  {:>7.3}  {:>+7.3}  {:>7.3}",
+            st,
+            60 - st,
+            a[0] as u64,
+            mse,
+            mae,
+            bias,
+            sd
+        );
+    }
+}
+
+fn count_cells<O: Optimizer>(trainer: &mut Trainer<O>, args: &Args, examples: &[Example]) {
+    trainer
+        .linear
+        .count_appearances(examples.iter().map(|e| e.board()));
+    trainer.linear.set_min_appear(args.min_appear);
+    for st in args.stages_lo..=args.stages_hi.min(STAGE_COUNT - 1) {
+        if let Some((seen, unseen, q)) = trainer.linear.appearance_spread(st) {
+            println!(
+                "  cell counts stage {st}: {seen} seen, {unseen} unseen, \
+                         min {} p1 {} median {} p99 {} max {}",
+                q[0], q[1], q[2], q[3], q[4]
+            );
+        }
+    }
+}
+
+fn stage_lr(args: &Args, stage: &StageState, epoch: usize, st: usize) -> f32 {
+    if stage.done[st] {
+        return 0.0;
+    }
+    let mut lr = if args.plateau > 0 {
+        stage.lr[st]
+    } else {
+        args.learning_rate * args.decay.powi(epoch as i32 - 1)
+    };
+    if args.warmup > 0 && epoch <= args.warmup {
+        lr *= 0.2 + 0.8 * (epoch as f32 / args.warmup as f32);
+    }
+    lr
+}
+
+/// (stages that beat their incumbent, stages in the reported range)
+fn per_stage_epoch<O: Optimizer>(
+    trainer: &mut Trainer<O>,
+    args: &Args,
+    val: &[Example],
+    stage: &mut StageState,
+    stagebest_path: &Path,
+) -> (usize, usize) {
+    let mut improved = 0usize;
+    let mut stages_seen = 0usize;
+    let acc = val_by_stage(&trainer.linear, val);
+    println!("  stage  empties       n      MSE      MAE     bias   spread");
+    for (st, a) in acc.iter().enumerate() {
+        if a[0] == 0.0 {
+            continue;
+        }
+        let reported = st >= args.stages_lo && st <= args.stages_hi;
+        if reported {
+            stages_seen += 1;
+        }
+        let (mse, mae, bias, sd) = stage_stats(a);
+        let score = select_score(&args.select_by, a);
+        let mut restored = false;
+        let better = score < stage.best[st];
+        if better {
+            stage.best[st] = score;
+            stage.snap[st] = Some(trainer.linear.stage_weights(st));
+            if reported {
+                improved += 1;
+            }
+            stage.stale[st] = 0;
+            stage.since_best[st] = 0;
+            stage.age[st] = 0;
+            stage.age_at_halve[st] = 0;
+        } else {
+            stage.since_best[st] += 1;
+            stage.age[st] += 1;
+            if score < stage.prev[st] && score > stage.best[st] {
+                stage.since_best[st] = 0;
+            }
+            let stalled_out = stage.age[st] >= args.patience * 3;
+            let flat = score == stage.prev[st];
+            let descending = score < stage.prev[st];
+            if reported
+                && args.patience > 0
+                && (stage.since_best[st] >= args.patience || stalled_out)
+                && !stage.done[st]
+            {
+                if let Some((w, num)) = &stage.snap[st] {
+                    trainer.linear.set_stage_weights(st, w, num);
+                }
+                stage.done[st] = true;
+                println!("  stage {st} (空き {}) 収束、学習終了", 60 - st);
+            }
+            if args.plateau > 0 {
+                if descending {
+                    stage.stale[st] = 0;
+                } else if !flat {
+                    stage.stale[st] += 1;
+                    let ceiling = args.plateau * 3;
+                    let overdue = stage.age[st] >= stage.age_at_halve[st] + ceiling;
+                    if stage.stale[st] >= args.plateau || overdue {
+                        stage.lr[st] *= args.plateau_factor;
+                        stage.stale[st] = 0;
+                        stage.age_at_halve[st] = stage.age[st];
+                        if args.restore_on_halve {
+                            if let Some((w, num)) = &stage.snap[st] {
+                                trainer.linear.set_stage_weights(st, w, num);
+                                restored = true;
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        stage.prev[st] = if restored { stage.best[st] } else { score };
+        if reported {
+            println!(
+                "  {:>5}  {:>7}  {:>6}  {:>7.3}  {:>7.3}  {:>+7.3}  {:>7.3}{}",
+                st,
+                60 - st,
+                a[0] as u64,
+                mse,
+                mae,
+                bias,
+                sd,
+                if better { " *" } else { "" }
+            );
+        }
+    }
+    if args.plateau > 0 && args.lr_smooth {
+        let src = stage.lr.clone();
+        for st in 0..STAGE_COUNT {
+            if !stage.best[st].is_finite() {
+                continue;
+            }
+            let mut acc = 0.0f64;
+            let mut n = 0.0f64;
+            for d in [-1i64, 0, 1] {
+                let j = st as i64 + d;
+                if j < 0 || j as usize >= STAGE_COUNT {
+                    continue;
+                }
+                let j = j as usize;
+                if !stage.best[j].is_finite() || src[j] <= 0.0 {
+                    continue;
+                }
+                let w = if d == 0 { 2.0 } else { 1.0 };
+                acc += w * (src[j] as f64).ln();
+                n += w;
+            }
+            if n > 0.0 {
+                stage.lr[st] = (acc / n).exp() as f32;
+            }
+        }
+    }
+    println!("  per-stage: {improved}/{stages_seen} stages beat their incumbent this epoch");
+    if args.plateau > 0 {
+        println!("  per-stage lr");
+        for (st, best) in stage.best.iter().enumerate() {
+            if best.is_finite() && st >= args.stages_lo && st <= args.stages_hi {
+                println!(
+                    "  lr {:>5} {:>7} {:.9} stale {}",
+                    st,
+                    60 - st,
+                    stage.lr[st],
+                    stage.stale[st]
+                );
+            }
+        }
+    }
+    {
+        let live: Vec<StageSnapshot> = (0..STAGE_COUNT)
+            .map(|st| trainer.linear.stage_weights(st))
+            .collect();
+        for (st, snap) in stage.snap.iter().enumerate() {
+            if let Some((w, num)) = snap {
+                trainer.linear.set_stage_weights(st, w, num);
+            }
+        }
+        if let Err(e) = trainer.linear.save_weights(stagebest_path) {
+            eprintln!("failed to save {}: {e}", stagebest_path.display());
+        }
+        for (st, (w, num)) in live.iter().enumerate() {
+            trainer.linear.set_stage_weights(st, w, num);
+        }
+    }
+    (improved, stages_seen)
+}
+
+/// True once the rate has reached its floor and training should stop.
+fn global_plateau(args: &Args, cur_lr: &mut f32, stale: &mut usize, progressed: bool) -> bool {
+    if progressed {
+        *stale = 0;
+        return false;
+    }
+    *stale += 1;
+    if *stale < args.plateau {
+        return false;
+    }
+    *cur_lr *= args.plateau_factor;
+    *stale = 0;
+    println!(
+        "  {} epochs without progress -> lr {:.8}",
+        args.plateau, *cur_lr
+    );
+    if *cur_lr < args.plateau_min {
+        println!("  rate floor reached; stopping");
+        return true;
+    }
+    false
+}
+
+fn persist_epoch<O: Optimizer>(
+    trainer: &Trainer<O>,
+    args: &Args,
+    epoch: usize,
+    stats: &EpochStats,
+    best: Option<&Path>,
+    swa: &mut Option<SwaAccumulator>,
+) -> Result<(), ()> {
+    if let Some(log) = &args.log_path {
+        if let Err(e) = append_log(log, epoch, stats) {
+            eprintln!("failed to write log {}: {e}", log.display());
+            return Err(());
+        }
+    }
+    if let Err(e) = trainer.linear.save_weights(&args.weights_path) {
+        eprintln!("failed to save {}: {e}", args.weights_path.display());
+        return Err(());
+    }
+    if let Some(p) = best {
+        if let Err(e) = trainer.linear.save_weights(p) {
+            eprintln!("failed to save {}: {e}", p.display());
+            return Err(());
+        }
+    }
+    if let Some(acc) = swa {
+        if epoch >= args.swa_start {
+            if let Err(e) = acc
+                .fold(&args.weights_path)
+                .and_then(|_| acc.write().map(|_| ()))
+            {
+                eprintln!("failed to update SWA: {e}");
+                return Err(());
+            }
+        }
+    }
+    Ok(())
+}
+
+fn report_swa(swa: &Option<SwaAccumulator>) {
+    if let Some(acc) = swa {
+        if acc.count > 0 {
+            println!(
+                "SWA mean of {} epochs saved to {}",
+                acc.count,
+                acc.out.display()
+            );
+        }
+    }
+}
+
+fn write_stage_best(lin: &mut Linear, stage: &StageState, path: &Path) -> bool {
+    let mut kept = 0usize;
+    for (st, snap) in stage.snap.iter().enumerate() {
+        if let Some((w, num)) = snap {
+            lin.set_stage_weights(st, w, num);
+            kept += 1;
+        }
+    }
+    if let Err(e) = lin.save_weights(path) {
+        eprintln!("failed to save {}: {e}", path.display());
+        return false;
+    }
+    let live = stage.best.iter().filter(|m| m.is_finite());
+    let n = live.clone().count().max(1);
+    let pooled: f64 = live.sum::<f64>() / n as f64;
+    println!(
+        "per-stage best: {kept} stages assembled \
+         (mean of per-stage best MSE {pooled:.4}) saved to {}",
+        path.display()
+    );
+    true
 }

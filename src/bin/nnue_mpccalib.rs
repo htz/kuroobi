@@ -1,38 +1,6 @@
-//! Measures the ProbCut sigma of one NNUE model and writes it into that
-//! model's own weights file.
-//!
-//! Sigma is the standard deviation of `search(depth) - search(pc_depth)`,
-//! and it belongs to the evaluator: a model that evaluates differently
-//! misses by a different amount. From 2026-07-20 to 2026-09-10 the NNUE
-//! searcher pruned against constants fitted for the *linear* evaluator, on
-//! a "safer anyway" argument, and the endgame sigma had made the same
-//! argument and turned out 2x too large.
-//!
-//! Measured, the borrowed constants were 1.15-1.28x wide -- conservative,
-//! as advertised -- and 300 games at 200 ms/move could not separate them
-//! from the measured ones (50.5%, 95% CI 44.8..56.2). So the value here is
-//! not a recovered loss; it is that the next model's margins will be its
-//! own, whether or not it happens to resemble this one.
-//!
-//! One run does the whole job: search, discard the terminal values, fit the
-//! six coefficients, write them back into the file it loaded. There is no
-//! way to write a sigma into a file other than the one it was measured
-//! against, which is the only failure this tool could otherwise cause.
-//!
-//! Positions run in parallel, searches stay sequential (Lazy SMP changes
-//! the tree; we measure values, not speed).
-//!
-//! `--patterns` selects the NNUE's pattern set (default `nnue`, the
-//! 297,432-row one). Without `--write` nothing is written and the fit is
-//! only reported.
-//!
-//! Usage:
-//!   nnue_mpccalib [--threads N] [--stride N] [--max N] [--max-depth 12]
-//!                 [--depths a,b,c] [--patterns nnue|linear] [--patterns-file <spec>]
-//!                 [--min-empties 20] [--max-empties 58] [--min-cell 8] [--csv out.csv] [--write]
-//!                 <nnue.bin> <data-file>...
+//! Measures the ProbCut sigma of one NNUE model and writes it into that model's own weights file.
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
@@ -40,35 +8,20 @@ use kuroobi::midgame::{mpc_reduced_depth, NnueSearch, SharedTt};
 use kuroobi::nnue::{MpcSigma, Nnue};
 use kuroobi::trainer::load_examples_binary;
 
-/// Values above this are the solver's terminal encoding, not a disc
-/// difference. Leaving them in is not a small error: they inflate the fitted
-/// sigma by three orders of magnitude.
 const DISC_LIMIT: f32 = 64.0;
 
-/// The coefficients the search used before any model carried its own. Kept
-/// as the fit's starting point -- the shape is right and only the scale is
-/// another evaluator's -- and as the ratio the report prints against.
 const LEGACY: [f32; MpcSigma::LEN] = [-0.068941, 0.368775, -0.713476, 0.010223, 0.647219, 4.050545];
 
-/// One (empties, depth, pc_depth) cell of the measurement.
 struct Cell {
-    /// Mean empty count of the samples in this cell. Empties are binned
-    /// (`--empties-bin`) because a cell keyed on the exact count holds a
-    /// handful of samples and its RMS is mostly noise; the surface is
-    /// smooth in empties, so the mean of a narrow bin costs nothing.
     empties: f64,
     e_lo: u32,
     e_hi: u32,
     depth: u32,
     pc_depth: u32,
     n: usize,
-    /// RMS of `search(depth) - search(pc_depth)` about zero, not about its
-    /// own mean: the margin is applied symmetrically, so a systematic bias
-    /// at this cell has to be paid for out of the same budget.
     rms: f32,
 }
 
-/// Solve `a x = b` for a small dense system, in place. `None` if singular.
 fn solve(mut a: Vec<Vec<f64>>, mut b: Vec<f64>) -> Option<Vec<f64>> {
     let n = b.len();
     for col in 0..n {
@@ -103,20 +56,8 @@ fn solve(mut a: Vec<Vec<f64>>, mut b: Vec<f64>) -> Option<Vec<f64>> {
     Some(x)
 }
 
-/// Free parameters of the fit: `b, c, qa, qb, qc`, with `a` held at one.
-///
-/// The stored form `qa*s^2 + qb*s + qc`, `s = a*e + b*d + c*p`, has a
-/// redundant scale: multiplying `s` by k and dividing `qa` by k^2 and `qb`
-/// by k describes the identical surface. Left free, the fit drifts along
-/// that direction and lands on whatever the damping happened to allow --
-/// which is how a first attempt produced `qa = -0.0716` for a surface that
-/// curves upward. Pinning `a = 1` removes the redundancy and costs no
-/// expressiveness, since `a` divides straight out into the other five.
 const NP: usize = 5;
 
-/// `qa*s^2 + qb*s + qc` with `s = e + b*d + c*p`, unfloored -- the fit works
-/// on the raw surface; the floor is the search's safety net, not the model's
-/// shape. Returns the value and the gradient in the free parameters.
 fn model(t: &[f64; NP], e: f64, d: f64, p: f64) -> (f64, [f64; NP]) {
     let s = e + t[0] * d + t[1] * p;
     let f = t[2] * s * s + t[3] * s + t[4];
@@ -124,7 +65,6 @@ fn model(t: &[f64; NP], e: f64, d: f64, p: f64) -> (f64, [f64; NP]) {
     (f, [ds * d, ds * p, s * s, s, 1.0])
 }
 
-/// The stored six from the fitted five.
 fn to_coefficients(t: &[f64; NP]) -> [f32; MpcSigma::LEN] {
     [
         1.0,
@@ -136,7 +76,6 @@ fn to_coefficients(t: &[f64; NP]) -> [f32; MpcSigma::LEN] {
     ]
 }
 
-/// The fitted five from a stored six, for use as a starting point.
 fn to_free(v: [f32; MpcSigma::LEN]) -> [f64; NP] {
     let a = v[0] as f64;
     [
@@ -148,9 +87,6 @@ fn to_free(v: [f32; MpcSigma::LEN]) -> [f64; NP] {
     ]
 }
 
-/// Levenberg-Marquardt on the six coefficients, weighted by `sqrt(n)`: the
-/// uncertainty of an RMS estimate falls as `1/sqrt(n)`, so a cell built from
-/// four samples should not outvote one built from four hundred.
 fn fit(cells: &[Cell], start: [f32; MpcSigma::LEN]) -> ([f32; MpcSigma::LEN], f64) {
     let mut t = to_free(start);
     let cost = |t: &[f64; NP]| -> f64 {
@@ -212,7 +148,27 @@ fn fit(cells: &[Cell], start: [f32; MpcSigma::LEN]) -> ([f32; MpcSigma::LEN], f6
     (to_coefficients(&t), (best / wsum.max(1.0)).sqrt())
 }
 
-fn main() -> ExitCode {
+struct Args {
+    paths: Vec<PathBuf>,
+    stride: usize,
+    threads: usize,
+    max_positions: usize,
+    max_depth: u32,
+    depths: Vec<u32>,
+    min_empties: u32,
+    max_empties: u32,
+    min_cell: usize,
+    empties_bin: u32,
+    csv: Option<PathBuf>,
+    from_csv: Option<PathBuf>,
+    show_cells: bool,
+    write: bool,
+    legacy_sigma: bool,
+    which: String,
+    spec: Option<PathBuf>,
+}
+
+fn parse_args() -> Result<Args, ExitCode> {
     let mut paths: Vec<PathBuf> = Vec::new();
     let mut stride = 997usize; // prime stride decorrelates from file order
     let mut max_positions = 2000usize;
@@ -222,28 +178,14 @@ fn main() -> ExitCode {
     let mut max_depth = 12u32;
     let mut depths: Vec<u32> = Vec::new();
     let mut min_empties = 20u32;
-    // The midgame search runs from the opening down to the solve threshold,
-    // so the fit has to cover that whole span. A cap at 45 left the opening
-    // out and let the quadratic extrapolate there unchecked.
     let mut max_empties = 58u32;
     let mut min_cell = 20usize;
     let mut empties_bin = 3u32;
     let mut csv: Option<PathBuf> = None;
-    // Re-fit an earlier run's raw values instead of searching again. The
-    // measurement is the expensive half and the fit is the half worth
-    // iterating on, so they are separable -- but only in this direction:
-    // there is still no way to write a sigma into a file other than the
-    // one named on the command line.
     let mut from_csv: Option<PathBuf> = None;
     let mut show_cells = false;
     let mut write = false;
-    // Stamp the pre-2026-09-10 constants into a file without measuring
-    // anything. Asking "was the borrowed sigma worse?" means playing the
-    // two against each other, and that needs an opponent built the old
-    // way. (Asked on 2026-09-10: 50.5% over 300 games, no difference.)
     let mut legacy_sigma = false;
-    // The tool predates the 297,432-row set; a weight file belongs to the
-    // pattern set it was trained on, so the set has to be selectable.
     let mut which = String::from("nnue");
     let mut spec: Option<PathBuf> = None;
 
@@ -296,8 +238,50 @@ fn main() -> ExitCode {
             _ => paths.push(PathBuf::from(arg)),
         }
     }
-    // A data file is only needed when something is actually searched;
-    // `--legacy-sigma` and `--from-csv` both skip the search.
+    Ok(Args {
+        paths,
+        stride,
+        threads,
+        max_positions,
+        max_depth,
+        depths,
+        min_empties,
+        max_empties,
+        min_cell,
+        empties_bin,
+        csv,
+        from_csv,
+        show_cells,
+        write,
+        legacy_sigma,
+        which,
+        spec,
+    })
+}
+
+fn main() -> ExitCode {
+    let Args {
+        mut paths,
+        stride,
+        threads,
+        max_positions,
+        max_depth,
+        mut depths,
+        min_empties,
+        max_empties,
+        min_cell,
+        empties_bin,
+        csv,
+        from_csv,
+        show_cells,
+        write,
+        legacy_sigma,
+        which,
+        spec,
+    } = match parse_args() {
+        Ok(a) => a,
+        Err(code) => return code,
+    };
     let want_data = !legacy_sigma && from_csv.is_none();
     if paths.is_empty() || (want_data && paths.len() < 2) {
         eprintln!(
@@ -311,34 +295,117 @@ fn main() -> ExitCode {
     let nnue_path = paths.remove(0);
 
     if legacy_sigma {
-        let patterns = match kuroobi::pattern::resolve(&which, spec.as_deref()) {
-            Ok(p) => p,
-            Err(e) => {
-                eprintln!("{e}");
-                return ExitCode::FAILURE;
-            }
-        };
-        let mut nn = Nnue::new(patterns);
-        if let Err(err) = nn.load(&nnue_path) {
-            eprintln!("failed to load {}: {err}", nnue_path.display());
+        return write_legacy_sigma(&nnue_path, &which, spec.as_deref());
+    }
+    let Some(pairs) = depth_pairs(max_depth, &mut depths) else {
+        return ExitCode::FAILURE;
+    };
+    let patterns = match kuroobi::pattern::resolve(&which, spec.as_deref()) {
+        Ok(p) => p,
+        Err(e) => {
+            eprintln!("{e}");
             return ExitCode::FAILURE;
         }
-        nn.set_mpc_sigma(Some(MpcSigma::from_array(LEGACY)));
-        if let Err(err) = nn.save(&nnue_path) {
-            eprintln!("failed to write {}: {err}", nnue_path.display());
-            return ExitCode::FAILURE;
-        }
+    };
+    let rows = match &from_csv {
+        Some(path) => read_csv(path, &mut depths),
+        None => measure(
+            &nnue_path,
+            patterns,
+            &paths,
+            &depths,
+            Scan {
+                stride,
+                min_empties,
+                max_empties,
+                max_positions,
+                threads,
+            },
+        ),
+    };
+    let Ok(rows) = rows else {
+        return ExitCode::FAILURE;
+    };
+    if let Some(path) = &csv {
+        write_csv(path, &depths, &rows);
+    }
+    let kept = keep_finite(&rows);
+    if kept.is_empty() {
+        eprintln!("nothing left to fit");
+        return ExitCode::FAILURE;
+    }
+    let cells = build_cells(&kept, &pairs, &depths, empties_bin, min_cell);
+    eprintln!(
+        "{} cells with at least {min_cell} samples, over {} (depth, pc_depth) pairs",
+        cells.len(),
+        pairs.len()
+    );
+    if cells.len() < 12 {
+        eprintln!("too few cells to fit six coefficients; measure more positions");
+        return ExitCode::FAILURE;
+    }
+
+    let (coef, rmse) = fit(&cells, LEGACY);
+    let sigma = MpcSigma::from_array(coef);
+    report_pairs(&cells, &pairs, &sigma, coef, rmse);
+    if show_cells {
+        report_cells(&cells, &sigma);
+    }
+    report_span(&pairs, &sigma);
+
+    if !write {
         println!(
-            "wrote the linear linear's constants into {} -- for A/B only, \
-             this is not a measurement of this model",
+            "not written (pass --write to store this in {})",
             nnue_path.display()
         );
         return ExitCode::SUCCESS;
     }
+    if from_csv.is_some() {
+        eprintln!(
+            "warning: these values were measured by an earlier run, not by this one -- \
+             writing them is only correct if {} holds those same weights",
+            nnue_path.display()
+        );
+    }
+    store_sigma(&nnue_path, patterns, sigma)
+}
 
-    /* The pairs the search will actually use, and nothing else: fitting a
-    surface over depths ProbCut never probes at spends the samples on cells
-    that cannot affect a game. */
+struct Scan {
+    stride: usize,
+    min_empties: u32,
+    max_empties: u32,
+    max_positions: usize,
+    threads: usize,
+}
+
+fn write_legacy_sigma(nnue_path: &Path, which: &str, spec: Option<&Path>) -> ExitCode {
+    let patterns = match kuroobi::pattern::resolve(which, spec) {
+        Ok(p) => p,
+        Err(e) => {
+            eprintln!("{e}");
+            return ExitCode::FAILURE;
+        }
+    };
+    let mut nn = Nnue::new(patterns);
+    if let Err(err) = nn.load(nnue_path) {
+        eprintln!("failed to load {}: {err}", nnue_path.display());
+        return ExitCode::FAILURE;
+    }
+    nn.set_mpc_sigma(Some(MpcSigma::from_array(LEGACY)));
+    if let Err(err) = nn.save(nnue_path) {
+        eprintln!("failed to write {}: {err}", nnue_path.display());
+        return ExitCode::FAILURE;
+    }
+    println!(
+        "wrote the linear linear's constants into {} -- for A/B only, \
+         this is not a measurement of this model",
+        nnue_path.display()
+    );
+    ExitCode::SUCCESS
+}
+
+/// The (depth, pc_depth) pairs to fit, and the depths they need searched.
+fn depth_pairs(max_depth: u32, depths: &mut Vec<u32>) -> Option<Vec<(u32, u32)>> {
     let mut pairs: Vec<(u32, u32)> = Vec::new();
     for d in kuroobi::midgame::mpc_min_depth()..=max_depth {
         let p = mpc_reduced_depth(d);
@@ -360,160 +427,157 @@ fn main() -> ExitCode {
         .collect();
     if pairs.is_empty() {
         eprintln!("no (depth, pc_depth) pair is covered by --depths");
-        return ExitCode::FAILURE;
+        return None;
     }
+    Some(pairs)
+}
 
-    let patterns = match kuroobi::pattern::resolve(&which, spec.as_deref()) {
-        Ok(p) => p,
-        Err(e) => {
-            eprintln!("{e}");
-            return ExitCode::FAILURE;
+fn read_csv(path: &Path, depths: &mut Vec<u32>) -> Result<Vec<(u32, Vec<f32>)>, ()> {
+    let text = match std::fs::read_to_string(path) {
+        Ok(t) => t,
+        Err(err) => {
+            eprintln!("failed to read {}: {err}", path.display());
+            return Err(());
         }
     };
-    /* The whole measurement, or an earlier one read back. Searching is the
-    expensive half; the fit is the half worth iterating on, so they are
-    separable. A re-fit never loads the model, which is a gigabyte. */
-    let rows: Vec<(u32, Vec<f32>)> = if let Some(path) = &from_csv {
-        let text = match std::fs::read_to_string(path) {
-            Ok(t) => t,
+    let mut it = text.lines();
+    let Some(header) = it.next() else {
+        eprintln!("{} is empty", path.display());
+        return Err(());
+    };
+    *depths = header
+        .split(',')
+        .skip(1)
+        .filter_map(|c| c.trim().strip_prefix('d')?.parse().ok())
+        .collect();
+    let mut out = Vec::new();
+    for line in it {
+        let mut f = line.split(',');
+        let Some(Ok(e)) = f.next().map(str::parse::<u32>) else {
+            continue;
+        };
+        let vals: Vec<f32> = f.filter_map(|v| v.trim().parse().ok()).collect();
+        if vals.len() == depths.len() {
+            out.push((e, vals));
+        }
+    }
+    eprintln!(
+        "re-fitting {} rows from {} at depths {:?}",
+        out.len(),
+        path.display(),
+        depths
+    );
+    Ok(out)
+}
+
+fn measure(
+    nnue_path: &Path,
+    patterns: &'static [kuroobi::pattern::Pattern],
+    paths: &[PathBuf],
+    depths: &[u32],
+    Scan {
+        stride,
+        min_empties,
+        max_empties,
+        max_positions,
+        threads,
+    }: Scan,
+) -> Result<Vec<(u32, Vec<f32>)>, ()> {
+    let mut nn = Nnue::new(patterns);
+    if let Err(err) = nn.load(nnue_path) {
+        eprintln!("failed to load {}: {err}", nnue_path.display());
+        return Err(());
+    }
+    nn.quantize();
+    let nn = std::sync::Arc::new(nn);
+
+    let mut boards = Vec::new();
+    'outer: for path in paths {
+        let examples = match load_examples_binary(path) {
+            Ok(ex) => ex,
             Err(err) => {
-                eprintln!("failed to read {}: {err}", path.display());
-                return ExitCode::FAILURE;
+                eprintln!("failed to load {}: {err}", path.display());
+                return Err(());
             }
         };
-        let mut it = text.lines();
-        let Some(header) = it.next() else {
-            eprintln!("{} is empty", path.display());
-            return ExitCode::FAILURE;
-        };
-        // The header names the depths, so a re-fit uses the depths that
-        // were actually searched rather than whatever the flags now say.
-        depths = header
-            .split(',')
-            .skip(1)
-            .filter_map(|c| c.trim().strip_prefix('d')?.parse().ok())
-            .collect();
-        let mut out = Vec::new();
-        for line in it {
-            let mut f = line.split(',');
-            let Some(Ok(e)) = f.next().map(str::parse::<u32>) else {
+        for ex in examples.iter().step_by(stride) {
+            let board = ex.board();
+            let empties = 64 - (board.black | board.white).count_ones();
+            if !(min_empties..=max_empties).contains(&empties) || board.movable() == 0 {
                 continue;
-            };
-            let vals: Vec<f32> = f.filter_map(|v| v.trim().parse().ok()).collect();
-            if vals.len() == depths.len() {
-                out.push((e, vals));
+            }
+            boards.push(board);
+            if boards.len() >= max_positions {
+                break 'outer;
             }
         }
-        eprintln!(
-            "re-fitting {} rows from {} at depths {:?}",
-            out.len(),
-            path.display(),
-            depths
-        );
-        out
-    } else {
-        let mut nn = Nnue::new(patterns);
-        if let Err(err) = nn.load(&nnue_path) {
-            eprintln!("failed to load {}: {err}", nnue_path.display());
-            return ExitCode::FAILURE;
-        }
-        // Skipping this makes the SIMD path read uninitialized memory.
-        nn.quantize();
-        let nn = std::sync::Arc::new(nn);
+    }
+    eprintln!(
+        "measuring {} positions at depths {:?} on {threads} threads",
+        boards.len(),
+        depths
+    );
 
-        // Collect positions first for parallel dispatch.
-        let mut boards = Vec::new();
-        'outer: for path in &paths {
-            let examples = match load_examples_binary(path) {
-                Ok(ex) => ex,
-                Err(err) => {
-                    eprintln!("failed to load {}: {err}", path.display());
-                    return ExitCode::FAILURE;
-                }
-            };
-            for ex in examples.iter().step_by(stride) {
-                let board = ex.board();
-                let empties = 64 - (board.black | board.white).count_ones();
-                if !(min_empties..=max_empties).contains(&empties) || board.movable() == 0 {
-                    continue;
-                }
-                boards.push(board);
-                if boards.len() >= max_positions {
-                    break 'outer;
-                }
-            }
-        }
-        eprintln!(
-            "measuring {} positions at depths {:?} on {threads} threads",
-            boards.len(),
-            depths
-        );
-
-        let next = AtomicUsize::new(0);
-        // One row per position: empties, then one value per measured depth.
-        std::thread::scope(|s| {
-            let handles: Vec<_> = (0..threads)
-                .map(|_| {
-                    let (next, boards, depths) = (&next, &boards, &depths);
-                    let nn = nn.clone();
-                    s.spawn(move || {
-                        /* Per-thread tables: sharing lets one position's
-                        results help another and breaks independence. 18 bits
-                        is ~4 MB per thread. */
-                        let tt = std::sync::Arc::new(SharedTt::new(18));
-                        let mut search = NnueSearch::new(nn, tt.clone());
-                        search.threads = 1; // sequential search keeps the tree fixed
-                        let mut out = Vec::new();
-                        loop {
-                            let i = next.fetch_add(1, Ordering::Relaxed);
-                            let Some(board) = boards.get(i) else { break };
-                            let empties = 64 - (board.black | board.white).count_ones();
-                            let vals = depths
-                                .iter()
-                                .map(|&d| {
-                                    tt.clear();
-                                    search.best_move_deadline(board, d, None).1
-                                })
-                                .collect();
-                            out.push((empties, vals));
-                        }
-                        out
-                    })
+    let next = AtomicUsize::new(0);
+    Ok(std::thread::scope(|s| {
+        let handles: Vec<_> = (0..threads)
+            .map(|_| {
+                let (next, boards, depths) = (&next, &boards, &depths);
+                let nn = nn.clone();
+                s.spawn(move || {
+                    let tt = std::sync::Arc::new(SharedTt::new(18));
+                    let mut search = NnueSearch::new(nn, tt.clone());
+                    search.threads = 1; // sequential search keeps the tree fixed
+                    let mut out = Vec::new();
+                    loop {
+                        let i = next.fetch_add(1, Ordering::Relaxed);
+                        let Some(board) = boards.get(i) else { break };
+                        let empties = 64 - (board.black | board.white).count_ones();
+                        let vals = depths
+                            .iter()
+                            .map(|&d| {
+                                tt.clear();
+                                search.best_move_deadline(board, d, None).1
+                            })
+                            .collect();
+                        out.push((empties, vals));
+                    }
+                    out
                 })
-                .collect();
-            handles
-                .into_iter()
-                .flat_map(|h| h.join().unwrap())
-                .collect()
-        })
-    };
+            })
+            .collect();
+        handles
+            .into_iter()
+            .flat_map(|h| h.join().unwrap())
+            .collect()
+    }))
+}
 
-    if let Some(path) = &csv {
-        use std::io::Write;
-        match std::fs::File::create(path) {
-            Ok(f) => {
-                let mut w = std::io::BufWriter::new(f);
-                let _ = write!(w, "empties");
-                for d in &depths {
-                    let _ = write!(w, ",d{d}");
+fn write_csv(path: &Path, depths: &[u32], rows: &[(u32, Vec<f32>)]) {
+    use std::io::Write;
+    match std::fs::File::create(path) {
+        Ok(f) => {
+            let mut w = std::io::BufWriter::new(f);
+            let _ = write!(w, "empties");
+            for d in depths {
+                let _ = write!(w, ",d{d}");
+            }
+            let _ = writeln!(w);
+            for (e, v) in rows {
+                let _ = write!(w, "{e}");
+                for x in v {
+                    let _ = write!(w, ",{x:.3}");
                 }
                 let _ = writeln!(w);
-                for (e, v) in &rows {
-                    let _ = write!(w, "{e}");
-                    for x in v {
-                        let _ = write!(w, ",{x:.3}");
-                    }
-                    let _ = writeln!(w);
-                }
-                eprintln!("raw values written to {}", path.display());
             }
-            Err(err) => eprintln!("could not write {}: {err}", path.display()),
+            eprintln!("raw values written to {}", path.display());
         }
+        Err(err) => eprintln!("could not write {}: {err}", path.display()),
     }
+}
 
-    /* Terminal values first. A position with fewer empties than the search
-    depth is solved, and the solver's win/loss encoding is not a disc
-    difference; a single one of those in a cell moves its RMS by hundreds. */
+/// Rows holding a terminal value would dominate the fit.
+fn keep_finite(rows: &[(u32, Vec<f32>)]) -> Vec<&(u32, Vec<f32>)> {
     let mut dropped = 0usize;
     let kept: Vec<&(u32, Vec<f32>)> = rows
         .iter()
@@ -530,11 +594,16 @@ fn main() -> ExitCode {
         rows.len(),
         kept.len()
     );
-    if kept.is_empty() {
-        eprintln!("nothing left to fit");
-        return ExitCode::FAILURE;
-    }
+    kept
+}
 
+fn build_cells(
+    kept: &[&(u32, Vec<f32>)],
+    pairs: &[(u32, u32)],
+    depths: &[u32],
+    empties_bin: u32,
+    min_cell: usize,
+) -> Vec<Cell> {
     let idx = |d: u32| depths.iter().position(|&x| x == d).unwrap();
     struct Acc {
         n: usize,
@@ -544,8 +613,8 @@ fn main() -> ExitCode {
         e_hi: u32,
     }
     let mut acc: std::collections::BTreeMap<(u32, u32, u32), Acc> = Default::default();
-    for (e, v) in &kept {
-        for &(d, p) in &pairs {
+    for (e, v) in kept {
+        for &(d, p) in pairs {
             let err = (v[idx(d)] - v[idx(p)]) as f64;
             let slot = acc.entry((*e / empties_bin, d, p)).or_insert(Acc {
                 n: 0,
@@ -574,27 +643,22 @@ fn main() -> ExitCode {
             rms: (a.sq / a.n as f64).sqrt() as f32,
         })
         .collect();
-    eprintln!(
-        "{} cells with at least {min_cell} samples, over {} (depth, pc_depth) pairs",
-        cells.len(),
-        pairs.len()
-    );
-    if cells.len() < 12 {
-        eprintln!("too few cells to fit six coefficients; measure more positions");
-        return ExitCode::FAILURE;
-    }
+    cells
+}
 
-    let (coef, rmse) = fit(&cells, LEGACY);
-    let sigma = MpcSigma::from_array(coef);
+fn report_pairs(
+    cells: &[Cell],
+    pairs: &[(u32, u32)],
+    sigma: &MpcSigma,
+    coef: [f32; MpcSigma::LEN],
+    rmse: f64,
+) {
     let legacy = MpcSigma::from_array(LEGACY);
-
-    // Per-pair summary: what was measured, what the fit says, and how it
-    // compares with what the search used to prune against.
     println!(
         "{:>5} {:>4} {:>8} {:>9} {:>8} {:>8} {:>7}",
         "depth", "pc", "n", "empties", "measured", "fitted", "vs old"
     );
-    for &(d, p) in &pairs {
+    for &(d, p) in pairs {
         let sel: Vec<&Cell> = cells
             .iter()
             .filter(|c| c.depth == d && c.pc_depth == p)
@@ -623,36 +687,34 @@ fn main() -> ExitCode {
         "a={:.6} b={:.6} c={:.6} qa={:.6} qb={:.6} qc={:.6}   (weighted rmse {rmse:.4})",
         coef[0], coef[1], coef[2], coef[3], coef[4], coef[5]
     );
+}
 
-    if show_cells {
-        println!();
+fn report_cells(cells: &[Cell], sigma: &MpcSigma) {
+    println!();
+    println!(
+        "{:>5} {:>4} {:>9} {:>8} {:>8} {:>8} {:>8}",
+        "depth", "pc", "empties", "n", "measured", "fitted", "err"
+    );
+    for c in cells {
+        let f = sigma.value(c.empties.round() as u32, c.depth, c.pc_depth);
         println!(
-            "{:>5} {:>4} {:>9} {:>8} {:>8} {:>8} {:>8}",
-            "depth", "pc", "empties", "n", "measured", "fitted", "err"
+            "{:>5} {:>4} {:>9} {:>8} {:>8.3} {:>8.3} {:>+8.3}",
+            c.depth,
+            c.pc_depth,
+            format!("{}-{}", c.e_lo, c.e_hi),
+            c.n,
+            c.rms,
+            f,
+            f - c.rms
         );
-        for c in &cells {
-            let f = sigma.value(c.empties.round() as u32, c.depth, c.pc_depth);
-            println!(
-                "{:>5} {:>4} {:>9} {:>8} {:>8.3} {:>8.3} {:>+8.3}",
-                c.depth,
-                c.pc_depth,
-                format!("{}-{}", c.e_lo, c.e_hi),
-                c.n,
-                c.rms,
-                f,
-                f - c.rms
-            );
-        }
     }
+}
 
-    /* The fit is a quadratic, so outside the empty counts it saw it can
-    turn down through zero or run away upward. Both are survivable -- the
-    floor catches one and a huge margin only means no pruning -- but a
-    silent one is not, so the whole deployed domain gets walked. */
+fn report_span(pairs: &[(u32, u32)], sigma: &MpcSigma) {
     let (mut worst_lo, mut worst_hi) = (f32::MAX, 0.0f32);
     let mut floored = 0usize;
     for e in 1..=60u32 {
-        for &(d, p) in &pairs {
+        for &(d, p) in pairs {
             let sv = e as f32 * sigma.a + d as f32 * sigma.b + p as f32 * sigma.c;
             let raw = sigma.qa * sv * sv + sigma.qb * sv + sigma.qc;
             if raw < 1.0 {
@@ -668,34 +730,20 @@ fn main() -> ExitCode {
         pairs.len(),
         60 * pairs.len()
     );
+}
 
-    if !write {
-        println!(
-            "not written (pass --write to store this in {})",
-            nnue_path.display()
-        );
-        return ExitCode::SUCCESS;
-    }
-    if from_csv.is_some() {
-        /* `--from-csv` is the one hole in "a sigma can only be written to
-        the file it was measured against": the values came from whatever
-        model produced the csv, which nothing here can check. Say so. */
-        eprintln!(
-            "warning: these values were measured by an earlier run, not by this one -- \
-             writing them is only correct if {} holds those same weights",
-            nnue_path.display()
-        );
-    }
-    /* Write back into the very file that was measured. Loading again rather
-    than reusing the quantized copy keeps the saved weights byte-identical to
-    what was on disk: this run must change the sigma and nothing else. */
+fn store_sigma(
+    nnue_path: &Path,
+    patterns: &'static [kuroobi::pattern::Pattern],
+    sigma: MpcSigma,
+) -> ExitCode {
     let mut out = Nnue::new(patterns);
-    if let Err(err) = out.load(&nnue_path) {
+    if let Err(err) = out.load(nnue_path) {
         eprintln!("failed to re-read {}: {err}", nnue_path.display());
         return ExitCode::FAILURE;
     }
     out.set_mpc_sigma(Some(sigma));
-    if let Err(err) = out.save(&nnue_path) {
+    if let Err(err) = out.save(nnue_path) {
         eprintln!("failed to write {}: {err}", nnue_path.display());
         return ExitCode::FAILURE;
     }
