@@ -37,6 +37,10 @@ pub static ROOT_TOTAL: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU
 
 const MPC_RELAX_STEP: f32 = 1.18;
 
+/// How much longer the next iteration is expected to take than the last one.
+/// Deriving it from the growth the search is actually showing was measured and
+/// made no difference (identical node counts at 4 / 8 / 16 s budgets): the time
+/// left unused is the granularity of a doubling pass, not a bad estimate.
 fn next_pass_factor() -> f32 {
     static V: std::sync::OnceLock<f32> = std::sync::OnceLock::new();
     *V.get_or_init(|| {
@@ -708,6 +712,15 @@ impl NnueSearch {
         self.done.is_some() && self.stopped()
     }
 
+    /// The search is being torn down -- deadline, external stop, or this
+    /// worker's generation retired -- as opposed to cut by a sibling. A cut
+    /// leaves the part already searched usable; a teardown does not.
+    #[inline]
+    fn torn_down(&self) -> bool {
+        self.stop.as_ref().is_some_and(|s| s.is_stopped())
+            || (self.done.is_some() && self.stopped())
+    }
+
     pub fn clear(&mut self) {
         self.tt.clear();
     }
@@ -783,7 +796,7 @@ impl NnueSearch {
             self.root_hash = zobrist::board_hash(b.player_bb(), b.opponent_bb());
             self.root_move = None;
             let v = self.negamax(b, &mut acc, d, f32::NEG_INFINITY, f32::INFINITY);
-            if v == ABORTED || self.stop.as_ref().is_some_and(|s| s.is_stopped()) {
+            if v == ABORTED || self.torn_down() {
                 break;
             }
             last_pass = t0.elapsed();
@@ -898,7 +911,7 @@ impl NnueSearch {
                     nodes.fetch_add(slot.nodes.load(Ordering::Relaxed), Ordering::Relaxed);
                 }
 
-                if v == ABORTED || self.stop.as_ref().is_some_and(|s| s.is_stopped()) {
+                if v == ABORTED || self.torn_down() {
                     break;
                 }
                 last_pass = t0.elapsed();
@@ -1392,7 +1405,8 @@ impl NnueSearch {
                     self.abort = outer.clone();
                 }
                 if raw == ABORTED {
-                    if !split_ok || outer.as_ref().is_some_and(|o| o.stopped()) {
+                    if !split_ok || self.torn_down() || outer.as_ref().is_some_and(|o| o.stopped())
+                    {
                         aborted = true;
                     }
                     break;
@@ -1423,6 +1437,9 @@ impl NnueSearch {
                 self.nodes += slot.nodes.load(std::sync::atomic::Ordering::Relaxed);
                 let raw = f32::from_bits(slot.bits.load(std::sync::atomic::Ordering::Relaxed));
                 if raw == ABORTED || aborted {
+                    if raw == ABORTED && self.torn_down() {
+                        aborted = true;
+                    }
                     continue;
                 }
                 let g = -raw;
@@ -1489,7 +1506,10 @@ impl NnueSearch {
             }
         }
 
-        if aborted {
+        // `ABORTED` is `f32::NEG_INFINITY`, which is also `best`'s starting
+        // value: a node whose first child was torn down looks exactly like a
+        // node that lost everything. Storing that poisons the table.
+        if aborted || best == ABORTED {
             return ABORTED;
         }
 
@@ -1537,6 +1557,50 @@ mod deadline_tests {
             el < std::time::Duration::from_secs(3),
             "must not overshoot the deadline by much ({el:?})"
         );
+    }
+
+    /// A torn-down node must not leave its half-finished value in the table.
+    /// `ABORTED` is `f32::NEG_INFINITY`, so storing it claims "worse than any
+    /// value", and `e.upper <= alpha` then cuts every later visit.
+    #[test]
+    fn a_cut_search_leaves_no_sentinel_bound() {
+        let mut nn0 = Nnue::new(crate::nnue::test_patterns());
+        nn0.quantize();
+        let nn = std::sync::Arc::new(nn0);
+        let tt = std::sync::Arc::new(SharedTt::new(18));
+        let mut s = NnueSearch::new(nn, tt);
+        s.threads = 4;
+        s.set_stop(Some(StopHandle::new()));
+        let b = Board::new();
+        let dl = std::time::Instant::now() + std::time::Duration::from_millis(400);
+        let (_pos, _v, reached) = s.best_move_deadline(&b, 40, Some(dl));
+        assert!(
+            reached < 40,
+            "the deadline has to bite for this to mean anything"
+        );
+
+        let mut boards = vec![b];
+        let mut m = b.movable();
+        while m != 0 {
+            let pos = Position::from_index(m.trailing_zeros()).unwrap();
+            m &= m - 1;
+            let mut child = b;
+            child.make_move_bits(pos);
+            boards.push(child);
+        }
+        for c in boards {
+            let e =
+                s.tt.get(zobrist::board_hash(c.player_bb(), c.opponent_bb()));
+            if e.flag == 0 {
+                continue;
+            }
+            assert!(
+                e.upper != f32::NEG_INFINITY && e.lower != f32::INFINITY,
+                "stored a sentinel bound: {} .. {}",
+                e.lower,
+                e.upper
+            );
+        }
     }
 
     #[test]
