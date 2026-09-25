@@ -196,6 +196,18 @@ const OVERTIME_SOLVE: u8 = 12;
 
 const NO_GRACE_RESERVE_MUL: u64 = 2;
 
+/// Seconds never allocated, whatever the clock says. `reserve_secs` is capped
+/// at half of what is left, so it shrinks with the clock and the last seconds
+/// get spent -- one board ran 901 s of a 900 s clock that way and a 16-disc
+/// win was recorded as a minimum-margin loss. From ~24 empties every move is
+/// solved in 0.3 s (measured), so this many seconds is a whole endgame.
+const ENDGAME_FLOOR: u64 = 10;
+
+/// What a move gets once the floor is all that is left: enough for a solve
+/// (0.3 s measured). With nothing left at all there is nothing to protect, so
+/// the move goes out as fast as it can instead.
+const FLOOR_MOVE_SECS: f64 = 0.25;
+
 pub fn plan(s: Situation, base: Levels, pace: Pace) -> Plan {
     if pace == Pace::Depth {
         return Plan {
@@ -232,7 +244,7 @@ pub fn plan(s: Situation, base: Levels, pace: Pace) -> Plan {
     } else {
         s.reserve_secs
     };
-    let reserve = want.min(avail / 2);
+    let reserve = want.min(avail / 2).max(ENDGAME_FLOOR.min(avail));
     let pool = avail.saturating_sub(reserve) as f64;
     let even = pool / my_moves as f64;
     let root = (my_moves as f64).sqrt();
@@ -248,14 +260,33 @@ pub fn plan(s: Situation, base: Levels, pace: Pace) -> Plan {
     } else {
         budget
     };
+    // Once the floor is all that is left the pool is empty, and with it the
+    // share this move would be budgeted from. That share is the wrong thing to
+    // price a solve against anyway: a solve ends the game, so there is no later
+    // move to save the floor for. Price it against the clock instead.
+    let last = pool <= 0.0;
     let solve = match s.nps {
         Some(nps) => {
             let b = (budget * SOLVE_GREED).min(avail as f64 * SOLVE_MAX_SHARE);
-            solve_entry(b, nps, s.threads, SOLVE_CEILING)
+            let from_share = solve_entry(b, nps, s.threads, SOLVE_CEILING);
+            if last {
+                from_share.max(solvable_now(s, nps))
+            } else {
+                from_share
+            }
         }
         None if avail < 20 => base.solve.min(14),
         None if avail < 60 => base.solve.min(20),
         None => base.solve,
+    };
+    let budget = if last && solve >= s.empties {
+        let need = s
+            .nps
+            .map(|nps| solve_secs(s.empties, nps, s.threads))
+            .unwrap_or(0.0);
+        budget.max(need.min(avail as f64 * SOLVE_FINAL_SHARE))
+    } else {
+        budget
     };
     let band = if base.auto_band {
         band_for(budget)
@@ -270,7 +301,30 @@ pub fn plan(s: Situation, base: Levels, pace: Pace) -> Plan {
         depth: DEPTH_BY_CLOCK,
         solve,
         band,
-        cap: Some(Duration::from_secs_f64(budget.max(0.05))),
+        cap: Some(Duration::from_secs_f64(budget.max(if avail > 0 {
+            FLOOR_MOVE_SECS
+        } else {
+            0.05
+        }))),
+    }
+}
+
+/// A terminal solve may spend nearly the whole clock: nothing comes after it,
+/// and `solve_secs` already carries `SOLVE_SAFETY` on top of the estimate.
+const SOLVE_FINAL_SHARE: f64 = 0.9;
+
+/// The position in front of us, when the clock can pay for solving it outright.
+///
+/// Deriving this from the move's share instead let `ENDGAME_FLOOR` reserve the
+/// whole remaining clock, drive the share to zero and come back `solve: 0` --
+/// at 10 empties with 7 s left a 0.4 ms exact answer was refused in favour of
+/// 0.25 s of midgame search, which read +4 on a board that finished +16.
+fn solvable_now(s: Situation, nps: f64) -> u8 {
+    let avail = s.clock_secs.unwrap_or(0) as f64;
+    if solve_secs(s.empties, nps, s.threads) <= avail * SOLVE_FINAL_SHARE {
+        s.empties
+    } else {
+        0
     }
 }
 
@@ -349,6 +403,82 @@ mod tests {
             Pace::Fast,
         );
         assert!(p.cap.unwrap() <= Duration::from_millis(100));
+    }
+
+    /// `reserve_secs` is capped at half the clock, so it shrinks with it. The
+    /// floor is what keeps the tail unspent: one board ran 901 s of a 900 s
+    /// clock and the flag turned a 16-disc win into a minimum-margin loss.
+    #[test]
+    fn the_floor_keeps_the_tail_unspent() {
+        let at = |left| {
+            plan(
+                Situation {
+                    clock_secs: Some(left),
+                    grace_secs: 120,
+                    empties: 26,
+                    budget_use: 5.8,
+                    ..Situation::default()
+                },
+                BASE,
+                Pace::Fast,
+            )
+            .cap
+            .unwrap()
+            .as_secs_f64()
+        };
+        for left in [ENDGAME_FLOOR, 8, 5, 2, 1] {
+            assert!(
+                at(left) <= 0.3,
+                "{left}s left must buy a solve, not a search: {}",
+                at(left)
+            );
+        }
+        assert!(
+            at(ENDGAME_FLOOR + 4) <= 4.0,
+            "above the floor only the pool is spendable: {}",
+            at(ENDGAME_FLOOR + 4)
+        );
+    }
+
+    /// The floor reserved the tail for the endgame and then let nothing spend
+    /// it: the reserve swallowed the whole clock, the pool went to zero, and
+    /// the plan came back `solve: 0`. At 10 empties with 7 s left that refused
+    /// a 0.4 ms exact answer and played 0.25 s of midgame search instead --
+    /// which reported +4 on a board that finished +16.
+    #[test]
+    fn the_floor_still_buys_the_solve_it_reserved_for() {
+        let at = |empties, left| {
+            plan(
+                Situation {
+                    clock_secs: Some(left),
+                    grace_secs: 120,
+                    empties,
+                    budget_use: 6.0,
+                    nps: Some(30e6),
+                    threads: 8,
+                    solve_ref: SolveRef::Auto,
+                    ..Situation::default()
+                },
+                BASE,
+                Pace::Fast,
+            )
+        };
+        for (empties, left) in [(10u8, 7u64), (10, 1), (18, 5), (24, 10)] {
+            let p = at(empties, left);
+            assert!(
+                p.solve >= empties,
+                "{empties} empties on {left}s must be solved ({:.4}s of work), got solve {}",
+                solve_secs(empties, 30e6, 8),
+                p.solve
+            );
+            assert!(
+                p.cap.unwrap().as_secs_f64() >= solve_secs(empties, 30e6, 8),
+                "the deadline must let the solve finish: cap {:?}",
+                p.cap.unwrap()
+            );
+        }
+        // Out of reach stays out of reach: no pretending the clock can solve it.
+        assert!(at(34, 54).solve < 34);
     }
 
     #[test]
