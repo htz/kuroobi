@@ -435,6 +435,27 @@ export function RateChart({ points, height = 74, width = 300, axes, dates, label
   );
 }
 
+/// The widths here mirror `ResultRow` below; the two drift apart the moment
+/// they are edited separately, so they sit next to each other. It belongs
+/// outside the scrolling body -- a header that scrolls away is no header.
+export function ResultHead({ note, rating, when }: {
+  note?: boolean; rating?: boolean; when?: boolean;
+}) {
+  const cell = (w: number | string): React.CSSProperties => ({
+    width: w, flex: 'none', textAlign: 'right',
+  });
+  return (
+    <TableHead pad="var(--sp-2)">
+      <span style={{ width: 24, flex: 'none' }}>{t('data.result.head_outcome')}</span>
+      <span style={{ flex: 1, minWidth: 0 }}>{t('data.result.head_opponent')}</span>
+      {note && <span style={{ width: 'var(--w-gtype)', flex: 'none' }}>{t('data.result.head_kind')}</span>}
+      <span style={cell(44)}>{t('data.result.head_discs')}</span>
+      {rating && <span style={cell(60)}>{t('data.result.head_rating')}</span>}
+      {when && <span style={cell(64)}>{t('data.result.head_date')}</span>}
+    </TableHead>
+  );
+}
+
 export function ResultRow({ win, draw, adjourned, opponent, discs, when, note, rating, dim, picked, onHover, onClick }: {
   win: boolean;
   draw?: boolean;

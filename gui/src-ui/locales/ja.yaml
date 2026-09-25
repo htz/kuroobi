@@ -188,6 +188,12 @@ data:
   result:
     adjourned: "断"
     draw: "分"
+    head_date: "日付"
+    head_discs: "石差"
+    head_kind: "形式"
+    head_opponent: "相手"
+    head_outcome: "勝敗"
+    head_rating: "レート"
     loss: "負"
     open_in_study: "検討で開く"
     win: "勝"

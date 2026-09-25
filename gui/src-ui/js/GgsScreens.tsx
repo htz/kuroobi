@@ -18,7 +18,7 @@ import {
   type Cond, type Match, type NavId,
 } from './components/ggs';
 import { Board, type Cell, type EvalInfo } from './components/board';
-import { EvalTrend, RateChart, ResultRow, StoneDot } from './components/data';
+import { EvalTrend, RateChart, ResultHead, ResultRow, StoneDot } from './components/data';
 import { flipped, type Prefs } from './prefs';
 import { logLinesOf } from './adapt';
 
@@ -1105,7 +1105,11 @@ function GgsResults({ snap, onKifu }: {
         )}
       </Section>
 
-      <Section title={t('ggs.results.finished')} aside={<span>{rows.length}</span>} grow>
+      <Section title={t('ggs.results.finished')} aside={<span>{rows.length}</span>} grow
+               head={!!rows.length && (
+                 <ResultHead note={cur === 'all'}
+                             rating={rows.some((r) => r.my_rating != null)} when />
+               )}>
         {!rows.length && <Empty>{t('ggs.no_records')}</Empty>}
         <List key={cur}>
         {rows.map((r) => (
@@ -1130,7 +1134,12 @@ function GgsResults({ snap, onKifu }: {
   );
 }
 
-const rowKey = (r: GameResult) => `${r.id}#${r.seq}`;
+// GGS hands out the same match number again and again, and the sequence number
+// beside it restarts with the app, so id and seq together name 33 pairs of
+// different games in the saved history. Hovering a row then lit up whichever
+// older game answered to the same name -- a row from 8/21 moved the chart's
+// marker to 8/14. The finish time settles it.
+const rowKey = (r: GameResult) => `${r.id}#${r.seq}#${r.at ?? 0}`;
 
 const poolOf = (base: string, raw?: string) => {
   const kind = baseType(base, raw);

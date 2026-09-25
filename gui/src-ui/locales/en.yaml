@@ -192,6 +192,12 @@ data:
   result:
     adjourned: "A"
     draw: "D"
+    head_date: "Date"
+    head_discs: "Discs"
+    head_kind: "Format"
+    head_opponent: "Opponent"
+    head_outcome: "Result"
+    head_rating: "Rating"
     loss: "L"
     open_in_study: "Open in study"
     win: "W"

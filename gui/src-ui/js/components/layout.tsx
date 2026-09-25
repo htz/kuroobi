@@ -153,9 +153,11 @@ export function Dock({ tabs, active, onTab, children, open, scroll = true }: {
   );
 }
 
-export function Section({ title, aside, grow, children }: {
+/// `head` sits between the title and the scrolling body, which is where a
+/// table header belongs -- inside `children` it scrolls away with the rows.
+export function Section({ title, aside, grow, head, children }: {
   title: string; aside?: React.ReactNode; children?: React.ReactNode;
-  grow?: boolean;
+  grow?: boolean; head?: React.ReactNode;
 }) {
   return (
     <section style={{
@@ -172,6 +174,7 @@ export function Section({ title, aside, grow, children }: {
       }}>{title}{aside && <span style={{
         marginLeft: 'auto', letterSpacing: 0, display: 'flex', alignItems: 'center', gap: 'var(--sp-2)',
       }}>{aside}</span>}</h3>
+      {head}
       {grow
         ? <div className="k-scroll" style={{ flex: 1, minHeight: 0 }}>{children}</div>
         : children}
