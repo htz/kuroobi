@@ -3060,7 +3060,16 @@ fn apply_block(m: &mut MatchState, block: &[String], login: &str) -> (bool, Opti
                     .to_string();
                 if ((2..=4).contains(&mv.len()) || mv.eq_ignore_ascii_case("pa")) && !mv.is_empty()
                 {
-                    let ev = parts.next().and_then(|x| x.trim().parse::<f32>().ok());
+                    // The server returns an evaluation of 0.00 as an empty
+                    // field -- 412 zeros went out over one session and not one
+                    // came back with its value -- so an empty field that is
+                    // there at all reads as 0. A move with no field (`F1`, no
+                    // slashes) reported nothing and stays unknown; without the
+                    // distinction every settled endgame drops out of the graph.
+                    let ev = parts.next().and_then(|x| match x.trim() {
+                        "" => Some(0.0),
+                        v => v.parse::<f32>().ok(),
+                    });
                     let sec = parts.next().and_then(|x| x.trim().parse::<f32>().ok());
                     m.moves.insert(n, mv);
                     let slot = m.move_evals.entry(n).or_insert((None, None));
@@ -4688,6 +4697,40 @@ mod tests {
             diff_from_raw(".7 2400 kuroobi 2400 saio s8r16", "saio"),
             None,
             "an adjourned match has no margin to show"
+        );
+    }
+
+    /// The server hands back an evaluation of 0.00 as an empty field, so
+    /// reading the field as "no value" lost every settled endgame from the
+    /// graph -- the line simply stopped where the game became even.
+    #[test]
+    fn an_empty_evaluation_field_is_a_zero() {
+        let block: Vec<String> = [
+            "|  1: F5/1.50/12.00",
+            "|  2: D6//8.00",
+            "|  3: C4",
+            "|* to move",
+        ]
+        .iter()
+        .map(|s| s.to_string())
+        .collect();
+        let mut m = MatchState::new();
+        apply_block(&mut m, &block, "kuroobi");
+        assert_eq!(m.move_evals.get(&1).map(|e| e.0), Some(Some(1.5)));
+        assert_eq!(
+            m.move_evals.get(&2).map(|e| e.0),
+            Some(Some(0.0)),
+            "an empty field that is present means 0.00"
+        );
+        assert_eq!(
+            m.move_evals.get(&3).map(|e| e.0),
+            Some(None),
+            "a move with no field at all reported nothing"
+        );
+        assert_eq!(
+            m.move_evals.get(&2).map(|e| e.1),
+            Some(Some(8.0)),
+            "the seconds after an empty evaluation still land"
         );
     }
 
