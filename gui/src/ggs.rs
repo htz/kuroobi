@@ -645,6 +645,33 @@ fn history_path() -> PathBuf {
     PathBuf::from("ggs_history.jsonl")
 }
 
+/// The margin a stored result really carries, read back from the server's own
+/// line rather than from the number beside it.
+///
+/// `- match .63 2696 Rhapsody 2358 kuroobi s8r14 R +29.00` is +29 *for the name
+/// written first*, so that row is a 29-disc loss; older builds filed it as a
+/// win, and a stretch of August reads as nine wins that the rating says were
+/// defeats -- it fell 2468 to 2324 across them. A synchro pair scores as the
+/// mean of its boards, so the margin for the match is twice the line.
+fn diff_from_raw(raw: &str, opp: &str) -> Option<i32> {
+    if opp.is_empty() {
+        return None;
+    }
+    let toks: Vec<&str> = raw.split_whitespace().collect();
+    let score = toks.iter().find_map(|t| {
+        t.starts_with(['+', '-'])
+            .then(|| t.parse::<f32>().ok())
+            .flatten()
+    })?;
+    let first = toks
+        .iter()
+        .skip(1)
+        .find(|t| t.len() >= 2 && t.chars().next().is_some_and(|c| c.is_ascii_alphabetic()))?;
+    let synchro = toks.iter().any(|t| t.starts_with("s8"));
+    let v = (if synchro { score * 2.0 } else { score }).round() as i32;
+    Some(if *first == opp { -v } else { v })
+}
+
 fn load_history() -> Vec<GameResult> {
     let Ok(text) = std::fs::read_to_string(history_path()) else {
         return Vec::new();
@@ -653,6 +680,11 @@ fn load_history() -> Vec<GameResult> {
         .lines()
         .filter_map(|l| serde_json::from_str::<GameResult>(l).ok())
         .collect();
+    for r in &mut out {
+        if let Some(d) = diff_from_raw(&r.raw, &r.opp) {
+            r.my_diff = Some(d);
+        }
+    }
     out.reverse();
     out.truncate(500);
     out
@@ -4624,6 +4656,39 @@ mod tests {
             "the post-draw board is not the start position: {bo}"
         );
         assert!(!ggf.contains("B[PA]"), "the record begins with a pass");
+    }
+
+    /// A stored margin is only as good as the name order it was read with.
+    /// These are real lines: `.63` went down 29 discs and was filed as a
+    /// 29-disc win, which turned a losing August into a winning one.
+    #[test]
+    fn a_stored_margin_follows_the_name_written_first() {
+        assert_eq!(
+            diff_from_raw(
+                ".63 2696 Rhapsody 2358 kuroobi s8r14 R +29.00  .83993",
+                "Rhapsody"
+            ),
+            Some(-58),
+            "the score belongs to the name written first, and a pair doubles it"
+        );
+        assert_eq!(
+            diff_from_raw(
+                ".21 2469 kuroobi 2591 Rhapsody s8r16 R +1.00  .86021",
+                "Rhapsody"
+            ),
+            Some(2),
+            "written first ourselves, the sign stands"
+        );
+        assert_eq!(
+            diff_from_raw(".9 2400 kuroobi 2400 saio 8 R -3.00", "saio"),
+            Some(-3),
+            "a lone board is not doubled"
+        );
+        assert_eq!(
+            diff_from_raw(".7 2400 kuroobi 2400 saio s8r16", "saio"),
+            None,
+            "an adjourned match has no margin to show"
+        );
     }
 
     #[test]
