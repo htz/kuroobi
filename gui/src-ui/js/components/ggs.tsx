@@ -198,14 +198,16 @@ export type Match = {
   id: string; mine: boolean; live: boolean;
   opponent?: string;
   black: string; white: string;
-  kind: string;      // "Synchro, random 16" / "Standard"
-  boards: number;    // 2 for synchro
-  ply: number;
+  kind: string;      // "Synchro, random 16" / "Standard" -- synchro means 2 boards
   myTurn?: boolean;
-  result?: string;   // "+8" and the like, once finished
+  result?: string;   // the match's own result, once every board is in
   ended?: string;
   leftBy?: string;
 };
+// A row stands for the match, so it carries nothing that belongs to one board.
+// The ply count is per board and the row used to print whichever board was
+// furthest along; the disc difference is per board too, and the row printed
+// whichever board finished first rather than the match's own result.
 
 const matchTitle = (m: Match) =>
   m.mine
@@ -243,8 +245,7 @@ export function MatchRow({ m, active, onSelect, onClose }: {
         </span>
         <span style={{ fontSize: 'var(--fs-6)', color: 'var(--sub)',
                        overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-          {m.kind}{m.boards > 1 && ' · ' + t('ggs.lobby.game_count', { n: m.boards })}
-          {' · '}{t('ggs.match.ply', { n: m.ply })}
+          {m.kind}
           {m.ended === 'adjourned'
             ? ' · ' + (m.leftBy ? t('ggs.play.left_by', { who: m.leftBy }) : t('ggs.play.opp_left'))
             : m.result && ` · ${m.result}`}

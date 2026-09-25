@@ -686,6 +686,17 @@ function MatchActions({ id, pair }: { id: string; pair: MatchView[] }) {
   );
 }
 
+// GGS scores a synchro match as the mean of its boards, so the match has no
+// result until every board is in -- and taking the first board that finished
+// would show one half of it.
+function matchResult(g: MatchView[]): string | undefined {
+  if (!g.every((x) => x.over)) return undefined;
+  const diffs = g.map((x) => Number.parseFloat(x.result));
+  if (diffs.length !== g.length || diffs.some((v) => !Number.isFinite(v))) return undefined;
+  const mean = diffs.reduce((a, b) => a + b, 0) / diffs.length;
+  return (mean > 0 ? '+' : '') + mean.toFixed(2);
+}
+
 function matchRowOf(g: MatchView[], key: string): Match {
   const m = g[0];
   const mine = g.some((x) => x.my_color);
@@ -693,9 +704,8 @@ function matchRowOf(g: MatchView[], key: string): Match {
     id: key, mine, live: !g.every((x) => x.over),
     opponent: m.opp_name,
     black: m.players[0]?.name ?? '?', white: m.players[1]?.name ?? '?',
-    kind: gtypeLabel(m.gtype), boards: g.length,
-    ply: Math.max(...g.map((x) => x.moves.length)),
-    result: g.map((x) => x.result).find(Boolean) || undefined,
+    kind: gtypeLabel(m.gtype),
+    result: matchResult(g),
     ended: g.map((x) => x.ended).find(Boolean) || undefined,
     leftBy: g.map((x) => x.left_by).find(Boolean) || undefined,
   };

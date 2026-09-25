@@ -490,7 +490,6 @@ ggs:
   match:
     close: "Remove from the list"
     me_vs: "Me vs {name}"
-    ply: "move {n}"
   match_requests: "Match requests"
   nav:
     chat: "Chat"

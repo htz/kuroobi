@@ -486,7 +486,6 @@ ggs:
   match:
     close: "一覧から閉じる"
     me_vs: "自分 対 {name}"
-    ply: "{n} 手目"
   match_requests: "対局の申し込み"
   nav:
     chat: "チャット"
