@@ -41,6 +41,34 @@ const MPC_RELAX_STEP: f32 = 1.18;
 /// Deriving it from the growth the search is actually showing was measured and
 /// made no difference (identical node counts at 4 / 8 / 16 s budgets): the time
 /// left unused is the granularity of a doubling pass, not a bad estimate.
+/// Stop deepening once the best move is clear. `DECIDED` is the margin in
+/// discs that counts as clear, and the root searches its other moves in a
+/// window that wide so "no move came within it" is proven rather than guessed.
+/// A wider window costs nodes, so the margin wants to be small. Off unless set.
+fn decided_margin() -> Option<f32> {
+    static V: std::sync::OnceLock<Option<f32>> = std::sync::OnceLock::new();
+    *V.get_or_init(|| {
+        std::env::var("DECIDED")
+            .ok()
+            .and_then(|v| v.parse().ok())
+            .filter(|v: &f32| v.is_finite() && *v > 0.0)
+    })
+}
+
+/// Fraction of the move's budget that is always spent deepening before the
+/// margin is consulted. A share of the time rather than a depth, so a position
+/// that deepens slowly still gets its iterations.
+fn decided_at() -> f32 {
+    static V: std::sync::OnceLock<f32> = std::sync::OnceLock::new();
+    *V.get_or_init(|| {
+        std::env::var("DECIDED_AT")
+            .ok()
+            .and_then(|v| v.parse().ok())
+            .filter(|v: &f32| v.is_finite() && *v > 0.0 && *v < 1.0)
+            .unwrap_or(0.5)
+    })
+}
+
 fn next_pass_factor() -> f32 {
     static V: std::sync::OnceLock<f32> = std::sync::OnceLock::new();
     *V.get_or_init(|| {
@@ -782,6 +810,7 @@ impl NnueSearch {
         let mut best = None;
         let mut reached = 0;
         let mut last_pass = std::time::Duration::ZERO;
+        let t_start = deadline.map(|_| std::time::Instant::now());
         for d in 1..=depth {
             if let Some(dl) = deadline {
                 let now = std::time::Instant::now();
@@ -803,11 +832,45 @@ impl NnueSearch {
             value = v;
             best = self.root_move.or_else(|| self.root_best(b, &mut acc));
             reached = d;
+            if let (Some(m), Some(dl), Some(start)) = (decided_margin(), deadline, t_start) {
+                let spent = start.elapsed().as_secs_f32();
+                let budget = (dl - start).as_secs_f32();
+                let clear = self.root_runner_up(b, best).is_some_and(|r| value - r >= m);
+                if spent >= budget * decided_at() && clear {
+                    break;
+                }
+            }
             if let Some(p) = self.progress.as_ref() {
                 p.reached(d, best, v);
             }
         }
         (best.or_else(|| self.root_best(b, &mut acc)), value, reached)
+    }
+
+    /// The best the root's other moves can be, read back from the table the
+    /// iteration just wrote. A move that failed low stored a bound, and `-lower`
+    /// of the child is an upper bound on what that move is worth -- so a gap
+    /// measured this way is a gap that exists. `None` when any move has no
+    /// entry: unknown is not the same as far behind.
+    fn root_runner_up(&self, b: &Board, best: Option<Position>) -> Option<f32> {
+        let mut top = f32::NEG_INFINITY;
+        let mut m = b.movable();
+        while m != 0 {
+            let pos = Position::from_index(m.trailing_zeros()).unwrap();
+            m &= m - 1;
+            if Some(pos) == best {
+                continue;
+            }
+            let mut child = *b;
+            child.make_move_bits(pos);
+            let h = zobrist::board_hash(child.player_bb(), child.opponent_bb());
+            let e = self.tt.get(h);
+            if e.key != h || e.flag == 0 || !e.lower.is_finite() {
+                return None;
+            }
+            top = top.max(-e.lower);
+        }
+        top.is_finite().then_some(top)
     }
 
     fn root_best(&self, b: &Board, acc: &mut PatternIndices) -> Option<Position> {
@@ -858,6 +921,7 @@ impl NnueSearch {
         let mut best = None;
         let mut reached = 0;
         let mut last_pass = std::time::Duration::ZERO;
+        let t_start = deadline.map(|_| std::time::Instant::now());
 
         let workers = self.threads - 1;
         let pool = self.shared_pool(workers);
@@ -920,6 +984,14 @@ impl NnueSearch {
                 reached = main_depth;
                 if let Some(p) = self.progress.as_ref() {
                     p.reached(main_depth, best, v);
+                }
+                if let (Some(m), Some(dl), Some(start)) = (decided_margin(), deadline, t_start) {
+                    let spent = start.elapsed().as_secs_f32();
+                    let budget = (dl - start).as_secs_f32();
+                    let clear = self.root_runner_up(b, best).is_some_and(|r| value - r >= m);
+                    if spent >= budget * decided_at() && clear {
+                        break;
+                    }
                 }
                 if std::env::var("ROOT_TRACE").is_ok() {
                     eprintln!(
@@ -1332,6 +1404,7 @@ impl NnueSearch {
 
         let split_ok = will_split;
 
+        let at_root = self.root_hash != 0 && h == self.root_hash;
         let mut aborted = false;
         let mut settled = [false; MAX_KIDS];
         let mut n_settled = 0usize;
@@ -1513,7 +1586,7 @@ impl NnueSearch {
             return ABORTED;
         }
 
-        if self.root_hash != 0 && h == self.root_hash && best_move < 64 {
+        if at_root && best_move < 64 {
             self.root_move = Position::from_index(best_move as u32);
         }
         self.tt.put(
