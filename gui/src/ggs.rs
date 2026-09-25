@@ -713,7 +713,12 @@ fn settings_path() -> PathBuf {
         .join("ggs_settings.json")
 }
 
+/// A field the file does not carry falls back to the value a fresh install
+/// uses. Without this, one missing field made the whole read fail, the defaults
+/// took over, and the next save overwrote what the user had set -- which is how
+/// a `budget_use` of 5.8 became 2.5.
 #[derive(Serialize, serde::Deserialize)]
+#[serde(default)]
 struct SavedSettings {
     depth: u32,
     solve: u8,
@@ -727,6 +732,25 @@ struct SavedSettings {
     watch_analysis: bool,
     use_book: bool,
     learn: bool,
+}
+
+impl Default for SavedSettings {
+    fn default() -> Self {
+        SavedSettings {
+            depth: 22,
+            solve: 26,
+            band: 6,
+            ponder: true,
+            pace: "fast".into(),
+            max_move_secs: 0,
+            reserve_secs: 20,
+            budget_use: 2.5,
+            auto_play: false,
+            watch_analysis: false,
+            use_book: true,
+            learn: true,
+        }
+    }
 }
 
 fn save_settings(ctx: &Ctx) {
