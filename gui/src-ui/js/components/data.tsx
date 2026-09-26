@@ -435,9 +435,7 @@ export function RateChart({ points, height = 74, width = 300, axes, dates, label
   );
 }
 
-/// The widths here mirror `ResultRow` below; the two drift apart the moment
-/// they are edited separately, so they sit next to each other. It belongs
-/// outside the scrolling body -- a header that scrolls away is no header.
+/// Widths mirror `ResultRow`.
 export function ResultHead({ note, rating, when }: {
   note?: boolean; rating?: boolean; when?: boolean;
 }) {

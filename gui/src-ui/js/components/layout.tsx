@@ -153,8 +153,7 @@ export function Dock({ tabs, active, onTab, children, open, scroll = true }: {
   );
 }
 
-/// `head` sits between the title and the scrolling body, which is where a
-/// table header belongs -- inside `children` it scrolls away with the rows.
+/// Outside the scroller, so a table header stays put.
 export function Section({ title, aside, grow, head, children }: {
   title: string; aside?: React.ReactNode; children?: React.ReactNode;
   grow?: boolean; head?: React.ReactNode;

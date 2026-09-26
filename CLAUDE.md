@@ -162,6 +162,17 @@ Japanese terms, used consistently in `ja.yaml`:
 Code identifiers (`book`, `band`, ...) and English UI text stay in the
 engine's own vocabulary: book, selective search, solve, analysis.
 
+## Comments
+
+**A comment says only what the code cannot**: a measured constant, a
+protocol quirk, or the reason behind a branch that looks wrong — each
+in one line. Anything that restates the code, narrates a change, or
+describes a test its name already describes gets deleted.
+
+The 2026-09-23 cleanup (`566d9bb`) cut 10,133 comment lines to 179.
+Two days later 322 had come back, 40 of them multi-line essays,
+because the rule lived only in that commit message.
+
 ## Commits
 
 - **Messages are English** (switched 2026-08-22; older history stays

@@ -686,9 +686,7 @@ function MatchActions({ id, pair }: { id: string; pair: MatchView[] }) {
   );
 }
 
-// GGS scores a synchro match as the mean of its boards, so the match has no
-// result until every board is in -- and taking the first board that finished
-// would show one half of it.
+// GGS scores a synchro match as the mean of its boards, so none until all are in.
 function matchResult(g: MatchView[]): string | undefined {
   if (!g.every((x) => x.over)) return undefined;
   const diffs = g.map((x) => Number.parseFloat(x.result));
@@ -1134,11 +1132,7 @@ function GgsResults({ snap, onKifu }: {
   );
 }
 
-// GGS hands out the same match number again and again, and the sequence number
-// beside it restarts with the app, so id and seq together name 33 pairs of
-// different games in the saved history. Hovering a row then lit up whichever
-// older game answered to the same name -- a row from 8/21 moved the chart's
-// marker to 8/14. The finish time settles it.
+// GGS reuses match numbers and seq restarts with the app; the finish time tells them apart.
 const rowKey = (r: GameResult) => `${r.id}#${r.seq}#${r.at ?? 0}`;
 
 const poolOf = (base: string, raw?: string) => {

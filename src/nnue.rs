@@ -743,8 +743,7 @@ impl Adw {
     }
 }
 
-/// Sums each sink's sparse rows into the scratch row, recording which rows were
-/// touched, and returns the squared norm of the summed gradient.
+/// Returns the squared norm of the summed gradient.
 fn reduce_rows<const D: usize>(
     cells: FtCells,
     cur: u32,

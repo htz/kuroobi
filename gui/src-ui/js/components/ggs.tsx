@@ -204,10 +204,6 @@ export type Match = {
   ended?: string;
   leftBy?: string;
 };
-// A row stands for the match, so it carries nothing that belongs to one board.
-// The ply count is per board and the row used to print whichever board was
-// furthest along; the disc difference is per board too, and the row printed
-// whichever board finished first rather than the match's own result.
 
 const matchTitle = (m: Match) =>
   m.mine

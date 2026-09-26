@@ -1253,7 +1253,6 @@ fn dispatch_dims(n_wg: usize) -> (u32, u32) {
 }
 
 impl GpuTrainer {
-    /// Take the model's tables onto the GPU.
     pub fn new(nn: &Nnue, batch: usize, adam: &AdamState, lookahead: (u32, f32)) -> GpuTrainer {
         assert!(
             !nn.so_grid,
@@ -2304,7 +2303,6 @@ impl GpuTrainer {
         }
     }
 
-    /// One pass over `examples` in batches, one optimizer step each.
     pub fn train_shard(
         &mut self,
         nn: &Nnue,
@@ -2380,7 +2378,6 @@ impl GpuTrainer {
         staging.unmap();
     }
 
-    /// Bring the trained tables back into `nn` (for the held-out pass and the save).
     fn read_back_u32(&self, src: &wgpu::Buffer, out: &mut [u32]) {
         let bytes = (out.len() * 4) as u64;
         let staging = self.device.create_buffer(&wgpu::BufferDescriptor {
@@ -2542,7 +2539,6 @@ mod tests {
         nn.apply_adamw_batch(&mut sinks, adam, lr, wd, 1.0 / exs.len() as f32);
     }
 
-    /// Compare both tables after `steps` batches, each side taking the same batches in the same order.
     fn agree_over(chunks: &[&[Example]], lr: f32, wd: f32, la: (u32, f32)) -> (f32, f32) {
         let pats = crate::nnue::test_patterns();
         let mut a = Nnue::new(pats);
@@ -2622,7 +2618,6 @@ mod tests {
         );
     }
 
-    /// The GPU trainer must move the weights where the CPU trainer moves them.
     #[test]
     #[ignore = "requires a GPU"]
     fn gpu_and_cpu_take_the_same_step() {
