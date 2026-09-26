@@ -153,6 +153,8 @@ export interface MatchView {
   watch_best: string | null;
   watch_exact: boolean;
   seen: number;
+  /** When the server's last update for this board arrived, in ms since the epoch. */
+  updated_ms: number;
 }
 
 export interface GameResult {

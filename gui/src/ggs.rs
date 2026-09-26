@@ -254,6 +254,8 @@ pub struct MatchView {
     pub watch_best: Option<String>,
     pub watch_exact: bool,
     pub seen: u64,
+    /// Arrival of the last server update (epoch ms); the screen runs the clock from here.
+    pub updated_ms: u64,
     pub order: u64,
 }
 
@@ -645,14 +647,7 @@ fn history_path() -> PathBuf {
     PathBuf::from("ggs_history.jsonl")
 }
 
-/// The margin a stored result really carries, read back from the server's own
-/// line rather than from the number beside it.
-///
-/// `- match .63 2696 Rhapsody 2358 kuroobi s8r14 R +29.00` is +29 *for the name
-/// written first*, so that row is a 29-disc loss; older builds filed it as a
-/// win, and a stretch of August reads as nine wins that the rating says were
-/// defeats -- it fell 2468 to 2324 across them. A synchro pair scores as the
-/// mean of its boards, so the margin for the match is twice the line.
+/// The line is signed for the name written first; a synchro match scores the mean of two boards.
 fn diff_from_raw(raw: &str, opp: &str) -> Option<i32> {
     if opp.is_empty() {
         return None;
@@ -745,10 +740,7 @@ fn settings_path() -> PathBuf {
         .join("ggs_settings.json")
 }
 
-/// A field the file does not carry falls back to the value a fresh install
-/// uses. Without this, one missing field made the whole read fail, the defaults
-/// took over, and the next save overwrote what the user had set -- which is how
-/// a `budget_use` of 5.8 became 2.5.
+/// A missing field falls back to its default instead of failing the read and wiping settings.
 #[derive(Serialize, serde::Deserialize)]
 #[serde(default)]
 struct SavedSettings {
@@ -966,6 +958,7 @@ struct MatchState {
     watch_hash: u64,
     last_played_hash: u64, // double-move protection
     seen: u64,
+    updated_ms: u64,
     order: u64,
     over: bool,
     result: String,
@@ -1034,6 +1027,7 @@ impl MatchState {
             watch_hash: self.watch_hash,
             last_played_hash: self.last_played_hash,
             seen: self.seen,
+            updated_ms: self.updated_ms,
             order: self.order,
             over: self.over,
             ended: self.ended.clone(),
@@ -1079,6 +1073,7 @@ impl MatchState {
             watch_hash: 0,
             last_played_hash: 0,
             seen: 0,
+            updated_ms: 0,
             order: MATCH_ORDER.fetch_add(1, std::sync::atomic::Ordering::Relaxed),
             over: false,
             result: String::new(),
@@ -1331,6 +1326,7 @@ struct Pending {
     board: Board,
     levels: (u32, u8, u8),
     cap: Option<Duration>,
+    extend: Option<Duration>,
     hash: u64,
     hint: Option<Position>,
 }
@@ -1340,6 +1336,7 @@ enum Job {
         board: Board,
         levels: (u32, u8, u8),
         cap: Option<Duration>,
+        extend: Option<Duration>,
         hint: Option<Position>,
     },
     Ponder {
@@ -1363,6 +1360,8 @@ struct Ctx {
     engine_cfg: EngineConfig,
     seq: u64,
     last_emit: Instant,
+    /// `rating_update` arrives before the result line it belongs to.
+    post_ratings: HashMap<String, f32>,
     dirty: bool,
     auto_watch: Vec<String>,
     rated_by_base: HashMap<String, bool>,
@@ -1492,6 +1491,7 @@ impl EngineWorker {
                         board,
                         levels,
                         cap,
+                        extend,
                         hint,
                     } => {
                         let base = {
@@ -1502,10 +1502,12 @@ impl EngineWorker {
                         if let Some(h) = hint {
                             engine.hint_move(&board, h);
                         }
-                        let dl = cap.map(|c| Instant::now() + c);
+                        let now = Instant::now();
+                        let dl = cap.map(|c| now + c);
+                        let ext = extend.map(|e| now + e);
                         let nf0 = kuroobi::engine::NON_FINITE_VALUES
                             .load(std::sync::atomic::Ordering::Relaxed);
-                        let mv = engine.choose_within(&board, dl);
+                        let mv = engine.choose_until(&board, dl, ext);
                         let nf1 = kuroobi::engine::NON_FINITE_VALUES
                             .load(std::sync::atomic::Ordering::Relaxed);
                         if nf1 != nf0 {
@@ -1697,6 +1699,7 @@ struct Wire {
     next_ask_at: Option<Instant>,
     want_quit: bool,
     had_own_match: bool,
+    rating_for: Option<String>,
 }
 
 impl Wire {
@@ -1717,6 +1720,7 @@ impl Wire {
             next_ask_at: None,
             want_quit: false,
             had_own_match: false,
+            rating_for: None,
         }
     }
 }
@@ -1749,6 +1753,7 @@ fn new_ctx(
         },
         seq: 0,
         last_emit: Instant::now(),
+        post_ratings: HashMap::new(),
         dirty: true,
         auto_watch: Vec::new(),
         rated_by_base: HashMap::new(),
@@ -2159,6 +2164,18 @@ fn dispatch_line(
 
     if let Some(msg) = parse_chat(ln) {
         push_chat(ctx, login, msg);
+        return;
+    }
+    if let Some(id) = ln.strip_prefix("/os: rating_update ") {
+        w.rating_for = Some(base_id(id.trim()));
+        return;
+    }
+    if let Some(id) = w.rating_for.clone() {
+        if ln == "READY" {
+            w.rating_for = None;
+        } else if let Some(after) = rating_after(ln, login) {
+            record_post_rating(ctx, &id, after);
+        }
         return;
     }
     if ln.starts_with("/os: update") || ln.starts_with("/os: join") {
@@ -2825,8 +2842,12 @@ fn handle_block(
     if mid.is_empty() {
         return;
     }
+    forget_finished_on_join(matches, &block[0], &mid);
     let m = matches.entry(mid.clone()).or_insert_with(MatchState::new);
     m.seen += 1;
+    m.updated_ms = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_or(0, |d| d.as_millis() as u64);
     if let Some(t) = block[0].split_whitespace().nth(3) {
         if t.starts_with('8') || t.starts_with("s8") {
             m.gtype = t.to_string();
@@ -2962,6 +2983,13 @@ fn board_of(m: &MatchState, turn: char) -> Option<Board> {
     Board::from_string(&sboard).ok()
 }
 
+/// GGS reuses match numbers; a join on a finished board is a new game.
+fn forget_finished_on_join(matches: &mut HashMap<String, MatchState>, first: &str, mid: &str) {
+    if first.starts_with("/os: join") && matches.get(mid).is_some_and(|m| m.over) {
+        matches.remove(mid);
+    }
+}
+
 fn apply_block(m: &mut MatchState, block: &[String], login: &str) -> (bool, Option<char>) {
     let mut rows: Vec<Vec<char>> = Vec::new();
     let mut boards: Vec<Vec<Vec<char>>> = Vec::new();
@@ -3060,12 +3088,7 @@ fn apply_block(m: &mut MatchState, block: &[String], login: &str) -> (bool, Opti
                     .to_string();
                 if ((2..=4).contains(&mv.len()) || mv.eq_ignore_ascii_case("pa")) && !mv.is_empty()
                 {
-                    // The server returns an evaluation of 0.00 as an empty
-                    // field -- 412 zeros went out over one session and not one
-                    // came back with its value -- so an empty field that is
-                    // there at all reads as 0. A move with no field (`F1`, no
-                    // slashes) reported nothing and stays unknown; without the
-                    // distinction every settled endgame drops out of the graph.
+                    // GGS sends 0.00 as an empty field; no field at all means no evaluation.
                     let ev = parts.next().and_then(|x| match x.trim() {
                         "" => Some(0.0),
                         v => v.parse::<f32>().ok(),
@@ -3130,7 +3153,7 @@ fn time_budget(
     mut s: kuroobi::timectl::Situation,
     base: (u32, u8, u8),
     pace: &str,
-) -> (u32, u8, u8, Option<Duration>) {
+) -> (u32, u8, u8, Option<Duration>, Option<Duration>) {
     s.nps = resources().nps_for(s.threads);
     let p = kuroobi::timectl::plan(
         s,
@@ -3142,7 +3165,16 @@ fn time_budget(
         },
         kuroobi::timectl::Pace::parse(pace),
     );
-    (p.depth, p.solve, p.band, p.cap)
+    (p.depth, p.solve, p.band, p.cap, p.extend)
+}
+
+fn game_over(board: &Board) -> bool {
+    if board.movable() != 0 {
+        return false;
+    }
+    let mut other = *board;
+    other.pass();
+    other.movable() == 0
 }
 
 fn think_and_play(
@@ -3156,6 +3188,10 @@ fn think_and_play(
         ctx.log("info", "failed to parse the board");
         return;
     };
+    // The end line lags the last move; a pass sent here is refused as "wrong game!".
+    if game_over(&board) {
+        return;
+    }
     let bh = board
         .black
         .wrapping_mul(31)
@@ -3189,7 +3225,7 @@ fn think_and_play(
         ctx.engine_cfg.solve_empties,
         ctx.engine_cfg.band,
     );
-    let (d, solve, band, cap) = time_budget(
+    let (d, solve, band, cap, extend) = time_budget(
         kuroobi::timectl::Situation {
             clock_secs,
             in_overtime: m.in_overtime,
@@ -3209,6 +3245,7 @@ fn think_and_play(
             board,
             levels: (d, solve, band),
             cap,
+            extend,
             hash: bh,
             hint: mirror_hint(matches, mid),
         });
@@ -3224,9 +3261,8 @@ fn think_and_play(
     }
     let engine = ctx.engine.as_mut().unwrap();
     engine.set_levels(d, solve, band);
-    let deadline = cap.map(|c| std::time::Instant::now() + c);
     let began = std::time::Instant::now();
-    let mv = engine.choose_within(&board, deadline);
+    let mv = engine.choose_until(&board, cap.map(|c| began + c), extend.map(|e| began + e));
     let took = began.elapsed();
     engine.set_levels(base.0, base.1, base.2);
 
@@ -3280,15 +3316,18 @@ fn pump_worker(ctx: &mut Ctx, i: usize) {
     };
     ctx.workers[i].pending_hash = p.hash;
     ctx.workers[i].pondering = false;
-    ctx.workers[i].sent_at = Some((Instant::now(), p.cap.unwrap_or(Duration::from_secs(60))));
+    // Measured against the extension, which is how far the search may go.
+    let limit = p.extend.or(p.cap).unwrap_or(Duration::from_secs(60));
+    ctx.workers[i].sent_at = Some((Instant::now(), limit));
     ctx.workers[i].stop.reset();
     let empties = p.board.empty_count();
     let movable = p.board.movable_count();
     ctx.log(
         "info",
         &format!(
-            "dispatch: empties {empties} moves {movable} deadline {:.1}s (depth {} solve {} band {})",
+            "dispatch: empties {empties} moves {movable} deadline {:.1}s extend {:.1}s (depth {} solve {} band {})",
             p.cap.map_or(-1.0, |c| c.as_secs_f32()),
+            p.extend.map_or(-1.0, |c| c.as_secs_f32()),
             p.levels.0,
             p.levels.1,
             p.levels.2,
@@ -3298,6 +3337,7 @@ fn pump_worker(ctx: &mut Ctx, i: usize) {
         board: p.board,
         levels: p.levels,
         cap: p.cap,
+        extend: p.extend,
         hint: p.hint,
     });
 }
@@ -3318,7 +3358,7 @@ fn collect_workers(ctx: &mut Ctx, matches: &mut HashMap<String, MatchState>) -> 
             ctx.log(
                 "info",
                 &format!(
-                    "stopped a search far past its deadline ({:.1}s / deadline {:.1}s)",
+                    "stopped a search far past its limit ({:.1}s / limit {:.1}s)",
                     at.elapsed().as_secs_f32(),
                     cap.as_secs_f32()
                 ),
@@ -3360,7 +3400,7 @@ fn collect_workers(ctx: &mut Ctx, matches: &mut HashMap<String, MatchState>) -> 
             ctx.log(
                 "info",
                 &format!(
-                    "reply: {:.1}s{}{} {}",
+                    "reply: {:.1}s{}{} {}{}{}{}",
                     t.as_secs_f32(),
                     if mv.cut { " (cut)" } else { "" },
                     if mv.depth > 0 {
@@ -3368,7 +3408,19 @@ fn collect_workers(ctx: &mut Ctx, matches: &mut HashMap<String, MatchState>) -> 
                     } else {
                         String::new()
                     },
-                    if mv.exact { "solve" } else { "search" }
+                    if mv.exact { "solve" } else { "search" },
+                    if mv.extended { " extended" } else { "" },
+                    if mv.depth > 0 {
+                        format!(" stop {}", mv.stop_reason.as_str())
+                    } else {
+                        String::new()
+                    },
+                    // A lower bound from a null window; `?` means no lead was shown, not a tie.
+                    match (mv.second, mv.gap) {
+                        (Some(p), Some(g)) => format!(" second {} gap >={g:.2}", coord(p)),
+                        (Some(p), None) => format!(" second {} gap ?", coord(p)),
+                        (None, _) => String::new(),
+                    }
                 ),
             );
         }
@@ -3514,6 +3566,7 @@ fn sync_matches(ctx: &mut Ctx, matches: &HashMap<String, MatchState>) {
             watch_best: m.watch_best.clone(),
             watch_exact: m.watch_exact,
             seen: m.seen,
+            updated_ms: m.updated_ms,
             order: m.order,
         })
         .collect();
@@ -3613,6 +3666,34 @@ fn re_text(score: Option<f32>) -> Option<String> {
     score.map(|s| format!("{s:+.2}"))
 }
 
+/// `|name old @ dev delta -> new @ dev`
+fn rating_after(ln: &str, login: &str) -> Option<f32> {
+    let mut t = ln.trim_start_matches('|').split_whitespace();
+    if t.next()? != login {
+        return None;
+    }
+    t.skip_while(|x| *x != "->").nth(1)?.parse().ok()
+}
+
+/// Only the newest row: GGS reuses match numbers.
+fn record_post_rating(ctx: &mut Ctx, id: &str, after: f32) {
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_or(0, |d| d.as_secs());
+    let mut s = ctx.snap.lock().unwrap();
+    match s.results.first_mut() {
+        Some(r) if base_id(&r.id) == id && now.saturating_sub(r.at) < 60 => {
+            r.my_rating = Some(after);
+            drop(s);
+            ctx.dirty = true;
+        }
+        _ => {
+            drop(s);
+            ctx.post_ratings.insert(id.to_string(), after);
+        }
+    }
+}
+
 fn handle_match_end(
     ctx: &mut Ctx,
     rest: &str,
@@ -3682,7 +3763,7 @@ fn handle_match_end(
         opp,
         kifu,
         seq: ctx.seq,
-        my_rating: {
+        my_rating: ctx.post_ratings.remove(&base_id(&id)).or_else(|| {
             let pool = if rest
                 .split_whitespace()
                 .any(|t| t.starts_with("s8r") || t.starts_with("8r"))
@@ -3697,7 +3778,7 @@ fn handle_match_end(
                 .find(|r| r.gtype == pool)
                 .map(|r| r.rating)
                 .or(s.my_rating)
-        },
+        }),
         at: now,
     };
     append_history(&result);
@@ -4667,9 +4748,6 @@ mod tests {
         assert!(!ggf.contains("B[PA]"), "the record begins with a pass");
     }
 
-    /// A stored margin is only as good as the name order it was read with.
-    /// These are real lines: `.63` went down 29 discs and was filed as a
-    /// 29-disc win, which turned a losing August into a winning one.
     #[test]
     fn a_stored_margin_follows_the_name_written_first() {
         assert_eq!(
@@ -4700,9 +4778,46 @@ mod tests {
         );
     }
 
-    /// The server hands back an evaluation of 0.00 as an empty field, so
-    /// reading the field as "no value" lost every settled endgame from the
-    /// graph -- the line simply stopped where the game became even.
+    #[test]
+    fn a_full_board_is_not_a_move_to_play() {
+        let full = Board::from_string(&format!("{} *", "*".repeat(64))).unwrap();
+        assert!(game_over(&full));
+        assert!(!game_over(&Board::new()), "the opening has moves");
+    }
+
+    #[test]
+    fn a_reused_match_number_starts_from_a_clean_board() {
+        let mut matches = HashMap::new();
+        let mut old = MatchState::new();
+        old.over = true;
+        old.in_overtime = true;
+        matches.insert(".10.0".to_string(), old);
+        forget_finished_on_join(&mut matches, "/os: update .10.0 s8r16 K?", ".10.0");
+        assert!(matches.contains_key(".10.0"), "an update is the same game");
+        forget_finished_on_join(&mut matches, "/os: join .10.0 s8r16 K?", ".10.0");
+        assert!(
+            !matches.contains_key(".10.0"),
+            "a join after the end is a new game"
+        );
+
+        let mut live = MatchState::new();
+        live.in_overtime = true;
+        matches.insert(".10.1".to_string(), live);
+        forget_finished_on_join(&mut matches, "/os: join .10.1 s8r16 K?", ".10.1");
+        assert!(
+            matches.get(".10.1").is_some_and(|m| m.in_overtime),
+            "a game still running keeps its state"
+        );
+    }
+
+    #[test]
+    fn a_result_takes_the_rating_the_server_announced_after_it() {
+        let ln = "|kuroobi  2476.63 @  35.96    -5.90 -> 2470.74 @  35.80";
+        assert_eq!(rating_after(ln, "kuroobi"), Some(2470.74));
+        assert_eq!(rating_after(ln, "Rhapsody"), None);
+        assert_eq!(rating_after("|kuroobi  2476.63 @  35.96", "kuroobi"), None);
+    }
+
     #[test]
     fn an_empty_evaluation_field_is_a_zero() {
         let block: Vec<String> = [
@@ -5147,7 +5262,7 @@ mod budget_tests {
 
     #[test]
     fn depth_mode_ignores_the_clock() {
-        let (d, solve, band, c) = time_budget(
+        let (d, solve, band, c, _) = time_budget(
             kuroobi::timectl::Situation {
                 clock_secs: Some(30),
                 grace_secs: 120,
@@ -5190,7 +5305,7 @@ mod budget_tests {
 
     #[test]
     fn the_endgame_keeps_a_reserve() {
-        let (_, _, _, c) = time_budget(
+        let (_, _, _, c, _) = time_budget(
             kuroobi::timectl::Situation {
                 clock_secs: Some(100),
                 empties: 40,

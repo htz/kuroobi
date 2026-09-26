@@ -75,7 +75,9 @@ function clockView(c: ClockBase | undefined, side: ClockSide, now: number): Cloc
   if (m.ended === 'adjourned' || m.ended === 'aborted') return { text: '', cls: '' };
   const active = !m.over && !!m.turn && !!color && m.turn === color;
   if (base === null) return { text: raw || '', cls: active ? 'turn' : '' };
-  const rem = base - (active ? (now - c.at) / 1000 : 0);
+  // From the server update, not first draw: remounting used to reset the clock.
+  const since = m.updated_ms || c.at;
+  const rem = base - (active ? Math.max(0, now - since) / 1000 : 0);
   const mine = side === 'my' || (!!color && color === m.my_color);
   if (mine && m.in_overtime && rem >= 0) {
     return { text: t('ggs.clock.overtime', { t: fmtSecs(rem) }), cls: 'ext' };
