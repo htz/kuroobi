@@ -349,6 +349,7 @@ impl Engine {
 
     pub fn clear_tables(&mut self) {
         self.search.clear();
+        self.solver.clear_tables();
     }
 
     pub fn measure_solve_nps(&mut self) -> f64 {
@@ -371,6 +372,7 @@ impl Engine {
             let Ok(board) = Board::from_string(p) else {
                 continue;
             };
+            self.solver.clear_tables();
             let r = self
                 .solver
                 .solve_with_eval(EndSolverMode::Perfect, &board, Some(&self.linear));

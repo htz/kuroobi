@@ -365,15 +365,50 @@ const ABORTED: i32 = i32::MIN + 1;
 struct ThreadBudget {
     pool: EndPool,
     scratch: std::sync::Mutex<Vec<Scratch>>,
+    /// Bumped per solve; part of a scratch's tag so a new root ages it.
+    root: std::sync::atomic::AtomicU32,
 }
 
+/// A worker's private tables. The caches hold only positions below
+/// `SELECTIVE_MIN_EMPTIES`, exact whatever the rung, so they outlive roots.
 struct Scratch {
     shallow: HashTable,
     mid: HashTable,
     l4: Vec<L4Entry>,
     l56: Vec<L4Entry>,
+    l9: Vec<L4Entry>,
     l78: Vec<L4Entry>,
-    tag: u32,
+    tag: u64,
+}
+
+impl Scratch {
+    fn new(l4_bits: u32, tag: u64) -> Scratch {
+        let cache = |on: bool, bits: u32| {
+            if on {
+                zeroed_vec::<L4Entry>(1usize << bits)
+            } else {
+                Vec::new()
+            }
+        };
+        let (sb, mb) = private_tt_bits();
+        Scratch {
+            shallow: HashTable::new(sb),
+            mid: HashTable::new(mb),
+            l4: cache(l4_cache() || l56_cache(), l4_bits),
+            l56: cache(new_shallow(), new_shallow_bits()),
+            l9: cache(new_mid(), new_mid_bits()),
+            l78: cache(new_78(), l78_bits()),
+            tag,
+        }
+    }
+
+    fn wipe(&mut self) {
+        self.shallow.wipe(1);
+        self.mid.wipe(1);
+        for c in [&mut self.l4, &mut self.l56, &mut self.l9, &mut self.l78] {
+            c.fill(L4_EMPTY);
+        }
+    }
 }
 
 impl ThreadBudget {
@@ -381,33 +416,29 @@ impl ThreadBudget {
         ThreadBudget {
             pool: EndPool::new(extra_threads),
             scratch: std::sync::Mutex::new(Vec::new()),
+            root: std::sync::atomic::AtomicU32::new(0),
         }
     }
 
-    fn take_scratch(&self, tag: u32) -> Scratch {
+    fn tag(&self, selective_t: Option<f32>) -> u64 {
+        let root = self.root.load(std::sync::atomic::Ordering::Relaxed) as u64;
+        root << 32 | selective_t.map_or(0, f32::to_bits) as u64
+    }
+
+    fn take_scratch(&self, tag: u64) -> Scratch {
         let popped = self.scratch.lock().unwrap().pop();
         match popped {
             Some(mut s) => {
                 if s.tag != tag {
                     s.shallow.clear(1);
                     s.mid.clear(1);
-                    s.l4.fill(L4_EMPTY);
-                    s.l56.fill(L4_EMPTY);
-                    s.l78.fill(L4_EMPTY);
                     s.tag = tag;
                 }
                 s
             }
             None => {
-                let (sb, mb) = private_tt_bits();
-                Scratch {
-                    shallow: HashTable::new(sb),
-                    mid: HashTable::new(mb),
-                    l4: Vec::new(),
-                    l56: Vec::new(),
-                    l78: Vec::new(),
-                    tag,
-                }
+                let threads = self.pool.workers + 1;
+                Scratch::new(l4_bits().saturating_sub(threads.ilog2()).max(13), tag)
             }
         }
     }
@@ -439,18 +470,12 @@ fn run_one_sibling(
         slot.finish(ABORTED, 0, false);
         return;
     }
-    let tag = selective_t.map_or(0, f32::to_bits);
-    let mut s = budget.take_scratch(tag);
-    let mut w = Worker::with_tables(tt, budget, group, s.shallow, s.mid);
-    if !s.l4.is_empty() {
-        w.l4 = std::mem::take(&mut s.l4);
-    }
-    if !s.l56.is_empty() {
-        w.l56 = std::mem::take(&mut s.l56);
-    }
-    if !s.l78.is_empty() {
-        w.l78 = std::mem::take(&mut s.l78);
-    }
+    let mut w = Worker::with_tables(
+        tt,
+        budget,
+        group,
+        budget.take_scratch(budget.tag(selective_t)),
+    );
     w.selective_t = selective_t;
     w.nnue = nnue;
     w.sigma_scale = sigma_scale;
@@ -490,14 +515,7 @@ fn run_one_sibling(
     }
 
     let nodes = w.nodes;
-    budget.give_scratch(Scratch {
-        shallow: w.shallow_table,
-        mid: w.mid_table,
-        l4: w.l4,
-        l56: w.l56,
-        l78: w.l78,
-        tag,
-    });
+    budget.give_scratch(w.into_scratch());
     TASK_NS.fetch_add(t_live.elapsed().as_nanos() as u64, Ordering::Relaxed);
     slot.finish(val, nodes, val != ABORTED && val > cur);
 }
@@ -575,7 +593,7 @@ unsafe fn help_split(sp: &SplitPoint) -> bool {
         Some(unsafe { &*(sp.ev as *const Linear) })
     };
     let moves = unsafe { std::slice::from_raw_parts(sp.moves, sp.n_moves) };
-    let tag = sp.selective_t.map_or(0, f32::to_bits);
+    let tag = budget.tag(sp.selective_t);
     let mut scratch: Option<Scratch> = None;
     let mut nodes = 0u64;
     loop {
@@ -592,17 +610,8 @@ unsafe fn help_split(sp: &SplitPoint) -> bool {
         }
         HANDED.fetch_add(1, Ordering::Relaxed);
         let m = moves[idx];
-        let mut sc = scratch.take().unwrap_or_else(|| budget.take_scratch(tag));
-        let mut w = Worker::with_tables(tt, budget, group, sc.shallow, sc.mid);
-        if !sc.l4.is_empty() {
-            w.l4 = std::mem::take(&mut sc.l4);
-        }
-        if !sc.l56.is_empty() {
-            w.l56 = std::mem::take(&mut sc.l56);
-        }
-        if !sc.l78.is_empty() {
-            w.l78 = std::mem::take(&mut sc.l78);
-        }
+        let sc = scratch.take().unwrap_or_else(|| budget.take_scratch(tag));
+        let mut w = Worker::with_tables(tt, budget, group, sc);
         w.selective_t = sp.selective_t;
         w.nnue = sp.nnue.clone();
         w.sigma_scale = sp.sigma_scale;
@@ -640,14 +649,7 @@ unsafe fn help_split(sp: &SplitPoint) -> bool {
             }
         }
         nodes += w.nodes;
-        scratch = Some(Scratch {
-            shallow: w.shallow_table,
-            mid: w.mid_table,
-            l4: w.l4,
-            l56: w.l56,
-            l78: w.l78,
-            tag,
-        });
+        scratch = Some(w.into_scratch());
         split_merge(sp, val, cur, m.pos);
     }
     if let Some(sc) = scratch {
@@ -1432,7 +1434,7 @@ impl HashTable {
         }
     }
 
-    fn clear(&mut self, threads: usize) {
+    fn wipe(&mut self, threads: usize) {
         let entries = self.entries.get_mut();
         if threads <= 1 {
             entries.fill(HashEntry::EMPTY);
@@ -1546,6 +1548,18 @@ impl HashTable {
     fn demote_to_seed_shared(&self) {
         let next = self.date().wrapping_add(1).max(1);
         self.date.store(next, std::sync::atomic::Ordering::Relaxed);
+    }
+
+    /// Older entries turn into seeds by date, so only a date about to wrap
+    /// onto live entries forces a wipe. A solve advances the date by a few
+    /// rungs, hence the margin.
+    fn clear(&mut self, threads: usize) {
+        if self.date() >= u8::MAX - 16 {
+            self.wipe(threads);
+            self.date.store(1, std::sync::atomic::Ordering::Relaxed);
+        } else {
+            self.demote_to_seed_shared();
+        }
     }
 
     fn seed_update(
@@ -1891,7 +1905,9 @@ pub struct Solver {
     best: Option<Position>,
     threads: usize,
     nnue: Option<NnueProbe>,
-    scratch: Option<(HashTable, HashTable, Vec<L4Entry>)>,
+    scratch: Option<Scratch>,
+    /// An aborted solve may have stored bounds from a cut-off subtree.
+    wipe: bool,
     budget: Option<std::sync::Arc<ThreadBudget>>,
     budget_threads: usize,
     budget_handles: Vec<std::thread::JoinHandle<()>>,
@@ -1921,6 +1937,7 @@ struct Worker<'a> {
     selective_t: Option<f32>,
     shallow_table: HashTable,
     mid_table: HashTable,
+    scratch_tag: u64,
     nnue: Option<NnueProbe>,
     taint: u64,
     l9: Vec<L4Entry>,
@@ -1928,12 +1945,23 @@ struct Worker<'a> {
 }
 
 impl<'a> Worker<'a> {
+    fn into_scratch(self) -> Scratch {
+        Scratch {
+            shallow: self.shallow_table,
+            mid: self.mid_table,
+            l4: self.l4,
+            l56: self.l56,
+            l9: self.l9,
+            l78: self.l78,
+            tag: self.scratch_tag,
+        }
+    }
+
     fn with_tables(
         tt: &'a HashTable,
         budget: &'a ThreadBudget,
         abort: &'a AbortFlag<'a>,
-        shallow_table: HashTable,
-        mid_table: HashTable,
+        sc: Scratch,
     ) -> Worker<'a> {
         Worker {
             tt,
@@ -1943,35 +1971,18 @@ impl<'a> Worker<'a> {
             warm_score: None,
             warm_window: None,
             selective_t: None,
-            shallow_table,
-            mid_table,
+            shallow_table: sc.shallow,
+            mid_table: sc.mid,
             mid_empties: mid_tt_empties(),
             order_ix: crate::pattern_index::PatternIndices::ZERO,
             order_seeded: false,
             nnue: None,
             taint: 0,
-            l56: if new_shallow() {
-                zeroed_vec::<L4Entry>(1usize << new_shallow_bits())
-            } else {
-                Vec::new()
-            },
-            l9: if new_mid() {
-                zeroed_vec::<L4Entry>(1usize << new_mid_bits())
-            } else {
-                Vec::new()
-            },
-            l78: if new_78() {
-                zeroed_vec::<L4Entry>(1usize << l78_bits())
-            } else {
-                Vec::new()
-            },
-            l4: if l4_cache() || l56_cache() {
-                let threads = budget.pool.workers + 1;
-                let bits = l4_bits().saturating_sub(threads.ilog2()).max(13);
-                zeroed_vec::<L4Entry>(1usize << bits)
-            } else {
-                Vec::new()
-            },
+            l56: sc.l56,
+            l9: sc.l9,
+            l78: sc.l78,
+            l4: sc.l4,
+            scratch_tag: sc.tag,
             sigma_scale: 1.0,
             g_l4_cache: l4_cache(),
             g_l56_cache: l56_cache(),
@@ -2277,6 +2288,7 @@ impl Solver {
             threads: 1,
             nnue: None,
             scratch: None,
+            wipe: true,
             budget: None,
             budget_threads: 0,
             budget_handles: Vec::new(),
@@ -2316,6 +2328,11 @@ impl Solver {
         tt: std::sync::Arc<crate::midgame::SharedTt>,
     ) {
         self.nnue = Some((nn, tt));
+    }
+
+    /// Makes the next solve start from empty tables, as between games.
+    pub fn clear_tables(&mut self) {
+        self.wipe = true;
     }
 
     pub fn set_stop(&mut self, stop: Option<crate::midgame::StopHandle>) {
@@ -2388,138 +2405,133 @@ impl Solver {
         self.hash_table.set_shared(self.threads > 1);
 
         let t_clear = std::time::Instant::now();
-        self.hash_table.clear(self.threads);
-        let (mut r_shallow, mut r_mid, mut r_l4) = self.scratch.take().unwrap_or_else(|| {
-            let (sb, mb) = private_tt_bits();
-            let l4 = if l4_cache() || l56_cache() {
-                zeroed_vec::<L4Entry>(1usize << l4_bits())
-            } else {
-                Vec::new()
-            };
-            (HashTable::new(sb), HashTable::new(mb), l4)
-        });
-        r_shallow.clear(1);
-        r_mid.clear(1);
-        r_l4.fill(L4_EMPTY);
-        if let Some(b) = self.budget.as_ref() {
-            b.scratch.lock().unwrap().clear();
+        let extra = self.threads.saturating_sub(1);
+        let budget_arc = self.ensure_budget(extra);
+        let mut root = self
+            .scratch
+            .take()
+            .unwrap_or_else(|| Scratch::new(l4_bits(), 0));
+        if std::mem::take(&mut self.wipe) {
+            self.hash_table.wipe(self.threads);
+            root.wipe();
+            budget_arc.scratch.lock().unwrap().clear();
+        } else {
+            self.hash_table.clear(self.threads);
+            root.shallow.clear(1);
+            root.mid.clear(1);
+            budget_arc
+                .root
+                .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
         }
         CLEAR_NS.fetch_add(
             t_clear.elapsed().as_nanos() as u64,
             std::sync::atomic::Ordering::Relaxed,
         );
 
-        let extra = self.threads.saturating_sub(1);
-        let budget_arc = self.ensure_budget(extra);
         let budget: &ThreadBudget = &budget_arc;
         let tt = &self.hash_table;
         let stop_ref = self.stop.as_ref();
         let root_abort = AbortFlag::root();
         let watching = std::sync::atomic::AtomicBool::new(true);
-        let (value, nodes, best, r_shallow_back, r_mid_back, r_l4_back) =
-            std::thread::scope(|scope| {
-                struct StopWatch<'a>(&'a std::sync::atomic::AtomicBool);
-                impl Drop for StopWatch<'_> {
-                    fn drop(&mut self) {
-                        self.0.store(false, std::sync::atomic::Ordering::Relaxed);
-                    }
+        let (value, nodes, best, root_back) = std::thread::scope(|scope| {
+            struct StopWatch<'a>(&'a std::sync::atomic::AtomicBool);
+            impl Drop for StopWatch<'_> {
+                fn drop(&mut self) {
+                    self.0.store(false, std::sync::atomic::Ordering::Relaxed);
                 }
-                let _watch = StopWatch(&watching);
-                if stop_ref.is_some() {
-                    let (stop, abort, watching) = (stop_ref, &root_abort, &watching);
-                    scope.spawn(move || {
-                        while watching.load(std::sync::atomic::Ordering::Relaxed) {
-                            if stop.is_some_and(|s| s.is_stopped()) {
-                                abort.abort();
-                                return;
-                            }
-                            std::thread::sleep(std::time::Duration::from_millis(5));
+            }
+            let _watch = StopWatch(&watching);
+            if stop_ref.is_some() {
+                let (stop, abort, watching) = (stop_ref, &root_abort, &watching);
+                scope.spawn(move || {
+                    while watching.load(std::sync::atomic::Ordering::Relaxed) {
+                        if stop.is_some_and(|s| s.is_stopped()) {
+                            abort.abort();
+                            return;
                         }
-                    });
-                }
-                let mut w = Worker::with_tables(tt, budget, &root_abort, r_shallow, r_mid);
-                w.l4 = r_l4;
-                w.stop = stop_ref;
-                w.nnue = if selective.is_some() || sel_nnue_warm() {
-                    self.nnue.clone()
+                        std::thread::sleep(std::time::Duration::from_millis(5));
+                    }
+                });
+            }
+            let mut w = Worker::with_tables(tt, budget, &root_abort, root);
+            w.stop = stop_ref;
+            w.nnue = if selective.is_some() || sel_nnue_warm() {
+                self.nnue.clone()
+            } else {
+                None
+            };
+            w.sigma_scale = std::env::var("SEL_SIGMA_SCALE")
+                .ok()
+                .and_then(|v| v.parse().ok())
+                .unwrap_or(if selective.is_some() { 0.6 } else { 1.0 });
+            let mut b = *board;
+
+            let t_warm = std::time::Instant::now();
+            let mut rungs: Vec<f32> = selective_ladder();
+            if let Some(t) = selective {
+                if !std::env::var("SEL_ONE_RUNG").is_ok_and(|v| v != "0") {
+                    rungs.retain(|&r| r < t);
+                    rungs.truncate(1);
                 } else {
-                    None
-                };
-                w.sigma_scale = std::env::var("SEL_SIGMA_SCALE")
-                    .ok()
-                    .and_then(|v| v.parse().ok())
-                    .unwrap_or(if selective.is_some() { 0.6 } else { 1.0 });
-                let mut b = *board;
-
-                let t_warm = std::time::Instant::now();
-                let mut rungs: Vec<f32> = selective_ladder();
-                if let Some(t) = selective {
-                    if !std::env::var("SEL_ONE_RUNG").is_ok_and(|v| v != "0") {
-                        rungs.retain(|&r| r < t);
-                        rungs.truncate(1);
-                    } else {
-                        rungs.clear();
-                    }
-                    rungs.push(t);
+                    rungs.clear();
                 }
-                let mut last_selective: Option<i32> = None;
-                if let Some(e) = ev {
-                    if selective.is_some() || board.empty_count() >= selective_pass_min_empties() {
-                        let mut guess = w.estimate_score(board, Some(e));
+                rungs.push(t);
+            }
+            let mut last_selective: Option<i32> = None;
+            if let Some(e) = ev {
+                if selective.is_some() || board.empty_count() >= selective_pass_min_empties() {
+                    let mut guess = w.estimate_score(board, Some(e));
+                    if dbg_asp() {
+                        eprintln!("[warm] estimate {guess}");
+                    }
+                    for t in rungs {
+                        w.selective_t = Some(t);
+                        let mut sb = *board;
+                        let n0 = w.nodes;
+                        let s =
+                            w.aspiration_width(&mut sb, guess, warm_aspiration_width(), Some(e));
                         if dbg_asp() {
-                            eprintln!("[warm] estimate {guess}");
-                        }
-                        for t in rungs {
-                            w.selective_t = Some(t);
-                            let mut sb = *board;
-                            let n0 = w.nodes;
-                            let s = w.aspiration_width(
-                                &mut sb,
-                                guess,
-                                warm_aspiration_width(),
-                                Some(e),
+                            eprintln!(
+                                "[warm] rung t={t} -> {s}, best={:?} ({}M nodes)",
+                                w.best,
+                                (w.nodes - n0) / 1_000_000
                             );
-                            if dbg_asp() {
-                                eprintln!(
-                                    "[warm] rung t={t} -> {s}, best={:?} ({}M nodes)",
-                                    w.best,
-                                    (w.nodes - n0) / 1_000_000
-                                );
-                            }
-                            w.selective_t = None;
-                            guess = s - (s & 1);
-                            last_selective = Some(s);
-                            w.tt.demote_to_seed_shared();
-                            w.warm_score = Some(s - (s & 1));
                         }
+                        w.selective_t = None;
+                        guess = s - (s & 1);
+                        last_selective = Some(s);
                         w.tt.demote_to_seed_shared();
+                        w.warm_score = Some(s - (s & 1));
                     }
+                    w.tt.demote_to_seed_shared();
                 }
+            }
 
-                WARMUP_NS.fetch_add(
-                    t_warm.elapsed().as_nanos() as u64,
-                    std::sync::atomic::Ordering::Relaxed,
-                );
-                let warm_nodes = w.nodes;
-                WARMUP_NODES.fetch_add(warm_nodes, std::sync::atomic::Ordering::Relaxed);
-                if let Some(v) = last_selective.filter(|_| selective.is_some()) {
-                    return (v, w.nodes, w.best, w.shallow_table, w.mid_table, w.l4);
-                }
-                let t_exact = std::time::Instant::now();
-                let v = match mode {
-                    EndSolverMode::WinLossDraw => w.pvs_root(&mut b, -1, 1, ev),
-                    EndSolverMode::WinDraw => w.pvs_root(&mut b, 0, 1, ev),
-                    EndSolverMode::DrawLoss => w.pvs_root(&mut b, -1, 0, ev),
-                    EndSolverMode::Perfect => w.perfect(&mut b, ev),
-                };
-                EXACT_NS.fetch_add(
-                    t_exact.elapsed().as_nanos() as u64,
-                    std::sync::atomic::Ordering::Relaxed,
-                );
-                EXACT_NODES.fetch_add(w.nodes - warm_nodes, std::sync::atomic::Ordering::Relaxed);
-                (v, w.nodes, w.best, w.shallow_table, w.mid_table, w.l4)
-            });
-        self.scratch = Some((r_shallow_back, r_mid_back, r_l4_back));
+            WARMUP_NS.fetch_add(
+                t_warm.elapsed().as_nanos() as u64,
+                std::sync::atomic::Ordering::Relaxed,
+            );
+            let warm_nodes = w.nodes;
+            WARMUP_NODES.fetch_add(warm_nodes, std::sync::atomic::Ordering::Relaxed);
+            if let Some(v) = last_selective.filter(|_| selective.is_some()) {
+                return (v, w.nodes, w.best, w.into_scratch());
+            }
+            let t_exact = std::time::Instant::now();
+            let v = match mode {
+                EndSolverMode::WinLossDraw => w.pvs_root(&mut b, -1, 1, ev),
+                EndSolverMode::WinDraw => w.pvs_root(&mut b, 0, 1, ev),
+                EndSolverMode::DrawLoss => w.pvs_root(&mut b, -1, 0, ev),
+                EndSolverMode::Perfect => w.perfect(&mut b, ev),
+            };
+            EXACT_NS.fetch_add(
+                t_exact.elapsed().as_nanos() as u64,
+                std::sync::atomic::Ordering::Relaxed,
+            );
+            EXACT_NODES.fetch_add(w.nodes - warm_nodes, std::sync::atomic::Ordering::Relaxed);
+            (v, w.nodes, w.best, w.into_scratch())
+        });
+        self.scratch = Some(root_back);
+        self.wipe = root_abort.aborted();
         self.nodes = nodes;
         self.best = best;
 

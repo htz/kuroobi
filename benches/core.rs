@@ -105,7 +105,10 @@ fn bench_solver(c: &mut Criterion) {
     let board = position_with_empties(14, 42);
     c.bench_function("solve_perfect_14_empties", |b| {
         let mut solver = Solver::new(18);
-        b.iter(|| solver.solve(EndSolverMode::Perfect, black_box(&board)))
+        b.iter(|| {
+            solver.clear_tables();
+            solver.solve(EndSolverMode::Perfect, black_box(&board))
+        })
     });
 }
 
@@ -147,7 +150,10 @@ fn bench_solver_nps(c: &mut Criterion) {
         let nodes = solver.solve(EndSolverMode::Perfect, &board).nodes;
         group.throughput(Throughput::Elements(nodes));
         group.bench_function(format!("empties_{empties}"), |b| {
-            b.iter(|| solver.solve(EndSolverMode::Perfect, black_box(&board)))
+            b.iter(|| {
+                solver.clear_tables();
+                solver.solve(EndSolverMode::Perfect, black_box(&board))
+            })
         });
     }
     group.finish();
