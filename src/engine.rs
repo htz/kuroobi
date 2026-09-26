@@ -89,6 +89,11 @@ pub struct MoveEval {
     pub learned: bool,
     pub depth: u32,
     pub cut: bool,
+    /// `gap` is a lower bound, `None` where no lead was shown (zero would read as a tie).
+    pub stop_reason: crate::midgame::Stopped,
+    pub second: Option<Position>,
+    pub gap: Option<f32>,
+    pub extended: bool,
 }
 
 #[derive(Debug, Default)]
@@ -477,6 +482,16 @@ impl Engine {
         board: &Board,
         deadline: Option<std::time::Instant>,
     ) -> MoveEval {
+        self.choose_until(board, deadline, None)
+    }
+
+    /// A contested midgame move may run on to `extend`; solves keep `deadline`.
+    pub fn choose_until(
+        &mut self,
+        board: &Board,
+        deadline: Option<std::time::Instant>,
+        extend: Option<std::time::Instant>,
+    ) -> MoveEval {
         self.stop.reset();
         self.progress.clear();
         self.progress.set_kind(Progress::THINK);
@@ -501,6 +516,7 @@ impl Engine {
                     learned,
                     depth: 0,
                     cut: false,
+                    ..Default::default()
                 };
             }
             hint = book
@@ -520,6 +536,7 @@ impl Engine {
                 learned: false,
                 depth: 0,
                 cut: false,
+                ..Default::default()
             };
         }
         if board.empty_count() <= c.solve_empties {
@@ -551,6 +568,7 @@ impl Engine {
                         learned: false,
                         depth: BACKUP_DEPTH,
                         cut: true,
+                        ..Default::default()
                     };
                 }
             }
@@ -562,6 +580,7 @@ impl Engine {
                 learned: false,
                 depth: 0,
                 cut: false,
+                ..Default::default()
             }
         } else if let Some(t) = selective_band(board.empty_count(), c.solve_empties, c.band) {
             let backup = deadline.map(|_| {
@@ -590,6 +609,7 @@ impl Engine {
                         learned: false,
                         depth: BACKUP_DEPTH,
                         cut: true,
+                        ..Default::default()
                     };
                 }
             }
@@ -601,18 +621,35 @@ impl Engine {
                 learned: false,
                 depth: 0,
                 cut: false,
+                ..Default::default()
             }
         } else {
-            let watcher = self.watch_deadline(deadline);
-            let (pos, value, reached) = self.search.best_move_deadline(board, c.depth, deadline);
-            let cut = self.stop_watch_done(watcher);
+            let (pos, value, reached) = self.search.best_move_until(
+                board,
+                c.depth,
+                deadline.map(crate::midgame::Deadline::new),
+                extend,
+            );
+            let cut = self.stop.is_stopped();
+            self.stop.reset();
             if std::env::var("ROOT_TRACE").is_ok() {
                 let h = crate::zobrist::board_hash(board.player_bb(), board.opponent_bb());
                 eprintln!(
-                    "  ret [{h:016x}] {:+8.2} (raw {value:+.2}) depth {reached} {:?}{}",
+                    "  ret [{h:016x}] {:+8.2} (raw {value:+.2}) depth {reached} {:?}{} stop {}{}{}",
                     stone_scale(value),
                     pos,
-                    if cut { " cut" } else { "" }
+                    if cut { " cut" } else { "" },
+                    self.search.stop_reason.as_str(),
+                    if self.search.extended {
+                        " extended"
+                    } else {
+                        ""
+                    },
+                    match (self.search.second, self.search.gap) {
+                        (Some(p), Some(g)) => format!(" second {p:?} gap >={g:.2}"),
+                        (Some(p), None) => format!(" second {p:?} gap ?"),
+                        (None, _) => String::new(),
+                    }
                 );
             }
             MoveEval {
@@ -623,6 +660,10 @@ impl Engine {
                 learned: false,
                 depth: reached,
                 cut,
+                stop_reason: self.search.stop_reason,
+                second: self.search.second,
+                gap: self.search.gap,
+                extended: self.search.extended,
             }
         }
     }
@@ -708,6 +749,7 @@ impl Engine {
                 learned: false,
                 depth: 0,
                 cut: false,
+                ..Default::default()
             };
         }
         if board.empty_count() <= self.config.solve_empties {
@@ -722,6 +764,7 @@ impl Engine {
                 learned: false,
                 depth: 0,
                 cut: false,
+                ..Default::default()
             }
         } else {
             let (pos, value) = self.search.best_move_valued(board, depth);
@@ -733,6 +776,7 @@ impl Engine {
                 learned: false,
                 depth: 0,
                 cut: false,
+                ..Default::default()
             }
         }
     }
@@ -757,6 +801,7 @@ impl Engine {
                     learned: false,
                     depth: 0,
                     cut: false,
+                    ..Default::default()
                 }
             } else if child.empty_count() <= self.config.solve_empties {
                 let r =
@@ -771,6 +816,7 @@ impl Engine {
                     learned: false,
                     depth: 0,
                     cut: false,
+                    ..Default::default()
                 }
             } else {
                 self.search.clear();
@@ -784,6 +830,7 @@ impl Engine {
                     learned: false,
                     depth: 0,
                     cut: false,
+                    ..Default::default()
                 }
             };
             out.push((pos, ev));
@@ -825,6 +872,7 @@ impl Engine {
                         learned: false,
                         depth: 0,
                         cut: false,
+                        ..Default::default()
                     }
                 } else if u32::from(child.empty_count()) <= depth {
                     let r = self.solver.solve_with_eval(
@@ -841,6 +889,7 @@ impl Engine {
                         learned: false,
                         depth: 0,
                         cut: false,
+                        ..Default::default()
                     }
                 } else {
                     all_exact = false;
@@ -854,6 +903,7 @@ impl Engine {
                         learned: false,
                         depth: reached + 1,
                         cut: false, // child at d = d+1 plies from the parent
+                        ..Default::default()
                     }
                 };
                 out.push((pos, ev));
