@@ -165,7 +165,7 @@ impl Progress {
 }
 
 pub struct Engine {
-    linear: Linear,
+    linear: std::sync::Arc<Linear>,
     search: NnueSearch,
     solver: Solver,
     config: EngineConfig,
@@ -179,8 +179,9 @@ pub struct Engine {
     progress: std::sync::Arc<Progress>,
 }
 
+#[derive(Clone)]
 pub struct EngineAssets {
-    linear: Linear,
+    linear: std::sync::Arc<Linear>,
     nnue: std::sync::Arc<Nnue>,
 }
 
@@ -203,7 +204,7 @@ impl EngineAssets {
         nn.quantize();
         nn.head_f32 = config.head_f32;
         Ok(EngineAssets {
-            linear,
+            linear: std::sync::Arc::new(linear),
             nnue: std::sync::Arc::new(nn),
         })
     }
@@ -373,9 +374,9 @@ impl Engine {
                 continue;
             };
             self.solver.clear_tables();
-            let r = self
-                .solver
-                .solve_with_eval(EndSolverMode::Perfect, &board, Some(&self.linear));
+            let r =
+                self.solver
+                    .solve_with_eval(EndSolverMode::Perfect, &board, Some(&*self.linear));
             nodes += r.nodes;
         }
         self.solver_nodes += nodes;
@@ -557,7 +558,7 @@ impl Engine {
             let watcher = self.watch_deadline(deadline);
             let r = self
                 .solver
-                .solve_with_eval(EndSolverMode::Perfect, board, Some(&self.linear));
+                .solve_with_eval(EndSolverMode::Perfect, board, Some(&*self.linear));
             self.solver_nodes += r.nodes;
             let cut = self.stop_watch_done(watcher);
             if cut {
@@ -598,7 +599,7 @@ impl Engine {
             });
             self.progress.set_kind(Progress::SELECT);
             let watcher = self.watch_deadline(deadline);
-            let r = self.solver.solve_selective(board, Some(&self.linear), t);
+            let r = self.solver.solve_selective(board, Some(&*self.linear), t);
             self.solver_nodes += r.nodes;
             let cut = self.stop_watch_done(watcher);
             if cut {
@@ -757,7 +758,7 @@ impl Engine {
         if board.empty_count() <= self.config.solve_empties {
             let r = self
                 .solver
-                .solve_with_eval(EndSolverMode::Perfect, board, Some(&self.linear));
+                .solve_with_eval(EndSolverMode::Perfect, board, Some(&*self.linear));
             MoveEval {
                 pos: r.best_move,
                 value: stone_scale(r.value as f32),
@@ -806,9 +807,11 @@ impl Engine {
                     ..Default::default()
                 }
             } else if child.empty_count() <= self.config.solve_empties {
-                let r =
-                    self.solver
-                        .solve_with_eval(EndSolverMode::Perfect, &child, Some(&self.linear));
+                let r = self.solver.solve_with_eval(
+                    EndSolverMode::Perfect,
+                    &child,
+                    Some(&*self.linear),
+                );
                 self.solver_nodes += r.nodes;
                 MoveEval {
                     pos: Some(pos),
@@ -880,7 +883,7 @@ impl Engine {
                     let r = self.solver.solve_with_eval(
                         EndSolverMode::Perfect,
                         &child,
-                        Some(&self.linear),
+                        Some(&*self.linear),
                     );
                     self.solver_nodes += r.nodes;
                     MoveEval {
