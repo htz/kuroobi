@@ -836,9 +836,7 @@ function MatchBoard({ snap, m, clock, prefs, onKifu, face, side }: {
         <Board cells={m.cells as Cell[]} last={last} disabled
                evals={busyEval}
                next={m.busy === 'ponder' ? m.busy_predict : null}
-               legal={busyEval ? Object.keys(busyEval).map(Number)
-                      : m.busy === 'ponder' && m.busy_predict != null ? [m.busy_predict]
-                      : []}
+               legal={[...new Set([...m.legal, ...(busyEval ? Object.keys(busyEval).map(Number) : [])])]}
                coords={prefs.coords} grain={prefs.grain}
                flip={flipped(prefs.facing, m.my_color)} />
       </div>

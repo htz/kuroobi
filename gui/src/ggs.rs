@@ -261,6 +261,8 @@ pub struct MatchView {
     pub think_since_ms: u64,
     /// Our move is waiting for the other board's search; the server charges none of the wait.
     pub think_queued: bool,
+    /// Squares the side to move can play, `file * 8 + rank`.
+    pub legal: Vec<u32>,
     pub order: u64,
 }
 
@@ -2981,6 +2983,17 @@ fn analyze_watch(ctx: &mut Ctx, mid: &str, matches: &mut HashMap<String, MatchSt
     ctx.emit(true);
 }
 
+fn legal_squares(m: &MatchState) -> Vec<u32> {
+    if m.over {
+        return Vec::new();
+    }
+    let Some(board) = board_of(m, m.turn) else {
+        return Vec::new();
+    };
+    let bits = board.movable();
+    (0..64u32).filter(|&i| bits >> i & 1 == 1).collect()
+}
+
 fn epoch_ms() -> u64 {
     std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
@@ -3620,6 +3633,7 @@ fn sync_matches(ctx: &mut Ctx, matches: &HashMap<String, MatchState>) {
             updated_ms: m.updated_ms,
             think_since_ms: 0,
             think_queued: false,
+            legal: legal_squares(m),
             order: m.order,
         })
         .collect();
@@ -4566,6 +4580,19 @@ mod tests {
         );
         assert_eq!(series[0].n, 1, "numbering is GGS's, not the index");
         assert!(series[0].mine, "odd moves are ours at this parity");
+    }
+
+    #[test]
+    fn the_legal_squares_are_the_side_to_moves() {
+        let mut m = MatchState::new();
+        m.cells = vec![0; 64];
+        for (sq, c) in [(27, 2), (36, 2), (28, 1), (35, 1)] {
+            m.cells[sq] = c;
+        }
+        m.turn = '*';
+        assert_eq!(legal_squares(&m), vec![19, 26, 37, 44], "c4 d3 e6 f5");
+        m.over = true;
+        assert!(legal_squares(&m).is_empty());
     }
 
     #[test]

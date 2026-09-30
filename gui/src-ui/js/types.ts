@@ -157,6 +157,7 @@ export interface MatchView {
   updated_ms: number;
   think_since_ms: number;
   think_queued: boolean;
+  legal: number[];
 }
 
 export interface GameResult {
