@@ -243,6 +243,9 @@ ggs --play <opponent> [--games N]
     [--depth N] [--solve-empties N] [--selective-band N] [--mpc]
     [--solver-hash 22] [--threads N] [--weights path] [--nnue path]
 
+# Wait for requests from <opponent> and accept them (asks for nothing)
+ggs --accept <opponent> [same options as --play]
+
 # Bridge that only returns a move (reads "<64 cells> <X|O>" on stdin
 # and answers "= <coord>")
 ggs --serve

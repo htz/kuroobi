@@ -3,15 +3,12 @@
 use std::path::PathBuf;
 use std::process::ExitCode;
 
-use kuroobi::linear::Linear;
-use kuroobi::midgame::{selective_band, NnueSearch, SharedTt};
-use kuroobi::nnue::Nnue;
-use kuroobi::pattern::LINEAR_PATTERNS;
-use kuroobi::solver::{EndSolverMode, Solver};
+use kuroobi::engine::{Engine, EngineConfig};
 use kuroobi::{Board, Position};
 
 struct Args {
     play: Option<String>,
+    accept: Option<String>,
     resume: Option<String>,
     serve: bool,
     login: Option<String>,
@@ -34,6 +31,7 @@ struct Args {
 fn parse_args() -> Result<Args, String> {
     let mut args = Args {
         play: None,
+        accept: None,
         resume: None,
         serve: false,
         login: None,
@@ -57,6 +55,7 @@ fn parse_args() -> Result<Args, String> {
         let mut value = |name: &str| it.next().ok_or_else(|| format!("{name} requires a value"));
         match arg.as_str() {
             "--play" => args.play = Some(value("--play")?),
+            "--accept" => args.accept = Some(value("--accept")?),
             "--resume" => args.resume = Some(value("--resume")?),
             "--serve" => args.serve = true,
             "--console" => args.console = true,
@@ -101,8 +100,16 @@ fn parse_args() -> Result<Args, String> {
             other => return Err(format!("unknown option: {other}")),
         }
     }
-    if args.play.is_none() && !args.serve && args.resume.is_none() && !args.console {
-        return Err("--play <opponent>, --resume <.id>, --console or --serve is required".into());
+    if args.play.is_none()
+        && args.accept.is_none()
+        && !args.serve
+        && args.resume.is_none()
+        && !args.console
+    {
+        return Err(
+            "--play <opponent>, --accept <opponent>, --resume <.id>, --console or --serve is required"
+                .into(),
+        );
     }
     Ok(args)
 }
@@ -133,9 +140,8 @@ fn run_session(
     opponent: &str,
     games_done: &mut usize,
     first_session: &mut bool,
-    search: &mut NnueSearch,
-    solver: &mut Solver,
-    pick: impl Fn(&Board, &mut NnueSearch, &mut Solver, Option<u64>) -> (Option<Position>, Option<f32>),
+    engine: &mut Engine,
+    pick: impl Fn(&Board, &mut Engine, Option<u64>) -> (Option<Position>, Option<f32>),
 ) -> SessionEnd {
     use std::io::{Read, Write};
     let mut stream = dial();
@@ -286,7 +292,7 @@ fn run_session(
                     if u.turn.is_some() && u.turn == my_color {
                         if let Some(board) = board_of(&u.rows, my_color) {
                             let t0 = std::time::Instant::now();
-                            let (mv, val) = pick(&board, search, solver, my_clock_secs);
+                            let (mv, val) = pick(&board, engine, my_clock_secs);
                             let m = match mv {
                                 Some(p) => coord(p),
                                 None => "pa".to_string(),
@@ -318,6 +324,13 @@ fn run_session(
                 eprintln!("### ignored: {ln}");
                 continue;
             }
+            if let (Some(from), Some(id)) = (&args.accept, request_id(&ln)) {
+                let mut words = ln.split_whitespace();
+                if words.any(|w| w == from) && ln.split_whitespace().any(|w| w == login) {
+                    send(&format!("tell /os accept {id}"));
+                    last_activity = std::time::Instant::now();
+                }
+            }
             if ln.starts_with("/os: + match") && ln.contains(login) {
                 in_match = true;
                 last_activity = std::time::Instant::now();
@@ -339,7 +352,7 @@ fn run_session(
 
         if let Some(t0) = ready_at {
             if (*first_session) && !in_match && asked_at.is_none() && t0.elapsed().as_secs() >= 4 {
-                if args.console {
+                if args.console || args.accept.is_some() {
                     continue;
                 }
                 asked_at = Some(std::time::Instant::now());
@@ -354,6 +367,13 @@ fn run_session(
             }
         }
     }
+}
+
+/// A request is `/os: +  .id ...` (two spaces after `+`); `+ match` starts a game instead.
+fn request_id(ln: &str) -> Option<&str> {
+    let rest = ln.strip_prefix("/os: +")?;
+    let id = rest.split_whitespace().next()?;
+    id.starts_with('.').then_some(id)
 }
 
 fn dial() -> std::net::TcpStream {
@@ -503,29 +523,28 @@ fn main() -> ExitCode {
         }
     };
 
-    let mut linear = Linear::new(LINEAR_PATTERNS);
-    if let Err(e) = linear.load_weights(&args.weights) {
-        eprintln!("failed to load {}: {e}", args.weights.display());
-        return ExitCode::FAILURE;
-    }
-    let mut nn = Nnue::new(LINEAR_PATTERNS);
-    if let Err(e) = nn.load(&args.nnue) {
-        eprintln!("failed to load nnue {}: {e}", args.nnue.display());
-        return ExitCode::FAILURE;
-    }
-    nn.quantize();
-    let nn = std::sync::Arc::new(nn);
-    let tt = std::sync::Arc::new(SharedTt::new(24));
-    let mut search = NnueSearch::new(nn.clone(), tt.clone());
-    search.threads = args.threads;
-    search.mpc = args.mpc;
-    let mut solver = Solver::new(args.solver_hash);
-    solver.set_nnue(nn, tt);
-    solver.set_threads(args.threads);
+    let config = EngineConfig {
+        depth: args.depth as u32,
+        solve_empties: args.solve_empties,
+        band: args.band,
+        threads: args.threads,
+        mpc: args.mpc,
+        solver_hash_bits: args.solver_hash,
+        weights: args.weights.clone(),
+        nnue: args.nnue.clone(),
+        use_book: false,
+        ..Default::default()
+    };
+    let mut engine = match Engine::new(config) {
+        Ok(e) => e,
+        Err(e) => {
+            eprintln!("failed to load the engine: {e}");
+            return ExitCode::FAILURE;
+        }
+    };
 
     let pick = |board: &Board,
-                search: &mut NnueSearch,
-                solver: &mut Solver,
+                engine: &mut Engine,
                 clock_secs: Option<u64>|
      -> (Option<Position>, Option<f32>) {
         if board.movable() == 0 {
@@ -541,17 +560,12 @@ fn main() -> ExitCode {
         } else {
             (args.depth, args.band)
         };
-        if board.empty_count() <= args.solve_empties {
-            let r = solver.solve_with_eval(EndSolverMode::Perfect, board, Some(&linear));
-            (r.best_move, Some(r.value as f32))
-        } else if let Some(t) = selective_band(board.empty_count(), args.solve_empties, band) {
-            let r = solver.solve_selective(board, Some(&linear), t);
-            (r.best_move, Some(r.value as f32))
-        } else {
-            let (mv, v) = search.best_move_valued(board, depth as u32);
-            let v = if v.abs() >= 999.0 { v / 1000.0 } else { v };
-            (mv, v.is_finite().then_some(v.clamp(-64.0, 64.0)))
-        }
+        engine.set_levels(depth as u32, args.solve_empties, band);
+        let mv = engine.choose(board);
+        (
+            mv.pos,
+            mv.value.is_finite().then(|| mv.value.clamp(-64.0, 64.0)),
+        )
     };
 
     if args.serve {
@@ -566,18 +580,10 @@ fn main() -> ExitCode {
                 println!("= ERR bad board");
                 continue;
             };
-            if board.empty_count() <= args.solve_empties {
-                let r = solver.solve_with_eval(EndSolverMode::Perfect, &board, Some(&linear));
-                match r.best_move {
-                    Some(p) => println!("= {} {}", coord(p), r.value),
-                    None => println!("= pa {}", r.value),
-                }
-            } else {
-                let (mv, v) = search.best_move_valued(&board, args.depth as u32);
-                match mv {
-                    Some(p) => println!("= {} {:.1}", coord(p), v),
-                    None => println!("= pa {:.1}", v),
-                }
+            let mv = engine.choose(&board);
+            match mv.pos {
+                Some(p) => println!("= {} {:.1}", coord(p), mv.value),
+                None => println!("= pa {:.1}", mv.value),
             }
             std::io::stdout().flush().ok();
         }
@@ -616,8 +622,7 @@ fn main() -> ExitCode {
             &opponent,
             &mut games_done,
             &mut first_session,
-            &mut search,
-            &mut solver,
+            &mut engine,
             pick,
         ) {
             SessionEnd::Stop => break,
