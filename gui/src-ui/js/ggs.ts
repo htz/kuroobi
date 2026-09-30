@@ -77,8 +77,9 @@ function clockView(c: ClockBase | undefined, side: ClockSide, now: number): Cloc
   if (base === null) return { text: raw || '', cls: active ? 'turn' : '' };
   // From the server update, not first draw: remounting used to reset the clock.
   const since = m.updated_ms || c.at;
-  const rem = base - (active ? Math.max(0, now - since) / 1000 : 0);
   const mine = side === 'my' || (!!color && color === m.my_color);
+  // The server charges others the time they report with the move, not the wall time.
+  const rem = base - (active && mine ? Math.max(0, now - since) / 1000 : 0);
   if (mine && m.in_overtime && rem >= 0) {
     return { text: t('ggs.clock.overtime', { t: fmtSecs(rem) }), cls: 'ext' };
   }
