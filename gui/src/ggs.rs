@@ -3546,6 +3546,10 @@ fn collect_workers(ctx: &mut Ctx, matches: &mut HashMap<String, MatchState>) -> 
             let Some(board) = board_of(m, m.turn) else {
                 continue;
             };
+            let c = &ctx.engine_cfg;
+            if !kuroobi::engine::ponder_pays(&board, c.solve_empties, c.band) {
+                continue;
+            }
             idle.push((i, board));
         }
         let running = ctx.workers.iter().filter(|w| w.busy).count();

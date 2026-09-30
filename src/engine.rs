@@ -164,6 +164,11 @@ impl Progress {
     }
 }
 
+/// Our next move is solved (fully or selectively) from the solver's own tables, which pondering never fills.
+pub fn ponder_pays(after_my_move: &Board, solve_empties: u8, band: u8) -> bool {
+    after_my_move.empty_count() as u32 > solve_empties as u32 + band as u32 + 1
+}
+
 pub struct Engine {
     linear: std::sync::Arc<Linear>,
     search: NnueSearch,
@@ -393,11 +398,11 @@ impl Engine {
         if is_game_over(after_my_move) || after_my_move.movable_count() == 0 {
             return 0;
         }
+        if !ponder_pays(after_my_move, self.config.solve_empties, self.config.band) {
+            return 0;
+        }
         let Some(pred) = self.tt_best(after_my_move) else {
             // Nothing searched here yet (second to move, or a book move): search their side for a reply.
-            if after_my_move.empty_count() <= self.config.solve_empties {
-                return 0;
-            }
             self.progress.clear();
             self.progress.set_kind(Progress::PONDER);
             self.stop.reset();
@@ -414,9 +419,6 @@ impl Engine {
         let mut child = *after_my_move;
         child.make_move_bits(pred);
         if is_game_over(&child) {
-            return 0;
-        }
-        if child.empty_count() <= self.config.solve_empties {
             return 0;
         }
         self.stop.reset();
