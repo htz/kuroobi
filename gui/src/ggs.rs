@@ -211,6 +211,7 @@ pub struct EvalPoint {
     pub n: u32,
     pub mine: bool,
     pub eval: Option<f32>,
+    pub secs: Option<f32>,
 }
 
 #[derive(Clone, Serialize, Default)]
@@ -256,6 +257,10 @@ pub struct MatchView {
     pub seen: u64,
     /// Arrival of the last server update (epoch ms); the screen runs the clock from here.
     pub updated_ms: u64,
+    /// When our search for this board began (epoch ms); our clock runs from here, not from the update.
+    pub think_since_ms: u64,
+    /// Our move is waiting for the other board's search; the server charges none of the wait.
+    pub think_queued: bool,
     pub order: u64,
 }
 
@@ -990,6 +995,7 @@ impl MatchState {
                 n,
                 mine: (n % 2) == mine_parity,
                 eval: self.move_evals.get(&n).and_then(|&(ev, _)| ev),
+                secs: self.move_evals.get(&n).and_then(|&(_, s)| s),
             })
             .collect()
     }
@@ -1318,6 +1324,8 @@ struct EngineWorker {
     sent_at: Option<(Instant, Duration)>,
     stopped_at: Option<Instant>,
     progress: std::sync::Arc<kuroobi::engine::Progress>,
+    threads: usize,
+    sent_ms: u64,
 }
 
 const WORKER_GIVE_UP: Duration = Duration::from_secs(10);
@@ -1329,6 +1337,7 @@ struct Pending {
     extend: Option<Duration>,
     hash: u64,
     hint: Option<Position>,
+    queued: Instant,
 }
 
 enum Job {
@@ -1376,7 +1385,6 @@ struct Ctx {
     engine_cfg_ponder: bool,
     ponder_at: Option<String>,
     workers: Vec<EngineWorker>,
-    worker_threads: usize,
 }
 
 const MAX_WORKERS: usize = 2;
@@ -1399,7 +1407,6 @@ impl Ctx {
                 Ok(mut w) => {
                     w.mid = Some(mid.to_string());
                     self.workers.push(w);
-                    self.share_threads();
                     return Some(self.workers.len() - 1);
                 }
                 Err(e) => {
@@ -1419,22 +1426,35 @@ impl Ctx {
         None
     }
 
-    fn share_threads(&mut self) {
-        let total = resolve_threads(self.engine_cfg.threads);
-        let active = self
-            .workers
-            .iter()
-            .filter(|w| w.mid.is_some())
-            .count()
-            .max(1);
-        let each = (total / active).max(1);
-        if each == self.worker_threads {
-            return;
+    /// Loading a worker takes seconds the server charges to our first move, so it happens at login.
+    fn prepare_workers(&mut self) {
+        if let Err(e) = self.ensure_engine() {
+            self.log("info", &format!("engine init failed: {e}"));
         }
-        for w in &mut self.workers {
-            w.send(Job::SetThreads(each));
+        while self.workers.len() < MAX_WORKERS {
+            match EngineWorker::spawn(self.engine_cfg.clone()) {
+                Ok(w) => self.workers.push(w),
+                Err(e) => {
+                    self.log("info", &format!("cannot spawn search worker: {e}"));
+                    return;
+                }
+            }
         }
-        self.worker_threads = each;
+    }
+
+    fn total_threads(&self) -> usize {
+        resolve_threads(self.engine_cfg.threads)
+    }
+
+    fn set_worker_threads(&mut self, i: usize, n: usize) {
+        if self.workers[i].threads != n {
+            self.workers[i].send(Job::SetThreads(n));
+            self.workers[i].threads = n;
+        }
+    }
+
+    fn thinking(&self) -> bool {
+        self.workers.iter().any(|w| w.busy && !w.pondering)
     }
 
     fn set_use_book(&mut self, b: bool) {
@@ -1449,7 +1469,6 @@ impl Ctx {
     }
 
     fn release_worker(&mut self, mid: &str) {
-        let mut hit = false;
         for w in &mut self.workers {
             if w.mid.as_deref() == Some(mid) {
                 w.mid = None;
@@ -1460,11 +1479,7 @@ impl Ctx {
                 w.sent_at = None;
                 w.stopped_at = None;
                 w.pending_hash = 0;
-                hit = true;
             }
-        }
-        if hit {
-            self.share_threads();
         }
     }
 }
@@ -1548,6 +1563,8 @@ impl EngineWorker {
             sent_at: None,
             stopped_at: None,
             progress,
+            threads: 0,
+            sent_ms: 0,
         })
     }
 
@@ -1768,7 +1785,6 @@ fn new_ctx(
         engine_cfg_ponder: true,
         ponder_at: None,
         workers: Vec::new(),
-        worker_threads: resolve_threads(0),
     };
     ctx.snap.lock().unwrap().engine = EngineCfgView {
         budget_use: 2.5,
@@ -2144,6 +2160,7 @@ fn greet(ctx: &mut Ctx, w: &mut Wire, login: &str, send: &mut impl FnMut(String)
         w.pending.push(key.into());
         say(ctx, send, cmd);
     }
+    ctx.prepare_workers();
 }
 
 fn dispatch_line(
@@ -2828,7 +2845,9 @@ fn apply_threads(ctx: &mut Ctx) {
         e.set_threads(n);
     }
     ctx.snap.lock().unwrap().engine.threads = n;
-    ctx.share_threads();
+    for w in &mut ctx.workers {
+        w.threads = 0;
+    }
 }
 
 fn handle_block(
@@ -2845,9 +2864,7 @@ fn handle_block(
     forget_finished_on_join(matches, &block[0], &mid);
     let m = matches.entry(mid.clone()).or_insert_with(MatchState::new);
     m.seen += 1;
-    m.updated_ms = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .map_or(0, |d| d.as_millis() as u64);
+    m.updated_ms = epoch_ms();
     if let Some(t) = block[0].split_whitespace().nth(3) {
         if t.starts_with('8') || t.starts_with("s8") {
             m.gtype = t.to_string();
@@ -2962,6 +2979,12 @@ fn analyze_watch(ctx: &mut Ctx, mid: &str, matches: &mut HashMap<String, MatchSt
     m.watch_exact = mv.exact;
     sync_matches(ctx, matches);
     ctx.emit(true);
+}
+
+fn epoch_ms() -> u64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_or(0, |d| d.as_millis() as u64)
 }
 
 fn board_of(m: &MatchState, turn: char) -> Option<Board> {
@@ -3234,7 +3257,7 @@ fn think_and_play(
             max_move_secs: ctx.engine_cfg_max_move,
             reserve_secs: ctx.engine_cfg_reserve,
             budget_use: ctx.engine_cfg_budget_use,
-            threads: ctx.worker_threads,
+            threads: ctx.total_threads(),
             ..Default::default()
         },
         base,
@@ -3248,11 +3271,9 @@ fn think_and_play(
             extend,
             hash: bh,
             hint: mirror_hint(matches, mid),
+            queued: Instant::now(),
         });
-        if ctx.workers[i].pondering {
-            ctx.workers[i].stop.stop();
-        }
-        pump_worker(ctx, i);
+        pump_next(ctx);
         return;
     }
     if let Err(e) = ctx.ensure_engine() {
@@ -3307,10 +3328,29 @@ fn think_and_play(
     ctx.emit(true);
 }
 
-fn pump_worker(ctx: &mut Ctx, i: usize) {
-    if ctx.workers[i].busy || ctx.workers[i].pending.is_none() {
+/// One board at a time on every thread: the server charges the reported time, so the waiting board loses none.
+fn pump_next(ctx: &mut Ctx) {
+    if ctx.thinking() {
         return;
     }
+    let Some(i) = (0..ctx.workers.len())
+        .filter(|&i| ctx.workers[i].pending.is_some())
+        .min_by_key(|&i| ctx.workers[i].pending.as_ref().map(|p| p.queued))
+    else {
+        return;
+    };
+    let mut ponders = false;
+    for w in &mut ctx.workers {
+        if w.busy {
+            w.stop.stop();
+            ponders = true;
+        }
+    }
+    if ponders {
+        return;
+    }
+    let total = ctx.total_threads();
+    ctx.set_worker_threads(i, total);
     let Some(p) = ctx.workers[i].pending.take() else {
         return;
     };
@@ -3319,6 +3359,7 @@ fn pump_worker(ctx: &mut Ctx, i: usize) {
     // Measured against the extension, which is how far the search may go.
     let limit = p.extend.or(p.cap).unwrap_or(Duration::from_secs(60));
     ctx.workers[i].sent_at = Some((Instant::now(), limit));
+    ctx.workers[i].sent_ms = epoch_ms();
     ctx.workers[i].stop.reset();
     let empties = p.board.empty_count();
     let movable = p.board.movable_count();
@@ -3394,7 +3435,6 @@ fn collect_workers(ctx: &mut Ctx, matches: &mut HashMap<String, MatchState>) -> 
         ctx.workers[i].busy = false;
         let took = ctx.workers[i].sent_at.map(|(t, _)| t.elapsed());
         ctx.workers[i].sent_at = None;
-        pump_worker(ctx, i);
         let Done::Moved(mv) = done else { continue };
         if let Some(t) = took {
             ctx.log(
@@ -3483,8 +3523,12 @@ fn collect_workers(ctx: &mut Ctx, matches: &mut HashMap<String, MatchState>) -> 
         ctx.dirty = true;
     }
 
-    if ctx.engine_cfg_ponder {
+    pump_next(ctx);
+
+    let queued = ctx.workers.iter().any(|w| w.pending.is_some());
+    if ctx.engine_cfg_ponder && !queued && !ctx.thinking() {
         const SLICE: Duration = Duration::from_secs(5);
+        let mut idle: Vec<(usize, Board)> = Vec::new();
         for i in 0..ctx.workers.len() {
             if ctx.workers[i].busy {
                 continue;
@@ -3502,9 +3546,12 @@ fn collect_workers(ctx: &mut Ctx, matches: &mut HashMap<String, MatchState>) -> 
             let Some(board) = board_of(m, m.turn) else {
                 continue;
             };
-            if ctx.workers[i].pending.is_some() {
-                continue;
-            }
+            idle.push((i, board));
+        }
+        let running = ctx.workers.iter().filter(|w| w.busy).count();
+        let each = (ctx.total_threads() / (running + idle.len()).max(1)).max(1);
+        for (i, board) in idle {
+            ctx.set_worker_threads(i, each);
             ctx.workers[i].pondering = true;
             ctx.workers[i].send(Job::Ponder {
                 board,
@@ -3567,6 +3614,8 @@ fn sync_matches(ctx: &mut Ctx, matches: &HashMap<String, MatchState>) {
             watch_exact: m.watch_exact,
             seen: m.seen,
             updated_ms: m.updated_ms,
+            think_since_ms: 0,
+            think_queued: false,
             order: m.order,
         })
         .collect();
@@ -3575,6 +3624,10 @@ fn sync_matches(ctx: &mut Ctx, matches: &HashMap<String, MatchState>) {
         let Some(w) = ctx.workers.iter().find(|w| w.mid.as_deref() == Some(&v.id)) else {
             continue;
         };
+        v.think_queued = w.pending.is_some();
+        if w.sent_ms > v.updated_ms {
+            v.think_since_ms = w.sent_ms;
+        }
         if !w.busy {
             continue;
         }
@@ -4509,6 +4562,22 @@ mod tests {
         );
         assert_eq!(series[0].n, 1, "numbering is GGS's, not the index");
         assert!(series[0].mine, "odd moves are ours at this parity");
+    }
+
+    #[test]
+    fn the_eval_series_carries_the_time_each_move_took() {
+        use std::collections::BTreeMap;
+        let mut m = MatchState::new();
+        m.moves = (1..=2u32)
+            .map(|n| (n, "f5".to_string()))
+            .collect::<BTreeMap<_, _>>();
+        m.eval_parity = Some(1);
+        m.move_evals.insert(1, (Some(1.5), Some(84.49)));
+        m.move_evals.insert(2, (None, None));
+
+        let series = m.eval_series();
+        assert_eq!(series[0].secs, Some(84.49));
+        assert_eq!(series[1].secs, None);
     }
 
     #[test]

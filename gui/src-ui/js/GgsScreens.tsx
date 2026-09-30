@@ -1,4 +1,4 @@
-import React, { useEffect, useRef, useState } from 'react';
+import React, { useEffect, useLayoutEffect, useRef, useState } from 'react';
 import { api, ggsApi, jsLog, onApp } from './api';
 import type { ChatMsg, GameResult, GgsSnapshot, MatchView, UserRow } from './types';
 import {
@@ -640,14 +640,15 @@ function GgsPlay({ snap, onNav, prefs, onKifu }: {
         ))}
       </aside>
 
-      <div className="k-scroll" style={{ flex: 1, minWidth: 0, minHeight: 0, padding: 'var(--sp-3)' }}>
+      <div className="k-scroll" style={{
+        flex: 1, minWidth: 0, minHeight: 0, padding: 'var(--sp-3)',
+        display: 'flex', flexDirection: 'column',
+      }}>
         {pair && <MatchActions id={cur} pair={pair} />}
-        <div style={{ display: 'flex', gap: 'var(--sp-3)', flexWrap: 'wrap', justifyContent: 'center' }}>
-          {pair?.map((m, i) => (
-            <MatchBoard key={m.id} snap={snap} m={m} clock={clock} prefs={prefs} onKifu={onKifu}
-                        face={(pair?.length ?? 1) > 1 ? i + 1 : undefined} />
-          ))}
-        </div>
+        {pair && <BoardPair pair={pair} render={(m, i, side) => (
+          <MatchBoard key={m.id} snap={snap} m={m} clock={clock} prefs={prefs} onKifu={onKifu}
+                      face={pair.length > 1 ? i + 1 : undefined} side={side} />
+        )} />}
       </div>
     </div>
   );
@@ -709,10 +710,58 @@ function matchRowOf(g: MatchView[], key: string): Match {
   };
 }
 
-function MatchBoard({ snap, m, clock, prefs, onKifu, face }: {
+const CARD_PAD = 12;
+const BOARD_GAP = 12;
+
+/** One board, or the two boards of a synchro game side by side; GGS has no other shape. */
+function BoardPair({ pair, render }: {
+  pair: MatchView[];
+  render: (m: MatchView, i: number, side: number) => React.ReactNode;
+}) {
+  const area = useRef<HTMLDivElement | null>(null);
+  const [box, setBox] = useState({ w: 0, h: 0 });
+  const [chrome, setChrome] = useState(280);
+  const n = pair.length > 1 ? 2 : 1;
+  const byWidth = (box.w - BOARD_GAP * (n - 1)) / n - CARD_PAD * 2;
+  const side = Math.max(200, Math.floor(Math.min(byWidth, box.h - chrome)));
+
+  useLayoutEffect(() => {
+    const el = area.current;
+    if (!el) return;
+    const measure = () => {
+      const r = el.getBoundingClientRect();
+      setBox((b) => (Math.abs(b.w - r.width) < 1 && Math.abs(b.h - r.height) < 1
+        ? b : { w: r.width, h: r.height }));
+    };
+    measure();
+    const o = new ResizeObserver(measure);
+    o.observe(el);
+    return () => o.disconnect();
+  }, []);
+
+  useLayoutEffect(() => {
+    const card = area.current?.querySelector<HTMLElement>('[data-card]');
+    const board = card?.querySelector<HTMLElement>('[data-board]');
+    if (!card || !board) return;
+    const c = card.offsetHeight - board.offsetHeight;
+    if (Math.abs(c - chrome) >= 1) setChrome(c);
+  }, [chrome, side, pair]);
+
+  return (
+    <div ref={area} style={{
+      flex: 1, minHeight: 0, display: 'flex', gap: BOARD_GAP,
+      justifyContent: 'center', alignItems: 'flex-start',
+    }}>
+      {box.w > 0 && pair.slice(0, 2).map((m, i) => render(m, i, side))}
+    </div>
+  );
+}
+
+function MatchBoard({ snap, m, clock, prefs, onKifu, face, side }: {
   snap: GgsSnapshot; m: MatchView; clock: (id: string, side: ClockSide) => ClockView; prefs: Prefs;
   onKifu: (title: string, kifu: string, archive?: string) => void;
   face?: number;
+  side: number;
 }) {
   const observer = !m.my_color;
   const { black, white } = countDiscs(m.cells);
@@ -733,10 +782,13 @@ function MatchBoard({ snap, m, clock, prefs, onKifu, face }: {
       })
     : undefined;
 
+  const plies = m.cells.filter((c) => c === 0).length + m.moves.length;
   const trend = m.eval_series.map((p) => ({
     x: p.n,
     mine: p.mine ? p.eval : null,
     opp: p.mine || p.eval == null ? null : -p.eval,
+    secs: p.secs,
+    minePly: p.mine,
   }));
 
   const busyEval: Record<number, EvalInfo> | undefined =
@@ -760,10 +812,10 @@ function MatchBoard({ snap, m, clock, prefs, onKifu, face }: {
     : { name: snap.login, rate: myRate != null ? myRate.toFixed(1) : '', color: m.my_color as 'black' | 'white', side: 'my' as const };
 
   return (
-    <div style={{
-      flex: '1 1 300px', minWidth: 260, maxWidth: 'min(460px, calc(100vh - 280px))',
+    <div data-card style={{
+      width: side + CARD_PAD * 2, flex: 'none',
       display: 'flex', flexDirection: 'column',
-      background: 'var(--panel)', borderRadius: 'var(--r-4)', padding: 'var(--sp-3)',
+      background: 'var(--panel)', borderRadius: 'var(--r-4)', padding: CARD_PAD,
     }}>
       {face !== undefined && (
         <div style={{
@@ -780,19 +832,21 @@ function MatchBoard({ snap, m, clock, prefs, onKifu, face }: {
                  rate={top.rate ? +top.rate : undefined}
                  meta={oppEval}
                  clock={clock(m.id, top.side).text} active={clock(m.id, top.side).cls === 'turn'} />
-      <Board cells={m.cells as Cell[]} last={last} disabled
-             evals={busyEval}
-             next={m.busy === 'ponder' ? m.busy_predict : null}
-             legal={busyEval ? Object.keys(busyEval).map(Number)
-                    : m.busy === 'ponder' && m.busy_predict != null ? [m.busy_predict]
-                    : []}
-             coords={prefs.coords} grain={prefs.grain}
-             flip={flipped(prefs.facing, m.my_color)} />
+      <div data-board style={{ width: side, height: side }}>
+        <Board cells={m.cells as Cell[]} last={last} disabled
+               evals={busyEval}
+               next={m.busy === 'ponder' ? m.busy_predict : null}
+               legal={busyEval ? Object.keys(busyEval).map(Number)
+                      : m.busy === 'ponder' && m.busy_predict != null ? [m.busy_predict]
+                      : []}
+               coords={prefs.coords} grain={prefs.grain}
+               flip={flipped(prefs.facing, m.my_color)} />
+      </div>
       <PlayerRow color={bottom.color === 'black' ? 'b' : 'w'} name={bottom.name || '?'}
                  rate={bottom.rate ? +bottom.rate : undefined}
                  meta={myEval}
                  clock={clock(m.id, bottom.side).text} active={clock(m.id, bottom.side).cls === 'turn'} />
-      {!observer && <EvalTrend points={trend} />}
+      {!observer && <EvalTrend points={trend} plies={plies} />}
       <div style={{
         display: 'flex', alignItems: 'center', gap: 'var(--sp-3)', height: 'var(--h-field)',
         fontSize: 'var(--fs-6)', color: 'var(--sub)',

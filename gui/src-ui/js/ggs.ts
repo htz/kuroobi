@@ -55,7 +55,22 @@ export interface ClockView {
   cls: '' | 'turn' | 'ext' | 'dead';
 }
 
-function clockView(c: ClockBase | undefined, side: ClockSide, now: number): ClockView {
+const theirTurn = (m: MatchView) =>
+  !m.over && !!m.my_color && (m.turn === 'black' || m.turn === 'white') && m.turn !== m.my_color;
+
+/** When the opponent's clock on this board starts running, or null while it waits for the other board. */
+function oppSince(m: MatchView, sib: MatchView | undefined): number | null {
+  if (!sib) return m.updated_ms;
+  // An opponent that searches one board at a time takes the board whose turn came first.
+  if (theirTurn(sib)) {
+    const first = m.updated_ms < sib.updated_ms || (m.updated_ms === sib.updated_ms && m.id < sib.id);
+    return first ? m.updated_ms : null;
+  }
+  return Math.max(m.updated_ms, sib.updated_ms);
+}
+
+function clockView(c: ClockBase | undefined, side: ClockSide, now: number,
+                   sib?: MatchView): ClockView {
   if (!c) return { text: '', cls: '' };
   const m = c.match;
   let base: number | null;
@@ -78,8 +93,16 @@ function clockView(c: ClockBase | undefined, side: ClockSide, now: number): Cloc
   // From the server update, not first draw: remounting used to reset the clock.
   const since = m.updated_ms || c.at;
   const mine = side === 'my' || (!!color && color === m.my_color);
+  const elapsed = active ? Math.max(0, now - since) / 1000 : 0;
   // The server charges others the time they report with the move, not the wall time.
-  const rem = base - (active && mine ? Math.max(0, now - since) / 1000 : 0);
+  if (!mine && base > 0) {
+    const from = side === 'opp' && m.updated_ms ? oppSince(m, sib) : since;
+    const spent = active && from != null ? Math.max(0, now - from) / 1000 : 0;
+    return { text: fmtSecs(Math.max(0, base - spent)), cls: active ? 'turn' : '' };
+  }
+  const ours = !active || m.think_queued ? 0
+    : m.think_since_ms ? Math.max(0, now - m.think_since_ms) / 1000 : elapsed;
+  const rem = base - (mine ? ours : 0);
   if (mine && m.in_overtime && rem >= 0) {
     return { text: t('ggs.clock.overtime', { t: fmtSecs(rem) }), cls: 'ext' };
   }
@@ -108,7 +131,12 @@ export function useClocks(matches: MatchView[]): (id: string, side: ClockSide) =
   }, [matches]);
 
   return useCallback(
-    (id: string, side: ClockSide) => clockView(state.bases[id], side, state.now),
+    (id: string, side: ClockSide) => {
+      const c = state.bases[id];
+      const sib = c && Object.values(state.bases)
+        .find((b) => b.match.base === c.match.base && b.match.id !== id)?.match;
+      return clockView(c, side, state.now, sib);
+    },
     [state],
   );
 }

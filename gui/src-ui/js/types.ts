@@ -146,7 +146,7 @@ export interface MatchView {
   last_eval_exact: boolean;
   opp_eval: number | null;
   opp_secs_used: number | null;
-  eval_series: { n: number; mine: boolean; eval: number | null }[];
+  eval_series: { n: number; mine: boolean; eval: number | null; secs: number | null }[];
   order: number;
   last_from_book: boolean;
   watch_eval: number | null;
@@ -155,6 +155,8 @@ export interface MatchView {
   seen: number;
   /** When the server's last update for this board arrived, in ms since the epoch. */
   updated_ms: number;
+  think_since_ms: number;
+  think_queued: boolean;
 }
 
 export interface GameResult {

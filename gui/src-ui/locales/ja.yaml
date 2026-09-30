@@ -213,6 +213,7 @@ data:
     hint: "自分から見た石差"
     mine: "自分"
     opp: "相手"
+    secs: "思考時間"
     title: "申告値"
 dialog:
   cancel: "やめる"

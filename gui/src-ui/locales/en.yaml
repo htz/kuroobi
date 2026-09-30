@@ -217,6 +217,7 @@ data:
     hint: "Disc difference from my side"
     mine: "Me"
     opp: "Opponent"
+    secs: "Time"
     title: "Reported eval"
 dialog:
   cancel: "Cancel"
