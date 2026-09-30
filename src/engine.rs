@@ -394,7 +394,16 @@ impl Engine {
             return 0;
         }
         let Some(pred) = self.tt_best(after_my_move) else {
-            return 0;
+            // Nothing searched here yet (second to move, or a book move): search their side for a reply.
+            if after_my_move.empty_count() <= self.config.solve_empties {
+                return 0;
+            }
+            self.progress.clear();
+            self.progress.set_kind(Progress::PONDER);
+            self.stop.reset();
+            self.search
+                .best_move_deadline(after_my_move, PONDER_DEPTH, Some(deadline));
+            return self.nodes() - base;
         };
         self.progress.clear();
         self.progress.set_kind(Progress::PONDER);
@@ -970,6 +979,22 @@ mod progress_tests {
 #[cfg(test)]
 mod assets_tests {
     use super::*;
+
+    #[test]
+    #[ignore = "requires weights/"]
+    fn pondering_a_position_never_searched_finds_a_reply_to_ponder_on() {
+        let mut engine = Engine::new(EngineConfig {
+            use_book: false,
+            ..Default::default()
+        })
+        .expect("engine");
+        let board = Board::new();
+        assert!(engine.tt_best(&board).is_none());
+
+        let deadline = std::time::Instant::now() + std::time::Duration::from_millis(200);
+        assert!(engine.ponder(&board, deadline) > 0);
+        assert!(engine.tt_best(&board).is_some());
+    }
 
     #[test]
     #[ignore = "requires weights/"]
