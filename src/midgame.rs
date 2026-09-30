@@ -139,6 +139,13 @@ fn mpc_old() -> bool {
 
 const MPC_MAX_LEVEL: u32 = 3;
 
+/// Off where the reduced search reaches the end: left on, it erred 6.4 discs against exact solves at 30 empties.
+const MPC_NESTED_GAP: u32 = 6;
+
+fn mpc_pv_factor(dev: u32) -> f32 {
+    1.05 / (1.0 + 0.05 * dev as f32)
+}
+
 pub fn mpc_reduced_depth(depth: u32) -> u32 {
     2 * (depth / 4) + (depth & 1)
 }
@@ -693,6 +700,8 @@ pub struct NnueSearch {
     pub nodes: u64,
     pub mpc: bool,
     probcut_level: u32,
+    /// Times the current line left the first-searched move (0 on the principal variation).
+    dev: u32,
     abort: Option<std::sync::Arc<AbortChain>>,
     stop: Option<StopHandle>,
     root_move: Option<Position>,
@@ -718,6 +727,7 @@ impl NnueSearch {
             nodes: 0,
             mpc: false,
             probcut_level: 0,
+            dev: 0,
             abort: None,
             stop: None,
             root_move: None,
@@ -768,6 +778,7 @@ impl NnueSearch {
             nodes: 0,
             mpc: self.mpc,
             probcut_level: 0,
+            dev: 0,
             abort: self.abort.clone(),
             stop: self.stop.clone(),
             root_move: None,
@@ -1312,6 +1323,7 @@ impl NnueSearch {
         let slot = std::sync::Arc::new(Slot::new());
         let (nn, tt, mpc, relax) = (self.nn.clone(), self.tt.clone(), self.mpc, self.mpc_relax);
         let (gen, my_gen) = (self.done.clone(), self.my_gen);
+        let kid_dev = self.dev + 1;
         let ext_stop = self.stop.clone();
         let task_slot = slot.clone();
         let pushed = pool.try_push(move || {
@@ -1328,6 +1340,7 @@ impl NnueSearch {
             w.abort_countdown = 1;
             w.done = gen;
             w.my_gen = my_gen;
+            w.dev = kid_dev;
             let mut cacc = w.nn.indices(child.black, child.white);
             let v = w.negamax(&child, &mut cacc, depth, -(alpha + PVS_EPS), -alpha);
             if v != ABORTED && -v > alpha {
@@ -1432,7 +1445,17 @@ impl NnueSearch {
         if pd < 1 || pd >= depth {
             return None;
         }
-        let t = mpc_t() * MPC_RELAX_STEP.powi(self.mpc_relax as i32);
+        let mut t = mpc_t() * MPC_RELAX_STEP.powi(self.mpc_relax as i32) * mpc_pv_factor(self.dev);
+        if let Some(a) = self.nn.mpc_alpha() {
+            let mut o = *b;
+            o.pass();
+            t *= a.value(
+                depth,
+                b.empty_count() as u32,
+                b.movable_count() as u32,
+                o.movable_count() as u32,
+            );
+        }
         let margin = t * sigma.value(b.empty_count() as u32, depth, pd);
         let old_style = mpc_old();
         let (try_high, try_low) = if old_style {
@@ -1445,7 +1468,7 @@ impl NnueSearch {
         if try_high || try_low {
             self.probcut_level += 1;
             let saved_mpc = self.mpc;
-            if !old_style {
+            if !old_style && (b.empty_count() as u32) < depth + MPC_NESTED_GAP {
                 self.mpc = false;
             }
             let mut cut = None;
@@ -1649,7 +1672,9 @@ impl NnueSearch {
                 }
                 let mut child = *acc;
                 self.nn.ix_apply(&mut child, pos, flipped, mover);
+                self.dev += 1;
                 let raw = self.negamax(&nb, &mut child, depth - 1, -(alpha + PVS_EPS), -alpha);
+                self.dev -= 1;
                 if split_ok {
                     self.abort = outer.clone();
                 }
@@ -1728,7 +1753,9 @@ impl NnueSearch {
                 nb.apply_flips(pos, flipped);
                 let mut child = *acc;
                 self.nn.ix_apply(&mut child, pos, flipped, mover);
+                self.dev += 1;
                 let raw = self.negamax(&nb, &mut child, depth - 1, -beta, -alpha);
+                self.dev -= 1;
                 if raw == ABORTED {
                     aborted = true;
                     break 'fanout;

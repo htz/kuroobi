@@ -127,7 +127,18 @@ the linear evaluator and is no longer in the build.
   evaluation error)
 - Two stages: gate on the static evaluation first, then fire the
   reduced search
-- Recursion goes two levels at most. **ProbCut results are never
+- Recursion goes three levels at most, and ProbCut stays on inside its
+  own reduced search unless that search reaches the end of the game
+  (empties < depth + 6). Always on, the value at 30 empties drifted 6.4
+  discs from exact solves; with the gap it did not, and at 10 s per move
+  (8 threads) the midgame reached depth 30.1 instead of 25.3.
+- The margin is scaled per node: by `1.05 / (1 + 0.05·dev)`, where `dev`
+  counts how often the line left the first-searched move, and by a
+  per-position factor α from own and opponent mobility (4 × 4 bands),
+  measured at depth pairs 10/14/18 and empties 22..52 and interpolated
+  linearly in both. α lives in the weights file next to σ
+  (`nnue_mpccalib --alpha`); a file without it cuts as before.
+- **ProbCut results are never
   written to the transposition table** (this keeps an unproven bound
   from masquerading as a settled value carrying a depth tag)
 - Off by default. Enabled through `Searcher::mpc` / `mpc_t` (the
@@ -139,6 +150,11 @@ Effect (FFO40-52, midgame mode):
 |---|---|---|---|
 | 10 | 3.42M nodes | 257k | **-92%** |
 | 12 | 18.4M nodes | 597k | **-97%** |
+
+The in-search recursion, the per-line factor and α together (depth 22:
+nodes ×0.16 against the plain cut) won **+1.64 discs per game over 400
+games** against the plain cut (200 synchro pairs, 60 s per side, 1
+thread, t = −2.72); the recursion alone was +1.55 over 376 games.
 
 **No strength loss at equal depth** has been confirmed over 800 games
 × 2 (47.7% / 47.1%, neither significant). On top of that, **MPC at

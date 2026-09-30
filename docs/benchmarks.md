@@ -1055,6 +1055,49 @@ solve.
 same verification can be redone in minutes when the evaluation function is
 replaced (5 minutes for 3000 positions).
 
+### ProbCut inside the reduced search, per-line and per-position width (adopted)
+
+Measured on 120 positions from self-play (20 each at 50/46/44/40/36/30
+empties, table cleared per position), references at depth 21 and 22,
+then in games (synchro pairs from 12 random plies, 60 s per side, one
+thread per engine).
+
+| Search | Nodes at depth 22 | Depth in 10 s, 44/46 empties (8 threads) | Games vs the plain cut |
+|---|---|---|---|
+| Plain cut (before) | ×1.00 | 25.3 | — |
+| ProbCut kept on in its reduced search | ×0.231 | 30.4 | — |
+| ... except where that search reaches the end | ×0.231 | 30.1 | +1.55 discs/game, 376 games, t = −2.70 |
+| ... plus per-line factor and per-position α | ×0.159 | 32.8 | +1.64 discs/game, 400 games, t = −2.72 |
+
+Kept on everywhere, the reduced searches read to the end selectively
+and the value at 30 empties drifted 6.41 discs from exact solves
+(1.03 before); with the gap it is 0.97. At 30 empties the adopted
+search lost 0 discs to exact solves over 20 positions, the plain cut 2.
+
+α was measured twice: 1800 positions with the old reduced search, and
+12000 with the new one. The two tables played even (200 games, +0.23
+discs, t = 0.33). Mobility alone moves the width by 0.7–1.3: a smooth
+formula predicted held-out errors slightly better than the 4 × 4 bands
+(NLL −0.015 against −0.011), but neither by much.
+
+### Search measures tried alongside that did not help (rejected)
+
+Same position set; nodes at fixed depth, depth and agreement at fixed time.
+
+| Measure | Result |
+|---|---|
+| No TT cut on PV nodes (both bounds / lower only) | nodes ×1.003 / ×1.002, same moves; 164 games 79-78-7 |
+| Evicting earlier moves' TT entries first (by age) | depth 24.2 → 23.1 at 42–36 empties; earlier entries are the next move's subtree |
+| 4× midgame table | +0.1 ply; capacity was not the limit (table 98% full, 39% from this move) |
+| Iterative deepening in steps of two, parity kept | agreement 88.3% → 84.2% against an odd-depth reference |
+| LMR on lines far from the PV (dev > 2, move ≥ 4, depth > 10) | nodes ×0.98, no depth gain at 10 s |
+| ProbCut on the beta side only | nodes ×1.28 |
+| Margin ×(0.9 + \|α\|/160) | nodes ×0.995 |
+| MPC_T 1.3 / 1.5 with the in-search recursion | nodes ×0.57 / ×0.82 against ×0.41, agreement not better |
+| Ordering children by a 2–6 ply search | nodes ×1.00 (×0.99 at depth 22) |
+| Aspiration ±2 at the root | nodes ×1.01 |
+| 1.8× time per move at 36–50 empties | 200 games, −0.81 discs/game, t = 1.06 |
+
 ### ETC (Enhanced Transposition Cutoff) — works in the endgame, not in the midgame
 
 A technique that looks each child up in the transposition table before
