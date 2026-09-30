@@ -5,7 +5,7 @@ use std::process::ExitCode;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
 use kuroobi::midgame::{mpc_reduced_depth, NnueSearch, SharedTt};
-use kuroobi::nnue::{MpcSigma, Nnue};
+use kuroobi::nnue::{MpcAlpha, MpcSigma, Nnue};
 use kuroobi::trainer::load_examples_binary;
 
 const DISC_LIMIT: f32 = 64.0;
@@ -164,6 +164,8 @@ struct Args {
     show_cells: bool,
     write: bool,
     legacy_sigma: bool,
+    alpha: bool,
+    alpha_per_stage: usize,
     which: String,
     spec: Option<PathBuf>,
 }
@@ -186,6 +188,8 @@ fn parse_args() -> Result<Args, ExitCode> {
     let mut show_cells = false;
     let mut write = false;
     let mut legacy_sigma = false;
+    let mut alpha = false;
+    let mut alpha_per_stage = 2000usize;
     let mut which = String::from("nnue");
     let mut spec: Option<PathBuf> = None;
 
@@ -230,6 +234,13 @@ fn parse_args() -> Result<Args, ExitCode> {
             "--cells" => show_cells = true,
             "--write" => write = true,
             "--legacy-sigma" => legacy_sigma = true,
+            "--alpha" => alpha = true,
+            "--alpha-per-stage" => {
+                alpha_per_stage = it
+                    .next()
+                    .and_then(|v| v.parse().ok())
+                    .unwrap_or(alpha_per_stage)
+            }
             "--depths" => {
                 if let Some(v) = it.next() {
                     depths = v.split(',').filter_map(|x| x.trim().parse().ok()).collect();
@@ -254,6 +265,8 @@ fn parse_args() -> Result<Args, ExitCode> {
         show_cells,
         write,
         legacy_sigma,
+        alpha,
+        alpha_per_stage,
         which,
         spec,
     })
@@ -276,6 +289,8 @@ fn main() -> ExitCode {
         show_cells,
         write,
         legacy_sigma,
+        alpha,
+        alpha_per_stage,
         which,
         spec,
     } = match parse_args() {
@@ -296,6 +311,24 @@ fn main() -> ExitCode {
 
     if legacy_sigma {
         return write_legacy_sigma(&nnue_path, &which, spec.as_deref());
+    }
+    if alpha {
+        let patterns = match kuroobi::pattern::resolve(&which, spec.as_deref()) {
+            Ok(p) => p,
+            Err(e) => {
+                eprintln!("{e}");
+                return ExitCode::FAILURE;
+            }
+        };
+        return calibrate_alpha(
+            &nnue_path,
+            patterns,
+            &paths,
+            stride,
+            alpha_per_stage,
+            threads,
+            write,
+        );
     }
     let Some(pairs) = depth_pairs(max_depth, &mut depths) else {
         return ExitCode::FAILURE;
@@ -748,5 +781,169 @@ fn store_sigma(
         return ExitCode::FAILURE;
     }
     println!("sigma written to {}", nnue_path.display());
+    ExitCode::SUCCESS
+}
+
+const ALPHA_EMPTIES: [u32; 6] = [22, 28, 34, 40, 46, 52];
+const ALPHA_DEPTHS: [u32; 3] = [10, 14, 18];
+/// Pseudo-samples at a ratio of 1 added to every cell, so thin cells stay near 1.
+const ALPHA_PRIOR: f64 = 12.0;
+
+/// Unlike sigma, measured with ProbCut on: α scales the cut as the search makes it.
+fn calibrate_alpha(
+    nnue_path: &Path,
+    patterns: &'static [kuroobi::pattern::Pattern],
+    paths: &[PathBuf],
+    stride: usize,
+    per_stage: usize,
+    threads: usize,
+    write: bool,
+) -> ExitCode {
+    let mut nn = Nnue::new(patterns);
+    if let Err(err) = nn.load(nnue_path) {
+        eprintln!("failed to load {}: {err}", nnue_path.display());
+        return ExitCode::FAILURE;
+    }
+    nn.quantize();
+    let nn = std::sync::Arc::new(nn);
+
+    let mut boards: Vec<kuroobi::Board> = Vec::new();
+    let mut per = [0usize; ALPHA_EMPTIES.len()];
+    'outer: for path in paths {
+        let examples = match load_examples_binary(path) {
+            Ok(ex) => ex,
+            Err(err) => {
+                eprintln!("failed to load {}: {err}", path.display());
+                return ExitCode::FAILURE;
+            }
+        };
+        for ex in examples.iter().step_by(stride.max(1)) {
+            let board = ex.board();
+            let empties = 64 - (board.black | board.white).count_ones();
+            let Some(k) = ALPHA_EMPTIES.iter().position(|&e| e == empties) else {
+                continue;
+            };
+            if per[k] >= per_stage || board.movable() == 0 {
+                continue;
+            }
+            per[k] += 1;
+            boards.push(board);
+            if per.iter().all(|&n| n >= per_stage) {
+                break 'outer;
+            }
+        }
+    }
+    eprintln!(
+        "alpha: {} positions ({per:?} per empty count) on {threads} threads",
+        boards.len()
+    );
+
+    let mut depths: Vec<u32> = ALPHA_DEPTHS
+        .iter()
+        .flat_map(|&d| [d, mpc_reduced_depth(d)])
+        .collect();
+    depths.sort_unstable();
+    depths.dedup();
+    let next = AtomicUsize::new(0);
+    let rows: Vec<(u32, u32, u32, Vec<f32>)> = std::thread::scope(|s| {
+        let handles: Vec<_> = (0..threads)
+            .map(|_| {
+                let (next, boards, depths, nn) = (&next, &boards, &depths, nn.clone());
+                s.spawn(move || {
+                    let tt = std::sync::Arc::new(SharedTt::new(20));
+                    let mut search = NnueSearch::new(nn, tt.clone());
+                    search.threads = 1;
+                    search.mpc = true;
+                    let mut out = Vec::new();
+                    loop {
+                        let i = next.fetch_add(1, Ordering::Relaxed);
+                        let Some(board) = boards.get(i) else { break };
+                        let mut opp = *board;
+                        opp.pass();
+                        let vals = depths
+                            .iter()
+                            .map(|&d| {
+                                tt.clear();
+                                search.best_move_deadline(board, d, None).1
+                            })
+                            .collect();
+                        out.push((
+                            board.empty_count() as u32,
+                            board.movable_count() as u32,
+                            opp.movable_count() as u32,
+                            vals,
+                        ));
+                    }
+                    out
+                })
+            })
+            .collect();
+        handles
+            .into_iter()
+            .flat_map(|h| h.join().unwrap())
+            .collect()
+    });
+
+    let at = |d: u32| depths.iter().position(|&x| x == d).unwrap();
+    let b = MpcAlpha::BUCKETS;
+    let (ne, nd) = (ALPHA_EMPTIES.len(), ALPHA_DEPTHS.len());
+    let mut cells = vec![0.0f32; nd * ne * b * b];
+    for (di, &d) in ALPHA_DEPTHS.iter().enumerate() {
+        let (hi, lo) = (at(d), at(mpc_reduced_depth(d)));
+        for (ei, &e) in ALPHA_EMPTIES.iter().enumerate() {
+            let errs: Vec<(u32, u32, f64)> = rows
+                .iter()
+                .filter(|r| r.0 == e && r.3[hi].abs() <= 64.0 && r.3[lo].abs() <= 64.0)
+                .map(|r| (r.1, r.2, (r.3[hi] - r.3[lo]) as f64))
+                .collect();
+            if errs.is_empty() {
+                continue;
+            }
+            let rms = (errs.iter().map(|x| x.2 * x.2).sum::<f64>() / errs.len() as f64).sqrt();
+            let mut sum = vec![(0.0f64, 0usize); b * b];
+            for &(own, opp, err) in &errs {
+                let c = &mut sum[MpcAlpha::bucket(own) * b + MpcAlpha::bucket(opp)];
+                c.0 += (err / rms).powi(2);
+                c.1 += 1;
+            }
+            for (ci, &(s2, n)) in sum.iter().enumerate() {
+                let r = ((s2 + ALPHA_PRIOR) / (n as f64 + ALPHA_PRIOR)).sqrt();
+                cells[(di * ne + ei) * b * b + ci] = r as f32;
+            }
+            println!(
+                "depth {d:2} <- {:2}, {e} empties: rms {rms:.2} discs over {}",
+                mpc_reduced_depth(d),
+                errs.len()
+            );
+        }
+    }
+    let table = MpcAlpha {
+        depths: ALPHA_DEPTHS.to_vec(),
+        empties: ALPHA_EMPTIES.to_vec(),
+        cells,
+    };
+    let (lo, hi) = table
+        .cells
+        .iter()
+        .fold((f32::MAX, f32::MIN), |(a, z), &v| (a.min(v), z.max(v)));
+    println!("alpha spans {lo:.2}..{hi:.2}");
+    if !write {
+        println!(
+            "not written (pass --write to store this in {})",
+            nnue_path.display()
+        );
+        return ExitCode::SUCCESS;
+    }
+    let mut out = Nnue::new(patterns);
+    if let Err(err) = out.load(nnue_path) {
+        eprintln!("failed to re-read {}: {err}", nnue_path.display());
+        return ExitCode::FAILURE;
+    }
+    out.set_mpc_alpha(Some(table));
+    if let Err(err) = out.save(nnue_path) {
+        eprintln!("failed to write {}: {err}", nnue_path.display());
+        return ExitCode::FAILURE;
+    }
+    println!("alpha written to {}", nnue_path.display());
     ExitCode::SUCCESS
 }

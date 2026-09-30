@@ -1084,6 +1084,112 @@ pub struct MpcSigma {
     pub qc: f32,
 }
 
+#[derive(Debug, Clone, PartialEq)]
+pub struct MpcAlpha {
+    pub depths: Vec<u32>,
+    pub empties: Vec<u32>,
+    /// `[depth][empties][own bucket][opp bucket]`, row-major.
+    pub cells: Vec<f32>,
+}
+
+impl MpcAlpha {
+    pub const BUCKETS: usize = 4;
+    const MAGIC: &'static [u8; 8] = b"MPCALPHA";
+
+    pub fn bucket(mobility: u32) -> usize {
+        match mobility {
+            0..=5 => 0,
+            6..=8 => 1,
+            9..=11 => 2,
+            _ => 3,
+        }
+    }
+
+    fn cell(&self, d: usize, e: usize, own: usize, opp: usize) -> f32 {
+        let b = Self::BUCKETS;
+        self.cells[((d * self.empties.len() + e) * b + own) * b + opp]
+    }
+
+    fn along(points: &[u32], x: u32) -> (usize, usize, f32) {
+        if x <= points[0] {
+            return (0, 0, 0.0);
+        }
+        for i in 1..points.len() {
+            if x <= points[i] {
+                let f = (x - points[i - 1]) as f32 / (points[i] - points[i - 1]) as f32;
+                return (i - 1, i, f);
+            }
+        }
+        let last = points.len() - 1;
+        (last, last, 0.0)
+    }
+
+    pub fn value(&self, depth: u32, empties: u32, own_mobility: u32, opp_mobility: u32) -> f32 {
+        let (own, opp) = (Self::bucket(own_mobility), Self::bucket(opp_mobility));
+        let (d0, d1, fd) = Self::along(&self.depths, depth);
+        let (e0, e1, fe) = Self::along(&self.empties, empties);
+        let at = |d| self.cell(d, e0, own, opp) * (1.0 - fe) + self.cell(d, e1, own, opp) * fe;
+        at(d0) * (1.0 - fd) + at(d1) * fd
+    }
+
+    fn write_to(&self, w: &mut impl std::io::Write) -> std::io::Result<()> {
+        w.write_all(Self::MAGIC)?;
+        w.write_all(&(self.depths.len() as u32).to_le_bytes())?;
+        w.write_all(&(self.empties.len() as u32).to_le_bytes())?;
+        for &v in self.depths.iter().chain(&self.empties) {
+            w.write_all(&v.to_le_bytes())?;
+        }
+        for &v in &self.cells {
+            w.write_all(&v.to_le_bytes())?;
+        }
+        Ok(())
+    }
+
+    /// `None` at the end of the file: weights written before the table existed.
+    fn read_from(r: &mut impl std::io::Read) -> std::io::Result<Option<MpcAlpha>> {
+        let mut magic = [0u8; 8];
+        match r.read_exact(&mut magic) {
+            Err(e) if e.kind() == std::io::ErrorKind::UnexpectedEof => return Ok(None),
+            Err(e) => return Err(e),
+            Ok(()) => {}
+        }
+        if &magic != Self::MAGIC {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::InvalidData,
+                "unknown section after the weights",
+            ));
+        }
+        let mut u = [0u8; 4];
+        let mut next = |r: &mut dyn std::io::Read| -> std::io::Result<[u8; 4]> {
+            r.read_exact(&mut u)?;
+            Ok(u)
+        };
+        let nd = u32::from_le_bytes(next(r)?) as usize;
+        let ne = u32::from_le_bytes(next(r)?) as usize;
+        let mut depths = Vec::with_capacity(nd);
+        for _ in 0..nd {
+            depths.push(u32::from_le_bytes(next(r)?));
+        }
+        let mut empties = Vec::with_capacity(ne);
+        for _ in 0..ne {
+            empties.push(u32::from_le_bytes(next(r)?));
+        }
+        let n = nd * ne * Self::BUCKETS * Self::BUCKETS;
+        let mut cells = Vec::with_capacity(n);
+        for _ in 0..n {
+            cells.push(f32::from_le_bytes(next(r)?));
+        }
+        if nd == 0 || ne == 0 {
+            return Ok(None);
+        }
+        Ok(Some(MpcAlpha {
+            depths,
+            empties,
+            cells,
+        }))
+    }
+}
+
 impl MpcSigma {
     pub const LEN: usize = 6;
 
@@ -1169,6 +1275,7 @@ pub struct Nnue {
     sq: stack_q::StackQ,
 
     mpc_sigma: Option<MpcSigma>,
+    mpc_alpha: Option<MpcAlpha>,
 }
 
 impl Nnue {
@@ -1245,11 +1352,20 @@ impl Nnue {
             out_scale: 0.0,
             ft_scale: 1.0,
             mpc_sigma: None,
+            mpc_alpha: None,
         }
     }
 
     pub fn mpc_sigma(&self) -> Option<MpcSigma> {
         self.mpc_sigma
+    }
+
+    pub fn mpc_alpha(&self) -> Option<&MpcAlpha> {
+        self.mpc_alpha.as_ref()
+    }
+
+    pub fn set_mpc_alpha(&mut self, alpha: Option<MpcAlpha>) {
+        self.mpc_alpha = alpha;
     }
 
     pub fn set_mpc_sigma(&mut self, sigma: Option<MpcSigma>) {
@@ -2740,12 +2856,16 @@ impl Nnue {
                 w.write_all(&v.to_le_bytes())?;
             }
         }
+        if let Some(a) = &self.mpc_alpha {
+            a.write_to(w)?;
+        }
         Ok(())
     }
 
     pub fn import_packed(&mut self, raw: &[u8]) -> std::io::Result<()> {
         use std::io::{Error, ErrorKind};
         self.mpc_sigma = None;
+        self.mpc_alpha = None;
         const L1_PAD_IN: usize = 288;
         const L2_PAD_IN: usize = SO_L1 * 2;
         const OUT_PAD_IN: usize = 320;
@@ -2991,6 +3111,11 @@ impl Nnue {
             read_into(r, &mut self.pa)?;
             read_into(r, &mut self.pa_bias)?;
         }
+        self.mpc_alpha = if &magic == b"BBRVNN10" {
+            MpcAlpha::read_from(&mut r)?
+        } else {
+            None
+        };
         self.refresh_so_grid();
         Ok(())
     }
@@ -3037,6 +3162,56 @@ mod tests {
 
         std::fs::remove_file(&path).ok();
         std::fs::remove_dir(&dir).ok();
+    }
+
+    fn alpha_for_test() -> MpcAlpha {
+        let (depths, empties) = (vec![10, 18], vec![20, 40]);
+        let n = depths.len() * empties.len() * MpcAlpha::BUCKETS * MpcAlpha::BUCKETS;
+        MpcAlpha {
+            depths,
+            empties,
+            cells: (0..n).map(|i| 0.5 + i as f32 / 64.0).collect(),
+        }
+    }
+
+    #[test]
+    fn a_file_carries_its_alpha_and_one_written_without_it_still_loads() {
+        let dir = std::env::temp_dir().join(format!("kuroobi-alpha-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("m.bin");
+
+        let mut nn = Nnue::new(test_patterns());
+        nn.init_weights();
+        nn.save(&path).unwrap();
+        let mut back = Nnue::new(test_patterns());
+        back.load(&path).unwrap();
+        assert_eq!(back.mpc_alpha(), None);
+
+        nn.set_mpc_alpha(Some(alpha_for_test()));
+        nn.save(&path).unwrap();
+        let mut back = Nnue::new(test_patterns());
+        back.load(&path).unwrap();
+        assert_eq!(back.mpc_alpha(), Some(&alpha_for_test()));
+        assert_eq!(back.ft, nn.ft, "the weights before the table are untouched");
+
+        std::fs::remove_file(&path).ok();
+        std::fs::remove_dir(&dir).ok();
+    }
+
+    #[test]
+    fn alpha_is_the_cell_at_a_measured_point_and_the_mean_halfway() {
+        let a = alpha_for_test();
+        let (own, opp) = (10, 4); // buckets 2 and 0
+        let cell = |d: usize, e: usize| a.cell(d, e, 2, 0);
+        assert_eq!(a.value(10, 20, own, opp), cell(0, 0));
+        assert_eq!(a.value(18, 40, own, opp), cell(1, 1));
+        let mid = (cell(0, 0) + cell(0, 1) + cell(1, 0) + cell(1, 1)) / 4.0;
+        assert!((a.value(14, 30, own, opp) - mid).abs() < 1e-6);
+        assert_eq!(
+            a.value(30, 60, own, opp),
+            cell(1, 1),
+            "beyond the last points it holds"
+        );
     }
 
     #[test]

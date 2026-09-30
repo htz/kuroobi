@@ -160,6 +160,16 @@ The source file has to span the empty counts the midgame searches; one
 whose positions all sit in a narrow band fits the six coefficients on
 that band and extrapolates the rest.
 
+`--alpha` measures the per-position factor on the margin instead: 2000
+positions at each of 22/28/34/40/46/52 empties (`--alpha-per-stage`),
+root values at depths 10/14/18 and their reduced depths, RMS error per
+own × opponent mobility band. Run it after sigma, on the same data.
+
+```sh
+nnue_mpccalib --alpha --threads 8 --stride 7 --write \
+  weights/nnue.bin data/records/selfplay/dedup_00*.data
+```
+
 ## Playing
 
 ### gtp
