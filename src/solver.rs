@@ -2704,12 +2704,13 @@ impl Worker<'_> {
         }
         if val > 0 {
             let bound = val + 8;
-            val = self.pvs_root(board, val, bound, ev);
+            // One below the proven bound: at the bound itself a move that only fails low reads as reaching it.
+            val = self.pvs_root(board, val - 1, bound, ev);
             if val == ABORTED {
                 return ABORTED;
             }
             if val >= bound {
-                val = self.pvs_root(board, val, 64, ev);
+                val = self.pvs_root(board, val - 1, 64, ev);
             }
         } else if val < 0 {
             let bound = val - 8;
@@ -2781,7 +2782,7 @@ impl Worker<'_> {
                 right = 0;
             } else if val >= hi && hi < 64 {
                 score = val;
-                left = 0;
+                left = 1;
                 right = (right * 2).min(128);
             } else {
                 self.warm_window = Some((lo, hi));
@@ -5188,6 +5189,65 @@ pub mod node_accounting {
 mod tests {
     use super::*;
     use crate::board::Board;
+
+    #[test]
+    fn the_solved_move_reaches_the_solved_value() {
+        let mut seed = 0x9e37_79b9_7f4a_7c15u64;
+        let mut rand = move || {
+            seed ^= seed << 13;
+            seed ^= seed >> 7;
+            seed ^= seed << 17;
+            seed
+        };
+        let mut solver = Solver::new(16);
+        let mut check = Solver::new(16);
+        let mut wrong = Vec::new();
+        for i in 0..3000u64 {
+            let stop = 7 + (i % 8) as u8;
+            let mut b = Board::new();
+            while b.empty_count() > stop
+                && !(b.movable() == 0 && {
+                    let mut p = b;
+                    p.pass();
+                    p.movable() == 0
+                })
+            {
+                let moves = b.movable();
+                if moves == 0 {
+                    b.pass();
+                    continue;
+                }
+                let n = rand() % moves.count_ones() as u64;
+                let mut m = moves;
+                for _ in 0..n {
+                    m &= m - 1;
+                }
+                b.make_move(Position::from_index(m.trailing_zeros()).unwrap())
+                    .unwrap();
+            }
+            if b.movable() < 2 || b.empty_count() > stop {
+                continue;
+            }
+            let r = solver.solve_with_eval(EndSolverMode::Perfect, &b, None);
+            let mut after = b;
+            after.make_move(r.best_move.unwrap()).unwrap();
+            let sign = if after.movable() == 0 {
+                after.pass();
+                1
+            } else {
+                -1
+            };
+            if after.movable() == 0 {
+                continue;
+            }
+            check.clear_tables();
+            let reply = check.solve_with_eval(EndSolverMode::Perfect, &after, None);
+            if sign * reply.value != r.value {
+                wrong.push((b.to_string(), r.best_move, r.value, sign * reply.value));
+            }
+        }
+        assert!(wrong.is_empty(), "moves that miss their value: {wrong:?}");
+    }
 
     #[test]
     fn shallow_subsets_cover_the_same_moves_as_the_scan() {
