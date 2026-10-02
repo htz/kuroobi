@@ -3197,7 +3197,6 @@ fn time_budget(
             depth: base.0,
             solve: base.1,
             band: base.2,
-            auto_band: true,
         },
         kuroobi::timectl::Pace::parse(pace),
     );
@@ -5352,6 +5351,7 @@ mod budget_tests {
                 clock_secs: secs,
                 grace_secs: 120,
                 empties,
+                budget_use: 0.5,
                 ..Default::default()
             },
             BASE,

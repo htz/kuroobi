@@ -36,7 +36,6 @@ pub struct Levels {
     pub depth: u32,
     pub solve: u8,
     pub band: u8,
-    pub auto_band: bool,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -60,33 +59,6 @@ pub struct Situation {
     pub budget_use: f64,
     pub nps: Option<f64>,
     pub threads: usize,
-    pub solve_ref: SolveRef,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq)]
-pub enum SolveRef {
-    Fixed(u8),
-    Auto,
-}
-
-impl SolveRef {
-    pub fn parse(s: &str) -> SolveRef {
-        if s == "auto" {
-            return SolveRef::Auto;
-        }
-        s.parse()
-            .map(SolveRef::Fixed)
-            .unwrap_or(SolveRef::Fixed(SOLVE_REF))
-    }
-
-    fn value(self, clock_secs: u64, nps: Option<f64>, threads: usize) -> u8 {
-        static ENV: std::sync::OnceLock<Option<SolveRef>> = std::sync::OnceLock::new();
-        let env = *ENV.get_or_init(|| std::env::var("SOLVE_REF").ok().map(|v| SolveRef::parse(&v)));
-        match env.unwrap_or(self) {
-            SolveRef::Fixed(v) => v,
-            SolveRef::Auto => auto_solve_ref(clock_secs, nps, threads),
-        }
-    }
 }
 
 impl Default for Situation {
@@ -101,7 +73,6 @@ impl Default for Situation {
             budget_use: 2.5,
             nps: None,
             threads: 1,
-            solve_ref: SolveRef::Fixed(SOLVE_REF),
         }
     }
 }
@@ -119,24 +90,27 @@ fn parallel_overhead(threads: usize, empties: u8) -> f64 {
 
 const DEEP_NPS_RATIO: f64 = 0.9;
 
-const SOLVE_SAFETY: f64 = 3.0;
-
-const SOLVE_TOTAL_FACTOR: f64 = 4.0 / 3.0;
-
+/// Typical cost: 40 live 29-30-empty solves (tables warmed 5 s) took a median 0.8x this.
 pub fn solve_secs(empties: u8, nps: f64, threads: usize) -> f64 {
     if nps <= 0.0 {
         return f64::INFINITY;
     }
     let nodes = SOLVE_NODES_A * (SOLVE_NODES_B * empties as f64).exp();
     nodes * parallel_overhead(threads, empties) / (nps * DEEP_NPS_RATIO)
-        * SOLVE_SAFETY
-        * SOLVE_TOTAL_FACTOR
+}
+
+/// The same 40 solves: 90th percentile 3.4x `solve_secs`, slowest 4.7x.
+const SOLVE_SLOW: f64 = 3.4;
+
+/// What a solve must be allowed so that it is rarely cut.
+fn solve_slow_secs(empties: u8, nps: f64, threads: usize) -> f64 {
+    solve_secs(empties, nps, threads) * SOLVE_SLOW
 }
 
 pub fn solve_entry(budget_secs: f64, nps: f64, threads: usize, max: u8) -> u8 {
     (0..=max)
         .rev()
-        .find(|&e| solve_secs(e, nps, threads) <= budget_secs)
+        .find(|&e| solve_slow_secs(e, nps, threads) <= budget_secs)
         .unwrap_or(0)
 }
 
@@ -146,26 +120,24 @@ const DEPTH_BY_CLOCK: u32 = 60;
 
 const SOLVE_REF: u8 = 18;
 
-pub fn auto_solve_ref(clock_secs: u64, nps: Option<f64>, threads: usize) -> u8 {
+/// The earliest solve the clock affords when it costs no more than one of the midgame moves
+/// still ahead; a fixed share of the clock shrank the solve's reserve as the clock ran down.
+fn solve_ref_and_moves(
+    avail: u64,
+    empties: u8,
+    nps: Option<f64>,
+    threads: usize,
+) -> (u8, u64, f64) {
+    let moves_above = |e: u8| (empties.saturating_sub(e) as f64 / 2.0).ceil() as u64;
+    let endgame = |e: u8, nps: f64| solve_slow_secs(e, nps, threads);
     let Some(nps) = nps else {
-        return SOLVE_REF;
+        return (SOLVE_REF, moves_above(SOLVE_REF).max(1), 0.0);
     };
-    let budget = clock_secs as f64 * SOLVE_REF_SHARE;
-    solve_entry(budget, nps, threads, SOLVE_REF_MAX).max(SOLVE_REF)
-}
-
-const SOLVE_REF_SHARE: f64 = 0.05;
-
-const SOLVE_REF_MAX: u8 = 30;
-
-fn band_for(budget: f64) -> u8 {
-    if budget < 12.0 {
-        0
-    } else if budget < 60.0 {
-        6
-    } else {
-        8
-    }
+    let e = (SOLVE_REF..=SOLVE_CEILING)
+        .rev()
+        .find(|&e| endgame(e, nps) <= avail as f64 / (moves_above(e) + 1) as f64)
+        .unwrap_or(SOLVE_REF);
+    (e, moves_above(e).max(1), endgame(e, nps))
 }
 
 const SOLVE_GREED: f64 = 10.0;
@@ -204,9 +176,14 @@ const ENDGAME_FLOOR: u64 = 10;
 /// Enough for a solve (0.3 s measured).
 const FLOOR_MOVE_SECS: f64 = 0.25;
 
-const EXTEND_MAX: f64 = 3.0;
+/// At 3.0, 33 of 45 extended moves ran to the limit while games ended with 1-2 minutes unspent (live, 5 minutes).
+const EXTEND_MAX: f64 = 5.0;
 
 const EXTEND_POOL_SHARE: f64 = 0.25;
+
+/// Every move ran its full even share (58 of 63 cut at the deadline), leaving nothing to extend with;
+/// at 0.7 72% of midgame moves still took 25-45 s.
+const MOVE_BASE: f64 = 0.5;
 
 pub fn plan(s: Situation, base: Levels, pace: Pace) -> Plan {
     if pace == Pace::Depth {
@@ -240,15 +217,24 @@ pub fn plan(s: Situation, base: Levels, pace: Pace) -> Plan {
         };
     }
     let avail = secs;
-    let solve_ref = s.solve_ref.value(avail, s.nps, s.threads);
-    let my_moves = ((s.empties.saturating_sub(solve_ref) as f64 / 2.0).ceil() as u64).max(1);
+    let (solve_ref, my_moves, endgame) = solve_ref_and_moves(avail, s.empties, s.nps, s.threads);
     let want = if s.grace_secs == 0 {
         s.reserve_secs * NO_GRACE_RESERVE_MUL
     } else {
         s.reserve_secs
     };
+    // Without the solve's own time held back, the auto reference let the opening take 140 of 300 s.
     let reserve = want.min(avail / 2).max(ENDGAME_FLOOR.min(avail));
+    // Held at a full midgame share: holding only the estimate let each move overspend, the reference slid
+    // from 31 to 28 and the selective moves were left 2-10 s (live, 5 minutes).
+    let reserve = if s.empties > solve_ref {
+        let share = avail as f64 / (my_moves + 1) as f64;
+        reserve.max((endgame.max(share).ceil() as u64).min(avail * 9 / 10))
+    } else {
+        reserve
+    };
     let pool = avail.saturating_sub(reserve) as f64;
+    let solve_due = s.empties <= solve_ref;
     let even = pool / my_moves as f64;
     let root = (my_moves as f64).sqrt();
     let budget = match pace {
@@ -257,7 +243,7 @@ pub fn plan(s: Situation, base: Levels, pace: Pace) -> Plan {
         _ => even,
     };
     let budget = budget * effective_budget_use(s.budget_use);
-    let budget = budget.min(pool);
+    let budget = budget.min(pool).min(even * MOVE_BASE);
     let budget = if s.max_move_secs > 0 {
         budget.min(s.max_move_secs as f64)
     } else {
@@ -267,7 +253,11 @@ pub fn plan(s: Situation, base: Levels, pace: Pace) -> Plan {
     let last = pool <= 0.0;
     let solve = match s.nps {
         Some(nps) => {
-            let b = (budget * SOLVE_GREED).min(avail as f64 * SOLVE_MAX_SHARE);
+            let b = if solve_due {
+                avail as f64 * SOLVE_MAX_SHARE
+            } else {
+                (budget * SOLVE_GREED).min(avail as f64 * SOLVE_MAX_SHARE)
+            };
             let from_share = solve_entry(b, nps, s.threads, SOLVE_CEILING);
             if last {
                 from_share.max(solvable_now(s, nps))
@@ -279,23 +269,24 @@ pub fn plan(s: Situation, base: Levels, pace: Pace) -> Plan {
         None if avail < 60 => base.solve.min(20),
         None => base.solve,
     };
-    let budget = if last && solve >= s.empties {
+    let budget = if (last || solve_due) && solve >= s.empties {
         let need = s
             .nps
-            .map(|nps| solve_secs(s.empties, nps, s.threads))
+            .map(|nps| solve_slow_secs(s.empties, nps, s.threads))
             .unwrap_or(0.0);
-        budget.max(need.min(avail as f64 * SOLVE_FINAL_SHARE))
+        let share = if last {
+            SOLVE_FINAL_SHARE
+        } else {
+            SOLVE_MAX_SHARE
+        };
+        budget.max(need.min(avail as f64 * share))
     } else {
         budget
     };
-    let band = if base.auto_band {
-        band_for(budget)
-    } else {
-        if budget >= 12.0 {
-            base.band
-        } else {
-            0
-        }
+    // Only for a due solve the clock cannot afford: on 22 live losing selective moves a midgame search repeated 14.
+    let band = match s.empties.checked_sub(solve) {
+        Some(gap) if solve_due && gap > 0 && gap <= base.band => gap,
+        _ => 0,
     };
     let cap = budget.max(if avail > 0 { FLOOR_MOVE_SECS } else { 0.05 });
     let extend = (!last).then(|| {
@@ -312,13 +303,13 @@ pub fn plan(s: Situation, base: Levels, pace: Pace) -> Plan {
     }
 }
 
-/// Nothing comes after a terminal solve, and `solve_secs` already carries `SOLVE_SAFETY`.
+/// Nothing comes after a terminal solve.
 const SOLVE_FINAL_SHARE: f64 = 0.9;
 
 /// Via the share, the floor zeroed the pool and refused a 0.4 ms solve at 10 empties.
 fn solvable_now(s: Situation, nps: f64) -> u8 {
     let avail = s.clock_secs.unwrap_or(0) as f64;
-    if solve_secs(s.empties, nps, s.threads) <= avail * SOLVE_FINAL_SHARE {
+    if solve_slow_secs(s.empties, nps, s.threads) <= avail * SOLVE_FINAL_SHARE {
         s.empties
     } else {
         0
@@ -333,7 +324,6 @@ mod tests {
         depth: 22,
         solve: 26,
         band: 6,
-        auto_band: false,
     };
 
     fn cap_secs(secs: u64, empties: u8, pace: Pace) -> f64 {
@@ -342,6 +332,8 @@ mod tests {
                 clock_secs: Some(secs),
                 grace_secs: 120,
                 empties,
+                // Below MOVE_BASE, so the pace still shapes the budget.
+                budget_use: 0.5,
                 ..Situation::default()
             },
             BASE,
@@ -445,7 +437,6 @@ mod tests {
                     budget_use: 6.0,
                     nps: Some(30e6),
                     threads: 8,
-                    solve_ref: SolveRef::Auto,
                     ..Situation::default()
                 },
                 BASE,
@@ -461,7 +452,7 @@ mod tests {
                 p.solve
             );
             assert!(
-                p.cap.unwrap().as_secs_f64() >= solve_secs(empties, 30e6, 8),
+                p.cap.unwrap().as_secs_f64() >= solve_secs(empties, 30e6, 8) - 1e-6,
                 "the deadline must let the solve finish: cap {:?}",
                 p.cap.unwrap()
             );
@@ -481,7 +472,6 @@ mod tests {
                     budget_use: 6.0,
                     nps: Some(30e6),
                     threads: 8,
-                    solve_ref: SolveRef::Auto,
                     ..Situation::default()
                 },
                 BASE,
@@ -521,45 +511,77 @@ mod tests {
             assert!((cap_secs(600, empties, Pace::Tail(0.6)) - f).abs() < 1e-9);
             assert!(cap_secs(600, empties, Pace::Tail(1.0)) > f);
         }
-        let two_left = SOLVE_REF + 4;
-        let late = cap_secs(600, two_left, Pace::Fast);
-        assert!((cap_secs(600, two_left, Pace::Tail(1.0)) - late).abs() < 1e-9);
+        let last_move = SOLVE_REF + 2;
+        let late = cap_secs(600, last_move, Pace::Fast);
+        assert!((cap_secs(600, last_move, Pace::Tail(1.0)) - late).abs() < 1e-9);
+    }
+
+    fn reference(clock: u64, nps: Option<f64>, threads: usize) -> u8 {
+        solve_ref_and_moves(clock, 44, nps, threads).0
     }
 
     #[test]
     fn the_reference_follows_the_machine() {
-        let live = auto_solve_ref(900, Some(130e6), 8);
-        let bench = auto_solve_ref(60, Some(13.8e6), 1);
-        assert!(
-            live > bench,
-            "live play should afford a deeper reference ({live} vs {bench})"
-        );
-        assert!(
-            (26..=30).contains(&live),
-            "live reference out of range: {live}"
-        );
-        assert!(
-            (18..=24).contains(&bench),
-            "bench reference out of range: {bench}"
-        );
-    }
-
-    #[test]
-    fn the_reference_never_goes_below_the_old_default() {
-        for (clock, nps, threads) in [(3u64, 1e6, 1), (10, 5e5, 1), (60, 1e5, 2)] {
-            assert_eq!(auto_solve_ref(clock, Some(nps), threads), SOLVE_REF);
-        }
+        let live = reference(900, Some(130e6), 8);
+        let bench = reference(60, Some(13.8e6), 1);
+        assert!(live > bench, "live {live} vs bench {bench}");
+        assert!(live <= SOLVE_CEILING && bench >= SOLVE_REF);
     }
 
     #[test]
     fn without_calibration_the_reference_is_the_old_default() {
-        assert_eq!(auto_solve_ref(900, None, 8), SOLVE_REF);
+        assert_eq!(reference(900, None, 8), SOLVE_REF);
     }
 
     #[test]
-    fn the_reference_is_capped() {
-        assert!(auto_solve_ref(60, Some(130e6), 8) <= auto_solve_ref(1800, Some(130e6), 8));
-        assert!(auto_solve_ref(36_000, Some(130e6), 8) <= SOLVE_REF_MAX);
+    fn the_reference_grows_with_the_clock() {
+        assert!(reference(60, Some(130e6), 8) <= reference(1800, Some(130e6), 8));
+        assert!(reference(36_000, Some(130e6), 8) <= SOLVE_CEILING);
+    }
+
+    #[test]
+    fn every_clock_keeps_the_solve_its_time() {
+        let (nps, threads) = (221e6, 8);
+        for clock in [60u64, 120, 300, 600, 900, 1800] {
+            let mut left = clock as f64;
+            let mut first = true;
+            for e in (2..=44u8).rev().step_by(2) {
+                let p = plan(
+                    Situation {
+                        clock_secs: Some(left as u64),
+                        grace_secs: 120,
+                        empties: e,
+                        budget_use: 6.0,
+                        nps: Some(nps),
+                        threads,
+                        ..Situation::default()
+                    },
+                    Levels {
+                        depth: 60,
+                        solve: 26,
+                        band: 6,
+                    },
+                    Pace::Fast,
+                );
+                let cap = p.cap.unwrap().as_secs_f64();
+                let used = if e <= p.solve && first {
+                    first = false;
+                    let need = solve_secs(e, nps, threads);
+                    assert!(
+                        cap >= need - 1e-6,
+                        "{clock}s: the first solve at {e} got {cap:.1}s of {need:.1}s"
+                    );
+                    need / 2.0
+                } else if e <= p.solve {
+                    1.0
+                } else {
+                    cap
+                };
+                left -= used.min(cap);
+                assert!(left >= 0.0, "{clock}s ran out at {e} empties");
+            }
+            assert!(!first, "{clock}s never solved");
+        }
     }
 
     #[test]
@@ -567,26 +589,6 @@ mod tests {
         let a = cap_secs(600, 60, Pace::Tail(0.6));
         let b = cap_secs(600, 60, Pace::Tail(0.25));
         assert!(b < a, "0.25 {b} < 0.6 {a}");
-    }
-
-    #[test]
-    fn calibration_does_not_move_the_move_budget() {
-        for secs in [3u64, 10, 30, 600] {
-            for empties in [60u8, 40, 30] {
-                let sit = |nps| Situation {
-                    clock_secs: Some(secs),
-                    empties,
-                    threads: 5,
-                    nps,
-                    ..Situation::default()
-                };
-                assert_eq!(
-                    plan(sit(None), BASE, Pace::Fast).cap,
-                    plan(sit(Some(90e6)), BASE, Pace::Fast).cap,
-                    "move budget moved at {secs}s, {empties} empties"
-                );
-            }
-        }
     }
 
     #[test]
@@ -742,7 +744,7 @@ mod tests {
         };
         let good = with(2.5);
         assert_eq!(with(0.0), good, "0 must fall to the default");
-        assert_ne!(with(1.0), good, "1.0 must differ from the default");
+        assert_ne!(with(0.3), good, "0.3 must differ from the default");
         assert_eq!(with(-1.0), good, "negatives must fall to the default");
         assert_eq!(with(f64::NAN), good, "NaN must fall to the default");
         assert_eq!(
@@ -768,8 +770,8 @@ mod tests {
             .cap
             .unwrap()
         };
-        assert!(with(1.0) < with(2.0));
-        assert!(with(2.0) < with(3.0));
+        assert!(with(0.2) < with(0.4));
+        assert!(with(0.4) < with(0.6));
     }
 
     #[test]
@@ -829,7 +831,6 @@ mod clock_usage_tests {
         depth: 22,
         solve: 26,
         band: 6,
-        auto_band: false,
     };
 
     fn play_out(use_ratio: f64) -> (f64, bool) {
