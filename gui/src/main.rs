@@ -139,6 +139,20 @@ fn total_memory() -> u64 {
     0
 }
 
+/// Behind another window, App Nap ran live solves at 3.4M nodes/s against 190M in front; they missed deadlines.
+#[cfg(target_os = "macos")]
+fn hold_off_app_nap() {
+    use objc2_foundation::{NSActivityOptions, NSProcessInfo, NSString};
+    let activity = NSProcessInfo::processInfo().beginActivityWithOptions_reason(
+        NSActivityOptions::UserInitiatedAllowingIdleSystemSleep,
+        &NSString::from_str("searching for moves on a game clock"),
+    );
+    std::mem::forget(activity);
+}
+
+#[cfg(not(target_os = "macos"))]
+fn hold_off_app_nap() {}
+
 #[derive(Default)]
 pub(crate) struct Activity {
     pub(crate) local: Option<&'static str>,
@@ -2156,6 +2170,7 @@ async fn ggs_save_kifu(
 }
 
 fn main() {
+    hold_off_app_nap();
     let initial = take_handoff_kifu()
         .as_deref()
         .and_then(game_from_text)
