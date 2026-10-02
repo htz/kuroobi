@@ -24,7 +24,7 @@ pub static NON_FINITE_VALUES: std::sync::atomic::AtomicU64 = std::sync::atomic::
 
 const PONDER_DEPTH: u32 = 60;
 
-const BACKUP_DEPTH: u32 = 8;
+const BACKUP_DEPTH: u32 = 60;
 
 const BACKUP_SHARE: f32 = 0.05;
 
@@ -301,6 +301,26 @@ impl Engine {
         Some(done)
     }
 
+    fn backup_move(
+        &mut self,
+        board: &Board,
+        deadline: std::time::Instant,
+    ) -> (Option<Position>, f32) {
+        let now = std::time::Instant::now();
+        let until = now
+            + deadline
+                .saturating_duration_since(now)
+                .mul_f32(BACKUP_SHARE);
+        let (pos, value, _) = self
+            .search
+            .best_move_deadline(board, BACKUP_DEPTH, Some(until));
+        // The backup's own deadline trips the shared stop; left set, it kills the solve at once.
+        if std::time::Instant::now() >= until {
+            self.stop.reset();
+        }
+        (pos, value)
+    }
+
     fn stop_watch_done(
         &mut self,
         watcher: Option<std::sync::Arc<std::sync::atomic::AtomicBool>>,
@@ -554,17 +574,7 @@ impl Engine {
             };
         }
         if board.empty_count() <= c.solve_empties {
-            let backup = deadline.map(|_| {
-                let (pos, value, _) = self.search.best_move_deadline(
-                    board,
-                    BACKUP_DEPTH,
-                    deadline.map(|d| {
-                        let now = std::time::Instant::now();
-                        now + (d - now).mul_f32(BACKUP_SHARE)
-                    }),
-                );
-                (pos, value)
-            });
+            let backup = deadline.map(|d| self.backup_move(board, d));
             self.progress.set_kind(Progress::SOLVE);
             let watcher = self.watch_deadline(deadline);
             let r = self
@@ -573,6 +583,18 @@ impl Engine {
             self.solver_nodes += r.nodes;
             let cut = self.stop_watch_done(watcher);
             if cut {
+                if let Some((value, pos)) = self.solver.warm_rung.filter(|(_, p)| p.is_some()) {
+                    return MoveEval {
+                        pos,
+                        value: stone_scale(value as f32),
+                        exact: false,
+                        from_book: false,
+                        learned: false,
+                        depth: 0,
+                        cut: true,
+                        ..Default::default()
+                    };
+                }
                 if let Some((pos, value)) = backup.filter(|(p, _)| p.is_some()) {
                     return MoveEval {
                         pos,
@@ -597,17 +619,7 @@ impl Engine {
                 ..Default::default()
             }
         } else if let Some(t) = selective_band(board.empty_count(), c.solve_empties, c.band) {
-            let backup = deadline.map(|_| {
-                let (pos, value, _) = self.search.best_move_deadline(
-                    board,
-                    BACKUP_DEPTH,
-                    deadline.map(|d| {
-                        let now = std::time::Instant::now();
-                        now + (d - now).mul_f32(BACKUP_SHARE)
-                    }),
-                );
-                (pos, value)
-            });
+            let backup = deadline.map(|d| self.backup_move(board, d));
             self.progress.set_kind(Progress::SELECT);
             let watcher = self.watch_deadline(deadline);
             let r = self.solver.solve_selective(board, Some(&*self.linear), t);

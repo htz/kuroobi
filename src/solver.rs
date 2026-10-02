@@ -1132,6 +1132,8 @@ fn selective_gate_offset() -> Option<f32> {
 }
 const SELECTIVE_PASS_MIN_EMPTIES: u8 = 18;
 const SELECTIVE_LADDER: [f32; 2] = [1.1, 1.8];
+/// 93%, the loosest confidence the selective band itself plays.
+const WARM_FALLBACK_T: f32 = 1.8;
 
 const SORT_DEPTH_LADDER: [u8; 64] =
     build_sort_ladder([DEEP_ORDER_EMPTIES, DEEP2_ORDER_EMPTIES, DEEP3_ORDER_EMPTIES]);
@@ -1912,6 +1914,8 @@ pub struct Solver {
     budget_threads: usize,
     budget_handles: Vec<std::thread::JoinHandle<()>>,
     stop: Option<crate::midgame::StopHandle>,
+    /// The warm-up rung a cut solve finished, which beats the midgame backup as its move.
+    pub warm_rung: Option<(i32, Option<Position>)>,
 }
 
 struct Worker<'a> {
@@ -2293,6 +2297,7 @@ impl Solver {
             budget_threads: 0,
             budget_handles: Vec::new(),
             stop: None,
+            warm_rung: None,
         }
     }
 
@@ -2374,6 +2379,7 @@ impl Solver {
     ) -> EndSolverResult {
         self.nodes = 0;
         self.best = None;
+        self.warm_rung = None;
 
         if !board.check_all() {
             return EndSolverResult {
@@ -2433,7 +2439,7 @@ impl Solver {
         let stop_ref = self.stop.as_ref();
         let root_abort = AbortFlag::root();
         let watching = std::sync::atomic::AtomicBool::new(true);
-        let (value, nodes, best, root_back) = std::thread::scope(|scope| {
+        let (value, nodes, best, root_back, warm) = std::thread::scope(|scope| {
             struct StopWatch<'a>(&'a std::sync::atomic::AtomicBool);
             impl Drop for StopWatch<'_> {
                 fn drop(&mut self) {
@@ -2478,6 +2484,7 @@ impl Solver {
                 rungs.push(t);
             }
             let mut last_selective: Option<i32> = None;
+            let mut warm: Option<(i32, Option<Position>)> = None;
             if let Some(e) = ev {
                 if selective.is_some() || board.empty_count() >= selective_pass_min_empties() {
                     let mut guess = w.estimate_score(board, Some(e));
@@ -2498,6 +2505,9 @@ impl Solver {
                             );
                         }
                         w.selective_t = None;
+                        if t >= WARM_FALLBACK_T && !root_abort.aborted() {
+                            warm = Some((s, w.best));
+                        }
                         guess = s - (s & 1);
                         last_selective = Some(s);
                         w.tt.demote_to_seed_shared();
@@ -2514,7 +2524,7 @@ impl Solver {
             let warm_nodes = w.nodes;
             WARMUP_NODES.fetch_add(warm_nodes, std::sync::atomic::Ordering::Relaxed);
             if let Some(v) = last_selective.filter(|_| selective.is_some()) {
-                return (v, w.nodes, w.best, w.into_scratch());
+                return (v, w.nodes, w.best, w.into_scratch(), warm);
             }
             let t_exact = std::time::Instant::now();
             let v = match mode {
@@ -2528,9 +2538,10 @@ impl Solver {
                 std::sync::atomic::Ordering::Relaxed,
             );
             EXACT_NODES.fetch_add(w.nodes - warm_nodes, std::sync::atomic::Ordering::Relaxed);
-            (v, w.nodes, w.best, w.into_scratch())
+            (v, w.nodes, w.best, w.into_scratch(), warm)
         });
         self.scratch = Some(root_back);
+        self.warm_rung = warm;
         self.wipe = root_abort.aborted();
         self.nodes = nodes;
         self.best = best;
