@@ -70,8 +70,12 @@ fn decided_margin() -> Option<f32> {
     })
 }
 
-/// Over 40 positions 0.3 saved 25% of the time, 0.5 8%, 0.6 1%.
-const DECIDED_AT: f32 = 0.3;
+/// On 8 threads 0.3 left too few iterations to check: 0.1 stopped 9 of 20 live positions at 30 s (0.3: 3), same moves.
+const DECIDED_AT: f32 = 0.1;
+
+const DECIDED_DEPTH: u32 = 28;
+
+const UNSETTLED_DROP: f32 = 1.0;
 
 fn decided_at() -> f32 {
     static V: std::sync::OnceLock<f32> = std::sync::OnceLock::new();
@@ -914,6 +918,8 @@ impl NnueSearch {
         let mut value = f32::NAN;
         let mut best = None;
         let mut last_best = None;
+        let mut two_ago = None;
+        let mut last_value = f32::NAN;
         let mut reached = 0;
         let mut last_pass = std::time::Duration::ZERO;
         let clock = deadline.map(|dl| (std::time::Instant::now(), dl.get()));
@@ -946,11 +952,14 @@ impl NnueSearch {
             best = self.root_move.or_else(|| self.root_best(b, &mut acc));
             reached = d;
             if self.settle(
-                b, &acc, best, last_best, d, value, clock, last_pass, deadline, extend,
+                b, &acc, best, last_best, two_ago, d, value, last_value, clock, last_pass,
+                deadline, extend,
             ) {
                 self.stop_reason = Stopped::Decided;
                 break;
             }
+            two_ago = last_best;
+            last_value = value;
             last_best = best;
             if let Some(p) = self.progress.as_ref() {
                 p.reached(d, best, v);
@@ -966,8 +975,10 @@ impl NnueSearch {
         acc: &PatternIndices,
         best: Option<Position>,
         last_best: Option<Position>,
+        two_ago: Option<Position>,
         depth: u32,
         value: f32,
+        last_value: f32,
         clock: Option<(std::time::Instant, std::time::Instant)>,
         last_pass: std::time::Duration,
         deadline: Option<&std::sync::Arc<Deadline>>,
@@ -980,17 +991,27 @@ impl NnueSearch {
         if start.elapsed().as_secs_f32() < budget * decided_at() {
             return false;
         }
-        if best != last_best {
-            return false;
+        // Live early stops at depth 19 and 25 each lost 2 discs; those at 28-39 lost none.
+        let shallow = depth < DECIDED_DEPTH;
+        // On live positions the best move alternated every depth from 24 to 29, so two back agrees too.
+        if !shallow && (best == last_best || best == two_ago) {
+            match self.others_behind(b, acc, best, depth, value, m) {
+                Some(true) => return true,
+                // Torn down mid-check: no verdict either way.
+                None => return false,
+                Some(false) => {}
+            }
         }
-        match self.others_behind(b, acc, best, depth, value, m) {
-            Some(true) => return true,
-            // Torn down mid-check: no verdict either way.
-            None => return false,
-            Some(false) => {}
-        }
-        // Only time that can finish an iteration buys depth.
+        // Rhapsody spends 45 s+ on a third of its midgame moves against our 18%; an unsettled move gets all.
+        let unsettled =
+            (best != last_best && best != two_ago) || value < last_value - UNSETTLED_DROP;
         if let (Some(dl), Some(limit)) = (deadline, extend) {
+            if unsettled {
+                dl.extend_to(limit);
+                self.extended = true;
+                return false;
+            }
+            // Only time that can finish an iteration buys depth.
             let need =
                 std::time::Instant::now() + last_pass.mul_f32(extend_pass_factor()) + EXTEND_SLACK;
             if need > dl.get() && need <= limit {
@@ -1101,6 +1122,8 @@ impl NnueSearch {
         let mut value = f32::NAN;
         let mut best = None;
         let mut last_best = None;
+        let mut two_ago = None;
+        let mut last_value = f32::NAN;
         let mut reached = 0;
         let mut last_pass = std::time::Duration::ZERO;
         let clock = deadline.map(|dl| (std::time::Instant::now(), dl.get()));
@@ -1175,11 +1198,14 @@ impl NnueSearch {
                     p.reached(main_depth, best, v);
                 }
                 if self.settle(
-                    b, &acc, best, last_best, main_depth, value, clock, last_pass, deadline, extend,
+                    b, &acc, best, last_best, two_ago, main_depth, value, last_value, clock,
+                    last_pass, deadline, extend,
                 ) {
                     self.stop_reason = Stopped::Decided;
                     break;
                 }
+                two_ago = last_best;
+                last_value = value;
                 last_best = best;
                 if std::env::var("ROOT_TRACE").is_ok() {
                     eprintln!(
