@@ -495,7 +495,9 @@ function GgsStandby({ snap }: { snap: GgsSnapshot }) {
 
   useEffect(() => {
     if (snap.login) ggsApi.finger(snap.login).catch(() => {});
+    if (snap.login) ggsApi.who().catch(() => {});
   }, [snap.login]);
+  const oppNames = opp && !names.includes(opp) ? [opp, ...names] : names;
 
   const form = (key: 'accept' | 'decline'): string =>
     (snap.fingers[snap.login]?.fields
@@ -537,8 +539,8 @@ function GgsStandby({ snap }: { snap: GgsSnapshot }) {
           gridTemplateColumns: 'repeat(auto-fit, minmax(240px, 1fr))',
         }}>
           <Field stretch label={t('ggs.field.opponent')}>
-            <Select value={names.includes(opp) ? opp : ''} onChange={setOpp}
-                    options={[['', t('ggs.opponent_any')], ...names.map((n) => [n, n] as [string, string])]} />
+            <Select value={opp} onChange={setOpp}
+                    options={[['', t('ggs.opponent_any')], ...oppNames.map((n) => [n, n] as [string, string])]} />
           </Field>
           <Field stretch label={t('ggs.field.format')}><Select value={gtype} onChange={setGtype} options={gtypeChoices()} /></Field>
           <Field stretch label={t('ggs.field.time_control')}><Select value={time} onChange={setTime} options={clockChoices()} /></Field>

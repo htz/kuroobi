@@ -2288,6 +2288,11 @@ fn service(ctx: &mut Ctx, w: &mut Wire, mut send: impl FnMut(String)) {
         w.next_match_at = Instant::now() + Duration::from_secs(60);
         w.pending.push("match_list".into());
         say(ctx, &mut send, "tell /os match");
+        // Players in a game drop out of `who`, so a one-off list never shows them free again.
+        for t in ["8", "8r"] {
+            w.pending.push(format!("who:{t}"));
+            say(ctx, &mut send, format!("tell /os who {t}"));
+        }
     }
 
     let done: Vec<String> = ctx
