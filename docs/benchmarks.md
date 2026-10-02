@@ -988,6 +988,21 @@ automatically becomes shallower before reaching a deep solve. This is why
 the gain from calibration stays with "the thickness of the margin" rather
 than "strength".
 
+#### One typical cost and one slow cost, both measured
+
+The estimate used to carry three stacked margins (1.5 × 4/3 × 1.5, about
+3× the node model). Live first solves at 29-30 empties instead ran at a
+median of 7-17 s while 18-23% were cut at 30-59 s. On 40 of those
+positions, tables warmed by 5 s of midgame search and no deadline, the
+time over the node model was 0.8 at the median, 1.54 at the 80th
+percentile, 3.4 at the 90th and 4.7 at worst. So the model now gives the
+typical cost unmargined (`solve_secs`), and one measured factor of 3.4
+(`SOLVE_SLOW`) decides whether a solve may start and how long it may run.
+A cut solve plays its 93% warm-up rung instead of a 5%-of-deadline
+midgame backup, which lost two discs per cut in live games: with the same
+40 positions cut at 3 s, the backup matched the exact best move in 33 and
+the rung in 40.
+
 ### Transposition table size — endgame default from 22 to 24 bits
 
 **Decided by measuring in the region games actually search.** 30 problems
@@ -1024,6 +1039,27 @@ evaluation gate plus lowering the cut bound, turning the probe into an
 unpruned NNUE search, collapsing the warm rungs into 1, and shrinking the
 margin relative to the calibrated σ (`SEL_SIGMA_SCALE`; quality is
 unchanged down to 0.6 and breaks first below 0.55).
+
+#### Under the clock: only as a stand-in for a due solve (adopted)
+
+Over 153 live 5-minute games against Rhapsody, 22 selective moves lost
+two discs each, 14 of them at the band's top (35-36 empties, 93%). Replayed
+on those 22 positions, a selective search repeated the losing move 15
+times, a midgame search of the same 5 s 14 times, a 15 s midgame search
+12 times, and a 99% selective search 13 times: the band was no worse than
+a midgame search, and no better. The band now opens only when the plan
+wants a solve the clock cannot afford, at the confidence the gap allows;
+above the planned solve the midgame search plays.
+
+#### Rejected: climbing the confidence while time remains
+
+Spending the band's leftover time by re-searching at 98% and 99%, then
+exactly: on 40 positions at 31-34 empties and 10 s, the move changed in 2
+positions with the same claimed value, and the exact solve never finished
+inside 10 s even at 31 empties. Live, each cut climb wiped the solver's
+table, and the following 29-30-empty solves were cut in turn (one took
+33 s without finishing, where 4-20 s was usual); the two games lost 4 and
+6 discs. 99% alone still ran past 4-9 s deadlines at 35-36 empties.
 
 ### Midgame MPC σ — re-measuring with NNUE changed nothing (rejected)
 
