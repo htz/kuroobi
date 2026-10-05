@@ -35,8 +35,24 @@ another needs no code.
 
 ### Stage split and the disc-count feature
 
-The weights are 3-dimensional, `weights[stage][pattern][index]`.
+The weights are 3-dimensional, `weights[stage][pattern][cell]`.
 `STAGE_COUNT = 61`, and the stage is the number of moves played.
+
+**Indices that a symmetric form of the board reads for the same squares
+share one cell.** A pattern's four masks are images of one another, and
+each mask has one symmetry that maps it onto itself with its squares in
+another order, so every index has a mirror image that must carry the same
+value. `fold[pattern][index]` maps an index to its cell; a table has a
+little over half as many cells as indices (320,193 against 612,360 per
+stage). The search does not pay for this: on load the cells are unfolded
+into the flat tables it indexes directly.
+
+Folding is what makes the evaluation the same for all eight forms of a
+board by construction, so training reads each position once. Before it,
+the eight forms of every position were trained and the mirror cells only
+came out equal; a stage trained both ways from zero followed the same
+train and validation MSE at every one of 96 epochs to the fourth decimal
+(best 37.0604 both), at 1.5 s an epoch against 9.2 s.
 
 On top of that, **`num_weights[stage][player disc count]` (65 entries) is
 added**. The total disc count is fixed within a stage, so this effectively
@@ -45,8 +61,8 @@ local patterns alone cannot provide.
 
 ### Weight file format
 
-Magic `BBRVWT02` (v2, with the disc-count table) / `BBRVWT01` (v1
-compatible, still readable). Saving is an **atomic write** — temporary file +
+Magic `BBRVWT03` (folded cells), the only format read. A file is 78 MB;
+the unfolded format before it was 149 MB. Saving is an **atomic write** — temporary file +
 `sync_all` + `rename` — so an interruption never corrupts the existing
 weights. On load the stage count, the pattern count and each table size are
 checked, so weights from a different library fail to load.

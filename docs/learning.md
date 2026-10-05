@@ -42,8 +42,8 @@ best val separately to `<weights>.best`**. Training overwrites `weights`
 every epoch, and since the last epoch is not necessarily the best, this
 separate save is in practice the deliverable.
 
-What `linear_train` returns is the mean squared error over the 8 symmetric
-forms.
+What `linear_train` returns is the mean squared error, one form per
+position; the folded cells give the other seven forms the same value.
 
 The data format is `kuroobi::record` (27 bytes): mover's discs, opponent's discs, search
 value, final disc difference, ply, random-move flag, move played, side to

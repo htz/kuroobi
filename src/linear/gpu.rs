@@ -4,7 +4,6 @@ use std::sync::mpsc;
 
 use wgpu::util::DeviceExt;
 
-use crate::board::Board;
 use crate::linear::{Linear, NUM_TABLE_SIZE, STAGE_COUNT};
 use crate::trainer::Example;
 
@@ -16,8 +15,8 @@ const BETA1: f32 = 0.9;
 const BETA2: f32 = 0.999;
 const EPSILON: f32 = 1e-8;
 
-/// The eight symmetric forms of every position are trained, so a batch of `n` examples is `8 * n` rows.
-pub const FORMS: usize = 8;
+/// Batches a submission carries: a submission costs about a millisecond whatever it holds, which at one batch each was most of an epoch.
+const GROUP: usize = 8;
 
 /// Uniform block shared by the kernels.
 #[repr(C)]
@@ -29,23 +28,6 @@ struct Params {
     lr: f32,
 }
 
-/// `back[f][s]` is the square of the original board that symmetric form `f` shows at square `s`.
-fn square_maps() -> [[u8; 64]; FORMS] {
-    let mut back = [[0u8; 64]; FORMS];
-    for s in 0..64u8 {
-        let b = Board {
-            black: 1u64 << s,
-            white: 0,
-            player: crate::color::Color::Black,
-            empty_count: 63,
-        };
-        for (f, sym) in b.symmetries().into_iter().enumerate() {
-            back[f][sym.black.trailing_zeros() as usize] = s;
-        }
-    }
-    back
-}
-
 /// The kernels, as one shader module each.
 struct Kernel {
     pipeline: wgpu::ComputePipeline,
@@ -55,9 +37,7 @@ struct Kernel {
 pub struct LinearGpu {
     device: wgpu::Device,
     queue: wgpu::Queue,
-    index: Kernel,
-    fwd: Kernel,
-    scatter: Kernel,
+    step: Kernel,
     bwd: Kernel,
     reduce: Kernel,
     b_w: wgpu::Buffer,
@@ -65,18 +45,18 @@ pub struct LinearGpu {
     b_v: wgpu::Buffer,
     b_t: wgpu::Buffer,
     /// Two of each per-batch buffer: the device is still reading one while the host builds the next, which is what keeps both busy.
-    b_ex: [wgpu::Buffer; 2],
+    b_ex: Vec<wgpu::Buffer>,
     b_msq: wgpu::Buffer,
     b_mptr: wgpu::Buffer,
     b_mbase: wgpu::Buffer,
-    b_cells: [wgpu::Buffer; 2],
-    b_tgt: [wgpu::Buffer; 2],
+    b_fold: wgpu::Buffer,
     b_err: [wgpu::Buffer; 2],
     b_grad: wgpu::Buffer,
     pending: std::collections::VecDeque<wgpu::SubmissionIndex>,
     b_stats: wgpu::Buffer,
     b_stats_read: wgpu::Buffer,
-    b_par: wgpu::Buffer,
+    b_par: Vec<wgpu::Buffer>,
+    groups: Vec<[wgpu::BindGroup; 3]>,
     n_cells: usize,
     stages: (usize, usize),
     cells_per_row: usize,
@@ -119,7 +99,6 @@ fn shader_prelude(
     nst: usize,
 ) -> String {
     let scale_f = SCALE;
-    let forms = FORMS;
     format!(
         "const WG: u32 = {WG}u;
 const CELLS: u32 = {cells_per_row}u;
@@ -127,7 +106,6 @@ const B1: f32 = {BETA1};
 const B2: f32 = {BETA2};
 const EPS: f32 = {EPSILON};
 const SCALE: f32 = {scale_f};
-const FORMS: u32 = {forms}u;
 const NST: u32 = {nst}u;
 const STLO: u32 = {stlo}u;
 const STRIDE: u32 = {stride}u;
@@ -143,92 +121,60 @@ struct Params {{
     )
 }
 
-const INDEX_SRC: &str = r#"
+/// Index, forward and scatter in one pass: a row's cells never leave the invocation that found them.
+const STEP_SRC: &str = r#"
 @group(0) @binding(0) var<storage, read> ex: array<u32>;      // 5 words each
 @group(0) @binding(1) var<storage, read> msq: array<u32>;     // mask squares
 @group(0) @binding(2) var<storage, read> mptr: array<u32>;    // offset<<8 | len
-@group(0) @binding(3) var<storage, read> mbase: array<u32>;   // pattern offset
-@group(0) @binding(4) var<storage, read_write> cells: array<u32>;
-@group(0) @binding(5) var<storage, read_write> tgt: array<f32>;
-@group(0) @binding(6) var<uniform> par: Params;
+@group(0) @binding(3) var<storage, read> mbase: array<u32>;   // pattern offset, then fold offset
+@group(0) @binding(4) var<storage, read> fold: array<u32>;    // index -> cell, per pattern
+@group(0) @binding(5) var<storage, read> w: array<f32>;
+@group(0) @binding(6) var<storage, read_write> grad: array<atomic<i32>>;
+@group(0) @binding(7) var<storage, read_write> err: array<f32>;
+@group(0) @binding(8) var<uniform> par: Params;
 
 @compute @workgroup_size(256)
 fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
   let r = gid.x;
   if (r >= par.n_rows) { return; }
-  let e = r / FORMS;
-  let f = r % FORMS;
-  let blo = ex[e * 5u];
-  let bhi = ex[e * 5u + 1u];
-  let wlo = ex[e * 5u + 2u];
-  let whi = ex[e * 5u + 3u];
-  tgt[r] = bitcast<f32>(ex[e * 5u + 4u]);
+  let own = array<u32, 2>(ex[r * 5u], ex[r * 5u + 1u]);
+  let opp = array<u32, 2>(ex[r * 5u + 2u], ex[r * 5u + 3u]);
+  let want = bitcast<f32>(ex[r * 5u + 4u]);
 
-  let discs = countOneBits(blo) + countOneBits(bhi) + countOneBits(wlo) + countOneBits(whi);
-  let empties = 64u - discs;
+  let mine = countOneBits(own[0]) + countOneBits(own[1]);
+  let empties = 64u - mine - countOneBits(opp[0]) - countOneBits(opp[1]);
   var stage = 0u;
   if (empties < 60u) { stage = 60u - empties; }
   stage = min(stage, STLO + NST - 1u);
   let base = (stage - STLO) * STRIDE;
 
-  let out = r * CELLS;
+  var cell: array<u32, CELLS>;
+  var s = 0.0;
   for (var k = 0u; k < CELLS - 1u; k = k + 1u) {
-    let ptr = mptr[f * (CELLS - 1u) + k];
+    let ptr = mptr[k];
     let off = ptr >> 8u;
     let len = ptr & 255u;
     var idx = 0u;
     for (var j = 0u; j < len; j = j + 1u) {
       let sq = msq[off + j];
-      var digit = 2u;
-      if (sq < 32u) {
-        let bit = 1u << sq;
-        if ((blo & bit) != 0u) { digit = 0u; } else if ((wlo & bit) != 0u) { digit = 1u; }
-      } else {
-        let bit = 1u << (sq - 32u);
-        if ((bhi & bit) != 0u) { digit = 0u; } else if ((whi & bit) != 0u) { digit = 1u; }
-      }
+      let half = sq >> 5u;
+      let bit = sq & 31u;
+      let digit = 2u - 2u * ((own[half] >> bit) & 1u) - ((opp[half] >> bit) & 1u);
       idx = idx * 3u + digit;
     }
-    cells[out + k] = base + mbase[k] + idx;
+    let c = base + mbase[k] + fold[mbase[CELLS - 1u + k] + idx];
+    cell[k] = c;
+    s = s + w[c];
   }
-  cells[out + CELLS - 1u] = base + NUMOFF + countOneBits(blo) + countOneBits(bhi);
-}
-"#;
+  let c = base + NUMOFF + mine;
+  cell[CELLS - 1u] = c;
+  s = s + w[c];
 
-const FWD_SRC: &str = r#"
-@group(0) @binding(0) var<storage, read> cells: array<u32>;
-@group(0) @binding(1) var<storage, read> tgt: array<f32>;
-@group(0) @binding(2) var<storage, read> w: array<f32>;
-@group(0) @binding(3) var<storage, read_write> err: array<f32>;
-@group(0) @binding(4) var<uniform> par: Params;
-
-@compute @workgroup_size(256)
-fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
-  let r = gid.x;
-  if (r >= par.n_rows) { return; }
-  let base = r * CELLS;
-  var s = 0.0;
+  let e = want - s;
+  err[r] = e;
+  let q = i32(round(e * SCALE));
   for (var i = 0u; i < CELLS; i = i + 1u) {
-    s = s + w[cells[base + i]];
-  }
-  err[r] = tgt[r] - s;
-}
-"#;
-
-const SCATTER_SRC: &str = r#"
-@group(0) @binding(0) var<storage, read> cells: array<u32>;
-@group(0) @binding(1) var<storage, read> err: array<f32>;
-@group(0) @binding(2) var<storage, read_write> grad: array<atomic<i32>>;
-@group(0) @binding(3) var<uniform> par: Params;
-
-@compute @workgroup_size(256)
-fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
-  let r = gid.x;
-  if (r >= par.n_rows) { return; }
-  let q = i32(round(err[r] * SCALE));
-  let base = r * CELLS;
-  for (var i = 0u; i < CELLS; i = i + 1u) {
-    atomicAdd(&grad[cells[base + i]], q);
+    atomicAdd(&grad[cell[i]], q);
   }
 }
 "#;
@@ -294,7 +240,7 @@ fn main(@builtin(local_invocation_id) lid: vec3<u32>) {
 "#;
 
 impl LinearGpu {
-    /// `batch` is examples per step; a step trains `FORMS * batch` rows.
+    /// `batch` is examples per step. One form per example: the folded cells already give the other seven the same value.
     pub fn new(ev: &Linear, batch: usize, stages: (usize, usize)) -> LinearGpu {
         let (st_lo, st_hi) = stages;
         assert!(st_lo <= st_hi && st_hi < STAGE_COUNT, "stage window");
@@ -302,37 +248,41 @@ impl LinearGpu {
         let patterns = ev.patterns();
         let mut pat_off = Vec::with_capacity(patterns.len() + 2);
         let mut off = 0u32;
-        for p in patterns {
+        assert!(
+            ev.is_symmetric(),
+            "one form per example only trains a symmetric pattern set"
+        );
+        let mut fold: Vec<u32> = Vec::new();
+        let mut fold_off = Vec::with_capacity(patterns.len());
+        for pi in 0..patterns.len() {
             pat_off.push(off);
-            off += p.table_size() as u32;
+            off += ev.table_len(pi) as u32;
+            fold_off.push(fold.len() as u32);
+            fold.extend_from_slice(ev.fold(pi));
         }
         pat_off.push(off); // the disc-count table
         off += NUM_TABLE_SIZE as u32;
         let stage_stride = off as usize;
         let n_cells = stage_stride * n_stages;
-        let max_rows = batch * FORMS;
+        let max_rows = batch;
         let cells_per_row = patterns.iter().map(|p| p.masks.len()).sum::<usize>() + 1;
-        let back = square_maps();
         let n_slots = cells_per_row - 1;
         let mut msq: Vec<u32> = Vec::new();
-        let mut mptr: Vec<u32> = vec![0; FORMS * n_slots];
-        let mut mbase: Vec<u32> = vec![0; n_slots];
-        for f in 0..FORMS {
-            let mut k = 0usize;
-            for (pi, p) in patterns.iter().enumerate() {
-                for m in p.masks {
-                    let off = msq.len() as u32;
-                    assert!(m.len() <= 255, "a mask longer than the length field");
-                    for &sq in *m {
-                        msq.push(back[f][sq as usize] as u32);
-                    }
-                    mptr[f * n_slots + k] = (off << 8) | m.len() as u32;
-                    mbase[k] = pat_off[pi];
-                    k += 1;
-                }
+        let mut mptr: Vec<u32> = vec![0; n_slots];
+        let mut mbase: Vec<u32> = vec![0; 2 * n_slots];
+        let mut k = 0usize;
+        for (pi, p) in patterns.iter().enumerate() {
+            for m in p.masks {
+                let off = msq.len() as u32;
+                assert!(m.len() <= 255, "a mask longer than the length field");
+                msq.extend(m.iter().map(|&sq| sq as u32));
+                mptr[k] = (off << 8) | m.len() as u32;
+                mbase[k] = pat_off[pi];
+                mbase[n_slots + k] = fold_off[pi];
+                k += 1;
             }
-            assert_eq!(k, n_slots);
         }
+        assert_eq!(k, n_slots);
         let instance = wgpu::Instance::new(wgpu::InstanceDescriptor::new_without_display_handle());
         let adapter = block_on(instance.request_adapter(&wgpu::RequestAdapterOptions {
             power_preference: wgpu::PowerPreference::HighPerformance,
@@ -378,9 +328,7 @@ impl LinearGpu {
             let layout = pipeline.get_bind_group_layout(0);
             Kernel { pipeline, layout }
         };
-        let index = make(INDEX_SRC, "index");
-        let fwd = make(FWD_SRC, "forward");
-        let scatter = make(SCATTER_SRC, "scatter");
+        let step = make(STEP_SRC, "step");
         let bwd = make(BWD_SRC, "adam");
         let reduce = make(REDUCE_SRC, "reduce");
 
@@ -411,15 +359,10 @@ impl LinearGpu {
         let b_msq = init(&msq, "mask squares");
         let b_mptr = init(&mptr, "mask pointers");
         let b_mbase = init(&mbase, "mask bases");
-        let b_ex = [
-            zeros(max_rows / FORMS * 5, "ex 0"),
-            zeros(max_rows / FORMS * 5, "ex 1"),
-        ];
-        let b_cells = [
-            zeros(max_rows * cells_per_row, "cells 0"),
-            zeros(max_rows * cells_per_row, "cells 1"),
-        ];
-        let b_tgt = [zeros(max_rows, "targets 0"), zeros(max_rows, "targets 1")];
+        let b_fold = init(&fold, "index folds");
+        let b_ex: Vec<wgpu::Buffer> = (0..2 * GROUP)
+            .map(|_| zeros(max_rows * 5, "examples"))
+            .collect();
         let b_err = [zeros(max_rows, "errors 0"), zeros(max_rows, "errors 1")];
         let b_grad = zeros(n_cells, "grad");
         let b_stats = zeros(4, "stats");
@@ -429,20 +372,22 @@ impl LinearGpu {
             usage: wgpu::BufferUsages::MAP_READ | wgpu::BufferUsages::COPY_DST,
             mapped_at_creation: false,
         });
-        let b_par = device.create_buffer(&wgpu::BufferDescriptor {
-            label: Some("params"),
-            size: std::mem::size_of::<Params>() as u64,
-            usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
-            mapped_at_creation: false,
-        });
+        let b_par: Vec<wgpu::Buffer> = (0..2 * GROUP)
+            .map(|_| {
+                device.create_buffer(&wgpu::BufferDescriptor {
+                    label: Some("params"),
+                    size: std::mem::size_of::<Params>() as u64,
+                    usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+                    mapped_at_creation: false,
+                })
+            })
+            .collect();
 
-        LinearGpu {
+        let mut gpu = LinearGpu {
             stages,
             device,
             queue,
-            index,
-            fwd,
-            scatter,
+            step,
             bwd,
             reduce,
             b_w,
@@ -453,19 +398,54 @@ impl LinearGpu {
             b_msq,
             b_mptr,
             b_mbase,
-            b_cells,
-            b_tgt,
+            b_fold,
             b_err,
             b_grad,
             pending: std::collections::VecDeque::new(),
             b_stats,
             b_stats_read,
             b_par,
+            groups: Vec::new(),
             n_cells,
             cells_per_row,
             max_rows,
             ex_words: Vec::new(),
-        }
+        };
+        gpu.groups = (0..2 * GROUP).map(|i| gpu.bind_batch(i)).collect();
+        gpu
+    }
+
+    /// The three bind groups of batch slot `i`; slots `0..GROUP` and `GROUP..2 * GROUP` are the two submissions in flight.
+    fn bind_batch(&self, i: usize) -> [wgpu::BindGroup; 3] {
+        let err = &self.b_err[i / GROUP];
+        [
+            self.bind(
+                &self.step,
+                &[
+                    &self.b_ex[i],
+                    &self.b_msq,
+                    &self.b_mptr,
+                    &self.b_mbase,
+                    &self.b_fold,
+                    &self.b_w,
+                    &self.b_grad,
+                    err,
+                    &self.b_par[i],
+                ],
+            ),
+            self.bind(&self.reduce, &[err, &self.b_stats, &self.b_par[i]]),
+            self.bind(
+                &self.bwd,
+                &[
+                    &self.b_grad,
+                    &self.b_w,
+                    &self.b_m,
+                    &self.b_v,
+                    &self.b_t,
+                    &self.b_par[i],
+                ],
+            ),
+        ]
     }
 
     /// Pack the batch as five words a position.
@@ -513,110 +493,68 @@ impl LinearGpu {
     ) -> f64 {
         self.queue.write_buffer(&self.b_stats, 0, &[0u8; 16]);
         let prof = std::env::var_os("KUROOBI_GPU_PROF").is_some();
-        let (mut t_prep, mut t_dev) = (0.0f64, 0.0f64);
-        let per_batch = self.max_rows / FORMS;
-        let mut slot = 0usize;
-        for batch in examples.chunks(per_batch) {
+        let (mut t_prep, mut t_dev, mut t_wait) = (0.0f64, 0.0f64, 0.0f64);
+        let per_batch = self.max_rows;
+        let mut half = 0usize;
+        for group in examples.chunks(per_batch * GROUP) {
+            let tw = std::time::Instant::now();
             self.drain(1);
             let t0 = std::time::Instant::now();
-            let kept = self.prepare(batch);
-            let t1 = std::time::Instant::now();
-            if kept == 0 {
-                continue;
-            }
-            let n_rows = kept * FORMS;
-            let t2 = t1;
-            t_prep += (t1 - t0).as_secs_f64();
-            let par = Params {
-                n_rows: n_rows as u32,
-                n_cells: self.n_cells as u32,
-                cells_per_row: self.cells_per_row as u32,
-                lr: lr_for_step(),
-            };
-            let q = &self.queue;
-            q.write_buffer(&self.b_par, 0, bytemuck::bytes_of(&par));
-            q.write_buffer(&self.b_ex[slot], 0, bytemuck::cast_slice(&self.ex_words));
-
-            let g_idx = self.bind(
-                &self.index,
-                &[
-                    &self.b_ex[slot],
-                    &self.b_msq,
-                    &self.b_mptr,
-                    &self.b_mbase,
-                    &self.b_cells[slot],
-                    &self.b_tgt[slot],
-                    &self.b_par,
-                ],
-            );
-            let g_fwd = self.bind(
-                &self.fwd,
-                &[
-                    &self.b_cells[slot],
-                    &self.b_tgt[slot],
-                    &self.b_w,
-                    &self.b_err[slot],
-                    &self.b_par,
-                ],
-            );
-            let g_sca = self.bind(
-                &self.scatter,
-                &[
-                    &self.b_cells[slot],
-                    &self.b_err[slot],
-                    &self.b_grad,
-                    &self.b_par,
-                ],
-            );
-            let g_bwd = self.bind(
-                &self.bwd,
-                &[
-                    &self.b_grad,
-                    &self.b_w,
-                    &self.b_m,
-                    &self.b_v,
-                    &self.b_t,
-                    &self.b_par,
-                ],
-            );
-            let g_red = self.bind(
-                &self.reduce,
-                &[&self.b_err[slot], &self.b_stats, &self.b_par],
-            );
+            t_wait += (t0 - tw).as_secs_f64();
 
             let mut enc = self
                 .device
                 .create_command_encoder(&wgpu::CommandEncoderDescriptor { label: None });
-            {
+            let mut any = false;
+            for (b, batch) in group.chunks(per_batch).enumerate() {
+                let tp = std::time::Instant::now();
+                let kept = self.prepare(batch);
+                t_prep += tp.elapsed().as_secs_f64();
+                if kept == 0 {
+                    continue;
+                }
+                any = true;
+                let i = half * GROUP + b;
+                let par = Params {
+                    n_rows: kept as u32,
+                    n_cells: self.n_cells as u32,
+                    cells_per_row: self.cells_per_row as u32,
+                    lr: lr_for_step(),
+                };
+                self.queue
+                    .write_buffer(&self.b_par[i], 0, bytemuck::bytes_of(&par));
+                self.queue
+                    .write_buffer(&self.b_ex[i], 0, bytemuck::cast_slice(&self.ex_words));
+                let rows_wg = (kept as u32).div_ceil(WG);
+                let [g_step, g_red, g_bwd] = &self.groups[i];
                 let mut p = enc.begin_compute_pass(&wgpu::ComputePassDescriptor {
                     label: None,
                     timestamp_writes: None,
                 });
-                p.set_pipeline(&self.index.pipeline);
-                p.set_bind_group(0, &g_idx, &[]);
-                p.dispatch_workgroups((n_rows as u32).div_ceil(WG), 1, 1);
-                p.set_pipeline(&self.fwd.pipeline);
-                p.set_bind_group(0, &g_fwd, &[]);
-                p.dispatch_workgroups((n_rows as u32).div_ceil(WG), 1, 1);
-                p.set_pipeline(&self.reduce.pipeline);
-                p.set_bind_group(0, &g_red, &[]);
-                p.dispatch_workgroups(1, 1, 1);
-                p.set_pipeline(&self.scatter.pipeline);
-                p.set_bind_group(0, &g_sca, &[]);
-                p.dispatch_workgroups((n_rows as u32).div_ceil(WG), 1, 1);
-                p.set_pipeline(&self.bwd.pipeline);
-                p.set_bind_group(0, &g_bwd, &[]);
-                p.dispatch_workgroups(2048, 1, 1);
+                for (k, g, n) in [
+                    (&self.step, g_step, rows_wg),
+                    (&self.reduce, g_red, 1),
+                    (&self.bwd, g_bwd, 2048),
+                ] {
+                    p.set_pipeline(&k.pipeline);
+                    p.set_bind_group(0, g, &[]);
+                    p.dispatch_workgroups(n, 1, 1);
+                }
             }
-            self.pending.push_back(self.queue.submit([enc.finish()]));
-            t_dev += t2.elapsed().as_secs_f64();
-            slot ^= 1;
+            if any {
+                self.pending.push_back(self.queue.submit([enc.finish()]));
+                half ^= 1;
+            }
+            t_dev += t0.elapsed().as_secs_f64();
         }
         let t = std::time::Instant::now();
         self.drain(0);
-        t_dev += t.elapsed().as_secs_f64();
+        t_wait += t.elapsed().as_secs_f64();
         if prof {
-            eprintln!("gpu prof: rows {t_prep:.2}s  device {t_dev:.2}s");
+            eprintln!(
+                "gpu prof: rows {t_prep:.2}s  encode and submit {:.2}s  waiting on the device {t_wait:.2}s",
+                t_dev - t_prep
+            );
         }
         let mut out = [0f32; 4];
         self.read_back(&mut out);
@@ -691,6 +629,7 @@ impl LinearGpu {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::board::Board;
 
     /// The flat numbering has to round-trip, or the GPU trains cells the evaluator reads somewhere else entirely.
     #[test]
@@ -727,9 +666,9 @@ mod tests {
         let patterns = ev.patterns();
         let mut off = 0u32;
         let mut pat_off = Vec::new();
-        for p in patterns {
+        for pi in 0..patterns.len() {
             pat_off.push(off);
-            off += p.table_size() as u32;
+            off += ev.table_len(pi) as u32;
         }
         pat_off.push(off);
         let stage_stride = off + NUM_TABLE_SIZE as u32;
@@ -737,7 +676,7 @@ mod tests {
         let mut sum = 0.0f32;
         for (pi, p) in patterns.iter().enumerate() {
             for idx in p.indices(b.black, b.white, b.player()) {
-                sum += flat[(base + pat_off[pi] + idx as u32) as usize];
+                sum += flat[(base + pat_off[pi] + ev.fold(pi)[idx]) as usize];
             }
         }
         sum += flat[(base + pat_off[patterns.len()] + b.player_bb().count_ones()) as usize];

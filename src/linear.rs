@@ -16,14 +16,104 @@ use crate::pattern_index::{PatternIndexer, PatternIndices};
 
 pub const STAGE_COUNT: usize = 61;
 
-const WEIGHT_MAGIC: &[u8; 8] = b"BBRVWT02";
-const WEIGHT_MAGIC_V1: &[u8; 8] = b"BBRVWT01";
+const WEIGHT_MAGIC: &[u8; 8] = b"BBRVWT03";
 
 pub const NUM_TABLE_SIZE: usize = 65;
 
+/// Square `s` of a board as symmetric form `k` shows it.
+fn symmetric_square(s: u8, k: usize) -> u8 {
+    let (mut f, mut r) = (s / 8, s % 8);
+    if k & 1 != 0 {
+        f = 7 - f;
+    }
+    if k & 2 != 0 {
+        r = 7 - r;
+    }
+    if k & 4 != 0 {
+        std::mem::swap(&mut f, &mut r);
+    }
+    f * 8 + r
+}
+
+/// Per pattern, index -> cell with the indices a symmetric form reads for the same squares sharing one; and whether every form of every mask is a mask of its pattern.
+fn fold_tables(patterns: &[Pattern]) -> (Vec<Vec<u32>>, bool) {
+    let mut closed = true;
+    let folds = patterns
+        .iter()
+        .map(|p| {
+            let n = p.size;
+            let size = p.table_size();
+            let mut parent: Vec<u32> = (0..size as u32).collect();
+            fn find(parent: &mut [u32], mut x: u32) -> u32 {
+                while parent[x as usize] != x {
+                    parent[x as usize] = parent[parent[x as usize] as usize];
+                    x = parent[x as usize];
+                }
+                x
+            }
+            let mut perms: Vec<Vec<usize>> = Vec::new();
+            for m in p.masks {
+                for k in 1..8 {
+                    let img: Vec<u8> = m.iter().map(|&s| symmetric_square(s, k)).collect();
+                    let hit = p.masks.iter().find_map(|m2| {
+                        img.iter()
+                            .map(|s| m2.iter().position(|x| x == s))
+                            .collect::<Option<Vec<usize>>>()
+                    });
+                    match hit {
+                        Some(perm) if !perms.contains(&perm) => perms.push(perm),
+                        Some(_) => {}
+                        None => closed = false,
+                    }
+                }
+            }
+            let mut digits = vec![0usize; n];
+            let mut out = vec![0usize; n];
+            for perm in perms
+                .iter()
+                .filter(|q| q.iter().enumerate().any(|(i, &j)| i != j))
+            {
+                for idx in 0..size {
+                    let mut x = idx;
+                    for j in (0..n).rev() {
+                        digits[j] = x % 3;
+                        x /= 3;
+                    }
+                    for j in 0..n {
+                        out[perm[j]] = digits[j];
+                    }
+                    let other = out.iter().fold(0, |a, &d| a * 3 + d);
+                    let (a, b) = (
+                        find(&mut parent, idx as u32),
+                        find(&mut parent, other as u32),
+                    );
+                    if a != b {
+                        parent[a.max(b) as usize] = a.min(b);
+                    }
+                }
+            }
+            let mut cell = vec![u32::MAX; size];
+            let mut next = 0u32;
+            for idx in 0..size {
+                let root = find(&mut parent, idx as u32) as usize;
+                if cell[root] == u32::MAX {
+                    cell[root] = next;
+                    next += 1;
+                }
+                cell[idx] = cell[root];
+            }
+            cell
+        })
+        .collect();
+    (folds, closed)
+}
+
 pub struct Linear {
     patterns: &'static [Pattern],
+    /// One cell per class of indices the board's symmetry makes interchangeable; `fold` maps an index to it.
     weights: Vec<Vec<Vec<f32>>>,
+    fold: Vec<Vec<u32>>,
+    symmetric: bool,
     flat_weights: Vec<Vec<f32>>,
     mask_off: Vec<u32>,
     flat_i8: Vec<Vec<i8>>,
@@ -84,52 +174,49 @@ impl Linear {
         target: f32,
         lr: f32,
     ) -> f32 {
-        let mut total = 0.0f32;
-        for sym in board.symmetries() {
-            let stage = Self::stage(&sym);
-            let mut prediction = 0.0f32;
+        let stage = Self::stage(board);
+        let key = |pi: usize, idx: usize| *self.fold[pi].get_unchecked(idx) as usize;
+        let mut prediction = 0.0f32;
+        for (pi, p) in self.patterns.iter().enumerate() {
+            let table = view.stages[stage][pi];
+            for idx in p.indices(board.black, board.white, board.player()) {
+                prediction += *table.add(key(pi, idx));
+            }
+        }
+        let num_idx = self.num_index(board);
+        prediction += *view.num[stage].add(num_idx);
+
+        let error = target - prediction;
+        let delta = lr * error;
+        let min_appear = self.min_appear;
+        if view.counts.is_empty() {
             for (pi, p) in self.patterns.iter().enumerate() {
                 let table = view.stages[stage][pi];
-                for idx in p.indices(sym.black, sym.white, sym.player()) {
-                    prediction += *table.add(idx);
+                for idx in p.indices(board.black, board.white, board.player()) {
+                    *table.add(key(pi, idx)) += delta;
                 }
             }
-            let num_idx = self.num_index(&sym);
-            prediction += *view.num[stage].add(num_idx);
-
-            let error = target - prediction;
-            let delta = lr * error;
-            let min_appear = self.min_appear;
-            if view.counts.is_empty() {
-                for (pi, p) in self.patterns.iter().enumerate() {
-                    let table = view.stages[stage][pi];
-                    for idx in p.indices(sym.black, sym.white, sym.player()) {
-                        *table.add(idx) += delta;
-                    }
-                }
-            } else {
-                for (pi, p) in self.patterns.iter().enumerate() {
-                    let table = view.stages[stage][pi];
-                    let counts = view.counts[stage][pi];
-                    for idx in p.indices(sym.black, sym.white, sym.player()) {
-                        let n = *counts.add(idx);
-                        if n > min_appear {
-                            *table.add(idx) += delta / n as f32;
-                        }
+        } else {
+            for (pi, p) in self.patterns.iter().enumerate() {
+                let table = view.stages[stage][pi];
+                let counts = view.counts[stage][pi];
+                for idx in p.indices(board.black, board.white, board.player()) {
+                    let n = *counts.add(key(pi, idx));
+                    if n > min_appear {
+                        *table.add(key(pi, idx)) += delta / n as f32;
                     }
                 }
             }
-            if view.counts_num.is_empty() {
-                *view.num[stage].add(num_idx) += delta;
-            } else {
-                let n = *view.counts_num[stage].add(num_idx);
-                if n > min_appear {
-                    *view.num[stage].add(num_idx) += delta / n as f32;
-                }
-            }
-            total += error * error;
         }
-        total / 8.0
+        if view.counts_num.is_empty() {
+            *view.num[stage].add(num_idx) += delta;
+        } else {
+            let n = *view.counts_num[stage].add(num_idx);
+            if n > min_appear {
+                *view.num[stage].add(num_idx) += delta / n as f32;
+            }
+        }
+        error * error
     }
 }
 
@@ -243,13 +330,16 @@ impl Optimizer for AdamOptimizer {
 
 impl Linear {
     pub fn new(patterns: &'static [Pattern]) -> Linear {
-        let stage_weights: Vec<Vec<f32>> = patterns
+        let (fold, symmetric) = fold_tables(patterns);
+        let stage_weights: Vec<Vec<f32>> = fold
             .iter()
-            .map(|p| vec![0.0f32; p.table_size()])
+            .map(|f| vec![0.0f32; f.iter().max().map_or(0, |&c| c as usize + 1)])
             .collect();
         Linear {
             patterns,
             weights: vec![stage_weights; STAGE_COUNT],
+            fold,
+            symmetric,
             flat_weights: Vec::new(),
             mask_off: Vec::new(),
             flat_i8: Vec::new(),
@@ -264,6 +354,21 @@ impl Linear {
 
     pub fn patterns(&self) -> &'static [Pattern] {
         self.patterns
+    }
+
+    /// Cells in pattern `pattern`'s table, after folding.
+    pub fn table_len(&self, pattern: usize) -> usize {
+        self.weights[0][pattern].len()
+    }
+
+    /// The cell each index of pattern `pattern` reads.
+    pub fn fold(&self, pattern: usize) -> &[u32] {
+        &self.fold[pattern]
+    }
+
+    /// Whether the evaluation is the same for all eight forms of a board, so training on one form is training on all.
+    pub fn is_symmetric(&self) -> bool {
+        self.symmetric
     }
 
     pub fn indexer(&self) -> &PatternIndexer {
@@ -286,16 +391,14 @@ impl Linear {
             self.appear_num = vec![[0u32; NUM_TABLE_SIZE]; STAGE_COUNT];
         }
         for b in boards {
-            for sym in b.symmetries() {
-                let stage = Self::stage(&sym);
-                let ni = self.num_index(&sym);
-                for (pi, p) in self.patterns.iter().enumerate() {
-                    for idx in p.indices(sym.black, sym.white, sym.player()) {
-                        self.appear[stage][pi][idx] += 1;
-                    }
+            let stage = Self::stage(&b);
+            let ni = self.num_index(&b);
+            for (pi, p) in self.patterns.iter().enumerate() {
+                for idx in p.indices(b.black, b.white, b.player()) {
+                    self.appear[stage][pi][self.fold[pi][idx] as usize] += 1;
                 }
-                self.appear_num[stage][ni] += 1;
             }
+            self.appear_num[stage][ni] += 1;
         }
     }
 
@@ -340,9 +443,9 @@ impl Linear {
         let weights = &self.weights[stage];
 
         let mut score = 0.0f32;
-        for (p, table) in self.patterns.iter().zip(weights) {
+        for ((p, table), fold) in self.patterns.iter().zip(weights).zip(&self.fold) {
             for idx in p.indices(board.black, board.white, board.player()) {
-                score += table[idx];
+                score += table[fold[idx] as usize];
             }
         }
         score + self.num_weights[stage][self.num_index(board)]
@@ -353,8 +456,7 @@ impl Linear {
     }
 
     pub fn flat_stages(&self, lo: usize, hi: usize) -> Vec<f32> {
-        let stride: usize =
-            self.patterns.iter().map(|p| p.table_size()).sum::<usize>() + NUM_TABLE_SIZE;
+        let stride: usize = self.weights[0].iter().map(Vec::len).sum::<usize>() + NUM_TABLE_SIZE;
         let mut out = Vec::with_capacity(stride * (hi + 1 - lo));
         for s in lo..=hi {
             for t in &self.weights[s] {
@@ -390,22 +492,21 @@ impl Linear {
 
     #[inline]
     pub fn eval_indices(&self, board: &Board, indices: &PatternIndices) -> f32 {
+        if self.flat_weights.is_empty() {
+            return self.eval(board);
+        }
         let stage = Self::stage(board);
-        let patterns = if self.flat_weights.is_empty() {
-            self.indexer
-                .eval_sum(indices, board.player(), &self.weights[stage])
-        } else {
-            self.indexer.eval_sum_flat(
-                indices,
-                board.player(),
-                &self.flat_weights[stage],
-                &self.mask_off,
-            )
-        };
+        let patterns = self.indexer.eval_sum_flat(
+            indices,
+            board.player(),
+            &self.flat_weights[stage],
+            &self.mask_off,
+        );
         patterns + self.num_weights[stage][self.num_index(board)]
     }
 
-    fn rebuild_flat(&mut self) {
+    /// Unfolds the cells into the tables the search indexes directly.
+    pub fn rebuild_flat(&mut self) {
         let mut pattern_off = Vec::with_capacity(self.patterns.len());
         let mut off = 0u32;
         for p in self.patterns {
@@ -421,7 +522,13 @@ impl Linear {
         self.flat_weights = self
             .weights
             .iter()
-            .map(|stage| stage.iter().flat_map(|t| t.iter().copied()).collect())
+            .map(|stage| {
+                stage
+                    .iter()
+                    .zip(&self.fold)
+                    .flat_map(|(t, fold)| fold.iter().map(|&c| t[c as usize]))
+                    .collect()
+            })
             .collect();
         let n_masks = self.indexer.n_masks();
         self.flat_i8 = self
@@ -494,12 +601,12 @@ impl Linear {
     }
 
     pub fn weight(&self, stage: usize, pattern: usize, index: usize) -> f32 {
-        self.weights[stage][pattern][index]
+        self.weights[stage][pattern][self.fold[pattern][index] as usize]
     }
 
     pub fn set_weight(&mut self, stage: usize, pattern: usize, index: usize, value: f32) {
         self.invalidate_flat();
-        self.weights[stage][pattern][index] = value;
+        self.weights[stage][pattern][self.fold[pattern][index] as usize] = value;
     }
 
     pub fn update_weights(&mut self, board: &Board, target: f32, learning_rate: f32) -> f32 {
@@ -511,7 +618,7 @@ impl Linear {
 
         for (pi, p) in self.patterns.iter().enumerate() {
             for idx in p.indices(board.black, board.white, board.player()) {
-                self.weights[stage][pi][idx] += delta;
+                self.weights[stage][pi][self.fold[pi][idx] as usize] += delta;
                 self.flat_weights.clear();
             }
         }
@@ -531,8 +638,9 @@ impl Linear {
         let stage = Self::stage(board);
 
         for (pi, p) in self.patterns.iter().enumerate() {
-            let table_size = p.table_size();
+            let table_size = self.weights[stage][pi].len();
             for idx in p.indices(board.black, board.white, board.player()) {
+                let idx = self.fold[pi][idx] as usize;
                 let delta = opt.step(stage, pi, idx, table_size, error);
                 self.weights[stage][pi][idx] += delta;
                 self.flat_weights.clear();
@@ -554,12 +662,8 @@ impl Linear {
     }
 
     pub fn train(&mut self, board: &Board, target: f32, opt: &mut impl Optimizer) -> f32 {
-        let mut total_sq_err = 0.0f32;
-        for sym in board.symmetries() {
-            let e = self.update_weights_with(&sym, target, opt);
-            total_sq_err += e * e;
-        }
-        total_sq_err / 8.0
+        let e = self.update_weights_with(board, target, opt);
+        e * e
     }
 
     pub fn train_game(
@@ -612,6 +716,9 @@ impl Linear {
             for p in self.patterns {
                 w.write_all(&(p.table_size() as u32).to_le_bytes())?;
             }
+            for t in &self.weights[0] {
+                w.write_all(&(t.len() as u32).to_le_bytes())?;
+            }
             for stage in &self.weights {
                 for table in stage {
                     for &v in table {
@@ -635,8 +742,7 @@ impl Linear {
 
         let mut magic = [0u8; 8];
         r.read_exact(&mut magic)?;
-        let v1 = &magic == WEIGHT_MAGIC_V1;
-        if !v1 && &magic != WEIGHT_MAGIC {
+        if &magic != WEIGHT_MAGIC {
             return Err(io::Error::new(io::ErrorKind::InvalidData, "bad magic"));
         }
 
@@ -665,6 +771,16 @@ impl Linear {
             }
         }
 
+        for t in &self.weights[0] {
+            r.read_exact(&mut u32buf)?;
+            if u32::from_le_bytes(u32buf) as usize != t.len() {
+                return Err(io::Error::new(
+                    io::ErrorKind::InvalidData,
+                    "folded table size mismatch",
+                ));
+            }
+        }
+
         let mut f32buf = [0u8; 4];
         for stage in &mut self.weights {
             for table in stage {
@@ -674,16 +790,10 @@ impl Linear {
                 }
             }
         }
-        if v1 {
-            for table in self.num_weights.iter_mut() {
-                table.fill(0.0);
-            }
-        } else {
-            for table in self.num_weights.iter_mut() {
-                for v in table.iter_mut() {
-                    r.read_exact(&mut f32buf)?;
-                    *v = f32::from_le_bytes(f32buf);
-                }
+        for table in self.num_weights.iter_mut() {
+            for v in table.iter_mut() {
+                r.read_exact(&mut f32buf)?;
+                *v = f32::from_le_bytes(f32buf);
             }
         }
         self.rebuild_flat();
@@ -717,10 +827,11 @@ mod tests {
 
     fn gradient_multiplier(board: &Board) -> f32 {
         use std::collections::HashMap;
-        let mut counts: HashMap<(usize, usize), u32> = HashMap::new();
+        let e = Linear::new(LINEAR_PATTERNS);
+        let mut counts: HashMap<(usize, u32), u32> = HashMap::new();
         for (pi, p) in LINEAR_PATTERNS.iter().enumerate() {
             for idx in p.indices(board.black, board.white, board.player()) {
-                *counts.entry((pi, idx)).or_insert(0) += 1;
+                *counts.entry((pi, e.fold(pi)[idx])).or_insert(0) += 1;
             }
         }
         counts.values().map(|&k| (k * k) as f32).sum::<f32>() + 1.0
@@ -769,7 +880,7 @@ mod tests {
 
             let multiplier = gradient_multiplier(&b);
             if plies == 0 {
-                assert_eq!(multiplier, 217.0, "symmetric start: Σk² + 1 = 217");
+                assert_eq!(multiplier, 225.0, "symmetric start: Σk² + 1 = 225");
             } else {
                 assert_eq!(
                     multiplier, 193.0,
@@ -912,9 +1023,9 @@ mod tests {
         let final_score = 10.0f32; // pretend Black wins by 10
 
         let mut e = Linear::new(LINEAR_PATTERNS);
-        let mut opt = AdamOptimizer::new(0.03);
+        let mut opt = AdamOptimizer::new(0.01);
         let mut last_err = f32::MAX;
-        for _ in 0..200 {
+        for _ in 0..1600 {
             last_err = e.train_game(&history, final_score, 1.0, &mut opt);
         }
         assert!(last_err < 2.0, "game training converges, err {last_err}");
@@ -1106,10 +1217,57 @@ mod tests {
     }
 
     #[test]
-    fn test_num_weights_roundtrip_and_v1_compat() {
-        let dir = std::env::temp_dir().join("bbrv_weight_test_v2");
+    fn every_form_of_a_board_reads_the_same_cells() {
+        let mut e = Linear::new(LINEAR_PATTERNS);
+        assert!(e.is_symmetric());
+        let mut state = 0x9e3779b97f4a7c15u64;
+        for stage in 0..12 {
+            for (pi, p) in LINEAR_PATTERNS.iter().enumerate() {
+                for idx in 0..p.table_size() {
+                    state = state
+                        .wrapping_mul(6364136223846793005)
+                        .wrapping_add(1442695040888963407);
+                    e.set_weight(stage, pi, idx, ((state >> 40) as i32 % 256) as f32 / 32.0);
+                }
+            }
+        }
+        let mut board = Board::new();
+        for _ in 0..10 {
+            let moves = board.movable();
+            if moves == 0 {
+                break;
+            }
+            let pick = moves.count_ones() as u64 / 2;
+            let mut m = moves;
+            for _ in 0..pick {
+                m &= m - 1;
+            }
+            board.make_move_unchecked(Position::from_index(m.trailing_zeros()).unwrap());
+            let base = e.eval(&board);
+            for sym in board.symmetries() {
+                assert_eq!(e.eval(&sym), base, "a symmetric form scored differently");
+            }
+        }
+    }
+
+    #[test]
+    fn folding_halves_the_tables_but_for_the_self_symmetric_cells() {
+        let e = Linear::new(LINEAR_PATTERNS);
+        for (pi, p) in LINEAR_PATTERNS.iter().enumerate() {
+            let (full, folded) = (p.table_size(), e.table_len(pi));
+            assert!(
+                folded > full / 2 && folded <= full * 2 / 3,
+                "{}: {folded} cells for {full} indices",
+                p.name
+            );
+        }
+    }
+
+    #[test]
+    fn a_saved_file_loads_back_exactly_and_an_older_format_is_refused() {
+        let dir = std::env::temp_dir().join(format!("bbrv_weight_test_{}", std::process::id()));
         std::fs::create_dir_all(&dir).unwrap();
-        let path = dir.join("weights_v2.bin");
+        let path = dir.join("weights.bin");
 
         let mut e = Linear::new(LINEAR_PATTERNS);
         let b = Board::new();
@@ -1119,28 +1277,14 @@ mod tests {
 
         let mut e2 = Linear::new(LINEAR_PATTERNS);
         e2.load_weights(&path).unwrap();
-        assert_eq!(e2.eval(&b), expected, "v2 roundtrip must be lossless");
+        assert_eq!(e2.eval(&b), expected, "roundtrip must be lossless");
 
         let mut bytes = std::fs::read(&path).unwrap();
-        bytes[..8].copy_from_slice(b"BBRVWT01");
-        bytes.truncate(bytes.len() - STAGE_COUNT * 65 * 4);
-        let v1_path = dir.join("weights_v1.bin");
-        std::fs::write(&v1_path, bytes).unwrap();
+        bytes[..8].copy_from_slice(b"BBRVWT02");
+        std::fs::write(&path, bytes).unwrap();
+        assert!(Linear::new(LINEAR_PATTERNS).load_weights(&path).is_err());
 
-        let mut e3 = Linear::new(LINEAR_PATTERNS);
-        e3.load_weights(&v1_path).unwrap();
-        let delta = expected - e3.eval(&b);
-        assert!(
-            delta.abs() > 0.0,
-            "v1 load must zero the disc-count weights"
-        );
-        assert!(
-            (delta - 0.005 * 10.0).abs() < 1e-4,
-            "missing term is one SGD step on the num cell, got {delta}"
-        );
-
-        std::fs::remove_file(&path).ok();
-        std::fs::remove_file(&v1_path).ok();
+        std::fs::remove_dir_all(&dir).ok();
     }
 
     #[test]

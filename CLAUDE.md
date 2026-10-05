@@ -110,9 +110,8 @@ real incident behind it.
 
 ### Known traps
 
-- **`linear_train`'s MSE is the mean squared error over 8 symmetric forms**,
-  not mean absolute. As training progresses MAE shrinks faster than
-  RMS, so a squared-MAE proxy can move opposite to true MSE (this was
+- **`linear_train`'s MSE is the mean squared error**, not mean absolute.
+  As training progresses MAE shrinks faster than RMS, so a squared-MAE proxy can move opposite to true MSE (this was
   once misread as training regressing).
 - **PGO training positions must include deep ones.** Shallow-only
   profiles look 3-6% faster on the training set but 0.1% overall;

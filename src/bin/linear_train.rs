@@ -485,6 +485,61 @@ impl Rng {
     }
 }
 
+/// Scatters into buckets that fit the cache and shuffles each: the uniform permutation one pass over everything gives, without a cache miss per swap.
+fn shuffle_examples(
+    seed: u64,
+    items: &mut Vec<Example>,
+    scratch: &mut Vec<Example>,
+    threads: usize,
+) {
+    const BUCKET: usize = 1 << 14;
+    let n = items.len();
+    if n <= 4 * BUCKET {
+        Rng::new(seed).shuffle(items);
+        return;
+    }
+    let bits = (n / BUCKET).next_power_of_two().trailing_zeros();
+    let buckets = 1usize << bits;
+    let pick = |rng: &mut Rng| (rng.next() >> (64 - bits)) as usize;
+
+    let mut start = vec![0usize; buckets + 1];
+    let mut rng = Rng::new(seed);
+    for _ in 0..n {
+        start[pick(&mut rng) + 1] += 1;
+    }
+    for b in 0..buckets {
+        start[b + 1] += start[b];
+    }
+    scratch.clear();
+    scratch.resize(n, items[0]);
+    let mut at = start.clone();
+    let mut rng = Rng::new(seed);
+    for &item in items.iter() {
+        let b = pick(&mut rng);
+        scratch[at[b]] = item;
+        at[b] += 1;
+    }
+
+    let mut parts: Vec<(usize, &mut [Example])> = Vec::with_capacity(buckets);
+    let mut rest = scratch.as_mut_slice();
+    for b in 0..buckets {
+        let (head, tail) = rest.split_at_mut(start[b + 1] - start[b]);
+        parts.push((b, head));
+        rest = tail;
+    }
+    let per = parts.len().div_ceil(threads.max(1));
+    std::thread::scope(|scope| {
+        for group in parts.chunks_mut(per) {
+            scope.spawn(move || {
+                for (b, part) in group.iter_mut() {
+                    Rng::new(seed ^ ((*b as u64 + 1) << 20)).shuffle(part);
+                }
+            });
+        }
+    });
+    std::mem::swap(items, scratch);
+}
+
 fn fmt_count(n: usize) -> String {
     if n >= 1_000_000 {
         format!("{:.1}M", n as f64 / 1e6)
@@ -613,6 +668,10 @@ fn main() -> ExitCode {
     }
 
     let mut linear = Linear::new(patterns);
+    if !linear.is_symmetric() {
+        eprintln!("this pattern set is not closed under the board's symmetries; training reads one form per position");
+        return ExitCode::FAILURE;
+    }
     if args.weights_path.exists() {
         match linear.load_weights(&args.weights_path) {
             Ok(()) => println!("resumed weights from {}", args.weights_path.display()),
@@ -747,37 +806,76 @@ fn stage_stats(a: &[f64; 4]) -> (f64, f64, f64, f64) {
     (mse, mae, bias, (mse - bias * bias).max(0.0).sqrt())
 }
 
-fn val_mse(linear: &Linear, val: &[Example], threads: usize) -> f64 {
-    if val.is_empty() {
-        return f64::NAN;
+/// The cells each held-out position reads, found once; an epoch's validation is then lookups.
+struct ValCells {
+    lo: usize,
+    hi: usize,
+    per_row: usize,
+    cells: Vec<u32>,
+    stage: Vec<u8>,
+    score: Vec<f32>,
+}
+
+impl ValCells {
+    fn new(linear: &Linear, val: &[Example]) -> ValCells {
+        let stages: Vec<usize> = val.iter().map(|ex| Linear::stage(&ex.board())).collect();
+        let lo = stages.iter().copied().min().unwrap_or(0);
+        let hi = stages.iter().copied().max().unwrap_or(0);
+        let patterns = linear.patterns();
+        let mut pat_off = Vec::with_capacity(patterns.len());
+        let mut stride = 0u32;
+        for pi in 0..patterns.len() {
+            pat_off.push(stride);
+            stride += linear.table_len(pi) as u32;
+        }
+        let num_off = stride;
+        stride += kuroobi::linear::NUM_TABLE_SIZE as u32;
+        let per_row = patterns.iter().map(|p| p.masks.len()).sum::<usize>() + 1;
+        let mut cells = Vec::with_capacity(val.len() * per_row);
+        for (ex, &st) in val.iter().zip(&stages) {
+            let board = ex.board();
+            let base = (st - lo) as u32 * stride;
+            for (pi, p) in patterns.iter().enumerate() {
+                let fold = linear.fold(pi);
+                for idx in p.indices(board.black, board.white, board.player()) {
+                    cells.push(base + pat_off[pi] + fold[idx]);
+                }
+            }
+            cells.push(base + num_off + board.player_bb().count_ones());
+        }
+        ValCells {
+            lo,
+            hi,
+            per_row,
+            cells,
+            stage: stages.iter().map(|&s| s as u8).collect(),
+            score: val.iter().map(|ex| ex.score).collect(),
+        }
     }
-    let sum: f64 = if threads > 1 {
-        let chunk = val.len().div_ceil(threads);
-        std::thread::scope(|scope| {
-            let handles: Vec<_> = val
-                .chunks(chunk)
-                .map(|part| {
-                    scope.spawn(move || {
-                        part.iter()
-                            .map(|ex| {
-                                let e = ex.score as f64 - linear.eval(&ex.board()) as f64;
-                                e * e
-                            })
-                            .sum::<f64>()
-                    })
-                })
-                .collect();
-            handles.into_iter().map(|h| h.join().unwrap()).sum()
-        })
-    } else {
-        val.iter()
-            .map(|ex| {
-                let e = ex.score as f64 - linear.eval(&ex.board()) as f64;
-                e * e
-            })
-            .sum()
-    };
-    sum / val.len() as f64
+
+    fn by_stage(&self, linear: &Linear) -> Vec<[f64; 4]> {
+        let mut acc = vec![[0.0f64; 4]; STAGE_COUNT];
+        if self.score.is_empty() {
+            return acc;
+        }
+        let flat = linear.flat_stages(self.lo, self.hi);
+        for ((row, &st), &score) in self
+            .cells
+            .chunks_exact(self.per_row)
+            .zip(&self.stage)
+            .zip(&self.score)
+        {
+            let (num, pats) = row.split_last().unwrap();
+            let v = pats.iter().map(|&c| flat[c as usize]).sum::<f32>() + flat[*num as usize];
+            let e = v as f64 - score as f64;
+            let a = &mut acc[st as usize];
+            a[0] += 1.0;
+            a[1] += e * e;
+            a[2] += e.abs();
+            a[3] += e;
+        }
+        acc
+    }
 }
 
 struct SwaAccumulator {
@@ -914,6 +1012,8 @@ fn run_epochs<O: Optimizer>(
     let mut stale = 0usize;
     let mut stage = StageState::new(args.learning_rate);
     let mut counted_shards: Vec<usize> = Vec::new();
+    let mut scratch: Vec<Example> = Vec::new();
+    let val_cells = ValCells::new(&trainer.linear, val);
     let mut stage_lr_seeded = false;
     if args.per_stage_best && !val.is_empty() {
         seed_stage_best(&trainer.linear, args, val, &mut stage);
@@ -952,11 +1052,20 @@ fn run_epochs<O: Optimizer>(
         let mut stats = EpochStats::default();
         let mut done = 0usize;
         for (si, shard) in shards.iter().enumerate() {
-            if let Err(path) = load_shard(shard, plan, args, &filter, &policy, &mut examples) {
-                eprintln!("\nfailed to load {}", path.display());
-                return ExitCode::FAILURE;
+            // One shard is the whole data and already in memory: reading it again only cost time.
+            let resident = shards.len() == 1 && epoch > 1 && !examples.is_empty();
+            if !resident {
+                if let Err(path) = load_shard(shard, plan, args, &filter, &policy, &mut examples) {
+                    eprintln!("\nfailed to load {}", path.display());
+                    return ExitCode::FAILURE;
+                }
             }
-            Rng::new((epoch as u64) << 32 | si as u64).shuffle(&mut examples);
+            shuffle_examples(
+                (epoch as u64) << 32 | si as u64,
+                &mut examples,
+                &mut scratch,
+                args.threads,
+            );
 
             if args.cell_lr && !counted_shards.contains(&si) {
                 counted_shards.push(si);
@@ -998,7 +1107,7 @@ fn run_epochs<O: Optimizer>(
                     g.download(&mut trainer.linear);
                     let mut st = EpochStats::default();
                     st.loss_sum[0] = sq;
-                    st.samples[0] = (examples.len() * kuroobi::linear::gpu::FORMS) as u64;
+                    st.samples[0] = examples.len() as u64;
                     st
                 }
                 #[cfg(not(feature = "gpu"))]
@@ -1036,10 +1145,11 @@ fn run_epochs<O: Optimizer>(
         eprint!("\r{:width$}\r", "", width = 90);
         let elapsed = t.elapsed().as_secs_f32();
         let per_sec = done as f32 / elapsed;
+        let acc = val_cells.by_stage(&trainer.linear);
         let vm = if val.is_empty() {
             f64::NAN
         } else {
-            val_mse(&trainer.linear, val, args.threads)
+            acc.iter().map(|a| a[1]).sum::<f64>() / val.len() as f64
         };
         let is_best = vm < best_val; // false when vm is NaN (no val set)
         if !stage_lr_seeded && args.plateau > 0 {
@@ -1056,7 +1166,7 @@ fn run_epochs<O: Optimizer>(
             stage_lr_seeded = true;
         }
         let (improved, stages_seen) = if args.per_stage_best && !val.is_empty() {
-            per_stage_epoch(&mut trainer, args, val, &mut stage, &stagebest_path)
+            per_stage_epoch(&mut trainer, args, &acc, &mut stage, &stagebest_path)
         } else {
             (0, 0)
         };
@@ -1234,13 +1344,12 @@ fn stage_lr(args: &Args, stage: &StageState, epoch: usize, st: usize) -> f32 {
 fn per_stage_epoch<O: Optimizer>(
     trainer: &mut Trainer<O>,
     args: &Args,
-    val: &[Example],
+    acc: &[[f64; 4]],
     stage: &mut StageState,
     stagebest_path: &Path,
 ) -> (usize, usize) {
     let mut improved = 0usize;
     let mut stages_seen = 0usize;
-    let acc = val_by_stage(&trainer.linear, val);
     println!("  stage  empties       n      MSE      MAE     bias   spread");
     for (st, a) in acc.iter().enumerate() {
         if a[0] == 0.0 {

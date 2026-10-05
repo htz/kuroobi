@@ -240,28 +240,6 @@ impl PatternIndexer {
         let pi = self.mask_pattern[m] as usize;
         self.swap_tables[self.patterns[pi].size][idx] as usize
     }
-
-    pub fn eval_sum(&self, indices: &PatternIndices, player: Color, weights: &[Vec<f32>]) -> f32 {
-        let mut score = 0.0f32;
-        unsafe {
-            if player == Color::Black {
-                for m in 0..self.n_masks {
-                    let pi = *self.mask_pattern.get_unchecked(m) as usize;
-                    let table = weights.get_unchecked(pi);
-                    score += *table.get_unchecked(*indices.idx.get_unchecked(m) as usize);
-                }
-            } else {
-                for m in 0..self.n_masks {
-                    let pi = *self.mask_pattern.get_unchecked(m) as usize;
-                    let table = weights.get_unchecked(pi);
-                    let swap = self.swap_tables.get_unchecked(self.patterns[pi].size);
-                    let idx = *swap.get_unchecked(*indices.idx.get_unchecked(m) as usize);
-                    score += *table.get_unchecked(idx as usize);
-                }
-            }
-        }
-        score
-    }
 }
 
 #[cfg(test)]
