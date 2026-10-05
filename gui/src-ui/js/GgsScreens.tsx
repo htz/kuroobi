@@ -9,7 +9,7 @@ import {
 } from './ggs';
 import { sqName } from './adapt';
 import { t, useLang, tErr } from './i18n';
-import { Col, Empty, EmptyBoard, EmptyState, List, Modal, Note, Overlay, Section, TableHead, TableRow, picked } from './components/layout';
+import { Col, Empty, EmptyBoard, EmptyState, List, Note, Section, TableHead, TableRow, picked } from './components/layout';
 import { Button, Segmented, Select, TextArea, TextField, Toggle } from './components/primitives';
 import { Strength } from './components/strength';
 import { Confirm, PickOne } from './Dialogs';
@@ -1226,54 +1226,10 @@ function fmtDay(secs: number): string {
 }
 
 
-function UserCard({ snap, name, onClose, onDetail, onAsk }: {
-  snap: GgsSnapshot; name: string;
-  onClose: () => void;
-  onDetail: () => void;
-  onAsk: () => void;
-}) {
-  useEffect(() => { ggsApi.finger(name).catch(() => {}); }, [name]);
-
-  const u = onlineRows(snap).find((x) => x.name === name);
-  const rates = bothRates(u);
-  const fields = snap.fingers[name]?.fields ?? [];
-
-  const facts = (fingerGroups(fields).find((g) => g.id === 'request')?.rows ?? [])
-    .filter((r) => !['accept', 'decline', 'request'].includes(normKey(r.key).replace(/\(.*\)/, '')));
-
-  return (
-    <Overlay onClose={onClose}>
-      <Modal title={name} onClose={onClose}
-             sub={rates || undefined}
-             scroll
-             actions={<>
-               <Button size="field" onClick={onDetail}>{t('ggs.users.details')}</Button>
-               <span style={{ marginLeft: 'auto' }} />
-               <Button size="field" variant="primary" onClick={onAsk}>{t('ggs.lobby.ask')}</Button>
-             </>}>
-        <Section title={t('ggs.match_requests')}>
-            {!facts.length && <Empty>{t('ggs.loading')}</Empty>}
-            {facts.map((r) => (
-              <div key={r.key} style={{ display: 'flex', alignItems: 'center',
-                                        gap: 'var(--sp-3)', fontSize: 'var(--fs-5)' }}>
-                <span style={{ color: 'var(--sub)' }}>{r.label}</span>
-                <span style={{ marginLeft: 'auto', overflow: 'hidden',
-                               textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-                  {fingerValue(r.key, r.value) || '—'}
-                </span>
-              </div>
-            ))}
-        </Section>
-      </Modal>
-    </Overlay>
-  );
-}
-
 function GgsUsers({ snap, onNav, onKifu }: {
   snap: GgsSnapshot; onNav: (id: NavId) => void;
   onKifu: (title: string, kifu: string, archive?: string) => void;
 }) {
-  const [card, setCard] = useState<string | null>(null);
   const [mode, setMode] = useState<'who' | 'top'>('who');
   const userCols: Col[] = [
     ...(mode === 'top' ? [{ head: '#', w: 26, right: true, num: true } as Col] : []),
@@ -1288,7 +1244,6 @@ function GgsUsers({ snap, onNav, onKifu }: {
   useEffect(() => { void ggsApi.listMatches().catch(() => {}); }, []);
   useEffect(() => {
     void ggsApi.autoview().then((v) => {
-      if (v === 'players:card') setCard(snap.login || '—');
       if (v === 'players:top') setMode('top');
     }).catch(() => {});
   }, [snap.login]);
@@ -1311,12 +1266,6 @@ function GgsUsers({ snap, onNav, onKifu }: {
 
   return (
     <div className="k-scroll" style={{ flex: 1, minHeight: 0, padding: 'var(--sp-4) var(--sp-4) 0' }}>
-      {card && (
-        <UserCard snap={snap} name={card}
-                  onClose={() => setCard(null)}
-                  onDetail={() => { setSel(card); setCard(null); }}
-                  onAsk={() => { setCard(null); onNav('ggs-lobby'); }} />
-      )}
       <Section title={t('ggs.users.my_rating')}
                aside={<Button onClick={() => {
                  for (const pool of ['8', '8r']) void ggsApi.rank(pool, snap.login);
@@ -1357,7 +1306,7 @@ function GgsUsers({ snap, onNav, onKifu }: {
         {slice.map((u, i) => {
         const state = presence(snap, u.name);
         return (
-          <TableRow key={u.name} cols={userCols} pad="var(--sp-4)" onClick={() => setCard(u.name)}>
+          <TableRow key={u.name} cols={userCols} pad="var(--sp-4)" onClick={() => setSel(u.name)}>
             {mode === 'top' && (
               <span style={{ fontSize: 'var(--fs-7)', color: 'var(--sub)' }}>
                 {cur * perPage + i + 1}

@@ -645,7 +645,6 @@ ggs:
     col_side: "Turn"
     col_status: "Status"
     col_when: "Date"
-    details: "See details"
     my_rating: "My rating"
     no_history: "No games played yet."
     no_ranking: "The ranking has not arrived yet."

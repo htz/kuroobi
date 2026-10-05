@@ -641,7 +641,6 @@ ggs:
     col_side: "手番"
     col_status: "状態"
     col_when: "日時"
-    details: "詳しく見る"
     my_rating: "自分のレート"
     no_history: "対戦履歴はありません。"
     no_ranking: "順位をまだ受け取っていません。"
