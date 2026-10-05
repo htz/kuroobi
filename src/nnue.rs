@@ -60,6 +60,12 @@ fn pa_bucket(stage: usize) -> usize {
     (stage / (SO_STAGES / PA_BUCKETS)).min(PA_BUCKETS - 1)
 }
 
+/// True when the stages own every pattern-add bucket they touch, so training them alone moves no other stage.
+pub fn owns_whole_buckets(lo: usize, hi: usize) -> bool {
+    let w = SO_STAGES / PA_BUCKETS;
+    lo <= hi && hi < SO_STAGES && lo.is_multiple_of(w) && (hi + 1).is_multiple_of(w)
+}
+
 const SO_SKIP: usize = H + PA_DIMS;
 const SO_L1_IN: usize = SO_SKIP + 1;
 const SO_OUT_IN: usize = SO_L2 + SO_SKIP;
@@ -956,6 +962,25 @@ impl GradSink {
     fn push_pa(&mut self, row: u32, vals: &[f32; PA_DIMS]) {
         let p = row as usize % self.parts;
         self.pa_rows[p].push((row, *vals));
+    }
+
+    /// Leaves only the per-stage head and the stage-bucketed pattern add, so the shared layers stay put.
+    pub fn keep_stage_heads_only(&mut self) {
+        self.out_w.fill(0.0);
+        self.out_b.fill(0.0);
+        self.num_w.fill(0.0);
+        self.mob_w.fill(0.0);
+        self.mlp_l1_w.fill(0.0);
+        self.mlp_l1_b.fill(0.0);
+        self.mlp_l2_w.fill(0.0);
+        self.mlp_l2_b.fill(0.0);
+        self.mlp_out_w.fill(0.0);
+        self.mlp_mob_w.fill(0.0);
+        self.ft_bias.fill(0.0);
+        self.pw.fill(0.0);
+        for b in self.ft_rows.iter_mut() {
+            b.clear();
+        }
     }
 
     pub fn clear(&mut self) {
@@ -3137,6 +3162,15 @@ pub(crate) fn test_patterns() -> &'static [crate::pattern::Pattern] {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn head_only_ranges_must_cover_whole_pattern_add_buckets() {
+        assert!(owns_whole_buckets(50, 59));
+        assert!(owns_whole_buckets(40, 59));
+        assert!(!owns_whole_buckets(48, 59));
+        assert!(!owns_whole_buckets(50, 55));
+        assert!(!owns_whole_buckets(50, 60));
+    }
 
     #[test]
     fn a_file_carries_the_sigma_it_was_measured_with_or_says_it_has_none() {

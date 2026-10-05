@@ -851,6 +851,9 @@ fn main(@builtin(local_invocation_id) lid: vec3<u32>,
     if (i >= N_DENSE) {
         return;
     }
+    if ((P.flags & 2u) != 0u && i >= D_FTB && i < D_PAB) {
+        return;
+    }
     let hidden = i < D_L1B || (i >= D_L2W && i < D_L2B);
     let decay = hidden || (i >= D_OW && i < D_OB);
     let g = grad[i] * step[0];
@@ -1139,6 +1142,7 @@ const PROF_LA: usize = 3;
 
 pub struct GpuTrainer {
     device: wgpu::Device,
+    heads_only: bool,
     prof: Option<Prof>,
     queue: wgpu::Queue,
     k_fwd_bwd: Kernel,
@@ -1612,6 +1616,7 @@ impl GpuTrainer {
             u_fin_ft,
             u_fin_pa,
             u_step_ft,
+            heads_only: false,
             u_step_pa,
             u_fold_ft,
             u_fold_pa,
@@ -1635,6 +1640,11 @@ impl GpuTrainer {
     }
 
     /// Optimizer steps taken so far.
+    /// Steps only the per-stage head and the pattern add; the transformer and its bias stay as loaded.
+    pub fn set_heads_only(&mut self, on: bool) {
+        self.heads_only = on;
+    }
+
     pub fn steps(&self) -> u32 {
         self.t
     }
@@ -1899,7 +1909,15 @@ impl GpuTrainer {
             }
             .bytes(),
         );
-        q.write_buffer(&self.u_step_dense, 0, &step_base.bytes());
+        q.write_buffer(
+            &self.u_step_dense,
+            0,
+            &Params {
+                flags: if self.heads_only { 2 } else { 0 },
+                ..step_base
+            }
+            .bytes(),
+        );
         if la_fold {
             for (u, n, w) in [
                 (&self.u_fold_ft, self.ft_rows * ACC_DIMS, ACC_DIMS),
@@ -2153,12 +2171,14 @@ impl GpuTrainer {
             run(7, &self.k_finalize, &bg.fin, 1);
             let st = PROF_STEP + if la_fold { PROF_LA } else { 0 };
             if dense_now {
-                run(
-                    st,
-                    &self.k_step_rows,
-                    &bg.step_ft,
-                    (self.ft_rows * ACC_DIMS).div_ceil(WG),
-                );
+                if !self.heads_only {
+                    run(
+                        st,
+                        &self.k_step_rows,
+                        &bg.step_ft,
+                        (self.ft_rows * ACC_DIMS).div_ceil(WG),
+                    );
+                }
                 run(
                     st + 1,
                     &self.k_step_rows,
@@ -2166,12 +2186,14 @@ impl GpuTrainer {
                     (self.pa_rows * PA_DIMS).div_ceil(WG),
                 );
             } else {
-                run(
-                    st,
-                    &self.k_step_sparse,
-                    &bg.sparse_ft,
-                    (b.ft.n_touched * ACC_DIMS).div_ceil(WG),
-                );
+                if !self.heads_only {
+                    run(
+                        st,
+                        &self.k_step_sparse,
+                        &bg.sparse_ft,
+                        (b.ft.n_touched * ACC_DIMS).div_ceil(WG),
+                    );
+                }
                 run(
                     st + 1,
                     &self.k_step_sparse,

@@ -154,6 +154,7 @@ fn train_pass_minibatch(
     lr_for_step: &mut impl FnMut() -> f32,
     wd: f32,
     sym: SymPlan,
+    heads_only: bool,
 ) -> f64 {
     let threads = threads.max(1);
     while sinks.len() < threads {
@@ -206,6 +207,11 @@ fn train_pass_minibatch(
                 sq_total += h.join().unwrap();
             }
         });
+        if heads_only {
+            for s in sinks[..used].iter_mut() {
+                s.keep_stage_heads_only();
+            }
+        }
         let lr = lr_for_step();
         nn.apply_adamw_batch(&mut sinks[..used], adam, lr, wd, 1.0 / chunk.len() as f32);
     }
@@ -266,6 +272,7 @@ struct CkptHeader {
     plateau_lr: f32,
     stale: usize,
     best: f64,
+    best_train: f64,
     rng: u64,
 }
 
@@ -285,8 +292,15 @@ fn write_checkpoint(
         let mut w = std::io::BufWriter::with_capacity(1 << 20, f);
         let text = format!(
             "epoch {}\nmb_step {}\nmb_total_steps {}\nplateau_lr {}\nstale {}\nbest {}\n\
-             rng {}\n",
-            h.epoch, h.mb_step, h.mb_total_steps, h.plateau_lr, h.stale, h.best, h.rng
+             best_train {}\nrng {}\n",
+            h.epoch,
+            h.mb_step,
+            h.mb_total_steps,
+            h.plateau_lr,
+            h.stale,
+            h.best,
+            h.best_train,
+            h.rng
         );
         let mut head = [b' '; CKPT_HEADER_LEN];
         let bytes = text.as_bytes();
@@ -340,6 +354,7 @@ fn read_checkpoint(
             "plateau_lr" => h.plateau_lr = v.parse().unwrap_or(0.0),
             "stale" => h.stale = v.parse().unwrap_or(0),
             "best" => h.best = v.parse().unwrap_or(f64::INFINITY),
+            "best_train" => h.best_train = v.parse().unwrap_or(f64::INFINITY),
             "rng" => h.rng = v.parse().unwrap_or(0),
             _ => {}
         }
@@ -388,6 +403,7 @@ struct Args {
     which_patterns: String,
     patterns_file: Option<PathBuf>,
     patterns_share: bool,
+    train_stages: Option<(usize, usize)>,
 }
 
 fn parse_args() -> Result<Args, ExitCode> {
@@ -418,6 +434,7 @@ fn parse_args() -> Result<Args, ExitCode> {
     let mut interleave = false;
     let mut val_cap: Option<usize> = None;
     let mut init: Option<PathBuf> = None;
+    let mut train_stages: Option<(usize, usize)> = None;
     let mut checkpoint: Option<PathBuf> = None;
     let mut resume: Option<PathBuf> = None;
     let mut start_epoch = 1usize;
@@ -446,6 +463,21 @@ fn parse_args() -> Result<Args, ExitCode> {
             "--plateau" => plateau = it.next().unwrap().parse().unwrap(),
             "--select-by" => select_by = it.next().unwrap(),
             "--val-by-stage" => val_by_stage_report = true,
+            "--train-stages" => {
+                let v = it.next().unwrap_or_default();
+                let r = v
+                    .split_once('-')
+                    .and_then(|(a, b)| Some((a.parse().ok()?, b.parse().ok()?)));
+                match r {
+                    Some((lo, hi)) if kuroobi::nnue::owns_whole_buckets(lo, hi) => {
+                        train_stages = Some((lo, hi))
+                    }
+                    _ => {
+                        eprintln!("--train-stages {v}: needs LO-HI covering whole 10-stage buckets, e.g. 50-59");
+                        return Err(ExitCode::FAILURE);
+                    }
+                }
+            }
             "--plateau-factor" => plateau_factor = it.next().unwrap().parse().unwrap(),
             "--plateau-min" => plateau_min = it.next().unwrap().parse().unwrap(),
             "--wd" => wd = it.next().unwrap().parse().unwrap(),
@@ -510,6 +542,7 @@ fn parse_args() -> Result<Args, ExitCode> {
         which_patterns,
         patterns_file,
         patterns_share,
+        train_stages,
     })
 }
 
@@ -548,6 +581,7 @@ fn main() -> ExitCode {
         mut which_patterns,
         patterns_file,
         patterns_share,
+        train_stages,
     } = match parse_args() {
         Ok(a) => a,
         Err(code) => return code,
@@ -558,11 +592,17 @@ fn main() -> ExitCode {
         );
         return ExitCode::FAILURE;
     }
+    // Weight decay and the lookahead pull touch every weight, gradient or not.
+    if train_stages.is_some() && (minibatch == 0 || !adam || wd != 0.0 || lookahead != 0) {
+        eprintln!("--train-stages needs --adam --minibatch n, --wd 0 and no --lookahead");
+        return ExitCode::FAILURE;
+    }
 
+    // Only val reads through here; --limit cut it to its first 26k rows, stages 0-13 alone.
     let load = |files: &[PathBuf]| -> std::io::Result<Vec<Example>> {
         let mut v = Vec::new();
         for f in files {
-            load_examples_filtered_into(f, &mut v, limit, &filter, &policy)?;
+            load_examples_filtered_into(f, &mut v, None, &filter, &policy)?;
         }
         Ok(v)
     };
@@ -674,6 +714,7 @@ fn main() -> ExitCode {
     } else {
         select_score(&select_by, &pooled(&val_by_stage(&mut nn, None, &val)))
     };
+    let mut best_train = f64::INFINITY;
     if best.is_finite() {
         report_start_val(&mut nn, &val, &select_by, val_by_stage_report);
     }
@@ -703,6 +744,11 @@ fn main() -> ExitCode {
         mb_step_done = h.mb_step;
         mb_total_steps = h.mb_total_steps;
         best = h.best;
+        best_train = if h.best_train > 0.0 {
+            h.best_train
+        } else {
+            f64::INFINITY
+        };
         if sched.first_epoch > epochs {
             println!("nothing left to do: --epochs {epochs} already reached");
             return ExitCode::SUCCESS;
@@ -725,7 +771,9 @@ fn main() -> ExitCode {
         } else {
             (0, 0.0)
         };
-        kuroobi::nnue::gpu::GpuTrainer::new(&nn, minibatch, ad, la)
+        let mut g = kuroobi::nnue::gpu::GpuTrainer::new(&nn, minibatch, ad, la);
+        g.set_heads_only(train_stages.is_some());
+        g
     });
 
     for epoch in first_epoch..=epochs {
@@ -758,6 +806,9 @@ fn main() -> ExitCode {
                     return ExitCode::FAILURE;
                 }
             };
+            if let Some((lo, hi)) = train_stages {
+                examples.retain(|ex| (lo..=hi).contains(&Linear::stage(&ex.board())));
+            }
             t_load += t_l.elapsed().as_secs_f64();
             let t_s = Instant::now();
             shuffle(&mut examples, &rand);
@@ -818,14 +869,32 @@ fn main() -> ExitCode {
                         sq
                     } else {
                         train_pass_minibatch(
-                            &mut nn, None, ad, &mut sinks, &examples, threads, minibatch,
-                            &mut lr_fn, wd, sym,
+                            &mut nn,
+                            None,
+                            ad,
+                            &mut sinks,
+                            &examples,
+                            threads,
+                            minibatch,
+                            &mut lr_fn,
+                            wd,
+                            sym,
+                            train_stages.is_some(),
                         )
                     }
                     #[cfg(not(feature = "gpu"))]
                     train_pass_minibatch(
-                        &mut nn, None, ad, &mut sinks, &examples, threads, minibatch, &mut lr_fn,
-                        wd, sym,
+                        &mut nn,
+                        None,
+                        ad,
+                        &mut sinks,
+                        &examples,
+                        threads,
+                        minibatch,
+                        &mut lr_fn,
+                        wd,
+                        sym,
+                        train_stages.is_some(),
                     )
                 } else {
                     train_pass(
@@ -872,10 +941,12 @@ fn main() -> ExitCode {
                 seen,
                 secs: t.elapsed().as_secs_f32(),
                 best,
+                best_train,
             },
             tprof.then_some((t_load, t_shuf, t_pass)),
         );
-        let is_best = vm < best;
+        let train_mse = sq_total / seen.max(1) as f64;
+        let is_best = beats(vm, train_mse, best, best_train);
         if let Some(ad) = adam_state.as_mut().filter(|_| !gpu) {
             nn.settle_adam(ad, cur_lr, wd);
         }
@@ -886,6 +957,7 @@ fn main() -> ExitCode {
             plateau_lr,
             stale,
             best: if is_best { vm } else { best },
+            best_train: if is_best { train_mse } else { best_train },
             rng: rng_state.get(),
         };
         if save_epoch(
@@ -902,6 +974,7 @@ fn main() -> ExitCode {
         }
         if is_best {
             best = vm;
+            best_train = train_mse;
         }
         if plateau > 0
             && plateau_step(
@@ -934,6 +1007,13 @@ struct EpochLine {
     seen: usize,
     secs: f32,
     best: f64,
+    best_train: f64,
+}
+
+/// Equal at the printed four decimals counts as a tie, and the tie goes to the lower training error.
+fn beats(vm: f64, train: f64, best: f64, best_train: f64) -> bool {
+    let (a, b) = ((vm * 1e4).round(), (best * 1e4).round());
+    a < b || (a == b && train < best_train)
 }
 
 /// Validates, prints the epoch's line, and returns the score selection runs on.
@@ -957,7 +1037,11 @@ fn report_epoch(
     let (vmse, vmae, vbias, vsd) = stats_of(&tot);
     let vgrid = tot[4] / tot[0].max(1.0);
     let vm = select_score(select_by, &tot);
-    let marker = if vm < line.best { " *best" } else { "" };
+    let marker = if beats(vm, line.train_mse, line.best, line.best_train) {
+        " *best"
+    } else {
+        ""
+    };
     let EpochLine {
         epoch,
         epochs,
@@ -1164,6 +1248,14 @@ fn plateau_step(
 #[cfg(test)]
 mod shard_tests {
     use super::*;
+
+    #[test]
+    fn a_tie_at_four_decimals_goes_to_the_lower_training_error() {
+        assert!(beats(11.83619, 10.39, 11.83621, 10.40));
+        assert!(!beats(11.83619, 10.41, 11.83621, 10.40));
+        assert!(beats(11.8361, 10.50, 11.8362, 10.40));
+        assert!(!beats(11.8363, 10.00, 11.8362, 10.40));
+    }
 
     #[test]
     fn interleaving_gives_every_shard_a_slice_of_every_file() {
