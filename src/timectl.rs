@@ -99,8 +99,9 @@ pub fn solve_secs(empties: u8, nps: f64, threads: usize) -> f64 {
     nodes * parallel_overhead(threads, empties) / (nps * DEEP_NPS_RATIO)
 }
 
-/// The same 40 solves: 90th percentile 3.4x `solve_secs`, slowest 4.7x.
-const SOLVE_SLOW: f64 = 3.4;
+/// 80th percentile 1.54x, 90th 3.4x; cut solves play their 93% rung. At 2.0 the solve stayed at 30 empties,
+/// took 13 s there and 5-minute boards ended with about 1 minute unused.
+const SOLVE_SLOW: f64 = 1.0;
 
 /// What a solve must be allowed so that it is rarely cut.
 fn solve_slow_secs(empties: u8, nps: f64, threads: usize) -> f64 {
@@ -120,6 +121,9 @@ const DEPTH_BY_CLOCK: u32 = 60;
 
 const SOLVE_REF: u8 = 18;
 
+/// Solves after the first are near free (1-5 s live); at 1 share 5-minute games still ended with 1:22-1:46 unused.
+const SOLVE_SHARES: f64 = 2.0;
+
 /// The earliest solve the clock affords when it costs no more than one of the midgame moves
 /// still ahead; a fixed share of the clock shrank the solve's reserve as the clock ran down.
 fn solve_ref_and_moves(
@@ -135,7 +139,10 @@ fn solve_ref_and_moves(
     };
     let e = (SOLVE_REF..=SOLVE_CEILING)
         .rev()
-        .find(|&e| endgame(e, nps) <= avail as f64 / (moves_above(e) + 1) as f64)
+        .find(|&e| {
+            endgame(e, nps)
+                <= avail as f64 * SOLVE_SHARES / (moves_above(e) + SOLVE_SHARES as u64) as f64
+        })
         .unwrap_or(SOLVE_REF);
     (e, moves_above(e).max(1), endgame(e, nps))
 }
@@ -179,11 +186,11 @@ const FLOOR_MOVE_SECS: f64 = 0.25;
 /// At 3.0, 33 of 45 extended moves ran to the limit while games ended with 1-2 minutes unspent (live, 5 minutes).
 const EXTEND_MAX: f64 = 5.0;
 
-const EXTEND_POOL_SHARE: f64 = 0.25;
+/// At 0.25 the first unbooked move of each board took 49-81 s of 5 minutes, leaving 13-28 s for later ones.
+const EXTEND_POOL_SHARE: f64 = 0.1;
 
-/// Every move ran its full even share (58 of 63 cut at the deadline), leaving nothing to extend with;
-/// at 0.7 72% of midgame moves still took 25-45 s.
-const MOVE_BASE: f64 = 0.5;
+/// At 0.85, with early stops for settled moves, 5-minute boards still ended with 35-71 s unused.
+const MOVE_BASE: f64 = 1.0;
 
 pub fn plan(s: Situation, base: Levels, pace: Pace) -> Plan {
     if pace == Pace::Depth {
@@ -225,11 +232,9 @@ pub fn plan(s: Situation, base: Levels, pace: Pace) -> Plan {
     };
     // Without the solve's own time held back, the auto reference let the opening take 140 of 300 s.
     let reserve = want.min(avail / 2).max(ENDGAME_FLOOR.min(avail));
-    // Held at a full midgame share: holding only the estimate let each move overspend, the reference slid
-    // from 31 to 28 and the selective moves were left 2-10 s (live, 5 minutes).
+    // A midgame share on top of the estimate left 35-71 s of 5 minutes unused; live endgames cost 13-30 s.
     let reserve = if s.empties > solve_ref {
-        let share = avail as f64 / (my_moves + 1) as f64;
-        reserve.max((endgame.max(share).ceil() as u64).min(avail * 9 / 10))
+        reserve.max((endgame.ceil() as u64).min(avail * 9 / 10))
     } else {
         reserve
     };
@@ -269,17 +274,18 @@ pub fn plan(s: Situation, base: Levels, pace: Pace) -> Plan {
         None if avail < 60 => base.solve.min(20),
         None => base.solve,
     };
+    // Priced at its own cost: taking the whole pool, a 31-empty solve ran 57 of 77 s, was cut anyway and
+    // left the board 3 s at the end.
     let budget = if (last || solve_due) && solve >= s.empties {
-        let need = s
-            .nps
-            .map(|nps| solve_slow_secs(s.empties, nps, s.threads))
-            .unwrap_or(0.0);
         let share = if last {
             SOLVE_FINAL_SHARE
         } else {
             SOLVE_MAX_SHARE
         };
-        budget.max(need.min(avail as f64 * share))
+        match s.nps {
+            Some(nps) => solve_slow_secs(s.empties, nps, s.threads).min(avail as f64 * share),
+            None => budget,
+        }
     } else {
         budget
     };
