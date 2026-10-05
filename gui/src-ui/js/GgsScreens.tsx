@@ -301,8 +301,8 @@ export function GgsChat({ snap }: { snap: GgsSnapshot }) {
 
 function GgsLobby({ snap, onNav }: { snap: GgsSnapshot; onNav: (id: NavId) => void }) {
   const [opp, setOpp] = useState('');
-  const [gtype, setGtype] = useState('s8r16');
-  const [time, setTime] = useState('00:15:00');
+  const [gtype, setGtype] = useState('s8r14');
+  const [time, setTime] = useState('00:05:00');
   const noRated = useNoRated();
   const calibrated = useCalibrated();
   const [rated, setRated] = useState(true);
@@ -477,8 +477,8 @@ function GgsStandby({ snap }: { snap: GgsSnapshot }) {
   const sb = snap.standby;
   const st = snap.standby_stats;
   const [opp, setOpp] = useState(sb.opponent);
-  const [gtype, setGtype] = useState(sb.gtype || 's8r16');
-  const [time, setTime] = useState(sb.time || '00:15:00');
+  const [gtype, setGtype] = useState(sb.gtype || 's8r14');
+  const [time, setTime] = useState(sb.time || '00:05:00');
   const [maxGames, setMaxGames] = useState(sb.max_games);
   const [interval, setInterval] = useState(sb.interval_secs || 20);
   const [autoAccept, setAutoAccept] = useState(sb.auto_accept);

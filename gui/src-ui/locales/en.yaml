@@ -464,7 +464,6 @@ ggs:
   gtype_choice:
     rand16: "Standard, random 16"
     std: "Standard (one game)"
-    synchro_rand16: "Synchro, random 16 (recommended)"
     synchro_std: "Synchro, standard opening"
   jobs:
     idle: "Idle"

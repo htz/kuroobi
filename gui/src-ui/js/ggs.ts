@@ -202,7 +202,8 @@ const gtypeNames = (): Record<string, string> => ({
 export const gtypeLabel = (code: string): string => gtypeNames()[code] ?? (code || '?');
 
 export const gtypeChoices = (): [string, string][] => [
-  ['s8r16', t('ggs.gtype_choice.synchro_rand16')],
+  ['s8r14', t('ggs.gtype.synchro_rand14')],
+  ['s8r16', t('ggs.gtype.synchro_rand16')],
   ['s8r18', t('ggs.gtype.synchro_rand18')],
   ['s8r20', t('ggs.gtype.synchro_rand20')],
   ['s8', t('ggs.gtype_choice.synchro_std')],
@@ -210,6 +211,8 @@ export const gtypeChoices = (): [string, string][] => [
   ['8r16', t('ggs.gtype_choice.rand16')],
 ];
 export const clockChoices = (): [string, string][] => [
+  ['00:01:00', t('ggs.clock_choice.minutes', { n: 1 })],
+  ['00:03:00', t('ggs.clock_choice.minutes', { n: 3 })],
   ['00:05:00', t('ggs.clock_choice.minutes', { n: 5 })],
   ['00:10:00', t('ggs.clock_choice.minutes', { n: 10 })],
   ['00:15:00', t('ggs.clock_choice.minutes', { n: 15 })],

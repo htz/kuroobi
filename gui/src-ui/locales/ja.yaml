@@ -460,7 +460,6 @@ ggs:
   gtype_choice:
     rand16: "通常・ランダム16手"
     std: "通常 (1局)"
-    synchro_rand16: "同期・ランダム16手 (推奨)"
     synchro_std: "同期・通常開局"
   jobs:
     idle: "待機中"
