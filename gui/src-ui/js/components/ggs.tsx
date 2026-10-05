@@ -23,7 +23,7 @@ export type NavItem = {
   icon: IconName;     // IconName from Icons.tsx
   count?: number;    // count badge
   alert?: boolean;   // addressed to me / unread; painted --bad
-  dot?: 'ok' | 'gold' | 'bad';  // state badge (waiting mode on, my turn, ...)
+  dot?: 'ok' | 'gold' | 'bad';  // state badge (auto match on, my turn, ...)
   hint?: string;
 };
 

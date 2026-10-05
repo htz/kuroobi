@@ -95,6 +95,15 @@ pub struct StandbyCfg {
     pub interval_secs: u64,
 }
 
+impl StandbyCfg {
+    /// Without an opponent it never asks and only accepted whatever arrived, which the server-side formula already does.
+    fn needing_opponent(mut self) -> StandbyCfg {
+        self.opponent = self.opponent.trim().to_string();
+        self.enabled &= !self.opponent.is_empty();
+        self
+    }
+}
+
 #[derive(Clone, Serialize, Default)]
 pub struct LogLine {
     pub dir: String, // "in" | "out" | "info"
@@ -1893,7 +1902,7 @@ fn wait_for_connect(ctx: &mut Ctx, rx: &Receiver<Cmd>) -> Option<(String, String
                 save_settings(ctx);
             }
             Ok(Cmd::ReloadThreads) => apply_threads(ctx),
-            Ok(Cmd::SetStandby(cfg)) => ctx.snap.lock().unwrap().standby = cfg,
+            Ok(Cmd::SetStandby(cfg)) => ctx.snap.lock().unwrap().standby = cfg.needing_opponent(),
             Ok(Cmd::SetPacing {
                 pace,
                 max_move_secs,
@@ -2290,7 +2299,7 @@ fn standby_tick(ctx: &mut Ctx, w: &mut Wire, mut send: impl FnMut(String)) {
     if in_match || outgoing {
         return;
     }
-    ctx.log("info", &format!("waiting mode: asking {}", sb.opponent));
+    ctx.log("info", &format!("auto match: asking {}", sb.opponent));
     let rated = if sb.rated && !no_rated() { "+" } else { "-" };
     say(ctx, &mut send, format!("tell /os rated {rated}"));
     say(
@@ -2602,7 +2611,7 @@ fn handle_cmd(
         Cmd::SetStandby(cfg) => {
             let mut s = ctx.snap.lock().unwrap();
             let was = s.standby.enabled;
-            s.standby = cfg;
+            s.standby = cfg.needing_opponent();
             if !was && s.standby.enabled {
                 s.standby_stats = Default::default();
             }
@@ -2618,10 +2627,7 @@ fn handle_cmd(
             };
             drop(s);
             if let Some(id) = take {
-                ctx.log(
-                    "info",
-                    &format!("waiting mode: accepting pending offer {id}"),
-                );
+                ctx.log("info", &format!("auto match: accepting pending offer {id}"));
                 send(format!("tell /os accept {id}"));
             }
             *next_ask_at = Some(Instant::now() + Duration::from_secs(3));
@@ -2680,7 +2686,7 @@ fn handle_os_line(
             drop(s);
             if let Some((true, id)) = incoming {
                 if auto && !in_match {
-                    ctx.log("info", &format!("waiting mode: auto-accepting {id}"));
+                    ctx.log("info", &format!("auto match: auto-accepting {id}"));
                     send(format!("tell /os accept {id}"));
                 } else {
                     let who = ctx
@@ -2777,7 +2783,7 @@ fn handle_os_line(
         if unattended {
             ctx.log(
                 "info",
-                &format!("waiting mode: unattended, declining ({})", req.who),
+                &format!("auto match: unattended, declining ({})", req.who),
             );
             send(format!("tell /os decline {}", req.who));
         }
@@ -4778,6 +4784,18 @@ mod tests {
         let (main, _, ext) = parse_clock("-0:03,0:0//02:00,0:0");
         assert_eq!(main, Some(0));
         assert_eq!(ext, Some(120));
+    }
+
+    #[test]
+    fn auto_match_does_not_start_without_an_opponent() {
+        let cfg = |opponent: &str| StandbyCfg {
+            enabled: true,
+            opponent: opponent.into(),
+            ..Default::default()
+        };
+        assert!(!cfg("").needing_opponent().enabled);
+        assert!(!cfg("  ").needing_opponent().enabled);
+        assert!(cfg("iEdax").needing_opponent().enabled);
     }
 
     #[test]

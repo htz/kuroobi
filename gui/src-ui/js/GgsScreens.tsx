@@ -534,7 +534,7 @@ function GgsStandby({ snap }: { snap: GgsSnapshot }) {
                  <Stat v={st.draws} label={t('ggs.stat.draws')} />
                  <Stat v={`${st.diff_sum > 0 ? '+' : ''}${st.diff_sum}`} label={t('ggs.stat.disc_diff')} />
                  <Button variant={sb.enabled ? 'danger' : 'primary'}
-                         disabled={!sb.enabled && !calibrated} onClick={toggle}>
+                         disabled={!sb.enabled && (!calibrated || !opp.trim())} onClick={toggle}>
                    {sb.enabled ? t('ggs.standby.stop') : t('ggs.standby.start')}
                  </Button>
                </span>}>
@@ -544,7 +544,7 @@ function GgsStandby({ snap }: { snap: GgsSnapshot }) {
         }}>
           <Field stretch label={t('ggs.field.opponent')}>
             <Select value={opp} onChange={setOpp}
-                    options={[['', t('ggs.opponent_any')], ...oppNames.map((n) => [n, n] as [string, string])]} />
+                    options={[['', t('ggs.standby.pick_opponent')], ...oppNames.map((n) => [n, n] as [string, string])]} />
           </Field>
           <Field stretch label={t('ggs.field.format')}><Select value={gtype} onChange={setGtype} options={gtypeChoices()} /></Field>
           <Field stretch label={t('ggs.field.time_control')}><Select value={time} onChange={setTime} options={clockChoices()} /></Field>
