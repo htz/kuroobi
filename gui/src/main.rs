@@ -2036,6 +2036,13 @@ fn ggs_set_auto_play(app: State<App>, on: bool) -> Result<(), String> {
 }
 
 #[tauri::command]
+fn ggs_set_open(app: State<App>, on: bool) -> Result<(), String> {
+    ggs_tx(&app)?
+        .send(ggs::Cmd::SetOpen(on))
+        .map_err(|e| e.to_string())
+}
+
+#[tauri::command]
 fn ggs_set_watch_analysis(app: State<App>, on: bool) -> Result<(), String> {
     ggs_tx(&app)?
         .send(ggs::Cmd::SetWatchAnalysis(on))
@@ -2304,6 +2311,7 @@ fn main() {
             ggs_set_engine,
             ggs_set_pacing,
             ggs_set_auto_play,
+            ggs_set_open,
             ggs_set_watch_analysis,
             ggs_set_use_book,
             ggs_set_learn,

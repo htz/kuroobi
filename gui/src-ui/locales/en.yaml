@@ -475,6 +475,7 @@ ggs:
   lobby:
     accept: "Accept"
     ask: "Request"
+    closed_note: "Requests are turned off. Nobody can send you one, and auto-accept and the server-side conditions only act while requests are on."
     decline: "Decline"
     game_count: "{n} games"
     no_adjourned: "No adjourned games."
@@ -483,6 +484,7 @@ ggs:
     no_requests: "No match requests."
     ongoing_title: "In progress"
     open_request: "Post an open request"
+    open_toggle: "Accept requests"
     raw_info: "Info"
     request_title: "Request a game"
     resume: "Resume"
@@ -623,7 +625,6 @@ ggs:
     aborted: "Aborted"
     adjourned: "Adjourned"
     finished: "Finished"
-    idle: "Idle"
     playing: "Playing"
   status:
     band: "selective +{n}"
@@ -656,6 +657,8 @@ ggs:
     open_no: "Not accepting"
     open_yes: "Accepting"
     per_page: "Rows"
+    presence_offline: "Offline"
+    presence_online: "Online"
     ranking: "Ranking"
     tab_history: "Game history"
     tab_profile: "Profile"

@@ -2,7 +2,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { ggsApi, jsLog, onGgsSnapshot } from './api';
 import { t } from './i18n';
-import type { GgsSnapshot, MatchView, PlayerView } from './types';
+import type { GgsSnapshot, MatchView, PlayerView, UserRow } from './types';
 
 
 export function useGgs() {
@@ -111,6 +111,45 @@ function clockView(c: ClockBase | undefined, side: ClockSide, now: number,
     return { text: t('ggs.clock.overtime', { t: fmtSecs(ext + rem) }), cls: 'ext' };
   }
   return { text: t('ggs.clock.timeout'), cls: 'dead' };
+}
+
+export type Presence = 'playing' | 'online' | 'offline';
+
+/** Everyone logged in: `/os who` lists only players who are free and taking requests, so the players of ongoing matches come from the match list and the rest from the server's own `who` (not taking requests). */
+export function onlineRows(snap: GgsSnapshot): UserRow[] {
+  const rows = [...snap.users];
+  const have = new Set(rows.map((u) => u.name));
+  for (const o of snap.ongoing) {
+    const random = o.gtype.startsWith('s8r') || o.gtype.startsWith('8r');
+    o.names.forEach((name, i) => {
+      if (have.has(name)) return;
+      have.add(name);
+      const r = Number(o.ratings[i]);
+      const rating = Number.isFinite(r) ? r : null;
+      rows.push({
+        name, rating: random ? null : rating, dev: null,
+        rating_r: random ? rating : null, dev_r: null, open: null, raw: '',
+      });
+    });
+  }
+  for (const name of snap.online ?? []) {
+    if (have.has(name)) continue;
+    have.add(name);
+    const mine = name === snap.login ? snap.my_ranks : [];
+    const n8 = mine.find((r) => r.gtype === '8');
+    const n8r = mine.find((r) => r.gtype === '8r');
+    rows.push({
+      name, rating: n8?.rating ?? null, dev: n8?.dev ?? null,
+      rating_r: n8r?.rating ?? null, dev_r: n8r?.dev ?? null, open: '-', raw: '',
+    });
+  }
+  return rows.sort((a, b) => (b.rating ?? b.rating_r ?? 0) - (a.rating ?? a.rating_r ?? 0));
+}
+
+export function presence(snap: GgsSnapshot, name: string): Presence {
+  if (snap.ongoing.some((o) => o.names.includes(name))) return 'playing';
+  const on = snap.users.some((u) => u.name === name) || (snap.online ?? []).includes(name);
+  return on ? 'online' : 'offline';
 }
 
 export function useClocks(matches: MatchView[]): (id: string, side: ClockSide) => ClockView {

@@ -471,6 +471,7 @@ ggs:
   lobby:
     accept: "受ける"
     ask: "申し込む"
+    closed_note: "受け付けない設定です。相手からの申し込みは届きません。自動受け付けとサーバー側の条件も、受け付けるときだけ効きます。"
     decline: "断る"
     game_count: "{n} 局"
     no_adjourned: "中断対局はありません。"
@@ -479,6 +480,7 @@ ggs:
     no_requests: "対局の申し込みはありません。"
     ongoing_title: "対局中"
     open_request: "募集する"
+    open_toggle: "申し込みを受け付ける"
     raw_info: "情報"
     request_title: "対局を申し込む"
     resume: "再開"
@@ -619,7 +621,6 @@ ggs:
     aborted: "中止"
     adjourned: "中断"
     finished: "終局"
-    idle: "待機"
     playing: "対局中"
   status:
     band: "選択読み+{n}"
@@ -652,6 +653,8 @@ ggs:
     open_no: "受けない"
     open_yes: "受付中"
     per_page: "表示件数"
+    presence_offline: "オフライン"
+    presence_online: "オンライン"
     ranking: "ランキング"
     tab_history: "対戦履歴"
     tab_profile: "プロフィール"

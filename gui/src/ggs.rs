@@ -61,6 +61,7 @@ pub enum Cmd {
         budget_use: f64,
     },
     SetAutoPlay(bool),
+    SetOpen(bool),
     SetWatchAnalysis(bool),
     SetUseBook(bool),
     SetLearn(bool),
@@ -308,6 +309,8 @@ pub struct Snapshot {
     pub offers: Vec<Offer>,
     pub matches: Vec<MatchView>,
     pub ongoing: Vec<OngoingView>,
+    /// Everyone logged in, or `None` until the server's `who` has answered once.
+    pub online: Option<Vec<String>>,
     pub notice: String,
     pub stored: Vec<StoredView>,
     pub history: HashMap<String, Vec<HistoryRow>>,
@@ -318,6 +321,8 @@ pub struct Snapshot {
     pub standby_stats: StandbyStats,
     pub engine: EngineCfgView,
     pub auto_play: bool,
+    /// The server's `open` flag: whether anyone may send us a request at all.
+    pub open: bool,
     pub watch_analysis: bool,
     pub thinking: Option<String>,
     pub fetched_ggf: Option<FetchedGgf>,
@@ -635,6 +640,7 @@ pub fn spawn(
             interval_secs: 20,
         },
         auto_play: true,
+        open: true,
         watch_analysis: true,
         results: load_history(),
         ..Default::default()
@@ -760,6 +766,7 @@ struct SavedSettings {
     reserve_secs: u64,
     budget_use: f64,
     auto_play: bool,
+    open: bool,
     watch_analysis: bool,
     use_book: bool,
     learn: bool,
@@ -777,6 +784,7 @@ impl Default for SavedSettings {
             reserve_secs: 20,
             budget_use: 2.5,
             auto_play: false,
+            open: true,
             watch_analysis: false,
             use_book: true,
             learn: true,
@@ -797,6 +805,7 @@ fn save_settings(ctx: &Ctx) {
         reserve_secs: e.reserve_secs,
         budget_use: e.budget_use,
         auto_play: s.auto_play,
+        open: s.open,
         watch_analysis: s.watch_analysis,
         use_book: e.use_book,
         learn: e.learn,
@@ -1832,6 +1841,7 @@ fn restore_settings(ctx: &mut Ctx) {
     s.engine.use_book = v.use_book;
     s.engine.learn = v.learn;
     s.auto_play = v.auto_play;
+    s.open = v.open;
     s.watch_analysis = v.watch_analysis;
 }
 
@@ -1895,6 +1905,10 @@ fn wait_for_connect(ctx: &mut Ctx, rx: &Receiver<Cmd>) -> Option<(String, String
             }
             Ok(Cmd::SetAutoPlay(b)) => {
                 ctx.snap.lock().unwrap().auto_play = b;
+                save_settings(ctx);
+            }
+            Ok(Cmd::SetOpen(b)) => {
+                ctx.snap.lock().unwrap().open = b;
                 save_settings(ctx);
             }
             Ok(Cmd::SetUseBook(b)) => {
@@ -2140,15 +2154,18 @@ fn greet(ctx: &mut Ctx, w: &mut Wire, login: &str, send: &mut impl FnMut(String)
             "tell /os rated +"
         },
         "tell /os notify +",
-        "tell /os open 1",
         "chann + .chat",
     ] {
         say(ctx, send, c);
     }
+    let open = ctx.snap.lock().unwrap().open;
+    say(ctx, send, format!("tell /os open {}", u8::from(open)));
     for t in ["8", "8r"] {
         w.pending.push(format!("who:{t}"));
         say(ctx, send, format!("tell /os who {t}"));
     }
+    w.pending.push("online".into());
+    say(ctx, send, "who");
     for t in ["8", "8r"] {
         w.pending.push(format!("rank:{t}:{login}"));
         say(ctx, send, format!("tell /os rank {t} {login}"));
@@ -2293,6 +2310,8 @@ fn service(ctx: &mut Ctx, w: &mut Wire, mut send: impl FnMut(String)) {
             w.pending.push(format!("who:{t}"));
             say(ctx, &mut send, format!("tell /os who {t}"));
         }
+        w.pending.push("online".into());
+        say(ctx, &mut send, "who");
     }
 
     let done: Vec<String> = ctx
@@ -2424,6 +2443,8 @@ fn handle_cmd(
                 pending.push(format!("who:{t}"));
                 send(format!("tell /os who {t}"));
             }
+            pending.push("online".into());
+            send("who".into());
         }
         Cmd::Top { gtype, n } => {
             pending.push("top".into());
@@ -2524,6 +2545,12 @@ fn handle_cmd(
         Cmd::SetAutoPlay(b) => {
             ctx.snap.lock().unwrap().auto_play = b;
             save_settings(ctx);
+            ctx.dirty = true;
+        }
+        Cmd::SetOpen(b) => {
+            ctx.snap.lock().unwrap().open = b;
+            save_settings(ctx);
+            send(format!("tell /os open {}", u8::from(b)));
             ctx.dirty = true;
         }
         Cmd::SetUseBook(b) => {
@@ -2630,28 +2657,7 @@ fn handle_os_line(
                 let mut s = ctx.snap.lock().unwrap();
                 s.ongoing.retain(|o| o.id != id);
                 if !mine {
-                    let t: Vec<&str> = mrest.split_whitespace().collect();
-                    let names: Vec<String> = t
-                        .iter()
-                        .filter(|x| {
-                            x.len() >= 2
-                                && x.chars().next().map(|c| c.is_ascii_alphabetic()) == Some(true)
-                                && !x.starts_with("s8")
-                                && **x != "R"
-                                && **x != "U"
-                        })
-                        .map(|x| x.to_string())
-                        .collect();
-                    let gtype = t
-                        .iter()
-                        .find(|x| x.starts_with("s8") || x.starts_with('8'))
-                        .map(|x| x.to_string())
-                        .unwrap_or_default();
-                    let ratings: Vec<String> = t
-                        .iter()
-                        .filter(|x| x.parse::<f32>().is_ok() && x.len() >= 3)
-                        .map(|x| x.to_string())
-                        .collect();
+                    let (names, ratings, gtype) = match_line_parts(mrest);
                     s.ongoing.push(OngoingView {
                         id,
                         raw: mrest.to_string(),
@@ -2723,12 +2729,13 @@ fn handle_os_line(
             sync_matches(ctx, matches);
             ctx.emit(true);
             handle_match_end(ctx, mrest, login, matches);
-            if was_mine {
-                for t in ["8", "8r"] {
-                    pending.push(format!("who:{t}"));
-                    send(format!("tell /os who {t}"));
-                }
+            // Both players just left the match list but are back in `who` only once it is asked again.
+            for t in ["8", "8r"] {
+                pending.push(format!("who:{t}"));
+                send(format!("tell /os who {t}"));
             }
+            pending.push("online".into());
+            send("who".into());
             let s = ctx.snap.lock().unwrap();
             let sb = s.standby.clone();
             let games = s.standby_stats.games;
@@ -3068,9 +3075,10 @@ fn apply_block(m: &mut MatchState, block: &[String], login: &str) -> (bool, Opti
                         m.my_clock = clock.clone();
                         if let (Some(now), Some(g)) = (main, ext) {
                             let bump = inc.unwrap_or(0);
-                            let jumped = m
-                                .my_clock_secs
-                                .is_some_and(|prev| now > prev.saturating_add(bump));
+                            // The server shows 4:59 at join and 5:00 after an instant book move; only a jump into the extension is overtime.
+                            let jumped = now <= g
+                                && m.my_clock_secs
+                                    .is_some_and(|prev| now > prev.saturating_add(bump));
                             let played = m.moves.len() >= 2;
                             if g > 0 && (jumped || (now == 0 && played)) {
                                 m.in_overtime = true;
@@ -3991,6 +3999,44 @@ fn is_month(t: &str) -> bool {
     )
 }
 
+/// Names, their ratings in the same order, and the game type of a match line `.id r1 name1 r2 name2 type R|U ...`.
+fn match_line_parts(line: &str) -> (Vec<String>, Vec<String>, String) {
+    let t: Vec<&str> = line.split_whitespace().collect();
+    let names = t
+        .iter()
+        .filter(|x| {
+            x.len() >= 2
+                && x.chars().next().map(|c| c.is_ascii_alphabetic()) == Some(true)
+                && !x.starts_with("s8")
+                && **x != "R"
+                && **x != "U"
+        })
+        .map(|x| x.to_string())
+        .collect();
+    // The id (`.23`) and the archive number parse as floats too.
+    let ratings = t
+        .iter()
+        .filter(|x| !x.starts_with('.') && x.parse::<f32>().is_ok() && x.len() >= 3)
+        .map(|x| x.to_string())
+        .collect();
+    let gtype = t
+        .iter()
+        .find(|x| x.starts_with("s8") || x.starts_with('8'))
+        .map(|x| x.to_string())
+        .unwrap_or_default();
+    (names, ratings, gtype)
+}
+
+/// Everyone logged in to GGS, from the server's own `who`; `/os who` leaves out players who are in a game or not taking requests.
+fn online_names(buf: &[String]) -> Vec<String> {
+    buf.iter()
+        .skip(1)
+        .filter_map(|l| l.split_whitespace().next())
+        .filter(|n| n.starts_with(|c: char| c.is_ascii_alphabetic()))
+        .map(str::to_string)
+        .collect()
+}
+
 fn capture_header_matches(kind: &str, ln: &str) -> bool {
     if kind.starts_with("who") {
         ln.starts_with("/os: who")
@@ -4008,6 +4054,8 @@ fn capture_header_matches(kind: &str, ln: &str) -> bool {
         ln.starts_with("/os: match")
     } else if kind.starts_with("osfinger:") {
         ln.starts_with("/os: finger")
+    } else if kind == "online" {
+        ln.starts_with(": who")
     } else if kind.starts_with("finger:") {
         ln.starts_with(": finger") || ln.trim_start().starts_with("login")
     } else {
@@ -4176,27 +4224,7 @@ fn capture_match_list(ctx: &mut Ctx, buf: &[String], login: &str) {
         if !id.starts_with('.') {
             continue;
         }
-        let names: Vec<String> = t
-            .iter()
-            .filter(|x| {
-                x.len() >= 2
-                    && x.chars().next().map(|c| c.is_ascii_alphabetic()) == Some(true)
-                    && !x.starts_with("s8")
-                    && **x != "R"
-                    && **x != "U"
-            })
-            .map(|x| x.to_string())
-            .collect();
-        let gtype = t
-            .iter()
-            .find(|x| x.starts_with("s8") || x.starts_with('8'))
-            .map(|x| x.to_string())
-            .unwrap_or_default();
-        let ratings: Vec<String> = t
-            .iter()
-            .filter(|x| x.parse::<f32>().is_ok() && x.len() >= 3)
-            .map(|x| x.to_string())
-            .collect();
+        let (names, ratings, gtype) = match_line_parts(rest);
         list.push(OngoingView {
             id: id.to_string(),
             raw: rest.trim().to_string(),
@@ -4422,6 +4450,14 @@ fn capture_finger(ctx: &mut Ctx, buf: &[String], name: &str) {
 }
 
 fn finish_capture(ctx: &mut Ctx, kind: &str, buf: &[String], login: &str) {
+    if kind == "online" {
+        let names = online_names(buf);
+        if !names.is_empty() {
+            ctx.snap.lock().unwrap().online = Some(names);
+            ctx.dirty = true;
+        }
+        return;
+    }
     if let Some(id) = kind.strip_prefix("look:") {
         let joined: String = buf.iter().map(|l| l.trim()).collect::<Vec<_>>().join("");
         let mut parts: Vec<String> = Vec::new();
@@ -4745,6 +4781,30 @@ mod tests {
     }
 
     #[test]
+    fn the_servers_who_lists_every_login_but_not_the_services() {
+        let buf: Vec<String> = [
+            ": who   17        idle      online         ip-addr hostname",
+            "/os      +    00:00:12312.04:55:04",
+            "HCyrano  +    00:02:29  1.20:22:29",
+            "kuroobi  +    00:00:00    00:06:42 153.242.133.003  <=",
+            "nyanyan3 -    00:00:12    06:02:18",
+        ]
+        .iter()
+        .map(|s| s.to_string())
+        .collect();
+        assert_eq!(online_names(&buf), ["HCyrano", "kuroobi", "nyanyan3"]);
+    }
+
+    #[test]
+    fn a_match_line_pairs_each_name_with_its_rating_not_the_id() {
+        let (names, ratings, gtype) =
+            match_line_parts(".23 2571 Rhapsody 2415 piglet      s8r16  R 1");
+        assert_eq!(names, ["Rhapsody", "piglet"]);
+        assert_eq!(ratings, ["2571", "2415"]);
+        assert_eq!(gtype, "s8r16");
+    }
+
+    #[test]
     fn a_jumping_clock_means_overtime() {
         let board: Vec<String> = [
             "|   A B C D E F G H",
@@ -4784,6 +4844,13 @@ mod tests {
         assert!(m2.in_overtime, "missed the clock stuck at 0");
         apply_block(&mut m, &with_clock("01:12,0:0"), "kuroobi");
         assert!(m.in_overtime, "cleared the overtime flag");
+        let mut m3 = MatchState::new();
+        apply_block(&mut m3, &with_clock("04:59,0:0"), "kuroobi");
+        apply_block(&mut m3, &with_clock("05:00,1:0"), "kuroobi");
+        assert!(
+            !m3.in_overtime,
+            "a second back after a book move is not overtime"
+        );
     }
 
     #[test]

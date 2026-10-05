@@ -246,6 +246,7 @@ export interface GgsSnapshot {
   offers: Offer[];
   matches: MatchView[];
   ongoing: OngoingView[];
+  online: string[] | null;
   notice: string;
   stored: StoredView[];
   history: Record<string, HistoryRow[]>;
@@ -256,6 +257,7 @@ export interface GgsSnapshot {
   standby_stats: StandbyStats;
   engine: EngineCfgView;
   auto_play: boolean;
+  open: boolean;
   watch_analysis: boolean;
   thinking: string | null;
   fetched_ggf: FetchedGgf | null;

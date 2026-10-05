@@ -142,6 +142,7 @@ export const ggsApi = {
   setPacing: (pace: string, maxMoveSecs: number, reserveSecs: number, budgetUse: number) =>
     call('ggs_set_pacing', { pace, maxMoveSecs, reserveSecs, budgetUse }),
   setAutoPlay: (on: boolean) => call('ggs_set_auto_play', { on }),
+  setOpen: (on: boolean) => call('ggs_set_open', { on }),
   setWatchAnalysis: (on: boolean) => call('ggs_set_watch_analysis', { on }),
   setUseBook: (on: boolean) => call('ggs_set_use_book', { on }),
   setLearn: (on: boolean) => call('ggs_set_learn', { on }),

@@ -3,7 +3,8 @@ import { api, ggsApi, jsLog, onApp } from './api';
 import type { ChatMsg, GameResult, GgsSnapshot, MatchView, UserRow } from './types';
 import {
   clockChoices, gtypeChoices, clockOf, countDiscs, ggsMoveToIndex, gtypeLabel,
-  fingerGroups, fingerValue, hasJapanese, normKey, parseCond, translate, useClocks,
+  fingerGroups, fingerValue, hasJapanese, normKey, onlineRows, parseCond, presence, translate,
+  useClocks,
   type ClockSide, type ClockView,
 } from './ggs';
 import { sqName } from './adapt';
@@ -335,7 +336,10 @@ function GgsLobby({ snap, onNav }: { snap: GgsSnapshot; onNav: (id: NavId) => vo
           </List>
         </Section>
 
-        <Section title={t('ggs.match_requests')}>
+        <Section title={t('ggs.match_requests')}
+                 aside={<Toggle checked={snap.open} label={t('ggs.lobby.open_toggle')}
+                                onChange={(on) => void ggsApi.setOpen(on)} />}>
+          {!snap.open && <Note>{t('ggs.lobby.closed_note')}</Note>}
           {!snap.offers.length && <Empty>{t('ggs.lobby.no_requests')}</Empty>}
           <List>
           {snap.offers.map((o) => {
@@ -1230,7 +1234,7 @@ function UserCard({ snap, name, onClose, onDetail, onAsk }: {
 }) {
   useEffect(() => { ggsApi.finger(name).catch(() => {}); }, [name]);
 
-  const u = snap.users.find((x) => x.name === name);
+  const u = onlineRows(snap).find((x) => x.name === name);
   const rates = bothRates(u);
   const fields = snap.fingers[name]?.fields ?? [];
 
@@ -1299,7 +1303,7 @@ function GgsUsers({ snap, onNav, onKifu }: {
                        onBack={() => setSel(null)} onNav={onNav} onKifu={onKifu} />;
   }
 
-  const rows = mode === 'who' ? snap.users : snap.ranking;
+  const rows = mode === 'who' ? onlineRows(snap) : snap.ranking;
   const mine = snap.my_ranks;
   const pages = Math.max(1, Math.ceil(rows.length / perPage));
   const cur = Math.min(page, pages - 1);
@@ -1351,7 +1355,7 @@ function GgsUsers({ snap, onNav, onKifu }: {
         )}
         <List>
         {slice.map((u, i) => {
-        const playing = snap.ongoing.some((o) => o.names.includes(u.name));
+        const state = presence(snap, u.name);
         return (
           <TableRow key={u.name} cols={userCols} pad="var(--sp-4)" onClick={() => setCard(u.name)}>
             {mode === 'top' && (
@@ -1390,8 +1394,10 @@ function GgsUsers({ snap, onNav, onKifu }: {
               </span>
             )}
             <span style={{
-              fontSize: 'var(--fs-6)', color: playing ? 'var(--ok)' : 'var(--sub)',
-            }}>{playing ? t('ggs.state.playing') : t('ggs.state.idle')}</span>
+              fontSize: 'var(--fs-6)',
+              color: state === 'playing' ? 'var(--ok)' : state === 'online' ? 'var(--accent)' : 'var(--sub)',
+            }}>{state === 'playing' ? t('ggs.state.playing')
+              : state === 'online' ? t('ggs.users.presence_online') : t('ggs.users.presence_offline')}</span>
           </TableRow>
         );})}
         </List>
@@ -1422,9 +1428,9 @@ function UserDetail({ snap, name, tab, onTab, onBack, onNav, onKifu }: {
   useEffect(() => { ggsApi.finger(name).catch(() => {}); }, [name]);
   useEffect(() => { ggsApi.history(name === snap.login ? '' : name).catch(() => {}); }, [name, snap.login]);
 
-  const u = snap.users.find((x) => x.name === name);
+  const u = onlineRows(snap).find((x) => x.name === name);
   const rates = bothRates(u);
-  const playing = snap.ongoing.some((o) => o.names.includes(name));
+  const playing = presence(snap, name) === 'playing';
   const fields = snap.fingers[name]?.fields ?? [];
   const who = { me: name, them: t('ggs.formula.who.me') };
   const rows = snap.history[name] ?? [];
