@@ -200,12 +200,12 @@ directions at once instead of looping. Details in
 
 ![Evaluation patterns](docs/img/patterns.svg)
 
-The board is cut into **16 kinds of square groups (patterns) × 4
-orientations**, and the weights matching each arrangement are summed. The
-choice of which squares form a group is not ours: we use the **Egaroucid
-pattern set** as-is. In the figure
-above, the dark green is the first orientation and the pale green the
-other three.
+The board is cut into **17 kinds of square groups (patterns), 72 with
+their orientations**, and the weights matching each arrangement are summed.
+These are the **KUROOBI patterns**. The set started from Egaroucid's 16 shapes: the three rows and the 3x3
+corner were widened to 10 squares, the 7-square diagonal was replaced, and
+a 2x5 corner block was added. In the figure above, the dark green is the
+first orientation and the pale green the others.
 
 Rather than recount everything after each move, **only the patterns
 containing a changed square** are updated (incremental pattern indices).

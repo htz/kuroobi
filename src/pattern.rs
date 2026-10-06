@@ -1,4 +1,4 @@
-//! Pattern definitions for AI evaluation: the linear evaluator's set (16 shapes, orientations sharing a table) and the NNUE's (32 shapes, one table each).
+//! Pattern definitions for AI evaluation: the linear evaluator's set, the KUROOBI patterns (17 shapes, orientations sharing a table) and the NNUE's (32 shapes, one table each).
 
 use crate::color::Color;
 
@@ -69,53 +69,53 @@ impl Pattern {
 
 pub const LINEAR_PATTERNS: &[Pattern] = &[
     Pattern {
-        name: "Line2",
-        size: 8,
+        name: "Row2+Corners",
+        size: 10,
         masks: &[
-            &[A2, B2, C2, D2, E2, F2, G2, H2],
-            &[A7, B7, C7, D7, E7, F7, G7, H7],
-            &[B1, B2, B3, B4, B5, B6, B7, B8],
-            &[G1, G2, G3, G4, G5, G6, G7, G8],
+            &[A2, B2, C2, D2, E2, F2, G2, H2, A1, H1],
+            &[A7, B7, C7, D7, E7, F7, G7, H7, A8, H8],
+            &[B1, B2, B3, B4, B5, B6, B7, B8, A1, A8],
+            &[G1, G2, G3, G4, G5, G6, G7, G8, H1, H8],
         ],
     },
     Pattern {
-        name: "Line3",
-        size: 8,
+        name: "Row3+2X",
+        size: 10,
         masks: &[
-            &[A3, B3, C3, D3, E3, F3, G3, H3],
-            &[A6, B6, C6, D6, E6, F6, G6, H6],
-            &[C1, C2, C3, C4, C5, C6, C7, C8],
-            &[F1, F2, F3, F4, F5, F6, F7, F8],
+            &[A3, B3, C3, D3, E3, F3, G3, H3, B2, G2],
+            &[A6, B6, C6, D6, E6, F6, G6, H6, B7, G7],
+            &[C1, C2, C3, C4, C5, C6, C7, C8, B2, B7],
+            &[F1, F2, F3, F4, F5, F6, F7, F8, G2, G7],
         ],
     },
     Pattern {
-        name: "Line4",
-        size: 8,
+        name: "Row4+Centre",
+        size: 10,
         masks: &[
-            &[A4, B4, C4, D4, E4, F4, G4, H4],
-            &[A5, B5, C5, D5, E5, F5, G5, H5],
-            &[D1, D2, D3, D4, D5, D6, D7, D8],
-            &[E1, E2, E3, E4, E5, E6, E7, E8],
+            &[A4, B4, C4, D4, E4, F4, G4, H4, D5, E5],
+            &[A5, B5, C5, D5, E5, F5, G5, H5, D4, E4],
+            &[D1, D2, D3, D4, D5, D6, D7, D8, E4, E5],
+            &[E1, E2, E3, E4, E5, E6, E7, E8, D4, D5],
         ],
     },
     Pattern {
-        name: "Corner3x3",
+        name: "Corner3x3+D4",
+        size: 10,
+        masks: &[
+            &[A1, B1, A2, B2, C1, A3, C2, B3, C3, D4],
+            &[H1, G1, H2, G2, F1, H3, F2, G3, F3, E4],
+            &[A8, B8, A7, B7, C8, A6, C7, B6, C6, D5],
+            &[H8, G8, H7, G7, F8, H6, F7, G6, F6, E5],
+        ],
+    },
+    Pattern {
+        name: "Diag4+5",
         size: 9,
         masks: &[
-            &[A1, B1, A2, B2, C1, A3, C2, B3, C3],
-            &[H1, G1, H2, G2, F1, H3, F2, G3, F3],
-            &[A8, A7, B8, B7, A6, C8, B6, C7, C6],
-            &[H8, H7, G8, G7, H6, F8, G6, F7, F6],
-        ],
-    },
-    Pattern {
-        name: "Diagonal5",
-        size: 7,
-        masks: &[
-            &[B2, D1, E2, F3, G4, H5, G7],
-            &[B2, A4, B5, C6, D7, E8, G7],
-            &[G2, E1, D2, C3, B4, A5, B7],
-            &[G2, H4, G5, F6, E7, D8, B7],
+            &[A4, B3, C2, D1, A5, B4, C3, D2, E1],
+            &[H4, G3, F2, E1, H5, G4, F3, E2, D1],
+            &[A5, B6, C7, D8, A4, B5, C6, D7, E8],
+            &[H5, G6, F7, E8, H4, G5, F6, E7, D8],
         ],
     },
     Pattern {
@@ -123,9 +123,9 @@ pub const LINEAR_PATTERNS: &[Pattern] = &[
         size: 9,
         masks: &[
             &[B1, C1, D2, E3, G2, F4, G5, H6, H7],
-            &[A2, A3, B4, C5, B7, D6, E7, F8, G8],
             &[G1, F1, E2, D3, B2, C4, B5, A6, A7],
-            &[H2, H3, G4, F5, G7, E6, D7, C8, B8],
+            &[B8, C8, D7, E6, G7, F5, G4, H3, H2],
+            &[G8, F8, E7, D6, B7, C5, B4, A3, A2],
         ],
     },
     Pattern {
@@ -133,9 +133,9 @@ pub const LINEAR_PATTERNS: &[Pattern] = &[
         size: 9,
         masks: &[
             &[A1, B1, C2, D3, E4, F5, G6, H7, H8],
-            &[H1, H2, G3, F4, E5, D6, C7, B8, A8],
-            &[A1, A2, B3, C4, D5, E6, F7, G8, H8],
             &[H1, G1, F2, E3, D4, C5, B6, A7, A8],
+            &[A8, B8, C7, D6, E5, F4, G3, H2, H1],
+            &[H8, G8, F7, E6, D5, C4, B3, A2, A1],
         ],
     },
     Pattern {
@@ -143,13 +143,13 @@ pub const LINEAR_PATTERNS: &[Pattern] = &[
         size: 10,
         masks: &[
             &[A1, B2, C3, D4, E5, F6, G7, H8, A2, B1],
-            &[A8, B7, C6, D5, E4, F3, G2, H1, B8, A7],
+            &[H1, G2, F3, E4, D5, C6, B7, A8, H2, G1],
+            &[A8, B7, C6, D5, E4, F3, G2, H1, A7, B8],
             &[H8, G7, F6, E5, D4, C3, B2, A1, H7, G8],
-            &[H1, G2, F3, E4, D5, C6, B7, A8, G1, H2],
         ],
     },
     Pattern {
-        name: "Edge+2x",
+        name: "Edge+2X",
         size: 10,
         masks: &[
             &[B2, A1, B1, C1, D1, E1, F1, G1, H1, G2],
@@ -163,19 +163,19 @@ pub const LINEAR_PATTERNS: &[Pattern] = &[
         size: 10,
         masks: &[
             &[A1, A2, B1, A3, B2, C1, A4, B3, C2, D1],
-            &[H1, G1, H2, F1, G2, H3, E1, F2, G3, H4],
+            &[H1, H2, G1, H3, G2, F1, H4, G3, F2, E1],
+            &[A8, A7, B8, A6, B7, C8, A5, B6, C7, D8],
             &[H8, H7, G8, H6, G7, F8, H5, G6, F7, E8],
-            &[A8, B8, A7, C8, B7, A6, D8, C7, B6, A5],
         ],
     },
     Pattern {
-        name: "Corner + Block",
+        name: "Corner+Block",
         size: 10,
         masks: &[
             &[A1, C1, D1, C2, D2, E2, F2, E1, F1, H1],
+            &[A8, C8, D8, C7, D7, E7, F7, E8, F8, H8],
+            &[A1, A3, A4, B3, B4, B5, B6, A5, A6, A8],
             &[H1, H3, H4, G3, G4, G5, G6, H5, H6, H8],
-            &[H8, F8, E8, F7, E7, D7, C7, D8, C8, A8],
-            &[A8, A6, A5, B6, B5, B4, B3, A4, A3, A1],
         ],
     },
     Pattern {
@@ -199,7 +199,7 @@ pub const LINEAR_PATTERNS: &[Pattern] = &[
         ],
     },
     Pattern {
-        name: "Narrow Triangle",
+        name: "NarrowTriangle",
         size: 10,
         masks: &[
             &[A1, B1, C1, D1, E1, A2, B2, A3, A4, A5],
@@ -222,10 +222,24 @@ pub const LINEAR_PATTERNS: &[Pattern] = &[
         name: "Anvil",
         size: 10,
         masks: &[
-            &[C6, D6, D7, D8, C8, F8, E8, E7, E6, F6],
-            &[C3, C4, B4, A4, A3, A6, A5, B5, C5, C6],
-            &[F3, E3, E2, E1, F1, C1, D1, D2, D3, C3],
-            &[F6, F5, G5, H5, H6, H3, H4, G4, F4, F3],
+            &[C1, D1, E1, F1, D2, E2, C3, D3, E3, F3],
+            &[C8, D8, E8, F8, D7, E7, C6, D6, E6, F6],
+            &[A3, A4, A5, A6, B4, B5, C3, C4, C5, C6],
+            &[H3, H4, H5, H6, G4, G5, F3, F4, F5, F6],
+        ],
+    },
+    Pattern {
+        name: "Corner2x5",
+        size: 10,
+        masks: &[
+            &[A1, B1, C1, D1, E1, A2, B2, C2, D2, E2],
+            &[H1, G1, F1, E1, D1, H2, G2, F2, E2, D2],
+            &[A8, B8, C8, D8, E8, A7, B7, C7, D7, E7],
+            &[H8, G8, F8, E8, D8, H7, G7, F7, E7, D7],
+            &[A1, A2, A3, A4, A5, B1, B2, B3, B4, B5],
+            &[H1, H2, H3, H4, H5, G1, G2, G3, G4, G5],
+            &[A8, A7, A6, A5, A4, B8, B7, B6, B5, B4],
+            &[H8, H7, H6, H5, H4, G8, G7, G6, G5, G4],
         ],
     },
 ];
@@ -503,7 +517,7 @@ mod tests {
 
     #[test]
     fn test_pattern_counts() {
-        assert_eq!(LINEAR_PATTERNS.len(), 16, "the linear set has 16 patterns");
+        assert_eq!(LINEAR_PATTERNS.len(), 17, "the linear set has 17 patterns");
         assert_eq!(NNUE_PATTERNS.len(), 32, "the unshared set has 32 patterns");
     }
 
@@ -569,8 +583,8 @@ mod tests {
     #[test]
     fn test_orientation_symmetry_on_initial_board() {
         let b = Board::new();
-        let corner = &LINEAR_PATTERNS[3];
-        assert_eq!(corner.name, "Corner3x3");
+        let corner = &LINEAR_PATTERNS[9];
+        assert_eq!(corner.name, "Triangle");
         let indices: Vec<usize> = corner.indices(b.black, b.white, b.player()).collect();
         assert!(indices.windows(2).all(|w| w[0] == w[1]));
         assert_eq!(indices[0], corner.table_size() - 1);
@@ -580,7 +594,7 @@ mod tests {
     fn test_line4_sees_initial_pieces() {
         let b = Board::new();
         let line4 = &LINEAR_PATTERNS[2];
-        assert_eq!(line4.name, "Line4");
+        assert_eq!(line4.name, "Row4+Centre");
         for idx in line4.indices(b.black, b.white, b.player()) {
             assert_ne!(idx, line4.table_size() - 1, "Line4 must see center discs");
         }

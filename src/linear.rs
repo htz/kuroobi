@@ -880,11 +880,11 @@ mod tests {
 
             let multiplier = gradient_multiplier(&b);
             if plies == 0 {
-                assert_eq!(multiplier, 225.0, "symmetric start: Σk² + 1 = 225");
+                assert_eq!(multiplier, 281.0, "symmetric start: Σk² + 1 = 281");
             } else {
                 assert_eq!(
-                    multiplier, 193.0,
-                    "first move keeps a mirror: Σk² + 1 = 193"
+                    multiplier, 251.0,
+                    "first move keeps a mirror: Σk² + 1 = 251"
                 );
             }
 
@@ -1255,6 +1255,10 @@ mod tests {
         let e = Linear::new(LINEAR_PATTERNS);
         for (pi, p) in LINEAR_PATTERNS.iter().enumerate() {
             let (full, folded) = (p.table_size(), e.table_len(pi));
+            if p.masks.len() == 8 {
+                assert_eq!(folded, full, "{}: no orientation maps onto itself", p.name);
+                continue;
+            }
             assert!(
                 folded > full / 2 && folded <= full * 2 / 3,
                 "{}: {folded} cells for {full} indices",

@@ -7,7 +7,7 @@ groups of squares (patterns), and the NNUE that replaced it.
 
 ![Evaluation patterns](img/patterns.svg)
 
-*The linear evaluator's set -- the Egaroucid patterns (16 kinds × 4 orientations). Dark green is the first orientation, pale green the other 3.*
+*The linear evaluator's set, the KUROOBI patterns (17 kinds, 72 masks with their orientations). Dark green is the first orientation, pale green the others.*
 
 ### Pattern evaluation
 
@@ -18,20 +18,41 @@ is looked up, and the results are summed.
 The index is base-3 with `0 = own, 1 = opponent, 2 = empty` (the leading
 square is the most significant digit), and the table size is `3^size`.
 
-Which squares form a group is taken directly from what the public engines
-use. Two sets are kept:
+Two sets are kept:
 
 | Set | Patterns | Masks incl. orientations | Notes |
 |---|---|---|---|
-| `LINEAR_PATTERNS` | 16 | 64 | The linear evaluator, which the endgame solver orders moves with. The shapes are Egaroucid's |
+| `LINEAR_PATTERNS` | 17 | 72 | The KUROOBI patterns: the linear evaluator, which the endgame solver orders moves with. Egaroucid's 16 shapes with the rows and the 3x3 corner widened to 10 squares, the 7-square diagonal replaced, and a 2x5 corner block added |
 | `NNUE_PATTERNS` | 32 | 32 | The NNUE's feature set: every orientation its own table |
 
-Sets that were tried and dropped: the 12-shape Edax family, an 18-shape
-extension of the 16 (`Diagonal4` small enough to be fully learned in the
-opening -- it did not beat the 16 in league play), a shared-table 8-shape
-set, and a 7-shape corner-weighted one. None of them beat what is
-here, and `pattern::from_spec` reads a set from a text file, so trying
-another needs no code.
+The set was Egaroucid's 16 shapes until 2026-10-06. Against them, trained
+the same way on the same records, the KUROOBI patterns score a held-out MSE of 25.218
+against 26.965 (mean of stages 8-59, lower at 51 of the 52 and equal at
+the last), and the solver they order moves for reads FFO 40-59 in 10.27G
+nodes against 10.59G on one thread (-3.0%, every value the same) at 33.50M
+nodes a second against 33.94M.
+
+What each change is worth, as held-out MSE after 5 epochs a stage (mean of
+stages 8-59; the order of two sets at 5 epochs matched their order at
+convergence in 24 of 24 stages when they were 0.6 apart, and was a coin
+toss under 0.1):
+
+| Change | MSE | Cells a stage |
+|---|---:|---:|
+| the 2x5 corner block added | -1.19 | +59,049 |
+| row 2 with both corners | -0.53 | +52,488 |
+| row 3 with both X squares | -0.37 | +52,488 |
+| the three diagonals widened to 10 squares | -0.35 | +118,098 |
+| row 4 with the two centre squares below | -0.15 | +52,488 |
+| the 3x3 corner with D4 | -0.02 | +39,366 |
+
+The diagonals were left at 9 squares for their cost. Tried and dropped
+against the 16: "star" shapes (a key square with the squares along every
+line through it, for X, C, A and the edge centre) in place of the corner
+shapes, +0.38 worse at 25 epochs and worse at 51 of 52 stages. Earlier:
+the 12-shape Edax family, an 18-shape extension of the 16, a shared-table
+8-shape set, and a 7-shape corner-weighted one. `pattern::from_spec` reads
+a set from a text file, so trying another needs no code.
 
 ### Stage split and the disc-count feature
 
@@ -39,12 +60,13 @@ The weights are 3-dimensional, `weights[stage][pattern][cell]`.
 `STAGE_COUNT = 61`, and the stage is the number of moves played.
 
 **Indices that a symmetric form of the board reads for the same squares
-share one cell.** A pattern's four masks are images of one another, and
-each mask has one symmetry that maps it onto itself with its squares in
-another order, so every index has a mirror image that must carry the same
-value. `fold[pattern][index]` maps an index to its cell; a table has a
-little over half as many cells as indices (320,193 against 612,360 per
-stage). The search does not pay for this: on load the cells are unfolded
+share one cell.** A pattern's masks are images of one another. Where there
+are four, each has one symmetry that maps it onto itself with its squares
+in another order, so every index has a mirror image that must carry the
+same value; the 2x5 block has eight and no such symmetry.
+`fold[pattern][index]` maps an index to its cell; a folded table has a
+little over half as many cells as indices (487,458 against 885,735 per
+stage over the whole set). The search does not pay for this: on load the cells are unfolded
 into the flat tables it indexes directly.
 
 Folding is what makes the evaluation the same for all eight forms of a
