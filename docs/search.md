@@ -86,8 +86,8 @@ raised NPS by 27% **without changing the tree or the answers** are
 recorded here. Both were adopted only after confirming "same node
 count, same move" (moves identical at depths 10/12/14/16).
 
-**Copy the indices instead of undoing them (+19%).** `ix_undo` walks
-the CSR again for every flipped disc. With the placed square plus the
+**Copy the indices instead of undoing them (+19%).** Undoing an index
+update walks the CSR again for every flipped disc. With the placed square plus the
 flips that comes to around 40 updates, and it is a chain that waits
 for the previous result before writing the next, so nothing can be
 issued in parallel. `PatternIndices`, by contrast, is a fixed 160-byte

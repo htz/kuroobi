@@ -59,7 +59,7 @@ export interface UserRow {
   raw: string;
 }
 
-export interface RankRow {
+interface RankRow {
   gtype: string;
   name: string;
   rating: number;
@@ -70,13 +70,13 @@ export interface RankRow {
   losses: number;
 }
 
-export interface FingerInfo {
+interface FingerInfo {
   name: string;
   fields: [string, string][];
   raw: string[];
 }
 
-export interface Offer {
+interface Offer {
   id: string;
   raw: string;
   incoming: boolean;
@@ -86,7 +86,7 @@ export interface Offer {
   rated: boolean;
 }
 
-export interface OngoingView {
+interface OngoingView {
   id: string;
   raw: string;
   watching: boolean;
@@ -96,7 +96,7 @@ export interface OngoingView {
   mine: boolean;
 }
 
-export interface StoredView {
+interface StoredView {
   id: string;
   raw: string;
   opp: string;
@@ -174,7 +174,7 @@ export interface GameResult {
   at: number;
 }
 
-export interface HistoryRow {
+interface HistoryRow {
   id: string;
   at: string;
   black: string;
@@ -204,7 +204,7 @@ export interface StandbyCfg {
   interval_secs: number;
 }
 
-export interface StandbyStats {
+interface StandbyStats {
   games: number;
   wins: number;
   losses: number;
@@ -212,7 +212,7 @@ export interface StandbyStats {
   diff_sum: number;
 }
 
-export interface EngineCfgView {
+interface EngineCfgView {
   depth: number;
   solve: number;
   band: number;
@@ -228,7 +228,7 @@ export interface EngineCfgView {
   budget_use: number;
 }
 
-export interface FetchedGgf {
+interface FetchedGgf {
   id: string;
   ggf: string;
   parts: string[];
@@ -275,7 +275,7 @@ declare global {
   }
 }
 
-export interface BookMove { pos: number; value: number; games: number }
+interface BookMove { pos: number; value: number; games: number }
 
 export interface BookNode {
   cells: number[];

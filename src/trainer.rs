@@ -1,4 +1,4 @@
-//! Record-based training: load positions and run epoch-style training with symmetry augmentation (the Go trainer's workflow).
+//! Training examples: loading records, symmetric forms, and the linear evaluator's epoch loop.
 
 use std::io;
 use std::path::Path;
@@ -163,6 +163,8 @@ impl EpochStats {
     }
 }
 
+const PROGRESS_INTERVAL: usize = 1 << 16;
+
 pub struct Trainer<O: Optimizer = AdamOptimizer> {
     pub linear: Linear,
     pub optimizer: O,
@@ -192,8 +194,6 @@ impl<O: Optimizer> Trainer<O> {
         examples: &[Example],
         mut progress: impl FnMut(usize, usize),
     ) -> EpochStats {
-        const PROGRESS_INTERVAL: usize = 1 << 16;
-
         let total = examples.len();
         let mut stats = EpochStats::default();
         for (i, ex) in examples.iter().enumerate() {
@@ -230,7 +230,7 @@ impl<O: Optimizer> Trainer<O> {
             let mse = unsafe { ev.train_shared(&view, &board, ex.score, lr) };
             stats.loss_sum[stage] += mse as f64;
             stats.samples[stage] += 1;
-            if (i + 1) & ((1 << 16) - 1) == 0 {
+            if (i + 1) & (PROGRESS_INTERVAL - 1) == 0 {
                 progress(i + 1, total);
             }
         }

@@ -1,27 +1,24 @@
 import type { GameView, GgsSnapshot, LogLine as RawLog } from './types';
-import type { MoveInfo } from './state';
-import type { Cell, EvalInfo } from './components/board';
+import type { Hints, MoveInfo } from './state';
+import type { EvalInfo } from './components/board';
 import type { GraphPoint, Move, MoveSrc, StoneColor } from './components/data';
 import type { LogLine } from './components/ggs';
-
 
 export const sqName = (sq: number): string => 'abcdefgh'[Math.floor(sq / 8)] + (sq % 8 + 1);
 
 const colorOf = (i: number): StoneColor => (i % 2 === 0 ? 'b' : 'w');
 
-export const cellsOf = (v: GameView): Cell[] => v.cells as Cell[];
-
 function lossOf(i: number, value: number | undefined, prev: number | undefined): number | undefined {
   if (value === undefined || prev === undefined) return undefined;
   const loss = i % 2 === 0 ? prev - value : value - prev;
-  return loss >= 2 ? +loss.toFixed(1) : undefined;   // mark only losses of 2+ discs
+  return loss >= 2 ? +loss.toFixed(1) : undefined;
 }
 
 export function movesOf(
   v: GameView,
   info: Record<number, MoveInfo>,
-  values?: (GraphPoint | undefined)[] | null,
-  sign: 1 | -1 = 1,
+  values: (GraphPoint | undefined)[] | null,
+  sign: 1 | -1,
 ): Move[] {
   const shown = v.moves.map((_, i) => (info[i + 1] ? info[i + 1].value : values?.[i + 1]?.value));
   return v.moves.map((m, i) => {
@@ -48,9 +45,9 @@ export function movesOf(
 }
 
 export function evalsOf(
-  hints: Record<number, { value: number; exact: boolean; book: boolean; depth: number }> | null,
-  blackToMove = true,
-  sign: 1 | -1 = 1,
+  hints: Hints | null,
+  blackToMove: boolean,
+  sign: 1 | -1,
 ): Record<number, EvalInfo> | undefined {
   if (!hints) return undefined;
   const out: Record<number, EvalInfo> = {};
@@ -69,7 +66,6 @@ export function evalsOf(
   }
   return out;
 }
-
 
 export const connOf = (c: GgsSnapshot['conn'] | undefined): 'offline' | 'connecting' | 'logging-in' | 'online' =>
   c === 'online' ? 'online' : c === 'connecting' ? 'connecting'

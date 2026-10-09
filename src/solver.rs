@@ -11,72 +11,19 @@ use crate::zobrist;
 
 const PVS_LIMIT: u8 = 12;
 
-#[cfg(feature = "tunable")]
-fn pvs_limit() -> u8 {
-    static V: std::sync::OnceLock<u8> = std::sync::OnceLock::new();
-    *V.get_or_init(|| {
-        std::env::var("PVS_MIN")
-            .ok()
-            .and_then(|v| v.parse().ok())
-            .unwrap_or(PVS_LIMIT)
-    })
-}
-#[cfg(not(feature = "tunable"))]
-const fn pvs_limit() -> u8 {
-    PVS_LIMIT
-}
+knob!(fn pvs_limit() -> u8 = "PVS_MIN" or PVS_LIMIT);
 const MOVE_ORDERING_LIMIT: u8 = 7;
 const TT_MIN_EMPTIES_DEFAULT: u8 = 11;
 
-#[cfg(feature = "tunable")]
-fn tt_min_empties() -> u8 {
-    static V: std::sync::OnceLock<u8> = std::sync::OnceLock::new();
-    *V.get_or_init(|| {
-        std::env::var("TT_MIN")
-            .ok()
-            .and_then(|v| v.parse().ok())
-            .unwrap_or(TT_MIN_EMPTIES_DEFAULT)
-    })
-}
-#[cfg(not(feature = "tunable"))]
-const fn tt_min_empties() -> u8 {
-    TT_MIN_EMPTIES_DEFAULT
-}
+knob!(fn tt_min_empties() -> u8 = "TT_MIN" or TT_MIN_EMPTIES_DEFAULT);
 
-#[cfg(feature = "tunable")]
-fn etc_empties() -> u8 {
-    static V: std::sync::OnceLock<u8> = std::sync::OnceLock::new();
-    *V.get_or_init(|| {
-        std::env::var("ETC_MIN")
-            .ok()
-            .and_then(|v| v.parse().ok())
-            .unwrap_or(ETC_EMPTIES)
-    })
-}
-#[cfg(not(feature = "tunable"))]
-const fn etc_empties() -> u8 {
-    ETC_EMPTIES
-}
+knob!(fn etc_empties() -> u8 = "ETC_MIN" or ETC_EMPTIES);
 
 const MID_TT_EMPTIES: u8 = 10;
 const MID_TT_BITS: u32 = 19;
 const SHALLOW_TT_BITS: u32 = 13;
 
-#[inline(always)]
-#[cfg(feature = "tunable")]
-fn mid_tt_empties() -> u8 {
-    static V: std::sync::OnceLock<u8> = std::sync::OnceLock::new();
-    *V.get_or_init(|| {
-        std::env::var("TT_MID_EMPTIES")
-            .ok()
-            .and_then(|v| v.parse().ok())
-            .unwrap_or(MID_TT_EMPTIES)
-    })
-}
-#[cfg(not(feature = "tunable"))]
-fn mid_tt_empties() -> u8 {
-    MID_TT_EMPTIES
-}
+knob!(fn mid_tt_empties() -> u8 = "TT_MID_EMPTIES" or MID_TT_EMPTIES);
 
 fn private_tt_bits() -> (u32, u32) {
     static V: std::sync::OnceLock<(u32, u32)> = std::sync::OnceLock::new();
@@ -93,27 +40,9 @@ fn private_tt_bits() -> (u32, u32) {
         )
     })
 }
-pub static ORDER_MISMATCH: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
-pub static ORDER_MISMATCH_UNSEEDED: std::sync::atomic::AtomicU64 =
-    std::sync::atomic::AtomicU64::new(0);
-pub static ORDER_MISMATCH_ZERO: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
-
 const EVAL_ORDER_EMPTIES: u8 = 14;
 
-#[cfg(feature = "tunable")]
-fn eval_order_empties() -> u8 {
-    static V: std::sync::OnceLock<u8> = std::sync::OnceLock::new();
-    *V.get_or_init(|| {
-        std::env::var("EVAL_ORDER_MIN")
-            .ok()
-            .and_then(|v| v.parse().ok())
-            .unwrap_or(EVAL_ORDER_EMPTIES)
-    })
-}
-#[cfg(not(feature = "tunable"))]
-const fn eval_order_empties() -> u8 {
-    EVAL_ORDER_EMPTIES
-}
+knob!(fn eval_order_empties() -> u8 = "EVAL_ORDER_MIN" or EVAL_ORDER_EMPTIES);
 const DEEP_ORDER_EMPTIES: u8 = 17;
 #[inline]
 pub fn final_score(board: &Board) -> i32 {
@@ -200,34 +129,20 @@ const STABILITY_CUT_MARGIN: i32 = 8;
 
 const STAB_MIN_EMPTIES: u8 = 4;
 
-#[cfg(feature = "tunable")]
-fn stab_min_empties() -> u8 {
-    static V: std::sync::OnceLock<u8> = std::sync::OnceLock::new();
-    *V.get_or_init(|| {
-        std::env::var("EXACT_STAB_MIN")
-            .ok()
-            .and_then(|v| v.parse().ok())
-            .unwrap_or(STAB_MIN_EMPTIES)
-    })
-}
-#[cfg(not(feature = "tunable"))]
-fn stab_min_empties() -> u8 {
-    STAB_MIN_EMPTIES
-}
+knob!(fn stab_min_empties() -> u8 = "EXACT_STAB_MIN" or STAB_MIN_EMPTIES);
 
 #[inline]
-fn stability_cut(board: &Board, alpha: i32, beta: i32) -> Option<i32> {
+fn stability_cut(board: &Board, alpha: i32) -> Option<i32> {
     stability_cut_bb(
         board.player_bb(),
         board.opponent_bb(),
         board.empty_count(),
         alpha,
-        beta,
     )
 }
 
 #[inline(always)]
-fn stability_cut_bb(player: u64, opponent: u64, empties: u8, alpha: i32, beta: i32) -> Option<i32> {
+fn stability_cut_bb(player: u64, opponent: u64, empties: u8, alpha: i32) -> Option<i32> {
     if empties < stab_min_empties() {
         return None;
     }
@@ -243,7 +158,7 @@ fn stability_cut_bb(player: u64, opponent: u64, empties: u8, alpha: i32, beta: i
             }
         }
     }
-    stability_cut_high(player, opponent, empties, beta)
+    None
 }
 
 #[inline(never)]
@@ -253,76 +168,27 @@ fn stability_sweep_low(player: u64, opponent: u64, need: i32, alpha: i32) -> Opt
     (bound <= alpha).then_some(bound)
 }
 
-#[inline(always)]
-fn stability_cut_high(player: u64, opponent: u64, empties: u8, beta: i32) -> Option<i32> {
-    {
-        let _ = (player, opponent, empties, beta);
-        #[cfg(feature = "layer-profile")]
-        ab_stats::STAB_GATE_B.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-        None
-    }
-}
-
 const DEEP2_ORDER_EMPTIES: u8 = 20;
 const DEEP3_ORDER_EMPTIES: u8 = 29;
 const ETC_EMPTIES: u8 = 13;
 const MOBILITY_ORDER_WEIGHT: i32 = 12;
 const PARALLEL_MIN_EMPTIES: u8 = 16;
 
-#[cfg(feature = "tunable")]
-fn parallel_min_empties() -> u8 {
-    static V: std::sync::OnceLock<u8> = std::sync::OnceLock::new();
-    *V.get_or_init(|| {
-        std::env::var("PAR_MIN")
-            .ok()
-            .and_then(|v| v.parse().ok())
-            .unwrap_or(PARALLEL_MIN_EMPTIES)
-    })
-}
-#[cfg(not(feature = "tunable"))]
-fn parallel_min_empties() -> u8 {
-    PARALLEL_MIN_EMPTIES
-}
+knob!(fn parallel_min_empties() -> u8 = "PAR_MIN" or PARALLEL_MIN_EMPTIES);
 
-pub static SPLITS: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
-pub static HANDED: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
 pub static WARMUP_NS: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
 pub static EXACT_NS: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
 pub static WARMUP_NODES: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
 pub static EXACT_NODES: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
 pub static CLEAR_NS: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
-pub static REFUSED: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
 
 pub static ABORT_FIRED: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
 
-#[cfg(feature = "tunable")]
-fn solver_abort() -> bool {
-    static V: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
-    *V.get_or_init(|| std::env::var("SOLVER_ABORT").map_or(true, |v| v != "0"))
-}
-#[cfg(not(feature = "tunable"))]
-fn solver_abort() -> bool {
-    true
-}
+flag!(fn solver_abort() = "SOLVER_ABORT" or true);
 
-#[cfg(feature = "tunable")]
-fn chaos_every() -> u64 {
-    static V: std::sync::OnceLock<u64> = std::sync::OnceLock::new();
-    *V.get_or_init(|| {
-        std::env::var("SOLVER_CHAOS")
-            .ok()
-            .and_then(|v| v.parse().ok())
-            .unwrap_or(0)
-    })
-}
-#[cfg(not(feature = "tunable"))]
-fn chaos_every() -> u64 {
-    0
-}
+knob!(fn chaos_every() -> u64 = "SOLVER_CHAOS" or 0);
 
 pub static TASK_ABORTED: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
-pub static TASK_NS: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
-pub static WAIT_NS: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
 
 struct AbortFlag<'p> {
     flag: std::sync::atomic::AtomicBool,
@@ -464,7 +330,6 @@ fn run_one_sibling(
     ev: Option<&Linear>,
 ) {
     use std::sync::atomic::Ordering;
-    let t_live = std::time::Instant::now();
     let cur = shared_lower.load(Ordering::Relaxed);
     if group.aborted() || cur >= upper {
         slot.finish(ABORTED, 0, false);
@@ -483,7 +348,6 @@ fn run_one_sibling(
     let mut child = m.child(parent);
     if let Some(e) = ev.filter(|_| child.empty_count() >= eval_order_empties()) {
         w.order_ix = order_indexer(e).init(child.black, child.white);
-        w.order_seeded = true;
     }
     let ch = child_hash_of(&child);
     let mut val = -w.pvs(&mut child, ch, -cur - 1, -cur, false, true, ev);
@@ -516,7 +380,6 @@ fn run_one_sibling(
 
     let nodes = w.nodes;
     budget.give_scratch(w.into_scratch());
-    TASK_NS.fetch_add(t_live.elapsed().as_nanos() as u64, Ordering::Relaxed);
     slot.finish(val, nodes, val != ABORTED && val > cur);
 }
 
@@ -551,15 +414,7 @@ struct SplitMerge {
     aborted: bool,
 }
 
-#[cfg(feature = "tunable")]
-fn split_v2() -> bool {
-    static V: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
-    *V.get_or_init(|| std::env::var("SPLIT_V2").map_or(true, |v| v != "0"))
-}
-#[cfg(not(feature = "tunable"))]
-fn split_v2() -> bool {
-    true
-}
+flag!(fn split_v2() = "SPLIT_V2" or true);
 
 fn split_merge(sp: &SplitPoint, val: i32, cur: i32, pos: Position) {
     let mut m = sp.merge.lock().unwrap();
@@ -579,7 +434,6 @@ fn split_merge(sp: &SplitPoint, val: i32, cur: i32, pos: Position) {
 
 unsafe fn help_split(sp: &SplitPoint) -> bool {
     use std::sync::atomic::Ordering;
-    let t_live = std::time::Instant::now();
     let (tt, group, budget) = unsafe {
         (
             &*sp.tt,
@@ -608,7 +462,6 @@ unsafe fn help_split(sp: &SplitPoint) -> bool {
         if idx >= sp.n_moves {
             break;
         }
-        HANDED.fetch_add(1, Ordering::Relaxed);
         let m = moves[idx];
         let sc = scratch.take().unwrap_or_else(|| budget.take_scratch(tag));
         let mut w = Worker::with_tables(tt, budget, group, sc);
@@ -618,7 +471,6 @@ unsafe fn help_split(sp: &SplitPoint) -> bool {
         let mut child = m.child(&sp.board);
         if let Some(e) = ev.filter(|_| child.empty_count() >= eval_order_empties()) {
             w.order_ix = order_indexer(e).init(child.black, child.white);
-            w.order_seeded = true;
         }
         let ch = child_hash_of(&child);
         let mut val = -w.pvs(&mut child, ch, -cur - 1, -cur, false, true, ev);
@@ -655,7 +507,6 @@ unsafe fn help_split(sp: &SplitPoint) -> bool {
     if let Some(sc) = scratch {
         budget.give_scratch(sc);
         sp.nodes.fetch_add(nodes, Ordering::Relaxed);
-        TASK_NS.fetch_add(t_live.elapsed().as_nanos() as u64, Ordering::Relaxed);
         return true;
     }
     false
@@ -703,30 +554,9 @@ const SPLIT_SLOTS: usize = 32;
 
 const SPEC_SPLIT_MAX_EMPTIES: u8 = 24;
 
-#[cfg(feature = "tunable")]
-fn spec_split_max() -> u8 {
-    static V: std::sync::OnceLock<u8> = std::sync::OnceLock::new();
-    *V.get_or_init(|| {
-        std::env::var("SPEC_MAX")
-            .ok()
-            .and_then(|v| v.parse().ok())
-            .unwrap_or(SPEC_SPLIT_MAX_EMPTIES)
-    })
-}
-#[cfg(not(feature = "tunable"))]
-fn spec_split_max() -> u8 {
-    SPEC_SPLIT_MAX_EMPTIES
-}
+knob!(fn spec_split_max() -> u8 = "SPEC_MAX" or SPEC_SPLIT_MAX_EMPTIES);
 
-#[cfg(feature = "tunable")]
-fn join_deepest() -> bool {
-    static V: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
-    *V.get_or_init(|| std::env::var("JOIN_DEEP").map_or(true, |v| v != "0"))
-}
-#[cfg(not(feature = "tunable"))]
-fn join_deepest() -> bool {
-    true
-}
+flag!(fn join_deepest() = "JOIN_DEEP" or true);
 
 #[cfg(feature = "tunable")]
 fn join_deepest_big() -> bool {
@@ -738,30 +568,9 @@ fn join_deepest_big() -> bool {
     true
 }
 
-#[cfg(feature = "tunable")]
-fn max_join() -> usize {
-    static V: std::sync::OnceLock<usize> = std::sync::OnceLock::new();
-    *V.get_or_init(|| {
-        std::env::var("MAX_JOIN")
-            .ok()
-            .and_then(|v| v.parse().ok())
-            .unwrap_or(0)
-    })
-}
-#[cfg(not(feature = "tunable"))]
-fn max_join() -> usize {
-    0
-}
+knob!(fn max_join() -> usize = "MAX_JOIN" or 0);
 
-#[cfg(feature = "tunable")]
-fn spec_split() -> bool {
-    static V: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
-    *V.get_or_init(|| std::env::var("SPEC_SPLIT").map_or(true, |v| v != "0"))
-}
-#[cfg(not(feature = "tunable"))]
-fn spec_split() -> bool {
-    true
-}
+flag!(fn spec_split() = "SPEC_SPLIT" or true);
 
 struct EndPool {
     q: std::sync::Mutex<std::collections::VecDeque<Box<dyn FnOnce() + Send + 'static>>>,
@@ -964,26 +773,10 @@ const SORT_ALPHA_DELTA: i32 = 12;
 const EDGE_STABILITY_ORDER_WEIGHT: i32 = 1;
 const ASPIRATION_WIDTH: i32 = 6;
 
-fn dbg_asp() -> bool {
-    static ON: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
-    *ON.get_or_init(|| std::env::var("DBG_ASP").is_ok_and(|v| v != "0"))
-}
+flag!(fn dbg_asp() = "DBG_ASP" or false);
 const WARM_ASPIRATION_WIDTH: i32 = 6;
 
-#[cfg(feature = "tunable")]
-fn warm_aspiration_width() -> i32 {
-    static V: std::sync::OnceLock<i32> = std::sync::OnceLock::new();
-    *V.get_or_init(|| {
-        std::env::var("WARM_ASP_WIDTH")
-            .ok()
-            .and_then(|v| v.parse().ok())
-            .unwrap_or(WARM_ASPIRATION_WIDTH)
-    })
-}
-#[cfg(not(feature = "tunable"))]
-fn warm_aspiration_width() -> i32 {
-    WARM_ASPIRATION_WIDTH
-}
+knob!(fn warm_aspiration_width() -> i32 = "WARM_ASP_WIDTH" or WARM_ASPIRATION_WIDTH);
 
 const ESTIMATE_DEPTH: u8 = 6;
 const SELECTIVE_MIN_EMPTIES: u8 = 10;
@@ -1000,35 +793,9 @@ fn selective_ladder() -> Vec<f32> {
     .clone()
 }
 
-#[cfg(feature = "tunable")]
-fn selective_pass_min_empties() -> u8 {
-    static V: std::sync::OnceLock<u8> = std::sync::OnceLock::new();
-    *V.get_or_init(|| {
-        std::env::var("SEL_PASS_MIN")
-            .ok()
-            .and_then(|v| v.parse().ok())
-            .unwrap_or(SELECTIVE_PASS_MIN_EMPTIES)
-    })
-}
-#[cfg(not(feature = "tunable"))]
-fn selective_pass_min_empties() -> u8 {
-    SELECTIVE_PASS_MIN_EMPTIES
-}
+knob!(fn selective_pass_min_empties() -> u8 = "SEL_PASS_MIN" or SELECTIVE_PASS_MIN_EMPTIES);
 
-#[cfg(feature = "tunable")]
-fn selective_min_empties() -> u8 {
-    static V: std::sync::OnceLock<u8> = std::sync::OnceLock::new();
-    *V.get_or_init(|| {
-        std::env::var("SEL_MIN_EMPTIES")
-            .ok()
-            .and_then(|v| v.parse().ok())
-            .unwrap_or(SELECTIVE_MIN_EMPTIES)
-    })
-}
-#[cfg(not(feature = "tunable"))]
-fn selective_min_empties() -> u8 {
-    SELECTIVE_MIN_EMPTIES
-}
+knob!(fn selective_min_empties() -> u8 = "SEL_MIN_EMPTIES" or SELECTIVE_MIN_EMPTIES);
 
 const SELECTIVE_PROBE_DEPTH: u8 = 2;
 
@@ -1068,25 +835,28 @@ fn legacy_sigma() -> bool {
 }
 
 fn selective_probe_depth(empties: u8) -> u8 {
-    static V: std::sync::OnceLock<Option<u8>> = std::sync::OnceLock::new();
-    if let Some(d) = *V.get_or_init(|| {
-        std::env::var("SEL_PROBE_DEPTH")
-            .ok()
-            .and_then(|v| v.parse().ok())
-    }) {
-        return d;
-    }
-    static S: std::sync::OnceLock<Option<(u8, u8)>> = std::sync::OnceLock::new();
-    if let Some((at, d)) = *S.get_or_init(|| {
-        std::env::var("SEL_PROBE_STEP").ok().and_then(|v| {
-            let (a, b) = v.split_once(':')?;
-            Some((a.parse().ok()?, b.parse().ok()?))
-        })
-    }) {
-        if empties >= at {
+    #[cfg(feature = "tunable")]
+    {
+        static V: std::sync::OnceLock<Option<u8>> = std::sync::OnceLock::new();
+        if let Some(d) = *V.get_or_init(|| {
+            std::env::var("SEL_PROBE_DEPTH")
+                .ok()
+                .and_then(|v| v.parse().ok())
+        }) {
             return d;
         }
-        return SELECTIVE_PROBE_DEPTH;
+        static S: std::sync::OnceLock<Option<(u8, u8)>> = std::sync::OnceLock::new();
+        if let Some((at, d)) = *S.get_or_init(|| {
+            std::env::var("SEL_PROBE_STEP").ok().and_then(|v| {
+                let (a, b) = v.split_once(':')?;
+                Some((a.parse().ok()?, b.parse().ok()?))
+            })
+        }) {
+            if empties >= at {
+                return d;
+            }
+            return SELECTIVE_PROBE_DEPTH;
+        }
     }
     let step = PROBE_STEP.load(std::sync::atomic::Ordering::Relaxed);
     if step != 0 {
@@ -1122,6 +892,11 @@ fn selective_probe_scaled() -> bool {
     false
 }
 
+#[cfg(not(feature = "tunable"))]
+const fn selective_gate_offset() -> Option<f32> {
+    Some(4.0)
+}
+#[cfg(feature = "tunable")]
 fn selective_gate_offset() -> Option<f32> {
     static V: std::sync::OnceLock<Option<f32>> = std::sync::OnceLock::new();
     *V.get_or_init(|| match std::env::var("SEL_GATE").ok().as_deref() {
@@ -1156,6 +931,11 @@ const fn build_sort_ladder(steps: [u8; 3]) -> [u8; 64] {
     t
 }
 
+#[cfg(not(feature = "tunable"))]
+const fn sort_depth_ladder() -> &'static [u8; 64] {
+    &SORT_DEPTH_LADDER
+}
+#[cfg(feature = "tunable")]
 fn sort_depth_ladder() -> &'static [u8; 64] {
     static V: std::sync::OnceLock<[u8; 64]> = std::sync::OnceLock::new();
     V.get_or_init(|| {
@@ -1626,23 +1406,8 @@ pub struct EndSolverResult {
     pub nodes: u64,
 }
 
-pub static ORDER_NNUE: std::sync::OnceLock<std::sync::Arc<crate::nnue::Nnue>> =
-    std::sync::OnceLock::new();
-
 fn order_indexer(e: &crate::linear::Linear) -> &crate::pattern_index::PatternIndexer {
-    match order_nnue() {
-        Some(nn) => nn.indexer(),
-        None => e.indexer(),
-    }
-}
-
-pub fn order_nnue() -> Option<&'static crate::nnue::Nnue> {
-    static ON: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
-    if *ON.get_or_init(|| std::env::var("KUROOBI_NNUE_ORDER").is_ok()) {
-        ORDER_NNUE.get().map(|nn| &**nn)
-    } else {
-        None
-    }
+    e.indexer()
 }
 
 pub type NnueProbe = (
@@ -1650,25 +1415,9 @@ pub type NnueProbe = (
     std::sync::Arc<crate::midgame::SharedTt>,
 );
 
-#[cfg(feature = "tunable")]
-fn sel_nnue_probe() -> bool {
-    static V: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
-    *V.get_or_init(|| std::env::var("SEL_NNUE_PROBE").map_or(true, |v| v != "0"))
-}
-#[cfg(not(feature = "tunable"))]
-fn sel_nnue_probe() -> bool {
-    true
-}
+flag!(fn sel_nnue_probe() = "SEL_NNUE_PROBE" or true);
 
-#[cfg(feature = "tunable")]
-fn sel_nnue_warm() -> bool {
-    static V: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
-    *V.get_or_init(|| std::env::var("SEL_NNUE_WARM").map_or(true, |v| v != "0"))
-}
-#[cfg(not(feature = "tunable"))]
-fn sel_nnue_warm() -> bool {
-    true
-}
+flag!(fn sel_nnue_warm() = "SEL_NNUE_WARM" or true);
 
 #[cfg(feature = "tunable")]
 fn exact_keep_floor() -> u8 {
@@ -1695,15 +1444,7 @@ fn exact_reopen_clamp() -> Option<i32> {
     })
 }
 
-#[cfg(feature = "tunable")]
-fn l4_cache() -> bool {
-    static V: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
-    *V.get_or_init(|| std::env::var("EXACT_L4_CACHE").map_or(true, |v| v != "0"))
-}
-#[cfg(not(feature = "tunable"))]
-fn l4_cache() -> bool {
-    true
-}
+flag!(fn l4_cache() = "EXACT_L4_CACHE" or true);
 
 #[derive(Clone, Copy)]
 #[repr(C, packed)]
@@ -1733,7 +1474,6 @@ pub mod ab_stats {
     pub static STAB_FULL: AtomicU64 = AtomicU64::new(0);
 
     pub static STAB_GATE_A: AtomicU64 = AtomicU64::new(0);
-    pub static STAB_GATE_B: AtomicU64 = AtomicU64::new(0);
     pub static O_NODES: AtomicU64 = AtomicU64::new(0);
 
     pub static O_SCORED: AtomicU64 = AtomicU64::new(0);
@@ -1771,125 +1511,25 @@ fn zeroed_vec<T: Copy>(len: usize) -> Vec<T> {
     }
 }
 
-#[cfg(feature = "tunable")]
-fn l4_bits() -> u32 {
-    static V: std::sync::OnceLock<u32> = std::sync::OnceLock::new();
-    *V.get_or_init(|| {
-        std::env::var("EXACT_L4_BITS")
-            .ok()
-            .and_then(|v| v.parse().ok())
-            .unwrap_or(14)
-    })
-}
-#[cfg(not(feature = "tunable"))]
-fn l4_bits() -> u32 {
-    14
-}
+knob!(fn l4_bits() -> u32 = "EXACT_L4_BITS" or 14);
 
-#[cfg(feature = "tunable")]
-fn no_shallow56() -> bool {
-    static V: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
-    *V.get_or_init(|| std::env::var("NO_SHALLOW56").is_ok_and(|v| v != "0"))
-}
-#[cfg(not(feature = "tunable"))]
-fn no_shallow56() -> bool {
-    false
-}
+flag!(fn no_shallow56() = "NO_SHALLOW56" or false);
 
-#[cfg(feature = "tunable")]
-fn new_shallow() -> bool {
-    static V: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
-    *V.get_or_init(|| std::env::var("NEW_SHALLOW").map_or(true, |v| v != "0"))
-}
-#[cfg(not(feature = "tunable"))]
-fn new_shallow() -> bool {
-    true
-}
+flag!(fn new_shallow() = "NEW_SHALLOW" or true);
 
-#[cfg(feature = "tunable")]
-fn new_mid() -> bool {
-    static V: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
-    *V.get_or_init(|| std::env::var("NEW_MID").is_ok_and(|v| v != "0"))
-}
-#[cfg(not(feature = "tunable"))]
-fn new_mid() -> bool {
-    false
-}
+flag!(fn new_mid() = "NEW_MID" or false);
 
-#[cfg(feature = "tunable")]
-fn new_mid_bits() -> u32 {
-    static V: std::sync::OnceLock<u32> = std::sync::OnceLock::new();
-    *V.get_or_init(|| {
-        std::env::var("NEW_MID_BITS")
-            .ok()
-            .and_then(|v| v.parse().ok())
-            .unwrap_or(18)
-    })
-}
-#[cfg(not(feature = "tunable"))]
-fn new_mid_bits() -> u32 {
-    18
-}
+knob!(fn new_mid_bits() -> u32 = "NEW_MID_BITS" or 18);
 
-#[cfg(feature = "tunable")]
-fn new_78() -> bool {
-    static V: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
-    *V.get_or_init(|| std::env::var("NEW_78").map_or(true, |v| v != "0"))
-}
-#[cfg(not(feature = "tunable"))]
-fn new_78() -> bool {
-    true
-}
+flag!(fn new_78() = "NEW_78" or true);
 
-#[cfg(feature = "tunable")]
-fn l78_bits() -> u32 {
-    static V: std::sync::OnceLock<u32> = std::sync::OnceLock::new();
-    *V.get_or_init(|| {
-        std::env::var("L78_BITS")
-            .ok()
-            .and_then(|v| v.parse().ok())
-            .unwrap_or(15)
-    })
-}
-#[cfg(not(feature = "tunable"))]
-fn l78_bits() -> u32 {
-    15
-}
+knob!(fn l78_bits() -> u32 = "L78_BITS" or 15);
 
-#[cfg(feature = "tunable")]
-fn new_shallow_bits() -> u32 {
-    static V: std::sync::OnceLock<u32> = std::sync::OnceLock::new();
-    *V.get_or_init(|| {
-        std::env::var("NEW_SHALLOW_BITS")
-            .ok()
-            .and_then(|v| v.parse().ok())
-            .unwrap_or(14)
-    })
-}
-#[cfg(not(feature = "tunable"))]
-fn new_shallow_bits() -> u32 {
-    14
-}
+knob!(fn new_shallow_bits() -> u32 = "NEW_SHALLOW_BITS" or 14);
 
-#[cfg(feature = "tunable")]
-fn l56_cache() -> bool {
-    static V: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
-    *V.get_or_init(|| std::env::var("EXACT_L56_CACHE").is_ok_and(|v| v != "0"))
-}
-#[cfg(not(feature = "tunable"))]
-fn l56_cache() -> bool {
-    false
-}
+flag!(fn l56_cache() = "EXACT_L56_CACHE" or false);
 
-#[cfg(feature = "tunable")]
-fn exact_proof() -> bool {
-    static V: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
-    *V.get_or_init(|| std::env::var("EXACT_PROOF").is_ok_and(|v| v != "0"))
-}
-#[cfg(not(feature = "tunable"))]
-fn exact_proof() -> bool {
-    false
-}
+flag!(fn exact_proof() = "EXACT_PROOF" or false);
 
 #[cfg(feature = "tunable")]
 fn structural_proof_floor() -> u8 {
@@ -1918,6 +1558,16 @@ pub struct Solver {
     pub warm_rung: Option<(i32, Option<Position>)>,
 }
 
+macro_rules! gate {
+    ($field:expr, $knob:ident) => {
+        if cfg!(feature = "tunable") {
+            $field
+        } else {
+            $knob()
+        }
+    };
+}
+
 struct Worker<'a> {
     nodes: u64,
     l4: Vec<L4Entry>,
@@ -1930,7 +1580,6 @@ struct Worker<'a> {
     g_new_mid: bool,
     mid_empties: u8,
     order_ix: crate::pattern_index::PatternIndices,
-    order_seeded: bool,
     tt: &'a HashTable,
     abort: &'a AbortFlag<'a>,
     budget: &'a ThreadBudget,
@@ -1979,7 +1628,6 @@ impl<'a> Worker<'a> {
             mid_table: sc.mid,
             mid_empties: mid_tt_empties(),
             order_ix: crate::pattern_index::PatternIndices::ZERO,
-            order_seeded: false,
             nnue: None,
             taint: 0,
             l56: sc.l56,
@@ -2813,7 +2461,6 @@ impl Worker<'_> {
 
         if let Some(e) = ev.filter(|_| board.empty_count() >= eval_order_empties()) {
             self.order_ix = order_indexer(e).init(board.black, board.white);
-            self.order_seeded = true;
         }
         let root_mover = board.player();
 
@@ -2913,7 +2560,6 @@ impl Worker<'_> {
         use std::sync::atomic::{AtomicI32, AtomicU64, AtomicUsize, Ordering};
 
         let pool = &self.budget.pool;
-        SPLITS.fetch_add(1, Ordering::Relaxed);
         let group = AbortFlag::child(self.abort);
         let sp = SplitPoint {
             board: *parent,
@@ -2989,11 +2635,9 @@ impl Worker<'_> {
         if let Some(i) = slot {
             pool.unregister_split(i, &sp);
         }
-        let t_wait = std::time::Instant::now();
         while sp.active.load(Ordering::Acquire) != 0 {
             std::thread::park();
         }
-        WAIT_NS.fetch_add(t_wait.elapsed().as_nanos() as u64, Ordering::Relaxed);
 
         self.nodes += sp.nodes.load(Ordering::Relaxed);
         let mg = *sp.merge.lock().unwrap();
@@ -3023,7 +2667,6 @@ impl Worker<'_> {
         if split_v2() {
             return self.split_siblings_v2(parent, siblings, lower, upper, ev);
         }
-        SPLITS.fetch_add(1, Ordering::Relaxed);
 
         let shared_lower = AtomicI32::new(lower);
         let tt = self.tt;
@@ -3081,10 +2724,8 @@ impl Worker<'_> {
                 };
                 if pushed {
                     handed.push(i);
-                    HANDED.fetch_add(1, Ordering::Relaxed);
                     continue;
                 }
-                REFUSED.fetch_add(1, Ordering::Relaxed);
             }
             let n0 = self.nodes;
             let mut child = m.child(parent);
@@ -3124,11 +2765,9 @@ impl Worker<'_> {
             }
         }
 
-        let t_wait = std::time::Instant::now();
         for &i in &handed {
             pool.help_until(&slots[i].done);
         }
-        WAIT_NS.fetch_add(t_wait.elapsed().as_nanos() as u64, Ordering::Relaxed);
         let mut any_aborted = false;
         for &i in &handed {
             let (val, nodes) = slots[i].result();
@@ -3248,7 +2887,7 @@ impl Worker<'_> {
 
         {
             let _p = layer_profile::Scope::new(layer_profile::STAB, board.empty_count());
-            if let Some(bound) = stability_cut(board, lower, upper) {
+            if let Some(bound) = stability_cut(board, lower) {
                 return bound;
             }
         }
@@ -3660,13 +3299,13 @@ impl Worker<'_> {
 
         {
             let _p = layer_profile::Scope::new(layer_profile::STAB, n_empties);
-            if let Some(bound) = stability_cut_bb(player, opponent, n_empties, alpha, beta) {
+            if let Some(bound) = stability_cut_bb(player, opponent, n_empties, alpha) {
                 return bound;
             }
         }
 
         abst!(O_NODES);
-        let use_l9 = use_tt && self.g_new_mid && n_empties < self.mid_empties;
+        let use_l9 = use_tt && gate!(self.g_new_mid, new_mid) && n_empties < self.mid_empties;
         let use_l78 = !use_tt && !self.l78.is_empty();
         let mut l9_best: Option<Position> = None;
         let mut l78_best: Option<Position> = None;
@@ -3708,7 +3347,7 @@ impl Worker<'_> {
 
         if narrowed {
             let _p = layer_profile::Scope::new(layer_profile::STAB, n_empties);
-            if let Some(bound) = stability_cut_bb(player, opponent, n_empties, alpha, beta) {
+            if let Some(bound) = stability_cut_bb(player, opponent, n_empties, alpha) {
                 return bound;
             }
         }
@@ -3877,7 +3516,7 @@ impl Worker<'_> {
     ) -> i32 {
         let cp = opponent_bb ^ flips;
         let co = player_bb | flips | pos_bit;
-        if !self.g_l4_cache {
+        if !gate!(self.g_l4_cache, l4_cache) {
             return -self.search4(cp, co, empties & !pos_bit, alpha, beta, parity);
         }
         let child_hash = zobrist::board_hash(cp, co);
@@ -3921,12 +3560,12 @@ impl Worker<'_> {
         upper: i32,
         best: i32,
     ) {
-        if self.g_l56_cache {
+        if gate!(self.g_l56_cache, l56_cache) {
             self.l4_store(hash, player, opponent, lower, upper, best);
         }
-        if self.g_new_shallow {
+        if gate!(self.g_new_shallow, new_shallow) {
             self.l56_store(hash, player, opponent, lower, upper, best);
-        } else if !self.g_no_shallow56 {
+        } else if !gate!(self.g_no_shallow56, no_shallow56) {
             self.shallow_table.update(
                 &board_of(player, opponent, crate::color::Color::Black),
                 hash,
@@ -3957,7 +3596,7 @@ impl Worker<'_> {
             }
             {
                 let _p = layer_profile::Scope::new(layer_profile::STAB, 4);
-                if let Some(bound) = stability_cut_bb(player, opponent, 4, alpha, beta) {
+                if let Some(bound) = stability_cut_bb(player, opponent, 4, alpha) {
                     self.nodes += 1;
                     return bound;
                 }
@@ -3974,26 +3613,26 @@ impl Worker<'_> {
 
         {
             let _p = layer_profile::Scope::new(layer_profile::STAB, n_empties);
-            if let Some(bound) = stability_cut_bb(player, opponent, n_empties, alpha, beta) {
+            if let Some(bound) = stability_cut_bb(player, opponent, n_empties, alpha) {
                 return bound;
             }
         }
 
         let mut lower = alpha;
         let mut upper = beta;
-        if self.g_l56_cache {
+        if gate!(self.g_l56_cache, l56_cache) {
             if let Some(v) = self.l4_probe(hash, player, opponent, lower, upper) {
                 return v;
             }
         }
         abst!(NODES);
-        if self.g_new_shallow {
+        if gate!(self.g_new_shallow, new_shallow) {
             abst!(L56_PROBE);
             if let Some(v) = self.l56_probe(hash, player, opponent, lower, upper) {
                 abst!(L56_HIT);
                 return v;
             }
-        } else if !self.g_no_shallow56 {
+        } else if !gate!(self.g_no_shallow56, no_shallow56) {
             if let Some(v) = self.shallow_table.get(
                 &board_of(player, opponent, crate::color::Color::Black),
                 hash,
@@ -4152,7 +3791,7 @@ impl Worker<'_> {
         {
             let _p = layer_profile::Scope::new(layer_profile::STAB, 4);
             abst!(STAB4);
-            if let Some(bound) = stability_cut_bb(player, opponent, 4, alpha, beta) {
+            if let Some(bound) = stability_cut_bb(player, opponent, 4, alpha) {
                 abst!(STAB4_CUT);
                 *trivial = true;
                 self.nodes += 1;
@@ -4917,20 +4556,6 @@ impl Worker<'_> {
         if !eval_order || ev.is_none() {
             return self.score_moves_static(board, moves, tt_best, parity);
         }
-        if std::env::var_os("KUROOBI_ORDER_CHECK").is_some() {
-            if let Some(e) = ev {
-                let want = order_indexer(e).init(board.black, board.white);
-                if want != self.order_ix {
-                    ORDER_MISMATCH.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-                    if !self.order_seeded {
-                        ORDER_MISMATCH_UNSEEDED.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-                    }
-                    if self.order_ix == crate::pattern_index::PatternIndices::ZERO {
-                        ORDER_MISMATCH_ZERO.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-                    }
-                }
-            }
-        }
         let mut order_ix = if eval_order {
             ev.map(|e| (order_indexer(e), self.order_ix))
         } else {
@@ -4969,8 +4594,6 @@ impl Worker<'_> {
                         f32::NEG_INFINITY,
                         sort_hi,
                     )
-                } else if let Some(nn) = order_nnue() {
-                    nn.eval_from_indices(indices, &child)
                 } else {
                     e.eval_order_bb(cp, co, mover.opponent(), indices)
                 };
@@ -5121,9 +4744,6 @@ fn shallow_search(
     let _prof = layer_profile::Scope::new(layer_profile::LOOKAHEAD, board.empty_count());
     node_accounting::lookahead();
     if depth == 0 {
-        if let Some(nn) = order_nnue() {
-            return nn.eval_from_indices(indices, board);
-        }
         return ev.eval_order_bb(
             board.player_bb(),
             board.opponent_bb(),
@@ -5183,15 +4803,7 @@ fn weighted_mobility(cp: u64, co: u64) -> i32 {
     (m.count_ones() + (m & CORNERS).count_ones()) as i32
 }
 
-#[cfg(feature = "tunable")]
-fn order_pot() -> bool {
-    static V: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
-    *V.get_or_init(|| std::env::var("ORDER_POT").is_ok_and(|v| v != "0"))
-}
-#[cfg(not(feature = "tunable"))]
-fn order_pot() -> bool {
-    false
-}
+flag!(fn order_pot() = "ORDER_POT" or false);
 
 fn move_ordering_value(pos: Position, cp: u64, co: u64, parity: u8, pot: bool) -> i32 {
     const W_MOBILITY: i32 = 1 << 15;
@@ -5276,7 +4888,7 @@ pub mod layer_profile {
                 if phase == SEARCH {
                     NODES[(empties as usize) & 63].fetch_add(1, Relaxed);
                 }
-                return Scope(prev);
+                Scope(prev)
             }
             #[cfg(not(feature = "layer-profile"))]
             {

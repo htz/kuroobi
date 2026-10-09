@@ -13,15 +13,15 @@ const INTERNAL_PREFIX = [
   'hash does not match',
 ];
 
-export type ToastTone = 'bad' | 'gold';
+type ToastTone = 'bad' | 'gold';
 
-export interface Toast { id: number; text: string; tone: ToastTone }
+interface Toast { id: number; text: string; tone: ToastTone }
 
 const TOAST_MS = 5000;
 
-export type AppMode = 'vs' | 'study';
+type AppMode = 'vs' | 'study';
 export type EngineSide = 'black' | 'white' | 'both' | 'off';
-export type MoveSource = 'book' | 'search';
+type MoveSource = 'book' | 'search';
 
 export interface MoveInfo {
   source: MoveSource;
@@ -56,12 +56,9 @@ export function clampLevels(v: Levels): Levels {
   return { depth, solve: Math.max(depth, Math.min(SOLVE_MAX, v.solve)), band: v.band };
 }
 
+export type Hints = Record<number, { value: number; exact: boolean; book: boolean; depth: number }>;
 
-export interface Hints {
-  [sq: number]: { value: number; exact: boolean; book: boolean; depth: number };
-}
-
-export function useGame(clockSecs = 0) {
+export function useGame(clockSecs: number) {
   const [view, setView] = useState<GameView | null>(null);
   const [mode, setMode] = useState<AppMode>('vs');
   const [side, setSide] = useState<EngineSide>('white');
@@ -77,13 +74,11 @@ export function useGame(clockSecs = 0) {
   const [stat, setStat] = useState<SearchStat | null>(null);
   const [playing, setPlaying] = useState(false);
   const [thinking, setThinking] = useState(false);
-  const [thinkSecs, setThinkSecs] = useState(0);          // elapsed while thinking
+  const [thinkSecs, setThinkSecs] = useState(0);
   const [thinkTotal, setThinkTotal] = useState({ black: 0, white: 0 });
   const [moveSource, setMoveSource] = useState<Record<number, MoveInfo>>({});
   const [toasts, setToasts] = useState<Toast[]>([]);
   const toastId = useRef(0);
-
-  const hintSeq = useRef(0);
 
   const levels: Levels = level === 'custom' ? custom : LEVELS[level];
 
@@ -124,16 +119,16 @@ export function useGame(clockSecs = 0) {
     })();
   }, [say]);
 
-  const refreshHints = useCallback(async (v: GameView | null = view) => {
+  const refreshHints = useCallback(async () => {
     if (thinking) return;
     await api.stopSearch().catch(() => {});
+    const v = view;
     if (!v || v.over) return;
-    if (playing && engineSides().includes(v.player)) return;   // the engine's turn
+    if (playing && engineSides().includes(v.player)) return;
     if (!autoHint) {
       if (playing) api.ponderLive().catch(() => {});
       return;
     }
-    hintSeq.current++;
     try {
       await pushLevels();
       await api.analyzeLive();
@@ -186,7 +181,6 @@ export function useGame(clockSecs = 0) {
   }, [clockSecs, playing, say]);
 
   const newGame = useCallback(async () => {
-    hintSeq.current++;
     api.stopSearch().catch(() => {});
     void pushLevels();
     setMoveSource({});
@@ -194,18 +188,15 @@ export function useGame(clockSecs = 0) {
     setPlaying(false);
     apply(await api.newGame());
     setClock(await api.setClock(clockSecs).catch(() => null));
-    say('');
-  }, [apply, pushLevels, say, clockSecs]);
+  }, [apply, pushLevels, clockSecs]);
 
   const undo = useCallback(async () => {
     if (thinking) return;
-    hintSeq.current++;
     try { apply(await api.undo()); } catch (e) { say(tErr(e)); }
   }, [thinking, apply, say]);
 
   const jumpTo = useCallback(async (n: number) => {
     if (thinking) return;
-    hintSeq.current++;
     api.stopSearch().catch(() => {});
     if (playing) setPlaying(false);   // scrubbing the record ends the live game
     try { apply(await api.goto(n)); } catch (e) { say(tErr(e)); }
@@ -218,9 +209,9 @@ export function useGame(clockSecs = 0) {
 
   return {
     view, setView: apply,
-    mode, setMode,
+    setMode,
     side, setSide,
-    level, setLevel, custom, setCustom, levels,
+    level, setLevel, setCustom, levels,
     useBook, setUseBook, hasBook, setHasBook,
     learnOn, setLearnOn, maybeLearn,
     autoHint, setAutoHint,
@@ -235,7 +226,6 @@ export function useGame(clockSecs = 0) {
     engineSides, pushLevels, refreshHints,
     play, newGame, undo, jumpTo, stop,
     clockSecs, clock,
-    hintSeq,
   };
 }
 

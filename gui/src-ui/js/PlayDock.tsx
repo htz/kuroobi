@@ -1,14 +1,14 @@
 import { Button, Progress, Segmented, Toggle } from './components/primitives';
 import { Busy, Dock, KeyValue, Note, Section } from './components/layout';
 import { KifuTable } from './components/data';
-import { Strength } from './components/strength';
+import { Strength, presetOf } from './components/strength';
 import { api } from './api';
 import type { ActivityView } from './api';
 import type { Prefs } from './prefs';
 import type { BookBrowse } from './BookScreen';
 import type { NavId } from './components/ggs';
 import type { Move } from './components/data';
-import { LEVELS } from './state';
+import type { Game } from './state';
 import { t, tErr } from './i18n';
 
 const TABS = ['record', 'strength', 'learn'] as const;
@@ -26,7 +26,7 @@ export function PlayDock({
   g, book, cpu, prefs, tab, onTab, open, onNav, onBookTab,
   onPaste, onLoadFile, study, moves, ggfNames,
 }: {
-  g: ReturnType<typeof import('./state').useGame>;
+  g: Game;
   book: BookBrowse;
   cpu: ActivityView | null;
   prefs: Prefs;
@@ -42,10 +42,9 @@ export function PlayDock({
   ggfNames: () => [string, string];
 }) {
   const active = tabOf(tab);
-  const labels = TABS.map(tabLabel);
   return (
-    <Dock tabs={labels} active={tabLabel(active)}
-          onTab={(label) => onTab(TABS[labels.indexOf(label)] ?? 'record')}
+    <Dock tabs={TABS.map((id) => ({ id, label: tabLabel(id) }))} active={active}
+          onTab={onTab}
           open={open} scroll={active !== 'record'}>
       {active === 'record' && (
         <>
@@ -69,8 +68,8 @@ export function PlayDock({
       {active === 'strength' && (
         <Section title={study ? t('dock.strength.analysis_title') : t('dock.tab.strength')}>
           <Strength value={g.levels} onChange={(v) => {
-            const i = LEVELS.findIndex((l) => l.depth === v.depth && l.solve === v.solve && l.band === v.band);
-            if (i >= 0) { g.setLevel(i); return; }
+            const i = presetOf(v);
+            if (i !== 'custom') { g.setLevel(i); return; }
             g.setCustom(v);
             g.setLevel('custom');
           }} />

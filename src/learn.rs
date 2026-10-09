@@ -65,7 +65,7 @@ pub struct BackupJob {
     evaluating: bool,
     new_depth: u8,
     out: BackupOutcome,
-    done: bool,
+    ply: usize,
 }
 
 impl BackupJob {
@@ -82,6 +82,7 @@ impl BackupJob {
         };
         Ok(BackupJob {
             idx: line.len(),
+            ply: line.iter().filter(|(_, m)| m.is_some()).count(),
             line,
             v_next,
             terminal,
@@ -92,7 +93,6 @@ impl BackupJob {
             evaluating: false,
             new_depth,
             out: BackupOutcome::default(),
-            done: false,
         })
     }
 
@@ -102,15 +102,11 @@ impl BackupJob {
 
     pub fn next(&mut self, learned: &mut Book, base: &mut Book) -> JobStep {
         loop {
-            if self.done {
-                return JobStep::Done(std::mem::take(&mut self.out));
-            }
             if self.awaiting_terminal {
                 return JobStep::Search(self.terminal);
             }
             if self.idx == 0 {
-                self.done = true;
-                continue;
+                return JobStep::Done(std::mem::take(&mut self.out));
             }
             let (board, mv) = self.line[self.idx - 1];
             let Some(mv) = mv else {
@@ -162,11 +158,7 @@ impl BackupJob {
             e.update_move(mapped, after);
             self.out.updated += 1;
             self.out.changes.push(BackupChange {
-                ply: self.line[..self.idx - 1]
-                    .iter()
-                    .filter(|(_, m)| m.is_some())
-                    .count()
-                    + 1,
+                ply: self.ply,
                 mv,
                 before,
                 after,
@@ -176,6 +168,7 @@ impl BackupJob {
             self.v_next = e.best().map(|c| c.value).unwrap_or(-self.v_next);
             base.insert_raw(key, e.clone());
             self.idx -= 1;
+            self.ply -= 1;
         }
     }
 

@@ -3,12 +3,12 @@ import { api, ggsApi, type KifuFrame } from './api';
 import { Board } from './components/board';
 import { MoveScrub, ScoreRow, StoneDot } from './components/data';
 import { Modal, Overlay } from './components/layout';
-import { Segmented } from './components/primitives';
-import { Button } from './components/primitives';
+import { Button, Segmented } from './components/primitives';
+import { sqName } from './adapt';
 import { t, tErr } from './i18n';
 
 
-export interface KifuViewerProps {
+interface KifuViewerProps {
   title: string;
   kifu: string;
   onClose: () => void;
@@ -55,7 +55,7 @@ export function KifuViewer({ title, kifu, onClose, onStudy, onRefetch, parts, me
   const cur = Math.min(at ?? last, last);
   const f = frames?.[cur];
   const end = frames?.[last];
-  const moveList = frames ? frames.slice(1).map((k) => sqName(k.last)).join('') : '';
+  const moveList = frames ? frames.slice(1).map((k) => moveName(k.last)).join('') : '';
 
   const running = playing && cur < last;
   useEffect(() => {
@@ -138,7 +138,7 @@ export function KifuViewer({ title, kifu, onClose, onStudy, onRefetch, parts, me
                 )}
                 <div style={{ fontSize: 'var(--fs-6)', color: 'var(--sub)' }}>{t('kifu.this_move')}</div>
                 <div style={{ fontSize: 'var(--fs-1)', fontWeight: 700, fontVariantNumeric: 'tabular-nums' }}>
-                  {cur === 0 ? t('kifu.initial_position') : `${cur}. ${sqName(f.last)}`}
+                  {cur === 0 ? t('kifu.initial_position') : `${cur}. ${moveName(f.last)}`}
                 </div>
                 <Raw label={t('kifu.raw.moves')} tone="text" text={moveList} />
                 {shown.startsWith('(;') && <Raw label="GGF" text={shown} scroll />}
@@ -194,5 +194,4 @@ function Raw({ label, text, tone, scroll }: {
   );
 }
 
-const sqName = (sq: number | null): string =>
-  sq == null ? t('kifu.pass') : 'abcdefgh'[Math.floor(sq / 8)] + (sq % 8 + 1);
+const moveName = (sq: number | null): string => (sq == null ? t('kifu.pass') : sqName(sq));

@@ -9,20 +9,19 @@ const label = (l: typeof LEVELS[number]) =>
     ? t('ui.strength.preset_band', { name: l.name, depth: l.depth, solve: l.solve, band: l.band })
     : t('ui.strength.preset', { name: l.name, depth: l.depth, solve: l.solve }));
 
-const presetOf = (v: Levels): number | 'custom' => {
+export const presetOf = (v: Levels): number | 'custom' => {
   const i = LEVELS.findIndex((l) => l.depth === v.depth && l.solve === v.solve && l.band === v.band);
   return i >= 0 ? i : 'custom';
 };
 
-
-
 export function Strength({ value, onChange }: { value: Levels; onChange: (v: Levels) => void }) {
   const [picked, setPicked] = useState(false);
-  const custom = picked || presetOf(value) === 'custom';
+  const preset = presetOf(value);
+  const custom = picked || preset === 'custom';
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: 'var(--sp-3)' }}>
-      <Select value={custom ? 'custom' : String(presetOf(value))}
+      <Select value={custom ? 'custom' : String(preset)}
               options={[...LEVELS.map((l, i) => [String(i), label(l)] as [string, string]),
                         ['custom', t('ui.strength.custom')]]}
               onChange={(s) => {

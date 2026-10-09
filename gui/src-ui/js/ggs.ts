@@ -1,5 +1,5 @@
 
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useState } from 'react';
 import { ggsApi, jsLog, onGgsSnapshot } from './api';
 import { t } from './i18n';
 import type { GgsSnapshot, MatchView, PlayerView, UserRow } from './types';
@@ -7,7 +7,6 @@ import type { GgsSnapshot, MatchView, PlayerView, UserRow } from './types';
 
 export function useGgs() {
   const [snap, setSnap] = useState<GgsSnapshot | null>(null);
-  const demo = useRef(false);
 
   useEffect(() => {
     let alive = true;
@@ -15,7 +14,7 @@ export function useGgs() {
     void (async () => {
       try {
         unlisten = await onGgsSnapshot((s) => {
-          if (alive && !demo.current) setSnap(s);
+          if (alive) setSnap(s);
         });
         const s = await ggsApi.snapshot();
         if (alive) setSnap((prev) => prev ?? s);
@@ -29,12 +28,7 @@ export function useGgs() {
     };
   }, []);
 
-  const patch = useCallback((p: Partial<GgsSnapshot>) => {
-    demo.current = true;
-    setSnap((prev) => (prev ? { ...prev, ...p } : prev));
-  }, []);
-
-  return { snap, patch };
+  return { snap };
 }
 
 
@@ -58,7 +52,7 @@ export interface ClockView {
 const theirTurn = (m: MatchView) =>
   !m.over && !!m.my_color && (m.turn === 'black' || m.turn === 'white') && m.turn !== m.my_color;
 
-/** When the opponent's clock on this board starts running, or null while it waits for the other board. */
+// null while the opponent's clock waits for the other board
 function oppSince(m: MatchView, sib: MatchView | undefined): number | null {
   if (!sib) return m.updated_ms;
   // An opponent that searches one board at a time takes the board whose turn came first.
@@ -90,7 +84,7 @@ function clockView(c: ClockBase | undefined, side: ClockSide, now: number,
   if (m.ended === 'adjourned' || m.ended === 'aborted') return { text: '', cls: '' };
   const active = !m.over && !!m.turn && !!color && m.turn === color;
   if (base === null) return { text: raw || '', cls: active ? 'turn' : '' };
-  // From the server update, not first draw: remounting used to reset the clock.
+  // From the server update, not first draw, so a remount does not reset the clock.
   const since = m.updated_ms || c.at;
   const mine = side === 'my' || (!!color && color === m.my_color);
   const elapsed = active ? Math.max(0, now - since) / 1000 : 0;
@@ -113,9 +107,9 @@ function clockView(c: ClockBase | undefined, side: ClockSide, now: number,
   return { text: t('ggs.clock.timeout'), cls: 'dead' };
 }
 
-export type Presence = 'playing' | 'online' | 'offline';
+type Presence = 'playing' | 'online' | 'offline';
 
-/** Everyone logged in: `/os who` lists only players who are free and taking requests, so the players of ongoing matches come from the match list and the rest from the server's own `who` (not taking requests). */
+// `/os who` lists only free players taking requests; match players and the server's own `who` fill in the rest.
 export function onlineRows(snap: GgsSnapshot): UserRow[] {
   const rows = [...snap.users];
   const have = new Set(rows.map((u) => u.name));
@@ -259,7 +253,9 @@ export const hasJapanese = (s: string): boolean =>
   /[\u3040-\u30ff\u4e00-\u9fff]/.test(s);
 
 
-export const normKey = (k: string): string => k.replace(/\s+/g, '');
+const normKey = (k: string): string => k.replace(/\s+/g, '');
+
+export const fingerKey = (k: string): string => normKey(k).replace(/\(.*\)/, '');
 
 const fingerLabels = (): Record<string, string> => ({
   open: t('ggs.finger.open'),
@@ -272,7 +268,7 @@ const fingerLabels = (): Record<string, string> => ({
   since: t('ggs.finger.since'), idle: t('ggs.finger.idle'), host: t('ggs.finger.host'),
   dblen: t('ggs.finger.dblen'),
   level: t('ggs.finger.level'), trust: t('ggs.finger.trust'), client: t('ggs.finger.client'),
-  sock: t('ggs.finger.sock'), bell: t('ggs.finger.bell'), hear: t('ggs.finger.hear'),
+  bell: t('ggs.finger.bell'), hear: t('ggs.finger.hear'),
   vt100: t('ggs.finger.vt100'),
   'watch(+)': t('ggs.finger.watch'), 'watch(-)': t('ggs.finger.watch'),
   'track(+)': t('ggs.finger.track'), 'track(-)': t('ggs.finger.track'),
@@ -307,7 +303,7 @@ const fingerGroupDefs = (): { id: string; title: string; keys: string[] }[] => [
   },
 ];
 
-export interface FingerRow { key: string; label: string; value: string }
+interface FingerRow { key: string; label: string; value: string }
 
 export function fingerGroups(
   fields: [string, string][],
@@ -316,7 +312,7 @@ export function fingerGroups(
   const got = new Map(fields.map(([k, v]) => [normKey(k), v]));
   const used = new Set<string>();
   const row = (k: string): FingerRow | null => {
-    if (FINGER_HIDDEN.includes(k.replace(/\(.*\)/, ''))) return null;
+    if (FINGER_HIDDEN.includes(fingerKey(k))) return null;
     const v = got.get(k);
     if (v === undefined && !FINGER_ALWAYS.includes(k)) return null;
     used.add(k);
@@ -336,14 +332,14 @@ export function fingerGroups(
     rows: dedupe(g.keys.map(row).filter((r): r is FingerRow => r !== null)),
   }));
   const rest = [...got.entries()]
-    .filter(([k]) => !used.has(k) && !FINGER_HIDDEN.includes(k.replace(/\(.*\)/, '')))
+    .filter(([k]) => !used.has(k) && !FINGER_HIDDEN.includes(fingerKey(k)))
     .map(([k, v]) => ({ key: k, label: labels[k] ?? k, value: v }));
   out[out.length - 1].rows.push(...dedupe(rest));
   return out.filter((g) => g.rows.length > 0);
 }
 
 export function fingerValue(k: string, v: string): string {
-  const key = normKey(k).replace(/\(.*\)/, '');
+  const key = fingerKey(k);
   if (key === 'open') {
     return v === '0' || v === '-'
       ? t('ggs.finger.value.not_accepting') : t('ggs.finger.value.accepting');
@@ -376,7 +372,7 @@ export function fingerValue(k: string, v: string): string {
   if (key === 'groups') return v === '_client' ? t('ggs.finger.value.group_client') : v;
   if (key === 'bell') return readBell(v);
   if (key === 'since' || key === 'idle') return readTime(k, v);
-  if (['track', 'watch', 'groups', 'channs', 'notify', 'ignore', 'stored'].includes(key)) {
+  if (['track', 'watch', 'channs', 'ignore', 'stored'].includes(key)) {
     return v.trim() || t('ggs.finger.value.none');
   }
   return v;
@@ -423,17 +419,12 @@ function readTime(k: string, v: string): string {
 }
 
 
-type Formula =
-  | { kind: 'all' | 'any'; kids: Formula[] }
-  | { kind: 'atom'; src: string };
-
-
 export interface Who {
   me: string;
   them: string;
 }
 
-export const defaultWho = (): Who => ({
+const defaultWho = (): Who => ({
   me: t('ggs.formula.who.me'),
   them: t('ggs.formula.who.them'),
 });
@@ -448,7 +439,7 @@ const SIDED: Record<string, string> = {
   mt3: 't3', ot3: 't3',
 };
 
-export function varLabel(name: string, who: Who = defaultWho()): string {
+function varLabel(name: string, who: Who = defaultWho()): string {
   const side = SIDED[name];
   if (side) {
     return t(`ggs.formula.side.${side}`, { who: name.startsWith('m') ? who.me : who.them });
@@ -457,7 +448,7 @@ export function varLabel(name: string, who: Who = defaultWho()): string {
   return t(`ggs.formula.${name}`);
 }
 
-export interface FormulaVar {
+interface FormulaVar {
   name: string;
   label: string;
   type: 'bool' | 'num' | 'color';
@@ -543,9 +534,7 @@ function parseAtomSrc(src: string): Cond {
 export function parseCond(src: string): Cond | null {
   const body = src.replace(/^\s*:\s*/, '').trim();
   if (!body) return null;
-  const walk = (n: Formula): Cond =>
-    n.kind === 'atom' ? parseAtomSrc(n.src) : { kind: n.kind, kids: n.kids.map(walk) };
-  return walk(parseFormula(body));
+  return parseFormula(body);
 }
 
 export function condToSrc(c: Cond): string {
@@ -561,21 +550,20 @@ export function condToSrc(c: Cond): string {
   return parts.map((p) => (c.kind === 'all' && p.includes('|') ? `(${p})` : p)).join(sep);
 }
 
-function parseFormula(src: string): Formula {
+function parseFormula(src: string): Cond {
   const toks = (src.match(/\(|\)|&|\||[^()&|]+/g) ?? [])
     .map((x) => x.trim()).filter(Boolean);
   let i = 0;
-  const atom = (): Formula => {
+  const atom = (): Cond => {
     if (toks[i] === '(') {
       i++;
       const inner = or();
       if (toks[i] === ')') i++;
       return inner;
     }
-    const raw = toks[i++] ?? '';
-    return { kind: 'atom', src: raw };
+    return parseAtomSrc(toks[i++] ?? '');
   };
-  const join = (kind: 'all' | 'any', sep: string, next: () => Formula): Formula => {
+  const join = (kind: 'all' | 'any', sep: string, next: () => Cond): Cond => {
     const kids = [next()];
     while (toks[i] === sep) { i++; kids.push(next()); }
     return kids.length === 1 ? kids[0] : { kind, kids };

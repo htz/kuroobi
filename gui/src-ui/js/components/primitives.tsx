@@ -9,7 +9,7 @@ const R: Record<Size, string> = { chip: 'var(--r-1)', row: 'var(--r-1)', ctrl: '
 
 const cx = (...v: (string | false | undefined)[]) => v.filter(Boolean).join(' ');
 
-export type ButtonProps = {
+type ButtonProps = {
   variant?: 'primary' | 'secondary' | 'ghost' | 'danger';
   size?: Size;
   disabled?: boolean;
@@ -43,19 +43,16 @@ export function Button({ variant = 'secondary', size = 'ctrl', disabled, childre
 }
 
 
-export function Segmented<T extends string>({ value, options, onChange, size = 'ctrl', fill, disabled, solid, className }: {
+export function Segmented<T extends string>({ value, options, onChange, fill, disabled }: {
   value: T;
   options: { value: T; label: React.ReactNode }[];
   onChange?: (v: T) => void;
-  size?: Size;
   fill?: boolean;
   disabled?: boolean;
-  solid?: boolean;
-  className?: string;
 }) {
   return (
-    <div role="radiogroup" aria-disabled={disabled || undefined} className={cx('k-seg', className)} style={{
-      height: H[size], display: fill ? 'flex' : 'inline-flex', gap: 2, padding: 2,
+    <div role="radiogroup" aria-disabled={disabled || undefined} className="k-seg" style={{
+      height: H.ctrl, display: fill ? 'flex' : 'inline-flex', gap: 2, padding: 2,
       background: 'var(--bg)', border: '1px solid var(--border)', borderRadius: 'var(--r-2)',
       opacity: disabled ? 0.4 : 1,
     }}>
@@ -64,12 +61,12 @@ export function Segmented<T extends string>({ value, options, onChange, size = '
         return (
           <button key={o.value} type="button" role="radio" aria-checked={on} disabled={disabled}
             onClick={() => onChange?.(o.value)}
-            className={cx('k-press', on && 'k-on', on && !solid && 'k-seg-on')}
+            className={cx('k-press', on && 'k-on', on && 'k-seg-on')}
             style={{
-              flex: fill ? 1 : 'none', padding: '0 12px', borderRadius: 'var(--r-1)', fontSize: FS[size],
+              flex: fill ? 1 : 'none', padding: '0 12px', borderRadius: 'var(--r-1)', fontSize: FS.ctrl,
               border: 0,
-              background: on ? (solid ? 'var(--accent-dim)' : 'var(--card)') : 'transparent',
-              color: on ? (solid ? 'var(--on-accent)' : 'var(--text)') : 'var(--sub)',
+              background: on ? 'var(--card)' : 'transparent',
+              color: on ? 'var(--text)' : 'var(--sub)',
               fontWeight: on ? 600 : 400,
               display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 'var(--sp-0)',
               whiteSpace: 'nowrap',
@@ -101,30 +98,28 @@ export function Toggle({ checked, onChange, label }: { checked: boolean; onChang
 }
 
 
-export function Select({ value, options, onChange, size = 'field', width, disabled, className, title }: {
+export function Select({ value, options, onChange, size = 'field', width, title }: {
   value: string;
   options: [string, string][];        // [value, label]
   onChange?: (v: string) => void;
   size?: Size;
   width?: number;                     // min width, for aligned columns
-  disabled?: boolean;
-  className?: string;
   title?: string;
 }) {
   const label = options.find(([v]) => v === value)?.[1] ?? value;
   return (
-    <span className={cx('k-press', 'k-input', className)} style={{
-      position: 'relative',            /* never drop this */
+    <span className="k-press k-input" style={{
+      position: 'relative',            // anchors the invisible <select> laid over it
       height: H[size], minWidth: width, maxWidth: '100%',
       padding: PAD[size], borderRadius: R[size],
       background: 'var(--bg)', border: '1px solid var(--border)',
       display: 'inline-flex', alignItems: 'center', gap: 'var(--sp-2)', fontSize: FS[size],
-      opacity: disabled ? 0.4 : 1,
+      opacity: 1,
     }}>
       <span style={{ minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis',
                      whiteSpace: 'nowrap' }}>{label}</span>
       <span style={{ marginLeft: 'auto', color: 'var(--sub)', flex: 'none' }}>▾</span>
-      <select value={value} disabled={disabled} title={title} aria-label={title}
+      <select value={value} title={title} aria-label={title}
         onChange={e => onChange?.(e.target.value)}
         style={{ position: 'absolute', inset: 0, opacity: 0, width: '100%', height: '100%' }}>
         {options.map(([v, l]) => <option key={v} value={v}>{l}</option>)}
@@ -133,56 +128,50 @@ export function Select({ value, options, onChange, size = 'field', width, disabl
   );
 }
 
-export function TextArea({ value, onChange, mono, invalid, placeholder, rows = 4, className }: {
-  value?: string;
-  onChange?: (v: string) => void;
+export function TextArea({ value, onChange, mono, placeholder, rows }: {
+  value: string;
+  onChange: (v: string) => void;
   mono?: boolean;
-  invalid?: boolean;
   placeholder?: string;
-  rows?: number;
-  className?: string;
+  rows: number;
 }) {
-  const ro = !onChange;
   return (
     <textarea
-      value={value} placeholder={placeholder} readOnly={ro} rows={rows}
+      value={value} placeholder={placeholder} rows={rows}
       spellCheck={false} autoCapitalize="off" autoCorrect="off"
-      onChange={ro ? undefined : (e) => onChange?.(e.target.value)}
-      className={cx('k-input', className)}
+      onChange={(e) => onChange(e.target.value)}
+      className="k-input"
       style={{
         width: '100%', minWidth: 0, resize: 'vertical',
         padding: 'var(--sp-3)', borderRadius: 'var(--r-3)',
-        background: 'var(--bg)', border: '1px solid ' + (invalid ? 'var(--bad)' : 'var(--border)'),
+        background: 'var(--bg)', border: '1px solid var(--border)',
         fontFamily: mono ? 'var(--ff-mono)' : 'var(--ff)', fontSize: 'var(--fs-6)',
         lineHeight: 1.6,
       }} />
   );
 }
 
-export function TextField({ value, onChange, mono, invalid, placeholder, readOnly, numeric, password, align, width, className, title, onEnter }: {
+export function TextField({ value, onChange, mono, invalid, placeholder, numeric, password, align, width, onEnter }: {
   value?: string;
   onChange?: (v: string) => void;
   mono?: boolean;
   invalid?: boolean;
   placeholder?: string;
-  readOnly?: boolean;
-  numeric?: boolean;                  // digits only (formula values, seconds)
-  password?: boolean;                 // masked (GGS login only)
+  numeric?: boolean;
+  password?: boolean;
   align?: 'left' | 'right';
   width?: number;
-  className?: string;
-  title?: string;
   onEnter?: () => void;
 }) {
-  const ro = readOnly ?? !onChange;
+  const ro = !onChange;
   return (
     <input
-      value={value} placeholder={placeholder} readOnly={ro} title={title}
+      value={value} placeholder={placeholder} readOnly={ro}
       onKeyDown={onEnter && ((e) => { if (e.key === 'Enter' && !e.nativeEvent.isComposing) { e.preventDefault(); onEnter(); } })}
       type={password ? 'password' : undefined}
       inputMode={numeric ? 'numeric' : undefined}
       onChange={ro ? undefined : e => onChange?.(numeric ? e.target.value.replace(/[^\d-]/g, '') : e.target.value)}
-      className={cx('k-input', className)}
+      className="k-input"
       style={{
         flexGrow: width ? 0 : 1, flexShrink: 1, flexBasis: 'auto', width, minWidth: 0,
         height: 'var(--h-field)', padding: '0 var(--sp-3)', borderRadius: 'var(--r-3)',
@@ -193,14 +182,11 @@ export function TextField({ value, onChange, mono, invalid, placeholder, readOnl
   );
 }
 
-export function Badge({ tone = 'sub', children }: { tone?: 'sub' | 'accent' | 'ok' | 'bad' | 'gold'; children: React.ReactNode }) {
-  const c = 'var(--' + (tone === 'sub' ? 'sub' : tone) + ')';
+export function Badge({ children }: { children: React.ReactNode }) {
   return (
     <span style={{
       padding: '0 5px', borderRadius: 'var(--r-pill)', fontSize: 'var(--fs-7)',
-      background: tone === 'bad' ? 'var(--bad)' : 'transparent',
-      color: tone === 'bad' ? 'var(--on-bad)' : c,
-      boxShadow: tone === 'bad' ? 'none' : 'inset 0 0 0 1px ' + c,
+      background: 'var(--bad)', color: 'var(--on-bad)', boxShadow: 'none',
     }}>{children}</span>
   );
 }
@@ -213,6 +199,6 @@ export function Progress({ value }: { value: number }) {
   );
 }
 
-export function Dot({ tone = 'accent' }: { tone?: 'accent' | 'ok' | 'bad' | 'sub' | 'gold' }) {
+export function Dot({ tone = 'accent' }: { tone?: 'accent' | 'ok' | 'sub' | 'gold' }) {
   return <span style={{ width: 6, height: 6, borderRadius: '50%', flex: 'none', background: 'var(--' + tone + ')' }} />;
 }

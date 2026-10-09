@@ -184,9 +184,10 @@ fn play_game(cfg_black: &EngineConfig, cfg_white: &EngineConfig) -> (String, i32
         let mv = e.choose(&board);
         let p = mv.pos.expect("a move returns when legal moves exist");
         board.make_move(p).expect("engine moves are legal");
-        kifu.push_str(&p.to_kifu().to_lowercase());
+        kifu.push_str(&p.to_kifu());
     }
-    let diff = board.black_count() as i32 - board.white_count() as i32;
+    let (black, white) = board.piece_count();
+    let diff = black as i32 - white as i32;
     (kifu, diff)
 }
 
@@ -260,10 +261,7 @@ fn measure_deviation_quality() {
         };
         let v_old = val_of(old_mv);
         let v_new = val_of(new_mv);
-        let best_mv = best
-            .pos
-            .map(|p| p.to_kifu().to_lowercase())
-            .unwrap_or_default();
+        let best_mv = best.pos.map(|p| p.to_kifu()).unwrap_or_default();
         let loss_vs_old = v_old - v_new;
         let loss_vs_best = best.value - v_new;
         println!(

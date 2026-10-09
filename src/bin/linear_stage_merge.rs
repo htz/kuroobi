@@ -3,7 +3,7 @@ use kuroobi::linear::{Linear, STAGE_COUNT};
 use kuroobi::pattern::LINEAR_PATTERNS;
 use kuroobi::record::{Filter, TeacherPolicy};
 use kuroobi::trainer::load_examples_filtered_into;
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 use std::process::ExitCode;
 
 fn stats_of(a: &[f64; 4]) -> (f64, f64, f64, f64) {
@@ -92,7 +92,7 @@ fn main() -> ExitCode {
     let mut evs: Vec<Linear> = Vec::with_capacity(inputs.len());
     for p in &inputs {
         let mut ev = Linear::new(LINEAR_PATTERNS);
-        if let Err(e) = ev.load_weights(Path::new(p)) {
+        if let Err(e) = ev.load_weights(p) {
             eprintln!("failed to load {}: {e}", p.display());
             return ExitCode::FAILURE;
         }
@@ -111,7 +111,7 @@ fn main() -> ExitCode {
     }
 
     let mut merged = Linear::new(LINEAR_PATTERNS);
-    if let Err(e) = merged.load_weights(Path::new(&inputs[0])) {
+    if let Err(e) = merged.load_weights(&inputs[0]) {
         eprintln!("failed to load {}: {e}", inputs[0].display());
         return ExitCode::FAILURE;
     }
@@ -120,7 +120,7 @@ fn main() -> ExitCode {
     println!(
         "  stage  empties       n      MSE     MAE     bias   spread   from  (selecting on {select_by})"
     );
-    for (st, first) in scores[0].iter().enumerate().take(STAGE_COUNT) {
+    for (st, first) in scores[0].iter().enumerate() {
         let n = first[0];
         if n == 0.0 {
             continue;

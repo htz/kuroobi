@@ -1,31 +1,8 @@
 //! Verifies NNUE evaluation symmetry invariance.
 
-use kuroobi::bitboard;
 use kuroobi::nnue::Nnue;
 use kuroobi::pattern::LINEAR_PATTERNS;
 use kuroobi::Board;
-
-fn sym_board(b: &Board, i: u8) -> Board {
-    let mut black = b.black;
-    let mut white = b.white;
-    if i >= 4 {
-        black = bitboard::mirror_horizontal(black);
-        white = bitboard::mirror_horizontal(white);
-        for _ in 0..(i - 4) {
-            black = bitboard::rotate_90(black);
-            white = bitboard::rotate_90(white);
-        }
-    } else {
-        for _ in 0..i {
-            black = bitboard::rotate_90(black);
-            white = bitboard::rotate_90(white);
-        }
-    }
-    let mut out = *b;
-    out.black = black;
-    out.white = white;
-    out
-}
 
 #[test]
 #[ignore = "requires weights/"]
@@ -44,7 +21,7 @@ fn shipped_weights_are_symmetric() {
     }
 
     for (i, bd) in boards.iter().enumerate() {
-        let vals: Vec<f32> = (0..8).map(|k| nn.eval(&sym_board(bd, k))).collect();
+        let vals: Vec<f32> = bd.symmetries().iter().map(|s| nn.eval(s)).collect();
         let spread = vals.iter().cloned().fold(f32::MIN, f32::max)
             - vals.iter().cloned().fold(f32::MAX, f32::min);
         println!("position {i}: 8-symmetry eval spread {spread:.6}");

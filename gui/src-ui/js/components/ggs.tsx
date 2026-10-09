@@ -7,27 +7,25 @@ import { t } from '../i18n';
 import logo from '../../assets/kuroobi.svg?raw';
 import {
   colorChoices, boolOps, FORMULA_OPS, formulaVars, varOf, condToSrc, condLabel,
-  isGroup, type Cond as SharedCond, type FormulaOp, type Who,
+  isGroup, type Cond, type FormulaOp, type Who,
 } from '../ggs';
-
-
 
 export type NavId =
   | 'play' | 'study' | 'book'
   | 'ggs-play' | 'ggs-lobby' | 'ggs-players' | 'ggs-results' | 'ggs-chat' | 'ggs-standby' | 'ggs-console' | 'ggs-settings'
   | 'ggs-login';
 
-export type NavItem = {
+type NavItem = {
   id: NavId;
   label: string;
-  icon: IconName;     // IconName from Icons.tsx
-  count?: number;    // count badge
+  icon: IconName;
+  count?: number;
   alert?: boolean;   // addressed to me / unread; painted --bad
   dot?: 'ok' | 'gold' | 'bad';  // state badge (auto match on, my turn, ...)
   hint?: string;
 };
 
-export type Conn = 'offline' | 'connecting' | 'logging-in' | 'online';
+type Conn = 'offline' | 'connecting' | 'logging-in' | 'online';
 
 const CONN_TONE: Record<Conn, 'sub' | 'gold' | 'ok'> = {
   offline: 'sub', connecting: 'gold', 'logging-in': 'gold', online: 'ok',
@@ -117,8 +115,8 @@ function NavRow({ item, active, onSelect }: { item: NavItem; active: boolean; on
 }
 
 
-export function Meter({ icon, label, value, unit, ratio, note }: {
-  icon: IconName; label: string; value: React.ReactNode; unit?: string; ratio: number; note?: string;
+export function Meter({ icon, label, value, unit, ratio }: {
+  icon: IconName; label: string; value: React.ReactNode; unit?: string; ratio: number;
 }) {
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: 'var(--sp-1)' }}>
@@ -139,7 +137,6 @@ export function Meter({ icon, label, value, unit, ratio, note }: {
         fontSize: 'var(--fs-7)', color: 'var(--text)', textAlign: 'center',
         fontVariantNumeric: 'tabular-nums',
       }}>{value}{typeof unit === 'string' ? unit.trim() : unit}</div>
-      {note && <div style={{ fontSize: 'var(--fs-7)', color: 'var(--sub)' }}>{note}</div>}
     </div>
   );
 }
@@ -162,7 +159,7 @@ export function JobList({ jobs }: { jobs: { label: string; threads?: number; yie
 }
 
 
-export type Rate = { value: number; dev: number; rank?: number; w: number; l: number; d: number; provisional?: boolean };
+type Rate = { value: number; dev: number; rank?: number; w: number; l: number; d: number; provisional?: boolean };
 
 export function RateRow({ label, rate }: { label: string; rate: Rate }) {
   return (
@@ -191,16 +188,12 @@ export function RateRow({ label, rate }: { label: string; rate: Rate }) {
   );
 }
 
-export { PlayerRow, StoneDot, toStoneColor, type StoneColor } from './data';
-
-
 export type Match = {
-  id: string; mine: boolean; live: boolean;
+  mine: boolean; live: boolean;
   opponent?: string;
   black: string; white: string;
-  kind: string;      // "Synchro, random 16" / "Standard" -- synchro means 2 boards
-  myTurn?: boolean;
-  result?: string;   // the match's own result, once every board is in
+  kind: string;
+  result?: string;
   ended?: string;
   leftBy?: string;
 };
@@ -211,13 +204,13 @@ const matchTitle = (m: Match) =>
     : t('ggs.vs', { a: m.black, b: m.white });
 
 export function MatchRow({ m, active, onSelect, onClose }: {
-  m: Match; active?: boolean; onSelect?: () => void; onClose?: () => void;
+  m: Match; active: boolean; onSelect: () => void; onClose: () => void;
 }) {
-  const closable = !m.live && !!onClose;
+  const closable = !m.live;
   return (
     <div className={'k-row' + (active ? ' k-on' : '')} style={{
       position: 'relative', borderBottom: '1px solid var(--border-weak)',
-      ...picked(!!active),
+      ...picked(active),
     }}>
       <button type="button" onClick={onSelect} className="k-row"
               aria-current={active || undefined} style={{
@@ -237,7 +230,6 @@ export function MatchRow({ m, active, onSelect, onClose }: {
           <span style={{ fontSize: 'var(--fs-5)', color: m.live ? 'var(--text)' : 'var(--sub)' }}>
             {matchTitle(m)}
           </span>
-          {m.myTurn && <Dot />}
         </span>
         <span style={{ fontSize: 'var(--fs-6)', color: 'var(--sub)',
                        overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
@@ -249,7 +241,7 @@ export function MatchRow({ m, active, onSelect, onClose }: {
       </button>
       {closable && (
         <span style={{ position: 'absolute', right: 4, top: 4 }}>
-          <IconButton name="close" label={t('ggs.match.close')} onClick={onClose!} size={14} />
+          <IconButton name="close" label={t('ggs.match.close')} onClick={onClose} size={14} />
         </span>
       )}
     </div>
@@ -266,10 +258,6 @@ export function Tag({ tone = 'sub', children }: { tone?: 'sub' | 'accent' | 'ok'
   }}>{children}</span>;
 }
 
-
-export type Cond = SharedCond;
-export type { Who };
-export { isGroup };
 
 export function FormulaView({ node, top, who }: { node: Cond; top?: boolean; who?: Who }) {
   if (node.kind === 'atom') return <CondChip c={node} who={who} />;
@@ -320,9 +308,9 @@ function FormulaWire({ text }: { text: string }) {
 export function FormulaEditor({ value, onChange, onSave, onClear, onRaw }: {
   value: Cond | null;
   onChange: (c: Cond) => void;
-  onSave?: (src: string) => void;
-  onClear?: () => void;
-  onRaw?: (src: string) => void;
+  onSave: (src: string) => void;
+  onClear: () => void;
+  onRaw: (src: string) => void;
 }) {
   if (!value) {
     return (
@@ -334,7 +322,7 @@ export function FormulaEditor({ value, onChange, onSave, onClear, onRaw }: {
         <Note>{t('ggs.formula.unset_note')}</Note>
         <div style={{ display: 'flex', gap: 'var(--sp-2)' }}>
           <Button onClick={() => onChange(newGroup())}>{t('ggs.formula.add_condition')}</Button>
-          {onRaw && <Button variant="ghost" onClick={() => onRaw('')}>{t('ggs.formula.write_raw')}</Button>}
+          <Button variant="ghost" onClick={() => onRaw('')}>{t('ggs.formula.write_raw')}</Button>
         </div>
       </div>
     );
@@ -346,9 +334,9 @@ export function FormulaEditor({ value, onChange, onSave, onClear, onRaw }: {
       <FormulaWire text={src} />
       <div style={{ display: 'flex', gap: 'var(--sp-2)', alignItems: 'center' }}>
         <Button variant="secondary" onClick={onClear}>{t('ggs.formula.clear')}</Button>
-        {onRaw && <Button variant="ghost" onClick={() => onRaw(src)}>{t('ggs.formula.write_raw')}</Button>}
+        <Button variant="ghost" onClick={() => onRaw(src)}>{t('ggs.formula.write_raw')}</Button>
         <span style={{ marginLeft: 'auto' }}>
-          <Button variant="primary" onClick={() => onSave?.(src)}>{t('ggs.apply')}</Button>
+          <Button variant="primary" onClick={() => onSave(src)}>{t('ggs.apply')}</Button>
         </span>
       </div>
     </div>
@@ -448,7 +436,7 @@ function AtomRow({ c, onChange, onRemove }: {
 }
 
 
-export type Msg = { from: string; mine?: boolean; at: string; body: string; ja?: string };
+type Msg = { from: string; mine?: boolean; at: string; body: string; ja?: string };
 
 export function Bubble({ m, showName }: { m: Msg; showName?: boolean }) {
   return (
@@ -516,16 +504,16 @@ export function ConsoleLog({ lines }: { lines: LogLine[] }) {
 }
 
 
-export type Toast = { id: string; tone: 'bad' | 'gold'; text: string };
+type Toast = { id: number; tone: 'bad' | 'gold'; text: string };
 
-export function Toasts({ items, onDismiss }: { items: Toast[]; onDismiss?: (id: string) => void }) {
+export function Toasts({ items, onDismiss }: { items: Toast[]; onDismiss: (id: number) => void }) {
   return (
     <div style={{
       position: 'absolute', right: 'var(--sp-4)', bottom: 'calc(var(--h-status) + var(--sp-3))',
       display: 'flex', flexDirection: 'column', gap: 'var(--sp-2h)', alignItems: 'flex-end', zIndex: 20,
     }}>
       {items.map(item => (
-        <button key={item.id} type="button" onClick={() => onDismiss?.(item.id)} className="k-press" style={{
+        <button key={item.id} type="button" onClick={() => onDismiss(item.id)} className="k-press" style={{
           maxWidth: 340, padding: 'var(--sp-3)', borderRadius: 'var(--r-4)', textAlign: 'left',
           background: 'var(--card)', border: '1px solid var(--border)', boxShadow: 'var(--sh-2)',
           fontSize: 'var(--fs-5)', lineHeight: 1.6, color: 'var(--text)',
@@ -551,14 +539,14 @@ export function StatusChip({ label, unread, active, onClick }: {
       fontSize: 'var(--fs-7)', display: 'flex', alignItems: 'center', gap: 'var(--sp-0)',
     }}>
       {label}
-      {unread ? <Badge tone="bad">{unread}</Badge> : null}
+      {unread ? <Badge>{unread}</Badge> : null}
     </button>
   );
 }
 
-export function GgsStatus({ snap, showStrength = true }: {
+export function GgsStatus({ snap, showStrength }: {
   snap: GgsSnapshot;
-  showStrength?: boolean;
+  showStrength: boolean;
 }) {
   const e = snap.engine;
   return (

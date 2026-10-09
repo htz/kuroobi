@@ -12,15 +12,20 @@ use kuroobi::trainer::{
     count_examples_binary, load_examples_filtered_into, load_examples_range_into, Example, SymPlan,
 };
 
-fn val_by_stage(nn: &mut Nnue, base: Option<&Linear>, val: &[Example]) -> Vec<[f64; 5]> {
+const LOOKAHEAD_K: u32 = 6;
+
+fn cosine_factor(t: f32) -> f32 {
+    0.5 * (1.0 + (std::f32::consts::PI * t).cos())
+}
+
+fn val_by_stage(nn: &mut Nnue, val: &[Example]) -> Vec<[f64; 5]> {
     nn.quantize();
     let mut acc = vec![[0.0f64; 5]; STAGE_COUNT];
     for ex in val {
         let board = ex.board();
         let ix = nn.indices(ex.black, ex.white);
-        let b = base.map_or(0.0, |e| e.eval_indices(&board, &ix));
         let q = nn.eval_from_indices(&ix, &board);
-        let e = (q + b) as f64 - ex.score as f64;
+        let e = q as f64 - ex.score as f64;
         let a = &mut acc[Linear::stage(&board)];
         a[0] += 1.0;
         a[1] += e * e;
@@ -145,7 +150,6 @@ fn interleaved_shards(counts: &[usize], rot: &[usize], max: usize) -> Vec<Shard>
 #[allow(clippy::too_many_arguments)]
 fn train_pass_minibatch(
     nn: &mut Nnue,
-    base: Option<&Linear>,
     adam: &mut AdamState,
     sinks: &mut Vec<kuroobi::nnue::GradSink>,
     examples: &[Example],
@@ -168,7 +172,6 @@ fn train_pass_minibatch(
         let next = std::sync::atomic::AtomicUsize::new(0);
         let next = &next;
         let nn_ref = &*nn;
-        let used = threads;
         std::thread::scope(|scope| {
             let mut handles = Vec::new();
             for sink in sinks[..threads].iter_mut() {
@@ -187,17 +190,9 @@ fn train_pass_minibatch(
                             let ex = sym.apply(ex, &mut rs);
                             let board = ex.board();
                             let stage = Linear::stage(&board);
-                            let discs = ex.black.count_ones() as usize;
                             let mob = kuroobi::nnue::Nnue::mob_index(&board);
                             let ix = nn_ref.indices(ex.black, ex.white);
-                            s += nn_ref.grad_black_into(
-                                &ix,
-                                stage,
-                                discs,
-                                mob,
-                                ex.score - base.map_or(0.0, |e| e.eval_indices(&board, &ix)),
-                                sink,
-                            ) as f64;
+                            s += nn_ref.grad_black_into(&ix, stage, mob, ex.score, sink) as f64;
                         }
                     }
                     s
@@ -208,12 +203,18 @@ fn train_pass_minibatch(
             }
         });
         if heads_only {
-            for s in sinks[..used].iter_mut() {
+            for s in sinks[..threads].iter_mut() {
                 s.keep_stage_heads_only();
             }
         }
         let lr = lr_for_step();
-        nn.apply_adamw_batch(&mut sinks[..used], adam, lr, wd, 1.0 / chunk.len() as f32);
+        nn.apply_adamw_batch(
+            &mut sinks[..threads],
+            adam,
+            lr,
+            wd,
+            1.0 / chunk.len() as f32,
+        );
     }
     sq_total
 }
@@ -384,7 +385,7 @@ struct Args {
     adam: bool,
     sym_train: bool,
     sym_all: bool,
-    lookahead: u32,
+    lookahead: bool,
     gpu: bool,
     threads: usize,
     limit: Option<usize>,
@@ -421,7 +422,7 @@ fn parse_args() -> Result<Args, ExitCode> {
     let mut adam = false;
     let mut sym_train = false;
     let mut sym_all = false;
-    let mut lookahead = 0u32;
+    let mut lookahead = false;
     let mut gpu = false;
     let mut threads = 1usize;
     let mut limit: Option<usize> = None;
@@ -488,7 +489,7 @@ fn parse_args() -> Result<Args, ExitCode> {
             }
             "--sym-train" => sym_train = true,
             "--sym-all" => sym_all = true,
-            "--lookahead" => lookahead = 6,
+            "--lookahead" => lookahead = true,
             "--gpu" => gpu = true,
             "--threads" => threads = it.next().unwrap().parse().unwrap(),
             "--limit" => limit = Some(it.next().unwrap().parse().unwrap()),
@@ -593,12 +594,12 @@ fn main() -> ExitCode {
         return ExitCode::FAILURE;
     }
     // Weight decay and the lookahead pull touch every weight, gradient or not.
-    if train_stages.is_some() && (minibatch == 0 || !adam || wd != 0.0 || lookahead != 0) {
+    if train_stages.is_some() && (minibatch == 0 || !adam || wd != 0.0 || lookahead) {
         eprintln!("--train-stages needs --adam --minibatch n, --wd 0 and no --lookahead");
         return ExitCode::FAILURE;
     }
 
-    // Only val reads through here; --limit cut it to its first 26k rows, stages 0-13 alone.
+    // Val ignores --limit: it would keep only the earliest stages.
     let load = |files: &[PathBuf]| -> std::io::Result<Vec<Example>> {
         let mut v = Vec::new();
         for f in files {
@@ -687,9 +688,9 @@ fn main() -> ExitCode {
         );
         let mut st = AdamState::new(&nn);
         st.wd = wd;
-        if lookahead > 0 {
-            st.set_lookahead(lookahead, 0.5);
-            println!("adam: lookahead k={lookahead} alpha=0.5");
+        if lookahead {
+            st.set_lookahead(LOOKAHEAD_K, 0.5);
+            println!("adam: lookahead k={LOOKAHEAD_K} alpha=0.5");
         }
         st
     });
@@ -712,7 +713,7 @@ fn main() -> ExitCode {
     let mut best = if val.is_empty() {
         f64::INFINITY
     } else {
-        select_score(&select_by, &pooled(&val_by_stage(&mut nn, None, &val)))
+        select_score(&select_by, &pooled(&val_by_stage(&mut nn, &val)))
     };
     let mut best_train = f64::INFINITY;
     if best.is_finite() {
@@ -733,10 +734,9 @@ fn main() -> ExitCode {
         Err(()) => return ExitCode::FAILURE,
     }
     if let Some(path) = &resume {
-        let Some(ad) = adam_state.as_mut() else {
-            eprintln!("--resume needs --adam");
-            return ExitCode::FAILURE;
-        };
+        let ad = adam_state
+            .as_mut()
+            .expect("--resume without --adam was rejected above");
         let Ok(h) = apply_resume(path, &mut nn, ad, &mut sched, &rng_state) else {
             return ExitCode::FAILURE;
         };
@@ -766,8 +766,8 @@ fn main() -> ExitCode {
             .as_ref()
             .expect("--gpu requires --adam --minibatch N");
         assert!(minibatch > 0, "--gpu requires --minibatch N");
-        let la = if lookahead > 0 {
-            (lookahead, 0.5)
+        let la = if lookahead {
+            (LOOKAHEAD_K, 0.5)
         } else {
             (0, 0.0)
         };
@@ -785,7 +785,7 @@ fn main() -> ExitCode {
             plateau_lr
         } else if cosine {
             let t = (epoch as f32 - 1.0) / epochs as f32;
-            lr * 0.5 * (1.0 + (std::f32::consts::PI * t).cos())
+            lr * cosine_factor(t)
         } else {
             lr * decay.powi(epoch as i32 - 1)
         };
@@ -814,7 +814,6 @@ fn main() -> ExitCode {
             shuffle(&mut examples, &rand);
             t_shuf += t_s.elapsed().as_secs_f64();
             let ts = Instant::now();
-            let t_p = Instant::now();
             let sym_seed = if sym_train { rand() | 1 } else { 0 };
             let forms: Vec<Option<u8>> = if sym_all {
                 (0..8u8).map(Some).collect()
@@ -847,10 +846,7 @@ fn main() -> ExitCode {
                                 mb_step as f32 / mb_total_steps.max(1) as f32
                             };
                             const ETA_MIN: f32 = 1e-8;
-                            ETA_MIN
-                                + (base_lr - ETA_MIN)
-                                    * 0.5
-                                    * (1.0 + (std::f32::consts::PI * t.min(1.0)).cos())
+                            ETA_MIN + (base_lr - ETA_MIN) * cosine_factor(t.min(1.0))
                         } else {
                             cur_lr
                         };
@@ -870,7 +866,6 @@ fn main() -> ExitCode {
                     } else {
                         train_pass_minibatch(
                             &mut nn,
-                            None,
                             ad,
                             &mut sinks,
                             &examples,
@@ -885,7 +880,6 @@ fn main() -> ExitCode {
                     #[cfg(not(feature = "gpu"))]
                     train_pass_minibatch(
                         &mut nn,
-                        None,
                         ad,
                         &mut sinks,
                         &examples,
@@ -918,7 +912,7 @@ fn main() -> ExitCode {
                 ts.elapsed().as_secs_f32(),
                 rows as f32 / ts.elapsed().as_secs_f32(),
             );
-            t_pass += t_p.elapsed().as_secs_f64();
+            t_pass += ts.elapsed().as_secs_f64();
         }
         if minibatch > 0 && epoch == first_epoch {
             let per_epoch = mb_step - mb_step_done;
@@ -929,7 +923,8 @@ fn main() -> ExitCode {
             }
             mb_total_steps = mb_step_done + per_epoch * (epochs - first_epoch + 1) as u64;
         }
-        let vm = report_epoch(
+        let train_mse = sq_total / seen.max(1) as f64;
+        let (vm, is_best) = report_epoch(
             &mut nn,
             &val,
             &select_by,
@@ -937,7 +932,7 @@ fn main() -> ExitCode {
             EpochLine {
                 epoch,
                 epochs,
-                train_mse: sq_total / seen.max(1) as f64,
+                train_mse,
                 seen,
                 secs: t.elapsed().as_secs_f32(),
                 best,
@@ -945,8 +940,6 @@ fn main() -> ExitCode {
             },
             tprof.then_some((t_load, t_shuf, t_pass)),
         );
-        let train_mse = sq_total / seen.max(1) as f64;
-        let is_best = beats(vm, train_mse, best, best_train);
         if let Some(ad) = adam_state.as_mut().filter(|_| !gpu) {
             nn.settle_adam(ad, cur_lr, wd);
         }
@@ -993,7 +986,7 @@ fn main() -> ExitCode {
     ExitCode::SUCCESS
 }
 
-fn shuffle(v: &mut [Example], rand: &dyn Fn() -> u64) {
+fn shuffle<T>(v: &mut [T], rand: &dyn Fn() -> u64) {
     for i in (1..v.len()).rev() {
         let j = (rand() % (i as u64 + 1)) as usize;
         v.swap(i, j);
@@ -1016,7 +1009,7 @@ fn beats(vm: f64, train: f64, best: f64, best_train: f64) -> bool {
     a < b || (a == b && train < best_train)
 }
 
-/// Validates, prints the epoch's line, and returns the score selection runs on.
+/// Validates, prints the epoch's line, and returns the score selection runs on and whether it is the best so far.
 fn report_epoch(
     nn: &mut Nnue,
     val: &[Example],
@@ -1024,9 +1017,9 @@ fn report_epoch(
     table: bool,
     line: EpochLine,
     prof: Option<(f64, f64, f64)>,
-) -> f64 {
+) -> (f64, bool) {
     let t_v = Instant::now();
-    let acc = val_by_stage(nn, None, val);
+    let acc = val_by_stage(nn, val);
     if let Some((load, shuf, pass)) = prof {
         eprintln!(
             "train prof: load {load:.2}s shuffle {shuf:.2}s pass {pass:.2}s val {:.2}s",
@@ -1037,11 +1030,8 @@ fn report_epoch(
     let (vmse, vmae, vbias, vsd) = stats_of(&tot);
     let vgrid = tot[4] / tot[0].max(1.0);
     let vm = select_score(select_by, &tot);
-    let marker = if beats(vm, line.train_mse, line.best, line.best_train) {
-        " *best"
-    } else {
-        ""
-    };
+    let is_best = beats(vm, line.train_mse, line.best, line.best_train);
+    let marker = if is_best { " *best" } else { "" };
     let EpochLine {
         epoch,
         epochs,
@@ -1058,7 +1048,7 @@ fn report_epoch(
     if table {
         print_stage_table(&acc);
     }
-    vm
+    (vm, is_best)
 }
 
 struct Sched {
@@ -1098,7 +1088,7 @@ fn resolve_patterns(
 }
 
 fn report_start_val(nn: &mut Nnue, val: &[Example], select_by: &str, table: bool) {
-    let acc = val_by_stage(nn, None, val);
+    let acc = val_by_stage(nn, val);
     let (m, a, b, sd) = stats_of(&pooled(&acc));
     println!(
         "starting val mse {m:.4} mae {a:.4} bias {b:+.4} spread {sd:.4}  \
@@ -1128,7 +1118,7 @@ fn enter_schedule(
         return Err(());
     }
     let done = start_epoch - 1;
-    let f = 0.5 * (1.0 + (std::f32::consts::PI * done as f32 / epochs as f32).cos());
+    let f = cosine_factor(done as f32 / epochs as f32);
     println!(
         "entering the schedule at epoch {start_epoch}/{epochs}: lr {:.8} ({f:.3} of {lr:.8})",
         lr * f
@@ -1179,10 +1169,7 @@ fn epoch_plan(
         return interleaved_shards(counts, &rot, max_examples);
     }
     let mut order: Vec<usize> = (0..counts.len()).collect();
-    for i in (1..order.len()).rev() {
-        let j = (rand() % (i as u64 + 1)) as usize;
-        order.swap(i, j);
-    }
+    shuffle(&mut order, rand);
     shards(counts, &order, max_examples)
 }
 

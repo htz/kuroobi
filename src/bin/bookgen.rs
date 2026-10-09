@@ -23,6 +23,10 @@ struct Args {
     min_empties: u8,
 }
 
+fn num<T: std::str::FromStr<Err: std::fmt::Display>>(v: String) -> Result<T, String> {
+    v.parse().map_err(|e: T::Err| e.to_string())
+}
+
 fn parse_args() -> Result<Args, String> {
     let mut a = Args {
         scan: None,
@@ -55,17 +59,17 @@ fn parse_args() -> Result<Args, String> {
             "--scan" => a.scan = Some(PathBuf::from(val(&mut i)?)),
             "--deepen" => a.deepen = true,
             "--out" | "--book" => a.out = PathBuf::from(val(&mut i)?),
-            "--max-ply" => a.max_ply = val(&mut i)?.parse().map_err(|e| format!("{e}"))?,
-            "--min-games" => a.min_games = val(&mut i)?.parse().map_err(|e| format!("{e}"))?,
-            "--depth" => a.depth = val(&mut i)?.parse().map_err(|e| format!("{e}"))?,
-            "--solve" => a.solve = val(&mut i)?.parse().map_err(|e| format!("{e}"))?,
-            "--band" => a.band = val(&mut i)?.parse().map_err(|e| format!("{e}"))?,
-            "--threads" => a.threads = val(&mut i)?.parse().map_err(|e| format!("{e}"))?,
-            "--limit" => a.limit = val(&mut i)?.parse().map_err(|e| format!("{e}"))?,
-            "--hash-bits" => a.hash_bits = val(&mut i)?.parse().map_err(|e| format!("{e}"))?,
-            "--max-cands" => a.max_cands = val(&mut i)?.parse().map_err(|e| format!("{e}"))?,
+            "--max-ply" => a.max_ply = num(val(&mut i)?)?,
+            "--min-games" => a.min_games = num(val(&mut i)?)?,
+            "--depth" => a.depth = num(val(&mut i)?)?,
+            "--solve" => a.solve = num(val(&mut i)?)?,
+            "--band" => a.band = num(val(&mut i)?)?,
+            "--threads" => a.threads = num(val(&mut i)?)?,
+            "--limit" => a.limit = num(val(&mut i)?)?,
+            "--hash-bits" => a.hash_bits = num(val(&mut i)?)?,
+            "--max-cands" => a.max_cands = num(val(&mut i)?)?,
             "--all-moves" => a.all_moves = true,
-            "--min-empties" => a.min_empties = val(&mut i)?.parse().map_err(|e| format!("{e}"))?,
+            "--min-empties" => a.min_empties = num(val(&mut i)?)?,
             other => return Err(format!("unknown option {other}")),
         }
         i += 1;
@@ -79,14 +83,14 @@ fn scan(dir: &Path, max_ply: usize, min_games: u32, book: &mut Book) -> std::io:
         .filter(|p| p.extension().is_some_and(|e| e.eq_ignore_ascii_case("wtb")))
         .collect();
     files.sort();
-    let mut counts: std::collections::HashMap<((u64, u64), u8), u32> = Default::default();
+    let mut counts: std::collections::HashMap<((u64, u64), Position), u32> = Default::default();
     let mut total_games = 0usize;
     for f in &files {
-        let games = wthor::read(f)?.into_iter().filter(|g| g.moves.len() >= 10);
+        let games = wthor::read(f)?.into_iter().filter(|g| g.len() >= 10);
         for game in games {
             total_games += 1;
             let mut b = Board::new();
-            for (ply, &pos) in game.moves.iter().enumerate() {
+            for (ply, &pos) in game.iter().enumerate() {
                 if ply >= max_ply {
                     break;
                 }
@@ -98,7 +102,7 @@ fn scan(dir: &Path, max_ply: usize, min_games: u32, book: &mut Book) -> std::io:
                 }
                 let (key, i) = Book::key(&b);
                 let mapped = Book::map_move(pos, i);
-                *counts.entry((key, mapped.index())).or_insert(0) += 1;
+                *counts.entry((key, mapped)).or_insert(0) += 1;
                 b.make_move_bits(pos);
             }
         }
@@ -106,7 +110,8 @@ fn scan(dir: &Path, max_ply: usize, min_games: u32, book: &mut Book) -> std::io:
     }
     eprintln!();
 
-    let mut by_pos: std::collections::HashMap<(u64, u64), Vec<(u8, u32)>> = Default::default();
+    let mut by_pos: std::collections::HashMap<(u64, u64), Vec<(Position, u32)>> =
+        Default::default();
     for ((key, mv), n) in counts {
         by_pos.entry(key).or_default().push((mv, n));
     }
@@ -122,17 +127,12 @@ fn scan(dir: &Path, max_ply: usize, min_games: u32, book: &mut Book) -> std::io:
         }
         let moves: Vec<Candidate> = cands
             .iter()
-            .filter_map(|(mv, n)| {
-                Position::from_index(*mv as u32).map(|p| Candidate {
-                    mv: p,
-                    value: 0.0,
-                    games: *n,
-                })
+            .map(|&(mv, games)| Candidate {
+                mv,
+                value: 0.0,
+                games,
             })
             .collect();
-        if moves.is_empty() {
-            continue;
-        }
         book.insert_raw(
             key,
             Entry {
@@ -148,7 +148,7 @@ fn scan(dir: &Path, max_ply: usize, min_games: u32, book: &mut Book) -> std::io:
     Ok(())
 }
 
-fn deepen(book: &mut Book, out: &Path, a: &Args) -> Result<(), String> {
+fn deepen(book: &mut Book, a: &Args) -> Result<(), String> {
     use std::sync::atomic::{AtomicUsize, Ordering};
     use std::sync::Mutex;
 
@@ -191,7 +191,7 @@ fn deepen(book: &mut Book, out: &Path, a: &Args) -> Result<(), String> {
     let total = todo.len();
     if total == 0 {
         eprintln!("nothing to deepen");
-        return book.save(out).map_err(|e| format!("{e}"));
+        return book.save(&a.out).map_err(|e| format!("{e}"));
     }
 
     let cores = std::thread::available_parallelism()
@@ -318,7 +318,7 @@ fn deepen(book: &mut Book, out: &Path, a: &Args) -> Result<(), String> {
     for (key, e) in results.into_inner().unwrap() {
         book.insert_raw(key, e);
     }
-    book.save(out).map_err(|e| e.to_string())?;
+    book.save(&a.out).map_err(|e| e.to_string())?;
     eprintln!("done: {:.1} min", t0.elapsed().as_secs_f64() / 60.0);
     Ok(())
 }
@@ -347,7 +347,7 @@ fn main() -> std::process::ExitCode {
     }
 
     if a.deepen {
-        if let Err(e) = deepen(&mut book, &a.out, &a) {
+        if let Err(e) = deepen(&mut book, &a) {
             eprintln!("deepen failed: {e}");
             return std::process::ExitCode::FAILURE;
         }

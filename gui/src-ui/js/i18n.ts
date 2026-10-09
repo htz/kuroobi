@@ -3,8 +3,8 @@ import en from '../locales/en.yaml';
 import ja from '../locales/ja.yaml';
 
 
-export const LANGS = ['en', 'ja'] as const;
-export type Lang = (typeof LANGS)[number];
+const LANGS = ['en', 'ja'] as const;
+type Lang = (typeof LANGS)[number];
 export type LangPref = 'auto' | Lang;
 
 type Tree = { [k: string]: string | Tree };
@@ -49,7 +49,7 @@ export function setLang(lang: Lang) {
   for (const fn of listeners) fn();
 }
 
-export const getLang = (): Lang => current;
+const getLang = (): Lang => current;
 
 export function useLang(): Lang {
   return useSyncExternalStore(
@@ -58,7 +58,7 @@ export function useLang(): Lang {
   );
 }
 
-export type Params = Record<string, string | number>;
+type Params = Record<string, string | number>;
 
 export function t(key: string, params?: Params): string {
   const s = TABLES[current][key] ?? TABLES.en[key] ?? key;

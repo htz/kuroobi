@@ -1,9 +1,9 @@
 
 export type IconName =
   | 'play' | 'study' | 'ggs-play' | 'ggs-lobby' | 'ggs-users' | 'ggs-chat'
-  | 'ggs-standby' | 'ggs-console' | 'login' | 'logout' | 'cpu' | 'memory' | 'gear'
-  | 'refresh' | 'check' | 'alert' | 'back' | 'close' | 'panel'
-  | 'start' | 'stop' | 'newgame' | 'undo' | 'hint' | 'book' | 'results' | 'prefs';
+  | 'ggs-standby' | 'ggs-console' | 'login' | 'cpu' | 'memory'
+  | 'check' | 'alert' | 'back' | 'close' | 'panel'
+  | 'book' | 'results' | 'prefs';
 
 const PATHS: Record<IconName, React.ReactNode> = {
   play: <>
@@ -54,41 +54,12 @@ const PATHS: Record<IconName, React.ReactNode> = {
     <path d="M12 3.2 21 8l-9 4.8L3 8z" />
     <path d="M3 12.6 12 17.4l9-4.8M3 17.2 12 22l9-4.8" />
   </>,
-  logout: <>
-    <path d="M10.5 4H6a2 2 0 0 0-2 2v12a2 2 0 0 0 2 2h4.5" />
-    <path d="M16.5 16l4-4-4-4M20.5 12H10.5" />
-  </>,
-  refresh: <>
-    <path d="M20 12a8 8 0 1 1-2.6-5.9" />
-    <path d="M20.5 4v4.5H16" />
-  </>,
   check: <>
     <path d="M4.5 12.5 9.5 17.5 19.5 6.5" />
   </>,
   alert: <>
     <path d="M12 3.5 22 20.5H2z" />
     <path d="M12 10v4.5M12 17.6v.1" />
-  </>,
-  start: <>
-    <path d="M8.6 5.9 18.4 12 8.6 18.1z" fill="currentColor" strokeWidth="2.6" />
-  </>,
-  stop: <>
-    <rect x="7.4" y="7.4" width="9.2" height="9.2" rx="1.7"
-          fill="currentColor" strokeWidth="2.2" />
-  </>,
-  newgame: <>
-    <circle cx="8.2" cy="8.2" r="2.9" />
-    <circle cx="15.8" cy="15.8" r="2.9" />
-    <circle cx="15.8" cy="8.2" r="3.3" fill="currentColor" stroke="none" />
-    <circle cx="8.2" cy="15.8" r="3.3" fill="currentColor" stroke="none" />
-  </>,
-  undo: <>
-    <path d="M8.6 8.6h5.9a4.9 4.9 0 0 1 0 9.8h-4.4" />
-    <path d="M11.4 5.2 8 8.6l3.4 3.4" />
-  </>,
-  hint: <>
-    <path d="M3.1 12a10.6 10.6 0 0 1 17.8 0 10.6 10.6 0 0 1-17.8 0z" />
-    <circle cx="12" cy="12" r="2.7" />
   </>,
   back: <>
     <path d="M14.5 5.5 8 12l6.5 6.5" />
@@ -113,21 +84,11 @@ const PATHS: Record<IconName, React.ReactNode> = {
     <path d="M4.5 20.5V13M12 20.5V6.5M19.5 20.5v-5" />
     <path d="M2.8 20.5h18.4" />
   </>,
-  gear: <>
-    <circle cx="12" cy="12" r="3" />
-    <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 1 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 1 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06A1.65 1.65 0 0 0 9 4.6a1.65 1.65 0 0 0 1-1.51V3a2 2 0 1 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9c.14.36.4.66.73.86.3.18.65.28 1 .28H21a2 2 0 1 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z" />
-  </>,
 };
 
-export interface IconProps {
-  name: IconName;
-  size?: number;
-  className?: string;
-}
-
-export function Icon({ name, size = 17, className }: IconProps) {
+export function Icon({ name, size = 17 }: { name: IconName; size?: number }) {
   return (
-    <svg className={className} width={size} height={size} viewBox="0 0 24 24"
+    <svg width={size} height={size} viewBox="0 0 24 24"
          fill="none" stroke="currentColor" strokeWidth={1.8}
          strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
       {PATHS[name]}
@@ -135,21 +96,20 @@ export function Icon({ name, size = 17, className }: IconProps) {
   );
 }
 
-export function IconButton({ name, label, onClick, size = 17, disabled }: {
+export function IconButton({ name, label, onClick, size = 17 }: {
   name: IconName;
   label: string;
   onClick: () => void;
   size?: number;
-  disabled?: boolean;
 }) {
   return (
     <button type="button" className="k-press" title={label} aria-label={label}
-      onClick={onClick} disabled={disabled}
+      onClick={onClick}
       style={{
         width: 32, height: 32, flex: 'none', border: 0, borderRadius: 'var(--r-2)',
         background: 'transparent', color: 'var(--sub)',
         display: 'inline-grid', placeItems: 'center',
-        opacity: disabled ? 0.4 : 1,
+        opacity: 1,
       }}>
       <Icon name={name} size={size} />
     </button>

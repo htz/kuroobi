@@ -22,8 +22,8 @@ struct Cell {
     rms: f32,
 }
 
-fn solve(mut a: Vec<Vec<f64>>, mut b: Vec<f64>) -> Option<Vec<f64>> {
-    let n = b.len();
+fn solve(mut a: [[f64; NP]; NP], mut b: [f64; NP]) -> Option<[f64; NP]> {
+    let n = NP;
     for col in 0..n {
         let piv = (col..n).max_by(|&i, &j| {
             a[i][col]
@@ -45,7 +45,7 @@ fn solve(mut a: Vec<Vec<f64>>, mut b: Vec<f64>) -> Option<Vec<f64>> {
             b[row] -= f * b[col];
         }
     }
-    let mut x = vec![0.0; n];
+    let mut x = [0.0; NP];
     for row in (0..n).rev() {
         let mut s = b[row];
         for k in (row + 1)..n {
@@ -103,8 +103,8 @@ fn fit(cells: &[Cell], start: [f32; MpcSigma::LEN]) -> ([f32; MpcSigma::LEN], f6
     let mut best = cost(&t);
     let mut lambda = 1e-3f64;
     for _ in 0..500 {
-        let mut ata = vec![vec![0.0f64; NP]; NP];
-        let mut atb = vec![0.0f64; NP];
+        let mut ata = [[0.0f64; NP]; NP];
+        let mut atb = [0.0f64; NP];
         for c in cells {
             let w = (c.n as f64).sqrt();
             let (f, g) = model(&t, c.empties, c.depth as f64, c.pc_depth as f64);
@@ -118,11 +118,11 @@ fn fit(cells: &[Cell], start: [f32; MpcSigma::LEN]) -> ([f32; MpcSigma::LEN], f6
         }
         let mut improved = false;
         for _ in 0..12 {
-            let mut damped = ata.clone();
+            let mut damped = ata;
             for (i, row) in damped.iter_mut().enumerate() {
                 row[i] += lambda * (1.0 + ata[i][i]);
             }
-            let Some(step) = solve(damped, atb.clone()) else {
+            let Some(step) = solve(damped, atb) else {
                 lambda *= 10.0;
                 continue;
             };
@@ -170,106 +170,93 @@ struct Args {
     spec: Option<PathBuf>,
 }
 
-fn parse_args() -> Result<Args, ExitCode> {
-    let mut paths: Vec<PathBuf> = Vec::new();
-    let mut stride = 997usize; // prime stride decorrelates from file order
-    let mut max_positions = 2000usize;
-    let mut threads = std::thread::available_parallelism()
-        .map(|n| n.get())
-        .unwrap_or(4);
-    let mut max_depth = 12u32;
-    let mut depths: Vec<u32> = Vec::new();
-    let mut min_empties = 20u32;
-    let mut max_empties = 58u32;
-    let mut min_cell = 20usize;
-    let mut empties_bin = 3u32;
-    let mut csv: Option<PathBuf> = None;
-    let mut from_csv: Option<PathBuf> = None;
-    let mut show_cells = false;
-    let mut write = false;
-    let mut legacy_sigma = false;
-    let mut alpha = false;
-    let mut alpha_per_stage = 2000usize;
-    let mut which = String::from("nnue");
-    let mut spec: Option<PathBuf> = None;
+fn parse_args() -> Args {
+    let mut a = Args {
+        paths: Vec::new(),
+        stride: 997usize, // prime stride decorrelates from file order
+        max_positions: 2000usize,
+        threads: std::thread::available_parallelism()
+            .map(|n| n.get())
+            .unwrap_or(4),
+        max_depth: 12u32,
+        depths: Vec::new(),
+        min_empties: 20u32,
+        max_empties: 58u32,
+        min_cell: 20usize,
+        empties_bin: 3u32,
+        csv: None,
+        from_csv: None,
+        show_cells: false,
+        write: false,
+        legacy_sigma: false,
+        alpha: false,
+        alpha_per_stage: 2000usize,
+        which: String::from("nnue"),
+        spec: None,
+    };
 
     let mut it = std::env::args().skip(1);
     while let Some(arg) = it.next() {
         match arg.as_str() {
-            "--patterns" => which = it.next().unwrap_or(which),
-            "--patterns-file" => spec = it.next().map(PathBuf::from),
-            "--threads" => threads = it.next().and_then(|v| v.parse().ok()).unwrap_or(threads),
-            "--stride" => stride = it.next().and_then(|v| v.parse().ok()).unwrap_or(stride),
+            "--patterns" => a.which = it.next().unwrap_or(a.which),
+            "--patterns-file" => a.spec = it.next().map(PathBuf::from),
+            "--threads" => a.threads = it.next().and_then(|v| v.parse().ok()).unwrap_or(a.threads),
+            "--stride" => a.stride = it.next().and_then(|v| v.parse().ok()).unwrap_or(a.stride),
             "--max" => {
-                max_positions = it
+                a.max_positions = it
                     .next()
                     .and_then(|v| v.parse().ok())
-                    .unwrap_or(max_positions)
+                    .unwrap_or(a.max_positions)
             }
             "--max-depth" => {
-                max_depth = it.next().and_then(|v| v.parse().ok()).unwrap_or(max_depth)
+                a.max_depth = it
+                    .next()
+                    .and_then(|v| v.parse().ok())
+                    .unwrap_or(a.max_depth)
             }
             "--min-empties" => {
-                min_empties = it
+                a.min_empties = it
                     .next()
                     .and_then(|v| v.parse().ok())
-                    .unwrap_or(min_empties)
+                    .unwrap_or(a.min_empties)
             }
             "--max-empties" => {
-                max_empties = it
+                a.max_empties = it
                     .next()
                     .and_then(|v| v.parse().ok())
-                    .unwrap_or(max_empties)
+                    .unwrap_or(a.max_empties)
             }
-            "--min-cell" => min_cell = it.next().and_then(|v| v.parse().ok()).unwrap_or(min_cell),
+            "--min-cell" => {
+                a.min_cell = it.next().and_then(|v| v.parse().ok()).unwrap_or(a.min_cell)
+            }
             "--empties-bin" => {
-                empties_bin = it
+                a.empties_bin = it
                     .next()
                     .and_then(|v| v.parse().ok())
                     .filter(|&n| n >= 1)
-                    .unwrap_or(empties_bin)
+                    .unwrap_or(a.empties_bin)
             }
-            "--csv" => csv = it.next().map(PathBuf::from),
-            "--from-csv" => from_csv = it.next().map(PathBuf::from),
-            "--cells" => show_cells = true,
-            "--write" => write = true,
-            "--legacy-sigma" => legacy_sigma = true,
-            "--alpha" => alpha = true,
+            "--csv" => a.csv = it.next().map(PathBuf::from),
+            "--from-csv" => a.from_csv = it.next().map(PathBuf::from),
+            "--cells" => a.show_cells = true,
+            "--write" => a.write = true,
+            "--legacy-sigma" => a.legacy_sigma = true,
+            "--alpha" => a.alpha = true,
             "--alpha-per-stage" => {
-                alpha_per_stage = it
+                a.alpha_per_stage = it
                     .next()
                     .and_then(|v| v.parse().ok())
-                    .unwrap_or(alpha_per_stage)
+                    .unwrap_or(a.alpha_per_stage)
             }
             "--depths" => {
                 if let Some(v) = it.next() {
-                    depths = v.split(',').filter_map(|x| x.trim().parse().ok()).collect();
+                    a.depths = v.split(',').filter_map(|x| x.trim().parse().ok()).collect();
                 }
             }
-            _ => paths.push(PathBuf::from(arg)),
+            _ => a.paths.push(PathBuf::from(arg)),
         }
     }
-    Ok(Args {
-        paths,
-        stride,
-        threads,
-        max_positions,
-        max_depth,
-        depths,
-        min_empties,
-        max_empties,
-        min_cell,
-        empties_bin,
-        csv,
-        from_csv,
-        show_cells,
-        write,
-        legacy_sigma,
-        alpha,
-        alpha_per_stage,
-        which,
-        spec,
-    })
+    a
 }
 
 fn main() -> ExitCode {
@@ -293,10 +280,7 @@ fn main() -> ExitCode {
         alpha_per_stage,
         which,
         spec,
-    } = match parse_args() {
-        Ok(a) => a,
-        Err(code) => return code,
-    };
+    } = parse_args();
     let want_data = !legacy_sigma && from_csv.is_none();
     if paths.is_empty() || (want_data && paths.len() < 2) {
         eprintln!(
@@ -313,12 +297,8 @@ fn main() -> ExitCode {
         return write_legacy_sigma(&nnue_path, &which, spec.as_deref());
     }
     if alpha {
-        let patterns = match kuroobi::pattern::resolve(&which, spec.as_deref()) {
-            Ok(p) => p,
-            Err(e) => {
-                eprintln!("{e}");
-                return ExitCode::FAILURE;
-            }
+        let Some(patterns) = resolve_patterns(&which, spec.as_deref()) else {
+            return ExitCode::FAILURE;
         };
         return calibrate_alpha(
             &nnue_path,
@@ -333,12 +313,8 @@ fn main() -> ExitCode {
     let Some(pairs) = depth_pairs(max_depth, &mut depths) else {
         return ExitCode::FAILURE;
     };
-    let patterns = match kuroobi::pattern::resolve(&which, spec.as_deref()) {
-        Ok(p) => p,
-        Err(e) => {
-            eprintln!("{e}");
-            return ExitCode::FAILURE;
-        }
+    let Some(patterns) = resolve_patterns(&which, spec.as_deref()) else {
+        return ExitCode::FAILURE;
     };
     let rows = match &from_csv {
         Some(path) => read_csv(path, &mut depths),
@@ -403,6 +379,33 @@ fn main() -> ExitCode {
     store_sigma(&nnue_path, patterns, sigma)
 }
 
+type Patterns = &'static [kuroobi::pattern::Pattern];
+
+fn resolve_patterns(which: &str, spec: Option<&Path>) -> Option<Patterns> {
+    kuroobi::pattern::resolve(which, spec)
+        .map_err(|e| eprintln!("{e}"))
+        .ok()
+}
+
+fn rewrite_model(
+    nnue_path: &Path,
+    patterns: Patterns,
+    read_verb: &str,
+    set: impl FnOnce(&mut Nnue),
+) -> bool {
+    let mut nn = Nnue::new(patterns);
+    if let Err(err) = nn.load(nnue_path) {
+        eprintln!("failed to {read_verb} {}: {err}", nnue_path.display());
+        return false;
+    }
+    set(&mut nn);
+    if let Err(err) = nn.save(nnue_path) {
+        eprintln!("failed to write {}: {err}", nnue_path.display());
+        return false;
+    }
+    true
+}
+
 struct Scan {
     stride: usize,
     min_empties: u32,
@@ -412,21 +415,13 @@ struct Scan {
 }
 
 fn write_legacy_sigma(nnue_path: &Path, which: &str, spec: Option<&Path>) -> ExitCode {
-    let patterns = match kuroobi::pattern::resolve(which, spec) {
-        Ok(p) => p,
-        Err(e) => {
-            eprintln!("{e}");
-            return ExitCode::FAILURE;
-        }
-    };
-    let mut nn = Nnue::new(patterns);
-    if let Err(err) = nn.load(nnue_path) {
-        eprintln!("failed to load {}: {err}", nnue_path.display());
+    let Some(patterns) = resolve_patterns(which, spec) else {
         return ExitCode::FAILURE;
-    }
-    nn.set_mpc_sigma(Some(MpcSigma::from_array(LEGACY)));
-    if let Err(err) = nn.save(nnue_path) {
-        eprintln!("failed to write {}: {err}", nnue_path.display());
+    };
+    let sigma = MpcSigma::from_array(LEGACY);
+    if !rewrite_model(nnue_path, patterns, "load", |nn| {
+        nn.set_mpc_sigma(Some(sigma))
+    }) {
         return ExitCode::FAILURE;
     }
     println!(
@@ -770,14 +765,9 @@ fn store_sigma(
     patterns: &'static [kuroobi::pattern::Pattern],
     sigma: MpcSigma,
 ) -> ExitCode {
-    let mut out = Nnue::new(patterns);
-    if let Err(err) = out.load(nnue_path) {
-        eprintln!("failed to re-read {}: {err}", nnue_path.display());
-        return ExitCode::FAILURE;
-    }
-    out.set_mpc_sigma(Some(sigma));
-    if let Err(err) = out.save(nnue_path) {
-        eprintln!("failed to write {}: {err}", nnue_path.display());
+    if !rewrite_model(nnue_path, patterns, "re-read", |nn| {
+        nn.set_mpc_sigma(Some(sigma))
+    }) {
         return ExitCode::FAILURE;
     }
     println!("sigma written to {}", nnue_path.display());
@@ -893,7 +883,7 @@ fn calibrate_alpha(
         for (ei, &e) in ALPHA_EMPTIES.iter().enumerate() {
             let errs: Vec<(u32, u32, f64)> = rows
                 .iter()
-                .filter(|r| r.0 == e && r.3[hi].abs() <= 64.0 && r.3[lo].abs() <= 64.0)
+                .filter(|r| r.0 == e && r.3[hi].abs() <= DISC_LIMIT && r.3[lo].abs() <= DISC_LIMIT)
                 .map(|r| (r.1, r.2, (r.3[hi] - r.3[lo]) as f64))
                 .collect();
             if errs.is_empty() {
@@ -934,14 +924,9 @@ fn calibrate_alpha(
         );
         return ExitCode::SUCCESS;
     }
-    let mut out = Nnue::new(patterns);
-    if let Err(err) = out.load(nnue_path) {
-        eprintln!("failed to re-read {}: {err}", nnue_path.display());
-        return ExitCode::FAILURE;
-    }
-    out.set_mpc_alpha(Some(table));
-    if let Err(err) = out.save(nnue_path) {
-        eprintln!("failed to write {}: {err}", nnue_path.display());
+    if !rewrite_model(nnue_path, patterns, "re-read", |nn| {
+        nn.set_mpc_alpha(Some(table))
+    }) {
         return ExitCode::FAILURE;
     }
     println!("alpha written to {}", nnue_path.display());

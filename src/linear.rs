@@ -140,14 +140,11 @@ impl Linear {
         self.flat_weights.clear();
         self.flat_i8.clear();
         self.flat_i8_white.clear();
-        let counts = if self.appear.is_empty() {
-            Vec::new()
-        } else {
-            self.appear
-                .iter()
-                .map(|st| st.iter().map(|t| t.as_ptr()).collect())
-                .collect()
-        };
+        let counts = self
+            .appear
+            .iter()
+            .map(|st| st.iter().map(|t| t.as_ptr()).collect())
+            .collect();
         LinearView {
             counts,
             stages: self
@@ -376,9 +373,12 @@ impl Linear {
     }
 
     pub fn stage(board: &Board) -> usize {
-        60usize
-            .saturating_sub(board.empty_count() as usize)
-            .min(STAGE_COUNT - 1)
+        Self::stage_of(board.empty_count() as usize)
+    }
+
+    #[inline]
+    fn stage_of(empties: usize) -> usize {
+        60usize.saturating_sub(empties).min(STAGE_COUNT - 1)
     }
 
     pub fn count_appearances(&mut self, boards: impl Iterator<Item = Board>) {
@@ -422,7 +422,8 @@ impl Linear {
         self.min_appear = n;
     }
 
-    pub fn has_appearances(&self) -> bool {
+    #[cfg(test)]
+    fn has_appearances(&self) -> bool {
         !self.appear.is_empty()
     }
 
@@ -451,6 +452,7 @@ impl Linear {
         score + self.num_weights[stage][self.num_index(board)]
     }
 
+    #[cfg(all(test, feature = "gpu"))]
     pub fn flat_all(&self) -> Vec<f32> {
         self.flat_stages(0, STAGE_COUNT - 1)
     }
@@ -467,6 +469,7 @@ impl Linear {
         out
     }
 
+    #[cfg(all(test, feature = "gpu"))]
     pub fn set_flat_all(&mut self, v: &[f32]) {
         self.set_flat_stages(0, STAGE_COUNT - 1, v)
     }
@@ -506,7 +509,7 @@ impl Linear {
     }
 
     /// Unfolds the cells into the tables the search indexes directly.
-    pub fn rebuild_flat(&mut self) {
+    fn rebuild_flat(&mut self) {
         let mut pattern_off = Vec::with_capacity(self.patterns.len());
         let mut off = 0u32;
         for p in self.patterns {
@@ -574,7 +577,7 @@ impl Linear {
         indices: &PatternIndices,
     ) -> f32 {
         let empties = 64 - (player | opponent).count_ones() as usize;
-        let stage = 60usize.saturating_sub(empties).min(STAGE_COUNT - 1);
+        let stage = Self::stage_of(empties);
         if self.flat_i8.is_empty() {
             let mut b = Board::new();
             b.black = if matches!(color, Color::Black) {
@@ -600,7 +603,8 @@ impl Linear {
         sum as f32 / I8_SCALE + self.num_weights[stage][player.count_ones() as usize]
     }
 
-    pub fn weight(&self, stage: usize, pattern: usize, index: usize) -> f32 {
+    #[cfg(test)]
+    fn weight(&self, stage: usize, pattern: usize, index: usize) -> f32 {
         self.weights[stage][pattern][self.fold[pattern][index] as usize]
     }
 
@@ -609,17 +613,18 @@ impl Linear {
         self.weights[stage][pattern][self.fold[pattern][index] as usize] = value;
     }
 
-    pub fn update_weights(&mut self, board: &Board, target: f32, learning_rate: f32) -> f32 {
+    #[cfg(test)]
+    fn update_weights(&mut self, board: &Board, target: f32, learning_rate: f32) -> f32 {
         let prediction = self.eval(board);
         let error = target - prediction;
 
         let stage = Self::stage(board);
         let delta = learning_rate * error;
 
+        self.flat_weights.clear();
         for (pi, p) in self.patterns.iter().enumerate() {
             for idx in p.indices(board.black, board.white, board.player()) {
                 self.weights[stage][pi][self.fold[pi][idx] as usize] += delta;
-                self.flat_weights.clear();
             }
         }
         let num_idx = self.num_index(board);
@@ -637,28 +642,19 @@ impl Linear {
         let error = target - prediction;
         let stage = Self::stage(board);
 
+        self.flat_weights.clear();
         for (pi, p) in self.patterns.iter().enumerate() {
             let table_size = self.weights[stage][pi].len();
             for idx in p.indices(board.black, board.white, board.player()) {
                 let idx = self.fold[pi][idx] as usize;
                 let delta = opt.step(stage, pi, idx, table_size, error);
                 self.weights[stage][pi][idx] += delta;
-                self.flat_weights.clear();
             }
         }
         let num_idx = self.num_index(board);
         let delta = opt.step(stage, self.patterns.len(), num_idx, NUM_TABLE_SIZE, error);
         self.num_weights[stage][num_idx] += delta;
         error
-    }
-
-    pub fn update_weights_adam(
-        &mut self,
-        board: &Board,
-        target: f32,
-        opt: &mut AdamOptimizer,
-    ) -> f32 {
-        self.update_weights_with(board, target, opt)
     }
 
     pub fn train(&mut self, board: &Board, target: f32, opt: &mut impl Optimizer) -> f32 {
@@ -909,7 +905,7 @@ mod tests {
 
         let mut later = b;
         let pos = crate::position::Position::from_index(later.movable().trailing_zeros()).unwrap();
-        later.make_move_unchecked(pos); // now stage 1
+        later.make_move_unchecked(pos);
         assert_eq!(Linear::stage(&later), 1);
         assert_eq!(e.eval(&later), 0.0, "stage-1 weights must be untouched");
     }
@@ -966,7 +962,7 @@ mod tests {
         let mut adam_eval = Linear::new(LINEAR_PATTERNS);
         let mut opt = AdamOptimizer::new(lr);
         for _ in 0..100 {
-            adam_eval.update_weights_adam(&b, target, &mut opt);
+            adam_eval.update_weights_with(&b, target, &mut opt);
         }
         let adam_residual = (target - adam_eval.eval(&b)).abs();
         let band = 65.0 * lr * 2.0;

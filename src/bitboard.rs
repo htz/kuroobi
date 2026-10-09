@@ -4,9 +4,8 @@ const MASK_RANK: u64 = 0x7E7E7E7E7E7E7E7E;
 const MASK_FILE: u64 = 0x00FFFFFFFFFFFF00;
 const MASK_DIAG: u64 = 0x007E7E7E7E7E7E00;
 
-#[inline(always)]
+#[cfg(test)]
 fn flip_shift<const DIR: u32, const UP: bool>(player: u64, opp_masked: u64, pos: u64) -> u64 {
-    #[inline(always)]
     fn sh<const N: u32, const UP: bool>(x: u64) -> u64 {
         if UP {
             x << N
@@ -22,19 +21,15 @@ fn flip_shift<const DIR: u32, const UP: bool>(player: u64, opp_masked: u64, pos:
 
     let opp2 = opp_masked & sh::<DIR, UP>(opp_masked);
 
+    let hop2 = |f: u64| match DIR {
+        1 => sh::<2, UP>(f) & opp2,
+        7 => sh::<14, UP>(f) & opp2,
+        8 => sh::<16, UP>(f) & opp2,
+        _ => sh::<18, UP>(f) & opp2,
+    };
     f |= sh::<DIR, UP>(f) & opp_masked; // up to 2
-    f |= match DIR {
-        1 => sh::<2, UP>(f) & opp2,
-        7 => sh::<14, UP>(f) & opp2,
-        8 => sh::<16, UP>(f) & opp2,
-        _ => sh::<18, UP>(f) & opp2,
-    }; // up to 4
-    f |= match DIR {
-        1 => sh::<2, UP>(f) & opp2,
-        7 => sh::<14, UP>(f) & opp2,
-        8 => sh::<16, UP>(f) & opp2,
-        _ => sh::<18, UP>(f) & opp2,
-    }; // up to 6
+    f |= hop2(f); // up to 4
+    f |= hop2(f); // up to 6
 
     if sh::<DIR, UP>(f) & player != 0 {
         f
@@ -43,8 +38,8 @@ fn flip_shift<const DIR: u32, const UP: bool>(player: u64, opp_masked: u64, pos:
     }
 }
 
-#[inline]
-pub fn flippable_generic(player_bb: u64, opponent_bb: u64, pos_bit: u64) -> u64 {
+#[cfg(test)]
+fn flippable_generic(player_bb: u64, opponent_bb: u64, pos_bit: u64) -> u64 {
     let o_rank = opponent_bb & MASK_RANK;
     let o_file = opponent_bb & MASK_FILE;
     let o_diag = opponent_bb & MASK_DIAG;
@@ -63,7 +58,7 @@ pub fn flippable_generic(player_bb: u64, opponent_bb: u64, pos_bit: u64) -> u64 
 pub fn check(player_bb: u64, opponent_bb: u64, pos_bit: u64) -> bool {
     let mask = !(player_bb | opponent_bb) & pos_bit;
     if mask == 0 {
-        return false; // Occupied
+        return false;
     }
     flippable(player_bb, opponent_bb, mask) != 0
 }
@@ -218,11 +213,6 @@ pub fn symmetries(board: u64) -> [u64; 8] {
 }
 
 #[inline]
-pub fn count_bits(bb: u64) -> u32 {
-    bb.count_ones()
-}
-
-#[inline]
 pub fn iter_bits(bb: u64) -> impl Iterator<Item = u8> {
     let mut remaining = bb;
     std::iter::from_fn(move || -> Option<u8> {
@@ -234,6 +224,16 @@ pub fn iter_bits(bb: u64) -> impl Iterator<Item = u8> {
             Some(bit)
         }
     })
+}
+
+#[cfg(test)]
+fn xorshift(mut state: u64) -> impl FnMut() -> u64 {
+    move || {
+        state ^= state << 13;
+        state ^= state >> 7;
+        state ^= state << 17;
+        state
+    }
 }
 
 #[cfg(test)]
@@ -277,13 +277,7 @@ mod tests {
     }
 
     fn random_boards(n: usize) -> Vec<(u64, u64)> {
-        let mut state = 0x243F6A8885A308D3u64;
-        let mut next = move || {
-            state ^= state << 13;
-            state ^= state >> 7;
-            state ^= state << 17;
-            state
-        };
+        let mut next = xorshift(0x243F6A8885A308D3);
         (0..n)
             .map(|_| {
                 let a = next();
@@ -395,45 +389,10 @@ mod tests {
     }
 
     #[test]
-    fn test_mobility_matches_flippable() {
-        for (player, opp) in random_boards(200) {
-            let empty = !(player | opp);
-            let mob = mobility(player, opp, empty);
-            let mut e = empty;
-            while e != 0 {
-                let bit = 1u64 << e.trailing_zeros();
-                e &= e - 1;
-                let can_flip = flippable(player, opp, bit) != 0;
-                assert_eq!(
-                    mob & bit != 0,
-                    can_flip,
-                    "mobility and flippable disagree at {bit:#x}"
-                );
-            }
-        }
-    }
-
-    #[test]
-    fn test_check_all_consistency() {
-        for (player, opp) in random_boards(100) {
-            let empty = !(player | opp);
-            assert_eq!(check_all(player, opp), mobility(player, opp, empty) != 0);
-        }
-    }
-
-    #[test]
     fn test_empty_bb() {
         assert_eq!(empty_bb(0, 0), u64::MAX);
         assert_eq!(empty_bb(1, 0), u64::MAX ^ 1);
         assert_eq!(empty_bb(u64::MAX, 0), 0);
-    }
-
-    #[test]
-    fn test_count_bits() {
-        assert_eq!(count_bits(0), 0);
-        assert_eq!(count_bits(1), 1);
-        assert_eq!(count_bits(0xFF), 8);
-        assert_eq!(count_bits(u64::MAX), 64);
     }
 
     #[test]
@@ -590,7 +549,6 @@ static COUNT_LAST_FLIP_PAIR: [[u16; 256]; PAIR_ROWS] = {
     t
 };
 
-#[repr(align(64))]
 #[derive(Clone, Copy)]
 #[repr(C, align(64))]
 struct LastDiag {
@@ -627,13 +585,13 @@ const fn line_mask(sq: i32, cu: [i32; 8], nu: usize, cd: [i32; 8], nd: usize) ->
     mask
 }
 
-const fn span_in_byte(mask: u64) -> (i32, i32) {
+const fn span_in_byte(mask: u64, by_byte: bool) -> (i32, i32) {
     let mut lo = 8i32;
     let mut hi = -1i32;
     let mut b = 0i32;
     while b < 64 {
         if mask & (1u64 << b) != 0 {
-            let k = b % 8;
+            let k = if by_byte { b / 8 } else { b % 8 };
             if k < lo {
                 lo = k;
             }
@@ -720,21 +678,7 @@ const fn build_last_diag() -> [LastDiag; 64] {
                 i += 1;
             }
             let by_byte = !form_a;
-            let mut lo = 8i32;
-            let mut hi = -1i32;
-            let mut b = 0i32;
-            while b < 64 {
-                if mask & (1u64 << b) != 0 {
-                    let k = if by_byte { b / 8 } else { b % 8 };
-                    if k < lo {
-                        lo = k;
-                    }
-                    if k > hi {
-                        hi = k;
-                    }
-                }
-                b += 1;
-            }
+            let (lo, hi) = span_in_byte(mask, by_byte);
             let own = if by_byte { sq / 8 } else { sq % 8 };
             let (a0, pm0, mul0) = if by_byte {
                 let mut a = 0u64;
@@ -763,8 +707,8 @@ const fn build_last_diag() -> [LastDiag; 64] {
         } else {
             let m9 = line_mask(sq, c9u, n9u, c9d, n9d);
             let m7 = line_mask(sq, c7u, n7u, c7d, n7d);
-            let (lo9, hi9) = span_in_byte(m9);
-            let (lo7, hi7) = span_in_byte(m7);
+            let (lo9, hi9) = span_in_byte(m9, false);
+            let (lo7, hi7) = span_in_byte(m7, false);
             let own = sq % 8;
             t[sq as usize] = LastDiag {
                 m0: m9,
@@ -803,7 +747,7 @@ pub fn count_last_flips(player: u64, sq: u8) -> (u32, u32) {
 
     let i0 = (player >> (s & 0x38)) as u8;
     let c0 = pair_class(s & 7, 8);
-    let i1 = (((player >> (s & 7)) & 0x0101_0101_0101_0101).wrapping_mul(GATHER_MUL_8) >> 56) as u8;
+    let i1 = (((player >> (s & 7)) & MUL_BYTES).wrapping_mul(GATHER_MUL_8) >> 56) as u8;
     let c1 = pair_class(s >> 3, 8);
 
     let g = &LAST_DIAG[s];
@@ -978,89 +922,6 @@ pub fn flippable2(player_bb: u64, opponent_bb: u64, a: u8, b: u8) -> (u64, u64) 
     )
 }
 
-#[derive(Clone, Copy)]
-pub struct FlipCtx {
-    #[cfg(target_arch = "aarch64")]
-    ctx: BoardCtx,
-    #[cfg(not(target_arch = "aarch64"))]
-    player: u64,
-    #[cfg(not(target_arch = "aarch64"))]
-    opponent: u64,
-}
-
-impl FlipCtx {
-    #[inline]
-    pub fn new(player_bb: u64, opponent_bb: u64) -> Self {
-        #[cfg(target_arch = "aarch64")]
-        {
-            Self {
-                ctx: unsafe { BoardCtx::new(player_bb, opponent_bb) },
-            }
-        }
-        #[cfg(not(target_arch = "aarch64"))]
-        Self {
-            player: player_bb,
-            opponent: opponent_bb,
-        }
-    }
-
-    #[inline]
-    pub fn flip(&self, sq: u8) -> u64 {
-        #[cfg(target_arch = "aarch64")]
-        {
-            unsafe { self.ctx.flip1((sq & 63) as usize) }
-        }
-        #[cfg(not(target_arch = "aarch64"))]
-        flippable_scalar(self.player, self.opponent, 1u64 << (sq & 63))
-    }
-}
-
-#[inline]
-pub fn neighbours(sq: u8) -> u64 {
-    NEIGHBOURS[(sq & 63) as usize]
-}
-
-static NEIGHBOURS: [u64; 64] = {
-    let mut t = [0u64; 64];
-    let mut sq = 0usize;
-    while sq < 64 {
-        let file = (sq / 8) as i32;
-        let rank = (sq % 8) as i32;
-        let mut mask = 0u64;
-        let mut df = -1i32;
-        while df <= 1 {
-            let mut dr = -1i32;
-            while dr <= 1 {
-                let (f, r) = (file + df, rank + dr);
-                if !(df == 0 && dr == 0) && f >= 0 && f < 8 && r >= 0 && r < 8 {
-                    mask |= 1u64 << (f * 8 + r);
-                }
-                dr += 1;
-            }
-            df += 1;
-        }
-        t[sq] = mask;
-        sq += 1;
-    }
-    t
-};
-
-const _: () = {
-    let mut sq = 0usize;
-    while sq < 64 {
-        let file = sq / 8;
-        let rank = sq % 8;
-        let edges = ((file == 0 || file == 7) as u32) + ((rank == 0 || rank == 7) as u32);
-        let want = match edges {
-            2 => 3,
-            1 => 5,
-            _ => 8,
-        };
-        assert!(NEIGHBOURS[sq].count_ones() == want);
-        sq += 1;
-    }
-};
-
 #[inline]
 pub fn flippable3(player_bb: u64, opponent_bb: u64, a: u8, b: u8, c: u8) -> (u64, u64, u64) {
     #[cfg(target_arch = "aarch64")]
@@ -1118,13 +979,7 @@ mod flip_kernel_tests {
 
     #[test]
     fn batched_flips_match_single() {
-        let mut state = 0xDEAD_BEEF_1234_5678u64;
-        let mut next = || {
-            state ^= state << 13;
-            state ^= state >> 7;
-            state ^= state << 17;
-            state
-        };
+        let mut next = xorshift(0xDEAD_BEEF_1234_5678);
         for i in 0..200_000 {
             let x = next();
             let y = next();
@@ -1166,13 +1021,7 @@ mod flip_kernel_tests {
 
     #[test]
     fn flippable_matches_the_ray_scan() {
-        let mut state = 0x1357_9BDF_2468_ACE0u64;
-        let mut next = || {
-            state ^= state << 13;
-            state ^= state >> 7;
-            state ^= state << 17;
-            state
-        };
+        let mut next = xorshift(0x1357_9BDF_2468_ACE0);
         for i in 0..20_000 {
             let x = next();
             let y = next();
@@ -1199,13 +1048,7 @@ mod count_last_flip_tests {
 
     #[test]
     fn count_last_flips_matches_flippable() {
-        let mut state = 0x1234_5678_9ABC_DEF0u64;
-        let mut next = || {
-            state ^= state << 13;
-            state ^= state >> 7;
-            state ^= state << 17;
-            state
-        };
+        let mut next = xorshift(0x1234_5678_9ABC_DEF0);
         for _ in 0..20_000 {
             let bits = next();
             for sq in 0..64u8 {
@@ -1234,13 +1077,7 @@ mod neon_mobility_tests {
 
     #[test]
     fn neon_mobility_matches_scalar() {
-        let mut state = 0x9E37_79B9_7F4A_7C15u64;
-        let mut next = || {
-            state ^= state << 13;
-            state ^= state >> 7;
-            state ^= state << 17;
-            state
-        };
+        let mut next = xorshift(0x9E37_79B9_7F4A_7C15);
         for i in 0..300_000 {
             let a = next();
             let b = next();

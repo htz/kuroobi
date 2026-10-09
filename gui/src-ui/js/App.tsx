@@ -1,25 +1,23 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { PlayDock } from './PlayDock';
-import { useGame, type EngineSide } from './state';
-import { useGgs } from './ggs';
+import { LEVELS, useGame, type EngineSide } from './state';
+import { fmtSecs, useGgs } from './ggs';
 import { flipped, usePrefs } from './prefs';
 import type { GameView } from './types';
 import { api, ggsApi, jsLog, onApp, type ActivityView } from './api';
 import { useActivity, useEngineSettings, useEngineTurn, useGraph, useHints, useLearnLog, useStartGame, type AskArgs } from './engine';
-import { fmtSecs } from './ggs';
-import { cellsOf, connOf, evalsOf, ggsPlaying, movesOf, navBadges, sqName } from './adapt';
-import { AppFrame, Body, BottomPanel, Busy, Divider, Dock, Main, Overlay, StatusBar, StatusStat, Toolbar, WindowBar, useToolbarCompact } from './components/layout';
+import { connOf, evalsOf, ggsPlaying, movesOf, navBadges, sqName } from './adapt';
+import { AppFrame, BoardFit, Body, BottomPanel, Busy, Divider, Dock, Main, Overlay, StatusBar, StatusStat, Toolbar, WindowBar, useToolbarCompact } from './components/layout';
 import { GgsChat, GgsConsole, GgsScreen } from './GgsScreens';
 import { Confirm, PasteKifu, Settings } from './Dialogs';
-import { Board } from './components/board';
+import { Board, type Cell } from './components/board';
 import { EvalGraph, MoveScrub, ScoreRow, StoneDot, srcIsBook, srcLabel } from './components/data';
-import { GgsStatus, JobList, Meter, Nav, navLocal, StatusChip, ggsNav, Toasts, type NavId, type Toast } from './components/ggs';
+import { GgsStatus, JobList, Meter, Nav, navLocal, StatusChip, ggsNav, Toasts, type NavId } from './components/ggs';
 import { Button, Progress, Segmented, Select, Toggle } from './components/primitives';
 import { Icon } from './components/Icons';
 import { BookDock, BookPane, BookTree, useBookBrowse } from './BookScreen';
 import { LearnLog } from './LearnLog';
 import { KifuViewer } from './KifuViewer';
-import { LEVELS } from './state';
 import { t, useLang, tErr } from './i18n';
 
 
@@ -370,8 +368,6 @@ export function App() {
     return () => window.removeEventListener('keydown', onKey);
   }, [setNav, paste, ask, viewer, settings, isBook, isGgs, study, book, g, v]);
 
-  const toasts: Toast[] = g.toasts.map(x => ({ id: String(x.id), tone: x.tone, text: x.text }));
-
   const over = v?.over ?? false;
   const result = v?.over
     ? t(v.black === v.white ? 'app.result.draw'
@@ -547,19 +543,13 @@ export function App() {
           flex: 1, minHeight: 'calc(200px + var(--h-bar))',
           display: 'flex', flexDirection: 'column',
         }}>
-          <div style={{
-            flex: 1, minHeight: 200, display: 'grid', placeItems: 'center',
-            gridTemplateRows: 'minmax(0, 1fr)', gridTemplateColumns: 'minmax(0, 1fr)',
-            padding: 'var(--sp-2) var(--sp-4)',
-          }}>
-              <div style={{ height: '100%', maxHeight: '100%', aspectRatio: '1 / 1', maxWidth: '100%' }}>
-              {v && <Board cells={cellsOf(v)} legal={v.legal} last={v.last} evals={evals}
-                           coords={prefs.coords} grain={prefs.grain}
-                           flip={flipped(prefs.facing, study ? '' : sideColor)}
-                           disabled={g.thinking}
-                           onPlay={(sq) => void g.play(sq)} />}
-            </div>
-          </div>
+          <BoardFit minHeight={200} padding="var(--sp-2) var(--sp-4)">
+            {v && <Board cells={v.cells as Cell[]} legal={v.legal} last={v.last} evals={evals}
+                         coords={prefs.coords} grain={prefs.grain}
+                         flip={flipped(prefs.facing, study ? '' : sideColor)}
+                         disabled={g.thinking}
+                         onPlay={(sq) => void g.play(sq)} />}
+          </BoardFit>
           <ScoreRow black={v?.black ?? 2} white={v?.white ?? 2}
                     turn={!v || v.over ? undefined : v.player === 'black' ? 'b' : 'w'}
                     meta={study ? curMoveMeta : result}
@@ -605,7 +595,7 @@ export function App() {
       </Main>
 
       {isBook && bookTab === 'book' && book.node?.size !== 0 && (
-        <Dock tabs={[t('app.book.tab_book')]} active={t('app.book.tab_book')} open={dockOpen}>
+        <Dock tabs={[{ id: 'book', label: t('app.book.tab_book') }]} active="book" open={dockOpen}>
           <BookDock b={book} decimals={prefs.decimals} />
         </Dock>
       )}
@@ -695,7 +685,7 @@ export function App() {
         </Overlay>
       )}
 
-      <Toasts items={toasts} onDismiss={(id) => g.dismiss(+id)} />
+      <Toasts items={g.toasts} onDismiss={g.dismiss} />
     </AppFrame>
   );
 }

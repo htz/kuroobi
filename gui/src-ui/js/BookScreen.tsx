@@ -4,7 +4,7 @@ import { sqName } from './adapt';
 import type { BookNode } from './types';
 import { Board, type EvalInfo } from './components/board';
 import { ScoreRow } from './components/data';
-import { Col, Empty, EmptyState, List, Section, TableHead } from './components/layout';
+import { BoardFit, Col, Empty, EmptyState, List, Section, TableHead } from './components/layout';
 import { Button } from './components/primitives';
 import { t, tErr } from './i18n';
 
@@ -109,19 +109,13 @@ export function BookPane({ b, coords, grain, flip, onSettings }: {
   });
   return (
     <div style={{ flex: 1, minWidth: 0, minHeight: 0, display: 'flex', flexDirection: 'column' }}>
-          <div style={{
-            flex: 1, minHeight: 0, display: 'grid', placeItems: 'center',
-            gridTemplateRows: 'minmax(0, 1fr)', gridTemplateColumns: 'minmax(0, 1fr)',
-            padding: 'var(--sp-2) var(--sp-4)',
-          }}>
-              <div style={{ height: '100%', maxHeight: '100%', aspectRatio: '1 / 1', maxWidth: '100%' }}>
-          <Board cells={(n?.cells ?? INITIAL) as (0 | 1 | 2)[]}
-                 legal={n?.moves.map((m) => m.pos) ?? []}
-                 last={b.line.length ? b.line[b.line.length - 1] : null}
-                 evals={evals} coords={coords} grain={grain} flip={flip}
-                 onPlay={(sq) => { if (n?.moves.some((m) => m.pos === sq)) b.push(sq); }} />
-        </div>
-      </div>
+      <BoardFit padding="var(--sp-2) var(--sp-4)">
+        <Board cells={(n?.cells ?? INITIAL) as (0 | 1 | 2)[]}
+               legal={n?.moves.map((m) => m.pos) ?? []}
+               last={b.line.length ? b.line[b.line.length - 1] : null}
+               evals={evals} coords={coords} grain={grain} flip={flip}
+               onPlay={(sq) => { if (n?.moves.some((m) => m.pos === sq)) b.push(sq); }} />
+      </BoardFit>
       <ScoreRow black={n?.black ?? 2} white={n?.white ?? 2}
                 turn={n?.player === 'white' ? 'w' : 'b'}
                 meta={b.err || (n && n.moves.length === 0 ? t('book.meta.end_of_line') : undefined)} />
@@ -148,7 +142,7 @@ function rowsOf(b: BookBrowse, key: string, depth: number, out: Row[]): void {
   }
 }
 
-export function BookDock({ b, decimals = 1 }: { b: BookBrowse; decimals?: number }) {
+export function BookDock({ b, decimals }: { b: BookBrowse; decimals: number }) {
   const n = b.node;
 
   return (
@@ -185,7 +179,7 @@ export function BookDock({ b, decimals = 1 }: { b: BookBrowse; decimals?: number
           <Empty>{n ? t('book.empty.end_of_line') : t('book.empty.not_in_book')}</Empty>
         ) : (
           <List>
-            {n?.moves.map((m) => (
+            {n.moves.map((m) => (
               <button key={m.pos} type="button" className="k-row" onClick={() => b.push(m.pos)}
                       title={t('book.row.play_move')}
                       style={{
@@ -212,9 +206,9 @@ export function BookDock({ b, decimals = 1 }: { b: BookBrowse; decimals?: number
   );
 }
 
-export function BookTree({ b, decimals = 1, onStudy }: {
-  b: BookBrowse; decimals?: number;
-  onStudy?: (kifu: string) => void;
+export function BookTree({ b, decimals, onStudy }: {
+  b: BookBrowse; decimals: number;
+  onStudy: (kifu: string) => void;
 }) {
   const root = keyOf(b.line);
   const rows: Row[] = [];
@@ -234,22 +228,20 @@ export function BookTree({ b, decimals = 1, onStudy }: {
                    onGo={() => b.goto(r.key)} />
         ))}
       </div>
-      {onStudy && (
-        <div style={{
-          flex: 'none', padding: 'var(--sp-2) var(--sp-3)',
-          borderTop: '1px solid var(--border-weak)',
-        }}>
-          <Button disabled={!b.line.length}
-                  onClick={() => onStudy(b.line.map(sqName).join(''))}>{t('book.open_in_study')}</Button>
-        </div>
-      )}
+      <div style={{
+        flex: 'none', padding: 'var(--sp-2) var(--sp-3)',
+        borderTop: '1px solid var(--border-weak)',
+      }}>
+        <Button disabled={!b.line.length}
+                onClick={() => onStudy(root)}>{t('book.open_in_study')}</Button>
+      </div>
     </div>
   );
 }
 
 
-function BookRow({ r, open, onToggle, onGo, decimals = 1 }: {
-  r: Row; open: boolean; onToggle: () => void; onGo: () => void; decimals?: number;
+function BookRow({ r, open, onToggle, onGo, decimals }: {
+  r: Row; open: boolean; onToggle: () => void; onGo: () => void; decimals: number;
 }) {
   const leaf = r.child && r.child.moves.length === 0;
   return (

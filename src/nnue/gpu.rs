@@ -690,7 +690,6 @@ fn main(@builtin(local_invocation_id) lid: vec3<u32>) {
             f = CLIP_NORM / norm;
         }
         step[0] = f;
-        step[1] = norm;
     }
     workgroupBarrier();
     var q = 0.0;
@@ -707,7 +706,6 @@ fn main(@builtin(local_invocation_id) lid: vec3<u32>) {
     }
     if (h == 0u) {
         stats[0] += red[0];
-        stats[1] += f32(P.n_ex);
     }
 }
 "#;
@@ -952,13 +950,10 @@ struct Csr {
     segs: Vec<u32>,
     /// Rows of more than one segment, three words each: touched row and its partial-sum slot range.
     multi: Vec<u32>,
-    n_segs: usize,
-    n_multi: usize,
     /// `slot[row]` is one past the row's index in the touched list, zero for an untouched row.
     slot: Vec<u32>,
     /// The inverse of `slot`: `touched[slot[row] - 1] == row`.
     touched: Vec<u32>,
-    n_touched: usize,
 }
 
 impl Csr {
@@ -969,11 +964,8 @@ impl Csr {
             exids: Vec::new(),
             segs: Vec::new(),
             multi: Vec::new(),
-            n_segs: 0,
-            n_multi: 0,
             slot: vec![0; n_rows],
             touched: Vec::new(),
-            n_touched: 0,
         }
     }
 
@@ -986,8 +978,6 @@ impl Csr {
         n_masks: usize,
         row_off: impl Fn(usize) -> u32,
     ) {
-        let tm = std::env::var_os("KUROOBI_CSR_PROF").is_some();
-        let t0 = std::time::Instant::now();
         for &r in &self.touched {
             self.counts[r as usize] = 0;
         }
@@ -997,7 +987,6 @@ impl Csr {
                 self.counts[(rows[e * stride + m] + off) as usize] += 1;
             }
         }
-        let t1 = std::time::Instant::now();
         self.rowptr.clear();
         self.rowptr.push(0);
         let mut total = 0u32;
@@ -1016,8 +1005,6 @@ impl Csr {
             self.rowptr.push(total);
             self.counts[r] = total - c;
         }
-        self.n_touched = t as usize;
-        let t2 = std::time::Instant::now();
         self.segs.clear();
         self.multi.clear();
         let mut n_part = 0u32;
@@ -1035,9 +1022,6 @@ impl Csr {
             }
             self.multi.extend_from_slice(&[t as u32, first, n_part]);
         }
-        self.n_segs = self.segs.len() / 4;
-        self.n_multi = self.multi.len() / 3;
-        let t3 = std::time::Instant::now();
         self.exids.resize(total as usize, 0);
         for e in 0..n_ex {
             let off = row_off(e);
@@ -1048,17 +1032,18 @@ impl Csr {
                 self.counts[r] += 1;
             }
         }
-        if tm {
-            eprintln!(
-                "csr: clear+count {:.0}us sweep {:.0}us segs {:.0}us fill {:.0}us  (rows {} touched {})",
-                (t1 - t0).as_secs_f64() * 1e6,
-                (t2 - t1).as_secs_f64() * 1e6,
-                (t3 - t2).as_secs_f64() * 1e6,
-                t3.elapsed().as_secs_f64() * 1e6,
-                self.counts.len(),
-                self.n_touched
-            );
-        }
+    }
+
+    fn n_segs(&self) -> usize {
+        self.segs.len() / 4
+    }
+
+    fn n_multi(&self) -> usize {
+        self.multi.len() / 3
+    }
+
+    fn n_touched(&self) -> usize {
+        self.touched.len()
     }
 }
 
@@ -1256,6 +1241,10 @@ fn dispatch_dims(n_wg: usize) -> (u32, u32) {
     (x, n.div_ceil(x))
 }
 
+fn u32s(v: &[u32]) -> &[u8] {
+    bytemuck::cast_slice(v)
+}
+
 impl GpuTrainer {
     pub fn new(nn: &Nnue, batch: usize, adam: &AdamState, lookahead: (u32, f32)) -> GpuTrainer {
         assert!(
@@ -1263,22 +1252,17 @@ impl GpuTrainer {
             "the GPU path trains the f32 model, not the grid"
         );
         assert!(nn.base.is_none(), "the GPU path has no base linear");
-        assert!(
-            !adam.legacy_optimizer,
-            "the GPU path is the corrected optimizer only"
-        );
         const {
             assert!(
                 SO_SKIP <= WG && ACC_DIMS == WG,
                 "kernels are written for a 256-lane accumulator"
             );
-            assert!(FT_BUCKETS == 1, "kernels assume one transformer copy");
             assert!(
                 SO_L2 * 4 == WG && SO_L1 * 2 * 8 == WG,
                 "fwd_bwd splits the middle layer four and eight ways"
             );
         }
-        assert_eq!(nn.pa.len(), PA_BUCKETS * nn.n_feat_bucket * PA_DIMS);
+        assert_eq!(nn.pa.len(), PA_BUCKETS * nn.n_features * PA_DIMS);
 
         let instance = wgpu::Instance::new(wgpu::InstanceDescriptor::new_without_display_handle());
         let adapter = block_on(instance.request_adapter(&wgpu::RequestAdapterOptions {
@@ -1358,7 +1342,7 @@ impl GpuTrainer {
         let k_step_dense = make(K_STEP_DENSE, "step_dense");
 
         let n_masks = nn.n_masks;
-        let nfb = nn.n_feat_bucket;
+        let nfb = nn.n_features;
         let ft_rows = nn.ft.len() / ACC_DIMS;
         let pa_rows = nn.pa.len() / PA_DIMS;
         let st = wgpu::BufferUsages::STORAGE;
@@ -1639,14 +1623,9 @@ impl GpuTrainer {
         }
     }
 
-    /// Optimizer steps taken so far.
     /// Steps only the per-stage head and the pattern add; the transformer and its bias stay as loaded.
     pub fn set_heads_only(&mut self, on: bool) {
         self.heads_only = on;
-    }
-
-    pub fn steps(&self) -> u32 {
-        self.t
     }
 
     fn bind(&self, k: &Kernel, bufs: &[&wgpu::Buffer]) -> wgpu::BindGroup {
@@ -1694,7 +1673,7 @@ impl GpuTrainer {
                         let board = ex.board();
                         let stage = crate::linear::Linear::stage(&board);
                         let ix = nn.indices(ex.black, ex.white);
-                        let f = nn.features_black(&ix, stage);
+                        let f = nn.features_black(&ix);
                         o[..nm].copy_from_slice(&f[..nm]);
                         o[nm] = stage as u32;
                         o[nm + 1] = mob_unit(Nnue::mob_index(&board)).to_bits();
@@ -1749,9 +1728,6 @@ impl GpuTrainer {
         let n = b.n;
         let stride = self.n_masks + 3;
         let q = &self.queue;
-        fn u32s(v: &[u32]) -> &[u8] {
-            bytemuck::cast_slice(v)
-        }
         q.write_buffer(&self.b_inp, 0, u32s(&b.inp[..n * stride]));
         q.write_buffer(&self.b_stage_off, 0, u32s(&b.stage_off));
         q.write_buffer(&self.b_ft_segs, 0, u32s(&b.ft.segs));
@@ -1794,9 +1770,6 @@ impl GpuTrainer {
         let b = &self.batches[slot];
         let n = b.n;
         let q = &self.queue;
-        fn u32s(v: &[u32]) -> &[u8] {
-            bytemuck::cast_slice(v)
-        }
         let bc1 = 1.0 - self.beta1.powi(self.t as i32);
         let bc2s = (1.0 - self.beta2.powi(self.t as i32)).sqrt();
         let scale = 1.0 / n as f32;
@@ -1821,7 +1794,7 @@ impl GpuTrainer {
             &self.u_row_ft,
             0,
             &Params {
-                n_items: b.ft.n_segs as u32,
+                n_items: b.ft.n_segs() as u32,
                 width: ACC_DIMS as u32,
                 rec_off: R_DRAW as u32,
                 ..base
@@ -1832,7 +1805,7 @@ impl GpuTrainer {
             &self.u_fin_ft,
             0,
             &Params {
-                n_items: b.ft.n_multi as u32,
+                n_items: b.ft.n_multi() as u32,
                 width: ACC_DIMS as u32,
                 ..base
             }
@@ -1842,7 +1815,7 @@ impl GpuTrainer {
             &self.u_row_pa,
             0,
             &Params {
-                n_items: b.pa.n_segs as u32,
+                n_items: b.pa.n_segs() as u32,
                 width: PA_DIMS as u32,
                 rec_off: R_DPA as u32,
                 ..base
@@ -1853,7 +1826,7 @@ impl GpuTrainer {
             &self.u_fin_pa,
             0,
             &Params {
-                n_items: b.pa.n_multi as u32,
+                n_items: b.pa.n_multi() as u32,
                 width: PA_DIMS as u32,
                 ..base
             }
@@ -1866,8 +1839,8 @@ impl GpuTrainer {
             &self.u_fin,
             0,
             &Params {
-                n_a: b.ft.n_touched as u32,
-                n_b: b.pa.n_touched as u32,
+                n_a: b.ft.n_touched() as u32,
+                n_b: b.pa.n_touched() as u32,
                 n_c: n_dense_wg as u32,
                 ..base
             }
@@ -1887,7 +1860,7 @@ impl GpuTrainer {
         let (ft_items, pa_items) = if dense_now {
             (self.ft_rows * ACC_DIMS, self.pa_rows * PA_DIMS)
         } else {
-            (b.ft.n_touched * ACC_DIMS, b.pa.n_touched * PA_DIMS)
+            (b.ft.n_touched() * ACC_DIMS, b.pa.n_touched() * PA_DIMS)
         };
         q.write_buffer(
             &self.u_step_ft,
@@ -2153,18 +2126,18 @@ impl GpuTrainer {
                 pass.dispatch_workgroups(x, y, 1);
             };
             run(0, &self.k_fwd_bwd, &bg.fwd, n);
-            run(1, &self.k_row_grad, &bg.row_ft, b.ft.n_segs);
+            run(1, &self.k_row_grad, &bg.row_ft, b.ft.n_segs());
             run(
                 2,
                 &self.k_row_grad_pair,
                 &bg.row_pa,
-                b.pa.n_segs.div_ceil(WG / PA_DIMS),
+                b.pa.n_segs().div_ceil(WG / PA_DIMS),
             );
-            if b.ft.n_multi > 0 {
-                run(3, &self.k_row_finish, &bg.fin_ft, b.ft.n_multi);
+            if b.ft.n_multi() > 0 {
+                run(3, &self.k_row_finish, &bg.fin_ft, b.ft.n_multi());
             }
-            if b.pa.n_multi > 0 {
-                run(4, &self.k_row_finish, &bg.fin_pa, b.pa.n_multi);
+            if b.pa.n_multi() > 0 {
+                run(4, &self.k_row_finish, &bg.fin_pa, b.pa.n_multi());
             }
             run(5, &self.k_bias_part, &bg.bias, n_chunks);
             run(6, &self.k_dense_grad, &bg.dense, n_dense_wg);
@@ -2191,14 +2164,14 @@ impl GpuTrainer {
                         st,
                         &self.k_step_sparse,
                         &bg.sparse_ft,
-                        (b.ft.n_touched * ACC_DIMS).div_ceil(WG),
+                        (b.ft.n_touched() * ACC_DIMS).div_ceil(WG),
                     );
                 }
                 run(
                     st + 1,
                     &self.k_step_sparse,
                     &bg.sparse_pa,
-                    (b.pa.n_touched * PA_DIMS).div_ceil(WG),
+                    (b.pa.n_touched() * PA_DIMS).div_ceil(WG),
                 );
             }
             run(st + 2, &self.k_step_dense, &bg.step_dense, n_dense_wg);
@@ -2247,7 +2220,7 @@ impl GpuTrainer {
                 }
                 eprintln!(
                     "gpu prof: {name} rows touched {} max len {mx} rows>1024 {over}",
-                    c.n_touched
+                    c.n_touched()
                 );
             }
         }
@@ -2548,14 +2521,7 @@ mod tests {
             let board = ex.board();
             let stage = crate::linear::Linear::stage(&board);
             let ix = nn.indices(ex.black, ex.white);
-            nn.grad_black_into(
-                &ix,
-                stage,
-                ex.black.count_ones() as usize,
-                Nnue::mob_index(&board),
-                ex.score,
-                &mut sink,
-            );
+            nn.grad_black_into(&ix, stage, Nnue::mob_index(&board), ex.score, &mut sink);
         }
         let mut sinks = [sink];
         nn.apply_adamw_batch(&mut sinks, adam, lr, wd, 1.0 / exs.len() as f32);

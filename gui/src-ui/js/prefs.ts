@@ -4,10 +4,10 @@ import { backendStrings, resolveLang, setLang, type LangPref } from './i18n';
 
 
 export type Theme = 'os' | 'dark' | 'light';
-export type Facing = 'black' | 'white' | 'auto';
+type Facing = 'black' | 'white' | 'auto';
 
-export type Tatami = 0 | 1 | 2 | 3;
-export type Decimals = 0 | 1 | 2;
+type Tatami = 0 | 1 | 2 | 3;
+type Decimals = 0 | 1 | 2;
 
 export interface Prefs {
   theme: Theme;

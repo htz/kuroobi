@@ -5,7 +5,7 @@ use crate::position::Position;
 use std::sync::OnceLock;
 
 pub struct ZobristTable {
-    pub set_zobrist: [[u64; 3]; 64],
+    pub set_zobrist: [[u64; 2]; 64],
     pub flip_zobrist: [u64; 64],
     pub swap_player_zobrist: u64,
 }
@@ -13,7 +13,7 @@ pub struct ZobristTable {
 impl ZobristTable {
     pub fn generate() -> Self {
         let mut table = ZobristTable {
-            set_zobrist: [[0u64; 3]; 64],
+            set_zobrist: [[0u64; 2]; 64],
             flip_zobrist: [0u64; 64],
             swap_player_zobrist: 0,
         };
@@ -50,15 +50,13 @@ pub fn compute_hash(black: u64, white: u64, player: Color) -> u64 {
 
     let mut b = black;
     while b != 0 {
-        let pos = b.trailing_zeros() as u8;
-        hash ^= table.set_zobrist[pos as usize][Color::Black as usize];
+        hash ^= table.set_zobrist[b.trailing_zeros() as usize][Color::Black as usize];
         b &= b - 1;
     }
 
     let mut w = white;
     while w != 0 {
-        let pos = w.trailing_zeros() as u8;
-        hash ^= table.set_zobrist[pos as usize][Color::White as usize];
+        hash ^= table.set_zobrist[w.trailing_zeros() as usize][Color::White as usize];
         w &= w - 1;
     }
 
@@ -75,8 +73,7 @@ pub fn update_hash_on_move(prev_hash: u64, pos: Position, flipped: u64, player: 
 
     let mut f = flipped;
     while f != 0 {
-        let pos_idx = f.trailing_zeros() as u8;
-        hash ^= table.flip_zobrist[pos_idx as usize];
+        hash ^= table.flip_zobrist[f.trailing_zeros() as usize];
         f &= f - 1;
     }
 

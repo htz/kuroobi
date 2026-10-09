@@ -36,7 +36,7 @@ impl Pattern {
         3usize.pow(self.size as u32)
     }
 
-    pub fn mask_index(mask: &[u8], black: u64, white: u64, player: Color) -> usize {
+    fn mask_index(mask: &[u8], black: u64, white: u64, player: Color) -> usize {
         let player_bb = [black, white][player.index()];
         let opponent_bb = [black, white][player.opponent().index()];
 
@@ -583,29 +583,33 @@ mod tests {
     #[test]
     fn test_orientation_symmetry_on_initial_board() {
         let b = Board::new();
-        let corner = &LINEAR_PATTERNS[9];
-        assert_eq!(corner.name, "Triangle");
-        let indices: Vec<usize> = corner.indices(b.black, b.white, b.player()).collect();
+        let triangle = &LINEAR_PATTERNS[9];
+        assert_eq!(triangle.name, "Triangle");
+        let indices: Vec<usize> = triangle.indices(b.black, b.white, b.player()).collect();
         assert!(indices.windows(2).all(|w| w[0] == w[1]));
-        assert_eq!(indices[0], corner.table_size() - 1);
+        assert_eq!(indices[0], triangle.table_size() - 1);
     }
 
     #[test]
-    fn test_line4_sees_initial_pieces() {
+    fn test_row4_centre_sees_initial_pieces() {
         let b = Board::new();
-        let line4 = &LINEAR_PATTERNS[2];
-        assert_eq!(line4.name, "Row4+Centre");
-        for idx in line4.indices(b.black, b.white, b.player()) {
-            assert_ne!(idx, line4.table_size() - 1, "Line4 must see center discs");
+        let row4 = &LINEAR_PATTERNS[2];
+        assert_eq!(row4.name, "Row4+Centre");
+        for idx in row4.indices(b.black, b.white, b.player()) {
+            assert_ne!(
+                idx,
+                row4.table_size() - 1,
+                "Row4+Centre must see center discs"
+            );
         }
     }
 
     #[test]
     fn test_player_perspective_flips_digits() {
         let b = Board::new();
-        let line4 = &LINEAR_PATTERNS[2];
-        let black_view: Vec<usize> = line4.indices(b.black, b.white, Color::Black).collect();
-        let white_view: Vec<usize> = line4.indices(b.black, b.white, Color::White).collect();
+        let row4 = &LINEAR_PATTERNS[2];
+        let black_view: Vec<usize> = row4.indices(b.black, b.white, Color::Black).collect();
+        let white_view: Vec<usize> = row4.indices(b.black, b.white, Color::White).collect();
         assert_ne!(
             black_view, white_view,
             "swapping perspective must swap player/opponent digits"
@@ -614,37 +618,36 @@ mod tests {
 
     #[test]
     fn from_spec_rebuilds_a_hand_written_set() {
-        for set in [LINEAR_PATTERNS] {
-            let spec: String = set
-                .iter()
-                .map(|p| {
-                    let cells: Vec<String> = p.masks[0]
-                        .iter()
-                        .map(|&s| format!("{}{}", (b'A' + s / 8) as char, s % 8 + 1))
-                        .collect();
-                    format!("{}: {}\n", p.name, cells.join(" "))
-                })
-                .collect();
-            let built = from_spec(&spec, true).expect("spec parses");
-            assert_eq!(built.len(), set.len());
-            for (b, p) in built.iter().zip(set.iter()) {
-                assert_eq!(b.name, p.name);
-                assert_eq!(b.size, p.size);
-                assert_eq!(b.masks.len(), p.masks.len(), "{}", p.name);
-                let key = |ms: &[&[u8]]| {
-                    let mut v: Vec<Vec<u8>> = ms
-                        .iter()
-                        .map(|m| {
-                            let mut m = m.to_vec();
-                            m.sort_unstable();
-                            m
-                        })
-                        .collect();
-                    v.sort();
-                    v
-                };
-                assert_eq!(key(b.masks), key(p.masks), "{}", p.name);
-            }
+        let set = LINEAR_PATTERNS;
+        let spec: String = set
+            .iter()
+            .map(|p| {
+                let cells: Vec<String> = p.masks[0]
+                    .iter()
+                    .map(|&s| format!("{}{}", (b'A' + s / 8) as char, s % 8 + 1))
+                    .collect();
+                format!("{}: {}\n", p.name, cells.join(" "))
+            })
+            .collect();
+        let built = from_spec(&spec, true).expect("spec parses");
+        assert_eq!(built.len(), set.len());
+        for (b, p) in built.iter().zip(set.iter()) {
+            assert_eq!(b.name, p.name);
+            assert_eq!(b.size, p.size);
+            assert_eq!(b.masks.len(), p.masks.len(), "{}", p.name);
+            let key = |ms: &[&[u8]]| {
+                let mut v: Vec<Vec<u8>> = ms
+                    .iter()
+                    .map(|m| {
+                        let mut m = m.to_vec();
+                        m.sort_unstable();
+                        m
+                    })
+                    .collect();
+                v.sort();
+                v
+            };
+            assert_eq!(key(b.masks), key(p.masks), "{}", p.name);
         }
     }
 

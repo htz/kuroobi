@@ -4,7 +4,7 @@ use kuroobi::bitboard;
 use kuroobi::engine::{Engine, EngineConfig};
 use kuroobi::nnue::Nnue;
 use kuroobi::pattern::LINEAR_PATTERNS;
-use kuroobi::{Board, Color, Position};
+use kuroobi::{Board, Position};
 
 const KIFU: &str = "e6f4c3d6f6e7f5g5e3g4c7d3f3c4c6c5b4b6d7b5c2a3f8e8d8c8b8d2g3e2\
                     a6c1d1e1f2f1f7h3a5a7a8b7g2g8h8g1b3a4a2b2a1b1g7g6h6h7h5h4h2h1";
@@ -54,10 +54,7 @@ fn replay(kifu: &str, plies: usize) -> Board {
 fn flip_colors(b: &Board) -> Board {
     let mut out = *b;
     std::mem::swap(&mut out.black, &mut out.white);
-    out.player = match b.player {
-        Color::Black => Color::White,
-        Color::White => Color::Black,
-    };
+    out.player = b.player.opponent();
     out
 }
 

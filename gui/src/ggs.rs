@@ -14,6 +14,8 @@ use tauri::Emitter;
 use kuroobi::engine::{Engine, EngineConfig};
 use kuroobi::{Board, Position};
 
+use crate::{append_line, now_secs};
+
 pub enum Cmd {
     Connect {
         login: String,
@@ -106,11 +108,11 @@ impl StandbyCfg {
 
 #[derive(Clone, Serialize, Default)]
 pub struct LogLine {
-    pub dir: String, // "in" | "out" | "info"
+    pub dir: &'static str, // "in" | "out" | "info"
     pub text: String,
 }
 
-#[derive(Clone, Serialize, serde::Deserialize, Default)]
+#[derive(Clone, Serialize, Default)]
 pub struct RankRow {
     pub gtype: String,
     pub name: String,
@@ -122,7 +124,7 @@ pub struct RankRow {
     pub losses: u64,
 }
 
-#[derive(Clone, Serialize, serde::Deserialize, Default)]
+#[derive(Clone, Serialize, Default)]
 pub struct FingerInfo {
     pub name: String,
     pub fields: Vec<(String, String)>,
@@ -155,13 +157,6 @@ pub struct ChatMsg {
 
 pub fn no_rated() -> bool {
     std::env::var("KUROOBI_NO_RATED").is_ok()
-}
-
-fn now_secs() -> u64 {
-    std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .map(|d| d.as_secs())
-        .unwrap_or(0)
 }
 
 #[derive(Clone, Serialize, Default)]
@@ -525,27 +520,27 @@ pub fn demo_snapshot() -> Snapshot {
     .collect();
     s.log = vec![
         LogLine {
-            dir: "info".into(),
+            dir: "info",
             text: "connected (skatgame.net:5000)".into(),
         },
         LogLine {
-            dir: "out".into(),
+            dir: "out",
             text: "tell /os play .71.0 F5".into(),
         },
         LogLine {
-            dir: "in".into(),
+            dir: "in",
             text: "/os: match .71.0 update".into(),
         },
         LogLine {
-            dir: "in".into(),
+            dir: "in",
             text: "/os: | 1 kuroobi 1842.3 11:04 vs saio 2245.8 12:30".into(),
         },
         LogLine {
-            dir: "out".into(),
+            dir: "out",
             text: "tell /os look".into(),
         },
         LogLine {
-            dir: "in".into(),
+            dir: "in",
             text: "/os: 12 waiting requests".into(),
         },
     ]
@@ -669,6 +664,13 @@ fn history_path() -> PathBuf {
     PathBuf::from("ggs_history.jsonl")
 }
 
+fn data_dir() -> PathBuf {
+    history_path()
+        .parent()
+        .unwrap_or(&PathBuf::from("."))
+        .to_path_buf()
+}
+
 /// The line is signed for the name written first; a synchro match scores the mean of two boards.
 fn diff_from_raw(raw: &str, opp: &str) -> Option<i32> {
     if opp.is_empty() {
@@ -709,14 +711,7 @@ fn load_history() -> Vec<GameResult> {
 
 fn append_history(r: &GameResult) {
     if let Ok(line) = serde_json::to_string(r) {
-        use std::io::Write as _;
-        if let Ok(mut f) = std::fs::OpenOptions::new()
-            .create(true)
-            .append(true)
-            .open(history_path())
-        {
-            let _ = writeln!(f, "{line}");
-        }
+        append_line(&history_path(), &line);
     }
 }
 
@@ -731,10 +726,7 @@ fn chat_path(login: &str) -> PathBuf {
             }
         })
         .collect();
-    let dir = history_path()
-        .parent()
-        .unwrap_or(&PathBuf::from("."))
-        .join("chat");
+    let dir = data_dir().join("chat");
     let _ = std::fs::create_dir_all(&dir);
     dir.join(format!("{safe}.jsonl"))
 }
@@ -756,10 +748,7 @@ fn load_chat(login: &str) -> Vec<ChatMsg> {
 }
 
 fn settings_path() -> PathBuf {
-    history_path()
-        .parent()
-        .unwrap_or(&PathBuf::from("."))
-        .join("ggs_settings.json")
+    data_dir().join("ggs_settings.json")
 }
 
 /// A missing field falls back to its default instead of failing the read and wiping settings.
@@ -826,10 +815,7 @@ fn save_settings(ctx: &Ctx) {
 }
 
 fn wire_path() -> PathBuf {
-    history_path()
-        .parent()
-        .unwrap_or(&PathBuf::from("."))
-        .join("ggs_wire.log")
+    data_dir().join("ggs_wire.log")
 }
 
 fn roll_if_large(p: &std::path::Path) {
@@ -879,14 +865,7 @@ fn append_chat(login: &str, m: &ChatMsg) {
     let Ok(line) = serde_json::to_string(m) else {
         return;
     };
-    use std::io::Write as _;
-    if let Ok(mut f) = std::fs::OpenOptions::new()
-        .create(true)
-        .append(true)
-        .open(&path)
-    {
-        let _ = writeln!(f, "{line}");
-    }
+    append_line(&path, &line);
     if let Ok(meta) = std::fs::metadata(&path) {
         if meta.len() > (CHAT_KEEP as u64) * 120 * 12 / 10 {
             let kept = load_chat(login);
@@ -916,24 +895,23 @@ fn session_lock_path() -> PathBuf {
     std::env::temp_dir().join("kuroobi_ggs.pid")
 }
 
+fn other_session_pid(path: &std::path::Path) -> Option<i32> {
+    let pid = std::fs::read_to_string(path)
+        .ok()?
+        .trim()
+        .parse::<i32>()
+        .ok()?;
+    (pid != std::process::id() as i32 && unsafe { libc::kill(pid, 0) } == 0).then_some(pid)
+}
+
 pub fn session_locked_by_other() -> bool {
-    let Ok(s) = std::fs::read_to_string(session_lock_path()) else {
-        return false;
-    };
-    match s.trim().parse::<i32>() {
-        Ok(pid) => pid != std::process::id() as i32 && unsafe { libc::kill(pid, 0) } == 0,
-        Err(_) => false,
-    }
+    other_session_pid(&session_lock_path()).is_some()
 }
 
 fn try_lock_session() -> Result<(), i32> {
     let path = session_lock_path();
-    if let Ok(s) = std::fs::read_to_string(&path) {
-        if let Ok(pid) = s.trim().parse::<i32>() {
-            if pid != std::process::id() as i32 && unsafe { libc::kill(pid, 0) } == 0 {
-                return Err(pid);
-            }
-        }
+    if let Some(pid) = other_session_pid(&path) {
+        return Err(pid);
     }
     let _ = std::fs::write(&path, std::process::id().to_string());
     Ok(())
@@ -948,6 +926,7 @@ fn unlock_session() {
     }
 }
 
+#[derive(Clone)]
 struct MatchState {
     cells: Vec<u8>,
     start_cells: Vec<u8>,
@@ -1022,44 +1001,8 @@ impl MatchState {
 
     fn snapshot(&self) -> MatchState {
         MatchState {
-            cells: self.cells.clone(),
-            start_cells: self.start_cells.clone(),
-            start_turn: self.start_turn,
-            gtype: self.gtype.clone(),
-            turn: self.turn,
-            my_color: self.my_color,
             told_turn: false,
-            my_clock: self.my_clock.clone(),
-            my_clock_secs: self.my_clock_secs,
-            my_ext: self.my_ext,
-            in_overtime: self.in_overtime,
-            opp_name: self.opp_name.clone(),
-            opp_rating: self.opp_rating.clone(),
-            opp_clock: self.opp_clock.clone(),
-            opp_secs: self.opp_secs,
-            opp_ext: self.opp_ext,
-            players: self.players.clone(),
-            moves: self.moves.clone(),
-            last_eval: self.last_eval,
-            last_eval_exact: self.last_eval_exact,
-            last_from_book: self.last_from_book,
-            move_evals: self.move_evals.clone(),
-            opp_eval: self.opp_eval,
-            opp_secs_used: self.opp_secs_used,
-            eval_parity: self.eval_parity,
-            watch_eval: self.watch_eval,
-            watch_best: self.watch_best.clone(),
-            watch_exact: self.watch_exact,
-            watch_hash: self.watch_hash,
-            last_played_hash: self.last_played_hash,
-            seen: self.seen,
-            updated_ms: self.updated_ms,
-            order: self.order,
-            over: self.over,
-            ended: self.ended.clone(),
-            archive: self.archive.clone(),
-            left_by: self.left_by.clone(),
-            result: self.result.clone(),
+            ..self.clone()
         }
     }
 
@@ -1243,18 +1186,10 @@ fn parse_clock(s: &str) -> (Option<u64>, Option<u64>, Option<u64>) {
         {
             continue;
         }
-        let mut secs = 0u64;
-        let mut ok = true;
-        for seg in p.split(':') {
-            match seg.parse::<u64>() {
-                Ok(v) => secs = secs * 60 + v,
-                Err(_) => {
-                    ok = false;
-                    break;
-                }
-            }
-        }
-        if ok {
+        let secs = p
+            .split(':')
+            .try_fold(0u64, |acc, seg| Some(acc * 60 + seg.parse::<u64>().ok()?));
+        if let Some(secs) = secs {
             out[i] = Some(if neg { 0 } else { secs });
         }
     }
@@ -1263,21 +1198,23 @@ fn parse_clock(s: &str) -> (Option<u64>, Option<u64>, Option<u64>) {
 
 pub(crate) const LEARN_DEPTH: u32 = 18;
 
-fn base_id(id: &str) -> String {
-    let parts: Vec<&str> = id.split('.').collect();
-    if parts.len() >= 3 && parts.last().map(|s| s.len() == 1) == Some(true) {
-        parts[..parts.len() - 1].join(".")
-    } else {
-        id.to_string()
+fn base_id(id: &str) -> &str {
+    match id.rsplit_once('.') {
+        Some((head, tail)) if tail.len() == 1 && head.contains('.') => head,
+        _ => id,
     }
 }
 
-fn drop_match(matches: &mut HashMap<String, MatchState>, id: &str) -> Vec<MatchState> {
-    let keys: Vec<String> = matches
+fn boards_of(matches: &HashMap<String, MatchState>, id: &str) -> Vec<String> {
+    matches
         .keys()
         .filter(|k| k.as_str() == id || base_id(k) == id)
         .cloned()
-        .collect();
+        .collect()
+}
+
+fn drop_match(matches: &mut HashMap<String, MatchState>, id: &str) -> Vec<MatchState> {
+    let keys = boards_of(matches, id);
     keys.iter().filter_map(|k| matches.remove(k)).collect()
 }
 
@@ -1289,13 +1226,8 @@ fn finish_match(
     left_by: &str,
     archive: &str,
 ) -> Vec<MatchState> {
-    let keys: Vec<String> = matches
-        .keys()
-        .filter(|k| k.as_str() == id || base_id(k) == id)
-        .cloned()
-        .collect();
     let mut out = Vec::new();
-    for k in keys {
+    for k in boards_of(matches, id) {
         if let Some(m) = matches.get_mut(&k) {
             m.over = true;
             m.turn = ' ';
@@ -1607,24 +1539,15 @@ impl Ctx {
             .body(body)
             .show();
     }
-    fn log(&mut self, dir: &str, text: &str) {
-        {
-            use std::io::Write as _;
-            let p = std::env::var("KUROOBI_GGS_WIRE")
-                .map(PathBuf::from)
-                .unwrap_or_else(|_| wire_path());
-            roll_if_large(&p);
-            if let Ok(mut f) = std::fs::OpenOptions::new()
-                .create(true)
-                .append(true)
-                .open(&p)
-            {
-                let _ = writeln!(f, "{dir} {text}");
-            }
-        }
+    fn log(&mut self, dir: &'static str, text: &str) {
+        let p = std::env::var("KUROOBI_GGS_WIRE")
+            .map(PathBuf::from)
+            .unwrap_or_else(|_| wire_path());
+        roll_if_large(&p);
+        append_line(&p, &format!("{dir} {text}"));
         let mut s = self.snap.lock().unwrap();
         s.log.push_back(LogLine {
-            dir: dir.into(),
+            dir,
             text: text.into(),
         });
         while s.log.len() > 600 {
@@ -1774,6 +1697,7 @@ fn new_ctx(
     local_stop: Arc<Mutex<Option<kuroobi::midgame::StopHandle>>>,
     local_activity: Arc<Mutex<crate::Activity>>,
 ) -> Ctx {
+    let res = resources();
     let ctx = Ctx {
         app,
         stop: None,
@@ -1783,9 +1707,9 @@ fn new_ctx(
             depth: 22,
             solve_empties: 26,
             band: 6,
-            threads: resources().threads.unwrap_or_else(|| resolve_threads(0)),
-            midgame_hash_bits: resources().hash_mid_bits(),
-            solver_hash_bits: resources().hash_end_bits(),
+            threads: res.threads.unwrap_or_else(|| resolve_threads(0)),
+            midgame_hash_bits: res.hash_mid_bits(),
+            solver_hash_bits: res.hash_end_bits(),
             ..Default::default()
         },
         seq: 0,
@@ -1807,19 +1731,14 @@ fn new_ctx(
         workers: Vec::new(),
     };
     ctx.snap.lock().unwrap().engine = EngineCfgView {
-        budget_use: 2.5,
-        depth: 22,
-        solve: 26,
-        band: 6,
         threads: ctx.engine_cfg.threads,
-        ready: false,
         use_book: ctx.engine_cfg.use_book,
-        book_loaded: resources().book_path().exists(),
-        learn: true,
+        book_loaded: res.book_path().exists(),
         ponder: ctx.engine_cfg_ponder,
         pace: ctx.engine_cfg_pace.clone(),
         max_move_secs: ctx.engine_cfg_max_move,
         reserve_secs: ctx.engine_cfg_reserve,
+        ..Default::default()
     };
     ctx
 }
@@ -1828,24 +1747,9 @@ fn restore_settings(ctx: &mut Ctx) {
     let Some(v) = load_settings() else { return };
     apply_engine_cfg(ctx, v.depth, v.solve, v.band);
     ctx.engine_cfg_ponder = v.ponder;
-    ctx.engine_cfg_pace = v.pace.clone();
-    ctx.engine_cfg_max_move = v.max_move_secs;
-    ctx.engine_cfg_reserve = v.reserve_secs;
-    apply_pacing(
-        ctx,
-        v.pace.clone(),
-        v.max_move_secs,
-        v.reserve_secs,
-        v.budget_use,
-    );
+    apply_pacing(ctx, v.pace, v.max_move_secs, v.reserve_secs, v.budget_use);
     let mut s = ctx.snap.lock().unwrap();
-    s.engine.depth = v.depth;
-    s.engine.solve = v.solve;
-    s.engine.band = v.band;
     s.engine.ponder = v.ponder;
-    s.engine.pace = v.pace;
-    s.engine.max_move_secs = v.max_move_secs;
-    s.engine.reserve_secs = v.reserve_secs;
     s.engine.budget_use = v.budget_use;
     s.engine.use_book = v.use_book;
     s.engine.learn = v.learn;
@@ -2152,6 +2056,15 @@ fn login_step(ctx: &mut Ctx, w: &mut Wire, login: &str, pw: &str, mut send: impl
     ctx.emit(false);
 }
 
+fn ask_who(pending: &mut Vec<String>, mut send: impl FnMut(String)) {
+    for t in ["8", "8r"] {
+        pending.push(format!("who:{t}"));
+        send(format!("tell /os who {t}"));
+    }
+    pending.push("online".into());
+    send("who".into());
+}
+
 fn greet(ctx: &mut Ctx, w: &mut Wire, login: &str, send: &mut impl FnMut(String)) {
     for c in [
         "verbose -news -faq -help -ack",
@@ -2169,12 +2082,7 @@ fn greet(ctx: &mut Ctx, w: &mut Wire, login: &str, send: &mut impl FnMut(String)
     }
     let open = ctx.snap.lock().unwrap().open;
     say(ctx, send, format!("tell /os open {}", u8::from(open)));
-    for t in ["8", "8r"] {
-        w.pending.push(format!("who:{t}"));
-        say(ctx, send, format!("tell /os who {t}"));
-    }
-    w.pending.push("online".into());
-    say(ctx, send, "who");
+    ask_who(&mut w.pending, |c| say(ctx, send, c));
     for t in ["8", "8r"] {
         w.pending.push(format!("rank:{t}:{login}"));
         say(ctx, send, format!("tell /os rank {t} {login}"));
@@ -2212,7 +2120,7 @@ fn dispatch_line(
         return;
     }
     if let Some(id) = ln.strip_prefix("/os: rating_update ") {
-        w.rating_for = Some(base_id(id.trim()));
+        w.rating_for = Some(base_id(id.trim()).to_string());
         return;
     }
     if let Some(id) = w.rating_for.clone() {
@@ -2242,7 +2150,7 @@ fn dispatch_line(
             .map(str::to_string)
         {
             if ctx.pending_watch.remove(&mid).is_some()
-                | ctx.pending_watch.remove(&base_id(&mid)).is_some()
+                | ctx.pending_watch.remove(base_id(&mid)).is_some()
             {
                 ctx.snap.lock().unwrap().notice.clear();
             }
@@ -2315,12 +2223,7 @@ fn service(ctx: &mut Ctx, w: &mut Wire, mut send: impl FnMut(String)) {
         w.pending.push("match_list".into());
         say(ctx, &mut send, "tell /os match");
         // Players in a game drop out of `who`, so a one-off list never shows them free again.
-        for t in ["8", "8r"] {
-            w.pending.push(format!("who:{t}"));
-            say(ctx, &mut send, format!("tell /os who {t}"));
-        }
-        w.pending.push("online".into());
-        say(ctx, &mut send, "who");
+        ask_who(&mut w.pending, |c| say(ctx, &mut send, c));
     }
 
     let done: Vec<String> = ctx
@@ -2394,6 +2297,14 @@ fn expire_watches(ctx: &mut Ctx) {
     ctx.emit(true);
 }
 
+fn mark_watching(s: &mut Snapshot, id: &str, on: bool) {
+    for o in s.ongoing.iter_mut() {
+        if o.id == id {
+            o.watching = on;
+        }
+    }
+}
+
 fn handle_cmd(
     ctx: &mut Ctx,
     cmd: Cmd,
@@ -2408,7 +2319,7 @@ fn handle_cmd(
         Cmd::Connect { .. } => {}
         Cmd::Disconnect => {
             if let Some(h) = &ctx.stop {
-                h.stop(); // abort any running think too
+                h.stop();
             }
             send("quit".to_string());
             quit = true;
@@ -2447,14 +2358,7 @@ fn handle_cmd(
             pending.push(format!("osfinger:{name}"));
             send(format!("tell /os finger {name}"));
         }
-        Cmd::Who => {
-            for t in ["8", "8r"] {
-                pending.push(format!("who:{t}"));
-                send(format!("tell /os who {t}"));
-            }
-            pending.push("online".into());
-            send("who".into());
-        }
+        Cmd::Who => ask_who(pending, &mut send),
         Cmd::Top { gtype, n } => {
             pending.push("top".into());
             send(format!("tell /os top {gtype} {n}"));
@@ -2485,22 +2389,14 @@ fn handle_cmd(
             ctx.pending_watch
                 .insert(id.clone(), Instant::now() + Duration::from_secs(6));
             let mut s = ctx.snap.lock().unwrap();
-            for o in s.ongoing.iter_mut() {
-                if o.id == id {
-                    o.watching = true;
-                }
-            }
+            mark_watching(&mut s, &id, true);
             drop(s);
             ctx.dirty = true;
         }
         Cmd::Unwatch(id) => {
             send(format!("tell /os watch - {id}"));
             let mut s = ctx.snap.lock().unwrap();
-            for o in s.ongoing.iter_mut() {
-                if o.id == id {
-                    o.watching = false;
-                }
-            }
+            mark_watching(&mut s, &id, false);
             s.matches.retain(|m| m.id != id && base_id(&m.id) != id);
             drop(s);
             drop_match(matches, &id);
@@ -2653,7 +2549,7 @@ fn handle_os_line(
             if !id.is_empty() {
                 if let Some(f) = mrest.split_whitespace().last() {
                     if f == "R" || f == "U" {
-                        ctx.rated_by_base.insert(base_id(&id), f == "R");
+                        ctx.rated_by_base.insert(base_id(&id).to_string(), f == "R");
                     }
                 }
                 let mine = mrest.contains(login);
@@ -2682,21 +2578,16 @@ fn handle_os_line(
             let s = ctx.snap.lock().unwrap();
             let auto = s.standby.enabled && s.standby.auto_accept;
             let in_match = s.matches.iter().any(|m| !m.over);
-            let incoming = s.offers.last().map(|o| (o.incoming, o.id.clone()));
+            let incoming = s
+                .offers
+                .last()
+                .map(|o| (o.incoming, o.id.clone(), o.names.join(" ")));
             drop(s);
-            if let Some((true, id)) = incoming {
+            if let Some((true, id, who)) = incoming {
                 if auto && !in_match {
                     ctx.log("info", &format!("auto match: auto-accepting {id}"));
                     send(format!("tell /os accept {id}"));
                 } else {
-                    let who = ctx
-                        .snap
-                        .lock()
-                        .unwrap()
-                        .offers
-                        .last()
-                        .map(|o| o.names.join(" "))
-                        .unwrap_or_default();
                     ctx.notify(
                         &crate::i18n::t("backend.notify.match_request_title"),
                         &format!("{who} ({id})"),
@@ -2736,12 +2627,7 @@ fn handle_os_line(
             ctx.emit(true);
             handle_match_end(ctx, mrest, login, matches);
             // Both players just left the match list but are back in `who` only once it is asked again.
-            for t in ["8", "8r"] {
-                pending.push(format!("who:{t}"));
-                send(format!("tell /os who {t}"));
-            }
-            pending.push("online".into());
-            send("who".into());
+            ask_who(pending, &mut send);
             let s = ctx.snap.lock().unwrap();
             let sb = s.standby.clone();
             let games = s.standby_stats.games;
@@ -2833,7 +2719,7 @@ fn apply_pacing(
     ctx.dirty = true;
 }
 
-pub fn resolve_threads(n: usize) -> usize {
+fn resolve_threads(n: usize) -> usize {
     if n == 0 {
         std::thread::available_parallelism()
             .map(|c| (c.get() / 2).max(1))
@@ -2917,7 +2803,8 @@ fn handle_block(
         }
         return;
     }
-    if turn.is_some() && turn == m.my_color && !m.told_turn {
+    let my_turn = turn == m.my_color;
+    if my_turn && !m.told_turn {
         m.told_turn = true;
         if !auto {
             let who = if m.opp_name.is_empty() {
@@ -2927,17 +2814,15 @@ fn handle_block(
             };
             ctx.notify(&crate::i18n::t("backend.notify.your_turn_title"), &who);
         }
-    } else if turn != m.my_color {
-        let m = matches.get_mut(&mid).unwrap();
+    } else if !my_turn {
         m.told_turn = false;
     }
-    ctx.ponder_at = if turn.is_some() && turn != matches[&mid].my_color {
+    ctx.ponder_at = if turn.is_some() && !my_turn {
         Some(mid.clone())
     } else {
         None
     };
-    let m = matches.get_mut(&mid).unwrap();
-    if !auto || !rows_ok || turn.is_none() || turn != m.my_color {
+    if !auto || !rows_ok || !my_turn {
         return;
     }
     think_and_play(ctx, &mid, matches, send);
@@ -2959,7 +2844,7 @@ fn ponder_slice(ctx: &mut Ctx, matches: &HashMap<String, MatchState>) {
         return;
     };
     if Some(m.turn) == m.my_color {
-        return; // it became our turn again
+        return;
     }
     if ctx.engine.is_none() {
         return;
@@ -2975,7 +2860,7 @@ fn analyze_watch(ctx: &mut Ctx, mid: &str, matches: &mut HashMap<String, MatchSt
     };
     let bh = board.black.wrapping_mul(31).wrapping_add(board.white) ^ (m.turn as u64);
     if bh == m.watch_hash {
-        return; // never re-analyze the same position
+        return;
     }
     m.watch_hash = bh;
     let black_turn = m.turn == '*';
@@ -3048,7 +2933,6 @@ fn apply_block(m: &mut MatchState, block: &[String], login: &str) -> (bool, Opti
     let mut rows: Vec<Vec<char>> = Vec::new();
     let mut boards: Vec<Vec<Vec<char>>> = Vec::new();
     let mut turns: Vec<char> = Vec::new();
-    let mut turn: Option<char> = None;
     let moves_before = m.moves.len();
     m.players.clear();
     for l in block {
@@ -3066,7 +2950,7 @@ fn apply_block(m: &mut MatchState, block: &[String], login: &str) -> (bool, Opti
                     m.players.retain(|p| p.name != name);
                     m.players.push(PlayerView {
                         name: name.to_string(),
-                        rating: inner.trim_end_matches(['*', 'O']).trim().to_string(),
+                        rating: rating.clone(),
                         clock: clock.clone(),
                         color: if color == '*' {
                             "black".into()
@@ -3123,10 +3007,8 @@ fn apply_block(m: &mut MatchState, block: &[String], login: &str) -> (bool, Opti
             }
         }
         if t.starts_with("* to move") {
-            turn = Some('*');
             turns.push('*');
         } else if t.starts_with("O to move") {
-            turn = Some('O');
             turns.push('O');
         }
         if let Some(colon) = t.find(':') {
@@ -3141,8 +3023,7 @@ fn apply_block(m: &mut MatchState, block: &[String], login: &str) -> (bool, Opti
                     .next()
                     .unwrap_or("")
                     .to_string();
-                if ((2..=4).contains(&mv.len()) || mv.eq_ignore_ascii_case("pa")) && !mv.is_empty()
-                {
+                if (2..=4).contains(&mv.len()) || mv.eq_ignore_ascii_case("pa") {
                     // GGS sends 0.00 as an empty field; no field at all means no evaluation.
                     let ev = parts.next().and_then(|x| match x.trim() {
                         "" => Some(0.0),
@@ -3162,16 +3043,14 @@ fn apply_block(m: &mut MatchState, block: &[String], login: &str) -> (bool, Opti
         }
     }
 
-    if let (Some(t), Some(mc)) = (turn, m.my_color) {
-        if let Some((&n, _)) = m.moves.iter().next_back() {
-            m.eval_parity = Some(if t != mc { n % 2 } else { (n + 1) % 2 });
-        }
+    let turn = turns.last().copied();
+    let last_n = m.moves.keys().next_back().copied();
+    if let (Some(t), Some(mc), Some(n)) = (turn, m.my_color, last_n) {
+        m.eval_parity = Some(if t != mc { n % 2 } else { (n + 1) % 2 });
         if t == mc {
-            if let Some((n, _)) = m.moves.iter().next_back() {
-                let (ev, sec) = m.move_evals.get(n).copied().unwrap_or((None, None));
-                m.opp_eval = ev;
-                m.opp_secs_used = sec;
-            }
+            let (ev, sec) = m.move_evals.get(&n).copied().unwrap_or((None, None));
+            m.opp_eval = ev;
+            m.opp_secs_used = sec;
         }
     }
 
@@ -3231,6 +3110,38 @@ fn game_over(board: &Board) -> bool {
     other.movable() == 0
 }
 
+fn play_hash(board: &Board, moves: usize) -> u64 {
+    board
+        .black
+        .wrapping_mul(31)
+        .wrapping_add(board.white)
+        .wrapping_add((moves as u64).wrapping_mul(0x9e37_79b9))
+}
+
+fn move_text(pos: Option<Position>) -> String {
+    match pos {
+        Some(p) => coord(p),
+        None => "pa".to_string(),
+    }
+}
+
+fn move_source(mv: &kuroobi::engine::MoveEval) -> &'static str {
+    if mv.from_book && mv.learned {
+        "book (learned)"
+    } else if mv.from_book {
+        "book"
+    } else {
+        "search"
+    }
+}
+
+fn record_played(m: &mut MatchState, mv: &kuroobi::engine::MoveEval, hash: u64) {
+    m.last_eval = Some(if mv.value.is_finite() { mv.value } else { 0.0 });
+    m.last_eval_exact = mv.exact;
+    m.last_from_book = mv.from_book;
+    m.last_played_hash = hash;
+}
+
 fn think_and_play(
     ctx: &mut Ctx,
     mid: &str,
@@ -3246,11 +3157,7 @@ fn think_and_play(
     if game_over(&board) {
         return;
     }
-    let bh = board
-        .black
-        .wrapping_mul(31)
-        .wrapping_add(board.white)
-        .wrapping_add((m.moves.len() as u64).wrapping_mul(0x9e37_79b9));
+    let bh = play_hash(&board, m.moves.len());
     if bh == m.last_played_hash {
         return;
     }
@@ -3307,10 +3214,6 @@ fn think_and_play(
         pump_next(ctx);
         return;
     }
-    if let Err(e) = ctx.ensure_engine() {
-        ctx.log("info", &format!("engine init failed: {e}"));
-        return;
-    }
     let engine = ctx.engine.as_mut().unwrap();
     engine.set_levels(d, solve, band);
     let began = std::time::Instant::now();
@@ -3318,10 +3221,7 @@ fn think_and_play(
     let took = began.elapsed();
     engine.set_levels(base.0, base.1, base.2);
 
-    let mstr = match mv.pos {
-        Some(p) => coord(p),
-        None => "pa".to_string(),
-    };
+    let mstr = move_text(mv.pos);
     let arg = play_arg(&mstr, mv.value, Some(took));
     send(format!("tell /os play {mid} {arg}"));
     ctx.log("out", &format!("tell /os play {mid} {arg}"));
@@ -3329,13 +3229,7 @@ fn think_and_play(
         "info",
         &format!(
             "{mid} {mstr}: {} {:+.2}{}{}",
-            if mv.from_book && mv.learned {
-                "book (learned)"
-            } else if mv.from_book {
-                "book"
-            } else {
-                "search"
-            },
+            move_source(&mv),
             mv.value,
             if mv.exact { " (solved)" } else { "" },
             if mv.depth > 0 {
@@ -3346,11 +3240,7 @@ fn think_and_play(
         ),
     );
 
-    let m = matches.get_mut(mid).unwrap();
-    m.last_eval = Some(if mv.value.is_finite() { mv.value } else { 0.0 });
-    m.last_eval_exact = mv.exact;
-    m.last_from_book = mv.from_book;
-    m.last_played_hash = bh;
+    record_played(matches.get_mut(mid).unwrap(), &mv, bh);
     {
         let mut s = ctx.snap.lock().unwrap();
         s.thinking = None;
@@ -3505,12 +3395,7 @@ fn collect_workers(ctx: &mut Ctx, matches: &mut HashMap<String, MatchState>) -> 
         if m.over || m.my_color.is_none() || Some(m.turn) != m.my_color {
             continue;
         }
-        let now_hash = board_of(m, m.turn).map(|b| {
-            b.black
-                .wrapping_mul(31)
-                .wrapping_add(b.white)
-                .wrapping_add((m.moves.len() as u64).wrapping_mul(0x9e37_79b9))
-        });
+        let now_hash = board_of(m, m.turn).map(|b| play_hash(&b, m.moves.len()));
         if now_hash != Some(bh) {
             ctx.log(
                 "info",
@@ -3518,29 +3403,17 @@ fn collect_workers(ctx: &mut Ctx, matches: &mut HashMap<String, MatchState>) -> 
             );
             continue;
         }
-        let mstr = match mv.pos {
-            Some(p) => coord(p),
-            None => "pa".to_string(),
-        };
+        let mstr = move_text(mv.pos);
         out.push(format!(
             "tell /os play {mid} {}",
             play_arg(&mstr, mv.value, took)
         ));
-        m.last_eval = Some(if mv.value.is_finite() { mv.value } else { 0.0 });
-        m.last_eval_exact = mv.exact;
-        m.last_from_book = mv.from_book;
-        m.last_played_hash = bh;
+        record_played(m, &mv, bh);
         ctx.log(
             "info",
             &format!(
                 "{mid} {mstr}: {} {:+.2}{}",
-                if mv.from_book && mv.learned {
-                    "book (learned)"
-                } else if mv.from_book {
-                    "book"
-                } else {
-                    "search"
-                },
+                move_source(&mv),
                 mv.value,
                 if mv.exact { " (solved)" } else { "" }
             ),
@@ -3602,8 +3475,8 @@ fn sync_matches(ctx: &mut Ctx, matches: &HashMap<String, MatchState>) {
         .iter()
         .map(|(id, m)| MatchView {
             id: id.clone(),
-            base: base_id(id),
-            rated: ctx.rated_by_base.get(&base_id(id)).copied(),
+            base: base_id(id).to_string(),
+            rated: ctx.rated_by_base.get(base_id(id)).copied(),
             ended: m.ended.clone(),
             left_by: m.left_by.clone(),
             archive: m.archive.clone(),
@@ -3751,10 +3624,6 @@ fn end_kind(rest: &str) -> (&'static str, String) {
     ("finished", String::new())
 }
 
-fn re_text(score: Option<f32>) -> Option<String> {
-    score.map(|s| format!("{s:+.2}"))
-}
-
 /// `|name old @ dev delta -> new @ dev`
 fn rating_after(ln: &str, login: &str) -> Option<f32> {
     let mut t = ln.trim_start_matches('|').split_whitespace();
@@ -3766,9 +3635,7 @@ fn rating_after(ln: &str, login: &str) -> Option<f32> {
 
 /// Only the newest row: GGS reuses match numbers.
 fn record_post_rating(ctx: &mut Ctx, id: &str, after: f32) {
-    let now = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .map_or(0, |d| d.as_secs());
+    let now = now_secs();
     let mut s = ctx.snap.lock().unwrap();
     match s.results.first_mut() {
         Some(r) if base_id(&r.id) == id && now.saturating_sub(r.at) < 60 => {
@@ -3811,17 +3678,17 @@ fn handle_match_end(
         .filter(|t| t.starts_with('.') && t.len() > 1 && **t != id)
         .copied()
         .unwrap_or("");
+    let re = score.map(|s| format!("{s:+.2}"));
     let mut dropped = finish_match(
         matches,
         &id,
-        re_text(score).as_deref().unwrap_or(""),
+        re.as_deref().unwrap_or(""),
         kind,
         &who,
         archive,
     );
     dropped.sort_by_key(|m| m.seen);
     let m = dropped.first();
-    let re = score.map(|s| format!("{s:+.2}"));
     let (kifu, ggf, opp) = match &m {
         Some(m) => (m.kifu(), m.ggf(&id, re.as_deref()), m.opp_name.clone()),
         None => (String::new(), String::new(), String::new()),
@@ -3834,27 +3701,20 @@ fn handle_match_end(
         opp.clone()
     };
     ctx.seq += 1;
-    let now = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .map(|d| d.as_secs())
-        .unwrap_or(0);
+    let now = now_secs();
     let result = GameResult {
         id: id.clone(),
-        base: base_id(&id),
+        base: base_id(&id).to_string(),
         ggf,
-        archive: toks
-            .last()
-            .filter(|t| t.starts_with('.') && t.len() > 1 && **t != id)
-            .map(|t| t.to_string())
-            .unwrap_or_default(),
+        archive: archive.to_string(),
         raw: rest.to_string(),
         my_diff,
         opp,
         kifu,
         seq: ctx.seq,
-        my_rating: ctx.post_ratings.remove(&base_id(&id)).or_else(|| {
-            let pool = if rest
-                .split_whitespace()
+        my_rating: ctx.post_ratings.remove(base_id(&id)).or_else(|| {
+            let pool = if toks
+                .iter()
                 .any(|t| t.starts_with("s8r") || t.starts_with("8r"))
             {
                 "8r"
@@ -3934,7 +3794,7 @@ fn handle_match_end(
                     Err(_) => (0, 0),
                 };
                 let entry = crate::LearnEntry {
-                    at: crate::now_secs(),
+                    at: now_secs(),
                     kifu: kifu.clone(),
                     black,
                     white,
@@ -3960,13 +3820,14 @@ fn learn_tick(ctx: &mut Ctx) {
     if ctx.learn_jobs.is_empty() || ctx.ensure_engine().is_err() {
         return;
     }
-    let (id, job, entry) = ctx.learn_jobs.front_mut().expect("checked non-empty");
-    let id = id.clone();
-    let entry = entry.clone();
-    match ctx.engine.as_mut().unwrap().learn_step(job, LEARN_DEPTH) {
+    let (_, job, _) = ctx.learn_jobs.front_mut().expect("checked non-empty");
+    let step = ctx.engine.as_mut().unwrap().learn_step(job, LEARN_DEPTH);
+    if matches!(step, Ok(None)) {
+        return;
+    }
+    let (id, _, mut entry) = ctx.learn_jobs.pop_front().expect("checked non-empty");
+    match step {
         Ok(Some(out)) => {
-            ctx.learn_jobs.pop_front();
-            let mut entry = entry;
             entry.changes = out.changes.iter().map(crate::LearnChange::of).collect();
             crate::learn_log_append(&entry);
             ctx.log(
@@ -3980,10 +3841,7 @@ fn learn_tick(ctx: &mut Ctx) {
             );
         }
         Ok(None) => {}
-        Err(e) => {
-            ctx.learn_jobs.pop_front();
-            ctx.log("info", &format!("learn failed ({id}): {e}"));
-        }
+        Err(e) => ctx.log("info", &format!("learn failed ({id}): {e}")),
     }
 }
 
@@ -4160,14 +4018,13 @@ fn capture_who(ctx: &mut Ctx, kind: &str, buf: &[String], login: &str) {
             .skip(1)
             .find_map(|(i, t)| parse_rating_token(t).map(|v| (i, v)));
         let Some((ri, r)) = at else { continue };
-        let rating = Some(r);
         let dev = match toks[ri].split_once('@') {
             Some((_, rest)) if !rest.is_empty() => parse_dev_token(rest),
             Some(_) => toks.get(ri + 1).and_then(|t| parse_dev_token(t)),
             None => None,
         };
         if name == login {
-            my_rating = rating;
+            my_rating = Some(r);
         }
         let open = if kind.starts_with("who") {
             toks.get(1)
@@ -4178,7 +4035,7 @@ fn capture_who(ctx: &mut Ctx, kind: &str, buf: &[String], login: &str) {
         };
         users.push(UserRow {
             name: name.to_string(),
-            rating,
+            rating: Some(r),
             dev,
             rating_r: None,
             dev_r: None,
@@ -4247,15 +4104,12 @@ fn capture_match_list(ctx: &mut Ctx, buf: &[String], login: &str) {
             o.watching = true;
         }
     }
-    let ids: Vec<String> = list.iter().map(|o| o.id.clone()).collect();
+    if std::env::var("KUROOBI_GGS_AUTOWATCH").as_deref() == Ok("auto") {
+        ctx.auto_watch.extend(list.iter().map(|o| o.id.clone()));
+    }
     s.ongoing = list;
     drop(s);
     ctx.dirty = true;
-    if std::env::var("KUROOBI_GGS_AUTOWATCH").as_deref() == Ok("auto") {
-        for id in ids {
-            ctx.auto_watch.push(id);
-        }
-    }
 }
 
 fn capture_stored_list(ctx: &mut Ctx, buf: &[String], login: &str) {
@@ -4431,7 +4285,7 @@ fn capture_finger(ctx: &mut Ctx, buf: &[String], name: &str) {
         }
         let t = t.strip_prefix(": ").unwrap_or(t);
         let lower = t.to_lowercase();
-        if lower.starts_with("passw") || lower.starts_with("password") {
+        if lower.starts_with("passw") {
             continue;
         }
         raw.push(t.to_string());

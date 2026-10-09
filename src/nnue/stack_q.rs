@@ -1,8 +1,8 @@
 //! The stacked read-out in integers, the form the search runs.
 
 use super::{
-    ft_bucket, pa_bucket, so_stage, Nnue, ACC_DIMS, H, PA_BUCKETS, PA_DIMS, SO_L1, SO_L2,
-    SO_OUT_IN, SO_SKIP, SO_STAGES,
+    pa_bucket, so_stage, Nnue, ACC_DIMS, H, PA_BUCKETS, PA_DIMS, SO_L1, SO_L2, SO_OUT_IN, SO_SKIP,
+    SO_STAGES,
 };
 use crate::color::Color;
 use crate::pattern_index::{PatternIndices, MAX_MASKS};
@@ -36,10 +36,9 @@ fn packed_index(out: usize, inp: usize, n_out: usize) -> usize {
     (inp / 4 * n_out + out) * 4 + inp % 4
 }
 
-/// The quantized tables of the stacked read-out.
 #[derive(Default)]
 pub(super) struct StackQ {
-    /// Transformer rows per perspective, `[feature][ACC_DIMS]`, the White copy pre-swapped like `ft_w_i8`.
+    /// Transformer rows per perspective, `[feature][ACC_DIMS]`, the White copy pre-swapped.
     ft_b: Vec<i16>,
     ft_w: Vec<i16>,
     ft_bias: Vec<i16>,
@@ -84,23 +83,19 @@ impl StackQ {
 
         let mut ft_w = vec![0i16; ft_b.len()];
         let mut pa_w = vec![0i16; pa_b.len()];
-        let n_bucket = net.n_feat_bucket;
+        let n_bucket = net.n_features;
         for m in 0..net.n_masks {
             let off = net.mask_off[m] as usize;
             let size = net.patterns[net.indexer.mask_patterns()[m] as usize].table_size();
             for i in 0..size {
                 let j = net.indexer.swapped_index(m, i);
-                for b in 0..super::FT_BUCKETS {
-                    let src = (b * n_bucket + off + j) * ACC_DIMS;
-                    let dst = (b * n_bucket + off + i) * ACC_DIMS;
-                    ft_w[dst..dst + ACC_DIMS].copy_from_slice(&ft_b[src..src + ACC_DIMS]);
-                }
-                if !pa_b.is_empty() {
-                    for b in 0..PA_BUCKETS {
-                        let src = (b * n_bucket + off + j) * PA_DIMS;
-                        let dst = (b * n_bucket + off + i) * PA_DIMS;
-                        pa_w[dst..dst + PA_DIMS].copy_from_slice(&pa_b[src..src + PA_DIMS]);
-                    }
+                let src = (off + j) * ACC_DIMS;
+                let dst = (off + i) * ACC_DIMS;
+                ft_w[dst..dst + ACC_DIMS].copy_from_slice(&ft_b[src..src + ACC_DIMS]);
+                for b in 0..PA_BUCKETS {
+                    let src = (b * n_bucket + off + j) * PA_DIMS;
+                    let dst = (b * n_bucket + off + i) * PA_DIMS;
+                    pa_w[dst..dst + PA_DIMS].copy_from_slice(&pa_b[src..src + PA_DIMS]);
                 }
             }
         }
@@ -192,13 +187,12 @@ impl StackQ {
         } else {
             (&self.ft_w, &self.pa_w)
         };
-        let ft_base = ft_bucket(stage) * net.n_feat_bucket;
-        let pa_base = pa_bucket(stage) * net.n_feat_bucket;
+        let pa_base = pa_bucket(stage) * net.n_features;
         let st = so_stage(stage);
         #[cfg(all(target_arch = "aarch64", not(feature = "nnue-scalar")))]
         let sum = unsafe {
             self.eval_neon(
-                ft.as_ptr().add(ft_base * ACC_DIMS),
+                ft.as_ptr(),
                 pa.as_ptr().add(pa_base * PA_DIMS),
                 &rows,
                 net.n_masks,
@@ -209,7 +203,7 @@ impl StackQ {
         };
         #[cfg(not(all(target_arch = "aarch64", not(feature = "nnue-scalar"))))]
         let sum = self.eval_scalar(
-            &ft[ft_base * ACC_DIMS..],
+            ft,
             &pa[pa_base * PA_DIMS..],
             &rows,
             net.n_masks,
@@ -220,7 +214,6 @@ impl StackQ {
         sum as f32 / OUT_PER_DISC
     }
 
-    /// The same arithmetic, one integer at a time.
     #[cfg_attr(
         all(target_arch = "aarch64", not(feature = "nnue-scalar")),
         allow(dead_code)
@@ -493,8 +486,7 @@ mod tests {
     use crate::pattern::NNUE_PATTERNS;
     use crate::position::Position;
 
-    /// Plays a game and hands every position to `f`, alternating colours.
-    fn walk_game(nn: &Nnue, mut f: impl FnMut(&Board, usize)) {
+    fn walk_game(mut f: impl FnMut(&Board, usize)) {
         let mut board = Board::new();
         for ply in 0..60 {
             f(&board, ply);
@@ -509,10 +501,8 @@ mod tests {
             let pos = Position::from_index(moves.trailing_zeros()).unwrap();
             board.make_move_bits(pos);
         }
-        let _ = nn;
     }
 
-    /// The scalar kernel's result for the position, in discs.
     fn scalar_discs(nn: &Nnue, board: &Board) -> f32 {
         let ix = nn.indices(board.black, board.white);
         let stage = crate::linear::Linear::stage(board);
@@ -523,8 +513,8 @@ mod tests {
             (&nn.sq.ft_w, &nn.sq.pa_w)
         };
         nn.sq.eval_scalar(
-            &ft[ft_bucket(stage) * nn.n_feat_bucket * ACC_DIMS..],
-            &pa[pa_bucket(stage) * nn.n_feat_bucket * PA_DIMS..],
+            ft,
+            &pa[pa_bucket(stage) * nn.n_features * PA_DIMS..],
             &rows,
             nn.n_masks,
             so_stage(stage),
@@ -534,13 +524,12 @@ mod tests {
             / OUT_PER_DISC
     }
 
-    /// The vector kernel against the scalar one, exactly, for both colours along a game.
     #[test]
     fn vector_kernel_matches_scalar() {
         let mut nn = Nnue::new(NNUE_PATTERNS);
         nn.init_weights();
         nn.quantize();
-        walk_game(&nn, |board, ply| {
+        walk_game(|board, ply| {
             let ix = nn.indices(board.black, board.white);
             let q = nn.eval_from_indices(&ix, board);
             let s = scalar_discs(&nn, board);
@@ -551,7 +540,7 @@ mod tests {
         });
     }
 
-    /// The integer stack against the f32 network it was converted from, on trained weights (`KUROOBI_STACK_WEIGHTS` names the file).
+    /// `KUROOBI_STACK_WEIGHTS` names the trained weight file.
     #[test]
     #[ignore]
     fn integer_stack_matches_f32_on_trained_weights() {
@@ -561,11 +550,10 @@ mod tests {
         nn.load(std::path::Path::new(&path)).expect("weights load");
         nn.quantize();
         let mut worst = 0.0f32;
-        walk_game(&nn, |board, _| {
+        walk_game(|board, _| {
             let ix = nn.indices(board.black, board.white);
             let f = nn.eval_indices(board, &ix);
             let q = nn.eval_from_indices(&ix, board);
-            eprintln!("{} empty: f32 {f:.3} int {q:.3}", board.empty_count());
             worst = worst.max((q - f).abs() / f.abs().max(4.0));
         });
         assert!(
@@ -611,7 +599,7 @@ mod probe {
                 let stage = crate::linear::Linear::stage(&board);
                 let st = so_stage(stage);
                 let ix = nn.indices(board.black, board.white);
-                let feats = nn.features_player(&ix, board.player(), stage);
+                let feats = nn.features_player(&ix, board.player());
                 let mut raw = [0.0f32; ACC_DIMS];
                 for &f in feats.iter().take(nn.n_masks) {
                     let row = &nn.ft[f as usize * ACC_DIMS..(f as usize + 1) * ACC_DIMS];

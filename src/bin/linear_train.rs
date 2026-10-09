@@ -30,10 +30,8 @@ struct Args {
     cosine: bool,
     gpu: bool,
     minibatch: usize,
-    search_value_to_ply: Option<u8>,
-    drop_random: bool,
-    keep_above_ply: Option<u8>,
-    min_ply: u8,
+    filter: Filter,
+    policy: TeacherPolicy,
     swa: bool,
     swa_start: usize,
     per_stage_best: bool,
@@ -178,6 +176,10 @@ Options:
                     epochs are still settling from the start point)
   -h, --help        Show this help";
 
+fn num<T: std::str::FromStr<Err: std::fmt::Display>>(name: &str, v: String) -> Result<T, String> {
+    v.parse().map_err(|e: T::Err| format!("{name}: {e}"))
+}
+
 fn parse_args() -> Result<Args, String> {
     let mut args = Args {
         epochs: 10,
@@ -193,10 +195,8 @@ fn parse_args() -> Result<Args, String> {
         cosine: false,
         gpu: false,
         minibatch: 8192,
-        search_value_to_ply: None,
-        drop_random: false,
-        keep_above_ply: None,
-        min_ply: 0,
+        filter: Filter::NONE,
+        policy: TeacherPolicy::DEFAULT,
         per_stage_best: false,
         select_by: String::from("mae"),
         cell_lr: false,
@@ -220,24 +220,10 @@ fn parse_args() -> Result<Args, String> {
     while let Some(arg) = it.next() {
         let mut value = |name: &str| it.next().ok_or_else(|| format!("{name} requires a value"));
         match arg.as_str() {
-            "--epochs" => {
-                args.epochs = value("--epochs")?
-                    .parse()
-                    .map_err(|e| format!("--epochs: {e}"))?
-            }
-            "--lr" => {
-                args.learning_rate = value("--lr")?.parse().map_err(|e| format!("--lr: {e}"))?
-            }
-            "--decay" => {
-                args.decay = value("--decay")?
-                    .parse()
-                    .map_err(|e| format!("--decay: {e}"))?
-            }
-            "--threads" => {
-                args.threads = value("--threads")?
-                    .parse()
-                    .map_err(|e| format!("--threads: {e}"))?
-            }
+            "--epochs" => args.epochs = num("--epochs", value("--epochs")?)?,
+            "--lr" => args.learning_rate = num("--lr", value("--lr")?)?,
+            "--decay" => args.decay = num("--decay", value("--decay")?)?,
+            "--threads" => args.threads = num("--threads", value("--threads")?)?,
             "--optimizer" => {
                 let v = value("--optimizer")?;
                 args.optimizer = match v.as_str() {
@@ -247,59 +233,35 @@ fn parse_args() -> Result<Args, String> {
                 };
             }
             "--weights" => args.weights_path = PathBuf::from(value("--weights")?),
-            "--limit" => {
-                args.limit = Some(
-                    value("--limit")?
-                        .parse()
-                        .map_err(|e| format!("--limit: {e}"))?,
-                )
-            }
+            "--limit" => args.limit = Some(num("--limit", value("--limit")?)?),
             "--max-examples" => {
-                let n: usize = value("--max-examples")?
-                    .parse()
-                    .map_err(|e| format!("--max-examples: {e}"))?;
+                let n: usize = num("--max-examples", value("--max-examples")?)?;
                 args.max_examples = (n > 0).then_some(n);
             }
             "--log" => args.log_path = Some(PathBuf::from(value("--log")?)),
             "--val" => args.val_files.push(PathBuf::from(value("--val")?)),
             "--cosine" => args.cosine = true,
             "--gpu" => args.gpu = true,
-            "--minibatch" => {
-                args.minibatch = value("--minibatch")?
-                    .parse()
-                    .map_err(|e| format!("--minibatch: {e}"))?
-            }
+            "--minibatch" => args.minibatch = num("--minibatch", value("--minibatch")?)?,
             "--search-value-to-ply" => {
-                args.search_value_to_ply = Some(
-                    value("--search-value-to-ply")?
-                        .parse()
-                        .map_err(|e| format!("--search-value-to-ply: {e}"))?,
-                )
+                args.policy.search_value_to_ply = Some(num(
+                    "--search-value-to-ply",
+                    value("--search-value-to-ply")?,
+                )?)
             }
-            "--drop-random" => args.drop_random = true,
+            "--drop-random" => args.filter.drop_random = true,
             "--keep-above-ply" => {
-                args.keep_above_ply = Some(
-                    value("--keep-above-ply")?
-                        .parse()
-                        .map_err(|e| format!("--keep-above-ply: {e}"))?,
-                )
+                args.filter.keep_above_ply =
+                    Some(num("--keep-above-ply", value("--keep-above-ply")?)?)
             }
-            "--min-ply" => {
-                args.min_ply = value("--min-ply")?
-                    .parse()
-                    .map_err(|e| format!("--min-ply: {e}"))?
-            }
+            "--min-ply" => args.filter.min_ply = num("--min-ply", value("--min-ply")?)?,
             "--swa" => args.swa = true,
             "--per-stage-best" => args.per_stage_best = true,
             "--select-by" => args.select_by = it.next().unwrap_or_default(),
             "--lr-smooth" => args.lr_smooth = true,
             "--cell-lr" => args.cell_lr = true,
             "--restore-on-halve" => args.restore_on_halve = true,
-            "--min-appear" => {
-                args.min_appear = value("--min-appear")?
-                    .parse()
-                    .map_err(|e| format!("--min-appear: {e}"))?
-            }
+            "--min-appear" => args.min_appear = num("--min-appear", value("--min-appear")?)?,
             "--stages" => {
                 let v = value("--stages")?;
                 let (a, b) = v.split_once('-').unwrap_or((v.as_str(), v.as_str()));
@@ -310,50 +272,24 @@ fn parse_args() -> Result<Args, String> {
                 }
             }
             "--stage" => {
-                let n: usize = value("--stage")?
-                    .parse()
-                    .map_err(|e| format!("--stage: {e}"))?;
+                let n: usize = num("--stage", value("--stage")?)?;
                 if n >= STAGE_COUNT {
                     return Err(format!("--stage: {n} is past the last stage"));
                 }
                 args.stages_lo = n;
                 args.stages_hi = n;
             }
-            "--warmup" => {
-                args.warmup = value("--warmup")?
-                    .parse()
-                    .map_err(|e| format!("--warmup: {e}"))?
-            }
-            "--patience" => {
-                args.patience = value("--patience")?
-                    .parse()
-                    .map_err(|e| format!("--patience: {e}"))?
-            }
-            "--plateau" => {
-                args.plateau = value("--plateau")?
-                    .parse()
-                    .map_err(|e| format!("--plateau: {e}"))?
-            }
+            "--warmup" => args.warmup = num("--warmup", value("--warmup")?)?,
+            "--patience" => args.patience = num("--patience", value("--patience")?)?,
+            "--plateau" => args.plateau = num("--plateau", value("--plateau")?)?,
             "--plateau-factor" => {
-                args.plateau_factor = value("--plateau-factor")?
-                    .parse()
-                    .map_err(|e| format!("--plateau-factor: {e}"))?
+                args.plateau_factor = num("--plateau-factor", value("--plateau-factor")?)?
             }
             "--plateau-frac" => {
-                args.plateau_frac = value("--plateau-frac")?
-                    .parse()
-                    .map_err(|e| format!("--plateau-frac: {e}"))?
+                args.plateau_frac = num("--plateau-frac", value("--plateau-frac")?)?
             }
-            "--plateau-min" => {
-                args.plateau_min = value("--plateau-min")?
-                    .parse()
-                    .map_err(|e| format!("--plateau-min: {e}"))?
-            }
-            "--swa-start" => {
-                args.swa_start = value("--swa-start")?
-                    .parse()
-                    .map_err(|e| format!("--swa-start: {e}"))?
-            }
+            "--plateau-min" => args.plateau_min = num("--plateau-min", value("--plateau-min")?)?,
+            "--swa-start" => args.swa_start = num("--swa-start", value("--swa-start")?)?,
             "-h" | "--help" => return Err(USAGE.to_string()),
             other if other.starts_with('-') => {
                 return Err(format!("unknown option: {other}\n\n{USAGE}"))
@@ -385,31 +321,6 @@ fn parse_args() -> Result<Args, String> {
         ));
     }
     Ok(args)
-}
-
-fn filter_of(args: &Args) -> Filter {
-    Filter {
-        min_ply: args.min_ply,
-        max_score_diff: None,
-        drop_random: args.drop_random,
-        keep_above_ply: args.keep_above_ply,
-    }
-}
-
-fn policy_of(args: &Args) -> TeacherPolicy {
-    TeacherPolicy {
-        search_value_to_ply: args.search_value_to_ply,
-    }
-}
-
-fn load_file_into(
-    path: &Path,
-    limit: Option<usize>,
-    out: &mut Vec<Example>,
-    filter: &Filter,
-    policy: &TeacherPolicy,
-) -> std::io::Result<usize> {
-    load_examples_filtered_into(path, out, limit, filter, policy)
 }
 
 struct DataPlan {
@@ -639,12 +550,10 @@ fn main() -> ExitCode {
         }
     }
 
-    let filter = filter_of(&args);
-    let policy = policy_of(&args);
-    println!("teacher: {}", policy.describe());
+    println!("teacher: {}", args.policy.describe());
     let mut val: Vec<Example> = Vec::new();
     for f in &args.val_files {
-        if let Err(e) = load_file_into(f, None, &mut val, &filter, &policy) {
+        if let Err(e) = load_examples_filtered_into(f, &mut val, None, &args.filter, &args.policy) {
             eprintln!("failed to load val {}: {e}", f.display());
             return ExitCode::FAILURE;
         }
@@ -903,10 +812,7 @@ impl SwaAccumulator {
         Ok(())
     }
 
-    fn write(&self) -> std::io::Result<bool> {
-        if self.count == 0 {
-            return Ok(false);
-        }
+    fn write(&self) -> std::io::Result<()> {
         let inv = 1.0 / self.count as f64;
         let mut buf = self.header.clone();
         buf.reserve(self.sum.len() * 4);
@@ -915,8 +821,7 @@ impl SwaAccumulator {
         }
         let tmp = self.out.with_extension("swa.tmp");
         std::fs::write(&tmp, &buf)?;
-        std::fs::rename(&tmp, &self.out)?;
-        Ok(true)
+        std::fs::rename(&tmp, &self.out)
     }
 }
 
@@ -962,15 +867,13 @@ fn load_shard(
     shard: &Shard,
     plan: &mut DataPlan,
     args: &Args,
-    filter: &Filter,
-    policy: &TeacherPolicy,
     examples: &mut Vec<Example>,
 ) -> Result<(), PathBuf> {
     examples.clear();
     for &fi in &shard.files {
         let before = examples.len();
         let path = &plan.files[fi];
-        match load_file_into(path, args.limit, examples, filter, policy) {
+        match load_examples_filtered_into(path, examples, args.limit, &args.filter, &args.policy) {
             Ok(_) => plan.counts[fi] = examples.len() - before,
             Err(e) => {
                 eprintln!("{e}");
@@ -989,8 +892,6 @@ fn run_epochs<O: Optimizer>(
     interrupted: &AtomicBool,
 ) -> ExitCode {
     let parallel = args.optimizer == OptimizerKind::Sgd;
-    let filter = filter_of(args);
-    let policy = policy_of(args);
     #[cfg(feature = "gpu")]
     let mut gpu = args.gpu.then(|| {
         kuroobi::linear::gpu::LinearGpu::new(
@@ -1018,25 +919,18 @@ fn run_epochs<O: Optimizer>(
     if args.per_stage_best && !val.is_empty() {
         seed_stage_best(&trainer.linear, args, val, &mut stage);
     }
-    let best_path = {
+    let suffixed = |suffix: &str| {
         let mut p = args.weights_path.clone().into_os_string();
-        p.push(".best");
+        p.push(suffix);
         PathBuf::from(p)
     };
-    let stagebest_path = {
-        let mut p = args.weights_path.clone().into_os_string();
-        p.push(".stagebest");
-        PathBuf::from(p)
-    };
-    let mut swa = args.swa.then(|| {
-        let mut p = args.weights_path.clone().into_os_string();
-        p.push(".swa");
-        SwaAccumulator {
-            header: Vec::new(),
-            sum: Vec::new(),
-            count: 0,
-            out: PathBuf::from(p),
-        }
+    let best_path = suffixed(".best");
+    let stagebest_path = suffixed(".stagebest");
+    let mut swa = args.swa.then(|| SwaAccumulator {
+        header: Vec::new(),
+        sum: Vec::new(),
+        count: 0,
+        out: suffixed(".swa"),
     });
 
     for epoch in 1..=args.epochs {
@@ -1055,7 +949,7 @@ fn run_epochs<O: Optimizer>(
             // One shard is the whole data and already in memory: reading it again only cost time.
             let resident = shards.len() == 1 && epoch > 1 && !examples.is_empty();
             if !resident {
-                if let Err(path) = load_shard(shard, plan, args, &filter, &policy, &mut examples) {
+                if let Err(path) = load_shard(shard, plan, args, &mut examples) {
                     eprintln!("\nfailed to load {}", path.display());
                     return ExitCode::FAILURE;
                 }
@@ -1243,15 +1137,7 @@ fn run_epochs<O: Optimizer>(
             best_path.display()
         );
     }
-    if let Some(acc) = &swa {
-        if acc.count > 0 {
-            println!(
-                "SWA mean of {} epochs saved to {}",
-                acc.count,
-                acc.out.display()
-            );
-        }
-    }
+    report_swa(&swa);
     ExitCode::SUCCESS
 }
 
@@ -1314,7 +1200,7 @@ fn count_cells<O: Optimizer>(trainer: &mut Trainer<O>, args: &Args, examples: &[
         .linear
         .count_appearances(examples.iter().map(|e| e.board()));
     trainer.linear.set_min_appear(args.min_appear);
-    for st in args.stages_lo..=args.stages_hi.min(STAGE_COUNT - 1) {
+    for st in args.stages_lo..=args.stages_hi {
         if let Some((seen, unseen, q)) = trainer.linear.appearance_spread(st) {
             println!(
                 "  cell counts stage {st}: {seen} seen, {unseen} unseen, \
@@ -1474,11 +1360,7 @@ fn per_stage_epoch<O: Optimizer>(
         let live: Vec<StageSnapshot> = (0..STAGE_COUNT)
             .map(|st| trainer.linear.stage_weights(st))
             .collect();
-        for (st, snap) in stage.snap.iter().enumerate() {
-            if let Some((w, num)) = snap {
-                trainer.linear.set_stage_weights(st, w, num);
-            }
-        }
+        apply_stage_best(&mut trainer.linear, stage);
         if let Err(e) = trainer.linear.save_weights(stagebest_path) {
             eprintln!("failed to save {}: {e}", stagebest_path.display());
         }
@@ -1538,10 +1420,7 @@ fn persist_epoch<O: Optimizer>(
     }
     if let Some(acc) = swa {
         if epoch >= args.swa_start {
-            if let Err(e) = acc
-                .fold(&args.weights_path)
-                .and_then(|_| acc.write().map(|_| ()))
-            {
+            if let Err(e) = acc.fold(&args.weights_path).and_then(|_| acc.write()) {
                 eprintln!("failed to update SWA: {e}");
                 return Err(());
             }
@@ -1562,7 +1441,7 @@ fn report_swa(swa: &Option<SwaAccumulator>) {
     }
 }
 
-fn write_stage_best(lin: &mut Linear, stage: &StageState, path: &Path) -> bool {
+fn apply_stage_best(lin: &mut Linear, stage: &StageState) -> usize {
     let mut kept = 0usize;
     for (st, snap) in stage.snap.iter().enumerate() {
         if let Some((w, num)) = snap {
@@ -1570,6 +1449,11 @@ fn write_stage_best(lin: &mut Linear, stage: &StageState, path: &Path) -> bool {
             kept += 1;
         }
     }
+    kept
+}
+
+fn write_stage_best(lin: &mut Linear, stage: &StageState, path: &Path) -> bool {
+    let kept = apply_stage_best(lin, stage);
     if let Err(e) = lin.save_weights(path) {
         eprintln!("failed to save {}: {e}", path.display());
         return false;

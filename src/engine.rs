@@ -7,7 +7,7 @@ use crate::linear::Linear;
 use crate::midgame::{selective_band, NnueSearch, SharedTt, StopHandle};
 use crate::nnue::{Nnue, ACT_UNITS};
 use crate::pattern::{Pattern, LINEAR_PATTERNS, NNUE_PATTERNS};
-use crate::solver::{final_score, EndSolverMode, Solver};
+use crate::solver::{final_score, EndSolverMode, EndSolverResult, Solver};
 use crate::{Board, Position};
 
 fn stone_scale(v: f32) -> f32 {
@@ -89,9 +89,9 @@ pub struct MoveEval {
     pub learned: bool,
     pub depth: u32,
     pub cut: bool,
-    /// `gap` is a lower bound, `None` where no lead was shown (zero would read as a tie).
     pub stop_reason: crate::midgame::Stopped,
     pub second: Option<Position>,
+    /// A lower bound, `None` where no lead was shown (zero would read as a tie).
     pub gap: Option<f32>,
     pub extended: bool,
 }
@@ -213,10 +213,14 @@ impl EngineAssets {
             nnue: std::sync::Arc::new(nn),
         })
     }
+}
 
-    pub fn nnue(&self) -> &Nnue {
-        &self.nnue
+fn merged_book(base: Option<Book>, learned: &Book) -> Option<Book> {
+    let mut book = base.filter(|b| !b.is_empty());
+    if !learned.is_empty() {
+        crate::learn::merge_learned(book.get_or_insert_with(Book::new), learned);
     }
+    book
 }
 
 impl Engine {
@@ -240,21 +244,10 @@ impl Engine {
         let stop = StopHandle::new();
         search.set_stop(Some(stop.clone()));
         solver.set_stop(Some(stop.clone()));
-        let mut book = match Book::load(&config.book) {
-            Ok(b) if !b.is_empty() => Some(b),
-            _ => None,
-        };
         let learn_path = config.book.with_file_name("book_learn.txt");
-        let book_base = match Book::load(&config.book) {
-            Ok(b) if !b.is_empty() => Some(b),
-            _ => None,
-        };
+        let book_base = Book::load(&config.book).ok().filter(|b| !b.is_empty());
         let learned = Book::load(&learn_path).unwrap_or_default();
-        if !learned.is_empty() {
-            let base = book.get_or_insert_with(Book::new);
-            crate::learn::merge_learned(base, &learned);
-        }
-        let book = book.map(std::sync::Arc::new);
+        let book = merged_book(book_base.clone(), &learned).map(std::sync::Arc::new);
         let book_rand = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
             .map(|d| d.as_nanos() as u64)
@@ -272,7 +265,7 @@ impl Engine {
             learned,
             learn_path,
             solver_nodes: 0,
-            progress: progress.clone(),
+            progress,
         })
     }
 
@@ -332,6 +325,32 @@ impl Engine {
         cut
     }
 
+    /// The backup move comes back only when the deadline cut the solve.
+    fn solve_within(
+        &mut self,
+        board: &Board,
+        deadline: Option<std::time::Instant>,
+        kind: u8,
+        solve: impl FnOnce(&mut Solver, &Linear) -> EndSolverResult,
+    ) -> (EndSolverResult, bool, Option<MoveEval>) {
+        let backup = deadline.map(|d| self.backup_move(board, d));
+        self.progress.set_kind(kind);
+        let watcher = self.watch_deadline(deadline);
+        let r = solve(&mut self.solver, &self.linear);
+        self.solver_nodes += r.nodes;
+        let cut = self.stop_watch_done(watcher);
+        let backup = backup
+            .filter(|(p, _)| cut && p.is_some())
+            .map(|(pos, value)| MoveEval {
+                pos,
+                value: stone_scale(value),
+                depth: BACKUP_DEPTH,
+                cut: true,
+                ..Default::default()
+            });
+        (r, cut, backup)
+    }
+
     pub fn nodes(&self) -> u64 {
         self.search.nodes + self.solver_nodes
     }
@@ -359,13 +378,6 @@ impl Engine {
 
     pub fn has_book(&self) -> bool {
         self.book.is_some()
-    }
-
-    pub fn book_hints(&self, board: &Board) -> Option<Vec<(Position, f32)>> {
-        self.book
-            .as_ref()
-            .filter(|_| self.config.use_book)?
-            .candidates(board)
     }
 
     pub fn book_node(&self, board: &Board) -> Option<(Vec<BookCandidate>, bool)> {
@@ -415,23 +427,21 @@ impl Engine {
 
     pub fn ponder(&mut self, after_my_move: &Board, deadline: std::time::Instant) -> u64 {
         let base = self.nodes();
-        if is_game_over(after_my_move) || after_my_move.movable_count() == 0 {
+        if after_my_move.movable_count() == 0 {
             return 0;
         }
         if !ponder_pays(after_my_move, self.config.solve_empties, self.config.band) {
             return 0;
         }
+        self.progress.clear();
+        self.progress.set_kind(Progress::PONDER);
         let Some(pred) = self.tt_best(after_my_move) else {
             // Nothing searched here yet (second to move, or a book move): search their side for a reply.
-            self.progress.clear();
-            self.progress.set_kind(Progress::PONDER);
             self.stop.reset();
             self.search
                 .best_move_deadline(after_my_move, PONDER_DEPTH, Some(deadline));
             return self.nodes() - base;
         };
-        self.progress.clear();
-        self.progress.set_kind(Progress::PONDER);
         self.progress
             .flip
             .store(true, std::sync::atomic::Ordering::Relaxed);
@@ -447,22 +457,12 @@ impl Engine {
         self.nodes() - base
     }
 
-    pub fn tt_best(&self, board: &Board) -> Option<Position> {
+    fn tt_best(&self, board: &Board) -> Option<Position> {
         let h = crate::zobrist::board_hash(board.player_bb(), board.opponent_bb());
         self.search
             .tt
             .best_move(h)
             .and_then(|i| Position::from_index(i as u32))
-    }
-
-    pub fn book_value(&self, board: &Board) -> Option<(f32, bool)> {
-        let hints = self.book_hints(board)?;
-        let best = hints
-            .iter()
-            .map(|(_, v)| *v)
-            .fold(f32::NEG_INFINITY, f32::max);
-        let learned = self.learned.get_raw(Book::key(board).0).is_some();
-        Some((best, learned))
     }
 
     pub fn book_base_value(&self, board: &Board) -> Option<f32> {
@@ -484,10 +484,6 @@ impl Engine {
         let depth = book.get_raw(Book::key(board).0).map_or(0, |e| e.depth);
         let learned = self.learned.get_raw(Book::key(board).0).is_some();
         Some((value, learned, depth))
-    }
-
-    pub fn book_is_complete(&self, board: &Board) -> bool {
-        self.book.as_ref().is_some_and(|b| b.is_complete(board))
     }
 
     pub fn set_levels(&mut self, depth: u32, solve_empties: u8, band: u8) {
@@ -545,11 +541,8 @@ impl Engine {
                 return MoveEval {
                     pos: Some(pos),
                     value,
-                    exact: false,
                     from_book: true,
                     learned,
-                    depth: 0,
-                    cut: false,
                     ..Default::default()
                 };
             }
@@ -563,90 +556,46 @@ impl Engine {
         let c = &self.config;
         if is_game_over(board) {
             return MoveEval {
-                pos: None,
                 value: final_score(board) as f32,
                 exact: true,
-                from_book: false,
-                learned: false,
-                depth: 0,
-                cut: false,
                 ..Default::default()
             };
         }
         if board.empty_count() <= c.solve_empties {
-            let backup = deadline.map(|d| self.backup_move(board, d));
-            self.progress.set_kind(Progress::SOLVE);
-            let watcher = self.watch_deadline(deadline);
-            let r = self
-                .solver
-                .solve_with_eval(EndSolverMode::Perfect, board, Some(&*self.linear));
-            self.solver_nodes += r.nodes;
-            let cut = self.stop_watch_done(watcher);
+            let (r, cut, backup) =
+                self.solve_within(board, deadline, Progress::SOLVE, |solver, linear| {
+                    solver.solve_with_eval(EndSolverMode::Perfect, board, Some(linear))
+                });
             if cut {
                 if let Some((value, pos)) = self.solver.warm_rung.filter(|(_, p)| p.is_some()) {
                     return MoveEval {
                         pos,
                         value: stone_scale(value as f32),
-                        exact: false,
-                        from_book: false,
-                        learned: false,
-                        depth: 0,
                         cut: true,
                         ..Default::default()
                     };
                 }
-                if let Some((pos, value)) = backup.filter(|(p, _)| p.is_some()) {
-                    return MoveEval {
-                        pos,
-                        value: stone_scale(value),
-                        exact: false,
-                        from_book: false,
-                        learned: false,
-                        depth: BACKUP_DEPTH,
-                        cut: true,
-                        ..Default::default()
-                    };
-                }
+            }
+            if let Some(backup) = backup {
+                return backup;
             }
             MoveEval {
                 pos: r.best_move,
                 value: stone_scale(r.value as f32),
                 exact: !cut,
-                from_book: false,
-                learned: false,
-                depth: 0,
-                cut: false,
                 ..Default::default()
             }
         } else if let Some(t) = selective_band(board.empty_count(), c.solve_empties, c.band) {
-            let backup = deadline.map(|d| self.backup_move(board, d));
-            self.progress.set_kind(Progress::SELECT);
-            let watcher = self.watch_deadline(deadline);
-            let r = self.solver.solve_selective(board, Some(&*self.linear), t);
-            self.solver_nodes += r.nodes;
-            let cut = self.stop_watch_done(watcher);
-            if cut {
-                if let Some((pos, value)) = backup.filter(|(p, _)| p.is_some()) {
-                    return MoveEval {
-                        pos,
-                        value: stone_scale(value),
-                        exact: false,
-                        from_book: false,
-                        learned: false,
-                        depth: BACKUP_DEPTH,
-                        cut: true,
-                        ..Default::default()
-                    };
-                }
+            let (r, _, backup) =
+                self.solve_within(board, deadline, Progress::SELECT, |solver, linear| {
+                    solver.solve_selective(board, Some(linear), t)
+                });
+            if let Some(backup) = backup {
+                return backup;
             }
             MoveEval {
                 pos: r.best_move,
                 value: stone_scale(r.value as f32),
-                exact: false,
-                from_book: false,
-                learned: false,
-                depth: 0,
-                cut: false,
                 ..Default::default()
             }
         } else {
@@ -658,26 +607,6 @@ impl Engine {
             );
             let cut = self.stop.is_stopped();
             self.stop.reset();
-            if std::env::var("ROOT_TRACE").is_ok() {
-                let h = crate::zobrist::board_hash(board.player_bb(), board.opponent_bb());
-                eprintln!(
-                    "  ret [{h:016x}] {:+8.2} (raw {value:+.2}) depth {reached} {:?}{} stop {}{}{}",
-                    stone_scale(value),
-                    pos,
-                    if cut { " cut" } else { "" },
-                    self.search.stop_reason.as_str(),
-                    if self.search.extended {
-                        " extended"
-                    } else {
-                        ""
-                    },
-                    match (self.search.second, self.search.gap) {
-                        (Some(p), Some(g)) => format!(" second {p:?} gap >={g:.2}"),
-                        (Some(p), None) => format!(" second {p:?} gap ?"),
-                        (None, _) => String::new(),
-                    }
-                );
-            }
             MoveEval {
                 pos,
                 value: stone_scale(value),
@@ -748,15 +677,8 @@ impl Engine {
         self.learned
             .save(&self.learn_path)
             .map_err(|e| format!("saving learned book {}: {e}", self.learn_path.display()))?;
-        let mut book = match Book::load(&self.config.book) {
-            Ok(b) if !b.is_empty() => Some(b),
-            _ => None,
-        };
-        if !self.learned.is_empty() {
-            let base = book.get_or_insert_with(Book::new);
-            crate::learn::merge_learned(base, &self.learned);
-        }
-        self.book = book.map(std::sync::Arc::new);
+        self.book =
+            merged_book(Book::load(&self.config.book).ok(), &self.learned).map(std::sync::Arc::new);
         Ok(n)
     }
 
@@ -768,13 +690,8 @@ impl Engine {
     fn eval_position_inner(&mut self, board: &Board, depth: u32) -> MoveEval {
         if is_game_over(board) {
             return MoveEval {
-                pos: None,
                 value: final_score(board) as f32,
                 exact: true,
-                from_book: false,
-                learned: false,
-                depth: 0,
-                cut: false,
                 ..Default::default()
             };
         }
@@ -786,10 +703,6 @@ impl Engine {
                 pos: r.best_move,
                 value: stone_scale(r.value as f32),
                 exact: true,
-                from_book: false,
-                learned: false,
-                depth: 0,
-                cut: false,
                 ..Default::default()
             }
         } else {
@@ -797,11 +710,6 @@ impl Engine {
             MoveEval {
                 pos,
                 value: stone_scale(value),
-                exact: false,
-                from_book: false,
-                learned: false,
-                depth: 0,
-                cut: false,
                 ..Default::default()
             }
         }
@@ -814,7 +722,7 @@ impl Engine {
         let mut out = Vec::new();
         for pos in board.movable_iter() {
             if self.stop.is_stopped() {
-                break; // stopped: return what has been scored
+                break;
             }
             let mut child = *board;
             child.make_move_bits(pos);
@@ -823,10 +731,6 @@ impl Engine {
                     pos: Some(pos),
                     value: -(final_score(&child) as f32),
                     exact: true,
-                    from_book: false,
-                    learned: false,
-                    depth: 0,
-                    cut: false,
                     ..Default::default()
                 }
             } else if child.empty_count() <= self.config.solve_empties {
@@ -840,10 +744,6 @@ impl Engine {
                     pos: Some(pos),
                     value: -(r.value as f32),
                     exact: true,
-                    from_book: false,
-                    learned: false,
-                    depth: 0,
-                    cut: false,
                     ..Default::default()
                 }
             } else {
@@ -853,11 +753,6 @@ impl Engine {
                 MoveEval {
                     pos: Some(pos),
                     value: stone_scale(-v),
-                    exact: false,
-                    from_book: false,
-                    learned: false,
-                    depth: 0,
-                    cut: false,
                     ..Default::default()
                 }
             };
@@ -896,10 +791,6 @@ impl Engine {
                         pos: Some(pos),
                         value: -(final_score(&child) as f32),
                         exact: true,
-                        from_book: false,
-                        learned: false,
-                        depth: 0,
-                        cut: false,
                         ..Default::default()
                     }
                 } else if u32::from(child.empty_count()) <= depth {
@@ -913,10 +804,6 @@ impl Engine {
                         pos: Some(pos),
                         value: stone_scale(-(r.value as f32)),
                         exact: true,
-                        from_book: false,
-                        learned: false,
-                        depth: 0,
-                        cut: false,
                         ..Default::default()
                     }
                 } else {
@@ -926,11 +813,7 @@ impl Engine {
                     MoveEval {
                         pos: Some(pos),
                         value: stone_scale(-v),
-                        exact: false,
-                        from_book: false,
-                        learned: false,
-                        depth: reached + 1,
-                        cut: false, // child at d = d+1 plies from the parent
+                        depth: reached + 1, // child at d = d+1 plies from the parent
                         ..Default::default()
                     }
                 };

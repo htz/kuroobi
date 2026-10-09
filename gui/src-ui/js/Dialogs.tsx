@@ -11,8 +11,8 @@ import { GgsSettings } from './GgsScreens';
 import type { GgsSnapshot } from './types';
 
 
-export function Confirm({ title, body, ok = 'OK', danger, onOk, onCancel }: {
-  title: string; body?: React.ReactNode; ok?: string; danger?: boolean;
+export function Confirm({ title, body, ok, danger, onOk, onCancel }: {
+  title: string; body?: React.ReactNode; ok: string; danger?: boolean;
   onOk: () => void; onCancel: () => void;
 }) {
   return (
@@ -148,12 +148,12 @@ const notFound = (kind: string): string =>
 
 export function Settings({ prefs, setPref, ggs, initialTab, onClose }: {
   prefs: Prefs; setPref: <K extends keyof Prefs>(k: K, v: Prefs[K]) => void;
-  ggs?: GgsSnapshot | null;
-  initialTab?: 'engine' | 'view' | 'ggs';
-  onClose?: () => void;
+  ggs: GgsSnapshot | null;
+  initialTab: 'engine' | 'view' | 'ggs';
+  onClose: () => void;
 }) {
   useLang();
-  const [tab, setTab] = useState<'engine' | 'view' | 'ggs'>(initialTab ?? 'engine');
+  const [tab, setTab] = useState<'engine' | 'view' | 'ggs'>(initialTab);
   useEffect(() => {
     void api.autoplay().then((v) => {
       const [, want, arg] = (v ?? '').split(':');
@@ -210,9 +210,13 @@ export function Settings({ prefs, setPref, ggs, initialTab, onClose }: {
     } catch { /* leave it as is when the save fails */ }
   };
 
+  const saveHash = async (mid: number, end: number) => {
+    try { setHash(await api.setHashSizes(mid, end)); } catch { /* the save failed */ }
+  };
+
   return (
     <Modal title={t('settings.title')} width="560px" onClose={onClose} scroll
-           band={<>
+           band={
                <div style={{
                  flex: 1, display: 'flex', alignItems: 'center',
                  justifyContent: 'center', gap: 'var(--sp-1)',
@@ -232,7 +236,7 @@ export function Settings({ prefs, setPref, ggs, initialTab, onClose }: {
                    );
                  })}
                </div>
-           </>}>
+           }>
       <div className="k-settings" style={{ display: 'flex', flexDirection: 'column' }}>
 
         {tab === 'view' && <ViewSettings prefs={prefs} setPref={setPref} />}
@@ -323,26 +327,12 @@ export function Settings({ prefs, setPref, ggs, initialTab, onClose }: {
         {hash && (
           <Section title={t('settings.hash.title')}>
             <Row2 label={t('settings.hash.mid')}>
-                <Select width={140} value={String(hash.mid)}
-                        onChange={(v) => void (async () => {
-                          try { setHash(await api.setHashSizes(+v, hash.end)); } catch { /* the save failed */ }
-                        })()}
-                        options={Array.from({ length: hash.max - hash.min + 1 }, (_, i) => {
-                          const b = hash.min + i;
-                          const size = fmtSize(2 ** (b + 4));
-                          return [String(b), b === 22 ? t('settings.hash.default', { size }) : size] as [string, string];
-                        })} />
+              <HashSelect hash={hash} bits={hash.mid} standard={22} bytes={(b) => 2 ** (b + 4)}
+                          onPick={(b) => void saveHash(b, hash.end)} />
             </Row2>
             <Row2 label={t('settings.hash.end')}>
-              <Select width={140} value={String(hash.end)}
-                      onChange={(v) => void (async () => {
-                        try { setHash(await api.setHashSizes(hash.mid, +v)); } catch { /* the save failed */ }
-                      })()}
-                      options={Array.from({ length: hash.max - hash.min + 1 }, (_, i) => {
-                        const b = hash.min + i;
-                        const size = fmtSize(2 ** b * 24);
-                        return [String(b), b === 24 ? t('settings.hash.default', { size }) : size] as [string, string];
-                      })} />
+              <HashSelect hash={hash} bits={hash.end} standard={24} bytes={(b) => 2 ** b * 24}
+                          onPick={(b) => void saveHash(hash.mid, b)} />
             </Row2>
             <Note>{t('settings.hash.note')}</Note>
           </Section>
@@ -375,6 +365,20 @@ export function Settings({ prefs, setPref, ggs, initialTab, onClose }: {
                  }} />
       )}
     </Modal>
+  );
+}
+
+function HashSelect({ hash, bits, standard, bytes, onPick }: {
+  hash: HashView; bits: number; standard: number;
+  bytes: (bits: number) => number; onPick: (bits: number) => void;
+}) {
+  return (
+    <Select width={140} value={String(bits)} onChange={(v) => onPick(+v)}
+            options={Array.from({ length: hash.max - hash.min + 1 }, (_, i) => {
+              const b = hash.min + i;
+              const size = fmtSize(bytes(b));
+              return [String(b), b === standard ? t('settings.hash.default', { size }) : size] as [string, string];
+            })} />
   );
 }
 

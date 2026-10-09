@@ -21,14 +21,6 @@ impl Pace {
             _ => Pace::Fast,
         }
     }
-
-    pub fn as_str(self) -> &'static str {
-        match self {
-            Pace::Fast => "fast",
-            Pace::Depth => "depth",
-            Pace::Tail(_) => "tail",
-        }
-    }
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -871,15 +863,6 @@ mod clock_usage_tests {
     #[test]
     fn the_clock_is_actually_used() {
         let (rate, out) = play_out(0.47);
-        println!("  midgame spend rate (measured 47%): {:.0}%", rate * 100.0);
-        println!(
-            "  equivalent before BUDGET_USE:      {:.0}%",
-            play_out(0.235).0 * 100.0
-        );
-        println!(
-            "  if deadlines were fully used:      {:.0}%",
-            play_out(1.0).0 * 100.0
-        );
         assert!(!out, "ran out of clock");
         assert!(
             rate > 0.60,

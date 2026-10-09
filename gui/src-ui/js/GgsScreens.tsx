@@ -3,11 +3,11 @@ import { api, ggsApi, jsLog, onApp } from './api';
 import type { ChatMsg, GameResult, GgsSnapshot, MatchView, UserRow } from './types';
 import {
   clockChoices, gtypeChoices, clockOf, countDiscs, ggsMoveToIndex, gtypeLabel,
-  fingerGroups, fingerValue, hasJapanese, normKey, onlineRows, parseCond, presence, translate,
+  fingerGroups, fingerKey, fingerValue, hasJapanese, onlineRows, parseCond, presence, translate,
   useClocks,
-  type ClockSide, type ClockView,
+  type ClockSide, type ClockView, type Cond,
 } from './ggs';
-import { sqName } from './adapt';
+import { logLinesOf, sqName } from './adapt';
 import { t, useLang, tErr } from './i18n';
 import { Col, Empty, EmptyBoard, EmptyState, List, Note, Section, TableHead, TableRow, picked } from './components/layout';
 import { Button, Segmented, Select, TextArea, TextField, Toggle } from './components/primitives';
@@ -15,13 +15,12 @@ import { Strength } from './components/strength';
 import { Confirm, PickOne } from './Dialogs';
 import { IconButton } from './components/Icons';
 import {
-  Bubble, ConsoleLog, DayMark, FormulaEditor, FormulaView, MatchRow, PlayerRow, RateRow, Tag,
-  type Cond, type Match, type NavId,
+  Bubble, ConsoleLog, DayMark, FormulaEditor, FormulaView, MatchRow, RateRow, Tag,
+  type Match, type NavId,
 } from './components/ggs';
 import { Board, type Cell, type EvalInfo } from './components/board';
-import { EvalTrend, RateChart, ResultHead, ResultRow, StoneDot } from './components/data';
+import { EvalTrend, PlayerRow, RateChart, ResultHead, ResultRow, StoneDot } from './components/data';
 import { flipped, type Prefs } from './prefs';
-import { logLinesOf } from './adapt';
 
 
 export function GgsScreen({ nav, snap, onNav, prefs, onKifu }: {
@@ -237,7 +236,7 @@ export function GgsChat({ snap }: { snap: GgsSnapshot }) {
 
   return (
     <div style={{ flex: 1, minHeight: 0, display: 'flex' }}>
-      <ChatList sorted={sorted} cur={cur} onThread={setThread} onPick={setPick} />
+      <ChatList sorted={sorted} cur={cur} onThread={setThread} onPick={() => setPick(true)} />
 
       <div style={{ flex: 1, minWidth: 0, display: 'flex', flexDirection: 'column' }}>
         <div style={{
@@ -291,13 +290,16 @@ export function GgsChat({ snap }: { snap: GgsSnapshot }) {
                  body={<span style={{ fontSize: 'var(--fs-6)', color: 'var(--sub)' }}>
                    {t('ggs.chat.pick_note')}
                  </span>}
-                 options={snap.users.filter((u) => u.name !== login).map((u) => [u.name, u.name] as [string, string])}
+                 options={otherNames(snap).map((n) => [n, n] as [string, string])}
                  onCancel={() => setPick(false)}
                  onOk={(who) => { setThread(who); setPick(false); }} />
       )}
     </div>
   );
 }
+
+const otherNames = (snap: GgsSnapshot): string[] =>
+  snap.users.filter((u) => u.name !== snap.login).map((u) => u.name);
 
 function GgsLobby({ snap, onNav }: { snap: GgsSnapshot; onNav: (id: NavId) => void }) {
   const [opp, setOpp] = useState('');
@@ -310,7 +312,7 @@ function GgsLobby({ snap, onNav }: { snap: GgsSnapshot; onNav: (id: NavId) => vo
   useEffect(() => { void ggsApi.listMatches().catch(() => {}); }, []);
 
   const games = snap.ongoing.filter((o) => !o.mine);
-  const names = snap.users.filter((u) => u.name !== snap.login).map((u) => u.name);
+  const names = otherNames(snap);
 
   return (
     <div style={{ flex: 1, minHeight: 0, display: 'flex' }}>
@@ -384,18 +386,12 @@ function GgsLobby({ snap, onNav }: { snap: GgsSnapshot; onNav: (id: NavId) => vo
           </Field>
           <Field label={t('ggs.field.format')}><Select value={gtype} onChange={setGtype} options={gtypeChoices()} /></Field>
           <Field label={t('ggs.field.time_control')}><Select value={time} onChange={setTime} options={clockChoices()} /></Field>
-          <Field label={t('ggs.rated')}>
-            <Segmented value={rated && !noRated ? 'on' : 'off'} disabled={noRated}
-                       onChange={(v) => setRated(v === 'on')}
-                       options={[{ value: 'on', label: t('ggs.on') },
-                                 { value: 'off', label: t('ggs.off') }]} />
-            {noRated && <Note>{t('ggs.no_rated_note')}</Note>}
-          </Field>
+          <RatedField rated={rated} noRated={noRated} onChange={setRated} />
           <Button size="field" variant="primary" disabled={!calibrated}
                   onClick={() => void ggsApi.ask(gtype, time, opp, rated)}>
             {opp ? t('ggs.lobby.ask') : t('ggs.lobby.open_request')}
           </Button>
-          {!calibrated && <Note>{calibNote()}</Note>}
+          {!calibrated && <Note>{t('ggs.calib_note')}</Note>}
           <Note>{t('ggs.lobby.synchro_note')}</Note>
         </Section>
 
@@ -415,19 +411,28 @@ function GgsLobby({ snap, onNav }: { snap: GgsSnapshot; onNav: (id: NavId) => vo
   );
 }
 
-function Row({ title, sub, tag, tagTone, alert, actions, onClick, title2 }: {
+function RatedField({ rated, noRated, onChange }: {
+  rated: boolean; noRated: boolean; onChange: (on: boolean) => void;
+}) {
+  return (
+    <Field label={t('ggs.rated')}>
+      <Segmented value={rated && !noRated ? 'on' : 'off'} disabled={noRated}
+                 onChange={(v) => onChange(v === 'on')}
+                 options={[{ value: 'on', label: t('ggs.on') },
+                           { value: 'off', label: t('ggs.off') }]} />
+      {noRated && <Note>{t('ggs.no_rated_note')}</Note>}
+    </Field>
+  );
+}
+
+function Row({ title, sub, tag, tagTone, alert, actions }: {
   title: string; sub?: string; tag?: string;
   tagTone?: 'sub' | 'accent' | 'ok' | 'bad';
   alert?: boolean;
   actions?: React.ReactNode;
-  onClick?: () => void;
-  title2?: string;
 }) {
-  const Tag_ = onClick && !actions ? 'button' : 'div';
   return (
-    <Tag_ {...(onClick && !actions
-      ? { type: 'button' as const, className: 'k-row', onClick, title: title2 }
-      : {})} style={{
+    <div style={{
       display: 'flex', alignItems: 'center', gap: 'var(--sp-2)', width: '100%',
       height: 'var(--h-row2)', flex: 'none', padding: '0 var(--sp-4)',
       border: 0, borderRadius: 0,
@@ -435,7 +440,7 @@ function Row({ title, sub, tag, tagTone, alert, actions, onClick, title2 }: {
       background: alert ? 'color-mix(in srgb, var(--bad) 8%, transparent)' : 'transparent',
       boxShadow: alert ? 'inset 2px 0 0 var(--bad)' : undefined,
       textAlign: 'left',
-      color: 'var(--text)', cursor: onClick && !actions ? 'pointer' : undefined,
+      color: 'var(--text)',
     }}>
       <span style={{ flex: 1, minWidth: 0, display: 'flex', flexDirection: 'column', gap: 2 }}>
         <span style={{ display: 'flex', alignItems: 'center', gap: 'var(--sp-2)', fontSize: 'var(--fs-5)' }}>
@@ -447,7 +452,7 @@ function Row({ title, sub, tag, tagTone, alert, actions, onClick, title2 }: {
                                whiteSpace: 'nowrap' }}>{sub}</span>}
       </span>
       {actions}
-    </Tag_>
+    </div>
   );
 }
 
@@ -471,8 +476,6 @@ function useCalibrated(): boolean {
   return ok;
 }
 
-const calibNote = (): string => t('ggs.calib_note');
-
 function GgsStandby({ snap }: { snap: GgsSnapshot }) {
   const sb = snap.standby;
   const st = snap.standby_stats;
@@ -486,7 +489,7 @@ function GgsStandby({ snap }: { snap: GgsSnapshot }) {
   const calibrated = useCalibrated();
   const [rated, setRated] = useState(sb.rated);
 
-  const names = snap.users.filter((u) => u.name !== snap.login).map((u) => u.name);
+  const names = otherNames(snap);
   const playing = snap.matches.some((m) => !m.over);
   const state = sb.enabled
     ? (playing ? t('ggs.standby.state_playing') : t('ggs.standby.state_waiting'))
@@ -505,7 +508,7 @@ function GgsStandby({ snap }: { snap: GgsSnapshot }) {
 
   const form = (key: 'accept' | 'decline'): string =>
     (snap.fingers[snap.login]?.fields
-      .find(([k]) => k.replace(/\s+/g, '').replace(/\(.*\)/, '') === key)?.[1] ?? '')
+      .find(([k]) => fingerKey(k) === key)?.[1] ?? '')
       .replace(/^\s*:\s*/, '').trim();
 
   const online = snap.conn === 'online';
@@ -556,19 +559,13 @@ function GgsStandby({ snap }: { snap: GgsSnapshot }) {
             <TextField numeric align="right" value={String(interval)}
                        onChange={(x) => setInterval(+x || 0)} />
           </Field>
-          <Field label={t('ggs.rated')}>
-            <Segmented value={rated && !noRated ? 'on' : 'off'} disabled={noRated}
-                       onChange={(v) => setRated(v === 'on')}
-                       options={[{ value: 'on', label: t('ggs.on') },
-                                 { value: 'off', label: t('ggs.off') }]} />
-            {noRated && <Note>{t('ggs.no_rated_note')}</Note>}
-          </Field>
+          <RatedField rated={rated} noRated={noRated} onChange={setRated} />
         </div>
         <span style={{ width: 300, display: 'block' }}>
           <Toggle checked={autoAccept} onChange={setAutoAccept} label={t('ggs.standby.auto_accept')} />
         </span>
         <Note>{t('ggs.standby.note')}</Note>
-        {!sb.enabled && !calibrated && <Note>{calibNote()}</Note>}
+        {!sb.enabled && !calibrated && <Note>{t('ggs.calib_note')}</Note>}
       </Section>
 
       <Section title={t('ggs.standby.formula_title')}>
@@ -599,7 +596,7 @@ function Stat({ v, label, color }: { v: number | string; label: string; color?: 
 }
 
 let wantedMatch = '';
-export function focusMatch(id: string) { wantedMatch = id; }
+function focusMatch(id: string) { wantedMatch = id; }
 
 function GgsPlay({ snap, onNav, prefs, onKifu }: {
   snap: GgsSnapshot; onNav: (id: NavId) => void; prefs: Prefs;
@@ -637,7 +634,7 @@ function GgsPlay({ snap, onNav, prefs, onKifu }: {
         width: 'var(--w-list)', flex: 'none', borderRight: '1px solid var(--border)', minHeight: 0,
       }}>
         {keys.map((key) => (
-          <MatchRow key={key} m={matchRowOf(groups.get(key)!, key)}
+          <MatchRow key={key} m={matchRowOf(groups.get(key)!)}
                     active={key === cur} onSelect={() => setSel(key)}
                     onClose={() => {
                       void ggsApi.closeMatch(key);
@@ -681,12 +678,12 @@ function MatchActions({ id, pair }: { id: string; pair: MatchView[] }) {
               onClick={() => setAsk('resign')}>{t('ggs.resign')}</Button>
       {ask === 'break' && (
         <Confirm title={t('ggs.play.adjourn_confirm')} ok={t('ggs.play.adjourn_ok')}
-                 body={<>{adjournBody}</>}
+                 body={adjournBody}
                  onCancel={() => setAsk('')} onOk={() => send('break')} />
       )}
       {ask === 'resign' && (
         <Confirm title={t('ggs.play.resign_confirm')} ok={t('ggs.play.resign_ok')} danger
-                 body={<>{t('ggs.play.resign_body')}</>}
+                 body={t('ggs.play.resign_body')}
                  onCancel={() => setAsk('')} onOk={() => send('resign')} />
       )}
     </div>
@@ -697,16 +694,16 @@ function MatchActions({ id, pair }: { id: string; pair: MatchView[] }) {
 function matchResult(g: MatchView[]): string | undefined {
   if (!g.every((x) => x.over)) return undefined;
   const diffs = g.map((x) => Number.parseFloat(x.result));
-  if (diffs.length !== g.length || diffs.some((v) => !Number.isFinite(v))) return undefined;
+  if (diffs.some((v) => !Number.isFinite(v))) return undefined;
   const mean = diffs.reduce((a, b) => a + b, 0) / diffs.length;
   return (mean > 0 ? '+' : '') + mean.toFixed(2);
 }
 
-function matchRowOf(g: MatchView[], key: string): Match {
+function matchRowOf(g: MatchView[]): Match {
   const m = g[0];
   const mine = g.some((x) => x.my_color);
   return {
-    id: key, mine, live: !g.every((x) => x.over),
+    mine, live: !g.every((x) => x.over),
     opponent: m.opp_name,
     black: m.players[0]?.name ?? '?', white: m.players[1]?.name ?? '?',
     kind: gtypeLabel(m.gtype),
@@ -719,7 +716,7 @@ function matchRowOf(g: MatchView[], key: string): Match {
 const CARD_PAD = 12;
 const BOARD_GAP = 12;
 
-/** One board, or the two boards of a synchro game side by side; GGS has no other shape. */
+// GGS has no shape beyond one board or a synchro pair.
 function BoardPair({ pair, render }: {
   pair: MatchView[];
   render: (m: MatchView, i: number, side: number) => React.ReactNode;
@@ -1011,22 +1008,20 @@ export function GgsSettings({ snap }: { snap: GgsSnapshot }) {
             </Note>
           )}
           <Note>{t('ggs.settings.pacing_note')}</Note>
-          {(
-            <div style={{ display: 'flex', gap: 'var(--sp-4)' }}>
-              <Field label={t('ggs.settings.max_move')}>
-                <TextField numeric align="right" width={80} value={String(maxMove)}
-                           onChange={(x) => setMaxMove(Math.max(0, +x || 0))} />
-              </Field>
-              <Field label={t('ggs.settings.reserve')}>
-                <TextField numeric align="right" width={80} value={String(reserve)}
-                           onChange={(x) => setReserve(Math.max(0, +x || 0))} />
-              </Field>
-              <Field label={t('ggs.settings.budget_use')}>
-                <TextField numeric align="right" width={80} value={String(budgetUse)}
-                           onChange={(x) => setBudgetUse(Math.max(0.1, +x || 2.5))} />
-              </Field>
-            </div>
-          )}
+          <div style={{ display: 'flex', gap: 'var(--sp-4)' }}>
+            <Field label={t('ggs.settings.max_move')}>
+              <TextField numeric align="right" width={80} value={String(maxMove)}
+                         onChange={(x) => setMaxMove(Math.max(0, +x || 0))} />
+            </Field>
+            <Field label={t('ggs.settings.reserve')}>
+              <TextField numeric align="right" width={80} value={String(reserve)}
+                         onChange={(x) => setReserve(Math.max(0, +x || 0))} />
+            </Field>
+            <Field label={t('ggs.settings.budget_use')}>
+              <TextField numeric align="right" width={80} value={String(budgetUse)}
+                         onChange={(x) => setBudgetUse(Math.max(0.1, +x || 2.5))} />
+            </Field>
+          </div>
           <Note>{t('ggs.settings.budget_note')}</Note>
         </Section>
 
@@ -1055,7 +1050,7 @@ export function GgsSettings({ snap }: { snap: GgsSnapshot }) {
             }}>{saved}</span>
           )}
           <span style={{ marginLeft: 'auto' }} />
-          {!calibrated && <Note>{calibNote()}</Note>}
+          {!calibrated && <Note>{t('ggs.calib_note')}</Note>}
         </div>
 
         {online && (
@@ -1070,7 +1065,7 @@ export function GgsSettings({ snap }: { snap: GgsSnapshot }) {
 }
 
 function FormulaField({ label, src, onSave }: { label: string; src: string; onSave: (s: string) => void }) {
-  const [cond, setCond] = useState<Cond | null>(() => (src ? parseCond(src) : null));
+  const [cond, setCond] = useState<Cond | null>(() => parseCond(src));
   const [raw, setRaw] = useState<string | null>(null);
   if (raw !== null) {
     return (
@@ -1079,11 +1074,11 @@ function FormulaField({ label, src, onSave }: { label: string; src: string; onSa
           <TextArea mono rows={4} value={raw} onChange={setRaw}
                     placeholder={t('ggs.settings.formula_placeholder')} />
           <div style={{ display: 'flex', gap: 'var(--sp-2)' }}>
-            <Button onClick={() => { setRaw(null); setCond(raw ? parseCond(raw) : null); }}>
+            <Button onClick={() => { setRaw(null); setCond(parseCond(raw)); }}>
               {t('ggs.settings.back_to_tree')}
             </Button>
             <span style={{ flex: 1 }} />
-            <Button variant="primary" onClick={() => { onSave(raw); setRaw(null); setCond(raw ? parseCond(raw) : null); }}>
+            <Button variant="primary" onClick={() => { onSave(raw); setRaw(null); setCond(parseCond(raw)); }}>
               {t('ggs.apply')}
             </Button>
           </div>
@@ -1094,7 +1089,7 @@ function FormulaField({ label, src, onSave }: { label: string; src: string; onSa
   return (
     <Field label={label}>
       <FormulaEditor value={cond} onChange={setCond} onClear={() => setCond(null)}
-                     onSave={onSave} onRaw={(s) => setRaw(s)} />
+                     onSave={onSave} onRaw={setRaw} />
     </Field>
   );
 }
@@ -1156,7 +1151,7 @@ function GgsResults({ snap, onKifu }: {
         {cur === 'all' ? (
           <Note>{t('ggs.results.per_pool_note')}</Note>
         ) : (
-          <RateChart points={rates} width={800} height={180} axes dates={rateDates}
+          <RateChart points={rates} width={800} height={180} dates={rateDates}
                      labels={rateLabels} hover={hover} onHover={setHover} />
         )}
       </Section>
@@ -1164,7 +1159,7 @@ function GgsResults({ snap, onKifu }: {
       <Section title={t('ggs.results.finished')} aside={<span>{rows.length}</span>} grow
                head={!!rows.length && (
                  <ResultHead note={cur === 'all'}
-                             rating={rows.some((r) => r.my_rating != null)} when />
+                             rating={rows.some((r) => r.my_rating != null)} />
                )}>
         {!rows.length && <Empty>{t('ggs.no_records')}</Empty>}
         <List key={cur}>
@@ -1420,7 +1415,7 @@ function UserDetail({ snap, name, tab, onTab, onBack, onNav, onKifu }: {
             {fingerGroups(fields).map((g) => (
               <Section key={g.title} title={g.title}>
                 {g.rows.map((r) => {
-                  const key = normKey(r.key).replace(/\(.*\)/, '');
+                  const key = fingerKey(r.key);
                   const cond = ['accept', 'decline', 'request'].includes(key)
                     ? parseCond(r.value) : null;
                   return (
@@ -1481,10 +1476,9 @@ function ChatList({ sorted, cur, onThread, onPick }: {
   sorted: [string, { last: ChatMsg; n: number }][];
   cur: string;
   onThread: (t: string) => void;
-  onPick: (v: boolean) => void;
+  onPick: () => void;
 }) {
   return (
-    <>
     <aside style={{
       width: 'var(--w-lobby)', flex: 'none', borderRight: '1px solid var(--border)',
       minHeight: 0, display: 'flex', flexDirection: 'column',
@@ -1495,7 +1489,7 @@ function ChatList({ sorted, cur, onThread, onPick }: {
       }}>
         <span style={{ fontSize: 'var(--fs-7)', fontWeight: 600, letterSpacing: '.08em', color: 'var(--sub)' }}>{t('ggs.chat.threads')}</span>
         <span style={{ marginLeft: 'auto' }} />
-        <Button size="chip" onClick={() => onPick(true)}>{t('ggs.chat.new_thread')}</Button>
+        <Button size="chip" onClick={onPick}>{t('ggs.chat.new_thread')}</Button>
       </div>
       <div className="k-scroll" style={{ flex: 1, minHeight: 0 }}>
       {sorted.map(([key, info]) => (
@@ -1524,6 +1518,5 @@ function ChatList({ sorted, cur, onThread, onPick }: {
       ))}
       </div>
     </aside>
-    </>
   );
 }

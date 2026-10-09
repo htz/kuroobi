@@ -183,14 +183,13 @@ fn ggs_snap_arc(app: &State<App>) -> Option<Arc<Mutex<ggs::Snapshot>>> {
     app.ggs.lock().unwrap().as_ref().map(|h| h.snapshot.clone())
 }
 
+fn own_match_running(s: &ggs::Snapshot) -> bool {
+    s.matches.iter().any(|m| !m.my_color.is_empty() && !m.over)
+}
+
 fn ggs_match_in(snap: &Option<Arc<Mutex<ggs::Snapshot>>>) -> bool {
-    snap.as_ref().is_some_and(|s| {
-        s.lock()
-            .unwrap()
-            .matches
-            .iter()
-            .any(|m| !m.my_color.is_empty() && !m.over)
-    })
+    snap.as_ref()
+        .is_some_and(|s| own_match_running(&s.lock().unwrap()))
 }
 
 fn ggs_match_active(app: &State<App>) -> bool {
@@ -261,23 +260,23 @@ fn board_at_line(game: &mut Reversi, n: usize) -> Result<Board, String> {
         return Err("out of range".into());
     }
     let saved = game.move_count();
-    let goto = |to: usize, game: &mut Reversi| -> Result<(), String> {
-        while game.move_count() > to {
-            game.undo().map_err(|e| format!("{e:?}"))?;
-        }
-        while game.move_count() < to {
-            game.redo().map_err(|e| format!("{e:?}"))?;
-        }
-        Ok(())
-    };
-    goto(n, game)?;
+    seek(game, n)?;
     let b = game.board;
-    goto(saved, game)?;
+    seek(game, saved)?;
     Ok(b)
 }
 
-fn view(game: &Reversi) -> GameView {
-    let b = &game.board;
+fn seek(game: &mut Reversi, to: usize) -> Result<(), String> {
+    while game.move_count() > to {
+        game.undo().map_err(|e| format!("{e:?}"))?;
+    }
+    while game.move_count() < to {
+        game.redo().map_err(|e| format!("{e:?}"))?;
+    }
+    Ok(())
+}
+
+fn cells_of(b: &Board) -> Vec<u8> {
     let mut cells = vec![0u8; 64];
     for i in 0..64u8 {
         let bit = 1u64 << i;
@@ -287,13 +286,21 @@ fn view(game: &Reversi) -> GameView {
             cells[i as usize] = 2;
         }
     }
+    cells
+}
+
+fn color_name(c: Color) -> &'static str {
+    match c {
+        Color::Black => "black",
+        Color::White => "white",
+    }
+}
+
+fn view(game: &Reversi) -> GameView {
     let (black, white) = game.piece_count();
     GameView {
-        cells,
-        player: match game.player() {
-            Color::Black => "black".into(),
-            Color::White => "white".into(),
-        },
+        cells: cells_of(&game.board),
+        player: color_name(game.player()).into(),
         legal: game.movable_list().iter().map(|p| p.index()).collect(),
         black,
         white,
@@ -314,19 +321,21 @@ fn auto_pass(game: &mut Reversi) {
     }
 }
 
+fn config_dir() -> PathBuf {
+    dirs_config()
+        .unwrap_or_else(|| PathBuf::from(concat!(env!("CARGO_MANIFEST_DIR"), "/..")))
+        .join("kuroobi")
+}
+
 fn resources_path() -> PathBuf {
-    let base =
-        dirs_config().unwrap_or_else(|| PathBuf::from(concat!(env!("CARGO_MANIFEST_DIR"), "/..")));
-    base.join("kuroobi").join("resources.conf")
+    config_dir().join("resources.conf")
 }
 
 fn learn_log_path() -> PathBuf {
     if let Ok(p) = std::env::var("KUROOBI_LEARN_LOG") {
         return PathBuf::from(p);
     }
-    let base =
-        dirs_config().unwrap_or_else(|| PathBuf::from(concat!(env!("CARGO_MANIFEST_DIR"), "/..")));
-    base.join("kuroobi").join("learn_log.jsonl")
+    config_dir().join("learn_log.jsonl")
 }
 
 fn dirs_config() -> Option<PathBuf> {
@@ -420,7 +429,6 @@ fn calibrate_missing(
                 let mut r = resources();
                 r.set_nps(t, nps);
                 let _ = r.save(&resources_path());
-                use tauri::Emitter;
                 let _ = app.emit("resources-changed", ());
             }
         }
@@ -495,12 +503,7 @@ fn goto(app: State<App>, n: usize) -> Result<GameView, String> {
     if n > game.line().len() {
         return Err("out of range".into());
     }
-    while game.move_count() > n {
-        game.undo().map_err(|e| format!("{e:?}"))?;
-    }
-    while game.move_count() < n {
-        game.redo().map_err(|e| format!("{e:?}"))?;
-    }
+    seek(&mut game, n)?;
     Ok(view(&game))
 }
 
@@ -614,15 +617,19 @@ pub fn learn_log_append(e: &LearnEntry) {
     let Ok(line) = serde_json::to_string(e) else {
         return;
     };
+    append_line(&path, &line);
+    trim_learn_log(&path);
+}
+
+pub(crate) fn append_line(path: &std::path::Path, line: &str) {
+    use std::io::Write as _;
     if let Ok(mut f) = std::fs::OpenOptions::new()
         .create(true)
         .append(true)
-        .open(&path)
+        .open(path)
     {
-        use std::io::Write;
         let _ = writeln!(f, "{line}");
     }
-    trim_learn_log(&path);
 }
 
 const LEARN_LOG_MAX: usize = 200;
@@ -649,7 +656,7 @@ fn learn_log() -> Vec<LearnEntry> {
         .filter_map(|l| serde_json::from_str(l).ok())
         .collect();
     out.reverse();
-    out.truncate(200);
+    out.truncate(LEARN_LOG_MAX);
     out
 }
 
@@ -916,7 +923,7 @@ async fn set_local_threads(
 
 #[derive(Serialize)]
 struct ActivityView {
-    local: Option<String>,
+    local: Option<&'static str>,
     local_threads: u32,
     learn: Option<(u32, u32)>,
     learn_paused: bool,
@@ -949,7 +956,7 @@ fn activity_status(app: State<App>) -> ActivityView {
         .map(|s| {
             let s = s.lock().unwrap();
             (
-                s.matches.iter().any(|m| !m.my_color.is_empty() && !m.over),
+                own_match_running(&s),
                 s.thinking.is_some(),
                 s.engine.threads as u32,
             )
@@ -957,7 +964,7 @@ fn activity_status(app: State<App>) -> ActivityView {
         .unwrap_or((false, false, 0));
     let a = app.activity.lock().unwrap();
     ActivityView {
-        local: a.local.map(String::from),
+        local: a.local,
         local_threads: resources().threads.unwrap_or_else(auto_threads) as u32,
         learn: a.learn,
         learn_paused: a.learn_paused,
@@ -1077,13 +1084,7 @@ fn clocks(app: State<App>) -> ClockView {
         total: c.total,
         black,
         white,
-        lost: c.lost.map(|x| {
-            if x == kuroobi::Color::Black {
-                "black".into()
-            } else {
-                "white".into()
-            }
-        }),
+        lost: c.lost.map(|x| color_name(x).into()),
     }
 }
 
@@ -1526,19 +1527,7 @@ fn load_kifu_into(app: &State<App>, text: &str) -> Result<GameView, String> {
         *game = loaded;
         return Ok(view(&game));
     }
-    let start = extract_start(text);
-    let body = match &start {
-        Some(_) => text
-            .lines()
-            .filter(|l| {
-                let c: Vec<char> = l.chars().filter(|c| !c.is_whitespace()).collect();
-                c.len() != 65 && !l.contains("BO[")
-            })
-            .collect::<Vec<_>>()
-            .join("\n"),
-        None => text.to_string(),
-    };
-    let s = extract_kifu(&body);
+    let (start, s) = plain_record(text);
     if s.is_empty() && start.is_none() {
         return Err("err.record_not_found".into());
     }
@@ -1624,25 +1613,11 @@ async fn book_node(app: State<'_, App>, kifu: String) -> Result<BookNodeView, St
         let e = guard.as_mut().ok_or("err.engine_not_ready")?;
         let (moves, learned) = e.book_node(&b).unwrap_or((Vec::new(), false));
         let entry = e.book_entry(&b);
-        let mut cells = vec![0u8; 64];
-        for i in 0..64u8 {
-            let bit = 1u64 << i;
-            if b.black & bit != 0 {
-                cells[i as usize] = 1;
-            } else if b.white & bit != 0 {
-                cells[i as usize] = 2;
-            }
-        }
         Ok(BookNodeView {
             value: entry.map(|(v, _, _)| v),
             depth: entry.map(|(_, _, d)| d),
-            cells,
-            player: if player == Color::Black {
-                "black"
-            } else {
-                "white"
-            }
-            .into(),
+            cells: cells_of(&b),
+            player: color_name(player).into(),
             black: b.black.count_ones() as u8,
             white: b.white.count_ones() as u8,
             moves: moves
@@ -1671,26 +1646,12 @@ fn preview_kifu(text: String) -> Result<Vec<KifuFrame>, String> {
     }
     let mut b = game.board;
 
-    let frame = |b: &Board, last: Option<u8>| {
-        let mut cells = vec![0u8; 64];
-        for i in 0..64u8 {
-            let bit = 1u64 << i;
-            if b.black & bit != 0 {
-                cells[i as usize] = 1;
-            } else if b.white & bit != 0 {
-                cells[i as usize] = 2;
-            }
-        }
-        KifuFrame {
-            cells,
-            last,
-            black: b.black.count_ones() as u8,
-            white: b.white.count_ones() as u8,
-            player: match b.player() {
-                Color::Black => "black".into(),
-                Color::White => "white".into(),
-            },
-        }
+    let frame = |b: &Board, last: Option<u8>| KifuFrame {
+        cells: cells_of(b),
+        last,
+        black: b.black.count_ones() as u8,
+        white: b.white.count_ones() as u8,
+        player: color_name(b.player()).into(),
     };
 
     let mut out = vec![frame(&b, None)];
@@ -1723,8 +1684,16 @@ fn game_from_text(text: &str) -> Option<Reversi> {
             None => Reversi::from_kifu(&kifu).ok(),
         };
     }
+    let (start, kifu) = plain_record(text);
+    match &start {
+        Some(b) => Reversi::from_kifu_with_start(b, &kifu).ok(),
+        None => Reversi::from_kifu(&kifu).ok(),
+    }
+}
+
+fn plain_record(text: &str) -> (Option<String>, String) {
     let start = extract_start(text);
-    let body: String = match &start {
+    let body = match &start {
         Some(_) => text
             .lines()
             .filter(|l| {
@@ -1736,10 +1705,7 @@ fn game_from_text(text: &str) -> Option<Reversi> {
         None => text.to_string(),
     };
     let kifu = extract_kifu(&body);
-    match &start {
-        Some(b) => Reversi::from_kifu_with_start(b, &kifu).ok(),
-        None => Reversi::from_kifu(&kifu).ok(),
-    }
+    (start, kifu)
 }
 
 fn ggs_tx(app: &State<App>) -> Result<std::sync::mpsc::Sender<ggs::Cmd>, String> {
@@ -1749,6 +1715,10 @@ fn ggs_tx(app: &State<App>) -> Result<std::sync::mpsc::Sender<ggs::Cmd>, String>
         .as_ref()
         .map(|h| h.tx.clone())
         .ok_or_else(|| "err.ggs_session_not_started".into())
+}
+
+fn ggs_send(app: &State<App>, cmd: ggs::Cmd) -> Result<(), String> {
+    ggs_tx(app)?.send(cmd).map_err(|e| e.to_string())
 }
 
 fn read_credentials() -> Option<(String, String)> {
@@ -1781,12 +1751,13 @@ fn ggs_connect(app: State<App>, login: String, pw: String) -> Result<String, Str
         return Err("err.login_and_password_required".into());
     }
     let l = login.trim().to_string();
-    ggs_tx(&app)?
-        .send(ggs::Cmd::Connect {
+    ggs_send(
+        &app,
+        ggs::Cmd::Connect {
             login: l.clone(),
             pw,
-        })
-        .map_err(|e| e.to_string())?;
+        },
+    )?;
     Ok(l)
 }
 
@@ -1797,34 +1768,27 @@ fn set_backend_strings(strings: std::collections::HashMap<String, String>) {
 
 #[tauri::command]
 fn js_log(msg: String) {
-    use std::io::Write as _;
-    if let Ok(mut f) = std::fs::OpenOptions::new()
-        .create(true)
-        .append(true)
-        .open("/tmp/kuroobi_js.log")
-    {
-        let _ = writeln!(f, "[JS] {msg}");
-    }
+    append_line(
+        std::path::Path::new("/tmp/kuroobi_js.log"),
+        &format!("[JS] {msg}"),
+    );
 }
 
 #[tauri::command]
 fn ggs_disconnect(app: State<App>) -> Result<(), String> {
     keychain::forget();
-    ggs_tx(&app)?
-        .send(ggs::Cmd::Disconnect)
-        .map_err(|e| e.to_string())
+    ggs_send(&app, ggs::Cmd::Disconnect)
 }
 
 #[tauri::command]
 fn ggs_raw(app: State<App>, cmd: String) -> Result<(), String> {
-    ggs_tx(&app)?
-        .send(ggs::Cmd::Raw(cmd))
-        .map_err(|e| e.to_string())
+    ggs_send(&app, ggs::Cmd::Raw(cmd))
 }
 
 fn require_calibration() -> Result<(), String> {
-    let t = resources().threads.unwrap_or_else(auto_threads);
-    if resources().nps_for(t).is_none() {
+    let r = resources();
+    let t = r.threads.unwrap_or_else(auto_threads);
+    if r.nps_for(t).is_none() {
         return Err(format!("err.solve_speed_not_measured|threads={t}"));
     }
     Ok(())
@@ -1839,61 +1803,50 @@ fn ggs_ask(
     rated: bool,
 ) -> Result<(), String> {
     require_calibration()?;
-    ggs_tx(&app)?
-        .send(ggs::Cmd::Ask {
+    ggs_send(
+        &app,
+        ggs::Cmd::Ask {
             gtype,
             time,
             opponent,
             rated,
-        })
-        .map_err(|e| e.to_string())
+        },
+    )
 }
 
 #[tauri::command]
 fn ggs_accept(app: State<App>, id: String) -> Result<(), String> {
-    ggs_tx(&app)?
-        .send(ggs::Cmd::Accept(id))
-        .map_err(|e| e.to_string())
+    ggs_send(&app, ggs::Cmd::Accept(id))
 }
 
 #[tauri::command]
 fn ggs_decline(app: State<App>, id: String) -> Result<(), String> {
-    ggs_tx(&app)?
-        .send(ggs::Cmd::Decline(id))
-        .map_err(|e| e.to_string())
+    ggs_send(&app, ggs::Cmd::Decline(id))
 }
 
 #[tauri::command]
 fn ggs_finger(app: State<App>, name: String) -> Result<(), String> {
-    ggs_tx(&app)?
-        .send(ggs::Cmd::Finger(name))
-        .map_err(|e| e.to_string())
+    ggs_send(&app, ggs::Cmd::Finger(name))
 }
 
 #[tauri::command]
 fn ggs_who(app: State<App>) -> Result<(), String> {
-    ggs_tx(&app)?.send(ggs::Cmd::Who).map_err(|e| e.to_string())
+    ggs_send(&app, ggs::Cmd::Who)
 }
 
 #[tauri::command]
 fn ggs_top(app: State<App>, gtype: String, n: u32) -> Result<(), String> {
-    ggs_tx(&app)?
-        .send(ggs::Cmd::Top { gtype, n })
-        .map_err(|e| e.to_string())
+    ggs_send(&app, ggs::Cmd::Top { gtype, n })
 }
 
 #[tauri::command]
 fn ggs_rank(app: State<App>, gtype: String, name: String) -> Result<(), String> {
-    ggs_tx(&app)?
-        .send(ggs::Cmd::Rank { gtype, name })
-        .map_err(|e| e.to_string())
+    ggs_send(&app, ggs::Cmd::Rank { gtype, name })
 }
 
 #[tauri::command]
 fn ggs_close_match(app: State<App>, id: String) -> Result<(), String> {
-    ggs_tx(&app)?
-        .send(ggs::Cmd::CloseMatch(id))
-        .map_err(|e| e.to_string())
+    ggs_send(&app, ggs::Cmd::CloseMatch(id))
 }
 
 #[tauri::command]
@@ -1903,7 +1856,7 @@ fn ggs_watch(app: State<App>, id: String, on: bool) -> Result<(), String> {
     } else {
         ggs::Cmd::Unwatch(id)
     };
-    ggs_tx(&app)?.send(cmd).map_err(|e| e.to_string())
+    ggs_send(&app, cmd)
 }
 
 #[tauri::command]
@@ -1917,9 +1870,7 @@ fn ggs_ack(app: State<App>) -> Result<(), String> {
 
 #[tauri::command]
 fn ggs_look(app: State<App>, id: String) -> Result<(), String> {
-    ggs_tx(&app)?
-        .send(ggs::Cmd::Look(id))
-        .map_err(|e| e.to_string())
+    ggs_send(&app, ggs::Cmd::Look(id))
 }
 
 #[tauri::command]
@@ -1927,12 +1878,13 @@ fn ggs_chat(app: State<App>, target: String, text: String) -> Result<(), String>
     if target.trim().is_empty() || text.trim().is_empty() {
         return Err("err.chat_target_and_text_required".into());
     }
-    ggs_tx(&app)?
-        .send(ggs::Cmd::Chat {
+    ggs_send(
+        &app,
+        ggs::Cmd::Chat {
             target: target.trim().into(),
             text: text.trim().into(),
-        })
-        .map_err(|e| e.to_string())
+        },
+    )
 }
 
 #[tauri::command]
@@ -1941,9 +1893,7 @@ fn ggs_match_cmd(app: State<App>, id: String, verb: String, arg: String) -> Resu
     if !ALLOWED.contains(&verb.as_str()) {
         return Err(format!("unsupported verb: {verb}"));
     }
-    ggs_tx(&app)?
-        .send(ggs::Cmd::MatchCmd { id, verb, arg })
-        .map_err(|e| e.to_string())
+    ggs_send(&app, ggs::Cmd::MatchCmd { id, verb, arg })
 }
 
 #[tauri::command]
@@ -1951,44 +1901,32 @@ fn ggs_set_formula(app: State<App>, kind: String, expr: String) -> Result<(), St
     if kind != "aform" && kind != "dform" {
         return Err(format!("err.bad_formula_kind|kind={kind}"));
     }
-    ggs_tx(&app)?
-        .send(ggs::Cmd::SetFormula { kind, expr })
-        .map_err(|e| e.to_string())
+    ggs_send(&app, ggs::Cmd::SetFormula { kind, expr })
 }
 
 #[tauri::command]
 fn ggs_list_stored(app: State<App>) -> Result<(), String> {
-    ggs_tx(&app)?
-        .send(ggs::Cmd::ListStored)
-        .map_err(|e| e.to_string())
+    ggs_send(&app, ggs::Cmd::ListStored)
 }
 
 #[tauri::command]
 fn ggs_list_matches(app: State<App>) -> Result<(), String> {
-    ggs_tx(&app)?
-        .send(ggs::Cmd::ListMatches)
-        .map_err(|e| e.to_string())
+    ggs_send(&app, ggs::Cmd::ListMatches)
 }
 
 #[tauri::command]
 fn ggs_resume_stored(app: State<App>, id: String) -> Result<(), String> {
-    ggs_tx(&app)?
-        .send(ggs::Cmd::ResumeStored(id))
-        .map_err(|e| e.to_string())
+    ggs_send(&app, ggs::Cmd::ResumeStored(id))
 }
 
 #[tauri::command]
 fn ggs_history(app: State<App>, name: String) -> Result<(), String> {
-    ggs_tx(&app)?
-        .send(ggs::Cmd::History(name))
-        .map_err(|e| e.to_string())
+    ggs_send(&app, ggs::Cmd::History(name))
 }
 
 #[tauri::command]
 fn ggs_chat_seen(app: State<App>, at: u64) -> Result<(), String> {
-    ggs_tx(&app)?
-        .send(ggs::Cmd::ChatSeen(at))
-        .map_err(|e| e.to_string())
+    ggs_send(&app, ggs::Cmd::ChatSeen(at))
 }
 
 #[tauri::command]
@@ -1999,14 +1937,15 @@ fn ggs_set_engine(
     band: u8,
     ponder: bool,
 ) -> Result<(), String> {
-    ggs_tx(&app)?
-        .send(ggs::Cmd::SetEngine {
+    ggs_send(
+        &app,
+        ggs::Cmd::SetEngine {
             depth,
             solve,
             band,
             ponder,
-        })
-        .map_err(|e| e.to_string())
+        },
+    )
 }
 
 #[tauri::command]
@@ -2018,49 +1957,40 @@ fn ggs_set_pacing(
     budget_use: f64,
 ) -> Result<(), String> {
     require_calibration()?;
-    ggs_tx(&app)?
-        .send(ggs::Cmd::SetPacing {
+    ggs_send(
+        &app,
+        ggs::Cmd::SetPacing {
             pace,
             max_move_secs,
             reserve_secs,
             budget_use,
-        })
-        .map_err(|e| e.to_string())
+        },
+    )
 }
 
 #[tauri::command]
 fn ggs_set_auto_play(app: State<App>, on: bool) -> Result<(), String> {
-    ggs_tx(&app)?
-        .send(ggs::Cmd::SetAutoPlay(on))
-        .map_err(|e| e.to_string())
+    ggs_send(&app, ggs::Cmd::SetAutoPlay(on))
 }
 
 #[tauri::command]
 fn ggs_set_open(app: State<App>, on: bool) -> Result<(), String> {
-    ggs_tx(&app)?
-        .send(ggs::Cmd::SetOpen(on))
-        .map_err(|e| e.to_string())
+    ggs_send(&app, ggs::Cmd::SetOpen(on))
 }
 
 #[tauri::command]
 fn ggs_set_watch_analysis(app: State<App>, on: bool) -> Result<(), String> {
-    ggs_tx(&app)?
-        .send(ggs::Cmd::SetWatchAnalysis(on))
-        .map_err(|e| e.to_string())
+    ggs_send(&app, ggs::Cmd::SetWatchAnalysis(on))
 }
 
 #[tauri::command]
 fn ggs_set_use_book(app: State<App>, on: bool) -> Result<(), String> {
-    ggs_tx(&app)?
-        .send(ggs::Cmd::SetUseBook(on))
-        .map_err(|e| e.to_string())
+    ggs_send(&app, ggs::Cmd::SetUseBook(on))
 }
 
 #[tauri::command]
 fn ggs_set_learn(app: State<App>, on: bool) -> Result<(), String> {
-    ggs_tx(&app)?
-        .send(ggs::Cmd::SetLearn(on))
-        .map_err(|e| e.to_string())
+    ggs_send(&app, ggs::Cmd::SetLearn(on))
 }
 
 #[tauri::command]
@@ -2068,9 +1998,7 @@ fn ggs_set_standby(app: State<App>, cfg: ggs::StandbyCfg) -> Result<(), String> 
     if cfg.enabled {
         require_calibration()?;
     }
-    ggs_tx(&app)?
-        .send(ggs::Cmd::SetStandby(cfg))
-        .map_err(|e| e.to_string())
+    ggs_send(&app, ggs::Cmd::SetStandby(cfg))
 }
 
 #[tauri::command]
@@ -2085,13 +2013,7 @@ fn ggs_snapshot(app: State<App>) -> Result<ggs::Snapshot, String> {
         }
         return Ok(s);
     }
-    let snap = {
-        let guard = app.ggs.lock().unwrap();
-        let h = guard
-            .as_ref()
-            .ok_or_else(|| "err.ggs_session_not_started".to_string())?;
-        h.snapshot.clone()
-    };
+    let snap = ggs_snap_arc(&app).ok_or_else(|| "err.ggs_session_not_started".to_string())?;
     let s = snap.lock().unwrap().clone();
     Ok(s)
 }

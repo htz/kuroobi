@@ -20,15 +20,6 @@ impl Color {
     pub const fn index(self) -> usize {
         self as usize
     }
-
-    #[inline]
-    pub const fn from_usize(u: usize) -> Option<Color> {
-        match u {
-            0 => Some(Color::Black),
-            1 => Some(Color::White),
-            _ => None,
-        }
-    }
 }
 
 #[cfg(test)]
@@ -45,12 +36,5 @@ mod tests {
     fn test_index() {
         assert_eq!(Color::Black.index(), 0);
         assert_eq!(Color::White.index(), 1);
-    }
-
-    #[test]
-    fn test_from_usize() {
-        assert_eq!(Color::from_usize(0), Some(Color::Black));
-        assert_eq!(Color::from_usize(1), Some(Color::White));
-        assert_eq!(Color::from_usize(2), None);
     }
 }

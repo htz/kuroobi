@@ -87,10 +87,6 @@ impl Record {
             score: self.teacher(),
         }
     }
-
-    pub fn empties(&self) -> u8 {
-        64 - (self.mover | self.opponent).count_ones() as u8
-    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -190,11 +186,8 @@ impl TeacherPolicy {
     }
 
     pub fn value(&self, r: &Record) -> f32 {
-        if r.ply <= 1 {
-            return 0.0;
-        }
         match self.search_value_to_ply {
-            Some(t) if r.ply <= t => r.score,
+            Some(t) if r.ply > 1 && r.ply <= t => r.score,
             _ => r.teacher(),
         }
     }
@@ -204,32 +197,8 @@ pub fn count(path: &Path) -> io::Result<usize> {
     Ok(std::fs::metadata(path)?.len() as usize / SIZE)
 }
 
-pub fn for_each(path: &Path, mut f: impl FnMut(Record) -> bool) -> io::Result<()> {
-    const BLOCK: usize = SIZE * 4096;
-    let mut file = File::open(path)?;
-    let mut buf = vec![0u8; BLOCK];
-    let mut carry = 0usize;
-    loop {
-        let mut filled = carry;
-        while filled < BLOCK {
-            match file.read(&mut buf[filled..])? {
-                0 => break,
-                got => filled += got,
-            }
-        }
-        let eof = filled < BLOCK;
-        for rec in buf[..filled].as_chunks::<SIZE>().0 {
-            if !f(Record::from_bytes(rec)) {
-                return Ok(());
-            }
-        }
-        let used = (filled / SIZE) * SIZE;
-        carry = filled - used;
-        buf.copy_within(used..filled, 0);
-        if eof {
-            return Ok(());
-        }
-    }
+pub fn for_each(path: &Path, f: impl FnMut(Record) -> bool) -> io::Result<()> {
+    for_each_range(path, 0, usize::MAX, f)
 }
 
 pub fn for_each_range(
@@ -245,7 +214,7 @@ pub fn for_each_range(
     let mut left = len;
     let mut carry = 0usize;
     while left > 0 {
-        let want = (left * SIZE).min(BLOCK);
+        let want = left.saturating_mul(SIZE).min(BLOCK);
         let mut filled = carry;
         while filled < want {
             match file.read(&mut buf[filled..want])? {
@@ -270,35 +239,19 @@ pub fn for_each_range(
     Ok(())
 }
 
-pub fn read_all(path: &Path) -> io::Result<Vec<Record>> {
-    let mut v = Vec::with_capacity(count(path)?);
-    for_each(path, |r| {
-        v.push(r);
-        true
-    })?;
-    Ok(v)
-}
-
 pub struct Writer {
     w: BufWriter<File>,
-    n: usize,
 }
 
 impl Writer {
     pub fn create(path: &Path) -> io::Result<Writer> {
         Ok(Writer {
             w: BufWriter::new(File::create(path)?),
-            n: 0,
         })
     }
 
     pub fn write(&mut self, r: &Record) -> io::Result<()> {
-        self.n += 1;
         self.w.write_all(&r.to_bytes())
-    }
-
-    pub fn written(&self) -> usize {
-        self.n
     }
 
     pub fn finish(mut self) -> io::Result<()> {
@@ -413,7 +366,12 @@ mod tests {
         f.write_all(&[1, 2, 3]).unwrap();
         drop(f);
         assert_eq!(count(&path).unwrap(), 2);
-        let v = read_all(&path).unwrap();
+        let mut v = Vec::new();
+        for_each(&path, |r| {
+            v.push(r);
+            true
+        })
+        .unwrap();
         assert_eq!(v.len(), 2);
         assert_eq!(v[0], sample());
         assert_eq!(v[1].ply, 0);

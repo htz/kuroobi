@@ -15,16 +15,7 @@ mod stack_q;
 
 pub const H: usize = 128;
 
-pub const FT_BUCKETS: usize = 1;
-
-#[inline]
-pub const fn ft_bucket(stage: usize) -> usize {
-    stage * FT_BUCKETS / STAGE_COUNT
-}
-
 pub const ACC_DIMS: usize = 2 * H;
-
-const H2: usize = 2 * ACC_DIMS;
 
 const FT_BIAS_LEN: usize = ACC_DIMS;
 
@@ -33,8 +24,6 @@ const PAIR_CLAMP: f32 = 1.0;
 const ACT_SCALE: f32 = 255.0 / 256.0;
 
 const FT_CLAMP: f32 = 32.0;
-
-const FT_CLIP_BUDGET: f32 = 1e-4;
 
 const NUM_TABLE_SIZE: usize = 65;
 
@@ -79,11 +68,16 @@ const SO_SIZES: (usize, usize, usize, usize, usize, usize) = (
     SO_STAGES,
 );
 
-const PAIR_CLAMP_F32: f32 = PAIR_CLAMP;
-
 #[inline]
 fn mob_unit(mob: usize) -> f32 {
     (mob as f32 * (7.0 / 255.0)).min(1.0)
+}
+
+fn xorshift_unit(s: &mut u64) -> f32 {
+    *s ^= *s >> 12;
+    *s ^= *s << 25;
+    *s ^= *s >> 27;
+    ((s.wrapping_mul(0x2545_F491_4F6C_DD1D) >> 40) as i64 as f32) / (1i64 << 23) as f32
 }
 
 fn so_moment_shapes() -> Vec<Vec<f32>> {
@@ -105,118 +99,7 @@ const HALF: usize = H / 2;
 
 const PROD_CLAMP: f32 = 16.0;
 
-const ACT_CLAMP: f32 = 16.0;
-
 pub const ACT_UNITS: f32 = 16.0;
-
-#[inline]
-unsafe fn acc_row_addsub(acc: &mut [i16; H2], new: *const i16, old: *const i16) {
-    #[cfg(all(target_arch = "aarch64", not(feature = "nnue-scalar")))]
-    {
-        use std::arch::aarch64::*;
-        let mut i = 0;
-        while i + 8 <= H2 {
-            let a = vld1q_s16(acc.as_ptr().add(i));
-            let n = vld1q_s16(new.add(i));
-            let o = vld1q_s16(old.add(i));
-            vst1q_s16(acc.as_mut_ptr().add(i), vaddq_s16(a, vsubq_s16(n, o)));
-            i += 8;
-        }
-        while i < H2 {
-            let v = (*acc.get_unchecked(i)).wrapping_add((*new.add(i)).wrapping_sub(*old.add(i)));
-            *acc.get_unchecked_mut(i) = v;
-            i += 1;
-        }
-    }
-    #[cfg(any(not(target_arch = "aarch64"), feature = "nnue-scalar"))]
-    {
-        for i in 0..H2 {
-            acc[i] = acc[i].wrapping_add((*new.add(i)).wrapping_sub(*old.add(i)));
-        }
-    }
-}
-
-#[inline]
-unsafe fn accumulate_rows(
-    acc: &mut [i16; ACC_DIMS],
-    ft: *const i8,
-    mask_off: &[u32],
-    raw: &[u16; MAX_MASKS],
-    n: usize,
-) {
-    #[inline(always)]
-    unsafe fn row(ft: *const i8, mask_off: &[u32], raw: &[u16; MAX_MASKS], m: usize) -> *const i8 {
-        ft.add((*mask_off.get_unchecked(m) as usize + *raw.get_unchecked(m) as usize) * ACC_DIMS)
-    }
-
-    #[cfg(all(target_arch = "aarch64", not(feature = "nnue-scalar")))]
-    {
-        use std::arch::aarch64::*;
-        const _: () = assert!(
-            ACC_DIMS.is_multiple_of(16),
-            "ACC_DIMS must be a multiple of 16"
-        );
-        const VEC: usize = ACC_DIMS.div_ceil(8);
-        const PARTS: usize = if 16 / VEC == 0 { 1 } else { 16 / VEC };
-        const CHUNKS: usize = ACC_DIMS / 16;
-        let mut p: [[int16x8_t; VEC]; PARTS] = [[vdupq_n_s16(0); VEC]; PARTS];
-        const PREFETCH_AHEAD: usize = 8;
-
-        let mut m = 0;
-        while m + PARTS <= n {
-            if m + PREFETCH_AHEAD < n {
-                for k in 0..PARTS {
-                    let ptr = row(ft, mask_off, raw, m + PREFETCH_AHEAD + k) as *const u8;
-                    let mut off = 0usize;
-                    while off < ACC_DIMS {
-                        let q = ptr.add(off);
-                        std::arch::asm!("prfm pldl1keep, [{p}]", p = in(reg) q, options(nostack, readonly));
-                        off += 64;
-                    }
-                }
-            }
-            for (k, part) in p.iter_mut().enumerate() {
-                let r = row(ft, mask_off, raw, m + k);
-                for c in 0..CHUNKS {
-                    let v = vld1q_s8(r.add(c * 16));
-                    part[2 * c] = vaddw_s8(part[2 * c], vget_low_s8(v));
-                    part[2 * c + 1] = vaddw_high_s8(part[2 * c + 1], v);
-                }
-            }
-            m += PARTS;
-        }
-        for v in 0..VEC {
-            let mut s = p[0][v];
-            for part in p.iter().skip(1) {
-                s = vaddq_s16(s, part[v]);
-            }
-            let a = vaddq_s16(vld1q_s16(acc.as_ptr().add(v * 8)), s);
-            vst1q_s16(acc.as_mut_ptr().add(v * 8), a);
-        }
-        while m < n {
-            let r = row(ft, mask_off, raw, m);
-            for h in 0..ACC_DIMS {
-                *acc.get_unchecked_mut(h) = (*acc.get_unchecked(h)).wrapping_add(*r.add(h) as i16);
-            }
-            m += 1;
-        }
-    }
-    #[cfg(any(not(target_arch = "aarch64"), feature = "nnue-scalar"))]
-    {
-        for m in 0..n {
-            let r = row(ft, mask_off, raw, m);
-            for h in 0..ACC_DIMS {
-                *acc.get_unchecked_mut(h) = (*acc.get_unchecked(h)).wrapping_add(*r.add(h) as i16);
-            }
-        }
-    }
-}
-
-#[derive(Clone)]
-pub struct Accumulator {
-    indices: PatternIndices,
-    acc: [i16; H2],
-}
 
 pub struct NnueView {
     ft: *mut f32,
@@ -275,7 +158,6 @@ pub struct AdamState {
     pa_stamp: Vec<u32>,
     pa_touched: Vec<Vec<u32>>,
     t: u32,
-    pub legacy_optimizer: bool,
     la_k: u32,
     la_alpha: f32,
     la_step: u32,
@@ -335,7 +217,8 @@ impl AdamState {
         for v in [self.t, self.la_k, self.la_step, self.stamp_cur] {
             w.write_all(&v.to_le_bytes())?;
         }
-        w.write_all(&[u8::from(self.legacy_optimizer)])?;
+        // the removed legacy-optimizer switch; kept so checkpoints stay readable
+        w.write_all(&[0u8])?;
         let me = self;
         macro_rules! put {
             ($t:expr) => {{
@@ -384,32 +267,31 @@ impl AdamState {
         self.stamp_cur = u32_of(r)?;
         let mut b1 = [0u8; 1];
         r.read_exact(&mut b1)?;
-        self.legacy_optimizer = b1[0] != 0;
+        if b1[0] != 0 {
+            return Err(Error::new(
+                ErrorKind::InvalidData,
+                "checkpoint was written by the removed legacy optimizer",
+            ));
+        }
 
         fn take_len(r: &mut dyn Read) -> std::io::Result<usize> {
             let mut b = [0u8; 8];
             r.read_exact(&mut b)?;
             Ok(u64::from_le_bytes(b) as usize)
         }
-        fn fill_f32(r: &mut dyn Read, dst: &mut [f32]) -> std::io::Result<()> {
-            let n = take_len(r)?;
-            if n != dst.len() {
-                return Err(Error::new(
-                    ErrorKind::InvalidData,
-                    format!(
-                        "checkpoint table is {n} cells, this model wants {}",
-                        dst.len()
-                    ),
-                ));
-            }
+        fn cells<T>(
+            r: &mut dyn Read,
+            dst: &mut [T],
+            from: fn([u8; 4]) -> T,
+        ) -> std::io::Result<()> {
             let mut b = [0u8; 4];
             for x in dst.iter_mut() {
                 r.read_exact(&mut b)?;
-                *x = f32::from_le_bytes(b);
+                *x = from(b);
             }
             Ok(())
         }
-        fn fill_u32(r: &mut dyn Read, dst: &mut [u32]) -> std::io::Result<()> {
+        fn fill<T>(r: &mut dyn Read, dst: &mut [T], from: fn([u8; 4]) -> T) -> std::io::Result<()> {
             let n = take_len(r)?;
             if n != dst.len() {
                 return Err(Error::new(
@@ -420,23 +302,18 @@ impl AdamState {
                     ),
                 ));
             }
-            let mut b = [0u8; 4];
-            for x in dst.iter_mut() {
-                r.read_exact(&mut b)?;
-                *x = u32::from_le_bytes(b);
-            }
-            Ok(())
+            cells(r, dst, from)
         }
 
         let me = self;
         macro_rules! get {
             ($t:expr) => {
-                fill_f32(r, &mut $t)?
+                fill(r, &mut $t, f32::from_le_bytes)?
             };
         }
         adam_flat_tables!(me, get);
-        fill_u32(r, &mut me.ft_last)?;
-        fill_u32(r, &mut me.pa_last)?;
+        fill(r, &mut me.ft_last, u32::from_le_bytes)?;
+        fill(r, &mut me.pa_last, u32::from_le_bytes)?;
         macro_rules! get_nested {
             ($t:expr) => {{
                 let outer = take_len(r)?;
@@ -448,11 +325,7 @@ impl AdamState {
                     if inner.len() != n {
                         inner.resize(n, 0.0);
                     }
-                    let mut b = [0u8; 4];
-                    for x in inner.iter_mut() {
-                        r.read_exact(&mut b)?;
-                        *x = f32::from_le_bytes(b);
-                    }
+                    cells(r, inner, f32::from_le_bytes)?;
                 }
             }};
         }
@@ -513,7 +386,6 @@ impl AdamState {
             pa_stamp: vec![0; nn.pa.len().checked_div(PA_DIMS).unwrap_or(0)],
             pa_touched: Vec::new(),
             t: 0,
-            legacy_optimizer: false,
             la_k: 0,
             la_alpha: 0.5,
             la_step: 0,
@@ -601,14 +473,14 @@ fn replicate_stage0(t: &mut [f32], per_stage: usize) {
 
 #[inline]
 fn so_act(a: f32) -> f32 {
-    (a * (1.0 / PAIR_CLAMP_F32)).clamp(0.0, 1.0)
+    (a * (1.0 / PAIR_CLAMP)).clamp(0.0, 1.0)
 }
 
 #[inline]
 fn so_act_grad(a: f32) -> f32 {
-    let x = a * (1.0 / PAIR_CLAMP_F32);
+    let x = a * (1.0 / PAIR_CLAMP);
     if x > 0.0 && x < 1.0 {
-        1.0 / PAIR_CLAMP_F32
+        1.0 / PAIR_CLAMP
     } else {
         0.0
     }
@@ -616,35 +488,31 @@ fn so_act_grad(a: f32) -> f32 {
 
 #[inline]
 fn fold_pairs_f32(raw: &[f32; ACC_DIMS]) -> [f32; H] {
-    {
-        let mut out = [0.0f32; H];
-        for i in 0..H {
-            let a = raw[i].clamp(0.0, PAIR_CLAMP);
-            let b = raw[i + H].clamp(0.0, PAIR_CLAMP);
-            out[i] = a * b * (ACT_SCALE / PAIR_CLAMP);
-        }
-        out
+    let mut out = [0.0f32; H];
+    for i in 0..H {
+        let a = raw[i].clamp(0.0, PAIR_CLAMP);
+        let b = raw[i + H].clamp(0.0, PAIR_CLAMP);
+        out[i] = a * b * (ACT_SCALE / PAIR_CLAMP);
     }
+    out
 }
 
 #[inline]
 fn fold_pairs_back(raw: &[f32; ACC_DIMS], dfolded: &[f32; H]) -> [f32; ACC_DIMS] {
-    {
-        let mut d = [0.0f32; ACC_DIMS];
-        for i in 0..H {
-            let a = raw[i];
-            let b = raw[i + H];
-            let ca = a.clamp(0.0, PAIR_CLAMP);
-            let cb = b.clamp(0.0, PAIR_CLAMP);
-            if a > 0.0 && a < PAIR_CLAMP {
-                d[i] = dfolded[i] * cb * (ACT_SCALE / PAIR_CLAMP);
-            }
-            if b > 0.0 && b < PAIR_CLAMP {
-                d[i + H] = dfolded[i] * ca * (ACT_SCALE / PAIR_CLAMP);
-            }
+    let mut d = [0.0f32; ACC_DIMS];
+    for i in 0..H {
+        let a = raw[i];
+        let b = raw[i + H];
+        let ca = a.clamp(0.0, PAIR_CLAMP);
+        let cb = b.clamp(0.0, PAIR_CLAMP);
+        if a > 0.0 && a < PAIR_CLAMP {
+            d[i] = dfolded[i] * cb * (ACT_SCALE / PAIR_CLAMP);
         }
-        d
+        if b > 0.0 && b < PAIR_CLAMP {
+            d[i + H] = dfolded[i] * ca * (ACT_SCALE / PAIR_CLAMP);
+        }
     }
+    d
 }
 
 #[derive(Clone, Copy)]
@@ -708,7 +576,6 @@ struct Adw {
     eps: f32,
     bc1: f32,
     bc2s: f32,
-    legacy: bool,
     lr: f32,
     wd: f32,
     scale: f32,
@@ -720,15 +587,8 @@ impl Adw {
     }
 
     fn step(&self, m: &mut f32, v: &mut f32, g: f32, w: &mut f32, decay: f32) {
-        if self.legacy && g == 0.0 {
-            return;
-        }
         *m = self.b1 * *m + (1.0 - self.b1) * g;
         *v = self.b2 * *v + (1.0 - self.b2) * g * g;
-        if self.legacy {
-            *w -= self.lr * *m / ((*v).sqrt() + self.eps) + decay * self.lr * *w;
-            return;
-        }
         *w = *w * (1.0 - decay * self.lr)
             - (self.lr / self.bc1) * *m / ((*v).sqrt() / self.bc2s + self.eps);
     }
@@ -815,21 +675,19 @@ fn apply_rows<const D: usize>(cells: FtCells, touched: &[Vec<u32>], adw: &Adw, t
                     for &row in tv.iter() {
                         let base = row as usize * D;
                         let lp = cells.last.add(row as usize);
-                        if !adw.legacy {
-                            catch_up(
-                                cells.m.add(base),
-                                cells.v.add(base),
-                                cells.w.add(base),
-                                D,
-                                *lp,
-                                t_now,
-                                adw.lr,
-                                adw.wd,
-                                adw.b1,
-                                adw.b2,
-                                adw.eps,
-                            );
-                        }
+                        catch_up(
+                            cells.m.add(base),
+                            cells.v.add(base),
+                            cells.w.add(base),
+                            D,
+                            *lp,
+                            t_now,
+                            adw.lr,
+                            adw.wd,
+                            adw.b1,
+                            adw.b2,
+                            adw.eps,
+                        );
                         *lp = t_now;
                         for h in 0..D {
                             let g = *cells.scratch.add(base + h) * adw.scale;
@@ -1027,78 +885,6 @@ pub fn sym_board(b: u64, i: u8) -> u64 {
     b
 }
 
-fn sym_square(sq: u8, i: u8) -> u8 {
-    let mut b = 1u64 << sq;
-    if i >= 4 {
-        b = crate::bitboard::mirror_horizontal(b);
-        for _ in 0..(i - 4) {
-            b = crate::bitboard::rotate_90(b);
-        }
-    } else {
-        for _ in 0..i {
-            b = crate::bitboard::rotate_90(b);
-        }
-    }
-    b.trailing_zeros() as u8
-}
-
-fn symmetry_index_perms(p: &Pattern) -> Vec<Vec<usize>> {
-    let masks: Vec<&[u8]> = p.masks.to_vec();
-    let mut out: Vec<Vec<usize>> = Vec::new();
-    for m in &masks {
-        for s in 0..8u8 {
-            let mapped: Vec<u8> = m.iter().map(|&c| sym_square(c, s)).collect();
-            for k in &masks {
-                if k.len() != mapped.len() {
-                    continue;
-                }
-                let mut sorted_k: Vec<u8> = k.to_vec();
-                sorted_k.sort_unstable();
-                let mut sorted_m = mapped.clone();
-                sorted_m.sort_unstable();
-                if sorted_k != sorted_m {
-                    continue;
-                }
-                let mut perm = vec![usize::MAX; mapped.len()];
-                let mut ok = true;
-                for (j, c) in mapped.iter().enumerate() {
-                    match k.iter().position(|x| x == c) {
-                        Some(pos) => perm[j] = pos,
-                        None => {
-                            ok = false;
-                            break;
-                        }
-                    }
-                }
-                if ok && perm.iter().any(|&x| x != usize::MAX) && !out.contains(&perm) {
-                    out.push(perm);
-                }
-                break;
-            }
-        }
-    }
-    out.retain(|perm| perm.iter().enumerate().any(|(j, &t)| j != t));
-    out
-}
-
-fn apply_index_perm(index: usize, size: usize, perm: &[usize]) -> usize {
-    let mut digits = vec![0usize; size];
-    let mut x = index;
-    for j in (0..size).rev() {
-        digits[j] = x % 3;
-        x /= 3;
-    }
-    let mut out_digits = vec![0usize; size];
-    for j in 0..size {
-        out_digits[perm[j]] = digits[j];
-    }
-    let mut y = 0usize;
-    for j in 0..size {
-        y = y * 3 + out_digits[j];
-    }
-    y
-}
-
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct MpcSigma {
     pub a: f32,
@@ -1246,7 +1032,6 @@ pub struct Nnue {
     indexer: PatternIndexer,
     n_masks: usize,
     mask_off: Vec<u32>,
-    n_feat_bucket: usize,
     n_features: usize,
 
     ft: Vec<f32>,
@@ -1275,28 +1060,9 @@ pub struct Nnue {
     mob_w: Vec<f32>,
     pw: Vec<f32>,
 
-    ftc_i16: Vec<i16>,
-    ft_b_i8: Vec<i8>,
-    ft_w_i8: Vec<i8>,
-    ft_clipped: usize,
-    has_pw: bool,
-    has_head: bool,
-    mlp_l1_w_i8: Vec<i8>,
-    mlp_l1_rowsum: Vec<i32>,
-    mlp_l1_dequant: f32,
-    act_shift: i16,
-    ft_bias_i16: Vec<i16>,
-    out_w_i16: Vec<i16>,
-    pw_i16: Vec<i16>,
-    prod_scale: f32,
-    prod_clamp_q: i32,
-    act_clamp_q: i16,
-    act_shift_q: i16,
     pub head_f32: bool,
     pub act_units: f32,
-    out_scale: f32,
 
-    ft_scale: f32,
     sq: stack_q::StackQ,
 
     mpc_sigma: Option<MpcSigma>,
@@ -1314,8 +1080,7 @@ impl Nnue {
             pattern_off.push(off);
             off += p.table_size() as u32;
         }
-        let n_feat_bucket = off as usize;
-        let n_features = n_feat_bucket * FT_BUCKETS;
+        let n_features = off as usize;
         let mask_off: Vec<u32> = indexer
             .mask_patterns()
             .iter()
@@ -1328,11 +1093,10 @@ impl Nnue {
             indexer,
             n_masks,
             mask_off,
-            n_feat_bucket,
             n_features,
             ft: vec![0.0; n_features * ACC_DIMS],
             ft_bias: vec![0.0; FT_BIAS_LEN],
-            pa: vec![0.0; n_feat_bucket * PA_BUCKETS * PA_DIMS],
+            pa: vec![0.0; n_features * PA_BUCKETS * PA_DIMS],
             pa_bias: vec![0.0; PA_DIMS * PA_BUCKETS],
             out_w: vec![0.0; STAGE_COUNT * H],
             out_b: vec![0.0; STAGE_COUNT],
@@ -1354,28 +1118,9 @@ impl Nnue {
             so_l2_wq: vec![0.0; SO_SIZES.2],
             so_grid: false,
             pw: vec![0.0; STAGE_COUNT * HALF],
-            ftc_i16: Vec::new(),
-            ft_b_i8: Vec::new(),
-            ft_w_i8: Vec::new(),
             sq: stack_q::StackQ::default(),
-            ft_clipped: 0,
-            has_pw: false,
-            has_head: false,
-            mlp_l1_w_i8: Vec::new(),
-            mlp_l1_rowsum: vec![0; MLP_H1],
-            mlp_l1_dequant: 0.0,
-            act_shift: 0,
-            ft_bias_i16: vec![0; FT_BIAS_LEN],
-            out_w_i16: vec![0; STAGE_COUNT * H],
-            pw_i16: vec![0; STAGE_COUNT * HALF],
-            prod_scale: 0.0,
-            prod_clamp_q: 0,
-            act_clamp_q: 0,
-            act_shift_q: 0,
             head_f32: false,
             act_units: ACT_UNITS,
-            out_scale: 0.0,
-            ft_scale: 1.0,
             mpc_sigma: None,
             mpc_alpha: None,
         }
@@ -1397,180 +1142,8 @@ impl Nnue {
         self.mpc_sigma = sigma;
     }
 
-    pub fn symmetrize(&mut self) {
-        for (bucket, pi) in
-            (0..FT_BUCKETS).flat_map(|b| (0..self.patterns.len()).map(move |i| (b, i)))
-        {
-            let p = &self.patterns[pi];
-            let size = p.size;
-            let table = 3usize.pow(size as u32);
-            let base = bucket * self.n_feat_bucket + self.pattern_offset(pi);
-            let perms = symmetry_index_perms(p);
-            if perms.is_empty() {
-                continue;
-            }
-            let mut seen = vec![false; table];
-            for x in 0..table {
-                if seen[x] {
-                    continue;
-                }
-                let mut orbit = vec![x];
-                seen[x] = true;
-                let mut i = 0;
-                while i < orbit.len() {
-                    let cur = orbit[i];
-                    for perm in &perms {
-                        let y = apply_index_perm(cur, size, perm);
-                        if !seen[y] {
-                            seen[y] = true;
-                            orbit.push(y);
-                        }
-                    }
-                    i += 1;
-                }
-                if orbit.len() < 2 {
-                    continue;
-                }
-                let inv = 1.0 / orbit.len() as f32;
-                for h in 0..H {
-                    let mut sum = 0.0f32;
-                    for &y in &orbit {
-                        sum += self.ft[(base + y) * H + h];
-                    }
-                    let avg = sum * inv;
-                    for &y in &orbit {
-                        self.ft[(base + y) * H + h] = avg;
-                    }
-                }
-            }
-        }
-    }
-
-    fn pattern_offset(&self, pi: usize) -> usize {
-        let mut off = 0usize;
-        for p in self.patterns.iter().take(pi) {
-            off += 3usize.pow(p.size as u32);
-        }
-        off
-    }
-
     pub fn quantize(&mut self) {
-        self.has_pw = self.pw.iter().any(|&v| v != 0.0);
-        self.has_head = self.mlp_out_w.iter().any(|&v| v != 0.0);
-
-        let ft_max = self.ft.iter().fold(1e-6f32, |m, &v| m.max(v.abs()));
-        let w_max = self.out_w.iter().fold(1e-6f32, |m, &v| m.max(v.abs()));
-
-        let bias_max = self.ft_bias.iter().fold(0.0f32, |m, &v| m.max(v.abs()));
-        let room = 32_000.0 / (self.n_masks as f32 * ft_max + bias_max);
-        let mut ft_scale = (2.0f32).powi(room.log2().floor() as i32).max(1.0);
-
-        let clip_fraction = |s: f32| {
-            let n = self
-                .ft
-                .iter()
-                .filter(|&&v| (v * s).round().abs() > 127.0)
-                .count();
-            n as f32 / self.ft.len().max(1) as f32
-        };
-        let budget: f32 = std::env::var("KUROOBI_FT_CLIP_BUDGET")
-            .ok()
-            .and_then(|v| v.parse().ok())
-            .unwrap_or(FT_CLIP_BUDGET);
-        while ft_scale > 1.0 && clip_fraction(ft_scale) > budget {
-            ft_scale *= 0.5;
-        }
-        self.ft_clipped = (clip_fraction(ft_scale) * self.ft.len() as f32) as usize;
-
-        let phi_max = (ACT_CLAMP * ft_scale).min(32_767.0);
-        let w_limit = (i32::MAX as f32 / (phi_max * H as f32)).min(32_000.0);
-        let w_scale = w_limit / w_max;
-        self.out_scale = 1.0 / (ft_scale * w_scale);
-        self.ft_scale = ft_scale;
-
-        let q = |v: f32, s: f32| (v * s).round().clamp(-32768.0, 32767.0) as i16;
-
-        for i in 0..FT_BIAS_LEN {
-            self.ft_bias_i16[i] = q(self.ft_bias[i], ft_scale);
-        }
-        self.out_w_i16 = self.out_w.iter().map(|&v| q(v, w_scale)).collect();
-
-        let pw_max = self.pw.iter().fold(1e-6f32, |m, &v| m.max(v.abs()));
-        let pw_scale = (16_000.0 / pw_max).min(32_000.0);
-        self.pw_i16 = self.pw.iter().map(|&v| q(v, pw_scale)).collect();
-        self.prod_scale = 1.0 / (ft_scale * ft_scale * pw_scale * PROD_CLAMP);
-        self.prod_clamp_q = ((PROD_CLAMP * ft_scale) as i32).min(32_767);
-        let cap = (ACT_CLAMP * ft_scale).min(32_767.0);
-        self.act_clamp_q = cap as i16;
-        self.act_shift_q = cap.log2().round() as i16;
-        self.act_shift = (ft_scale / self.act_units).max(1.0).log2().round() as i16;
-        let l1_max = self.mlp_l1_w.iter().fold(1e-6f32, |m, &v| m.max(v.abs()));
-        let l1_scale = 127.0 / l1_max;
-        self.mlp_l1_w_i8 = self
-            .mlp_l1_w
-            .iter()
-            .map(|&v| (v * l1_scale).round().clamp(-127.0, 127.0) as i8)
-            .collect();
-        self.mlp_l1_rowsum = (0..MLP_H1)
-            .map(|i| {
-                self.mlp_l1_w_i8[i * H..i * H + H]
-                    .iter()
-                    .map(|&w| w as i32)
-                    .sum()
-            })
-            .collect();
-        let act_units = ft_scale / (1 << self.act_shift) as f32;
-        self.mlp_l1_dequant = 1.0 / (act_units * l1_scale);
-
-        self.ft_b_i8 = vec![0; self.n_features * ACC_DIMS];
-        self.ft_w_i8 = vec![0; self.n_features * ACC_DIMS];
-        for (i, &v) in self.ft.iter().enumerate() {
-            self.ft_b_i8[i] = (v * ft_scale).round().clamp(-127.0, 127.0) as i8;
-        }
-        for bucket in 0..FT_BUCKETS {
-            let bucket_base = bucket * self.n_feat_bucket;
-            for m in 0..self.n_masks {
-                let base = bucket_base + self.mask_off[m] as usize;
-                let size = self.patterns[self.indexer.mask_patterns()[m] as usize].table_size();
-                for i in 0..size {
-                    let src = (base + self.indexer.swapped_index(m, i)) * ACC_DIMS;
-                    let dst = (base + i) * ACC_DIMS;
-                    self.ft_w_i8[dst..dst + ACC_DIMS]
-                        .copy_from_slice(&self.ft_b_i8[src..src + ACC_DIMS]);
-                }
-            }
-        }
-        {
-            self.sq = stack_q::StackQ::build(self);
-        }
-    }
-
-    pub fn ft_clipped(&self) -> (usize, usize) {
-        (self.ft_clipped, self.ft.len())
-    }
-
-    pub fn build_incremental_table(&mut self) {
-        let q = |v: f32| (v * self.ft_scale).round().clamp(-127.0, 127.0) as i16;
-        self.ftc_i16 = vec![0; self.n_features * H2];
-        for f in 0..self.n_features {
-            for h in 0..ACC_DIMS {
-                self.ftc_i16[f * H2 + h] = q(self.ft[f * ACC_DIMS + h]);
-            }
-        }
-        for bucket in 0..FT_BUCKETS {
-            let bucket_base = bucket * self.n_feat_bucket;
-            for m in 0..self.n_masks {
-                let base = bucket_base + self.mask_off[m] as usize;
-                let size = self.patterns[self.indexer.mask_patterns()[m] as usize].table_size();
-                for i in 0..size {
-                    let src = (base + self.indexer.swapped_index(m, i)) * H2;
-                    let dst = (base + i) * H2 + ACC_DIMS;
-                    for h in 0..ACC_DIMS {
-                        self.ftc_i16[dst + h] = self.ftc_i16[src + h];
-                    }
-                }
-            }
-        }
+        self.sq = stack_q::StackQ::build(self);
     }
 
     pub fn n_features(&self) -> usize {
@@ -1579,75 +1152,59 @@ impl Nnue {
 
     pub fn init_weights(&mut self) {
         let mut s: u64 = 0x1234_5678_9abc_def0;
-        let mut next = || {
-            s ^= s >> 12;
-            s ^= s << 25;
-            s ^= s >> 27;
-            ((s.wrapping_mul(0x2545_F491_4F6C_DD1D) >> 40) as i64 as f32) / (1i64 << 23) as f32
-        };
+        let mut next = || xorshift_unit(&mut s);
         for w in &mut self.out_w {
             *w = next() * 0.1;
         }
         self.ft_bias.fill(0.0);
         self.init_mlp_hidden();
-        {
-            let bound = (6.0 / ACC_DIMS as f32).sqrt() * 0.25;
-            for w in &mut self.ft {
-                *w = next() * bound;
+        let bound = (6.0 / ACC_DIMS as f32).sqrt() * 0.25;
+        for w in &mut self.ft {
+            *w = next() * bound;
+        }
+        let bound = (6.0 / (PA_DIMS * PA_BUCKETS) as f32).sqrt() * 0.25;
+        let rows = self.n_features;
+        for r in 0..rows {
+            for j in 0..PA_DIMS {
+                self.pa[r * PA_DIMS + j] = next() * bound;
             }
         }
-        {
-            let bound = (6.0 / (PA_DIMS * PA_BUCKETS) as f32).sqrt() * 0.25;
-            let rows = self.n_feat_bucket;
-            for r in 0..rows {
-                for j in 0..PA_DIMS {
-                    self.pa[r * PA_DIMS + j] = next() * bound;
-                }
-            }
-            for b in 1..PA_BUCKETS {
-                let (head, tail) = self.pa.split_at_mut(b * rows * PA_DIMS);
-                tail[..rows * PA_DIMS].copy_from_slice(&head[..rows * PA_DIMS]);
-            }
-            self.pa_bias.fill(0.0);
+        for b in 1..PA_BUCKETS {
+            let (head, tail) = self.pa.split_at_mut(b * rows * PA_DIMS);
+            tail[..rows * PA_DIMS].copy_from_slice(&head[..rows * PA_DIMS]);
         }
-        {
-            let b1 = 1.0 / (SO_L1_IN as f32).sqrt();
-            for i in 0..SO_L1 * SO_L1_IN {
-                self.so_l1_w[i] = next() * b1;
-            }
-            for i in 0..SO_L1 {
-                self.so_l1_b[i] = next() * b1;
-            }
-            let b2 = 1.0 / ((SO_L1 * 2) as f32).sqrt();
-            for i in 0..SO_L2 * (SO_L1 * 2) {
-                self.so_l2_w[i] = next() * b2;
-            }
-            for i in 0..SO_L2 {
-                self.so_l2_b[i] = next() * b2;
-            }
-            let bo = 1.0 / (SO_OUT_IN as f32).sqrt();
-            for i in 0..SO_OUT_IN {
-                self.so_out_w[i] = next() * bo;
-            }
-            self.so_out_b[0] = 0.0;
-            replicate_stage0(&mut self.so_l1_w, SO_L1 * SO_L1_IN);
-            replicate_stage0(&mut self.so_l1_b, SO_L1);
-            replicate_stage0(&mut self.so_l2_w, SO_L2 * (SO_L1 * 2));
-            replicate_stage0(&mut self.so_l2_b, SO_L2);
-            replicate_stage0(&mut self.so_out_w, SO_OUT_IN);
-            replicate_stage0(&mut self.so_out_b, 1);
-            self.refresh_so_grid();
+        self.pa_bias.fill(0.0);
+        let b1 = 1.0 / (SO_L1_IN as f32).sqrt();
+        for i in 0..SO_L1 * SO_L1_IN {
+            self.so_l1_w[i] = next() * b1;
         }
+        for i in 0..SO_L1 {
+            self.so_l1_b[i] = next() * b1;
+        }
+        let b2 = 1.0 / ((SO_L1 * 2) as f32).sqrt();
+        for i in 0..SO_L2 * (SO_L1 * 2) {
+            self.so_l2_w[i] = next() * b2;
+        }
+        for i in 0..SO_L2 {
+            self.so_l2_b[i] = next() * b2;
+        }
+        let bo = 1.0 / (SO_OUT_IN as f32).sqrt();
+        for i in 0..SO_OUT_IN {
+            self.so_out_w[i] = next() * bo;
+        }
+        self.so_out_b[0] = 0.0;
+        replicate_stage0(&mut self.so_l1_w, SO_L1 * SO_L1_IN);
+        replicate_stage0(&mut self.so_l1_b, SO_L1);
+        replicate_stage0(&mut self.so_l2_w, SO_L2 * (SO_L1 * 2));
+        replicate_stage0(&mut self.so_l2_b, SO_L2);
+        replicate_stage0(&mut self.so_out_w, SO_OUT_IN);
+        replicate_stage0(&mut self.so_out_b, 1);
+        self.refresh_so_grid();
     }
 
     fn init_mlp_hidden(&mut self) {
         let mut s: u64 = 0x5DEE_CE66_D5AB_1EE5;
-        let mut next = || {
-            s ^= s >> 12;
-            s ^= s << 25;
-            s ^= s >> 27;
-            ((s.wrapping_mul(0x2545_F491_4F6C_DD1D) >> 40) as i64 as f32) / (1i64 << 23) as f32
-        };
+        let mut next = || xorshift_unit(&mut s);
         for v in self.mlp_l1_w.iter_mut() {
             *v = next() * 0.5;
         }
@@ -1657,42 +1214,29 @@ impl Nnue {
     }
 
     #[inline]
-    fn features_black(&self, indices: &PatternIndices, stage: usize) -> [u32; MAX_MASKS] {
+    fn features_black(&self, indices: &PatternIndices) -> [u32; MAX_MASKS] {
         let mut f = [0u32; MAX_MASKS];
         let raw = indices.raw();
-        let base = self.bucket_base(stage);
         for m in 0..self.n_masks {
-            f[m] = base + self.mask_off[m] + raw[m] as u32;
+            f[m] = self.mask_off[m] + raw[m] as u32;
         }
         f
     }
 
     #[inline]
-    fn bucket_base(&self, stage: usize) -> u32 {
-        (ft_bucket(stage) * self.n_feat_bucket) as u32
-    }
-
-    #[inline]
-    fn features_player(
-        &self,
-        indices: &PatternIndices,
-        player: Color,
-        stage: usize,
-    ) -> [u32; MAX_MASKS] {
+    fn features_player(&self, indices: &PatternIndices, player: Color) -> [u32; MAX_MASKS] {
         if player == Color::Black {
-            return self.features_black(indices, stage);
+            return self.features_black(indices);
         }
         let mut f = [0u32; MAX_MASKS];
         let raw = indices.raw();
-        let base = self.bucket_base(stage);
         for m in 0..self.n_masks {
             let idx = self.indexer.swapped_index(m, raw[m] as usize) as u32;
-            f[m] = base + self.mask_off[m] + idx;
+            f[m] = self.mask_off[m] + idx;
         }
         f
     }
 
-    #[allow(clippy::needless_return)]
     #[inline]
     pub fn eval_from_indices(&self, indices: &PatternIndices, board: &Board) -> f32 {
         self.net_from_indices(indices, board) + self.base_score(board, indices)
@@ -1713,27 +1257,8 @@ impl Nnue {
     #[inline]
     pub fn net_from_indices(&self, indices: &PatternIndices, board: &Board) -> f32 {
         let stage = crate::linear::Linear::stage(board);
-        let ft = if board.player() == Color::Black {
-            &self.ft_b_i8
-        } else {
-            &self.ft_w_i8
-        };
-        let mut raw_acc = [0i16; ACC_DIMS]; // bias is added at readout
-        let base = ft_bucket(stage) * self.n_feat_bucket * ACC_DIMS;
-        unsafe {
-            accumulate_rows(
-                &mut raw_acc,
-                ft.as_ptr().add(base),
-                &self.mask_off,
-                indices.raw(),
-                self.n_masks,
-            );
-        }
-        {
-            let _ = raw_acc;
-            self.sq
-                .eval(self, indices, board.player(), stage, Self::mob_index(board))
-        }
+        self.sq
+            .eval(self, indices, board.player(), stage, Self::mob_index(board))
     }
 
     pub fn eval(&self, board: &Board) -> f32 {
@@ -1747,11 +1272,8 @@ impl Nnue {
 
     pub fn net_indices(&self, board: &Board, indices: &PatternIndices) -> f32 {
         let stage = crate::linear::Linear::stage(board);
-        let feats = self.features_player(indices, board.player(), stage);
-        let base = self.forward(&feats, Self::mob_index(board), stage);
-        {
-            base
-        }
+        let feats = self.features_player(indices, board.player());
+        self.forward(&feats, Self::mob_index(board), stage)
     }
 
     fn pa_forward(
@@ -1760,16 +1282,14 @@ impl Nnue {
         stage: usize,
     ) -> ([f32; PA_DIMS], [f32; PA_DIMS]) {
         let mut z = [0.0f32; PA_DIMS];
-        {
-            let bucket = pa_bucket(stage);
-            z.copy_from_slice(&self.pa_bias[bucket * PA_DIMS..bucket * PA_DIMS + PA_DIMS]);
-            let base_row = bucket * self.n_feat_bucket;
-            for &f in feats.iter().take(self.n_masks) {
-                let off = (base_row + f as usize) * PA_DIMS;
-                let row = &self.pa[off..off + PA_DIMS];
-                for (j, zz) in z.iter_mut().enumerate() {
-                    *zz += row[j];
-                }
+        let bucket = pa_bucket(stage);
+        z.copy_from_slice(&self.pa_bias[bucket * PA_DIMS..bucket * PA_DIMS + PA_DIMS]);
+        let base_row = bucket * self.n_features;
+        for &f in feats.iter().take(self.n_masks) {
+            let off = (base_row + f as usize) * PA_DIMS;
+            let row = &self.pa[off..off + PA_DIMS];
+            for (j, zz) in z.iter_mut().enumerate() {
+                *zz += row[j];
             }
         }
         let mut a = [0.0f32; PA_DIMS];
@@ -1826,12 +1346,9 @@ impl Nnue {
 
     #[inline]
     pub fn mob_index(board: &Board) -> usize {
-        {
-            board.movable_count() as usize
-        }
+        board.movable_count() as usize
     }
 
-    #[allow(clippy::needless_return)]
     fn forward(&self, feats: &[u32; MAX_MASKS], mob: usize, stage: usize) -> f32 {
         let mut raw = [0.0f32; ACC_DIMS];
         for &f in feats.iter().take(self.n_masks) {
@@ -1845,10 +1362,8 @@ impl Nnue {
             raw[h] += self.ft_bias[h];
         }
         let acc = fold_pairs_f32(&raw);
-        {
-            let (pa, _) = self.pa_forward(feats, stage);
-            return self.stacked_readout(&acc, &pa, mob, stage);
-        }
+        let (pa, _) = self.pa_forward(feats, stage);
+        self.stacked_readout(&acc, &pa, mob, stage)
     }
 
     pub fn indexer(&self) -> &PatternIndexer {
@@ -1859,18 +1374,15 @@ impl Nnue {
         self.indexer.init(black, white)
     }
 
-    #[allow(clippy::needless_return)]
-    #[allow(clippy::too_many_arguments)]
     pub fn grad_black_into(
         &self,
         indices: &PatternIndices,
         stage: usize,
-        discs: usize,
         mob: usize,
         target: f32,
         sink: &mut GradSink,
     ) -> f32 {
-        let feats = self.features_black(indices, stage);
+        let feats = self.features_black(indices);
         let mut raw = [0.0f32; ACC_DIMS];
         for &f in feats.iter().take(self.n_masks) {
             let base = f as usize * ACC_DIMS;
@@ -1882,24 +1394,18 @@ impl Nnue {
             raw[h] += self.ft_bias[h];
         }
         let acc = fold_pairs_f32(&raw);
-        {
-            let (pa, pa_z) = self.pa_forward(&feats, stage);
-            let (sq, draw, dpa) =
-                self.grad_stacked(&raw, &acc, &pa, &pa_z, discs, mob, target, stage, sink);
-            for &f in feats.iter().take(self.n_masks) {
-                sink.push_ft(f, &draw);
-            }
-            {
-                let base_row = (pa_bucket(stage) * self.n_feat_bucket) as u32;
-                for &f in feats.iter().take(self.n_masks) {
-                    sink.push_pa(base_row + f, &dpa);
-                }
-            }
-            return sq;
+        let (pa, pa_z) = self.pa_forward(&feats, stage);
+        let (sq, draw, dpa) = self.grad_stacked(&raw, &acc, &pa, &pa_z, mob, target, stage, sink);
+        for &f in feats.iter().take(self.n_masks) {
+            sink.push_ft(f, &draw);
         }
+        let base_row = (pa_bucket(stage) * self.n_features) as u32;
+        for &f in feats.iter().take(self.n_masks) {
+            sink.push_pa(base_row + f, &dpa);
+        }
+        sq
     }
 
-    #[allow(clippy::too_many_arguments)]
     #[allow(clippy::too_many_arguments)]
     fn grad_stacked(
         &self,
@@ -1907,13 +1413,11 @@ impl Nnue {
         acc: &[f32; H],
         pa: &[f32; PA_DIMS],
         pa_z: &[f32; PA_DIMS],
-        discs: usize,
         mob: usize,
         target: f32,
         stage: usize,
         sink: &mut GradSink,
     ) -> (f32, [f32; ACC_DIMS], [f32; PA_DIMS]) {
-        let _ = discs;
         let st = so_stage(stage);
         let m = mob_unit(mob);
         let mut xin = stack_inputs(acc, pa);
@@ -2032,11 +1536,9 @@ impl Nnue {
         for h in 0..ACC_DIMS {
             sink.ft_bias[h] += draw[h];
         }
-        {
-            let off = pa_bucket(stage) * PA_DIMS;
-            for j in 0..PA_DIMS {
-                sink.pa_bias[off + j] += dpa[j];
-            }
+        let off = pa_bucket(stage) * PA_DIMS;
+        for j in 0..PA_DIMS {
+            sink.pa_bias[off + j] += dpa[j];
         }
         (err_discs * err_discs, draw, dpa)
     }
@@ -2057,7 +1559,6 @@ impl Nnue {
             eps: adam.eps,
             bc1: 1.0 - adam.beta1.powi(t_now as i32),
             bc2s: (1.0 - adam.beta2.powi(t_now as i32)).sqrt(),
-            legacy: adam.legacy_optimizer,
             lr,
             wd,
             scale,
@@ -2228,18 +1729,14 @@ impl Nnue {
         for (w, m, v, get, decay) in dense.iter_mut() {
             adw.dense(w, m, v, sinks, *get, *decay);
         }
-        for i in 0..self.ft_bias.len() {
-            let g = adw.grad(sinks, |s| s.ft_bias.as_slice(), i);
-            let m = &mut adam.m_ft_bias[i];
-            let v = &mut adam.v_ft_bias[i];
-            *m = adw.b1 * *m + (1.0 - adw.b1) * g;
-            *v = adw.b2 * *v + (1.0 - adw.b2) * g * g;
-            self.ft_bias[i] -= if adw.legacy {
-                lr * *m / ((*v).sqrt() + adw.eps)
-            } else {
-                (lr / adw.bc1) * *m / ((*v).sqrt() / adw.bc2s + adw.eps)
-            };
-        }
+        adw.dense(
+            &mut self.ft_bias,
+            &mut adam.m_ft_bias,
+            &mut adam.v_ft_bias,
+            sinks,
+            |s| s.ft_bias.as_slice(),
+            0.0,
+        );
         adw.dense(
             &mut self.pw,
             &mut adam.m_pw,
@@ -2314,9 +1811,6 @@ impl Nnue {
     }
 
     pub fn settle_adam(&mut self, adam: &mut AdamState, lr: f32, wd: f32) {
-        if adam.legacy_optimizer {
-            return;
-        }
         let (b1, b2, eps, t) = (adam.beta1, adam.beta2, adam.eps, adam.t);
         for r in 0..adam.ft_last.len() {
             let base = r * ACC_DIMS;
@@ -2412,85 +1906,6 @@ impl Nnue {
         self.indexer.apply(ix, pos, flipped, mover);
     }
 
-    #[inline]
-    pub fn ix_undo(&self, ix: &mut PatternIndices, pos: Position, flipped: u64, mover: Color) {
-        self.indexer.undo(ix, pos, flipped, mover);
-    }
-
-    pub fn accumulator(&self, board: &Board) -> Accumulator {
-        assert!(
-            !self.ftc_i16.is_empty(),
-            "the incremental accumulator needs build_incremental_table()"
-        );
-        let indices = self.indexer.init(board.black, board.white);
-        let mut acc = [0i16; H2];
-        for m in 0..self.n_masks {
-            let raw = indices.raw()[m] as usize;
-            let f = (self.mask_off[m] as usize + raw) * H2;
-            for i in 0..H2 {
-                acc[i] = acc[i].wrapping_add(self.ftc_i16[f + i]);
-            }
-        }
-        Accumulator { indices, acc }
-    }
-
-    #[inline]
-    pub fn acc_apply(&self, acc: &mut Accumulator, pos: Position, flipped: u64, mover: Color) {
-        let md = mover.index() as u16;
-        self.acc_square(acc, pos.index(), md.wrapping_sub(2));
-        let flip_diff = md.wrapping_sub(1 - md);
-        let mut f = flipped;
-        while f != 0 {
-            let sq = f.trailing_zeros() as u8;
-            f &= f - 1;
-            self.acc_square(acc, sq, flip_diff);
-        }
-    }
-
-    #[inline]
-    fn acc_square(&self, acc: &mut Accumulator, sq: u8, digit_diff: u16) {
-        let ftc = self.ftc_i16.as_ptr();
-        let raw = acc.indices.raw_mut();
-        let vec = &mut acc.acc;
-        for e in self.indexer.square_entries(sq) {
-            let mask = e.mask as usize;
-            let delta = digit_diff.wrapping_mul(e.pow3);
-            let old = raw[mask] as usize;
-            let new = raw[mask].wrapping_add(delta) as usize;
-            raw[mask] = new as u16;
-            let base = self.mask_off[mask] as usize;
-            unsafe {
-                acc_row_addsub(vec, ftc.add((base + new) * H2), ftc.add((base + old) * H2));
-            }
-        }
-    }
-
-    #[allow(clippy::needless_return)]
-    #[inline]
-    pub fn eval_acc(&self, acc: &Accumulator, board: &Board) -> f32 {
-        let stage = crate::linear::Linear::stage(board);
-        if FT_BUCKETS > 1 && ft_bucket(stage) != 0 {
-            return self.eval_from_indices(&acc.indices, board);
-        }
-        let mut v = [0i16; ACC_DIMS];
-        v.copy_from_slice(if board.player() == Color::Black {
-            &acc.acc[0..ACC_DIMS]
-        } else {
-            &acc.acc[ACC_DIMS..H2]
-        });
-        {
-            let inv = 1.0 / self.ft_scale;
-            let mut raw = [0.0f32; ACC_DIMS];
-            for i in 0..ACC_DIMS {
-                raw[i] = v[i] as f32 * inv + self.ft_bias[i];
-            }
-            let feats = self.features_player(&acc.indices, board.player(), stage);
-            let (pa, _) = self.pa_forward(&feats, stage);
-            let folded = fold_pairs_f32(&raw);
-            return self.stacked_readout(&folded, &pa, Self::mob_index(board), stage);
-        }
-    }
-
     pub fn train_black(
         &mut self,
         indices: &PatternIndices,
@@ -2500,7 +1915,7 @@ impl Nnue {
         target: f32,
         lr: f32,
     ) -> f32 {
-        let feats = self.features_black(indices, stage);
+        let feats = self.features_black(indices);
 
         let mut acc = [0.0f32; H];
         for &f in feats.iter().take(self.n_masks) {
@@ -2565,68 +1980,6 @@ impl Nnue {
         err * err
     }
 
-    pub fn weights_flat(&self) -> Vec<f32> {
-        let mut v = Vec::with_capacity(
-            self.ft.len()
-                + self.ft_bias.len()
-                + self.out_w.len()
-                + self.out_b.len()
-                + self.num_w.len()
-                + self.pw.len()
-                + self.mob_w.len()
-                + self.mlp_l1_w.len()
-                + self.mlp_l1_b.len()
-                + self.mlp_l2_w.len()
-                + self.mlp_l2_b.len()
-                + self.mlp_out_w.len(),
-        );
-        v.extend_from_slice(&self.ft);
-        v.extend_from_slice(&self.ft_bias);
-        v.extend_from_slice(&self.out_w);
-        v.extend_from_slice(&self.out_b);
-        v.extend_from_slice(&self.num_w);
-        v.extend_from_slice(&self.pw);
-        v.extend_from_slice(&self.mob_w);
-        v.extend_from_slice(&self.mlp_l1_w);
-        v.extend_from_slice(&self.mlp_l1_b);
-        v.extend_from_slice(&self.mlp_l2_w);
-        v.extend_from_slice(&self.mlp_l2_b);
-        v.extend_from_slice(&self.mlp_out_w);
-        v
-    }
-
-    pub fn set_weights_flat(&mut self, v: &[f32]) {
-        let mut o = 0;
-        for dst in [
-            &mut self.ft,
-            &mut self.ft_bias,
-            &mut self.out_w,
-            &mut self.out_b,
-            &mut self.num_w,
-            &mut self.pw,
-            &mut self.mob_w,
-            &mut self.mlp_l1_w,
-            &mut self.mlp_l1_b,
-            &mut self.mlp_l2_w,
-            &mut self.mlp_l2_b,
-            &mut self.mlp_out_w,
-        ] {
-            let n = dst.len();
-            dst.copy_from_slice(&v[o..o + n]);
-            o += n;
-        }
-        assert_eq!(o, v.len(), "weights_flat length mismatch");
-    }
-
-    pub fn set_num_w(&mut self, v: &[f32]) {
-        assert_eq!(v.len(), self.num_w.len(), "num_w length mismatch");
-        self.num_w.copy_from_slice(v);
-    }
-
-    pub fn num_w_len(&self) -> usize {
-        self.num_w.len()
-    }
-
     pub fn ft_len(&self) -> usize {
         self.ft.len()
     }
@@ -2657,7 +2010,7 @@ impl Nnue {
         target: f32,
         lr: f32,
     ) -> f32 {
-        let feats = self.features_black(indices, stage);
+        let feats = self.features_black(indices);
 
         let mut acc = [0.0f32; H];
         for h in 0..H {
@@ -2739,7 +2092,7 @@ impl Nnue {
         target: f32,
         lr: f32,
     ) -> f32 {
-        let feats = self.features_black(indices, stage);
+        let feats = self.features_black(indices);
 
         let mut acc = [0.0f32; H];
         for h in 0..H {
@@ -2797,14 +2150,12 @@ impl Nnue {
                 lr,
             ) + adam.wd * lr * *p;
         }
-        {
-            let p = view.out_b.add(stage);
-            *p -= adam.step(adam.m_out_b, adam.v_out_b, stage, err, lr);
-            let q = view.num_w.add(num_off);
-            *q -= adam.step(adam.m_num_w, adam.v_num_w, num_off, err, lr);
-            let mo = view.mob_w.add(mob_off);
-            *mo -= adam.step(adam.m_mob_w, adam.v_mob_w, mob_off, err, lr);
-        }
+        let p = view.out_b.add(stage);
+        *p -= adam.step(adam.m_out_b, adam.v_out_b, stage, err, lr);
+        let q = view.num_w.add(num_off);
+        *q -= adam.step(adam.m_num_w, adam.v_num_w, num_off, err, lr);
+        let mo = view.mob_w.add(mob_off);
+        *mo -= adam.step(adam.m_mob_w, adam.v_mob_w, mob_off, err, lr);
         for h in 0..H {
             let i = stage * H + h;
             let p = view.ft_bias.add(i);
@@ -2833,149 +2184,54 @@ impl Nnue {
     }
 
     pub fn write_to(&self, w: &mut impl std::io::Write) -> std::io::Result<()> {
+        w.write_all(b"BBRVNN10")?;
+        w.write_all(&(ACC_DIMS as u32).to_le_bytes())?;
+        w.write_all(&(self.n_features as u32).to_le_bytes())?;
+        w.write_all(&(STAGE_COUNT as u32).to_le_bytes())?;
+        w.write_all(&(self.pa.len() as u32).to_le_bytes())?;
+        let so_len = self.so_l1_w.len()
+            + self.so_l1_b.len()
+            + self.so_l2_w.len()
+            + self.so_l2_b.len()
+            + self.so_out_w.len()
+            + self.so_out_b.len();
+        w.write_all(&(so_len as u32).to_le_bytes())?;
+        w.write_all(&u32::from(self.mpc_sigma.is_some()).to_le_bytes())?;
+        for &v in &self
+            .mpc_sigma
+            .unwrap_or(MpcSigma::from_array([0.0; 6]))
+            .to_array()
         {
-            w.write_all(b"BBRVNN10")?;
-            w.write_all(&(ACC_DIMS as u32).to_le_bytes())?;
-            w.write_all(&(self.n_features as u32).to_le_bytes())?;
-            w.write_all(&(STAGE_COUNT as u32).to_le_bytes())?;
-            w.write_all(&(self.pa.len() as u32).to_le_bytes())?;
-            let so_len = self.so_l1_w.len()
-                + self.so_l1_b.len()
-                + self.so_l2_w.len()
-                + self.so_l2_b.len()
-                + self.so_out_w.len()
-                + self.so_out_b.len();
-            w.write_all(&(so_len as u32).to_le_bytes())?;
-            w.write_all(&u32::from(self.mpc_sigma.is_some()).to_le_bytes())?;
-            for &v in &self
-                .mpc_sigma
-                .unwrap_or(MpcSigma::from_array([0.0; 6]))
-                .to_array()
-            {
-                w.write_all(&v.to_le_bytes())?;
-            }
-            for &v in self
-                .ft
-                .iter()
-                .chain(&self.ft_bias)
-                .chain(&self.out_w)
-                .chain(&self.out_b)
-                .chain(&self.num_w)
-                .chain(&self.pw)
-                .chain(&self.mob_w)
-                .chain(&self.mlp_l1_w)
-                .chain(&self.mlp_l1_b)
-                .chain(&self.mlp_l2_w)
-                .chain(&self.mlp_l2_b)
-                .chain(&self.mlp_out_w)
-                .chain(&self.mlp_mob_w)
-                .chain(&self.so_l1_w)
-                .chain(&self.so_l1_b)
-                .chain(&self.so_l2_w)
-                .chain(&self.so_l2_b)
-                .chain(&self.so_out_w)
-                .chain(&self.so_out_b)
-                .chain(&self.pa)
-                .chain(&self.pa_bias)
-            {
-                w.write_all(&v.to_le_bytes())?;
-            }
+            w.write_all(&v.to_le_bytes())?;
+        }
+        for &v in self
+            .ft
+            .iter()
+            .chain(&self.ft_bias)
+            .chain(&self.out_w)
+            .chain(&self.out_b)
+            .chain(&self.num_w)
+            .chain(&self.pw)
+            .chain(&self.mob_w)
+            .chain(&self.mlp_l1_w)
+            .chain(&self.mlp_l1_b)
+            .chain(&self.mlp_l2_w)
+            .chain(&self.mlp_l2_b)
+            .chain(&self.mlp_out_w)
+            .chain(&self.mlp_mob_w)
+            .chain(&self.so_l1_w)
+            .chain(&self.so_l1_b)
+            .chain(&self.so_l2_w)
+            .chain(&self.so_l2_b)
+            .chain(&self.so_out_w)
+            .chain(&self.so_out_b)
+            .chain(&self.pa)
+            .chain(&self.pa_bias)
+        {
+            w.write_all(&v.to_le_bytes())?;
         }
         if let Some(a) = &self.mpc_alpha {
             a.write_to(w)?;
-        }
-        Ok(())
-    }
-
-    pub fn import_packed(&mut self, raw: &[u8]) -> std::io::Result<()> {
-        use std::io::{Error, ErrorKind};
-        self.mpc_sigma = None;
-        self.mpc_alpha = None;
-        const L1_PAD_IN: usize = 288;
-        const L2_PAD_IN: usize = SO_L1 * 2;
-        const OUT_PAD_IN: usize = 320;
-        let mut at = 0usize;
-        let mut take = |n: usize| -> std::io::Result<&[u8]> {
-            if at + n > raw.len() {
-                return Err(Error::new(
-                    ErrorKind::UnexpectedEof,
-                    "packed weights truncated",
-                ));
-            }
-            let s = &raw[at..at + n];
-            at += n;
-            Ok(s)
-        };
-        let i16s = |b: &[u8]| -> Vec<i16> {
-            b.as_chunks::<2>()
-                .0
-                .iter()
-                .map(|c| i16::from_le_bytes(*c))
-                .collect()
-        };
-        let i32s = |b: &[u8]| -> Vec<i32> {
-            b.as_chunks::<4>()
-                .0
-                .iter()
-                .map(|c| i32::from_le_bytes(*c))
-                .collect()
-        };
-        let nf = self.n_features;
-        if self.n_masks != 32 || nf != 297_432 || self.pa.len() != PA_BUCKETS * nf * PA_DIMS {
-            return Err(Error::new(
-                ErrorKind::InvalidData,
-                "import_packed wants the unshared pattern set (--patterns nnue)",
-            ));
-        }
-        for (dst, v) in self.ft_bias.iter_mut().zip(i16s(take(ACC_DIMS * 2)?)) {
-            *dst = v as f32 / 512.0;
-        }
-        for (dst, v) in self.ft.iter_mut().zip(i16s(take(nf * ACC_DIMS * 2)?)) {
-            *dst = v as f32 / 512.0;
-        }
-        for b in 0..PA_BUCKETS {
-            let bias = &mut self.pa_bias[b * PA_DIMS..(b + 1) * PA_DIMS];
-            for (dst, v) in bias.iter_mut().zip(i16s(take(PA_DIMS * 2)?)) {
-                *dst = v as f32 / 512.0;
-            }
-            let rows = &mut self.pa[b * nf * PA_DIMS..(b + 1) * nf * PA_DIMS];
-            for (dst, v) in rows.iter_mut().zip(i16s(take(nf * PA_DIMS * 2)?)) {
-                *dst = v as f32 / 512.0;
-            }
-        }
-        for st in 0..SO_STAGES {
-            for (o, v) in i32s(take(SO_L1 * 4)?).into_iter().enumerate() {
-                self.so_l1_b[st * SO_L1 + o] = v as f32 / (1u32 << 14) as f32;
-            }
-            let w = take(L1_PAD_IN * SO_L1)?;
-            for o in 0..SO_L1 {
-                for k in 0..SO_L1_IN {
-                    self.so_l1_w[(st * SO_L1 + o) * SO_L1_IN + k] =
-                        w[o * L1_PAD_IN + k] as i8 as f32 / 64.0;
-                }
-            }
-            for (o, v) in i32s(take(SO_L2 * 4)?).into_iter().enumerate() {
-                self.so_l2_b[st * SO_L2 + o] = v as f32 / (1u32 << 14) as f32;
-            }
-            let w = take(L2_PAD_IN * SO_L2)?;
-            for o in 0..SO_L2 {
-                for k in 0..SO_L1 * 2 {
-                    self.so_l2_w[(st * SO_L2 + o) * (SO_L1 * 2) + k] =
-                        w[o * L2_PAD_IN + k] as i8 as f32 / 64.0;
-                }
-            }
-            let b = i32s(take(4)?)[0];
-            self.so_out_b[st] = b as f32 / (1u32 << 20) as f32;
-            let w = i16s(take(OUT_PAD_IN * 2)?);
-            for k in 0..SO_OUT_IN {
-                self.so_out_w[st * SO_OUT_IN + k] = w[k] as f32 / 4096.0;
-            }
-        }
-        if at != raw.len() {
-            return Err(Error::new(
-                ErrorKind::InvalidData,
-                format!("packed weights: {} bytes left over", raw.len() - at),
-            ));
         }
         Ok(())
     }
@@ -2990,16 +2246,15 @@ impl Nnue {
         let mut r = &mut *r;
         let mut magic = [0u8; 8];
         r.read_exact(&mut magic)?;
-        let (staged_bias, has_num, has_pw, has_mob, has_mlp, has_mlp_mob) = match &magic {
-            b"BBRVNN10" | b"BBRVNN09" | b"BBRVNN08" | b"BBRVNN07" => {
-                (true, true, true, true, true, true)
+        let v10 = match &magic {
+            b"BBRVNN10" => true,
+            b"BBRVNN09" => false,
+            m if m.starts_with(b"BBRVNN0") && (b'1'..=b'8').contains(&m[7]) => {
+                return Err(std::io::Error::new(
+                    std::io::ErrorKind::InvalidData,
+                    "nnue file predates the phase-adaptive layer; this build cannot read it",
+                ))
             }
-            b"BBRVNN06" => (true, true, true, true, true, false),
-            b"BBRVNN05" => (true, true, true, true, false, false),
-            b"BBRVNN04" => (true, true, true, false, false, false),
-            b"BBRVNN03" => (true, true, false, false, false, false),
-            b"BBRVNN02" => (false, true, false, false, false, false),
-            b"BBRVNN01" => (false, false, false, false, false, false),
             _ => {
                 return Err(std::io::Error::new(
                     std::io::ErrorKind::InvalidData,
@@ -3023,12 +2278,8 @@ impl Nnue {
             ));
         }
         r.read_exact(&mut u)?;
-        let pa_len = if &magic == b"BBRVNN10" || &magic == b"BBRVNN09" {
-            r.read_exact(&mut u)?;
-            u32::from_le_bytes(u) as usize
-        } else {
-            0
-        };
+        r.read_exact(&mut u)?;
+        let pa_len = u32::from_le_bytes(u) as usize;
         if pa_len != self.pa.len() {
             return Err(std::io::Error::new(
                 std::io::ErrorKind::InvalidData,
@@ -3036,14 +2287,10 @@ impl Nnue {
                  the accumulator has a phase-adaptive half",
             ));
         }
-        let so_len = if &magic == b"BBRVNN10" || &magic == b"BBRVNN09" || &magic == b"BBRVNN08" {
-            r.read_exact(&mut u)?;
-            u32::from_le_bytes(u) as usize
-        } else {
-            0
-        };
+        r.read_exact(&mut u)?;
+        let so_len = u32::from_le_bytes(u) as usize;
         self.mpc_sigma = None;
-        if &magic == b"BBRVNN10" {
+        if v10 {
             r.read_exact(&mut u)?;
             let present = u32::from_le_bytes(u) != 0;
             let mut coef = [0.0f32; MpcSigma::LEN];
@@ -3078,65 +2325,38 @@ impl Nnue {
             Ok(())
         };
         read_into(r, &mut self.ft)?;
-        if staged_bias {
-            read_into(r, &mut self.ft_bias)?;
-        } else {
-            let mut one = vec![0.0f32; H];
-            read_into(r, &mut one)?;
-            for st in 0..STAGE_COUNT {
-                self.ft_bias[st * H..st * H + H].copy_from_slice(&one);
-            }
-        }
+        read_into(r, &mut self.ft_bias)?;
         read_into(r, &mut self.out_w)?;
         read_into(r, &mut self.out_b)?;
-        self.num_w.fill(0.0);
-        if has_num {
-            read_into(r, &mut self.num_w)?;
-        }
-        self.pw.fill(0.0);
-        if has_pw {
-            read_into(r, &mut self.pw)?;
-        }
-        self.mob_w.fill(0.0);
-        if has_mob {
-            read_into(r, &mut self.mob_w)?;
-        }
-        self.mlp_out_w.fill(0.0);
-        if has_mlp {
-            read_into(r, &mut self.mlp_l1_w)?;
-            read_into(r, &mut self.mlp_l1_b)?;
-            read_into(r, &mut self.mlp_l2_w)?;
-            read_into(r, &mut self.mlp_l2_b)?;
-            read_into(r, &mut self.mlp_out_w)?;
-        }
-        self.mlp_mob_w.fill(0.0);
-        if has_mlp_mob {
-            read_into(r, &mut self.mlp_mob_w)?;
-        }
+        read_into(r, &mut self.num_w)?;
+        read_into(r, &mut self.pw)?;
+        read_into(r, &mut self.mob_w)?;
+        read_into(r, &mut self.mlp_l1_w)?;
+        read_into(r, &mut self.mlp_l1_b)?;
+        read_into(r, &mut self.mlp_l2_w)?;
+        read_into(r, &mut self.mlp_l2_b)?;
+        read_into(r, &mut self.mlp_out_w)?;
+        read_into(r, &mut self.mlp_mob_w)?;
         if self.mlp_l1_w.iter().all(|&v| v == 0.0) || self.mlp_l2_w.iter().all(|&v| v == 0.0) {
             self.init_mlp_hidden();
         }
-        if so_len > 0 {
-            let read_stages = |r: &mut dyn Read, dst: &mut [f32]| -> std::io::Result<()> {
-                read_into(r, dst)?;
-                if extra_stage {
-                    let mut tail = vec![0.0f32; dst.len() * (so_len - want_so) / want_so];
-                    read_into(r, &mut tail)?;
-                }
-                Ok(())
-            };
-            read_stages(&mut r, &mut self.so_l1_w)?;
-            read_stages(&mut r, &mut self.so_l1_b)?;
-            read_stages(&mut r, &mut self.so_l2_w)?;
-            read_stages(&mut r, &mut self.so_l2_b)?;
-            read_stages(&mut r, &mut self.so_out_w)?;
-            read_stages(&mut r, &mut self.so_out_b)?;
-        }
-        if pa_len > 0 {
-            read_into(r, &mut self.pa)?;
-            read_into(r, &mut self.pa_bias)?;
-        }
-        self.mpc_alpha = if &magic == b"BBRVNN10" {
+        let read_stages = |r: &mut dyn Read, dst: &mut [f32]| -> std::io::Result<()> {
+            read_into(r, dst)?;
+            if extra_stage {
+                let mut tail = vec![0.0f32; dst.len() * (so_len - want_so) / want_so];
+                read_into(r, &mut tail)?;
+            }
+            Ok(())
+        };
+        read_stages(&mut r, &mut self.so_l1_w)?;
+        read_stages(&mut r, &mut self.so_l1_b)?;
+        read_stages(&mut r, &mut self.so_l2_w)?;
+        read_stages(&mut r, &mut self.so_l2_b)?;
+        read_stages(&mut r, &mut self.so_out_w)?;
+        read_stages(&mut r, &mut self.so_out_b)?;
+        read_into(r, &mut self.pa)?;
+        read_into(r, &mut self.pa_bias)?;
+        self.mpc_alpha = if v10 {
             MpcAlpha::read_from(&mut r)?
         } else {
             None
@@ -3360,73 +2580,6 @@ mod tests {
     }
 
     #[test]
-    fn test_eval_paths_agree() {
-        let mut nn = Nnue::new(test_patterns());
-        nn.init_weights();
-        let mut s: u64 = 0x1234_5678;
-        for v in nn.ft.iter_mut() {
-            s ^= s >> 12;
-            s ^= s << 25;
-            s ^= s >> 27;
-            *v = ((s >> 40) as i32 as f32) / 8.0e6;
-        }
-        for v in nn.pw.iter_mut() {
-            s ^= s >> 12;
-            s ^= s << 25;
-            s ^= s >> 27;
-            *v = ((s >> 40) as i32 as f32) / 2.0e7;
-        }
-        nn.quantize();
-        nn.build_incremental_table();
-
-        const QUANT_TOL_REL: f32 = 1e-3;
-
-        let mut board = Board::new();
-        let mut acc = nn.accumulator(&board);
-        let mut buckets_seen = [false; FT_BUCKETS];
-        let mut plies = 0;
-        for _ in 0..60 {
-            let scratch = nn.eval(&board);
-            let inc = nn.eval_acc(&acc, &board);
-            let ix = nn.indices(board.black, board.white);
-            let from_ix = nn.eval_from_indices(&ix, &board);
-            buckets_seen[ft_bucket(crate::linear::Linear::stage(&board))] = true;
-            plies += 1;
-
-            let tol = 1.0 + inc.abs().max(scratch.abs()) * QUANT_TOL_REL;
-            assert!(
-                (inc - scratch).abs() < tol,
-                "incremental {inc} vs scratch {scratch} (player {:?}, {} empty)",
-                board.player(),
-                board.empty_count()
-            );
-            let _ = from_ix;
-
-            let moves = board.movable();
-            if moves == 0 {
-                board.pass();
-                if board.movable() == 0 {
-                    break;
-                }
-                continue;
-            }
-            let pos = Position::from_index(moves.trailing_zeros()).unwrap();
-            let mover = board.player();
-            let flipped = board.make_move_bits(pos);
-            nn.acc_apply(&mut acc, pos, flipped, mover);
-        }
-        assert!(
-            plies > 40,
-            "only reached {plies} plies; the late game is untested"
-        );
-        assert!(
-            buckets_seen.iter().all(|&b| b),
-            "transformer copies visited: {buckets_seen:?} -- every copy must be \
-             exercised or a wrong one goes unnoticed"
-        );
-    }
-
-    #[test]
     fn training_forward_matches_eval() {
         let mut nn = Nnue::new(test_patterns());
         nn.init_weights();
@@ -3471,19 +2624,13 @@ mod tests {
         let board = Board::new();
         let ix = nn.indices(board.black, board.white);
         let stage = crate::linear::Linear::stage(&board);
-        let discs = board.player_bb().count_ones() as usize;
         let mob = 3usize;
 
-        let evaluated = {
-            let f = nn.forward(&nn.features_black(&ix, stage), mob, stage);
-            {
-                f
-            }
-        };
+        let evaluated = nn.forward(&nn.features_black(&ix), mob, stage);
 
         let mut sink = GradSink::new(1);
-        let sq0 = nn.grad_black_into(&ix, stage, discs, mob, 0.0, &mut sink);
-        let sq2 = nn.grad_black_into(&ix, stage, discs, mob, 2.0, &mut sink);
+        let sq0 = nn.grad_black_into(&ix, stage, mob, 0.0, &mut sink);
+        let sq2 = nn.grad_black_into(&ix, stage, mob, 2.0, &mut sink);
         let trained = (sq0 - sq2 + 4.0) / 4.0;
 
         assert!(
@@ -3505,12 +2652,11 @@ mod tests {
         }
         let ix = nn.indices(board.black, board.white);
         let stage = crate::linear::Linear::stage(&board);
-        let discs = board.black.count_ones() as usize;
         let mob = Nnue::mob_index(&board);
         let loss_of = |nn: &mut Nnue, on: bool| {
             nn.set_so_grid(on);
             let mut sink = GradSink::new(1);
-            nn.grad_black_into(&ix, stage, discs, mob, 7.0, &mut sink)
+            nn.grad_black_into(&ix, stage, mob, 7.0, &mut sink)
         };
         let off = loss_of(&mut nn, false);
         let on = loss_of(&mut nn, true);
@@ -3593,14 +2739,13 @@ mod tests {
         }
         let ix = nn.indices(board.black, board.white);
         let stage = crate::linear::Linear::stage(&board);
-        let discs = board.black.count_ones() as usize;
         let mob = Nnue::mob_index(&board);
         let target = 7.0f32;
 
         let mut sink = GradSink::new(1);
-        nn.grad_black_into(&ix, stage, discs, mob, target, &mut sink);
+        nn.grad_black_into(&ix, stage, mob, target, &mut sink);
 
-        let feats = nn.features_black(&ix, stage);
+        let feats = nn.features_black(&ix);
         let loss = |nn: &Nnue| -> f32 {
             let out = nn.forward(&feats, mob, stage);
             let e = (out - target) / SO_SCORE;
@@ -3608,7 +2753,7 @@ mod tests {
         };
 
         let row = feats[0] as usize;
-        let pa_row = pa_bucket(stage) * nn.n_feat_bucket + row;
+        let pa_row = pa_bucket(stage) * nn.n_features + row;
         let mut cases: Vec<(&str, usize, f32)> = Vec::new();
         for i in [0usize, 1, 7] {
             cases.push((
@@ -3641,8 +2786,8 @@ mod tests {
         for i in [0usize, 3] {
             cases.push(("ft_bias", i, sink.ft_bias[i]));
         }
-        let ft_grad: Vec<(usize, f32)> = // One part, so every row lands in bucket zero.
-            sink.ft_rows[0]
+        // One part, so every row lands in bucket zero.
+        let ft_grad: Vec<(usize, f32)> = sink.ft_rows[0]
             .iter()
             .find(|(r, _)| *r as usize == row)
             .map(|(_, v)| vec![(0usize, v[0]), (3usize, v[3])])

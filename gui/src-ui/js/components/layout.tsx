@@ -74,7 +74,7 @@ export const useToolbarCompact = (): boolean => React.useContext(CompactContext)
 export function Toolbar({ children, aux, dock, graph }: {
   children: React.ReactNode;
   aux?: React.ReactNode;
-  dock?: { open: boolean; onToggle: () => void; label?: string };
+  dock?: { open: boolean; onToggle: () => void };
   graph?: { open: boolean; onToggle: () => void };
 }) {
   const [group, setGroup] = React.useState<HTMLElement | null>(null);
@@ -124,7 +124,7 @@ export function Toolbar({ children, aux, dock, graph }: {
       )}
       {dock && (
         <span className="k-dock-toggle">
-          <IconButton name="panel" label={dock.label ?? t(dock.open ? 'ui.panel.close' : 'ui.panel.open')}
+          <IconButton name="panel" label={t(dock.open ? 'ui.panel.close' : 'ui.panel.open')}
                       onClick={dock.onToggle} />
         </span>
       )}
@@ -133,7 +133,8 @@ export function Toolbar({ children, aux, dock, graph }: {
 }
 
 export function Dock({ tabs, active, onTab, children, open, scroll = true }: {
-  tabs: string[]; active: string; onTab?: (t: string) => void; children: React.ReactNode;
+  tabs: { id: string; label: string }[]; active: string; onTab?: (id: string) => void;
+  children: React.ReactNode;
   open?: boolean;
   scroll?: boolean;
 }) {
@@ -144,7 +145,7 @@ export function Dock({ tabs, active, onTab, children, open, scroll = true }: {
     }}>
       <div style={{ padding: 'var(--sp-2)', flex: 'none' }}>
         <Segmented fill value={active} onChange={onTab}
-                   options={tabs.map(name => ({ value: name, label: name }))} />
+                   options={tabs.map(tab => ({ value: tab.id, label: tab.label }))} />
       </div>
       <div className={scroll ? 'k-scroll' : undefined} style={{
         flex: 1, minHeight: 0, display: scroll ? undefined : 'flex', flexDirection: 'column',
@@ -153,10 +154,10 @@ export function Dock({ tabs, active, onTab, children, open, scroll = true }: {
   );
 }
 
-/// Outside the scroller, so a table header stays put.
 export function Section({ title, aside, grow, head, children }: {
   title: string; aside?: React.ReactNode; children?: React.ReactNode;
-  grow?: boolean; head?: React.ReactNode;
+  grow?: boolean;
+  head?: React.ReactNode;   // outside the scroller, so a table header stays put
 }) {
   return (
     <section style={{
@@ -181,6 +182,22 @@ export function Section({ title, aside, grow, head, children }: {
   );
 }
 
+export function BoardFit({ minHeight = 0, padding, children }: {
+  minHeight?: number; padding?: string; children: React.ReactNode;
+}) {
+  return (
+    <div style={{
+      flex: 1, minHeight, display: 'grid', placeItems: 'center',
+      gridTemplateRows: 'minmax(0, 1fr)', gridTemplateColumns: 'minmax(0, 1fr)',
+      padding,
+    }}>
+      <div style={{ height: '100%', maxHeight: '100%', aspectRatio: '1 / 1', maxWidth: '100%' }}>
+        {children}
+      </div>
+    </div>
+  );
+}
+
 export function StatusBar({ left, right }: { left?: React.ReactNode; right?: React.ReactNode }) {
   return (
     <div style={{
@@ -201,14 +218,14 @@ export function StatusStat({ label, value, unit }: { label?: string; value: Reac
   );
 }
 
-export function BottomPanel({ tabs, active, onTab, onClose, height = 240, children }: {
+export function BottomPanel({ tabs, active, onTab, onClose, children }: {
   tabs: { id: string; label: string; unread?: number }[];
   active: string; onTab?: (id: string) => void; onClose?: () => void;
-  height?: number; children: React.ReactNode;
+  children: React.ReactNode;
 }) {
   return (
     <div style={{
-      flex: 'none', height: Math.max(180, Math.min(420, height)),
+      flex: 'none', height: 240,
       background: 'var(--panel)', borderTop: '1px solid var(--border)',
       display: 'flex', flexDirection: 'column',
     }}>
@@ -369,15 +386,16 @@ export interface Col {
 }
 
 function cell(c: Col, head?: boolean): React.CSSProperties {
+  const size = c.w === undefined ? { flex: 1, minWidth: 0 } : { width: c.w, flex: 'none' };
   if (!head && c.clip) {
     return {
-      ...(c.w === undefined ? { flex: 1, minWidth: 0 } : { width: c.w, flex: 'none' }),
+      ...size,
       overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
       textAlign: c.right ? 'right' : undefined,
     };
   }
   return {
-    ...(c.w === undefined ? { flex: 1, minWidth: 0 } : { width: c.w, flex: 'none' }),
+    ...size,
     display: 'flex', alignItems: 'center', gap: 'var(--sp-0)',
     justifyContent: c.right ? 'flex-end' : 'flex-start',
     whiteSpace: 'nowrap',
@@ -407,19 +425,18 @@ export const picked = (on: boolean): React.CSSProperties => ({
   boxShadow: on ? 'inset 2px 0 0 var(--accent)' : 'none',
 });
 
-export function TableRow({ cols, on, pad = 'var(--sp-3)', fs = 'var(--fs-5)', muted, onClick, title, innerRef, children }: {
-  cols?: Col[];
+export function TableRow({ cols, on, pad = 'var(--sp-3)', fs = 'var(--fs-5)', muted, onClick, innerRef, children }: {
+  cols: Col[];
   on?: boolean;
   pad?: string;
   fs?: string;
   muted?: boolean;
   onClick?: () => void;
-  title?: string;
   innerRef?: React.Ref<HTMLButtonElement>;
   children: React.ReactNode;
 }) {
   return (
-    <button type="button" onClick={onClick} title={title} ref={innerRef}
+    <button type="button" onClick={onClick} ref={innerRef}
       aria-current={on || undefined}
       className={'k-row' + (on ? ' k-on' : '')}
       style={{
@@ -431,11 +448,9 @@ export function TableRow({ cols, on, pad = 'var(--sp-3)', fs = 'var(--fs-5)', mu
         color: muted ? 'var(--sub)' : 'var(--text)',
         ...picked(!!on),
       }}>
-      {cols
-        ? React.Children.toArray(children).map((ch, i) => (
-            <span key={i} style={cell(cols[i] ?? {})}>{ch}</span>
-          ))
-        : children}
+      {React.Children.toArray(children).map((ch, i) => (
+        <span key={i} style={cell(cols[i] ?? {})}>{ch}</span>
+      ))}
     </button>
   );
 }
@@ -477,13 +492,13 @@ export function EmptyState({ title, body, actions, visual }: {
   );
 }
 
-export function EmptyBoard({ size = 150 }: { size?: number }) {
+export function EmptyBoard() {
   const cells: (0 | 1 | 2)[] = Array(64).fill(0);
   cells[3 * 8 + 3] = 2; cells[4 * 8 + 4] = 2;
   cells[4 * 8 + 3] = 1; cells[3 * 8 + 4] = 1;
   return (
     <div aria-hidden style={{
-      width: size, flex: 'none', padding: 'var(--sp-1)',
+      width: 150, flex: 'none', padding: 'var(--sp-1)',
       borderRadius: 'var(--r-4)', background: 'var(--panel)',
     }}>
       <div style={{ borderRadius: 'var(--r-1)', overflow: 'hidden' }}>

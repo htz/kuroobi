@@ -43,30 +43,17 @@ impl Entry {
     }
 }
 
-fn normalize(board: &Board) -> (u64, u64, u8) {
-    let mut best = (board.player_bb(), board.opponent_bb());
-    let mut best_i = 0u8;
-    let mut p = board.player_bb();
-    let mut o = board.opponent_bb();
-    for i in 0..8u8 {
-        if i > 0 {
-            if i == 4 {
-                p = crate::bitboard::mirror_horizontal(board.player_bb());
-                o = crate::bitboard::mirror_horizontal(board.opponent_bb());
-            } else {
-                p = crate::bitboard::rotate_90(p);
-                o = crate::bitboard::rotate_90(o);
-            }
-        }
-        if (p, o) < best {
-            best = (p, o);
-            best_i = i;
+fn normalize(board: &Board) -> ((u64, u64), u8) {
+    let ps = crate::bitboard::symmetries(board.player_bb());
+    let os = crate::bitboard::symmetries(board.opponent_bb());
+    let mut best = ((ps[0], os[0]), 0u8);
+    for i in 1..8 {
+        if (ps[i], os[i]) < best.0 {
+            best = ((ps[i], os[i]), i as u8);
         }
     }
-    (best.0, best.1, best_i)
+    best
 }
-
-pub type BookMove = (Position, f32, u32);
 
 fn transform_bb(bb: u64, i: u8) -> u64 {
     let mut b = bb;
@@ -83,7 +70,7 @@ fn transform_bb(bb: u64, i: u8) -> u64 {
     b
 }
 
-pub fn stabilizers(board: &Board) -> Vec<u8> {
+fn stabilizers(board: &Board) -> Vec<u8> {
     let (p, o) = (board.player_bb(), board.opponent_bb());
     (0..8u8)
         .filter(|&i| (transform_bb(p, i), transform_bb(o, i)) == (p, o))
@@ -91,27 +78,11 @@ pub fn stabilizers(board: &Board) -> Vec<u8> {
 }
 
 fn map_square(sq: u8, i: u8) -> u8 {
-    let mut bit = 1u64 << sq;
-    if i >= 4 {
-        bit = crate::bitboard::mirror_horizontal(bit);
-        for _ in 0..(i - 4) {
-            bit = crate::bitboard::rotate_90(bit);
-        }
-    } else {
-        for _ in 0..i {
-            bit = crate::bitboard::rotate_90(bit);
-        }
-    }
-    bit.trailing_zeros() as u8
+    transform_bb(1u64 << sq, i).trailing_zeros() as u8
 }
 
 fn unmap_square(sq: u8, i: u8) -> u8 {
-    for cand in 0..64u8 {
-        if map_square(cand, i) == sq {
-            return cand;
-        }
-    }
-    sq
+    (0..64u8).find(|&c| map_square(c, i) == sq).unwrap_or(sq)
 }
 
 pub fn board_from_key(key: (u64, u64)) -> Board {
@@ -132,9 +103,7 @@ pub type BookCandidate = (Position, f32, u32);
 
 impl Book {
     pub fn new() -> Book {
-        Book {
-            map: HashMap::new(),
-        }
+        Book::default()
     }
 
     pub fn len(&self) -> usize {
@@ -177,19 +146,15 @@ impl Book {
         self.expand(board).is_some_and(|(_, _, c)| c)
     }
 
-    fn expand(&self, board: &Board) -> Option<(Vec<BookMove>, u8, bool)> {
+    fn expand(&self, board: &Board) -> Option<(Vec<BookCandidate>, u8, bool)> {
         let (key, i) = Book::key(board);
         let e = self.map.get(&key)?;
         let stab = stabilizers(board);
-        let mut out: Vec<BookMove> = Vec::new();
+        let mut out: Vec<BookCandidate> = Vec::new();
         for c in &e.moves {
-            let Some(p0) = Self::back(c.mv, i) else {
-                continue;
-            };
+            let p0 = Position(unmap_square(c.mv.index(), i));
             for &g in &stab {
-                let Some(p) = Position::from_index(map_square(p0.index(), g) as u32) else {
-                    continue;
-                };
+                let p = Self::map_move(p0, g);
                 if !board.check(p) || out.iter().any(|(q, _, _)| *q == p) {
                     continue;
                 }
@@ -248,13 +213,8 @@ impl Book {
         self.map.contains_key(&Book::key(board).0)
     }
 
-    fn back(mv: Position, i: u8) -> Option<Position> {
-        Position::from_index(unmap_square(mv.index(), i) as u32)
-    }
-
     pub fn key(board: &Board) -> ((u64, u64), u8) {
-        let (p, o, i) = normalize(board);
-        ((p, o), i)
+        normalize(board)
     }
 
     pub fn map_move(pos: Position, i: u8) -> Position {
@@ -404,11 +364,9 @@ mod tests {
     #[test]
     fn varied_choice_stays_within_tolerance() {
         let b = Board::new();
-        let (key, i) = Book::key(&b);
         let mut after = b;
         after.make_move_bits(Position::from_kifu("f5").unwrap());
         let (key2, i2) = Book::key(&after);
-        let _ = (key, i);
 
         let legal: Vec<Position> = after.movable_iter().collect();
         assert!(legal.len() >= 3);

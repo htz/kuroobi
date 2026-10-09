@@ -16,6 +16,9 @@
 //! assert_eq!(game.to_kifu().len(), 2);
 //! ```
 
+#[macro_use]
+mod knob;
+
 pub mod bitboard;
 pub mod board;
 pub mod book;
@@ -44,7 +47,6 @@ pub use board::MoveError;
 pub use board::ParseError;
 pub use board::BOARD_INIT_STRING;
 pub use color::Color;
-pub use game::MoveRecord;
 pub use game::Reversi;
 pub use linear::{AdamOptimizer, Linear, Optimizer, SgdOptimizer, STAGE_COUNT};
 pub use pattern::{Pattern, LINEAR_PATTERNS, NNUE_PATTERNS};
@@ -52,4 +54,3 @@ pub use pattern_index::{PatternIndexer, PatternIndices};
 pub use position::Position;
 pub use solver::{EndSolverMode, EndSolverResult, Solver};
 pub use trainer::{Example, Trainer};
-pub use zobrist::ZobristTable;

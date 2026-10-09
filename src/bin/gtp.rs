@@ -15,16 +15,31 @@ fn parse_vertex(s: &str) -> Option<Position> {
     }
     let file = b[0].to_ascii_lowercase().wrapping_sub(b'a');
     let rank = b[1].wrapping_sub(b'1');
-    if file >= 8 || rank >= 8 {
-        return None;
-    }
     Position::from_file_rank(file, rank)
 }
 
-fn vertex_name(p: Position) -> String {
-    let f = (b'a' + p.index() / 8) as char;
-    let r = (b'1' + p.index() % 8) as char;
-    format!("{f}{r}")
+const COMMANDS: [&str; 11] = [
+    "protocol_version",
+    "name",
+    "version",
+    "list_commands",
+    "known_command",
+    "boardsize",
+    "clear_board",
+    "komi",
+    "play",
+    "genmove",
+    "quit",
+];
+
+fn give_turn_to(board: &mut Board, color: Color) -> bool {
+    if board.player() != color {
+        if board.movable() != 0 {
+            return false;
+        }
+        board.pass();
+    }
+    true
 }
 
 fn parse_color(s: &str) -> Option<Color> {
@@ -55,6 +70,12 @@ fn parse_args() -> Result<(EngineConfig, u64), ExitCode> {
     let mut time_ms: u64 = 0;
     let mut solve_set = false;
 
+    let patterns = |name: &str, file: Option<&std::path::Path>| {
+        kuroobi::pattern::resolve(name, file).map_err(|e| {
+            eprintln!("{e}");
+            ExitCode::FAILURE
+        })
+    };
     let mut it = std::env::args().skip(1);
     while let Some(a) = it.next() {
         match a.as_str() {
@@ -89,23 +110,11 @@ fn parse_args() -> Result<(EngineConfig, u64), ExitCode> {
             "--nnue-base" => cfg.nnue_base = PathBuf::from(it.next().unwrap_or_default()),
             "--patterns" => {
                 let name = it.next().unwrap_or_else(|| "linear".to_string());
-                cfg.nnue_patterns = match kuroobi::pattern::resolve(&name, None) {
-                    Ok(p) => p,
-                    Err(e) => {
-                        eprintln!("{e}");
-                        std::process::exit(1);
-                    }
-                }
+                cfg.nnue_patterns = patterns(&name, None)?;
             }
             "--patterns-file" => {
                 let path = PathBuf::from(it.next().unwrap_or_default());
-                cfg.nnue_patterns = match kuroobi::pattern::resolve("", Some(&path)) {
-                    Ok(p) => p,
-                    Err(e) => {
-                        eprintln!("{e}");
-                        std::process::exit(1);
-                    }
-                }
+                cfg.nnue_patterns = patterns("", Some(&path))?;
             }
             "--book" => {
                 cfg.book = PathBuf::from(it.next().unwrap_or_default());
@@ -159,26 +168,9 @@ fn main() -> ExitCode {
             "protocol_version" => ok(&id, "2"),
             "name" => ok(&id, "KUROOBI"),
             "version" => ok(&id, env!("CARGO_PKG_VERSION")),
-            "list_commands" => ok(
-                &id,
-                "protocol_version\nname\nversion\nlist_commands\nknown_command\n\
-                 boardsize\nclear_board\nkomi\nplay\ngenmove\nquit",
-            ),
+            "list_commands" => ok(&id, &COMMANDS.join("\n")),
             "known_command" => {
-                let known = matches!(
-                    args.first().copied().unwrap_or(""),
-                    "protocol_version"
-                        | "name"
-                        | "version"
-                        | "list_commands"
-                        | "known_command"
-                        | "boardsize"
-                        | "clear_board"
-                        | "komi"
-                        | "play"
-                        | "genmove"
-                        | "quit"
-                );
+                let known = COMMANDS.contains(&args.first().copied().unwrap_or(""));
                 ok(&id, if known { "true" } else { "false" });
             }
             "boardsize" => {
@@ -202,12 +194,9 @@ fn main() -> ExitCode {
                     err(&id, "syntax error");
                     continue;
                 };
-                if board.player() != color {
-                    if board.movable() != 0 {
-                        err(&id, "not your turn");
-                        continue;
-                    }
-                    board.pass();
+                if !give_turn_to(&mut board, color) {
+                    err(&id, "not your turn");
+                    continue;
                 }
                 if v.eq_ignore_ascii_case("pass") {
                     board.pass();
@@ -227,12 +216,9 @@ fn main() -> ExitCode {
                     err(&id, "syntax error");
                     continue;
                 };
-                if board.player() != color {
-                    if board.movable() != 0 {
-                        err(&id, "not your turn");
-                        continue;
-                    }
-                    board.pass();
+                if !give_turn_to(&mut board, color) {
+                    err(&id, "not your turn");
+                    continue;
                 }
                 if board.movable() == 0 {
                     board.pass();
@@ -249,7 +235,7 @@ fn main() -> ExitCode {
                 match mv.pos {
                     Some(pos) => {
                         board.make_move_bits(pos);
-                        ok(&id, &vertex_name(pos));
+                        ok(&id, &pos.to_kifu());
                     }
                     None => {
                         board.pass();

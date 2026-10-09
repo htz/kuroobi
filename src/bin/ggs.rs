@@ -132,18 +132,17 @@ enum SessionEnd {
     Retry,
 }
 
-#[allow(clippy::too_many_arguments)]
 fn run_session(
     args: &Args,
     login: &str,
     pw: &str,
-    opponent: &str,
     games_done: &mut usize,
     first_session: &mut bool,
     engine: &mut Engine,
     pick: impl Fn(&Board, &mut Engine, Option<u64>) -> (Option<Position>, Option<f32>),
 ) -> SessionEnd {
     use std::io::{Read, Write};
+    let opponent = args.play.as_deref().unwrap_or_default();
     let mut stream = dial();
     let pw_for_mask = pw.to_string();
     let mut send = {
@@ -168,10 +167,10 @@ fn run_session(
     let mut my_color: Option<char> = None;
     let mut my_clock_secs: Option<u64> = None;
     let mut in_match = false;
-    let mut asked_at: Option<std::time::Instant> = None;
+    let mut asked = false;
     let mut ready_at: Option<std::time::Instant> = None;
     let mut awaiting_stored = false;
-    let mut stored_ids: Vec<String> = Vec::new();
+    let mut stored_id: Option<String> = None;
     let mut last_activity = std::time::Instant::now();
     let mut lost = false;
 
@@ -259,15 +258,15 @@ fn run_session(
                 if let Some(rest) = ln.strip_prefix('|') {
                     let id = rest.split_whitespace().next().unwrap_or("");
                     if id.starts_with('.') && rest.contains(login) {
-                        stored_ids.push(id.to_string());
+                        stored_id.get_or_insert_with(|| id.to_string());
                     }
                 }
                 if ln == "READY" {
                     awaiting_stored = false;
-                    if let Some(id) = stored_ids.first().cloned() {
+                    if let Some(id) = &stored_id {
                         eprintln!("### resuming stored {id}");
                         send(&format!("tell /os ask {id}"));
-                        asked_at = Some(std::time::Instant::now());
+                        asked = true;
                     }
                 }
             }
@@ -325,8 +324,8 @@ fn run_session(
                 continue;
             }
             if let (Some(from), Some(id)) = (&args.accept, request_id(&ln)) {
-                let mut words = ln.split_whitespace();
-                if words.any(|w| w == from) && ln.split_whitespace().any(|w| w == login) {
+                let has_word = |word: &str| ln.split_whitespace().any(|w| w == word);
+                if has_word(from) && has_word(login) {
                     send(&format!("tell /os accept {id}"));
                     last_activity = std::time::Instant::now();
                 }
@@ -339,9 +338,9 @@ fn run_session(
                 in_match = false;
                 my_color = None;
                 my_clock_secs = None;
-                asked_at = None;
+                asked = false;
                 *games_done += 1;
-                stored_ids.retain(|_| false);
+                stored_id = None;
                 println!("### game {}/{} over: {ln}", *games_done, args.games);
                 if !args.console && (*games_done) >= args.games {
                     send("quit");
@@ -351,11 +350,11 @@ fn run_session(
         }
 
         if let Some(t0) = ready_at {
-            if (*first_session) && !in_match && asked_at.is_none() && t0.elapsed().as_secs() >= 4 {
+            if (*first_session) && !in_match && !asked && t0.elapsed().as_secs() >= 4 {
                 if args.console || args.accept.is_some() {
                     continue;
                 }
-                asked_at = Some(std::time::Instant::now());
+                asked = true;
                 if let Some(id) = &args.resume {
                     send(&format!("tell /os ask {id}"));
                 } else {
@@ -609,7 +608,6 @@ fn main() -> ExitCode {
             }
         },
     };
-    let opponent = args.play.clone().unwrap_or_default();
 
     let mut games_done = 0usize;
     let mut first_session = true;
@@ -619,7 +617,6 @@ fn main() -> ExitCode {
             &args,
             &login,
             &pw,
-            &opponent,
             &mut games_done,
             &mut first_session,
             &mut engine,

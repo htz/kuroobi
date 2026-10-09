@@ -1,9 +1,8 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { api, ggsApi, onHints, type ActivityView } from './api';
-import type { Game } from './state';
+import type { Game, Hints } from './state';
 import type { GameView, LearnEntry } from './types';
 import { t, tErr } from './i18n';
-
 
 export function useEngineSettings(g: Game) {
   const { depth, solve, band } = g.levels;
@@ -28,7 +27,7 @@ export function useHints(g: Game) {
   useEffect(() => {
     let off: (() => void) | undefined;
     void onHints((_depth, hs, nodes, secs) => {
-      const next: Record<number, { value: number; exact: boolean; book: boolean; depth: number }> = {};
+      const next: Hints = {};
       for (const h of hs) {
         if (!Number.isFinite(h.value)) continue;
         next[h.pos] = { value: h.value, exact: h.exact, book: h.from_book, depth: h.depth };
@@ -89,7 +88,6 @@ export function useEngineTurn(g: Game) {
         applyView(next);
         maybeLearn(next);
         setStat(r.nodes > 0 ? { nodes: r.nodes, secs: r.secs } : null);
-        say('');
       } catch (e) {
         say(tErr(e));
         setPlaying(false);
@@ -112,10 +110,9 @@ const lineKey = (v: GameView | null) =>
   v ? v.moves.map((m) => (m == null ? 'p' : m)).join(',') : '';
 
 export interface AskArgs { title: string; body: string; ok: string; danger?: boolean }
-export type Ask = (a: AskArgs) => boolean | Promise<boolean>;
-const askDefault: Ask = (a) => window.confirm(a.title + '\n' + a.body);
+type Ask = (a: AskArgs) => boolean | Promise<boolean>;
 
-export function useGraph(g: Game, ggsMatch: boolean, ask: Ask = askDefault) {
+export function useGraph(g: Game, ggsMatch: boolean, ask: Ask) {
   const [values, setValues] = useState<(GraphPoint | undefined)[] | null>(null);
   const [busy, setBusy] = useState(false);
   const [prog, setProg] = useState<{ done: number; total: number } | null>(null);
@@ -146,7 +143,6 @@ export function useGraph(g: Game, ggsMatch: boolean, ask: Ask = askDefault) {
     const vals: (GraphPoint | undefined)[] = new Array(len + 1);
     keyRef.current = lineKey(v);
     setValues(null);
-    let failed = false;
     await g.pushLevels();
     const depth = Math.min(g.levels.depth, 14);
     for (let n = len; n >= 0; n--) {
@@ -159,9 +155,8 @@ export function useGraph(g: Game, ggsMatch: boolean, ask: Ask = askDefault) {
         if (seq !== seqRef.current) break;
         if (Number.isFinite(p.value)) vals[n] = { value: p.value, exact: p.exact, book: p.from_book };
         setValues([...vals]);
-      } catch (e) { g.say(tErr(e)); failed = true; break; }
+      } catch (e) { g.say(tErr(e)); break; }
     }
-    if (!failed && seq === seqRef.current) g.say('');
     if (seq === seqRef.current) { setBusy(false); setProg(null); }
   }, [g, busy, ggsMatch, ask]);
 
@@ -170,8 +165,7 @@ export function useGraph(g: Game, ggsMatch: boolean, ask: Ask = askDefault) {
     setBusy(false);
     setProg(null);
     void api.stopSearch();
-    g.say('');
-  }, [g]);
+  }, []);
 
   return { values, busy, prog, update, stop };
 }
@@ -180,10 +174,10 @@ export function useStartGame(
   g: Game,
   ggsMatch: boolean,
   graph: { busy: boolean; stop: () => void },
-  ask: Ask = askDefault,
+  ask: Ask,
 ) {
   return useCallback(async () => {
-    if (g.playing) { g.stop(); g.say(''); return; }
+    if (g.playing) { g.stop(); return; }
     if (ggsMatch) { g.say(t('engine.toast.no_local_during_ggs'), 'gold'); return; }
     if (graph.busy) {
       if (!await ask({
@@ -194,7 +188,6 @@ export function useStartGame(
       graph.stop();
     }
     g.setPlaying(true);
-    g.say('');
   }, [g, ggsMatch, graph, ask]);
 }
 

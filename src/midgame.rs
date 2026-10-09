@@ -20,54 +20,28 @@ fn order_key(x: f32) -> i32 {
 
 const MAX_KIDS: usize = 34;
 
-fn eval_order_depth() -> u32 {
-    static V: std::sync::OnceLock<u32> = std::sync::OnceLock::new();
-    *V.get_or_init(|| {
-        std::env::var("EVAL_ORDER_DEPTH")
-            .ok()
-            .and_then(|v| v.parse().ok())
-            .unwrap_or(3)
-    })
-}
+knob!(fn eval_order_depth() -> u32 = "EVAL_ORDER_DEPTH" or 3);
 
 const ABORTED: f32 = f32::NEG_INFINITY;
-
-pub static ROOT_DIFF: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
-pub static ROOT_TOTAL: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
 
 const MPC_RELAX_STEP: f32 = 1.18;
 
 /// 2 discs: on 7 contested replays depth 31.00 against 30.71 with it off, same moves; 1 disc bought none.
-///
-/// `DECIDED=0` turns both the early stop and the extension off.
 const DECIDED: f32 = 2.0;
 
 /// At the `NEXT_PASS` factor the granted iteration was torn down before it finished.
 const EXTEND_PASS: f32 = 3.0;
 
-fn extend_pass_factor() -> f32 {
-    static V: std::sync::OnceLock<f32> = std::sync::OnceLock::new();
-    *V.get_or_init(|| {
-        std::env::var("EXTEND_PASS")
-            .ok()
-            .and_then(|v| v.parse().ok())
-            .filter(|v: &f32| v.is_finite() && *v > 0.0)
-            .unwrap_or(EXTEND_PASS)
-    })
-}
+knob!(fn extend_pass_factor() -> f32 = "EXTEND_PASS" or EXTEND_PASS);
 
 /// Keeps the `NEXT_PASS` check from refusing the time just granted.
 const EXTEND_SLACK: std::time::Duration = std::time::Duration::from_millis(50);
 
+knob!(fn decided() -> f32 = "DECIDED" or DECIDED);
+
 fn decided_margin() -> Option<f32> {
-    static V: std::sync::OnceLock<Option<f32>> = std::sync::OnceLock::new();
-    *V.get_or_init(|| {
-        let v: f32 = std::env::var("DECIDED")
-            .ok()
-            .and_then(|v| v.parse().ok())
-            .unwrap_or(DECIDED);
-        (v.is_finite() && v > 0.0).then_some(v)
-    })
+    let v = decided();
+    (v.is_finite() && v > 0.0).then_some(v)
 }
 
 /// On 8 threads 0.3 left too few iterations to check: 0.1 stopped 9 of 20 live positions at 30 s (0.3: 3), same moves.
@@ -77,69 +51,25 @@ const DECIDED_DEPTH: u32 = 28;
 
 const UNSETTLED_DROP: f32 = 1.0;
 
-fn decided_at() -> f32 {
-    static V: std::sync::OnceLock<f32> = std::sync::OnceLock::new();
-    *V.get_or_init(|| {
-        std::env::var("DECIDED_AT")
-            .ok()
-            .and_then(|v| v.parse().ok())
-            .filter(|v: &f32| v.is_finite() && *v > 0.0 && *v < 1.0)
-            .unwrap_or(DECIDED_AT)
-    })
-}
+knob!(fn decided_at() -> f32 = "DECIDED_AT" or DECIDED_AT);
 
-/// Estimating it from the observed growth changed nothing (same nodes at 4 / 8 / 16 s).
-fn next_pass_factor() -> f32 {
-    static V: std::sync::OnceLock<f32> = std::sync::OnceLock::new();
-    *V.get_or_init(|| {
-        std::env::var("NEXT_PASS")
-            .ok()
-            .and_then(|v| v.parse().ok())
-            .unwrap_or(2.0)
-    })
-}
+// Estimating it from the observed growth changed nothing (same nodes at 4 / 8 / 16 s).
+knob!(fn next_pass_factor() -> f32 = "NEXT_PASS" or 2.0);
 
-fn ybwc_min_depth() -> u32 {
-    static V: std::sync::OnceLock<u32> = std::sync::OnceLock::new();
-    *V.get_or_init(|| {
-        std::env::var("YBWC_MIN")
-            .ok()
-            .and_then(|v| v.parse().ok())
-            .unwrap_or(6)
-    })
-}
+knob!(fn ybwc_min_depth() -> u32 = "YBWC_MIN" or 6);
 const ABORT_CHECK_INTERVAL: u64 = 512;
 
 const MPC_MIN_DEPTH: u32 = 4;
 
 const MPC_T: f32 = 1.1;
 
-pub fn mpc_t() -> f32 {
-    static V: std::sync::OnceLock<f32> = std::sync::OnceLock::new();
-    *V.get_or_init(|| {
-        std::env::var("MPC_T")
-            .ok()
-            .and_then(|v| v.parse().ok())
-            .unwrap_or(MPC_T)
-    })
-}
+knob!(pub fn mpc_t() -> f32 = "MPC_T" or MPC_T);
 
-pub fn mpc_min_depth() -> u32 {
-    static V: std::sync::OnceLock<u32> = std::sync::OnceLock::new();
-    *V.get_or_init(|| {
-        std::env::var("MPC_MIN_DEPTH")
-            .ok()
-            .and_then(|v| v.parse().ok())
-            .unwrap_or(MPC_MIN_DEPTH)
-    })
-}
+knob!(pub fn mpc_min_depth() -> u32 = "MPC_MIN_DEPTH" or MPC_MIN_DEPTH);
 
 const MPC_D0_OFFSET: f32 = 4.0;
 
-fn mpc_old() -> bool {
-    static V: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
-    *V.get_or_init(|| std::env::var("MPC_OLD").is_ok_and(|v| v != "0"))
-}
+flag!(fn mpc_old() = "MPC_OLD" or false);
 
 const MPC_MAX_LEVEL: u32 = 3;
 
@@ -191,15 +121,12 @@ fn potential_mobility(discs: u64, empties: u64) -> u32 {
     (res & empties).count_ones()
 }
 
-fn pool_slack() -> usize {
-    static V: std::sync::OnceLock<usize> = std::sync::OnceLock::new();
-    *V.get_or_init(|| {
-        std::env::var("POOL_SLACK")
-            .ok()
-            .and_then(|v| v.parse().ok())
-            .unwrap_or(2)
-    })
-}
+knob!(fn pool_slack() -> usize = "POOL_SLACK" or 2);
+
+knob!(fn smp_min_depth() -> u32 = "SMP_MIN_DEPTH" or 1);
+knob!(fn smp_spread() -> u32 = "SMP_SPREAD" or 2);
+knob!(fn smp_sharpen_max() -> u32 = "SMP_SHARPEN_MAX" or 2);
+knob!(fn smp_max_depth() -> u32 = "SMP_MAX_DEPTH" or 10);
 
 const TT_WAYS: usize = 4;
 
@@ -284,13 +211,12 @@ impl SharedTt {
             return;
         }
         if self.best_move(hash).is_some() {
-            return; // never clobber a real entry
+            return;
         }
         self.put(hash, 0, 0, f32::INFINITY, f32::NEG_INFINITY, 0.0, best_move);
     }
 
     #[inline]
-    #[allow(clippy::too_many_arguments)]
     fn put(
         &self,
         hash: u64,
@@ -405,20 +331,9 @@ impl TtEntry {
     };
 }
 
-pub static SPLIT_TRIED: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
-pub static WORKER_BUSY_NS: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
-pub static POOL_WORKERS: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
-pub static SPLIT_DONE: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
-pub static WAIT_IDLE_MAIN_NS: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
-pub static WAIT_IDLE_WORKER_NS: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
 pub static BUSY_HIST: [std::sync::atomic::AtomicU64; 17] =
     [const { std::sync::atomic::AtomicU64::new(0) }; 17];
 pub static SEARCH_ACTIVE: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
-
-thread_local! {
-    static IS_POOL_WORKER: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
-    static SPLIT_TRIED_LOCAL: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
-}
 
 #[derive(Clone, Default)]
 pub struct StopHandle(std::sync::Arc<std::sync::atomic::AtomicBool>);
@@ -498,38 +413,21 @@ struct Pool {
     cv: std::sync::Condvar,
     idle: std::sync::atomic::AtomicUsize,
     queued: std::sync::atomic::AtomicUsize,
-    workers: usize,
-    #[allow(dead_code)]
-    stop: std::sync::atomic::AtomicBool,
 }
 
 impl Pool {
-    fn new(workers: usize) -> Pool {
-        use std::sync::atomic::{AtomicBool, AtomicUsize};
+    fn new() -> Pool {
+        use std::sync::atomic::AtomicUsize;
         Pool {
             q: std::sync::Mutex::new(std::collections::VecDeque::new()),
             cv: std::sync::Condvar::new(),
             idle: AtomicUsize::new(0),
             queued: AtomicUsize::new(0),
-            workers,
-            stop: AtomicBool::new(false),
         }
     }
 
     fn try_push(&self, f: impl FnOnce() + Send + 'static) -> bool {
         use std::sync::atomic::Ordering;
-        if self.workers == 0 {
-            return false;
-        }
-        SPLIT_TRIED_LOCAL.with(|c| {
-            let n = c.get() + 1;
-            if n >= 4096 {
-                c.set(0);
-                SPLIT_TRIED.fetch_add(n, Ordering::Relaxed);
-            } else {
-                c.set(n);
-            }
-        });
         let slack = pool_slack();
         let free = |queued: usize| self.idle.load(Ordering::Relaxed) + slack > queued;
         if !free(self.queued.load(Ordering::Relaxed)) {
@@ -539,7 +437,6 @@ impl Pool {
         if !free(q.len()) {
             return false;
         }
-        SPLIT_DONE.fetch_add(1, Ordering::Relaxed);
         q.push_back(Box::new(f));
         self.queued.fetch_add(1, Ordering::Relaxed);
         drop(q);
@@ -572,22 +469,10 @@ impl Pool {
     fn wait(&self, slot: &Slot) {
         use std::sync::atomic::Ordering;
         let mut idle = 0u32;
-        let mut starved: Option<std::time::Instant> = None;
         while !slot.done.load(Ordering::Acquire) {
             if self.run_one() {
                 idle = 0;
-                if let Some(t0) = starved.take() {
-                    let ns = t0.elapsed().as_nanos() as u64;
-                    if IS_POOL_WORKER.with(|c| c.get()) {
-                        WAIT_IDLE_WORKER_NS.fetch_add(ns, Ordering::Relaxed);
-                    } else {
-                        WAIT_IDLE_MAIN_NS.fetch_add(ns, Ordering::Relaxed);
-                    }
-                }
                 continue;
-            }
-            if starved.is_none() {
-                starved = Some(std::time::Instant::now());
             }
             idle += 1;
             if idle < 8 {
@@ -599,44 +484,24 @@ impl Pool {
                 }
             }
         }
-        if let Some(t0) = starved {
-            let ns = t0.elapsed().as_nanos() as u64;
-            if IS_POOL_WORKER.with(|c| c.get()) {
-                WAIT_IDLE_WORKER_NS.fetch_add(ns, Ordering::Relaxed);
-            } else {
-                WAIT_IDLE_MAIN_NS.fetch_add(ns, Ordering::Relaxed);
-            }
-        }
     }
 
     fn worker_loop(&self) {
         use std::sync::atomic::Ordering;
-        IS_POOL_WORKER.with(|c| c.set(true));
         loop {
             self.idle.fetch_add(1, Ordering::Relaxed);
-            #[allow(clippy::never_loop)]
-            let task = 'get: loop {
+            let task = {
                 let mut q = self.q.lock().unwrap();
                 loop {
                     if let Some(t) = q.pop_front() {
                         self.queued.fetch_sub(1, Ordering::Relaxed);
-                        break 'get Some(t);
-                    }
-                    if self.stop.load(Ordering::Relaxed) {
-                        break 'get None;
+                        break t;
                     }
                     q = self.cv.wait(q).unwrap();
                 }
             };
             self.idle.fetch_sub(1, Ordering::Relaxed);
-            match task {
-                Some(t) => {
-                    let t0 = std::time::Instant::now();
-                    t();
-                    WORKER_BUSY_NS.fetch_add(t0.elapsed().as_nanos() as u64, Ordering::Relaxed);
-                }
-                None => return,
-            }
+            task();
         }
     }
 }
@@ -753,10 +618,9 @@ impl NnueSearch {
         if workers == 0 {
             return None;
         }
-        static POOL: std::sync::OnceLock<Option<&'static Pool>> = std::sync::OnceLock::new();
-        *POOL.get_or_init(|| {
-            POOL_WORKERS.store(workers, std::sync::atomic::Ordering::Relaxed);
-            let pool: &'static Pool = Box::leak(Box::new(Pool::new(workers)));
+        static POOL: std::sync::OnceLock<&'static Pool> = std::sync::OnceLock::new();
+        Some(*POOL.get_or_init(|| {
+            let pool: &'static Pool = Box::leak(Box::new(Pool::new()));
             for _ in 0..workers {
                 std::thread::spawn(move || pool.worker_loop());
             }
@@ -770,8 +634,8 @@ impl NnueSearch {
                     std::thread::sleep(std::time::Duration::from_micros(100));
                 });
             }
-            Some(pool)
-        })
+            pool
+        }))
     }
 
     fn worker(&self) -> NnueSearch {
@@ -836,22 +700,17 @@ impl NnueSearch {
         if self.should_stop() {
             return true;
         }
-        self.done.is_some() && self.stopped()
+        self.stopped()
     }
 
     /// A sibling cut keeps what was searched; a teardown does not.
     #[inline]
     fn torn_down(&self) -> bool {
-        self.stop.as_ref().is_some_and(|s| s.is_stopped())
-            || (self.done.is_some() && self.stopped())
+        self.stop.as_ref().is_some_and(|s| s.is_stopped()) || self.stopped()
     }
 
     pub fn clear(&mut self) {
         self.tt.clear();
-    }
-
-    pub fn best_move(&mut self, b: &Board, depth: u32) -> Option<Position> {
-        self.best_move_valued(b, depth).0
     }
 
     pub fn best_move_valued(&mut self, b: &Board, depth: u32) -> (Option<Position>, f32) {
@@ -968,7 +827,6 @@ impl NnueSearch {
         (best.or_else(|| self.root_best(b, &mut acc)), value, reached)
     }
 
-    #[allow(clippy::too_many_arguments)] // the iteration's state, read once
     fn settle(
         &mut self,
         b: &Board,
@@ -997,7 +855,6 @@ impl NnueSearch {
         if !shallow && (best == last_best || best == two_ago) {
             match self.others_behind(b, acc, best, depth, value, m) {
                 Some(true) => return true,
-                // Torn down mid-check: no verdict either way.
                 None => return false,
                 Some(false) => {}
             }
@@ -1093,30 +950,6 @@ impl NnueSearch {
         extend: Option<std::time::Instant>,
     ) -> (Option<Position>, f32, u32) {
         use std::sync::atomic::{AtomicU64, Ordering};
-        fn env_u32(key: &'static str, default: u32) -> u32 {
-            std::env::var(key)
-                .ok()
-                .and_then(|v| v.parse().ok())
-                .unwrap_or(default)
-        }
-        fn smp_min_depth() -> u32 {
-            static V: std::sync::OnceLock<u32> = std::sync::OnceLock::new();
-            *V.get_or_init(|| env_u32("SMP_MIN_DEPTH", 1))
-        }
-        fn smp_spread() -> u32 {
-            static V: std::sync::OnceLock<u32> = std::sync::OnceLock::new();
-            *V.get_or_init(|| env_u32("SMP_SPREAD", 2))
-        }
-        fn smp_sharpen_max() -> u32 {
-            static V: std::sync::OnceLock<u32> = std::sync::OnceLock::new();
-            *V.get_or_init(|| env_u32("SMP_SHARPEN_MAX", 2))
-        }
-
-        fn smp_max_depth() -> u32 {
-            static V: std::sync::OnceLock<u32> = std::sync::OnceLock::new();
-            *V.get_or_init(|| env_u32("SMP_MAX_DEPTH", 10))
-        }
-
         let nodes = AtomicU64::new(0);
         let mut acc = self.nn.indices(b.black, b.white);
         let mut value = f32::NAN;
@@ -1207,30 +1040,10 @@ impl NnueSearch {
                 two_ago = last_best;
                 last_value = value;
                 last_best = best;
-                if std::env::var("ROOT_TRACE").is_ok() {
-                    eprintln!(
-                        "  iter [{:016x}] {main_depth:2} {v:+8.2} {:?} {:.1}s",
-                        self.root_hash,
-                        best,
-                        t0.elapsed().as_secs_f32()
-                    );
-                }
             }
         }
         self.nodes += nodes.load(Ordering::Relaxed);
         let out = best.or_else(|| self.root_best(b, &mut acc));
-        if std::env::var("ROOT_DIFF").is_ok() {
-            let from_tt = self.root_best(b, &mut acc);
-            ROOT_TOTAL.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-            if from_tt != out {
-                ROOT_DIFF.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-                eprintln!(
-                    "  returning {:?} / table {:?} (depth {reached})",
-                    out.map(|p| p.index()),
-                    from_tt.map(|p| p.index())
-                );
-            }
-        }
         (
             out,
             value,
@@ -1627,17 +1440,15 @@ impl NnueSearch {
             }
         }
 
-        let split_ok = will_split;
-
         let at_root = self.root_hash != 0 && h == self.root_hash;
         let mut aborted = false;
         let mut settled = [false; MAX_KIDS];
         let mut n_settled = 0usize;
         let mut first = !pre_searched;
 
-        let outer = if split_ok { self.abort.clone() } else { None };
+        let outer = if will_split { self.abort.clone() } else { None };
         'fanout: loop {
-            let fan_stop = if split_ok {
+            let fan_stop = if will_split {
                 Some(AbortChain::child(outer.clone()))
             } else {
                 None
@@ -1685,7 +1496,7 @@ impl NnueSearch {
                 }
 
                 let is_last = (i + 1..n_kids).all(|j| settled[j]);
-                if split_ok && !is_last {
+                if will_split && !is_last {
                     let stop = fan_stop.clone().unwrap();
                     if let Some(slot) = self.spawn_kid(nb, depth - 1, alpha, stop) {
                         pending.push((i, slot));
@@ -1693,7 +1504,7 @@ impl NnueSearch {
                     }
                 }
 
-                if split_ok {
+                if will_split {
                     self.abort = fan_stop.clone();
                 }
                 let mut child = *acc;
@@ -1701,11 +1512,13 @@ impl NnueSearch {
                 self.dev += 1;
                 let raw = self.negamax(&nb, &mut child, depth - 1, -(alpha + PVS_EPS), -alpha);
                 self.dev -= 1;
-                if split_ok {
+                if will_split {
                     self.abort = outer.clone();
                 }
                 if raw == ABORTED {
-                    if !split_ok || self.torn_down() || outer.as_ref().is_some_and(|o| o.stopped())
+                    if !will_split
+                        || self.torn_down()
+                        || outer.as_ref().is_some_and(|o| o.stopped())
                     {
                         aborted = true;
                     }

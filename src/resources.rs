@@ -38,6 +38,12 @@ pub fn default_dir() -> PathBuf {
     PathBuf::from(concat!(env!("CARGO_MANIFEST_DIR"), "/weights"))
 }
 
+fn hash_bits(configured: Option<u32>, default: u32) -> u32 {
+    configured
+        .filter(|b| (HASH_BITS_MIN..=HASH_BITS_MAX).contains(b))
+        .unwrap_or(default)
+}
+
 impl Resources {
     pub fn load(path: &Path) -> Resources {
         let Ok(text) = std::fs::read_to_string(path) else {
@@ -56,12 +62,12 @@ impl Resources {
             if v.is_empty() {
                 continue;
             }
-            let p = Some(PathBuf::from(v));
+            let path = || Some(PathBuf::from(v));
             match k.trim() {
-                "dir" => r.dir = p,
-                "weights" => r.weights = p,
-                "nnue" => r.nnue = p,
-                "book" => r.book = p,
+                "dir" => r.dir = path(),
+                "weights" => r.weights = path(),
+                "nnue" => r.nnue = path(),
+                "book" => r.book = path(),
                 "threads" => r.threads = v.parse().ok(),
                 "hash_mid" => r.hash_mid = v.parse().ok(),
                 "hash_end" => r.hash_end = v.parse().ok(),
@@ -132,15 +138,11 @@ impl Resources {
     }
 
     pub fn hash_mid_bits(&self) -> u32 {
-        self.hash_mid
-            .filter(|b| (HASH_BITS_MIN..=HASH_BITS_MAX).contains(b))
-            .unwrap_or(22)
+        hash_bits(self.hash_mid, 22)
     }
 
     pub fn hash_end_bits(&self) -> u32 {
-        self.hash_end
-            .filter(|b| (HASH_BITS_MIN..=HASH_BITS_MAX).contains(b))
-            .unwrap_or(24)
+        hash_bits(self.hash_end, 24)
     }
 
     pub fn dir(&self) -> PathBuf {
@@ -163,13 +165,6 @@ impl Resources {
         self.book
             .clone()
             .unwrap_or_else(|| self.dir().join("book.txt"))
-    }
-
-    pub fn status(&self) -> Vec<(&'static str, PathBuf, bool)> {
-        self.detailed()
-            .into_iter()
-            .map(|(n, p, ok, _, _)| (n, p, ok))
-            .collect()
     }
 
     pub fn detailed(&self) -> Vec<(&'static str, PathBuf, bool, u64, String)> {

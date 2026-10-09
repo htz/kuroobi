@@ -3,6 +3,7 @@
 use crate::bitboard;
 use crate::color::Color;
 use crate::position::Position;
+use std::fmt::Write;
 
 #[derive(Debug, Clone, Copy)]
 pub struct Board {
@@ -14,7 +15,6 @@ pub struct Board {
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum MoveError {
-    InvalidPosition,
     NotPlayable,
     Occupied,
 }
@@ -22,7 +22,6 @@ pub enum MoveError {
 impl std::fmt::Display for MoveError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            MoveError::InvalidPosition => write!(f, "invalid position"),
             MoveError::NotPlayable => write!(f, "not playable (no flip)"),
             MoveError::Occupied => write!(f, "square already occupied"),
         }
@@ -34,14 +33,12 @@ impl std::error::Error for MoveError {}
 #[derive(Debug, Clone, PartialEq)]
 pub enum GameError {
     NoMoves,
-    GameOver,
 }
 
 impl std::fmt::Display for GameError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             GameError::NoMoves => write!(f, "no moves available"),
-            GameError::GameOver => write!(f, "game is over"),
         }
     }
 }
@@ -66,14 +63,12 @@ pub const BOARD_INIT_STRING: &str =
 
 impl Board {
     pub fn new() -> Board {
-        let mut b = Board {
-            black: 0,
-            white: 0,
+        Board {
+            black: (1u64 << 35) | (1u64 << 28), // E4 + D5
+            white: (1u64 << 27) | (1u64 << 36), // D4 + E5
             player: Color::Black,
             empty_count: 60,
-        };
-        b.set_initial();
-        b
+        }
     }
 
     pub fn from_string(s: &str) -> Result<Board, ParseError> {
@@ -83,57 +78,23 @@ impl Board {
             player: Color::Black,
             empty_count: 0,
         };
-        b.set_from_string(s)?;
-        Ok(b)
-    }
-
-    fn set_initial(&mut self) {
-        self.black = (1u64 << 35) | (1u64 << 28); // E4 + D5
-        self.white = (1u64 << 27) | (1u64 << 36); // D4 + E5
-        self.player = Color::Black;
-        self.empty_count = 60;
-    }
-
-    fn set_from_string(&mut self, s: &str) -> Result<(), ParseError> {
-        self.black = 0;
-        self.white = 0;
-        self.empty_count = 0;
-
-        let chars: Vec<char> = s.chars().filter(|c| !c.is_whitespace()).collect();
-        if chars.len() != 65 {
-            return Err(ParseError::InvalidString);
-        }
-
-        for (i, &ch) in chars.iter().take(64).enumerate() {
-            let file = (i % 8) as u8;
-            let rank = (i / 8) as u8;
-            let pos = Position::from_file_rank(file, rank).ok_or(ParseError::InvalidString)?;
-            match ch.to_ascii_lowercase() {
-                'x' | '*' => {
-                    self.black |= pos.to_bit();
-                }
-                'o' => {
-                    self.white |= pos.to_bit();
-                }
-                '-' | '.' => {
-                    self.empty_count += 1;
-                }
+        let mut n = 0u32;
+        for ch in s.chars().filter(|c| !c.is_whitespace()) {
+            let bit = 1u64.checked_shl((n % 8) * 8 + n / 8).unwrap_or(0);
+            match (n, ch.to_ascii_lowercase()) {
+                (0..=63, 'x' | '*') => b.black |= bit,
+                (0..=63, 'o') => b.white |= bit,
+                (0..=63, '-' | '.') => b.empty_count += 1,
+                (64, 'x' | '*') => b.player = Color::Black,
+                (64, 'o') => b.player = Color::White,
                 _ => return Err(ParseError::InvalidString),
             }
+            n += 1;
         }
-
-        let player_char = s
-            .chars()
-            .filter(|c| !c.is_whitespace())
-            .nth(64)
-            .ok_or(ParseError::InvalidString)?;
-        match player_char.to_ascii_lowercase() {
-            'x' | '*' => self.player = Color::Black,
-            'o' => self.player = Color::White,
-            _ => return Err(ParseError::InvalidString),
+        if n != 65 {
+            return Err(ParseError::InvalidString);
         }
-
-        Ok(())
+        Ok(b)
     }
 
     #[inline]
@@ -168,7 +129,7 @@ impl Board {
         bitboard::check_all(self.player_bb(), self.opponent_bb())
     }
 
-    pub fn make_move(&mut self, pos: Position) -> Result<Vec<Position>, MoveError> {
+    pub fn make_move(&mut self, pos: Position) -> Result<u64, MoveError> {
         let pos_bit = pos.to_bit();
 
         if (self.black | self.white) & pos_bit != 0 {
@@ -181,10 +142,7 @@ impl Board {
         }
 
         self.apply_move(pos_bit, flipped);
-        let positions: Vec<Position> = bitboard::iter_bits(flipped)
-            .filter_map(|i| Position::from_index(i as u32))
-            .collect();
-        Ok(positions)
+        Ok(flipped)
     }
 
     pub fn make_move_unchecked(&mut self, pos: Position) {
@@ -263,21 +221,12 @@ impl Board {
     }
 
     pub fn movable_iter(&self) -> impl Iterator<Item = Position> {
-        let mut mob = self.movable();
-        std::iter::from_fn(move || {
-            if mob == 0 {
-                None
-            } else {
-                let bit = mob.trailing_zeros();
-                mob &= mob - 1;
-                Position::from_index(bit)
-            }
-        })
+        bitboard::iter_bits(self.movable()).map(Position)
     }
 
     pub fn is_game_over(&self) -> bool {
         if self.empty_count == 0 {
-            return true; // Board full
+            return true;
         }
         if self.check_all() {
             return false;
@@ -287,14 +236,6 @@ impl Board {
 
     pub fn piece_count(&self) -> (u8, u8) {
         (self.black.count_ones() as u8, self.white.count_ones() as u8)
-    }
-
-    pub fn black_count(&self) -> u8 {
-        self.black.count_ones() as u8
-    }
-
-    pub fn white_count(&self) -> u8 {
-        self.white.count_ones() as u8
     }
 
     pub fn empty_count(&self) -> u8 {
@@ -313,21 +254,6 @@ impl Board {
             score
         }
     }
-
-    pub fn color_at(&self, pos: Position) -> Option<Color> {
-        let bit = pos.to_bit();
-        if self.black & bit != 0 {
-            Some(Color::Black)
-        } else if self.white & bit != 0 {
-            Some(Color::White)
-        } else {
-            None
-        }
-    }
-
-    pub fn turn(&self) -> usize {
-        60 - self.empty_count as usize
-    }
 }
 
 impl std::fmt::Display for Board {
@@ -343,7 +269,7 @@ impl std::fmt::Display for Board {
             } else {
                 '-'
             };
-            f.write_str(c.encode_utf8(&mut [0u8; 4]))?;
+            f.write_char(c)?;
         }
         f.write_str(match self.player {
             Color::Black => " X",
@@ -381,16 +307,6 @@ mod tests {
     #[test]
     fn test_board_from_string_invalid() {
         assert!(Board::from_string("invalid").is_err());
-    }
-
-    #[test]
-    fn test_initial_pieces() {
-        let b = Board::new();
-        assert_eq!(b.color_at(Position(27)), Some(Color::White)); // D4 (file=3, rank=3)
-        assert_eq!(b.color_at(Position(35)), Some(Color::Black)); // E4 (file=4, rank=3)
-        assert_eq!(b.color_at(Position(28)), Some(Color::Black)); // D5 (file=3, rank=4)
-        assert_eq!(b.color_at(Position(36)), Some(Color::White)); // E5 (file=4, rank=4)
-        assert_eq!(b.color_at(Position(0)), None); // A1 is empty
     }
 
     #[test]
@@ -462,8 +378,6 @@ mod tests {
     fn test_piece_count() {
         let b = Board::new();
         assert_eq!(b.piece_count(), (2, 2));
-        assert_eq!(b.black_count(), 2);
-        assert_eq!(b.white_count(), 2);
     }
 
     #[test]
@@ -490,18 +404,6 @@ mod tests {
             -3,
             "Score is from White's perspective after Black's move"
         );
-    }
-
-    #[test]
-    fn test_turn() {
-        let b = Board::new();
-        assert_eq!(b.turn(), 0, "Initial turn count");
-
-        let mut b = Board::new();
-        let movable = b.movable();
-        let first = movable.trailing_zeros();
-        b.make_move_unchecked(Position::from_index(first).unwrap());
-        assert_eq!(b.turn(), 1, "After 1 move, turn count is 1");
     }
 
     #[test]

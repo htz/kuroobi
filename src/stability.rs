@@ -155,32 +155,15 @@ fn edge_table() -> &'static [u8; 65536] {
 }
 
 const GATHER_MAGIC: u64 = 0x0102_0408_1020_4080;
-const SCATTER_RANK0: [u64; 256] = {
-    let mut t = [0u64; 256];
-    let mut m = 0usize;
-    while m < 256 {
-        let mut out = 0u64;
-        let mut f = 0;
-        while f < 8 {
-            if m & (1 << f) != 0 {
-                out |= 1u64 << (f * 8);
-            }
-            f += 1;
-        }
-        t[m] = out;
-        m += 1;
-    }
-    t
-};
-
 #[inline]
 fn gather_rank(x: u64, r: u32) -> u8 {
     (((x >> r) & RANK0).wrapping_mul(GATHER_MAGIC) >> 56) as u8
 }
 
+/// Corners come from the rank lookups, so only the six inner bits are spread.
 #[inline]
-fn scatter_rank(mask: u8, r: u32) -> u64 {
-    SCATTER_RANK0[mask as usize] << r
+fn scatter_inner(mask: u8, r: u32) -> u64 {
+    ((mask as u64 & 0x7e).wrapping_mul(0x0000_0408_1020_4080) & 0x0001_0101_0101_0100) << r
 }
 
 pub(crate) fn edge_stable_all(own: u64, opp: u64) -> u64 {
@@ -189,12 +172,12 @@ pub(crate) fn edge_stable_all(own: u64, opp: u64) -> u64 {
     for r in [0u32, 7] {
         let o = gather_rank(own, r);
         let x = gather_rank(opp, r);
-        stable |= scatter_rank(t[((o as usize) << 8) | x as usize], r);
+        stable |= scatter_inner(t[((o as usize) << 8) | x as usize], r);
     }
     for f in [0u32, 7] {
         let o = ((own >> (8 * f)) & 0xFF) as usize;
         let x = ((opp >> (8 * f)) & 0xFF) as usize;
-        stable |= ((t[(o << 8) | x] as u64) << (8 * f)) & (0xFFu64 << (8 * f));
+        stable |= (t[(o << 8) | x] as u64) << (8 * f);
     }
     stable
 }
@@ -275,7 +258,7 @@ mod tests {
         }
         for r in 0..8u32 {
             for m in 0..=255u8 {
-                assert_eq!(scatter_rank(m, r), scatter_ref(m, r), "m={m} r={r}");
+                assert_eq!(scatter_inner(m, r), scatter_ref(m & 0x7e, r), "m={m} r={r}");
             }
         }
         for r in 0..8u32 {

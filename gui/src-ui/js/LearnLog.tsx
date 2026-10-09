@@ -2,7 +2,7 @@ import { useEffect, useState } from 'react';
 import { api, type KifuFrame } from './api';
 import type { LearnChange, LearnEntry } from './types';
 import { Board } from './components/board';
-import { Col, Empty, KeyValue, List, Section, TableHead, TableRow } from './components/layout';
+import { BoardFit, Col, Empty, KeyValue, List, Section, TableHead, TableRow } from './components/layout';
 import { Button, Segmented, Select } from './components/primitives';
 import { t } from './i18n';
 
@@ -30,7 +30,7 @@ export function LearnLog({ items: all, onOpen, onUndo, onBook }: {
   items: LearnEntry[];
   onOpen: (e: LearnEntry, ply?: number) => void;
   onUndo: (e: LearnEntry) => void;
-  onBook?: (kifu: string) => void;
+  onBook: (kifu: string) => void;
 }) {
   const [sel, setSel] = useState('');
   const [days, setDays] = useState('0');
@@ -178,7 +178,7 @@ export function LearnLog({ items: all, onOpen, onUndo, onBook }: {
         </Section>
 
         <div style={{ display: 'flex', gap: 'var(--sp-2)', padding: '0 var(--sp-3)' }}>
-          {onBook && <Button onClick={() => onBook(cur.kifu)}>{t('learn.action.show_in_book')}</Button>}
+          <Button onClick={() => onBook(cur.kifu)}>{t('learn.action.show_in_book')}</Button>
           <Button variant="danger" disabled={!cur.changes.length}
                   onClick={() => onUndo(cur)}>{t('learn.action.undo')}</Button>
         </div>
@@ -209,16 +209,11 @@ function BlunderPane({ cur, bad, frame, onOpen }: {
       flex: 1, minWidth: 0, minHeight: 0, display: 'flex', flexDirection: 'column',
       padding: 'var(--sp-4)', gap: 'var(--sp-3)',
     }}>
-      <div style={{
-        flex: 1, minHeight: 0, display: 'grid', placeItems: 'center',
-        gridTemplateRows: 'minmax(0, 1fr)', gridTemplateColumns: 'minmax(0, 1fr)',
-      }}>
-        <div style={{ height: '100%', maxHeight: '100%', aspectRatio: '1 / 1', maxWidth: '100%' }}>
-          {frame && (
-            <Board cells={frame.cells as (0 | 1 | 2)[]} last={frame.last} coords={false} disabled />
-          )}
-        </div>
-      </div>
+      <BoardFit>
+        {frame && (
+          <Board cells={frame.cells as (0 | 1 | 2)[]} last={frame.last} coords={false} disabled />
+        )}
+      </BoardFit>
       {bad ? (
         <div style={{ display: 'flex', flexDirection: 'column', gap: 'var(--sp-2)' }}>
           <div style={{ display: 'flex', alignItems: 'baseline', gap: 'var(--sp-2)' }}>

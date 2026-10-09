@@ -21,9 +21,16 @@ pub struct Reversi {
 
 impl Reversi {
     pub fn new() -> Reversi {
-        let board = Board::new();
-        let hash = zobrist::compute_hash(board.black, board.white, board.player());
+        Self::from_board(Board::new())
+    }
 
+    pub fn from_string(s: &str) -> Result<Reversi, String> {
+        let board = Board::from_string(s).map_err(|e| format!("parse error: {:?}", e))?;
+        Ok(Self::from_board(board))
+    }
+
+    fn from_board(board: Board) -> Reversi {
+        let hash = zobrist::compute_hash(board.black, board.white, board.player());
         Reversi {
             board,
             history: Vec::new(),
@@ -32,33 +39,18 @@ impl Reversi {
         }
     }
 
-    pub fn from_string(s: &str) -> Result<Reversi, String> {
-        let board = Board::from_string(s).map_err(|e| format!("parse error: {:?}", e))?;
-        let hash = zobrist::compute_hash(board.black, board.white, board.player());
-
-        Ok(Reversi {
-            board,
-            history: Vec::new(),
-            redo_stack: Vec::new(),
-            hash,
-        })
-    }
-
-    pub fn make_move(&mut self, pos: Position) -> Result<Vec<Position>, MoveError> {
-        if (self.board.black | self.board.white) & pos.to_bit() != 0 {
+    pub fn make_move(&mut self, pos: Position) -> Result<(), MoveError> {
+        let pos_bit = pos.to_bit();
+        if (self.board.black | self.board.white) & pos_bit != 0 {
             return Err(MoveError::Occupied);
         }
-        if !self.board.check(pos) {
+        let flipped =
+            crate::bitboard::flippable(self.board.player_bb(), self.board.opponent_bb(), pos_bit);
+        if flipped == 0 {
             return Err(MoveError::NotPlayable);
         }
 
         let prev_hash = self.hash;
-
-        let pos_bit = pos.to_bit();
-        let player_bb = self.board.player_bb();
-        let opponent_bb = self.board.opponent_bb();
-        let flipped = crate::bitboard::flippable(player_bb, opponent_bb, pos_bit);
-
         self.history.push(MoveRecord {
             pos: Some(pos),
             flipped,
@@ -67,26 +59,16 @@ impl Reversi {
         self.redo_stack.clear();
 
         let mover = self.board.player();
-
-        self.board.make_move_unchecked(pos);
-
+        self.board.apply_flips(pos, flipped);
         self.hash = zobrist::update_hash_on_move(prev_hash, pos, flipped, mover);
-
-        let positions: Vec<Position> = crate::bitboard::iter_bits(flipped)
-            .filter_map(|i| Position::from_index(i as u32))
-            .collect();
-        Ok(positions)
-    }
-
-    pub fn make_move_unchecked(&mut self, pos: Position) {
-        self.make_move(pos).expect("invalid move");
+        Ok(())
     }
 
     pub fn pass(&mut self) -> Result<(), GameError> {
         let prev_hash = self.hash;
 
         self.history.push(MoveRecord {
-            pos: None, // Pass
+            pos: None,
             flipped: 0,
             hash: prev_hash,
         });
@@ -121,7 +103,7 @@ impl Reversi {
         let mover = self.board.player();
 
         if let Some(pos) = record.pos {
-            self.board.make_move_unchecked(pos);
+            self.board.apply_flips(pos, record.flipped);
             self.hash = zobrist::update_hash_on_move(prev_hash, pos, record.flipped, mover);
         } else {
             self.board.pass();
@@ -145,16 +127,8 @@ impl Reversi {
         self.board.movable()
     }
 
-    pub fn movable_count(&self) -> u8 {
-        self.board.movable_count()
-    }
-
     pub fn is_game_over(&self) -> bool {
         self.board.is_game_over()
-    }
-
-    pub fn check_all(&self) -> bool {
-        self.board.check_all()
     }
 
     pub fn piece_count(&self) -> (u8, u8) {
@@ -163,14 +137,6 @@ impl Reversi {
 
     pub fn player(&self) -> Color {
         self.board.player()
-    }
-
-    pub fn turn(&self) -> usize {
-        self.board.turn()
-    }
-
-    pub fn hash(&self) -> u64 {
-        self.hash
     }
 
     pub fn to_kifu(&self) -> String {
@@ -217,38 +183,8 @@ impl Reversi {
         self.history.len()
     }
 
-    pub fn board_at(&self, n: usize) -> Result<Board, String> {
-        if n > self.history.len() {
-            return Err(format!("move index {} out of range", n));
-        }
-        let mut b = Board::new();
-        for i in 0..n {
-            let r = &self.history[i];
-            if let Some(pos) = r.pos {
-                b.make_move_unchecked(pos);
-            } else {
-                b.pass();
-            }
-        }
-        Ok(b)
-    }
-
-    pub fn empty_count(&self) -> u8 {
-        self.board.empty_count()
-    }
-
     pub fn movable_list(&self) -> Vec<Position> {
-        let mob = self.movable();
-        let mut result = Vec::new();
-        let mut b = mob;
-        while b != 0 {
-            let bit = b.trailing_zeros() as u8;
-            if let Some(pos) = Position::from_index(bit as u32) {
-                result.push(pos);
-            }
-            b &= b - 1;
-        }
-        result
+        self.board.movable_iter().collect()
     }
 
     #[cfg(feature = "random")]
@@ -260,40 +196,12 @@ impl Reversi {
         let choice = rng.gen_range(0..movable.count_ones());
         let mut b = movable;
         for _ in 0..choice {
-            b &= b - 1; // skip to next set bit
+            b &= b - 1;
         }
         let pos = Position::from_index(b.trailing_zeros())?;
         self.make_move(pos)
             .expect("moves from movable() are always legal");
         Some(pos)
-    }
-
-    pub fn serialize(&self) -> [u64; 3] {
-        [self.board.black, self.board.white, self.hash]
-    }
-
-    pub fn deserialize(black: u64, white: u64, hash: u64) -> Result<Reversi, String> {
-        let empty_count = (64 - black.count_ones() - white.count_ones()) as u8;
-
-        let player = if zobrist::compute_hash(black, white, Color::Black) == hash {
-            Color::Black
-        } else if zobrist::compute_hash(black, white, Color::White) == hash {
-            Color::White
-        } else {
-            return Err("hash does not match board state".to_string());
-        };
-
-        Ok(Reversi {
-            board: Board {
-                black,
-                white,
-                player,
-                empty_count,
-            },
-            history: Vec::new(),
-            redo_stack: Vec::new(),
-            hash,
-        })
     }
 }
 
@@ -313,7 +221,7 @@ mod tests {
         let g = Reversi::new();
         assert_eq!(g.player(), Color::Black);
         assert_eq!(g.piece_count(), (2, 2));
-        assert_eq!(g.empty_count(), 60);
+        assert_eq!(g.board.empty_count(), 60);
         assert_eq!(g.move_count(), 0);
         assert_eq!(g.to_kifu(), "");
     }
@@ -327,7 +235,7 @@ mod tests {
         assert!(result.is_ok(), "First move should be valid: {result:?}");
 
         assert_eq!(g.move_count(), 1);
-        assert_eq!(g.piece_count(), (4, 1)); // Black placed 1, White flipped 1
+        assert_eq!(g.piece_count(), (4, 1));
         assert_eq!(g.player(), Color::White);
     }
 
@@ -350,7 +258,7 @@ mod tests {
 
         g.pass().unwrap();
         assert_eq!(g.move_count(), 2);
-        assert_eq!(g.player(), Color::Black); // Player swapped back
+        assert_eq!(g.player(), Color::Black);
     }
 
     #[test]
@@ -377,12 +285,12 @@ mod tests {
         assert!(g.redo().is_err(), "redo on fresh game must fail");
 
         g.make_move(Position(19)).unwrap();
-        let hash_after_move = g.hash();
+        let hash_after_move = g.hash;
         g.undo().unwrap();
         g.redo().unwrap();
-        assert_eq!(g.hash(), hash_after_move, "redo restores the exact hash");
+        assert_eq!(g.hash, hash_after_move, "redo restores the exact hash");
         assert_eq!(
-            g.hash(),
+            g.hash,
             zobrist::compute_hash(g.board.black, g.board.white, g.player()),
             "hash stays consistent with the board after redo"
         );
@@ -395,26 +303,26 @@ mod tests {
         g.make_move(Position(19)).unwrap();
         let m2 = Position::from_index(g.movable().trailing_zeros()).unwrap();
         g.make_move(m2).unwrap();
-        let final_hash = g.hash();
+        let final_hash = g.hash;
         g.undo().unwrap();
         g.undo().unwrap();
         assert_eq!(g.piece_count(), (2, 2));
         g.redo().unwrap();
         g.redo().unwrap();
-        assert_eq!(g.hash(), final_hash, "two undos + two redos round-trip");
+        assert_eq!(g.hash, final_hash, "two undos + two redos round-trip");
     }
 
     #[test]
     fn test_undo_after_pass() {
         let mut g = Reversi::new();
         g.make_move(Position(19)).unwrap();
-        let hash_before_pass = g.hash();
+        let hash_before_pass = g.hash;
         let player_before_pass = g.player();
 
         g.pass().unwrap();
         g.undo().unwrap();
 
-        assert_eq!(g.hash(), hash_before_pass, "undoing a pass restores hash");
+        assert_eq!(g.hash, hash_before_pass, "undoing a pass restores hash");
         assert_eq!(
             g.player(),
             player_before_pass,
@@ -445,49 +353,15 @@ mod tests {
     #[test]
     fn test_hash_consistency() {
         let mut g = Reversi::new();
-        let h1 = g.hash();
+        let h1 = g.hash;
 
         g.make_move(Position(19)).unwrap();
 
-        let h2 = g.hash();
+        let h2 = g.hash;
         assert_ne!(h1, h2, "Hash should change after move");
 
         g.undo().unwrap();
-        assert_eq!(g.hash(), h1, "Hash should be restored after undo");
-    }
-
-    #[test]
-    fn test_serialize_deserialize() {
-        let mut g = Reversi::new();
-
-        g.make_move(Position(19)).unwrap();
-
-        let serialized = g.serialize();
-        let g2 = Reversi::deserialize(serialized[0], serialized[1], serialized[2]).unwrap();
-
-        assert_eq!(g2.board.black, g.board.black);
-        assert_eq!(g2.board.white, g.board.white);
-        assert_eq!(
-            g2.player(),
-            g.player(),
-            "player must be recovered from hash"
-        );
-        assert_eq!(g2.hash(), g.hash());
-
-        assert!(Reversi::deserialize(serialized[0], serialized[1], serialized[2] ^ 1).is_err());
-    }
-
-    #[test]
-    fn test_board_at() {
-        let mut g = Reversi::new();
-
-        let b0 = g.board_at(0).unwrap();
-        assert_eq!(b0.piece_count(), (2, 2));
-
-        g.make_move(Position(19)).unwrap();
-
-        let b1 = g.board_at(1).unwrap();
-        assert_eq!(b1.piece_count(), (4, 1));
+        assert_eq!(g.hash, h1, "Hash should be restored after undo");
     }
 
     #[test]
@@ -542,12 +416,12 @@ mod tests {
 
             let (b, w) = g.piece_count();
             assert_eq!(
-                b as u32 + w as u32 + g.empty_count() as u32,
+                b as u32 + w as u32 + g.board.empty_count() as u32,
                 64,
                 "piece conservation"
             );
             let recomputed = zobrist::compute_hash(g.board.black, g.board.white, g.player());
-            assert_eq!(g.hash(), recomputed, "incremental hash must stay in sync");
+            assert_eq!(g.hash, recomputed, "incremental hash must stay in sync");
         }
         assert!(plies >= 20, "a full game plays plenty of moves");
         assert!(g.is_game_over());
@@ -588,7 +462,7 @@ mod tests {
         for _ in 0..3 {
             let p = drawn.board.movable_iter().next().unwrap();
             drawn.make_move(p).unwrap();
-            played.push_str(&p.to_kifu().to_lowercase());
+            played.push_str(&p.to_kifu());
         }
 
         let replayed = Reversi::from_kifu_with_start(&start, &played).unwrap();

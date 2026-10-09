@@ -6,7 +6,6 @@ use std::fmt;
 pub struct Position(pub u8);
 
 impl Position {
-    pub const MIN: u8 = 0;
     pub const MAX: u8 = 63;
 
     #[inline]
@@ -48,9 +47,7 @@ impl Position {
     }
 
     pub fn to_kifu(self) -> String {
-        let col = (b'a' + self.file()) as char;
-        let row = (b'1' + self.rank()) as char;
-        format!("{}{}", col, row)
+        self.to_string()
     }
 
     pub fn from_kifu(s: &str) -> Result<Position, String> {
@@ -69,18 +66,10 @@ impl Position {
 
 impl fmt::Display for Position {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "{}", self.to_kifu())
+        let col = (b'a' + self.file()) as char;
+        let row = (b'1' + self.rank()) as char;
+        write!(f, "{col}{row}")
     }
-}
-
-pub fn kifu_pair(s: &str) -> Result<(Position, Position), String> {
-    if s.len() != 4 {
-        return Err(format!("invalid KIFU pair: {}", s));
-    }
-    Ok((
-        Position::from_kifu(&s[..2])?,
-        Position::from_kifu(&s[2..4])?,
-    ))
 }
 
 #[cfg(test)]
@@ -133,12 +122,6 @@ mod tests {
         assert_eq!(Position(0).to_bit(), 1u64);
         assert_eq!(Position(44).to_bit(), 1u64 << 44);
         assert_eq!(Position(63).to_bit(), 1u64 << 63);
-    }
-
-    #[test]
-    fn test_kifu_pair() {
-        assert_eq!(kifu_pair("f5g5"), Ok((Position(44), Position(52))));
-        assert!(kifu_pair("fg").is_err());
     }
 
     #[test]

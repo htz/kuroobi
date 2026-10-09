@@ -90,7 +90,6 @@ export interface ThreadsView {
   set: number | null;
   auto: number;
   nps: number | null;
-  nps_stale: boolean;
 }
 
 export interface ActivityView {

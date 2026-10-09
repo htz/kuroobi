@@ -1,5 +1,4 @@
-//! Core-operation benchmarks: mobility, flippable, make_move, perft, solver,
-//! and NPS (nodes/sec) throughput for the midgame search and endgame solver.
+//! Core-operation benchmarks: bitboard primitives, perft, evaluation and the endgame solver.
 
 use criterion::{black_box, criterion_group, criterion_main, Criterion, Throughput};
 
@@ -112,8 +111,6 @@ fn bench_solver(c: &mut Criterion) {
     });
 }
 
-/// Linear with random-ish nonzero weights: eval cost is weight-independent
-/// but nonzero weights keep move ordering realistic in the search benches.
 fn bench_evaluator() -> Linear {
     let mut e = Linear::new(LINEAR_PATTERNS);
     let mut state = 0x9e3779b97f4a7c15u64;
@@ -123,7 +120,6 @@ fn bench_evaluator() -> Linear {
                 state = state
                     .wrapping_mul(6364136223846793005)
                     .wrapping_add(1442695040888963407);
-                // Small values in [-4, 4)
                 let w = ((state >> 40) as i32 % 256) as f32 / 32.0;
                 e.set_weight(stage, pi, idx, w);
             }

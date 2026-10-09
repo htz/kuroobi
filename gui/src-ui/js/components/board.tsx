@@ -6,7 +6,8 @@ const CELL = 100;
 const PAD = 40;
 const PITCH = 12.5;          // grain spacing; 7 lines per cell
 const GRAIN_OPACITY = 0.07;
-const SIZE = PAD * 2 + CELL * 8;   // 880
+const SPAN = CELL * 8;
+const SIZE = PAD * 2 + SPAN;
 
 const TATAMI_ID = 'kb-tatami';
 
@@ -18,10 +19,10 @@ export function BoardDefs() {
     lines.push(<line key={key} x1={x1} y1={y1} x2={x2} y2={y2}
       stroke="var(--grain)" strokeOpacity={GRAIN_OPACITY} strokeWidth={2.4} />);
 
-  d.forEach(v => push('a' + v, 0, v, CELL, v));                       // (0,0) horizontal grain
-  d.forEach(v => push('b' + v, CELL + v, 0, CELL + v, CELL));         // (1,0) vertical grain
-  d.forEach(v => push('c' + v, v, CELL, v, CELL * 2));                // (0,1) vertical grain
-  d.forEach(v => push('d' + v, CELL, CELL + v, CELL * 2, CELL + v));  // (1,1) horizontal grain
+  d.forEach(v => push('a' + v, 0, v, CELL, v));
+  d.forEach(v => push('b' + v, CELL + v, 0, CELL + v, CELL));
+  d.forEach(v => push('c' + v, v, CELL, v, CELL * 2));
+  d.forEach(v => push('d' + v, CELL, CELL + v, CELL * 2, CELL + v));
 
   return (
     <svg width={0} height={0} style={{ position: 'absolute' }} aria-hidden>
@@ -37,7 +38,7 @@ export function BoardDefs() {
 
 export type Cell = 0 | 1 | 2;            // 0 empty / 1 black / 2 white
 
-export type EvalSource = { book: true } | { exact: true } | { select: true } | { depth: number };
+type EvalSource = { book: true } | { exact: true } | { select: true } | { depth: number };
 export type EvalInfo = { score: number; src: EvalSource; best?: boolean };
 
 const sourceLabel = (s: EvalSource) =>
@@ -57,13 +58,13 @@ const numSize = (s: string) => (s.length <= 3 ? 24 : s.length === 4 ? 21 : 17);
 const cx = (i: number) => PAD + i * CELL + CELL / 2;
 const fr = (sq: number): [number, number] => [Math.floor(sq / 8), sq % 8];
 
-export function Board({ cells, legal = [], evals, last, next, coords = true, grain = true, flip = false, disabled, onPlay }: {
+export function Board({ cells, legal = [], evals, last, next, coords, grain = true, flip = false, disabled, onPlay }: {
   cells: Cell[];                                   // 64 (sq = file*8 + rank)
   legal?: number[];
   evals?: Record<number, EvalInfo>;
   last?: number | null;
-  next?: number | null;                            // next move in the record; gold dashed ring
-  coords?: boolean;
+  next?: number | null;                            // the reply a ponder search expects
+  coords: boolean;
   grain?: boolean;
   flip?: boolean;
   disabled?: boolean;
@@ -78,14 +79,14 @@ export function Board({ cells, legal = [], evals, last, next, coords = true, gra
     <svg viewBox={`0 0 ${SIZE} ${SIZE}`} style={{ width: '100%', height: '100%', display: 'block' }}
          role="img" aria-label={t('ui.board.aria')}>
       <rect x={0} y={0} width={SIZE} height={SIZE} rx={14} fill="var(--card)" />
-      <rect x={PAD - 6} y={PAD - 6} width={812} height={812} rx={6} fill="var(--board-dark)" />
-      <rect x={PAD} y={PAD} width={800} height={800} fill="var(--board)" />
-      {grain && <rect x={PAD} y={PAD} width={800} height={800} fill={`url(#${TATAMI_ID})`} />}
+      <rect x={PAD - 6} y={PAD - 6} width={SPAN + 12} height={SPAN + 12} rx={6} fill="var(--board-dark)" />
+      <rect x={PAD} y={PAD} width={SPAN} height={SPAN} fill="var(--board)" />
+      {grain && <rect x={PAD} y={PAD} width={SPAN} height={SPAN} fill={`url(#${TATAMI_ID})`} />}
 
       {Array.from({ length: 9 }, (_, i) => (
         <g key={'g' + i}>
-          <line x1={PAD + i * CELL} y1={PAD} x2={PAD + i * CELL} y2={PAD + 800} stroke="var(--line)" strokeWidth={2} />
-          <line x1={PAD} y1={PAD + i * CELL} x2={PAD + 800} y2={PAD + i * CELL} stroke="var(--line)" strokeWidth={2} />
+          <line x1={PAD + i * CELL} y1={PAD} x2={PAD + i * CELL} y2={PAD + SPAN} stroke="var(--line)" strokeWidth={2} />
+          <line x1={PAD} y1={PAD + i * CELL} x2={PAD + SPAN} y2={PAD + i * CELL} stroke="var(--line)" strokeWidth={2} />
         </g>
       ))}
       {([[2, 2], [2, 6], [6, 2], [6, 6]] as [number, number][]).map(([a, b]) => (
@@ -118,7 +119,7 @@ export function Board({ cells, legal = [], evals, last, next, coords = true, gra
   );
 }
 
-export function Stone({ x, y, color, last }: { x: number; y: number; color: 1 | 2; last?: boolean }) {
+function Stone({ x, y, color, last }: { x: number; y: number; color: 1 | 2; last?: boolean }) {
   const black = color === 1;
   return (
     <g className="k-flip" style={{ transformOrigin: `${x}px ${y}px` }}>

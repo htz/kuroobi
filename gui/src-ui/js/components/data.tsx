@@ -1,11 +1,10 @@
 import React from 'react';
-import { Badge, Button, Dot } from './primitives';
+import { Button } from './primitives';
 import { Col, Divider, Empty, TableHead, TableRow, picked as pickedStyle } from './layout';
 import { t } from '../i18n';
 
 
 export type StoneColor = 'b' | 'w';
-export const toStoneColor = (n: 1 | 2): StoneColor => (n === 1 ? 'b' : 'w');
 
 export type Move = {
   n: number; move: string; color: StoneColor;
@@ -25,7 +24,7 @@ const SRC_KEY: Record<string, string> = {
 
 export const srcLabel = (src: string): string => (SRC_KEY[src] ? t(SRC_KEY[src]) : src);
 export const srcIsBook = (src: string): boolean => src === 'book' || src === 'book_learned';
-export const srcIsSolve = (src: string): boolean => src === 'solve';
+const srcIsSolve = (src: string): boolean => src === 'solve';
 
 const moveCols = (): Col[] => [
   { head: '#', w: 22, right: true },
@@ -35,9 +34,9 @@ const moveCols = (): Col[] => [
   { head: t('data.moves.header_source'), right: true, clip: true },
 ];
 
-export function KifuTable({ moves, current, onSelect, decimals = 1 }: {
+export function KifuTable({ moves, current, onSelect, decimals }: {
   moves: Move[]; current?: number; onSelect?: (n: number) => void;
-  decimals?: number;
+  decimals: number;
 }) {
   const box = React.useRef<HTMLDivElement>(null);
   const row = React.useRef<HTMLButtonElement>(null);
@@ -101,16 +100,16 @@ export function StoneDot({ color, size = 9 }: { color: StoneColor; size?: number
 
 export type GraphPoint = { value: number; exact?: boolean; book?: boolean };
 
-export function EvalGraph({ points, plies, cursor, blunder, busy, pov = 'b', extra, onJump, moveName, open }: {
+export function EvalGraph({ points, plies, cursor, blunder, busy, pov, extra, onJump, moveName, open }: {
   points: (GraphPoint | undefined)[];
   plies?: number;
   cursor?: number;
   blunder?: { at: number; loss: number };
   busy?: boolean;
-  pov?: 'b' | 'w';
-  extra?: React.ReactNode;
-  onJump?: (n: number) => void;
-  moveName?: (n: number) => string | undefined;
+  pov: 'b' | 'w';
+  extra: React.ReactNode;
+  onJump: (n: number) => void;
+  moveName: (n: number) => string | undefined;
   open?: boolean;
 }) {
   const [hover, setHover] = React.useState<number | null>(null);
@@ -175,7 +174,7 @@ export function EvalGraph({ points, plies, cursor, blunder, busy, pov = 'b', ext
     return n >= 0 && n <= len ? n : null;
   };
   const shown = hover !== null ? points[hover] : undefined;
-  const shownMove = hover !== null ? moveName?.(hover) : undefined;
+  const shownMove = hover !== null ? moveName(hover) : undefined;
 
   return (
     <div className={'k-graph' + (open ? ' k-open' : '')} style={{
@@ -184,7 +183,7 @@ export function EvalGraph({ points, plies, cursor, blunder, busy, pov = 'b', ext
       padding: 'var(--sp-3) var(--sp-4) var(--sp-4)', flexDirection: 'column', gap: 'var(--sp-2)',
     }}>
       <div style={{
-        minHeight: extra ? 'var(--h-field)' : 'var(--h-head)',
+        minHeight: 'var(--h-field)',
         display: 'flex', alignItems: 'center', gap: 'var(--sp-3)',
         fontSize: 'var(--fs-6)', color: 'var(--sub)',
       }}>
@@ -203,7 +202,7 @@ export function EvalGraph({ points, plies, cursor, blunder, busy, pov = 'b', ext
             </span>
           </>}
         </span>
-        {extra && <span style={{ marginLeft: 'auto', display: 'flex', alignItems: 'center', gap: 'var(--sp-3)' }}>{extra}</span>}
+        <span style={{ marginLeft: 'auto', display: 'flex', alignItems: 'center', gap: 'var(--sp-3)' }}>{extra}</span>
       </div>
       <div ref={attach} style={{
         position: 'relative', flexGrow: 0, flexShrink: 1,
@@ -215,7 +214,7 @@ export function EvalGraph({ points, plies, cursor, blunder, busy, pov = 'b', ext
              role="img" aria-label={t('data.graph.aria')}
              onMouseMove={(e) => setHover(plyAt(e))}
              onMouseLeave={() => setHover(null)}
-             onClick={onJump && ((e) => { const n = plyAt(e); if (n !== null) onJump(n); })}>
+             onClick={(e) => { const n = plyAt(e); if (n !== null) onJump(n); }}>
           <rect x={0} y={0} width={W} height={H} rx={8} fill="var(--bg)" />
           <text x={10} y={12} fill="var(--sub)" fontSize={10}>{t('data.graph.unit_discs')}</text>
 
@@ -323,27 +322,20 @@ export function ScoreRow({ black, white, turn, meta, blackClock, whiteClock }: {
   );
 }
 
-export function PlayerRow({ color, name, rate, dev, meta, clock, active, discs, onName }: {
+export function PlayerRow({ color, name, rate, meta, clock, active }: {
   color: StoneColor; name: string;
-  rate?: number; dev?: number; meta?: React.ReactNode;
-  clock?: string; active?: boolean; discs?: number;
-  onName?: () => void;
+  rate?: number; meta?: React.ReactNode;
+  clock?: string; active?: boolean;
 }) {
   return (
     <div style={{ display: 'flex', alignItems: 'center', gap: 'var(--sp-3)', height: 'var(--h-field)', fontSize: 'var(--fs-5)' }}>
       <StoneDot color={color} size={14} />
-      {onName
-        ? <button type="button" onClick={onName} className="k-link k-sel" style={{
-            border: 0, background: 'transparent', padding: 0, fontSize: 'var(--fs-4)', fontWeight: 600, color: 'var(--text)',
-            borderBottom: '1px solid color-mix(in srgb, var(--accent) 40%, transparent)',
-          }}>{name}</button>
-        : <b className="k-sel" style={{ fontSize: 'var(--fs-4)', fontWeight: 600 }}>{name}</b>}
+      <b className="k-sel" style={{ fontSize: 'var(--fs-4)', fontWeight: 600 }}>{name}</b>
       {rate !== undefined && (
         <span style={{ color: 'var(--sub)', fontSize: 'var(--fs-6)', fontVariantNumeric: 'tabular-nums' }}>
-          {rate.toFixed(1)}{dev !== undefined && <span style={{ opacity: .7, marginLeft: 4 }}>±{dev}</span>}
+          {rate.toFixed(1)}
         </span>
       )}
-      {discs !== undefined && <span style={{ fontSize: 'var(--fs-1)', fontWeight: 700 }}>{discs}</span>}
       <span style={{ flex: 1 }} />
       {meta && <span style={{ color: 'var(--sub)', fontSize: 'var(--fs-6)' }}>{meta}</span>}
       {clock && <span style={{
@@ -356,15 +348,14 @@ export function PlayerRow({ color, name, rate, dev, meta, clock, active, discs, 
   );
 }
 
-export function RateChart({ points, height = 74, width = 300, axes, dates, labels, hover, onHover }: {
+export function RateChart({ points, height, width, dates, labels, hover, onHover }: {
   points: number[];
-  height?: number;
-  width?: number;
-  axes?: boolean;
-  dates?: string[];
-  labels?: string[];
-  hover?: number | null;
-  onHover?: (i: number | null) => void;
+  height: number;
+  width: number;
+  dates: string[];
+  labels: string[];
+  hover: number | null;
+  onHover: (i: number | null) => void;
 }) {
   if (points.length < 2) {
     return (
@@ -373,7 +364,7 @@ export function RateChart({ points, height = 74, width = 300, axes, dates, label
       </div>
     );
   }
-  const padL = axes ? 34 : 0, padB = axes ? 16 : 0;
+  const padL = 34, padB = 16;
   const w = width, pad = 8;
   const min = Math.min(...points), max = Math.max(...points), span = Math.max(1, max - min);
   const y = (p: number) =>
@@ -382,25 +373,23 @@ export function RateChart({ points, height = 74, width = 300, axes, dates, label
   const xy = points.map((p, i) => [x(i), y(p)] as const);
   const last = xy[xy.length - 1];
   const ticks: number[] = [];
-  if (axes) {
-    const step = [1, 2, 5, 10, 25, 50, 100, 200, 500, 1000].find((v) => span / v <= 5) ?? 2000;
-    for (let v = Math.ceil(min / step) * step; v <= max; v += step) ticks.push(v);
-  }
+  const step = [1, 2, 5, 10, 25, 50, 100, 200, 500, 1000].find((v) => span / v <= 5) ?? 2000;
+  for (let v = Math.ceil(min / step) * step; v <= max; v += step) ticks.push(v);
   const pick = (e: React.MouseEvent<SVGSVGElement>): number => {
     const r = e.currentTarget.getBoundingClientRect();
-    const scale = axes ? Math.min(r.width / w, r.height / height) : r.width / w;
-    const ox = axes ? (r.width - w * scale) / 2 : 0;
+    const scale = Math.min(r.width / w, r.height / height);
+    const ox = (r.width - w * scale) / 2;
     const vx = (e.clientX - r.left - ox) / scale;
     const i = Math.round(((vx - padL) / (w - padL)) * (points.length - 1));
     return Math.max(0, Math.min(points.length - 1, i));
   };
-  const at = hover != null && hover >= 0 && hover < points.length ? hover : null;
+  const at = hover !== null && hover >= 0 && hover < points.length ? hover : null;
   return (
     <svg viewBox={'0 0 ' + w + ' ' + height}
-         preserveAspectRatio={axes ? 'xMidYMid meet' : 'none'}
+         preserveAspectRatio="xMidYMid meet"
          style={{ width: '100%', height, display: 'block' }}
-         onMouseMove={onHover ? (e) => onHover(pick(e)) : undefined}
-         onMouseLeave={onHover ? () => onHover(null) : undefined}>
+         onMouseMove={(e) => onHover(pick(e))}
+         onMouseLeave={() => onHover(null)}>
       {ticks.map((tick) => (
         <g key={tick}>
           <line x1={padL} y1={y(tick)} x2={w} y2={y(tick)} stroke="var(--border-weak)" strokeWidth={1} />
@@ -408,7 +397,7 @@ export function RateChart({ points, height = 74, width = 300, axes, dates, label
                 fontSize={10} fill="var(--sub)">{tick}</text>
         </g>
       ))}
-      {axes && dates && dates.length === points.length && dates.map((d, i) => (
+      {dates.length === points.length && dates.map((d, i) => (
         (i === 0 || i === dates.length - 1 || i === (dates.length >> 1)) ? (
           <text key={i} x={x(i)} y={height - 3}
                 textAnchor={i === 0 ? 'start' : i === dates.length - 1 ? 'end' : 'middle'}
@@ -419,7 +408,7 @@ export function RateChart({ points, height = 74, width = 300, axes, dates, label
       <circle cx={last[0]} cy={last[1]} r={3} fill="var(--accent)" />
       {at != null && (() => {
         const [hx, hy] = xy[at];
-        const text = labels?.[at] ?? String(points[at]);
+        const text = labels[at] ?? String(points[at]);
         const tw = [...text].reduce((n, c) => n + (c.charCodeAt(0) < 256 ? 6 : 11), 0) + 12;
         const bx = Math.min(Math.max(hx - tw / 2, padL), w - tw);
         return (
@@ -435,21 +424,22 @@ export function RateChart({ points, height = 74, width = 300, axes, dates, label
   );
 }
 
-/// Widths mirror `ResultRow`.
-export function ResultHead({ note, rating, when }: {
-  note?: boolean; rating?: boolean; when?: boolean;
+const W_OUTCOME = 24, W_DISCS = 44, W_RATING = 60, W_WHEN = 64;
+
+export function ResultHead({ note, rating }: {
+  note?: boolean; rating?: boolean;
 }) {
-  const cell = (w: number | string): React.CSSProperties => ({
+  const cell = (w: number): React.CSSProperties => ({
     width: w, flex: 'none', textAlign: 'right',
   });
   return (
     <TableHead pad="var(--sp-2)">
-      <span style={{ width: 24, flex: 'none' }}>{t('data.result.head_outcome')}</span>
+      <span style={{ width: W_OUTCOME, flex: 'none' }}>{t('data.result.head_outcome')}</span>
       <span style={{ flex: 1, minWidth: 0 }}>{t('data.result.head_opponent')}</span>
       {note && <span style={{ width: 'var(--w-gtype)', flex: 'none' }}>{t('data.result.head_kind')}</span>}
-      <span style={cell(44)}>{t('data.result.head_discs')}</span>
-      {rating && <span style={cell(60)}>{t('data.result.head_rating')}</span>}
-      {when && <span style={cell(64)}>{t('data.result.head_date')}</span>}
+      <span style={cell(W_DISCS)}>{t('data.result.head_discs')}</span>
+      {rating && <span style={cell(W_RATING)}>{t('data.result.head_rating')}</span>}
+      <span style={cell(W_WHEN)}>{t('data.result.head_date')}</span>
     </TableHead>
   );
 }
@@ -469,7 +459,7 @@ export function ResultRow({ win, draw, adjourned, opponent, discs, when, note, r
   onClick?: () => void;
 }) {
   const body = <>
-    <span style={{ width: 24, flex: 'none',
+    <span style={{ width: W_OUTCOME, flex: 'none',
                    color: adjourned || draw ? 'var(--sub)' : win ? 'var(--ok)' : 'var(--bad)' }}>
       {t(adjourned ? 'data.result.adjourned'
          : draw ? 'data.result.draw' : win ? 'data.result.win' : 'data.result.loss')}
@@ -482,18 +472,18 @@ export function ResultRow({ win, draw, adjourned, opponent, discs, when, note, r
                      fontSize: 'var(--fs-6)', overflow: 'hidden', textOverflow: 'ellipsis',
                      whiteSpace: 'nowrap' }}>{note}</span>
     )}
-    <span style={{ width: 44, flex: 'none', textAlign: 'right', color: 'var(--sub)',
+    <span style={{ width: W_DISCS, flex: 'none', textAlign: 'right', color: 'var(--sub)',
                    fontVariantNumeric: 'tabular-nums' }}>
       {adjourned ? '\u2014' : discs > 0 ? '+' + discs : discs}
     </span>
     {rating != null && (
-      <span style={{ width: 60, flex: 'none', textAlign: 'right', color: 'var(--sub)',
+      <span style={{ width: W_RATING, flex: 'none', textAlign: 'right', color: 'var(--sub)',
                      fontSize: 'var(--fs-6)', fontVariantNumeric: 'tabular-nums' }}>
         {rating.toFixed(1)}
       </span>
     )}
     {when && (
-      <span style={{ width: 64, flex: 'none', textAlign: 'right', color: 'var(--sub)',
+      <span style={{ width: W_WHEN, flex: 'none', textAlign: 'right', color: 'var(--sub)',
                      fontSize: 'var(--fs-6)', fontVariantNumeric: 'tabular-nums' }}>{when}</span>
     )}
   </>;
@@ -511,8 +501,6 @@ export function ResultRow({ win, draw, adjourned, opponent, discs, when, note, r
               style={{ ...style, border: 0, background: 'transparent', cursor: 'pointer' }}>{body}</button>
     : <div style={{ ...style, opacity: dim ? 0.5 : 1 }} {...hov}>{body}</div>;
 }
-
-export { Badge, Dot };
 
 export function MoveScrub({ plies, cursor, blunder, onSeek, nav = true }: {
   plies: number;

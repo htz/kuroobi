@@ -96,14 +96,6 @@ training-data I/O). `rotate_90() = transpose(swap_bytes())`,
 `mirror_horizontal() = swap_bytes()`. `symmetries()` returns the eight
 symmetric forms.
 
-### Neighbour table
-
-`NeighbourTable` precomputes the 8-neighbour masks for all 64 squares;
-during the endgame enumeration of empties, `neighbours.get(sq) &
-opponent_bb == 0` means "not adjacent to any opponent disc, hence
-certainly illegal", and the branch is discarded before `flippable` is
-called — an **early-rejection filter**.
-
 ---
 
 ---
