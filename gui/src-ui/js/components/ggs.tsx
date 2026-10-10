@@ -574,5 +574,5 @@ export function GgsStatus({ snap, showStrength }: {
   );
 }
 
-const poolLabel = (pool: string): string =>
+export const poolLabel = (pool: string): string =>
   pool === '8' ? t('ggs.pool.normal') : pool === '8r' ? t('ggs.pool.random') : pool;

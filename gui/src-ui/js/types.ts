@@ -7,7 +7,6 @@ export interface GameView {
   white: number;
   over: boolean;
   last: number | null;
-  kifu: string;
   move_count: number;
   moves: (number | null)[];
   cursor: number;
@@ -37,7 +36,6 @@ export interface HintView {
 }
 
 export interface EvalPoint {
-  n: number;
   value: number;
   exact: boolean;
   from_book: boolean;
@@ -72,9 +70,7 @@ interface RankRow {
 }
 
 interface FingerInfo {
-  name: string;
   fields: [string, string][];
-  raw: string[];
 }
 
 interface Offer {
@@ -89,7 +85,6 @@ interface Offer {
 
 interface OngoingView {
   id: string;
-  raw: string;
   watching: boolean;
   names: string[];
   ratings: string[];
@@ -99,7 +94,6 @@ interface OngoingView {
 
 interface StoredView {
   id: string;
-  raw: string;
   opp: string;
   gtype: string;
 }
@@ -311,7 +305,6 @@ export interface LearnChange {
 }
 
 export interface ClockView {
-  total: number;
   black: number;
   white: number;
   lost: 'black' | 'white' | null;

@@ -145,10 +145,6 @@ impl Board {
         Ok(flipped)
     }
 
-    pub fn make_move_unchecked(&mut self, pos: Position) {
-        self.make_move_bits(pos);
-    }
-
     #[inline]
     pub fn make_move_bits(&mut self, pos: Position) -> u64 {
         let pos_bit = pos.to_bit();
@@ -398,7 +394,7 @@ mod tests {
         let mut b = Board::new();
         let movable = b.movable();
         let first = movable.trailing_zeros();
-        b.make_move_unchecked(Position::from_index(first).unwrap());
+        b.make_move_bits(Position::from_index(first).unwrap());
         assert_eq!(
             b.score(),
             -3,
@@ -503,7 +499,7 @@ mod tests {
             if moves == 0 {
                 break;
             }
-            b.make_move_unchecked(Position::from_index(moves.trailing_zeros()).unwrap());
+            b.make_move_bits(Position::from_index(moves.trailing_zeros()).unwrap());
         }
         let b2 = Board::from_string(&b.to_string()).unwrap();
         assert_eq!(b.black, b2.black);

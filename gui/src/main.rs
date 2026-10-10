@@ -221,7 +221,6 @@ struct GameView {
     white: u8,
     over: bool,
     last: Option<u8>,
-    kifu: String,
     move_count: usize,
     moves: Vec<Option<u8>>,
     cursor: usize,
@@ -249,7 +248,6 @@ struct HintView {
 
 #[derive(Serialize)]
 struct EvalPoint {
-    n: usize,
     value: f32,
     exact: bool,
     from_book: bool,
@@ -306,7 +304,6 @@ fn view(game: &Reversi) -> GameView {
         white,
         over: game.is_game_over(),
         last: game.history.last().and_then(|r| r.pos).map(|p| p.index()),
-        kifu: game.to_kifu(),
         move_count: game.move_count(),
         moves: game.line().iter().map(|p| p.map(|p| p.index())).collect(),
         cursor: game.move_count(),
@@ -315,9 +312,7 @@ fn view(game: &Reversi) -> GameView {
 
 fn auto_pass(game: &mut Reversi) {
     while !game.is_game_over() && game.movable() == 0 {
-        if game.pass().is_err() {
-            break;
-        }
+        game.pass();
     }
 }
 
@@ -1056,7 +1051,6 @@ async fn set_levels(
 
 #[derive(Serialize)]
 struct ClockView {
-    total: u64,
     black: f64,
     white: f64,
     lost: Option<String>,
@@ -1079,7 +1073,6 @@ fn clocks(app: State<App>) -> ClockView {
         }
     }
     ClockView {
-        total: c.total,
         black,
         white,
         lost: c.lost.map(|x| color_name(x).into()),
@@ -1182,7 +1175,7 @@ fn apply_move(app: State<App>, sq: Option<u8>) -> Result<GameView, String> {
             let pos = Position::from_index(s as u32).ok_or("err.bad_square")?;
             game.make_move(pos).map_err(|e| format!("{e:?}"))?;
         }
-        None => game.pass().map_err(|e| format!("{e:?}"))?,
+        None => game.pass(),
     }
     auto_pass(&mut game);
     Ok(view(&game))
@@ -1229,7 +1222,7 @@ async fn analyze_live(app: State<'_, App>, handle: tauri::AppHandle) -> Result<(
         let mut guard = eng.lock().unwrap();
         let Some(e) = guard.as_mut() else { return };
         let t0 = std::time::Instant::now();
-        e.analyze_deepening(&board, 1, |depth, hints, nodes| {
+        e.analyze_deepening(&board, 1, |_, hints, nodes| {
             let view: Vec<HintView> = hints
                 .iter()
                 .map(|(p, ev)| HintView {
@@ -1241,7 +1234,7 @@ async fn analyze_live(app: State<'_, App>, handle: tauri::AppHandle) -> Result<(
                 })
                 .collect();
             handle
-                .emit("hints", (depth, view, nodes, t0.elapsed().as_secs_f32()))
+                .emit("hints", (view, nodes, t0.elapsed().as_secs_f32()))
                 .is_ok()
         });
     });
@@ -1286,7 +1279,6 @@ async fn eval_at(app: State<'_, App>, n: usize, depth: u32) -> Result<EvalPoint,
     }
     let value = finite(if white { -value } else { value });
     Ok(EvalPoint {
-        n,
         value,
         exact,
         from_book,
@@ -1297,20 +1289,13 @@ async fn eval_at(app: State<'_, App>, n: usize, depth: u32) -> Result<EvalPoint,
 async fn save_kifu(
     app: State<'_, App>,
     handle: tauri::AppHandle,
-    black: Option<String>,
-    white: Option<String>,
+    black: String,
+    white: String,
 ) -> Result<Option<String>, String> {
     use tauri_plugin_dialog::DialogExt;
     let (kifu, ggf) = {
         let game = app.game.lock().unwrap();
-        (
-            game.to_kifu(),
-            to_ggf(
-                &game,
-                black.as_deref().unwrap_or("Black"),
-                white.as_deref().unwrap_or("White"),
-            ),
-        )
+        (game.to_kifu(), to_ggf(&game, &black, &white))
     };
     if kifu.is_empty() {
         return Err("err.record_empty".into());
@@ -1572,7 +1557,6 @@ struct KifuFrame {
     last: Option<u8>,
     black: u8,
     white: u8,
-    player: String,
 }
 
 #[derive(Serialize)]
@@ -1649,7 +1633,6 @@ fn preview_kifu(text: String) -> Result<Vec<KifuFrame>, String> {
         last,
         black: b.black.count_ones() as u8,
         white: b.white.count_ones() as u8,
-        player: color_name(b.player()).into(),
     };
 
     let mut out = vec![frame(&b, None)];
@@ -1744,19 +1727,17 @@ fn saved_credentials() -> Option<(String, String)> {
 }
 
 #[tauri::command]
-fn ggs_connect(app: State<App>, login: String, pw: String) -> Result<String, String> {
+fn ggs_connect(app: State<App>, login: String, pw: String) -> Result<(), String> {
     if login.trim().is_empty() || pw.is_empty() {
         return Err("err.login_and_password_required".into());
     }
-    let l = login.trim().to_string();
     ggs_send(
         &app,
         ggs::Cmd::Connect {
-            login: l.clone(),
+            login: login.trim().to_string(),
             pw,
         },
-    )?;
-    Ok(l)
+    )
 }
 
 #[tauri::command]

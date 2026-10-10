@@ -3,20 +3,17 @@
 use crate::board::{Board, GameError, MoveError};
 use crate::color::Color;
 use crate::position::Position;
-use crate::zobrist;
 
 #[derive(Debug, Clone)]
 pub struct MoveRecord {
     pub pos: Option<Position>, // None for pass
     pub flipped: u64,
-    pub hash: u64,
 }
 
 pub struct Reversi {
     pub board: Board,
     pub history: Vec<MoveRecord>,
     redo_stack: Vec<MoveRecord>,
-    pub hash: u64,
 }
 
 impl Reversi {
@@ -30,12 +27,10 @@ impl Reversi {
     }
 
     fn from_board(board: Board) -> Reversi {
-        let hash = zobrist::compute_hash(board.black, board.white, board.player());
         Reversi {
             board,
             history: Vec::new(),
             redo_stack: Vec::new(),
-            hash,
         }
     }
 
@@ -50,40 +45,26 @@ impl Reversi {
             return Err(MoveError::NotPlayable);
         }
 
-        let prev_hash = self.hash;
         self.history.push(MoveRecord {
             pos: Some(pos),
             flipped,
-            hash: prev_hash,
         });
         self.redo_stack.clear();
-
-        let mover = self.board.player();
         self.board.apply_flips(pos, flipped);
-        self.hash = zobrist::update_hash_on_move(prev_hash, pos, flipped, mover);
         Ok(())
     }
 
-    pub fn pass(&mut self) -> Result<(), GameError> {
-        let prev_hash = self.hash;
-
+    pub fn pass(&mut self) {
         self.history.push(MoveRecord {
             pos: None,
             flipped: 0,
-            hash: prev_hash,
         });
         self.redo_stack.clear();
-
         self.board.pass();
-        self.hash = zobrist::update_hash_on_pass(prev_hash);
-
-        Ok(())
     }
 
     pub fn undo(&mut self) -> Result<(), GameError> {
         let record = self.history.pop().ok_or(GameError::NoMoves)?;
-
-        self.hash = record.hash;
 
         if let Some(pos) = record.pos {
             self.board.undo_move(pos, record.flipped);
@@ -99,15 +80,10 @@ impl Reversi {
     pub fn redo(&mut self) -> Result<(), GameError> {
         let record = self.redo_stack.pop().ok_or(GameError::NoMoves)?;
 
-        let prev_hash = self.hash;
-        let mover = self.board.player();
-
         if let Some(pos) = record.pos {
             self.board.apply_flips(pos, record.flipped);
-            self.hash = zobrist::update_hash_on_move(prev_hash, pos, record.flipped, mover);
         } else {
             self.board.pass();
-            self.hash = zobrist::update_hash_on_pass(prev_hash);
         }
 
         self.history.push(record);
@@ -170,7 +146,7 @@ impl Reversi {
             let pos = Position::from_kifu(&s).map_err(|e| format!("KIFU parse error: {}", e))?;
 
             if !self.board.check(pos) && !self.board.check_all() {
-                self.pass().map_err(|e| format!("pass error: {}", e))?;
+                self.pass();
             }
             self.make_move(pos)
                 .map_err(|e| format!("cannot replay KIFU move ({s}): {e}"))?;
@@ -239,7 +215,7 @@ mod tests {
 
         g.make_move(Position(19)).unwrap();
 
-        g.pass().unwrap();
+        g.pass();
         assert_eq!(g.move_count(), 2);
         assert_eq!(g.player(), Color::Black);
     }
@@ -260,6 +236,10 @@ mod tests {
         assert_eq!(g.piece_count(), (4, 1));
     }
 
+    fn state(g: &Reversi) -> (u64, u64, Color) {
+        (g.board.black, g.board.white, g.player())
+    }
+
     #[test]
     fn test_undo_redo_edge_cases() {
         let mut g = Reversi::new();
@@ -268,15 +248,10 @@ mod tests {
         assert!(g.redo().is_err(), "redo on fresh game must fail");
 
         g.make_move(Position(19)).unwrap();
-        let hash_after_move = g.hash;
+        let after_move = state(&g);
         g.undo().unwrap();
         g.redo().unwrap();
-        assert_eq!(g.hash, hash_after_move, "redo restores the exact hash");
-        assert_eq!(
-            g.hash,
-            zobrist::compute_hash(g.board.black, g.board.white, g.player()),
-            "hash stays consistent with the board after redo"
-        );
+        assert_eq!(state(&g), after_move, "redo restores the exact board");
 
         g.undo().unwrap();
         g.make_move(Position(26)).unwrap(); // d3, another legal opening
@@ -286,26 +261,24 @@ mod tests {
         g.make_move(Position(19)).unwrap();
         let m2 = Position::from_index(g.movable().trailing_zeros()).unwrap();
         g.make_move(m2).unwrap();
-        let final_hash = g.hash;
+        let last = state(&g);
         g.undo().unwrap();
         g.undo().unwrap();
         assert_eq!(g.piece_count(), (2, 2));
         g.redo().unwrap();
         g.redo().unwrap();
-        assert_eq!(g.hash, final_hash, "two undos + two redos round-trip");
+        assert_eq!(state(&g), last, "two undos + two redos round-trip");
     }
 
     #[test]
     fn test_undo_after_pass() {
         let mut g = Reversi::new();
         g.make_move(Position(19)).unwrap();
-        let hash_before_pass = g.hash;
         let player_before_pass = g.player();
 
-        g.pass().unwrap();
+        g.pass();
         g.undo().unwrap();
 
-        assert_eq!(g.hash, hash_before_pass, "undoing a pass restores hash");
         assert_eq!(
             g.player(),
             player_before_pass,
@@ -331,20 +304,6 @@ mod tests {
         let g2 = Reversi::from_kifu(&kifu).unwrap();
         assert_eq!(g2.piece_count(), g.piece_count());
         assert_eq!(g2.player(), g.player());
-    }
-
-    #[test]
-    fn test_hash_consistency() {
-        let mut g = Reversi::new();
-        let h1 = g.hash;
-
-        g.make_move(Position(19)).unwrap();
-
-        let h2 = g.hash;
-        assert_ne!(h1, h2, "Hash should change after move");
-
-        g.undo().unwrap();
-        assert_eq!(g.hash, h1, "Hash should be restored after undo");
     }
 
     #[test]
@@ -386,7 +345,7 @@ mod tests {
                 if g.is_game_over() {
                     break;
                 }
-                g.pass().unwrap();
+                g.pass();
                 continue;
             }
             let bit = if plies % 2 == 0 {
@@ -403,8 +362,6 @@ mod tests {
                 64,
                 "piece conservation"
             );
-            let recomputed = zobrist::compute_hash(g.board.black, g.board.white, g.player());
-            assert_eq!(g.hash, recomputed, "incremental hash must stay in sync");
         }
         assert!(plies >= 20, "a full game plays plenty of moves");
         assert!(g.is_game_over());

@@ -41,7 +41,11 @@ fn choose_and_analyze_on_opening() {
     assert!(!mv.exact, "60 empties is not in the solve region");
     assert!(mv.value.abs() < 64.0);
 
-    let hints = engine.analyze(&board, 6);
+    let mut hints = Vec::new();
+    engine.analyze_deepening(&board, 6, |_, pass, _| {
+        hints = pass.to_vec();
+        false
+    });
     assert_eq!(hints.len(), 4, "the opening has 4 legal moves");
     let vals: Vec<f32> = hints.iter().map(|(_, e)| e.value).collect();
     let spread = vals.iter().cloned().fold(f32::MIN, f32::max)

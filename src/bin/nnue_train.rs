@@ -355,9 +355,6 @@ struct Args {
     checkpoint: Option<PathBuf>,
     resume: Option<PathBuf>,
     start_epoch: usize,
-    which_patterns: String,
-    patterns_file: Option<PathBuf>,
-    patterns_share: bool,
     train_stages: Option<(usize, usize)>,
 }
 
@@ -393,9 +390,6 @@ fn parse_args() -> Result<Args, ExitCode> {
     let mut checkpoint: Option<PathBuf> = None;
     let mut resume: Option<PathBuf> = None;
     let mut start_epoch = 1usize;
-    let mut which_patterns = String::from("nnue");
-    let mut patterns_file: Option<PathBuf> = None;
-    let mut patterns_share = false;
 
     let mut it = std::env::args().skip(1);
     while let Some(a) = it.next() {
@@ -408,9 +402,6 @@ fn parse_args() -> Result<Args, ExitCode> {
             }
         }
         match a.as_str() {
-            "--patterns" => which_patterns = it.next().unwrap(),
-            "--patterns-file" => patterns_file = Some(PathBuf::from(it.next().unwrap())),
-            "--patterns-share" => patterns_share = true,
             "--epochs" => epochs = it.next().unwrap().parse().unwrap(),
             "--lr" => lr = it.next().unwrap().parse().unwrap(),
             "--decay" => decay = it.next().unwrap().parse().unwrap(),
@@ -494,9 +485,6 @@ fn parse_args() -> Result<Args, ExitCode> {
         checkpoint,
         resume,
         start_epoch,
-        which_patterns,
-        patterns_file,
-        patterns_share,
         train_stages,
     })
 }
@@ -533,9 +521,6 @@ fn main() -> ExitCode {
         mut checkpoint,
         resume,
         start_epoch,
-        mut which_patterns,
-        patterns_file,
-        patterns_share,
         train_stages,
     } = match parse_args() {
         Ok(a) => a,
@@ -593,17 +578,7 @@ fn main() -> ExitCode {
         policy.describe()
     );
 
-    let patterns = match resolve_patterns(
-        patterns_file.as_deref(),
-        &mut which_patterns,
-        patterns_share,
-    ) {
-        Ok(p) => p,
-        Err(e) => {
-            eprintln!("{e}");
-            return ExitCode::FAILURE;
-        }
-    };
+    let patterns = pattern::NNUE_PATTERNS;
     if checkpoint.is_none() {
         checkpoint.clone_from(&resume);
     }
@@ -628,7 +603,7 @@ fn main() -> ExitCode {
     }
     nn.set_mpc_sigma(None);
     println!(
-        "nnue: patterns={which_patterns} masks={} H={} features={}",
+        "nnue: masks={} H={} features={}",
         patterns.iter().map(|p| p.masks.len()).sum::<usize>(),
         kuroobi::nnue::H,
         nn.n_features()
@@ -1018,21 +993,6 @@ fn size_files(files: &[PathBuf], limit: Option<usize>) -> Result<Vec<usize>, ()>
         }
     }
     Ok(c)
-}
-
-fn resolve_patterns(
-    file: Option<&Path>,
-    which: &mut String,
-    share: bool,
-) -> Result<&'static [pattern::Pattern], String> {
-    let Some(path) = file else {
-        return pattern::resolve(which, None).map_err(|e| format!("{e} (nnue | linear)"));
-    };
-    let at = path.display();
-    let text = std::fs::read_to_string(path).map_err(|e| format!("patterns-file {at}: {e}"))?;
-    let p = pattern::from_spec(&text, share).map_err(|e| format!("patterns-file {at}: {e}"))?;
-    *which = at.to_string();
-    Ok(p)
 }
 
 fn report_start_val(nn: &mut Nnue, val: &[Example], select_by: &str, table: bool) {

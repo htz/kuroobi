@@ -26,7 +26,7 @@ export function useHints(g: Game) {
   const setStat = g.setStat;
   useEffect(() => {
     let off: (() => void) | undefined;
-    void onHints((_depth, hs, nodes, secs) => {
+    void onHints((hs, nodes, secs) => {
       const next: Hints = {};
       for (const h of hs) {
         if (!Number.isFinite(h.value)) continue;

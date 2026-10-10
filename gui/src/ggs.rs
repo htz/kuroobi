@@ -127,9 +127,7 @@ pub struct RankRow {
 
 #[derive(Clone, Serialize, Default)]
 pub struct FingerInfo {
-    pub name: String,
     pub fields: Vec<(String, String)>,
-    pub raw: Vec<String>,
 }
 
 #[derive(Clone, Serialize, Default)]
@@ -163,7 +161,6 @@ pub fn no_rated() -> bool {
 #[derive(Clone, Serialize, Default)]
 pub struct StoredView {
     pub id: String,
-    pub raw: String,
     pub opp: String,
     pub gtype: String,
 }
@@ -183,7 +180,6 @@ pub struct HistoryRow {
 #[derive(Clone, Serialize, Default)]
 pub struct OngoingView {
     pub id: String,
-    pub raw: String,
     pub watching: bool,
     pub names: Vec<String>,
     pub ratings: Vec<String>,
@@ -396,7 +392,6 @@ pub fn demo_snapshot() -> Snapshot {
     s.ongoing = vec![
         OngoingView {
             id: ".71.0".into(),
-            raw: "tamaki vs momo-bot".into(),
             watching: true,
             names: vec!["tamaki".into(), "momo-bot".into()],
             ratings: vec!["2011.4".into(), "2280.1".into()],
@@ -405,7 +400,6 @@ pub fn demo_snapshot() -> Snapshot {
         },
         OngoingView {
             id: ".72.0".into(),
-            raw: "nara vs kei".into(),
             watching: false,
             names: vec!["nara".into(), "kei".into()],
             ratings: vec!["1688.2".into(), "1488.9".into()],
@@ -435,7 +429,6 @@ pub fn demo_snapshot() -> Snapshot {
     ];
     s.stored = vec![StoredView {
         id: "3".into(),
-        raw: "tamaki".into(),
         opp: "tamaki".into(),
         gtype: "s8r16".into(),
     }];
@@ -558,8 +551,7 @@ pub fn demo_snapshot() -> Snapshot {
         draws: 1,
         diff_sum: 38,
     };
-    let finger = |name: &str, accept: &str| FingerInfo {
-        name: name.into(),
+    let finger = |accept: &str| FingerInfo {
         fields: vec![
             ("open".into(), "1".into()),
             ("rated".into(), "+".into()),
@@ -570,14 +562,12 @@ pub fn demo_snapshot() -> Snapshot {
             ("info".into(), "demo data for screen checks".into()),
             ("since".into(), "2026-01-15".into()),
         ],
-        raw: vec![format!("{name} 1842.3@34.0")],
     };
     s.fingers.insert(
         "kuroobi".into(),
-        finger("kuroobi", "rand&discs>=14&discs<=20&mt1>=120"),
+        finger("rand&discs>=14&discs<=20&mt1>=120"),
     );
-    s.fingers
-        .insert("saio".into(), finger("saio", "rand&or>=1600"));
+    s.fingers.insert("saio".into(), finger("rand&or>=1600"));
     s
 }
 
@@ -2578,7 +2568,6 @@ fn handle_os_line(
                     let (names, ratings, gtype) = match_line_parts(mrest);
                     s.ongoing.push(OngoingView {
                         id,
-                        raw: mrest.to_string(),
                         watching: false,
                         names,
                         ratings,
@@ -4106,7 +4095,6 @@ fn capture_match_list(ctx: &mut Ctx, buf: &[String], login: &str) {
         let (names, ratings, gtype) = match_line_parts(rest);
         list.push(OngoingView {
             id: id.to_string(),
-            raw: rest.trim().to_string(),
             watching: false,
             names,
             ratings,
@@ -4161,7 +4149,6 @@ fn capture_stored_list(ctx: &mut Ctx, buf: &[String], login: &str) {
             .unwrap_or_default();
         list.push(StoredView {
             id: id.to_string(),
-            raw: rest.to_string(),
             opp,
             gtype,
         });
@@ -4293,7 +4280,6 @@ fn capture_osfinger(ctx: &mut Ctx, buf: &[String], name: &str) {
 
 fn capture_finger(ctx: &mut Ctx, buf: &[String], name: &str) {
     let mut fields: Vec<(String, String)> = Vec::new();
-    let mut raw: Vec<String> = Vec::new();
     for l in buf {
         let t = l.trim_end();
         if t.is_empty() || t == ":" {
@@ -4304,7 +4290,6 @@ fn capture_finger(ctx: &mut Ctx, buf: &[String], name: &str) {
         if lower.starts_with("passw") {
             continue;
         }
-        raw.push(t.to_string());
         if let Some((k, v)) = t.split_once(':') {
             let (k, v) = (k.trim(), v.trim());
             if !k.is_empty() && !k.contains(' ') || k.contains('(') {
@@ -4313,14 +4298,7 @@ fn capture_finger(ctx: &mut Ctx, buf: &[String], name: &str) {
         }
     }
     let mut s = ctx.snap.lock().unwrap();
-    s.fingers.insert(
-        name.to_string(),
-        FingerInfo {
-            name: name.to_string(),
-            fields,
-            raw,
-        },
-    );
+    s.fingers.insert(name.to_string(), FingerInfo { fields });
     drop(s);
     ctx.dirty = true;
 }

@@ -6,11 +6,14 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 
 use kuroobi::midgame::{mpc_reduced_depth, NnueSearch, SharedTt};
 use kuroobi::nnue::{MpcAlpha, MpcSigma, Nnue};
+use kuroobi::pattern::NNUE_PATTERNS;
 use kuroobi::trainer::load_examples_binary;
 
 const DISC_LIMIT: f32 = 64.0;
 
-const LEGACY: [f32; MpcSigma::LEN] = [-0.068941, 0.368775, -0.713476, 0.010223, 0.647219, 4.050545];
+/// Where the fit starts.
+const FIT_START: [f32; MpcSigma::LEN] =
+    [-0.068941, 0.368775, -0.713476, 0.010223, 0.647219, 4.050545];
 
 struct Cell {
     empties: f64,
@@ -163,11 +166,8 @@ struct Args {
     from_csv: Option<PathBuf>,
     show_cells: bool,
     write: bool,
-    legacy_sigma: bool,
     alpha: bool,
     alpha_per_stage: usize,
-    which: String,
-    spec: Option<PathBuf>,
 }
 
 fn parse_args() -> Args {
@@ -188,18 +188,13 @@ fn parse_args() -> Args {
         from_csv: None,
         show_cells: false,
         write: false,
-        legacy_sigma: false,
         alpha: false,
         alpha_per_stage: 2000usize,
-        which: String::from("nnue"),
-        spec: None,
     };
 
     let mut it = std::env::args().skip(1);
     while let Some(arg) = it.next() {
         match arg.as_str() {
-            "--patterns" => a.which = it.next().unwrap_or(a.which),
-            "--patterns-file" => a.spec = it.next().map(PathBuf::from),
             "--threads" => a.threads = it.next().and_then(|v| v.parse().ok()).unwrap_or(a.threads),
             "--stride" => a.stride = it.next().and_then(|v| v.parse().ok()).unwrap_or(a.stride),
             "--max" => {
@@ -240,7 +235,6 @@ fn parse_args() -> Args {
             "--from-csv" => a.from_csv = it.next().map(PathBuf::from),
             "--cells" => a.show_cells = true,
             "--write" => a.write = true,
-            "--legacy-sigma" => a.legacy_sigma = true,
             "--alpha" => a.alpha = true,
             "--alpha-per-stage" => {
                 a.alpha_per_stage = it
@@ -275,17 +269,14 @@ fn main() -> ExitCode {
         from_csv,
         show_cells,
         write,
-        legacy_sigma,
         alpha,
         alpha_per_stage,
-        which,
-        spec,
     } = parse_args();
-    let want_data = !legacy_sigma && from_csv.is_none();
+    let want_data = from_csv.is_none();
     if paths.is_empty() || (want_data && paths.len() < 2) {
         eprintln!(
             "usage: nnue_mpccalib [--threads N] [--stride N] [--max N] [--max-depth 12] \
-             [--depths a,b,c] [--patterns nnue|linear] [--patterns-file <spec>] [--min-empties 20] [--max-empties 58] \
+             [--depths a,b,c] [--min-empties 20] [--max-empties 58] \
              [--min-cell 20] [--empties-bin 3] [--csv out.csv] [--cells] [--write] \
              <nnue.bin> <data-file>..."
         );
@@ -293,16 +284,10 @@ fn main() -> ExitCode {
     }
     let nnue_path = paths.remove(0);
 
-    if legacy_sigma {
-        return write_legacy_sigma(&nnue_path, &which, spec.as_deref());
-    }
     if alpha {
-        let Some(patterns) = resolve_patterns(&which, spec.as_deref()) else {
-            return ExitCode::FAILURE;
-        };
         return calibrate_alpha(
             &nnue_path,
-            patterns,
+            NNUE_PATTERNS,
             &paths,
             stride,
             alpha_per_stage,
@@ -313,9 +298,7 @@ fn main() -> ExitCode {
     let Some(pairs) = depth_pairs(max_depth, &mut depths) else {
         return ExitCode::FAILURE;
     };
-    let Some(patterns) = resolve_patterns(&which, spec.as_deref()) else {
-        return ExitCode::FAILURE;
-    };
+    let patterns = NNUE_PATTERNS;
     let rows = match &from_csv {
         Some(path) => read_csv(path, &mut depths),
         None => measure(
@@ -354,7 +337,7 @@ fn main() -> ExitCode {
         return ExitCode::FAILURE;
     }
 
-    let (coef, rmse) = fit(&cells, LEGACY);
+    let (coef, rmse) = fit(&cells, FIT_START);
     let sigma = MpcSigma::from_array(coef);
     report_pairs(&cells, &pairs, &sigma, coef, rmse);
     if show_cells {
@@ -381,12 +364,6 @@ fn main() -> ExitCode {
 
 type Patterns = &'static [kuroobi::pattern::Pattern];
 
-fn resolve_patterns(which: &str, spec: Option<&Path>) -> Option<Patterns> {
-    kuroobi::pattern::resolve(which, spec)
-        .map_err(|e| eprintln!("{e}"))
-        .ok()
-}
-
 fn rewrite_model(
     nnue_path: &Path,
     patterns: Patterns,
@@ -412,24 +389,6 @@ struct Scan {
     max_empties: u32,
     max_positions: usize,
     threads: usize,
-}
-
-fn write_legacy_sigma(nnue_path: &Path, which: &str, spec: Option<&Path>) -> ExitCode {
-    let Some(patterns) = resolve_patterns(which, spec) else {
-        return ExitCode::FAILURE;
-    };
-    let sigma = MpcSigma::from_array(LEGACY);
-    if !rewrite_model(nnue_path, patterns, "load", |nn| {
-        nn.set_mpc_sigma(Some(sigma))
-    }) {
-        return ExitCode::FAILURE;
-    }
-    println!(
-        "wrote the linear linear's constants into {} -- for A/B only, \
-         this is not a measurement of this model",
-        nnue_path.display()
-    );
-    ExitCode::SUCCESS
 }
 
 /// The (depth, pc_depth) pairs to fit, and the depths they need searched.
@@ -681,10 +640,9 @@ fn report_pairs(
     coef: [f32; MpcSigma::LEN],
     rmse: f64,
 ) {
-    let legacy = MpcSigma::from_array(LEGACY);
     println!(
-        "{:>5} {:>4} {:>8} {:>9} {:>8} {:>8} {:>7}",
-        "depth", "pc", "n", "empties", "measured", "fitted", "vs old"
+        "{:>5} {:>4} {:>8} {:>9} {:>8} {:>8}",
+        "depth", "pc", "n", "empties", "measured", "fitted"
     );
     for &(d, p) in pairs {
         let sel: Vec<&Cell> = cells
@@ -704,11 +662,9 @@ fn report_pairs(
         let hi = sel.iter().map(|c| c.e_hi).max().unwrap();
         let mid = (lo + hi) / 2;
         let fitted = sigma.value(mid, d, p);
-        let old = legacy.value(mid, d, p);
         println!(
-            "{d:>5} {p:>4} {n:>8} {:>9} {meas:>8.3} {fitted:>8.3} {:>6.2}x",
-            format!("{lo}-{hi}"),
-            fitted / old
+            "{d:>5} {p:>4} {n:>8} {:>9} {meas:>8.3} {fitted:>8.3}",
+            format!("{lo}-{hi}")
         );
     }
     println!(

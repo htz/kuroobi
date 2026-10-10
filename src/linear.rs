@@ -810,7 +810,7 @@ mod tests {
 
         let mut b = Board::new();
         let first = b.movable().trailing_zeros();
-        b.make_move_unchecked(Position::from_index(first).unwrap());
+        b.make_move_bits(Position::from_index(first).unwrap());
         assert_eq!(Linear::stage(&b), 1, "one move played -> stage 1");
     }
 
@@ -871,7 +871,7 @@ mod tests {
             for _ in 0..plies {
                 let pos =
                     crate::position::Position::from_index(b.movable().trailing_zeros()).unwrap();
-                b.make_move_unchecked(pos);
+                b.make_move_bits(pos);
             }
 
             let multiplier = gradient_multiplier(&b);
@@ -905,7 +905,7 @@ mod tests {
 
         let mut later = b;
         let pos = crate::position::Position::from_index(later.movable().trailing_zeros()).unwrap();
-        later.make_move_unchecked(pos);
+        later.make_move_bits(pos);
         assert_eq!(Linear::stage(&later), 1);
         assert_eq!(e.eval(&later), 0.0, "stage-1 weights must be untouched");
     }
@@ -929,7 +929,7 @@ mod tests {
     fn test_asymmetric_position_perspectives_differ() {
         let mut b = Board::new();
         let pos = crate::position::Position::from_index(b.movable().trailing_zeros()).unwrap();
-        b.make_move_unchecked(pos);
+        b.make_move_bits(pos);
 
         let mut e = Linear::new(LINEAR_PATTERNS);
         for _ in 0..300 {
@@ -976,7 +976,7 @@ mod tests {
     fn test_symmetry_augmented_training_generalizes() {
         let mut b = Board::new();
         let pos = Position::from_index(b.movable().trailing_zeros()).unwrap();
-        b.make_move_unchecked(pos);
+        b.make_move_bits(pos);
 
         let mut e = Linear::new(LINEAR_PATTERNS);
         let mut opt = AdamOptimizer::new(0.01);
@@ -1013,7 +1013,7 @@ mod tests {
             if moves == 0 {
                 break;
             }
-            board.make_move_unchecked(Position::from_index(moves.trailing_zeros()).unwrap());
+            board.make_move_bits(Position::from_index(moves.trailing_zeros()).unwrap());
             history.push(board);
         }
         let final_score = 10.0f32; // pretend Black wins by 10
@@ -1050,7 +1050,7 @@ mod tests {
             if moves == 0 {
                 break;
             }
-            board.make_move_unchecked(Position::from_index(moves.trailing_zeros()).unwrap());
+            board.make_move_bits(Position::from_index(moves.trailing_zeros()).unwrap());
             history.push(board);
         }
 
@@ -1238,7 +1238,7 @@ mod tests {
             for _ in 0..pick {
                 m &= m - 1;
             }
-            board.make_move_unchecked(Position::from_index(m.trailing_zeros()).unwrap());
+            board.make_move_bits(Position::from_index(m.trailing_zeros()).unwrap());
             let base = e.eval(&board);
             for sym in board.symmetries() {
                 assert_eq!(e.eval(&sym), base, "a symmetric form scored differently");

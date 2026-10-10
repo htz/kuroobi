@@ -27,7 +27,7 @@ fn position_with_empties(empties: u8, seed: u64) -> Board {
             nth -= 1;
         }
         let pos = Position::from_index(m.trailing_zeros()).unwrap();
-        board.make_move_unchecked(pos);
+        board.make_move_bits(pos);
     }
     board
 }
@@ -48,7 +48,7 @@ fn negamax(board: &Board, passed: bool) -> i32 {
         let bit = m.trailing_zeros();
         m &= m - 1;
         let mut child = *board;
-        child.make_move_unchecked(Position::from_index(bit).unwrap());
+        child.make_move_bits(Position::from_index(bit).unwrap());
         best = best.max(-negamax(&child, false));
     }
     best
@@ -87,7 +87,7 @@ fn solver_deep_endgame_16_empties() {
     assert!(perfect.value.abs() <= 64);
 
     let mut child = board;
-    child.make_move_unchecked(best);
+    child.make_move_bits(best);
     let reply = solver.solve(EndSolverMode::Perfect, &child);
     assert_eq!(
         -reply.value, perfect.value,

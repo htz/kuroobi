@@ -407,6 +407,7 @@ pub const NNUE_PATTERNS: &[Pattern] = &[
     },
 ];
 
+#[cfg(test)]
 fn orbit(base: &[u8]) -> Vec<Vec<u8>> {
     let transpose = |m: &[u8]| -> Vec<u8> { m.iter().map(|&s| (s % 8) * 8 + s / 8).collect() };
     let flip_file = |m: &[u8]| -> Vec<u8> { m.iter().map(|&s| (7 - s / 8) * 8 + s % 8).collect() };
@@ -437,7 +438,11 @@ fn orbit(base: &[u8]) -> Vec<Vec<u8>> {
     out
 }
 
-pub fn from_spec(text: &str, share_orientations: bool) -> Result<&'static [Pattern], String> {
+#[cfg(test)]
+pub(crate) fn from_spec(
+    text: &str,
+    share_orientations: bool,
+) -> Result<&'static [Pattern], String> {
     let mut pats: Vec<Pattern> = Vec::new();
     for (n, line) in text.lines().enumerate() {
         let line = line.split('#').next().unwrap_or("").trim();
@@ -496,18 +501,6 @@ pub fn from_spec(text: &str, share_orientations: bool) -> Result<&'static [Patte
         return Err("spec defines no patterns".to_string());
     }
     Ok(Box::leak(pats.into_boxed_slice()))
-}
-
-pub fn resolve(name: &str, spec: Option<&std::path::Path>) -> Result<&'static [Pattern], String> {
-    if let Some(path) = spec {
-        let text = std::fs::read_to_string(path).map_err(|e| format!("{}: {e}", path.display()))?;
-        return from_spec(&text, false);
-    }
-    match name {
-        "nnue" => Ok(NNUE_PATTERNS),
-        "linear" => Ok(LINEAR_PATTERNS),
-        other => Err(format!("unknown pattern set {other}")),
-    }
 }
 
 #[cfg(test)]

@@ -688,7 +688,7 @@ export function EvalTrend({ points, plies, height = 96 }: {
         {ticks.map((tick) => (
           <g key={tick}>
             <line x1={padL} y1={y(tick)} x2={w - padR} y2={y(tick)}
-                  stroke={tick === 0 ? 'var(--line)' : 'var(--border-weak)'} strokeWidth={1} />
+                  stroke={tick === 0 ? 'var(--border)' : 'var(--border-weak)'} strokeWidth={1} />
             <text x={padL - 4} y={y(tick) + 3} textAnchor="end"
                   fontSize={9} fill="var(--sub)">{tick > 0 ? `+${tick}` : tick}</text>
           </g>

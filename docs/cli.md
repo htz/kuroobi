@@ -78,14 +78,6 @@ nnue_train [OPTIONS] <data-file>...
 | `--sym-train` | Draw one of the eight symmetric forms per example per epoch |
 | `--sym-all` | Train every example in all eight forms, as eight separate passes |
 
-**Model**
-
-| Option | Meaning |
-|---|---|
-| `--patterns <name>` | `nnue` or `linear` |
-| `--patterns-file <path>` | Pattern set from a spec file |
-| `--patterns-share` | Share one weight block across a shape's symmetric forms |
-
 **Optimizer**
 
 | Option | Meaning |
@@ -152,7 +144,7 @@ off** -- the search is correct but much slower. Sigma belongs to the
 evaluator, so every new model needs its own.
 
 ```sh
-nnue_mpccalib --threads 10 --max 6000 --patterns nnue --write \
+nnue_mpccalib --threads 10 --max 6000 --write \
   weights/nnue.bin data/records/egaroucid_v0002/train-d4/rand8.data
 ```
 

@@ -531,6 +531,28 @@ impl Deadline {
             self.set(at);
         }
     }
+
+    /// Trips `stop` once the deadline passes; storing `true` in the returned flag ends the watch.
+    pub fn watch(
+        self: &std::sync::Arc<Deadline>,
+        stop: StopHandle,
+    ) -> std::sync::Arc<std::sync::atomic::AtomicBool> {
+        let dl = self.clone();
+        let done = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let d2 = done.clone();
+        std::thread::spawn(move || {
+            while !d2.load(std::sync::atomic::Ordering::Relaxed) {
+                let now = std::time::Instant::now();
+                let at = dl.get();
+                if now >= at {
+                    stop.stop();
+                    return;
+                }
+                std::thread::sleep((at - now).min(std::time::Duration::from_millis(20)));
+            }
+        });
+        done
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
@@ -721,23 +743,9 @@ impl NnueSearch {
         if b.movable() == 0 {
             return (None, f32::NAN, 0);
         }
-        let watcher = deadline.clone().and_then(|dl| {
-            let stop = self.stop.clone()?;
-            let done = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
-            let d2 = done.clone();
-            std::thread::spawn(move || {
-                while !d2.load(std::sync::atomic::Ordering::Relaxed) {
-                    let now = std::time::Instant::now();
-                    let at = dl.get();
-                    if now >= at {
-                        stop.stop();
-                        return;
-                    }
-                    std::thread::sleep((at - now).min(std::time::Duration::from_millis(20)));
-                }
-            });
-            Some(done)
-        });
+        let watcher = deadline
+            .as_ref()
+            .and_then(|dl| Some(dl.watch(self.stop.clone()?)));
         let r = self.best_move_valued_inner(b, depth, deadline.as_ref(), extend);
         if let Some(d) = watcher {
             d.store(true, std::sync::atomic::Ordering::Relaxed);

@@ -46,7 +46,7 @@ export type ClockSide = 'my' | 'opp' | 'p0' | 'p1';
 
 export interface ClockView {
   text: string;
-  cls: '' | 'turn' | 'ext' | 'dead';
+  active: boolean;
 }
 
 const theirTurn = (m: MatchView) =>
@@ -65,7 +65,7 @@ function oppSince(m: MatchView, sib: MatchView | undefined): number | null {
 
 function clockView(c: ClockBase | undefined, side: ClockSide, now: number,
                    sib?: MatchView): ClockView {
-  if (!c) return { text: '', cls: '' };
+  if (!c) return { text: '', active: false };
   const m = c.match;
   let base: number | null;
   let ext: number | null;
@@ -73,7 +73,7 @@ function clockView(c: ClockBase | undefined, side: ClockSide, now: number,
   let color: string;
   if (side === 'p0' || side === 'p1') {
     const p: PlayerView | undefined = m.players[side === 'p0' ? 0 : 1];
-    if (!p) return { text: '', cls: '' };
+    if (!p) return { text: '', active: false };
     base = p.secs; ext = p.ext; raw = p.clock; color = p.color;
   } else if (side === 'my') {
     base = m.my_secs; ext = m.my_ext; raw = m.my_clock; color = m.my_color;
@@ -81,9 +81,9 @@ function clockView(c: ClockBase | undefined, side: ClockSide, now: number,
     base = m.opp_secs; ext = m.opp_ext; raw = m.opp_clock;
     color = m.my_color === 'black' ? 'white' : m.my_color === 'white' ? 'black' : '';
   }
-  if (m.ended === 'adjourned' || m.ended === 'aborted') return { text: '', cls: '' };
+  if (m.ended === 'adjourned' || m.ended === 'aborted') return { text: '', active: false };
   const active = !m.over && !!m.turn && !!color && m.turn === color;
-  if (base === null) return { text: raw || '', cls: active ? 'turn' : '' };
+  if (base === null) return { text: raw || '', active };
   // From the server update, not first draw, so a remount does not reset the clock.
   const since = m.updated_ms || c.at;
   const mine = side === 'my' || (!!color && color === m.my_color);
@@ -92,19 +92,19 @@ function clockView(c: ClockBase | undefined, side: ClockSide, now: number,
   if (!mine && base > 0) {
     const from = side === 'opp' && m.updated_ms ? oppSince(m, sib) : since;
     const spent = active && from != null ? Math.max(0, now - from) / 1000 : 0;
-    return { text: fmtSecs(Math.max(0, base - spent)), cls: active ? 'turn' : '' };
+    return { text: fmtSecs(Math.max(0, base - spent)), active };
   }
   const ours = !active || m.think_queued ? 0
     : m.think_since_ms ? Math.max(0, now - m.think_since_ms) / 1000 : elapsed;
   const rem = base - (mine ? ours : 0);
   if (mine && m.in_overtime && rem >= 0) {
-    return { text: t('ggs.clock.overtime', { t: fmtSecs(rem) }), cls: 'ext' };
+    return { text: t('ggs.clock.overtime', { t: fmtSecs(rem) }), active: false };
   }
-  if (rem >= 0) return { text: fmtSecs(rem), cls: active ? 'turn' : '' };
+  if (rem >= 0) return { text: fmtSecs(rem), active };
   if (ext && ext + rem >= 0) {
-    return { text: t('ggs.clock.overtime', { t: fmtSecs(ext + rem) }), cls: 'ext' };
+    return { text: t('ggs.clock.overtime', { t: fmtSecs(ext + rem) }), active: false };
   }
-  return { text: t('ggs.clock.timeout'), cls: 'dead' };
+  return { text: t('ggs.clock.timeout'), active: false };
 }
 
 type Presence = 'playing' | 'online' | 'offline';

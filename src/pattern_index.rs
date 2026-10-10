@@ -270,7 +270,7 @@ mod tests {
                 for (before, pos, flipped, mover) in &game {
                     ix.apply(&mut indices, *pos, *flipped, *mover);
                     let mut after = *before;
-                    after.make_move_unchecked(*pos);
+                    after.make_move_bits(*pos);
                     for player in [Color::Black, Color::White] {
                         assert_eq!(
                             indexer_view(&ix, &indices, player),

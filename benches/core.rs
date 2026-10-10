@@ -29,7 +29,7 @@ fn position_with_empties(empties: u8, seed: u64) -> Board {
             m &= m - 1;
             nth -= 1;
         }
-        board.make_move_unchecked(Position::from_index(m.trailing_zeros()).unwrap());
+        board.make_move_bits(Position::from_index(m.trailing_zeros()).unwrap());
     }
     board
 }
@@ -53,7 +53,7 @@ fn perft(board: &Board, depth: u32) -> u64 {
         let bit = m.trailing_zeros();
         m &= m - 1;
         let mut child = *board;
-        child.make_move_unchecked(Position::from_index(bit).unwrap());
+        child.make_move_bits(Position::from_index(bit).unwrap());
         nodes += perft(&child, depth - 1);
     }
     nodes

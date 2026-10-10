@@ -23,11 +23,6 @@ const PAIR_CLAMP: f32 = 1.0;
 
 const ACT_SCALE: f32 = 255.0 / 256.0;
 
-const NUM_TABLE_SIZE: usize = 65;
-
-const MLP_H1: usize = 16;
-const MLP_H2: usize = 16;
-
 const SO_STAGES: usize = 60;
 
 #[inline]
@@ -90,14 +85,6 @@ fn so_moment_shapes() -> Vec<Vec<f32>> {
 }
 
 const GRAD_CLIP_NORM: f32 = 1.0;
-
-const MOB_BUCKETS: usize = 24;
-
-/// Formats 09 and 10 carry a read-out no forward pass uses; the reader skips this many values.
-const LEGACY_READOUT_LEN: usize = STAGE_COUNT
-    * (H + 1 + NUM_TABLE_SIZE + H / 2 + MOB_BUCKETS + MLP_H2)
-    + MLP_H1 * (H + 1 + MLP_H2 + 1)
-    + MLP_H2;
 
 pub struct AdamState {
     pub beta1: f32,
@@ -817,7 +804,6 @@ impl MpcSigma {
 }
 
 pub struct Nnue {
-    base: Option<Box<crate::linear::Linear>>,
     patterns: &'static [Pattern],
     indexer: PatternIndexer,
     n_masks: usize,
@@ -860,7 +846,6 @@ impl Nnue {
             .collect();
 
         Nnue {
-            base: None,
             patterns,
             indexer,
             n_masks,
@@ -983,19 +968,7 @@ impl Nnue {
 
     #[inline]
     pub fn eval_from_indices(&self, indices: &PatternIndices, board: &Board) -> f32 {
-        self.net_from_indices(indices, board) + self.base_score(board, indices)
-    }
-
-    #[inline]
-    fn base_score(&self, board: &Board, indices: &PatternIndices) -> f32 {
-        match &self.base {
-            Some(e) => e.eval_indices(board, indices),
-            None => 0.0,
-        }
-    }
-
-    pub fn set_base(&mut self, e: crate::linear::Linear) {
-        self.base = Some(Box::new(e));
+        self.net_from_indices(indices, board)
     }
 
     #[inline]
@@ -1011,7 +984,7 @@ impl Nnue {
     }
 
     pub fn eval_indices(&self, board: &Board, indices: &PatternIndices) -> f32 {
-        self.net_indices(board, indices) + self.base_score(board, indices)
+        self.net_indices(board, indices)
     }
 
     pub fn net_indices(&self, board: &Board, indices: &PatternIndices) -> f32 {
@@ -1575,23 +1548,12 @@ impl Nnue {
         let mut r = &mut *r;
         let mut magic = [0u8; 8];
         r.read_exact(&mut magic)?;
-        let (sigma, legacy) = match &magic {
-            b"BBRVNN11" => (true, false),
-            b"BBRVNN10" => (true, true),
-            b"BBRVNN09" => (false, true),
-            m if m.starts_with(b"BBRVNN0") && (b'1'..=b'8').contains(&m[7]) => {
-                return Err(std::io::Error::new(
-                    std::io::ErrorKind::InvalidData,
-                    "nnue file predates the phase-adaptive layer; this build cannot read it",
-                ))
-            }
-            _ => {
-                return Err(std::io::Error::new(
-                    std::io::ErrorKind::InvalidData,
-                    "bad nnue magic",
-                ))
-            }
-        };
+        if &magic != b"BBRVNN11" {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::InvalidData,
+                "bad nnue magic",
+            ));
+        }
         let mut u = [0u8; 4];
         r.read_exact(&mut u)?;
         if u32::from_le_bytes(u) as usize != ACC_DIMS {
@@ -1619,27 +1581,21 @@ impl Nnue {
         }
         r.read_exact(&mut u)?;
         let so_len = u32::from_le_bytes(u) as usize;
-        self.mpc_sigma = None;
-        if sigma {
+        r.read_exact(&mut u)?;
+        let present = u32::from_le_bytes(u) != 0;
+        let mut coef = [0.0f32; MpcSigma::LEN];
+        for c in coef.iter_mut() {
             r.read_exact(&mut u)?;
-            let present = u32::from_le_bytes(u) != 0;
-            let mut coef = [0.0f32; MpcSigma::LEN];
-            for c in coef.iter_mut() {
-                r.read_exact(&mut u)?;
-                *c = f32::from_le_bytes(u);
-            }
-            if present {
-                self.mpc_sigma = Some(MpcSigma::from_array(coef));
-            }
+            *c = f32::from_le_bytes(u);
         }
+        self.mpc_sigma = present.then(|| MpcSigma::from_array(coef));
         let want_so = self.so_l1_w.len()
             + self.so_l1_b.len()
             + self.so_l2_w.len()
             + self.so_l2_b.len()
             + self.so_out_w.len()
             + self.so_out_b.len();
-        let extra_stage = so_len == want_so + want_so / SO_STAGES;
-        if so_len != want_so && !extra_stage {
+        if so_len != want_so {
             return Err(std::io::Error::new(
                 std::io::ErrorKind::InvalidData,
                 "stacked read-out mismatch: this build and the file disagree on whether the \
@@ -1656,30 +1612,15 @@ impl Nnue {
         };
         read_into(r, &mut self.ft)?;
         read_into(r, &mut self.ft_bias)?;
-        if legacy {
-            read_into(r, &mut vec![0.0f32; LEGACY_READOUT_LEN])?;
-        }
-        let read_stages = |r: &mut dyn Read, dst: &mut [f32]| -> std::io::Result<()> {
-            read_into(r, dst)?;
-            if extra_stage {
-                let mut tail = vec![0.0f32; dst.len() * (so_len - want_so) / want_so];
-                read_into(r, &mut tail)?;
-            }
-            Ok(())
-        };
-        read_stages(&mut r, &mut self.so_l1_w)?;
-        read_stages(&mut r, &mut self.so_l1_b)?;
-        read_stages(&mut r, &mut self.so_l2_w)?;
-        read_stages(&mut r, &mut self.so_l2_b)?;
-        read_stages(&mut r, &mut self.so_out_w)?;
-        read_stages(&mut r, &mut self.so_out_b)?;
+        read_into(r, &mut self.so_l1_w)?;
+        read_into(r, &mut self.so_l1_b)?;
+        read_into(r, &mut self.so_l2_w)?;
+        read_into(r, &mut self.so_l2_b)?;
+        read_into(r, &mut self.so_out_w)?;
+        read_into(r, &mut self.so_out_b)?;
         read_into(r, &mut self.pa)?;
         read_into(r, &mut self.pa_bias)?;
-        self.mpc_alpha = if sigma {
-            MpcAlpha::read_from(&mut r)?
-        } else {
-            None
-        };
+        self.mpc_alpha = MpcAlpha::read_from(&mut r)?;
         Ok(())
     }
 }

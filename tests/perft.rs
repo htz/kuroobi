@@ -24,7 +24,7 @@ fn perft(board: &Board, depth: u32) -> u64 {
         m &= m - 1;
         let pos = kuroobi::Position::from_index(bit).unwrap();
         let mut next = *board;
-        next.make_move_unchecked(pos);
+        next.make_move_bits(pos);
         nodes += perft(&next, depth - 1);
     }
     nodes
@@ -85,7 +85,7 @@ fn mobility_matches_flippable_exhaustive() {
             63 - moves.leading_zeros()
         };
         let pos = kuroobi::Position::from_index(bit).unwrap();
-        board.make_move_unchecked(pos);
+        board.make_move_bits(pos);
         steps += 1;
         if steps > 100 {
             break;

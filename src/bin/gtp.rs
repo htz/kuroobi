@@ -70,12 +70,6 @@ fn parse_args() -> Result<(EngineConfig, u64), ExitCode> {
     let mut time_ms: u64 = 0;
     let mut solve_set = false;
 
-    let patterns = |name: &str, file: Option<&std::path::Path>| {
-        kuroobi::pattern::resolve(name, file).map_err(|e| {
-            eprintln!("{e}");
-            ExitCode::FAILURE
-        })
-    };
     let mut it = std::env::args().skip(1);
     while let Some(a) = it.next() {
         match a.as_str() {
@@ -100,15 +94,6 @@ fn parse_args() -> Result<(EngineConfig, u64), ExitCode> {
             "--time-ms" => time_ms = it.next().and_then(|v| v.parse().ok()).unwrap_or(0),
             "--weights" => cfg.weights = PathBuf::from(it.next().unwrap_or_default()),
             "--nnue" => cfg.nnue = PathBuf::from(it.next().unwrap_or_default()),
-            "--nnue-base" => cfg.nnue_base = PathBuf::from(it.next().unwrap_or_default()),
-            "--patterns" => {
-                let name = it.next().unwrap_or_else(|| "linear".to_string());
-                cfg.nnue_patterns = patterns(&name, None)?;
-            }
-            "--patterns-file" => {
-                let path = PathBuf::from(it.next().unwrap_or_default());
-                cfg.nnue_patterns = patterns("", Some(&path))?;
-            }
             "--book" => {
                 cfg.book = PathBuf::from(it.next().unwrap_or_default());
                 cfg.use_book = true;

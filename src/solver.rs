@@ -800,38 +800,12 @@ knob!(fn selective_min_empties() -> u8 = "SEL_MIN_EMPTIES" or SELECTIVE_MIN_EMPT
 const SELECTIVE_PROBE_DEPTH: u8 = 2;
 
 fn selective_sigma(empties: u8, pc: u8) -> f32 {
-    if legacy_sigma() {
-        return legacy_mpc_sigma(empties as u32, empties, pc);
-    }
-
     let e = (empties as f32).clamp(14.0, 30.0);
     let p = (pc as f32).clamp(2.0, 10.0);
     let s = 7.246577 + 0.020516 * e - 0.438464 * p - 0.004024 * e * e
         + 0.000167 * p * p
         + 0.009864 * e * p;
     s.max(1.0)
-}
-
-#[inline]
-fn legacy_mpc_sigma(empties: u32, depth: u8, pc_depth: u8) -> f32 {
-    const A: f32 = -0.068941;
-    const B: f32 = 0.368775;
-    const C: f32 = -0.713476;
-    const QA: f32 = 0.010223;
-    const QB: f32 = 0.647219;
-    const QC: f32 = 4.050545;
-    let s = A * empties as f32 + B * depth as f32 + C * pc_depth as f32;
-    QA * s * s + QB * s + QC
-}
-
-#[cfg(feature = "tunable")]
-fn legacy_sigma() -> bool {
-    static V: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
-    *V.get_or_init(|| std::env::var("SEL_SIGMA").is_ok_and(|v| v == "old"))
-}
-#[cfg(not(feature = "tunable"))]
-fn legacy_sigma() -> bool {
-    false
 }
 
 fn selective_probe_depth(empties: u8) -> u8 {
@@ -5172,7 +5146,7 @@ mod tests {
             let bit = m.trailing_zeros();
             m &= m - 1;
             let mut child = *board;
-            child.make_move_unchecked(Position::from_index(bit).unwrap());
+            child.make_move_bits(Position::from_index(bit).unwrap());
             let v = -negamax(&child, false);
             if v > best {
                 best = v;
@@ -5200,7 +5174,7 @@ mod tests {
             } else {
                 63 - moves.leading_zeros()
             };
-            b.make_move_unchecked(Position::from_index(bit).unwrap());
+            b.make_move_bits(Position::from_index(bit).unwrap());
             ply += 1;
         }
         b

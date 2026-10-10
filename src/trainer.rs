@@ -444,7 +444,7 @@ mod tests {
         let mut examples = Vec::new();
         for score in [4i8, -6, 10] {
             let pos = Position::from_index(b.movable().trailing_zeros()).unwrap();
-            b.make_move_unchecked(pos);
+            b.make_move_bits(pos);
             let (black, white, score) = if b.player() == Color::Black {
                 (b.black, b.white, score)
             } else {

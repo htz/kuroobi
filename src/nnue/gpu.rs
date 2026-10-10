@@ -1265,7 +1265,6 @@ fn u32s(v: &[u32]) -> &[u8] {
 
 impl GpuTrainer {
     pub fn new(nn: &Nnue, batch: usize, adam: &AdamState, lookahead: (u32, f32)) -> GpuTrainer {
-        assert!(nn.base.is_none(), "the GPU path has no base linear");
         const {
             assert!(
                 SO_SKIP <= WG && ACC_DIMS == WG,

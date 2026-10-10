@@ -6,7 +6,7 @@ use crate::book::{Book, BookCandidate};
 use crate::linear::Linear;
 use crate::midgame::{selective_band, NnueSearch, SharedTt, StopHandle};
 use crate::nnue::Nnue;
-use crate::pattern::{Pattern, LINEAR_PATTERNS, NNUE_PATTERNS};
+use crate::pattern::{LINEAR_PATTERNS, NNUE_PATTERNS};
 use crate::solver::{final_score, EndSolverMode, EndSolverResult, Solver};
 use crate::{Board, Position};
 
@@ -48,8 +48,6 @@ pub struct EngineConfig {
     pub solver_hash_bits: u32,
     pub weights: PathBuf,
     pub nnue: PathBuf,
-    pub nnue_base: PathBuf,
-    pub nnue_patterns: &'static [Pattern],
     pub book: PathBuf,
     pub use_book: bool,
     pub book_tolerance: f32,
@@ -67,8 +65,6 @@ impl Default for EngineConfig {
             solver_hash_bits: 22,
             weights: PathBuf::from("weights/linear.bin"),
             nnue: PathBuf::from("weights/nnue.bin"),
-            nnue_base: PathBuf::new(),
-            nnue_patterns: NNUE_PATTERNS,
             book: PathBuf::from("weights/book.txt"),
             use_book: true,
             book_tolerance: 1.0,
@@ -192,15 +188,9 @@ impl EngineAssets {
         linear
             .load_weights(&config.weights)
             .map_err(|e| format!("weights {}: {e}", config.weights.display()))?;
-        let mut nn = Nnue::new(config.nnue_patterns);
+        let mut nn = Nnue::new(NNUE_PATTERNS);
         nn.load(&config.nnue)
             .map_err(|e| format!("nnue {}: {e}", config.nnue.display()))?;
-        if !config.nnue_base.as_os_str().is_empty() {
-            let mut b = Linear::new(config.nnue_patterns);
-            b.load_weights(&config.nnue_base)
-                .map_err(|e| format!("nnue base {}: {e}", config.nnue_base.display()))?;
-            nn.set_base(b);
-        }
         nn.quantize();
         Ok(EngineAssets {
             linear: std::sync::Arc::new(linear),
@@ -271,21 +261,7 @@ impl Engine {
         &self,
         deadline: Option<std::time::Instant>,
     ) -> Option<std::sync::Arc<std::sync::atomic::AtomicBool>> {
-        let dl = deadline?;
-        let stop = self.stop.clone();
-        let done = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
-        let d2 = done.clone();
-        std::thread::spawn(move || {
-            while !d2.load(std::sync::atomic::Ordering::Relaxed) {
-                let now = std::time::Instant::now();
-                if now >= dl {
-                    stop.stop();
-                    return;
-                }
-                std::thread::sleep((dl - now).min(std::time::Duration::from_millis(20)));
-            }
-        });
-        Some(done)
+        Some(crate::midgame::Deadline::new(deadline?).watch(self.stop.clone()))
     }
 
     fn backup_move(
@@ -707,55 +683,6 @@ impl Engine {
                 ..Default::default()
             }
         }
-    }
-
-    pub fn analyze(&mut self, board: &Board, depth: u32) -> Vec<(Position, MoveEval)> {
-        self.stop.reset();
-        let saved_threads = self.search.threads;
-        self.search.threads = 1;
-        let mut out = Vec::new();
-        for pos in board.movable_iter() {
-            if self.stop.is_stopped() {
-                break;
-            }
-            let mut child = *board;
-            child.make_move_bits(pos);
-            let ev = if is_game_over(&child) {
-                MoveEval {
-                    pos: Some(pos),
-                    value: -(final_score(&child) as f32),
-                    exact: true,
-                    ..Default::default()
-                }
-            } else if child.empty_count() <= self.config.solve_empties {
-                let r = self.solver.solve_with_eval(
-                    EndSolverMode::Perfect,
-                    &child,
-                    Some(&*self.linear),
-                );
-                self.solver_nodes += r.nodes;
-                MoveEval {
-                    pos: Some(pos),
-                    value: -(r.value as f32),
-                    exact: true,
-                    ..Default::default()
-                }
-            } else {
-                self.search.clear();
-                let d = depth.saturating_sub(1).max(1);
-                let (_, v) = self.search.best_move_valued(&child, d);
-                MoveEval {
-                    pos: Some(pos),
-                    value: stone_scale(-v),
-                    ..Default::default()
-                }
-            };
-            out.push((pos, ev));
-        }
-        self.search.threads = saved_threads;
-        self.search.clear();
-        out.sort_by(|a, b| b.1.value.total_cmp(&a.1.value));
-        out
     }
 
     pub fn analyze_deepening(

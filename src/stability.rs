@@ -347,7 +347,7 @@ mod tests {
                 m &= m - 1;
                 nth -= 1;
             }
-            board.make_move_unchecked(Position::from_index(m.trailing_zeros()).unwrap());
+            board.make_move_bits(Position::from_index(m.trailing_zeros()).unwrap());
         }
     }
 
@@ -374,7 +374,7 @@ mod tests {
                 m &= m - 1;
                 nth -= 1;
             }
-            board.make_move_unchecked(Position::from_index(m.trailing_zeros()).unwrap());
+            board.make_move_bits(Position::from_index(m.trailing_zeros()).unwrap());
         }
         board
     }

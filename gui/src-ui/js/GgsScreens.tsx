@@ -15,7 +15,7 @@ import { Strength } from './components/strength';
 import { Confirm, PickOne } from './Dialogs';
 import { IconButton } from './components/Icons';
 import {
-  Bubble, ConsoleLog, DayMark, FormulaEditor, FormulaView, MatchRow, RateRow, Tag,
+  Bubble, ConsoleLog, DayMark, FormulaEditor, FormulaView, MatchRow, RateRow, Tag, poolLabel,
   type Match, type NavId,
 } from './components/ggs';
 import { Board, type Cell, type EvalInfo } from './components/board';
@@ -359,7 +359,7 @@ function GgsLobby({ snap, onNav }: { snap: GgsSnapshot; onNav: (id: NavId) => vo
                      <Button size="row" onClick={() => setInfo(info === o.id ? '' : o.id)}>{t('ggs.lobby.raw_info')}</Button>
                      {o.incoming && <>
                        <Button size="row" variant="primary"
-                               onClick={() => { focusMatch(o.id); void ggsApi.accept(o.id); }}>{t('ggs.lobby.accept')}</Button>
+                               onClick={() => void ggsApi.accept(o.id)}>{t('ggs.lobby.accept')}</Button>
                        <Button size="row" variant="danger" onClick={() => void ggsApi.decline(o.id)}>{t('ggs.lobby.decline')}</Button>
                      </>}
                    </>} />
@@ -835,7 +835,7 @@ function MatchBoard({ snap, m, clock, prefs, onKifu, face, side }: {
       <PlayerRow color={top.color === 'black' ? 'b' : 'w'} name={top.name || '?'}
                  rate={top.rate ? +top.rate : undefined}
                  meta={oppEval}
-                 clock={clock(m.id, top.side).text} active={clock(m.id, top.side).cls === 'turn'} />
+                 clock={clock(m.id, top.side).text} active={clock(m.id, top.side).active} />
       <div data-board style={{ width: side, height: side }}>
         <Board cells={m.cells as Cell[]} last={last} disabled
                evals={busyEval}
@@ -847,7 +847,7 @@ function MatchBoard({ snap, m, clock, prefs, onKifu, face, side }: {
       <PlayerRow color={bottom.color === 'black' ? 'b' : 'w'} name={bottom.name || '?'}
                  rate={bottom.rate ? +bottom.rate : undefined}
                  meta={myEval}
-                 clock={clock(m.id, bottom.side).text} active={clock(m.id, bottom.side).cls === 'turn'} />
+                 clock={clock(m.id, bottom.side).text} active={clock(m.id, bottom.side).active} />
       {!observer && <EvalTrend points={trend} plies={plies} />}
       <div style={{
         display: 'flex', alignItems: 'center', gap: 'var(--sp-3)', height: 'var(--h-field)',
@@ -1198,9 +1198,6 @@ const poolOf = (base: string, raw?: string) => {
   if (!kind) return '';
   return kind.includes('r') ? '8r' : '8';
 };
-
-const poolLabel = (p: string) =>
-  (p === '8r' ? t('ggs.gtype.rand_opening') : p === '8' ? t('ggs.pool.normal') : p);
 
 const baseType = (base: string, raw?: string) => {
   const fromRaw = raw?.split(/\s+/).find((x) => /^s?8(r\d+)?$/.test(x));

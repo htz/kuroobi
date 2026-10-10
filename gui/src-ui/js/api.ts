@@ -79,7 +79,6 @@ export interface KifuFrame {
   last: number | null;
   black: number;
   white: number;
-  player: string;
 }
 
 export interface HashView {
@@ -108,7 +107,7 @@ export interface ActivityView {
 
 
 export const ggsApi = {
-  connect: (login: string, pw: string) => call<string>('ggs_connect', { login, pw }),
+  connect: (login: string, pw: string) => call<void>('ggs_connect', { login, pw }),
   disconnect: () => call('ggs_disconnect'),
   snapshot: () => call<GgsSnapshot>('ggs_snapshot'),
   raw: (cmd: string) => call('ggs_raw', { cmd }),
@@ -152,13 +151,13 @@ export const ggsApi = {
 };
 
 export async function onHints(
-  fn: (depth: number, hints: HintView[], nodes: number, secs: number) => void,
+  fn: (hints: HintView[], nodes: number, secs: number) => void,
 ): Promise<() => void> {
   const ev = window.__TAURI__?.event;
   if (!ev) throw new Error('Tauri events unavailable');
-  return ev.listen<[number, HintView[], number, number]>(
+  return ev.listen<[HintView[], number, number]>(
     'hints',
-    (e) => fn(e.payload[0], e.payload[1], e.payload[2], e.payload[3]),
+    (e) => fn(e.payload[0], e.payload[1], e.payload[2]),
   );
 }
 
