@@ -5,7 +5,7 @@ use std::path::PathBuf;
 use crate::book::{Book, BookCandidate};
 use crate::linear::Linear;
 use crate::midgame::{selective_band, NnueSearch, SharedTt, StopHandle};
-use crate::nnue::{Nnue, ACT_UNITS};
+use crate::nnue::Nnue;
 use crate::pattern::{Pattern, LINEAR_PATTERNS, NNUE_PATTERNS};
 use crate::solver::{final_score, EndSolverMode, EndSolverResult, Solver};
 use crate::{Board, Position};
@@ -50,8 +50,6 @@ pub struct EngineConfig {
     pub nnue: PathBuf,
     pub nnue_base: PathBuf,
     pub nnue_patterns: &'static [Pattern],
-    pub head_f32: bool,
-    pub act_units: f32,
     pub book: PathBuf,
     pub use_book: bool,
     pub book_tolerance: f32,
@@ -61,8 +59,6 @@ impl Default for EngineConfig {
     fn default() -> Self {
         EngineConfig {
             depth: 12,
-            head_f32: false,
-            act_units: ACT_UNITS,
             solve_empties: 18,
             band: 0,
             threads: 4,
@@ -205,9 +201,7 @@ impl EngineAssets {
                 .map_err(|e| format!("nnue base {}: {e}", config.nnue_base.display()))?;
             nn.set_base(b);
         }
-        nn.act_units = config.act_units;
         nn.quantize();
-        nn.head_f32 = config.head_f32;
         Ok(EngineAssets {
             linear: std::sync::Arc::new(linear),
             nnue: std::sync::Arc::new(nn),

@@ -97,13 +97,6 @@ fn parse_args() -> Result<(EngineConfig, u64), ExitCode> {
             }
             "--band" => cfg.band = it.next().and_then(|v| v.parse().ok()).unwrap_or(0),
             "--no-mpc" => cfg.mpc = false,
-            "--head-f32" => cfg.head_f32 = true,
-            "--act-units" => {
-                cfg.act_units = it
-                    .next()
-                    .and_then(|v| v.parse().ok())
-                    .unwrap_or(cfg.act_units)
-            }
             "--time-ms" => time_ms = it.next().and_then(|v| v.parse().ok()).unwrap_or(0),
             "--weights" => cfg.weights = PathBuf::from(it.next().unwrap_or_default()),
             "--nnue" => cfg.nnue = PathBuf::from(it.next().unwrap_or_default()),

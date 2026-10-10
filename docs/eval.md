@@ -498,7 +498,10 @@ in sequence** (they are refused because nothing is idle). Meanwhile the 5 it
 handed off (45 µs each) finish, and the workers starve for the rest of the
 fan-out.
 
-Allow the queue to hold up to the idle count + `POOL_SLACK`. At d16 / 20
+Allow the queue to hold up to the idle count + `POOL_SLACK`. (The search
+knobs named in this section — `POOL_SLACK`, `YBWC_MIN`, `SMP_MAX_DEPTH`,
+`MPC_T` — are constants in a normal build; `--features tunable` reads them
+from the environment variable of the same name.) At d16 / 20
 games / minimum of 3 rounds: 0 -> 2.25x, 2 -> 2.41x, **8 -> 2.47x**,
 32 -> 2.18x, 128 -> 2.20x. Beyond 8 the price of duplicated search outweighs
 the gain in occupancy (nodes go from 175M to 252M).
@@ -588,11 +591,12 @@ core seconds available, 27.2 is 35% utilization. **The utilization needed for
 > removing the condition-variable timeout) turned out to be noise. **3x will
 > not come from shared costs; it will come from killing the idleness.**
 
-#### The idleness is bimodal — look at it with `POOL_SAMPLE=1`
+#### The idleness is bimodal
 
 The average utilization alone cannot distinguish "always half" from
 "alternating between full and empty", and the two call for opposite remedies.
-`POOL_SAMPLE=1` samples the number of busy workers every 100 µs. Sample
+A sampler thread (since removed) read the number of busy workers every
+100 µs. Sample
 **only during the midgame search** — including the opponent's turn and the
 endgame solver leaves 3/4 of the samples empty and useless.
 
@@ -670,7 +674,8 @@ minimum of 6 is optimal.**
 
 ### Training
 
-`nnue_train` trains with Hogwild parallel SGD (2.2M pos/s on 10 threads). The
+`nnue_train` first trained with Hogwild parallel SGD (2.2M pos/s on 10
+threads); that mode is gone and training is minibatch Adam. The
 whole corpus (44 GB, 1.72 billion positions) does not fit in RAM, so it uses
 the same **sharded loading** as the linear version. It reads files together
 up to a budget (`--max-examples`, 48 million by default), trains, and

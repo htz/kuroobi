@@ -471,15 +471,16 @@ export function DayMark({ children }: { children: React.ReactNode }) {
 }
 
 
-export type LogLine = { dir: 'out' | 'in' | 'app'; text: string };
+export type LogLine = { seq: number; dir: 'out' | 'in' | 'app'; text: string };
 
 export function ConsoleLog({ lines }: { lines: LogLine[] }) {
   const box = React.useRef<HTMLDivElement>(null);
   const stick = React.useRef(true);
+  const last = lines.at(-1)?.seq;
   React.useEffect(() => {
     const b = box.current;
     if (b && stick.current) b.scrollTop = b.scrollHeight;
-  }, [lines.length]);
+  }, [last]);
   return (
     <div className="k-scroll" ref={box}
       onScroll={() => {
@@ -490,8 +491,8 @@ export function ConsoleLog({ lines }: { lines: LogLine[] }) {
       flex: 1, minHeight: 0, padding: '10px var(--sp-3)', display: 'flex', flexDirection: 'column', gap: 3,
       fontFamily: 'var(--ff-mono)', fontSize: 'var(--fs-6)', lineHeight: 1.7,
     }}>
-      {lines.map((l, i) => (
-        <div key={i} style={{
+      {lines.map((l) => (
+        <div key={l.seq} style={{
           display: 'flex', gap: 'var(--sp-2)',
           color: l.dir === 'out' ? 'var(--accent)' : l.dir === 'app' ? 'var(--sub)' : 'var(--text)',
         }}>

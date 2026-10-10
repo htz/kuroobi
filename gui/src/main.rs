@@ -478,7 +478,7 @@ fn new_game(app: State<App>) -> GameView {
 #[tauri::command]
 fn play(app: State<App>, sq: u8) -> Result<GameView, String> {
     let mut game = app.game.lock().unwrap();
-    let pos = Position::from_index(sq as u32).ok_or("bad square")?;
+    let pos = Position::from_index(sq as u32).ok_or("err.bad_square")?;
     game.make_move(pos).map_err(|e| format!("{e:?}"))?;
     auto_pass(&mut game);
     Ok(view(&game))
@@ -523,7 +523,7 @@ async fn set_use_book(app: State<'_, App>, on: bool) -> Result<(), String> {
         eng.lock()
             .unwrap()
             .as_mut()
-            .ok_or("engine")?
+            .ok_or("err.engine_not_ready")?
             .set_use_book(on);
         Ok(())
     })
@@ -831,7 +831,6 @@ struct HashView {
     end: u32,
     min: u32,
     max: u32,
-    bytes: u64,
 }
 
 fn hash_view() -> HashView {
@@ -842,7 +841,6 @@ fn hash_view() -> HashView {
         end,
         min: kuroobi::resources::HASH_BITS_MIN,
         max: kuroobi::resources::HASH_BITS_MAX,
-        bytes: kuroobi::resources::midgame_bytes(mid) + kuroobi::resources::endgame_bytes(end),
     }
 }
 
@@ -1018,7 +1016,7 @@ async fn set_resource(
         "weights" => r.weights = p,
         "nnue" => r.nnue = p,
         "book" => r.book = p,
-        other => return Err(format!("unknown resource: {other}")),
+        other => return Err(format!("err.unknown_resource|name={other}")),
     }
     r.save(&resources_path())?;
     let (eng, stop, act) = (app.engine.clone(), app.stop.clone(), app.activity.clone());
@@ -1048,7 +1046,7 @@ async fn set_levels(
         eng.lock()
             .unwrap()
             .as_mut()
-            .ok_or("engine")?
+            .ok_or("err.engine_not_ready")?
             .set_levels(depth, solve_empties, band);
         Ok(())
     })
@@ -1181,7 +1179,7 @@ fn apply_move(app: State<App>, sq: Option<u8>) -> Result<GameView, String> {
     app.clocks.lock().unwrap().turn_done(mover);
     match sq {
         Some(s) => {
-            let pos = Position::from_index(s as u32).ok_or("bad square")?;
+            let pos = Position::from_index(s as u32).ok_or("err.bad_square")?;
             game.make_move(pos).map_err(|e| format!("{e:?}"))?;
         }
         None => game.pass().map_err(|e| format!("{e:?}"))?,
@@ -1889,9 +1887,9 @@ fn ggs_chat(app: State<App>, target: String, text: String) -> Result<(), String>
 
 #[tauri::command]
 fn ggs_match_cmd(app: State<App>, id: String, verb: String, arg: String) -> Result<(), String> {
-    const ALLOWED: [&str; 4] = ["undo", "abort", "resign", "tell"];
+    const ALLOWED: [&str; 5] = ["undo", "abort", "break", "resign", "tell"];
     if !ALLOWED.contains(&verb.as_str()) {
-        return Err(format!("unsupported verb: {verb}"));
+        return Err(format!("err.unsupported_verb|verb={verb}"));
     }
     ggs_send(&app, ggs::Cmd::MatchCmd { id, verb, arg })
 }
@@ -2034,6 +2032,8 @@ fn env_overrides() -> Vec<(String, String)> {
         "KUROOBI_GGS_AUTOLOOK",
         "KUROOBI_AUTOPLAY",
         "KUROOBI_THEME",
+        "KUROOBI_LANG",
+        "KUROOBI_GGS_WIRE",
         "KUROOBI_LEARN_LOG",
         "KUROOBI_KEYCHAIN_SERVICE",
         "KUROOBI_SESSION_LOCK",

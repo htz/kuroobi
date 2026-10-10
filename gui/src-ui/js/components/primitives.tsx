@@ -151,13 +151,14 @@ export function TextArea({ value, onChange, mono, placeholder, rows }: {
   );
 }
 
-export function TextField({ value, onChange, mono, invalid, placeholder, numeric, password, align, width, onEnter }: {
+export function TextField({ value, onChange, mono, invalid, placeholder, numeric, decimal, password, align, width, onEnter }: {
   value?: string;
   onChange?: (v: string) => void;
   mono?: boolean;
   invalid?: boolean;
   placeholder?: string;
   numeric?: boolean;
+  decimal?: boolean;
   password?: boolean;
   align?: 'left' | 'right';
   width?: number;
@@ -169,8 +170,10 @@ export function TextField({ value, onChange, mono, invalid, placeholder, numeric
       value={value} placeholder={placeholder} readOnly={ro}
       onKeyDown={onEnter && ((e) => { if (e.key === 'Enter' && !e.nativeEvent.isComposing) { e.preventDefault(); onEnter(); } })}
       type={password ? 'password' : undefined}
-      inputMode={numeric ? 'numeric' : undefined}
-      onChange={ro ? undefined : e => onChange?.(numeric ? e.target.value.replace(/[^\d-]/g, '') : e.target.value)}
+      inputMode={numeric ? 'numeric' : decimal ? 'decimal' : undefined}
+      onChange={ro ? undefined : e => onChange?.(
+        numeric ? e.target.value.replace(/[^\d-]/g, '')
+          : decimal ? e.target.value.replace(/[^\d.]/g, '') : e.target.value)}
       className="k-input"
       style={{
         flexGrow: width ? 0 : 1, flexShrink: 1, flexBasis: 'auto', width, minWidth: 0,

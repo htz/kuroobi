@@ -8,7 +8,7 @@ import {
   type ClockSide, type ClockView, type Cond,
 } from './ggs';
 import { logLinesOf, sqName } from './adapt';
-import { t, useLang, tErr } from './i18n';
+import { t, useLang, tErr, dateLocale } from './i18n';
 import { Col, Empty, EmptyBoard, EmptyState, List, Note, Section, TableHead, TableRow, picked } from './components/layout';
 import { Button, Segmented, Select, TextArea, TextField, Toggle } from './components/primitives';
 import { Strength } from './components/strength';
@@ -60,15 +60,18 @@ function GgsLogin() {
   const [user, setUser] = useState('');
   const [pw, setPw] = useState('');
   const [status, setStatus] = useState('');
+  const [connecting, setConnecting] = useState(false);
 
   const connect = async () => {
     setStatus(t('ggs.login.connecting'));
+    setConnecting(true);
     try {
       await ggsApi.connect(user, pw);
       setStatus('');
     } catch (e) {
       setStatus(tErr(e));
     }
+    setConnecting(false);
   };
 
   return (
@@ -95,7 +98,7 @@ function GgsLogin() {
                 onClick={() => void connect()}>{t('ggs.login.submit')}</Button>
         <div style={{
           fontSize: 'var(--fs-6)', minHeight: 16,
-          color: status === t('ggs.login.connecting') ? 'var(--sub)' : 'var(--bad)',
+          color: connecting ? 'var(--sub)' : 'var(--bad)',
         }}>{status}</div>
       </div>
     </div>
@@ -126,8 +129,7 @@ export function GgsConsole({ snap }: { snap: GgsSnapshot }) {
     setCmd('');
   };
   const all = logLinesOf(snap.log);
-  const shown = all.slice(Math.min(from, all.length))
-    .filter((l) => dir === 'all' || l.dir === dir);
+  const shown = all.filter((l) => l.seq >= from && (dir === 'all' || l.dir === dir));
   return (
     <div style={{ flex: 1, minHeight: 0, display: 'flex', flexDirection: 'column' }}>
       <div style={{ flex: 1, minHeight: 0, display: 'flex', flexDirection: 'column', padding: '0 var(--sp-4)' }}>
@@ -137,7 +139,7 @@ export function GgsConsole({ snap }: { snap: GgsSnapshot }) {
             { value: 'out', label: t('ggs.console.dir_out') },
             { value: 'in', label: t('ggs.console.dir_in') },
           ]} />
-          <Button onClick={() => setFrom(all.length)} disabled={!all.length}>{t('ggs.console.clear')}</Button>
+          <Button onClick={() => setFrom((all.at(-1)?.seq ?? -1) + 1)} disabled={!all.length}>{t('ggs.console.clear')}</Button>
           <Button disabled={!shown.length}
                   onClick={() => void ggsApi.saveLog(
                     shown.map((l) => (l.dir === 'out' ? '› ' : '') + l.text).join('\n') + '\n',
@@ -225,7 +227,7 @@ export function GgsChat({ snap }: { snap: GgsSnapshot }) {
   const rows: { c: ChatMsg; day: string; dayHead: boolean; head: boolean }[] = [];
   let lastFrom = '', lastDay = '';
   for (const c of msgs) {
-    const day = c.at ? new Date(c.at * 1000).toLocaleDateString('ja-JP',
+    const day = c.at ? new Date(c.at * 1000).toLocaleDateString(dateLocale(),
       { month: 'long', day: 'numeric', weekday: 'short' }) : '';
     const dayHead = !!day && day !== lastDay;
     if (dayHead) { lastDay = day; lastFrom = ''; }
@@ -501,7 +503,6 @@ function GgsStandby({ snap }: { snap: GgsSnapshot }) {
   });
 
   useEffect(() => {
-    if (snap.login) ggsApi.finger(snap.login).catch(() => {});
     if (snap.login) ggsApi.who().catch(() => {});
   }, [snap.login]);
   const oppNames = opp && !names.includes(opp) ? [opp, ...names] : names;
@@ -781,7 +782,7 @@ function MatchBoard({ snap, m, clock, prefs, onKifu, face, side }: {
   const oppEval = !observer && m.opp_eval != null
     ? t('ggs.play.opp_eval', {
         v: (m.opp_eval > 0 ? '+' : '') + m.opp_eval.toFixed(1)
-          + (m.opp_secs_used != null ? ` · ${m.opp_secs_used.toFixed(0)}s` : ''),
+          + (m.opp_secs_used != null ? ` · ${m.opp_secs_used.toFixed(0)}${t('unit.s')}` : ''),
       })
     : undefined;
 
@@ -926,7 +927,10 @@ export function GgsSettings({ snap }: { snap: GgsSnapshot }) {
   const e = snap.engine;
   const calibrated = useCalibrated();
   const [saved, setSaved] = useState('');
-  const say = (msg: string) => { setSaved(msg); window.setTimeout(() => setSaved(''), 2500); };
+  const [failed, setFailed] = useState(false);
+  const say = (msg: string, bad = false) => {
+    setSaved(msg); setFailed(bad); window.setTimeout(() => setSaved(''), 2500);
+  };
   const [levels, setLevels] = useState({ depth: e.depth, solve: e.solve, band: e.band });
   const threads = e.threads;
   const [ponder, setPonder] = useState(e.ponder);
@@ -937,7 +941,8 @@ export function GgsSettings({ snap }: { snap: GgsSnapshot }) {
   const byClock = pace !== 'depth';
   const [maxMove, setMaxMove] = useState(e.max_move_secs);
   const [reserve, setReserve] = useState(e.reserve_secs);
-  const [budgetUse, setBudgetUse] = useState(e.budget_use);
+  const [budgetText, setBudgetText] = useState(String(e.budget_use));
+  const budgetUse = Math.max(0.1, +budgetText || 2.5);
   const [cores, setCores] = useState(0);
   useEffect(() => { api.activity().then((a) => setCores(a.cores)).catch(() => {}); }, []);
 
@@ -951,7 +956,7 @@ export function GgsSettings({ snap }: { snap: GgsSnapshot }) {
       await ggsApi.setWatchAnalysis(watch);
       await ggsApi.setUseBook(book);
     } catch (e) {
-      say(t('ggs.settings.apply_failed', { error: tErr(e) }));
+      say(t('ggs.settings.apply_failed', { error: tErr(e) }), true);
       return;
     }
     say(t('ggs.settings.applied'));
@@ -1018,8 +1023,8 @@ export function GgsSettings({ snap }: { snap: GgsSnapshot }) {
                          onChange={(x) => setReserve(Math.max(0, +x || 0))} />
             </Field>
             <Field label={t('ggs.settings.budget_use')}>
-              <TextField numeric align="right" width={80} value={String(budgetUse)}
-                         onChange={(x) => setBudgetUse(Math.max(0.1, +x || 2.5))} />
+              <TextField decimal align="right" width={80} value={budgetText}
+                         onChange={setBudgetText} />
             </Field>
           </div>
           <Note>{t('ggs.settings.budget_note')}</Note>
@@ -1046,7 +1051,7 @@ export function GgsSettings({ snap }: { snap: GgsSnapshot }) {
           {saved && (
             <span style={{
               fontSize: 'var(--fs-6)',
-              color: saved === t('ggs.settings.applied') ? 'var(--ok)' : 'var(--bad)',
+              color: failed ? 'var(--bad)' : 'var(--ok)',
             }}>{saved}</span>
           )}
           <span style={{ marginLeft: 'auto' }} />

@@ -45,6 +45,7 @@ export interface EvalPoint {
 
 
 export interface LogLine {
+  seq: number;
   dir: 'in' | 'out' | 'info';
   text: string;
 }
@@ -151,7 +152,6 @@ export interface MatchView {
   last_from_book: boolean;
   watch_eval: number | null;
   watch_best: string | null;
-  watch_exact: boolean;
   seen: number;
   /** When the server's last update for this board arrived, in ms since the epoch. */
   updated_ms: number;
@@ -217,7 +217,6 @@ interface EngineCfgView {
   solve: number;
   band: number;
   threads: number;
-  ready: boolean;
   use_book: boolean;
   book_loaded: boolean;
   learn: boolean;

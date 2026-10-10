@@ -144,16 +144,6 @@ const SOLVE_GREED: f64 = 10.0;
 const SOLVE_MAX_SHARE: f64 = 0.5;
 
 fn effective_budget_use(from_setting: f64) -> f64 {
-    static ENV: std::sync::OnceLock<Option<f64>> = std::sync::OnceLock::new();
-    let env = *ENV.get_or_init(|| {
-        std::env::var("BUDGET_USE")
-            .ok()
-            .and_then(|v| v.parse::<f64>().ok())
-            .filter(|v| v.is_finite() && *v > 0.0)
-    });
-    if let Some(v) = env {
-        return v;
-    }
     if from_setting.is_finite() && from_setting > 0.0 {
         from_setting
     } else {

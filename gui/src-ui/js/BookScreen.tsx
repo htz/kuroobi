@@ -168,7 +168,7 @@ export function BookDock({ b, decimals }: { b: BookBrowse; decimals: number }) {
             <span style={{ color: 'var(--sub)' }}>{t('book.position.source')}</span>
             <span style={{ marginLeft: 'auto', flex: 'none', whiteSpace: 'nowrap',
                            color: n.learned ? 'var(--gold)' : undefined }}>
-              {n.learned ? t('book.source.learned') : 'book.txt'}
+              {n.learned ? t('book.source.learned') : t('book.source.file')}
             </span>
           </div>
         )}

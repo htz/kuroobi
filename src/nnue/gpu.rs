@@ -758,7 +758,7 @@ const K_STEP_SPARSE: &str = r#"
 @group(0) @binding(3) var<storage, read> touched: array<u32>;
 @group(0) @binding(4) var<storage, read> grad: array<f32>;
 @group(0) @binding(5) var<storage, read> step: array<f32>;
-@group(0) @binding(6) var<storage, read_write> last: array<u32>;
+@group(0) @binding(6) var<storage, read> last: array<u32>;
 @group(0) @binding(7) var<uniform> P: Params;
 
 @compute @workgroup_size(256)
@@ -804,10 +804,24 @@ fn main(@builtin(local_invocation_id) lid: vec3<u32>,
     m[cell] = mm;
     v[cell] = vv;
     w[cell] = ww * (1.0 - P.wd * P.lr) - (P.lr / P.bc1) * mm / (sqrt(vv) / P.bc2s + P.eps);
+}
+"#;
 
-    if (h == 0u) {
-        last[row] = P.t_now;
+/// Runs after `K_STEP_SPARSE`: stamping inside it races with the row's other cells still reading `last`.
+const K_STAMP_ROWS: &str = r#"
+@group(0) @binding(0) var<storage, read> touched: array<u32>;
+@group(0) @binding(1) var<storage, read_write> last: array<u32>;
+@group(0) @binding(2) var<uniform> P: Params;
+
+@compute @workgroup_size(256)
+fn main(@builtin(local_invocation_id) lid: vec3<u32>,
+        @builtin(workgroup_id) wg: vec3<u32>,
+        @builtin(num_workgroups) nwg: vec3<u32>) {
+    let i = linear_wg(wg, nwg) * 256u + lid.x;
+    if (i * P.width >= P.n_items) {
+        return;
     }
+    last[touched[i]] = P.t_now;
 }
 "#;
 
@@ -1069,6 +1083,8 @@ struct Binds {
     step_pa: wgpu::BindGroup,
     sparse_ft: wgpu::BindGroup,
     sparse_pa: wgpu::BindGroup,
+    stamp_ft: wgpu::BindGroup,
+    stamp_pa: wgpu::BindGroup,
     fold: [wgpu::BindGroup; 3],
     step_dense: wgpu::BindGroup,
 }
@@ -1123,6 +1139,7 @@ const PROF_NAMES: [&str; PROF_N] = [
 const PROF_N: usize = 14;
 /// Pass index of the first step kernel, and the offset to its Lookahead-sync twin.
 const PROF_STEP: usize = 8;
+const UNTIMED: usize = PROF_N;
 const PROF_LA: usize = 3;
 
 pub struct GpuTrainer {
@@ -1139,6 +1156,7 @@ pub struct GpuTrainer {
     k_finalize: Kernel,
     k_step_rows: Kernel,
     k_step_sparse: Kernel,
+    k_stamp_rows: Kernel,
     k_la_fold: Kernel,
     k_step_dense: Kernel,
     /// Force the dense step (measurement; see the dispatch).
@@ -1247,10 +1265,6 @@ fn u32s(v: &[u32]) -> &[u8] {
 
 impl GpuTrainer {
     pub fn new(nn: &Nnue, batch: usize, adam: &AdamState, lookahead: (u32, f32)) -> GpuTrainer {
-        assert!(
-            !nn.so_grid,
-            "the GPU path trains the f32 model, not the grid"
-        );
         assert!(nn.base.is_none(), "the GPU path has no base linear");
         const {
             assert!(
@@ -1338,6 +1352,7 @@ impl GpuTrainer {
         let k_finalize = make(K_FINALIZE, "finalize");
         let k_step_rows = make(K_STEP_ROWS, "step_rows");
         let k_step_sparse = make(K_STEP_SPARSE, "step_sparse");
+        let k_stamp_rows = make(K_STAMP_ROWS, "stamp_rows");
         let k_la_fold = make(K_LA_FOLD, "la_fold");
         let k_step_dense = make(K_STEP_DENSE, "step_dense");
 
@@ -1544,6 +1559,7 @@ impl GpuTrainer {
             k_finalize,
             k_step_rows,
             k_step_sparse,
+            k_stamp_rows,
             k_la_fold,
             k_step_dense,
             dense_step: std::env::var_os("KUROOBI_GPU_DENSE_STEP").is_some(),
@@ -2054,6 +2070,14 @@ impl GpuTrainer {
                     &self.u_step_pa,
                 ],
             ),
+            stamp_ft: self.bind(
+                &self.k_stamp_rows,
+                &[&self.b_ft_touch, &self.b_ft_last, &self.u_step_ft],
+            ),
+            stamp_pa: self.bind(
+                &self.k_stamp_rows,
+                &[&self.b_pa_touch, &self.b_pa_last, &self.u_step_pa],
+            ),
             fold: [
                 self.bind(
                     &self.k_la_fold,
@@ -2117,8 +2141,8 @@ impl GpuTrainer {
         {
             let mut run = |i: usize, k: &Kernel, bg: &wgpu::BindGroup, n_wg: usize| {
                 let mut pass = enc.begin_compute_pass(&wgpu::ComputePassDescriptor {
-                    label: Some(PROF_NAMES[i]),
-                    timestamp_writes: timestamps(i),
+                    label: PROF_NAMES.get(i).copied(),
+                    timestamp_writes: PROF_NAMES.get(i).and_then(|_| timestamps(i)),
                 });
                 let (x, y) = dispatch_dims(n_wg);
                 pass.set_pipeline(&k.pipeline);
@@ -2173,6 +2197,12 @@ impl GpuTrainer {
                     &bg.sparse_pa,
                     (b.pa.n_touched() * PA_DIMS).div_ceil(WG),
                 );
+                if !self.heads_only {
+                    let n_wg = b.ft.n_touched().div_ceil(WG);
+                    run(UNTIMED, &self.k_stamp_rows, &bg.stamp_ft, n_wg);
+                }
+                let n_wg = b.pa.n_touched().div_ceil(WG);
+                run(UNTIMED, &self.k_stamp_rows, &bg.stamp_pa, n_wg);
             }
             run(st + 2, &self.k_step_dense, &bg.step_dense, n_dense_wg);
             if la_fold {
@@ -2470,7 +2500,6 @@ impl GpuTrainer {
         nn.so_out_b.copy_from_slice(&dense[D_OB..D_FTB]);
         nn.ft_bias.copy_from_slice(&dense[D_FTB..D_PAB]);
         nn.pa_bias.copy_from_slice(&dense[D_PAB..N_DENSE]);
-        nn.refresh_so_grid();
     }
 }
 
@@ -2588,7 +2617,7 @@ mod tests {
 
     /// A lookahead sync must land where the CPU's does.
     #[test]
-    #[ignore = "known GPU/CPU divergence across a lookahead fold; predates the sparse step"]
+    #[ignore = "requires a GPU"]
     fn a_lookahead_sync_lands_where_the_cpu_puts_it() {
         let _gpu = gpu_lock();
         let exs = batch(8192);

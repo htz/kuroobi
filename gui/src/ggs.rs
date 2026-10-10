@@ -108,6 +108,7 @@ impl StandbyCfg {
 
 #[derive(Clone, Serialize, Default)]
 pub struct LogLine {
+    pub seq: u64,
     pub dir: &'static str, // "in" | "out" | "info"
     pub text: String,
 }
@@ -258,7 +259,6 @@ pub struct MatchView {
     pub last_from_book: bool,
     pub watch_eval: Option<f32>,
     pub watch_best: Option<String>,
-    pub watch_exact: bool,
     pub seen: u64,
     /// Arrival of the last server update (epoch ms); the screen runs the clock from here.
     pub updated_ms: u64,
@@ -520,26 +520,32 @@ pub fn demo_snapshot() -> Snapshot {
     .collect();
     s.log = vec![
         LogLine {
+            seq: 0,
             dir: "info",
             text: "connected (skatgame.net:5000)".into(),
         },
         LogLine {
+            seq: 1,
             dir: "out",
             text: "tell /os play .71.0 F5".into(),
         },
         LogLine {
+            seq: 2,
             dir: "in",
             text: "/os: match .71.0 update".into(),
         },
         LogLine {
+            seq: 3,
             dir: "in",
             text: "/os: | 1 kuroobi 1842.3 11:04 vs saio 2245.8 12:30".into(),
         },
         LogLine {
+            seq: 4,
             dir: "out",
             text: "tell /os look".into(),
         },
         LogLine {
+            seq: 5,
             dir: "in",
             text: "/os: 12 waiting requests".into(),
         },
@@ -589,7 +595,6 @@ pub struct EngineCfgView {
     pub solve: u8,
     pub band: u8,
     pub threads: usize,
-    pub ready: bool,
     pub use_book: bool,
     pub book_loaded: bool,
     pub learn: bool,
@@ -607,7 +612,6 @@ impl Default for EngineCfgView {
             solve: 26,
             band: 6,
             threads: 4,
-            ready: false,
             use_book: true,
             book_loaded: false,
             learn: true,
@@ -781,9 +785,9 @@ impl Default for SavedSettings {
             max_move_secs: 0,
             reserve_secs: 20,
             budget_use: 2.5,
-            auto_play: false,
+            auto_play: true,
             open: true,
-            watch_analysis: false,
+            watch_analysis: true,
             use_book: true,
             learn: true,
         }
@@ -958,7 +962,6 @@ struct MatchState {
     eval_parity: Option<u32>,
     watch_eval: Option<f32>,
     watch_best: Option<String>,
-    watch_exact: bool,
     watch_hash: u64,
     last_played_hash: u64, // double-move protection
     seen: u64,
@@ -1038,7 +1041,6 @@ impl MatchState {
             eval_parity: None,
             watch_eval: None,
             watch_best: None,
-            watch_exact: false,
             watch_hash: 0,
             last_played_hash: 0,
             seen: 0,
@@ -1321,6 +1323,7 @@ struct Ctx {
     engine_cfg: EngineConfig,
     seq: u64,
     last_emit: Instant,
+    last_sent: u64,
     /// `rating_update` arrives before the result line it belongs to.
     post_ratings: HashMap<String, f32>,
     dirty: bool,
@@ -1546,7 +1549,9 @@ impl Ctx {
         roll_if_large(&p);
         append_line(&p, &format!("{dir} {text}"));
         let mut s = self.snap.lock().unwrap();
+        let seq = s.log.back().map_or(0, |l| l.seq + 1);
         s.log.push_back(LogLine {
+            seq,
             dir,
             text: text.into(),
         });
@@ -1564,6 +1569,18 @@ impl Ctx {
             return;
         }
         let s = self.snap.lock().unwrap().clone();
+        let sent = serde_json::to_vec(&s).map_or(0, |b| {
+            use std::hash::{Hash, Hasher};
+            let mut h = std::collections::hash_map::DefaultHasher::new();
+            b.hash(&mut h);
+            h.finish()
+        });
+        if !force && sent == self.last_sent {
+            self.last_emit = Instant::now();
+            self.dirty = false;
+            return;
+        }
+        self.last_sent = sent;
         let _emit_ok = self.app.emit("ggs", &s).is_ok();
         #[cfg(debug_assertions)]
         {
@@ -1634,7 +1651,6 @@ impl Ctx {
             self.engine = Some(engine);
             {
                 let mut s = self.snap.lock().unwrap();
-                s.engine.ready = true;
                 s.engine.book_loaded = loaded;
             }
             self.dirty = true;
@@ -1714,6 +1730,7 @@ fn new_ctx(
         },
         seq: 0,
         last_emit: Instant::now(),
+        last_sent: 0,
         post_ratings: HashMap::new(),
         dirty: true,
         auto_watch: Vec::new(),
@@ -1748,10 +1765,10 @@ fn restore_settings(ctx: &mut Ctx) {
     apply_engine_cfg(ctx, v.depth, v.solve, v.band);
     ctx.engine_cfg_ponder = v.ponder;
     apply_pacing(ctx, v.pace, v.max_move_secs, v.reserve_secs, v.budget_use);
+    ctx.set_use_book(v.use_book);
     let mut s = ctx.snap.lock().unwrap();
     s.engine.ponder = v.ponder;
     s.engine.budget_use = v.budget_use;
-    s.engine.use_book = v.use_book;
     s.engine.learn = v.learn;
     s.auto_play = v.auto_play;
     s.open = v.open;
@@ -2091,7 +2108,6 @@ fn greet(ctx: &mut Ctx, w: &mut Wire, login: &str, send: &mut impl FnMut(String)
         ("stored_list", "tell /os stored"),
         ("match_list", "tell /os match"),
         ("history:", "tell /os history"),
-        ("stored_list", "tell /os stored"),
     ] {
         w.pending.push(key.into());
         say(ctx, send, cmd);
@@ -2682,7 +2698,7 @@ fn handle_os_line(
         ctx.snap.lock().unwrap().notice = if msg.is_empty() {
             "err.ggs_action_refused".into()
         } else {
-            format!("GGS: {msg}")
+            format!("err.ggs_refused|msg={}", msg.replace('|', "/"))
         };
         ctx.dirty = true;
     }
@@ -2798,7 +2814,9 @@ fn handle_block(
     };
     let m = matches.get_mut(&mid).unwrap();
     if m.my_color.is_none() {
-        if watch_an && rows_ok && turn.is_some() {
+        // The search runs on this thread, so it would stall an own match.
+        let playing = matches.values().any(|x| x.my_color.is_some() && !x.over);
+        if watch_an && rows_ok && turn.is_some() && !playing {
             analyze_watch(ctx, &mid, matches);
         }
         return;
@@ -2881,7 +2899,6 @@ fn analyze_watch(ctx: &mut Ctx, mid: &str, matches: &mut HashMap<String, MatchSt
     let v = if mv.value.is_finite() { mv.value } else { 0.0 };
     m.watch_eval = Some(if black_turn { v } else { -v }); // to Black's view
     m.watch_best = mv.pos.map(coord);
-    m.watch_exact = mv.exact;
     sync_matches(ctx, matches);
     ctx.emit(true);
 }
@@ -3519,7 +3536,6 @@ fn sync_matches(ctx: &mut Ctx, matches: &HashMap<String, MatchState>) {
             last_from_book: m.last_from_book,
             watch_eval: m.watch_eval,
             watch_best: m.watch_best.clone(),
-            watch_exact: m.watch_exact,
             seen: m.seen,
             updated_ms: m.updated_ms,
             think_since_ms: 0,

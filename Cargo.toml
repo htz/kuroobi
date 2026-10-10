@@ -6,7 +6,6 @@ license = "MIT"
 description = "Ultra-fast Reversi bitboard library using 2x uint64"
 
 [dependencies]
-rand = { version = "0.8", optional = true }
 libc = "0.2"
 # GPU training path (`gpu` feature): one code base for Metal and Vulkan.
 wgpu = { version = "29", optional = true, default-features = false, features = ["metal", "vulkan", "wgsl", "std"] }
@@ -24,7 +23,6 @@ gpu = ["dep:wgpu", "dep:bytemuck"]
 # instead of compiling their defaults in. Sweeps need this; the default
 # build folds the knobs to constants so dead regimes cost nothing.
 tunable = []
-random = ["rand"]
 # Count move-ordering and ETC probes as nodes, the wider convention, so node
 # totals are comparable with engines that use it. Costs a few percent of
 # search time.

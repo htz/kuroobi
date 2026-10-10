@@ -1,14 +1,14 @@
 //! Verifies NNUE evaluation symmetry invariance.
 
 use kuroobi::nnue::Nnue;
-use kuroobi::pattern::LINEAR_PATTERNS;
+use kuroobi::pattern::NNUE_PATTERNS;
 use kuroobi::Board;
 
 #[test]
 #[ignore = "requires weights/"]
 fn shipped_weights_are_symmetric() {
     let path = std::path::Path::new("weights/nnue.bin");
-    let mut nn = Nnue::new(LINEAR_PATTERNS);
+    let mut nn = Nnue::new(NNUE_PATTERNS);
     nn.load(path).expect("nnue");
     nn.quantize();
 

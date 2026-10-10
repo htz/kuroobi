@@ -498,7 +498,7 @@ export function ResultRow({ win, draw, adjourned, opponent, discs, when, note, r
     : {};
   return onClick && !dim
     ? <button type="button" className="k-row" onClick={onClick} title={t('data.result.open_in_study')} {...hov}
-              style={{ ...style, border: 0, background: 'transparent', cursor: 'pointer' }}>{body}</button>
+              style={{ background: 'transparent', ...style, border: 0, cursor: 'pointer' }}>{body}</button>
     : <div style={{ ...style, opacity: dim ? 0.5 : 1 }} {...hov}>{body}</div>;
 }
 
@@ -677,7 +677,7 @@ export function EvalTrend({ points, plies, height = 96 }: {
           <span><span style={{ color: 'var(--accent)' }}>—</span> {t('data.trend.mine')} {cur ? fmt(cur.mine) : ''}</span>
           <span><span style={{ color: 'var(--sub)' }}>—</span> {t('data.trend.opp')} {cur ? fmt(cur.opp) : ''}</span>
           {maxSecs > 0 && (
-            <span>{t('data.trend.secs')} {cur?.secs != null ? `${cur.secs.toFixed(1)}s` : ''}</span>
+            <span>{t('data.trend.secs')} {cur?.secs != null ? `${cur.secs.toFixed(1)}${t('unit.s')}` : ''}</span>
           )}
           <span>{cur ? t('data.ply', { n: cur.x }) : t('data.trend.hint')}</span>
         </span>
@@ -695,8 +695,8 @@ export function EvalTrend({ points, plies, height = 96 }: {
         ))}
         {maxSecs > 0 && (
           <g>
-            <text x={w - padR + 4} y={pad + 3} fontSize={9} fill="var(--sub)">{secsTop}s</text>
-            <text x={w - padR + 4} y={base + 3} fontSize={9} fill="var(--sub)">0s</text>
+            <text x={w - padR + 4} y={pad + 3} fontSize={9} fill="var(--sub)">{secsTop}{t('unit.s')}</text>
+            <text x={w - padR + 4} y={base + 3} fontSize={9} fill="var(--sub)">0{t('unit.s')}</text>
             {points.map((p, i) => p.secs ? (
               <rect key={i} x={padL + i * slot} y={base - barH(p.secs)}
                     width={slot} height={barH(p.secs)}

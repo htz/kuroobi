@@ -32,7 +32,9 @@ selection `[black, white][player.index()]` with no branch (`Color` is
 
 ![Flipping discs](img/flip.svg)
 
-`bitboard::flip_shift<const DIR: u32, const UP: bool>` is the core.
+`bitboard::flip_shift<const DIR: u32, const UP: bool>` is the reference
+implementation; tests hold the production paths to it. Production
+flipping goes through the NEON kernel on arm64 and a ray scan elsewhere.
 Because the direction is **fixed at compile time by a const generic**,
 all eight directions monomorphise into straight-line code with
 immediate shift amounts.

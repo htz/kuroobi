@@ -3,7 +3,7 @@
 use kuroobi::bitboard;
 use kuroobi::engine::{Engine, EngineConfig};
 use kuroobi::nnue::Nnue;
-use kuroobi::pattern::LINEAR_PATTERNS;
+use kuroobi::pattern::NNUE_PATTERNS;
 use kuroobi::{Board, Position};
 
 const KIFU: &str = "e6f4c3d6f6e7f5g5e3g4c7d3f3c4c6c5b4b6d7b5c2a3f8e8d8c8b8d2g3e2\
@@ -98,7 +98,7 @@ fn all_views(kifu: &str, plies: usize) -> Vec<(String, Board)> {
 #[test]
 #[ignore = "requires weights/ (not in git)"]
 fn eval_is_the_same_from_every_view() {
-    let mut nn = Nnue::new(LINEAR_PATTERNS);
+    let mut nn = Nnue::new(NNUE_PATTERNS);
     nn.load(std::path::Path::new("weights/nnue.bin"))
         .expect("nnue");
     nn.quantize();

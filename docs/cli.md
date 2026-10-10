@@ -92,8 +92,8 @@ nnue_train [OPTIONS] <data-file>...
 |---|---|
 | `--lr <f>` | Learning rate |
 | `--wd <f>` | Weight decay (AdamW) |
-| `--adam` | Adam rather than SGD |
-| `--minibatch <n>` | Minibatch size (required by `--gpu`) |
+| `--adam` | Adam; required |
+| `--minibatch <n>` | Minibatch size; required |
 | `--lookahead` | Lookahead on top of Adam (k=6, alpha=0.5) |
 | `--cosine` | Anneal the rate over the run in one cosine sweep |
 | `--decay <f>` | Geometric per-epoch decay, when `--cosine` is off (1.0 = fixed rate) |

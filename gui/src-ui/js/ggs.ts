@@ -1,7 +1,7 @@
 
 import { useCallback, useEffect, useState } from 'react';
 import { ggsApi, jsLog, onGgsSnapshot } from './api';
-import { t } from './i18n';
+import { t, dateLocale } from './i18n';
 import type { GgsSnapshot, MatchView, PlayerView, UserRow } from './types';
 
 
@@ -215,8 +215,8 @@ export const clockChoices = (): [string, string][] => [
 ];
 
 export function clockOf(at: number): string {
-  return new Date(at * 1000).toLocaleTimeString('ja-JP',
-    { hour: '2-digit', minute: '2-digit' });
+  return new Date(at * 1000).toLocaleTimeString(dateLocale(),
+    { hour: '2-digit', minute: '2-digit', hourCycle: 'h23' });
 }
 
 
@@ -396,7 +396,7 @@ function readTime(k: string, v: string): string {
   if (k === 'since') {
     const at = Date.parse(v.replace(/\s*[A-Z]{3}$/, ' GMT-0600'));
     if (!Number.isNaN(at)) {
-      return new Date(at).toLocaleString('ja-JP', {
+      return new Date(at).toLocaleString(dateLocale(), {
         year: 'numeric', month: 'long', day: 'numeric',
         hour: '2-digit', minute: '2-digit', weekday: 'short',
       });

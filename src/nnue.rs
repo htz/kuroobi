@@ -23,8 +23,6 @@ const PAIR_CLAMP: f32 = 1.0;
 
 const ACT_SCALE: f32 = 255.0 / 256.0;
 
-const FT_CLAMP: f32 = 32.0;
-
 const NUM_TABLE_SIZE: usize = 65;
 
 const MLP_H1: usize = 16;
@@ -95,23 +93,11 @@ const GRAD_CLIP_NORM: f32 = 1.0;
 
 const MOB_BUCKETS: usize = 24;
 
-const HALF: usize = H / 2;
-
-const PROD_CLAMP: f32 = 16.0;
-
-pub const ACT_UNITS: f32 = 16.0;
-
-pub struct NnueView {
-    ft: *mut f32,
-    ft_bias: *mut f32,
-    out_w: *mut f32,
-    out_b: *mut f32,
-    num_w: *mut f32,
-    pw: *mut f32,
-    mob_w: *mut f32,
-}
-unsafe impl Send for NnueView {}
-unsafe impl Sync for NnueView {}
+/// Formats 09 and 10 carry a read-out no forward pass uses; the reader skips this many values.
+const LEGACY_READOUT_LEN: usize = STAGE_COUNT
+    * (H + 1 + NUM_TABLE_SIZE + H / 2 + MOB_BUCKETS + MLP_H2)
+    + MLP_H1 * (H + 1 + MLP_H2 + 1)
+    + MLP_H2;
 
 pub struct AdamState {
     pub beta1: f32,
@@ -122,28 +108,6 @@ pub struct AdamState {
     v_ft: Vec<f32>,
     m_ft_bias: Vec<f32>,
     v_ft_bias: Vec<f32>,
-    m_out_w: Vec<f32>,
-    v_out_w: Vec<f32>,
-    m_out_b: Vec<f32>,
-    v_out_b: Vec<f32>,
-    m_num_w: Vec<f32>,
-    v_num_w: Vec<f32>,
-    m_pw: Vec<f32>,
-    v_pw: Vec<f32>,
-    m_mob_w: Vec<f32>,
-    v_mob_w: Vec<f32>,
-    m_mlp_l1_w: Vec<f32>,
-    v_mlp_l1_w: Vec<f32>,
-    m_mlp_l1_b: Vec<f32>,
-    v_mlp_l1_b: Vec<f32>,
-    m_mlp_l2_w: Vec<f32>,
-    v_mlp_l2_w: Vec<f32>,
-    m_mlp_l2_b: Vec<f32>,
-    v_mlp_l2_b: Vec<f32>,
-    m_mlp_out_w: Vec<f32>,
-    v_mlp_out_w: Vec<f32>,
-    m_mlp_mob_w: Vec<f32>,
-    v_mlp_mob_w: Vec<f32>,
     m_so: Vec<Vec<f32>>,
     v_so: Vec<Vec<f32>>,
     grad_scratch: Vec<f32>,
@@ -172,28 +136,6 @@ macro_rules! adam_flat_tables {
         $f!($s.v_ft);
         $f!($s.m_ft_bias);
         $f!($s.v_ft_bias);
-        $f!($s.m_out_w);
-        $f!($s.v_out_w);
-        $f!($s.m_out_b);
-        $f!($s.v_out_b);
-        $f!($s.m_num_w);
-        $f!($s.v_num_w);
-        $f!($s.m_pw);
-        $f!($s.v_pw);
-        $f!($s.m_mob_w);
-        $f!($s.v_mob_w);
-        $f!($s.m_mlp_l1_w);
-        $f!($s.v_mlp_l1_w);
-        $f!($s.m_mlp_l1_b);
-        $f!($s.v_mlp_l1_b);
-        $f!($s.m_mlp_l2_w);
-        $f!($s.v_mlp_l2_w);
-        $f!($s.m_mlp_l2_b);
-        $f!($s.v_mlp_l2_b);
-        $f!($s.m_mlp_out_w);
-        $f!($s.v_mlp_out_w);
-        $f!($s.m_mlp_mob_w);
-        $f!($s.v_mlp_mob_w);
         $f!($s.m_pa);
         $f!($s.v_pa);
         $f!($s.m_pa_bias);
@@ -217,8 +159,6 @@ impl AdamState {
         for v in [self.t, self.la_k, self.la_step, self.stamp_cur] {
             w.write_all(&v.to_le_bytes())?;
         }
-        // the removed legacy-optimizer switch; kept so checkpoints stay readable
-        w.write_all(&[0u8])?;
         let me = self;
         macro_rules! put {
             ($t:expr) => {{
@@ -265,14 +205,6 @@ impl AdamState {
         self.la_k = u32_of(r)?;
         self.la_step = u32_of(r)?;
         self.stamp_cur = u32_of(r)?;
-        let mut b1 = [0u8; 1];
-        r.read_exact(&mut b1)?;
-        if b1[0] != 0 {
-            return Err(Error::new(
-                ErrorKind::InvalidData,
-                "checkpoint was written by the removed legacy optimizer",
-            ));
-        }
 
         fn take_len(r: &mut dyn Read) -> std::io::Result<usize> {
             let mut b = [0u8; 8];
@@ -350,28 +282,6 @@ impl AdamState {
             v_ft: vec![0.0; nn.ft.len()],
             m_ft_bias: vec![0.0; FT_BIAS_LEN],
             v_ft_bias: vec![0.0; FT_BIAS_LEN],
-            m_out_w: vec![0.0; nn.out_w.len()],
-            v_out_w: vec![0.0; nn.out_w.len()],
-            m_out_b: vec![0.0; STAGE_COUNT],
-            v_out_b: vec![0.0; STAGE_COUNT],
-            m_num_w: vec![0.0; STAGE_COUNT * NUM_TABLE_SIZE],
-            v_num_w: vec![0.0; STAGE_COUNT * NUM_TABLE_SIZE],
-            m_pw: vec![0.0; STAGE_COUNT * HALF],
-            v_pw: vec![0.0; STAGE_COUNT * HALF],
-            m_mob_w: vec![0.0; STAGE_COUNT * MOB_BUCKETS],
-            v_mob_w: vec![0.0; STAGE_COUNT * MOB_BUCKETS],
-            m_mlp_l1_w: vec![0.0; MLP_H1 * H],
-            v_mlp_l1_w: vec![0.0; MLP_H1 * H],
-            m_mlp_l1_b: vec![0.0; MLP_H1],
-            v_mlp_l1_b: vec![0.0; MLP_H1],
-            m_mlp_l2_w: vec![0.0; MLP_H2 * MLP_H1],
-            v_mlp_l2_w: vec![0.0; MLP_H2 * MLP_H1],
-            m_mlp_l2_b: vec![0.0; MLP_H2],
-            v_mlp_l2_b: vec![0.0; MLP_H2],
-            m_mlp_out_w: vec![0.0; STAGE_COUNT * MLP_H2],
-            v_mlp_out_w: vec![0.0; STAGE_COUNT * MLP_H2],
-            m_mlp_mob_w: vec![0.0; MLP_H1],
-            v_mlp_mob_w: vec![0.0; MLP_H1],
             m_so: so_moment_shapes(),
             v_so: so_moment_shapes(),
             grad_scratch: vec![0.0; nn.ft.len()],
@@ -393,64 +303,6 @@ impl AdamState {
             stamp_cur: 0,
             touched: Vec::new(),
         }
-    }
-
-    pub fn view(&mut self) -> AdamView {
-        AdamView {
-            m_ft: self.m_ft.as_mut_ptr(),
-            v_ft: self.v_ft.as_mut_ptr(),
-            m_ft_bias: self.m_ft_bias.as_mut_ptr(),
-            v_ft_bias: self.v_ft_bias.as_mut_ptr(),
-            m_out_w: self.m_out_w.as_mut_ptr(),
-            v_out_w: self.v_out_w.as_mut_ptr(),
-            m_out_b: self.m_out_b.as_mut_ptr(),
-            v_out_b: self.v_out_b.as_mut_ptr(),
-            m_num_w: self.m_num_w.as_mut_ptr(),
-            v_num_w: self.v_num_w.as_mut_ptr(),
-            m_pw: self.m_pw.as_mut_ptr(),
-            v_pw: self.v_pw.as_mut_ptr(),
-            m_mob_w: self.m_mob_w.as_mut_ptr(),
-            v_mob_w: self.v_mob_w.as_mut_ptr(),
-            beta1: self.beta1,
-            wd: self.wd,
-            beta2: self.beta2,
-            eps: self.eps,
-        }
-    }
-}
-
-#[derive(Clone, Copy)]
-pub struct AdamView {
-    m_ft: *mut f32,
-    v_ft: *mut f32,
-    m_ft_bias: *mut f32,
-    v_ft_bias: *mut f32,
-    m_out_w: *mut f32,
-    v_out_w: *mut f32,
-    m_out_b: *mut f32,
-    v_out_b: *mut f32,
-    m_num_w: *mut f32,
-    v_num_w: *mut f32,
-    m_pw: *mut f32,
-    v_pw: *mut f32,
-    m_mob_w: *mut f32,
-    v_mob_w: *mut f32,
-    beta1: f32,
-    wd: f32,
-    beta2: f32,
-    eps: f32,
-}
-unsafe impl Send for AdamView {}
-unsafe impl Sync for AdamView {}
-
-impl AdamView {
-    #[inline]
-    unsafe fn step(&self, m: *mut f32, v: *mut f32, i: usize, grad: f32, lr: f32) -> f32 {
-        let mp = m.add(i);
-        let vp = v.add(i);
-        *mp = self.beta1 * *mp + (1.0 - self.beta1) * grad;
-        *vp = self.beta2 * *vp + (1.0 - self.beta2) * grad * grad;
-        lr * *mp / ((*vp).sqrt() + self.eps)
     }
 }
 
@@ -529,28 +381,10 @@ unsafe impl Sync for FtCells {}
 
 type Grad = fn(&GradSink) -> &[f32];
 type RowBlock<const D: usize> = Vec<(u32, [f32; D])>;
-type DenseParam<'a> = (
-    &'a mut Vec<f32>,
-    &'a mut Vec<f32>,
-    &'a mut Vec<f32>,
-    Grad,
-    f32,
-);
 
 /// Same order as [`Nnue::dense_lens`].
-const DENSE_GRADS: [Grad; 19] = [
-    |s| s.out_w.as_slice(),
-    |s| s.out_b.as_slice(),
-    |s| s.num_w.as_slice(),
-    |s| s.mob_w.as_slice(),
+const DENSE_GRADS: [Grad; 8] = [
     |s| s.ft_bias.as_slice(),
-    |s| s.pw.as_slice(),
-    |s| s.mlp_l1_w.as_slice(),
-    |s| s.mlp_l1_b.as_slice(),
-    |s| s.mlp_l2_w.as_slice(),
-    |s| s.mlp_l2_b.as_slice(),
-    |s| s.mlp_out_w.as_slice(),
-    |s| s.mlp_mob_w.as_slice(),
     |s| s.pa_bias.as_slice(),
     |s| s.so_l1_w.as_slice(),
     |s| s.so_l1_b.as_slice(),
@@ -757,16 +591,6 @@ unsafe fn catch_up(
 }
 
 pub struct GradSink {
-    pub out_w: Vec<f32>,
-    pub out_b: Vec<f32>,
-    pub num_w: Vec<f32>,
-    pub mob_w: Vec<f32>,
-    pub mlp_l1_w: Vec<f32>,
-    pub mlp_l1_b: Vec<f32>,
-    pub mlp_l2_w: Vec<f32>,
-    pub mlp_l2_b: Vec<f32>,
-    pub mlp_out_w: Vec<f32>,
-    pub mlp_mob_w: Vec<f32>,
     pub so_l1_w: Vec<f32>,
     pub so_l1_b: Vec<f32>,
     pub so_l2_w: Vec<f32>,
@@ -775,7 +599,6 @@ pub struct GradSink {
     pub so_out_b: Vec<f32>,
     pub ft_bias: Vec<f32>,
     pub pa_bias: Vec<f32>,
-    pub pw: Vec<f32>,
     pub ft_rows: Vec<Vec<(u32, [f32; ACC_DIMS])>>,
     pub pa_rows: Vec<Vec<(u32, [f32; PA_DIMS])>>,
     parts: usize,
@@ -785,16 +608,6 @@ impl GradSink {
     pub fn new(parts: usize) -> GradSink {
         let parts = parts.max(1);
         GradSink {
-            out_w: vec![0.0; STAGE_COUNT * H],
-            out_b: vec![0.0; STAGE_COUNT],
-            num_w: vec![0.0; STAGE_COUNT * NUM_TABLE_SIZE],
-            mob_w: vec![0.0; STAGE_COUNT * MOB_BUCKETS],
-            mlp_l1_w: vec![0.0; MLP_H1 * H],
-            mlp_l1_b: vec![0.0; MLP_H1],
-            mlp_l2_w: vec![0.0; MLP_H2 * MLP_H1],
-            mlp_l2_b: vec![0.0; MLP_H2],
-            mlp_out_w: vec![0.0; STAGE_COUNT * MLP_H2],
-            mlp_mob_w: vec![0.0; MLP_H1],
             so_l1_w: vec![0.0; SO_SIZES.0],
             so_l1_b: vec![0.0; SO_SIZES.1],
             so_l2_w: vec![0.0; SO_SIZES.2],
@@ -803,7 +616,6 @@ impl GradSink {
             so_out_b: vec![0.0; SO_SIZES.5],
             ft_bias: vec![0.0; FT_BIAS_LEN],
             pa_bias: vec![0.0; PA_DIMS * PA_BUCKETS],
-            pw: vec![0.0; STAGE_COUNT * HALF],
             ft_rows: (0..parts).map(|_| Vec::new()).collect(),
             pa_rows: (0..parts).map(|_| Vec::new()).collect(),
             parts,
@@ -824,34 +636,13 @@ impl GradSink {
 
     /// Leaves only the per-stage head and the stage-bucketed pattern add, so the shared layers stay put.
     pub fn keep_stage_heads_only(&mut self) {
-        self.out_w.fill(0.0);
-        self.out_b.fill(0.0);
-        self.num_w.fill(0.0);
-        self.mob_w.fill(0.0);
-        self.mlp_l1_w.fill(0.0);
-        self.mlp_l1_b.fill(0.0);
-        self.mlp_l2_w.fill(0.0);
-        self.mlp_l2_b.fill(0.0);
-        self.mlp_out_w.fill(0.0);
-        self.mlp_mob_w.fill(0.0);
         self.ft_bias.fill(0.0);
-        self.pw.fill(0.0);
         for b in self.ft_rows.iter_mut() {
             b.clear();
         }
     }
 
     pub fn clear(&mut self) {
-        self.out_w.fill(0.0);
-        self.out_b.fill(0.0);
-        self.num_w.fill(0.0);
-        self.mob_w.fill(0.0);
-        self.mlp_l1_w.fill(0.0);
-        self.mlp_l1_b.fill(0.0);
-        self.mlp_l2_w.fill(0.0);
-        self.mlp_l2_b.fill(0.0);
-        self.mlp_out_w.fill(0.0);
-        self.mlp_mob_w.fill(0.0);
         self.so_l1_w.fill(0.0);
         self.so_l1_b.fill(0.0);
         self.so_l2_w.fill(0.0);
@@ -860,7 +651,6 @@ impl GradSink {
         self.so_out_b.fill(0.0);
         self.ft_bias.fill(0.0);
         self.pa_bias.fill(0.0);
-        self.pw.fill(0.0);
         for b in self.ft_rows.iter_mut() {
             b.clear();
         }
@@ -1038,30 +828,12 @@ pub struct Nnue {
     ft_bias: Vec<f32>,
     pub pa: Vec<f32>,
     pub pa_bias: Vec<f32>,
-    out_w: Vec<f32>,
-    out_b: Vec<f32>,
-    num_w: Vec<f32>,
-    mlp_l1_w: Vec<f32>,
-    mlp_l1_b: Vec<f32>,
-    mlp_l2_w: Vec<f32>,
-    mlp_l2_b: Vec<f32>,
-    mlp_out_w: Vec<f32>,
-    mlp_mob_w: Vec<f32>,
     so_l1_w: Vec<f32>,
     so_l1_b: Vec<f32>,
     so_l2_w: Vec<f32>,
     so_l2_b: Vec<f32>,
     so_out_w: Vec<f32>,
     so_out_b: Vec<f32>,
-    so_l1_wq: Vec<f32>,
-    so_l2_wq: Vec<f32>,
-    so_grid: bool,
-
-    mob_w: Vec<f32>,
-    pw: Vec<f32>,
-
-    pub head_f32: bool,
-    pub act_units: f32,
 
     sq: stack_q::StackQ,
 
@@ -1098,29 +870,13 @@ impl Nnue {
             ft_bias: vec![0.0; FT_BIAS_LEN],
             pa: vec![0.0; n_features * PA_BUCKETS * PA_DIMS],
             pa_bias: vec![0.0; PA_DIMS * PA_BUCKETS],
-            out_w: vec![0.0; STAGE_COUNT * H],
-            out_b: vec![0.0; STAGE_COUNT],
-            num_w: vec![0.0; STAGE_COUNT * NUM_TABLE_SIZE],
-            mob_w: vec![0.0; STAGE_COUNT * MOB_BUCKETS],
-            mlp_l1_w: vec![0.0; MLP_H1 * H],
-            mlp_l1_b: vec![0.0; MLP_H1],
-            mlp_l2_w: vec![0.0; MLP_H2 * MLP_H1],
-            mlp_l2_b: vec![0.0; MLP_H2],
-            mlp_out_w: vec![0.0; STAGE_COUNT * MLP_H2],
-            mlp_mob_w: vec![0.0; MLP_H1],
             so_l1_w: vec![0.0; SO_SIZES.0],
             so_l1_b: vec![0.0; SO_SIZES.1],
             so_l2_w: vec![0.0; SO_SIZES.2],
             so_l2_b: vec![0.0; SO_SIZES.3],
             so_out_w: vec![0.0; SO_SIZES.4],
             so_out_b: vec![0.0; SO_SIZES.5],
-            so_l1_wq: vec![0.0; SO_SIZES.0],
-            so_l2_wq: vec![0.0; SO_SIZES.2],
-            so_grid: false,
-            pw: vec![0.0; STAGE_COUNT * HALF],
             sq: stack_q::StackQ::default(),
-            head_f32: false,
-            act_units: ACT_UNITS,
             mpc_sigma: None,
             mpc_alpha: None,
         }
@@ -1153,11 +909,11 @@ impl Nnue {
     pub fn init_weights(&mut self) {
         let mut s: u64 = 0x1234_5678_9abc_def0;
         let mut next = || xorshift_unit(&mut s);
-        for w in &mut self.out_w {
-            *w = next() * 0.1;
+        // the removed read-out drew first; skipping its draws keeps a fresh network bit-identical
+        for _ in 0..STAGE_COUNT * H {
+            next();
         }
         self.ft_bias.fill(0.0);
-        self.init_mlp_hidden();
         let bound = (6.0 / ACC_DIMS as f32).sqrt() * 0.25;
         for w in &mut self.ft {
             *w = next() * bound;
@@ -1199,18 +955,6 @@ impl Nnue {
         replicate_stage0(&mut self.so_l2_b, SO_L2);
         replicate_stage0(&mut self.so_out_w, SO_OUT_IN);
         replicate_stage0(&mut self.so_out_b, 1);
-        self.refresh_so_grid();
-    }
-
-    fn init_mlp_hidden(&mut self) {
-        let mut s: u64 = 0x5DEE_CE66_D5AB_1EE5;
-        let mut next = || xorshift_unit(&mut s);
-        for v in self.mlp_l1_w.iter_mut() {
-            *v = next() * 0.5;
-        }
-        for v in self.mlp_l2_w.iter_mut() {
-            *v = next() * 0.5;
-        }
     }
 
     #[inline]
@@ -1420,19 +1164,10 @@ impl Nnue {
     ) -> (f32, [f32; ACC_DIMS], [f32; PA_DIMS]) {
         let st = so_stage(stage);
         let m = mob_unit(mob);
-        let mut xin = stack_inputs(acc, pa);
-        let grid = |a: f32| (a * 256.0).floor().min(255.0) / 256.0;
-        let act = |a: f32| if self.so_grid { grid(a) } else { a };
-        if self.so_grid {
-            for x in xin.iter_mut() {
-                *x = grid(*x);
-            }
-        }
-
-        debug_assert_eq!(self.so_l1_wq.len(), self.so_l1_w.len());
+        let xin = stack_inputs(acc, pa);
         let mut l1 = [0.0f32; SO_L1];
         for (i, v) in l1.iter_mut().enumerate() {
-            let row = &self.so_l1_wq[(st * SO_L1 + i) * SO_L1_IN..];
+            let row = &self.so_l1_w[(st * SO_L1 + i) * SO_L1_IN..];
             let mut x = self.so_l1_b[st * SO_L1 + i];
             for (k, &xv) in xin.iter().enumerate() {
                 x += row[k] * xv;
@@ -1441,20 +1176,20 @@ impl Nnue {
         }
         let mut a1 = [0.0f32; SO_L1 * 2];
         for i in 0..SO_L1 {
-            a1[i] = act((l1[i] * l1[i] * ACT_SCALE).clamp(0.0, 1.0));
-            a1[SO_L1 + i] = act(l1[i].clamp(0.0, 1.0));
+            a1[i] = (l1[i] * l1[i] * ACT_SCALE).clamp(0.0, 1.0);
+            a1[SO_L1 + i] = l1[i].clamp(0.0, 1.0);
         }
         let mut l2 = [0.0f32; SO_L2];
         let mut v2 = [0.0f32; SO_L2];
         for j in 0..SO_L2 {
-            let row = &self.so_l2_wq[(st * SO_L2 + j) * (SO_L1 * 2)..];
+            let row = &self.so_l2_w[(st * SO_L2 + j) * (SO_L1 * 2)..];
             let mut x = self.so_l2_b[st * SO_L2 + j];
             for (i, a) in a1.iter().enumerate() {
                 x += row[i] * a;
             }
             l2[j] = x;
             let c = x.clamp(0.0, 1.0);
-            v2[j] = act(c * c * ACT_SCALE);
+            v2[j] = c * c * ACT_SCALE;
         }
         let ow = &self.so_out_w[st * SO_OUT_IN..];
         let mut unit = self.so_out_b[st];
@@ -1492,7 +1227,7 @@ impl Nnue {
             }
             sink.so_l2_b[st * SO_L2 + j] += dl2;
             let woff = (st * SO_L2 + j) * (SO_L1 * 2);
-            let row = &self.so_l2_wq[woff..woff + SO_L1 * 2];
+            let row = &self.so_l2_w[woff..woff + SO_L1 * 2];
             for i in 0..SO_L1 * 2 {
                 sink.so_l2_w[woff + i] += dl2 * a1[i];
                 da1[i] += dl2 * row[i];
@@ -1512,7 +1247,7 @@ impl Nnue {
             }
             sink.so_l1_b[st * SO_L1 + i] += dl1;
             let woff = (st * SO_L1 + i) * SO_L1_IN;
-            let row = &self.so_l1_wq[woff..woff + SO_L1_IN];
+            let row = &self.so_l1_w[woff..woff + SO_L1_IN];
             for (k, &xv) in xin.iter().enumerate() {
                 sink.so_l1_w[woff + k] += dl1 * xv;
                 dxin[k] += dl1 * row[k];
@@ -1620,68 +1355,6 @@ impl Nnue {
             adw.scale = scale * (GRAD_CLIP_NORM / norm);
         }
 
-        let mut dense: [DenseParam; 8] = [
-            (
-                &mut self.out_w,
-                &mut adam.m_out_w,
-                &mut adam.v_out_w,
-                |s| s.out_w.as_slice(),
-                wd,
-            ),
-            (
-                &mut self.out_b,
-                &mut adam.m_out_b,
-                &mut adam.v_out_b,
-                |s| s.out_b.as_slice(),
-                0.0,
-            ),
-            (
-                &mut self.num_w,
-                &mut adam.m_num_w,
-                &mut adam.v_num_w,
-                |s| s.num_w.as_slice(),
-                0.0,
-            ),
-            (
-                &mut self.mlp_l1_w,
-                &mut adam.m_mlp_l1_w,
-                &mut adam.v_mlp_l1_w,
-                |s| s.mlp_l1_w.as_slice(),
-                wd,
-            ),
-            (
-                &mut self.mlp_l1_b,
-                &mut adam.m_mlp_l1_b,
-                &mut adam.v_mlp_l1_b,
-                |s| s.mlp_l1_b.as_slice(),
-                0.0,
-            ),
-            (
-                &mut self.mlp_l2_w,
-                &mut adam.m_mlp_l2_w,
-                &mut adam.v_mlp_l2_w,
-                |s| s.mlp_l2_w.as_slice(),
-                wd,
-            ),
-            (
-                &mut self.mlp_l2_b,
-                &mut adam.m_mlp_l2_b,
-                &mut adam.v_mlp_l2_b,
-                |s| s.mlp_l2_b.as_slice(),
-                0.0,
-            ),
-            (
-                &mut self.mlp_out_w,
-                &mut adam.m_mlp_out_w,
-                &mut adam.v_mlp_out_w,
-                |s| s.mlp_out_w.as_slice(),
-                wd,
-            ),
-        ];
-        for (w, m, v, get, decay) in dense.iter_mut() {
-            adw.dense(w, m, v, sinks, *get, *decay);
-        }
-
         // int8 quantization caps the second-order head's weights
         const SO_MAX_W: f32 = 127.0 / 64.0;
         let mut so: [&mut Vec<f32>; 6] = [
@@ -1708,27 +1381,7 @@ impl Nnue {
                 }
             }
         }
-        self.refresh_so_grid();
 
-        let mut dense: [DenseParam; 2] = [
-            (
-                &mut self.mlp_mob_w,
-                &mut adam.m_mlp_mob_w,
-                &mut adam.v_mlp_mob_w,
-                |s| s.mlp_mob_w.as_slice(),
-                wd,
-            ),
-            (
-                &mut self.mob_w,
-                &mut adam.m_mob_w,
-                &mut adam.v_mob_w,
-                |s| s.mob_w.as_slice(),
-                0.0,
-            ),
-        ];
-        for (w, m, v, get, decay) in dense.iter_mut() {
-            adw.dense(w, m, v, sinks, *get, *decay);
-        }
         adw.dense(
             &mut self.ft_bias,
             &mut adam.m_ft_bias,
@@ -1736,14 +1389,6 @@ impl Nnue {
             sinks,
             |s| s.ft_bias.as_slice(),
             0.0,
-        );
-        adw.dense(
-            &mut self.pw,
-            &mut adam.m_pw,
-            &mut adam.v_pw,
-            sinks,
-            |s| s.pw.as_slice(),
-            wd,
         );
 
         apply_rows::<ACC_DIMS>(ft_cells, &adam.touched[..parts], &adw, t_now);
@@ -1767,20 +1412,9 @@ impl Nnue {
         self.lookahead_sync(adam);
     }
 
-    fn dense_lens(&self) -> [usize; 19] {
+    fn dense_lens(&self) -> [usize; 8] {
         [
-            self.out_w.len(),
-            self.out_b.len(),
-            self.num_w.len(),
-            self.mob_w.len(),
             self.ft_bias.len(),
-            self.pw.len(),
-            self.mlp_l1_w.len(),
-            self.mlp_l1_b.len(),
-            self.mlp_l2_w.len(),
-            self.mlp_l2_b.len(),
-            self.mlp_out_w.len(),
-            self.mlp_mob_w.len(),
             self.pa_bias.len(),
             self.so_l1_w.len(),
             self.so_l1_b.len(),
@@ -1789,25 +1423,6 @@ impl Nnue {
             self.so_out_w.len(),
             self.so_out_b.len(),
         ]
-    }
-
-    pub fn set_so_grid(&mut self, on: bool) {
-        self.so_grid = on;
-        self.refresh_so_grid();
-    }
-
-    fn refresh_so_grid(&mut self) {
-        let round = |w: f32| {
-            if self.so_grid {
-                (w * 64.0).round() / 64.0
-            } else {
-                w
-            }
-        };
-        self.so_l1_wq.clear();
-        self.so_l1_wq.extend(self.so_l1_w.iter().map(|&w| round(w)));
-        self.so_l2_wq.clear();
-        self.so_l2_wq.extend(self.so_l2_w.iter().map(|&w| round(w)));
     }
 
     pub fn settle_adam(&mut self, adam: &mut AdamState, lr: f32, wd: f32) {
@@ -1858,17 +1473,6 @@ impl Nnue {
             &mut self.ft_bias,
             &mut self.pa,
             &mut self.pa_bias,
-            &mut self.out_w,
-            &mut self.out_b,
-            &mut self.num_w,
-            &mut self.mob_w,
-            &mut self.pw,
-            &mut self.mlp_l1_w,
-            &mut self.mlp_l1_b,
-            &mut self.mlp_l2_w,
-            &mut self.mlp_l2_b,
-            &mut self.mlp_out_w,
-            &mut self.mlp_mob_w,
             &mut self.so_l1_w,
             &mut self.so_l1_b,
             &mut self.so_l2_w,
@@ -1898,7 +1502,6 @@ impl Nnue {
                 *w = *sw;
             }
         }
-        self.refresh_so_grid();
     }
 
     #[inline]
@@ -1906,271 +1509,8 @@ impl Nnue {
         self.indexer.apply(ix, pos, flipped, mover);
     }
 
-    pub fn train_black(
-        &mut self,
-        indices: &PatternIndices,
-        stage: usize,
-        discs: usize,
-        mob: usize,
-        target: f32,
-        lr: f32,
-    ) -> f32 {
-        let feats = self.features_black(indices);
-
-        let mut acc = [0.0f32; H];
-        for &f in feats.iter().take(self.n_masks) {
-            let base = f as usize * H;
-            for h in 0..H {
-                acc[h] += self.ft[base + h];
-            }
-        }
-        let ow_off = stage * H;
-        let pw_off = stage * HALF;
-        let num_off = stage * NUM_TABLE_SIZE + discs;
-        let mob_off = stage * MOB_BUCKETS + mob.min(MOB_BUCKETS - 1);
-        let mut out = self.out_b[stage] + self.num_w[num_off] + self.mob_w[mob_off];
-        for h in 0..H {
-            if acc[h] > 0.0 {
-                out += self.out_w[ow_off + h] * acc[h];
-            }
-        }
-        let mut pa = [0.0f32; HALF];
-        let mut pb = [0.0f32; HALF];
-        for i in 0..HALF {
-            pa[i] = acc[i].clamp(0.0, PROD_CLAMP);
-            pb[i] = acc[i + HALF].clamp(0.0, PROD_CLAMP);
-            out += self.pw[pw_off + i] * pa[i] * pb[i] * (1.0 / PROD_CLAMP);
-        }
-
-        let err = out - target;
-        let g = lr * err;
-        self.num_w[num_off] -= g;
-        self.mob_w[mob_off] -= g;
-
-        let mut delta = [0.0f32; H];
-        for h in 0..H {
-            if acc[h] > 0.0 {
-                delta[h] = self.out_w[ow_off + h];
-                self.out_w[ow_off + h] -= g * acc[h];
-            }
-        }
-        for i in 0..HALF {
-            let w = self.pw[pw_off + i] * (1.0 / PROD_CLAMP);
-            if acc[i] > 0.0 && acc[i] < PROD_CLAMP {
-                delta[i] += w * pb[i];
-            }
-            if acc[i + HALF] > 0.0 && acc[i + HALF] < PROD_CLAMP {
-                delta[i + HALF] += w * pa[i];
-            }
-            self.pw[pw_off + i] -= g * pa[i] * pb[i] * (1.0 / PROD_CLAMP);
-        }
-        self.out_b[stage] -= g;
-
-        for h in 0..H {
-            let i = stage * H + h;
-            self.ft_bias[i] = (self.ft_bias[i] - g * delta[h]).clamp(-FT_CLAMP, FT_CLAMP);
-        }
-        for &f in feats.iter().take(self.n_masks) {
-            let base = f as usize * H;
-            for h in 0..H {
-                self.ft[base + h] = (self.ft[base + h] - g * delta[h]).clamp(-FT_CLAMP, FT_CLAMP);
-            }
-        }
-
-        err * err
-    }
-
     pub fn ft_len(&self) -> usize {
         self.ft.len()
-    }
-
-    pub fn view(&mut self) -> NnueView {
-        NnueView {
-            ft: self.ft.as_mut_ptr(),
-            ft_bias: self.ft_bias.as_mut_ptr(),
-            out_w: self.out_w.as_mut_ptr(),
-            out_b: self.out_b.as_mut_ptr(),
-            num_w: self.num_w.as_mut_ptr(),
-            pw: self.pw.as_mut_ptr(),
-            mob_w: self.mob_w.as_mut_ptr(),
-        }
-    }
-
-    /// # Safety
-    ///
-    /// Callers must not write the same weight cell concurrently.
-    #[allow(clippy::too_many_arguments)]
-    pub unsafe fn train_black_shared(
-        &self,
-        view: &NnueView,
-        indices: &PatternIndices,
-        stage: usize,
-        discs: usize,
-        mob: usize,
-        target: f32,
-        lr: f32,
-    ) -> f32 {
-        let feats = self.features_black(indices);
-
-        let mut acc = [0.0f32; H];
-        for h in 0..H {
-            acc[h] = *view.ft_bias.add(stage * H + h);
-        }
-        for &f in feats.iter().take(self.n_masks) {
-            let base = f as usize * H;
-            for h in 0..H {
-                acc[h] += *view.ft.add(base + h);
-            }
-        }
-        let ow_off = stage * H;
-        let pw_off = stage * HALF;
-        let num_off = stage * NUM_TABLE_SIZE + discs;
-        let mob_off = stage * MOB_BUCKETS + mob.min(MOB_BUCKETS - 1);
-        let mut out = *view.out_b.add(stage) + *view.num_w.add(num_off) + *view.mob_w.add(mob_off);
-        for h in 0..H {
-            if acc[h] > 0.0 {
-                out += *view.out_w.add(ow_off + h) * acc[h];
-            }
-        }
-        let mut pa = [0.0f32; HALF];
-        let mut pb = [0.0f32; HALF];
-        for i in 0..HALF {
-            pa[i] = acc[i].clamp(0.0, PROD_CLAMP);
-            pb[i] = acc[i + HALF].clamp(0.0, PROD_CLAMP);
-            out += *view.pw.add(pw_off + i) * pa[i] * pb[i] * (1.0 / PROD_CLAMP);
-        }
-
-        let err = out - target;
-        let g = lr * err;
-
-        let mut delta = [0.0f32; H];
-        for h in 0..H {
-            if acc[h] > 0.0 {
-                delta[h] = *view.out_w.add(ow_off + h);
-                *view.out_w.add(ow_off + h) -= g * acc[h];
-            }
-        }
-        for i in 0..HALF {
-            let w = *view.pw.add(pw_off + i) * (1.0 / PROD_CLAMP);
-            if acc[i] > 0.0 && acc[i] < PROD_CLAMP {
-                delta[i] += w * pb[i];
-            }
-            if acc[i + HALF] > 0.0 && acc[i + HALF] < PROD_CLAMP {
-                delta[i + HALF] += w * pa[i];
-            }
-            *view.pw.add(pw_off + i) -= g * pa[i] * pb[i] * (1.0 / PROD_CLAMP);
-        }
-        *view.out_b.add(stage) -= g;
-        *view.num_w.add(num_off) -= g;
-        *view.mob_w.add(mob_off) -= g;
-        for h in 0..H {
-            let p = view.ft_bias.add(stage * H + h);
-            *p = (*p - g * delta[h]).clamp(-FT_CLAMP, FT_CLAMP);
-        }
-        for &f in feats.iter().take(self.n_masks) {
-            let base = f as usize * H;
-            for h in 0..H {
-                let p = view.ft.add(base + h);
-                *p = (*p - g * delta[h]).clamp(-FT_CLAMP, FT_CLAMP);
-            }
-        }
-        err * err
-    }
-
-    /// # Safety
-    ///
-    /// Callers must not write the same weight cell concurrently.
-    #[allow(clippy::too_many_arguments)]
-    pub unsafe fn train_black_adam_shared(
-        &self,
-        view: &NnueView,
-        adam: &AdamView,
-        indices: &PatternIndices,
-        stage: usize,
-        discs: usize,
-        mob: usize,
-        target: f32,
-        lr: f32,
-    ) -> f32 {
-        let feats = self.features_black(indices);
-
-        let mut acc = [0.0f32; H];
-        for h in 0..H {
-            acc[h] = *view.ft_bias.add(stage * H + h);
-        }
-        for &f in feats.iter().take(self.n_masks) {
-            let base = f as usize * H;
-            for h in 0..H {
-                acc[h] += *view.ft.add(base + h);
-            }
-        }
-        let ow_off = stage * H;
-        let pw_off = stage * HALF;
-        let num_off = stage * NUM_TABLE_SIZE + discs;
-        let mob_off = stage * MOB_BUCKETS + mob.min(MOB_BUCKETS - 1);
-        let mut out = *view.out_b.add(stage) + *view.num_w.add(num_off) + *view.mob_w.add(mob_off);
-        for h in 0..H {
-            if acc[h] > 0.0 {
-                out += *view.out_w.add(ow_off + h) * acc[h];
-            }
-        }
-        let mut pa = [0.0f32; HALF];
-        let mut pb = [0.0f32; HALF];
-        for i in 0..HALF {
-            pa[i] = acc[i].clamp(0.0, PROD_CLAMP);
-            pb[i] = acc[i + HALF].clamp(0.0, PROD_CLAMP);
-            out += *view.pw.add(pw_off + i) * pa[i] * pb[i] * (1.0 / PROD_CLAMP);
-        }
-
-        let err = out - target;
-
-        let mut delta = [0.0f32; H];
-        for h in 0..H {
-            if acc[h] > 0.0 {
-                delta[h] = *view.out_w.add(ow_off + h);
-                let p = view.out_w.add(ow_off + h);
-                *p -= adam.step(adam.m_out_w, adam.v_out_w, ow_off + h, err * acc[h], lr)
-                    + adam.wd * lr * *p;
-            }
-        }
-        for i in 0..HALF {
-            let w = *view.pw.add(pw_off + i) * (1.0 / PROD_CLAMP);
-            if acc[i] > 0.0 && acc[i] < PROD_CLAMP {
-                delta[i] += w * pb[i];
-            }
-            if acc[i + HALF] > 0.0 && acc[i + HALF] < PROD_CLAMP {
-                delta[i + HALF] += w * pa[i];
-            }
-            let p = view.pw.add(pw_off + i);
-            *p -= adam.step(
-                adam.m_pw,
-                adam.v_pw,
-                pw_off + i,
-                err * pa[i] * pb[i] * (1.0 / PROD_CLAMP),
-                lr,
-            ) + adam.wd * lr * *p;
-        }
-        let p = view.out_b.add(stage);
-        *p -= adam.step(adam.m_out_b, adam.v_out_b, stage, err, lr);
-        let q = view.num_w.add(num_off);
-        *q -= adam.step(adam.m_num_w, adam.v_num_w, num_off, err, lr);
-        let mo = view.mob_w.add(mob_off);
-        *mo -= adam.step(adam.m_mob_w, adam.v_mob_w, mob_off, err, lr);
-        for h in 0..H {
-            let i = stage * H + h;
-            let p = view.ft_bias.add(i);
-            let d = adam.step(adam.m_ft_bias, adam.v_ft_bias, i, err * delta[h], lr);
-            *p = (*p - d).clamp(-FT_CLAMP, FT_CLAMP);
-        }
-        for &f in feats.iter().take(self.n_masks) {
-            let base = f as usize * H;
-            for h in 0..H {
-                let p = view.ft.add(base + h);
-                let d = adam.step(adam.m_ft, adam.v_ft, base + h, err * delta[h], lr);
-                *p = (*p - d - adam.wd * lr * *p).clamp(-FT_CLAMP, FT_CLAMP);
-            }
-        }
-        err * err
     }
 
     pub fn save(&self, path: &std::path::Path) -> std::io::Result<()> {
@@ -2184,7 +1524,7 @@ impl Nnue {
     }
 
     pub fn write_to(&self, w: &mut impl std::io::Write) -> std::io::Result<()> {
-        w.write_all(b"BBRVNN10")?;
+        w.write_all(b"BBRVNN11")?;
         w.write_all(&(ACC_DIMS as u32).to_le_bytes())?;
         w.write_all(&(self.n_features as u32).to_le_bytes())?;
         w.write_all(&(STAGE_COUNT as u32).to_le_bytes())?;
@@ -2208,17 +1548,6 @@ impl Nnue {
             .ft
             .iter()
             .chain(&self.ft_bias)
-            .chain(&self.out_w)
-            .chain(&self.out_b)
-            .chain(&self.num_w)
-            .chain(&self.pw)
-            .chain(&self.mob_w)
-            .chain(&self.mlp_l1_w)
-            .chain(&self.mlp_l1_b)
-            .chain(&self.mlp_l2_w)
-            .chain(&self.mlp_l2_b)
-            .chain(&self.mlp_out_w)
-            .chain(&self.mlp_mob_w)
             .chain(&self.so_l1_w)
             .chain(&self.so_l1_b)
             .chain(&self.so_l2_w)
@@ -2246,9 +1575,10 @@ impl Nnue {
         let mut r = &mut *r;
         let mut magic = [0u8; 8];
         r.read_exact(&mut magic)?;
-        let v10 = match &magic {
-            b"BBRVNN10" => true,
-            b"BBRVNN09" => false,
+        let (sigma, legacy) = match &magic {
+            b"BBRVNN11" => (true, false),
+            b"BBRVNN10" => (true, true),
+            b"BBRVNN09" => (false, true),
             m if m.starts_with(b"BBRVNN0") && (b'1'..=b'8').contains(&m[7]) => {
                 return Err(std::io::Error::new(
                     std::io::ErrorKind::InvalidData,
@@ -2290,7 +1620,7 @@ impl Nnue {
         r.read_exact(&mut u)?;
         let so_len = u32::from_le_bytes(u) as usize;
         self.mpc_sigma = None;
-        if v10 {
+        if sigma {
             r.read_exact(&mut u)?;
             let present = u32::from_le_bytes(u) != 0;
             let mut coef = [0.0f32; MpcSigma::LEN];
@@ -2326,19 +1656,8 @@ impl Nnue {
         };
         read_into(r, &mut self.ft)?;
         read_into(r, &mut self.ft_bias)?;
-        read_into(r, &mut self.out_w)?;
-        read_into(r, &mut self.out_b)?;
-        read_into(r, &mut self.num_w)?;
-        read_into(r, &mut self.pw)?;
-        read_into(r, &mut self.mob_w)?;
-        read_into(r, &mut self.mlp_l1_w)?;
-        read_into(r, &mut self.mlp_l1_b)?;
-        read_into(r, &mut self.mlp_l2_w)?;
-        read_into(r, &mut self.mlp_l2_b)?;
-        read_into(r, &mut self.mlp_out_w)?;
-        read_into(r, &mut self.mlp_mob_w)?;
-        if self.mlp_l1_w.iter().all(|&v| v == 0.0) || self.mlp_l2_w.iter().all(|&v| v == 0.0) {
-            self.init_mlp_hidden();
+        if legacy {
+            read_into(r, &mut vec![0.0f32; LEGACY_READOUT_LEN])?;
         }
         let read_stages = |r: &mut dyn Read, dst: &mut [f32]| -> std::io::Result<()> {
             read_into(r, dst)?;
@@ -2356,12 +1675,11 @@ impl Nnue {
         read_stages(&mut r, &mut self.so_out_b)?;
         read_into(r, &mut self.pa)?;
         read_into(r, &mut self.pa_bias)?;
-        self.mpc_alpha = if v10 {
+        self.mpc_alpha = if sigma {
             MpcAlpha::read_from(&mut r)?
         } else {
             None
         };
-        self.refresh_so_grid();
         Ok(())
     }
 }
@@ -2469,6 +1787,20 @@ mod tests {
     }
 
     #[test]
+    fn a_saved_network_reads_back() {
+        let mut a = Nnue::new(test_patterns());
+        a.init_weights();
+        let mut bytes = Vec::new();
+        a.write_to(&mut bytes).unwrap();
+        let mut b = Nnue::new(test_patterns());
+        b.read_from(&mut bytes.as_slice()).unwrap();
+        assert_eq!(a.ft, b.ft);
+        assert_eq!(a.pa, b.pa);
+        assert_eq!(a.so_l1_w, b.so_l1_w);
+        assert_eq!(a.so_out_b, b.so_out_b);
+    }
+
+    #[test]
     fn adam_moments_survive_a_round_trip_and_a_mismatch_does_not() {
         let mut nn = Nnue::new(test_patterns());
         nn.init_weights();
@@ -2479,7 +1811,7 @@ mod tests {
         for (i, x) in a.m_ft.iter_mut().enumerate().take(64) {
             *x = i as f32 * 0.5;
         }
-        for (i, x) in a.v_out_w.iter_mut().enumerate().take(16) {
+        for (i, x) in a.v_ft_bias.iter_mut().enumerate().take(16) {
             *x = 1.0 / (i as f32 + 2.0);
         }
         a.ft_last[3] = 99;
@@ -2493,7 +1825,7 @@ mod tests {
         assert_eq!(b.wd, 0.0125);
         assert_eq!(b.ft_last[3], 99);
         assert_eq!(&b.m_ft[..64], &a.m_ft[..64]);
-        assert_eq!(&b.v_out_w[..16], &a.v_out_w[..16]);
+        assert_eq!(&b.v_ft_bias[..16], &a.v_ft_bias[..16]);
 
         let corner_only = crate::pattern::from_spec("Corner3x3: A1 B1 C1 A2 B2 C2 A3 B3 C3", true)
             .expect("test spec parses");
@@ -2513,73 +1845,6 @@ mod tests {
     }
 
     #[test]
-    fn product_gate_training_descends() {
-        let make = || {
-            let mut nn = Nnue::new(test_patterns());
-            nn.init_weights();
-            let mut s: u64 = 0x9E37_79B9;
-            for v in nn.ft.iter_mut() {
-                s ^= s >> 12;
-                s ^= s << 25;
-                s ^= s >> 27;
-                *v = ((s >> 40) as i32 as f32) / 4.0e7;
-            }
-            for v in nn.pw.iter_mut() {
-                s ^= s >> 12;
-                s ^= s << 25;
-                s ^= s >> 27;
-                *v = ((s >> 40) as i32 as f32) / 1.0e8;
-            }
-            nn
-        };
-        let board = Board::new();
-        let target = 7.5f32;
-
-        let mut nn = make();
-        let ix = nn.indices(board.black, board.white);
-        let stage = crate::linear::Linear::stage(&board);
-        let discs = board.player_bb().count_ones() as usize;
-        let first = nn.train_black(&ix, stage, discs, 0, target, 0.01);
-        let mut last = first;
-        for _ in 0..200 {
-            last = nn.train_black(&ix, stage, discs, 0, target, 0.01);
-        }
-        assert!(
-            last < first * 0.05,
-            "plain SGD failed to descend: first {first} last {last}"
-        );
-
-        let mut nn = make();
-        let view = nn.view();
-        let first = unsafe { nn.train_black_shared(&view, &ix, stage, discs, 0, target, 0.01) };
-        let mut last = first;
-        for _ in 0..200 {
-            last = unsafe { nn.train_black_shared(&view, &ix, stage, discs, 0, target, 0.01) };
-        }
-        assert!(
-            last < first * 0.05,
-            "shared SGD failed to descend: first {first} last {last}"
-        );
-
-        let mut nn = make();
-        let mut adam = AdamState::new(&nn);
-        let view = nn.view();
-        let av = adam.view();
-        let first =
-            unsafe { nn.train_black_adam_shared(&view, &av, &ix, stage, discs, 0, target, 0.01) };
-        let mut last = first;
-        for _ in 0..400 {
-            last = unsafe {
-                nn.train_black_adam_shared(&view, &av, &ix, stage, discs, 0, target, 0.01)
-            };
-        }
-        assert!(
-            last < first * 0.05,
-            "shared Adam failed to descend: first {first} last {last}"
-        );
-    }
-
-    #[test]
     fn training_forward_matches_eval() {
         let mut nn = Nnue::new(test_patterns());
         nn.init_weights();
@@ -2592,33 +1857,6 @@ mod tests {
         };
         for v in nn.ft.iter_mut() {
             *v = rnd() * 0.02;
-        }
-        for v in nn.out_w.iter_mut() {
-            *v = rnd() * 0.2;
-        }
-        for v in nn.pw.iter_mut() {
-            *v = rnd() * 0.2;
-        }
-        for v in nn.num_w.iter_mut() {
-            *v = rnd() * 0.2;
-        }
-        for v in nn.mob_w.iter_mut() {
-            *v = rnd() * 0.2;
-        }
-        for v in nn.mlp_l1_w.iter_mut() {
-            *v = rnd() * 0.2;
-        }
-        for v in nn.mlp_l1_b.iter_mut() {
-            *v = rnd() * 0.2;
-        }
-        for v in nn.mlp_l2_w.iter_mut() {
-            *v = rnd() * 0.2;
-        }
-        for v in nn.mlp_l2_b.iter_mut() {
-            *v = rnd() * 0.2;
-        }
-        for v in nn.mlp_out_w.iter_mut() {
-            *v = rnd() * 0.2;
         }
 
         let board = Board::new();
@@ -2637,50 +1875,6 @@ mod tests {
             (trained - evaluated).abs() < 1e-3 * evaluated.abs().max(1.0),
             "training forward {trained} vs evaluated {evaluated}: the trainer \
              is descending on a different function than the search reads"
-        );
-    }
-
-    #[test]
-    fn stacked_grid_rounds_the_forward_pass() {
-        let mut nn = Nnue::new(crate::pattern::NNUE_PATTERNS);
-        nn.init_weights();
-        let mut board = Board::new();
-        for _ in 0..12 {
-            let m = board.movable();
-            let pos = Position::from_index(m.trailing_zeros()).unwrap();
-            board.make_move(pos).unwrap();
-        }
-        let ix = nn.indices(board.black, board.white);
-        let stage = crate::linear::Linear::stage(&board);
-        let mob = Nnue::mob_index(&board);
-        let loss_of = |nn: &mut Nnue, on: bool| {
-            nn.set_so_grid(on);
-            let mut sink = GradSink::new(1);
-            nn.grad_black_into(&ix, stage, mob, 7.0, &mut sink)
-        };
-        let off = loss_of(&mut nn, false);
-        let on = loss_of(&mut nn, true);
-        assert!(
-            (on - off).abs() > 1e-6,
-            "grid on and off gave the same loss {on}; the forward pass is not rounding"
-        );
-        let on_grid = |w: f32| ((w * 64.0).round() / 64.0 - w).abs() < 1e-7;
-        assert!(
-            nn.so_l1_wq.iter().all(|&w| on_grid(w)),
-            "L1 read off the grid"
-        );
-        assert!(
-            nn.so_l2_wq.iter().all(|&w| on_grid(w)),
-            "L2 read off the grid"
-        );
-        assert!(
-            nn.so_l1_w.iter().any(|&w| !on_grid(w)),
-            "the originals were rounded; the optimizer would have nothing to move"
-        );
-        nn.set_so_grid(false);
-        assert!(
-            nn.so_l1_wq == nn.so_l1_w,
-            "grid off must read the originals"
         );
     }
 
@@ -2725,7 +1919,6 @@ mod tests {
         for v in nn.so_out_b.iter_mut() {
             *v = rnd() * 0.5;
         }
-        nn.refresh_so_grid();
 
         let mut board = Board::new();
         for _ in 0..17 {
@@ -2818,13 +2011,10 @@ mod tests {
             };
             let orig = unsafe { *cell(nn, sel, i) };
             unsafe { *cell(nn, sel, i) = orig + h };
-            nn.refresh_so_grid();
             let up = loss(nn);
             unsafe { *cell(nn, sel, i) = orig - h };
-            nn.refresh_so_grid();
             let down = loss(nn);
             unsafe { *cell(nn, sel, i) = orig };
-            nn.refresh_so_grid();
             let numeric = (up - down) / (2.0 * h);
             let d = if (numeric - want).abs() < 1e-4 {
                 0.0

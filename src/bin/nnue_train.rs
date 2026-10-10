@@ -219,52 +219,6 @@ fn train_pass_minibatch(
     sq_total
 }
 
-fn train_pass(
-    nn: &mut Nnue,
-    adam: Option<&mut AdamState>,
-    examples: &[Example],
-    threads: usize,
-    lr: f32,
-    sym: SymPlan,
-) -> f64 {
-    let av = adam.map(|a| a.view());
-    let view = nn.view();
-    let nn_ref = &*nn;
-    let threads = threads.max(1);
-    let chunk = examples.len().div_ceil(threads).max(1);
-    std::thread::scope(|scope| {
-        let mut handles = Vec::new();
-        for (ti, part) in examples.chunks(chunk).enumerate() {
-            let view = &view;
-            let av = av.as_ref();
-            handles.push(scope.spawn(move || {
-                let mut s = 0.0f64;
-                let mut rs = sym.stream(ti as u64 + 1);
-                for ex in part {
-                    let ex = sym.apply(ex, &mut rs);
-                    let ex = &ex;
-                    let board = ex.board();
-                    let stage = Linear::stage(&board);
-                    let discs = ex.black.count_ones() as usize;
-                    let mob = kuroobi::nnue::Nnue::mob_index(&board);
-                    let ix = nn_ref.indices(ex.black, ex.white);
-                    s += unsafe {
-                        match av {
-                            Some(a) => nn_ref.train_black_adam_shared(
-                                view, a, &ix, stage, discs, mob, ex.score, lr,
-                            ),
-                            None => nn_ref
-                                .train_black_shared(view, &ix, stage, discs, mob, ex.score, lr),
-                        }
-                    } as f64;
-                }
-                s
-            }));
-        }
-        handles.into_iter().map(|h| h.join().unwrap()).sum()
-    })
-}
-
 #[derive(Default)]
 struct CkptHeader {
     epoch: usize,
@@ -277,7 +231,7 @@ struct CkptHeader {
     rng: u64,
 }
 
-const CKPT_MAGIC: &[u8; 8] = b"BBRVCK01";
+const CKPT_MAGIC: &[u8; 8] = b"BBRVCK02";
 const CKPT_HEADER_LEN: usize = 512;
 
 fn write_checkpoint(
@@ -593,9 +547,13 @@ fn main() -> ExitCode {
         );
         return ExitCode::FAILURE;
     }
+    if minibatch == 0 || !adam {
+        eprintln!("nnue_train needs --adam --minibatch n");
+        return ExitCode::FAILURE;
+    }
     // Weight decay and the lookahead pull touch every weight, gradient or not.
-    if train_stages.is_some() && (minibatch == 0 || !adam || wd != 0.0 || lookahead) {
-        eprintln!("--train-stages needs --adam --minibatch n, --wd 0 and no --lookahead");
+    if train_stages.is_some() && (wd != 0.0 || lookahead) {
+        eprintln!("--train-stages needs --wd 0 and no --lookahead");
         return ExitCode::FAILURE;
     }
 
@@ -765,7 +723,6 @@ fn main() -> ExitCode {
         let ad = adam_state
             .as_ref()
             .expect("--gpu requires --adam --minibatch N");
-        assert!(minibatch > 0, "--gpu requires --minibatch N");
         let la = if lookahead {
             (LOOKAHEAD_K, 0.5)
         } else {
@@ -778,7 +735,7 @@ fn main() -> ExitCode {
 
     for epoch in first_epoch..=epochs {
         let t = Instant::now();
-        if minibatch > 0 && epoch == first_epoch && mb_total_steps <= mb_step_done {
+        if epoch == first_epoch && mb_total_steps <= mb_step_done {
             mb_total_steps = u64::MAX;
         }
         let cur_lr = if plateau > 0 {
@@ -833,7 +790,7 @@ fn main() -> ExitCode {
                     t_shuf += t_s.elapsed().as_secs_f64();
                 }
                 rows += examples.len();
-                sq += if minibatch > 0 {
+                sq += {
                     let ad = adam_state
                         .as_mut()
                         .expect("--minibatch requires --adam (moments)");
@@ -890,15 +847,6 @@ fn main() -> ExitCode {
                         sym,
                         train_stages.is_some(),
                     )
-                } else {
-                    train_pass(
-                        &mut nn,
-                        adam_state.as_mut(),
-                        &examples,
-                        threads,
-                        cur_lr,
-                        sym,
-                    )
                 };
             }
             sq_total += sq;
@@ -914,7 +862,7 @@ fn main() -> ExitCode {
             );
             t_pass += ts.elapsed().as_secs_f64();
         }
-        if minibatch > 0 && epoch == first_epoch {
+        if epoch == first_epoch {
             let per_epoch = mb_step - mb_step_done;
             if virtual_done > 0 {
                 let skipped = per_epoch * virtual_done as u64;

@@ -83,7 +83,7 @@ export interface KifuFrame {
 }
 
 export interface HashView {
-  mid: number; end: number; min: number; max: number; bytes: number;
+  mid: number; end: number; min: number; max: number;
 }
 
 export interface ThreadsView {

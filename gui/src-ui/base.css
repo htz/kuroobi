@@ -128,8 +128,6 @@ button:disabled, button[aria-disabled="true"] { cursor:default; }
 .k-input:focus-within, .k-input:focus { border-color:var(--accent); }
 
 /* Link-like text (player names, etc). Only the underline strength changes */
-.k-link { cursor:pointer; transition:border-color var(--dur) var(--ease), color var(--dur) var(--ease); }
-.k-link:hover { color:var(--accent); border-bottom-color:var(--accent); }
 
 /* Draggable divider. Unused today — BottomPanel has a fixed height, and a
  * grip that looks draggable but does nothing is worse than none, so the grip
@@ -277,7 +275,7 @@ button:disabled, button[aria-disabled="true"] { cursor:default; }
 
 @media (prefers-reduced-motion: reduce) {
   .k-flip { animation:none; }
-  .k-press, .k-input, .k-link, .k-cell circle { transition:none; }
+  .k-press, .k-input, .k-cell circle { transition:none; }
   .k-nav-row, .k-dock { transition:none; }
 }
 

@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { PlayDock } from './PlayDock';
-import { LEVELS, useGame, type EngineSide } from './state';
+import { useGame, type EngineSide } from './state';
 import { fmtSecs, useGgs } from './ggs';
 import { flipped, usePrefs } from './prefs';
 import type { GameView } from './types';
@@ -385,7 +385,7 @@ export function App() {
 
   const nodes = g.stat && g.stat.nodes > 0 ? g.stat.nodes : 0;
   const nps = nodes && g.stat && g.stat.secs > 0 ? nodes / g.stat.secs : 0;
-  const lv = g.level === 'custom' ? t('app.level.custom') : LEVELS[g.level].name;
+  const lv = g.level === 'custom' ? t('app.level.custom') : t('app.level.preset', { n: g.level + 1 });
   const screenTitle =
     [...navLocal(), ...ggsNav(conn)].find((i) => i.id === nav)?.label ?? 'KUROOBI';
   const screenSub = isGgs
@@ -407,9 +407,9 @@ export function App() {
            active={nav} onSelect={setNav}
            footer={<>
              {cpu && <>
-             <Meter icon="cpu" label="CPU" value={Math.round(cpu.cpu)} unit="%"
+             <Meter icon="cpu" label={t('app.meter.cpu')} value={Math.round(cpu.cpu)} unit="%"
                     ratio={cpu.cpu / (cpu.cores * 100)} />
-             <Meter icon="memory" label={t('app.meter.memory')} value={(cpu.mem / 1e9).toFixed(1)} unit={'\u00a0GB'}
+             <Meter icon="memory" label={t('app.meter.memory')} value={(cpu.mem / 1e9).toFixed(1)} unit={'\u00a0' + t('unit.gb')}
                     ratio={cpu.mem_total > 0 ? cpu.mem / cpu.mem_total : 0} />
              <JobList jobs={jobsOf(cpu)} />
              </>}
@@ -617,9 +617,9 @@ export function App() {
             {g.thinking && (
               <Busy>{t('app.status.thinking')}</Busy>
             )}
-            {g.thinking && <StatusStat value={g.thinkSecs.toFixed(1)} unit="s" />}
-            {nodes > 0 && <StatusStat label="nodes" value={fmtNodes(nodes)} />}
-            {nps > 0 && <StatusStat label="nps" value={(nps / 1e6).toFixed(1)} unit="Mnps" />}
+            {g.thinking && <StatusStat value={g.thinkSecs.toFixed(1)} unit={t('unit.s')} />}
+            {nodes > 0 && <StatusStat label={t('unit.nodes')} value={fmtNodes(nodes)} />}
+            {nps > 0 && <StatusStat label={t('unit.nps')} value={(nps / 1e6).toFixed(1)} unit={t('unit.mnps')} />}
           </>}
           right={isGgs
             ? <>
@@ -726,10 +726,11 @@ function EnvTags({ items }: { items: [string, string][] }) {
 }
 
 function ggfNames(side: 'black' | 'white' | 'both' | 'off'): [string, string] {
+  const me = t('kifu.player');
   if (side === 'both') return ['KUROOBI', 'KUROOBI'];
-  if (side === 'black') return ['KUROOBI', 'Player'];
-  if (side === 'white') return ['Player', 'KUROOBI'];
-  return ['Player', 'Player'];
+  if (side === 'black') return ['KUROOBI', me];
+  if (side === 'white') return [me, 'KUROOBI'];
+  return [me, me];
 }
 
 const fmtNodes = (n: number): string =>

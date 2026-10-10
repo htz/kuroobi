@@ -186,23 +186,6 @@ impl Reversi {
     pub fn movable_list(&self) -> Vec<Position> {
         self.board.movable_iter().collect()
     }
-
-    #[cfg(feature = "random")]
-    pub fn random_move(&mut self, rng: &mut impl rand::Rng) -> Option<Position> {
-        let movable = self.movable();
-        if movable == 0 {
-            return None;
-        }
-        let choice = rng.gen_range(0..movable.count_ones());
-        let mut b = movable;
-        for _ in 0..choice {
-            b &= b - 1;
-        }
-        let pos = Position::from_index(b.trailing_zeros())?;
-        self.make_move(pos)
-            .expect("moves from movable() are always legal");
-        Some(pos)
-    }
 }
 
 impl Default for Reversi {
@@ -429,23 +412,6 @@ mod tests {
         let replay = Reversi::from_kifu(&g.to_kifu()).unwrap();
         assert_eq!(replay.board.black, g.board.black);
         assert_eq!(replay.board.white, g.board.white);
-    }
-
-    #[cfg(feature = "random")]
-    #[test]
-    fn test_random_move_plays_legal_moves() {
-        use rand::SeedableRng;
-        let mut rng = rand::rngs::StdRng::seed_from_u64(42);
-        let mut g = Reversi::new();
-        for _ in 0..10 {
-            if g.movable() == 0 {
-                break;
-            }
-            let before = g.movable();
-            let pos = g.random_move(&mut rng).unwrap();
-            assert!(before & pos.to_bit() != 0, "returned move was legal");
-        }
-        assert!(g.move_count() > 0);
     }
 
     #[test]

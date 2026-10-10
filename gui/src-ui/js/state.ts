@@ -32,19 +32,19 @@ export interface MoveInfo {
 }
 
 export const LEVELS = [
-  { name: 'Lv1', depth: 1, solve: 2, band: 0 },
-  { name: 'Lv2', depth: 2, solve: 4, band: 0 },
-  { name: 'Lv3', depth: 4, solve: 8, band: 0 },
-  { name: 'Lv4', depth: 6, solve: 10, band: 0 },
-  { name: 'Lv5', depth: 8, solve: 12, band: 0 },
-  { name: 'Lv6', depth: 10, solve: 14, band: 0 },
-  { name: 'Lv7', depth: 12, solve: 16, band: 0 },
-  { name: 'Lv8', depth: 14, solve: 18, band: 0 },
-  { name: 'Lv9', depth: 16, solve: 20, band: 0 },
-  { name: 'Lv10', depth: 18, solve: 22, band: 6 },
-  { name: 'Lv11', depth: 20, solve: 24, band: 6 },
-  { name: 'Lv12', depth: 22, solve: 26, band: 6 },
-  { name: 'Lv13', depth: 24, solve: 26, band: 8 },
+  { depth: 1, solve: 2, band: 0 },
+  { depth: 2, solve: 4, band: 0 },
+  { depth: 4, solve: 8, band: 0 },
+  { depth: 6, solve: 10, band: 0 },
+  { depth: 8, solve: 12, band: 0 },
+  { depth: 10, solve: 14, band: 0 },
+  { depth: 12, solve: 16, band: 0 },
+  { depth: 14, solve: 18, band: 0 },
+  { depth: 16, solve: 20, band: 0 },
+  { depth: 18, solve: 22, band: 6 },
+  { depth: 20, solve: 24, band: 6 },
+  { depth: 22, solve: 26, band: 6 },
+  { depth: 24, solve: 26, band: 8 },
 ] as const;
 
 export interface Levels { depth: number; solve: number; band: number }

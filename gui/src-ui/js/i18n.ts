@@ -51,6 +51,8 @@ export function setLang(lang: Lang) {
 
 const getLang = (): Lang => current;
 
+export const dateLocale = (): string => (current === 'ja' ? 'ja-JP' : 'en-US');
+
 export function useLang(): Lang {
   return useSyncExternalStore(
     (fn) => { listeners.add(fn); return () => listeners.delete(fn); },

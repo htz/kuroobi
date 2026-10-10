@@ -69,8 +69,6 @@ knob!(pub fn mpc_min_depth() -> u32 = "MPC_MIN_DEPTH" or MPC_MIN_DEPTH);
 
 const MPC_D0_OFFSET: f32 = 4.0;
 
-flag!(fn mpc_old() = "MPC_OLD" or false);
-
 const MPC_MAX_LEVEL: u32 = 3;
 
 /// Off where the reduced search reaches the end: left on, it erred 6.4 discs against exact solves at 30 empties.
@@ -330,10 +328,6 @@ impl TtEntry {
         epoch: 0,
     };
 }
-
-pub static BUSY_HIST: [std::sync::atomic::AtomicU64; 17] =
-    [const { std::sync::atomic::AtomicU64::new(0) }; 17];
-pub static SEARCH_ACTIVE: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
 
 #[derive(Clone, Default)]
 pub struct StopHandle(std::sync::Arc<std::sync::atomic::AtomicBool>);
@@ -624,16 +618,6 @@ impl NnueSearch {
             for _ in 0..workers {
                 std::thread::spawn(move || pool.worker_loop());
             }
-            if std::env::var("POOL_SAMPLE").is_ok() {
-                std::thread::spawn(move || loop {
-                    if SEARCH_ACTIVE.load(std::sync::atomic::Ordering::Relaxed) {
-                        let idle = pool.idle.load(std::sync::atomic::Ordering::Relaxed);
-                        let busy = workers.saturating_sub(idle).min(16);
-                        BUSY_HIST[busy].fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-                    }
-                    std::thread::sleep(std::time::Duration::from_micros(100));
-                });
-            }
             pool
         }))
     }
@@ -737,7 +721,6 @@ impl NnueSearch {
         if b.movable() == 0 {
             return (None, f32::NAN, 0);
         }
-        SEARCH_ACTIVE.store(true, std::sync::atomic::Ordering::Relaxed);
         let watcher = deadline.clone().and_then(|dl| {
             let stop = self.stop.clone()?;
             let done = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
@@ -759,7 +742,6 @@ impl NnueSearch {
         if let Some(d) = watcher {
             d.store(true, std::sync::atomic::Ordering::Relaxed);
         }
-        SEARCH_ACTIVE.store(false, std::sync::atomic::Ordering::Relaxed);
         r
     }
 
@@ -1296,18 +1278,13 @@ impl NnueSearch {
             );
         }
         let margin = t * sigma.value(b.empty_count() as u32, depth, pd);
-        let old_style = mpc_old();
-        let (try_high, try_low) = if old_style {
-            (true, true)
-        } else {
-            let d0 = self.nn.eval_from_indices(acc, b);
-            let gate = (margin - MPC_D0_OFFSET).max(1.0);
-            (d0 >= beta + gate, d0 <= alpha - gate)
-        };
+        let d0 = self.nn.eval_from_indices(acc, b);
+        let gate = (margin - MPC_D0_OFFSET).max(1.0);
+        let (try_high, try_low) = (d0 >= beta + gate, d0 <= alpha - gate);
         if try_high || try_low {
             self.probcut_level += 1;
             let saved_mpc = self.mpc;
-            if !old_style && (b.empty_count() as u32) < depth + MPC_NESTED_GAP {
+            if (b.empty_count() as u32) < depth + MPC_NESTED_GAP {
                 self.mpc = false;
             }
             let mut cut = None;

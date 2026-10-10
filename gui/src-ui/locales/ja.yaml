@@ -55,7 +55,9 @@ app:
     undo_title: "この対局の取り込みを取り消します"
   level:
     custom: "カスタム"
+    preset: "Lv{n}"
   meter:
+    cpu: "CPU"
     memory: "メモリ"
   moves:
     pass: "パス"
@@ -151,6 +153,7 @@ book:
     next: "次の手"
     position: "この局面"
   source:
+    file: "book.txt"
     learned: "実戦の学習"
   src:
     book: "定石"
@@ -272,6 +275,7 @@ engine:
     white_flagged: "白の時間切れ"
 err:
   bad_formula_kind: "申し込みの扱いの種別が不正です ({kind})"
+  bad_square: "そのマスはありません"
   busy_ggs: "GGS 対局中は控えます"
   busy_ggs_analysis: "GGS 対局中は分析を控えます"
   busy_ggs_search: "GGS 対局中はローカルの探索を控えます (終局までお待ちください)"
@@ -281,6 +285,7 @@ err:
   game_not_over: "終局していません"
   ggs_action_refused: "GGS がこの操作を受け付けませんでした"
   ggs_not_connected: "GGS に接続していません"
+  ggs_refused: "GGS: {msg}"
   ggs_session_not_started: "GGS セッションが起動していません"
   linear_weights_missing: "線形評価の重みを読み込めません ({path})。設定でファイルの場所を指定してください。"
   log_empty: "ログが空です"
@@ -296,6 +301,8 @@ err:
   record_unreadable: "棋譜を読み取れません。手の並びが正しいか確かめてください"
   solve_speed_not_measured: "読切の速度をまだ測っていません ({threads} スレッド)。設定 → エンジン の「読切の速度」で測ってから設定してください"
   solve_speed_unmeasurable: "読切の速度を測れませんでした"
+  unknown_resource: "不明なリソースです ({name})"
+  unsupported_verb: "対応していない対局コマンドです ({verb})"
 ggs:
   adjourned_games: "中断対局"
   and_separator: " と "
@@ -382,7 +389,6 @@ ggs:
     play: "対局の状況"
     request: "募集中の条件"
     since: "接続開始"
-    sock: "接続方式"
     stored: "二人の間の中断対局数"
     track: "入退室を知らせる相手"
     trust: "信用"
@@ -680,6 +686,7 @@ kifu:
   of_plies: "/ {n} 手"
   open_in_study: "検討で開く"
   pass: "パス"
+  player: "Player"
   raw:
     moves: "着手列"
   save: "ファイルに保存"
@@ -830,3 +837,12 @@ ui:
   toolbar:
     graph: "グラフ"
     graph_title: "評価値グラフ"
+unit:
+  b: "B"
+  gb: "GB"
+  kb: "KB"
+  mb: "MB"
+  mnps: "Mnps"
+  nodes: "nodes"
+  nps: "nps"
+  s: "s"

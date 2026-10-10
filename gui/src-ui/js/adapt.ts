@@ -88,4 +88,4 @@ export const ggsPlaying = (snap: GgsSnapshot | null): boolean =>
   snap?.matches.some((m) => m.my_color && !m.over) ?? false;
 
 export const logLinesOf = (log: RawLog[]): LogLine[] =>
-  log.map((l) => ({ dir: l.dir === 'info' ? 'app' : l.dir, text: l.text }));
+  log.map((l) => ({ seq: l.seq, dir: l.dir === 'info' ? 'app' : l.dir, text: l.text }));

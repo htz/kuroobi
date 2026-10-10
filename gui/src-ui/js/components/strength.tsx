@@ -4,10 +4,12 @@ import { t } from '../i18n';
 import { Select } from './primitives';
 
 
-const label = (l: typeof LEVELS[number]) =>
-  (l.band
-    ? t('ui.strength.preset_band', { name: l.name, depth: l.depth, solve: l.solve, band: l.band })
-    : t('ui.strength.preset', { name: l.name, depth: l.depth, solve: l.solve }));
+const label = (l: typeof LEVELS[number], i: number) => {
+  const name = t('app.level.preset', { n: i + 1 });
+  return l.band
+    ? t('ui.strength.preset_band', { name, depth: l.depth, solve: l.solve, band: l.band })
+    : t('ui.strength.preset', { name, depth: l.depth, solve: l.solve });
+};
 
 export const presetOf = (v: Levels): number | 'custom' => {
   const i = LEVELS.findIndex((l) => l.depth === v.depth && l.solve === v.solve && l.band === v.band);
@@ -22,7 +24,7 @@ export function Strength({ value, onChange }: { value: Levels; onChange: (v: Lev
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: 'var(--sp-3)' }}>
       <Select value={custom ? 'custom' : String(preset)}
-              options={[...LEVELS.map((l, i) => [String(i), label(l)] as [string, string]),
+              options={[...LEVELS.map((l, i) => [String(i), label(l, i)] as [string, string]),
                         ['custom', t('ui.strength.custom')]]}
               onChange={(s) => {
                 if (s === 'custom') { setPicked(true); return; }   // keep the values
