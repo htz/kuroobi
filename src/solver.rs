@@ -19,11 +19,6 @@ knob!(fn tt_min_empties() -> u8 = "TT_MIN" or TT_MIN_EMPTIES_DEFAULT);
 
 knob!(fn etc_empties() -> u8 = "ETC_MIN" or ETC_EMPTIES);
 
-const MID_TT_EMPTIES: u8 = 10;
-const MID_TT_BITS: u32 = 19;
-
-knob!(fn mid_tt_empties() -> u8 = "TT_MID_EMPTIES" or MID_TT_EMPTIES);
-
 const EVAL_ORDER_EMPTIES: u8 = 14;
 
 knob!(fn eval_order_empties() -> u8 = "EVAL_ORDER_MIN" or EVAL_ORDER_EMPTIES);
@@ -209,34 +204,27 @@ const ABORTED: i32 = i32::MIN + 1;
 struct ThreadBudget {
     pool: EndPool,
     scratch: std::sync::Mutex<Vec<Scratch>>,
-    /// Bumped per solve; part of a scratch's tag so a new root ages it.
-    root: std::sync::atomic::AtomicU32,
 }
 
 /// A worker's private tables. The caches hold only positions below
 /// `SELECTIVE_MIN_EMPTIES`, exact whatever the rung, so they outlive roots.
 struct Scratch {
-    mid: HashTable,
     l4: Vec<L4Entry>,
     l56: Vec<L4Entry>,
     l78: Vec<L4Entry>,
-    tag: u64,
 }
 
 impl Scratch {
-    fn new(l4_bits: u32, tag: u64) -> Scratch {
+    fn new(l4_bits: u32) -> Scratch {
         let cache = |bits: u32| zeroed_vec::<L4Entry>(1usize << bits);
         Scratch {
-            mid: HashTable::new(MID_TT_BITS),
             l4: cache(l4_bits),
             l56: cache(new_shallow_bits()),
             l78: cache(l78_bits()),
-            tag,
         }
     }
 
     fn wipe(&mut self) {
-        self.mid.wipe(1);
         for c in [&mut self.l4, &mut self.l56, &mut self.l78] {
             c.fill(L4_EMPTY);
         }
@@ -248,30 +236,15 @@ impl ThreadBudget {
         ThreadBudget {
             pool: EndPool::new(extra_threads),
             scratch: std::sync::Mutex::new(Vec::new()),
-            root: std::sync::atomic::AtomicU32::new(0),
         }
     }
 
-    fn tag(&self, selective_t: Option<f32>) -> u64 {
-        let root = self.root.load(std::sync::atomic::Ordering::Relaxed) as u64;
-        root << 32 | selective_t.map_or(0, f32::to_bits) as u64
-    }
-
-    fn take_scratch(&self, tag: u64) -> Scratch {
+    fn take_scratch(&self) -> Scratch {
         let popped = self.scratch.lock().unwrap().pop();
-        match popped {
-            Some(mut s) => {
-                if s.tag != tag {
-                    s.mid.clear(1);
-                    s.tag = tag;
-                }
-                s
-            }
-            None => {
-                let threads = self.pool.workers + 1;
-                Scratch::new(l4_bits().saturating_sub(threads.ilog2()).max(13), tag)
-            }
-        }
+        popped.unwrap_or_else(|| {
+            let threads = self.pool.workers + 1;
+            Scratch::new(l4_bits().saturating_sub(threads.ilog2()).max(13))
+        })
     }
 
     fn give_scratch(&self, s: Scratch) {
@@ -341,7 +314,6 @@ unsafe fn help_split(sp: &SplitPoint) -> bool {
         Some(unsafe { &*(sp.ev as *const Linear) })
     };
     let moves = unsafe { std::slice::from_raw_parts(sp.moves, sp.n_moves) };
-    let tag = budget.tag(sp.selective_t);
     let mut scratch: Option<Scratch> = None;
     let mut nodes = 0u64;
     loop {
@@ -357,7 +329,7 @@ unsafe fn help_split(sp: &SplitPoint) -> bool {
             break;
         }
         let m = moves[idx];
-        let sc = scratch.take().unwrap_or_else(|| budget.take_scratch(tag));
+        let sc = scratch.take().unwrap_or_else(|| budget.take_scratch());
         let mut w = Worker::with_tables(tt, budget, group, sc);
         w.selective_t = sp.selective_t;
         w.nnue = sp.nnue.clone();
@@ -1131,7 +1103,6 @@ struct Worker<'a> {
     l4: Vec<L4Entry>,
     l56: Vec<L4Entry>,
     l78: Vec<L4Entry>,
-    mid_empties: u8,
     order_ix: crate::pattern_index::PatternIndices,
     tt: &'a HashTable,
     abort: &'a AbortFlag<'a>,
@@ -1141,8 +1112,6 @@ struct Worker<'a> {
     warm_score: Option<i32>,
     warm_window: Option<(i32, i32)>,
     selective_t: Option<f32>,
-    mid_table: HashTable,
-    scratch_tag: u64,
     nnue: Option<NnueProbe>,
     sigma_scale: f32,
 }
@@ -1150,11 +1119,9 @@ struct Worker<'a> {
 impl<'a> Worker<'a> {
     fn into_scratch(self) -> Scratch {
         Scratch {
-            mid: self.mid_table,
             l4: self.l4,
             l56: self.l56,
             l78: self.l78,
-            tag: self.scratch_tag,
         }
     }
 
@@ -1172,32 +1139,15 @@ impl<'a> Worker<'a> {
             warm_score: None,
             warm_window: None,
             selective_t: None,
-            mid_table: sc.mid,
-            mid_empties: mid_tt_empties(),
             order_ix: crate::pattern_index::PatternIndices::ZERO,
             nnue: None,
             l56: sc.l56,
             l78: sc.l78,
             l4: sc.l4,
-            scratch_tag: sc.tag,
             sigma_scale: 1.0,
             budget,
             abort,
         }
-    }
-
-    #[inline(always)]
-    fn l78_prefetch(&self, hash: u64) {
-        if self.l78.is_empty() {
-            return;
-        }
-        let idx = (hash as usize) & (self.l78.len() - 1);
-        #[cfg(target_arch = "aarch64")]
-        unsafe {
-            std::arch::asm!("prfm pldl1keep, [{0}]", in(reg) self.l78.as_ptr().add(idx), options(nostack, preserves_flags));
-        }
-        #[cfg(not(target_arch = "aarch64"))]
-        let _ = idx;
     }
 
     #[inline]
@@ -1384,15 +1334,6 @@ impl<'a> Worker<'a> {
         }
     }
 
-    #[inline(always)]
-    fn table(&self, empties: u8) -> &HashTable {
-        if empties < self.mid_empties {
-            &self.mid_table
-        } else {
-            self.tt
-        }
-    }
-
     #[inline]
     fn should_abort(&mut self) -> bool {
         if self.abort.aborted() {
@@ -1534,17 +1475,13 @@ impl Solver {
         let mut root = self
             .scratch
             .take()
-            .unwrap_or_else(|| Scratch::new(l4_bits(), 0));
+            .unwrap_or_else(|| Scratch::new(l4_bits()));
         if std::mem::take(&mut self.wipe) {
             self.hash_table.wipe(self.threads);
             root.wipe();
             budget_arc.scratch.lock().unwrap().clear();
         } else {
             self.hash_table.clear(self.threads);
-            root.mid.clear(1);
-            budget_arc
-                .root
-                .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
         }
         CLEAR_NS.fetch_add(
             t_clear.elapsed().as_nanos() as u64,
@@ -2423,7 +2360,6 @@ impl Worker<'_> {
         &mut self,
         use_tt: bool,
         use_l78: bool,
-        n_empties: u8,
         to_move: crate::color::Color,
         hash: u64,
         player: u64,
@@ -2434,7 +2370,7 @@ impl Worker<'_> {
         best: Option<Position>,
     ) {
         if use_tt {
-            self.table(n_empties).update(
+            self.tt.update(
                 &board_of(player, opponent, to_move),
                 hash,
                 orig_alpha,
@@ -2510,7 +2446,7 @@ impl Worker<'_> {
 
         let use_tt = n_empties >= tt_min_empties();
         if use_tt {
-            self.table(n_empties).prefetch(hash);
+            self.tt.prefetch(hash);
         }
 
         {
@@ -2527,15 +2463,14 @@ impl Worker<'_> {
             let _p = layer_profile::Scope::new(layer_profile::TT, n_empties);
             if use_tt {
                 abst!(O_TT_PROBE);
-                self.table(n_empties)
-                    .get(&board_of(player, opponent, to_move), hash)
+                self.tt.get(&board_of(player, opponent, to_move), hash)
             } else {
                 None
             }
         };
         let mut narrowed = false;
         if let Some(e) = entry {
-            if !e.is_seed(self.table(n_empties).date()) {
+            if !e.is_seed(self.tt.date()) {
                 if let Some(v) = narrow(&mut alpha, &mut beta, &mut narrowed, e.lower(), e.upper())
                 {
                     return v;
@@ -2580,7 +2515,7 @@ impl Worker<'_> {
                 ev,
             );
             if use_tt {
-                self.table(n_empties).update(
+                self.tt.update(
                     &board_of(player, opponent, to_move),
                     hash,
                     orig_alpha,
@@ -2619,8 +2554,8 @@ impl Worker<'_> {
                     node_accounting::cut_at(n_empties, Some(0));
                     best = Some(m.pos);
                     self.ordered_store(
-                        use_tt, use_l78, n_empties, to_move, hash, player, opponent, orig_alpha,
-                        beta, alpha, best,
+                        use_tt, use_l78, to_move, hash, player, opponent, orig_alpha, beta, alpha,
+                        best,
                     );
                     return alpha;
                 }
@@ -2669,8 +2604,7 @@ impl Worker<'_> {
         }
 
         self.ordered_store(
-            use_tt, use_l78, n_empties, to_move, hash, player, opponent, orig_alpha, beta, alpha,
-            best,
+            use_tt, use_l78, to_move, hash, player, opponent, orig_alpha, beta, alpha, best,
         );
         alpha
     }
@@ -3614,11 +3548,7 @@ impl Worker<'_> {
             for i in 0..n {
                 let m = out[i];
                 let child_hash = zobrist::board_hash(o ^ m.flipped, p | m.flipped | m.pos.to_bit());
-                if child_empties >= tt_min_empties() {
-                    self.table(child_empties).prefetch(child_hash);
-                } else if child_empties >= MOVE_ORDERING_LIMIT {
-                    self.l78_prefetch(child_hash);
-                }
+                self.tt.prefetch(child_hash);
             }
         }
     }
