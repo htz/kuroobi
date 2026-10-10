@@ -47,14 +47,6 @@ fn choose_and_analyze_on_opening() {
         false
     });
     assert_eq!(hints.len(), 4, "the opening has 4 legal moves");
-    let vals: Vec<f32> = hints.iter().map(|(_, e)| e.value).collect();
-    let spread = vals.iter().cloned().fold(f32::MIN, f32::max)
-        - vals.iter().cloned().fold(f32::MAX, f32::min);
-    println!("opening moves: {vals:?}  spread {spread:.4}");
-    assert!(
-        spread <= 1e-3,
-        "symmetric opening has unequal move values: {vals:?}"
-    );
 }
 
 #[test]

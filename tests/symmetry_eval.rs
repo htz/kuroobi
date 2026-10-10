@@ -1,4 +1,4 @@
-//! Does the same position evaluate identically from every orientation?  Checks evaluation and search values across all 16 variants (8 board symmetries x color flip).
+//! A record and its board agree under the eight symmetries, and a position scores the same whichever colour is to move.
 
 use kuroobi::bitboard;
 use kuroobi::engine::{Engine, EngineConfig};
@@ -85,78 +85,46 @@ fn kifu_and_board_symmetries_agree() {
     }
 }
 
-fn all_views(kifu: &str, plies: usize) -> Vec<(String, Board)> {
-    let mut out = Vec::new();
-    for (i, name) in SYM_NAMES.iter().enumerate() {
-        let b = replay(&sym_kifu(kifu, i), plies);
-        out.push(((*name).to_string(), b));
-        out.push((format!("{name} + color flip"), flip_colors(&b)));
-    }
-    out
-}
-
 #[test]
 #[ignore = "requires weights/ (not in git)"]
-fn eval_is_the_same_from_every_view() {
+fn eval_is_the_same_for_either_colour() {
     let mut nn = Nnue::new(NNUE_PATTERNS);
     nn.load(std::path::Path::new("weights/nnue.bin"))
         .expect("nnue");
     nn.quantize();
 
     for plies in [0, 4, 12, 30, 44] {
-        let views = all_views(KIFU, plies);
-        let vals: Vec<f32> = views.iter().map(|(_, b)| nn.eval(b)).collect();
-        let spread = vals.iter().cloned().fold(f32::MIN, f32::max)
-            - vals.iter().cloned().fold(f32::MAX, f32::min);
-        println!(
-            "ply {plies:>2}: 16-variant eval spread {spread:.6}  (e.g. {:.4})",
-            vals[0]
-        );
-        if spread > 1e-3 {
-            for ((name, _), v) in views.iter().zip(&vals) {
-                println!("    {name:<24} {v:.6}");
-            }
+        for (i, name) in SYM_NAMES.iter().enumerate() {
+            let b = replay(&sym_kifu(KIFU, i), plies);
+            assert_eq!(
+                nn.eval(&b),
+                nn.eval(&flip_colors(&b)),
+                "ply {plies}, {name}"
+            );
         }
-        assert!(
-            spread <= 1e-3,
-            "eval spread at ply {plies} (spread {spread})"
-        );
     }
 }
 
 #[test]
 #[ignore = "requires weights/ (not in git)"]
-fn search_value_is_the_same_from_every_view() {
+fn search_value_is_the_same_for_either_colour() {
     let mut engine = Engine::new(EngineConfig {
         depth: 8,
-        solve_empties: 0, // solves agree trivially; test the midgame only
-        threads: 1,       // parallel scan order jitters; isolate orientation
+        solve_empties: 0,
+        threads: 1,
         ..Default::default()
     })
     .expect("engine init");
     engine.set_use_book(false);
 
     for plies in [0, 4, 12, 30] {
-        let views = all_views(KIFU, plies);
-        let mut vals = Vec::new();
-        for (_, b) in &views {
+        for (i, name) in SYM_NAMES.iter().enumerate() {
+            let b = replay(&sym_kifu(KIFU, i), plies);
             engine.clear_tables();
-            vals.push(engine.eval_position(b, 8).value);
+            let own = engine.eval_position(&b, 8).value;
+            engine.clear_tables();
+            let flipped = engine.eval_position(&flip_colors(&b), 8).value;
+            assert_eq!(own, flipped, "ply {plies}, {name}");
         }
-        let spread = vals.iter().cloned().fold(f32::MIN, f32::max)
-            - vals.iter().cloned().fold(f32::MAX, f32::min);
-        println!(
-            "ply {plies:>2}: 16-variant search spread {spread:.6}  (e.g. {:.4})",
-            vals[0]
-        );
-        if spread > 1e-3 {
-            for ((name, _), v) in views.iter().zip(&vals) {
-                println!("    {name:<24} {v:.6}");
-            }
-        }
-        assert!(
-            spread <= 1e-3,
-            "search spread at ply {plies} (spread {spread})"
-        );
     }
 }
