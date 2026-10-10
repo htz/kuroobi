@@ -24,8 +24,8 @@ the usual rank-major, so the direction offsets are `±1` for vertical,
 choice one byte corresponds to one file, and **the left-right mirror
 becomes a single `swap_bytes()` instruction**.
 
-Fetching the side-to-move bitboard, `player_bb()`, is an array index
-selection `[black, white][player.index()]` with no branch (`Color` is
+Fetching the side-to-move bitboard, `player_bb()`, selects on `player`
+— a conditional the compiler turns into a select (`Color` is
 `#[repr(u8)]` with `Black=0 / White=1`).
 
 ### Flip computation — a Kogge-Stone-style doubling smear
@@ -64,16 +64,19 @@ just once**:
 The justification is that "the edge square along the scan direction
 can never be part of a flipped run (its anchor would be off the
 board)". This makes the shift scan wrap-free and **the masking inside
-the loop disappears**. `flippable` computes the three masks once at
-the top and reuses them for every direction.
+the loop disappears**. The reference `flippable_generic` (tests only)
+computes the three masks once at the top and reuses them for every
+direction; the `flippable` the search calls is the NEON kernel on
+arm64 and a ray-table scan elsewhere.
 
 ### Legal move generation
 
-`some_mobility` ORs `<<dir` and `>>dir` together so that one function
-handles both signs, and expands the six-stage smear as **unrolled
-straight-line code**. ORing the four axes and ANDing with the empty
-squares yields the legal move bitboard, and **the mobility count is a
-single popcount** (`mobility_count`).
+On arm64 `mobility` is a NEON kernel. The scalar path, `some_mobility`,
+handles both signs of a direction in one function with the same
+1-1-2-2 doubling smear as **unrolled straight-line code**. ORing the
+four axes and ANDing with the empty squares yields the legal move
+bitboard, and **the mobility count is a single popcount**
+(`mobility_count`).
 
 ### Applying a move — make/unmake
 
@@ -84,8 +87,10 @@ self.black ^= pos_bit | flipped;  self.white ^= flipped;
 Placing the disc and flipping are completed with **two XORs**.
 `undo_move` is a perfectly symmetric undo that merely re-applies the
 same XOR pattern: **a make/unmake scheme that saves no copy of the
-position**. `make_move_bits` calls `flippable` only once and uses the
-result for both validation and application.
+position**. `make_move` calls `flippable` only once and uses the
+result for both validation and application; `make_move_bits` is the
+same without the validation, for callers that already know the move is
+legal.
 
 A pass only flips `player`.
 
@@ -106,8 +111,8 @@ symmetric forms.
 
 `zobrist::board_hash(player, opponent)` is the one position hash, keyed
 on the side-to-move pair so the same position reached by either colour
-shares an entry. On arm64 it is two chained CRC32C instructions (the low
-half hashes `player`, the high half folds in `opponent`); elsewhere it
+shares an entry. On arm64 it is two chained CRC32C instructions (the high
+half hashes `player`, the low half folds in `opponent`); elsewhere it
 falls back to a multiply-xorshift mix.
 
 ---
@@ -136,10 +141,13 @@ There was a pitfall in how this is used in the search. Originally it
 was gated on the α value, but PVS null windows are placed near the
 root value, so it never fired. The correct form is a **necessary
 condition gate by popcount** — compute `need = (64 - alpha + 1) / 2`
-and decide that if the opponent's total disc count falls short of it,
-nothing can be pruned without even counting stable discs.
+and decide that if the opponent's total disc count falls short of it
+plus a margin of 8, nothing can be pruned without even counting stable
+discs.
 
 The β-side cut did not pay off on balanced positions (FFO40-45) and
 was rejected once, but it turned out to be effective on lopsided ones
 (FFO#59) and was reinstated. It is recorded as **a concrete case where
 a biased measurement set led to the wrong accept/reject decision**.
+The current solver carries the α-side cut only; the β-side branch had
+been reduced to a stub and was removed with it.

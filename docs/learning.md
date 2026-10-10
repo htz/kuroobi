@@ -16,14 +16,17 @@ squared loss, the update for each active cell is `w += lr * error`.
   (Adam's normalised step tops out at roughly lr however large or small
   the error is). Adam is implemented as well, holding the moments in
   dense arrays
-- **8-fold symmetry augmentation**: for each position all 8 rotations
-  and mirrors are updated against the same target
+- **Symmetry by construction**: mirror-image indices share one cell
+  (`fold`), so each position is trained once and all 8 forms read the
+  same value. Only the `--gpu` path still expands eight rows per
+  position
 - **Deterministic Fisher-Yates shuffle** (on the CLI side): SGD assumes
   an IID order, but concatenating several sources (per-book-depth files
   and the like) skews the order, the model is pulled towards the last
   source, and the epoch loss rises
 - Rule of thumb for the learning rate: with K the number of cells one
-  prediction reads, `lr < 2/K` converges (`lr ≲ 0.034` for K≈58)
+  prediction reads, `lr < 2/K` converges (`lr ≲ 0.027` for K = 73: 72
+  mask cells and the disc-count cell)
 - Atomic save after every epoch; Ctrl-C saves at a shard boundary and
   stops
 
@@ -68,9 +71,8 @@ data is **cut into shards along file boundaries and read one shard at a
 time, then dropped**.
 
 - The shard plan is drawn up from file sizes alone. The binary is
-  fixed-length, so `size / 17` is the exact count and the split is
-  decided before reading 16 GB (text is over-estimated at 67 bytes or
-  more per line = safe on the memory side)
+  fixed-length, so `size / 27` is the exact count and the split is
+  decided before reading 16 GB
 - **Shuffling happens within a shard.** On top of that **the order of
   the files is permuted every epoch**, so the same files are not always
   together
@@ -82,8 +84,9 @@ time, then dropped**.
   GB-scale allocation and release
 
 Peak RSS therefore does not depend on the size of the dataset and tops
-out at `--max-examples × 24 bytes + the 150 MB weight table`
-(255 MB measured with a budget of 4M).
+out at `--max-examples × 24 bytes + the weight tables` (119 MB folded
+and 216 MB unfolded today; 255 MB was measured with a budget of 4M on
+the earlier, smaller set).
 
 #### The NNUE step on the GPU (`--gpu`)
 
@@ -129,9 +132,11 @@ splits an epoch into load / shuffle / pass / val.
 
 ### Self-play reinforcement learning
 
-`train_game` does TD(λ)-style credit assignment over every position. The
-target is `λ * final result + (1-λ) * bootstrap value`. Training **back
-to front** means the bootstrap uses the newly updated weights.
+An earlier `Linear::train_game`, since removed, did TD(λ)-style credit
+assignment over every position. The target was
+`λ * final result + (1-λ) * bootstrap value`, trained **back to
+front** so the bootstrap used the newly updated weights. It never beat
+supervised weights; see below.
 
 ### Where learning got to (conclusions from measurement)
 
@@ -142,8 +147,8 @@ to front** means the bootstrap uses the newly updated weights.
   bias from a shared transposition table (since fixed)
 - Continued training hits a ceiling around val MSE 39.56. **An
   improvement of the 0.01 class in val MSE no longer turns into playing
-  strength** (50.1% / 49.0% over 800 games in the promotion arena,
-  neither significant) → supervised learning was judged converged and
+  strength** (50.1% / 49.0% over 800 games in head-to-head promotion
+  matches, neither significant) → supervised learning was judged converged and
   stopped
 - Going further needs a redesign of the pattern composition or the stage
   split, not more data

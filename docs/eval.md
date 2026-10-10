@@ -51,8 +51,8 @@ against the 16: "star" shapes (a key square with the squares along every
 line through it, for X, C, A and the edge centre) in place of the corner
 shapes, +0.38 worse at 25 epochs and worse at 51 of 52 stages. Earlier:
 the 12-shape Edax family, an 18-shape extension of the 16, a shared-table
-8-shape set, and a 7-shape corner-weighted one. `pattern::from_spec` reads
-a set from a text file, so trying another needs no code.
+8-shape set, and a 7-shape corner-weighted one. Both sets are constants
+in `pattern.rs`; trying another means editing them and retraining.
 
 ### Stage split and the disc-count feature
 
@@ -83,8 +83,8 @@ local patterns alone cannot provide.
 
 ### Weight file format
 
-Magic `BBRVWT03` (folded cells), the only format read. A file is 78 MB;
-the unfolded format before it was 149 MB. Saving is an **atomic write** — temporary file +
+Magic `BBRVWT03` (folded cells), the only format read. A file is 119 MB;
+unfolded it would be 216 MB. Saving is an **atomic write** — temporary file +
 `sync_all` + `rename` — so an interruption never corrupts the existing
 weights. On load the stage count, the pattern count and each table size are
 checked, so weights from a different library fail to load.
@@ -110,14 +110,14 @@ table** (`swap_tables[size]`, an involution that exchanges digits 0 and 1).
 
 Implementation notes:
 
-- The update entries are in **CSR form**
-  (`entries[offsets[sq]..offsets[sq+1]]`), giving "the mask this square
-  belongs to and the digit weight `3^k`"
+- The update table is dense: `dense_pow3[sq][mask]` holds the digit
+  weight `3^k`, or 0 where the mask does not contain the square, so one
+  square's update is a single sweep across the mask slots
 - The update is a `wrapping_add` of `digit_diff.wrapping_mul(pow3)`. The
   difference is two's complement, but since the true result always fits in
   `0..3^size` the wrapping arithmetic is exactly correct
 - The order of addition is kept identical to the recomputing
-  `Evaluator::eval`, so the results are **bit-exact in f32**
+  `Linear::eval`, so the results are **bit-exact in f32**
   (`test_eval_indices_bit_exact_with_eval` verifies this)
 - `PatternIndices` is a `Copy` type of `[u16; 80]`
 
@@ -132,16 +132,19 @@ way achieved **-25% time on FFO40-49 (with node counts exactly identical)**.
 
 The linear pattern evaluation has a convex MSE loss, and its held-out MSE
 plateaus at **~39 disc²** (it cannot express interactions between features).
-Feeding the same incremental pattern features through a non-linear NNUE broke
-that floor.
+Feeding incrementally maintained pattern indices (the NNUE's own 32-mask
+set) through a non-linear network broke that floor.
 
 ```text
-active features (64 masks) ──▶ feature transformer (H dims/feature, shared by all stages)
-                                    │ sum = accumulator (H)
-                                    │ ReLU
-                                    ▼
-                        per-stage linear readout ──▶ evaluation (disc difference)
+32 masks ─┬▶ feature table (256/row, all stages) ── sum ── pairwise fold ──▶ 128 ─┐
+          └▶ phase table (128/row, 6 stage buckets) ─ sum ── clamp² ───────▶ 128 ─┤ + mobility
+                                                                                  ▼
+                  per-stage stack (60 heads): 257 → 16 → 64 → 1, with a skip from the 256 inputs
 ```
+
+The weight file's magic is `BBRVNN11`, the only format read. Its header
+carries the accumulator width, the feature count and the phase-table and
+stack sizes, and a mismatch fails the load.
 
 ### Where it stands (v0002_valfull, 13.73 million positions)
 
@@ -200,14 +203,18 @@ width with int16x8.
 
 **i8 was rejected.** It is 8% faster but the MSE degrades by +0.48. The
 policy is not to trade away evaluation accuracy, and even unused it left the
-cost of building a 20MB table, so the code was deleted outright.
+cost of building a 20MB table, so the code was deleted outright. (That
+was about the feature table. The current network keeps both tables in i16
+and runs the small stacked layers in i8.)
 
 > **Pitfall**: the NEON readout (`vmlal_s16`) **accumulates into i32 lanes**.
 > `acc(~16.4k) × w(32k) × H=16 ≈ 2e9` overflows i32 and **flips the sign of
 > the evaluation** (measured: f32 +115 against i16 -104). The readout scale
 > is capped at a value derived backwards from the i32 limit.
-> `test_eval_paths_agree` verifies that the 3 paths — f32, incremental and
-> leaf reconstruction — agree, and it caught this overflow.
+> A test comparing the f32 and integer paths caught this overflow; today
+> `vector_kernel_matches_scalar` and
+> `integer_stack_matches_f32_on_trained_weights` (in `nnue/stack_q.rs`)
+> guard the integer path.
 
 ### Choosing H (the accumulator width)
 
@@ -253,12 +260,12 @@ depth ignores speed, so it measures only the quality of the evaluation. Under
 game conditions the difference disappears.
 
 > **It was once written that "the price is 8%", but that was an invalid
-> number measured on a defective build.** The NEON partial sums in
-> `accumulate_rows` were fixed at `[int16x8_t; 2]`, so at H=64 only 16 of the
+> number measured on a defective build.** The NEON partial sums (in a
+> function since removed) were fixed at `[int16x8_t; 2]`, so at H=64 only 16 of the
 > 64 lanes were being added (since fixed). Of course it looks fast when the
 > summation does 1/4 of the work. **Before measuring speed, make
-> `cargo test` pass on that build** — `test_eval_paths_agree` catches this
-> defect.
+> `cargo test` pass on that build** — the path-agreement tests catch this
+> kind of defect.
 
 Incidentally, the 3 points from that same 2026-07-27 run (H=8 39.67 /
 H=16 36.10 / H=64 33.63) show that **width acts monotonically on MSE**. The
@@ -669,7 +676,7 @@ minimum of 6 is optimal.**
 > at that moment.
 > **Copying a task's indices from the parent's accumulator** (dropping the
 > rebuild) is neutral (6.9s against 7.2s, within noise). `Nnue::indices`
-> scans 80 masks, so the amount of work certainly goes down, but it does not
+> rebuilds every mask index, so the amount of work certainly goes down, but it does not
 > show up in wall-clock.
 
 ### Training

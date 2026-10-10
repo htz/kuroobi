@@ -3,8 +3,9 @@
 *[日本語版はこちら](README.ja.md)*
 
 **A Reversi (Othello) engine built on a 2×u64 bitboard.** Written in Rust
-with no external dependencies (apart from random numbers and the
-benchmark harness). The midgame uses an NNUE evaluation with selective
+with no external dependencies in the engine itself (`libc` serves one
+trainer's signal handler, the GPU trainer is optional, and random
+numbers and the benchmark harness are dev-only). The midgame uses an NNUE evaluation with selective
 search; the endgame is solved exactly. A GUI for playing, studying and
 browsing the opening book ships with it, along with a client for the
 online server GGS.
@@ -15,7 +16,7 @@ online server GGS.
 | | |
 |---|---|
 | **Strength** | **53.9%** against Edax 4.5.5 (level 13) over 800 games<br><sub>2315-2337 in the GGS random-opening pool (2026-08-21)</sub> |
-| **Endgame** | Solves FFO40-59 in **310 s** (1 thread) / **56 s** (10 threads)<br><sub>`problems/fforum-40-59.obf`, with the rest of the FFO suite beside it</sub> |
+| **Endgame** | Solves FFO40-59 in **289 s** (1 thread) / **49 s** (8 threads); Edax 4.6 takes 520 s / 82 s and Egaroucid 7.8.0 495 s / 67 s on the same machine<br><sub>`problems/fforum-40-59.obf`, with the rest of the FFO suite beside it</sub> |
 | **Evaluation** | Beats Edax and Zebra in a fixed 8-ply round robin; does not reach Egaroucid |
 | **Implementation** | Rust. The engine itself pulls in no external crates |
 | **GUI** | Tauri + TypeScript. Play, study, book, GGS |
@@ -63,15 +64,15 @@ source column** separates moves that came from the book file (book) from
 moves learned from real games and written back (learned book), with the
 number of games behind each.
 
-The record of what was imported is in the Learning tab of the play
-screen, where you can follow **game → losing move → the rewrite (old to
+The record of what was imported is in the Learning log tab of the Book
+screen (the play screen's Learning tab links to it), where you can follow **game → losing move → the rewrite (old to
 new)**. If a bad game gets imported, it can be reverted game by game.
 
 ### Online play (GGS)
 
 ![GGS game results](docs/img/gui-ggs.png)
 
-Playing, observing, the lobby, chat and waiting mode are all built in.
+Playing, observing, the lobby, chat and auto match are all built in.
 Synchro matches (the same opening played twice with colours swapped) are
 supported; the per-move deadline is derived from the clock, and iterative
 deepening stops inside it. Finished games are kept and listed with the
@@ -110,11 +111,14 @@ jump in the clock, there are only two rating pools — are collected in
 
 ![FFO40-59 by thread count](docs/img/bench-threads.svg)
 
-Compared against Edax 4.6 built natively for arm64 on the same machine.
-**Per node we run at about half Edax's speed**, but **the search tree is
-about half the size**, so the total time comes out ahead. Those two
-cancelling out is where things currently stand; neither number alone
-measures the engine.
+Compared against Edax 4.6 and Egaroucid 7.8.0, each built natively for
+arm64 and run on the same machine (2026-10-11). **The lead comes from a
+smaller search tree, not from speed per node** — Edax's nodes are the
+cheaper ones — and **both of the others scale better with threads**, so
+the gap narrows from 1.8x and 1.7x on one thread to 1.7x and 1.4x on
+eight. Neither number alone measures the engine. On the harder
+FFO60-79, eight threads take 28 minutes against Edax's 44 and
+Egaroucid's 53.
 
 Measurement details, rejected changes and the parallel-scaling breakdown
 are in [Where it stands](docs/benchmarks.md).
@@ -180,12 +184,13 @@ per move, while from 26 empties down 299 of 300 moves were best — that
 is, **time saved in the endgame is not reaching the opening, where the
 games are lost**. The cause is the denominator in the allocation: the
 solve actually starts around 26-30 empties, but `(empties − 18) / 2`
-estimates "six more moves to pay for". A path that derives the
-denominator from the machine's speed (`timectl::auto_solve_ref`) exists
-and was checked in self-play, but a 60-second single-threaded bench
-cannot reproduce match conditions (one endgame move eats 6.7% of the
-clock there, against 0.13% in a real game). The default stands, pending
-a check under match conditions. The numbers are in
+estimates "six more moves to pay for". Once the solve speed has been
+measured on the machine, the denominator is derived from it instead
+(`solve_ref_and_moves` in `timectl.rs`); without a measurement the fixed
+18 stands. A 60-second single-threaded bench could not reproduce match
+conditions when this was checked in self-play (one endgame move eats
+6.7% of the clock there, against 0.13% in a real game). The numbers are
+in
 [Where it stands](docs/benchmarks.md#ggs-rated-games).
 
 ### The board moves by bit operations
@@ -210,8 +215,9 @@ first orientation and the pale green the others.
 Rather than recount everything after each move, **only the patterns
 containing a changed square** are updated (incremental pattern indices).
 
-The evaluation used in games today is an NNUE that takes those patterns
-as input, quantized to int16 and running on NEON. Details in
+The evaluation used in games today is an NNUE over its own set of 32
+square groups, quantized to integers and running on NEON; the KUROOBI
+patterns order moves in the endgame solver. Details in
 [Evaluation function](docs/eval.md).
 
 ---
@@ -259,13 +265,13 @@ src/
 ├── resources.rs       where weights and the book live (configurable)
 ├── timectl.rs         time allocation and the entrance to the solve (derived from machine speed)
 ├── engine.rs          session layer shared by the GUI and the CLI (move choice, analysis)
-├── trainer.rs         training data I/O, symmetric expansion, epoch stats
-└── bin/               CLI tools (training, measurement, matches, correctness)
+├── trainer.rs         training data I/O, symmetric forms, epoch stats
+└── bin/               CLI tools (training, MPC calibration, book generation, GTP and GGS clients)
 gui/                   GUI (Tauri + Vite/TypeScript)
 docs/                  implementation notes (linked from this README)
 tests/                 perft coverage, solver integration tests, time to stop
 benches/               micro-benchmarks (criterion)
-problems/              reference positions (OBF) for σ calibration and selective-search checks
+problems/              reference positions (OBF) for σ calibration and selective-search checks, and calibration data
 .github/workflows/     CI (format, clippy, tests, GUI build)
 CLAUDE.md              how to work in this repository
 weights/ logs/ train_data/   trained weights, logs, training data (not in git)

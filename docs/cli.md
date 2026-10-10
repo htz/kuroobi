@@ -7,9 +7,9 @@ for a question, and the question is settled. They run as
 `cargo run --release --bin <name> -- <args>` (what follows spells out
 the direct call to the binary in `target/release/`).
 
-Argument parsing is hand-rolled. Called without arguments they either
-print their usage or start straight away on their defaults (the
-benchmarks do the latter).
+Argument parsing is hand-rolled. Called without arguments most print
+their usage; `gtp` starts serving and `bookgen` reports the book it
+finds.
 
 | Purpose | Command |
 |---|---|
@@ -101,6 +101,7 @@ nnue_train [OPTIONS] <data-file>...
 |---|---|
 | `--epochs <n>` | Number of passes |
 | `--start-epoch <n>` | Enter the cosine schedule at epoch n, for continuing trained weights |
+| `--train-stages <lo-hi>` | Train only the per-stage heads of that stage range, which has to cover whole 10-stage buckets (e.g. `50-59`) |
 | `--out <path>` | Where the best-val weights go. `<out>.last.bin` holds the latest epoch regardless |
 | `--init <path>` | Initial weights. Restores weights only — Adam starts cold |
 | `--checkpoint <path>` | Write weights, moments and loop state every epoch. The best epoch is parked alongside as `<path>.best.ckpt` |
@@ -232,7 +233,7 @@ functionality and usually suffices.
 ggs --play <opponent> [--games N]
     [--login name --pw pass | --credentials .ggs_credentials]
     [--type 8] [--time 30:00] [--resume <game id>]
-    [--depth N] [--solve-empties N] [--selective-band N] [--mpc]
+    [--depth N] [--solve-empties N] [--selective-band N] [--no-mpc]
     [--solver-hash 22] [--threads N] [--weights path] [--nnue path]
 
 # Wait for requests from <opponent> and accept them (asks for nothing)
@@ -241,6 +242,9 @@ ggs --accept <opponent> [same options as --play]
 # Bridge that only returns a move (reads "<64 cells> <X|O>" on stdin
 # and answers "= <coord>")
 ggs --serve
+
+# Stay logged in and pass stdin lines to the server, without playing
+ggs --console
 ```
 
 | Option | Default | Meaning |

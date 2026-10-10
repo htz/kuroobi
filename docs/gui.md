@@ -6,7 +6,7 @@ The screens for play, study, the book and the GGS connection.
 
 The rail on the left is where you go: **Play, Study and Book**, plus the
 seven screens that open once you connect to GGS (Play / observe, Lobby,
-Players, Results, Chat, Waiting mode, Console). As the window narrows,
+Players, Results, Chat, Auto match, Console). As the window narrows,
 the right-hand panel folds first, then the labels on the left, then the
 auxiliary information along the top; the board is the last thing left.
 
@@ -66,18 +66,19 @@ report back to the screen as it goes.
   is the better choice for handing a game to other software.
 - **GGS (online play)** — a client for GGS (Generic Game Server) is
   built in: play, observing, lobby, player information, results, chat,
-  waiting mode (game over → interval wait → automatic match request,
-  repeated) and a console for raw commands. The board, the clocks and
+  auto match (game over → interval wait → automatic match request to
+  the opponent picked, repeated) and a console for raw commands. The board, the clocks and
   the players' row are drawn with the same parts as a local game.
-  Finished games stay in the archive, and pressing one opens its record
-  in Study. See [What GGS taught us](#what-ggs-taught-us) for details.
+  Finished games stay in the archive, and pressing one opens its
+  record, which can be taken on into Study. See [What GGS taught us](#what-ggs-taught-us) for details.
 
 The keys are ⌘N (new game), ⌘Z (take back), ⌘S (save), ⌘O (load), ⌘B
 (book). In Study, ← → move one move, with ⇧ ten moves, and with ⌘ to the
 first or last position.
 
-The thinking settings (depth, exact solve, selective search, thread
-count) are given by picking a level or with Custom. Whether the book is
+The thinking settings (depth, exact solve, selective search) are given
+by picking a level or with Custom; the thread count is under Settings →
+Engine. Whether the book is
 used can be toggled too (used by default); turn it off when research
 calls for the engine's own move.
 
@@ -127,10 +128,12 @@ real games went through.
 Not only on GGS: a game finished in the local play mode is imported by
 the same mechanism (run in the background; a game record that was merely
 loaded, and a game that does not start from the initial position, are
-out of scope). Whether to import is toggled by the play panel's Learning
-tab and by the GGS engine settings (imported by default).
+out of scope). Whether to import is toggled in the play panel's
+Learning tab; the one switch covers local and GGS games (imported by
+default).
 
-Imported games stay in that same Learning tab as a list, and can be
+Imported games are listed in the Book screen's Learning log tab (the
+Learning tab has a button that opens it), and can be
 followed all the way to **game → losing move → the move that was
 rewritten (old→new)**. Write-back overwrites values, so a single odd
 game mixed in changes the moves that follow — the details are kept so it
@@ -138,7 +141,7 @@ can be found, and **an import can be undone per game**. Undoing restores
 the value of a move that was in the book already, and removes, candidate
 and all, a move that was not.
 
-The build steps and the pitfalls are in [CLAUDE.md](CLAUDE.md).
+The build steps and the pitfalls are in [CLAUDE.md](../CLAUDE.md).
 
 ---
 

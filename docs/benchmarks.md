@@ -9,14 +9,18 @@ rejected.
 > 2026-09-14. Everything here is a record of what they measured, with the
 > flags and conditions they were given; none of it can be re-run as
 > written without restoring them from `c89d9ba^` first.
+> The exception is the [FFO benchmark](#ffo-benchmark-endgame-exact-solve)
+> and the thread-count table, re-measured on 2026-10-11 against freshly
+> built opponents.
 
 ## Level reached
 
 ![FFO40-59 by thread count](img/bench-threads.svg)
 
-Games are against Edax 4.5.5 (on macOS, the x86 binary through Rosetta);
-the endgame benchmark is against Edax 4.6 built natively for arm64. Both
-are single-threaded.
+Games are against Edax 4.5.5 (on macOS, the x86 binary through Rosetta,
+at fixed levels, so its speed does not enter the result); the endgame
+benchmark is against Edax 4.6 and Egaroucid 7.8.0, both built natively
+for arm64.
 
 ### Games against Edax
 
@@ -161,13 +165,10 @@ Things learned as a by-product:
 
 ### FFO benchmark (endgame exact solve)
 
-FFO tests 1-59 (6-34 empties) were matched against Edax problem by
-problem. **Both were built natively for arm64 on the same machine, run
-single-threaded with the number of transposition table entries matched**,
-and run alternately, taking the minimum. All values are correct (an exact
-match with Edax). ★ marks the problems where we searched fewer nodes than
-Edax (38/59). A "—" in the t-ratio means Edax's time rounded to 0 and the
-ratio cannot be computed.
+Measured on 2026-10-11 against Edax 4.6 and Egaroucid 7.8.0. **All three
+were built natively for arm64 and run one at a time on the same
+machine, on the same problem files, at 100% (exact) solve.** Every
+engine returns the same value on every problem.
 
 **Measurement conditions** (stated for reproduction and comparison):
 
@@ -175,151 +176,152 @@ ratio cannot be computed.
 |---|---|
 | CPU / RAM | Apple M1 Max (8 performance + 2 efficiency = 10 cores) / 64 GB |
 | OS | macOS 26.5.1 |
-| KUROOBI | Rust 1.92.0, native arm64, `solve_obf --hash-bits 25 --threads 1`, PGO build |
-| Edax | 4.6 made native arm64 with `make build ARCH=native OS=osx COMP=clang`, `-solve -level 60 -n 1 -h 26` |
-| Transposition table | **2^26 entries on both sides**. Ours 24 B/entry 2-way, Edax 24 B/entry 4-way |
+| KUROOBI | `5f0058d`, Rust 1.98.1, `cargo build --release` (no PGO). Main table 2^25 entries (1.07 GB), cleared for every problem with the clear left out of the time |
+| Edax | 4.6, `abulmo/edax-reversi` at `14f048c`, built as its README says: `make pgo-build ARCH=armv8.5-a COMP=clang OS=osx` (Apple clang 21). Run as `-solve <obf> -level 60 -n <threads> -h 26` (1.87 GB resident) |
+| Egaroucid | 7.8.0 for Console, `ff9ec32`, the "macOS ARM64 Generic (Clang)" build. Run as `-l 60 -nobook -t <threads> -solve <obf>` with its default table (1.61 GB resident) |
+| Runs | FFO40-59 at 1 and 8 threads twice and FFO1-39 three times, taking the minimum; the other thread counts and FFO60-79 once. The engines alternate within a round |
 
-Our `--hash-bits N` internally multiplies by 2 and allocates 2^(N+1)
-entries, whereas Edax's `-h N` is 2^N entries exactly. To match the entry
-count, ours has to be 1 smaller (25 against 26). Also, without `-level 60`
-Edax runs an 87% selective search instead of an exact solve.
+Our driver is not in the tree: it is a loop around
+`Solver::solve_with_eval` that clears the tables before each problem.
+Edax needs `-level 60`, without which it runs an 87% selective search,
+and its problem lines must be exactly 65 characters (board, space, side
+to move); a trailing `;` makes it silently re-solve the previous board.
 
-**Edax's measured times move by 5% with thermal state** (FFO40-59 takes
-527 seconds from cold and 543-549 seconds after continuous measurement).
-Do not carry past measurements around as a fixed baseline; run both
-alternately in the same session every time you compare.
+The machine was not otherwise idle (an editor and other sessions were
+open), and thermal state moves these times by a few percent, so the
+spread between two runs of the same thing is shown beside the totals.
+**Node counts are not comparable between engines** — each counts
+ordering and table probes differently — so the tables rank by time and
+give nodes only for reference.
 
 #### Totals
 
-| Set | KUROOBI | Edax | Time ratio | KUROOBI nodes | Edax nodes | Node ratio | KUROOBI NPS | Edax NPS |
-|---|---:|---:|---:|---:|---:|---:|---:|---:|
-| FFO1-19 (14-16 empties) † | 0.073 s | 0.05 s | 1.46 | 2.1M | 3.0M | 0.71 | 29.0M | 60.6M |
-| FFO20-39 (6-22 empties) † | 3.48 s | 2.36 s | 1.47 | 103.9M | 111.4M | 0.93 | 29.8M | 47.2M |
-| **FFO40-59 (20-34 empties)** | **535.1 s** | **542.99 s** | **0.97** | **12.62G** | **25.39G** | **0.50** | **23.6M** | **46.7M** |
-| **FFO1-59 total** | **538.7 s** | **552.8 s** | **0.97** | **12.72G** | **25.50G** | **0.50** | **23.6M** | **46.1M** |
+| Set | Threads | KUROOBI | Edax 4.6 | Egaroucid 7.8.0 | Edax / KUROOBI | Egaroucid / KUROOBI |
+|---|---:|---:|---:|---:|---:|---:|
+| FFO1-19 (14-16 empties) | 1 | 0.033 s | 0.048 s | 0.049 s | 1.45 | 1.48 |
+| FFO1-19 (14-16 empties) | 8 | 0.037 s | 0.049 s | 0.050 s | 1.32 | 1.35 |
+| FFO20-39 (6-22 empties) | 1 | 1.77 s | 2.28 s | 2.34 s | 1.29 | 1.32 |
+| FFO20-39 (6-22 empties) | 8 | 0.546 s | 0.756 s | 0.704 s | 1.38 | 1.29 |
+| **FFO40-59 (20-34 empties)** | 1 | 289.0 s | 520.4 s | 494.6 s | 1.80 | 1.71 |
+| **FFO40-59 (20-34 empties)** | 8 | 49.1 s | 81.8 s | 66.9 s | 1.67 | 1.36 |
+| **FFO60-79 (24-36 empties)** | 8 | 1690.0 s | 2649.6 s | 3173.3 s | 1.57 | 1.88 |
 
-> The position set is `problems/fforum-40-59.obf`, which ships with the
-> repo along with the rest of the FFO suite.
+Every run behind those minimums, in seconds:
 
-**Speed per node is about half of Edax's (23.6M against 46.1M NPS).** We
-still come out ahead on total time because the search tree is exactly half
-the size (0.50). These 2 cancelling out is the current equilibrium, and
-neither number on its own measures the real strength.
+| Set | Threads | KUROOBI | Edax 4.6 | Egaroucid 7.8.0 |
+|---|---:|---|---|---|
+| FFO1-19 | 1 | 0.035, 0.036, 0.033 | 0.048, 0.049, 0.048 | 0.050, 0.050, 0.049 |
+| FFO1-19 | 8 | 0.037, 0.037, 0.037 | 0.049, 0.049, 0.049 | 0.050, 0.051, 0.051 |
+| FFO20-39 | 1 | 1.77, 1.78, 1.78 | 2.28, 2.28, 2.28 | 2.34, 2.35, 2.35 |
+| FFO20-39 | 8 | 0.549, 0.546, 0.553 | 0.758, 0.756, 0.778 | 0.733, 0.721, 0.704 |
+| FFO40-59 | 1 | 289.0, 289.3 | 520.4, 521.7 | 494.6, 495.9 |
+| FFO40-59 | 2 | 160.9 | 268.9 | 250.9 |
+| FFO40-59 | 4 | 84.90 | 143.2 | 125.3 |
+| FFO40-59 | 8 | 49.26, 49.09 | 85.14, 81.80 | 70.87, 66.94 |
+| FFO40-59 | 10 | 46.09 | 80.83 | 70.24 |
+| FFO60-79 | 8 | 1690.0 | 2649.6 | 3173.3 |
 
-† For the 2 shallow sets our times are measured **with the table sized to
-the problem** (FFO1-19 with `--hash-bits 20`, FFO20-39 with
-`--hash-bits 22`). Left at 2^26, about 18 ms of transposition table
-clearing per position is added on top and buries the search itself (it
-becomes 0.41 s / 3.71 s). Edax does not clear its transposition table and
-does not pay this cost. Details in the next section.
+On FFO40-59 **we are 1.80x faster than Edax and 1.71x
+faster than Egaroucid on one thread, and 1.67x and 1.36x
+on eight.** The whole of the one-thread lead is tree size: we search
+9.63G nodes where Edax counts 25.39G and Egaroucid
+14.87G (the definitions differ, so read those as a rough guide),
+while Edax's nodes are the cheaper ones. Both of them scale better than
+we do from 1 to 8 threads, so the gap narrows as threads are added.
 
-The pattern is that the harder the problem the better we do: **the search
-tree is half of Edax's**, while Edax is faster per node. The two are
-evenly matched because the smaller tree and the difference in per-node
-cost cancel exactly.
+**FFO60-79 is the set that still takes real time** — 28 minutes
+for us on eight threads, 44 for Edax and 53 for Egaroucid — and
+the order of the other two swaps there: Edax is ahead of Egaroucid on
+the deepest problems. It was run on eight threads only; one thread
+would take each engine several hours.
 
-#### The shallow sets measure transposition table clearing
+Edax's table size does not move this: at `-h 24`, a quarter of the table, FFO40-59 takes 515.0 s on 1 thread and 80.8 s on 8, against 520.4 s and 81.8 s at `-h 26`.
 
-The 8.7x ratio on FFO1-19 is **not a difference in search**. We clear the
-whole transposition table for every position, but **Edax does not** — a
-clear request only increments a date counter, and the actual zero-fill
-happens 1 time in 127 positions. A lookup does not look at the date, only
-at whether the board matches; the date is used solely as the eviction
-priority.
-
-Zero-filling 2^26 entries = 1.6 GB takes about 18 ms per position. On a
-14-empty problem the search itself is only about 20 microseconds, so this
-takes up 84% of the time. **Sizing the table to the problem makes it go
-away**:
-
-| Set | Table 2^26 | Table shrunk | Edax |
-|---|---:|---:|---:|
-| FFO1-19 | 0.41 s | **0.073 s** (`--hash-bits 20`) | 0.05 s |
-| FFO20-39 | 3.71 s | **3.48 s** (`--hash-bits 22`) | 2.36 s |
-
-A scheme that does not clear and manages generations by date was also
-implemented and measured, but **FFO40-59 got 5.7% worse**, so it was not
-adopted. The breakdown is 2.5% for the generation-management code itself
-(the search is completely identical — 12,618,873,806 nodes match — and the
-eviction test gains 1 comparison) and about 3% for not clearing at all.
-`update` is called more than 100 million times per position, so any
-instruction added on that path shows up directly. As long as deep
-positions are the main battlefield, clearing is the right side.
+The shallow sets finish in milliseconds per problem and mostly measure
+start-up; they are listed for completeness. Our figures exclude the
+per-problem table clear, which neither of the others pays inside its
+timing (Edax only bumps a date counter, Egaroucid initialises outside
+the timed region).
 
 #### Per-problem detail
 
-| FFO | Emp | Value | KUROOBI nodes | Edax nodes | N ratio | KUROOBI s | Edax s | t ratio | KUROOBI NPS | Edax NPS |
-|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|
-| 1 | 14 | +18 | 49,285 | 63,433 | 0.78 ★ | 0.005 | 0.002 | 2.50 | 9.9M | 31.7M |
-| 2 | 14 | +10 | 26,665 | 32,443 | 0.82 ★ | 0.002 | 0.001 | 2.00 | 13.3M | 32.4M |
-| 3 | 14 | +2 | 94,370 | 135,736 | 0.70 ★ | 0.003 | 0.003 | 1.00 | 31.5M | 45.2M |
-| 4 | 14 | +0 | 35,913 | 36,831 | 0.98 ★ | 0.002 | 0.001 | 2.00 | 18.0M | 36.8M |
-| 5 | 14 | +32 | 14,159 | 12,718 | 1.11 | 0.001 | 0.000 | — | 14.2M | — |
-| 6 | 14 | +14 | 85,287 | 60,849 | 1.40 | 0.003 | 0.002 | 1.50 | 28.4M | 30.4M |
-| 7 | 14 | +8 | 24,271 | 22,373 | 1.08 | 0.001 | 0.001 | 1.00 | 24.3M | 22.4M |
-| 8 | 15 | +8 | 251,397 | 255,020 | 0.99 ★ | 0.006 | 0.004 | 1.50 | 41.9M | 63.8M |
-| 9 | 15 | -8 | 42,575 | 66,086 | 0.64 ★ | 0.002 | 0.002 | 1.00 | 21.3M | 33.0M |
-| 10 | 15 | +10 | 88,848 | 116,329 | 0.76 ★ | 0.003 | 0.002 | 1.50 | 29.6M | 58.2M |
-| 11 | 15 | +30 | 70,280 | 69,184 | 1.02 | 0.003 | 0.002 | 1.50 | 23.4M | 34.6M |
-| 12 | 15 | -8 | 96,167 | 102,410 | 0.94 ★ | 0.003 | 0.002 | 1.50 | 32.1M | 51.2M |
-| 13 | 16 | +14 | 84,556 | 101,311 | 0.83 ★ | 0.003 | 0.003 | 1.00 | 28.2M | 33.8M |
-| 14 | 16 | +18 | 143,615 | 99,279 | 1.45 | 0.005 | 0.002 | 2.50 | 28.7M | 49.6M |
-| 15 | 16 | +4 | 162,173 | 297,103 | 0.55 ★ | 0.004 | 0.006 | 0.67 | 40.5M | 49.5M |
-| 16 | 16 | +24 | 316,212 | 213,597 | 1.48 | 0.010 | 0.004 | 2.50 | 31.6M | 53.4M |
-| 17 | 16 | +8 | 21,929 | 34,178 | 0.64 ★ | 0.002 | 0.001 | 2.00 | 11.0M | 34.2M |
-| 18 | 16 | -2 | 270,628 | 205,052 | 1.32 | 0.008 | 0.005 | 1.60 | 33.8M | 41.0M |
-| 19 | 16 | +8 | 237,667 | 196,103 | 1.21 | 0.007 | 0.004 | 1.75 | 34.0M | 49.0M |
-| 20 | 6 | +6 | 22 | 271 | 0.08 ★ | 0.007 | 0.000 | — | 0.0M | — |
-| 21 | 15 | +0 | 186,004 | 240,991 | 0.77 ★ | 0.007 | 0.003 | 2.33 | 26.6M | 80.3M |
-| 22 | 17 | +2 | 588,382 | 553,734 | 1.06 | 0.018 | 0.012 | 1.50 | 32.7M | 46.1M |
-| 23 | 18 | +4 | 554,755 | 462,584 | 1.20 | 0.018 | 0.011 | 1.64 | 30.8M | 42.1M |
-| 24 | 19 | +0 | 880,446 | 1,314,519 | 0.67 ★ | 0.026 | 0.028 | 0.93 | 33.9M | 46.9M |
-| 25 | 19 | +0 | 2,935,305 | 4,380,945 | 0.67 ★ | 0.070 | 0.084 | 0.83 | 41.9M | 52.2M |
-| 26 | 20 | +0 | 5,579,393 | 11,581,885 | 0.48 ★ | 0.154 | 0.232 | 0.66 | 36.2M | 49.9M |
-| 27 | 20 | -2 | 2,386,238 | 1,749,257 | 1.36 | 0.074 | 0.043 | 1.72 | 32.2M | 40.7M |
-| 28 | 20 | +0 | 6,286,199 | 9,685,208 | 0.65 ★ | 0.163 | 0.175 | 0.93 | 38.6M | 55.3M |
-| 29 | 20 | +10 | 1,826,318 | 982,419 | 1.86 | 0.061 | 0.026 | 2.35 | 29.9M | 37.8M |
-| 30 | 20 | +0 | 1,694,553 | 2,715,654 | 0.62 ★ | 0.056 | 0.058 | 0.97 | 30.3M | 46.8M |
-| 31 | 20 | -2 | 3,184,137 | 2,029,626 | 1.57 | 0.100 | 0.048 | 2.08 | 31.8M | 42.3M |
-| 32 | 20 | -4 | 7,462,178 | 5,600,088 | 1.33 | 0.180 | 0.114 | 1.58 | 41.5M | 49.1M |
-| 33 | 20 | -8 | 8,378,891 | 4,757,407 | 1.76 | 0.232 | 0.105 | 2.21 | 36.1M | 45.3M |
-| 34 | 20 | -2 | 8,583,592 | 8,067,390 | 1.06 | 0.227 | 0.138 | 1.64 | 37.8M | 58.5M |
-| 35 | 21 | +0 | 1,608,335 | 4,424,179 | 0.36 ★ | 0.064 | 0.091 | 0.70 | 25.1M | 48.6M |
-| 36 | 21 | +0 | 10,102,519 | 8,030,367 | 1.26 | 0.276 | 0.156 | 1.77 | 36.6M | 51.5M |
-| 37 | 22 | -20 | 23,732,865 | 21,107,036 | 1.12 | 0.844 | 0.521 | 1.62 | 28.1M | 40.5M |
-| 38 | 24 | +4 | 15,800,731 | 23,128,707 | 0.68 ★ | 0.740 | 0.496 | 1.49 | 21.4M | 46.6M |
-| 39 | 26 | +64 | 2,094,697 | 393,603 | 5.32 | 0.120 | 0.016 | 7.50 | 17.5M | 24.6M |
-| 40 | 20 | +38 | 9,373,569 | 10,871,279 | 0.86 ★ | 0.298 | 0.218 | 1.37 | 31.5M | 49.9M |
-| 41 | 22 | +0 | 14,992,276 | 23,776,974 | 0.63 ★ | 0.442 | 0.463 | 0.95 | 33.9M | 51.4M |
-| 42 | 22 | +6 | 21,605,765 | 26,627,982 | 0.81 ★ | 0.570 | 0.580 | 0.98 | 37.9M | 45.9M |
-| 43 | 23 | -12 | 25,614,451 | 69,140,391 | 0.37 ★ | 1.050 | 1.806 | 0.58 | 24.4M | 38.3M |
-| 44 | 23 | -14 | 27,866,862 | 20,331,907 | 1.37 | 1.044 | 0.507 | 2.06 | 26.7M | 40.1M |
-| 45 | 24 | +6 | 159,587,707 | 269,563,518 | 0.59 ★ | 5.937 | 6.212 | 0.96 | 26.9M | 43.4M |
-| 46 | 24 | -8 | 30,859,212 | 58,851,351 | 0.52 ★ | 1.306 | 1.304 | 1.00 | 23.6M | 45.1M |
-| 47 | 25 | +4 | 13,470,849 | 15,908,913 | 0.85 ★ | 0.500 | 0.356 | 1.40 | 26.9M | 44.7M |
-| 48 | 25 | +28 | 108,619,601 | 140,881,999 | 0.77 ★ | 5.167 | 3.820 | 1.35 | 21.0M | 36.9M |
-| 49 | 26 | +16 | 110,488,125 | 314,841,257 | 0.35 ★ | 5.311 | 7.469 | 0.71 | 20.8M | 42.2M |
-| 50 | 26 | +10 | 412,662,918 | 1,016,810,102 | 0.41 ★ | 24.603 | 25.391 | 0.97 | 16.8M | 40.0M |
-| 51 | 27 | +6 | 154,541,093 | 266,257,527 | 0.58 ★ | 6.846 | 5.916 | 1.16 | 22.6M | 45.0M |
-| 52 | 27 | +0 | 173,097,396 | 527,248,112 | 0.33 ★ | 6.304 | 11.869 | 0.53 | 27.5M | 44.4M |
-| 53 | 28 | -2 | 1,063,132,194 | 2,662,837,881 | 0.40 ★ | 38.669 | 54.335 | 0.71 | 27.5M | 49.0M |
-| 54 | 28 | -2 | 2,279,981,788 | 4,297,602,280 | 0.53 ★ | 77.922 | 82.302 | 0.95 | 29.3M | 52.2M |
-| 55 | 29 | +0 | 5,879,384,139 | 11,267,921,720 | 0.52 ★ | 258.616 | 244.959 | 1.06 | 22.7M | 46.0M |
-| 56 | 29 | +2 | 537,331,814 | 1,333,827,459 | 0.40 ★ | 27.021 | 29.457 | 0.92 | 19.9M | 45.3M |
-| 57 | 30 | -10 | 982,262,488 | 1,230,860,828 | 0.80 ★ | 41.511 | 33.305 | 1.25 | 23.7M | 37.0M |
-| 58 | 30 | +4 | 609,435,769 | 1,835,207,430 | 0.33 ★ | 31.613 | 40.029 | 0.79 | 19.3M | 45.8M |
-| 59 | 34 | +64 | 4,565,790 | 1,881,623 | 2.43 | 0.411 | 0.088 | 4.67 | 11.1M | 21.4M |
-| **Total** | | | **12,724,855,363** | **25,504,576,438** | **0.50** | **538.7** | **552.8** | **0.97** | **23.6M** | **46.1M** |
+**FFO40-59, 1 thread** (the fastest time on each row in bold):
 
-How representative hard problems moved before and after the improvement
-work:
+| FFO | Emp | Value | KUROOBI s | Edax 4.6 s | Egaroucid 7.8.0 s | KUROOBI nodes | Edax 4.6 nodes | Egaroucid 7.8.0 nodes |
+|---:|---:|---:|---:|---:|---:|---:|---:|---:|
+| 40 | 20 | +38 | **0.163** | 0.214 | 0.198 | 6,408,410 | 10,871,279 | 9,431,517 |
+| 41 | 22 | +0 | **0.265** | 0.441 | 0.306 | 10,725,448 | 23,776,974 | 10,892,492 |
+| 42 | 22 | +6 | 0.419 | 0.538 | **0.377** | 19,334,309 | 26,627,982 | 15,464,004 |
+| 43 | 23 | -12 | **1.128** | 1.700 | 1.565 | 33,423,701 | 69,140,391 | 49,833,299 |
+| 44 | 23 | -14 | 0.299 | 0.491 | **0.261** | 7,932,101 | 20,331,907 | 7,030,702 |
+| 45 | 24 | +6 | **3.597** | 5.902 | 4.498 | 126,183,098 | 269,563,518 | 175,867,034 |
+| 46 | 24 | -8 | **0.671** | 1.232 | 0.934 | 20,236,222 | 58,851,351 | 32,696,179 |
+| 47 | 25 | +4 | **0.254** | 0.337 | 0.288 | 9,699,126 | 15,908,913 | 9,503,406 |
+| 48 | 25 | +28 | **2.056** | 3.585 | 3.752 | 47,410,907 | 140,881,999 | 83,659,411 |
+| 49 | 26 | +16 | **2.824** | 7.067 | 9.059 | 79,526,704 | 314,841,257 | 289,899,987 |
+| 50 | 26 | +10 | **15.550** | 23.874 | 18.409 | 374,047,647 | 1,016,810,102 | 510,900,647 |
+| 51 | 27 | +6 | **4.224** | 5.565 | 8.545 | 140,239,775 | 266,257,527 | 277,439,675 |
+| 52 | 27 | +0 | **3.301** | 11.229 | 6.344 | 114,550,894 | 527,248,112 | 201,302,410 |
+| 53 | 28 | -2 | **20.406** | 51.305 | 34.055 | 728,122,616 | 2,662,837,881 | 1,128,001,420 |
+| 54 | 28 | -2 | **44.118** | 77.867 | 61.187 | 1,839,273,846 | 4,297,602,280 | 1,997,470,643 |
+| 55 | 29 | +0 | **131.698** | 231.765 | 267.922 | 4,248,560,480 | 11,267,921,720 | 7,982,044,901 |
+| 56 | 29 | +2 | **16.824** | 27.843 | 18.976 | 485,324,494 | 1,333,827,459 | 471,117,006 |
+| 57 | 30 | -10 | **24.266** | 31.545 | 28.825 | 867,209,457 | 1,230,860,828 | 807,096,762 |
+| 58 | 30 | +4 | **16.608** | 37.780 | 28.613 | 473,035,514 | 1,835,207,430 | 802,219,035 |
+| 59 | 34 | +64 | 0.353 | **0.081** | 0.479 | 2,990,360 | 1,881,623 | 5,830,987 |
+| **Total** | | | **289.0** | **520.4** | **494.6** | **9,634,235,109** | **25,391,250,533** | **14,867,701,517** |
 
-| Problem | Before | Now |
-|---|---|---|
-| FFO#53 (28 empties) | 6,282M / 763 s | 1,813M / 191 s |
-| FFO#57 (30 empties) | 8,088M / 1,492 s | 962M / 139 s |
-| FFO#59 (34 empties) | 19.3M / 8.0 s | 1.8M / 0.5 s |
-| FFO#65 (28 empties) | — | 2,264M / 282 s (Edax 10,236M / 951 s) |
+**FFO40-59, 8 threads** (the fastest time on each row in bold):
+
+| FFO | Emp | Value | KUROOBI s | Edax 4.6 s | Egaroucid 7.8.0 s | KUROOBI nodes | Edax 4.6 nodes | Egaroucid 7.8.0 nodes |
+|---:|---:|---:|---:|---:|---:|---:|---:|---:|
+| 40 | 20 | +38 | 0.048 | **0.040** | 0.044 | 8,535,914 | 11,064,352 | 9,668,286 |
+| 41 | 22 | +0 | **0.064** | 0.096 | 0.070 | 12,141,588 | 22,111,051 | 11,487,598 |
+| 42 | 22 | +6 | 0.094 | 0.129 | **0.083** | 26,385,298 | 27,976,828 | 15,678,588 |
+| 43 | 23 | -12 | **0.186** | 0.330 | 0.350 | 35,919,438 | 78,827,037 | 57,184,450 |
+| 44 | 23 | -14 | 0.075 | 0.141 | **0.057** | 9,216,735 | 20,938,765 | 7,310,319 |
+| 45 | 24 | +6 | **0.675** | 0.896 | 0.726 | 159,399,465 | 267,273,255 | 193,592,154 |
+| 46 | 24 | -8 | **0.152** | 0.237 | 0.196 | 26,379,213 | 60,587,603 | 35,411,814 |
+| 47 | 25 | +4 | 0.085 | 0.100 | **0.077** | 18,572,900 | 16,842,288 | 10,387,405 |
+| 48 | 25 | +28 | **0.362** | 0.601 | 0.563 | 55,188,415 | 147,054,255 | 81,357,802 |
+| 49 | 26 | +16 | **0.506** | 1.310 | 1.067 | 94,524,208 | 364,516,663 | 215,663,006 |
+| 50 | 26 | +10 | **2.298** | 3.085 | 2.593 | 387,067,769 | 923,256,768 | 487,581,602 |
+| 51 | 27 | +6 | **0.759** | 1.320 | 0.817 | 161,299,825 | 395,374,983 | 146,894,239 |
+| 52 | 27 | +0 | **0.706** | 2.226 | 1.541 | 154,175,333 | 682,308,842 | 278,633,163 |
+| 53 | 28 | -2 | **4.540** | 7.687 | 5.167 | 1,041,276,416 | 2,647,006,867 | 1,082,629,946 |
+| 54 | 28 | -2 | **7.750** | 11.033 | 9.562 | 2,045,761,398 | 4,258,386,627 | 2,005,958,862 |
+| 55 | 29 | +0 | **20.084** | 34.540 | 30.076 | 4,425,436,831 | 11,566,151,575 | 6,282,278,581 |
+| 56 | 29 | +2 | **2.900** | 4.170 | 3.022 | 584,181,554 | 1,337,438,206 | 504,825,299 |
+| 57 | 30 | -10 | **4.956** | 7.154 | 6.027 | 1,089,045,779 | 1,553,409,094 | 1,020,322,648 |
+| 58 | 30 | +4 | **2.793** | 6.675 | 4.765 | 522,394,142 | 2,005,511,815 | 858,902,173 |
+| 59 | 34 | +64 | 0.055 | **0.025** | 0.142 | 2,829,516 | 989,115 | 5,651,576 |
+| **Total** | | | **49.1** | **81.8** | **66.9** | **10,859,731,737** | **26,387,025,989** | **13,311,419,511** |
+
+**FFO60-79, 8 threads** (the fastest time on each row in bold):
+
+| FFO | Emp | Value | KUROOBI s | Edax 4.6 s | Egaroucid 7.8.0 s | KUROOBI nodes | Edax 4.6 nodes | Egaroucid 7.8.0 nodes |
+|---:|---:|---:|---:|---:|---:|---:|---:|---:|
+| 60 | 24 | +20 | **0.136** | 0.283 | 0.282 | 21,887,118 | 63,255,324 | 39,438,507 |
+| 61 | 25 | -14 | 0.450 | 0.726 | **0.383** | 79,898,585 | 195,995,979 | 53,480,175 |
+| 62 | 27 | +28 | 3.597 | 4.674 | **3.498** | 595,594,277 | 1,240,826,254 | 530,245,358 |
+| 63 | 27 | -2 | **2.044** | 3.574 | 3.458 | 474,353,322 | 1,324,989,491 | 662,967,293 |
+| 64 | 27 | +20 | **5.397** | 11.190 | 7.454 | 1,214,942,523 | 3,408,374,827 | 1,385,382,366 |
+| 65 | 28 | +10 | **9.304** | 32.731 | 29.228 | 1,743,162,995 | 10,450,919,888 | 7,205,140,027 |
+| 66 | 28 | +30 | **6.843** | 10.489 | 14.960 | 945,990,532 | 3,090,819,318 | 2,801,872,315 |
+| 67 | 28 | +22 | **11.814** | 22.444 | 16.164 | 2,255,491,067 | 7,105,414,097 | 3,465,049,352 |
+| 68 | 30 | +28 | **40.664** | 123.357 | 87.174 | 4,575,316,451 | 30,302,409,604 | 13,899,686,794 |
+| 69 | 30 | +0 | **8.981** | 18.345 | 22.445 | 1,917,978,086 | 4,343,787,465 | 4,381,522,195 |
+| 70 | 30 | -24 | **3.299** | 7.193 | 3.815 | 510,481,189 | 1,329,837,629 | 494,957,919 |
+| 71 | 31 | +20 | **12.527** | 28.712 | 25.227 | 1,918,900,831 | 5,682,005,435 | 3,981,120,266 |
+| 72 | 31 | +24 | **152.245** | 219.172 | 265.865 | 19,042,926,114 | 50,405,223,933 | 30,122,705,691 |
+| 73 | 31 | -4 | **16.478** | 48.456 | 36.785 | 3,058,026,351 | 12,954,698,223 | 6,774,204,263 |
+| 74 | 31 | -30 | **178.485** | 319.435 | 449.494 | 17,267,861,509 | 73,663,641,284 | 52,507,129,178 |
+| 75 | 32 | +14 | **172.304** | 395.471 | 309.372 | 29,517,864,714 | 129,819,663,526 | 63,093,971,428 |
+| 76 | 32 | +32 | **556.413** | 699.936 | 1102.986 | 44,799,515,864 | 160,243,017,584 | 133,052,768,616 |
+| 77 | 34 | +34 | **332.789** | 488.873 | 536.014 | 30,703,249,146 | 123,797,618,128 | 53,699,496,520 |
+| 78 | 34 | +8 | **175.765** | 213.934 | 253.162 | 26,645,567,673 | 57,630,088,267 | 39,146,703,744 |
+| 79 | 36 | +64 | **0.480** | 0.557 | 5.560 | 43,046,040 | 69,615,221 | 287,822,857 |
+| **Total** | | | **1690.0** | **2649.6** | **3173.3** | **187,332,054,387** | **677,122,201,477** | **417,585,664,864** |
 
 ### Parallel search
 
@@ -459,6 +461,12 @@ at the wide-window nodes higher up the tree — that is, exactly where
 re-searching is most expensive.
 
 #### Comparison against Egaroucid's endgame parallelism (same 10 problems, same exact solve)
+
+> This section records the state before the pooling and split work that
+> follows it. Today's figures for the same engines are in the
+> [FFO benchmark](#ffo-benchmark-endgame-exact-solve) section: Egaroucid
+> still scales better (7.4x against our 5.9x at 8 threads on FFO40-59),
+> but we are ahead on the clock at every thread count.
 
 **This is the right footing.** Egaroucid's `-solve` initialises the
 transposition table per problem and reports a total; it is the same kind
@@ -877,44 +885,32 @@ phase.
 > comparing engines against each other, **solve the same problem file at
 > the same precision and line them up at the same thread count**.
 
-#### Head-to-head at 8 threads (matched to the P-core count)
-
-> The FFO40-59 figures in this section were measured before the pooling
-> above (re-measuring is expensive because 1 thread takes 535 seconds). If
-> the 2.69× → 3.79× that 8 threads gained on FFO40-49 carries over
-> directly, these should shrink too.
-
-| | FFO1-19 † | FFO20-39 † | FFO40-59 | FFO40-59 against 1 thread |
-|---|---:|---:|---:|---:|
-| **KUROOBI** | 0.078 s | **1.80 s** | **142.9 s** | **3.74×** |
-| Edax | 0.053 s | 1.27 s | 197.8 s | 2.75× |
-
-On the deep set **we are 1.38x faster**. The gap opens up from 0.97x at a
-single thread because we scale better.
-
 #### FFO40-59 across thread counts
 
-| Threads | KUROOBI | Edax |
-|---:|---:|---:|
-| 1 | 535.1 s | 543.0 s |
-| 4 | — | 199.3 s |
-| 6 | — | 191.2 s |
-| **8** | **142.9 s** | **197.8 s** |
-| 10 | 138.5 s | 258.1 s |
+| Threads | KUROOBI | Edax 4.6 | Egaroucid 7.8.0 |
+|---:|---:|---:|---:|
+| 1 | 289.0 s | 520.4 s | 494.6 s |
+| 2 | 160.9 s (1.80×) | 268.9 s (1.93×) | 250.9 s (1.97×) |
+| 4 | 84.9 s (3.40×) | 143.2 s (3.63×) | 125.3 s (3.95×) |
+| 8 | 49.1 s (5.89×) | 81.8 s (6.36×) | 66.9 s (7.39×) |
+| 10 | 46.1 s (6.27×) | 80.8 s (6.44×) | 70.2 s (7.04×) |
 
-**Edax plateaus at 6 threads and is actually slower at 10.** Checking on
-FFO54 alone: 82.9 s at 1 thread → 30.9 s at 4 threads (2.68×) → 31.4 s at
-8 threads, essentially unchanged. CPU time rises to the equivalent of 7.43
-cores at 8 threads, so the cores are turning; it is eaten by duplicated
-search, not by waiting. We keep improving to 138.5 s at 10 threads
-(3.86×), but the 2 efficiency cores add little on top.
+Speedups are against the same engine's own one-thread time. The machine
+has 8 performance cores, and at 10 threads two workers land on the
+efficiency cores, which is why none of the three gains much there.
 
-The cost of parallelism shows up in the node count. At 8 threads we go
-12.6G → 14.5G (+15%) and Edax 25.4G → 26.9G (+6%). Edax duplicates less,
-and gains correspondingly less parallelism.
-
-The shallow sets do not scale because the search per problem is too short
-and gets buried in thread startup.
+> **Correction (2026-10-11).** Until this date the page said Edax
+> plateaued at 6 threads — 197.8 s at 8 threads, 2.75x over one, and
+> slower again at 10 — and drew conclusions about duplicated search from
+> it. **A clean build does not behave that way**: it scales
+> 6.36x to 8 threads here, in line with figures reported to us from
+> an Apple M4 (5.93x). The old multi-thread figures came from a binary
+> built out of a tree that carried our own profiling instrumentation in
+> `search.c`, and should not have been published as Edax's: run again
+> today, that binary takes 188.6 s at 8 threads and 542.1 s at one. The
+> one-thread figure of the time (543 s) was therefore close to right,
+> since the instrumentation only hurts when threads share it. Everything
+> above was measured on a fresh clone built the way its README says.
 
 ### Time control — fixing the solve entry point from the machine's speed
 
@@ -1575,6 +1571,9 @@ declared but never wired to anything, so they had been measuring nothing;
 `gen-no-prefetch` is wired now and the other two are gone.
 
 ### Remaining work
+
+(Written 2026-09-02. Where the engines stand today is in the
+[FFO benchmark](#ffo-benchmark-endgame-exact-solve) section.)
 
 The balance holds with **a search tree half the size of Edax's (0.50) and
 a speed per node also about half (23.6M against 46.1M NPS)**. As a design

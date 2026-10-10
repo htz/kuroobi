@@ -1,7 +1,7 @@
 # Search
 
-The selective midgame search, the endgame exact solve, and the
-transposition table that both of them share.
+The selective midgame search, the endgame exact solve, and their
+transposition tables (one each).
 
 ## Midgame search
 
@@ -26,9 +26,12 @@ current engine runs them.
 - **ETC (Enhanced Transposition Cutoff)**: at remaining depth 4 or
   more, the hashes of all child positions are probed first, and the
   node is cut without searching if a fail-high is already proven
-- **killer / history heuristics**; deep nodes are ordered by the
-  evaluation of every child (`EVAL_ORDER_MIN_DEPTH = 6`), shallow ones
-  by opponent mobility and a corner/X-square bias
+- **killer / history heuristics** in the old search; deep nodes were
+  ordered by the evaluation of every child, shallow ones by opponent
+  mobility and a corner/X-square bias. `midgame.rs` orders by the
+  table's two best moves, then corner-weighted opponent mobility,
+  potential mobility on full-window nodes, and the child's own
+  evaluation from remaining depth 3 (`eval_order_depth`)
 - **0.5-disc quantisation at the leaves**: with continuous f32 values
   "a barely better child" occurs constantly, and the PVS null-window
   check degenerates into a full re-search almost every time. Half a
@@ -141,8 +144,9 @@ the linear evaluator and is no longer in the build.
 - **ProbCut results are never
   written to the transposition table** (this keeps an unproven bound
   from masquerading as a settled value carrying a depth tag)
-- Off by default. Enabled through `Searcher::mpc` / `mpc_t` (the
-  exactness tests assume it is off)
+- Off in a bare `NnueSearch` (the exactness tests assume that) and on
+  by default in `EngineConfig`; `--no-mpc` turns it off. The confidence
+  is `midgame::mpc_t()`, 1.1
 
 Effect (FFO40-52, midgame mode):
 
@@ -173,10 +177,11 @@ strategy is switched in stages according to the remaining empties.
 
 | Empties | Strategy |
 |---|---|
-| 7 or more | PVS + transposition table + ETC + evaluation-based ordering |
-| 5-6 | plain αβ + **a small transposition table dedicated to the shallow region** |
-| 4 | `last4` (specialised search in quadrant-parity order) |
-| 3/2/1 | `last3` / `last2` / `last1` (direct computation, no recursion) |
+| 12 or more | PVS + the main transposition table, with ETC from 13 and evaluation-based ordering from 14 |
+| 7-11 | ordered αβ; the main table at 11, a small private cache (`l78`) at 7-10 |
+| 5-6 | plain αβ + **a small private cache dedicated to the shallow region** (`l56`) |
+| 4 | a private cache (`l4`) in front of `last4` (specialised search in quadrant-parity order) |
+| 3/2/1 | `last3` / `last2` / `last1_value` (direct computation, no recursion) |
 
 ### Staged move ordering
 
@@ -186,13 +191,15 @@ ordering is raised in stages according to the empty count**:
 
 | Empties | Ordering |
 |---|---|
-| 28 or more | evaluation + **3-ply lookahead** (with pruning) |
-| 19 or more | evaluation + **2-ply lookahead** |
-| 16 or more | evaluation + **1-ply lookahead** |
+| 29 or more | evaluation + **3-ply lookahead** (with pruning) |
+| 20 or more | evaluation + **2-ply lookahead** |
+| 17 or more | evaluation + **1-ply lookahead** |
 | 14 or more | evaluation (0 ply) |
 | below 14 | static heuristics (opponent mobility + corner stable discs) |
 
 **This ladder is a two-sided optimum, measured from both directions.**
+(The measurements below were taken when it stood one empty lower, at
+16/19/28; it has since moved out a rung to 17/20/29.)
 Stepping it up two empties earlier (14/17/26 instead of 16/19/28) buys
 a smaller tree everywhere — 5.8% fewer nodes at band22, 6.3% on
 FFO40-49, 7.6% at 26 empties — and loses on the clock every time:
@@ -221,11 +228,12 @@ The evaluation does not directly express "how many moves this move
 leaves the opponent", so the two work complementarily. The current
 ordering key is
 
-    eval × 8 + opponent replies × 12 − edge stable discs × 1   (smaller first)
+    eval × 8 + opponent replies × 12 − corner-anchored stable discs × 8   (smaller first)
 
 and the coefficients were fixed by measurement (one reply ≒ 1.5 discs
-of evaluation). Edge stable discs are added at 1/16 of the scale of
-mobility.
+of evaluation). A reply onto a corner counts twice, and the stable
+discs counted are the corners and the edge discs an owned corner
+anchors.
 
 The lookahead is not full width but uses `shallow_search` with
 pruning, and on top of that **caps the value with the node's alpha**.
@@ -234,9 +242,6 @@ to prove the exact value of hopeless moves. The lookahead runs from
 the child position's point of view, so the node's alpha becomes an
 upper bound with its sign flipped (passing it as a lower bound makes
 nodes 44-71% worse).
-
-**Odd-depth lookahead is not used** — measurements confirm that tempo
-parity makes the ordering quality worse instead.
 
 **Scoring the ordering candidates with the NNUE instead of the linear
 pattern sum was rejected.** The exact pass's depth-0 ordering value came
@@ -273,11 +278,13 @@ tempting argument — "degrading the ordering costs 17% of tree, so improving
 it should pay" — reads the derivative in the wrong currency. The tree does
 respond in both directions; the price responds several times harder.
 
-The square-type table and potential mobility are not part of the
-ordering. Both were pure tiebreakers expected to be under 1/1000 of
-mobility, a scale our integer key cannot represent. Indeed, adding
-them while ignoring the relative ratio improved shallow positions but
-made deep ones 4-31% worse.
+Potential mobility is not part of the solver's ordering, and the
+square-type table survives only as the last tiebreak of the static key
+below 14 empties and as the move order inside `shallow_search`. Both
+were pure tiebreakers expected to be under 1/1000 of mobility, a scale
+the evaluation-based key cannot represent. Indeed, adding them while
+ignoring the relative ratio improved shallow positions but made deep
+ones 4-31% worse.
 
 **Generating the legal moves before ordering the 5-6 empties band was
 a wash.** That band walks every empty square and calls a zero flip
@@ -291,22 +298,29 @@ the extra masking and passes eat exactly that much time. This is the
 whole of what a doubly-linked empty-square list would buy here: the
 O(1) quadrant parity it also maintains we already keep incrementally.
 
+**What did pay was one more class in front.** The band now makes one
+mobility call and tries the legal squares in five classes: a
+quadrant's only empty, then odd corners, even corners, the odd rest
+and the even rest. One thread, min of 5 alternating runs: band22 -4.9%
+nodes / -3.9% time, FFO20-39 -6.7% / -3.35%, FFO40-49 -6.4% / -3.0%
+(together with the lone-empty rule at four empties below).
+
 ### Quadrant parity
 
 The board is split into four quadrants and **moves in quadrants with
 an odd number of empties are tried first** (`parity_of` /
-`odd_quadrant_mask`). A standard endgame ordering rule, tied directly
+`quadrant_id` / `PARITY_ODD_MASK`). A standard endgame ordering rule, tied directly
 to the fight over the last move. It is built into `last4` / `last3`
 as well.
 
-Within one parity class the four squares stay in board-index order.
+Within one parity class the four squares stay in board-index order,
+except that a quadrant's only empty is played first.
 Sorting them by strategic value as a second key — corners first, X
 squares last, the order the ordering tables already encode — does
 shrink the tree, by 0.4-1.6%, and loses on the clock every time:
 +0.6% to +2.6% across four sets, whether or not the all-even case is
 sorted too. A four-empty subtree is too small to repay any ordering
-work beyond the parity key, the same reason the parity-by-corner
-four-way split lost at five and six empties.
+work beyond the parity key.
 
 ### The stability cut, and where it stops paying
 
@@ -314,13 +328,15 @@ A node whose stable discs already bound the result past the window can
 return without searching. Two guards keep the bound cheap: the window
 must be extreme enough for the empty count (`STABILITY_THRESHOLD`),
 and a popcount must show enough discs of the right colour before
-`stable_count` runs at all. That popcount gate carries a margin of 8
+`stable_count_at_least` runs at all. That popcount gate carries a margin of 8
 discs; requiring the slack is band22 -4.4%, FFO40-49 -2.0%, fix24
 -6.8%, 26 empties -2.5%. A larger margin looks better on the shallow
 sets (12 beats 8 on band22 and fix24) but grows the FFO tree by 9.1%
 and, at 16, loses on the clock outright — the deep set holds the veto.
 
-**Below five empties the cut is not attempted.** In the layer profile
+**The floor is now four empties** (`STAB_MIN_EMPTIES`); the
+measurements in this section were taken with it at five.
+**Below five empties the cut was not attempted.** In the layer profile
 it took 13.0% of wall clock, 6.1 points of that at four empties alone,
 where the subtree it can prune is four plies deep. Skipping it there
 is band22 -2.9%, fix22 -2.8%, fix24 -3.0%, and free on the two sets
@@ -349,19 +365,22 @@ the exact pass's window**.
 
 - The selective pass cuts a branch at null-window nodes when a shallow
   evaluation search exceeds a confidence margin (`t × σ`, with the
-  same measured σ model as the midgame ProbCut)
-- After the pass, the table's entries are **demoted to a treatment
-  that trusts the best move only** (`demote_to_seed`). An exact search
-  must not believe estimated bounds
-- The exact pass starts from a **±6 window** centred on that score and
-  widens only the side that failed, doubling each time
-- It triggers at 20 or more empties. Below that the exact search is
+  solver's own fitted σ(empties, probe depth); the probe is the NNUE
+  midgame search when a network is attached)
+- After each rung, the table's entries are **demoted to a treatment
+  that trusts the best move only** (`demote_to_seed_shared`, a date
+  bump: entries at 12 or more empties from an earlier rung keep only
+  their move). An exact search must not believe estimated bounds
+- The exact pass starts from the window the last rung settled in, or
+  failing that a **±6 window** centred on its score, and widens only
+  the side that failed, doubling each time
+- It triggers at 18 or more empties. Below that the exact search is
   cheap enough that the pass does not pay for itself (on FFO1-19, +24%
   time at 16 empties, +62% at 14)
-- One rung, `t = 1.8`. Multiple rungs (1.1 → 1.8 → 2.6) were tried
-  too, but for solving all the way out the cost of extra rungs exceeds
-  the gain. Multiple rungs are meaningful when the goal is time
-  control (an answer comes out even if the search is cut off midway)
+- Two rungs, `t = 1.1` then `1.8`. A third (2.6) was tried too, but
+  for solving all the way out the cost of the extra rung exceeds the
+  gain. More rungs are meaningful when the goal is time control (an
+  answer comes out even if the search is cut off midway)
 
 There is a pitfall: **it does not work unless bounds are demoted
 between rungs.** Without the demotion a careful rung trusts a coarse
@@ -387,7 +406,9 @@ that prepares another search.**
 
 ## Parallel search correctness
 
-`split_siblings` (YBWC) hands children to other threads and takes the
+`split_siblings` (YBWC after the first move, plus a speculative split
+of every sibling at expected All nodes between 16 and 24 empties) hands
+children to other threads and takes the
 best of the returned values. There was one **defect that confused a
 value with a move** here. It only came to light after losing 36 discs
 in a real game, so its nature and the fix are recorded.
@@ -452,9 +473,9 @@ non-determinism as a defect and burned two hours.
 
 Reproduction needs **a mechanism that breaks things deliberately**.
 Aborts happen only about once in several thousand moves in real games,
-so an environment variable can raise the firing rate
-(`SOLVER_CHAOS=n` aborts a thread that has not produced a cut once
-every n times). Before the fix this made 4-5% of 320 positions
+so in a `--features tunable` build an environment variable can raise
+the firing rate (`SOLVER_CHAOS=n` aborts a thread that has not
+produced a cut once every n times). Before the fix this made 4-5% of 320 positions
 disagree; after the fix, zero.
 
 ---
@@ -466,7 +487,7 @@ disagree; after the fix, zero.
 ### Entry layout (32 bytes)
 
 ```
-black u64 | white u64 | lower i8 | upper i8 | depth u8 | best u8 | flags u8 | pad[3]
+black u64 | white u64 | lower i8 | upper i8 | depth u8 | best u8 | flags u8 | date u8 | pad[2]
 ```
 
 - **No hash key is stored**. `(black, white, player)` identifies the
@@ -475,7 +496,8 @@ black u64 | white u64 | lower i8 | upper i8 | depth u8 | best u8 | flags u8 | pa
   sentinels
 - At 32 bytes, **two entries fit in one cache line, so a 2-way
   associative bucket costs a single memory access**
-- `flags` holds the used / side-to-move / seed bits
+- `flags` holds the used / side-to-move / seed bits; `date` ages
+  entries between rungs and between solves
 
 ### Replacement policy
 
@@ -493,7 +515,26 @@ conclude it is **architecturally incompatible** with our design.
 
 ### Separate tables
 
-- Main table (variable size, 2^26 = 2.1GB by default)
+What the solver consults, by empties:
+
+| Empties | Table |
+|---|---|
+| 11 or more | the main table: 2^n entries of 32 bytes, shared by every thread. `EngineConfig` defaults to n = 22 (134MB), the GUI to 24 (537MB), and the FFO runs use 25-26 (1.1-2.1GB) |
+| 7-10 | `l78`: a direct-mapped private cache per worker, 2^15 entries of 19 bytes (622KB), which also keeps the best move |
+| 5-6 | `l56`: the same shape, 2^14 entries (311KB) |
+| 4 | `l4`: the same shape, 2^14 entries on one thread and fewer per worker as threads are added (never below 2^13) |
+
+The midgame search has a table of its own (`SharedTt`): 4-way buckets
+of one cache line pair, each entry holding the 64-bit hash key, f32
+bounds, two best moves, the depth and the ProbCut relax level. 2^22
+entries (134MB) by default.
+
+**How the shallow layers got here.** The bullets below are the
+measurements that shaped the layout, taken on the tables of the time:
+a 2-way "shallow" table at 5-6 empties and a 2-way "mid" table at 7-9.
+Both have since been replaced by the direct-mapped caches above, and
+the main table now starts at 11.
+
 - **Shallow-region table** (5-6 empties, 2^13 = 192KB): transpositions
   are dense in this region, but under empty-count-based replacement it
   always loses the fight for slots in the main table, so it was split
@@ -549,12 +590,11 @@ conclude it is **architecturally incompatible** with our design.
   size, from +0.4% to +9.6%: shrinking it far enough to be cheap starves
   the nine-empty layer that depends on it. Probing at nine and above,
   and nowhere below, is an extremum along all three axes
-- The midgame search's table is separate per evaluation function
 
 The **capacity** of the transposition table strongly governs endgame
-performance. For problems that search billions of nodes, the old
-default of 2^22 entries (134MB) was oversaturated by orders of
-magnitude, and the overwriting directly hurt search efficiency.
+performance. For problems that search billions of nodes, 2^22
+entries (134MB) is oversaturated by orders of magnitude, and the
+overwriting directly hurts search efficiency.
 Widening it to 2^26 gave -14 to -16% nodes and -23 to -31% time
 (consistently across FFO50/51/53/54/57).
 
@@ -566,4 +606,5 @@ dominates associativity.
 > across evaluation functions. Entries identify only the position key
 > and not the evaluation function, so sharing contaminates match
 > results (symptom: A and B win exactly the same number of games, over
-> and over). Training and match code calls `clear()` once per game.
+> and over). `Engine::clear_tables` is what a driver calls between
+> games.
