@@ -21,25 +21,9 @@ knob!(fn etc_empties() -> u8 = "ETC_MIN" or ETC_EMPTIES);
 
 const MID_TT_EMPTIES: u8 = 10;
 const MID_TT_BITS: u32 = 19;
-const SHALLOW_TT_BITS: u32 = 13;
 
 knob!(fn mid_tt_empties() -> u8 = "TT_MID_EMPTIES" or MID_TT_EMPTIES);
 
-fn private_tt_bits() -> (u32, u32) {
-    static V: std::sync::OnceLock<(u32, u32)> = std::sync::OnceLock::new();
-    *V.get_or_init(|| {
-        let read = |k: &str, d: u32| {
-            std::env::var(k)
-                .ok()
-                .and_then(|v| v.parse().ok())
-                .unwrap_or(d)
-        };
-        (
-            read("TT_SHALLOW_BITS", SHALLOW_TT_BITS),
-            read("TT_MID_BITS", MID_TT_BITS),
-        )
-    })
-}
 const EVAL_ORDER_EMPTIES: u8 = 14;
 
 knob!(fn eval_order_empties() -> u8 = "EVAL_ORDER_MIN" or EVAL_ORDER_EMPTIES);
@@ -176,15 +160,9 @@ const PARALLEL_MIN_EMPTIES: u8 = 16;
 
 knob!(fn parallel_min_empties() -> u8 = "PAR_MIN" or PARALLEL_MIN_EMPTIES);
 
-pub static WARMUP_NS: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
-pub static EXACT_NS: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
-pub static WARMUP_NODES: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
-pub static EXACT_NODES: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
 pub static CLEAR_NS: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
 
 pub static ABORT_FIRED: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
-
-flag!(fn solver_abort() = "SOLVER_ABORT" or true);
 
 knob!(fn chaos_every() -> u64 = "SOLVER_CHAOS" or 0);
 
@@ -238,40 +216,28 @@ struct ThreadBudget {
 /// A worker's private tables. The caches hold only positions below
 /// `SELECTIVE_MIN_EMPTIES`, exact whatever the rung, so they outlive roots.
 struct Scratch {
-    shallow: HashTable,
     mid: HashTable,
     l4: Vec<L4Entry>,
     l56: Vec<L4Entry>,
-    l9: Vec<L4Entry>,
     l78: Vec<L4Entry>,
     tag: u64,
 }
 
 impl Scratch {
     fn new(l4_bits: u32, tag: u64) -> Scratch {
-        let cache = |on: bool, bits: u32| {
-            if on {
-                zeroed_vec::<L4Entry>(1usize << bits)
-            } else {
-                Vec::new()
-            }
-        };
-        let (sb, mb) = private_tt_bits();
+        let cache = |bits: u32| zeroed_vec::<L4Entry>(1usize << bits);
         Scratch {
-            shallow: HashTable::new(sb),
-            mid: HashTable::new(mb),
-            l4: cache(l4_cache() || l56_cache(), l4_bits),
-            l56: cache(new_shallow(), new_shallow_bits()),
-            l9: cache(new_mid(), new_mid_bits()),
-            l78: cache(new_78(), l78_bits()),
+            mid: HashTable::new(MID_TT_BITS),
+            l4: cache(l4_bits),
+            l56: cache(new_shallow_bits()),
+            l78: cache(l78_bits()),
             tag,
         }
     }
 
     fn wipe(&mut self) {
-        self.shallow.wipe(1);
         self.mid.wipe(1);
-        for c in [&mut self.l4, &mut self.l56, &mut self.l9, &mut self.l78] {
+        for c in [&mut self.l4, &mut self.l56, &mut self.l78] {
             c.fill(L4_EMPTY);
         }
     }
@@ -296,7 +262,6 @@ impl ThreadBudget {
         match popped {
             Some(mut s) => {
                 if s.tag != tag {
-                    s.shallow.clear(1);
                     s.mid.clear(1);
                     s.tag = tag;
                 }
@@ -312,75 +277,6 @@ impl ThreadBudget {
     fn give_scratch(&self, s: Scratch) {
         self.scratch.lock().unwrap().push(s);
     }
-}
-
-#[allow(clippy::too_many_arguments)]
-fn run_one_sibling(
-    tt: &HashTable,
-    budget: &ThreadBudget,
-    group: &AbortFlag<'_>,
-    selective_t: Option<f32>,
-    nnue: Option<NnueProbe>,
-    sigma_scale: f32,
-    parent: &Board,
-    m: ScoredMove,
-    upper: i32,
-    shared_lower: &std::sync::atomic::AtomicI32,
-    slot: &TaskSlot,
-    ev: Option<&Linear>,
-) {
-    use std::sync::atomic::Ordering;
-    let cur = shared_lower.load(Ordering::Relaxed);
-    if group.aborted() || cur >= upper {
-        slot.finish(ABORTED, 0, false);
-        return;
-    }
-    let mut w = Worker::with_tables(
-        tt,
-        budget,
-        group,
-        budget.take_scratch(budget.tag(selective_t)),
-    );
-    w.selective_t = selective_t;
-    w.nnue = nnue;
-    w.sigma_scale = sigma_scale;
-
-    let mut child = m.child(parent);
-    if let Some(e) = ev.filter(|_| child.empty_count() >= eval_order_empties()) {
-        w.order_ix = order_indexer(e).init(child.black, child.white);
-    }
-    let ch = child_hash_of(&child);
-    let mut val = -w.pvs(&mut child, ch, -cur - 1, -cur, false, true, ev);
-    if val == -ABORTED {
-        val = ABORTED;
-    } else if cur < val && val < upper {
-        let ch = child_hash_of(&child);
-        let re = -w.pvs(&mut child, ch, -upper, -val, false, false, ev);
-        val = if re == -ABORTED { ABORTED } else { re };
-    }
-    if val != ABORTED && val > cur {
-        shared_lower.fetch_max(val, Ordering::Relaxed);
-        if val >= upper {
-            ABORT_FIRED.fetch_add(1, Ordering::Relaxed);
-            if solver_abort() {
-                group.abort();
-            }
-        }
-    }
-    if chaos_every() > 0
-        && TASK_ABORTED
-            .fetch_add(0, Ordering::Relaxed)
-            .is_multiple_of(7)
-    {
-        let n = ABORT_FIRED.fetch_add(1, Ordering::Relaxed);
-        if n.is_multiple_of(chaos_every()) {
-            group.abort();
-        }
-    }
-
-    let nodes = w.nodes;
-    budget.give_scratch(w.into_scratch());
-    slot.finish(val, nodes, val != ABORTED && val > cur);
 }
 
 struct SplitPoint {
@@ -413,8 +309,6 @@ struct SplitMerge {
     best: Option<Position>,
     aborted: bool,
 }
-
-flag!(fn split_v2() = "SPLIT_V2" or true);
 
 fn split_merge(sp: &SplitPoint, val: i32, cur: i32, pos: Position) {
     let mut m = sp.merge.lock().unwrap();
@@ -485,9 +379,7 @@ unsafe fn help_split(sp: &SplitPoint) -> bool {
             sp.shared_lower.fetch_max(val, Ordering::Relaxed);
             if val >= sp.upper {
                 ABORT_FIRED.fetch_add(1, Ordering::Relaxed);
-                if solver_abort() {
-                    group.abort();
-                }
+                group.abort();
             }
         }
         if chaos_every() > 0
@@ -512,73 +404,18 @@ unsafe fn help_split(sp: &SplitPoint) -> bool {
     false
 }
 
-struct TaskSlot {
-    done: std::sync::atomic::AtomicBool,
-    beat: std::sync::atomic::AtomicBool,
-    value: std::sync::atomic::AtomicI32,
-    nodes: std::sync::atomic::AtomicU64,
-    waiter: std::thread::Thread,
-}
-
-impl TaskSlot {
-    fn new(waiter: std::thread::Thread) -> TaskSlot {
-        TaskSlot {
-            done: std::sync::atomic::AtomicBool::new(false),
-            beat: std::sync::atomic::AtomicBool::new(false),
-            value: std::sync::atomic::AtomicI32::new(ABORTED),
-            nodes: std::sync::atomic::AtomicU64::new(0),
-            waiter,
-        }
-    }
-
-    fn finish(&self, value: i32, nodes: u64, beat: bool) {
-        use std::sync::atomic::Ordering;
-        self.beat.store(beat, Ordering::Relaxed);
-        self.value.store(value, Ordering::Relaxed);
-        self.nodes.store(nodes, Ordering::Relaxed);
-        let waiter = self.waiter.clone();
-        self.done.store(true, Ordering::Release);
-        waiter.unpark();
-    }
-
-    fn result(&self) -> (i32, u64) {
-        use std::sync::atomic::Ordering;
-        (
-            self.value.load(Ordering::Relaxed),
-            self.nodes.load(Ordering::Relaxed),
-        )
-    }
-}
-
 const SPLIT_SLOTS: usize = 32;
 
 const SPEC_SPLIT_MAX_EMPTIES: u8 = 24;
 
 knob!(fn spec_split_max() -> u8 = "SPEC_MAX" or SPEC_SPLIT_MAX_EMPTIES);
 
-flag!(fn join_deepest() = "JOIN_DEEP" or true);
-
-#[cfg(feature = "tunable")]
-fn join_deepest_big() -> bool {
-    static V: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
-    *V.get_or_init(|| std::env::var("JOIN_DEEP").map_or(true, |v| v != "1"))
-}
-#[cfg(not(feature = "tunable"))]
-fn join_deepest_big() -> bool {
-    true
-}
-
-knob!(fn max_join() -> usize = "MAX_JOIN" or 0);
-
-flag!(fn spec_split() = "SPEC_SPLIT" or true);
-
 struct EndPool {
-    q: std::sync::Mutex<std::collections::VecDeque<Box<dyn FnOnce() + Send + 'static>>>,
+    /// Guards the sleep: a split is published under it so a worker about to wait cannot miss it.
+    sleep: std::sync::Mutex<()>,
     cv: std::sync::Condvar,
     split_ptr: [std::sync::atomic::AtomicPtr<SplitPoint>; SPLIT_SLOTS],
     split_guard: [std::sync::atomic::AtomicUsize; SPLIT_SLOTS],
-    idle: std::sync::atomic::AtomicUsize,
-    queued: std::sync::atomic::AtomicUsize,
     workers: usize,
     stop: std::sync::atomic::AtomicBool,
 }
@@ -586,38 +423,14 @@ struct EndPool {
 impl EndPool {
     fn new(workers: usize) -> EndPool {
         EndPool {
-            q: std::sync::Mutex::new(std::collections::VecDeque::new()),
+            sleep: std::sync::Mutex::new(()),
             cv: std::sync::Condvar::new(),
             split_ptr: [const { std::sync::atomic::AtomicPtr::new(std::ptr::null_mut()) };
                 SPLIT_SLOTS],
             split_guard: [const { std::sync::atomic::AtomicUsize::new(0) }; SPLIT_SLOTS],
-            idle: std::sync::atomic::AtomicUsize::new(0),
-            queued: std::sync::atomic::AtomicUsize::new(0),
             workers,
             stop: std::sync::atomic::AtomicBool::new(false),
         }
-    }
-
-    unsafe fn try_push<'t>(&self, f: impl FnOnce() + Send + 't) -> bool {
-        use std::sync::atomic::Ordering;
-        if self.workers == 0 {
-            return false;
-        }
-        let free = |queued: usize| self.idle.load(Ordering::Relaxed) > queued;
-        if !free(self.queued.load(Ordering::Relaxed)) {
-            return false;
-        }
-        let boxed: Box<dyn FnOnce() + Send + 't> = Box::new(f);
-        let boxed: Box<dyn FnOnce() + Send + 'static> = unsafe { std::mem::transmute(boxed) };
-        let mut q = self.q.lock().unwrap();
-        if !free(q.len()) {
-            return false;
-        }
-        q.push_back(boxed);
-        self.queued.store(q.len(), Ordering::Relaxed);
-        drop(q);
-        self.cv.notify_one();
-        true
     }
 
     fn register_split(&self, sp: &SplitPoint) -> Option<usize> {
@@ -628,7 +441,7 @@ impl EndPool {
                 .compare_exchange(std::ptr::null_mut(), p, Ordering::AcqRel, Ordering::Relaxed)
                 .is_ok()
             {
-                drop(self.q.lock().unwrap());
+                drop(self.sleep.lock().unwrap());
                 self.cv.notify_all();
                 return Some(i);
             }
@@ -653,23 +466,16 @@ impl EndPool {
     fn try_help_splits(&self) -> bool {
         use std::sync::atomic::Ordering;
         let mut order: [(u8, u8); SPLIT_SLOTS] = [(u8::MAX, 0); SPLIT_SLOTS];
-        if join_deepest() {
-            for (i, o) in order.iter_mut().enumerate() {
-                self.split_guard[i].fetch_add(1, Ordering::AcqRel);
-                let p = self.split_ptr[i].load(Ordering::Acquire);
-                if !p.is_null() {
-                    let e = unsafe { (*p).board.empty_count() };
-                    let key = if join_deepest_big() { 64 - e } else { e };
-                    *o = (key, i as u8);
-                }
-                self.split_guard[i].fetch_sub(1, Ordering::Release);
+        for (i, o) in order.iter_mut().enumerate() {
+            self.split_guard[i].fetch_add(1, Ordering::AcqRel);
+            let p = self.split_ptr[i].load(Ordering::Acquire);
+            if !p.is_null() {
+                let e = unsafe { (*p).board.empty_count() };
+                *o = (64 - e, i as u8);
             }
-            order.sort_unstable();
-        } else {
-            for (i, o) in order.iter_mut().enumerate() {
-                *o = (0, i as u8);
-            }
+            self.split_guard[i].fetch_sub(1, Ordering::Release);
         }
+        order.sort_unstable();
         for &(_, slot) in order.iter() {
             let i = slot as usize;
             self.split_guard[i].fetch_add(1, Ordering::AcqRel);
@@ -679,11 +485,6 @@ impl EndPool {
                 continue;
             }
             let sp = unsafe { &*p };
-            let cap = max_join();
-            if cap != 0 && sp.active.load(Ordering::Relaxed) >= cap {
-                self.split_guard[i].fetch_sub(1, Ordering::Release);
-                continue;
-            }
             sp.active.fetch_add(1, Ordering::AcqRel);
             self.split_guard[i].fetch_sub(1, Ordering::Release);
             let ran = unsafe { help_split(sp) };
@@ -697,72 +498,28 @@ impl EndPool {
         false
     }
 
-    fn try_run_one(&self) -> bool {
-        use std::sync::atomic::Ordering;
-        let task = {
-            let mut q = self.q.lock().unwrap();
-            let t = q.pop_front();
-            self.queued.store(q.len(), Ordering::Relaxed);
-            t
-        };
-        match task {
-            Some(t) => {
-                t();
-                true
-            }
-            None => false,
-        }
-    }
-
-    fn help_until(&self, done: &std::sync::atomic::AtomicBool) {
-        use std::sync::atomic::Ordering;
-        while !done.load(Ordering::Acquire) {
-            if self.try_run_one() {
-                continue;
-            }
-            if done.load(Ordering::Acquire) {
-                return;
-            }
-            std::thread::park();
-        }
-    }
-
     fn worker_loop(&self) {
         use std::sync::atomic::Ordering;
-        let mut q = self.q.lock().unwrap();
-        self.idle.fetch_add(1, Ordering::Relaxed);
+        let mut q = self.sleep.lock().unwrap();
         loop {
-            while q.is_empty() {
-                if self.stop.load(Ordering::Relaxed) {
-                    self.idle.fetch_sub(1, Ordering::Relaxed);
-                    return;
-                }
-                drop(q);
-                self.idle.fetch_sub(1, Ordering::Relaxed);
-                let helped = self.try_help_splits();
-                self.idle.fetch_add(1, Ordering::Relaxed);
-                q = self.q.lock().unwrap();
-                if helped || !q.is_empty() {
-                    continue;
-                }
-                if self.stop.load(Ordering::Relaxed) {
-                    self.idle.fetch_sub(1, Ordering::Relaxed);
-                    return;
-                }
-                q = self.cv.wait(q).unwrap();
+            if self.stop.load(Ordering::Relaxed) {
+                return;
             }
-            let t = q.pop_front().unwrap();
-            self.queued.store(q.len(), Ordering::Relaxed);
-            self.idle.fetch_sub(1, Ordering::Relaxed);
             drop(q);
-            t();
-            q = self.q.lock().unwrap();
-            self.idle.fetch_add(1, Ordering::Relaxed);
+            let helped = self.try_help_splits();
+            q = self.sleep.lock().unwrap();
+            if helped {
+                continue;
+            }
+            if self.stop.load(Ordering::Relaxed) {
+                return;
+            }
+            q = self.cv.wait(q).unwrap();
         }
     }
 
     fn shutdown(&self) {
-        let _q = self.q.lock().unwrap();
+        let _q = self.sleep.lock().unwrap();
         self.stop.store(true, std::sync::atomic::Ordering::Relaxed);
         drop(_q);
         self.cv.notify_all();
@@ -773,25 +530,12 @@ const SORT_ALPHA_DELTA: i32 = 12;
 const EDGE_STABILITY_ORDER_WEIGHT: i32 = 1;
 const ASPIRATION_WIDTH: i32 = 6;
 
-flag!(fn dbg_asp() = "DBG_ASP" or false);
 const WARM_ASPIRATION_WIDTH: i32 = 6;
 
 knob!(fn warm_aspiration_width() -> i32 = "WARM_ASP_WIDTH" or WARM_ASPIRATION_WIDTH);
 
 const ESTIMATE_DEPTH: u8 = 6;
 const SELECTIVE_MIN_EMPTIES: u8 = 10;
-
-fn selective_ladder() -> Vec<f32> {
-    static V: std::sync::OnceLock<Vec<f32>> = std::sync::OnceLock::new();
-    V.get_or_init(|| {
-        std::env::var("SEL_LADDER")
-            .ok()
-            .map(|s| s.split(',').filter_map(|x| x.trim().parse().ok()).collect())
-            .filter(|v: &Vec<f32>| !v.is_empty())
-            .unwrap_or_else(|| SELECTIVE_LADDER.to_vec())
-    })
-    .clone()
-}
 
 knob!(fn selective_pass_min_empties() -> u8 = "SEL_PASS_MIN" or SELECTIVE_PASS_MIN_EMPTIES);
 
@@ -809,76 +553,17 @@ fn selective_sigma(empties: u8, pc: u8) -> f32 {
 }
 
 fn selective_probe_depth(empties: u8) -> u8 {
-    #[cfg(feature = "tunable")]
-    {
-        static V: std::sync::OnceLock<Option<u8>> = std::sync::OnceLock::new();
-        if let Some(d) = *V.get_or_init(|| {
-            std::env::var("SEL_PROBE_DEPTH")
-                .ok()
-                .and_then(|v| v.parse().ok())
-        }) {
-            return d;
-        }
-        static S: std::sync::OnceLock<Option<(u8, u8)>> = std::sync::OnceLock::new();
-        if let Some((at, d)) = *S.get_or_init(|| {
-            std::env::var("SEL_PROBE_STEP").ok().and_then(|v| {
-                let (a, b) = v.split_once(':')?;
-                Some((a.parse().ok()?, b.parse().ok()?))
-            })
-        }) {
-            if empties >= at {
-                return d;
-            }
-            return SELECTIVE_PROBE_DEPTH;
-        }
-    }
     let step = PROBE_STEP.load(std::sync::atomic::Ordering::Relaxed);
-    if step != 0 {
-        if empties >= (step >> 8) as u8 {
-            return (step & 0xff) as u8;
-        }
-        return SELECTIVE_PROBE_DEPTH;
+    if step != 0 && empties >= (step >> 8) as u8 {
+        return (step & 0xff) as u8;
     }
-    if selective_probe_scaled() {
-        ((empties / 3) & !1) + (empties & 1)
-    } else {
-        SELECTIVE_PROBE_DEPTH
-    }
+    SELECTIVE_PROBE_DEPTH
 }
 
 static PROBE_STEP: std::sync::atomic::AtomicU16 = std::sync::atomic::AtomicU16::new(0);
 
-#[cfg(feature = "tunable")]
-static PROBE_SCALED: std::sync::atomic::AtomicU8 = std::sync::atomic::AtomicU8::new(u8::MAX);
-
-#[cfg(feature = "tunable")]
-fn selective_probe_scaled() -> bool {
-    use std::sync::atomic::Ordering::Relaxed;
-    let mut v = PROBE_SCALED.load(Relaxed);
-    if v == u8::MAX {
-        v = std::env::var("SEL_PROBE_SCALED").is_ok_and(|s| s != "0") as u8;
-        PROBE_SCALED.store(v, Relaxed);
-    }
-    v == 1
-}
-#[cfg(not(feature = "tunable"))]
-fn selective_probe_scaled() -> bool {
-    false
-}
-
-#[cfg(not(feature = "tunable"))]
-const fn selective_gate_offset() -> Option<f32> {
-    Some(4.0)
-}
-#[cfg(feature = "tunable")]
-fn selective_gate_offset() -> Option<f32> {
-    static V: std::sync::OnceLock<Option<f32>> = std::sync::OnceLock::new();
-    *V.get_or_init(|| match std::env::var("SEL_GATE").ok().as_deref() {
-        Some("off") | Some("-") => None,
-        Some(v) => v.parse().ok().filter(|v: &f32| *v >= 0.0).or(Some(4.0)),
-        None => Some(4.0),
-    })
-}
+/// A probe runs only when the static evaluation already clears the bound by the margin less this.
+const SELECTIVE_GATE_OFFSET: f32 = 4.0;
 const SELECTIVE_PASS_MIN_EMPTIES: u8 = 18;
 const SELECTIVE_LADDER: [f32; 2] = [1.1, 1.8];
 /// 93%, the loosest confidence the selective band itself plays.
@@ -905,28 +590,6 @@ const fn build_sort_ladder(steps: [u8; 3]) -> [u8; 64] {
     t
 }
 
-#[cfg(not(feature = "tunable"))]
-const fn sort_depth_ladder() -> &'static [u8; 64] {
-    &SORT_DEPTH_LADDER
-}
-#[cfg(feature = "tunable")]
-fn sort_depth_ladder() -> &'static [u8; 64] {
-    static V: std::sync::OnceLock<[u8; 64]> = std::sync::OnceLock::new();
-    V.get_or_init(|| {
-        let Ok(spec) = std::env::var("SORT_LADDER") else {
-            return SORT_DEPTH_LADDER;
-        };
-        let mut steps = [DEEP_ORDER_EMPTIES, DEEP2_ORDER_EMPTIES, DEEP3_ORDER_EMPTIES];
-        for (slot, field) in steps.iter_mut().zip(spec.split(',')) {
-            if let Ok(v) = field.trim().parse() {
-                *slot = v;
-            }
-        }
-        build_sort_ladder(steps)
-    })
-}
-
-#[inline(always)]
 fn child_hash_of(child: &Board) -> u64 {
     zobrist::board_hash(child.player_bb(), child.opponent_bb())
 }
@@ -1052,16 +715,7 @@ impl HashEntry {
         if self.date == now {
             return false;
         }
-        if self.flags & Self::PROVEN != 0 {
-            return false;
-        }
-        self.depth >= exact_keep_floor()
-    }
-
-    const PROVEN: u8 = 8;
-
-    fn proven_entry(&self) -> bool {
-        self.flags & Self::PROVEN != 0 || self.depth < structural_proof_floor()
+        self.depth >= structural_proof_floor()
     }
 
     #[inline]
@@ -1238,13 +892,7 @@ impl HashTable {
         beta: i32,
         value: i32,
         best: Option<Position>,
-        proven: bool,
     ) {
-        let proven_bit = if proven && exact_proof() {
-            HashEntry::PROVEN
-        } else {
-            0
-        };
         let best8 = best.map_or(255, |p| p.index());
         let now = self.date();
         let base = ((hash & self.mask) as usize) << 1;
@@ -1269,7 +917,7 @@ impl HashTable {
                     upper8: if value < beta { value as i8 } else { i8::MAX },
                     depth: board.empty_count(),
                     best8,
-                    flags: 1 | ((board.player as u8) << 1) | proven_bit,
+                    flags: 1 | ((board.player as u8) << 1),
                     date: self.date(),
                     _pad: [0; 2],
                 };
@@ -1281,13 +929,10 @@ impl HashTable {
             entry.lower8 = if value > alpha { value as i8 } else { i8::MIN };
             entry.upper8 = if value < beta { value as i8 } else { i8::MAX };
             entry.depth = board.empty_count();
-            entry.flags = 1 | ((board.player as u8) << 1) | proven_bit;
+            entry.flags = 1 | ((board.player as u8) << 1);
             entry.best8 = best8;
             entry.date = now;
             return;
-        }
-        if proven_bit == 0 {
-            entry.flags &= !HashEntry::PROVEN;
         }
         if value < beta && (value as i8) < entry.upper8 {
             entry.upper8 = value as i8;
@@ -1389,37 +1034,6 @@ pub type NnueProbe = (
     std::sync::Arc<crate::midgame::SharedTt>,
 );
 
-flag!(fn sel_nnue_probe() = "SEL_NNUE_PROBE" or true);
-
-flag!(fn sel_nnue_warm() = "SEL_NNUE_WARM" or true);
-
-#[cfg(feature = "tunable")]
-fn exact_keep_floor() -> u8 {
-    static V: std::sync::OnceLock<u8> = std::sync::OnceLock::new();
-    *V.get_or_init(|| {
-        if std::env::var("EXACT_KEEP_SHALLOW").is_ok_and(|v| v == "0") {
-            return 0;
-        }
-        structural_proof_floor()
-    })
-}
-#[cfg(not(feature = "tunable"))]
-fn exact_keep_floor() -> u8 {
-    structural_proof_floor()
-}
-
-fn exact_reopen_clamp() -> Option<i32> {
-    static V: std::sync::OnceLock<Option<i32>> = std::sync::OnceLock::new();
-    *V.get_or_init(|| {
-        std::env::var("EXACT_REOPEN_CLAMP")
-            .ok()
-            .and_then(|v| v.parse().ok())
-            .filter(|d: &i32| *d > 0)
-    })
-}
-
-flag!(fn l4_cache() = "EXACT_L4_CACHE" or true);
-
 #[derive(Clone, Copy)]
 #[repr(C, packed)]
 struct L4Entry {
@@ -1487,32 +1101,12 @@ fn zeroed_vec<T: Copy>(len: usize) -> Vec<T> {
 
 knob!(fn l4_bits() -> u32 = "EXACT_L4_BITS" or 14);
 
-flag!(fn no_shallow56() = "NO_SHALLOW56" or false);
-
-flag!(fn new_shallow() = "NEW_SHALLOW" or true);
-
-flag!(fn new_mid() = "NEW_MID" or false);
-
-knob!(fn new_mid_bits() -> u32 = "NEW_MID_BITS" or 18);
-
-flag!(fn new_78() = "NEW_78" or true);
-
 knob!(fn l78_bits() -> u32 = "L78_BITS" or 15);
 
 knob!(fn new_shallow_bits() -> u32 = "NEW_SHALLOW_BITS" or 14);
 
-flag!(fn l56_cache() = "EXACT_L56_CACHE" or false);
-
-flag!(fn exact_proof() = "EXACT_PROOF" or false);
-
-#[cfg(feature = "tunable")]
 fn structural_proof_floor() -> u8 {
-    static V: std::sync::OnceLock<u8> = std::sync::OnceLock::new();
-    *V.get_or_init(|| pvs_limit().max(selective_min_empties()))
-}
-#[cfg(not(feature = "tunable"))]
-fn structural_proof_floor() -> u8 {
-    pvs_limit().max(SELECTIVE_MIN_EMPTIES)
+    pvs_limit().max(selective_min_empties())
 }
 
 pub struct Solver {
@@ -1532,26 +1126,11 @@ pub struct Solver {
     pub warm_rung: Option<(i32, Option<Position>)>,
 }
 
-macro_rules! gate {
-    ($field:expr, $knob:ident) => {
-        if cfg!(feature = "tunable") {
-            $field
-        } else {
-            $knob()
-        }
-    };
-}
-
 struct Worker<'a> {
     nodes: u64,
     l4: Vec<L4Entry>,
     l56: Vec<L4Entry>,
     l78: Vec<L4Entry>,
-    g_l4_cache: bool,
-    g_l56_cache: bool,
-    g_new_shallow: bool,
-    g_no_shallow56: bool,
-    g_new_mid: bool,
     mid_empties: u8,
     order_ix: crate::pattern_index::PatternIndices,
     tt: &'a HashTable,
@@ -1562,23 +1141,18 @@ struct Worker<'a> {
     warm_score: Option<i32>,
     warm_window: Option<(i32, i32)>,
     selective_t: Option<f32>,
-    shallow_table: HashTable,
     mid_table: HashTable,
     scratch_tag: u64,
     nnue: Option<NnueProbe>,
-    taint: u64,
-    l9: Vec<L4Entry>,
     sigma_scale: f32,
 }
 
 impl<'a> Worker<'a> {
     fn into_scratch(self) -> Scratch {
         Scratch {
-            shallow: self.shallow_table,
             mid: self.mid_table,
             l4: self.l4,
             l56: self.l56,
-            l9: self.l9,
             l78: self.l78,
             tag: self.scratch_tag,
         }
@@ -1598,23 +1172,15 @@ impl<'a> Worker<'a> {
             warm_score: None,
             warm_window: None,
             selective_t: None,
-            shallow_table: sc.shallow,
             mid_table: sc.mid,
             mid_empties: mid_tt_empties(),
             order_ix: crate::pattern_index::PatternIndices::ZERO,
             nnue: None,
-            taint: 0,
             l56: sc.l56,
-            l9: sc.l9,
             l78: sc.l78,
             l4: sc.l4,
             scratch_tag: sc.tag,
             sigma_scale: 1.0,
-            g_l4_cache: l4_cache(),
-            g_l56_cache: l56_cache(),
-            g_new_shallow: new_shallow(),
-            g_no_shallow56: no_shallow56(),
-            g_new_mid: new_mid(),
             budget,
             abort,
         }
@@ -1695,69 +1261,6 @@ impl<'a> Worker<'a> {
     ) {
         let idx = (hash as usize) & (self.l78.len() - 1);
         let e = unsafe { self.l78.get_unchecked_mut(idx) };
-        if e.player != player || e.opponent != opponent {
-            *e = L4Entry {
-                player,
-                opponent,
-                lower: i8::MIN,
-                upper: i8::MAX,
-                best8: 0,
-            };
-        }
-        if score > alpha {
-            e.lower = e.lower.max(score as i8);
-        }
-        if score < beta {
-            e.upper = e.upper.min(score as i8);
-        }
-        if let Some(b) = best {
-            e.best8 = b.index() + 1;
-        }
-    }
-
-    #[inline]
-    #[allow(clippy::type_complexity)]
-    fn l9_probe(
-        &self,
-        hash: u64,
-        player: u64,
-        opponent: u64,
-    ) -> Option<(i32, i32, Option<Position>)> {
-        let e = unsafe { self.l9.get_unchecked((hash as usize) & (self.l9.len() - 1)) };
-        if e.player == player && e.opponent == opponent {
-            let lo = if e.lower == i8::MIN {
-                -VALUE_INF
-            } else {
-                e.lower as i32
-            };
-            let hi = if e.upper == i8::MAX {
-                VALUE_INF
-            } else {
-                e.upper as i32
-            };
-            let best = if e.best8 == 0 {
-                None
-            } else {
-                Some(Position(e.best8 - 1))
-            };
-            return Some((lo, hi, best));
-        }
-        None
-    }
-
-    #[inline]
-    fn l9_store(
-        &mut self,
-        hash: u64,
-        player: u64,
-        opponent: u64,
-        alpha: i32,
-        beta: i32,
-        score: i32,
-        best: Option<Position>,
-    ) {
-        let idx = (hash as usize) & (self.l9.len() - 1);
-        let e = unsafe { self.l9.get_unchecked_mut(idx) };
         if e.player != player || e.opponent != opponent {
             *e = L4Entry {
                 player,
@@ -2013,16 +1516,9 @@ impl Solver {
         }
 
         {
-            static DEEP_ROOT: std::sync::OnceLock<u8> = std::sync::OnceLock::new();
-            let n = *DEEP_ROOT.get_or_init(|| {
-                std::env::var("SEL_DEEP_ROOT")
-                    .ok()
-                    .and_then(|v| v.parse().ok())
-                    .unwrap_or(25)
-            });
             let step = if selective.is_some() {
                 0
-            } else if n != 0 && board.empty_count() >= n {
+            } else if board.empty_count() >= 25 {
                 (20 << 8) | 6
             } else {
                 3
@@ -2045,7 +1541,6 @@ impl Solver {
             budget_arc.scratch.lock().unwrap().clear();
         } else {
             self.hash_table.clear(self.threads);
-            root.shallow.clear(1);
             root.mid.clear(1);
             budget_arc
                 .root
@@ -2083,26 +1578,13 @@ impl Solver {
             }
             let mut w = Worker::with_tables(tt, budget, &root_abort, root);
             w.stop = stop_ref;
-            w.nnue = if selective.is_some() || sel_nnue_warm() {
-                self.nnue.clone()
-            } else {
-                None
-            };
-            w.sigma_scale = std::env::var("SEL_SIGMA_SCALE")
-                .ok()
-                .and_then(|v| v.parse().ok())
-                .unwrap_or(if selective.is_some() { 0.6 } else { 1.0 });
+            w.nnue = self.nnue.clone();
+            w.sigma_scale = if selective.is_some() { 0.6 } else { 1.0 };
             let mut b = *board;
-
-            let t_warm = std::time::Instant::now();
-            let mut rungs: Vec<f32> = selective_ladder();
+            let mut rungs: Vec<f32> = SELECTIVE_LADDER.to_vec();
             if let Some(t) = selective {
-                if !std::env::var("SEL_ONE_RUNG").is_ok_and(|v| v != "0") {
-                    rungs.retain(|&r| r < t);
-                    rungs.truncate(1);
-                } else {
-                    rungs.clear();
-                }
+                rungs.retain(|&r| r < t);
+                rungs.truncate(1);
                 rungs.push(t);
             }
             let mut last_selective: Option<i32> = None;
@@ -2110,22 +1592,11 @@ impl Solver {
             if let Some(e) = ev {
                 if selective.is_some() || board.empty_count() >= selective_pass_min_empties() {
                     let mut guess = w.estimate_score(board, Some(e));
-                    if dbg_asp() {
-                        eprintln!("[warm] estimate {guess}");
-                    }
                     for t in rungs {
                         w.selective_t = Some(t);
                         let mut sb = *board;
-                        let n0 = w.nodes;
                         let s =
                             w.aspiration_width(&mut sb, guess, warm_aspiration_width(), Some(e));
-                        if dbg_asp() {
-                            eprintln!(
-                                "[warm] rung t={t} -> {s}, best={:?} ({}M nodes)",
-                                w.best,
-                                (w.nodes - n0) / 1_000_000
-                            );
-                        }
                         w.selective_t = None;
                         if t >= WARM_FALLBACK_T && !root_abort.aborted() {
                             warm = Some((s, w.best));
@@ -2139,27 +1610,15 @@ impl Solver {
                 }
             }
 
-            WARMUP_NS.fetch_add(
-                t_warm.elapsed().as_nanos() as u64,
-                std::sync::atomic::Ordering::Relaxed,
-            );
-            let warm_nodes = w.nodes;
-            WARMUP_NODES.fetch_add(warm_nodes, std::sync::atomic::Ordering::Relaxed);
             if let Some(v) = last_selective.filter(|_| selective.is_some()) {
                 return (v, w.nodes, w.best, w.into_scratch(), warm);
             }
-            let t_exact = std::time::Instant::now();
             let v = match mode {
                 EndSolverMode::WinLossDraw => w.pvs_root(&mut b, -1, 1, ev),
                 EndSolverMode::WinDraw => w.pvs_root(&mut b, 0, 1, ev),
                 EndSolverMode::DrawLoss => w.pvs_root(&mut b, -1, 0, ev),
                 EndSolverMode::Perfect => w.perfect(&mut b, ev),
             };
-            EXACT_NS.fetch_add(
-                t_exact.elapsed().as_nanos() as u64,
-                std::sync::atomic::Ordering::Relaxed,
-            );
-            EXACT_NODES.fetch_add(w.nodes - warm_nodes, std::sync::atomic::Ordering::Relaxed);
             (v, w.nodes, w.best, w.into_scratch(), warm)
         });
         self.scratch = Some(root_back);
@@ -2304,20 +1763,9 @@ impl Worker<'_> {
     }
 
     fn perfect(&mut self, board: &mut Board, ev: Option<&Linear>) -> i32 {
-        if std::env::var("SEL_EXACT_FULLWIN").is_ok_and(|v| v != "0") && self.warm_score.is_some() {
-            return self.pvs_root(board, -64, 64, ev);
-        }
         if let Some(score) = self.warm_score {
-            let recenter = std::env::var("SEL_ASP_RECENTER").is_ok_and(|v| v != "0");
-            if let Some((mut lo, mut hi)) = self.warm_window.filter(|_| !recenter) {
+            if let Some((lo, hi)) = self.warm_window {
                 if lo < score && score < hi {
-                    if let Some(d) = exact_reopen_clamp() {
-                        lo = lo.max(score - d);
-                        hi = hi.min(score + d);
-                    }
-                    if dbg_asp() {
-                        eprintln!("[exact] reopening warm window [{lo},{hi}]");
-                    }
                     let val = self.pvs_root(board, lo, hi, ev);
                     if val == ABORTED {
                         return ABORTED;
@@ -2398,16 +1846,9 @@ impl Worker<'_> {
             if lo >= hi || (lo <= -64 && hi >= 64) {
                 break;
             }
-            let n0 = self.nodes;
             let val = self.pvs_root(board, lo, hi, ev);
             if val == ABORTED {
                 return ABORTED;
-            }
-            if dbg_asp() {
-                eprintln!(
-                    "[asp] window [{lo},{hi}] -> {val} ({}M nodes)",
-                    (self.nodes - n0) / 1_000_000
-                );
             }
             if val <= lo && lo > -64 {
                 score = val;
@@ -2450,20 +1891,12 @@ impl Worker<'_> {
         let mut max;
 
         {
-            let n0 = self.nodes;
             let m0 = moves[0];
             let mut child = m0.child(board);
             let ch = child_hash_of(&child);
             max = -self.pvs_ordered(&mut child, ch, -upper, -lower, false, ev, m0, root_mover);
             if max == -ABORTED {
                 return ABORTED;
-            }
-            if dbg_asp() {
-                eprintln!(
-                    "[root] eldest {:?} [{lower},{upper}] -> {max} ({}M)",
-                    moves[0].pos,
-                    (self.nodes - n0) / 1_000_000
-                );
             }
             if max > lower {
                 lower = max;
@@ -2481,9 +1914,7 @@ impl Worker<'_> {
                         best = p;
                     }
                 }
-                let clean = self.selective_t.is_none();
-                self.tt
-                    .update(board, hash, alpha, beta, max, Some(best), clean);
+                self.tt.update(board, hash, alpha, beta, max, Some(best));
                 self.best = Some(best);
                 return max;
             }
@@ -2515,15 +1946,12 @@ impl Worker<'_> {
                 }
             }
         }
-
-        let clean = self.selective_t.is_none();
-        self.tt
-            .update(board, hash, alpha, beta, max, Some(best), clean);
+        self.tt.update(board, hash, alpha, beta, max, Some(best));
         self.best = Some(best);
         max
     }
 
-    fn split_siblings_v2(
+    fn split_siblings(
         &mut self,
         parent: &Board,
         siblings: &[ScoredMove],
@@ -2534,6 +1962,9 @@ impl Worker<'_> {
         use std::sync::atomic::{AtomicI32, AtomicU64, AtomicUsize, Ordering};
 
         let pool = &self.budget.pool;
+        if pool.workers == 0 {
+            return None;
+        }
         let group = AbortFlag::child(self.abort);
         let sp = SplitPoint {
             board: *parent,
@@ -2599,9 +2030,7 @@ impl Worker<'_> {
             split_merge(&sp, val, cur, m.pos);
             if val >= upper {
                 ABORT_FIRED.fetch_add(1, Ordering::Relaxed);
-                if solver_abort() {
-                    group.abort();
-                }
+                group.abort();
                 break;
             }
         }
@@ -2624,163 +2053,7 @@ impl Worker<'_> {
         Some((mg.max, mg.best))
     }
 
-    fn split_siblings(
-        &mut self,
-        parent: &Board,
-        siblings: &[ScoredMove],
-        lower: i32,
-        upper: i32,
-        ev: Option<&Linear>,
-    ) -> Option<(i32, Option<Position>)> {
-        use std::sync::atomic::{AtomicI32, Ordering};
-
-        let pool = &self.budget.pool;
-        if pool.workers == 0 {
-            return None;
-        }
-        if split_v2() {
-            return self.split_siblings_v2(parent, siblings, lower, upper, ev);
-        }
-
-        let shared_lower = AtomicI32::new(lower);
-        let tt = self.tt;
-        let budget = self.budget;
-        let selective_t = self.selective_t;
-        let nnue = self.nnue.clone();
-        let sigma_scale = self.sigma_scale;
-        let group = AbortFlag::child(self.abort);
-        let group = &group;
-        let waiter = std::thread::current();
-        let slots: Vec<TaskSlot> = siblings
-            .iter()
-            .map(|_| TaskSlot::new(waiter.clone()))
-            .collect();
-        let board = *parent;
-
-        let mut handed: Vec<usize> = Vec::new();
-        let mut max = i32::MIN;
-        let mut best_val = i32::MIN;
-        let mut best: Option<Position> = None;
-        let mut unwound = false;
-        let mut cut_short = false;
-
-        for (i, m) in siblings.iter().enumerate() {
-            if group.aborted() {
-                cut_short = true;
-                break;
-            }
-            let cur = shared_lower.load(Ordering::Relaxed);
-            if cur >= upper {
-                break;
-            }
-            if i + 1 < siblings.len() {
-                let m = *m;
-                let slot = &slots[i];
-                let shared = &shared_lower;
-                let nnue = nnue.clone();
-                let pushed = unsafe {
-                    pool.try_push(move || {
-                        run_one_sibling(
-                            tt,
-                            budget,
-                            group,
-                            selective_t,
-                            nnue,
-                            sigma_scale,
-                            &board,
-                            m,
-                            upper,
-                            shared,
-                            slot,
-                            ev,
-                        );
-                    })
-                };
-                if pushed {
-                    handed.push(i);
-                    continue;
-                }
-            }
-            let n0 = self.nodes;
-            let mut child = m.child(parent);
-            let ch = child_hash_of(&child);
-            let mover = parent.player();
-            let mut val = -self.pvs_ordered(&mut child, ch, -cur - 1, -cur, true, ev, *m, mover);
-            if val == -ABORTED {
-                unwound = true;
-                break;
-            }
-            if cur < val && val < upper {
-                let ch = child_hash_of(&child);
-                val = -self.pvs_ordered(&mut child, ch, -upper, -val, false, ev, *m, mover);
-                if val == -ABORTED {
-                    unwound = true;
-                    break;
-                }
-            }
-            if dbg_asp() && parent.empty_count() >= 10 {
-                eprintln!(
-                    "[split e{}] inline {:?} probe@{cur} -> {val} ({}M)",
-                    parent.empty_count(),
-                    m.pos,
-                    (self.nodes - n0) / 1_000_000
-                );
-            }
-            if val > max {
-                max = val;
-                shared_lower.fetch_max(val, Ordering::Relaxed);
-            }
-            if val > cur && val > best_val {
-                best_val = val;
-                best = Some(m.pos);
-            }
-            if val >= upper {
-                break;
-            }
-        }
-
-        for &i in &handed {
-            pool.help_until(&slots[i].done);
-        }
-        let mut any_aborted = false;
-        for &i in &handed {
-            let (val, nodes) = slots[i].result();
-            let beat = slots[i].beat.load(Ordering::Relaxed);
-            self.nodes += nodes;
-            if val == ABORTED {
-                any_aborted = true;
-                TASK_ABORTED.fetch_add(1, Ordering::Relaxed);
-            }
-            if dbg_asp() && parent.empty_count() >= 10 {
-                eprintln!(
-                    "[split e{}] handed {:?} -> {val} (beat {beat}) ({}M)",
-                    parent.empty_count(),
-                    siblings[i].pos,
-                    nodes / 1_000_000
-                );
-            }
-            if val != ABORTED {
-                if val > max {
-                    max = val;
-                }
-                if beat && val > best_val {
-                    best_val = val;
-                    best = Some(siblings[i].pos);
-                }
-            }
-        }
-
-        if unwound {
-            return Some((ABORTED, best));
-        }
-        if (any_aborted || cut_short) && max < upper {
-            return Some((ABORTED, best));
-        }
-        Some((max, best))
-    }
-
     #[allow(clippy::too_many_arguments)]
-    /// Stores a result, marked clean when no selective cut fed into it.
     #[inline(always)]
     fn store(
         &mut self,
@@ -2790,10 +2063,8 @@ impl Worker<'_> {
         beta: i32,
         val: i32,
         best: Option<Position>,
-        taint0: u64,
     ) {
-        let clean = self.selective_t.is_none() || self.taint == taint0;
-        self.tt.update(board, hash, alpha, beta, val, best, clean);
+        self.tt.update(board, hash, alpha, beta, val, best);
     }
 
     /// Enhanced transposition cutoff: a child the table already proves good enough.
@@ -2806,9 +2077,6 @@ impl Worker<'_> {
             let child = m.child(board);
             if let Some(e) = self.tt.get(&child, child_hash_of(&child)) {
                 if !e.is_seed(self.tt.date()) && -e.upper() >= upper {
-                    if self.selective_t.is_some() && !e.proven_entry() {
-                        self.taint += 1;
-                    }
                     node_accounting::etc(probed);
                     return Some(-e.upper());
                 }
@@ -2837,7 +2105,6 @@ impl Worker<'_> {
             return ABORTED;
         }
         let mover = board.player();
-        let taint0 = self.taint;
 
         if let Some(v) = wipeout_score(board) {
             return v;
@@ -2849,9 +2116,6 @@ impl Worker<'_> {
         };
         if let Some(e) = entry {
             if !e.is_seed(self.tt.date()) {
-                if self.selective_t.is_some() && !e.proven_entry() {
-                    self.taint += 1;
-                }
                 let mut unused = false;
                 if let Some(v) = narrow(&mut lower, &mut upper, &mut unused, e.lower(), e.upper()) {
                     return v;
@@ -2869,7 +2133,6 @@ impl Worker<'_> {
         if let (Some(t), Some(e)) = (self.selective_t, ev) {
             if board.empty_count() >= selective_min_empties() && upper - lower <= 1 {
                 if let Some(v) = self.selective_cut(board, hash, e, t, lower, upper) {
-                    self.taint += 1;
                     return v;
                 }
             }
@@ -2896,12 +2159,12 @@ impl Worker<'_> {
             if val == -ABORTED {
                 return ABORTED;
             }
-            self.store(board, hash, alpha, beta, val, None, taint0);
+            self.store(board, hash, alpha, beta, val, None);
             return val;
         }
 
         if moves.iter().any(|m| m.child(board).player_bb() == 0) {
-            self.tt.update(board, hash, alpha, beta, 64, None, true);
+            self.tt.update(board, hash, alpha, beta, 64, None);
             return 64;
         }
 
@@ -2916,24 +2179,20 @@ impl Worker<'_> {
 
         let tt_best = entry.and_then(|e| e.best());
 
-        if spec_split()
-            && !cut_node
+        if !cut_node
             && upper - lower == 1
             && board.empty_count() >= parallel_min_empties()
             && board.empty_count() <= spec_split_max()
             && moves.len() > 2
             && self.budget.pool.workers > 0
         {
-            self.score_moves(board, &mut moves, tt_best, ev, lower, parity_of(board));
+            self.score_moves(board, &mut moves, tt_best, ev, lower);
             moves.sort_unstable_by_key(|m| m.value);
             if let Some((val, bpos)) = self.split_siblings(board, &moves, lower, upper, ev) {
                 if val == ABORTED {
                     return ABORTED;
                 }
-                if self.selective_t.is_some() {
-                    self.taint += 1;
-                }
-                self.store(board, hash, alpha, beta, val, bpos, taint0);
+                self.store(board, hash, alpha, beta, val, bpos);
                 return val;
             }
         }
@@ -2949,14 +2208,14 @@ impl Worker<'_> {
                     lower = max;
                 }
                 if lower >= upper {
-                    self.store(board, hash, alpha, beta, max, best, taint0);
+                    self.store(board, hash, alpha, beta, max, best);
                     node_accounting::cut_at(board.empty_count(), Some(0));
                     return max;
                 }
             }
         }
 
-        self.score_moves(board, &mut moves, None, ev, lower, parity_of(board));
+        self.score_moves(board, &mut moves, None, ev, lower);
 
         let mut next = 0usize;
         let tt_searched = max != i32::MIN;
@@ -2990,10 +2249,7 @@ impl Worker<'_> {
                         best = Some(p);
                     }
                 }
-                if self.selective_t.is_some() {
-                    self.taint += 1;
-                }
-                self.store(board, hash, alpha, beta, max, best, taint0);
+                self.store(board, hash, alpha, beta, max, best);
                 return max;
             }
         }
@@ -3039,7 +2295,7 @@ impl Worker<'_> {
             );
         }
 
-        self.store(board, hash, alpha, beta, max, best, taint0);
+        self.store(board, hash, alpha, beta, max, best);
         max
     }
 
@@ -3099,17 +2355,7 @@ impl Worker<'_> {
         ev: Option<&Linear>,
     ) -> i32 {
         if child.empty_count() >= pvs_limit() {
-            let dbg = dbg_asp() && child.empty_count() >= 23;
-            let n0 = self.nodes;
             let v = self.pvs(child, hash, alpha, beta, false, cut_node, ev);
-            if dbg {
-                eprintln!(
-                    "[d{}] h{:04x} [{alpha},{beta}] -> {v} ({}M)",
-                    child.empty_count(),
-                    hash & 0xffff,
-                    (self.nodes - n0) / 1_000_000
-                );
-            }
             if v == ABORTED {
                 return ABORTED;
             }
@@ -3175,7 +2421,6 @@ impl Worker<'_> {
     #[allow(clippy::too_many_arguments)]
     fn ordered_store(
         &mut self,
-        use_l9: bool,
         use_tt: bool,
         use_l78: bool,
         n_empties: u8,
@@ -3188,9 +2433,7 @@ impl Worker<'_> {
         value: i32,
         best: Option<Position>,
     ) {
-        if use_l9 {
-            self.l9_store(hash, player, opponent, orig_alpha, beta, value, best);
-        } else if use_tt {
+        if use_tt {
             self.table(n_empties).update(
                 &board_of(player, opponent, to_move),
                 hash,
@@ -3198,7 +2441,6 @@ impl Worker<'_> {
                 beta,
                 value,
                 best,
-                true,
             );
         } else if use_l78 {
             self.l78_store(hash, player, opponent, orig_alpha, beta, value, best);
@@ -3279,13 +2521,11 @@ impl Worker<'_> {
         }
 
         abst!(O_NODES);
-        let use_l9 = use_tt && gate!(self.g_new_mid, new_mid) && n_empties < self.mid_empties;
-        let use_l78 = !use_tt && !self.l78.is_empty();
-        let mut l9_best: Option<Position> = None;
+        let use_l78 = !use_tt;
         let mut l78_best: Option<Position> = None;
         let entry = {
             let _p = layer_profile::Scope::new(layer_profile::TT, n_empties);
-            if use_tt && !use_l9 {
+            if use_tt {
                 abst!(O_TT_PROBE);
                 self.table(n_empties)
                     .get(&board_of(player, opponent, to_move), hash)
@@ -3294,14 +2534,7 @@ impl Worker<'_> {
             }
         };
         let mut narrowed = false;
-        if use_l9 {
-            if let Some((lo, hi, best)) = self.l9_probe(hash, player, opponent) {
-                l9_best = best;
-                if let Some(v) = narrow(&mut alpha, &mut beta, &mut narrowed, lo, hi) {
-                    return v;
-                }
-            }
-        } else if let Some(e) = entry {
+        if let Some(e) = entry {
             if !e.is_seed(self.table(n_empties).date()) {
                 if let Some(v) = narrow(&mut alpha, &mut beta, &mut narrowed, e.lower(), e.upper())
                 {
@@ -3346,9 +2579,7 @@ impl Worker<'_> {
                 parity,
                 ev,
             );
-            if use_l9 {
-                self.l9_store(hash, player, opponent, orig_alpha, beta, val, None);
-            } else if use_tt {
+            if use_tt {
                 self.table(n_empties).update(
                     &board_of(player, opponent, to_move),
                     hash,
@@ -3356,7 +2587,6 @@ impl Worker<'_> {
                     beta,
                     val,
                     None,
-                    true,
                 );
             } else if use_l78 {
                 self.l78_store(hash, player, opponent, orig_alpha, beta, val, None);
@@ -3371,12 +2601,7 @@ impl Worker<'_> {
             );
         }
 
-        let tt_best = if use_l9 {
-            l9_best
-        } else {
-            entry.and_then(|e| e.best())
-        }
-        .or(l78_best);
+        let tt_best = entry.and_then(|e| e.best()).or(l78_best);
         let mut best = None;
         let mut scored_from = 0usize;
         if let Some(bpos) = tt_best {
@@ -3394,8 +2619,8 @@ impl Worker<'_> {
                     node_accounting::cut_at(n_empties, Some(0));
                     best = Some(m.pos);
                     self.ordered_store(
-                        use_l9, use_tt, use_l78, n_empties, to_move, hash, player, opponent,
-                        orig_alpha, beta, alpha, best,
+                        use_tt, use_l78, n_empties, to_move, hash, player, opponent, orig_alpha,
+                        beta, alpha, best,
                     );
                     return alpha;
                 }
@@ -3414,7 +2639,6 @@ impl Worker<'_> {
                 None,
                 ev,
                 i32::MIN / 2,
-                parity,
             );
         } else {
             self.score_moves_static_bb(
@@ -3423,7 +2647,6 @@ impl Worker<'_> {
                 n_empties,
                 moves.tail_mut(scored_from),
                 None,
-                parity,
             );
         }
 
@@ -3446,8 +2669,8 @@ impl Worker<'_> {
         }
 
         self.ordered_store(
-            use_l9, use_tt, use_l78, n_empties, to_move, hash, player, opponent, orig_alpha, beta,
-            alpha, best,
+            use_tt, use_l78, n_empties, to_move, hash, player, opponent, orig_alpha, beta, alpha,
+            best,
         );
         alpha
     }
@@ -3490,9 +2713,6 @@ impl Worker<'_> {
     ) -> i32 {
         let cp = opponent_bb ^ flips;
         let co = player_bb | flips | pos_bit;
-        if !gate!(self.g_l4_cache, l4_cache) {
-            return -self.search4(cp, co, empties & !pos_bit, alpha, beta, parity);
-        }
         let child_hash = zobrist::board_hash(cp, co);
         if rest != 0 {
             let jb = rest.isolate_lowest_one();
@@ -3534,22 +2754,7 @@ impl Worker<'_> {
         upper: i32,
         best: i32,
     ) {
-        if gate!(self.g_l56_cache, l56_cache) {
-            self.l4_store(hash, player, opponent, lower, upper, best);
-        }
-        if gate!(self.g_new_shallow, new_shallow) {
-            self.l56_store(hash, player, opponent, lower, upper, best);
-        } else if !gate!(self.g_no_shallow56, no_shallow56) {
-            self.shallow_table.update(
-                &board_of(player, opponent, crate::color::Color::Black),
-                hash,
-                lower,
-                upper,
-                best,
-                None,
-                true,
-            );
-        }
+        self.l56_store(hash, player, opponent, lower, upper, best);
     }
 
     fn alpha_beta_bb(
@@ -3592,30 +2797,13 @@ impl Worker<'_> {
             }
         }
 
-        let mut lower = alpha;
-        let mut upper = beta;
-        if gate!(self.g_l56_cache, l56_cache) {
-            if let Some(v) = self.l4_probe(hash, player, opponent, lower, upper) {
-                return v;
-            }
-        }
+        let lower = alpha;
+        let upper = beta;
         abst!(NODES);
-        if gate!(self.g_new_shallow, new_shallow) {
-            abst!(L56_PROBE);
-            if let Some(v) = self.l56_probe(hash, player, opponent, lower, upper) {
-                abst!(L56_HIT);
-                return v;
-            }
-        } else if !gate!(self.g_no_shallow56, no_shallow56) {
-            if let Some(v) = self.shallow_table.get(
-                &board_of(player, opponent, crate::color::Color::Black),
-                hash,
-            ) {
-                let mut unused = false;
-                if let Some(x) = narrow(&mut lower, &mut upper, &mut unused, v.lower(), v.upper()) {
-                    return x;
-                }
-            }
+        abst!(L56_PROBE);
+        if let Some(v) = self.l56_probe(hash, player, opponent, lower, upper) {
+            abst!(L56_HIT);
+            return v;
         }
 
         let orig_lower = lower;
@@ -3731,19 +2919,6 @@ impl Worker<'_> {
 
         self.shallow_store(player, opponent, hash, orig_lower, upper, best);
         best
-    }
-
-    fn search4(
-        &mut self,
-        player: u64,
-        opponent: u64,
-        empties: u64,
-        alpha: i32,
-        beta: i32,
-        parity: u8,
-    ) -> i32 {
-        let mut trivial = false;
-        self.search4_t(player, opponent, empties, alpha, beta, parity, &mut trivial)
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -4269,61 +3444,57 @@ impl Worker<'_> {
         let pd = selective_probe_depth(empties);
         let error = t * selective_sigma(empties, pd) * self.sigma_scale;
 
-        if sel_nnue_probe() {
-            if let Some((nn, mtt)) = self.nnue.clone() {
-                const EPS: f32 = 0.01;
-                let mut acc = nn.indices(board.black, board.white);
-                let gate = selective_gate_offset()
-                    .map(|off| (nn.eval_from_indices(&acc, board), (error - off).max(1.0)));
-                let mut ms = crate::midgame::NnueSearch::new(nn, mtt);
-                let hi = upper as f32 + error;
-                if hi < 64.0 && gate.is_none_or(|(d0, e0)| d0 >= upper as f32 + e0) {
-                    let v = ms.negamax(board, &mut acc, pd as u32, hi - EPS, hi);
-                    if v >= hi {
-                        self.nodes += ms.nodes;
-                        return Some(upper);
-                    }
+        if let Some((nn, mtt)) = self.nnue.clone() {
+            const EPS: f32 = 0.01;
+            let mut acc = nn.indices(board.black, board.white);
+            let d0 = nn.eval_from_indices(&acc, board);
+            let e0 = (error - SELECTIVE_GATE_OFFSET).max(1.0);
+            let mut ms = crate::midgame::NnueSearch::new(nn, mtt);
+            let hi = upper as f32 + error;
+            if hi < 64.0 && d0 >= upper as f32 + e0 {
+                let v = ms.negamax(board, &mut acc, pd as u32, hi - EPS, hi);
+                if v >= hi {
+                    self.nodes += ms.nodes;
+                    return Some(upper);
                 }
-                let lo = lower as f32 - error;
-                if lo > -64.0 && gate.is_none_or(|(d0, e0)| d0 <= lower as f32 - e0) {
-                    let v = ms.negamax(board, &mut acc, pd as u32, lo, lo + EPS);
-                    if v <= lo {
-                        self.nodes += ms.nodes;
-                        return Some(lower);
-                    }
-                }
-                self.nodes += ms.nodes;
-                return None;
             }
+            let lo = lower as f32 - error;
+            if lo > -64.0 && d0 <= lower as f32 - e0 {
+                let v = ms.negamax(board, &mut acc, pd as u32, lo, lo + EPS);
+                if v <= lo {
+                    self.nodes += ms.nodes;
+                    return Some(lower);
+                }
+            }
+            self.nodes += ms.nodes;
+            return None;
         }
 
         let ix = ev.indexer();
         let mut indices = ix.init(board.black, board.white);
 
-        let gate = selective_gate_offset().map(|off| {
-            let d0 = self.seed_search(
-                board,
-                hash,
-                ev,
-                ix,
-                &mut indices,
-                0,
-                f32::NEG_INFINITY,
-                f32::INFINITY,
-                false,
-            );
-            (d0, (error - off).max(1.0))
-        });
+        let d0 = self.seed_search(
+            board,
+            hash,
+            ev,
+            ix,
+            &mut indices,
+            0,
+            f32::NEG_INFINITY,
+            f32::INFINITY,
+            false,
+        );
+        let e0 = (error - SELECTIVE_GATE_OFFSET).max(1.0);
 
         let hi = upper as f32 + error;
-        if hi < 64.0 && gate.is_none_or(|(d0, e0)| d0 >= upper as f32 + e0) {
+        if hi < 64.0 && d0 >= upper as f32 + e0 {
             let v = self.seed_search(board, hash, ev, ix, &mut indices, pd, hi - 1.0, hi, false);
             if v >= hi {
                 return Some(upper);
             }
         }
         let lo = lower as f32 - error;
-        if lo > -64.0 && gate.is_none_or(|(d0, e0)| d0 <= lower as f32 - e0) {
+        if lo > -64.0 && d0 <= lower as f32 - e0 {
             let v = self.seed_search(board, hash, ev, ix, &mut indices, pd, lo, lo + 1.0, false);
             if v <= lo {
                 return Some(lower);
@@ -4340,7 +3511,7 @@ impl Worker<'_> {
         out: &mut MoveBuf,
     ) {
         self.gen_moves(board, out);
-        self.score_moves(board, out, tt_best, ev, i32::MIN / 2, parity_of(board));
+        self.score_moves(board, out, tt_best, ev, i32::MIN / 2);
     }
 
     fn gen_moves(&self, board: &Board, out: &mut MoveBuf) {
@@ -4457,7 +3628,6 @@ impl Worker<'_> {
         board: &Board,
         moves: &mut [ScoredMove],
         tt_best: Option<Position>,
-        parity: u8,
     ) {
         self.score_moves_static_bb(
             board.player_bb(),
@@ -4465,7 +3635,6 @@ impl Worker<'_> {
             board.empty_count(),
             moves,
             tt_best,
-            parity,
         )
     }
 
@@ -4477,11 +3646,9 @@ impl Worker<'_> {
         n_empties: u8,
         moves: &mut [ScoredMove],
         tt_best: Option<Position>,
-        parity: u8,
     ) {
         let _prof = layer_profile::Scope::new(layer_profile::ORDER, n_empties);
         node_accounting::sorted(moves.len() as u64);
-        let pot = order_pot();
         match tt_best {
             None => {
                 for sm in moves.iter_mut() {
@@ -4492,7 +3659,7 @@ impl Worker<'_> {
                     sm.value = if cp == 0 {
                         i32::MIN
                     } else {
-                        move_ordering_value(pos, cp, co, parity, pot)
+                        move_ordering_value(pos, cp, co)
                     };
                 }
             }
@@ -4507,7 +3674,7 @@ impl Worker<'_> {
                     } else if pos == best {
                         i32::MIN + 1
                     } else {
-                        move_ordering_value(pos, cp, co, parity, pot)
+                        move_ordering_value(pos, cp, co)
                     };
                 }
             }
@@ -4521,14 +3688,12 @@ impl Worker<'_> {
         tt_best: Option<Position>,
         ev: Option<&Linear>,
         alpha: i32,
-        parity: u8,
     ) {
         let _prof = layer_profile::Scope::new(layer_profile::ORDER, board.empty_count());
         node_accounting::sorted(moves.len() as u64);
-        let pot = order_pot();
         let eval_order = board.empty_count() >= eval_order_empties();
         if !eval_order || ev.is_none() {
-            return self.score_moves_static(board, moves, tt_best, parity);
+            return self.score_moves_static(board, moves, tt_best);
         }
         let mut order_ix = if eval_order {
             ev.map(|e| (order_indexer(e), self.order_ix))
@@ -4542,7 +3707,7 @@ impl Worker<'_> {
             -(alpha - SORT_ALPHA_DELTA) as f32
         };
 
-        let sort_depth = sort_depth_ladder()[(board.empty_count() as usize).min(63)];
+        let sort_depth = SORT_DEPTH_LADDER[(board.empty_count() as usize).min(63)];
         let player_bb = board.player_bb();
         let opponent_bb = board.opponent_bb();
         for sm in moves.iter_mut() {
@@ -4576,7 +3741,7 @@ impl Worker<'_> {
                 (v * 8.0) as i32 + weighted_mobility(cp, co) * MOBILITY_ORDER_WEIGHT
                     - edge * EDGE_STABILITY_ORDER_WEIGHT
             } else {
-                move_ordering_value(pos, cp, co, parity, pot)
+                move_ordering_value(pos, cp, co)
             };
         }
     }
@@ -4765,39 +3930,17 @@ fn shallow_search(
 }
 
 #[inline]
-fn dilate(x: u64) -> u64 {
-    let v = x | ((x & 0x7F7F_7F7F_7F7F_7F7F) << 1) | ((x & 0xFEFE_FEFE_FEFE_FEFE) >> 1);
-    v | (v << 8) | (v >> 8)
-}
-
-#[inline]
 fn weighted_mobility(cp: u64, co: u64) -> i32 {
     const CORNERS: u64 = 0x8100_0000_0000_0081;
     let m = bitboard::mobility(cp, co, !(cp | co));
     (m.count_ones() + (m & CORNERS).count_ones()) as i32
 }
 
-flag!(fn order_pot() = "ORDER_POT" or false);
-
-fn move_ordering_value(pos: Position, cp: u64, co: u64, parity: u8, pot: bool) -> i32 {
+fn move_ordering_value(pos: Position, cp: u64, co: u64) -> i32 {
     const W_MOBILITY: i32 = 1 << 15;
     const W_CORNER_STABILITY: i32 = 1 << 11;
-    const W_POTENTIAL: i32 = 1 << 5;
-    const W_PARITY: i32 = 1 << 3;
 
-    if !pot {
-        let mut score = SQUARE_VALUE[(pos.index() & 63) as usize] as i32;
-        score += corner_stability_bb(co) * W_CORNER_STABILITY;
-        score += (36 - weighted_mobility(cp, co)) * W_MOBILITY;
-        return -score;
-    }
-    let empty = !(cp | co);
-    let potential = (dilate(co) & empty).count_ones() as i32;
     let mut score = SQUARE_VALUE[(pos.index() & 63) as usize] as i32;
-    if parity & quadrant_id(pos.index()) != 0 {
-        score += W_PARITY;
-    }
-    score += (36 - potential) * W_POTENTIAL;
     score += corner_stability_bb(co) * W_CORNER_STABILITY;
     score += (36 - weighted_mobility(cp, co)) * W_MOBILITY;
     -score

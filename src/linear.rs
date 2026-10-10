@@ -662,46 +662,6 @@ impl Linear {
         e * e
     }
 
-    pub fn train_game(
-        &mut self,
-        history: &[Board],
-        final_score: f32,
-        lambda: f32,
-        opt: &mut impl Optimizer,
-    ) -> f32 {
-        if history.is_empty() {
-            return 0.0;
-        }
-
-        let mut total_sq_err = 0.0f32;
-        let mut next_value_black_view = final_score;
-
-        for board in history.iter().rev() {
-            let outcome_here = if board.player() == crate::color::Color::Black {
-                final_score
-            } else {
-                -final_score
-            };
-            let bootstrap_here = if board.player() == crate::color::Color::Black {
-                next_value_black_view
-            } else {
-                -next_value_black_view
-            };
-
-            let target = lambda * outcome_here + (1.0 - lambda) * bootstrap_here;
-            total_sq_err += self.train(board, target, opt);
-
-            let v = self.eval(board);
-            next_value_black_view = if board.player() == crate::color::Color::Black {
-                v
-            } else {
-                -v
-            };
-        }
-
-        total_sq_err / history.len() as f32
-    }
-
     pub fn save_weights(&self, path: &Path) -> io::Result<()> {
         let tmp_path = path.with_extension("tmp");
         {
@@ -1002,71 +962,6 @@ mod tests {
                 "symmetry {i} must also be near the target, got {v}"
             );
         }
-    }
-
-    #[test]
-    fn test_train_game_monte_carlo_labels_all_stages() {
-        let mut board = Board::new();
-        let mut history = vec![board];
-        for _ in 0..6 {
-            let moves = board.movable();
-            if moves == 0 {
-                break;
-            }
-            board.make_move_bits(Position::from_index(moves.trailing_zeros()).unwrap());
-            history.push(board);
-        }
-        let final_score = 10.0f32; // pretend Black wins by 10
-
-        let mut e = Linear::new(LINEAR_PATTERNS);
-        let mut opt = AdamOptimizer::new(0.01);
-        let mut last_err = f32::MAX;
-        for _ in 0..1600 {
-            last_err = e.train_game(&history, final_score, 1.0, &mut opt);
-        }
-        assert!(last_err < 2.0, "game training converges, err {last_err}");
-
-        for b in &history {
-            let v = e.eval(b);
-            let expected = if b.player() == crate::color::Color::Black {
-                final_score
-            } else {
-                -final_score
-            };
-            assert!(
-                (v - expected).abs() < 3.0,
-                "position (stage {}) evaluates {v}, expected ~{expected}",
-                Linear::stage(b)
-            );
-        }
-    }
-
-    #[test]
-    fn test_train_game_td_bootstrap_direction() {
-        let mut board = Board::new();
-        let mut history = vec![board];
-        for _ in 0..4 {
-            let moves = board.movable();
-            if moves == 0 {
-                break;
-            }
-            board.make_move_bits(Position::from_index(moves.trailing_zeros()).unwrap());
-            history.push(board);
-        }
-
-        let mut e = Linear::new(LINEAR_PATTERNS);
-        let mut opt = AdamOptimizer::new(0.05);
-        for _ in 0..60 {
-            e.train_game(&history, 12.0, 0.0, &mut opt);
-        }
-
-        let first = &history[0];
-        assert_eq!(first.player(), crate::color::Color::Black);
-        assert!(
-            e.eval(first) > 1.0,
-            "TD(0) must propagate the win backward, got {}",
-            e.eval(first)
-        );
     }
 
     #[test]

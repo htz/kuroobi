@@ -142,10 +142,6 @@ impl Book {
         cands.first().map(|(p, v, _)| (*p, *v, depth))
     }
 
-    pub fn is_complete(&self, board: &Board) -> bool {
-        self.expand(board).is_some_and(|(_, _, c)| c)
-    }
-
     fn expand(&self, board: &Board) -> Option<(Vec<BookCandidate>, u8, bool)> {
         let (key, i) = Book::key(board);
         let e = self.map.get(&key)?;

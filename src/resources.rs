@@ -17,14 +17,6 @@ pub struct Resources {
 pub const HASH_BITS_MIN: u32 = 16;
 pub const HASH_BITS_MAX: u32 = 26;
 
-pub fn midgame_bytes(bits: u32) -> u64 {
-    1u64 << (bits.clamp(HASH_BITS_MIN, HASH_BITS_MAX) + 4)
-}
-
-pub fn endgame_bytes(bits: u32) -> u64 {
-    (1u64 << bits.clamp(HASH_BITS_MIN, HASH_BITS_MAX)) * 24
-}
-
 pub fn default_dir() -> PathBuf {
     if let Ok(d) = std::env::var("KUROOBI_WEIGHTS_DIR") {
         return PathBuf::from(d);

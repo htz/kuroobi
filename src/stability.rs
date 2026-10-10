@@ -182,6 +182,7 @@ pub(crate) fn edge_stable_all(own: u64, opp: u64) -> u64 {
     stable
 }
 
+#[cfg(test)]
 pub fn stable_discs(own: u64, opp: u64) -> u64 {
     let occ = own | opp;
     let (full_h, full_v, full_d9, full_d7) = full_lines(occ);
@@ -225,11 +226,6 @@ pub fn stable_count_at_least(own: u64, opp: u64, need: u32) -> u32 {
         }
         stable = next;
     }
-}
-
-#[inline]
-pub fn stable_count(own: u64, opp: u64) -> u32 {
-    stable_discs(own, opp).count_ones()
 }
 
 #[cfg(test)]
