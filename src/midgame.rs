@@ -423,6 +423,7 @@ struct Fan {
     tt: std::sync::Arc<SharedTt>,
     mpc: bool,
     mpc_relax: u32,
+    split_min: u32,
     ext_stop: Option<StopHandle>,
     gen: Option<std::sync::Arc<std::sync::atomic::AtomicU32>>,
     my_gen: u32,
@@ -469,6 +470,7 @@ impl Fan {
             let mut w = NnueSearch::new(self.nn.clone(), self.tt.clone());
             w.mpc = self.mpc;
             w.mpc_relax = self.mpc_relax;
+            w.split_min = self.split_min;
             w.pool = Some(self.pool);
             w.abort = Some(self.stop.clone());
             w.stop = self.ext_stop.clone();
@@ -754,6 +756,7 @@ pub struct NnueSearch {
     my_gen: u32,
     pool: Option<&'static Pool>,
     mpc_relax: u32,
+    split_min: u32,
     pub stop_reason: Stopped,
     pub second: Option<Position>,
     pub gap: Option<f32>,
@@ -785,6 +788,7 @@ impl NnueSearch {
             gap: None,
             extended: false,
             mpc_relax: 0,
+            split_min: ybwc_min_depth(),
         }
     }
 
@@ -821,6 +825,7 @@ impl NnueSearch {
             my_gen: self.my_gen,
             pool: self.pool,
             mpc_relax: self.mpc_relax,
+            split_min: self.split_min,
             progress: None,
             stop_reason: Stopped::Ceiling,
             second: None,
@@ -1112,6 +1117,8 @@ impl NnueSearch {
 
         let workers = self.threads - 1;
         let pool = self.shared_pool(workers);
+        // Two threads lose to the extra split points one ply down; three and more gain.
+        self.split_min = ybwc_min_depth() - u32::from(self.threads >= 3);
 
         self.stop_reason = Stopped::Ceiling;
         self.second = None;
@@ -1344,6 +1351,7 @@ impl NnueSearch {
             tt: self.tt.clone(),
             mpc: self.mpc,
             mpc_relax: self.mpc_relax,
+            split_min: self.split_min,
             ext_stop: self.stop.clone(),
             gen: self.done.clone(),
             my_gen: self.my_gen,
@@ -1552,7 +1560,7 @@ impl NnueSearch {
 
         let narrow = beta - alpha <= PVS_EPS * 1.5;
         let kids_all = narrow && !all_node;
-        let will_split = self.pool.is_some() && depth >= ybwc_min_depth();
+        let will_split = self.pool.is_some() && depth >= self.split_min;
         // Every move of an expected All node gets searched, so its siblings need not wait for the first.
         let early = will_split && narrow && all_node;
 

@@ -660,6 +660,19 @@ Spinning helps only when the minimum is lowered (the latency grows relative
 to the task length), but it cannot cover the loss of lowering it at all. **A
 minimum of 6 is optimal.**
 
+That table predates the open-sibling scheme above, where an idle thread
+finds work by itself. Measured again on it (48 positions of 36-48 empties,
+mean of 3 runs), a minimum of 5 wins from three threads on and loses on two,
+so the minimum is 6 on two threads and 5 above:
+
+| Threads, depth | Minimum 6 | Minimum 5 |
+|---|---|---|
+| 2, depth 26 | **83.9 s** | 88.4 s |
+| 3, depth 26 (2 runs) | 58.4 s | **57.7 s** |
+| 4, depth 26 | 50.5 s | **49.0 s** |
+| 8, depth 26 | 39.6 s | **38.0 s** |
+| 8, depth 22 | 15.1 s | **14.1 s** |
+
 > Rejected parallelizations: **root splitting** lost to a single thread (1.3x
 > slower for 1.7x the nodes). **A dedicated transposition table per worker**
 > raises nps by 19% but increases nodes by 69%, and losing the main thread's
