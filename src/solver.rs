@@ -1930,6 +1930,9 @@ impl Worker<'_> {
             waiter: std::thread::current(),
         };
         let slot = pool.register_split(&sp);
+        // A helper's cut must stop the owner's own child too, or the owner finishes a refuted subtree.
+        let outer = self.abort;
+        self.abort = unsafe { std::mem::transmute::<&AbortFlag<'_>, &AbortFlag<'_>>(&group) };
 
         let mut unwound = false;
         let mut cut_short = false;
@@ -1951,17 +1954,14 @@ impl Worker<'_> {
             let ch = child_hash_of(&child);
             let mover = parent.player();
             let mut val = -self.pvs_ordered(&mut child, ch, -cur - 1, -cur, true, ev, m, mover);
-            if val == -ABORTED {
-                unwound = true;
-                break;
-            }
             if cur < val && val < upper {
                 let ch = child_hash_of(&child);
                 val = -self.pvs_ordered(&mut child, ch, -upper, -val, false, ev, m, mover);
-                if val == -ABORTED {
-                    unwound = true;
-                    break;
-                }
+            }
+            if val == -ABORTED {
+                unwound = outer.aborted();
+                cut_short = true;
+                break;
             }
             if val > cur {
                 sp.shared_lower.fetch_max(val, Ordering::Relaxed);
@@ -1973,6 +1973,7 @@ impl Worker<'_> {
                 break;
             }
         }
+        self.abort = outer;
         sp.cursor.store(sp.n_moves, Ordering::Release);
         if let Some(i) = slot {
             pool.unregister_split(i, &sp);
