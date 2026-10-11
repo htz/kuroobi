@@ -496,33 +496,51 @@ leaves evict, every time, the deep entries the iteration above them needs.
 under parallelism — shallow stores arrive from every worker at once, so deep
 entries barely survive.
 
-#### Loosening the "hand off only when idle" rule is faster
+#### Siblings stay open for whoever becomes idle
 
-The rule "hand work to a worker only when it is idle **right now**"
-(`n_idle > 0`) is faster once loosened. With 9 younger siblings and 5 idle
-threads, the parent hands off 5 and then **searches the remaining 4 itself,
-in sequence** (they are refused because nothing is idle). Meanwhile the 5 it
-handed off (45 µs each) finish, and the workers starve for the rest of the
-fan-out.
+A fan-out used to hand each younger sibling to a worker **at the moment the
+parent reached it**: refused if nothing was idle right then, searched by the
+parent instead, and never offered again. Selective search makes most
+siblings tiny (100-1,000 nodes), so a node with 10 of them under "first
+child first" tops out near 10 / (1 + 9/8) = 4.7x on 8 threads, and the
+measured occupancy was 4.5 cores: 46% of thread time idle, 20% of the wall
+clock with a single thread working.
 
-Allow the queue to hold up to the idle count + `POOL_SLACK`. (The search
-knobs named in this section — `POOL_SLACK`, `YBWC_MIN`, `SMP_MAX_DEPTH`,
+Two changes, measured on 48 positions (36-48 empties) at depth 26, mean of
+3 runs:
+
+- **The unsearched siblings of a node are left open** (`Fan`), and an idle
+  thread takes the next one from the open node nearest the root. The parent
+  takes from the same list, so nothing is queued and nothing waits for a
+  thread that is busy elsewhere.
+- **An expected All node opens its siblings before its first child
+  returns.** The type alternates down a null-window subtree (the child of a
+  Cut node is an All node, and so is the root of a fail-low probe); a first
+  child that does cut aborts the siblings.
+
+| threads | before | after | speedup before | after |
+|---:|---:|---:|---:|---:|
+| 1 | 156.0 s | 156.0 s | | |
+| 2 | 92.2 s | 84.2 s | 1.69x | 1.85x |
+| 4 | 65.8 s | 53.7 s | 2.37x | 2.91x |
+| 8 | 50.7 s | 38.8 s | 3.08x | 4.02x |
+
+Occupancy at 8 threads rose from 4.5 to 6.2 cores. Nodes at 8 threads went
+from 470M to 526M (379M on one thread), so the gain is occupancy, not a
+smaller tree. The single-thread search is node-for-node unchanged.
+
+(The search knobs named in this section — `YBWC_MIN`, `SMP_MAX_DEPTH`,
 `MPC_T` — are constants in a normal build; `--features tunable` reads them
-from the environment variable of the same name.) At d16 / 20
-games / minimum of 3 rounds: 0 -> 2.25x, 2 -> 2.41x, **8 -> 2.47x**,
-32 -> 2.18x, 128 -> 2.20x. Beyond 8 the price of duplicated search outweighs
-the gain in occupancy (nodes go from 175M to 252M).
+from the environment variable of the same name.)
 
-This is **the revival of a measure that was once rejected**. Allowing a queue
-used to inflate the nodes to 1.87x the sequential count and lose. The
-`searchings` chain removed the node inflation down to 1.03x, so the premise
-changed. The revival could be judged only because the reason for the
-rejection had been recorded too.
+Rejected along the way, same 48 positions at 8 threads:
 
-If work is queued, **check for the abort the moment it is dequeued**.
-`ABORT_CHECK_INTERVAL` is 512 nodes, so even if a sibling failed high while
-the task was waiting, the task only notices after searching 512 nodes. A
-single check at dequeue took the same setting from 12.0s to 11.2s.
+- **Speculating on every null-window node with a low-priority queue**:
+  occupancy 6.7 cores, but 2.2x the nodes and 83 s against 56 s.
+- **A deeper task queue in the old scheme** (idle count + 8 / + 1000):
+  nodes +20% / +38%, 60.8 s / 68.4 s against 54-57 s.
+- **Spinning before a worker sleeps**: no gain in time, more nodes. The
+  idle time was missing work, not slow wake-ups.
 
 #### Measurements
 

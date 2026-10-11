@@ -19,6 +19,7 @@ fn order_key(x: f32) -> i32 {
 }
 
 const MAX_KIDS: usize = 34;
+const NO_SLOT: u8 = u8::MAX;
 
 knob!(fn eval_order_depth() -> u32 = "EVAL_ORDER_DEPTH" or 3);
 
@@ -118,8 +119,6 @@ fn potential_mobility(discs: u64, empties: u64) -> u32 {
         | (hvmask >> 9);
     (res & empties).count_ones()
 }
-
-knob!(fn pool_slack() -> usize = "POOL_SLACK" or 2);
 
 knob!(fn smp_min_depth() -> u32 = "SMP_MIN_DEPTH" or 1);
 knob!(fn smp_spread() -> u32 = "SMP_SPREAD" or 2);
@@ -402,7 +401,99 @@ impl Slot {
     }
 }
 
+struct FanKid {
+    pos: Position,
+    flipped: u64,
+    taken: std::sync::atomic::AtomicBool,
+    done: std::sync::atomic::AtomicBool,
+    bits: std::sync::atomic::AtomicU32,
+}
+
+/// One node's unsearched siblings, left open for any idle thread to take.
+struct Fan {
+    board: Board,
+    depth: u32,
+    alpha: f32,
+    kids: Vec<FanKid>,
+    left: std::sync::atomic::AtomicUsize,
+    helpers: std::sync::atomic::AtomicUsize,
+    nodes: std::sync::atomic::AtomicU64,
+    stop: std::sync::Arc<AbortChain>,
+    nn: std::sync::Arc<Nnue>,
+    tt: std::sync::Arc<SharedTt>,
+    mpc: bool,
+    mpc_relax: u32,
+    ext_stop: Option<StopHandle>,
+    gen: Option<std::sync::Arc<std::sync::atomic::AtomicU32>>,
+    my_gen: u32,
+    dev: u32,
+    kids_all: bool,
+    pool: &'static Pool,
+}
+
+impl Fan {
+    fn take(&self, k: usize) -> bool {
+        use std::sync::atomic::Ordering;
+        if self.kids[k].taken.swap(true, Ordering::AcqRel) {
+            return false;
+        }
+        self.left.fetch_sub(1, Ordering::Relaxed);
+        true
+    }
+
+    fn open(&self) -> bool {
+        self.left.load(std::sync::atomic::Ordering::Relaxed) > 0 && !self.stop.stopped()
+    }
+
+    fn result(&self, k: usize) -> Option<f32> {
+        use std::sync::atomic::Ordering;
+        let kid = &self.kids[k];
+        kid.done
+            .load(Ordering::Acquire)
+            .then(|| f32::from_bits(kid.bits.load(Ordering::Relaxed)))
+    }
+
+    fn help(&self) -> bool {
+        use std::sync::atomic::Ordering;
+        let mut ran = false;
+        for (k, kid) in self.kids.iter().enumerate() {
+            if self.stop.stopped() {
+                break;
+            }
+            if !self.take(k) {
+                continue;
+            }
+            ran = true;
+            let mut child = self.board;
+            child.apply_flips(kid.pos, kid.flipped);
+            let mut w = NnueSearch::new(self.nn.clone(), self.tt.clone());
+            w.mpc = self.mpc;
+            w.mpc_relax = self.mpc_relax;
+            w.pool = Some(self.pool);
+            w.abort = Some(self.stop.clone());
+            w.stop = self.ext_stop.clone();
+            w.abort_countdown = 1;
+            w.done = self.gen.clone();
+            w.my_gen = self.my_gen;
+            w.dev = self.dev;
+            w.expect_all = self.kids_all;
+            let mut acc = w.nn.indices(child.black, child.white);
+            let (lo, hi) = (-(self.alpha + PVS_EPS), -self.alpha);
+            let v = w.negamax(&child, &mut acc, self.depth, lo, hi);
+            if v != ABORTED && -v > self.alpha {
+                self.stop.raise();
+            }
+            self.nodes.fetch_add(w.nodes, Ordering::Relaxed);
+            kid.bits.store(v.to_bits(), Ordering::Relaxed);
+            kid.done.store(true, Ordering::Release);
+        }
+        ran
+    }
+}
+
 struct Pool {
+    fans: std::sync::Mutex<Vec<std::sync::Arc<Fan>>>,
+    n_fans: std::sync::atomic::AtomicUsize,
     q: std::sync::Mutex<std::collections::VecDeque<Box<dyn FnOnce() + Send + 'static>>>,
     cv: std::sync::Condvar,
     idle: std::sync::atomic::AtomicUsize,
@@ -415,27 +506,84 @@ impl Pool {
         Pool {
             q: std::sync::Mutex::new(std::collections::VecDeque::new()),
             cv: std::sync::Condvar::new(),
+            fans: std::sync::Mutex::new(Vec::new()),
+            n_fans: AtomicUsize::new(0),
             idle: AtomicUsize::new(0),
             queued: AtomicUsize::new(0),
         }
     }
 
-    fn try_push(&self, f: impl FnOnce() + Send + 'static) -> bool {
+    fn push(&self, f: impl FnOnce() + Send + 'static) {
         use std::sync::atomic::Ordering;
-        let slack = pool_slack();
-        let free = |queued: usize| self.idle.load(Ordering::Relaxed) + slack > queued;
-        if !free(self.queued.load(Ordering::Relaxed)) {
-            return false;
-        }
         let mut q = self.q.lock().unwrap();
-        if !free(q.len()) {
-            return false;
-        }
         q.push_back(Box::new(f));
         self.queued.fetch_add(1, Ordering::Relaxed);
         drop(q);
         self.cv.notify_one();
-        true
+    }
+
+    fn open_fan(&self, f: &std::sync::Arc<Fan>) {
+        use std::sync::atomic::Ordering;
+        self.fans.lock().unwrap().push(f.clone());
+        self.n_fans.fetch_add(1, Ordering::Relaxed);
+        if self.idle.load(Ordering::Relaxed) > 0 {
+            let _q = self.q.lock().unwrap();
+            self.cv.notify_all();
+        }
+    }
+
+    /// Takes back what nobody started and waits out the helpers, helping other fans meanwhile.
+    fn close_fan(&self, f: &std::sync::Arc<Fan>) {
+        use std::sync::atomic::Ordering;
+        for k in 0..f.kids.len() {
+            f.take(k);
+        }
+        self.fans
+            .lock()
+            .unwrap()
+            .retain(|x| !std::sync::Arc::ptr_eq(x, f));
+        self.n_fans.fetch_sub(1, Ordering::Relaxed);
+        let mut idle = 0u32;
+        while f.helpers.load(Ordering::Acquire) > 0 {
+            if self.help_any() {
+                idle = 0;
+                continue;
+            }
+            idle += 1;
+            if idle < 64 {
+                std::hint::spin_loop();
+            } else {
+                std::thread::yield_now();
+            }
+        }
+    }
+
+    fn fan_open(&self) -> bool {
+        use std::sync::atomic::Ordering;
+        self.n_fans.load(Ordering::Relaxed) > 0
+            && self.fans.lock().unwrap().iter().any(|f| f.open())
+    }
+
+    /// Joins the open fan nearest the root: its siblings are the largest pieces of work.
+    fn help_any(&self) -> bool {
+        use std::sync::atomic::Ordering;
+        if self.n_fans.load(Ordering::Relaxed) == 0 {
+            return false;
+        }
+        let pick = {
+            let fans = self.fans.lock().unwrap();
+            let best = fans.iter().filter(|f| f.open()).max_by_key(|f| f.depth);
+            best.map(|f| {
+                f.helpers.fetch_add(1, Ordering::AcqRel);
+                f.clone()
+            })
+        };
+        let Some(f) = pick else {
+            return false;
+        };
+        let ran = f.help();
+        f.helpers.fetch_sub(1, Ordering::AcqRel);
+        ran
     }
 
     fn run_one(&self) -> bool {
@@ -490,6 +638,14 @@ impl Pool {
                     if let Some(t) = q.pop_front() {
                         self.queued.fetch_sub(1, Ordering::Relaxed);
                         break t;
+                    }
+                    if self.fan_open() {
+                        drop(q);
+                        self.idle.fetch_sub(1, Ordering::Relaxed);
+                        self.help_any();
+                        self.idle.fetch_add(1, Ordering::Relaxed);
+                        q = self.q.lock().unwrap();
+                        continue;
                     }
                     q = self.cv.wait(q).unwrap();
                 }
@@ -585,6 +741,7 @@ pub struct NnueSearch {
     pub nodes: u64,
     pub mpc: bool,
     probcut_level: u32,
+    expect_all: bool,
     /// Times the current line left the first-searched move (0 on the principal variation).
     dev: u32,
     abort: Option<std::sync::Arc<AbortChain>>,
@@ -612,6 +769,7 @@ impl NnueSearch {
             nodes: 0,
             mpc: false,
             probcut_level: 0,
+            expect_all: false,
             dev: 0,
             abort: None,
             stop: None,
@@ -652,6 +810,7 @@ impl NnueSearch {
             nodes: 0,
             mpc: self.mpc,
             probcut_level: 0,
+            expect_all: false,
             dev: 0,
             abort: self.abort.clone(),
             stop: self.stop.clone(),
@@ -986,13 +1145,12 @@ impl NnueSearch {
                         let d = (main_depth + ahead).min(depth);
                         let task_slot = slot.clone();
                         let root = *b;
-                        if pool.try_push(move || {
+                        pool.push(move || {
                             let mut wacc = w.nn.indices(root.black, root.white);
                             w.negamax(&root, &mut wacc, d, f32::NEG_INFINITY, f32::INFINITY);
                             task_slot.set(0.0, w.nodes);
-                        }) {
-                            slots.push(slot);
-                        }
+                        });
+                        slots.push(slot);
                     }
                 } else {
                     self.pool = pool;
@@ -1140,44 +1298,61 @@ impl NnueSearch {
         v
     }
 
-    /// Hands one child to the pool at a null window; `None` when it is full.
-    fn spawn_kid(
+    /// Opens the unsettled kids from `from` on to the pool; `None` when fewer than two remain.
+    #[allow(clippy::too_many_arguments)]
+    fn open_fan(
         &self,
-        child: Board,
+        b: &Board,
+        kids: &[Kid],
+        settled: &[bool],
+        from: usize,
         depth: u32,
         alpha: f32,
         stop: std::sync::Arc<AbortChain>,
-    ) -> Option<std::sync::Arc<Slot>> {
+        kids_all: bool,
+        slot_of: &mut [u8; MAX_KIDS],
+    ) -> Option<std::sync::Arc<Fan>> {
+        use std::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, AtomicUsize};
+        let mut fan_kids = Vec::new();
+        for j in from..kids.len() {
+            if !settled[j] {
+                slot_of[j] = fan_kids.len() as u8;
+                fan_kids.push(FanKid {
+                    pos: kids[j].0,
+                    flipped: kids[j].1,
+                    taken: AtomicBool::new(false),
+                    done: AtomicBool::new(false),
+                    bits: AtomicU32::new(0),
+                });
+            }
+        }
+        if fan_kids.len() < 2 {
+            *slot_of = [NO_SLOT; MAX_KIDS];
+            return None;
+        }
         let pool = self.pool.unwrap();
-        let slot = std::sync::Arc::new(Slot::new());
-        let (nn, tt, mpc, relax) = (self.nn.clone(), self.tt.clone(), self.mpc, self.mpc_relax);
-        let (gen, my_gen) = (self.done.clone(), self.my_gen);
-        let kid_dev = self.dev + 1;
-        let ext_stop = self.stop.clone();
-        let task_slot = slot.clone();
-        let pushed = pool.try_push(move || {
-            if stop.stopped() {
-                task_slot.set(ABORTED, 0);
-                return;
-            }
-            let mut w = NnueSearch::new(nn, tt);
-            w.mpc = mpc;
-            w.mpc_relax = relax;
-            w.pool = Some(pool);
-            w.abort = Some(stop.clone());
-            w.stop = ext_stop;
-            w.abort_countdown = 1;
-            w.done = gen;
-            w.my_gen = my_gen;
-            w.dev = kid_dev;
-            let mut cacc = w.nn.indices(child.black, child.white);
-            let v = w.negamax(&child, &mut cacc, depth, -(alpha + PVS_EPS), -alpha);
-            if v != ABORTED && -v > alpha {
-                stop.raise();
-            }
-            task_slot.set(v, w.nodes);
+        let fan = std::sync::Arc::new(Fan {
+            board: *b,
+            depth,
+            alpha,
+            left: AtomicUsize::new(fan_kids.len()),
+            kids: fan_kids,
+            helpers: AtomicUsize::new(0),
+            nodes: AtomicU64::new(0),
+            stop,
+            nn: self.nn.clone(),
+            tt: self.tt.clone(),
+            mpc: self.mpc,
+            mpc_relax: self.mpc_relax,
+            ext_stop: self.stop.clone(),
+            gen: self.done.clone(),
+            my_gen: self.my_gen,
+            dev: self.dev + 1,
+            kids_all,
+            pool,
         });
-        pushed.then_some(slot)
+        pool.open_fan(&fan);
+        Some(fan)
     }
 
     /// Pass, or the final score when neither side can move.
@@ -1299,6 +1474,7 @@ impl NnueSearch {
             let mut aborted = false;
             if try_high {
                 let hi = beta + margin;
+                self.expect_all = false;
                 let high = self.negamax(b, acc, pd, hi - PVS_EPS, hi);
                 if high == ABORTED {
                     aborted = true;
@@ -1308,6 +1484,7 @@ impl NnueSearch {
             }
             if !aborted && cut.is_none() && try_low {
                 let lo = alpha - margin;
+                self.expect_all = true;
                 let low = self.negamax(b, acc, pd, lo, lo + PVS_EPS);
                 if low == ABORTED {
                     aborted = true;
@@ -1336,12 +1513,16 @@ impl NnueSearch {
         beta: f32,
     ) -> f32 {
         self.nodes += 1;
+        let all_node = std::mem::take(&mut self.expect_all);
         if self.should_stop_or_done() {
             return ABORTED;
         }
         let moves = b.movable();
         if moves == 0 {
-            return self.after_pass(b, acc, depth, alpha, beta);
+            self.expect_all = !all_node;
+            let v = self.after_pass(b, acc, depth, alpha, beta);
+            self.expect_all = false;
+            return v;
         }
         if depth == 0 {
             return self.nn.eval_from_indices(acc, b);
@@ -1369,13 +1550,25 @@ impl NnueSearch {
         let mut best_move = 64u8;
         let mut moves = moves;
 
+        let narrow = beta - alpha <= PVS_EPS * 1.5;
+        let kids_all = narrow && !all_node;
+        let will_split = self.pool.is_some() && depth >= ybwc_min_depth();
+        // Every move of an expected All node gets searched, so its siblings need not wait for the first.
+        let early = will_split && narrow && all_node;
+
         let mut pre_searched = false;
-        if tt_move < 64 && depth >= 2 && moves.count_ones() > 1 && moves >> tt_move & 1 == 1 {
+        if !early
+            && tt_move < 64
+            && depth >= 2
+            && moves.count_ones() > 1
+            && moves >> tt_move & 1 == 1
+        {
             let pos = Position::from_index(tt_move as u32).unwrap();
             let mut nb = *b;
             let flipped = nb.make_move_bits(pos);
             let mut child = *acc;
             self.nn.ix_apply(&mut child, pos, flipped, mover);
+            self.expect_all = kids_all;
             let raw = self.negamax(&nb, &mut child, depth - 1, -beta, -alpha);
             if raw == ABORTED {
                 return ABORTED;
@@ -1403,10 +1596,19 @@ impl NnueSearch {
         let null_window = beta - alpha <= PVS_EPS * 1.5;
 
         let mut kids: [Kid; MAX_KIDS] = [(Position(0), 0, 0); MAX_KIDS];
-        let will_split = self.pool.is_some() && depth >= ybwc_min_depth();
         let ordered = depth >= 2 && moves.count_ones() > 1;
         let n_kids = if ordered {
-            self.ordered_into(b, acc, depth, moves, &mut kids, null_window, 64, tt_move2)
+            let first_key = if early { tt_move } else { 64 };
+            self.ordered_into(
+                b,
+                acc,
+                depth,
+                moves,
+                &mut kids,
+                null_window,
+                first_key,
+                tt_move2,
+            )
         } else {
             let mut n = 0usize;
             let mut m = moves;
@@ -1439,7 +1641,9 @@ impl NnueSearch {
                 None
             };
             let mut stop_fanout = false;
-            let mut pending: Vec<(usize, std::sync::Arc<Slot>)> = Vec::new();
+            let mut fan: Option<std::sync::Arc<Fan>> = None;
+            let mut fan_tried = false;
+            let mut slot_of = [NO_SLOT; MAX_KIDS];
             let mut research: Vec<usize> = Vec::new();
             let mut next_alpha = alpha;
 
@@ -1455,11 +1659,34 @@ impl NnueSearch {
                 nb.apply_flips(pos, flipped);
 
                 if first {
+                    if early {
+                        let stop = fan_stop.clone().unwrap();
+                        fan = self.open_fan(
+                            b,
+                            &kids[..n_kids],
+                            &settled,
+                            i + 1,
+                            depth - 1,
+                            alpha,
+                            stop,
+                            kids_all,
+                            &mut slot_of,
+                        );
+                        fan_tried = true;
+                        self.abort = fan_stop.clone();
+                    }
                     let mut child = *acc;
                     self.nn.ix_apply(&mut child, pos, flipped, mover);
+                    self.expect_all = kids_all;
                     let raw = self.negamax(&nb, &mut child, depth - 1, -beta, -alpha);
+                    if early {
+                        self.abort = outer.clone();
+                    }
                     if raw == ABORTED {
-                        aborted = true;
+                        if !early || self.torn_down() || outer.as_ref().is_some_and(|o| o.stopped())
+                        {
+                            aborted = true;
+                        }
                         break;
                     }
                     first = false;
@@ -1475,16 +1702,31 @@ impl NnueSearch {
                         next_alpha = alpha;
                     }
                     if alpha >= beta {
+                        if let Some(f) = &fan_stop {
+                            f.raise();
+                        }
                         break;
                     }
                     continue;
                 }
 
-                let is_last = (i + 1..n_kids).all(|j| settled[j]);
-                if will_split && !is_last {
+                if will_split && !fan_tried {
                     let stop = fan_stop.clone().unwrap();
-                    if let Some(slot) = self.spawn_kid(nb, depth - 1, alpha, stop) {
-                        pending.push((i, slot));
+                    fan = self.open_fan(
+                        b,
+                        &kids[..n_kids],
+                        &settled,
+                        i,
+                        depth - 1,
+                        alpha,
+                        stop,
+                        kids_all,
+                        &mut slot_of,
+                    );
+                    fan_tried = true;
+                }
+                if let Some(f) = fan.as_ref().filter(|_| slot_of[i] != NO_SLOT) {
+                    if !f.take(slot_of[i] as usize) {
                         continue;
                     }
                 }
@@ -1495,6 +1737,7 @@ impl NnueSearch {
                 let mut child = *acc;
                 self.nn.ix_apply(&mut child, pos, flipped, mover);
                 self.dev += 1;
+                self.expect_all = kids_all;
                 let raw = self.negamax(&nb, &mut child, depth - 1, -(alpha + PVS_EPS), -alpha);
                 self.dev -= 1;
                 if will_split {
@@ -1530,10 +1773,19 @@ impl NnueSearch {
                 }
             }
 
-            for (i, slot) in pending {
-                self.pool.unwrap().wait(&slot);
-                self.nodes += slot.nodes.load(std::sync::atomic::Ordering::Relaxed);
-                let raw = f32::from_bits(slot.bits.load(std::sync::atomic::Ordering::Relaxed));
+            let helped = fan.take();
+            if let Some(f) = &helped {
+                self.pool.unwrap().close_fan(f);
+                self.nodes += f.nodes.load(std::sync::atomic::Ordering::Relaxed);
+            }
+            for i in 0..n_kids {
+                let Some(raw) = helped
+                    .as_ref()
+                    .filter(|_| slot_of[i] != NO_SLOT)
+                    .and_then(|f| f.result(slot_of[i] as usize))
+                else {
+                    continue;
+                };
                 if raw == ABORTED || aborted {
                     if raw == ABORTED && self.torn_down() {
                         aborted = true;
