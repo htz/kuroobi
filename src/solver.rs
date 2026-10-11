@@ -502,7 +502,8 @@ impl EndPool {
 
 const SORT_ALPHA_DELTA: i32 = 12;
 const EDGE_STABILITY_ORDER_WEIGHT: i32 = 1;
-const ASPIRATION_WIDTH: i32 = 6;
+/// The exact pass opens one notch around the warm-up score: a wide window lets a wrong first move be searched exactly.
+const EXACT_ASPIRATION_WIDTH: i32 = 1;
 
 const WARM_ASPIRATION_WIDTH: i32 = 6;
 
@@ -539,7 +540,7 @@ static PROBE_STEP: std::sync::atomic::AtomicU16 = std::sync::atomic::AtomicU16::
 /// A probe runs only when the static evaluation already clears the bound by the margin less this.
 const SELECTIVE_GATE_OFFSET: f32 = 4.0;
 const SELECTIVE_PASS_MIN_EMPTIES: u8 = 18;
-const SELECTIVE_LADDER: [f32; 2] = [1.1, 1.8];
+const SELECTIVE_LADDER: [f32; 3] = [0.6, 1.1, 1.8];
 /// 93%, the loosest confidence the selective band itself plays.
 const WARM_FALLBACK_T: f32 = 1.8;
 
@@ -1112,7 +1113,6 @@ struct Worker<'a> {
     stop: Option<&'a crate::midgame::StopHandle>,
     best: Option<Position>,
     warm_score: Option<i32>,
-    warm_window: Option<(i32, i32)>,
     selective_t: Option<f32>,
     nnue: Option<NnueProbe>,
     sigma_scale: f32,
@@ -1139,7 +1139,6 @@ impl<'a> Worker<'a> {
             nodes: 0,
             best: None,
             warm_score: None,
-            warm_window: None,
             selective_t: None,
             order_ix: crate::pattern_index::PatternIndices::ZERO,
             nnue: None,
@@ -1522,6 +1521,8 @@ impl Solver {
             let mut b = *board;
             let mut rungs: Vec<f32> = SELECTIVE_LADDER.to_vec();
             if let Some(t) = selective {
+                // The cheapest rung is measured for the exact solve only.
+                rungs.remove(0);
                 rungs.retain(|&r| r < t);
                 rungs.truncate(1);
                 rungs.push(t);
@@ -1703,19 +1704,7 @@ impl Worker<'_> {
 
     fn perfect(&mut self, board: &mut Board, ev: Option<&Linear>) -> i32 {
         if let Some(score) = self.warm_score {
-            if let Some((lo, hi)) = self.warm_window {
-                if lo < score && score < hi {
-                    let val = self.pvs_root(board, lo, hi, ev);
-                    if val == ABORTED {
-                        return ABORTED;
-                    }
-                    if lo < val && val < hi {
-                        return val;
-                    }
-                    return self.aspiration(board, val, ev);
-                }
-            }
-            return self.aspiration(board, score, ev);
+            return self.aspiration_width(board, score, EXACT_ASPIRATION_WIDTH, ev);
         }
 
         let mut val = self.pvs_root(board, -1, 1, ev);
@@ -1766,10 +1755,6 @@ impl Worker<'_> {
         rounded.clamp(-62, 62)
     }
 
-    fn aspiration(&mut self, board: &mut Board, score: i32, ev: Option<&Linear>) -> i32 {
-        self.aspiration_width(board, score, ASPIRATION_WIDTH, ev)
-    }
-
     fn aspiration_width(
         &mut self,
         board: &mut Board,
@@ -1792,17 +1777,16 @@ impl Worker<'_> {
             if val <= lo && lo > -64 {
                 score = val;
                 left = (left * 2).min(128);
-                right = 0;
+                // One above, so an upper bound that is the value itself lands inside.
+                right = 1;
             } else if val >= hi && hi < 64 {
                 score = val;
                 left = 1;
-                right = (right * 2).min(128);
+                right = (right * 2).clamp(1, 128);
             } else {
-                self.warm_window = Some((lo, hi));
                 return val;
             }
         }
-        self.warm_window = Some((-64, 64));
         self.pvs_root(board, -64, 64, ev)
     }
 

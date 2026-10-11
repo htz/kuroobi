@@ -1557,8 +1557,6 @@ column says otherwise:
 - 32-byte alignment or natural layout for the bound-cache entry, which the
   feature list had carried as unmeasured: -0.97% and -0.11%. The packed
   19-byte entry stays
-- clamping the exact pass's reopened aspiration window to +/-1 instead of
-  the warm rung's converged span: 0.6% fewer nodes and no time
 - the dead `need <= 32` test in the stability gate, which the threshold
   test above it already implies: -0.25%. Summing the two population counts
   the ordering needs in one vector instead of two: also a loss. Below this

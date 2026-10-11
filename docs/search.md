@@ -371,16 +371,24 @@ the exact pass's window**.
   that trusts the best move only** (`demote_to_seed_shared`, a date
   bump: entries at 12 or more empties from an earlier rung keep only
   their move). An exact search must not believe estimated bounds
-- The exact pass starts from the window the last rung settled in, or
-  failing that a **±6 window** centred on its score, and widens only
-  the side that failed, doubling each time
+- The exact pass starts from a **±1 window** on the last rung's score
+  and widens only the side that failed, doubling each time. It used to
+  reuse the 12-wide window the last rung settled in, and where that
+  rung's first move is not the exact one, a bound far below the value
+  has the wrong move searched exactly: FFO74 took 16.8G nodes from
+  `[-32,-20]` and 31.1G from `[-34,-22]`, against 10.4G from ±1 (true
+  value -30, rung score -28). FFO60-79 at 8 threads goes from 1644.5 s
+  to 1582.9 s, all of it that one problem; FFO40-59 does not move
 - It triggers at 18 or more empties. Below that the exact search is
   cheap enough that the pass does not pay for itself (on FFO1-19, +24%
   time at 16 empties, +62% at 14)
-- Two rungs, `t = 1.1` then `1.8`. A third (2.6) was tried too, but
-  for solving all the way out the cost of the extra rung exceeds the
-  gain. More rungs are meaningful when the goal is time control (an
-  answer comes out even if the search is cut off midway)
+- Three rungs, `t = 0.6`, `1.1`, then `1.8`. The cheap first rung gives
+  the next one its moves, which otherwise searches on a cold table:
+  FFO40-59 takes 9.63G → 9.34G nodes on 1 thread and 47.4 s → 45.0 s on
+  8. It needs the ±1 exact window above: with the old window it moved
+  that window's lower bound and FFO60-79 took 1855 s instead of 1643 s.
+  A rung above 1.8 (2.6) costs more than it gains when solving all the
+  way out. A selective solve for the clock skips the 0.6 rung
 
 There is a pitfall: **it does not work unless bounds are demoted
 between rungs.** Without the demotion a careful rung trusts a coarse
