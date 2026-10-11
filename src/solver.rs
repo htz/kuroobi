@@ -460,8 +460,10 @@ impl EndPool {
             sp.active.fetch_add(1, Ordering::AcqRel);
             self.split_guard[i].fetch_sub(1, Ordering::Release);
             let ran = unsafe { help_split(sp) };
+            // The owner frees the split the moment `active` reads zero, so take the handle first.
+            let waiter = sp.waiter.clone();
             if sp.active.fetch_sub(1, Ordering::AcqRel) == 1 {
-                sp.waiter.unpark();
+                waiter.unpark();
             }
             if ran {
                 return true;
