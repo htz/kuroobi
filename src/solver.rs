@@ -2174,29 +2174,35 @@ impl Worker<'_> {
             }
         }
 
-        if moves.len() - next > 1 && board.empty_count() >= parallel_min_empties() && lower < upper
-        {
-            moves[next..].sort_unstable_by_key(|m| m.value);
-            if let Some((val, bpos)) = self.split_siblings(board, &moves[next..], lower, upper, ev)
-            {
-                if val == ABORTED {
-                    return ABORTED;
-                }
-                if val > max {
-                    max = val;
-                    if let Some(p) = bpos {
-                        best = Some(p);
-                    }
-                }
-                self.store(board, hash, alpha, beta, max, best);
-                return max;
-            }
-        }
+        // A cut node whose first move failed is usually cut by the next one: search that alone first.
+        let mut alone =
+            usize::from(cut_node && self.selective_t.is_none() && self.budget.pool.workers > 0);
+        let mut may_split = board.empty_count() >= parallel_min_empties();
 
         while next < moves.len() {
             if lower >= upper {
                 break;
             }
+            if may_split && alone == 0 && moves.len() - next > 1 {
+                may_split = false;
+                moves[next..].sort_unstable_by_key(|m| m.value);
+                if let Some((val, bpos)) =
+                    self.split_siblings(board, &moves[next..], lower, upper, ev)
+                {
+                    if val == ABORTED {
+                        return ABORTED;
+                    }
+                    if val > max {
+                        max = val;
+                        if let Some(p) = bpos {
+                            best = Some(p);
+                        }
+                    }
+                    self.store(board, hash, alpha, beta, max, best);
+                    return max;
+                }
+            }
+            alone = alone.saturating_sub(1);
             Self::select_next(&mut moves, next);
             let m = moves[next];
             next += 1;
