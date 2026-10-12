@@ -16,7 +16,7 @@ online server GGS.
 | | |
 |---|---|
 | **Strength** | **53.9%** against Edax 4.5.5 (level 13) over 800 games<br><sub>2315-2337 in the GGS random-opening pool (2026-08-21)</sub> |
-| **Endgame** | Solves FFO40-59 in **283 s** (1 thread) / **45 s** (8 threads); Edax 4.6 takes 520 s / 82 s and Egaroucid 7.8.0 495 s / 67 s on the same machine<br><sub>`problems/fforum-40-59.obf`, with the rest of the FFO suite beside it</sub> |
+| **Endgame** | Solves FFO40-59 in **283 s** (1 thread) / **43 s** (8 threads); Edax 4.6 takes 520 s / 82 s and Egaroucid 7.8.0 495 s / 67 s on the same machine<br><sub>`problems/fforum-40-59.obf`, with the rest of the FFO suite beside it</sub> |
 | **Evaluation** | Beats Edax and Zebra in a fixed 8-ply round robin; does not reach Egaroucid |
 | **Implementation** | Rust. The engine itself pulls in no external crates |
 | **GUI** | Tauri + TypeScript. Play, study, book, GGS |
@@ -115,8 +115,8 @@ Compared against Edax 4.6 and Egaroucid 7.8.0, each built natively for
 arm64 and run on the same machine (theirs on 2026-10-11, ours again on
 2026-10-12). **The lead comes from a smaller search tree, not from speed
 per node** — Edax's nodes are the cheaper ones. From 1 to 8 threads we
-speed up 6.2x, Edax 6.4x and Egaroucid 7.4x, so the lead over Edax holds
-at 1.8x while the one over Egaroucid narrows from 1.7x to 1.5x. Neither
+speed up 6.5x, Edax 6.4x and Egaroucid 7.4x, so the lead over Edax holds
+at 1.8-1.9x while the one over Egaroucid narrows from 1.7x to 1.5x. Neither
 number alone measures the engine. On the harder FFO60-79, eight threads
 take 26 minutes against Edax's 44 and Egaroucid's 53.
 

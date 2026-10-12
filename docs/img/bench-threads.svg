@@ -23,36 +23,36 @@
 <line x1="60" y1="108.0" x2="876" y2="108.0" stroke="#e6e9ec" stroke-width="1"/>
 <text x="52" y="112.0" font-size="10.5" fill="#8b949e" text-anchor="end">600</text>
 <text x="52" y="94" font-size="10.5" fill="#8b949e" text-anchor="end">sec</text>
-<path d="M73.6 326 L73.6 227.2 Q73.6 223.2 77.6 223.2 L113.6 223.2 Q117.6 223.2 117.6 227.2 L117.6 326 Z" fill="#2a78d6"/>
-<text x="95.6" y="217.2" font-size="11" font-weight="700" fill="#1f2328" text-anchor="middle">283</text>
+<path d="M73.6 326 L73.6 227.3 Q73.6 223.3 77.6 223.3 L113.6 223.3 Q117.6 223.3 117.6 227.3 L117.6 326 Z" fill="#2a78d6"/>
+<text x="95.6" y="217.3" font-size="11" font-weight="700" fill="#1f2328" text-anchor="middle">283</text>
 <path d="M119.6 326 L119.6 140.9 Q119.6 136.9 123.6 136.9 L159.6 136.9 Q163.6 136.9 163.6 140.9 L163.6 326 Z" fill="#eb6834"/>
 <text x="141.6" y="130.9" font-size="11" font-weight="700" fill="#1f2328" text-anchor="middle">520</text>
 <path d="M165.6 326 L165.6 150.3 Q165.6 146.3 169.6 146.3 L205.6 146.3 Q209.6 146.3 209.6 150.3 L209.6 326 Z" fill="#3f9c5a"/>
 <text x="187.6" y="140.3" font-size="11" font-weight="700" fill="#1f2328" text-anchor="middle">495</text>
 <text x="141.6" y="348" font-size="12" fill="#1f2328" text-anchor="middle">1 thread</text>
-<path d="M236.8 326 L236.8 273.6 Q236.8 269.6 240.8 269.6 L276.8 269.6 Q280.8 269.6 280.8 273.6 L280.8 326 Z" fill="#2a78d6"/>
-<text x="258.8" y="263.6" font-size="11" font-weight="700" fill="#1f2328" text-anchor="middle">155</text>
+<path d="M236.8 326 L236.8 276.8 Q236.8 272.8 240.8 272.8 L276.8 272.8 Q280.8 272.8 280.8 276.8 L280.8 326 Z" fill="#2a78d6"/>
+<text x="258.8" y="266.8" font-size="11" font-weight="700" fill="#1f2328" text-anchor="middle">146</text>
 <path d="M282.8 326 L282.8 232.3 Q282.8 228.3 286.8 228.3 L322.8 228.3 Q326.8 228.3 326.8 232.3 L326.8 326 Z" fill="#eb6834"/>
 <text x="304.8" y="222.3" font-size="11" font-weight="700" fill="#1f2328" text-anchor="middle">269</text>
 <path d="M328.8 326 L328.8 238.8 Q328.8 234.8 332.8 234.8 L368.8 234.8 Q372.8 234.8 372.8 238.8 L372.8 326 Z" fill="#3f9c5a"/>
 <text x="350.8" y="228.8" font-size="11" font-weight="700" fill="#1f2328" text-anchor="middle">251</text>
 <text x="304.8" y="348" font-size="12" fill="#1f2328" text-anchor="middle">2 threads</text>
-<path d="M400.0 326 L400.0 300.6 Q400.0 296.6 404.0 296.6 L440.0 296.6 Q444.0 296.6 444.0 300.6 L444.0 326 Z" fill="#2a78d6"/>
-<text x="422.0" y="290.6" font-size="11" font-weight="700" fill="#1f2328" text-anchor="middle">80.9</text>
+<path d="M400.0 326 L400.0 301.8 Q400.0 297.8 404.0 297.8 L440.0 297.8 Q444.0 297.8 444.0 301.8 L444.0 326 Z" fill="#2a78d6"/>
+<text x="422.0" y="291.8" font-size="11" font-weight="700" fill="#1f2328" text-anchor="middle">77.6</text>
 <path d="M446.0 326 L446.0 278.0 Q446.0 274.0 450.0 274.0 L486.0 274.0 Q490.0 274.0 490.0 278.0 L490.0 326 Z" fill="#eb6834"/>
 <text x="468.0" y="268.0" font-size="11" font-weight="700" fill="#1f2328" text-anchor="middle">143</text>
 <path d="M492.0 326 L492.0 284.5 Q492.0 280.5 496.0 280.5 L532.0 280.5 Q536.0 280.5 536.0 284.5 L536.0 326 Z" fill="#3f9c5a"/>
 <text x="514.0" y="274.5" font-size="11" font-weight="700" fill="#1f2328" text-anchor="middle">125</text>
 <text x="468.0" y="348" font-size="12" fill="#1f2328" text-anchor="middle">4 threads</text>
-<path d="M563.2 326 L563.2 313.5 Q563.2 309.5 567.2 309.5 L603.2 309.5 Q607.2 309.5 607.2 313.5 L607.2 326 Z" fill="#2a78d6"/>
-<text x="585.2" y="303.5" font-size="11" font-weight="700" fill="#1f2328" text-anchor="middle">45.3</text>
+<path d="M563.2 326 L563.2 314.3 Q563.2 310.3 567.2 310.3 L603.2 310.3 Q607.2 310.3 607.2 314.3 L607.2 326 Z" fill="#2a78d6"/>
+<text x="585.2" y="304.3" font-size="11" font-weight="700" fill="#1f2328" text-anchor="middle">43.2</text>
 <path d="M609.2 326 L609.2 300.3 Q609.2 296.3 613.2 296.3 L649.2 296.3 Q653.2 296.3 653.2 300.3 L653.2 326 Z" fill="#eb6834"/>
 <text x="631.2" y="290.3" font-size="11" font-weight="700" fill="#1f2328" text-anchor="middle">81.8</text>
 <path d="M655.2 326 L655.2 305.7 Q655.2 301.7 659.2 301.7 L695.2 301.7 Q699.2 301.7 699.2 305.7 L699.2 326 Z" fill="#3f9c5a"/>
 <text x="677.2" y="295.7" font-size="11" font-weight="700" fill="#1f2328" text-anchor="middle">66.9</text>
 <text x="631.2" y="348" font-size="12" fill="#1f2328" text-anchor="middle">8 threads</text>
-<path d="M726.4 326 L726.4 314.8 Q726.4 310.8 730.4 310.8 L766.4 310.8 Q770.4 310.8 770.4 314.8 L770.4 326 Z" fill="#2a78d6"/>
-<text x="748.4" y="304.8" font-size="11" font-weight="700" fill="#1f2328" text-anchor="middle">41.8</text>
+<path d="M726.4 326 L726.4 315.0 Q726.4 311.0 730.4 311.0 L766.4 311.0 Q770.4 311.0 770.4 315.0 L770.4 326 Z" fill="#2a78d6"/>
+<text x="748.4" y="305.0" font-size="11" font-weight="700" fill="#1f2328" text-anchor="middle">41.2</text>
 <path d="M772.4 326 L772.4 300.6 Q772.4 296.6 776.4 296.6 L812.4 296.6 Q816.4 296.6 816.4 300.6 L816.4 326 Z" fill="#eb6834"/>
 <text x="794.4" y="290.6" font-size="11" font-weight="700" fill="#1f2328" text-anchor="middle">80.8</text>
 <path d="M818.4 326 L818.4 304.5 Q818.4 300.5 822.4 300.5 L858.4 300.5 Q862.4 300.5 862.4 304.5 L862.4 326 Z" fill="#3f9c5a"/>
