@@ -197,6 +197,18 @@ impl<'p> AbortFlag<'p> {
         }
         false
     }
+
+    fn descends_from(&self, ancestor: &AbortFlag) -> bool {
+        let want = ancestor as *const AbortFlag as *const ();
+        let mut cur = Some(self);
+        while let Some(f) = cur {
+            if std::ptr::eq(f as *const AbortFlag as *const (), want) {
+                return true;
+            }
+            cur = f.parent;
+        }
+        false
+    }
 }
 
 const ABORTED: i32 = i32::MIN + 1;
@@ -377,6 +389,8 @@ unsafe fn help_split(sp: &SplitPoint) -> bool {
 }
 
 const SPLIT_SLOTS: usize = 32;
+/// How long a waiting owner sleeps between looks for a split under its own; 50 and 500 us measured the same.
+const OWNER_POLL: std::time::Duration = std::time::Duration::from_micros(200);
 
 const SPEC_SPLIT_MAX_EMPTIES: u8 = 24;
 
@@ -448,28 +462,38 @@ impl EndPool {
             self.split_guard[i].fetch_sub(1, Ordering::Release);
         }
         order.sort_unstable();
-        for &(_, slot) in order.iter() {
-            let i = slot as usize;
-            self.split_guard[i].fetch_add(1, Ordering::AcqRel);
-            let p = self.split_ptr[i].load(Ordering::Acquire);
-            if p.is_null() {
-                self.split_guard[i].fetch_sub(1, Ordering::Release);
-                continue;
-            }
-            let sp = unsafe { &*p };
-            sp.active.fetch_add(1, Ordering::AcqRel);
+        order
+            .iter()
+            .any(|&(_, slot)| self.help_slot(slot as usize, |_| true))
+    }
+
+    fn help_slot(&self, i: usize, wanted: impl Fn(&SplitPoint) -> bool) -> bool {
+        use std::sync::atomic::Ordering;
+        self.split_guard[i].fetch_add(1, Ordering::AcqRel);
+        let p = self.split_ptr[i].load(Ordering::Acquire);
+        if p.is_null() || !wanted(unsafe { &*p }) {
             self.split_guard[i].fetch_sub(1, Ordering::Release);
-            let ran = unsafe { help_split(sp) };
-            // The owner frees the split the moment `active` reads zero, so take the handle first.
-            let waiter = sp.waiter.clone();
-            if sp.active.fetch_sub(1, Ordering::AcqRel) == 1 {
-                waiter.unpark();
-            }
-            if ran {
-                return true;
-            }
+            return false;
         }
-        false
+        let sp = unsafe { &*p };
+        sp.active.fetch_add(1, Ordering::AcqRel);
+        self.split_guard[i].fetch_sub(1, Ordering::Release);
+        let ran = unsafe { help_split(sp) };
+        // The owner frees the split the moment `active` reads zero, so take the handle first.
+        let waiter = sp.waiter.clone();
+        if sp.active.fetch_sub(1, Ordering::AcqRel) == 1 {
+            waiter.unpark();
+        }
+        ran
+    }
+
+    /// Only splits under `ancestor`: anything else could outlast the result its owner is waiting for.
+    fn help_under(&self, ancestor: &AbortFlag) -> bool {
+        (0..SPLIT_SLOTS).any(|i| {
+            self.help_slot(i, |sp| {
+                unsafe { &*(sp.group as *const AbortFlag<'static>) }.descends_from(ancestor)
+            })
+        })
     }
 
     fn worker_loop(&self) {
@@ -1963,7 +1987,9 @@ impl Worker<'_> {
             pool.unregister_split(i, &sp);
         }
         while sp.active.load(Ordering::Acquire) != 0 {
-            std::thread::park();
+            if !pool.help_under(&group) {
+                std::thread::park_timeout(OWNER_POLL);
+            }
         }
 
         self.nodes += sp.nodes.load(Ordering::Relaxed);
