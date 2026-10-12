@@ -533,6 +533,30 @@ smaller tree. The single-thread search is node-for-node unchanged.
 `MPC_T` — are constants in a normal build; `--features tunable` reads them
 from the environment variable of the same name.)
 
+**The mobility weight in null-window move ordering is 0.25, not 17/7.**
+Ordering scores a move by the opponent's weighted mobility and the child's
+static evaluation. The ratio 17 : 7 came with a pattern evaluation in whole
+discs; against our evaluation it lets mobility outvote the value. Same 48
+positions, depth 26, weight 17/7 -> 0.25:
+
+| threads | before | after | nodes before | after |
+|---:|---:|---:|---:|---:|
+| 1 | 161.3 s | 104.2 s | 379M | 248M |
+| 2 | 82.8 s | 62.1 s | 372M | 277M |
+| 4 | 47.5-48.4 s | 35.3-39.2 s | 394-401M | 288-322M |
+| 8 | 33.2-35.4 s | 28.0-28.8 s | 451-493M | 374-380M |
+
+At depth 22 on 8 threads 13.3-13.4 s becomes 11.1-11.6 s. The returned
+values move by 0.09 discs on average and 3 of the 48 moves change, the
+same order as between one thread and eight. The sweep on one thread
+(nodes at depth 26): 0 -> 96M on a 12-position subset where 17/7 gives
+107M, 0.12 / 0.24 / 0.36 / 0.6 / 0.85 -> 76 / 74 / 75 / 75 / 87M, and 1.5
+times 17/7 -> 113M. The endgame solver's probes use the same ordering and
+do not notice: FFO40-59 on 8 threads 42.8-43.1 s before, 43.1 s after.
+**The smaller tree splits worse**: the 8-thread node count is now 1.5
+times the one-thread count instead of 1.25 times, so the gain shrinks from
+35% on one thread to 17% on eight.
+
 **A parent waiting for its fan helps only the fans under it.** It used to
 take a sibling from any open node. A node elsewhere can hold it past the
 moment its own fan is done, and the cut it is about to return then

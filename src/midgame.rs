@@ -1234,8 +1234,9 @@ impl NnueSearch {
         tt_move2: u8,
     ) -> usize {
         let mover = b.player();
+        // 0.25 measured: 17/7, the ratio that suits a disc-scaled pattern evaluation, searched 1.5x the nodes.
         let (w_mob, w_pm, w_val) = if null_window {
-            (17.0 / 7.0, 0.0, 1.0)
+            (0.25, 0.0, 1.0)
         } else {
             (35.0 / 269.0, 17.0 / 269.0, 1.0)
         };
