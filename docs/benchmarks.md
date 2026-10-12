@@ -439,6 +439,10 @@ there is an idle worker, so anything put in the queue is certain to be
 picked up. That is why parking is safe (an `unpark` arriving first is not
 lost).
 
+(The endgame solver has since changed shape: a waiting owner now helps the
+splits under its own before it sleeps — see "A waiting split owner helps
+the splits under its own" below.)
+
 #### Rejected: dropping the fan-out on an alpha improvement
 
 Search all younger brothers with a null window at the current alpha and
