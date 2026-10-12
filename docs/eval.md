@@ -533,12 +533,37 @@ smaller tree. The single-thread search is node-for-node unchanged.
 `MPC_T` — are constants in a normal build; `--features tunable` reads them
 from the environment variable of the same name.)
 
+**A parent waiting for its fan helps only the fans under it.** It used to
+take a sibling from any open node. A node elsewhere can hold it past the
+moment its own fan is done, and the cut it is about to return then
+arrives late, after other threads have searched siblings it would have
+stopped. Same 48 positions, before -> after:
+
+| threads | depth | before | after |
+|---:|---:|---:|---:|
+| 2 | 26 | 84.0 s | 82.8 s |
+| 4 | 26 | 49.6 s | 47.5-48.4 s |
+| 8 | 26 | 37.8 s (36.0-39.5, 10 runs) | 35.3 s (33.2-37.6, 8 runs) |
+| 8 | 22 | 13.7-14.1 s | 13.3-13.4 s |
+
+Nodes at 8 threads fall from 511M to 469M (379M on one thread); nodes per
+second are unchanged. A parent that helps nobody searches fewer nodes
+still (435M) but idles, 35.9-36.9 s.
+
 Rejected along the way, same 48 positions at 8 threads:
 
 - **Speculating on every null-window node with a low-priority queue**:
   occupancy 6.7 cores, but 2.2x the nodes and 83 s against 56 s.
 - **A deeper task queue in the old scheme** (idle count + 8 / + 1000):
   nodes +20% / +38%, 60.8 s / 68.4 s against 54-57 s.
+- **Idle threads joining the deepest open node** instead of the one
+  nearest the root, or the newest: 64-72 s and twice the nodes.
+- **Letting a PV node's siblings finish when one of them beats alpha**,
+  instead of stopping them for the re-search: 39.6-40.5 s.
+- **Searching the second move alone at an expected Cut node** before
+  opening the rest: 40.3-41.9 s.
+- **No early opening at expected All nodes**: 12.9 s against 9.5 s on a
+  12-position subset.
 - **Spinning before a worker sleeps**: no gain in time, more nodes. The
   idle time was missing work, not slow wake-ups.
 

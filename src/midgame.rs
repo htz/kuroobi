@@ -376,6 +376,18 @@ impl AbortChain {
             }
         }
     }
+    fn descends_from(&self, ancestor: &AbortChain) -> bool {
+        let mut n = self;
+        loop {
+            if std::ptr::eq(n, ancestor) {
+                return true;
+            }
+            match &n.parent {
+                Some(p) => n = p,
+                None => return false,
+            }
+        }
+    }
 }
 
 struct Slot {
@@ -534,7 +546,7 @@ impl Pool {
         }
     }
 
-    /// Takes back what nobody started and waits out the helpers, helping other fans meanwhile.
+    /// Takes back what nobody started and waits out the helpers, helping the fans under this one meanwhile.
     fn close_fan(&self, f: &std::sync::Arc<Fan>) {
         use std::sync::atomic::Ordering;
         for k in 0..f.kids.len() {
@@ -547,7 +559,8 @@ impl Pool {
         self.n_fans.fetch_sub(1, Ordering::Relaxed);
         let mut idle = 0u32;
         while f.helpers.load(Ordering::Acquire) > 0 {
-            if self.help_any() {
+            // A fan elsewhere would hold this thread past its own result, and a late cut is searched siblings.
+            if self.help(Some(&f.stop)) {
                 idle = 0;
                 continue;
             }
@@ -567,14 +580,17 @@ impl Pool {
     }
 
     /// Joins the open fan nearest the root: its siblings are the largest pieces of work.
-    fn help_any(&self) -> bool {
+    fn help(&self, under: Option<&AbortChain>) -> bool {
         use std::sync::atomic::Ordering;
         if self.n_fans.load(Ordering::Relaxed) == 0 {
             return false;
         }
         let pick = {
             let fans = self.fans.lock().unwrap();
-            let best = fans.iter().filter(|f| f.open()).max_by_key(|f| f.depth);
+            let best = fans
+                .iter()
+                .filter(|f| f.open() && under.is_none_or(|a| f.stop.descends_from(a)))
+                .max_by_key(|f| f.depth);
             best.map(|f| {
                 f.helpers.fetch_add(1, Ordering::AcqRel);
                 f.clone()
@@ -644,7 +660,7 @@ impl Pool {
                     if self.fan_open() {
                         drop(q);
                         self.idle.fetch_sub(1, Ordering::Relaxed);
-                        self.help_any();
+                        self.help(None);
                         self.idle.fetch_add(1, Ordering::Relaxed);
                         q = self.q.lock().unwrap();
                         continue;
