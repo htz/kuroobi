@@ -166,6 +166,7 @@ export interface GameResult {
   seq: number;
   my_rating: number | null;
   at: number;
+  boards?: { id: string; kifu: string; ggf: string }[];
 }
 
 interface HistoryRow {

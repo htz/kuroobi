@@ -284,6 +284,16 @@ pub struct GameResult {
     pub my_rating: Option<f32>,
     #[serde(default)]
     pub at: u64,
+    /// Every board of the match; `kifu` and `ggf` above hold only the first, which lost half of each synchro pair.
+    #[serde(default)]
+    pub boards: Vec<BoardRecord>,
+}
+
+#[derive(Clone, Serialize, serde::Deserialize, Default)]
+pub struct BoardRecord {
+    pub id: String,
+    pub kifu: String,
+    pub ggf: String,
 }
 
 #[derive(Clone, Serialize, Default)]
@@ -1059,6 +1069,10 @@ impl MatchState {
     }
 
     fn ggf(&self, id: &str, result: Option<&str>) -> String {
+        self.ggf_with(id, result, false)
+    }
+
+    fn ggf_with(&self, id: &str, result: Option<&str>, evals: bool) -> String {
         let board = match self.start_string() {
             s if s.len() == 66 => s.replace('X', "*"),
             _ => format!(
@@ -1086,13 +1100,19 @@ impl MatchState {
         }
         out.push_str(&format!("BO[8 {board}]"));
         let mut black = !board.ends_with(" O");
-        for mv in self.moves.values() {
+        for (n, mv) in &self.moves {
             let tag = if black { "B" } else { "W" };
-            let m = if mv.eq_ignore_ascii_case("pa") || mv.eq_ignore_ascii_case("pass") {
+            let mut m = if mv.eq_ignore_ascii_case("pa") || mv.eq_ignore_ascii_case("pass") {
                 "PA".to_string()
             } else {
                 mv.to_uppercase()
             };
+            if let Some(&(Some(ev), secs)) = self.move_evals.get(n).filter(|_| evals) {
+                m.push_str(&format!("/{ev:.2}"));
+                if let Some(t) = secs {
+                    m.push_str(&format!("/{t:.2}"));
+                }
+            }
             out.push_str(&format!("{tag}[{m}]"));
             black = !black;
         }
@@ -1217,7 +1237,7 @@ fn finish_match(
     ended: &str,
     left_by: &str,
     archive: &str,
-) -> Vec<MatchState> {
+) -> Vec<(String, MatchState)> {
     let mut out = Vec::new();
     for k in boards_of(matches, id) {
         if let Some(m) = matches.get_mut(&k) {
@@ -1233,7 +1253,7 @@ fn finish_match(
                 m.ended = ended.to_string();
                 m.left_by = left_by.to_string();
             }
-            out.push(m.snapshot());
+            out.push((k, m.snapshot()));
         }
     }
     out
@@ -3692,8 +3712,17 @@ fn handle_match_end(
         &who,
         archive,
     );
-    dropped.sort_by_key(|m| m.seen);
-    let m = dropped.first();
+    dropped.sort_by_key(|(_, m)| m.seen);
+    let m = dropped.first().map(|(_, m)| m);
+    let mut boards: Vec<BoardRecord> = dropped
+        .iter()
+        .map(|(k, m)| BoardRecord {
+            id: k.clone(),
+            kifu: m.kifu(),
+            ggf: m.ggf_with(k, Some(m.result.as_str()).filter(|r| !r.is_empty()), true),
+        })
+        .collect();
+    boards.sort_by(|a, b| a.id.cmp(&b.id));
     let (kifu, ggf, opp) = match &m {
         Some(m) => (m.kifu(), m.ggf(&id, re.as_deref()), m.opp_name.clone()),
         None => (String::new(), String::new(), String::new()),
@@ -3734,6 +3763,7 @@ fn handle_match_end(
                 .or(s.my_rating)
         }),
         at: now,
+        boards,
     };
     append_history(&result);
     let mut s = ctx.snap.lock().unwrap();
@@ -3770,7 +3800,7 @@ fn handle_match_end(
     if !ctx.snap.lock().unwrap().engine.learn {
         return;
     }
-    for lm in &dropped {
+    for (_, lm) in &dropped {
         if lm.my_color.is_none() {
             continue; // watched games are not imported (not our choices)
         }
@@ -4454,6 +4484,23 @@ mod tests {
     }
 
     #[test]
+    fn a_board_record_carries_each_move_s_eval_and_time() {
+        let mut m = MatchState::new();
+        m.moves = [
+            (1u32, "f5".to_string()),
+            (2, "d6".to_string()),
+            (3, "pa".to_string()),
+        ]
+        .into();
+        m.move_evals.insert(1, (Some(1.5), Some(2.25)));
+        m.move_evals.insert(2, (Some(-2.0), None));
+
+        let full = m.ggf_with(".7.1", Some("+4.00"), true);
+        assert!(full.contains("B[F5/1.50/2.25]W[D6/-2.00]B[PA]"), "{full}");
+        assert!(m.ggf(".7.1", None).contains("B[F5]W[D6]B[PA]"));
+    }
+
+    #[test]
     fn the_eval_series_keeps_the_moves_nobody_reported() {
         use std::collections::BTreeMap;
         let mut m = MatchState::new();
@@ -4545,7 +4592,14 @@ mod tests {
         b.result = "-18.00".into();
         ms.insert(".4.1".into(), b);
 
-        finish_match(&mut ms, ".4", "-4.00", "finished", "", ".85929");
+        let mut both = finish_match(&mut ms, ".4", "-4.00", "finished", "", ".85929");
+        both.sort_by(|a, b| a.0.cmp(&b.0));
+        let ids: Vec<&str> = both.iter().map(|(k, _)| k.as_str()).collect();
+        assert_eq!(
+            ids,
+            [".4.0", ".4.1"],
+            "a synchro match hands back both boards"
+        );
         assert_eq!(ms[".4.0"].result, "+10.00");
         assert_eq!(ms[".4.1"].result, "-18.00");
 
