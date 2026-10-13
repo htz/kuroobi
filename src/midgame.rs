@@ -1157,25 +1157,33 @@ impl NnueSearch {
                 let lazy = main_depth >= smp_min_depth() && main_depth <= smp_max_depth();
                 let gen = std::sync::Arc::new(std::sync::atomic::AtomicU32::new(main_depth));
                 let mut slots = Vec::new();
-                if let Some(pool) = pool.filter(|_| lazy) {
+                let root_task = |mut w: NnueSearch, d: u32| {
+                    let slot = std::sync::Arc::new(Slot::new());
+                    w.done = Some(gen.clone());
+                    w.my_gen = main_depth;
+                    let task_slot = slot.clone();
+                    let root = *b;
+                    pool.unwrap().push(move || {
+                        let mut wacc = w.nn.indices(root.black, root.white);
+                        w.negamax(&root, &mut wacc, d, f32::NEG_INFINITY, f32::INFINITY);
+                        task_slot.set(0.0, w.nodes);
+                    });
+                    slot
+                };
+                if pool.is_some() && lazy {
                     for idx in 0..workers {
-                        let slot = std::sync::Arc::new(Slot::new());
                         let mut w = self.worker();
-                        w.done = Some(gen.clone());
-                        w.my_gen = main_depth;
                         let ahead = (idx as u32 + 1).trailing_zeros() * smp_spread();
                         w.mpc_relax = (idx as u32 / 2).min(smp_sharpen_max());
-                        let d = (main_depth + ahead).min(depth);
-                        let task_slot = slot.clone();
-                        let root = *b;
-                        pool.push(move || {
-                            let mut wacc = w.nn.indices(root.black, root.white);
-                            w.negamax(&root, &mut wacc, d, f32::NEG_INFINITY, f32::INFINITY);
-                            task_slot.set(0.0, w.nodes);
-                        });
-                        slots.push(slot);
+                        slots.push(root_task(w, (main_depth + ahead).min(depth)));
                     }
                 } else {
+                    // One worker starts the next depth and splits it too: 8 threads 29.9 -> 24.9 s; two threads lose, 62.7 -> 64.6 s.
+                    if pool.is_some() && workers >= 2 && main_depth < depth {
+                        let mut w = self.worker();
+                        w.pool = pool;
+                        slots.push(root_task(w, main_depth + 1));
+                    }
                     self.pool = pool;
                 }
 

@@ -533,6 +533,49 @@ smaller tree. The single-thread search is node-for-node unchanged.
 `MPC_T` — are constants in a normal build; `--features tunable` reads them
 from the environment variable of the same name.)
 
+**One worker starts the next depth while the rest split the current one.**
+Split work runs out: at depth 26 the eight threads kept 6.2 cores busy,
+and what filled the gap was speculation on siblings, 40% of all nodes
+spent behind a move that cut. The next iteration is work that is certain
+to be needed, so one worker searches the root one ply deeper, opening its
+own nodes to the pool like the main thread, and is stopped when the
+current depth returns. Same 48 positions, before -> after:
+
+| threads | depth | before | after |
+|---:|---:|---:|---:|
+| 3 | 26 | 45.4-47.8 s | 38.2-42.1 s |
+| 4 | 26 | 36.8-38.0 s | 34.1-35.6 s |
+| 8 | 26 | 29.4-32.2 s (9 runs) | 23.9-26.4 s (9 runs) |
+| 8 | 22 | 11.8-12.2 s | 9.4-10.7 s |
+| 8 | 30 (12 positions) | 18.8-19.3 s | 15.8-16.5 s |
+
+Nodes at 8 threads are unchanged (343-368M against 354-394M); busy cores
+go from 6.2 to 7.0. At depth 30 eight threads are now 5.0-5.2 times one
+(82.3 s). The returned values differ from the one-thread values by 0.22-0.27
+discs on average and 3-5 of the 48 moves differ, the same with and
+without it. With two threads the only worker would do nothing else, and
+that loses (62.7 -> 64.6 s), so it starts at three. Variants at 8 threads,
+depth 26: the worker not splitting its search 25.8-27.9 s; two or three
+workers on the next depths 25.4-26.4 s / 24.9-26.1 s; one worker two plies
+ahead, not splitting, 29.2-31.3 s.
+
+Tried first against the same node growth, 48 positions at 8 threads
+(base 29.4-32.2 s; one setting swings 339-384M nodes between runs):
+
+- **Early opening only from depth 8 / 10 / 7**: 29.1-30.3 / 30.6-32.3 /
+  29.6-31.9 s. None at all: 13% fewer nodes, 5.4 busy cores, 31.3-34.0 s.
+- **Predicting All nodes from the static evaluation**: an expected-All
+  node is All 44-63% of the time whatever its evaluation says against
+  alpha. Multi-ProbCut has already taken the nodes the evaluation can tell.
+- **Closing an early fan to new helpers once its first child's first move
+  has failed to cut**: 29.2-31.2 s.
+- **Enhanced transposition cutoff in the null-window search**: one thread
+  -1.9% nodes from depth 6 and -3.8% from depth 3; 8 threads 29.2-31.4 s.
+- **Re-searching one of several PV siblings that beat alpha, then
+  null-window first for the others**: no change.
+- **Rounding the evaluation to 0.25 / 0.5 / 1 disc**: the 8-thread tree
+  stays 1.4-1.5 times the one-thread tree.
+
 **The mobility weight in null-window move ordering is 0.25, not 17/7.**
 Ordering scores a move by the opponent's weighted mobility and the child's
 static evaluation. The ratio 17 : 7 came with a pattern evaluation in whole
