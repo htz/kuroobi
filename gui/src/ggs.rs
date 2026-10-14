@@ -1297,6 +1297,7 @@ const WORKER_GIVE_UP: Duration = Duration::from_secs(10);
 struct Pending {
     board: Board,
     levels: (u32, u8, u8),
+    select: Option<f32>,
     cap: Option<Duration>,
     extend: Option<Duration>,
     hash: u64,
@@ -1308,6 +1309,7 @@ enum Job {
     Think {
         board: Board,
         levels: (u32, u8, u8),
+        select: Option<f32>,
         cap: Option<Duration>,
         extend: Option<Duration>,
         hint: Option<Position>,
@@ -1470,6 +1472,7 @@ impl EngineWorker {
                     Job::Think {
                         board,
                         levels,
+                        select,
                         cap,
                         extend,
                         hint,
@@ -1479,6 +1482,7 @@ impl EngineWorker {
                             (c.depth, c.solve_empties, c.band)
                         };
                         engine.set_levels(levels.0, levels.1, levels.2);
+                        engine.set_select(select);
                         if let Some(h) = hint {
                             engine.hint_move(&board, h);
                         }
@@ -1499,6 +1503,7 @@ impl EngineWorker {
                             );
                         }
                         engine.set_levels(base.0, base.1, base.2);
+                        engine.set_select(None);
                         engine.progress().clear();
                         if dtx.send(Done::Moved(Box::new(mv))).is_err() {
                             return;
@@ -3113,7 +3118,7 @@ fn time_budget(
     mut s: kuroobi::timectl::Situation,
     base: (u32, u8, u8),
     pace: &str,
-) -> (u32, u8, u8, Option<Duration>, Option<Duration>) {
+) -> (u32, u8, u8, Option<Duration>, Option<Duration>, Option<f32>) {
     s.nps = resources().nps_for(s.threads);
     let p = kuroobi::timectl::plan(
         s,
@@ -3124,7 +3129,7 @@ fn time_budget(
         },
         kuroobi::timectl::Pace::parse(pace),
     );
-    (p.depth, p.solve, p.band, p.cap, p.extend)
+    (p.depth, p.solve, p.band, p.cap, p.extend, p.select)
 }
 
 fn game_over(board: &Board) -> bool {
@@ -3212,7 +3217,7 @@ fn think_and_play(
         ctx.engine_cfg.solve_empties,
         ctx.engine_cfg.band,
     );
-    let (d, solve, band, cap, extend) = time_budget(
+    let (d, solve, band, cap, extend, select) = time_budget(
         kuroobi::timectl::Situation {
             clock_secs,
             in_overtime: m.in_overtime,
@@ -3231,6 +3236,7 @@ fn think_and_play(
         ctx.workers[i].pending = Some(Pending {
             board,
             levels: (d, solve, band),
+            select,
             cap,
             extend,
             hash: bh,
@@ -3242,10 +3248,12 @@ fn think_and_play(
     }
     let engine = ctx.engine.as_mut().unwrap();
     engine.set_levels(d, solve, band);
+    engine.set_select(select);
     let began = std::time::Instant::now();
     let mv = engine.choose_until(&board, cap.map(|c| began + c), extend.map(|e| began + e));
     let took = began.elapsed();
     engine.set_levels(base.0, base.1, base.2);
+    engine.set_select(None);
 
     let mstr = move_text(mv.pos);
     let arg = play_arg(&mstr, mv.value, Some(took));
@@ -3313,17 +3321,19 @@ fn pump_next(ctx: &mut Ctx) {
     ctx.log(
         "info",
         &format!(
-            "dispatch: empties {empties} moves {movable} deadline {:.1}s extend {:.1}s (depth {} solve {} band {})",
+            "dispatch: empties {empties} moves {movable} deadline {:.1}s extend {:.1}s (depth {} solve {} band {} select {})",
             p.cap.map_or(-1.0, |c| c.as_secs_f32()),
             p.extend.map_or(-1.0, |c| c.as_secs_f32()),
             p.levels.0,
             p.levels.1,
             p.levels.2,
+            p.select.map_or("-".into(), |t| t.to_string()),
         ),
     );
     ctx.workers[i].send(Job::Think {
         board: p.board,
         levels: p.levels,
+        select: p.select,
         cap: p.cap,
         extend: p.extend,
         hint: p.hint,
@@ -5354,7 +5364,7 @@ mod budget_tests {
 
     #[test]
     fn depth_mode_ignores_the_clock() {
-        let (d, solve, band, c, _) = time_budget(
+        let (d, solve, band, c, _, _) = time_budget(
             kuroobi::timectl::Situation {
                 clock_secs: Some(30),
                 grace_secs: 120,
@@ -5397,7 +5407,7 @@ mod budget_tests {
 
     #[test]
     fn the_endgame_keeps_a_reserve() {
-        let (_, _, _, c, _) = time_budget(
+        let (_, _, _, c, _, _) = time_budget(
             kuroobi::timectl::Situation {
                 clock_secs: Some(100),
                 empties: 40,

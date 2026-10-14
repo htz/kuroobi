@@ -42,6 +42,7 @@ pub struct EngineConfig {
     pub depth: u32,
     pub solve_empties: u8,
     pub band: u8,
+    pub select: Option<f32>,
     pub threads: usize,
     pub mpc: bool,
     pub midgame_hash_bits: u32,
@@ -59,6 +60,7 @@ impl Default for EngineConfig {
             depth: 12,
             solve_empties: 18,
             band: 0,
+            select: None,
             threads: 4,
             mpc: true,
             midgame_hash_bits: 22,
@@ -462,6 +464,10 @@ impl Engine {
         self.config.band = band;
     }
 
+    pub fn set_select(&mut self, t: Option<f32>) {
+        self.config.select = t;
+    }
+
     pub fn set_threads(&mut self, n: usize) {
         let n = n.max(1);
         self.config.threads = n;
@@ -555,7 +561,10 @@ impl Engine {
                 exact: !cut,
                 ..Default::default()
             }
-        } else if let Some(t) = selective_band(board.empty_count(), c.solve_empties, c.band) {
+        } else if let Some(t) = c
+            .select
+            .or_else(|| selective_band(board.empty_count(), c.solve_empties, c.band))
+        {
             let (r, _, backup) =
                 self.solve_within(board, deadline, Progress::SELECT, |solver, linear| {
                     solver.solve_selective(board, Some(linear), t)

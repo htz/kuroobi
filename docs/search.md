@@ -410,6 +410,33 @@ quality of the seeding drops and the expensive exact search pays for
 it. **ProbCut suits a search that is itself the final output, not one
 that prepares another search.**
 
+### Selective search or the midgame, chosen by the clock
+
+Between the solve and `SELECTIVE_MAX_EMPTIES` empties, `timectl::plan`
+picks per move (`selective_rung`): **the surest selective rung whose
+slow case fits the move's budget, otherwise the midgame search**. The
+midgame is the fallback because a cut midgame search still returns the
+previous depth's move, while a cut selective search plays the 5% backup
+midgame move. With no calibrated nps, or a band of 0, there is no
+selective search under the clock.
+
+A rung's time is modelled as
+
+    seconds(empties, t) = at30(t) × growth(t)^(empties − 30) × SELECTIVE_REF_NPS ÷ nps
+
+and a rung is taken when `SELECTIVE_SLOW` × that time fits the move.
+The stored nps rescales the model to the machine, as it does for
+`solve_secs`.
+
+**Re-measuring.** Calibrate nps in the GUI. For every position in
+`problems/selclock.obf` and every rung, run `Engine::set_levels(60,
+empties − 1, 0)`, `Engine::set_select(Some(t))` and `Engine::choose`
+with 8 threads and fresh tables, timing each run. Per rung, fit
+ln(seconds) against empties by least squares: the line gives `at30`
+and `growth` in `SELECTIVE_RUNGS`. The calibrated 8-thread nps goes
+into `SELECTIVE_REF_NPS`, and the largest 90th-percentile ratio of
+measured time to the line into `SELECTIVE_SLOW`.
+
 ---
 
 ## Parallel search correctness

@@ -35,6 +35,8 @@ pub struct Plan {
     pub depth: u32,
     pub solve: u8,
     pub band: u8,
+    /// Selective confidence chosen against the clock; overrides `band`.
+    pub select: Option<f32>,
     pub cap: Option<Duration>,
     /// Comes out of the moves after it: the next plan reads the clock actually left.
     pub extend: Option<Duration>,
@@ -105,6 +107,39 @@ pub fn solve_entry(budget_secs: f64, nps: f64, threads: usize, max: u8) -> u8 {
         .rev()
         .find(|&e| solve_slow_secs(e, nps, threads) <= budget_secs)
         .unwrap_or(0)
+}
+
+/// (confidence, seconds at 30 empties, growth per empty): ln(s) fitted on problems/selclock.obf, docs/search.md.
+const SELECTIVE_RUNGS: [(f32, f64, f64); 3] =
+    [(2.58, 0.79, 1.62), (2.33, 0.62, 1.58), (1.81, 0.30, 1.47)];
+
+/// The 8-thread nps the GUI calibration stored when `SELECTIVE_RUNGS` was measured.
+const SELECTIVE_REF_NPS: f64 = 249e6;
+
+/// Largest 90th-percentile time over the fit (2.44-2.82 by rung): a cut selective search plays a 5% midgame move.
+const SELECTIVE_SLOW: f64 = 2.8;
+
+/// Measured up to here: over 108 positions at 30-35 empties the 99% rung lost 6 discs, the midgame's sub-second depth 18.
+const SELECTIVE_MAX_EMPTIES: u8 = 36;
+
+pub fn selective_secs(empties: u8, t: f32, nps: f64) -> f64 {
+    let (_, at30, growth) = SELECTIVE_RUNGS
+        .iter()
+        .copied()
+        .find(|r| r.0 == t)
+        .unwrap_or(SELECTIVE_RUNGS[0]);
+    at30 * growth.powi(empties as i32 - 30) * SELECTIVE_REF_NPS / nps
+}
+
+/// The surest rung whose slow case fits the move; none means a midgame search.
+pub fn selective_rung(empties: u8, solve: u8, secs: f64, nps: f64) -> Option<f32> {
+    if empties <= solve || empties > SELECTIVE_MAX_EMPTIES || nps <= 0.0 {
+        return None;
+    }
+    SELECTIVE_RUNGS
+        .iter()
+        .map(|r| r.0)
+        .find(|&t| selective_secs(empties, t, nps) * SELECTIVE_SLOW <= secs)
 }
 
 const SOLVE_CEILING: u8 = 32;
@@ -180,6 +215,7 @@ pub fn plan(s: Situation, base: Levels, pace: Pace) -> Plan {
             depth: base.depth,
             solve: base.solve,
             band: base.band,
+            select: None,
             cap: None,
             extend: None,
         };
@@ -189,6 +225,7 @@ pub fn plan(s: Situation, base: Levels, pace: Pace) -> Plan {
             depth: base.depth,
             solve: base.solve,
             band: base.band,
+            select: None,
             cap: None,
             extend: None,
         };
@@ -201,6 +238,7 @@ pub fn plan(s: Situation, base: Levels, pace: Pace) -> Plan {
             depth: DEPTH_BY_CLOCK,
             solve: base.solve.min(OVERTIME_SOLVE),
             band: 0,
+            select: None,
             cap: Some(Duration::from_secs_f64(per.max(0.05))),
             extend: None,
         };
@@ -271,12 +309,11 @@ pub fn plan(s: Situation, base: Levels, pace: Pace) -> Plan {
     } else {
         budget
     };
-    // Only for a due solve the clock cannot afford: on 22 live losing selective moves a midgame search repeated 14.
-    let band = match s.empties.checked_sub(solve) {
-        Some(gap) if solve_due && gap > 0 && gap <= base.band => gap,
-        _ => 0,
-    };
     let cap = budget.max(if avail > 0 { FLOOR_MOVE_SECS } else { 0.05 });
+    let select = match s.nps {
+        Some(nps) if base.band > 0 => selective_rung(s.empties, solve, cap, nps),
+        _ => None,
+    };
     let extend = (!last).then(|| {
         (cap * EXTEND_MAX)
             .min(cap + (pool - cap).max(0.0) * EXTEND_POOL_SHARE)
@@ -285,7 +322,8 @@ pub fn plan(s: Situation, base: Levels, pace: Pace) -> Plan {
     Plan {
         depth: DEPTH_BY_CLOCK,
         solve,
-        band,
+        band: 0,
+        select,
         cap: Some(Duration::from_secs_f64(cap)),
         extend: extend.map(Duration::from_secs_f64),
     }
@@ -808,6 +846,57 @@ mod tests {
         let p = ot_plan(120, 20);
         assert!(p.solve <= OVERTIME_SOLVE);
         assert_eq!(p.band, 0);
+        assert_eq!(p.select, None);
+    }
+
+    #[test]
+    fn the_surest_selective_rung_that_fits() {
+        let nps = SELECTIVE_REF_NPS;
+        assert_eq!(selective_rung(34, 26, 20.0, nps), Some(2.58));
+        assert_eq!(selective_rung(34, 26, 10.0, nps), Some(1.81));
+        assert_eq!(selective_rung(34, 26, 2.0, nps), None);
+        assert_eq!(selective_rung(34, 26, 5.0, nps / 2.0), None);
+        assert_eq!(selective_rung(26, 26, 1e6, nps), None);
+        assert_eq!(
+            selective_rung(SELECTIVE_MAX_EMPTIES + 1, 26, 1e6, nps),
+            None
+        );
+    }
+
+    #[test]
+    fn the_clock_picks_selective_search_only_above_the_solve() {
+        for e in (20..=44u8).rev() {
+            let p = plan(
+                Situation {
+                    clock_secs: Some(600),
+                    grace_secs: 120,
+                    empties: e,
+                    budget_use: 6.0,
+                    nps: Some(SELECTIVE_REF_NPS),
+                    threads: 8,
+                    ..Situation::default()
+                },
+                BASE,
+                Pace::Fast,
+            );
+            if let Some(t) = p.select {
+                assert!(e > p.solve && e <= SELECTIVE_MAX_EMPTIES, "{e}: {t}");
+                let slow = selective_secs(e, t, SELECTIVE_REF_NPS) * SELECTIVE_SLOW;
+                assert!(slow <= p.cap.unwrap().as_secs_f64(), "{e}: {slow:.1}s");
+            }
+        }
+        let off = Levels { band: 0, ..BASE };
+        let p = plan(
+            Situation {
+                clock_secs: Some(600),
+                empties: 30,
+                nps: Some(SELECTIVE_REF_NPS),
+                ..Situation::default()
+            },
+            off,
+            Pace::Fast,
+        );
+        assert_eq!(p.select, None);
     }
 }
 
