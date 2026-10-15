@@ -253,6 +253,7 @@ export interface GgsSnapshot {
   auto_play: boolean;
   open: boolean;
   watch_analysis: boolean;
+  log_channel: string;
   thinking: string | null;
   fetched_ggf: FetchedGgf | null;
 }

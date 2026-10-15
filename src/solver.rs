@@ -1375,6 +1375,12 @@ impl Drop for Solver {
 }
 
 impl Solver {
+    pub fn table_move(&self, board: &Board) -> Option<Position> {
+        let hash = zobrist::board_hash(board.player_bb(), board.opponent_bb());
+        let e = self.hash_table.get(board, hash)?;
+        Position::from_index(e.best8 as u32)
+    }
+
     pub fn new(bit_size: u32) -> Solver {
         Solver {
             hash_table: HashTable::new(bit_size),
@@ -4315,6 +4321,20 @@ mod tests {
             "solver's best move must be legal"
         );
         assert!(result.nodes > 0);
+    }
+
+    #[test]
+    fn the_table_keeps_a_legal_reply_to_the_best_move() {
+        let board = position_with_empties(16);
+        let mut solver = Solver::new(16);
+        let best = solver
+            .solve(EndSolverMode::Perfect, &board)
+            .best_move
+            .unwrap();
+        let mut child = board;
+        child.make_move_bits(best);
+        let reply = solver.table_move(&child).expect("the reply was stored");
+        assert!(child.movable() & reply.to_bit() != 0);
     }
 
     #[test]

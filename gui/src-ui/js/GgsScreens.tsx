@@ -923,6 +923,9 @@ function bothRates(u: UserRow | undefined): string {
   return parts.join(' · ');
 }
 
+// Mirrors `valid_log_channel` in ggs.rs: GGS caps channel names at 8 characters including the dot.
+const validLogChannel = (c: string) => c === '' || /^\.[A-Za-z0-9_-]{1,7}$/.test(c);
+
 export function GgsSettings({ snap }: { snap: GgsSnapshot }) {
   const e = snap.engine;
   const calibrated = useCalibrated();
@@ -936,6 +939,8 @@ export function GgsSettings({ snap }: { snap: GgsSnapshot }) {
   const [ponder, setPonder] = useState(e.ponder);
   const [auto, setAuto] = useState(snap.auto_play);
   const [watch, setWatch] = useState(snap.watch_analysis);
+  const [logChannel, setLogChannel] = useState(snap.log_channel);
+  const logChannelOk = validLogChannel(logChannel);
   const [book, setBook] = useState(e.use_book);
   const [pace, setPace] = useState(e.pace === 'depth' ? 'depth' : 'fast');
   const byClock = pace !== 'depth';
@@ -954,6 +959,7 @@ export function GgsSettings({ snap }: { snap: GgsSnapshot }) {
       await ggsApi.setPacing(pace, maxMove, reserve, budgetUse);
       await ggsApi.setAutoPlay(auto);
       await ggsApi.setWatchAnalysis(watch);
+      if (logChannelOk) await ggsApi.setLogChannel(logChannel);
       await ggsApi.setUseBook(book);
     } catch (e) {
       say(t('ggs.settings.apply_failed', { error: tErr(e) }), true);
@@ -969,7 +975,7 @@ export function GgsSettings({ snap }: { snap: GgsSnapshot }) {
     const timer = setTimeout(() => void apply(), 400);
     return () => clearTimeout(timer);
   }, [levels.depth, levels.solve, levels.band, ponder, pace,
-      maxMove, reserve, budgetUse, auto, watch, book]);
+      maxMove, reserve, budgetUse, auto, watch, logChannel, book]);
 
 
   return (
@@ -1045,6 +1051,15 @@ export function GgsSettings({ snap }: { snap: GgsSnapshot }) {
           <span style={{ width: 300, display: 'block' }}>
             <Toggle checked={watch} onChange={setWatch} label={t('ggs.settings.watch_analysis')} />
           </span>
+          <Field label={t('ggs.settings.log_channel')}>
+            <TextField width={120} value={logChannel} onChange={setLogChannel} invalid={!logChannelOk} />
+          </Field>
+          {!logChannelOk && (
+            <span style={{ fontSize: 'var(--fs-6)', color: 'var(--bad)' }}>
+              {t('ggs.settings.log_channel_invalid')}
+            </span>
+          )}
+          <Note>{t('ggs.settings.log_channel_note')}</Note>
         </Section>
 
         <div style={{ display: 'flex', alignItems: 'center', gap: 'var(--sp-3)', padding: '0 var(--sp-3) var(--sp-5)' }}>

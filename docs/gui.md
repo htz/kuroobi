@@ -250,3 +250,32 @@ Each login appends to `ggs_games/chat/<name>.jsonl`, and the most recent
 300 entries are restored at startup. 5000 are kept; on overflow the file
 is rewritten and packed down. An unreadable line (such as a last line
 cut short by a crash mid-write) is discarded and the rest is used.
+
+### Each move can be posted to a channel
+
+Spectators follow an engine by joining its channel, usually `.<login>`,
+where Edax and Melody already post their searches. Setting a channel in
+the GGS settings (Behavior) joins it and posts each move there in the
+layout of Edax's log from the GGS guide; left empty, nothing is joined
+or posted:
+
+```
+-----------------------------------------
+kuroobi plays F5 in game .1.0 using 8 threads ;
+score == +2 at 22@73% ; PV: F5 d6 C3 f4 ;
+nodes: 2.149 GN ; time: search = 4.3s, move = 4.3s; speed: 499.8 MN/s.
+search completed
+```
+
+Black's moves are in capitals and white's in lower case, `PA` being a
+pass. `at` is `<depth>@<confidence>%` for a midgame search (the
+confidence of its cut, 73%) and `<empties>@<confidence>%` for a
+selective search or a solve (`@100%`). The PV is what the tables still
+hold after the search, so it can end before eight moves. Pondering is
+not credited to the move, so `search` and `move` are the same time. The
+last line is `search out of time at ...` when the deadline cut the
+search; book moves give only `score == ... from book ;`. The
+channel must be a dot and 1-7 letters, digits, `_` or `-` (GGS caps
+channel names at 8 characters, so `Rhapsody` posts to `.Rhapsod`);
+anything else is refused rather than corrected. Our own lines come back
+to us and are kept out of the chat.

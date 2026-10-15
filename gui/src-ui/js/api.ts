@@ -142,6 +142,7 @@ export const ggsApi = {
   setAutoPlay: (on: boolean) => call('ggs_set_auto_play', { on }),
   setOpen: (on: boolean) => call('ggs_set_open', { on }),
   setWatchAnalysis: (on: boolean) => call('ggs_set_watch_analysis', { on }),
+  setLogChannel: (channel: string) => call('ggs_set_log_channel', { channel }),
   setUseBook: (on: boolean) => call('ggs_set_use_book', { on }),
   setLearn: (on: boolean) => call('ggs_set_learn', { on }),
   setStandby: (cfg: StandbyCfg) => call('ggs_set_standby', { cfg }),

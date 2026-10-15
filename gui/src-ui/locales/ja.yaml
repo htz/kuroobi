@@ -275,6 +275,7 @@ engine:
     white_flagged: "白の時間切れ"
 err:
   bad_formula_kind: "申し込みの扱いの種別が不正です ({kind})"
+  bad_log_channel: "思考ログのチャンネル名が不正です (「.」に続けて英数字・_・- を 1〜7 文字)"
   bad_square: "そのマスはありません"
   busy_ggs: "GGS 対局中は控えます"
   busy_ggs_analysis: "GGS 対局中は分析を控えます"
@@ -589,6 +590,9 @@ ggs:
     formula_failed: "条件を送れませんでした ({error})"
     formula_placeholder: "例: rated & or>=1600 & !synchro"
     level_mode_note: "「Lv で決める」を選んでいるので、ここは効きません。"
+    log_channel: "思考ログのチャンネル"
+    log_channel_invalid: "「.」に続けて英数字・_・- を 1〜7 文字で入力してください。この値は使われません。"
+    log_channel_note: "1 手ごとの探索結果をこのチャンネルに流します。観戦者は同じチャンネルに入ると読めます。空欄なら流しません。"
     logout: "ログアウト"
     logout_note: "ログアウトすると保存済みの認証情報も消えます。次の起動では自動ログインしません。"
     max_move: "1 手の上限 (秒、0 = なし)"

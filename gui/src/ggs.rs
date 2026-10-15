@@ -65,6 +65,7 @@ pub enum Cmd {
     SetAutoPlay(bool),
     SetOpen(bool),
     SetWatchAnalysis(bool),
+    SetLogChannel(String),
     SetUseBook(bool),
     SetLearn(bool),
     #[allow(clippy::enum_variant_names)]
@@ -334,6 +335,8 @@ pub struct Snapshot {
     /// The server's `open` flag: whether anyone may send us a request at all.
     pub open: bool,
     pub watch_analysis: bool,
+    /// Empty means the search log goes nowhere.
+    pub log_channel: String,
     pub thinking: Option<String>,
     pub fetched_ggf: Option<FetchedGgf>,
 }
@@ -770,6 +773,7 @@ struct SavedSettings {
     auto_play: bool,
     open: bool,
     watch_analysis: bool,
+    log_channel: String,
     use_book: bool,
     learn: bool,
 }
@@ -788,6 +792,7 @@ impl Default for SavedSettings {
             auto_play: true,
             open: true,
             watch_analysis: true,
+            log_channel: String::new(),
             use_book: true,
             learn: true,
         }
@@ -809,6 +814,7 @@ fn save_settings(ctx: &Ctx) {
         auto_play: s.auto_play,
         open: s.open,
         watch_analysis: s.watch_analysis,
+        log_channel: s.log_channel.clone(),
         use_book: e.use_book,
         learn: e.learn,
     };
@@ -1290,6 +1296,26 @@ struct EngineWorker {
     progress: std::sync::Arc<kuroobi::engine::Progress>,
     threads: usize,
     sent_ms: u64,
+    sent_level: Level,
+}
+
+#[derive(Clone, Copy, Default)]
+struct Level {
+    empties: u8,
+    select: Option<f32>,
+}
+
+impl Level {
+    fn of(board: &Board, levels: (u32, u8, u8), select: Option<f32>) -> Level {
+        let empties = board.empty_count();
+        let select = (empties > levels.1).then(|| {
+            select.or_else(|| kuroobi::midgame::selective_band(empties, levels.1, levels.2))
+        });
+        Level {
+            empties,
+            select: select.flatten(),
+        }
+    }
 }
 
 const WORKER_GIVE_UP: Duration = Duration::from_secs(10);
@@ -1322,8 +1348,29 @@ enum Job {
     SetThreads(usize),
 }
 
+struct Report {
+    nodes: u64,
+    pv: Vec<Option<Position>>,
+}
+
+/// Edax's log shows eight plies.
+const PV_LEN: usize = 8;
+
+fn report(
+    engine: &kuroobi::engine::Engine,
+    board: &Board,
+    mv: &kuroobi::engine::MoveEval,
+    nodes: u64,
+) -> Report {
+    let pv = match mv.pos {
+        Some(p) if !mv.from_book => engine.principal_variation(board, p, PV_LEN),
+        _ => vec![mv.pos],
+    };
+    Report { nodes, pv }
+}
+
 enum Done {
-    Moved(Box<kuroobi::engine::MoveEval>),
+    Moved(Box<kuroobi::engine::MoveEval>, Report),
     Pondered,
 }
 
@@ -1491,7 +1538,9 @@ impl EngineWorker {
                         let ext = extend.map(|e| now + e);
                         let nf0 = kuroobi::engine::NON_FINITE_VALUES
                             .load(std::sync::atomic::Ordering::Relaxed);
+                        let n0 = engine.nodes();
                         let mv = engine.choose_until(&board, dl, ext);
+                        let nodes = engine.nodes() - n0;
                         let nf1 = kuroobi::engine::NON_FINITE_VALUES
                             .load(std::sync::atomic::Ordering::Relaxed);
                         if nf1 != nf0 {
@@ -1505,7 +1554,8 @@ impl EngineWorker {
                         engine.set_levels(base.0, base.1, base.2);
                         engine.set_select(None);
                         engine.progress().clear();
-                        if dtx.send(Done::Moved(Box::new(mv))).is_err() {
+                        let r = report(&engine, &board, &mv, nodes);
+                        if dtx.send(Done::Moved(Box::new(mv), r)).is_err() {
                             return;
                         }
                     }
@@ -1535,6 +1585,7 @@ impl EngineWorker {
             progress,
             threads: 0,
             sent_ms: 0,
+            sent_level: Level::default(),
         })
     }
 
@@ -1788,6 +1839,9 @@ fn restore_settings(ctx: &mut Ctx) {
     s.auto_play = v.auto_play;
     s.open = v.open;
     s.watch_analysis = v.watch_analysis;
+    if valid_log_channel(&v.log_channel) {
+        s.log_channel = v.log_channel;
+    }
 }
 
 pub fn run(
@@ -1866,6 +1920,10 @@ fn wait_for_connect(ctx: &mut Ctx, rx: &Receiver<Cmd>) -> Option<(String, String
             }
             Ok(Cmd::SetLearn(b)) => {
                 ctx.snap.lock().unwrap().engine.learn = b;
+                save_settings(ctx);
+            }
+            Ok(Cmd::SetLogChannel(c)) if valid_log_channel(&c) => {
+                ctx.snap.lock().unwrap().log_channel = c;
                 save_settings(ctx);
             }
             Ok(_) => continue,
@@ -2112,6 +2170,10 @@ fn greet(ctx: &mut Ctx, w: &mut Wire, login: &str, send: &mut impl FnMut(String)
     ] {
         say(ctx, send, c);
     }
+    let chan = ctx.snap.lock().unwrap().log_channel.clone();
+    if !chan.is_empty() {
+        say(ctx, send, format!("chann + {chan}"));
+    }
     let open = ctx.snap.lock().unwrap().open;
     say(ctx, send, format!("tell /os open {}", u8::from(open)));
     ask_who(&mut w.pending, |c| say(ctx, send, c));
@@ -2147,7 +2209,10 @@ fn dispatch_line(
     }
 
     if let Some(msg) = parse_chat(ln) {
-        push_chat(ctx, login, msg);
+        let chan = ctx.snap.lock().unwrap().log_channel.clone();
+        if msg.chan != chan || msg.from != login {
+            push_chat(ctx, login, msg);
+        }
         return;
     }
     if let Some(id) = ln.strip_prefix("/os: rating_update ") {
@@ -2504,6 +2569,20 @@ fn handle_cmd(
             save_settings(ctx);
             ctx.dirty = true;
         }
+        Cmd::SetLogChannel(new) if valid_log_channel(&new) => {
+            let old = std::mem::replace(&mut ctx.snap.lock().unwrap().log_channel, new.clone());
+            if old != new {
+                if !old.is_empty() {
+                    send(format!("chann - {old}"));
+                }
+                if !new.is_empty() {
+                    send(format!("chann + {new}"));
+                }
+            }
+            save_settings(ctx);
+            ctx.dirty = true;
+        }
+        Cmd::SetLogChannel(_) => {}
         Cmd::ListStored => {
             pending.push("stored_list".into());
             send("tell /os stored".to_string());
@@ -3166,6 +3245,113 @@ fn move_source(mv: &kuroobi::engine::MoveEval) -> &'static str {
     }
 }
 
+/// GGS caps channel names at 8 characters including the dot; empty turns the log off.
+pub fn valid_log_channel(chan: &str) -> bool {
+    chan.is_empty()
+        || chan.strip_prefix('.').is_some_and(|name| {
+            (1..=7).contains(&name.len())
+                && name
+                    .chars()
+                    .all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '-')
+        })
+}
+
+struct Searched {
+    level: Level,
+    threads: usize,
+    nodes: u64,
+    took: Duration,
+    pv: Vec<Option<Position>>,
+    black: bool,
+}
+
+fn count(n: f64, unit: &str) -> String {
+    if n >= 1e9 {
+        format!("{:.3} G{unit}", n / 1e9)
+    } else if n >= 1e6 {
+        format!("{:.1} M{unit}", n / 1e6)
+    } else {
+        format!("{:.1} K{unit}", n / 1e3)
+    }
+}
+
+fn confidence_pct(t: f32) -> u32 {
+    // Abramowitz-Stegun 7.1.26 for erf(t / sqrt 2): the two-sided normal coverage.
+    let x = f64::from(t) / std::f64::consts::SQRT_2;
+    let k = 1.0 / (1.0 + 0.3275911 * x);
+    let poly = k
+        * (0.254829592
+            + k * (-0.284496736 + k * (1.421413741 + k * (-1.453152027 + k * 1.061405429))));
+    ((1.0 - poly * (-x * x).exp()) * 100.0).round() as u32
+}
+
+/// Edax's spectator log from the GGS guide: black's moves in capitals, white's in lower case.
+fn search_log(
+    chan: &str,
+    login: &str,
+    mid: &str,
+    mv: &kuroobi::engine::MoveEval,
+    s: &Searched,
+) -> Vec<String> {
+    let square = |p: Option<Position>, black: bool| {
+        let t = p.map_or("PA".to_string(), coord);
+        if black {
+            t
+        } else {
+            t.to_lowercase()
+        }
+    };
+    let mut lines = vec![
+        "-----------------------------------------".to_string(),
+        format!(
+            "{login} plays {} in game {mid} using {} threads ;",
+            square(mv.pos, s.black),
+            s.threads
+        ),
+    ];
+    let score = mv.value.round() as i32;
+    if mv.from_book {
+        lines.push(format!("score == {score:+} from book ;"));
+    } else {
+        let e = s.level.empties;
+        let at = match s.level.select {
+            _ if mv.depth > 0 => format!(
+                "{}@{}%",
+                mv.depth,
+                confidence_pct(kuroobi::midgame::mpc_t())
+            ),
+            Some(t) => format!("{e}@{}%", confidence_pct(t)),
+            None => format!("{e}@100%"),
+        };
+        let pv: Vec<String> =
+            s.pv.iter()
+                .scan(!s.black, |black, p| {
+                    *black = !*black;
+                    Some(square(*p, *black))
+                })
+                .collect();
+        let secs = s.took.as_secs_f64();
+        lines.push(format!(
+            "score == {score:+} at {at} ; PV: {} ;",
+            pv.join(" ")
+        ));
+        lines.push(format!(
+            "nodes: {} ; time: search = {secs:.1}s, move = {secs:.1}s; speed: {}.",
+            count(s.nodes as f64, "N"),
+            count(s.nodes as f64 / secs.max(1e-3), "N/s"),
+        ));
+        lines.push(if mv.cut {
+            format!("search out of time at {at}")
+        } else {
+            "search completed".to_string()
+        });
+    }
+    lines
+        .into_iter()
+        .map(|l| format!("tell {chan} {l}"))
+        .collect()
+}
+
 fn record_played(m: &mut MatchState, mv: &kuroobi::engine::MoveEval, hash: u64) {
     m.last_eval = Some(if mv.value.is_finite() { mv.value } else { 0.0 });
     m.last_eval_exact = mv.exact;
@@ -3204,6 +3390,7 @@ fn think_and_play(
         return;
     }
     let clock_secs = m.my_clock_secs;
+    let black = m.my_color == Some('*');
     let grace = m.my_ext.unwrap_or(0);
     let empties = board.empty_count();
     {
@@ -3249,9 +3436,11 @@ fn think_and_play(
     let engine = ctx.engine.as_mut().unwrap();
     engine.set_levels(d, solve, band);
     engine.set_select(select);
+    let n0 = engine.nodes();
     let began = std::time::Instant::now();
     let mv = engine.choose_until(&board, cap.map(|c| began + c), extend.map(|e| began + e));
     let took = began.elapsed();
+    let r = report(engine, &board, &mv, engine.nodes() - n0);
     engine.set_levels(base.0, base.1, base.2);
     engine.set_select(None);
 
@@ -3259,6 +3448,28 @@ fn think_and_play(
     let arg = play_arg(&mstr, mv.value, Some(took));
     send(format!("tell /os play {mid} {arg}"));
     ctx.log("out", &format!("tell /os play {mid} {arg}"));
+    let (chan, login) = {
+        let s = ctx.snap.lock().unwrap();
+        (s.log_channel.clone(), s.login.clone())
+    };
+    if !chan.is_empty() {
+        for line in search_log(
+            &chan,
+            &login,
+            mid,
+            &mv,
+            &Searched {
+                level: Level::of(&board, (d, solve, band), select),
+                threads: ctx.total_threads(),
+                nodes: r.nodes,
+                took,
+                pv: r.pv,
+                black,
+            },
+        ) {
+            send(line);
+        }
+    }
     ctx.log(
         "info",
         &format!(
@@ -3315,6 +3526,7 @@ fn pump_next(ctx: &mut Ctx) {
     let limit = p.extend.or(p.cap).unwrap_or(Duration::from_secs(60));
     ctx.workers[i].sent_at = Some((Instant::now(), limit));
     ctx.workers[i].sent_ms = epoch_ms();
+    ctx.workers[i].sent_level = Level::of(&p.board, p.levels, p.select);
     ctx.workers[i].stop.reset();
     let empties = p.board.empty_count();
     let movable = p.board.movable_count();
@@ -3392,7 +3604,9 @@ fn collect_workers(ctx: &mut Ctx, matches: &mut HashMap<String, MatchState>) -> 
         ctx.workers[i].busy = false;
         let took = ctx.workers[i].sent_at.map(|(t, _)| t.elapsed());
         ctx.workers[i].sent_at = None;
-        let Done::Moved(mv) = done else { continue };
+        let Done::Moved(mv, r) = done else {
+            continue;
+        };
         if let Some(t) = took {
             ctx.log(
                 "info",
@@ -3445,6 +3659,27 @@ fn collect_workers(ctx: &mut Ctx, matches: &mut HashMap<String, MatchState>) -> 
             play_arg(&mstr, mv.value, took)
         ));
         record_played(m, &mv, bh);
+        let (chan, login) = {
+            let s = ctx.snap.lock().unwrap();
+            (s.log_channel.clone(), s.login.clone())
+        };
+        if !chan.is_empty() {
+            let w = &ctx.workers[i];
+            out.extend(search_log(
+                &chan,
+                &login,
+                &mid,
+                &mv,
+                &Searched {
+                    level: w.sent_level,
+                    threads: w.threads,
+                    nodes: r.nodes,
+                    took: took.unwrap_or_default(),
+                    pv: r.pv,
+                    black: m.my_color == Some('*'),
+                },
+            ));
+        }
         ctx.log(
             "info",
             &format!(
@@ -4478,6 +4713,100 @@ mod tests {
     ];
 
     use super::*;
+
+    #[test]
+    fn a_log_channel_is_a_dot_and_up_to_seven_name_characters() {
+        for ok in ["", ".kuroobi", ".Rhapsod", ".a", ".my_bot1", ".x-y_z"] {
+            assert!(valid_log_channel(ok), "{ok:?}");
+        }
+        for bad in [
+            "kuroobi",
+            ".",
+            ".Rhapsody",
+            " .kuroobi",
+            ".kuro obi",
+            "..kuroo",
+            ".くろおび",
+        ] {
+            assert!(!valid_log_channel(bad), "{bad:?}");
+        }
+    }
+
+    #[test]
+    fn the_selective_rungs_read_as_their_confidence() {
+        assert_eq!([2.58, 2.33, 1.81].map(confidence_pct), [99, 98, 93]);
+    }
+
+    #[test]
+    fn the_search_log_follows_edax_s_layout() {
+        let sq = |t: &str| Position::from_kifu(t).ok();
+        let s = |empties, select, black| Searched {
+            level: Level { empties, select },
+            threads: 8,
+            nodes: 2_149_000_000,
+            took: Duration::from_millis(4300),
+            pv: vec![sq("f5"), sq("d6"), None, sq("c3")],
+            black,
+        };
+        let mid = kuroobi::engine::MoveEval {
+            pos: sq("f5"),
+            value: 2.4,
+            depth: 22,
+            ..Default::default()
+        };
+        assert_eq!(
+            search_log(".kuroobi", "kuroobi", ".1.0", &mid, &s(40, None, true)),
+            [
+                "tell .kuroobi -----------------------------------------",
+                "tell .kuroobi kuroobi plays F5 in game .1.0 using 8 threads ;",
+                "tell .kuroobi score == +2 at 22@73% ; PV: F5 d6 PA c3 ;",
+                "tell .kuroobi nodes: 2.149 GN ; time: search = 4.3s, move = 4.3s; speed: 499.8 MN/s.",
+                "tell .kuroobi search completed",
+            ]
+        );
+        let sel = kuroobi::engine::MoveEval {
+            pos: sq("f5"),
+            value: -1.0,
+            cut: true,
+            ..Default::default()
+        };
+        let lines = search_log(
+            ".kuroobi",
+            "kuroobi",
+            ".1.0",
+            &sel,
+            &s(32, Some(2.58), false),
+        );
+        assert_eq!(
+            lines[1],
+            "tell .kuroobi kuroobi plays f5 in game .1.0 using 8 threads ;"
+        );
+        assert_eq!(
+            lines[2],
+            "tell .kuroobi score == -1 at 32@99% ; PV: f5 D6 pa C3 ;"
+        );
+        assert_eq!(lines[4], "tell .kuroobi search out of time at 32@99%");
+        let exact = kuroobi::engine::MoveEval {
+            pos: sq("f5"),
+            value: 4.0,
+            exact: true,
+            ..Default::default()
+        };
+        assert!(
+            search_log(".kuroobi", "kuroobi", ".1.0", &exact, &s(26, None, true))[2]
+                .starts_with("tell .kuroobi score == +4 at 26@100% ;")
+        );
+        let book = kuroobi::engine::MoveEval {
+            pos: sq("f5"),
+            value: 0.5,
+            from_book: true,
+            ..Default::default()
+        };
+        assert_eq!(
+            search_log(".kuroobi", "kuroobi", ".1.0", &book, &s(50, None, true))[2..],
+            ["tell .kuroobi score == +1 from book ;"]
+        );
+    }
 
     #[test]
     fn clock_real_format() {

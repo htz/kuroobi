@@ -602,6 +602,38 @@ impl Engine {
         }
     }
 
+    /// The line the tables still hold after `first`, `None` for a pass; it ends where an entry was overwritten.
+    pub fn principal_variation(
+        &self,
+        board: &Board,
+        first: Position,
+        len: usize,
+    ) -> Vec<Option<Position>> {
+        let mut pv = vec![Some(first)];
+        let mut b = *board;
+        b.make_move_bits(first);
+        while pv.len() < len {
+            if b.movable() == 0 {
+                b.pass();
+                if b.movable() == 0 {
+                    break;
+                }
+                pv.push(None);
+            }
+            let Some(p) = self
+                .solver
+                .table_move(&b)
+                .or_else(|| self.tt_best(&b))
+                .filter(|p| b.movable() >> p.index() & 1 == 1)
+            else {
+                break;
+            };
+            b.make_move_bits(p);
+            pv.push(Some(p));
+        }
+        pv
+    }
+
     pub fn learn_start(
         &self,
         start: Option<&str>,
@@ -821,6 +853,30 @@ mod assets_tests {
         let deadline = std::time::Instant::now() + std::time::Duration::from_millis(200);
         assert!(engine.ponder(&board, deadline) > 0);
         assert!(engine.tt_best(&board).is_some());
+    }
+
+    #[test]
+    #[ignore = "requires weights/"]
+    fn the_principal_variation_is_a_legal_line_from_the_move() {
+        let mut engine = Engine::new(EngineConfig {
+            use_book: false,
+            ..Default::default()
+        })
+        .expect("engine");
+        engine.set_levels(12, 0, 0);
+        let board = Board::new();
+        let mv = engine.choose_until(&board, None, None);
+        let pv = engine.principal_variation(&board, mv.pos.unwrap(), 8);
+        assert_eq!(pv[0], mv.pos);
+        assert!(pv.len() >= 4, "{pv:?}");
+        let mut b = board;
+        for p in pv.into_iter().flatten() {
+            if b.movable() == 0 {
+                b.pass();
+            }
+            assert!(b.movable() & p.to_bit() != 0);
+            b.make_move_bits(p);
+        }
     }
 
     #[test]

@@ -279,6 +279,7 @@ engine:
     white_flagged: "White ran out of time"
 err:
   bad_formula_kind: "Invalid match-request handling type ({kind})"
+  bad_log_channel: "Invalid search log channel (\".\" followed by 1-7 letters, digits, _ or -)"
   bad_square: "That square does not exist"
   busy_ggs: "Not available during a GGS game"
   busy_ggs_analysis: "No analysis during a GGS game"
@@ -593,6 +594,9 @@ ggs:
     formula_failed: "Could not send the conditions ({error})"
     formula_placeholder: "e.g. rated & or>=1600 & !synchro"
     level_mode_note: "“By level” is selected, so nothing here has any effect."
+    log_channel: "Search log channel"
+    log_channel_invalid: "Enter \".\" followed by 1-7 letters, digits, _ or -. This value is not used."
+    log_channel_note: "Posts each move's search result to this channel, where spectators who join it can read it. Left empty, nothing is posted."
     logout: "Log out"
     logout_note: "Logging out also erases the saved credentials. The next start will not log in automatically."
     max_move: "Cap per move (s)"
