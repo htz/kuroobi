@@ -491,7 +491,7 @@ function GgsStandby({ snap }: { snap: GgsSnapshot }) {
   const calibrated = useCalibrated();
   const [rated, setRated] = useState(sb.rated);
 
-  const names = otherNames(snap);
+  const names = onlineRows(snap).map((u) => u.name).filter((n) => n !== snap.login);
   const playing = snap.matches.some((m) => !m.over);
   const state = sb.enabled
     ? (playing ? t('ggs.standby.state_playing') : t('ggs.standby.state_waiting'))

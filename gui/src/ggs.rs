@@ -2293,6 +2293,9 @@ fn standby_tick(ctx: &mut Ctx, w: &mut Wire, mut send: impl FnMut(String)) {
     let in_match = s.matches.iter().any(|m| !m.over);
     let games = s.standby_stats.games;
     let outgoing = s.offers.iter().any(|o| !o.incoming);
+    // Both lists refresh every minute; anyone else is offline and an ask only draws an error.
+    let present = s.users.iter().any(|u| u.name == sb.opponent)
+        || s.ongoing.iter().any(|o| o.names.contains(&sb.opponent));
     drop(s);
 
     let more = sb.max_games == 0 || games < sb.max_games;
@@ -2300,7 +2303,7 @@ fn standby_tick(ctx: &mut Ctx, w: &mut Wire, mut send: impl FnMut(String)) {
         return;
     }
     w.next_ask_at = Some(Instant::now() + Duration::from_secs(sb.interval_secs.max(30)));
-    if in_match || outgoing {
+    if in_match || outgoing || !present {
         return;
     }
     ctx.log("info", &format!("auto match: asking {}", sb.opponent));

@@ -618,7 +618,7 @@ ggs:
     formula_title: "Request conditions (on the server)"
     interval: "Interval between games (sec)"
     max_games: "Maximum games (0 = unlimited)"
-    note: "Game ends → wait the interval → request again, repeatedly. It reconnects on its own after a disconnect and resumes adjourned games. An opponent is required."
+    note: "Game ends → wait the interval → request again, repeatedly. It reconnects on its own after a disconnect and resumes adjourned games. An opponent is required. While the opponent is offline it waits instead of asking."
     pick_opponent: "Pick an opponent"
     start: "Start auto match"
     state_off: "Stopped"
