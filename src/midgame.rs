@@ -57,6 +57,19 @@ knob!(fn decided_at() -> f32 = "DECIDED_AT" or DECIDED_AT);
 // Estimating it from the observed growth changed nothing (same nodes at 4 / 8 / 16 s).
 knob!(fn next_pass_factor() -> f32 = "NEXT_PASS" or 2.0);
 
+/// Live 5-minute games tore down the unfinished depth on almost every midgame move at a fixed 2x.
+const NEXT_PASS_MAX_GROWTH: f32 = 6.0;
+
+/// The next depth's time at the growth the last two depths showed, never below the fixed factor.
+fn next_pass_eta(last: std::time::Duration, prev: std::time::Duration) -> std::time::Duration {
+    let growth = if prev.is_zero() {
+        0.0
+    } else {
+        last.as_secs_f32() / prev.as_secs_f32()
+    };
+    last.mul_f32(growth.min(NEXT_PASS_MAX_GROWTH).max(next_pass_factor()))
+}
+
 knob!(fn ybwc_min_depth() -> u32 = "YBWC_MIN" or 6);
 const ABORT_CHECK_INTERVAL: u64 = 512;
 
@@ -951,6 +964,7 @@ impl NnueSearch {
         let mut last_value = f32::NAN;
         let mut reached = 0;
         let mut last_pass = std::time::Duration::ZERO;
+        let mut prev_pass = std::time::Duration::ZERO;
         let clock = deadline.map(|dl| (std::time::Instant::now(), dl.get()));
         self.stop_reason = Stopped::Ceiling;
         self.second = None;
@@ -963,7 +977,7 @@ impl NnueSearch {
                     self.stop_reason = Stopped::Deadline;
                     break;
                 }
-                if reached > 0 && now + last_pass.mul_f32(next_pass_factor()) >= dl {
+                if reached > 0 && now + next_pass_eta(last_pass, prev_pass) >= dl {
                     self.stop_reason = Stopped::NextPass;
                     break;
                 }
@@ -976,6 +990,7 @@ impl NnueSearch {
                 self.stop_reason = Stopped::TornDown;
                 break;
             }
+            prev_pass = last_pass;
             last_pass = t0.elapsed();
             value = v;
             best = self.root_move.or_else(|| self.root_best(b, &mut acc));
@@ -1129,6 +1144,7 @@ impl NnueSearch {
         let mut last_value = f32::NAN;
         let mut reached = 0;
         let mut last_pass = std::time::Duration::ZERO;
+        let mut prev_pass = std::time::Duration::ZERO;
         let clock = deadline.map(|dl| (std::time::Instant::now(), dl.get()));
 
         let workers = self.threads - 1;
@@ -1148,7 +1164,7 @@ impl NnueSearch {
                         self.stop_reason = Stopped::Deadline;
                         break;
                     }
-                    if reached > 0 && now + last_pass.mul_f32(next_pass_factor()) >= dl {
+                    if reached > 0 && now + next_pass_eta(last_pass, prev_pass) >= dl {
                         self.stop_reason = Stopped::NextPass;
                         break;
                     }
@@ -1202,6 +1218,7 @@ impl NnueSearch {
                     self.stop_reason = Stopped::TornDown;
                     break;
                 }
+                prev_pass = last_pass;
                 last_pass = t0.elapsed();
                 value = v;
                 best = self.root_move.or_else(|| self.root_best(b, &mut acc));
