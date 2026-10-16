@@ -347,8 +347,8 @@ pub fn plan(s: Situation, base: Levels, pace: Pace) -> Plan {
         None if avail < 60 => base.solve.min(20),
         None => base.solve,
     };
-    // Priced at its own cost: taking the whole pool, a 31-empty solve ran 57 of 77 s, was cut anyway and
-    // left the board 3 s at the end.
+    // Cut at its own estimate, live 30-31 empty solves stopped at 17 and 34 s with the clock to spare;
+    // what follows a solve costs only the per-move lag, which `avail` already holds back.
     let budget = if (last || solve_due) && solve >= s.empties {
         let share = if last {
             SOLVE_FINAL_SHARE
@@ -356,7 +356,7 @@ pub fn plan(s: Situation, base: Levels, pace: Pace) -> Plan {
             SOLVE_DUE_SHARE
         };
         match s.nps {
-            Some(nps) => solve_slow_secs(s.empties, nps, s.threads).min(avail as f64 * share),
+            Some(_) => avail as f64 * share,
             None => budget,
         }
     } else {
