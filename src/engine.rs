@@ -565,10 +565,20 @@ impl Engine {
             .select
             .or_else(|| selective_band(board.empty_count(), c.solve_empties, c.band))
         {
-            let (r, _, backup) =
+            let (r, cut, backup) =
                 self.solve_within(board, deadline, Progress::SELECT, |solver, linear| {
                     solver.solve_selective(board, Some(linear), t)
                 });
+            if cut {
+                if let Some((value, pos)) = self.solver.warm_rung.filter(|(_, p)| p.is_some()) {
+                    return MoveEval {
+                        pos,
+                        value: stone_scale(value as f32),
+                        cut: true,
+                        ..Default::default()
+                    };
+                }
+            }
             if let Some(backup) = backup {
                 return backup;
             }

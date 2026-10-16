@@ -131,15 +131,21 @@ pub fn selective_secs(empties: u8, t: f32, nps: f64) -> f64 {
     at30 * growth.powi(empties as i32 - 30) * SELECTIVE_REF_NPS / nps
 }
 
-/// The surest rung whose slow case fits the move; none means a midgame search.
+/// The surest rung that fits on top of the 93% rung a cut falls back to, whose slow case must fit; none
+/// means a midgame search. Requiring the target's own slow case played 93% at 36 empties with 2-6 of 14 s used.
 pub fn selective_rung(empties: u8, solve: u8, secs: f64, nps: f64) -> Option<f32> {
     if empties <= solve || empties > SELECTIVE_MAX_EMPTIES || nps <= 0.0 {
+        return None;
+    }
+    let lowest = SELECTIVE_RUNGS[SELECTIVE_RUNGS.len() - 1].0;
+    let fallback = selective_secs(empties, lowest, nps);
+    if fallback * SELECTIVE_SLOW > secs {
         return None;
     }
     SELECTIVE_RUNGS
         .iter()
         .map(|r| r.0)
-        .find(|&t| selective_secs(empties, t, nps) * SELECTIVE_SLOW <= secs)
+        .find(|&t| t == lowest || fallback + selective_secs(empties, t, nps) <= secs)
 }
 
 const SOLVE_CEILING: u8 = 32;
@@ -902,7 +908,8 @@ mod tests {
     fn the_surest_selective_rung_that_fits() {
         let nps = SELECTIVE_REF_NPS;
         assert_eq!(selective_rung(34, 26, 20.0, nps), Some(2.58));
-        assert_eq!(selective_rung(34, 26, 10.0, nps), Some(1.81));
+        assert_eq!(selective_rung(34, 26, 10.0, nps), Some(2.58));
+        assert_eq!(selective_rung(34, 26, 5.0, nps), Some(1.81));
         assert_eq!(selective_rung(34, 26, 2.0, nps), None);
         assert_eq!(selective_rung(34, 26, 5.0, nps / 2.0), None);
         assert_eq!(selective_rung(26, 26, 1e6, nps), None);

@@ -1553,8 +1553,8 @@ impl Solver {
             if let Some(t) = selective {
                 // The cheapest rung is measured for the exact solve only.
                 rungs.remove(0);
-                rungs.retain(|&r| r < t);
-                rungs.truncate(1);
+                // Keeping the 93% rung below a surer target leaves a cut search that rung's move, not a shallow midgame one.
+                rungs.retain(|&r| r < t - 0.1);
                 rungs.push(t);
             }
             let mut last_selective: Option<i32> = None;
