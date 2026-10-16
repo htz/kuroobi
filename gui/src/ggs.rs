@@ -2890,11 +2890,7 @@ fn handle_block(
     if m.in_overtime && !was_overtime {
         ctx.log(
             "info",
-            &format!(
-                "{mid}: in overtime. **this game is a decided loss on time** \
-                 (the result is capped at a minimal loss); playing out fast \
-                 from here to avoid a wipeout"
-            ),
+            &format!("{mid}: in overtime; playing on with the extension as the clock"),
         );
     }
 

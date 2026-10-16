@@ -178,6 +178,9 @@ const SOLVE_GREED: f64 = 10.0;
 
 const SOLVE_MAX_SHARE: f64 = 0.5;
 
+/// The solves after the first took 0.3-1.5 s live, so the first may take most of the clock.
+const SOLVE_DUE_SHARE: f64 = 0.8;
+
 fn effective_budget_use(from_setting: f64) -> f64 {
     if from_setting.is_finite() && from_setting > 0.0 {
         from_setting
@@ -186,11 +189,8 @@ fn effective_budget_use(from_setting: f64) -> f64 {
     }
 }
 
-const OVERTIME_RESERVE: u64 = 5;
-
-const OVERTIME_MAX_SECS: f64 = 1.5;
-
-const OVERTIME_SOLVE: u8 = 12;
+/// Live GGS clocks lost 0.25-0.3 s a move beyond the search; 13 solved moves ran a 3 s margin out.
+const MOVE_LAG_SECS: f64 = 0.3;
 
 const NO_GRACE_RESERVE_MUL: u64 = 2;
 
@@ -208,6 +208,20 @@ const EXTEND_POOL_SHARE: f64 = 0.1;
 
 /// At 0.85, with early stops for settled moves, 5-minute boards still ended with 35-71 s unused.
 const MOVE_BASE: f64 = 1.0;
+
+/// My selective moves still ahead, deepest first, from this move down to just above the solve.
+fn selective_ahead(empties: u8, solve_ref: u8) -> impl Iterator<Item = u8> {
+    (solve_ref + 1..=SELECTIVE_MAX_EMPTIES.min(empties))
+        .rev()
+        .filter(move |e| (empties - e).is_multiple_of(2))
+}
+
+/// Priced as midgame shares, live 5-minute boards spent 9-21 s of 30-109 s here and ended ~100 s unused.
+fn selective_reserve(moves: impl Iterator<Item = u8>, nps: f64) -> f64 {
+    moves
+        .map(|e| selective_secs(e, SELECTIVE_RUNGS[0].0, nps))
+        .sum()
+}
 
 pub fn plan(s: Situation, base: Levels, pace: Pace) -> Plan {
     if pace == Pace::Depth {
@@ -230,20 +244,22 @@ pub fn plan(s: Situation, base: Levels, pace: Pace) -> Plan {
             extend: None,
         };
     };
+    // Rushing the extension turned a solved -2 into -38 live; it is a clock like any other.
     if s.in_overtime {
-        let moves = ((s.empties as f64 / 2.0).ceil() as u64).max(1);
-        let pool = secs.saturating_sub(OVERTIME_RESERVE) as f64;
-        let per = (pool / moves as f64).min(OVERTIME_MAX_SECS);
-        return Plan {
-            depth: DEPTH_BY_CLOCK,
-            solve: base.solve.min(OVERTIME_SOLVE),
-            band: 0,
-            select: None,
-            cap: Some(Duration::from_secs_f64(per.max(0.05))),
-            extend: None,
-        };
+        // GGS shows 0:00 until the extension's own countdown appears.
+        let clock = if secs > 0 { secs } else { s.grace_secs };
+        return plan(
+            Situation {
+                clock_secs: Some(clock),
+                in_overtime: false,
+                grace_secs: 0,
+                ..s
+            },
+            base,
+            pace,
+        );
     }
-    let avail = secs;
+    let avail = secs.saturating_sub((MOVE_LAG_SECS * (s.empties / 2) as f64).ceil() as u64);
     let (solve_ref, my_moves, endgame) = solve_ref_and_moves(avail, s.empties, s.nps, s.threads);
     let want = if s.grace_secs == 0 {
         s.reserve_secs * NO_GRACE_RESERVE_MUL
@@ -254,12 +270,35 @@ pub fn plan(s: Situation, base: Levels, pace: Pace) -> Plan {
     let reserve = want.min(avail / 2).max(ENDGAME_FLOOR.min(avail));
     // A midgame share on top of the estimate left 35-71 s of 5 minutes unused; live endgames cost 13-30 s.
     let reserve = if s.empties > solve_ref {
-        reserve.max((endgame.ceil() as u64).min(avail * 9 / 10))
+        // My first solve falls on my parity: one empty short of the reference halves it.
+        let endgame = match s.nps {
+            Some(nps) if !(s.empties - solve_ref).is_multiple_of(2) => {
+                solve_slow_secs(solve_ref - 1, nps, s.threads)
+            }
+            _ => endgame,
+        };
+        reserve.max(((endgame / SOLVE_DUE_SHARE).ceil() as u64).min(avail * 9 / 10))
     } else {
         reserve
     };
     let pool = avail.saturating_sub(reserve) as f64;
     let solve_due = s.empties <= solve_ref;
+    let selective_nps = s.nps.filter(|_| base.band > 0);
+    let in_selective = selective_nps.is_some() && !solve_due && s.empties <= SELECTIVE_MAX_EMPTIES;
+    let (pool, my_moves) = match selective_nps {
+        Some(nps) if !solve_due && !in_selective => {
+            let ahead = selective_ahead(s.empties, solve_ref).count() as u64;
+            let held = selective_reserve(selective_ahead(s.empties, solve_ref), nps);
+            let left = my_moves.saturating_sub(ahead).max(1);
+            // Only a clock that affords the rung at all would end up spending this little there.
+            if ahead > 0 && held < pool && (pool - held) / left as f64 >= pool / my_moves as f64 {
+                (pool - held, left)
+            } else {
+                (pool, my_moves)
+            }
+        }
+        _ => (pool, my_moves),
+    };
     let even = pool / my_moves as f64;
     let root = (my_moves as f64).sqrt();
     let budget = match pace {
@@ -269,6 +308,20 @@ pub fn plan(s: Situation, base: Levels, pace: Pace) -> Plan {
     };
     let budget = budget * effective_budget_use(s.budget_use);
     let budget = budget.min(pool).min(even * MOVE_BASE);
+    // A selective search stops when done, so only the later ones' expected cost is held back.
+    let budget = match selective_nps {
+        Some(nps) if in_selective => {
+            let later = selective_ahead(s.empties, solve_ref).skip(1);
+            let open = pool - selective_reserve(later, nps);
+            let lowest = SELECTIVE_RUNGS[SELECTIVE_RUNGS.len() - 1].0;
+            if selective_secs(s.empties, lowest, nps) * SELECTIVE_SLOW <= open {
+                open.max(budget)
+            } else {
+                budget
+            }
+        }
+        _ => budget,
+    };
     let budget = if s.max_move_secs > 0 {
         budget.min(s.max_move_secs as f64)
     } else {
@@ -279,7 +332,7 @@ pub fn plan(s: Situation, base: Levels, pace: Pace) -> Plan {
     let solve = match s.nps {
         Some(nps) => {
             let b = if solve_due {
-                avail as f64 * SOLVE_MAX_SHARE
+                avail as f64 * SOLVE_DUE_SHARE
             } else {
                 (budget * SOLVE_GREED).min(avail as f64 * SOLVE_MAX_SHARE)
             };
@@ -300,7 +353,7 @@ pub fn plan(s: Situation, base: Levels, pace: Pace) -> Plan {
         let share = if last {
             SOLVE_FINAL_SHARE
         } else {
-            SOLVE_MAX_SHARE
+            SOLVE_DUE_SHARE
         };
         match s.nps {
             Some(nps) => solve_slow_secs(s.empties, nps, s.threads).min(avail as f64 * share),
@@ -735,21 +788,25 @@ mod tests {
     }
 
     #[test]
-    fn overtime_is_far_cheaper_than_main_time() {
-        let ot = ot_plan(120, 40).cap.unwrap();
-        let main = plan(
-            Situation {
-                clock_secs: Some(120),
-                empties: 40,
-                ..Situation::default()
-            },
-            BASE,
-            Pace::Fast,
-        )
-        .cap
-        .unwrap();
-        assert!(ot <= Duration::from_secs_f64(OVERTIME_MAX_SECS));
-        assert!(ot < main, "overtime spends like main time");
+    fn overtime_plays_the_extension_like_main_time() {
+        let main = |left: u64| {
+            plan(
+                Situation {
+                    clock_secs: Some(left),
+                    empties: 40,
+                    ..Situation::default()
+                },
+                BASE,
+                Pace::Fast,
+            )
+            .cap
+        };
+        assert_eq!(ot_plan(90, 40).cap, main(90));
+        assert_eq!(
+            ot_plan(0, 40).cap,
+            main(120),
+            "a 0:00 display is the whole extension"
+        );
     }
 
     #[test]
@@ -842,14 +899,6 @@ mod tests {
     }
 
     #[test]
-    fn overtime_keeps_the_solver_shallow() {
-        let p = ot_plan(120, 20);
-        assert!(p.solve <= OVERTIME_SOLVE);
-        assert_eq!(p.band, 0);
-        assert_eq!(p.select, None);
-    }
-
-    #[test]
     fn the_surest_selective_rung_that_fits() {
         let nps = SELECTIVE_REF_NPS;
         assert_eq!(selective_rung(34, 26, 20.0, nps), Some(2.58));
@@ -861,6 +910,28 @@ mod tests {
             selective_rung(SELECTIVE_MAX_EMPTIES + 1, 26, 1e6, nps),
             None
         );
+    }
+
+    #[test]
+    fn selective_moves_ahead_leave_the_midgame_more() {
+        let at = |band| {
+            plan(
+                Situation {
+                    clock_secs: Some(295),
+                    grace_secs: 120,
+                    empties: 48,
+                    budget_use: 6.0,
+                    nps: Some(SELECTIVE_REF_NPS),
+                    threads: 8,
+                    ..Situation::default()
+                },
+                Levels { band, ..BASE },
+                Pace::Fast,
+            )
+            .cap
+            .unwrap()
+        };
+        assert!(at(6) > at(0), "{:?} vs {:?}", at(6), at(0));
     }
 
     #[test]
