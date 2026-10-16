@@ -698,6 +698,22 @@ impl Engine {
         self.eval_position_inner(board, depth)
     }
 
+    /// Where `eval_position` would solve, a 99% selective search instead; `None` elsewhere.
+    pub fn eval_position_selective(&mut self, board: &Board) -> Option<MoveEval> {
+        self.stop.reset();
+        if is_game_over(board) || board.empty_count() > self.config.solve_empties {
+            return None;
+        }
+        let r = self
+            .solver
+            .solve_selective(board, Some(&*self.linear), 2.58);
+        Some(MoveEval {
+            pos: r.best_move,
+            value: stone_scale(r.value as f32),
+            ..Default::default()
+        })
+    }
+
     fn eval_position_inner(&mut self, board: &Board, depth: u32) -> MoveEval {
         if is_game_over(board) {
             return MoveEval {
@@ -877,6 +893,27 @@ mod assets_tests {
             assert!(b.movable() & p.to_bit() != 0);
             b.make_move_bits(p);
         }
+    }
+
+    #[test]
+    #[ignore = "requires weights/"]
+    fn the_selective_evaluation_stands_in_only_where_a_solve_would_run() {
+        let mut engine = Engine::new(EngineConfig {
+            use_book: false,
+            ..Default::default()
+        })
+        .expect("engine");
+        engine.set_levels(10, 16, 0);
+        assert!(engine.eval_position_selective(&Board::new()).is_none());
+        let board = Board::from_string(
+            "OOOOOOOOXOOXXX--XXOOXOO-XOXOOO--XOOOOX--XOOXOO--XOOOOO--XXXX---- O",
+        )
+        .unwrap();
+        let approx = engine
+            .eval_position_selective(&board)
+            .expect("in solve range");
+        assert!(!approx.exact);
+        assert!(approx.value.is_finite());
     }
 
     #[test]

@@ -58,7 +58,8 @@ export const api = {
   applyMove: (sq: number | null) => call<GameView>('apply_move', { sq }),
   analyzeLive: () => call<void>('analyze_live'),
   ponderLive: () => call<void>('ponder_live'),
-  evalAt: (n: number, depth: number) => call<EvalPoint>('eval_at', { n, depth }),
+  evalAt: (n: number, depth: number, selective: boolean) =>
+    call<EvalPoint>('eval_at', { n, depth, selective }),
   saveKifu: (black: string, white: string) =>
     call<string | null>('save_kifu', { black, white }),
   loadKifu: () => call<GameView | null>('load_kifu'),

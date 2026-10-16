@@ -39,6 +39,7 @@ export interface EvalPoint {
   value: number;
   exact: boolean;
   from_book: boolean;
+  selective: boolean;
 }
 
 

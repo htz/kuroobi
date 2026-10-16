@@ -214,6 +214,7 @@ data:
     book: "Book"
     book_learned: "Learned"
     search: "Search"
+    selective: "Selective"
     solve: "Solve"
   trend:
     empty: "No reported evals yet"

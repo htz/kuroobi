@@ -104,7 +104,7 @@ export function useEngineTurn(g: Game) {
       setMoveSource, applyView, setPlaying, say, maybeLearn, setStat]);
 }
 
-export type GraphPoint = { value: number; exact: boolean; book: boolean };
+export type GraphPoint = { value: number; exact: boolean; book: boolean; approx?: boolean };
 
 const lineKey = (v: GameView | null) =>
   v ? v.moves.map((m) => (m == null ? 'p' : m)).join(',') : '';
@@ -145,18 +145,31 @@ export function useGraph(g: Game, ggsMatch: boolean, ask: Ask) {
     setValues(null);
     await g.pushLevels();
     const depth = Math.min(g.levels.depth, 14);
-    for (let n = len; n >= 0; n--) {
-      if (seq !== seqRef.current) break;
-      if (vals[n]) continue;
-      if (n < len && v.moves[n] == null) continue;   // pass turns are not measured
-      setProg({ done: len - n + 1, total: len + 1 });
-      try {
-        const p = await api.evalAt(n, depth);
+    // Solves come last: the whole line is drawn from selective values first, then each is replaced.
+    const unsolved: number[] = [];
+    let done = 0;
+    const measure = async (n: number, selective: boolean) => {
+      setProg({ done: ++done, total: len + 1 + unsolved.length });
+      const p = await api.evalAt(n, depth, selective);
+      if (seq !== seqRef.current) return false;
+      if (Number.isFinite(p.value)) {
+        vals[n] = { value: p.value, exact: p.exact, book: p.from_book, approx: p.selective };
+      }
+      if (p.selective) unsolved.push(n);
+      setValues([...vals]);
+      return true;
+    };
+    try {
+      for (let n = len; n >= 0; n--) {
         if (seq !== seqRef.current) break;
-        if (Number.isFinite(p.value)) vals[n] = { value: p.value, exact: p.exact, book: p.from_book };
-        setValues([...vals]);
-      } catch (e) { g.say(tErr(e)); break; }
-    }
+        if (vals[n] || (n < len && v.moves[n] == null)) { done++; continue; }   // pass turns are not measured
+        if (!await measure(n, true)) break;
+      }
+      for (const n of [...unsolved]) {
+        if (seq !== seqRef.current) break;
+        if (!await measure(n, false)) break;
+      }
+    } catch (e) { g.say(tErr(e)); }
     if (seq === seqRef.current) { setBusy(false); setProg(null); }
   }, [g, busy, ggsMatch, ask]);
 

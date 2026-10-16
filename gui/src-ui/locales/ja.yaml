@@ -210,6 +210,7 @@ data:
     book: "定石"
     book_learned: "定石·学"
     search: "探索"
+    selective: "選択読み"
     solve: "読切"
   trend:
     empty: "まだ申告値がありません"

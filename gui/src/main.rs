@@ -251,6 +251,7 @@ struct EvalPoint {
     value: f32,
     exact: bool,
     from_book: bool,
+    selective: bool,
 }
 
 fn board_at_line(game: &mut Reversi, n: usize) -> Result<Board, String> {
@@ -1242,7 +1243,12 @@ async fn analyze_live(app: State<'_, App>, handle: tauri::AppHandle) -> Result<(
 }
 
 #[tauri::command]
-async fn eval_at(app: State<'_, App>, n: usize, depth: u32) -> Result<EvalPoint, String> {
+async fn eval_at(
+    app: State<'_, App>,
+    n: usize,
+    depth: u32,
+    selective: bool,
+) -> Result<EvalPoint, String> {
     if ggs_match_active(&app) {
         return Err("err.busy_ggs_analysis".into());
     }
@@ -1255,7 +1261,7 @@ async fn eval_at(app: State<'_, App>, n: usize, depth: u32) -> Result<EvalPoint,
     if let Some(h) = stop.lock().unwrap().as_ref() {
         h.reset();
     }
-    let (value, exact, from_book, searched) = tauri::async_runtime::spawn_blocking(move || {
+    let (value, exact, from_book, selective) = tauri::async_runtime::spawn_blocking(move || {
         let _g = ActivityGuard::begin(&act, "analyzing");
         let mut guard = eng.lock().unwrap();
         let e = guard.as_mut().unwrap();
@@ -1263,12 +1269,18 @@ async fn eval_at(app: State<'_, App>, n: usize, depth: u32) -> Result<EvalPoint,
         if let Some(v) = from_book {
             return (v, false, true, false);
         }
+        if let Some(mv) = selective
+            .then(|| e.eval_position_selective(&board))
+            .flatten()
+        {
+            return (mv.value, false, false, true);
+        }
         let mv = e.eval_position(&board, depth);
-        (mv.value, mv.exact, false, true)
+        (mv.value, mv.exact, false, false)
     })
     .await
     .map_err(|e| e.to_string())?;
-    if searched
+    if !from_book
         && stop
             .lock()
             .unwrap()
@@ -1282,6 +1294,7 @@ async fn eval_at(app: State<'_, App>, n: usize, depth: u32) -> Result<EvalPoint,
         value,
         exact,
         from_book,
+        selective,
     })
 }
 

@@ -52,7 +52,10 @@ from: book, solve, or an N-ply search.
 Below the board is a scrubber over the moves, ticked every move and
 numbered every ten, with **the losing move marked in red**. Clicking and
 dragging land on the same move. Under it, the eval graph re-measures the
-whole record, so one line shows where the game turned.
+whole record, so one line shows where the game turned. Positions in
+solve range are first drawn from a 99% selective search and then
+replaced by their solves, so the whole line appears before the slow
+part.
 
 ### Book
 
