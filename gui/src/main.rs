@@ -4,7 +4,6 @@
 
 mod ggs;
 mod i18n;
-mod keychain;
 
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
@@ -1715,7 +1714,7 @@ fn ggs_send(app: &State<App>, cmd: ggs::Cmd) -> Result<(), String> {
     ggs_tx(app)?.send(cmd).map_err(|e| e.to_string())
 }
 
-fn read_credentials() -> Option<(String, String)> {
+pub(crate) fn read_credentials() -> Option<(String, String)> {
     for c in [
         ".ggs_credentials",
         "../.ggs_credentials",
@@ -1728,15 +1727,6 @@ fn read_credentials() -> Option<(String, String)> {
         }
     }
     None
-}
-
-fn saved_credentials() -> Option<(String, String)> {
-    if keychain::exists() {
-        return keychain::load();
-    }
-    let (l, p) = read_credentials()?;
-    keychain::save(&l, &p);
-    Some((l, p))
 }
 
 #[tauri::command]
@@ -1766,8 +1756,22 @@ fn ggs_accounts() -> Vec<ggs::SavedAccount> {
 
 #[tauri::command]
 fn ggs_connect_saved(app: State<App>, server: String, login: String) -> Result<(), String> {
-    let pw = keychain::account_password(&server, &login)
+    let pw = ggs::account_password(&server, &login)
         .ok_or_else(|| "err.saved_password_missing".to_string())?;
+    let server = if server == ggs::DEFAULT_SERVER {
+        String::new()
+    } else {
+        server
+    };
+    ggs_send(&app, ggs::Cmd::Connect { login, pw, server })
+}
+
+/// Logs out and back in as a saved account; unlike a logout, auto-login stays on.
+#[tauri::command]
+fn ggs_switch_account(app: State<App>, server: String, login: String) -> Result<(), String> {
+    let pw = ggs::account_password(&server, &login)
+        .ok_or_else(|| "err.saved_password_missing".to_string())?;
+    ggs_send(&app, ggs::Cmd::Disconnect)?;
     let server = if server == ggs::DEFAULT_SERVER {
         String::new()
     } else {
@@ -1796,7 +1800,7 @@ fn js_log(msg: String) {
 
 #[tauri::command]
 fn ggs_disconnect(app: State<App>) -> Result<(), String> {
-    keychain::forget();
+    ggs::clear_auto();
     ggs_send(&app, ggs::Cmd::Disconnect)
 }
 
@@ -2065,7 +2069,6 @@ fn env_overrides() -> Vec<(String, String)> {
         "KUROOBI_LANG",
         "KUROOBI_GGS_WIRE",
         "KUROOBI_LEARN_LOG",
-        "KUROOBI_KEYCHAIN_SERVICE",
         "KUROOBI_SESSION_LOCK",
         "KUROOBI_WEIGHTS_DIR",
     ];
@@ -2168,11 +2171,15 @@ fn main() {
             let demo = std::env::var("KUROOBI_AUTOPLAY").is_ok()
                 || std::env::var("KUROOBI_GGS_AUTOVIEW").is_ok();
             if (force || !demo) && !ggs::session_locked_by_other() {
-                if let Some((l, p)) = saved_credentials() {
+                if let Some((srv, l, p)) = ggs::auto_account() {
                     let _ = handle.tx.send(ggs::Cmd::Connect {
                         login: l,
                         pw: p,
-                        server: String::new(),
+                        server: if srv == ggs::DEFAULT_SERVER {
+                            String::new()
+                        } else {
+                            srv
+                        },
                     });
                 }
             }
@@ -2246,6 +2253,7 @@ fn main() {
             ggs_accounts,
             ggs_connect_saved,
             ggs_forget_account,
+            ggs_switch_account,
             ggs_disconnect,
             ggs_raw,
             ggs_ask,

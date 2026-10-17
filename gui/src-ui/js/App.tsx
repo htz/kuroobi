@@ -3,7 +3,7 @@ import { PlayDock } from './PlayDock';
 import { useGame, type EngineSide } from './state';
 import { fmtSecs, useGgs } from './ggs';
 import { flipped, usePrefs } from './prefs';
-import type { GameView } from './types';
+import type { GameView, GgsSnapshot } from './types';
 import { api, ggsApi, jsLog, onApp, type ActivityView } from './api';
 import { useActivity, useEngineSettings, useEngineTurn, useGraph, useHints, useLearnLog, useStartGame, type AskArgs } from './engine';
 import { connOf, evalsOf, ggsPlaying, movesOf, navBadges, sqName } from './adapt';
@@ -15,6 +15,7 @@ import { EvalGraph, MoveScrub, ScoreRow, StoneDot, srcIsBook, srcLabel } from '.
 import { GgsStatus, JobList, Meter, Nav, navLocal, StatusChip, ggsNav, Toasts, type NavId } from './components/ggs';
 import { Button, Progress, Segmented, Select, Toggle } from './components/primitives';
 import { Icon } from './components/Icons';
+import { AccountList, PUBLIC_SERVER, type Account } from './components/accounts';
 import { BookDock, BookPane, BookTree, useBookBrowse } from './BookScreen';
 import { LearnLog } from './LearnLog';
 import { KifuViewer } from './KifuViewer';
@@ -462,7 +463,7 @@ export function App() {
             </>
           ) : isGgs ? (
             <span style={{ fontSize: 'var(--fs-5)', color: 'var(--sub)' }}>
-              {conn === 'online' ? <>{t('app.ggs.connected')} <b style={{ color: 'var(--text)' }}>{ggs.snap?.login}</b></>
+              {conn === 'online' && ggs.snap ? <>{t('app.ggs.connected')} <AccountSwitch snap={ggs.snap} /></>
                 : t(conn === 'offline' ? 'app.ggs.offline' : 'app.ggs.logging_in')}
             </span>
           ) : study ? (
@@ -700,10 +701,59 @@ const envLabels = (): Record<string, string> => ({
   KUROOBI_AUTOPLAY: t('app.env.autoplay'),
   KUROOBI_THEME: t('app.env.theme'),
   KUROOBI_LEARN_LOG: t('app.env.learn_log'),
-  KUROOBI_KEYCHAIN_SERVICE: t('app.env.keychain'),
   KUROOBI_SESSION_LOCK: t('app.env.session_lock'),
   KUROOBI_WEIGHTS_DIR: t('app.env.weights_dir'),
 });
+
+function AccountSwitch({ snap }: { snap: GgsSnapshot }) {
+  const [open, setOpen] = useState(false);
+  const [saved, setSaved] = useState<Account[]>([]);
+  const box = useRef<HTMLSpanElement>(null);
+  const load = () => void ggsApi.accounts().then(setSaved).catch(() => {});
+  useEffect(load, [snap.login, snap.server]);
+  useEffect(() => {
+    if (!open) return;
+    const away = (e: MouseEvent) => { if (!box.current?.contains(e.target as Node)) setOpen(false); };
+    const esc = (e: KeyboardEvent) => { if (e.key === 'Escape') setOpen(false); };
+    window.addEventListener('mousedown', away);
+    window.addEventListener('keydown', esc);
+    return () => { window.removeEventListener('mousedown', away); window.removeEventListener('keydown', esc); };
+  }, [open]);
+  const label = snap.server && snap.server !== PUBLIC_SERVER ? `${snap.login} @ ${snap.server}` : snap.login;
+  return (
+    <span ref={box} style={{ position: 'relative', display: 'inline-block', marginLeft: 'var(--sp-1)' }}>
+      <button type="button" className="k-press" title={t('app.ggs.switch_account')} aria-expanded={open}
+              onClick={() => { if (!open) load(); setOpen(!open); }} style={{
+        display: 'inline-flex', alignItems: 'center', gap: 'var(--sp-1)',
+        padding: '2px 8px', borderRadius: 'var(--r-2)', border: '1px solid var(--border)',
+        background: 'var(--panel)', color: 'var(--text)', fontWeight: 600, fontSize: 'var(--fs-5)', cursor: 'pointer',
+      }}>
+        {label}<span style={{ color: 'var(--sub)', fontSize: 'var(--fs-7)' }}>▾</span>
+      </button>
+      {open && (
+        <div role="menu" style={{
+          position: 'absolute', top: 'calc(100% + 4px)', left: 0, zIndex: 50, width: 320, maxHeight: 440,
+          display: 'flex', flexDirection: 'column', overflow: 'hidden',
+          background: 'var(--bg)', border: '1px solid var(--border)', borderRadius: 'var(--r-3)', boxShadow: 'var(--sh-2)',
+        }}>
+          <AccountList accounts={saved} current={`${snap.server}|${snap.login}`}
+                       onSelect={(a) => {
+                         if (a.server === snap.server && a.login === snap.login) return;
+                         setOpen(false);
+                         void ggsApi.switchAccount(a.server, a.login);
+                       }} />
+          <button type="button" className="k-row" role="menuitem"
+                  onClick={() => { setOpen(false); void ggsApi.disconnect(); }} style={{
+            flex: 'none', width: '100%', border: 0, borderTop: '1px solid var(--border)', textAlign: 'left',
+            padding: 'var(--sp-2) var(--sp-3)', background: 'transparent', color: 'var(--bad)', fontSize: 'var(--fs-5)',
+          }}>
+            {t('ggs.settings.logout')}
+          </button>
+        </div>
+      )}
+    </span>
+  );
+}
 
 function EnvTags({ items }: { items: [string, string][] }) {
   if (!items.length) return null;

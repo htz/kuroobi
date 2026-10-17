@@ -233,6 +233,7 @@ interface FetchedGgf {
 export interface GgsSnapshot {
   conn: 'disconnected' | 'connecting' | 'logging_in' | 'online';
   login: string;
+  server: string;
   my_ranks: RankRow[];
   log: LogLine[];
   users: UserRow[];

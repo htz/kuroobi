@@ -312,6 +312,8 @@ pub struct StandbyStats {
 pub struct Snapshot {
     pub conn: String, // disconnected | connecting | logging_in | online
     pub login: String,
+    /// `host:port` of the current session.
+    pub server: String,
     #[serde(skip)]
     pub my_rating: Option<f32>,
     pub my_ranks: Vec<RankRow>,
@@ -724,80 +726,231 @@ fn server() -> String {
     }
 }
 
-/// A test server must not touch the real account's history, chat, keychain or book.
+/// Test games must not be learned into the shared book.
 fn local_server() -> bool {
     server() != DEFAULT_SERVER
 }
 
-#[derive(Clone, Serialize, serde::Deserialize, PartialEq)]
-pub struct SavedAccount {
-    pub server: String,
-    pub login: String,
-}
-
-fn accounts_path() -> PathBuf {
+/// `ggs_games/`, holding the account store and one folder per account.
+fn base_dir() -> PathBuf {
     for c in ["ggs_games", "../ggs_games", "../../ggs_games"] {
         let p = PathBuf::from(c);
         if p.is_dir() {
-            return p.join("accounts.json");
+            return p;
         }
     }
-    PathBuf::from("ggs_accounts.json")
+    PathBuf::from(".")
 }
 
-/// Most recently used first; passwords are in the keychain, never in this file.
-pub fn saved_accounts() -> Vec<SavedAccount> {
-    std::fs::read_to_string(accounts_path())
-        .ok()
-        .and_then(|t| serde_json::from_str(&t).ok())
-        .unwrap_or_default()
-}
-
-fn write_accounts(list: &[SavedAccount]) {
-    if let Ok(t) = serde_json::to_string_pretty(list) {
-        let _ = std::fs::write(accounts_path(), t);
-    }
-}
-
-fn remember_account(server: &str, login: &str, pw: &str) {
-    crate::keychain::save_account(server, login, pw);
-    let mut list = saved_accounts();
-    let a = SavedAccount {
-        server: server.to_string(),
-        login: login.to_string(),
-    };
-    list.retain(|x| *x != a);
-    list.insert(0, a);
-    write_accounts(&list);
-}
-
-pub fn forget_account(server: &str, login: &str) {
-    crate::keychain::forget_account(server, login);
-    let mut list = saved_accounts();
-    list.retain(|x| !(x.server == server && x.login == login));
-    write_accounts(&list);
-}
-
-fn history_path() -> PathBuf {
-    for c in ["ggs_games", "../ggs_games", "../../ggs_games"] {
-        let p = PathBuf::from(c);
-        if p.is_dir() {
-            if local_server() {
-                let d = p.join("local");
-                let _ = std::fs::create_dir_all(&d);
-                return d.join("history.jsonl");
+fn safe_name(s: &str) -> String {
+    s.chars()
+        .map(|c| {
+            if c.is_ascii_alphanumeric() || matches!(c, '_' | '-' | '.') {
+                c
+            } else {
+                '_'
             }
-            return p.join("history.jsonl");
-        }
+        })
+        .collect()
+}
+
+/// The account whose history, chat and wire log are read and written.
+static USER: Mutex<Option<(String, String)>> = Mutex::new(None);
+
+fn user_dir(server: &str, login: &str) -> PathBuf {
+    base_dir()
+        .join("users")
+        .join(safe_name(server))
+        .join(safe_name(login))
+}
+
+fn set_user(server: &str, login: &str) {
+    let dir = user_dir(server, login);
+    if !dir.exists() {
+        let _ = std::fs::create_dir_all(&dir);
+        adopt_legacy_data(server, login, &dir);
     }
-    PathBuf::from("ggs_history.jsonl")
+    *USER.lock().unwrap() = Some((server.to_string(), login.to_string()));
+}
+
+/// Data written before per-account folders belongs to the public account whose chat file it kept.
+fn adopt_legacy_data(server: &str, login: &str, dir: &std::path::Path) {
+    if server != DEFAULT_SERVER {
+        return;
+    }
+    let base = base_dir();
+    let chat = base
+        .join("chat")
+        .join(format!("{}.jsonl", safe_name(login)));
+    if !chat.exists() {
+        return;
+    }
+    let _ = std::fs::create_dir_all(dir.join("chat"));
+    for f in [chat.clone(), chat.with_extension("seen")] {
+        let _ = std::fs::rename(&f, dir.join("chat").join(f.file_name().unwrap()));
+    }
+    for f in ["history.jsonl", "ggs_wire.log", "ggs_wire.log.1"] {
+        let _ = std::fs::rename(base.join(f), dir.join(f));
+    }
 }
 
 fn data_dir() -> PathBuf {
-    history_path()
-        .parent()
-        .unwrap_or(&PathBuf::from("."))
-        .to_path_buf()
+    match &*USER.lock().unwrap() {
+        Some((srv, login)) => user_dir(srv, login),
+        None => base_dir(),
+    }
+}
+
+fn history_path() -> PathBuf {
+    data_dir().join("history.jsonl")
+}
+
+#[derive(Clone, Serialize, serde::Deserialize, PartialEq, Default)]
+pub struct SavedAccount {
+    pub server: String,
+    pub login: String,
+    /// Unix seconds of the last successful login.
+    #[serde(default)]
+    pub last: u64,
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub password: String,
+}
+
+#[derive(Serialize, serde::Deserialize, Default)]
+struct AccountStore {
+    accounts: Vec<SavedAccount>,
+    /// `server|login` to log in as at startup; cleared by logging out.
+    #[serde(default)]
+    auto: Option<String>,
+}
+
+// The `.ggs_credentials` prefix keeps the file under the repo's credential ignore rule.
+fn store_path() -> PathBuf {
+    base_dir().join(".ggs_credentials.accounts.json")
+}
+
+fn key_of(server: &str, login: &str) -> String {
+    format!("{server}|{login}")
+}
+
+fn load_store() -> AccountStore {
+    if let Some(s) = std::fs::read_to_string(store_path())
+        .ok()
+        .and_then(|t| serde_json::from_str(&t).ok())
+    {
+        return s;
+    }
+    let s = import_old_credentials();
+    write_store(&s);
+    s
+}
+
+fn write_store(s: &AccountStore) {
+    let Ok(text) = serde_json::to_string_pretty(s) else {
+        return;
+    };
+    let p = store_path();
+    if std::fs::write(&p, text).is_ok() {
+        use std::os::unix::fs::PermissionsExt as _;
+        let _ = std::fs::set_permissions(&p, std::fs::Permissions::from_mode(0o600));
+    }
+}
+
+/// One-time pickup of the login the keychain or `.ggs_credentials` held before the store existed.
+fn import_old_credentials() -> AccountStore {
+    let run = |args: &[&str]| {
+        std::process::Command::new("/usr/bin/security")
+            .args(args)
+            .output()
+            .ok()
+            .filter(|o| o.status.success())
+            .map(|o| String::from_utf8_lossy(&o.stdout).to_string())
+    };
+    let keychain = || -> Option<(String, String)> {
+        let meta = run(&["find-generic-password", "-s", "kuroobi-ggs"])?;
+        let login = meta.lines().find_map(|l| {
+            l.trim()
+                .strip_prefix("\"acct\"<blob>=\"")?
+                .strip_suffix('"')
+                .map(str::to_string)
+        })?;
+        let pw = run(&["find-generic-password", "-s", "kuroobi-ggs", "-w"])?;
+        let pw = pw.trim_end_matches('\n').to_string();
+        (!pw.is_empty() && login != "-").then_some((login, pw))
+    };
+    let mut s = AccountStore::default();
+    if let Some((login, pw)) = keychain().or_else(crate::read_credentials) {
+        s.auto = Some(key_of(DEFAULT_SERVER, &login));
+        s.accounts.push(SavedAccount {
+            server: DEFAULT_SERVER.to_string(),
+            login,
+            last: now_secs(),
+            password: pw,
+        });
+    }
+    s
+}
+
+/// Most recently used first, without passwords.
+pub fn saved_accounts() -> Vec<SavedAccount> {
+    let mut list: Vec<SavedAccount> = load_store()
+        .accounts
+        .into_iter()
+        .map(|a| SavedAccount {
+            password: String::new(),
+            ..a
+        })
+        .collect();
+    list.sort_by_key(|a| std::cmp::Reverse(a.last));
+    list
+}
+
+pub fn account_password(server: &str, login: &str) -> Option<String> {
+    load_store()
+        .accounts
+        .into_iter()
+        .find(|a| a.server == server && a.login == login && !a.password.is_empty())
+        .map(|a| a.password)
+}
+
+/// The account to log in as at startup: `(server, login, password)`.
+pub fn auto_account() -> Option<(String, String, String)> {
+    let s = load_store();
+    let key = s.auto?;
+    s.accounts
+        .into_iter()
+        .find(|a| key_of(&a.server, &a.login) == key && !a.password.is_empty())
+        .map(|a| (a.server, a.login, a.password))
+}
+
+pub fn clear_auto() {
+    let mut s = load_store();
+    s.auto = None;
+    write_store(&s);
+}
+
+fn remember_account(server: &str, login: &str, pw: &str) {
+    let mut s = load_store();
+    s.accounts
+        .retain(|x| !(x.server == server && x.login == login));
+    s.accounts.push(SavedAccount {
+        server: server.to_string(),
+        login: login.to_string(),
+        last: now_secs(),
+        password: pw.to_string(),
+    });
+    s.auto = Some(key_of(server, login));
+    write_store(&s);
+}
+
+pub fn forget_account(server: &str, login: &str) {
+    let mut s = load_store();
+    s.accounts
+        .retain(|x| !(x.server == server && x.login == login));
+    if s.auto.as_deref() == Some(&key_of(server, login)) {
+        s.auto = None;
+    }
+    write_store(&s);
 }
 
 /// The line is signed for the name written first; a synchro match scores the mean of two boards.
@@ -876,7 +1029,7 @@ fn load_chat(login: &str) -> Vec<ChatMsg> {
 }
 
 fn settings_path() -> PathBuf {
-    data_dir().join("ggs_settings.json")
+    base_dir().join("ggs_settings.json")
 }
 
 /// A missing field falls back to its default instead of failing the read and wiping settings.
@@ -2123,6 +2276,12 @@ fn session(ctx: &mut Ctx, rx: &Receiver<Cmd>, login: &str, pw: &str) {
             let mut s = ctx.snap.lock().unwrap();
             s.conn = "connecting".into();
             s.login = login.to_string();
+            s.server = server();
+            drop(s);
+            set_user(&server(), login);
+            let mut s = ctx.snap.lock().unwrap();
+            s.results = load_history();
+            s.chat.clear();
         }
         ctx.emit(true);
         let Some((mut stream, mut writer)) = dial(ctx) else {
@@ -2133,7 +2292,11 @@ fn session(ctx: &mut Ctx, rx: &Receiver<Cmd>, login: &str, pw: &str) {
 
         let mut w = Wire::new();
         loop {
-            while let Ok(cmd) = rx.try_recv() {
+            // Stop at a quit so a Connect queued behind it reaches wait_for_connect.
+            while !w.want_quit {
+                let Ok(cmd) = rx.try_recv() else {
+                    break;
+                };
                 if handle_cmd(
                     ctx,
                     cmd,
@@ -2333,9 +2496,6 @@ fn dispatch_line(
 
     if !*cred_saved && (ln == "READY" || ln.starts_with("/os")) {
         *cred_saved = true;
-        if !local_server() {
-            crate::keychain::save(login, pw);
-        }
         remember_account(&server(), login, pw);
     }
 
@@ -4653,13 +4813,22 @@ fn td_apply_event(td: &mut TdView, login: &str, first: &str, rest: &[&str], now:
 /// Rows of `tourneys`: `id director service #pl played/ rounds start clock type [Winner: X]`.
 fn td_apply_list(td: &mut TdView, rows: &[&str]) {
     for row in rows {
-        let f: Vec<&str> = row.split_whitespace().collect();
+        // `%3d/%3d` runs together once both reach three digits ("100/100").
+        let mut joined = row.to_string();
+        while joined.contains("/ ") {
+            joined = joined.replace("/ ", "/");
+        }
+        let mut f: Vec<&str> = joined.split_whitespace().collect();
         let Some(id) = f.first().and_then(|x| x.parse::<u32>().ok()) else {
             continue;
         };
-        if f.len() < 9 {
+        if f.len() < 8 {
             continue;
         }
+        let Some((played, rounds)) = f[4].split_once('/') else {
+            continue;
+        };
+        f.splice(4..5, [played, rounds]);
         let t = td_entry(td, id);
         t.director = f[1].to_string();
         t.n_players = f[3].parse().unwrap_or(t.n_players);
@@ -5694,11 +5863,26 @@ mod tests {
         td_apply(
             &mut td,
             "kuroobi",
-            "tourneys: 2\n   id director  game #pl   round start             clock       type\n   27  HCyrano    os   7  10/ 10  done        3:00//0:30      s8r14   Winner: ymatioun\n   31  HCyrano    os   3   0/ 10  4:10        3:00//0:30      s8r14",
+            "tourneys: 2\n   id director  game #pl   round start             clock       type\n   27  HCyrano    os   7  10/ 10  done        3:00//0:30      s8r14   Winner: ymatioun\n   31  HCyrano    os   3   0/ 10  4:10        3:00//0:30      s8r14\n   29  HCyrano   /os   2   2/  2  done        1:00//0:30      s8r14   Winner: iEdax\n   11  HCyrano   /os   6 100/100  done        1:00//2:00      s8r14   Winner: ymatioun",
             true,
             100,
         );
-        assert_eq!(td.tourneys.len(), 2);
+        assert_eq!(td.tourneys.len(), 4);
+        let t29 = td.tourneys.iter().find(|t| t.id == 29).unwrap();
+        assert_eq!(
+            (t29.rounds_played, t29.rounds, t29.state.as_str()),
+            (2, 2, "over")
+        );
+        let t11 = td.tourneys.iter().find(|t| t.id == 11).unwrap();
+        assert_eq!(
+            (
+                t11.state.as_str(),
+                t11.rounds,
+                t11.gtype.as_str(),
+                t11.winner.as_str()
+            ),
+            ("over", 100, "s8r14", "ymatioun")
+        );
         let t27 = td.tourneys.iter().find(|t| t.id == 27).unwrap();
         assert_eq!(
             (t27.state.as_str(), t27.winner.as_str(), t27.rounds),

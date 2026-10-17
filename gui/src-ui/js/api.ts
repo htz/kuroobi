@@ -110,9 +110,10 @@ export interface ActivityView {
 export const ggsApi = {
   connect: (login: string, pw: string, server: string) => call<void>('ggs_connect', { login, pw, server }),
   disconnect: () => call('ggs_disconnect'),
-  accounts: () => call<{ server: string; login: string }[]>('ggs_accounts'),
+  accounts: () => call<{ server: string; login: string; last?: number }[]>('ggs_accounts'),
   connectSaved: (server: string, login: string) => call<void>('ggs_connect_saved', { server, login }),
   forgetAccount: (server: string, login: string) => call<void>('ggs_forget_account', { server, login }),
+  switchAccount: (server: string, login: string) => call<void>('ggs_switch_account', { server, login }),
   snapshot: () => call<GgsSnapshot>('ggs_snapshot'),
   raw: (cmd: string) => call('ggs_raw', { cmd }),
   ask: (gtype: string, time: string, opponent: string, rated: boolean) =>

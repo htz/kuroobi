@@ -19,6 +19,7 @@ import {
   type Match, type NavId,
 } from './components/ggs';
 import { Board, type Cell, type EvalInfo } from './components/board';
+import { AccountList, PUBLIC_SERVER, accountKey, lastUsed, type Account } from './components/accounts';
 import { EvalTrend, PlayerRow, RateChart, ResultHead, ResultRow, StoneDot } from './components/data';
 import { flipped, type Prefs } from './prefs';
 
@@ -57,7 +58,7 @@ function Field({ label, children, stretch }: { label: string; children: React.Re
   );
 }
 
-const DEFAULT_SERVER = 'skatgame.net:5000';
+const DEFAULT_SERVER = PUBLIC_SERVER;
 
 function GgsLogin() {
   const [user, setUser] = useState('');
@@ -66,9 +67,14 @@ function GgsLogin() {
   const [status, setStatus] = useState('');
   const [connecting, setConnecting] = useState(false);
 
-  const [saved, setSaved] = useState<{ server: string; login: string }[]>([]);
-  const loadSaved = () => void ggsApi.accounts().then(setSaved).catch(() => {});
+  const [saved, setSaved] = useState<Account[]>([]);
+  const [sel, setSel] = useState<string | null>(null);
+  const loadSaved = () => void ggsApi.accounts().then((a) => {
+    setSaved(a);
+    setSel((cur) => (cur === null && a.length ? accountKey([...a].sort((x, y) => (y.last ?? 0) - (x.last ?? 0))[0]) : cur));
+  }).catch(() => {});
   useEffect(loadSaved, []);
+  const picked_ = saved.find((a) => accountKey(a) === sel);
 
   const run = async (go: () => Promise<void>) => {
     setStatus(t('ggs.login.connecting'));
@@ -82,54 +88,74 @@ function GgsLogin() {
     setConnecting(false);
   };
   const connect = () => run(() => ggsApi.connect(user, pw, server.trim() === DEFAULT_SERVER ? '' : server.trim()));
+  const statusLine = (
+    <div style={{ fontSize: 'var(--fs-6)', minHeight: 16, color: connecting ? 'var(--sub)' : 'var(--bad)' }}>{status}</div>
+  );
 
-  return (
-    <div style={{ flex: 1, display: 'grid', placeItems: 'center', padding: 'var(--sp-5)' }}>
-      <div style={{
-        width: 'var(--w-modal)', borderRadius: 'var(--r-4)', background: 'var(--panel)',
-        border: '1px solid var(--border)', padding: 22,
-        display: 'flex', flexDirection: 'column', gap: 'var(--sp-3h)',
-      }}>
-        <div style={{ fontSize: 'var(--fs-3)', fontWeight: 600 }}>{t('ggs.login.title')}</div>
-        <Note>
-          <span style={{ fontFamily: 'var(--ff-mono)' }}>{server.trim() || DEFAULT_SERVER}</span>
-          {' '}{server.trim() && server.trim() !== DEFAULT_SERVER ? t('ggs.login.local_note') : t('ggs.login.note')}
-        </Note>
-        {saved.length > 0 && (
-          <div style={{ display: 'flex', flexDirection: 'column', gap: 'var(--sp-1)' }}>
-            <div style={{ fontSize: 'var(--fs-6)', color: 'var(--sub)' }}>{t('ggs.login.saved')}</div>
-            {saved.map((a) => (
-              <div key={a.server + '|' + a.login} style={{ display: 'flex', alignItems: 'center', gap: 'var(--sp-2)' }}>
-                <span style={{ flex: 1, minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-                  {a.login} <span style={{ color: 'var(--sub)', fontFamily: 'var(--ff-mono)', fontSize: 'var(--fs-6)' }}>{a.server}</span>
-                </span>
-                <Button variant="primary" onClick={() => void run(() => ggsApi.connectSaved(a.server, a.login))}>
-                  {t('ggs.login.submit')}
-                </Button>
-                <Button onClick={() => void ggsApi.forgetAccount(a.server, a.login).then(loadSaved)}>
-                  {t('ggs.login.remove')}
-                </Button>
-              </div>
-            ))}
-          </div>
-        )}
-        <div style={{ display: 'flex', flexDirection: 'column', gap: 'var(--sp-2)' }}>
-          <LoginField label={t('ggs.login.server')}>
-            <TextField value={server} onChange={setServer} />
-          </LoginField>
-          <LoginField label={t('ggs.login.username')}>
-            <TextField value={user} onChange={setUser} />
-          </LoginField>
-          <LoginField label={t('ggs.login.password')}>
-            <TextField value={pw} password onChange={setPw} />
-          </LoginField>
+  const form = (
+    <div style={{ width: 'var(--w-modal)', display: 'flex', flexDirection: 'column', gap: 'var(--sp-3h)' }}>
+      <div style={{ fontSize: 'var(--fs-3)', fontWeight: 600 }}>
+        {saved.length ? t('ggs.login.other_account') : t('ggs.login.title')}
+      </div>
+      <Note>
+        <span style={{ fontFamily: 'var(--ff-mono)' }}>{server.trim() || DEFAULT_SERVER}</span>
+        {' '}{server.trim() && server.trim() !== DEFAULT_SERVER ? t('ggs.login.local_note') : t('ggs.login.note')}
+      </Note>
+      <div style={{ display: 'flex', flexDirection: 'column', gap: 'var(--sp-2)' }}>
+        <LoginField label={t('ggs.login.server')}>
+          <TextField value={server} onChange={setServer} />
+        </LoginField>
+        <LoginField label={t('ggs.login.username')}>
+          <TextField value={user} onChange={setUser} />
+        </LoginField>
+        <LoginField label={t('ggs.login.password')}>
+          <TextField value={pw} password onChange={setPw} onEnter={() => void connect()} />
+        </LoginField>
+      </div>
+      <Button size="field" variant="primary" className="k-wide"
+              onClick={() => void connect()}>{t('ggs.login.submit')}</Button>
+      {statusLine}
+    </div>
+  );
+
+  const detail = picked_ && (
+    <div style={{ width: 'var(--w-modal)', display: 'flex', flexDirection: 'column', gap: 'var(--sp-3h)' }}>
+      <div>
+        <div className="k-sel" style={{ fontSize: 'var(--fs-1)', fontWeight: 700 }}>{picked_.login}</div>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 'var(--sp-2)', marginTop: 'var(--sp-1)' }}>
+          <span className="k-sel" style={{ fontFamily: 'var(--ff-mono)', fontSize: 'var(--fs-5)', color: 'var(--sub)' }}>{picked_.server}</span>
+          {picked_.server === PUBLIC_SERVER && <Tag tone="accent">{t('ggs.accounts.public')}</Tag>}
         </div>
-        <Button size="field" variant="primary" className="k-wide"
-                onClick={() => void connect()}>{t('ggs.login.submit')}</Button>
-        <div style={{
-          fontSize: 'var(--fs-6)', minHeight: 16,
-          color: connecting ? 'var(--sub)' : 'var(--bad)',
-        }}>{status}</div>
+      </div>
+      {picked_.last ? <Note>{t('ggs.accounts.last', { when: lastUsed(picked_.last) })}</Note> : null}
+      <Note>{(picked_.server === PUBLIC_SERVER ? t('ggs.login.note') : t('ggs.login.local_note')).replace(/^—\s*/, '')}</Note>
+      <Button size="field" variant="primary" className="k-wide"
+              onClick={() => void run(() => ggsApi.connectSaved(picked_.server, picked_.login))}>
+        {t('ggs.login.submit')}
+      </Button>
+      <div>
+        <Button variant="danger" onClick={() => void ggsApi.forgetAccount(picked_.server, picked_.login).then(() => { setSel(null); loadSaved(); })}>
+          {t('ggs.login.remove')}
+        </Button>
+      </div>
+      {statusLine}
+    </div>
+  );
+
+  if (!saved.length) {
+    return <div style={{ flex: 1, display: 'grid', placeItems: 'center', padding: 'var(--sp-5)' }}>{form}</div>;
+  }
+  return (
+    <div style={{ flex: 1, minHeight: 0, display: 'flex' }}>
+      <aside style={{
+        width: 'var(--w-lobby)', flex: 'none', borderRight: '1px solid var(--border)',
+        minHeight: 0, display: 'flex', flexDirection: 'column',
+      }}>
+        <AccountList accounts={saved} selected={sel ?? undefined}
+                     onSelect={(a) => setSel(accountKey(a))} onNew={() => setSel('')} />
+      </aside>
+      <div className="k-scroll" style={{ flex: 1, minHeight: 0, display: 'grid', placeItems: 'center', padding: 'var(--sp-5)' }}>
+        {detail ?? form}
       </div>
     </div>
   );
@@ -1433,8 +1459,6 @@ export function GgsSettings({ snap }: { snap: GgsSnapshot }) {
   const [cores, setCores] = useState(0);
   useEffect(() => { api.activity().then((a) => setCores(a.cores)).catch(() => {}); }, []);
 
-  const online = snap.conn === 'online';
-
   const apply = async () => {
     try {
       await ggsApi.setEngine(levels.depth, levels.solve, levels.band, ponder);
@@ -1555,12 +1579,6 @@ export function GgsSettings({ snap }: { snap: GgsSnapshot }) {
           {!calibrated && <Note>{t('ggs.calib_note')}</Note>}
         </div>
 
-        {online && (
-          <Section title={t('ggs.settings.connection')}>
-            <Note>{t('ggs.settings.logout_note')}</Note>
-            <div><Button variant="danger" onClick={() => void ggsApi.disconnect()}>{t('ggs.settings.logout')}</Button></div>
-          </Section>
-        )}
       </div>
     </div>
   );
