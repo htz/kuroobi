@@ -101,3 +101,64 @@ pub fn load() -> Option<(String, String)> {
     }
     Some((login, pw))
 }
+
+/// Saved logins live under their own service so the auto-login entry above stays single.
+const ACCOUNTS: &str = "kuroobi-ggs-accounts";
+
+fn account_key(server: &str, login: &str) -> String {
+    format!("{server}|{login}")
+}
+
+pub fn save_account(server: &str, login: &str, pw: &str) {
+    let Ok(mut child) = Command::new("/usr/bin/security")
+        .arg("-i")
+        .stdin(Stdio::piped())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .spawn()
+    else {
+        return;
+    };
+    if let Some(mut stdin) = child.stdin.take() {
+        let _ = writeln!(
+            stdin,
+            "add-generic-password -U -s {} -a {} -w {}",
+            quote(ACCOUNTS),
+            quote(&account_key(server, login)),
+            quote(pw)
+        );
+    }
+    let _ = child.wait();
+}
+
+pub fn account_password(server: &str, login: &str) -> Option<String> {
+    let out = Command::new("/usr/bin/security")
+        .args([
+            "find-generic-password",
+            "-s",
+            ACCOUNTS,
+            "-a",
+            &account_key(server, login),
+            "-w",
+        ])
+        .output()
+        .ok()?;
+    let pw = String::from_utf8_lossy(&out.stdout)
+        .trim_end_matches('\n')
+        .to_string();
+    (out.status.success() && !pw.is_empty()).then_some(pw)
+}
+
+pub fn forget_account(server: &str, login: &str) {
+    let _ = Command::new("/usr/bin/security")
+        .args([
+            "delete-generic-password",
+            "-s",
+            ACCOUNTS,
+            "-a",
+            &account_key(server, login),
+        ])
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .status();
+}

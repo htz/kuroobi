@@ -12,7 +12,7 @@ import {
 
 export type NavId =
   | 'play' | 'study' | 'book'
-  | 'ggs-play' | 'ggs-lobby' | 'ggs-players' | 'ggs-results' | 'ggs-chat' | 'ggs-standby' | 'ggs-console' | 'ggs-settings'
+  | 'ggs-play' | 'ggs-lobby' | 'ggs-players' | 'ggs-results' | 'ggs-chat' | 'ggs-tourney' | 'ggs-standby' | 'ggs-console' | 'ggs-settings'
   | 'ggs-login';
 
 type NavItem = {
@@ -45,6 +45,7 @@ export function ggsNav(conn: Conn, badges?: Partial<Record<NavId, Pick<NavItem, 
     { id: 'ggs-players', label: t('ggs.nav.players'), icon: 'ggs-users' },
     { id: 'ggs-results', label: t('ggs.nav.results'), icon: 'results' },
     { id: 'ggs-chat', label: t('ggs.nav.chat'), icon: 'ggs-chat' },
+    { id: 'ggs-tourney', label: t('ggs.nav.tourney'), icon: 'ggs-tourney' },
     { id: 'ggs-standby', label: t('ggs.waiting_mode'), icon: 'ggs-standby' },
     { id: 'ggs-console', label: t('ggs.nav.console'), icon: 'ggs-console' },
   ];
@@ -453,7 +454,7 @@ export function Bubble({ m, showName }: { m: Msg; showName?: boolean }) {
         maxWidth: 320, padding: '6px 10px', borderRadius: 'var(--r-bubble)', fontSize: 'var(--fs-5)', lineHeight: 1.5,
         background: m.mine ? 'var(--accent-dim)' : 'var(--panel)', color: m.mine ? 'var(--on-accent)' : 'var(--text)',
       }}>
-        <span className="k-sel">{m.body}</span>
+        <span className="k-sel" style={{ whiteSpace: 'pre-wrap' }}>{m.body}</span>
         {m.ja && <div className="k-sel" style={{
           marginTop: 4, paddingTop: 4, borderTop: '1px solid var(--border)',
           fontSize: 'var(--fs-6)', color: 'var(--sub)',

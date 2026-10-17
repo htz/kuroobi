@@ -1740,7 +1740,12 @@ fn saved_credentials() -> Option<(String, String)> {
 }
 
 #[tauri::command]
-fn ggs_connect(app: State<App>, login: String, pw: String) -> Result<(), String> {
+fn ggs_connect(
+    app: State<App>,
+    login: String,
+    pw: String,
+    server: Option<String>,
+) -> Result<(), String> {
     if login.trim().is_empty() || pw.is_empty() {
         return Err("err.login_and_password_required".into());
     }
@@ -1749,8 +1754,31 @@ fn ggs_connect(app: State<App>, login: String, pw: String) -> Result<(), String>
         ggs::Cmd::Connect {
             login: login.trim().to_string(),
             pw,
+            server: server.unwrap_or_default(),
         },
     )
+}
+
+#[tauri::command]
+fn ggs_accounts() -> Vec<ggs::SavedAccount> {
+    ggs::saved_accounts()
+}
+
+#[tauri::command]
+fn ggs_connect_saved(app: State<App>, server: String, login: String) -> Result<(), String> {
+    let pw = keychain::account_password(&server, &login)
+        .ok_or_else(|| "err.saved_password_missing".to_string())?;
+    let server = if server == ggs::DEFAULT_SERVER {
+        String::new()
+    } else {
+        server
+    };
+    ggs_send(&app, ggs::Cmd::Connect { login, pw, server })
+}
+
+#[tauri::command]
+fn ggs_forget_account(server: String, login: String) {
+    ggs::forget_account(&server, &login);
 }
 
 #[tauri::command]
@@ -2141,7 +2169,11 @@ fn main() {
                 || std::env::var("KUROOBI_GGS_AUTOVIEW").is_ok();
             if (force || !demo) && !ggs::session_locked_by_other() {
                 if let Some((l, p)) = saved_credentials() {
-                    let _ = handle.tx.send(ggs::Cmd::Connect { login: l, pw: p });
+                    let _ = handle.tx.send(ggs::Cmd::Connect {
+                        login: l,
+                        pw: p,
+                        server: String::new(),
+                    });
                 }
             }
             if force {
@@ -2211,6 +2243,9 @@ fn main() {
             preview_kifu,
             js_log,
             ggs_connect,
+            ggs_accounts,
+            ggs_connect_saved,
+            ggs_forget_account,
             ggs_disconnect,
             ggs_raw,
             ggs_ask,

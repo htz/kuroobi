@@ -1,7 +1,7 @@
 
 export type IconName =
   | 'play' | 'study' | 'ggs-play' | 'ggs-lobby' | 'ggs-users' | 'ggs-chat'
-  | 'ggs-standby' | 'ggs-console' | 'login' | 'cpu' | 'memory'
+  | 'ggs-standby' | 'ggs-tourney' | 'ggs-console' | 'login' | 'cpu' | 'memory'
   | 'check' | 'alert' | 'back' | 'close' | 'panel'
   | 'book' | 'results' | 'prefs';
 
@@ -36,6 +36,10 @@ const PATHS: Record<IconName, React.ReactNode> = {
   'ggs-standby': <>
     <circle cx="12" cy="12" r="8.5" />
     <path d="M12 6.8V12l3.6 2.1" />
+  </>,
+  'ggs-tourney': <>
+    <path d="M7.5 4.5h9v5a4.5 4.5 0 0 1-9 0z" />
+    <path d="M7.5 6.5H4.5a3 3 0 0 0 3 3.5M16.5 6.5h3a3 3 0 0 1-3 3.5M12 14v3.5M8.5 20h7" />
   </>,
   'ggs-console': <>
     <rect x="3" y="4.5" width="18" height="15" rx="2" />

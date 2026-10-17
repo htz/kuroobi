@@ -20,6 +20,8 @@ pub enum Cmd {
     Connect {
         login: String,
         pw: String,
+        /// `host:port`; empty means the public server.
+        server: String,
     },
     Disconnect,
     CloseMatch(String),
@@ -339,6 +341,55 @@ pub struct Snapshot {
     pub log_channel: String,
     pub thinking: Option<String>,
     pub fetched_ggf: Option<FetchedGgf>,
+    pub td: TdView,
+}
+
+#[derive(Clone, Serialize, Default, Debug, PartialEq)]
+pub struct TourneyView {
+    pub id: u32,
+    /// announced | running | break | over | cancelled
+    pub state: String,
+    pub desc: String,
+    pub director: String,
+    pub clock: String,
+    pub gtype: String,
+    pub players: Vec<String>,
+    pub n_players: usize,
+    pub rounds_played: u32,
+    pub rounds: u32,
+    /// Unix seconds of the next start (tournament or round), when known.
+    pub next_at: Option<u64>,
+    pub joined: bool,
+    pub winner: String,
+    /// Latest raw `finger`, `rankings` and full-schedule replies for this tournament.
+    pub info: String,
+    pub rankings: String,
+    pub schedule: String,
+}
+
+#[derive(Clone, Serialize, Default, Debug, PartialEq)]
+pub struct TdReply {
+    pub cmd: String,
+    pub text: String,
+    pub err: bool,
+    pub at: u64,
+}
+
+#[derive(Clone, Serialize, Default)]
+pub struct TdView {
+    pub tourneys: Vec<TourneyView>,
+    pub reply: Option<TdReply>,
+    /// Our matches the director started (`+ match ... T`), newest last.
+    pub games: Vec<TdGame>,
+}
+
+#[derive(Clone, Serialize, Default, Debug, PartialEq)]
+pub struct TdGame {
+    pub id: String,
+    pub tid: u32,
+    pub opp: String,
+    /// Disc difference for us, summed over both boards of a synchro pair.
+    pub diff: Option<i32>,
 }
 
 pub fn demo_snapshot() -> Snapshot {
@@ -661,10 +712,81 @@ pub fn spawn(
     Handle { tx, snapshot }
 }
 
+pub const DEFAULT_SERVER: &str = "skatgame.net:5000";
+static SERVER: Mutex<String> = Mutex::new(String::new());
+
+fn server() -> String {
+    let s = SERVER.lock().unwrap();
+    if s.is_empty() {
+        DEFAULT_SERVER.to_string()
+    } else {
+        s.clone()
+    }
+}
+
+/// A test server must not touch the real account's history, chat, keychain or book.
+fn local_server() -> bool {
+    server() != DEFAULT_SERVER
+}
+
+#[derive(Clone, Serialize, serde::Deserialize, PartialEq)]
+pub struct SavedAccount {
+    pub server: String,
+    pub login: String,
+}
+
+fn accounts_path() -> PathBuf {
+    for c in ["ggs_games", "../ggs_games", "../../ggs_games"] {
+        let p = PathBuf::from(c);
+        if p.is_dir() {
+            return p.join("accounts.json");
+        }
+    }
+    PathBuf::from("ggs_accounts.json")
+}
+
+/// Most recently used first; passwords are in the keychain, never in this file.
+pub fn saved_accounts() -> Vec<SavedAccount> {
+    std::fs::read_to_string(accounts_path())
+        .ok()
+        .and_then(|t| serde_json::from_str(&t).ok())
+        .unwrap_or_default()
+}
+
+fn write_accounts(list: &[SavedAccount]) {
+    if let Ok(t) = serde_json::to_string_pretty(list) {
+        let _ = std::fs::write(accounts_path(), t);
+    }
+}
+
+fn remember_account(server: &str, login: &str, pw: &str) {
+    crate::keychain::save_account(server, login, pw);
+    let mut list = saved_accounts();
+    let a = SavedAccount {
+        server: server.to_string(),
+        login: login.to_string(),
+    };
+    list.retain(|x| *x != a);
+    list.insert(0, a);
+    write_accounts(&list);
+}
+
+pub fn forget_account(server: &str, login: &str) {
+    crate::keychain::forget_account(server, login);
+    let mut list = saved_accounts();
+    list.retain(|x| !(x.server == server && x.login == login));
+    write_accounts(&list);
+}
+
 fn history_path() -> PathBuf {
     for c in ["ggs_games", "../ggs_games", "../../ggs_games"] {
         let p = PathBuf::from(c);
         if p.is_dir() {
+            if local_server() {
+                let d = p.join("local");
+                let _ = std::fs::create_dir_all(&d);
+                return d.join("history.jsonl");
+            }
             return p.join("history.jsonl");
         }
     }
@@ -739,19 +861,18 @@ fn chat_path(login: &str) -> PathBuf {
 }
 
 const CHAT_KEEP: usize = 5000;
+// Per-thread trimming can leave the file above the fixed floor, so the next trim waits for growth past it.
+static CHAT_TRIMMED_LEN: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
 
 fn load_chat(login: &str) -> Vec<ChatMsg> {
     let Ok(text) = std::fs::read_to_string(chat_path(login)) else {
         return Vec::new();
     };
-    let mut out: Vec<ChatMsg> = text
+    let out: Vec<ChatMsg> = text
         .lines()
         .filter_map(|l| serde_json::from_str::<ChatMsg>(l).ok())
         .collect();
-    if out.len() > CHAT_KEEP {
-        out.drain(..out.len() - CHAT_KEEP);
-    }
-    out
+    keep_latest_per_thread(out, CHAT_KEEP)
 }
 
 fn settings_path() -> PathBuf {
@@ -877,7 +998,9 @@ fn append_chat(login: &str, m: &ChatMsg) {
     };
     append_line(&path, &line);
     if let Ok(meta) = std::fs::metadata(&path) {
-        if meta.len() > (CHAT_KEEP as u64) * 120 * 12 / 10 {
+        let floor = (CHAT_KEEP as u64) * 120 * 12 / 10;
+        let last = CHAT_TRIMMED_LEN.load(std::sync::atomic::Ordering::Relaxed);
+        if meta.len() > floor.max(last * 12 / 10) {
             let kept = load_chat(login);
             let body: String = kept
                 .iter()
@@ -885,8 +1008,9 @@ fn append_chat(login: &str, m: &ChatMsg) {
                 .map(|l| l + "\n")
                 .collect();
             let tmp = path.with_extension("jsonl.tmp");
-            if std::fs::write(&tmp, body).is_ok() {
+            if std::fs::write(&tmp, &body).is_ok() {
                 let _ = std::fs::rename(&tmp, &path);
+                CHAT_TRIMMED_LEN.store(body.len() as u64, std::sync::atomic::Ordering::Relaxed);
             }
         }
     }
@@ -1742,6 +1866,8 @@ struct Wire {
     want_quit: bool,
     had_own_match: bool,
     rating_for: Option<String>,
+    chat_block: Option<ChatMsg>,
+    td_block: Vec<String>,
 }
 
 impl Wire {
@@ -1763,6 +1889,8 @@ impl Wire {
             want_quit: false,
             had_own_match: false,
             rating_for: None,
+            chat_block: None,
+            td_block: Vec::new(),
         }
     }
 }
@@ -1879,7 +2007,10 @@ pub fn run(
 fn wait_for_connect(ctx: &mut Ctx, rx: &Receiver<Cmd>) -> Option<(String, String)> {
     loop {
         match rx.recv_timeout(Duration::from_millis(300)) {
-            Ok(Cmd::Connect { login, pw }) => return Some((login, pw)),
+            Ok(Cmd::Connect { login, pw, server }) => {
+                *SERVER.lock().unwrap() = server.trim().to_string();
+                return Some((login, pw));
+            }
             Ok(Cmd::SetEngine {
                 depth,
                 solve,
@@ -1960,17 +2091,14 @@ fn claim_session(ctx: &mut Ctx) -> bool {
 fn restore_chat(ctx: &mut Ctx, login: &str) {
     let mut s = ctx.snap.lock().unwrap();
     if s.chat.is_empty() {
-        let mut past = load_chat(login);
-        if past.len() > 300 {
-            past.drain(..past.len() - 300);
-        }
-        s.chat.extend(past);
+        s.chat
+            .extend(keep_latest_per_thread(load_chat(login), CHAT_IN_MEMORY));
     }
     s.chat_seen = load_chat_seen(login);
 }
 
 fn dial(ctx: &mut Ctx) -> Option<(TcpStream, TcpStream)> {
-    match TcpStream::connect(("skatgame.net", 5000)) {
+    match TcpStream::connect(server()) {
         Ok(stream) => {
             stream
                 .set_read_timeout(Some(Duration::from_millis(250)))
@@ -2205,14 +2333,32 @@ fn dispatch_line(
 
     if !*cred_saved && (ln == "READY" || ln.starts_with("/os")) {
         *cred_saved = true;
-        crate::keychain::save(login, pw);
+        if !local_server() {
+            crate::keychain::save(login, pw);
+        }
+        remember_account(&server(), login, pw);
     }
 
-    if let Some(msg) = parse_chat(ln) {
-        let chan = ctx.snap.lock().unwrap().log_channel.clone();
-        if msg.chan != chan || msg.from != login {
-            push_chat(ctx, login, msg);
+    if !w.td_block.is_empty() {
+        if let Some(body) = ln.strip_prefix('|') {
+            w.td_block.push(body.trim_end().to_string());
+            return;
         }
+        let text = std::mem::take(&mut w.td_block).join("\n");
+        apply_td(ctx, login, &text, true);
+    }
+    if let Some(first) = ln.strip_prefix("/td: ") {
+        w.td_block.push(first.trim_end().to_string());
+        return;
+    }
+    let (done, was_chat) = take_chat_line(&mut w.chat_block, ln);
+    for m in done {
+        if m.from == "/td" {
+            apply_td(ctx, login, &m.text, false);
+        }
+        deliver_chat(ctx, login, m);
+    }
+    if was_chat {
         return;
     }
     if let Some(id) = ln.strip_prefix("/os: rating_update ") {
@@ -2661,8 +2807,28 @@ fn handle_os_line(
             let id = mrest.split_whitespace().next().unwrap_or("").to_string();
             if !id.is_empty() {
                 if let Some(f) = mrest.split_whitespace().last() {
-                    if f == "R" || f == "U" {
-                        ctx.rated_by_base.insert(base_id(&id).to_string(), f == "R");
+                    // Tournament games ("T") are always rated.
+                    if f == "R" || f == "U" || f == "T" {
+                        ctx.rated_by_base.insert(base_id(&id).to_string(), f != "U");
+                    }
+                    if f == "T" && mrest.contains(login) {
+                        let mut snap = ctx.snap.lock().unwrap();
+                        let tid = td_running(&snap.td);
+                        let games = &mut snap.td.games;
+                        let b = base_id(&id).to_string();
+                        if !games.iter().any(|g| g.id == b) {
+                            let opp = match_line_parts(mrest)
+                                .0
+                                .into_iter()
+                                .find(|n| n != login)
+                                .unwrap_or_default();
+                            games.push(TdGame {
+                                id: b,
+                                tid,
+                                opp,
+                                diff: None,
+                            });
+                        }
                     }
                 }
                 let mine = mrest.contains(login);
@@ -2725,6 +2891,13 @@ fn handle_os_line(
         let rest = rest.trim_start();
         if let Some(mrest) = rest.strip_prefix("match ") {
             let was_mine = mrest.contains(login);
+            if was_mine {
+                let id = mrest.split_whitespace().next().unwrap_or("");
+                let mut s = ctx.snap.lock().unwrap();
+                if let Some(g) = s.td.games.iter_mut().find(|g| g.id == base_id(id)) {
+                    g.diff = diff_from_raw(mrest, &g.opp);
+                }
+            }
             {
                 let id = mrest.split_whitespace().next().unwrap_or("").to_string();
                 let mut s = ctx.snap.lock().unwrap();
@@ -4041,7 +4214,7 @@ fn handle_match_end(
     ctx.log("info", &format!("game over: {rest}"));
     ctx.emit(true);
 
-    if !ctx.snap.lock().unwrap().engine.learn {
+    if !ctx.snap.lock().unwrap().engine.learn || local_server() {
         return;
     }
     for (_, lm) in &dropped {
@@ -4258,15 +4431,354 @@ fn parse_chat(ln: &str) -> Option<ChatMsg> {
     })
 }
 
+/// Returns the messages this line completes, and whether the line belonged to a chat.
+fn take_chat_line(block: &mut Option<ChatMsg>, ln: &str) -> (Vec<ChatMsg>, bool) {
+    if let Some(m) = block.as_mut() {
+        if let Some(body) = ln.strip_prefix('|') {
+            if !body.starts_with("---") {
+                if !m.text.is_empty() {
+                    m.text.push('\n');
+                }
+                m.text.push_str(body.trim_end());
+            }
+            return (Vec::new(), true);
+        }
+    }
+    let done: Vec<ChatMsg> = block.take().into_iter().collect();
+    let Some(msg) = parse_chat(ln) else {
+        return (done, false);
+    };
+    // A message may continue on "|" lines (a /td announcement even starts with an empty header), so it waits for the next line.
+    *block = Some(msg);
+    (done, true)
+}
+
+fn apply_td(ctx: &mut Ctx, login: &str, text: &str, direct: bool) {
+    let mut s = ctx.snap.lock().unwrap();
+    td_apply(&mut s.td, login, text, direct, now_secs());
+    drop(s);
+    ctx.dirty = true;
+}
+
+/// The tournament we are playing in right now, which a new `T` match belongs to.
+fn td_running(td: &TdView) -> u32 {
+    td.tourneys
+        .iter()
+        .find(|t| t.joined && t.state == "running")
+        .or_else(|| td.tourneys.iter().find(|t| t.joined && t.state != "over"))
+        .map_or(0, |t| t.id)
+}
+
+/// `m:ss` as printed by the director (`TimeOut`).
+fn td_secs(t: &str) -> Option<u64> {
+    let (m, s) = t.trim().split_once(':')?;
+    Some(m.parse::<u64>().ok()? * 60 + s.parse::<u64>().ok()?)
+}
+
+fn td_entry(td: &mut TdView, id: u32) -> &mut TourneyView {
+    if let Some(i) = td.tourneys.iter().position(|t| t.id == id) {
+        return &mut td.tourneys[i];
+    }
+    td.tourneys.push(TourneyView {
+        id,
+        ..Default::default()
+    });
+    td.tourneys.sort_by_key(|t| std::cmp::Reverse(t.id));
+    let i = td.tourneys.iter().position(|t| t.id == id).unwrap();
+    &mut td.tourneys[i]
+}
+
+/// The number right after `"tournament "` in `s`.
+fn td_id_after(s: &str) -> Option<u32> {
+    let rest = &s[s.find("tournament ")? + "tournament ".len()..];
+    let n: String = rest.chars().take_while(|c| c.is_ascii_digit()).collect();
+    n.parse().ok()
+}
+
+/// Folds one /td message (wording from GGS Service/TD/src) into the tournament list.
+fn td_apply(td: &mut TdView, login: &str, text: &str, direct: bool, now: u64) {
+    let mut lines = text.lines();
+    let first = lines.next().unwrap_or("").trim();
+    let rest: Vec<&str> = lines.collect();
+    let (first, rest) = if first.is_empty() || first.starts_with("---") {
+        let mut it = rest
+            .iter()
+            .copied()
+            .filter(|l| !l.trim_start().starts_with("---"));
+        (it.next().unwrap_or("").trim(), it.collect::<Vec<_>>())
+    } else {
+        (first, rest)
+    };
+
+    if direct {
+        let (err, body) = match first.strip_prefix("ERR ") {
+            Some(e) => (true, e.split_once(": ").map_or(e, |x| x.1)),
+            None => (false, first),
+        };
+        let (cmd, head) = body.split_once(": ").unwrap_or(("", body));
+        let mut full = vec![head];
+        full.extend(rest.iter().copied());
+        td.reply = Some(TdReply {
+            cmd: cmd.to_string(),
+            text: full.join("\n"),
+            err,
+            at: now,
+        });
+        if err {
+            return;
+        }
+        match cmd {
+            "tourneys" => {
+                td_apply_list(td, &rest);
+                return;
+            }
+            "finger" => {
+                td_apply_finger(td, login, head, &rest);
+                if let Ok(id) = head.trim().parse::<u32>() {
+                    td_entry(td, id).info = rest.join("\n");
+                }
+                return;
+            }
+            "rankings" | "st" => {
+                if let Some(id) = td_id_after(head) {
+                    let full = td
+                        .reply
+                        .as_ref()
+                        .map(|r| r.text.clone())
+                        .unwrap_or_default();
+                    let t = td_entry(td, id);
+                    if cmd == "rankings" {
+                        t.rankings = full;
+                    } else {
+                        t.schedule = full;
+                    }
+                }
+                return;
+            }
+            _ => {}
+        }
+        if let Some(text) = body.split_once(": ").map(|x| x.1) {
+            td_apply_event(td, login, text, &rest, now);
+        }
+        return;
+    }
+    td_apply_event(td, login, first, &rest, now);
+}
+
+fn td_apply_event(td: &mut TdView, login: &str, first: &str, rest: &[&str], now: u64) {
+    let Some(id) = td_id_after(first) else {
+        return;
+    };
+    // "join: X joins tournament N" and "withdraw: X withdrawn from tournament N".
+    let event = first.split_once(": ").map_or(first, |x| x.1);
+    let t = td_entry(td, id);
+    if let Some(m) = first
+        .strip_prefix(&format!("tournament {id} starting in "))
+        .and_then(|r| r.strip_suffix(" minutes"))
+    {
+        t.state = "announced".into();
+        if let Ok(m) = m.trim().parse::<u64>() {
+            t.next_at = Some(now + m * 60);
+        }
+        if let Some(d) = rest
+            .iter()
+            .find_map(|l| l.trim().strip_prefix('(').and_then(|x| x.strip_suffix(')')))
+        {
+            t.desc = d.to_string();
+        }
+    } else if let Some(r) = first.strip_prefix(&format!("tournament {id} starts in ")) {
+        t.state = "announced".into();
+        t.next_at = td_secs(r).map(|x| now + x);
+    } else if let Some(r) = first.strip_prefix(&format!("tournament {id} round ")) {
+        if let Some((round, wait)) = r.split_once(" starts in ") {
+            t.state = "break".into();
+            if let Ok(n) = round.trim().parse::<u32>() {
+                t.rounds_played = n.saturating_sub(1);
+            }
+            t.next_at = td_secs(wait).map(|x| now + x);
+        }
+    } else if let Some(r) = first.strip_prefix("starting round ") {
+        t.state = "running".into();
+        t.next_at = None;
+        if let Some(n) = r
+            .split_whitespace()
+            .next()
+            .and_then(|x| x.parse::<u32>().ok())
+        {
+            t.rounds_played = n.saturating_sub(1);
+        }
+    } else if let Some(r) = first.strip_prefix("ending round ") {
+        t.state = "break".into();
+        if let Some(n) = r
+            .split_whitespace()
+            .next()
+            .and_then(|x| x.parse::<u32>().ok())
+        {
+            t.rounds_played = n;
+        }
+    } else if first.contains(" is over.") {
+        t.state = "over".into();
+        t.next_at = None;
+        if t.rounds > 0 {
+            t.rounds_played = t.rounds;
+        }
+    } else if first.contains(" is cancelled") {
+        t.state = "cancelled".into();
+        t.next_at = None;
+    } else if let Some(w) = first.strip_prefix("Congratulations to ") {
+        t.winner = w.split(',').next().unwrap_or("").trim().to_string();
+        t.state = "over".into();
+        t.next_at = None;
+    } else if let Some((who, _)) = event.split_once(" joins tournament ") {
+        let who = who.trim();
+        if who == login {
+            t.joined = true;
+        }
+        if !t.players.iter().any(|p| p == who) {
+            t.players.push(who.to_string());
+            t.n_players += 1;
+        }
+    } else if let Some((who, _)) = event.split_once(" withdrawn from tournament ") {
+        let who = who.trim();
+        if who == login {
+            t.joined = false;
+        }
+        if t.players.iter().any(|p| p == who) {
+            t.players.retain(|p| p != who);
+            t.n_players = t.n_players.saturating_sub(1);
+        }
+    }
+}
+
+/// Rows of `tourneys`: `id director service #pl played/ rounds start clock type [Winner: X]`.
+fn td_apply_list(td: &mut TdView, rows: &[&str]) {
+    for row in rows {
+        let f: Vec<&str> = row.split_whitespace().collect();
+        let Some(id) = f.first().and_then(|x| x.parse::<u32>().ok()) else {
+            continue;
+        };
+        if f.len() < 9 {
+            continue;
+        }
+        let t = td_entry(td, id);
+        t.director = f[1].to_string();
+        t.n_players = f[3].parse().unwrap_or(t.n_players);
+        t.rounds_played = f[4].trim_end_matches('/').parse().unwrap_or(0);
+        t.rounds = f[5].parse().unwrap_or(0);
+        t.clock = f[7].to_string();
+        t.gtype = f[8].to_string();
+        if let Some(i) = f.iter().position(|x| *x == "Winner:") {
+            t.winner = f.get(i + 1).unwrap_or(&"").to_string();
+        }
+        match f[6] {
+            "now" => {
+                t.state = "running".into();
+                t.next_at = None;
+            }
+            "done" => {
+                t.state = "over".into();
+                t.next_at = None;
+            }
+            w => {
+                if t.state.is_empty() || t.state == "over" {
+                    t.state = if t.rounds_played == 0 {
+                        "announced"
+                    } else {
+                        "break"
+                    }
+                    .into();
+                }
+                t.next_at = td_secs(w).map(|x| now_secs() + x);
+            }
+        }
+    }
+}
+
+/// `finger N`: `key : value` lines after the id.
+fn td_apply_finger(td: &mut TdView, login: &str, head: &str, rest: &[&str]) {
+    let Some(id) = head.trim().parse::<u32>().ok() else {
+        return;
+    };
+    let t = td_entry(td, id);
+    for l in rest {
+        let l = l.trim();
+        if let Some((k, v)) = l.split_once(" : ") {
+            let v = v.trim();
+            match k.trim() {
+                "director" => t.director = v.to_string(),
+                "clock" => t.clock = v.to_string(),
+                "type" => t.gtype = v.to_string(),
+                "rounds" => {
+                    if let Some((a, b)) = v.split_once('/') {
+                        t.rounds_played = a.trim().parse().unwrap_or(t.rounds_played);
+                        t.rounds = b.trim().parse().unwrap_or(t.rounds);
+                    }
+                }
+                "players" => {
+                    let mut it = v.split_whitespace();
+                    t.n_players = it.next().and_then(|x| x.parse().ok()).unwrap_or(0);
+                    t.players = it
+                        .filter(|p| *p != "(bye)")
+                        .map(|p| p.trim_matches(|c| c == '(' || c == ')').to_string())
+                        .collect();
+                    t.joined = t.players.iter().any(|p| p == login);
+                }
+                _ => {}
+            }
+        } else if let Some(r) = l.strip_prefix("round ") {
+            if let Some((_, w)) = r.split_once(" begins in ") {
+                t.next_at = td_secs(w).map(|x| now_secs() + x);
+                if t.rounds_played == 0 {
+                    t.state = "announced".into();
+                } else {
+                    t.state = "break".into();
+                }
+            } else if r.contains("is being played") {
+                t.state = "running".into();
+                t.next_at = None;
+            }
+        } else if l == "tournament has finished" {
+            t.state = "over".into();
+            t.next_at = None;
+        }
+    }
+}
+
+fn deliver_chat(ctx: &mut Ctx, login: &str, msg: ChatMsg) {
+    let chan = ctx.snap.lock().unwrap().log_channel.clone();
+    if msg.chan != chan || msg.from != login {
+        push_chat(ctx, login, msg);
+    }
+}
+
 fn push_chat(ctx: &mut Ctx, login: &str, msg: ChatMsg) {
     append_chat(login, &msg);
     let mut s = ctx.snap.lock().unwrap();
+    let thread = msg.thread.clone();
     s.chat.push_back(msg);
-    while s.chat.len() > CHAT_IN_MEMORY {
-        s.chat.pop_front();
+    if s.chat.iter().filter(|m| m.thread == thread).count() > CHAT_IN_MEMORY {
+        if let Some(i) = s.chat.iter().position(|m| m.thread == thread) {
+            s.chat.remove(i);
+        }
     }
     drop(s);
     ctx.dirty = true;
+}
+
+/// Caps each thread separately so a busy analysis channel cannot push out conversations.
+fn keep_latest_per_thread(msgs: Vec<ChatMsg>, n: usize) -> Vec<ChatMsg> {
+    let mut seen: HashMap<String, usize> = HashMap::new();
+    let mut keep: Vec<ChatMsg> = msgs
+        .into_iter()
+        .rev()
+        .filter(|m| {
+            let c = seen.entry(m.thread.clone()).or_default();
+            *c += 1;
+            *c <= n
+        })
+        .collect();
+    keep.reverse();
+    keep
 }
 fn capture_who(ctx: &mut Ctx, kind: &str, buf: &[String], login: &str) {
     let mut users = Vec::new();
@@ -5109,6 +5621,164 @@ mod tests {
             !m3.in_overtime,
             "a second back after a book move is not overtime"
         );
+    }
+
+    #[test]
+    fn td_follows_a_tournament_from_announcement_to_end() {
+        let mut td = TdView::default();
+        let me = "kuroobi";
+        td_apply(
+            &mut td,
+            me,
+            "tournament 31 starting in 5 minutes\n(8x8 SynchroRand Reversi clock: 3:00//0:30, 10 rounds rrobin)\nto play: tell /td join 31\nfor tournament messages: chann + .tourney",
+            false,
+            1000,
+        );
+        let t = &td.tourneys[0];
+        assert_eq!(
+            (t.id, t.state.as_str(), t.next_at),
+            (31, "announced", Some(1300))
+        );
+        assert_eq!(
+            t.desc,
+            "8x8 SynchroRand Reversi clock: 3:00//0:30, 10 rounds rrobin"
+        );
+
+        td_apply(&mut td, me, "join: egrcd joins tournament 31", false, 1005);
+        td_apply(&mut td, me, "join: kuroobi joins tournament 31", true, 1010);
+        assert!(td.tourneys[0].joined);
+        assert_eq!(td.tourneys[0].n_players, 2);
+        assert_eq!(td.reply.as_ref().unwrap().cmd, "join");
+
+        td_apply(&mut td, me, "tournament 31 starts in  1:00", false, 1240);
+        assert_eq!(td.tourneys[0].next_at, Some(1300));
+        td_apply(
+            &mut td,
+            me,
+            "starting round 1 of tournament 31",
+            false,
+            1300,
+        );
+        assert_eq!(td.tourneys[0].state, "running");
+        td_apply(
+            &mut td,
+            me,
+            "ending round 1 of tournament 31\nround   1:\n  1.1  kuroobi   egrcd    +2.0",
+            false,
+            1500,
+        );
+        let t = &td.tourneys[0];
+        assert_eq!((t.state.as_str(), t.rounds_played), ("break", 1));
+        td_apply(
+            &mut td,
+            me,
+            "tournament 31 round 2 starts in  1:00",
+            false,
+            1500,
+        );
+        assert_eq!(td.tourneys[0].next_at, Some(1560));
+        td_apply(
+            &mut td,
+            me,
+            "Congratulations to kuroobi, winner of tournament 31",
+            false,
+            9000,
+        );
+        let t = &td.tourneys[0];
+        assert_eq!((t.state.as_str(), t.winner.as_str()), ("over", "kuroobi"));
+    }
+
+    #[test]
+    fn td_reads_list_finger_and_errors() {
+        let mut td = TdView::default();
+        td_apply(
+            &mut td,
+            "kuroobi",
+            "tourneys: 2\n   id director  game #pl   round start             clock       type\n   27  HCyrano    os   7  10/ 10  done        3:00//0:30      s8r14   Winner: ymatioun\n   31  HCyrano    os   3   0/ 10  4:10        3:00//0:30      s8r14",
+            true,
+            100,
+        );
+        assert_eq!(td.tourneys.len(), 2);
+        let t27 = td.tourneys.iter().find(|t| t.id == 27).unwrap();
+        assert_eq!(
+            (t27.state.as_str(), t27.winner.as_str(), t27.rounds),
+            ("over", "ymatioun", 10)
+        );
+        let t31 = td.tourneys.iter().find(|t| t.id == 31).unwrap();
+        assert_eq!(
+            (t31.state.as_str(), t31.n_players, t31.clock.as_str()),
+            ("announced", 3, "3:00//0:30")
+        );
+
+        td_apply(
+            &mut td,
+            "kuroobi",
+            "finger: 31\nt kuroobi finger: \nid        : 31\njoining   : open\nrounds    : 0/10\nplayers   : 3 egrcd kuroobi (ymatioun) \nround 1 begins in  4:00",
+            true,
+            200,
+        );
+        let t31 = td.tourneys.iter().find(|t| t.id == 31).unwrap();
+        assert!(t31.joined);
+        assert_eq!(t31.players, ["egrcd", "kuroobi", "ymatioun"]);
+
+        td_apply(
+            &mut td,
+            "kuroobi",
+            "ERR 7: join: tournament id does not exist",
+            true,
+            300,
+        );
+        let r = td.reply.as_ref().unwrap();
+        assert!(r.err);
+        assert_eq!(
+            (r.cmd.as_str(), r.text.as_str()),
+            ("join", "tournament id does not exist")
+        );
+    }
+
+    #[test]
+    fn td_announcement_keeps_its_body() {
+        let mut block = None;
+        let lines = [
+            ".chat /td: ",
+            "|---------------- /td --------------",
+            "|tournament 30 starting in 2 minutes",
+            "|to play: tell /td join 30",
+            "|---------------- /td --------------",
+            "READY",
+        ];
+        let mut got = Vec::new();
+        for ln in lines {
+            got.extend(take_chat_line(&mut block, ln).0);
+        }
+        assert_eq!(got.len(), 1);
+        assert_eq!(got[0].from, "/td");
+        assert_eq!(
+            got[0].text,
+            "tournament 30 starting in 2 minutes\nto play: tell /td join 30"
+        );
+        assert!(block.is_none());
+    }
+
+    #[test]
+    fn busy_channel_does_not_evict_other_threads() {
+        let msg = |thread: &str, at: u64| ChatMsg {
+            chan: thread.into(),
+            from: "x".into(),
+            text: "t".into(),
+            at,
+            thread: thread.into(),
+        };
+        let mut v = vec![msg(".chat", 0)];
+        v.extend((1..=10).map(|i| msg(".Harmony", i)));
+        let kept = keep_latest_per_thread(v, 3);
+        assert_eq!(kept.iter().filter(|m| m.thread == ".chat").count(), 1);
+        let harmony: Vec<u64> = kept
+            .iter()
+            .filter(|m| m.thread == ".Harmony")
+            .map(|m| m.at)
+            .collect();
+        assert_eq!(harmony, [8, 9, 10]);
     }
 
     #[test]

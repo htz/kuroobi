@@ -81,6 +81,10 @@ export function navBadges(snap: GgsSnapshot | null, chatUnread: number) {
     },
     'ggs-chat': { count: chatUnread || undefined, alert: true },
     'ggs-standby': { dot: snap?.standby.enabled ? ('ok' as const) : undefined },
+    'ggs-tourney': {
+      dot: snap?.td.tourneys.some((x) => x.joined && x.state !== 'over' && x.state !== 'cancelled')
+        ? ('gold' as const) : undefined,
+    },
   };
 }
 

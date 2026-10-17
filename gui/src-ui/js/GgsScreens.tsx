@@ -1,6 +1,6 @@
 import React, { useEffect, useLayoutEffect, useRef, useState } from 'react';
 import { api, ggsApi, jsLog, onApp } from './api';
-import type { ChatMsg, GameResult, GgsSnapshot, MatchView, UserRow } from './types';
+import type { ChatMsg, GameResult, GgsSnapshot, MatchView, TourneyView, UserRow } from './types';
 import {
   clockChoices, gtypeChoices, clockOf, countDiscs, ggsMoveToIndex, gtypeLabel,
   fingerGroups, fingerKey, fingerValue, hasJapanese, onlineRows, parseCond, presence, translate,
@@ -38,6 +38,7 @@ export function GgsScreen({ nav, snap, onNav, prefs, onKifu }: {
     case 'ggs-results': return <GgsResults snap={snap} onKifu={onKifu} />;
     case 'ggs-chat': return <GgsChat snap={snap} />;
     case 'ggs-standby': return <GgsStandby snap={snap} />;
+    case 'ggs-tourney': return <GgsTourney snap={snap} onNav={onNav} />;
     case 'ggs-console': return <GgsConsole snap={snap} />;
     case 'ggs-settings': return <GgsSettings snap={snap} />;
     default: return null;
@@ -56,23 +57,31 @@ function Field({ label, children, stretch }: { label: string; children: React.Re
   );
 }
 
+const DEFAULT_SERVER = 'skatgame.net:5000';
+
 function GgsLogin() {
   const [user, setUser] = useState('');
   const [pw, setPw] = useState('');
+  const [server, setServer] = useState(DEFAULT_SERVER);
   const [status, setStatus] = useState('');
   const [connecting, setConnecting] = useState(false);
 
-  const connect = async () => {
+  const [saved, setSaved] = useState<{ server: string; login: string }[]>([]);
+  const loadSaved = () => void ggsApi.accounts().then(setSaved).catch(() => {});
+  useEffect(loadSaved, []);
+
+  const run = async (go: () => Promise<void>) => {
     setStatus(t('ggs.login.connecting'));
     setConnecting(true);
     try {
-      await ggsApi.connect(user, pw);
+      await go();
       setStatus('');
     } catch (e) {
       setStatus(tErr(e));
     }
     setConnecting(false);
   };
+  const connect = () => run(() => ggsApi.connect(user, pw, server.trim() === DEFAULT_SERVER ? '' : server.trim()));
 
   return (
     <div style={{ flex: 1, display: 'grid', placeItems: 'center', padding: 'var(--sp-5)' }}>
@@ -83,10 +92,31 @@ function GgsLogin() {
       }}>
         <div style={{ fontSize: 'var(--fs-3)', fontWeight: 600 }}>{t('ggs.login.title')}</div>
         <Note>
-          <span style={{ fontFamily: 'var(--ff-mono)' }}>skatgame.net:5000</span>
-          {' '}{t('ggs.login.note')}
+          <span style={{ fontFamily: 'var(--ff-mono)' }}>{server.trim() || DEFAULT_SERVER}</span>
+          {' '}{server.trim() && server.trim() !== DEFAULT_SERVER ? t('ggs.login.local_note') : t('ggs.login.note')}
         </Note>
+        {saved.length > 0 && (
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 'var(--sp-1)' }}>
+            <div style={{ fontSize: 'var(--fs-6)', color: 'var(--sub)' }}>{t('ggs.login.saved')}</div>
+            {saved.map((a) => (
+              <div key={a.server + '|' + a.login} style={{ display: 'flex', alignItems: 'center', gap: 'var(--sp-2)' }}>
+                <span style={{ flex: 1, minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                  {a.login} <span style={{ color: 'var(--sub)', fontFamily: 'var(--ff-mono)', fontSize: 'var(--fs-6)' }}>{a.server}</span>
+                </span>
+                <Button variant="primary" onClick={() => void run(() => ggsApi.connectSaved(a.server, a.login))}>
+                  {t('ggs.login.submit')}
+                </Button>
+                <Button onClick={() => void ggsApi.forgetAccount(a.server, a.login).then(loadSaved)}>
+                  {t('ggs.login.remove')}
+                </Button>
+              </div>
+            ))}
+          </div>
+        )}
         <div style={{ display: 'flex', flexDirection: 'column', gap: 'var(--sp-2)' }}>
+          <LoginField label={t('ggs.login.server')}>
+            <TextField value={server} onChange={setServer} />
+          </LoginField>
           <LoginField label={t('ggs.login.username')}>
             <TextField value={user} onChange={setUser} />
           </LoginField>
@@ -585,6 +615,458 @@ function GgsStandby({ snap }: { snap: GgsSnapshot }) {
       </Section>
     </div>
   );
+}
+
+const td = (cmd: string) => void ggsApi.raw(`tell /td ${cmd}`).catch(() => {});
+
+function useNow(): number {
+  const [now, setNow] = useState(() => Date.now() / 1000);
+  useEffect(() => {
+    const h = window.setInterval(() => setNow(Date.now() / 1000), 1000);
+    return () => window.clearInterval(h);
+  }, []);
+  return now;
+}
+
+const mmss = (secs: number): string => {
+  const s = Math.max(0, Math.round(secs));
+  return `${Math.floor(s / 60)}:${String(s % 60).padStart(2, '0')}`;
+};
+
+function GgsTourney({ snap, onNav }: { snap: GgsSnapshot; onNav: (id: NavId) => void }) {
+  const now = useNow();
+  const [sel, setSel] = useState<number | null>(null);
+  useEffect(() => { if (sel == null) td('t'); }, [sel]);
+  const picked = sel == null ? undefined : snap.td.tourneys.find((x) => x.id === sel);
+  if (picked) return <TourneyDetail snap={snap} x={picked} now={now} onBack={() => setSel(null)} onNav={onNav} />;
+
+  const live = snap.td.tourneys.filter((x) => x.state !== 'over' && x.state !== 'cancelled');
+  const past = snap.td.tourneys.filter((x) => x.state === 'over' || x.state === 'cancelled');
+  return (
+    <div className="k-scroll" style={{ flex: 1, minHeight: 0, padding: 'var(--sp-4) var(--sp-4) 0' }}>
+      <Section title={t('ggs.tourney.title')}
+               aside={<Button onClick={() => td('t')}>{t('ggs.tourney.refresh')}</Button>}>
+        {live.some((x) => x.joined) && snap.standby.enabled && (
+          <Note>
+            {t('ggs.tourney.standby_warn')}{' '}
+            <Button onClick={() => onNav('ggs-standby')}>{t('ggs.play.to_standby')}</Button>
+          </Note>
+        )}
+        <TdError snap={snap} now={now} />
+        {live.length === 0
+          ? <Empty>{t('ggs.tourney.none')}</Empty>
+          : <List>{live.map((x) => <TourneyRow key={x.id} x={x} now={now} onOpen={() => setSel(x.id)} />)}</List>}
+        <Note>{t('ggs.tourney.note')}</Note>
+      </Section>
+      {past.length > 0 && (
+        <Section title={t('ggs.tourney.past')}>
+          <List>{past.map((x) => <TourneyRow key={x.id} x={x} now={now} onOpen={() => setSel(x.id)} />)}</List>
+        </Section>
+      )}
+    </div>
+  );
+}
+
+const tdErrors: [RegExp, string][] = [
+  [/does not exist/, 'ggs.tourney.err.not_exist'],
+  [/already in the tournament/, 'ggs.tourney.err.already'],
+  [/after tournament starts|tournament is over/, 'ggs.tourney.err.started'],
+  [/registered/, 'ggs.tourney.err.unregistered'],
+];
+
+function TdError({ snap, now }: { snap: GgsSnapshot; now: number }) {
+  const r = snap.td.reply;
+  if (!r?.err || now - r.at > 60) return null;
+  const key = tdErrors.find(([re]) => re.test(r.text))?.[1];
+  return <Note>{key ? t(key) : t('ggs.tourney.err.other', { text: r.text })}</Note>;
+}
+
+const tourneySub = (x: TourneyView, now: number): string => {
+  const left = x.next_at != null ? mmss(x.next_at - now) : '';
+  return [
+    x.desc || [x.gtype, x.clock].filter(Boolean).join(' '),
+    x.rounds ? t('ggs.tourney.rounds', {
+      done: x.state === 'running' ? x.rounds_played + 1 : x.rounds_played, all: x.rounds,
+    }) : '',
+    x.n_players ? t('ggs.tourney.players', { n: x.n_players }) : '',
+    x.winner ? t('ggs.tourney.winner', { name: x.winner }) : '',
+    left && x.state === 'announced' ? t('ggs.tourney.starts_in', { left }) : '',
+    left && x.state === 'break' ? t('ggs.tourney.next_round_in', { left }) : '',
+  ].filter(Boolean).join(' · ');
+};
+
+const stateTone = (x: TourneyView): 'accent' | 'ok' | 'sub' =>
+  x.state === 'running' ? 'accent' : x.state === 'break' || x.state === 'announced' ? 'ok' : 'sub';
+
+const beforeStart = (x: TourneyView): boolean => x.state === 'announced' || x.state === '';
+
+function JoinButtons({ x }: { x: TourneyView }) {
+  if (!beforeStart(x)) return null;
+  return x.joined
+    ? <Button onClick={() => td(`withdraw ${x.id}`)}>{t('ggs.tourney.withdraw')}</Button>
+    : <Button variant="primary" onClick={() => td(`join ${x.id}`)}>{t('ggs.tourney.join')}</Button>;
+}
+
+function TourneyRow({ x, now, onOpen }: { x: TourneyView; now: number; onOpen: () => void }) {
+  return (
+    <div className="k-row" style={{ cursor: 'pointer' }} onClick={onOpen}>
+      <Row title={t('ggs.tourney.name', { id: x.id }) + (x.joined ? ' · ' + t('ggs.tourney.joined') : '')}
+           sub={tourneySub(x, now)}
+           tag={x.state ? t(`ggs.tourney.state.${x.state}`) : undefined} tagTone={stateTone(x)}
+           actions={<span onClick={(e) => e.stopPropagation()}><JoinButtons x={x} /></span>} />
+    </div>
+  );
+}
+
+function TourneyDetail({ snap, x, now, onBack, onNav }: {
+  snap: GgsSnapshot; x: TourneyView; now: number; onBack: () => void; onNav: (id: NavId) => void;
+}) {
+  const started = !beforeStart(x) && x.state !== 'cancelled';
+  const refresh = React.useCallback(() => {
+    td(`f ${x.id}`);
+    if (started) { td(`r ${x.id}`); td(`st ${x.id}`); }
+  }, [x.id, started]);
+  useEffect(refresh, [refresh, x.rounds_played, x.state]);
+
+  const me = snap.login;
+  const ranks = parseRankings(x.rankings);
+  const sched = parseSchedule(x.schedule);
+  const info = parseFinger(x.info);
+  const synchro = (x.gtype || info.get('type') || '').startsWith('s');
+  const mine = sched.filter((r) => r.black === me || r.white === me);
+  const myRank = ranks.findIndex((r) => r.name === me);
+
+  return (
+    <div style={{ flex: 1, minHeight: 0, display: 'flex', flexDirection: 'column' }}>
+      <div style={{
+        flex: 'none', display: 'flex', alignItems: 'center', gap: 'var(--sp-3)',
+        padding: 'var(--sp-3) var(--sp-4)', borderBottom: '1px solid var(--border)',
+        background: 'var(--panel)',
+      }}>
+        <IconButton name="back" label={t('ggs.back_to_list')} onClick={onBack} />
+        <span className="k-sel" style={{ fontSize: 'var(--fs-2)', fontWeight: 600 }}>{t('ggs.tourney.name', { id: x.id })}</span>
+        {x.state && <Tag tone={stateTone(x)}>{t(`ggs.tourney.state.${x.state}`)}</Tag>}
+        {x.joined && x.state !== 'over' && <Tag tone="ok">{t('ggs.tourney.joined')}</Tag>}
+        <span style={{ marginLeft: 'auto' }} />
+        <JoinButtons x={x} />
+        <Button onClick={refresh}>{t('ggs.tourney.refresh')}</Button>
+      </div>
+
+      <div className="k-scroll" style={{ flex: 1, minHeight: 0, padding: 'var(--sp-4)' }}>
+        <TdError snap={snap} now={now} />
+        <div style={{
+          display: 'grid', gap: 'var(--sp-3)', marginBottom: 'var(--sp-4)',
+          gridTemplateColumns: 'repeat(auto-fit, minmax(220px, 1fr))',
+        }}>
+          <ProgressCard x={x} now={now} />
+          {x.joined && started && myRank >= 0 && <MyCard rank={myRank + 1} of={ranks.length} r={ranks[myRank]} />}
+          <RuleCard x={x} info={info} />
+          <PlayersCard x={x} info={info} me={me} />
+        </div>
+
+        {mine.length > 0 && (
+          <Section title={t('ggs.tourney.my_games')}>
+            <List>
+              {mine.map((r) => {
+                const g = snap.td.games.find((gg) => gg.tid === x.id && gg.diff == null && gg.opp === (r.black === me ? r.white : r.black));
+                return <MyGameRow key={r.game} r={r} me={me} synchro={synchro}
+                                  onOpen={g ? () => { focusMatch(g.id); onNav('ggs-play'); } : undefined} />;
+              })}
+            </List>
+          </Section>
+        )}
+
+        {started && (
+          <Section title={t('ggs.tourney.rankings')}>
+            {ranks.length ? <RankTable ranks={ranks} login={me} /> : <Empty>{t('ggs.loading')}</Empty>}
+          </Section>
+        )}
+
+        {started && (
+          <Section title={t('ggs.tourney.schedule')}>
+            {sched.length ? <ScheduleView rows={sched} login={me} synchro={synchro} /> : <Empty>{t('ggs.loading')}</Empty>}
+          </Section>
+        )}
+      </div>
+    </div>
+  );
+}
+
+function Card({ label, children }: { label: string; children: React.ReactNode }) {
+  return (
+    <div style={{
+      background: 'var(--card)', border: '1px solid var(--border-weak)', borderRadius: 'var(--r-4)',
+      padding: 'var(--sp-3) var(--sp-4)', display: 'flex', flexDirection: 'column', gap: 'var(--sp-2)', minWidth: 0,
+    }}>
+      <span style={{ fontSize: 'var(--fs-7)', fontWeight: 600, letterSpacing: '.08em', color: 'var(--sub)' }}>{label}</span>
+      {children}
+    </div>
+  );
+}
+
+const Big = ({ children, color }: { children: React.ReactNode; color?: string }) => (
+  <span style={{ fontSize: 'var(--fs-1)', fontWeight: 700, fontVariantNumeric: 'tabular-nums', color }}>{children}</span>
+);
+const Sub = ({ children }: { children: React.ReactNode }) => (
+  <span style={{ fontSize: 'var(--fs-6)', color: 'var(--sub)' }}>{children}</span>
+);
+
+function ProgressCard({ x, now }: { x: TourneyView; now: number }) {
+  const all = x.rounds || 0;
+  const cur = x.state === 'running' ? x.rounds_played + 1 : x.rounds_played;
+  const left = x.next_at != null ? mmss(x.next_at - now) : '';
+  const line = x.state === 'announced' && left ? t('ggs.tourney.starts_in', { left })
+    : x.state === 'break' && left ? t('ggs.tourney.next_round_in', { left })
+      : x.state === 'over' && x.winner ? t('ggs.tourney.winner', { name: x.winner })
+        : x.state ? t(`ggs.tourney.state.${x.state}`) : '';
+  return (
+    <Card label={t('ggs.tourney.card.progress')}>
+      <span style={{ display: 'flex', alignItems: 'baseline', gap: 'var(--sp-1)' }}>
+        <Big>{x.state === 'announced' && left ? left : `${cur}`}</Big>
+        {!(x.state === 'announced' && left) && all > 0 && <Sub>/ {all} {t('ggs.tourney.col.round')}</Sub>}
+      </span>
+      {all > 0 && (
+        <span style={{ display: 'flex', gap: 3 }}>
+          {Array.from({ length: all }, (_, i) => (
+            <span key={i} style={{
+              flex: 1, height: 4, borderRadius: 'var(--r-0)',
+              background: i < x.rounds_played ? 'var(--ok)' : i === x.rounds_played && x.state === 'running' ? 'var(--accent)' : 'var(--border)',
+            }} />
+          ))}
+        </span>
+      )}
+      <Sub>{line}</Sub>
+    </Card>
+  );
+}
+
+function MyCard({ rank, of, r }: { rank: number; of: number; r: RankRow }) {
+  return (
+    <Card label={t('ggs.tourney.card.me')}>
+      <span style={{ display: 'flex', alignItems: 'baseline', gap: 'var(--sp-1)' }}>
+        <Big color={rank === 1 ? 'var(--gold)' : undefined}>{t('ggs.tourney.place', { n: rank })}</Big>
+        <Sub>/ {t('ggs.tourney.players', { n: of })}</Sub>
+      </span>
+      <span style={{ fontSize: 'var(--fs-5)', fontVariantNumeric: 'tabular-nums' }}>
+        {t('ggs.tourney.points_n', { n: r.pts })}
+        {' · '}<span style={{ color: 'var(--ok)' }}>{r.w}{t('ggs.stat.wins')}</span>
+        {' '}<span style={{ color: 'var(--bad)' }}>{r.l}{t('ggs.stat.losses')}</span>
+        {' '}{r.d}{t('ggs.stat.draws')}
+      </span>
+      <Sub>{t('ggs.tourney.col.disc')} {signed(r.disc)}</Sub>
+    </Card>
+  );
+}
+
+// GGS clock text is "main/increment/extension", e.g. "3:00//0:30".
+const clockText = (ck: string): string => {
+  const [main, inc, ext] = ck.split('/');
+  return [main, inc ? t('ggs.tourney.clock_inc', { v: inc }) : '', ext ? t('ggs.tourney.clock_ext', { v: ext }) : '']
+    .filter(Boolean).join(' ');
+};
+
+function RuleCard({ x, info }: { x: TourneyView; info: Map<string, string> }) {
+  const ck = x.clock || info.get('clock') || '';
+  const type = x.gtype || info.get('type') || '';
+  return (
+    <Card label={t('ggs.tourney.card.rules')}>
+      <span style={{ display: 'flex', alignItems: 'baseline', gap: 'var(--sp-2)' }}>
+        <Big>{ck ? ck.split('/')[0] : '—'}</Big>
+        <Sub>{ck ? clockText(ck).replace(ck.split('/')[0], '').trim() : ''}</Sub>
+      </span>
+      <span style={{ fontSize: 'var(--fs-5)' }}>
+        {[type ? gtypeLabel(type) : '', x.rounds ? t('ggs.tourney.rrobin', { n: x.rounds }) : ''].filter(Boolean).join(' · ')}
+      </span>
+      <Sub>
+        {[info.get('breaks') ? t('ggs.tourney.break_len', { v: info.get('breaks')!.trim() }) : '',
+          (x.director || info.get('director')) ? t('ggs.tourney.directed_by', { name: x.director || info.get('director')! }) : '']
+          .filter(Boolean).join(' · ')}
+      </Sub>
+    </Card>
+  );
+}
+
+function PlayersCard({ x, info, me }: { x: TourneyView; info: Map<string, string>; me: string }) {
+  const names = (info.get('players') ?? '').split(/\s+/).slice(1)
+    .map((p) => p.replace(/[()]/g, '')).filter((p) => p && p !== 'bye');
+  const list = names.length ? names : x.players;
+  return (
+    <Card label={t('ggs.tourney.card.players')}>
+      <span style={{ display: 'flex', alignItems: 'baseline', gap: 'var(--sp-1)' }}>
+        <Big>{list.length || x.n_players}</Big><Sub>{t('ggs.tourney.people')}</Sub>
+        {beforeStart(x) && info.get('joining') && (
+          <span style={{ marginLeft: 'auto' }}>
+            <Tag tone={info.get('joining') === 'open' ? 'ok' : 'sub'}>
+              {info.get('joining') === 'open' ? t('ggs.tourney.joining_open') : t('ggs.tourney.joining_closed')}
+            </Tag>
+          </span>
+        )}
+      </span>
+      <span style={{ display: 'flex', flexWrap: 'wrap', gap: 'var(--sp-1)' }}>
+        {list.map((n) => (
+          <span key={n} className="k-sel" style={{
+            fontSize: 'var(--fs-6)', padding: '2px 8px', borderRadius: 'var(--r-pill)',
+            background: n === me ? 'var(--accent-dim)' : 'var(--panel)',
+            color: n === me ? 'var(--on-accent)' : 'var(--text)',
+          }}>{n}</span>
+        ))}
+      </span>
+    </Card>
+  );
+}
+
+const signed = (v: string | number): string => {
+  const n = typeof v === 'number' ? v : parseFloat(v);
+  if (!isFinite(n)) return String(v);
+  const s = Number.isInteger(n) ? String(n) : n.toFixed(1);
+  return n > 0 ? '+' + s : s;
+};
+
+function MyGameRow({ r, me, synchro, onOpen }: {
+  r: SchedRow; me: string; synchro: boolean; onOpen?: () => void;
+}) {
+  const black = r.black === me;
+  const opp = black ? r.white : r.black;
+  const v = parseFloat(r.raw);
+  const done = isFinite(v);
+  const mine = done ? (black ? v : -v) * (synchro ? 2 : 1) : 0;
+  return (
+    <div style={{
+      display: 'flex', alignItems: 'center', gap: 'var(--sp-3)', height: 'var(--h-row2)',
+      padding: '0 var(--sp-3)', borderBottom: '1px solid var(--border-weak)', fontSize: 'var(--fs-5)',
+    }}>
+      <span style={{ width: 72, flex: 'none', color: 'var(--sub)', fontVariantNumeric: 'tabular-nums' }}>
+        {t('ggs.tourney.round_n', { n: r.round })}
+      </span>
+      <span style={{ width: 52, flex: 'none', fontWeight: 600,
+                     color: !done ? 'var(--accent)' : mine > 0 ? 'var(--ok)' : mine < 0 ? 'var(--bad)' : 'var(--sub)' }}>
+        {!done ? r.result : mine > 0 ? t('data.result.win') : mine < 0 ? t('data.result.loss') : t('data.result.draw')}
+      </span>
+      <span style={{ display: 'flex', alignItems: 'center', gap: 'var(--sp-1)', flex: 1, minWidth: 0 }}>
+        {!synchro && <StoneDot color={black ? 'w' : 'b'} />}
+        <span className="k-sel" style={{ fontSize: 'var(--fs-4)', fontWeight: 600 }}>{opp}</span>
+      </span>
+      <span style={{ width: 96, flex: 'none', textAlign: 'right', fontVariantNumeric: 'tabular-nums',
+                     fontSize: 'var(--fs-4)', fontWeight: 600 }}>
+        {done ? signed(mine) : ''}
+      </span>
+      <span style={{ width: 96, flex: 'none', textAlign: 'right' }}>
+        {onOpen && <Button onClick={onOpen}>{t('ggs.tourney.open_game')}</Button>}
+      </span>
+    </div>
+  );
+}
+
+type RankRow = { pts: string; w: number; d: number; l: number; disc: string; name: string; tb: string };
+
+function parseRankings(text: string): RankRow[] {
+  return text.split('\n').flatMap((l) => {
+    const m = /^\s*([\d.]+)\s*\(\s*(\d+)\s+(\d+)\s+(\d+)\)\s*\{\s*([-+\d.]+)\s*\}\s*(\S+)\s*\[([\d.]+)\]/.exec(l);
+    return m ? [{ pts: m[1], w: +m[2], d: +m[3], l: +m[4], disc: m[5], name: m[6], tb: m[7] }] : [];
+  });
+}
+
+function parseFinger(text: string): Map<string, string> {
+  return new Map(text.split('\n').flatMap((l) => {
+    const m = /^\s*(\w+)\s+:\s*(.*)$/.exec(l);
+    return m ? [[m[1], m[2].trim()] as [string, string]] : [];
+  }));
+}
+
+function RankTable({ ranks, login }: { ranks: RankRow[]; login: string }) {
+  const cols: Col[] = [
+    { head: t('ggs.tourney.col.rank'), w: 48, right: true, num: true },
+    { head: t('ggs.tourney.col.player'), clip: true },
+    { head: t('ggs.tourney.col.points'), w: 64, right: true, num: true },
+    { head: t('ggs.tourney.col.wdl'), w: 104, right: true, num: true },
+    { head: t('ggs.tourney.col.disc'), w: 88, right: true, num: true },
+    { head: t('ggs.tourney.col.tiebreak'), w: 80, right: true, num: true },
+  ];
+  return (
+    <List>
+      <TableHead cols={cols} />
+      {ranks.map((r, i) => (
+        <TableRow key={r.name} cols={cols} on={r.name === login}>
+          <span style={{ fontWeight: 700, color: i === 0 ? 'var(--gold)' : 'var(--sub)' }}>{i + 1}</span>
+          <span className="k-sel" style={{ fontWeight: r.name === login ? 700 : 500 }}>{r.name}</span>
+          <span style={{ fontWeight: 700 }}>{r.pts}</span>
+          <span>
+            <span style={{ color: 'var(--ok)' }}>{r.w}</span>{' - '}{r.d}{' - '}<span style={{ color: 'var(--bad)' }}>{r.l}</span>
+          </span>
+          <span style={{ color: parseFloat(r.disc) > 0 ? 'var(--ok)' : parseFloat(r.disc) < 0 ? 'var(--bad)' : 'var(--sub)' }}>{signed(r.disc)}</span>
+          <span style={{ color: 'var(--sub)' }}>{r.tb}</span>
+        </TableRow>
+      ))}
+    </List>
+  );
+}
+
+function ScheduleView({ rows, login, synchro }: { rows: SchedRow[]; login: string; synchro: boolean }) {
+  const rounds = [...new Set(rows.map((r) => r.round))];
+  return (
+    <div style={{ display: 'flex', flexDirection: 'column', gap: 'var(--sp-3)' }}>
+      {rounds.map((rd) => (
+        <div key={rd}>
+          <div style={{ fontSize: 'var(--fs-6)', fontWeight: 600, color: 'var(--sub)', padding: '0 var(--sp-3) var(--sp-1)' }}>
+            {t('ggs.tourney.round_n', { n: rd })}
+          </div>
+          <List>
+            {rows.filter((r) => r.round === rd).map((r) => {
+              const v = parseFloat(r.raw);
+              const done = isFinite(v);
+              const mineRow = r.black === login || r.white === login;
+              const name = (n: string, win: boolean) => (
+                <span className="k-sel" style={{
+                  fontWeight: win ? 700 : 400, color: n === login ? 'var(--accent)' : done && !win ? 'var(--sub)' : 'var(--text)',
+                  overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
+                }}>{n}</span>
+              );
+              return (
+                <div key={r.game} style={{
+                  display: 'grid', gridTemplateColumns: '1fr 120px 1fr', alignItems: 'center', gap: 'var(--sp-3)',
+                  height: 'var(--h-row)', padding: '0 var(--sp-3)', fontSize: 'var(--fs-5)',
+                  borderBottom: '1px solid var(--border-weak)', ...picked(mineRow),
+                }}>
+                  <span style={{ display: 'flex', alignItems: 'center', gap: 'var(--sp-1)', justifyContent: 'flex-end', minWidth: 0 }}>
+                    {name(r.black, done && v > 0)}{!synchro && <StoneDot color="b" />}
+                  </span>
+                  <span style={{ textAlign: 'center', fontVariantNumeric: 'tabular-nums',
+                                 fontWeight: done ? 700 : 400, color: done ? 'var(--text)' : 'var(--sub)' }}>
+                    {r.bye ? t('ggs.tourney.bye') : done ? signed(v * (synchro ? 2 : 1)) : r.result}
+                  </span>
+                  <span style={{ display: 'flex', alignItems: 'center', gap: 'var(--sp-1)', minWidth: 0 }}>
+                    {!synchro && <StoneDot color="w" />}{name(r.white, done && v < 0)}
+                  </span>
+                </div>
+              );
+            })}
+          </List>
+        </div>
+      ))}
+    </div>
+  );
+}
+
+// Words from GGS CSGResult::Out.
+const tdResult = (r: string): string =>
+  r === '?' ? t('ggs.tourney.result_pending')
+    : r === 'unstarted' ? t('ggs.tourney.result_unstarted')
+      : r === 'bye' ? t('ggs.tourney.bye') : r;
+
+type SchedRow = { round: string; game: string; black: string; white: string; raw: string; result: string; bye?: boolean };
+
+function parseSchedule(text: string): SchedRow[] {
+  const rows: SchedRow[] = [];
+  let round = '';
+  for (const l of text.split('\n')) {
+    const r = /^\s*round\s+(\d+):/.exec(l);
+    const bye = /^\s*(\d+\.\d+)\s+(\S+)\s+rests\s*$/.exec(l);
+    const g = /^\s*(\d+\.\d+)\s+(\S+)\s+(\S+)\s+(\S+)\s*$/.exec(l);
+    if (r) round = r[1];
+    else if (bye) rows.push({ round, game: bye[1], black: bye[2], white: '', raw: '', result: '', bye: true });
+    else if (g) rows.push({ round, game: g[1], black: g[2], white: g[3], raw: g[4], result: tdResult(g[4]) });
+  }
+  return rows;
 }
 
 function Stat({ v, label, color }: { v: number | string; label: string; color?: string }) {

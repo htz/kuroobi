@@ -257,6 +257,32 @@ export interface GgsSnapshot {
   log_channel: string;
   thinking: string | null;
   fetched_ggf: FetchedGgf | null;
+  td: TdView;
+}
+
+export interface TourneyView {
+  id: number;
+  state: '' | 'announced' | 'running' | 'break' | 'over' | 'cancelled';
+  desc: string;
+  director: string;
+  clock: string;
+  gtype: string;
+  players: string[];
+  n_players: number;
+  rounds_played: number;
+  rounds: number;
+  next_at: number | null;
+  joined: boolean;
+  winner: string;
+  info: string;
+  rankings: string;
+  schedule: string;
+}
+
+export interface TdView {
+  tourneys: TourneyView[];
+  reply: { cmd: string; text: string; err: boolean; at: number } | null;
+  games: { id: string; tid: number; opp: string; diff: number | null }[];
 }
 
 declare global {
