@@ -1,5 +1,5 @@
 import React, { useEffect, useLayoutEffect, useRef, useState } from 'react';
-import { api, ggsApi, jsLog } from './api';
+import { ggsApi, jsLog } from './api';
 import type { ChatMsg, GameResult, GgsSnapshot, MatchView, TourneyView, UserRow } from './types';
 import {
   clockChoices, gtypeChoices, clockOf, countDiscs, ggsMoveToIndex, gtypeLabel,
@@ -1406,14 +1406,11 @@ export function GgsSettings({ snap }: { snap: GgsSnapshot }) {
   const say = (msg: string, bad = false) => {
     setSaved(msg); setFailed(bad); window.setTimeout(() => setSaved(''), 2500);
   };
-  const threads = e.threads;
   const [auto, setAuto] = useState(snap.auto_play);
   const [watch, setWatch] = useState(snap.watch_analysis);
   const [logChannel, setLogChannel] = useState(snap.log_channel);
   const logChannelOk = validLogChannel(logChannel);
   const [book, setBook] = useState(e.use_book);
-  const [cores, setCores] = useState(0);
-  useEffect(() => { api.activity().then((a) => setCores(a.cores)).catch(() => {}); }, []);
 
   const apply = async () => {
     try {
@@ -1439,18 +1436,6 @@ export function GgsSettings({ snap }: { snap: GgsSnapshot }) {
   return (
     <div className="k-scroll" style={{ flex: 1, minHeight: 0, padding: 'var(--sp-4) var(--sp-4) 0' }}>
       <div style={{ maxWidth: 720, display: 'flex', flexDirection: 'column' }}>
-        <Section title={t('ggs.settings.strength')}>
-          <Note>{t('ggs.settings.by_clock_note')}</Note>
-          <Field label={t('ggs.settings.threads')}>
-            <span style={{ fontSize: 'var(--fs-5)', color: 'var(--sub)' }}>
-              {threads === 0
-                ? t('ggs.settings.threads_auto', { n: Math.max(1, Math.floor(cores / 2)) || '—' })
-                : threads}
-              {' · '}{t('ggs.settings.threads_hint')}
-            </span>
-          </Field>
-        </Section>
-
         <Section title={t('ggs.book')}>
           {e.book_loaded
             ? <div><Segmented value={book ? 'on' : 'off'} onChange={(v) => setBook(v === 'on')}

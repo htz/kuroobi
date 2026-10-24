@@ -586,7 +586,6 @@ ggs:
     back_to_tree: "木に戻す"
     behavior: "ふるまい"
     book_missing: "ファイルがありません。左メニュー下の「設定」で指定してください。"
-    by_clock_note: "1 手に使う時間と読みの深さを、残り時間から毎手決めます。"
     formula_failed: "条件を送れませんでした ({error})"
     formula_placeholder: "例: rated & or>=1600 & !synchro"
     log_channel: "思考ログのチャンネル"
@@ -594,10 +593,6 @@ ggs:
     log_channel_note: "1 手ごとの探索結果をこのチャンネルに流します。観戦者は同じチャンネルに入ると読めます。空欄なら流しません。"
     logout: "ログアウト"
     offline_note: "繋いでいないあいだは読めません。ログインすると出ます。"
-    strength: "強さ"
-    threads: "スレッド"
-    threads_auto: "自動 ({n})"
-    threads_hint: "設定 → エンジンで変えられます"
     watch_analysis: "観戦中の対局も解析する"
   standby:
     auto_accept: "届いた申し込みを自動で受ける"

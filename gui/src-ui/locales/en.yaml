@@ -590,7 +590,6 @@ ggs:
     back_to_tree: "Back to the tree"
     behavior: "Behavior"
     book_missing: "No file. Point to one under “Settings” at the bottom of the left menu."
-    by_clock_note: "Time per move and search depth are decided per move from the time left."
     formula_failed: "Could not send the conditions ({error})"
     formula_placeholder: "e.g. rated & or>=1600 & !synchro"
     log_channel: "Search log channel"
@@ -598,10 +597,6 @@ ggs:
     log_channel_note: "Posts each move's search result to this channel, where spectators who join it can read it. Left empty, nothing is posted."
     logout: "Log out"
     offline_note: "Not readable while disconnected. Log in to see it."
-    strength: "Strength"
-    threads: "Threads"
-    threads_auto: "Auto ({n})"
-    threads_hint: "changed in Settings → Engine"
     watch_analysis: "Analyze observed games too"
   standby:
     auto_accept: "Accept incoming requests automatically"
