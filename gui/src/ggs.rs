@@ -2013,7 +2013,6 @@ pub fn run(
         if !claim_session(&mut ctx) {
             continue;
         }
-        restore_chat(&mut ctx, &login);
         session(&mut ctx, &rx, &login, &pw);
         unlock_session();
         {
@@ -2091,15 +2090,6 @@ fn claim_session(ctx: &mut Ctx) -> bool {
     false
 }
 
-fn restore_chat(ctx: &mut Ctx, login: &str) {
-    let mut s = ctx.snap.lock().unwrap();
-    if s.chat.is_empty() {
-        s.chat
-            .extend(keep_latest_per_thread(load_chat(login), CHAT_IN_MEMORY));
-    }
-    s.chat_seen = load_chat_seen(login);
-}
-
 fn dial(ctx: &mut Ctx) -> Option<(TcpStream, TcpStream)> {
     match TcpStream::connect(server()) {
         Ok(stream) => {
@@ -2131,7 +2121,9 @@ fn session(ctx: &mut Ctx, rx: &Receiver<Cmd>, login: &str, pw: &str) {
             set_user(&server(), login);
             let mut s = ctx.snap.lock().unwrap();
             s.results = load_history();
-            s.chat.clear();
+            // The account's folder is known only from here on.
+            s.chat = keep_latest_per_thread(load_chat(login), CHAT_IN_MEMORY).into();
+            s.chat_seen = load_chat_seen(login);
         }
         ctx.emit(true);
         let Some((mut stream, mut writer)) = dial(ctx) else {
