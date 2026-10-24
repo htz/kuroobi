@@ -705,15 +705,15 @@ const envLabels = (): Record<string, string> => ({
 });
 
 function AccountSwitch({ snap }: { snap: GgsSnapshot }) {
-  const [open, setOpen] = useState(false);
+  const [open, setOpen] = useState<DOMRect | null>(null);
   const [saved, setSaved] = useState<Account[]>([]);
   const box = useRef<HTMLSpanElement>(null);
   const load = () => void ggsApi.accounts().then(setSaved).catch(() => {});
   useEffect(load, [snap.login, snap.server]);
   useEffect(() => {
     if (!open) return;
-    const away = (e: MouseEvent) => { if (!box.current?.contains(e.target as Node)) setOpen(false); };
-    const esc = (e: KeyboardEvent) => { if (e.key === 'Escape') setOpen(false); };
+    const away = (e: MouseEvent) => { if (!box.current?.contains(e.target as Node)) setOpen(null); };
+    const esc = (e: KeyboardEvent) => { if (e.key === 'Escape') setOpen(null); };
     window.addEventListener('mousedown', away);
     window.addEventListener('keydown', esc);
     return () => { window.removeEventListener('mousedown', away); window.removeEventListener('keydown', esc); };
@@ -721,8 +721,8 @@ function AccountSwitch({ snap }: { snap: GgsSnapshot }) {
   const label = snap.server && snap.server !== PUBLIC_SERVER ? `${snap.login} @ ${snap.server}` : snap.login;
   return (
     <span ref={box} style={{ position: 'relative', display: 'inline-block', marginLeft: 'var(--sp-1)' }}>
-      <button type="button" className="k-press" title={t('app.ggs.switch_account')} aria-expanded={open}
-              onClick={() => { if (!open) load(); setOpen(!open); }} style={{
+      <button type="button" className="k-press" title={t('app.ggs.switch_account')} aria-expanded={!!open}
+              onClick={(e) => { if (!open) load(); setOpen(open ? null : e.currentTarget.getBoundingClientRect()); }} style={{
         display: 'inline-flex', alignItems: 'center', gap: 'var(--sp-1)',
         padding: '2px 8px', borderRadius: 'var(--r-2)', border: '1px solid var(--border)',
         background: 'var(--panel)', color: 'var(--text)', fontWeight: 600, fontSize: 'var(--fs-5)', cursor: 'pointer',
@@ -730,19 +730,20 @@ function AccountSwitch({ snap }: { snap: GgsSnapshot }) {
         {label}<span style={{ color: 'var(--sub)', fontSize: 'var(--fs-7)' }}>▾</span>
       </button>
       {open && (
+        // Fixed, because the toolbar clips overflow.
         <div role="menu" style={{
-          position: 'absolute', top: 'calc(100% + 4px)', left: 0, zIndex: 50, width: 320, maxHeight: 440,
+          position: 'fixed', top: open.bottom + 4, left: open.left, zIndex: 50, width: 320, maxHeight: 440,
           display: 'flex', flexDirection: 'column', overflow: 'hidden',
           background: 'var(--bg)', border: '1px solid var(--border)', borderRadius: 'var(--r-3)', boxShadow: 'var(--sh-2)',
         }}>
           <AccountList accounts={saved} current={`${snap.server}|${snap.login}`}
                        onSelect={(a) => {
                          if (a.server === snap.server && a.login === snap.login) return;
-                         setOpen(false);
+                         setOpen(null);
                          void ggsApi.switchAccount(a.server, a.login);
                        }} />
           <button type="button" className="k-row" role="menuitem"
-                  onClick={() => { setOpen(false); void ggsApi.disconnect(); }} style={{
+                  onClick={() => { setOpen(null); void ggsApi.disconnect(); }} style={{
             flex: 'none', width: '100%', border: 0, borderTop: '1px solid var(--border)', textAlign: 'left',
             padding: 'var(--sp-2) var(--sp-3)', background: 'transparent', color: 'var(--bad)', fontSize: 'var(--fs-5)',
           }}>
