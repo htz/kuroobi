@@ -9,7 +9,6 @@ pub struct Resources {
     pub nnue: Option<PathBuf>,
     pub book: Option<PathBuf>,
     pub threads: Option<usize>,
-    pub nps: Vec<(usize, f64)>,
     pub hash_mid: Option<u32>,
     pub hash_end: Option<u32>,
 }
@@ -63,11 +62,6 @@ impl Resources {
                 "threads" => r.threads = v.parse().ok(),
                 "hash_mid" => r.hash_mid = v.parse().ok(),
                 "hash_end" => r.hash_end = v.parse().ok(),
-                k if k.starts_with("nps.") => {
-                    if let (Ok(t), Ok(n)) = (k[4..].parse::<usize>(), v.parse::<f64>()) {
-                        r.set_nps(t, n);
-                    }
-                }
                 _ => {}
             }
         }
@@ -91,9 +85,6 @@ impl Resources {
         if let Some(n) = self.threads {
             out.push_str(&format!("threads={n}\n"));
         }
-        for (t, n) in &self.nps {
-            out.push_str(&format!("nps.{t}={n:.0}\n"));
-        }
         if let Some(n) = self.hash_mid {
             out.push_str(&format!("hash_mid={n}\n"));
         }
@@ -101,32 +92,6 @@ impl Resources {
             out.push_str(&format!("hash_end={n}\n"));
         }
         std::fs::write(path, out).map_err(|e| e.to_string())
-    }
-
-    pub fn nps_for(&self, threads: usize) -> Option<f64> {
-        if let Some(n) = self
-            .nps
-            .iter()
-            .find(|(t, n)| *t == threads && *n > 0.0)
-            .map(|(_, n)| *n)
-        {
-            return Some(n);
-        }
-        self.nps
-            .iter()
-            .filter(|(t, n)| *t > 0 && *n > 0.0)
-            .map(|(t, n)| n * threads as f64 / *t as f64)
-            .min_by(|a, b| a.total_cmp(b))
-    }
-
-    pub fn set_nps(&mut self, threads: usize, nps: f64) {
-        match self.nps.iter_mut().find(|(t, _)| *t == threads) {
-            Some(e) => e.1 = nps,
-            None => {
-                self.nps.push((threads, nps));
-                self.nps.sort_by_key(|(t, _)| *t);
-            }
-        }
     }
 
     pub fn hash_mid_bits(&self) -> u32 {
@@ -197,22 +162,6 @@ fn nnue_header(p: &std::path::Path) -> Option<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn borrows_a_conservative_nps_for_uncalibrated_threads() {
-        let r = Resources {
-            nps: vec![(5, 72_000_000.0), (8, 96_000_000.0)],
-            ..Default::default()
-        };
-        assert_eq!(r.nps_for(8), Some(96_000_000.0), "calibrated value wins");
-        let four = r.nps_for(4).expect("no substitute produced");
-        assert!(
-            (four - 48_000_000.0).abs() < 1.0,
-            "did not take the lower estimate: {four}"
-        );
-        assert!(four < 72_000_000.0, "estimate exceeds a measured value");
-        assert_eq!(Resources::default().nps_for(4), None);
-    }
 
     #[test]
     fn falls_back_to_the_directory() {

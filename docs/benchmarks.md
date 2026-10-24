@@ -986,6 +986,10 @@ efficiency cores, which is why none of the three gains much there.
 
 ### Time control — fixing the solve entry point from the machine's speed
 
+> Replaced by the search on a clock (`clock.rs`), which against the
+> same opponent under the same clock lost fewer discs; kept as the record
+> of what the earlier design measured.
+
 **Adopted. The effect shows up not as strength but as breakdowns
 avoided.**
 
@@ -1093,6 +1097,10 @@ are made `'static` with `Box::leak`, so rebuilding them leaves the old
 ones unfreed and piling up (167 MB → 470 MB per engine).
 
 ### Selective search (the band)
+
+> Replaced by the search on a clock (`clock.rs`), which against the
+> same opponent under the same clock lost fewer discs; kept as the record
+> of what the earlier design measured.
 
 The 25-30 empties that the exact solve cannot reach can be run as a band
 that returns an "almost exact move" from a selective search with a
@@ -1358,6 +1366,9 @@ The same shape appears against all 3 opponents (Rhapsody 0.44 → 0.10,
 piglet 0.32 → 0.45, Harmony 6.80 → 0.00 discs/move).
 
 #### Only 63% of the time control is used
+
+> Measured with the earlier time control; the search on a clock
+> (`clock.rs`) allocates by its own rule.
 
 Counting the time spent over the same 24 sides gave **13,296 seconds for
 us against 19,834 for the opponents** (21,000 seconds of time control in

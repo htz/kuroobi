@@ -20,7 +20,6 @@ struct Args {
     gtype: String,
     depth: u8,
     solve_empties: u8,
-    band: u8,
     mpc: bool,
     threads: usize,
     weights: PathBuf,
@@ -43,7 +42,6 @@ fn parse_args() -> Result<Args, String> {
         gtype: "8".into(),
         depth: 10,
         solve_empties: 20,
-        band: 0,
         mpc: true,
         threads: 8,
         weights: PathBuf::from("weights/linear.bin"),
@@ -78,11 +76,6 @@ fn parse_args() -> Result<Args, String> {
                 args.solve_empties = value("--solve-empties")?
                     .parse()
                     .map_err(|e| format!("--solve-empties: {e}"))?
-            }
-            "--selective-band" => {
-                args.band = value("--selective-band")?
-                    .parse()
-                    .map_err(|e| format!("--selective-band: {e}"))?
             }
             "--no-mpc" => args.mpc = false,
             "--threads" => {
@@ -332,6 +325,7 @@ fn run_session(
             }
             if ln.starts_with("/os: + match") && ln.contains(login) {
                 in_match = true;
+                engine.clear_tables();
                 last_activity = std::time::Instant::now();
             }
             if ln.starts_with("/os: - match") && ln.contains(login) {
@@ -525,7 +519,6 @@ fn main() -> ExitCode {
     let config = EngineConfig {
         depth: args.depth as u32,
         solve_empties: args.solve_empties,
-        band: args.band,
         threads: args.threads,
         mpc: args.mpc,
         solver_hash_bits: args.solver_hash,
@@ -549,18 +542,10 @@ fn main() -> ExitCode {
         if board.movable() == 0 {
             return (None, None);
         }
-        let secs = clock_secs.unwrap_or(u64::MAX);
-        let (depth, band) = if secs < 8 {
-            (4, 0)
-        } else if secs < 20 {
-            (6, 0)
-        } else if secs < 60 {
-            (args.depth.saturating_sub(2).max(6), 0)
-        } else {
-            (args.depth, args.band)
+        let mv = match clock_secs {
+            Some(s) => engine.play_clock(board, std::time::Duration::from_secs(s)),
+            None => engine.choose(board),
         };
-        engine.set_levels(depth as u32, args.solve_empties, band);
-        let mv = engine.choose(board);
         (
             mv.pos,
             mv.value.is_finite().then(|| mv.value.clamp(-64.0, 64.0)),

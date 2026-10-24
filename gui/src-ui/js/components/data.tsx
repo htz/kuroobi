@@ -98,7 +98,7 @@ export function StoneDot({ color, size = 9 }: { color: StoneColor; size?: number
   }} />;
 }
 
-export type GraphPoint = { value: number; exact?: boolean; book?: boolean; approx?: boolean };
+export type GraphPoint = { value: number; exact?: boolean; book?: boolean };
 
 export function EvalGraph({ points, plies, cursor, blunder, busy, pov, extra, onJump, moveName, open }: {
   points: (GraphPoint | undefined)[];
@@ -155,15 +155,13 @@ export function EvalGraph({ points, plies, cursor, blunder, busy, pov, extra, on
   const cols: number[] = [];
   for (let n = 0; n <= len; n += 10) cols.push(n);
 
-  // A segment touching an approximate point is drawn faint and dashed, so the approximation reads as such.
-  let d = '', faint = '';
+  let d = '';
   let prev: { n: number; p: GraphPoint } | null = null;
   points.forEach((p, n) => {
     if (!p) return;
     const at = (k: number, v: number) => x(k).toFixed(1) + ' ' + y(clamp(v)).toFixed(1);
     if (prev) {
-      const seg = 'M' + at(prev.n, prev.p.value) + ' L' + at(n, p.value) + ' ';
-      if (prev.p.approx || p.approx) faint += seg; else d += seg;
+      d += 'M' + at(prev.n, prev.p.value) + ' L' + at(n, p.value) + ' ';
     }
     prev = { n, p };
   });
@@ -206,7 +204,7 @@ export function EvalGraph({ points, plies, cursor, blunder, busy, pov, extra, on
             </b>
             <span style={{ color: shown.book ? 'var(--gold)' : 'var(--sub)' }}>
               {' '}{t(shown.book ? 'data.src.book' : shown.exact ? 'data.src.solve'
-                : shown.approx ? 'data.src.selective' : 'data.src.search')}
+                : 'data.src.search')}
             </span>
           </>}
         </span>
@@ -249,8 +247,6 @@ export function EvalGraph({ points, plies, cursor, blunder, busy, pov, extra, on
           <text x={W - R + 8} y={H - 8} fill="var(--sub)" fontSize={10}>{t('data.graph.axis_moves')}</text>
 
           {d && <path d={d.trim()} fill="none" stroke="var(--accent)" strokeWidth={2} strokeLinejoin="round" />}
-          {faint && <path d={faint.trim()} fill="none" stroke="var(--accent)" strokeWidth={2}
-                          strokeOpacity={0.45} strokeDasharray="4 3" />}
 
           {blunder && <>
             <line x1={bx} y1={T} x2={bx} y2={H - B} stroke="var(--bad)" strokeWidth={1.5} />
@@ -268,9 +264,7 @@ export function EvalGraph({ points, plies, cursor, blunder, busy, pov, extra, on
             <circle key={n} cx={x(n)} cy={y(clamp(p.value))}
                     r={n === hover ? 5 : p.exact || p.book ? 4 : 3}
                     fill={p.book ? 'var(--gold)' : p.exact ? 'var(--text)' : 'var(--accent)'}
-                    fillOpacity={p.approx ? 0.3 : 1}
-                    stroke={p.approx ? 'var(--accent)' : 'var(--bg)'} strokeWidth={1}
-                    strokeOpacity={p.approx ? 0.45 : 1} />
+                    stroke="var(--bg)" strokeWidth={1} />
           ))}
           {hover !== null && shown && (
             <line x1={x(hover)} y1={T} x2={x(hover)} y2={H - B}

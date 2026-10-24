@@ -30,14 +30,6 @@ const MPC_RELAX_STEP: f32 = 1.18;
 /// 2 discs: on 7 contested replays depth 31.00 against 30.71 with it off, same moves; 1 disc bought none.
 const DECIDED: f32 = 2.0;
 
-/// At the `NEXT_PASS` factor the granted iteration was torn down before it finished.
-const EXTEND_PASS: f32 = 3.0;
-
-knob!(fn extend_pass_factor() -> f32 = "EXTEND_PASS" or EXTEND_PASS);
-
-/// Keeps the `NEXT_PASS` check from refusing the time just granted.
-const EXTEND_SLACK: std::time::Duration = std::time::Duration::from_millis(50);
-
 knob!(fn decided() -> f32 = "DECIDED" or DECIDED);
 
 fn decided_margin() -> Option<f32> {
@@ -49,8 +41,6 @@ fn decided_margin() -> Option<f32> {
 const DECIDED_AT: f32 = 0.1;
 
 const DECIDED_DEPTH: u32 = 28;
-
-const UNSETTLED_DROP: f32 = 1.0;
 
 knob!(fn decided_at() -> f32 = "DECIDED_AT" or DECIDED_AT);
 
@@ -94,18 +84,6 @@ fn mpc_pv_factor(dev: u32) -> f32 {
 
 pub fn mpc_reduced_depth(depth: u32) -> u32 {
     2 * (depth / 4) + (depth & 1)
-}
-
-pub fn selective_band(empties: u8, solve_empties: u8, width: u8) -> Option<f32> {
-    if empties <= solve_empties || empties > solve_empties + width {
-        return None;
-    }
-    match empties - solve_empties {
-        1..=2 => Some(2.58), // 99%
-        3..=4 => Some(2.33), // 98%
-        5..=6 => Some(1.81), // 93%
-        _ => None,
-    }
 }
 
 const STATIC_CELL_PRIORITY: [u64; 4] = [
@@ -688,35 +666,16 @@ impl Pool {
 }
 
 pub struct Deadline {
-    origin: std::time::Instant,
-    at_nanos: std::sync::atomic::AtomicU64,
+    at: std::time::Instant,
 }
 
 impl Deadline {
     pub fn new(at: std::time::Instant) -> std::sync::Arc<Deadline> {
-        let origin = std::time::Instant::now();
-        let d = Deadline {
-            origin,
-            at_nanos: std::sync::atomic::AtomicU64::new(0),
-        };
-        d.set(at);
-        std::sync::Arc::new(d)
+        std::sync::Arc::new(Deadline { at })
     }
 
     pub fn get(&self) -> std::time::Instant {
-        let n = self.at_nanos.load(std::sync::atomic::Ordering::Relaxed);
-        self.origin + std::time::Duration::from_nanos(n)
-    }
-
-    fn set(&self, at: std::time::Instant) {
-        let n = at.saturating_duration_since(self.origin).as_nanos() as u64;
-        self.at_nanos.store(n, std::sync::atomic::Ordering::Relaxed);
-    }
-
-    pub fn extend_to(&self, at: std::time::Instant) {
-        if at > self.get() {
-            self.set(at);
-        }
+        self.at
     }
 
     /// Trips `stop` once the deadline passes; storing `true` in the returned flag ends the watch.
@@ -742,29 +701,6 @@ impl Deadline {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
-pub enum Stopped {
-    #[default]
-    Ceiling,
-    Deadline,
-    NextPass,
-    Decided,
-    /// A sibling abandoned the search, or the clock tore it down mid-iteration.
-    TornDown,
-}
-
-impl Stopped {
-    pub fn as_str(self) -> &'static str {
-        match self {
-            Stopped::Ceiling => "ceiling",
-            Stopped::Deadline => "deadline",
-            Stopped::NextPass => "next-pass",
-            Stopped::Decided => "decided",
-            Stopped::TornDown => "torn-down",
-        }
-    }
-}
-
 pub struct NnueSearch {
     pub nn: std::sync::Arc<Nnue>,
     pub tt: std::sync::Arc<SharedTt>,
@@ -786,10 +722,6 @@ pub struct NnueSearch {
     pool: Option<&'static Pool>,
     mpc_relax: u32,
     split_min: u32,
-    pub stop_reason: Stopped,
-    pub second: Option<Position>,
-    pub gap: Option<f32>,
-    pub extended: bool,
 }
 
 impl NnueSearch {
@@ -812,10 +744,6 @@ impl NnueSearch {
             done: None,
             my_gen: 0,
             pool: None,
-            stop_reason: Stopped::Ceiling,
-            second: None,
-            gap: None,
-            extended: false,
             mpc_relax: 0,
             split_min: ybwc_min_depth(),
         }
@@ -856,10 +784,6 @@ impl NnueSearch {
             mpc_relax: self.mpc_relax,
             split_min: self.split_min,
             progress: None,
-            stop_reason: Stopped::Ceiling,
-            second: None,
-            gap: None,
-            extended: false,
         }
     }
 
@@ -923,23 +847,14 @@ impl NnueSearch {
         depth: u32,
         deadline: Option<std::time::Instant>,
     ) -> (Option<Position>, f32, u32) {
-        self.best_move_until(b, depth, deadline.map(Deadline::new), None)
-    }
-
-    pub fn best_move_until(
-        &mut self,
-        b: &Board,
-        depth: u32,
-        deadline: Option<std::sync::Arc<Deadline>>,
-        extend: Option<std::time::Instant>,
-    ) -> (Option<Position>, f32, u32) {
         if b.movable() == 0 {
             return (None, f32::NAN, 0);
         }
+        let deadline = deadline.map(Deadline::new);
         let watcher = deadline
             .as_ref()
             .and_then(|dl| Some(dl.watch(self.stop.clone()?)));
-        let r = self.best_move_valued_inner(b, depth, deadline.as_ref(), extend);
+        let r = self.best_move_valued_inner(b, depth, deadline.as_ref());
         if let Some(d) = watcher {
             d.store(true, std::sync::atomic::Ordering::Relaxed);
         }
@@ -951,34 +866,23 @@ impl NnueSearch {
         b: &Board,
         depth: u32,
         deadline: Option<&std::sync::Arc<Deadline>>,
-        extend: Option<std::time::Instant>,
     ) -> (Option<Position>, f32, u32) {
         if self.threads > 1 && depth >= 2 {
-            return self.lazy_smp(b, depth, deadline, extend);
+            return self.lazy_smp(b, depth, deadline);
         }
         let mut acc = self.nn.indices(b.black, b.white);
         let mut value = f32::NAN;
         let mut best = None;
         let mut last_best = None;
         let mut two_ago = None;
-        let mut last_value = f32::NAN;
         let mut reached = 0;
         let mut last_pass = std::time::Duration::ZERO;
         let mut prev_pass = std::time::Duration::ZERO;
         let clock = deadline.map(|dl| (std::time::Instant::now(), dl.get()));
-        self.stop_reason = Stopped::Ceiling;
-        self.second = None;
-        self.gap = None;
-        self.extended = false;
         for d in 1..=depth {
             if let Some(dl) = deadline.map(|dl| dl.get()) {
                 let now = std::time::Instant::now();
-                if now >= dl {
-                    self.stop_reason = Stopped::Deadline;
-                    break;
-                }
-                if reached > 0 && now + next_pass_eta(last_pass, prev_pass) >= dl {
-                    self.stop_reason = Stopped::NextPass;
+                if now >= dl || (reached > 0 && now + next_pass_eta(last_pass, prev_pass) >= dl) {
                     break;
                 }
             }
@@ -987,7 +891,6 @@ impl NnueSearch {
             self.root_move = None;
             let v = self.negamax(b, &mut acc, d, f32::NEG_INFINITY, f32::INFINITY);
             if v == ABORTED || self.torn_down() {
-                self.stop_reason = Stopped::TornDown;
                 break;
             }
             prev_pass = last_pass;
@@ -995,15 +898,10 @@ impl NnueSearch {
             value = v;
             best = self.root_move.or_else(|| self.root_best(b, &mut acc));
             reached = d;
-            if self.settle(
-                b, &acc, best, last_best, two_ago, d, value, last_value, clock, last_pass,
-                deadline, extend,
-            ) {
-                self.stop_reason = Stopped::Decided;
+            if self.settle(b, &acc, best, last_best, two_ago, d, value, clock) {
                 break;
             }
             two_ago = last_best;
-            last_value = value;
             last_best = best;
             if let Some(p) = self.progress.as_ref() {
                 p.reached(d, best, v);
@@ -1021,11 +919,7 @@ impl NnueSearch {
         two_ago: Option<Position>,
         depth: u32,
         value: f32,
-        last_value: f32,
         clock: Option<(std::time::Instant, std::time::Instant)>,
-        last_pass: std::time::Duration,
-        deadline: Option<&std::sync::Arc<Deadline>>,
-        extend: Option<std::time::Instant>,
     ) -> bool {
         let (Some(m), Some((start, soft))) = (decided_margin(), clock) else {
             return false;
@@ -1037,31 +931,9 @@ impl NnueSearch {
         // Live early stops at depth 19 and 25 each lost 2 discs; those at 28-39 lost none.
         let shallow = depth < DECIDED_DEPTH;
         // On live positions the best move alternated every depth from 24 to 29, so two back agrees too.
-        if !shallow && (best == last_best || best == two_ago) {
-            match self.others_behind(b, acc, best, depth, value, m) {
-                Some(true) => return true,
-                None => return false,
-                Some(false) => {}
-            }
-        }
-        // Rhapsody spends 45 s+ on a third of its midgame moves against our 18%; an unsettled move gets all.
-        let unsettled =
-            (best != last_best && best != two_ago) || value < last_value - UNSETTLED_DROP;
-        if let (Some(dl), Some(limit)) = (deadline, extend) {
-            if unsettled {
-                dl.extend_to(limit);
-                self.extended = true;
-                return false;
-            }
-            // Only time that can finish an iteration buys depth.
-            let need =
-                std::time::Instant::now() + last_pass.mul_f32(extend_pass_factor()) + EXTEND_SLACK;
-            if need > dl.get() && need <= limit {
-                dl.extend_to(need);
-                self.extended = true;
-            }
-        }
-        false
+        !shallow
+            && (best == last_best || best == two_ago)
+            && self.others_behind(b, acc, best, depth, value, m) == Some(true)
     }
 
     /// `None` when torn down: no verdict either way.
@@ -1079,7 +951,6 @@ impl NnueSearch {
         let n = self.ordered_into(b, &mut scratch, 1, b.movable(), &mut kids, false, 64, 64);
         let want = depth.saturating_sub(1);
         let bar = value - margin;
-        let mut closest: Option<(Position, f32)> = None;
         for pos in kids[..n].iter().map(|k| k.0).filter(|p| Some(*p) != best) {
             let mut nb = *b;
             let flipped = nb.make_move_bits(pos);
@@ -1103,16 +974,9 @@ impl NnueSearch {
                 -raw
             };
             if v >= bar {
-                self.second = Some(pos);
-                self.gap = None;
                 return Some(false);
             }
-            if closest.is_none_or(|(_, c)| v > c) {
-                closest = Some((pos, v));
-            }
         }
-        self.second = closest.map(|(p, _)| p);
-        self.gap = closest.map(|(_, c)| value - c);
         Some(true)
     }
 
@@ -1132,7 +996,6 @@ impl NnueSearch {
         b: &Board,
         depth: u32,
         deadline: Option<&std::sync::Arc<Deadline>>,
-        extend: Option<std::time::Instant>,
     ) -> (Option<Position>, f32, u32) {
         use std::sync::atomic::{AtomicU64, Ordering};
         let nodes = AtomicU64::new(0);
@@ -1141,7 +1004,6 @@ impl NnueSearch {
         let mut best = None;
         let mut last_best = None;
         let mut two_ago = None;
-        let mut last_value = f32::NAN;
         let mut reached = 0;
         let mut last_pass = std::time::Duration::ZERO;
         let mut prev_pass = std::time::Duration::ZERO;
@@ -1152,20 +1014,12 @@ impl NnueSearch {
         // Two threads lose to the extra split points one ply down; three and more gain.
         self.split_min = ybwc_min_depth() - u32::from(self.threads >= 3);
 
-        self.stop_reason = Stopped::Ceiling;
-        self.second = None;
-        self.gap = None;
-        self.extended = false;
         {
             for main_depth in 1..=depth {
                 if let Some(dl) = deadline.map(|dl| dl.get()) {
                     let now = std::time::Instant::now();
-                    if now >= dl {
-                        self.stop_reason = Stopped::Deadline;
-                        break;
-                    }
-                    if reached > 0 && now + next_pass_eta(last_pass, prev_pass) >= dl {
-                        self.stop_reason = Stopped::NextPass;
+                    if now >= dl || (reached > 0 && now + next_pass_eta(last_pass, prev_pass) >= dl)
+                    {
                         break;
                     }
                 }
@@ -1215,7 +1069,6 @@ impl NnueSearch {
                 }
 
                 if v == ABORTED || self.torn_down() {
-                    self.stop_reason = Stopped::TornDown;
                     break;
                 }
                 prev_pass = last_pass;
@@ -1226,15 +1079,10 @@ impl NnueSearch {
                 if let Some(p) = self.progress.as_ref() {
                     p.reached(main_depth, best, v);
                 }
-                if self.settle(
-                    b, &acc, best, last_best, two_ago, main_depth, value, last_value, clock,
-                    last_pass, deadline, extend,
-                ) {
-                    self.stop_reason = Stopped::Decided;
+                if self.settle(b, &acc, best, last_best, two_ago, main_depth, value, clock) {
                     break;
                 }
                 two_ago = last_best;
-                last_value = value;
                 last_best = best;
             }
         }
@@ -1932,22 +1780,6 @@ impl NnueSearch {
 #[cfg(test)]
 mod deadline_tests {
     use super::*;
-
-    #[test]
-    fn a_deadline_moves_out_and_never_back() {
-        let t0 = std::time::Instant::now();
-        let d = Deadline::new(t0 + std::time::Duration::from_secs(10));
-        d.extend_to(t0 + std::time::Duration::from_secs(5));
-        assert!(
-            d.get() >= t0 + std::time::Duration::from_millis(9_999),
-            "pulled earlier"
-        );
-        d.extend_to(t0 + std::time::Duration::from_secs(30));
-        assert!(
-            d.get() >= t0 + std::time::Duration::from_millis(29_999),
-            "not pushed out"
-        );
-    }
 
     #[test]
     fn deadline_cuts_the_search_short() {

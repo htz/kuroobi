@@ -76,9 +76,10 @@ The keys are ⌘N (new game), ⌘Z (take back), ⌘S (save), ⌘O (load), ⌘B
 (book). In Study, ← → move one move, with ⇧ ten moves, and with ⌘ to the
 first or last position.
 
-The thinking settings (depth, exact solve, selective search) are given
-by picking a level or with Custom; the thread count is under Settings →
-Engine. Whether the book is
+The thinking settings (depth, exact solve) are given by picking a level
+or with Custom; with a clock set, the clock decides instead (see
+[Search](search.md#search-on-a-clock-clockrs)), as it always does on GGS.
+The thread count is under Settings → Engine. Whether the book is
 used can be toggled too (used by default); turn it off when research
 calls for the engine's own move.
 
@@ -268,11 +269,10 @@ search completed
 ```
 
 Black's moves are in capitals and white's in lower case, `PA` being a
-pass. `at` is `<depth>@<confidence>%` for a midgame search (the
-confidence of its cut, 73%) and `<empties>@<confidence>%` for a
-selective search or a solve (`@100%`). The PV is what the tables still
-hold after the search, so it can end before eight moves. Pondering is
-not credited to the move, so `search` and `move` are the same time. The
+pass. `at` is `<depth>@<confidence>%` for a search (the confidence of
+its ProbCut margin) and `<empties>@100%` for a solve. The PV is what the
+tables still hold after the search, so it can end before eight moves.
+`search` and `move` are the same time. The
 last line is `search out of time at ...` when the deadline cut the
 search; book moves give only `score == ... from book ;`. The
 channel must be a dot and 1-7 letters, digits, `_` or `-` (GGS caps

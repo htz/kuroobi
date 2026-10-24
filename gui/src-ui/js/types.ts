@@ -39,7 +39,6 @@ export interface EvalPoint {
   value: number;
   exact: boolean;
   from_book: boolean;
-  selective: boolean;
 }
 
 
@@ -116,11 +115,10 @@ export interface MatchView {
   left_by: string;
   rated: boolean | null;
   archive: string;
-  busy: '' | 'think' | 'ponder' | 'solve' | 'select';
+  busy: '' | 'think' | 'solve';
   busy_depth: number;
   busy_best: number | null;
   busy_eval: number | null;
-  busy_predict: number | null;
   result: string;
   cells: number[];
   turn: '' | 'black' | 'white';
@@ -209,18 +207,10 @@ interface StandbyStats {
 }
 
 interface EngineCfgView {
-  depth: number;
-  solve: number;
-  band: number;
   threads: number;
   use_book: boolean;
   book_loaded: boolean;
   learn: boolean;
-  ponder: boolean;
-  pace: string;
-  max_move_secs: number;
-  reserve_secs: number;
-  budget_use: number;
 }
 
 interface FetchedGgf {

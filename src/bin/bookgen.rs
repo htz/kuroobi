@@ -14,7 +14,6 @@ struct Args {
     min_games: u32,
     depth: u32,
     solve: u8,
-    band: u8,
     threads: usize,
     limit: usize,
     hash_bits: u32,
@@ -36,7 +35,6 @@ fn parse_args() -> Result<Args, String> {
         min_games: 3,
         depth: 26,
         solve: 30,
-        band: 8,
         threads: std::thread::available_parallelism()
             .map(|n| n.get())
             .unwrap_or(8),
@@ -63,7 +61,6 @@ fn parse_args() -> Result<Args, String> {
             "--min-games" => a.min_games = num(val(&mut i)?)?,
             "--depth" => a.depth = num(val(&mut i)?)?,
             "--solve" => a.solve = num(val(&mut i)?)?,
-            "--band" => a.band = num(val(&mut i)?)?,
             "--threads" => a.threads = num(val(&mut i)?)?,
             "--limit" => a.limit = num(val(&mut i)?)?,
             "--hash-bits" => a.hash_bits = num(val(&mut i)?)?,
@@ -200,8 +197,8 @@ fn deepen(book: &mut Book, a: &Args) -> Result<(), String> {
     let per = a.threads.max(1);
     let workers = (cores / per).max(1).min(total);
     eprintln!(
-        "deepening {total} positions (depth {} / solve {} / band {}) - {workers} workers x {per} threads",
-        a.depth, a.solve, a.band
+        "deepening {total} positions (depth {} / solve {}) - {workers} workers x {per} threads",
+        a.depth, a.solve
     );
 
     let next = AtomicUsize::new(0);
@@ -220,7 +217,6 @@ fn deepen(book: &mut Book, a: &Args) -> Result<(), String> {
                 let cfg = EngineConfig {
                     depth: a.depth,
                     solve_empties: a.solve,
-                    band: a.band,
                     threads: per,
                     midgame_hash_bits: a.hash_bits,
                     solver_hash_bits: a.hash_bits,

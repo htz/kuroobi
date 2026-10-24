@@ -187,7 +187,7 @@ bookgen --scan data/source/wthor --max-ply 24 --min-games 3 --out book.txt
 
 # 2. Solve unevaluated and shallowly evaluated entries with a search
 #    deeper than a real game
-bookgen --deepen book.txt --depth 26 --solve 30 --band 8 [--limit 500]
+bookgen --deepen book.txt --depth 26 --solve 30 [--limit 500]
 
 # 3. Score every legal move, so the shallow entries can name a best move
 bookgen --deepen book.txt --all-moves --min-empties 54 --depth 26 --solve 30
@@ -203,8 +203,7 @@ bookgen --deepen book.txt --all-moves --min-empties 54 --depth 26 --solve 30
 | `--threads <n>` | cores | Search threads **per position**; `cores / n` positions run at a time |
 
 **Book values are worthless unless they come from a depth a real game
-cannot reach**, hence the defaults of depth 26 / solve 30 / band 8 (the
-live GGS settings are 22 / 26 / 6). Stopping partway keeps what has
+cannot reach**, hence the defaults of depth 26 / solve 30. Stopping partway keeps what has
 been saved, so it can be topped up any number of times. The loop that
 keeps going until stopped is a loop around it; one is not shipped.
 
@@ -233,7 +232,7 @@ functionality and usually suffices.
 ggs --play <opponent> [--games N]
     [--login name --pw pass | --credentials .ggs_credentials]
     [--type 8] [--time 30:00] [--resume <game id>]
-    [--depth N] [--solve-empties N] [--selective-band N] [--no-mpc]
+    [--depth N] [--solve-empties N] [--no-mpc]
     [--solver-hash 22] [--threads N] [--weights path] [--nnue path]
 
 # Wait for requests from <opponent> and accept them (asks for nothing)
@@ -252,6 +251,7 @@ ggs --console
 | `--type <t>` | `8` | Game type, e.g. `s8r16` (synchronous, 16 random plies). Same notation as the GUI's list |
 | `--time <hh:mm>` | `30:00` | Time control |
 | `--resume <id>` | — | Resume a suspended game |
+| `--depth <n>` / `--solve-empties <n>` | 10 / 20 | The level for `--serve`; games on GGS always play by the clock |
 | `--solver-hash <n>` | 22 | Transposition table size for exact solving (2^n entries) |
 
 `--credentials` exists so credentials need not be passed in plain text.

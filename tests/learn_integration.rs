@@ -25,7 +25,6 @@ fn absorbs_a_game_and_biases_the_choice() {
         book: book_path.clone(),
         depth: 6,
         solve_empties: 12,
-        band: 0,
         threads: 1,
         ..Default::default()
     };
@@ -111,7 +110,6 @@ fn repeated_matches_diverge_after_losses() {
         book: dir.join("book.txt"), // nonexistent (no book)
         depth,
         solve_empties: solve,
-        band: 0,
         threads: 1,
         midgame_hash_bits: 18,
         solver_hash_bits: 18,
@@ -209,7 +207,6 @@ fn measure_deviation_quality() {
         book: dir.join("book.txt"),
         depth,
         solve_empties: solve,
-        band: 0,
         threads,
         midgame_hash_bits: 20,
         solver_hash_bits: 20,

@@ -85,7 +85,6 @@ fn the_midgame_deadline_is_honoured() {
     let cfg = EngineConfig {
         depth: 60,
         solve_empties: 12,
-        band: 0,
         threads: 4,
         ..Default::default()
     };
@@ -118,7 +117,6 @@ fn the_deadline_holds_when_two_engines_share_the_machine() {
                 let cfg = EngineConfig {
                     depth: 60,
                     solve_empties: 12,
-                    band: 0,
                     threads: 4,
                     ..Default::default()
                 };
@@ -154,7 +152,6 @@ fn a_search_that_cannot_finish_is_still_cut() {
     let cfg = EngineConfig {
         depth: 60,
         solve_empties: 12,
-        band: 0,
         threads: 8,
         ..Default::default()
     };
@@ -179,7 +176,6 @@ fn the_deadline_holds_for_a_single_engine() {
     let cfg = EngineConfig {
         depth: 60,
         solve_empties: 12,
-        band: 0,
         threads: 4,
         ..Default::default()
     };
@@ -207,7 +203,6 @@ fn the_deadline_cuts_the_endgame_solver() {
     let cfg = EngineConfig {
         depth: 60,
         solve_empties: 26,
-        band: 0,
         threads: 4,
         ..Default::default()
     };
@@ -225,58 +220,4 @@ fn the_deadline_cuts_the_endgame_solver() {
         cap.as_secs_f32(),
         took.as_secs_f32()
     );
-}
-
-#[test]
-#[ignore = "requires real files in weights/ (not in git)"]
-fn report_deadline_utilisation() {
-    let cfg = EngineConfig {
-        depth: 60,
-        solve_empties: 26,
-        band: 6,
-        threads: 8,
-        ..Default::default()
-    };
-    let mut engine = Engine::new(cfg).expect("engine init");
-    println!("  empties  deadline  actual  utilization");
-    let mut sum = 0.0;
-    let mut n = 0;
-    for empties in [48u8, 44, 40, 36, 32] {
-        let board = replay_until_empties(KIFU, empties);
-        for cap_s in [20u64, 60] {
-            let cap = std::time::Duration::from_secs(cap_s);
-            let t0 = std::time::Instant::now();
-            let _ = engine.choose_within(&board, Some(t0 + cap));
-            let took = t0.elapsed().as_secs_f64();
-            let r = took / cap_s as f64;
-            sum += r;
-            n += 1;
-            println!("  {empties:4}  {cap_s:3}s  {took:5.1}s  {:5.0}%", r * 100.0);
-        }
-    }
-    println!("  mean utilization {:.0}%", sum / n as f64 * 100.0);
-}
-
-#[test]
-#[ignore = "requires real files in weights/ (not in git)"]
-fn report_depth_per_extra_time() {
-    let cfg = EngineConfig {
-        depth: 60,
-        solve_empties: 26,
-        band: 6,
-        threads: 8,
-        ..Default::default()
-    };
-    let mut engine = Engine::new(cfg).expect("engine init");
-    println!("  empties  deadline  reached depth");
-    for empties in [48u8, 44, 40] {
-        let board = replay_until_empties(KIFU, empties);
-        let mut line = format!("  {empties:4}  ");
-        for cap_s in [20u64, 40, 60] {
-            let t0 = std::time::Instant::now();
-            let mv = engine.choose_within(&board, Some(t0 + std::time::Duration::from_secs(cap_s)));
-            line.push_str(&format!(" {cap_s:3}s→d{:<3}", mv.depth));
-        }
-        println!("{line}");
-    }
 }

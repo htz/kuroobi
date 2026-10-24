@@ -51,19 +51,7 @@ pub enum Cmd {
         target: String,
         text: String,
     },
-    SetEngine {
-        depth: u32,
-        solve: u8,
-        band: u8,
-        ponder: bool,
-    },
     ReloadThreads,
-    SetPacing {
-        pace: String,
-        max_move_secs: u64,
-        reserve_secs: u64,
-        budget_use: f64,
-    },
     SetAutoPlay(bool),
     SetOpen(bool),
     SetWatchAnalysis(bool),
@@ -233,7 +221,6 @@ pub struct MatchView {
     pub busy_depth: u32,
     pub busy_best: Option<u32>,
     pub busy_eval: Option<f32>,
-    pub busy_predict: Option<u32>,
     pub cells: Vec<u8>, // 0 empty, 1 black (*), 2 white (O)
     pub turn: String,   // "black" | "white" | ""
     pub my_color: String,
@@ -647,35 +634,19 @@ pub struct FetchedGgf {
 
 #[derive(Clone, Serialize)]
 pub struct EngineCfgView {
-    pub depth: u32,
-    pub solve: u8,
-    pub band: u8,
     pub threads: usize,
     pub use_book: bool,
     pub book_loaded: bool,
     pub learn: bool,
-    pub ponder: bool,
-    pub pace: String,
-    pub max_move_secs: u64,
-    pub reserve_secs: u64,
-    pub budget_use: f64,
 }
 
 impl Default for EngineCfgView {
     fn default() -> Self {
         EngineCfgView {
-            depth: 22,
-            solve: 26,
-            band: 6,
             threads: 4,
             use_book: true,
             book_loaded: false,
             learn: true,
-            ponder: true,
-            pace: "fast".into(),
-            max_move_secs: 0,
-            reserve_secs: 20,
-            budget_use: 2.5,
         }
     }
 }
@@ -1036,14 +1007,6 @@ fn settings_path() -> PathBuf {
 #[derive(Serialize, serde::Deserialize)]
 #[serde(default)]
 struct SavedSettings {
-    depth: u32,
-    solve: u8,
-    band: u8,
-    ponder: bool,
-    pace: String,
-    max_move_secs: u64,
-    reserve_secs: u64,
-    budget_use: f64,
     auto_play: bool,
     open: bool,
     watch_analysis: bool,
@@ -1055,14 +1018,6 @@ struct SavedSettings {
 impl Default for SavedSettings {
     fn default() -> Self {
         SavedSettings {
-            depth: 22,
-            solve: 26,
-            band: 6,
-            ponder: true,
-            pace: "fast".into(),
-            max_move_secs: 0,
-            reserve_secs: 20,
-            budget_use: 2.5,
             auto_play: true,
             open: true,
             watch_analysis: true,
@@ -1077,14 +1032,6 @@ fn save_settings(ctx: &Ctx) {
     let s = ctx.snap.lock().unwrap();
     let e = &s.engine;
     let v = SavedSettings {
-        depth: e.depth,
-        solve: e.solve,
-        band: e.band,
-        ponder: e.ponder,
-        pace: e.pace.clone(),
-        max_move_secs: e.max_move_secs,
-        reserve_secs: e.reserve_secs,
-        budget_use: e.budget_use,
         auto_play: s.auto_play,
         open: s.open,
         watch_analysis: s.watch_analysis,
@@ -1567,42 +1514,19 @@ struct EngineWorker {
     mid: Option<String>,
     pending_hash: u64,
     pending: Option<Pending>,
-    pondering: bool,
     sent_at: Option<(Instant, Duration)>,
     stopped_at: Option<Instant>,
     progress: std::sync::Arc<kuroobi::engine::Progress>,
     threads: usize,
     sent_ms: u64,
-    sent_level: Level,
-}
-
-#[derive(Clone, Copy, Default)]
-struct Level {
-    empties: u8,
-    select: Option<f32>,
-}
-
-impl Level {
-    fn of(board: &Board, levels: (u32, u8, u8), select: Option<f32>) -> Level {
-        let empties = board.empty_count();
-        let select = (empties > levels.1).then(|| {
-            select.or_else(|| kuroobi::midgame::selective_band(empties, levels.1, levels.2))
-        });
-        Level {
-            empties,
-            select: select.flatten(),
-        }
-    }
+    sent_empties: u8,
 }
 
 const WORKER_GIVE_UP: Duration = Duration::from_secs(10);
 
 struct Pending {
     board: Board,
-    levels: (u32, u8, u8),
-    select: Option<f32>,
-    cap: Option<Duration>,
-    extend: Option<Duration>,
+    clock: Duration,
     hash: u64,
     hint: Option<Position>,
     queued: Instant,
@@ -1611,16 +1535,10 @@ struct Pending {
 enum Job {
     Think {
         board: Board,
-        levels: (u32, u8, u8),
-        select: Option<f32>,
-        cap: Option<Duration>,
-        extend: Option<Duration>,
+        clock: Duration,
         hint: Option<Position>,
     },
-    Ponder {
-        board: Board,
-        slice: Duration,
-    },
+    NewGame,
     SetUseBook(bool),
     SetThreads(usize),
 }
@@ -1648,7 +1566,6 @@ fn report(
 
 enum Done {
     Moved(Box<kuroobi::engine::MoveEval>, Report),
-    Pondered,
 }
 
 struct Ctx {
@@ -1669,12 +1586,6 @@ struct Ctx {
     local_stop: Arc<Mutex<Option<kuroobi::midgame::StopHandle>>>,
     local_activity: Arc<Mutex<crate::Activity>>,
     pending_watch: HashMap<String, Instant>,
-    engine_cfg_pace: String,
-    engine_cfg_max_move: u64,
-    engine_cfg_reserve: u64,
-    engine_cfg_budget_use: f64,
-    engine_cfg_ponder: bool,
-    ponder_at: Option<String>,
     workers: Vec<EngineWorker>,
 }
 
@@ -1691,6 +1602,7 @@ impl Ctx {
         }
         if let Some(i) = self.workers.iter().position(|w| w.mid.is_none()) {
             self.workers[i].mid = Some(mid.to_string());
+            self.workers[i].send(Job::NewGame);
             return Some(i);
         }
         if self.workers.len() < MAX_WORKERS {
@@ -1712,6 +1624,7 @@ impl Ctx {
             .position(|w| !w.busy && w.pending.is_none())
         {
             self.workers[i].mid = Some(mid.to_string());
+            self.workers[i].send(Job::NewGame);
             return Some(i);
         }
         None
@@ -1745,7 +1658,7 @@ impl Ctx {
     }
 
     fn thinking(&self) -> bool {
-        self.workers.iter().any(|w| w.busy && !w.pondering)
+        self.workers.iter().any(|w| w.busy)
     }
 
     fn set_use_book(&mut self, b: bool) {
@@ -1793,30 +1706,14 @@ impl EngineWorker {
             let mut engine = engine;
             while let Ok(job) = jrx.recv() {
                 match job {
-                    Job::Think {
-                        board,
-                        levels,
-                        select,
-                        cap,
-                        extend,
-                        hint,
-                    } => {
-                        let base = {
-                            let c = engine.config();
-                            (c.depth, c.solve_empties, c.band)
-                        };
-                        engine.set_levels(levels.0, levels.1, levels.2);
-                        engine.set_select(select);
+                    Job::Think { board, clock, hint } => {
                         if let Some(h) = hint {
                             engine.hint_move(&board, h);
                         }
-                        let now = Instant::now();
-                        let dl = cap.map(|c| now + c);
-                        let ext = extend.map(|e| now + e);
                         let nf0 = kuroobi::engine::NON_FINITE_VALUES
                             .load(std::sync::atomic::Ordering::Relaxed);
                         let n0 = engine.nodes();
-                        let mv = engine.choose_until(&board, dl, ext);
+                        let mv = engine.play_clock(&board, clock);
                         let nodes = engine.nodes() - n0;
                         let nf1 = kuroobi::engine::NON_FINITE_VALUES
                             .load(std::sync::atomic::Ordering::Relaxed);
@@ -1828,21 +1725,13 @@ impl EngineWorker {
                                 mv.cut
                             );
                         }
-                        engine.set_levels(base.0, base.1, base.2);
-                        engine.set_select(None);
                         engine.progress().clear();
                         let r = report(&engine, &board, &mv, nodes);
                         if dtx.send(Done::Moved(Box::new(mv), r)).is_err() {
                             return;
                         }
                     }
-                    Job::Ponder { board, slice } => {
-                        engine.ponder(&board, Instant::now() + slice);
-                        engine.progress().clear();
-                        if dtx.send(Done::Pondered).is_err() {
-                            return;
-                        }
-                    }
+                    Job::NewGame => engine.clear_tables(),
                     Job::SetUseBook(b) => engine.set_use_book(b),
                     Job::SetThreads(n) => engine.set_threads(n),
                 }
@@ -1856,18 +1745,17 @@ impl EngineWorker {
             mid: None,
             pending_hash: 0,
             pending: None,
-            pondering: false,
             sent_at: None,
             stopped_at: None,
             progress,
             threads: 0,
             sent_ms: 0,
-            sent_level: Level::default(),
+            sent_empties: 0,
         })
     }
 
     fn send(&mut self, job: Job) {
-        let counts = matches!(job, Job::Think { .. } | Job::Ponder { .. });
+        let counts = matches!(job, Job::Think { .. });
         if self.tx.send(job).is_ok() && counts {
             self.busy = true;
         }
@@ -2067,9 +1955,6 @@ fn new_ctx(
         snap,
         engine: None,
         engine_cfg: EngineConfig {
-            depth: 22,
-            solve_empties: 26,
-            band: 6,
             threads: res.threads.unwrap_or_else(|| resolve_threads(0)),
             midgame_hash_bits: res.hash_mid_bits(),
             solver_hash_bits: res.hash_end_bits(),
@@ -2086,22 +1971,12 @@ fn new_ctx(
         local_stop,
         local_activity,
         pending_watch: HashMap::new(),
-        engine_cfg_pace: "fast".into(),
-        engine_cfg_max_move: 0,
-        engine_cfg_reserve: 20,
-        engine_cfg_budget_use: 2.5,
-        engine_cfg_ponder: true,
-        ponder_at: None,
         workers: Vec::new(),
     };
     ctx.snap.lock().unwrap().engine = EngineCfgView {
         threads: ctx.engine_cfg.threads,
         use_book: ctx.engine_cfg.use_book,
         book_loaded: res.book_path().exists(),
-        ponder: ctx.engine_cfg_ponder,
-        pace: ctx.engine_cfg_pace.clone(),
-        max_move_secs: ctx.engine_cfg_max_move,
-        reserve_secs: ctx.engine_cfg_reserve,
         ..Default::default()
     };
     ctx
@@ -2109,13 +1984,8 @@ fn new_ctx(
 
 fn restore_settings(ctx: &mut Ctx) {
     let Some(v) = load_settings() else { return };
-    apply_engine_cfg(ctx, v.depth, v.solve, v.band);
-    ctx.engine_cfg_ponder = v.ponder;
-    apply_pacing(ctx, v.pace, v.max_move_secs, v.reserve_secs, v.budget_use);
     ctx.set_use_book(v.use_book);
     let mut s = ctx.snap.lock().unwrap();
-    s.engine.ponder = v.ponder;
-    s.engine.budget_use = v.budget_use;
     s.engine.learn = v.learn;
     s.auto_play = v.auto_play;
     s.open = v.open;
@@ -2164,28 +2034,8 @@ fn wait_for_connect(ctx: &mut Ctx, rx: &Receiver<Cmd>) -> Option<(String, String
                 *SERVER.lock().unwrap() = server.trim().to_string();
                 return Some((login, pw));
             }
-            Ok(Cmd::SetEngine {
-                depth,
-                solve,
-                band,
-                ponder,
-            }) => {
-                apply_engine_cfg(ctx, depth, solve, band);
-                ctx.engine_cfg_ponder = ponder;
-                ctx.snap.lock().unwrap().engine.ponder = ponder;
-                save_settings(ctx);
-            }
             Ok(Cmd::ReloadThreads) => apply_threads(ctx),
             Ok(Cmd::SetStandby(cfg)) => ctx.snap.lock().unwrap().standby = cfg.needing_opponent(),
-            Ok(Cmd::SetPacing {
-                pace,
-                max_move_secs,
-                reserve_secs,
-                budget_use,
-            }) => {
-                apply_pacing(ctx, pace, max_move_secs, reserve_secs, budget_use);
-                save_settings(ctx);
-            }
             Ok(Cmd::SetAutoPlay(b)) => {
                 ctx.snap.lock().unwrap().auto_play = b;
                 save_settings(ctx);
@@ -2657,9 +2507,6 @@ fn service(ctx: &mut Ctx, w: &mut Wire, mut send: impl FnMut(String)) {
     }
     sync_matches(ctx, &w.matches);
 
-    if ctx.workers.is_empty() {
-        ponder_slice(ctx, &w.matches);
-    }
     expire_watches(ctx);
 
     let own_match = w.matches.values().any(|m| m.my_color.is_some());
@@ -2827,30 +2674,9 @@ fn handle_cmd(
                 },
             );
         }
-        Cmd::SetEngine {
-            depth,
-            solve,
-            band,
-            ponder,
-        } => {
-            apply_engine_cfg(ctx, depth, solve, band);
-            ctx.engine_cfg_ponder = ponder;
-            ctx.snap.lock().unwrap().engine.ponder = ponder;
-            save_settings(ctx);
-            ctx.dirty = true;
-        }
         Cmd::ReloadThreads => {
             apply_threads(ctx);
             ctx.dirty = true;
-        }
-        Cmd::SetPacing {
-            pace,
-            max_move_secs,
-            reserve_secs,
-            budget_use,
-        } => {
-            apply_pacing(ctx, pace, max_move_secs, reserve_secs, budget_use);
-            save_settings(ctx);
         }
         Cmd::SetAutoPlay(b) => {
             ctx.snap.lock().unwrap().auto_play = b;
@@ -3139,31 +2965,6 @@ fn ctx_send(writer: &mut TcpStream, cmd: &str) {
         .and_then(|_| writer.write_all(b"\n"));
 }
 
-fn apply_pacing(
-    ctx: &mut Ctx,
-    pace: String,
-    max_move_secs: u64,
-    reserve_secs: u64,
-    budget_use: f64,
-) {
-    let budget_use = if budget_use.is_finite() && budget_use > 0.0 {
-        budget_use
-    } else {
-        2.5
-    };
-    ctx.engine_cfg_pace = pace.clone();
-    ctx.engine_cfg_max_move = max_move_secs;
-    ctx.engine_cfg_reserve = reserve_secs;
-    ctx.engine_cfg_budget_use = budget_use;
-    let mut s = ctx.snap.lock().unwrap();
-    s.engine.pace = pace;
-    s.engine.max_move_secs = max_move_secs;
-    s.engine.reserve_secs = reserve_secs;
-    s.engine.budget_use = budget_use;
-    drop(s);
-    ctx.dirty = true;
-}
-
 fn resolve_threads(n: usize) -> usize {
     if n == 0 {
         std::thread::available_parallelism()
@@ -3172,21 +2973,6 @@ fn resolve_threads(n: usize) -> usize {
     } else {
         n
     }
-}
-
-fn apply_engine_cfg(ctx: &mut Ctx, depth: u32, solve: u8, band: u8) {
-    ctx.engine_cfg.depth = depth;
-    ctx.engine_cfg.solve_empties = solve;
-    ctx.engine_cfg.band = band;
-    if let Some(e) = ctx.engine.as_mut() {
-        e.set_levels(depth, solve, band);
-    }
-    let mut s = ctx.snap.lock().unwrap();
-    s.engine.depth = depth;
-    s.engine.solve = solve;
-    s.engine.band = band;
-    drop(s);
-    ctx.dirty = true;
 }
 
 fn apply_threads(ctx: &mut Ctx) {
@@ -3260,41 +3046,15 @@ fn handle_block(
     } else if !my_turn {
         m.told_turn = false;
     }
-    ctx.ponder_at = if turn.is_some() && !my_turn {
-        Some(mid.clone())
-    } else {
-        None
-    };
     if !auto || !rows_ok || !my_turn {
         return;
     }
     think_and_play(ctx, &mid, matches, send);
 }
 
-fn ponder_slice(ctx: &mut Ctx, matches: &HashMap<String, MatchState>) {
-    const SLICE: Duration = Duration::from_millis(200);
-    if !ctx.engine_cfg_ponder {
-        return;
-    }
-    let Some(mid) = ctx.ponder_at.clone() else {
-        return;
-    };
-    let Some(m) = matches.get(&mid) else {
-        ctx.ponder_at = None;
-        return;
-    };
-    let Some(board) = board_of(m, m.turn) else {
-        return;
-    };
-    if Some(m.turn) == m.my_color {
-        return;
-    }
-    if ctx.engine.is_none() {
-        return;
-    }
-    let engine = ctx.engine.as_mut().unwrap();
-    engine.ponder(&board, Instant::now() + SLICE);
-}
+/// Watched games are analysed between server lines, so the search stays short.
+const WATCH_DEPTH: u32 = 14;
+const WATCH_SOLVE: u8 = 20;
 
 fn analyze_watch(ctx: &mut Ctx, mid: &str, matches: &mut HashMap<String, MatchState>) {
     let m = matches.get_mut(mid).unwrap();
@@ -3310,15 +3070,9 @@ fn analyze_watch(ctx: &mut Ctx, mid: &str, matches: &mut HashMap<String, MatchSt
     if ctx.ensure_engine().is_err() {
         return;
     }
-    let base = (
-        ctx.engine_cfg.depth,
-        ctx.engine_cfg.solve_empties,
-        ctx.engine_cfg.band,
-    );
     let engine = ctx.engine.as_mut().unwrap();
-    engine.set_levels(base.0.min(14), base.1.min(20), 0);
+    engine.set_levels(WATCH_DEPTH, WATCH_SOLVE);
     let mv = engine.choose(&board);
-    engine.set_levels(base.0, base.1, base.2);
 
     let m = matches.get_mut(mid).unwrap();
     let v = if mv.value.is_finite() { mv.value } else { 0.0 };
@@ -3525,22 +3279,14 @@ fn apply_block(m: &mut MatchState, block: &[String], login: &str) -> (bool, Opti
     (!boards.is_empty(), turn)
 }
 
-fn time_budget(
-    mut s: kuroobi::timectl::Situation,
-    base: (u32, u8, u8),
-    pace: &str,
-) -> (u32, u8, u8, Option<Duration>, Option<Duration>, Option<f32>) {
-    s.nps = resources().nps_for(s.threads);
-    let p = kuroobi::timectl::plan(
-        s,
-        kuroobi::timectl::Levels {
-            depth: base.0,
-            solve: base.1,
-            band: base.2,
-        },
-        kuroobi::timectl::Pace::parse(pace),
-    );
-    (p.depth, p.solve, p.band, p.cap, p.extend, p.select)
+/// GGS shows 0:00 in overtime until the extension's own countdown appears.
+fn my_clock_secs(m: &MatchState) -> u64 {
+    let secs = m.my_clock_secs.unwrap_or(0);
+    if m.in_overtime && secs == 0 {
+        m.my_ext.unwrap_or(0)
+    } else {
+        secs
+    }
 }
 
 fn game_over(board: &Board) -> bool {
@@ -3589,7 +3335,7 @@ pub fn valid_log_channel(chan: &str) -> bool {
 }
 
 struct Searched {
-    level: Level,
+    empties: u8,
     threads: usize,
     nodes: u64,
     took: Duration,
@@ -3645,15 +3391,11 @@ fn search_log(
     if mv.from_book {
         lines.push(format!("score == {score:+} from book ;"));
     } else {
-        let e = s.level.empties;
-        let at = match s.level.select {
-            _ if mv.depth > 0 => format!(
-                "{}@{}%",
-                mv.depth,
-                confidence_pct(kuroobi::midgame::mpc_t())
-            ),
-            Some(t) => format!("{e}@{}%", confidence_pct(t)),
-            None => format!("{e}@100%"),
+        let at = if mv.exact || mv.depth == 0 {
+            format!("{}@100%", s.empties)
+        } else {
+            let t = mv.mpc_t.unwrap_or_else(kuroobi::midgame::mpc_t);
+            format!("{}@{}%", mv.depth, confidence_pct(t))
         };
         let pv: Vec<String> =
             s.pv.iter()
@@ -3712,7 +3454,7 @@ fn think_and_play(
     }
     if ctx.workers.iter().any(|w| {
         w.mid.as_deref() == Some(mid)
-            && ((w.busy && !w.pondering && w.pending_hash == bh)
+            && ((w.busy && w.pending_hash == bh)
                 || w.pending.as_ref().is_some_and(|p| p.hash == bh))
     }) {
         return;
@@ -3721,43 +3463,18 @@ fn think_and_play(
         ctx.log("info", &format!("engine init failed: {e}"));
         return;
     }
-    let clock_secs = m.my_clock_secs;
+    let clock = Duration::from_secs(my_clock_secs(m));
     let black = m.my_color == Some('*');
-    let grace = m.my_ext.unwrap_or(0);
-    let empties = board.empty_count();
     {
         let mut s = ctx.snap.lock().unwrap();
         s.thinking = Some(mid.to_string());
     }
     ctx.emit(true);
 
-    let base = (
-        ctx.engine_cfg.depth,
-        ctx.engine_cfg.solve_empties,
-        ctx.engine_cfg.band,
-    );
-    let (d, solve, band, cap, extend, select) = time_budget(
-        kuroobi::timectl::Situation {
-            clock_secs,
-            in_overtime: m.in_overtime,
-            grace_secs: grace,
-            empties,
-            max_move_secs: ctx.engine_cfg_max_move,
-            reserve_secs: ctx.engine_cfg_reserve,
-            budget_use: ctx.engine_cfg_budget_use,
-            threads: ctx.total_threads(),
-            ..Default::default()
-        },
-        base,
-        &ctx.engine_cfg_pace,
-    );
     if let Some(i) = ctx.worker_for(mid) {
         ctx.workers[i].pending = Some(Pending {
             board,
-            levels: (d, solve, band),
-            select,
-            cap,
-            extend,
+            clock,
             hash: bh,
             hint: mirror_hint(matches, mid),
             queued: Instant::now(),
@@ -3766,15 +3483,11 @@ fn think_and_play(
         return;
     }
     let engine = ctx.engine.as_mut().unwrap();
-    engine.set_levels(d, solve, band);
-    engine.set_select(select);
     let n0 = engine.nodes();
     let began = std::time::Instant::now();
-    let mv = engine.choose_until(&board, cap.map(|c| began + c), extend.map(|e| began + e));
+    let mv = engine.play_clock(&board, clock);
     let took = began.elapsed();
     let r = report(engine, &board, &mv, engine.nodes() - n0);
-    engine.set_levels(base.0, base.1, base.2);
-    engine.set_select(None);
 
     let mstr = move_text(mv.pos);
     let arg = play_arg(&mstr, mv.value, Some(took));
@@ -3791,7 +3504,7 @@ fn think_and_play(
             mid,
             &mv,
             &Searched {
-                level: Level::of(&board, (d, solve, band), select),
+                empties: board.empty_count(),
                 threads: ctx.total_threads(),
                 nodes: r.nodes,
                 took,
@@ -3853,33 +3566,23 @@ fn pump_next(ctx: &mut Ctx) {
         return;
     };
     ctx.workers[i].pending_hash = p.hash;
-    ctx.workers[i].pondering = false;
-    // Measured against the extension, which is how far the search may go.
-    let limit = p.extend.or(p.cap).unwrap_or(Duration::from_secs(60));
-    ctx.workers[i].sent_at = Some((Instant::now(), limit));
+    // A search can never use more than the clock it was given.
+    ctx.workers[i].sent_at = Some((Instant::now(), p.clock));
     ctx.workers[i].sent_ms = epoch_ms();
-    ctx.workers[i].sent_level = Level::of(&p.board, p.levels, p.select);
+    ctx.workers[i].sent_empties = p.board.empty_count();
     ctx.workers[i].stop.reset();
     let empties = p.board.empty_count();
     let movable = p.board.movable_count();
     ctx.log(
         "info",
         &format!(
-            "dispatch: empties {empties} moves {movable} deadline {:.1}s extend {:.1}s (depth {} solve {} band {} select {})",
-            p.cap.map_or(-1.0, |c| c.as_secs_f32()),
-            p.extend.map_or(-1.0, |c| c.as_secs_f32()),
-            p.levels.0,
-            p.levels.1,
-            p.levels.2,
-            p.select.map_or("-".into(), |t| t.to_string()),
+            "dispatch: empties {empties} moves {movable} clock {:.1}s",
+            p.clock.as_secs_f32()
         ),
     );
     ctx.workers[i].send(Job::Think {
         board: p.board,
-        levels: p.levels,
-        select: p.select,
-        cap: p.cap,
-        extend: p.extend,
+        clock: p.clock,
         hint: p.hint,
     });
 }
@@ -3936,14 +3639,12 @@ fn collect_workers(ctx: &mut Ctx, matches: &mut HashMap<String, MatchState>) -> 
         ctx.workers[i].busy = false;
         let took = ctx.workers[i].sent_at.map(|(t, _)| t.elapsed());
         ctx.workers[i].sent_at = None;
-        let Done::Moved(mv, r) = done else {
-            continue;
-        };
+        let Done::Moved(mv, r) = done;
         if let Some(t) = took {
             ctx.log(
                 "info",
                 &format!(
-                    "reply: {:.1}s{}{} {}{}{}{}",
+                    "reply: {:.1}s{}{} {}{}",
                     t.as_secs_f32(),
                     if mv.cut { " (cut)" } else { "" },
                     if mv.depth > 0 {
@@ -3952,18 +3653,8 @@ fn collect_workers(ctx: &mut Ctx, matches: &mut HashMap<String, MatchState>) -> 
                         String::new()
                     },
                     if mv.exact { "solve" } else { "search" },
-                    if mv.extended { " extended" } else { "" },
-                    if mv.depth > 0 {
-                        format!(" stop {}", mv.stop_reason.as_str())
-                    } else {
-                        String::new()
-                    },
-                    // A lower bound from a null window; `?` means no lead was shown, not a tie.
-                    match (mv.second, mv.gap) {
-                        (Some(p), Some(g)) => format!(" second {} gap >={g:.2}", coord(p)),
-                        (Some(p), None) => format!(" second {} gap ?", coord(p)),
-                        (None, _) => String::new(),
-                    }
+                    mv.mpc_t
+                        .map_or(String::new(), |t| format!(" @{}%", confidence_pct(t))),
                 ),
             );
         }
@@ -4003,7 +3694,7 @@ fn collect_workers(ctx: &mut Ctx, matches: &mut HashMap<String, MatchState>) -> 
                 &mid,
                 &mv,
                 &Searched {
-                    level: w.sent_level,
+                    empties: w.sent_empties,
                     threads: w.threads,
                     nodes: r.nodes,
                     took: took.unwrap_or_default(),
@@ -4032,44 +3723,6 @@ fn collect_workers(ctx: &mut Ctx, matches: &mut HashMap<String, MatchState>) -> 
 
     pump_next(ctx);
 
-    let queued = ctx.workers.iter().any(|w| w.pending.is_some());
-    if ctx.engine_cfg_ponder && !queued && !ctx.thinking() {
-        const SLICE: Duration = Duration::from_secs(5);
-        let mut idle: Vec<(usize, Board)> = Vec::new();
-        for i in 0..ctx.workers.len() {
-            if ctx.workers[i].busy {
-                continue;
-            }
-            let Some(mid) = ctx.workers[i].mid.clone() else {
-                continue;
-            };
-            let Some(m) = matches.get(&mid) else { continue };
-            if m.over {
-                continue;
-            }
-            if m.my_color.is_none() || Some(m.turn) == m.my_color {
-                continue;
-            }
-            let Some(board) = board_of(m, m.turn) else {
-                continue;
-            };
-            let c = &ctx.engine_cfg;
-            if !kuroobi::engine::ponder_pays(&board, c.solve_empties, c.band) {
-                continue;
-            }
-            idle.push((i, board));
-        }
-        let running = ctx.workers.iter().filter(|w| w.busy).count();
-        let each = (ctx.total_threads() / (running + idle.len()).max(1)).max(1);
-        for (i, board) in idle {
-            ctx.set_worker_threads(i, each);
-            ctx.workers[i].pondering = true;
-            ctx.workers[i].send(Job::Ponder {
-                board,
-                slice: SLICE,
-            });
-        }
-    }
     out
 }
 
@@ -4087,7 +3740,6 @@ fn sync_matches(ctx: &mut Ctx, matches: &HashMap<String, MatchState>) {
             busy_depth: 0,
             busy_best: None,
             busy_eval: None,
-            busy_predict: None,
             cells: m.cells.clone(),
             turn: match m.turn {
                 '*' => "black".into(),
@@ -4142,19 +3794,16 @@ fn sync_matches(ctx: &mut Ctx, matches: &HashMap<String, MatchState>) {
         if !w.busy {
             continue;
         }
-        let (kind, depth, best, eval, predict) = w.progress.snapshot();
+        let (kind, depth, best, eval) = w.progress.snapshot();
         v.busy = match kind {
             kuroobi::engine::Progress::THINK => "think",
-            kuroobi::engine::Progress::PONDER => "ponder",
             kuroobi::engine::Progress::SOLVE => "solve",
-            kuroobi::engine::Progress::SELECT => "select",
             _ => "",
         }
         .into();
         v.busy_depth = depth;
         v.busy_best = best;
         v.busy_eval = eval;
-        v.busy_predict = predict;
     }
     ctx.snap.lock().unwrap().matches = view;
     ctx.dirty = true;
@@ -5413,15 +5062,15 @@ mod tests {
     }
 
     #[test]
-    fn the_selective_rungs_read_as_their_confidence() {
-        assert_eq!([2.58, 2.33, 1.81].map(confidence_pct), [99, 98, 93]);
+    fn probcut_margins_read_as_their_confidence() {
+        assert_eq!([1.5, 2.0, 2.5].map(confidence_pct), [87, 95, 99]);
     }
 
     #[test]
     fn the_search_log_follows_edax_s_layout() {
         let sq = |t: &str| Position::from_kifu(t).ok();
-        let s = |empties, select, black| Searched {
-            level: Level { empties, select },
+        let s = |empties, black| Searched {
+            empties,
             threads: 8,
             nodes: 2_149_000_000,
             took: Duration::from_millis(4300),
@@ -5435,7 +5084,7 @@ mod tests {
             ..Default::default()
         };
         assert_eq!(
-            search_log(".kuroobi", "kuroobi", ".1.0", &mid, &s(40, None, true)),
+            search_log(".kuroobi", "kuroobi", ".1.0", &mid, &s(40, true)),
             [
                 "tell .kuroobi -----------------------------------------",
                 "tell .kuroobi kuroobi plays F5 in game .1.0 using 8 threads ;",
@@ -5447,16 +5096,12 @@ mod tests {
         let sel = kuroobi::engine::MoveEval {
             pos: sq("f5"),
             value: -1.0,
+            depth: 32,
+            mpc_t: Some(2.5),
             cut: true,
             ..Default::default()
         };
-        let lines = search_log(
-            ".kuroobi",
-            "kuroobi",
-            ".1.0",
-            &sel,
-            &s(32, Some(2.58), false),
-        );
+        let lines = search_log(".kuroobi", "kuroobi", ".1.0", &sel, &s(32, false));
         assert_eq!(
             lines[1],
             "tell .kuroobi kuroobi plays f5 in game .1.0 using 8 threads ;"
@@ -5473,7 +5118,7 @@ mod tests {
             ..Default::default()
         };
         assert!(
-            search_log(".kuroobi", "kuroobi", ".1.0", &exact, &s(26, None, true))[2]
+            search_log(".kuroobi", "kuroobi", ".1.0", &exact, &s(26, true))[2]
                 .starts_with("tell .kuroobi score == +4 at 26@100% ;")
         );
         let book = kuroobi::engine::MoveEval {
@@ -5483,7 +5128,7 @@ mod tests {
             ..Default::default()
         };
         assert_eq!(
-            search_log(".kuroobi", "kuroobi", ".1.0", &book, &s(50, None, true))[2..],
+            search_log(".kuroobi", "kuroobi", ".1.0", &book, &s(50, true))[2..],
             ["tell .kuroobi score == +1 from book ;"]
         );
     }
@@ -6519,91 +6164,6 @@ mod who_tests {
         assert_eq!(parse_rating_token("1938.0@"), Some(1938.0));
         assert_eq!(parse_rating_token("+33.6"), None); // a delta is out of range
         assert_eq!(parse_rating_token("71.7="), None);
-    }
-}
-
-#[cfg(test)]
-mod budget_tests {
-    use super::time_budget;
-    use std::time::Duration;
-
-    const BASE: (u32, u8, u8) = (22, 26, 6);
-
-    fn cap(secs: Option<u64>, empties: u8, pace: &str) -> Option<Duration> {
-        time_budget(
-            kuroobi::timectl::Situation {
-                clock_secs: secs,
-                grace_secs: 120,
-                empties,
-                budget_use: 0.5,
-                ..Default::default()
-            },
-            BASE,
-            pace,
-        )
-        .3
-    }
-
-    #[test]
-    fn depth_mode_ignores_the_clock() {
-        let (d, solve, band, c, _, _) = time_budget(
-            kuroobi::timectl::Situation {
-                clock_secs: Some(30),
-                grace_secs: 120,
-                empties: 40,
-                ..Default::default()
-            },
-            BASE,
-            "depth",
-        );
-        assert_eq!((d, solve, band), BASE);
-        assert!(c.is_none(), "no deadline");
-    }
-
-    #[test]
-    fn the_budget_shrinks_with_the_clock() {
-        let a = cap(Some(900), 40, "fast").unwrap();
-        let b = cap(Some(300), 40, "fast").unwrap();
-        let c = cap(Some(60), 40, "fast").unwrap();
-        assert!(
-            a > b && b > c,
-            "less time left means a shorter move: {a:?} > {b:?} > {c:?}"
-        );
-    }
-
-    #[test]
-    fn dropped_paces_fall_back_to_the_default() {
-        let fast = cap(Some(900), 50, "fast").unwrap();
-        for p in ["slow", "even", ""] {
-            assert_eq!(cap(Some(900), 50, p).unwrap(), fast, "{p:?}");
-        }
-        let even = cap(Some(900), 50, "tail:1.0").unwrap();
-        assert!(even > fast, "even split {even:?} > default {fast:?}");
-    }
-
-    #[test]
-    fn out_of_main_time_plays_fast() {
-        let c = cap(Some(0), 30, "fast").unwrap();
-        assert!(c <= Duration::from_secs(1), "{c:?}");
-    }
-
-    #[test]
-    fn the_endgame_keeps_a_reserve() {
-        let (_, _, _, c, _, _) = time_budget(
-            kuroobi::timectl::Situation {
-                clock_secs: Some(100),
-                empties: 40,
-                ..Default::default()
-            },
-            BASE,
-            "tail:1.0",
-        );
-        let b = c.unwrap().as_secs_f64();
-        assert!(
-            b <= 80.0,
-            "the per-move deadline exceeded the share available (80s): {b:.1}"
-        );
-        assert!(b > 0.0);
     }
 }
 

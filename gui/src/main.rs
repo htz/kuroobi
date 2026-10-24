@@ -250,7 +250,6 @@ struct EvalPoint {
     value: f32,
     exact: bool,
     from_book: bool,
-    selective: bool,
 }
 
 fn board_at_line(game: &mut Reversi, n: usize) -> Result<Board, String> {
@@ -379,54 +378,6 @@ fn preload_engine(
     std::thread::spawn(move || {
         let _guard = ActivityGuard::begin(&activity, "loading");
         let _ = ensure_engine_in(&engine_slot, &stop_slot);
-    });
-}
-
-fn calibrate_missing(
-    app: tauri::AppHandle,
-    engine_slot: Arc<Mutex<Option<Engine>>>,
-    stop_slot: Arc<Mutex<Option<kuroobi::midgame::StopHandle>>>,
-    activity: Arc<Mutex<Activity>>,
-    wanted: Vec<usize>,
-) {
-    std::thread::spawn(move || {
-        let missing: Vec<usize> = {
-            let r = resources();
-            let mut v: Vec<usize> = wanted
-                .into_iter()
-                .filter(|t| r.nps_for(*t).is_none())
-                .collect();
-            v.sort_unstable();
-            v.dedup();
-            v
-        };
-        if missing.is_empty() {
-            return;
-        }
-        if ensure_engine_in(&engine_slot, &stop_slot).is_err() {
-            return;
-        }
-        for t in missing {
-            if activity.lock().unwrap().local.is_some() {
-                return;
-            }
-            let nps = {
-                let _g = ActivityGuard::begin(&activity, "calibrating");
-                let mut guard = engine_slot.lock().unwrap();
-                let Some(e) = guard.as_mut() else { return };
-                let keep = e.config().threads;
-                e.set_threads(t);
-                let n = e.measure_solve_nps();
-                e.set_threads(keep);
-                n
-            };
-            if nps > 0.0 {
-                let mut r = resources();
-                r.set_nps(t, nps);
-                let _ = r.save(&resources_path());
-                let _ = app.emit("resources-changed", ());
-            }
-        }
     });
 }
 
@@ -802,16 +753,13 @@ fn learn_game(app: State<App>, my_color: String) -> Result<(), String> {
 struct ThreadsView {
     set: Option<u32>,
     auto: u32,
-    nps: Option<f64>,
 }
 
 fn threads_view() -> ThreadsView {
     let r = resources();
-    let now = r.threads.unwrap_or_else(auto_threads);
     ThreadsView {
         set: r.threads.map(|n| n as u32),
         auto: auto_threads() as u32,
-        nps: r.nps_for(now),
     }
 }
 
@@ -858,34 +806,7 @@ fn set_hash_sizes(mid: u32, end: u32) -> Result<HashView, String> {
 }
 
 #[tauri::command]
-async fn calibrate_nps(app: State<'_, App>) -> Result<ThreadsView, String> {
-    ensure_engine(&app)?;
-    let eng = app.engine.clone();
-    let act = app.activity.clone();
-    let (nps, threads) = tauri::async_runtime::spawn_blocking(move || {
-        let _g = ActivityGuard::begin(&act, "calibrating");
-        let mut guard = eng.lock().unwrap();
-        let e = guard.as_mut().unwrap();
-        let threads = e.config().threads;
-        (e.measure_solve_nps(), threads)
-    })
-    .await
-    .map_err(|e| e.to_string())?;
-    if nps <= 0.0 {
-        return Err("err.solve_speed_unmeasurable".into());
-    }
-    let mut r = resources();
-    r.set_nps(threads, nps);
-    r.save(&resources_path())?;
-    Ok(threads_view())
-}
-
-#[tauri::command]
-async fn set_local_threads(
-    app: State<'_, App>,
-    handle: tauri::AppHandle,
-    n: Option<u32>,
-) -> Result<(), String> {
+async fn set_local_threads(app: State<'_, App>, n: Option<u32>) -> Result<(), String> {
     let mut r = resources();
     r.threads = n.map(|v| v.clamp(1, 64) as usize);
     r.save(&resources_path())?;
@@ -904,13 +825,6 @@ async fn set_local_threads(
     if let Ok(tx) = ggs_tx(&app) {
         let _ = tx.send(ggs::Cmd::ReloadThreads);
     }
-    calibrate_missing(
-        handle,
-        eng,
-        app.stop.clone(),
-        app.activity.clone(),
-        vec![threads],
-    );
     Ok(())
 }
 
@@ -1029,12 +943,7 @@ async fn set_resource(
 }
 
 #[tauri::command]
-async fn set_levels(
-    app: State<'_, App>,
-    depth: u32,
-    solve_empties: u8,
-    band: u8,
-) -> Result<(), String> {
+async fn set_levels(app: State<'_, App>, depth: u32, solve_empties: u8) -> Result<(), String> {
     let (eng, stop) = (app.engine.clone(), app.stop.clone());
     tauri::async_runtime::spawn_blocking(move || {
         ensure_engine_in(&eng, &stop)?;
@@ -1042,7 +951,7 @@ async fn set_levels(
             .unwrap()
             .as_mut()
             .ok_or("err.engine_not_ready")?
-            .set_levels(depth, solve_empties, band);
+            .set_levels(depth, solve_empties);
         Ok(())
     })
     .await
@@ -1095,31 +1004,9 @@ async fn think(app: State<'_, App>) -> Result<ThinkView, String> {
     let eng = app.engine.clone();
     let act = app.activity.clone();
     let stop = app.stop.clone();
-    let (base, plan) = {
+    let clock = {
         let c = app.clocks.lock().unwrap();
-        let e = app.engine.lock().unwrap();
-        let cfg = e.as_ref().unwrap().config();
-        let base = kuroobi::timectl::Levels {
-            depth: cfg.depth,
-            solve: cfg.solve_empties,
-            band: cfg.band,
-        };
-        let threads = cfg.threads;
-        drop(e);
-        let plan = (c.total > 0).then(|| {
-            kuroobi::timectl::plan(
-                kuroobi::timectl::Situation {
-                    clock_secs: Some(c.left(board.player()) as u64),
-                    empties: board.empty_count(),
-                    nps: resources().nps_for(threads),
-                    threads,
-                    ..Default::default()
-                },
-                base,
-                kuroobi::timectl::Pace::Fast,
-            )
-        });
-        (base, plan)
+        (c.total > 0).then(|| std::time::Duration::from_secs_f64(c.left(board.player())))
     };
     let (mv, secs, nodes, aborted) = tauri::async_runtime::spawn_blocking(move || {
         let _g = ActivityGuard::begin(&act, "thinking");
@@ -1127,16 +1014,10 @@ async fn think(app: State<'_, App>) -> Result<ThinkView, String> {
         let t0 = std::time::Instant::now();
         let n0 = guard.as_ref().unwrap().nodes();
         let e = guard.as_mut().unwrap();
-        if let Some(p) = plan {
-            e.set_levels(p.depth, p.solve, p.band);
-        }
-        let mv = match plan.and_then(|p| p.cap) {
-            Some(d) => e.choose_within(&board, Some(t0 + d)),
+        let mv = match clock {
+            Some(c) => e.play_clock(&board, c),
             None => e.choose(&board),
         };
-        if plan.is_some() {
-            e.set_levels(base.depth, base.solve, base.band);
-        }
         let nodes = guard.as_ref().unwrap().nodes() - n0;
         let aborted = nodes > 0
             && stop
@@ -1182,29 +1063,6 @@ fn apply_move(app: State<App>, sq: Option<u8>) -> Result<GameView, String> {
 }
 
 #[tauri::command]
-async fn ponder_live(app: State<'_, App>) -> Result<(), String> {
-    if ggs_match_active(&app) {
-        return Err("err.busy_ggs".into());
-    }
-    ensure_engine(&app)?;
-    let board = app.game.lock().unwrap().board;
-    let eng = app.engine.clone();
-    let act = app.activity.clone();
-    let stop = app.stop.clone();
-    if let Some(h) = stop.lock().unwrap().as_ref() {
-        h.reset();
-    }
-    tauri::async_runtime::spawn_blocking(move || {
-        let _g = ActivityGuard::begin(&act, "pondering");
-        let mut guard = eng.lock().unwrap();
-        let Some(e) = guard.as_mut() else { return };
-        let until = std::time::Instant::now() + std::time::Duration::from_secs(60);
-        e.ponder(&board, until);
-    });
-    Ok(())
-}
-
-#[tauri::command]
 async fn analyze_live(app: State<'_, App>, handle: tauri::AppHandle) -> Result<(), String> {
     if ggs_match_active(&app) {
         return Err("err.busy_ggs_analysis".into());
@@ -1242,12 +1100,7 @@ async fn analyze_live(app: State<'_, App>, handle: tauri::AppHandle) -> Result<(
 }
 
 #[tauri::command]
-async fn eval_at(
-    app: State<'_, App>,
-    n: usize,
-    depth: u32,
-    selective: bool,
-) -> Result<EvalPoint, String> {
+async fn eval_at(app: State<'_, App>, n: usize, depth: u32) -> Result<EvalPoint, String> {
     if ggs_match_active(&app) {
         return Err("err.busy_ggs_analysis".into());
     }
@@ -1260,22 +1113,16 @@ async fn eval_at(
     if let Some(h) = stop.lock().unwrap().as_ref() {
         h.reset();
     }
-    let (value, exact, from_book, selective) = tauri::async_runtime::spawn_blocking(move || {
+    let (value, exact, from_book) = tauri::async_runtime::spawn_blocking(move || {
         let _g = ActivityGuard::begin(&act, "analyzing");
         let mut guard = eng.lock().unwrap();
         let e = guard.as_mut().unwrap();
         let from_book = e.book_base_value(&board);
         if let Some(v) = from_book {
-            return (v, false, true, false);
-        }
-        if let Some(mv) = selective
-            .then(|| e.eval_position_selective(&board))
-            .flatten()
-        {
-            return (mv.value, false, false, true);
+            return (v, false, true);
         }
         let mv = e.eval_position(&board, depth);
-        (mv.value, mv.exact, false, false)
+        (mv.value, mv.exact, false)
     })
     .await
     .map_err(|e| e.to_string())?;
@@ -1293,7 +1140,6 @@ async fn eval_at(
         value,
         exact,
         from_book,
-        selective,
     })
 }
 
@@ -1809,15 +1655,6 @@ fn ggs_raw(app: State<App>, cmd: String) -> Result<(), String> {
     ggs_send(&app, ggs::Cmd::Raw(cmd))
 }
 
-fn require_calibration() -> Result<(), String> {
-    let r = resources();
-    let t = r.threads.unwrap_or_else(auto_threads);
-    if r.nps_for(t).is_none() {
-        return Err(format!("err.solve_speed_not_measured|threads={t}"));
-    }
-    Ok(())
-}
-
 #[tauri::command]
 fn ggs_ask(
     app: State<App>,
@@ -1826,7 +1663,6 @@ fn ggs_ask(
     opponent: String,
     rated: bool,
 ) -> Result<(), String> {
-    require_calibration()?;
     ggs_send(
         &app,
         ggs::Cmd::Ask {
@@ -1954,45 +1790,6 @@ fn ggs_chat_seen(app: State<App>, at: u64) -> Result<(), String> {
 }
 
 #[tauri::command]
-fn ggs_set_engine(
-    app: State<App>,
-    depth: u32,
-    solve: u8,
-    band: u8,
-    ponder: bool,
-) -> Result<(), String> {
-    ggs_send(
-        &app,
-        ggs::Cmd::SetEngine {
-            depth,
-            solve,
-            band,
-            ponder,
-        },
-    )
-}
-
-#[tauri::command]
-fn ggs_set_pacing(
-    app: State<App>,
-    pace: String,
-    max_move_secs: u64,
-    reserve_secs: u64,
-    budget_use: f64,
-) -> Result<(), String> {
-    require_calibration()?;
-    ggs_send(
-        &app,
-        ggs::Cmd::SetPacing {
-            pace,
-            max_move_secs,
-            reserve_secs,
-            budget_use,
-        },
-    )
-}
-
-#[tauri::command]
 fn ggs_set_auto_play(app: State<App>, on: bool) -> Result<(), String> {
     ggs_send(&app, ggs::Cmd::SetAutoPlay(on))
 }
@@ -2027,9 +1824,6 @@ fn ggs_set_learn(app: State<App>, on: bool) -> Result<(), String> {
 
 #[tauri::command]
 fn ggs_set_standby(app: State<App>, cfg: ggs::StandbyCfg) -> Result<(), String> {
-    if cfg.enabled {
-        require_calibration()?;
-    }
     ggs_send(&app, ggs::Cmd::SetStandby(cfg))
 }
 
@@ -2156,16 +1950,6 @@ fn main() {
                 return Ok(());
             }
             preload_engine(st.engine.clone(), st.stop.clone(), st.activity.clone());
-            calibrate_missing(
-                app.handle().clone(),
-                st.engine.clone(),
-                st.stop.clone(),
-                st.activity.clone(),
-                vec![
-                    resources().threads.unwrap_or_else(auto_threads),
-                    auto_threads(),
-                ],
-            );
             let handle = ggs::spawn(app.handle().clone(), st.stop.clone(), st.activity.clone());
             let force = std::env::var("KUROOBI_GGS_AUTOCONNECT").is_ok();
             let demo = std::env::var("KUROOBI_AUTOPLAY").is_ok()
@@ -2223,7 +2007,6 @@ fn main() {
             set_local_threads,
             hash_sizes,
             set_hash_sizes,
-            calibrate_nps,
             activity_status,
             set_learn,
             learn_game,
@@ -2242,7 +2025,6 @@ fn main() {
             think,
             apply_move,
             analyze_live,
-            ponder_live,
             eval_at,
             save_kifu,
             load_kifu,
@@ -2275,8 +2057,6 @@ fn main() {
             ggs_resume_stored,
             ggs_history,
             ggs_chat_seen,
-            ggs_set_engine,
-            ggs_set_pacing,
             ggs_set_auto_play,
             ggs_set_open,
             ggs_set_watch_analysis,

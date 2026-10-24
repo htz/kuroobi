@@ -5,8 +5,8 @@
 **A Reversi (Othello) engine built on a 2×u64 bitboard.** Written in Rust
 with no external dependencies in the engine itself (`libc` serves one
 trainer's signal handler, the GPU trainer is optional, and random
-numbers and the benchmark harness are dev-only). The midgame uses an NNUE evaluation with selective
-search; the endgame is solved exactly. A GUI for playing, studying and
+numbers and the benchmark harness are dev-only). The search uses an NNUE evaluation with
+ProbCut; the endgame is solved exactly. A GUI for playing, studying and
 browsing the opening book ships with it, along with a client for the
 online server GGS.
 
@@ -52,10 +52,7 @@ from: book, solve, or an N-ply search.
 Below the board is a scrubber over the moves, ticked every move and
 numbered every ten, with **the losing move marked in red**. Clicking and
 dragging land on the same move. Under it, the eval graph re-measures the
-whole record, so one line shows where the game turned. Positions in
-solve range are first drawn from a 99% selective search and then
-replaced by their solves, so the whole line appears before the slow
-part.
+whole record, so one line shows where the game turned.
 
 ### Book
 
@@ -134,67 +131,34 @@ are in [Where it stands](docs/benchmarks.md).
 
 ![What each search covers](docs/img/search-flow.svg)
 
-Responsibility changes with the number of empties. **While the position
+Responsibility changes as the game goes on. **While the position
 is in the book and every legal move there was scored, nothing is
 searched.** An entry that only scored the moves the records played names
 the best of a sample rather than of the position, so it is treated as a
-hint: the search runs, with the book's move first in the ordering. Once
-out of book, the midgame
-search runs to a depth limit; as the end comes into view it switches to a
-selective search that prunes probabilistically; finally it solves without
-pruning and returns the exact disc difference.
+hint: the search runs, with the book's move first in the ordering.
 
-### The clock is defended at the entrance to the solve
+On a clock, one search plays every move out of book. It deepens two
+plies a pass; once its depth reaches the end of the game it searches the full
+depth again with a wider ProbCut margin each pass, and when the widest
+margin is done it solves without pruning and returns the exact disc
+difference. Without a clock (the fixed levels, analysis) the midgame
+search runs to the level's depth and the solve starts at the level's
+empties.
 
-The midgame search deepens iteratively, so when the deadline arrives it
-can return the previous depth's answer. **The one place a deadline cannot
-help is the solve**: once inside, it does not come back until it is done.
-So the question is how long it will take *before* entering.
+### The clock alone sets the pace
 
-The estimate is layered in three:
+Each move gets a share of the time left, a larger share as the board
+fills:
 
-    time = reference nodes(empties) × parallel overhead(threads) ÷ nps
+    budget = 1.8 × (time left − 2 s) ÷ max(4.8, 37 − discs)
 
-The reference node count follows an exponential in the empties
-(`2.82·e^{0.693·empties}`, branching factor **1.999**) and does not move
-between machines. The parallel overhead depends only on the thread count.
-**Only nps is machine-dependent**, so only nps is measured — solving
-three positions at 22 empties, which takes 1-3 seconds. Measure it from
-the GUI's settings; the result is stored in
-`resources.conf` (re-measure after changing the thread count).
-
-**The solve gets no budget of its own.** A separate "you may spend N% of
-the remaining time" allowance disagrees with the midgame's allocation,
-and it broke in practice (in a 30-second game it decided it could spend
-24 seconds, and a long game was left with 0.9 seconds). Tie it to the
-per-move budget instead, and the test tightens automatically as the clock
-runs down.
-
-**The effect shows up as failures avoided, not as strength.** In
-self-play at equal time controls (1400 games in total) the score did not
-move; the time left at the end did.
-
-| Time control | Minimum time left (calibrated / fixed ladder) | Score |
-|---|---|---|
-| 30 s | **8.9 s / 5.0 s** | 51.5% (no difference) |
-| 10 s | **0.3 s / 0.0 s** | 50.2% (no difference) |
-| 10 s (5 threads) | **0.6 s / 0.0 s** | 50.5% (no difference) |
-
-**There is still time being left on the table.** Counting 24 real GGS
-boards, games ended having used only 63% of the clock (opponents used
-94%). The loss concentrates between 48 and 38 empties at 1.0-1.1 discs
-per move, while from 26 empties down 299 of 300 moves were best — that
-is, **time saved in the endgame is not reaching the opening, where the
-games are lost**. The cause is the denominator in the allocation: the
-solve actually starts around 26-30 empties, but `(empties − 18) / 2`
-estimates "six more moves to pay for". Once the solve speed has been
-measured on the machine, the denominator is derived from it instead
-(`solve_ref_and_moves` in `timectl.rs`); without a measurement the fixed
-18 stands. A 60-second single-threaded bench could not reproduce match
-conditions when this was checked in self-play (one endgame move eats
-6.7% of the clock there, against 0.13% in a real game). The numbers are
-in
-[Where it stands](docs/benchmarks.md#ggs-rated-games).
+A new pass starts only while the budget lasts, and past half of it only
+if the last pass changed the best move or failed low; a pass the
+deadline cuts is thrown away and the previous one's move is played. The
+solve is just the last pass, so it runs on the same budget and a cut
+solve leaves the last full-depth move in place. Nothing is measured per
+machine: a slower machine reaches less depth in the same time. The
+details are in [Search](docs/search.md#search-on-a-clock-clockrs).
 
 ### The board moves by bit operations
 
@@ -260,13 +224,13 @@ src/
 ├── nnue.rs            NNUE evaluation (int16 quantization + NEON)
 ├── record.rs          training record format
 ├── wthor.rs           WTHOR archive reader (.wtb)
-├── midgame.rs         NNUE midgame search for games: YBWC + Lazy SMP
-├── solver.rs          endgame exact solver + selective search
+├── clock.rs           the search for games on a clock, time rule included
+├── midgame.rs         NNUE midgame search for fixed levels and analysis: YBWC + Lazy SMP
+├── solver.rs          endgame exact solver
 ├── stability.rs       stable discs
 ├── book.rs            opening book (8-fold symmetry, randomized within a margin)
 ├── learn.rs           writing game outcomes back into the book (avoiding lost games)
 ├── resources.rs       where weights and the book live (configurable)
-├── timectl.rs         time allocation and the entrance to the solve (derived from machine speed)
 ├── engine.rs          session layer shared by the GUI and the CLI (move choice, analysis)
 ├── trainer.rs         training data I/O, symmetric forms, epoch stats
 └── bin/               CLI tools (training, MPC calibration, book generation, GTP and GGS clients)
@@ -274,7 +238,7 @@ gui/                   GUI (Tauri + Vite/TypeScript)
 docs/                  implementation notes (linked from this README)
 tests/                 perft coverage, solver integration tests, time to stop
 benches/               micro-benchmarks (criterion)
-problems/              reference positions (OBF) for σ calibration and selective-search checks, and calibration data
+problems/              reference positions (OBF) for solver benchmarks and σ calibration
 .github/workflows/     CI (format, clippy, tests, GUI build)
 CLAUDE.md              how to work in this repository
 weights/ logs/ train_data/   trained weights, logs, training data (not in git)

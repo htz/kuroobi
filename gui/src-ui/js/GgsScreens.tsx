@@ -1,5 +1,5 @@
 import React, { useEffect, useLayoutEffect, useRef, useState } from 'react';
-import { api, ggsApi, jsLog, onApp } from './api';
+import { api, ggsApi, jsLog } from './api';
 import type { ChatMsg, GameResult, GgsSnapshot, MatchView, TourneyView, UserRow } from './types';
 import {
   clockChoices, gtypeChoices, clockOf, countDiscs, ggsMoveToIndex, gtypeLabel,
@@ -7,11 +7,10 @@ import {
   useClocks,
   type ClockSide, type ClockView, type Cond,
 } from './ggs';
-import { logLinesOf, sqName } from './adapt';
+import { logLinesOf } from './adapt';
 import { t, useLang, tErr, dateLocale } from './i18n';
 import { Col, Empty, EmptyBoard, EmptyState, List, Note, Section, TableHead, TableRow, picked } from './components/layout';
 import { Button, Segmented, Select, TextArea, TextField, Toggle } from './components/primitives';
-import { Strength } from './components/strength';
 import { Confirm, PickOne } from './Dialogs';
 import { IconButton } from './components/Icons';
 import {
@@ -364,7 +363,6 @@ function GgsLobby({ snap, onNav }: { snap: GgsSnapshot; onNav: (id: NavId) => vo
   const [gtype, setGtype] = useState('s8r14');
   const [time, setTime] = useState('00:05:00');
   const noRated = useNoRated();
-  const calibrated = useCalibrated();
   const [rated, setRated] = useState(true);
   const [info, setInfo] = useState('');
   useEffect(() => { void ggsApi.listMatches().catch(() => {}); }, []);
@@ -445,11 +443,10 @@ function GgsLobby({ snap, onNav }: { snap: GgsSnapshot; onNav: (id: NavId) => vo
           <Field label={t('ggs.field.format')}><Select value={gtype} onChange={setGtype} options={gtypeChoices()} /></Field>
           <Field label={t('ggs.field.time_control')}><Select value={time} onChange={setTime} options={clockChoices()} /></Field>
           <RatedField rated={rated} noRated={noRated} onChange={setRated} />
-          <Button size="field" variant="primary" disabled={!calibrated}
+          <Button size="field" variant="primary"
                   onClick={() => void ggsApi.ask(gtype, time, opp, rated)}>
             {opp ? t('ggs.lobby.ask') : t('ggs.lobby.open_request')}
           </Button>
-          {!calibrated && <Note>{t('ggs.calib_note')}</Note>}
           <Note>{t('ggs.lobby.synchro_note')}</Note>
         </Section>
 
@@ -520,20 +517,6 @@ function useNoRated(): boolean {
   return no;
 }
 
-function useCalibrated(): boolean {
-  const [ok, setOk] = useState(true);
-  useEffect(() => {
-    let alive = true;
-    const load = () => void api.localThreads()
-      .then((t) => { if (alive) setOk(t.nps != null); })
-      .catch(() => {});
-    load();
-    const off = onApp('resources-changed', load);
-    return () => { alive = false; void off.then((f) => f()); };
-  }, []);
-  return ok;
-}
-
 function GgsStandby({ snap }: { snap: GgsSnapshot }) {
   const sb = snap.standby;
   const st = snap.standby_stats;
@@ -544,7 +527,6 @@ function GgsStandby({ snap }: { snap: GgsSnapshot }) {
   const [interval, setInterval] = useState(sb.interval_secs || 20);
   const [autoAccept, setAutoAccept] = useState(sb.auto_accept);
   const noRated = useNoRated();
-  const calibrated = useCalibrated();
   const [rated, setRated] = useState(sb.rated);
 
   const names = onlineRows(snap).map((u) => u.name).filter((n) => n !== snap.login);
@@ -594,7 +576,7 @@ function GgsStandby({ snap }: { snap: GgsSnapshot }) {
                  <Stat v={st.draws} label={t('ggs.stat.draws')} />
                  <Stat v={`${st.diff_sum > 0 ? '+' : ''}${st.diff_sum}`} label={t('ggs.stat.disc_diff')} />
                  <Button variant={sb.enabled ? 'danger' : 'primary'}
-                         disabled={!sb.enabled && (!calibrated || !opp.trim())} onClick={toggle}>
+                         disabled={!sb.enabled && !opp.trim()} onClick={toggle}>
                    {sb.enabled ? t('ggs.standby.stop') : t('ggs.standby.start')}
                  </Button>
                </span>}>
@@ -622,7 +604,6 @@ function GgsStandby({ snap }: { snap: GgsSnapshot }) {
           <Toggle checked={autoAccept} onChange={setAutoAccept} label={t('ggs.standby.auto_accept')} />
         </span>
         <Note>{t('ggs.standby.note')}</Note>
-        {!sb.enabled && !calibrated && <Note>{t('ggs.calib_note')}</Note>}
       </Section>
 
       <Section title={t('ggs.standby.formula_title')}>
@@ -1304,13 +1285,11 @@ function MatchBoard({ snap, m, clock, prefs, onKifu, face, side }: {
   }));
 
   const busyEval: Record<number, EvalInfo> | undefined =
-    m.busy && m.busy !== 'ponder' && m.busy_best != null
+    m.busy && m.busy_best != null
       ? {
           [m.busy_best]: {
             score: m.busy_eval ?? 0,
-            src: m.busy === 'solve' ? { exact: true }
-              : m.busy === 'select' ? { select: true }
-              : { depth: m.busy_depth },
+            src: m.busy === 'solve' ? { exact: true } : { depth: m.busy_depth },
             best: true,
           },
         }
@@ -1347,7 +1326,6 @@ function MatchBoard({ snap, m, clock, prefs, onKifu, face, side }: {
       <div data-board style={{ width: side, height: side }}>
         <Board cells={m.cells as Cell[]} last={last} disabled
                evals={busyEval}
-               next={m.busy === 'ponder' ? m.busy_predict : null}
                legal={[...new Set([...m.legal, ...(busyEval ? Object.keys(busyEval).map(Number) : [])])]}
                coords={prefs.coords} grain={prefs.grain}
                flip={flipped(prefs.facing, m.my_color)} />
@@ -1378,19 +1356,6 @@ function MatchBoard({ snap, m, clock, prefs, onKifu, face, side }: {
           </span>
         )}
         {m.busy === 'solve' && <span style={{ color: 'var(--accent)' }}>{t('ggs.play.solving')}</span>}
-        {m.busy === 'select' && <span style={{ color: 'var(--accent)' }}>{t('ggs.play.selecting')}</span>}
-        {m.busy === 'ponder' && (
-          <span style={{ color: 'var(--sub)' }}>
-            {m.busy_predict != null && m.busy_eval != null
-              ? t('ggs.play.pondering_line', {
-                  m: sqName(m.busy_predict),
-                  v: (m.busy_eval > 0 ? '+' : '') + m.busy_eval.toFixed(1),
-                })
-              : m.busy_predict != null
-                ? t('ggs.play.pondering_reply', { m: sqName(m.busy_predict) })
-                : t('ggs.play.pondering')}
-          </span>
-        )}
         {!m.busy && snap.thinking === m.id && (
           <span style={{ color: 'var(--accent)' }}>{t('ggs.play.thinking')}</span>
         )}
@@ -1436,33 +1401,22 @@ const validLogChannel = (c: string) => c === '' || /^\.[A-Za-z0-9_-]{1,7}$/.test
 
 export function GgsSettings({ snap }: { snap: GgsSnapshot }) {
   const e = snap.engine;
-  const calibrated = useCalibrated();
   const [saved, setSaved] = useState('');
   const [failed, setFailed] = useState(false);
   const say = (msg: string, bad = false) => {
     setSaved(msg); setFailed(bad); window.setTimeout(() => setSaved(''), 2500);
   };
-  const [levels, setLevels] = useState({ depth: e.depth, solve: e.solve, band: e.band });
   const threads = e.threads;
-  const [ponder, setPonder] = useState(e.ponder);
   const [auto, setAuto] = useState(snap.auto_play);
   const [watch, setWatch] = useState(snap.watch_analysis);
   const [logChannel, setLogChannel] = useState(snap.log_channel);
   const logChannelOk = validLogChannel(logChannel);
   const [book, setBook] = useState(e.use_book);
-  const [pace, setPace] = useState(e.pace === 'depth' ? 'depth' : 'fast');
-  const byClock = pace !== 'depth';
-  const [maxMove, setMaxMove] = useState(e.max_move_secs);
-  const [reserve, setReserve] = useState(e.reserve_secs);
-  const [budgetText, setBudgetText] = useState(String(e.budget_use));
-  const budgetUse = Math.max(0.1, +budgetText || 2.5);
   const [cores, setCores] = useState(0);
   useEffect(() => { api.activity().then((a) => setCores(a.cores)).catch(() => {}); }, []);
 
   const apply = async () => {
     try {
-      await ggsApi.setEngine(levels.depth, levels.solve, levels.band, ponder);
-      await ggsApi.setPacing(pace, maxMove, reserve, budgetUse);
       await ggsApi.setAutoPlay(auto);
       await ggsApi.setWatchAnalysis(watch);
       if (logChannelOk) await ggsApi.setLogChannel(logChannel);
@@ -1477,30 +1431,16 @@ export function GgsSettings({ snap }: { snap: GgsSnapshot }) {
   const first = useRef(true);
   useEffect(() => {
     if (first.current) { first.current = false; return; }
-    if (!calibrated) return;
     const timer = setTimeout(() => void apply(), 400);
     return () => clearTimeout(timer);
-  }, [levels.depth, levels.solve, levels.band, ponder, pace,
-      maxMove, reserve, budgetUse, auto, watch, logChannel, book]);
+  }, [auto, watch, logChannel, book]);
 
 
   return (
     <div className="k-scroll" style={{ flex: 1, minHeight: 0, padding: 'var(--sp-4) var(--sp-4) 0' }}>
       <div style={{ maxWidth: 720, display: 'flex', flexDirection: 'column' }}>
         <Section title={t('ggs.settings.strength')}>
-          <Field label={t('ggs.settings.mode')}>
-            <Segmented value={pace} onChange={setPace}
-                       options={[{ value: 'fast', label: t('ggs.settings.by_clock') },
-                                 { value: 'depth', label: t('ggs.settings.by_level') }]} />
-          </Field>
-          <Note>
-            {byClock ? t('ggs.settings.by_clock_note') : t('ggs.settings.by_level_note')}
-          </Note>
-          {!byClock && (
-            <span style={{ maxWidth: 340, display: 'block' }}>
-              <Strength value={levels} onChange={setLevels} />
-            </span>
-          )}
+          <Note>{t('ggs.settings.by_clock_note')}</Note>
           <Field label={t('ggs.settings.threads')}>
             <span style={{ fontSize: 'var(--fs-5)', color: 'var(--sub)' }}>
               {threads === 0
@@ -1509,37 +1449,6 @@ export function GgsSettings({ snap }: { snap: GgsSnapshot }) {
               {' · '}{t('ggs.settings.threads_hint')}
             </span>
           </Field>
-          <Field label={t('ggs.settings.ponder')}>
-            <Segmented value={ponder ? 'on' : 'off'}
-                       onChange={(v) => setPonder(v === 'on')}
-                       options={[{ value: 'on', label: t('ggs.on') },
-                                 { value: 'off', label: t('ggs.off') }]} />
-          </Field>
-          <Note>{t('ggs.settings.ponder_note')}</Note>
-        </Section>
-
-        <Section title={t('ggs.settings.clock_use')}>
-          {!byClock && (
-            <Note>
-              <b style={{ color: 'var(--text)' }}>{t('ggs.settings.level_mode_note')}</b>
-            </Note>
-          )}
-          <Note>{t('ggs.settings.pacing_note')}</Note>
-          <div style={{ display: 'flex', gap: 'var(--sp-4)' }}>
-            <Field label={t('ggs.settings.max_move')}>
-              <TextField numeric align="right" width={80} value={String(maxMove)}
-                         onChange={(x) => setMaxMove(Math.max(0, +x || 0))} />
-            </Field>
-            <Field label={t('ggs.settings.reserve')}>
-              <TextField numeric align="right" width={80} value={String(reserve)}
-                         onChange={(x) => setReserve(Math.max(0, +x || 0))} />
-            </Field>
-            <Field label={t('ggs.settings.budget_use')}>
-              <TextField decimal align="right" width={80} value={budgetText}
-                         onChange={setBudgetText} />
-            </Field>
-          </div>
-          <Note>{t('ggs.settings.budget_note')}</Note>
         </Section>
 
         <Section title={t('ggs.book')}>
@@ -1576,7 +1485,6 @@ export function GgsSettings({ snap }: { snap: GgsSnapshot }) {
             }}>{saved}</span>
           )}
           <span style={{ marginLeft: 'auto' }} />
-          {!calibrated && <Note>{t('ggs.calib_note')}</Note>}
         </div>
 
       </div>

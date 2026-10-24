@@ -38,13 +38,12 @@ export function BoardDefs() {
 
 export type Cell = 0 | 1 | 2;            // 0 empty / 1 black / 2 white
 
-type EvalSource = { book: true } | { exact: true } | { select: true } | { depth: number };
+type EvalSource = { book: true } | { exact: true } | { depth: number };
 export type EvalInfo = { score: number; src: EvalSource; best?: boolean };
 
 const sourceLabel = (s: EvalSource) =>
   'book' in s ? t('ui.board.src_book')
   : 'exact' in s ? t('ui.board.src_solve')
-  : 'select' in s ? t('ui.board.src_select')
   : t('ui.board.src_depth', { n: s.depth });
 
 const evalText = (score: number, exact: boolean) => {
@@ -58,12 +57,11 @@ const numSize = (s: string) => (s.length <= 3 ? 24 : s.length === 4 ? 21 : 17);
 const cx = (i: number) => PAD + i * CELL + CELL / 2;
 const fr = (sq: number): [number, number] => [Math.floor(sq / 8), sq % 8];
 
-export function Board({ cells, legal = [], evals, last, next, coords, grain = true, flip = false, disabled, onPlay }: {
+export function Board({ cells, legal = [], evals, last, coords, grain = true, flip = false, disabled, onPlay }: {
   cells: Cell[];                                   // 64 (sq = file*8 + rank)
   legal?: number[];
   evals?: Record<number, EvalInfo>;
   last?: number | null;
-  next?: number | null;                            // the reply a ponder search expects
   coords: boolean;
   grain?: boolean;
   flip?: boolean;
@@ -108,7 +106,6 @@ export function Board({ cells, legal = [], evals, last, next, coords, grain = tr
           <g key={sq} className={disabled ? undefined : 'k-cell'}
              onClick={disabled ? undefined : () => onPlay?.(sq)}>
             <circle cx={x} cy={y} r={46} fill="transparent" />
-            {next === sq && <circle cx={x} cy={y} r={38} fill="none" stroke="var(--gold)" strokeWidth={2.5} strokeDasharray="6 5" />}
             {ev
               ? <g className="k-eval" style={{ opacity: .88 }}><EvalCell x={x} y={y} info={ev} /></g>
               : <circle className="k-legal" cx={x} cy={y} r={7} fill="var(--board-hint)" opacity={.5} />}
@@ -137,7 +134,7 @@ function EvalCell({ x, y, info }: { x: number; y: number; info: EvalInfo }) {
   const label = sourceLabel(src);
   const num = evalText(score, 'exact' in src);
   const srcColor = 'book' in src ? 'var(--board-eval-book)'
-    : 'exact' in src || 'select' in src ? 'var(--board-eval-strong)'
+    : 'exact' in src ? 'var(--board-eval-strong)'
     : 'var(--board-eval-weak)';
   return (
     <g>

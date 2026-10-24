@@ -32,28 +32,28 @@ export interface MoveInfo {
 }
 
 export const LEVELS = [
-  { depth: 1, solve: 2, band: 0 },
-  { depth: 2, solve: 4, band: 0 },
-  { depth: 4, solve: 8, band: 0 },
-  { depth: 6, solve: 10, band: 0 },
-  { depth: 8, solve: 12, band: 0 },
-  { depth: 10, solve: 14, band: 0 },
-  { depth: 12, solve: 16, band: 0 },
-  { depth: 14, solve: 18, band: 0 },
-  { depth: 16, solve: 20, band: 0 },
-  { depth: 18, solve: 22, band: 6 },
-  { depth: 20, solve: 24, band: 6 },
-  { depth: 22, solve: 26, band: 6 },
-  { depth: 24, solve: 26, band: 8 },
+  { depth: 1, solve: 2 },
+  { depth: 2, solve: 4 },
+  { depth: 4, solve: 8 },
+  { depth: 6, solve: 10 },
+  { depth: 8, solve: 12 },
+  { depth: 10, solve: 14 },
+  { depth: 12, solve: 16 },
+  { depth: 14, solve: 18 },
+  { depth: 16, solve: 20 },
+  { depth: 18, solve: 22 },
+  { depth: 20, solve: 24 },
+  { depth: 22, solve: 26 },
+  { depth: 24, solve: 26 },
 ] as const;
 
-export interface Levels { depth: number; solve: number; band: number }
+export interface Levels { depth: number; solve: number }
 
 export const SOLVE_MAX = 36;
 
 export function clampLevels(v: Levels): Levels {
   const depth = Math.max(1, Math.min(SOLVE_MAX, v.depth));
-  return { depth, solve: Math.max(depth, Math.min(SOLVE_MAX, v.solve)), band: v.band };
+  return { depth, solve: Math.max(depth, Math.min(SOLVE_MAX, v.solve)) };
 }
 
 export type Hints = Record<number, { value: number; exact: boolean; book: boolean; depth: number }>;
@@ -65,7 +65,7 @@ export function useGame(clockSecs: number) {
   const [levelRaw, setLevel] = useState<number | 'custom'>(6);
   const level: number | 'custom' =
     levelRaw === 'custom' ? 'custom' : Math.max(0, Math.min(LEVELS.length - 1, levelRaw));
-  const [custom, setCustom] = useState<Levels>({ depth: 12, solve: 18, band: 0 });
+  const [custom, setCustom] = useState<Levels>({ depth: 12, solve: 18 });
   const [useBook, setUseBook] = useState(true);
   const [hasBook, setHasBook] = useState(true);
   const [learnOn, setLearnOn] = useState(true);
@@ -105,8 +105,8 @@ export function useGame(clockSecs: number) {
   }, [dismiss]);
 
   const pushLevels = useCallback(async () => {
-    await api.setLevels(levels.depth, levels.solve, levels.band).catch(() => {});
-  }, [levels.depth, levels.solve, levels.band]);
+    await api.setLevels(levels.depth, levels.solve).catch(() => {});
+  }, [levels.depth, levels.solve]);
 
   useEffect(() => {
     void (async () => {
@@ -125,10 +125,7 @@ export function useGame(clockSecs: number) {
     const v = view;
     if (!v || v.over) return;
     if (playing && engineSides().includes(v.player)) return;
-    if (!autoHint) {
-      if (playing) api.ponderLive().catch(() => {});
-      return;
-    }
+    if (!autoHint) return;
     try {
       await pushLevels();
       await api.analyzeLive();

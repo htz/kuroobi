@@ -546,11 +546,7 @@ export function StatusChip({ label, unread, active, onClick }: {
   );
 }
 
-export function GgsStatus({ snap, showStrength }: {
-  snap: GgsSnapshot;
-  showStrength: boolean;
-}) {
-  const e = snap.engine;
+export function GgsStatus({ snap }: { snap: GgsSnapshot }) {
   return (
     <>
       {snap.my_ranks.map((r) => (
@@ -562,14 +558,6 @@ export function GgsStatus({ snap, showStrength }: {
           <span style={{ opacity: .7, marginLeft: 3 }}>±{Math.round(r.dev)}</span>
         </span>
       ))}
-      {showStrength && (
-        <span style={{ fontSize: 'var(--fs-6)', color: 'var(--sub)', fontVariantNumeric: 'tabular-nums' }}>
-          {t('ggs.status.strength')} <b style={{ color: 'var(--text)', fontWeight: 600 }}>
-            {t('ggs.status.depth', { n: e.depth })} / {t('ggs.status.solve', { n: e.solve })}
-            {e.band > 0 ? ' / ' + t('ggs.status.band', { n: e.band }) : ''}
-          </b>
-        </span>
-      )}
       {snap.standby.enabled && <Tag tone="ok">{t('ggs.waiting_mode')}</Tag>}
     </>
   );

@@ -6,13 +6,11 @@ import { Select } from './primitives';
 
 const label = (l: typeof LEVELS[number], i: number) => {
   const name = t('app.level.preset', { n: i + 1 });
-  return l.band
-    ? t('ui.strength.preset_band', { name, depth: l.depth, solve: l.solve, band: l.band })
-    : t('ui.strength.preset', { name, depth: l.depth, solve: l.solve });
+  return t('ui.strength.preset', { name, depth: l.depth, solve: l.solve });
 };
 
 export const presetOf = (v: Levels): number | 'custom' => {
-  const i = LEVELS.findIndex((l) => l.depth === v.depth && l.solve === v.solve && l.band === v.band);
+  const i = LEVELS.findIndex((l) => l.depth === v.depth && l.solve === v.solve);
   return i >= 0 ? i : 'custom';
 };
 
@@ -30,17 +28,14 @@ export function Strength({ value, onChange }: { value: Levels; onChange: (v: Lev
                 if (s === 'custom') { setPicked(true); return; }   // keep the values
                 setPicked(false);
                 const l = LEVELS[+s];
-                onChange({ depth: l.depth, solve: l.solve, band: l.band });
+                onChange({ depth: l.depth, solve: l.solve });
               }} />
       {custom && (
-        <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: 'var(--sp-2)' }}>
+        <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 'var(--sp-2)' }}>
           <Pick label={t('ui.strength.depth')} value={value.depth} min={1} max={SOLVE_MAX}
                 onChange={(n) => onChange(clampLevels({ ...value, depth: n }))} />
           <Pick label={t('ui.strength.solve')} value={value.solve} min={value.depth} max={SOLVE_MAX}
                 onChange={(n) => onChange(clampLevels({ ...value, solve: n }))} />
-          <Pick label={t('ui.strength.band')} value={value.band} min={0} max={12}
-                zero={t('ui.strength.band_none')} plus
-                onChange={(n) => onChange({ ...value, band: n })} />
         </div>
       )}
     </div>

@@ -59,7 +59,6 @@ export function evalsOf(
       score: h.value * flip,
       src: h.book ? { book: true }
         : h.exact ? { exact: true }
-        : h.depth === 0 ? { select: true }
         : { depth: h.depth },
       best: h.value === best,
     };

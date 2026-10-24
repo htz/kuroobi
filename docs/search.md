@@ -1,13 +1,70 @@
 # Search
 
-The selective midgame search, the endgame exact solve, and their
+The search that plays games on a clock, the midgame search behind the
+fixed levels and analysis, the endgame exact solve, and their
 transposition tables (one each).
 
-## Midgame search
+## Search on a clock (`clock.rs`)
 
 ![What each search covers](img/search-flow.svg)
 
-The search that plays games is `src/midgame.rs`, covered below. What
+A game on a clock is played by one search from the first move out of
+book to the exact solve. Nothing switches at a fixed number of empties;
+the clock decides how far each move gets.
+
+**Passes.** Iterative deepening starts at depth 6 or 7 (the parity of
+the discs on the board) and adds two plies per pass. Once the next
+depth would come within five plies of the end, the pass goes to the full
+depth instead. From then on each pass searches the full depth again with
+a wider ProbCut margin, in half-sigmas `3 → 4 → 5 → 6 → 8`; the next
+step after 8 is the exact solve, which `Engine::play_clock` runs on the
+solver until the same deadline. A solve the deadline cuts leaves the
+last pass's move in place. The margin a move reached carries over to the
+next move as long as that move's search also reaches the full depth.
+
+**One node.** Scores are integer discs. At a leaf the NNUE value is
+rounded and clamped to ±64; past 60 discs on the board the rest is
+searched exactly without a table. ProbCut
+applies at null-window nodes from depth 2: the probe depth comes from
+`PROBE_DEPTH` (none from depth 35 up), the margin is the model's
+σ(empties, depth, probe depth) from the weights file times the pass's
+half-sigmas, and a probe that fails inside the margin hands its best
+move to the ordering. A model without a measured σ searches without
+ProbCut.
+
+**Ordering.** The table's move first, then a history count (raised on a
+cut by the depth, lowered for the moves tried before it, divided by 8
+between moves) plus a static bonus for corners and a penalty for the X
+and C squares.
+
+**Table.** Two-way buckets of a 64-bit key xor data and the data, so a
+torn write fails the key check. An entry holds a lower and upper bound,
+the move, the depth and the margin it was searched with; a bound is used
+only from an entry at least as deep, searched with a margin at least as
+wide. On the PV only the
+upper bound may cut, so the move to play is always searched. The size is
+the midgame table's setting (`hash_mid`).
+
+**Threads.** From depth 12 the helper threads run the same root search
+over the shared table. Below the root, from depth 5, a sibling that
+another thread is already searching is put off to the end of the move
+list.
+
+**Time.** With `r` the clock less 2 s (at least 0.2 s) and `n` the
+discs on the board, a move gets
+
+    budget = max(0.02 s, 1.8 · r / max(4.8, 37 − n))
+
+and 1.2 times that for the first search of a game before 40 discs. A new
+pass starts only while the budget lasts, and past half of it only when
+the last pass changed the best move or failed low. A pass the deadline
+cuts is discarded. There is nothing to calibrate per machine: a slower
+machine reaches less depth in the same budget.
+
+## Midgame search
+
+The search behind the fixed levels, analysis, hints and the book is
+`src/midgame.rs`, covered below. What
 follows first is the αβ skeleton every version of this engine has had,
 written up against the linear-evaluator search that came before it
 (`src/search.rs`, removed once nothing but a benchmark called it). PVS,
@@ -82,9 +139,9 @@ from a large table was rejected without implementing it: the table
 does not fit in L2 (12MB) and a single load would cost more than the
 entire current cost.
 
-### Two speedups for the game-play midgame (`midgame.rs`)
+### Two speedups for the midgame (`midgame.rs`)
 
-The NNUE midgame used in games is `src/midgame.rs`. Two changes that
+Two changes to the NNUE midgame search that
 raised NPS by 27% **without changing the tree or the answers** are
 recorded here. Both were adopted only after confirming "same node
 count, same move" (moves identical at depths 10/12/14/16).
@@ -388,7 +445,7 @@ the exact pass's window**.
   8. It needs the ±1 exact window above: with the old window it moved
   that window's lower bound and FFO60-79 took 1855 s instead of 1643 s.
   A rung above 1.8 (2.6) costs more than it gains when solving all the
-  way out. A selective solve for the clock skips the 0.6 rung
+  way out
 
 There is a pitfall: **it does not work unless bounds are demoted
 between rungs.** Without the demotion a careful rung trusts a coarse
@@ -409,33 +466,6 @@ cuts returns without storing the best move for the full depth, so the
 quality of the seeding drops and the expensive exact search pays for
 it. **ProbCut suits a search that is itself the final output, not one
 that prepares another search.**
-
-### Selective search or the midgame, chosen by the clock
-
-Between the solve and `SELECTIVE_MAX_EMPTIES` empties, `timectl::plan`
-picks per move (`selective_rung`): **the surest selective rung whose
-slow case fits the move's budget, otherwise the midgame search**. The
-midgame is the fallback because a cut midgame search still returns the
-previous depth's move, while a cut selective search plays the 5% backup
-midgame move. With no calibrated nps, or a band of 0, there is no
-selective search under the clock.
-
-A rung's time is modelled as
-
-    seconds(empties, t) = at30(t) × growth(t)^(empties − 30) × SELECTIVE_REF_NPS ÷ nps
-
-and a rung is taken when `SELECTIVE_SLOW` × that time fits the move.
-The stored nps rescales the model to the machine, as it does for
-`solve_secs`.
-
-**Re-measuring.** Calibrate nps in the GUI. For every position in
-`problems/selclock.obf` and every rung, run `Engine::set_levels(60,
-empties − 1, 0)`, `Engine::set_select(Some(t))` and `Engine::choose`
-with 8 threads and fresh tables, timing each run. Per rung, fit
-ln(seconds) against empties by least squares: the line gives `at30`
-and `growth` in `SELECTIVE_RUNGS`. The calibrated 8-thread nps goes
-into `SELECTIVE_REF_NPS`, and the largest 90th-percentile ratio of
-measured time to the line into `SELECTIVE_SLOW`.
 
 ---
 

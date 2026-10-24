@@ -51,15 +51,14 @@ export const api = {
   pickResource: (kind: string) => call<string | null>('pick_resource', { kind }),
   setResource: (kind: string, path: string | null) =>
     call<void>('set_resource', { kind, path }),
-  setLevels: (depth: number, solveEmpties: number, band: number) =>
-    call('set_levels', { depth, solveEmpties, band }),
+  setLevels: (depth: number, solveEmpties: number) =>
+    call('set_levels', { depth, solveEmpties }),
   stopSearch: () => call('stop_search'),
   think: () => call<ThinkView>('think'),
   applyMove: (sq: number | null) => call<GameView>('apply_move', { sq }),
   analyzeLive: () => call<void>('analyze_live'),
-  ponderLive: () => call<void>('ponder_live'),
-  evalAt: (n: number, depth: number, selective: boolean) =>
-    call<EvalPoint>('eval_at', { n, depth, selective }),
+  evalAt: (n: number, depth: number) =>
+    call<EvalPoint>('eval_at', { n, depth }),
   saveKifu: (black: string, white: string) =>
     call<string | null>('save_kifu', { black, white }),
   loadKifu: () => call<GameView | null>('load_kifu'),
@@ -67,7 +66,6 @@ export const api = {
   previewKifu: (text: string) => call<KifuFrame[]>('preview_kifu', { text }),
   localThreads: () => call<ThreadsView>('local_threads', {}),
   setLocalThreads: (n: number | null) => call('set_local_threads', { n }),
-  calibrateNps: () => call<ThreadsView>('calibrate_nps', {}),
   hashSizes: () => call<HashView>('hash_sizes', {}),
   setHashSizes: (mid: number, end: number) => call<HashView>('set_hash_sizes', { mid, end }),
   activity: () => call<ActivityView>('activity_status', {}),
@@ -89,7 +87,6 @@ export interface HashView {
 export interface ThreadsView {
   set: number | null;
   auto: number;
-  nps: number | null;
 }
 
 export interface ActivityView {
@@ -140,10 +137,6 @@ export const ggsApi = {
   resumeStored: (id: string) => call('ggs_resume_stored', { id }),
   history: (name: string) => call('ggs_history', { name }),
   chatSeen: (at: number) => call('ggs_chat_seen', { at }),
-  setEngine: (depth: number, solve: number, band: number, ponder: boolean) =>
-    call('ggs_set_engine', { depth, solve, band, ponder }),
-  setPacing: (pace: string, maxMoveSecs: number, reserveSecs: number, budgetUse: number) =>
-    call('ggs_set_pacing', { pace, maxMoveSecs, reserveSecs, budgetUse }),
   setAutoPlay: (on: boolean) => call('ggs_set_auto_play', { on }),
   setOpen: (on: boolean) => call('ggs_set_open', { on }),
   setWatchAnalysis: (on: boolean) => call('ggs_set_watch_analysis', { on }),

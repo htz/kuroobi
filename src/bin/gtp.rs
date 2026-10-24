@@ -89,7 +89,6 @@ fn parse_args() -> Result<(EngineConfig, u64), ExitCode> {
                 cfg.solve_empties = it.next().and_then(|v| v.parse().ok()).unwrap_or(0);
                 solve_set = true;
             }
-            "--band" => cfg.band = it.next().and_then(|v| v.parse().ok()).unwrap_or(0),
             "--no-mpc" => cfg.mpc = false,
             "--time-ms" => time_ms = it.next().and_then(|v| v.parse().ok()).unwrap_or(0),
             "--weights" => cfg.weights = PathBuf::from(it.next().unwrap_or_default()),

@@ -166,7 +166,6 @@ export function Settings({ prefs, setPref, ggs, initialTab, onClose }: {
   const [reset, setReset] = useState(false);
   const [status, setStatus] = useState<[string, string, boolean, number, string][]>([]);
   const [th, setTh] = useState<ThreadsView | null>(null);
-  const [calib, setCalib] = useState(false);
   const [hash, setHash] = useState<HashView | null>(null);
 
   const load = useCallback(async () => {
@@ -300,28 +299,6 @@ export function Settings({ prefs, setPref, ggs, initialTab, onClose }: {
                       })} />
             </Row2>
             <Note>{t('settings.threads.note')}</Note>
-          </Section>
-        )}
-        {th && (
-          <Section title={t('settings.nps.title')}>
-            <Row2 label={t('settings.nps.label')}>
-              <span style={{
-                width: 200, flex: 'none',
-                fontSize: 'var(--fs-5)', fontVariantNumeric: 'tabular-nums',
-                color: th.nps != null ? 'var(--text)' : 'var(--sub)',
-              }}>
-                {th.nps == null
-                  ? t('settings.nps.unmeasured')
-                  : t('settings.nps.value', { n: (th.nps / 1e6).toFixed(1) })}
-              </span>
-              <Button size="field" disabled={calib}
-                      onClick={() => void (async () => {
-                        setCalib(true);
-                        try { setTh(await api.calibrateNps()); } catch { /* keep the old value when it cannot be measured */ }
-                        setCalib(false);
-                      })()}>{calib ? t('settings.nps.measuring') : t('settings.nps.remeasure')}</Button>
-            </Row2>
-            <Note>{t('settings.nps.note')}</Note>
           </Section>
         )}
         {hash && (

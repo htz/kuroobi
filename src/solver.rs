@@ -271,7 +271,6 @@ struct SplitPoint {
     upper: i32,
     selective_t: Option<f32>,
     nnue: Option<NnueProbe>,
-    sigma_scale: f32,
     tt: *const HashTable,
     ev: *const (),
     group: *const (),
@@ -345,7 +344,6 @@ unsafe fn help_split(sp: &SplitPoint) -> bool {
         let mut w = Worker::with_tables(tt, budget, group, sc);
         w.selective_t = sp.selective_t;
         w.nnue = sp.nnue.clone();
-        w.sigma_scale = sp.sigma_scale;
         let mut child = m.child(&sp.board);
         if let Some(e) = ev.filter(|_| child.empty_count() >= eval_order_empties()) {
             w.order_ix = order_indexer(e).init(child.black, child.white);
@@ -565,7 +563,7 @@ static PROBE_STEP: std::sync::atomic::AtomicU16 = std::sync::atomic::AtomicU16::
 const SELECTIVE_GATE_OFFSET: f32 = 4.0;
 const SELECTIVE_PASS_MIN_EMPTIES: u8 = 18;
 const SELECTIVE_LADDER: [f32; 3] = [0.6, 1.1, 1.8];
-/// 93%, the loosest confidence the selective band itself plays.
+/// From this rung on, a cut solve plays the warm-up's move.
 const WARM_FALLBACK_T: f32 = 1.8;
 
 const SORT_DEPTH_LADDER: [u8; 64] =
@@ -1139,7 +1137,6 @@ struct Worker<'a> {
     warm_score: Option<i32>,
     selective_t: Option<f32>,
     nnue: Option<NnueProbe>,
-    sigma_scale: f32,
 }
 
 impl<'a> Worker<'a> {
@@ -1169,7 +1166,6 @@ impl<'a> Worker<'a> {
             l56: sc.l56,
             l78: sc.l78,
             l4: sc.l4,
-            sigma_scale: 1.0,
             budget,
             abort,
         }
@@ -1455,16 +1451,7 @@ impl Solver {
         board: &Board,
         ev: Option<&Linear>,
     ) -> EndSolverResult {
-        self.solve_impl(mode, board, ev, None)
-    }
-
-    pub fn solve_selective(
-        &mut self,
-        board: &Board,
-        ev: Option<&Linear>,
-        t: f32,
-    ) -> EndSolverResult {
-        self.solve_impl(EndSolverMode::Perfect, board, ev, Some(t))
+        self.solve_impl(mode, board, ev)
     }
 
     fn solve_impl(
@@ -1472,7 +1459,6 @@ impl Solver {
         mode: EndSolverMode,
         board: &Board,
         ev: Option<&Linear>,
-        selective: Option<f32>,
     ) -> EndSolverResult {
         self.nodes = 0;
         self.best = None;
@@ -1488,9 +1474,7 @@ impl Solver {
         }
 
         {
-            let step = if selective.is_some() {
-                0
-            } else if board.empty_count() >= 25 {
+            let step = if board.empty_count() >= 25 {
                 (20 << 8) | 6
             } else {
                 3
@@ -1547,22 +1531,12 @@ impl Solver {
             let mut w = Worker::with_tables(tt, budget, &root_abort, root);
             w.stop = stop_ref;
             w.nnue = self.nnue.clone();
-            w.sigma_scale = if selective.is_some() { 0.6 } else { 1.0 };
             let mut b = *board;
-            let mut rungs: Vec<f32> = SELECTIVE_LADDER.to_vec();
-            if let Some(t) = selective {
-                // The cheapest rung is measured for the exact solve only.
-                rungs.remove(0);
-                // Keeping the 93% rung below a surer target leaves a cut search that rung's move, not a shallow midgame one.
-                rungs.retain(|&r| r < t - 0.1);
-                rungs.push(t);
-            }
-            let mut last_selective: Option<i32> = None;
             let mut warm: Option<(i32, Option<Position>)> = None;
             if let Some(e) = ev {
-                if selective.is_some() || board.empty_count() >= selective_pass_min_empties() {
+                if board.empty_count() >= selective_pass_min_empties() {
                     let mut guess = w.estimate_score(board, Some(e));
-                    for t in rungs {
+                    for t in SELECTIVE_LADDER {
                         w.selective_t = Some(t);
                         let mut sb = *board;
                         let s =
@@ -1572,7 +1546,6 @@ impl Solver {
                             warm = Some((s, w.best));
                         }
                         guess = s - (s & 1);
-                        last_selective = Some(s);
                         w.tt.demote_to_seed_shared();
                         w.warm_score = Some(s - (s & 1));
                     }
@@ -1580,9 +1553,6 @@ impl Solver {
                 }
             }
 
-            if let Some(v) = last_selective.filter(|_| selective.is_some()) {
-                return (v, w.nodes, w.best, w.into_scratch(), warm);
-            }
             let v = match mode {
                 EndSolverMode::WinLossDraw => w.pvs_root(&mut b, -1, 1, ev),
                 EndSolverMode::WinDraw => w.pvs_root(&mut b, 0, 1, ev),
@@ -1926,7 +1896,6 @@ impl Worker<'_> {
             upper,
             selective_t: self.selective_t,
             nnue: self.nnue.clone(),
-            sigma_scale: self.sigma_scale,
             tt: self.tt as *const HashTable,
             ev: ev.map_or(std::ptr::null(), |e| e as *const Linear as *const ()),
             group: &group as *const AbortFlag as *const (),
@@ -3401,7 +3370,7 @@ impl Worker<'_> {
     ) -> Option<i32> {
         let empties = board.empty_count();
         let pd = selective_probe_depth(empties);
-        let error = t * selective_sigma(empties, pd) * self.sigma_scale;
+        let error = t * selective_sigma(empties, pd);
 
         if let Some((nn, mtt)) = self.nnue.clone() {
             const EPS: f32 = 0.01;

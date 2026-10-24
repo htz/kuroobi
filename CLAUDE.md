@@ -153,13 +153,12 @@ Japanese terms, used consistently in `ja.yaml`:
 | Use | Not |
 |---|---|
 | 定石 | 定石 book, book |
-| 選択読み | 帯 |
 | 読切 | 完全読み (on screen) |
 | 分析 (running evals over a record) | 採点, グラフ計算 |
 | KUROOBI (our engine) | エンジン |
 
-Code identifiers (`book`, `band`, ...) and English UI text stay in the
-engine's own vocabulary: book, selective search, solve, analysis.
+Code identifiers (`book`, `solve`, ...) and English UI text stay in the
+engine's own vocabulary: book, solve, analysis.
 
 ## Comments
 

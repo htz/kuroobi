@@ -3,8 +3,9 @@
 use std::path::PathBuf;
 
 use crate::book::{Book, BookCandidate};
+use crate::clock::ClockSearch;
 use crate::linear::Linear;
-use crate::midgame::{selective_band, NnueSearch, SharedTt, StopHandle};
+use crate::midgame::{NnueSearch, SharedTt, StopHandle};
 use crate::nnue::Nnue;
 use crate::pattern::{LINEAR_PATTERNS, NNUE_PATTERNS};
 use crate::solver::{final_score, EndSolverMode, EndSolverResult, Solver};
@@ -21,8 +22,6 @@ fn stone_scale(v: f32) -> f32 {
 }
 
 pub static NON_FINITE_VALUES: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
-
-const PONDER_DEPTH: u32 = 60;
 
 const BACKUP_DEPTH: u32 = 60;
 
@@ -41,8 +40,6 @@ fn is_game_over(board: &Board) -> bool {
 pub struct EngineConfig {
     pub depth: u32,
     pub solve_empties: u8,
-    pub band: u8,
-    pub select: Option<f32>,
     pub threads: usize,
     pub mpc: bool,
     pub midgame_hash_bits: u32,
@@ -59,8 +56,6 @@ impl Default for EngineConfig {
         EngineConfig {
             depth: 12,
             solve_empties: 18,
-            band: 0,
-            select: None,
             threads: 4,
             mpc: true,
             midgame_hash_bits: 22,
@@ -83,11 +78,8 @@ pub struct MoveEval {
     pub learned: bool,
     pub depth: u32,
     pub cut: bool,
-    pub stop_reason: crate::midgame::Stopped,
-    pub second: Option<Position>,
-    /// A lower bound, `None` where no lead was shown (zero would read as a tie).
-    pub gap: Option<f32>,
-    pub extended: bool,
+    /// The ProbCut confidence the move was searched at, in sigmas; `None` for the midgame's default.
+    pub mpc_t: Option<f32>,
 }
 
 #[derive(Debug, Default)]
@@ -96,16 +88,12 @@ pub struct Progress {
     pub depth: std::sync::atomic::AtomicU32,
     pub best: std::sync::atomic::AtomicU32,
     pub milli: std::sync::atomic::AtomicI32,
-    predicted: std::sync::atomic::AtomicU32,
-    flip: std::sync::atomic::AtomicBool,
 }
 
 impl Progress {
     pub const IDLE: u8 = 0;
     pub const THINK: u8 = 1;
-    pub const PONDER: u8 = 2;
     pub const SOLVE: u8 = 3;
-    pub const SELECT: u8 = 4;
 
     pub fn set_kind(&self, kind: u8) {
         self.kind.store(kind, std::sync::atomic::Ordering::Relaxed);
@@ -118,9 +106,6 @@ impl Progress {
         self.best.store(64, std::sync::atomic::Ordering::Relaxed);
         self.milli
             .store(i32::MIN, std::sync::atomic::Ordering::Relaxed);
-        self.predicted
-            .store(64, std::sync::atomic::Ordering::Relaxed);
-        self.flip.store(false, std::sync::atomic::Ordering::Relaxed);
     }
 
     pub fn reached(&self, depth: u32, best: Option<Position>, value: f32) {
@@ -129,43 +114,29 @@ impl Progress {
         self.best
             .store(best.map(|p| p.index() as u32).unwrap_or(64), Relaxed);
         if value.is_finite() {
-            let v = if self.flip.load(Relaxed) {
-                -value
-            } else {
-                value
-            };
-            self.milli.store((v * 1000.0) as i32, Relaxed);
+            self.milli.store((value * 1000.0) as i32, Relaxed);
         }
     }
 
-    pub fn predict(&self, pos: Position) {
-        self.predicted
-            .store(pos.index() as u32, std::sync::atomic::Ordering::Relaxed);
-    }
-
-    pub fn snapshot(&self) -> (u8, u32, Option<u32>, Option<f32>, Option<u32>) {
+    pub fn snapshot(&self) -> (u8, u32, Option<u32>, Option<f32>) {
         use std::sync::atomic::Ordering::Relaxed;
         let b = self.best.load(Relaxed);
         let m = self.milli.load(Relaxed);
-        let p = self.predicted.load(Relaxed);
         (
             self.kind.load(Relaxed),
             self.depth.load(Relaxed),
             (b < 64).then_some(b),
             (m != i32::MIN).then(|| m as f32 / 1000.0),
-            (p < 64).then_some(p),
         )
     }
-}
-
-/// Our next move is solved (fully or selectively) from the solver's own tables, which pondering never fills.
-pub fn ponder_pays(after_my_move: &Board, solve_empties: u8, band: u8) -> bool {
-    after_my_move.empty_count() as u32 > solve_empties as u32 + band as u32 + 1
 }
 
 pub struct Engine {
     linear: std::sync::Arc<Linear>,
     search: NnueSearch,
+    /// Built on the first move played on a clock.
+    clock: Option<ClockSearch>,
+    nnue: std::sync::Arc<Nnue>,
     solver: Solver,
     config: EngineConfig,
     stop: StopHandle,
@@ -174,7 +145,8 @@ pub struct Engine {
     learned: Book,
     book_base: Option<Book>,
     learn_path: std::path::PathBuf,
-    solver_nodes: u64,
+    /// Nodes outside the midgame search: the solver's and the clock search's.
+    other_nodes: u64,
     progress: std::sync::Arc<Progress>,
 }
 
@@ -221,6 +193,7 @@ impl Engine {
         let tt = std::sync::Arc::new(SharedTt::new(config.midgame_hash_bits));
         let progress = std::sync::Arc::new(Progress::default());
         let mut search = NnueSearch::new(nn.clone(), tt.clone());
+        let nnue = nn.clone();
         search.set_progress(Some(progress.clone()));
         search.threads = config.threads;
         search.mpc = config.mpc;
@@ -242,6 +215,8 @@ impl Engine {
         Ok(Engine {
             linear,
             search,
+            clock: None,
+            nnue,
             solver,
             config,
             stop,
@@ -250,7 +225,7 @@ impl Engine {
             book_rand,
             learned,
             learn_path,
-            solver_nodes: 0,
+            other_nodes: 0,
             progress,
         })
     }
@@ -309,7 +284,7 @@ impl Engine {
         self.progress.set_kind(kind);
         let watcher = self.watch_deadline(deadline);
         let r = solve(&mut self.solver, &self.linear);
-        self.solver_nodes += r.nodes;
+        self.other_nodes += r.nodes;
         let cut = self.stop_watch_done(watcher);
         let backup = backup
             .filter(|(p, _)| cut && p.is_some())
@@ -324,7 +299,7 @@ impl Engine {
     }
 
     pub fn nodes(&self) -> u64 {
-        self.search.nodes + self.solver_nodes
+        self.search.nodes + self.other_nodes
     }
 
     pub fn book_size(&self) -> usize {
@@ -338,6 +313,9 @@ impl Engine {
     pub fn hint_move(&mut self, board: &Board, pos: Position) {
         let h = crate::zobrist::board_hash(board.player_bb(), board.opponent_bb());
         self.search.tt.seed_move(h, pos.index());
+        if let Some(c) = self.clock.as_ref() {
+            c.seed_move(board, pos);
+        }
     }
 
     pub fn stop_handle(&self) -> StopHandle {
@@ -360,73 +338,9 @@ impl Engine {
     pub fn clear_tables(&mut self) {
         self.search.clear();
         self.solver.clear_tables();
-    }
-
-    pub fn measure_solve_nps(&mut self) -> f64 {
-        let a = self.measure_solve_nps_once();
-        let b = self.measure_solve_nps_once();
-        a.max(b)
-    }
-
-    fn measure_solve_nps_once(&mut self) -> f64 {
-        const POSITIONS: [&str; 3] = [
-            "--XOOO----XOOOOO-XXOOOOX-XXXOXXX-XXXOXXX-XOOOOXX--OO-O------O--- X",
-            "----X-----OX-O---XXXXO--XXXXXO--OOXXXOO-OOOXOXOO-OOOOOX--XXXXXX- X",
-            "-OOOOX---OXXOX--XXXOOOOOXXXXO-O-XXXOOO--XXXXXXX-X--XXX------X--- X",
-        ];
-        use std::sync::atomic::Ordering;
-        let clear0 = crate::solver::CLEAR_NS.load(Ordering::Relaxed);
-        let t0 = std::time::Instant::now();
-        let mut nodes = 0u64;
-        for p in POSITIONS {
-            let Ok(board) = Board::from_string(p) else {
-                continue;
-            };
-            self.solver.clear_tables();
-            let r =
-                self.solver
-                    .solve_with_eval(EndSolverMode::Perfect, &board, Some(&*self.linear));
-            nodes += r.nodes;
+        if let Some(c) = self.clock.as_mut() {
+            c.new_game();
         }
-        self.solver_nodes += nodes;
-        let clear = (crate::solver::CLEAR_NS.load(Ordering::Relaxed) - clear0) as f64 / 1e9;
-        let secs = t0.elapsed().as_secs_f64() - clear;
-        if secs <= 0.0 || nodes == 0 {
-            return 0.0;
-        }
-        nodes as f64 / secs
-    }
-
-    pub fn ponder(&mut self, after_my_move: &Board, deadline: std::time::Instant) -> u64 {
-        let base = self.nodes();
-        if after_my_move.movable_count() == 0 {
-            return 0;
-        }
-        if !ponder_pays(after_my_move, self.config.solve_empties, self.config.band) {
-            return 0;
-        }
-        self.progress.clear();
-        self.progress.set_kind(Progress::PONDER);
-        let Some(pred) = self.tt_best(after_my_move) else {
-            // Nothing searched here yet (second to move, or a book move): search their side for a reply.
-            self.stop.reset();
-            self.search
-                .best_move_deadline(after_my_move, PONDER_DEPTH, Some(deadline));
-            return self.nodes() - base;
-        };
-        self.progress
-            .flip
-            .store(true, std::sync::atomic::Ordering::Relaxed);
-        self.progress.predict(pred);
-        let mut child = *after_my_move;
-        child.make_move_bits(pred);
-        if is_game_over(&child) {
-            return 0;
-        }
-        self.stop.reset();
-        self.search
-            .best_move_deadline(&child, PONDER_DEPTH, Some(deadline));
-        self.nodes() - base
     }
 
     fn tt_best(&self, board: &Board) -> Option<Position> {
@@ -458,14 +372,9 @@ impl Engine {
         Some((value, learned, depth))
     }
 
-    pub fn set_levels(&mut self, depth: u32, solve_empties: u8, band: u8) {
+    pub fn set_levels(&mut self, depth: u32, solve_empties: u8) {
         self.config.depth = depth;
         self.config.solve_empties = solve_empties;
-        self.config.band = band;
-    }
-
-    pub fn set_select(&mut self, t: Option<f32>) {
-        self.config.select = t;
     }
 
     pub fn set_threads(&mut self, n: usize) {
@@ -473,6 +382,9 @@ impl Engine {
         self.config.threads = n;
         self.search.threads = n;
         self.solver.set_threads(n);
+        if let Some(c) = self.clock.as_mut() {
+            c.set_threads(n);
+        }
     }
 
     pub fn choose(&mut self, board: &Board) -> MoveEval {
@@ -483,51 +395,101 @@ impl Engine {
         self.progress.clone()
     }
 
+    /// A book move, or `None` after seeding the search with the book's best line.
+    fn book_move(&mut self, board: &Board) -> Option<MoveEval> {
+        let book = self.book.as_ref().filter(|_| self.config.use_book)?;
+        let hit = if self.config.book_tolerance > 0.0 {
+            self.book_rand = self
+                .book_rand
+                .wrapping_mul(6364136223846793005)
+                .wrapping_add(1442695040888963407);
+            book.probe_varied(board, self.config.book_tolerance, self.book_rand >> 11)
+        } else {
+            book.probe(board)
+        };
+        if let Some((pos, value, _depth)) = hit {
+            let learned = self.learned.get_raw(Book::key(board).0).is_some();
+            return Some(MoveEval {
+                pos: Some(pos),
+                value,
+                from_book: true,
+                learned,
+                ..Default::default()
+            });
+        }
+        if let Some(p) = book
+            .candidates(board)
+            .and_then(|v| v.first().map(|(p, _)| *p))
+        {
+            self.hint_move(board, p);
+        }
+        None
+    }
+
+    /// A move on a game clock; `clock` is the time this side has left for the rest of the game.
+    pub fn play_clock(&mut self, board: &Board, clock: std::time::Duration) -> MoveEval {
+        self.stop.reset();
+        self.progress.clear();
+        self.progress.set_kind(Progress::THINK);
+        if let Some(mv) = self.book_move(board) {
+            return mv;
+        }
+        if is_game_over(board) {
+            return MoveEval {
+                value: final_score(board) as f32,
+                exact: true,
+                ..Default::default()
+            };
+        }
+        let (nnue, bits, threads, stop) = (
+            self.nnue.clone(),
+            self.config.midgame_hash_bits,
+            self.config.threads,
+            self.stop.clone(),
+        );
+        let clock_search = self
+            .clock
+            .get_or_insert_with(|| ClockSearch::new(nnue, bits, threads, Some(stop)));
+        let progress = self.progress.clone();
+        let c = clock_search.choose(board, clock, |p| {
+            progress.reached(p.depth as u32, Some(p.mv), p.score as f32)
+        });
+        self.other_nodes += c.nodes;
+        let mut out = MoveEval {
+            pos: c.mv,
+            value: c.score as f32,
+            depth: c.depth as u32,
+            mpc_t: (c.depth > 0).then(|| c.margin as f32 / 2.0),
+            ..Default::default()
+        };
+        if c.solve && !self.stop.is_stopped() && std::time::Instant::now() < c.deadline {
+            self.progress.set_kind(Progress::SOLVE);
+            let watcher = self.watch_deadline(Some(c.deadline));
+            let r = self
+                .solver
+                .solve_with_eval(EndSolverMode::Perfect, board, Some(&*self.linear));
+            self.other_nodes += r.nodes;
+            out.cut = self.stop_watch_done(watcher);
+            if !out.cut && r.best_move.is_some() {
+                out.pos = r.best_move;
+                out.value = r.value as f32;
+                out.exact = true;
+            }
+        }
+        self.stop.reset();
+        out
+    }
+
     pub fn choose_within(
         &mut self,
         board: &Board,
         deadline: Option<std::time::Instant>,
     ) -> MoveEval {
-        self.choose_until(board, deadline, None)
-    }
-
-    /// A contested midgame move may run on to `extend`; solves keep `deadline`.
-    pub fn choose_until(
-        &mut self,
-        board: &Board,
-        deadline: Option<std::time::Instant>,
-        extend: Option<std::time::Instant>,
-    ) -> MoveEval {
         self.stop.reset();
         self.progress.clear();
         self.progress.set_kind(Progress::THINK);
-        let mut hint = None;
-        if let Some(book) = self.book.as_ref().filter(|_| self.config.use_book) {
-            let hit = if self.config.book_tolerance > 0.0 {
-                self.book_rand = self
-                    .book_rand
-                    .wrapping_mul(6364136223846793005)
-                    .wrapping_add(1442695040888963407);
-                book.probe_varied(board, self.config.book_tolerance, self.book_rand >> 11)
-            } else {
-                book.probe(board)
-            };
-            if let Some((pos, value, _depth)) = hit {
-                let learned = self.learned.get_raw(Book::key(board).0).is_some();
-                return MoveEval {
-                    pos: Some(pos),
-                    value,
-                    from_book: true,
-                    learned,
-                    ..Default::default()
-                };
-            }
-            hint = book
-                .candidates(board)
-                .and_then(|v| v.first().map(|(p, _)| *p));
-        }
-        if let Some(p) = hint {
-            self.hint_move(board, p);
+        if let Some(mv) = self.book_move(board) {
+            return mv;
         }
         let c = &self.config;
         if is_game_over(board) {
@@ -561,39 +523,8 @@ impl Engine {
                 exact: !cut,
                 ..Default::default()
             }
-        } else if let Some(t) = c
-            .select
-            .or_else(|| selective_band(board.empty_count(), c.solve_empties, c.band))
-        {
-            let (r, cut, backup) =
-                self.solve_within(board, deadline, Progress::SELECT, |solver, linear| {
-                    solver.solve_selective(board, Some(linear), t)
-                });
-            if cut {
-                if let Some((value, pos)) = self.solver.warm_rung.filter(|(_, p)| p.is_some()) {
-                    return MoveEval {
-                        pos,
-                        value: stone_scale(value as f32),
-                        cut: true,
-                        ..Default::default()
-                    };
-                }
-            }
-            if let Some(backup) = backup {
-                return backup;
-            }
-            MoveEval {
-                pos: r.best_move,
-                value: stone_scale(r.value as f32),
-                ..Default::default()
-            }
         } else {
-            let (pos, value, reached) = self.search.best_move_until(
-                board,
-                c.depth,
-                deadline.map(crate::midgame::Deadline::new),
-                extend,
-            );
+            let (pos, value, reached) = self.search.best_move_deadline(board, c.depth, deadline);
             let cut = self.stop.is_stopped();
             self.stop.reset();
             MoveEval {
@@ -604,10 +535,7 @@ impl Engine {
                 learned: false,
                 depth: reached,
                 cut,
-                stop_reason: self.search.stop_reason,
-                second: self.search.second,
-                gap: self.search.gap,
-                extended: self.search.extended,
+                ..Default::default()
             }
         }
     }
@@ -633,6 +561,7 @@ impl Engine {
             let Some(p) = self
                 .solver
                 .table_move(&b)
+                .or_else(|| self.clock.as_ref()?.table_move(&b))
                 .or_else(|| self.tt_best(&b))
                 .filter(|p| b.movable() >> p.index() & 1 == 1)
             else {
@@ -708,22 +637,6 @@ impl Engine {
         self.eval_position_inner(board, depth)
     }
 
-    /// Where `eval_position` would solve, a 99% selective search instead; `None` elsewhere.
-    pub fn eval_position_selective(&mut self, board: &Board) -> Option<MoveEval> {
-        self.stop.reset();
-        if is_game_over(board) || board.empty_count() > self.config.solve_empties {
-            return None;
-        }
-        let r = self
-            .solver
-            .solve_selective(board, Some(&*self.linear), 2.58);
-        Some(MoveEval {
-            pos: r.best_move,
-            value: stone_scale(r.value as f32),
-            ..Default::default()
-        })
-    }
-
     fn eval_position_inner(&mut self, board: &Board, depth: u32) -> MoveEval {
         if is_game_over(board) {
             return MoveEval {
@@ -787,7 +700,7 @@ impl Engine {
                         &child,
                         Some(&*self.linear),
                     );
-                    self.solver_nodes += r.nodes;
+                    self.other_nodes += r.nodes;
                     MoveEval {
                         pos: Some(pos),
                         value: stone_scale(-(r.value as f32)),
@@ -820,66 +733,8 @@ impl Engine {
 }
 
 #[cfg(test)]
-mod progress_tests {
-    use super::Progress;
-    use crate::Position;
-
-    #[test]
-    fn pondering_keeps_the_reply_it_assumed() {
-        let p = Progress::default();
-        p.clear();
-        p.set_kind(Progress::PONDER);
-        p.predict(Position::from_index(19).unwrap());
-        assert_eq!(p.snapshot().4, Some(19), "the assumed reply is readable");
-
-        p.reached(6, Position::from_index(42), 4.0);
-        assert_eq!(p.snapshot().2, Some(42), "best move is the search's");
-        assert_eq!(p.snapshot().4, Some(19), "the assumption is unchanged");
-
-        p.clear();
-        assert_eq!(p.snapshot().4, None);
-    }
-
-    #[test]
-    fn clear_drops_the_flip() {
-        let p = Progress::default();
-        let mv = Position::from_index(19);
-
-        p.set_kind(Progress::PONDER);
-        p.flip.store(true, std::sync::atomic::Ordering::Relaxed);
-        p.reached(6, mv, 4.0);
-        assert_eq!(p.snapshot().3, Some(-4.0), "ponder stores negated");
-
-        p.clear();
-        p.set_kind(Progress::THINK);
-        p.reached(6, mv, 4.0);
-        assert_eq!(
-            p.snapshot().3,
-            Some(4.0),
-            "clear() must not carry the negate flag over"
-        );
-    }
-}
-
-#[cfg(test)]
 mod assets_tests {
     use super::*;
-
-    #[test]
-    #[ignore = "requires weights/"]
-    fn pondering_a_position_never_searched_finds_a_reply_to_ponder_on() {
-        let mut engine = Engine::new(EngineConfig {
-            use_book: false,
-            ..Default::default()
-        })
-        .expect("engine");
-        let board = Board::new();
-        assert!(engine.tt_best(&board).is_none());
-
-        let deadline = std::time::Instant::now() + std::time::Duration::from_millis(200);
-        assert!(engine.ponder(&board, deadline) > 0);
-        assert!(engine.tt_best(&board).is_some());
-    }
 
     #[test]
     #[ignore = "requires weights/"]
@@ -889,9 +744,9 @@ mod assets_tests {
             ..Default::default()
         })
         .expect("engine");
-        engine.set_levels(12, 0, 0);
+        engine.set_levels(12, 0);
         let board = Board::new();
-        let mv = engine.choose_until(&board, None, None);
+        let mv = engine.choose_within(&board, None);
         let pv = engine.principal_variation(&board, mv.pos.unwrap(), 8);
         assert_eq!(pv[0], mv.pos);
         assert!(pv.len() >= 4, "{pv:?}");
@@ -907,23 +762,26 @@ mod assets_tests {
 
     #[test]
     #[ignore = "requires weights/"]
-    fn the_selective_evaluation_stands_in_only_where_a_solve_would_run() {
+    fn a_clock_move_is_legal_and_the_end_is_solved_exactly() {
         let mut engine = Engine::new(EngineConfig {
             use_book: false,
             ..Default::default()
         })
         .expect("engine");
-        engine.set_levels(10, 16, 0);
-        assert!(engine.eval_position_selective(&Board::new()).is_none());
+        let t0 = std::time::Instant::now();
+        let mv = engine.play_clock(&Board::new(), std::time::Duration::from_secs(60));
+        assert!(Board::new().movable() & mv.pos.unwrap().to_bit() != 0);
+        assert!(t0.elapsed() < std::time::Duration::from_secs(10));
+
         let board = Board::from_string(
             "OOOOOOOOXOOXXX--XXOOXOO-XOXOOO--XOOOOX--XOOXOO--XOOOOO--XXXX---- O",
         )
         .unwrap();
-        let approx = engine
-            .eval_position_selective(&board)
-            .expect("in solve range");
-        assert!(!approx.exact);
-        assert!(approx.value.is_finite());
+        let end = engine.play_clock(&board, std::time::Duration::from_secs(60));
+        let mut solver = Solver::new(20);
+        let exact = solver.solve(EndSolverMode::Perfect, &board);
+        assert!(end.exact);
+        assert_eq!(end.value, exact.value as f32);
     }
 
     #[test]

@@ -201,7 +201,7 @@ export function App() {
       }
       if (who === 'tab') {
         if (lv) setTab(lv);
-        if (v.endsWith(':custom')) { g.setCustom({ depth: 20, solve: 24, band: 4 }); g.setLevel('custom'); }
+        if (v.endsWith(':custom')) { g.setCustom({ depth: 20, solve: 24 }); g.setLevel('custom'); }
         return;
       }
       if (who === 'book') {
@@ -443,8 +443,7 @@ export function App() {
                 </Busy>
               : undefined)
             : isGgs ? (conn === 'online' && ggs.snap
-              ? <GgsStatus snap={ggs.snap}
-                           showStrength={nav !== 'ggs-settings' && nav !== 'ggs-standby'} />
+              ? <GgsStatus snap={ggs.snap} />
               : undefined)
             : undefined}>
           {isBook ? (
