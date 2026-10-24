@@ -628,7 +628,6 @@ ggs:
     adjourned: "Adjourned"
     finished: "Finished"
     playing: "Playing"
-  status:
   stop_observing: "Stop observing"
   tag:
     mine: "Mine"

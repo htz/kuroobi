@@ -624,7 +624,6 @@ ggs:
     adjourned: "中断"
     finished: "終局"
     playing: "対局中"
-  status:
   stop_observing: "観戦をやめる"
   tag:
     mine: "自分"
