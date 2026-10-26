@@ -11,6 +11,7 @@ struct Args {
     accept: Option<String>,
     resume: Option<String>,
     serve: bool,
+    server: String,
     login: Option<String>,
     pw: Option<String>,
     credentials: PathBuf,
@@ -33,6 +34,7 @@ fn parse_args() -> Result<Args, String> {
         accept: None,
         resume: None,
         serve: false,
+        server: "skatgame.net:5000".into(),
         login: None,
         pw: None,
         credentials: PathBuf::from(".ggs_credentials"),
@@ -56,6 +58,7 @@ fn parse_args() -> Result<Args, String> {
             "--accept" => args.accept = Some(value("--accept")?),
             "--resume" => args.resume = Some(value("--resume")?),
             "--serve" => args.serve = true,
+            "--server" => args.server = value("--server")?,
             "--console" => args.console = true,
             "--login" => args.login = Some(value("--login")?),
             "--pw" => args.pw = Some(value("--pw")?),
@@ -136,7 +139,7 @@ fn run_session(
 ) -> SessionEnd {
     use std::io::{Read, Write};
     let opponent = args.play.as_deref().unwrap_or_default();
-    let mut stream = dial();
+    let mut stream = dial(&args.server);
     let pw_for_mask = pw.to_string();
     let mut send = {
         let mut w = stream.try_clone().expect("clone stream");
@@ -318,7 +321,7 @@ fn run_session(
             }
             if let (Some(from), Some(id)) = (&args.accept, request_id(&ln)) {
                 let has_word = |word: &str| ln.split_whitespace().any(|w| w == word);
-                if has_word(from) && has_word(login) {
+                if (from == "*" || has_word(from)) && has_word(login) {
                     send(&format!("tell /os accept {id}"));
                     last_activity = std::time::Instant::now();
                 }
@@ -369,9 +372,9 @@ fn request_id(ln: &str) -> Option<&str> {
     id.starts_with('.').then_some(id)
 }
 
-fn dial() -> std::net::TcpStream {
+fn dial(server: &str) -> std::net::TcpStream {
     let stream = loop {
-        match std::net::TcpStream::connect(("skatgame.net", 5000)) {
+        match std::net::TcpStream::connect(server) {
             Ok(s) => break s,
             Err(e) => {
                 eprintln!("### connect failed: {e}; retry in 15s");

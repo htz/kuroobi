@@ -230,12 +230,13 @@ functionality and usually suffices.
 ```sh
 # Play games
 ggs --play <opponent> [--games N]
-    [--login name --pw pass | --credentials .ggs_credentials]
+    [--login name --pw pass | --credentials .ggs_credentials] [--server host:port]
     [--type 8] [--time 30:00] [--resume <game id>]
     [--depth N] [--solve-empties N] [--no-mpc]
     [--solver-hash 22] [--threads N] [--weights path] [--nnue path]
 
-# Wait for requests from <opponent> and accept them (asks for nothing)
+# Wait for requests from <opponent> and accept them (asks for nothing);
+# `--accept '*'` takes a request from anyone
 ggs --accept <opponent> [same options as --play]
 
 # Bridge that only returns a move (reads "<64 cells> <X|O>" on stdin
@@ -248,6 +249,7 @@ ggs --console
 
 | Option | Default | Meaning |
 |---|---|---|
+| `--server <host:port>` | `skatgame.net:5000` | The GGS server to connect to, e.g. a local test server |
 | `--type <t>` | `8` | Game type, e.g. `s8r16` (synchronous, 16 random plies). Same notation as the GUI's list |
 | `--time <hh:mm>` | `30:00` | Time control |
 | `--resume <id>` | — | Resume a suspended game |
