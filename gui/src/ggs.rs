@@ -1201,6 +1201,10 @@ struct MatchState {
     result: String,
 }
 
+fn is_pass(mv: &str) -> bool {
+    mv.eq_ignore_ascii_case("pa") || mv.eq_ignore_ascii_case("pass")
+}
+
 impl MatchState {
     fn eval_series(&self) -> Vec<EvalPoint> {
         let Some(&last_n) = self.moves.keys().next_back() else {
@@ -1222,9 +1226,12 @@ impl MatchState {
                 }
             }
         };
+        // GGS numbers a pass like a move; the series counts only the discs placed.
         (1..=last_n)
-            .map(|n| EvalPoint {
-                n,
+            .filter(|n| !self.moves.get(n).is_some_and(|m| is_pass(m)))
+            .enumerate()
+            .map(|(i, n)| EvalPoint {
+                n: i as u32 + 1,
                 mine: (n % 2) == mine_parity,
                 eval: self.move_evals.get(&n).and_then(|&(ev, _)| ev),
                 secs: self.move_evals.get(&n).and_then(|&(_, s)| s),
@@ -2908,6 +2915,9 @@ fn handle_os_line(
                         .and_then(|t| t.split_whitespace().next())
                         .is_some_and(|first| first == login);
                     m.result = format!("{:+.2}", if mine { v } else { -v });
+                    // One board of a synchro pair can end before the match does; its clocks stop here.
+                    m.over = true;
+                    m.turn = ' ';
                 }
             }
         }
@@ -5252,6 +5262,28 @@ mod tests {
         let series = m.eval_series();
         assert_eq!(series[0].secs, Some(84.49));
         assert_eq!(series[1].secs, None);
+    }
+
+    #[test]
+    fn the_eval_series_leaves_passes_out() {
+        let mut m = MatchState::new();
+        m.moves = [(1u32, "f5"), (2, "pa"), (3, "d6")]
+            .into_iter()
+            .map(|(n, mv)| (n, mv.to_string()))
+            .collect();
+        m.eval_parity = Some(1);
+        m.move_evals.insert(1, (Some(2.0), None));
+        m.move_evals.insert(3, (Some(4.0), None));
+
+        let series = m.eval_series();
+        assert_eq!(
+            series
+                .iter()
+                .map(|p| (p.n, p.mine, p.eval))
+                .collect::<Vec<_>>(),
+            vec![(1, true, Some(2.0)), (2, true, Some(4.0))],
+            "a pass is not a move: two discs, two points, both mine"
+        );
     }
 
     #[test]

@@ -84,6 +84,8 @@ function clockView(c: ClockBase | undefined, side: ClockSide, now: number,
   if (m.ended === 'adjourned' || m.ended === 'aborted') return { text: '', active: false };
   const active = !m.over && !!m.turn && !!color && m.turn === color;
   if (base === null) return { text: raw || '', active };
+  // A finished board keeps the time each side had left at its last move, without overtime marks.
+  if (m.over) return { text: fmtSecs(base), active: false };
   // From the server update, not first draw, so a remount does not reset the clock.
   const since = m.updated_ms || c.at;
   const mine = side === 'my' || (!!color && color === m.my_color);
