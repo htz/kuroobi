@@ -694,10 +694,12 @@ impl ClockSearch {
             deadline,
             nodes: 0,
         };
-        if moves.count_ones() == 1 {
-            out.mv = Some(Position(moves.trailing_zeros() as u8));
+        // No move is a pass (mv None); anything else falls back to the 64th square, which does not exist.
+        if moves == 0 {
             return out;
         }
+        // A forced move still needs its value (it is reported and graphed), so it gets one pass.
+        let forced = moves.count_ones() == 1;
         let sh = self.sh.clone();
         sh.table.generation.fetch_add(1, Relaxed);
         for v in self.history.iter_mut().flatten() {
@@ -758,7 +760,7 @@ impl ClockSearch {
                 beta = s + 2;
             }
             let elapsed = t0.elapsed().as_secs_f64();
-            if timeout || elapsed >= budget {
+            if timeout || elapsed >= budget || (forced && best < NO_MOVE) {
                 break;
             }
             if !changed && !fail_low && elapsed > budget * SETTLED_SHARE {
@@ -804,15 +806,38 @@ mod tests {
     }
 
     #[test]
-    fn a_forced_move_is_played_without_searching() {
+    fn a_forced_move_is_played_with_its_value() {
         let b = Board::from_string(
             "XOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOO- X",
         )
         .unwrap();
+        let mut after = b;
+        after.make_move(Position(63)).unwrap();
+        let mine = after.opponent_bb().count_ones() as i32;
+        let theirs = after.player_bb().count_ones() as i32;
+        let mut s = search();
+        let t0 = Instant::now();
+        let c = s.choose(&b, Duration::from_secs(60), |_| {});
+        assert_eq!(c.mv.map(|p| p.index()), Some(63));
+        // Either scored here or handed to the exact solve, never a bare 0.
+        assert!(
+            c.solve || (c.depth > 0 && c.score == mine - theirs),
+            "{c:?}"
+        );
+        assert!(t0.elapsed() < Duration::from_secs(1));
+    }
+
+    #[test]
+    fn no_legal_move_is_a_pass() {
+        // O to move with the last empty square, which only X can take.
+        let b = Board::from_string(
+            "XXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXO- O",
+        )
+        .unwrap();
+        assert_eq!(b.movable(), 0);
         let mut s = search();
         let c = s.choose(&b, Duration::from_secs(60), |_| {});
-        assert_eq!(c.nodes, 0);
-        assert_eq!(c.mv.map(|p| p.index()), Some(63));
+        assert_eq!(c.mv, None);
     }
 
     #[test]
