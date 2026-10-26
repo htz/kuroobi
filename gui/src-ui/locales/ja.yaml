@@ -62,9 +62,6 @@ app:
   nav:
     settings: "設定"
     settings_title: "設定 (⌘,)"
-  panel:
-    chat: "チャット"
-    console: "コンソール"
   play:
     new_game: "新規対局"
     show_evals: "評価値を表示"
@@ -211,13 +208,12 @@ data:
     search: "探索"
     solve: "読切"
   trend:
-    empty: "まだ申告値がありません"
     hint: "自分から見た石差"
     mine: "自分"
     opp: "相手"
     secs: "思考時間"
-    title: "申告値"
-    title_sum: "申告値 (両面の合計)"
+    title: "評価値"
+    title_sum: "評価値 (両面の合計)"
 dialog:
   cancel: "やめる"
   kifu:

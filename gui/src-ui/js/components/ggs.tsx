@@ -1,7 +1,7 @@
 import React from 'react';
 import { Icon, IconButton, type IconName } from './Icons';
 import type { GgsSnapshot } from '../types';
-import { Badge, Dot, Button, Select, TextField } from './primitives';
+import { Dot, Button, Select, TextField } from './primitives';
 import { Note, picked } from './layout';
 import { t } from '../i18n';
 import logo from '../../assets/kuroobi.svg?raw';
@@ -529,22 +529,6 @@ export function Toasts({ items, onDismiss }: { items: Toast[]; onDismiss: (id: n
   );
 }
 
-
-export function StatusChip({ label, unread, active, onClick }: {
-  label: string; unread?: number; active?: boolean; onClick?: () => void;
-}) {
-  return (
-    <button type="button" onClick={onClick} className={'k-press' + (active ? ' k-on' : '')} style={{
-      height: 'var(--h-chip)', padding: '0 10px', borderRadius: 'var(--r-1)', background: 'transparent',
-      border: '1px solid var(--' + (active ? 'accent' : 'border') + ')',
-      color: 'var(--' + (active ? 'accent' : 'sub') + ')',
-      fontSize: 'var(--fs-7)', display: 'flex', alignItems: 'center', gap: 'var(--sp-0)',
-    }}>
-      {label}
-      {unread ? <Badge>{unread}</Badge> : null}
-    </button>
-  );
-}
 
 export function GgsStatus({ snap }: { snap: GgsSnapshot }) {
   return (

@@ -7,12 +7,12 @@ import type { GameView, GgsSnapshot } from './types';
 import { api, ggsApi, jsLog, onApp, type ActivityView } from './api';
 import { useActivity, useEngineSettings, useEngineTurn, useGraph, useHints, useLearnLog, useStartGame, type AskArgs } from './engine';
 import { connOf, evalsOf, ggsPlaying, movesOf, navBadges, sqName } from './adapt';
-import { AppFrame, BoardFit, Body, BottomPanel, Busy, Divider, Dock, Main, Overlay, StatusBar, StatusStat, Toolbar, WindowBar, useToolbarCompact } from './components/layout';
-import { GgsChat, GgsConsole, GgsScreen } from './GgsScreens';
+import { AppFrame, BoardFit, Body, Busy, Divider, Dock, Main, Overlay, StatusBar, StatusStat, Toolbar, WindowBar, useToolbarCompact } from './components/layout';
+import { GgsScreen } from './GgsScreens';
 import { Confirm, PasteKifu, Settings } from './Dialogs';
 import { Board, type Cell } from './components/board';
 import { EvalGraph, MoveScrub, ScoreRow, StoneDot, srcIsBook, srcLabel } from './components/data';
-import { GgsStatus, JobList, Meter, Nav, navLocal, StatusChip, ggsNav, Toasts, type NavId } from './components/ggs';
+import { GgsStatus, JobList, Meter, Nav, navLocal, ggsNav, Toasts, type NavId } from './components/ggs';
 import { Button, Progress, Segmented, Select, Toggle } from './components/primitives';
 import { Icon } from './components/Icons';
 import { AccountList, PUBLIC_SERVER, type Account } from './components/accounts';
@@ -100,12 +100,10 @@ export function App() {
   const graph = useGraph(g, ggsMatch, confirm);
   const startGame = useStartGame(g, ggsMatch, graph, confirm);
 
-  const [panel, setPanel] = useState<'' | 'chat' | 'console'>('');
-
   const chatMsgs = ggs.snap?.chat ?? [];
   const chatSeen = ggs.snap?.chat_seen ?? 0;
   const chatLatest = chatMsgs.length ? Math.max(...chatMsgs.map((m) => m.at)) : 0;
-  const chatOpen = nav === 'ggs-chat' || panel === 'chat';
+  const chatOpen = nav === 'ggs-chat';
   const chatUnread = chatOpen ? 0 : chatMsgs.filter((m) => m.at > chatSeen).length;
 
   const markChatRead = useCallback(() => {
@@ -115,13 +113,6 @@ export function App() {
   useEffect(() => {
     if (chatOpen) markChatRead();
   }, [chatOpen, markChatRead]);
-
-  const showPanel = useCallback((next: '' | 'chat' | 'console') => {
-    setPanel((cur) => {
-      if (cur === 'chat' && next !== 'chat') markChatRead();
-      return cur === next ? '' : next;
-    });
-  }, [markChatRead]);
 
   const setMode = g.setMode;
   const setNav = useCallback((id: NavId) => {
@@ -557,16 +548,6 @@ export function App() {
         </div>
         )}
 
-        {isGgs && panel && ggs.snap && (
-          <BottomPanel
-            tabs={[{ id: 'chat', label: t('app.panel.chat'), unread: panel === 'chat' ? 0 : chatUnread },
-                   { id: 'console', label: t('app.panel.console') }]}
-            active={panel} onTab={(id) => showPanel(id as 'chat' | 'console')}
-            onClose={() => showPanel('')}>
-            {panel === 'chat' ? <GgsChat snap={ggs.snap} /> : <GgsConsole snap={ggs.snap} />}
-          </BottomPanel>
-        )}
-
         {study && !isGgs && !isBook && v && (
           <MoveScrub plies={v.moves.length} cursor={v.cursor} blunder={blunder}
                      onSeek={(n) => void g.jumpTo(n)} />
@@ -623,13 +604,6 @@ export function App() {
           </>}
           right={isGgs
             ? <>
-              {ggsMatch && <>
-                <StatusChip label={t('app.panel.chat')} unread={panel === 'chat' ? 0 : chatUnread}
-                            active={panel === 'chat'}
-                            onClick={() => showPanel('chat')} />
-                <StatusChip label={t('app.panel.console')} active={panel === 'console'}
-                            onClick={() => showPanel('console')} />
-              </>}
               <StatusStat label="GGS" value={t(conn === 'online' ? 'app.ggs.connected'
                 : conn === 'offline' ? 'app.ggs.offline' : 'app.ggs.connecting')} />
             </>

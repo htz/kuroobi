@@ -603,7 +603,7 @@ export function MoveScrub({ plies, cursor, blunder, onSeek, nav = true }: {
 export function EvalTrend({ points, plies, height = 96, title }: {
   points: {
     x: number; mine: number | null; opp: number | null;
-    secs?: number | null; minePly?: boolean;
+    mySecs?: number | null; oppSecs?: number | null;
   }[];
   plies?: number;
   height?: number;
@@ -623,17 +623,6 @@ export function EvalTrend({ points, plies, height = 96, title }: {
     o.observe(el);
     obs.current = o;
   }, []);
-  const has = points.some((p) => p.mine != null || p.opp != null);
-  if (!points.length || !has) {
-    return (
-      <div style={{
-        height, display: 'grid', placeItems: 'center',
-        fontSize: 'var(--fs-7)', color: 'var(--sub)',
-      }}>
-        {t('data.trend.empty')}
-      </div>
-    );
-  }
   const pad = 10, padL = 26, padB = 14, padR = 30;
   const vals = points.flatMap((p) => [p.mine, p.opp]).filter((v): v is number => v != null);
   const lim = Math.max(8, ...vals.map((v) => Math.abs(v)));
@@ -641,14 +630,18 @@ export function EvalTrend({ points, plies, height = 96, title }: {
   const ticks: number[] = [];
   for (let v = -Math.floor(lim / step) * step; v <= lim; v += step) ticks.push(v);
 
-  const slots = Math.max(1, plies ?? 0, points.length);
+  // Move n sits at n steps from the left edge, which is move 0; the axis is labelled every 5 moves.
+  const first = points[0]?.x ?? 1;
+  const slots = Math.max(1, plies ?? 0, first + points.length - 1);
   const slot = (w - padL - padR) / slots;
-  const x = (i: number) => padL + (i + 0.5) * slot;
-  const maxSecs = Math.max(0, ...points.map((p) => p.secs ?? 0));
+  const xAt = (n: number) => padL + n * slot;
+  const x = (i: number) => xAt(first + i);
+  const marks = Array.from({ length: Math.floor(slots / 5) + 1 }, (_, k) => k * 5);
+  const maxSecs = Math.max(0, ...points.flatMap((p) => [p.mySecs ?? 0, p.oppSecs ?? 0]));
   const secsTop = [1, 2, 5, 10, 15, 20, 30, 45, 60, 90, 120, 180, 240, 300, 420, 600]
     .find((v) => v >= maxSecs) ?? Math.ceil(maxSecs / 60) * 60;
-  const base = height - padB;
-  const barH = (s: number) => (s / secsTop) * (base - pad);
+  // Think time shares the eval frame: mine rises from the 0 line, the opponent's hangs below it.
+  const barH = (s: number) => (s / secsTop) * ((height - padB) / 2 - pad);
   const y = (v: number) => (height - padB) / 2 - (v / lim) * ((height - padB) / 2 - pad);
 
   const path = (pick: (p: (typeof points)[number]) => number | null) => {
@@ -664,14 +657,16 @@ export function EvalTrend({ points, plies, height = 96, title }: {
   };
 
   const pickAt = (e: React.MouseEvent<SVGSVGElement>) => {
+    if (!points.length) return;
     const r = e.currentTarget.getBoundingClientRect();
     const vx = ((e.clientX - r.left) / r.width) * w;
-    const i = Math.floor((vx - padL) / slot);
+    const i = Math.round((vx - padL) / slot) - first;
     setAt(Math.max(0, Math.min(points.length - 1, i)));
   };
 
   const cur = at != null ? points[at] : null;
   const fmt = (v: number | null) => (v == null ? '—' : (v > 0 ? '+' : '') + v.toFixed(1));
+  const fmtSecs = (v: number | null | undefined) => (v == null ? '—' : `${v.toFixed(1)}${t('unit.s')}`);
 
   return (
     <div>
@@ -684,7 +679,7 @@ export function EvalTrend({ points, plies, height = 96, title }: {
           <span><span style={{ color: 'var(--accent)' }}>—</span> {t('data.trend.mine')} {cur ? fmt(cur.mine) : ''}</span>
           <span><span style={{ color: 'var(--sub)' }}>—</span> {t('data.trend.opp')} {cur ? fmt(cur.opp) : ''}</span>
           {maxSecs > 0 && (
-            <span>{t('data.trend.secs')} {cur?.secs != null ? `${cur.secs.toFixed(1)}${t('unit.s')}` : ''}</span>
+            <span>{t('data.trend.secs')} {cur ? `${fmtSecs(cur.mySecs)} / ${fmtSecs(cur.oppSecs)}` : ''}</span>
           )}
           <span>{cur ? t('data.ply', { n: cur.x }) : t('data.trend.hint')}</span>
         </span>
@@ -702,19 +697,30 @@ export function EvalTrend({ points, plies, height = 96, title }: {
         ))}
         {maxSecs > 0 && (
           <g>
-            <text x={w - padR + 4} y={pad + 3} fontSize={9} fill="var(--sub)">{secsTop}{t('unit.s')}</text>
-            <text x={w - padR + 4} y={base + 3} fontSize={9} fill="var(--sub)">0{t('unit.s')}</text>
-            {points.map((p, i) => p.secs ? (
-              <rect key={i} x={padL + i * slot} y={base - barH(p.secs)}
-                    width={slot} height={barH(p.secs)}
-                    fill={p.minePly ? 'var(--accent)' : 'var(--sub)'} opacity={0.25} />
-            ) : null)}
+            <text x={w - padR + 4} y={y(lim) + 3} fontSize={9} fill="var(--sub)">{secsTop}{t('unit.s')}</text>
+            <text x={w - padR + 4} y={y(0) + 3} fontSize={9} fill="var(--sub)">0{t('unit.s')}</text>
+            <text x={w - padR + 4} y={y(-lim) + 3} fontSize={9} fill="var(--sub)">{secsTop}{t('unit.s')}</text>
+            {points.map((p, i) => (
+              <g key={i}>
+                {p.mySecs ? (
+                  <rect x={x(i) - slot * 0.35} y={y(0) - barH(p.mySecs)}
+                        width={slot * 0.7} height={barH(p.mySecs)} fill="var(--accent)" opacity={0.22} />
+                ) : null}
+                {p.oppSecs ? (
+                  <rect x={x(i) - slot * 0.35} y={y(0)}
+                        width={slot * 0.7} height={barH(p.oppSecs)} fill="var(--sub)" opacity={0.3} />
+                ) : null}
+              </g>
+            ))}
           </g>
         )}
-        {[0, slots >> 1, slots - 1].map((i, k) => (
-          <text key={k} x={x(i)} y={height - 3}
-                textAnchor={k === 0 ? 'start' : k === 2 ? 'end' : 'middle'}
-                fontSize={9} fill="var(--sub)">{points[0].x + i}</text>
+        {marks.map((n) => (
+          <g key={n}>
+            <line x1={xAt(n)} y1={height - padB} x2={xAt(n)} y2={height - padB + 3}
+                  stroke="var(--border)" strokeWidth={1} />
+            <text x={xAt(n)} y={height - 3} textAnchor="middle"
+                  fontSize={9} fill="var(--sub)">{n}</text>
+          </g>
         ))}
         <path d={path((p) => p.opp)} fill="none" stroke="var(--sub)"
               strokeWidth={1.5} strokeLinejoin="round" vectorEffect="non-scaling-stroke" />

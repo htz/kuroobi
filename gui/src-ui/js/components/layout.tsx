@@ -218,49 +218,6 @@ export function StatusStat({ label, value, unit }: { label?: string; value: Reac
   );
 }
 
-export function BottomPanel({ tabs, active, onTab, onClose, children }: {
-  tabs: { id: string; label: string; unread?: number }[];
-  active: string; onTab?: (id: string) => void; onClose?: () => void;
-  children: React.ReactNode;
-}) {
-  return (
-    <div style={{
-      flex: 'none', height: 240,
-      background: 'var(--panel)', borderTop: '1px solid var(--border)',
-      display: 'flex', flexDirection: 'column',
-    }}>
-      <div style={{
-        height: 'var(--h-field)', flex: 'none', display: 'flex', alignItems: 'center', gap: 'var(--sp-2)',
-        padding: '0 var(--sp-3)', borderBottom: '1px solid var(--border-weak)',
-      }}>
-        {tabs.map(tab => {
-          const on = active === tab.id;
-          return (
-            <button key={tab.id} type="button" onClick={() => onTab?.(tab.id)}
-              aria-pressed={on} className={'k-press' + (on ? ' k-on' : '')}
-              style={{
-                height: 'var(--h-chip)', padding: '0 var(--sp-3)', border: 0, borderRadius: 'var(--r-1)', fontSize: 'var(--fs-6)',
-                background: on ? 'var(--card)' : 'transparent',
-                color: on ? 'var(--text)' : 'var(--sub)', fontWeight: on ? 600 : 400,
-                display: 'flex', alignItems: 'center', gap: 'var(--sp-2)',
-              }}>
-              {tab.label}
-              {tab.unread ? <span style={{ background: 'var(--bad)', color: 'var(--on-bad)', borderRadius: 'var(--r-pill)', padding: '0 var(--sp-1)', fontSize: 'var(--fs-7)' }}>{tab.unread}</span> : null}
-            </button>
-          );
-        })}
-        {onClose && (
-          <span style={{ marginLeft: 'auto' }}>
-            <IconButton name="close" label={t('ui.panel.close')} onClick={onClose} size={14} />
-          </span>
-        )}
-      </div>
-      <div style={{ flex: 1, display: 'flex', minHeight: 0 }}>{children}</div>
-    </div>
-  );
-}
-
-
 export function Modal({ title, sub, body, actions, width = 'var(--w-modal)', onClose, scroll, band, children }: {
   title: string;
   sub?: React.ReactNode;

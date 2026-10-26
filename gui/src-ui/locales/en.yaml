@@ -66,9 +66,6 @@ app:
   nav:
     settings: "Settings"
     settings_title: "Settings (⌘,)"
-  panel:
-    chat: "Chat"
-    console: "Console"
   play:
     new_game: "New game"
     show_evals: "Evals"
@@ -215,13 +212,12 @@ data:
     search: "Search"
     solve: "Solve"
   trend:
-    empty: "No reported evals yet"
     hint: "Disc difference from my side"
     mine: "Me"
     opp: "Opponent"
     secs: "Time"
-    title: "Reported eval"
-    title_sum: "Reported eval (both boards summed)"
+    title: "Eval"
+    title_sum: "Eval (both boards summed)"
 dialog:
   cancel: "Cancel"
   kifu:

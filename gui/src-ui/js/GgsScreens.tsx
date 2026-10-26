@@ -358,8 +358,11 @@ export function GgsChat({ snap }: { snap: GgsSnapshot }) {
 const otherNames = (snap: GgsSnapshot): string[] =>
   snap.users.filter((u) => u.name !== snap.login).map((u) => u.name);
 
+// The player whose page sent us to the lobby, taken once as the request's opponent.
+let wantedOpponent = '';
+
 function GgsLobby({ snap, onNav }: { snap: GgsSnapshot; onNav: (id: NavId) => void }) {
-  const [opp, setOpp] = useState('');
+  const [opp, setOpp] = useState(() => { const w = wantedOpponent; wantedOpponent = ''; return w; });
   const [gtype, setGtype] = useState('s8r14');
   const [time, setTime] = useState('00:05:00');
   const noRated = useNoRated();
@@ -1138,12 +1141,20 @@ function GgsPlay({ snap, onNav, prefs, onKifu }: {
         display: 'flex', flexDirection: 'column',
       }}>
         {pair && <MatchActions id={cur} pair={pair} />}
-        {pair && <MatchBoards pair={pair} render={(m, side, face) => (
-          <MatchBoard key={m.id} snap={snap} m={m} clock={clock} prefs={prefs} onKifu={onKifu}
-                      face={face} side={side} />
-        )} />}
+        {pair && (pair.length === 2
+          ? <SynchroLayout pair={[pair[0], pair[1]]} board={(m, side, face) => (
+              <MatchBoard key={m.id} snap={snap} m={m} clock={clock} prefs={prefs} onKifu={onKifu}
+                          face={face} side={side} />
+            )} />
+          : <SingleLayout m={pair[0]} board={(m, side) => (
+              <MatchBoard key={m.id} snap={snap} m={m} clock={clock} prefs={prefs} onKifu={onKifu}
+                          side={side} />
+            )} />)}
         {pair && pair.some((m) => m.my_color) && (
-          <div style={{ flex: 'none', height: TREND_H + 28, marginTop: 'var(--sp-3)' }}>
+          <div style={{
+            flex: 'none', height: TREND_H + 28, marginTop: 'var(--sp-3)',
+            paddingTop: 'var(--sp-2)', borderTop: '1px solid var(--border-weak)',
+          }}>
             <EvalTrend points={trendOf(pair)} plies={Math.max(...pair.map(pliesOf))} height={TREND_H}
                        title={pair.length === 2 ? t('data.trend.title_sum') : undefined} />
           </div>
@@ -1209,22 +1220,21 @@ function matchRowOf(g: MatchView[]): Match {
   };
 }
 
-const CARD_PAD = 12;
-const BOARD_GAP = 12;
+/** The play column's side padding (`--sp-3`); a synchro board keeps it from the divider too. */
+const EDGE_PAD = 12;
+const TREND_H = 150;
 
-const TREND_H = 110;
-
-// GGS plays one board, or a synchro pair of two; no other shape exists.
-function MatchBoards({ pair, render }: {
-  pair: MatchView[];
-  render: (m: MatchView, side: number, face?: number) => React.ReactNode;
-}) {
-  const synchro = pair.length === 2;
+// Fits a square board side into the area left after the rows above and below it.
+function useBoardSide(columns: 1 | 2, deps: unknown[]) {
   const area = useRef<HTMLDivElement | null>(null);
   const [box, setBox] = useState({ w: 0, h: 0 });
-  const [chrome, setChrome] = useState(200);
-  const perBoard = synchro ? (box.w - BOARD_GAP) / 2 : box.w;
-  const side = Math.max(200, Math.floor(Math.min(perBoard - CARD_PAD * 2, box.h - chrome)));
+  const [chrome, setChrome] = useState(160);
+  // A synchro pair splits the width in two halves around the 1 px divider, and each board is
+  // centred between the column's edge padding and the same distance from the divider, so its two
+  // margins match (and at full width it lines up with the buttons above). Anything that overflows
+  // brings a scroll bar, which changes the box and the side, which takes the scroll bar away again.
+  const perBoard = columns === 2 ? (box.w - 1) / 2 - EDGE_PAD : box.w;
+  const side = Math.max(200, Math.floor(Math.min(perBoard, box.h - chrome) - 1));
 
   useLayoutEffect(() => {
     const el = area.current;
@@ -1241,28 +1251,57 @@ function MatchBoards({ pair, render }: {
   }, []);
 
   useLayoutEffect(() => {
-    const card = area.current?.querySelector<HTMLElement>('[data-card]');
-    const board = card?.querySelector<HTMLElement>('[data-board]');
-    if (!card || !board) return;
-    const c = card.offsetHeight - board.offsetHeight;
+    const col = area.current?.querySelector<HTMLElement>('[data-col]');
+    const board = col?.querySelector<HTMLElement>('[data-board]');
+    if (!col || !board) return;
+    const c = col.offsetHeight - board.offsetHeight;
     if (Math.abs(c - chrome) >= 1) setChrome(c);
-  }, [chrome, side, pair]);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [chrome, side, ...deps]);
 
+  return { area, side, ready: box.w > 0 };
+}
+
+const areaStyle: React.CSSProperties = {
+  flex: 1, minHeight: 0, display: 'flex', justifyContent: 'center', alignItems: 'flex-start',
+  overflow: 'hidden',
+};
+
+// GGS plays one board or a synchro pair of two, and nothing else; each has its own layout.
+function SingleLayout({ m, board }: {
+  m: MatchView; board: (m: MatchView, side: number) => React.ReactNode;
+}) {
+  const { area, side, ready } = useBoardSide(1, [m]);
+  return <div ref={area} style={areaStyle}>{ready && board(m, side)}</div>;
+}
+
+const half = (inner: 'paddingRight' | 'paddingLeft'): React.CSSProperties => ({
+  flex: 1, minWidth: 0, display: 'flex', justifyContent: 'center', [inner]: EDGE_PAD,
+});
+
+function SynchroLayout({ pair, board }: {
+  pair: [MatchView, MatchView]; board: (m: MatchView, side: number, face: number) => React.ReactNode;
+}) {
+  const { area, side, ready } = useBoardSide(2, [pair]);
   return (
-    <div ref={area} style={{
-      flex: 1, minHeight: 0, display: 'flex', gap: BOARD_GAP,
-      justifyContent: 'center', alignItems: 'flex-start',
-    }}>
-      {box.w > 0 && (synchro
-        ? <>{render(pair[0], side, 1)}{render(pair[1], side, 2)}</>
-        : render(pair[0], side))}
+    <div ref={area} style={areaStyle}>
+      {ready && <>
+        <div style={half('paddingRight')}>{board(pair[0], side, 1)}</div>
+        <div style={{ alignSelf: 'stretch', width: 1, flex: 'none', background: 'var(--border-weak)' }} />
+        <div style={half('paddingLeft')}>{board(pair[1], side, 2)}</div>
+      </>}
     </div>
   );
 }
 
-const pliesOf = (m: MatchView) => m.cells.filter((c) => c === 0).length + m.moves.length;
+// GGS numbers a pass like a move; only placed discs count as moves here.
+const isPass = (mv: string) => /^(pa|pass)$/i.test(mv);
+const placed = (m: MatchView) => m.moves.filter((mv) => !isPass(mv)).length;
+const pliesOf = (m: MatchView) => m.cells.filter((c) => c === 0).length + placed(m);
 
-type TrendPoint = { x: number; mine: number | null; opp: number | null; secs: number | null; minePly: boolean };
+type TrendPoint = { x: number; mine: number | null; opp: number | null; mySecs: number | null; oppSecs: number | null };
+
+const EMPTY_POINT: TrendPoint = { x: 0, mine: null, opp: null, mySecs: null, oppSecs: null };
 
 // Each side's reported evals from my side of the board.
 function boardTrend(m: MatchView): TrendPoint[] {
@@ -1270,8 +1309,8 @@ function boardTrend(m: MatchView): TrendPoint[] {
     x: p.n,
     mine: p.mine ? p.eval : null,
     opp: p.mine || p.eval == null ? null : -p.eval,
-    secs: p.secs,
-    minePly: p.mine,
+    mySecs: p.mine ? p.secs : null,
+    oppSecs: p.mine ? null : p.secs,
   }));
 }
 
@@ -1290,13 +1329,17 @@ function trendOf(pair: MatchView[]): TrendPoint[] {
       return v;
     });
   };
+  // A board that has not reported yet adds nothing, so the first move still shows.
   const sum = (u: (number | null)[], v: (number | null)[]) =>
-    u.map((x, i) => (x != null && v[i] != null ? x + (v[i] as number) : null));
+    u.map((x, i) => (x == null && v[i] == null ? null : (x ?? 0) + (v[i] ?? 0)));
   const mine = sum(held(a, (p) => p.mine), held(b, (p) => p.mine));
   const opp = sum(held(a, (p) => p.opp), held(b, (p) => p.opp));
   return Array.from({ length: n }, (_, i) => {
-    const own = [a[i], b[i]].find((p) => p?.minePly);
-    return { x: i + 1, mine: mine[i], opp: opp[i], secs: own?.secs ?? null, minePly: true };
+    const pick = (f: (p: TrendPoint) => number | null) => f(a[i] ?? EMPTY_POINT) ?? f(b[i] ?? EMPTY_POINT);
+    return {
+      x: i + 1, mine: mine[i], opp: opp[i],
+      mySecs: pick((p) => p.mySecs), oppSecs: pick((p) => p.oppSecs),
+    };
   });
 }
 
@@ -1344,11 +1387,7 @@ function MatchBoard({ snap, m, clock, prefs, onKifu, face, side }: {
     : { name: snap.login, rate: myRate != null ? myRate.toFixed(1) : '', color: m.my_color as 'black' | 'white', side: 'my' as const };
 
   return (
-    <div data-card style={{
-      width: side + CARD_PAD * 2, flex: 'none',
-      display: 'flex', flexDirection: 'column',
-      background: 'var(--panel)', borderRadius: 'var(--r-4)', padding: CARD_PAD,
-    }}>
+    <div data-col style={{ width: side, flex: 'none', display: 'flex', flexDirection: 'column' }}>
       {face !== undefined && (
         <div style={{
           height: 'var(--h-head)', display: 'flex', alignItems: 'center', gap: 'var(--sp-3)',
@@ -1380,7 +1419,7 @@ function MatchBoard({ snap, m, clock, prefs, onKifu, face, side }: {
         fontSize: 'var(--fs-6)', color: 'var(--sub)',
       }}>
         <span style={{ color: 'var(--text)' }}>{black} – {white}</span>
-        <span>{t('ggs.play.moves', { n: m.moves.length })}</span>
+        <span>{t('ggs.play.moves', { n: placed(m) })}</span>
         {observer && m.watch_eval != null && (
           <span style={{ display: 'inline-flex', alignItems: 'center', gap: 4 }}>
             {t('ggs.play.analysis')} <StoneDot color="b" />
@@ -1410,13 +1449,13 @@ function MatchBoard({ snap, m, clock, prefs, onKifu, face, side }: {
           <span style={{ color: 'var(--text)' }}>{t('ggs.play.finished_result', { result: m.result })}</span>
         )}
         <span style={{ marginLeft: 'auto' }} />
-        <Button
+        {m.over && <Button
                 onClick={() => onKifu(m.opp_name
                                         ? t('ggs.play.game_with', { name: m.opp_name })
                                         : t('ggs.play.record_title'),
                                       m.ggf || m.moves.join(''), m.archive || undefined)}>
           {t('ggs.game_record')}
-        </Button>
+        </Button>}
       </div>
     </div>
   );
@@ -1850,7 +1889,9 @@ function UserDetail({ snap, name, tab, onTab, onBack, onNav, onKifu }: {
         )}
         {playing && <Tag tone="ok">{t('ggs.state.playing')}</Tag>}
         <span style={{ marginLeft: 'auto' }} />
-        <Button variant="primary" onClick={() => onNav('ggs-lobby')}>{t('ggs.lobby.request_title')}</Button>
+        <Button variant="primary" onClick={() => { wantedOpponent = name; onNav('ggs-lobby'); }}>
+          {t('ggs.lobby.request_title')}
+        </Button>
       </div>
       <div style={{ flex: 'none', padding: 'var(--sp-2) var(--sp-4)' }}>
         <Segmented value={tab} onChange={onTab}

@@ -73,7 +73,9 @@ report back to the screen as it goes.
   side; under them sits one eval graph in the same place either way.
   For a synchro pair it plots the two boards' evals at the same move
   number added together: the colours are swapped, so the sum stays near
-  0, and a swing shows which board moved the match.
+  0, and a swing shows which board moved the match. Think time shares
+  the frame as faint bars from the 0 line, mine up and the opponent's
+  down.
   Finished games stay in the archive, and pressing one opens its
   record, which can be taken on into Study. See [What GGS taught us](#what-ggs-taught-us) for details.
 
