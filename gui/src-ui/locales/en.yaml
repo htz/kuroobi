@@ -220,6 +220,7 @@ data:
     opp: "Opponent"
     secs: "Time"
     title: "Reported eval"
+    title_sum: "Reported eval (both boards summed)"
 dialog:
   cancel: "Cancel"
   kifu:

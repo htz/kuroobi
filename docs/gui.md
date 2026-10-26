@@ -69,6 +69,11 @@ report back to the screen as it goes.
   auto match (game over → interval wait → automatic match request to
   the opponent picked, repeated) and a console for raw commands. The board, the clocks and
   the players' row are drawn with the same parts as a local game.
+  A game shows one board, or the two boards of a synchro pair side by
+  side; under them sits one eval graph in the same place either way.
+  For a synchro pair it plots the two boards' evals at the same move
+  number added together: the colours are swapped, so the sum stays near
+  0, and a swing shows which board moved the match.
   Finished games stay in the archive, and pressing one opens its
   record, which can be taken on into Study. See [What GGS taught us](#what-ggs-taught-us) for details.
 

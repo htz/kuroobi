@@ -216,6 +216,7 @@ data:
     opp: "相手"
     secs: "思考時間"
     title: "申告値"
+    title_sum: "申告値 (両面の合計)"
 dialog:
   cancel: "やめる"
   kifu:

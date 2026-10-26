@@ -600,13 +600,14 @@ export function MoveScrub({ plies, cursor, blunder, onSeek, nav = true }: {
   );
 }
 
-export function EvalTrend({ points, plies, height = 96 }: {
+export function EvalTrend({ points, plies, height = 96, title }: {
   points: {
     x: number; mine: number | null; opp: number | null;
     secs?: number | null; minePly?: boolean;
   }[];
   plies?: number;
   height?: number;
+  title?: string;
 }) {
   const [at, setAt] = React.useState<number | null>(null);
   const [w, setW] = React.useState(300);
@@ -678,7 +679,7 @@ export function EvalTrend({ points, plies, height = 96 }: {
         display: 'flex', gap: 'var(--sp-3)', alignItems: 'center',
         fontSize: 'var(--fs-7)', color: 'var(--sub)', height: 'var(--h-head)',
       }}>
-        <span>{t('data.trend.title')}</span>
+        <span>{title ?? t('data.trend.title')}</span>
         <span style={{ marginLeft: 'auto', display: 'inline-flex', gap: 'var(--sp-3)' }}>
           <span><span style={{ color: 'var(--accent)' }}>—</span> {t('data.trend.mine')} {cur ? fmt(cur.mine) : ''}</span>
           <span><span style={{ color: 'var(--sub)' }}>—</span> {t('data.trend.opp')} {cur ? fmt(cur.opp) : ''}</span>

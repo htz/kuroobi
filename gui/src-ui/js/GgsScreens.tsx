@@ -1138,10 +1138,16 @@ function GgsPlay({ snap, onNav, prefs, onKifu }: {
         display: 'flex', flexDirection: 'column',
       }}>
         {pair && <MatchActions id={cur} pair={pair} />}
-        {pair && <BoardPair pair={pair} render={(m, i, side) => (
+        {pair && <MatchBoards pair={pair} render={(m, side, face) => (
           <MatchBoard key={m.id} snap={snap} m={m} clock={clock} prefs={prefs} onKifu={onKifu}
-                      face={pair.length > 1 ? i + 1 : undefined} side={side} />
+                      face={face} side={side} />
         )} />}
+        {pair && pair.some((m) => m.my_color) && (
+          <div style={{ flex: 'none', height: TREND_H + 28, marginTop: 'var(--sp-3)' }}>
+            <EvalTrend points={trendOf(pair)} plies={Math.max(...pair.map(pliesOf))} height={TREND_H}
+                       title={pair.length === 2 ? t('data.trend.title_sum') : undefined} />
+          </div>
+        )}
       </div>
     </div>
   );
@@ -1206,17 +1212,19 @@ function matchRowOf(g: MatchView[]): Match {
 const CARD_PAD = 12;
 const BOARD_GAP = 12;
 
-// GGS has no shape beyond one board or a synchro pair.
-function BoardPair({ pair, render }: {
+const TREND_H = 110;
+
+// GGS plays one board, or a synchro pair of two; no other shape exists.
+function MatchBoards({ pair, render }: {
   pair: MatchView[];
-  render: (m: MatchView, i: number, side: number) => React.ReactNode;
+  render: (m: MatchView, side: number, face?: number) => React.ReactNode;
 }) {
+  const synchro = pair.length === 2;
   const area = useRef<HTMLDivElement | null>(null);
   const [box, setBox] = useState({ w: 0, h: 0 });
-  const [chrome, setChrome] = useState(280);
-  const n = pair.length > 1 ? 2 : 1;
-  const byWidth = (box.w - BOARD_GAP * (n - 1)) / n - CARD_PAD * 2;
-  const side = Math.max(200, Math.floor(Math.min(byWidth, box.h - chrome)));
+  const [chrome, setChrome] = useState(200);
+  const perBoard = synchro ? (box.w - BOARD_GAP) / 2 : box.w;
+  const side = Math.max(200, Math.floor(Math.min(perBoard - CARD_PAD * 2, box.h - chrome)));
 
   useLayoutEffect(() => {
     const el = area.current;
@@ -1245,9 +1253,51 @@ function BoardPair({ pair, render }: {
       flex: 1, minHeight: 0, display: 'flex', gap: BOARD_GAP,
       justifyContent: 'center', alignItems: 'flex-start',
     }}>
-      {box.w > 0 && pair.slice(0, 2).map((m, i) => render(m, i, side))}
+      {box.w > 0 && (synchro
+        ? <>{render(pair[0], side, 1)}{render(pair[1], side, 2)}</>
+        : render(pair[0], side))}
     </div>
   );
+}
+
+const pliesOf = (m: MatchView) => m.cells.filter((c) => c === 0).length + m.moves.length;
+
+type TrendPoint = { x: number; mine: number | null; opp: number | null; secs: number | null; minePly: boolean };
+
+// Each side's reported evals from my side of the board.
+function boardTrend(m: MatchView): TrendPoint[] {
+  return m.eval_series.map((p) => ({
+    x: p.n,
+    mine: p.mine ? p.eval : null,
+    opp: p.mine || p.eval == null ? null : -p.eval,
+    secs: p.secs,
+    minePly: p.mine,
+  }));
+}
+
+// A synchro pair starts both boards from one position with the colours swapped, so the two
+// boards' evals at the same move number cancel out; what is left shows which board moved the
+// match. Each board keeps its last reported value until it reports again.
+function trendOf(pair: MatchView[]): TrendPoint[] {
+  if (pair.length !== 2) return boardTrend(pair[0]);
+  const [a, b] = pair.map(boardTrend);
+  const n = Math.max(a.length, b.length);
+  const held = (s: TrendPoint[], pick: (p: TrendPoint) => number | null) => {
+    let v: number | null = null;
+    return Array.from({ length: n }, (_, i) => {
+      const x = i < s.length ? pick(s[i]) : null;
+      if (x != null) v = x;
+      return v;
+    });
+  };
+  const sum = (u: (number | null)[], v: (number | null)[]) =>
+    u.map((x, i) => (x != null && v[i] != null ? x + (v[i] as number) : null));
+  const mine = sum(held(a, (p) => p.mine), held(b, (p) => p.mine));
+  const opp = sum(held(a, (p) => p.opp), held(b, (p) => p.opp));
+  return Array.from({ length: n }, (_, i) => {
+    const own = [a[i], b[i]].find((p) => p?.minePly);
+    return { x: i + 1, mine: mine[i], opp: opp[i], secs: own?.secs ?? null, minePly: true };
+  });
 }
 
 function MatchBoard({ snap, m, clock, prefs, onKifu, face, side }: {
@@ -1274,15 +1324,6 @@ function MatchBoard({ snap, m, clock, prefs, onKifu, face, side }: {
           + (m.opp_secs_used != null ? ` · ${m.opp_secs_used.toFixed(0)}${t('unit.s')}` : ''),
       })
     : undefined;
-
-  const plies = m.cells.filter((c) => c === 0).length + m.moves.length;
-  const trend = m.eval_series.map((p) => ({
-    x: p.n,
-    mine: p.mine ? p.eval : null,
-    opp: p.mine || p.eval == null ? null : -p.eval,
-    secs: p.secs,
-    minePly: p.mine,
-  }));
 
   const busyEval: Record<number, EvalInfo> | undefined =
     m.busy && m.busy_best != null
@@ -1334,7 +1375,6 @@ function MatchBoard({ snap, m, clock, prefs, onKifu, face, side }: {
                  rate={bottom.rate ? +bottom.rate : undefined}
                  meta={myEval}
                  clock={clock(m.id, bottom.side).text} active={clock(m.id, bottom.side).active} />
-      {!observer && <EvalTrend points={trend} plies={plies} />}
       <div style={{
         display: 'flex', alignItems: 'center', gap: 'var(--sp-3)', height: 'var(--h-field)',
         fontSize: 'var(--fs-6)', color: 'var(--sub)',
