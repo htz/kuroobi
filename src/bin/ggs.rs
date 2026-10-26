@@ -11,6 +11,7 @@ struct Args {
     accept: Option<String>,
     resume: Option<String>,
     serve: bool,
+    fixed_level: bool,
     server: String,
     login: Option<String>,
     pw: Option<String>,
@@ -34,6 +35,7 @@ fn parse_args() -> Result<Args, String> {
         accept: None,
         resume: None,
         serve: false,
+        fixed_level: false,
         server: "skatgame.net:5000".into(),
         login: None,
         pw: None,
@@ -58,6 +60,7 @@ fn parse_args() -> Result<Args, String> {
             "--accept" => args.accept = Some(value("--accept")?),
             "--resume" => args.resume = Some(value("--resume")?),
             "--serve" => args.serve = true,
+            "--fixed-level" => args.fixed_level = true,
             "--server" => args.server = value("--server")?,
             "--console" => args.console = true,
             "--login" => args.login = Some(value("--login")?),
@@ -538,6 +541,7 @@ fn main() -> ExitCode {
         }
     };
 
+    let fixed_level = args.fixed_level;
     let pick = |board: &Board,
                 engine: &mut Engine,
                 clock_secs: Option<u64>|
@@ -545,7 +549,7 @@ fn main() -> ExitCode {
         if board.movable() == 0 {
             return (None, None);
         }
-        let mv = match clock_secs {
+        let mv = match clock_secs.filter(|_| !fixed_level) {
             Some(s) => engine.play_clock(board, std::time::Duration::from_secs(s)),
             None => engine.choose(board),
         };

@@ -253,7 +253,8 @@ ggs --console
 | `--type <t>` | `8` | Game type, e.g. `s8r16` (synchronous, 16 random plies). Same notation as the GUI's list |
 | `--time <hh:mm>` | `30:00` | Time control |
 | `--resume <id>` | — | Resume a suspended game |
-| `--depth <n>` / `--solve-empties <n>` | 10 / 20 | The level for `--serve`; games on GGS always play by the clock |
+| `--depth <n>` / `--solve-empties <n>` | 10 / 20 | The level for `--serve`; games on GGS play by the clock unless `--fixed-level` |
+| `--fixed-level` | off | Play GGS games at `--depth` / `--solve-empties` instead of by the clock (a weak test opponent, e.g. `--depth 1 --solve-empties 1`) |
 | `--solver-hash <n>` | 22 | Transposition table size for exact solving (2^n entries) |
 
 `--credentials` exists so credentials need not be passed in plain text.
