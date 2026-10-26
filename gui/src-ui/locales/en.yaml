@@ -216,6 +216,8 @@ data:
     mine: "Me"
     opp: "Opponent"
     secs: "Time"
+    split: "Split at move {n}"
+    split_mark: "Split"
     title: "Eval"
     title_sum: "Eval (both boards summed)"
 dialog:

@@ -212,6 +212,8 @@ data:
     mine: "自分"
     opp: "相手"
     secs: "思考時間"
+    split: "分岐 {n} 手目"
+    split_mark: "分岐"
     title: "評価値"
     title_sum: "評価値 (両面の合計)"
 dialog:

@@ -600,7 +600,7 @@ export function MoveScrub({ plies, cursor, blunder, onSeek, nav = true }: {
   );
 }
 
-export function EvalTrend({ points, plies, height = 96, title }: {
+export function EvalTrend({ points, plies, height = 96, title, split }: {
   points: {
     x: number; mine: number | null; opp: number | null;
     mySecs?: number | null; oppSecs?: number | null;
@@ -608,6 +608,8 @@ export function EvalTrend({ points, plies, height = 96, title }: {
   plies?: number;
   height?: number;
   title?: string;
+  /** The move at which a synchro pair's two boards first played differently. */
+  split?: number;
 }) {
   const [at, setAt] = React.useState<number | null>(null);
   const [w, setW] = React.useState(300);
@@ -675,6 +677,9 @@ export function EvalTrend({ points, plies, height = 96, title }: {
         fontSize: 'var(--fs-7)', color: 'var(--sub)', height: 'var(--h-head)',
       }}>
         <span>{title ?? t('data.trend.title')}</span>
+        {split != null && (
+          <span style={{ color: 'var(--gold)' }}>{t('data.trend.split', { n: split })}</span>
+        )}
         <span style={{ marginLeft: 'auto', display: 'inline-flex', gap: 'var(--sp-3)' }}>
           <span><span style={{ color: 'var(--accent)' }}>—</span> {t('data.trend.mine')} {cur ? fmt(cur.mine) : ''}</span>
           <span><span style={{ color: 'var(--sub)' }}>—</span> {t('data.trend.opp')} {cur ? fmt(cur.opp) : ''}</span>
@@ -712,6 +717,13 @@ export function EvalTrend({ points, plies, height = 96, title }: {
                 ) : null}
               </g>
             ))}
+          </g>
+        )}
+        {split != null && split <= slots && (
+          <g pointerEvents="none">
+            <line x1={xAt(split)} y1={pad} x2={xAt(split)} y2={height - padB}
+                  stroke="var(--gold)" strokeWidth={1.5} strokeDasharray="4 3" />
+            <text x={xAt(split) + 3} y={pad + 8} fontSize={9} fill="var(--gold)">{t('data.trend.split_mark')}</text>
           </g>
         )}
         {marks.map((n) => (

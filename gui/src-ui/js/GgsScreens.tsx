@@ -1156,7 +1156,8 @@ function GgsPlay({ snap, onNav, prefs, onKifu }: {
             paddingTop: 'var(--sp-2)', borderTop: '1px solid var(--border-weak)',
           }}>
             <EvalTrend points={trendOf(pair)} plies={Math.max(...pair.map(pliesOf))} height={TREND_H}
-                       title={pair.length === 2 ? t('data.trend.title_sum') : undefined} />
+                       title={pair.length === 2 ? t('data.trend.title_sum') : undefined}
+                       split={pair.length === 2 ? splitAt(pair[0], pair[1]) : undefined} />
           </div>
         )}
       </div>
@@ -1297,6 +1298,16 @@ function SynchroLayout({ pair, board }: {
 // GGS numbers a pass like a move; only placed discs count as moves here.
 const isPass = (mv: string) => /^(pa|pass)$/i.test(mv);
 const placed = (m: MatchView) => m.moves.filter((mv) => !isPass(mv)).length;
+// Both boards of a synchro pair start from one position; the first move that differs is where the
+// two games split (counted in placed discs, like the graph).
+function splitAt(a: MatchView, b: MatchView): number | undefined {
+  const pa = a.moves.filter((mv) => !isPass(mv)).map((mv) => mv.toLowerCase());
+  const pb = b.moves.filter((mv) => !isPass(mv)).map((mv) => mv.toLowerCase());
+  const n = Math.min(pa.length, pb.length);
+  for (let i = 0; i < n; i++) if (pa[i] !== pb[i]) return i + 1;
+  return undefined;
+}
+
 const pliesOf = (m: MatchView) => m.cells.filter((c) => c === 0).length + placed(m);
 
 type TrendPoint = { x: number; mine: number | null; opp: number | null; mySecs: number | null; oppSecs: number | null };
