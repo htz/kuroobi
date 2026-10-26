@@ -122,6 +122,7 @@ backend:
     local_search_stopped_body: "Stopped the local search"
     login_failed_title: "GGS: cannot log in"
     login_stalled_title: "GGS: login is not progressing"
+    login_stalled_body: "Gave up after 20 s. Check that the server is GGS and that the account is not logged in elsewhere"
     match_request_title: "GGS: match request"
     result_draw: "Draw (vs {opp})"
     result_loss: "Loss {diff} (vs {opp})"

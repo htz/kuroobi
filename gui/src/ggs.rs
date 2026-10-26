@@ -1587,6 +1587,8 @@ struct Ctx {
     local_activity: Arc<Mutex<crate::Activity>>,
     pending_watch: HashMap<String, Instant>,
     workers: Vec<EngineWorker>,
+    /// A login asked for while a session was up; the session ends and this one starts.
+    reconnect: Option<(String, String, String)>,
 }
 
 const MAX_WORKERS: usize = 2;
@@ -1971,6 +1973,7 @@ fn new_ctx(
         local_stop,
         local_activity,
         pending_watch: HashMap::new(),
+        reconnect: None,
         workers: Vec::new(),
     };
     ctx.snap.lock().unwrap().engine = EngineCfgView {
@@ -2027,6 +2030,10 @@ pub fn run(
 }
 
 fn wait_for_connect(ctx: &mut Ctx, rx: &Receiver<Cmd>) -> Option<(String, String)> {
+    if let Some((login, pw, server)) = ctx.reconnect.take() {
+        *SERVER.lock().unwrap() = server.trim().to_string();
+        return Some((login, pw));
+    }
     loop {
         match rx.recv_timeout(Duration::from_millis(300)) {
             Ok(Cmd::Connect { login, pw, server }) => {
@@ -2090,6 +2097,24 @@ fn claim_session(ctx: &mut Ctx) -> bool {
     false
 }
 
+/// Sleeps before the next dial, but a disconnect or a login elsewhere ends the wait;
+/// true when the session should end.
+fn wait_redial(ctx: &mut Ctx, rx: &Receiver<Cmd>) -> bool {
+    let until = Instant::now() + Duration::from_secs(15);
+    while let Some(left) = until.checked_duration_since(Instant::now()) {
+        match rx.recv_timeout(left.min(Duration::from_millis(300))) {
+            Ok(Cmd::Disconnect) => return true,
+            Ok(Cmd::Connect { login, pw, server }) => {
+                ctx.reconnect = Some((login, pw, server));
+                return true;
+            }
+            Ok(_) | Err(mpsc::RecvTimeoutError::Timeout) => {}
+            Err(mpsc::RecvTimeoutError::Disconnected) => return true,
+        }
+    }
+    false
+}
+
 fn dial(ctx: &mut Ctx) -> Option<(TcpStream, TcpStream)> {
     match TcpStream::connect(server()) {
         Ok(stream) => {
@@ -2102,7 +2127,6 @@ fn dial(ctx: &mut Ctx) -> Option<(TcpStream, TcpStream)> {
         Err(e) => {
             ctx.log("info", &format!("connect failed: {e} — retrying in 15s"));
             ctx.emit(true);
-            std::thread::sleep(Duration::from_secs(15));
             None
         }
     }
@@ -2127,6 +2151,9 @@ fn session(ctx: &mut Ctx, rx: &Receiver<Cmd>, login: &str, pw: &str) {
         }
         ctx.emit(true);
         let Some((mut stream, mut writer)) = dial(ctx) else {
+            if wait_redial(ctx, rx) {
+                return;
+            }
             continue;
         };
         ctx.snap.lock().unwrap().conn = "logging_in".into();
@@ -2164,6 +2191,9 @@ fn session(ctx: &mut Ctx, rx: &Receiver<Cmd>, login: &str, pw: &str) {
             }
             if !w.logged_in {
                 login_step(ctx, &mut w, login, pw, |c| ctx_send(&mut writer, &c));
+                if w.login_warned {
+                    return;
+                }
                 continue;
             }
             while let Some(ln) = w.lines.pop_front() {
@@ -2237,20 +2267,29 @@ fn on_lost(ctx: &mut Ctx, login_fails: &mut u32, logged_in: bool) -> bool {
     false
 }
 
+/// A server that has not asked for the login by now never will (a wrong port answers
+/// nothing), and retrying forever left the window stuck on it.
+const LOGIN_GIVE_UP: Duration = Duration::from_secs(20);
+
 fn login_step(ctx: &mut Ctx, w: &mut Wire, login: &str, pw: &str, mut send: impl FnMut(String)) {
-    if !w.login_warned && w.login_started.elapsed() > Duration::from_secs(20) {
+    if !w.login_warned && w.login_started.elapsed() > LOGIN_GIVE_UP {
         w.login_warned = true;
         ctx.log(
             "info",
-            "login is not progressing; check whether another process \
-             is connected with the same account (GGS rejects \
-             duplicate logins)",
+            &format!(
+                "login did not finish in {}s; giving up. Check that {} is a GGS \
+                 server, and that no other process is connected with the same \
+                 account (GGS rejects duplicate logins)",
+                LOGIN_GIVE_UP.as_secs(),
+                server()
+            ),
         );
         ctx.notify(
             &crate::i18n::t("backend.notify.login_stalled_title"),
-            &crate::i18n::t("backend.notify.duplicate_login_body"),
+            &crate::i18n::t("backend.notify.login_stalled_body"),
         );
         ctx.emit(true);
+        return;
     }
     let tail = String::from_utf8_lossy(&w.raw).to_lowercase();
     let tail2 = w
@@ -2560,7 +2599,14 @@ fn handle_cmd(
 ) -> bool {
     let mut quit = false;
     match cmd {
-        Cmd::Connect { .. } => {}
+        Cmd::Connect { login, pw, server } => {
+            if let Some(h) = &ctx.stop {
+                h.stop();
+            }
+            send("quit".to_string());
+            ctx.reconnect = Some((login, pw, server));
+            quit = true;
+        }
         Cmd::Disconnect => {
             if let Some(h) = &ctx.stop {
                 h.stop();

@@ -118,6 +118,7 @@ backend:
     local_search_stopped_body: "ローカルの探索を停止しました"
     login_failed_title: "GGS: ログインできません"
     login_stalled_title: "GGS: ログインが進みません"
+    login_stalled_body: "20 秒待っても進まないので切断しました。接続先が GGS か、二重ログインでないか確かめてください"
     match_request_title: "GGS: 対局の申し込み"
     result_draw: "引き分け (vs {opp})"
     result_loss: "負け {diff} (vs {opp})"
