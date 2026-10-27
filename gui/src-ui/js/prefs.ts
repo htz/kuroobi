@@ -27,11 +27,13 @@ const DEFAULTS: Prefs = {
   clockSecs: 0, lang: 'auto',
 };
 
-export const TATAMI: { labelKey: string; board: string; dark: string; line: string; grain: string }[] = [
+/** `hint` is the legal-move dot on a board too dark for the light theme's black dots (it then
+ *  holds in both themes); without it the theme's own dot is used. */
+export const TATAMI: { labelKey: string; board: string; dark: string; line: string; grain: string; hint?: string }[] = [
   { labelKey: 'settings.tatami.default', board: '#77914e', dark: '#3f4f2c', line: '#3d5226', grain: '#33421d' },
   { labelKey: 'settings.tatami.straw', board: '#8a8f5c', dark: '#474a2f', line: '#464a28', grain: '#3b3f1f' },
   { labelKey: 'settings.tatami.moss', board: '#6f7f6a', dark: '#3a4238', line: '#374033', grain: '#2f382c' },
-  { labelKey: 'settings.tatami.forest', board: '#3f4f2c', dark: '#232c18', line: '#212b14', grain: '#1b230f' },
+  { labelKey: 'settings.tatami.forest', board: '#3f4f2c', dark: '#232c18', line: '#212b14', grain: '#1b230f', hint: 'rgba(255,255,255,.40)' },
 ];
 
 const KEY = 'kuroobi.prefs';
@@ -106,13 +108,15 @@ export function usePrefs() {
 
   useEffect(() => {
     const el = document.documentElement;
-    const keys = ['--board', '--board-dark', '--line', '--grain'];
+    const keys = ['--board', '--board-dark', '--line', '--grain', '--board-hint'];
     if (prefs.tatami === 0) { for (const k of keys) el.style.removeProperty(k); return; }
     const t = TATAMI[prefs.tatami];
     el.style.setProperty('--board', t.board);
     el.style.setProperty('--board-dark', t.dark);
     el.style.setProperty('--line', t.line);
     el.style.setProperty('--grain', t.grain);
+    if (t.hint) el.style.setProperty('--board-hint', t.hint);
+    else el.style.removeProperty('--board-hint');
   }, [prefs.tatami]);
 
   return { prefs, set };

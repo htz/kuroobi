@@ -1,4 +1,4 @@
-import { Button, Progress, Segmented, Toggle } from './components/primitives';
+import { Button, Progress, Toggle } from './components/primitives';
 import { Busy, Dock, KeyValue, Note, Section } from './components/layout';
 import { KifuTable } from './components/data';
 import { Strength, presetOf } from './components/strength';
@@ -82,10 +82,9 @@ export function PlayDock({
                 </span>
               )}
             </div>
-            <Segmented fill value={g.useBook ? 'on' : 'off'} disabled={!g.hasBook}
-                       onChange={(x) => g.setUseBook(x === 'on')}
-                       options={[{ value: 'on', label: t('dock.book.use') },
-                                 { value: 'off', label: t('dock.book.dont_use') }]} />
+            <span style={{ display: 'flex', alignItems: 'center', height: 'var(--h-ctrl)' }}>
+              <Toggle checked={g.useBook} disabled={!g.hasBook} onChange={g.setUseBook} />
+            </span>
           </div>
         </Section>
       )}

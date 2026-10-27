@@ -17,6 +17,7 @@ body {
   margin:0; background:var(--bg); color:var(--text);
   font:var(--fs-4)/1.6 var(--ff);
   font-feature-settings:"tnum";           /* align digit columns; required everywhere */
+  text-wrap:pretty;                        /* no one-character last lines in wrapped help text */
   -webkit-font-smoothing:antialiased;
   overflow:hidden;                         /* desktop app: never scroll outside the window */
   /* **On-screen text is not selectable.** This is a desktop app; dragging
@@ -91,6 +92,8 @@ button:disabled, button[aria-disabled="true"] { cursor:default; }
  * A selected row already has a background and a 2px bar from the component,
  * so only hover belongs here. */
 .k-row { cursor:pointer; }
+/* A row sits flush in a scrolling list, so its focus ring is drawn inside it rather than clipped. */
+.k-row:focus-visible { outline-offset:-2px; }
 .k-row:hover { background-image:linear-gradient(var(--hover), var(--hover)) !important; }
 .k-row[aria-current="true"]:hover, .k-row.k-on:hover { background-image:linear-gradient(var(--hover-on), var(--hover-on)) !important; }
 
@@ -115,12 +118,6 @@ button:disabled, button[aria-disabled="true"] { cursor:default; }
  * the width */
 .k-wide { width:100%; }
 
-/* The settings window has --bg as its ground, so fields left at --bg lose
- * their surface. The design brightens fields one step here only. */
-/* `.k-select` is set by nobody (Select applies `k-input`). Leaving dead
-   selectors around muddies the next cleanup with rules that only look live */
-.k-settings .k-input, .k-settings .k-seg { background:var(--panel) !important; }
-
 /* Inputs. Brighten only the border (leave the surface — a place you type into
    should stay quiet) */
 .k-input { transition:border-color var(--dur) var(--ease); }
@@ -129,11 +126,6 @@ button:disabled, button[aria-disabled="true"] { cursor:default; }
 
 /* Link-like text (player names, etc). Only the underline strength changes */
 
-/* Draggable divider. Unused today — BottomPanel has a fixed height, and a
- * grip that looks draggable but does nothing is worse than none, so the grip
- * was dropped. Restore this when resizing lands. */
-.k-grip { cursor:row-resize; }
-.k-grip:hover > span, .k-grip:active > span { background:var(--sub); }
 
 
 /* ============================================================
@@ -152,9 +144,7 @@ button:disabled, button[aria-disabled="true"] { cursor:default; }
  * written on the component. Components must not put these in style. */
 .k-nav { width:var(--w-nav); }
 .k-dock { width:var(--w-dock); display:flex; }
-.k-nav-section, .k-meter-text, .k-toolbar-aux, .k-nav-jobs { display:flex; }
-.k-meter-bar { display:block; }
-.k-meter-mini { display:none; }      /* shown only in the collapsed column */
+.k-nav-section, .k-toolbar-aux { display:flex; }
 /* Marker for env-var overrides at startup. **Show which ones are set as
    tags** — a count alone only says "not a plain launch" and not how it
    differs.
@@ -174,9 +164,6 @@ button:disabled, button[aria-disabled="true"] { cursor:default; }
    "● GGS" heading is the separator, so it is unnecessary (do not double up
    with the heading's top margin) */
 .k-nav-rule { display:none; height:1px; background:var(--border); }
-/* Settings button. Full width in a wide window, square in the 48px column
-   (both width and display are moved by the breakpoints, so they live here) */
-.k-nav-settings { display:flex; width:100%; }
 .k-nav-foot { padding:var(--sp-3); }
 .k-nav-row { padding:0 10px; }
 /* Count badges and status dots. In a wide window they are pushed to the right
@@ -199,12 +186,15 @@ button:disabled, button[aria-disabled="true"] { cursor:default; }
 /* The Dock is opened from the right end of the Toolbar (k-dock-toggle).
  * In a wide window the Dock is always visible, so the toggle is hidden. */
 .k-dock-toggle { display:none; }
+/* The learning log's right column is no Dock: it narrows at 1120px instead of collapsing. */
+.k-learn-side { width:var(--w-dock); }
 @media (max-width: 1120px) {
   .k-dock { display:none; }
   /* Positioned against Body (position:relative). Do not slip under the
      full-width bars — top starts below the screen toolbar, bottom ends at
      the bottom of Body (= above the StatusBar) */
   .k-dock.k-open { display:flex; position:absolute; right:0; top:var(--h-bar); bottom:0; z-index:5; box-shadow:var(--sh-2); }
+  .k-dock.k-open.k-dock-push { position:static; box-shadow:none; }
   .k-dock-toggle { display:inline-flex; }
   /* Keep the board from sliding under the overlaid Dock. The board sizes
      itself from its container's height (rule 77), so unless the container
@@ -214,20 +204,17 @@ button:disabled, button[aria-disabled="true"] { cursor:default; }
      Use margin, not padding: components write padding with the shorthand,
      and inline beats media queries so padding would not reach */
   .k-dock-inset > :not(:first-child) { margin-right:var(--w-dock); }
+  .k-learn-side { width:var(--w-list-narrow); }
 }
+/* Left list panes (GGS lists, settings categories). Narrow windows give the width to the content. */
+.k-listpane { width:var(--w-list); }
 @media (max-width: 1040px) {
+  .k-listpane { width:var(--w-list-narrow); }
   /* Narrow icon-only column. 48px = 32px hit target + 8px on each side */
   .k-nav { width:48px; }
-  /* Drop all text. The logo and job list are text too and get the same
-     treatment — hiding only the meter label and keeping the rest makes the
-     48px column wrap and grow vertically */
-  .k-nav .k-nav-label, .k-nav .k-nav-section, .k-nav .k-meter-text,
-  .k-nav .k-nav-logo, .k-nav .k-nav-jobs, .k-nav .k-meter-bar { display:none; }
-  /* A number instead of the bar, a 1px rule instead of the text */
-  .k-nav .k-meter-mini { display:block; }
-  /* With the text gone, icons are stranded at the left edge, so center them
-     like the numbers */
-  .k-nav .k-meter-head { justify-content:center; }
+  /* Drop all text, the logo included: any text left makes the 48px column wrap and grow */
+  .k-nav .k-nav-label, .k-nav .k-nav-section, .k-nav .k-nav-logo { display:none; }
+  /* With the text gone, icons are stranded at the left edge, so center them */
   .k-nav .k-nav-row { justify-content:center; padding:0; position:relative; }
   /* Badges overlay the icon's corner here. Left in the flow they sit beside
      the icon, and icon + gap + badge does not fit 32px — the row grew past

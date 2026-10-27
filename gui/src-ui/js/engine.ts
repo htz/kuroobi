@@ -159,7 +159,10 @@ export function useGraph(g: Game, ggsMatch: boolean, ask: Ask) {
     try {
       for (let n = len; n >= 0; n--) {
         if (seq !== seqRef.current) break;
-        if (vals[n] || (n < len && v.moves[n] == null)) { done++; continue; }   // pass turns are not measured
+        if (vals[n]) { done++; continue; }
+        // The side to move must pass: the board is the one after the pass, and the value is black's
+        // either way, so it is that one rather than a gap in the graph and the move list.
+        if (n < len && v.moves[n] == null) { vals[n] = vals[n + 1]; done++; setValues([...vals]); continue; }
         if (!await measure(n)) break;
       }
     } catch (e) { g.say(tErr(e)); }

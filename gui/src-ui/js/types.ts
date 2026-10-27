@@ -81,6 +81,8 @@ interface Offer {
   gtype: string;
   time: string;
   rated: boolean;
+  /** When the request was first heard of (epoch ms). */
+  since_ms: number;
 }
 
 interface OngoingView {
@@ -247,6 +249,7 @@ export interface GgsSnapshot {
   watch_analysis: boolean;
   log_channel: string;
   thinking: string | null;
+  last_search: { nodes: number; secs: number } | null;
   fetched_ggf: FetchedGgf | null;
   td: TdView;
 }

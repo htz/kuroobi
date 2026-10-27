@@ -74,12 +74,12 @@ export function navBadges(snap: GgsSnapshot | null, chatUnread: number) {
   return {
     'ggs-lobby': { count: snap?.offers.filter((o) => o.incoming).length || undefined, alert: true },
     'ggs-play': {
-      count: new Set(snap?.matches.map((m) => m.base || m.id) ?? []).size || undefined,
+      // Games still going; finished ones stay in the list but need nothing.
+      count: new Set(snap?.matches.filter((m) => !m.over).map((m) => m.base || m.id) ?? []).size || undefined,
       dot: snap?.matches.some((m) => m.my_color && !m.over && m.turn === m.my_color)
         ? ('bad' as const) : undefined,
     },
     'ggs-chat': { count: chatUnread || undefined, alert: true },
-    'ggs-standby': { dot: snap?.standby.enabled ? ('ok' as const) : undefined },
     'ggs-tourney': {
       dot: snap?.td.tourneys.some((x) => x.joined && x.state !== 'over' && x.state !== 'cancelled')
         ? ('gold' as const) : undefined,

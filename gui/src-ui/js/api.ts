@@ -104,12 +104,20 @@ export interface ActivityView {
 }
 
 
+export interface SavedServer { addr: string; name: string; public: boolean }
+
 export const ggsApi = {
   connect: (login: string, pw: string, server: string) => call<void>('ggs_connect', { login, pw, server }),
   disconnect: () => call('ggs_disconnect'),
   accounts: () => call<{ server: string; login: string; last?: number }[]>('ggs_accounts'),
   connectSaved: (server: string, login: string) => call<void>('ggs_connect_saved', { server, login }),
   forgetAccount: (server: string, login: string) => call<void>('ggs_forget_account', { server, login }),
+  servers: () => call<SavedServer[]>('ggs_servers'),
+  saveServer: (old: string, name: string, addr: string, isPublic: boolean) =>
+    call<void>('ggs_save_server', { old, name, addr, public: isPublic }),
+  forgetServer: (addr: string) => call<void>('ggs_forget_server', { addr }),
+  autoAccount: () => call<[string, string] | null>('ggs_auto_account'),
+  setAutoAccount: (server: string, login: string) => call<void>('ggs_set_auto_account', { server, login }),
   switchAccount: (server: string, login: string) => call<void>('ggs_switch_account', { server, login }),
   snapshot: () => call<GgsSnapshot>('ggs_snapshot'),
   raw: (cmd: string) => call('ggs_raw', { cmd }),

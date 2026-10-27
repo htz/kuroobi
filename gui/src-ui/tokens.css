@@ -26,13 +26,18 @@
      dots and eval squares disappear in light */
   --stone-shadow:rgba(0,0,0,.25);
   --board-hint:rgba(255,255,255,.30);
-  --board-eval-bg:rgba(255,255,255,.06); --board-eval-edge:rgba(255,255,255,.25);
-  --board-eval-text:#d9e6de; --board-eval-strong:#cfd8d2; --board-eval-weak:#9fb0a6;
-  /* Text for the "book" source. Plain --gold blends into the light board and
-     becomes unreadable (the surface can stay --gold since it is color-mix 14%
-     — text lands at 100%) */
+  /* The eval disc hides enough of the board under it that its text reads on every tatami colour
+     (the tatami is chosen apart from the theme, from light straw to dark forest): 4.5:1 or more. */
+  --board-eval-bg:rgba(0,0,0,.55); --board-eval-edge:rgba(255,255,255,.25);
+  --board-eval-text:#eef2ec; --board-eval-strong:#ffffff; --board-eval-weak:#c3cec6;
+  --board-eval-neg:#ff9a8a; --board-eval-best:#ffd479;
+  /* Text for the "book" source on the eval disc. Plain --gold is too pale on the light disc. */
   --board-eval-book:#ffd479;
   --stone-white:#f1f1f1; --stone-white-edge:#c9cdd1;
+  /* The edge of a small black stone mark on the screen's own surfaces (score row, side pickers).
+     The board's black edge is as dark as the ground in dark, so the mark vanished; this one
+     keeps 3:1 against bg, panel and card. On the board the stones keep --stone-black-edge. */
+  --stone-black-dot-edge:#737a83; --stone-black-dot-hi:#5d636b;
 
   /* Spacing */
   --sp-1:4px; --sp-2:8px; --sp-3:12px; --sp-4:16px; --sp-5:24px; --sp-6:32px;
@@ -59,9 +64,9 @@
   --w-dock:290px;    /* right dock; identical on all 3 screens */
   --w-nav:208px;     /* left menu */
   --w-list:268px;    /* GGS match list, record column */
-  --w-lobby:174px;   /* GGS left column */
   --w-book-tree:269px; /* book tree column; measured from design §7 */
-  --w-label:96px;    /* settings label column */
+  --w-label:200px;   /* the name column of a settings row */
+  --w-label-sm:96px; /* the name column of a form inside a sheet or a detail pane (request sheet, profile) */
   --w-signals:78px;  /* traffic-light inset. 12x3 + gap 8x2 + 12 left = 64, + gap 14 */
   --w-text:720px;    /* wrap width for prose. Tables, lists and the board may fill the
                         window, but at 1500px per line the eye cannot find the next one */
@@ -69,6 +74,15 @@
   /* Only two overlay widths. **Callers must not write px** — the same 520 was
      written separately in the record viewer and the record importer
      (rules 1 and 6) */
+  --swatch-dark:#16191d;  /* the theme picker's samples: each theme's ground, the same in either theme */
+  --swatch-light:#faf8f3;
+  --w-list-narrow:216px; /* a list or side column in a window of 1040px or less */
+  --w-control:520px;     /* the widest a settings control or form grows */
+  --w-select:200px;      /* a settings dropdown with long choices (language) */
+  --w-select-sm:140px;   /* a settings dropdown with short choices (numbers, sizes) */
+  --w-bubble:320px;      /* a chat message */
+  --w-settings:820px;    /* the settings page's text column */
+  --w-popover:300px;   /* menus and pickers that float over the screen */
   --w-modal:340px;      /* confirmation and login boxes; text alone is enough */
   --w-modal-wide:520px; /* overlays with real content (record viewer, record import; rule 71) */
 
@@ -121,10 +135,12 @@
      invisible**. It is fine on the (green) board, but the small stones on
      name cards and lists disappear. Darkened to 3:1 */
   --stone-white-edge:#8b9198;
+  --stone-black-dot-edge:#2c2e30; --stone-black-dot-hi:#4a4e53;
   --stone-shadow:rgba(0,0,0,.22);
   --board-hint:rgba(0,0,0,.34);
-  --board-eval-bg:rgba(0,0,0,.10); --board-eval-edge:rgba(0,0,0,.28);
+  --board-eval-bg:rgba(255,255,255,.75); --board-eval-edge:rgba(0,0,0,.28);
   --board-eval-text:#1c2418; --board-eval-strong:#101710; --board-eval-weak:#3c4a36;
+  --board-eval-neg:#9c2f1f; --board-eval-best:#6b4e00;
   --board-eval-book:#6b4e00;
   --gold:#876819; --ok:#4b782b; --bad:#b54c39;
   --sh-1:0 1px 2px rgba(0,0,0,.18);
@@ -144,10 +160,12 @@
        invisible**. It is fine on the (green) board, but the small stones on
        name cards and lists disappear. Darkened to 3:1 */
     --stone-white-edge:#8b9198;
+  --stone-black-dot-edge:#2c2e30; --stone-black-dot-hi:#4a4e53;
     --stone-shadow:rgba(0,0,0,.22);
     --board-hint:rgba(0,0,0,.34);
-    --board-eval-bg:rgba(0,0,0,.10); --board-eval-edge:rgba(0,0,0,.28);
+    --board-eval-bg:rgba(255,255,255,.75); --board-eval-edge:rgba(0,0,0,.28);
     --board-eval-text:#1c2418; --board-eval-strong:#101710; --board-eval-weak:#3c4a36;
+    --board-eval-neg:#9c2f1f; --board-eval-best:#6b4e00;
     --board-eval-book:#6b4e00;
     --gold:#876819; --ok:#4b782b; --bad:#b54c39;
     --sh-1:0 1px 2px rgba(0,0,0,.18);

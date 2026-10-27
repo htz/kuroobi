@@ -1,8 +1,7 @@
 import React from 'react';
 import { Icon, IconButton, type IconName } from './Icons';
-import type { GgsSnapshot } from '../types';
 import { Dot, Button, Select, TextField } from './primitives';
-import { Note, picked } from './layout';
+import { Caption, Note, picked } from './layout';
 import { t } from '../i18n';
 import logo from '../../assets/kuroobi.svg?raw';
 import {
@@ -11,11 +10,11 @@ import {
 } from '../ggs';
 
 export type NavId =
-  | 'play' | 'study' | 'book'
-  | 'ggs-play' | 'ggs-lobby' | 'ggs-players' | 'ggs-results' | 'ggs-chat' | 'ggs-tourney' | 'ggs-standby' | 'ggs-console' | 'ggs-settings'
+  | 'play' | 'study' | 'book' | 'settings'
+  | 'ggs-play' | 'ggs-lobby' | 'ggs-players' | 'ggs-results' | 'ggs-chat' | 'ggs-tourney' | 'ggs-console'
   | 'ggs-login';
 
-type NavItem = {
+export type NavItem = {
   id: NavId;
   label: string;
   icon: IconName;
@@ -34,7 +33,7 @@ const CONN_TONE: Record<Conn, 'sub' | 'gold' | 'ok'> = {
 export const navLocal = (): NavItem[] => [
   { id: 'play', label: t('ggs.nav.play'), icon: 'play' },
   { id: 'study', label: t('ggs.nav.study'), icon: 'study' },
-  { id: 'book', label: t('ggs.book'), icon: 'book', hint: '⌘B' },
+  { id: 'book', label: t('ggs.nav.book'), icon: 'book', hint: '⌘B' },
 ];
 
 export function ggsNav(conn: Conn, badges?: Partial<Record<NavId, Pick<NavItem, 'count' | 'alert' | 'dot'>>>): NavItem[] {
@@ -46,7 +45,6 @@ export function ggsNav(conn: Conn, badges?: Partial<Record<NavId, Pick<NavItem, 
     { id: 'ggs-results', label: t('ggs.nav.results'), icon: 'results' },
     { id: 'ggs-chat', label: t('ggs.nav.chat'), icon: 'ggs-chat' },
     { id: 'ggs-tourney', label: t('ggs.nav.tourney'), icon: 'ggs-tourney' },
-    { id: 'ggs-standby', label: t('ggs.waiting_mode'), icon: 'ggs-standby' },
     { id: 'ggs-console', label: t('ggs.nav.console'), icon: 'ggs-console' },
   ];
   return base.map(i => ({ ...i, ...(badges?.[i.id] ?? {}) }));
@@ -64,6 +62,8 @@ export function Nav({ items, ggsItems, conn, active, onSelect, footer }: {
       <div className="k-nav-logo" style={{ height: 'var(--h-bar)', flex: 'none' }}>
         <span aria-label="KUROOBI" dangerouslySetInnerHTML={{ __html: logo }} />
       </div>
+      {/* The rows scroll when the window is too low for them; the logo and the footer stay put. */}
+      <div className="k-scroll" style={{ flex: 1, minHeight: 0 }}>
       <div style={{ padding: 'var(--sp-1) var(--sp-2) 0', display: 'flex', flexDirection: 'column', gap: 1 }}>
         {items.map(i => <NavRow key={i.id} item={i} active={active === i.id} onSelect={onSelect} />)}
       </div>
@@ -77,15 +77,16 @@ export function Nav({ items, ggsItems, conn, active, onSelect, footer }: {
       <div style={{ padding: '0 var(--sp-2)', display: 'flex', flexDirection: 'column', gap: 1 }}>
         {ggsItems.map(i => <NavRow key={i.id} item={i} active={active === i.id} onSelect={onSelect} />)}
       </div>
+      </div>
       {footer && <div className="k-nav-foot" style={{
-        marginTop: 'auto', display: 'flex', flexDirection: 'column',
+        flex: 'none', display: 'flex', flexDirection: 'column',
         gap: 'var(--sp-3)', borderTop: '1px solid var(--border)',
       }}>{footer}</div>}
     </nav>
   );
 }
 
-function NavRow({ item, active, onSelect }: { item: NavItem; active: boolean; onSelect?: (id: NavId) => void }) {
+export function NavRow({ item, active, onSelect }: { item: NavItem; active: boolean; onSelect?: (id: NavId) => void }) {
   return (
     <button type="button" onClick={() => onSelect?.(item.id)} aria-current={active || undefined}
       title={item.hint ? `${item.label} (${item.hint})` : item.label}
@@ -116,48 +117,7 @@ function NavRow({ item, active, onSelect }: { item: NavItem; active: boolean; on
 }
 
 
-export function Meter({ icon, label, value, unit, ratio }: {
-  icon: IconName; label: string; value: React.ReactNode; unit?: string; ratio: number;
-}) {
-  return (
-    <div style={{ display: 'flex', flexDirection: 'column', gap: 'var(--sp-1)' }}>
-      <div className="k-meter-head" style={{ display: 'flex', alignItems: 'center', gap: 'var(--sp-0)', fontSize: 'var(--fs-6)', color: 'var(--sub)' }}>
-        <Icon name={icon} size={13} />
-        <span className="k-meter-text">{label}</span>
-        <span className="k-meter-text" style={{ marginLeft: 'auto', color: 'var(--text)' }}>
-          <b style={{ fontWeight: 600 }}>{value}</b>{unit && <span style={{ color: 'var(--sub)' }}>{unit}</span>}
-        </span>
-      </div>
-      <div className="k-meter-bar" style={{ height: 4, borderRadius: 'var(--r-0)', background: 'var(--track)', overflow: 'hidden' }}>
-        <span style={{
-          display: 'block', width: Math.min(100, Math.round(ratio * 100)) + '%', height: '100%',
-          background: ratio > 0.75 ? 'var(--gold)' : 'var(--accent)',
-        }} />
-      </div>
-      <div className="k-meter-mini" style={{
-        fontSize: 'var(--fs-7)', color: 'var(--text)', textAlign: 'center',
-        fontVariantNumeric: 'tabular-nums',
-      }}>{value}{typeof unit === 'string' ? unit.trim() : unit}</div>
-    </div>
-  );
-}
 
-export function JobList({ jobs }: { jobs: { label: string; threads?: number; yielded?: boolean }[] }) {
-  if (!jobs.length) {
-    return <div className="k-nav-jobs" style={{ fontSize: 'var(--fs-7)', color: 'var(--sub)' }}>
-      {t('ggs.jobs.idle')}
-    </div>;
-  }
-  return (
-    <div className="k-nav-jobs" style={{ flexDirection: 'column', gap: 3, fontSize: 'var(--fs-7)', color: 'var(--text)' }}>
-      {jobs.map((j, i) => (
-        <div key={i}>{j.label}{j.threads ? ' ' + t('ggs.jobs.threads', { n: j.threads }) : ''}
-          {j.yielded && <span style={{ color: 'var(--sub)' }}>{' ' + t('ggs.jobs.yielding')}</span>}
-        </div>
-      ))}
-    </div>
-  );
-}
 
 
 type Rate = { value: number; dev: number; rank?: number; w: number; l: number; d: number; provisional?: boolean };
@@ -199,36 +159,36 @@ export type Match = {
   leftBy?: string;
 };
 
-const matchTitle = (m: Match) =>
-  m.mine
-    ? t('ggs.match.me_vs', { name: m.opponent ?? '?' })
-    : t('ggs.vs', { a: m.black, b: m.white });
+// Both players by name, the same for one's own games and watched ones: only the actions differ.
+const matchTitle = (m: Match) => t('ggs.vs', { a: m.black, b: m.white });
 
 export function MatchRow({ m, active, onSelect, onClose }: {
   m: Match; active: boolean; onSelect: () => void; onClose: () => void;
 }) {
   const closable = !m.live;
   return (
-    <div className={'k-row' + (active ? ' k-on' : '')} style={{
+    // Only the button is the row: a k-row on the wrapper too laid the hover over twice.
+    <div style={{
       position: 'relative', borderBottom: '1px solid var(--border-weak)',
       ...picked(active),
     }}>
-      <button type="button" onClick={onSelect} className="k-row"
+      <button type="button" onClick={onSelect} className={'k-row' + (active ? ' k-on' : '')}
               aria-current={active || undefined} style={{
         width: '100%', border: 0, background: 'transparent', textAlign: 'left',
         padding: '9px var(--sp-3)', paddingRight: closable ? 40 : undefined,
         display: 'flex', flexDirection: 'column', gap: 5,
       }}>
-        <span style={{ display: 'flex', alignItems: 'center', gap: 'var(--sp-0)' }}>
-          <Tag tone={m.mine ? 'accent' : 'sub'}>
-            {m.mine ? t('ggs.tag.mine') : t('ggs.tag.observing')}
-          </Tag>
-          <Tag tone={m.live ? 'ok' : m.ended === 'adjourned' ? 'bad' : 'sub'}>
-            {m.live ? t('ggs.state.playing')
-              : m.ended === 'adjourned' ? t('ggs.state.adjourned')
-              : m.ended === 'aborted' ? t('ggs.state.aborted') : t('ggs.state.finished')}
-          </Tag>
-          <span style={{ fontSize: 'var(--fs-5)', color: m.live ? 'var(--text)' : 'var(--sub)' }}>
+        <span style={{ display: 'flex', alignItems: 'center', gap: 'var(--sp-0)', minWidth: 0, whiteSpace: 'nowrap' }}>
+          {/* Watched games carry a quiet mark; one's own games need none. */}
+          {!m.mine && <Tag tone="sub">{t('ggs.tag.observing')}</Tag>}
+          {/* Live games sit under the "in progress" heading already; only an ended game says how it ended. */}
+          {!m.live && (
+            <Tag tone={m.ended === 'adjourned' ? 'bad' : 'sub'}>
+              {m.ended === 'adjourned' ? t('ggs.state.adjourned')
+                : m.ended === 'aborted' ? t('ggs.state.aborted') : t('ggs.state.finished')}
+            </Tag>
+          )}
+          <span style={{ fontSize: 'var(--fs-5)', color: m.live ? 'var(--text)' : 'var(--sub)', minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis' }}>
             {matchTitle(m)}
           </span>
         </span>
@@ -249,13 +209,20 @@ export function MatchRow({ m, active, onSelect, onClose }: {
   );
 }
 
+/**
+ * A small label. It must read on every surface it lands on (the ground, a panel, a chosen row's
+ * card), in both themes: a thin tint and an outline of its colour give the shape, and the text
+ * is its colour pulled toward the body text, which keeps it above 4.5:1 on that tint.
+ */
 export function Tag({ tone = 'sub', children }: { tone?: 'sub' | 'accent' | 'ok' | 'bad'; children: React.ReactNode }) {
   const solid = tone === 'accent';
+  const c = `var(--${tone})`;
   return <span style={{
-    padding: '1px 6px', borderRadius: 'var(--r-1)', fontSize: 'var(--fs-tag)', flex: 'none',
-    fontWeight: solid ? 600 : 400,
-    background: solid ? 'var(--accent-dim)' : tone === 'sub' ? 'var(--card)' : `color-mix(in srgb, var(--${tone}) 18%, transparent)`,
-    color: solid ? 'var(--on-accent)' : tone === 'sub' ? 'var(--sub)' : `var(--${tone})`,
+    padding: '0 5px', borderRadius: 'var(--r-1)', fontSize: 'var(--fs-tag)', flex: 'none',
+    fontWeight: solid ? 600 : 500,
+    border: `1px solid ${solid ? 'var(--accent-dim)' : `color-mix(in srgb, ${c} 50%, transparent)`}`,
+    background: solid ? 'var(--accent-dim)' : `color-mix(in srgb, ${c} 12%, transparent)`,
+    color: solid ? 'var(--on-accent)' : `color-mix(in srgb, ${c} 70%, var(--text))`,
   }}>{children}</span>;
 }
 
@@ -297,7 +264,7 @@ function FormulaWire({ text }: { text: string }) {
       display: 'flex', alignItems: 'baseline', gap: 'var(--sp-3)', padding: '9px var(--sp-3)',
       borderRadius: 'var(--r-3)', background: 'var(--panel)', border: '1px solid var(--border)',
     }}>
-      <span style={{ fontSize: 'var(--fs-7)', fontWeight: 600, letterSpacing: '.08em', color: 'var(--sub)', flex: 'none' }}>{t('ggs.formula.wire')}</span>
+      <Caption>{t('ggs.formula.wire')}</Caption>
       <code className="k-sel" style={{
         fontFamily: 'var(--ff-mono)', fontSize: 'var(--fs-6)', color: 'var(--text)',
         minWidth: 0, whiteSpace: 'pre-wrap', overflowWrap: 'anywhere', lineHeight: 1.6,
@@ -306,13 +273,22 @@ function FormulaWire({ text }: { text: string }) {
   );
 }
 
-export function FormulaEditor({ value, onChange, onSave, onClear, onRaw }: {
+export function FormulaEditor({ value, onChange, onSave, onClear, onRaw, dirty = false }: {
   value: Cond | null;
   onChange: (c: Cond) => void;
   onSave: (src: string) => void;
   onClear: () => void;
   onRaw: (src: string) => void;
+  /** The rule on screen differs from the one GGS has: it is sent only by "Apply". */
+  dirty?: boolean;
 }) {
+  // Unlike the other settings this is sent only on "Apply", so an unsent change says so.
+  const apply = (src: string) => (
+    <span style={{ marginLeft: 'auto', display: 'flex', alignItems: 'center', gap: 'var(--sp-2)' }}>
+      {dirty && <span style={{ fontSize: 'var(--fs-6)', color: 'var(--gold)' }}>{t('ggs.formula.unsent')}</span>}
+      <Button variant="primary" disabled={!dirty} onClick={() => onSave(src)}>{t('ggs.apply')}</Button>
+    </span>
+  );
   if (!value) {
     return (
       <div style={{
@@ -321,9 +297,11 @@ export function FormulaEditor({ value, onChange, onSave, onClear, onRaw }: {
       }}>
         <div style={{ fontSize: 'var(--fs-5)', color: 'var(--text)' }}>{t('ggs.formula.unset')}</div>
         <Note>{t('ggs.formula.unset_note')}</Note>
-        <div style={{ display: 'flex', gap: 'var(--sp-2)' }}>
+        <div style={{ display: 'flex', gap: 'var(--sp-2)', alignSelf: 'stretch', alignItems: 'center' }}>
           <Button onClick={() => onChange(newGroup())}>{t('ggs.formula.add_condition')}</Button>
           <Button variant="ghost" onClick={() => onRaw('')}>{t('ggs.formula.write_raw')}</Button>
+          {/* Clearing a rule GGS still has is a change to send too. */}
+          {dirty && apply('')}
         </div>
       </div>
     );
@@ -336,9 +314,7 @@ export function FormulaEditor({ value, onChange, onSave, onClear, onRaw }: {
       <div style={{ display: 'flex', gap: 'var(--sp-2)', alignItems: 'center' }}>
         <Button variant="secondary" onClick={onClear}>{t('ggs.formula.clear')}</Button>
         <Button variant="ghost" onClick={() => onRaw(src)}>{t('ggs.formula.write_raw')}</Button>
-        <span style={{ marginLeft: 'auto' }}>
-          <Button variant="primary" onClick={() => onSave(src)}>{t('ggs.apply')}</Button>
-        </span>
+        {apply(src)}
       </div>
     </div>
   );
@@ -397,7 +373,7 @@ function AtomRow({ c, onChange, onRemove }: {
   const type = v?.type ?? 'bool';
   return (
     <div style={{ display: 'flex', alignItems: 'center', gap: 'var(--sp-0)' }}>
-      <Select value={c.name} width={140} size="ctrl"
+      <Select value={c.name} width="var(--w-select-sm)" size="ctrl"
               options={formulaVars().map(x => [x.name, x.label] as [string, string])}
               onChange={name => {
                 const nv = varOf(name);
@@ -445,16 +421,16 @@ export function Bubble({ m, showName }: { m: Msg; showName?: boolean }) {
       {showName && (
         <div style={{ display: 'flex', alignItems: 'baseline', gap: 7 }}>
           <span className="k-sel" style={{ fontSize: 'var(--fs-6)', fontWeight: 600, color: m.mine ? 'var(--accent)' : 'var(--text)' }}>
-            {m.mine ? t('ggs.chat.me') : m.from}
+            {m.from}
           </span>
           <span style={{ fontSize: 'var(--fs-7)', color: 'var(--sub)' }}>{m.at}</span>
         </div>
       )}
       <div style={{
-        maxWidth: 320, padding: '6px 10px', borderRadius: 'var(--r-bubble)', fontSize: 'var(--fs-5)', lineHeight: 1.5,
+        maxWidth: 'var(--w-bubble)', padding: '6px 10px', borderRadius: 'var(--r-bubble)', fontSize: 'var(--fs-5)', lineHeight: 1.5,
         background: m.mine ? 'var(--accent-dim)' : 'var(--panel)', color: m.mine ? 'var(--on-accent)' : 'var(--text)',
       }}>
-        <span className="k-sel" style={{ whiteSpace: 'pre-wrap' }}>{m.body}</span>
+        <span className="k-sel" style={{ whiteSpace: 'pre-wrap', overflowWrap: 'anywhere' }}>{m.body}</span>
         {m.ja && <div className="k-sel" style={{
           marginTop: 4, paddingTop: 4, borderTop: '1px solid var(--border)',
           fontSize: 'var(--fs-6)', color: 'var(--sub)',
@@ -474,14 +450,14 @@ export function DayMark({ children }: { children: React.ReactNode }) {
 
 export type LogLine = { seq: number; dir: 'out' | 'in' | 'app'; text: string };
 
-export function ConsoleLog({ lines }: { lines: LogLine[] }) {
+export function ConsoleLog({ lines, follow = true }: { lines: LogLine[]; follow?: boolean }) {
   const box = React.useRef<HTMLDivElement>(null);
   const stick = React.useRef(true);
   const last = lines.at(-1)?.seq;
   React.useEffect(() => {
     const b = box.current;
-    if (b && stick.current) b.scrollTop = b.scrollHeight;
-  }, [last]);
+    if (b && follow && stick.current) b.scrollTop = b.scrollHeight;
+  }, [last, follow]);
   return (
     <div className="k-scroll" ref={box}
       onScroll={() => {
@@ -516,7 +492,7 @@ export function Toasts({ items, onDismiss }: { items: Toast[]; onDismiss: (id: n
     }}>
       {items.map(item => (
         <button key={item.id} type="button" onClick={() => onDismiss(item.id)} className="k-press" style={{
-          maxWidth: 340, padding: 'var(--sp-3)', borderRadius: 'var(--r-4)', textAlign: 'left',
+          maxWidth: 'var(--w-modal)', padding: 'var(--sp-3)', borderRadius: 'var(--r-4)', textAlign: 'left',
           background: 'var(--card)', border: '1px solid var(--border)', boxShadow: 'var(--sh-2)',
           fontSize: 'var(--fs-5)', lineHeight: 1.6, color: 'var(--text)',
           display: 'flex', gap: 'var(--sp-2)', alignItems: 'flex-start',
@@ -529,23 +505,6 @@ export function Toasts({ items, onDismiss }: { items: Toast[]; onDismiss: (id: n
   );
 }
 
-
-export function GgsStatus({ snap }: { snap: GgsSnapshot }) {
-  return (
-    <>
-      {snap.my_ranks.map((r) => (
-        <span key={r.gtype} style={{ fontSize: 'var(--fs-6)', color: 'var(--sub)' }}>
-          {poolLabel(r.gtype)}{' '}
-          <b style={{ color: 'var(--text)', fontWeight: 600, fontVariantNumeric: 'tabular-nums' }}>
-            {r.rating.toFixed(0)}
-          </b>
-          <span style={{ opacity: .7, marginLeft: 3 }}>±{Math.round(r.dev)}</span>
-        </span>
-      ))}
-      {snap.standby.enabled && <Tag tone="ok">{t('ggs.waiting_mode')}</Tag>}
-    </>
-  );
-}
 
 export const poolLabel = (pool: string): string =>
   pool === '8' ? t('ggs.pool.normal') : pool === '8r' ? t('ggs.pool.random') : pool;

@@ -195,7 +195,16 @@ const gtypeNames = (): Record<string, string> => ({
   '8r16': t('ggs.gtype.rand16'),
   '8r': t('ggs.gtype.rand_opening'),
 });
-export const gtypeLabel = (code: string): string => gtypeNames()[code] ?? (code || '?');
+export function gtypeLabel(raw: string): string {
+  // The stored-games list adds a mark after a colon ("s8r14:l"); the type is what comes before it.
+  const code = raw.split(':')[0];
+  const hit = gtypeNames()[code];
+  if (hit) return hit;
+  // Other random lengths, as GGS and GGF write them ("8r12", "s8r22").
+  const m = /^(s)?8r(\d+)$/.exec(code);
+  if (m) return t(m[1] ? 'ggs.gtype.synchro_rand' : 'ggs.gtype.rand', { n: Number(m[2]) });
+  return code || '?';
+}
 
 export const gtypeChoices = (): [string, string][] => [
   ['s8r14', t('ggs.gtype.synchro_rand14')],
@@ -216,10 +225,6 @@ export const clockChoices = (): [string, string][] => [
   ['00:30:00', t('ggs.clock_choice.minutes', { n: 30 })],
 ];
 
-export function clockOf(at: number): string {
-  return new Date(at * 1000).toLocaleTimeString(dateLocale(),
-    { hour: '2-digit', minute: '2-digit', hourCycle: 'h23' });
-}
 
 
 export function ggsMoveToIndex(mv: string): number | null {

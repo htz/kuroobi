@@ -138,11 +138,10 @@ function EvalCell({ x, y, info }: { x: number; y: number; info: EvalInfo }) {
     : 'var(--board-eval-weak)';
   return (
     <g>
-      <circle cx={x} cy={y} r={30}
-              fill={best ? 'color-mix(in srgb, var(--gold) 14%, transparent)' : 'var(--board-eval-bg)'}
-              stroke={best ? 'var(--gold)' : 'var(--board-eval-edge)'} strokeWidth={best ? 2 : 1} />
+      <circle cx={x} cy={y} r={30} fill="var(--board-eval-bg)"
+              stroke={best ? 'var(--board-eval-best)' : 'var(--board-eval-edge)'} strokeWidth={best ? 2.5 : 1} />
       <text x={x} y={y + 2} textAnchor="middle" fontSize={numSize(num)}
-            fill={best ? 'var(--gold)' : score < 0 ? 'var(--bad)' : 'var(--board-eval-text)'}
+            fill={best ? 'var(--board-eval-best)' : score < 0 ? 'var(--board-eval-neg)' : 'var(--board-eval-text)'}
             fontWeight={best ? 700 : 400}>
         {num}
       </text>

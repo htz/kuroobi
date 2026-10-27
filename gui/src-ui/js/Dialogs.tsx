@@ -2,13 +2,11 @@ import { useCallback, useEffect, useState, type ReactNode } from 'react';
 import { api, emitApp, onApp, type HashView, type KifuFrame, type ThreadsView } from './api';
 import { TATAMI, type Prefs, type Theme } from './prefs';
 import { t, useLang, tErr } from './i18n';
-import { Modal, Note, Overlay, Section } from './components/layout';
-import { Button, Segmented, Select, TextField } from './components/primitives';
-import { Icon } from './components/Icons';
+import { Caption, Modal, Overlay, Section } from './components/layout';
+import { Button, Segmented, Select, TextArea, TextField, Toggle } from './components/primitives';
 import { Board } from './components/board';
+import { markApplied } from './applied';
 import { StoneDot } from './components/data';
-import { GgsSettings } from './GgsScreens';
-import type { GgsSnapshot } from './types';
 
 
 export function Confirm({ title, body, ok, danger, onOk, onCancel }: {
@@ -26,26 +24,6 @@ export function Confirm({ title, body, ok, danger, onOk, onCancel }: {
   );
 }
 
-export function PickOne({ title, body, options, ok = t('dialog.open'), onOk, onCancel }: {
-  title: string; body?: React.ReactNode; options: [string, string][];
-  ok?: string; onOk: (v: string) => void; onCancel: () => void;
-}) {
-  const [v, setV] = useState(options[0]?.[0] ?? '');
-  return (
-    <Overlay onClose={onCancel}>
-      <Modal title={title} onClose={onCancel}
-             body={<div style={{ display: 'flex', flexDirection: 'column', gap: 'var(--sp-3)' }}>
-               {body}
-               <Select value={v} options={options} onChange={setV} />
-             </div>}
-             actions={<>
-               <span style={{ marginLeft: 'auto' }} />
-               <Button size="field" onClick={onCancel}>{t('dialog.cancel')}</Button>
-               <Button size="field" variant="primary" disabled={!v} onClick={() => onOk(v)}>{ok}</Button>
-             </>} />
-    </Overlay>
-  );
-}
 
 export function PasteKifu({ onLoad, onFile, onCancel }: {
   onLoad: (text: string) => void; onFile: () => void; onCancel: () => void;
@@ -80,13 +58,7 @@ export function PasteKifu({ onLoad, onFile, onCancel }: {
                <Button size="field" variant="primary" disabled={!ok}
                        onClick={() => onLoad(text)}>{t('dialog.kifu.load')}</Button>
              </>}>
-        <textarea value={text} onChange={(e) => setText(e.target.value)}
-          className="k-input"
-          style={{
-            height: 110, resize: 'none', padding: 'var(--sp-3)', borderRadius: 'var(--r-3)',
-            background: 'var(--bg)', border: '1px solid var(--border)',
-            fontFamily: 'var(--ff-mono)', fontSize: 'var(--fs-6)', lineHeight: 1.6,
-          }} />
+        <TextArea mono rows={5} value={text} onChange={setText} />
         <div style={{ display: 'flex', gap: 'var(--sp-4)', alignItems: 'center', minHeight: 96 }}>
           <div style={{
             width: 96, height: 96, flex: 'none',
@@ -98,9 +70,7 @@ export function PasteKifu({ onLoad, onFile, onCancel }: {
             display: 'flex', flexDirection: 'column', gap: 'var(--sp-0)',
             fontSize: 'var(--fs-5)', color: peek?.err ? 'var(--bad)' : 'var(--text)',
           }}>
-            <span style={{
-              fontSize: 'var(--fs-7)', fontWeight: 600, letterSpacing: '.08em', color: 'var(--sub)',
-            }}>{t('dialog.kifu.preview')}</span>
+            <Caption>{t('dialog.kifu.preview')}</Caption>
             {!peek && <span style={{ color: 'var(--sub)' }}>{t('dialog.kifu.preview_hint')}</span>}
             {peek?.err && <span>{peek.err}</span>}
             {last && <>
@@ -146,23 +116,39 @@ const notFound = (kind: string): string =>
   : kind === 'book' ? t('settings.file.book_missing')
   : t('settings.file.weights_missing');
 
-export function Settings({ prefs, setPref, ggs, initialTab, onClose }: {
+/** One setting: the label on the left, the control and a one-line help under it on the right. */
+export function SettingRow({ label, help, error, children }: {
+  label: string; help?: ReactNode; error?: ReactNode; children: ReactNode;
+}) {
+  return (
+    <div style={{
+      display: 'flex', gap: 'var(--sp-4)', padding: 'var(--sp-3) 0',
+      borderBottom: '1px solid var(--border-weak)',
+    }}>
+      <span style={{ width: 'var(--w-label)', flex: 'none', lineHeight: 'var(--h-ctrl)', fontSize: 'var(--fs-4)' }}>{label}</span>
+      <div style={{ flex: 1, minWidth: 0, display: 'flex', flexDirection: 'column', gap: 'var(--sp-1)', alignItems: 'flex-start' }}>
+        {children}
+        {error
+          ? <span style={{ fontSize: 'var(--fs-6)', color: 'var(--bad)' }}>{error}</span>
+          : help && <span style={{ fontSize: 'var(--fs-6)', color: 'var(--sub)' }}>{help}</span>}
+      </div>
+    </div>
+  );
+}
+
+/** A titled group of setting rows. */
+export function SettingGroup({ title, aside, children }: { title: string; aside?: ReactNode; children: ReactNode }) {
+  return (
+    <Section title={title} aside={aside}>
+      <div style={{ display: 'flex', flexDirection: 'column' }}>{children}</div>
+    </Section>
+  );
+}
+
+export function EngineSettings({ prefs, setPref }: {
   prefs: Prefs; setPref: <K extends keyof Prefs>(k: K, v: Prefs[K]) => void;
-  ggs: GgsSnapshot | null;
-  initialTab: 'engine' | 'view' | 'ggs';
-  onClose: () => void;
 }) {
   useLang();
-  const [tab, setTab] = useState<'engine' | 'view' | 'ggs'>(initialTab);
-  useEffect(() => {
-    void api.autoplay().then((v) => {
-      const [, want, arg] = (v ?? '').split(':');
-      if (want === 'engine' || want === 'view' || want === 'ggs') setTab(want);
-      if (arg === 'light' || arg === 'dark' || arg === 'os') {
-        window.setTimeout(() => setPref('theme', arg), 5000);
-      }
-    }).catch(() => { /* outside Tauri it simply does nothing */ });
-  }, []);
   const [reset, setReset] = useState(false);
   const [status, setStatus] = useState<[string, string, boolean, number, string][]>([]);
   const [th, setTh] = useState<ThreadsView | null>(null);
@@ -201,131 +187,80 @@ export function Settings({ prefs, setPref, ggs, initialTab, onClose }: {
     await api.setResource(kind, path);
     await load();
     emitApp('resources-changed');
+    markApplied();
   };
   const setThreads = async (n: number | null) => {
     try {
       await api.setLocalThreads(n);
       setTh(await api.localThreads());
+      markApplied();
     } catch { /* leave it as is when the save fails */ }
   };
-
   const saveHash = async (mid: number, end: number) => {
-    try { setHash(await api.setHashSizes(mid, end)); } catch { /* the save failed */ }
+    try { setHash(await api.setHashSizes(mid, end)); markApplied(); } catch { /* the save failed */ }
   };
 
   return (
-    <Modal title={t('settings.title')} width="560px" onClose={onClose} scroll
-           band={
-               <div style={{
-                 flex: 1, display: 'flex', alignItems: 'center',
-                 justifyContent: 'center', gap: 'var(--sp-1)',
-               }}>
-                 {tabs().map(([v, label]) => {
-                   const on = tab === v;
-                   return (
-                     <button key={v} type="button" className={'k-press' + (on ? ' k-on' : '')}
-                             onClick={() => setTab(v)} aria-pressed={on}
-                             style={{
-                               height: 'var(--h-ctrl)', padding: '0 14px', border: 0,
-                               borderRadius: 'var(--r-2)', fontSize: 'var(--fs-5)',
-                               background: on ? 'var(--accent-dim)' : 'transparent',
-                               color: on ? 'var(--on-accent)' : 'var(--sub)',
-                               fontWeight: on ? 600 : 400,
-                             }}>{label}</button>
-                   );
-                 })}
-               </div>
-           }>
-      <div className="k-settings" style={{ display: 'flex', flexDirection: 'column' }}>
+    <>
+      <SettingGroup title={t('settings.files.title')}>
+        {kinds().map(([kind, label]) => {
+          const info = byName.get(kind);
+          return (
+            <SettingRow key={kind} label={label}
+                        help={info?.ok
+                          ? [t('settings.file.loaded'), fmtSize(info.size)].filter(Boolean).join(' · ')
+                          : undefined}
+                        error={info && !info.ok ? notFound(kind) : undefined}>
+              <span style={{ display: 'flex', gap: 'var(--sp-2)', width: '100%', maxWidth: 'var(--w-control)' }}>
+                <span style={{ flex: 1, minWidth: 0, display: 'flex' }}>
+                  <TextField mono value={info?.p ?? ''} placeholder={t('settings.file.unset')} invalid={!!info && !info.ok} />
+                </span>
+                <Button onClick={async () => {
+                  const p = await api.pickResource(kind);
+                  if (p) await change(kind, p);
+                }}>{t('settings.file.choose')}</Button>
+              </span>
+            </SettingRow>
+          );
+        })}
+        <SettingRow label={t('settings.reset.label')} help={t('settings.reset.help')}>
+          <Button onClick={() => setReset(true)}>{t('settings.reset.button')}</Button>
+        </SettingRow>
+      </SettingGroup>
 
-        {tab === 'view' && <ViewSettings prefs={prefs} setPref={setPref} />}
-
-        {tab === 'ggs' && (ggs
-          ? <GgsSettings snap={ggs} />
-          : (
-            <Section title="GGS">
-              <Note>{t('settings.ggs.unloaded')}</Note>
-            </Section>
-          )
-        )}
-
-
-        {tab === 'engine' && <>
-        <Section title={t('settings.files.title')}>
-          {kinds().map(([kind, label]) => {
-            const info = byName.get(kind);
-            return (
-              <div key={kind} style={{ display: 'flex', flexDirection: 'column', gap: 'var(--sp-1)' }}>
-                <Row2 label={label}>
-                  <TextField value={info?.p ?? ''} placeholder={t('settings.file.unset')} invalid={!info?.ok} />
-                  <Button size="field" onClick={async () => {
-                    const p = await api.pickResource(kind);
-                    if (p) await change(kind, p);
-                  }}>{t('settings.file.choose')}</Button>
-                </Row2>
-                <div style={{
-                  marginLeft: 'calc(var(--w-label) + var(--sp-3))',
-                  display: 'flex', alignItems: 'center', gap: 'var(--sp-2)',
-                  fontSize: 'var(--fs-6)', color: info?.ok ? 'var(--ok)' : 'var(--bad)',
-                }}>
-                  <Icon name={info?.ok ? 'check' : 'alert'} size={12} />
-                  {info?.ok
-                    ? [t('settings.file.loaded'), fmtSize(info.size), info.kind].filter(Boolean).join(' · ')
-                    : notFound(kind)}
-                </div>
-              </div>
-            );
-          })}
-        </Section>
-
-          <Section title={t('settings.clock.title')}>
-            <Row2 label={t('settings.clock.label')}>
-              <Select width={140} value={String(prefs.clockSecs)}
-                      onChange={(v) => setPref('clockSecs', +v)}
-                      options={[['0', t('settings.clock.none')],
-                                ...[5, 10, 15, 20, 30].map((m) =>
-                                  [String(m * 60), t('settings.clock.minutes', { n: m })] as [string, string])]} />
-            </Row2>
-            <Note>{t('settings.clock.note')}</Note>
-          </Section>
+      <SettingGroup title={t('settings.search.title')}>
         {th && (
-          <Section title={t('settings.threads.title')}>
-            <Row2 label={t('settings.threads.label')}>
-              <Select width={140} value={String(th.set ?? th.auto)}
-                      onChange={(v) => void setThreads(+v === th.auto ? null : +v)}
-                      options={Array.from({ length: th.auto * 2 }, (_, i) => {
-                        const n = i + 1;
-                        return [String(n), n === th.auto ? t('settings.threads.auto', { n }) : String(n)] as [string, string];
-                      })} />
-            </Row2>
-            <Note>{t('settings.threads.note')}</Note>
-          </Section>
+          <SettingRow label={t('settings.threads.label')} help={t('settings.threads.note')}>
+            <Select width="var(--w-select-sm)" value={String(th.set ?? th.auto)}
+                    onChange={(v) => void setThreads(+v === th.auto ? null : +v)}
+                    options={Array.from({ length: th.auto * 2 }, (_, i) => {
+                      const n = i + 1;
+                      return [String(n), n === th.auto ? t('settings.threads.auto', { n }) : String(n)] as [string, string];
+                    })} />
+          </SettingRow>
         )}
-        {hash && (
-          <Section title={t('settings.hash.title')}>
-            <Row2 label={t('settings.hash.mid')}>
-              <HashSelect hash={hash} bits={hash.mid} standard={22} bytes={(b) => 2 ** (b + 4)}
-                          onPick={(b) => void saveHash(b, hash.end)} />
-            </Row2>
-            <Row2 label={t('settings.hash.end')}>
-              <HashSelect hash={hash} bits={hash.end} standard={24} bytes={(b) => 2 ** b * 24}
-                          onPick={(b) => void saveHash(hash.mid, b)} />
-            </Row2>
-            <Note>{t('settings.hash.note')}</Note>
-          </Section>
-        )}
+        {hash && <>
+          <SettingRow label={t('settings.hash.mid_label')}>
+            <HashSelect hash={hash} bits={hash.mid} standard={22} bytes={(b) => 2 ** (b + 4)}
+                        onPick={(b) => void saveHash(b, hash.end)} />
+          </SettingRow>
+          <SettingRow label={t('settings.hash.end_label')} help={t('settings.hash.note')}>
+            <HashSelect hash={hash} bits={hash.end} standard={24} bytes={(b) => 2 ** b * 24}
+                        onPick={(b) => void saveHash(hash.mid, b)} />
+          </SettingRow>
         </>}
+      </SettingGroup>
 
-        {tab === 'engine' && (
-          <div style={{
-            display: 'flex', alignItems: 'center', gap: 'var(--sp-3)',
-            margin: '0 var(--sp-3)', paddingTop: 'var(--sp-4)',
-            borderTop: '1px solid var(--border-weak)',
-          }}>
-            <Button size="field" onClick={() => setReset(true)}>{t('settings.reset.button')}</Button>
-          </div>
-        )}
-      </div>
+      <SettingGroup title={t('settings.clock.title')}>
+        <SettingRow label={t('settings.clock.label')} help={t('settings.clock.note')}>
+          <Select width="var(--w-select-sm)" value={String(prefs.clockSecs)}
+                  onChange={(v) => setPref('clockSecs', +v)}
+                  options={[['0', t('settings.clock.none')],
+                            ...[5, 10, 15, 20, 30].map((m) =>
+                              [String(m * 60), t('settings.clock.minutes', { n: m })] as [string, string])]} />
+        </SettingRow>
+      </SettingGroup>
+
       {reset && (
         <Confirm title={t('settings.reset.title')}
                  body={t('settings.reset.body')}
@@ -341,7 +276,7 @@ export function Settings({ prefs, setPref, ggs, initialTab, onClose }: {
                    })();
                  }} />
       )}
-    </Modal>
+    </>
   );
 }
 
@@ -350,7 +285,7 @@ function HashSelect({ hash, bits, standard, bytes, onPick }: {
   bytes: (bits: number) => number; onPick: (bits: number) => void;
 }) {
   return (
-    <Select width={140} value={String(bits)} onChange={(v) => onPick(+v)}
+    <Select width="var(--w-select-sm)" value={String(bits)} onChange={(v) => onPick(+v)}
             options={Array.from({ length: hash.max - hash.min + 1 }, (_, i) => {
               const b = hash.min + i;
               const size = fmtSize(bytes(b));
@@ -358,12 +293,6 @@ function HashSelect({ hash, bits, standard, bytes, onPick }: {
             })} />
   );
 }
-
-const tabs = (): ['engine' | 'view' | 'ggs', string][] => [
-  ['engine', t('settings.tab.engine')],
-  ['view', t('settings.tab.view')],
-  ['ggs', t('settings.tab.ggs')],
-];
 
 const themes = (): [Theme, string][] => [
   ['os', t('settings.theme.os')],
@@ -378,62 +307,83 @@ const languages = (): [Prefs['lang'], string][] => [
 ];
 
 function ThemeSwatch({ kind }: { kind: Theme }) {
-  const dark = '#16191d', light = '#faf8f3';
+  const dark = 'var(--swatch-dark)', light = 'var(--swatch-light)';
   return (
     <span style={{
       display: 'block', height: 38, borderRadius: 'var(--r-1)', width: '100%',
-      boxShadow: kind === 'dark' ? 'inset 0 0 0 1px var(--border)' : undefined,
+      boxShadow: 'inset 0 0 0 1px var(--border)',
       background: kind === 'dark' ? dark : kind === 'light' ? light
         : `linear-gradient(135deg, ${dark} 50%, ${light} 50%)`,
     }} />
   );
 }
 
-function Row2({ label, children }: { label: string; children: ReactNode }) {
-  return (
-    <div style={{ display: 'flex', alignItems: 'center', gap: 'var(--sp-3)', minHeight: 'var(--h-field)' }}>
-      <span style={{ width: 'var(--w-label)', flex: 'none', textAlign: 'right',
-                     fontSize: 'var(--fs-5)', color: 'var(--sub)' }}>{label}</span>
-      {children}
-    </div>
-  );
-}
-
-function ViewSettings({ prefs, setPref }: {
+export function ViewSettings({ prefs, setPref }: {
   prefs: Prefs;
   setPref: <K extends keyof Prefs>(k: K, v: Prefs[K]) => void;
 }) {
+  useLang();
   return (
     <>
-      <Section title={t('settings.language.label')}>
-        <span style={{ alignSelf: 'flex-start' }}>
+      <SettingGroup title={t('settings.screen.title')}>
+        <SettingRow label={t('settings.theme.title')}>
+          <div style={{ display: 'flex', gap: 'var(--sp-2h)', width: '100%', maxWidth: 420 }}>
+            {themes().map(([v, label]) => {
+              const on = prefs.theme === v;
+              return (
+                <button key={v} type="button" className="k-press" onClick={() => setPref('theme', v)}
+                  aria-pressed={on}
+                  style={{
+                    flex: 1, minWidth: 0, display: 'flex', flexDirection: 'column',
+                    gap: 'var(--sp-2)', padding: 'var(--sp-2)', borderRadius: 'var(--r-3)',
+                    background: on ? 'var(--panel)' : 'transparent', fontSize: 'var(--fs-6)',
+                    border: '1px solid ' + (on ? 'var(--accent)' : 'var(--border)'),
+                    color: on ? 'var(--text)' : 'var(--sub)', fontWeight: 400,
+                  }}>
+                  <ThemeSwatch kind={v} />
+                  {label}
+                </button>
+              );
+            })}
+          </div>
+        </SettingRow>
+        <SettingRow label={t('settings.language.label')}>
           <Select value={prefs.lang} onChange={(v) => setPref('lang', v as Prefs['lang'])}
-                  options={languages()} width={200} />
-        </span>
-      </Section>
-      <Section title={t('settings.theme.title')}>
-        <div style={{ display: 'flex', gap: 'var(--sp-2h)' }}>
-          {themes().map(([v, label]) => {
-            const on = prefs.theme === v;
-            return (
-              <button key={v} type="button" className="k-press" onClick={() => setPref('theme', v)}
-                aria-pressed={on}
-                style={{
-                  flex: 1, minWidth: 0, display: 'flex', flexDirection: 'column',
-                  gap: 'var(--sp-2)', padding: 'var(--sp-2)', borderRadius: 'var(--r-3)',
-                  background: on ? 'var(--panel)' : 'transparent', fontSize: 'var(--fs-6)',
-                  border: '1px solid ' + (on ? 'var(--accent)' : 'var(--border)'),
-                  color: on ? 'var(--text)' : 'var(--sub)', fontWeight: 400,
-                }}>
-                <ThemeSwatch kind={v} />
-                {label}
-              </button>
-            );
-          })}
-        </div>
-      </Section>
-      <Section title={t('settings.board.title')}>
-        <Row2 label={t('settings.board.tatami')}>
+                  options={languages()} width="var(--w-select)" />
+        </SettingRow>
+        <SettingRow label={t('settings.numbers.decimals')}>
+          <Segmented value={String(prefs.decimals)}
+                     onChange={(v) => setPref('decimals', +v as Prefs['decimals'])}
+                     options={[{ value: '0', label: '0' },
+                               { value: '1', label: '1' },
+                               { value: '2', label: '2' }]} />
+        </SettingRow>
+      </SettingGroup>
+      <SettingGroup title={t('settings.board.title')}>
+        <SettingRow label={t('settings.board.coords')}>
+          <span style={{ display: 'flex', alignItems: 'center', height: 'var(--h-ctrl)' }}>
+            <Toggle checked={prefs.coords} onChange={(v) => setPref('coords', v)} />
+          </span>
+        </SettingRow>
+        <SettingRow label={t('settings.board.grain')}>
+          <span style={{ display: 'flex', alignItems: 'center', height: 'var(--h-ctrl)' }}>
+            <Toggle checked={prefs.grain} onChange={(v) => setPref('grain', v)} />
+          </span>
+        </SettingRow>
+        <SettingRow label={t('settings.board.flip')}>
+          <Segmented value={String(prefs.flipMs)} onChange={(v) => setPref('flipMs', +v as Prefs['flipMs'])}
+                     options={[{ value: '0', label: t('settings.flip.none') },
+                               { value: '120', label: t('settings.flip.fast') },
+                               { value: '240', label: t('settings.flip.slow') }]} />
+        </SettingRow>
+        <SettingRow label={t('settings.board.facing')} help={t('settings.view.facing_help')}>
+          <Segmented value={prefs.facing} onChange={(v) => setPref('facing', v)} options={[
+            { value: 'black', label: t('settings.facing.black') },
+            { value: 'white', label: t('settings.facing.white') },
+            { value: 'auto', label: t('settings.facing.auto') },
+          ]} />
+        </SettingRow>
+        <SettingRow label={t('settings.board.tatami')}>
           <span style={{ display: 'flex', gap: 'var(--sp-2)' }}>
             {TATAMI.map((mat, i) => {
               const on = prefs.tatami === i;
@@ -443,7 +393,7 @@ function ViewSettings({ prefs, setPref }: {
                         onClick={() => setPref('tatami', i as Prefs['tatami'])}
                         title={label} aria-label={label} aria-pressed={on}
                         style={{
-                          width: 28, height: 28, borderRadius: 'var(--r-2)', padding: 0,
+                          width: 'var(--h-ctrl)', height: 'var(--h-ctrl)', borderRadius: 'var(--r-2)', padding: 0,
                           border: 0, background: mat.board,
                           boxShadow: on
                             ? '0 0 0 2px var(--accent), inset 0 0 0 1px var(--border)'
@@ -452,40 +402,8 @@ function ViewSettings({ prefs, setPref }: {
               );
             })}
           </span>
-        </Row2>
-        <Row2 label={t('settings.board.coords')}>
-          <Segmented value={prefs.coords ? 'on' : 'off'} onChange={(v) => setPref('coords', v === 'on')}
-                     options={[{ value: 'on', label: t('settings.show') },
-                               { value: 'off', label: t('settings.hide') }]} />
-        </Row2>
-        <Row2 label={t('settings.board.grain')}>
-          <Segmented value={prefs.grain ? 'on' : 'off'} onChange={(v) => setPref('grain', v === 'on')}
-                     options={[{ value: 'on', label: t('settings.show') },
-                               { value: 'off', label: t('settings.hide') }]} />
-        </Row2>
-        <Row2 label={t('settings.board.flip')}>
-          <Segmented value={String(prefs.flipMs)} onChange={(v) => setPref('flipMs', +v as Prefs['flipMs'])}
-                     options={[{ value: '0', label: t('settings.flip.none') },
-                               { value: '120', label: t('settings.flip.fast') },
-                               { value: '240', label: t('settings.flip.slow') }]} />
-        </Row2>
-        <Row2 label={t('settings.board.facing')}>
-          <Segmented value={prefs.facing} onChange={(v) => setPref('facing', v)} options={[
-            { value: 'black', label: t('settings.facing.black') },
-            { value: 'white', label: t('settings.facing.white') },
-            { value: 'auto', label: t('settings.facing.auto') },
-          ]} />
-        </Row2>
-      </Section>
-      <Section title={t('settings.numbers.title')}>
-        <Row2 label={t('settings.numbers.decimals')}>
-          <Segmented value={String(prefs.decimals)}
-                     onChange={(v) => setPref('decimals', +v as Prefs['decimals'])}
-                     options={[{ value: '0', label: '0' },
-                               { value: '1', label: '1' },
-                               { value: '2', label: '2' }]} />
-        </Row2>
-      </Section>
+        </SettingRow>
+      </SettingGroup>
     </>
   );
 }

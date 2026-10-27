@@ -3,23 +3,27 @@ import { PlayDock } from './PlayDock';
 import { useGame, type EngineSide } from './state';
 import { fmtSecs, useGgs } from './ggs';
 import { flipped, usePrefs } from './prefs';
-import type { GameView, GgsSnapshot } from './types';
-import { api, ggsApi, jsLog, onApp, type ActivityView } from './api';
+import type { GameView } from './types';
+import { api, ggsApi, jsLog, onApp } from './api';
 import { useActivity, useEngineSettings, useEngineTurn, useGraph, useHints, useLearnLog, useStartGame, type AskArgs } from './engine';
 import { connOf, evalsOf, ggsPlaying, movesOf, navBadges, sqName } from './adapt';
-import { AppFrame, BoardFit, Body, Busy, Divider, Dock, Main, Overlay, StatusBar, StatusStat, Toolbar, WindowBar, useToolbarCompact } from './components/layout';
+import { AppFrame, BoardFit, Body, Busy, Divider, Dock, Main, Toolbar, WindowBar, useToolbarCompact } from './components/layout';
 import { GgsScreen } from './GgsScreens';
-import { Confirm, PasteKifu, Settings } from './Dialogs';
+import { Confirm, PasteKifu } from './Dialogs';
 import { Board, type Cell } from './components/board';
 import { EvalGraph, MoveScrub, ScoreRow, StoneDot, srcIsBook, srcLabel } from './components/data';
-import { GgsStatus, JobList, Meter, Nav, navLocal, ggsNav, Toasts, type NavId } from './components/ggs';
+import { Nav, NavRow, navLocal, ggsNav, Toasts, type NavId } from './components/ggs';
 import { Button, Progress, Segmented, Select, Toggle } from './components/primitives';
-import { Icon } from './components/Icons';
-import { AccountList, PUBLIC_SERVER, type Account } from './components/accounts';
 import { BookDock, BookPane, BookTree, useBookBrowse } from './BookScreen';
 import { LearnLog } from './LearnLog';
 import { KifuViewer } from './KifuViewer';
 import { t, useLang, tErr } from './i18n';
+import { SettingsScreen, settingsTitle, useServers, type SettingsCat } from './SettingsScreen';
+import { AskSheet, askSheet, useAskSheet } from './AskSheet';
+import { onGgsFailure } from './ggsui';
+import { markApplied, useApplied } from './applied';
+import { Icon } from './components/Icons';
+import { GlobalStatus } from './GlobalStatus';
 
 
 function RolePicker({ value, onChange }: {
@@ -66,6 +70,7 @@ function reachable(raw: NavId, conn: ReturnType<typeof connOf>): NavId {
 export function App() {
   useLang();
   const { prefs, set: setPref } = usePrefs();
+  const applied = useApplied();
   const g = useGame(prefs.clockSecs);
   const ggs = useGgs();
   const [navRaw, setNavRaw] = useState<NavId>('play');
@@ -130,8 +135,19 @@ export function App() {
   >(null);
 
   const [paste, setPaste] = useState(false);
-  const [settings, setSettings] = useState(false);
-  const [settingsTab, setSettingsTab] = useState<'engine' | 'view' | 'ggs'>('engine');
+  const [settingsCat, setSettingsCat] = useState<SettingsCat>('engine');
+  const isSettings = nav === 'settings';
+  // The right panel exists on the play/study screens and on the book tab when there is a book;
+  // the toolbar's panel button and the room kept for the panel follow it.
+  const bookDock = isBook && bookTab === 'book' && book.node?.size !== 0;
+  const playDock = !isGgs && !isBook && !isSettings;
+  const hasDock = bookDock || playDock;
+  const asking = useAskSheet();
+  // The sheet only shows while connected; a sheet left open across a disconnect would stay
+  // invisible and still hold the keyboard shortcuts, so a lost connection closes it.
+  const askOnline = ggs.snap?.conn === 'online';
+  useEffect(() => { if (!askOnline) askSheet.close(); }, [askOnline]);
+  const { servers } = useServers();
 
   const started = useRef(false);
   const autoGraph = useRef<(() => void) | null>(null);
@@ -148,8 +164,9 @@ export function App() {
       const mc = v.match(/:clock(\d+)$/);
       if (mc) { setPref('clockSecs', +mc[1]); void api.setClock(+mc[1]); }
       if (who === 'settings') {
-        if (lv === 'ggs' || lv === 'view' || lv === 'engine') setSettingsTab(lv);
-        setSettings(true);
+        if (lv === 'view' || lv === 'engine') setSettingsCat(lv);
+        if (lv === 'ggs') setSettingsCat('ggs-account');
+        setNavRaw('settings');
         return;
       }
       if (who === 'overlay') {
@@ -255,6 +272,9 @@ export function App() {
     } catch (e) { g.say(tErr(e)); }
   };
 
+  // A GGS action a person asked for that failed (the screens report it through ggsui).
+  const sayFailure = g.say;
+  useEffect(() => onGgsFailure((e) => sayFailure(tErr(e))), [sayFailure]);
   const notice = ggs.snap?.notice ?? '';
   const fetched = ggs.snap?.fetched_ggf ?? null;
   useEffect(() => {
@@ -320,21 +340,23 @@ export function App() {
     const onKey = (e: KeyboardEvent) => {
       const el = e.target as HTMLElement | null;
       if (el && (el.tagName === 'INPUT' || el.tagName === 'TEXTAREA' || el.isContentEditable)) return;
-      if (paste || ask || viewer || settings) return;
+      if (paste || ask || viewer || asking) return;
       const cmd = e.metaKey || e.ctrlKey;
       const key = e.key.toLowerCase();
-      if (cmd && key === ',') { e.preventDefault(); setSettings(true); return; }
+      if (cmd && key === ',') { e.preventDefault(); setNav('settings'); return; }
       if (cmd && key === 'b') { e.preventDefault(); setNav('book'); return; }
-      if (cmd && key === 'n') { e.preventDefault(); if (!g.thinking) void g.newGame(); return; }
-      if (cmd && key === 's' && !isGgs && !isBook) {
+      // The game shortcuts act on the local board, so only where it is on screen (play and study);
+      // elsewhere ⌘Z stays the text fields' own undo.
+      if (cmd && key === 'n' && playDock) { e.preventDefault(); if (!g.thinking) void g.newGame(); return; }
+      if (cmd && key === 's' && playDock) {
         e.preventDefault();
         if (v && v.moves.length > 0) {
           void api.saveKifu(...ggfNames(g.side)).catch((err) => g.say(tErr(err)));
         }
         return;
       }
-      if (cmd && key === 'o' && !isGgs && !isBook) { e.preventDefault(); setPaste(true); return; }
-      if (cmd && key === 'z') {
+      if (cmd && key === 'o' && playDock) { e.preventDefault(); setPaste(true); return; }
+      if (cmd && key === 'z' && playDock) {
         e.preventDefault();
         if (!g.thinking && v && v.move_count > 0) void g.undo();
         return;
@@ -358,7 +380,7 @@ export function App() {
     };
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
-  }, [setNav, paste, ask, viewer, settings, isBook, isGgs, study, book, g, v]);
+  }, [setNav, paste, ask, viewer, asking, isBook, isGgs, playDock, study, book, g, v]);
 
   const over = v?.over ?? false;
   const result = v?.over
@@ -378,11 +400,12 @@ export function App() {
   const nodes = g.stat && g.stat.nodes > 0 ? g.stat.nodes : 0;
   const nps = nodes && g.stat && g.stat.secs > 0 ? nodes / g.stat.secs : 0;
   const lv = g.level === 'custom' ? t('app.level.custom') : t('app.level.preset', { n: g.level + 1 });
-  const screenTitle =
-    [...navLocal(), ...ggsNav(conn)].find((i) => i.id === nav)?.label ?? 'KUROOBI';
-  const screenSub = isGgs
-    ? (conn === 'online' ? ggs.snap?.login : undefined)
+  const screenTitle = isSettings ? t('settings.title')
+    : [...navLocal(), ...ggsNav(conn)].find((i) => i.id === nav)?.label ?? 'KUROOBI';
+  const screenSub = isGgs || isSettings ? undefined
     : isBook ? undefined
+    // Studying, KUROOBI plays no side; its level is the analysis strength.
+    : study ? t('app.study.analysis_level', { lv })
     : `${lv} · ${t(g.side === 'both' ? 'app.side.both'
         : g.side === 'off' ? 'app.side.none_assigned'
         : g.side === 'black' ? 'app.color.black' : 'app.color.white')}`;
@@ -397,32 +420,23 @@ export function App() {
 
       <Nav items={navLocal()} ggsItems={ggsNav(conn, navBadges(ggs.snap, chatUnread))} conn={conn}
            active={nav} onSelect={setNav}
-           footer={<>
-             {cpu && <>
-             <Meter icon="cpu" label={t('app.meter.cpu')} value={Math.round(cpu.cpu)} unit="%"
-                    ratio={cpu.cpu / (cpu.cores * 100)} />
-             <Meter icon="memory" label={t('app.meter.memory')} value={(cpu.mem / 1e9).toFixed(1)} unit={'\u00a0' + t('unit.gb')}
-                    ratio={cpu.mem_total > 0 ? cpu.mem / cpu.mem_total : 0} />
-             <JobList jobs={jobsOf(cpu)} />
-             </>}
-             <button type="button" className="k-press k-nav-settings"
-                     title={t('app.nav.settings_title')} aria-label={t('app.nav.settings')}
-                     onClick={() => setSettings(true)}
-                     style={{
-                       alignItems: 'center', justifyContent: 'center',
-                       gap: 'var(--sp-2)', height: 'var(--h-field)',
-                       border: '1px solid var(--border)', borderRadius: 'var(--r-2)',
-                       background: 'var(--card)', color: 'var(--text)',
-                       fontSize: 'var(--fs-6)', cursor: 'pointer', padding: 0,
-                     }}>
-               <Icon name="prefs" size={15} />
-               <span className="k-nav-label">{t('app.nav.settings')}</span>
-             </button>
-           </>} />
+           footer={<NavRow item={{ id: 'settings', label: t('ggs.nav.settings'), icon: 'prefs', hint: '⌘,' }}
+                           active={isSettings} onSelect={setNav} />} />
 
-      <Main inset={dockOpen && !isGgs}>
-      <Toolbar
-          dock={isGgs ? undefined : { open: dockOpen, onToggle: () => setDockOpen(o => !o) }}
+      <Main inset={dockOpen && hasDock}>
+      {isSettings && (
+        <Toolbar>
+          <span style={{ fontSize: 'var(--fs-3)', fontWeight: 600, whiteSpace: 'nowrap' }}>{settingsTitle(settingsCat)}</span>
+          {applied && (
+            <span style={{ marginLeft: 'auto', display: 'flex', alignItems: 'center', gap: 'var(--sp-1)',
+                           fontSize: 'var(--fs-6)', color: 'var(--ok)', whiteSpace: 'nowrap' }}>
+              <Icon name="check" size={14} />{t('settings.applied')}
+            </span>
+          )}
+        </Toolbar>
+      )}
+      {!isGgs && !isSettings && <Toolbar
+          dock={hasDock ? { open: dockOpen, onToggle: () => setDockOpen(o => !o) } : undefined}
           graph={study && !isGgs && !isBook
             ? { open: graphOpen, onToggle: () => setGraphOpen(o => !o) } : undefined}
           aux={isBook
@@ -432,9 +446,6 @@ export function App() {
                                                   total: cpu.learn[1].toLocaleString() })}
                   </span>
                 </Busy>
-              : undefined)
-            : isGgs ? (conn === 'online' && ggs.snap
-              ? <GgsStatus snap={ggs.snap} />
               : undefined)
             : undefined}>
           {isBook ? (
@@ -451,11 +462,6 @@ export function App() {
                 </span>
               </>}
             </>
-          ) : isGgs ? (
-            <span style={{ fontSize: 'var(--fs-5)', color: 'var(--sub)' }}>
-              {conn === 'online' && ggs.snap ? <>{t('app.ggs.connected')} <AccountSwitch snap={ggs.snap} /></>
-                : t(conn === 'offline' ? 'app.ggs.offline' : 'app.ggs.logging_in')}
-            </span>
           ) : study ? (
             <>
               <Button variant="primary" disabled={graph.busy || !v?.moves.length}
@@ -487,9 +493,12 @@ export function App() {
               <Toggle checked={g.autoHint} onChange={g.setAutoHint} label={t('app.play.show_evals')} />
             </>
           )}
-      </Toolbar>
+      </Toolbar>}
 
-        {isGgs ? <GgsScreen nav={nav} snap={ggs.snap} onNav={setNav} prefs={prefs}
+        {isSettings ? <SettingsScreen cat={settingsCat} onCat={setSettingsCat} prefs={prefs}
+                                       setPref={(k, v) => { setPref(k, v); markApplied(); }} snap={ggs.snap}
+                                       onLogin={() => setNav('ggs-login')} />
+         : isGgs ? <GgsScreen nav={nav} snap={ggs.snap} onNav={setNav} prefs={prefs}
                        onKifu={(title, kifu, archive) => {
                          if (archive) {
                            setViewer({ title, kifu: '', pending: archive, archive });
@@ -506,7 +515,7 @@ export function App() {
                           onStudy={(kifu) => { setNav('study'); void loadFromText(kifu); }} />
               )}
               <BookPane b={book} coords={prefs.coords} grain={prefs.grain}
-                        flip={flipped(prefs.facing, '')} onSettings={() => setSettings(true)} />
+                        flip={flipped(prefs.facing, '')} onSettings={() => { setSettingsCat('engine'); setNav('settings'); }} />
             </div>
           ) : (
             <div style={{ flex: 1, minHeight: 0, display: 'flex' }}>
@@ -557,7 +566,7 @@ export function App() {
           <EvalGraph points={povPoints} plies={v?.moves.length} cursor={v?.cursor}
                      blunder={blunder} busy={graph.busy} onJump={(n) => void g.jumpTo(n)}
                      open={graphOpen} pov={pov}
-                     moveName={(n) => { const m = v?.moves[n - 1]; return m == null ? undefined : sqName(m); }}
+                     moveName={(n) => { if (!v || n < 1 || n > v.moves.length) return undefined; const m = v.moves[n - 1]; return m == null ? t('app.moves.pass') : sqName(m); }}
                      extra={<>
                        {graph.prog && (
                          <span style={{ display: 'flex', alignItems: 'center', gap: 'var(--sp-2)' }}>
@@ -575,13 +584,13 @@ export function App() {
 
       </Main>
 
-      {isBook && bookTab === 'book' && book.node?.size !== 0 && (
+      {bookDock && (
         <Dock tabs={[{ id: 'book', label: t('app.book.tab_book') }]} active="book" open={dockOpen}>
           <BookDock b={book} decimals={prefs.decimals} />
         </Dock>
       )}
 
-      {!isGgs && !isBook && (
+      {playDock && (
         <PlayDock g={g} book={book} cpu={cpu} prefs={prefs} tab={tab} onTab={setTab}
                   open={dockOpen} onNav={setNav} onBookTab={setBookTab}
                   onPaste={() => setPaste(true)} onLoadFile={loadFromFile}
@@ -590,39 +599,8 @@ export function App() {
 
       </Body>
 
-        <StatusBar
-          left={<>
-            {graph.busy && (
-              <Busy>{t('app.status.analyzing')}</Busy>
-            )}
-            {g.thinking && (
-              <Busy>{t('app.status.thinking')}</Busy>
-            )}
-            {g.thinking && <StatusStat value={g.thinkSecs.toFixed(1)} unit={t('unit.s')} />}
-            {nodes > 0 && <StatusStat label={t('unit.nodes')} value={fmtNodes(nodes)} />}
-            {nps > 0 && <StatusStat label={t('unit.nps')} value={(nps / 1e6).toFixed(1)} unit={t('unit.mnps')} />}
-          </>}
-          right={isGgs
-            ? <>
-              <StatusStat label="GGS" value={t(conn === 'online' ? 'app.ggs.connected'
-                : conn === 'offline' ? 'app.ggs.offline' : 'app.ggs.connecting')} />
-            </>
-            : isBook
-            ? <>
-              <StatusStat label={t('app.status.stored_positions')}
-                          value={book.node ? book.node.size.toLocaleString() : '—'} />
-              <StatusStat label={t('app.status.of_which_learned')}
-                          value={book.node ? book.node.learned_size.toLocaleString() : '—'} />
-            </>
-            : <>
-              {study && v && <StatusStat label={t('app.status.record')} value={v.cursor}
-                                         unit={t('app.status.of_moves', { n: v.moves.length })} />}
-              {study && <StatusStat value={t(pov === 'b' ? 'app.study.black_view' : 'app.study.white_view')} />}
-              <StatusStat label={t('app.status.book')}
-                          value={t(g.hasBook ? (g.useBook ? 'app.status.book_on' : 'app.status.book_off')
-                            : 'app.status.book_none')} />
-              <StatusStat label="KUROOBI" value={lv} />
-            </>} />
+        <GlobalStatus snap={ggs.snap} cpu={cpu} analyzing={graph.busy ? graph.prog : null} thinking={g.thinking}
+                      thinkSecs={g.thinkSecs} nodes={nodes} nps={nps} servers={servers} />
 
 
       {ask && (
@@ -633,7 +611,7 @@ export function App() {
 
       {viewer && (
         <KifuViewer title={viewer.title} kifu={viewer.kifu}
-                    parts={viewer.parts} me={ggs.snap?.login}
+                    parts={viewer.parts}
                     onClose={() => setViewer(null)}
                     onRefetch={viewer.archive && viewer.pending !== viewer.archive
                       ? () => {
@@ -651,13 +629,7 @@ export function App() {
                    onLoad={(t) => void loadFromText(t)} />
       )}
 
-      {settings && (
-        <Overlay onClose={() => setSettings(false)}>
-          <Settings prefs={prefs} setPref={setPref} ggs={ggs.snap}
-                    initialTab={settingsTab}
-                    onClose={() => setSettings(false)} />
-        </Overlay>
-      )}
+      {asking && ggs.snap?.conn === 'online' && <AskSheet snap={ggs.snap} init={asking} />}
 
       <Toasts items={g.toasts} onDismiss={g.dismiss} />
     </AppFrame>
@@ -677,57 +649,6 @@ const envLabels = (): Record<string, string> => ({
   KUROOBI_SESSION_LOCK: t('app.env.session_lock'),
   KUROOBI_WEIGHTS_DIR: t('app.env.weights_dir'),
 });
-
-function AccountSwitch({ snap }: { snap: GgsSnapshot }) {
-  const [open, setOpen] = useState<DOMRect | null>(null);
-  const [saved, setSaved] = useState<Account[]>([]);
-  const box = useRef<HTMLSpanElement>(null);
-  const load = () => void ggsApi.accounts().then(setSaved).catch(() => {});
-  useEffect(load, [snap.login, snap.server]);
-  useEffect(() => {
-    if (!open) return;
-    const away = (e: MouseEvent) => { if (!box.current?.contains(e.target as Node)) setOpen(null); };
-    const esc = (e: KeyboardEvent) => { if (e.key === 'Escape') setOpen(null); };
-    window.addEventListener('mousedown', away);
-    window.addEventListener('keydown', esc);
-    return () => { window.removeEventListener('mousedown', away); window.removeEventListener('keydown', esc); };
-  }, [open]);
-  const label = snap.server && snap.server !== PUBLIC_SERVER ? `${snap.login} @ ${snap.server}` : snap.login;
-  return (
-    <span ref={box} style={{ position: 'relative', display: 'inline-block', marginLeft: 'var(--sp-1)' }}>
-      <button type="button" className="k-press" title={t('app.ggs.switch_account')} aria-expanded={!!open}
-              onClick={(e) => { if (!open) load(); setOpen(open ? null : e.currentTarget.getBoundingClientRect()); }} style={{
-        display: 'inline-flex', alignItems: 'center', gap: 'var(--sp-1)',
-        padding: '2px 8px', borderRadius: 'var(--r-2)', border: '1px solid var(--border)',
-        background: 'var(--panel)', color: 'var(--text)', fontWeight: 600, fontSize: 'var(--fs-5)', cursor: 'pointer',
-      }}>
-        {label}<span style={{ color: 'var(--sub)', fontSize: 'var(--fs-7)' }}>▾</span>
-      </button>
-      {open && (
-        // Fixed, because the toolbar clips overflow.
-        <div role="menu" style={{
-          position: 'fixed', top: open.bottom + 4, left: open.left, zIndex: 50, width: 320, maxHeight: 440,
-          display: 'flex', flexDirection: 'column', overflow: 'hidden',
-          background: 'var(--bg)', border: '1px solid var(--border)', borderRadius: 'var(--r-3)', boxShadow: 'var(--sh-2)',
-        }}>
-          <AccountList accounts={saved} current={`${snap.server}|${snap.login}`}
-                       onSelect={(a) => {
-                         if (a.server === snap.server && a.login === snap.login) return;
-                         setOpen(null);
-                         void ggsApi.switchAccount(a.server, a.login);
-                       }} />
-          <button type="button" className="k-row" role="menuitem"
-                  onClick={() => { setOpen(null); void ggsApi.disconnect(); }} style={{
-            flex: 'none', width: '100%', border: 0, borderTop: '1px solid var(--border)', textAlign: 'left',
-            padding: 'var(--sp-2) var(--sp-3)', background: 'transparent', color: 'var(--bad)', fontSize: 'var(--fs-5)',
-          }}>
-            {t('ggs.settings.logout')}
-          </button>
-        </div>
-      )}
-    </span>
-  );
-}
 
 function EnvTags({ items }: { items: [string, string][] }) {
   if (!items.length) return null;
@@ -757,21 +678,3 @@ function ggfNames(side: 'black' | 'white' | 'both' | 'off'): [string, string] {
   return [me, me];
 }
 
-const fmtNodes = (n: number): string =>
-  n >= 1e9 ? (n / 1e9).toFixed(1) + 'G' : n >= 1e6 ? (n / 1e6).toFixed(1) + 'M'
-    : n >= 1e3 ? (n / 1e3).toFixed(0) + 'k' : String(n);
-
-function jobsOf(cpu: ActivityView) {
-  const jobs: { label: string; threads?: number; yielded?: boolean }[] = [];
-  if (cpu.local)
-    jobs.push({
-      label: t('activity.' + cpu.local),
-      threads: cpu.local === 'loading' ? undefined : cpu.local_threads,
-    });
-  if (cpu.ggs_match) jobs.push({ label: t('app.jobs.ggs_game'), threads: cpu.ggs_thinking ? cpu.ggs_threads : undefined });
-  if (cpu.learn) {
-    jobs.push({ label: t('app.jobs.learning', { done: cpu.learn[0], total: cpu.learn[1] }),
-                yielded: cpu.learn_paused });
-  }
-  return jobs;
-}

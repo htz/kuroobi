@@ -34,7 +34,8 @@ export function Button({ variant = 'secondary', size = 'ctrl', disabled, childre
         height: H[size],
         width: square ? H[size] : undefined, flex: square ? 'none' : undefined,
         padding: square ? 0 : variant === 'primary' && size === 'ctrl' ? '0 14px' : PAD[size],
-        borderRadius: R[size], fontSize: FS[size],
+        // Set, not inherited: a button inside a heading would take its weight and spacing.
+        borderRadius: R[size], fontSize: FS[size], fontWeight: 400, letterSpacing: 0, lineHeight: 1,
         display: 'inline-grid', placeItems: 'center', whiteSpace: 'nowrap',
         opacity: disabled ? 0.4 : 1, ...skin,
       }}
@@ -78,11 +79,13 @@ export function Segmented<T extends string>({ value, options, onChange, fill, di
   );
 }
 
-export function Toggle({ checked, onChange, label }: { checked: boolean; onChange?: (v: boolean) => void; label?: string }) {
+export function Toggle({ checked, onChange, label, disabled }: {
+  checked: boolean; onChange?: (v: boolean) => void; label?: string; disabled?: boolean;
+}) {
   return (
-    <label style={{ display: 'flex', alignItems: 'center', gap: 'var(--sp-3)', fontSize: 'var(--fs-5)' }}>
+    <label style={{ display: 'flex', alignItems: 'center', gap: 'var(--sp-3)', fontSize: 'var(--fs-5)', opacity: disabled ? 0.4 : 1 }}>
       {label && <span>{label}</span>}
-      <button type="button" role="switch" aria-checked={checked} onClick={() => onChange?.(!checked)}
+      <button type="button" role="switch" aria-checked={checked} disabled={disabled} onClick={() => onChange?.(!checked)}
         className="k-press"
         style={{
           marginLeft: 'auto', flex: 'none', width: 34, height: 20, borderRadius: 'var(--r-pill)', border: 0,
@@ -103,7 +106,7 @@ export function Select({ value, options, onChange, size = 'field', width, title 
   options: [string, string][];        // [value, label]
   onChange?: (v: string) => void;
   size?: Size;
-  width?: number;                     // min width, for aligned columns
+  width?: number | string;            // min width, for aligned columns
   title?: string;
 }) {
   const label = options.find(([v]) => v === value)?.[1] ?? value;
@@ -176,7 +179,7 @@ export function TextField({ value, onChange, mono, invalid, placeholder, numeric
           : decimal ? e.target.value.replace(/[^\d.]/g, '') : e.target.value)}
       className="k-input"
       style={{
-        flexGrow: width ? 0 : 1, flexShrink: 1, flexBasis: 'auto', width, minWidth: 0,
+        flexGrow: width ? 0 : 1, flexShrink: width ? 0 : 1, flexBasis: 'auto', width, minWidth: 0,
         height: 'var(--h-field)', padding: '0 var(--sp-3)', borderRadius: 'var(--r-3)',
         background: 'var(--bg)', border: '1px solid ' + (invalid ? 'var(--bad)' : 'var(--border)'),
         fontFamily: mono ? 'var(--ff-mono)' : 'var(--ff)', fontSize: 'var(--fs-5)',

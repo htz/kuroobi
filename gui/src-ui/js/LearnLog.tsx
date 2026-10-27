@@ -5,6 +5,7 @@ import { Board } from './components/board';
 import { BoardFit, Col, Empty, KeyValue, List, Section, TableHead, TableRow } from './components/layout';
 import { Button, Segmented, Select } from './components/primitives';
 import { t } from './i18n';
+import { whenShort } from './when';
 
 
 const lossOf = (c: LearnChange) => c.best - c.after;
@@ -63,17 +64,11 @@ export function LearnLog({ items: all, onOpen, onUndo, onBook }: {
     ? shown[Math.min(bad?.ply ?? shown.length - 1, shown.length - 1)]
     : null;
 
-  if (!items.length || !cur) {
+  // Nothing imported at all: there is nothing to filter either.
+  if (!all.length) {
     return (
       <Section title={t('learn.section.imported')}>
-        {hidden > 0 ? (
-          <div style={{ display: 'flex', alignItems: 'center', gap: 'var(--sp-3)' }}>
-            <Empty>{t('learn.empty.filtered', { n: hidden })}</Empty>
-            <Button size="ctrl" onClick={() => setDays('0')}>{t('learn.empty.show_all')}</Button>
-          </div>
-        ) : (
-          <Empty>{t('learn.empty.none')}</Empty>
-        )}
+        <Empty>{t('learn.empty.none')}</Empty>
       </Section>
     );
   }
@@ -100,14 +95,21 @@ export function LearnLog({ items: all, onOpen, onUndo, onBook }: {
         </div>
         <TableHead cols={cols} />
         <div className="k-scroll" style={{ flex: 1, minHeight: 0, padding: '0 var(--sp-3)' }}>
+          {/* A filter that leaves nothing keeps its bar, so it can be undone right here. */}
+          {!items.length && (
+            <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-start', gap: 'var(--sp-2)', padding: 'var(--sp-3) 0' }}>
+              <Empty>{t('learn.empty.filtered', { n: hidden })}</Empty>
+              <Button size="ctrl" onClick={() => { setDays('0'); setOnly('all'); }}>{t('learn.empty.show_all')}</Button>
+            </div>
+          )}
           <List>
             {items.map((e) => {
-              const on = keyOf(e) === keyOf(cur);
+              const on = !!cur && keyOf(e) === keyOf(cur);
               return (
                 <TableRow key={keyOf(e)} cols={cols} on={on} pad="var(--sp-1)" fs="var(--fs-6)"
                           onClick={() => setSel(keyOf(e))}>
                   <span>
-                    <span style={{ color: 'var(--sub)' }}>{fmtWhen(e.at)}</span>
+                    <span style={{ color: 'var(--sub)' }}>{whenShort(e.at)}</span>
                     {' '}{e.opponent || 'KUROOBI'}
                   </span>
                   <span>{e.black}–{e.white}</span>
@@ -132,17 +134,19 @@ export function LearnLog({ items: all, onOpen, onUndo, onBook }: {
         </div>
       </div>
 
+      {!cur ? <div style={{ flex: 1 }} /> : <>
       <BlunderPane cur={cur} bad={bad} frame={frame} onOpen={onOpen} />
 
-      <div className="k-scroll" style={{
-        width: 'var(--w-dock)', flex: 'none', minHeight: 0,
+      {/* Its width is moved by a breakpoint (base.css), so it is not written here. */}
+      <div className="k-scroll k-learn-side" style={{
+        flex: 'none', minHeight: 0,
         borderLeft: '1px solid var(--border)', padding: 'var(--sp-3) 0',
       }}>
         <Section title={t('learn.section.game')}>
           <KeyValue label={t('learn.game.opponent')} value={cur.opponent || 'KUROOBI'} />
           <KeyValue label={t('learn.col.discs')} value={`${cur.black} – ${cur.white}`} />
           <KeyValue label={t('learn.game.imported')}
-                    value={t('learn.game.imported_value', { n: cur.positions, when: fmtWhen(cur.at) })} />
+                    value={t('learn.game.imported_value', { n: cur.positions, when: whenShort(cur.at) })} />
         </Section>
 
         <Section title={t('learn.section.changes')} aside={<span>{cur.changes.length}</span>}>
@@ -183,20 +187,12 @@ export function LearnLog({ items: all, onOpen, onUndo, onBook }: {
                   onClick={() => onUndo(cur)}>{t('learn.action.undo')}</Button>
         </div>
       </div>
+      </>}
     </div>
   );
 }
 
 
-function fmtWhen(secs: number): string {
-  const d = new Date(secs * 1000);
-  const now = new Date();
-  const sameDay = d.getFullYear() === now.getFullYear() && d.getMonth() === now.getMonth()
-    && d.getDate() === now.getDate();
-  const p2 = (n: number) => String(n).padStart(2, '0');
-  return sameDay ? `${p2(d.getHours())}:${p2(d.getMinutes())}`
-    : `${d.getMonth() + 1}/${p2(d.getDate())}`;
-}
 
 function BlunderPane({ cur, bad, frame, onOpen }: {
   cur: LearnEntry;

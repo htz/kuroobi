@@ -13,7 +13,10 @@ const keyOf = (line: number[]) => line.map(sqName).join('');
 
 export interface BookBrowse {
   line: number[];
+  /** The position on screen; null until the book has answered for it. */
   node: BookNode | null;
+  /** The last position the book answered for, kept on screen while the next one loads. */
+  shown: BookNode | null;
   nodes: Record<string, BookNode>;
   open: ReadonlySet<string>;
   toggle: (key: string) => void;
@@ -39,6 +42,9 @@ export function useBookBrowse(on: boolean): BookBrowse {
   const [err, setErr] = useState('');
 
   const root = keyOf(line);
+  const node = nodes[root] ?? null;
+  const [shown, setShown] = useState<BookNode | null>(null);
+  if (node && node !== shown) setShown(node);
 
   const want = useMemo(() => {
     const need = new Set<string>([root]);
@@ -78,7 +84,8 @@ export function useBookBrowse(on: boolean): BookBrowse {
 
   return {
     line,
-    node: nodes[root] ?? null,
+    node,
+    shown,
     nodes,
     open,
     toggle,
@@ -94,7 +101,8 @@ export function BookPane({ b, coords, grain, flip, onSettings }: {
   b: BookBrowse; coords: boolean; grain: boolean; flip: boolean;
   onSettings: () => void;
 }) {
-  const n = b.node;
+  // While the next position loads, the board keeps the last one instead of jumping to the start.
+  const n = b.node ?? b.shown;
   if (n && n.size === 0) {
     return (
       <EmptyState title={t('book.empty.no_book_title')}
@@ -111,10 +119,10 @@ export function BookPane({ b, coords, grain, flip, onSettings }: {
     <div style={{ flex: 1, minWidth: 0, minHeight: 0, display: 'flex', flexDirection: 'column' }}>
       <BoardFit padding="var(--sp-2) var(--sp-4)">
         <Board cells={(n?.cells ?? INITIAL) as (0 | 1 | 2)[]}
-               legal={n?.moves.map((m) => m.pos) ?? []}
+               legal={b.node?.moves.map((m) => m.pos) ?? []}
                last={b.line.length ? b.line[b.line.length - 1] : null}
                evals={evals} coords={coords} grain={grain} flip={flip}
-               onPlay={(sq) => { if (n?.moves.some((m) => m.pos === sq)) b.push(sq); }} />
+               onPlay={(sq) => { if (b.node?.moves.some((m) => m.pos === sq)) b.push(sq); }} />
       </BoardFit>
       <ScoreRow black={n?.black ?? 2} white={n?.white ?? 2}
                 turn={n?.player === 'white' ? 'w' : 'b'}
@@ -176,7 +184,7 @@ export function BookDock({ b, decimals }: { b: BookBrowse; decimals: number }) {
 
       <Section title={t('book.section.next')} aside={n ? <span>{n.moves.length}</span> : undefined}>
         {!n || n.moves.length === 0 ? (
-          <Empty>{n ? t('book.empty.end_of_line') : t('book.empty.not_in_book')}</Empty>
+          <Empty>{n ? t('book.empty.end_of_line') : t('ggs.loading')}</Empty>
         ) : (
           <List>
             {n.moves.map((m) => (
@@ -245,7 +253,8 @@ function BookRow({ r, open, onToggle, onGo, decimals }: {
 }) {
   const leaf = r.child && r.child.moves.length === 0;
   return (
-    <div className="k-row" style={{
+    // The row's own button (the move) carries the hover; the wrapper only lays it out.
+    <div style={{
       display: 'flex', alignItems: 'center', height: 'var(--h-row)',
       paddingLeft: r.depth * 16, borderRadius: 'var(--r-2)',
       borderBottom: '1px solid var(--border-weak)',
