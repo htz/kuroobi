@@ -27,6 +27,10 @@ struct App {
     clocks: Mutex<Clocks>,
 }
 
+/// The local game clock. It runs only while a game is being played (`run`), and it remembers both
+/// times after every ply, so going back in the record (take-back, a click on a past move) puts the
+/// times back too. A ply nobody timed (a loaded record, moves played without a clock) counts as
+/// both times full: a game timed from there starts fresh.
 #[derive(Default)]
 struct Clocks {
     total: u64,
@@ -34,6 +38,7 @@ struct Clocks {
     white: f64,
     lost: Option<kuroobi::Color>,
     turn_started: Option<std::time::Instant>,
+    marks: Vec<Option<(f64, f64)>>,
 }
 
 impl Clocks {
@@ -42,22 +47,58 @@ impl Clocks {
         self.black = total as f64;
         self.white = total as f64;
         self.lost = None;
-        self.turn_started = if total > 0 {
-            Some(std::time::Instant::now())
-        } else {
-            None
-        };
+        self.turn_started = None;
+        self.marks.clear();
     }
 
-    fn turn_done(&mut self, mover: kuroobi::Color) {
+    /// Starts or stops the side to move's clock (a game started, stopped or paused).
+    fn run(&mut self, on: bool, to_move: kuroobi::Color) {
         if self.total == 0 {
             return;
         }
+        match (on, self.turn_started.take()) {
+            (true, None) if self.lost.is_none() => {
+                self.turn_started = Some(std::time::Instant::now())
+            }
+            (true, Some(t)) => self.turn_started = Some(t),
+            (false, Some(t)) => self.spend(to_move, t.elapsed().as_secs_f64()),
+            _ => {}
+        }
+    }
+
+    /// `mover` finished a turn and the record is now `from` .. `to` plies long (passes that followed
+    /// the move included); the next turn's clock starts if the clock is running.
+    fn moved(&mut self, mover: kuroobi::Color, from: usize, to: usize) {
         if let Some(t) = self.turn_started.take() {
             self.spend(mover, t.elapsed().as_secs_f64());
+            if self.lost.is_none() {
+                self.turn_started = Some(std::time::Instant::now());
+            }
         }
-        self.turn_started = Some(std::time::Instant::now());
+        self.marks.truncate(from + 1);
+        self.marks.resize(from + 1, None);
+        for _ in from + 1..=to {
+            self.marks.push(Some((self.black, self.white)));
+        }
     }
+
+    /// The record moved to `ply` without anyone playing (take-back, seek, a loaded record).
+    fn seek(&mut self, ply: usize) {
+        let full = self.total as f64;
+        let (b, w) = self
+            .marks
+            .get(ply)
+            .copied()
+            .flatten()
+            .unwrap_or((full, full));
+        self.black = b;
+        self.white = w;
+        self.lost = None;
+        if self.turn_started.is_some() {
+            self.turn_started = Some(std::time::Instant::now());
+        }
+    }
+
     fn left(&self, c: kuroobi::Color) -> f64 {
         if c == kuroobi::Color::Black {
             self.black
@@ -66,6 +107,9 @@ impl Clocks {
         }
     }
     fn spend(&mut self, c: kuroobi::Color, secs: f64) {
+        if self.total == 0 {
+            return;
+        }
         let v = if c == kuroobi::Color::Black {
             &mut self.black
         } else {
@@ -425,8 +469,13 @@ fn new_game(app: State<App>) -> GameView {
 fn play(app: State<App>, sq: u8) -> Result<GameView, String> {
     let mut game = app.game.lock().unwrap();
     let pos = Position::from_index(sq as u32).ok_or("err.bad_square")?;
+    let (mover, from) = (game.board.player(), game.move_count());
     game.make_move(pos).map_err(|e| format!("{e:?}"))?;
     auto_pass(&mut game);
+    app.clocks
+        .lock()
+        .unwrap()
+        .moved(mover, from, game.move_count());
     Ok(view(&game))
 }
 
@@ -440,6 +489,7 @@ fn undo(app: State<App>) -> Result<GameView, String> {
             break;
         }
     }
+    app.clocks.lock().unwrap().seek(game.move_count());
     Ok(view(&game))
 }
 
@@ -450,6 +500,7 @@ fn goto(app: State<App>, n: usize) -> Result<GameView, String> {
         return Err("out of range".into());
     }
     seek(&mut game, n)?;
+    app.clocks.lock().unwrap().seek(n);
     Ok(view(&game))
 }
 
@@ -990,7 +1041,19 @@ fn clocks(app: State<App>) -> ClockView {
 
 #[tauri::command]
 fn set_clock(app: State<App>, secs: u64) -> ClockView {
-    app.clocks.lock().unwrap().reset(secs);
+    let ply = app.game.lock().unwrap().move_count();
+    let mut c = app.clocks.lock().unwrap();
+    c.reset(secs);
+    c.seek(ply);
+    drop(c);
+    clocks(app)
+}
+
+/// Runs the clock while the local game is being played, and holds it otherwise.
+#[tauri::command]
+fn run_clock(app: State<App>, on: bool) -> ClockView {
+    let to_move = app.game.lock().unwrap().board.player();
+    app.clocks.lock().unwrap().run(on, to_move);
     clocks(app)
 }
 
@@ -1049,8 +1112,7 @@ async fn think(app: State<'_, App>) -> Result<ThinkView, String> {
 #[tauri::command]
 fn apply_move(app: State<App>, sq: Option<u8>) -> Result<GameView, String> {
     let mut game = app.game.lock().unwrap();
-    let mover = game.board.player();
-    app.clocks.lock().unwrap().turn_done(mover);
+    let (mover, from) = (game.board.player(), game.move_count());
     match sq {
         Some(s) => {
             let pos = Position::from_index(s as u32).ok_or("err.bad_square")?;
@@ -1059,6 +1121,10 @@ fn apply_move(app: State<App>, sq: Option<u8>) -> Result<GameView, String> {
         None => game.pass(),
     }
     auto_pass(&mut game);
+    app.clocks
+        .lock()
+        .unwrap()
+        .moved(mover, from, game.move_count());
     Ok(view(&game))
 }
 
@@ -1366,6 +1432,7 @@ fn load_kifu_into(app: &State<App>, text: &str) -> Result<GameView, String> {
     if let Some(loaded) = game_from_text(text) {
         let mut game = app.game.lock().unwrap();
         *game = loaded;
+        clock_loaded(app, &game);
         return Ok(view(&game));
     }
     let (start, s) = plain_record(text);
@@ -1382,7 +1449,15 @@ fn load_kifu_into(app: &State<App>, text: &str) -> Result<GameView, String> {
     })?;
     let mut game = app.game.lock().unwrap();
     *game = loaded;
+    clock_loaded(app, &game);
     Ok(view(&game))
+}
+
+/// A loaded record was played without this clock, so every ply of it counts as both times full.
+fn clock_loaded(app: &State<App>, game: &Reversi) {
+    let mut c = app.clocks.lock().unwrap();
+    c.marks.clear();
+    c.seek(game.move_count());
 }
 
 #[tauri::command]
@@ -2021,6 +2096,7 @@ fn main() {
             set_backend_strings,
             clocks,
             set_clock,
+            run_clock,
             state,
             new_game,
             play,
@@ -2108,6 +2184,54 @@ fn main() {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn clock_goes_back_with_the_record() {
+        use kuroobi::Color::{Black, White};
+        let mut c = Clocks::default();
+        c.reset(600);
+        // Untimed plies before the clock ran (a loaded record) count as full.
+        c.black = 500.0;
+        c.moved(Black, 0, 1);
+        c.white = 450.0;
+        c.moved(White, 1, 3); // a move followed by a pass
+        c.seek(2);
+        assert_eq!(
+            (c.black, c.white),
+            (500.0, 450.0),
+            "the ply after the move but before the pass"
+        );
+        c.seek(1);
+        assert_eq!((c.black, c.white), (500.0, 600.0));
+        c.seek(0);
+        assert_eq!((c.black, c.white), (600.0, 600.0));
+        // Going forward again finds the times the record had.
+        c.seek(3);
+        assert_eq!((c.black, c.white), (500.0, 450.0));
+        // A new move from an earlier ply drops the later times.
+        c.seek(1);
+        c.white = 300.0;
+        c.moved(White, 1, 2);
+        assert_eq!(c.marks.len(), 3);
+        c.seek(2);
+        assert_eq!(c.white, 300.0);
+    }
+
+    #[test]
+    fn clock_runs_only_while_played() {
+        use kuroobi::Color::Black;
+        let mut c = Clocks::default();
+        c.reset(600);
+        assert!(
+            c.turn_started.is_none(),
+            "a reset clock waits for the game to start"
+        );
+        c.run(true, Black);
+        assert!(c.turn_started.is_some());
+        c.run(false, Black);
+        assert!(c.turn_started.is_none());
+        assert!(c.black <= 600.0);
+    }
 
     #[test]
     fn shape_and_absence_are_different_errors() {
