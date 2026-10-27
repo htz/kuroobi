@@ -111,6 +111,8 @@ backend:
     weights: "重み"
   notify:
     abort_request_title: "GGS: 中止の申し出"
+    auto_match_refused_body: "{name} が申し込みを受けないため"
+    auto_match_refused_title: "GGS: 自動対局を止めました"
     connect_blocked_body: "別のウィンドウが接続中です"
     connect_blocked_title: "GGS: 接続できません"
     disconnected_body: "10 秒後に自動再接続します"
@@ -291,6 +293,7 @@ engine:
     no_record: "棋譜がありません"
     white_flagged: "白の時間切れ"
 err:
+  auto_match_refused: "{name} が申し込みを続けて断ったため、自動対局を止めました。"
   bad_formula_kind: "申し込みの扱いの種別が不正です ({kind})"
   bad_log_channel: "思考ログのチャンネル名が不正です (「.」に続けて英数字・_・- を 1〜7 文字)"
   bad_square: "そのマスはありません"

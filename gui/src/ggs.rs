@@ -1744,6 +1744,12 @@ struct Ctx {
     workers: Vec<EngineWorker>,
     /// A login asked for while a session was up; the session ends and this one starts.
     reconnect: Option<(String, String, String)>,
+    /// Request ids we cancelled ourselves, so their removal is not taken as a refusal.
+    cancelled: std::collections::HashSet<String>,
+    /// The auto-match opponent took our request away this many times in a row without a game.
+    ask_refusals: u32,
+    /// A game with the auto-match opponent started since the last ask.
+    ask_matched: bool,
 }
 
 const MAX_WORKERS: usize = 2;
@@ -2132,6 +2138,9 @@ fn new_ctx(
         pending_watch: HashMap::new(),
         reconnect: None,
         workers: Vec::new(),
+        cancelled: std::collections::HashSet::new(),
+        ask_refusals: 0,
+        ask_matched: false,
     };
     ctx.snap.lock().unwrap().engine = EngineCfgView {
         threads: ctx.engine_cfg.threads,
@@ -2669,6 +2678,7 @@ fn standby_tick(ctx: &mut Ctx, w: &mut Wire, mut send: impl FnMut(String)) {
         return;
     }
     ctx.log("info", &format!("auto match: asking {}", sb.opponent));
+    ctx.ask_matched = false;
     let rated = if sb.rated && !no_rated() { "+" } else { "-" };
     say(ctx, &mut send, format!("tell /os rated {rated}"));
     say(
@@ -2789,7 +2799,13 @@ fn handle_cmd(
             send("quit".to_string());
             quit = true;
         }
-        Cmd::Raw(c) => send(c),
+        Cmd::Raw(c) => {
+            if let Some(ids) = c.strip_prefix("tell /os cancel ") {
+                ctx.cancelled
+                    .extend(ids.split_whitespace().map(str::to_string));
+            }
+            send(c)
+        }
         Cmd::ChatSeen(at) => {
             save_chat_seen(login, at);
             let mut s = ctx.snap.lock().unwrap();
@@ -2972,6 +2988,7 @@ fn handle_cmd(
             s.standby = cfg.needing_opponent();
             if !was && s.standby.enabled {
                 s.standby_stats = Default::default();
+                ctx.ask_refusals = 0;
             }
             let take = if s.standby.enabled && s.standby.auto_accept {
                 let busy = s.matches.iter().any(|m| !m.over);
@@ -3009,6 +3026,11 @@ fn handle_os_line(
         if let Some(mrest) = rest.strip_prefix("match ") {
             let id = mrest.split_whitespace().next().unwrap_or("").to_string();
             if mrest.split_whitespace().any(|t| t == login) {
+                let opp = ctx.snap.lock().unwrap().standby.opponent.clone();
+                if !opp.is_empty() && mrest.split_whitespace().any(|t| t == opp) {
+                    ctx.ask_matched = true;
+                    ctx.ask_refusals = 0;
+                }
                 // A game against someone we had an adjourned game with is that game resumed:
                 // the stored list and the old adjourned boards are out of date now.
                 let opp = match_line_parts(mrest)
@@ -3147,9 +3169,13 @@ fn handle_os_line(
         } else if rest.starts_with('.') {
             let id = rest.split_whitespace().next().unwrap_or("").to_string();
             let mut s = ctx.snap.lock().unwrap();
+            let gone = s.offers.iter().find(|o| o.id == id).cloned();
             s.offers.retain(|o| o.id != id);
             drop(s);
             ctx.dirty = true;
+            if let Some(o) = gone {
+                refused_ask(ctx, &o, login);
+            }
         }
     } else if let Some(req) = parse_request(ln, login) {
         let unattended = {
@@ -3194,6 +3220,48 @@ fn handle_os_line(
         };
         ctx.dirty = true;
     }
+}
+
+/// Our auto-match request vanished with no game and no cancel from us: the opponent declined it
+/// (or closed itself to requests). Asking again every minute only pesters them, so auto match
+/// stops at the second time in a row; one alone could be the opponent starting a game elsewhere.
+fn refused_ask(ctx: &mut Ctx, o: &Offer, login: &str) {
+    const STOP_AFTER: u32 = 2;
+    let cancelled = ctx.cancelled.remove(&o.id);
+    let mut s = ctx.snap.lock().unwrap();
+    let opp = s.standby.opponent.clone();
+    if cancelled || ctx.ask_matched || !s.standby.enabled || !ask_to(o, login, &opp) {
+        return;
+    }
+    ctx.ask_refusals += 1;
+    let n = ctx.ask_refusals;
+    if n >= STOP_AFTER {
+        s.standby.enabled = false;
+        s.notice = format!("err.auto_match_refused|name={opp}");
+    }
+    drop(s);
+    ctx.log(
+        "info",
+        &format!(
+            "auto match: {opp} took request {} away ({n} in a row)",
+            o.id
+        ),
+    );
+    if n >= STOP_AFTER {
+        ctx.log("info", "auto match: stopped");
+        ctx.notify(
+            &crate::i18n::t("backend.notify.auto_match_refused_title"),
+            &crate::i18n::tf("backend.notify.auto_match_refused_body", &[("name", &opp)]),
+        );
+    }
+    ctx.dirty = true;
+}
+
+/// Our own request to `opp` (not one sent to us, nor one to anybody).
+fn ask_to(o: &Offer, login: &str, opp: &str) -> bool {
+    !o.incoming
+        && o.names.first().is_some_and(|n| n == login)
+        && o.names.get(1).is_some_and(|n| n == opp)
 }
 
 /// A server refusal as a message key: the ones a person can cause from the screens get their own
@@ -5823,6 +5891,26 @@ mod tests {
         assert!(!cfg("").needing_opponent().enabled);
         assert!(!cfg("  ").needing_opponent().enabled);
         assert!(cfg("iEdax").needing_opponent().enabled);
+    }
+
+    #[test]
+    fn only_our_request_to_the_auto_match_opponent_counts_as_refused() {
+        let line = "+  .50 2589.7 kuroobi  03:00//02:00    s8r14 R 2610.4 rho";
+        let o = parse_offer(line.trim_start_matches("+ ").trim(), "kuroobi").unwrap();
+        assert!(ask_to(&o, "kuroobi", "rho"));
+        assert!(!ask_to(&o, "kuroobi", "piglet"));
+        let theirs = parse_offer(
+            ".51 2610.4 rho  03:00//02:00    s8r14 R 2589.7 kuroobi",
+            "kuroobi",
+        )
+        .unwrap();
+        assert!(!ask_to(&theirs, "kuroobi", "rho"));
+        let open = parse_offer(
+            ".52 2589.7 kuroobi  03:00//02:00    s8r14 R *      *",
+            "kuroobi",
+        )
+        .unwrap();
+        assert!(!ask_to(&open, "kuroobi", "rho"));
     }
 
     #[test]
