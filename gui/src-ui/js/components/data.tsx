@@ -645,7 +645,11 @@ export function EvalTrend({ points, plies, height = 96, title, split, names }: {
   /** Player names for the two lines (the graph never says "me": GGS screens name everyone). */
   names: { mine: string; opp: string };
 }) {
-  const [at, setAt] = React.useState<number | null>(null);
+  // The index under the pointer. Read through `at` below, which drops an index the points no longer
+  // reach: the next game of an automatic series starts with fewer points while the pointer is still
+  // over the graph, and reading past the end took the whole screen down.
+  const [hovered, setAt] = React.useState<number | null>(null);
+  const at = hovered != null && hovered < points.length ? hovered : null;
   const [w, setW] = React.useState(300);
   const obs = React.useRef<ResizeObserver | null>(null);
   const attach = React.useCallback((el: SVGSVGElement | null) => {
