@@ -25,6 +25,8 @@ export interface BookBrowse {
   back: () => void;
   reset: () => void;
   goto: (kifu: string) => void;
+  /** Reads the book again (it grew from a finished game). */
+  reload: () => void;
 }
 
 const C_VALUE = { w: 44 };
@@ -94,6 +96,7 @@ export function useBookBrowse(on: boolean): BookBrowse {
     back: useCallback(() => setLine((l) => l.slice(0, -1)), []),
     reset: useCallback(() => setLine([]), []),
     goto: useCallback((kifu: string) => setLine(parseLine(kifu)), []),
+    reload: useCallback(() => setNodes({}), []),
   };
 }
 
@@ -229,7 +232,8 @@ export function BookTree({ b, decimals, onStudy }: {
     }}>
       <TableHead cols={treeCols()} />
       <div className="k-scroll" style={{ flex: 1, minHeight: 0, padding: '0 var(--sp-3)' }}>
-        {rows.length === 0 && <Empty>{t('book.empty.end_of_line')}</Empty>}
+        {/* No rows yet may only mean the book has not answered for this position. */}
+        {rows.length === 0 && <Empty>{b.node ? t('book.empty.end_of_line') : t('ggs.loading')}</Empty>}
         {rows.map((r) => (
           <BookRow key={r.key} r={r} open={b.open.has(r.key)} decimals={decimals}
                    onToggle={() => b.toggle(r.key)}
@@ -275,21 +279,22 @@ function BookRow({ r, open, onToggle, onGo, decimals }: {
               title={t('book.row.goto')}
               style={{
                 flex: 1, minWidth: 0, display: 'flex', alignItems: 'center', gap: 'var(--sp-2)',
-                border: 0, background: 'transparent', padding: '0 var(--sp-1)',
+                // No right padding: the numbers end where the header's do.
+                border: 0, background: 'transparent', padding: '0 0 0 var(--sp-1)',
                 fontSize: 'var(--fs-6)', color: 'var(--text)', textAlign: 'left',
               }}>
         <span style={{ width: 30, fontWeight: 600 }}>{r.name}</span>
-        <span style={{ width: C_VALUE.w, textAlign: 'right', fontVariantNumeric: 'tabular-nums' }}>
+        {/* Every row is a book move; only the ones learned from play are worth a word. */}
+        <span style={{ flex: 1, minWidth: 0, fontSize: 'var(--fs-7)', color: 'var(--gold)',
+                       whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
+          {r.child?.learned ? t('book.src.learned') : ''}
+        </span>
+        <span style={{ width: C_VALUE.w, flex: 'none', textAlign: 'right', fontVariantNumeric: 'tabular-nums' }}>
           {r.value > 0 ? '+' : ''}{r.value.toFixed(decimals)}
         </span>
-        <span style={{ width: C_GAMES.w, textAlign: 'right', fontSize: 'var(--fs-7)',
+        <span style={{ width: C_GAMES.w, flex: 'none', textAlign: 'right', fontSize: 'var(--fs-7)',
                        color: 'var(--sub)', fontVariantNumeric: 'tabular-nums' }}>
           {r.games.toLocaleString()}
-        </span>
-        <span style={{ marginLeft: 'auto', fontSize: 'var(--fs-7)', flex: 'none',
-                       whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis',
-                       color: r.child?.learned ? 'var(--gold)' : 'var(--sub)' }}>
-          {r.child ? (r.child.learned ? t('book.src.learned') : t('book.src.book')) : ''}
         </span>
       </button>
     </div>

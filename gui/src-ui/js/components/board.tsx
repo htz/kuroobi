@@ -8,6 +8,7 @@ const PITCH = 12.5;          // grain spacing; 7 lines per cell
 const GRAIN_OPACITY = 0.07;
 const SPAN = CELL * 8;
 const SIZE = PAD * 2 + SPAN;
+const COORD_MIN = 11;        // screen px
 
 const TATAMI_ID = 'kb-tatami';
 
@@ -73,8 +74,20 @@ export function Board({ cells, legal = [], evals, last, coords, grain = true, fl
     const [f, r] = fr(flip ? 63 - sq : sq);
     return [cx(f), cx(r)];
   };
+  // The board scales as a whole, so on a small one the coordinates would shrink below reading
+  // size: they grow back to at least COORD_MIN screen pixels (the margin has room for that).
+  const [px, setPx] = React.useState(SIZE);
+  const svg = React.useRef<SVGSVGElement>(null);
+  React.useLayoutEffect(() => {
+    const el = svg.current;
+    if (!el) return;
+    const ro = new ResizeObserver(() => setPx(Math.min(el.clientWidth, el.clientHeight) || SIZE));
+    ro.observe(el);
+    return () => ro.disconnect();
+  }, []);
+  const coordSize = Math.min(30, Math.max(19, COORD_MIN * SIZE / px));
   return (
-    <svg viewBox={`0 0 ${SIZE} ${SIZE}`} style={{ width: '100%', height: '100%', display: 'block' }}
+    <svg ref={svg} viewBox={`0 0 ${SIZE} ${SIZE}`} style={{ width: '100%', height: '100%', display: 'block' }}
          role="img" aria-label={t('ui.board.aria')}>
       <rect x={0} y={0} width={SIZE} height={SIZE} rx={14} fill="var(--card)" />
       <rect x={PAD - 6} y={PAD - 6} width={SPAN + 12} height={SPAN + 12} rx={6} fill="var(--board-dark)" />
@@ -92,8 +105,8 @@ export function Board({ cells, legal = [], evals, last, coords, grain = true, fl
       ))}
       {coords && Array.from({ length: 8 }, (_, i) => (
         <g key={'l' + i}>
-          <text x={cx(i)} y={27} textAnchor="middle" fill="var(--sub)" fontSize={19}>{'abcdefgh'[flip ? 7 - i : i]}</text>
-          <text x={21} y={PAD + i * CELL + 57} textAnchor="middle" fill="var(--sub)" fontSize={19}>{flip ? 8 - i : i + 1}</text>
+          <text x={cx(i)} y={PAD - 13} textAnchor="middle" fill="var(--sub)" fontSize={coordSize}>{'abcdefgh'[flip ? 7 - i : i]}</text>
+          <text x={PAD / 2 + 1} y={PAD + i * CELL + CELL / 2} dominantBaseline="central" textAnchor="middle" fill="var(--sub)" fontSize={coordSize}>{flip ? 8 - i : i + 1}</text>
         </g>
       ))}
 

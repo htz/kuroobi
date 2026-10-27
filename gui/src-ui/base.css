@@ -194,7 +194,6 @@ button:disabled, button[aria-disabled="true"] { cursor:default; }
      full-width bars — top starts below the screen toolbar, bottom ends at
      the bottom of Body (= above the StatusBar) */
   .k-dock.k-open { display:flex; position:absolute; right:0; top:var(--h-bar); bottom:0; z-index:5; box-shadow:var(--sh-2); }
-  .k-dock.k-open.k-dock-push { position:static; box-shadow:none; }
   .k-dock-toggle { display:inline-flex; }
   /* Keep the board from sliding under the overlaid Dock. The board sizes
      itself from its container's height (rule 77), so unless the container

@@ -62,6 +62,7 @@
   --h-head:20px;     /* table and section headings */
   --h-chip:20px;     /* buttons and badges inside the status bar */
   --w-dock:290px;    /* right dock; identical on all 3 screens */
+  --w-drawer:480px;  /* details of a picked row, slid in from the right (players, results) */
   --w-nav:208px;     /* left menu */
   --w-list:268px;    /* GGS match list, record column */
   --w-book-tree:269px; /* book tree column; measured from design §7 */

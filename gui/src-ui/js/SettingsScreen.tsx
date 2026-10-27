@@ -8,7 +8,7 @@ import { Field, ListRow, marked, Modal, Overlay } from './components/layout';
 import { ListHead } from './ggsui';
 import { Button, Segmented, Select, TextField, Toggle } from './components/primitives';
 import { Tag } from './components/ggs';
-import { Confirm, EngineSettings, SettingGroup, SettingRow, ViewSettings } from './Dialogs';
+import { Confirm, EngineSettings, SettingGroup, SettingRow, ViewSettings, type LearnSetting } from './Dialogs';
 import { FormulaField } from './GgsScreens';
 import { openNewLogin } from './ggs/Login';
 import { markApplied } from './applied';
@@ -34,10 +34,11 @@ export const settingsTitle = (cat: SettingsCat): string =>
     : cat === 'ggs-play' ? t('settings.cat.play') : t('settings.cat.form'));
 
 /** The settings screen: categories on the left, rows on the right. Every change applies at once. */
-export function SettingsScreen({ cat, onCat, prefs, setPref, snap, onLogin }: {
+export function SettingsScreen({ cat, onCat, prefs, setPref, snap, onLogin, learn }: {
   cat: SettingsCat; onCat: (c: SettingsCat) => void;
   /** Leaves settings for the login screen (to add an account). */
   onLogin: () => void;
+  learn: LearnSetting;
   prefs: Prefs; setPref: <K extends keyof Prefs>(k: K, v: Prefs[K]) => void;
   snap: GgsSnapshot | null;
 }) {
@@ -64,7 +65,7 @@ export function SettingsScreen({ cat, onCat, prefs, setPref, snap, onLogin }: {
       </div>
       <div className="k-scroll" style={{ flex: 1, minWidth: 0, minHeight: 0, padding: 'var(--sp-4) var(--sp-1) 0' }}>
         <div style={{ maxWidth: 'var(--w-settings)', display: 'flex', flexDirection: 'column' }}>
-          {cat === 'engine' && <EngineSettings prefs={prefs} setPref={setPref} />}
+          {cat === 'engine' && <EngineSettings learn={learn} />}
           {cat === 'view' && <ViewSettings prefs={prefs} setPref={setPref} />}
           {cat === 'ggs-account' && <GgsAccountSettings snap={snap} onLogin={onLogin} />}
           {cat === 'ggs-play' && (snap && snap.conn === 'online'

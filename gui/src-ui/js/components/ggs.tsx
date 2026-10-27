@@ -486,9 +486,10 @@ type Toast = { id: number; tone: 'bad' | 'gold'; text: string };
 
 export function Toasts({ items, onDismiss }: { items: Toast[]; onDismiss: (id: number) => void }) {
   return (
-    <div style={{
+    // Above a drawer (26), below a dialog's scrim (30).
+    <div data-k-toasts="" style={{
       position: 'absolute', right: 'var(--sp-4)', bottom: 'calc(var(--h-status) + var(--sp-3))',
-      display: 'flex', flexDirection: 'column', gap: 'var(--sp-2h)', alignItems: 'flex-end', zIndex: 20,
+      display: 'flex', flexDirection: 'column', gap: 'var(--sp-2h)', alignItems: 'flex-end', zIndex: 27,
     }}>
       {items.map(item => (
         <button key={item.id} type="button" onClick={() => onDismiss(item.id)} className="k-press" style={{

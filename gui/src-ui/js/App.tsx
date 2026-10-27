@@ -71,7 +71,7 @@ export function App() {
   useLang();
   const { prefs, set: setPref } = usePrefs();
   const applied = useApplied();
-  const g = useGame(prefs.clockSecs);
+  const g = useGame(prefs.clockSecs, prefs.learnOn);
   const ggs = useGgs();
   const [navRaw, setNavRaw] = useState<NavId>('play');
   const conn = connOf(ggs.snap?.conn);
@@ -79,7 +79,6 @@ export function App() {
   const study = nav === 'study';
   const isBook = nav === 'book';
   const isGgs = nav.startsWith('ggs');
-  const [tab, setTab] = useState('record');
   const [bookTab, setBookTab] = useState('book');
   const [dockOpen, setDockOpen] = useState(false);
   const [graphOpen, setGraphOpen] = useState(false);
@@ -101,6 +100,13 @@ export function App() {
   const confirm = useCallback(
     (a: AskArgs) => new Promise<boolean>((done) => setAsk({ ...a, done })),
     [setAsk]);
+  // A new game throws the record away (study shows the same one), so a board with moves on it asks first.
+  const newGame = useCallback(async () => {
+    if ((g.view?.moves.length ?? 0) > 0 && !(await confirm({
+      title: t('app.play.new_game_title'), body: t('app.play.new_game_body'), ok: t('app.play.new_game'),
+    }))) return;
+    await g.newGame();
+  }, [g, confirm]);
   const ggsMatch = ggsPlaying(ggs.snap);
   const graph = useGraph(g, ggsMatch, confirm);
   const startGame = useStartGame(g, ggsMatch, graph, confirm);
@@ -120,19 +126,38 @@ export function App() {
   }, [chatOpen, markChatRead]);
 
   const setMode = g.setMode;
+  // Leaving the game for another screen pauses it, clock and all, like any game one plays alone;
+  // 「対局開始」 takes it on from the same position.
+  const { playing, stop } = g;
   const setNav = useCallback((id: NavId) => {
     if (navRaw === 'ggs-chat' && id !== 'ggs-chat') markChatRead();
+    if (navRaw === 'play' && id !== 'play' && playing) stop();
     setNavRaw(id);
     if (id === 'play' || id === 'study') setMode(id === 'study' ? 'study' : 'vs');
-  }, [setMode, navRaw, markChatRead]);
+  }, [setMode, navRaw, markChatRead, playing, stop]);
 
-  const book = useBookBrowse(isBook || tab === 'learn');
+  // Settings shows how much of the book was learned, so it reads the book too.
+  const book = useBookBrowse(isBook || nav === 'settings');
+  // An import that just ended changed the book: what is on screen is read again.
+  const learning = !!cpu?.learn;
+  const wasLearning = useRef(learning);
+  const reloadBook = book.reload;
+  useEffect(() => {
+    if (wasLearning.current && !learning) reloadBook();
+    wasLearning.current = learning;
+  }, [learning, reloadBook]);
   const { items: learnLog, reload: learnLogReload } = useLearnLog(
     isBook && bookTab === 'log', !!cpu?.learn);
 
   const [viewer, setViewer] = useState<
     { title: string; kifu: string; pending?: string; archive?: string; parts?: string[] } | null
   >(null);
+  // Records still being fetched for a viewer that was closed: they are dropped when they arrive.
+  const dropped = useRef(new Set<string>());
+  const closeViewer = () => {
+    if (viewer?.pending && !viewer.kifu) dropped.current.add(viewer.pending);
+    setViewer(null);
+  };
 
   const [paste, setPaste] = useState(false);
   const [settingsCat, setSettingsCat] = useState<SettingsCat>('engine');
@@ -141,6 +166,15 @@ export function App() {
   // the toolbar's panel button and the room kept for the panel follow it.
   const bookDock = isBook && bookTab === 'book' && book.node?.size !== 0;
   const playDock = !isGgs && !isBook && !isSettings;
+  // The board's live evals search until stopped and hold the engine, so they stop while the board is
+  // off screen (the book and settings read the engine), and do not start again until it is back
+  // (the hints effect restarts them). A game's own search and the graph analysis are left running.
+  const setBoardShown = g.setBoardShown;
+  useEffect(() => {
+    setBoardShown(playDock);
+    if (!playDock && !g.thinking && !graph.busy) void api.stopSearch().catch(() => {});
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [playDock]);
   const hasDock = bookDock || playDock;
   const asking = useAskSheet();
   // The sheet only shows while connected; a sheet left open across a disconnect would stay
@@ -157,9 +191,7 @@ export function App() {
     started.current = true;
     void api.autoplay().then(async (v) => {
       if (!v) return;
-      const [who, lv, extraRaw] = v.split(':');
-      const extra =
-        extraRaw === 'nobook' || /^clock\d+$/.test(extraRaw ?? '') ? undefined : extraRaw;
+      const [who, lv] = v.split(':');
       if (v.endsWith(':nobook')) g.setUseBook(false);
       const mc = v.match(/:clock(\d+)$/);
       if (mc) { setPref('clockSecs', +mc[1]); void api.setClock(+mc[1]); }
@@ -190,7 +222,6 @@ export function App() {
         return;
       }
       if (who === 'yield') {
-        setTab('learn');
         g.setSide('both');
         g.setLevel(0);   // Fastest: end the game early so the import starts
         g.setPlaying(true);
@@ -208,7 +239,6 @@ export function App() {
         return;
       }
       if (who === 'tab') {
-        if (lv) setTab(lv);
         if (v.endsWith(':custom')) { g.setCustom({ depth: 20, solve: 24 }); g.setLevel('custom'); }
         return;
       }
@@ -225,17 +255,17 @@ export function App() {
         g.setView(await api.loadKifuText(
           'e6f4c3d6f6e7f5g5e3g4c7d3f3c4c6c5b4b6d7b5c2a3f8e8d8c8b8d2g3e2'));
         if (lv === 'hint') {
+          // Study shows the evals from the start; the call here would set play's switch.
           g.setView(await api.goto(8));
-          g.setAutoHint(true);
         }
         if (lv === 'graph') setTimeout(() => autoGraph.current?.(), 400);
-        if (extra) setTab(extra);
         return;
       }
       if (who === 'both') g.setSide('both');
       if (lv !== undefined && Number.isFinite(+lv)) g.setLevel(+lv);
       await g.newGame();
-      if (extra) setTab(extra);
+      // newGame set the clock it was made with (the saved one); the requested clock goes on top.
+      if (mc) await g.resetClock(+mc[1]);
       g.setPlaying(true);
     }).catch((e) => jsLog('autoplay: ' + e));
   }, []);
@@ -258,7 +288,16 @@ export function App() {
     g.setPlaying(false);
     g.setView(v);
   };
+  // Loading a record replaces the one play and study share, so a board with a record asks first
+  // (the same question from every way in: open in study, load, paste).
+  const replaceOk = async () => {
+    const n = g.view?.moves.length ?? 0;
+    return n === 0 || confirm({
+      title: t('app.study.replace_title'), body: t('app.study.replace_body', { n }), ok: t('app.study.replace_ok'),
+    });
+  };
   const loadFromFile = async () => {
+    if (!await replaceOk()) return;
     try {
       const loaded = await api.loadKifu();
       if (loaded) { applyLoaded(loaded); setPaste(false); }   // null = closed without choosing
@@ -270,6 +309,13 @@ export function App() {
       setPaste(false);
       if (ply !== undefined) await g.jumpTo(ply);
     } catch (e) { g.say(tErr(e)); }
+  };
+  // "Open in study" from another screen replaces the record play and study share, so a record asks first.
+  const openInStudy = async (text: string, ply?: number): Promise<boolean> => {
+    if (!await replaceOk()) return false;
+    setNav('study');
+    await loadFromText(text, ply);
+    return true;
   };
 
   // A GGS action a person asked for that failed (the screens report it through ggsui).
@@ -287,19 +333,18 @@ export function App() {
   useEffect(() => {
     if (!fetched) return;
     void (async () => {
+      // Acknowledged first: opening it may wait on a question.
+      await ggsApi.ack().catch(() => {});
+      if (dropped.current.delete(fetched.id)) return;
       if (fetched.ggf) {
         setViewer((cur) => (cur && cur.pending === fetched.id
           ? { ...cur, kifu: fetched.ggf, parts: fetched.parts }
           : cur));
-        if (!viewer?.pending) {
-          setNav('study');
-          await loadFromText(fetched.ggf);
-        }
+        if (!viewer?.pending) await openInStudy(fetched.ggf);
       } else {
         setViewer(null);
         g.say(fetched.error ? tErr(fetched.error) : t('app.ggs.fetch_failed'));
       }
-      await ggsApi.ack().catch(() => {});
     })();
   }, [fetched]);
 
@@ -341,13 +386,15 @@ export function App() {
       const el = e.target as HTMLElement | null;
       if (el && (el.tagName === 'INPUT' || el.tagName === 'TEXTAREA' || el.isContentEditable)) return;
       if (paste || ask || viewer || asking) return;
+      // Any dialog a screen opened itself (a delete question, the server editor) holds the keys too.
+      if (document.querySelector('[data-k-overlay]')) return;
       const cmd = e.metaKey || e.ctrlKey;
       const key = e.key.toLowerCase();
       if (cmd && key === ',') { e.preventDefault(); setNav('settings'); return; }
       if (cmd && key === 'b') { e.preventDefault(); setNav('book'); return; }
       // The game shortcuts act on the local board, so only where it is on screen (play and study);
       // elsewhere ⌘Z stays the text fields' own undo.
-      if (cmd && key === 'n' && playDock) { e.preventDefault(); if (!g.thinking) void g.newGame(); return; }
+      if (cmd && key === 'n' && playDock) { e.preventDefault(); if (!g.thinking) void newGame(); return; }
       if (cmd && key === 's' && playDock) {
         e.preventDefault();
         if (v && v.moves.length > 0) {
@@ -362,6 +409,8 @@ export function App() {
         return;
       }
       if (isBook) {
+        // The arrows walk the book; the learning log tab has nothing for them to move.
+        if (bookTab !== 'book') return;
         if (e.key === 'ArrowLeft') { e.preventDefault(); book.back(); }
         if (e.key === 'ArrowUp') { e.preventDefault(); book.reset(); }
         if (e.key === 'ArrowRight' && book.node?.moves.length) {
@@ -380,7 +429,33 @@ export function App() {
     };
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
-  }, [setNav, paste, ask, viewer, asking, isBook, isGgs, playDock, study, book, g, v]);
+  }, [setNav, paste, ask, viewer, asking, isBook, bookTab, isGgs, playDock, study, book, g, v, newGame]);
+
+  // Studying a record, the record's own next move just steps forward; another move drops the rest, so it asks.
+  const playAt = async (sq: number) => {
+    if (study && v && v.cursor < v.moves.length) {
+      if (v.moves[v.cursor] === sq) {
+        let n = v.cursor + 1;
+        while (n < v.moves.length && v.moves[n] == null) n++;   // a forced pass comes with the move
+        await g.jumpTo(n);
+        return;
+      }
+      if (!(await confirm({
+        title: t('app.study.branch_title'),
+        body: t('app.study.branch_body', { n: v.cursor + 1, m: v.moves.length - v.cursor }),
+        ok: t('app.study.branch_ok'),
+      }))) return;
+    }
+    // Playing, a press on the board before 「対局開始」 starts the game: the person's move is played
+    // and KUROOBI answers, or on KUROOBI's turn KUROOBI starts. With no side for KUROOBI it is just a move.
+    if (!study && v && !v.over && !g.playing && g.side !== 'off') {
+      if (g.side === 'both' || g.side === v.player) { await startGame(); return; }
+      await g.play(sq);
+      await startGame();
+      return;
+    }
+    await g.play(sq);
+  };
 
   const over = v?.over ?? false;
   const result = v?.over
@@ -400,13 +475,15 @@ export function App() {
   const nodes = g.stat && g.stat.nodes > 0 ? g.stat.nodes : 0;
   const nps = nodes && g.stat && g.stat.secs > 0 ? nodes / g.stat.secs : 0;
   const lv = g.level === 'custom' ? t('app.level.custom') : t('app.level.preset', { n: g.level + 1 });
+  // Playing to a clock, KUROOBI's strength is the clock.
+  const playLv = prefs.clockSecs > 0 ? t('dock.strength.minutes', { n: prefs.clockSecs / 60 }) : lv;
   const screenTitle = isSettings ? t('settings.title')
     : [...navLocal(), ...ggsNav(conn)].find((i) => i.id === nav)?.label ?? 'KUROOBI';
   const screenSub = isGgs || isSettings ? undefined
     : isBook ? undefined
     // Studying, KUROOBI plays no side; its level is the analysis strength.
     : study ? t('app.study.analysis_level', { lv })
-    : `${lv} · ${t(g.side === 'both' ? 'app.side.both'
+    : `${playLv} · ${t(g.side === 'both' ? 'app.side.both'
         : g.side === 'off' ? 'app.side.none_assigned'
         : g.side === 'black' ? 'app.color.black' : 'app.color.white')}`;
 
@@ -466,6 +543,8 @@ export function App() {
             <>
               <Button variant="primary" disabled={graph.busy || !v?.moves.length}
                       onClick={() => void graph.update()}>{t('app.study.analyze')}</Button>
+              <Toggle checked={g.autoHint} onChange={g.setAutoHint} label={t('app.play.show_evals')} />
+              <Divider />
               <Button title="⌘O" onClick={() => setPaste(true)}>{t('app.study.load_record')}</Button>
               <Divider />
               <Segmented value={pov} onChange={setPov}
@@ -480,11 +559,12 @@ export function App() {
           ) : (
             <>
               <Button variant={g.playing ? 'danger' : 'primary'}
-                      disabled={!g.playing && (over || g.thinking)}
+                      // Nothing to start when KUROOBI plays no side and there is no clock to run.
+                      disabled={!g.playing && (over || g.thinking || (g.side === 'off' && !prefs.clockSecs))}
                       onClick={startGame}>
                 {t(g.playing ? 'app.play.stop' : 'app.play.start')}
               </Button>
-              <Button title="⌘N" disabled={g.thinking} onClick={() => void g.newGame()}>{t('app.play.new_game')}</Button>
+              <Button title="⌘N" disabled={g.thinking} onClick={() => void newGame()}>{t('app.play.new_game')}</Button>
               <Button title="⌘Z" disabled={g.thinking || !v || v.move_count === 0}
                       onClick={() => void g.undo()}>{t('app.play.undo')}</Button>
               <Divider />
@@ -497,7 +577,10 @@ export function App() {
 
         {isSettings ? <SettingsScreen cat={settingsCat} onCat={setSettingsCat} prefs={prefs}
                                        setPref={(k, v) => { setPref(k, v); markApplied(); }} snap={ggs.snap}
-                                       onLogin={() => setNav('ggs-login')} />
+                                       onLogin={() => setNav('ggs-login')}
+                                       learn={{ on: g.learnOn, set: (on) => { setPref('learnOn', on); markApplied(); },
+                                                stored: book.node?.size, learned: book.node?.learned_size,
+                                                onLog: () => { setBookTab('log'); setNav('book'); } }} />
          : isGgs ? <GgsScreen nav={nav} snap={ggs.snap} onNav={setNav} prefs={prefs}
                        onKifu={(title, kifu, archive) => {
                          if (archive) {
@@ -512,7 +595,7 @@ export function App() {
             <div style={{ flex: 1, minHeight: 0, display: 'flex' }}>
               {book.node?.size !== 0 && (
                 <BookTree b={book} decimals={prefs.decimals}
-                          onStudy={(kifu) => { setNav('study'); void loadFromText(kifu); }} />
+                          onStudy={(kifu) => void openInStudy(kifu)} />
               )}
               <BookPane b={book} coords={prefs.coords} grain={prefs.grain}
                         flip={flipped(prefs.facing, '')} onSettings={() => { setSettingsCat('engine'); setNav('settings'); }} />
@@ -532,10 +615,7 @@ export function App() {
                     learnLogReload();
                   } catch (err) { g.say(tErr(err)); }
                 })()}
-                onOpen={(e, ply) => {
-                  setNav('study');
-                  void loadFromText(e.start ? e.start + '\n' + e.kifu : e.kifu, ply);
-                }} />
+                onOpen={(e, ply) => void openInStudy(e.start ? e.start + '\n' + e.kifu : e.kifu, ply)} />
             </div>
           )
         ) : (
@@ -548,7 +628,7 @@ export function App() {
                          coords={prefs.coords} grain={prefs.grain}
                          flip={flipped(prefs.facing, study ? '' : sideColor)}
                          disabled={g.thinking}
-                         onPlay={(sq) => void g.play(sq)} />}
+                         onPlay={(sq) => void playAt(sq)} />}
           </BoardFit>
           <ScoreRow black={v?.black ?? 2} white={v?.white ?? 2}
                     turn={!v || v.over ? undefined : v.player === 'black' ? 'b' : 'w'}
@@ -591,8 +671,8 @@ export function App() {
       )}
 
       {playDock && (
-        <PlayDock g={g} book={book} cpu={cpu} prefs={prefs} tab={tab} onTab={setTab}
-                  open={dockOpen} onNav={setNav} onBookTab={setBookTab}
+        <PlayDock g={g} prefs={prefs} setClockSecs={(secs) => { setPref('clockSecs', secs); void g.resetClock(secs); }}
+                  open={dockOpen}
                   onPaste={() => setPaste(true)} onLoadFile={loadFromFile}
                   study={study} moves={moves} ggfNames={() => ggfNames(g.side)} />
       )}
@@ -603,16 +683,11 @@ export function App() {
                       thinkSecs={g.thinkSecs} nodes={nodes} nps={nps} servers={servers} />
 
 
-      {ask && (
-        <Confirm title={ask.title} body={ask.body} ok={ask.ok} danger={ask.danger}
-                 onCancel={() => { ask.done(false); setAsk(null); }}
-                 onOk={() => { ask.done(true); setAsk(null); }} />
-      )}
 
       {viewer && (
         <KifuViewer title={viewer.title} kifu={viewer.kifu}
                     parts={viewer.parts}
-                    onClose={() => setViewer(null)}
+                    onClose={closeViewer}
                     onRefetch={viewer.archive && viewer.pending !== viewer.archive
                       ? () => {
                           const id = viewer.archive!;
@@ -620,16 +695,23 @@ export function App() {
                           void ggsApi.look(id);
                         }
                       : undefined}
-                    onStudy={(text) => { setNav('study'); void loadFromText(text); }} />
+                    onStudy={(text) => openInStudy(text)} />
       )}
 
       {paste && (
         <PasteKifu onCancel={() => setPaste(false)}
                    onFile={() => void loadFromFile()}
-                   onLoad={(t) => void loadFromText(t)} />
+                   onLoad={(text) => void (async () => { if (await replaceOk()) await loadFromText(text); })()} />
       )}
 
       {asking && ggs.snap?.conn === 'online' && <AskSheet snap={ggs.snap} init={asking} />}
+
+      {/* Last, so a question asked over the viewer or the paste dialog sits on top of it. */}
+      {ask && (
+        <Confirm title={ask.title} body={ask.body} ok={ask.ok} danger={ask.danger}
+                 onCancel={() => { ask.done(false); setAsk(null); }}
+                 onOk={() => { ask.done(true); setAsk(null); }} />
+      )}
 
       <Toasts items={g.toasts} onDismiss={g.dismiss} />
     </AppFrame>

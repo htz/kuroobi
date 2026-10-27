@@ -18,13 +18,15 @@ export interface Prefs {
   flipMs: 0 | 120 | 240;
   facing: Facing;
   clockSecs: number;
+  /** Finished games go into the book (local and GGS). */
+  learnOn: boolean;
   lang: LangPref;
 }
 
 const DEFAULTS: Prefs = {
   theme: 'os', tatami: 0, decimals: 1,
   coords: true, grain: true, flipMs: 120, facing: 'black',
-  clockSecs: 0, lang: 'auto',
+  clockSecs: 0, learnOn: true, lang: 'auto',
 };
 
 /** `hint` is the legal-move dot on a board too dark for the light theme's black dots (it then

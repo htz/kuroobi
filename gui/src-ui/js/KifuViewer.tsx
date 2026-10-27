@@ -14,7 +14,8 @@ interface KifuViewerProps {
   title: string;
   kifu: string;
   onClose: () => void;
-  onStudy: (kifu: string) => void;
+  /** Resolves false when the person keeps the record they have (the viewer then stays open). */
+  onStudy: (kifu: string) => Promise<boolean>;
   onRefetch?: () => void;
   parts?: string[];
 }
@@ -111,7 +112,7 @@ export function KifuViewer({ title, kifu, onClose, onStudy, onRefetch, parts }: 
                  {t('kifu.save')}
                </Button>
                <Button size="field" variant="primary" disabled={!frames}
-                       onClick={() => { onStudy(shown); onClose(); }}>{t('kifu.open_in_study')}</Button>
+                       onClick={() => void onStudy(shown).then((done) => { if (done) onClose(); })}>{t('kifu.open_in_study')}</Button>
              </>}>
         {!f ? (
           // While the server sends the kifu, and when it cannot.

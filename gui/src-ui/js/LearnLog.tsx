@@ -11,9 +11,11 @@ import { whenShort } from './when';
 const lossOf = (c: LearnChange) => c.best - c.after;
 
 const logCols = (): Col[] => [
-  { head: t('learn.col.game'), clip: true },
-  { head: t('learn.col.discs'), w: 52, right: true, num: true },
-  { head: t('learn.col.positions'), w: 64, right: true, num: true },
+  { head: t('learn.col.date'), w: 40 },
+  { head: t('learn.col.opponent'), clip: true },
+  // Narrow number columns leave the opponent's name whole.
+  { head: t('learn.col.discs'), w: 48, right: true, num: true },
+  { head: t('learn.col.positions'), w: 36, right: true, num: true },
 ];
 
 function blunderOf(e: LearnEntry): LearnChange | undefined {
@@ -89,7 +91,7 @@ export function LearnLog({ items: all, onOpen, onUndo, onBook }: {
                                { value: 'lost', label: t('learn.filter.lost') }]} />
           <span style={{ width: 'var(--sp-2)' }} />
           <Select size="ctrl" value={days} onChange={setDays} options={[
-            ['0', t('learn.filter.all')], ['7', t('learn.filter.days_7')],
+            ['0', t('learn.filter.days_all')], ['7', t('learn.filter.days_7')],
             ['30', t('learn.filter.days_30')], ['90', t('learn.filter.days_90')],
           ]} />
         </div>
@@ -108,10 +110,8 @@ export function LearnLog({ items: all, onOpen, onUndo, onBook }: {
               return (
                 <TableRow key={keyOf(e)} cols={cols} on={on} pad="var(--sp-1)" fs="var(--fs-6)"
                           onClick={() => setSel(keyOf(e))}>
-                  <span>
-                    <span style={{ color: 'var(--sub)' }}>{whenShort(e.at)}</span>
-                    {' '}{e.opponent || 'KUROOBI'}
-                  </span>
+                  <span style={{ color: 'var(--sub)' }}>{whenShort(e.at)}</span>
+                  <span>{e.opponent || 'KUROOBI'}</span>
                   <span>{e.black}–{e.white}</span>
                   <span style={{ fontSize: 'var(--fs-7)', color: 'var(--sub)' }}>{e.positions}</span>
                 </TableRow>

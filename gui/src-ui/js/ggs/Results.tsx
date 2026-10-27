@@ -3,7 +3,7 @@ import { ggsApi } from '../api';
 import type { GameResult, GgsSnapshot } from '../types';
 import { gtypeLabel } from '../ggs';
 import { t } from '../i18n';
-import { Divider, Dock, Section, Toolbar } from '../components/layout';
+import { Divider, Drawer, Section, Toolbar } from '../components/layout';
 import { Button, Segmented, Select } from '../components/primitives';
 import { Tag } from '../components/ggs';
 import { KeyValue } from '../components/layout';
@@ -52,7 +52,7 @@ function ggfTrend(ggf: string, me: string): Pt[] {
 }
 
 
-/** My finished games: the rating trend or both ratings on top, the games below, the chosen one in the dock. */
+/** My finished games: the rating trend or both ratings on top, the games below, the chosen one in a drawer. */
 export function Results({ snap, onKifu }: {
   snap: GgsSnapshot; onKifu: (title: string, kifu: string, archive?: string) => void;
 }) {
@@ -61,7 +61,6 @@ export function Results({ snap, onKifu }: {
   const [since, setSince] = useState(0);
   const [pick, setPick] = useState('');
   const [hover, setHover] = useState<number | null>(null);
-  const [dock, setDock] = useState(false);
   const [chartRef, chartW] = useWidth();
   // In a short window the chart gives its height to the list of games.
   const short = useWindowHeight() < 700;
@@ -82,6 +81,7 @@ export function Results({ snap, onKifu }: {
         kifu: '', ggf: '', archive: h.id,
       } as GameResult;
     });
+  const ever = snap.results.length + fromServer.length;
   const all = [...snap.results, ...fromServer]
     .filter((r) => (r.at ?? 0) >= since)
     .sort((x, y) => (y.at ?? 0) - (x.at ?? 0));
@@ -125,7 +125,7 @@ export function Results({ snap, onKifu }: {
 
   return (
     <>
-      <Toolbar dock={{ open: dock, onToggle: () => setDock((o) => !o) }}>
+      <Toolbar>
         <Segmented value={pool} onChange={(p) => { setPool(p); setHover(null); }}
                    options={[{ value: '8r', label: t('ggs.pool.random') }, { value: '8', label: t('ggs.pool.normal') },
                              { value: 'all', label: t('ggs.filter.all') }]} />
@@ -136,7 +136,8 @@ export function Results({ snap, onKifu }: {
                           ['30', t('results.period_days', { n: 30 })], ['90', t('results.period_days', { n: 90 })]]} />
       </Toolbar>
       <Page row>
-        {!all.length ? <Blank title={t('ggs.no_records')} body={t('results.empty_help')} /> : (
+        {!ever ? <Blank title={t('ggs.no_records')} body={t('results.empty_help')} />
+          : !all.length ? <Blank title={t('results.none_in_period')} /> : (
           <Sections>
             {pool === 'all' ? (
               <Section title={t('results.ratings')}>
@@ -176,7 +177,7 @@ export function Results({ snap, onKifu }: {
                                discs={r.my_diff ?? 0} when={whenShort(r.at)}
                                note={pool === 'all' ? gtypeLabel(baseType(r.base, r.raw)) : undefined}
                                rating={hasRating ? r.my_rating : undefined}
-                               onClick={() => { setPick(rowKey(r)); setDock(true); }}
+                               onClick={() => setPick(rowKey(r))}
                                dim={!r.ggf && !r.kifu && !r.archive} />
                   ))}
                 </Rows>
@@ -184,21 +185,21 @@ export function Results({ snap, onKifu }: {
             </Section>
           </Sections>
         )}
-        <Dock push tabs={[{ id: 'game', label: t('results.this_game') }]} active="game" open={dock}>
-          {!sel ? <Blank title={t('results.pick')} /> : (
+        {sel && (
+          <Drawer label={t('results.this_game')} onClose={() => setPick('')}
+                  title={<>
+                    <Tag tone={sel.my_diff == null ? 'sub' : sel.my_diff > 0 ? 'ok' : sel.my_diff < 0 ? 'bad' : 'sub'}>
+                      {sel.my_diff == null ? t('results.tag_adjourned') : sel.my_diff > 0 ? t('ggs.stat.wins') : sel.my_diff < 0 ? t('ggs.stat.losses') : t('ggs.stat.draws')}
+                    </Tag>
+                    <span className="k-sel" style={{ overflow: 'hidden', textOverflow: 'ellipsis' }}>{sel.opp}</span>
+                    {sel.my_diff != null && (
+                      <span style={{ color: sel.my_diff > 0 ? 'var(--ok)' : sel.my_diff < 0 ? 'var(--bad)' : 'var(--text)' }}>
+                        {signed(sel.my_diff)}
+                      </span>
+                    )}
+                  </>}>
+            <div className="k-scroll" style={{ flex: 1, minHeight: 0 }}>
             <div style={{ display: 'flex', flexDirection: 'column', gap: 'var(--sp-3)', padding: 'var(--sp-4) var(--sp-4) var(--sp-5)' }}>
-              <div style={{ display: 'flex', alignItems: 'center', gap: 'var(--sp-2)', minWidth: 0, whiteSpace: 'nowrap' }}>
-                <Tag tone={sel.my_diff == null ? 'sub' : sel.my_diff > 0 ? 'ok' : sel.my_diff < 0 ? 'bad' : 'sub'}>
-                  {sel.my_diff == null ? t('results.tag_adjourned') : sel.my_diff > 0 ? t('ggs.stat.wins') : sel.my_diff < 0 ? t('ggs.stat.losses') : t('ggs.stat.draws')}
-                </Tag>
-                <span className="k-sel" style={{ fontSize: 'var(--fs-2)', fontWeight: 600, overflow: 'hidden', textOverflow: 'ellipsis' }}>{sel.opp}</span>
-                {sel.my_diff != null && (
-                  <span style={{ marginLeft: 'auto', fontSize: 'var(--fs-1)', fontWeight: 600,
-                                 color: sel.my_diff > 0 ? 'var(--ok)' : sel.my_diff < 0 ? 'var(--bad)' : 'var(--text)' }}>
-                    {signed(sel.my_diff)}
-                  </span>
-                )}
-              </div>
               <div style={{ display: 'flex', flexDirection: 'column', gap: 'var(--sp-1)' }}>
                 {oppRate && <KeyValue label={t('results.opp_rating')} value={oppRate} />}
                 {kind && <KeyValue label={t('ggs.field.format')} value={gtypeLabel(kind)} />}
@@ -211,22 +212,21 @@ export function Results({ snap, onKifu }: {
                 )}
               </div>
               {trend.some((p) => p.mine != null || p.opp != null) && (
-                <EvalTrend points={trend} height={150} title={t('play.trend_title', { name: login })}
+                <EvalTrend points={trend} height={180} title={t('play.trend_title', { name: login })}
                            names={{ mine: login, opp: sel.opp }} />
               )}
               <div style={{ display: 'flex', gap: 'var(--sp-2)' }}>
-                <span style={{ flex: 1, minWidth: 0, display: 'flex' }}>
-                  <Button variant="primary" size="field" className="k-wide"
-                          disabled={!sel.ggf && !sel.kifu && !sel.archive}
-                          onClick={() => onKifu(`${t('ggs.play.game_with', { name: sel.opp })} · ${whenFull(sel.at ?? 0)}`, sel.ggf || sel.kifu, sel.archive)}>
-                    {t('results.open_kifu')}
-                  </Button>
-                </span>
+                <Button variant="primary" size="field"
+                        disabled={!sel.ggf && !sel.kifu && !sel.archive}
+                        onClick={() => onKifu(`${t('ggs.play.game_with', { name: sel.opp })} · ${whenFull(sel.at ?? 0)}`, sel.ggf || sel.kifu, sel.archive)}>
+                  {t('results.open_kifu')}
+                </Button>
                 <Button size="field" onClick={() => askSheet.open({ opponent: sel.opp, gtype: kind || undefined })}>{t('results.rematch')}</Button>
               </div>
             </div>
-          )}
-        </Dock>
+            </div>
+          </Drawer>
+        )}
       </Page>
     </>
   );

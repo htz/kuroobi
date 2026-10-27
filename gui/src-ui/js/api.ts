@@ -32,6 +32,7 @@ export const api = {
   newGame: () => call<GameView>('new_game'),
   clocks: () => call<ClockView>('clocks'),
   setClock: (secs: number) => call<ClockView>('set_clock', { secs }),
+  runClock: (on: boolean) => call<ClockView>('run_clock', { on }),
   play: (sq: number) => call<GameView>('play', { sq }),
   undo: () => call<GameView>('undo'),
   goto: (n: number) => call<GameView>('goto', { n }),

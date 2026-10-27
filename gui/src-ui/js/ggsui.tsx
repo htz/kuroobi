@@ -3,7 +3,7 @@ import { clockChoices, gtypeLabel } from './ggs';
 import { t } from './i18n';
 import type { GgsSnapshot } from './types';
 import { RateRow } from './components/ggs';
-import { captionStyle, ListRow, marked, TableHead } from './components/layout';
+import { captionStyle, ListRow, marked, picked as pickedStyle, TableHead } from './components/layout';
 
 /** "5 分" for "00:05:00"; anything unusual is shown as GGS wrote it. */
 export function clockLabel(time: string): string {
@@ -87,13 +87,15 @@ export function Line({ children, onClick, picked, height = 'field', mark }: {
   height?: 'row' | 'field' | 'row2'; mark?: boolean;
 }) {
   const extra: React.CSSProperties = { gap: 'var(--sp-3)', ...(mark && !picked ? marked(true) : null) };
+  // A row that cannot be pressed can still be the one that is meant (the login's row in a table).
+  const mine: React.CSSProperties = picked ? pickedStyle(true) : {};
   if (onClick) return <ListRow on={picked} height={height} onClick={onClick} style={extra}>{children}</ListRow>;
   // Not pressable as a whole (its buttons are), so no hover or pointer on the row.
   return (
     <div style={{
       flex: 'none', display: 'flex', alignItems: 'center', width: '100%', height: `var(--h-${height})`,
       padding: '0 var(--sp-3)', borderBottom: '1px solid var(--border-weak)', fontSize: 'var(--fs-5)',
-      color: 'var(--text)', whiteSpace: 'nowrap', ...extra,
+      color: 'var(--text)', whiteSpace: 'nowrap', ...extra, ...mine,
     }}>{children}</div>
   );
 }

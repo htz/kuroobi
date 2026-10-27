@@ -2,27 +2,15 @@ import { useCallback, useEffect, useState, type ReactNode } from 'react';
 import { api, emitApp, onApp, type HashView, type KifuFrame, type ThreadsView } from './api';
 import { TATAMI, type Prefs, type Theme } from './prefs';
 import { t, useLang, tErr } from './i18n';
-import { Caption, Modal, Overlay, Section } from './components/layout';
+import { Caption, Confirm, Modal, Overlay, Section } from './components/layout';
 import { Button, Segmented, Select, TextArea, TextField, Toggle } from './components/primitives';
 import { Board } from './components/board';
 import { markApplied } from './applied';
 import { StoneDot } from './components/data';
 
 
-export function Confirm({ title, body, ok, danger, onOk, onCancel }: {
-  title: string; body?: React.ReactNode; ok: string; danger?: boolean;
-  onOk: () => void; onCancel: () => void;
-}) {
-  return (
-    <Overlay onClose={onCancel}>
-      <Modal title={title} body={body} onClose={onCancel} actions={<>
-        <span style={{ marginLeft: 'auto' }} />
-        <Button size="field" onClick={onCancel}>{t('dialog.cancel')}</Button>
-        <Button size="field" variant={danger ? 'danger' : 'primary'} onClick={onOk}>{ok}</Button>
-      </>} />
-    </Overlay>
-  );
-}
+// The DS component; screens keep importing it from here.
+export { Confirm };
 
 
 export function PasteKifu({ onLoad, onFile, onCancel }: {
@@ -63,6 +51,8 @@ export function PasteKifu({ onLoad, onFile, onCancel }: {
           <div style={{
             width: 96, height: 96, flex: 'none',
             borderRadius: 'var(--r-2)', overflow: 'hidden',
+            // Until something is pasted the slot shows as a slot, not as a hole in the layout.
+            border: last ? 'none' : '1px dashed var(--border)',
           }}>
             {last && <Board cells={last.cells as (0 | 1 | 2)[]} last={last.last} coords={false} grain={false} />}
           </div>
@@ -145,9 +135,13 @@ export function SettingGroup({ title, aside, children }: { title: string; aside?
   );
 }
 
-export function EngineSettings({ prefs, setPref }: {
-  prefs: Prefs; setPref: <K extends keyof Prefs>(k: K, v: Prefs[K]) => void;
-}) {
+/** Learning from finished games: the switch, how much of the book it wrote, and the way to its log. */
+export interface LearnSetting {
+  on: boolean; set: (on: boolean) => void;
+  stored?: number; learned?: number; onLog: () => void;
+}
+
+export function EngineSettings({ learn }: { learn: LearnSetting }) {
   useLang();
   const [reset, setReset] = useState(false);
   const [status, setStatus] = useState<[string, string, boolean, number, string][]>([]);
@@ -251,13 +245,20 @@ export function EngineSettings({ prefs, setPref }: {
         </>}
       </SettingGroup>
 
-      <SettingGroup title={t('settings.clock.title')}>
-        <SettingRow label={t('settings.clock.label')} help={t('settings.clock.note')}>
-          <Select width="var(--w-select-sm)" value={String(prefs.clockSecs)}
-                  onChange={(v) => setPref('clockSecs', +v)}
-                  options={[['0', t('settings.clock.none')],
-                            ...[5, 10, 15, 20, 30].map((m) =>
-                              [String(m * 60), t('settings.clock.minutes', { n: m })] as [string, string])]} />
+      <SettingGroup title={t('settings.learn.title')}>
+        <SettingRow label={t('settings.learn.toggle')} help={t('settings.learn.help')}>
+          <Toggle checked={learn.on} onChange={learn.set} />
+        </SettingRow>
+        <SettingRow label={t('settings.learn.book')}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 'var(--sp-4)', minHeight: 'var(--h-ctrl)',
+                        fontSize: 'var(--fs-5)', color: 'var(--sub)', whiteSpace: 'nowrap' }}>
+            {([[t('settings.learn.stored'), learn.stored], [t('settings.learn.learned'), learn.learned]] as const).map(([label, n]) => (
+              <span key={label}>{label}{' '}
+                <b style={{ color: 'var(--text)', fontWeight: 600, fontVariantNumeric: 'tabular-nums' }}>{n?.toLocaleString() ?? '—'}</b>
+              </span>
+            ))}
+            <Button onClick={learn.onLog}>{t('settings.learn.open_log')}</Button>
+          </div>
         </SettingRow>
       </SettingGroup>
 
@@ -269,8 +270,8 @@ export function EngineSettings({ prefs, setPref }: {
                  onOk={() => {
                    setReset(false);
                    void (async () => {
+                     // Only the files, as the question says; the threads stay as chosen.
                      for (const [kind] of kinds()) await api.setResource(kind, null);
-                     await setThreads(null);
                      await load();
                      emitApp('resources-changed');
                    })();

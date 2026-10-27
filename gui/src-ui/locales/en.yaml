@@ -55,6 +55,8 @@ app:
     pass: "Pass"
   play:
     new_game: "New game"
+    new_game_body: "The current record will be cleared (study shows the same one). Save it first to keep it."
+    new_game_title: "Start a new game?"
     show_evals: "Evals"
     start: "Start game"
     stop: "Stop game"
@@ -75,10 +77,16 @@ app:
     analysis_level: "Analysis {lv}"
     analyze: "Analyze"
     black_view: "Black view"
+    branch_body: "The record from move {n} on ({m} moves) and its analysis will be cleared. Save it first to keep it."
+    branch_ok: "Play"
+    branch_title: "Play a different move?"
     load_record: "Load game record"
     move_eval: "Eval of this move"
     no_record: "No game record"
     ply_of: "{n} / {total} moves"
+    replace_body: "The current record ({n} moves) will be cleared (the game uses the same one). Save it first to keep it."
+    replace_ok: "Replace"
+    replace_title: "Replace the record?"
     stop_analysis: "Stop analysis"
     white_view: "White view"
 ask:
@@ -163,8 +171,7 @@ book:
     file: "book.txt"
     learned: "Learned from play"
   src:
-    book: "Book"
-    learned: "Learned book"
+    learned: "Learned"
   tree:
     collapse: "Collapse"
     expand: "Expand"
@@ -260,28 +267,19 @@ dock:
   book:
     label: "Book"
     missing: "— No file (you can choose one in settings)"
-  learn:
-    book_title: "Learned book"
-    import_toggle: "Import finished games"
-    importing: "Importing"
-    learned: "Of which learned"
-    open_log: "View learning log"
-    progress: "Positions {done} / {total}"
-    stored: "Stored positions"
-    writeback_note: "Games are imported win or lose, and the final disc difference is written back to the root. You stop repeating the same loss."
-    writeback_title: "Write back to the book"
-    yielding: "Yielding"
-    yielding_note: "Yields while a game or study is running"
   record:
     load: "Load"
     paste: "Paste"
     save: "Save"
   strength:
     analysis_title: "Analysis settings"
-  tab:
-    learning: "Learning"
-    record: "Game record"
-    strength: "Strength"
+    by_clock: "Time control"
+    by_level: "Level"
+    kuroobi: "KUROOBI"
+    left: "{color} · {who}"
+    minutes: "{n} min"
+    title: "Strength"
+    you: "You"
 engine:
   ask:
     stop_analysis_body: "The eval-graph analysis will be stopped partway. Points measured so far stay on the graph."
@@ -711,8 +709,9 @@ learn:
     old_entry: "This is an older entry, saved without details."
     open_move: "Open that move's position in study"
   col:
+    date: "Date"
     discs: "Discs"
-    game: "Game"
+    opponent: "Opponent"
     positions: "Positions"
   empty:
     filtered: "No games match ({n} outside the filter)"
@@ -723,6 +722,7 @@ learn:
     days_30: "Last 30 days"
     days_7: "Last 7 days"
     days_90: "Last 90 days"
+    days_all: "All time"
     lost: "Lost games"
   game:
     imported: "Import"
@@ -789,28 +789,26 @@ play:
   won_by: "{name} wins +{d}"
 players:
   count: "{n} players"
+  detail: "Player details"
   games: "{n} games"
   no_hit: "No players match \"{q}\""
   no_hit_help: "Players who are offline can be found in the ranking."
   per: "{n} per page"
-  pick: "Pick a player to see details"
   rank: "Rank"
   rate_trend: "Rating trend"
-  result: "Diff"
   search: "Search by name"
   tab_summary: "Summary"
   top_title: "Top players ({pool})"
-  when: "When"
 results:
   avg_diff: "Avg diff"
   best: "Best rating"
   change: "Change"
   empty_help: "Your results build up here as you play on GGS."
+  none_in_period: "No games in this period"
   open_kifu: "Open kifu"
   opp_rating: "Opponent rating"
   period_all: "All time"
   period_days: "{n} days"
-  pick: "Pick a game to see details"
   rating: "Rating"
   ratings: "Ratings"
   rematch: "Rematch"
@@ -847,12 +845,6 @@ settings:
     account: "Servers and accounts"
     form: "Request rules"
     play: "Playing and watching"
-  clock:
-    label: "Time control"
-    minutes: "{n} min"
-    none: "None"
-    note: "KUROOBI and you each get this time. It applies from the next new game. Running out loses the game."
-    title: "Local games"
   facing:
     auto: "You at bottom"
     black: "Black at bottom"
@@ -889,6 +881,14 @@ settings:
     en: "English"
     ja: "日本語"
     label: "Language"
+  learn:
+    book: "Learned book"
+    help: "Local and GGS games are imported win or lose, and the final disc difference is written back to the root."
+    learned: "Of which learned"
+    open_log: "View learning log"
+    stored: "Stored positions"
+    title: "Learning"
+    toggle: "Import finished games"
   numbers:
     decimals: "Decimals"
   play:

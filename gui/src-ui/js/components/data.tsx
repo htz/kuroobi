@@ -47,7 +47,9 @@ export function KifuTable({ moves, current, onSelect, decimals }: {
     if (top < b.scrollTop) b.scrollTop = top;
     else if (bottom > b.scrollTop + b.clientHeight) b.scrollTop = bottom - b.clientHeight;
   }, [current, moves.length]);
-  const cols = moveCols();
+  // A record read from a file carries no times: the column would only sit empty.
+  const timed = moves.some((m) => m.secs != null);
+  const cols = moveCols().filter((_, i) => timed || i !== 3);   // 3: the time column
   return (
     <div style={{ flex: 1, display: 'flex', flexDirection: 'column', minHeight: 0 }}>
       <TableHead cols={cols} />
@@ -75,7 +77,7 @@ export function KifuTable({ moves, current, onSelect, decimals }: {
                 {m.loss ? <span style={{ fontSize: 'var(--fs-7)', color: 'var(--bad)' }}>▼{m.loss}</span> : null}
                 <span>{m.score === undefined ? '' : (m.score > 0 ? '+' : '') + m.score.toFixed(decimals)}</span>
               </span>
-              <span style={{ color: 'var(--sub)', fontSize: 'var(--fs-6)' }}>{m.secs?.toFixed(1) ?? ''}</span>
+              {timed && <span style={{ color: 'var(--sub)', fontSize: 'var(--fs-6)' }}>{m.secs?.toFixed(1) ?? ''}</span>}
               <span style={{
                 fontSize: 'var(--fs-6)',
                 color: m.src && srcIsBook(m.src) ? 'var(--gold)'
@@ -280,8 +282,13 @@ export function EvalGraph({ points, plies, cursor, blunder, busy, pov, extra, on
         {!drawn && (
           <div style={{
             position: 'absolute', inset: 0, display: 'grid', placeItems: 'center',
-            fontSize: 'var(--fs-5)', color: 'var(--sub)',
-          }}>{busy ? t('data.graph.analyzing') : t('data.graph.empty')}</div>
+            fontSize: 'var(--fs-5)', color: 'var(--sub)', pointerEvents: 'none',
+          }}>
+            {/* The ground under the words keeps the zero line from striking them through. */}
+            <span style={{ background: 'var(--bg)', padding: '0 var(--sp-2)' }}>
+              {busy ? t('data.graph.analyzing') : t('data.graph.empty')}
+            </span>
+          </div>
         )}
       </div>
     </div>
@@ -303,13 +310,12 @@ export function ScoreRow({ black, white, turn, meta, blackClock, whiteClock }: {
   meta?: React.ReactNode;
   blackClock?: string; whiteClock?: string;
 }) {
+  // The side not to move fades its number only: a faded black stone vanishes into a dark ground.
   const side = (c: 'b' | 'w', n: number) => (
-    <span style={{
-      display: 'flex', alignItems: 'center', gap: 'var(--sp-2)',
-      opacity: turn === undefined || turn === c ? 1 : 0.55,
-    }}>
+    <span style={{ display: 'flex', alignItems: 'center', gap: 'var(--sp-2)' }}>
       <StoneDot color={c} size={14} />
-      <b style={{ fontSize: 'var(--fs-1)', fontWeight: 700, color: 'var(--text)' }}>{n}</b>
+      <b style={{ fontSize: 'var(--fs-1)', fontWeight: 700, color: 'var(--text)',
+                  opacity: turn === undefined || turn === c ? 1 : 0.55 }}>{n}</b>
     </span>
   );
   return (
@@ -534,9 +540,10 @@ export function ResultRow({ win, draw, adjourned, opponent, discs, when, note, r
   const hov = onHover
     ? { onMouseEnter: () => onHover(true), onMouseLeave: () => onHover(false) }
     : {};
-  return onClick && !dim
+  // A game without a record is faint but still opens: its details and a rematch need no record.
+  return onClick
     ? <button type="button" className="k-row" onClick={onClick} {...hov}
-              style={{ background: 'transparent', ...style, border: 0, cursor: 'pointer' }}>{body}</button>
+              style={{ background: 'transparent', ...style, border: 0, cursor: 'pointer', opacity: dim ? 0.5 : 1 }}>{body}</button>
     : <div style={{ ...style, opacity: dim ? 0.5 : 1 }} {...hov}>{body}</div>;
 }
 

@@ -1,12 +1,12 @@
 import { useEffect, useState } from 'react';
 import { ggsApi } from '../api';
 import type { GgsSnapshot, UserRow } from '../types';
-import { fingerGroups, fingerKey, fingerValue, onlineRows, parseCond, presence } from '../ggs';
+import { fingerGroups, fingerKey, fingerValue, gtypeLabel, onlineRows, parseCond, presence } from '../ggs';
 import { t } from '../i18n';
-import { Caption, Dock, Section, Toolbar } from '../components/layout';
+import { Caption, Drawer, Section, Toolbar } from '../components/layout';
 import { Button, Segmented, Select, TextField } from '../components/primitives';
 import { FormulaView, Tag, type NavId } from '../components/ggs';
-import { RateChart } from '../components/data';
+import { RateChart, ResultHead, ResultRow } from '../components/data';
 import { askSheet } from '../AskSheet';
 import { openChat } from './Chat';
 import { act, Blank, Cell, HeadRow, Line, ListHead, ListNote, Page, RankRates, rateLabel, Rows, Sections, Table } from '../ggsui';
@@ -30,9 +30,9 @@ export function Players({ snap, onNav, onKifu }: {
   const [query, setQuery] = useState('');
   const [page, setPage] = useState(0);
   const [perPage, setPerPage] = useState(25);
-  const [sel, setSel] = useState<string | null>(() => wantedPlayer || null);
+  // The details open only while someone is picked.
+  const [sel, setSel] = useState<string | null>(() => { const w = wantedPlayer || null; wantedPlayer = ''; return w; });
   const [tab, setTab] = useState('summary');
-  const [dock, setDock] = useState(() => { const open = !!wantedPlayer; wantedPlayer = ''; return open; });
   useEffect(() => { void ggsApi.listMatches().catch(() => {}); }, []);
   useEffect(() => {
     void ggsApi.autoview().then((v) => { if (v === 'players:top') setMode('top'); }).catch(() => {});
@@ -46,12 +46,11 @@ export function Players({ snap, onNav, onKifu }: {
   const cur = Math.min(page, pages - 1);
   const slice = rows.slice(cur * perPage, (cur + 1) * perPage);
   const mine = [...snap.my_ranks].sort((a, b) => (a.gtype === '8r' ? 0 : 1) - (b.gtype === '8r' ? 0 : 1));
-  const pick = (name: string) => { setSel(name); setDock(true); };
+  const pick = (name: string) => setSel(name);
 
   return (
     <>
-      <Toolbar dock={{ open: dock, onToggle: () => setDock((o) => !o) }}
-               end={<>
+      <Toolbar end={<>
                  <Button disabled={cur === 0} onClick={() => setPage(cur - 1)}>{t('ggs.prev')}</Button>
                  <span style={{ fontSize: 'var(--fs-6)', fontVariantNumeric: 'tabular-nums' }}>
                    {rows.length ? `${cur + 1} / ${pages}` : '0 / 0'}
@@ -102,14 +101,34 @@ export function Players({ snap, onNav, onKifu }: {
             </Table>
           </Section>
         </Sections>
-        <Dock push tabs={[{ id: 'summary', label: t('players.tab_summary') }, { id: 'history', label: t('ggs.users.tab_history') },
-                     { id: 'profile', label: t('ggs.users.tab_profile') }]}
-              active={tab} onTab={setTab} open={dock} scroll={false}>
-          {sel
-            ? <PlayerDetail snap={snap} name={sel} tab={tab} onNav={onNav} onKifu={onKifu} />
-            : <Blank title={t('players.pick')} />}
-        </Dock>
+        {sel && (
+          <Drawer label={t('players.detail')} onClose={() => setSel(null)}
+                  title={<PlayerTitle snap={snap} name={sel} />}
+                  tools={<Segmented value={tab} onChange={setTab}
+                                    options={[{ value: 'summary', label: t('players.tab_summary') },
+                                              { value: 'history', label: t('ggs.users.tab_history') },
+                                              { value: 'profile', label: t('ggs.users.tab_profile') }]} />}>
+            <PlayerDetail snap={snap} name={sel} tab={tab} onNav={onNav} onKifu={onKifu} />
+          </Drawer>
+        )}
       </Page>
+    </>
+  );
+}
+
+/** The drawer's heading: the name, whether they are playing, and whether they take requests. */
+function PlayerTitle({ snap, name }: { snap: GgsSnapshot; name: string }) {
+  const u = onlineRows(snap).find((x) => x.name === name) ?? snap.ranking.find((x) => x.name === name);
+  return (
+    <>
+      <span className="k-sel" style={{ minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis' }}>{name}</span>
+      {presence(snap, name) === 'playing' && <Tag tone="ok">{t('ggs.state.playing')}</Tag>}
+      {u?.open && (
+        <span style={{ flex: 'none', fontSize: 'var(--fs-6)', fontWeight: 400,
+                       color: u.open === '+' ? 'var(--accent)' : u.open === 'x' ? 'var(--bad)' : 'var(--sub)' }}>
+          {u.open === '+' ? t('ggs.users.open_yes') : u.open === 'x' ? t('ggs.users.open_ghost') : t('ggs.users.open_no')}
+        </span>
+      )}
     </>
   );
 }
@@ -160,7 +179,6 @@ function PlayerDetail({ snap, name, tab, onNav, onKifu }: {
   const [pool, setPool] = useState<'8r' | '8'>('8r');
   const [hover, setHover] = useState<number | null>(null);
   const u = onlineRows(snap).find((x) => x.name === name) ?? snap.ranking.find((x) => x.name === name);
-  const state = presence(snap, name);
   // Not there yet means still asking the server; an empty list means no games.
   const loaded = snap.history[name] !== undefined;
   const hist = snap.history[name] ?? [];
@@ -175,27 +193,27 @@ function PlayerDetail({ snap, name, tab, onNav, onKifu }: {
                      options={[{ value: '8r', label: t('ggs.pool.random') }, { value: '8', label: t('ggs.pool.normal') }]} />
           <span style={{ marginLeft: 'auto', fontSize: 'var(--fs-6)', color: 'var(--sub)' }}>{t('players.games', { n: rows.length })}</span>
         </div>
-        <HeadRow cols={[[t('players.when'), 64], [t('ggs.field.opponent'), undefined], [t('players.result'), 48, 'right']]} />
-        {!rows.length ? <Blank title={loaded ? t('ggs.users.no_history') : t('ggs.loading')} /> : (
-          <Rows>
-            {rows.map((h) => {
-              const black = h.black === name;
-              const d = parseFloat(h.score);
-              const v = Number.isFinite(d) ? (black ? d : -d) : null;
-              return (
-                <Line key={h.id} height="row" onClick={() => onKifu(t('ggs.vs', { a: h.black, b: h.white }), '', h.id)}>
-                  <Cell w={64} sub>{whenShort(secsOfText(h.at)) || h.at}</Cell>
-                  <Cell sel>{black ? h.white : h.black}</Cell>
-                  <Cell w={48} align="right">
-                    <b style={{ color: v == null ? 'var(--sub)' : v > 0 ? 'var(--ok)' : v < 0 ? 'var(--bad)' : 'var(--text)' }}>
-                      {v == null ? '—' : v > 0 ? `+${v}` : `${v}`}
-                    </b>
-                  </Cell>
-                </Line>
-              );
-            })}
-          </Rows>
-        )}
+        {/* The same table as the results screen, from this player's side. */}
+        <div style={{ flex: 1, minHeight: 0, display: 'flex', flexDirection: 'column', padding: '0 var(--sp-2) var(--sp-2)' }}>
+          <Table>
+            <ResultHead note />
+            {!rows.length ? <Blank title={loaded ? t('ggs.users.no_history') : t('ggs.loading')} /> : (
+              <Rows>
+                {rows.map((h) => {
+                  const black = h.black === name;
+                  const d = parseFloat(h.score);
+                  const v = Number.isFinite(d) ? (black ? d : -d) : null;
+                  return (
+                    <ResultRow key={h.id} opponent={black ? h.white : h.black}
+                               win={(v ?? 0) > 0} draw={v === 0} adjourned={v == null} discs={v ?? 0}
+                               when={whenShort(secsOfText(h.at)) || h.at} note={gtypeLabel(h.gtype)}
+                               onClick={() => onKifu(t('ggs.vs', { a: h.black, b: h.white }), '', h.id)} />
+                  );
+                })}
+              </Rows>
+            )}
+          </Table>
+        </div>
       </div>
     );
   }
@@ -252,13 +270,6 @@ function PlayerDetail({ snap, name, tab, onNav, onKifu }: {
   return (
     <div className="k-scroll" style={{ flex: 1, minHeight: 0 }}>
       <div style={{ display: 'flex', flexDirection: 'column', gap: 'var(--sp-3)', padding: 'var(--sp-4) var(--sp-4) var(--sp-5)' }}>
-        <div style={{ display: 'flex', alignItems: 'center', gap: 'var(--sp-2)', whiteSpace: 'nowrap', minWidth: 0 }}>
-          <span className="k-sel" style={{ fontSize: 'var(--fs-2)', fontWeight: 600, overflow: 'hidden', textOverflow: 'ellipsis' }}>{name}</span>
-          {state === 'playing' && <Tag tone="ok">{t('ggs.state.playing')}</Tag>}
-          <span style={{ marginLeft: 'auto', fontSize: 'var(--fs-6)', color: u?.open === '+' ? 'var(--accent)' : 'var(--sub)' }}>
-            {u?.open === '+' ? t('ggs.users.open_yes') : u?.open ? t('ggs.users.open_no') : ''}
-          </span>
-        </div>
         <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 'var(--sp-3)' }}>
           {([[t('ggs.pool.random'), u?.rating_r ?? null, u?.dev_r ?? null], [t('ggs.pool.normal'), u?.rating ?? null, u?.dev ?? null]] as const)
             .map(([label, r, d]) => (
@@ -271,9 +282,7 @@ function PlayerDetail({ snap, name, tab, onNav, onKifu }: {
         </div>
         {name !== snap.login && (
           <div style={{ display: 'flex', gap: 'var(--sp-2)' }}>
-            <span style={{ flex: 1, minWidth: 0, display: 'flex' }}>
-              <Button variant="primary" className="k-wide" onClick={() => askSheet.open({ opponent: name })}>{t('ask.title')}</Button>
-            </span>
+            <Button variant="primary" onClick={() => askSheet.open({ opponent: name })}>{t('ask.title')}</Button>
             <Button onClick={() => { openChat(name); onNav('ggs-chat'); }}>{t('ggs.nav.chat')}</Button>
           </div>
         )}
@@ -286,7 +295,7 @@ function PlayerDetail({ snap, name, tab, onNav, onKifu }: {
             </span>
           </div>
           {after.length >= 2
-            ? <RateChart points={after.map((p) => p.r)} width={258} height={120} dates={after.map((p) => whenShort(secsOfText(p.at)))}
+            ? <RateChart points={after.map((p) => p.r)} width={448} height={160} dates={after.map((p) => whenShort(secsOfText(p.at)))}
                          labels={after.map((p) => rateLabel(whenFull(secsOfText(p.at)), p.opp, p.discs, p.r))} hover={hover} onHover={setHover} />
             : <span style={{ fontSize: 'var(--fs-6)', color: 'var(--sub)' }}>{loaded ? t('ggs.no_records') : t('ggs.loading')}</span>}
         </div>

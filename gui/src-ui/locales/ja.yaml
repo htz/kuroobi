@@ -51,6 +51,8 @@ app:
     pass: "パス"
   play:
     new_game: "新規対局"
+    new_game_body: "今の棋譜は消えます (検討の棋譜も同じものです)。残すときは先に「保存」してください。"
+    new_game_title: "新規対局にしますか？"
     show_evals: "評価値を表示"
     start: "対局開始"
     stop: "対局停止"
@@ -71,10 +73,16 @@ app:
     analysis_level: "解析 {lv}"
     analyze: "分析"
     black_view: "黒視点"
+    branch_body: "{n} 手目から先の棋譜 ({m} 手) と分析は消えます。残すときは先に「保存」してください。"
+    branch_ok: "打つ"
+    branch_title: "別の手を打ちますか？"
     load_record: "棋譜を読み込む"
     move_eval: "この手の評価"
     no_record: "棋譜がありません"
     ply_of: "{n} / {total} 手"
+    replace_body: "今の棋譜 ({n} 手) は消えます (対局の棋譜も同じものです)。残すときは先に「保存」してください。"
+    replace_ok: "置き換える"
+    replace_title: "棋譜を置き換えますか？"
     stop_analysis: "分析停止"
     white_view: "白視点"
 ask:
@@ -159,8 +167,7 @@ book:
     file: "book.txt"
     learned: "実戦の学習"
   src:
-    book: "定石"
-    learned: "定石·学"
+    learned: "学習"
   tree:
     collapse: "閉じる"
     expand: "先を開く"
@@ -256,28 +263,19 @@ dock:
   book:
     label: "定石"
     missing: "— ファイルがありません (設定から指定できます)"
-  learn:
-    book_title: "学習した定石"
-    import_toggle: "終局した対局を取り込む"
-    importing: "取り込み中"
-    learned: "うち学習"
-    open_log: "学習ログを見る"
-    progress: "局面 {done} / {total}"
-    stored: "登録局面"
-    writeback_note: "勝敗にかかわらず取り込み、終局の石差を根まで書き戻します。同じ負け方をなぞらなくなります。"
-    writeback_title: "定石への書き戻し"
-    yielding: "譲り中"
-    yielding_note: "対局・検討が動いている間は譲ります"
   record:
     load: "読込"
     paste: "貼り付け"
     save: "保存"
   strength:
     analysis_title: "解析の設定"
-  tab:
-    learning: "学習"
-    record: "棋譜"
-    strength: "強さ"
+    by_clock: "持ち時間"
+    by_level: "レベル"
+    kuroobi: "KUROOBI"
+    left: "{color} · {who}"
+    minutes: "{n} 分"
+    title: "強さ"
+    you: "自分"
 engine:
   ask:
     stop_analysis_body: "評価値グラフの分析を途中で止めます。測り終えたところまでの点は残ります。"
@@ -707,8 +705,9 @@ learn:
     old_entry: "明細の無い古い控えです。"
     open_move: "その手の局面を検討で開く"
   col:
+    date: "日付"
     discs: "石数"
-    game: "対局"
+    opponent: "相手"
     positions: "局面"
   empty:
     filtered: "この条件に合う対局はありません ({n} 局は条件の外)"
@@ -719,6 +718,7 @@ learn:
     days_30: "直近 30 日"
     days_7: "直近 7 日"
     days_90: "直近 90 日"
+    days_all: "全期間"
     lost: "負けた対局"
   game:
     imported: "取り込み"
@@ -785,28 +785,26 @@ play:
   won_by: "{name} の勝ち +{d}"
 players:
   count: "{n} 人"
+  detail: "プレイヤーの詳細"
   games: "{n} 局"
   no_hit: "「{q}」に当たるプレイヤーはいません"
   no_hit_help: "接続していない人は「上位」から探せます"
   per: "{n} 件"
-  pick: "プレイヤーを選ぶと詳細が出ます"
   rank: "順位"
   rate_trend: "レートの推移"
-  result: "石差"
   search: "名前で検索"
   tab_summary: "概要"
   top_title: "{pool}の上位"
-  when: "日時"
 results:
   avg_diff: "平均石差"
   best: "最高"
   change: "期間の増減"
   empty_help: "終わった対局がここに残ります"
+  none_in_period: "この期間の対局はありません"
   open_kifu: "棋譜を開く"
   opp_rating: "相手のレート"
   period_all: "すべての期間"
   period_days: "直近 {n} 日"
-  pick: "対局を選ぶと詳細が出ます"
   rating: "レート"
   ratings: "レート"
   rematch: "同じ条件で再戦"
@@ -843,12 +841,6 @@ settings:
     account: "サーバーとアカウント"
     form: "申し込みの条件"
     play: "対局と観戦"
-  clock:
-    label: "持ち時間"
-    minutes: "{n} 分"
-    none: "なし"
-    note: "KUROOBI と自分の両方が持つ。次の「新規対局」から効く"
-    title: "ローカル対局"
   facing:
     auto: "自分が下"
     black: "黒が下"
@@ -885,6 +877,14 @@ settings:
     en: "English"
     ja: "日本語"
     label: "言語"
+  learn:
+    book: "学習した定石"
+    help: "ローカル対局と GGS の対局を、勝敗にかかわらず定石に取り込み、終局の石差を根まで書き戻す"
+    learned: "うち学習"
+    open_log: "学習ログを見る"
+    stored: "登録局面"
+    title: "学習"
+    toggle: "終局した対局を取り込む"
   numbers:
     decimals: "評価値の小数"
   play:

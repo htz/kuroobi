@@ -135,23 +135,24 @@ export function Toolbar({ children, aux, end, dock, graph }: {
   );
 }
 
-export function Dock({ tabs, active, onTab, children, open, scroll = true, push }: {
+export function Dock({ tabs, active, onTab, children, open, scroll = true }: {
   tabs: { id: string; label: string }[]; active: string; onTab?: (id: string) => void;
   children: React.ReactNode;
   open?: boolean;
   scroll?: boolean;
-  /** When the window is narrow, take room beside the content instead of covering it (for tables whose right columns matter). */
-  push?: boolean;
 }) {
   return (
-    <aside className={'k-dock' + (open ? ' k-open' : '') + (push ? ' k-dock-push' : '')} style={{
+    <aside className={'k-dock' + (open ? ' k-open' : '')} style={{
       flex: 'none', background: 'var(--panel)',
       borderLeft: '1px solid var(--border)', flexDirection: 'column', minHeight: 0,
     }}>
-      <div style={{ padding: 'var(--sp-2)', flex: 'none' }}>
-        <Segmented fill value={active} onChange={onTab}
-                   options={tabs.map(tab => ({ value: tab.id, label: tab.label }))} />
-      </div>
+      {/* A lone tab has nothing to switch to; its sections carry their own titles. */}
+      {tabs.length > 1 && (
+        <div style={{ padding: 'var(--sp-2)', flex: 'none' }}>
+          <Segmented fill value={active} onChange={onTab}
+                     options={tabs.map(tab => ({ value: tab.id, label: tab.label }))} />
+        </div>
+      )}
       <div className={scroll ? 'k-scroll' : undefined} style={{
         flex: 1, minHeight: 0, display: scroll ? undefined : 'flex', flexDirection: 'column',
       }}>{children}</div>
@@ -616,9 +617,14 @@ const FOCUSABLE =
 const FIRST_STOP = 'textarea:not(:disabled), input:not(:disabled), select:not(:disabled)';
 
 export function Overlay({ onClose, children }: { onClose?: () => void; children: React.ReactNode }) {
+  const root = React.useRef<HTMLDivElement>(null);
   React.useEffect(() => {
     if (!onClose) return;
-    const on = (e: KeyboardEvent) => { if (e.key === 'Escape') onClose(); };
+    // Only the topmost one closes (a question asked over the game record viewer).
+    const on = (e: KeyboardEvent) => {
+      const all = document.querySelectorAll('[data-k-overlay]');
+      if (e.key === 'Escape' && all[all.length - 1] === root.current) onClose();
+    };
     window.addEventListener('keydown', on);
     return () => window.removeEventListener('keydown', on);
   }, [onClose]);
@@ -648,7 +654,7 @@ export function Overlay({ onClose, children }: { onClose?: () => void; children:
   const pressedScrim = React.useRef(false);
 
   return (
-    <div
+    <div ref={root} data-k-overlay=""
       onMouseDown={(e) => { pressedScrim.current = e.target === e.currentTarget; }}
       onMouseUp={(e) => {
         const upOnScrim = e.target === e.currentTarget;
@@ -662,5 +668,70 @@ export function Overlay({ onClose, children }: { onClose?: () => void; children:
       }}>
       <div ref={box} tabIndex={-1}>{children}</div>
     </div>
+  );
+}
+
+/**
+ * The details of a picked row, slid in from the right over the screen (players, results). It is there
+ * only while something is picked; a click outside it, its close button or Esc closes it. The click
+ * outside still does what it was for (another row opens its own details, Nav changes screen), and a
+ * dialog opened from the drawer (a request, a game record) is not outside it.
+ */
+export function Drawer({ title, tools, label, onClose, children }: {
+  title: React.ReactNode; tools?: React.ReactNode; label: string;
+  onClose: () => void; children: React.ReactNode;
+}) {
+  const box = useRef<HTMLElement>(null);
+  const shut = useRef(onClose);
+  useLayoutEffect(() => { shut.current = onClose; });
+  useEffect(() => {
+    const overlay = () => document.querySelector('[data-k-overlay]') !== null;
+    const key = (e: KeyboardEvent) => { if (e.key === 'Escape' && !overlay()) shut.current(); };
+    const press = (e: MouseEvent) => {
+      const at = e.target as Element | null;
+      if (overlay() || !at || box.current?.contains(at) || at.closest('[data-k-toasts]')) return;
+      shut.current();
+    };
+    window.addEventListener('keydown', key);
+    window.addEventListener('mousedown', press, true);
+    return () => { window.removeEventListener('keydown', key); window.removeEventListener('mousedown', press, true); };
+  }, []);
+  // Placed against the window, so the screen that opens it can sit anywhere inside the frame.
+  const edge = { position: 'fixed', top: 'var(--h-window)', bottom: 'var(--h-status)' } as const;
+  return (
+    <>
+      <aside ref={box} role="dialog" aria-label={label} style={{
+        ...edge, right: 0, zIndex: 26, width: 'var(--w-drawer)', maxWidth: 'calc(100% - 120px)',
+        display: 'flex', flexDirection: 'column', background: 'var(--panel)',
+        borderLeft: '1px solid var(--border)', boxShadow: 'var(--sh-2)',
+      }}>
+        <div style={{
+          flex: 'none', height: 'var(--h-bar)', display: 'flex', alignItems: 'center', gap: 'var(--sp-2)',
+          padding: '0 var(--sp-2) 0 var(--sp-3)', borderBottom: '1px solid var(--border)', whiteSpace: 'nowrap',
+        }}>
+          <div style={{ flex: 1, minWidth: 0, display: 'flex', alignItems: 'center', gap: 'var(--sp-2)',
+                        fontSize: 'var(--fs-3)', fontWeight: 600, overflow: 'hidden' }}>{title}</div>
+          {tools}
+          <IconButton name="close" label={t('ui.close')} onClick={onClose} />
+        </div>
+        <div style={{ flex: 1, minHeight: 0, display: 'flex', flexDirection: 'column' }}>{children}</div>
+      </aside>
+    </>
+  );
+}
+
+/** The yes/no question before a step that cannot be taken back (resign, a new game, a delete). */
+export function Confirm({ title, body, ok, danger, onOk, onCancel }: {
+  title: string; body?: React.ReactNode; ok: string; danger?: boolean;
+  onOk: () => void; onCancel: () => void;
+}) {
+  return (
+    <Overlay onClose={onCancel}>
+      <Modal title={title} body={body} onClose={onCancel} actions={<>
+        <span style={{ marginLeft: 'auto' }} />
+        <Button size="field" onClick={onCancel}>{t('dialog.cancel')}</Button>
+        <Button size="field" variant={danger ? 'danger' : 'primary'} onClick={onOk}>{ok}</Button>
+      </>} />
+    </Overlay>
   );
 }
