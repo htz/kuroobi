@@ -16,6 +16,10 @@ import { secsOfText, whenFull, whenShort } from '../when';
 const fmt = (r: number | null, d: number | null) =>
   r == null ? '—' : `${r.toFixed(1)}${d != null ? ` ±${Math.round(d)}` : ''}`;
 
+let wantedPlayer = '';
+/** Opens a player's details the next time the players screen opens (from the observers list). */
+export const focusPlayer = (name: string) => { wantedPlayer = name; };
+
 /** Online players or the ranking on the left; the chosen one's summary, history and profile in the dock. */
 export function Players({ snap, onNav, onKifu }: {
   snap: GgsSnapshot; onNav: (id: NavId) => void;
@@ -26,9 +30,9 @@ export function Players({ snap, onNav, onKifu }: {
   const [query, setQuery] = useState('');
   const [page, setPage] = useState(0);
   const [perPage, setPerPage] = useState(25);
-  const [sel, setSel] = useState<string | null>(null);
+  const [sel, setSel] = useState<string | null>(() => wantedPlayer || null);
   const [tab, setTab] = useState('summary');
-  const [dock, setDock] = useState(false);
+  const [dock, setDock] = useState(() => { const open = !!wantedPlayer; wantedPlayer = ''; return open; });
   useEffect(() => { void ggsApi.listMatches().catch(() => {}); }, []);
   useEffect(() => {
     void ggsApi.autoview().then((v) => { if (v === 'players:top') setMode('top'); }).catch(() => {});

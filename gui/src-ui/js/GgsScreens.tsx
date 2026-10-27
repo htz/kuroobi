@@ -6,7 +6,8 @@ import {
   type ClockSide, type ClockView, type Cond,
 } from './ggs';
 import { t, useLang } from './i18n';
-import { EmptyBoard, EmptyState, Toolbar } from './components/layout';
+import { Caption, EmptyBoard, EmptyState, ListRow, popoverStyle, Toolbar, useDismiss } from './components/layout';
+import { Icon } from './components/Icons';
 import { Button, Segmented, TextArea } from './components/primitives';
 import { Confirm, SettingRow } from './Dialogs';
 import { FormulaEditor, MatchRow, Tag, type Match, type NavId } from './components/ggs';
@@ -15,7 +16,7 @@ import { EvalTrend, PlayerRow } from './components/data';
 import { flipped, type Prefs } from './prefs';
 import { askSheet } from './AskSheet';
 import { Lobby, takeFocus } from './ggs/Lobby';
-import { Players } from './ggs/Players';
+import { focusPlayer, Players } from './ggs/Players';
 import { Results } from './ggs/Results';
 import { Chat } from './ggs/Chat';
 import { Tourney } from './ggs/Tourney';
@@ -44,6 +45,56 @@ export function GgsScreen({ nav, snap, onNav, prefs, onKifu }: {
     case 'ggs-console': return <Console snap={snap} />;
     default: return null;
   }
+}
+
+/**
+ * "観戦 3": who is watching this match, kept live from the server's notices. Pressing it opens
+ * their names under it; a name opens that player. With nobody watching it cannot be pressed.
+ */
+function Watchers({ names, onPick }: { names: string[]; onPick: (name: string) => void }) {
+  const [at, setAt] = useState<{ top: number; left: number } | null>(null);
+  const btn = useRef<HTMLSpanElement>(null);
+  const box = useRef<HTMLDivElement>(null);
+  // The last one leaving closes the list for good (it must not reopen when someone comes later).
+  if (!names.length && at) setAt(null);
+  const open = names.length > 0 ? at : null;
+  useDismiss(open !== null, () => setAt(null), btn, box);
+  const toggle = () => {
+    if (open) { setAt(null); return; }
+    const r = btn.current?.getBoundingClientRect();
+    if (!r) return;
+    // Under the button, from its left edge; near the window's right edge, ending at its right edge.
+    const w = parseFloat(getComputedStyle(document.documentElement).getPropertyValue('--w-popover')) || 300;
+    setAt({ top: r.bottom + 4, left: r.left + w > window.innerWidth - 8 ? Math.max(8, r.right - w) : r.left });
+  };
+  return (
+    <span ref={btn} style={{ display: 'flex' }}>
+      <Button variant="ghost" disabled={!names.length} title={t('ggs.watchers.title')} onClick={toggle}>
+        <span style={{ display: 'inline-flex', alignItems: 'center', gap: 'var(--sp-1)', color: names.length ? 'var(--text)' : undefined }}>
+          <Icon name="watch" size={15} />
+          {t('ggs.watchers.button')}
+          <b style={{ fontWeight: 600, fontVariantNumeric: 'tabular-nums' }}>{names.length}</b>
+        </span>
+      </Button>
+      {open && (
+        // Fixed to the window: the toolbar around the button must not cut it off.
+        <div ref={box} role="dialog" style={{ ...popoverStyle, position: 'fixed', top: open.top, left: open.left, zIndex: 20, width: 'var(--w-popover)' }}>
+          <div style={{ flex: 'none', height: 'var(--h-head)', display: 'flex', alignItems: 'center', gap: 'var(--sp-2)', padding: 'var(--sp-1) var(--sp-3) 0' }}>
+            <Caption>{t('ggs.watchers.title')}</Caption>
+            <span style={{ marginLeft: 'auto', fontSize: 'var(--fs-7)', color: 'var(--sub)' }}>{t('ggs.watchers.count', { n: names.length })}</span>
+          </div>
+          <div className="k-scroll" style={{ maxHeight: 'calc(var(--h-field) * 7)', display: 'flex', flexDirection: 'column', padding: 'var(--sp-1) 0' }}>
+            {names.map((name) => (
+              <ListRow key={name} rule={false} title={t('ggs.watchers.open_player')}
+                       onClick={() => { setAt(null); onPick(name); }}>
+                <span className="k-sel" style={{ flex: 1, minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis' }}>{name}</span>
+              </ListRow>
+            ))}
+          </div>
+        </div>
+      )}
+    </span>
+  );
 }
 
 export function GgsPlay({ snap, onNav, prefs, onKifu }: {
@@ -136,6 +187,10 @@ export function GgsPlay({ snap, onNav, prefs, onKifu }: {
   return (
     <>
       <Toolbar end={<>
+        {!ended && first && (
+          <Watchers names={snap.watchers[first.base] ?? []}
+                    onPick={(name) => { focusPlayer(name); onNav('ggs-players'); }} />
+        )}
         {mine && !ended && !tourney && <Button onClick={() => setAsk('break')}>{t('ggs.adjourn')}</Button>}
         {mine && !ended && <Button variant="danger" onClick={() => setAsk('resign')}>{t('ggs.resign')}</Button>}
         {!mine && !ended && first && (

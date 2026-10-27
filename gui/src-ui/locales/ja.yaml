@@ -663,6 +663,11 @@ ggs:
     winner: "優勝 {name}"
     withdraw: "辞退"
   vs_word: "対"
+  watchers:
+    button: "観戦"
+    count: "{n} 人"
+    open_player: "プレイヤーの詳細を見る"
+    title: "観戦している人"
 kifu:
   board_tab: "{n} 面目"
   close: "閉じる"

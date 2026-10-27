@@ -667,6 +667,11 @@ ggs:
     winner: "winner {name}"
     withdraw: "Withdraw"
   vs_word: "vs"
+  watchers:
+    button: "Watching"
+    count: "{n}"
+    open_player: "Open the player's details"
+    title: "Watching this game"
 kifu:
   board_tab: "Board {n}"
   close: "Close"

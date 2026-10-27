@@ -318,6 +318,9 @@ pub struct Snapshot {
     pub fingers: HashMap<String, FingerInfo>,
     pub offers: Vec<Offer>,
     pub matches: Vec<MatchView>,
+    /// Who is watching each match we play or watch, by match id (`.7`; both boards of a synchro
+    /// pair share it), in name order.
+    pub watchers: HashMap<String, Vec<String>>,
     pub ongoing: Vec<OngoingView>,
     /// Everyone logged in, or `None` until the server's `who` has answered once.
     pub online: Option<Vec<String>>,
@@ -1730,6 +1733,10 @@ struct Ctx {
     dirty: bool,
     auto_watch: Vec<String>,
     rated_by_base: HashMap<String, bool>,
+    /// Observers per match id: seeded once by `watch .id`, then kept by the server's notices.
+    watchers: HashMap<String, std::collections::BTreeSet<String>>,
+    /// Match ids whose observers have been asked for since we joined them.
+    watch_asked: std::collections::HashSet<String>,
     learn_jobs: VecDeque<(String, kuroobi::learn::BackupJob, crate::LearnEntry)>,
     local_stop: Arc<Mutex<Option<kuroobi::midgame::StopHandle>>>,
     local_activity: Arc<Mutex<crate::Activity>>,
@@ -2117,6 +2124,8 @@ fn new_ctx(
         dirty: true,
         auto_watch: Vec::new(),
         rated_by_base: HashMap::new(),
+        watchers: HashMap::new(),
+        watch_asked: std::collections::HashSet::new(),
         learn_jobs: VecDeque::new(),
         local_stop,
         local_activity,
@@ -2171,8 +2180,11 @@ pub fn run(
             s.conn = "disconnected".into();
             s.offers.clear();
             s.matches.clear();
+            s.watchers.clear();
             s.thinking = None;
         }
+        ctx.watchers.clear();
+        ctx.watch_asked.clear();
         ctx.emit(true);
     }
 }
@@ -2486,6 +2498,9 @@ fn greet(ctx: &mut Ctx, w: &mut Wire, login: &str, send: &mut impl FnMut(String)
             "tell /os rated +"
         },
         "tell /os notify +",
+        // Observers coming and going on our games and watched games arrive as `+ name watch .id`;
+        // that keeps the observer list live without asking again.
+        "tell /os watch +",
         "chann + .chat",
     ] {
         say(ctx, send, c);
@@ -2587,6 +2602,18 @@ fn dispatch_line(
             }
         }
         handle_block(ctx, &w.block, login, &mut w.matches, &mut send);
+        ask_watchers(ctx, w, &mut send);
+        return;
+    }
+
+    if let Some((on, name, id)) = watch_notice(ln) {
+        let set = ctx.watchers.entry(id.to_string()).or_default();
+        if on {
+            set.insert(name.to_string());
+        } else {
+            set.remove(name);
+        }
+        publish_watchers(ctx);
         return;
     }
 
@@ -2833,6 +2860,10 @@ fn handle_cmd(
         }
         Cmd::Unwatch(id) => {
             send(format!("tell /os watch - {id}"));
+            // Notices stop with the watching: the list would go stale, and watching again asks anew.
+            ctx.watchers.remove(base_id(&id));
+            ctx.watch_asked.remove(base_id(&id));
+            publish_watchers(ctx);
             let mut s = ctx.snap.lock().unwrap();
             mark_watching(&mut s, &id, false);
             s.matches.retain(|m| m.id != id && base_id(&m.id) != id);
@@ -4419,6 +4450,8 @@ fn capture_header_matches(kind: &str, ln: &str) -> bool {
         ln.starts_with("/os: match")
     } else if kind.starts_with("osfinger:") {
         ln.starts_with("/os: finger")
+    } else if kind.starts_with("watchers:") {
+        ln.starts_with("/os: watch")
     } else if kind == "online" {
         ln.starts_with(": who")
     } else if kind.starts_with("finger:") {
@@ -5155,6 +5188,71 @@ fn capture_finger(ctx: &mut Ctx, buf: &[String], name: &str) {
     ctx.dirty = true;
 }
 
+/// Asks once for the observers of each match that has appeared, and drops the ones that are gone.
+fn ask_watchers(ctx: &mut Ctx, w: &mut Wire, send: &mut impl FnMut(String)) {
+    let ids: std::collections::HashSet<String> =
+        w.matches.keys().map(|k| base_id(k).to_string()).collect();
+    let before = ctx.watchers.len();
+    ctx.watchers.retain(|id, _| ids.contains(id));
+    ctx.watch_asked.retain(|id| ids.contains(id));
+    let mut ask: Vec<String> = ids
+        .into_iter()
+        .filter(|id| !ctx.watch_asked.contains(id))
+        .collect();
+    ask.sort();
+    for id in ask {
+        ctx.watch_asked.insert(id.clone());
+        w.pending.push(format!("watchers:{id}"));
+        say(ctx, send, format!("tell /os watch {id}"));
+    }
+    if ctx.watchers.len() != before {
+        publish_watchers(ctx);
+    }
+}
+
+fn publish_watchers(ctx: &mut Ctx) {
+    let view: HashMap<String, Vec<String>> = ctx
+        .watchers
+        .iter()
+        .map(|(id, names)| (id.clone(), names.iter().cloned().collect()))
+        .collect();
+    ctx.snap.lock().unwrap().watchers = view;
+    ctx.dirty = true;
+}
+
+/// `/os:  + root watch .7` (someone began watching) or `/os:  - root watch .7` (stopped, or left).
+fn watch_notice(ln: &str) -> Option<(bool, &str, &str)> {
+    let mut t = ln.strip_prefix("/os:")?.split_whitespace();
+    let on = match t.next()? {
+        "+" => true,
+        "-" => false,
+        _ => return None,
+    };
+    let name = t.next()?;
+    if t.next()? != "watch" {
+        return None;
+    }
+    let id = t.next()?;
+    (id.starts_with('.') && t.next().is_none()).then_some((on, name, id))
+}
+
+/// The answer to `watch .7 .9`: `/os: watch 2`, then `|.7        2 : root tdir` per match.
+fn watch_list(buf: &[String]) -> Vec<(String, Vec<String>)> {
+    buf.iter()
+        .filter_map(|l| {
+            let rest = l.strip_prefix('|')?;
+            let (head, names) = rest.split_once(':')?;
+            let id = head.split_whitespace().next()?;
+            id.starts_with('.').then(|| {
+                (
+                    id.to_string(),
+                    names.split_whitespace().map(str::to_string).collect(),
+                )
+            })
+        })
+        .collect()
+}
+
 fn finish_capture(ctx: &mut Ctx, kind: &str, buf: &[String], login: &str) {
     if kind == "online" {
         let names = online_names(buf);
@@ -5210,6 +5308,13 @@ fn finish_capture(ctx: &mut Ctx, kind: &str, buf: &[String], login: &str) {
         ctx.dirty = true;
         return;
     }
+    if kind.starts_with("watchers:") {
+        for (id, names) in watch_list(buf) {
+            ctx.watchers.insert(id, names.into_iter().collect());
+        }
+        publish_watchers(ctx);
+        return;
+    }
     if kind.starts_with("who") || kind == "top" {
         capture_who(ctx, kind, buf, login);
     } else if kind == "match_list" {
@@ -5229,6 +5334,37 @@ fn finish_capture(ctx: &mut Ctx, kind: &str, buf: &[String], login: &str) {
 
 #[cfg(test)]
 mod tests {
+
+    #[test]
+    fn reads_watch_notices_and_lists() {
+        assert_eq!(
+            super::watch_notice("/os:  + root watch .7"),
+            Some((true, "root", ".7"))
+        );
+        assert_eq!(
+            super::watch_notice("/os:  - tdir watch .12"),
+            Some((false, "tdir", ".12"))
+        );
+        assert_eq!(
+            super::watch_notice("/os: + match .7 1667 regu 1690 bob s8r14 R"),
+            None
+        );
+        assert_eq!(super::watch_notice("/os:  + root watch"), None);
+        let buf: Vec<String> = ["/os: watch 2", "|.7        2 : root tdir", "|.9        0 :"]
+            .iter()
+            .map(|s| s.to_string())
+            .collect();
+        assert_eq!(
+            super::watch_list(&buf),
+            vec![
+                (
+                    ".7".to_string(),
+                    vec!["root".to_string(), "tdir".to_string()]
+                ),
+                (".9".to_string(), vec![]),
+            ]
+        );
+    }
 
     const WATCH_JOIN_BLOCK: &[&str] = &[
         "/os: join .45.0 s8r14 K?",

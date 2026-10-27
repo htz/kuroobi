@@ -233,6 +233,8 @@ export interface GgsSnapshot {
   fingers: Record<string, FingerInfo>;
   offers: Offer[];
   matches: MatchView[];
+  /** Who is watching each match we play or watch, by match id (`.7`), in name order. */
+  watchers: Record<string, string[]>;
   ongoing: OngoingView[];
   online: string[] | null;
   notice: string;
