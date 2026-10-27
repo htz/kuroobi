@@ -1632,6 +1632,31 @@ fn ggs_forget_account(server: String, login: String) {
 }
 
 #[tauri::command]
+fn ggs_servers() -> Vec<ggs::SavedServer> {
+    ggs::saved_servers()
+}
+
+#[tauri::command]
+fn ggs_save_server(old: String, name: String, addr: String, public: bool) -> Result<(), String> {
+    ggs::save_server(&old, &name, &addr, public)
+}
+
+#[tauri::command]
+fn ggs_forget_server(addr: String) {
+    ggs::forget_server(&addr);
+}
+
+#[tauri::command]
+fn ggs_auto_account() -> Option<(String, String)> {
+    ggs::auto_key()
+}
+
+#[tauri::command]
+fn ggs_set_auto_account(server: String, login: String) {
+    ggs::set_auto(&server, &login);
+}
+
+#[tauri::command]
 fn set_backend_strings(strings: std::collections::HashMap<String, String>) {
     i18n::set(strings);
 }
@@ -2035,6 +2060,11 @@ fn main() {
             ggs_accounts,
             ggs_connect_saved,
             ggs_forget_account,
+            ggs_servers,
+            ggs_save_server,
+            ggs_forget_server,
+            ggs_auto_account,
+            ggs_set_auto_account,
             ggs_switch_account,
             ggs_disconnect,
             ggs_raw,

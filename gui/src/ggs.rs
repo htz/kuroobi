@@ -197,6 +197,8 @@ pub struct Offer {
     pub gtype: String,
     pub time: String,
     pub rated: bool,
+    /// When the request was first heard of (epoch ms), for "sent N min ago".
+    pub since_ms: u64,
 }
 
 #[derive(Clone, Serialize, Default)]
@@ -295,6 +297,12 @@ pub struct StandbyStats {
     pub diff_sum: i32,
 }
 
+#[derive(Clone, Copy, Serialize)]
+pub struct SearchStat {
+    pub nodes: u64,
+    pub secs: f64,
+}
+
 #[derive(Clone, Serialize, Default)]
 pub struct Snapshot {
     pub conn: String, // disconnected | connecting | logging_in | online
@@ -329,6 +337,8 @@ pub struct Snapshot {
     /// Empty means the search log goes nowhere.
     pub log_channel: String,
     pub thinking: Option<String>,
+    /// The last move kuroobi searched in a GGS game, for the status bar.
+    pub last_search: Option<SearchStat>,
     pub fetched_ggf: Option<FetchedGgf>,
     pub td: TdView,
 }
@@ -469,6 +479,7 @@ pub fn demo_snapshot() -> Snapshot {
             gtype: "s8r16".into(),
             time: "00:15:00".into(),
             rated: true,
+            since_ms: epoch_ms() - 120_000,
         },
         Offer {
             id: "2".into(),
@@ -478,6 +489,7 @@ pub fn demo_snapshot() -> Snapshot {
             gtype: "8".into(),
             time: "00:10:00".into(),
             rated: false,
+            since_ms: epoch_ms() - 45_000,
         },
     ];
     s.stored = vec![StoredView {
@@ -697,9 +709,10 @@ fn server() -> String {
     }
 }
 
-/// Test games must not be learned into the shared book.
+/// Test games must not be learned into the shared book: only a server marked public counts.
 fn local_server() -> bool {
-    server() != DEFAULT_SERVER
+    let addr = server();
+    !saved_servers().iter().any(|s| s.addr == addr && s.public)
 }
 
 /// `ggs_games/`, holding the account store and one folder per account.
@@ -787,8 +800,19 @@ pub struct SavedAccount {
     pub password: String,
 }
 
+/// A server the user has named; `public` marks the real one, whose games teach the book.
+#[derive(Clone, Serialize, serde::Deserialize, Default)]
+pub struct SavedServer {
+    pub addr: String,
+    pub name: String,
+    #[serde(default)]
+    pub public: bool,
+}
+
 #[derive(Serialize, serde::Deserialize, Default)]
 struct AccountStore {
+    #[serde(default)]
+    servers: Vec<SavedServer>,
     accounts: Vec<SavedAccount>,
     /// `server|login` to log in as at startup; cleared by logging out.
     #[serde(default)]
@@ -911,6 +935,101 @@ fn remember_account(server: &str, login: &str, pw: &str) {
         password: pw.to_string(),
     });
     s.auto = Some(key_of(server, login));
+    write_store(&s);
+}
+
+/// The named servers: the public one first, then every server an account was saved on.
+pub fn saved_servers() -> Vec<SavedServer> {
+    let s = load_store();
+    let mut out = s.servers.clone();
+    if !out.iter().any(|x| x.addr == DEFAULT_SERVER) {
+        out.insert(
+            0,
+            SavedServer {
+                addr: DEFAULT_SERVER.to_string(),
+                name: "GGS".to_string(),
+                public: true,
+            },
+        );
+    }
+    for a in &s.accounts {
+        if !out.iter().any(|x| x.addr == a.server) {
+            out.push(SavedServer {
+                addr: a.server.clone(),
+                name: a.server.clone(),
+                public: false,
+            });
+        }
+    }
+    out
+}
+
+/// Adds or edits a server; when its address changes, its accounts move with it.
+pub fn save_server(old: &str, name: &str, addr: &str, public: bool) -> Result<(), String> {
+    let addr = addr.trim();
+    if addr.is_empty() || !addr.contains(':') {
+        return Err("err.server_address".to_string());
+    }
+    let mut s = load_store();
+    let mut list = saved_servers();
+    if addr != old && list.iter().any(|x| x.addr == addr) {
+        return Err("err.server_exists".to_string());
+    }
+    let entry = SavedServer {
+        addr: addr.to_string(),
+        name: if name.trim().is_empty() {
+            addr.to_string()
+        } else {
+            name.trim().to_string()
+        },
+        public,
+    };
+    match list.iter_mut().find(|x| !old.is_empty() && x.addr == old) {
+        Some(x) => *x = entry,
+        None => list.push(entry),
+    }
+    if !old.is_empty() && old != addr {
+        for a in s.accounts.iter_mut().filter(|a| a.server == old) {
+            a.server = addr.to_string();
+        }
+        if let Some(k) = s.auto.as_mut() {
+            if let Some(login) = k.strip_prefix(&format!("{old}|")) {
+                *k = key_of(addr, login);
+            }
+        }
+    }
+    s.servers = list;
+    write_store(&s);
+    Ok(())
+}
+
+/// Removes a server and the accounts saved on it.
+pub fn forget_server(addr: &str) {
+    let mut s = load_store();
+    s.servers = saved_servers()
+        .into_iter()
+        .filter(|x| x.addr != addr)
+        .collect();
+    s.accounts.retain(|a| a.server != addr);
+    if s.auto
+        .as_deref()
+        .is_some_and(|k| k.starts_with(&format!("{addr}|")))
+    {
+        s.auto = None;
+    }
+    write_store(&s);
+}
+
+/// The account to log in as at startup, as `(server, login)`.
+pub fn auto_key() -> Option<(String, String)> {
+    let k = load_store().auto?;
+    let (server, login) = k.split_once('|')?;
+    Some((server.to_string(), login.to_string()))
+}
+
+pub fn set_auto(server: &str, login: &str) {
+    let mut s = load_store();
+    s.auto = (!login.is_empty()).then(|| key_of(server, login));
     write_store(&s);
 }
 
@@ -1213,13 +1332,22 @@ impl MatchState {
         let mine_parity = match self.eval_parity {
             Some(p) => p,
             None => {
-                let Some(mc) = self.my_color else {
-                    return Vec::new();
-                };
+                // An observer sees the series from black's side.
+                let mc = self.my_color.unwrap_or('*');
                 if self.turn != '*' && self.turn != 'O' {
-                    return Vec::new();
-                }
-                if self.turn != mc {
+                    // Over (no side to move): count from who moved first. GGS numbers a pass
+                    // like a move, so the sides alternate by move number.
+                    match self.start_turn {
+                        '*' | 'O' => {
+                            if self.start_turn == mc {
+                                1
+                            } else {
+                                0
+                            }
+                        }
+                        _ => return Vec::new(),
+                    }
+                } else if self.turn != mc {
                     last_n % 2
                 } else {
                     (last_n + 1) % 2
@@ -1467,10 +1595,21 @@ fn drop_match(matches: &mut HashMap<String, MatchState>, id: &str) -> Vec<MatchS
     keys.iter().filter_map(|k| matches.remove(k)).collect()
 }
 
+/// A board's final disc difference from black's side, given the score from `first`'s side.
+/// Black is unknown only before the board was seen; the score is then kept as written.
+fn black_view(m: &MatchState, first: &str, v: f32) -> String {
+    let first_is_white = m
+        .players
+        .iter()
+        .any(|p| p.name == first && p.color == "white");
+    format!("{:+.2}", if first_is_white { -v } else { v })
+}
+
 fn finish_match(
     matches: &mut HashMap<String, MatchState>,
     id: &str,
-    result: &str,
+    first: &str,
+    result: Option<f32>,
     ended: &str,
     left_by: &str,
     archive: &str,
@@ -1483,8 +1622,10 @@ fn finish_match(
             if !archive.is_empty() {
                 m.archive = archive.to_string();
             }
-            if !result.is_empty() && m.result.is_empty() {
-                m.result = result.to_string();
+            if m.result.is_empty() {
+                if let Some(v) = result {
+                    m.result = black_view(m, first, v);
+                }
             }
             if !ended.is_empty() {
                 m.ended = ended.to_string();
@@ -2836,6 +2977,22 @@ fn handle_os_line(
         let rest = rest.trim_start();
         if let Some(mrest) = rest.strip_prefix("match ") {
             let id = mrest.split_whitespace().next().unwrap_or("").to_string();
+            if mrest.split_whitespace().any(|t| t == login) {
+                // A game against someone we had an adjourned game with is that game resumed:
+                // the stored list and the old adjourned boards are out of date now.
+                let opp = match_line_parts(mrest)
+                    .0
+                    .into_iter()
+                    .find(|n| n != login)
+                    .unwrap_or_default();
+                let resumed = ctx.snap.lock().unwrap().stored.iter().any(|x| x.opp == opp);
+                if resumed {
+                    pending.push("stored_list".into());
+                    send("tell /os stored".to_string());
+                    matches.retain(|_, m| !(m.over && m.ended == "adjourned" && m.opp_name == opp));
+                    sync_matches(ctx, matches);
+                }
+            }
             if !id.is_empty() {
                 if let Some(f) = mrest.split_whitespace().last() {
                     // Tournament games ("T") are always rated.
@@ -2909,12 +3066,13 @@ fn handle_os_line(
         if let (Some(id), Some(score)) = (it.next(), rest.rsplit(' ').next()) {
             if let Ok(v) = score.trim().parse::<f32>() {
                 if let Some(m) = matches.get_mut(id) {
-                    let mine = rest
+                    // The score is from the first name in the brackets, which is not always black.
+                    let first = rest
                         .split('(')
                         .nth(1)
                         .and_then(|t| t.split_whitespace().next())
-                        .is_some_and(|first| first == login);
-                    m.result = format!("{:+.2}", if mine { v } else { -v });
+                        .unwrap_or("");
+                    m.result = black_view(m, first, v);
                     // One board of a synchro pair can end before the match does; its clocks stop here.
                     m.over = true;
                     m.turn = ' ';
@@ -2939,7 +3097,7 @@ fn handle_os_line(
                 drop(s);
                 if !was_mine {
                     let (kind, who) = end_kind(mrest);
-                    finish_match(matches, &id, "", kind, &who, "");
+                    finish_match(matches, &id, "", None, kind, &who, "");
                 }
             }
             sync_matches(ctx, matches);
@@ -3001,10 +3159,35 @@ fn handle_os_line(
         ctx.snap.lock().unwrap().notice = if msg.is_empty() {
             "err.ggs_action_refused".into()
         } else {
-            format!("err.ggs_refused|msg={}", msg.replace('|', "/"))
+            ggs_err_notice(msg)
         };
         ctx.dirty = true;
     }
+}
+
+/// A server refusal as a message key: the ones a person can cause from the screens get their own
+/// words, anything else is shown as the server wrote it.
+fn ggs_err_notice(msg: &str) -> String {
+    let quoted = || msg.split('\'').nth(1).unwrap_or("").replace('|', "/");
+    let key = match msg {
+        m if m.contains("same parameters is already pending") => "dup_request",
+        m if m.contains("doesn't fit the opponent's formula") => "formula",
+        m if m.contains("not accepting new matches") => "not_accepting",
+        m if m.contains("open value is too low") => "open_low",
+        m if m.contains("cannot accept your own") => "own_request",
+        m if m.contains("opponent is ignoring you") => "ignored",
+        m if m.contains("you are ignoring the opponent") => "ignoring",
+        m if m.contains("you have too many stored") => "stored_mine",
+        m if m.contains("opponent has too many stored") => "stored_opp",
+        m if m.contains("you are not registered") => "unregistered",
+        m if m.contains("rated variable mismatch") => "rated_mismatch",
+        m if m.starts_with("user '") && m.ends_with("not found.") => {
+            return format!("err.ggs.no_user|name={}", quoted())
+        }
+        m if m.starts_with("request '") && m.ends_with("not found.") => "request_gone",
+        _ => return format!("err.ggs_refused|msg={}", msg.replace('|', "/")),
+    };
+    format!("err.ggs.{key}")
 }
 
 fn ctx_send(writer: &mut TcpStream, cmd: &str) {
@@ -3542,7 +3725,11 @@ fn think_and_play(
     send(format!("tell /os play {mid} {arg}"));
     ctx.log("out", &format!("tell /os play {mid} {arg}"));
     let (chan, login) = {
-        let s = ctx.snap.lock().unwrap();
+        let mut s = ctx.snap.lock().unwrap();
+        s.last_search = Some(SearchStat {
+            nodes: r.nodes,
+            secs: took.as_secs_f64(),
+        });
         (s.log_channel.clone(), s.login.clone())
     };
     if !chan.is_empty() {
@@ -3731,7 +3918,13 @@ fn collect_workers(ctx: &mut Ctx, matches: &mut HashMap<String, MatchState>) -> 
         ));
         record_played(m, &mv, bh);
         let (chan, login) = {
-            let s = ctx.snap.lock().unwrap();
+            let mut s = ctx.snap.lock().unwrap();
+            if let Some(t) = took {
+                s.last_search = Some(SearchStat {
+                    nodes: r.nodes,
+                    secs: t.as_secs_f64(),
+                });
+            }
             (s.log_channel.clone(), s.login.clone())
         };
         if !chan.is_empty() {
@@ -3858,11 +4051,16 @@ fn sync_matches(ctx: &mut Ctx, matches: &HashMap<String, MatchState>) {
 }
 
 fn add_offer(ctx: &mut Ctx, rest: &str, login: &str) {
-    let Some(offer) = parse_offer(rest, login) else {
+    let Some(mut offer) = parse_offer(rest, login) else {
         return;
     };
     let id = offer.id.clone();
     let mut s = ctx.snap.lock().unwrap();
+    offer.since_ms = s
+        .offers
+        .iter()
+        .find(|o| o.id == id)
+        .map_or_else(epoch_ms, |o| o.since_ms);
     s.offers.retain(|o| o.id != id);
     s.offers.push(offer);
     drop(s);
@@ -3905,6 +4103,7 @@ fn parse_offer(rest: &str, login: &str) -> Option<Offer> {
         gtype,
         time,
         rated,
+        since_ms: 0,
     })
 }
 
@@ -3978,14 +4177,7 @@ fn handle_match_end(
         .copied()
         .unwrap_or("");
     let re = score.map(|s| format!("{s:+.2}"));
-    let mut dropped = finish_match(
-        matches,
-        &id,
-        re.as_deref().unwrap_or(""),
-        kind,
-        &who,
-        archive,
-    );
+    let mut dropped = finish_match(matches, &id, first_name, score, kind, &who, archive);
     dropped.sort_by_key(|(_, m)| m.seen);
     let m = dropped.first().map(|(_, m)| m);
     let mut boards: Vec<BoardRecord> = dropped
@@ -4859,11 +5051,19 @@ fn capture_rank(ctx: &mut Ctx, buf: &[String], login: &str, rest: &str) {
         if t[1] != target {
             continue;
         }
+        // "1722.1@ 76.1=": a deviation under 100 is padded, so it lands in the next token.
         let (rating, dev) = match t[2].split_once('@') {
-            Some((r, d)) => (
-                r.parse::<f32>().unwrap_or(0.0),
-                d.trim_end_matches(['=', '+']).parse::<f32>().unwrap_or(0.0),
-            ),
+            Some((r, d)) => {
+                let d = if d.is_empty() {
+                    t.get(3).copied().unwrap_or("")
+                } else {
+                    d
+                };
+                (
+                    r.parse::<f32>().unwrap_or(0.0),
+                    d.trim_end_matches(['=', '+']).parse::<f32>().unwrap_or(0.0),
+                )
+            }
             None => continue,
         };
         let nums: Vec<u64> = t
@@ -5317,6 +5517,61 @@ mod tests {
     }
 
     #[test]
+    fn a_finished_watched_board_keeps_its_eval_series() {
+        let mut m = MatchState::new();
+        for n in 1..=4u32 {
+            m.moves.insert(n, "d3".into());
+            m.move_evals.insert(n, (Some(n as f32), None));
+        }
+        m.start_turn = '*';
+        m.turn = '*';
+        let live: Vec<bool> = m.eval_series().iter().map(|p| p.mine).collect();
+        m.turn = ' ';
+        let over: Vec<bool> = m.eval_series().iter().map(|p| p.mine).collect();
+        assert_eq!(
+            live,
+            [true, false, true, false],
+            "black's moves are the observer's side"
+        );
+        assert_eq!(over, live, "the series survives the end of the game");
+    }
+
+    #[test]
+    fn a_server_refusal_gets_words_when_it_is_known() {
+        assert_eq!(
+            ggs_err_notice("match with same parameters is already pending."),
+            "err.ggs.dup_request"
+        );
+        assert_eq!(
+            ggs_err_notice("user 'zed' not found."),
+            "err.ggs.no_user|name=zed"
+        );
+        assert_eq!(
+            ggs_err_notice("odd thing."),
+            "err.ggs_refused|msg=odd thing."
+        );
+    }
+
+    #[test]
+    fn a_board_result_is_kept_from_blacks_side() {
+        let mut m = MatchState::new();
+        for (name, color) in [("bob", "black"), ("alice", "white")] {
+            m.players.push(PlayerView {
+                name: name.into(),
+                rating: String::new(),
+                clock: String::new(),
+                color: color.into(),
+                secs: None,
+                ext: None,
+            });
+        }
+        // GGS scores "( alice vs. bob ) +4.00" from alice's side; alice is white here.
+        assert_eq!(black_view(&m, "alice", 4.0), "-4.00");
+        assert_eq!(black_view(&m, "bob", 4.0), "+4.00");
+        assert_eq!(black_view(&MatchState::new(), "alice", 4.0), "+4.00");
+    }
+
+    #[test]
     fn a_per_board_result_survives_the_match_line() {
         let mut ms: HashMap<String, MatchState> = HashMap::new();
         let mut a = MatchState::new();
@@ -5326,7 +5581,7 @@ mod tests {
         b.result = "-18.00".into();
         ms.insert(".4.1".into(), b);
 
-        let mut both = finish_match(&mut ms, ".4", "-4.00", "finished", "", ".85929");
+        let mut both = finish_match(&mut ms, ".4", "a", Some(-4.0), "finished", "", ".85929");
         both.sort_by(|a, b| a.0.cmp(&b.0));
         let ids: Vec<&str> = both.iter().map(|(k, _)| k.as_str()).collect();
         assert_eq!(
@@ -5339,7 +5594,7 @@ mod tests {
 
         let mut ms2: HashMap<String, MatchState> = HashMap::new();
         ms2.insert(".9.0".into(), MatchState::new());
-        finish_match(&mut ms2, ".9", "+2.00", "finished", "", "");
+        finish_match(&mut ms2, ".9", "a", Some(2.0), "finished", "", "");
         assert_eq!(ms2[".9.0"].result, "+2.00");
     }
 
