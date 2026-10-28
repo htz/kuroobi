@@ -331,6 +331,8 @@ function GgsPlaySettings({ snap }: { snap: GgsSnapshot }) {
   );
 }
 
+const flat = (x: string) => x.replace(/\s+/g, '');
+
 function GgsFormSettings({ snap }: { snap: GgsSnapshot }) {
   const login = snap.login;
   useEffect(() => { if (login) ggsApi.finger(login).catch(() => {}); }, [login]);
@@ -338,20 +340,31 @@ function GgsFormSettings({ snap }: { snap: GgsSnapshot }) {
     (snap.fingers[login]?.fields.find(([k]) => fingerKey(k) === key)?.[1] ?? '')
       .replace(/^\s*:\s*/, '').trim();
   const [err, setErr] = useState('');
+  // Sent but not yet seen in finger: GGS answers a bad formula with "dform ERR …" and keeps the old one.
+  const [pending, setPending] = useState<{ kind: 'aform' | 'dform'; expr: string } | null>(null);
   const save = async (kind: 'aform' | 'dform', expr: string) => {
     try {
       await ggsApi.setFormula(kind, expr);
       setErr('');
-      markApplied();
+      setPending({ kind, expr });
     } catch (e) {
       setErr(t('ggs.settings.formula_failed', { error: tErr(e) }));
       return;
     }
     if (login) ggsApi.finger(login).catch(() => {});
   };
+  const now = pending ? form(pending.kind === 'aform' ? 'accept' : 'decline') : '';
+  const [refusedKind, refusedWhy] = snap.formula_refused.split(/\|(.*)/s);
+  const refused = !!pending && refusedKind === pending.kind;
+  const done = !!pending && !refused && flat(now) === flat(pending.expr);
+  useEffect(() => { if (done) markApplied(); }, [done]);
   return (
     <SettingGroup title={t('settings.cat.form')} aside={t('settings.form.aside')}>
-      {err && <span style={{ fontSize: 'var(--fs-6)', color: 'var(--bad)' }}>{err}</span>}
+      {(refused || err) && (
+        <span style={{ fontSize: 'var(--fs-6)', color: 'var(--bad)' }}>
+          {refused ? t('ggs.settings.formula_refused', { error: refusedWhy ?? '' }) : err}
+        </span>
+      )}
       <FormulaField key={'a:' + form('accept')} label={t('ggs.finger.accept')} src={form('accept')}
                     onSave={(x) => void save('aform', x)} />
       <FormulaField key={'d:' + form('decline')} label={t('ggs.finger.decline')} src={form('decline')}

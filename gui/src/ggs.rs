@@ -326,6 +326,8 @@ pub struct Snapshot {
     /// Everyone logged in, or `None` until the server's `who` has answered once.
     pub online: Option<Vec<String>>,
     pub notice: String,
+    /// The server's refusal of the last aform/dform we sent ("dform|O2.e{REAL}!={INT}"), else empty.
+    pub formula_refused: String,
     pub stored: Vec<StoredView>,
     pub history: HashMap<String, Vec<HistoryRow>>,
     pub chat: VecDeque<ChatMsg>,
@@ -3003,6 +3005,8 @@ fn handle_cmd(
             }
         }
         Cmd::SetFormula { kind, expr } => {
+            ctx.snap.lock().unwrap().formula_refused.clear();
+            ctx.dirty = true;
             send(format!("tell /os {kind} {expr}"));
             ctx.log("info", &format!("set {kind}: {expr}"));
         }
@@ -3238,6 +3242,10 @@ fn handle_os_line(
             );
             send(format!("tell /os decline {}", req.who));
         }
+    } else if let Some((kind, why)) = formula_refusal(ln) {
+        ctx.log("info", &format!("server error: {ln}"));
+        ctx.snap.lock().unwrap().formula_refused = format!("{kind}|{why}");
+        ctx.dirty = true;
     } else if ln.starts_with("/os: ERR") {
         ctx.log("info", &format!("server error: {ln}"));
         if ln.contains("not found") && ln.contains("match") {
@@ -3587,6 +3595,14 @@ fn ask_to(o: &Offer, login: &str, opp: &str) -> bool {
 
 /// A server refusal as a message key: the ones a person can cause from the screens get their own
 /// words, anything else is shown as the server wrote it.
+/// A formula the server would not take: `/os: dform ERR O2.e{REAL}!={INT}""` (not `/os: ERR`).
+fn formula_refusal(ln: &str) -> Option<(&str, &str)> {
+    ["aform", "dform"].into_iter().find_map(|kind| {
+        let rest = ln.strip_prefix("/os: ")?.strip_prefix(kind)?;
+        Some((kind, rest.trim_start().strip_prefix("ERR")?.trim()))
+    })
+}
+
 fn ggs_err_notice(msg: &str) -> String {
     let quoted = || msg.split('\'').nth(1).unwrap_or("").replace('|', "/");
     let key = match msg {
@@ -6079,6 +6095,20 @@ mod tests {
             ggs_err_notice("odd thing."),
             "err.ggs_refused|msg=odd thing."
         );
+    }
+
+    #[test]
+    fn a_refused_formula_is_told_apart_from_other_errors() {
+        assert_eq!(
+            formula_refusal("/os: dform ERR O2.e{REAL}!={INT}\"\""),
+            Some(("dform", "O2.e{REAL}!={INT}\"\""))
+        );
+        assert_eq!(
+            formula_refusal("/os: aform ERR E5.?: *"),
+            Some(("aform", "E5.?: *"))
+        );
+        assert_eq!(formula_refusal("/os: ERR user 'zed' not found."), None);
+        assert_eq!(formula_refusal("/os: dform rated"), None);
     }
 
     #[test]

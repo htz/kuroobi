@@ -485,6 +485,7 @@ const SIDED: Record<string, string> = {
   mm3: 'm3', om3: 'm3',
   ma3: 'a3', oa3: 'a3',
   mr: 'r', or: 'r',
+  md: 'd', od: 'd',
   mt1: 't1', ot1: 't1',
   mt2: 't2', ot2: 't2',
   mt3: 't3', ot3: 't3',
@@ -505,6 +506,11 @@ interface FormulaVar {
   type: 'bool' | 'num' | 'color';
   unit?: string;
   def?: number;
+  /** Called with an argument: a number (md, od, rnd) or the kind of games to count (playing). */
+  arg?: 'num' | 'pool';
+  argDef?: string;
+  /** GGS types mr, or, md() and od() as REAL: their numbers need a "." (or>=1600.0), the rest must not have one. */
+  real?: boolean;
 }
 
 export const formulaVars = (who: Who = defaultWho()): FormulaVar[] => {
@@ -516,14 +522,17 @@ export const formulaVars = (who: Who = defaultWho()): FormulaVar[] => {
     v('komi', 'bool'), v('anti', 'bool'), v('ml1', 'bool'), v('ol1', 'bool'),
     v('ma2', 'bool'), v('oa2', 'bool'), v('ma3', 'bool'), v('oa3', 'bool'),
     v('size', 'num', { def: 8 }), v('discs', 'num', { def: 16 }),
-    v('mr', 'num', { def: 2000 }), v('or', 'num', { def: 2000 }),
+    v('mr', 'num', { def: 2000, real: true }), v('or', 'num', { def: 2000, real: true }),
+    v('md', 'num', { def: 0, arg: 'num', argDef: '+1.0', real: true }),
+    v('od', 'num', { def: 0, arg: 'num', argDef: '+1.0', real: true }),
     v('mt1', 'num', { unit: sec, def: 600 }), v('ot1', 'num', { unit: sec, def: 600 }),
     v('mt2', 'num', { unit: sec, def: 0 }), v('ot2', 'num', { unit: sec, def: 0 }),
     v('mt3', 'num', { unit: sec, def: 0 }), v('ot3', 'num', { unit: sec, def: 0 }),
     v('mm1', 'num', { def: 0 }), v('om1', 'num', { def: 0 }),
     v('mm2', 'num', { def: 1 }), v('om2', 'num', { def: 1 }),
     v('mm3', 'num', { def: 0 }), v('om3', 'num', { def: 0 }),
-    v('stored', 'num', { def: 0 }), v('playing', 'num', { def: 0 }),
+    v('stored', 'num', { def: 0 }), v('playing', 'num', { def: 0, arg: 'pool', argDef: 'both' }),
+    v('rnd', 'num', { def: 50, arg: 'num', argDef: '100' }),
     v('mc', 'color'), v('oc', 'color'),
   ];
 };
@@ -535,35 +544,68 @@ export const DEFAULT_DECLINE = 'size!=8|anti|komi|mm1!=0|mt2!=0|mm3!=0|!ml1|disc
 export const FORMULA_OPS = ['=', '≠', '<', '>', '≤', '≥'] as const;
 export type FormulaOp = (typeof FORMULA_OPS)[number];
 
+// GGS knows only "==": a single "=" is a type error on the server.
 const OP_SRC: Record<FormulaOp, string> = {
-  '=': '=', '≠': '!=', '<': '<', '>': '>', '≤': '<=', '≥': '>=',
+  '=': '==', '≠': '!=', '<': '<', '>': '>', '≤': '<=', '≥': '>=',
 };
 const SRC_OP: Record<string, FormulaOp> = {
   '=': '=', '==': '=', '!=': '≠', '<': '<', '>': '>', '<=': '≤', '>=': '≥',
 };
 
+export type Atom = { kind: 'atom'; name: string; op: FormulaOp; val: string; neg: boolean; arg?: string };
 export type Cond =
-  | { kind: 'all' | 'any'; kids: Cond[] }
-  | { kind: 'atom'; name: string; op: FormulaOp; val: string; neg: boolean };
+  | { kind: 'all' | 'any'; kids: Cond[]; neg?: boolean }
+  | Atom
+  /** Anything the rows cannot hold (arithmetic such as `or+100`), kept and edited as text. */
+  | { kind: 'expr'; src: string };
 
 export const varOf = (name: string, who: Who = defaultWho()): FormulaVar | undefined =>
   formulaVars(who).find((v) => v.name === name);
 
 export const colorChoices = (): [string, string][] => [
-  ['?', t('ggs.color.any')], ['*', t('ggs.color.black')], ['O', t('ggs.color.white')],
+  ['?', t('ggs.color.any')], ['B', t('ggs.color.black')], ['W', t('ggs.color.white')],
 ];
 
 export const boolOps = (): [boolean, string][] =>
   [[false, t('ggs.formula.bool_is')], [true, t('ggs.formula.bool_is_not')]];
 
-export const isGroup = (c: Cond): c is { kind: 'all' | 'any'; kids: Cond[] } =>
-  c.kind !== 'atom';
+/** What `playing(…)` counts: T random games, F the others, or both added up. */
+export const poolChoices = (): [string, string][] => [
+  ['both', t('ggs.formula.pool.both')], ['T', t('ggs.formula.pool.rand')], ['F', t('ggs.formula.pool.std')],
+];
+
+/** A group's kind with its `!( … )`: "all", "any", "!all", "!any". */
+export const groupChoices = (): [string, string][] => [
+  ['all', t('ggs.formula.all_of')], ['any', t('ggs.formula.any_of')],
+  ['!all', t('ggs.formula.not_all_of')], ['!any', t('ggs.formula.none_of')],
+];
+
+export const isGroup = (c: Cond): c is { kind: 'all' | 'any'; kids: Cond[]; neg?: boolean } =>
+  c.kind === 'all' || c.kind === 'any';
+
+export function groupLabel(c: { kind: 'all' | 'any'; neg?: boolean }): string {
+  const key = (c.neg ? '!' : '') + c.kind;
+  return groupChoices().find(([k]) => k === key)?.[1] ?? '';
+}
+
+/** A number as GGS reads it for a REAL or an INT slot. */
+export const numOk = (val: string, real = false): boolean =>
+  real ? /^[+-]?\d+(\.\d+)?$/.test(val) : /^[+-]?\d+$/.test(val);
+const numSrc = (val: string, real = false): string => (real && /^[+-]?\d+$/.test(val) ? `${val}.0` : val);
+
+const callSrc = (name: string, arg = ''): string =>
+  name === 'playing' ? (arg === 'both' ? 'playing(T)+playing(F)' : `playing(${arg})`)
+    : `${name}(${numSrc(arg, name !== 'rnd')})`;
 
 export function condLabel(c: Cond, who: Who = defaultWho()): string {
-  if (isGroup(c)) return c.kind === 'all' ? t('ggs.formula.all_of') : t('ggs.formula.any_of');
+  if (isGroup(c)) return groupLabel(c);
+  if (c.kind === 'expr') return t('ggs.formula.expr', { x: c.src });
   const v = varOf(c.name, who);
   if (!v) return t('ggs.formula.unknown', { x: condToSrc(c) });
-  const label = v.label;
+  let label = v.label;
+  if (c.name === 'rnd') label = t('ggs.formula.rnd_below', { n: c.arg ?? '' });
+  else if (v.arg === 'num') label = t('ggs.formula.after_result', { x: label, d: c.arg ?? '' });
+  else if (v.arg === 'pool') label = `${label} (${poolChoices().find(([k]) => k === c.arg)?.[1] ?? c.arg})`;
   if (v.type === 'bool') {
     return c.neg ? t('ggs.formula.is_false', { x: label }) : t('ggs.formula.is_true', { x: label });
   }
@@ -578,15 +620,51 @@ export function condLabel(c: Cond, who: Who = defaultWho()): string {
   return `${label} ${c.op} ${rhs}`;
 }
 
+const NUM = /^[+-]?\d+(\.\d+)?$/;
+
+/** The left side of a comparison as a row: a plain number variable or a call with a literal argument. */
+function parseLhs(s: string): { name: string; arg?: string } | null {
+  let m = /^([A-Za-z]\w*)$/.exec(s);
+  if (m) return varOf(m[1]) && !varOf(m[1])!.arg ? { name: m[1] } : null;
+  m = /^(md|od|rnd)\(\s*([+-]?\d+(?:\.\d+)?)\s*\)$/.exec(s);
+  if (m) return { name: m[1], arg: m[2] };
+  m = /^playing\(\s*([TF])\s*\)$/.exec(s);
+  if (m) return { name: 'playing', arg: m[1] };
+  if (/^playing\(\s*([TF])\s*\)\s*\+\s*playing\(\s*(?!\1)[TF]\s*\)$/.test(s)) return { name: 'playing', arg: 'both' };
+  return null;
+}
+
 function parseAtomSrc(src: string): Cond {
-  const m = /^\s*(!?)\s*([A-Za-z][A-Za-z0-9]*)\s*(==|!=|<=|>=|<|>|=)?\s*(.*?)\s*$/.exec(src);
-  if (!m) return { kind: 'atom', name: src.trim(), op: '=', val: '', neg: false };
-  const [, bang, name, op, rawVal] = m;
-  if (op === '==' && /^[TF]$/.test(rawVal)) {
-    return { kind: 'atom', name, op: '=', val: '', neg: rawVal === 'F' };
+  const s = src.trim();
+  const expr: Cond = { kind: 'expr', src: s };
+  const b = /^(!?)\s*([A-Za-z]\w*)\s*(?:==\s*([TF]))?$/.exec(s);
+  if (b) {
+    if (varOf(b[2])?.type !== 'bool') return expr;
+    return { kind: 'atom', name: b[2], op: '=', val: '', neg: (b[1] === '!') !== (b[3] === 'F') };
   }
-  if (!op) return { kind: 'atom', name, op: '=', val: '', neg: bang === '!' };
-  return { kind: 'atom', name, op: SRC_OP[op] ?? '=', val: rawVal, neg: bang === '!' };
+  const m = /^(.+?)\s*(==|!=|<=|>=|<|>|=)\s*(.+)$/.exec(s);
+  const lhs = m && parseLhs(m[1].trim());
+  if (!m || !lhs) return expr;
+  const v = varOf(lhs.name)!;
+  const op = SRC_OP[m[2]];
+  const val = m[3].trim();
+  if (v.type === 'color') {
+    return /^[?WB]$/.test(val) && (op === '=' || op === '≠') ? { kind: 'atom', name: lhs.name, op, val, neg: false } : expr;
+  }
+  const other = varOf(val);
+  const same = other && other.type === 'num' && !other.arg && !other.real === !v.real;
+  if (!(NUM.test(val) && numOk(val, v.real)) && !same) return expr;
+  return { kind: 'atom', name: lhs.name, op, val, neg: false, ...(lhs.arg !== undefined ? { arg: lhs.arg } : {}) };
+}
+
+/** Every number in the tree is one GGS takes for its slot; otherwise the server refuses the formula. */
+export function condValid(c: Cond): boolean {
+  if (isGroup(c)) return c.kids.every(condValid);
+  if (c.kind === 'expr') return true;
+  const v = varOf(c.name);
+  if (!v || v.type !== 'num') return true;
+  if (v.arg === 'num' && !numOk(c.arg ?? '', c.name !== 'rnd')) return false;
+  return !!varOf(c.val) || numOk(c.val, v.real);
 }
 
 export function parseCond(src: string): Cond | null {
@@ -596,37 +674,62 @@ export function parseCond(src: string): Cond | null {
 }
 
 export function condToSrc(c: Cond): string {
+  if (c.kind === 'expr') return c.src.trim();
   if (c.kind === 'atom') {
     const v = varOf(c.name);
-    if (!v || v.type === 'bool') return (c.neg ? '!' : '') + c.name;
-    return `${c.name}${OP_SRC[c.op]}${c.val}`;
+    if (!v) return c.name;
+    if (v.type === 'bool') return (c.neg ? '!' : '') + c.name;
+    const rhs = varOf(c.val) ? c.val : numSrc(c.val, v.real);
+    return `${v.arg ? callSrc(c.name, c.arg) : c.name}${OP_SRC[c.op]}${rhs}`;
   }
-  const parts = c.kids.map(condToSrc).filter(Boolean);
-  if (!parts.length) return '';
-  if (parts.length === 1) return parts[0];
+  const parts = c.kids.map((k) => [k, condToSrc(k)] as const).filter(([, p]) => p);
+  if (parts.length === 1 && !c.neg) return parts[0][1];
   const sep = c.kind === 'all' ? '&' : '|';
-  return parts.map((p) => (c.kind === 'all' && p.includes('|') ? `(${p})` : p)).join(sep);
+  // Groups always keep their brackets: GGS gives & and | the same level.
+  const inner = parts.map(([k, p]) => (isGroup(k) && !k.neg && /[&|]/.test(p) ? `(${p})` : p)).join(sep);
+  if (!inner) return '';
+  return c.neg ? `!(${inner})` : inner;
 }
 
 function parseFormula(src: string): Cond {
-  const toks = (src.match(/\(|\)|&|\||[^()&|]+/g) ?? [])
-    .map((x) => x.trim()).filter(Boolean);
+  // A "(" opening an atom groups (so does one after a lone "!"); after a name it is a call: md(+1.0).
+  const toks: string[] = [];
+  let cur = '';
+  let depth = 0;
+  const flush = () => { if (cur.trim()) toks.push(cur.trim()); cur = ''; };
+  for (const ch of src) {
+    if (depth === 0 && (ch === '&' || ch === '|')) { flush(); toks.push(ch); }
+    else if (ch === '(' && depth === 0 && (!cur.trim() || cur.trim() === '!')) { flush(); toks.push(ch); }
+    else if (ch === ')' && depth === 0) { flush(); toks.push(ch); }
+    else {
+      if (ch === '(') depth++;
+      if (ch === ')') depth--;
+      cur += ch;
+    }
+  }
+  flush();
   let i = 0;
   const atom = (): Cond => {
+    const neg = toks[i] === '!' && toks[i + 1] === '(';
+    if (neg) i++;
     if (toks[i] === '(') {
       i++;
-      const inner = or();
+      const inner = expr();
       if (toks[i] === ')') i++;
-      return inner;
+      if (!neg) return inner;
+      return isGroup(inner) ? { ...inner, neg: !inner.neg } : { kind: 'all', kids: [inner], neg: true };
     }
     return parseAtomSrc(toks[i++] ?? '');
   };
-  const join = (kind: 'all' | 'any', sep: string, next: () => Cond): Cond => {
-    const kids = [next()];
-    while (toks[i] === sep) { i++; kids.push(next()); }
-    return kids.length === 1 ? kids[0] : { kind, kids };
+  // GGS gives & and | one level and binds to the right: `a & b | c` is `a & (b | c)`.
+  const expr = (): Cond => {
+    const left = atom();
+    const op = toks[i];
+    if (op !== '&' && op !== '|') return left;
+    i++;
+    const right = expr();
+    const kind = op === '&' ? 'all' : 'any';
+    return { kind, kids: [left, ...(isGroup(right) && right.kind === kind && !right.neg ? right.kids : [right])] };
   };
-  const and = () => join('all', '&', atom);
-  const or = () => join('any', '|', and);
-  return or();
+  return expr();
 }

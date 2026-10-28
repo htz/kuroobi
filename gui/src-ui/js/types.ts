@@ -238,6 +238,8 @@ export interface GgsSnapshot {
   ongoing: OngoingView[];
   online: string[] | null;
   notice: string;
+  /** The server refused our last aform/dform: "dform|O2.e{REAL}!={INT}", else empty. */
+  formula_refused: string;
   stored: StoredView[];
   history: Record<string, HistoryRow[]>;
   chat: ChatMsg[];

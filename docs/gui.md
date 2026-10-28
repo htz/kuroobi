@@ -427,7 +427,21 @@ written to `ggs_wire.log` in the account's data folder.
 - **Request rules** — the **Auto-accept condition** and **Auto-decline
   condition**, edited as a tree of conditions or written as a formula
   directly. These live on the server and apply even while the app is
-  closed, so they are sent only on **Apply**. **Use the defaults** under
+  closed, so they are sent only on **Apply**. The tree covers the whole
+  GGS formula language: groups that must all or any hold, and their
+  negations (`!( … )`); a variable against a number or another variable
+  (`mt1 < ot1`); the calls `md(x)` / `od(x)` (rating change if the game
+  ends `x`), `rnd(n)` and `playing(T|F)` with their argument; and, via
+  **Write as a formula…**, a row of free arithmetic such as `mr>or+100.0`.
+  Formulas read the way the server does, with `&` and `|` on one level
+  binding to the right, and are written back with every nested group
+  bracketed, `==` for equality, `B`/`W`/`?` for colors and a `.0` on
+  the REAL values (`mr`, `or`, `md`, `od`), which GGS otherwise rejects.
+  A number GGS would refuse for its slot turns its field red and keeps
+  **Apply** off. **Applied** shows only once `finger` carries the new
+  formula; a formula the server refuses anyway (`dform ERR …`) is
+  reported under the heading, and the previous one stays in force.
+  **Use the defaults** under
   the decline condition fills in the tournament director's guidance
   (decline under 14 discs or under 1 minute of main time) together with
   everything KUROOBI cannot play or would play at a disadvantage:

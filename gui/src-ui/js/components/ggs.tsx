@@ -5,8 +5,8 @@ import { Caption, Note, picked } from './layout';
 import { t } from '../i18n';
 import logo from '../../assets/kuroobi.svg?raw';
 import {
-  colorChoices, boolOps, FORMULA_OPS, formulaVars, varOf, condToSrc, condLabel,
-  isGroup, type Cond, type FormulaOp, type Who,
+  colorChoices, boolOps, FORMULA_OPS, formulaVars, varOf, condToSrc, condLabel, groupChoices, groupLabel,
+  numOk, poolChoices, isGroup, condValid, type Atom, type Cond, type FormulaOp, type Who,
 } from '../ggs';
 
 export type NavId =
@@ -228,7 +228,7 @@ export function Tag({ tone = 'sub', children }: { tone?: 'sub' | 'accent' | 'ok'
 
 
 export function FormulaView({ node, top, who }: { node: Cond; top?: boolean; who?: Who }) {
-  if (node.kind === 'atom') return <CondChip c={node} who={who} />;
+  if (!isGroup(node)) return <CondChip c={node} who={who} />;
   return (
     <div style={{
       borderLeft: '2px solid var(--' + (top ? 'accent' : 'border') + ')',
@@ -237,7 +237,7 @@ export function FormulaView({ node, top, who }: { node: Cond; top?: boolean; who
       <div style={{
         fontSize: 'var(--fs-7)', fontWeight: 600, letterSpacing: '.06em',
         color: node.kind === 'any' ? 'var(--gold)' : 'var(--sub)',
-      }}>{node.kind === 'all' ? t('ggs.formula.all_of') : t('ggs.formula.any_of')}</div>
+      }}>{groupLabel(node)}</div>
       <div style={{ display: 'flex', flexWrap: 'wrap', gap: 5, alignItems: 'flex-start' }}>
         {node.kids.map((n, i) => isGroup(n)
           ? <FormulaView key={i} node={n} who={who} />
@@ -248,7 +248,7 @@ export function FormulaView({ node, top, who }: { node: Cond; top?: boolean; who
 }
 
 function CondChip({ c, who }: { c: Cond; who?: Who }) {
-  const known = c.kind !== 'atom' || !!varOf(c.name, who);
+  const known = isGroup(c) || (c.kind === 'atom' && !!varOf(c.name, who));
   return (
     <span style={{
       padding: '2px var(--sp-2)', borderRadius: 'var(--r-1)', background: 'var(--panel)',
@@ -283,10 +283,13 @@ export function FormulaEditor({ value, onChange, onSave, onClear, onRaw, dirty =
   dirty?: boolean;
 }) {
   // Unlike the other settings this is sent only on "Apply", so an unsent change says so.
+  const valid = !value || condValid(value);
   const apply = (src: string) => (
     <span style={{ marginLeft: 'auto', display: 'flex', alignItems: 'center', gap: 'var(--sp-2)' }}>
-      {dirty && <span style={{ fontSize: 'var(--fs-6)', color: 'var(--gold)' }}>{t('ggs.formula.unsent')}</span>}
-      <Button variant="primary" disabled={!dirty} onClick={() => onSave(src)}>{t('ggs.apply')}</Button>
+      {!valid
+        ? <span style={{ fontSize: 'var(--fs-6)', color: 'var(--bad)' }}>{t('ggs.formula.invalid')}</span>
+        : dirty && <span style={{ fontSize: 'var(--fs-6)', color: 'var(--gold)' }}>{t('ggs.formula.unsent')}</span>}
+      <Button variant="primary" disabled={!dirty || !valid} onClick={() => onSave(src)}>{t('ggs.apply')}</Button>
     </span>
   );
   if (!value) {
@@ -326,7 +329,7 @@ const newGroup = (op: 'all' | 'any' = 'all'): Cond => ({ kind: op, kids: [newAto
 function CondNode({ node, top, onChange, onRemove }: {
   node: Cond; top?: boolean; onChange: (c: Cond) => void; onRemove?: () => void;
 }) {
-  if (node.kind === 'atom') return <AtomRow c={node} onChange={onChange} onRemove={onRemove} />;
+  if (!isGroup(node)) return <AtomRow c={node} onChange={onChange} onRemove={onRemove} />;
 
   const setKid = (i: number, c: Cond | null) => {
     const kids = c ? node.kids.map((k, j) => (j === i ? c : k)) : node.kids.filter((_, j) => j !== i);
@@ -341,9 +344,8 @@ function CondNode({ node, top, onChange, onRemove }: {
       padding: 'var(--sp-3)', display: 'flex', flexDirection: 'column', gap: 'var(--sp-3)',
     }}>
       <div style={{ display: 'flex', alignItems: 'center', gap: 'var(--sp-2)' }}>
-        <Select value={node.kind} width={132} size="ctrl"
-                options={[['all', t('ggs.formula.all_of')], ['any', t('ggs.formula.any_of')]]}
-                onChange={v => onChange({ ...node, kind: v as 'all' | 'any' })} />
+        <Select value={(node.neg ? '!' : '') + node.kind} width={160} size="ctrl" options={groupChoices()}
+                onChange={v => onChange({ ...node, kind: v.replace('!', '') as 'all' | 'any', neg: v.startsWith('!') })} />
         {onRemove && (
           <span style={{ marginLeft: 'auto' }}>
             <IconButton name="close" label={t('ggs.formula.remove_group')} onClick={onRemove} size={13} />
@@ -366,48 +368,84 @@ function CondNode({ node, top, onChange, onRemove }: {
   );
 }
 
+const EXPR = '=expr';
+
 function AtomRow({ c, onChange, onRemove }: {
-  c: Extract<Cond, { kind: 'atom' }>; onChange: (c: Cond) => void; onRemove?: () => void;
+  c: Atom | { kind: 'expr'; src: string }; onChange: (c: Cond) => void; onRemove?: () => void;
 }) {
-  const v = varOf(c.name);
+  const v = c.kind === 'atom' ? varOf(c.name) : undefined;
   const type = v?.type ?? 'bool';
+  const pick = (name: string) => {
+    if (name === EXPR) { onChange({ kind: 'expr', src: condToSrc(c) }); return; }
+    const nv = varOf(name);
+    onChange({
+      kind: 'atom', name, neg: false,
+      op: nv?.type === 'num' ? '≥' : '=',
+      val: nv?.type === 'num' ? String(nv.def ?? 0) : nv?.type === 'color' ? '?' : '',
+      ...(nv?.arg ? { arg: nv.argDef } : {}),
+    });
+  };
+  const remove = onRemove && (
+    <span style={{ flex: 'none', height: 'var(--h-ctrl)', display: 'flex', alignItems: 'center' }}>
+      <IconButton name="close" label={t('ggs.formula.remove_atom')} onClick={onRemove} size={13} />
+    </span>
+  );
+  const numVars = formulaVars().filter(x => x.type === 'num' && !x.arg && !x.real === !v?.real);
   return (
-    <div style={{ display: 'flex', alignItems: 'center', gap: 'var(--sp-0)' }}>
-      <Select value={c.name} width="var(--w-select-sm)" size="ctrl"
-              options={formulaVars().map(x => [x.name, x.label] as [string, string])}
-              onChange={name => {
-                const nv = varOf(name);
-                onChange({
-                  ...c, name,
-                  op: nv?.type === 'num' ? '≥' : '=',
-                  val: nv?.type === 'num' ? String(nv.def ?? 0) : nv?.type === 'color' ? '?' : '',
-                });
-              }} />
-      {type === 'bool' && (
+    <div style={{ display: 'flex', alignItems: 'flex-start', gap: 'var(--sp-2)' }}>
+    <div style={{ display: 'flex', alignItems: 'center', gap: 'var(--sp-0)', flexWrap: 'wrap', rowGap: 'var(--sp-1)', flex: 1, minWidth: 0 }}>
+      <Select value={c.kind === 'expr' ? EXPR : c.name} width="var(--w-select-sm)" size="ctrl"
+              options={[...formulaVars().map(x => [x.name, x.label] as [string, string]),
+                        [EXPR, t('ggs.formula.as_expr')]]}
+              onChange={pick} />
+      {c.kind === 'expr' && (
+        <span style={{ flex: 1, minWidth: 160, display: 'flex' }}>
+          <TextField mono value={c.src} onChange={src => onChange({ kind: 'expr', src })}
+                     placeholder={t('ggs.settings.formula_placeholder')} />
+        </span>
+      )}
+      {c.kind === 'atom' && v?.arg === 'num' && <>
+        <span style={{ fontSize: 'var(--fs-6)', color: 'var(--sub)', padding: '0 var(--sp-1)' }}>
+          {c.name === 'rnd' ? t('ggs.formula.arg_below') : t('ggs.formula.arg_result')}
+        </span>
+        <TextField value={c.arg ?? ''} align="right" width={52} invalid={!numOk(c.arg ?? '', c.name !== 'rnd')}
+                   onChange={arg => onChange({ ...c, arg })} />
+      </>}
+      {c.kind === 'atom' && v?.arg === 'pool' && (
+        <Select value={c.arg ?? 'both'} width={96} size="ctrl" options={poolChoices()}
+                onChange={arg => onChange({ ...c, arg })} />
+      )}
+      {c.kind === 'atom' && type === 'bool' && (
         <Select value={c.neg ? '1' : '0'} width={88} size="ctrl"
                 options={boolOps().map(([neg, label]) => [neg ? '1' : '0', label] as [string, string])}
                 onChange={s => onChange({ ...c, neg: s === '1' })} />
       )}
-      {type === 'color' && <>
+      {c.kind === 'atom' && type === 'color' && <>
         <Select value={c.op} width={88} size="ctrl"
                 options={[['=', t('ggs.formula.bool_is')], ['≠', t('ggs.formula.bool_is_not')]]}
                 onChange={op => onChange({ ...c, op: op as FormulaOp })} />
         <Select value={c.val} width={84} size="ctrl" options={colorChoices()}
                 onChange={val => onChange({ ...c, val })} />
       </>}
-      {type === 'num' && <>
+      {c.kind === 'atom' && type === 'num' && <>
         <Select value={c.op} width={74} size="ctrl"
                 options={FORMULA_OPS.map(o => [o, o] as [string, string])}
                 onChange={op => onChange({ ...c, op: op as FormulaOp })} />
-        <TextField value={c.val} numeric align="right" width={58}
-                   onChange={val => onChange({ ...c, val })} />
-        {v?.unit && <span style={{ fontSize: 'var(--fs-6)', color: 'var(--sub)' }}>{v.unit}</span>}
+        {/* The other side is a number, or another variable such as the opponent's clock (mt1 != ot1). */}
+        {!v?.arg && (
+          <Select value={varOf(c.val) ? c.val : '#'} width={varOf(c.val) ? 'var(--w-select-sm)' : 80} size="ctrl"
+                  options={[['#', t('ggs.formula.number')] as [string, string],
+                            ...numVars.map(x => [x.name, x.label] as [string, string])]}
+                  onChange={val => onChange({ ...c, val: val === '#' ? String(v?.def ?? 0) : val })} />
+        )}
+        {!varOf(c.val) && <>
+          <TextField value={c.val} align="right" width={v?.real ? 66 : 58} invalid={!numOk(c.val, v?.real)}
+                     onChange={val => onChange({ ...c, val })} />
+          {v?.unit && <span style={{ fontSize: 'var(--fs-6)', color: 'var(--sub)' }}>{v.unit}</span>}
+        </>}
       </>}
-      {onRemove && (
-        <span style={{ marginLeft: 'auto' }}>
-          <IconButton name="close" label={t('ggs.formula.remove_atom')} onClick={onRemove} size={13} />
-        </span>
-      )}
+    </div>
+      {remove}
     </div>
   );
 }
