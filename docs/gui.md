@@ -330,8 +330,10 @@ A custom clock is one `mm:ss` field typed from the minutes: each part
 shows its digits right-aligned as they come (`1` is 01:00), two minute
 digits or `:` move to the seconds, Backspace takes back the last digit
 and steps back into the minutes, and a seconds digit that would make 60
-or more is refused. The value is kept on Enter or leaving the field,
-pulled into range.
+or more is refused. Clicking a part, or moving onto it with the arrow
+keys, selects it: the next digit replaces it, and neither part ever
+holds more than two digits. The value is kept on Enter or leaving the
+field, pulled into range.
 
 Picking an opponent reads their finger, and the sheet judges the request
 against their decline formula the way the server does (the formula is

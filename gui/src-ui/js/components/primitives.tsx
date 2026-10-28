@@ -191,6 +191,7 @@ export function TextField({ value, onChange, mono, invalid, placeholder, numeric
 /**
  * A clock as "mm:ss", typed from the minutes: each part shows its digits right-aligned as they are
  * typed (1 → 01:00), two minute digits or ":" move to the seconds, and the value is kept on Enter or leaving.
+ * A part picked by a click or an arrow is overwritten by the next digit, never grown past two.
  */
 export function ClockField({ value, onChange, min = 0, max = 99 * 60 + 59, label }: {
   value: number;
@@ -199,8 +200,10 @@ export function ClockField({ value, onChange, min = 0, max = 99 * 60 + 59, label
   max?: number;
   label?: string;
 }) {
-  // null while not typing; otherwise the digits typed into each part and the part being typed.
-  const [edit, setEdit] = useState<{ m: string; s: string; inSecs: boolean } | null>(null);
+  // null while not typing (the whole value is selected); otherwise the digits of each part, the
+  // part being typed, and whether that part was just picked, so the next digit replaces it.
+  type Edit = { m: string; s: string; inSecs: boolean; fresh: boolean };
+  const [edit, setEdit] = useState<Edit | null>(null);
   const [focused, setFocused] = useState(false);
   const pad = (d: string) => d.padStart(2, '0');
   const mm = edit ? pad(edit.m) : pad(String(Math.floor(value / 60)));
@@ -209,40 +212,48 @@ export function ClockField({ value, onChange, min = 0, max = 99 * 60 + 59, label
     if (edit) onChange(Math.min(max, Math.max(min, Number(edit.m || 0) * 60 + Number(edit.s || 0))));
     setEdit(null);
   };
+  const pick = (inSecs: boolean): Edit =>
+    ({ ...(edit ?? { m: String(Math.floor(value / 60)), s: String(value % 60) }), inSecs, fresh: true });
   const key = (e: React.KeyboardEvent) => {
     const k = e.key;
     if (k === 'Tab' || (k === 'Escape' && !edit) || e.metaKey || e.ctrlKey) { commit(); return; }
     e.preventDefault();
     e.stopPropagation();
-    const cur = edit ?? { m: '', s: '', inSecs: false };
+    // Typing over the whole selection starts the value afresh from the minutes.
+    const cur = edit ?? { m: '', s: '', inSecs: false, fresh: false };
     if (/^\d$/.test(k)) {
       if (!cur.inSecs) {
-        const m = cur.m + k;
-        setEdit({ ...cur, m, inSecs: m.length === 2 });
-      } else if (cur.s.length < 2 && Number(cur.s + k) < 60) {
-        setEdit({ ...cur, s: cur.s + k });
+        const m = (cur.fresh ? '' : cur.m) + k;
+        setEdit(m.length === 2 ? { ...cur, m, inSecs: true, fresh: true } : { ...cur, m, fresh: false });
+      } else {
+        const s = (cur.fresh ? '' : cur.s) + k;
+        if (s.length <= 2 && Number(s) < 60) setEdit({ ...cur, s, fresh: false });
       }
     } else if (k === ':' || k === 'ArrowRight') {
-      setEdit({ ...cur, inSecs: true });
+      setEdit(pick(true));
     } else if (k === 'ArrowLeft') {
-      setEdit({ ...cur, inSecs: false });
+      setEdit(pick(false));
     } else if (k === 'Backspace') {
-      if (cur.inSecs && cur.s) setEdit({ ...cur, s: cur.s.slice(0, -1) });
-      else setEdit({ ...cur, m: cur.m.slice(0, -1), inSecs: false });
+      if (cur.inSecs && cur.s) setEdit({ ...cur, s: cur.s.slice(0, -1), fresh: false });
+      else setEdit({ ...cur, m: cur.m.slice(0, -1), inSecs: false, fresh: false });
     } else if (k === 'Delete') {
-      setEdit({ m: '', s: '', inSecs: false });
+      setEdit({ m: '', s: '', inSecs: false, fresh: false });
     } else if (k === 'Enter') {
       commit();
     } else if (k === 'Escape') {
       setEdit(null);
     }
   };
-  const part = (text: string, on: boolean) => (
-    <span style={{
-      boxShadow: on ? 'inset 0 -2px 0 var(--accent)' : undefined,
-      background: focused && !edit ? 'color-mix(in srgb, var(--accent) 30%, transparent)' : undefined,
-    }}>{text}</span>
-  );
+  const selected = 'color-mix(in srgb, var(--accent) 30%, transparent)';
+  const part = (text: string, secs: boolean) => {
+    const on = !!edit && edit.inSecs === secs;
+    return (
+      <span onMouseDown={() => setEdit(pick(secs))} style={{
+        boxShadow: on ? 'inset 0 -2px 0 var(--accent)' : undefined,
+        background: (focused && !edit) || (on && edit.fresh) ? selected : undefined,
+      }}>{text}</span>
+    );
+  };
   return (
     <span tabIndex={0} role="textbox" aria-label={label} className="k-input"
       onFocus={() => setFocused(true)}
@@ -255,9 +266,9 @@ export function ClockField({ value, onChange, min = 0, max = 99 * 60 + 59, label
         fontFamily: 'var(--ff-mono)', fontSize: 'var(--fs-4)', color: 'var(--text)', letterSpacing: '.04em',
         userSelect: 'none',
       }}>
-      {part(mm, !!edit && !edit.inSecs)}
-      <span style={{ color: 'var(--sub)', background: focused && !edit ? 'color-mix(in srgb, var(--accent) 30%, transparent)' : undefined }}>:</span>
-      {part(ss, !!edit && edit.inSecs)}
+      {part(mm, false)}
+      <span style={{ color: 'var(--sub)', background: focused && !edit ? selected : undefined }}>:</span>
+      {part(ss, true)}
     </span>
   );
 }
