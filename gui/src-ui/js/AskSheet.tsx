@@ -1,7 +1,7 @@
 import React, { useEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react';
 import { ggsApi, type UnfitView } from './api';
 import type { GgsSnapshot, StandbyCfg, UserRow } from './types';
-import { askClockChoices, clockSpec, DEFAULT_EXT, gtypeChoices, gtypeLabel, onlineRows, pairLabel, parseClockSpec, presence } from './ggs';
+import { askClockChoices, clockSpec, DEFAULT_EXT, gtypeChoices, gtypeLabel, MIN_CLOCK, onlineRows, parseClockSpec, presence } from './ggs';
 import { ListNote } from './ggsui';
 import { t, tErr } from './i18n';
 import { marked, Modal, Overlay, popoverStyle, useDismiss } from './components/layout';
@@ -153,20 +153,11 @@ export function AskSheet({ snap, init }: { snap: GgsSnapshot; init: AskInit }) {
   const label = (s: string) => (
     <span style={{ lineHeight: 'var(--h-ctrl)', fontSize: 'var(--fs-5)', color: 'var(--sub)' }}>{s}</span>
   );
-  const summary = [
-    opp || (repeat ? t('ask.pick_opponent') : t('ask.anyone_short')),
-    gtypeLabel(gtype),
-    pairLabel(mainSecs, extSecs),
-    rated ? t('ggs.rated') : t('ask.unrated'),
-  ].join(' · ');
-
   return (
     <Overlay onClose={close}>
       <Modal title={t('ask.title')} width="var(--w-modal-wide)" onClose={close} scroll
              actions={<>
-               <span style={{ flex: 1, minWidth: 0, fontSize: 'var(--fs-6)', lineHeight: 1.35, color: err ? 'var(--bad)' : 'var(--sub)' }}>
-                 {err || summary}
-               </span>
+               <span style={{ flex: 1, minWidth: 0, fontSize: 'var(--fs-6)', lineHeight: 1.35, color: 'var(--bad)' }}>{err}</span>
                {running && repeat && (
                  <Button size="field" variant="danger" onClick={() => void stop()}>{t('ask.stop')}</Button>
                )}
@@ -246,7 +237,7 @@ export function AskSheet({ snap, init }: { snap: GgsSnapshot; init: AskInit }) {
                             fontSize: 'var(--fs-5)', color: 'var(--sub)', whiteSpace: 'nowrap' }}>
                 <span style={{ display: 'inline-flex', alignItems: 'center', gap: 'var(--sp-2)' }}>
                   {t('ggs.field.time_control')}
-                  <ClockField value={mainSecs} onChange={setMainSecs} label={t('ggs.field.time_control')} />
+                  <ClockField value={mainSecs} onChange={setMainSecs} min={MIN_CLOCK} label={t('ggs.field.time_control')} />
                 </span>
                 <span style={{ display: 'inline-flex', alignItems: 'center', gap: 'var(--sp-2)' }}>
                   {t('ggs.field.extension')}

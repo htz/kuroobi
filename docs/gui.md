@@ -60,7 +60,9 @@ The right panel's **Strength** chooses between:
   solve 26`) or **Custom…** with its own depth and exact-solve depth. The
   level can be changed during a game.
 - **Time control** — 1 to 30 minutes, or **Custom…** to the second
-  (0:30 to 99:59, see below). KUROOBI plans each move from its
+  (0:01 to 99:59, see below; 0 would mean playing by level). Custom
+  starts from the choice selected just before it; the first default is
+  10 minutes. KUROOBI plans each move from its
   remaining time (see [Search](search.md#search-on-a-clock-clockrs)), and
   you get the same clock. Once the game starts the two times left
   replace the choice.
@@ -322,8 +324,10 @@ standard, standard, random 16), the **Time control** and **Rated**.
 The time control is a main time and an extension together, as
 tournaments set them: 1 or 3 minutes with 30 seconds (the recent
 tournaments), 5, 10 or 15 minutes with 2 minutes (GGS's own extension,
-left out of the request), or **Custom…**, which shows a field for each, from 0:00 to 99:59 (GGS
-itself takes any length, down to none). It remembers the last choices. There is no increment:
+left out of the request), or **Custom…**, which shows a field for each: a main time from 0:01
+and an extension from 0:00, up to 99:59 (the same floor as local games),
+starting from the pair selected just before; the first default is 5
+minutes with 2 minutes of extension. It remembers the last choices. There is no increment:
 KUROOBI's time plan only sees the time left, so an increment would go
 unused.
 
