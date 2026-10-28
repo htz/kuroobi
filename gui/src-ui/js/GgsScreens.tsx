@@ -565,13 +565,27 @@ function MatchBoard({ snap, m, clock, prefs, face, side, lead }: {
   );
 }
 
-export function FormulaField({ label, src, onSave }: { label: string; src: string; onSave: (s: string) => void }) {
+export function FormulaField({ label, src, onSave, preset }: {
+  label: string; src: string; onSave: (s: string) => void;
+  /** A ready-made rule offered below the editor; it is only filled in, and sent by "Apply". */
+  preset?: { src: string; label: string; note: string };
+}) {
   const [cond, setCond] = useState<Cond | null>(() => parseCond(src));
   const [raw, setRaw] = useState<string | null>(null);
   // What GGS has, written the way the editor writes it, against what is on screen now.
   const sent = (() => { const c = parseCond(src); return c ? condToSrc(c) : src.trim(); })();
   const shown = raw !== null ? raw.trim() : cond ? condToSrc(cond) : '';
   const dirty = shown !== sent && !(raw !== null && raw.trim() === src.trim());
+  // In the raw editor the column's own gap already spaces it.
+  const presetRow = (spaced: boolean) => preset && (
+    <div style={{ display: 'flex', alignItems: 'center', gap: 'var(--sp-3)', marginTop: spaced ? 'var(--sp-2)' : 0 }}>
+      <Button disabled={shown === preset.src}
+              onClick={() => { if (raw !== null) setRaw(preset.src); else setCond(parseCond(preset.src)); }}>
+        {preset.label}
+      </Button>
+      <span style={{ fontSize: 'var(--fs-6)', color: 'var(--sub)', lineHeight: 1.5 }}>{preset.note}</span>
+    </div>
+  );
   if (raw !== null) {
     return (
       <SettingRow label={label}>
@@ -588,6 +602,7 @@ export function FormulaField({ label, src, onSave }: { label: string; src: strin
               {t('ggs.apply')}
             </Button>
           </div>
+          {presetRow(false)}
         </div>
       </SettingRow>
     );
@@ -597,6 +612,7 @@ export function FormulaField({ label, src, onSave }: { label: string; src: strin
       <div style={{ width: '100%', maxWidth: 'var(--w-control)' }}>
         <FormulaEditor value={cond} onChange={setCond} onClear={() => setCond(null)}
                        onSave={onSave} onRaw={setRaw} dirty={dirty} />
+        {presetRow(true)}
       </div>
     </SettingRow>
   );

@@ -480,6 +480,10 @@ const SIDED: Record<string, string> = {
   mc: 'c', oc: 'c',
   ml1: 'l1', ol1: 'l1',
   mm1: 'm1', om1: 'm1',
+  mm2: 'm2', om2: 'm2',
+  ma2: 'a2', oa2: 'a2',
+  mm3: 'm3', om3: 'm3',
+  ma3: 'a3', oa3: 'a3',
   mr: 'r', or: 'r',
   mt1: 't1', ot1: 't1',
   mt2: 't2', ot2: 't2',
@@ -510,16 +514,23 @@ export const formulaVars = (who: Who = defaultWho()): FormulaVar[] => {
   return [
     v('rated', 'bool'), v('rand', 'bool'), v('synchro', 'bool'), v('saved', 'bool'),
     v('komi', 'bool'), v('anti', 'bool'), v('ml1', 'bool'), v('ol1', 'bool'),
+    v('ma2', 'bool'), v('oa2', 'bool'), v('ma3', 'bool'), v('oa3', 'bool'),
     v('size', 'num', { def: 8 }), v('discs', 'num', { def: 16 }),
     v('mr', 'num', { def: 2000 }), v('or', 'num', { def: 2000 }),
     v('mt1', 'num', { unit: sec, def: 600 }), v('ot1', 'num', { unit: sec, def: 600 }),
     v('mt2', 'num', { unit: sec, def: 0 }), v('ot2', 'num', { unit: sec, def: 0 }),
     v('mt3', 'num', { unit: sec, def: 0 }), v('ot3', 'num', { unit: sec, def: 0 }),
     v('mm1', 'num', { def: 0 }), v('om1', 'num', { def: 0 }),
+    v('mm2', 'num', { def: 1 }), v('om2', 'num', { def: 1 }),
+    v('mm3', 'num', { def: 0 }), v('om3', 'num', { def: 0 }),
     v('stored', 'num', { def: 0 }), v('playing', 'num', { def: 0 }),
     v('mc', 'color'), v('oc', 'color'),
   ];
 };
+
+// The tournament director's guidance (discs<14, mt1<60), plus what KUROOBI cannot play or plays at a
+// disadvantage: other boards, komi, anti, move-count clocks, increments, and a main time with no loss.
+export const DEFAULT_DECLINE = 'size!=8|anti|komi|mm1!=0|mt2!=0|mm3!=0|!ml1|discs<14|mt1<60';
 
 export const FORMULA_OPS = ['=', '≠', '<', '>', '≤', '≥'] as const;
 export type FormulaOp = (typeof FORMULA_OPS)[number];

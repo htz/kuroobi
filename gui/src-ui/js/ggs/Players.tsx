@@ -221,7 +221,7 @@ function PlayerDetail({ snap, name, tab, onNav, onKifu }: {
   if (tab === 'profile') {
     const fields = snap.fingers[name]?.fields ?? [];
     // The rules are this player's: "me" is them by name, "them" is whoever sends the request.
-    const who = { me: name, them: t('ggs.formula.who.them') };
+    const who = { me: t('ggs.formula.who.named', { name }), them: t('ggs.formula.who.them') };
     return (
       <div className="k-scroll" style={{ flex: 1, minHeight: 0, paddingBottom: 'var(--sp-4)' }}>
         {/* Until the profile arrives there is nothing to show, not even the request rules' defaults. */}

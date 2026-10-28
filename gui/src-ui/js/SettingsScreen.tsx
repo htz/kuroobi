@@ -2,7 +2,7 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import { api, emitApp, ggsApi, onApp, type SavedServer } from './api';
 import type { GgsSnapshot } from './types';
 import type { Prefs } from './prefs';
-import { fingerKey } from './ggs';
+import { DEFAULT_DECLINE, fingerKey } from './ggs';
 import { t, tErr, useLang } from './i18n';
 import { Field, ListRow, marked, Modal, Overlay } from './components/layout';
 import { ListHead } from './ggsui';
@@ -355,7 +355,9 @@ function GgsFormSettings({ snap }: { snap: GgsSnapshot }) {
       <FormulaField key={'a:' + form('accept')} label={t('ggs.finger.accept')} src={form('accept')}
                     onSave={(x) => void save('aform', x)} />
       <FormulaField key={'d:' + form('decline')} label={t('ggs.finger.decline')} src={form('decline')}
-                    onSave={(x) => void save('dform', x)} />
+                    onSave={(x) => void save('dform', x)}
+                    preset={{ src: DEFAULT_DECLINE, label: t('ggs.settings.default_decline'),
+                              note: t('ggs.settings.default_decline_note') }} />
     </SettingGroup>
   );
 }

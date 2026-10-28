@@ -427,7 +427,17 @@ written to `ggs_wire.log` in the account's data folder.
 - **Request rules** — the **Auto-accept condition** and **Auto-decline
   condition**, edited as a tree of conditions or written as a formula
   directly. These live on the server and apply even while the app is
-  closed, so they are sent only on **Apply**.
+  closed, so they are sent only on **Apply**. **Use the defaults** under
+  the decline condition fills in the tournament director's guidance
+  (decline under 14 discs or under 1 minute of main time) together with
+  everything KUROOBI cannot play or would play at a disadvantage:
+
+  ```
+  size!=8|anti|komi|mm1!=0|mt2!=0|mm3!=0|!ml1|discs<14|mt1<60
+  ```
+
+  That is other board sizes, anti and komi games, clocks with a move
+  count or an increment, and a main time whose timeout is not a loss.
 
 ---
 
