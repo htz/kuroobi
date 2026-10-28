@@ -1,5 +1,6 @@
 //! GGS session thread (Generic Game Server, skatgame.net:5000).
 
+use crate::formula;
 use std::collections::{HashMap, VecDeque};
 use std::io::{Read, Write};
 use std::net::TcpStream;
@@ -1752,6 +1753,8 @@ struct Ctx {
     ask_matched: bool,
     /// Auto match has just sent an ask and the server has not answered it yet.
     auto_asked: bool,
+    /// The auto-match opponent whose finger was fetched to check the request; fetched once only.
+    auto_fingered: String,
 }
 
 const MAX_WORKERS: usize = 2;
@@ -2144,6 +2147,7 @@ fn new_ctx(
         ask_refusals: 0,
         ask_matched: false,
         auto_asked: false,
+        auto_fingered: String::new(),
     };
     ctx.snap.lock().unwrap().engine = EngineCfgView {
         threads: ctx.engine_cfg.threads,
@@ -2678,6 +2682,29 @@ fn standby_tick(ctx: &mut Ctx, w: &mut Wire, mut send: impl FnMut(String)) {
     }
     w.next_ask_at = Some(Instant::now() + Duration::from_secs(sb.interval_secs.max(30)));
     if in_match || outgoing || !present {
+        return;
+    }
+    // The opponent's decline formula is checked here first, so a request it would refuse is not sent.
+    let (read, unfit) = {
+        let s = ctx.snap.lock().unwrap();
+        (
+            s.fingers
+                .get(&sb.opponent)
+                .is_some_and(|f| f.fields.iter().any(|(k, _)| k == "decline")),
+            unfit_ask(&s, &sb.gtype, &sb.time, &sb.opponent, sb.rated),
+        )
+    };
+    if !read && ctx.auto_fingered != sb.opponent {
+        ctx.auto_fingered = sb.opponent.clone();
+        w.pending.push(format!("finger:{}", sb.opponent));
+        say(ctx, &mut send, format!("finger {}", sb.opponent));
+        w.pending.push(format!("osfinger:{}", sb.opponent));
+        say(ctx, &mut send, format!("tell /os finger {}", sb.opponent));
+        w.next_ask_at = Some(Instant::now() + Duration::from_secs(2));
+        return;
+    }
+    if let Some(o) = unfit {
+        stop_auto_match_unfit(ctx, Some(&o));
         return;
     }
     ctx.log("info", &format!("auto match: asking {}", sb.opponent));
@@ -3219,7 +3246,7 @@ fn handle_os_line(
         let msg = ln.trim_start_matches("/os: ERR").trim();
         if std::mem::take(&mut ctx.auto_asked)
             && msg.contains("doesn't fit the opponent's formula")
-            && stop_auto_match_unfit(ctx)
+            && stop_auto_match_unfit(ctx, None)
         {
             return;
         }
@@ -3268,15 +3295,22 @@ fn refused_ask(ctx: &mut Ctx, o: &Offer, login: &str) {
 }
 
 /// The auto-match opponent's formula turns the request away as written; asking again the same way
-/// can never succeed, so auto match stops at the first one.
-fn stop_auto_match_unfit(ctx: &mut Ctx) -> bool {
+/// can never succeed, so auto match stops at the first one. `why` is the outline found before
+/// sending; `None` when it was the server that refused.
+fn stop_auto_match_unfit(ctx: &mut Ctx, why: Option<&formula::Outline>) -> bool {
     let mut s = ctx.snap.lock().unwrap();
     if !s.standby.enabled {
         return false;
     }
     let opp = s.standby.opponent.clone();
     s.standby.enabled = false;
-    s.notice = format!("err.auto_match_unfit|name={opp}");
+    s.notice = match why {
+        None => format!("err.auto_match_unfit|name={opp}"),
+        Some(o) => format!(
+            "err.auto_match_unfit_why|name={opp}|why={}",
+            hit_words(o, &opp).replace('|', "/")
+        ),
+    };
     drop(s);
     ctx.log(
         "info",
@@ -3288,6 +3322,260 @@ fn stop_auto_match_unfit(ctx: &mut Ctx) -> bool {
     );
     ctx.dirty = true;
     true
+}
+
+/// One line of the opponent's formula as the request sheet lays it out.
+#[derive(Clone, Serialize)]
+pub struct UnfitRow {
+    pub depth: u8,
+    /// `Some(any)` for a group ("any of" / "all of"), `None` for a condition.
+    pub group: Option<bool>,
+    pub text: String,
+    pub hit: bool,
+}
+
+/// Why the opponent turns the request away: the top of its formula (`any`, `all`, or `one` for a
+/// single condition) and the lines below it.
+#[derive(Clone, Serialize)]
+pub struct UnfitView {
+    pub top: &'static str,
+    pub rows: Vec<UnfitRow>,
+}
+
+/// `opp`'s decline formula laid out for the request sheet; `None` when the request fits.
+pub fn unfit_view(
+    s: &Snapshot,
+    gtype: &str,
+    time: &str,
+    opp: &str,
+    rated: bool,
+) -> Option<UnfitView> {
+    let o = unfit_ask(s, gtype, time, opp, rated)?;
+    let mut rows = Vec::new();
+    let top = match &o {
+        formula::Outline::Group { any, kids, .. } => {
+            for k in hits_first(kids) {
+                unfit_rows(k, opp, 0, &mut rows);
+            }
+            if *any {
+                "any"
+            } else {
+                "all"
+            }
+        }
+        formula::Outline::Cond { .. } => {
+            unfit_rows(&o, opp, 0, &mut rows);
+            "one"
+        }
+    };
+    Some(UnfitView { top, rows })
+}
+
+fn unfit_rows(o: &formula::Outline, opp: &str, depth: u8, out: &mut Vec<UnfitRow>) {
+    match o {
+        formula::Outline::Group { any, hit, kids } => {
+            out.push(UnfitRow {
+                depth,
+                group: Some(*any),
+                text: String::new(),
+                hit: *hit,
+            });
+            for k in hits_first(kids) {
+                unfit_rows(k, opp, depth + 1, out);
+            }
+        }
+        formula::Outline::Cond { shape, hit } => out.push(UnfitRow {
+            depth,
+            group: None,
+            text: unfit_words(shape, opp),
+            hit: *hit,
+        }),
+    }
+}
+
+/// The parts of a group with the ones that hold first; their order inside `|` or `&` means nothing.
+fn hits_first(kids: &[formula::Outline]) -> impl Iterator<Item = &formula::Outline> {
+    kids.iter()
+        .filter(|k| k.hit())
+        .chain(kids.iter().filter(|k| !k.hit()))
+}
+
+/// The conditions that hold, in words, for a notice: a group that holds reads as "all of: a, b".
+fn hit_words(o: &formula::Outline, opp: &str) -> String {
+    use crate::i18n::t;
+    match o {
+        formula::Outline::Cond { shape, .. } => unfit_words(shape, opp),
+        formula::Outline::Group { any, kids, .. } => {
+            let parts: Vec<String> = kids
+                .iter()
+                .filter(|k| k.hit())
+                .map(|k| match k {
+                    formula::Outline::Group { any: inner, .. } => format!(
+                        "{}: {}",
+                        t(if *inner {
+                            "backend.unfit.group_any"
+                        } else {
+                            "backend.unfit.group_all"
+                        }),
+                        hit_words(k, opp)
+                    ),
+                    _ => hit_words(k, opp),
+                })
+                .collect();
+            let sep = if *any {
+                " / ".to_string()
+            } else {
+                t("backend.unfit.join")
+            };
+            parts.join(&sep)
+        }
+    }
+}
+
+/// `opp`'s decline formula as an outline when it turns this request away, judged before sending
+/// as the server would; `None` when it fits, or when that cannot be told (finger not read, a value
+/// unknown).
+pub fn unfit_ask(
+    s: &Snapshot,
+    gtype: &str,
+    time: &str,
+    opp: &str,
+    rated: bool,
+) -> Option<formula::Outline> {
+    if opp.is_empty() || opp == s.login {
+        return None;
+    }
+    let finger = s.fingers.get(opp)?;
+    let decline = &finger.fields.iter().find(|(k, _)| k == "decline")?.1;
+    let mut f = formula::Facts::from_request(gtype, time)?;
+    f.rated = rated && !no_rated();
+    f.stored = s.stored.iter().filter(|x| x.opp == opp).count() as i64;
+    let pool = f.pool();
+    // Someone online with no rating in the pool is rated from the server's start, 1720 @ 350.
+    let rating = |name: &str| {
+        let u = s.users.iter().find(|u| u.name == name)?;
+        let r = match pool.as_str() {
+            "8" => u.rating.zip(u.dev),
+            "8r" => u.rating_r.zip(u.dev_r),
+            _ => return None,
+        };
+        Some(r.map_or((1720.0, 350.0), |(r, d)| (f64::from(r), f64::from(d))))
+    };
+    f.asker_rating = rating(&s.login);
+    f.owner_rating = rating(opp);
+    formula::declined_by(decline, &f)
+}
+
+/// One condition of the opponent's decline formula in words, as a state of the request that the
+/// condition looks for ("not synchro", "the main time under 3 min 20 s").
+fn unfit_words(shape: &formula::Shape, owner: &str) -> String {
+    use crate::i18n::{t, tf};
+    use formula::{Cmp, Shape};
+    let key = |k: &str| format!("backend.unfit.{k}");
+    let other = || t(&key("other"));
+    // The clock variables come in pairs (`mt1` / `ot1`): the owner's and the asker's are worded alike.
+    let base = |var: &str| -> String {
+        if var.len() == 3 && (var.starts_with('m') || var.starts_with('o')) {
+            var[1..].to_string()
+        } else {
+            var.to_string()
+        }
+    };
+    // A key the language does not have comes back as itself; such a condition is said generically.
+    let label = |var: &str| {
+        let k = key(&format!("var.{}", base(var)));
+        let l = tf(&k, &[("name", owner)]);
+        (l != k).then_some(l)
+    };
+    let secs = |v: f64| {
+        let v = v.round() as i64;
+        let (m, s) = ((v / 60).to_string(), (v % 60).to_string());
+        let k = match (v / 60, v % 60) {
+            (0, _) => "time_s",
+            (_, 0) => "time_m",
+            _ => "time_ms",
+        };
+        tf(&key(k), &[("m", &m), ("s", &s)])
+    };
+    let value = |var: &str, v: f64| match base(var).as_str() {
+        "t1" | "t2" | "t3" => secs(v),
+        "mr" | "or" => format!("{v:.1}"),
+        _ => format!("{}", v.round() as i64),
+    };
+    match shape {
+        Shape::Flag { var, when } => {
+            let k = key(&format!(
+                "flag.{}_{}",
+                base(var),
+                if *when { "yes" } else { "no" }
+            ));
+            let w = t(&k);
+            if w == k {
+                other()
+            } else {
+                w
+            }
+        }
+        Shape::Number {
+            var: "stored",
+            cmp: Cmp::Gt,
+            limit,
+        } if *limit == 0.0 => t(&key("stored")),
+        Shape::Number { var, cmp, limit } => {
+            let Some(label) = label(var) else {
+                return other();
+            };
+            let k = match cmp {
+                Cmp::Lt => "number_lt",
+                Cmp::Le => "number_le",
+                Cmp::Gt => "number_gt",
+                Cmp::Ge => "number_ge",
+                Cmp::Eq => "number_eq",
+                Cmp::Ne => "number_ne",
+            };
+            // A number is spaced from the words after it ("16 未満"), a unit is not ("3 分未満").
+            let v = value(var, *limit);
+            let sp = if v.ends_with(|c: char| c.is_ascii_digit()) {
+                " "
+            } else {
+                ""
+            };
+            tf(&key(k), &[("label", &label), ("v", &v), ("sp", sp)])
+        }
+        Shape::Same { var } => match label(var) {
+            Some(label) => tf(&key("same"), &[("label", &label)]),
+            None => other(),
+        },
+        Shape::Color { var, cmp, color } => {
+            // The asker's own colour has its own words: "you" is not a name.
+            let you = if *var == "mc" { "" } else { "_you" };
+            match (color, cmp) {
+                ('?', Cmp::Ne) => t(&key("color_named")),
+                ('?', Cmp::Eq) => t(&key("color_unnamed")),
+                ('B' | 'W', Cmp::Eq | Cmp::Ne) => {
+                    let side = t(&key(if *color == 'B' { "black" } else { "white" }));
+                    let k = if *cmp == Cmp::Eq {
+                        "color_is"
+                    } else {
+                        "color_is_not"
+                    };
+                    tf(
+                        &key(&format!("{k}{you}")),
+                        &[("who", owner), ("side", &side)],
+                    )
+                }
+                _ => other(),
+            }
+        }
+        Shape::Delta {
+            owner: true,
+            result,
+            cmp: Cmp::Le | Cmp::Lt,
+            limit,
+        } if *result > 0.0 && *limit <= 0.0 => t(&key("no_gain")),
+        Shape::Delta { .. } => t(&key("rating")),
+        Shape::Other => other(),
+    }
 }
 
 /// Our own request to `opp` (not one sent to us, nor one to anybody).

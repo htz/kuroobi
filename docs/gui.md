@@ -320,12 +320,26 @@ makes an open request), the **Format** (synchro random 14–20, synchro
 standard, standard, random 16), the **Time control** (1–30 minutes) and
 **Rated**. It remembers the last choices.
 
+Picking an opponent reads their finger, and the sheet judges the request
+against their decline formula the way the server does (the formula is
+theirs, so `m…` is them and `o…` is you), again whenever the format, time
+or Rated changes. A request it would turn away cannot be sent: a card
+lays out their formula as an outline of "any of" and "all of" groups,
+each condition in words ("not synchro", "the main time under 3 min
+20 s"), with the ones that hold marked and the rest folded away. Every
+marked line of an "any of" group has to be cleared, one of an "all of"
+group is enough. Values only
+the server knows (`rnd`, `playing`) leave the decision to it.
+
 **Games: Repeat (auto match)** asks again and again: after each game it
 waits the given seconds and asks the same opponent, up to the given
 number of games (0 keeps going until stopped), optionally also accepting
 requests that arrive meanwhile. Auto match needs a named opponent, asks
 only while that opponent is online, and stops with a notice when the
-opponent turns the request down twice in a row. While it runs the status
+opponent turns the request down twice in a row. It checks the
+opponent's decline formula before each ask as the sheet does and stops
+without asking when the request breaks it, or at once if the server
+still answers that the request does not fit. While it runs the status
 bar shows Auto match; pressing it reopens the sheet to change or stop it.
 The sheet also opens from Players (with the opponent filled in) and from
 a result's **Rematch**.

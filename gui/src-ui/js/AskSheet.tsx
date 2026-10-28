@@ -1,5 +1,5 @@
 import React, { useEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react';
-import { ggsApi } from './api';
+import { ggsApi, type UnfitView } from './api';
 import type { GgsSnapshot, StandbyCfg, UserRow } from './types';
 import { clockChoices, gtypeChoices, gtypeLabel, onlineRows, presence } from './ggs';
 import { t, tErr } from './i18n';
@@ -93,6 +93,36 @@ export function AskSheet({ snap, init }: { snap: GgsSnapshot; init: AskInit }) {
   const clocks = clockChoices();
   const pick = (name: string) => setOpp(name);
 
+  // The opponent's decline formula, checked here so a request it would refuse is never sent.
+  useEffect(() => { if (opp) ggsApi.finger(opp).catch(() => {}); }, [opp]);
+  const decline = opp ? snap.fingers[opp]?.fields.find(([k]) => k === 'decline')?.[1] ?? '' : '';
+  const key = [opp, gtype, time, rated, decline].join('|');
+  const [unfit, setUnfit] = useState<{ key: string; view: UnfitView | null }>({ key: '', view: null });
+  const [unfitOpen, setUnfitOpen] = useState(false);
+  useEffect(() => {
+    if (!opp) return;
+    let alive = true;
+    ggsApi.unfit(gtype, time, opp, rated)
+      .then((view) => { if (alive) setUnfit({ key, view }); })
+      .catch(() => {});
+    return () => { alive = false; };
+  }, [key, opp, gtype, time, rated]);
+  const unfitView = opp && unfit.key === key ? unfit.view : null;
+  // Folded, only the lines that hold show; a group that does not hold hides with its lines.
+  const unfitRows: UnfitView['rows'] = [];
+  let unfitHidden = 0;
+  let below = -1;
+  for (const r of unfitView?.rows ?? []) {
+    if (below >= 0 && r.depth > below) { if (unfitOpen) unfitRows.push(r); continue; }
+    below = -1;
+    if (!r.hit) {
+      unfitHidden++;
+      if (r.group !== null) below = r.depth;
+      if (!unfitOpen) continue;
+    }
+    unfitRows.push(r);
+  }
+
   const go = async () => {
     setErr('');
     writeLast({ gtype, time, rated });
@@ -136,7 +166,7 @@ export function AskSheet({ snap, init }: { snap: GgsSnapshot; init: AskInit }) {
                  <Button size="field" variant="danger" onClick={() => void stop()}>{t('ask.stop')}</Button>
                )}
                <Button size="field" variant="ghost" onClick={close}>{t('dialog.cancel')}</Button>
-               <Button size="field" variant="primary" disabled={repeat && !opp} onClick={() => void go()}>
+               <Button size="field" variant="primary" disabled={(repeat && !opp) || unfitView !== null} onClick={() => void go()}>
                  {repeat ? (running ? t('ask.apply_repeat') : t('ask.start_repeat')) : t('ask.go')}
                </Button>
              </>}>
@@ -163,6 +193,32 @@ export function AskSheet({ snap, init }: { snap: GgsSnapshot; init: AskInit }) {
                 <span style={{ fontSize: 'var(--fs-6)', color: 'var(--sub)' }}>
                   {gtypeLabel(stored.gtype)} · {t('ask.stored_where')}
                 </span>
+              </div>
+            )}
+            {unfitView && (
+              <div style={{ display: 'flex', flexDirection: 'column', gap: 'var(--sp-1)', lineHeight: 1.35, padding: 'var(--sp-2) var(--sp-3)',
+                            borderRadius: 'var(--r-1)', background: 'var(--card)', boxShadow: 'inset 2px 0 0 var(--bad)' }}>
+                <span style={{ fontSize: 'var(--fs-5)', fontWeight: 600 }}>{t('ask.unfit', { name: opp })}</span>
+                <span style={{ fontSize: 'var(--fs-6)', color: 'var(--sub)' }}>{t(`ask.unfit_lead_${unfitView.top}`)}</span>
+                {/* Indent stops at four levels, long words wrap, and a long list scrolls inside the card. */}
+                <div className="k-scroll" style={{ maxHeight: 240, display: 'flex', flexDirection: 'column', gap: 'var(--sp-1)' }}>
+                  {unfitRows.map((r, i) => (
+                    <span key={i} style={{ flex: 'none', display: 'flex', alignItems: 'baseline', gap: 'var(--sp-2)', paddingLeft: Math.min(r.depth, 4) * 16,
+                                           fontSize: 'var(--fs-6)', color: r.hit ? 'var(--text)' : 'var(--sub)', fontWeight: r.group !== null ? 600 : 400 }}>
+                      <span aria-hidden="true" style={{ width: 10, flex: 'none', textAlign: 'center', color: r.hit ? 'var(--bad)' : 'var(--sub)' }}>
+                        {r.hit ? '✕' : '·'}
+                      </span>
+                      <span style={{ minWidth: 0, overflowWrap: 'anywhere' }}>{r.group === null ? r.text : t(r.group ? 'ask.unfit_any' : 'ask.unfit_all')}</span>
+                    </span>
+                  ))}
+                </div>
+                {unfitHidden > 0 && (
+                  <button type="button" className="k-press" onClick={() => setUnfitOpen(!unfitOpen)}
+                          style={{ alignSelf: 'flex-start', display: 'flex', alignItems: 'center', gap: 'var(--sp-1)', height: 'var(--h-chip)',
+                                   padding: 0, border: 0, background: 'transparent', font: 'inherit', fontSize: 'var(--fs-6)', color: 'var(--accent)' }}>
+                    {unfitOpen ? `▾ ${t('ask.unfit_fold')}` : `▸ ${t('ask.unfit_more', { n: unfitHidden })}`}
+                  </button>
+                )}
               </div>
             )}
           </div>

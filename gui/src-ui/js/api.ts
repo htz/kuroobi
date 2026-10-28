@@ -107,6 +107,12 @@ export interface ActivityView {
 
 export interface SavedServer { addr: string; name: string; public: boolean }
 
+/** The opponent's decline formula as an outline: `group` is set (any / all) on a group line. */
+export type UnfitView = {
+  top: 'any' | 'all' | 'one';
+  rows: { depth: number; group: boolean | null; text: string; hit: boolean }[];
+};
+
 export const ggsApi = {
   connect: (login: string, pw: string, server: string) => call<void>('ggs_connect', { login, pw, server }),
   disconnect: () => call('ggs_disconnect'),
@@ -127,6 +133,9 @@ export const ggsApi = {
   accept: (id: string) => call('ggs_accept', { id }),
   decline: (id: string) => call('ggs_decline', { id }),
   finger: (name: string) => call('ggs_finger', { name }),
+  /** Why the opponent's decline formula turns this request away, laid out; null when it does not (or not known yet). */
+  unfit: (gtype: string, time: string, opponent: string, rated: boolean) =>
+    call<UnfitView | null>('ggs_unfit', { gtype, time, opponent, rated }),
   who: () => call('ggs_who', {}),
   top: (gtype: string, n: number) => call('ggs_top', { gtype, n }),
   rank: (gtype: string, name: string) => call('ggs_rank', { gtype, name }),

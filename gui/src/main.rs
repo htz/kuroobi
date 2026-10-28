@@ -2,6 +2,7 @@
 
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
+mod formula;
 mod ggs;
 mod i18n;
 
@@ -1777,6 +1778,21 @@ fn ggs_ask(
     )
 }
 
+/// Why the opponent's decline formula turns this request away, laid out; `None` when it does not
+/// (or that cannot be told yet).
+#[tauri::command]
+fn ggs_unfit(
+    app: State<App>,
+    gtype: String,
+    time: String,
+    opponent: String,
+    rated: bool,
+) -> Option<ggs::UnfitView> {
+    let snap = ggs_snap_arc(&app)?;
+    let s = snap.lock().unwrap();
+    ggs::unfit_view(&s, &gtype, &time, &opponent, rated)
+}
+
 #[tauri::command]
 fn ggs_accept(app: State<App>, id: String) -> Result<(), String> {
     ggs_send(&app, ggs::Cmd::Accept(id))
@@ -2174,6 +2190,7 @@ fn main() {
             ggs_set_learn,
             ggs_set_standby,
             ggs_snapshot,
+            ggs_unfit,
             ggs_autoview,
             ggs_no_rated,
             env_overrides,
