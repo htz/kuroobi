@@ -131,9 +131,19 @@ Analysis is held off during a GGS game.
 record panel in Play) read a paste or a file. The format is **GGF**
 (Generic Game Format), which GGS uses, so a game that does not start
 from the initial position (a random opening) is reproduced along with
-its starting position. A plain move list (`f5d6c3…`) and the form of one
-board line plus a move list are accepted as well. Before loading, a
-preview shows the number of moves and the final position. If the board
+its starting position. The form is worked out from the text, so these
+load as well:
+
+- a move list (`f5d6c3…`); case, spaces, move numbers such as `2.` and
+  other stray text are ignored, so a PlayOK copy loads as it is;
+- a board alone: 64 squares from a1 to h8 and the side to move, where
+  `-` or `.` is empty, `X` `x` `B` `b` `0` `*` black and `O` `o` `W`
+  `w` `1` white, with spaces and line breaks allowed anywhere in it;
+- a board followed by the moves played from it;
+- an Othello Quest saved game (its JSON).
+
+Before loading, a preview shows the number of moves and the final
+position, or for a board alone, whose turn it is. If the board
 already holds a record, loading asks first ("Replace the record?"),
 wherever the record comes from — a paste, a file, or **Open in study**
 on another screen.

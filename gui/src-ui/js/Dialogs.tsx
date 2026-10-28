@@ -33,7 +33,8 @@ export function PasteKifu({ onLoad, onFile, onCancel }: {
     return () => { alive = false; clearTimeout(id); };
   }, [text]);
 
-  const ok = !!peek && !peek.err && peek.frames.length > 1;
+  // A board alone (one frame) loads too: text with neither board nor moves comes back as an error.
+  const ok = !!peek && !peek.err && peek.frames.length > 0;
   const last = ok ? peek!.frames[peek!.frames.length - 1] : null;
   return (
     <Overlay onClose={onCancel}>
@@ -74,12 +75,13 @@ export function PasteKifu({ onLoad, onFile, onCancel }: {
                 </span>
               </div>
               <span style={{ color: 'var(--sub)' }}>
-                {t(last.black + last.white === 64
-                  ? 'dialog.kifu.summary_final' : 'dialog.kifu.summary_last',
-                   { n: peek!.frames.length - 1 })}
+                {peek!.frames.length === 1
+                  ? t('dialog.kifu.summary_board', { side: t(`app.color.${last.turn}`) })
+                  : t(last.black + last.white === 64
+                    ? 'dialog.kifu.summary_final' : 'dialog.kifu.summary_last',
+                     { n: peek!.frames.length - 1 })}
               </span>
             </>}
-            {peek && !peek.err && !ok && <span style={{ color: 'var(--sub)' }}>{t('dialog.kifu.no_moves')}</span>}
           </div>
         </div>
       </Modal>

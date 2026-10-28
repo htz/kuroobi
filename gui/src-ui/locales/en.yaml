@@ -323,10 +323,10 @@ dialog:
   kifu:
     from_file: "From a file…"
     load: "Load"
-    no_moves: "No move could be read."
     preview: "Preview"
     preview_hint: "Paste a record and the result appears here."
-    sub: "GGF, f5d6-style move lists and board-prefixed forms all load."
+    sub: "A move list (f5d6…), a board, a board plus moves, GGF or Othello Quest: the form is worked out for you."
+    summary_board: "Board only · {side} to move"
     summary_final: "{n} moves · Final position"
     summary_final_one: "{n} move · Final position"
     summary_last: "{n} moves · Last position"

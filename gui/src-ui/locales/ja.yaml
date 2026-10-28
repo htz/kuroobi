@@ -316,10 +316,10 @@ dialog:
   kifu:
     from_file: "ファイルから…"
     load: "読み込む"
-    no_moves: "手が 1 つも読み取れません。"
     preview: "下読み"
     preview_hint: "貼り付けると、ここに読み取り結果が出ます。"
-    sub: "GGF・f5d6… 形式・盤面つきのいずれでも読めます。"
+    sub: "棋譜 (f5d6…)・盤面・盤面＋棋譜・GGF・オセロクエストのどれでも、形式を見分けて読みます。"
+    summary_board: "盤面のみ ・ {side}番"
     summary_final: "{n} 手 ・ 終局図"
     summary_last: "{n} 手 ・ 最後の局面"
     title: "棋譜を読み込む"

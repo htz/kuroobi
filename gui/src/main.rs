@@ -1342,21 +1342,63 @@ fn ggf_now() -> String {
     )
 }
 
-fn extract_start(text: &str) -> Option<String> {
-    let cell = |c: char| matches!(c.to_ascii_lowercase(), '-' | '.' | 'x' | 'o' | '*');
-    let side = |c: char| matches!(c.to_ascii_lowercase(), 'x' | 'o' | '*');
-    let ggf = text.find("BO[").map(|i| &text[i + 3..]).and_then(|rest| {
-        let end = rest.find(']')?;
-        let inner = rest[..end].trim_start_matches('8').trim();
-        Some(inner.to_string())
-    });
-    for cand in ggf.into_iter().chain(text.lines().map(|l| l.to_string())) {
-        let c: Vec<char> = cand.chars().filter(|c| !c.is_whitespace()).collect();
-        if c.len() == 65 && c[..64].iter().all(|&x| cell(x)) && side(c[64]) {
-            return Some(c.into_iter().collect());
+/// One board square or side-to-move letter as the common formats write it: `-` `.` empty,
+/// `X` `x` `B` `b` `0` `*` black, `O` `o` `W` `w` `1` white; in the engine's letters.
+fn board_char(c: char) -> Option<char> {
+    match c {
+        '-' | '.' => Some('-'),
+        'X' | 'x' | 'B' | 'b' | '0' | '*' => Some('x'),
+        'O' | 'o' | 'W' | 'w' | '1' => Some('o'),
+        _ => None,
+    }
+}
+
+/// A board written from the start of some line as 64 squares (a1, b1 … h8) and the side to move,
+/// spaces and line breaks allowed anywhere in it. Returns it in the engine's letters together with
+/// the rest of the text, where the moves played from it may follow.
+fn find_board(text: &str) -> Option<(String, String)> {
+    let line_starts = std::iter::once(0).chain(text.match_indices('\n').map(|(i, _)| i + 1));
+    for start in line_starts {
+        let mut board = String::new();
+        for (i, c) in text[start..].char_indices() {
+            if c.is_whitespace() {
+                continue;
+            }
+            match board_char(c) {
+                Some(b) if board.len() < 64 || b != '-' => board.push(b),
+                _ => break,
+            }
+            if board.len() == 65 {
+                let end = start + i + c.len_utf8();
+                return Some((board, format!("{}\n{}", &text[..start], &text[end..])));
+            }
         }
     }
     None
+}
+
+/// Othello Quest's saved game (JSON): the moves of `position.moves[].m`, in order.
+fn quest_moves(text: &str) -> Option<String> {
+    use serde_json::Value;
+    fn moves(v: &Value) -> Option<&Vec<Value>> {
+        match v {
+            Value::Object(m) => m
+                .get("moves")
+                .and_then(Value::as_array)
+                .filter(|a| a.iter().any(|e| e.get("m").is_some()))
+                .or_else(|| m.values().find_map(moves)),
+            Value::Array(a) => a.iter().find_map(moves),
+            _ => None,
+        }
+    }
+    let v: Value = serde_json::from_str(text.trim()).ok()?;
+    let kifu: String = moves(&v)?
+        .iter()
+        .filter_map(|e| e.get("m")?.as_str())
+        .map(str::to_lowercase)
+        .filter(|m| m.len() == 2 && m != "pa" && m != "ps")
+        .collect();
+    (!kifu.is_empty()).then_some(kifu)
 }
 
 fn parse_ggf(text: &str) -> Option<(Option<String>, String)> {
@@ -1494,6 +1536,7 @@ struct KifuFrame {
     last: Option<u8>,
     black: u8,
     white: u8,
+    turn: &'static str,
 }
 
 #[derive(Serialize)]
@@ -1570,6 +1613,7 @@ fn preview_kifu(text: String) -> Result<Vec<KifuFrame>, String> {
         last,
         black: b.black.count_ones() as u8,
         white: b.white.count_ones() as u8,
+        turn: color_name(b.player()),
     };
 
     let mut out = vec![frame(&b, None)];
@@ -1602,28 +1646,22 @@ fn game_from_text(text: &str) -> Option<Reversi> {
             None => Reversi::from_kifu(&kifu).ok(),
         };
     }
+    if let Some(kifu) = quest_moves(text) {
+        return Reversi::from_kifu(&kifu).ok();
+    }
     let (start, kifu) = plain_record(text);
     match &start {
         Some(b) => Reversi::from_kifu_with_start(b, &kifu).ok(),
+        None if kifu.is_empty() => None,
         None => Reversi::from_kifu(&kifu).ok(),
     }
 }
 
 fn plain_record(text: &str) -> (Option<String>, String) {
-    let start = extract_start(text);
-    let body = match &start {
-        Some(_) => text
-            .lines()
-            .filter(|l| {
-                let c: Vec<char> = l.chars().filter(|c| !c.is_whitespace()).collect();
-                c.len() != 65 && !l.contains("BO[")
-            })
-            .collect::<Vec<_>>()
-            .join("\n"),
-        None => text.to_string(),
-    };
-    let kifu = extract_kifu(&body);
-    (start, kifu)
+    match find_board(text) {
+        Some((board, rest)) => (Some(board), extract_kifu(&rest)),
+        None => (None, extract_kifu(text)),
+    }
 }
 
 fn ggs_tx(app: &State<App>) -> Result<std::sync::mpsc::Sender<ggs::Cmd>, String> {
@@ -2275,17 +2313,14 @@ mod tests {
     fn reads_start_position_and_kifu() {
         let start = Board::new().to_string();
         let text = format!("{start}\nf5d6c3\n");
-        assert_eq!(
-            extract_start(&text).as_deref(),
-            Some(start.replace(' ', "").as_str())
-        );
+        assert!(find_board(&text).is_some());
         let g = game_from_text(&text).expect("parses");
         assert_eq!(g.move_count(), 3);
     }
 
     #[test]
     fn plain_kifu_still_works() {
-        assert!(extract_start("f5d6c3").is_none());
+        assert!(find_board("f5d6c3").is_none());
         let g = game_from_text("f5d6c3").expect("parses");
         assert_eq!(g.move_count(), 3);
     }
@@ -2294,10 +2329,54 @@ mod tests {
     fn reads_start_from_ggf() {
         let start = Board::new().to_string();
         let text = format!("(;GM[Othello]PC[GGS/os]BO[8 {start}]B[F5]W[D6];)");
+        let g = game_from_text(&text).expect("parses");
+        assert_eq!(g.move_count(), 2);
+    }
+
+    // Egaroucid's examples of the board, board + moves and Othello Quest forms.
+    #[test]
+    fn reads_a_board_alone_in_any_letters() {
+        let a =
+            game_from_text("------------------XO------XXX------OXX-----O-------------------- O")
+                .expect("parses");
+        let b = game_from_text(
+            "........\n........\n..01....\n..000...\n...100..\n...1....\n........\n........\nw",
+        )
+        .expect("parses");
         assert_eq!(
-            extract_start(&text).as_deref(),
-            Some(start.replace(' ', "").as_str())
+            (a.move_count(), a.board.black, a.board.white),
+            (0, b.board.black, b.board.white)
         );
+        assert_eq!(color_name(a.board.player()), "white");
+    }
+
+    #[test]
+    fn reads_a_board_then_moves_and_skips_move_numbers() {
+        let g = game_from_text(
+            "---------------------------OX------OXX-----O-------------------- X c3d3c4f4f6f3",
+        )
+        .expect("parses");
+        assert_eq!(g.move_count(), 6);
+        let p = game_from_text("F5 f4 2. F3 g4 3. H3 f6 4. G5 g6").expect("parses");
+        assert_eq!(p.move_count(), 8);
+    }
+
+    #[test]
+    fn reads_othello_quest_json() {
+        let q = r#"{"name":"player","args":[{"gtype":"reversi1","position":{"moves":[{"t":1,"m":"e6"},{"t":218,"m":"f6"},{"t":639,"m":"f5"},{"t":467,"m":"d6"}]},"finished":false}]}"#;
+        assert_eq!(game_from_text(q).expect("parses").move_count(), 4);
+    }
+
+    #[test]
+    fn reads_a_ggf_with_passes_to_the_end() {
+        let ggf = "(;GM[Othello]PC[]PB[b_player]PW[w_player]RE[-32]TI[0]TY[8]BO[8 ---------------------------O*------*O--------------------------- *]B[E6]W[F6]B[F5]W[D6]B[C3]W[G4]B[C6]W[F4]B[H4]W[F3]B[G5]W[E3]B[D3]W[C4]B[C5]W[G6]B[H6]W[H3]B[G3]W[E2]B[E1]W[D7]B[D8]W[B3]B[B5]W[F7]B[F8]W[D2]B[D1]W[C7]B[A3]W[H5]B[H2]W[C8]B[F2]W[E8]B[B8]W[E7]B[B4]W[A4]B[A6]W[A5]B[B6]W[H7]B[H8]W[G8]B[G7]W[A8]B[PA]W[A7]B[PA]W[B7]B[PA]W[A2]B[B2]W[G2]B[F1]W[H1]B[PA]W[A1]B[C2]W[G1]B[B1]W[C1];)";
+        let g = game_from_text(ggf).expect("parses");
+        assert_eq!(g.board.black.count_ones() + g.board.white.count_ones(), 64);
+    }
+
+    #[test]
+    fn text_with_neither_board_nor_moves_is_no_record() {
+        assert!(game_from_text("hello there").is_none());
     }
 
     #[test]

@@ -79,6 +79,7 @@ export interface KifuFrame {
   last: number | null;
   black: number;
   white: number;
+  turn: 'black' | 'white';
 }
 
 export interface HashView {
