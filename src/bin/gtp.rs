@@ -1,4 +1,4 @@
-//! GTP server around [`kuroobi::engine::Engine`], so this build can be driven as an external opponent by `roundrobin` (or any GTP driver).
+//! GTP server around [`kuroobi::engine::Engine`], so this build can be driven by any GTP driver, or played against another build of itself.
 
 use std::io::{BufRead, Write};
 use std::path::PathBuf;
@@ -18,7 +18,7 @@ fn parse_vertex(s: &str) -> Option<Position> {
     Position::from_file_rank(file, rank)
 }
 
-const COMMANDS: [&str; 11] = [
+const COMMANDS: [&str; 13] = [
     "protocol_version",
     "name",
     "version",
@@ -29,6 +29,8 @@ const COMMANDS: [&str; 11] = [
     "komi",
     "play",
     "genmove",
+    "time_settings",
+    "time_left",
     "quit",
 ];
 
@@ -124,6 +126,9 @@ fn main() -> ExitCode {
     };
 
     let mut board = Board::new();
+    // Each side's time left (black, white) once the driver sets a clock; without one, moves follow the level.
+    let mut main_secs: Option<f64> = None;
+    let mut left: [Option<f64>; 2] = [None, None];
     let mut tot_nodes = 0u64;
     let mut tot_secs = 0f64;
     let stdin = std::io::stdin();
@@ -161,8 +166,29 @@ fn main() -> ExitCode {
             "clear_board" => {
                 board = Board::new();
                 engine.clear_tables();
+                left = [main_secs, main_secs];
                 ok(&id, "");
             }
+            // `time_settings <main> <byo-yomi> <stones>`: only the main time is used; GGS has no byo-yomi either.
+            "time_settings" => match args.first().and_then(|v| v.parse::<f64>().ok()) {
+                Some(m) => {
+                    main_secs = (m > 0.0).then_some(m);
+                    left = [main_secs, main_secs];
+                    ok(&id, "");
+                }
+                None => err(&id, "syntax error"),
+            },
+            // `time_left <color> <seconds> <stones>`
+            "time_left" => match (
+                args.first().copied().and_then(parse_color),
+                args.get(1).and_then(|v| v.parse::<f64>().ok()),
+            ) {
+                (Some(c), Some(secs)) => {
+                    left[(c == Color::White) as usize] = Some(secs.max(0.0));
+                    ok(&id, "");
+                }
+                _ => err(&id, "syntax error"),
+            },
             "play" => {
                 let (Some(color), Some(v)) = (
                     args.first().copied().and_then(parse_color),
@@ -202,11 +228,19 @@ fn main() -> ExitCode {
                     ok(&id, "pass");
                     continue;
                 }
-                let deadline =
-                    (time_ms > 0).then(|| Instant::now() + Duration::from_millis(time_ms));
                 let n0 = engine.nodes();
                 let t0 = Instant::now();
-                let mv = engine.choose_within(&board, deadline);
+                let mv = match left[(color == Color::White) as usize] {
+                    Some(secs) => engine.play_clock(&board, Duration::from_secs_f64(secs)),
+                    None => {
+                        let deadline =
+                            (time_ms > 0).then(|| Instant::now() + Duration::from_millis(time_ms));
+                        engine.choose_within(&board, deadline)
+                    }
+                };
+                if let Some(secs) = left[(color == Color::White) as usize].as_mut() {
+                    *secs = (*secs - t0.elapsed().as_secs_f64()).max(0.0);
+                }
                 tot_nodes += engine.nodes() - n0;
                 tot_secs += t0.elapsed().as_secs_f64();
                 match mv.pos {
