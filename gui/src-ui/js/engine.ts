@@ -55,7 +55,7 @@ export function useEngineTurn(g: Game) {
   const turnRef = useRef(false);
   const {
     playing, view: gv, engineSides, setThinking, setThinkSecs, setThinkTotal,
-    setMoveSource, setView: applyView, setPlaying, say, maybeLearn, setStat,
+    setMoveSource, setView: applyView, setPlaying, say, maybeLearn, setStat, holdHints,
   } = g;
 
   useEffect(() => {
@@ -68,11 +68,13 @@ export function useEngineTurn(g: Game) {
     const side = gv.player as 'black' | 'white';
     const t0 = performance.now();
     setThinking(true);
+    holdHints(true);   // a live-eval request still on its way must not start once the engine is ours
     const timer = window.setInterval(
       () => setThinkSecs((performance.now() - t0) / 1000), 50);
 
     void (async () => {
       try {
+        await api.stopSearch().catch(() => {});   // the live evals hold the engine until stopped
         const r = await api.think();
         setThinkTotal((tot) => ({ ...tot, [side]: tot[side] + r.secs }));
         const next = await api.applyMove(r.pos);
@@ -94,6 +96,7 @@ export function useEngineTurn(g: Game) {
         setPlaying(false);
       } finally {
         clearInterval(timer);
+        holdHints(false);
         setThinking(false);
         setThinkSecs(0);
         turnRef.current = false;
@@ -102,7 +105,7 @@ export function useEngineTurn(g: Game) {
 
     return () => clearInterval(timer);
   }, [playing, gv, engineSides, setThinking, setThinkSecs, setThinkTotal,
-      setMoveSource, applyView, setPlaying, say, maybeLearn, setStat]);
+      setMoveSource, applyView, setPlaying, say, maybeLearn, setStat, holdHints]);
 }
 
 export type GraphPoint = { value: number; exact: boolean; book: boolean };

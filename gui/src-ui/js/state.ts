@@ -137,10 +137,11 @@ export function useGame(clockSecs: number, learnOn: boolean) {
   const holdHints = useCallback((on: boolean) => { hintsHeld.current = on; }, []);
   const refreshHints = useCallback(async () => {
     if (thinking || !boardShown) return;
-    await api.stopSearch().catch(() => {});
     const v = view;
+    // KUROOBI's turn: its search may already be under way, and a stop would make it move at once.
+    if (v && playing && engineSides().includes(v.player)) return;
+    await api.stopSearch().catch(() => {});
     if (!v || v.over) return;
-    if (playing && engineSides().includes(v.player)) return;
     if (!autoHint) return;
     try {
       await pushLevels();
