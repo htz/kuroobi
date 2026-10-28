@@ -48,9 +48,9 @@ poor moves get a ▼ with how much they lost. The node count and speed are
 in the status bar at the bottom.*
 
 Choose which side KUROOBI plays with **KUROOBI plays** (Black, White,
-Both, None) and press **Start game**, or simply press the board: on your
-turn that plays the move, on KUROOBI's turn KUROOBI starts. With None
-both sides are human; with Both KUROOBI plays itself. **Stop game**
+Both, None) and press **Start game**, or simply play your move on the
+board, which starts the game. On KUROOBI's turn the board takes no
+move. With None both sides are human; with Both KUROOBI plays itself. **Stop game**
 pauses. **Evals** shows the evaluation of every legal move on the board
 while you play (off by default in Play, kept separately from Study).
 
@@ -61,13 +61,13 @@ The right panel's **Strength** chooses between:
   level can be changed during a game.
 - **Time control** — 1 to 30 minutes. KUROOBI plans each move from its
   remaining time (see [Search](search.md#search-on-a-clock-clockrs)), and
-  you get the same clock. Once a move is on the board the two times left
+  you get the same clock. Once the game starts the two times left
   replace the choice.
 
 The **Book** switch below decides whether book moves are played (on by
 default; turn it off when research calls for the engine's own move).
-Once the record has a move, Level / Time control and the clock are
-fixed until **New game**.
+From **Start game** on, and while the record has a move, Level / Time
+control and the clock are fixed until **New game**.
 
 The clock runs only while a game is being played (from Start game until
 Stop game, the end, or a pause), and each move is charged to the side

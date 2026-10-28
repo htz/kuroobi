@@ -75,7 +75,7 @@ function LevelOnly({ g }: { g: Game }) {
 
 /**
  * KUROOBI plays to a level or to a clock (then it spends its own time, and the person gets the same).
- * Once a move is on the board the choice and the clock stay as they are until a new game; a clock
+ * Once the game starts the choice and the clock stay as they are until a new game; a clock
  * game shows both times left in the clock's place.
  */
 function LevelOrClock({ g, prefs, setClockSecs }: {
@@ -83,8 +83,8 @@ function LevelOrClock({ g, prefs, setClockSecs }: {
 }) {
   const byClock = prefs.clockSecs > 0;
   const [lastClock, setLastClock] = useState(byClock ? prefs.clockSecs : 600);
-  // Started once the record has a move (also when looking back at its start).
-  const started = (g.view?.moves.length ?? 0) > 0;
+  // Started from 「対局開始」 on, and while the record has a move (also when looking back at its start).
+  const started = g.playing || (g.view?.moves.length ?? 0) > 0;
   const who = (color: 'black' | 'white') =>
     g.side === 'both' || g.side === color ? t('dock.strength.kuroobi') : t('dock.strength.you');
   const left = (color: 'black' | 'white') =>

@@ -432,6 +432,8 @@ export function App() {
   }, [setNav, paste, ask, viewer, asking, isBook, bookTab, isGgs, playDock, study, book, g, v, newGame]);
 
   // Studying a record, the record's own next move just steps forward; another move drops the rest, so it asks.
+  // On KUROOBI's turn the board takes no move, so it shows none under the pointer either.
+  const kuroobiTurn = !study && !!v && !v.over && g.engineSides().includes(v.player);
   const playAt = async (sq: number) => {
     if (study && v && v.cursor < v.moves.length) {
       if (v.moves[v.cursor] === sq) {
@@ -446,10 +448,8 @@ export function App() {
         ok: t('app.study.branch_ok'),
       }))) return;
     }
-    // Playing, a press on the board before 「対局開始」 starts the game: the person's move is played
-    // and KUROOBI answers, or on KUROOBI's turn KUROOBI starts. With no side for KUROOBI it is just a move.
+    // A move before 「対局開始」 starts the game and KUROOBI answers it; with no side for KUROOBI it is just a move.
     if (!study && v && !v.over && !g.playing && g.side !== 'off') {
-      if (g.side === 'both' || g.side === v.player) { await startGame(); return; }
       await g.play(sq);
       await startGame();
       return;
@@ -627,7 +627,7 @@ export function App() {
             {v && <Board cells={v.cells as Cell[]} legal={v.legal} last={v.last} evals={evals}
                          coords={prefs.coords} grain={prefs.grain}
                          flip={flipped(prefs.facing, study ? '' : sideColor)}
-                         disabled={g.thinking}
+                         disabled={g.thinking || kuroobiTurn}
                          onPlay={(sq) => void playAt(sq)} />}
           </BoardFit>
           <ScoreRow black={v?.black ?? 2} white={v?.white ?? 2}
