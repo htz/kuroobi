@@ -62,8 +62,12 @@ export function useLang(): Lang {
 
 type Params = Record<string, string | number>;
 
+/** A count of one reads `<key>_one` where the language has it; Japanese has none and keeps its own text. */
 export function t(key: string, params?: Params): string {
-  const s = TABLES[current][key] ?? TABLES.en[key] ?? key;
+  const one = params?.n === 1 ? `${key}_one` : null;
+  const own = TABLES[current];
+  const s = (one !== null && key in own ? own[one] : undefined) ?? own[key]
+    ?? (one !== null ? TABLES.en[one] : undefined) ?? TABLES.en[key] ?? key;
   if (!params) return s;
   return s.replace(/\{(\w+)\}/g, (m, name: string) =>
     name in params ? String(params[name]) : m);

@@ -1138,12 +1138,13 @@ async fn analyze_live(app: State<'_, App>, handle: tauri::AppHandle) -> Result<(
     let eng = app.engine.clone();
     let act = app.activity.clone();
     let stop = app.stop.clone();
-    if let Some(h) = stop.lock().unwrap().as_ref() {
-        h.reset();
-    }
     tauri::async_runtime::spawn_blocking(move || {
         let _g = ActivityGuard::begin(&act, "analyzing");
         let mut guard = eng.lock().unwrap();
+        // Reset only once the engine is ours, or a search told to stop misses the flag and never lets go.
+        if let Some(h) = stop.lock().unwrap().as_ref() {
+            h.reset();
+        }
         let Some(e) = guard.as_mut() else { return };
         let t0 = std::time::Instant::now();
         e.analyze_deepening(&board, 1, |_, hints, nodes| {
@@ -1176,12 +1177,14 @@ async fn eval_at(app: State<'_, App>, n: usize, depth: u32) -> Result<EvalPoint,
     let eng = app.engine.clone();
     let act = app.activity.clone();
     let stop = app.stop.clone();
-    if let Some(h) = stop.lock().unwrap().as_ref() {
-        h.reset();
-    }
+    let stop_in = stop.clone();
     let (value, exact, from_book) = tauri::async_runtime::spawn_blocking(move || {
         let _g = ActivityGuard::begin(&act, "analyzing");
         let mut guard = eng.lock().unwrap();
+        // As in analyze_live: clear the stop flag only after the engine is free of the last search.
+        if let Some(h) = stop_in.lock().unwrap().as_ref() {
+            h.reset();
+        }
         let e = guard.as_mut().unwrap();
         let from_book = e.book_base_value(&board);
         if let Some(v) = from_book {

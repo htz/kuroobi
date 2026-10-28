@@ -171,10 +171,8 @@ export function AskSheet({ snap, init }: { snap: GgsSnapshot; init: AskInit }) {
           <Select value={gtype} onChange={setGtype} options={gtypeChoices()} />
 
           {label(t('ggs.field.time_control'))}
-          <div style={{ display: 'flex' }}>
-            <Segmented value={time} onChange={setTime} fill
-                       options={clocks.map(([v, l]) => ({ value: v, label: l }))} />
-          </div>
+          {/* Seven choices do not fit side by side in every language: a list, as for a local game. */}
+          <Select value={time} onChange={setTime} options={clocks} />
 
           {label(t('ggs.rated'))}
           <div style={{ display: 'flex', flexDirection: 'column', gap: 'var(--sp-1)' }}>

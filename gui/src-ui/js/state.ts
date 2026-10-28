@@ -132,6 +132,9 @@ export function useGame(clockSecs: number, learnOn: boolean) {
 
   // The board's live evals run only while the board is on screen (App says when it is not).
   const [boardShown, setBoardShown] = useState(true);
+  // Re-read just before analyzeLive: a request begun before the graph analysis must not start an endless search.
+  const hintsHeld = useRef(false);
+  const holdHints = useCallback((on: boolean) => { hintsHeld.current = on; }, []);
   const refreshHints = useCallback(async () => {
     if (thinking || !boardShown) return;
     await api.stopSearch().catch(() => {});
@@ -141,6 +144,7 @@ export function useGame(clockSecs: number, learnOn: boolean) {
     if (!autoHint) return;
     try {
       await pushLevels();
+      if (hintsHeld.current) return;
       await api.analyzeLive();
     } catch (e) {
       // During a GGS game the engine is the game's: the evals just stay off, without a message.
@@ -275,7 +279,7 @@ export function useGame(clockSecs: number, learnOn: boolean) {
     thinkTotal, setThinkTotal,
     moveSource, setMoveSource,
     toasts, say, dismiss,
-    engineSides, pushLevels, refreshHints, setBoardShown,
+    engineSides, pushLevels, refreshHints, setBoardShown, holdHints,
     play, newGame, undo, jumpTo, stop,
     clockSecs, clock, resetClock,
   };

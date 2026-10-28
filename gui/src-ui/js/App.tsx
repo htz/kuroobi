@@ -93,7 +93,6 @@ export function App() {
   }, [setHasBook]);
 
   useEngineSettings(g);
-  useHints(g);
   useEngineTurn(g);
   const cpu = useActivity();
   const [ask, setAsk] = useState<(AskArgs & { done: (ok: boolean) => void }) | null>(null);
@@ -109,6 +108,7 @@ export function App() {
   }, [g, confirm]);
   const ggsMatch = ggsPlaying(ggs.snap);
   const graph = useGraph(g, ggsMatch, confirm);
+  useHints(g, graph.busy);
   const startGame = useStartGame(g, ggsMatch, graph, confirm);
 
   const chatMsgs = ggs.snap?.chat ?? [];

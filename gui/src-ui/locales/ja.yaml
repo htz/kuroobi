@@ -732,6 +732,7 @@ learn:
     games: "{n} 局の合計"
     games_hidden: "{n} 局の合計 (他 {hidden} 局)"
 lobby:
+  open_game: "開く"
   cancel: "取り消す"
   closed: "申し込みを受け付けていません"
   count: "{n} 件"

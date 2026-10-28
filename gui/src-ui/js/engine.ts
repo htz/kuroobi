@@ -18,9 +18,10 @@ export function useEngineSettings(g: Game) {
   }, [g.learnOn]);
 }
 
-export function useHints(g: Game) {
+/** `hold`: the graph analysis has the engine, so the live evals wait until it is done. */
+export function useHints(g: Game, hold: boolean) {
   const refresh = g.refreshHints;
-  useEffect(() => { void refresh(); }, [g.view, g.autoHint, refresh]);
+  useEffect(() => { if (!hold) void refresh(); }, [g.view, g.autoHint, refresh, hold]);
 
   const setHints = g.setHints;
   const setStat = g.setStat;
@@ -143,6 +144,9 @@ export function useGraph(g: Game, ggsMatch: boolean, ask: Ask) {
     const vals: (GraphPoint | undefined)[] = new Array(len + 1);
     keyRef.current = lineKey(v);
     setValues(null);
+    // The live evals search until stopped and hold the engine; the graph needs it first.
+    g.holdHints(true);
+    await api.stopSearch().catch(() => {});
     await g.pushLevels();
     const depth = Math.min(g.levels.depth, 14);
     let done = 0;
@@ -166,15 +170,17 @@ export function useGraph(g: Game, ggsMatch: boolean, ask: Ask) {
         if (!await measure(n)) break;
       }
     } catch (e) { g.say(tErr(e)); }
-    if (seq === seqRef.current) { setBusy(false); setProg(null); }
+    if (seq === seqRef.current) { g.holdHints(false); setBusy(false); setProg(null); }
   }, [g, busy, ggsMatch, ask]);
 
+  const holdHints = g.holdHints;
   const stop = useCallback(() => {
     seqRef.current++;
+    holdHints(false);   // before busy goes false, so the live evals come back on that change
     setBusy(false);
     setProg(null);
     void api.stopSearch();
-  }, []);
+  }, [holdHints]);
 
   return { values, busy, prog, update, stop };
 }

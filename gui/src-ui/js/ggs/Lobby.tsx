@@ -46,7 +46,7 @@ export function Lobby({ snap, onNav }: { snap: GgsSnapshot; onNav: (id: NavId) =
   // Requests to anybody: only the asker is named.
   const open = snap.offers.filter((o) => !o.incoming && o.names[0] !== me && o.names.length === 1);
   const todo = snap.stored.length + incoming.length + mine.length;
-  const games = snap.ongoing.filter((o) => !o.mine);
+  const games = snap.ongoing;
   const now = useNow(incoming.length + mine.length > 0, 1000);
   // GGS does not say when a request was made; the backend notes when it first heard of it.
   const age = (id: string) => {
@@ -116,14 +116,22 @@ export function Lobby({ snap, onNav }: { snap: GgsSnapshot; onNav: (id: NavId) =
                         <NameRate name={o.names[1] ?? '?'} rate={o.ratings[1] ?? ''} />
                         <Cell w={128} sub>{gtypeLabel(o.gtype)}</Cell>
                         <span style={{ width: 64, flex: 'none', display: 'flex', justifyContent: 'flex-end' }}>
-                          <Button size="row" variant={o.watching ? 'ghost' : 'secondary'}
-                                  onClick={() => {
-                                    const on = !o.watching;
-                                    act(ggsApi.watch(o.id, on));
-                                    if (on) { focusGame(o.id); onNav('ggs-play'); }
-                                  }}>
-                            {o.watching ? t('ggs.stop_observing') : t('ggs.observe')}
-                          </Button>
+                          {/* A game being played is already on the game screen: the row opens it there. */}
+                          {o.mine ? (
+                            <Button size="row" variant="secondary"
+                                    onClick={() => { focusGame(o.id); onNav('ggs-play'); }}>
+                              {t('lobby.open_game')}
+                            </Button>
+                          ) : (
+                            <Button size="row" variant={o.watching ? 'ghost' : 'secondary'}
+                                    onClick={() => {
+                                      const on = !o.watching;
+                                      act(ggsApi.watch(o.id, on));
+                                      if (on) { focusGame(o.id); onNav('ggs-play'); }
+                                    }}>
+                              {o.watching ? t('ggs.stop_observing') : t('ggs.observe')}
+                            </Button>
+                          )}
                         </span>
                       </Line>
                     ))}
