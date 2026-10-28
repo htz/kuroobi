@@ -368,9 +368,18 @@ is used.
 
 Tournaments run by GGS's `/td` are listed (live and open, then
 finished). A tournament shows its rules and progress, and before the
-start its entrants with **Join** / **Withdraw**. Once it runs it shows
-the rankings, your games (**Open board** for the one in progress) and
-the schedule round by round, filterable by player. If auto match is on
+start its entrants with **Join** / **Withdraw**. Once it runs, two
+tabs share the space below. **Crosstable** lists the players in ranking
+order against each other: each cell is the row player's points and
+W-D-L against that opponent (a GGS round robin meets the same opponent
+many times), tinted green or red by how lopsided it is, and pressing it
+shows the games between the two. With many players the header row and
+the five standing columns stay put while the cells scroll both ways.
+**All games** steps through the pairings round by round, or picks one or
+two players to list their games across all rounds, the first pick on the
+left with the result from their side; your own games are found by
+picking yourself (**Open board** for the one in progress is in the
+toolbar). If auto match is on
 while you are in a tournament, a band warns that other games will still
 be accepted and offers to change it.
 

@@ -249,7 +249,7 @@ button:disabled, button[aria-disabled="true"] { cursor:default; }
 
 /* Scrolling — inside the dock and tables only */
 .k-scroll { overflow-y:auto; overscroll-behavior:contain; }
-.k-scroll::-webkit-scrollbar { width:9px; }
+.k-scroll::-webkit-scrollbar { width:9px; height:9px; }
 .k-scroll::-webkit-scrollbar-thumb { background:var(--border); border-radius:9px; border:2px solid transparent; background-clip:content-box; }
 .k-scroll::-webkit-scrollbar-track { background:transparent; }
 .k-scroll:hover::-webkit-scrollbar-thumb { background:var(--sub); }

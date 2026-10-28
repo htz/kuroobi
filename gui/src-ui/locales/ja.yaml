@@ -391,7 +391,6 @@ ggs:
     minutes: "{n} 分"
   field:
     format: "形式"
-    opponent: "相手"
     time_control: "持ち時間"
     turn: "手番"
   filter:
@@ -622,6 +621,7 @@ ggs:
     top: "上位"
   vs: "{a} 対 {b}"
   tourney:
+    all_games: "対局一覧"
     bye: "休み"
     col:
       disc: "平均石差"
@@ -635,7 +635,7 @@ ggs:
       other: "大会の操作に失敗しました: {text}"
       started: "大会はもう始まっています"
       unregistered: "登録済みのアカウントだけが参加できます"
-    games_of: "{name} の対局"
+    crosstable: "成績表"
     join: "参加"
     joined: "参加中"
     joining_closed: "締切"
@@ -646,13 +646,11 @@ ggs:
     open_game: "盤を開く"
     past: "終わった大会"
     players: "{n} 人"
-    rankings: "順位"
     result_pending: "対局中"
     result_unstarted: "未対局"
     round_n: "ラウンド {n}"
     rounds: "ラウンド {done}/{all}"
     rrobin: "総当たり {n} ラウンド"
-    schedule: "対戦表"
     standby_warn: "自動対局が ON です。大会中も別の対局を受けて同時に打つことになります。"
     starts_in: "開始まで {left}"
     state:
@@ -949,18 +947,22 @@ status:
   secs: "秒"
   speed: "速度"
 tourney:
+  all: "すべて"
   all_rounds: "全 {n} ラウンド"
   breaks: "ラウンド間"
+  cell_tip: "{a} − {b} の対局を見る"
   change_auto: "自動対局を変更"
+  clear: "解除"
   director: "主催"
   entrants: "参加者"
-  filter: "プレイヤーで絞る"
+  filter_count: "{n} 局 · 終局 {done}"
+  filter_who: "{who} の対局"
+  game_players: "対局者"
   group_live: "開催中・開催予定"
-  mine_done: "終局 {done} / {all}"
   next_of: "{name} の次の対局"
   next_round: "次のラウンド"
   no_games: "このラウンドの対局はありません"
-  none_body: "大会が開かれると左の一覧に並び、順位と対戦表をここで見られます"
+  none_body: "大会が開かれると左の一覧に並び、成績と対局をここで見られます"
   none_title: "大会を選ぶとここに出ます"
   open: "受付中"
   pairing: "組み方"
@@ -970,7 +972,6 @@ tourney:
   round: "ラウンド"
   round_done: "このラウンドの終局"
   this_round: "今のラウンド"
-  to_name: "{name} の位置へ"
 ui:
   board:
     aria: "盤面"

@@ -1,14 +1,14 @@
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useState, type CSSProperties } from 'react';
 import { ggsApi } from '../api';
 import type { GgsSnapshot, TourneyView } from '../types';
 import { gtypeLabel, onlineRows } from '../ggs';
 import { t } from '../i18n';
 import { ListRow, Toolbar, TwoLines } from '../components/layout';
-import { Button, Dot, Progress, Segmented, TextField } from '../components/primitives';
+import { Button, Dot, Progress, Segmented, Select, TextField } from '../components/primitives';
 import { Tag, type NavId } from '../components/ggs';
 import { askSheet } from '../AskSheet';
 import { focusGame } from './Lobby';
-import { act, Band, Blank, Cell, HeadRow, Line, ListHead, ListNote, ListPane, Page, Rows, TitleBit, useNow, useWidth } from '../ggsui';
+import { act, Band, Blank, Cell, HeadRow, Line, ListHead, ListNote, ListPane, Page, Rows, TitleBit, useNow } from '../ggsui';
 
 const td = (cmd: string) => act(ggsApi.raw(`tell /td ${cmd}`));
 
@@ -135,15 +135,15 @@ export function Tourney({ snap, onNav }: { snap: GgsSnapshot; onNav: (id: NavId)
           {past.map(row)}
         </ListPane>
         {!x ? <Blank title={t('tourney.none_title')} body={t('tourney.none_body')} /> : (
-          <TourneyDetail key={x.id} snap={snap} x={x} now={now} onNav={onNav} errText={errText} />
+          <TourneyDetail key={x.id} snap={snap} x={x} now={now} errText={errText} />
         )}
       </Page>
     </>
   );
 }
 
-function TourneyDetail({ snap, x, now, onNav, errText }: {
-  snap: GgsSnapshot; x: TourneyView; now: number; onNav: (id: NavId) => void; errText: string;
+function TourneyDetail({ snap, x, now, errText }: {
+  snap: GgsSnapshot; x: TourneyView; now: number; errText: string;
 }) {
   const started = !beforeStart(x) && x.state !== 'cancelled';
   const refresh = useCallback(() => {
@@ -160,20 +160,17 @@ function TourneyDetail({ snap, x, now, onNav, errText }: {
   const synchro = type.startsWith('s');
   const all = x.rounds || Math.max(0, ...sched.map((r) => r.round));
   const cur = x.state === 'running' ? x.rounds_played + 1 : Math.max(1, x.rounds_played);
-  const [pane, setView] = useState<'rank' | 'mine' | 'sched'>('sched');
-  // Too narrow for the ranking and the schedule side by side: one at a time, picked by tabs.
-  const [boxRef, boxW] = useWidth();
-  const narrow = boxW < 640;
-  const view = !narrow && pane === 'rank' ? 'sched' : pane;
+  const [view, setView] = useState<'cross' | 'games'>('cross');
   // The schedule follows the current round until another one is picked.
   const [pinned, setPinned] = useState<number | null>(null);
   const round = pinned ?? cur;
   const [typed, setTyped] = useState<string | null>(null);
   const roundText = typed ?? String(round);
   const setRoundText = (v: string) => setTyped(v);
-  const [who, setWho] = useState('');
-  const rankBox = useRef<HTMLDivElement>(null);
-  const mineBox = useRef<HTMLDivElement>(null);
+  // Two symmetric picks: one player's games, or the games between two.
+  const [pick, setPick] = useState<[string, string]>(['', '']);
+  const picked = pick.filter(Boolean);
+  const focus = picked[0] ?? '';
 
   const go = (n: number) => {
     const v = Math.max(1, Math.min(all || 1, n));
@@ -182,19 +179,14 @@ function TourneyDetail({ snap, x, now, onNav, errText }: {
   useEffect(() => {
     const on = (e: KeyboardEvent) => {
       const el = e.target as HTMLElement | null;
-      if (el && (el.tagName === 'INPUT' || el.tagName === 'TEXTAREA')) return;
-      if (view !== 'sched' || who) return;
+      if (el && (el.tagName === 'INPUT' || el.tagName === 'TEXTAREA' || el.tagName === 'SELECT')) return;
+      if (view !== 'games' || picked.length) return;
       if (e.key === 'ArrowLeft') { e.preventDefault(); go(round - 1); }
       if (e.key === 'ArrowRight') { e.preventDefault(); go(round + 1); }
     };
     window.addEventListener('keydown', on);
     return () => window.removeEventListener('keydown', on);
   });
-  // "My games" opens with the current round in view.
-  useEffect(() => {
-    if (view !== 'mine') return;
-    mineBox.current?.querySelector('[data-cur]')?.scrollIntoView({ block: 'center' });
-  }, [view]);
 
   const clock = x.clock || info.get('clock') || '';
   const director = x.director || info.get('director') || '';
@@ -207,29 +199,33 @@ function TourneyDetail({ snap, x, now, onNav, errText }: {
     ...(director ? [[t('tourney.director'), director] as [string, string]] : []),
   ];
   const left = x.next_at != null ? mmss(x.next_at - now) : '';
+  const done = (r: SchedRow) => isFinite(parseFloat(r.raw));
   const thisRound = sched.filter((r) => r.round === cur && !r.bye);
-  const doneThis = thisRound.filter((r) => isFinite(parseFloat(r.raw))).length;
-  const myNext = sched.find((r) => r.round >= cur && (r.a === me || r.b === me) && !isFinite(parseFloat(r.raw)));
+  const doneThis = thisRound.filter(done).length;
+  const myNext = sched.find((r) => r.round >= cur && (r.a === me || r.b === me) && !done(r));
   const myRank = ranks.findIndex((r) => r.name === me);
   const entrants = (() => {
     const names = (info.get('players') ?? '').split(/\s+/).slice(1).map((p) => p.replace(/[()]/g, '')).filter((p) => p && p !== 'bye');
     return names.length ? names : x.players;
   })();
   const joining = info.get('joining');
-  const myGames = sched.filter((r) => r.a === me || r.b === me);
-  const shown = who
-    ? sched.filter((r) => r.a.toLowerCase().includes(who.toLowerCase()) || r.b.toLowerCase().includes(who.toLowerCase()))
+  const shown = picked.length
+    ? sched.filter((r) => !r.bye && picked.every((n) => r.a === n || r.b === n))
     : sched.filter((r) => r.round === round);
-  const openOf = (r: SchedRow) => snap.td.games.find((g) => g.tid === x.id && g.diff == null && (g.opp === r.a || g.opp === r.b));
+  const cross = crossOf(sched, cur);
+  const players = [...ranks.map((r) => r.name), ...[...cross.keys()].filter((n) => !ranks.some((r) => r.name === n)).sort()];
+  const pickOptions = (other: string): [string, string][] =>
+    [['', t('tourney.all')], ...players.filter((n) => n !== other).map((n) => [n, n] as [string, string])];
 
   const tabs = (
     <Segmented value={view} onChange={setView}
-               options={[...(narrow ? [{ value: 'rank' as const, label: t('ggs.tourney.rankings') }] : []),
-                         { value: 'mine' as const, label: t('ggs.tourney.games_of', { name: me }) }, { value: 'sched' as const, label: t('ggs.tourney.schedule') }]} />
+               options={[{ value: 'cross' as const, label: t('ggs.tourney.crosstable') },
+                         { value: 'games' as const, label: t('ggs.tourney.all_games') }]} />
   );
+  const sub: CSSProperties = { fontSize: 'var(--fs-6)', color: 'var(--sub)' };
 
   return (
-    <div ref={boxRef} style={{ flex: 1, minWidth: 0, minHeight: 0, display: 'flex', flexDirection: 'column' }}>
+    <div style={{ flex: 1, minWidth: 0, minHeight: 0, display: 'flex', flexDirection: 'column' }}>
       {errText && <div style={{ paddingTop: 'var(--sp-2)' }}><Band tone="bad">{errText}</Band></div>}
       {x.joined && !finished(x) && snap.standby.enabled && (
         <div style={{ paddingTop: 'var(--sp-2)' }}>
@@ -249,9 +245,9 @@ function TourneyDetail({ snap, x, now, onNav, errText }: {
             <span style={{ fontSize: 'var(--fs-5)' }}>{t('tourney.round')} <b style={{ fontSize: 'var(--fs-3)', fontWeight: 700 }}>{cur}</b> <span style={{ color: 'var(--sub)' }}>/ {all}</span></span>
             <span style={{ flex: 1, minWidth: 0 }}><Progress value={all ? (cur - 1 + (thisRound.length ? doneThis / thisRound.length : 0)) / all : 0} /></span>
             {x.state === 'break' && left
-              ? <span style={{ fontSize: 'var(--fs-6)', color: 'var(--sub)' }}>{t('ggs.tourney.next_round_in', { left })}</span>
-              : thisRound.length > 0 && <span style={{ fontSize: 'var(--fs-6)', color: 'var(--sub)' }}>{t('tourney.round_done')} <b style={{ color: 'var(--text)', fontWeight: 600 }}>{doneThis} / {thisRound.length}</b></span>}
-            {myNext && <span style={{ fontSize: 'var(--fs-6)', color: 'var(--sub)' }}>· {t('tourney.next_of', { name: me })} <b style={{ color: 'var(--text)', fontWeight: 600 }}>{t('ggs.tourney.round_n', { n: myNext.round })}</b></span>}
+              ? <span style={sub}>{t('ggs.tourney.next_round_in', { left })}</span>
+              : thisRound.length > 0 && <span style={sub}>{t('tourney.round_done')} <b style={{ color: 'var(--text)', fontWeight: 600 }}>{doneThis} / {thisRound.length}</b></span>}
+            {myNext && <span style={sub}>· {t('tourney.next_of', { name: me })} <b style={{ color: 'var(--text)', fontWeight: 600 }}>{t('ggs.tourney.round_n', { n: myNext.round })}</b></span>}
           </div>
         ) : (
           <div style={{ display: 'flex', alignItems: 'center', gap: 'var(--sp-3)', fontSize: 'var(--fs-5)', whiteSpace: 'nowrap' }}>
@@ -272,7 +268,7 @@ function TourneyDetail({ snap, x, now, onNav, errText }: {
         <div style={{ flex: 1, minHeight: 0, display: 'flex', flexDirection: 'column' }}>
           <div style={{ flex: 'none', display: 'flex', alignItems: 'center', gap: 'var(--sp-2)', height: 'var(--h-bar)', padding: '0 var(--sp-3)' }}>
             <b style={{ fontWeight: 600 }}>{t('tourney.entrants')}</b>
-            <span style={{ fontSize: 'var(--fs-6)', color: 'var(--sub)' }}>{t('ggs.tourney.players', { n: entrants.length })}</span>
+            <span style={sub}>{t('ggs.tourney.players', { n: entrants.length })}</span>
             {joining && <span style={{ marginLeft: 'auto' }}><Tag tone={joining === 'open' ? 'ok' : 'sub'}>{joining === 'open' ? t('ggs.tourney.joining_open') : t('ggs.tourney.joining_closed')}</Tag></span>}
           </div>
           <HeadRow cols={[['#', 32, 'right'], [t('ggs.tourney.col.player'), undefined], [t('ggs.pool.random'), 96, 'right']]} />
@@ -290,128 +286,189 @@ function TourneyDetail({ snap, x, now, onNav, errText }: {
           </Rows>
         </div>
       ) : (
-        <div style={{ flex: 1, minHeight: 0, display: 'flex' }}>
-          {(!narrow || view === 'rank') && (
-          <div style={{ flex: 1, minWidth: 0, display: 'flex', flexDirection: 'column', overflow: 'hidden', borderRight: narrow ? 0 : '1px solid var(--border)' }}>
-            <div style={{ flex: 'none', display: 'flex', alignItems: 'center', gap: 'var(--sp-2)', height: 'var(--h-bar)', padding: '0 var(--sp-3)', whiteSpace: 'nowrap' }}>
-              {narrow ? tabs : <b style={{ fontWeight: 600 }}>{t('ggs.tourney.rankings')}</b>}
-              {myRank >= 0 && <span style={{ fontSize: 'var(--fs-6)', color: 'var(--sub)' }}>{t('tourney.place_of', { name: me, n: myRank + 1, of: ranks.length })}</span>}
-              {myRank >= 0 && (
-                <span style={{ marginLeft: 'auto' }}>
-                  <Button size="row" variant="ghost" onClick={() => rankBox.current?.querySelector('[data-me]')?.scrollIntoView({ block: 'center' })}>
-                    {t('tourney.to_name', { name: me })}
-                  </Button>
-                </span>
-              )}
-            </div>
-            <HeadRow cols={[[t('ggs.tourney.col.rank'), 32, 'right'], [t('ggs.tourney.col.player'), undefined],
-                            [t('ggs.tourney.col.points'), 44, 'right'], [t('ggs.tourney.col.wdl'), 72, 'right'],
-                            [t('ggs.tourney.col.disc'), 56, 'right']]} />
-            {!ranks.length ? <Blank title={t('ggs.loading')} /> : (
-              <div ref={rankBox} className="k-scroll" style={{ flex: 1, minHeight: 0, display: 'flex', flexDirection: 'column' }}>
-                {ranks.map((r, i) => (
-                  <div key={r.name} data-me={r.name === me ? '' : undefined} style={{ display: 'contents' }}>
-                    <Line height="row" picked={r.name === me}>
-                      <Cell w={32} align="right"><b style={{ color: i === 0 ? 'var(--gold)' : 'var(--sub)' }}>{i + 1}</b></Cell>
-                      <Cell sel bold={r.name === me}>{r.name}</Cell>
-                      <Cell w={44} align="right"><b>{r.pts}</b></Cell>
-                      <Cell w={72} align="right"><span style={{ color: 'var(--ok)' }}>{r.w}</span>-{r.d}-<span style={{ color: 'var(--bad)' }}>{r.l}</span></Cell>
-                      <Cell w={56} align="right">
-                        <span style={{ color: parseFloat(r.disc) > 0 ? 'var(--ok)' : parseFloat(r.disc) < 0 ? 'var(--bad)' : 'var(--sub)' }}>{num(r.disc)}</span>
-                      </Cell>
-                    </Line>
-                  </div>
-                ))}
-              </div>
+        <div style={{ flex: 1, minHeight: 0, display: 'flex', flexDirection: 'column' }}>
+          <div style={{ flex: 'none', display: 'flex', alignItems: 'center', gap: 'var(--sp-2)', height: 'var(--h-bar)', padding: '0 var(--sp-3)', whiteSpace: 'nowrap' }}>
+            {tabs}
+            {view === 'cross' && myRank >= 0 && (
+              <span style={{ ...sub, marginLeft: 'auto' }}>{t('tourney.place_of', { name: me, n: myRank + 1, of: ranks.length })}</span>
+            )}
+            {view === 'games' && (
+              <span style={{ marginLeft: 'auto', display: 'flex', alignItems: 'center', gap: 'var(--sp-2)' }}>
+                <span style={sub}>{t('tourney.game_players')}</span>
+                <Select value={pick[0]} onChange={(v) => setPick([v, pick[1]])} options={pickOptions(pick[1])} width={124} title={t('tourney.game_players')} />
+                <span style={{ color: 'var(--sub)' }}>−</span>
+                <Select value={pick[1]} onChange={(v) => setPick([pick[0], v])} options={pickOptions(pick[0])} width={124} title={t('tourney.game_players')} />
+                {picked.length > 0 && <Button size="row" variant="ghost" onClick={() => setPick(['', ''])}>{t('tourney.clear')}</Button>}
+              </span>
             )}
           </div>
+
+          {view === 'cross' && (
+            !ranks.length && !players.length ? <Blank title={t('ggs.loading')} /> : (
+              <CrossTable players={players} ranks={ranks} cross={cross} me={me}
+                          onPick={(a, b) => { setPick([a, b]); setView('games'); }} />
+            )
           )}
 
-          {(!narrow || view !== 'rank') && (
-          <div style={{ flex: 1, minWidth: 0, display: 'flex', flexDirection: 'column', overflow: 'hidden' }}>
-            <div style={{ flex: 'none', display: 'flex', alignItems: 'center', gap: 'var(--sp-2)', height: 'var(--h-bar)', padding: '0 var(--sp-3)', whiteSpace: 'nowrap' }}>
-              {tabs}
-              <span style={{ marginLeft: 'auto', flex: '0 1 160px', minWidth: 64, display: 'flex', justifyContent: 'flex-end' }}>
-                {view === 'sched'
-                  ? <TextField value={who} onChange={setWho} placeholder={t('tourney.filter')} />
-                  : <span style={{ fontSize: 'var(--fs-6)', color: 'var(--sub)' }}>{t('tourney.mine_done', { done: myGames.filter((r) => isFinite(parseFloat(r.raw))).length, all: myGames.length })}</span>}
-              </span>
-            </div>
-
-            {view === 'sched' && !who && (
-              <div style={{ flex: 'none', display: 'flex', alignItems: 'center', gap: 'var(--sp-2)', height: 'var(--h-field)', padding: '0 var(--sp-3)',
-                            borderTop: '1px solid var(--border-weak)', background: 'var(--panel)', whiteSpace: 'nowrap', fontSize: 'var(--fs-5)' }}>
-                <Button square onClick={() => go(round - 1)} title={t('tourney.prev_round')}>‹</Button>
-                <span style={{ color: 'var(--sub)' }}>{t('tourney.round')}</span>
-                <TextField value={roundText} onChange={setRoundText} numeric align="right" width={52}
-                           onEnter={() => go(Number(roundText) || round)} />
-                <span style={{ color: 'var(--sub)' }}>/ {all}</span>
-                <Button square onClick={() => go(round + 1)} title={t('tourney.next_round')}>›</Button>
-                <span style={{ marginLeft: 'auto' }}>
-                  <Button size="row" variant="ghost" disabled={round === cur} onClick={() => go(cur)}>{t('tourney.this_round')}</Button>
-                </span>
-              </div>
-            )}
-
-            {view === 'sched' ? (
-              <>
-                <HeadRow cols={[...(who ? [['R', 40, 'right'] as [string, number, 'right']] : []),
-                                [t('lobby.player'), undefined, 'right'], ['', 16], [t('lobby.player'), undefined], [t('tourney.result'), 72, 'right']]} />
-                {!shown.length ? <Blank title={sched.length ? t('tourney.no_games') : t('ggs.loading')} /> : (
-                  <Rows>
-                    {shown.map((r) => {
-                      const mine = r.a === me || r.b === me;
-                      return (
-                        <Line key={r.game} height="row" picked={mine}>
-                          {who && <Cell w={40} align="right" sub>{r.round}</Cell>}
-                          <Cell align="right" sel>{r.a}</Cell>
-                          <span style={{ width: 16, flex: 'none', textAlign: 'center', color: 'var(--sub)' }}>{r.bye ? '' : '−'}</span>
-                          <Cell sel>{r.b}</Cell>
-                          {/* Only a finished pairing is a result; the rest is a state, written quietly. */}
-                          <Cell w={72} align="right" sub={!isFinite(parseFloat(r.raw))}>
-                            <b style={{ fontWeight: isFinite(parseFloat(r.raw)) ? 600 : 400 }}>{resultOf(r, synchro)}</b>
-                          </Cell>
-                        </Line>
-                      );
-                    })}
-                  </Rows>
-                )}
-              </>
-            ) : (
-              <>
-                <HeadRow cols={[['R', 40, 'right'], [t('ggs.field.opponent'), undefined], [t('tourney.result'), 72, 'right'], ['', 80]]} />
-                <div ref={mineBox} className="k-scroll" style={{ flex: 1, minHeight: 0, display: 'flex', flexDirection: 'column' }}>
-                  {myGames.map((r) => {
-                    const first = r.a === me;
-                    const v = parseFloat(r.raw);
-                    const done = isFinite(v);
-                    const mine = done ? (first ? v : -v) * (synchro ? 2 : 1) : 0;
-                    const live = r.round === cur && !done;
-                    const g = live ? openOf(r) : undefined;
+          {view === 'games' && (
+            <>
+              {picked.length ? (
+                <div style={{ flex: 'none', display: 'flex', alignItems: 'center', gap: 'var(--sp-2)', height: 'var(--h-field)', padding: '0 var(--sp-3)',
+                              borderTop: '1px solid var(--border-weak)', background: 'var(--panel)', whiteSpace: 'nowrap', fontSize: 'var(--fs-5)' }}>
+                  <b style={{ fontWeight: 600 }}>{t('tourney.filter_who', { who: picked.join(' − ') })}</b>
+                  <span style={{ color: 'var(--sub)' }}>{t('tourney.filter_count', { n: shown.length, done: shown.filter(done).length })}</span>
+                </div>
+              ) : (
+                <div style={{ flex: 'none', display: 'flex', alignItems: 'center', gap: 'var(--sp-2)', height: 'var(--h-field)', padding: '0 var(--sp-3)',
+                              borderTop: '1px solid var(--border-weak)', background: 'var(--panel)', whiteSpace: 'nowrap', fontSize: 'var(--fs-5)' }}>
+                  <Button square onClick={() => go(round - 1)} title={t('tourney.prev_round')}>‹</Button>
+                  <span style={{ color: 'var(--sub)' }}>{t('tourney.round')}</span>
+                  <TextField value={roundText} onChange={setRoundText} numeric align="right" width={52}
+                             onEnter={() => go(Number(roundText) || round)} />
+                  <span style={{ color: 'var(--sub)' }}>/ {all}</span>
+                  <Button square onClick={() => go(round + 1)} title={t('tourney.next_round')}>›</Button>
+                  <span style={{ marginLeft: 'auto' }}>
+                    <Button size="row" variant="ghost" disabled={round === cur} onClick={() => go(cur)}>{t('tourney.this_round')}</Button>
+                  </span>
+                </div>
+              )}
+              <HeadRow cols={[...(picked.length ? [['R', 40, 'right'] as [string, number, 'right']] : []),
+                              [t('lobby.player'), undefined, 'right'], ['', 16], [t('lobby.player'), undefined], [t('tourney.result'), 72, 'right']]} />
+              {!shown.length ? <Blank title={sched.length ? t('tourney.no_games') : t('ggs.loading')} /> : (
+                <Rows>
+                  {shown.map((r) => {
+                    const mine = r.a === me || r.b === me;
+                    // Filtered, the picked player sits on the left and the result is theirs.
+                    const flip = focus !== '' && r.b === focus;
+                    const v = parseFloat(r.raw) * (synchro ? 2 : 1) * (flip ? -1 : 1);
+                    const tone = focus && done(r) ? (v > 0 ? 'var(--ok)' : v < 0 ? 'var(--bad)' : undefined) : undefined;
                     return (
-                      <div key={r.game} data-cur={r.round === cur ? '' : undefined} style={{ display: 'contents' }}>
-                        <Line height="row" picked={live}>
-                          <Cell w={40} align="right" sub>{r.round}</Cell>
-                          <Cell sel sub={r.round > cur}>{first ? r.b : r.a}</Cell>
-                          <Cell w={72} align="right">
-                            <b style={{ fontWeight: 600, color: !done ? 'var(--sub)' : mine > 0 ? 'var(--ok)' : mine < 0 ? 'var(--bad)' : 'var(--sub)' }}>
-                              {done ? num(mine) : r.round === cur ? t('ggs.state.playing') : ''}
-                            </b>
-                          </Cell>
-                          <span style={{ width: 80, flex: 'none', display: 'flex', justifyContent: 'flex-end' }}>
-                            {g && <Button size="row" variant="primary" onClick={() => { focusGame(g.id); onNav('ggs-play'); }}>{t('ggs.tourney.open_game')}</Button>}
-                          </span>
-                        </Line>
-                      </div>
+                      <Line key={r.game} height="row" picked={mine}>
+                        {picked.length > 0 && <Cell w={40} align="right" sub>{r.round}</Cell>}
+                        <Cell align="right" sel sub={r.round > cur}>{flip ? r.b : r.a}</Cell>
+                        <span style={{ width: 16, flex: 'none', textAlign: 'center', color: 'var(--sub)' }}>{r.bye ? '' : '−'}</span>
+                        <Cell sel sub={r.round > cur}>{flip ? r.a : r.b}</Cell>
+                        {/* Only a finished pairing is a result; the rest is a state, written quietly. */}
+                        <Cell w={72} align="right" sub={!done(r)}>
+                          <b style={{ fontWeight: done(r) ? 600 : 400, color: tone }}>
+                            {r.round > cur && !done(r) ? '' : done(r) ? num(v) : resultOf(r, synchro)}
+                          </b>
+                        </Cell>
+                      </Line>
                     );
                   })}
-                </div>
-              </>
-            )}
-          </div>
+                </Rows>
+              )}
+            </>
           )}
+
         </div>
       )}
+    </div>
+  );
+}
+
+type CrossCell = { w: number; d: number; l: number; live: boolean };
+
+/** Each pair's games from the row player's side; a pair meets many times in a GGS round robin. */
+function crossOf(sched: SchedRow[], cur: number): Map<string, Map<string, CrossCell>> {
+  const m = new Map<string, Map<string, CrossCell>>();
+  const at = (a: string, b: string): CrossCell => {
+    let row = m.get(a);
+    if (!row) { row = new Map(); m.set(a, row); }
+    let c = row.get(b);
+    if (!c) { c = { w: 0, d: 0, l: 0, live: false }; row.set(b, c); }
+    return c;
+  };
+  for (const r of sched) {
+    if (r.bye || !r.b) continue;
+    const x = at(r.a, r.b), y = at(r.b, r.a);
+    const v = parseFloat(r.raw);
+    if (isFinite(v)) {
+      if (v > 0) { x.w++; y.l++; } else if (v < 0) { x.l++; y.w++; } else { x.d++; y.d++; }
+    } else if (r.round === cur && r.raw === '?') {
+      x.live = true; y.live = true;
+    }
+  }
+  return m;
+}
+
+const CELL = 50;
+const headText: CSSProperties = { fontSize: 'var(--fs-7)', fontWeight: 600, letterSpacing: '.08em', color: 'var(--sub)', whiteSpace: 'nowrap' };
+// The five columns that stay put while the opponents scroll sideways.
+const fixedPart = (bg: string, extra?: CSSProperties): CSSProperties => ({
+  position: 'sticky', left: 0, zIndex: 1, alignSelf: 'stretch', display: 'flex', alignItems: 'center',
+  gap: 'var(--sp-3)', padding: '0 var(--sp-3)', background: bg, borderRight: '1px solid var(--border)', ...extra,
+});
+const fmtPts = (p: number) => (Number.isInteger(p) ? String(p) : p.toFixed(1));
+
+function CrossTable({ players, ranks, cross, me, onPick }: {
+  players: string[]; ranks: RankRow[]; cross: Map<string, Map<string, CrossCell>>; me: string;
+  onPick: (a: string, b: string) => void;
+}) {
+  const byName = new Map(ranks.map((r) => [r.name, r]));
+  return (
+    <div className="k-scroll" style={{ flex: 1, minHeight: 0, overflow: 'auto', borderTop: '1px solid var(--border-weak)' }}>
+      <div style={{ width: 'max-content', minWidth: '100%', display: 'flex', flexDirection: 'column' }}>
+        <div style={{ position: 'sticky', top: 0, zIndex: 2, flex: 'none', display: 'flex', alignItems: 'center', height: 'var(--h-head)',
+                      paddingRight: 'var(--sp-3)', borderBottom: '1px solid var(--border)', background: 'var(--bg)', ...headText }}>
+          <span style={fixedPart('var(--bg)')}>
+            <span style={{ width: 32, textAlign: 'right' }}>{t('ggs.tourney.col.rank')}</span>
+            <span style={{ width: 96 }}>{t('ggs.tourney.col.player')}</span>
+            <span style={{ width: 40, textAlign: 'right' }}>{t('ggs.tourney.col.points')}</span>
+            <span style={{ width: 60, textAlign: 'right' }}>{t('ggs.tourney.col.wdl')}</span>
+            <span style={{ width: 48, textAlign: 'right' }}>{t('ggs.tourney.col.disc')}</span>
+          </span>
+          <span style={{ display: 'flex', gap: 2, paddingLeft: 'var(--sp-3)' }}>
+            {players.map((n) => (
+              <span key={n} title={n} style={{ width: CELL, textAlign: 'center', overflow: 'hidden', textOverflow: 'ellipsis', letterSpacing: 0,
+                                               color: n === me ? 'var(--accent)' : undefined }}>{n}</span>
+            ))}
+          </span>
+        </div>
+        {players.map((a, i) => {
+          const r = byName.get(a);
+          const mine = a === me;
+          const disc = r ? parseFloat(r.disc) : NaN;
+          return (
+            <div key={a} style={{ flex: 'none', display: 'flex', alignItems: 'center', height: 'var(--h-row2)', paddingRight: 'var(--sp-3)',
+                                  borderBottom: '1px solid var(--border-weak)', fontSize: 'var(--fs-5)', whiteSpace: 'nowrap' }}>
+              <span style={fixedPart(mine ? 'var(--card)' : 'var(--bg)', mine ? { boxShadow: 'inset 2px 0 0 var(--accent)' } : undefined)}>
+                <span style={{ width: 32, textAlign: 'right', fontWeight: 700, color: i === 0 ? 'var(--gold)' : 'var(--sub)' }}>{r ? i + 1 : ''}</span>
+                <span className="k-sel" style={{ width: 96, overflow: 'hidden', textOverflow: 'ellipsis', fontWeight: mine ? 600 : undefined }}>{a}</span>
+                <span style={{ width: 40, textAlign: 'right', fontWeight: 700 }}>{r?.pts ?? ''}</span>
+                <span style={{ width: 60, textAlign: 'right' }}>
+                  {r && <><span style={{ color: 'var(--ok)' }}>{r.w}</span>-{r.d}-<span style={{ color: 'var(--bad)' }}>{r.l}</span></>}
+                </span>
+                <span style={{ width: 48, textAlign: 'right', color: disc > 0 ? 'var(--ok)' : disc < 0 ? 'var(--bad)' : 'var(--sub)' }}>{r ? num(r.disc) : ''}</span>
+              </span>
+              <span style={{ alignSelf: 'stretch', display: 'flex', gap: 2, padding: '3px 0 3px var(--sp-3)' }}>
+                {players.map((b) => {
+                  if (a === b) {
+                    return <span key={b} style={{ width: CELL, borderRadius: 'var(--r-1)',
+                                                  background: 'repeating-linear-gradient(45deg, transparent 0 5px, var(--border-weak) 5px 6px)' }} />;
+                  }
+                  const c = cross.get(a)?.get(b);
+                  const g = c ? c.w + c.d + c.l : 0;
+                  const p = c ? c.w + c.d / 2 : 0;
+                  // Tinted by how far the pair is from even: up to 32% of ok / bad.
+                  const pct = g ? Math.round(Math.min(Math.abs(p / g - 0.5) * 2, 1) * 32) : 0;
+                  const bg = pct ? `color-mix(in srgb, var(${p / g > 0.5 ? '--ok' : '--bad'}) ${pct}%, transparent)` : 'transparent';
+                  return (
+                    <span key={b} className="k-press" title={t('tourney.cell_tip', { a, b })} onClick={() => onPick(a, b)}
+                          style={{ width: CELL, display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', lineHeight: 1.15,
+                                   borderRadius: 'var(--r-1)', background: bg, cursor: 'pointer',
+                                   boxShadow: c?.live ? 'inset 0 0 0 1px var(--accent)' : undefined }}>
+                      <b style={{ fontWeight: 600, color: g ? undefined : 'var(--sub)' }}>{g ? fmtPts(p) : '–'}</b>
+                      {g > 0 && <span style={{ fontSize: 'var(--fs-7)', color: 'var(--sub)' }}>{c!.w}-{c!.d}-{c!.l}</span>}
+                    </span>
+                  );
+                })}
+              </span>
+            </div>
+          );
+        })}
+      </div>
     </div>
   );
 }
