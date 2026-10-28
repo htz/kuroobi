@@ -1,10 +1,10 @@
 import React, { useEffect, useRef, useState } from 'react';
 import { ggsApi, jsLog } from '../api';
 import type { ChatMsg, GgsSnapshot } from '../types';
-import { hasJapanese, onlineRows, translate } from '../ggs';
+import { onlineRows, translate } from '../ggs';
 import { t, dateLocale, useLang } from '../i18n';
-import { Caption, Divider, ListRow, popoverStyle, Toolbar, TwoLines, useDismiss } from '../components/layout';
-import { Badge, Button, TextField, Toggle } from '../components/primitives';
+import { Caption, ListRow, popoverStyle, Toolbar, TwoLines, useDismiss } from '../components/layout';
+import { Badge, Button, TextField } from '../components/primitives';
 import { Bubble, DayMark, Tag } from '../components/ggs';
 import { Blank, ListPane, Page, reportGgsFailure, ListNote } from '../ggsui';
 import { clock, whenChat } from '../when';
@@ -30,7 +30,6 @@ export function Chat({ snap }: { snap: GgsSnapshot }) {
   const login = snap.login;
   const [thread, setThread] = useState(() => { const w = wanted; wanted = ''; return w || '.chat'; });
   const [text, setText] = useState('');
-  const [toEn, setToEn] = useState(false);
   // Translations asked for one message at a time, into the app's language: null while it is on its way.
   const lang = useLang();
   const [trs, setTrs] = useState<Record<string, { text: string | null; failed?: boolean; shown: boolean }>>({});
@@ -91,13 +90,10 @@ export function Chat({ snap }: { snap: GgsSnapshot }) {
   };
   const trOf = (c: ChatMsg) => trs[trKey(c) + '|' + lang];
 
-  const send = async () => {
-    let msg = text.trim();
+  const send = () => {
+    const msg = text.trim();
     if (!msg) return;
     setText('');
-    if (toEn && hasJapanese(msg)) {
-      try { msg = (await translate(msg, 'en')) || msg; } catch (e) { jsLog('translation failed: ' + e); }
-    }
     // A message that did not go out comes back to the box, and says why.
     ggsApi.chat(cur, msg).catch((e) => { setText(msg); reportGgsFailure(e); });
   };
@@ -122,8 +118,6 @@ export function Chat({ snap }: { snap: GgsSnapshot }) {
       <Toolbar>
         <b style={{ fontSize: 'var(--fs-3)', fontWeight: 600, whiteSpace: 'nowrap' }}>{title(cur)}</b>
         <Tag tone="sub">{cur === '.chat' ? t('ggs.chat.to_everyone') : t('ggs.chat.to_person')}</Tag>
-        <Divider />
-        <Toggle checked={toEn} onChange={setToEn} label={t('ggs.chat.translate_out')} />
       </Toolbar>
       <Page row>
         <ListPane head={

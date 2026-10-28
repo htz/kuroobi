@@ -441,7 +441,6 @@ ggs:
     to_person: "Goes to this person only"
     translate: "Translate"
     translate_failed: "Could not translate"
-    translate_out: "Send translated into English"
     translating: "Translating…"
   clock:
     overtime: "OT {t}"

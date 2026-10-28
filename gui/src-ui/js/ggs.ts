@@ -296,10 +296,6 @@ export async function translate(text: string, target: string): Promise<string> {
   return (j[0] ?? []).map((x) => x[0]).join('');
 }
 
-export const hasJapanese = (s: string): boolean =>
-  /[\u3040-\u30ff\u4e00-\u9fff]/.test(s);
-
-
 const normKey = (k: string): string => k.replace(/\s+/g, '');
 
 export const fingerKey = (k: string): string => normKey(k).replace(/\(.*\)/, '');

@@ -432,7 +432,6 @@ ggs:
     to_person: "本人にだけ届く"
     translate: "翻訳"
     translate_failed: "翻訳できませんでした"
-    translate_out: "英訳して送信"
     translating: "翻訳中…"
   clock:
     overtime: "ロス {t}"
