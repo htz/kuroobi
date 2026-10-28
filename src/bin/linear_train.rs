@@ -61,21 +61,22 @@ enum OptimizerKind {
 const USAGE: &str = "\
 Usage: linear_train [OPTIONS] <data-file>...
 
-Train the pattern linear on `kuroobi::record` files (kifu2data and
-gendata output).
+Train the pattern linear on `kuroobi::record` files (27 bytes per
+position).
 
 Options:
   --epochs <n>      Passes over all examples (default 10)
   --stage <n>       The one stage this run trains. Required for sgd: a run
                     covers one stage, and several stages means several
                     processes, not several threads
-  --threads <n>     Workers for scoring the val set, and for adam's pass.
-                    Sgd trains one stage on one thread; see --stage
+  --threads <n>     Workers for scoring the val set, and for adam's pass
+                    (default 1). Sgd trains one stage on one thread; see
+                    --stage
   --optimizer <o>   sgd | adam (default sgd; sgd's error-proportional step
                     converges much faster on this linear model)
   --lr <f>          Learning rate (default: sgd 0.002, adam 0.01)
   --decay <f>       SGD per-epoch lr decay factor (default 0.95)
-  --weights <path>  Weight file to load/save (default weights.bin)
+  --weights <path>  Weight file to load/save (default weights/weights.bin)
   --limit <n>       Max examples per file
   --max-examples <n>
                     Examples held in RAM at once (default 64000000, 0 = all).
@@ -101,7 +102,8 @@ Options:
                     to on the same files.
   --drop-random     Drop positions whose move was chosen at random
   --keep-above-ply <n>
-                    From this ply on, keep everything the two above drop
+                    From this ply on, keep the positions --drop-random
+                    drops
   --min-ply <n>     Drop positions before this ply
   --val <path>      Held-out file scored after every epoch (repeatable).
                     The in-epoch training MSE is measured while the weights
@@ -161,7 +163,7 @@ Options:
   --plateau-min <f>     Rate floor; the run ends below it (default 1e-6)
   --select-by M     Which per-stage number decides a snapshot: mae
                     (default), mse, or spread -- the error with the stage's
-                    constant offset taken out. See `stage_stats`
+                    constant offset taken out
   --per-stage-best  Score the val set separately for each of the 61 stages
                     every epoch, keep each stage's best-scoring weights, and
                     save the assembled model to <weights>.stagebest. The
