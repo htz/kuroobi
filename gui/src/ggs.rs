@@ -1750,6 +1750,8 @@ struct Ctx {
     ask_refusals: u32,
     /// A game with the auto-match opponent started since the last ask.
     ask_matched: bool,
+    /// Auto match has just sent an ask and the server has not answered it yet.
+    auto_asked: bool,
 }
 
 const MAX_WORKERS: usize = 2;
@@ -2141,6 +2143,7 @@ fn new_ctx(
         cancelled: std::collections::HashSet::new(),
         ask_refusals: 0,
         ask_matched: false,
+        auto_asked: false,
     };
     ctx.snap.lock().unwrap().engine = EngineCfgView {
         threads: ctx.engine_cfg.threads,
@@ -2679,6 +2682,7 @@ fn standby_tick(ctx: &mut Ctx, w: &mut Wire, mut send: impl FnMut(String)) {
     }
     ctx.log("info", &format!("auto match: asking {}", sb.opponent));
     ctx.ask_matched = false;
+    ctx.auto_asked = true;
     let rated = if sb.rated && !no_rated() { "+" } else { "-" };
     say(ctx, &mut send, format!("tell /os rated {rated}"));
     say(
@@ -3213,6 +3217,12 @@ fn handle_os_line(
             return;
         }
         let msg = ln.trim_start_matches("/os: ERR").trim();
+        if std::mem::take(&mut ctx.auto_asked)
+            && msg.contains("doesn't fit the opponent's formula")
+            && stop_auto_match_unfit(ctx)
+        {
+            return;
+        }
         ctx.snap.lock().unwrap().notice = if msg.is_empty() {
             "err.ggs_action_refused".into()
         } else {
@@ -3255,6 +3265,29 @@ fn refused_ask(ctx: &mut Ctx, o: &Offer, login: &str) {
         );
     }
     ctx.dirty = true;
+}
+
+/// The auto-match opponent's formula turns the request away as written; asking again the same way
+/// can never succeed, so auto match stops at the first one.
+fn stop_auto_match_unfit(ctx: &mut Ctx) -> bool {
+    let mut s = ctx.snap.lock().unwrap();
+    if !s.standby.enabled {
+        return false;
+    }
+    let opp = s.standby.opponent.clone();
+    s.standby.enabled = false;
+    s.notice = format!("err.auto_match_unfit|name={opp}");
+    drop(s);
+    ctx.log(
+        "info",
+        &format!("auto match: the request does not fit {opp}'s formula; stopped"),
+    );
+    ctx.notify(
+        &crate::i18n::t("backend.notify.auto_match_refused_title"),
+        &crate::i18n::tf("backend.notify.auto_match_unfit_body", &[("name", &opp)]),
+    );
+    ctx.dirty = true;
+    true
 }
 
 /// Our own request to `opp` (not one sent to us, nor one to anybody).
@@ -4154,6 +4187,10 @@ fn add_offer(ctx: &mut Ctx, rest: &str, login: &str) {
         return;
     };
     let id = offer.id.clone();
+    if !offer.incoming {
+        // The server took our request, so a later formula error is not about auto match's ask.
+        ctx.auto_asked = false;
+    }
     let mut s = ctx.snap.lock().unwrap();
     offer.since_ms = s
         .offers

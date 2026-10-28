@@ -126,6 +126,7 @@ backend:
     abort_request_title: "GGS: abort request"
     auto_match_refused_body: "{name} is not taking requests"
     auto_match_refused_title: "GGS: auto match stopped"
+    auto_match_unfit_body: "The request doesn't fit what {name} accepts"
     connect_blocked_body: "Another window is already connected"
     connect_blocked_title: "GGS: cannot connect"
     disconnected_body: "Reconnecting automatically in 10 seconds"
@@ -300,6 +301,7 @@ engine:
     white_flagged: "White ran out of time"
 err:
   auto_match_refused: "{name} turned down the request twice in a row, so auto match has stopped."
+  auto_match_unfit: "The request doesn't fit what {name} accepts, so auto match has stopped. Check the game type and the time."
   bad_formula_kind: "Invalid match-request handling type ({kind})"
   bad_log_channel: "Invalid search log channel (\".\" followed by 1-7 letters, digits, _ or -)"
   bad_square: "That square does not exist"
