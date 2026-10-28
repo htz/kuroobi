@@ -67,7 +67,9 @@ board)". This makes the shift scan wrap-free and **the masking inside
 the loop disappears**. The reference `flippable_generic` (tests only)
 computes the three masks once at the top and reuses them for every
 direction; the `flippable` the search calls is the NEON kernel on
-arm64 and a ray-table scan elsewhere.
+arm64 and a ray-table scan elsewhere. `flippable2` / `flippable4` compute
+the flips of several squares from one setup of the board, which move
+generation in the solver uses.
 
 ### Legal move generation
 
@@ -78,19 +80,23 @@ four axes and ANDing with the empty squares yields the legal move
 bitboard, and **the mobility count is a single popcount**
 (`mobility_count`).
 
-### Applying a move — make/unmake
+### Applying a move
 
 ```rust
 self.black ^= pos_bit | flipped;  self.white ^= flipped;
 ```
 
 Placing the disc and flipping are completed with **two XORs**.
-`undo_move` is a perfectly symmetric undo that merely re-applies the
-same XOR pattern: **a make/unmake scheme that saves no copy of the
-position**. `make_move` calls `flippable` only once and uses the
-result for both validation and application; `make_move_bits` is the
-same without the validation, for callers that already know the move is
-legal.
+`make_move` calls `flippable` only once and uses the result for both
+validation and application; `make_move_bits` is the same without the
+validation, for callers that already know the move is legal, and
+`apply_flips` applies a flip set computed earlier (move ordering computes
+it once per child and the search reuses it).
+
+The searches do not undo moves: a `Board` is 24 bytes and `Copy`, so a
+child is a copy of the parent with the move applied, and the parent is
+still there when the child returns. `undo_move`, which re-applies the same
+XOR pattern, serves taking moves back in a game.
 
 A pass only flips `player`.
 
@@ -109,11 +115,12 @@ symmetric forms.
 
 ## Hashing
 
-`zobrist::board_hash(player, opponent)` is the one position hash, keyed
-on the side-to-move pair so the same position reached by either colour
-shares an entry. On arm64 it is two chained CRC32C instructions (the high
-half hashes `player`, the low half folds in `opponent`); elsewhere it
-falls back to a multiply-xorshift mix.
+`zobrist::board_hash(player, opponent)` is the one position hash for every
+transposition table. It is keyed on the side-to-move pair, not on black
+and white, so the same discs with the same mover hash alike whichever
+colour that mover is. On arm64 it is two chained CRC32C instructions (the high
+half hashes `player`, the low half folds in `opponent`); without the CRC
+extension it falls back to a multiply-xorshift mix.
 
 ---
 
@@ -127,27 +134,27 @@ final score is at most `64 - 2S`.
 
 - **Edge stable discs are exact**: for all `3^8` configurations of a
   one-dimensional 8-square line, the set that "cannot be flipped no
-  matter how play goes" was computed by **greatest-fixed-point
-  iteration** (`build_edge_table`) into a 64KB table. The four edges
-  are read with gather/scatter
+  matter how play goes" is computed by **greatest-fixed-point
+  iteration** (`build_edge_table`, a `const fn`, so the 64KB table is
+  built at compile time). The four edges are read with gather/scatter
 - **Full lines** (`full_lines`) are computed bit-parallel by a
   byte-wise AND reduction (four directions: horizontal, vertical and
   both diagonals)
 - **Propagation loop**: in each of the four directions a disc
   sandwiched between "one's own disc or a wall" is accepted as stable;
-  iterate until nothing changes
+  iterate until nothing changes. `stable_count_at_least` stops as soon
+  as the count reaches what the caller needs
 
-There was a pitfall in how this is used in the search. Originally it
-was gated on the α value, but PVS null windows are placed near the
-root value, so it never fired. The correct form is a **necessary
-condition gate by popcount** — compute `need = (64 - alpha + 1) / 2`
-and decide that if the opponent's total disc count falls short of it
-plus a margin of 8, nothing can be pruned without even counting stable
-discs.
+The solver uses it only to prove a fail low (the α side), behind two
+cheap gates. The α value must be high enough for the empty count
+(`STABILITY_THRESHOLD`); a gate on the α value alone never fires on PVS
+null windows, which sit near the root value, so the second gate is a
+**necessary condition by popcount**: with `need = (64 - alpha + 1) / 2`,
+if the opponent's disc count falls short of `need` plus a margin of 8,
+nothing can be pruned and stable discs are not counted at all. Below four
+empties the cut is not attempted (`STAB_MIN_EMPTIES`).
 
-The β-side cut did not pay off on balanced positions (FFO40-45) and
-was rejected once, but it turned out to be effective on lopsided ones
-(FFO#59) and was reinstated. It is recorded as **a concrete case where
-a biased measurement set led to the wrong accept/reject decision**.
-The current solver carries the α-side cut only; the β-side branch had
-been reduced to a stub and was removed with it.
+The β side (our own stable discs proving a fail high) is not in the
+solver. Its measurements are the standard example of why both balanced
+and lopsided position sets are needed: neutral on balanced positions
+(FFO40-45), effective on a lopsided one (FFO#59).

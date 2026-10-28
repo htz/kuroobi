@@ -15,9 +15,6 @@ online server GGS.
 
 | | |
 |---|---|
-| **Strength** | **53.9%** against Edax 4.5.5 (level 13) over 800 games<br><sub>2315-2337 in the GGS random-opening pool (2026-08-21)</sub> |
-| **Endgame** | Solves FFO40-59 in **283 s** (1 thread) / **43 s** (8 threads); Edax 4.6 takes 520 s / 82 s and Egaroucid 7.8.0 495 s / 67 s on the same machine<br><sub>`problems/fforum-40-59.obf`, with the rest of the FFO suite beside it</sub> |
-| **Evaluation** | Beats Edax and Zebra in a fixed 8-ply round robin; does not reach Egaroucid |
 | **Implementation** | Rust. The engine itself pulls in no external crates |
 | **GUI** | Tauri + TypeScript. Play, study, book, GGS |
 
@@ -34,94 +31,64 @@ board is the last thing to shrink.
 
 ![Play screen](docs/img/gui-play.png)
 
-Controls sit above the board, disc counts and clocks below. The record on
-the right carries, for every move, **its evaluation, the time spent on
-it, and where the move came from (book, learned book, search, solve)**;
-a weak move gets a ▼ with how much it cost. The numbers (seconds thought,
-nodes, and the rate) live in the strip at the bottom.
+Pick which side KUROOBI plays and start — or just press the board. The
+right pane holds **the strength on top and the record below**: KUROOBI
+plays either to a level (a fixed depth and solve) or to a clock, which
+then runs for both sides only while the game is played. Once the record
+has a move the choice stays until a new game, and a clocked game shows
+both times left in its place. The record carries, for every move, **its
+evaluation, the time spent on it, and where it came from (book, learned
+book, search, solve)**; a weak move gets a ▼ with how much it cost.
+
+Take-back returns to before your own last move, KUROOBI's reply and any
+pass with it, and the clocks go back too. Leaving the screen pauses the
+game; clicking a past move pauses it there, and a move played from that
+point takes the game on from it.
 
 ### Study
 
 ![Study screen](docs/img/gui-study.png)
 
-Turn on "Evals" in the toolbar and **every legal move is scored on the
-board itself**. Iterative deepening keeps going while you look, so the
-values tighten as you watch. Under each square is where the value came
-from: book, solve, or an N-ply search.
+**Every legal move is scored on the board itself**, and the values tighten
+as the search keeps deepening; under each square is where the value came
+from: book, solve, or an N-ply search. The analysis strength is set in the
+right pane, apart from the playing strength.
 
-Below the board is a scrubber over the moves, ticked every move and
-numbered every ten, with **the losing move marked in red**. Clicking and
-dragging land on the same move. Under it, the eval graph re-measures the
-whole record, so one line shows where the game turned.
+Below the board is a scrubber over the moves with **the losing move marked
+in red**, and under it the eval graph, which re-measures the whole record
+on "Analyze" so one line shows where the game turned. Playing a different
+move partway through asks before the rest of the record is dropped.
 
 ### Book
 
 ![Book browser](docs/img/gui-book.png)
 
 Walk the opening book from a position. Candidate values appear on the
-board's squares, and the list on the right indents the branches. **The
-source column** separates moves that came from the book file (book) from
-moves learned from real games and written back (learned book), with the
-number of games behind each.
+board's squares, and the tree on the left indents the branches with each
+move's value and the number of games behind it; moves **learned from real
+games** carry a gold "Learned". The right pane shows the position's value
+and its source.
 
-The record of what was imported is in the Learning log tab of the Book
-screen (the play screen's Learning tab links to it), where you can follow **game → losing move → the rewrite (old to
-new)**. If a bad game gets imported, it can be reverted game by game.
+Finished games are written back into the book (Settings → Engine). The
+record of what was imported is in the Learning log tab, where you can
+follow **game → losing move → the rewrite (old to new)**, and a bad import
+can be reverted game by game.
 
 ### Online play (GGS)
 
-![GGS game results](docs/img/gui-ggs.png)
+![A standard game on GGS](docs/img/gui-ggs.png)
 
-Playing, observing, the lobby, chat and auto match are all built in.
-Synchro matches (the same opening played twice with colours swapped) are
-supported; the per-move deadline is derived from the clock, and iterative
-deepening stops inside it. Finished games are kept and listed with the
-rating history (**the opponent names in the screenshot are fictitious**).
-Clicking a row opens that record — a synchro match holds two boards, so
-you can switch between them.
+Playing, observing, the lobby, players, results, chat, tournaments and
+the raw console are all built in, and auto match keeps asking the same
+opponent from the request sheet. Synchro matches (the same opening played
+twice with colours swapped) show both boards and one eval graph from
+KUROOBI's side, with each move's thinking time as bars. Finished games are
+kept with the rating history; player and game details open in a drawer.
 
 The behaviours that came out of reading the server's implementation — an
 adjourned game is not resumed automatically, lost time is detected from a
 jump in the clock, there are only two rating pools — are collected in
 [GUI](docs/gui.md#what-ggs-taught-us).
-
----
-
-## How strong is it
-
-### Against Edax
-
-| Conditions | Opponent | Result |
-|---|---|---|
-| depth10 + solve22 (no MPC) | level 11 | 46.5% (even) |
-| depth14 + solve22 + MPC | level 11 | **57.8%** (400 games, significant) |
-| depth16 + solve22 + MPC | level 13 | **53.9%** (800 games, significant) |
-| depth22 + exact solve from 27 empties + MPC, 8 threads | level 24 | 49.0% (100 games, even) |
-
-### Evaluation functions alone (fixed 8-ply, round robin, 100 games per pair)
-
-| Rank | Engine | Points | Score |
-|---|---|---:|---:|
-| 1 | Egaroucid 7.8 | 196.0 / 300 | **65.3%** |
-| 2 | **KUROOBI** | 155.5 / 300 | **51.8%** |
-| 3 | Edax 4.6 | 141.5 / 300 | 47.2% |
-| 4 | Zebra (the engine inside WZebra) | 107.0 / 300 | 35.7% |
-
-### Endgame exact solve (FFO40-59)
-
-![FFO40-59 by thread count](docs/img/bench-threads.svg)
-
-Compared against Edax 4.6 and Egaroucid 7.8.0, each built natively for
-arm64 and run on the same machine (theirs on 2026-10-11, ours again on
-2026-10-12). **The lead comes from a smaller search tree, not from speed
-per node** — Edax's nodes are the cheaper ones. From 1 to 8 threads we
-speed up 6.5x, Edax 6.4x and Egaroucid 7.4x, so the lead over Edax holds
-at 1.8-1.9x while the one over Egaroucid narrows from 1.7x to 1.5x. Neither
-number alone measures the engine. On the harder FFO60-79, eight threads
-take 26 minutes against Edax's 44 and Egaroucid's 53.
-
-Measurement details, rejected changes and the parallel-scaling breakdown
-are in [Where it stands](docs/benchmarks.md).
 
 ---
 
@@ -174,9 +141,10 @@ directions at once instead of looping. Details in
 
 The board is cut into **17 kinds of square groups (patterns), 72 with
 their orientations**, and the weights matching each arrangement are summed.
-These are the **KUROOBI patterns**. The set started from Egaroucid's 16 shapes: the three rows and the 3x3
-corner were widened to 10 squares, the 7-square diagonal was replaced, and
-a 2x5 corner block was added. In the figure above, the dark green is the
+These are the **KUROOBI patterns**: sixteen 9- and 10-square shapes in
+four orientations each — rows 2-4 and the 3x3 corner at 10 squares, the
+diagonals, edge and corner shapes — plus a 2x5 corner block in eight. In
+the figure above, the dark green is the
 first orientation and the pale green the others.
 
 Rather than recount everything after each move, **only the patterns
@@ -184,7 +152,8 @@ containing a changed square** are updated (incremental pattern indices).
 
 The evaluation used in games today is an NNUE over its own set of 32
 square groups, quantized to integers and running on NEON; the KUROOBI
-patterns order moves in the endgame solver. Details in
+patterns order moves in the endgame solver and give its warm-up the first
+estimate. Details in
 [Evaluation function](docs/eval.md).
 
 ---
@@ -194,11 +163,11 @@ patterns order moves in the endgame solver. Details in
 | | Contents |
 |---|---|
 | [Board representation and bit operations](docs/board.md) | The 2×u64 layout, flipping, legal-move generation, position hashing, stable discs |
-| [Evaluation function](docs/eval.md) | Pattern evaluation, incremental indices, NNUE (quantization, speed, precision) |
-| [Search](docs/search.md) | Midgame (PVS + ProbCut), endgame exact solve, transposition table |
-| [Learning](docs/learning.md) | Supervised learning, self-play, where it got to |
+| [Evaluation function](docs/eval.md) | Pattern evaluation, incremental indices, NNUE (architecture, integer inference, width) |
+| [Search](docs/search.md) | Search on a clock, midgame search (PVS, ProbCut, parallel search), endgame exact solve, transposition tables |
+| [Learning](docs/learning.md) | Training data, linear and NNUE training, the GPU step |
 | [Where it stands](docs/benchmarks.md) | Match results, FFO benchmarks, parallel-scaling measurements, rejected changes |
-| [CLI tools](docs/cli.md) | Commands for training, measuring and playing |
+| [CLI tools](docs/cli.md) | Commands for training, assembling a model, building the book and playing |
 | [GUI](docs/gui.md) | Play, study, book, GGS, and learning the book from real games |
 
 Whether a given change was adopted rests on measurement throughout:
@@ -221,7 +190,7 @@ src/
 ├── pattern.rs         evaluation pattern definitions (2 sets)
 ├── pattern_index.rs   incremental pattern indices
 ├── linear.rs          linear pattern evaluation + supervised learning
-├── nnue.rs            NNUE evaluation (int16 quantization + NEON)
+├── nnue.rs            NNUE evaluation (i16 tables + i8 stack, NEON)
 ├── record.rs          training record format
 ├── wthor.rs           WTHOR archive reader (.wtb)
 ├── clock.rs           the search for games on a clock, time rule included
@@ -233,7 +202,7 @@ src/
 ├── resources.rs       where weights and the book live (configurable)
 ├── engine.rs          session layer shared by the GUI and the CLI (move choice, analysis)
 ├── trainer.rs         training data I/O, symmetric forms, epoch stats
-└── bin/               CLI tools (training, MPC calibration, book generation, GTP and GGS clients)
+└── bin/               CLI tools (training, stage merge, MPC calibration, book generation, GTP server, GGS client)
 gui/                   GUI (Tauri + Vite/TypeScript)
 docs/                  implementation notes (linked from this README)
 tests/                 perft coverage, solver integration tests, time to stop

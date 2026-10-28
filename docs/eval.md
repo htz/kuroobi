@@ -1,15 +1,21 @@
 # Evaluation function
 
-The part that turns a board into a number. A linear evaluation that looks up
-groups of squares (patterns), and the NNUE that replaced it.
+The part that turns a board into a number. Two evaluators share one
+mechanism for reading the board — groups of squares (patterns) whose
+indices are kept up to date as moves are played:
 
-## Evaluation function
+- **The NNUE** is the evaluation the searches play with: the search on a
+  clock, the midgame search and the solver's selective probes.
+- **The linear pattern evaluation** orders the endgame solver's moves and
+  gives the solver's warm-up its starting estimate.
+
+## Pattern evaluation (linear)
 
 ![Evaluation patterns](img/patterns.svg)
 
 *The linear evaluator's set, the KUROOBI patterns (17 kinds, 72 masks with their orientations). Dark green is the first orientation, pale green the others.*
 
-### Pattern evaluation
+### Patterns
 
 A linear model: for every fixed shape (pattern) on the board, the disc
 configuration of that shape is converted into a base-3 index, a weight table
@@ -18,46 +24,31 @@ is looked up, and the results are summed.
 The index is base-3 with `0 = own, 1 = opponent, 2 = empty` (the leading
 square is the most significant digit), and the table size is `3^size`.
 
-Two sets are kept:
+Two sets are kept, both constants in `pattern.rs`:
 
-| Set | Patterns | Masks incl. orientations | Notes |
+| Set | Patterns | Masks incl. orientations | Read by |
 |---|---|---|---|
-| `LINEAR_PATTERNS` | 17 | 72 | The KUROOBI patterns: the linear evaluator, which the endgame solver orders moves with. Egaroucid's 16 shapes with the rows and the 3x3 corner widened to 10 squares, the 7-square diagonal replaced, and a 2x5 corner block added |
-| `NNUE_PATTERNS` | 32 | 32 | The NNUE's feature set: every orientation its own table |
+| `LINEAR_PATTERNS` | 17 | 72 | The linear evaluator. The KUROOBI patterns: sixteen 9- and 10-square shapes in four orientations each (rows 2-4 and the 3x3 corner widened to 10 squares, the diagonals, edge and corner shapes) plus a 2x5 corner block in eight |
+| `NNUE_PATTERNS` | 32 | 32 | The NNUE's feature set: 7- to 9-square shapes, every orientation its own table |
 
-The set was Egaroucid's 16 shapes until 2026-10-06. Against them, trained
-the same way on the same records, the KUROOBI patterns score a held-out MSE of 25.218
-against 26.965 (mean of stages 8-59, lower at 51 of the 52 and equal at
-the last), and the solver they order moves for reads FFO 40-59 in 10.27G
-nodes against 10.59G on one thread (-3.0%, every value the same) at 33.50M
-nodes a second against 33.94M.
+Trying another set means editing these constants and retraining; a
+weights file records its table sizes, so weights of another set do not
+load. Ranked by what each widening of the linear set buys in held-out MSE
+per cell spent, the 2x5 corner block is worth the most and the tenth
+square of the 3x3 corner the least. The diagonals stay at 9 squares for
+the cost of a tenth.
 
-What each change is worth, as held-out MSE after 5 epochs a stage (mean of
-stages 8-59; the order of two sets at 5 epochs matched their order at
-convergence in 24 of 24 stages when they were 0.6 apart, and was a coin
-toss under 0.1):
-
-| Change | MSE | Cells a stage |
-|---|---:|---:|
-| the 2x5 corner block added | -1.19 | +59,049 |
-| row 2 with both corners | -0.53 | +52,488 |
-| row 3 with both X squares | -0.37 | +52,488 |
-| the three diagonals widened to 10 squares | -0.35 | +118,098 |
-| row 4 with the two centre squares below | -0.15 | +52,488 |
-| the 3x3 corner with D4 | -0.02 | +39,366 |
-
-The diagonals were left at 9 squares for their cost. Tried and dropped
-against the 16: "star" shapes (a key square with the squares along every
-line through it, for X, C, A and the edge centre) in place of the corner
-shapes, +0.38 worse at 25 epochs and worse at 51 of 52 stages. Earlier:
-the 12-shape Edax family, an 18-shape extension of the 16, a shared-table
-8-shape set, and a 7-shape corner-weighted one. Both sets are constants
-in `pattern.rs`; trying another means editing them and retraining.
+Measured and rejected as the linear set: "star" shapes (a key square
+with the squares along every line through it, for X, C, A and the edge
+centre) in place of the corner shapes, worse at 51 of 52 stages; the
+12-shape set Edax evaluates with; an 18-shape extension of the sixteen; a
+shared-table 8-shape set; and a 7-shape corner-weighted one.
 
 ### Stage split and the disc-count feature
 
 The weights are 3-dimensional, `weights[stage][pattern][cell]`.
-`STAGE_COUNT = 61`, and the stage is the number of moves played.
+`STAGE_COUNT = 61`, and the stage is the number of discs placed (60 −
+empties).
 
 **Indices that a symmetric form of the board reads for the same squares
 share one cell.** A pattern's masks are images of one another. Where there
@@ -65,48 +56,44 @@ are four, each has one symmetry that maps it onto itself with its squares
 in another order, so every index has a mirror image that must carry the
 same value; the 2x5 block has eight and no such symmetry.
 `fold[pattern][index]` maps an index to its cell; a folded table has a
-little over half as many cells as indices (487,458 against 885,735 per
-stage over the whole set). The search does not pay for this: on load the cells are unfolded
-into the flat tables it indexes directly.
+little over half as many cells as indices. The search does not pay for
+this: on load the cells are unfolded into the flat tables it indexes
+directly.
 
-Folding is what makes the evaluation the same for all eight forms of a
-board by construction, so training reads each position once. Before it,
-the eight forms of every position were trained and the mirror cells only
-came out equal; a stage trained both ways from zero followed the same
-train and validation MSE at every one of 96 epochs to the fourth decimal
-(best 37.0604 both), at 1.5 s an epoch against 9.2 s.
+Folding makes the evaluation the same for all eight forms of a board by
+construction, so training reads each position once instead of eight
+times, and gets the same result.
 
 On top of that, **`num_weights[stage][player disc count]` (65 entries) is
 added**. The total disc count is fixed within a stage, so this effectively
 expresses the **disc difference** and supplies the global information that
 local patterns alone cannot provide.
 
+The solver's move ordering reads the tables quantised to i8
+(`eval_order_bb`); training and `eval` use f32.
+
 ### Weight file format
 
-Magic `BBRVWT03` (folded cells), the only format read. A file is 119 MB;
-unfolded it would be 216 MB. Saving is an **atomic write** — temporary file +
-`sync_all` + `rename` — so an interruption never corrupts the existing
-weights. On load the stage count, the pattern count and each table size are
-checked, so weights from a different library fail to load.
-
----
+Magic `BBRVWT03` (folded cells), the only format read. Saving is an
+**atomic write** — temporary file + `sync_all` + `rename` — so an
+interruption never corrupts the existing weights. On load the stage
+count, the pattern count and each table size are checked, so weights from
+a different set fail to load.
 
 ---
 
 ## Incremental pattern indices
 
-The change that sped up the search the most (**midgame NPS +130-147%**).
-
-The naive implementation of pattern evaluation recomputes the indices of
-every mask on each evaluation. That dominated the search cost, so it was
-replaced by a scheme that **updates the indices incrementally as moves are
-played and taken back**.
+Recomputing every mask's index at each evaluation would dominate the
+search, so the indices are **updated incrementally as moves are played**
+(`pattern_index.rs`), for both evaluators.
 
 The core trick is to **hold the indices in absolute colors (0 = black,
-1 = white, 2 = empty)**. That makes them independent of the side to move, so
-`apply` / `undo` do not have to care about it. Only when evaluating from
-White's point of view is the index mapped through a precomputed **digit-swap
-table** (`swap_tables[size]`, an involution that exchanges digits 0 and 1).
+1 = white, 2 = empty)**. That makes them independent of the side to move,
+so an update does not have to care about it. Only when evaluating from
+White's point of view is the index mapped through a precomputed
+**digit-swap table** (`swap_tables[size]`, an involution that exchanges
+digits 0 and 1).
 
 Implementation notes:
 
@@ -119,715 +106,91 @@ Implementation notes:
 - The order of addition is kept identical to the recomputing
   `Linear::eval`, so the results are **bit-exact in f32**
   (`test_eval_indices_bit_exact_with_eval` verifies this)
-- `PatternIndices` is a `Copy` type of `[u16; 80]`
+- `PatternIndices` is a `Copy` type of `[u16; 80]` (160 bytes). A child's
+  indices are a copy of the parent's with the move applied, never an
+  undo: copying is fewer instructions than walking the flips back, and it
+  breaks the dependency chain an undo would form
 
-Making the endgame solver's move-ordering evaluation incremental in the same
-way achieved **-25% time on FFO40-49 (with node counts exactly identical)**.
-
----
+The endgame solver carries the linear set's indices down its tree the same
+way for its ordering evaluation.
 
 ---
 
 ## NNUE evaluation function
 
-The linear pattern evaluation has a convex MSE loss, and its held-out MSE
-plateaus at **~39 disc²** (it cannot express interactions between features).
-Feeding incrementally maintained pattern indices (the NNUE's own 32-mask
-set) through a non-linear network broke that floor.
+The linear model's loss is convex and it cannot express interactions
+between features, so its held-out MSE has a floor. Feeding the
+incrementally maintained pattern indices (the NNUE's own 32-mask set)
+through a non-linear network goes below it.
 
 ```text
 32 masks ─┬▶ feature table (256/row, all stages) ── sum ── pairwise fold ──▶ 128 ─┐
           └▶ phase table (128/row, 6 stage buckets) ─ sum ── clamp² ───────▶ 128 ─┤ + mobility
                                                                                   ▼
-                  per-stage stack (60 heads): 257 → 16 → 64 → 1, with a skip from the 256 inputs
+          per-stage stack (60 heads): 257 → 16 (squared and plain) → 64 → 1, with a skip from the 256 inputs
 ```
 
-The weight file's magic is `BBRVNN11`, the only format read. Its header
+- **Feature table**: one 256-wide row per pattern index, shared by every
+  stage. The sum is folded pairwise (`a × b` of the clamped halves) into
+  `H = 128`
+- **Phase table**: a 128-wide row per index in each of six stage buckets
+  (ten stages each), summed and passed through a clamped square
+- **Stack**: one small network per stage (stages 0-59), reading the 256
+  values and the side to move's mobility; its output also takes the 256
+  inputs directly
+
+The weights file's magic is `BBRVNN11`, the only format read. Its header
 carries the accumulator width, the feature count and the phase-table and
-stack sizes, and a mismatch fails the load.
+stack sizes, and a mismatch fails the load. The file also carries the
+model's own ProbCut calibration — σ(empties, depth, probe depth) and the
+per-position factor α — written by `nnue_mpccalib`
+(see [Search](search.md#probcut-mpc)); a file without σ searches without
+ProbCut.
 
-### Where it stands (v0002_valfull, 13.73 million positions)
+### How it runs
 
-| Evaluation function | val MSE | Speed (vs linear) |
-|---|---|---|
-| Linear evaluation | 39.09 | 1.00x |
-| Egaroucid production | 38.95 | — |
-| **NNUE (H=16)** | **36.15** | **0.98x** |
+**The accumulator is rebuilt at the leaf, not maintained through the
+tree.** Internal nodes carry only the 2-byte pattern indices, exactly as
+the linear evaluator does; the 256-wide sum is built from them when a
+position is evaluated. Maintaining it across moves would touch about 50
+random cache lines per move (the width × old/new × overlapping masks),
+more memory traffic than rebuilding at the leaves.
 
-In pure-evaluation matches at the same search depth it beats the linear
-evaluation significantly, **57.5% at depth4 / 64.7% at depth6**. **A large
-improvement in MSE widens its edge the deeper the search goes** — the
-opposite of a small difference, which vanishes by depth8.
+The search runs the network in integers (`nnue/stack_q.rs`, built by
+`Nnue::quantize`, which must be called after loading):
 
-### Speed: the 16.3x → 0.98x breakdown (MSE completely unchanged)
+- Both tables in **i16**, one copy per side to move with White's
+  pre-swapped, so the absolute-colour indices address rows directly and
+  each evaluation reads one copy. NEON sums the rows a lane group at a
+  time in independent registers, prefetching the next rows, so the 32 rows
+  do not form one serial dependency chain
+- The stack in **i8** weights with i32 sums, laid out for `vdotq_laneq_s32`
 
-**The ratios in this table are both NPS ratios and time ratios.** The sweep
-is full-width at fixed depth, so the linear and the NNUE versions visit the
-same node set (6,248,308), and the two coincide by definition.
+**i16 is the precision of the tables.** f32 and i32 cost about five times
+the time for no measurable accuracy; i16 loses about 0.1% of MSE. An i8
+feature table was measured 8% faster but lost 0.5 disc² of MSE and is not
+used: accuracy is not traded for speed.
 
-| Step | vs linear | val MSE | Why it worked |
-|---|---|---|---|
-| f32 scalar, incrementally maintained | 16.3x | 36.100 | — |
-| int16 quantization + NEON | 2.64x | 36.148 | Half the FT memory, 2x the SIMD width |
-| Interleaved viewpoints (2H updated at once) | 1.51x | 36.148 | Half the loads per mask |
-| **Leaf reconstruction scheme** | **1.12x** | 36.148 | **Accumulation at internal nodes removed** |
-| Separate FT per viewpoint | 1.05x | 36.148 | Half the load volume at leaves |
-| **4-way partial sums + prefetch** | **0.98x** | **36.148** | Breaks the serial dependency of 64 rows |
-
-Everything from int16 onwards is a **bit-identical transformation** (layout
-changes and instruction-level parallelism), so **the MSE stays pinned at
-36.148**. It is faster than the linear evaluation and has lost no accuracy.
-
-**The single biggest step was to stop maintaining the accumulator
-incrementally.** Maintaining it across make/unmake touches ~50 random cache
-lines per move (2H wide × old/new × mask overlap). Restricting internal nodes
-to the same 2-byte index update as the linear version and doing the H
-accumulation only at leaves gives less total memory traffic.
-
-Rejected: aggregating the deltas per mask to cut the FT accesses down to 1
-is slower instead (1.83x). Against the cost of zero-initializing the
-array, the flipped discs lie on a single line and the masks overlap little.
-
-### Precision: i16 is the optimum (all 13.73 million val positions)
-
-| Precision | val MSE | vs f32 | Speed | Verdict |
-|---|---|---|---|---|
-| f32 | 36.100 | — | 5.70x slower | ✗ Too slow |
-| i32 | 36.103 | +0.004 | 5.41x slower | ✗ Too slow |
-| **i16** | **36.148** | **+0.048** | **0.98x** | **✓ Adopted** |
-| i8 | 36.632 | +0.532 | 0.90x | ✗ **Rejected: it costs accuracy** |
-
-The quantization loss of i16 is 0.05 disc² (0.1%), negligible, while i32 and
-f32 are 5x slower. At 2 bytes the FT fits in cache, and NEON gets 2x the
-width with int16x8.
-
-**i8 was rejected.** It is 8% faster but the MSE degrades by +0.48. The
-policy is not to trade away evaluation accuracy, and even unused it left the
-cost of building a 20MB table, so the code was deleted outright. (That
-was about the feature table. The current network keeps both tables in i16
-and runs the small stacked layers in i8.)
-
-> **Pitfall**: the NEON readout (`vmlal_s16`) **accumulates into i32 lanes**.
-> `acc(~16.4k) × w(32k) × H=16 ≈ 2e9` overflows i32 and **flips the sign of
-> the evaluation** (measured: f32 +115 against i16 -104). The readout scale
-> is capped at a value derived backwards from the i32 limit.
-> A test comparing the f32 and integer paths caught this overflow; today
-> `vector_kernel_matches_scalar` and
+> **Pitfall**: integer read-outs accumulate into i32 lanes, and an
+> accumulator times a weight times the width overflows them, flipping the
+> sign of the evaluation. The scales are chosen backwards from the i32
+> limit, and `vector_kernel_matches_scalar` and
 > `integer_stack_matches_f32_on_trained_weights` (in `nnue/stack_q.rs`)
-> guard the integer path.
+> hold the integer path to the f32 one. Speed measured on a build whose
+> path-agreement tests fail is not a measurement: a summation that drops
+> lanes looks fast because it does less of the work.
 
 ### Choosing H (the accumulator width)
 
-The shipped width is **H=128**, reached with the stacked read-out and the
-doubled (pairwise-folded) input layer. It is a constant in `nnue.rs`: the
-cargo features that used to build 16/32/64/256 beside it are gone, and a
-weight file records its own width, so another width means editing that
-constant and training from scratch. What follows is how the width was
-argued up, kept because each step says what the next one has to beat.
-
-**Measured under the incrementally maintained scheme** (2026-07-27):
-
-| H | val MSE | Speed | Verdict at the time |
-|---|---|---|---|
-| 64 | 33.83 | Slow | Strongest but heavy |
-| **16** | **36.15** | **0.98x** | **Adopted** |
-| 8 | 39.78 | 0.96x | Faster than linear but **weaker than linear**, so pointless |
-
-H=8 cannot beat the linear evaluation, so its speed means nothing. At the
-time H=16 was the optimum between strength and speed.
-
-**Re-measuring on 2026-08-17 did not change the verdict.** Since the switch
-to leaf reconstruction removed the accumulation at internal nodes, there was
-reason to suspect that "the price of H is gone now" — it is not. Measured on
-the production path, alternating with the linear baseline 3 times each:
-
-| H | vs linear | Measured nps | val MSE |
-|---|---|---|---:|
-| **16** | **0.96-1.15x** | **9.5-11.0 Mnps** | **31.05** |
-| 64 | 2.06-2.18x | 4.95-5.24 Mnps | 27.63 |
-
-**4x the width is about 2x slower.** Widening does improve the
-evaluation (MSE −3.4), but that edge is washed out by depth. Results of
-head-to-head play:
-
-| Condition | Games | H=64 win rate |
-|---|---:|---|
-| Fixed depth 8 | 200 | **60.8%** |
-| **300 ms/move** | 400 | 52.6% (95% CI 47.7..57.5) |
-
-**Looking only at fixed depth would have shipped the wrong thing.** Fixed
-depth ignores speed, so it measures only the quality of the evaluation. Under
-game conditions the difference disappears.
-
-> **It was once written that "the price is 8%", but that was an invalid
-> number measured on a defective build.** The NEON partial sums (in a
-> function since removed) were fixed at `[int16x8_t; 2]`, so at H=64 only 16 of the
-> 64 lanes were being added (since fixed). Of course it looks fast when the
-> summation does 1/4 of the work. **Before measuring speed, make
-> `cargo test` pass on that build** — the path-agreement tests catch this
-> kind of defect.
-
-Incidentally, the 3 points from that same 2026-07-27 run (H=8 39.67 /
-H=16 36.10 / H=64 33.63) show that **width acts monotonically on MSE**. The
-later statement that "H=16 is better than H=64 (33.63)" was an error that
-compared the old H=64 figure against a newer H=16 (31.05) trained on
-**different data by a different procedure**. The conclusion (take H=16) is
-nevertheless correct, on the speed side.
-
-### Parallelizing the search (YBWC + Lazy SMP)
-
-The NNUE midgame search is parallelized in two ways. **Shallow iterations use
-Lazy SMP, deep iterations use YBWC.** Both share a single thread pool that
-lives for the whole process.
-
-Exact agreement with the sequential search used to be a requirement, but that
-left helpers unable to contribute anything to the main thread and capped the
-speedup at 1.10x. Non-determinism is now accepted as a property, and playing
-strength is measured directly instead.
-
-#### Strength is verified by head-to-head games between identical engines
-
-Win rates against an external engine cannot detect it. Even at 200 games the
-95% confidence interval is ±7%, and this measurement was repeatedly used to
-conclude, wrongly, that "parallelization has not weakened play".
-Self-play games **with the same net, the same depth and the same endgame
-threshold, varying only the thread count** are what detects it. At
-equal depth it should be 50%; anything below that is a loss of strength.
-
-Defects found with this measurement. Both show up as "fewer nodes", so
-looking at time alone makes them look like speedups:
-
-| Defect | Symptom |
-|---|---|
-| The transposition table ignored selectivity | The main thread adopted the helpers' over-aggressive pruning as-is |
-| ABORTED propagated wrongly | A sibling's fail-high discarded the whole node, throwing away that fail-high itself |
-
-Before the fix, 10 threads scored **38.8%** (95% CI 30.0..47.5), disc
-difference -3.14 — significantly weaker. On the surface it was 2.57x faster.
-After the fix, 48.5% / 1.11x.
-
-#### Midgame parallelism is set by tree size for Egaroucid too
-
-**The goal set at the outset, "Egaroucid's 3.28x on 6 threads", was the wrong
-goal for the midgame.** That figure was measured with `--edax-threads` as a
-per-move average over whole games, and Egaroucid at L15 enters the exact
-solve from 22 empties. **Most of the 3x-plus is the parallelism of the
-endgame solver.**
-
-How to isolate and measure **Egaroucid's midgame alone**: with `-noise` it
-prints `main mid depth ... n_nodes ... time ...`. Choosing positions where
-empties > depth keeps the main search in the midgame (at 30 empties with L21
-it enters the exact solve). Positions advance by repeating `go` after
-`setboard`, so play N moves at a low level and read the board off.
-
-A 42-empty position, minimum of 5 rounds:
-
-| Egaroucid level | Tree (1 thread) | t=6 | t=8 |
-|---|---|---|---|
-| 15 | 126k | 2.80x | 2.33x |
-| 17 | 278k | 1.93x | 1.93x |
-| 19 | 571k | 2.48x | 2.70x |
-| 21 | 1.77M | 2.57x | 4.02x |
-| 23 | 4.09M | 3.55x | 5.09x |
-| 25 | 13.1M | 3.31x | 4.51x |
-
-**Egaroucid's midgame parallelism also depends strongly on tree size.** And
-once the tree sizes are matched we are roughly on par: our d20 is 780
-thousand nodes per move at **2.34x**, and Egaroucid's comparably sized L19
-(570 thousand) is **2.48x** — a 6% difference. The nodes per move are close
-too (170 thousand for our d16, 140 thousand for Egaroucid L15), as is
-single-thread nps (8.2 against 10.1 Mnps).
-
-#### The 3x shows up in phases where the tree is big
-
-Isolating the endgame solver (a separate implementation,
-`Solver::set_threads`) and measuring it over 10 games, minimum of 2 rounds:
-
-| Endgame threshold | Phase | T=1 | T=6 | T=8 |
-|---|---|---|---|---|
-| 22 empties | Endgame | 9.1s | 3.8s (2.39x) | 3.4s (2.68x) |
-| 24 empties | Endgame | 26.0s | 11.9s (2.18x) | **8.6s (3.02x)** |
-| 24 empties | Total | 28.7s | 13.8s (2.08x) | **10.5s (2.73x)** |
-
-At the practical setting of d18 + a 24-empty exact solve, 6 threads give
-1.98x in the midgame / 2.33x in the endgame / **2.20x overall**. **The 3x
-does appear in phases whose trees run to tens of millions of nodes, so the
-reason it does not appear in the midgame is tree size, not the
-implementation** — Egaroucid is under the same constraint.
-
-#### Measure the reachable parallelism first
-
-Looking only at our own speed ratio does not tell whether it is the limit of
-the implementation or of the hardware. **Pinning ourselves to 1 thread and
-varying only the opponent's thread count** yields Egaroucid's parallel efficiency directly, on the same machine (10
-physical cores, minimum of 3 rounds):
-
-| Egaroucid threads | 1 | 2 | 4 | 6 | 8 | 10 |
-|---|---|---|---|---|---|---|
-| Speed ratio | 1.00x | 1.47x | 2.43x | **3.28x** | **4.00x** | 3.74x |
-
-3x is achievable on this machine. Everything short of that may be treated as
-an implementation difference.
-
-#### How YBWC is built
-
-- What gets split are **children whose window is a null window** (i.e. not
-  the eldest child). Judging by the parent's window puts the whole PV line
-  out of scope, throwing away the top of the tree — the largest subtree.
-  Fixing it raised worker utilization from 32% to 41%
-- When a task fails high, cut the siblings off immediately. But **only when
-  the parent is a null-window node**. A fail-high at a PV node merely demands
-  a re-search with the full window; the siblings still matter
-- **Carry the abort flags of every ancestor.** Passing only the node's own
-  flag means that when an ancestor aborts, grandchild tasks search a tree
-  nobody will read all the way to the end, while the parent `wait`s for them.
-  This alone dropped the extra nodes under parallelism **from 1.42x the
-  sequential count to 1.04x**
-- But **allocate the flag only at nodes that can be split**. A `bool` on the
-  stack is free, but this one is heap-allocated, so creating it at every
-  internal node costs 13% of single-thread performance for a flag nobody can
-  raise. **The fan-out cutoff itself is done with a local bool** — making it
-  depend on the flag means that at nodes without one (i.e. during sequential
-  execution) a fail-high stops nothing and the node count quadruples
-- Workers split recursively as well. A thread waiting on a split runs tasks
-  from the queue while it waits, so no task is ever stuck "behind the thread
-  that needs it"
-- **Decide whether a split is possible without a lock, before taking one.**
-  Split attempts happen hundreds of thousands of times a second and most are
-  refused, so taking a mutex just to learn of the refusal serializes every
-  search thread onto a single lock
-- Polling for a split checks the queue length atomically before taking the
-  lock at all. Locking on every emptiness check lets the waiting side
-  serialize all the workers
-
-#### Move ordering: "always score" + weights that vary by node type
-
-The **shape** matters more than the numbers.
-
-1. **Always score every move.** The transposition-table move merely comes
-   first thanks to a large constant bonus; the ordering itself is not
-   skipped. We used to skip the ordering entirely when there was a
-   transposition-table move and leave the rest in bit order. Those are
-   **exactly the younger siblings YBWC splits**, and when a badly ordered
-   sibling exceeds alpha the fan-out stops and everything behind it is
-   re-searched
-2. **The weights differ by node type.** At PV nodes the evaluation
-   dominates; at null-window nodes the evaluation barely matters and the
-   mobility count dominates. **Most of the tree is null-window nodes, so most
-   of the tree is ordered by mobility**
-3. Mobility is weighted (moves x2 + corner moves +1), and at PV nodes
-   potential mobility (empties adjacent to the opponent's discs) is added on
-   top
-
-Point 2 matters especially for us, where evaluation is expensive. The NNUE
-evaluation is orders of magnitude heavier than the incremental pattern
-evaluation, so using it to order every null-window node pours the budget into
-the worst possible place.
-
-d16 / 20 games / minimum of 3 rounds: **26.8s -> 21.3s (-21%) on 1 thread,
-nodes 172M -> 111M (-35%)**. Strength is unchanged (49.0% -> 48.5% over 100
-games against Egaroucid L15; both have wide 95% CIs and show no difference).
-
-#### Shallow null-window nodes get a dedicated routine and never touch the transposition table
-
-NWS is split into separate implementations by depth:
-
-- Depth 1: **no transposition table, no list, no ordering**. Legal moves are
-  scanned in a fixed priority order by square type (corner -> box -> block ->
-  X/C) and it returns the moment alpha is exceeded
-- Depth 2: the transposition table is probed, but its move is searched first
-  and the rest ordered afterwards
-- Depth 3-4: simplified ordering, with neither YBWC nor ETC
-
-Specializing depth 1 alone **raised nps from 4.33 to 6.05 Mnps (+40%)**. The
-node count is essentially the same, so that is entirely the 2 read/write
-trips into a 400 MB table. Depth-1 null-window nodes are the most numerous in
-the tree, and **they sit below the depth at which splitting is possible**, so
-this cost was coming entirely out of the sequential part.
-
-> The union of the 4 fixed-priority masks does not include the 4 central
-> squares, but those are filled from the initial position and can
-> never be legal moves, so coverage is not a problem.
-
-#### The transposition-table move is searched on its own, before the ordering
-
-The transposition-table move is searched first, and if it produces a cutoff
-**the scoring pass never runs at all**. Our scoring pass runs 1 NNUE
-evaluation per child, so among the things that can be skipped at cutoff nodes
-(about half of an alpha-beta tree) this is the most expensive. Node counts
-stay exactly identical while **nps is +5%**.
-
-#### The transposition table holds 2 bounds, lower/upper, not 1 value
-
-1 value plus a "lower/upper/exact" tag can answer only half of what is
-asked. A node that failed low leaves only an upper bound, so a search
-arriving later with a window that needs a lower bound learns nothing and
-searches again. Both ends are accumulated into the same entry on every visit,
-and the side the caller can use is handed back. On a hit the window itself is
-narrowed from both sides.
-
-**This implementation failed twice before it landed.** 3 things were
-missing:
-
-1. **The bound-repair clause.** When lowering the upper bound, if the lower
-   bound exceeds it, lower the lower bound too (and vice versa). ProbCut is
-   probabilistic, so searching the same node with a different window really
-   does produce `lower > upper`
-2. The bonuses for the transposition-table move and the second-best move must
-   be **added to the score before sorting**. Doing `swap(0, i)` twice does not
-   put the second-best move second, and it kicks out the head that the
-   ordering chose (this alone changed node counts by 32%)
-3. Having the second-best move at all
-
-d16 / 20 games / minimum of 3 rounds: **21.8s -> 18.4s (-16%) on 1 thread,
-nodes 111M -> 90M (-19%)**. Strength: 46.0% -> 47.0% over 200 games against
-Egaroucid L15, and 54.6% on 6 threads over 120 self-play games (disc
-difference +0.12).
-
-#### The transposition table replaces 3-way, depth-first
-
-3 consecutive slots are scanned, and **only slots worth less than the
-result being stored** are overwritten (worth is judged depth-first). If all 3
-are deeper, nothing is written.
-
-A 1-way direct-mapped table cannot express this. Shallow stores near the
-leaves evict, every time, the deep entries the iteration above them needs.
-**-34% nodes and -24% wall-clock on a single thread.** It helps even more
-under parallelism — shallow stores arrive from every worker at once, so deep
-entries barely survive.
-
-#### Siblings stay open for whoever becomes idle
-
-A fan-out used to hand each younger sibling to a worker **at the moment the
-parent reached it**: refused if nothing was idle right then, searched by the
-parent instead, and never offered again. Selective search makes most
-siblings tiny (100-1,000 nodes), so a node with 10 of them under "first
-child first" tops out near 10 / (1 + 9/8) = 4.7x on 8 threads, and the
-measured occupancy was 4.5 cores: 46% of thread time idle, 20% of the wall
-clock with a single thread working.
-
-Two changes, measured on 48 positions (36-48 empties) at depth 26, mean of
-3 runs:
-
-- **The unsearched siblings of a node are left open** (`Fan`), and an idle
-  thread takes the next one from the open node nearest the root. The parent
-  takes from the same list, so nothing is queued and nothing waits for a
-  thread that is busy elsewhere.
-- **An expected All node opens its siblings before its first child
-  returns.** The type alternates down a null-window subtree (the child of a
-  Cut node is an All node, and so is the root of a fail-low probe); a first
-  child that does cut aborts the siblings.
-
-| threads | before | after | speedup before | after |
-|---:|---:|---:|---:|---:|
-| 1 | 156.0 s | 156.0 s | | |
-| 2 | 92.2 s | 84.2 s | 1.69x | 1.85x |
-| 4 | 65.8 s | 53.7 s | 2.37x | 2.91x |
-| 8 | 50.7 s | 38.8 s | 3.08x | 4.02x |
-
-Occupancy at 8 threads rose from 4.5 to 6.2 cores. Nodes at 8 threads went
-from 470M to 526M (379M on one thread), so the gain is occupancy, not a
-smaller tree. The single-thread search is node-for-node unchanged.
-
-(The search knobs named in this section — `YBWC_MIN`, `SMP_MAX_DEPTH`,
-`MPC_T` — are constants in a normal build; `--features tunable` reads them
-from the environment variable of the same name.)
-
-**One worker starts the next depth while the rest split the current one.**
-Split work runs out: at depth 26 the eight threads kept 6.2 cores busy,
-and what filled the gap was speculation on siblings, 40% of all nodes
-spent behind a move that cut. The next iteration is work that is certain
-to be needed, so one worker searches the root one ply deeper, opening its
-own nodes to the pool like the main thread, and is stopped when the
-current depth returns. Same 48 positions, before -> after:
-
-| threads | depth | before | after |
-|---:|---:|---:|---:|
-| 3 | 26 | 45.4-47.8 s | 38.2-42.1 s |
-| 4 | 26 | 36.8-38.0 s | 34.1-35.6 s |
-| 8 | 26 | 29.4-32.2 s (9 runs) | 23.9-26.4 s (9 runs) |
-| 8 | 22 | 11.8-12.2 s | 9.4-10.7 s |
-| 8 | 30 (12 positions) | 18.8-19.3 s | 15.8-16.5 s |
-
-Nodes at 8 threads are unchanged (343-368M against 354-394M); busy cores
-go from 6.2 to 7.0. At depth 30 eight threads are now 5.0-5.2 times one
-(82.3 s). The returned values differ from the one-thread values by 0.22-0.27
-discs on average and 3-5 of the 48 moves differ, the same with and
-without it. With two threads the only worker would do nothing else, and
-that loses (62.7 -> 64.6 s), so it starts at three. Variants at 8 threads,
-depth 26: the worker not splitting its search 25.8-27.9 s; two or three
-workers on the next depths 25.4-26.4 s / 24.9-26.1 s; one worker two plies
-ahead, not splitting, 29.2-31.3 s.
-
-Tried first against the same node growth, 48 positions at 8 threads
-(base 29.4-32.2 s; one setting swings 339-384M nodes between runs):
-
-- **Early opening only from depth 8 / 10 / 7**: 29.1-30.3 / 30.6-32.3 /
-  29.6-31.9 s. None at all: 13% fewer nodes, 5.4 busy cores, 31.3-34.0 s.
-- **Predicting All nodes from the static evaluation**: an expected-All
-  node is All 44-63% of the time whatever its evaluation says against
-  alpha. Multi-ProbCut has already taken the nodes the evaluation can tell.
-- **Closing an early fan to new helpers once its first child's first move
-  has failed to cut**: 29.2-31.2 s.
-- **Enhanced transposition cutoff in the null-window search**: one thread
-  -1.9% nodes from depth 6 and -3.8% from depth 3; 8 threads 29.2-31.4 s.
-- **Re-searching one of several PV siblings that beat alpha, then
-  null-window first for the others**: no change.
-- **Rounding the evaluation to 0.25 / 0.5 / 1 disc**: the 8-thread tree
-  stays 1.4-1.5 times the one-thread tree.
-
-**The mobility weight in null-window move ordering is 0.25, not 17/7.**
-Ordering scores a move by the opponent's weighted mobility and the child's
-static evaluation. The ratio 17 : 7 came with a pattern evaluation in whole
-discs; against our evaluation it lets mobility outvote the value. Same 48
-positions, depth 26, weight 17/7 -> 0.25:
-
-| threads | before | after | nodes before | after |
-|---:|---:|---:|---:|---:|
-| 1 | 161.3 s | 104.2 s | 379M | 248M |
-| 2 | 82.8 s | 62.1 s | 372M | 277M |
-| 4 | 47.5-48.4 s | 35.3-39.2 s | 394-401M | 288-322M |
-| 8 | 33.2-35.4 s | 28.0-28.8 s | 451-493M | 374-380M |
-
-At depth 22 on 8 threads 13.3-13.4 s becomes 11.1-11.6 s. The returned
-values move by 0.09 discs on average and 3 of the 48 moves change, the
-same order as between one thread and eight. The sweep on one thread
-(nodes at depth 26): 0 -> 96M on a 12-position subset where 17/7 gives
-107M, 0.12 / 0.24 / 0.36 / 0.6 / 0.85 -> 76 / 74 / 75 / 75 / 87M, and 1.5
-times 17/7 -> 113M. The endgame solver's probes use the same ordering and
-do not notice: FFO40-59 on 8 threads 42.8-43.1 s before, 43.1 s after.
-**The smaller tree splits worse**: the 8-thread node count is now 1.5
-times the one-thread count instead of 1.25 times, so the gain shrinks from
-35% on one thread to 17% on eight.
-
-**A parent waiting for its fan helps only the fans under it.** It used to
-take a sibling from any open node. A node elsewhere can hold it past the
-moment its own fan is done, and the cut it is about to return then
-arrives late, after other threads have searched siblings it would have
-stopped. Same 48 positions, before -> after:
-
-| threads | depth | before | after |
-|---:|---:|---:|---:|
-| 2 | 26 | 84.0 s | 82.8 s |
-| 4 | 26 | 49.6 s | 47.5-48.4 s |
-| 8 | 26 | 37.8 s (36.0-39.5, 10 runs) | 35.3 s (33.2-37.6, 8 runs) |
-| 8 | 22 | 13.7-14.1 s | 13.3-13.4 s |
-
-Nodes at 8 threads fall from 511M to 469M (379M on one thread); nodes per
-second are unchanged. A parent that helps nobody searches fewer nodes
-still (435M) but idles, 35.9-36.9 s.
-
-Rejected along the way, same 48 positions at 8 threads:
-
-- **Speculating on every null-window node with a low-priority queue**:
-  occupancy 6.7 cores, but 2.2x the nodes and 83 s against 56 s.
-- **A deeper task queue in the old scheme** (idle count + 8 / + 1000):
-  nodes +20% / +38%, 60.8 s / 68.4 s against 54-57 s.
-- **Idle threads joining the deepest open node** instead of the one
-  nearest the root, or the newest: 64-72 s and twice the nodes.
-- **Letting a PV node's siblings finish when one of them beats alpha**,
-  instead of stopping them for the re-search: 39.6-40.5 s.
-- **Searching the second move alone at an expected Cut node** before
-  opening the rest: 40.3-41.9 s.
-- **No early opening at expected All nodes**: 12.9 s against 9.5 s on a
-  12-position subset.
-- **Spinning before a worker sleeps**: no gain in time, more nodes. The
-  idle time was missing work, not slow wake-ups.
-
-#### Measurements
-
-The ceiling is **5.7x of aggregate throughput from 6 independent
-processes** (no sharing, no synchronization; 94% per core). It is not
-memory-bandwidth bound.
-
-d16 / 20 games / against Egaroucid L15, minimum of 3 rounds (midgame time):
-
-| Version | 1 thread | 6 threads | Speed ratio | Nodes at 1 thread |
-|---|---|---|---|---|
-| Before the fixes | 39.6s | 24.0s | 1.65x | 261M |
-| `searchings` chain + 3-way transposition table + lock-free split test | 30.2s | 12.1s | 2.50x | 172M |
-| + not touching `Arc` at non-split nodes | 27.3s | 13.0s | 2.10x | 172M |
-| + queue slack + abort check at dequeue | 26.8s | 11.5s | **2.46x** (8 threads) | 172M |
-| + the ordering port | 21.3s | 10.9s | 1.95x | 111M |
-| + lower/upper bounds + second-best move | 18.4s | 9.3s | 1.98x | 90M |
-| + queue slack from 8 to 2 (re-measured) | 18.0s | 9.0s | 2.00x | 90M |
-| + dedicated depth-1 NWS | 12.4s | 7.9s | 1.57x | 94M |
-| + searching the transposition-table move first | **11.5s** | **7.2s** | 1.60x | **94M** |
-
-Cumulatively from the start of the session (39.6s on 1 thread / 24.0s on 6)
-that is **3.44x on 1 thread and 3.33x on 6 threads**. The speed ratio is
-roughly flat, from 1.65x to 1.60x, but that is because the denominator got
-3.4x faster — **in wall-clock terms 6 threads improved by 3.3x**.
-
-The last row is an example of **the speed ratio falling while wall-clock
-shrinks**. The denominator got 21% faster so the ratio drops, but the
-6-thread wall-clock matches the best 8-thread figure. Node inflation under
-parallelism rose from 1.02x to 1.26x — better ordering means more nodes cut
-off after 1 child, fewer younger siblings available to split, and therefore
-more speculative splitting. **Targeting the ratio would make us reject a
-wall-clock improvement**, so both are recorded side by side.
-
-**3x has not been reached.** On the same machine Egaroucid gets 3.28x on 6
-threads. The way threads are counted (pool size + main thread) has been
-confirmed to be the same, so this is an implementation difference, not a
-counting difference.
-
-Strength has not dropped (60 self-play games, d16): 6 threads **53.3%**
-(29W 25L 6D, disc difference +0.93), 8 threads 54.2% (31W 26L 3D, disc
-difference +0.53). Both 95% confidence intervals include 50%.
-
-**Parallelism is set by tree size** (10 games, midgame time only):
-
-| Depth | 1 thread | 6 threads | Speed ratio | Worker utilization |
-|---|---|---|---|---|
-| 12 | 3.3s | 1.9s | 1.74x | 38% |
-| 16 | 15.0s | 9.1s | 1.65x | 50% |
-| 20 | 68.2s | 28.3s | **2.41x** | **64%** |
-
-At 320 thousand nodes per move (d16) we are an order of magnitude below
-Egaroucid, and nodes at depth 6 or more — the split points themselves — are
-simply too few. Raising the depth improves things straightforwardly, but **a
-speed ratio at a depth never used in games must not be counted as a result**.
-For the minimum split depth (`YBWC_MIN`), 4 and 6 are equivalent and 3 is
-worse (3 -> 1.87x, 4 -> 2.26x, 6 -> 2.27x).
-
-#### The residual is all idleness, and per-core efficiency has not dropped
-
-At d16 / 6 threads, effective CPU time = (midgame time - main-thread
-starvation) + (worker busy time - worker starvation) = 27.2 core seconds.
-That almost matches the sequential midgame time of 27.8s, and nps per core is
-6.49 against 6.18 Mnps — **not below the sequential figure**. Against the 78
-core seconds available, 27.2 is 35% utilization. **The utilization needed for
-3x is not 100% but 49%.**
-
-> It was recorded at one point that "the nps of a working core is 66% of
-> sequential", but that number came from the version doing an atomic RMW on a
-> shared refcount at every internal node, and it disappeared the moment that
-> was fixed. It is consistent with this that every measure aimed at per-core
-> efficiency (cache-line-aligned 4-way buckets, spinning before workers park,
-> removing the condition-variable timeout) turned out to be noise. **3x will
-> not come from shared costs; it will come from killing the idleness.**
-
-#### The idleness is bimodal
-
-The average utilization alone cannot distinguish "always half" from
-"alternating between full and empty", and the two call for opposite remedies.
-A sampler thread (since removed) read the number of busy workers every
-100 µs. Sample
-**only during the midgame search** — including the opponent's turn and the
-endgame solver leaves 3/4 of the samples empty and useless.
-
-Distribution at d16 / 6 threads (5 workers):
-
-| Busy workers | 0 | 1 | 2 | 3 | 4 | 5 |
-|---|---|---|---|---|---|---|
-| Before the ordering and bounds port | **29%** | 12% | 10% | 9% | 9% | **31%** |
-| After the port | 18% | 14% | 14% | 12% | 14% | 28% |
-
-Before the port the average was 2.50 workers + 0.63 main thread = 3.13
-threads, which explains the 2.47x ratio. After the port the average rose to
-2.74 and the time at 0 fell from 29% to 18%. The reason the ratio still
-does not improve is that node inflation under parallelism rose from 1.02x to
-1.36x (better ordering means more nodes cut off after 1 child, fewer
-younger siblings available to split, and therefore more speculative
-splitting). **Making the sequential search faster lowers the parallel ratio.**
-
-The main thread starves waiting 37% of the time, and while it does at least
-1 worker is running (there is someone to wait for). Therefore **the 29% at 0
-workers is time the main thread spends on work that cannot be split**:
-subtrees below depth 6, the reduced searches of MPC, and the serial stretch
-walking down the eldest children. Filling that in would bring the average to
-3.4 workers, which is 3x territory.
-
-Trying to fill it by lowering the minimum split depth does not get there.
-Even combined with a pre-park spin that hides the 9 µs handoff latency, the
-lower it goes the worse it gets (minimum of 3 rounds, slack=8, 6 threads):
-
-| `YBWC_MIN` | 6 | 5 | 4 | 3 |
-|---|---|---|---|---|
-| Without spin | **11.7s** | 12.2s | 12.4s | 18.0s |
-| With spin | 11.9s | 11.8s | 11.8s | 17.8s |
-
-Spinning helps only when the minimum is lowered (the latency grows relative
-to the task length), but it cannot cover the loss of lowering it at all. **A
-minimum of 6 is optimal.**
-
-That table predates the open-sibling scheme above, where an idle thread
-finds work by itself. Measured again on it (48 positions of 36-48 empties,
-mean of 3 runs), a minimum of 5 wins from three threads on and loses on two,
-so the minimum is 6 on two threads and 5 above:
-
-| Threads, depth | Minimum 6 | Minimum 5 |
-|---|---|---|
-| 2, depth 26 | **83.9 s** | 88.4 s |
-| 3, depth 26 (2 runs) | 58.4 s | **57.7 s** |
-| 4, depth 26 | 50.5 s | **49.0 s** |
-| 8, depth 26 | 39.6 s | **38.0 s** |
-| 8, depth 22 | 15.1 s | **14.1 s** |
-
-> Rejected parallelizations: **root splitting** lost to a single thread (1.3x
-> slower for 1.7x the nodes). **A dedicated transposition table per worker**
-> raises nps by 19% but increases nodes by 69%, and losing the main thread's
-> ordering information makes wall-clock 42% worse.
-> **16-20 threads** is consistently slower in an environment with 10 physical
-> cores. **Always ordering the children at split-candidate nodes** cuts nodes
-> by 3% but costs 10% of nps in evaluation, and loses in wall-clock.
-> **Fitting a bucket into 1 cache line** (16B x 4-way, 64B aligned) and
-> **spinning before workers park** are both noise (they merely scatter over
-> the 11.4-13.5s range). Both are measures aimed at per-core efficiency, so
-> the reason they do nothing is as above.
-> **Dropping Lazy SMP for YBWC in the shallow iterations too** is worse as
-> well (`SMP_MAX_DEPTH` 10 -> 2.37x, 4 -> 2.20x, 0 -> 2.20x). The gate
-> limiting it to shallow iterations is right.
-> **A serial path for nodes that will not be split** (picking the second-best
-> move 1 at a time) loses at +4% nodes and roughly the same nps.
-> The bookkeeping of the fan-out (the settled array, the Vec, the abort
-> flags) cost nothing to begin with.
-> This experiment did find 1 bug, though: the PVS re-search window is
-> `nega_scout(-beta, -g)`, i.e. **the null-window result `g` becomes the new
-> alpha**. Using the old alpha costs +17% nodes.
-> **Not killing the running tasks on a fail-high** (not raising
-> `n_searching`) is worse (7.6s / 1.54 inflation against 7.0s / 1.34). It
-> pays to stop searches on the old window even at the cost of discarding work
-> in progress.
-> **ETC** (`etc_nws`) does nothing whatever the threshold (nodes ±0.5%). For
-> us the transposition table's window narrowing and "searching the
-> transposition-table move first" already play the same role.
-> **Counting threads blocked in `Pool::wait` as `idle`** does nothing either.
-> Splits rise from 1.10M to 1.28M but the time is unchanged: it is not that
-> there is nowhere to hand work to, it is that there is no work to hand off
-> at that moment.
-> **Copying a task's indices from the parent's accumulator** (dropping the
-> rebuild) is neutral (6.9s against 7.2s, within noise). `Nnue::indices`
-> rebuilds every mask index, so the amount of work certainly goes down, but it does not
-> show up in wall-clock.
-
-### Training
-
-`nnue_train` first trained with Hogwild parallel SGD (2.2M pos/s on 10
-threads); that mode is gone and training is minibatch Adam. The
-whole corpus (44 GB, 1.72 billion positions) does not fit in RAM, so it uses
-the same **sharded loading** as the linear version. It reads files together
-up to a budget (`--max-examples`, 48 million by default), trains, and
-discards them. The file order is shuffled every epoch, so the combination of
-shards never becomes a fixed correlation. `--init` continues from an existing
-model.
-
-**The trend that data volume dominates** continued unchanged:
-
-| Training positions | val MSE |
-|---|---|
-| 24 million | 40.7 (overfitting) |
-| 100 million | 36.1 |
-| **1.72 billion** | **33.0** |
-
-For comparison, Egaroucid's production eval is 38.95 and the linear
-evaluation 39.55 (both measured by us on the same val set). However,
-**improvements in MSE hardly convert into playing strength**: the 36.07 model
-and the 33.02 model played 400 games at equal search for 52.5% (95% CI
-47.6..57.4), disc difference +0.80. There is no significant difference.
-
-**lr is around 0.0005.** The default of 0.02 is orders of magnitude too
-large; from a warm start or from scratch alike, val diverges into the 600s.
-`--val` measures held-out MSE every epoch and saves only the epochs that
-improved, so even a divergence does not destroy the existing model.
+The width is **H = 128**, a constant in `nnue.rs`; a weights file records
+its own width, so another width means editing that constant and training
+from scratch.
+
+**A width is judged under a clock, not at fixed depth.** Fixed depth
+ignores speed, so it measures only the quality of the evaluation: four
+times the width scored 60.8% over 200 games at fixed depth 8, and 52.6%
+(95% CI 47.7..57.5) over 400 at 300 ms a move, where it costs half the
+nodes per second. Width acts monotonically on MSE; whether that pays
+depends on what the extra time costs in depth.
+
+Training is in [Learning](learning.md#nnue-training-nnue_train).
