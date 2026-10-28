@@ -1,9 +1,9 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useEffectEvent, useMemo, useRef, useState } from 'react';
 import { PlayDock } from './PlayDock';
 import { useGame, type EngineSide } from './state';
 import { fmtSecs, useGgs } from './ggs';
 import { flipped, usePrefs } from './prefs';
-import type { GameView } from './types';
+import type { GameView, FetchedGgf } from './types';
 import { api, ggsApi, jsLog, onApp } from './api';
 import { useActivity, useEngineSettings, useEngineTurn, useGraph, useHints, useLearnLog, useStartGame, type AskArgs } from './engine';
 import { connOf, evalsOf, ggsPlaying, movesOf, navBadges, sqName } from './adapt';
@@ -186,9 +186,7 @@ export function App() {
   const started = useRef(false);
   const autoGraph = useRef<(() => void) | null>(null);
   const bookLine = useRef<((kifu: string) => void) | null>(null);
-  useEffect(() => {
-    if (started.current) return;
-    started.current = true;
+  const runAutoplay = useEffectEvent(() => {
     void api.autoplay().then(async (v) => {
       if (!v) return;
       const [who, lv] = v.split(':');
@@ -268,6 +266,11 @@ export function App() {
       if (mc) await g.resetClock(+mc[1]);
       g.setPlaying(true);
     }).catch((e) => jsLog('autoplay: ' + e));
+  });
+  useEffect(() => {
+    if (started.current) return;
+    started.current = true;
+    runAutoplay();
   }, []);
   useEffect(() => { autoGraph.current = () => void graph.update(); }, [graph]);
   useEffect(() => { bookLine.current = book.goto; }, [book.goto]);
@@ -326,12 +329,12 @@ export function App() {
   useEffect(() => {
     if (!notice) return;
     void (async () => {
-      g.say(tErr(notice));
+      sayFailure(tErr(notice));
       await ggsApi.ack().catch(() => {});
     })();
-  }, [notice]);
-  useEffect(() => {
-    if (!fetched) return;
+  }, [notice, sayFailure]);
+  // Reads the viewer and study as they are when the record arrives; only its arrival runs it.
+  const onFetched = useEffectEvent((fetched: FetchedGgf) => {
     void (async () => {
       // Acknowledged first: opening it may wait on a question.
       await ggsApi.ack().catch(() => {});
@@ -346,6 +349,9 @@ export function App() {
         g.say(fetched.error ? tErr(fetched.error) : t('app.ggs.fetch_failed'));
       }
     })();
+  });
+  useEffect(() => {
+    if (fetched) onFetched(fetched);
   }, [fetched]);
 
   const v = g.view;

@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useEffectEvent, useState } from 'react';
 import { api, ggsApi, type KifuFrame } from './api';
 import { Board } from './components/board';
 import { MoveScrub, StoneDot } from './components/data';
@@ -35,6 +35,12 @@ export function KifuViewer({ title, kifu, onClose, onStudy, onRefetch, parts }: 
   const [note, say] = useFlash();
   const [playing, setPlaying] = useState(false);
 
+  // The latest onRefetch, without making a new one rerun the preview.
+  const refetch = useEffectEvent((): boolean => {
+    if (!onRefetch) return false;
+    onRefetch();
+    return true;
+  });
   useEffect(() => {
     if (!shown.trim()) return;
     let alive = true;
@@ -42,7 +48,7 @@ export function KifuViewer({ title, kifu, onClose, onStudy, onRefetch, parts }: 
       .then((frames) => { if (alive) { setGot({ kifu: shown, frames }); setAt(null); } })
       .catch((e) => {
         if (!alive) return;
-        if (onRefetch) { onRefetch(); return; }
+        if (refetch()) return;
         setGot({ kifu: shown, err: tErr(e) }); setAt(null);
       });
     return () => { alive = false; };

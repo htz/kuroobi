@@ -215,7 +215,7 @@ interface EngineCfgView {
   learn: boolean;
 }
 
-interface FetchedGgf {
+export interface FetchedGgf {
   id: string;
   ggf: string;
   parts: string[];

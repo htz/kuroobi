@@ -219,6 +219,6 @@ export function useLearnLog(on: boolean, learning: boolean) {
     const ended = wasLearning.current && !learning;
     wasLearning.current = learning;
     if (on && (ended || items.length === 0)) reload();
-  }, [on, learning, reload]);
+  }, [on, learning, reload, items.length]);
   return { items, reload };
 }
