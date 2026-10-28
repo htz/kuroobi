@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from 'react';
 import { ggsApi, type ActivityView, type SavedServer } from './api';
 import type { GgsSnapshot } from './types';
-import { t, dateLocale } from './i18n';
+import { t } from './i18n';
 import { Caption, popoverStyle, StatusBar, useDismiss } from './components/layout';
 import { Dot } from './components/primitives';
 import { askSheet } from './AskSheet';
@@ -169,12 +169,8 @@ function GgsConn({ snap, servers }: { snap: GgsSnapshot | null; servers: SavedSe
   );
 }
 
-/** "5,870 万" in Japanese, "58.7M" in English. */
-const fmtNodes = (n: number): string => {
-  if (dateLocale() === 'ja-JP') {
-    return n >= 1e8 ? (n / 1e8).toFixed(2) + ' 億' : n >= 1e4 ? Math.round(n / 1e4).toLocaleString() + ' 万' : n.toLocaleString();
-  }
-  return n >= 1e9 ? (n / 1e9).toFixed(1) + 'G' : n >= 1e6 ? (n / 1e6).toFixed(1) + 'M'
-    : n >= 1e3 ? (n / 1e3).toFixed(0) + 'k' : String(n);
-};
+/** SI prefixes in every language, as the speed's Mnps. */
+const fmtNodes = (n: number): string =>
+  n >= 1e12 ? (n / 1e12).toFixed(1) + 'T' : n >= 1e9 ? (n / 1e9).toFixed(1) + 'G'
+    : n >= 1e6 ? (n / 1e6).toFixed(1) + 'M' : n >= 1e3 ? (n / 1e3).toFixed(0) + 'k' : String(n);
 
