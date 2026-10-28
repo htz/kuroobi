@@ -2,7 +2,7 @@ import React, { useEffect, useRef, useState } from 'react';
 import { ggsApi, jsLog } from '../api';
 import type { ChatMsg, GgsSnapshot } from '../types';
 import { hasJapanese, onlineRows, translate } from '../ggs';
-import { t, dateLocale } from '../i18n';
+import { t, dateLocale, useLang } from '../i18n';
 import { Caption, Divider, ListRow, popoverStyle, Toolbar, TwoLines, useDismiss } from '../components/layout';
 import { Badge, Button, TextField, Toggle } from '../components/primitives';
 import { Bubble, DayMark, Tag } from '../components/ggs';
@@ -13,8 +13,6 @@ let wanted = '';
 /** Opens a conversation with `name` the next time the chat screen shows. */
 export const openChat = (name: string) => { wanted = name; };
 
-const wantsTranslation = (c: ChatMsg, login: string): boolean =>
-  c.from !== login && !hasJapanese(c.text) && /[a-zA-Z]{2,}/.test(c.text);
 const trKey = (c: ChatMsg): string => c.from + '|' + c.text;
 const threadOf = (c: ChatMsg): string => c.thread || c.chan || c.from;
 /** A conversation's last message: the time today, 昨日 yesterday, the date before that. */
@@ -32,16 +30,16 @@ export function Chat({ snap }: { snap: GgsSnapshot }) {
   const login = snap.login;
   const [thread, setThread] = useState(() => { const w = wanted; wanted = ''; return w || '.chat'; });
   const [text, setText] = useState('');
-  const [autoJa, setAutoJa] = useState(true);
   const [toEn, setToEn] = useState(false);
-  const [trs, setTrs] = useState<Record<string, string>>({});
+  // Translations asked for one message at a time, into the app's language: null while it is on its way.
+  const lang = useLang();
+  const [trs, setTrs] = useState<Record<string, { text: string | null; failed?: boolean; shown: boolean }>>({});
   const [picker, setPicker] = useState(false);
   const pickerBox = useRef<HTMLDivElement>(null);
   const pickerBtn = useRef<HTMLSpanElement>(null);
   useDismiss(picker, () => setPicker(false), pickerBox, pickerBtn);
   const [query, setQuery] = useState('');
   const [seen, setSeen] = useState<Record<string, number>>(() => readSeen(login));
-  const pending = useRef<Set<string>>(new Set());
   const box = useRef<HTMLDivElement>(null);
 
   const threads = new Map<string, { last: ChatMsg | null; unread: number }>();
@@ -76,18 +74,22 @@ export function Chat({ snap }: { snap: GgsSnapshot }) {
     if (b) b.scrollTop = b.scrollHeight;
   }, [count, cur]);
 
-  useEffect(() => {
-    if (!autoJa) return;
-    for (const c of msgs) {
-      if (!wantsTranslation(c, login)) continue;
-      const key = trKey(c);
-      if (key in trs || pending.current.has(key)) continue;
-      pending.current.add(key);
-      translate(c.text, 'ja')
-        .then((tr) => setTrs((prev) => ({ ...prev, [key]: tr && tr !== c.text ? tr : '' })))
-        .catch(() => setTrs((prev) => ({ ...prev, [key]: '' })));
+  const toggleTr = (c: ChatMsg) => {
+    const key = trKey(c) + '|' + lang;
+    const had = trs[key];
+    if (had && had.text !== null && !had.failed) {
+      setTrs((prev) => ({ ...prev, [key]: { ...had, shown: !had.shown } }));
+      return;
     }
-  }, [msgs, autoJa, trs, login]);
+    setTrs((prev) => ({ ...prev, [key]: { text: null, shown: true } }));
+    translate(c.text, lang)
+      .then((tr) => setTrs((prev) => ({ ...prev, [key]: { text: tr || c.text, shown: true } })))
+      .catch((e) => {
+        jsLog('translation failed: ' + e);
+        setTrs((prev) => ({ ...prev, [key]: { text: t('ggs.chat.translate_failed'), failed: true, shown: true } }));
+      });
+  };
+  const trOf = (c: ChatMsg) => trs[trKey(c) + '|' + lang];
 
   const send = async () => {
     let msg = text.trim();
@@ -121,7 +123,6 @@ export function Chat({ snap }: { snap: GgsSnapshot }) {
         <b style={{ fontSize: 'var(--fs-3)', fontWeight: 600, whiteSpace: 'nowrap' }}>{title(cur)}</b>
         <Tag tone="sub">{cur === '.chat' ? t('ggs.chat.to_everyone') : t('ggs.chat.to_person')}</Tag>
         <Divider />
-        <Toggle checked={autoJa} onChange={setAutoJa} label={t('ggs.chat.translate_in')} />
         <Toggle checked={toEn} onChange={setToEn} label={t('ggs.chat.translate_out')} />
       </Toolbar>
       <Page row>
@@ -170,15 +171,23 @@ export function Chat({ snap }: { snap: GgsSnapshot }) {
                      body={cur === '.chat' ? undefined : t('chat.empty_help')} />
             : (
               <div className="k-scroll" ref={box} style={{ flex: 1, minHeight: 0, padding: 'var(--sp-4)', display: 'flex', flexDirection: 'column', gap: 'var(--sp-3)' }}>
-                {rows.map(({ c, day, dayHead, head }, i) => (
-                  <React.Fragment key={i}>
-                    {dayHead && <DayMark>{day}</DayMark>}
-                    <Bubble showName={head} m={{
-                      from: c.from, mine: c.from === login, at: clock(c.at), body: c.text,
-                      ja: autoJa && wantsTranslation(c, login) ? (trs[trKey(c)] || undefined) : undefined,
-                    }} />
-                  </React.Fragment>
-                ))}
+                {rows.map(({ c, day, dayHead, head }, i) => {
+                  const mine = c.from === login;
+                  const tr = trOf(c);
+                  const shown = tr?.shown && tr.text !== null;
+                  return (
+                    <React.Fragment key={i}>
+                      {dayHead && <DayMark>{day}</DayMark>}
+                      <Bubble showName={head} m={{
+                        from: c.from, mine, at: clock(c.at), body: c.text,
+                        tr: shown ? tr.text ?? undefined : undefined, trFailed: shown && tr.failed,
+                      }} action={mine ? undefined
+                        : tr && tr.text === null ? { label: t('ggs.chat.translating') }
+                        : { label: shown && !tr.failed ? t('ggs.chat.hide_translation') : t('ggs.chat.translate'),
+                            onClick: () => toggleTr(c) }} />
+                    </React.Fragment>
+                  );
+                })}
               </div>
             )}
           <div style={{ flex: 'none', display: 'flex', gap: 'var(--sp-2)', alignItems: 'center',

@@ -423,14 +423,17 @@ ggs:
   chat:
     empty_global: "まだ発言はありません"
     global: "全体チャット"
+    hide_translation: "訳を隠す"
     new_thread: "新しい会話"
     pick_title: "話す相手"
     placeholder: "メッセージを入力 (Enter で送信)"
     threads: "会話"
     to_everyone: "全員に届く"
     to_person: "本人にだけ届く"
-    translate_in: "和訳して表示"
+    translate: "翻訳"
+    translate_failed: "翻訳できませんでした"
     translate_out: "英訳して送信"
+    translating: "翻訳中…"
   clock:
     overtime: "ロス {t}"
     timeout: "時間切れ"

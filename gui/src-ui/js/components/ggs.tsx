@@ -451,9 +451,12 @@ function AtomRow({ c, onChange, onRemove }: {
 }
 
 
-type Msg = { from: string; mine?: boolean; at: string; body: string; ja?: string };
+type Msg = { from: string; mine?: boolean; at: string; body: string; tr?: string; trFailed?: boolean };
 
-export function Bubble({ m, showName }: { m: Msg; showName?: boolean }) {
+/** A chat message. `action` is the small text button under it (Translate / Hide translation). */
+export function Bubble({ m, showName, action }: {
+  m: Msg; showName?: boolean; action?: { label: string; onClick?: () => void };
+}) {
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: 3, alignItems: m.mine ? 'flex-end' : 'flex-start' }}>
       {showName && (
@@ -469,11 +472,18 @@ export function Bubble({ m, showName }: { m: Msg; showName?: boolean }) {
         background: m.mine ? 'var(--accent-dim)' : 'var(--panel)', color: m.mine ? 'var(--on-accent)' : 'var(--text)',
       }}>
         <span className="k-sel" style={{ whiteSpace: 'pre-wrap', overflowWrap: 'anywhere' }}>{m.body}</span>
-        {m.ja && <div className="k-sel" style={{
+        {m.tr && <div className="k-sel" style={{
           marginTop: 4, paddingTop: 4, borderTop: '1px solid var(--border)',
-          fontSize: 'var(--fs-6)', color: 'var(--sub)',
-        }}>{m.ja}</div>}
+          fontSize: 'var(--fs-6)', color: m.trFailed ? 'var(--bad)' : 'var(--sub)',
+        }}>{m.tr}</div>}
       </div>
+      {action && (
+        <button type="button" className="k-press" disabled={!action.onClick} onClick={action.onClick}
+                style={{ padding: 0, border: 0, background: 'transparent', font: 'inherit', fontSize: 'var(--fs-7)',
+                         color: action.onClick ? 'var(--accent)' : 'var(--sub)' }}>
+          {action.label}
+        </button>
+      )}
     </div>
   );
 }

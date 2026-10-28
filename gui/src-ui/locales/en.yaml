@@ -432,14 +432,17 @@ ggs:
   chat:
     empty_global: "No messages yet."
     global: "Public chat"
+    hide_translation: "Hide translation"
     new_thread: "New person"
     pick_title: "Who do you want to talk to?"
     placeholder: "Type a message (Enter to send)"
     threads: "Conversations"
     to_everyone: "Goes to everyone here"
     to_person: "Goes to this person only"
-    translate_in: "Show a Japanese translation"
+    translate: "Translate"
+    translate_failed: "Could not translate"
     translate_out: "Send translated into English"
+    translating: "Translating…"
   clock:
     overtime: "OT {t}"
     timeout: "Out of time"

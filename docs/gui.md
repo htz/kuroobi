@@ -390,8 +390,10 @@ the game when its record carries evals, **Open kifu** and **Rematch**.
 
 Public chat and one conversation per person (**New person** starts one
 with anyone online). Unread messages are counted on the menu.
-**Show a Japanese translation** and **Send translated into English**
-translate in either direction. Each login appends its chat to
+Nothing is translated on its own: **Translate** under someone's message
+puts that one message into the app's language (Japanese or English)
+below it, and **Hide translation** folds it again. **Send translated
+into English** translates your own messages on the way out. Each login appends its chat to
 `chat/<login>.jsonl` in its data folder, and the latest 300 messages per
 conversation are restored at startup. 5000 per conversation are kept; on
 overflow the file is rewritten and packed down. An unreadable line (such
