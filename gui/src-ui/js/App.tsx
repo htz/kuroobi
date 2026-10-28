@@ -471,6 +471,8 @@ export function App() {
   const anyThink = g.thinkTotal.black > 0 || g.thinkTotal.white > 0;
   const clockLabel = (c: 'b' | 'w') => {
     if (g.clockSecs) {
+      // In play the dock shows the time left; only study needs it here.
+      if (!study) return undefined;
       const v = c === 'b' ? g.clock?.black : g.clock?.white;
       return v === undefined ? undefined : fmtSecs(v);
     }
