@@ -1,11 +1,11 @@
 import React, { useEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react';
 import { ggsApi, type UnfitView } from './api';
 import type { GgsSnapshot, StandbyCfg, UserRow } from './types';
-import { clockChoices, gtypeChoices, gtypeLabel, onlineRows, presence } from './ggs';
+import { askClockChoices, clockSpec, DEFAULT_EXT, gtypeChoices, gtypeLabel, MIN_CLOCK, onlineRows, pairLabel, parseClockSpec, presence } from './ggs';
+import { ListNote } from './ggsui';
 import { t, tErr } from './i18n';
 import { marked, Modal, Overlay, popoverStyle, useDismiss } from './components/layout';
-import { ListNote } from './ggsui';
-import { Button, Segmented, Select, TextField, Toggle } from './components/primitives';
+import { Button, ClockField, Segmented, Select, TextField, Toggle } from './components/primitives';
 
 /** What the sheet opens with. Every field is optional: the rest comes from the last request. */
 export interface AskInit {
@@ -64,7 +64,13 @@ export function AskSheet({ snap, init }: { snap: GgsSnapshot; init: AskInit }) {
   const last = useMemo(() => readLast(), []);
   const [opp, setOpp] = useState(init.opponent ?? (init.repeat && running ? sb.opponent : ''));
   const [gtype, setGtype] = useState(init.gtype ?? (init.repeat && running ? sb.gtype : last.gtype));
-  const [time, setTime] = useState(init.time ?? (init.repeat && running ? sb.time : last.time));
+  // A clock with an increment cannot be set here, so such a one starts from the default.
+  const initClock = parseClockSpec(init.time ?? (init.repeat && running ? sb.time : last.time)) ?? { main: 300, ext: DEFAULT_EXT };
+  const [mainSecs, setMainSecs] = useState(initClock.main);
+  const [extSecs, setExtSecs] = useState(initClock.ext);
+  const time = clockSpec(mainSecs, extSecs);
+  const clocks = askClockChoices();
+  const [customClock, setCustomClock] = useState(!clocks.some(([v]) => v === time));
   const reg = registered(snap);
   const [rated, setRated] = useState(reg && (init.rated ?? last.rated));
   const [repeat, setRepeat] = useState(!!init.repeat);
@@ -90,7 +96,6 @@ export function AskSheet({ snap, init }: { snap: GgsSnapshot; init: AskInit }) {
       : u.open === '-' ? { label: t('ask.state_closed'), color: 'var(--sub)' }
       : { label: t('ask.state_open'), color: 'var(--accent)' };
   };
-  const clocks = clockChoices();
   const pick = (name: string) => setOpp(name);
 
   // The opponent's decline formula, checked here so a request it would refuse is never sent.
@@ -151,7 +156,7 @@ export function AskSheet({ snap, init }: { snap: GgsSnapshot; init: AskInit }) {
   const summary = [
     opp || (repeat ? t('ask.pick_opponent') : t('ask.anyone_short')),
     gtypeLabel(gtype),
-    clocks.find(([v]) => v === time)?.[1] ?? time,
+    pairLabel(mainSecs, extSecs),
     rated ? t('ggs.rated') : t('ask.unrated'),
   ].join(' · ');
 
@@ -227,8 +232,29 @@ export function AskSheet({ snap, init }: { snap: GgsSnapshot; init: AskInit }) {
           <Select value={gtype} onChange={setGtype} options={gtypeChoices()} />
 
           {label(t('ggs.field.time_control'))}
-          {/* Seven choices do not fit side by side in every language: a list, as for a local game. */}
-          <Select value={time} onChange={setTime} options={clocks} />
+          {/* The main time and extension go as a pair, as tournaments set them. No increment: KUROOBI's time plan does not use one. */}
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 'var(--sp-2)' }}>
+            <Select value={customClock ? 'custom' : time}
+                    onChange={(v) => {
+                      setCustomClock(v === 'custom');
+                      const c = v === 'custom' ? null : parseClockSpec(v);
+                      if (c) { setMainSecs(c.main); setExtSecs(c.ext); }
+                    }}
+                    options={[...clocks, ['custom', t('ggs.clock_choice.custom')]]} />
+            {customClock && (
+              <div style={{ display: 'flex', alignItems: 'center', flexWrap: 'wrap', gap: 'var(--sp-2) var(--sp-4)',
+                            fontSize: 'var(--fs-5)', color: 'var(--sub)', whiteSpace: 'nowrap' }}>
+                <span style={{ display: 'inline-flex', alignItems: 'center', gap: 'var(--sp-2)' }}>
+                  {t('ggs.field.time_control')}
+                  <ClockField value={mainSecs} onChange={setMainSecs} min={MIN_CLOCK} label={t('ggs.field.time_control')} />
+                </span>
+                <span style={{ display: 'inline-flex', alignItems: 'center', gap: 'var(--sp-2)' }}>
+                  {t('ggs.field.extension')}
+                  <ClockField value={extSecs} onChange={setExtSecs} label={t('ggs.field.extension')} />
+                </span>
+              </div>
+            )}
+          </div>
 
           {label(t('ggs.rated'))}
           <div style={{ display: 'flex', flexDirection: 'column', gap: 'var(--sp-1)' }}>

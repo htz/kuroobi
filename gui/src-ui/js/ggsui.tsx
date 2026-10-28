@@ -1,26 +1,17 @@
 import React, { useEffect, useLayoutEffect, useRef, useState, type RefObject } from 'react';
-import { clockChoices, gtypeLabel } from './ggs';
+import { DEFAULT_EXT, gtypeLabel, parseClockSpec, secsText } from './ggs';
 import { t } from './i18n';
 import type { GgsSnapshot } from './types';
 import { RateRow } from './components/ggs';
 import { captionStyle, ListRow, marked, picked as pickedStyle, TableHead } from './components/layout';
 
-/** "5 分" for "00:05:00"; anything unusual is shown as GGS wrote it. */
+/** "5 分" for "00:05:00", "4 分 30 秒 (延長 1 分)" for "00:04:30//00:01:00"; anything unusual as GGS wrote it. */
 export function clockLabel(time: string): string {
-  const hit = clockChoices().find(([v]) => v === time);
-  if (hit) return hit[1];
-  // "00:05:00", or the GGF form "05:00//02:00" (main time, then the extension).
-  const [base, , ext] = time.split('/');
-  const span = (v: string): string | null => {
-    const m = /^(?:(\d+):)?(\d+):(\d\d)$/.exec(v);
-    if (!m) return null;
-    const mins = Number(m[1] ?? 0) * 60 + Number(m[2]);
-    return Number(m[3]) ? `${mins}:${m[3]}` : t('ggs.clock_choice.minutes', { n: mins });
-  };
-  const main = span(base);
-  if (!main) return time;
-  const extra = ext ? span(ext.split(',')[0]) : null;
-  return extra ? t('ggs.clock_choice.with_ext', { main, ext: extra }) : main;
+  const c = parseClockSpec(time);
+  if (!c) return time;
+  const main = secsText(c.main);
+  if (c.ext === DEFAULT_EXT) return main;
+  return c.ext ? t('ggs.clock_choice.with_ext', { main, ext: secsText(c.ext) }) : t('ggs.clock_choice.no_ext', { main });
 }
 
 /** "同期・ランダム14手 · 5 分 · レート戦" */

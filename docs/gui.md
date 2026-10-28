@@ -59,7 +59,8 @@ The right panel's **Strength** chooses between:
 - **Level** — a preset (`Lv1 — depth 1 / solve 2` … `Lv13 — depth 24 /
   solve 26`) or **Custom…** with its own depth and exact-solve depth. The
   level can be changed during a game.
-- **Time control** — 1 to 30 minutes. KUROOBI plans each move from its
+- **Time control** — 1 to 30 minutes, or **Custom…** to the second
+  (0:30 to 99:59, see below). KUROOBI plans each move from its
   remaining time (see [Search](search.md#search-on-a-clock-clockrs)), and
   you get the same clock. Once the game starts the two times left
   replace the choice.
@@ -317,8 +318,20 @@ pair, **Copy game record**, **Save to file**, and **Open in study**.
 The request sheet sets the **Opponent** (a dropdown of everyone online,
 searchable, showing who accepts requests and who is playing; **Anyone**
 makes an open request), the **Format** (synchro random 14–20, synchro
-standard, standard, random 16), the **Time control** (1–30 minutes) and
-**Rated**. It remembers the last choices.
+standard, standard, random 16), the **Time control** and **Rated**.
+The time control is a main time and an extension together, as
+tournaments set them: 1 or 3 minutes with 30 seconds (the recent
+tournaments), 5, 10 or 15 minutes with 2 minutes (GGS's own extension,
+left out of the request), or **Custom…**, which shows a field for each. It remembers the last choices. There is no increment:
+KUROOBI's time plan only sees the time left, so an increment would go
+unused.
+
+A custom clock is one `mm:ss` field typed from the minutes: each part
+shows its digits right-aligned as they come (`1` is 01:00), two minute
+digits or `:` move to the seconds, Backspace takes back the last digit
+and steps back into the minutes, and a seconds digit that would make 60
+or more is refused. The value is kept on Enter or leaving the field,
+pulled into range.
 
 Picking an opponent reads their finger, and the sheet judges the request
 against their decline formula the way the server does (the formula is

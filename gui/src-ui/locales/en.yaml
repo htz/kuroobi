@@ -346,7 +346,6 @@ dock:
     by_level: "Level"
     kuroobi: "KUROOBI"
     left: "{color} · {who}"
-    minutes: "{n} min"
     title: "Strength"
     you: "You"
 engine:
@@ -445,7 +444,14 @@ ggs:
     overtime: "OT {t}"
     timeout: "Out of time"
   clock_choice:
+    custom: "Custom…"
+    min_sec: "{m} min {s} s"
     minutes: "{n} min"
+    no_ext: "{main} (no extra)"
+    pair: "{main} · {ext} extra"
+    pair_none: "{main} · no extra"
+    seconds: "{n} s"
+    unit: "min:sec"
     with_ext: "{main} (+{ext} extra)"
   color:
     any: "Either"
@@ -465,6 +471,7 @@ ggs:
     hours: "{n}h"
     minutes: "{n}m"
   field:
+    extension: "Extra time"
     format: "Format"
     time_control: "Time control"
     turn: "Colour"

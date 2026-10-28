@@ -337,7 +337,6 @@ dock:
     by_level: "レベル"
     kuroobi: "KUROOBI"
     left: "{color} · {who}"
-    minutes: "{n} 分"
     title: "強さ"
     you: "自分"
 engine:
@@ -436,7 +435,14 @@ ggs:
     overtime: "ロス {t}"
     timeout: "時間切れ"
   clock_choice:
+    custom: "カスタム…"
+    min_sec: "{m} 分 {s} 秒"
     minutes: "{n} 分"
+    no_ext: "{main} (延長なし)"
+    pair: "{main} · 延長 {ext}"
+    pair_none: "{main} · 延長なし"
+    seconds: "{n} 秒"
+    unit: "分:秒"
     with_ext: "{main} (延長 {ext})"
   color:
     any: "おまかせ"
@@ -456,6 +462,7 @@ ggs:
     hours: "{n} 時間"
     minutes: "{n} 分"
   field:
+    extension: "延長"
     format: "形式"
     time_control: "持ち時間"
     turn: "手番"

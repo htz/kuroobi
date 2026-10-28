@@ -215,15 +215,55 @@ export const gtypeChoices = (): [string, string][] => [
   ['8', t('ggs.gtype_choice.std')],
   ['8r16', t('ggs.gtype_choice.rand16')],
 ];
-export const clockChoices = (): [string, string][] => [
-  ['00:01:00', t('ggs.clock_choice.minutes', { n: 1 })],
-  ['00:03:00', t('ggs.clock_choice.minutes', { n: 3 })],
-  ['00:05:00', t('ggs.clock_choice.minutes', { n: 5 })],
-  ['00:10:00', t('ggs.clock_choice.minutes', { n: 10 })],
-  ['00:15:00', t('ggs.clock_choice.minutes', { n: 15 })],
-  ['00:20:00', t('ggs.clock_choice.minutes', { n: 20 })],
-  ['00:30:00', t('ggs.clock_choice.minutes', { n: 30 })],
-];
+/** The shortest main time a custom clock takes. */
+export const MIN_CLOCK = 30;
+
+/** GGS's extension when a request names none. */
+export const DEFAULT_EXT = 120;
+
+/** "4 分 30 秒", "5 分", "30 秒". */
+export function secsText(secs: number): string {
+  const m = Math.floor(secs / 60), s = secs % 60;
+  if (!m) return t('ggs.clock_choice.seconds', { n: s });
+  return s ? t('ggs.clock_choice.min_sec', { m, s }) : t('ggs.clock_choice.minutes', { n: m });
+}
+
+const hms = (secs: number): string =>
+  [Math.floor(secs / 3600), Math.floor(secs / 60) % 60, secs % 60].map((n) => String(n).padStart(2, '0')).join(':');
+
+const toSecs = (v: string): number | null => {
+  const parts = v.split(',')[0].trim().split(':');
+  if (!parts.every((p) => /^\d+$/.test(p))) return null;
+  // A bare number is minutes, as GGS reads it.
+  return parts.length === 1 ? Number(parts[0]) * 60 : parts.reduce((a, p) => a * 60 + Number(p), 0);
+};
+
+/** The request's clock as GGS takes it: the main time, and the extension only when it is not GGS's own. */
+export function clockSpec(main: number, ext: number): string {
+  return ext === DEFAULT_EXT ? hms(main) : `${hms(main)}//${hms(ext)}`;
+}
+
+/** The main time and extension of a clock ("05:00//02:00", "14:59,0:0//02:00,0:0"); null with an increment. */
+export function parseClockSpec(spec: string): { main: number; ext: number } | null {
+  const [base, inc = '', ext] = spec.split('/');
+  const step = inc.trim() ? toSecs(inc) : 0;
+  const main = toSecs(base);
+  const e = ext == null || ext.trim() === '' ? DEFAULT_EXT : toSecs(ext);
+  return main == null || e == null || step !== 0 ? null : { main, ext: e };
+}
+
+export const clockChoices = (): [number, string][] =>
+  [1, 3, 5, 10, 15, 20, 30].map((n) => [n * 60, t('ggs.clock_choice.minutes', { n })]);
+
+/** "3 分 · 延長 30 秒" */
+export const pairLabel = (main: number, ext: number): string => ext
+  ? t('ggs.clock_choice.pair', { main: secsText(main), ext: secsText(ext) })
+  : t('ggs.clock_choice.pair_none', { main: secsText(main) });
+
+// The last tournaments' two clocks, then the usual ones with GGS's own extension.
+export const askClockChoices = (): [string, string][] =>
+  ([[60, 30], [180, 30], [300, DEFAULT_EXT], [600, DEFAULT_EXT], [900, DEFAULT_EXT]] as const)
+    .map(([m, e]) => [clockSpec(m, e), pairLabel(m, e)]);
 
 
 

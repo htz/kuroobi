@@ -1,4 +1,4 @@
-import React from 'react';
+import React, { useState } from 'react';
 
 
 type Size = 'chip' | 'row' | 'ctrl' | 'field';
@@ -185,6 +185,80 @@ export function TextField({ value, onChange, mono, invalid, placeholder, numeric
         fontFamily: mono ? 'var(--ff-mono)' : 'var(--ff)', fontSize: 'var(--fs-5)',
         textAlign: align ?? 'left',
       }} />
+  );
+}
+
+/**
+ * A clock as "mm:ss", typed from the minutes: each part shows its digits right-aligned as they are
+ * typed (1 → 01:00), two minute digits or ":" move to the seconds, and the value is kept on Enter or leaving.
+ */
+export function ClockField({ value, onChange, min = 0, max = 99 * 60 + 59, label }: {
+  value: number;
+  onChange: (secs: number) => void;
+  min?: number;
+  max?: number;
+  label?: string;
+}) {
+  // null while not typing; otherwise the digits typed into each part and the part being typed.
+  const [edit, setEdit] = useState<{ m: string; s: string; inSecs: boolean } | null>(null);
+  const [focused, setFocused] = useState(false);
+  const pad = (d: string) => d.padStart(2, '0');
+  const mm = edit ? pad(edit.m) : pad(String(Math.floor(value / 60)));
+  const ss = edit ? pad(edit.s) : pad(String(value % 60));
+  const commit = () => {
+    if (edit) onChange(Math.min(max, Math.max(min, Number(edit.m || 0) * 60 + Number(edit.s || 0))));
+    setEdit(null);
+  };
+  const key = (e: React.KeyboardEvent) => {
+    const k = e.key;
+    if (k === 'Tab' || (k === 'Escape' && !edit) || e.metaKey || e.ctrlKey) { commit(); return; }
+    e.preventDefault();
+    e.stopPropagation();
+    const cur = edit ?? { m: '', s: '', inSecs: false };
+    if (/^\d$/.test(k)) {
+      if (!cur.inSecs) {
+        const m = cur.m + k;
+        setEdit({ ...cur, m, inSecs: m.length === 2 });
+      } else if (cur.s.length < 2 && Number(cur.s + k) < 60) {
+        setEdit({ ...cur, s: cur.s + k });
+      }
+    } else if (k === ':' || k === 'ArrowRight') {
+      setEdit({ ...cur, inSecs: true });
+    } else if (k === 'ArrowLeft') {
+      setEdit({ ...cur, inSecs: false });
+    } else if (k === 'Backspace') {
+      if (cur.inSecs && cur.s) setEdit({ ...cur, s: cur.s.slice(0, -1) });
+      else setEdit({ ...cur, m: cur.m.slice(0, -1), inSecs: false });
+    } else if (k === 'Delete') {
+      setEdit({ m: '', s: '', inSecs: false });
+    } else if (k === 'Enter') {
+      commit();
+    } else if (k === 'Escape') {
+      setEdit(null);
+    }
+  };
+  const part = (text: string, on: boolean) => (
+    <span style={{
+      boxShadow: on ? 'inset 0 -2px 0 var(--accent)' : undefined,
+      background: focused && !edit ? 'color-mix(in srgb, var(--accent) 30%, transparent)' : undefined,
+    }}>{text}</span>
+  );
+  return (
+    <span tabIndex={0} role="textbox" aria-label={label} className="k-input"
+      onFocus={() => setFocused(true)}
+      onBlur={() => { setFocused(false); commit(); }}
+      onKeyDown={key}
+      style={{
+        display: 'inline-flex', alignItems: 'center', flex: 'none', cursor: 'text', outline: 'none',
+        height: 'var(--h-field)', padding: '0 var(--sp-3)', borderRadius: 'var(--r-3)',
+        background: 'var(--bg)', border: '1px solid ' + (focused ? 'var(--accent)' : 'var(--border)'),
+        fontFamily: 'var(--ff-mono)', fontSize: 'var(--fs-4)', color: 'var(--text)', letterSpacing: '.04em',
+        userSelect: 'none',
+      }}>
+      {part(mm, !!edit && !edit.inSecs)}
+      <span style={{ color: 'var(--sub)', background: focused && !edit ? 'color-mix(in srgb, var(--accent) 30%, transparent)' : undefined }}>:</span>
+      {part(ss, !!edit && edit.inSecs)}
+    </span>
   );
 }
 

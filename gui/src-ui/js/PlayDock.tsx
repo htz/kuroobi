@@ -1,19 +1,16 @@
 import { useState } from 'react';
-import { Button, Segmented, Select, Toggle } from './components/primitives';
+import { Button, Segmented, Toggle } from './components/primitives';
 import { Dock, KeyValue, Note, Section } from './components/layout';
 import { KifuTable } from './components/data';
 import { Strength, presetOf } from './components/strength';
 import { api } from './api';
-import { clockChoices, fmtSecs } from './ggs';
+import { clockChoices, fmtSecs, MIN_CLOCK } from './ggs';
+import { ClockPick } from './ClockPick';
 import type { Prefs } from './prefs';
 import type { Move } from './components/data';
 import type { Game } from './state';
 import { t, tErr } from './i18n';
 
-// The same clocks as a GGS request ("00:05:00" there, seconds here).
-const clockOptions = (): [string, string][] => clockChoices().map(([hms, label]) => [
-  String(hms.split(':').reduce((a, n) => a * 60 + Number(n), 0)), label,
-]);
 
 /**
  * The right panel of play and study, one page: the strength on top (study: the analysis settings),
@@ -97,9 +94,8 @@ function LevelOrClock({ g, prefs, setClockSecs }: {
                            { value: 'clock', label: t('dock.strength.by_clock') }]} />
       {!byClock && <LevelOnly g={g} />}
       {byClock && !started && (
-        <Select value={String(prefs.clockSecs)}
-                onChange={(v) => { setLastClock(+v); setClockSecs(+v); }}
-                options={clockOptions()} />
+        <ClockPick secs={prefs.clockSecs} min={MIN_CLOCK} choices={clockChoices()}
+                   onChange={(v) => { setLastClock(v); setClockSecs(v); }} />
       )}
       {byClock && started && (['black', 'white'] as const).map((c) => (
         <KeyValue key={c} big label={left(c)} value={fmtSecs(g.clock?.[c] ?? prefs.clockSecs)} />

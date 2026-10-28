@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useEffectEvent, useMemo, useRef, useState } from 'react';
 import { PlayDock } from './PlayDock';
 import { useGame, type EngineSide } from './state';
-import { fmtSecs, useGgs } from './ggs';
+import { fmtSecs, secsText, useGgs } from './ggs';
 import { flipped, usePrefs } from './prefs';
 import type { GameView, FetchedGgf } from './types';
 import { api, ggsApi, jsLog, onApp } from './api';
@@ -482,7 +482,7 @@ export function App() {
   const nps = nodes && g.stat && g.stat.secs > 0 ? nodes / g.stat.secs : 0;
   const lv = g.level === 'custom' ? t('app.level.custom') : t('app.level.preset', { n: g.level + 1 });
   // Playing to a clock, KUROOBI's strength is the clock.
-  const playLv = prefs.clockSecs > 0 ? t('dock.strength.minutes', { n: prefs.clockSecs / 60 }) : lv;
+  const playLv = prefs.clockSecs > 0 ? secsText(prefs.clockSecs) : lv;
   const screenTitle = isSettings ? t('settings.title')
     : [...navLocal(), ...ggsNav(conn)].find((i) => i.id === nav)?.label ?? 'KUROOBI';
   const screenSub = isGgs || isSettings ? undefined
