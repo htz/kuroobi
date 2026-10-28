@@ -1,7 +1,7 @@
 import React, { useEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react';
 import { ggsApi, type UnfitView } from './api';
 import type { GgsSnapshot, StandbyCfg, UserRow } from './types';
-import { askClockChoices, clockSpec, DEFAULT_EXT, gtypeChoices, gtypeLabel, MIN_CLOCK, onlineRows, pairLabel, parseClockSpec, presence } from './ggs';
+import { askClockChoices, clockSpec, DEFAULT_EXT, gtypeChoices, gtypeLabel, onlineRows, pairLabel, parseClockSpec, presence } from './ggs';
 import { ListNote } from './ggsui';
 import { t, tErr } from './i18n';
 import { marked, Modal, Overlay, popoverStyle, useDismiss } from './components/layout';
@@ -246,7 +246,7 @@ export function AskSheet({ snap, init }: { snap: GgsSnapshot; init: AskInit }) {
                             fontSize: 'var(--fs-5)', color: 'var(--sub)', whiteSpace: 'nowrap' }}>
                 <span style={{ display: 'inline-flex', alignItems: 'center', gap: 'var(--sp-2)' }}>
                   {t('ggs.field.time_control')}
-                  <ClockField value={mainSecs} onChange={setMainSecs} min={MIN_CLOCK} label={t('ggs.field.time_control')} />
+                  <ClockField value={mainSecs} onChange={setMainSecs} label={t('ggs.field.time_control')} />
                 </span>
                 <span style={{ display: 'inline-flex', alignItems: 'center', gap: 'var(--sp-2)' }}>
                   {t('ggs.field.extension')}

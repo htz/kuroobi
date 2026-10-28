@@ -215,7 +215,7 @@ export const gtypeChoices = (): [string, string][] => [
   ['8', t('ggs.gtype_choice.std')],
   ['8r16', t('ggs.gtype_choice.rand16')],
 ];
-/** The shortest main time a custom clock takes. */
+/** The shortest main time for a local game; GGS itself takes any, down to 0. */
 export const MIN_CLOCK = 30;
 
 /** GGS's extension when a request names none. */

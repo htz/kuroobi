@@ -322,7 +322,8 @@ standard, standard, random 16), the **Time control** and **Rated**.
 The time control is a main time and an extension together, as
 tournaments set them: 1 or 3 minutes with 30 seconds (the recent
 tournaments), 5, 10 or 15 minutes with 2 minutes (GGS's own extension,
-left out of the request), or **Custom…**, which shows a field for each. It remembers the last choices. There is no increment:
+left out of the request), or **Custom…**, which shows a field for each, from 0:00 to 99:59 (GGS
+itself takes any length, down to none). It remembers the last choices. There is no increment:
 KUROOBI's time plan only sees the time left, so an increment would go
 unused.
 
