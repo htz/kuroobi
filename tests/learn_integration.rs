@@ -71,7 +71,7 @@ fn absorbs_a_game_and_biases_the_choice() {
     let mut losing_recorded = 0;
     for (board, mv) in &line {
         let Some(mv) = mv else { continue };
-        if board.player() != kuroobi::Color::White {
+        if board.player() != Color::White {
             continue; // only the losing side's (White's) moves
         }
         let choice = e2.choose(board);
@@ -187,90 +187,4 @@ fn play_game(cfg_black: &EngineConfig, cfg_white: &EngineConfig) -> (String, i32
     let (black, white) = board.piece_count();
     let diff = black as i32 - white as i32;
     (kifu, diff)
-}
-
-#[test]
-#[ignore]
-fn measure_deviation_quality() {
-    let res = Resources::load(Path::new("/nonexistent"));
-    let dir_a = std::env::temp_dir().join("kuroobi_learn_devq_a");
-    let dir_b = std::env::temp_dir().join("kuroobi_learn_devq_b");
-    let dir_j = std::env::temp_dir().join("kuroobi_learn_devq_judge");
-    for d in [&dir_a, &dir_b, &dir_j] {
-        std::fs::create_dir_all(d).unwrap();
-        let _ = std::fs::remove_file(d.join("book_learn.txt"));
-    }
-
-    let mk = |dir: &Path, depth: u32, solve: u8, threads: usize| EngineConfig {
-        weights: res.weights_path(),
-        nnue: res.nnue_path(),
-        book: dir.join("book.txt"),
-        depth,
-        solve_empties: solve,
-        threads,
-        midgame_hash_bits: 20,
-        solver_hash_bits: 20,
-        ..Default::default()
-    };
-    let cfg_a = mk(&dir_a, 2, 8, 1); // learner (Black)
-    let cfg_b = mk(&dir_b, 6, 10, 1); // opponent (White)
-
-    let mut games: Vec<(String, i32)> = Vec::new();
-    for _ in 0..8 {
-        let (kifu, diff) = play_game(&cfg_a, &cfg_b);
-        let mut a = Engine::new(cfg_a.clone()).unwrap();
-        let mut job = a.learn_start(None, &kifu, 4).unwrap();
-        while a.learn_step(&mut job, 4).unwrap().is_none() {}
-        games.push((kifu, diff));
-    }
-
-    let mut judge = Engine::new(mk(&dir_j, 16, 18, 8)).unwrap();
-
-    println!("-- deviation deep-dive (depth 16 / solve 18) --");
-    let mut worst: f32 = 0.0;
-    let mut count = 0;
-    for g in 1..games.len() {
-        let (prev, _) = &games[g - 1];
-        let (cur, _) = &games[g];
-        let n = (0..prev.len().min(cur.len()) / 2)
-            .find(|i| prev[i * 2..i * 2 + 2] != cur[i * 2..i * 2 + 2]);
-        let Some(n) = n else { continue };
-        let old_mv = &prev[n * 2..n * 2 + 2];
-        let new_mv = &cur[n * 2..n * 2 + 2];
-        let (line, _) = kuroobi::learn::replay(None, cur).unwrap();
-        let board = line
-            .iter()
-            .filter(|(_, m)| m.is_some())
-            .nth(n)
-            .expect("divergent move is within the record")
-            .0;
-        let side = if board.player() == Color::Black {
-            "Black"
-        } else {
-            "White"
-        };
-        let best = judge.eval_position(&board, 16);
-        let mut val_of = |mv: &str| -> f32 {
-            let p = Position::from_kifu(mv).unwrap();
-            let mut c = board;
-            c.make_move(p).unwrap();
-            -judge.eval_position(&c, 15).value
-        };
-        let v_old = val_of(old_mv);
-        let v_new = val_of(new_mv);
-        let best_mv = best.pos.map(|p| p.to_kifu()).unwrap_or_default();
-        let loss_vs_old = v_old - v_new;
-        let loss_vs_best = best.value - v_new;
-        println!(
-            "game {g}: move {} ({side}) {old_mv}->{new_mv}  deep: old {v_old:+.1} / new {v_new:+.1} / best {best_mv} {:+.1}  (vs old {:+.1}, vs best {:+.1})",
-            n + 1,
-            best.value,
-            -loss_vs_old,
-            -loss_vs_best,
-        );
-        worst = worst.max(loss_vs_best);
-        count += 1;
-    }
-    println!("{count} divergences / worst loss vs best {worst:+.1} discs");
-    assert!(count > 0, "divergences must be observable");
 }

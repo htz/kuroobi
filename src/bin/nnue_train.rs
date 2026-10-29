@@ -7,9 +7,9 @@ use std::time::Instant;
 use kuroobi::linear::{Linear, STAGE_COUNT};
 use kuroobi::nnue::{AdamState, Nnue};
 use kuroobi::pattern;
-use kuroobi::record::{Filter, TeacherPolicy};
+use kuroobi::record::{self, Filter, TeacherPolicy};
 use kuroobi::trainer::{
-    count_examples_binary, load_examples_filtered_into, load_examples_range_into, Example, SymPlan,
+    load_examples_filtered_into, load_examples_range_into, Example, SelectBy, SymPlan, ValError,
 };
 
 const LOOKAHEAD_K: u32 = 6;
@@ -18,70 +18,54 @@ fn cosine_factor(t: f32) -> f32 {
     0.5 * (1.0 + (std::f32::consts::PI * t).cos())
 }
 
-fn val_by_stage(nn: &mut Nnue, val: &[Example]) -> Vec<[f64; 5]> {
+/// A stage's held-out error, and its summed gap between the quantized and the float network.
+#[derive(Clone, Copy, Default)]
+struct StageVal {
+    err: ValError,
+    grid: f64,
+}
+
+fn val_by_stage(nn: &mut Nnue, val: &[Example]) -> Vec<StageVal> {
     nn.quantize();
-    let mut acc = vec![[0.0f64; 5]; STAGE_COUNT];
+    let mut acc = vec![StageVal::default(); STAGE_COUNT];
     for ex in val {
         let board = ex.board();
         let ix = nn.indices(ex.black, ex.white);
         let q = nn.eval_from_indices(&ix, &board);
-        let e = q as f64 - ex.score as f64;
         let a = &mut acc[Linear::stage(&board)];
-        a[0] += 1.0;
-        a[1] += e * e;
-        a[2] += e.abs();
-        a[3] += e;
-        a[4] += (q - nn.eval_indices(&board, &ix)).abs() as f64;
+        a.err.add(q as f64 - ex.score as f64);
+        a.grid += (q - nn.eval_indices(&board, &ix)).abs() as f64;
     }
     acc
 }
 
-fn stats_of(a: &[f64; 5]) -> (f64, f64, f64, f64) {
-    let n = a[0];
-    if n == 0.0 {
-        return (f64::NAN, f64::NAN, f64::NAN, f64::NAN);
-    }
-    let (mse, mae, bias) = (a[1] / n, a[2] / n, a[3] / n);
-    (mse, mae, bias, (mse - bias * bias).max(0.0).sqrt())
-}
-
-fn pooled(acc: &[[f64; 5]]) -> [f64; 5] {
-    let mut t = [0.0f64; 5];
+fn pooled(acc: &[StageVal]) -> StageVal {
+    let mut t = StageVal::default();
     for a in acc {
-        for (d, s) in t.iter_mut().zip(a) {
-            *d += s;
-        }
+        t.err.merge(&a.err);
+        t.grid += a.grid;
     }
     t
 }
 
-fn print_stage_table(acc: &[[f64; 5]]) {
+fn print_stage_table(acc: &[StageVal]) {
     println!("  stage  empties       n      MSE      MAE     bias   spread     grid");
     for (st, a) in acc.iter().enumerate() {
-        if a[0] == 0.0 {
+        if a.err.n == 0.0 {
             continue;
         }
-        let (mse, mae, bias, sd) = stats_of(a);
+        let (mse, mae, bias, sd) = a.err.stats();
         println!(
             "  {:>5}  {:>7}  {:>6}  {:>7.3}  {:>7.3}  {:>+7.3}  {:>7.3}  {:>7.3}",
             st,
             60 - st,
-            a[0] as u64,
+            a.err.n as u64,
             mse,
             mae,
             bias,
             sd,
-            a[4] / a[0]
+            a.grid / a.err.n
         );
-    }
-}
-
-fn select_score(which: &str, a: &[f64; 5]) -> f64 {
-    let (mse, mae, _, sd) = stats_of(a);
-    match which {
-        "mae" => mae,
-        "spread" => sd,
-        _ => mse,
     }
 }
 
@@ -330,7 +314,7 @@ struct Args {
     decay: f32,
     cosine: bool,
     plateau: usize,
-    select_by: String,
+    select_by: SelectBy,
     val_by_stage_report: bool,
     plateau_factor: f32,
     plateau_min: f32,
@@ -358,135 +342,101 @@ struct Args {
     train_stages: Option<(usize, usize)>,
 }
 
-fn parse_args() -> Result<Args, ExitCode> {
-    let mut epochs = 10usize;
-    let mut lr = 0.02f32;
-    let mut decay = 1.0f32;
-    let mut cosine = false;
-    let mut plateau = 0usize;
-    let mut select_by = String::from("mse");
-    let mut val_by_stage_report = false;
-    let mut plateau_factor = 0.5f32;
-    let mut plateau_min = 1e-6f32;
-    let mut wd = 0.0f32;
-    let mut minibatch = 0usize;
-    let mut adam = false;
-    let mut sym_train = false;
-    let mut sym_all = false;
-    let mut lookahead = false;
-    let mut gpu = false;
-    let mut threads = 1usize;
-    let mut limit: Option<usize> = None;
-    let mut filter = Filter::NONE;
-    let mut policy = TeacherPolicy::DEFAULT;
-    let mut out = PathBuf::from("weights/nnue.bin");
-    let mut val_files: Vec<PathBuf> = Vec::new();
-    let mut data_files: Vec<PathBuf> = Vec::new();
-    let mut max_examples = DEFAULT_MAX_EXAMPLES;
-    let mut interleave = false;
-    let mut val_cap: Option<usize> = None;
-    let mut init: Option<PathBuf> = None;
-    let mut train_stages: Option<(usize, usize)> = None;
-    let mut checkpoint: Option<PathBuf> = None;
-    let mut resume: Option<PathBuf> = None;
-    let mut start_epoch = 1usize;
-
+fn parse_args() -> Result<Args, String> {
+    let mut a = Args {
+        epochs: 10,
+        lr: 0.02,
+        decay: 1.0,
+        cosine: false,
+        plateau: 0,
+        select_by: SelectBy::Mse,
+        val_by_stage_report: false,
+        plateau_factor: 0.5,
+        plateau_min: 1e-6,
+        wd: 0.0,
+        minibatch: 0,
+        adam: false,
+        sym_train: false,
+        sym_all: false,
+        lookahead: false,
+        gpu: false,
+        threads: 1,
+        limit: None,
+        filter: Filter::NONE,
+        policy: TeacherPolicy::DEFAULT,
+        out: PathBuf::from("weights/nnue.bin"),
+        val_files: Vec::new(),
+        data_files: Vec::new(),
+        max_examples: DEFAULT_MAX_EXAMPLES,
+        interleave: false,
+        val_cap: None,
+        init: None,
+        checkpoint: None,
+        resume: None,
+        start_epoch: 1,
+        train_stages: None,
+    };
     let mut it = std::env::args().skip(1);
-    while let Some(a) = it.next() {
-        match filter.take_flag(&a, &mut it) {
-            Ok(true) => continue,
-            Ok(false) => {}
-            Err(e) => {
-                eprintln!("{e}");
-                return Err(ExitCode::FAILURE);
-            }
+    while let Some(flag) = it.next() {
+        if a.filter.take_flag(&flag, &mut it)? {
+            continue;
         }
-        match a.as_str() {
-            "--epochs" => epochs = it.next().unwrap().parse().unwrap(),
-            "--lr" => lr = it.next().unwrap().parse().unwrap(),
-            "--decay" => decay = it.next().unwrap().parse().unwrap(),
-            "--cosine" => cosine = true,
-            "--plateau" => plateau = it.next().unwrap().parse().unwrap(),
-            "--select-by" => select_by = it.next().unwrap(),
-            "--val-by-stage" => val_by_stage_report = true,
+        let mut value = || it.next().ok_or_else(|| format!("{flag} needs a value"));
+        fn num<T: std::str::FromStr>(flag: &str, v: String) -> Result<T, String> {
+            v.parse().map_err(|_| format!("{flag} {v}: not a number"))
+        }
+        match flag.as_str() {
+            "--epochs" => a.epochs = num(&flag, value()?)?,
+            "--lr" => a.lr = num(&flag, value()?)?,
+            "--decay" => a.decay = num(&flag, value()?)?,
+            "--cosine" => a.cosine = true,
+            "--plateau" => a.plateau = num(&flag, value()?)?,
+            "--select-by" => a.select_by = value()?.parse()?,
+            "--val-by-stage" => a.val_by_stage_report = true,
             "--train-stages" => {
-                let v = it.next().unwrap_or_default();
+                let v = value()?;
                 let r = v
                     .split_once('-')
-                    .and_then(|(a, b)| Some((a.parse().ok()?, b.parse().ok()?)));
+                    .and_then(|(lo, hi)| Some((lo.parse().ok()?, hi.parse().ok()?)));
                 match r {
                     Some((lo, hi)) if kuroobi::nnue::owns_whole_buckets(lo, hi) => {
-                        train_stages = Some((lo, hi))
+                        a.train_stages = Some((lo, hi))
                     }
                     _ => {
-                        eprintln!("--train-stages {v}: needs LO-HI covering whole 10-stage buckets, e.g. 50-59");
-                        return Err(ExitCode::FAILURE);
+                        return Err(format!(
+                            "--train-stages {v}: needs LO-HI covering whole 10-stage buckets, e.g. 50-59"
+                        ))
                     }
                 }
             }
-            "--plateau-factor" => plateau_factor = it.next().unwrap().parse().unwrap(),
-            "--plateau-min" => plateau_min = it.next().unwrap().parse().unwrap(),
-            "--wd" => wd = it.next().unwrap().parse().unwrap(),
-            "--minibatch" => minibatch = it.next().unwrap().parse().unwrap(),
-            "--adam" => adam = true,
+            "--plateau-factor" => a.plateau_factor = num(&flag, value()?)?,
+            "--plateau-min" => a.plateau_min = num(&flag, value()?)?,
+            "--wd" => a.wd = num(&flag, value()?)?,
+            "--minibatch" => a.minibatch = num(&flag, value()?)?,
+            "--adam" => a.adam = true,
             "--search-value-to-ply" => {
-                policy.search_value_to_ply = it.next().and_then(|v| v.parse().ok());
+                a.policy.search_value_to_ply = Some(num(&flag, value()?)?);
             }
-            "--sym-train" => sym_train = true,
-            "--sym-all" => sym_all = true,
-            "--lookahead" => lookahead = true,
-            "--gpu" => gpu = true,
-            "--threads" => threads = it.next().unwrap().parse().unwrap(),
-            "--limit" => limit = Some(it.next().unwrap().parse().unwrap()),
-            "--out" => out = PathBuf::from(it.next().unwrap()),
-            "--val" => val_files.push(PathBuf::from(it.next().unwrap())),
-            "--max-examples" => max_examples = it.next().unwrap().parse().unwrap(),
-            "--interleave" => interleave = true,
-            "--val-cap" => val_cap = Some(it.next().unwrap().parse().unwrap()),
-            "--init" => init = Some(PathBuf::from(it.next().unwrap())),
-            "--checkpoint" => checkpoint = Some(PathBuf::from(it.next().unwrap())),
-            "--resume" => resume = Some(PathBuf::from(it.next().unwrap())),
-            "--start-epoch" => start_epoch = it.next().unwrap().parse().unwrap(),
-            other if other.starts_with('-') => {
-                eprintln!("unknown option {other}");
-                return Err(ExitCode::FAILURE);
-            }
-            file => data_files.push(PathBuf::from(file)),
+            "--sym-train" => a.sym_train = true,
+            "--sym-all" => a.sym_all = true,
+            "--lookahead" => a.lookahead = true,
+            "--gpu" => a.gpu = true,
+            "--threads" => a.threads = num(&flag, value()?)?,
+            "--limit" => a.limit = Some(num(&flag, value()?)?),
+            "--out" => a.out = PathBuf::from(value()?),
+            "--val" => a.val_files.push(PathBuf::from(value()?)),
+            "--max-examples" => a.max_examples = num(&flag, value()?)?,
+            "--interleave" => a.interleave = true,
+            "--val-cap" => a.val_cap = Some(num(&flag, value()?)?),
+            "--init" => a.init = Some(PathBuf::from(value()?)),
+            "--checkpoint" => a.checkpoint = Some(PathBuf::from(value()?)),
+            "--resume" => a.resume = Some(PathBuf::from(value()?)),
+            "--start-epoch" => a.start_epoch = num(&flag, value()?)?,
+            other if other.starts_with('-') => return Err(format!("unknown option {other}")),
+            file => a.data_files.push(PathBuf::from(file)),
         }
     }
-    Ok(Args {
-        epochs,
-        lr,
-        decay,
-        cosine,
-        plateau,
-        select_by,
-        val_by_stage_report,
-        plateau_factor,
-        plateau_min,
-        wd,
-        minibatch,
-        adam,
-        sym_train,
-        sym_all,
-        lookahead,
-        gpu,
-        threads,
-        limit,
-        filter,
-        policy,
-        out,
-        val_files,
-        data_files,
-        max_examples,
-        interleave,
-        val_cap,
-        init,
-        checkpoint,
-        resume,
-        start_epoch,
-        train_stages,
-    })
+    Ok(a)
 }
 
 fn main() -> ExitCode {
@@ -524,7 +474,10 @@ fn main() -> ExitCode {
         train_stages,
     } = match parse_args() {
         Ok(a) => a,
-        Err(code) => return code,
+        Err(e) => {
+            eprintln!("{e}");
+            return ExitCode::FAILURE;
+        }
     };
     if data_files.is_empty() {
         eprintln!(
@@ -542,14 +495,6 @@ fn main() -> ExitCode {
         return ExitCode::FAILURE;
     }
 
-    // Val ignores --limit: it would keep only the earliest stages.
-    let load = |files: &[PathBuf]| -> std::io::Result<Vec<Example>> {
-        let mut v = Vec::new();
-        for f in files {
-            load_examples_filtered_into(f, &mut v, None, &filter, &policy)?;
-        }
-        Ok(v)
-    };
     let load_parts = |parts: &[(usize, usize, usize)]| -> std::io::Result<Vec<Example>> {
         let mut v = Vec::new();
         for &(i, start, len) in parts {
@@ -562,7 +507,14 @@ fn main() -> ExitCode {
         Err(()) => return ExitCode::FAILURE,
     };
     let total: usize = counts.iter().sum();
-    let mut val = load(&val_files).unwrap_or_default();
+    // Val ignores --limit: it would keep only the earliest stages.
+    let mut val = Vec::new();
+    for f in &val_files {
+        if let Err(e) = load_examples_filtered_into(f, &mut val, None, &filter, &policy) {
+            eprintln!("failed to load val {}: {e}", f.display());
+            return ExitCode::FAILURE;
+        }
+    }
     let val_cap = val_cap.unwrap_or(400_000);
     if val.len() > val_cap {
         let step = val.len() / val_cap;
@@ -584,10 +536,6 @@ fn main() -> ExitCode {
     }
     if resume.is_some() && init.is_some() {
         eprintln!("--resume and --init both restore weights; pass one");
-        return ExitCode::FAILURE;
-    }
-    if resume.is_some() && !adam {
-        eprintln!("--resume restores Adam moments, so it needs --adam");
         return ExitCode::FAILURE;
     }
     let mut nn = Nnue::new(patterns);
@@ -614,19 +562,13 @@ fn main() -> ExitCode {
     let mut mb_step_done: u64 = 0;
     let base_lr = lr;
     let mut mb_total_steps: u64 = 0;
-    let mut adam_state = adam.then(|| {
-        println!(
-            "adam: moments {} MB",
-            (nn.ft_len() + STAGE_COUNT * kuroobi::nnue::H) * 2 * 4 / 1_000_000
-        );
-        let mut st = AdamState::new(&nn);
-        st.wd = wd;
-        if lookahead {
-            st.set_lookahead(LOOKAHEAD_K, 0.5);
-            println!("adam: lookahead k={LOOKAHEAD_K} alpha=0.5");
-        }
-        st
-    });
+    println!("adam: moments {} MB", nn.table_len() * 2 * 4 / 1_000_000);
+    let mut adam_state = AdamState::new(&nn);
+    adam_state.wd = wd;
+    if lookahead {
+        adam_state.set_lookahead(LOOKAHEAD_K, 0.5);
+        println!("adam: lookahead k={LOOKAHEAD_K} alpha=0.5");
+    }
 
     #[cfg(not(feature = "gpu"))]
     if gpu {
@@ -646,11 +588,11 @@ fn main() -> ExitCode {
     let mut best = if val.is_empty() {
         f64::INFINITY
     } else {
-        select_score(&select_by, &pooled(&val_by_stage(&mut nn, &val)))
+        pooled(&val_by_stage(&mut nn, &val)).err.score(select_by)
     };
     let mut best_train = f64::INFINITY;
     if best.is_finite() {
-        report_start_val(&mut nn, &val, &select_by, val_by_stage_report);
+        report_start_val(&mut nn, &val, select_by, val_by_stage_report);
     }
     let mut sched = Sched {
         plateau_lr: lr,
@@ -667,10 +609,7 @@ fn main() -> ExitCode {
         Err(()) => return ExitCode::FAILURE,
     }
     if let Some(path) = &resume {
-        let ad = adam_state
-            .as_mut()
-            .expect("--resume without --adam was rejected above");
-        let Ok(h) = apply_resume(path, &mut nn, ad, &mut sched, &rng_state) else {
+        let Ok(h) = apply_resume(path, &mut nn, &mut adam_state, &mut sched, &rng_state) else {
             return ExitCode::FAILURE;
         };
         mb_step = h.mb_step;
@@ -695,15 +634,12 @@ fn main() -> ExitCode {
     } = sched;
     #[cfg(feature = "gpu")]
     let mut gpu_trainer = gpu.then(|| {
-        let ad = adam_state
-            .as_ref()
-            .expect("--gpu requires --adam --minibatch N");
         let la = if lookahead {
             (LOOKAHEAD_K, 0.5)
         } else {
             (0, 0.0)
         };
-        let mut g = kuroobi::nnue::gpu::GpuTrainer::new(&nn, minibatch, ad, la);
+        let mut g = kuroobi::nnue::gpu::GpuTrainer::new(&nn, minibatch, &adam_state, la);
         g.set_heads_only(train_stages.is_some());
         g
     });
@@ -765,40 +701,27 @@ fn main() -> ExitCode {
                     t_shuf += t_s.elapsed().as_secs_f64();
                 }
                 rows += examples.len();
-                sq += {
-                    let ad = adam_state
-                        .as_mut()
-                        .expect("--minibatch requires --adam (moments)");
-                    let entry_t = virtual_done as f32 / epochs as f32;
-                    let mut lr_fn = || {
-                        let lr = if cosine {
-                            let t = if mb_total_steps == u64::MAX {
-                                entry_t
-                            } else {
-                                mb_step as f32 / mb_total_steps.max(1) as f32
-                            };
-                            const ETA_MIN: f32 = 1e-8;
-                            ETA_MIN + (base_lr - ETA_MIN) * cosine_factor(t.min(1.0))
+                let entry_t = virtual_done as f32 / epochs as f32;
+                let mut lr_fn = || {
+                    let lr = if cosine {
+                        let t = if mb_total_steps == u64::MAX {
+                            entry_t
                         } else {
-                            cur_lr
+                            mb_step as f32 / mb_total_steps.max(1) as f32
                         };
-                        mb_step += 1;
-                        lr
-                    };
-                    #[cfg(feature = "gpu")]
-                    if let Some(g) = gpu_trainer.as_mut() {
-                        let sq = g.train_shard(&nn, &examples, threads, &mut lr_fn, wd, sym);
-                        if si + 1 == plan.len() {
-                            match adam_state.as_mut().filter(|_| want_ckpt) {
-                                Some(ad) => g.download_state(&mut nn, ad),
-                                None => g.download(&mut nn),
-                            }
-                        }
-                        sq
+                        const ETA_MIN: f32 = 1e-8;
+                        ETA_MIN + (base_lr - ETA_MIN) * cosine_factor(t.min(1.0))
                     } else {
+                        cur_lr
+                    };
+                    mb_step += 1;
+                    lr
+                };
+                macro_rules! cpu_pass {
+                    () => {
                         train_pass_minibatch(
                             &mut nn,
-                            ad,
+                            &mut adam_state,
                             &mut sinks,
                             &examples,
                             threads,
@@ -808,21 +731,26 @@ fn main() -> ExitCode {
                             sym,
                             train_stages.is_some(),
                         )
+                    };
+                }
+                #[cfg(feature = "gpu")]
+                let pass = match gpu_trainer.as_mut() {
+                    Some(g) => {
+                        let sq = g.train_shard(&nn, &examples, threads, &mut lr_fn, wd, sym);
+                        if si + 1 == plan.len() {
+                            if want_ckpt {
+                                g.download_state(&mut nn, &mut adam_state);
+                            } else {
+                                g.download(&mut nn);
+                            }
+                        }
+                        sq
                     }
-                    #[cfg(not(feature = "gpu"))]
-                    train_pass_minibatch(
-                        &mut nn,
-                        ad,
-                        &mut sinks,
-                        &examples,
-                        threads,
-                        minibatch,
-                        &mut lr_fn,
-                        wd,
-                        sym,
-                        train_stages.is_some(),
-                    )
+                    None => cpu_pass!(),
                 };
+                #[cfg(not(feature = "gpu"))]
+                let pass = cpu_pass!();
+                sq += pass;
             }
             sq_total += sq;
             seen += rows;
@@ -850,7 +778,7 @@ fn main() -> ExitCode {
         let (vm, is_best) = report_epoch(
             &mut nn,
             &val,
-            &select_by,
+            select_by,
             val_by_stage_report,
             EpochLine {
                 epoch,
@@ -863,8 +791,8 @@ fn main() -> ExitCode {
             },
             tprof.then_some((t_load, t_shuf, t_pass)),
         );
-        if let Some(ad) = adam_state.as_mut().filter(|_| !gpu) {
-            nn.settle_adam(ad, cur_lr, wd);
+        if !gpu {
+            nn.settle_adam(&mut adam_state, cur_lr, wd);
         }
         let h = CkptHeader {
             epoch,
@@ -876,16 +804,7 @@ fn main() -> ExitCode {
             best_train: if is_best { train_mse } else { best_train },
             rng: rng_state.get(),
         };
-        if save_epoch(
-            &nn,
-            &out,
-            checkpoint.as_deref(),
-            adam_state.as_ref(),
-            &h,
-            is_best,
-        )
-        .is_err()
-        {
+        if save_epoch(&nn, &out, checkpoint.as_deref(), &adam_state, &h, is_best).is_err() {
             return ExitCode::FAILURE;
         }
         if is_best {
@@ -936,7 +855,7 @@ fn beats(vm: f64, train: f64, best: f64, best_train: f64) -> bool {
 fn report_epoch(
     nn: &mut Nnue,
     val: &[Example],
-    select_by: &str,
+    select_by: SelectBy,
     table: bool,
     line: EpochLine,
     prof: Option<(f64, f64, f64)>,
@@ -950,9 +869,9 @@ fn report_epoch(
         );
     }
     let tot = pooled(&acc);
-    let (vmse, vmae, vbias, vsd) = stats_of(&tot);
-    let vgrid = tot[4] / tot[0].max(1.0);
-    let vm = select_score(select_by, &tot);
+    let (vmse, vmae, vbias, vsd) = tot.err.stats();
+    let vgrid = tot.grid / tot.err.n.max(1.0);
+    let vm = tot.err.score(select_by);
     let is_best = beats(vm, line.train_mse, line.best, line.best_train);
     let marker = if is_best { " *best" } else { "" };
     let EpochLine {
@@ -984,7 +903,7 @@ struct Sched {
 fn size_files(files: &[PathBuf], limit: Option<usize>) -> Result<Vec<usize>, ()> {
     let mut c = Vec::with_capacity(files.len());
     for f in files {
-        match count_examples_binary(f) {
+        match record::count(f) {
             Ok(n) => c.push(limit.map_or(n, |l| n.min(l))),
             Err(e) => {
                 eprintln!("cannot size {}: {e}", f.display());
@@ -995,9 +914,9 @@ fn size_files(files: &[PathBuf], limit: Option<usize>) -> Result<Vec<usize>, ()>
     Ok(c)
 }
 
-fn report_start_val(nn: &mut Nnue, val: &[Example], select_by: &str, table: bool) {
+fn report_start_val(nn: &mut Nnue, val: &[Example], select_by: SelectBy, table: bool) {
     let acc = val_by_stage(nn, val);
-    let (m, a, b, sd) = stats_of(&pooled(&acc));
+    let (m, a, b, sd) = pooled(&acc).err.stats();
     println!(
         "starting val mse {m:.4} mae {a:.4} bias {b:+.4} spread {sd:.4}  \
          (selecting on {select_by})"
@@ -1085,7 +1004,7 @@ fn save_epoch(
     nn: &Nnue,
     out: &Path,
     checkpoint: Option<&Path>,
-    ad: Option<&AdamState>,
+    ad: &AdamState,
     h: &CkptHeader,
     is_best: bool,
 ) -> Result<(), ()> {
@@ -1093,7 +1012,7 @@ fn save_epoch(
         eprintln!("save failed: {e}");
         return Err(());
     }
-    if let (Some(path), Some(ad)) = (checkpoint, ad) {
+    if let Some(path) = checkpoint {
         if let Err(e) = write_checkpoint(path, nn, ad, h) {
             eprintln!("checkpoint failed: {e}");
             return Err(());

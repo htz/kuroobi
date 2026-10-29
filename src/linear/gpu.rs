@@ -636,12 +636,12 @@ mod tests {
     fn flat_layout_round_trips() {
         use crate::pattern::LINEAR_PATTERNS;
         let mut ev = Linear::new(LINEAR_PATTERNS);
-        let mut flat = ev.flat_all();
+        let mut flat = ev.flat_stages(0, STAGE_COUNT - 1);
         for (i, w) in flat.iter_mut().enumerate() {
             *w = (i % 997) as f32;
         }
-        ev.set_flat_all(&flat);
-        assert_eq!(ev.flat_all(), flat);
+        ev.set_flat_stages(0, STAGE_COUNT - 1, &flat);
+        assert_eq!(ev.flat_stages(0, STAGE_COUNT - 1), flat);
     }
 
     /// A board's cells under the flat numbering must sum to what `eval` returns; the GPU forward is exactly that sum.
@@ -649,13 +649,13 @@ mod tests {
     fn flat_cells_sum_to_the_evaluation() {
         use crate::pattern::LINEAR_PATTERNS;
         let mut ev = Linear::new(LINEAR_PATTERNS);
-        let mut flat = ev.flat_all();
+        let mut flat = ev.flat_stages(0, STAGE_COUNT - 1);
         let mut k = 0u32;
         for w in flat.iter_mut() {
             k = k.wrapping_mul(1664525).wrapping_add(1013904223);
             *w = (k >> 20) as f32 / 4096.0 - 0.5;
         }
-        ev.set_flat_all(&flat);
+        ev.set_flat_stages(0, STAGE_COUNT - 1, &flat);
 
         let mut b = Board::new();
         for mv in [19u32, 18, 17, 26] {

@@ -1,4 +1,4 @@
-//! Board position: A1=0, B1=1, ..., H8=63.
+//! Board square, file-major: A1=0, A2=1, ..., B1=8, ..., H8=63.
 
 use std::fmt;
 
@@ -6,11 +6,9 @@ use std::fmt;
 pub struct Position(pub u8);
 
 impl Position {
-    pub const MAX: u8 = 63;
-
     #[inline]
     pub const fn from_index(i: u32) -> Option<Position> {
-        if i <= Self::MAX as u32 {
+        if i < 64 {
             Some(Position(i as u8))
         } else {
             None
@@ -57,10 +55,7 @@ impl Position {
         }
         let file = bytes[0].wrapping_sub(b'a');
         let rank = bytes[1].wrapping_sub(b'1');
-        match Position::from_file_rank(file, rank) {
-            Some(pos) => Ok(pos),
-            None => Err(format!("invalid KIFU: {}", s)),
-        }
+        Position::from_file_rank(file, rank).ok_or_else(|| format!("invalid KIFU: {s}"))
     }
 }
 

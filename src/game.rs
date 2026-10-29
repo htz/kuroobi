@@ -6,7 +6,7 @@ use crate::position::Position;
 
 #[derive(Debug, Clone)]
 pub struct MoveRecord {
-    pub pos: Option<Position>, // None for pass
+    pub pos: Option<Position>,
     pub flipped: u64,
 }
 
@@ -35,22 +35,12 @@ impl Reversi {
     }
 
     pub fn make_move(&mut self, pos: Position) -> Result<(), MoveError> {
-        let pos_bit = pos.to_bit();
-        if (self.board.black | self.board.white) & pos_bit != 0 {
-            return Err(MoveError::Occupied);
-        }
-        let flipped =
-            crate::bitboard::flippable(self.board.player_bb(), self.board.opponent_bb(), pos_bit);
-        if flipped == 0 {
-            return Err(MoveError::NotPlayable);
-        }
-
+        let flipped = self.board.make_move(pos)?;
         self.history.push(MoveRecord {
             pos: Some(pos),
             flipped,
         });
         self.redo_stack.clear();
-        self.board.apply_flips(pos, flipped);
         Ok(())
     }
 
@@ -145,7 +135,7 @@ impl Reversi {
             let s: String = chunk.iter().collect();
             let pos = Position::from_kifu(&s).map_err(|e| format!("KIFU parse error: {}", e))?;
 
-            if !self.board.check(pos) && !self.board.check_all() {
+            if self.board.movable() == 0 {
                 self.pass();
             }
             self.make_move(pos)
@@ -205,7 +195,7 @@ mod tests {
         let result = g.make_move(Position(28));
         assert_eq!(result, Err(MoveError::Occupied));
 
-        let result = g.make_move(Position(0)); // A1 is far from pieces
+        let result = g.make_move(Position(0));
         assert_eq!(result, Err(MoveError::NotPlayable));
     }
 

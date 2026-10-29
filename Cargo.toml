@@ -23,12 +23,6 @@ gpu = ["dep:wgpu", "dep:bytemuck"]
 # instead of compiling their defaults in. Sweeps need this; the default
 # build folds the knobs to constants so dead regimes cost nothing.
 tunable = []
-# Count move-ordering and ETC probes as nodes, the wider convention, so node
-# totals are comparable with engines that use it. Costs a few percent of
-# search time.
-node-accounting = []
-# Sample where search time goes, by empty count and phase. Measurement only.
-layer-profile = []
 # Force the scalar NNUE accumulator path even on aarch64 (to measure the
 # NEON speedup). Off by default; NEON is used automatically on aarch64.
 nnue-scalar = []

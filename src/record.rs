@@ -1,7 +1,7 @@
 //! The training record: one position with everything the game that produced it can say about it.
 
 use std::fs::File;
-use std::io::{self, BufWriter, Read, Seek, SeekFrom, Write};
+use std::io::{self, Read, Seek, SeekFrom};
 use std::path::Path;
 
 use crate::bitboard;
@@ -26,7 +26,6 @@ pub struct Record {
 
 impl Record {
     pub fn from_bytes(b: &[u8; SIZE]) -> Record {
-        let sq = b[23];
         Record {
             mover: bitboard::transpose(u64::from_le_bytes(b[0..8].try_into().unwrap())),
             opponent: bitboard::transpose(u64::from_le_bytes(b[8..16].try_into().unwrap())),
@@ -34,17 +33,14 @@ impl Record {
             game_score: b[20] as i8,
             ply: b[21],
             random: b[22] != 0,
-            sq: if sq < 64 {
-                (sq % 8) * 8 + sq / 8
-            } else {
-                NO_SQUARE
-            },
+            sq: transpose_sq(b[23]),
             black_to_move: b[24] == 0,
             game_id: u16::from_le_bytes([b[25], b[26]]),
         }
     }
 
-    pub fn to_bytes(&self) -> [u8; SIZE] {
+    #[cfg(test)]
+    pub(crate) fn to_bytes(self) -> [u8; SIZE] {
         let mut b = [0u8; SIZE];
         b[0..8].copy_from_slice(&bitboard::transpose(self.mover).to_le_bytes());
         b[8..16].copy_from_slice(&bitboard::transpose(self.opponent).to_le_bytes());
@@ -52,11 +48,7 @@ impl Record {
         b[20] = self.game_score as u8;
         b[21] = self.ply;
         b[22] = u8::from(self.random);
-        b[23] = if self.sq < 64 {
-            (self.sq % 8) * 8 + self.sq / 8
-        } else {
-            NO_SQUARE
-        };
+        b[23] = transpose_sq(self.sq);
         b[24] = u8::from(!self.black_to_move);
         b[25..27].copy_from_slice(&self.game_id.to_le_bytes());
         b
@@ -79,13 +71,14 @@ impl Record {
             score: policy.value(self),
         }
     }
+}
 
-    pub fn example(&self) -> Example {
-        Example {
-            black: self.mover,
-            white: self.opponent,
-            score: self.teacher(),
-        }
+/// Squares are rank-major on disk.
+fn transpose_sq(sq: u8) -> u8 {
+    if sq < 64 {
+        (sq % 8) * 8 + sq / 8
+    } else {
+        NO_SQUARE
     }
 }
 
@@ -239,24 +232,10 @@ pub fn for_each_range(
     Ok(())
 }
 
-pub struct Writer {
-    w: BufWriter<File>,
-}
-
-impl Writer {
-    pub fn create(path: &Path) -> io::Result<Writer> {
-        Ok(Writer {
-            w: BufWriter::new(File::create(path)?),
-        })
-    }
-
-    pub fn write(&mut self, r: &Record) -> io::Result<()> {
-        self.w.write_all(&r.to_bytes())
-    }
-
-    pub fn finish(mut self) -> io::Result<()> {
-        self.w.flush()
-    }
+#[cfg(test)]
+pub(crate) fn write_all(path: &Path, records: &[Record]) -> io::Result<()> {
+    let bytes: Vec<u8> = records.iter().flat_map(|r| r.to_bytes()).collect();
+    std::fs::write(path, bytes)
 }
 
 #[cfg(test)]
@@ -355,16 +334,10 @@ mod tests {
         let dir = std::env::temp_dir().join(format!("kuroobi-record-{}", std::process::id()));
         std::fs::create_dir_all(&dir).unwrap();
         let path = dir.join("t.data");
-        let mut w = Writer::create(&path).unwrap();
-        w.write(&sample()).unwrap();
-        w.write(&Record { ply: 0, ..sample() }).unwrap();
-        w.finish().unwrap();
-        let mut f = std::fs::OpenOptions::new()
-            .append(true)
-            .open(&path)
-            .unwrap();
-        f.write_all(&[1, 2, 3]).unwrap();
-        drop(f);
+        write_all(&path, &[sample(), Record { ply: 0, ..sample() }]).unwrap();
+        let mut bytes = std::fs::read(&path).unwrap();
+        bytes.extend([1, 2, 3]);
+        std::fs::write(&path, bytes).unwrap();
         assert_eq!(count(&path).unwrap(), 2);
         let mut v = Vec::new();
         for_each(&path, |r| {
@@ -383,16 +356,14 @@ mod tests {
         let dir = std::env::temp_dir().join(format!("kuroobi-range-{}", std::process::id()));
         std::fs::create_dir_all(&dir).unwrap();
         let path = dir.join("t.data");
-        let mut w = Writer::create(&path).unwrap();
-        for ply in 0..10_000u32 {
-            w.write(&Record {
+        let records: Vec<Record> = (0..10_000u32)
+            .map(|ply| Record {
                 ply: (ply % 60) as u8,
                 game_id: ply as u16,
                 ..sample()
             })
-            .unwrap();
-        }
-        w.finish().unwrap();
+            .collect();
+        write_all(&path, &records).unwrap();
         let ids = |start: usize, len: usize| {
             let mut v = Vec::new();
             for_each_range(&path, start, len, |r| {

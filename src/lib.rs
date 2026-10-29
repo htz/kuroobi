@@ -1,4 +1,4 @@
-//! Ultra-fast Reversi board processing using 2x uint64 bitboards.
+//! A Reversi engine on 2×u64 bitboards.
 //!
 //! ```rust
 //! use kuroobi::{Board, Reversi, Color, Position};
@@ -42,15 +42,10 @@ pub mod wthor;
 pub mod zobrist;
 
 pub use board::Board;
-pub use board::GameError;
-pub use board::MoveError;
-pub use board::ParseError;
 pub use board::BOARD_INIT_STRING;
 pub use color::Color;
 pub use game::Reversi;
-pub use linear::{AdamOptimizer, Linear, Optimizer, SgdOptimizer, STAGE_COUNT};
-pub use pattern::{Pattern, LINEAR_PATTERNS, NNUE_PATTERNS};
-pub use pattern_index::{PatternIndexer, PatternIndices};
+pub use linear::{Linear, STAGE_COUNT};
+pub use pattern::LINEAR_PATTERNS;
 pub use position::Position;
-pub use solver::{EndSolverMode, EndSolverResult, Solver};
-pub use trainer::{Example, Trainer};
+pub use solver::{EndSolverMode, Solver};

@@ -10,7 +10,17 @@ use crate::{Board, Position};
 
 const PVS_EPS: f32 = 0.01;
 
+#[inline(always)]
+fn is_null_window(alpha: f32, beta: f32) -> bool {
+    beta - alpha <= PVS_EPS * 1.5
+}
+
 type Kid = (Position, u64, i32);
+
+/// A finished game, scaled far beyond any evaluation.
+fn final_value(b: &Board) -> f32 {
+    crate::solver::final_score(b) as f32 * 1000.0
+}
 
 #[inline]
 fn order_key(x: f32) -> i32 {
@@ -21,7 +31,7 @@ fn order_key(x: f32) -> i32 {
 const MAX_KIDS: usize = 34;
 const NO_SLOT: u8 = u8::MAX;
 
-knob!(fn eval_order_depth() -> u32 = "EVAL_ORDER_DEPTH" or 3);
+const EVAL_ORDER_DEPTH: u32 = 3;
 
 const ABORTED: f32 = f32::NEG_INFINITY;
 
@@ -30,22 +40,13 @@ const MPC_RELAX_STEP: f32 = 1.18;
 /// 2 discs: on 7 contested replays depth 31.00 against 30.71 with it off, same moves; 1 disc bought none.
 const DECIDED: f32 = 2.0;
 
-knob!(fn decided() -> f32 = "DECIDED" or DECIDED);
-
-fn decided_margin() -> Option<f32> {
-    let v = decided();
-    (v.is_finite() && v > 0.0).then_some(v)
-}
-
 /// On 8 threads 0.3 left too few iterations to check: 0.1 stopped 9 of 20 live positions at 30 s (0.3: 3), same moves.
 const DECIDED_AT: f32 = 0.1;
 
 const DECIDED_DEPTH: u32 = 28;
 
-knob!(fn decided_at() -> f32 = "DECIDED_AT" or DECIDED_AT);
-
-// Estimating it from the observed growth changed nothing (same nodes at 4 / 8 / 16 s).
-knob!(fn next_pass_factor() -> f32 = "NEXT_PASS" or 2.0);
+/// Estimating it from the observed growth alone changed nothing (same nodes at 4 / 8 / 16 s).
+const NEXT_PASS_FACTOR: f32 = 2.0;
 
 /// Live 5-minute games tore down the unfinished depth on almost every midgame move at a fixed 2x.
 const NEXT_PASS_MAX_GROWTH: f32 = 6.0;
@@ -57,19 +58,17 @@ fn next_pass_eta(last: std::time::Duration, prev: std::time::Duration) -> std::t
     } else {
         last.as_secs_f32() / prev.as_secs_f32()
     };
-    last.mul_f32(growth.min(NEXT_PASS_MAX_GROWTH).max(next_pass_factor()))
+    last.mul_f32(growth.clamp(NEXT_PASS_FACTOR, NEXT_PASS_MAX_GROWTH))
 }
 
 knob!(fn ybwc_min_depth() -> u32 = "YBWC_MIN" or 6);
 const ABORT_CHECK_INTERVAL: u64 = 512;
 
-const MPC_MIN_DEPTH: u32 = 4;
+pub const MPC_MIN_DEPTH: u32 = 4;
 
 const MPC_T: f32 = 1.1;
 
 knob!(pub fn mpc_t() -> f32 = "MPC_T" or MPC_T);
-
-knob!(pub fn mpc_min_depth() -> u32 = "MPC_MIN_DEPTH" or MPC_MIN_DEPTH);
 
 const MPC_D0_OFFSET: f32 = 4.0;
 
@@ -381,24 +380,15 @@ impl AbortChain {
     }
 }
 
+#[derive(Default)]
 struct Slot {
     done: std::sync::atomic::AtomicBool,
-    bits: std::sync::atomic::AtomicU32,
     nodes: std::sync::atomic::AtomicU64,
 }
 
 impl Slot {
-    fn new() -> Slot {
-        use std::sync::atomic::{AtomicBool, AtomicU32, AtomicU64};
-        Slot {
-            done: AtomicBool::new(false),
-            bits: AtomicU32::new(0),
-            nodes: AtomicU64::new(0),
-        }
-    }
-    fn set(&self, v: f32, nodes: u64) {
+    fn finish(&self, nodes: u64) {
         use std::sync::atomic::Ordering;
-        self.bits.store(v.to_bits(), Ordering::Relaxed);
         self.nodes.store(nodes, Ordering::Relaxed);
         self.done.store(true, Ordering::Release);
     }
@@ -665,40 +655,36 @@ impl Pool {
     }
 }
 
-pub struct Deadline {
+/// Trips `stop` once `at` passes; storing `true` in the returned flag ends the watch.
+pub fn watch_deadline(
     at: std::time::Instant,
+    stop: StopHandle,
+) -> std::sync::Arc<std::sync::atomic::AtomicBool> {
+    let done = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+    let watching = done.clone();
+    std::thread::spawn(move || {
+        while !watching.load(std::sync::atomic::Ordering::Relaxed) {
+            let now = std::time::Instant::now();
+            if now >= at {
+                stop.stop();
+                return;
+            }
+            std::thread::sleep((at - now).min(std::time::Duration::from_millis(20)));
+        }
+    });
+    done
 }
 
-impl Deadline {
-    pub fn new(at: std::time::Instant) -> std::sync::Arc<Deadline> {
-        std::sync::Arc::new(Deadline { at })
-    }
-
-    pub fn get(&self) -> std::time::Instant {
-        self.at
-    }
-
-    /// Trips `stop` once the deadline passes; storing `true` in the returned flag ends the watch.
-    pub fn watch(
-        self: &std::sync::Arc<Deadline>,
-        stop: StopHandle,
-    ) -> std::sync::Arc<std::sync::atomic::AtomicBool> {
-        let dl = self.clone();
-        let done = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
-        let d2 = done.clone();
-        std::thread::spawn(move || {
-            while !d2.load(std::sync::atomic::Ordering::Relaxed) {
-                let now = std::time::Instant::now();
-                let at = dl.get();
-                if now >= at {
-                    stop.stop();
-                    return;
-                }
-                std::thread::sleep((at - now).min(std::time::Duration::from_millis(20)));
-            }
-        });
-        done
-    }
+fn out_of_time(
+    deadline: Option<std::time::Instant>,
+    reached: u32,
+    last_pass: std::time::Duration,
+    prev_pass: std::time::Duration,
+) -> bool {
+    deadline.is_some_and(|dl| {
+        let now = std::time::Instant::now();
+        now >= dl || (reached > 0 && now + next_pass_eta(last_pass, prev_pass) >= dl)
+    })
 }
 
 pub struct NnueSearch {
@@ -765,25 +751,15 @@ impl NnueSearch {
 
     fn worker(&self) -> NnueSearch {
         NnueSearch {
-            nn: self.nn.clone(),
-            tt: self.tt.clone(),
-            threads: 1,
-            nodes: 0,
             mpc: self.mpc,
-            probcut_level: 0,
-            expect_all: false,
-            dev: 0,
             abort: self.abort.clone(),
             stop: self.stop.clone(),
-            root_move: None,
-            root_hash: 0,
-            abort_countdown: ABORT_CHECK_INTERVAL,
             done: self.done.clone(),
             my_gen: self.my_gen,
             pool: self.pool,
             mpc_relax: self.mpc_relax,
             split_min: self.split_min,
-            progress: None,
+            ..NnueSearch::new(self.nn.clone(), self.tt.clone())
         }
     }
 
@@ -836,11 +812,6 @@ impl NnueSearch {
         self.tt.clear();
     }
 
-    pub fn best_move_valued(&mut self, b: &Board, depth: u32) -> (Option<Position>, f32) {
-        let (p, v, _) = self.best_move_deadline(b, depth, None);
-        (p, v)
-    }
-
     pub fn best_move_deadline(
         &mut self,
         b: &Board,
@@ -850,22 +821,19 @@ impl NnueSearch {
         if b.movable() == 0 {
             return (None, f32::NAN, 0);
         }
-        let deadline = deadline.map(Deadline::new);
-        let watcher = deadline
-            .as_ref()
-            .and_then(|dl| Some(dl.watch(self.stop.clone()?)));
-        let r = self.best_move_valued_inner(b, depth, deadline.as_ref());
+        let watcher = deadline.and_then(|dl| Some(watch_deadline(dl, self.stop.clone()?)));
+        let r = self.iterate(b, depth, deadline);
         if let Some(d) = watcher {
             d.store(true, std::sync::atomic::Ordering::Relaxed);
         }
         r
     }
 
-    fn best_move_valued_inner(
+    fn iterate(
         &mut self,
         b: &Board,
         depth: u32,
-        deadline: Option<&std::sync::Arc<Deadline>>,
+        deadline: Option<std::time::Instant>,
     ) -> (Option<Position>, f32, u32) {
         if self.threads > 1 && depth >= 2 {
             return self.lazy_smp(b, depth, deadline);
@@ -878,13 +846,10 @@ impl NnueSearch {
         let mut reached = 0;
         let mut last_pass = std::time::Duration::ZERO;
         let mut prev_pass = std::time::Duration::ZERO;
-        let clock = deadline.map(|dl| (std::time::Instant::now(), dl.get()));
+        let clock = deadline.map(|dl| (std::time::Instant::now(), dl));
         for d in 1..=depth {
-            if let Some(dl) = deadline.map(|dl| dl.get()) {
-                let now = std::time::Instant::now();
-                if now >= dl || (reached > 0 && now + next_pass_eta(last_pass, prev_pass) >= dl) {
-                    break;
-                }
+            if out_of_time(deadline, reached, last_pass, prev_pass) {
+                break;
             }
             let t0 = std::time::Instant::now();
             self.root_hash = zobrist::board_hash(b.player_bb(), b.opponent_bb());
@@ -921,11 +886,11 @@ impl NnueSearch {
         value: f32,
         clock: Option<(std::time::Instant, std::time::Instant)>,
     ) -> bool {
-        let (Some(m), Some((start, soft))) = (decided_margin(), clock) else {
+        let Some((start, soft)) = clock else {
             return false;
         };
         let budget = soft.saturating_duration_since(start).as_secs_f32();
-        if start.elapsed().as_secs_f32() < budget * decided_at() {
+        if start.elapsed().as_secs_f32() < budget * DECIDED_AT {
             return false;
         }
         // Live early stops at depth 19 and 25 each lost 2 discs; those at 28-39 lost none.
@@ -933,7 +898,7 @@ impl NnueSearch {
         // On live positions the best move alternated every depth from 24 to 29, so two back agrees too.
         !shallow
             && (best == last_best || best == two_ago)
-            && self.others_behind(b, acc, best, depth, value, m) == Some(true)
+            && self.others_behind(b, acc, best, depth, value, DECIDED) == Some(true)
     }
 
     /// `None` when torn down: no verdict either way.
@@ -995,10 +960,10 @@ impl NnueSearch {
         &mut self,
         b: &Board,
         depth: u32,
-        deadline: Option<&std::sync::Arc<Deadline>>,
+        deadline: Option<std::time::Instant>,
     ) -> (Option<Position>, f32, u32) {
-        use std::sync::atomic::{AtomicU64, Ordering};
-        let nodes = AtomicU64::new(0);
+        use std::sync::atomic::Ordering;
+        let mut nodes = 0;
         let mut acc = self.nn.indices(b.black, b.white);
         let mut value = f32::NAN;
         let mut best = None;
@@ -1007,86 +972,80 @@ impl NnueSearch {
         let mut reached = 0;
         let mut last_pass = std::time::Duration::ZERO;
         let mut prev_pass = std::time::Duration::ZERO;
-        let clock = deadline.map(|dl| (std::time::Instant::now(), dl.get()));
+        let clock = deadline.map(|dl| (std::time::Instant::now(), dl));
 
         let workers = self.threads - 1;
         let pool = self.shared_pool(workers);
         // Two threads lose to the extra split points one ply down; three and more gain.
         self.split_min = ybwc_min_depth() - u32::from(self.threads >= 3);
 
-        {
-            for main_depth in 1..=depth {
-                if let Some(dl) = deadline.map(|dl| dl.get()) {
-                    let now = std::time::Instant::now();
-                    if now >= dl || (reached > 0 && now + next_pass_eta(last_pass, prev_pass) >= dl)
-                    {
-                        break;
-                    }
-                }
-                let t0 = std::time::Instant::now();
-                let lazy = main_depth >= smp_min_depth() && main_depth <= smp_max_depth();
-                let gen = std::sync::Arc::new(std::sync::atomic::AtomicU32::new(main_depth));
-                let mut slots = Vec::new();
-                let root_task = |mut w: NnueSearch, d: u32| {
-                    let slot = std::sync::Arc::new(Slot::new());
-                    w.done = Some(gen.clone());
-                    w.my_gen = main_depth;
-                    let task_slot = slot.clone();
-                    let root = *b;
-                    pool.unwrap().push(move || {
-                        let mut wacc = w.nn.indices(root.black, root.white);
-                        w.negamax(&root, &mut wacc, d, f32::NEG_INFINITY, f32::INFINITY);
-                        task_slot.set(0.0, w.nodes);
-                    });
-                    slot
-                };
-                if pool.is_some() && lazy {
-                    for idx in 0..workers {
-                        let mut w = self.worker();
-                        let ahead = (idx as u32 + 1).trailing_zeros() * smp_spread();
-                        w.mpc_relax = (idx as u32 / 2).min(smp_sharpen_max());
-                        slots.push(root_task(w, (main_depth + ahead).min(depth)));
-                    }
-                } else {
-                    // One worker starts the next depth and splits it too: 8 threads 29.9 -> 24.9 s; two threads lose, 62.7 -> 64.6 s.
-                    if pool.is_some() && workers >= 2 && main_depth < depth {
-                        let mut w = self.worker();
-                        w.pool = pool;
-                        slots.push(root_task(w, main_depth + 1));
-                    }
-                    self.pool = pool;
-                }
-
-                self.root_hash = zobrist::board_hash(b.player_bb(), b.opponent_bb());
-                self.root_move = None;
-                let v = self.negamax(b, &mut acc, main_depth, f32::NEG_INFINITY, f32::INFINITY);
-                self.pool = None;
-
-                gen.store(u32::MAX, Ordering::Relaxed);
-                for slot in slots {
-                    pool.unwrap().wait(&slot);
-                    nodes.fetch_add(slot.nodes.load(Ordering::Relaxed), Ordering::Relaxed);
-                }
-
-                if v == ABORTED || self.torn_down() {
-                    break;
-                }
-                prev_pass = last_pass;
-                last_pass = t0.elapsed();
-                value = v;
-                best = self.root_move.or_else(|| self.root_best(b, &mut acc));
-                reached = main_depth;
-                if let Some(p) = self.progress.as_ref() {
-                    p.reached(main_depth, best, v);
-                }
-                if self.settle(b, &acc, best, last_best, two_ago, main_depth, value, clock) {
-                    break;
-                }
-                two_ago = last_best;
-                last_best = best;
+        for main_depth in 1..=depth {
+            if out_of_time(deadline, reached, last_pass, prev_pass) {
+                break;
             }
+            let t0 = std::time::Instant::now();
+            let lazy = main_depth >= smp_min_depth() && main_depth <= smp_max_depth();
+            let gen = std::sync::Arc::new(std::sync::atomic::AtomicU32::new(main_depth));
+            let mut slots = Vec::new();
+            let root_task = |mut w: NnueSearch, d: u32| {
+                let slot = std::sync::Arc::new(Slot::default());
+                w.done = Some(gen.clone());
+                w.my_gen = main_depth;
+                let task_slot = slot.clone();
+                let root = *b;
+                pool.unwrap().push(move || {
+                    let mut wacc = w.nn.indices(root.black, root.white);
+                    w.negamax(&root, &mut wacc, d, f32::NEG_INFINITY, f32::INFINITY);
+                    task_slot.finish(w.nodes);
+                });
+                slot
+            };
+            if pool.is_some() && lazy {
+                for idx in 0..workers {
+                    let mut w = self.worker();
+                    let ahead = (idx as u32 + 1).trailing_zeros() * smp_spread();
+                    w.mpc_relax = (idx as u32 / 2).min(smp_sharpen_max());
+                    slots.push(root_task(w, (main_depth + ahead).min(depth)));
+                }
+            } else {
+                // One worker starts the next depth and splits it too: 8 threads 29.9 -> 24.9 s; two threads lose, 62.7 -> 64.6 s.
+                if pool.is_some() && workers >= 2 && main_depth < depth {
+                    let mut w = self.worker();
+                    w.pool = pool;
+                    slots.push(root_task(w, main_depth + 1));
+                }
+                self.pool = pool;
+            }
+
+            self.root_hash = zobrist::board_hash(b.player_bb(), b.opponent_bb());
+            self.root_move = None;
+            let v = self.negamax(b, &mut acc, main_depth, f32::NEG_INFINITY, f32::INFINITY);
+            self.pool = None;
+
+            gen.store(u32::MAX, Ordering::Relaxed);
+            for slot in slots {
+                pool.unwrap().wait(&slot);
+                nodes += slot.nodes.load(Ordering::Relaxed);
+            }
+
+            if v == ABORTED || self.torn_down() {
+                break;
+            }
+            prev_pass = last_pass;
+            last_pass = t0.elapsed();
+            value = v;
+            best = self.root_move.or_else(|| self.root_best(b, &mut acc));
+            reached = main_depth;
+            if let Some(p) = self.progress.as_ref() {
+                p.reached(main_depth, best, v);
+            }
+            if self.settle(b, &acc, best, last_best, two_ago, main_depth, value, clock) {
+                break;
+            }
+            two_ago = last_best;
+            last_best = best;
         }
-        self.nodes += nodes.load(Ordering::Relaxed);
+        self.nodes += nodes;
         let out = best.or_else(|| self.root_best(b, &mut acc));
         (
             out,
@@ -1113,7 +1072,7 @@ impl NnueSearch {
         } else {
             (35.0 / 269.0, 17.0 / 269.0, 1.0)
         };
-        let eval_order = depth >= eval_order_depth();
+        let eval_order = depth >= EVAL_ORDER_DEPTH;
         let mut n = 0usize;
         let mut m = moves;
         while m != 0 {
@@ -1156,17 +1115,7 @@ impl NnueSearch {
             let mut nb = *b;
             nb.pass();
             if nb.movable() == 0 {
-                let p = b.player_bb().count_ones() as i32;
-                let o = b.opponent_bb().count_ones() as i32;
-                let e = 64 - p - o;
-                let diff = if p > o {
-                    p - o + e
-                } else if o > p {
-                    p - o - e
-                } else {
-                    0
-                };
-                return diff as f32 * 1000.0;
+                return final_value(b);
             }
             let raw = self.eval1_nws(&nb, acc, -alpha - PVS_EPS);
             return -raw;
@@ -1266,17 +1215,7 @@ impl NnueSearch {
         let mut nb = *b;
         nb.pass();
         if nb.movable() == 0 {
-            let p = b.player_bb().count_ones() as i32;
-            let o = b.opponent_bb().count_ones() as i32;
-            let e = 64 - p - o;
-            let diff = if p > o {
-                p - o + e
-            } else if o > p {
-                p - o - e
-            } else {
-                0
-            };
-            return diff as f32 * 1000.0;
+            return final_value(b);
         }
         if depth == 0 {
             return self.nn.eval_from_indices(acc, b);
@@ -1334,11 +1273,11 @@ impl NnueSearch {
         beta: f32,
     ) -> Option<f32> {
         if !(self.mpc
-            && depth >= mpc_min_depth()
+            && depth >= MPC_MIN_DEPTH
             && self.probcut_level < MPC_MAX_LEVEL
             && alpha.is_finite()
             && beta.is_finite()
-            && beta - alpha <= PVS_EPS * 1.5)
+            && is_null_window(alpha, beta))
         {
             return None;
         }
@@ -1426,7 +1365,7 @@ impl NnueSearch {
             return self.nn.eval_from_indices(acc, b);
         }
 
-        if depth == 1 && beta - alpha <= PVS_EPS * 1.5 {
+        if depth == 1 && is_null_window(alpha, beta) {
             return self.eval1_nws(b, acc, alpha);
         }
 
@@ -1448,7 +1387,7 @@ impl NnueSearch {
         let mut best_move = 64u8;
         let mut moves = moves;
 
-        let narrow = beta - alpha <= PVS_EPS * 1.5;
+        let narrow = is_null_window(alpha, beta);
         let kids_all = narrow && !all_node;
         let will_split = self.pool.is_some() && depth >= self.split_min;
         // Every move of an expected All node gets searched, so its siblings need not wait for the first.
@@ -1491,7 +1430,7 @@ impl NnueSearch {
             }
             pre_searched = true;
         }
-        let null_window = beta - alpha <= PVS_EPS * 1.5;
+        let null_window = is_null_window(alpha, beta);
 
         let mut kids: [Kid; MAX_KIDS] = [(Position(0), 0, 0); MAX_KIDS];
         let ordered = depth >= 2 && moves.count_ones() > 1;

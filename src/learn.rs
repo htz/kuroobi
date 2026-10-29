@@ -30,10 +30,9 @@ pub fn replay(start: Option<&str>, kifu: &str) -> Result<(Line, Board), String> 
     };
     let mut seq = Vec::new();
     let chars: Vec<char> = kifu.chars().collect();
-    let mut i = 0;
-    while i + 2 <= chars.len() {
-        let mv = Position::from_kifu(&chars[i..i + 2].iter().collect::<String>())
-            .map_err(|e| format!("kifu move {}{}: {e}", chars[i], chars[i + 1]))?;
+    for pair in chars.as_chunks::<2>().0 {
+        let text: String = pair.iter().collect();
+        let mv = Position::from_kifu(&text).map_err(|e| format!("kifu move {text}: {e}"))?;
         if !b.check(mv) && b.movable() == 0 {
             seq.push((b, None));
             b.pass();
@@ -43,7 +42,6 @@ pub fn replay(start: Option<&str>, kifu: &str) -> Result<(Line, Board), String> 
         }
         seq.push((b, Some(mv)));
         b.make_move(mv).map_err(|e| format!("{e:?}"))?;
-        i += 2;
     }
     Ok((seq, b))
 }
@@ -191,6 +189,43 @@ pub fn merge_learned(base: &mut Book, learned: &Book) {
     for (key, e) in learned.iter() {
         base.insert_raw(*key, e.clone());
     }
+}
+
+pub fn undo_backup(
+    learned: &mut Book,
+    start: Option<&str>,
+    kifu: &str,
+    changes: &[BackupChange],
+) -> Result<usize, String> {
+    let (line, _) = replay(start, kifu)?;
+    let boards: Vec<Board> = line
+        .iter()
+        .filter(|(_, m)| m.is_some())
+        .map(|(b, _)| *b)
+        .collect();
+    let mut n = 0;
+    for c in changes.iter().rev() {
+        let Some(board) = boards.get(c.ply.wrapping_sub(1)) else {
+            continue;
+        };
+        let (key, i) = Book::key(board);
+        if c.new_entry {
+            if learned.remove_raw(key).is_some() {
+                n += 1;
+            }
+            continue;
+        }
+        let Some(e) = learned.get_raw_mut(key) else {
+            continue;
+        };
+        let mapped = Book::map_move(c.mv, i);
+        match c.before {
+            Some(v) => e.update_move(mapped, v),
+            None => e.remove_move(mapped),
+        }
+        n += 1;
+    }
+    Ok(n)
 }
 
 #[cfg(test)]
@@ -437,48 +472,6 @@ mod tests {
         let v = base.get_raw(key0).unwrap().best().unwrap().value;
         assert!((v + 5.0).abs() < 1e-6);
     }
-}
-
-pub fn undo_backup(
-    learned: &mut Book,
-    start: Option<&str>,
-    kifu: &str,
-    changes: &[BackupChange],
-) -> Result<usize, String> {
-    let (line, _) = replay(start, kifu)?;
-    let boards: Vec<Board> = line
-        .iter()
-        .filter(|(_, m)| m.is_some())
-        .map(|(b, _)| *b)
-        .collect();
-    let mut n = 0;
-    for c in changes.iter().rev() {
-        let Some(board) = boards.get(c.ply.wrapping_sub(1)) else {
-            continue;
-        };
-        let (key, i) = Book::key(board);
-        if c.new_entry {
-            if learned.remove_raw(key).is_some() {
-                n += 1;
-            }
-            continue;
-        }
-        let Some(e) = learned.get_raw_mut(key) else {
-            continue;
-        };
-        let mapped = Book::map_move(c.mv, i);
-        match c.before {
-            Some(v) => e.update_move(mapped, v),
-            None => e.remove_move(mapped),
-        }
-        n += 1;
-    }
-    Ok(n)
-}
-
-#[cfg(test)]
-mod undo_tests {
-    use super::*;
 
     #[test]
     fn undo_restores_learned() {
@@ -486,12 +479,7 @@ mod undo_tests {
         let mut learned = Book::new();
         let mut base = Book::new();
         let mut job = BackupJob::new(None, kifu, 8).expect("job builds");
-        let out = loop {
-            match job.next(&mut learned, &mut base) {
-                JobStep::Search(_) => job.feed(0.0),
-                JobStep::Done(o) => break o,
-            }
-        };
+        let out = run_job(&mut job, &mut learned, &mut base, |_| 0.0);
         assert!(out.updated > 0, "nothing was rewritten");
         assert!(!learned.is_empty());
         let n = undo_backup(&mut learned, None, kifu, &out.changes).expect("undo succeeds");

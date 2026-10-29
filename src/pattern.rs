@@ -1,4 +1,4 @@
-//! Pattern definitions for AI evaluation: the linear evaluator's set, the KUROOBI patterns (17 shapes, orientations sharing a table) and the NNUE's (32 shapes, one table each).
+//! Pattern sets: the linear evaluator's KUROOBI patterns (17 shapes, orientations sharing a table) and the NNUE's (32 shapes, one table each).
 
 use crate::color::Color;
 
@@ -408,102 +408,6 @@ pub const NNUE_PATTERNS: &[Pattern] = &[
 ];
 
 #[cfg(test)]
-fn orbit(base: &[u8]) -> Vec<Vec<u8>> {
-    let transpose = |m: &[u8]| -> Vec<u8> { m.iter().map(|&s| (s % 8) * 8 + s / 8).collect() };
-    let flip_file = |m: &[u8]| -> Vec<u8> { m.iter().map(|&s| (7 - s / 8) * 8 + s % 8).collect() };
-    let flip_rank =
-        |m: &[u8]| -> Vec<u8> { m.iter().map(|&s| (s / 8) * 8 + (7 - s % 8)).collect() };
-
-    let mut out: Vec<Vec<u8>> = Vec::with_capacity(8);
-    let mut seen: Vec<Vec<u8>> = Vec::with_capacity(8);
-    for root in [base.to_vec(), transpose(base)] {
-        for a in [false, true] {
-            for b in [false, true] {
-                let mut m = root.clone();
-                if b {
-                    m = flip_rank(&m);
-                }
-                if a {
-                    m = flip_file(&m);
-                }
-                let mut key = m.clone();
-                key.sort_unstable();
-                if !seen.contains(&key) {
-                    seen.push(key);
-                    out.push(m);
-                }
-            }
-        }
-    }
-    out
-}
-
-#[cfg(test)]
-pub(crate) fn from_spec(
-    text: &str,
-    share_orientations: bool,
-) -> Result<&'static [Pattern], String> {
-    let mut pats: Vec<Pattern> = Vec::new();
-    for (n, line) in text.lines().enumerate() {
-        let line = line.split('#').next().unwrap_or("").trim();
-        if line.is_empty() {
-            continue;
-        }
-        let (name, cells) = line
-            .split_once(':')
-            .ok_or_else(|| format!("line {}: expected `Name: A1 B1 ...`", n + 1))?;
-        let name = name.trim();
-        if name.is_empty() {
-            return Err(format!("line {}: empty shape name", n + 1));
-        }
-        let mut base: Vec<u8> = Vec::new();
-        for cell in cells.split_whitespace() {
-            let bytes = cell.as_bytes();
-            let file = match bytes.first() {
-                Some(c @ b'A'..=b'H') => c - b'A',
-                _ => return Err(format!("line {}: bad square {cell}", n + 1)),
-            };
-            let rank = match (bytes.len(), bytes.get(1)) {
-                (2, Some(c @ b'1'..=b'8')) => c - b'1',
-                _ => return Err(format!("line {}: bad square {cell}", n + 1)),
-            };
-            let s = file * 8 + rank;
-            if base.contains(&s) {
-                return Err(format!("line {}: {cell} appears twice", n + 1));
-            }
-            base.push(s);
-        }
-        if base.is_empty() {
-            return Err(format!("line {}: shape {name} has no squares", n + 1));
-        }
-        let size = base.len();
-        let masks: Vec<&'static [u8]> = orbit(&base)
-            .into_iter()
-            .map(|m| &*Box::leak(m.into_boxed_slice()))
-            .collect();
-        if share_orientations {
-            pats.push(Pattern {
-                name: Box::leak(name.to_string().into_boxed_str()),
-                size,
-                masks: Box::leak(masks.into_boxed_slice()),
-            });
-        } else {
-            for (i, mask) in masks.into_iter().enumerate() {
-                pats.push(Pattern {
-                    name: Box::leak(format!("{name}#{i}").into_boxed_str()),
-                    size,
-                    masks: Box::leak(vec![mask].into_boxed_slice()),
-                });
-            }
-        }
-    }
-    if pats.is_empty() {
-        return Err("spec defines no patterns".to_string());
-    }
-    Ok(Box::leak(pats.into_boxed_slice()))
-}
-
-#[cfg(test)]
 mod tests {
     use super::*;
     use crate::board::Board;
@@ -607,61 +511,5 @@ mod tests {
             black_view, white_view,
             "swapping perspective must swap player/opponent digits"
         );
-    }
-
-    #[test]
-    fn from_spec_rebuilds_a_hand_written_set() {
-        let set = LINEAR_PATTERNS;
-        let spec: String = set
-            .iter()
-            .map(|p| {
-                let cells: Vec<String> = p.masks[0]
-                    .iter()
-                    .map(|&s| format!("{}{}", (b'A' + s / 8) as char, s % 8 + 1))
-                    .collect();
-                format!("{}: {}\n", p.name, cells.join(" "))
-            })
-            .collect();
-        let built = from_spec(&spec, true).expect("spec parses");
-        assert_eq!(built.len(), set.len());
-        for (b, p) in built.iter().zip(set.iter()) {
-            assert_eq!(b.name, p.name);
-            assert_eq!(b.size, p.size);
-            assert_eq!(b.masks.len(), p.masks.len(), "{}", p.name);
-            let key = |ms: &[&[u8]]| {
-                let mut v: Vec<Vec<u8>> = ms
-                    .iter()
-                    .map(|m| {
-                        let mut m = m.to_vec();
-                        m.sort_unstable();
-                        m
-                    })
-                    .collect();
-                v.sort();
-                v
-            };
-            assert_eq!(key(b.masks), key(p.masks), "{}", p.name);
-        }
-    }
-
-    #[test]
-    fn from_spec_rejects_malformed_input() {
-        assert!(from_spec("A1 B1", false).is_err(), "no name");
-        assert!(from_spec("x: A1 A1", false).is_err(), "square twice");
-        assert!(from_spec("x: I1", false).is_err(), "file out of range");
-        assert!(from_spec("x: A9", false).is_err(), "rank out of range");
-        assert!(from_spec("# only a comment", false).is_err(), "no patterns");
-    }
-
-    #[test]
-    fn from_spec_defaults_to_unshared_tables() {
-        let spec = "Corner3x3: A1 B1 C1 A2 B2 C2 A3 B3 C3\nDiagonal8: A1 B2 C3 D4 E5 F6 G7 H8\n";
-        let shared = from_spec(spec, true).unwrap();
-        let unshared = from_spec(spec, false).unwrap();
-        let rows = |ps: &[Pattern]| -> usize { ps.iter().map(|p| p.table_size()).sum() };
-        assert_eq!(shared.len(), 2);
-        assert_eq!(unshared.len(), 6, "4 corner masks + 2 diagonal masks");
-        assert_eq!(rows(shared), 19_683 + 6_561);
-        assert_eq!(rows(unshared), 4 * 19_683 + 2 * 6_561);
     }
 }

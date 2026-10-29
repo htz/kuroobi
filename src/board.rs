@@ -122,7 +122,8 @@ impl Board {
 
     pub fn check(&self, pos: Position) -> bool {
         let pos_bit = pos.to_bit();
-        bitboard::check(self.player_bb(), self.opponent_bb(), pos_bit)
+        self.empty() & pos_bit != 0
+            && bitboard::flippable(self.player_bb(), self.opponent_bb(), pos_bit) != 0
     }
 
     pub fn check_all(&self) -> bool {
@@ -160,37 +161,28 @@ impl Board {
 
     #[inline]
     fn apply_move(&mut self, pos_bit: u64, flipped: u64) {
-        let black_is_mover = matches!(self.player, Color::Black);
+        self.xor_move(pos_bit, flipped);
+        self.player = self.player.opponent();
+        self.empty_count -= 1;
+    }
+
+    pub fn undo_move(&mut self, pos: Position, flipped: u64) {
+        self.player = self.player.opponent();
+        self.xor_move(pos.to_bit(), flipped);
+        self.empty_count += 1;
+    }
+
+    /// Places or lifts the side to move's disc and toggles the flipped ones.
+    #[inline]
+    fn xor_move(&mut self, pos_bit: u64, flipped: u64) {
         let mover_mask = pos_bit | flipped;
-        let (black_mask, white_mask) = if black_is_mover {
+        let (black_mask, white_mask) = if matches!(self.player, Color::Black) {
             (mover_mask, flipped)
         } else {
             (flipped, mover_mask)
         };
         self.black ^= black_mask;
         self.white ^= white_mask;
-
-        self.player = self.player.opponent();
-
-        self.empty_count -= 1;
-    }
-
-    pub fn undo_move(&mut self, pos: Position, flipped: u64) {
-        self.player = self.player.opponent();
-
-        let pos_bit = pos.to_bit();
-        match self.player {
-            Color::Black => {
-                self.black ^= pos_bit | flipped;
-                self.white ^= flipped;
-            }
-            Color::White => {
-                self.white ^= pos_bit | flipped;
-                self.black ^= flipped;
-            }
-        }
-
-        self.empty_count += 1;
     }
 
     pub fn pass(&mut self) {
@@ -213,7 +205,7 @@ impl Board {
     }
 
     pub fn movable_count(&self) -> u8 {
-        bitboard::mobility_count(self.player_bb(), self.opponent_bb())
+        self.movable().count_ones() as u8
     }
 
     pub fn movable_iter(&self) -> impl Iterator<Item = Position> {

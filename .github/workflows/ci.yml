@@ -38,8 +38,6 @@ jobs:
 
       - name: Build feature combinations
         run: |
-          cargo build --release --features node-accounting
-          cargo build --release --features layer-profile
           cargo build --release --features nnue-scalar
 
   gui-ui:

@@ -3,9 +3,10 @@
 use std::io;
 use std::path::Path;
 
+use crate::bitboard::symmetry;
 use crate::board::Board;
 use crate::color::Color;
-use crate::linear::{AdamOptimizer, Linear, Optimizer, STAGE_COUNT};
+use crate::linear::{Linear, Optimizer, STAGE_COUNT};
 use crate::record::{self, Filter, TeacherPolicy};
 
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -37,8 +38,8 @@ impl SymPlan {
             return *ex;
         }
         Example {
-            black: crate::nnue::sym_board(ex.black, i),
-            white: crate::nnue::sym_board(ex.white, i),
+            black: symmetry(ex.black, i),
+            white: symmetry(ex.white, i),
             score: ex.score,
         }
     }
@@ -59,22 +60,17 @@ impl Example {
     }
 }
 
+/// Every record of the file, unfiltered, under the default teacher rule.
 pub fn load_examples_binary(path: &Path) -> io::Result<Vec<Example>> {
     let mut examples = Vec::new();
-    load_examples_binary_into(path, &mut examples, None)?;
+    load_examples_filtered_into(
+        path,
+        &mut examples,
+        None,
+        &Filter::NONE,
+        &TeacherPolicy::DEFAULT,
+    )?;
     Ok(examples)
-}
-
-pub fn count_examples_binary(path: &Path) -> io::Result<usize> {
-    record::count(path)
-}
-
-pub fn load_examples_binary_into(
-    path: &Path,
-    out: &mut Vec<Example>,
-    limit: Option<usize>,
-) -> io::Result<usize> {
-    load_examples_filtered_into(path, out, limit, &Filter::NONE, &TeacherPolicy::DEFAULT)
 }
 
 pub fn load_examples_filtered_into(
@@ -163,9 +159,85 @@ impl EpochStats {
     }
 }
 
+/// The held-out number that picks a snapshot.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum SelectBy {
+    Mse,
+    Mae,
+    /// The error with the constant offset taken out.
+    Spread,
+}
+
+impl std::str::FromStr for SelectBy {
+    type Err = String;
+
+    fn from_str(s: &str) -> Result<SelectBy, String> {
+        match s {
+            "mse" => Ok(SelectBy::Mse),
+            "mae" => Ok(SelectBy::Mae),
+            "spread" => Ok(SelectBy::Spread),
+            other => Err(format!("--select-by {other}: expected mse, mae or spread")),
+        }
+    }
+}
+
+impl std::fmt::Display for SelectBy {
+    fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+        f.write_str(match self {
+            SelectBy::Mse => "mse",
+            SelectBy::Mae => "mae",
+            SelectBy::Spread => "spread",
+        })
+    }
+}
+
+/// Sums of an evaluator's error over held-out positions.
+#[derive(Clone, Copy, Debug, Default)]
+pub struct ValError {
+    pub n: f64,
+    pub sq: f64,
+    pub abs: f64,
+    pub sum: f64,
+}
+
+impl ValError {
+    pub fn add(&mut self, e: f64) {
+        self.n += 1.0;
+        self.sq += e * e;
+        self.abs += e.abs();
+        self.sum += e;
+    }
+
+    pub fn merge(&mut self, o: &ValError) {
+        self.n += o.n;
+        self.sq += o.sq;
+        self.abs += o.abs;
+        self.sum += o.sum;
+    }
+
+    /// (MSE, MAE, bias, spread); all NaN without positions.
+    pub fn stats(&self) -> (f64, f64, f64, f64) {
+        let n = self.n;
+        if n == 0.0 {
+            return (f64::NAN, f64::NAN, f64::NAN, f64::NAN);
+        }
+        let (mse, mae, bias) = (self.sq / n, self.abs / n, self.sum / n);
+        (mse, mae, bias, (mse - bias * bias).max(0.0).sqrt())
+    }
+
+    pub fn score(&self, by: SelectBy) -> f64 {
+        let (mse, mae, _, spread) = self.stats();
+        match by {
+            SelectBy::Mse => mse,
+            SelectBy::Mae => mae,
+            SelectBy::Spread => spread,
+        }
+    }
+}
+
 const PROGRESS_INTERVAL: usize = 1 << 16;
 
-pub struct Trainer<O: Optimizer = AdamOptimizer> {
+pub struct Trainer<O: Optimizer> {
     pub linear: Linear,
     pub optimizer: O,
 }
@@ -173,20 +245,6 @@ pub struct Trainer<O: Optimizer = AdamOptimizer> {
 impl<O: Optimizer> Trainer<O> {
     pub fn new(linear: Linear, optimizer: O) -> Trainer<O> {
         Trainer { linear, optimizer }
-    }
-
-    pub fn train_epoch(&mut self, examples: &[Example]) -> EpochStats {
-        self.train_epoch_with_progress(examples, |_, _| {})
-    }
-
-    pub fn train_epoch_with_progress(
-        &mut self,
-        examples: &[Example],
-        progress: impl FnMut(usize, usize),
-    ) -> EpochStats {
-        let stats = self.train_pass(examples, progress);
-        self.optimizer.next_epoch();
-        stats
     }
 
     pub fn train_pass(
@@ -237,14 +295,15 @@ impl<O: Optimizer> Trainer<O> {
         progress(total, total);
         stats
     }
-
-    pub fn run(&mut self, epochs: usize, examples: &[Example]) -> Vec<EpochStats> {
-        (0..epochs).map(|_| self.train_epoch(examples)).collect()
-    }
 }
 
 #[cfg(test)]
 mod tests {
+    use super::*;
+    use crate::linear::{AdamOptimizer, SgdOptimizer};
+    use crate::pattern::LINEAR_PATTERNS;
+    use crate::position::Position;
+    use crate::record::Record;
 
     #[test]
     fn sym_plan_fixed_walks_eight_distinct_forms() {
@@ -282,13 +341,21 @@ mod tests {
         assert_eq!((e.black, e.white), (ex.black, ex.white));
         assert_eq!(rs, 12345, "no draw, no advance");
     }
-    use super::*;
-    use crate::pattern::LINEAR_PATTERNS;
-    use crate::position::Position;
-    use crate::record::Record;
+
+    #[test]
+    fn val_error_spread_drops_the_constant_offset() {
+        let mut v = ValError::default();
+        assert!(v.score(SelectBy::Mse).is_nan(), "no positions, no score");
+        for e in [3.0, 3.0, 3.0] {
+            v.add(e);
+        }
+        assert_eq!(v.stats(), (9.0, 3.0, 3.0, 0.0));
+        assert_eq!("spread".parse::<SelectBy>(), Ok(SelectBy::Spread));
+        assert!("rmse".parse::<SelectBy>().is_err());
+    }
 
     fn temp_path(name: &str) -> std::path::PathBuf {
-        let dir = std::env::temp_dir().join("bbrv_trainer_test");
+        let dir = std::env::temp_dir().join("kuroobi_trainer_test");
         std::fs::create_dir_all(&dir).unwrap();
         dir.join(name)
     }
@@ -308,11 +375,7 @@ mod tests {
     }
 
     fn write_records(path: &Path, records: &[Record]) {
-        let mut w = record::Writer::create(path).unwrap();
-        for r in records {
-            w.write(r).unwrap();
-        }
-        w.finish().unwrap();
+        record::write_all(path, records).unwrap();
     }
 
     #[test]
@@ -346,20 +409,21 @@ mod tests {
             black_to_move: true,
             game_id: 1,
         };
-        let mut w = record::Writer::create(&bin_path).unwrap();
-        w.write(&base).unwrap(); // searched: teacher = result
-        w.write(&Record {
-            random: true,
-            ..base
-        })
-        .unwrap(); // random: teacher = search value; dropped by the filter
-        w.write(&Record {
-            game_score: 30,
-            ..base
-        })
-        .unwrap(); // disagrees with the search by 27: dropped
-        w.write(&Record { ply: 5, ..base }).unwrap(); // before min ply: dropped
-        w.finish().unwrap();
+        write_records(
+            &bin_path,
+            &[
+                base, // searched: teacher = result
+                Record {
+                    random: true,
+                    ..base
+                }, // random: teacher = search value; dropped by the filter
+                Record {
+                    game_score: 30,
+                    ..base
+                }, // disagrees with the search by 27: dropped
+                Record { ply: 5, ..base }, // before min ply: dropped
+            ],
+        );
 
         let all = load_examples_binary(&bin_path).unwrap();
         assert_eq!(
@@ -394,33 +458,54 @@ mod tests {
             })
             .collect();
         write_records(&bin_path, &records);
-        let written: Vec<Example> = records.iter().map(Record::example).collect();
+        let written: Vec<Example> = records
+            .iter()
+            .map(|r| r.example_with(&TeacherPolicy::DEFAULT))
+            .collect();
 
-        assert_eq!(count_examples_binary(&bin_path).unwrap(), written.len());
+        assert_eq!(record::count(&bin_path).unwrap(), written.len());
         assert_eq!(load_examples_binary(&bin_path).unwrap(), written);
 
+        let load = |out: &mut Vec<Example>, limit| {
+            load_examples_filtered_into(
+                &bin_path,
+                out,
+                limit,
+                &Filter::NONE,
+                &TeacherPolicy::DEFAULT,
+            )
+            .unwrap()
+        };
         let mut out = vec![written[0]];
-        let n = load_examples_binary_into(&bin_path, &mut out, None).unwrap();
-        assert_eq!(n, written.len());
+        assert_eq!(load(&mut out, None), written.len());
         assert_eq!(out.len(), written.len() + 1);
         assert_eq!(&out[1..], &written[..]);
 
         let mut capped = Vec::new();
-        let n = load_examples_binary_into(&bin_path, &mut capped, Some(5_000)).unwrap();
-        assert_eq!(n, 5_000);
+        assert_eq!(load(&mut capped, Some(5_000)), 5_000);
         assert_eq!(capped, written[..5_000]);
 
         let mut over = Vec::new();
-        let n = load_examples_binary_into(&bin_path, &mut over, Some(usize::MAX)).unwrap();
-        assert_eq!(n, written.len());
+        assert_eq!(load(&mut over, Some(usize::MAX)), written.len());
+
+        let mut range = Vec::new();
+        let n = load_examples_range_into(
+            &bin_path,
+            &mut range,
+            9_000,
+            500,
+            &Filter::NONE,
+            &TeacherPolicy::DEFAULT,
+        )
+        .unwrap();
+        assert_eq!(n, 500);
+        assert_eq!(range, written[9_000..9_500]);
 
         std::fs::remove_file(&bin_path).ok();
     }
 
     #[test]
     fn test_train_pass_does_not_advance_lr_schedule() {
-        use crate::linear::SgdOptimizer;
-
         let b = Board::new();
         let examples = [Example {
             black: b.black,
@@ -431,7 +516,7 @@ mod tests {
         let before = trainer.optimizer.learning_rate;
         trainer.train_pass(&examples, |_, _| {});
         assert_eq!(trainer.optimizer.learning_rate, before, "pass holds lr");
-        trainer.train_epoch(&examples);
+        trainer.optimizer.next_epoch();
         assert!(
             trainer.optimizer.learning_rate < before,
             "an epoch decays lr"
@@ -458,7 +543,13 @@ mod tests {
         }
 
         let mut trainer = Trainer::new(Linear::new(LINEAR_PATTERNS), AdamOptimizer::new(0.01));
-        let stats = trainer.run(60, &examples);
+        let stats: Vec<EpochStats> = (0..60)
+            .map(|_| {
+                let st = trainer.train_pass(&examples, |_, _| {});
+                trainer.optimizer.next_epoch();
+                st
+            })
+            .collect();
         let first = stats.first().unwrap().mse();
         let last = stats.last().unwrap().mse();
         assert!(
@@ -476,7 +567,7 @@ mod tests {
             score: 2.0,
         }];
         let mut trainer = Trainer::new(Linear::new(LINEAR_PATTERNS), AdamOptimizer::new(0.01));
-        let stats = trainer.train_epoch(&examples);
+        let stats = trainer.train_pass(&examples, |_, _| {});
         assert_eq!(stats.samples[0], 1, "initial position is stage 0");
         assert_eq!(stats.samples[1..].iter().sum::<u64>(), 0);
         assert!(stats.stage_mse(0) > 0.0, "first-epoch loss is nonzero");

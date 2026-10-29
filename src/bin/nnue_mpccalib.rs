@@ -192,56 +192,35 @@ fn parse_args() -> Args {
         alpha_per_stage: 2000usize,
     };
 
+    // An unparsable value keeps the default.
+    fn set<T: std::str::FromStr>(slot: &mut T, v: Option<String>) {
+        if let Some(x) = v.and_then(|v| v.parse().ok()) {
+            *slot = x;
+        }
+    }
     let mut it = std::env::args().skip(1);
     while let Some(arg) = it.next() {
         match arg.as_str() {
-            "--threads" => a.threads = it.next().and_then(|v| v.parse().ok()).unwrap_or(a.threads),
-            "--stride" => a.stride = it.next().and_then(|v| v.parse().ok()).unwrap_or(a.stride),
-            "--max" => {
-                a.max_positions = it
-                    .next()
-                    .and_then(|v| v.parse().ok())
-                    .unwrap_or(a.max_positions)
-            }
-            "--max-depth" => {
-                a.max_depth = it
-                    .next()
-                    .and_then(|v| v.parse().ok())
-                    .unwrap_or(a.max_depth)
-            }
-            "--min-empties" => {
-                a.min_empties = it
-                    .next()
-                    .and_then(|v| v.parse().ok())
-                    .unwrap_or(a.min_empties)
-            }
-            "--max-empties" => {
-                a.max_empties = it
-                    .next()
-                    .and_then(|v| v.parse().ok())
-                    .unwrap_or(a.max_empties)
-            }
-            "--min-cell" => {
-                a.min_cell = it.next().and_then(|v| v.parse().ok()).unwrap_or(a.min_cell)
-            }
+            "--threads" => set(&mut a.threads, it.next()),
+            "--stride" => set(&mut a.stride, it.next()),
+            "--max" => set(&mut a.max_positions, it.next()),
+            "--max-depth" => set(&mut a.max_depth, it.next()),
+            "--min-empties" => set(&mut a.min_empties, it.next()),
+            "--max-empties" => set(&mut a.max_empties, it.next()),
+            "--min-cell" => set(&mut a.min_cell, it.next()),
             "--empties-bin" => {
-                a.empties_bin = it
-                    .next()
-                    .and_then(|v| v.parse().ok())
-                    .filter(|&n| n >= 1)
-                    .unwrap_or(a.empties_bin)
+                let mut n = 0u32;
+                set(&mut n, it.next());
+                if n >= 1 {
+                    a.empties_bin = n;
+                }
             }
             "--csv" => a.csv = it.next().map(PathBuf::from),
             "--from-csv" => a.from_csv = it.next().map(PathBuf::from),
             "--cells" => a.show_cells = true,
             "--write" => a.write = true,
             "--alpha" => a.alpha = true,
-            "--alpha-per-stage" => {
-                a.alpha_per_stage = it
-                    .next()
-                    .and_then(|v| v.parse().ok())
-                    .unwrap_or(a.alpha_per_stage)
-            }
+            "--alpha-per-stage" => set(&mut a.alpha_per_stage, it.next()),
             "--depths" => {
                 if let Some(v) = it.next() {
                     a.depths = v.split(',').filter_map(|x| x.trim().parse().ok()).collect();
@@ -285,25 +264,15 @@ fn main() -> ExitCode {
     let nnue_path = paths.remove(0);
 
     if alpha {
-        return calibrate_alpha(
-            &nnue_path,
-            NNUE_PATTERNS,
-            &paths,
-            stride,
-            alpha_per_stage,
-            threads,
-            write,
-        );
+        return calibrate_alpha(&nnue_path, &paths, stride, alpha_per_stage, threads, write);
     }
     let Some(pairs) = depth_pairs(max_depth, &mut depths) else {
         return ExitCode::FAILURE;
     };
-    let patterns = NNUE_PATTERNS;
     let rows = match &from_csv {
         Some(path) => read_csv(path, &mut depths),
         None => measure(
             &nnue_path,
-            patterns,
             &paths,
             &depths,
             Scan {
@@ -359,20 +328,27 @@ fn main() -> ExitCode {
             nnue_path.display()
         );
     }
-    store_sigma(&nnue_path, patterns, sigma)
+    if !rewrite_model(&nnue_path, |nn| nn.set_mpc_sigma(Some(sigma))) {
+        return ExitCode::FAILURE;
+    }
+    println!("sigma written to {}", nnue_path.display());
+    ExitCode::SUCCESS
 }
 
-type Patterns = &'static [kuroobi::pattern::Pattern];
-
-fn rewrite_model(
-    nnue_path: &Path,
-    patterns: Patterns,
-    read_verb: &str,
-    set: impl FnOnce(&mut Nnue),
-) -> bool {
-    let mut nn = Nnue::new(patterns);
+fn load_quantized(nnue_path: &Path) -> Option<std::sync::Arc<Nnue>> {
+    let mut nn = Nnue::new(NNUE_PATTERNS);
     if let Err(err) = nn.load(nnue_path) {
-        eprintln!("failed to {read_verb} {}: {err}", nnue_path.display());
+        eprintln!("failed to load {}: {err}", nnue_path.display());
+        return None;
+    }
+    nn.quantize();
+    Some(std::sync::Arc::new(nn))
+}
+
+fn rewrite_model(nnue_path: &Path, set: impl FnOnce(&mut Nnue)) -> bool {
+    let mut nn = Nnue::new(NNUE_PATTERNS);
+    if let Err(err) = nn.load(nnue_path) {
+        eprintln!("failed to re-read {}: {err}", nnue_path.display());
         return false;
     }
     set(&mut nn);
@@ -394,7 +370,7 @@ struct Scan {
 /// The (depth, pc_depth) pairs to fit, and the depths they need searched.
 fn depth_pairs(max_depth: u32, depths: &mut Vec<u32>) -> Option<Vec<(u32, u32)>> {
     let mut pairs: Vec<(u32, u32)> = Vec::new();
-    for d in kuroobi::midgame::mpc_min_depth()..=max_depth {
+    for d in kuroobi::midgame::MPC_MIN_DEPTH..=max_depth {
         let p = mpc_reduced_depth(d);
         if p >= 1 && p < d {
             pairs.push((d, p));
@@ -459,7 +435,6 @@ fn read_csv(path: &Path, depths: &mut Vec<u32>) -> Result<Vec<(u32, Vec<f32>)>, 
 
 fn measure(
     nnue_path: &Path,
-    patterns: &'static [kuroobi::pattern::Pattern],
     paths: &[PathBuf],
     depths: &[u32],
     Scan {
@@ -470,13 +445,7 @@ fn measure(
         threads,
     }: Scan,
 ) -> Result<Vec<(u32, Vec<f32>)>, ()> {
-    let mut nn = Nnue::new(patterns);
-    if let Err(err) = nn.load(nnue_path) {
-        eprintln!("failed to load {}: {err}", nnue_path.display());
-        return Err(());
-    }
-    nn.quantize();
-    let nn = std::sync::Arc::new(nn);
+    let nn = load_quantized(nnue_path).ok_or(())?;
 
     let mut boards = Vec::new();
     'outer: for path in paths {
@@ -716,20 +685,6 @@ fn report_span(pairs: &[(u32, u32)], sigma: &MpcSigma) {
     );
 }
 
-fn store_sigma(
-    nnue_path: &Path,
-    patterns: &'static [kuroobi::pattern::Pattern],
-    sigma: MpcSigma,
-) -> ExitCode {
-    if !rewrite_model(nnue_path, patterns, "re-read", |nn| {
-        nn.set_mpc_sigma(Some(sigma))
-    }) {
-        return ExitCode::FAILURE;
-    }
-    println!("sigma written to {}", nnue_path.display());
-    ExitCode::SUCCESS
-}
-
 const ALPHA_EMPTIES: [u32; 6] = [22, 28, 34, 40, 46, 52];
 const ALPHA_DEPTHS: [u32; 3] = [10, 14, 18];
 /// Pseudo-samples at a ratio of 1 added to every cell, so thin cells stay near 1.
@@ -738,20 +693,15 @@ const ALPHA_PRIOR: f64 = 12.0;
 /// Unlike sigma, measured with ProbCut on: α scales the cut as the search makes it.
 fn calibrate_alpha(
     nnue_path: &Path,
-    patterns: &'static [kuroobi::pattern::Pattern],
     paths: &[PathBuf],
     stride: usize,
     per_stage: usize,
     threads: usize,
     write: bool,
 ) -> ExitCode {
-    let mut nn = Nnue::new(patterns);
-    if let Err(err) = nn.load(nnue_path) {
-        eprintln!("failed to load {}: {err}", nnue_path.display());
+    let Some(nn) = load_quantized(nnue_path) else {
         return ExitCode::FAILURE;
-    }
-    nn.quantize();
-    let nn = std::sync::Arc::new(nn);
+    };
 
     let mut boards: Vec<kuroobi::Board> = Vec::new();
     let mut per = [0usize; ALPHA_EMPTIES.len()];
@@ -880,9 +830,7 @@ fn calibrate_alpha(
         );
         return ExitCode::SUCCESS;
     }
-    if !rewrite_model(nnue_path, patterns, "re-read", |nn| {
-        nn.set_mpc_alpha(Some(table))
-    }) {
+    if !rewrite_model(nnue_path, |nn| nn.set_mpc_alpha(Some(table))) {
         return ExitCode::FAILURE;
     }
     println!("alpha written to {}", nnue_path.display());

@@ -1,32 +1,74 @@
-//! Endgame solver: PVS (principal variation search) with a Zobrist-keyed transposition table, move ordering, and specialized last-4/3/2/1 fast paths.
+//! Endgame solver: PVS with a shared transposition table, move ordering, parallel splits, and
+//! specialized last-4/3/2/1 fast paths.
 
+// Search functions carry the whole node state as arguments.
 #![allow(clippy::too_many_arguments)]
 
 use crate::bitboard;
 use crate::board::Board;
+use crate::color::Color;
 use crate::linear::Linear;
+use crate::midgame::StopHandle;
 use crate::pattern_index::{PatternIndexer, PatternIndices};
 use crate::position::Position;
 use crate::zobrist;
 
 const PVS_LIMIT: u8 = 12;
-
-knob!(fn pvs_limit() -> u8 = "PVS_MIN" or PVS_LIMIT);
 const MOVE_ORDERING_LIMIT: u8 = 7;
-const TT_MIN_EMPTIES_DEFAULT: u8 = 11;
-
-knob!(fn tt_min_empties() -> u8 = "TT_MIN" or TT_MIN_EMPTIES_DEFAULT);
-
-knob!(fn etc_empties() -> u8 = "ETC_MIN" or ETC_EMPTIES);
-
+const TT_MIN_EMPTIES: u8 = 11;
+const ETC_EMPTIES: u8 = 13;
 const EVAL_ORDER_EMPTIES: u8 = 14;
-
-knob!(fn eval_order_empties() -> u8 = "EVAL_ORDER_MIN" or EVAL_ORDER_EMPTIES);
 const DEEP_ORDER_EMPTIES: u8 = 17;
+const DEEP2_ORDER_EMPTIES: u8 = 20;
+const DEEP3_ORDER_EMPTIES: u8 = 29;
+const MOBILITY_ORDER_WEIGHT: i32 = 12;
+const EDGE_STABILITY_ORDER_WEIGHT: i32 = 1;
+const SORT_ALPHA_DELTA: i32 = 12;
+const PARALLEL_MIN_EMPTIES: u8 = 16;
+const SPEC_SPLIT_MAX_EMPTIES: u8 = 24;
+const STAB_MIN_EMPTIES: u8 = 4;
+const STABILITY_CUT_MARGIN: i32 = 8;
+const L4_BITS: u32 = 14;
+const L56_BITS: u32 = 14;
+const L78_BITS: u32 = 15;
+
+/// The exact pass opens one notch around the warm-up score: a wide window lets a wrong first move be searched exactly.
+const EXACT_ASPIRATION_WIDTH: i32 = 1;
+const WARM_ASPIRATION_WIDTH: i32 = 6;
+const ESTIMATE_DEPTH: u8 = 6;
+const SELECTIVE_MIN_EMPTIES: u8 = 10;
+const SELECTIVE_PASS_MIN_EMPTIES: u8 = 18;
+const SELECTIVE_LADDER: [f32; 3] = [0.6, 1.1, 1.8];
+/// From this rung on, a cut solve plays the warm-up's move.
+const WARM_FALLBACK_T: f32 = 1.8;
+/// A probe runs only when the static evaluation already clears the bound by the margin less this.
+const SELECTIVE_GATE_OFFSET: f32 = 4.0;
+/// Below this no cut is selective, so older entries stay exact rather than turning into seeds.
+const SEED_MIN_EMPTIES: u8 = if PVS_LIMIT > SELECTIVE_MIN_EMPTIES {
+    PVS_LIMIT
+} else {
+    SELECTIVE_MIN_EMPTIES
+};
+
+const VALUE_INF: i32 = i32::MAX / 2;
+const ABORTED: i32 = i32::MIN + 1;
+const CORNER_MASK: u64 = 0x8100_0000_0000_0081;
+
+pub static CLEAR_NS: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+
+knob!(fn chaos_every() -> u64 = "SOLVER_CHAOS" or 0);
+static ABORT_FIRED: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+static TASK_ABORTED: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+
 #[inline]
 pub fn final_score(board: &Board) -> i32 {
-    let diff = board.score();
-    let empties = board.empty_count() as i32;
+    final_score_bb(board.player_bb(), board.opponent_bb())
+}
+
+#[inline]
+pub(crate) fn final_score_bb(player: u64, opponent: u64) -> i32 {
+    let diff = player.count_ones() as i32 - opponent.count_ones() as i32;
+    let empties = 64 - (player | opponent).count_ones() as i32;
     match diff.cmp(&0) {
         std::cmp::Ordering::Greater => diff + empties,
         std::cmp::Ordering::Less => diff - empties,
@@ -35,8 +77,14 @@ pub fn final_score(board: &Board) -> i32 {
 }
 
 #[inline]
-fn wipeout_score(board: &Board) -> Option<i32> {
-    wipeout_score_bb(board.player_bb(), board.opponent_bb())
+fn wipeout_score(player: u64, opponent: u64) -> Option<i32> {
+    if opponent == 0 {
+        return Some(64);
+    }
+    if player == 0 {
+        return Some(-64);
+    }
+    None
 }
 
 /// Narrows `alpha..beta` to a probed bound; `Some` is an immediate return.
@@ -63,13 +111,8 @@ fn narrow(alpha: &mut i32, beta: &mut i32, narrowed: &mut bool, lo: i32, hi: i32
 }
 
 #[inline]
-fn child_bb(player: u64, opponent: u64, m: ScoredMove) -> (u64, u64) {
-    (opponent ^ m.flipped, player | m.flipped | m.pos.to_bit())
-}
-
-#[inline]
-fn board_of(player: u64, opponent: u64, to_move: crate::color::Color) -> Board {
-    let (black, white) = if to_move == crate::color::Color::Black {
+fn board_of(player: u64, opponent: u64, to_move: Color) -> Board {
+    let (black, white) = if to_move == Color::Black {
         (player, opponent)
     } else {
         (opponent, player)
@@ -80,17 +123,6 @@ fn board_of(player: u64, opponent: u64, to_move: crate::color::Color) -> Board {
         player: to_move,
         empty_count: bitboard::empty_bb(player, opponent).count_ones() as u8,
     }
-}
-
-#[inline]
-fn wipeout_score_bb(player: u64, opponent: u64) -> Option<i32> {
-    if opponent == 0 {
-        return Some(64);
-    }
-    if player == 0 {
-        return Some(-64);
-    }
-    None
 }
 
 const STABILITY_THRESHOLD: [i32; 64] = [
@@ -104,37 +136,15 @@ const STABILITY_THRESHOLD: [i32; 64] = [
     99, 99, 99, 99, 99, 99, 99, 99,
 ];
 
-const STABILITY_CUT_MARGIN: i32 = 8;
-
-const STAB_MIN_EMPTIES: u8 = 4;
-
-knob!(fn stab_min_empties() -> u8 = "EXACT_STAB_MIN" or STAB_MIN_EMPTIES);
-
-#[inline]
-fn stability_cut(board: &Board, alpha: i32) -> Option<i32> {
-    stability_cut_bb(
-        board.player_bb(),
-        board.opponent_bb(),
-        board.empty_count(),
-        alpha,
-    )
-}
-
 #[inline(always)]
-fn stability_cut_bb(player: u64, opponent: u64, empties: u8, alpha: i32) -> Option<i32> {
-    if empties < stab_min_empties() {
+fn stability_cut(player: u64, opponent: u64, empties: u8, alpha: i32) -> Option<i32> {
+    if empties < STAB_MIN_EMPTIES {
         return None;
     }
-    #[cfg(feature = "layer-profile")]
-    ab_stats::STAB_GATE_A.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
     if alpha >= STABILITY_THRESHOLD[(empties & 63) as usize] {
         let need = (64 - alpha + 1) / 2;
         if need <= 32 && (opponent.count_ones() as i32) >= need + STABILITY_CUT_MARGIN {
-            #[cfg(feature = "layer-profile")]
-            ab_stats::STAB_FULL.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-            if let Some(bound) = stability_sweep_low(player, opponent, need, alpha) {
-                return Some(bound);
-            }
+            return stability_sweep_low(player, opponent, need, alpha);
         }
     }
     None
@@ -146,22 +156,6 @@ fn stability_sweep_low(player: u64, opponent: u64, need: i32, alpha: i32) -> Opt
         64 - 2 * crate::stability::stable_count_at_least(opponent, player, need as u32) as i32;
     (bound <= alpha).then_some(bound)
 }
-
-const DEEP2_ORDER_EMPTIES: u8 = 20;
-const DEEP3_ORDER_EMPTIES: u8 = 29;
-const ETC_EMPTIES: u8 = 13;
-const MOBILITY_ORDER_WEIGHT: i32 = 12;
-const PARALLEL_MIN_EMPTIES: u8 = 16;
-
-knob!(fn parallel_min_empties() -> u8 = "PAR_MIN" or PARALLEL_MIN_EMPTIES);
-
-pub static CLEAR_NS: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
-
-pub static ABORT_FIRED: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
-
-knob!(fn chaos_every() -> u64 = "SOLVER_CHAOS" or 0);
-
-pub static TASK_ABORTED: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
 
 struct AbortFlag<'p> {
     flag: std::sync::atomic::AtomicBool,
@@ -211,15 +205,12 @@ impl<'p> AbortFlag<'p> {
     }
 }
 
-const ABORTED: i32 = i32::MIN + 1;
-
 struct ThreadBudget {
     pool: EndPool,
     scratch: std::sync::Mutex<Vec<Scratch>>,
 }
 
-/// A worker's private tables. The caches hold only positions below
-/// `SELECTIVE_MIN_EMPTIES`, exact whatever the rung, so they outlive roots.
+/// A worker's private caches: positions below `SELECTIVE_MIN_EMPTIES` are exact on every rung, so they outlive roots.
 struct Scratch {
     l4: Vec<L4Entry>,
     l56: Vec<L4Entry>,
@@ -231,8 +222,8 @@ impl Scratch {
         let cache = |bits: u32| zeroed_vec::<L4Entry>(1usize << bits);
         Scratch {
             l4: cache(l4_bits),
-            l56: cache(new_shallow_bits()),
-            l78: cache(l78_bits()),
+            l56: cache(L56_BITS),
+            l78: cache(L78_BITS),
         }
     }
 
@@ -255,7 +246,7 @@ impl ThreadBudget {
         let popped = self.scratch.lock().unwrap().pop();
         popped.unwrap_or_else(|| {
             let threads = self.pool.workers + 1;
-            Scratch::new(l4_bits().saturating_sub(threads.ilog2()).max(13))
+            Scratch::new(L4_BITS.saturating_sub(threads.ilog2()).max(13))
         })
     }
 
@@ -269,12 +260,12 @@ struct SplitPoint {
     moves: *const ScoredMove,
     n_moves: usize,
     upper: i32,
-    selective_t: Option<f32>,
+    selective: Option<Selectivity>,
     nnue: Option<NnueProbe>,
     tt: *const HashTable,
-    ev: *const (),
-    group: *const (),
-    budget: *const (),
+    ev: *const Linear,
+    group: *const AbortFlag<'static>,
+    budget: *const ThreadBudget,
     cursor: std::sync::atomic::AtomicUsize,
     shared_lower: std::sync::atomic::AtomicI32,
     active: std::sync::atomic::AtomicUsize,
@@ -312,18 +303,7 @@ fn split_merge(sp: &SplitPoint, val: i32, cur: i32, pos: Position) {
 
 unsafe fn help_split(sp: &SplitPoint) -> bool {
     use std::sync::atomic::Ordering;
-    let (tt, group, budget) = unsafe {
-        (
-            &*sp.tt,
-            &*(sp.group as *const AbortFlag<'static>),
-            &*(sp.budget as *const ThreadBudget),
-        )
-    };
-    let ev: Option<&Linear> = if sp.ev.is_null() {
-        None
-    } else {
-        Some(unsafe { &*(sp.ev as *const Linear) })
-    };
+    let (tt, group, budget, ev) = unsafe { (&*sp.tt, &*sp.group, &*sp.budget, sp.ev.as_ref()) };
     let moves = unsafe { std::slice::from_raw_parts(sp.moves, sp.n_moves) };
     let mut scratch: Option<Scratch> = None;
     let mut nodes = 0u64;
@@ -342,18 +322,17 @@ unsafe fn help_split(sp: &SplitPoint) -> bool {
         let m = moves[idx];
         let sc = scratch.take().unwrap_or_else(|| budget.take_scratch());
         let mut w = Worker::with_tables(tt, budget, group, sc);
-        w.selective_t = sp.selective_t;
+        w.selective = sp.selective;
         w.nnue = sp.nnue.clone();
         let mut child = m.child(&sp.board);
-        if let Some(e) = ev.filter(|_| child.empty_count() >= eval_order_empties()) {
-            w.order_ix = order_indexer(e).init(child.black, child.white);
+        if let Some(e) = ev.filter(|_| child.empty_count() >= EVAL_ORDER_EMPTIES) {
+            w.order_ix = e.indexer().init(child.black, child.white);
         }
         let ch = child_hash_of(&child);
         let mut val = -w.pvs(&mut child, ch, -cur - 1, -cur, false, true, ev);
         if val == -ABORTED {
             val = ABORTED;
         } else if cur < val && val < sp.upper {
-            let ch = child_hash_of(&child);
             let re = -w.pvs(&mut child, ch, -sp.upper, -val, false, false, ev);
             val = if re == -ABORTED { ABORTED } else { re };
         }
@@ -389,10 +368,6 @@ unsafe fn help_split(sp: &SplitPoint) -> bool {
 const SPLIT_SLOTS: usize = 32;
 /// How long a waiting owner sleeps between looks for a split under its own; 50 and 500 us measured the same.
 const OWNER_POLL: std::time::Duration = std::time::Duration::from_micros(200);
-
-const SPEC_SPLIT_MAX_EMPTIES: u8 = 24;
-
-knob!(fn spec_split_max() -> u8 = "SPEC_MAX" or SPEC_SPLIT_MAX_EMPTIES);
 
 struct EndPool {
     /// Guards the sleep: a split is published under it so a worker about to wait cannot miss it.
@@ -487,11 +462,8 @@ impl EndPool {
 
     /// Only splits under `ancestor`: anything else could outlast the result its owner is waiting for.
     fn help_under(&self, ancestor: &AbortFlag) -> bool {
-        (0..SPLIT_SLOTS).any(|i| {
-            self.help_slot(i, |sp| {
-                unsafe { &*(sp.group as *const AbortFlag<'static>) }.descends_from(ancestor)
-            })
-        })
+        (0..SPLIT_SLOTS)
+            .any(|i| self.help_slot(i, |sp| unsafe { &*sp.group }.descends_from(ancestor)))
     }
 
     fn worker_loop(&self) {
@@ -522,23 +494,28 @@ impl EndPool {
     }
 }
 
-const SORT_ALPHA_DELTA: i32 = 12;
-const EDGE_STABILITY_ORDER_WEIGHT: i32 = 1;
-/// The exact pass opens one notch around the warm-up score: a wide window lets a wrong first move be searched exactly.
-const EXACT_ASPIRATION_WIDTH: i32 = 1;
+#[derive(Clone, Copy)]
+struct Selectivity {
+    t: f32,
+    deep_root: bool,
+}
 
-const WARM_ASPIRATION_WIDTH: i32 = 6;
+impl Selectivity {
+    fn new(t: f32, root: &Board) -> Selectivity {
+        Selectivity {
+            t,
+            deep_root: root.empty_count() >= 25,
+        }
+    }
 
-knob!(fn warm_aspiration_width() -> i32 = "WARM_ASP_WIDTH" or WARM_ASPIRATION_WIDTH);
-
-const ESTIMATE_DEPTH: u8 = 6;
-const SELECTIVE_MIN_EMPTIES: u8 = 10;
-
-knob!(fn selective_pass_min_empties() -> u8 = "SEL_PASS_MIN" or SELECTIVE_PASS_MIN_EMPTIES);
-
-knob!(fn selective_min_empties() -> u8 = "SEL_MIN_EMPTIES" or SELECTIVE_MIN_EMPTIES);
-
-const SELECTIVE_PROBE_DEPTH: u8 = 2;
+    fn probe_depth(self, empties: u8) -> u8 {
+        match (self.deep_root, empties >= 20) {
+            (false, _) => 3,
+            (true, true) => 6,
+            (true, false) => 2,
+        }
+    }
+}
 
 fn selective_sigma(empties: u8, pc: u8) -> f32 {
     let e = (empties as f32).clamp(14.0, 30.0);
@@ -548,23 +525,6 @@ fn selective_sigma(empties: u8, pc: u8) -> f32 {
         + 0.009864 * e * p;
     s.max(1.0)
 }
-
-fn selective_probe_depth(empties: u8) -> u8 {
-    let step = PROBE_STEP.load(std::sync::atomic::Ordering::Relaxed);
-    if step != 0 && empties >= (step >> 8) as u8 {
-        return (step & 0xff) as u8;
-    }
-    SELECTIVE_PROBE_DEPTH
-}
-
-static PROBE_STEP: std::sync::atomic::AtomicU16 = std::sync::atomic::AtomicU16::new(0);
-
-/// A probe runs only when the static evaluation already clears the bound by the margin less this.
-const SELECTIVE_GATE_OFFSET: f32 = 4.0;
-const SELECTIVE_PASS_MIN_EMPTIES: u8 = 18;
-const SELECTIVE_LADDER: [f32; 3] = [0.6, 1.1, 1.8];
-/// From this rung on, a cut solve plays the warm-up's move.
-const WARM_FALLBACK_T: f32 = 1.8;
 
 const SORT_DEPTH_LADDER: [u8; 64] =
     build_sort_ladder([DEEP_ORDER_EMPTIES, DEEP2_ORDER_EMPTIES, DEEP3_ORDER_EMPTIES]);
@@ -591,39 +551,8 @@ fn child_hash_of(child: &Board) -> u64 {
     zobrist::board_hash(child.player_bb(), child.opponent_bb())
 }
 
-#[cfg(test)]
-fn neighbour_bit(sq: u8) -> u64 {
-    let file = (sq / 8) as i32;
-    let rank = (sq % 8) as i32;
-    let mut mask = 0u64;
-    for df in -1..=1i32 {
-        for dr in -1..=1i32 {
-            if df == 0 && dr == 0 {
-                continue;
-            }
-            let f = file + df;
-            let r = rank + dr;
-            if (0..8).contains(&f) && (0..8).contains(&r) {
-                mask |= 1u64 << (f * 8 + r);
-            }
-        }
-    }
-    mask
-}
-
 #[inline]
-fn final_score_bb(player: u64, opponent: u64) -> i32 {
-    let diff = player.count_ones() as i32 - opponent.count_ones() as i32;
-    let empties = 64 - (player | opponent).count_ones() as i32;
-    match diff.cmp(&0) {
-        std::cmp::Ordering::Greater => diff + empties,
-        std::cmp::Ordering::Less => diff - empties,
-        std::cmp::Ordering::Equal => 0,
-    }
-}
-
-#[inline]
-fn parity_of_bb(occupied: u64) -> u8 {
+fn parity_of(occupied: u64) -> u8 {
     let empty = !occupied;
     let mut parity = 0u8;
     for (id, mask) in QUADRANT_MASKS {
@@ -665,13 +594,6 @@ const PARITY_ODD_MASK: [u64; 16] = {
     t
 };
 
-#[inline]
-fn parity_of(board: &Board) -> u8 {
-    parity_of_bb(board.black | board.white)
-}
-
-const VALUE_INF: i32 = i32::MAX / 2;
-
 #[derive(Clone, Copy)]
 #[repr(C, align(32))]
 struct HashEntry {
@@ -712,7 +634,7 @@ impl HashEntry {
         if self.date == now {
             return false;
         }
-        self.depth >= structural_proof_floor()
+        self.depth >= SEED_MIN_EMPTIES
     }
 
     #[inline]
@@ -832,13 +754,7 @@ impl HashTable {
     #[inline(always)]
     fn prefetch(&self, hash: u64) {
         let base = ((hash & self.mask) as usize) << 1;
-        unsafe {
-            let p = (*self.entries.get()).as_ptr().add(base);
-            #[cfg(target_arch = "aarch64")]
-            std::arch::asm!("prfm pldl1keep, [{p}]", p = in(reg) p, options(nostack, preserves_flags));
-            #[cfg(not(target_arch = "aarch64"))]
-            let _ = p;
-        }
+        prefetch(unsafe { (*self.entries.get()).as_ptr().add(base) });
     }
 
     fn wipe(&mut self, threads: usize) {
@@ -948,9 +864,7 @@ impl HashTable {
         self.date.store(next, std::sync::atomic::Ordering::Relaxed);
     }
 
-    /// Older entries turn into seeds by date, so only a date about to wrap
-    /// onto live entries forces a wipe. A solve advances the date by a few
-    /// rungs, hence the margin.
+    /// Older entries turn into seeds by date; only a date near wrapping (a solve takes a few) forces a wipe.
     fn clear(&mut self, threads: usize) {
         if self.date() >= u8::MAX - 16 {
             self.wipe(threads);
@@ -1018,12 +932,7 @@ pub enum EndSolverMode {
 pub struct EndSolverResult {
     pub best_move: Option<Position>,
     pub value: i32,
-    pub empty: u8,
     pub nodes: u64,
-}
-
-fn order_indexer(e: &crate::linear::Linear) -> &crate::pattern_index::PatternIndexer {
-    e.indexer()
 }
 
 pub type NnueProbe = (
@@ -1031,6 +940,7 @@ pub type NnueProbe = (
     std::sync::Arc<crate::midgame::SharedTt>,
 );
 
+/// An entry of a worker's private cache; `best8` is the move plus one, 0 for none.
 #[derive(Clone, Copy)]
 #[repr(C, packed)]
 struct L4Entry {
@@ -1041,43 +951,7 @@ struct L4Entry {
     best8: u8,
 }
 
-const ENTRY_BYTES: usize = std::mem::size_of::<L4Entry>();
-const _: () = assert!(ENTRY_BYTES == 19);
-
-#[cfg(feature = "layer-profile")]
-pub mod ab_stats {
-    use std::sync::atomic::AtomicU64;
-    pub static NODES: AtomicU64 = AtomicU64::new(0);
-    pub static L4_PROBE: AtomicU64 = AtomicU64::new(0);
-    pub static L4_HIT: AtomicU64 = AtomicU64::new(0);
-    pub static L4_STORE: AtomicU64 = AtomicU64::new(0);
-    pub static L56_PROBE: AtomicU64 = AtomicU64::new(0);
-    pub static L56_HIT: AtomicU64 = AtomicU64::new(0);
-    pub static CHILD: AtomicU64 = AtomicU64::new(0);
-    pub static STAB4: AtomicU64 = AtomicU64::new(0);
-    pub static STAB4_CUT: AtomicU64 = AtomicU64::new(0);
-    pub static STAB_FULL: AtomicU64 = AtomicU64::new(0);
-
-    pub static STAB_GATE_A: AtomicU64 = AtomicU64::new(0);
-    pub static O_NODES: AtomicU64 = AtomicU64::new(0);
-
-    pub static O_SCORED: AtomicU64 = AtomicU64::new(0);
-    pub static O_TT_PROBE: AtomicU64 = AtomicU64::new(0);
-    pub static O_TT_CUT: AtomicU64 = AtomicU64::new(0);
-    pub static O_CHILD: AtomicU64 = AtomicU64::new(0);
-}
-#[cfg(feature = "layer-profile")]
-macro_rules! abst {
-    ($c:ident) => {
-        ab_stats::$c.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
-    };
-}
-#[cfg(not(feature = "layer-profile"))]
-macro_rules! abst {
-    ($c:ident) => {
-        ()
-    };
-}
+const _: () = assert!(std::mem::size_of::<L4Entry>() == 19);
 
 const L4_EMPTY: L4Entry = L4Entry {
     player: 0,
@@ -1086,6 +960,75 @@ const L4_EMPTY: L4Entry = L4Entry {
     upper: 0,
     best8: 0,
 };
+
+#[inline(always)]
+fn cache_slot(cache: &[L4Entry], hash: u64) -> &L4Entry {
+    unsafe { cache.get_unchecked((hash as usize) & (cache.len() - 1)) }
+}
+
+#[inline]
+fn cache_cut(
+    cache: &[L4Entry],
+    hash: u64,
+    player: u64,
+    opponent: u64,
+    alpha: i32,
+    beta: i32,
+) -> Option<i32> {
+    let e = cache_slot(cache, hash);
+    if e.player == player && e.opponent == opponent {
+        if (e.lower as i32) >= beta {
+            return Some(e.lower as i32);
+        }
+        if (e.upper as i32) <= alpha {
+            return Some(e.upper as i32);
+        }
+    }
+    None
+}
+
+#[inline]
+fn cache_store(
+    cache: &mut [L4Entry],
+    hash: u64,
+    player: u64,
+    opponent: u64,
+    alpha: i32,
+    beta: i32,
+    score: i32,
+    best: Option<Position>,
+) {
+    let idx = (hash as usize) & (cache.len() - 1);
+    let e = unsafe { cache.get_unchecked_mut(idx) };
+    if e.player != player || e.opponent != opponent {
+        *e = L4Entry {
+            player,
+            opponent,
+            lower: i8::MIN,
+            upper: i8::MAX,
+            best8: 0,
+        };
+    }
+    if score > alpha {
+        e.lower = e.lower.max(score as i8);
+    }
+    if score < beta {
+        e.upper = e.upper.min(score as i8);
+    }
+    if let Some(b) = best {
+        e.best8 = b.index() + 1;
+    }
+}
+
+#[inline(always)]
+fn prefetch<T>(p: *const T) {
+    #[cfg(target_arch = "aarch64")]
+    unsafe {
+        std::arch::asm!("prfm pldl1keep, [{p}]", p = in(reg) p, options(nostack, preserves_flags));
+    }
+    #[cfg(not(target_arch = "aarch64"))]
+    let _ = p;
+}
 
 fn zeroed_vec<T: Copy>(len: usize) -> Vec<T> {
     let layout = std::alloc::Layout::array::<T>(len).expect("table size overflow");
@@ -1096,29 +1039,16 @@ fn zeroed_vec<T: Copy>(len: usize) -> Vec<T> {
     }
 }
 
-knob!(fn l4_bits() -> u32 = "EXACT_L4_BITS" or 14);
-
-knob!(fn l78_bits() -> u32 = "L78_BITS" or 15);
-
-knob!(fn new_shallow_bits() -> u32 = "NEW_SHALLOW_BITS" or 14);
-
-fn structural_proof_floor() -> u8 {
-    pvs_limit().max(selective_min_empties())
-}
-
 pub struct Solver {
     hash_table: HashTable,
-    nodes: u64,
-    best: Option<Position>,
     threads: usize,
     nnue: Option<NnueProbe>,
     scratch: Option<Scratch>,
     /// An aborted solve may have stored bounds from a cut-off subtree.
     wipe: bool,
     budget: Option<std::sync::Arc<ThreadBudget>>,
-    budget_threads: usize,
     budget_handles: Vec<std::thread::JoinHandle<()>>,
-    stop: Option<crate::midgame::StopHandle>,
+    stop: Option<StopHandle>,
     /// The warm-up rung a cut solve finished, which beats the midgame backup as its move.
     pub warm_rung: Option<(i32, Option<Position>)>,
 }
@@ -1128,14 +1058,14 @@ struct Worker<'a> {
     l4: Vec<L4Entry>,
     l56: Vec<L4Entry>,
     l78: Vec<L4Entry>,
-    order_ix: crate::pattern_index::PatternIndices,
+    order_ix: PatternIndices,
     tt: &'a HashTable,
     abort: &'a AbortFlag<'a>,
     budget: &'a ThreadBudget,
-    stop: Option<&'a crate::midgame::StopHandle>,
+    stop: Option<&'a StopHandle>,
     best: Option<Position>,
     warm_score: Option<i32>,
-    selective_t: Option<f32>,
+    selective: Option<Selectivity>,
     nnue: Option<NnueProbe>,
 }
 
@@ -1160,8 +1090,8 @@ impl<'a> Worker<'a> {
             nodes: 0,
             best: None,
             warm_score: None,
-            selective_t: None,
-            order_ix: crate::pattern_index::PatternIndices::ZERO,
+            selective: None,
+            order_ix: PatternIndices::ZERO,
             nnue: None,
             l56: sc.l56,
             l78: sc.l78,
@@ -1171,21 +1101,7 @@ impl<'a> Worker<'a> {
         }
     }
 
-    #[inline]
-    fn l4_prefetch(&self, hash: u64) {
-        if self.l4.is_empty() {
-            return;
-        }
-        let idx = (hash as usize) & (self.l4.len() - 1);
-        unsafe {
-            let p = self.l4.as_ptr().add(idx);
-            #[cfg(target_arch = "aarch64")]
-            std::arch::asm!("prfm pldl1keep, [{p}]", p = in(reg) p, options(nostack, preserves_flags));
-            #[cfg(not(target_arch = "aarch64"))]
-            let _ = p;
-        }
-    }
-
+    /// `(lower, upper, best move)` for a 7-10 empties position the table does not hold.
     #[inline]
     #[allow(clippy::type_complexity)]
     fn l78_probe(
@@ -1194,165 +1110,21 @@ impl<'a> Worker<'a> {
         player: u64,
         opponent: u64,
     ) -> Option<(i32, i32, Option<Position>)> {
-        let e = unsafe {
-            self.l78
-                .get_unchecked((hash as usize) & (self.l78.len() - 1))
+        let e = cache_slot(&self.l78, hash);
+        if e.player != player || e.opponent != opponent {
+            return None;
+        }
+        let lo = if e.lower == i8::MIN {
+            -VALUE_INF
+        } else {
+            e.lower as i32
         };
-        if e.player == player && e.opponent == opponent {
-            let lo = if e.lower == i8::MIN {
-                -VALUE_INF
-            } else {
-                e.lower as i32
-            };
-            let hi = if e.upper == i8::MAX {
-                VALUE_INF
-            } else {
-                e.upper as i32
-            };
-            let best = if e.best8 == 0 {
-                None
-            } else {
-                Some(Position(e.best8 - 1))
-            };
-            return Some((lo, hi, best));
-        }
-        None
-    }
-
-    #[inline]
-    fn l78_store(
-        &mut self,
-        hash: u64,
-        player: u64,
-        opponent: u64,
-        alpha: i32,
-        beta: i32,
-        score: i32,
-        best: Option<Position>,
-    ) {
-        let idx = (hash as usize) & (self.l78.len() - 1);
-        let e = unsafe { self.l78.get_unchecked_mut(idx) };
-        if e.player != player || e.opponent != opponent {
-            *e = L4Entry {
-                player,
-                opponent,
-                lower: i8::MIN,
-                upper: i8::MAX,
-                best8: 0,
-            };
-        }
-        if score > alpha {
-            e.lower = e.lower.max(score as i8);
-        }
-        if score < beta {
-            e.upper = e.upper.min(score as i8);
-        }
-        if let Some(b) = best {
-            e.best8 = b.index() + 1;
-        }
-    }
-
-    #[inline]
-    fn l56_probe(
-        &self,
-        hash: u64,
-        player: u64,
-        opponent: u64,
-        alpha: i32,
-        beta: i32,
-    ) -> Option<i32> {
-        let e = unsafe {
-            self.l56
-                .get_unchecked((hash as usize) & (self.l56.len() - 1))
+        let hi = if e.upper == i8::MAX {
+            VALUE_INF
+        } else {
+            e.upper as i32
         };
-        if e.player == player && e.opponent == opponent {
-            if (e.lower as i32) >= beta {
-                return Some(e.lower as i32);
-            }
-            if (e.upper as i32) <= alpha {
-                return Some(e.upper as i32);
-            }
-        }
-        None
-    }
-
-    #[inline]
-    fn l56_store(
-        &mut self,
-        hash: u64,
-        player: u64,
-        opponent: u64,
-        alpha: i32,
-        beta: i32,
-        score: i32,
-    ) {
-        let idx = (hash as usize) & (self.l56.len() - 1);
-        let e = unsafe { self.l56.get_unchecked_mut(idx) };
-        if e.player != player || e.opponent != opponent {
-            *e = L4Entry {
-                player,
-                opponent,
-                lower: i8::MIN,
-                upper: i8::MAX,
-                best8: 0,
-            };
-        }
-        if score > alpha {
-            e.lower = e.lower.max(score as i8);
-        }
-        if score < beta {
-            e.upper = e.upper.min(score as i8);
-        }
-    }
-
-    #[inline]
-    fn l4_probe(
-        &self,
-        hash: u64,
-        player: u64,
-        opponent: u64,
-        alpha: i32,
-        beta: i32,
-    ) -> Option<i32> {
-        let e = unsafe { self.l4.get_unchecked((hash as usize) & (self.l4.len() - 1)) };
-        if e.player == player && e.opponent == opponent {
-            if (e.lower as i32) >= beta {
-                return Some(e.lower as i32);
-            }
-            if (e.upper as i32) <= alpha {
-                return Some(e.upper as i32);
-            }
-        }
-        None
-    }
-
-    #[inline]
-    fn l4_store(
-        &mut self,
-        hash: u64,
-        player: u64,
-        opponent: u64,
-        alpha: i32,
-        beta: i32,
-        score: i32,
-    ) {
-        let idx = (hash as usize) & (self.l4.len() - 1);
-        let e = unsafe { self.l4.get_unchecked_mut(idx) };
-        if e.player != player || e.opponent != opponent {
-            *e = L4Entry {
-                player,
-                opponent,
-                lower: i8::MIN,
-                upper: i8::MAX,
-                best8: 0,
-            };
-        }
-        if score > alpha {
-            e.lower = e.lower.max(score as i8);
-        }
-        if score < beta {
-            e.upper = e.upper.min(score as i8);
-        }
+        Some((lo, hi, e.best8.checked_sub(1).map(Position)))
     }
 
     #[inline]
@@ -1371,31 +1143,27 @@ impl Drop for Solver {
 }
 
 impl Solver {
-    pub fn table_move(&self, board: &Board) -> Option<Position> {
-        let hash = zobrist::board_hash(board.player_bb(), board.opponent_bb());
-        let e = self.hash_table.get(board, hash)?;
-        Position::from_index(e.best8 as u32)
-    }
-
     pub fn new(bit_size: u32) -> Solver {
         Solver {
             hash_table: HashTable::new(bit_size),
-            nodes: 0,
-            best: None,
             threads: 1,
             nnue: None,
             scratch: None,
             wipe: true,
             budget: None,
-            budget_threads: 0,
             budget_handles: Vec::new(),
             stop: None,
             warm_rung: None,
         }
     }
 
+    pub fn table_move(&self, board: &Board) -> Option<Position> {
+        let hash = zobrist::board_hash(board.player_bb(), board.opponent_bb());
+        self.hash_table.get(board, hash)?.best()
+    }
+
     fn ensure_budget(&mut self, extra: usize) -> std::sync::Arc<ThreadBudget> {
-        if self.budget.is_none() || self.budget_threads != extra {
+        if self.budget.as_ref().is_none_or(|b| b.pool.workers != extra) {
             self.drop_budget();
             let b = std::sync::Arc::new(ThreadBudget::new(extra));
             for _ in 0..extra {
@@ -1404,7 +1172,6 @@ impl Solver {
                     .push(std::thread::spawn(move || bc.pool.worker_loop()));
             }
             self.budget = Some(b);
-            self.budget_threads = extra;
         }
         std::sync::Arc::clone(self.budget.as_ref().unwrap())
     }
@@ -1415,9 +1182,7 @@ impl Solver {
             for h in self.budget_handles.drain(..) {
                 let _ = h.join();
             }
-            drop(b);
         }
-        self.budget_threads = 0;
     }
 
     pub fn set_nnue(
@@ -1433,7 +1198,7 @@ impl Solver {
         self.wipe = true;
     }
 
-    pub fn set_stop(&mut self, stop: Option<crate::midgame::StopHandle>) {
+    pub fn set_stop(&mut self, stop: Option<StopHandle>) {
         self.stop = stop;
     }
 
@@ -1445,52 +1210,27 @@ impl Solver {
         self.solve_with_eval(mode, board, None)
     }
 
+    /// With an evaluator, solves from `SELECTIVE_PASS_MIN_EMPTIES` up start from a selective warm-up.
     pub fn solve_with_eval(
         &mut self,
         mode: EndSolverMode,
         board: &Board,
         ev: Option<&Linear>,
     ) -> EndSolverResult {
-        self.solve_impl(mode, board, ev)
-    }
-
-    fn solve_impl(
-        &mut self,
-        mode: EndSolverMode,
-        board: &Board,
-        ev: Option<&Linear>,
-    ) -> EndSolverResult {
-        self.nodes = 0;
-        self.best = None;
         self.warm_rung = None;
-
         if !board.check_all() {
             return EndSolverResult {
                 best_move: None,
                 value: 0,
-                empty: board.empty_count(),
                 nodes: 0,
             };
-        }
-
-        {
-            let step = if board.empty_count() >= 25 {
-                (20 << 8) | 6
-            } else {
-                3
-            };
-            PROBE_STEP.store(step, std::sync::atomic::Ordering::Relaxed);
         }
 
         self.hash_table.set_shared(self.threads > 1);
 
         let t_clear = std::time::Instant::now();
-        let extra = self.threads.saturating_sub(1);
-        let budget_arc = self.ensure_budget(extra);
-        let mut root = self
-            .scratch
-            .take()
-            .unwrap_or_else(|| Scratch::new(l4_bits()));
+        let budget_arc = self.ensure_budget(self.threads - 1);
+        let mut root = self.scratch.take().unwrap_or_else(|| Scratch::new(L4_BITS));
         if std::mem::take(&mut self.wipe) {
             self.hash_table.wipe(self.threads);
             root.wipe();
@@ -1516,11 +1256,12 @@ impl Solver {
                 }
             }
             let _watch = StopWatch(&watching);
-            if stop_ref.is_some() {
-                let (stop, abort, watching) = (stop_ref, &root_abort, &watching);
+            // Helpers carry no stop handle; they see a stop through the root's abort flag.
+            if let Some(stop) = stop_ref {
+                let (abort, watching) = (&root_abort, &watching);
                 scope.spawn(move || {
                     while watching.load(std::sync::atomic::Ordering::Relaxed) {
-                        if stop.is_some_and(|s| s.is_stopped()) {
+                        if stop.is_stopped() {
                             abort.abort();
                             return;
                         }
@@ -1532,25 +1273,22 @@ impl Solver {
             w.stop = stop_ref;
             w.nnue = self.nnue.clone();
             let mut b = *board;
-            let mut warm: Option<(i32, Option<Position>)> = None;
-            if let Some(e) = ev {
-                if board.empty_count() >= selective_pass_min_empties() {
-                    let mut guess = w.estimate_score(board, Some(e));
-                    for t in SELECTIVE_LADDER {
-                        w.selective_t = Some(t);
-                        let mut sb = *board;
-                        let s =
-                            w.aspiration_width(&mut sb, guess, warm_aspiration_width(), Some(e));
-                        w.selective_t = None;
-                        if t >= WARM_FALLBACK_T && !root_abort.aborted() {
-                            warm = Some((s, w.best));
-                        }
-                        guess = s - (s & 1);
-                        w.tt.demote_to_seed_shared();
-                        w.warm_score = Some(s - (s & 1));
+            let mut warm = None;
+            if let Some(e) = ev.filter(|_| board.empty_count() >= SELECTIVE_PASS_MIN_EMPTIES) {
+                let mut guess = w.estimate_score(board, e);
+                for t in SELECTIVE_LADDER {
+                    w.selective = Some(Selectivity::new(t, board));
+                    let mut sb = *board;
+                    let s = w.aspiration_width(&mut sb, guess, WARM_ASPIRATION_WIDTH, ev);
+                    w.selective = None;
+                    if t >= WARM_FALLBACK_T && !root_abort.aborted() {
+                        warm = Some((s, w.best));
                     }
+                    guess = s - (s & 1);
                     w.tt.demote_to_seed_shared();
+                    w.warm_score = Some(guess);
                 }
+                w.tt.demote_to_seed_shared();
             }
 
             let v = match mode {
@@ -1564,20 +1302,16 @@ impl Solver {
         self.scratch = Some(root_back);
         self.warm_rung = warm;
         self.wipe = root_abort.aborted();
-        self.nodes = nodes;
-        self.best = best;
 
         EndSolverResult {
-            best_move: self.best,
+            best_move: best,
             value,
-            empty: board.empty_count(),
-            nodes: self.nodes,
+            nodes,
         }
     }
 }
 
 impl Worker<'_> {
-    #[allow(clippy::too_many_arguments)]
     fn seed_search(
         &mut self,
         board: &Board,
@@ -1590,10 +1324,9 @@ impl Worker<'_> {
         beta: f32,
         store: bool,
     ) -> f32 {
-        let _prof = layer_profile::Scope::new(layer_profile::WARMUP, board.empty_count());
         self.nodes += 1;
 
-        if let Some(v) = wipeout_score(board) {
+        if let Some(v) = wipeout_score(board.player_bb(), board.opponent_bb()) {
             return v as f32;
         }
         if depth == 0 {
@@ -1734,8 +1467,7 @@ impl Worker<'_> {
         val
     }
 
-    fn estimate_score(&mut self, board: &Board, ev: Option<&Linear>) -> i32 {
-        let Some(e) = ev else { return 0 };
+    fn estimate_score(&mut self, board: &Board, e: &Linear) -> i32 {
         let ix = e.indexer();
         let mut indices = ix.init(board.black, board.white);
         let hash = zobrist::board_hash(board.player_bb(), board.opponent_bb());
@@ -1782,7 +1514,7 @@ impl Worker<'_> {
             } else if val >= hi && hi < 64 {
                 score = val;
                 left = 1;
-                right = (right * 2).clamp(1, 128);
+                right = (right * 2).min(128);
             } else {
                 return val;
             }
@@ -1797,14 +1529,15 @@ impl Worker<'_> {
 
         self.nodes += 1;
 
-        if let Some(e) = ev.filter(|_| board.empty_count() >= eval_order_empties()) {
-            self.order_ix = order_indexer(e).init(board.black, board.white);
+        if let Some(e) = ev.filter(|_| board.empty_count() >= EVAL_ORDER_EMPTIES) {
+            self.order_ix = e.indexer().init(board.black, board.white);
         }
         let root_mover = board.player();
 
         let mut moves = MoveBuf::new();
         let tt_best = self.tt.get(board, hash).and_then(|e| e.best());
-        self.scored_moves(board, tt_best, ev, &mut moves);
+        self.gen_moves(board, &mut moves);
+        self.score_moves(board, &mut moves, tt_best, ev, i32::MIN / 2);
         if moves.is_empty() {
             return final_score(board);
         }
@@ -1826,7 +1559,7 @@ impl Worker<'_> {
             }
         }
 
-        if moves.len() > 2 && board.empty_count() >= parallel_min_empties() && lower < upper {
+        if moves.len() > 2 && board.empty_count() >= PARALLEL_MIN_EMPTIES && lower < upper {
             if let Some((val, bpos)) = self.split_siblings(board, &moves[1..], lower, upper, ev) {
                 if val == ABORTED {
                     return ABORTED;
@@ -1855,7 +1588,6 @@ impl Worker<'_> {
                 return ABORTED;
             }
             if lower < val && val < upper {
-                let ch = child_hash_of(&child);
                 val = -self.pvs_ordered(&mut child, ch, -upper, -val, false, ev, *m, root_mover);
                 if val == -ABORTED {
                     return ABORTED;
@@ -1894,12 +1626,12 @@ impl Worker<'_> {
             moves: siblings.as_ptr(),
             n_moves: siblings.len(),
             upper,
-            selective_t: self.selective_t,
+            selective: self.selective,
             nnue: self.nnue.clone(),
-            tt: self.tt as *const HashTable,
-            ev: ev.map_or(std::ptr::null(), |e| e as *const Linear as *const ()),
-            group: &group as *const AbortFlag as *const (),
-            budget: self.budget as *const ThreadBudget as *const (),
+            tt: self.tt,
+            ev: ev.map_or(std::ptr::null(), |e| e),
+            group: (&group as *const AbortFlag<'_>).cast(),
+            budget: self.budget,
             cursor: AtomicUsize::new(0),
             shared_lower: AtomicI32::new(lower),
             active: AtomicUsize::new(0),
@@ -1938,7 +1670,6 @@ impl Worker<'_> {
             let mover = parent.player();
             let mut val = -self.pvs_ordered(&mut child, ch, -cur - 1, -cur, true, ev, m, mover);
             if cur < val && val < upper {
-                let ch = child_hash_of(&child);
                 val = -self.pvs_ordered(&mut child, ch, -upper, -val, false, ev, m, mover);
             }
             if val == -ABORTED {
@@ -1969,45 +1700,23 @@ impl Worker<'_> {
 
         self.nodes += sp.nodes.load(Ordering::Relaxed);
         let mg = *sp.merge.lock().unwrap();
-        if unwound {
-            return Some((ABORTED, mg.best));
-        }
-        if (mg.aborted || cut_short) && mg.max < upper {
+        if unwound || ((mg.aborted || cut_short) && mg.max < upper) {
             return Some((ABORTED, mg.best));
         }
         Some((mg.max, mg.best))
     }
 
-    #[allow(clippy::too_many_arguments)]
-    #[inline(always)]
-    fn store(
-        &mut self,
-        board: &Board,
-        hash: u64,
-        alpha: i32,
-        beta: i32,
-        val: i32,
-        best: Option<Position>,
-    ) {
-        self.tt.update(board, hash, alpha, beta, val, best);
-    }
-
     /// Enhanced transposition cutoff: a child the table already proves good enough.
     #[inline(always)]
-    fn etc_cut(&mut self, board: &Board, moves: &MoveBuf, upper: i32) -> Option<i32> {
-        let _p = layer_profile::Scope::new(layer_profile::ETC, board.empty_count());
-        let mut probed = 0u64;
+    fn etc_cut(&self, board: &Board, moves: &MoveBuf, upper: i32) -> Option<i32> {
         for m in moves.iter() {
-            probed += 1;
             let child = m.child(board);
             if let Some(e) = self.tt.get(&child, child_hash_of(&child)) {
                 if !e.is_seed(self.tt.date()) && -e.upper() >= upper {
-                    node_accounting::etc(probed);
                     return Some(-e.upper());
                 }
             }
         }
-        node_accounting::etc(probed);
         None
     }
 
@@ -2021,7 +1730,6 @@ impl Worker<'_> {
         cut_node: bool,
         ev: Option<&Linear>,
     ) -> i32 {
-        let _prof = layer_profile::Scope::new(layer_profile::SEARCH, board.empty_count());
         let mut lower = alpha;
         let mut upper = beta;
 
@@ -2031,33 +1739,25 @@ impl Worker<'_> {
         }
         let mover = board.player();
 
-        if let Some(v) = wipeout_score(board) {
+        if let Some(v) = wipeout_score(board.player_bb(), board.opponent_bb()) {
             return v;
         }
-
-        let entry = {
-            let _p = layer_profile::Scope::new(layer_profile::TT, board.empty_count());
-            self.tt.get(board, hash)
-        };
-        if let Some(e) = entry {
-            if !e.is_seed(self.tt.date()) {
-                let mut unused = false;
-                if let Some(v) = narrow(&mut lower, &mut upper, &mut unused, e.lower(), e.upper()) {
-                    return v;
-                }
+        let entry = self.tt.get(board, hash);
+        if let Some(e) = entry.filter(|e| !e.is_seed(self.tt.date())) {
+            let mut unused = false;
+            if let Some(v) = narrow(&mut lower, &mut upper, &mut unused, e.lower(), e.upper()) {
+                return v;
             }
         }
 
-        {
-            let _p = layer_profile::Scope::new(layer_profile::STAB, board.empty_count());
-            if let Some(bound) = stability_cut(board, lower) {
-                return bound;
-            }
+        let (player, opponent) = (board.player_bb(), board.opponent_bb());
+        if let Some(bound) = stability_cut(player, opponent, board.empty_count(), lower) {
+            return bound;
         }
 
-        if let (Some(t), Some(e)) = (self.selective_t, ev) {
-            if board.empty_count() >= selective_min_empties() && upper - lower <= 1 {
-                if let Some(v) = self.selective_cut(board, hash, e, t, lower, upper) {
+        if let (Some(sel), Some(e)) = (self.selective, ev) {
+            if board.empty_count() >= SELECTIVE_MIN_EMPTIES && upper - lower <= 1 {
+                if let Some(v) = self.selective_cut(board, hash, e, sel, lower, upper) {
                     return v;
                 }
             }
@@ -2084,7 +1784,7 @@ impl Worker<'_> {
             if val == -ABORTED {
                 return ABORTED;
             }
-            self.store(board, hash, alpha, beta, val, None);
+            self.tt.update(board, hash, alpha, beta, val, None);
             return val;
         }
 
@@ -2093,7 +1793,7 @@ impl Worker<'_> {
             return 64;
         }
 
-        if board.empty_count() >= etc_empties() {
+        if board.empty_count() >= ETC_EMPTIES {
             if let Some(v) = self.etc_cut(board, &moves, upper) {
                 return v;
             }
@@ -2106,8 +1806,8 @@ impl Worker<'_> {
 
         if !cut_node
             && upper - lower == 1
-            && board.empty_count() >= parallel_min_empties()
-            && board.empty_count() <= spec_split_max()
+            && board.empty_count() >= PARALLEL_MIN_EMPTIES
+            && board.empty_count() <= SPEC_SPLIT_MAX_EMPTIES
             && moves.len() > 2
             && self.budget.pool.workers > 0
         {
@@ -2117,7 +1817,7 @@ impl Worker<'_> {
                 if val == ABORTED {
                     return ABORTED;
                 }
-                self.store(board, hash, alpha, beta, val, bpos);
+                self.tt.update(board, hash, alpha, beta, val, bpos);
                 return val;
             }
         }
@@ -2128,13 +1828,15 @@ impl Worker<'_> {
                 let mut child = m.child(board);
                 let ch = child_hash_of(&child);
                 max = self.descend_ordered(&mut child, ch, -upper, -lower, !cut_node, ev, m, mover);
+                if max == ABORTED {
+                    return ABORTED;
+                }
                 best = Some(m.pos);
                 if max > lower {
                     lower = max;
                 }
                 if lower >= upper {
-                    self.store(board, hash, alpha, beta, max, best);
-                    node_accounting::cut_at(board.empty_count(), Some(0));
+                    self.tt.update(board, hash, alpha, beta, max, best);
                     return max;
                 }
             }
@@ -2143,7 +1845,6 @@ impl Worker<'_> {
         self.score_moves(board, &mut moves, None, ev, lower);
 
         let mut next = 0usize;
-        let tt_searched = max != i32::MIN;
         if max == i32::MIN {
             Self::select_next(&mut moves, 0);
             let m = moves[0];
@@ -2162,8 +1863,8 @@ impl Worker<'_> {
 
         // A cut node whose first move failed is usually cut by the next one: search that alone first.
         let mut alone =
-            usize::from(cut_node && self.selective_t.is_none() && self.budget.pool.workers > 0);
-        let mut may_split = board.empty_count() >= parallel_min_empties();
+            usize::from(cut_node && self.selective.is_none() && self.budget.pool.workers > 0);
+        let mut may_split = board.empty_count() >= PARALLEL_MIN_EMPTIES;
 
         while next < moves.len() {
             if lower >= upper {
@@ -2184,7 +1885,7 @@ impl Worker<'_> {
                             best = Some(p);
                         }
                     }
-                    self.store(board, hash, alpha, beta, max, best);
+                    self.tt.update(board, hash, alpha, beta, max, best);
                     return max;
                 }
             }
@@ -2193,19 +1894,10 @@ impl Worker<'_> {
             let m = moves[next];
             next += 1;
             let mut child = m.child(board);
-            let val = {
-                let ch = child_hash_of(&child);
-                match ev.filter(|_| child.empty_count() >= eval_order_empties()) {
-                    Some(e) => {
-                        let saved = self.order_ix;
-                        order_indexer(e).apply(&mut self.order_ix, m.pos, m.flipped, mover);
-                        let v = self.descend_null_window(&mut child, ch, lower, upper, true, ev);
-                        self.order_ix = saved;
-                        v
-                    }
-                    None => self.descend_null_window(&mut child, ch, lower, upper, true, ev),
-                }
-            };
+            let ch = child_hash_of(&child);
+            let val = self.with_child_indices(ev, child.empty_count(), m, mover, |w| {
+                w.descend_null_window(&mut child, ch, lower, upper, true, ev)
+            });
             if val == ABORTED {
                 return ABORTED;
             }
@@ -2218,19 +1910,30 @@ impl Worker<'_> {
             }
         }
 
-        if moves.len() + usize::from(tt_searched) >= 2 {
-            let searched = next + usize::from(tt_searched);
-            node_accounting::cut_at(
-                board.empty_count(),
-                (lower >= upper).then_some(searched.saturating_sub(1)),
-            );
-        }
-
-        self.store(board, hash, alpha, beta, max, best);
+        self.tt.update(board, hash, alpha, beta, max, best);
         max
     }
 
-    #[allow(clippy::too_many_arguments)]
+    #[inline(always)]
+    fn with_child_indices<R>(
+        &mut self,
+        ev: Option<&Linear>,
+        child_empties: u8,
+        m: ScoredMove,
+        mover: Color,
+        f: impl FnOnce(&mut Self) -> R,
+    ) -> R {
+        let Some(e) = ev.filter(|_| child_empties >= EVAL_ORDER_EMPTIES) else {
+            return f(self);
+        };
+        let saved = self.order_ix;
+        e.indexer()
+            .apply(&mut self.order_ix, m.pos, m.flipped, mover);
+        let v = f(self);
+        self.order_ix = saved;
+        v
+    }
+
     fn pvs_ordered(
         &mut self,
         child: &mut Board,
@@ -2240,19 +1943,13 @@ impl Worker<'_> {
         cut_node: bool,
         ev: Option<&Linear>,
         m: ScoredMove,
-        mover: crate::color::Color,
+        mover: Color,
     ) -> i32 {
-        let Some(e) = ev.filter(|_| child.empty_count() >= eval_order_empties()) else {
-            return self.pvs(child, hash, alpha, beta, false, cut_node, ev);
-        };
-        let saved = self.order_ix;
-        order_indexer(e).apply(&mut self.order_ix, m.pos, m.flipped, mover);
-        let v = self.pvs(child, hash, alpha, beta, false, cut_node, ev);
-        self.order_ix = saved;
-        v
+        self.with_child_indices(ev, child.empty_count(), m, mover, |w| {
+            w.pvs(child, hash, alpha, beta, false, cut_node, ev)
+        })
     }
 
-    #[allow(clippy::too_many_arguments)]
     fn descend_ordered(
         &mut self,
         child: &mut Board,
@@ -2262,20 +1959,14 @@ impl Worker<'_> {
         cut_node: bool,
         ev: Option<&Linear>,
         m: ScoredMove,
-        mover: crate::color::Color,
+        mover: Color,
     ) -> i32 {
-        let Some(e) = ev.filter(|_| child.empty_count() >= eval_order_empties()) else {
-            return self.descend(child, hash, alpha, beta, cut_node, ev);
-        };
-        let saved = self.order_ix;
-        order_indexer(e).apply(&mut self.order_ix, m.pos, m.flipped, mover);
-        let v = self.descend(child, hash, alpha, beta, cut_node, ev);
-        self.order_ix = saved;
-        v
+        self.with_child_indices(ev, child.empty_count(), m, mover, |w| {
+            w.descend(child, hash, alpha, beta, cut_node, ev)
+        })
     }
 
     #[inline(always)]
-    #[allow(clippy::too_many_arguments)]
     fn descend(
         &mut self,
         child: &mut Board,
@@ -2285,18 +1976,31 @@ impl Worker<'_> {
         cut_node: bool,
         ev: Option<&Linear>,
     ) -> i32 {
-        if child.empty_count() >= pvs_limit() {
+        if child.empty_count() >= PVS_LIMIT {
             let v = self.pvs(child, hash, alpha, beta, false, cut_node, ev);
             if v == ABORTED {
                 return ABORTED;
             }
             -v
         } else {
-            let parity = parity_of(child);
-            if child.empty_count() >= MOVE_ORDERING_LIMIT {
-                -self.alpha_beta_ordered(child, hash, alpha, beta, false, parity, ev)
+            let (player, opponent, empties) =
+                (child.player_bb(), child.opponent_bb(), child.empty_count());
+            let parity = parity_of(player | opponent);
+            if empties >= MOVE_ORDERING_LIMIT {
+                -self.alpha_beta_ordered(
+                    player,
+                    opponent,
+                    empties,
+                    child.player,
+                    hash,
+                    alpha,
+                    beta,
+                    false,
+                    parity,
+                    ev,
+                )
             } else {
-                -self.alpha_beta(child, hash, alpha, beta, false, parity)
+                -self.alpha_beta(player, opponent, empties, hash, alpha, beta, false, parity)
             }
         }
     }
@@ -2324,37 +2028,11 @@ impl Worker<'_> {
         val
     }
 
-    #[allow(clippy::too_many_arguments)]
-    fn alpha_beta_ordered(
-        &mut self,
-        board: &mut Board,
-        hash: u64,
-        alpha: i32,
-        beta: i32,
-        passed: bool,
-        parity: u8,
-        ev: Option<&Linear>,
-    ) -> i32 {
-        self.alpha_beta_ordered_bb(
-            board.player_bb(),
-            board.opponent_bb(),
-            board.empty_count(),
-            board.player,
-            hash,
-            alpha,
-            beta,
-            passed,
-            parity,
-            ev,
-        )
-    }
-
-    #[allow(clippy::too_many_arguments)]
+    /// Positions from `TT_MIN_EMPTIES` go to the shared table, the rest to the worker's own cache.
     fn ordered_store(
         &mut self,
         use_tt: bool,
-        use_l78: bool,
-        to_move: crate::color::Color,
+        to_move: Color,
         hash: u64,
         player: u64,
         opponent: u64,
@@ -2372,12 +2050,20 @@ impl Worker<'_> {
                 value,
                 best,
             );
-        } else if use_l78 {
-            self.l78_store(hash, player, opponent, orig_alpha, beta, value, best);
+        } else {
+            cache_store(
+                &mut self.l78,
+                hash,
+                player,
+                opponent,
+                orig_alpha,
+                beta,
+                value,
+                best,
+            );
         }
     }
 
-    #[allow(clippy::too_many_arguments)]
     /// One child at the negated window: ordered search above the limit, plain below.
     #[inline(always)]
     fn child_value(
@@ -2385,19 +2071,19 @@ impl Worker<'_> {
         player: u64,
         opponent: u64,
         n_empties: u8,
-        to_move: crate::color::Color,
+        to_move: Color,
         m: ScoredMove,
         alpha: i32,
         beta: i32,
         parity: u8,
         ev: Option<&Linear>,
     ) -> i32 {
-        let (cbp, cbo) = child_bb(player, opponent, m);
+        let (cbp, cbo) = (opponent ^ m.flipped, player | m.flipped | m.pos.to_bit());
         let cp = parity ^ quadrant_id(m.pos.index());
         let ch = zobrist::board_hash(cbp, cbo);
         let ce = n_empties - 1;
         if ce >= MOVE_ORDERING_LIMIT {
-            -self.alpha_beta_ordered_bb(
+            -self.alpha_beta_ordered(
                 cbp,
                 cbo,
                 ce,
@@ -2410,16 +2096,16 @@ impl Worker<'_> {
                 ev,
             )
         } else {
-            -self.alpha_beta_bb(cbp, cbo, ce, ch, -beta, -alpha, false, cp)
+            -self.alpha_beta(cbp, cbo, ce, ch, -beta, -alpha, false, cp)
         }
     }
 
-    fn alpha_beta_ordered_bb(
+    fn alpha_beta_ordered(
         &mut self,
         player: u64,
         opponent: u64,
         n_empties: u8,
-        to_move: crate::color::Color,
+        to_move: Color,
         hash: u64,
         alpha: i32,
         beta: i32,
@@ -2427,52 +2113,39 @@ impl Worker<'_> {
         parity: u8,
         ev: Option<&Linear>,
     ) -> i32 {
-        let _prof = layer_profile::Scope::new(layer_profile::SEARCH, n_empties);
         debug_assert!(alpha < beta, "alpha_beta_ordered needs a non-empty window");
         let mut alpha = alpha;
         let mut beta = beta;
 
         self.nodes += 1;
 
-        if let Some(v) = wipeout_score_bb(player, opponent) {
+        if let Some(v) = wipeout_score(player, opponent) {
             return v;
         }
 
-        let use_tt = n_empties >= tt_min_empties();
+        let use_tt = n_empties >= TT_MIN_EMPTIES;
         if use_tt {
             self.tt.prefetch(hash);
         }
 
-        {
-            let _p = layer_profile::Scope::new(layer_profile::STAB, n_empties);
-            if let Some(bound) = stability_cut_bb(player, opponent, n_empties, alpha) {
-                return bound;
-            }
+        if let Some(bound) = stability_cut(player, opponent, n_empties, alpha) {
+            return bound;
         }
 
-        abst!(O_NODES);
-        let use_l78 = !use_tt;
         let mut l78_best: Option<Position> = None;
-        let entry = {
-            let _p = layer_profile::Scope::new(layer_profile::TT, n_empties);
-            if use_tt {
-                abst!(O_TT_PROBE);
-                self.tt.get(&board_of(player, opponent, to_move), hash)
-            } else {
-                None
-            }
+        let entry = if use_tt {
+            self.tt.get(&board_of(player, opponent, to_move), hash)
+        } else {
+            None
         };
         let mut narrowed = false;
-        if let Some(e) = entry {
-            if !e.is_seed(self.tt.date()) {
-                if let Some(v) = narrow(&mut alpha, &mut beta, &mut narrowed, e.lower(), e.upper())
-                {
-                    return v;
-                }
+        if let Some(e) = entry.filter(|e| !e.is_seed(self.tt.date())) {
+            if let Some(v) = narrow(&mut alpha, &mut beta, &mut narrowed, e.lower(), e.upper()) {
+                return v;
             }
         }
 
-        if use_l78 {
+        if !use_tt {
             if let Some((lo, hi, best)) = self.l78_probe(hash, player, opponent) {
                 l78_best = best;
                 if let Some(v) = narrow(&mut alpha, &mut beta, &mut narrowed, lo, hi) {
@@ -2482,8 +2155,7 @@ impl Worker<'_> {
         }
 
         if narrowed {
-            let _p = layer_profile::Scope::new(layer_profile::STAB, n_empties);
-            if let Some(bound) = stability_cut_bb(player, opponent, n_empties, alpha) {
+            if let Some(bound) = stability_cut(player, opponent, n_empties, alpha) {
                 return bound;
             }
         }
@@ -2496,7 +2168,7 @@ impl Worker<'_> {
             if passed {
                 return final_score_bb(player, opponent);
             }
-            let val = -self.alpha_beta_ordered_bb(
+            let val = -self.alpha_beta_ordered(
                 opponent,
                 player,
                 n_empties,
@@ -2508,18 +2180,9 @@ impl Worker<'_> {
                 parity,
                 ev,
             );
-            if use_tt {
-                self.tt.update(
-                    &board_of(player, opponent, to_move),
-                    hash,
-                    orig_alpha,
-                    beta,
-                    val,
-                    None,
-                );
-            } else if use_l78 {
-                self.l78_store(hash, player, opponent, orig_alpha, beta, val, None);
-            }
+            self.ordered_store(
+                use_tt, to_move, hash, player, opponent, orig_alpha, beta, val, None,
+            );
             return val;
         }
 
@@ -2535,7 +2198,6 @@ impl Worker<'_> {
         let mut scored_from = 0usize;
         if let Some(bpos) = tt_best {
             if let Some(idx) = moves.iter().position(|m| m.pos == bpos) {
-                abst!(O_CHILD);
                 moves.swap(0, idx);
                 scored_from = 1;
                 let m = moves.at(0);
@@ -2544,12 +2206,9 @@ impl Worker<'_> {
                 );
                 if val >= beta {
                     alpha = val;
-                    abst!(O_TT_CUT);
-                    node_accounting::cut_at(n_empties, Some(0));
                     best = Some(m.pos);
                     self.ordered_store(
-                        use_tt, use_l78, to_move, hash, player, opponent, orig_alpha, beta, alpha,
-                        best,
+                        use_tt, to_move, hash, player, opponent, orig_alpha, beta, alpha, best,
                     );
                     return alpha;
                 }
@@ -2557,10 +2216,7 @@ impl Worker<'_> {
             }
         }
 
-        for _ in scored_from..moves.len() {
-            abst!(O_SCORED);
-        }
-        if n_empties >= eval_order_empties() {
+        if n_empties >= EVAL_ORDER_EMPTIES {
             let scratch = board_of(player, opponent, to_move);
             self.score_moves(
                 &scratch,
@@ -2570,13 +2226,7 @@ impl Worker<'_> {
                 i32::MIN / 2,
             );
         } else {
-            self.score_moves_static_bb(
-                player,
-                opponent,
-                n_empties,
-                moves.tail_mut(scored_from),
-                None,
-            );
+            score_moves_static(player, opponent, moves.tail_mut(scored_from), None);
         }
 
         for i in scored_from..moves.len() {
@@ -2588,104 +2238,60 @@ impl Worker<'_> {
             if val >= beta {
                 alpha = val;
                 best = Some(m.pos);
-                node_accounting::cut_at(n_empties, Some(i));
                 break;
             }
             alpha = alpha.max(val);
         }
-        if best.is_none() {
-            node_accounting::cut_at(n_empties, None);
-        }
 
         self.ordered_store(
-            use_tt, use_l78, to_move, hash, player, opponent, orig_alpha, beta, alpha, best,
+            use_tt, to_move, hash, player, opponent, orig_alpha, beta, alpha, best,
         );
         alpha
     }
 
-    fn alpha_beta(
-        &mut self,
-        board: &mut Board,
-        hash: u64,
-        alpha: i32,
-        beta: i32,
-        passed: bool,
-        parity: u8,
-    ) -> i32 {
-        self.alpha_beta_bb(
-            board.player_bb(),
-            board.opponent_bb(),
-            board.empty_count(),
-            hash,
-            alpha,
-            beta,
-            passed,
-            parity,
-        )
-    }
-
-    #[allow(clippy::too_many_arguments)]
     /// The five-empty child: cached four-empty search, or the plain one.
     #[inline(always)]
     fn child5(
         &mut self,
-        player_bb: u64,
-        opponent_bb: u64,
+        player: u64,
+        opponent: u64,
         pos_bit: u64,
         flips: u64,
         empties: u64,
-        rest: u64,
+        next_sibling: u64,
         alpha: i32,
         beta: i32,
         parity: u8,
     ) -> i32 {
-        let cp = opponent_bb ^ flips;
-        let co = player_bb | flips | pos_bit;
+        let cp = opponent ^ flips;
+        let co = player | flips | pos_bit;
         let child_hash = zobrist::board_hash(cp, co);
-        if rest != 0 {
-            let jb = rest.isolate_lowest_one();
-            let jf = bitboard::flippable(player_bb, opponent_bb, jb);
+        if next_sibling != 0 {
+            let jb = next_sibling.isolate_lowest_one();
+            let jf = bitboard::flippable(player, opponent, jb);
             if jf != 0 {
-                self.l4_prefetch(zobrist::board_hash(opponent_bb ^ jf, player_bb | jf | jb));
+                let h = zobrist::board_hash(opponent ^ jf, player | jf | jb);
+                prefetch(cache_slot(&self.l4, h));
             }
         }
-        abst!(L4_PROBE);
-        if let Some(h) = self.l4_probe(child_hash, cp, co, alpha, beta) {
-            abst!(L4_HIT);
+        if let Some(h) = cache_cut(&self.l4, child_hash, cp, co, alpha, beta) {
             self.nodes += 1;
             return -h;
         }
-        let mut trivial = false;
-        let r = self.search4_t(
-            cp,
-            co,
-            empties & !pos_bit,
-            alpha,
-            beta,
-            parity,
-            &mut trivial,
-        );
-        if !trivial {
-            abst!(L4_STORE);
-            self.l4_store(child_hash, cp, co, alpha, beta, r);
+        if cp == 0 {
+            self.nodes += 1;
+            return 64;
         }
+        if let Some(bound) = stability_cut(cp, co, 4, alpha) {
+            self.nodes += 1;
+            return -bound;
+        }
+        let r = self.last4_bb(cp, co, empties & !pos_bit, alpha, beta, false, parity);
+        cache_store(&mut self.l4, child_hash, cp, co, alpha, beta, r, None);
         -r
     }
 
-    #[inline(always)]
-    fn shallow_store(
-        &mut self,
-        player: u64,
-        opponent: u64,
-        hash: u64,
-        lower: i32,
-        upper: i32,
-        best: i32,
-    ) {
-        self.l56_store(hash, player, opponent, lower, upper, best);
-    }
-
-    fn alpha_beta_bb(
+    fn alpha_beta(
         &mut self,
         player: u64,
         opponent: u64,
@@ -2697,57 +2303,48 @@ impl Worker<'_> {
         parity: u8,
     ) -> i32 {
         if n_empties == 4 {
-            if let Some(v) = wipeout_score_bb(player, opponent) {
+            if let Some(v) = wipeout_score(player, opponent) {
                 self.nodes += 1;
                 return v;
             }
-            {
-                let _p = layer_profile::Scope::new(layer_profile::STAB, 4);
-                if let Some(bound) = stability_cut_bb(player, opponent, 4, alpha) {
-                    self.nodes += 1;
-                    return bound;
-                }
-            }
-            return self.last4_bb(player, opponent, alpha, beta, passed, parity);
-        }
-
-        let _prof = layer_profile::Scope::new(layer_profile::SEARCH, n_empties);
-        self.nodes += 1;
-
-        if let Some(v) = wipeout_score_bb(player, opponent) {
-            return v;
-        }
-
-        {
-            let _p = layer_profile::Scope::new(layer_profile::STAB, n_empties);
-            if let Some(bound) = stability_cut_bb(player, opponent, n_empties, alpha) {
+            if let Some(bound) = stability_cut(player, opponent, 4, alpha) {
+                self.nodes += 1;
                 return bound;
             }
+            let empties = bitboard::empty_bb(player, opponent);
+            return self.last4_bb(player, opponent, empties, alpha, beta, passed, parity);
         }
 
-        let lower = alpha;
-        let upper = beta;
-        abst!(NODES);
-        abst!(L56_PROBE);
-        if let Some(v) = self.l56_probe(hash, player, opponent, lower, upper) {
-            abst!(L56_HIT);
+        self.nodes += 1;
+        if let Some(v) = wipeout_score(player, opponent) {
+            return v;
+        }
+        if let Some(bound) = stability_cut(player, opponent, n_empties, alpha) {
+            return bound;
+        }
+        if let Some(v) = cache_cut(&self.l56, hash, player, opponent, alpha, beta) {
             return v;
         }
 
-        let orig_lower = lower;
-        let mut best = lower;
-        let mut any = false;
-        let mut cut = false;
-        let player_bb = player;
-        let opponent_bb = opponent;
-        let five_empty = n_empties == 5;
-        let need_child_hash = !five_empty;
-
         let empties = bitboard::empty_bb(player, opponent);
+        let legal = bitboard::mobility(player, opponent, empties);
+        if legal == 0 {
+            if passed {
+                return final_score_bb(player, opponent);
+            }
+            return -self.alpha_beta(
+                opponent,
+                player,
+                n_empties,
+                zobrist::board_hash(player, opponent),
+                -beta,
+                -alpha,
+                true,
+                parity,
+            );
+        }
+
         let odd = PARITY_ODD_MASK[parity as usize];
-        let legal = bitboard::mobility(player_bb, opponent_bb, empties);
-        let odd_moves = legal & odd;
-        let even_moves = legal & !odd;
         // A quadrant's only empty goes first, and corners outrank parity: 5-7% fewer nodes at 20-29 empties.
         let mut lone = 0u64;
         for (_, mask) in QUADRANT_MASKS {
@@ -2757,7 +2354,8 @@ impl Worker<'_> {
             }
         }
         let lone = lone & legal;
-        let odd_moves = odd_moves & !lone;
+        let odd_moves = legal & odd & !lone;
+        let even_moves = legal & !odd;
         let classes = [
             lone,
             odd_moves & CORNER_MASK,
@@ -2765,139 +2363,87 @@ impl Worker<'_> {
             odd_moves & !CORNER_MASK,
             even_moves & !CORNER_MASK,
         ];
+        let mut best = alpha;
         let mut class_ix = 0usize;
         let mut cur = classes[0];
-        'passes: loop {
-            {
-                while cur == 0 {
-                    class_ix += 1;
-                    if class_ix == 5 {
-                        break 'passes;
-                    }
-                    cur = unsafe { *classes.get_unchecked(class_ix) };
+        loop {
+            while cur == 0 {
+                class_ix += 1;
+                if class_ix == 5 {
+                    cache_store(
+                        &mut self.l56,
+                        hash,
+                        player,
+                        opponent,
+                        alpha,
+                        beta,
+                        best,
+                        None,
+                    );
+                    return best;
                 }
-                let sq = cur.trailing_zeros() as u8;
-                cur &= cur - 1;
-                let pos = Position(sq);
-                let pos_bit = pos.to_bit();
-                let flips = bitboard::flippable(player_bb, opponent_bb, pos_bit);
-
-                any = true;
-                abst!(CHILD);
-                let child_parity = parity ^ quadrant_id(sq);
-                let val = if five_empty {
-                    self.child5(
-                        player_bb,
-                        opponent_bb,
-                        pos_bit,
-                        flips,
-                        empties,
-                        cur,
-                        -upper,
-                        -best.max(orig_lower),
-                        child_parity,
-                    )
-                } else {
-                    let cp = opponent_bb ^ flips;
-                    let co = player_bb | flips | pos_bit;
-                    let child_hash = if need_child_hash {
-                        zobrist::board_hash(cp, co)
-                    } else {
-                        0
-                    };
-                    -self.alpha_beta_bb(
-                        cp,
-                        co,
-                        n_empties - 1,
-                        child_hash,
-                        -upper,
-                        -best.max(orig_lower),
-                        false,
-                        child_parity,
-                    )
-                };
-
-                if val >= upper {
-                    best = val;
-                    cut = true;
-                    break 'passes;
-                }
-                if val > best {
-                    best = val;
-                }
+                cur = unsafe { *classes.get_unchecked(class_ix) };
             }
-        }
-        let _ = cut;
-
-        if !any {
-            if passed {
-                return final_score_bb(player, opponent);
+            let sq = cur.trailing_zeros() as u8;
+            cur &= cur - 1;
+            let pos_bit = 1u64 << sq;
+            let flips = bitboard::flippable(player, opponent, pos_bit);
+            let child_parity = parity ^ quadrant_id(sq);
+            let val = if n_empties == 5 {
+                self.child5(
+                    player,
+                    opponent,
+                    pos_bit,
+                    flips,
+                    empties,
+                    cur,
+                    -beta,
+                    -best,
+                    child_parity,
+                )
+            } else {
+                let cp = opponent ^ flips;
+                let co = player | flips | pos_bit;
+                -self.alpha_beta(
+                    cp,
+                    co,
+                    n_empties - 1,
+                    zobrist::board_hash(cp, co),
+                    -beta,
+                    -best,
+                    false,
+                    child_parity,
+                )
+            };
+            if val >= beta {
+                cache_store(
+                    &mut self.l56,
+                    hash,
+                    player,
+                    opponent,
+                    alpha,
+                    beta,
+                    val,
+                    None,
+                );
+                return val;
             }
-            return -self.alpha_beta_bb(
-                opponent,
-                player,
-                n_empties,
-                zobrist::board_hash(player, opponent),
-                -upper,
-                -orig_lower,
-                true,
-                parity,
-            );
+            best = best.max(val);
         }
-
-        self.shallow_store(player, opponent, hash, orig_lower, upper, best);
-        best
     }
 
-    #[allow(clippy::too_many_arguments)]
-    fn search4_t(
+    #[inline]
+    fn last4_bb(
         &mut self,
         player: u64,
         opponent: u64,
         empties: u64,
         alpha: i32,
         beta: i32,
-        parity: u8,
-        trivial: &mut bool,
-    ) -> i32 {
-        if player == 0 {
-            *trivial = true;
-            self.nodes += 1;
-            return -64;
-        }
-        {
-            let _p = layer_profile::Scope::new(layer_profile::STAB, 4);
-            abst!(STAB4);
-            if let Some(bound) = stability_cut_bb(player, opponent, 4, alpha) {
-                abst!(STAB4_CUT);
-                *trivial = true;
-                self.nodes += 1;
-                return bound;
-            }
-        }
-        let mut e = empties;
-        let p1 = e.trailing_zeros() as u8;
-        e &= e - 1;
-        let p2 = e.trailing_zeros() as u8;
-        e &= e - 1;
-        let p3 = e.trailing_zeros() as u8;
-        e &= e - 1;
-        let p4 = e.trailing_zeros() as u8;
-        self.last4(player, opponent, p1, p2, p3, p4, alpha, beta, false, parity)
-    }
-
-    #[inline]
-    #[allow(clippy::too_many_arguments)]
-    fn last4_bb(
-        &mut self,
-        player: u64,
-        opponent: u64,
-        alpha: i32,
-        beta: i32,
         passed: bool,
         parity: u8,
     ) -> i32 {
-        let mut e = bitboard::empty_bb(player, opponent);
+        let mut e = empties;
         let p1 = e.trailing_zeros() as u8;
         e &= e - 1;
         let p2 = e.trailing_zeros() as u8;
@@ -2910,7 +2456,6 @@ impl Worker<'_> {
         )
     }
 
-    #[allow(clippy::too_many_arguments)]
     fn last4(
         &mut self,
         player: u64,
@@ -2924,7 +2469,6 @@ impl Worker<'_> {
         passed: bool,
         parity: u8,
     ) -> i32 {
-        let _prof = layer_profile::Scope::new(layer_profile::SEARCH, 4);
         self.nodes += 1;
 
         let (p1, p2, p3, p4) = if parity != 0 {
@@ -3060,7 +2604,6 @@ impl Worker<'_> {
     }
 
     #[inline(always)]
-    #[allow(clippy::too_many_arguments)]
     fn last3(
         &mut self,
         player: u64,
@@ -3073,7 +2616,6 @@ impl Worker<'_> {
         passed: bool,
         parity: u8,
     ) -> i32 {
-        let _prof = layer_profile::Scope::new(layer_profile::SEARCH, 3);
         self.nodes += 1;
 
         let (p1, p2, p3) = {
@@ -3154,7 +2696,6 @@ impl Worker<'_> {
     }
 
     #[inline(always)]
-    #[allow(clippy::too_many_arguments)]
     fn last3_min(
         &mut self,
         player: u64,
@@ -3167,7 +2708,6 @@ impl Worker<'_> {
         passed: bool,
         parity: u8,
     ) -> i32 {
-        let _prof = layer_profile::Scope::new(layer_profile::SEARCH, 3);
         self.nodes += 1;
 
         let (p1, p2, p3) = {
@@ -3258,7 +2798,6 @@ impl Worker<'_> {
         beta: i32,
         passed: bool,
     ) -> i32 {
-        let _prof = layer_profile::Scope::new(layer_profile::SEARCH, 2);
         self.nodes += 1;
 
         let mut alpha = alpha;
@@ -3304,7 +2843,6 @@ impl Worker<'_> {
         beta: i32,
         passed: bool,
     ) -> i32 {
-        let _prof = layer_profile::Scope::new(layer_profile::SEARCH, 2);
         self.nodes += 1;
 
         let mut beta = beta;
@@ -3341,7 +2879,6 @@ impl Worker<'_> {
 
     #[inline(always)]
     fn last1_value(player: u64, p1: u8) -> (i32, u64) {
-        let _prof = layer_profile::Scope::new(layer_profile::SEARCH, 1);
         let diff = 2 * player.count_ones() as i32 - 63;
         let (mine, theirs) = bitboard::count_last_flips(player, p1);
 
@@ -3364,82 +2901,54 @@ impl Worker<'_> {
         board: &Board,
         hash: u64,
         ev: &Linear,
-        t: f32,
+        sel: Selectivity,
         lower: i32,
         upper: i32,
     ) -> Option<i32> {
         let empties = board.empty_count();
-        let pd = selective_probe_depth(empties);
-        let error = t * selective_sigma(empties, pd);
+        let pd = sel.probe_depth(empties);
+        let error = sel.t * selective_sigma(empties, pd);
+        let gate = (error - SELECTIVE_GATE_OFFSET).max(1.0);
+        let (hi, lo) = (upper as f32 + error, lower as f32 - error);
 
         if let Some((nn, mtt)) = self.nnue.clone() {
             const EPS: f32 = 0.01;
             let mut acc = nn.indices(board.black, board.white);
             let d0 = nn.eval_from_indices(&acc, board);
-            let e0 = (error - SELECTIVE_GATE_OFFSET).max(1.0);
             let mut ms = crate::midgame::NnueSearch::new(nn, mtt);
-            let hi = upper as f32 + error;
-            if hi < 64.0 && d0 >= upper as f32 + e0 {
-                let v = ms.negamax(board, &mut acc, pd as u32, hi - EPS, hi);
-                if v >= hi {
-                    self.nodes += ms.nodes;
-                    return Some(upper);
-                }
-            }
-            let lo = lower as f32 - error;
-            if lo > -64.0 && d0 <= lower as f32 - e0 {
-                let v = ms.negamax(board, &mut acc, pd as u32, lo, lo + EPS);
-                if v <= lo {
-                    self.nodes += ms.nodes;
-                    return Some(lower);
-                }
+            let mut cut = None;
+            if hi < 64.0
+                && d0 >= upper as f32 + gate
+                && ms.negamax(board, &mut acc, pd as u32, hi - EPS, hi) >= hi
+            {
+                cut = Some(upper);
+            } else if lo > -64.0
+                && d0 <= lower as f32 - gate
+                && ms.negamax(board, &mut acc, pd as u32, lo, lo + EPS) <= lo
+            {
+                cut = Some(lower);
             }
             self.nodes += ms.nodes;
-            return None;
+            return cut;
         }
 
         let ix = ev.indexer();
         let mut indices = ix.init(board.black, board.white);
-
-        let d0 = self.seed_search(
-            board,
-            hash,
-            ev,
-            ix,
-            &mut indices,
-            0,
-            f32::NEG_INFINITY,
-            f32::INFINITY,
-            false,
-        );
-        let e0 = (error - SELECTIVE_GATE_OFFSET).max(1.0);
-
-        let hi = upper as f32 + error;
-        if hi < 64.0 && d0 >= upper as f32 + e0 {
+        let (inf, neg_inf) = (f32::INFINITY, f32::NEG_INFINITY);
+        let d0 = self.seed_search(board, hash, ev, ix, &mut indices, 0, neg_inf, inf, false);
+        if hi < 64.0 && d0 >= upper as f32 + gate {
             let v = self.seed_search(board, hash, ev, ix, &mut indices, pd, hi - 1.0, hi, false);
             if v >= hi {
                 return Some(upper);
             }
         }
-        let lo = lower as f32 - error;
-        if lo > -64.0 && d0 <= lower as f32 - e0 {
+        if lo > -64.0 && d0 <= lower as f32 - gate {
             let v = self.seed_search(board, hash, ev, ix, &mut indices, pd, lo, lo + 1.0, false);
             if v <= lo {
                 return Some(lower);
             }
         }
         None
-    }
-
-    fn scored_moves(
-        &self,
-        board: &Board,
-        tt_best: Option<Position>,
-        ev: Option<&Linear>,
-        out: &mut MoveBuf,
-    ) {
-        self.gen_moves(board, out);
-        self.score_moves(board, out, tt_best, ev, i32::MIN / 2);
     }
 
     fn gen_moves(&self, board: &Board, out: &mut MoveBuf) {
@@ -3452,7 +2961,6 @@ impl Worker<'_> {
     }
 
     fn gen_moves_bb(&self, p: u64, o: u64, n_empties: u8, out: &mut MoveBuf) {
-        let _prof = layer_profile::Scope::new(layer_profile::GEN, n_empties);
         out.len = 0;
 
         let n = {
@@ -3536,71 +3044,12 @@ impl Worker<'_> {
         };
 
         out.len = n;
-        let child_empties = n_empties - 1;
-        let eager = child_empties >= tt_min_empties();
-        if eager {
-            for i in 0..n {
-                let m = out[i];
-                let child_hash = zobrist::board_hash(o ^ m.flipped, p | m.flipped | m.pos.to_bit());
-                self.tt.prefetch(child_hash);
-            }
-        }
-    }
-
-    fn score_moves_static(
-        &self,
-        board: &Board,
-        moves: &mut [ScoredMove],
-        tt_best: Option<Position>,
-    ) {
-        self.score_moves_static_bb(
-            board.player_bb(),
-            board.opponent_bb(),
-            board.empty_count(),
-            moves,
-            tt_best,
-        )
-    }
-
-    #[allow(clippy::too_many_arguments)]
-    fn score_moves_static_bb(
-        &self,
-        player_bb: u64,
-        opponent_bb: u64,
-        n_empties: u8,
-        moves: &mut [ScoredMove],
-        tt_best: Option<Position>,
-    ) {
-        let _prof = layer_profile::Scope::new(layer_profile::ORDER, n_empties);
-        node_accounting::sorted(moves.len() as u64);
-        match tt_best {
-            None => {
-                for sm in moves.iter_mut() {
-                    let pos = sm.pos;
-                    let flipped = sm.flipped;
-                    let cp = opponent_bb ^ flipped;
-                    let co = player_bb | flipped | pos.to_bit();
-                    sm.value = if cp == 0 {
-                        i32::MIN
-                    } else {
-                        move_ordering_value(pos, cp, co)
-                    };
-                }
-            }
-            Some(best) => {
-                for sm in moves.iter_mut() {
-                    let pos = sm.pos;
-                    let flipped = sm.flipped;
-                    let cp = opponent_bb ^ flipped;
-                    let co = player_bb | flipped | pos.to_bit();
-                    sm.value = if cp == 0 {
-                        i32::MIN
-                    } else if pos == best {
-                        i32::MIN + 1
-                    } else {
-                        move_ordering_value(pos, cp, co)
-                    };
-                }
+        if n_empties > TT_MIN_EMPTIES {
+            for m in out.iter() {
+                self.tt.prefetch(zobrist::board_hash(
+                    o ^ m.flipped,
+                    p | m.flipped | m.pos.to_bit(),
+                ));
             }
         }
     }
@@ -3613,59 +3062,41 @@ impl Worker<'_> {
         ev: Option<&Linear>,
         alpha: i32,
     ) {
-        let _prof = layer_profile::Scope::new(layer_profile::ORDER, board.empty_count());
-        node_accounting::sorted(moves.len() as u64);
-        let eval_order = board.empty_count() >= eval_order_empties();
-        if !eval_order || ev.is_none() {
-            return self.score_moves_static(board, moves, tt_best);
-        }
-        let mut order_ix = if eval_order {
-            ev.map(|e| (order_indexer(e), self.order_ix))
-        } else {
-            None
+        let (player, opponent) = (board.player_bb(), board.opponent_bb());
+        let Some(e) = ev.filter(|_| board.empty_count() >= EVAL_ORDER_EMPTIES) else {
+            return score_moves_static(player, opponent, moves, tt_best);
         };
+        let ix = e.indexer();
+        let mut indices = self.order_ix;
         let mover = board.player();
         let sort_hi = if alpha <= i32::MIN / 4 {
             f32::INFINITY
         } else {
             -(alpha - SORT_ALPHA_DELTA) as f32
         };
-
         let sort_depth = SORT_DEPTH_LADDER[(board.empty_count() as usize).min(63)];
-        let player_bb = board.player_bb();
-        let opponent_bb = board.opponent_bb();
         for sm in moves.iter_mut() {
-            let pos = sm.pos;
-            let flipped = sm.flipped;
-            let cp = opponent_bb ^ flipped;
-            let co = player_bb | flipped | pos.to_bit();
+            let (pos, flipped) = (sm.pos, sm.flipped);
+            let cp = opponent ^ flipped;
+            let co = player | flipped | pos.to_bit();
             sm.value = if cp == 0 {
                 i32::MIN
             } else if Some(pos) == tt_best {
                 i32::MIN + 1
-            } else if let (Some(e), Some((ix, indices))) = (ev, order_ix.as_mut()) {
-                let child = sm.child(board);
-                let saved = *indices;
-                ix.apply(indices, pos, flipped, mover);
+            } else {
+                let saved = indices;
+                ix.apply(&mut indices, pos, flipped, mover);
                 let v = if sort_depth > 0 {
-                    shallow_search(
-                        &child,
-                        e,
-                        ix,
-                        indices,
-                        sort_depth,
-                        f32::NEG_INFINITY,
-                        sort_hi,
-                    )
+                    let child = sm.child(board);
+                    let (lo, hi) = (f32::NEG_INFINITY, sort_hi);
+                    shallow_search(&child, e, ix, &mut indices, sort_depth, lo, hi)
                 } else {
-                    e.eval_order_bb(cp, co, mover.opponent(), indices)
+                    e.eval_order_bb(cp, co, mover.opponent(), &indices)
                 };
-                *indices = saved;
+                indices = saved;
                 let edge = corner_stability_bb(co) * 8;
                 (v * 8.0) as i32 + weighted_mobility(cp, co) * MOBILITY_ORDER_WEIGHT
                     - edge * EDGE_STABILITY_ORDER_WEIGHT
-            } else {
-                move_ordering_value(pos, cp, co)
             };
         }
     }
@@ -3767,22 +3198,16 @@ impl std::ops::DerefMut for MoveBuf {
 }
 
 #[rustfmt::skip]
-const SHALLOW_ORDER: [u8; 64] = {
-    let rm: [u8; 64] = [
-         0,  9,  3,  5,  5,  3,  9,  0,
-         9, 12,  7,  8,  8,  7, 12,  9,
-         3,  7,  1,  4,  4,  1,  7,  3,
-         5,  8,  4,  6,  6,  4,  8,  5,
-         5,  8,  4,  6,  6,  4,  8,  5,
-         3,  7,  1,  4,  4,  1,  7,  3,
-         9, 12,  7,  8,  8,  7, 12,  9,
-         0,  9,  3,  5,  5,  3,  9,  0,
-    ];
-    let mut t = [0u8; 64];
-    let mut f = 0;
-    while f < 8 { let mut r = 0; while r < 8 { t[f*8+r] = rm[r*8+f]; r += 1; } f += 1; }
-    t
-};
+const SHALLOW_ORDER: [u8; 64] = [
+     0,  9,  3,  5,  5,  3,  9,  0,
+     9, 12,  7,  8,  8,  7, 12,  9,
+     3,  7,  1,  4,  4,  1,  7,  3,
+     5,  8,  4,  6,  6,  4,  8,  5,
+     5,  8,  4,  6,  6,  4,  8,  5,
+     3,  7,  1,  4,  4,  1,  7,  3,
+     9, 12,  7,  8,  8,  7, 12,  9,
+     0,  9,  3,  5,  5,  3,  9,  0,
+];
 
 const SHALLOW_TIERS: [u64; 13] = {
     let mut t = [0u64; 13];
@@ -3794,7 +3219,6 @@ const SHALLOW_TIERS: [u64; 13] = {
     t
 };
 
-#[allow(clippy::too_many_arguments)]
 fn shallow_search(
     board: &Board,
     ev: &Linear,
@@ -3804,8 +3228,6 @@ fn shallow_search(
     alpha: f32,
     beta: f32,
 ) -> f32 {
-    let _prof = layer_profile::Scope::new(layer_profile::LOOKAHEAD, board.empty_count());
-    node_accounting::lookahead();
     if depth == 0 {
         return ev.eval_order_bb(
             board.player_bb(),
@@ -3855,9 +3277,33 @@ fn shallow_search(
 
 #[inline]
 fn weighted_mobility(cp: u64, co: u64) -> i32 {
-    const CORNERS: u64 = 0x8100_0000_0000_0081;
     let m = bitboard::mobility(cp, co, !(cp | co));
-    (m.count_ones() + (m & CORNERS).count_ones()) as i32
+    (m.count_ones() + (m & CORNER_MASK).count_ones()) as i32
+}
+
+fn score_moves_static(
+    player: u64,
+    opponent: u64,
+    moves: &mut [ScoredMove],
+    tt_best: Option<Position>,
+) {
+    for sm in moves.iter_mut() {
+        let cp = opponent ^ sm.flipped;
+        let co = player | sm.flipped | sm.pos.to_bit();
+        sm.value = if cp == 0 {
+            i32::MIN
+        } else {
+            move_ordering_value(sm.pos, cp, co)
+        };
+    }
+    if let Some(best) = tt_best {
+        if let Some(sm) = moves
+            .iter_mut()
+            .find(|m| m.pos == best && m.value != i32::MIN)
+        {
+            sm.value = i32::MIN + 1;
+        }
+    }
 }
 
 fn move_ordering_value(pos: Position, cp: u64, co: u64) -> i32 {
@@ -3869,8 +3315,6 @@ fn move_ordering_value(pos: Position, cp: u64, co: u64) -> i32 {
     score += (36 - weighted_mobility(cp, co)) * W_MOBILITY;
     -score
 }
-
-const CORNER_MASK: u64 = 0x8100_0000_0000_0081;
 
 const SQUARE_VALUE: [u8; 64] = [
     18, 4, 16, 12, 12, 16, 4, 18, //
@@ -3889,132 +3333,14 @@ fn corner_stability_bb(bb: u64) -> i32 {
     const RANK8_CORNERS: u64 = 0x8000_0000_0000_0080;
     const FILE_A_CORNERS: u64 = 0x0000_0000_0000_0081;
     const FILE_H_CORNERS: u64 = 0x8100_0000_0000_0000;
-    const CORNERS: u64 = 0x8100_0000_0000_0081;
 
     let stable = (((RANK1_CORNERS & bb) << 1)
         | ((RANK8_CORNERS & bb) >> 1)
         | ((FILE_A_CORNERS & bb) << 8)
         | ((FILE_H_CORNERS & bb) >> 8)
-        | CORNERS)
+        | CORNER_MASK)
         & bb;
     stable.count_ones() as i32
-}
-
-pub mod layer_profile {
-    use std::sync::atomic::{AtomicU32, AtomicU64, Ordering::Relaxed};
-
-    pub const SEARCH: u32 = 0;
-    pub const ORDER: u32 = 1;
-    pub const LOOKAHEAD: u32 = 2;
-    pub const WARMUP: u32 = 3;
-    pub const GEN: u32 = 4;
-    pub const ETC: u32 = 5;
-    pub const TT: u32 = 6;
-    pub const STAB: u32 = 7;
-    pub const PHASES: usize = 8;
-
-    pub static STATE: AtomicU32 = AtomicU32::new(0);
-    pub static NODES: [AtomicU64; 64] = [const { AtomicU64::new(0) }; 64];
-    pub const ENABLED: bool = cfg!(feature = "layer-profile");
-
-    pub struct Scope(#[allow(dead_code)] u32);
-
-    impl Scope {
-        #[inline(always)]
-        pub fn new(phase: u32, empties: u8) -> Self {
-            #[cfg(feature = "layer-profile")]
-            {
-                let prev = STATE.load(Relaxed);
-                STATE.store((phase << 8) | empties as u32, Relaxed);
-                if phase == SEARCH {
-                    NODES[(empties as usize) & 63].fetch_add(1, Relaxed);
-                }
-                Scope(prev)
-            }
-            #[cfg(not(feature = "layer-profile"))]
-            {
-                let _ = (phase, empties);
-                Scope(0)
-            }
-        }
-    }
-
-    impl Drop for Scope {
-        #[inline(always)]
-        fn drop(&mut self) {
-            #[cfg(feature = "layer-profile")]
-            STATE.store(self.0, Relaxed);
-        }
-    }
-
-    pub fn sample() -> (usize, usize) {
-        let v = STATE.load(Relaxed);
-        (
-            ((v >> 8) as usize).min(PHASES - 1),
-            (v & 0xFF) as usize & 63,
-        )
-    }
-}
-
-pub mod node_accounting {
-    #[cfg(feature = "node-accounting")]
-    use std::sync::atomic::{AtomicU64, Ordering::Relaxed};
-
-    #[cfg(feature = "node-accounting")]
-    static SORTED: AtomicU64 = AtomicU64::new(0);
-    #[cfg(feature = "node-accounting")]
-    static ETC: AtomicU64 = AtomicU64::new(0);
-    #[cfg(feature = "node-accounting")]
-    static LOOKAHEAD: AtomicU64 = AtomicU64::new(0);
-    #[cfg(feature = "node-accounting")]
-    static CUT_AT: [[AtomicU64; 4]; 64] = [const { [const { AtomicU64::new(0) }; 4] }; 64];
-
-    #[inline(always)]
-    pub(crate) fn cut_at(empties: u8, at: Option<usize>) {
-        let _ = (empties, at);
-        #[cfg(feature = "node-accounting")]
-        {
-            let slot = at.map_or(3, |i| i.min(2));
-            CUT_AT[(empties as usize) & 63][slot].fetch_add(1, Relaxed);
-        }
-    }
-
-    #[inline(always)]
-    pub(crate) fn sorted(n: u64) {
-        let _ = n;
-        #[cfg(feature = "node-accounting")]
-        SORTED.fetch_add(n, Relaxed);
-    }
-
-    #[inline(always)]
-    pub(crate) fn etc(n: u64) {
-        let _ = n;
-        #[cfg(feature = "node-accounting")]
-        ETC.fetch_add(n, Relaxed);
-    }
-
-    #[inline(always)]
-    pub(crate) fn lookahead() {
-        #[cfg(feature = "node-accounting")]
-        LOOKAHEAD.fetch_add(1, Relaxed);
-    }
-
-    pub fn totals() -> (u64, u64, u64) {
-        #[cfg(feature = "node-accounting")]
-        {
-            (
-                SORTED.load(Relaxed),
-                ETC.load(Relaxed),
-                LOOKAHEAD.load(Relaxed),
-            )
-        }
-        #[cfg(not(feature = "node-accounting"))]
-        {
-            (0, 0, 0)
-        }
-    }
-
-    pub const ENABLED: bool = cfg!(feature = "node-accounting");
 }
 
 #[cfg(test)]
@@ -4115,10 +3441,14 @@ mod tests {
             assert_eq!(moves, scanned, "mobility disagrees with the flip scan");
 
             for parity in 0..16u8 {
-                const CORNERS: u64 = 0x8100_0000_0000_0081;
                 let odd = PARITY_ODD_MASK[parity as usize];
                 let (om, em) = (moves & odd, moves & !odd);
-                let subsets = [om & CORNERS, om & !CORNERS, em & CORNERS, em & !CORNERS];
+                let subsets = [
+                    om & CORNER_MASK,
+                    om & !CORNER_MASK,
+                    em & CORNER_MASK,
+                    em & !CORNER_MASK,
+                ];
                 let mut union = 0u64;
                 let mut total = 0u32;
                 for m in subsets {
@@ -4312,7 +3642,7 @@ mod tests {
         b.black = 1u64 << 0; // A1
         b.white = 1u64 << 8; // B1
         b.empty_count = 62;
-        b.player = crate::color::Color::White; // White has no move
+        b.player = Color::White; // White has no move
         let mut solver = Solver::new(10);
         let result = solver.solve(EndSolverMode::Perfect, &b);
         assert_eq!(result.best_move, None, "pass position returns no move");
@@ -4330,24 +3660,13 @@ mod tests {
     }
 
     #[test]
-    fn test_neighbour_table() {
-        assert_eq!(neighbour_bit(0), (1u64 << 1) | (1u64 << 8) | (1u64 << 9));
-        assert_eq!(neighbour_bit(36).count_ones(), 8);
-    }
-
-    #[test]
     fn test_quadrant_parity() {
         let b = Board::new();
-        assert_eq!(parity_of(&b), 0b1111);
+        assert_eq!(parity_of(b.black | b.white), 0b1111);
     }
-}
-
-#[cfg(test)]
-mod quadrant_id_tests {
-    use super::quadrant_id;
 
     #[test]
-    fn matches_the_file_rank_split() {
+    fn quadrant_id_matches_the_file_rank_split() {
         for sq in 0u8..64 {
             let (file, rank) = (sq / 8, sq % 8);
             let want = match (file < 4, rank < 4) {

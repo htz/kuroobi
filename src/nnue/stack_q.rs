@@ -1,8 +1,7 @@
 //! The stacked read-out in integers, the form the search runs.
 
 use super::{
-    pa_bucket, so_stage, Nnue, ACC_DIMS, H, PA_BUCKETS, PA_DIMS, SO_L1, SO_L2, SO_OUT_IN, SO_SKIP,
-    SO_STAGES,
+    pa_bucket, so_stage, Nnue, ACC_DIMS, H, PA_DIMS, SO_L1, SO_L2, SO_OUT_IN, SO_SKIP, SO_STAGES,
 };
 use crate::color::Color;
 use crate::pattern_index::{PatternIndices, MAX_MASKS};
@@ -61,44 +60,17 @@ impl StackQ {
         let qi16 =
             |v: f32, scale: f32| -> i16 { (v * scale).round().clamp(-32768.0, 32767.0) as i16 };
 
-        let n_feat = net.n_features;
-        let mut ft_b = vec![0i16; n_feat * ACC_DIMS];
-        for (d, &v) in ft_b.iter_mut().zip(net.ft.iter()) {
-            *d = qi16(v, ROW_ONE as f32);
-        }
-        let ft_bias: Vec<i16> = net
-            .ft_bias
-            .iter()
-            .map(|&v| qi16(v, ROW_ONE as f32))
-            .collect();
-        let mut pa_b = vec![0i16; net.pa.len()];
-        for (d, &v) in pa_b.iter_mut().zip(net.pa.iter()) {
-            *d = qi16(v, ROW_ONE as f32);
-        }
-        let pa_bias: Vec<i16> = net
-            .pa_bias
-            .iter()
-            .map(|&v| qi16(v, ROW_ONE as f32))
-            .collect();
+        let rows = |t: &[f32]| -> Vec<i16> { t.iter().map(|&v| qi16(v, ROW_ONE as f32)).collect() };
+        let ft_b = rows(&net.ft);
+        let ft_bias = rows(&net.ft_bias);
+        let pa_b = rows(&net.pa);
+        let pa_bias = rows(&net.pa_bias);
 
-        let mut ft_w = vec![0i16; ft_b.len()];
-        let mut pa_w = vec![0i16; pa_b.len()];
-        let n_bucket = net.n_features;
-        for m in 0..net.n_masks {
-            let off = net.mask_off[m] as usize;
-            let size = net.patterns[net.indexer.mask_patterns()[m] as usize].table_size();
-            for i in 0..size {
-                let j = net.indexer.swapped_index(m, i);
-                let src = (off + j) * ACC_DIMS;
-                let dst = (off + i) * ACC_DIMS;
-                ft_w[dst..dst + ACC_DIMS].copy_from_slice(&ft_b[src..src + ACC_DIMS]);
-                for b in 0..PA_BUCKETS {
-                    let src = (b * n_bucket + off + j) * PA_DIMS;
-                    let dst = (b * n_bucket + off + i) * PA_DIMS;
-                    pa_w[dst..dst + PA_DIMS].copy_from_slice(&pa_b[src..src + PA_DIMS]);
-                }
-            }
-        }
+        let ft_w = net.indexer.swap_colors(&ft_b, &net.mask_off, ACC_DIMS);
+        let pa_w = pa_b
+            .chunks(net.n_features * PA_DIMS)
+            .flat_map(|bucket| net.indexer.swap_colors(bucket, &net.mask_off, PA_DIMS))
+            .collect();
 
         let qi8 = |v: f32| -> i8 { (v * 64.0).round().clamp(-127.0, 127.0) as i8 };
         let mut l1_w = vec![0i8; SO_STAGES * L1_CHUNKS * 4 * SO_L1];
@@ -160,17 +132,6 @@ impl StackQ {
         }
     }
 
-    /// Row ids inside one transformer copy, one per mask.
-    #[inline]
-    fn rows(net: &Nnue, indices: &PatternIndices) -> [u32; MAX_MASKS] {
-        let mut f = [0u32; MAX_MASKS];
-        let raw = indices.raw();
-        for m in 0..net.n_masks {
-            f[m] = net.mask_off[m] + raw[m] as u32;
-        }
-        f
-    }
-
     /// The score in discs for the side to move.
     #[inline]
     pub(super) fn eval(
@@ -181,7 +142,7 @@ impl StackQ {
         stage: usize,
         mob: usize,
     ) -> f32 {
-        let rows = Self::rows(net, indices);
+        let rows = net.features_black(indices);
         let (ft, pa) = if player == Color::Black {
             (&self.ft_b, &self.pa_b)
         } else {
@@ -371,8 +332,8 @@ impl StackQ {
             rows,
             n,
         );
-        for r in 0..16 {
-            let v = vminq_s16(pz[r], clamp);
+        for (r, &z) in pz.iter().enumerate() {
+            let v = vminq_s16(z, clamp);
             let p = vqmovun_s16(vqdmulhq_s16(
                 vreinterpretq_s16_u16(vqshluq_n_s16::<5>(v)),
                 v,
@@ -386,17 +347,17 @@ impl StackQ {
 
         let l1w = self.l1_w.as_ptr().add(st * L1_CHUNKS * 4 * SO_L1);
         let mut acc1: [int32x4_t; 4] = [vdupq_n_s32(0); 4];
-        for j in 0..4 {
-            acc1[j] = vld1q_s32(self.l1_b.as_ptr().add(st * SO_L1 + j * 4));
+        for (j, a) in acc1.iter_mut().enumerate() {
+            *a = vld1q_s32(self.l1_b.as_ptr().add(st * SO_L1 + j * 4));
         }
         for g in 0..SO_SKIP / 16 {
             let xv = vld1q_s8(x.add(g * 16));
             let wp = l1w.add(g * 4 * SO_L1 * 4);
-            for j in 0..4 {
-                acc1[j] = vdotq_laneq_s32::<0>(acc1[j], vld1q_s8(wp.add(j * 16)), xv);
-                acc1[j] = vdotq_laneq_s32::<1>(acc1[j], vld1q_s8(wp.add(64 + j * 16)), xv);
-                acc1[j] = vdotq_laneq_s32::<2>(acc1[j], vld1q_s8(wp.add(128 + j * 16)), xv);
-                acc1[j] = vdotq_laneq_s32::<3>(acc1[j], vld1q_s8(wp.add(192 + j * 16)), xv);
+            for (j, a) in acc1.iter_mut().enumerate() {
+                *a = vdotq_laneq_s32::<0>(*a, vld1q_s8(wp.add(j * 16)), xv);
+                *a = vdotq_laneq_s32::<1>(*a, vld1q_s8(wp.add(64 + j * 16)), xv);
+                *a = vdotq_laneq_s32::<2>(*a, vld1q_s8(wp.add(128 + j * 16)), xv);
+                *a = vdotq_laneq_s32::<3>(*a, vld1q_s8(wp.add(192 + j * 16)), xv);
             }
         }
         {
@@ -404,8 +365,8 @@ impl StackQ {
             let xb =
                 vreinterpretq_s8_s32(vdupq_n_s32((x.add(c * 4) as *const i32).read_unaligned()));
             let wp = l1w.add(c * SO_L1 * 4);
-            for j in 0..4 {
-                acc1[j] = vdotq_s32(acc1[j], vld1q_s8(wp.add(j * 16)), xb);
+            for (j, a) in acc1.iter_mut().enumerate() {
+                *a = vdotq_s32(*a, vld1q_s8(wp.add(j * 16)), xb);
             }
         }
         let mut a1 = Buf::<L2_IN>([0; L2_IN]);
@@ -424,17 +385,17 @@ impl StackQ {
 
         let l2w = self.l2_w.as_ptr().add(st * L2_CHUNKS * 4 * SO_L2);
         let mut acc2: [int32x4_t; 16] = [vdupq_n_s32(0); 16];
-        for j in 0..16 {
-            acc2[j] = vld1q_s32(self.l2_b.as_ptr().add(st * SO_L2 + j * 4));
+        for (j, a) in acc2.iter_mut().enumerate() {
+            *a = vld1q_s32(self.l2_b.as_ptr().add(st * SO_L2 + j * 4));
         }
         for g in 0..L2_IN / 16 {
             let xv = vld1q_s8(a1.0.as_ptr().add(g * 16));
             let wp = l2w.add(g * 4 * SO_L2 * 4);
-            for j in 0..16 {
-                acc2[j] = vdotq_laneq_s32::<0>(acc2[j], vld1q_s8(wp.add(j * 16)), xv);
-                acc2[j] = vdotq_laneq_s32::<1>(acc2[j], vld1q_s8(wp.add(256 + j * 16)), xv);
-                acc2[j] = vdotq_laneq_s32::<2>(acc2[j], vld1q_s8(wp.add(512 + j * 16)), xv);
-                acc2[j] = vdotq_laneq_s32::<3>(acc2[j], vld1q_s8(wp.add(768 + j * 16)), xv);
+            for (j, a) in acc2.iter_mut().enumerate() {
+                *a = vdotq_laneq_s32::<0>(*a, vld1q_s8(wp.add(j * 16)), xv);
+                *a = vdotq_laneq_s32::<1>(*a, vld1q_s8(wp.add(256 + j * 16)), xv);
+                *a = vdotq_laneq_s32::<2>(*a, vld1q_s8(wp.add(512 + j * 16)), xv);
+                *a = vdotq_laneq_s32::<3>(*a, vld1q_s8(wp.add(768 + j * 16)), xv);
             }
         }
         let mut xo = Buf::<OUT_IN>([0; OUT_IN]);
@@ -506,7 +467,7 @@ mod tests {
     fn scalar_discs(nn: &Nnue, board: &Board) -> f32 {
         let ix = nn.indices(board.black, board.white);
         let stage = crate::linear::Linear::stage(board);
-        let rows = StackQ::rows(nn, &ix);
+        let rows = nn.features_black(&ix);
         let (ft, pa) = if board.player() == Color::Black {
             (&nn.sq.ft_b, &nn.sq.pa_b)
         } else {

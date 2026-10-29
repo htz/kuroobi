@@ -36,7 +36,8 @@ held-out numbers only compare when they match.
 |---|---|
 | `--search-value-to-ply <n>` | Up to and including ply n the target is the record's search value; past it, the final disc difference. Without it every position reads as the game result |
 | `--drop-random` | Drop positions whose move was chosen at random |
-| `--keep-above-ply <n>` | From ply n on, keep what `--drop-random` (and `nnue_train`'s `--max-score-diff`) would drop |
+| `--max-score-diff <d>` | Drop positions whose search value and final result differ by more than d |
+| `--keep-above-ply <n>` | From ply n on, keep what `--drop-random` and `--max-score-diff` would drop |
 | `--min-ply <n>` | Drop positions before ply n |
 
 ### linear_train
@@ -99,11 +100,9 @@ linear_train --optimizer adam --gpu --cosine --epochs 20 \
 | `--patience <n>` | off | Stop a stage after n epochs that neither beat its best nor improved on the epoch before |
 | `--restore-on-halve` | off | On a rate drop, put the stage back on its best weights first |
 | `--warmup <n>` | off | Start at a fifth of the rate and climb to it over n epochs |
-| `--cell-lr` | off | Divide each cell's step by how often it appears in the data; skip cells that never appear |
+| `--cell-lr` | off | Divide each cell's step by how often it appears in the data; skip cells that never appear (CPU only) |
 | `--min-appear <n>` | 0 | With `--cell-lr`, leave cells seen n times or fewer alone |
 | `--lr-smooth` | off | After each rate drop, smooth every stage's rate with its two neighbours |
-| `--swa` | off | Keep a running mean of the per-epoch weights in `<weights>.swa` |
-| `--swa-start <n>` | 2 | First epoch folded into that mean |
 
 Plus the shared target and filter options above.
 
@@ -133,7 +132,6 @@ nnue_train --adam --minibatch 65536 --lr 0.0001 --cosine --epochs 30 \
 | `--limit <n>` | all | Cap on the examples used per file |
 | `--max-examples <n>` | 48000000 | Examples held in RAM at once |
 | `--interleave` | off | Draw each shard from every file rather than file by file |
-| `--max-score-diff <d>` | off | Drop positions whose search value and final result differ by more than d |
 | `--sym-train` | off | Draw one of the eight symmetric forms per example per epoch |
 | `--sym-all` | off | Train every example in all eight forms, as eight separate passes |
 

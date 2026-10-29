@@ -1,7 +1,5 @@
 //! NNUE-style non-linear evaluator built on the existing pattern features.
 
-#![allow(clippy::needless_range_loop)]
-
 use crate::board::Board;
 use crate::color::Color;
 use crate::linear::STAGE_COUNT;
@@ -16,10 +14,6 @@ mod stack_q;
 pub const H: usize = 128;
 
 pub const ACC_DIMS: usize = 2 * H;
-
-const FT_BIAS_LEN: usize = ACC_DIMS;
-
-const PAIR_CLAMP: f32 = 1.0;
 
 const ACT_SCALE: f32 = 255.0 / 256.0;
 
@@ -42,7 +36,7 @@ fn pa_bucket(stage: usize) -> usize {
     (stage / (SO_STAGES / PA_BUCKETS)).min(PA_BUCKETS - 1)
 }
 
-/// True when the stages own every pattern-add bucket they touch, so training them alone moves no other stage.
+/// True when the stages own every phase-adaptive bucket they touch, so training them alone moves no other stage.
 pub fn owns_whole_buckets(lo: usize, hi: usize) -> bool {
     let w = SO_STAGES / PA_BUCKETS;
     lo <= hi && hi < SO_STAGES && lo.is_multiple_of(w) && (hi + 1).is_multiple_of(w)
@@ -60,17 +54,11 @@ const SO_SIZES: (usize, usize, usize, usize, usize, usize) = (
     SO_STAGES * SO_OUT_IN,
     SO_STAGES,
 );
+const SO_LEN: usize = SO_SIZES.0 + SO_SIZES.1 + SO_SIZES.2 + SO_SIZES.3 + SO_SIZES.4 + SO_SIZES.5;
 
 #[inline]
 fn mob_unit(mob: usize) -> f32 {
     (mob as f32 * (7.0 / 255.0)).min(1.0)
-}
-
-fn xorshift_unit(s: &mut u64) -> f32 {
-    *s ^= *s >> 12;
-    *s ^= *s << 25;
-    *s ^= *s >> 27;
-    ((s.wrapping_mul(0x2545_F491_4F6C_DD1D) >> 40) as i64 as f32) / (1i64 << 23) as f32
 }
 
 fn so_moment_shapes() -> Vec<Vec<f32>> {
@@ -87,9 +75,10 @@ fn so_moment_shapes() -> Vec<Vec<f32>> {
 const GRAD_CLIP_NORM: f32 = 1.0;
 
 pub struct AdamState {
-    pub beta1: f32,
-    pub beta2: f32,
-    pub eps: f32,
+    beta1: f32,
+    beta2: f32,
+    eps: f32,
+    /// Only recorded in the checkpoint; the step takes its own.
     pub wd: f32,
     m_ft: Vec<f32>,
     v_ft: Vec<f32>,
@@ -97,8 +86,8 @@ pub struct AdamState {
     v_ft_bias: Vec<f32>,
     m_so: Vec<Vec<f32>>,
     v_so: Vec<Vec<f32>>,
-    grad_scratch: Vec<f32>,
-    row_stamp: Vec<u32>,
+    ft_scratch: Vec<f32>,
+    ft_stamp: Vec<u32>,
     ft_last: Vec<u32>,
     pa_last: Vec<u32>,
     m_pa: Vec<f32>,
@@ -114,7 +103,7 @@ pub struct AdamState {
     la_step: u32,
     la_slow: Vec<Vec<f32>>,
     stamp_cur: u32,
-    touched: Vec<Vec<u32>>,
+    ft_touched: Vec<Vec<u32>>,
 }
 
 macro_rules! adam_flat_tables {
@@ -172,27 +161,11 @@ impl AdamState {
 
     pub fn read_state(&mut self, r: &mut impl std::io::Read) -> std::io::Result<()> {
         use std::io::{Error, ErrorKind, Read};
-        let r = &mut *r;
-        let mut f4 = [0u8; 4];
-        let mut f32_of = |r: &mut dyn Read| -> std::io::Result<f32> {
-            r.read_exact(&mut f4)?;
-            Ok(f32::from_le_bytes(f4))
-        };
-        self.beta1 = f32_of(r)?;
-        self.beta2 = f32_of(r)?;
-        self.eps = f32_of(r)?;
-        self.wd = f32_of(r)?;
-        self.la_alpha = f32_of(r)?;
-        let mut u4 = [0u8; 4];
-        let mut u32_of = |r: &mut dyn Read| -> std::io::Result<u32> {
-            r.read_exact(&mut u4)?;
-            Ok(u32::from_le_bytes(u4))
-        };
-        self.t = u32_of(r)?;
-        self.la_k = u32_of(r)?;
-        self.la_step = u32_of(r)?;
-        self.stamp_cur = u32_of(r)?;
-
+        fn word(r: &mut dyn Read) -> std::io::Result<[u8; 4]> {
+            let mut b = [0u8; 4];
+            r.read_exact(&mut b)?;
+            Ok(b)
+        }
         fn take_len(r: &mut dyn Read) -> std::io::Result<usize> {
             let mut b = [0u8; 8];
             r.read_exact(&mut b)?;
@@ -203,10 +176,8 @@ impl AdamState {
             dst: &mut [T],
             from: fn([u8; 4]) -> T,
         ) -> std::io::Result<()> {
-            let mut b = [0u8; 4];
             for x in dst.iter_mut() {
-                r.read_exact(&mut b)?;
-                *x = from(b);
+                *x = from(word(r)?);
             }
             Ok(())
         }
@@ -222,6 +193,24 @@ impl AdamState {
                 ));
             }
             cells(r, dst, from)
+        }
+
+        for v in [
+            &mut self.beta1,
+            &mut self.beta2,
+            &mut self.eps,
+            &mut self.wd,
+            &mut self.la_alpha,
+        ] {
+            *v = f32::from_le_bytes(word(r)?);
+        }
+        for v in [
+            &mut self.t,
+            &mut self.la_k,
+            &mut self.la_step,
+            &mut self.stamp_cur,
+        ] {
+            *v = u32::from_le_bytes(word(r)?);
         }
 
         let me = self;
@@ -267,20 +256,20 @@ impl AdamState {
             wd: 0.0,
             m_ft: vec![0.0; nn.ft.len()],
             v_ft: vec![0.0; nn.ft.len()],
-            m_ft_bias: vec![0.0; FT_BIAS_LEN],
-            v_ft_bias: vec![0.0; FT_BIAS_LEN],
+            m_ft_bias: vec![0.0; ACC_DIMS],
+            v_ft_bias: vec![0.0; ACC_DIMS],
             m_so: so_moment_shapes(),
             v_so: so_moment_shapes(),
-            grad_scratch: vec![0.0; nn.ft.len()],
-            row_stamp: vec![0; nn.ft.len() / ACC_DIMS],
+            ft_scratch: vec![0.0; nn.ft.len()],
+            ft_stamp: vec![0; nn.ft.len() / ACC_DIMS],
             ft_last: vec![0; nn.ft.len() / ACC_DIMS],
-            pa_last: vec![0; nn.pa.len().checked_div(PA_DIMS).unwrap_or(0)],
+            pa_last: vec![0; nn.pa.len() / PA_DIMS],
             m_pa: vec![0.0; nn.pa.len()],
             v_pa: vec![0.0; nn.pa.len()],
             m_pa_bias: vec![0.0; PA_DIMS * PA_BUCKETS],
             v_pa_bias: vec![0.0; PA_DIMS * PA_BUCKETS],
             pa_scratch: vec![0.0; nn.pa.len()],
-            pa_stamp: vec![0; nn.pa.len().checked_div(PA_DIMS).unwrap_or(0)],
+            pa_stamp: vec![0; nn.pa.len() / PA_DIMS],
             pa_touched: Vec::new(),
             t: 0,
             la_k: 0,
@@ -288,7 +277,7 @@ impl AdamState {
             la_step: 0,
             la_slow: Vec::new(),
             stamp_cur: 0,
-            touched: Vec::new(),
+            ft_touched: Vec::new(),
         }
     }
 }
@@ -303,6 +292,17 @@ fn stack_inputs(acc: &[f32; H], pa: &[f32; PA_DIMS]) -> [f32; SO_SKIP] {
     xin
 }
 
+/// The stacked read-out's activations, kept for the backward pass.
+struct Stack {
+    m: f32,
+    xin: [f32; SO_SKIP],
+    l1: [f32; SO_L1],
+    a1: [f32; SO_L1 * 2],
+    l2: [f32; SO_L2],
+    v2: [f32; SO_L2],
+    unit: f32,
+}
+
 fn replicate_stage0(t: &mut [f32], per_stage: usize) {
     for st in 1..SO_STAGES {
         let (head, tail) = t.split_at_mut(st * per_stage);
@@ -312,14 +312,13 @@ fn replicate_stage0(t: &mut [f32], per_stage: usize) {
 
 #[inline]
 fn so_act(a: f32) -> f32 {
-    (a * (1.0 / PAIR_CLAMP)).clamp(0.0, 1.0)
+    a.clamp(0.0, 1.0)
 }
 
 #[inline]
 fn so_act_grad(a: f32) -> f32 {
-    let x = a * (1.0 / PAIR_CLAMP);
-    if x > 0.0 && x < 1.0 {
-        1.0 / PAIR_CLAMP
+    if a > 0.0 && a < 1.0 {
+        1.0
     } else {
         0.0
     }
@@ -329,9 +328,9 @@ fn so_act_grad(a: f32) -> f32 {
 fn fold_pairs_f32(raw: &[f32; ACC_DIMS]) -> [f32; H] {
     let mut out = [0.0f32; H];
     for i in 0..H {
-        let a = raw[i].clamp(0.0, PAIR_CLAMP);
-        let b = raw[i + H].clamp(0.0, PAIR_CLAMP);
-        out[i] = a * b * (ACT_SCALE / PAIR_CLAMP);
+        let a = raw[i].clamp(0.0, 1.0);
+        let b = raw[i + H].clamp(0.0, 1.0);
+        out[i] = a * b * ACT_SCALE;
     }
     out
 }
@@ -342,20 +341,18 @@ fn fold_pairs_back(raw: &[f32; ACC_DIMS], dfolded: &[f32; H]) -> [f32; ACC_DIMS]
     for i in 0..H {
         let a = raw[i];
         let b = raw[i + H];
-        let ca = a.clamp(0.0, PAIR_CLAMP);
-        let cb = b.clamp(0.0, PAIR_CLAMP);
-        if a > 0.0 && a < PAIR_CLAMP {
-            d[i] = dfolded[i] * cb * (ACT_SCALE / PAIR_CLAMP);
+        if a > 0.0 && a < 1.0 {
+            d[i] = dfolded[i] * b.clamp(0.0, 1.0) * ACT_SCALE;
         }
-        if b > 0.0 && b < PAIR_CLAMP {
-            d[i + H] = dfolded[i] * ca * (ACT_SCALE / PAIR_CLAMP);
+        if b > 0.0 && b < 1.0 {
+            d[i + H] = dfolded[i] * a.clamp(0.0, 1.0) * ACT_SCALE;
         }
     }
     d
 }
 
 #[derive(Clone, Copy)]
-struct FtCells {
+struct RowCells {
     scratch: *mut f32,
     stamp: *mut u32,
     m: *mut f32,
@@ -363,13 +360,12 @@ struct FtCells {
     w: *mut f32,
     last: *mut u32,
 }
-unsafe impl Send for FtCells {}
-unsafe impl Sync for FtCells {}
+unsafe impl Send for RowCells {}
+unsafe impl Sync for RowCells {}
 
 type Grad = fn(&GradSink) -> &[f32];
 type RowBlock<const D: usize> = Vec<(u32, [f32; D])>;
 
-/// Same order as [`Nnue::dense_lens`].
 const DENSE_GRADS: [Grad; 8] = [
     |s| s.ft_bias.as_slice(),
     |s| s.pa_bias.as_slice(),
@@ -403,6 +399,19 @@ struct Adw {
 }
 
 impl Adw {
+    fn new(adam: &AdamState, lr: f32, wd: f32, scale: f32) -> Adw {
+        Adw {
+            b1: adam.beta1,
+            b2: adam.beta2,
+            eps: adam.eps,
+            bc1: 1.0 - adam.beta1.powi(adam.t as i32),
+            bc2s: (1.0 - adam.beta2.powi(adam.t as i32)).sqrt(),
+            lr,
+            wd,
+            scale,
+        }
+    }
+
     fn grad(&self, sinks: &[GradSink], get: Grad, i: usize) -> f32 {
         sinks.iter().map(|s| get(s)[i]).sum::<f32>() * self.scale
     }
@@ -432,7 +441,7 @@ impl Adw {
 
 /// Returns the squared norm of the summed gradient.
 fn reduce_rows<const D: usize>(
-    cells: FtCells,
+    cells: RowCells,
     cur: u32,
     touched: &mut [Vec<u32>],
     sinks: &[GradSink],
@@ -462,8 +471,8 @@ fn reduce_rows<const D: usize>(
                                     D,
                                 );
                             } else {
-                                for h in 0..D {
-                                    *cells.scratch.add(base + h) += vals[h];
+                                for (h, &g) in vals.iter().enumerate() {
+                                    *cells.scratch.add(base + h) += g;
                                 }
                             }
                         }
@@ -486,7 +495,7 @@ fn reduce_rows<const D: usize>(
     sq
 }
 
-fn apply_rows<const D: usize>(cells: FtCells, touched: &[Vec<u32>], adw: &Adw, t_now: u32) {
+fn apply_rows<const D: usize>(cells: RowCells, touched: &[Vec<u32>], adw: &Adw, t_now: u32) {
     std::thread::scope(|scope| {
         for tv in touched.iter() {
             scope.spawn(move || {
@@ -503,11 +512,7 @@ fn apply_rows<const D: usize>(cells: FtCells, touched: &[Vec<u32>], adw: &Adw, t
                             D,
                             *lp,
                             t_now,
-                            adw.lr,
-                            adw.wd,
-                            adw.b1,
-                            adw.b2,
-                            adw.eps,
+                            adw,
                         );
                         *lp = t_now;
                         for h in 0..D {
@@ -526,7 +531,7 @@ fn apply_rows<const D: usize>(cells: FtCells, touched: &[Vec<u32>], adw: &Adw, t
         }
     });
 }
-#[allow(clippy::too_many_arguments)]
+/// Replays the steps a row sat out: its moments decay and keep moving the weight with no new gradient.
 #[inline]
 unsafe fn catch_up(
     m: *mut f32,
@@ -535,12 +540,16 @@ unsafe fn catch_up(
     n: usize,
     last: u32,
     now: u32,
-    lr: f32,
-    wd: f32,
-    b1: f32,
-    b2: f32,
-    eps: f32,
+    adw: &Adw,
 ) {
+    let Adw {
+        b1,
+        b2,
+        eps,
+        lr,
+        wd,
+        ..
+    } = *adw;
     let miss = now.saturating_sub(last).saturating_sub(1);
     if miss == 0 {
         return;
@@ -577,18 +586,43 @@ unsafe fn catch_up(
     }
 }
 
+fn settle_rows<const D: usize>(
+    m: &mut [f32],
+    v: &mut [f32],
+    w: &mut [f32],
+    last: &mut [u32],
+    t: u32,
+    adw: &Adw,
+) {
+    for (r, l) in last.iter_mut().enumerate() {
+        let base = r * D;
+        unsafe {
+            catch_up(
+                m.as_mut_ptr().add(base),
+                v.as_mut_ptr().add(base),
+                w.as_mut_ptr().add(base),
+                D,
+                *l,
+                t + 1,
+                adw,
+            );
+        }
+        *l = t;
+    }
+}
+
+/// One worker's gradients; sparse rows are split into `parts` by row so each part reduces on its own thread.
 pub struct GradSink {
-    pub so_l1_w: Vec<f32>,
-    pub so_l1_b: Vec<f32>,
-    pub so_l2_w: Vec<f32>,
-    pub so_l2_b: Vec<f32>,
-    pub so_out_w: Vec<f32>,
-    pub so_out_b: Vec<f32>,
-    pub ft_bias: Vec<f32>,
-    pub pa_bias: Vec<f32>,
-    pub ft_rows: Vec<Vec<(u32, [f32; ACC_DIMS])>>,
-    pub pa_rows: Vec<Vec<(u32, [f32; PA_DIMS])>>,
-    parts: usize,
+    so_l1_w: Vec<f32>,
+    so_l1_b: Vec<f32>,
+    so_l2_w: Vec<f32>,
+    so_l2_b: Vec<f32>,
+    so_out_w: Vec<f32>,
+    so_out_b: Vec<f32>,
+    ft_bias: Vec<f32>,
+    pa_bias: Vec<f32>,
+    ft_rows: Vec<RowBlock<ACC_DIMS>>,
+    pa_rows: Vec<RowBlock<PA_DIMS>>,
 }
 
 impl GradSink {
@@ -601,27 +635,26 @@ impl GradSink {
             so_l2_b: vec![0.0; SO_SIZES.3],
             so_out_w: vec![0.0; SO_SIZES.4],
             so_out_b: vec![0.0; SO_SIZES.5],
-            ft_bias: vec![0.0; FT_BIAS_LEN],
+            ft_bias: vec![0.0; ACC_DIMS],
             pa_bias: vec![0.0; PA_DIMS * PA_BUCKETS],
             ft_rows: (0..parts).map(|_| Vec::new()).collect(),
             pa_rows: (0..parts).map(|_| Vec::new()).collect(),
-            parts,
         }
     }
 
     #[inline]
     fn push_ft(&mut self, row: u32, vals: &[f32; ACC_DIMS]) {
-        let p = row as usize % self.parts;
+        let p = row as usize % self.ft_rows.len();
         self.ft_rows[p].push((row, *vals));
     }
 
     #[inline]
     fn push_pa(&mut self, row: u32, vals: &[f32; PA_DIMS]) {
-        let p = row as usize % self.parts;
+        let p = row as usize % self.pa_rows.len();
         self.pa_rows[p].push((row, *vals));
     }
 
-    /// Leaves only the per-stage head and the stage-bucketed pattern add, so the shared layers stay put.
+    /// Leaves only the per-stage head and the phase-adaptive layer, so the shared layers stay put.
     pub fn keep_stage_heads_only(&mut self) {
         self.ft_bias.fill(0.0);
         for b in self.ft_rows.iter_mut() {
@@ -645,21 +678,6 @@ impl GradSink {
             b.clear();
         }
     }
-}
-
-pub fn sym_board(b: u64, i: u8) -> u64 {
-    let mut b = b;
-    if i >= 4 {
-        b = crate::bitboard::mirror_horizontal(b);
-        for _ in 0..(i - 4) {
-            b = crate::bitboard::rotate_90(b);
-        }
-    } else {
-        for _ in 0..i {
-            b = crate::bitboard::rotate_90(b);
-        }
-    }
-    b
 }
 
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -804,7 +822,6 @@ impl MpcSigma {
 }
 
 pub struct Nnue {
-    patterns: &'static [Pattern],
     indexer: PatternIndexer,
     n_masks: usize,
     mask_off: Vec<u32>,
@@ -812,8 +829,8 @@ pub struct Nnue {
 
     ft: Vec<f32>,
     ft_bias: Vec<f32>,
-    pub pa: Vec<f32>,
-    pub pa_bias: Vec<f32>,
+    pa: Vec<f32>,
+    pa_bias: Vec<f32>,
     so_l1_w: Vec<f32>,
     so_l1_b: Vec<f32>,
     so_l2_w: Vec<f32>,
@@ -831,28 +848,16 @@ impl Nnue {
     pub fn new(patterns: &'static [Pattern]) -> Nnue {
         let indexer = PatternIndexer::new(patterns);
         let n_masks = indexer.n_masks();
-
-        let mut pattern_off = Vec::with_capacity(patterns.len());
-        let mut off = 0u32;
-        for p in patterns {
-            pattern_off.push(off);
-            off += p.table_size() as u32;
-        }
-        let n_features = off as usize;
-        let mask_off: Vec<u32> = indexer
-            .mask_patterns()
-            .iter()
-            .map(|&pi| pattern_off[pi as usize])
-            .collect();
+        let n_features = patterns.iter().map(|p| p.table_size()).sum();
+        let mask_off = indexer.mask_offsets();
 
         Nnue {
-            patterns,
             indexer,
             n_masks,
             mask_off,
             n_features,
             ft: vec![0.0; n_features * ACC_DIMS],
-            ft_bias: vec![0.0; FT_BIAS_LEN],
+            ft_bias: vec![0.0; ACC_DIMS],
             pa: vec![0.0; n_features * PA_BUCKETS * PA_DIMS],
             pa_bias: vec![0.0; PA_DIMS * PA_BUCKETS],
             so_l1_w: vec![0.0; SO_SIZES.0],
@@ -893,7 +898,12 @@ impl Nnue {
 
     pub fn init_weights(&mut self) {
         let mut s: u64 = 0x1234_5678_9abc_def0;
-        let mut next = || xorshift_unit(&mut s);
+        let mut next = || {
+            s ^= s >> 12;
+            s ^= s << 25;
+            s ^= s >> 27;
+            ((s.wrapping_mul(0x2545_F491_4F6C_DD1D) >> 40) as i64 as f32) / (1i64 << 23) as f32
+        };
         // the removed read-out drew first; skipping its draws keeps a fresh network bit-identical
         for _ in 0..STAGE_COUNT * H {
             next();
@@ -966,13 +976,9 @@ impl Nnue {
         f
     }
 
+    /// The search's evaluation: the integer network, which needs [`Nnue::quantize`] first.
     #[inline]
     pub fn eval_from_indices(&self, indices: &PatternIndices, board: &Board) -> f32 {
-        self.net_from_indices(indices, board)
-    }
-
-    #[inline]
-    pub fn net_from_indices(&self, indices: &PatternIndices, board: &Board) -> f32 {
         let stage = crate::linear::Linear::stage(board);
         self.sq
             .eval(self, indices, board.player(), stage, Self::mob_index(board))
@@ -983,11 +989,8 @@ impl Nnue {
         self.eval_indices(board, &ix)
     }
 
+    /// The f32 network the trainer descends on.
     pub fn eval_indices(&self, board: &Board, indices: &PatternIndices) -> f32 {
-        self.net_indices(board, indices)
-    }
-
-    pub fn net_indices(&self, board: &Board, indices: &PatternIndices) -> f32 {
         let stage = crate::linear::Linear::stage(board);
         let feats = self.features_player(indices, board.player());
         self.forward(&feats, Self::mob_index(board), stage)
@@ -1017,125 +1020,7 @@ impl Nnue {
         (a, z)
     }
 
-    fn stacked_readout(
-        &self,
-        acc: &[f32; H],
-        pa: &[f32; PA_DIMS],
-        mob: usize,
-        stage: usize,
-    ) -> f32 {
-        let st = so_stage(stage);
-        let xin = stack_inputs(acc, pa);
-        let mut l1 = [0.0f32; SO_L1];
-        for (i, v) in l1.iter_mut().enumerate() {
-            let row = &self.so_l1_w[(st * SO_L1 + i) * SO_L1_IN..];
-            let mut x = self.so_l1_b[st * SO_L1 + i];
-            for (k, &xv) in xin.iter().enumerate() {
-                x += row[k] * xv;
-            }
-            x += row[SO_SKIP] * mob_unit(mob);
-            *v = x;
-        }
-        let mut a1 = [0.0f32; SO_L1 * 2];
-        for i in 0..SO_L1 {
-            a1[i] = (l1[i] * l1[i] * ACT_SCALE).clamp(0.0, 1.0);
-            a1[SO_L1 + i] = l1[i].clamp(0.0, 1.0);
-        }
-        let mut l2 = [0.0f32; SO_L2];
-        for (j, v) in l2.iter_mut().enumerate() {
-            let row = &self.so_l2_w[(st * SO_L2 + j) * (SO_L1 * 2)..];
-            let mut x = self.so_l2_b[st * SO_L2 + j];
-            for (i, a) in a1.iter().enumerate() {
-                x += row[i] * a;
-            }
-            *v = x.clamp(0.0, 1.0) * x.clamp(0.0, 1.0) * ACT_SCALE;
-        }
-        let ow = &self.so_out_w[st * SO_OUT_IN..];
-        let mut out = self.so_out_b[st];
-        for (j, v) in l2.iter().enumerate() {
-            out += ow[j] * v;
-        }
-        for (k, &xv) in xin.iter().enumerate() {
-            out += ow[SO_L2 + k] * xv;
-        }
-        out * SO_SCORE
-    }
-
-    #[inline]
-    pub fn mob_index(board: &Board) -> usize {
-        board.movable_count() as usize
-    }
-
-    fn forward(&self, feats: &[u32; MAX_MASKS], mob: usize, stage: usize) -> f32 {
-        let mut raw = [0.0f32; ACC_DIMS];
-        for &f in feats.iter().take(self.n_masks) {
-            let base = f as usize * ACC_DIMS;
-            let row = &self.ft[base..base + ACC_DIMS];
-            for h in 0..ACC_DIMS {
-                raw[h] += row[h];
-            }
-        }
-        for h in 0..ACC_DIMS {
-            raw[h] += self.ft_bias[h];
-        }
-        let acc = fold_pairs_f32(&raw);
-        let (pa, _) = self.pa_forward(feats, stage);
-        self.stacked_readout(&acc, &pa, mob, stage)
-    }
-
-    pub fn indexer(&self) -> &PatternIndexer {
-        &self.indexer
-    }
-
-    pub fn indices(&self, black: u64, white: u64) -> PatternIndices {
-        self.indexer.init(black, white)
-    }
-
-    pub fn grad_black_into(
-        &self,
-        indices: &PatternIndices,
-        stage: usize,
-        mob: usize,
-        target: f32,
-        sink: &mut GradSink,
-    ) -> f32 {
-        let feats = self.features_black(indices);
-        let mut raw = [0.0f32; ACC_DIMS];
-        for &f in feats.iter().take(self.n_masks) {
-            let base = f as usize * ACC_DIMS;
-            for h in 0..ACC_DIMS {
-                raw[h] += self.ft[base + h];
-            }
-        }
-        for h in 0..ACC_DIMS {
-            raw[h] += self.ft_bias[h];
-        }
-        let acc = fold_pairs_f32(&raw);
-        let (pa, pa_z) = self.pa_forward(&feats, stage);
-        let (sq, draw, dpa) = self.grad_stacked(&raw, &acc, &pa, &pa_z, mob, target, stage, sink);
-        for &f in feats.iter().take(self.n_masks) {
-            sink.push_ft(f, &draw);
-        }
-        let base_row = (pa_bucket(stage) * self.n_features) as u32;
-        for &f in feats.iter().take(self.n_masks) {
-            sink.push_pa(base_row + f, &dpa);
-        }
-        sq
-    }
-
-    #[allow(clippy::too_many_arguments)]
-    fn grad_stacked(
-        &self,
-        raw: &[f32; ACC_DIMS],
-        acc: &[f32; H],
-        pa: &[f32; PA_DIMS],
-        pa_z: &[f32; PA_DIMS],
-        mob: usize,
-        target: f32,
-        stage: usize,
-        sink: &mut GradSink,
-    ) -> (f32, [f32; ACC_DIMS], [f32; PA_DIMS]) {
-        let st = so_stage(stage);
+    fn stack_forward(&self, acc: &[f32; H], pa: &[f32; PA_DIMS], mob: usize, st: usize) -> Stack {
         let m = mob_unit(mob);
         let xin = stack_inputs(acc, pa);
         let mut l1 = [0.0f32; SO_L1];
@@ -1172,8 +1057,91 @@ impl Nnue {
         for (k, &xv) in xin.iter().enumerate() {
             unit += ow[SO_L2 + k] * xv;
         }
-        let out = unit * SO_SCORE;
-        let err_discs = out - target;
+        Stack {
+            m,
+            xin,
+            l1,
+            a1,
+            l2,
+            v2,
+            unit,
+        }
+    }
+
+    #[inline]
+    pub fn mob_index(board: &Board) -> usize {
+        board.movable_count() as usize
+    }
+
+    fn ft_raw(&self, feats: &[u32; MAX_MASKS]) -> [f32; ACC_DIMS] {
+        let mut raw = [0.0f32; ACC_DIMS];
+        for &f in feats.iter().take(self.n_masks) {
+            let row = &self.ft[f as usize * ACC_DIMS..][..ACC_DIMS];
+            for (r, &v) in raw.iter_mut().zip(row) {
+                *r += v;
+            }
+        }
+        for (r, &b) in raw.iter_mut().zip(&self.ft_bias) {
+            *r += b;
+        }
+        raw
+    }
+
+    fn forward(&self, feats: &[u32; MAX_MASKS], mob: usize, stage: usize) -> f32 {
+        let acc = fold_pairs_f32(&self.ft_raw(feats));
+        let (pa, _) = self.pa_forward(feats, stage);
+        self.stack_forward(&acc, &pa, mob, so_stage(stage)).unit * SO_SCORE
+    }
+
+    pub fn indices(&self, black: u64, white: u64) -> PatternIndices {
+        self.indexer.init(black, white)
+    }
+
+    pub fn grad_black_into(
+        &self,
+        indices: &PatternIndices,
+        stage: usize,
+        mob: usize,
+        target: f32,
+        sink: &mut GradSink,
+    ) -> f32 {
+        let feats = self.features_black(indices);
+        let raw = self.ft_raw(&feats);
+        let acc = fold_pairs_f32(&raw);
+        let (pa, pa_z) = self.pa_forward(&feats, stage);
+        let fwd = self.stack_forward(&acc, &pa, mob, so_stage(stage));
+        let (sq, draw, dpa) = self.grad_stacked(&fwd, &raw, &pa_z, target, stage, sink);
+        for &f in feats.iter().take(self.n_masks) {
+            sink.push_ft(f, &draw);
+        }
+        let base_row = (pa_bucket(stage) * self.n_features) as u32;
+        for &f in feats.iter().take(self.n_masks) {
+            sink.push_pa(base_row + f, &dpa);
+        }
+        sq
+    }
+
+    fn grad_stacked(
+        &self,
+        fwd: &Stack,
+        raw: &[f32; ACC_DIMS],
+        pa_z: &[f32; PA_DIMS],
+        target: f32,
+        stage: usize,
+        sink: &mut GradSink,
+    ) -> (f32, [f32; ACC_DIMS], [f32; PA_DIMS]) {
+        let st = so_stage(stage);
+        let Stack {
+            m,
+            xin,
+            l1,
+            a1,
+            l2,
+            v2,
+            unit,
+        } = fwd;
+        let ow = &self.so_out_w[st * SO_OUT_IN..];
+        let err_discs = unit * SO_SCORE - target;
         let err = 2.0 * err_discs / SO_SCORE;
 
         sink.so_out_b[st] += err;
@@ -1230,7 +1198,7 @@ impl Nnue {
 
         let mut dacc = [0.0f32; H];
         for (h, d) in dacc.iter_mut().enumerate() {
-            *d = dxin[h] * so_act_grad(acc[h]);
+            *d = dxin[h] * so_act_grad(xin[h]);
         }
         let mut dpa = [0.0f32; PA_DIMS];
         for (j, d) in dpa.iter_mut().enumerate() {
@@ -1241,12 +1209,12 @@ impl Nnue {
         }
 
         let draw = fold_pairs_back(raw, &dacc);
-        for h in 0..ACC_DIMS {
-            sink.ft_bias[h] += draw[h];
+        for (g, &d) in sink.ft_bias.iter_mut().zip(&draw) {
+            *g += d;
         }
         let off = pa_bucket(stage) * PA_DIMS;
-        for j in 0..PA_DIMS {
-            sink.pa_bias[off + j] += dpa[j];
+        for (g, &d) in sink.pa_bias[off..off + PA_DIMS].iter_mut().zip(&dpa) {
+            *g += d;
         }
         (err_discs * err_discs, draw, dpa)
     }
@@ -1261,39 +1229,29 @@ impl Nnue {
     ) {
         adam.t = adam.t.saturating_add(1);
         let t_now = adam.t;
-        let mut adw = Adw {
-            b1: adam.beta1,
-            b2: adam.beta2,
-            eps: adam.eps,
-            bc1: 1.0 - adam.beta1.powi(t_now as i32),
-            bc2s: (1.0 - adam.beta2.powi(t_now as i32)).sqrt(),
-            lr,
-            wd,
-            scale,
-        };
+        let mut adw = Adw::new(adam, lr, wd, scale);
 
         let parts = sinks.first().map_or(1, |s| s.ft_rows.len());
         adam.stamp_cur = adam.stamp_cur.wrapping_add(1);
         if adam.stamp_cur == 0 {
-            adam.row_stamp.fill(0);
+            adam.ft_stamp.fill(0);
+            adam.pa_stamp.fill(0);
             adam.stamp_cur = 1;
         }
         let cur = adam.stamp_cur;
-        while adam.touched.len() < parts {
-            adam.touched.push(Vec::new());
+        if adam.ft_touched.len() < parts {
+            adam.ft_touched.resize_with(parts, Vec::new);
+            adam.pa_touched.resize_with(parts, Vec::new);
         }
-        while adam.pa_touched.len() < parts {
-            adam.pa_touched.push(Vec::new());
-        }
-        let ft_cells = FtCells {
-            scratch: adam.grad_scratch.as_mut_ptr(),
-            stamp: adam.row_stamp.as_mut_ptr(),
+        let ft_cells = RowCells {
+            scratch: adam.ft_scratch.as_mut_ptr(),
+            stamp: adam.ft_stamp.as_mut_ptr(),
             m: adam.m_ft.as_mut_ptr(),
             v: adam.v_ft.as_mut_ptr(),
             w: self.ft.as_mut_ptr(),
             last: adam.ft_last.as_mut_ptr(),
         };
-        let pa_cells = FtCells {
+        let pa_cells = RowCells {
             scratch: adam.pa_scratch.as_mut_ptr(),
             stamp: adam.pa_stamp.as_mut_ptr(),
             m: adam.m_pa.as_mut_ptr(),
@@ -1305,7 +1263,7 @@ impl Nnue {
         let mut sq = reduce_rows(
             ft_cells,
             cur,
-            &mut adam.touched[..parts],
+            &mut adam.ft_touched[..parts],
             sinks,
             |s| s.ft_rows.as_slice(),
             scale,
@@ -1317,9 +1275,9 @@ impl Nnue {
             |s| s.pa_rows.as_slice(),
             scale,
         );
-        for (get, len) in DENSE_GRADS.iter().zip(self.dense_lens()) {
-            for i in 0..len {
-                let g = adw.grad(sinks, *get, i);
+        for get in DENSE_GRADS {
+            for i in 0..sinks.first().map_or(0, |s| get(s).len()) {
+                let g = adw.grad(sinks, get, i);
                 sq += (g as f64) * (g as f64);
             }
         }
@@ -1364,7 +1322,7 @@ impl Nnue {
             0.0,
         );
 
-        apply_rows::<ACC_DIMS>(ft_cells, &adam.touched[..parts], &adw, t_now);
+        apply_rows::<ACC_DIMS>(ft_cells, &adam.ft_touched[..parts], &adw, t_now);
         apply_rows::<PA_DIMS>(pa_cells, &adam.pa_touched[..parts], &adw, t_now);
         adw.dense(
             &mut self.pa_bias,
@@ -1385,59 +1343,26 @@ impl Nnue {
         self.lookahead_sync(adam);
     }
 
-    fn dense_lens(&self) -> [usize; 8] {
-        [
-            self.ft_bias.len(),
-            self.pa_bias.len(),
-            self.so_l1_w.len(),
-            self.so_l1_b.len(),
-            self.so_l2_w.len(),
-            self.so_l2_b.len(),
-            self.so_out_w.len(),
-            self.so_out_b.len(),
-        ]
-    }
-
+    /// Brings every row up to the last step, so the weights read as if no row had been skipped.
     pub fn settle_adam(&mut self, adam: &mut AdamState, lr: f32, wd: f32) {
-        let (b1, b2, eps, t) = (adam.beta1, adam.beta2, adam.eps, adam.t);
-        for r in 0..adam.ft_last.len() {
-            let base = r * ACC_DIMS;
-            unsafe {
-                catch_up(
-                    adam.m_ft.as_mut_ptr().add(base),
-                    adam.v_ft.as_mut_ptr().add(base),
-                    self.ft.as_mut_ptr().add(base),
-                    ACC_DIMS,
-                    adam.ft_last[r],
-                    t + 1,
-                    lr,
-                    wd,
-                    b1,
-                    b2,
-                    eps,
-                );
-            }
-            adam.ft_last[r] = t;
-        }
-        for r in 0..adam.pa_last.len() {
-            let base = r * PA_DIMS;
-            unsafe {
-                catch_up(
-                    adam.m_pa.as_mut_ptr().add(base),
-                    adam.v_pa.as_mut_ptr().add(base),
-                    self.pa.as_mut_ptr().add(base),
-                    PA_DIMS,
-                    adam.pa_last[r],
-                    t + 1,
-                    lr,
-                    wd,
-                    b1,
-                    b2,
-                    eps,
-                );
-            }
-            adam.pa_last[r] = t;
-        }
+        let adw = Adw::new(adam, lr, wd, 1.0);
+        let t = adam.t;
+        settle_rows::<ACC_DIMS>(
+            &mut adam.m_ft,
+            &mut adam.v_ft,
+            &mut self.ft,
+            &mut adam.ft_last,
+            t,
+            &adw,
+        );
+        settle_rows::<PA_DIMS>(
+            &mut adam.m_pa,
+            &mut adam.v_pa,
+            &mut self.pa,
+            &mut adam.pa_last,
+            t,
+            &adw,
+        );
     }
 
     fn trainable_tables(&mut self) -> Vec<&mut [f32]> {
@@ -1482,8 +1407,9 @@ impl Nnue {
         self.indexer.apply(ix, pos, flipped, mover);
     }
 
-    pub fn ft_len(&self) -> usize {
-        self.ft.len()
+    /// Weights in the two feature tables, which is what the optimizer's moments scale with.
+    pub fn table_len(&self) -> usize {
+        self.ft.len() + self.pa.len()
     }
 
     pub fn save(&self, path: &std::path::Path) -> std::io::Result<()> {
@@ -1502,13 +1428,7 @@ impl Nnue {
         w.write_all(&(self.n_features as u32).to_le_bytes())?;
         w.write_all(&(STAGE_COUNT as u32).to_le_bytes())?;
         w.write_all(&(self.pa.len() as u32).to_le_bytes())?;
-        let so_len = self.so_l1_w.len()
-            + self.so_l1_b.len()
-            + self.so_l2_w.len()
-            + self.so_l2_b.len()
-            + self.so_out_w.len()
-            + self.so_out_b.len();
-        w.write_all(&(so_len as u32).to_le_bytes())?;
+        w.write_all(&(SO_LEN as u32).to_le_bytes())?;
         w.write_all(&u32::from(self.mpc_sigma.is_some()).to_le_bytes())?;
         for &v in &self
             .mpc_sigma
@@ -1569,14 +1489,13 @@ impl Nnue {
                 "n_features mismatch",
             ));
         }
+        // the stage count, which the network no longer reads
         r.read_exact(&mut u)?;
         r.read_exact(&mut u)?;
-        let pa_len = u32::from_le_bytes(u) as usize;
-        if pa_len != self.pa.len() {
+        if u32::from_le_bytes(u) as usize != self.pa.len() {
             return Err(std::io::Error::new(
                 std::io::ErrorKind::InvalidData,
-                "phase-adaptive layer mismatch: this build and the file disagree on whether \
-                 the accumulator has a phase-adaptive half",
+                "phase-adaptive layer size mismatch",
             ));
         }
         r.read_exact(&mut u)?;
@@ -1589,17 +1508,10 @@ impl Nnue {
             *c = f32::from_le_bytes(u);
         }
         self.mpc_sigma = present.then(|| MpcSigma::from_array(coef));
-        let want_so = self.so_l1_w.len()
-            + self.so_l1_b.len()
-            + self.so_l2_w.len()
-            + self.so_l2_b.len()
-            + self.so_out_w.len()
-            + self.so_out_b.len();
-        if so_len != want_so {
+        if so_len != SO_LEN {
             return Err(std::io::Error::new(
                 std::io::ErrorKind::InvalidData,
-                "stacked read-out mismatch: this build and the file disagree on whether the \
-                 score comes from the layer stack or from the shared read-out",
+                "stacked read-out size mismatch",
             ));
         }
         let read_into = |r: &mut dyn Read, dst: &mut [f32]| -> std::io::Result<()> {
@@ -1627,15 +1539,29 @@ impl Nnue {
 
 #[cfg(test)]
 pub(crate) fn test_patterns() -> &'static [crate::pattern::Pattern] {
-    static SET: std::sync::OnceLock<&'static [crate::pattern::Pattern]> =
-        std::sync::OnceLock::new();
-    SET.get_or_init(|| {
-        crate::pattern::from_spec(
-            "Edge2X: A1 B1 C1 D1 E1 F1 G1 H1 B2 G2\nCorner3x3: A1 B1 C1 A2 B2 C2 A3 B3 C3\n",
-            true,
-        )
-        .expect("test spec parses")
-    })
+    use crate::pattern::{sq::*, Pattern};
+    &[
+        Pattern {
+            name: "Edge2X",
+            size: 10,
+            masks: &[
+                &[A1, B1, C1, D1, E1, F1, G1, H1, B2, G2],
+                &[A8, B8, C8, D8, E8, F8, G8, H8, B7, G7],
+                &[A1, A2, A3, A4, A5, A6, A7, A8, B2, B7],
+                &[H1, H2, H3, H4, H5, H6, H7, H8, G2, G7],
+            ],
+        },
+        Pattern {
+            name: "Corner3x3",
+            size: 9,
+            masks: &[
+                &[A1, B1, C1, A2, B2, C2, A3, B3, C3],
+                &[A8, B8, C8, A7, B7, C7, A6, B6, C6],
+                &[H1, G1, F1, H2, G2, F2, H3, G3, F3],
+                &[H8, G8, F8, H7, G7, F7, H6, G6, F6],
+            ],
+        },
+    ]
 }
 
 #[cfg(test)]
@@ -1768,9 +1694,7 @@ mod tests {
         assert_eq!(&b.m_ft[..64], &a.m_ft[..64]);
         assert_eq!(&b.v_ft_bias[..16], &a.v_ft_bias[..16]);
 
-        let corner_only = crate::pattern::from_spec("Corner3x3: A1 B1 C1 A2 B2 C2 A3 B3 C3", true)
-            .expect("test spec parses");
-        let mut other = Nnue::new(corner_only);
+        let mut other = Nnue::new(&test_patterns()[1..]);
         other.init_weights();
         let mut c = AdamState::new(&other);
         assert!(

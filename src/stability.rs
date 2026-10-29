@@ -1,8 +1,6 @@
 //! Stable-disc computation for endgame pruning.
 
 const RANK0: u64 = 0x0101_0101_0101_0101;
-#[cfg(test)]
-const RANK7: u64 = 0x8080_8080_8080_8080;
 const INTERIOR: u64 = 0x007e_7e7e_7e7e_7e00;
 
 const D9_L1: u64 = 0x0101_0101_0101_01FF;
@@ -87,10 +85,11 @@ const fn place_1d(mover: u8, other: u8, s: u8) -> (u8, u8) {
     (mover | (1 << s) | flipped, other & !flipped)
 }
 
+/// Indexed by `own << 8 | opp` for one edge line: the discs of `own` no play can flip.
 #[repr(align(64))]
-struct Align64<T>(T);
+struct EdgeTable([u8; 65536]);
 
-static EDGE_TABLE: Align64<[u8; 65536]> = Align64(build_edge_table());
+static EDGE_TABLE: EdgeTable = EdgeTable(build_edge_table());
 
 const fn build_edge_table() -> [u8; 65536] {
     let mut stable = [0u8; 65536];
@@ -149,11 +148,6 @@ const fn build_edge_table() -> [u8; 65536] {
     stable
 }
 
-#[inline(always)]
-fn edge_table() -> &'static [u8; 65536] {
-    &EDGE_TABLE.0
-}
-
 const GATHER_MAGIC: u64 = 0x0102_0408_1020_4080;
 #[inline]
 fn gather_rank(x: u64, r: u32) -> u8 {
@@ -166,8 +160,8 @@ fn scatter_inner(mask: u8, r: u32) -> u64 {
     ((mask as u64 & 0x7e).wrapping_mul(0x0000_0408_1020_4080) & 0x0001_0101_0101_0100) << r
 }
 
-pub(crate) fn edge_stable_all(own: u64, opp: u64) -> u64 {
-    let t = edge_table();
+fn edge_stable(own: u64, opp: u64) -> u64 {
+    let t = &EDGE_TABLE.0;
     let mut stable = 0u64;
     for r in [0u32, 7] {
         let o = gather_rank(own, r);
@@ -182,45 +176,35 @@ pub(crate) fn edge_stable_all(own: u64, opp: u64) -> u64 {
     stable
 }
 
-#[cfg(test)]
-pub fn stable_discs(own: u64, opp: u64) -> u64 {
-    let occ = own | opp;
-    let (full_h, full_v, full_d9, full_d7) = full_lines(occ);
+/// Interior discs on four full lines are stable outright.
+#[inline(always)]
+fn seed(own: u64, lines: (u64, u64, u64, u64)) -> u64 {
+    let (full_h, full_v, full_d9, full_d7) = lines;
+    own & INTERIOR & full_h & full_v & full_d9 & full_d7
+}
 
-    let interior = own & INTERIOR;
-    let mut stable = edge_stable_all(own, opp);
-    stable |= interior & full_h & full_v & full_d9 & full_d7;
-
-    loop {
-        let safe_h = full_h | (stable << 8) | (stable >> 8);
-        let safe_v = full_v | (stable << 1) | (stable >> 1);
-        let safe_d9 = full_d9 | (stable << 9) | (stable >> 9);
-        let safe_d7 = full_d7 | (stable << 7) | (stable >> 7);
-        let next = stable | (interior & safe_h & safe_v & safe_d9 & safe_d7);
-        if next == stable {
-            return stable;
-        }
-        stable = next;
-    }
+/// One propagation step: an interior disc is stable once every line through it is full or blocked by a stable neighbour.
+#[inline(always)]
+fn grow(stable: u64, interior: u64, lines: (u64, u64, u64, u64)) -> u64 {
+    let (full_h, full_v, full_d9, full_d7) = lines;
+    let safe_h = full_h | (stable << 8) | (stable >> 8);
+    let safe_v = full_v | (stable << 1) | (stable >> 1);
+    let safe_d9 = full_d9 | (stable << 9) | (stable >> 9);
+    let safe_d7 = full_d7 | (stable << 7) | (stable >> 7);
+    stable | (interior & safe_h & safe_v & safe_d9 & safe_d7)
 }
 
 #[inline]
 pub fn stable_count_at_least(own: u64, opp: u64, need: u32) -> u32 {
-    let occ = own | opp;
-    let (full_h, full_v, full_d9, full_d7) = full_lines(occ);
+    let lines = full_lines(own | opp);
     let interior = own & INTERIOR;
-    let mut stable = edge_stable_all(own, opp);
-    stable |= interior & full_h & full_v & full_d9 & full_d7;
+    let mut stable = edge_stable(own, opp) | seed(own, lines);
     loop {
         let c = stable.count_ones();
         if c >= need {
             return c;
         }
-        let safe_h = full_h | (stable << 8) | (stable >> 8);
-        let safe_v = full_v | (stable << 1) | (stable >> 1);
-        let safe_d9 = full_d9 | (stable << 9) | (stable >> 9);
-        let safe_d7 = full_d7 | (stable << 7) | (stable >> 7);
-        let next = stable | (interior & safe_h & safe_v & safe_d9 & safe_d7);
+        let next = grow(stable, interior, lines);
         if next == stable {
             return c;
         }
@@ -231,6 +215,22 @@ pub fn stable_count_at_least(own: u64, opp: u64, need: u32) -> u32 {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::board::Board;
+    use crate::position::Position;
+
+    const RANK7: u64 = 0x8080_8080_8080_8080;
+
+    fn stable_discs(own: u64, opp: u64) -> u64 {
+        let lines = full_lines(own | opp);
+        let mut stable = edge_stable(own, opp) | seed(own, lines);
+        loop {
+            let next = grow(stable, own & INTERIOR, lines);
+            if next == stable {
+                return stable;
+            }
+            stable = next;
+        }
+    }
 
     #[test]
     fn rank_gather_scatter_match_the_bit_loops() {
@@ -318,18 +318,15 @@ mod tests {
             assert_eq!((d9, d7), full_diags_ref(occ), "occ = {occ:#018x}");
         }
     }
-    use crate::board::Board;
-    use crate::position::Position;
 
-    fn random_playout(mut board: Board, seed: u64) -> Board {
-        let mut state = seed.wrapping_mul(6364136223846793005).wrapping_add(1);
-        loop {
+    fn play_random(mut board: Board, mut state: u64, plies: usize) -> Board {
+        for _ in 0..plies {
             let moves = board.movable();
             if moves == 0 {
                 let mut p = board;
                 p.pass();
                 if p.movable() == 0 {
-                    return board;
+                    break;
                 }
                 board = p;
                 continue;
@@ -337,42 +334,23 @@ mod tests {
             state = state
                 .wrapping_mul(6364136223846793005)
                 .wrapping_add(1442695040888963407);
-            let mut nth = (state >> 33) % moves.count_ones() as u64;
-            let mut m = moves;
-            while nth > 0 {
-                m &= m - 1;
-                nth -= 1;
-            }
-            board.make_move_bits(Position::from_index(m.trailing_zeros()).unwrap());
+            let nth = (state >> 33) % moves.count_ones() as u64;
+            let sq = crate::bitboard::iter_bits(moves).nth(nth as usize).unwrap();
+            board.make_move_bits(Position(sq));
         }
+        board
     }
 
     fn random_position(seed: u64, plies: usize) -> Board {
-        let mut board = Board::new();
-        let mut state = seed
+        let state = seed
             .wrapping_mul(2862933555777941757)
             .wrapping_add(3037000493);
-        for _ in 0..plies {
-            let moves = board.movable();
-            if moves == 0 {
-                board.pass();
-                if board.movable() == 0 {
-                    break;
-                }
-                continue;
-            }
-            state = state
-                .wrapping_mul(6364136223846793005)
-                .wrapping_add(1442695040888963407);
-            let mut nth = (state >> 33) % moves.count_ones() as u64;
-            let mut m = moves;
-            while nth > 0 {
-                m &= m - 1;
-                nth -= 1;
-            }
-            board.make_move_bits(Position::from_index(m.trailing_zeros()).unwrap());
-        }
-        board
+        play_random(Board::new(), state, plies)
+    }
+
+    fn random_playout(board: Board, seed: u64) -> Board {
+        let state = seed.wrapping_mul(6364136223846793005).wrapping_add(1);
+        play_random(board, state, usize::MAX)
     }
 
     #[test]
@@ -406,6 +384,7 @@ mod tests {
                 (board.white, board.black, false),
             ] {
                 let stable = stable_discs(own, opp);
+                assert_eq!(stable_count_at_least(own, opp, 65), stable.count_ones());
                 if stable == 0 {
                     continue;
                 }

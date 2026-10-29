@@ -4,65 +4,6 @@ const MASK_RANK: u64 = 0x7E7E7E7E7E7E7E7E;
 const MASK_FILE: u64 = 0x00FFFFFFFFFFFF00;
 const MASK_DIAG: u64 = 0x007E7E7E7E7E7E00;
 
-#[cfg(test)]
-fn flip_shift<const DIR: u32, const UP: bool>(player: u64, opp_masked: u64, pos: u64) -> u64 {
-    fn sh<const N: u32, const UP: bool>(x: u64) -> u64 {
-        if UP {
-            x << N
-        } else {
-            x >> N
-        }
-    }
-
-    let mut f = sh::<DIR, UP>(pos) & opp_masked; // run length 1
-    if f == 0 {
-        return 0;
-    }
-
-    let opp2 = opp_masked & sh::<DIR, UP>(opp_masked);
-
-    let hop2 = |f: u64| match DIR {
-        1 => sh::<2, UP>(f) & opp2,
-        7 => sh::<14, UP>(f) & opp2,
-        8 => sh::<16, UP>(f) & opp2,
-        _ => sh::<18, UP>(f) & opp2,
-    };
-    f |= sh::<DIR, UP>(f) & opp_masked; // up to 2
-    f |= hop2(f); // up to 4
-    f |= hop2(f); // up to 6
-
-    if sh::<DIR, UP>(f) & player != 0 {
-        f
-    } else {
-        0
-    }
-}
-
-#[cfg(test)]
-fn flippable_generic(player_bb: u64, opponent_bb: u64, pos_bit: u64) -> u64 {
-    let o_rank = opponent_bb & MASK_RANK;
-    let o_file = opponent_bb & MASK_FILE;
-    let o_diag = opponent_bb & MASK_DIAG;
-
-    flip_shift::<1, true>(player_bb, o_rank, pos_bit)
-        | flip_shift::<1, false>(player_bb, o_rank, pos_bit)
-        | flip_shift::<8, true>(player_bb, o_file, pos_bit)
-        | flip_shift::<8, false>(player_bb, o_file, pos_bit)
-        | flip_shift::<7, true>(player_bb, o_diag, pos_bit)
-        | flip_shift::<7, false>(player_bb, o_diag, pos_bit)
-        | flip_shift::<9, true>(player_bb, o_diag, pos_bit)
-        | flip_shift::<9, false>(player_bb, o_diag, pos_bit)
-}
-
-#[inline]
-pub fn check(player_bb: u64, opponent_bb: u64, pos_bit: u64) -> bool {
-    let mask = !(player_bb | opponent_bb) & pos_bit;
-    if mask == 0 {
-        return false;
-    }
-    flippable(player_bb, opponent_bb, mask) != 0
-}
-
 #[inline]
 pub fn check_all(player_bb: u64, opponent_bb: u64) -> bool {
     let empty = !(player_bb | opponent_bb);
@@ -169,12 +110,6 @@ pub fn mobility_scalar(player_bb: u64, opponent_bb: u64, empty_bb: u64) -> u64 {
 }
 
 #[inline]
-pub fn mobility_count(player_bb: u64, opponent_bb: u64) -> u8 {
-    let empty = !(player_bb | opponent_bb);
-    mobility(player_bb, opponent_bb, empty).count_ones() as u8
-}
-
-#[inline]
 pub fn empty_bb(black: u64, white: u64) -> u64 {
     !(black | white)
 }
@@ -197,6 +132,20 @@ pub fn rotate_90(board: u64) -> u64 {
 #[inline]
 pub fn mirror_horizontal(board: u64) -> u64 {
     board.swap_bytes()
+}
+
+/// Form `i` of [`symmetries`].
+#[inline]
+pub fn symmetry(board: u64, i: u8) -> u64 {
+    let mut b = if i >= 4 {
+        mirror_horizontal(board)
+    } else {
+        board
+    };
+    for _ in 0..i % 4 {
+        b = rotate_90(b);
+    }
+    b
 }
 
 #[inline]
@@ -226,244 +175,28 @@ pub fn iter_bits(bb: u64) -> impl Iterator<Item = u8> {
     })
 }
 
-#[cfg(test)]
-fn xorshift(mut state: u64) -> impl FnMut() -> u64 {
-    move || {
-        state ^= state << 13;
-        state ^= state >> 7;
-        state ^= state << 17;
-        state
-    }
-}
+/// Per square, the four rays in increasing bit order; index 64 (no square) stays empty.
+const RAY_UP: [[u64; 4]; 65] = build_rays(1);
+/// The four opposite rays, bit-reversed so they too run upwards.
+const RAY_DOWN_REV: [[u64; 4]; 65] = build_rays(-1);
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    fn flippable_reference(player: u64, opp: u64, pos_bit: u64) -> u64 {
-        let sq = pos_bit.trailing_zeros() as i32;
-        let (pf, pr) = (sq / 8, sq % 8);
-        let mut flipped = 0u64;
-        for (df, dr) in [
-            (-1, -1),
-            (-1, 0),
-            (-1, 1),
-            (0, -1),
-            (0, 1),
-            (1, -1),
-            (1, 0),
-            (1, 1),
-        ] {
-            let mut run = 0u64;
-            let (mut f, mut r) = (pf + df, pr + dr);
-            loop {
-                if !(0..8).contains(&f) || !(0..8).contains(&r) {
-                    break; // ran off board: no anchor
-                }
-                let bit = 1u64 << (f * 8 + r);
-                if opp & bit != 0 {
-                    run |= bit;
-                } else if player & bit != 0 {
-                    flipped |= run; // anchored run
-                    break;
-                } else {
-                    break; // empty: no anchor
-                }
-                f += df;
-                r += dr;
-            }
-        }
-        flipped
-    }
-
-    fn random_boards(n: usize) -> Vec<(u64, u64)> {
-        let mut next = xorshift(0x243F6A8885A308D3);
-        (0..n)
-            .map(|_| {
-                let a = next();
-                let b = next();
-                (a & !b, b & !a)
-            })
-            .collect()
-    }
-
-    #[test]
-    fn test_flippable_matches_reference_on_random_boards() {
-        for (player, opp) in random_boards(500) {
-            let empty = !(player | opp);
-            let mut e = empty;
-            while e != 0 {
-                let bit = 1u64 << e.trailing_zeros();
-                e &= e - 1;
-                assert_eq!(
-                    flippable(player, opp, bit),
-                    flippable_reference(player, opp, bit),
-                    "player={player:#x} opp={opp:#x} pos={bit:#x}"
-                );
-            }
-        }
-    }
-
-    #[test]
-    fn test_flippable_all_eight_directions_from_center() {
-        let pos = 1u64 << 35;
-        for (df, dr) in [
-            (-1i32, -1i32),
-            (-1, 0),
-            (-1, 1),
-            (0, -1),
-            (0, 1),
-            (1, -1),
-            (1, 0),
-            (1, 1),
-        ] {
-            let opp_sq = ((4 + df) * 8 + (3 + dr)) as u64;
-            let anchor_sq = ((4 + 2 * df) * 8 + (3 + 2 * dr)) as u64;
-            let opp = 1u64 << opp_sq;
-            let player = 1u64 << anchor_sq;
-            assert_eq!(
-                flippable(player, opp, pos),
-                opp,
-                "direction ({df},{dr}) must flip exactly the adjacent disc"
-            );
-        }
-    }
-
-    #[test]
-    fn test_flippable_edge_wrap_regressions() {
-        let player = 1u64 << 9; // B2
-        let opp = 1u64 << 8; // B1
-        assert_eq!(
-            flippable(player, opp, 1u64 << 7), // place at A8
-            0,
-            "A8 -> B1 crosses the board edge and must not flip"
-        );
-
-        let player = 1u64 << 0; // A1
-        let opp =
-            (1u64 << 8) | (1u64 << 16) | (1u64 << 24) | (1u64 << 32) | (1u64 << 40) | (1u64 << 48);
-        assert_eq!(
-            flippable(player, opp, 1u64 << 56), // H1
-            opp,
-            "full-rank horizontal flip"
-        );
-
-        let player = 1u64 << 2; // A3
-        let opp = 1u64 << 1; // A2
-        assert_eq!(
-            flippable(player, opp, 1u64 << 57), // H2
-            0,
-            "H2 -> A2 is not a real diagonal"
-        );
-    }
-
-    #[test]
-    fn test_flippable_no_anchor_no_flip() {
-        let player = 0;
-        let opp = (1u64 << 8) | (1u64 << 16) | (1u64 << 24); // B1, C1, D1
-        assert_eq!(flippable(player, opp, 1u64 << 0), 0, "no anchor at edge");
-
-        let player = 1u64 << 40; // F1 present but gap at E1
-        let opp = (1u64 << 8) | (1u64 << 16); // B1, C1 (D1 empty)
-        assert_eq!(flippable(player, opp, 1u64 << 0), 0, "gap breaks the run");
-    }
-
-    #[test]
-    fn test_flippable_long_run() {
-        let player = 1u64 << 7; // A8 (rank 7)
-        let opp = (1u64 << 1) | (1u64 << 2) | (1u64 << 3) | (1u64 << 4) | (1u64 << 5) | (1u64 << 6);
-        assert_eq!(
-            flippable(player, opp, 1u64 << 0), // A1
-            opp,
-            "six-disc vertical run must flip entirely"
-        );
-    }
-
-    #[test]
-    fn test_check_valid_and_occupied() {
-        let player = 1u64 << 0; // A1
-        let opp = 1u64 << 8; // B1
-        assert!(check(player, opp, 1u64 << 16), "C1 flips B1");
-        assert!(!check(player, opp, 1u64 << 8), "occupied square");
-        assert!(!check(player, opp, 1u64 << 32), "E1 flips nothing");
-    }
-
-    #[test]
-    fn test_empty_bb() {
-        assert_eq!(empty_bb(0, 0), u64::MAX);
-        assert_eq!(empty_bb(1, 0), u64::MAX ^ 1);
-        assert_eq!(empty_bb(u64::MAX, 0), 0);
-    }
-
-    #[test]
-    fn test_iter_bits() {
-        let bb = (1u64 << 3) | (1u64 << 17) | (1u64 << 63);
-        let collected: Vec<u8> = iter_bits(bb).collect();
-        assert_eq!(collected, vec![3, 17, 63]);
-        assert_eq!(iter_bits(0).count(), 0);
-    }
-
-    #[test]
-    fn test_rotate_90() {
-        assert_eq!(rotate_90(1u64 << 0), 1u64 << 7, "A1 -> A8");
-        assert_eq!(rotate_90(1u64 << 7), 1u64 << 63, "A8 -> H8");
-        assert_eq!(rotate_90(1u64 << 63), 1u64 << 56, "H8 -> H1");
-        assert_eq!(rotate_90(1u64 << 56), 1u64 << 0, "H1 -> A1");
-
-        let original: u64 = 0x123456789ABCDEF0;
-        let r1 = rotate_90(original);
-        assert_eq!(r1.count_ones(), original.count_ones());
-        let r4 = rotate_90(rotate_90(rotate_90(r1)));
-        assert_eq!(r4, original, "4x 90° rotation is identity");
-    }
-}
-
-const RAY_UP: [[u64; 4]; 65] = {
-    let src = build_ray_masks(true);
+const fn build_rays(sign: i32) -> [[u64; 4]; 65] {
+    const DELTAS: [(i32, i32); 4] = [(0, 1), (1, 0), (1, 1), (1, -1)];
     let mut t = [[0u64; 4]; 65];
-    let mut sq = 0usize;
-    while sq < 64 {
-        t[sq] = src[sq];
-        sq += 1;
-    }
-    t
-};
-const RAY_DOWN_REV: [[u64; 4]; 65] = {
-    let src = build_ray_masks(false);
-    let mut t = [[0u64; 4]; 65];
-    let mut sq = 0usize;
-    while sq < 64 {
-        let mut a = 0usize;
-        while a < 4 {
-            t[sq][a] = src[sq][a].reverse_bits();
-            a += 1;
-        }
-        sq += 1;
-    }
-    t
-};
-
-const LINE_DELTAS: [(i32, i32); 4] = [(0, 1), (1, 0), (1, 1), (1, -1)];
-
-const fn build_ray_masks(increasing: bool) -> [[u64; 4]; 64] {
-    let mut t = [[0u64; 4]; 64];
     let mut sq = 0i32;
     while sq < 64 {
-        let f0 = sq / 8;
-        let r0 = sq % 8;
         let mut a = 0usize;
         while a < 4 {
-            let (df, dr) = LINE_DELTAS[a];
-            let (df, dr) = if increasing { (df, dr) } else { (-df, -dr) };
+            let (df, dr) = (DELTAS[a].0 * sign, DELTAS[a].1 * sign);
             let mut ray = 0u64;
-            let mut f = f0 + df;
-            let mut r = r0 + dr;
+            let mut f = sq / 8 + df;
+            let mut r = sq % 8 + dr;
             while f >= 0 && f < 8 && r >= 0 && r < 8 {
                 ray |= 1u64 << (f * 8 + r);
                 f += df;
                 r += dr;
             }
-            t[sq as usize][a] = ray;
+            t[sq as usize][a] = if sign < 0 { ray.reverse_bits() } else { ray };
             a += 1;
         }
         sq += 1;
@@ -618,6 +351,15 @@ const fn arm(sq: i32, df: i32, dr: i32) -> ([i32; 8], usize) {
     (cells, n)
 }
 
+/// An arm of one square can never hold a flip.
+const fn long_arm(n: usize) -> usize {
+    if n >= 2 {
+        n
+    } else {
+        0
+    }
+}
+
 const fn build_last_diag() -> [LastDiag; 64] {
     let mut t = [LastDiag {
         m0: 0,
@@ -648,35 +390,8 @@ const fn build_last_diag() -> [LastDiag; 64] {
         let form_b = up_f <= 1 && dn_f <= 1;
 
         if form_a || form_b {
-            let mut mask = 1u64 << sq;
-            let mut i = 0;
-            while i < n9u {
-                if l9u {
-                    mask |= 1u64 << c9u[i];
-                }
-                i += 1;
-            }
-            i = 0;
-            while i < n9d {
-                if l9d {
-                    mask |= 1u64 << c9d[i];
-                }
-                i += 1;
-            }
-            i = 0;
-            while i < n7u {
-                if l7u {
-                    mask |= 1u64 << c7u[i];
-                }
-                i += 1;
-            }
-            i = 0;
-            while i < n7d {
-                if l7d {
-                    mask |= 1u64 << c7d[i];
-                }
-                i += 1;
-            }
+            let mask = line_mask(sq, c9u, long_arm(n9u), c9d, long_arm(n9d))
+                | line_mask(sq, c7u, long_arm(n7u), c7d, long_arm(n7d));
             let by_byte = !form_a;
             let (lo, hi) = span_in_byte(mask, by_byte);
             let own = if by_byte { sq / 8 } else { sq % 8 };
@@ -770,17 +485,15 @@ pub fn count_last_flips(player: u64, sq: u8) -> (u32, u32) {
 struct MaskLr([u64; 8]);
 
 #[cfg(target_arch = "aarch64")]
-static MASK_LR: [MaskLr; 66] = {
-    let mut out = [MaskLr([0u64; 8]); 66];
+static MASK_LR: [MaskLr; 65] = {
+    let mut out = [MaskLr([0u64; 8]); 65];
     let mut sq = 0usize;
-    while sq < 66 {
-        if sq < 64 {
-            let mut j = 0usize;
-            while j < 4 {
-                out[sq].0[j] = RAY_UP[sq][j];
-                out[sq].0[j + 4] = RAY_DOWN_REV[sq][j];
-                j += 1;
-            }
+    while sq < 65 {
+        let mut j = 0usize;
+        while j < 4 {
+            out[sq].0[j] = RAY_UP[sq][j];
+            out[sq].0[j + 4] = RAY_DOWN_REV[sq][j];
+            j += 1;
         }
         out[sq].0[2] = !out[sq].0[2];
         out[sq].0[3] = !out[sq].0[3];
@@ -974,20 +687,89 @@ pub fn flippable4(
 }
 
 #[cfg(test)]
-mod flip_kernel_tests {
+mod tests {
     use super::*;
+
+    fn xorshift(mut state: u64) -> impl FnMut() -> u64 {
+        move || {
+            state ^= state << 13;
+            state ^= state >> 7;
+            state ^= state << 17;
+            state
+        }
+    }
+
+    /// Sparse, dense and thinned boards, so short and long runs both occur.
+    fn random_board(next: &mut impl FnMut() -> u64, i: usize) -> (u64, u64) {
+        let (x, y) = (next(), next());
+        match i % 3 {
+            0 => (x & !y, y & !x),
+            1 => (x & y, !(x | y)),
+            _ => (x & !y & next(), y & !x),
+        }
+    }
+
+    fn flippable_reference(player: u64, opp: u64, pos_bit: u64) -> u64 {
+        let sq = pos_bit.trailing_zeros() as i32;
+        let (pf, pr) = (sq / 8, sq % 8);
+        let mut flipped = 0u64;
+        for (df, dr) in [
+            (-1, -1),
+            (-1, 0),
+            (-1, 1),
+            (0, -1),
+            (0, 1),
+            (1, -1),
+            (1, 0),
+            (1, 1),
+        ] {
+            let mut run = 0u64;
+            let (mut f, mut r) = (pf + df, pr + dr);
+            while (0..8).contains(&f) && (0..8).contains(&r) {
+                let bit = 1u64 << (f * 8 + r);
+                if opp & bit != 0 {
+                    run |= bit;
+                } else {
+                    if player & bit != 0 {
+                        flipped |= run;
+                    }
+                    break;
+                }
+                f += df;
+                r += dr;
+            }
+        }
+        flipped
+    }
+
+    #[test]
+    fn flippable_matches_the_reference() {
+        let mut next = xorshift(0x1357_9BDF_2468_ACE0);
+        for i in 0..20_000 {
+            let (player, opponent) = random_board(&mut next, i);
+            for sq in 0..64u8 {
+                let pos_bit = 1u64 << sq;
+                let want = flippable_reference(player, opponent, pos_bit);
+                let msg = format!("player={player:#018x} opponent={opponent:#018x} sq={sq}");
+                assert_eq!(flippable(player, opponent, pos_bit), want, "{msg}");
+                assert_eq!(flippable_scalar(player, opponent, pos_bit), want, "{msg}");
+            }
+        }
+    }
+
+    #[test]
+    fn flippable_on_no_square_is_zero() {
+        assert_eq!(
+            flippable(0xFFFF_FFFF_0000_0000, 0x0000_0000_FFFF_FFFF, 0),
+            0
+        );
+    }
 
     #[test]
     fn batched_flips_match_single() {
         let mut next = xorshift(0xDEAD_BEEF_1234_5678);
         for i in 0..200_000 {
-            let x = next();
-            let y = next();
-            let (player, opponent) = match i % 3 {
-                0 => (x & !y, y & !x),
-                1 => (x & y, !(x | y)),
-                _ => (x & !y & next(), y & !x),
-            };
+            let (player, opponent) = random_board(&mut next, i);
             let s = [
                 (next() & 63) as u8,
                 (next() & 63) as u8,
@@ -1012,41 +794,6 @@ mod flip_kernel_tests {
     }
 
     #[test]
-    fn flippable_on_no_square_is_zero() {
-        assert_eq!(
-            flippable(0xFFFF_FFFF_0000_0000, 0x0000_0000_FFFF_FFFF, 0),
-            0
-        );
-    }
-
-    #[test]
-    fn flippable_matches_the_ray_scan() {
-        let mut next = xorshift(0x1357_9BDF_2468_ACE0);
-        for i in 0..20_000 {
-            let x = next();
-            let y = next();
-            let (player, opponent) = match i % 3 {
-                0 => (x & !y, y & !x),
-                1 => (x & y, !(x | y)),
-                _ => (x & !y & next(), y & !x),
-            };
-            for sq in 0..64u8 {
-                let pos_bit = 1u64 << sq;
-                assert_eq!(
-                    flippable(player, opponent, pos_bit),
-                    flippable_scalar(player, opponent, pos_bit),
-                    "player={player:#018x} opponent={opponent:#018x} sq={sq}"
-                );
-            }
-        }
-    }
-}
-
-#[cfg(test)]
-mod count_last_flip_tests {
-    use super::*;
-
-    #[test]
     fn count_last_flips_matches_flippable() {
         let mut next = xorshift(0x1234_5678_9ABC_DEF0);
         for _ in 0..20_000 {
@@ -1069,14 +816,9 @@ mod count_last_flip_tests {
             }
         }
     }
-}
-
-#[cfg(test)]
-mod neon_mobility_tests {
-    use super::*;
 
     #[test]
-    fn neon_mobility_matches_scalar() {
+    fn mobility_is_the_set_of_squares_that_flip() {
         let mut next = xorshift(0x9E37_79B9_7F4A_7C15);
         for i in 0..300_000 {
             let a = next();
@@ -1096,80 +838,33 @@ mod neon_mobility_tests {
                 }
             };
             let empty = !(player | opponent);
-            assert_eq!(
-                mobility(player, opponent, empty),
-                mobility_scalar(player, opponent, empty),
-                "player={player:#018x} opponent={opponent:#018x}"
-            );
-        }
-    }
-}
-
-#[cfg(test)]
-mod spec_flip_tests {
-    use super::*;
-
-    #[test]
-    fn specialized_flip_matches_generic() {
-        let mut state = 0x2545_F491_4F6C_DD1Du64;
-        let mut next = || {
-            state ^= state >> 12;
-            state ^= state << 25;
-            state ^= state >> 27;
-            state.wrapping_mul(0x9E37_79B9_7F4A_7C15)
-        };
-        for _ in 0..30_000 {
-            let a = next();
-            let b = next();
-            let player = a & !b;
-            let opponent = b & !a;
-            for sq in 0..64u32 {
-                let pos = 1u64 << sq;
-                if (player | opponent) & pos != 0 {
-                    continue;
-                }
-                assert_eq!(
-                    flippable(player, opponent, pos),
-                    flippable_generic(player, opponent, pos),
-                    "sq={sq} player={player:#018x} opponent={opponent:#018x}"
-                );
-            }
-        }
-    }
-}
-
-#[cfg(test)]
-mod mobility_smear_tests {
-    use super::*;
-
-    #[test]
-    fn mobility_agrees_with_flippable_random() {
-        let mut state = 0x0123_4567_89AB_CDEFu64;
-        let mut next = || {
-            state ^= state >> 12;
-            state ^= state << 25;
-            state ^= state >> 27;
-            state.wrapping_mul(0x2545_F491_4F6C_DD1D)
-        };
-        for _ in 0..40_000 {
-            let a = next();
-            let b = next();
-            let player = a & !b;
-            let opponent = b & !a;
-            let empty = !(player | opponent);
             let moves = mobility(player, opponent, empty);
-            let mut e = empty;
-            while e != 0 {
-                let sq = e.trailing_zeros();
-                e &= e - 1;
-                let pos = 1u64 << sq;
-                let flips = flippable(player, opponent, pos);
-                assert_eq!(
-                    flips != 0,
-                    moves & pos != 0,
-                    "sq={sq} player={player:#018x} opponent={opponent:#018x}"
-                );
+            let msg = format!("player={player:#018x} opponent={opponent:#018x}");
+            assert_eq!(moves, mobility_scalar(player, opponent, empty), "{msg}");
+            for sq in iter_bits(empty) {
+                let flips = flippable(player, opponent, 1u64 << sq);
+                assert_eq!(flips != 0, moves >> sq & 1 != 0, "{msg} sq={sq}");
             }
         }
+    }
+
+    #[test]
+    fn test_iter_bits() {
+        let bb = (1u64 << 3) | (1u64 << 17) | (1u64 << 63);
+        let collected: Vec<u8> = iter_bits(bb).collect();
+        assert_eq!(collected, vec![3, 17, 63]);
+        assert_eq!(iter_bits(0).count(), 0);
+    }
+
+    #[test]
+    fn test_rotate_90() {
+        assert_eq!(rotate_90(1u64 << 0), 1u64 << 7, "A1 -> A8");
+        assert_eq!(rotate_90(1u64 << 7), 1u64 << 63, "A8 -> H8");
+        assert_eq!(rotate_90(1u64 << 63), 1u64 << 56, "H8 -> H1");
+        assert_eq!(rotate_90(1u64 << 56), 1u64 << 0, "H1 -> A1");
+
+        let original: u64 = 0x123456789ABCDEF0;
+        let r4 = rotate_90(rotate_90(rotate_90(rotate_90(original))));
+        assert_eq!(r4, original, "4x 90° rotation is identity");
     }
 }

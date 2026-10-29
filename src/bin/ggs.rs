@@ -2,6 +2,7 @@
 
 use std::path::PathBuf;
 use std::process::ExitCode;
+use std::time::{Duration, Instant};
 
 use kuroobi::engine::{Engine, EngineConfig};
 use kuroobi::{Board, Position};
@@ -27,6 +28,13 @@ struct Args {
     weights: PathBuf,
     nnue: PathBuf,
     solver_hash: u32,
+}
+
+fn number<T: std::str::FromStr>(name: &str, v: String) -> Result<T, String>
+where
+    T::Err: std::fmt::Display,
+{
+    v.parse().map_err(|e| format!("{name}: {e}"))
 }
 
 fn parse_args() -> Result<Args, String> {
@@ -66,36 +74,18 @@ fn parse_args() -> Result<Args, String> {
             "--login" => args.login = Some(value("--login")?),
             "--pw" => args.pw = Some(value("--pw")?),
             "--credentials" => args.credentials = PathBuf::from(value("--credentials")?),
-            "--games" => {
-                args.games = value("--games")?
-                    .parse()
-                    .map_err(|e| format!("--games: {e}"))?
-            }
+            "--games" => args.games = number("--games", value("--games")?)?,
             "--time" => args.time = value("--time")?,
             "--type" => args.gtype = value("--type")?,
-            "--depth" => {
-                args.depth = value("--depth")?
-                    .parse()
-                    .map_err(|e| format!("--depth: {e}"))?
-            }
+            "--depth" => args.depth = number("--depth", value("--depth")?)?,
             "--solve-empties" => {
-                args.solve_empties = value("--solve-empties")?
-                    .parse()
-                    .map_err(|e| format!("--solve-empties: {e}"))?
+                args.solve_empties = number("--solve-empties", value("--solve-empties")?)?
             }
             "--no-mpc" => args.mpc = false,
-            "--threads" => {
-                args.threads = value("--threads")?
-                    .parse()
-                    .map_err(|e| format!("--threads: {e}"))?
-            }
+            "--threads" => args.threads = number("--threads", value("--threads")?)?,
             "--weights" => args.weights = PathBuf::from(value("--weights")?),
             "--nnue" => args.nnue = PathBuf::from(value("--nnue")?),
-            "--solver-hash" => {
-                args.solver_hash = value("--solver-hash")?
-                    .parse()
-                    .map_err(|e| format!("--solver-hash: {e}"))?
-            }
+            "--solver-hash" => args.solver_hash = number("--solver-hash", value("--solver-hash")?)?,
             other => return Err(format!("unknown option: {other}")),
         }
     }
@@ -122,8 +112,7 @@ fn parse_obf(line: &str) -> Option<Board> {
 }
 
 fn coord(p: Position) -> String {
-    let i = p.index();
-    format!("{}{}", (b'A' + i / 8) as char, i % 8 + 1)
+    p.to_kifu().to_uppercase()
 }
 
 enum SessionEnd {
@@ -167,10 +156,10 @@ fn run_session(
     let mut my_clock_secs: Option<u64> = None;
     let mut in_match = false;
     let mut asked = false;
-    let mut ready_at: Option<std::time::Instant> = None;
+    let mut ready_at: Option<Instant> = None;
     let mut awaiting_stored = false;
     let mut stored_id: Option<String> = None;
-    let mut last_activity = std::time::Instant::now();
+    let mut last_activity = Instant::now();
     let mut lost = false;
 
     loop {
@@ -178,7 +167,7 @@ fn run_session(
             if let Some(rx) = &stdin_rx {
                 while let Ok(cmd) = rx.try_recv() {
                     send(&cmd);
-                    last_activity = std::time::Instant::now();
+                    last_activity = Instant::now();
                 }
             }
         }
@@ -202,7 +191,7 @@ fn run_session(
         }
         if lost {
             eprintln!("### connection lost (in_match={in_match}); reconnecting");
-            std::thread::sleep(std::time::Duration::from_secs(10));
+            std::thread::sleep(Duration::from_secs(10));
             *first_session = false;
             return SessionEnd::Retry;
         }
@@ -233,8 +222,8 @@ fn run_session(
                 lines.clear();
                 raw.clear();
                 logged_in = true;
-                ready_at = Some(std::time::Instant::now());
-                last_activity = std::time::Instant::now();
+                ready_at = Some(Instant::now());
+                last_activity = Instant::now();
                 for cmd in [
                     "verbose -news -faq -help -ack",
                     "tell /os client -",
@@ -270,7 +259,7 @@ fn run_session(
                 }
             }
             if ln.starts_with("/os: update") || ln.starts_with("/os: join") {
-                last_activity = std::time::Instant::now();
+                last_activity = Instant::now();
                 in_block = true;
                 block.clear();
                 block.push(ln);
@@ -289,7 +278,7 @@ fn run_session(
                     }
                     if u.turn.is_some() && u.turn == my_color {
                         if let Some(board) = board_of(&u.rows, my_color) {
-                            let t0 = std::time::Instant::now();
+                            let t0 = Instant::now();
                             let (mv, val) = pick(&board, engine, my_clock_secs);
                             let m = match mv {
                                 Some(p) => coord(p),
@@ -326,13 +315,13 @@ fn run_session(
                 let has_word = |word: &str| ln.split_whitespace().any(|w| w == word);
                 if (from == "*" || has_word(from)) && has_word(login) {
                     send(&format!("tell /os accept {id}"));
-                    last_activity = std::time::Instant::now();
+                    last_activity = Instant::now();
                 }
             }
             if ln.starts_with("/os: + match") && ln.contains(login) {
                 in_match = true;
                 engine.clear_tables();
-                last_activity = std::time::Instant::now();
+                last_activity = Instant::now();
             }
             if ln.starts_with("/os: - match") && ln.contains(login) {
                 in_match = false;
@@ -381,12 +370,12 @@ fn dial(server: &str) -> std::net::TcpStream {
             Ok(s) => break s,
             Err(e) => {
                 eprintln!("### connect failed: {e}; retry in 15s");
-                std::thread::sleep(std::time::Duration::from_secs(15));
+                std::thread::sleep(Duration::from_secs(15));
             }
         }
     };
     stream
-        .set_read_timeout(Some(std::time::Duration::from_millis(300)))
+        .set_read_timeout(Some(Duration::from_millis(300)))
         .ok();
     stream
 }
@@ -496,20 +485,8 @@ fn board_of(rows: &[Vec<char>], color: Option<char>) -> Option<Board> {
     if rows.len() != 8 {
         return None;
     }
-    let mut s = String::with_capacity(66);
-    for r in rows {
-        for &c in r {
-            s.push(if c == '*' {
-                'X'
-            } else if c == 'O' {
-                'O'
-            } else {
-                '-'
-            });
-        }
-    }
-    s.push(' ');
-    s.push(if color == Some('*') { 'X' } else { 'O' });
+    let mut s: String = rows.iter().flatten().collect();
+    s.push(if color == Some('*') { '*' } else { 'O' });
     Board::from_string(&s).ok()
 }
 
@@ -550,7 +527,7 @@ fn main() -> ExitCode {
             return (None, None);
         }
         let mv = match clock_secs.filter(|_| !fixed_level) {
-            Some(s) => engine.play_clock(board, std::time::Duration::from_secs(s)),
+            Some(s) => engine.play_clock(board, Duration::from_secs(s)),
             None => engine.choose(board),
         };
         (

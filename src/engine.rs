@@ -27,15 +27,6 @@ const BACKUP_DEPTH: u32 = 60;
 
 const BACKUP_SHARE: f32 = 0.05;
 
-fn is_game_over(board: &Board) -> bool {
-    if board.movable() != 0 {
-        return false;
-    }
-    let mut b = *board;
-    b.pass();
-    b.movable() == 0
-}
-
 #[derive(Clone, Debug)]
 pub struct EngineConfig {
     pub depth: u32,
@@ -187,9 +178,9 @@ impl Engine {
         Engine::with_assets(assets, config)
     }
 
+    /// Builds an engine on weights already loaded, so many engines share one copy.
     pub fn with_assets(assets: EngineAssets, config: EngineConfig) -> Result<Engine, String> {
-        let linear = assets.linear;
-        let nn = assets.nnue;
+        let (linear, nn) = (assets.linear, assets.nnue);
         let tt = std::sync::Arc::new(SharedTt::new(config.midgame_hash_bits));
         let progress = std::sync::Arc::new(Progress::default());
         let mut search = NnueSearch::new(nn.clone(), tt.clone());
@@ -230,15 +221,11 @@ impl Engine {
         })
     }
 
-    pub fn config(&self) -> &EngineConfig {
-        &self.config
-    }
-
     fn watch_deadline(
         &self,
         deadline: Option<std::time::Instant>,
     ) -> Option<std::sync::Arc<std::sync::atomic::AtomicBool>> {
-        Some(crate::midgame::Deadline::new(deadline?).watch(self.stop.clone()))
+        Some(crate::midgame::watch_deadline(deadline?, self.stop.clone()))
     }
 
     fn backup_move(
@@ -434,7 +421,7 @@ impl Engine {
         if let Some(mv) = self.book_move(board) {
             return mv;
         }
-        if is_game_over(board) {
+        if board.is_game_over() {
             return MoveEval {
                 value: final_score(board) as f32,
                 exact: true,
@@ -492,7 +479,7 @@ impl Engine {
             return mv;
         }
         let c = &self.config;
-        if is_game_over(board) {
+        if board.is_game_over() {
             return MoveEval {
                 value: final_score(board) as f32,
                 exact: true,
@@ -530,9 +517,6 @@ impl Engine {
             MoveEval {
                 pos,
                 value: stone_scale(value),
-                exact: false,
-                from_book: false,
-                learned: false,
                 depth: reached,
                 cut,
                 ..Default::default()
@@ -638,7 +622,7 @@ impl Engine {
     }
 
     fn eval_position_inner(&mut self, board: &Board, depth: u32) -> MoveEval {
-        if is_game_over(board) {
+        if board.is_game_over() {
             return MoveEval {
                 value: final_score(board) as f32,
                 exact: true,
@@ -656,7 +640,7 @@ impl Engine {
                 ..Default::default()
             }
         } else {
-            let (pos, value) = self.search.best_move_valued(board, depth);
+            let (pos, value, _) = self.search.best_move_deadline(board, depth, None);
             MoveEval {
                 pos,
                 value: stone_scale(value),
@@ -687,7 +671,7 @@ impl Engine {
                 }
                 let mut child = *board;
                 child.make_move_bits(pos);
-                let ev = if is_game_over(&child) {
+                let ev = if child.is_game_over() {
                     MoveEval {
                         pos: Some(pos),
                         value: -(final_score(&child) as f32),
@@ -733,7 +717,7 @@ impl Engine {
 }
 
 #[cfg(test)]
-mod assets_tests {
+mod tests {
     use super::*;
 
     #[test]

@@ -28,32 +28,43 @@ Fetching the side-to-move bitboard, `player_bb()`, selects on `player`
 — a conditional the compiler turns into a select (`Color` is
 `#[repr(u8)]` with `Black=0 / White=1`).
 
-### Flip computation — a Kogge-Stone-style doubling smear
+### Flip computation — ray scans
 
 ![Flipping discs](img/flip.svg)
 
-`bitboard::flip_shift<const DIR: u32, const UP: bool>` is the reference
-implementation; tests hold the production paths to it. Production
-flipping goes through the NEON kernel on arm64 and a ray scan elsewhere.
-Because the direction is **fixed at compile time by a const generic**,
-all eight directions monomorphise into straight-line code with
-immediate shift amounts.
+`flippable` walks the eight rays out of the square through precomputed
+ray masks: `RAY_UP` for the four rays running towards higher bits, and
+`RAY_DOWN_REV` for the other four, stored bit-reversed so they run
+upwards on a bit-reversed board. On each ray the first square that is
+not an opponent disc is isolated with a lowest-set-bit operation; if it
+holds one's own disc, every ray square below it flips. The scan has no
+branches and no loop over run length.
+
+On arm64 the scan runs two rays per NEON register from one setup of the
+board (`BoardCtx`); elsewhere `flippable_scalar` scans one ray at a
+time. `flippable2` / `flippable3` / `flippable4` compute the flips of
+several squares from that one setup, which move generation in the solver
+uses. Tests hold both paths to a naive square-by-square walk.
+
+For the last empty square the solver needs only how many discs each side
+would flip: `count_last_flips` reads both counts from one table lookup
+per line through the square.
+
+### Legal move generation — a Kogge-Stone-style doubling smear
 
 The algorithm is the classic one of smearing one's own discs into a
-run of opponent discs, but it prepares `opp2 = opp & shift(opp)`
-(adjacent pairs of opponent discs) in advance to **advance two squares
-per step**. The step sequence 1→1→2→2 covers reversi's maximum flip
-length of 6, and **the dependency chain shortens from 6 to 4**
-compared with six naive sequential shifts.
+run of opponent discs, but it prepares `opp & shift(opp)` (adjacent
+pairs of opponent discs) in advance to **advance two squares per step**.
+The step sequence 1→1→2→2 covers reversi's maximum run length of 6, and
+**the dependency chain shortens from 6 to 4** compared with six naive
+sequential shifts. The scalar path, `some_mobility`, handles both signs
+of a direction in one function as **unrolled straight-line code**; on
+arm64 `mobility` is a NEON kernel doing the same for both diagonals at
+once. ORing the four axes and ANDing with the empty squares yields the
+legal move bitboard, and the mobility count is a single popcount.
 
-The anchor test (is the end of the run one's own disc?) is the
-**branch-free** test `shift(f) & player != 0`, returning `f` when it
-holds and `0` when it does not.
-
-### Edge wrap-around — per-direction masks
-
-Rather than masking at every step, **the opponent's bitboard is masked
-just once**:
+Edge wrap-around is handled by masking **the opponent's bitboard just
+once** per axis rather than at every step:
 
 | Constant | Value | Purpose |
 |---|---|---|
@@ -61,24 +72,8 @@ just once**:
 | `MASK_FILE` | `0x00FF…FF00` | ±8 directions (excludes file 0/7) |
 | `MASK_DIAG` | `0x007E…7E00` | ±7/±9 directions (excludes both) |
 
-The justification is that "the edge square along the scan direction
-can never be part of a flipped run (its anchor would be off the
-board)". This makes the shift scan wrap-free and **the masking inside
-the loop disappears**. The reference `flippable_generic` (tests only)
-computes the three masks once at the top and reuses them for every
-direction; the `flippable` the search calls is the NEON kernel on
-arm64 and a ray-table scan elsewhere. `flippable2` / `flippable4` compute
-the flips of several squares from one setup of the board, which move
-generation in the solver uses.
-
-### Legal move generation
-
-On arm64 `mobility` is a NEON kernel. The scalar path, `some_mobility`,
-handles both signs of a direction in one function with the same
-1-1-2-2 doubling smear as **unrolled straight-line code**. ORing the
-four axes and ANDing with the empty squares yields the legal move
-bitboard, and **the mobility count is a single popcount**
-(`mobility_count`).
+The justification is that the edge square along the scan direction
+can never be part of a flipped run (its anchor would be off the board).
 
 ### Applying a move
 
@@ -107,7 +102,8 @@ index expression is symmetric, so **the same function serves in both
 directions as a rank-major ⇄ file-major layout conversion** (used for
 training-data I/O). `rotate_90() = transpose(swap_bytes())`,
 `mirror_horizontal() = swap_bytes()`. `symmetries()` returns the eight
-symmetric forms.
+symmetric forms (the four rotations, then the mirror and its rotations);
+`symmetry(b, i)` computes form `i` alone.
 
 ---
 

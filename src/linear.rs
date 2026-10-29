@@ -7,12 +7,13 @@ use std::fs::File;
 use std::io::{self, BufReader, BufWriter, Read, Write};
 use std::path::Path;
 
-const I8_SCALE: f32 = 4.0;
-
 use crate::board::Board;
 use crate::color::Color;
 use crate::pattern::Pattern;
 use crate::pattern_index::{PatternIndexer, PatternIndices};
+
+/// The move-ordering tables hold weights in quarter discs.
+const I8_SCALE: f32 = 4.0;
 
 pub const STAGE_COUNT: usize = 61;
 
@@ -137,9 +138,7 @@ unsafe impl Sync for LinearView {}
 
 impl Linear {
     pub fn weight_view(&mut self) -> LinearView {
-        self.flat_weights.clear();
-        self.flat_i8.clear();
-        self.flat_i8_white.clear();
+        self.invalidate_flat();
         let counts = self
             .appear
             .iter()
@@ -332,20 +331,21 @@ impl Linear {
             .iter()
             .map(|f| vec![0.0f32; f.iter().max().map_or(0, |&c| c as usize + 1)])
             .collect();
+        let indexer = PatternIndexer::new(patterns);
         Linear {
             patterns,
             weights: vec![stage_weights; STAGE_COUNT],
             fold,
             symmetric,
             flat_weights: Vec::new(),
-            mask_off: Vec::new(),
+            mask_off: indexer.mask_offsets(),
             flat_i8: Vec::new(),
             flat_i8_white: Vec::new(),
             num_weights: vec![[0.0f32; NUM_TABLE_SIZE]; STAGE_COUNT],
             appear: Vec::new(),
             appear_num: Vec::new(),
             min_appear: 0,
-            indexer: PatternIndexer::new(patterns),
+            indexer,
         }
     }
 
@@ -422,11 +422,6 @@ impl Linear {
         self.min_appear = n;
     }
 
-    #[cfg(test)]
-    fn has_appearances(&self) -> bool {
-        !self.appear.is_empty()
-    }
-
     pub fn stage_weights(&self, stage: usize) -> (Vec<Vec<f32>>, Vec<f32>) {
         (
             self.weights[stage].clone(),
@@ -452,11 +447,6 @@ impl Linear {
         score + self.num_weights[stage][self.num_index(board)]
     }
 
-    #[cfg(all(test, feature = "gpu"))]
-    pub fn flat_all(&self) -> Vec<f32> {
-        self.flat_stages(0, STAGE_COUNT - 1)
-    }
-
     pub fn flat_stages(&self, lo: usize, hi: usize) -> Vec<f32> {
         let stride: usize = self.weights[0].iter().map(Vec::len).sum::<usize>() + NUM_TABLE_SIZE;
         let mut out = Vec::with_capacity(stride * (hi + 1 - lo));
@@ -467,11 +457,6 @@ impl Linear {
             out.extend_from_slice(&self.num_weights[s]);
         }
         out
-    }
-
-    #[cfg(all(test, feature = "gpu"))]
-    pub fn set_flat_all(&mut self, v: &[f32]) {
-        self.set_flat_stages(0, STAGE_COUNT - 1, v)
     }
 
     pub fn set_flat_stages(&mut self, lo: usize, hi: usize, v: &[f32]) {
@@ -485,7 +470,7 @@ impl Linear {
             self.num_weights[s].copy_from_slice(&v[k..k + NUM_TABLE_SIZE]);
             k += NUM_TABLE_SIZE;
         }
-        self.flat_weights.clear();
+        self.invalidate_flat();
     }
 
     #[inline]
@@ -495,6 +480,7 @@ impl Linear {
 
     #[inline]
     pub fn eval_indices(&self, board: &Board, indices: &PatternIndices) -> f32 {
+        // weights changed since the last load (training, tests) leave no flat tables
         if self.flat_weights.is_empty() {
             return self.eval(board);
         }
@@ -510,18 +496,6 @@ impl Linear {
 
     /// Unfolds the cells into the tables the search indexes directly.
     fn rebuild_flat(&mut self) {
-        let mut pattern_off = Vec::with_capacity(self.patterns.len());
-        let mut off = 0u32;
-        for p in self.patterns {
-            pattern_off.push(off);
-            off += p.table_size() as u32;
-        }
-        self.mask_off = self
-            .indexer
-            .mask_patterns()
-            .iter()
-            .map(|&pi| pattern_off[pi as usize])
-            .collect();
         self.flat_weights = self
             .weights
             .iter()
@@ -533,7 +507,6 @@ impl Linear {
                     .collect()
             })
             .collect();
-        let n_masks = self.indexer.n_masks();
         self.flat_i8 = self
             .flat_weights
             .iter()
@@ -547,17 +520,7 @@ impl Linear {
         self.flat_i8_white = self
             .flat_i8
             .iter()
-            .map(|stage| {
-                let mut out = stage.clone();
-                for m in 0..n_masks {
-                    let off = self.mask_off[m] as usize;
-                    let size = self.patterns[self.indexer.mask_patterns()[m] as usize].table_size();
-                    for i in 0..size {
-                        out[off + i] = stage[off + self.indexer.swapped_index(m, i)];
-                    }
-                }
-                out
-            })
+            .map(|stage| self.indexer.swap_colors(stage, &self.mask_off, 1))
             .collect();
     }
 
@@ -565,7 +528,6 @@ impl Linear {
         self.flat_weights.clear();
         self.flat_i8.clear();
         self.flat_i8_white.clear();
-        self.mask_off.clear();
     }
 
     #[inline(never)]
@@ -603,46 +565,17 @@ impl Linear {
         sum as f32 / I8_SCALE + self.num_weights[stage][player.count_ones() as usize]
     }
 
-    #[cfg(test)]
-    fn weight(&self, stage: usize, pattern: usize, index: usize) -> f32 {
-        self.weights[stage][pattern][self.fold[pattern][index] as usize]
-    }
-
     pub fn set_weight(&mut self, stage: usize, pattern: usize, index: usize, value: f32) {
         self.invalidate_flat();
         self.weights[stage][pattern][self.fold[pattern][index] as usize] = value;
     }
 
-    #[cfg(test)]
-    fn update_weights(&mut self, board: &Board, target: f32, learning_rate: f32) -> f32 {
-        let prediction = self.eval(board);
-        let error = target - prediction;
-
-        let stage = Self::stage(board);
-        let delta = learning_rate * error;
-
-        self.flat_weights.clear();
-        for (pi, p) in self.patterns.iter().enumerate() {
-            for idx in p.indices(board.black, board.white, board.player()) {
-                self.weights[stage][pi][self.fold[pi][idx] as usize] += delta;
-            }
-        }
-        let num_idx = self.num_index(board);
-        self.num_weights[stage][num_idx] += delta;
-        error
-    }
-
-    pub fn update_weights_with(
-        &mut self,
-        board: &Board,
-        target: f32,
-        opt: &mut impl Optimizer,
-    ) -> f32 {
-        let prediction = self.eval(board);
-        let error = target - prediction;
+    /// One optimizer step towards `target`; returns the squared error before it.
+    pub fn train(&mut self, board: &Board, target: f32, opt: &mut impl Optimizer) -> f32 {
+        let error = target - self.eval(board);
         let stage = Self::stage(board);
 
-        self.flat_weights.clear();
+        self.invalidate_flat();
         for (pi, p) in self.patterns.iter().enumerate() {
             let table_size = self.weights[stage][pi].len();
             for idx in p.indices(board.black, board.white, board.player()) {
@@ -654,12 +587,7 @@ impl Linear {
         let num_idx = self.num_index(board);
         let delta = opt.step(stage, self.patterns.len(), num_idx, NUM_TABLE_SIZE, error);
         self.num_weights[stage][num_idx] += delta;
-        error
-    }
-
-    pub fn train(&mut self, board: &Board, target: f32, opt: &mut impl Optimizer) -> f32 {
-        let e = self.update_weights_with(board, target, opt);
-        e * e
+        error * error
     }
 
     pub fn save_weights(&self, path: &Path) -> io::Result<()> {
@@ -787,7 +715,7 @@ mod tests {
         let mut counts: HashMap<(usize, u32), u32> = HashMap::new();
         for (pi, p) in LINEAR_PATTERNS.iter().enumerate() {
             for idx in p.indices(board.black, board.white, board.player()) {
-                *counts.entry((pi, e.fold(pi)[idx])).or_insert(0) += 1;
+                *counts.entry((pi, e.fold[pi][idx])).or_insert(0) += 1;
             }
         }
         counts.values().map(|&k| (k * k) as f32).sum::<f32>() + 1.0
@@ -795,14 +723,25 @@ mod tests {
 
     const LR: f32 = 0.005;
 
+    /// A plain SGD step; returns the error before it.
+    fn sgd(e: &mut Linear, b: &Board, target: f32, lr: f32) -> f32 {
+        let before = target - e.eval(b);
+        e.train(b, target, &mut SgdOptimizer::new(lr, 1.0));
+        before
+    }
+
+    fn weight(e: &Linear, stage: usize, pattern: usize, index: usize) -> f32 {
+        e.weights[stage][pattern][e.fold[pattern][index] as usize]
+    }
+
     #[test]
-    fn test_update_weights_reduces_error() {
+    fn test_sgd_step_reduces_error() {
         let mut e = Linear::new(LINEAR_PATTERNS);
         let b = Board::new();
 
-        let err0 = e.update_weights(&b, 10.0, LR);
+        let err0 = sgd(&mut e, &b, 10.0, LR);
         assert_eq!(err0, 10.0, "first error is the full target");
-        let err1 = e.update_weights(&b, 10.0, LR);
+        let err1 = sgd(&mut e, &b, 10.0, LR);
         assert!(
             err1.abs() < err0.abs(),
             "SGD must reduce error: {err0} -> {err1}"
@@ -811,11 +750,11 @@ mod tests {
     }
 
     #[test]
-    fn test_update_weights_converges_to_target() {
+    fn test_sgd_converges_to_target() {
         let mut e = Linear::new(LINEAR_PATTERNS);
         let b = Board::new();
         for _ in 0..200 {
-            e.update_weights(&b, 8.0, LR);
+            sgd(&mut e, &b, 8.0, LR);
         }
         let final_err = (8.0 - e.eval(&b)).abs();
         assert!(
@@ -846,7 +785,7 @@ mod tests {
 
             let mut e = Linear::new(LINEAR_PATTERNS);
             let target = 1.0f32;
-            e.update_weights(&b, target, LR);
+            sgd(&mut e, &b, target, LR);
             let expected = LR * target * multiplier;
             let got = e.eval(&b);
             assert!(
@@ -861,7 +800,7 @@ mod tests {
         let mut e = Linear::new(LINEAR_PATTERNS);
         let b = Board::new();
         assert_eq!(Linear::stage(&b), 0);
-        e.update_weights(&b, 5.0, LR);
+        sgd(&mut e, &b, 5.0, LR);
 
         let mut later = b;
         let pos = crate::position::Position::from_index(later.movable().trailing_zeros()).unwrap();
@@ -875,7 +814,7 @@ mod tests {
         let mut e = Linear::new(LINEAR_PATTERNS);
         let b = Board::new();
         for _ in 0..300 {
-            e.update_weights(&b, 8.0, LR);
+            sgd(&mut e, &b, 8.0, LR);
         }
         let mut swapped = b;
         swapped.pass();
@@ -893,7 +832,7 @@ mod tests {
 
         let mut e = Linear::new(LINEAR_PATTERNS);
         for _ in 0..300 {
-            e.update_weights(&b, 8.0, LR);
+            sgd(&mut e, &b, 8.0, LR);
         }
         let mut swapped = b;
         swapped.pass();
@@ -909,11 +848,11 @@ mod tests {
         let target = 8.0f32;
         let lr = 0.02f32;
 
-        let mut sgd = Linear::new(LINEAR_PATTERNS);
+        let mut plain = Linear::new(LINEAR_PATTERNS);
         for _ in 0..30 {
-            sgd.update_weights(&b, target, lr);
+            sgd(&mut plain, &b, target, lr);
         }
-        let sgd_residual = (target - sgd.eval(&b)).abs();
+        let sgd_residual = (target - plain.eval(&b)).abs();
         assert!(
             sgd_residual > 100.0,
             "SGD at lr=0.02 must diverge on the symmetric position, residual {sgd_residual}"
@@ -922,7 +861,7 @@ mod tests {
         let mut adam_eval = Linear::new(LINEAR_PATTERNS);
         let mut opt = AdamOptimizer::new(lr);
         for _ in 0..100 {
-            adam_eval.update_weights_with(&b, target, &mut opt);
+            adam_eval.train(&b, target, &mut opt);
         }
         let adam_residual = (target - adam_eval.eval(&b)).abs();
         let band = 65.0 * lr * 2.0;
@@ -979,6 +918,7 @@ mod tests {
             }
         }
 
+        e.rebuild_flat();
         let indexer = e.indexer();
         let mut board = Board::new();
         let mut indices = indexer.init(board.black, board.white);
@@ -1039,7 +979,7 @@ mod tests {
 
         let mut scaled = Linear::new(LINEAR_PATTERNS);
         scaled.count_appearances(std::iter::once(b));
-        assert!(scaled.has_appearances());
+        assert!(!scaled.appear.is_empty());
         step(&mut scaled, &b);
 
         let st = Linear::stage(&b);
@@ -1100,9 +1040,9 @@ mod tests {
 
         let mut e2 = Linear::new(LINEAR_PATTERNS);
         e2.load_weights(&path).unwrap();
-        assert_eq!(e2.weight(0, 0, 42), 1.25);
-        assert_eq!(e2.weight(60, 15, 7), -3.5);
-        assert_eq!(e2.weight(30, 8, 0), 0.0);
+        assert_eq!(weight(&e2, 0, 0, 42), 1.25);
+        assert_eq!(weight(&e2, 60, 15, 7), -3.5);
+        assert_eq!(weight(&e2, 30, 8, 0), 0.0);
 
         std::fs::remove_file(&path).ok();
     }
@@ -1166,7 +1106,7 @@ mod tests {
 
         let mut e = Linear::new(LINEAR_PATTERNS);
         let b = Board::new();
-        e.update_weights(&b, 10.0, 0.005);
+        sgd(&mut e, &b, 10.0, 0.005);
         let expected = e.eval(&b);
         e.save_weights(&path).unwrap();
 

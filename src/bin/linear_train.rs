@@ -8,9 +8,9 @@ use std::time::Instant;
 
 use kuroobi::linear::{AdamOptimizer, Linear, Optimizer, SgdOptimizer, STAGE_COUNT};
 use kuroobi::pattern::LINEAR_PATTERNS;
-use kuroobi::record::{Filter, TeacherPolicy};
+use kuroobi::record::{self, Filter, TeacherPolicy};
 use kuroobi::trainer::{
-    count_examples_binary, load_examples_filtered_into, EpochStats, Example, Trainer,
+    load_examples_filtered_into, EpochStats, Example, SelectBy, Trainer, ValError,
 };
 
 const DEFAULT_MAX_EXAMPLES: usize = 64_000_000;
@@ -32,10 +32,8 @@ struct Args {
     minibatch: usize,
     filter: Filter,
     policy: TeacherPolicy,
-    swa: bool,
-    swa_start: usize,
     per_stage_best: bool,
-    select_by: String,
+    select_by: SelectBy,
     cell_lr: bool,
     restore_on_halve: bool,
     min_appear: u32,
@@ -66,116 +64,68 @@ position).
 
 Options:
   --epochs <n>      Passes over all examples (default 10)
-  --stage <n>       The one stage this run trains. Required for sgd: a run
-                    covers one stage, and several stages means several
-                    processes, not several threads
-  --threads <n>     Workers for scoring the val set, and for adam's pass
-                    (default 1). Sgd trains one stage on one thread; see
-                    --stage
-  --optimizer <o>   sgd | adam (default sgd; sgd's error-proportional step
-                    converges much faster on this linear model)
+  --stage <n>       The one stage this run trains (0-60, by moves played).
+                    Required for sgd: several stages are several processes
+  --stages <a[-b]>  Train only these stages (adam). Every other stage stays
+                    as loaded
+  --optimizer <o>   sgd | adam (default sgd)
   --lr <f>          Learning rate (default: sgd 0.002, adam 0.01)
   --decay <f>       SGD per-epoch lr decay factor (default 0.95)
-  --weights <path>  Weight file to load/save (default weights/weights.bin)
+  --cosine          Anneal the rate from --lr to ~0 over the run, stepped
+                    once per shard
+  --gpu             Minibatch Adam on the GPU (needs --features gpu and
+                    --optimizer adam). A run aimed at one stage carries only
+                    that stage's tables
+  --minibatch <n>   Positions per GPU step (default 8192)
+  --threads <n>     Workers for scoring the val set and for adam's pass
+                    (default 1)
+  --weights <path>  Weight file to load and save every epoch
+                    (default weights/weights.bin)
   --limit <n>       Max examples per file
   --max-examples <n>
-                    Examples held in RAM at once (default 64000000, 0 = all).
-                    Datasets larger than this are split into shards of whole
-                    files; every epoch walks all shards, loading one at a time
+                    Examples held in RAM at once (default 64000000, 0 = all);
+                    larger data is split into shards of whole files
   --log <path>      Append per-epoch stage losses as CSV
-  --gpu             Train on the GPU (needs a build with --features gpu).
-                    Honours --stage / --stages: a run aimed at one stage
-                    carries only that stage's tables, 12 MB against 712,
-                    so eight of them share a device comfortably.
-                    Minibatch Adam instead of the CPU path's per-example
-                    steps, which is what makes the work parallel.
-  --minibatch <n>   Positions per GPU step (default 8192). Each is eight
-                    rows, one per symmetric form.
-  --cosine          Anneal the rate from --lr to ~0 across the whole run,
-                    stepped once per shard. Matches the NNUE trainer's
-                    schedule, which is what makes the two comparable.
+
+Target and filters:
   --search-value-to-ply <n>
                     Up to and including ply n take the record's search
-                    value; past it take the game's final disc difference.
-                    Without it every record reads as the game result,
-                    a different target from the one the NNUE was fitted
-                    to on the same files.
+                    value; past it the game's final disc difference
   --drop-random     Drop positions whose move was chosen at random
+  --max-score-diff <d>
+                    Drop positions whose search value and final result
+                    differ by more than d
   --keep-above-ply <n>
-                    From this ply on, keep the positions --drop-random
-                    drops
+                    From this ply on, keep what --drop-random and
+                    --max-score-diff drop
   --min-ply <n>     Drop positions before this ply
-  --val <path>      Held-out file scored after every epoch (repeatable).
-                    The in-epoch training MSE is measured while the weights
-                    are still moving, so it is a poor stopping signal; the
-                    val MSE is the honest one. When given, the weights with
-                    the best val MSE are also saved to <weights>.best
-  --plateau <n>     Halve the learning rate after n epochs in which no stage
-                    improved its best. With --per-stage-best, whether an
-                    epoch helped is a per-stage question: an epoch that
-                    moved even one of the 61 counts as progress, and the
-                    rate drops only when the whole model has stopped.
-                    Stops when the rate falls below --plateau-min (1e-6).
-                    Overrides --decay, which lowers the rate on a fixed
-                    schedule whether or not the model is still learning
-  --stages <a[-b]>  Train only these stages (0-60, by moves played, so stage
-                    40 is 20 empties). Everything else is left exactly as it
-                    was loaded. The stages are independent tables, so a run
-                    can be pointed at whichever few are still not converging
-                    instead of paying for all 61 to find out
+
+Validation and stopping:
+  --val <path>      Held-out file scored after every epoch (repeatable);
+                    the best epoch also goes to <weights>.best
+  --per-stage-best  Keep each stage's best-scoring weights and save the
+                    assembled model to <weights>.stagebest
+  --select-by <k>   mae | mse | spread (the error with the stage's constant
+                    offset taken out) decides those snapshots (default mae)
+  --plateau <n>     Lower the rate after n epochs without progress;
+                    overrides --decay
+  --plateau-frac <f>
+                    Share of stages that must improve for an epoch to count
+                    as progress (default 0.2)
+  --plateau-factor <f>
+                    Multiplier applied on a stall (default 0.5)
+  --plateau-min <f> Rate floor; the run ends below it (default 1e-6)
+  --patience <n>    Stop a stage after n epochs that neither beat its best
+                    nor improved on the epoch before
+  --restore-on-halve
+                    On a rate drop, put the stage back on its best weights
   --warmup <n>      Start at a fifth of the rate and climb to it over n
-                    epochs. A start point that was moved by hand -- a merge,
-                    a smoothing pass -- sits off its own minimum, so the
-                    first step is large exactly where the model is already
-                    good
-  --patience <n>    Stop a stage after n epochs that neither beat its
-                    incumbent nor improved on the epoch before. A descent
-                    that has not yet reached the incumbent still counts as
-                    progress, so the clock only runs while the stage is
-                    going nowhere. Without any of this a finished stage keeps
-                    walking away from its best weights for the rest of the
-                    run: 58 of 60 stages unable to return after three epochs
-  --cell-lr         Divide each cell's step by how often that cell appears
-                    in the training data, and skip cells that never appear.
-                    A shared rate starves the rare cells and overshoots the
-                    common ones, and the rate that suits neither gets halved
-                    again and again -- 16 halvings in 29 epochs here without
-                    the stage converging
-  --restore-on-halve  On a halving, put the stage back on the weights that
-                    scored its best before continuing. Halving alone only
-                    slows a drift: training resumes from the weights that
-                    just failed, so a stage started at too large a rate has
-                    to walk all the way back. Measured here, empties 14 went
-                    6.087 -> 6.375 over three epochs and two halvings without
-                    once returning
-  --min-appear N    With --cell-lr, leave cells seen N times or fewer alone.
-                    Their step is the largest under per-cell scaling and the
-                    least supported by data
-  --lr-smooth       After each halving pass, replace every stage's rate with
-                    the geometric mean of itself (weighted double) and its two
-                    neighbours. Adjacent stages differ by one ply and want
-                    nearly the same rate, but independent halving lets one
-                    epoch of val noise leave a stage at twice its neighbour
-  --plateau-frac <f>    Share of stages that must improve for an epoch to
-                    count as progress (default 0.2). Below it the epoch is a
-                    stall, however many stages crept
-  --plateau-factor <f>  Multiplier applied on a stall (default 0.5)
-  --plateau-min <f>     Rate floor; the run ends below it (default 1e-6)
-  --select-by M     Which per-stage number decides a snapshot: mae
-                    (default), mse, or spread -- the error with the stage's
-                    constant offset taken out
-  --per-stage-best  Score the val set separately for each of the 61 stages
-                    every epoch, keep each stage's best-scoring weights, and
-                    save the assembled model to <weights>.stagebest. The
-                    stages are independent tables, so one pooled val number
-                    lets a stage that improved and a stage that rotted cancel
-  --swa             Stochastic Weight Averaging: keep a running mean of the
-                    per-epoch weights and save it to <weights>.swa. On this
-                    convex (linear-model) loss the SGD iterates bounce around
-                    the true minimum; their average sits closer to it than any
-                    single epoch, so <weights>.swa usually beats <weights>.best
-  --swa-start <n>   First epoch folded into the SWA mean (default 2; earlier
-                    epochs are still settling from the start point)
+                    epochs
+  --cell-lr         Divide each cell's step by how often it appears in the
+                    data; skip cells that never appear (CPU only)
+  --min-appear <n>  With --cell-lr, leave cells seen n times or fewer alone
+  --lr-smooth       After each rate drop, smooth every stage's rate with its
+                    two neighbours
   -h, --help        Show this help";
 
 fn num<T: std::str::FromStr<Err: std::fmt::Display>>(name: &str, v: String) -> Result<T, String> {
@@ -193,14 +143,13 @@ fn parse_args() -> Result<Args, String> {
         limit: None,
         max_examples: Some(DEFAULT_MAX_EXAMPLES),
         log_path: None,
-        swa: false,
         cosine: false,
         gpu: false,
         minibatch: 8192,
         filter: Filter::NONE,
         policy: TeacherPolicy::DEFAULT,
         per_stage_best: false,
-        select_by: String::from("mae"),
+        select_by: SelectBy::Mae,
         cell_lr: false,
         restore_on_halve: false,
         min_appear: 0,
@@ -213,13 +162,15 @@ fn parse_args() -> Result<Args, String> {
         plateau_factor: 0.5,
         plateau_min: 1e-6,
         plateau_frac: 0.2,
-        swa_start: 2,
         val_files: Vec::new(),
         data_files: Vec::new(),
     };
 
     let mut it = std::env::args().skip(1);
     while let Some(arg) = it.next() {
+        if args.filter.take_flag(&arg, &mut it)? {
+            continue;
+        }
         let mut value = |name: &str| it.next().ok_or_else(|| format!("{name} requires a value"));
         match arg.as_str() {
             "--epochs" => args.epochs = num("--epochs", value("--epochs")?)?,
@@ -251,15 +202,8 @@ fn parse_args() -> Result<Args, String> {
                     value("--search-value-to-ply")?,
                 )?)
             }
-            "--drop-random" => args.filter.drop_random = true,
-            "--keep-above-ply" => {
-                args.filter.keep_above_ply =
-                    Some(num("--keep-above-ply", value("--keep-above-ply")?)?)
-            }
-            "--min-ply" => args.filter.min_ply = num("--min-ply", value("--min-ply")?)?,
-            "--swa" => args.swa = true,
             "--per-stage-best" => args.per_stage_best = true,
-            "--select-by" => args.select_by = it.next().unwrap_or_default(),
+            "--select-by" => args.select_by = value("--select-by")?.parse()?,
             "--lr-smooth" => args.lr_smooth = true,
             "--cell-lr" => args.cell_lr = true,
             "--restore-on-halve" => args.restore_on_halve = true,
@@ -291,7 +235,6 @@ fn parse_args() -> Result<Args, String> {
                 args.plateau_frac = num("--plateau-frac", value("--plateau-frac")?)?
             }
             "--plateau-min" => args.plateau_min = num("--plateau-min", value("--plateau-min")?)?,
-            "--swa-start" => args.swa_start = num("--swa-start", value("--swa-start")?)?,
             "-h" | "--help" => return Err(USAGE.to_string()),
             other if other.starts_with('-') => {
                 return Err(format!("unknown option: {other}\n\n{USAGE}"))
@@ -339,7 +282,7 @@ impl DataPlan {
     fn new(files: Vec<PathBuf>, limit: Option<usize>) -> std::io::Result<DataPlan> {
         let mut counts = Vec::with_capacity(files.len());
         for f in &files {
-            let est = count_examples_binary(f)?;
+            let est = record::count(f)?;
             counts.push(limit.map_or(est, |l| est.min(l)));
         }
         Ok(DataPlan { files, counts })
@@ -686,35 +629,13 @@ fn draw_progress(
 
 type StageSnapshot = (Vec<Vec<f32>>, Vec<f32>);
 
-fn val_by_stage(linear: &Linear, val: &[Example]) -> Vec<[f64; 4]> {
-    let mut acc = vec![[0.0f64; 4]; STAGE_COUNT];
+fn val_by_stage(linear: &Linear, val: &[Example]) -> Vec<ValError> {
+    let mut acc = vec![ValError::default(); STAGE_COUNT];
     for ex in val {
         let board = ex.board();
-        let e = linear.eval(&board) as f64 - ex.score as f64;
-        let a = &mut acc[Linear::stage(&board)];
-        a[0] += 1.0;
-        a[1] += e * e;
-        a[2] += e.abs();
-        a[3] += e;
+        acc[Linear::stage(&board)].add(linear.eval(&board) as f64 - ex.score as f64);
     }
     acc
-}
-
-fn select_score(which: &str, a: &[f64; 4]) -> f64 {
-    let (mse, mae, _, sd) = stage_stats(a);
-    match which {
-        "mse" => mse,
-        "spread" => sd,
-        _ => mae,
-    }
-}
-
-fn stage_stats(a: &[f64; 4]) -> (f64, f64, f64, f64) {
-    let n = a[0];
-    let mse = a[1] / n;
-    let mae = a[2] / n;
-    let bias = a[3] / n;
-    (mse, mae, bias, (mse - bias * bias).max(0.0).sqrt())
 }
 
 /// The cells each held-out position reads, found once; an epoch's validation is then lookups.
@@ -764,8 +685,8 @@ impl ValCells {
         }
     }
 
-    fn by_stage(&self, linear: &Linear) -> Vec<[f64; 4]> {
-        let mut acc = vec![[0.0f64; 4]; STAGE_COUNT];
+    fn by_stage(&self, linear: &Linear) -> Vec<ValError> {
+        let mut acc = vec![ValError::default(); STAGE_COUNT];
         if self.score.is_empty() {
             return acc;
         }
@@ -778,52 +699,9 @@ impl ValCells {
         {
             let (num, pats) = row.split_last().unwrap();
             let v = pats.iter().map(|&c| flat[c as usize]).sum::<f32>() + flat[*num as usize];
-            let e = v as f64 - score as f64;
-            let a = &mut acc[st as usize];
-            a[0] += 1.0;
-            a[1] += e * e;
-            a[2] += e.abs();
-            a[3] += e;
+            acc[st as usize].add(v as f64 - score as f64);
         }
         acc
-    }
-}
-
-struct SwaAccumulator {
-    header: Vec<u8>,
-    sum: Vec<f64>,
-    count: u64,
-    out: PathBuf,
-}
-
-impl SwaAccumulator {
-    fn fold(&mut self, weights_path: &Path) -> std::io::Result<()> {
-        let bytes = std::fs::read(weights_path)?;
-        if self.header.is_empty() {
-            let pattern_count = u32::from_le_bytes(bytes[12..16].try_into().unwrap()) as usize;
-            let header_len = 16 + 4 * pattern_count;
-            self.header = bytes[..header_len].to_vec();
-            self.sum = vec![0.0; (bytes.len() - header_len) / 4];
-        }
-        let payload = &bytes[self.header.len()..];
-        debug_assert_eq!(payload.len() / 4, self.sum.len());
-        for (i, chunk) in payload.as_chunks::<4>().0.iter().enumerate() {
-            self.sum[i] += f32::from_le_bytes(*chunk) as f64;
-        }
-        self.count += 1;
-        Ok(())
-    }
-
-    fn write(&self) -> std::io::Result<()> {
-        let inv = 1.0 / self.count as f64;
-        let mut buf = self.header.clone();
-        buf.reserve(self.sum.len() * 4);
-        for &s in &self.sum {
-            buf.extend_from_slice(&((s * inv) as f32).to_le_bytes());
-        }
-        let tmp = self.out.with_extension("swa.tmp");
-        std::fs::write(&tmp, &buf)?;
-        std::fs::rename(&tmp, &self.out)
     }
 }
 
@@ -893,7 +771,7 @@ fn run_epochs<O: Optimizer>(
     val: &[Example],
     interrupted: &AtomicBool,
 ) -> ExitCode {
-    let parallel = args.optimizer == OptimizerKind::Sgd;
+    let sgd = args.optimizer == OptimizerKind::Sgd;
     #[cfg(feature = "gpu")]
     let mut gpu = args.gpu.then(|| {
         kuroobi::linear::gpu::LinearGpu::new(
@@ -928,12 +806,6 @@ fn run_epochs<O: Optimizer>(
     };
     let best_path = suffixed(".best");
     let stagebest_path = suffixed(".stagebest");
-    let mut swa = args.swa.then(|| SwaAccumulator {
-        header: Vec::new(),
-        sum: Vec::new(),
-        count: 0,
-        out: suffixed(".swa"),
-    });
 
     for epoch in 1..=args.epochs {
         let t = Instant::now();
@@ -978,7 +850,7 @@ fn run_epochs<O: Optimizer>(
                     &t,
                 );
             };
-            let shard_stats = if parallel {
+            let shard_stats = if sgd {
                 let st = args.stages_lo;
                 if !stage_lr_seeded {
                     stage.counts[st] += examples
@@ -1034,7 +906,7 @@ fn run_epochs<O: Optimizer>(
                 return ExitCode::SUCCESS;
             }
         }
-        if !parallel {
+        if !sgd {
             trainer.optimizer.next_epoch();
         }
 
@@ -1045,7 +917,7 @@ fn run_epochs<O: Optimizer>(
         let vm = if val.is_empty() {
             f64::NAN
         } else {
-            acc.iter().map(|a| a[1]).sum::<f64>() / val.len() as f64
+            acc.iter().map(|a| a.sq).sum::<f64>() / val.len() as f64
         };
         let is_best = vm < best_val; // false when vm is NaN (no val set)
         if !stage_lr_seeded && args.plateau > 0 {
@@ -1071,7 +943,7 @@ fn run_epochs<O: Optimizer>(
                 .filter(|&st| stage.best[st].is_finite() && !stage.done[st])
                 .count();
             if live == 0 {
-                println!("  全ステージ収束、終了");
+                println!("  every stage converged; stopping");
                 break;
             }
         }
@@ -1106,7 +978,6 @@ fn run_epochs<O: Optimizer>(
             epoch,
             &stats,
             is_best.then_some(best_path.as_path()),
-            &mut swa,
         )
         .is_err()
         {
@@ -1116,7 +987,6 @@ fn run_epochs<O: Optimizer>(
             best_val = vm;
         }
         if interrupted.load(Ordering::SeqCst) {
-            report_swa(&swa);
             println!(
                 "stopped after epoch {epoch}; weights saved to {}",
                 args.weights_path.display()
@@ -1139,7 +1009,6 @@ fn run_epochs<O: Optimizer>(
             best_path.display()
         );
     }
-    report_swa(&swa);
     ExitCode::SUCCESS
 }
 
@@ -1167,10 +1036,10 @@ fn seed_stage_best(lin: &Linear, args: &Args, val: &[Example], stage: &mut Stage
     let acc = val_by_stage(lin, val);
     let mut seeded = 0usize;
     for (st, a) in acc.iter().enumerate() {
-        if a[0] == 0.0 {
+        if a.n == 0.0 {
             continue;
         }
-        stage.best[st] = select_score(&args.select_by, a);
+        stage.best[st] = a.score(args.select_by);
         stage.snap[st] = Some(lin.stage_weights(st));
         seeded += 1;
     }
@@ -1180,15 +1049,15 @@ fn seed_stage_best(lin: &Linear, args: &Args, val: &[Example], stage: &mut Stage
         args.select_by
     );
     for (st, a) in acc.iter().enumerate() {
-        if a[0] == 0.0 || st < args.stages_lo || st > args.stages_hi {
+        if a.n == 0.0 || st < args.stages_lo || st > args.stages_hi {
             continue;
         }
-        let (mse, mae, bias, sd) = stage_stats(a);
+        let (mse, mae, bias, sd) = a.stats();
         println!(
             "  {:>5}  {:>7}  {:>6}  {:>7.3}  {:>7.3}  {:>+7.3}  {:>7.3}",
             st,
             60 - st,
-            a[0] as u64,
+            a.n as u64,
             mse,
             mae,
             bias,
@@ -1232,7 +1101,7 @@ fn stage_lr(args: &Args, stage: &StageState, epoch: usize, st: usize) -> f32 {
 fn per_stage_epoch<O: Optimizer>(
     trainer: &mut Trainer<O>,
     args: &Args,
-    acc: &[[f64; 4]],
+    acc: &[ValError],
     stage: &mut StageState,
     stagebest_path: &Path,
 ) -> (usize, usize) {
@@ -1240,15 +1109,15 @@ fn per_stage_epoch<O: Optimizer>(
     let mut stages_seen = 0usize;
     println!("  stage  empties       n      MSE      MAE     bias   spread");
     for (st, a) in acc.iter().enumerate() {
-        if a[0] == 0.0 {
+        if a.n == 0.0 {
             continue;
         }
         let reported = st >= args.stages_lo && st <= args.stages_hi;
         if reported {
             stages_seen += 1;
         }
-        let (mse, mae, bias, sd) = stage_stats(a);
-        let score = select_score(&args.select_by, a);
+        let (mse, mae, bias, sd) = a.stats();
+        let score = a.score(args.select_by);
         let mut restored = false;
         let better = score < stage.best[st];
         if better {
@@ -1279,7 +1148,7 @@ fn per_stage_epoch<O: Optimizer>(
                     trainer.linear.set_stage_weights(st, w, num);
                 }
                 stage.done[st] = true;
-                println!("  stage {st} (空き {}) 収束、学習終了", 60 - st);
+                println!("  stage {st} ({} empties) converged; stopped", 60 - st);
             }
             if args.plateau > 0 {
                 if descending {
@@ -1308,7 +1177,7 @@ fn per_stage_epoch<O: Optimizer>(
                 "  {:>5}  {:>7}  {:>6}  {:>7.3}  {:>7.3}  {:>+7.3}  {:>7.3}{}",
                 st,
                 60 - st,
-                a[0] as u64,
+                a.n as u64,
                 mse,
                 mae,
                 bias,
@@ -1402,7 +1271,6 @@ fn persist_epoch<O: Optimizer>(
     epoch: usize,
     stats: &EpochStats,
     best: Option<&Path>,
-    swa: &mut Option<SwaAccumulator>,
 ) -> Result<(), ()> {
     if let Some(log) = &args.log_path {
         if let Err(e) = append_log(log, epoch, stats) {
@@ -1420,27 +1288,7 @@ fn persist_epoch<O: Optimizer>(
             return Err(());
         }
     }
-    if let Some(acc) = swa {
-        if epoch >= args.swa_start {
-            if let Err(e) = acc.fold(&args.weights_path).and_then(|_| acc.write()) {
-                eprintln!("failed to update SWA: {e}");
-                return Err(());
-            }
-        }
-    }
     Ok(())
-}
-
-fn report_swa(swa: &Option<SwaAccumulator>) {
-    if let Some(acc) = swa {
-        if acc.count > 0 {
-            println!(
-                "SWA mean of {} epochs saved to {}",
-                acc.count,
-                acc.out.display()
-            );
-        }
-    }
 }
 
 fn apply_stage_best(lin: &mut Linear, stage: &StageState) -> usize {

@@ -1,8 +1,10 @@
 //! Opening-book generator.
 
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::Mutex;
 
-use kuroobi::book::{Book, Candidate, Entry};
+use kuroobi::book::{board_from_key, Book, Candidate, Entry};
 use kuroobi::engine::{Engine, EngineConfig};
 use kuroobi::{wthor, Board, Position};
 
@@ -146,9 +148,6 @@ fn scan(dir: &Path, max_ply: usize, min_games: u32, book: &mut Book) -> std::io:
 }
 
 fn deepen(book: &mut Book, a: &Args) -> Result<(), String> {
-    use std::sync::atomic::{AtomicUsize, Ordering};
-    use std::sync::Mutex;
-
     if a.all_moves {
         let ready: Vec<(u64, u64)> = book
             .iter()
@@ -156,7 +155,7 @@ fn deepen(book: &mut Book, a: &Args) -> Result<(), String> {
                 if e.complete || e.depth == 0 {
                     return false;
                 }
-                let b = kuroobi::book::board_from_key(**k);
+                let b = board_from_key(**k);
                 let scored = e.moves.iter().filter(|c| b.check(c.mv)).count();
                 scored >= b.movable_iter().count()
             })
@@ -175,8 +174,7 @@ fn deepen(book: &mut Book, a: &Args) -> Result<(), String> {
     let mut todo: Vec<((u64, u64), Entry)> = book
         .iter()
         .filter(|(k, e)| {
-            if a.min_empties > 0 && kuroobi::book::board_from_key(**k).empty_count() < a.min_empties
-            {
+            if a.min_empties > 0 && board_from_key(**k).empty_count() < a.min_empties {
                 return false;
             }
             e.depth < a.depth as u8 || (a.all_moves && !e.complete)
@@ -231,9 +229,9 @@ fn deepen(book: &mut Book, a: &Args) -> Result<(), String> {
                     }
                     let (key, old) = &todo_ref[i];
                     let key = *key;
-                    let board = kuroobi::book::board_from_key(key);
+                    let board = board_from_key(key);
                     let best = engine.choose(&board);
-                    let mut cands: Vec<(kuroobi::Position, u32)> = if a.all_moves {
+                    let mut cands: Vec<(Position, u32)> = if a.all_moves {
                         board
                             .movable_iter()
                             .map(|p| {

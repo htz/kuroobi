@@ -184,7 +184,7 @@ fn main() -> ExitCode {
                 args.get(1).and_then(|v| v.parse::<f64>().ok()),
             ) {
                 (Some(c), Some(secs)) => {
-                    left[(c == Color::White) as usize] = Some(secs.max(0.0));
+                    left[c.index()] = Some(secs.max(0.0));
                     ok(&id, "");
                 }
                 _ => err(&id, "syntax error"),
@@ -230,7 +230,8 @@ fn main() -> ExitCode {
                 }
                 let n0 = engine.nodes();
                 let t0 = Instant::now();
-                let mv = match left[(color == Color::White) as usize] {
+                let clock = &mut left[color.index()];
+                let mv = match *clock {
                     Some(secs) => engine.play_clock(&board, Duration::from_secs_f64(secs)),
                     None => {
                         let deadline =
@@ -238,7 +239,7 @@ fn main() -> ExitCode {
                         engine.choose_within(&board, deadline)
                     }
                 };
-                if let Some(secs) = left[(color == Color::White) as usize].as_mut() {
+                if let Some(secs) = clock.as_mut() {
                     *secs = (*secs - t0.elapsed().as_secs_f64()).max(0.0);
                 }
                 tot_nodes += engine.nodes() - n0;

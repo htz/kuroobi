@@ -11,6 +11,7 @@ use crate::bitboard;
 use crate::midgame::StopHandle;
 use crate::nnue::{MpcSigma, Nnue};
 use crate::pattern_index::PatternIndices;
+use crate::solver::final_score_bb;
 use crate::zobrist;
 use crate::{Board, Position};
 
@@ -196,17 +197,6 @@ struct Worker<'a> {
     margin: i32,
 }
 
-#[inline]
-fn final_score(p: u64, o: u64) -> i32 {
-    let (a, b) = (p.count_ones() as i32, o.count_ones() as i32);
-    let e = 64 - a - b;
-    match a.cmp(&b) {
-        std::cmp::Ordering::Greater => a - b + e,
-        std::cmp::Ordering::Less => a - b - e,
-        std::cmp::Ordering::Equal => 0,
-    }
-}
-
 impl Worker<'_> {
     #[inline]
     fn aborted(&mut self) -> bool {
@@ -232,7 +222,7 @@ impl Worker<'_> {
         let moves = bitboard::mobility(p, o, !(p | o));
         if moves == 0 {
             if passed {
-                return final_score(p, o);
+                return final_score_bb(p, o);
             }
             return -self.exact(o, p, -beta, -alpha, true);
         }
@@ -286,7 +276,7 @@ impl Worker<'_> {
             let mut nb = *b;
             nb.pass();
             if nb.movable() == 0 {
-                return Some((final_score(b.player_bb(), b.opponent_bb()), NO_MOVE));
+                return Some((final_score_bb(b.player_bb(), b.opponent_bb()), NO_MOVE));
             }
             let (v, _) = self.search(&nb, acc, depth, -beta, -alpha, pv)?;
             return Some((-v, NO_MOVE));
@@ -591,7 +581,6 @@ impl ClockSearch {
         }
     }
 
-    /// The best move the table holds for `b`.
     pub fn table_move(&self, b: &Board) -> Option<Position> {
         let e = self
             .sh

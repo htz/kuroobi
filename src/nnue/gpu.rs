@@ -1638,7 +1638,7 @@ impl GpuTrainer {
         }
     }
 
-    /// Steps only the per-stage head and the pattern add; the transformer and its bias stay as loaded.
+    /// Steps only the per-stage head and the phase-adaptive layer; the transformer and its bias stay as loaded.
     pub fn set_heads_only(&mut self, on: bool) {
         self.heads_only = on;
     }
@@ -2292,11 +2292,11 @@ impl GpuTrainer {
         let Some(p) = self.prof.as_mut() else { return };
         let mut line = String::from("gpu kernels ms/batch:");
         let mut total = 0.0;
-        for i in 0..PROF_N {
-            if p.samples[i] == 0 {
+        for (i, &n) in p.samples.iter().enumerate() {
+            if n == 0 {
                 continue;
             }
-            let ms = p.acc[i] / p.samples[i] as f64 / 1e6;
+            let ms = p.acc[i] / n as f64 / 1e6;
             let k = self.la_k.max(1) as f64;
             let per_batch = if i >= PROF_STEP + PROF_LA {
                 ms / k

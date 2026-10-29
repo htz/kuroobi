@@ -4,6 +4,7 @@ use std::collections::HashMap;
 use std::io::{BufRead, BufReader, Write};
 use std::path::Path;
 
+use crate::bitboard::{symmetries, symmetry};
 use crate::{Board, Position};
 
 #[derive(Clone, Copy, Debug)]
@@ -43,42 +44,15 @@ impl Entry {
     }
 }
 
-fn normalize(board: &Board) -> ((u64, u64), u8) {
-    let ps = crate::bitboard::symmetries(board.player_bb());
-    let os = crate::bitboard::symmetries(board.opponent_bb());
-    let mut best = ((ps[0], os[0]), 0u8);
-    for i in 1..8 {
-        if (ps[i], os[i]) < best.0 {
-            best = ((ps[i], os[i]), i as u8);
-        }
-    }
-    best
-}
-
-fn transform_bb(bb: u64, i: u8) -> u64 {
-    let mut b = bb;
-    if i >= 4 {
-        b = crate::bitboard::mirror_horizontal(b);
-        for _ in 0..(i - 4) {
-            b = crate::bitboard::rotate_90(b);
-        }
-    } else {
-        for _ in 0..i {
-            b = crate::bitboard::rotate_90(b);
-        }
-    }
-    b
-}
-
 fn stabilizers(board: &Board) -> Vec<u8> {
     let (p, o) = (board.player_bb(), board.opponent_bb());
     (0..8u8)
-        .filter(|&i| (transform_bb(p, i), transform_bb(o, i)) == (p, o))
+        .filter(|&i| (symmetry(p, i), symmetry(o, i)) == (p, o))
         .collect()
 }
 
 fn map_square(sq: u8, i: u8) -> u8 {
-    transform_bb(1u64 << sq, i).trailing_zeros() as u8
+    symmetry(1u64 << sq, i).trailing_zeros() as u8
 }
 
 fn unmap_square(sq: u8, i: u8) -> u8 {
@@ -209,8 +183,14 @@ impl Book {
         self.map.contains_key(&Book::key(board).0)
     }
 
+    /// The smallest of the position's eight forms, and which form that is.
     pub fn key(board: &Board) -> ((u64, u64), u8) {
-        normalize(board)
+        let ps = symmetries(board.player_bb());
+        let os = symmetries(board.opponent_bb());
+        (0..8u8)
+            .map(|i| ((ps[i as usize], os[i as usize]), i))
+            .min_by_key(|&(k, _)| k)
+            .expect("eight forms")
     }
 
     pub fn map_move(pos: Position, i: u8) -> Position {
@@ -310,7 +290,6 @@ impl Book {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::Board;
 
     fn entry(mv: Position, value: f32, games: u32) -> Entry {
         Entry {
@@ -445,11 +424,6 @@ mod tests {
         assert_eq!(e.moves[1].games, 3);
         std::fs::remove_file(&path).ok();
     }
-}
-
-#[cfg(test)]
-mod symmetry_tests {
-    use super::*;
 
     #[test]
     fn the_opening_moves_are_all_equivalent() {

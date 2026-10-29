@@ -111,7 +111,7 @@ impl PatternIndexer {
 
     #[inline]
     pub fn apply(&self, indices: &mut PatternIndices, pos: Position, flipped: u64, mover: Color) {
-        let mover_digit = mover.index() as u16; // Black = 0, White = 1
+        let mover_digit = mover.index() as u16;
         self.update_square(indices, pos.index(), mover_digit.wrapping_sub(2));
         let flip_diff = mover_digit.wrapping_sub(1 - mover_digit);
         let mut f = flipped;
@@ -181,6 +181,34 @@ impl PatternIndexer {
         let pi = self.mask_pattern[m] as usize;
         self.swap_tables[self.patterns[pi].size][idx] as usize
     }
+
+    /// Where each mask's table starts when the patterns' tables are laid end to end.
+    pub fn mask_offsets(&self) -> Vec<u32> {
+        let mut pattern_off = Vec::with_capacity(self.patterns.len());
+        let mut off = 0u32;
+        for p in self.patterns {
+            pattern_off.push(off);
+            off += p.table_size() as u32;
+        }
+        self.mask_patterns()
+            .iter()
+            .map(|&pi| pattern_off[pi as usize])
+            .collect()
+    }
+
+    /// `table`, rows of `width` laid out by `mask_off`, with each row moved to its colour-swapped index.
+    pub fn swap_colors<T: Copy>(&self, table: &[T], mask_off: &[u32], width: usize) -> Vec<T> {
+        let mut out = table.to_vec();
+        for (m, &off) in mask_off.iter().enumerate() {
+            let off = off as usize;
+            for i in 0..self.patterns[self.mask_pattern[m] as usize].table_size() {
+                let j = self.swapped_index(m, i);
+                out[(off + i) * width..][..width]
+                    .copy_from_slice(&table[(off + j) * width..][..width]);
+            }
+        }
+        out
+    }
 }
 
 #[cfg(test)]
@@ -203,8 +231,7 @@ mod tests {
                 if player == Color::Black {
                     idx
                 } else {
-                    let pi = ix.mask_pattern[m] as usize;
-                    ix.swap_tables[ix.patterns[pi].size][idx] as usize
+                    ix.swapped_index(m, idx)
                 }
             })
             .collect()
@@ -228,14 +255,8 @@ mod tests {
             state = state
                 .wrapping_mul(6364136223846793005)
                 .wrapping_add(1442695040888963407);
-            let count = mob.count_ones() as u64;
-            let mut nth = (state >> 33) % count;
-            let mut m = mob;
-            while nth > 0 {
-                m &= m - 1;
-                nth -= 1;
-            }
-            let pos = Position::from_index(m.trailing_zeros()).unwrap();
+            let nth = (state >> 33) % mob.count_ones() as u64;
+            let pos = Position(crate::bitboard::iter_bits(mob).nth(nth as usize).unwrap());
             let before = board;
             let mover = board.player();
             let flipped = board.make_move_bits(pos);
