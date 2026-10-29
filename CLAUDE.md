@@ -173,6 +173,7 @@ and code alike (the server's own names in the last column):
 | 中断 (whole match) | | Adjourn | `adjourn`, `stored` |
 | 面 (one board of a synchro match) | 局 | Board | `board`, `.N.0` / `.N.1` |
 | 決着 (how a match or board was decided) | 終わり方 | Decided by | `ending` |
+| 石差 (GGS's figure for a match — a synchro pair's is the mean of its two boards — or for one board) | 合計, 平均 | Disc diff | `my_diff`, `disc_diff` |
 
 ## Comments
 

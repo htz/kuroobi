@@ -5,9 +5,8 @@ import { fmtSecs, gtypeLabel } from '../ggs';
 import { t } from '../i18n';
 import { Divider, Drawer, Section, Toolbar } from '../components/layout';
 import { Button, Segmented, Select } from '../components/primitives';
-import { Tag } from '../components/ggs';
 import { KeyValue } from '../components/layout';
-import { EvalTrend, RateChart, ResultBoardCell, ResultHead, ResultRow, StoneDot, type ResultBoard, type ResultEnding } from '../components/data';
+import { EvalTrend, RateChart, ResultHead, ResultRow, StoneDot, type ResultBoard, type ResultEnding } from '../components/data';
 import { askSheet } from '../AskSheet';
 import { Blank, clockLabel, Page, RankRates, rateLabel, Rows, Sections, signed, sumBoards, Table, type TrendPoint, useWidth, useWindowHeight } from '../ggsui';
 import { whenFull, whenShort } from '../when';
@@ -149,7 +148,6 @@ export function Results({ snap, onKifu }: {
   const at = sel ? rated.findIndex((r) => rowKey(r) === rowKey(sel)) : -1;
   const before = at > 0 ? rated[at - 1].my_rating : null;
   const after = sel?.my_rating ?? null;
-  const selEnding = sel ? endingOf(sel, login) : null;
   const selBoards = (sel?.boards ?? []).filter((b) => b.my_color || b.clocks?.length);
   const colorName = (c?: string) => t(c === 'black' ? 'data.color.black' : 'data.color.white');
   const myColors = selBoards.length > 1
@@ -221,20 +219,10 @@ export function Results({ snap, onKifu }: {
         )}
         {sel && (
           <Drawer label={t('results.this_game')} onClose={() => setPick('')}
-                  title={<>
-                    <Tag tone={sel.my_diff == null ? 'sub' : sel.my_diff > 0 ? 'ok' : sel.my_diff < 0 ? 'bad' : 'sub'}>
-                      {sel.my_diff == null ? t('results.tag_adjourned') : sel.my_diff > 0 ? t('ggs.stat.wins') : sel.my_diff < 0 ? t('ggs.stat.losses') : t('ggs.stat.draws')}
-                    </Tag>
-                    <span className="k-sel" style={{ overflow: 'hidden', textOverflow: 'ellipsis' }}>{sel.opp}</span>
-                    {sel.my_diff != null && (
-                      <span style={{ color: sel.my_diff > 0 ? 'var(--ok)' : sel.my_diff < 0 ? 'var(--bad)' : 'var(--text)' }}>
-                        {signed(sel.my_diff)}
-                      </span>
-                    )}
-                    {selEnding && <span style={{ fontSize: 'var(--fs-5)', fontWeight: 400, color: `var(--${selEnding.tone})` }}>{selEnding.text}</span>}
-                  </>}>
+                  title={<span className="k-sel" style={{ overflow: 'hidden', textOverflow: 'ellipsis' }}>{sel.opp}</span>}>
             <div className="k-scroll" style={{ flex: 1, minHeight: 0 }}>
             <div style={{ display: 'flex', flexDirection: 'column', gap: 'var(--sp-3)', padding: 'var(--sp-4) var(--sp-4) var(--sp-5)' }}>
+              <ResultCard r={sel} me={login} />
               <div style={{ display: 'flex', flexDirection: 'column', gap: 'var(--sp-1)' }}>
                 {oppRate && <KeyValue label={t('results.opp_rating')} value={oppRate} />}
                 {kind && <KeyValue label={t('ggs.field.format')} value={gtypeLabel(kind)} />}
@@ -247,7 +235,7 @@ export function Results({ snap, onKifu }: {
                             value={after.toFixed(1) + (before != null ? ` (${after - before >= 0 ? '+' : ''}${(after - before).toFixed(1)})` : '')} />
                 )}
               </div>
-              {selBoards.length > 0 && <BoardTable boards={selBoards} me={login} decided={!!sel.ending} recorded={sel.my_diff} />}
+              {selBoards.length > 0 && <BoardTable boards={selBoards} />}
               {trend.some((p) => p.mine != null || p.opp != null) && (
                 <EvalTrend points={trend} height={180} title={t('play.trend_title', { name: login })}
                            names={{ mine: login, opp: sel.opp }} />
@@ -275,11 +263,43 @@ const HEAD: React.CSSProperties = {
 };
 
 /** Each board: its result on the board and a time mark, then one row per player with the clock it ended on. */
-function BoardTable({ boards, me, decided, recorded }: {
-  boards: BoardRecord[]; me: string; decided: boolean; recorded: number | null;
-}) {
-  const diffs = boards.map((b) => b.disc_diff);
-  const total = diffs.every((d) => d != null) ? diffs.reduce((a: number, d) => a + (d as number), 0) : null;
+/** The result first and on its own: the outcome and the match's disc difference, then each board's. */
+function ResultCard({ r, me }: { r: GameResult; me: string }) {
+  const d = r.my_diff;
+  const tone = d == null || d === 0 ? 'sub' : d > 0 ? 'ok' : 'bad';
+  const word = d == null ? 'results.outcome_adjourned' : d > 0 ? 'results.outcome_win' : d < 0 ? 'results.outcome_loss' : 'results.outcome_draw';
+  const ending = endingOf(r, me);
+  const boards = boardsOf(r, me).filter((b) => b.diff != null);
+  return (
+    <div style={{
+      display: 'flex', flexDirection: 'column', gap: 'var(--sp-2)', padding: 'var(--sp-3) var(--sp-4)',
+      borderRadius: 'var(--r-3)', borderLeft: `3px solid var(--${tone})`,
+      background: `color-mix(in srgb, var(--${tone}) 12%, var(--card))`,
+    }}>
+      <div style={{ display: 'flex', alignItems: 'baseline', gap: 'var(--sp-3)', whiteSpace: 'nowrap' }}>
+        <span style={{ fontSize: 'var(--fs-1)', fontWeight: 700, color: `var(--${tone})` }}>{t(word)}</span>
+        {d != null && <>
+          <span style={{ fontSize: 'var(--fs-1)', fontWeight: 700, fontVariantNumeric: 'tabular-nums' }}>{signed(d)}</span>
+          <span style={{ fontSize: 'var(--fs-6)', color: 'var(--sub)' }}>{t('data.result.head_discs')}</span>
+        </>}
+        {ending && <span style={{ marginLeft: 'auto', fontSize: 'var(--fs-5)', color: `var(--${ending.tone})` }}>{ending.text}</span>}
+      </div>
+      {boards.length > 1 && (
+        <div style={{ display: 'flex', gap: 'var(--sp-5)', fontSize: 'var(--fs-5)', whiteSpace: 'nowrap' }}>
+          {boards.map((b, i) => (
+            <span key={i} style={{ display: 'flex', alignItems: 'baseline', gap: 'var(--sp-2)' }}>
+              <span style={{ color: 'var(--sub)' }}>{t('data.result.head_board', { n: i + 1 })}</span>
+              <b style={{ fontWeight: 600, fontVariantNumeric: 'tabular-nums' }}>{signed(b.diff as number)}</b>
+              {b.tag && <span style={{ color: `var(--${b.tone})`, fontSize: 'var(--fs-6)' }}>{b.tag}</span>}
+            </span>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
+function BoardTable({ boards }: { boards: BoardRecord[] }) {
   const row = (last: boolean): React.CSSProperties => ({
     height: 'var(--h-row)', display: 'flex', alignItems: 'center', gap: 'var(--sp-2)', fontSize: 'var(--fs-5)',
     borderBottom: last ? '1px solid var(--border-weak)' : undefined,
@@ -288,7 +308,6 @@ function BoardTable({ boards, me, decided, recorded }: {
     <div style={{ display: 'flex', flexDirection: 'column' }}>
       <div style={{ height: 'var(--h-head)', display: 'flex', alignItems: 'center', gap: 'var(--sp-2)', borderBottom: '1px solid var(--border)' }}>
         <span style={{ ...HEAD, width: 48, flex: 'none' }}>{t('results.head_board')}</span>
-        <span style={{ ...HEAD, width: 170, flex: 'none' }}>{t('data.result.head_discs')}</span>
         <span style={{ ...HEAD, flex: 1, minWidth: 0 }}>{t('results.head_player')}</span>
         <span style={{ ...HEAD, width: 112, flex: 'none', textAlign: 'right' }}>{t('results.head_left')}</span>
       </div>
@@ -296,12 +315,7 @@ function BoardTable({ boards, me, decided, recorded }: {
         const players = b.clocks?.length ? b.clocks : [null];
         return players.map((c, j) => (
           <div key={b.id + j} style={row(j === players.length - 1)}>
-            {j === 0
-              ? <>
-                  <span style={{ width: 48, flex: 'none', color: 'var(--sub)' }}>{t('data.result.head_board', { n: i + 1 })}</span>
-                  {decided ? <span style={{ width: 170, flex: 'none' }} /> : <ResultBoardCell b={boardOf(b, me)} />}
-                </>
-              : <span style={{ width: 226, flex: 'none' }} />}
+            <span style={{ width: 48, flex: 'none', color: 'var(--sub)' }}>{j === 0 ? t('data.result.head_board', { n: i + 1 }) : ''}</span>
             <span style={{ flex: 1, minWidth: 0, display: 'flex', alignItems: 'center', gap: 'var(--sp-1)', whiteSpace: 'nowrap', overflow: 'hidden' }}>
               {c && <><StoneDot color={c.color === 'black' ? 'b' : 'w'} size={12} />
                 <span className="k-sel" style={{ overflow: 'hidden', textOverflow: 'ellipsis' }}>{c.name}</span></>}
@@ -312,16 +326,6 @@ function BoardTable({ boards, me, decided, recorded }: {
           </div>
         ));
       })}
-      {!decided && boards.length > 1 && total != null && (
-        <div style={{ ...row(false), gap: 'var(--sp-2)' }}>
-          <span style={{ width: 48, flex: 'none', color: 'var(--sub)', whiteSpace: 'nowrap' }}>{t('results.total')}</span>
-          <span style={{ width: 28, flex: 'none', textAlign: 'right', fontWeight: 600, fontVariantNumeric: 'tabular-nums',
-                         color: total > 0 ? 'var(--ok)' : total < 0 ? 'var(--bad)' : 'var(--text)' }}>{signed(total)}</span>
-          {recorded != null && recorded !== total && (
-            <span style={{ color: 'var(--sub)', fontSize: 'var(--fs-6)' }}>{t('results.recorded', { d: signed(recorded) })}</span>
-          )}
-        </div>
-      )}
     </div>
   );
 }

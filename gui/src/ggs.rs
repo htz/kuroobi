@@ -296,8 +296,8 @@ pub struct BoardRecord {
     /// "black" | "white": the side the player had on this board.
     #[serde(default)]
     pub my_color: String,
-    /// The final position's disc difference from the player's side, empty squares to the side ahead
-    /// (not the server's ±64 for time).
+    /// The board's result from the player's side as GGS scored it (±64 for running out of time, the
+    /// smallest loss for over time); boards add up to the match's recorded result.
     #[serde(default)]
     pub disc_diff: Option<i32>,
     /// "over_time" (main time ran out, the board went on in the extension) or "out_of_time"
@@ -1094,8 +1094,8 @@ fn diff_from_raw(raw: &str, opp: &str) -> Option<i32> {
         .iter()
         .skip(1)
         .find(|t| t.len() >= 2 && t.chars().next().is_some_and(|c| c.is_ascii_alphabetic()))?;
-    let synchro = toks.iter().any(|t| t.starts_with("s8"));
-    let v = (if synchro { score * 2.0 } else { score }).round() as i32;
+    // GGS's own figure for the match: a synchro pair's is the mean of its two boards.
+    let v = score.round() as i32;
     Some(if *first == opp { -v } else { v })
 }
 
@@ -1556,8 +1556,8 @@ impl MatchState {
     }
 }
 
-fn my_stone_diff(score: f32, first_name: &str, login: &str, synchro: bool) -> i32 {
-    let v = (if synchro { score * 2.0 } else { score }).round() as i32;
+fn my_stone_diff(score: f32, first_name: &str, login: &str) -> i32 {
+    let v = score.round() as i32;
     if first_name == login {
         v
     } else {
@@ -4620,33 +4620,48 @@ fn parse_offer(rest: &str, login: &str) -> Option<Offer> {
 
 /// Records written before the colour and the final count were kept: both come from the board's own GGF.
 fn fill_board_from_ggf(b: &mut BoardRecord, opp: &str) {
-    if b.disc_diff.is_some() || b.ggf.is_empty() {
+    if b.ggf.is_empty() {
         return;
     }
-    let Some((color, game)) = replay_board(b, opp) else {
+    let Some(color) = ggf_color(&b.ggf, opp) else {
         return;
     };
-    let d = scored(
-        game.board.black.count_ones() as i32,
-        game.board.white.count_ones() as i32,
-    );
+    // The board's own result line, else the final position counted the same way.
+    let black = ggf_tag(&b.ggf, "RE")
+        .and_then(|v| v.split(':').next()?.trim().parse::<f32>().ok())
+        .map(|v| v.round() as i32)
+        .or_else(|| {
+            let (_, g) = replay_board(b, opp)?;
+            Some(scored(
+                g.board.black.count_ones() as i32,
+                g.board.white.count_ones() as i32,
+            ))
+        });
+    let Some(black) = black else {
+        return;
+    };
     b.my_color = color.to_string();
-    b.disc_diff = Some(if color == "black" { d } else { -d });
+    b.disc_diff = Some(if color == "black" { black } else { -black });
+}
+
+fn ggf_tag(ggf: &str, t: &str) -> Option<String> {
+    let open = format!("{t}[");
+    let i = ggf.find(&open)? + open.len();
+    Some(ggf[i..].split(']').next()?.to_string())
+}
+
+fn ggf_color(ggf: &str, opp: &str) -> Option<&'static str> {
+    match (ggf_tag(ggf, "PB"), ggf_tag(ggf, "PW")) {
+        (_, Some(w)) if w == opp => Some("black"),
+        (Some(bl), _) if bl == opp => Some("white"),
+        _ => None,
+    }
 }
 
 /// The player's colour and the board's final position, from its own GGF.
 fn replay_board(b: &BoardRecord, opp: &str) -> Option<(&'static str, kuroobi::game::Reversi)> {
-    let tag = |t: &str| {
-        let open = format!("{t}[");
-        let i = b.ggf.find(&open)? + open.len();
-        Some(b.ggf[i..].split(']').next()?.to_string())
-    };
-    let color = match (tag("PB"), tag("PW")) {
-        (_, Some(w)) if w == opp => "black",
-        (Some(bl), _) if bl == opp => "white",
-        _ => return None,
-    };
-    let start = tag("BO")?.strip_prefix("8 ")?.to_string();
+    let color = ggf_color(&b.ggf, opp)?;
+    let start = ggf_tag(&b.ggf, "BO")?.strip_prefix("8 ")?.to_string();
     let game = kuroobi::game::Reversi::from_kifu_with_start(&start, &b.kifu).ok()?;
     Some((color, game))
 }
@@ -4853,7 +4868,12 @@ fn clock_record(
 fn board_record(id: &str, m: &MatchState) -> BoardRecord {
     let black = m.cells.iter().filter(|&&c| c == 1).count() as i32;
     let white = m.cells.iter().filter(|&&c| c == 2).count() as i32;
-    let d = scored(black, white);
+    // GGS's own result for the board, else the final position counted the same way.
+    let d = m
+        .result
+        .parse::<f32>()
+        .map(|v| v.round() as i32)
+        .unwrap_or_else(|_| scored(black, white));
     let my_color = color_word(m.my_color);
     let (ending, ending_by) = if !m.out_of_time_by.is_empty() {
         ("out_of_time", m.out_of_time_by.clone())
@@ -4996,8 +5016,7 @@ fn handle_match_end(
         Some(m) => (m.kifu(), m.ggf(&id, re.as_deref()), m.opp_name.clone()),
         None => (String::new(), String::new(), String::new()),
     };
-    let synchro = toks.iter().any(|t| t.starts_with("s8"));
-    let my_diff = score.map(|s| my_stone_diff(s, first_name, login, synchro));
+    let my_diff = score.map(|s| my_stone_diff(s, first_name, login));
     let (ending, ending_by) = match_ending(kind, &who, &dropped, my_diff, login, &opp);
     let opp_for_note = if opp.is_empty() {
         "?".to_string()
@@ -6204,7 +6223,7 @@ mod tests {
 
     // The .46.0 board of a real match: morgoth's extension ran out with four squares empty, 25 to 35.
     #[test]
-    fn an_older_record_gets_its_colour_and_count_from_its_ggf() {
+    fn an_older_record_gets_its_colour_and_result_from_its_ggf() {
         let mut b = BoardRecord {
             id: ".46.0".into(),
             kifu: "f5b3c3b5d7c7b6e8a6e7f7b4a3g5g4a4a5g6h5h6e2h4h3h2g7e1g8c2f8f2c1b2g3b1d2d1a1h8h7d8h1g2f1g1b8c8".into(),
@@ -6214,7 +6233,15 @@ mod tests {
             ..Default::default()
         };
         fill_board_from_ggf(&mut b, "morgoth");
-        assert_eq!((b.my_color.as_str(), b.disc_diff), ("white", Some(-14)));
+        assert_eq!(
+            (b.my_color.as_str(), b.disc_diff),
+            ("white", Some(64)),
+            "the board's own result"
+        );
+        b.ggf = b.ggf.replace("RE[-64.00]", "");
+        b.disc_diff = None;
+        fill_board_from_ggf(&mut b, "morgoth");
+        assert_eq!(b.disc_diff, Some(-14), "without one, the final position");
     }
 
     // The end of the real .46 match (morgoth's extension ran out on both boards), as the wire log has it.
@@ -6245,7 +6272,7 @@ in /os: - match .46 2612 morgoth 2619 kuroobi s8r14 R -64.00  .90661
         let mut r = GameResult {
             raw: raw.into(),
             opp: "morgoth".into(),
-            my_diff: Some(128),
+            my_diff: Some(64),
             boards: vec![
                 BoardRecord {
                     id: ".46.0".into(),
@@ -6331,25 +6358,17 @@ in /os: - match .46 2612 morgoth 2619 kuroobi s8r14 R -64.00  .90661
         m.result = "-64.00".into();
         let boards = vec![(".9.0".to_string(), m.clone())];
         assert_eq!(
-            match_ending("finished", "", &boards, Some(-128), "me", "you"),
+            match_ending("finished", "", &boards, Some(-64), "me", "you"),
             ("resign".into(), "me".into())
         );
         assert_eq!(
-            match_ending("finished", "", &boards, Some(128), "me", "you").1,
+            match_ending("finished", "", &boards, Some(64), "me", "you").1,
             "you"
         );
         let mut t = m;
         t.out_of_time_by = "you".into();
         assert_eq!(
-            match_ending(
-                "finished",
-                "",
-                &[(".9.0".into(), t)],
-                Some(128),
-                "me",
-                "you"
-            )
-            .0,
+            match_ending("finished", "", &[(".9.0".into(), t)], Some(64), "me", "you").0,
             ""
         );
         assert_eq!(
@@ -6717,23 +6736,14 @@ in /os: - match .46 2612 morgoth 2619 kuroobi s8r14 R -64.00  .90661
 
     #[test]
     fn the_stone_diff_follows_the_first_name() {
-        assert_eq!(my_stone_diff(2.0, "kuroobi", "kuroobi", false), 2);
-        assert_eq!(my_stone_diff(-10.0, "kuroobi", "kuroobi", false), -10);
-        assert_eq!(my_stone_diff(-5.0, "kuroobi", "kuroobi", false), -5);
-        assert_eq!(my_stone_diff(-7.0, "kuroobi", "kuroobi", false), -7);
-        assert_eq!(my_stone_diff(-6.0, "htz", "kuroobi", false), 6);
-        assert_eq!(my_stone_diff(2.0, "htz", "kuroobi", false), -2);
-        assert_eq!(my_stone_diff(0.0, "kuroobi", "kuroobi", false), 0);
-        assert_eq!(my_stone_diff(0.0, "htz", "kuroobi", false), 0);
-    }
-
-    #[test]
-    fn a_synchro_margin_is_the_sum_of_both_boards() {
-        assert_eq!(my_stone_diff(-10.0, "kuroobi", "kuroobi", true), -20);
-        assert_eq!(my_stone_diff(16.0, "kuroobi", "kuroobi", true), 32);
-        assert_eq!(my_stone_diff(7.0, "kuroobi", "kuroobi", true), 14);
-        assert_eq!(my_stone_diff(-1.0, "piglet", "kuroobi", true), 2);
-        assert_eq!(my_stone_diff(0.5, "kuroobi", "kuroobi", true), 1);
+        assert_eq!(my_stone_diff(2.0, "kuroobi", "kuroobi"), 2);
+        assert_eq!(my_stone_diff(-10.0, "kuroobi", "kuroobi"), -10);
+        assert_eq!(my_stone_diff(-5.0, "kuroobi", "kuroobi"), -5);
+        assert_eq!(my_stone_diff(-7.0, "kuroobi", "kuroobi"), -7);
+        assert_eq!(my_stone_diff(-6.0, "htz", "kuroobi"), 6);
+        assert_eq!(my_stone_diff(2.0, "htz", "kuroobi"), -2);
+        assert_eq!(my_stone_diff(0.0, "kuroobi", "kuroobi"), 0);
+        assert_eq!(my_stone_diff(0.0, "htz", "kuroobi"), 0);
     }
 
     #[test]
@@ -7109,21 +7119,21 @@ in /os: - match .46 2612 morgoth 2619 kuroobi s8r14 R -64.00  .90661
                 ".63 2696 Rhapsody 2358 kuroobi s8r14 R +29.00  .83993",
                 "Rhapsody"
             ),
-            Some(-58),
-            "the score belongs to the name written first, and a pair doubles it"
+            Some(-29),
+            "the score belongs to the name written first; a pair's is the mean of its boards"
         );
         assert_eq!(
             diff_from_raw(
                 ".21 2469 kuroobi 2591 Rhapsody s8r16 R +1.00  .86021",
                 "Rhapsody"
             ),
-            Some(2),
+            Some(1),
             "written first ourselves, the sign stands"
         );
         assert_eq!(
             diff_from_raw(".9 2400 kuroobi 2400 saio 8 R -3.00", "saio"),
             Some(-3),
-            "a lone board is not doubled"
+            "a lone board's is its own"
         );
         assert_eq!(
             diff_from_raw(".7 2400 kuroobi 2400 saio s8r16", "saio"),
