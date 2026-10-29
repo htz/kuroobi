@@ -43,7 +43,7 @@ function endingOf(r: GameResult, me: string): ResultEnding | null {
 function boardOf(b: BoardRecord, me: string): ResultBoard {
   const lost = b.ending_by === me;
   return {
-    diff: b.disc_diff ?? null, empties: b.empties ?? 0,
+    diff: b.disc_diff ?? null,
     ...(b.ending === 'over_time' || b.ending === 'out_of_time'
       ? { tag: t(`data.result.${b.ending}_${lost ? 'loss' : 'win'}`), tone: lost ? 'bad' as const : 'gold' as const }
       : {}),
@@ -53,8 +53,11 @@ function boardOf(b: BoardRecord, me: string): ResultBoard {
 /** The boards' cells of a row; a match decided as a whole leaves them empty. */
 const boardsOf = (r: GameResult, me: string): ResultBoard[] => (r.ending ? [] : (r.boards ?? []).map((b) => boardOf(b, me)));
 
+/** As the live clock reads: the main time left, or once it is gone the extension left. */
 const clockLeft = (c: { main: number | null; ext: number | null }) =>
-  c.main == null ? '\u2014' : fmtSecs(c.main) + (c.ext != null ? ` · ${t('results.ext')} ${fmtSecs(c.ext)}` : '');
+  c.main == null ? '\u2014'
+    : c.main === 0 && c.ext != null ? t('ggs.clock.extension', { t: fmtSecs(c.ext) })
+    : fmtSecs(c.main);
 
 /** One board's reported values from a GGF that carries them (`B[F5/1.50/2.00]`), from `me`'s side. */
 function ggfTrend(ggf: string, me: string): Pt[] {
@@ -285,7 +288,7 @@ function BoardTable({ boards, me, decided, recorded }: {
     <div style={{ display: 'flex', flexDirection: 'column' }}>
       <div style={{ height: 'var(--h-head)', display: 'flex', alignItems: 'center', gap: 'var(--sp-2)', borderBottom: '1px solid var(--border)' }}>
         <span style={{ ...HEAD, width: 48, flex: 'none' }}>{t('results.head_board')}</span>
-        <span style={{ ...HEAD, width: 170, flex: 'none' }}>{t('results.head_on_board')}</span>
+        <span style={{ ...HEAD, width: 170, flex: 'none' }}>{t('data.result.head_discs')}</span>
         <span style={{ ...HEAD, flex: 1, minWidth: 0 }}>{t('results.head_player')}</span>
         <span style={{ ...HEAD, width: 112, flex: 'none', textAlign: 'right' }}>{t('results.head_left')}</span>
       </div>
@@ -311,7 +314,7 @@ function BoardTable({ boards, me, decided, recorded }: {
       })}
       {!decided && boards.length > 1 && total != null && (
         <div style={{ ...row(false), gap: 'var(--sp-2)' }}>
-          <span style={{ width: 48, flex: 'none', color: 'var(--sub)' }}>{t('results.board_total')}</span>
+          <span style={{ width: 48, flex: 'none', color: 'var(--sub)', whiteSpace: 'nowrap' }}>{t('results.total')}</span>
           <span style={{ width: 28, flex: 'none', textAlign: 'right', fontWeight: 600, fontVariantNumeric: 'tabular-nums',
                          color: total > 0 ? 'var(--ok)' : total < 0 ? 'var(--bad)' : 'var(--text)' }}>{signed(total)}</span>
           {recorded != null && recorded !== total && (

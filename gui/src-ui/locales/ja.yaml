@@ -282,7 +282,6 @@ data:
   rate:
     empty: "まだ記録がありません"
   result:
-    empties: "空き {n}"
     head_board: "{n} 面目"
     head_ending: "決着"
     opp_resigned: "相手の投了"
@@ -923,10 +922,8 @@ players:
   tab_summary: "概要"
   top_title: "{pool}の上位"
 results:
-  head_on_board: "盤上"
   head_board: "面"
-  board_total: "盤上の合計"
-  ext: "延長"
+  total: "合計"
   head_left: "残り時間"
   head_player: "対局者"
   my_color: "自分の色"

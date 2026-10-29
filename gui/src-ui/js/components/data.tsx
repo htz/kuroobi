@@ -471,8 +471,8 @@ const W_OUTCOME = 28, W_DISCS = 44, W_RATING = 60, W_WHEN = 64, W_ENDING = 72, W
 // Table cells never wrap: a narrow column turns a label into a vertical stack of characters.
 const ONE_LINE: React.CSSProperties = { whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' };
 
-/** One board of a result: the disc difference on it, how many squares were left, and a time mark if any. */
-export type ResultBoard = { diff: number | null; empties: number; tag?: string; tone?: 'gold' | 'bad' };
+/** One board of a result: the disc difference on it and a time mark if any. */
+export type ResultBoard = { diff: number | null; tag?: string; tone?: 'gold' | 'bad' };
 /** A match decided as a whole (a resignation, an adjournment). */
 export type ResultEnding = { text: string; tone: 'gold' | 'bad' | 'sub' };
 
@@ -506,7 +506,6 @@ export function ResultBoardCell({ b }: { b?: ResultBoard | null }) {
     <span style={{ width: W_BOARD, flex: 'none', display: 'flex', alignItems: 'baseline', gap: 6, ...ONE_LINE }}>
       {b && b.diff != null && <>
         <span style={{ width: 28, flex: 'none', textAlign: 'right', fontVariantNumeric: 'tabular-nums' }}>{signedDiff(b.diff)}</span>
-        {b.empties > 0 && <span style={{ color: 'var(--sub)', fontSize: 'var(--fs-6)' }}>{t('data.result.empties', { n: b.empties })}</span>}
         {b.tag && <span style={{ color: `var(--${b.tone})`, fontSize: 'var(--fs-6)' }}>{b.tag}</span>}
       </>}
     </span>

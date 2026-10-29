@@ -296,12 +296,10 @@ pub struct BoardRecord {
     /// "black" | "white": the side the player had on this board.
     #[serde(default)]
     pub my_color: String,
-    /// The final position's disc difference from the player's side (not the server's ±64 for time).
+    /// The final position's disc difference from the player's side, empty squares to the side ahead
+    /// (not the server's ±64 for time).
     #[serde(default)]
     pub disc_diff: Option<i32>,
-    /// Empty squares left: a board cut off by time or a resignation ends before it is full.
-    #[serde(default)]
-    pub empties: u8,
     /// "over_time" (main time ran out, the board went on in the extension) or "out_of_time"
     /// (the extension ran out too); empty when the board was played out.
     #[serde(default)]
@@ -1115,6 +1113,24 @@ fn load_history() -> Vec<GameResult> {
         }
         for b in &mut r.boards {
             fill_board_from_ggf(b, &r.opp);
+        }
+    }
+    // Games finished before endings and clocks were kept: the wire log still has them.
+    if out
+        .iter()
+        .any(|r| r.ending.is_empty() && r.boards.iter().all(|b| b.clocks.is_empty()))
+    {
+        let wire = wire_endings(&[wire_path().with_extension("log.1"), wire_path()]);
+        let login = USER
+            .lock()
+            .unwrap()
+            .as_ref()
+            .map(|u| u.1.clone())
+            .unwrap_or_default();
+        for r in &mut out {
+            if let Some(w) = wire.get(r.raw.trim()) {
+                backfill_from_wire(r, w, &login);
+            }
         }
     }
     out.reverse();
@@ -4607,6 +4623,19 @@ fn fill_board_from_ggf(b: &mut BoardRecord, opp: &str) {
     if b.disc_diff.is_some() || b.ggf.is_empty() {
         return;
     }
+    let Some((color, game)) = replay_board(b, opp) else {
+        return;
+    };
+    let d = scored(
+        game.board.black.count_ones() as i32,
+        game.board.white.count_ones() as i32,
+    );
+    b.my_color = color.to_string();
+    b.disc_diff = Some(if color == "black" { d } else { -d });
+}
+
+/// The player's colour and the board's final position, from its own GGF.
+fn replay_board(b: &BoardRecord, opp: &str) -> Option<(&'static str, kuroobi::game::Reversi)> {
     let tag = |t: &str| {
         let open = format!("{t}[");
         let i = b.ggf.find(&open)? + open.len();
@@ -4615,22 +4644,154 @@ fn fill_board_from_ggf(b: &mut BoardRecord, opp: &str) {
     let color = match (tag("PB"), tag("PW")) {
         (_, Some(w)) if w == opp => "black",
         (Some(bl), _) if bl == opp => "white",
-        _ => return,
+        _ => return None,
     };
-    let Some(start) = tag("BO").and_then(|bo| bo.strip_prefix("8 ").map(str::to_string)) else {
+    let start = tag("BO")?.strip_prefix("8 ")?.to_string();
+    let game = kuroobi::game::Reversi::from_kifu_with_start(&start, &b.kifu).ok()?;
+    Some((color, game))
+}
+
+#[derive(Default)]
+struct WireBoard {
+    over_by: String,
+    out_by: String,
+    /// Each player's last clock line: name, colour, main (or extension once in it), extension.
+    clocks: Vec<(String, String, Option<u64>, Option<u64>)>,
+    /// The server's result, from black's side.
+    result: Option<f32>,
+}
+
+/// What a wire log says about each match that ended in it, by the match's end line (with its archive
+/// number, so a reused match number cannot be mistaken for another).
+fn wire_endings(paths: &[PathBuf]) -> HashMap<String, HashMap<String, WireBoard>> {
+    let mut out = HashMap::new();
+    let mut live: HashMap<String, WireBoard> = HashMap::new();
+    let mut board = String::new();
+    for path in paths {
+        let Ok(text) = std::fs::read_to_string(path) else {
+            continue;
+        };
+        for line in text.lines() {
+            let Some(ln) = line.strip_prefix("in ") else {
+                continue;
+            };
+            if let Some(rest) = ln
+                .strip_prefix("/os: update ")
+                .or_else(|| ln.strip_prefix("/os: join "))
+            {
+                board = rest.split_whitespace().next().unwrap_or("").to_string();
+                continue;
+            }
+            if let Some(rest) = ln.strip_prefix('|') {
+                if let Some(c) = wire_clock_line(rest) {
+                    let b = live.entry(board.clone()).or_default();
+                    b.clocks.retain(|x| x.0 != c.0);
+                    b.clocks.push(c);
+                }
+                continue;
+            }
+            board.clear();
+            if let Some((rest, fatal)) = ln
+                .strip_prefix("/os: fatal-timeout ")
+                .map(|r| (r, true))
+                .or_else(|| ln.strip_prefix("/os: timeout ").map(|r| (r, false)))
+            {
+                let mut it = rest.split_whitespace();
+                if let (Some(id), Some(name)) = (it.next(), it.next()) {
+                    let b = live.entry(id.to_string()).or_default();
+                    if fatal {
+                        b.out_by = name.to_string();
+                    } else if b.over_by.is_empty() {
+                        b.over_by = name.to_string();
+                    }
+                }
+            } else if let Some(rest) = ln.strip_prefix("/os: end ") {
+                let id = rest.split_whitespace().next().unwrap_or("");
+                let v = rest
+                    .rsplit(' ')
+                    .next()
+                    .and_then(|v| v.trim().parse::<f32>().ok());
+                let first = rest
+                    .split('(')
+                    .nth(1)
+                    .and_then(|t| t.split_whitespace().next())
+                    .unwrap_or("");
+                let b = live.entry(id.to_string()).or_default();
+                // The score is from the first name; its colour is in the clock lines.
+                let first_white = b.clocks.iter().any(|c| c.0 == first && c.1 == "white");
+                b.result = v.map(|v| if first_white { -v } else { v });
+            } else if let Some(rest) = ln.strip_prefix("/os: + match ") {
+                let id = rest.split_whitespace().next().unwrap_or("").to_string();
+                live.retain(|k, _| k != &id && base_id(k) != id);
+            } else if let Some(rest) = ln.strip_prefix("/os: - match ") {
+                let id = rest.split_whitespace().next().unwrap_or("").to_string();
+                let boards: HashMap<String, WireBoard> = live
+                    .extract_if(|k, _| k == &id || base_id(k) == id)
+                    .collect();
+                out.insert(rest.trim().to_string(), boards);
+            }
+        }
+    }
+    out
+}
+
+/// `morgoth  (2629.3 *) 00:02,23:0//02:00,23:0`: a player's clock in an update.
+fn wire_clock_line(rest: &str) -> Option<(String, String, Option<u64>, Option<u64>)> {
+    let (name, tail) = rest.split_once(" (")?;
+    let (inside, clock) = tail.split_once(") ")?;
+    let color = match inside.split_whitespace().nth(1)? {
+        "*" => "black",
+        "O" => "white",
+        _ => return None,
+    };
+    let (secs, _, ext) = parse_clock(clock.trim());
+    Some((name.trim().to_string(), color.to_string(), secs, ext))
+}
+
+fn backfill_from_wire(r: &mut GameResult, wire: &HashMap<String, WireBoard>, login: &str) {
+    let mut resigned = false;
+    for b in &mut r.boards {
+        let Some(w) = wire.get(&b.id) else {
+            continue;
+        };
+        if b.ending.is_empty() {
+            if !w.out_by.is_empty() {
+                b.ending = "out_of_time".into();
+                b.ending_by = w.out_by.clone();
+            } else if !w.over_by.is_empty() {
+                b.ending = "over_time".into();
+                b.ending_by = w.over_by.clone();
+            }
+        }
+        if b.clocks.is_empty() {
+            b.clocks = w
+                .clocks
+                .iter()
+                .map(|(n, c, secs, ext)| clock_record(n, c, *secs, *ext, &w.over_by, &w.out_by))
+                .collect();
+        }
+        let cut_short = replay_board(b, &r.opp).is_some_and(|(_, g)| !g.is_game_over());
+        if w.out_by.is_empty() && cut_short && w.result.is_some_and(|v| v.abs() >= 63.5) {
+            resigned = true;
+        }
+    }
+    if !r.ending.is_empty() {
         return;
-    };
-    let Ok(game) = kuroobi::game::Reversi::from_kifu_with_start(&start, &b.kifu) else {
-        return;
-    };
-    let (d, empties) = scored(
-        game.board.black.count_ones() as i32,
-        game.board.white.count_ones() as i32,
-        game.is_game_over(),
-    );
-    b.my_color = color.to_string();
-    b.empties = empties;
-    b.disc_diff = Some(if color == "black" { d } else { -d });
+    }
+    let (kind, who) = end_kind(&r.raw);
+    if kind == "adjourned" {
+        r.ending = "adjourn".into();
+        r.ending_by = who;
+    } else if resigned {
+        if let Some(d) = r.my_diff.filter(|d| *d != 0) {
+            r.ending = "resign".into();
+            r.ending_by = if d < 0 {
+                login.to_string()
+            } else {
+                r.opp.clone()
+            };
+        }
+    }
 }
 
 fn board_of_cells(cells: &[u8]) -> Option<kuroobi::board::Board> {
@@ -4657,22 +4818,42 @@ fn color_word(c: Option<char>) -> &'static str {
     }
 }
 
-/// The disc difference from black's side and the squares left on a board cut short. A board played out
-/// gives its empty squares to the winner, as the game's score (and GGS) counts them.
-fn scored(black: i32, white: i32, over: bool) -> (i32, u8) {
-    let empties = 64 - black - white;
+/// The disc difference from black's side, the empty squares going to the side ahead as the game's
+/// score (and GGS) counts them.
+fn scored(black: i32, white: i32) -> i32 {
     let d = black - white;
-    if !over {
-        return (d, empties as u8);
+    d + d.signum() * (64 - black - white)
+}
+
+/// The server sends no clock with a timeout: the notice itself says the time is gone. Once in the extension
+/// the clock's first field counts the extension down; the last stays at its setting.
+fn clock_record(
+    name: &str,
+    color: &str,
+    secs: Option<u64>,
+    ext: Option<u64>,
+    over_by: &str,
+    out_by: &str,
+) -> ClockRecord {
+    let (main, ext) = if name == out_by {
+        (Some(0), Some(0))
+    } else if name == over_by {
+        (Some(0), secs)
+    } else {
+        (secs, ext)
+    };
+    ClockRecord {
+        name: name.to_string(),
+        color: color.to_string(),
+        main,
+        ext,
     }
-    (d + d.signum() * empties, 0)
 }
 
 fn board_record(id: &str, m: &MatchState) -> BoardRecord {
     let black = m.cells.iter().filter(|&&c| c == 1).count() as i32;
     let white = m.cells.iter().filter(|&&c| c == 2).count() as i32;
-    let over = board_of_cells(&m.cells).is_some_and(|b| b.is_game_over());
-    let (d, empties) = scored(black, white, over);
+    let d = scored(black, white);
     let my_color = color_word(m.my_color);
     let (ending, ending_by) = if !m.out_of_time_by.is_empty() {
         ("out_of_time", m.out_of_time_by.clone())
@@ -4691,28 +4872,20 @@ fn board_record(id: &str, m: &MatchState) -> BoardRecord {
             "white" => Some(-d),
             _ => None,
         },
-        empties,
         ending: ending.to_string(),
         ending_by,
         clocks: m
             .players
             .iter()
-            // The server sends no clock with a timeout: the notice itself says the time is gone. Once in the
-            // extension the clock's first field counts the extension down; the last stays at its setting.
             .map(|p| {
-                let (main, ext) = if p.name == m.out_of_time_by {
-                    (Some(0), Some(0))
-                } else if p.name == m.over_time_by {
-                    (Some(0), p.secs)
-                } else {
-                    (p.secs, p.ext)
-                };
-                ClockRecord {
-                    name: p.name.clone(),
-                    color: p.color.clone(),
-                    main,
-                    ext,
-                }
+                clock_record(
+                    &p.name,
+                    &p.color,
+                    p.secs,
+                    p.ext,
+                    &m.over_time_by,
+                    &m.out_of_time_by,
+                )
             })
             .collect(),
     }
@@ -6029,7 +6202,7 @@ mod tests {
 
     use super::*;
 
-    // The .46.0 board of a real match: morgoth's extension ran out with four squares empty.
+    // The .46.0 board of a real match: morgoth's extension ran out with four squares empty, 25 to 35.
     #[test]
     fn an_older_record_gets_its_colour_and_count_from_its_ggf() {
         let mut b = BoardRecord {
@@ -6041,10 +6214,66 @@ mod tests {
             ..Default::default()
         };
         fill_board_from_ggf(&mut b, "morgoth");
-        assert_eq!(
-            (b.my_color.as_str(), b.disc_diff, b.empties),
-            ("white", Some(-10), 4)
-        );
+        assert_eq!((b.my_color.as_str(), b.disc_diff), ("white", Some(-14)));
+    }
+
+    // The end of the real .46 match (morgoth's extension ran out on both boards), as the wire log has it.
+    #[test]
+    fn a_past_result_gets_its_endings_and_clocks_from_the_wire_log() {
+        let log = "in /os: + match .46 2629 morgoth 2602 kuroobi s8r14 R
+in /os: update .46.1 s8r14 K?
+in | 45: A8/-6.00/0.25
+in |kuroobi  (2602.3 *) 00:04,23:0//02:00,23:0
+in |morgoth  (2629.3 O) 00:03,22:0//02:00,22:0
+in |
+in /os: update .46.0 s8r14 K?
+in |morgoth  (2629.3 *) 00:02,23:0//02:00,23:0
+in |kuroobi  (2602.3 O) 00:04,23:0//02:00,23:0
+in /os: timeout .46.1 morgoth (O)
+in /os: fatal-timeout .46.1 morgoth (O)
+in /os: end .46.1 ( morgoth vs. kuroobi ) -64.00
+in /os: timeout .46.0 morgoth (*)
+in /os: fatal-timeout .46.0 morgoth (*)
+in /os: end .46.0 ( morgoth vs. kuroobi ) -64.00
+in /os: - match .46 2612 morgoth 2619 kuroobi s8r14 R -64.00  .90661
+";
+        let path = std::env::temp_dir().join(format!("kuroobi-wire-{}.log", std::process::id()));
+        std::fs::write(&path, log).unwrap();
+        let wire = wire_endings(std::slice::from_ref(&path));
+        let _ = std::fs::remove_file(&path);
+        let raw = ".46 2612 morgoth 2619 kuroobi s8r14 R -64.00  .90661";
+        let mut r = GameResult {
+            raw: raw.into(),
+            opp: "morgoth".into(),
+            my_diff: Some(128),
+            boards: vec![
+                BoardRecord {
+                    id: ".46.0".into(),
+                    ..Default::default()
+                },
+                BoardRecord {
+                    id: ".46.1".into(),
+                    ..Default::default()
+                },
+            ],
+            ..Default::default()
+        };
+        backfill_from_wire(&mut r, &wire[raw], "kuroobi");
+        assert_eq!(r.ending, "", "a timeout is no resignation");
+        for b in &r.boards {
+            assert_eq!(
+                (b.ending.as_str(), b.ending_by.as_str()),
+                ("out_of_time", "morgoth")
+            );
+            let c = |n: &str| {
+                b.clocks
+                    .iter()
+                    .find(|c| c.name == n)
+                    .map(|c| (c.main, c.ext))
+            };
+            assert_eq!(c("morgoth"), Some((Some(0), Some(0))));
+            assert_eq!(c("kuroobi"), Some((Some(4), Some(120))));
+        }
     }
 
     #[test]
@@ -6086,10 +6315,10 @@ mod tests {
     }
 
     #[test]
-    fn a_board_played_out_gives_its_empty_squares_to_the_winner() {
-        assert_eq!(scored(33, 30, true), (4, 0));
-        assert_eq!(scored(30, 30, true), (0, 0));
-        assert_eq!(scored(35, 25, false), (10, 4));
+    fn the_empty_squares_go_to_the_side_ahead() {
+        assert_eq!(scored(33, 30), 4);
+        assert_eq!(scored(30, 30), 0);
+        assert_eq!(scored(25, 35), -14);
     }
 
     #[test]

@@ -179,7 +179,6 @@ export interface BoardRecord {
   ggf: string;
   my_color?: string;
   disc_diff?: number | null;
-  empties?: number;
   /** "over_time" | "out_of_time" */
   ending?: string;
   ending_by?: string;

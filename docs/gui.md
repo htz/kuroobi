@@ -419,18 +419,19 @@ instead, since there is no rating across pools. Games from the server's
 history are mixed in. Each row shows the format, the recorded disc
 difference, how the match was decided when it was a resignation or an
 adjournment (GGS decides those for the whole match, both boards of a
-synchro), and each board's own result: the disc difference on the board,
-the empty squares left if it was cut short, and **Won / Lost on time**
+synchro), and each board's own result: the disc difference on the board
+(empty squares counted to the side ahead), and **Won / Lost on time**
 (the extension ran out too, the board counts ±64) or **Won / Lost on over
 time** (the main time ran out first and the board was finished in the
 extension; whoever ran out first cannot win it). A row opens the drawer
 with the opponent's rating, format, time control, your colour per board,
 date, the rating change, each board's players with the clock they ended
-on (main time and extension left), the boards' total next to the recorded
+on (the main time left, or the extension left once in it), the boards' total next to the recorded
 result when they differ, the eval graph of the game when its record
 carries evals, **Open kifu** and **Rematch**. Games recorded before this
-keep the disc count per board but not how they were decided or the
-clocks.
+get the disc difference per board from their record, and how they were
+decided and the clocks from the GGS wire log for as long as the log
+(with its previous generation) still holds them.
 
 ### Chat
 

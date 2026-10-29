@@ -289,7 +289,6 @@ data:
   rate:
     empty: "No history yet"
   result:
-    empties: "{n} empty"
     head_board: "Board {n}"
     head_ending: "Decided by"
     opp_resigned: "Opp. resigned"
@@ -945,10 +944,8 @@ players:
   tab_summary: "Summary"
   top_title: "Top players ({pool})"
 results:
-  head_on_board: "On the board"
   head_board: "Board"
-  board_total: "On the boards"
-  ext: "Ext"
+  total: "Total"
   head_left: "Time left"
   head_player: "Player"
   my_color: "Your colour"
