@@ -58,7 +58,10 @@ const numSize = (s: string) => (s.length <= 3 ? 24 : s.length === 4 ? 21 : 17);
 const cx = (i: number) => PAD + i * CELL + CELL / 2;
 const fr = (sq: number): [number, number] => [Math.floor(sq / 8), sq % 8];
 
-export function Board({ cells, legal = [], evals, last, coords, grain = true, flip = false, disabled, onPlay }: {
+/** Editing: every square takes the pointer; a press starts a stroke that the squares it crosses join. */
+export type BoardEdit = { ghost: Cell; onDown: (sq: number) => void; onEnter: (sq: number) => void };
+
+export function Board({ cells, legal = [], evals, last, coords, grain = true, flip = false, disabled, onPlay, edit }: {
   cells: Cell[];                                   // 64 (sq = file*8 + rank)
   legal?: number[];
   evals?: Record<number, EvalInfo>;
@@ -68,8 +71,10 @@ export function Board({ cells, legal = [], evals, last, coords, grain = true, fl
   flip?: boolean;
   disabled?: boolean;
   onPlay?: (sq: number) => void;
+  edit?: BoardEdit;
 }) {
   const legalSet = new Set(legal);
+  const [hover, setHover] = React.useState<number | null>(null);
   const at = (sq: number): [number, number] => {
     const [f, r] = fr(flip ? 63 - sq : sq);
     return [cx(f), cx(r)];
@@ -125,6 +130,23 @@ export function Board({ cells, legal = [], evals, last, coords, grain = true, fl
           </g>
         );
       })}
+
+      {edit && hover !== null && cells[hover] === 0 && edit.ghost !== 0 && (() => {
+        const [x, y] = at(hover);
+        return <g style={{ opacity: 0.35, pointerEvents: 'none' }}><Stone x={x} y={y} color={edit.ghost as 1 | 2} /></g>;
+      })()}
+      {edit && (
+        <g className="k-edit-cells" onPointerLeave={() => setHover(null)}>
+          {cells.map((_, sq) => {
+            const [x, y] = at(sq);
+            return (
+              <rect key={sq} x={x - CELL / 2} y={y - CELL / 2} width={CELL} height={CELL} fill="transparent"
+                    onPointerDown={(e) => { if (e.button === 0) { e.preventDefault(); edit.onDown(sq); } }}
+                    onPointerEnter={(e) => { setHover(sq); if (e.buttons & 1) edit.onEnter(sq); }} />
+            );
+          })}
+        </g>
+      )}
     </svg>
   );
 }

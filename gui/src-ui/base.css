@@ -104,6 +104,18 @@ button:disabled, button[aria-disabled="true"] { cursor:default; }
 .k-cell circle { transition:opacity var(--dur) var(--ease), r var(--dur) var(--ease); }
 .k-cell:hover .k-legal { opacity:.75; }
 .k-cell:hover .k-eval { opacity:1; }
+.k-edit-cells { cursor:crosshair; }
+
+/* Board editor: the stone to place, one tile each */
+.k-tile { position:relative; height:60px; display:flex; flex-direction:column; align-items:center; justify-content:center;
+  gap:5px; border:1px solid var(--border); border-radius:var(--r-2); background:var(--panel); color:var(--text);
+  font:inherit; font-size:var(--fs-6); }
+.k-tile:hover { border-color:var(--sub); }
+.k-tile[aria-pressed="true"] { border-color:var(--accent); box-shadow:inset 0 0 0 1px var(--accent);
+  background:color-mix(in srgb, var(--accent) 16%, var(--panel)); }
+.k-tile kbd { position:absolute; top:4px; right:6px; font:inherit; font-size:10px; color:var(--sub); }
+.k-fill > button { width:100%; justify-content:center; }
+.k-tile-erase { width:24px; height:24px; border-radius:50%; border:1.5px dashed var(--sub); }
 
 
 /* Selected Segmented item. In dark the surface color alone is enough (as

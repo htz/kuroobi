@@ -127,8 +127,8 @@ Analysis is held off during a GGS game.
 
 ## Game records
 
-**Load game record** (Study's toolbar, ⌘O) and **Paste** / **Load** (the
-record panel in Play) read a paste or a file. The format is **GGF**
+**Paste** (⌘O) and **Load** (the record panel in Play and Study) read
+a paste or a file. The format is **GGF**
 (Generic Game Format), which GGS uses, so a game that does not start
 from the initial position (a random opening) is reproduced along with
 its starting position. The form is worked out from the text, so these
@@ -152,6 +152,24 @@ on another screen.
 (`.ggf` for GGF, anything else for a move list). The move list drops the
 colours, the result and the starting position, so GGF is the better
 choice for handing a game to other software.
+
+## Board editor
+
+**Edit board** (⌘E; the record panel in Play and Study) sets up any position by hand, a puzzle for example, starting from the
+board on screen. Pick black, white or erase on the right (keys 1–3) and
+press or drag across squares. A press that starts on a stone of the
+picked colour erases for the whole drag. **Start position**, **Clear**
+and **Swap colors** (every stone turned over, and the side to move with
+them) change the whole board; ⌘Z / ⇧⌘Z undo and redo one press or
+button at a time. The side to move's legal moves are marked as in a
+game, and the panel says how many there are.
+
+**Play from here** (⌘↩) and **Open in study**, at the foot of the
+panel, replace the record with
+the position (asking first if the record has moves). If the side to
+move has no move, the record starts with its pass; if neither side can
+move, both are disabled. **Cancel** (Esc) or leaving for another screen
+keeps the board as it was.
 
 ## Book
 
@@ -200,8 +218,8 @@ The settings are kept in the OS config directory.
 
 ## Keys
 
-⌘N new game, ⌘Z take back, ⌘S save, ⌘O load (these four in Play and
-Study only; elsewhere ⌘Z stays the text field's undo), ⌘B book, ⌘,
+⌘N new game, ⌘Z take back, ⌘S save, ⌘O load, ⌘E edit board (these in
+Play and Study only; elsewhere ⌘Z stays the text field's undo), ⌘B book, ⌘,
 settings. In Study ← → move one move (⇧ ten, ⌘ to the end); in the Book
 tab ← back, ↑ start, → best move. No shortcut acts while a dialog is
 open or a text field has the focus.

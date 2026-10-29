@@ -64,6 +64,7 @@ export const api = {
     call<string | null>('save_kifu', { black, white }),
   loadKifu: () => call<GameView | null>('load_kifu'),
   loadKifuText: (text: string) => call<GameView>('load_kifu_text', { text }),
+  loadBoard: (board: string) => call<GameView>('load_board', { board }),
   previewKifu: (text: string) => call<KifuFrame[]>('preview_kifu', { text }),
   localThreads: () => call<ThreadsView>('local_threads', {}),
   setLocalThreads: (n: number | null) => call('set_local_threads', { n }),

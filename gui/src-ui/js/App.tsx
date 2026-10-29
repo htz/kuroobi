@@ -10,6 +10,7 @@ import { connOf, evalsOf, ggsPlaying, movesOf, navBadges, sqName } from './adapt
 import { AppFrame, BoardFit, Body, Busy, Divider, Dock, Main, Toolbar, WindowBar, useToolbarCompact } from './components/layout';
 import { GgsScreen } from './GgsScreens';
 import { Confirm, PasteKifu } from './Dialogs';
+import { EditBoard, EditDock, EditTools, boardText, useBoardEdit, useEditKeys } from './BoardEdit';
 import { Board, type Cell } from './components/board';
 import { EvalGraph, MoveScrub, ScoreRow, StoneDot, srcIsBook, srcLabel } from './components/data';
 import { Nav, NavRow, navLocal, ggsNav, Toasts, type NavId } from './components/ggs';
@@ -129,12 +130,15 @@ export function App() {
   // Leaving the game for another screen pauses it, clock and all, like any game one plays alone;
   // 「対局開始」 takes it on from the same position.
   const { playing, stop } = g;
+  const ed = useBoardEdit();
+  const closeEdit = ed.close;
   const setNav = useCallback((id: NavId) => {
+    closeEdit();
     if (navRaw === 'ggs-chat' && id !== 'ggs-chat') markChatRead();
     if (navRaw === 'play' && id !== 'play' && playing) stop();
     setNavRaw(id);
     if (id === 'play' || id === 'study') setMode(id === 'study' ? 'study' : 'vs');
-  }, [setMode, navRaw, markChatRead, playing, stop]);
+  }, [setMode, navRaw, markChatRead, playing, stop, closeEdit]);
 
   // Settings shows how much of the book was learned, so it reads the book too.
   const book = useBookBrowse(isBook || nav === 'settings');
@@ -166,15 +170,18 @@ export function App() {
   // the toolbar's panel button and the room kept for the panel follow it.
   const bookDock = isBook && bookTab === 'book' && book.node?.size !== 0;
   const playDock = !isGgs && !isBook && !isSettings;
+  const editing = playDock && !!ed.st;
   // The board's live evals search until stopped and hold the engine, so they stop while the board is
   // off screen (the book and settings read the engine), and do not start again until it is back
   // (the hints effect restarts them). A game's own search and the graph analysis are left running.
   const setBoardShown = g.setBoardShown;
+  // While editing, the board on screen is not the game's.
+  const boardShown = playDock && !editing;
   useEffect(() => {
-    setBoardShown(playDock);
-    if (!playDock && !g.thinking && !graph.busy) void api.stopSearch().catch(() => {});
+    setBoardShown(boardShown);
+    if (!boardShown && !g.thinking && !graph.busy) void api.stopSearch().catch(() => {});
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [playDock]);
+  }, [boardShown]);
   const hasDock = bookDock || playDock;
   const asking = useAskSheet();
   // The sheet only shows while connected; a sheet left open across a disconnect would stay
@@ -321,6 +328,21 @@ export function App() {
     return true;
   };
 
+  const canEdit = playDock && !g.thinking && (study ? !graph.busy : !g.playing);
+  const edOpen = ed.open;
+  const gameView = g.view;
+  const openEdit = useCallback(() => {
+    if (canEdit && gameView) edOpen(gameView.cells as Cell[], gameView.player);
+  }, [canEdit, gameView, edOpen]);
+  const startFromEdit = async (to: 'play' | 'study') => {
+    if (!ed.st || ed.dead || !await replaceOk()) return;
+    try {
+      applyLoaded(await api.loadBoard(boardText(ed.st.pos)));
+      setNav(to);
+    } catch (e) { g.say(tErr(e)); }
+  };
+  useEditKeys(ed, closeEdit, () => void startFromEdit('play'));
+
   // A GGS action a person asked for that failed (the screens report it through ggsui).
   const sayFailure = g.say;
   useEffect(() => onGgsFailure((e) => sayFailure(tErr(e))), [sayFailure]);
@@ -398,6 +420,8 @@ export function App() {
       const key = e.key.toLowerCase();
       if (cmd && key === ',') { e.preventDefault(); setNav('settings'); return; }
       if (cmd && key === 'b') { e.preventDefault(); setNav('book'); return; }
+      // The editor keeps the board's keys for itself (BoardEdit's useEditKeys).
+      if (editing) return;
       // The game shortcuts act on the local board, so only where it is on screen (play and study);
       // elsewhere ⌘Z stays the text fields' own undo.
       if (cmd && key === 'n' && playDock) { e.preventDefault(); if (!g.thinking) void newGame(); return; }
@@ -409,6 +433,7 @@ export function App() {
         return;
       }
       if (cmd && key === 'o' && playDock) { e.preventDefault(); setPaste(true); return; }
+      if (cmd && key === 'e' && playDock) { e.preventDefault(); openEdit(); return; }
       if (cmd && key === 'z' && playDock) {
         e.preventDefault();
         if (!g.thinking && v && v.move_count > 0) void g.undo();
@@ -435,7 +460,7 @@ export function App() {
     };
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
-  }, [setNav, paste, ask, viewer, asking, isBook, bookTab, isGgs, playDock, study, book, g, v, newGame]);
+  }, [setNav, paste, ask, viewer, asking, editing, openEdit, isBook, bookTab, isGgs, playDock, study, book, g, v, newGame]);
 
   // Studying a record, the record's own next move just steps forward; another move drops the rest, so it asks.
   // On KUROOBI's turn the board takes no move, so it shows none under the pointer either.
@@ -520,7 +545,12 @@ export function App() {
           )}
         </Toolbar>
       )}
-      {!isGgs && !isSettings && <Toolbar
+      {editing && (
+        <Toolbar dock={{ open: dockOpen, onToggle: () => setDockOpen(o => !o) }}>
+          <EditTools ed={ed} />
+        </Toolbar>
+      )}
+      {!isGgs && !isSettings && !editing && <Toolbar
           dock={hasDock ? { open: dockOpen, onToggle: () => setDockOpen(o => !o) } : undefined}
           graph={study && !isGgs && !isBook
             ? { open: graphOpen, onToggle: () => setGraphOpen(o => !o) } : undefined}
@@ -552,8 +582,6 @@ export function App() {
               <Button variant="primary" disabled={graph.busy || !v?.moves.length}
                       onClick={() => void graph.update()}>{t('app.study.analyze')}</Button>
               <Toggle checked={g.autoHint} onChange={g.setAutoHint} label={t('app.play.show_evals')} />
-              <Divider />
-              <Button title="⌘O" onClick={() => setPaste(true)}>{t('app.study.load_record')}</Button>
               <Divider />
               <Segmented value={pov} onChange={setPov}
                          options={[{ value: 'b', label: t('app.study.black_view') },
@@ -626,6 +654,9 @@ export function App() {
                 onOpen={(e, ply) => void openInStudy(e.start ? e.start + '\n' + e.kifu : e.kifu, ply)} />
             </div>
           )
+        ) : editing ? (
+          <EditBoard ed={ed} coords={prefs.coords} grain={prefs.grain}
+                     flip={flipped(prefs.facing, study ? '' : sideColor)} />
         ) : (
         <div style={{
           flex: 1, minHeight: 'calc(200px + var(--h-bar))',
@@ -645,12 +676,12 @@ export function App() {
         </div>
         )}
 
-        {study && !isGgs && !isBook && v && (
+        {study && !isGgs && !isBook && !editing && v && (
           <MoveScrub plies={v.moves.length} cursor={v.cursor} blunder={blunder}
                      onSeek={(n) => void g.jumpTo(n)} />
         )}
 
-        {study && !isGgs && !isBook && (
+        {study && !isGgs && !isBook && !editing && (
           <EvalGraph points={povPoints} plies={v?.moves.length} cursor={v?.cursor}
                      blunder={blunder} busy={graph.busy} onJump={(n) => void g.jumpTo(n)}
                      open={graphOpen} pov={pov}
@@ -678,10 +709,13 @@ export function App() {
         </Dock>
       )}
 
-      {playDock && (
+      {editing && <EditDock ed={ed} open={dockOpen} onCancel={closeEdit}
+                            onStudy={() => void startFromEdit('study')} onPlay={() => void startFromEdit('play')} />}
+
+      {playDock && !editing && (
         <PlayDock g={g} prefs={prefs} setClockSecs={(secs) => { setPref('clockSecs', secs); void g.resetClock(secs); }}
                   open={dockOpen}
-                  onPaste={() => setPaste(true)} onLoadFile={loadFromFile}
+                  onPaste={() => setPaste(true)} onLoadFile={loadFromFile} onEdit={openEdit} editOff={!canEdit}
                   study={study} moves={moves} ggfNames={() => ggfNames(g.side)} />
       )}
 

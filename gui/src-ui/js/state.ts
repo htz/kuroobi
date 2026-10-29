@@ -244,8 +244,9 @@ export function useGame(clockSecs: number, learnOn: boolean) {
       while (v.move_count > 0 && (!resting(v) || (human.length > 0 && !human.includes(v.player)))) {
         v = await api.undo();
       }
-      // Nothing of the person's to take back (KUROOBI moved first): leave the game as it was.
-      if (human.length > 0 && !human.includes(v.player)) v = await api.goto(from);
+      // Nothing of the person's to take back (KUROOBI moved first, or an edited board opened with a pass):
+      // leave the game as it was.
+      if (!resting(v) || (human.length > 0 && !human.includes(v.player))) v = await api.goto(from);
       apply(v);
     } catch (e) { say(tErr(e)); }
   }, [thinking, mode, side, view, apply, say]);

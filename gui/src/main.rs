@@ -1530,6 +1530,25 @@ fn load_kifu_text(app: State<App>, text: String) -> Result<GameView, String> {
     load_kifu_into(&app, &text)
 }
 
+/// A position made in the board editor: no moves yet, and a side with no move passes at once.
+#[tauri::command]
+fn load_board(app: State<App>, board: String) -> Result<GameView, String> {
+    let loaded = board_game(&board)?;
+    if let Some(e) = app.engine.lock().unwrap().as_mut() {
+        e.clear_tables();
+    }
+    let mut game = app.game.lock().unwrap();
+    *game = loaded;
+    clock_loaded(&app, &game);
+    Ok(view(&game))
+}
+
+fn board_game(board: &str) -> Result<Reversi, String> {
+    let mut game = Reversi::from_string(board).map_err(|_| "err.record_unreadable".to_string())?;
+    auto_pass(&mut game);
+    Ok(game)
+}
+
 #[derive(Serialize)]
 struct KifuFrame {
     cells: Vec<u8>,
@@ -2187,6 +2206,7 @@ fn main() {
             save_kifu,
             load_kifu,
             load_kifu_text,
+            load_board,
             preview_kifu,
             js_log,
             ggs_connect,
@@ -2348,6 +2368,16 @@ mod tests {
             (0, b.board.black, b.board.white)
         );
         assert_eq!(color_name(a.board.player()), "white");
+    }
+
+    #[test]
+    fn an_edited_board_whose_side_cannot_move_starts_with_its_pass() {
+        let g = board_game("----O-------------X-X-----------------------------O------X------ O")
+            .expect("parses");
+        assert_eq!(g.line(), vec![None]);
+        assert_eq!(color_name(g.board.player()), "black");
+        let dead = board_game(&format!("{}x", "-".repeat(64))).expect("parses");
+        assert!(dead.is_game_over() && dead.move_count() == 0);
     }
 
     #[test]

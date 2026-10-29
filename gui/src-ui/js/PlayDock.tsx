@@ -17,7 +17,7 @@ import { t, tErr } from './i18n';
  * the record below. Learning lives in the engine settings.
  */
 export function PlayDock({
-  g, prefs, setClockSecs, open, onPaste, onLoadFile, study, moves, ggfNames,
+  g, prefs, setClockSecs, open, onPaste, onLoadFile, onEdit, editOff, study, moves, ggfNames,
 }: {
   g: Game;
   prefs: Prefs;
@@ -25,6 +25,8 @@ export function PlayDock({
   open: boolean;
   onPaste: () => void;
   onLoadFile: () => void;
+  onEdit: () => void;
+  editOff: boolean;
   study: boolean;
   moves: Move[];
   ggfNames: () => [string, string];
@@ -47,9 +49,9 @@ export function PlayDock({
         flex: 'none', display: 'flex', gap: 'var(--sp-2)',
         padding: 'var(--sp-2) var(--sp-3)', borderTop: '1px solid var(--border-weak)',
       }}>
-        {!study && <Button title="⌘O" onClick={() => onPaste()}>{t('dock.record.paste')}</Button>}
-        {/* Study loads a record from its toolbar (「棋譜を読み込む」, which also takes a file). */}
-        {!study && <Button onClick={() => void onLoadFile()}>{t('dock.record.load')}</Button>}
+        <Button title="⌘O" onClick={() => onPaste()}>{t('dock.record.paste')}</Button>
+        <Button onClick={() => void onLoadFile()}>{t('dock.record.load')}</Button>
+        <Button title="⌘E" disabled={editOff} onClick={onEdit}>{t('dock.record.edit')}</Button>
         <Button title="⌘S" disabled={!moves.length}
                 onClick={() => void api.saveKifu(...ggfNames()).catch((e: unknown) => g.say(tErr(e)))}>
           {t('dock.record.save')}
