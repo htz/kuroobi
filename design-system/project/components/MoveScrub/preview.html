@@ -1,0 +1,19 @@
+<!-- @dsCard group="Board" height=240 -->
+<div id="root" style="padding: var(--sp-4); background: var(--bg); color: var(--text); font: var(--fs-4)/1.6 var(--ff);"></div>
+<script>
+KuroobiUI.setLang('ja');
+const h = React.createElement;
+const noop = () => {};
+const cap = (label, ...kids) => h('div', { style: { display: 'flex', flexDirection: 'column', gap: 'var(--sp-1)', minWidth: 0 } },
+  h('div', { style: { fontSize: 'var(--fs-7)', color: 'var(--sub)' } }, label), ...kids);
+const { MoveScrub } = KuroobiUI;
+function Demo({ plies, start, blunder, nav, label }) {
+  const [n, setN] = React.useState(start);
+  return cap(label + ' · move ' + n, h(MoveScrub, { plies, cursor: n, blunder, nav, onSeek: setN }));
+}
+ReactDOM.createRoot(document.getElementById('root')).render(
+  h('div', { style: { display: 'flex', flexDirection: 'column', gap: 'var(--sp-4)', maxWidth: 720 } },
+    h(Demo, { plies: 60, start: 32, blunder: { at: 32, loss: 7 }, label: 'Study · with blunder mark' }),
+    h(Demo, { plies: 60, start: 0, label: 'Starting position (First / Back disabled)' }),
+    h(Demo, { plies: 44, start: 44, nav: false, label: 'nav=false · partial record of 44 moves' })));
+</script>

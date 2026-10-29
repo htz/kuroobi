@@ -1,0 +1,22 @@
+<!-- @dsCard group="Layout" height=200 -->
+<div id="root" style="padding: var(--sp-4); background: var(--bg); color: var(--text); font: var(--fs-4)/1.6 var(--ff);"></div>
+<script>
+KuroobiUI.setLang('ja');
+const h = React.createElement;
+const { NavRow } = KuroobiUI;
+const items = [
+  { id: 'ggs-play', label: '対局・観戦', icon: 'ggs-play', count: 1, dot: 'bad' },
+  { id: 'ggs-lobby', label: 'ロビー', icon: 'ggs-lobby', count: 2, alert: true },
+  { id: 'ggs-tourney', label: '大会', icon: 'ggs-tourney', dot: 'gold' },
+  { id: 'settings', label: '設定', icon: 'prefs', hint: '⌘,' },
+];
+function Demo() {
+  const [cur, setCur] = React.useState('ggs-play');
+  return h('div', { style: { width: 'var(--w-nav)', padding: 'var(--sp-2)', background: 'var(--panel)', display: 'flex', flexDirection: 'column', gap: 2, borderRadius: 'var(--r-3)' } },
+    items.map((it) => h(NavRow, { key: it.id, item: it, active: cur === it.id, onSelect: setCur })));
+}
+ReactDOM.createRoot(document.getElementById('root')).render(
+  h('div', { style: { display: 'flex', flexDirection: 'column', gap: 'var(--sp-1)' } },
+    h('div', { style: { fontSize: 'var(--fs-7)', color: 'var(--sub)' } }, 'Selected (count and red dot) / count addressed to you (alert) / in-tournament dot / settings (⌘,)'),
+    h(Demo)));
+</script>

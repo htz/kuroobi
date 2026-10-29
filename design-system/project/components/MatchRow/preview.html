@@ -1,0 +1,24 @@
+<!-- @dsCard group="Lists" height=380 -->
+<div id="root" style="padding: var(--sp-4); background: var(--bg); color: var(--text); font: var(--fs-4)/1.6 var(--ff);"></div>
+<script>
+KuroobiUI.setLang('ja');
+const h = React.createElement;
+const noop = () => {};
+const cap = (label, ...kids) => h('div', { style: { display: 'flex', flexDirection: 'column', gap: 'var(--sp-1)', minWidth: 0 } },
+  h('div', { style: { fontSize: 'var(--fs-7)', color: 'var(--sub)' } }, label), ...kids);
+const { MatchRow } = KuroobiUI;
+const ROWS = [
+  { mine: true, live: true, opponent: 'ymatioun', black: 'htz', white: 'ymatioun', kind: '同期・ランダム14手' },
+  { mine: false, live: true, black: 'saio', white: 'kbcli', kind: '通常' },
+  { mine: true, live: false, opponent: 'eona', black: 'eona', white: 'htz', kind: '通常', ended: 'adjourned', leftBy: 'eona' },
+  { mine: true, live: false, opponent: 'kbcli', black: 'htz', white: 'kbcli', kind: '同期・ランダム16手', result: 'htz の勝ち +6', ended: 'finished' },
+  { mine: false, live: false, black: 'saio', white: 'rabbit', kind: 'ランダム開局', ended: 'aborted' },
+];
+function Demo() {
+  const [cur, setCur] = React.useState(0);
+  return h('div', { style: { width: 'var(--w-list)', background: 'var(--panel)', border: '1px solid var(--border-weak)' } },
+    ROWS.map((m, i) => h(MatchRow, { key: i, m, active: i === cur, onSelect: () => setCur(i), onClose: noop })));
+}
+ReactDOM.createRoot(document.getElementById('root')).render(
+  cap('Own game in progress (selected) / watching in progress / adjourned / finished / aborted — only finished rows have the close ✕', h(Demo)));
+</script>

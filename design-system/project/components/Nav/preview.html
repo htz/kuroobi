@@ -1,0 +1,29 @@
+<!-- @dsCard group="Layout" height=660 -->
+<div id="root" style="padding: var(--sp-4); background: var(--bg); color: var(--text); font: var(--fs-4)/1.6 var(--ff);"></div>
+<script>
+  KuroobiUI.setLang('ja');
+  const h = React.createElement;
+  const { Nav, NavRow, navLocal, ggsNav } = KuroobiUI;
+  // Settings at the bottom is a single NavRow (as in App.tsx)
+  const settings = (active, onSelect) => h(NavRow, { item: { id: 'settings', label: '設定', icon: 'prefs', hint: '⌘,' }, active, onSelect });
+  // The items are the real navLocal() and ggsNav(conn, badges). Selecting one moves active
+  function Demo({ conn, badges, start }) {
+    const [active, setActive] = React.useState(start);
+    return h('div', { style: { height: 620, display: 'flex', border: '1px solid var(--border)',
+                               borderRadius: 'var(--r-3)', overflow: 'hidden' } },
+      h(Nav, { items: navLocal(), ggsItems: ggsNav(conn, badges), conn, active, onSelect: setActive, footer: settings(active === 'settings', setActive) }));
+  }
+  ReactDOM.createRoot(document.getElementById('root')).render(
+    h('div', { style: { display: 'flex', gap: 'var(--sp-4)', flexWrap: 'wrap' } },
+      // Connected to GGS: 2 requests (alert), own side to move (bad dot), 3 unread, in a tournament (gold dot)
+      h(Demo, { conn: 'online', start: 'ggs-chat', badges: {
+        'ggs-lobby': { count: 2, alert: true },
+        'ggs-play': { count: 1, dot: 'bad' },
+        'ggs-chat': { count: 3, alert: true },
+        'ggs-tourney': { dot: 'gold' },
+      } }),
+      // Not connected: the only GGS item is "Log in"
+      h(Demo, { conn: 'offline', start: 'play' }),
+      // Connecting: the heading's dot is gold
+      h(Demo, { conn: 'connecting', start: 'ggs-login' })));
+</script>

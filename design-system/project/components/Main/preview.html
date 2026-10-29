@@ -1,0 +1,42 @@
+<!-- @dsCard group="Layout" height=625 -->
+<div id="root" style="padding: var(--sp-4); background: var(--bg); color: var(--text); font: var(--fs-4)/1.6 var(--ff);"></div>
+<script>
+  KuroobiUI.setLang('ja');
+  const h = React.createElement;
+  const { Body, Main, Toolbar, Button, Divider, Segmented, Toggle, Dock, Section, BoardFit, Board, ScoreRow, Strength, KifuTable } = KuroobiUI;
+  const noop = () => {};
+  // After f5d6c3d3c4f4f6f3e6e7 (black to move). Board squares are sq = column*8 + row
+  const cells = '..................XX......OXXO.....OOOO...OOXX..................'
+    .split('').map((c) => (c === 'X' ? 1 : c === 'O' ? 2 : 0));
+  // Main is the vertical stack filling the space between Nav and Dock inside Body. The first child is the Toolbar
+  function Scene({ inset }) {
+    const [pov, setPov] = React.useState('b');
+    return h('div', { style: { height: 280, display: 'flex', flexDirection: 'column',
+                               border: '1px solid var(--border)', borderRadius: 'var(--r-3)', overflow: 'hidden' } },
+      h(Body, null,
+        h(Main, { inset },
+          h(Toolbar, { dock: { open: inset, onToggle: () => {} } },
+            h(Button, { variant: 'primary' }, '分析'),
+            h(Button, { title: '⌘O' }, '棋譜を読み込む'),
+            h(Divider),
+            h(Segmented, { value: pov, onChange: setPov, options: [{ value: 'b', label: '黒視点' }, { value: 'w', label: '白視点' }] })),
+          h('div', { style: { flex: 1, minHeight: 0, display: 'flex', flexDirection: 'column' } },
+            h(BoardFit, { padding: 'var(--sp-2) var(--sp-4)' },
+              h(Board, { cells, last: 38, coords: true, grain: false })),
+            h(ScoreRow, { black: 6, white: 8, turn: 'b', meta: '10 手目 e7' }))),
+        // Open the Dock only with inset. Below 1120px wide the Dock overlaps, so
+        // Main's second and later children (the board column) leave w-dock of space on the right so they are not hidden (the Toolbar stays as is).
+        // The study Dock is a single pane without tabs: "Analysis settings" on top, the game record below
+        h(Dock, { tabs: [{ id: 'main', label: '' }], active: 'main', open: inset, scroll: false },
+          h('div', { style: { flex: 'none', paddingTop: 'var(--sp-3)', borderBottom: '1px solid var(--border)' } },
+            h(Section, { title: '解析の設定' },
+              h(Strength, { value: { depth: 12, solve: 16 }, onChange: noop }),
+              h(Toggle, { checked: true, onChange: noop, label: '定石' }))),
+          h('div', { style: { flex: 1, minHeight: 0, display: 'flex', flexDirection: 'column' } },
+            h(KifuTable, { moves: [], decimals: 1 })))));
+  }
+  ReactDOM.createRoot(document.getElementById('root')).render(
+    h('div', { style: { display: 'flex', flexDirection: 'column', gap: 'var(--sp-4)' } },
+      h(Scene, { inset: false }),
+      h(Scene, { inset: true })));
+</script>

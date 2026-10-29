@@ -1,0 +1,26 @@
+<!-- @dsCard group="Layout" height=340 -->
+<div id="root" style="padding: var(--sp-4); background: var(--bg); color: var(--text); font: var(--fs-4)/1.6 var(--ff);"></div>
+<script>
+  KuroobiUI.setLang('ja');
+  const h = React.createElement;
+  const { Section, KeyValue, Button, TableHead, TableRow } = KuroobiUI;
+  const cols = [{ head: '#', w: 28, num: true }, { head: '手' }, { head: '評価', w: 56, right: true, num: true }];
+  const moves = [['f5', '+2'], ['d6', '+1'], ['c3', '+3'], ['d3', '+2'], ['c4', '+4'], ['f4', '+1'], ['f6', '+6'], ['e6', '+3'], ['f3', '+5'], ['c5', '+2']];
+  // Three cases in columns matching the Dock width (w-dock)
+  const col = (children) => h('div', { style: { width: 'var(--w-dock)', height: 300, display: 'flex', flexDirection: 'column',
+                                                  background: 'var(--panel)', border: '1px solid var(--border)', borderRadius: 'var(--r-3)' } }, children);
+  ReactDOM.createRoot(document.getElementById('root')).render(
+    h('div', { style: { display: 'flex', gap: 'var(--sp-4)', flexWrap: 'wrap' } },
+      // Heading + content (keeps the content's height)
+      col(h(Section, { title: '探索' },
+        h(KeyValue, { label: '深さ', value: '24 手読み' }),
+        h(KeyValue, { label: 'ノード数', value: 182634112 }),
+        h(KeyValue, { label: '評価値', value: '+4', big: true }))),
+      // aside: a small control at the right end of the heading
+      col(h(Section, { title: '棋譜', aside: h(Button, { size: 'chip' }, 'コピー') },
+        h(KeyValue, { label: '手数', value: '34 / 60' }),
+        h(KeyValue, { label: '石差', value: '黒 +6' }))),
+      // grow + head: fills the remaining height and scrolls only the content. A table header placed in head stays fixed
+      col(h(Section, { title: '棋譜', grow: true, head: h(TableHead, { cols }) },
+        moves.map(([m, v], i) => h(TableRow, { key: i, cols, on: i === 4 }, i + 1, m, v))))));
+</script>

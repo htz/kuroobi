@@ -1,0 +1,32 @@
+<!-- @dsCard group="GGS" height=400 -->
+<div id="root" style="padding: var(--sp-4); background: var(--bg); color: var(--text); font: var(--fs-4)/1.6 var(--ff);"></div>
+<script>
+  KuroobiUI.setLang('ja');
+  const h = React.createElement;
+  const { FormulaView } = KuroobiUI;
+  const atom = (name, op, val, neg = false) => ({ kind: 'atom', name, op, val, neg });
+  // Example of a player's accept condition. who holds the names for "that player" and "you"
+  const who = { me: 'kbcli', them: '自分' };
+  const accept = { kind: 'all', kids: [
+    atom('rated', '=', ''),
+    atom('or', '≥', '1600'),
+    atom('mt1', '≥', '300'),
+    { kind: 'any', kids: [atom('synchro', '=', ''), atom('rand', '=', '')] },
+  ] };
+  // Decline condition: negation and colour
+  const decline = { kind: 'any', kids: [atom('anti', '=', ''), atom('komi', '=', '', true), atom('mc', '=', 'W')] };
+  // Negated group, functions, and a formula that cannot be shown as a row (dashed frame, sub colour)
+  const unknown = { kind: 'all', kids: [atom('rated', '=', ''),
+    { kind: 'all', neg: true, kids: [atom('rand', '=', ''), atom('synchro', '=', '')] },
+    { ...atom('md', '≤', '0.0'), arg: '+1.0' }, { ...atom('playing', '>', '0'), arg: 'both' },
+    { kind: 'expr', src: 'mr>or+100.0' }] };
+  const row = (label, node) => h('div', { style: { display: 'flex', gap: 'var(--sp-3)', alignItems: 'flex-start',
+                                                     padding: 'var(--sp-2) 0', borderBottom: '1px solid var(--border-weak)' } },
+    h('span', { style: { width: 'var(--w-label)', flex: 'none', fontSize: 'var(--fs-6)', color: 'var(--sub)' } }, label),
+    h('span', { style: { flex: 1, minWidth: 0, fontSize: 'var(--fs-5)' } }, h(FormulaView, { node, top: true, who })));
+  ReactDOM.createRoot(document.getElementById('root')).render(
+    h('div', { style: { maxWidth: 640 } },
+      row('Accept', accept),
+      row('Decline', decline),
+      row('Request', unknown)));
+</script>

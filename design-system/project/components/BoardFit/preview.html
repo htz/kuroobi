@@ -1,0 +1,22 @@
+<!-- @dsCard group="Board" height=355 -->
+<div id="root" style="padding: var(--sp-4); background: var(--bg); color: var(--text); font: var(--fs-4)/1.6 var(--ff);"></div>
+<script>
+KuroobiUI.setLang('ja');
+const h = React.createElement;
+const noop = () => {};
+const cap = (label, ...kids) => h('div', { style: { display: 'flex', flexDirection: 'column', gap: 'var(--sp-1)', minWidth: 0 } },
+  h('div', { style: { fontSize: 'var(--fs-7)', color: 'var(--sub)' } }, label), ...kids);
+const { Board, BoardDefs, BoardFit } = KuroobiUI;
+const P24 = [0,0,0,0,0,0,0,0,0,0,0,0,1,2,0,0,0,0,1,1,0,2,0,2,0,1,1,1,2,2,2,0,0,0,0,1,2,2,2,0,0,0,2,1,2,1,1,1,0,0,0,2,2,2,0,1,0,0,0,0,2,0,0,1];
+const frame = (w, hgt, label) => cap(label,
+  h('div', { style: { width: w, height: hgt, display: 'flex', flexDirection: 'column',
+                       border: '1px dashed var(--border)', borderRadius: 'var(--r-1)', background: 'var(--panel)' } },
+    h(BoardFit, { minHeight: 120, padding: 'var(--sp-2) var(--sp-4)' },
+      h(Board, { cells: P24, legal: [5,14,20,22,31,39,41,49,59,61,62], last: 23, coords: true, onPlay: noop }))));
+ReactDOM.createRoot(document.getElementById('root')).render(
+  h('div', null,
+    h(BoardDefs),
+    h('div', { style: { display: 'flex', gap: 'var(--sp-4)', alignItems: 'flex-start', flexWrap: 'wrap' } },
+      frame(380, 240, 'Wide frame 380×240 · fits the height'),
+      frame(220, 280, 'Tall frame 220×280 · fits the width'))));
+</script>

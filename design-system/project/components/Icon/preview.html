@@ -1,0 +1,23 @@
+<!-- @dsCard group="Display" height=364 -->
+<div id="root" style="padding: var(--sp-4); background: var(--bg); color: var(--text); font: var(--fs-4)/1.6 var(--ff);"></div>
+<script>
+  KuroobiUI.setLang('ja');
+  const h = React.createElement;
+  const noop = () => {};
+  const Case = ({ label, children }) => h('div', { style: { display: 'flex', flexDirection: 'column', gap: 'var(--sp-1)' } },
+    h('div', { style: { fontSize: 'var(--fs-7)', color: 'var(--sub)' } }, label), children);
+  const Row = (...kids) => h('div', { style: { display: 'flex', alignItems: 'center', gap: 'var(--sp-2)', flexWrap: 'wrap' } }, ...kids);
+  const Stack = (...kids) => h('div', { style: { display: 'flex', flexDirection: 'column', gap: 'var(--sp-4)' } }, ...kids);
+  const render = (el) => ReactDOM.createRoot(document.getElementById('root')).render(el);
+  const { Icon } = KuroobiUI;
+  const NAMES = ['play', 'study', 'book', 'results', 'prefs', 'ggs-play', 'ggs-lobby', 'ggs-users', 'ggs-chat',
+    'ggs-tourney', 'ggs-console', 'login', 'cpu', 'memory', 'check', 'alert', 'back', 'close', 'panel'];
+  const cell = (name) => h('div', { key: name, style: { display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 'var(--sp-1)',
+    padding: 'var(--sp-2) 0', borderRadius: 'var(--r-1)', background: 'var(--card)' } },
+    h(Icon, { name }), h('code', { style: { fontFamily: 'var(--ff-mono)', fontSize: 'var(--fs-7)', color: 'var(--sub)' } }, name));
+  render(Stack(
+    h(Case, { label: 'All ' + NAMES.length + ' IconName kinds (size 17)' },
+      h('div', { style: { display: 'grid', gridTemplateColumns: 'repeat(5, minmax(0, 96px))', gap: 'var(--sp-2)' } }, NAMES.map(cell))),
+    h(Case, { label: 'size: 12 / 13 / 15 / 17 / 24' }, Row(
+      ...[12, 13, 15, 17, 24].map(s => h(Icon, { key: s, name: 'ggs-play', size: s }))))));
+</script>

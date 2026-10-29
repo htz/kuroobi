@@ -1,0 +1,13 @@
+<!-- @dsCard group="Layout" height=300 -->
+<div id="root" style="padding: var(--sp-4); background: var(--bg); color: var(--text); font: var(--fs-4)/1.6 var(--ff);"></div>
+<script>
+KuroobiUI.setLang('ja');
+const h = React.createElement;
+const noop = () => {};
+const cap = (label, ...kids) => h('div', { style: { display: 'flex', flexDirection: 'column', gap: 'var(--sp-1)', minWidth: 0 } },
+  h('div', { style: { fontSize: 'var(--fs-7)', color: 'var(--sub)' } }, label), ...kids);
+const stack = (...kids) => h('div', { style: { display: 'flex', flexDirection: 'column', gap: 'var(--sp-4)' } }, ...kids);
+const render = (el) => ReactDOM.createRoot(document.getElementById('root')).render(el);
+const { Confirm } = KuroobiUI;
+render(h(Confirm, { title: '新規対局にしますか?', body: '今の棋譜は消えます (検討の棋譜も同じものです)。残すときは先に「保存」してください。', ok: '新規対局', onOk: noop, onCancel: noop }));
+</script>

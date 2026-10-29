@@ -1,0 +1,31 @@
+<!-- @dsCard group="Actions" height=232 -->
+<div id="root" style="padding: var(--sp-4); background: var(--bg); color: var(--text); font: var(--fs-4)/1.6 var(--ff);"></div>
+<script>
+  KuroobiUI.setLang('ja');
+  const h = React.createElement;
+  const noop = () => {};
+  const Case = ({ label, children }) => h('div', { style: { display: 'flex', flexDirection: 'column', gap: 'var(--sp-1)' } },
+    h('div', { style: { fontSize: 'var(--fs-7)', color: 'var(--sub)' } }, label), children);
+  const Row = (...kids) => h('div', { style: { display: 'flex', alignItems: 'center', gap: 'var(--sp-2)', flexWrap: 'wrap' } }, ...kids);
+  const Stack = (...kids) => h('div', { style: { display: 'flex', flexDirection: 'column', gap: 'var(--sp-4)' } }, ...kids);
+  const render = (el) => ReactDOM.createRoot(document.getElementById('root')).render(el);
+  const { Button } = KuroobiUI;
+  render(Stack(
+    h(Case, { label: 'variant (size=ctrl)' }, Row(
+      h(Button, { variant: 'primary', onClick: noop }, '対局開始'),
+      h(Button, { onClick: noop }, '新規対局'),
+      h(Button, { variant: 'ghost', onClick: noop }, '式を直接書く'),
+      h(Button, { variant: 'danger', onClick: noop }, '投了'))),
+    h(Case, { label: 'size: chip / row / ctrl / field' }, Row(
+      h(Button, { size: 'chip', onClick: noop }, 'キャンセル'),
+      h(Button, { size: 'row', onClick: noop }, 'キャンセル'),
+      h(Button, { size: 'ctrl', onClick: noop }, 'キャンセル'),
+      h(Button, { size: 'field', variant: 'primary', onClick: noop }, '反映する'))),
+    h(Case, { label: 'disabled / square (game record viewer stepping)' }, Row(
+      h(Button, { variant: 'primary', disabled: true }, '分析'),
+      h(Button, { disabled: true, title: '⌘Z' }, '待った'),
+      h(Button, { size: 'field', square: true, title: '最初へ', onClick: noop }, '|◀'),
+      h(Button, { size: 'field', square: true, title: '1 手戻る', onClick: noop }, '◀'),
+      h(Button, { size: 'field', square: true, title: '1 手進む', onClick: noop }, '▶'),
+      h(Button, { size: 'field', square: true, title: '最後へ', disabled: true }, '▶|')))));
+</script>

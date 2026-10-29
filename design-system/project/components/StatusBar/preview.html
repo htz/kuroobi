@@ -1,0 +1,32 @@
+<!-- @dsCard group="Layout" height=215 -->
+<div id="root" style="padding: var(--sp-4); background: var(--bg); color: var(--text); font: var(--fs-4)/1.6 var(--ff);"></div>
+<script>
+  KuroobiUI.setLang('ja');
+  const h = React.createElement;
+  const { StatusBar, Dot } = KuroobiUI;
+  // The bar's pieces as GlobalStatus.tsx draws them: a label, the number in bold, the unit.
+  const Stat = ({ dot, label, value, unit }) => h('span', { style: { display: 'flex', alignItems: 'center', gap: 'var(--sp-1)', whiteSpace: 'nowrap' } },
+    dot && h(Dot, { tone: dot }), label, h('b', { style: { color: 'var(--text)', fontWeight: 600, fontVariantNumeric: 'tabular-nums' } }, value), unit);
+  const Load = ({ label, ratio, value, unit }) => h('span', { style: { display: 'flex', alignItems: 'center', gap: 'var(--sp-1)', whiteSpace: 'nowrap' } },
+    label, h('span', { style: { display: 'inline-block', width: 32, height: 4, borderRadius: 'var(--r-pill)', background: 'var(--track)', overflow: 'hidden' } },
+      h('span', { style: { display: 'block', height: '100%', width: Math.round(ratio * 100) + '%', background: ratio >= 0.9 ? 'var(--bad)' : ratio >= 0.7 ? 'var(--gold)' : 'var(--ok)' } })),
+    h('b', { style: { color: ratio >= 0.9 ? 'var(--bad)' : ratio >= 0.7 ? 'var(--gold)' : 'var(--text)', fontWeight: 600, fontVariantNumeric: 'tabular-nums' } }, value), unit);
+  const right = (cpu, ggs) => h(React.Fragment, null,
+    h(Load, { label: 'CPU', ratio: cpu / 100, value: String(cpu), unit: '%' }),
+    h(Load, { label: 'メモリ', ratio: 0.58, value: '18.3', unit: 'GB' }),
+    h(Stat, { label: 'GGS', value: ggs }));
+  const box = (label, bar) => h('div', null,
+    h('div', { style: { fontSize: 'var(--fs-7)', color: 'var(--sub)', margin: 'var(--sp-2) 0 var(--sp-1)' } }, label),
+    h('div', { style: { border: '1px solid var(--border)', borderRadius: 'var(--r-3)', overflow: 'hidden' } }, bar));
+  ReactDOM.createRoot(document.getElementById('root')).render(
+    h('div', { style: { display: 'flex', flexDirection: 'column' } },
+      box('Thinking (work on the left, its details after)', h(StatusBar, {
+        left: h(React.Fragment, null,
+          h(Stat, { dot: 'accent', label: '思考中', value: '3.4', unit: '秒' }),
+          h(Stat, { label: 'ノード', value: '1.83 億' }),
+          h(Stat, { label: '速度', value: '53.7', unit: 'Mnps' })),
+        right: right(96, '接続中 (alice · local)'),
+      })),
+      box('Idle (left is empty)', h(StatusBar, { right: right(4, '接続中 (alice · local)') })),
+      box('GGS not connected', h(StatusBar, { right: right(4, '未接続') }))));
+</script>

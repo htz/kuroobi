@@ -1,0 +1,31 @@
+<!-- @dsCard group="Lists" height=345 -->
+<div id="root" style="padding: var(--sp-4); background: var(--bg); color: var(--text); font: var(--fs-4)/1.6 var(--ff);"></div>
+<script>
+KuroobiUI.setLang('ja');
+const h = React.createElement;
+const noop = () => {};
+const cap = (label, ...kids) => h('div', { style: { display: 'flex', flexDirection: 'column', gap: 'var(--sp-1)', minWidth: 0 } },
+  h('div', { style: { fontSize: 'var(--fs-7)', color: 'var(--sub)' } }, label), ...kids);
+const { ResultHead, ResultRow, List } = KuroobiUI;
+function Demo() {
+  const [hover, setHover] = React.useState('saio');
+  const row = (key, p) => h(ResultRow, { key, ...p, picked: hover === key,
+    onHover: (on) => setHover(on ? key : null), onClick: p.dim ? undefined : noop });
+  return h('div', { style: { maxWidth: 560 } },
+    h(ResultHead, { note: true, rating: true }),
+    h(List, null,
+      row('ymatioun', { win: true, opponent: 'ymatioun', discs: 12, when: '14:22', note: '同期・ランダム14手', rating: 2041.9 }),
+      row('saio', { win: false, opponent: 'saio', discs: -6, when: '10/25', note: '通常', rating: 2035.2 }),
+      row('kbcli', { win: false, draw: true, opponent: 'kbcli', discs: 0, when: '10/24', note: '同期・ランダム16手', rating: 2037.8 }),
+      row('rabbit', { win: true, opponent: 'rabbit', discs: 4, when: '10/21', note: 'ランダム開局', rating: 2029.4, dim: true })));
+}
+ReactDOM.createRoot(document.getElementById('root')).render(
+  h('div', { style: { display: 'flex', flexDirection: 'column', gap: 'var(--sp-4)' } },
+    cap('Win, loss (picked, linked to the rating chart), draw, no record (dim)', h(Demo)),
+    cap('Adjourned (no disc difference) · table without the format and rating columns',
+      h('div', { style: { maxWidth: 560 } },
+        h(ResultHead, null),
+        h(List, null,
+          h(ResultRow, { win: false, adjourned: true, opponent: 'eona', discs: 0, when: '10/23', onClick: noop }),
+          h(ResultRow, { win: true, opponent: 'kbcli', discs: 20, when: '10/22', onClick: noop }))))));
+</script>

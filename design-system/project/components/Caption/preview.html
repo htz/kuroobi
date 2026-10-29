@@ -1,0 +1,18 @@
+<!-- @dsCard group="Display" height=180 -->
+<div id="root" style="padding: var(--sp-4); background: var(--bg); color: var(--text); font: var(--fs-4)/1.6 var(--ff);"></div>
+<script>
+KuroobiUI.setLang('ja');
+const h = React.createElement;
+const noop = () => {};
+const cap = (label, ...kids) => h('div', { style: { display: 'flex', flexDirection: 'column', gap: 'var(--sp-1)', minWidth: 0 } },
+  h('div', { style: { fontSize: 'var(--fs-7)', color: 'var(--sub)' } }, label), ...kids);
+const stack = (...kids) => h('div', { style: { display: 'flex', flexDirection: 'column', gap: 'var(--sp-4)' } }, ...kids);
+const render = (el) => ReactDOM.createRoot(document.getElementById('root')).render(el);
+const { Caption, TextField } = KuroobiUI;
+render(stack(
+  cap('Small heading above a field', h('div', { style: { display: 'flex', flexDirection: 'column', gap: 'var(--sp-2)', maxWidth: 320 } },
+    h(Caption, null, '保存したアカウント'),
+    h(TextField, { value: 'ymatioun', onChange: noop }))),
+  cap('Divisions inside a menu', h('div', { style: { display: 'flex', gap: 'var(--sp-4)' } },
+    h(Caption, null, 'サーバー'), h(Caption, null, 'プロフィール'), h(Caption, null, '概要')))));
+</script>

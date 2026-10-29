@@ -1,0 +1,20 @@
+<!-- @dsCard group="Board" height=270 -->
+<div id="root" style="padding: var(--sp-4); background: var(--bg); color: var(--text); font: var(--fs-4)/1.6 var(--ff);"></div>
+<script>
+KuroobiUI.setLang('ja');
+const h = React.createElement;
+const noop = () => {};
+const cap = (label, ...kids) => h('div', { style: { display: 'flex', flexDirection: 'column', gap: 'var(--sp-1)', minWidth: 0 } },
+  h('div', { style: { fontSize: 'var(--fs-7)', color: 'var(--sub)' } }, label), ...kids);
+const { ScoreRow } = KuroobiUI;
+const frame = (label, row) => cap(label, h('div', { style: { background: 'var(--panel)', borderRadius: 'var(--r-1)' } }, row));
+const meta = h('span', { style: { display: 'flex', alignItems: 'center', gap: 'var(--sp-3)' } },
+  'この手の評価',
+  h('b', { style: { fontSize: 'var(--fs-3)', fontWeight: 600, color: 'var(--text)', fontVariantNumeric: 'tabular-nums' } }, '+9.1'),
+  h('span', { style: { color: 'var(--bad)', fontVariantNumeric: 'tabular-nums' } }, '▼7'));
+ReactDOM.createRoot(document.getElementById('root')).render(
+  h('div', { style: { display: 'flex', flexDirection: 'column', gap: 'var(--sp-3)', maxWidth: 640 } },
+    frame('In a match · black to move · with main time', h(ScoreRow, { black: 13, white: 15, turn: 'b', blackClock: '4:12', whiteClock: '3:58' })),
+    frame('Game over', h(ScoreRow, { black: 38, white: 26, meta: '黒の勝ち', blackClock: '1:47', whiteClock: '2:31' })),
+    frame('Study · move 32 (losing move by white)', h(ScoreRow, { black: 23, white: 13, turn: 'b', meta }))));
+</script>

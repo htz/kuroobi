@@ -1,0 +1,17 @@
+<!-- @dsCard group="Display" height=90 -->
+<div id="root" style="padding: var(--sp-4); background: var(--bg); color: var(--text); font: var(--fs-4)/1.6 var(--ff);"></div>
+<script>
+  KuroobiUI.setLang('ja');
+  const h = React.createElement;
+  const noop = () => {};
+  const Case = ({ label, children }) => h('div', { style: { display: 'flex', flexDirection: 'column', gap: 'var(--sp-1)' } },
+    h('div', { style: { fontSize: 'var(--fs-7)', color: 'var(--sub)' } }, label), children);
+  const Row = (...kids) => h('div', { style: { display: 'flex', alignItems: 'center', gap: 'var(--sp-2)', flexWrap: 'wrap' } }, ...kids);
+  const Stack = (...kids) => h('div', { style: { display: 'flex', flexDirection: 'column', gap: 'var(--sp-4)' } }, ...kids);
+  const render = (el) => ReactDOM.createRoot(document.getElementById('root')).render(el);
+  const { Dot } = KuroobiUI;
+  const item = (tone, text) => h('span', { style: { display: 'inline-flex', alignItems: 'center', gap: 'var(--sp-0)' } }, h(Dot, { tone }), text);
+  render(Stack(
+    h(Case, { label: 'tone: accent / ok / gold / sub' }, Row(
+      item('accent', '思考中'), item('ok', '接続中'), item('gold', 'ログイン中'), item('sub', '未接続')))));
+</script>

@@ -1,0 +1,33 @@
+<!-- @dsCard group="Lists" height=120 -->
+<div id="root" style="padding: var(--sp-4); background: var(--bg); color: var(--text); font: var(--fs-4)/1.6 var(--ff);"></div>
+<script>
+KuroobiUI.setLang('ja');
+const h = React.createElement;
+const noop = () => {};
+const cap = (label, ...kids) => h('div', { style: { display: 'flex', flexDirection: 'column', gap: 'var(--sp-1)', minWidth: 0 } },
+  h('div', { style: { fontSize: 'var(--fs-7)', color: 'var(--sub)' } }, label), ...kids);
+const { TableHead, TableRow } = KuroobiUI;
+const kifu = [
+  { head: '#', w: 22, right: true },
+  { head: '手', w: 58 },
+  { head: '評価', w: 56, right: true, num: true },
+  { head: '時間', w: 34, right: true, num: true },
+  { head: '出所', right: true, clip: true },
+];
+const box = (label, ...el) => cap(label, h('div', { style: { width: 'var(--w-dock)', background: 'var(--panel)' } }, ...el));
+ReactDOM.createRoot(document.getElementById('root')).render(
+  h('div', { style: { display: 'flex', gap: 'var(--sp-5)', flexWrap: 'wrap' } },
+    box('Columns passed with cols (record columns)',
+      h(TableHead, { cols: kifu }),
+      h(TableRow, { cols: kifu, onClick: noop },
+        h('span', { style: { fontSize: 'var(--fs-7)', color: 'var(--sub)' } }, 9),
+        h('span', { style: { fontFamily: 'var(--ff-mono)' } }, 'e6'),
+        h('span', null, '-2.0'), h('span', { style: { color: 'var(--sub)', fontSize: 'var(--fs-6)' } }, ''),
+        h('span', { style: { color: 'var(--gold)', fontSize: 'var(--fs-6)' } }, '定石'))),
+    box('Laid out freely with children · pad=var(--sp-2) (game results header)',
+      h(TableHead, { pad: 'var(--sp-2)' },
+        h('span', { style: { width: 24, flex: 'none' } }, '勝敗'),
+        h('span', { style: { flex: 1, minWidth: 0 } }, '相手'),
+        h('span', { style: { width: 44, flex: 'none', textAlign: 'right' } }, '石差'),
+        h('span', { style: { width: 64, flex: 'none', textAlign: 'right' } }, '日付')))));
+</script>

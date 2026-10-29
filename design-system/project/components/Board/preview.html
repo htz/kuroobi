@@ -1,0 +1,26 @@
+<!-- @dsCard group="Board" height=720 -->
+<div id="root" style="padding: var(--sp-4); background: var(--bg); color: var(--text); font: var(--fs-4)/1.6 var(--ff);"></div>
+<script>
+KuroobiUI.setLang('ja');
+const h = React.createElement;
+const noop = () => {};
+const cap = (label, ...kids) => h('div', { style: { display: 'flex', flexDirection: 'column', gap: 'var(--sp-1)', minWidth: 0 } },
+  h('div', { style: { fontSize: 'var(--fs-7)', color: 'var(--sub)' } }, label), ...kids);
+const { Board, BoardDefs } = KuroobiUI;
+const P24 = [0,0,0,0,0,0,0,0,0,0,0,0,1,2,0,0,0,0,1,1,0,2,0,2,0,1,1,1,2,2,2,0,0,0,0,1,2,2,2,0,0,0,2,1,2,1,1,1,0,0,0,2,2,2,0,1,0,0,0,0,2,0,0,1];
+const P44 = [0,0,0,0,2,2,2,0,1,0,0,0,2,2,0,1,1,1,1,1,2,1,1,1,1,1,1,1,2,1,1,1,0,1,1,1,1,1,1,1,0,1,1,1,1,1,1,1,0,0,2,2,2,2,0,1,0,0,2,2,2,2,2,1];
+const P6 = [0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,1,1,0,0,0,0,0,0,2,1,2,2,0,0,0,0,0,1,2,0,0,0,0,0,0,2,1,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0];
+const box = (label, board) => cap(label, h('div', { style: { width: 300, height: 300 } }, board));
+ReactDOM.createRoot(document.getElementById('root')).render(
+  h('div', null,
+    h(BoardDefs),
+    h('div', { style: { display: 'grid', gridTemplateColumns: 'repeat(2, 300px)', gap: 'var(--sp-4)' } },
+      box('In play · move 24, Black to move (legal moves and last move c8)',
+        h(Board, { cells: P24, legal: [5,14,20,22,31,39,41,49,59,61,62], last: 23, coords: true, onPlay: noop })),
+      box('Evals shown · 18-ply search',
+        h(Board, { cells: P24, legal: [5,14,20,22,31,39,41,49,59,61,62], last: 23, evals: {"20":{"score":-0.4,"src":{"depth":18},"best":true},"41":{"score":-1.6,"src":{"depth":18},"best":false},"59":{"score":-2.2,"src":{"depth":18},"best":false},"5":{"score":-3.1,"src":{"depth":18},"best":false},"39":{"score":-4.0,"src":{"depth":18},"best":false},"31":{"score":-5.2,"src":{"depth":18},"best":false},"61":{"score":-6.8,"src":{"depth":18},"best":false},"22":{"score":-7.5,"src":{"depth":18},"best":false},"62":{"score":-9.4,"src":{"depth":18},"best":false},"49":{"score":-11.6,"src":{"depth":18},"best":false},"14":{"score":-14.2,"src":{"depth":18},"best":false}}, coords: true, onPlay: noop })),
+      box('Opening · book moves show "Book"',
+        h(Board, { cells: P6, legal: [17,20,21,25,30,33,34,37,42,45,51], last: 43, evals: {"45":{"score":-1,"src":{"book":true},"best":true},"34":{"score":-3,"src":{"book":true},"best":false},"20":{"score":-4,"src":{"book":true},"best":false},"42":{"score":-4.6,"src":{"depth":14},"best":false},"37":{"score":-5.1,"src":{"depth":14},"best":false},"30":{"score":-6.8,"src":{"depth":14},"best":false},"25":{"score":-6.3,"src":{"depth":14},"best":false},"51":{"score":-7.9,"src":{"depth":14},"best":false},"21":{"score":-8.4,"src":{"depth":14},"best":false},"17":{"score":-9.0,"src":{"depth":14},"best":false},"33":{"score":-10.6,"src":{"depth":14},"best":false}}, coords: true, onPlay: noop })),
+      box('Endgame · solve · viewed from White (flip) · moves blocked while thinking (disabled)',
+        h(Board, { cells: P44, legal: [3,11,57], last: 6, evals: {"11":{"score":12,"src":{"exact":true},"best":true},"3":{"score":8,"src":{"exact":true},"best":false},"57":{"score":-2,"src":{"exact":true},"best":false}}, coords: true, flip: true, disabled: true })))));
+</script>

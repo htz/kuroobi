@@ -1,0 +1,49 @@
+<!-- @dsCard height=288 -->
+<div class="cover">
+  <svg class="art" viewBox="0 0 960 288" aria-hidden="true">
+    <!--
+      blocks: board (288x256, the play surface) · gold (160x120, the book mark) · accent (176x56, the "you" colour) · stone-white (48px disc; black would vanish on the dark ground)
+      arrangement: one tall board slab bleeding off the right edge, with the book gold, the accent and a white stone stacked to its left
+      pattern: a literal motif, the 8x8 board: a few discs placed on the line grid at the board's cell pitch (32px, sp-6), like an opening
+      steps and radii: sp-6 pitch, sp-4 gaps, r-4 on the panel, r-2 on the accent, discs at half their side
+    -->
+    <rect class="gold r4" x="496" y="16" width="160" height="120" />
+    <rect class="accent r2" x="496" y="152" width="160" height="56" />
+    <circle class="white" cx="576" cy="248" r="24" />
+    <rect class="board" x="672" y="16" width="288" height="256" />
+    <g class="grid">
+      <line x1="704" y1="16" x2="704" y2="272" /><line x1="736" y1="16" x2="736" y2="272" />
+      <line x1="768" y1="16" x2="768" y2="272" /><line x1="800" y1="16" x2="800" y2="272" />
+      <line x1="832" y1="16" x2="832" y2="272" /><line x1="864" y1="16" x2="864" y2="272" />
+      <line x1="896" y1="16" x2="896" y2="272" /><line x1="928" y1="16" x2="928" y2="272" />
+      <line x1="672" y1="48" x2="960" y2="48" /><line x1="672" y1="80" x2="960" y2="80" />
+      <line x1="672" y1="112" x2="960" y2="112" /><line x1="672" y1="144" x2="960" y2="144" />
+      <line x1="672" y1="176" x2="960" y2="176" /><line x1="672" y1="208" x2="960" y2="208" />
+      <line x1="672" y1="240" x2="960" y2="240" />
+    </g>
+    <circle class="ink" cx="784" cy="128" r="12" /><circle class="white" cx="816" cy="128" r="12" />
+    <circle class="white" cx="784" cy="160" r="12" /><circle class="ink" cx="816" cy="160" r="12" />
+    <circle class="ink" cx="848" cy="160" r="12" /><circle class="ink" cx="816" cy="96" r="12" />
+    <circle class="white" cx="752" cy="192" r="12" />
+  </svg>
+  <div class="name">
+    <div class="title">KUROOBI</div>
+    <div class="tag">オセロの思考エンジンと、対局・検討・GGS のためのデスクトップアプリ</div>
+  </div>
+</div>
+<style>
+  .cover { position: relative; width: 960px; height: 288px; background: var(--bg); overflow: hidden; }
+  .art { position: absolute; inset: 0; width: 960px; height: 288px; }
+  .gold { fill: var(--gold); }
+  .accent { fill: var(--accent); }
+  .board { fill: var(--board); }
+  .ink { fill: var(--stone-black); stroke: var(--stone-black-edge); stroke-width: 1; }
+  .white { fill: var(--stone-white); stroke: var(--stone-white-edge); stroke-width: 1; }
+  .grid line { stroke: var(--line); stroke-width: 1.5; }
+  .r4 { rx: var(--r-4); }
+  .r2 { rx: var(--r-2); }
+  .name { position: absolute; left: 40px; bottom: 32px; max-width: 420px; }
+  .title { font: 700 96px/0.92 var(--font-sans, -apple-system, BlinkMacSystemFont, "Hiragino Sans", sans-serif); color: var(--text); letter-spacing: 0.02em; }
+  .tag { margin-top: 16px; font-size: 13px; line-height: 1.5; color: var(--sub); }
+</style>
+<script>/* static cover */</script>

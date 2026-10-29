@@ -1,0 +1,22 @@
+<!-- @dsCard group="GGS" height=235 -->
+<div id="root" style="padding: var(--sp-4); background: var(--bg); color: var(--text); font: var(--fs-4)/1.6 var(--ff);"></div>
+<script>
+  KuroobiUI.setLang('ja');
+  const h = React.createElement;
+  const { ConsoleLog } = KuroobiUI;
+  // dir: out = a line you sent (accent and ›), in = a line from the server, app = an app note (sub)
+  const lines = [
+    { seq: 1, dir: 'app', text: '接続しました skatgame.net:5000' },
+    { seq: 2, dir: 'out', text: 'ts match' },
+    { seq: 3, dir: 'in', text: '/os: +match .4812.1 1873.2 kbcli 1802.4 htz 8 R' },
+    { seq: 4, dir: 'in', text: '/os: +match .4815 2201.7 saio 1655.0 ymatioun s8r14 R' },
+    { seq: 5, dir: 'out', text: 'ts ask s8r14 05:00//02:00 kbcli' },
+    { seq: 6, dir: 'in', text: '/os: + .4820 s8r14 R 05:00//02:00 htz 1802.4 kbcli 1873.2' },
+    { seq: 7, dir: 'app', text: '自動対局: 申し込みを受け付けました' },
+  ];
+  // ConsoleLog fills the parent's height with flex: 1 and scrolls inside. Give the parent a height
+  ReactDOM.createRoot(document.getElementById('root')).render(
+    h('div', { style: { height: 190, display: 'flex', flexDirection: 'column',
+                        border: '1px solid var(--border)', borderRadius: 'var(--r-3)' } },
+      h(ConsoleLog, { lines })));
+</script>

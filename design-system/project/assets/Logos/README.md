@@ -1,0 +1,2 @@
+- `kuroobi.svg`: the wordmark "KUROOBI". Stroke and fill are `currentColor`, so it is drawn in the text colour of where it is placed. The app places it at the top of the left nav in the `text` colour, 100px wide. Shown through `<img>` it renders black, so screens embed the SVG directly.
+- `icon.svg`: the app icon. Stones on a rounded square in the board's green (#77914e, the same as `board`). Its colours are fixed and do not change with the theme.

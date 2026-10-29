@@ -1,0 +1,42 @@
+<!-- @dsCard group="Lists" height=350 -->
+<div id="root" style="padding: var(--sp-4); background: var(--bg); color: var(--text); font: var(--fs-4)/1.6 var(--ff);"></div>
+<script>
+KuroobiUI.setLang('ja');
+const h = React.createElement;
+const noop = () => {};
+const cap = (label, ...kids) => h('div', { style: { display: 'flex', flexDirection: 'column', gap: 'var(--sp-1)', minWidth: 0 } },
+  h('div', { style: { fontSize: 'var(--fs-7)', color: 'var(--sub)' } }, label), ...kids);
+const cols = [
+  { head: '順位', w: 48, right: true, num: true },
+  { head: 'プレイヤー', clip: true },
+  { head: '勝点', w: 64, right: true, num: true },
+  { head: '勝-分-敗', w: 104, right: true, num: true },
+  { head: '平均石差', w: 88, right: true, num: true },
+];
+const RANKS = [
+  { name: 'ymatioun', pts: 5, w: 5, d: 0, l: 1, disc: '+14.3' },
+  { name: 'htz', pts: 4.5, w: 4, d: 1, l: 1, disc: '+9.8' },
+  { name: 'saio', pts: 3, w: 3, d: 0, l: 3, disc: '-1.2' },
+  { name: 'kbcli', pts: 1.5, w: 1, d: 1, l: 4, disc: '-11.6' },
+  { name: 'eona', pts: 1, w: 1, d: 0, l: 5, disc: '-18.4' },
+];
+const signed = (s) => s;
+const rankRow = (TableRow, r, i, login) => h(TableRow, { key: r.name, cols, on: r.name === login },
+  h('span', { style: { fontWeight: 700, color: i === 0 ? 'var(--gold)' : 'var(--sub)' } }, i + 1),
+  h('span', { className: 'k-sel', style: { fontWeight: r.name === login ? 700 : 500 } }, r.name),
+  h('span', { style: { fontWeight: 700 } }, r.pts),
+  h('span', null, h('span', { style: { color: 'var(--ok)' } }, r.w), ' - ', r.d, ' - ', h('span', { style: { color: 'var(--bad)' } }, r.l)),
+  h('span', { style: { color: parseFloat(r.disc) > 0 ? 'var(--ok)' : 'var(--bad)' } }, r.disc));
+
+const { List, TableHead, TableRow, ResultRow } = KuroobiUI;
+const box = (label, el) => cap(label, h('div', { style: { maxWidth: 520, background: 'var(--bg)' } }, el));
+ReactDOM.createRoot(document.getElementById('root')).render(
+  h('div', { style: { display: 'flex', flexDirection: 'column', gap: 'var(--sp-4)' } },
+    box('Tournament standings (TableHead + TableRow stacked by List)',
+      h(List, null, h(TableHead, { cols }), RANKS.map((r, i) => rankRow(TableRow, r, i, 'htz')))),
+    box('Match results (ResultRow stacked by List)',
+      h(List, null,
+        h(ResultRow, { win: true, opponent: 'ymatioun', discs: 12, when: '14:22', rating: 2041.9, onClick: noop }),
+        h(ResultRow, { win: false, opponent: 'saio', discs: -6, when: '10/25', rating: 2035.2, onClick: noop }),
+        h(ResultRow, { win: false, draw: true, opponent: 'kbcli', discs: 0, when: '10/24', rating: 2037.8, onClick: noop })))));
+</script>

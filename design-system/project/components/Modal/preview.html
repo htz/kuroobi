@@ -1,0 +1,42 @@
+<!-- @dsCard group="Layout" height=690 -->
+<div id="root" style="padding: var(--sp-4); background: var(--bg); color: var(--text); font: var(--fs-4)/1.6 var(--ff);"></div>
+<script>
+  KuroobiUI.setLang('ja');
+  const h = React.createElement;
+  const { Modal, Button, Segmented, KeyValue, Section } = KuroobiUI;
+  const noop = () => {};
+  // Modal is only the box. The app always places it inside an Overlay (scrim); the preview lays them out without a scrim to compare shapes
+  const tabs = [{ value: 'engine', label: 'エンジン' }, { value: 'view', label: '表示' }, { value: 'ggs', label: 'GGS' }];
+  function SettingsLike() {
+    const [tab, setTab] = React.useState('engine');
+    return h(Modal, { title: '設定', width: '440px', onClose: noop, scroll: true,
+                      band: h('div', { style: { flex: 1, display: 'flex', justifyContent: 'center' } },
+                        h(Segmented, { value: tab, onChange: setTab, options: tabs })) },
+      h(KeyValue, { label: 'スレッド', value: '8 (自動)' }),
+      h(KeyValue, { label: 'NNUE 重み', value: '読み込み済み' }),
+      h(KeyValue, { label: '定石', value: '読み込み済み' }));
+  }
+  ReactDOM.createRoot(document.getElementById('root')).render(
+    h('div', { style: { display: 'flex', flexDirection: 'column', gap: 'var(--sp-5)', alignItems: 'flex-start' } },
+      // Confirmation (Confirm): title + body + actions. Default width w-modal
+      h(Modal, { title: '27 手目まで戻します', onClose: noop,
+                 body: '自分の手と KUROOBI の手を 1 手ずつ戻します。戻した先から指し直せます。',
+                 actions: h(React.Fragment, null,
+                   h('span', { style: { marginLeft: 'auto' } }),
+                   h(Button, { size: 'field' }, 'キャンセル'),
+                   h(Button, { size: 'field', variant: 'primary' }, '戻す')) }),
+      // Box with content: sub + children, width w-modal-wide
+      h(Modal, { title: '棋譜を読み込む', sub: 'GGF・f5d6… 形式・盤面つきのいずれでも読めます。',
+                 width: 'var(--w-modal-wide)', onClose: noop,
+                 actions: h(React.Fragment, null,
+                   h(Button, { size: 'field' }, 'ファイルから…'),
+                   h('span', { style: { marginLeft: 'auto' } }),
+                   h(Button, { size: 'field' }, 'キャンセル'),
+                   h(Button, { size: 'field', variant: 'primary' }, '読み込む')) },
+        h('textarea', { className: 'k-input', readOnly: true, value: 'f5d6c3d3c4f4f6f3e6e7',
+                        style: { height: 80, resize: 'none', padding: 'var(--sp-3)', borderRadius: 'var(--r-3)',
+                                 background: 'var(--bg)', color: 'var(--text)', border: '1px solid var(--border)',
+                                 fontFamily: 'var(--ff-mono)', fontSize: 'var(--fs-6)', lineHeight: 1.6 } })),
+      // band (the band below the heading) + scroll. The shape of the settings screen
+      h(SettingsLike)));
+</script>

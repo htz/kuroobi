@@ -1,0 +1,72 @@
+<!-- @dsCard group="Layout" height=265 -->
+<div id="root" style="padding: var(--sp-4); background: var(--bg); color: var(--text); font: var(--fs-4)/1.6 var(--ff);"></div>
+<script>
+  KuroobiUI.setLang('ja');
+  const h = React.createElement;
+  const { Toolbar, Button, Divider, Segmented, Select, Toggle, StoneDot, Busy, useToolbarCompact } = KuroobiUI;
+  const noop = () => {};
+  const box = (label, bar) => h('div', null,
+    h('div', { style: { fontSize: 'var(--fs-7)', color: 'var(--sub)', margin: 'var(--sp-2) 0 var(--sp-1)' } }, label),
+    h('div', { style: { border: '1px solid var(--border)', borderRadius: 'var(--r-3)', overflow: 'hidden' } }, bar));
+  const sides = [
+    { value: 'black', label: h(React.Fragment, null, h(StoneDot, { color: 'b' }), '黒') },
+    { value: 'white', label: h(React.Fragment, null, h(StoneDot, { color: 'w' }), '白') },
+    { value: 'both', label: '両方' },
+    { value: 'off', label: 'なし' },
+  ];
+  // When the width runs out, Toolbar turns compact. Components inside collapse with useToolbarCompact() (same as RolePicker in App.tsx)
+  function RolePicker({ value, onChange }) {
+    if (useToolbarCompact()) {
+      return h(Select, { value, onChange, width: 116, title: 'KUROOBI の担当',
+                         options: [['black', '黒'], ['white', '白'], ['both', '両方'], ['off', 'なし']] });
+    }
+    return h(React.Fragment, null,
+      h('span', { style: { fontSize: 'var(--fs-6)', color: 'var(--sub)' } }, 'KUROOBI'),
+      h(Segmented, { value, onChange, options: sides }));
+  }
+  function Play() {
+    const [side, setSide] = React.useState('white');
+    const [hint, setHint] = React.useState(true);
+    const [dock, setDock] = React.useState(false);
+    // dock: the panel toggle button appears at the right end only below 1120px wide
+    return h(Toolbar, { dock: { open: dock, onToggle: () => setDock((o) => !o) } },
+      h(Button, { variant: 'primary' }, '対局開始'),
+      h(Button, { title: '⌘N' }, '新規対局'),
+      h(Button, { title: '⌘Z' }, '待った'),
+      h(Divider),
+      h(RolePicker, { value: side, onChange: setSide }),
+      h(Divider),
+      h(Toggle, { checked: hint, onChange: setHint, label: '評価値を表示' }));
+  }
+  function Study() {
+    const [pov, setPov] = React.useState('b');
+    const [hint, setHint] = React.useState(true);
+    // graph: the "Graph" button appears only at heights of 620px or less
+    return h(Toolbar, { dock: { open: false, onToggle: noop }, graph: { open: false, onToggle: noop } },
+      h(Button, { variant: 'primary' }, '分析'),
+      h(Toggle, { checked: hint, onChange: setHint, label: '評価値を表示' }),
+      h(Divider),
+      h(Button, { title: '⌘O' }, '棋譜を読み込む'),
+      h(Divider),
+      h(Segmented, { value: pov, onChange: setPov, options: [{ value: 'b', label: '黒視点' }, { value: 'w', label: '白視点' }] }),
+      h('span', { style: { fontSize: 'var(--fs-6)', color: 'var(--sub)' } }, '34 / 60 手'));
+  }
+  function Book() {
+    const [tab, setTab] = React.useState('book');
+    // aux: right-aligned auxiliary info. Disappears below 940px wide
+    return h(Toolbar, {
+        dock: { open: false, onToggle: noop },
+        aux: h(Busy, null, '取り込み中',
+          h('span', { style: { color: 'var(--sub)', fontVariantNumeric: 'tabular-nums' } }, '局面 1,284 / 5,000')) },
+      h(Segmented, { value: tab, onChange: setTab, options: [{ value: 'book', label: '定石' }, { value: 'log', label: '学習ログ' }] }),
+      h(Divider),
+      h(Button, null, '戻る'),
+      h(Button, null, '最初へ'),
+      h('span', { style: { marginLeft: 'var(--sp-3)', fontSize: 'var(--fs-6)', color: 'var(--sub)' } }, '12 手目'));
+  }
+  ReactDOM.createRoot(document.getElementById('root')).render(
+    h('div', { style: { display: 'flex', flexDirection: 'column' } },
+      box('Play (when narrow, the side-played picker collapses into a Select)', h(Play)),
+      box('Study', h(Study)),
+      box('Book (import progress in aux)', h(Book))));
+</script>

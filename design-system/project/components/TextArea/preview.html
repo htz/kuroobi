@@ -1,0 +1,22 @@
+<!-- @dsCard group="Forms" height=300 -->
+<div id="root" style="padding: var(--sp-4); background: var(--bg); color: var(--text); font: var(--fs-4)/1.6 var(--ff);"></div>
+<script>
+  KuroobiUI.setLang('ja');
+  const h = React.createElement;
+  const noop = () => {};
+  const Case = ({ label, children }) => h('div', { style: { display: 'flex', flexDirection: 'column', gap: 'var(--sp-1)' } },
+    h('div', { style: { fontSize: 'var(--fs-7)', color: 'var(--sub)' } }, label), children);
+  const Row = (...kids) => h('div', { style: { display: 'flex', alignItems: 'center', gap: 'var(--sp-2)', flexWrap: 'wrap' } }, ...kids);
+  const Stack = (...kids) => h('div', { style: { display: 'flex', flexDirection: 'column', gap: 'var(--sp-4)' } }, ...kids);
+  const render = (el) => ReactDOM.createRoot(document.getElementById('root')).render(el);
+  const { TextArea } = KuroobiUI;
+  function Demo(props) {
+    const [v, setV] = React.useState(props.init);
+    return h(TextArea, { ...props, value: v, onChange: setV });
+  }
+  render(h('div', { style: { width: 420 } }, Stack(
+    h(Case, { label: 'mono, rows=4 (writing the formula for accepted requests directly)' },
+      h(Demo, { init: 'rated & mr>=1800 & (rand | synchro)', mono: true, rows: 4 })),
+    h(Case, { label: 'Empty + placeholder, rows=4' },
+      h(Demo, { init: '', mono: true, rows: 4, placeholder: '例: rated & or>=1600 & !synchro' })))));
+</script>

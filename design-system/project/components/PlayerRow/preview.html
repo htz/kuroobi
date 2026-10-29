@@ -1,0 +1,19 @@
+<!-- @dsCard group="Board" height=140 -->
+<div id="root" style="padding: var(--sp-4); background: var(--bg); color: var(--text); font: var(--fs-4)/1.6 var(--ff);"></div>
+<script>
+KuroobiUI.setLang('ja');
+const h = React.createElement;
+const noop = () => {};
+const cap = (label, ...kids) => h('div', { style: { display: 'flex', flexDirection: 'column', gap: 'var(--sp-1)', minWidth: 0 } },
+  h('div', { style: { fontSize: 'var(--fs-7)', color: 'var(--sub)' } }, label), ...kids);
+const { PlayerRow } = KuroobiUI;
+const col = (label, ...rows) => cap(label, h('div', { style: { width: 340, padding: '0 var(--sp-2)', background: 'var(--panel)', borderRadius: 'var(--r-1)' } }, ...rows));
+ReactDOM.createRoot(document.getElementById('root')).render(
+  h('div', { style: { display: 'flex', gap: 'var(--sp-5)', flexWrap: 'wrap' } },
+    col('ymatioun to move',
+      h(PlayerRow, { color: 'w', name: 'ymatioun', rate: 2087.4, meta: '評価値 -1.8 · 6 秒', clock: '7:42', active: true }),
+      h(PlayerRow, { color: 'b', name: 'htz', rate: 2041.9, meta: '評価値 +2.4 · 5 秒', clock: '9:15' })),
+    col('Watching · top without an eval, bottom with a solved eval',
+      h(PlayerRow, { color: 'b', name: 'kbcli', rate: 1958.0, clock: '12:03' }),
+      h(PlayerRow, { color: 'w', name: 'saio', rate: 2003.6, meta: '評価値 +12 読切', clock: '0:41', active: true }))));
+</script>

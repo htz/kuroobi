@@ -1,0 +1,17 @@
+<!-- @dsCard group="Display" height=164 -->
+<div id="root" style="padding: var(--sp-4); background: var(--bg); color: var(--text); font: var(--fs-4)/1.6 var(--ff);"></div>
+<script>
+  KuroobiUI.setLang('ja');
+  const h = React.createElement;
+  const noop = () => {};
+  const Case = ({ label, children }) => h('div', { style: { display: 'flex', flexDirection: 'column', gap: 'var(--sp-1)' } },
+    h('div', { style: { fontSize: 'var(--fs-7)', color: 'var(--sub)' } }, label), children);
+  const Row = (...kids) => h('div', { style: { display: 'flex', alignItems: 'center', gap: 'var(--sp-2)', flexWrap: 'wrap' } }, ...kids);
+  const Stack = (...kids) => h('div', { style: { display: 'flex', flexDirection: 'column', gap: 'var(--sp-4)' } }, ...kids);
+  const render = (el) => ReactDOM.createRoot(document.getElementById('root')).render(el);
+  const { Note } = KuroobiUI;
+  render(Stack(
+    h(Case, { label: 'Short explanation' }, h(Note, null, '申し込みは自動で処理せず、届いたときに本人が判断します。')),
+    h(Case, { label: 'Long explanation (wraps at width w-text)' }, h(Note, null,
+      '自動対局を有効にすると、指定した形式と持ち時間で申し込みを送り、届いた申し込みも条件に合えば受けます。中断対局が残っていると新しい申し込みは断られるので、先に再開してください。'))));
+</script>

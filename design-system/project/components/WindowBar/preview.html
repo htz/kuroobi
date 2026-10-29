@@ -1,0 +1,20 @@
+<!-- @dsCard group="Layout" height=225 -->
+<div id="root" style="padding: var(--sp-4); background: var(--bg); color: var(--text); font: var(--fs-4)/1.6 var(--ff);"></div>
+<script>
+  KuroobiUI.setLang('ja');
+  const h = React.createElement;
+  const { WindowBar } = KuroobiUI;
+  // The left padding (w-signals) is the space for the macOS traffic-light buttons. The sample frames each bar
+  const box = (label, bar) => h('div', null,
+    h('div', { style: { fontSize: 'var(--fs-7)', color: 'var(--sub)', margin: 'var(--sp-2) 0 var(--sp-1)' } }, label),
+    h('div', { style: { border: '1px solid var(--border)', borderRadius: 'var(--r-3)', overflow: 'hidden' } }, bar));
+  // Overrides from environment variables at startup are listed at the right end with k-env-tag (same shape as EnvTags in App.tsx)
+  const env = h('div', { className: 'k-env' },
+    h('span', { className: 'k-env-tag' }, 'GGS デモ'),
+    h('span', { className: 'k-env-tag' }, 'テーマ', h('span', { className: 'k-env-val' }, 'light')));
+  ReactDOM.createRoot(document.getElementById('root')).render(
+    h('div', { style: { display: 'flex', flexDirection: 'column' } },
+      box('Screen name only', h(WindowBar, { title: '定石' })),
+      box('Screen name + note (strength and side played)', h(WindowBar, { title: '対局', sub: 'Lv5 · 白' })),
+      box('Note + environment variable overrides at the right end', h(WindowBar, { title: '対局・観戦', sub: 'htz', right: env }))));
+</script>

@@ -1,0 +1,27 @@
+<!-- @dsCard group="Lists" height=330 -->
+<div id="root" style="padding: var(--sp-4); background: var(--bg); color: var(--text); font: var(--fs-4)/1.6 var(--ff);"></div>
+<script>
+KuroobiUI.setLang('ja');
+const h = React.createElement;
+const noop = () => {};
+const cap = (label, ...kids) => h('div', { style: { display: 'flex', flexDirection: 'column', gap: 'var(--sp-1)', minWidth: 0 } },
+  h('div', { style: { fontSize: 'var(--fs-7)', color: 'var(--sub)' } }, label), ...kids);
+const stack = (...kids) => h('div', { style: { display: 'flex', flexDirection: 'column', gap: 'var(--sp-4)' } }, ...kids);
+const render = (el) => ReactDOM.createRoot(document.getElementById('root')).render(el);
+const { ListRow, TwoLines, Tag } = KuroobiUI;
+const box = (...kids) => h('div', { style: { maxWidth: 360, display: 'flex', flexDirection: 'column', border: '1px solid var(--border-weak)', borderRadius: 'var(--r-2)', overflow: 'hidden' } }, ...kids);
+function Demo() {
+  const [cur, setCur] = React.useState('saio');
+  const [chat, setChat] = React.useState('ymatioun');
+  const sub = (s) => h('span', { style: { marginLeft: 'auto', fontSize: 'var(--fs-6)', color: 'var(--sub)' } }, s);
+  return stack(
+    cap('One line (field): login accounts',
+      box(...['ymatioun', 'saio', 'kbcli'].map((n) =>
+        h(ListRow, { key: n, on: cur === n, onClick: () => setCur(n) }, h('span', { style: { fontWeight: 600 } }, n), sub('10/27'))))),
+    cap('Two lines (row2 + TwoLines): chat conversations',
+      box(...[['ymatioun', 'よろしくお願いします'], ['saio', 'ありがとうございました'], ['.chat', '大会は 21 時から']].map(([n, m]) =>
+        h(ListRow, { key: n, height: 'row2', on: chat === n, onClick: () => setChat(n) },
+          h(TwoLines, { top: [h('b', { key: 'n', style: { fontWeight: 600 } }, n), n.startsWith('.') ? h(Tag, { key: 't', tone: 'sub' }, '部屋') : null], bottom: m }))))));
+}
+render(h(Demo));
+</script>

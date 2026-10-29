@@ -1,0 +1,39 @@
+<!-- @dsCard group="Layout" height=400 -->
+<div id="root" style="padding: var(--sp-4); background: var(--bg); color: var(--text); font: var(--fs-4)/1.6 var(--ff);"></div>
+<script>
+  KuroobiUI.setLang('ja');
+  const h = React.createElement;
+  const { Overlay, Modal, Button, WindowBar, Toolbar, StatusBar } = KuroobiUI;
+  // The status bar's value: label, the number in bold, the unit (GlobalStatus.tsx).
+  const Stat = ({ label, value, unit }) => h('span', { style: { display: 'flex', alignItems: 'center', gap: 'var(--sp-1)', whiteSpace: 'nowrap' } },
+    label, h('b', { style: { color: 'var(--text)', fontWeight: 600, fontVariantNumeric: 'tabular-nums' } }, value), unit);
+  const Load = ({ label, ratio, value, unit }) => h('span', { style: { display: 'flex', alignItems: 'center', gap: 'var(--sp-1)', whiteSpace: 'nowrap' } },
+    label, h('span', { style: { display: 'inline-block', width: 32, height: 4, borderRadius: 'var(--r-pill)', background: 'var(--track)', overflow: 'hidden' } },
+      h('span', { style: { display: 'block', height: '100%', width: Math.round(ratio * 100) + '%', background: ratio >= 0.9 ? 'var(--bad)' : ratio >= 0.7 ? 'var(--gold)' : 'var(--ok)' } })),
+    h('b', { style: { color: ratio >= 0.7 ? 'var(--gold)' : 'var(--text)', fontWeight: 600, fontVariantNumeric: 'tabular-nums' } }, value), unit);
+  const resources = (ggs) => h(React.Fragment, null,
+    h(Load, { label: 'CPU', ratio: 0.12, value: '12', unit: '%' }),
+    h(Load, { label: 'メモリ', ratio: 0.58, value: '18.3', unit: 'GB' }),
+    h(Stat, { label: 'GGS', value: ggs || '未接続' }));
+  // Overlay uses position:absolute; inset:0 to cover the nearest position:relative box (AppFrame in the app) with the scrim.
+  // The preview treats a relative box with a fixed height as the screen and places it inside. Pressing (and releasing) the scrim calls onClose
+  function Demo() {
+    const [open, setOpen] = React.useState(true);
+    return h('div', { style: { position: 'relative', height: 360, display: 'flex', flexDirection: 'column',
+                               border: '1px solid var(--border)', borderRadius: 'var(--r-3)', overflow: 'hidden' } },
+      h(WindowBar, { title: '対局', sub: 'Lv5 · 白' }),
+      h(Toolbar, null,
+        h(Button, { variant: 'primary' }, '対局開始'),
+        h(Button, { onClick: () => setOpen(true) }, '待った')),
+      h('div', { style: { flex: 1 } }),
+      h(StatusBar, { right: resources() }),
+      open && h(Overlay, { onClose: () => setOpen(false) },
+        h(Modal, { title: '27 手目まで戻します', onClose: () => setOpen(false),
+                   body: '自分の手と KUROOBI の手を 1 手ずつ戻します。戻した先から指し直せます。',
+                   actions: h(React.Fragment, null,
+                     h('span', { style: { marginLeft: 'auto' } }),
+                     h(Button, { size: 'field', onClick: () => setOpen(false) }, 'キャンセル'),
+                     h(Button, { size: 'field', variant: 'primary', onClick: () => setOpen(false) }, '戻す')) })));
+  }
+  ReactDOM.createRoot(document.getElementById('root')).render(h(Demo));
+</script>

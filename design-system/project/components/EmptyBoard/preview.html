@@ -1,0 +1,25 @@
+<!-- @dsCard group="Board" height=460 -->
+<div id="root" style="padding: var(--sp-4); background: var(--bg); color: var(--text); font: var(--fs-4)/1.6 var(--ff);"></div>
+<script>
+KuroobiUI.setLang('ja');
+const h = React.createElement;
+const noop = () => {};
+const cap = (label, ...kids) => h('div', { style: { display: 'flex', flexDirection: 'column', gap: 'var(--sp-1)', minWidth: 0 } },
+  h('div', { style: { fontSize: 'var(--fs-7)', color: 'var(--sub)' } }, label), ...kids);
+const { EmptyBoard, EmptyState, BoardDefs, Button } = KuroobiUI;
+ReactDOM.createRoot(document.getElementById('root')).render(
+  h('div', { style: { display: 'flex', flexDirection: 'column', gap: 'var(--sp-4)' } },
+    h(BoardDefs),
+    cap('Standalone', h(EmptyBoard)),
+    cap('As the visual of EmptyState (no matches in GGS Play / observe)',
+      h('div', { style: { display: 'flex', border: '1px solid var(--border-weak)', borderRadius: 'var(--r-4)' } },
+        h(EmptyState, {
+          title: '進行中の対局はありません',
+          visual: h(EmptyBoard),
+          body: '申し込むか、ロビーで観戦する対局を選ぶとここに出ます',
+          actions: [
+            h(Button, { key: 'a', variant: 'primary', onClick: noop }, '対局を申し込む'),
+            h(Button, { key: 'b', onClick: noop }, 'ロビーで探す'),
+          ],
+        })))));
+</script>

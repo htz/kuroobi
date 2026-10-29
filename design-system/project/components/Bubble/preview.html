@@ -1,0 +1,17 @@
+<!-- @dsCard group="GGS" height=330 -->
+<div id="root" style="padding: var(--sp-4); background: var(--bg); color: var(--text); font: var(--fs-4)/1.6 var(--ff);"></div>
+<script>
+  KuroobiUI.setLang('ja');
+  const h = React.createElement;
+  const { Bubble } = KuroobiUI;
+  ReactDOM.createRoot(document.getElementById('root')).render(
+    h('div', { style: { maxWidth: 520, display: 'flex', flexDirection: 'column', gap: 'var(--sp-3)' } },
+      // Opponent's message (with name = that person's first message)
+      h(Bubble, { showName: true, m: { from: 'kbcli', at: '21:04', body: 'gg! nice endgame', tr: 'いい対局でした！終盤がうまかったです' },
+                  action: { label: '訳を隠す', onClick: () => {} } }),
+      // Continued from the same person (no name). Untranslated messages get "Translate"
+      h(Bubble, { m: { from: 'kbcli', at: '21:04', body: 'rematch with synchro rand 14?' }, action: { label: '翻訳', onClick: () => {} } }),
+      // Own messages
+      h(Bubble, { showName: true, m: { from: 'htz', mine: true, at: '21:05', body: 'sure, sending the request now' } }),
+      h(Bubble, { m: { from: 'htz', mine: true, at: '21:05', body: '同期・ランダム14手で申し込みます' } })));
+</script>

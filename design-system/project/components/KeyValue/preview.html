@@ -1,0 +1,22 @@
+<!-- @dsCard group="Display" height=234 -->
+<div id="root" style="padding: var(--sp-4); background: var(--bg); color: var(--text); font: var(--fs-4)/1.6 var(--ff);"></div>
+<script>
+  KuroobiUI.setLang('ja');
+  const h = React.createElement;
+  const noop = () => {};
+  const Case = ({ label, children }) => h('div', { style: { display: 'flex', flexDirection: 'column', gap: 'var(--sp-1)' } },
+    h('div', { style: { fontSize: 'var(--fs-7)', color: 'var(--sub)' } }, label), children);
+  const Row = (...kids) => h('div', { style: { display: 'flex', alignItems: 'center', gap: 'var(--sp-2)', flexWrap: 'wrap' } }, ...kids);
+  const Stack = (...kids) => h('div', { style: { display: 'flex', flexDirection: 'column', gap: 'var(--sp-4)' } }, ...kids);
+  const render = (el) => ReactDOM.createRoot(document.getElementById('root')).render(el);
+  const { KeyValue } = KuroobiUI;
+  const col = (...kids) => h('div', { style: { width: 258, display: 'flex', flexDirection: 'column', gap: 'var(--sp-2)' } }, ...kids);
+  render(Stack(
+    h(Case, { label: 'Normal (learning log details)' }, col(
+      h(KeyValue, { label: '相手', value: 'kbcli' }),
+      h(KeyValue, { label: '石数', value: '34 – 30' }),
+      h(KeyValue, { label: '取り込み', value: undefined }))),
+    h(Case, { label: 'big (book counts; numbers get thousands separators)' }, col(
+      h(KeyValue, { big: true, label: '登録局面', value: 1234567 }),
+      h(KeyValue, { big: true, label: 'うち学習', value: 8421 })))));
+</script>

@@ -1,0 +1,30 @@
+<!-- @dsCard group="Forms" height=384 -->
+<div id="root" style="padding: var(--sp-4); background: var(--bg); color: var(--text); font: var(--fs-4)/1.6 var(--ff);"></div>
+<script>
+  KuroobiUI.setLang('ja');
+  const h = React.createElement;
+  const noop = () => {};
+  const Case = ({ label, children }) => h('div', { style: { display: 'flex', flexDirection: 'column', gap: 'var(--sp-1)' } },
+    h('div', { style: { fontSize: 'var(--fs-7)', color: 'var(--sub)' } }, label), children);
+  const Row = (...kids) => h('div', { style: { display: 'flex', alignItems: 'center', gap: 'var(--sp-2)', flexWrap: 'wrap' } }, ...kids);
+  const Stack = (...kids) => h('div', { style: { display: 'flex', flexDirection: 'column', gap: 'var(--sp-4)' } }, ...kids);
+  const render = (el) => ReactDOM.createRoot(document.getElementById('root')).render(el);
+  const { TextField } = KuroobiUI;
+  function Demo(props) {
+    const [v, setV] = React.useState(props.init);
+    return h(TextField, { ...props, value: v, onChange: setV });
+  }
+  const col = (...kids) => h('div', { style: { width: 320, display: 'flex', gap: 'var(--sp-2)', alignItems: 'center' } }, ...kids);
+  render(Stack(
+    h(Case, { label: 'Normal / password (GGS login)' }, h('div', { style: { display: 'flex', flexDirection: 'column', gap: 'var(--sp-2)' } },
+      col(h(Demo, { init: 'skatgame.net:5000' })),
+      col(h(Demo, { init: 'secret', password: true, onEnter: noop })))),
+    h(Case, { label: 'mono + placeholder (GGS console)' },
+      col(h(Demo, { init: '', mono: true, placeholder: 'コマンド (例: tell /os who 8。Enter で送信)', onEnter: noop }))),
+    h(Case, { label: 'numeric + align=right + width (auto match game count and interval)' },
+      col(h(Demo, { init: '10', numeric: true, align: 'right', width: 72 }),
+          h('span', { style: { fontSize: 'var(--fs-6)', color: 'var(--sub)' } }, '局'))),
+    h(Case, { label: 'invalid / read-only (no onChange)' }, h('div', { style: { display: 'flex', flexDirection: 'column', gap: 'var(--sp-2)' } },
+      col(h(Demo, { init: '#kuroobi log', width: 120, invalid: true })),
+      col(h(TextField, { value: '', placeholder: '未設定', invalid: true }))))));
+</script>

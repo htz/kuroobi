@@ -1,0 +1,48 @@
+<!-- @dsCard group="Layout" height=870 -->
+<div id="root" style="padding: var(--sp-4); background: var(--bg); color: var(--text); font: var(--fs-4)/1.6 var(--ff);"></div>
+<script>
+  KuroobiUI.setLang('ja');
+  const h = React.createElement;
+  const { AppFrame, WindowBar, Body, Nav, navLocal, ggsNav, Main, Toolbar, Button, Dock, Section, KeyValue,
+          EmptyState, EmptyBoard, StatusBar } = KuroobiUI;
+  // The status bar's value: label, the number in bold, the unit (GlobalStatus.tsx).
+  const Stat = ({ label, value, unit }) => h('span', { style: { display: 'flex', alignItems: 'center', gap: 'var(--sp-1)', whiteSpace: 'nowrap' } },
+    label, h('b', { style: { color: 'var(--text)', fontWeight: 600, fontVariantNumeric: 'tabular-nums' } }, value), unit);
+  const Load = ({ label, ratio, value, unit }) => h('span', { style: { display: 'flex', alignItems: 'center', gap: 'var(--sp-1)', whiteSpace: 'nowrap' } },
+    label, h('span', { style: { display: 'inline-block', width: 32, height: 4, borderRadius: 'var(--r-pill)', background: 'var(--track)', overflow: 'hidden' } },
+      h('span', { style: { display: 'block', height: '100%', width: Math.round(ratio * 100) + '%', background: ratio >= 0.9 ? 'var(--bad)' : ratio >= 0.7 ? 'var(--gold)' : 'var(--ok)' } })),
+    h('b', { style: { color: ratio >= 0.7 ? 'var(--gold)' : 'var(--text)', fontWeight: 600, fontVariantNumeric: 'tabular-nums' } }, value), unit);
+  const resources = (ggs) => h(React.Fragment, null,
+    h(Load, { label: 'CPU', ratio: 0.12, value: '12', unit: '%' }),
+    h(Load, { label: 'メモリ', ratio: 0.58, value: '18.3', unit: 'GB' }),
+    h(Stat, { label: 'GGS', value: ggs || '未接続' }));
+  // Body is the horizontal row (Nav | Main | Dock) filling the remaining height between WindowBar and StatusBar.
+  // It is position:relative, so it is also the reference for the Dock that overlays it at narrow widths
+  const frame = (height, title, sub, body, status) =>
+    h('div', { style: { height, border: '1px solid var(--border)', borderRadius: 'var(--r-3)', overflow: 'hidden' } },
+      h(AppFrame, null, h(WindowBar, { title, sub }), body, h(StatusBar, { right: status })));
+  function Book() {
+    const [open, setOpen] = React.useState(false);
+    return frame(280, '定石', undefined,
+      h(Body, null,
+        h(Nav, { items: navLocal(), ggsItems: ggsNav('offline'), conn: 'offline', active: 'book' }),
+        h(Main, { inset: open },
+          h(Toolbar, { dock: { open, onToggle: () => setOpen((o) => !o) } }, h(Button, null, '戻る'), h(Button, null, '最初へ')),
+          h('div', { style: { flex: 1 } })),
+        h(Dock, { tabs: [{ id: 'book', label: '定石' }], active: 'book', open },
+          h(Section, { title: 'この局面' }, h(KeyValue, { label: '出所', value: 'book.txt' })))),
+      resources());
+  }
+  // GGS screens have no Dock, only Nav | Main (result and player details overlay the window as a Drawer). The WindowBar shows no subtitle either
+  const ggs = frame(530, '対局・観戦', undefined,
+    h(Body, null,
+      h(Nav, { items: navLocal(), ggsItems: ggsNav('online'), conn: 'online', active: 'ggs-play' }),
+      h(Main, null,
+        h(Toolbar, null, h('span', { style: { fontSize: 'var(--fs-3)', fontWeight: 600 } }, '対局・観戦')),
+        h(EmptyState, { title: '進行中の対局はありません', visual: h(EmptyBoard),
+                        body: '申し込むか、ロビーで観戦する対局を選ぶとここに出ます',
+                        actions: h(React.Fragment, null, h(Button, { variant: 'primary' }, '対局を申し込む'), h(Button, null, 'ロビーで探す')) }))),
+    resources('接続中 (alice · local)'));
+  ReactDOM.createRoot(document.getElementById('root')).render(
+    h('div', { style: { display: 'flex', flexDirection: 'column', gap: 'var(--sp-4)' } }, h(Book), ggs));
+</script>

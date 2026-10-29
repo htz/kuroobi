@@ -1,0 +1,62 @@
+<!-- @dsCard group="Layout" height=540 -->
+<div id="root" style="padding: var(--sp-4); background: var(--bg); color: var(--text); font: var(--fs-4)/1.6 var(--ff);"></div>
+<script>
+  KuroobiUI.setLang('ja');
+  const h = React.createElement;
+  const { AppFrame, WindowBar, Body, Nav, navLocal, ggsNav, Main, Toolbar, Button, Divider, Toggle,
+          BoardFit, Board, ScoreRow, Dock, Section, KeyValue, TableHead, TableRow, StatusBar, StatusStat, Toasts, NavRow } = KuroobiUI;
+  // The status bar's value: label, the number in bold, the unit (GlobalStatus.tsx).
+  const Stat = ({ label, value, unit }) => h('span', { style: { display: 'flex', alignItems: 'center', gap: 'var(--sp-1)', whiteSpace: 'nowrap' } },
+    label, h('b', { style: { color: 'var(--text)', fontWeight: 600, fontVariantNumeric: 'tabular-nums' } }, value), unit);
+  const Load = ({ label, ratio, value, unit }) => h('span', { style: { display: 'flex', alignItems: 'center', gap: 'var(--sp-1)', whiteSpace: 'nowrap' } },
+    label, h('span', { style: { display: 'inline-block', width: 32, height: 4, borderRadius: 'var(--r-pill)', background: 'var(--track)', overflow: 'hidden' } },
+      h('span', { style: { display: 'block', height: '100%', width: Math.round(ratio * 100) + '%', background: ratio >= 0.9 ? 'var(--bad)' : ratio >= 0.7 ? 'var(--gold)' : 'var(--ok)' } })),
+    h('b', { style: { color: ratio >= 0.7 ? 'var(--gold)' : 'var(--text)', fontWeight: 600, fontVariantNumeric: 'tabular-nums' } }, value), unit);
+  const resources = (ggs) => h(React.Fragment, null,
+    h(Load, { label: 'CPU', ratio: 0.12, value: '12', unit: '%' }),
+    h(Load, { label: 'メモリ', ratio: 0.58, value: '18.3', unit: 'GB' }),
+    h(Stat, { label: 'GGS', value: ggs || '未接続' }));
+  // After f5d6c3d3c4f4f6f3e6e7 (Black to move). Board squares are sq = column*8 + row
+  const cells = '..................XX......OXXO.....OOOO...OOXX..................'
+    .split('').map((c) => (c === 'X' ? 1 : c === 'O' ? 2 : 0));
+  const legal = [17, 21, 25, 30, 31, 33, 34, 41, 46, 49, 51];
+  const cols = [{ head: '#', w: 28, num: true }, { head: '黒' }, { head: '白' }];
+  const pairs = [['f5', 'd6'], ['c3', 'd3'], ['c4', 'f4'], ['f6', 'f3'], ['e6', 'e7']];
+  const settings = h(NavRow, { item: { id: 'settings', label: '設定', icon: 'prefs', hint: '⌘,' }, active: false });
+  // Same structure as App.tsx: AppFrame > WindowBar / Body (Nav | Main | Dock) / StatusBar, then Toasts last.
+  // AppFrame is height:100%, so put it in a box with a fixed height
+  function App() {
+    const [nav, setNav] = React.useState('play');
+    const [dock, setDock] = React.useState(false);
+    const [toasts, setToasts] = React.useState([{ id: 1, tone: 'gold', text: 'GGS 対局中は分析を控えます' }]);
+    return h('div', { style: { height: 500, border: '1px solid var(--border)', borderRadius: 'var(--r-3)', overflow: 'hidden' } },
+      h(AppFrame, null,
+        h(WindowBar, { title: '対局', sub: 'Lv5 · 白' }),
+        h(Body, null,
+          h(Nav, { items: navLocal(), ggsItems: ggsNav('offline'), conn: 'offline', active: nav, onSelect: setNav, footer: settings }),
+          h(Main, { inset: dock },
+            h(Toolbar, { dock: { open: dock, onToggle: () => setDock((o) => !o) } },
+              h(Button, { variant: 'primary' }, '対局開始'),
+              h(Button, { title: '⌘N' }, '新規対局'),
+              h(Button, { title: '⌘Z' }, '待った'),
+              h(Divider),
+              h(Toggle, { checked: true, label: '評価値を表示' })),
+            h('div', { style: { flex: 1, minHeight: 'calc(200px + var(--h-bar))', display: 'flex', flexDirection: 'column' } },
+              h(BoardFit, { minHeight: 200, padding: 'var(--sp-2) var(--sp-4)' },
+                h(Board, { cells, legal, last: 38, coords: true, grain: true })),
+              h(ScoreRow, { black: 6, white: 8, turn: 'b' }))),
+          // The play Dock is a single page without tabs (PlayDock): strength on top, game record below
+          h(Dock, { tabs: [{ id: 'main', label: '' }], active: 'main', open: dock, scroll: false },
+            h('div', { style: { flex: 'none', paddingTop: 'var(--sp-3)', borderBottom: '1px solid var(--border)' } },
+              h(Section, { title: '強さ' },
+                h(KeyValue, { label: '深さ', value: 12 }),
+                h(KeyValue, { label: '読切', value: 16 }))),
+            h('div', { style: { flex: 1, minHeight: 0, display: 'flex', flexDirection: 'column' } },
+              h(TableHead, { cols }),
+              h('div', { className: 'k-scroll', style: { flex: 1, minHeight: 0 } },
+                pairs.map(([b, w], i) => h(TableRow, { key: i, cols, on: i === pairs.length - 1 }, i + 1, b, w)))))),
+        h(StatusBar, { right: resources() }),
+        h(Toasts, { items: toasts, onDismiss: (id) => setToasts((xs) => xs.filter((x) => x.id !== id)) })));
+  }
+  ReactDOM.createRoot(document.getElementById('root')).render(h(App));
+</script>

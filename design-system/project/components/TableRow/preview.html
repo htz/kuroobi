@@ -1,0 +1,51 @@
+<!-- @dsCard group="Lists" height=250 -->
+<div id="root" style="padding: var(--sp-4); background: var(--bg); color: var(--text); font: var(--fs-4)/1.6 var(--ff);"></div>
+<script>
+KuroobiUI.setLang('ja');
+const h = React.createElement;
+const noop = () => {};
+const cap = (label, ...kids) => h('div', { style: { display: 'flex', flexDirection: 'column', gap: 'var(--sp-1)', minWidth: 0 } },
+  h('div', { style: { fontSize: 'var(--fs-7)', color: 'var(--sub)' } }, label), ...kids);
+const cols = [
+  { head: '順位', w: 48, right: true, num: true },
+  { head: 'プレイヤー', clip: true },
+  { head: '勝点', w: 64, right: true, num: true },
+  { head: '勝-分-敗', w: 104, right: true, num: true },
+  { head: '平均石差', w: 88, right: true, num: true },
+];
+const RANKS = [
+  { name: 'ymatioun', pts: 5, w: 5, d: 0, l: 1, disc: '+14.3' },
+  { name: 'htz', pts: 4.5, w: 4, d: 1, l: 1, disc: '+9.8' },
+  { name: 'saio', pts: 3, w: 3, d: 0, l: 3, disc: '-1.2' },
+  { name: 'kbcli', pts: 1.5, w: 1, d: 1, l: 4, disc: '-11.6' },
+  { name: 'eona', pts: 1, w: 1, d: 0, l: 5, disc: '-18.4' },
+];
+const signed = (s) => s;
+const rankRow = (TableRow, r, i, login) => h(TableRow, { key: r.name, cols, on: r.name === login },
+  h('span', { style: { fontWeight: 700, color: i === 0 ? 'var(--gold)' : 'var(--sub)' } }, i + 1),
+  h('span', { className: 'k-sel', style: { fontWeight: r.name === login ? 700 : 500 } }, r.name),
+  h('span', { style: { fontWeight: 700 } }, r.pts),
+  h('span', null, h('span', { style: { color: 'var(--ok)' } }, r.w), ' - ', r.d, ' - ', h('span', { style: { color: 'var(--bad)' } }, r.l)),
+  h('span', { style: { color: parseFloat(r.disc) > 0 ? 'var(--ok)' : 'var(--bad)' } }, r.disc));
+
+const { TableHead, TableRow } = KuroobiUI;
+function Demo() {
+  const [sel, setSel] = React.useState('htz');
+  const rows = RANKS.slice(0, 3);
+  return cap('Click to move the selection (on) · the selected row has a left strip and faint accent',
+    h('div', { style: { maxWidth: 520 } }, h(TableHead, { cols }),
+      rows.map((r, i) => h(TableRow, { key: r.name, cols, on: r.name === sel, onClick: () => setSel(r.name) },
+        h('span', { style: { fontWeight: 700, color: i === 0 ? 'var(--gold)' : 'var(--sub)' } }, i + 1),
+        h('span', { className: 'k-sel' }, r.name),
+        h('span', { style: { fontWeight: 700 } }, r.pts),
+        h('span', null, r.w + ' - ' + r.d + ' - ' + r.l),
+        h('span', null, r.disc)))));
+}
+ReactDOM.createRoot(document.getElementById('root')).render(
+  h('div', { style: { display: 'flex', flexDirection: 'column', gap: 'var(--sp-4)' } },
+    h(Demo),
+    cap('muted (unevaluated move) · compact row with pad=var(--sp-1) fs=var(--fs-6)',
+      h('div', { style: { maxWidth: 520 } },
+        h(TableRow, { cols, muted: true }, '—', 'kbcli', '1.5', '1 - 1 - 4', '-11.6'),
+        h(TableRow, { cols, pad: 'var(--sp-1)', fs: 'var(--fs-6)' }, '5', 'eona', '1', '1 - 0 - 5', '-18.4')))));
+</script>

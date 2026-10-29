@@ -1,0 +1,20 @@
+<!-- @dsCard group="Display" height=96 -->
+<div id="root" style="padding: var(--sp-4); background: var(--bg); color: var(--text); font: var(--fs-4)/1.6 var(--ff);"></div>
+<script>
+  KuroobiUI.setLang('ja');
+  const h = React.createElement;
+  const noop = () => {};
+  const Case = ({ label, children }) => h('div', { style: { display: 'flex', flexDirection: 'column', gap: 'var(--sp-1)' } },
+    h('div', { style: { fontSize: 'var(--fs-7)', color: 'var(--sub)' } }, label), children);
+  const Row = (...kids) => h('div', { style: { display: 'flex', alignItems: 'center', gap: 'var(--sp-2)', flexWrap: 'wrap' } }, ...kids);
+  const Stack = (...kids) => h('div', { style: { display: 'flex', flexDirection: 'column', gap: 'var(--sp-4)' } }, ...kids);
+  const render = (el) => ReactDOM.createRoot(document.getElementById('root')).render(el);
+  const { Divider, Button, Segmented } = KuroobiUI;
+  render(Stack(
+    h(Case, { label: 'Toolbar separator (study)' }, h('div', { style: { display: 'flex', alignItems: 'center', gap: 'var(--sp-2)' } },
+      h(Button, { variant: 'primary', onClick: noop }, '分析'),
+      h(Button, { title: '⌘O', onClick: noop }, '棋譜を読み込む'),
+      h(Divider),
+      h(Segmented, { value: 'b', onChange: noop, options: [{ value: 'b', label: '黒視点' }, { value: 'w', label: '白視点' }] }),
+      h('span', { style: { fontSize: 'var(--fs-6)', color: 'var(--sub)' } }, '24 / 60 手')))));
+</script>

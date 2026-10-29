@@ -1,0 +1,30 @@
+<!-- @dsCard group="Actions" height=288 -->
+<div id="root" style="padding: var(--sp-4); background: var(--bg); color: var(--text); font: var(--fs-4)/1.6 var(--ff);"></div>
+<script>
+  KuroobiUI.setLang('ja');
+  const h = React.createElement;
+  const noop = () => {};
+  const Case = ({ label, children }) => h('div', { style: { display: 'flex', flexDirection: 'column', gap: 'var(--sp-1)' } },
+    h('div', { style: { fontSize: 'var(--fs-7)', color: 'var(--sub)' } }, label), children);
+  const Row = (...kids) => h('div', { style: { display: 'flex', alignItems: 'center', gap: 'var(--sp-2)', flexWrap: 'wrap' } }, ...kids);
+  const Stack = (...kids) => h('div', { style: { display: 'flex', flexDirection: 'column', gap: 'var(--sp-4)' } }, ...kids);
+  const render = (el) => ReactDOM.createRoot(document.getElementById('root')).render(el);
+  const { Segmented, StoneDot } = KuroobiUI;
+  function Demo(props) {
+    const [v, setV] = React.useState(props.init);
+    return h(Segmented, { ...props, value: v, onChange: setV });
+  }
+  render(Stack(
+    h(Case, { label: 'Basic (study toolbar)' }, h('div', null,
+      h(Demo, { init: 'b', options: [{ value: 'b', label: '黒視点' }, { value: 'w', label: '白視点' }] }))),
+    h(Case, { label: 'Components in labels (KUROOBI side)' }, h('div', null,
+      h(Demo, { init: 'white', options: [
+        { value: 'black', label: h(React.Fragment, null, h(StoneDot, { color: 'b' }), '黒') },
+        { value: 'white', label: h(React.Fragment, null, h(StoneDot, { color: 'w' }), '白') },
+        { value: 'both', label: h(React.Fragment, null,
+            h('span', { style: { display: 'flex', gap: 2 } }, h(StoneDot, { color: 'b' }), h(StoneDot, { color: 'w' })), '両方') }] }))),
+    h(Case, { label: 'fill (full dock width)' }, h('div', { style: { width: 258 } },
+      h(Demo, { init: 'on', fill: true, options: [{ value: 'on', label: '定石を使う' }, { value: 'off', label: '使わない' }] }))),
+    h(Case, { label: 'disabled' }, h('div', null,
+      h(Segmented, { value: 'off', disabled: true, options: [{ value: 'on', label: 'レート戦' }, { value: 'off', label: '非レート戦' }] })))));
+</script>
