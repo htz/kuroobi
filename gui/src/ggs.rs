@@ -235,7 +235,7 @@ pub struct MatchView {
     pub opp_secs: Option<u64>,
     pub my_ext: Option<u64>,
     pub opp_ext: Option<u64>,
-    pub in_overtime: bool,
+    pub in_extension: bool,
     pub players: Vec<PlayerView>,
     pub gtype: String,
     pub moves: Vec<String>,
@@ -280,6 +280,12 @@ pub struct GameResult {
     /// Every board of the match; `kifu` and `ggf` above hold only the first, which lost half of each synchro pair.
     #[serde(default)]
     pub boards: Vec<BoardRecord>,
+    /// How the whole match was decided when it was not played out: "resign" or "adjourn" (GGS decides both
+    /// per match, both boards of a synchro at once); empty otherwise.
+    #[serde(default)]
+    pub ending: String,
+    #[serde(default)]
+    pub ending_by: String,
 }
 
 #[derive(Clone, Serialize, serde::Deserialize, Default)]
@@ -287,6 +293,32 @@ pub struct BoardRecord {
     pub id: String,
     pub kifu: String,
     pub ggf: String,
+    /// "black" | "white": the side the player had on this board.
+    #[serde(default)]
+    pub my_color: String,
+    /// The final position's disc difference from the player's side (not the server's ±64 for time).
+    #[serde(default)]
+    pub disc_diff: Option<i32>,
+    /// Empty squares left: a board cut off by time or a resignation ends before it is full.
+    #[serde(default)]
+    pub empties: u8,
+    /// "over_time" (main time ran out, the board went on in the extension) or "out_of_time"
+    /// (the extension ran out too); empty when the board was played out.
+    #[serde(default)]
+    pub ending: String,
+    #[serde(default)]
+    pub ending_by: String,
+    /// Each player's clock when the board ended.
+    #[serde(default)]
+    pub clocks: Vec<ClockRecord>,
+}
+
+#[derive(Clone, Serialize, serde::Deserialize, Default)]
+pub struct ClockRecord {
+    pub name: String,
+    pub color: String,
+    pub main: Option<u64>,
+    pub ext: Option<u64>,
 }
 
 #[derive(Clone, Serialize, Default)]
@@ -1081,6 +1113,9 @@ fn load_history() -> Vec<GameResult> {
         if let Some(d) = diff_from_raw(&r.raw, &r.opp) {
             r.my_diff = Some(d);
         }
+        for b in &mut r.boards {
+            fill_board_from_ggf(b, &r.opp);
+        }
     }
     out.reverse();
     out.truncate(500);
@@ -1297,7 +1332,10 @@ struct MatchState {
     my_clock: String,
     my_clock_secs: Option<u64>,
     my_ext: Option<u64>,
-    in_overtime: bool,
+    in_extension: bool,
+    /// Who used up the main time first (`timeout`) and who used up the extension too (`fatal-timeout`).
+    over_time_by: String,
+    out_of_time_by: String,
     ended: String,
     archive: String,
     left_by: String,
@@ -1392,7 +1430,9 @@ impl MatchState {
             my_clock: String::new(),
             my_clock_secs: None,
             my_ext: None,
-            in_overtime: false,
+            in_extension: false,
+            over_time_by: String::new(),
+            out_of_time_by: String::new(),
             ended: String::new(),
             archive: String::new(),
             left_by: String::new(),
@@ -3149,6 +3189,21 @@ fn handle_os_line(
                 }
             }
         }
+    } else if let Some((rest, fatal)) = ln
+        .strip_prefix("/os: fatal-timeout ")
+        .map(|r| (r, true))
+        .or_else(|| ln.strip_prefix("/os: timeout ").map(|r| (r, false)))
+    {
+        let mut it = rest.split_whitespace();
+        if let (Some(id), Some(name)) = (it.next(), it.next()) {
+            if let Some(m) = matches.get_mut(id) {
+                if fatal {
+                    m.out_of_time_by = name.to_string();
+                } else if m.over_time_by.is_empty() {
+                    m.over_time_by = name.to_string();
+                }
+            }
+        }
     } else if let Some(rest) = ln.strip_prefix("/os: end ") {
         let mut it = rest.split_whitespace();
         if let (Some(id), Some(score)) = (it.next(), rest.rsplit(' ').next()) {
@@ -3674,12 +3729,12 @@ fn handle_block(
             m.gtype = t.to_string();
         }
     }
-    let was_overtime = m.in_overtime;
+    let was_in_extension = m.in_extension;
     let (rows_ok, turn) = apply_block(m, block, login);
-    if m.in_overtime && !was_overtime {
+    if m.in_extension && !was_in_extension {
         ctx.log(
             "info",
-            &format!("{mid}: in overtime; playing on with the extension as the clock"),
+            &format!("{mid}: in the extension; playing on with the extension as the clock"),
         );
     }
 
@@ -3828,13 +3883,13 @@ fn apply_block(m: &mut MatchState, block: &[String], login: &str) -> (bool, Opti
                         m.my_clock = clock.clone();
                         if let (Some(now), Some(g)) = (main, ext) {
                             let bump = inc.unwrap_or(0);
-                            // The server shows 4:59 at join and 5:00 after an instant book move; only a jump into the extension is overtime.
+                            // The server shows 4:59 at join and 5:00 after an instant book move; only a jump into the extension means it began.
                             let jumped = now <= g
                                 && m.my_clock_secs
                                     .is_some_and(|prev| now > prev.saturating_add(bump));
                             let played = m.moves.len() >= 2;
                             if g > 0 && (jumped || (now == 0 && played)) {
-                                m.in_overtime = true;
+                                m.in_extension = true;
                             }
                         }
                         if !m.over {
@@ -3946,10 +4001,10 @@ fn apply_block(m: &mut MatchState, block: &[String], login: &str) -> (bool, Opti
     (!boards.is_empty(), turn)
 }
 
-/// GGS shows 0:00 in overtime until the extension's own countdown appears.
+/// GGS shows 0:00 in the extension until the extension's own countdown appears.
 fn my_clock_secs(m: &MatchState) -> u64 {
     let secs = m.my_clock_secs.unwrap_or(0);
-    if m.in_overtime && secs == 0 {
+    if m.in_extension && secs == 0 {
         m.my_ext.unwrap_or(0)
     } else {
         secs
@@ -4436,7 +4491,7 @@ fn sync_matches(ctx: &mut Ctx, matches: &HashMap<String, MatchState>) {
             opp_secs: m.opp_secs,
             my_ext: m.my_ext,
             opp_ext: m.opp_ext,
-            in_overtime: m.in_overtime,
+            in_extension: m.in_extension,
             players: m.players.clone(),
             gtype: m.gtype.clone(),
             ggf: m.ggf(id, None),
@@ -4547,6 +4602,148 @@ fn parse_offer(rest: &str, login: &str) -> Option<Offer> {
     })
 }
 
+/// Records written before the colour and the final count were kept: both come from the board's own GGF.
+fn fill_board_from_ggf(b: &mut BoardRecord, opp: &str) {
+    if b.disc_diff.is_some() || b.ggf.is_empty() {
+        return;
+    }
+    let tag = |t: &str| {
+        let open = format!("{t}[");
+        let i = b.ggf.find(&open)? + open.len();
+        Some(b.ggf[i..].split(']').next()?.to_string())
+    };
+    let color = match (tag("PB"), tag("PW")) {
+        (_, Some(w)) if w == opp => "black",
+        (Some(bl), _) if bl == opp => "white",
+        _ => return,
+    };
+    let Some(start) = tag("BO").and_then(|bo| bo.strip_prefix("8 ").map(str::to_string)) else {
+        return;
+    };
+    let Ok(game) = kuroobi::game::Reversi::from_kifu_with_start(&start, &b.kifu) else {
+        return;
+    };
+    let (d, empties) = scored(
+        game.board.black.count_ones() as i32,
+        game.board.white.count_ones() as i32,
+        game.is_game_over(),
+    );
+    b.my_color = color.to_string();
+    b.empties = empties;
+    b.disc_diff = Some(if color == "black" { d } else { -d });
+}
+
+fn board_of_cells(cells: &[u8]) -> Option<kuroobi::board::Board> {
+    if cells.len() != 64 {
+        return None;
+    }
+    // Board strings run a1, b1 … h8; `cells` is `file * 8 + rank`.
+    let s: String = (0..64)
+        .map(|n| match cells[(n % 8) * 8 + n / 8] {
+            1 => 'x',
+            2 => 'o',
+            _ => '-',
+        })
+        .chain(" x".chars())
+        .collect();
+    kuroobi::board::Board::from_string(&s).ok()
+}
+
+fn color_word(c: Option<char>) -> &'static str {
+    match c {
+        Some('*') => "black",
+        Some('O') => "white",
+        _ => "",
+    }
+}
+
+/// The disc difference from black's side and the squares left on a board cut short. A board played out
+/// gives its empty squares to the winner, as the game's score (and GGS) counts them.
+fn scored(black: i32, white: i32, over: bool) -> (i32, u8) {
+    let empties = 64 - black - white;
+    let d = black - white;
+    if !over {
+        return (d, empties as u8);
+    }
+    (d + d.signum() * empties, 0)
+}
+
+fn board_record(id: &str, m: &MatchState) -> BoardRecord {
+    let black = m.cells.iter().filter(|&&c| c == 1).count() as i32;
+    let white = m.cells.iter().filter(|&&c| c == 2).count() as i32;
+    let over = board_of_cells(&m.cells).is_some_and(|b| b.is_game_over());
+    let (d, empties) = scored(black, white, over);
+    let my_color = color_word(m.my_color);
+    let (ending, ending_by) = if !m.out_of_time_by.is_empty() {
+        ("out_of_time", m.out_of_time_by.clone())
+    } else if !m.over_time_by.is_empty() {
+        ("over_time", m.over_time_by.clone())
+    } else {
+        ("", String::new())
+    };
+    BoardRecord {
+        id: id.to_string(),
+        kifu: m.kifu(),
+        ggf: m.ggf_with(id, Some(m.result.as_str()).filter(|r| !r.is_empty()), true),
+        my_color: my_color.to_string(),
+        disc_diff: match my_color {
+            "black" => Some(d),
+            "white" => Some(-d),
+            _ => None,
+        },
+        empties,
+        ending: ending.to_string(),
+        ending_by,
+        clocks: m
+            .players
+            .iter()
+            // The server sends no clock with a timeout: the notice itself says the time is gone. Once in the
+            // extension the clock's first field counts the extension down; the last stays at its setting.
+            .map(|p| {
+                let (main, ext) = if p.name == m.out_of_time_by {
+                    (Some(0), Some(0))
+                } else if p.name == m.over_time_by {
+                    (Some(0), p.secs)
+                } else {
+                    (p.secs, p.ext)
+                };
+                ClockRecord {
+                    name: p.name.clone(),
+                    color: p.color.clone(),
+                    main,
+                    ext,
+                }
+            })
+            .collect(),
+    }
+}
+
+/// GGS reports a resignation only as a ±64 result: a board that ended there although it could go on and
+/// nobody ran out of time was resigned, by the side that lost it.
+fn match_ending(
+    kind: &str,
+    who: &str,
+    boards: &[(String, MatchState)],
+    my_diff: Option<i32>,
+    login: &str,
+    opp: &str,
+) -> (String, String) {
+    if kind == "adjourned" {
+        return ("adjourn".into(), who.to_string());
+    }
+    let resigned = boards.iter().any(|(_, m)| {
+        let full = m.result.trim_start_matches('+').trim_start_matches('-');
+        full.starts_with("64")
+            && m.out_of_time_by.is_empty()
+            && board_of_cells(&m.cells).is_some_and(|b| !b.is_game_over())
+    });
+    match (resigned, my_diff) {
+        (true, Some(d)) if d < 0 => ("resign".into(), login.to_string()),
+        (true, Some(d)) if d > 0 => ("resign".into(), opp.to_string()),
+        _ => (String::new(), String::new()),
+    }
+}
+
 fn end_kind(rest: &str) -> (&'static str, String) {
     if rest.contains(" aborted") {
         return ("aborted", String::new());
@@ -4620,14 +4817,7 @@ fn handle_match_end(
     let mut dropped = finish_match(matches, &id, first_name, score, kind, &who, archive);
     dropped.sort_by_key(|(_, m)| m.seen);
     let m = dropped.first().map(|(_, m)| m);
-    let mut boards: Vec<BoardRecord> = dropped
-        .iter()
-        .map(|(k, m)| BoardRecord {
-            id: k.clone(),
-            kifu: m.kifu(),
-            ggf: m.ggf_with(k, Some(m.result.as_str()).filter(|r| !r.is_empty()), true),
-        })
-        .collect();
+    let mut boards: Vec<BoardRecord> = dropped.iter().map(|(k, m)| board_record(k, m)).collect();
     boards.sort_by(|a, b| a.id.cmp(&b.id));
     let (kifu, ggf, opp) = match &m {
         Some(m) => (m.kifu(), m.ggf(&id, re.as_deref()), m.opp_name.clone()),
@@ -4635,6 +4825,7 @@ fn handle_match_end(
     };
     let synchro = toks.iter().any(|t| t.starts_with("s8"));
     let my_diff = score.map(|s| my_stone_diff(s, first_name, login, synchro));
+    let (ending, ending_by) = match_ending(kind, &who, &dropped, my_diff, login, &opp);
     let opp_for_note = if opp.is_empty() {
         "?".to_string()
     } else {
@@ -4670,6 +4861,8 @@ fn handle_match_end(
         }),
         at: now,
         boards,
+        ending,
+        ending_by,
     };
     append_history(&result);
     let mut s = ctx.snap.lock().unwrap();
@@ -5836,6 +6029,106 @@ mod tests {
 
     use super::*;
 
+    // The .46.0 board of a real match: morgoth's extension ran out with four squares empty.
+    #[test]
+    fn an_older_record_gets_its_colour_and_count_from_its_ggf() {
+        let mut b = BoardRecord {
+            id: ".46.0".into(),
+            kifu: "f5b3c3b5d7c7b6e8a6e7f7b4a3g5g4a4a5g6h5h6e2h4h3h2g7e1g8c2f8f2c1b2g3b1d2d1a1h8h7d8h1g2f1g1b8c8".into(),
+            ggf: "(;GM[Othello]PC[GGS/os]ID[.46.0]PB[morgoth]RB[2629.3]PW[kuroobi]RW[2602.3]RE[-64.00]\
+                  BO[8 -------------------*O*----**O*----OOO-----*OO*------------------ *];)"
+                .into(),
+            ..Default::default()
+        };
+        fill_board_from_ggf(&mut b, "morgoth");
+        assert_eq!(
+            (b.my_color.as_str(), b.disc_diff, b.empties),
+            ("white", Some(-10), 4)
+        );
+    }
+
+    #[test]
+    fn a_board_records_who_ran_out_of_main_time_and_of_the_extension() {
+        let mut m = MatchState::new();
+        m.my_color = Some('O');
+        m.over_time_by = "morgoth".into();
+        let r = board_record(".46.1", &m);
+        assert_eq!(
+            (r.ending.as_str(), r.ending_by.as_str()),
+            ("over_time", "morgoth")
+        );
+        m.out_of_time_by = "morgoth".into();
+        m.players = vec![PlayerView {
+            name: "morgoth".into(),
+            secs: Some(10),
+            ext: Some(5),
+            ..Default::default()
+        }];
+        let r = board_record(".46.1", &m);
+        assert_eq!(r.ending, "out_of_time");
+        assert_eq!((r.clocks[0].main, r.clocks[0].ext), (Some(0), Some(0)));
+    }
+
+    // Seen on the local server: `00:42,1:0//01:00,1:0` after moving 13 seconds into a one-minute extension.
+    #[test]
+    fn a_clock_in_the_extension_counts_it_down_in_its_first_field() {
+        let mut m = MatchState::new();
+        m.over_time_by = "bob".into();
+        let (secs, _, ext) = parse_clock("00:42,1:0//01:00,1:0");
+        m.players = vec![PlayerView {
+            name: "bob".into(),
+            secs,
+            ext,
+            ..Default::default()
+        }];
+        let c = &board_record(".0", &m).clocks[0];
+        assert_eq!((c.main, c.ext), (Some(0), Some(42)));
+    }
+
+    #[test]
+    fn a_board_played_out_gives_its_empty_squares_to_the_winner() {
+        assert_eq!(scored(33, 30, true), (4, 0));
+        assert_eq!(scored(30, 30, true), (0, 0));
+        assert_eq!(scored(35, 25, false), (10, 4));
+    }
+
+    #[test]
+    fn a_64_on_an_unfinished_board_without_a_timeout_is_a_resignation() {
+        let mut m = MatchState::new();
+        m.cells = vec![0; 64];
+        for (sq, c) in [(27, 2), (36, 2), (28, 1), (35, 1)] {
+            m.cells[sq] = c;
+        }
+        m.result = "-64.00".into();
+        let boards = vec![(".9.0".to_string(), m.clone())];
+        assert_eq!(
+            match_ending("finished", "", &boards, Some(-128), "me", "you"),
+            ("resign".into(), "me".into())
+        );
+        assert_eq!(
+            match_ending("finished", "", &boards, Some(128), "me", "you").1,
+            "you"
+        );
+        let mut t = m;
+        t.out_of_time_by = "you".into();
+        assert_eq!(
+            match_ending(
+                "finished",
+                "",
+                &[(".9.0".into(), t)],
+                Some(128),
+                "me",
+                "you"
+            )
+            .0,
+            ""
+        );
+        assert_eq!(
+            match_ending("adjourned", "you", &[], None, "me", "you"),
+            ("adjourn".into(), "you".into())
+        );
+    }
+
     #[test]
     fn a_log_channel_is_a_dot_and_up_to_seven_name_characters() {
         for ok in ["", ".kuroobi", ".Rhapsod", ".a", ".my_bot1", ".x-y_z"] {
@@ -6293,7 +6586,7 @@ mod tests {
     }
 
     #[test]
-    fn a_jumping_clock_means_overtime() {
+    fn a_jumping_clock_means_the_extension() {
         let board: Vec<String> = [
             "|   A B C D E F G H",
             "| 1 - - - - - - - - 1 ",
@@ -6322,22 +6615,22 @@ mod tests {
 
         let mut m = MatchState::new();
         apply_block(&mut m, &with_clock("00:04,0:0"), "kuroobi");
-        assert!(!m.in_overtime, "still in main time");
+        assert!(!m.in_extension, "still in main time");
         apply_block(&mut m, &with_clock("02:00,0:0"), "kuroobi");
-        assert!(m.in_overtime, "missed the jump");
+        assert!(m.in_extension, "missed the jump");
         let mut m2 = MatchState::new();
         apply_block(&mut m2, &with_clock("00:03,0:0"), "kuroobi");
-        assert!(!m2.in_overtime);
+        assert!(!m2.in_extension);
         apply_block(&mut m2, &with_clock("00:00,0:0"), "kuroobi");
-        assert!(m2.in_overtime, "missed the clock stuck at 0");
+        assert!(m2.in_extension, "missed the clock stuck at 0");
         apply_block(&mut m, &with_clock("01:12,0:0"), "kuroobi");
-        assert!(m.in_overtime, "cleared the overtime flag");
+        assert!(m.in_extension, "cleared the extension flag");
         let mut m3 = MatchState::new();
         apply_block(&mut m3, &with_clock("04:59,0:0"), "kuroobi");
         apply_block(&mut m3, &with_clock("05:00,1:0"), "kuroobi");
         assert!(
-            !m3.in_overtime,
-            "a second back after a book move is not overtime"
+            !m3.in_extension,
+            "a second back after a book move is not the extension"
         );
     }
 
@@ -6622,7 +6915,7 @@ mod tests {
         let mut matches = HashMap::new();
         let mut old = MatchState::new();
         old.over = true;
-        old.in_overtime = true;
+        old.in_extension = true;
         matches.insert(".10.0".to_string(), old);
         forget_finished_on_join(&mut matches, "/os: update .10.0 s8r16 K?", ".10.0");
         assert!(matches.contains_key(".10.0"), "an update is the same game");
@@ -6633,11 +6926,11 @@ mod tests {
         );
 
         let mut live = MatchState::new();
-        live.in_overtime = true;
+        live.in_extension = true;
         matches.insert(".10.1".to_string(), live);
         forget_finished_on_join(&mut matches, "/os: join .10.1 s8r16 K?", ".10.1");
         assert!(
-            matches.get(".10.1").is_some_and(|m| m.in_overtime),
+            matches.get(".10.1").is_some_and(|m| m.in_extension),
             "a game still running keeps its state"
         );
     }
@@ -6766,7 +7059,7 @@ mod tests {
     }
 
     #[test]
-    fn a_small_jump_is_still_overtime() {
+    fn a_small_jump_is_still_the_extension() {
         let with_clock = |secs: &str| {
             vec![
                 format!("|kuroobi  (1720.0 *) {secs}//02:00,0:0"),
@@ -6777,13 +7070,13 @@ mod tests {
         };
         let mut m = MatchState::new();
         apply_block(&mut m, &with_clock("00:50,0:0"), "kuroobi");
-        assert!(!m.in_overtime, "still in main time");
+        assert!(!m.in_extension, "still in main time");
         apply_block(&mut m, &with_clock("01:30,0:0"), "kuroobi");
-        assert!(m.in_overtime, "missed the 40-second jump");
+        assert!(m.in_extension, "missed the 40-second jump");
     }
 
     #[test]
-    fn an_increment_is_not_overtime() {
+    fn an_increment_is_not_the_extension() {
         let with_clock2 = |secs: &str, inc: &str| {
             vec![
                 format!("|kuroobi  (1720.0 *) {secs}/{inc}/02:00,0:0"),
@@ -6795,22 +7088,22 @@ mod tests {
         let mut m = MatchState::new();
         apply_block(&mut m, &with_clock2("05:00,0:0", "0:20"), "kuroobi");
         apply_block(&mut m, &with_clock2("05:15,0:0", "0:20"), "kuroobi");
-        assert!(!m.in_overtime, "mistook an increment for overtime");
+        assert!(!m.in_extension, "mistook an increment for the extension");
     }
 
     #[test]
-    fn a_zero_before_any_move_is_not_overtime() {
+    fn a_zero_before_any_move_is_not_the_extension() {
         let mut m = MatchState::new();
         let b = vec![
             "|kuroobi  (1720.0 *) 00:00,0:0//02:00,0:0".to_string(),
             "|* to move".to_string(),
         ];
         apply_block(&mut m, &b, "kuroobi");
-        assert!(!m.in_overtime, "set before any move was played");
+        assert!(!m.in_extension, "set before any move was played");
     }
 
     #[test]
-    fn a_falling_clock_is_not_overtime() {
+    fn a_falling_clock_is_not_the_extension() {
         let mut m = MatchState::new();
         for secs in ["15:00,0:0", "14:31,0:0", "13:02,0:0", "00:41,0:0"] {
             let b = vec![
@@ -6818,7 +7111,7 @@ mod tests {
                 "|* to move".to_string(),
             ];
             apply_block(&mut m, &b, "kuroobi");
-            assert!(!m.in_overtime, "{secs} was treated as overtime");
+            assert!(!m.in_extension, "{secs} was treated as the extension");
         }
     }
 

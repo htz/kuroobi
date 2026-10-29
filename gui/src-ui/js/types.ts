@@ -133,7 +133,7 @@ export interface MatchView {
   opp_secs: number | null;
   my_ext: number | null;
   opp_ext: number | null;
-  in_overtime: boolean;
+  in_extension: boolean;
   players: PlayerView[];
   gtype: string;
   moves: string[];
@@ -167,7 +167,23 @@ export interface GameResult {
   seq: number;
   my_rating: number | null;
   at: number;
-  boards?: { id: string; kifu: string; ggf: string }[];
+  boards?: BoardRecord[];
+  /** "resign" | "adjourn": the whole match was decided that way. */
+  ending?: string;
+  ending_by?: string;
+}
+
+export interface BoardRecord {
+  id: string;
+  kifu: string;
+  ggf: string;
+  my_color?: string;
+  disc_diff?: number | null;
+  empties?: number;
+  /** "over_time" | "out_of_time" */
+  ending?: string;
+  ending_by?: string;
+  clocks?: { name: string; color: string; main: number | null; ext: number | null }[];
 }
 
 interface HistoryRow {

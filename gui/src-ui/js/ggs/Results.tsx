@@ -1,13 +1,13 @@
 import { useEffect, useState } from 'react';
 import { ggsApi } from '../api';
-import type { GameResult, GgsSnapshot } from '../types';
-import { gtypeLabel } from '../ggs';
+import type { BoardRecord, GameResult, GgsSnapshot } from '../types';
+import { fmtSecs, gtypeLabel } from '../ggs';
 import { t } from '../i18n';
 import { Divider, Drawer, Section, Toolbar } from '../components/layout';
 import { Button, Segmented, Select } from '../components/primitives';
 import { Tag } from '../components/ggs';
 import { KeyValue } from '../components/layout';
-import { EvalTrend, RateChart, ResultHead, ResultRow } from '../components/data';
+import { EvalTrend, RateChart, ResultBoardCell, ResultHead, ResultRow, StoneDot, type ResultBoard, type ResultEnding } from '../components/data';
 import { askSheet } from '../AskSheet';
 import { Blank, clockLabel, Page, RankRates, rateLabel, Rows, Sections, signed, sumBoards, Table, type TrendPoint, useWidth, useWindowHeight } from '../ggsui';
 import { whenFull, whenShort } from '../when';
@@ -31,6 +31,30 @@ const poolOf = (base: string, raw?: string) => {
 
 
 type Pt = TrendPoint;
+
+/** A resignation or an adjournment decides the whole match (both boards of a synchro). */
+function endingOf(r: GameResult, me: string): ResultEnding | null {
+  if (r.ending === 'adjourn') return { text: t('data.result.stopped'), tone: 'sub' };
+  if (r.ending !== 'resign') return null;
+  return r.ending_by === me ? { text: t('data.result.resigned'), tone: 'bad' } : { text: t('data.result.opp_resigned'), tone: 'gold' };
+}
+
+/** Running out of time is per board: each board has its own clock. */
+function boardOf(b: BoardRecord, me: string): ResultBoard {
+  const lost = b.ending_by === me;
+  return {
+    diff: b.disc_diff ?? null, empties: b.empties ?? 0,
+    ...(b.ending === 'over_time' || b.ending === 'out_of_time'
+      ? { tag: t(`data.result.${b.ending}_${lost ? 'loss' : 'win'}`), tone: lost ? 'bad' as const : 'gold' as const }
+      : {}),
+  };
+}
+
+/** The boards' cells of a row; a match decided as a whole leaves them empty. */
+const boardsOf = (r: GameResult, me: string): ResultBoard[] => (r.ending ? [] : (r.boards ?? []).map((b) => boardOf(b, me)));
+
+const clockLeft = (c: { main: number | null; ext: number | null }) =>
+  c.main == null ? '\u2014' : fmtSecs(c.main) + (c.ext != null ? ` · ${t('results.ext')} ${fmtSecs(c.ext)}` : '');
 
 /** One board's reported values from a GGF that carries them (`B[F5/1.50/2.00]`), from `me`'s side. */
 function ggfTrend(ggf: string, me: string): Pt[] {
@@ -122,6 +146,12 @@ export function Results({ snap, onKifu }: {
   const at = sel ? rated.findIndex((r) => rowKey(r) === rowKey(sel)) : -1;
   const before = at > 0 ? rated[at - 1].my_rating : null;
   const after = sel?.my_rating ?? null;
+  const selEnding = sel ? endingOf(sel, login) : null;
+  const selBoards = (sel?.boards ?? []).filter((b) => b.my_color || b.clocks?.length);
+  const colorName = (c?: string) => t(c === 'black' ? 'data.color.black' : 'data.color.white');
+  const myColors = selBoards.length > 1
+    ? selBoards.map((b, i) => `${t('data.result.head_board', { n: i + 1 })} ${colorName(b.my_color)}`).join(' · ')
+    : selBoards.length === 1 && selBoards[0].my_color ? colorName(selBoards[0].my_color) : '';
 
   return (
     <>
@@ -164,7 +194,7 @@ export function Results({ snap, onKifu }: {
             )}
             <Section title={t('ggs.results.finished')} aside={t('ggs.lobby.game_count', { n: rows.length })} grow>
               <Table>
-                <ResultHead note={pool === 'all'} rating={hasRating} />
+                <ResultHead note rating={hasRating} boards />
                 <Rows>
                   {rows.map((r) => (
                     <ResultRow key={rowKey(r)} opponent={r.opp}
@@ -175,7 +205,8 @@ export function Results({ snap, onKifu }: {
                                }}
                                win={(r.my_diff ?? 0) > 0} draw={r.my_diff === 0} adjourned={r.my_diff == null}
                                discs={r.my_diff ?? 0} when={whenShort(r.at)}
-                               note={pool === 'all' ? gtypeLabel(baseType(r.base, r.raw)) : undefined}
+                               note={gtypeLabel(baseType(r.base, r.raw))}
+                               ending={endingOf(r, login)} boards={boardsOf(r, login)}
                                rating={hasRating ? r.my_rating : undefined}
                                onClick={() => setPick(rowKey(r))}
                                dim={!r.ggf && !r.kifu && !r.archive} />
@@ -197,6 +228,7 @@ export function Results({ snap, onKifu }: {
                         {signed(sel.my_diff)}
                       </span>
                     )}
+                    {selEnding && <span style={{ fontSize: 'var(--fs-5)', fontWeight: 400, color: `var(--${selEnding.tone})` }}>{selEnding.text}</span>}
                   </>}>
             <div className="k-scroll" style={{ flex: 1, minHeight: 0 }}>
             <div style={{ display: 'flex', flexDirection: 'column', gap: 'var(--sp-3)', padding: 'var(--sp-4) var(--sp-4) var(--sp-5)' }}>
@@ -204,13 +236,15 @@ export function Results({ snap, onKifu }: {
                 {oppRate && <KeyValue label={t('results.opp_rating')} value={oppRate} />}
                 {kind && <KeyValue label={t('ggs.field.format')} value={gtypeLabel(kind)} />}
                 {clock && <KeyValue label={t('ggs.field.time_control')} value={clock} />}
-                {(synchro || meBlack != null) && <KeyValue label={t('ggs.field.turn')} value={synchro ? t('ggs.results.both_colors') : meBlack ? t('data.color.black') : t('data.color.white')} />}
+                {myColors ? <KeyValue label={t('results.my_color')} value={myColors} />
+                  : (synchro || meBlack != null) && <KeyValue label={t('results.my_color')} value={synchro ? t('ggs.results.both_colors') : meBlack ? t('data.color.black') : t('data.color.white')} />}
                 <KeyValue label={t('results.when')} value={whenFull(sel.at ?? 0)} />
                 {after != null && (
                   <KeyValue label={t('results.rating')}
                             value={after.toFixed(1) + (before != null ? ` (${after - before >= 0 ? '+' : ''}${(after - before).toFixed(1)})` : '')} />
                 )}
               </div>
+              {selBoards.length > 0 && <BoardTable boards={selBoards} me={login} decided={!!sel.ending} recorded={sel.my_diff} />}
               {trend.some((p) => p.mine != null || p.opp != null) && (
                 <EvalTrend points={trend} height={180} title={t('play.trend_title', { name: login })}
                            names={{ mine: login, opp: sel.opp }} />
@@ -229,5 +263,62 @@ export function Results({ snap, onKifu }: {
         )}
       </Page>
     </>
+  );
+}
+
+const HEAD: React.CSSProperties = {
+  fontSize: 'var(--fs-7)', fontWeight: 600, letterSpacing: '.08em', color: 'var(--sub)',
+  whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis',
+};
+
+/** Each board: its result on the board and a time mark, then one row per player with the clock it ended on. */
+function BoardTable({ boards, me, decided, recorded }: {
+  boards: BoardRecord[]; me: string; decided: boolean; recorded: number | null;
+}) {
+  const diffs = boards.map((b) => b.disc_diff);
+  const total = diffs.every((d) => d != null) ? diffs.reduce((a: number, d) => a + (d as number), 0) : null;
+  const row = (last: boolean): React.CSSProperties => ({
+    height: 'var(--h-row)', display: 'flex', alignItems: 'center', gap: 'var(--sp-2)', fontSize: 'var(--fs-5)',
+    borderBottom: last ? '1px solid var(--border-weak)' : undefined,
+  });
+  return (
+    <div style={{ display: 'flex', flexDirection: 'column' }}>
+      <div style={{ height: 'var(--h-head)', display: 'flex', alignItems: 'center', gap: 'var(--sp-2)', borderBottom: '1px solid var(--border)' }}>
+        <span style={{ ...HEAD, width: 48, flex: 'none' }}>{t('results.head_board')}</span>
+        <span style={{ ...HEAD, width: 170, flex: 'none' }}>{t('results.head_on_board')}</span>
+        <span style={{ ...HEAD, flex: 1, minWidth: 0 }}>{t('results.head_player')}</span>
+        <span style={{ ...HEAD, width: 112, flex: 'none', textAlign: 'right' }}>{t('results.head_left')}</span>
+      </div>
+      {boards.map((b, i) => {
+        const players = b.clocks?.length ? b.clocks : [null];
+        return players.map((c, j) => (
+          <div key={b.id + j} style={row(j === players.length - 1)}>
+            {j === 0
+              ? <>
+                  <span style={{ width: 48, flex: 'none', color: 'var(--sub)' }}>{t('data.result.head_board', { n: i + 1 })}</span>
+                  {decided ? <span style={{ width: 170, flex: 'none' }} /> : <ResultBoardCell b={boardOf(b, me)} />}
+                </>
+              : <span style={{ width: 226, flex: 'none' }} />}
+            <span style={{ flex: 1, minWidth: 0, display: 'flex', alignItems: 'center', gap: 'var(--sp-1)', whiteSpace: 'nowrap', overflow: 'hidden' }}>
+              {c && <><StoneDot color={c.color === 'black' ? 'b' : 'w'} size={12} />
+                <span className="k-sel" style={{ overflow: 'hidden', textOverflow: 'ellipsis' }}>{c.name}</span></>}
+            </span>
+            <span style={{ width: 112, flex: 'none', textAlign: 'right', fontSize: 'var(--fs-6)', fontVariantNumeric: 'tabular-nums' }}>
+              {c ? clockLeft(c) : ''}
+            </span>
+          </div>
+        ));
+      })}
+      {!decided && boards.length > 1 && total != null && (
+        <div style={{ ...row(false), gap: 'var(--sp-2)' }}>
+          <span style={{ width: 48, flex: 'none', color: 'var(--sub)' }}>{t('results.board_total')}</span>
+          <span style={{ width: 28, flex: 'none', textAlign: 'right', fontWeight: 600, fontVariantNumeric: 'tabular-nums',
+                         color: total > 0 ? 'var(--ok)' : total < 0 ? 'var(--bad)' : 'var(--text)' }}>{signed(total)}</span>
+          {recorded != null && recorded !== total && (
+            <span style={{ color: 'var(--sub)', fontSize: 'var(--fs-6)' }}>{t('results.recorded', { d: signed(recorded) })}</span>
+          )}
+        </div>
+      )}
+    </div>
   );
 }

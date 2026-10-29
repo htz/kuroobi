@@ -467,12 +467,19 @@ export function RateChart({ points, height, width, dates, labels, hover, onHover
   );
 }
 
-const W_OUTCOME = 28, W_DISCS = 44, W_RATING = 60, W_WHEN = 64;
+const W_OUTCOME = 28, W_DISCS = 44, W_RATING = 60, W_WHEN = 64, W_ENDING = 72, W_BOARD = 170;
 // Table cells never wrap: a narrow column turns a label into a vertical stack of characters.
 const ONE_LINE: React.CSSProperties = { whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' };
 
-export function ResultHead({ note, rating }: {
+/** One board of a result: the disc difference on it, how many squares were left, and a time mark if any. */
+export type ResultBoard = { diff: number | null; empties: number; tag?: string; tone?: 'gold' | 'bad' };
+/** A match decided as a whole (a resignation, an adjournment). */
+export type ResultEnding = { text: string; tone: 'gold' | 'bad' | 'sub' };
+
+export function ResultHead({ note, rating, boards }: {
   note?: boolean; rating?: boolean;
+  /** The ending and the two board columns (my own games, where they are recorded). */
+  boards?: boolean;
 }) {
   const cell = (w: number): React.CSSProperties => ({
     width: w, flex: 'none', textAlign: 'right', ...ONE_LINE,
@@ -483,13 +490,35 @@ export function ResultHead({ note, rating }: {
       <span style={{ flex: 1, minWidth: 0, ...ONE_LINE }}>{t('data.result.head_opponent')}</span>
       {note && <span style={{ width: 'var(--w-gtype)', flex: 'none', ...ONE_LINE }}>{t('data.result.head_kind')}</span>}
       <span style={cell(W_DISCS)}>{t('data.result.head_discs')}</span>
+      {boards && <>
+        <span style={{ width: W_ENDING, flex: 'none', ...ONE_LINE }}>{t('data.result.head_ending')}</span>
+        <span style={{ width: W_BOARD, flex: 'none', ...ONE_LINE }}>{t('data.result.head_board', { n: 1 })}</span>
+        <span style={{ width: W_BOARD, flex: 'none', ...ONE_LINE }}>{t('data.result.head_board', { n: 2 })}</span>
+      </>}
       {rating && <span style={cell(W_RATING)}>{t('data.result.head_rating')}</span>}
       <span style={cell(W_WHEN)}>{t('data.result.head_date')}</span>
     </TableHead>
   );
 }
 
-export function ResultRow({ win, draw, adjourned, opponent, discs, when, note, rating, dim, picked, onHover, onClick }: {
+export function ResultBoardCell({ b }: { b?: ResultBoard | null }) {
+  return (
+    <span style={{ width: W_BOARD, flex: 'none', display: 'flex', alignItems: 'baseline', gap: 6, ...ONE_LINE }}>
+      {b && b.diff != null && <>
+        <span style={{ width: 28, flex: 'none', textAlign: 'right', fontVariantNumeric: 'tabular-nums' }}>{signedDiff(b.diff)}</span>
+        {b.empties > 0 && <span style={{ color: 'var(--sub)', fontSize: 'var(--fs-6)' }}>{t('data.result.empties', { n: b.empties })}</span>}
+        {b.tag && <span style={{ color: `var(--${b.tone})`, fontSize: 'var(--fs-6)' }}>{b.tag}</span>}
+      </>}
+    </span>
+  );
+}
+
+const signedDiff = (d: number) => (d > 0 ? '+' + d : d < 0 ? '\u2212' + -d : '0');
+
+export function ResultRow({ win, draw, adjourned, opponent, discs, when, note, rating, dim, picked, onHover, onClick, ending, boards }: {
+  ending?: ResultEnding | null;
+  /** Given: the ending and the two board columns are drawn (empty when not known). */
+  boards?: (ResultBoard | null)[];
   win: boolean;
   draw?: boolean;
   adjourned?: boolean;
@@ -522,6 +551,13 @@ export function ResultRow({ win, draw, adjourned, opponent, discs, when, note, r
                    fontVariantNumeric: 'tabular-nums', ...ONE_LINE }}>
       {adjourned ? '\u2014' : discs > 0 ? '+' + discs : discs}
     </span>
+    {boards && <>
+      <span style={{ width: W_ENDING, flex: 'none', fontSize: 'var(--fs-6)', color: ending ? `var(--${ending.tone})` : undefined, ...ONE_LINE }}>
+        {ending?.text}
+      </span>
+      <ResultBoardCell b={boards[0]} />
+      <ResultBoardCell b={boards[1]} />
+    </>}
     {rating !== undefined && (
       <span style={{ width: W_RATING, flex: 'none', textAlign: 'right', color: 'var(--sub)',
                      fontSize: 'var(--fs-6)', fontVariantNumeric: 'tabular-nums', ...ONE_LINE }}>

@@ -84,7 +84,7 @@ function clockView(c: ClockBase | undefined, side: ClockSide, now: number,
   if (m.ended === 'adjourned' || m.ended === 'aborted') return { text: '', active: false };
   const active = !m.over && !!m.turn && !!color && m.turn === color;
   if (base === null) return { text: raw || '', active };
-  // A finished board keeps the time each side had left at its last move, without overtime marks.
+  // A finished board keeps the time each side had left at its last move, without extension marks.
   if (m.over) return { text: fmtSecs(base), active: false };
   // From the server update, not first draw, so a remount does not reset the clock.
   const since = m.updated_ms || c.at;
@@ -99,14 +99,14 @@ function clockView(c: ClockBase | undefined, side: ClockSide, now: number,
   const ours = !active || m.think_queued ? 0
     : m.think_since_ms ? Math.max(0, now - m.think_since_ms) / 1000 : elapsed;
   const rem = base - (mine ? ours : 0);
-  if (mine && m.in_overtime && rem >= 0) {
-    return { text: t('ggs.clock.overtime', { t: fmtSecs(rem) }), active: false };
+  if (mine && m.in_extension && rem >= 0) {
+    return { text: t('ggs.clock.extension', { t: fmtSecs(rem) }), active: false };
   }
   if (rem >= 0) return { text: fmtSecs(rem), active };
   if (ext && ext + rem >= 0) {
-    return { text: t('ggs.clock.overtime', { t: fmtSecs(ext + rem) }), active: false };
+    return { text: t('ggs.clock.extension', { t: fmtSecs(ext + rem) }), active: false };
   }
-  return { text: t('ggs.clock.timeout'), active: false };
+  return { text: t('ggs.clock.out_of_time'), active: false };
 }
 
 type Presence = 'playing' | 'online' | 'offline';
