@@ -21,18 +21,16 @@
   --on-accent:#ffffff; --on-bad:#ffffff;
   --scrim:rgba(0,0,0,.45);   /* scrim; black regardless of theme */
   --stone-black:#111213; --stone-black-edge:#2c2e30;
-  /* Overlays drawn on the board. Dark overlays white, but light overlays
-     black because the board is bright — written as literals, the legal-move
-     dots and eval squares disappear in light */
   --stone-shadow:rgba(0,0,0,.25);
-  --board-hint:rgba(255,255,255,.30);
-  /* The eval disc hides enough of the board under it that its text reads on every tatami colour
-     (the tatami is chosen apart from the theme, from light straw to dark forest): 4.5:1 or more. */
-  --board-eval-bg:rgba(0,0,0,.55); --board-eval-edge:rgba(255,255,255,.25);
-  --board-eval-text:#eef2ec; --board-eval-strong:#ffffff; --board-eval-weak:#c3cec6;
-  --board-eval-neg:#ff9a8a; --board-eval-best:#ffd479;
-  /* Text for the "book" source on the eval disc. Plain --gold is too pale on the light disc. */
-  --board-eval-book:#ffd479;
+  /* Legal-move dots and eval discs take the colour of the side to move, in either theme, so the
+     board says whose turn it is. Translucent enough that the tatami shows through and they never
+     pass for stones; text keeps 4.5:1 over every tatami (light straw to dark forest). */
+  --mark-b-bg:rgba(0,0,0,.5); --mark-b-edge:rgba(0,0,0,.55);
+  --mark-b-text:#eef2ec; --mark-b-strong:#ffffff; --mark-b-weak:#c3cec6; --mark-b-neg:#ffb4a8; --mark-b-best:#ffd479;
+  --mark-b-dot:rgba(17,18,19,.6); --mark-b-dot-edge:rgba(255,255,255,.35);
+  --mark-w-bg:rgba(255,255,255,.5); --mark-w-edge:rgba(255,255,255,.85);
+  --mark-w-text:#101510; --mark-w-strong:#101510; --mark-w-weak:#1f261a; --mark-w-neg:#5a1006; --mark-w-best:#3d2c00;
+  --mark-w-dot:rgba(241,241,241,.72); --mark-w-dot-edge:rgba(0,0,0,.22);
   --stone-white:#f1f1f1; --stone-white-edge:#c9cdd1;
   /* The edge of a small black stone mark on the screen's own surfaces (score row, side pickers).
      The board's black edge is as dark as the ground in dark, so the mark vanished; this one
@@ -138,11 +136,6 @@
   --stone-white-edge:#8b9198;
   --stone-black-dot-edge:#2c2e30; --stone-black-dot-hi:#4a4e53;
   --stone-shadow:rgba(0,0,0,.22);
-  --board-hint:rgba(0,0,0,.34);
-  --board-eval-bg:rgba(255,255,255,.75); --board-eval-edge:rgba(0,0,0,.28);
-  --board-eval-text:#1c2418; --board-eval-strong:#101710; --board-eval-weak:#3c4a36;
-  --board-eval-neg:#9c2f1f; --board-eval-best:#6b4e00;
-  --board-eval-book:#6b4e00;
   --gold:#876819; --ok:#4b782b; --bad:#b54c39;
   --sh-1:0 1px 2px rgba(0,0,0,.18);
   --sh-2:0 20px 48px rgba(60,50,35,.28);
@@ -163,11 +156,6 @@
     --stone-white-edge:#8b9198;
   --stone-black-dot-edge:#2c2e30; --stone-black-dot-hi:#4a4e53;
     --stone-shadow:rgba(0,0,0,.22);
-    --board-hint:rgba(0,0,0,.34);
-    --board-eval-bg:rgba(255,255,255,.75); --board-eval-edge:rgba(0,0,0,.28);
-    --board-eval-text:#1c2418; --board-eval-strong:#101710; --board-eval-weak:#3c4a36;
-    --board-eval-neg:#9c2f1f; --board-eval-best:#6b4e00;
-    --board-eval-book:#6b4e00;
     --gold:#876819; --ok:#4b782b; --bad:#b54c39;
     --sh-1:0 1px 2px rgba(0,0,0,.18);
     --sh-2:0 20px 48px rgba(60,50,35,.28);

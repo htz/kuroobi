@@ -124,7 +124,7 @@ export function BookPane({ b, coords, grain, flip, onSettings }: {
         <Board cells={(n?.cells ?? INITIAL) as (0 | 1 | 2)[]}
                legal={b.node?.moves.map((m) => m.pos) ?? []}
                last={b.line.length ? b.line[b.line.length - 1] : null}
-               evals={evals} coords={coords} grain={grain} flip={flip}
+               evals={evals} turn={n?.player === 'white' ? 'w' : 'b'} coords={coords} grain={grain} flip={flip}
                onPlay={(sq) => { if (b.node?.moves.some((m) => m.pos === sq)) b.push(sq); }} />
       </BoardFit>
       <ScoreRow black={n?.black ?? 2} white={n?.white ?? 2}

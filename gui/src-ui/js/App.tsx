@@ -83,7 +83,6 @@ export function App() {
   const [bookTab, setBookTab] = useState('book');
   const [dockOpen, setDockOpen] = useState(false);
   const [graphOpen, setGraphOpen] = useState(false);
-  const [pov, setPov] = useState<'b' | 'w'>('b');
 
   const setHasBook = g.setHasBook;
   useEffect(() => {
@@ -377,14 +376,10 @@ export function App() {
   }, [fetched]);
 
   const v = g.view;
-  const sign: 1 | -1 = study && pov === 'w' ? -1 : 1;
   const moves = useMemo(
-    () => (v ? movesOf(v, g.moveSource, graph.values, sign) : []),
-    [v, g.moveSource, graph.values, sign]);
-  const evals = g.autoHint ? evalsOf(g.hints, v?.player !== 'white', sign) : undefined;
-  const povPoints = useMemo(
-    () => (graph.values ?? []).map((p) => (p && sign === -1 ? { ...p, value: -p.value } : p)),
-    [graph.values, sign]);
+    () => (v ? movesOf(v, g.moveSource, graph.values) : []),
+    [v, g.moveSource, graph.values]);
+  const evals = g.autoHint ? evalsOf(g.hints) : undefined;
   const blunder = useMemo(() => {
     let best: { at: number; loss: number } | undefined;
     for (const m of moves) if (m.loss && (!best || m.loss > best.loss)) best = { at: m.n, loss: m.loss };
@@ -583,9 +578,6 @@ export function App() {
                       onClick={() => void graph.update()}>{t('app.study.analyze')}</Button>
               <Toggle checked={g.autoHint} onChange={g.setAutoHint} label={t('app.play.show_evals')} />
               <Divider />
-              <Segmented value={pov} onChange={setPov}
-                         options={[{ value: 'b', label: t('app.study.black_view') },
-                                   { value: 'w', label: t('app.study.white_view') }]} />
               <span style={{ fontSize: 'var(--fs-6)', color: 'var(--sub)' }}>
                 {v && v.moves.length
                   ? t('app.study.ply_of', { n: v.cursor, total: v.moves.length })
@@ -664,6 +656,7 @@ export function App() {
         }}>
           <BoardFit minHeight={200} padding="var(--sp-2) var(--sp-4)">
             {v && <Board cells={v.cells as Cell[]} legal={v.legal} last={v.last} evals={evals}
+                         turn={v.player === 'white' ? 'w' : 'b'}
                          coords={prefs.coords} grain={prefs.grain}
                          flip={flipped(prefs.facing, study ? '' : sideColor)}
                          disabled={g.thinking || kuroobiTurn}
@@ -682,9 +675,9 @@ export function App() {
         )}
 
         {study && !isGgs && !isBook && !editing && (
-          <EvalGraph points={povPoints} plies={v?.moves.length} cursor={v?.cursor}
+          <EvalGraph points={graph.values ?? []} plies={v?.moves.length} cursor={v?.cursor}
                      blunder={blunder} busy={graph.busy} onJump={(n) => void g.jumpTo(n)}
-                     open={graphOpen} pov={pov}
+                     open={graphOpen}
                      moveName={(n) => { if (!v || n < 1 || n > v.moves.length) return undefined; const m = v.moves[n - 1]; return m == null ? t('app.moves.pass') : sqName(m); }}
                      extra={<>
                        {graph.prog && (

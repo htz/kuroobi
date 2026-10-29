@@ -61,11 +61,12 @@ const fr = (sq: number): [number, number] => [Math.floor(sq / 8), sq % 8];
 /** Editing: every square takes the pointer; a press starts a stroke that the squares it crosses join. */
 export type BoardEdit = { ghost: Cell; onDown: (sq: number) => void; onEnter: (sq: number) => void };
 
-export function Board({ cells, legal = [], evals, last, coords, grain = true, flip = false, disabled, onPlay, edit }: {
+export function Board({ cells, legal = [], evals, last, turn = 'b', coords, grain = true, flip = false, disabled, onPlay, edit }: {
   cells: Cell[];                                   // 64 (sq = file*8 + rank)
   legal?: number[];
   evals?: Record<number, EvalInfo>;
   last?: number | null;
+  turn?: 'b' | 'w';                                 // colours the legal-move marks; evals are this side's
   coords: boolean;
   grain?: boolean;
   flip?: boolean;
@@ -125,8 +126,9 @@ export function Board({ cells, legal = [], evals, last, coords, grain = true, fl
              onClick={disabled ? undefined : () => onPlay?.(sq)}>
             <circle cx={x} cy={y} r={46} fill="transparent" />
             {ev
-              ? <g className="k-eval" style={{ opacity: .88 }}><EvalCell x={x} y={y} info={ev} /></g>
-              : <circle className="k-legal" cx={x} cy={y} r={7} fill="var(--board-hint)" opacity={.5} />}
+              ? <g className="k-eval"><EvalCell x={x} y={y} info={ev} side={turn} /></g>
+              : <circle className="k-legal" cx={x} cy={y} r={9} fill={`var(--mark-${turn}-dot)`}
+                        stroke={`var(--mark-${turn}-dot-edge)`} strokeWidth={1.5} opacity={.85} />}
           </g>
         );
       })}
@@ -164,19 +166,18 @@ function Stone({ x, y, color, last }: { x: number; y: number; color: 1 | 2; last
   );
 }
 
-function EvalCell({ x, y, info }: { x: number; y: number; info: EvalInfo }) {
+function EvalCell({ x, y, info, side }: { x: number; y: number; info: EvalInfo; side: 'b' | 'w' }) {
   const { score, src, best } = info;
   const label = sourceLabel(src);
   const num = evalText(score, 'exact' in src);
-  const srcColor = 'book' in src ? 'var(--board-eval-book)'
-    : 'exact' in src ? 'var(--board-eval-strong)'
-    : 'var(--board-eval-weak)';
+  const c = (k: string) => `var(--mark-${side}-${k})`;
+  const srcColor = 'book' in src ? c('best') : 'exact' in src ? c('strong') : c('weak');
   return (
     <g>
-      <circle cx={x} cy={y} r={30} fill="var(--board-eval-bg)"
-              stroke={best ? 'var(--board-eval-best)' : 'var(--board-eval-edge)'} strokeWidth={best ? 2.5 : 1} />
+      <circle cx={x} cy={y} r={30} fill={c('bg')}
+              stroke={best ? c('best') : c('edge')} strokeWidth={best ? 2.5 : 1.5} />
       <text x={x} y={y + 2} textAnchor="middle" fontSize={numSize(num)}
-            fill={best ? 'var(--board-eval-best)' : score < 0 ? 'var(--board-eval-neg)' : 'var(--board-eval-text)'}
+            fill={best ? c('best') : score < 0 ? c('neg') : c('text')}
             fontWeight={best ? 700 : 400}>
         {num}
       </text>

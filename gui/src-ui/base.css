@@ -102,8 +102,7 @@ button:disabled, button[aria-disabled="true"] { cursor:default; }
  * pressable move, so the pointer cursor is safe here */
 .k-cell { cursor:pointer; }
 .k-cell circle { transition:opacity var(--dur) var(--ease), r var(--dur) var(--ease); }
-.k-cell:hover .k-legal { opacity:.75; }
-.k-cell:hover .k-eval { opacity:1; }
+.k-cell:hover .k-legal { opacity:1; }
 .k-edit-cells { cursor:crosshair; }
 
 /* Board editor: the stone to place, one tile each */

@@ -18,7 +18,6 @@ export function movesOf(
   v: GameView,
   info: Record<number, MoveInfo>,
   values: (GraphPoint | undefined)[] | null,
-  sign: 1 | -1,
 ): Move[] {
   const shown = v.moves.map((_, i) => (info[i + 1] ? info[i + 1].value : values?.[i + 1]?.value));
   return v.moves.map((m, i) => {
@@ -34,7 +33,7 @@ export function movesOf(
       move: m == null ? '' : sqName(m),
       pass: m == null,
       color: colorOf(i),
-      score: value === undefined ? undefined : value * sign,
+      score: value,
       loss: lossOf(i, value, prev),
       secs: rec?.secs,
       src: value === undefined ? undefined
@@ -44,19 +43,15 @@ export function movesOf(
   });
 }
 
-export function evalsOf(
-  hints: Hints | null,
-  blackToMove: boolean,
-  sign: 1 | -1,
-): Record<number, EvalInfo> | undefined {
+/** The board's evals, each from the side to move (as the engine gives them). */
+export function evalsOf(hints: Hints | null): Record<number, EvalInfo> | undefined {
   if (!hints) return undefined;
   const out: Record<number, EvalInfo> = {};
   let best = -Infinity;
   for (const h of Object.values(hints)) best = Math.max(best, h.value);
-  const flip = (blackToMove ? 1 : -1) * sign;
   for (const [sq, h] of Object.entries(hints)) {
     out[+sq] = {
-      score: h.value * flip,
+      score: h.value,
       src: h.book ? { book: true }
         : h.exact ? { exact: true }
         : { depth: h.depth },

@@ -548,7 +548,7 @@ function MatchBoard({ snap, m, clock, prefs, face, side, lead }: {
                  clock={clock(m.id, top.side).text} active={!m.over && clock(m.id, top.side).active} />
       <div data-board style={{ width: side, height: side }}>
         <Board cells={m.cells as Cell[]} last={last} disabled
-               evals={busyEval}
+               evals={busyEval} turn={m.turn === 'white' ? 'w' : 'b'}
                legal={[...new Set([...m.legal, ...(busyEval ? Object.keys(busyEval).map(Number) : [])])]}
                coords={prefs.coords} grain={prefs.grain}
                flip={flipped(prefs.facing, m.my_color)} />

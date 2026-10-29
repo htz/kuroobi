@@ -72,7 +72,6 @@ app:
   study:
     analysis_level: "解析 {lv}"
     analyze: "分析"
-    black_view: "黒視点"
     branch_body: "{n} 手目から先の棋譜 ({m} 手) と分析は消えます。残すときは先に「保存」してください。"
     branch_ok: "打つ"
     branch_title: "別の手を打ちますか？"
@@ -83,7 +82,6 @@ app:
     replace_ok: "置き換える"
     replace_title: "棋譜を置き換えますか？"
     stop_analysis: "分析停止"
-    white_view: "白視点"
 ask:
   anyone: "誰でも (募集する)"
   anyone_short: "誰でも"
@@ -270,7 +268,6 @@ data:
     empty: "「分析」で評価値を出します"
     even: "互角"
     title_black_view: "評価値グラフ (黒視点)"
-    title_white_view: "評価値グラフ (白視点)"
     unit_discs: "石差"
     white_ahead: "白有利"
   moves:
@@ -306,7 +303,6 @@ data:
     book_learned: "定石·学"
     search: "探索"
     solve: "読切"
-  to_move: "手番"
   trend:
     split: "分岐 {n} 手目"
     title: "評価値"

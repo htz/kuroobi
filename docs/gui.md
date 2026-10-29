@@ -54,6 +54,12 @@ move. With None both sides are human; with Both KUROOBI plays itself. **Stop gam
 pauses. **Evals** shows the evaluation of every legal move on the board
 while you play (off by default in Play, kept separately from Study).
 
+On every board, a value on a legal move is the side to move's (higher is
+better for whoever plays next), and the legal-move dots and value discs
+take that side's colour: dark when Black is to move, light when White is.
+The side to move's stone count under the board, and its player row in a
+GGS game, sit in an outlined box.
+
 The right panel's **Strength** chooses between:
 
 - **Level** — a preset (`Lv1 — depth 1 / solve 2` … `Lv13 — depth 24 /
@@ -114,11 +120,11 @@ from Play's strength) decide how strongly positions are measured.
   **Stop analysis** stops it, keeping the points measured so far.
   Switching between a running analysis and a game asks first.
 - **Evals** (on by default in Study) shows every legal move's value on
-  the board.
+  the board. The record's values and the graph are always Black's
+  (above zero is good for Black).
 - Walk the record with the strip below the board, the record in the
   right panel, a click on the graph, or the keys: ← → one move, with ⇧
   ten moves, with ⌘ to the first or last position.
-- **Black view / White view** flips the board and the graph.
 - Playing a move on the board that matches the record steps forward.
   Playing a different move asks first ("Play a different move?"), then
   drops the rest of the record and its analysis.

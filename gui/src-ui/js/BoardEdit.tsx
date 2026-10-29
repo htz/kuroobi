@@ -166,7 +166,7 @@ export function EditBoard({ ed, coords, grain, flip }: {
   return (
     <div style={{ flex: 1, minHeight: 'calc(200px + var(--h-bar))', display: 'flex', flexDirection: 'column' }}>
       <BoardFit minHeight={200} padding="var(--sp-2) var(--sp-4)">
-        <Board cells={cells} legal={ed.legal} coords={coords} grain={grain} flip={flip} disabled
+        <Board cells={cells} legal={ed.legal} turn={turn} coords={coords} grain={grain} flip={flip} disabled
                edit={{ ghost: ed.st.tool, onDown: ed.onDown, onEnter: ed.onEnter }} />
       </BoardFit>
       <ScoreRow black={n(1)} white={n(2)} turn={turn} meta={t('edit.empty', { n: n(0) })} />

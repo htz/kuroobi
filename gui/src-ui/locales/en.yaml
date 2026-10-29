@@ -76,7 +76,6 @@ app:
   study:
     analysis_level: "Analysis {lv}"
     analyze: "Analyze"
-    black_view: "Black view"
     branch_body: "The record from move {n} on ({m} moves) and its analysis will be cleared. Save it first to keep it."
     branch_ok: "Play"
     branch_title: "Play a different move?"
@@ -88,7 +87,6 @@ app:
     replace_ok: "Replace"
     replace_title: "Replace the record?"
     stop_analysis: "Stop analysis"
-    white_view: "White view"
 ask:
   anyone: "Anyone (open request)"
   anyone_short: "Anyone"
@@ -277,7 +275,6 @@ data:
     empty: "Run analysis to see evals"
     even: "Even"
     title_black_view: "Eval graph (black view)"
-    title_white_view: "Eval graph (white view)"
     unit_discs: "Disc diff"
     white_ahead: "White ahead"
   moves:
@@ -313,7 +310,6 @@ data:
     book_learned: "Learned"
     search: "Search"
     solve: "Solve"
-  to_move: "To move"
   trend:
     split: "Split at move {n}"
     title: "Eval"

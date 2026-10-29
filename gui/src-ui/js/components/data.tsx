@@ -104,13 +104,12 @@ export function StoneDot({ color, size = 9 }: { color: StoneColor; size?: number
 
 export type GraphPoint = { value: number; exact?: boolean; book?: boolean };
 
-export function EvalGraph({ points, plies, cursor, blunder, busy, pov, extra, onJump, moveName, open }: {
+export function EvalGraph({ points, plies, cursor, blunder, busy, extra, onJump, moveName, open }: {
   points: (GraphPoint | undefined)[];
   plies?: number;
   cursor?: number;
   blunder?: { at: number; loss: number };
   busy?: boolean;
-  pov: 'b' | 'w';
   extra: React.ReactNode;
   onJump: (n: number) => void;
   moveName: (n: number) => string | undefined;
@@ -132,10 +131,9 @@ export function EvalGraph({ points, plies, cursor, blunder, busy, pov, extra, on
     obs.current = o;
   }, []);
 
-  const black = pov === 'b';
-  const title = t(black ? 'data.graph.title_black_view' : 'data.graph.title_white_view');
-  const upLabel = t(black ? 'data.graph.black_ahead' : 'data.graph.white_ahead');
-  const downLabel = t(black ? 'data.graph.white_ahead' : 'data.graph.black_ahead');
+  const title = t('data.graph.title_black_view');
+  const upLabel = t('data.graph.black_ahead');
+  const downLabel = t('data.graph.white_ahead');
   const labelW = (s: string) =>
     [...s].reduce((n, ch) => n + (ch.charCodeAt(0) < 0x2e80 ? 6.1 : 11), 0);
   const W = 800, L = 44, T = 18, B = 26, STEP = 8;
@@ -304,6 +302,14 @@ function Legend({ tone, children }: { tone: 'gold' | 'text' | 'accent'; children
   );
 }
 
+/** The mark of the side to move (score row, player row): the same box on both sides, only its edge and ground change. */
+const turnBox = (on: boolean): React.CSSProperties => ({
+  display: 'flex', alignItems: 'center', gap: 'var(--sp-2)', height: 30, boxSizing: 'border-box',
+  padding: '0 var(--sp-2)', borderRadius: 'var(--r-2)',
+  border: '1px solid ' + (on ? 'var(--accent)' : 'transparent'),
+  background: on ? 'color-mix(in srgb, var(--accent) 16%, transparent)' : 'transparent',
+});
+
 export function ScoreRow({ black, white, turn, meta, blackClock, whiteClock }: {
   black: number; white: number;
   turn?: 'b' | 'w';
@@ -311,17 +317,18 @@ export function ScoreRow({ black, white, turn, meta, blackClock, whiteClock }: {
   blackClock?: string; whiteClock?: string;
 }) {
   // The side not to move fades its number only: a faded black stone vanishes into a dark ground.
+  // Both sides keep the same box, so the numbers stay put as the turn passes.
   const side = (c: 'b' | 'w', n: number) => (
-    <span style={{ display: 'flex', alignItems: 'center', gap: 'var(--sp-2)' }}>
+    <span style={{ ...turnBox(turn === c), minWidth: 64 }}>
       <StoneDot color={c} size={14} />
-      <b style={{ fontSize: 'var(--fs-1)', fontWeight: 700, color: 'var(--text)',
+      <b style={{ fontSize: 'var(--fs-1)', fontWeight: 700, color: 'var(--text)', fontVariantNumeric: 'tabular-nums',
                   opacity: turn === undefined || turn === c ? 1 : 0.55 }}>{n}</b>
     </span>
   );
   return (
     <div style={{
       flex: 'none', height: 'var(--h-bar)', display: 'flex', alignItems: 'center',
-      padding: '0 var(--sp-4)', gap: 20, borderTop: '1px solid var(--border-weak)',
+      padding: '0 var(--sp-3)', gap: 'var(--sp-2)', borderTop: '1px solid var(--border-weak)',
       fontSize: 'var(--fs-5)', color: 'var(--sub)',
     }}>
       {side('b', black)}
@@ -351,22 +358,15 @@ export function PlayerRow({ color, name, rate, meta, clock, active }: {
       display: 'flex', alignItems: 'center', gap: 'var(--sp-2)', height: 'var(--h-field)', minWidth: 0,
       fontSize: 'var(--fs-5)', lineHeight: 1.2, whiteSpace: 'nowrap',
     }}>
-      <span style={{ flex: 'none', display: 'flex' }}><StoneDot color={color} size={14} /></span>
-      <b className="k-sel" style={{ fontSize: 'var(--fs-4)', fontWeight: 600, flex: '0 1 auto', minWidth: '3em', overflow: 'hidden', textOverflow: 'ellipsis' }}>{name}</b>
-      {rate !== undefined && (
-        <span style={{ flex: 'none', color: 'var(--sub)', fontSize: 'var(--fs-6)', fontVariantNumeric: 'tabular-nums' }}>
-          {rate.toFixed(1)}
-        </span>
-      )}
-      {/* The side to move gets its own mark, so the clock can keep one look for both sides. */}
-      {active && (
-        <span style={{
-          flex: 'none', display: 'inline-flex', alignItems: 'center', height: 'var(--h-chip)',
-          // accent-dim, as a primary button: white on the bright accent is 2.7:1 in dark.
-          padding: '0 var(--sp-2)', borderRadius: 'var(--r-1)', background: 'var(--accent-dim)',
-          color: 'var(--on-accent)', fontSize: 'var(--fs-7)', fontWeight: 600,
-        }}>{t('data.to_move')}</span>
-      )}
+      <span style={{ ...turnBox(!!active), flex: '0 1 auto', minWidth: 0 }}>
+        <span style={{ flex: 'none', display: 'flex' }}><StoneDot color={color} size={14} /></span>
+        <b className="k-sel" style={{ fontSize: 'var(--fs-4)', fontWeight: 600, flex: '0 1 auto', minWidth: '3em', overflow: 'hidden', textOverflow: 'ellipsis' }}>{name}</b>
+        {rate !== undefined && (
+          <span style={{ flex: 'none', color: 'var(--sub)', fontSize: 'var(--fs-6)', fontVariantNumeric: 'tabular-nums' }}>
+            {rate.toFixed(1)}
+          </span>
+        )}
+      </span>
       <span style={{ flex: 1, minWidth: 'var(--sp-2)' }} />
       {/* The note gives way before the name does. */}
       {meta && <span style={{ color: 'var(--sub)', fontSize: 'var(--fs-6)', flex: '0 1000 auto', minWidth: '2.5em', overflow: 'hidden', textOverflow: 'ellipsis' }}>{meta}</span>}
