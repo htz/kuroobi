@@ -15,7 +15,30 @@ use tauri::Emitter;
 use kuroobi::engine::{Engine, EngineConfig};
 use kuroobi::{Board, Position};
 
-use crate::{append_line, now_secs};
+use crate::{append_line, now_secs, resources};
+
+mod chat;
+mod demo;
+mod replies;
+mod results;
+mod store;
+mod td;
+mod unfit;
+
+pub use demo::demo_snapshot;
+pub use store::{
+    account_password, auto_account, auto_key, clear_auto, forget_account, forget_server,
+    save_server, saved_accounts, saved_servers, session_locked_by_other, set_auto, SavedAccount,
+    SavedServer,
+};
+pub use unfit::{unfit_view, UnfitView};
+
+use chat::*;
+use replies::*;
+use results::*;
+use store::*;
+use td::*;
+use unfit::*;
 
 pub enum Cmd {
     Connect {
@@ -133,8 +156,6 @@ pub struct UserRow {
     pub raw: String,
 }
 
-const BARE_CMDS: [&str; 2] = ["verbose", "chann"];
-
 #[derive(Clone, Serialize, serde::Deserialize, Default)]
 pub struct ChatMsg {
     pub chan: String,
@@ -146,8 +167,16 @@ pub struct ChatMsg {
     pub thread: String,
 }
 
-pub fn no_rated() -> bool {
+fn no_rated() -> bool {
     std::env::var("KUROOBI_NO_RATED").is_ok()
+}
+
+fn rated_cmd(rated: bool) -> &'static str {
+    if rated && !no_rated() {
+        "tell /os rated +"
+    } else {
+        "tell /os rated -"
+    }
 }
 
 #[derive(Clone, Serialize, Default)]
@@ -260,65 +289,6 @@ pub struct MatchView {
     pub order: u64,
 }
 
-#[derive(Clone, Serialize, serde::Deserialize, Default)]
-pub struct GameResult {
-    pub id: String,
-    pub base: String,
-    pub raw: String,
-    pub my_diff: Option<i32>,
-    pub opp: String,
-    pub kifu: String,
-    #[serde(default)]
-    pub ggf: String,
-    #[serde(default)]
-    pub archive: String,
-    pub seq: u64,
-    #[serde(default)]
-    pub my_rating: Option<f32>,
-    #[serde(default)]
-    pub at: u64,
-    /// Every board of the match; `kifu` and `ggf` above hold only the first, which lost half of each synchro pair.
-    #[serde(default)]
-    pub boards: Vec<BoardRecord>,
-    /// How the whole match was decided when it was not played out: "resign" or "adjourn" (GGS decides both
-    /// per match, both boards of a synchro at once); empty otherwise.
-    #[serde(default)]
-    pub ending: String,
-    #[serde(default)]
-    pub ending_by: String,
-}
-
-#[derive(Clone, Serialize, serde::Deserialize, Default)]
-pub struct BoardRecord {
-    pub id: String,
-    pub kifu: String,
-    pub ggf: String,
-    /// "black" | "white": the side the player had on this board.
-    #[serde(default)]
-    pub my_color: String,
-    /// The board's result from the player's side as GGS scored it (±64 for running out of time, the
-    /// smallest loss for over time); boards add up to the match's recorded result.
-    #[serde(default)]
-    pub disc_diff: Option<i32>,
-    /// "over_time" (main time ran out, the board went on in the extension) or "out_of_time"
-    /// (the extension ran out too); empty when the board was played out.
-    #[serde(default)]
-    pub ending: String,
-    #[serde(default)]
-    pub ending_by: String,
-    /// Each player's clock when the board ended.
-    #[serde(default)]
-    pub clocks: Vec<ClockRecord>,
-}
-
-#[derive(Clone, Serialize, serde::Deserialize, Default)]
-pub struct ClockRecord {
-    pub name: String,
-    pub color: String,
-    pub main: Option<u64>,
-    pub ext: Option<u64>,
-}
-
 #[derive(Clone, Serialize, Default)]
 pub struct StandbyStats {
     pub games: usize,
@@ -377,299 +347,6 @@ pub struct Snapshot {
     pub last_search: Option<SearchStat>,
     pub fetched_ggf: Option<FetchedGgf>,
     pub td: TdView,
-}
-
-#[derive(Clone, Serialize, Default, Debug, PartialEq)]
-pub struct TourneyView {
-    pub id: u32,
-    /// announced | running | break | over | cancelled
-    pub state: String,
-    pub desc: String,
-    pub director: String,
-    pub clock: String,
-    pub gtype: String,
-    pub players: Vec<String>,
-    pub n_players: usize,
-    pub rounds_played: u32,
-    pub rounds: u32,
-    /// Unix seconds of the next start (tournament or round), when known.
-    pub next_at: Option<u64>,
-    pub joined: bool,
-    pub winner: String,
-    /// Latest raw `finger`, `rankings` and full-schedule replies for this tournament.
-    pub info: String,
-    pub rankings: String,
-    pub schedule: String,
-}
-
-#[derive(Clone, Serialize, Default, Debug, PartialEq)]
-pub struct TdReply {
-    pub cmd: String,
-    pub text: String,
-    pub err: bool,
-    pub at: u64,
-}
-
-#[derive(Clone, Serialize, Default)]
-pub struct TdView {
-    pub tourneys: Vec<TourneyView>,
-    pub reply: Option<TdReply>,
-    /// Our matches the director started (`+ match ... T`), newest last.
-    pub games: Vec<TdGame>,
-}
-
-#[derive(Clone, Serialize, Default, Debug, PartialEq)]
-pub struct TdGame {
-    pub id: String,
-    pub tid: u32,
-    pub opp: String,
-    /// Disc difference for us, summed over both boards of a synchro pair.
-    pub diff: Option<i32>,
-}
-
-pub fn demo_snapshot() -> Snapshot {
-    let mut s = Snapshot {
-        conn: "online".into(),
-        login: "kuroobi".into(),
-        ..Default::default()
-    };
-    s.my_ranks = vec![
-        RankRow {
-            gtype: "8".into(),
-            name: "kuroobi".into(),
-            rating: 1842.3,
-            dev: 34.0,
-            rank: 12,
-            wins: 128,
-            losses: 74,
-            draws: 6,
-        },
-        RankRow {
-            gtype: "8r16".into(),
-            name: "kuroobi".into(),
-            rating: 1795.0,
-            dev: 51.0,
-            rank: 27,
-            wins: 41,
-            losses: 38,
-            draws: 2,
-        },
-    ];
-    let mut users: Vec<UserRow> = vec![
-        ("saio", 2245.8, 34.0),
-        ("tamaki", 2011.4, 46.0),
-        ("momo-bot", 2280.1, 22.0),
-        ("nara", 1688.2, 91.0),
-        ("kei", 1488.9, 216.0),
-        ("newbie", 1200.0, 350.0),
-    ]
-    .into_iter()
-    .map(|(n, r, d)| UserRow {
-        name: n.into(),
-        rating: Some(r),
-        dev: Some(d),
-        rating_r: Some(r - 30.0),
-        dev_r: Some(d + 8.0),
-        open: Some(if r > 1700.0 { '+' } else { '-' }),
-        raw: format!("{n} {r}@{d}"),
-    })
-    .collect();
-    for i in 0..26 {
-        let r = 1900.0 - i as f32 * 21.0;
-        users.push(UserRow {
-            name: format!("player{:02}", i + 1),
-            rating: Some(r),
-            dev: Some(40.0 + i as f32),
-            rating_r: Some(r - 30.0),
-            dev_r: Some(48.0 + i as f32),
-            open: Some(if i % 3 == 0 { '-' } else { '+' }),
-            raw: format!("player{:02} {r}@40", i + 1),
-        });
-    }
-    s.users = users;
-    s.ranking = s.users.clone();
-    s.ongoing = vec![
-        OngoingView {
-            id: ".71.0".into(),
-            watching: true,
-            names: vec!["tamaki".into(), "momo-bot".into()],
-            ratings: vec!["2011.4".into(), "2280.1".into()],
-            gtype: "s8r14".into(),
-            mine: false,
-        },
-        OngoingView {
-            id: ".72.0".into(),
-            watching: false,
-            names: vec!["nara".into(), "kei".into()],
-            ratings: vec!["1688.2".into(), "1488.9".into()],
-            gtype: "8".into(),
-            mine: false,
-        },
-    ];
-    s.offers = vec![
-        Offer {
-            id: "1".into(),
-            raw: "+ .1 saio 2245.8 8r16 15:00 R".into(),
-            incoming: true,
-            names: vec!["saio".into(), "kuroobi".into()],
-            gtype: "s8r16".into(),
-            time: "00:15:00".into(),
-            rated: true,
-            since_ms: epoch_ms() - 120_000,
-        },
-        Offer {
-            id: "2".into(),
-            raw: "+ .2 tamaki 2011.4 8 10:00".into(),
-            incoming: false,
-            names: vec!["tamaki".into(), "nara".into()],
-            gtype: "8".into(),
-            time: "00:10:00".into(),
-            rated: false,
-            since_ms: epoch_ms() - 45_000,
-        },
-    ];
-    s.stored = vec![StoredView {
-        id: "3".into(),
-        opp: "tamaki".into(),
-        gtype: "s8r16".into(),
-    }];
-    let cells = |mv: &[(usize, u8)]| {
-        let mut c = vec![0u8; 64];
-        c[27] = 2;
-        c[28] = 1;
-        c[35] = 1;
-        c[36] = 2;
-        for &(i, v) in mv {
-            c[i] = v;
-        }
-        c
-    };
-    let face = |id: &str, my: &str, turn: &str, mine: u64, opp: u64| MatchView {
-        rated: Some(false),
-        id: id.into(),
-        base: ".71".into(),
-        over: false,
-        cells: cells(&[(20, 1), (29, 1), (34, 2), (37, 1), (43, 2), (44, 1)]),
-        turn: turn.into(),
-        my_color: my.into(),
-        opp_name: "saio".into(),
-        opp_rating: "2245.8".into(),
-        my_clock: format!("{}:{:02}", mine / 60, mine % 60),
-        opp_clock: format!("{}:{:02}", opp / 60, opp % 60),
-        my_secs: Some(mine),
-        opp_secs: Some(opp),
-        gtype: "s8r16".into(),
-        moves: vec!["f5".into(), "d6".into(), "c3".into(), "d3".into()],
-        last_eval: Some(2.5),
-        last_from_book: true,
-        ..Default::default()
-    };
-    s.matches = vec![
-        face(".71.0", "black", "black", 664, 750),
-        face(".71.1", "white", "white", 672, 746),
-    ];
-    s.chat = vec![
-        ChatMsg {
-            chan: ".chat".into(),
-            from: "demo-bob".into(),
-            text: "anyone up for a game?".into(),
-            at: 1_754_000_000,
-            thread: ".chat".into(),
-        },
-        ChatMsg {
-            chan: ".chat".into(),
-            from: "kuroobi".into(),
-            text: "sure, 15 min?".into(),
-            at: 1_754_000_060,
-            thread: ".chat".into(),
-        },
-        ChatMsg {
-            chan: ".chat".into(),
-            from: "saio".into(),
-            text: "good luck both".into(),
-            at: 1_754_002_800,
-            thread: ".chat".into(),
-        },
-    ]
-    .into();
-    s.results = vec![
-        (".70", "saio", 6i32, 1_754_003_000u64, 1842.3, "s8r16"),
-        (".69", "tamaki", -4, 1_753_990_000, 1836.1, "8"),
-        (".68", "nobu", 12, 1_753_900_000, 1840.0, "s8r16"),
-        (".67", "kei", 18, 1_753_820_000, 1828.4, "8r16"),
-        (".66", "momo-bot", -18, 1_753_740_000, 1812.9, "s8"),
-        (".65", "nara", 0, 1_753_650_000, 1825.5, "8"),
-    ]
-    .into_iter()
-    .map(|(id, opp, d, at, rate, gt)| GameResult {
-        id: id.into(),
-        base: format!("{gt}{id}"),
-        raw: format!("{id} {opp} {d:+}"),
-        my_diff: Some(d),
-        opp: opp.into(),
-        at,
-        my_rating: Some(rate),
-        ..Default::default()
-    })
-    .collect();
-    s.log = vec![
-        LogLine {
-            seq: 0,
-            dir: "info",
-            text: "connected (skatgame.net:5000)".into(),
-        },
-        LogLine {
-            seq: 1,
-            dir: "out",
-            text: "tell /os play .71.0 F5".into(),
-        },
-        LogLine {
-            seq: 2,
-            dir: "in",
-            text: "/os: match .71.0 update".into(),
-        },
-        LogLine {
-            seq: 3,
-            dir: "in",
-            text: "/os: | 1 kuroobi 1842.3 11:04 vs saio 2245.8 12:30".into(),
-        },
-        LogLine {
-            seq: 4,
-            dir: "out",
-            text: "tell /os look".into(),
-        },
-        LogLine {
-            seq: 5,
-            dir: "in",
-            text: "/os: 12 waiting requests".into(),
-        },
-    ]
-    .into();
-    s.standby_stats = StandbyStats {
-        games: 12,
-        wins: 7,
-        losses: 4,
-        draws: 1,
-        diff_sum: 38,
-    };
-    let finger = |accept: &str| FingerInfo {
-        fields: vec![
-            ("open".into(), "1".into()),
-            ("rated".into(), "+".into()),
-            ("accept".into(), accept.into()),
-            ("decline".into(), "rated&or>2400".into()),
-            ("play".into(), "0".into()),
-            ("stored (+)".into(), "0".into()),
-            ("info".into(), "demo data for screen checks".into()),
-            ("since".into(), "2026-01-15".into()),
-        ],
-    };
-    s.fingers.insert(
-        "kuroobi".into(),
-        finger("rand&discs>=14&discs<=20&mt1>=120"),
-    );
-    s.fingers.insert("saio".into(), finger("rand&or>=1600"));
-    s
 }
 
 #[derive(Clone, Serialize)]
@@ -733,608 +410,7 @@ pub fn spawn(
     Handle { tx, snapshot }
 }
 
-pub const DEFAULT_SERVER: &str = "skatgame.net:5000";
-static SERVER: Mutex<String> = Mutex::new(String::new());
-
-fn server() -> String {
-    let s = SERVER.lock().unwrap();
-    if s.is_empty() {
-        DEFAULT_SERVER.to_string()
-    } else {
-        s.clone()
-    }
-}
-
-/// Test games must not be learned into the shared book: only a server marked public counts.
-fn local_server() -> bool {
-    let addr = server();
-    !saved_servers().iter().any(|s| s.addr == addr && s.public)
-}
-
-/// `ggs_games/`, holding the account store and one folder per account.
-fn base_dir() -> PathBuf {
-    for c in ["ggs_games", "../ggs_games", "../../ggs_games"] {
-        let p = PathBuf::from(c);
-        if p.is_dir() {
-            return p;
-        }
-    }
-    PathBuf::from(".")
-}
-
-fn safe_name(s: &str) -> String {
-    s.chars()
-        .map(|c| {
-            if c.is_ascii_alphanumeric() || matches!(c, '_' | '-' | '.') {
-                c
-            } else {
-                '_'
-            }
-        })
-        .collect()
-}
-
-/// The account whose history, chat and wire log are read and written.
-static USER: Mutex<Option<(String, String)>> = Mutex::new(None);
-
-fn user_dir(server: &str, login: &str) -> PathBuf {
-    base_dir()
-        .join("users")
-        .join(safe_name(server))
-        .join(safe_name(login))
-}
-
-fn set_user(server: &str, login: &str) {
-    let dir = user_dir(server, login);
-    if !dir.exists() {
-        let _ = std::fs::create_dir_all(&dir);
-        adopt_legacy_data(server, login, &dir);
-    }
-    *USER.lock().unwrap() = Some((server.to_string(), login.to_string()));
-}
-
-/// Data written before per-account folders belongs to the public account whose chat file it kept.
-fn adopt_legacy_data(server: &str, login: &str, dir: &std::path::Path) {
-    if server != DEFAULT_SERVER {
-        return;
-    }
-    let base = base_dir();
-    let chat = base
-        .join("chat")
-        .join(format!("{}.jsonl", safe_name(login)));
-    if !chat.exists() {
-        return;
-    }
-    let _ = std::fs::create_dir_all(dir.join("chat"));
-    for f in [chat.clone(), chat.with_extension("seen")] {
-        let _ = std::fs::rename(&f, dir.join("chat").join(f.file_name().unwrap()));
-    }
-    for f in ["history.jsonl", "ggs_wire.log", "ggs_wire.log.1"] {
-        let _ = std::fs::rename(base.join(f), dir.join(f));
-    }
-}
-
-fn data_dir() -> PathBuf {
-    match &*USER.lock().unwrap() {
-        Some((srv, login)) => user_dir(srv, login),
-        None => base_dir(),
-    }
-}
-
-fn history_path() -> PathBuf {
-    data_dir().join("history.jsonl")
-}
-
-#[derive(Clone, Serialize, serde::Deserialize, PartialEq, Default)]
-pub struct SavedAccount {
-    pub server: String,
-    pub login: String,
-    /// Unix seconds of the last successful login.
-    #[serde(default)]
-    pub last: u64,
-    #[serde(default, skip_serializing_if = "String::is_empty")]
-    pub password: String,
-}
-
-/// A server the user has named; `public` marks the real one, whose games teach the book.
-#[derive(Clone, Serialize, serde::Deserialize, Default)]
-pub struct SavedServer {
-    pub addr: String,
-    pub name: String,
-    #[serde(default)]
-    pub public: bool,
-}
-
-#[derive(Serialize, serde::Deserialize, Default)]
-struct AccountStore {
-    #[serde(default)]
-    servers: Vec<SavedServer>,
-    accounts: Vec<SavedAccount>,
-    /// `server|login` to log in as at startup; cleared by logging out.
-    #[serde(default)]
-    auto: Option<String>,
-}
-
-// The `.ggs_credentials` prefix keeps the file under the repo's credential ignore rule.
-fn store_path() -> PathBuf {
-    base_dir().join(".ggs_credentials.accounts.json")
-}
-
-fn key_of(server: &str, login: &str) -> String {
-    format!("{server}|{login}")
-}
-
-fn load_store() -> AccountStore {
-    if let Some(s) = std::fs::read_to_string(store_path())
-        .ok()
-        .and_then(|t| serde_json::from_str(&t).ok())
-    {
-        return s;
-    }
-    let s = import_old_credentials();
-    write_store(&s);
-    s
-}
-
-fn write_store(s: &AccountStore) {
-    let Ok(text) = serde_json::to_string_pretty(s) else {
-        return;
-    };
-    let p = store_path();
-    if std::fs::write(&p, text).is_ok() {
-        use std::os::unix::fs::PermissionsExt as _;
-        let _ = std::fs::set_permissions(&p, std::fs::Permissions::from_mode(0o600));
-    }
-}
-
-/// One-time pickup of the login the keychain or `.ggs_credentials` held before the store existed.
-fn import_old_credentials() -> AccountStore {
-    let run = |args: &[&str]| {
-        std::process::Command::new("/usr/bin/security")
-            .args(args)
-            .output()
-            .ok()
-            .filter(|o| o.status.success())
-            .map(|o| String::from_utf8_lossy(&o.stdout).to_string())
-    };
-    let keychain = || -> Option<(String, String)> {
-        let meta = run(&["find-generic-password", "-s", "kuroobi-ggs"])?;
-        let login = meta.lines().find_map(|l| {
-            l.trim()
-                .strip_prefix("\"acct\"<blob>=\"")?
-                .strip_suffix('"')
-                .map(str::to_string)
-        })?;
-        let pw = run(&["find-generic-password", "-s", "kuroobi-ggs", "-w"])?;
-        let pw = pw.trim_end_matches('\n').to_string();
-        (!pw.is_empty() && login != "-").then_some((login, pw))
-    };
-    let mut s = AccountStore::default();
-    if let Some((login, pw)) = keychain().or_else(crate::read_credentials) {
-        s.auto = Some(key_of(DEFAULT_SERVER, &login));
-        s.accounts.push(SavedAccount {
-            server: DEFAULT_SERVER.to_string(),
-            login,
-            last: now_secs(),
-            password: pw,
-        });
-    }
-    s
-}
-
-/// Most recently used first, without passwords.
-pub fn saved_accounts() -> Vec<SavedAccount> {
-    let mut list: Vec<SavedAccount> = load_store()
-        .accounts
-        .into_iter()
-        .map(|a| SavedAccount {
-            password: String::new(),
-            ..a
-        })
-        .collect();
-    list.sort_by_key(|a| std::cmp::Reverse(a.last));
-    list
-}
-
-pub fn account_password(server: &str, login: &str) -> Option<String> {
-    load_store()
-        .accounts
-        .into_iter()
-        .find(|a| a.server == server && a.login == login && !a.password.is_empty())
-        .map(|a| a.password)
-}
-
-/// The account to log in as at startup: `(server, login, password)`.
-pub fn auto_account() -> Option<(String, String, String)> {
-    let s = load_store();
-    let key = s.auto?;
-    s.accounts
-        .into_iter()
-        .find(|a| key_of(&a.server, &a.login) == key && !a.password.is_empty())
-        .map(|a| (a.server, a.login, a.password))
-}
-
-pub fn clear_auto() {
-    let mut s = load_store();
-    s.auto = None;
-    write_store(&s);
-}
-
-fn remember_account(server: &str, login: &str, pw: &str) {
-    let mut s = load_store();
-    s.accounts
-        .retain(|x| !(x.server == server && x.login == login));
-    s.accounts.push(SavedAccount {
-        server: server.to_string(),
-        login: login.to_string(),
-        last: now_secs(),
-        password: pw.to_string(),
-    });
-    s.auto = Some(key_of(server, login));
-    write_store(&s);
-}
-
-/// The named servers: the public one first, then every server an account was saved on.
-pub fn saved_servers() -> Vec<SavedServer> {
-    let s = load_store();
-    let mut out = s.servers.clone();
-    if !out.iter().any(|x| x.addr == DEFAULT_SERVER) {
-        out.insert(
-            0,
-            SavedServer {
-                addr: DEFAULT_SERVER.to_string(),
-                name: "GGS".to_string(),
-                public: true,
-            },
-        );
-    }
-    for a in &s.accounts {
-        if !out.iter().any(|x| x.addr == a.server) {
-            out.push(SavedServer {
-                addr: a.server.clone(),
-                name: a.server.clone(),
-                public: false,
-            });
-        }
-    }
-    out
-}
-
-/// Adds or edits a server; when its address changes, its accounts move with it.
-pub fn save_server(old: &str, name: &str, addr: &str, public: bool) -> Result<(), String> {
-    let addr = addr.trim();
-    if addr.is_empty() || !addr.contains(':') {
-        return Err("err.server_address".to_string());
-    }
-    let mut s = load_store();
-    let mut list = saved_servers();
-    if addr != old && list.iter().any(|x| x.addr == addr) {
-        return Err("err.server_exists".to_string());
-    }
-    let entry = SavedServer {
-        addr: addr.to_string(),
-        name: if name.trim().is_empty() {
-            addr.to_string()
-        } else {
-            name.trim().to_string()
-        },
-        public,
-    };
-    match list.iter_mut().find(|x| !old.is_empty() && x.addr == old) {
-        Some(x) => *x = entry,
-        None => list.push(entry),
-    }
-    if !old.is_empty() && old != addr {
-        for a in s.accounts.iter_mut().filter(|a| a.server == old) {
-            a.server = addr.to_string();
-        }
-        if let Some(k) = s.auto.as_mut() {
-            if let Some(login) = k.strip_prefix(&format!("{old}|")) {
-                *k = key_of(addr, login);
-            }
-        }
-    }
-    s.servers = list;
-    write_store(&s);
-    Ok(())
-}
-
-/// Removes a server and the accounts saved on it.
-pub fn forget_server(addr: &str) {
-    let mut s = load_store();
-    s.servers = saved_servers()
-        .into_iter()
-        .filter(|x| x.addr != addr)
-        .collect();
-    s.accounts.retain(|a| a.server != addr);
-    if s.auto
-        .as_deref()
-        .is_some_and(|k| k.starts_with(&format!("{addr}|")))
-    {
-        s.auto = None;
-    }
-    write_store(&s);
-}
-
-/// The account to log in as at startup, as `(server, login)`.
-pub fn auto_key() -> Option<(String, String)> {
-    let k = load_store().auto?;
-    let (server, login) = k.split_once('|')?;
-    Some((server.to_string(), login.to_string()))
-}
-
-pub fn set_auto(server: &str, login: &str) {
-    let mut s = load_store();
-    s.auto = (!login.is_empty()).then(|| key_of(server, login));
-    write_store(&s);
-}
-
-pub fn forget_account(server: &str, login: &str) {
-    let mut s = load_store();
-    s.accounts
-        .retain(|x| !(x.server == server && x.login == login));
-    if s.auto.as_deref() == Some(&key_of(server, login)) {
-        s.auto = None;
-    }
-    write_store(&s);
-}
-
-/// The line is signed for the name written first; a synchro match scores the mean of two boards.
-fn diff_from_raw(raw: &str, opp: &str) -> Option<i32> {
-    if opp.is_empty() {
-        return None;
-    }
-    let toks: Vec<&str> = raw.split_whitespace().collect();
-    let score = toks.iter().find_map(|t| {
-        t.starts_with(['+', '-'])
-            .then(|| t.parse::<f32>().ok())
-            .flatten()
-    })?;
-    let first = toks
-        .iter()
-        .skip(1)
-        .find(|t| t.len() >= 2 && t.chars().next().is_some_and(|c| c.is_ascii_alphabetic()))?;
-    // GGS's own figure for the match: a synchro pair's is the mean of its two boards.
-    let v = score.round() as i32;
-    Some(if *first == opp { -v } else { v })
-}
-
-fn load_history() -> Vec<GameResult> {
-    let Ok(text) = std::fs::read_to_string(history_path()) else {
-        return Vec::new();
-    };
-    let mut out: Vec<GameResult> = text
-        .lines()
-        .filter_map(|l| serde_json::from_str::<GameResult>(l).ok())
-        .collect();
-    for r in &mut out {
-        if let Some(d) = diff_from_raw(&r.raw, &r.opp) {
-            r.my_diff = Some(d);
-        }
-        for b in &mut r.boards {
-            fill_board_from_ggf(b, &r.opp);
-        }
-    }
-    // Games finished before endings and clocks were kept: the wire log still has them.
-    if out
-        .iter()
-        .any(|r| r.ending.is_empty() && r.boards.iter().all(|b| b.clocks.is_empty()))
-    {
-        let wire = wire_endings(&[wire_path().with_extension("log.1"), wire_path()]);
-        let login = USER
-            .lock()
-            .unwrap()
-            .as_ref()
-            .map(|u| u.1.clone())
-            .unwrap_or_default();
-        for r in &mut out {
-            if let Some(w) = wire.get(r.raw.trim()) {
-                backfill_from_wire(r, w, &login);
-            }
-        }
-    }
-    out.reverse();
-    out.truncate(500);
-    out
-}
-
-fn append_history(r: &GameResult) {
-    if let Ok(line) = serde_json::to_string(r) {
-        append_line(&history_path(), &line);
-    }
-}
-
-fn chat_path(login: &str) -> PathBuf {
-    let safe: String = login
-        .chars()
-        .map(|c| {
-            if c.is_ascii_alphanumeric() || c == '_' || c == '-' {
-                c
-            } else {
-                '_'
-            }
-        })
-        .collect();
-    let dir = data_dir().join("chat");
-    let _ = std::fs::create_dir_all(&dir);
-    dir.join(format!("{safe}.jsonl"))
-}
-
-const CHAT_KEEP: usize = 5000;
-// Per-thread trimming can leave the file above the fixed floor, so the next trim waits for growth past it.
-static CHAT_TRIMMED_LEN: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
-
-fn load_chat(login: &str) -> Vec<ChatMsg> {
-    let Ok(text) = std::fs::read_to_string(chat_path(login)) else {
-        return Vec::new();
-    };
-    let out: Vec<ChatMsg> = text
-        .lines()
-        .filter_map(|l| serde_json::from_str::<ChatMsg>(l).ok())
-        .collect();
-    keep_latest_per_thread(out, CHAT_KEEP)
-}
-
-fn settings_path() -> PathBuf {
-    base_dir().join("ggs_settings.json")
-}
-
-/// A missing field falls back to its default instead of failing the read and wiping settings.
-#[derive(Serialize, serde::Deserialize)]
-#[serde(default)]
-struct SavedSettings {
-    auto_play: bool,
-    open: bool,
-    watch_analysis: bool,
-    log_channel: String,
-    use_book: bool,
-    learn: bool,
-}
-
-impl Default for SavedSettings {
-    fn default() -> Self {
-        SavedSettings {
-            auto_play: true,
-            open: true,
-            watch_analysis: true,
-            log_channel: String::new(),
-            use_book: true,
-            learn: true,
-        }
-    }
-}
-
-fn save_settings(ctx: &Ctx) {
-    let s = ctx.snap.lock().unwrap();
-    let e = &s.engine;
-    let v = SavedSettings {
-        auto_play: s.auto_play,
-        open: s.open,
-        watch_analysis: s.watch_analysis,
-        log_channel: s.log_channel.clone(),
-        use_book: e.use_book,
-        learn: e.learn,
-    };
-    drop(s);
-    if let Ok(text) = serde_json::to_string_pretty(&v) {
-        let _ = std::fs::write(settings_path(), text);
-    }
-}
-
-fn wire_path() -> PathBuf {
-    data_dir().join("ggs_wire.log")
-}
-
-fn roll_if_large(p: &std::path::Path) {
-    const CAP: u64 = 8 * 1024 * 1024;
-    if std::fs::metadata(p).is_ok_and(|m| m.len() > CAP) {
-        let _ = std::fs::rename(p, p.with_extension("log.1"));
-    }
-}
-
-fn load_settings() -> Option<SavedSettings> {
-    let text = std::fs::read_to_string(settings_path()).ok()?;
-    serde_json::from_str(&text).ok()
-}
-
 static MATCH_ORDER: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
-
-fn chat_seen_path(login: &str) -> PathBuf {
-    chat_path(login).with_extension("seen")
-}
-
-fn load_chat_seen(login: &str) -> u64 {
-    std::fs::read_to_string(chat_seen_path(login))
-        .ok()
-        .and_then(|t| t.trim().parse::<u64>().ok())
-        .unwrap_or_else(now_secs)
-}
-
-fn save_chat_seen(login: &str, at: u64) {
-    if login.is_empty() {
-        return;
-    }
-    let path = chat_seen_path(login);
-    let cur = std::fs::read_to_string(&path)
-        .ok()
-        .and_then(|t| t.trim().parse::<u64>().ok())
-        .unwrap_or(0);
-    if at > cur {
-        let _ = std::fs::write(&path, at.to_string());
-    }
-}
-
-fn append_chat(login: &str, m: &ChatMsg) {
-    if login.is_empty() {
-        return;
-    }
-    let path = chat_path(login);
-    let Ok(line) = serde_json::to_string(m) else {
-        return;
-    };
-    append_line(&path, &line);
-    if let Ok(meta) = std::fs::metadata(&path) {
-        let floor = (CHAT_KEEP as u64) * 120 * 12 / 10;
-        let last = CHAT_TRIMMED_LEN.load(std::sync::atomic::Ordering::Relaxed);
-        if meta.len() > floor.max(last * 12 / 10) {
-            let kept = load_chat(login);
-            let body: String = kept
-                .iter()
-                .filter_map(|m| serde_json::to_string(m).ok())
-                .map(|l| l + "\n")
-                .collect();
-            let tmp = path.with_extension("jsonl.tmp");
-            if std::fs::write(&tmp, &body).is_ok() {
-                let _ = std::fs::rename(&tmp, &path);
-                CHAT_TRIMMED_LEN.store(body.len() as u64, std::sync::atomic::Ordering::Relaxed);
-            }
-        }
-    }
-}
-
-fn resources() -> kuroobi::resources::Resources {
-    crate::resources()
-}
-
-fn session_lock_path() -> PathBuf {
-    if let Ok(p) = std::env::var("KUROOBI_SESSION_LOCK") {
-        if !p.is_empty() {
-            return PathBuf::from(p);
-        }
-    }
-    std::env::temp_dir().join("kuroobi_ggs.pid")
-}
-
-fn other_session_pid(path: &std::path::Path) -> Option<i32> {
-    let pid = std::fs::read_to_string(path)
-        .ok()?
-        .trim()
-        .parse::<i32>()
-        .ok()?;
-    (pid != std::process::id() as i32 && unsafe { libc::kill(pid, 0) } == 0).then_some(pid)
-}
-
-pub fn session_locked_by_other() -> bool {
-    other_session_pid(&session_lock_path()).is_some()
-}
-
-fn try_lock_session() -> Result<(), i32> {
-    let path = session_lock_path();
-    if let Some(pid) = other_session_pid(&path) {
-        return Err(pid);
-    }
-    let _ = std::fs::write(&path, std::process::id().to_string());
-    Ok(())
-}
-
-fn unlock_session() {
-    let path = session_lock_path();
-    if let Ok(s) = std::fs::read_to_string(&path) {
-        if s.trim() == std::process::id().to_string() {
-            let _ = std::fs::remove_file(&path);
-        }
-    }
-}
 
 #[derive(Clone)]
 struct MatchState {
@@ -1395,8 +471,7 @@ impl MatchState {
                 // An observer sees the series from black's side.
                 let mc = self.my_color.unwrap_or('*');
                 if self.turn != '*' && self.turn != 'O' {
-                    // Over (no side to move): count from who moved first. GGS numbers a pass
-                    // like a move, so the sides alternate by move number.
+                    // Over: count from who moved first; GGS numbers a pass like a move.
                     match self.start_turn {
                         '*' | 'O' => {
                             if self.start_turn == mc {
@@ -1481,25 +556,11 @@ impl MatchState {
         if self.start_cells.len() != 64 {
             return String::new();
         }
-        let mut out = String::with_capacity(66);
-        for i in 0..64 {
-            let (file, rank) = (i % 8, i / 8);
-            out.push(match self.start_cells[file * 8 + rank] {
-                1 => 'X',
-                2 => 'O',
-                _ => '-',
-            });
-        }
-        out.push(' ');
-        out.push(if self.start_turn == 'O' { 'O' } else { 'X' });
-        out
+        let side = if self.start_turn == 'O' { 'O' } else { 'X' };
+        format!("{} {side}", cells_text(&self.start_cells))
     }
 
-    fn ggf(&self, id: &str, result: Option<&str>) -> String {
-        self.ggf_with(id, result, false)
-    }
-
-    fn ggf_with(&self, id: &str, result: Option<&str>, evals: bool) -> String {
+    fn ggf(&self, id: &str, result: Option<&str>, evals: bool) -> String {
         let board = match self.start_string() {
             s if s.len() == 66 => s.replace('X', "*"),
             _ => format!(
@@ -1529,7 +590,7 @@ impl MatchState {
         let mut black = !board.ends_with(" O");
         for (n, mv) in &self.moves {
             let tag = if black { "B" } else { "W" };
-            let mut m = if mv.eq_ignore_ascii_case("pa") || mv.eq_ignore_ascii_case("pass") {
+            let mut m = if is_pass(mv) {
                 "PA".to_string()
             } else {
                 mv.to_uppercase()
@@ -1550,7 +611,7 @@ impl MatchState {
     fn kifu(&self) -> String {
         self.moves
             .values()
-            .filter(|m| !m.eq_ignore_ascii_case("pa") && !m.eq_ignore_ascii_case("pass"))
+            .filter(|m| !is_pass(m))
             .map(|m| m.to_lowercase())
             .collect()
     }
@@ -1574,14 +635,7 @@ fn mirror_hint(matches: &HashMap<String, MatchState>, mid: &str) -> Option<Posit
     if (1..n).any(|i| me.moves.get(&i) != you.moves.get(&i)) {
         return None;
     }
-    let mv = you.moves.get(&n)?;
-    let b = mv.as_bytes();
-    if b.len() != 2 {
-        return None;
-    }
-    let file = b[0].to_ascii_lowercase().wrapping_sub(b'a');
-    let rank = b[1].wrapping_sub(b'1');
-    Position::from_file_rank(file, rank)
+    Position::from_kifu(&you.moves.get(&n)?.to_ascii_lowercase()).ok()
 }
 
 struct Request {
@@ -1711,9 +765,7 @@ fn play_arg(mstr: &str, value: f32, took: Option<std::time::Duration>) -> String
 }
 
 fn coord(p: Position) -> String {
-    let f = (b'A' + p.index() / 8) as char;
-    let r = (b'1' + p.index() % 8) as char;
-    format!("{f}{r}")
+    p.to_kifu().to_uppercase()
 }
 
 struct EngineWorker {
@@ -1774,9 +826,7 @@ fn report(
     Report { nodes, pv }
 }
 
-enum Done {
-    Moved(Box<kuroobi::engine::MoveEval>, Report),
-}
+struct Done(Box<kuroobi::engine::MoveEval>, Report);
 
 struct Ctx {
     app: tauri::AppHandle,
@@ -1915,12 +965,9 @@ impl Ctx {
 }
 
 impl EngineWorker {
-    fn spawn(mut cfg: EngineConfig) -> Result<EngineWorker, String> {
+    fn spawn(cfg: EngineConfig) -> Result<EngineWorker, String> {
         let res = resources();
-        cfg.threads = resolve_threads(cfg.threads);
-        cfg.weights = res.weights_path();
-        cfg.nnue = res.nnue_path();
-        cfg.book = res.book_path();
+        let mut cfg = with_resources(cfg, &res);
         cfg.midgame_hash_bits = res.hash_mid_bits();
         cfg.solver_hash_bits = res.hash_end_bits();
         let engine = Engine::new(cfg)?;
@@ -1953,7 +1000,7 @@ impl EngineWorker {
                         }
                         engine.progress().clear();
                         let r = report(&engine, &board, &mv, nodes);
-                        if dtx.send(Done::Moved(Box::new(mv), r)).is_err() {
+                        if dtx.send(Done(Box::new(mv), r)).is_err() {
                             return;
                         }
                     }
@@ -2038,71 +1085,13 @@ impl Ctx {
             return;
         }
         self.last_sent = sent;
-        let _emit_ok = self.app.emit("ggs", &s).is_ok();
-        #[cfg(debug_assertions)]
-        {
-            use std::io::Write as _;
-            if let Ok(mut f) = std::fs::OpenOptions::new()
-                .create(true)
-                .append(true)
-                .open("/tmp/ggs_session_state.log")
-            {
-                let detail = s
-                    .matches
-                    .iter()
-                    .map(|m| {
-                        format!(
-                            " [{} {}discs start {}discs turn={} me={} eval={}]",
-                            m.id,
-                            m.cells.iter().filter(|&&c| c != 0).count(),
-                            m.ggf
-                                .split_once("BO[8 ")
-                                .map(|(_, r)| { r.chars().take(64).filter(|c| *c != '-').count() })
-                                .unwrap_or(0),
-                            if m.turn.is_empty() { "-" } else { &m.turn },
-                            if m.my_color.is_empty() {
-                                "observe"
-                            } else {
-                                &m.my_color
-                            },
-                            m.watch_eval
-                                .map(|v| format!("{v:+.1}"))
-                                .unwrap_or_else(|| "-".into()),
-                        )
-                    })
-                    .collect::<String>();
-                let fetched = match &s.fetched_ggf {
-                    Some(g) if !g.ggf.is_empty() => {
-                        format!(" fetched={} {}chars", g.id, g.ggf.len())
-                    }
-                    Some(g) => format!(" fetched={} error:{}", g.id, g.error),
-                    None => String::new(),
-                };
-                let _ = writeln!(
-                    f,
-                    "conn={} login={} matches={} offers={} log={} emit={}{}{fetched}",
-                    s.conn,
-                    s.login,
-                    s.matches.len(),
-                    s.offers.len(),
-                    s.log.len(),
-                    if _emit_ok { "ok" } else { "ERR" },
-                    detail
-                );
-            }
-        }
+        let _ = self.app.emit("ggs", &s);
         self.last_emit = Instant::now();
         self.dirty = false;
     }
     fn ensure_engine(&mut self) -> Result<(), String> {
         if self.engine.is_none() {
-            let res = resources();
-            let mut cfg = self.engine_cfg.clone();
-            cfg.threads = resolve_threads(cfg.threads);
-            cfg.weights = res.weights_path();
-            cfg.nnue = res.nnue_path();
-            cfg.book = res.book_path();
-            let engine = Engine::new(cfg)?;
+            let engine = Engine::new(with_resources(self.engine_cfg.clone(), &resources()))?;
             self.stop = Some(engine.stop_handle());
             let loaded = engine.has_book();
             self.engine = Some(engine);
@@ -2181,7 +1170,7 @@ fn new_ctx(
         snap,
         engine: None,
         engine_cfg: EngineConfig {
-            threads: res.threads.unwrap_or_else(|| resolve_threads(0)),
+            threads: res.threads.unwrap_or_else(crate::auto_threads),
             midgame_hash_bits: res.hash_mid_bits(),
             solver_hash_bits: res.hash_end_bits(),
             ..Default::default()
@@ -2216,20 +1205,7 @@ fn new_ctx(
     ctx
 }
 
-fn restore_settings(ctx: &mut Ctx) {
-    let Some(v) = load_settings() else { return };
-    ctx.set_use_book(v.use_book);
-    let mut s = ctx.snap.lock().unwrap();
-    s.engine.learn = v.learn;
-    s.auto_play = v.auto_play;
-    s.open = v.open;
-    s.watch_analysis = v.watch_analysis;
-    if valid_log_channel(&v.log_channel) {
-        s.log_channel = v.log_channel;
-    }
-}
-
-pub fn run(
+fn run(
     app: tauri::AppHandle,
     rx: Receiver<Cmd>,
     snap: Arc<Mutex<Snapshot>>,
@@ -2276,31 +1252,15 @@ fn wait_for_connect(ctx: &mut Ctx, rx: &Receiver<Cmd>) -> Option<(String, String
             }
             Ok(Cmd::ReloadThreads) => apply_threads(ctx),
             Ok(Cmd::SetStandby(cfg)) => ctx.snap.lock().unwrap().standby = cfg.needing_opponent(),
-            Ok(Cmd::SetAutoPlay(b)) => {
-                ctx.snap.lock().unwrap().auto_play = b;
-                save_settings(ctx);
-            }
-            Ok(Cmd::SetOpen(b)) => {
-                ctx.snap.lock().unwrap().open = b;
-                save_settings(ctx);
-            }
-            Ok(Cmd::SetUseBook(b)) => {
-                ctx.set_use_book(b);
-                save_settings(ctx);
-            }
-            Ok(Cmd::SetWatchAnalysis(b)) => {
-                ctx.snap.lock().unwrap().watch_analysis = b;
-                save_settings(ctx);
-            }
-            Ok(Cmd::SetLearn(b)) => {
-                ctx.snap.lock().unwrap().engine.learn = b;
-                save_settings(ctx);
-            }
             Ok(Cmd::SetLogChannel(c)) if valid_log_channel(&c) => {
                 ctx.snap.lock().unwrap().log_channel = c;
                 save_settings(ctx);
             }
-            Ok(_) => continue,
+            Ok(cmd) => {
+                if !set_pref(ctx, &cmd) {
+                    continue;
+                }
+            }
             Err(mpsc::RecvTimeoutError::Timeout) => {
                 learn_tick(ctx);
                 continue;
@@ -2309,6 +1269,20 @@ fn wait_for_connect(ctx: &mut Ctx, rx: &Receiver<Cmd>) -> Option<(String, String
         }
         ctx.emit(true);
     }
+}
+
+/// A setting kept in `ggs_settings.json`; false for any other command.
+fn set_pref(ctx: &mut Ctx, cmd: &Cmd) -> bool {
+    match *cmd {
+        Cmd::SetAutoPlay(b) => ctx.snap.lock().unwrap().auto_play = b,
+        Cmd::SetOpen(b) => ctx.snap.lock().unwrap().open = b,
+        Cmd::SetUseBook(b) => ctx.set_use_book(b),
+        Cmd::SetWatchAnalysis(b) => ctx.snap.lock().unwrap().watch_analysis = b,
+        Cmd::SetLearn(b) => ctx.snap.lock().unwrap().engine.learn = b,
+        _ => return false,
+    }
+    save_settings(ctx);
+    true
 }
 
 fn claim_session(ctx: &mut Ctx) -> bool {
@@ -2407,7 +1381,7 @@ fn session(ctx: &mut Ctx, rx: &Receiver<Cmd>, login: &str, pw: &str) {
                     &mut w.matches,
                     &mut w.pending,
                     &mut w.next_ask_at,
-                    |c| ctx_send(&mut writer, &c),
+                    |c| write_line(&mut writer, &c),
                 ) {
                     w.want_quit = true;
                 }
@@ -2424,7 +1398,7 @@ fn session(ctx: &mut Ctx, rx: &Receiver<Cmd>, login: &str, pw: &str) {
                 break;
             }
             if !w.logged_in {
-                login_step(ctx, &mut w, login, pw, |c| ctx_send(&mut writer, &c));
+                login_step(ctx, &mut w, login, pw, |c| write_line(&mut writer, &c));
                 if w.login_warned {
                     return;
                 }
@@ -2432,11 +1406,11 @@ fn session(ctx: &mut Ctx, rx: &Receiver<Cmd>, login: &str, pw: &str) {
             }
             while let Some(ln) = w.lines.pop_front() {
                 dispatch_line(ctx, &mut w, &ln, login, pw, &mut cred_saved, |c| {
-                    ctx_send(&mut writer, &c)
+                    write_line(&mut writer, &c)
                 });
             }
-            standby_tick(ctx, &mut w, |c| ctx_send(&mut writer, &c));
-            service(ctx, &mut w, |c| ctx_send(&mut writer, &c));
+            standby_tick(ctx, &mut w, |c| write_line(&mut writer, &c));
+            service(ctx, &mut w, |c| write_line(&mut writer, &c));
             ctx.emit(false);
         }
     }
@@ -2552,13 +1526,43 @@ fn login_step(ctx: &mut Ctx, w: &mut Wire, login: &str, pw: &str, mut send: impl
     ctx.emit(false);
 }
 
+/// Sends a command whose answer is captured under `key` (see `capture_header_matches`).
+fn query(
+    pending: &mut Vec<String>,
+    key: impl Into<String>,
+    cmd: impl Into<String>,
+    mut send: impl FnMut(String),
+) {
+    pending.push(key.into());
+    send(cmd.into());
+}
+
 fn ask_who(pending: &mut Vec<String>, mut send: impl FnMut(String)) {
     for t in ["8", "8r"] {
-        pending.push(format!("who:{t}"));
-        send(format!("tell /os who {t}"));
+        query(
+            pending,
+            format!("who:{t}"),
+            format!("tell /os who {t}"),
+            &mut send,
+        );
     }
-    pending.push("online".into());
-    send("who".into());
+    query(pending, "online", "who", send);
+}
+
+/// Both fingers: the server's (`decline` formula and the like) and the Othello service's.
+fn ask_finger(pending: &mut Vec<String>, name: &str, mut send: impl FnMut(String)) {
+    query(
+        pending,
+        format!("finger:{name}"),
+        format!("finger {name}"),
+        &mut send,
+    );
+    query(
+        pending,
+        format!("osfinger:{name}"),
+        format!("tell /os finger {name}"),
+        send,
+    );
 }
 
 fn greet(ctx: &mut Ctx, w: &mut Wire, login: &str, send: &mut impl FnMut(String)) {
@@ -2566,14 +1570,9 @@ fn greet(ctx: &mut Ctx, w: &mut Wire, login: &str, send: &mut impl FnMut(String)
         "verbose -news -faq -help -ack",
         "tell /os client -",
         "tell /os trust +",
-        if no_rated() {
-            "tell /os rated -"
-        } else {
-            "tell /os rated +"
-        },
+        rated_cmd(true),
         "tell /os notify +",
-        // Observers coming and going on our games and watched games arrive as `+ name watch .id`;
-        // that keeps the observer list live without asking again.
+        // Observers coming and going then arrive as `+ name watch .id`, keeping the lists live.
         "tell /os watch +",
         "chann + .chat",
     ] {
@@ -2587,16 +1586,19 @@ fn greet(ctx: &mut Ctx, w: &mut Wire, login: &str, send: &mut impl FnMut(String)
     say(ctx, send, format!("tell /os open {}", u8::from(open)));
     ask_who(&mut w.pending, |c| say(ctx, send, c));
     for t in ["8", "8r"] {
-        w.pending.push(format!("rank:{t}:{login}"));
-        say(ctx, send, format!("tell /os rank {t} {login}"));
+        query(
+            &mut w.pending,
+            format!("rank:{t}:{login}"),
+            format!("tell /os rank {t} {login}"),
+            |c| say(ctx, send, c),
+        );
     }
     for (key, cmd) in [
         ("stored_list", "tell /os stored"),
         ("match_list", "tell /os match"),
         ("history:", "tell /os history"),
     ] {
-        w.pending.push(key.into());
-        say(ctx, send, cmd);
+        query(&mut w.pending, key, cmd, |c| say(ctx, send, c));
     }
     ctx.prepare_workers();
 }
@@ -2754,10 +1756,7 @@ fn standby_tick(ctx: &mut Ctx, w: &mut Wire, mut send: impl FnMut(String)) {
     };
     if !read && ctx.auto_fingered != sb.opponent {
         ctx.auto_fingered = sb.opponent.clone();
-        w.pending.push(format!("finger:{}", sb.opponent));
-        say(ctx, &mut send, format!("finger {}", sb.opponent));
-        w.pending.push(format!("osfinger:{}", sb.opponent));
-        say(ctx, &mut send, format!("tell /os finger {}", sb.opponent));
+        ask_finger(&mut w.pending, &sb.opponent, |c| say(ctx, &mut send, c));
         w.next_ask_at = Some(Instant::now() + Duration::from_secs(2));
         return;
     }
@@ -2768,8 +1767,7 @@ fn standby_tick(ctx: &mut Ctx, w: &mut Wire, mut send: impl FnMut(String)) {
     ctx.log("info", &format!("auto match: asking {}", sb.opponent));
     ctx.ask_matched = false;
     ctx.auto_asked = true;
-    let rated = if sb.rated && !no_rated() { "+" } else { "-" };
-    say(ctx, &mut send, format!("tell /os rated {rated}"));
+    say(ctx, &mut send, rated_cmd(sb.rated));
     say(
         ctx,
         &mut send,
@@ -2780,8 +1778,9 @@ fn standby_tick(ctx: &mut Ctx, w: &mut Wire, mut send: impl FnMut(String)) {
 fn service(ctx: &mut Ctx, w: &mut Wire, mut send: impl FnMut(String)) {
     if Instant::now() >= w.next_match_at {
         w.next_match_at = Instant::now() + Duration::from_secs(60);
-        w.pending.push("match_list".into());
-        say(ctx, &mut send, "tell /os match");
+        query(&mut w.pending, "match_list", "tell /os match", |c| {
+            say(ctx, &mut send, c)
+        });
         // Players in a game drop out of `who`, so a one-off list never shows them free again.
         ask_who(&mut w.pending, |c| say(ctx, &mut send, c));
     }
@@ -2909,10 +1908,7 @@ fn handle_cmd(
             opponent,
             rated,
         } => {
-            send(format!(
-                "tell /os rated {}",
-                if rated && !no_rated() { "+" } else { "-" }
-            ));
+            send(rated_cmd(rated).to_string());
             let cmd = if opponent.is_empty() {
                 format!("tell /os ask {gtype} {time}")
             } else {
@@ -2922,25 +1918,21 @@ fn handle_cmd(
         }
         Cmd::Accept(id) => send(format!("tell /os accept {id}")),
         Cmd::Decline(id) => send(format!("tell /os decline {id}")),
-        Cmd::Finger(name) => {
-            pending.push(format!("finger:{name}"));
-            send(format!("finger {name}"));
-            pending.push(format!("osfinger:{name}"));
-            send(format!("tell /os finger {name}"));
-        }
-        Cmd::Who => ask_who(pending, &mut send),
-        Cmd::Top { gtype, n } => {
-            pending.push("top".into());
-            send(format!("tell /os top {gtype} {n}"));
-        }
-        Cmd::Rank { gtype, name } => {
-            pending.push(format!("rank:{gtype}:{name}"));
-            send(format!("tell /os rank {gtype} {name}"));
-        }
-        Cmd::Look(id) => {
-            pending.push(format!("look:{id}"));
-            send(format!("tell /os look {id}"));
-        }
+        Cmd::Finger(name) => ask_finger(pending, &name, send),
+        Cmd::Who => ask_who(pending, send),
+        Cmd::Top { gtype, n } => query(pending, "top", format!("tell /os top {gtype} {n}"), send),
+        Cmd::Rank { gtype, name } => query(
+            pending,
+            format!("rank:{gtype}:{name}"),
+            format!("tell /os rank {gtype} {name}"),
+            send,
+        ),
+        Cmd::Look(id) => query(
+            pending,
+            format!("look:{id}"),
+            format!("tell /os look {id}"),
+            send,
+        ),
         Cmd::CloseMatch(id) => {
             let keys: Vec<String> = matches
                 .iter()
@@ -3000,30 +1992,15 @@ fn handle_cmd(
             apply_threads(ctx);
             ctx.dirty = true;
         }
-        Cmd::SetAutoPlay(b) => {
-            ctx.snap.lock().unwrap().auto_play = b;
-            save_settings(ctx);
-            ctx.dirty = true;
-        }
-        Cmd::SetOpen(b) => {
-            ctx.snap.lock().unwrap().open = b;
-            save_settings(ctx);
-            send(format!("tell /os open {}", u8::from(b)));
-            ctx.dirty = true;
-        }
-        Cmd::SetUseBook(b) => {
-            ctx.set_use_book(b);
-            save_settings(ctx);
-            ctx.dirty = true;
-        }
-        Cmd::SetWatchAnalysis(b) => {
-            ctx.snap.lock().unwrap().watch_analysis = b;
-            save_settings(ctx);
-            ctx.dirty = true;
-        }
-        Cmd::SetLearn(b) => {
-            ctx.snap.lock().unwrap().engine.learn = b;
-            save_settings(ctx);
+        Cmd::SetAutoPlay(_)
+        | Cmd::SetOpen(_)
+        | Cmd::SetUseBook(_)
+        | Cmd::SetWatchAnalysis(_)
+        | Cmd::SetLearn(_) => {
+            set_pref(ctx, &cmd);
+            if let Cmd::SetOpen(b) = cmd {
+                send(format!("tell /os open {}", u8::from(b)));
+            }
             ctx.dirty = true;
         }
         Cmd::SetLogChannel(new) if valid_log_channel(&new) => {
@@ -3040,25 +2017,19 @@ fn handle_cmd(
             ctx.dirty = true;
         }
         Cmd::SetLogChannel(_) => {}
-        Cmd::ListStored => {
-            pending.push("stored_list".into());
-            send("tell /os stored".to_string());
-        }
-        Cmd::ListMatches => {
-            pending.push("match_list".into());
-            send("tell /os match".to_string());
-        }
+        Cmd::ListStored => query(pending, "stored_list", "tell /os stored", send),
+        Cmd::ListMatches => query(pending, "match_list", "tell /os match", send),
         Cmd::ResumeStored(id) => {
             ctx.log("info", &format!("resuming adjourned game {id}"));
             send(format!("tell /os ask {id}"));
         }
         Cmd::History(name) => {
-            pending.push(format!("history:{name}"));
-            if name.is_empty() {
-                send("tell /os history".to_string());
+            let cmd = if name.is_empty() {
+                "tell /os history".to_string()
             } else {
-                send(format!("tell /os history {name}"));
-            }
+                format!("tell /os history {name}")
+            };
+            query(pending, format!("history:{name}"), cmd, send);
         }
         Cmd::SetFormula { kind, expr } => {
             ctx.snap.lock().unwrap().formula_refused.clear();
@@ -3116,23 +2087,24 @@ fn handle_os_line(
         let rest = rest.trim_start();
         if let Some(mrest) = rest.strip_prefix("match ") {
             let id = mrest.split_whitespace().next().unwrap_or("").to_string();
+            let opponent = || {
+                match_line_parts(mrest)
+                    .0
+                    .into_iter()
+                    .find(|n| n != login)
+                    .unwrap_or_default()
+            };
             if mrest.split_whitespace().any(|t| t == login) {
                 let opp = ctx.snap.lock().unwrap().standby.opponent.clone();
                 if !opp.is_empty() && mrest.split_whitespace().any(|t| t == opp) {
                     ctx.ask_matched = true;
                     ctx.ask_refusals = 0;
                 }
-                // A game against someone we had an adjourned game with is that game resumed:
-                // the stored list and the old adjourned boards are out of date now.
-                let opp = match_line_parts(mrest)
-                    .0
-                    .into_iter()
-                    .find(|n| n != login)
-                    .unwrap_or_default();
+                // A game with someone we had adjourned with resumes it: the stored list and old boards are stale.
+                let opp = opponent();
                 let resumed = ctx.snap.lock().unwrap().stored.iter().any(|x| x.opp == opp);
                 if resumed {
-                    pending.push("stored_list".into());
-                    send("tell /os stored".to_string());
+                    query(pending, "stored_list", "tell /os stored", &mut send);
                     matches.retain(|_, m| !(m.over && m.ended == "adjourned" && m.opp_name == opp));
                     sync_matches(ctx, matches);
                 }
@@ -3149,15 +2121,10 @@ fn handle_os_line(
                         let games = &mut snap.td.games;
                         let b = base_id(&id).to_string();
                         if !games.iter().any(|g| g.id == b) {
-                            let opp = match_line_parts(mrest)
-                                .0
-                                .into_iter()
-                                .find(|n| n != login)
-                                .unwrap_or_default();
                             games.push(TdGame {
                                 id: b,
                                 tid,
-                                opp,
+                                opp: opponent(),
                                 diff: None,
                             });
                         }
@@ -3205,38 +2172,21 @@ fn handle_os_line(
                 }
             }
         }
-    } else if let Some((rest, fatal)) = ln
-        .strip_prefix("/os: fatal-timeout ")
-        .map(|r| (r, true))
-        .or_else(|| ln.strip_prefix("/os: timeout ").map(|r| (r, false)))
-    {
-        let mut it = rest.split_whitespace();
-        if let (Some(id), Some(name)) = (it.next(), it.next()) {
-            if let Some(m) = matches.get_mut(id) {
-                if fatal {
-                    m.out_of_time_by = name.to_string();
-                } else if m.over_time_by.is_empty() {
-                    m.over_time_by = name.to_string();
-                }
+    } else if let Some((id, name, fatal)) = timeout_line(ln) {
+        if let Some(m) = matches.get_mut(id) {
+            if fatal {
+                m.out_of_time_by = name.to_string();
+            } else if m.over_time_by.is_empty() {
+                m.over_time_by = name.to_string();
             }
         }
     } else if let Some(rest) = ln.strip_prefix("/os: end ") {
-        let mut it = rest.split_whitespace();
-        if let (Some(id), Some(score)) = (it.next(), rest.rsplit(' ').next()) {
-            if let Ok(v) = score.trim().parse::<f32>() {
-                if let Some(m) = matches.get_mut(id) {
-                    // The score is from the first name in the brackets, which is not always black.
-                    let first = rest
-                        .split('(')
-                        .nth(1)
-                        .and_then(|t| t.split_whitespace().next())
-                        .unwrap_or("");
-                    m.result = black_view(m, first, v);
-                    // One board of a synchro pair can end before the match does; its clocks stop here.
-                    m.over = true;
-                    m.turn = ' ';
-                }
-            }
+        let (id, score, first) = end_line(rest);
+        if let (Some(v), Some(m)) = (score, matches.get_mut(id)) {
+            m.result = black_view(m, first, v);
+            // One board of a synchro pair can end before the match does; its clocks stop here.
+            m.over = true;
+            m.turn = ' ';
         }
     } else if let Some(rest) = ln.strip_prefix("/os: - ") {
         let rest = rest.trim_start();
@@ -3403,260 +2353,6 @@ fn stop_auto_match_unfit(ctx: &mut Ctx, why: Option<&formula::Outline>) -> bool 
     true
 }
 
-/// One line of the opponent's formula as the request sheet lays it out.
-#[derive(Clone, Serialize)]
-pub struct UnfitRow {
-    pub depth: u8,
-    /// `Some(any)` for a group ("any of" / "all of"), `None` for a condition.
-    pub group: Option<bool>,
-    pub text: String,
-    pub hit: bool,
-}
-
-/// Why the opponent turns the request away: the top of its formula (`any`, `all`, or `one` for a
-/// single condition) and the lines below it.
-#[derive(Clone, Serialize)]
-pub struct UnfitView {
-    pub top: &'static str,
-    pub rows: Vec<UnfitRow>,
-}
-
-/// `opp`'s decline formula laid out for the request sheet; `None` when the request fits.
-pub fn unfit_view(
-    s: &Snapshot,
-    gtype: &str,
-    time: &str,
-    opp: &str,
-    rated: bool,
-) -> Option<UnfitView> {
-    let o = unfit_ask(s, gtype, time, opp, rated)?;
-    let mut rows = Vec::new();
-    let top = match &o {
-        formula::Outline::Group { any, kids, .. } => {
-            for k in hits_first(kids) {
-                unfit_rows(k, opp, 0, &mut rows);
-            }
-            if *any {
-                "any"
-            } else {
-                "all"
-            }
-        }
-        formula::Outline::Cond { .. } => {
-            unfit_rows(&o, opp, 0, &mut rows);
-            "one"
-        }
-    };
-    Some(UnfitView { top, rows })
-}
-
-fn unfit_rows(o: &formula::Outline, opp: &str, depth: u8, out: &mut Vec<UnfitRow>) {
-    match o {
-        formula::Outline::Group { any, hit, kids } => {
-            out.push(UnfitRow {
-                depth,
-                group: Some(*any),
-                text: String::new(),
-                hit: *hit,
-            });
-            for k in hits_first(kids) {
-                unfit_rows(k, opp, depth + 1, out);
-            }
-        }
-        formula::Outline::Cond { shape, hit } => out.push(UnfitRow {
-            depth,
-            group: None,
-            text: unfit_words(shape, opp),
-            hit: *hit,
-        }),
-    }
-}
-
-/// The parts of a group with the ones that hold first; their order inside `|` or `&` means nothing.
-fn hits_first(kids: &[formula::Outline]) -> impl Iterator<Item = &formula::Outline> {
-    kids.iter()
-        .filter(|k| k.hit())
-        .chain(kids.iter().filter(|k| !k.hit()))
-}
-
-/// The conditions that hold, in words, for a notice: a group that holds reads as "all of: a, b".
-fn hit_words(o: &formula::Outline, opp: &str) -> String {
-    use crate::i18n::t;
-    match o {
-        formula::Outline::Cond { shape, .. } => unfit_words(shape, opp),
-        formula::Outline::Group { any, kids, .. } => {
-            let parts: Vec<String> = kids
-                .iter()
-                .filter(|k| k.hit())
-                .map(|k| match k {
-                    formula::Outline::Group { any: inner, .. } => format!(
-                        "{}: {}",
-                        t(if *inner {
-                            "backend.unfit.group_any"
-                        } else {
-                            "backend.unfit.group_all"
-                        }),
-                        hit_words(k, opp)
-                    ),
-                    _ => hit_words(k, opp),
-                })
-                .collect();
-            let sep = if *any {
-                " / ".to_string()
-            } else {
-                t("backend.unfit.join")
-            };
-            parts.join(&sep)
-        }
-    }
-}
-
-/// `opp`'s decline formula as an outline when it turns this request away, judged before sending
-/// as the server would; `None` when it fits, or when that cannot be told (finger not read, a value
-/// unknown).
-pub fn unfit_ask(
-    s: &Snapshot,
-    gtype: &str,
-    time: &str,
-    opp: &str,
-    rated: bool,
-) -> Option<formula::Outline> {
-    if opp.is_empty() || opp == s.login {
-        return None;
-    }
-    let finger = s.fingers.get(opp)?;
-    let decline = &finger.fields.iter().find(|(k, _)| k == "decline")?.1;
-    let mut f = formula::Facts::from_request(gtype, time)?;
-    f.rated = rated && !no_rated();
-    f.stored = s.stored.iter().filter(|x| x.opp == opp).count() as i64;
-    let pool = f.pool();
-    // Someone online with no rating in the pool is rated from the server's start, 1720 @ 350.
-    let rating = |name: &str| {
-        let u = s.users.iter().find(|u| u.name == name)?;
-        let r = match pool.as_str() {
-            "8" => u.rating.zip(u.dev),
-            "8r" => u.rating_r.zip(u.dev_r),
-            _ => return None,
-        };
-        Some(r.map_or((1720.0, 350.0), |(r, d)| (f64::from(r), f64::from(d))))
-    };
-    f.asker_rating = rating(&s.login);
-    f.owner_rating = rating(opp);
-    formula::declined_by(decline, &f)
-}
-
-/// One condition of the opponent's decline formula in words, as a state of the request that the
-/// condition looks for ("not synchro", "the main time under 3 min 20 s").
-fn unfit_words(shape: &formula::Shape, owner: &str) -> String {
-    use crate::i18n::{t, tf};
-    use formula::{Cmp, Shape};
-    let key = |k: &str| format!("backend.unfit.{k}");
-    let other = || t(&key("other"));
-    // The clock variables come in pairs (`mt1` / `ot1`): the owner's and the asker's are worded alike.
-    let base = |var: &str| -> String {
-        if var.len() == 3 && (var.starts_with('m') || var.starts_with('o')) {
-            var[1..].to_string()
-        } else {
-            var.to_string()
-        }
-    };
-    // A key the language does not have comes back as itself; such a condition is said generically.
-    let label = |var: &str| {
-        let k = key(&format!("var.{}", base(var)));
-        let l = tf(&k, &[("name", owner)]);
-        (l != k).then_some(l)
-    };
-    let secs = |v: f64| {
-        let v = v.round() as i64;
-        let (m, s) = ((v / 60).to_string(), (v % 60).to_string());
-        let k = match (v / 60, v % 60) {
-            (0, _) => "time_s",
-            (_, 0) => "time_m",
-            _ => "time_ms",
-        };
-        tf(&key(k), &[("m", &m), ("s", &s)])
-    };
-    let value = |var: &str, v: f64| match base(var).as_str() {
-        "t1" | "t2" | "t3" => secs(v),
-        "mr" | "or" => format!("{v:.1}"),
-        _ => format!("{}", v.round() as i64),
-    };
-    match shape {
-        Shape::Flag { var, when } => {
-            let k = key(&format!(
-                "flag.{}_{}",
-                base(var),
-                if *when { "yes" } else { "no" }
-            ));
-            let w = t(&k);
-            if w == k {
-                other()
-            } else {
-                w
-            }
-        }
-        Shape::Number {
-            var: "stored",
-            cmp: Cmp::Gt,
-            limit,
-        } if *limit == 0.0 => t(&key("stored")),
-        Shape::Number { var, cmp, limit } => {
-            let Some(label) = label(var) else {
-                return other();
-            };
-            let k = match cmp {
-                Cmp::Lt => "number_lt",
-                Cmp::Le => "number_le",
-                Cmp::Gt => "number_gt",
-                Cmp::Ge => "number_ge",
-                Cmp::Eq => "number_eq",
-                Cmp::Ne => "number_ne",
-            };
-            // A number is spaced from the words after it ("16 未満"), a unit is not ("3 分未満").
-            let v = value(var, *limit);
-            let sp = if v.ends_with(|c: char| c.is_ascii_digit()) {
-                " "
-            } else {
-                ""
-            };
-            tf(&key(k), &[("label", &label), ("v", &v), ("sp", sp)])
-        }
-        Shape::Same { var } => match label(var) {
-            Some(label) => tf(&key("same"), &[("label", &label)]),
-            None => other(),
-        },
-        Shape::Color { var, cmp, color } => {
-            // The asker's own colour has its own words: "you" is not a name.
-            let you = if *var == "mc" { "" } else { "_you" };
-            match (color, cmp) {
-                ('?', Cmp::Ne) => t(&key("color_named")),
-                ('?', Cmp::Eq) => t(&key("color_unnamed")),
-                ('B' | 'W', Cmp::Eq | Cmp::Ne) => {
-                    let side = t(&key(if *color == 'B' { "black" } else { "white" }));
-                    let k = if *cmp == Cmp::Eq {
-                        "color_is"
-                    } else {
-                        "color_is_not"
-                    };
-                    tf(
-                        &key(&format!("{k}{you}")),
-                        &[("who", owner), ("side", &side)],
-                    )
-                }
-                _ => other(),
-            }
-        }
-        Shape::Delta {
-            owner: true,
-            result,
-            cmp: Cmp::Le | Cmp::Lt,
-            limit,
-        } if *result > 0.0 && *limit <= 0.0 => t(&key("no_gain")),
-        Shape::Delta { .. } => t(&key("rating")),
-        Shape::Other => other(),
-    }
-}
-
 /// Our own request to `opp` (not one sent to us, nor one to anybody).
 fn ask_to(o: &Offer, login: &str, opp: &str) -> bool {
     !o.incoming
@@ -3697,24 +2393,31 @@ fn ggs_err_notice(msg: &str) -> String {
     format!("err.ggs.{key}")
 }
 
-fn ctx_send(writer: &mut TcpStream, cmd: &str) {
+fn write_line(writer: &mut TcpStream, cmd: &str) {
     let _ = writer
         .write_all(cmd.as_bytes())
         .and_then(|_| writer.write_all(b"\n"));
 }
 
+/// The thread count resolved and the files the resource settings point at.
+fn with_resources(mut cfg: EngineConfig, res: &kuroobi::resources::Resources) -> EngineConfig {
+    cfg.threads = resolve_threads(cfg.threads);
+    cfg.weights = res.weights_path();
+    cfg.nnue = res.nnue_path();
+    cfg.book = res.book_path();
+    cfg
+}
+
 fn resolve_threads(n: usize) -> usize {
     if n == 0 {
-        std::thread::available_parallelism()
-            .map(|c| (c.get() / 2).max(1))
-            .unwrap_or(4)
+        crate::auto_threads()
     } else {
         n
     }
 }
 
 fn apply_threads(ctx: &mut Ctx) {
-    let n = resources().threads.unwrap_or_else(|| resolve_threads(0));
+    let n = resources().threads.unwrap_or_else(crate::auto_threads);
     ctx.engine_cfg.threads = n;
     if let Some(e) = ctx.engine.as_mut() {
         e.set_threads(n);
@@ -3837,23 +2540,22 @@ fn epoch_ms() -> u64 {
         .map_or(0, |d| d.as_millis() as u64)
 }
 
+/// `cells` (`file * 8 + rank`) as a board string runs them: a1, b1 … h8.
+fn cells_text(cells: &[u8]) -> String {
+    (0..64)
+        .map(|n| match cells[(n % 8) * 8 + n / 8] {
+            1 => 'X',
+            2 => 'O',
+            _ => '-',
+        })
+        .collect()
+}
+
 fn board_of(m: &MatchState, turn: char) -> Option<Board> {
     if turn != '*' && turn != 'O' {
         return None;
     }
-    let mut sboard = String::with_capacity(66);
-    for r in 0..8 {
-        for f in 0..8 {
-            sboard.push(match m.cells[f * 8 + r] {
-                1 => 'X',
-                2 => 'O',
-                _ => '-',
-            });
-        }
-    }
-    sboard.push(' ');
-    sboard.push(if turn == '*' { 'X' } else { 'O' });
-    Board::from_string(&sboard).ok()
+    Board::from_string(&format!("{} {turn}", cells_text(&m.cells))).ok()
 }
 
 /// GGS reuses match numbers; a join on a finished board is a new game.
@@ -4381,7 +3083,7 @@ fn collect_workers(ctx: &mut Ctx, matches: &mut HashMap<String, MatchState>) -> 
         ctx.workers[i].busy = false;
         let took = ctx.workers[i].sent_at.map(|(t, _)| t.elapsed());
         ctx.workers[i].sent_at = None;
-        let Done::Moved(mv, r) = done;
+        let Done(mv, r) = done;
         if let Some(t) = took {
             ctx.log(
                 "info",
@@ -4489,16 +3191,8 @@ fn sync_matches(ctx: &mut Ctx, matches: &HashMap<String, MatchState>) {
             busy_best: None,
             busy_eval: None,
             cells: m.cells.clone(),
-            turn: match m.turn {
-                '*' => "black".into(),
-                'O' => "white".into(),
-                _ => "".into(),
-            },
-            my_color: match m.my_color {
-                Some('*') => "black".into(),
-                Some('O') => "white".into(),
-                _ => "".into(),
-            },
+            turn: color_word(Some(m.turn)).into(),
+            my_color: color_word(m.my_color).into(),
             opp_name: m.opp_name.clone(),
             opp_rating: m.opp_rating.clone(),
             opp_clock: m.opp_clock.clone(),
@@ -4510,7 +3204,7 @@ fn sync_matches(ctx: &mut Ctx, matches: &HashMap<String, MatchState>) {
             in_extension: m.in_extension,
             players: m.players.clone(),
             gtype: m.gtype.clone(),
-            ggf: m.ggf(id, None),
+            ggf: m.ggf(id, None, false),
             moves: m.moves.values().cloned().collect(),
             over: m.over,
             result: m.result.clone(),
@@ -4618,338 +3312,12 @@ fn parse_offer(rest: &str, login: &str) -> Option<Offer> {
     })
 }
 
-/// Records written before the colour and the final count were kept: both come from the board's own GGF.
-fn fill_board_from_ggf(b: &mut BoardRecord, opp: &str) {
-    if b.ggf.is_empty() {
-        return;
-    }
-    let Some(color) = ggf_color(&b.ggf, opp) else {
-        return;
-    };
-    // The board's own result line, else the final position counted the same way.
-    let black = ggf_tag(&b.ggf, "RE")
-        .and_then(|v| v.split(':').next()?.trim().parse::<f32>().ok())
-        .map(|v| v.round() as i32)
-        .or_else(|| {
-            let (_, g) = replay_board(b, opp)?;
-            Some(scored(
-                g.board.black.count_ones() as i32,
-                g.board.white.count_ones() as i32,
-            ))
-        });
-    let Some(black) = black else {
-        return;
-    };
-    b.my_color = color.to_string();
-    b.disc_diff = Some(if color == "black" { black } else { -black });
-}
-
-fn ggf_tag(ggf: &str, t: &str) -> Option<String> {
-    let open = format!("{t}[");
-    let i = ggf.find(&open)? + open.len();
-    Some(ggf[i..].split(']').next()?.to_string())
-}
-
-fn ggf_color(ggf: &str, opp: &str) -> Option<&'static str> {
-    match (ggf_tag(ggf, "PB"), ggf_tag(ggf, "PW")) {
-        (_, Some(w)) if w == opp => Some("black"),
-        (Some(bl), _) if bl == opp => Some("white"),
-        _ => None,
-    }
-}
-
-/// The player's colour and the board's final position, from its own GGF.
-fn replay_board(b: &BoardRecord, opp: &str) -> Option<(&'static str, kuroobi::game::Reversi)> {
-    let color = ggf_color(&b.ggf, opp)?;
-    let start = ggf_tag(&b.ggf, "BO")?.strip_prefix("8 ")?.to_string();
-    let game = kuroobi::game::Reversi::from_kifu_with_start(&start, &b.kifu).ok()?;
-    Some((color, game))
-}
-
-#[derive(Default)]
-struct WireBoard {
-    over_by: String,
-    out_by: String,
-    /// Each player's last clock line: name, colour, main (or extension once in it), extension.
-    clocks: Vec<(String, String, Option<u64>, Option<u64>)>,
-    /// The server's result, from black's side.
-    result: Option<f32>,
-}
-
-/// What a wire log says about each match that ended in it, by the match's end line (with its archive
-/// number, so a reused match number cannot be mistaken for another).
-fn wire_endings(paths: &[PathBuf]) -> HashMap<String, HashMap<String, WireBoard>> {
-    let mut out = HashMap::new();
-    let mut live: HashMap<String, WireBoard> = HashMap::new();
-    let mut board = String::new();
-    for path in paths {
-        let Ok(text) = std::fs::read_to_string(path) else {
-            continue;
-        };
-        for line in text.lines() {
-            let Some(ln) = line.strip_prefix("in ") else {
-                continue;
-            };
-            if let Some(rest) = ln
-                .strip_prefix("/os: update ")
-                .or_else(|| ln.strip_prefix("/os: join "))
-            {
-                board = rest.split_whitespace().next().unwrap_or("").to_string();
-                continue;
-            }
-            if let Some(rest) = ln.strip_prefix('|') {
-                if let Some(c) = wire_clock_line(rest) {
-                    let b = live.entry(board.clone()).or_default();
-                    b.clocks.retain(|x| x.0 != c.0);
-                    b.clocks.push(c);
-                }
-                continue;
-            }
-            board.clear();
-            if let Some((rest, fatal)) = ln
-                .strip_prefix("/os: fatal-timeout ")
-                .map(|r| (r, true))
-                .or_else(|| ln.strip_prefix("/os: timeout ").map(|r| (r, false)))
-            {
-                let mut it = rest.split_whitespace();
-                if let (Some(id), Some(name)) = (it.next(), it.next()) {
-                    let b = live.entry(id.to_string()).or_default();
-                    if fatal {
-                        b.out_by = name.to_string();
-                    } else if b.over_by.is_empty() {
-                        b.over_by = name.to_string();
-                    }
-                }
-            } else if let Some(rest) = ln.strip_prefix("/os: end ") {
-                let id = rest.split_whitespace().next().unwrap_or("");
-                let v = rest
-                    .rsplit(' ')
-                    .next()
-                    .and_then(|v| v.trim().parse::<f32>().ok());
-                let first = rest
-                    .split('(')
-                    .nth(1)
-                    .and_then(|t| t.split_whitespace().next())
-                    .unwrap_or("");
-                let b = live.entry(id.to_string()).or_default();
-                // The score is from the first name; its colour is in the clock lines.
-                let first_white = b.clocks.iter().any(|c| c.0 == first && c.1 == "white");
-                b.result = v.map(|v| if first_white { -v } else { v });
-            } else if let Some(rest) = ln.strip_prefix("/os: + match ") {
-                let id = rest.split_whitespace().next().unwrap_or("").to_string();
-                live.retain(|k, _| k != &id && base_id(k) != id);
-            } else if let Some(rest) = ln.strip_prefix("/os: - match ") {
-                let id = rest.split_whitespace().next().unwrap_or("").to_string();
-                let boards: HashMap<String, WireBoard> = live
-                    .extract_if(|k, _| k == &id || base_id(k) == id)
-                    .collect();
-                out.insert(rest.trim().to_string(), boards);
-            }
-        }
-    }
-    out
-}
-
-/// `morgoth  (2629.3 *) 00:02,23:0//02:00,23:0`: a player's clock in an update.
-fn wire_clock_line(rest: &str) -> Option<(String, String, Option<u64>, Option<u64>)> {
-    let (name, tail) = rest.split_once(" (")?;
-    let (inside, clock) = tail.split_once(") ")?;
-    let color = match inside.split_whitespace().nth(1)? {
-        "*" => "black",
-        "O" => "white",
-        _ => return None,
-    };
-    let (secs, _, ext) = parse_clock(clock.trim());
-    Some((name.trim().to_string(), color.to_string(), secs, ext))
-}
-
-fn backfill_from_wire(r: &mut GameResult, wire: &HashMap<String, WireBoard>, login: &str) {
-    let mut resigned = false;
-    for b in &mut r.boards {
-        let Some(w) = wire.get(&b.id) else {
-            continue;
-        };
-        if b.ending.is_empty() {
-            if !w.out_by.is_empty() {
-                b.ending = "out_of_time".into();
-                b.ending_by = w.out_by.clone();
-            } else if !w.over_by.is_empty() {
-                b.ending = "over_time".into();
-                b.ending_by = w.over_by.clone();
-            }
-        }
-        if b.clocks.is_empty() {
-            b.clocks = w
-                .clocks
-                .iter()
-                .map(|(n, c, secs, ext)| clock_record(n, c, *secs, *ext, &w.over_by, &w.out_by))
-                .collect();
-        }
-        let cut_short = replay_board(b, &r.opp).is_some_and(|(_, g)| !g.is_game_over());
-        if w.out_by.is_empty() && cut_short && w.result.is_some_and(|v| v.abs() >= 63.5) {
-            resigned = true;
-        }
-    }
-    if !r.ending.is_empty() {
-        return;
-    }
-    let (kind, who) = end_kind(&r.raw);
-    if kind == "adjourned" {
-        r.ending = "adjourn".into();
-        r.ending_by = who;
-    } else if resigned {
-        if let Some(d) = r.my_diff.filter(|d| *d != 0) {
-            r.ending = "resign".into();
-            r.ending_by = if d < 0 {
-                login.to_string()
-            } else {
-                r.opp.clone()
-            };
-        }
-    }
-}
-
-fn board_of_cells(cells: &[u8]) -> Option<kuroobi::board::Board> {
-    if cells.len() != 64 {
-        return None;
-    }
-    // Board strings run a1, b1 … h8; `cells` is `file * 8 + rank`.
-    let s: String = (0..64)
-        .map(|n| match cells[(n % 8) * 8 + n / 8] {
-            1 => 'x',
-            2 => 'o',
-            _ => '-',
-        })
-        .chain(" x".chars())
-        .collect();
-    kuroobi::board::Board::from_string(&s).ok()
-}
-
 fn color_word(c: Option<char>) -> &'static str {
     match c {
         Some('*') => "black",
         Some('O') => "white",
         _ => "",
     }
-}
-
-/// The disc difference from black's side, the empty squares going to the side ahead as the game's
-/// score (and GGS) counts them.
-fn scored(black: i32, white: i32) -> i32 {
-    let d = black - white;
-    d + d.signum() * (64 - black - white)
-}
-
-/// The server sends no clock with a timeout: the notice itself says the time is gone. Once in the extension
-/// the clock's first field counts the extension down; the last stays at its setting.
-fn clock_record(
-    name: &str,
-    color: &str,
-    secs: Option<u64>,
-    ext: Option<u64>,
-    over_by: &str,
-    out_by: &str,
-) -> ClockRecord {
-    let (main, ext) = if name == out_by {
-        (Some(0), Some(0))
-    } else if name == over_by {
-        (Some(0), secs)
-    } else {
-        (secs, ext)
-    };
-    ClockRecord {
-        name: name.to_string(),
-        color: color.to_string(),
-        main,
-        ext,
-    }
-}
-
-fn board_record(id: &str, m: &MatchState) -> BoardRecord {
-    let black = m.cells.iter().filter(|&&c| c == 1).count() as i32;
-    let white = m.cells.iter().filter(|&&c| c == 2).count() as i32;
-    // GGS's own result for the board, else the final position counted the same way.
-    let d = m
-        .result
-        .parse::<f32>()
-        .map(|v| v.round() as i32)
-        .unwrap_or_else(|_| scored(black, white));
-    let my_color = color_word(m.my_color);
-    let (ending, ending_by) = if !m.out_of_time_by.is_empty() {
-        ("out_of_time", m.out_of_time_by.clone())
-    } else if !m.over_time_by.is_empty() {
-        ("over_time", m.over_time_by.clone())
-    } else {
-        ("", String::new())
-    };
-    BoardRecord {
-        id: id.to_string(),
-        kifu: m.kifu(),
-        ggf: m.ggf_with(id, Some(m.result.as_str()).filter(|r| !r.is_empty()), true),
-        my_color: my_color.to_string(),
-        disc_diff: match my_color {
-            "black" => Some(d),
-            "white" => Some(-d),
-            _ => None,
-        },
-        ending: ending.to_string(),
-        ending_by,
-        clocks: m
-            .players
-            .iter()
-            .map(|p| {
-                clock_record(
-                    &p.name,
-                    &p.color,
-                    p.secs,
-                    p.ext,
-                    &m.over_time_by,
-                    &m.out_of_time_by,
-                )
-            })
-            .collect(),
-    }
-}
-
-/// GGS reports a resignation only as a ±64 result: a board that ended there although it could go on and
-/// nobody ran out of time was resigned, by the side that lost it.
-fn match_ending(
-    kind: &str,
-    who: &str,
-    boards: &[(String, MatchState)],
-    my_diff: Option<i32>,
-    login: &str,
-    opp: &str,
-) -> (String, String) {
-    if kind == "adjourned" {
-        return ("adjourn".into(), who.to_string());
-    }
-    let resigned = boards.iter().any(|(_, m)| {
-        let full = m.result.trim_start_matches('+').trim_start_matches('-');
-        full.starts_with("64")
-            && m.out_of_time_by.is_empty()
-            && board_of_cells(&m.cells).is_some_and(|b| !b.is_game_over())
-    });
-    match (resigned, my_diff) {
-        (true, Some(d)) if d < 0 => ("resign".into(), login.to_string()),
-        (true, Some(d)) if d > 0 => ("resign".into(), opp.to_string()),
-        _ => (String::new(), String::new()),
-    }
-}
-
-fn end_kind(rest: &str) -> (&'static str, String) {
-    if rest.contains(" aborted") {
-        return ("aborted", String::new());
-    }
-    let toks: Vec<&str> = rest.split_whitespace().collect();
-    if let Some(i) = toks.iter().position(|t| *t == "left") {
-        let who = i
-            .checked_sub(1)
-            .map(|j| toks[j].to_string())
-            .unwrap_or_default();
-        return ("adjourned", who);
-    }
-    ("finished", String::new())
 }
 
 /// `|name old @ dev delta -> new @ dev`
@@ -4989,17 +3357,8 @@ fn handle_match_end(
     if !rest.contains(login) {
         return;
     }
-    let score: Option<f32> = toks.iter().find_map(|t| {
-        (t.starts_with(['+', '-']))
-            .then(|| t.parse::<f32>().ok())
-            .flatten()
-    });
-    let first_name = toks
-        .iter()
-        .skip(1)
-        .find(|t| t.len() >= 2 && t.chars().next().map(|c| c.is_ascii_alphabetic()) == Some(true))
-        .copied()
-        .unwrap_or("");
+    let (score, first_name) = match_score(rest);
+    let first_name = first_name.unwrap_or("");
     let (kind, who) = end_kind(rest);
     let archive = toks
         .last()
@@ -5013,7 +3372,11 @@ fn handle_match_end(
     let mut boards: Vec<BoardRecord> = dropped.iter().map(|(k, m)| board_record(k, m)).collect();
     boards.sort_by(|a, b| a.id.cmp(&b.id));
     let (kifu, ggf, opp) = match &m {
-        Some(m) => (m.kifu(), m.ggf(&id, re.as_deref()), m.opp_name.clone()),
+        Some(m) => (
+            m.kifu(),
+            m.ggf(&id, re.as_deref(), false),
+            m.opp_name.clone(),
+        ),
         None => (String::new(), String::new(), String::new()),
     };
     let my_diff = score.map(|s| my_stone_diff(s, first_name, login));
@@ -5171,24 +3534,6 @@ fn learn_tick(ctx: &mut Ctx) {
     }
 }
 
-fn is_month(t: &str) -> bool {
-    matches!(
-        t,
-        "Jan"
-            | "Feb"
-            | "Mar"
-            | "Apr"
-            | "May"
-            | "Jun"
-            | "Jul"
-            | "Aug"
-            | "Sep"
-            | "Oct"
-            | "Nov"
-            | "Dec"
-    )
-}
-
 /// Names, their ratings in the same order, and the game type of a match line `.id r1 name1 r2 name2 type R|U ...`.
 fn match_line_parts(line: &str) -> (Vec<String>, Vec<String>, String) {
     let t: Vec<&str> = line.split_whitespace().collect();
@@ -5217,767 +3562,9 @@ fn match_line_parts(line: &str) -> (Vec<String>, Vec<String>, String) {
     (names, ratings, gtype)
 }
 
-/// Everyone logged in to GGS, from the server's own `who`; `/os who` leaves out players who are in a game or not taking requests.
-fn online_names(buf: &[String]) -> Vec<String> {
-    buf.iter()
-        .skip(1)
-        .filter_map(|l| l.split_whitespace().next())
-        .filter(|n| n.starts_with(|c: char| c.is_ascii_alphabetic()))
-        .map(str::to_string)
-        .collect()
-}
-
-fn capture_header_matches(kind: &str, ln: &str) -> bool {
-    if kind.starts_with("who") {
-        ln.starts_with("/os: who")
-    } else if kind == "top" {
-        ln.starts_with("/os: top")
-    } else if kind == "stored_list" {
-        ln.starts_with("/os: stored")
-    } else if kind.starts_with("history:") {
-        ln.starts_with("/os: history")
-    } else if kind.starts_with("rank:") {
-        ln.starts_with("/os: rank")
-    } else if kind.starts_with("look:") {
-        ln.starts_with("/os: look")
-    } else if kind == "match_list" {
-        ln.starts_with("/os: match")
-    } else if kind.starts_with("osfinger:") {
-        ln.starts_with("/os: finger")
-    } else if kind.starts_with("watchers:") {
-        ln.starts_with("/os: watch")
-    } else if kind == "online" {
-        ln.starts_with(": who")
-    } else if kind.starts_with("finger:") {
-        ln.starts_with(": finger") || ln.trim_start().starts_with("login")
-    } else {
-        false
-    }
-}
-
-fn parse_dev_token(t: &str) -> Option<f32> {
-    let head: String = t
-        .chars()
-        .take_while(|c| c.is_ascii_digit() || *c == '.')
-        .collect();
-    head.parse::<f32>()
-        .ok()
-        .filter(|v| (0.0..1000.0).contains(v))
-}
-
-fn parse_rating_token(t: &str) -> Option<f32> {
-    let head = t.split('@').next()?;
-    head.parse::<f32>()
-        .ok()
-        .filter(|v| (100.0..4000.0).contains(v))
-}
-
-const CHAT_IN_MEMORY: usize = 300;
-
-fn parse_chat(ln: &str) -> Option<ChatMsg> {
-    let at = now_secs();
-    if let Some(rest) = ln.strip_prefix('.') {
-        let (head, text) = rest.split_once(": ")?;
-        let mut it = head.split_whitespace();
-        if let (Some(chan), Some(from), None) = (it.next(), it.next(), it.next()) {
-            return Some(ChatMsg {
-                chan: format!(".{chan}"),
-                from: from.to_string(),
-                text: text.to_string(),
-                at,
-                thread: format!(".{chan}"),
-            });
-        }
-        return None;
-    }
-    if ln.starts_with(['/', '|', ':', ' ']) || ln == "READY" {
-        return None;
-    }
-    let (name, text) = ln.split_once(": ")?;
-    let named = !name.is_empty()
-        && name.chars().all(|c| c.is_ascii_alphanumeric() || c == '_')
-        && name.starts_with(|c: char| c.is_ascii_alphabetic())
-        && !BARE_CMDS.contains(&name);
-    named.then(|| ChatMsg {
-        chan: String::new(),
-        from: name.to_string(),
-        text: text.to_string(),
-        at,
-        thread: name.to_string(),
-    })
-}
-
-/// Returns the messages this line completes, and whether the line belonged to a chat.
-fn take_chat_line(block: &mut Option<ChatMsg>, ln: &str) -> (Vec<ChatMsg>, bool) {
-    if let Some(m) = block.as_mut() {
-        if let Some(body) = ln.strip_prefix('|') {
-            if !body.starts_with("---") {
-                if !m.text.is_empty() {
-                    m.text.push('\n');
-                }
-                m.text.push_str(body.trim_end());
-            }
-            return (Vec::new(), true);
-        }
-    }
-    let done: Vec<ChatMsg> = block.take().into_iter().collect();
-    let Some(msg) = parse_chat(ln) else {
-        return (done, false);
-    };
-    // A message may continue on "|" lines (a /td announcement even starts with an empty header), so it waits for the next line.
-    *block = Some(msg);
-    (done, true)
-}
-
 fn apply_td(ctx: &mut Ctx, login: &str, text: &str, direct: bool) {
     let mut s = ctx.snap.lock().unwrap();
     td_apply(&mut s.td, login, text, direct, now_secs());
-    drop(s);
-    ctx.dirty = true;
-}
-
-/// The tournament we are playing in right now, which a new `T` match belongs to.
-fn td_running(td: &TdView) -> u32 {
-    td.tourneys
-        .iter()
-        .find(|t| t.joined && t.state == "running")
-        .or_else(|| td.tourneys.iter().find(|t| t.joined && t.state != "over"))
-        .map_or(0, |t| t.id)
-}
-
-/// `m:ss` as printed by the director (`TimeOut`).
-fn td_secs(t: &str) -> Option<u64> {
-    let (m, s) = t.trim().split_once(':')?;
-    Some(m.parse::<u64>().ok()? * 60 + s.parse::<u64>().ok()?)
-}
-
-fn td_entry(td: &mut TdView, id: u32) -> &mut TourneyView {
-    if let Some(i) = td.tourneys.iter().position(|t| t.id == id) {
-        return &mut td.tourneys[i];
-    }
-    td.tourneys.push(TourneyView {
-        id,
-        ..Default::default()
-    });
-    td.tourneys.sort_by_key(|t| std::cmp::Reverse(t.id));
-    let i = td.tourneys.iter().position(|t| t.id == id).unwrap();
-    &mut td.tourneys[i]
-}
-
-/// The number right after `"tournament "` in `s`.
-fn td_id_after(s: &str) -> Option<u32> {
-    let rest = &s[s.find("tournament ")? + "tournament ".len()..];
-    let n: String = rest.chars().take_while(|c| c.is_ascii_digit()).collect();
-    n.parse().ok()
-}
-
-/// Folds one /td message (wording from GGS Service/TD/src) into the tournament list.
-fn td_apply(td: &mut TdView, login: &str, text: &str, direct: bool, now: u64) {
-    let mut lines = text.lines();
-    let first = lines.next().unwrap_or("").trim();
-    let rest: Vec<&str> = lines.collect();
-    let (first, rest) = if first.is_empty() || first.starts_with("---") {
-        let mut it = rest
-            .iter()
-            .copied()
-            .filter(|l| !l.trim_start().starts_with("---"));
-        (it.next().unwrap_or("").trim(), it.collect::<Vec<_>>())
-    } else {
-        (first, rest)
-    };
-
-    if direct {
-        let (err, body) = match first.strip_prefix("ERR ") {
-            Some(e) => (true, e.split_once(": ").map_or(e, |x| x.1)),
-            None => (false, first),
-        };
-        let (cmd, head) = body.split_once(": ").unwrap_or(("", body));
-        let mut full = vec![head];
-        full.extend(rest.iter().copied());
-        td.reply = Some(TdReply {
-            cmd: cmd.to_string(),
-            text: full.join("\n"),
-            err,
-            at: now,
-        });
-        if err {
-            return;
-        }
-        match cmd {
-            "tourneys" => {
-                td_apply_list(td, &rest);
-                return;
-            }
-            "finger" => {
-                td_apply_finger(td, login, head, &rest);
-                if let Ok(id) = head.trim().parse::<u32>() {
-                    td_entry(td, id).info = rest.join("\n");
-                }
-                return;
-            }
-            "rankings" | "st" => {
-                if let Some(id) = td_id_after(head) {
-                    let full = td
-                        .reply
-                        .as_ref()
-                        .map(|r| r.text.clone())
-                        .unwrap_or_default();
-                    let t = td_entry(td, id);
-                    if cmd == "rankings" {
-                        t.rankings = full;
-                    } else {
-                        t.schedule = full;
-                    }
-                }
-                return;
-            }
-            _ => {}
-        }
-        if let Some(text) = body.split_once(": ").map(|x| x.1) {
-            td_apply_event(td, login, text, &rest, now);
-        }
-        return;
-    }
-    td_apply_event(td, login, first, &rest, now);
-}
-
-fn td_apply_event(td: &mut TdView, login: &str, first: &str, rest: &[&str], now: u64) {
-    let Some(id) = td_id_after(first) else {
-        return;
-    };
-    // "join: X joins tournament N" and "withdraw: X withdrawn from tournament N".
-    let event = first.split_once(": ").map_or(first, |x| x.1);
-    let t = td_entry(td, id);
-    if let Some(m) = first
-        .strip_prefix(&format!("tournament {id} starting in "))
-        .and_then(|r| r.strip_suffix(" minutes"))
-    {
-        t.state = "announced".into();
-        if let Ok(m) = m.trim().parse::<u64>() {
-            t.next_at = Some(now + m * 60);
-        }
-        if let Some(d) = rest
-            .iter()
-            .find_map(|l| l.trim().strip_prefix('(').and_then(|x| x.strip_suffix(')')))
-        {
-            t.desc = d.to_string();
-        }
-    } else if let Some(r) = first.strip_prefix(&format!("tournament {id} starts in ")) {
-        t.state = "announced".into();
-        t.next_at = td_secs(r).map(|x| now + x);
-    } else if let Some(r) = first.strip_prefix(&format!("tournament {id} round ")) {
-        if let Some((round, wait)) = r.split_once(" starts in ") {
-            t.state = "break".into();
-            if let Ok(n) = round.trim().parse::<u32>() {
-                t.rounds_played = n.saturating_sub(1);
-            }
-            t.next_at = td_secs(wait).map(|x| now + x);
-        }
-    } else if let Some(r) = first.strip_prefix("starting round ") {
-        t.state = "running".into();
-        t.next_at = None;
-        if let Some(n) = r
-            .split_whitespace()
-            .next()
-            .and_then(|x| x.parse::<u32>().ok())
-        {
-            t.rounds_played = n.saturating_sub(1);
-        }
-    } else if let Some(r) = first.strip_prefix("ending round ") {
-        t.state = "break".into();
-        if let Some(n) = r
-            .split_whitespace()
-            .next()
-            .and_then(|x| x.parse::<u32>().ok())
-        {
-            t.rounds_played = n;
-        }
-    } else if first.contains(" is over.") {
-        t.state = "over".into();
-        t.next_at = None;
-        if t.rounds > 0 {
-            t.rounds_played = t.rounds;
-        }
-    } else if first.contains(" is cancelled") {
-        t.state = "cancelled".into();
-        t.next_at = None;
-    } else if let Some(w) = first.strip_prefix("Congratulations to ") {
-        t.winner = w.split(',').next().unwrap_or("").trim().to_string();
-        t.state = "over".into();
-        t.next_at = None;
-    } else if let Some((who, _)) = event.split_once(" joins tournament ") {
-        let who = who.trim();
-        if who == login {
-            t.joined = true;
-        }
-        if !t.players.iter().any(|p| p == who) {
-            t.players.push(who.to_string());
-            t.n_players += 1;
-        }
-    } else if let Some((who, _)) = event.split_once(" withdrawn from tournament ") {
-        let who = who.trim();
-        if who == login {
-            t.joined = false;
-        }
-        if t.players.iter().any(|p| p == who) {
-            t.players.retain(|p| p != who);
-            t.n_players = t.n_players.saturating_sub(1);
-        }
-    }
-}
-
-/// Rows of `tourneys`: `id director service #pl played/ rounds start clock type [Winner: X]`.
-fn td_apply_list(td: &mut TdView, rows: &[&str]) {
-    for row in rows {
-        // `%3d/%3d` runs together once both reach three digits ("100/100").
-        let mut joined = row.to_string();
-        while joined.contains("/ ") {
-            joined = joined.replace("/ ", "/");
-        }
-        let mut f: Vec<&str> = joined.split_whitespace().collect();
-        let Some(id) = f.first().and_then(|x| x.parse::<u32>().ok()) else {
-            continue;
-        };
-        if f.len() < 8 {
-            continue;
-        }
-        let Some((played, rounds)) = f[4].split_once('/') else {
-            continue;
-        };
-        f.splice(4..5, [played, rounds]);
-        let t = td_entry(td, id);
-        t.director = f[1].to_string();
-        t.n_players = f[3].parse().unwrap_or(t.n_players);
-        t.rounds_played = f[4].trim_end_matches('/').parse().unwrap_or(0);
-        t.rounds = f[5].parse().unwrap_or(0);
-        t.clock = f[7].to_string();
-        t.gtype = f[8].to_string();
-        if let Some(i) = f.iter().position(|x| *x == "Winner:") {
-            t.winner = f.get(i + 1).unwrap_or(&"").to_string();
-        }
-        match f[6] {
-            "now" => {
-                t.state = "running".into();
-                t.next_at = None;
-            }
-            "done" => {
-                t.state = "over".into();
-                t.next_at = None;
-            }
-            w => {
-                if t.state.is_empty() || t.state == "over" {
-                    t.state = if t.rounds_played == 0 {
-                        "announced"
-                    } else {
-                        "break"
-                    }
-                    .into();
-                }
-                t.next_at = td_secs(w).map(|x| now_secs() + x);
-            }
-        }
-    }
-}
-
-/// `finger N`: `key : value` lines after the id.
-fn td_apply_finger(td: &mut TdView, login: &str, head: &str, rest: &[&str]) {
-    let Some(id) = head.trim().parse::<u32>().ok() else {
-        return;
-    };
-    let t = td_entry(td, id);
-    for l in rest {
-        let l = l.trim();
-        if let Some((k, v)) = l.split_once(" : ") {
-            let v = v.trim();
-            match k.trim() {
-                "director" => t.director = v.to_string(),
-                "clock" => t.clock = v.to_string(),
-                "type" => t.gtype = v.to_string(),
-                "rounds" => {
-                    if let Some((a, b)) = v.split_once('/') {
-                        t.rounds_played = a.trim().parse().unwrap_or(t.rounds_played);
-                        t.rounds = b.trim().parse().unwrap_or(t.rounds);
-                    }
-                }
-                "players" => {
-                    let mut it = v.split_whitespace();
-                    t.n_players = it.next().and_then(|x| x.parse().ok()).unwrap_or(0);
-                    t.players = it
-                        .filter(|p| *p != "(bye)")
-                        .map(|p| p.trim_matches(|c| c == '(' || c == ')').to_string())
-                        .collect();
-                    t.joined = t.players.iter().any(|p| p == login);
-                }
-                _ => {}
-            }
-        } else if let Some(r) = l.strip_prefix("round ") {
-            if let Some((_, w)) = r.split_once(" begins in ") {
-                t.next_at = td_secs(w).map(|x| now_secs() + x);
-                if t.rounds_played == 0 {
-                    t.state = "announced".into();
-                } else {
-                    t.state = "break".into();
-                }
-            } else if r.contains("is being played") {
-                t.state = "running".into();
-                t.next_at = None;
-            }
-        } else if l == "tournament has finished" {
-            t.state = "over".into();
-            t.next_at = None;
-        }
-    }
-}
-
-fn deliver_chat(ctx: &mut Ctx, login: &str, msg: ChatMsg) {
-    let chan = ctx.snap.lock().unwrap().log_channel.clone();
-    if msg.chan != chan || msg.from != login {
-        push_chat(ctx, login, msg);
-    }
-}
-
-fn push_chat(ctx: &mut Ctx, login: &str, msg: ChatMsg) {
-    append_chat(login, &msg);
-    let mut s = ctx.snap.lock().unwrap();
-    let thread = msg.thread.clone();
-    s.chat.push_back(msg);
-    if s.chat.iter().filter(|m| m.thread == thread).count() > CHAT_IN_MEMORY {
-        if let Some(i) = s.chat.iter().position(|m| m.thread == thread) {
-            s.chat.remove(i);
-        }
-    }
-    drop(s);
-    ctx.dirty = true;
-}
-
-/// Caps each thread separately so a busy analysis channel cannot push out conversations.
-fn keep_latest_per_thread(msgs: Vec<ChatMsg>, n: usize) -> Vec<ChatMsg> {
-    let mut seen: HashMap<String, usize> = HashMap::new();
-    let mut keep: Vec<ChatMsg> = msgs
-        .into_iter()
-        .rev()
-        .filter(|m| {
-            let c = seen.entry(m.thread.clone()).or_default();
-            *c += 1;
-            *c <= n
-        })
-        .collect();
-    keep.reverse();
-    keep
-}
-fn capture_who(ctx: &mut Ctx, kind: &str, buf: &[String], login: &str) {
-    let mut users = Vec::new();
-    let mut my_rating = None;
-    for l in buf {
-        let b = l.strip_prefix("/os: ").unwrap_or(l);
-        let b = b.strip_prefix('|').unwrap_or(b);
-        let mut toks: Vec<&str> = b.split_whitespace().collect();
-        if kind == "top" {
-            if toks.first().map(|t| t.chars().all(|c| c.is_ascii_digit())) == Some(true) {
-                toks.remove(0);
-            } else {
-                continue;
-            }
-        }
-        let Some(&name) = toks.first() else { continue };
-        if name.is_empty()
-            || !name.chars().next().unwrap().is_ascii_alphabetic()
-            || !name
-                .chars()
-                .all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '+')
-        {
-            continue;
-        }
-        let at = toks
-            .iter()
-            .enumerate()
-            .skip(1)
-            .find_map(|(i, t)| parse_rating_token(t).map(|v| (i, v)));
-        let Some((ri, r)) = at else { continue };
-        let dev = match toks[ri].split_once('@') {
-            Some((_, rest)) if !rest.is_empty() => parse_dev_token(rest),
-            Some(_) => toks.get(ri + 1).and_then(|t| parse_dev_token(t)),
-            None => None,
-        };
-        if name == login {
-            my_rating = Some(r);
-        }
-        let open = if kind.starts_with("who") {
-            toks.get(1)
-                .filter(|t| matches!(*t, &"+" | &"-" | &"x"))
-                .and_then(|t| t.chars().next())
-        } else {
-            None
-        };
-        users.push(UserRow {
-            name: name.to_string(),
-            rating: Some(r),
-            dev,
-            rating_r: None,
-            dev_r: None,
-            open,
-            raw: b.to_string(),
-        });
-    }
-    users.sort_by(|a, b| {
-        b.rating
-            .unwrap_or(0.0)
-            .partial_cmp(&a.rating.unwrap_or(0.0))
-            .unwrap_or(std::cmp::Ordering::Equal)
-    });
-    let mut s = ctx.snap.lock().unwrap();
-    if !users.is_empty() {
-        match kind {
-            "who:8r" => {
-                for u in &users {
-                    if let Some(t) = s.users.iter_mut().find(|x| x.name == u.name) {
-                        t.rating_r = u.rating;
-                        t.dev_r = u.dev;
-                    }
-                }
-            }
-            k if k.starts_with("who") => s.users = users,
-            _ => s.ranking = users,
-        }
-    }
-    if let Some(r) = my_rating {
-        s.my_rating = Some(r);
-        if let Some(latest) = s.results.first_mut() {
-            if latest.my_rating.is_none() {
-                latest.my_rating = Some(r);
-            }
-        }
-    }
-    drop(s);
-    ctx.dirty = true;
-}
-
-fn capture_match_list(ctx: &mut Ctx, buf: &[String], login: &str) {
-    let mut list = Vec::new();
-    for l in buf {
-        let Some(rest) = l.strip_prefix('|') else {
-            continue;
-        };
-        let t: Vec<&str> = rest.split_whitespace().collect();
-        let Some(&id) = t.first() else { continue };
-        if !id.starts_with('.') {
-            continue;
-        }
-        let (names, ratings, gtype) = match_line_parts(rest);
-        list.push(OngoingView {
-            id: id.to_string(),
-            watching: false,
-            names,
-            ratings,
-            gtype,
-            mine: rest.contains(login),
-        });
-    }
-    let mut s = ctx.snap.lock().unwrap();
-    for o in list.iter_mut() {
-        if s.ongoing.iter().any(|x| x.id == o.id && x.watching) {
-            o.watching = true;
-        }
-    }
-    if std::env::var("KUROOBI_GGS_AUTOWATCH").as_deref() == Ok("auto") {
-        ctx.auto_watch.extend(list.iter().map(|o| o.id.clone()));
-    }
-    s.ongoing = list;
-    drop(s);
-    ctx.dirty = true;
-}
-
-fn capture_stored_list(ctx: &mut Ctx, buf: &[String], login: &str) {
-    let mut list = Vec::new();
-    for l in buf {
-        let Some(rest) = l.strip_prefix('|') else {
-            continue;
-        };
-        let toks: Vec<&str> = rest.split_whitespace().collect();
-        let Some(&id) = toks.first() else { continue };
-        if !id.starts_with('.') {
-            continue;
-        }
-        let names: Vec<&str> = toks
-            .iter()
-            .filter(|t| {
-                t.len() >= 2
-                    && t.chars().next().map(|c| c.is_ascii_alphabetic()) == Some(true)
-                    && !t.contains(':')
-            })
-            .copied()
-            .collect();
-        let opp = names
-            .iter()
-            .find(|n| **n != login && !is_month(n))
-            .map(|s| s.to_string())
-            .unwrap_or_default();
-        let gtype = toks
-            .iter()
-            .rev()
-            .find(|t| t.starts_with("s8") || t.starts_with('8'))
-            .map(|s| s.to_string())
-            .unwrap_or_default();
-        list.push(StoredView {
-            id: id.to_string(),
-            opp,
-            gtype,
-        });
-    }
-    let mut s = ctx.snap.lock().unwrap();
-    s.stored = list;
-    drop(s);
-    ctx.dirty = true;
-}
-
-fn capture_history(ctx: &mut Ctx, buf: &[String], login: &str, target: &str) {
-    let mut rows = Vec::new();
-    for l in buf {
-        let Some(rest) = l.strip_prefix('|') else {
-            continue;
-        };
-        let t: Vec<&str> = rest.split_whitespace().collect();
-        if t.len() < 11 || !t[0].starts_with('.') {
-            continue;
-        }
-        rows.push(HistoryRow {
-            id: t[0].to_string(),
-            at: format!("{} {} {} {}", t[1], t[2], t[3], t[4]),
-            black_rating: t[5].to_string(),
-            black: t[6].to_string(),
-            white_rating: t[7].to_string(),
-            white: t[8].to_string(),
-            score: t[9].to_string(),
-            gtype: t[10].to_string(),
-        });
-    }
-    rows.reverse(); // newest first
-    let key = if target.is_empty() {
-        login.to_string()
-    } else {
-        target.to_string()
-    };
-    let mut s = ctx.snap.lock().unwrap();
-    s.history.insert(key, rows);
-    drop(s);
-    ctx.dirty = true;
-}
-
-fn capture_rank(ctx: &mut Ctx, buf: &[String], login: &str, rest: &str) {
-    let (gtype, target) = rest.split_once(':').unwrap_or((rest, ""));
-    for l in buf {
-        let b = l.strip_prefix("/os: ").unwrap_or(l);
-        let b = b.strip_prefix('|').unwrap_or(b);
-        let t: Vec<&str> = b.split_whitespace().collect();
-        if t.len() < 3 {
-            continue;
-        }
-        let Ok(rank) = t[0].parse::<u32>() else {
-            continue;
-        };
-        if t[1] != target {
-            continue;
-        }
-        // "1722.1@ 76.1=": a deviation under 100 is padded, so it lands in the next token.
-        let (rating, dev) = match t[2].split_once('@') {
-            Some((r, d)) => {
-                let d = if d.is_empty() {
-                    t.get(3).copied().unwrap_or("")
-                } else {
-                    d
-                };
-                (
-                    r.parse::<f32>().unwrap_or(0.0),
-                    d.trim_end_matches(['=', '+']).parse::<f32>().unwrap_or(0.0),
-                )
-            }
-            None => continue,
-        };
-        let nums: Vec<u64> = t
-            .iter()
-            .rev()
-            .filter_map(|x| x.parse::<u64>().ok())
-            .take(3)
-            .collect();
-        let (wins, draws, losses) = match nums.len() {
-            3 => (nums[2], nums[1], nums[0]),
-            _ => (0, 0, 0),
-        };
-        let row = RankRow {
-            gtype: gtype.to_string(),
-            name: target.to_string(),
-            rating,
-            dev,
-            rank,
-            wins,
-            draws,
-            losses,
-        };
-        let mut s = ctx.snap.lock().unwrap();
-        if target == login {
-            s.my_ranks.retain(|r| r.gtype != row.gtype);
-            s.my_ranks.push(row);
-            s.my_ranks.sort_by(|a, b| a.gtype.cmp(&b.gtype));
-        }
-        drop(s);
-        ctx.dirty = true;
-    }
-}
-
-fn capture_osfinger(ctx: &mut Ctx, buf: &[String], name: &str) {
-    let mut add: Vec<(String, String)> = Vec::new();
-    for l in buf {
-        if l.starts_with("/os:") {
-            continue;
-        }
-        let t = l.trim_end().trim_start_matches('|');
-        let Some((k, v)) = t.split_once(':') else {
-            continue;
-        };
-        let (k, v) = (k.trim(), v.trim());
-        if k.is_empty() || (k.contains(' ') && !k.contains('(')) {
-            continue;
-        }
-        if k.to_lowercase().starts_with("passw") {
-            continue;
-        }
-        add.push((k.to_string(), v.to_string()));
-    }
-    let mut s = ctx.snap.lock().unwrap();
-    if let Some(f) = s.fingers.get_mut(name) {
-        for (k, v) in add {
-            if let Some(slot) = f.fields.iter_mut().find(|(kk, _)| *kk == k) {
-                slot.1 = v;
-            } else {
-                f.fields.push((k, v));
-            }
-        }
-    }
-    drop(s);
-    ctx.dirty = true;
-}
-
-fn capture_finger(ctx: &mut Ctx, buf: &[String], name: &str) {
-    let mut fields: Vec<(String, String)> = Vec::new();
-    for l in buf {
-        let t = l.trim_end();
-        if t.is_empty() || t == ":" {
-            continue;
-        }
-        let t = t.strip_prefix(": ").unwrap_or(t);
-        let lower = t.to_lowercase();
-        if lower.starts_with("passw") {
-            continue;
-        }
-        if let Some((k, v)) = t.split_once(':') {
-            let (k, v) = (k.trim(), v.trim());
-            if !k.is_empty() && !k.contains(' ') || k.contains('(') {
-                fields.push((k.to_string(), v.to_string()));
-            }
-        }
-    }
-    let mut s = ctx.snap.lock().unwrap();
-    s.fingers.insert(name.to_string(), FingerInfo { fields });
     drop(s);
     ctx.dirty = true;
 }
@@ -5996,8 +3583,12 @@ fn ask_watchers(ctx: &mut Ctx, w: &mut Wire, send: &mut impl FnMut(String)) {
     ask.sort();
     for id in ask {
         ctx.watch_asked.insert(id.clone());
-        w.pending.push(format!("watchers:{id}"));
-        say(ctx, send, format!("tell /os watch {id}"));
+        query(
+            &mut w.pending,
+            format!("watchers:{id}"),
+            format!("tell /os watch {id}"),
+            |c| say(ctx, send, c),
+        );
     }
     if ctx.watchers.len() != before {
         publish_watchers(ctx);
@@ -6028,102 +3619,6 @@ fn watch_notice(ln: &str) -> Option<(bool, &str, &str)> {
     }
     let id = t.next()?;
     (id.starts_with('.') && t.next().is_none()).then_some((on, name, id))
-}
-
-/// The answer to `watch .7 .9`: `/os: watch 2`, then `|.7        2 : root tdir` per match.
-fn watch_list(buf: &[String]) -> Vec<(String, Vec<String>)> {
-    buf.iter()
-        .filter_map(|l| {
-            let rest = l.strip_prefix('|')?;
-            let (head, names) = rest.split_once(':')?;
-            let id = head.split_whitespace().next()?;
-            id.starts_with('.').then(|| {
-                (
-                    id.to_string(),
-                    names.split_whitespace().map(str::to_string).collect(),
-                )
-            })
-        })
-        .collect()
-}
-
-fn finish_capture(ctx: &mut Ctx, kind: &str, buf: &[String], login: &str) {
-    if kind == "online" {
-        let names = online_names(buf);
-        if !names.is_empty() {
-            ctx.snap.lock().unwrap().online = Some(names);
-            ctx.dirty = true;
-        }
-        return;
-    }
-    if let Some(id) = kind.strip_prefix("look:") {
-        let joined: String = buf.iter().map(|l| l.trim()).collect::<Vec<_>>().join("");
-        let mut parts: Vec<String> = Vec::new();
-        let mut rest = joined.as_str();
-        while let Some(i) = rest.find("(;") {
-            let after = &rest[i..];
-            let Some(end) = after.find(";)") else { break };
-            let one = &after[..end + 2];
-            if one.contains("GM[Othello]") {
-                parts.push(one.to_string());
-            }
-            rest = &after[end + 2..];
-        }
-        let ggf = parts.first().cloned();
-        let mut s = ctx.snap.lock().unwrap();
-        match ggf {
-            Some(g) => {
-                s.fetched_ggf = Some(FetchedGgf {
-                    id: id.to_string(),
-                    ggf: g,
-                    parts,
-                    error: String::new(),
-                });
-            }
-            None => {
-                let err = buf
-                    .iter()
-                    .find(|l| l.contains("ERR"))
-                    .cloned()
-                    .unwrap_or_default();
-                s.fetched_ggf = Some(FetchedGgf {
-                    id: id.to_string(),
-                    ggf: String::new(),
-                    parts: Vec::new(),
-                    error: if err.is_empty() {
-                        "err.record_not_found".into()
-                    } else {
-                        err
-                    },
-                });
-            }
-        }
-        drop(s);
-        ctx.dirty = true;
-        return;
-    }
-    if kind.starts_with("watchers:") {
-        for (id, names) in watch_list(buf) {
-            ctx.watchers.insert(id, names.into_iter().collect());
-        }
-        publish_watchers(ctx);
-        return;
-    }
-    if kind.starts_with("who") || kind == "top" {
-        capture_who(ctx, kind, buf, login);
-    } else if kind == "match_list" {
-        capture_match_list(ctx, buf, login);
-    } else if kind == "stored_list" {
-        capture_stored_list(ctx, buf, login);
-    } else if let Some(target) = kind.strip_prefix("history:") {
-        capture_history(ctx, buf, login, target);
-    } else if let Some(rest) = kind.strip_prefix("rank:") {
-        capture_rank(ctx, buf, login, rest);
-    } else if let Some(name) = kind.strip_prefix("osfinger:") {
-        capture_osfinger(ctx, buf, name);
-    } else if let Some(name) = kind.strip_prefix("finger:") {
-        capture_finger(ctx, buf, name);
-    }
 }
 
 #[cfg(test)]
@@ -6220,162 +3715,6 @@ mod tests {
     ];
 
     use super::*;
-
-    // The .46.0 board of a real match: morgoth's extension ran out with four squares empty, 25 to 35.
-    #[test]
-    fn an_older_record_gets_its_colour_and_result_from_its_ggf() {
-        let mut b = BoardRecord {
-            id: ".46.0".into(),
-            kifu: "f5b3c3b5d7c7b6e8a6e7f7b4a3g5g4a4a5g6h5h6e2h4h3h2g7e1g8c2f8f2c1b2g3b1d2d1a1h8h7d8h1g2f1g1b8c8".into(),
-            ggf: "(;GM[Othello]PC[GGS/os]ID[.46.0]PB[morgoth]RB[2629.3]PW[kuroobi]RW[2602.3]RE[-64.00]\
-                  BO[8 -------------------*O*----**O*----OOO-----*OO*------------------ *];)"
-                .into(),
-            ..Default::default()
-        };
-        fill_board_from_ggf(&mut b, "morgoth");
-        assert_eq!(
-            (b.my_color.as_str(), b.disc_diff),
-            ("white", Some(64)),
-            "the board's own result"
-        );
-        b.ggf = b.ggf.replace("RE[-64.00]", "");
-        b.disc_diff = None;
-        fill_board_from_ggf(&mut b, "morgoth");
-        assert_eq!(b.disc_diff, Some(-14), "without one, the final position");
-    }
-
-    // The end of the real .46 match (morgoth's extension ran out on both boards), as the wire log has it.
-    #[test]
-    fn a_past_result_gets_its_endings_and_clocks_from_the_wire_log() {
-        let log = "in /os: + match .46 2629 morgoth 2602 kuroobi s8r14 R
-in /os: update .46.1 s8r14 K?
-in | 45: A8/-6.00/0.25
-in |kuroobi  (2602.3 *) 00:04,23:0//02:00,23:0
-in |morgoth  (2629.3 O) 00:03,22:0//02:00,22:0
-in |
-in /os: update .46.0 s8r14 K?
-in |morgoth  (2629.3 *) 00:02,23:0//02:00,23:0
-in |kuroobi  (2602.3 O) 00:04,23:0//02:00,23:0
-in /os: timeout .46.1 morgoth (O)
-in /os: fatal-timeout .46.1 morgoth (O)
-in /os: end .46.1 ( morgoth vs. kuroobi ) -64.00
-in /os: timeout .46.0 morgoth (*)
-in /os: fatal-timeout .46.0 morgoth (*)
-in /os: end .46.0 ( morgoth vs. kuroobi ) -64.00
-in /os: - match .46 2612 morgoth 2619 kuroobi s8r14 R -64.00  .90661
-";
-        let path = std::env::temp_dir().join(format!("kuroobi-wire-{}.log", std::process::id()));
-        std::fs::write(&path, log).unwrap();
-        let wire = wire_endings(std::slice::from_ref(&path));
-        let _ = std::fs::remove_file(&path);
-        let raw = ".46 2612 morgoth 2619 kuroobi s8r14 R -64.00  .90661";
-        let mut r = GameResult {
-            raw: raw.into(),
-            opp: "morgoth".into(),
-            my_diff: Some(64),
-            boards: vec![
-                BoardRecord {
-                    id: ".46.0".into(),
-                    ..Default::default()
-                },
-                BoardRecord {
-                    id: ".46.1".into(),
-                    ..Default::default()
-                },
-            ],
-            ..Default::default()
-        };
-        backfill_from_wire(&mut r, &wire[raw], "kuroobi");
-        assert_eq!(r.ending, "", "a timeout is no resignation");
-        for b in &r.boards {
-            assert_eq!(
-                (b.ending.as_str(), b.ending_by.as_str()),
-                ("out_of_time", "morgoth")
-            );
-            let c = |n: &str| {
-                b.clocks
-                    .iter()
-                    .find(|c| c.name == n)
-                    .map(|c| (c.main, c.ext))
-            };
-            assert_eq!(c("morgoth"), Some((Some(0), Some(0))));
-            assert_eq!(c("kuroobi"), Some((Some(4), Some(120))));
-        }
-    }
-
-    #[test]
-    fn a_board_records_who_ran_out_of_main_time_and_of_the_extension() {
-        let mut m = MatchState::new();
-        m.my_color = Some('O');
-        m.over_time_by = "morgoth".into();
-        let r = board_record(".46.1", &m);
-        assert_eq!(
-            (r.ending.as_str(), r.ending_by.as_str()),
-            ("over_time", "morgoth")
-        );
-        m.out_of_time_by = "morgoth".into();
-        m.players = vec![PlayerView {
-            name: "morgoth".into(),
-            secs: Some(10),
-            ext: Some(5),
-            ..Default::default()
-        }];
-        let r = board_record(".46.1", &m);
-        assert_eq!(r.ending, "out_of_time");
-        assert_eq!((r.clocks[0].main, r.clocks[0].ext), (Some(0), Some(0)));
-    }
-
-    // Seen on the local server: `00:42,1:0//01:00,1:0` after moving 13 seconds into a one-minute extension.
-    #[test]
-    fn a_clock_in_the_extension_counts_it_down_in_its_first_field() {
-        let mut m = MatchState::new();
-        m.over_time_by = "bob".into();
-        let (secs, _, ext) = parse_clock("00:42,1:0//01:00,1:0");
-        m.players = vec![PlayerView {
-            name: "bob".into(),
-            secs,
-            ext,
-            ..Default::default()
-        }];
-        let c = &board_record(".0", &m).clocks[0];
-        assert_eq!((c.main, c.ext), (Some(0), Some(42)));
-    }
-
-    #[test]
-    fn the_empty_squares_go_to_the_side_ahead() {
-        assert_eq!(scored(33, 30), 4);
-        assert_eq!(scored(30, 30), 0);
-        assert_eq!(scored(25, 35), -14);
-    }
-
-    #[test]
-    fn a_64_on_an_unfinished_board_without_a_timeout_is_a_resignation() {
-        let mut m = MatchState::new();
-        m.cells = vec![0; 64];
-        for (sq, c) in [(27, 2), (36, 2), (28, 1), (35, 1)] {
-            m.cells[sq] = c;
-        }
-        m.result = "-64.00".into();
-        let boards = vec![(".9.0".to_string(), m.clone())];
-        assert_eq!(
-            match_ending("finished", "", &boards, Some(-64), "me", "you"),
-            ("resign".into(), "me".into())
-        );
-        assert_eq!(
-            match_ending("finished", "", &boards, Some(64), "me", "you").1,
-            "you"
-        );
-        let mut t = m;
-        t.out_of_time_by = "you".into();
-        assert_eq!(
-            match_ending("finished", "", &[(".9.0".into(), t)], Some(64), "me", "you").0,
-            ""
-        );
-        assert_eq!(
-            match_ending("adjourned", "you", &[], None, "me", "you"),
-            ("adjourn".into(), "you".into())
-        );
-    }
 
     #[test]
     fn a_log_channel_is_a_dot_and_up_to_seven_name_characters() {
@@ -6493,9 +3832,9 @@ in /os: - match .46 2612 morgoth 2619 kuroobi s8r14 R -64.00  .90661
         m.move_evals.insert(1, (Some(1.5), Some(2.25)));
         m.move_evals.insert(2, (Some(-2.0), None));
 
-        let full = m.ggf_with(".7.1", Some("+4.00"), true);
+        let full = m.ggf(".7.1", Some("+4.00"), true);
         assert!(full.contains("B[F5/1.50/2.25]W[D6/-2.00]B[PA]"), "{full}");
-        assert!(m.ggf(".7.1", None).contains("B[F5]W[D6]B[PA]"));
+        assert!(m.ggf(".7.1", None, false).contains("B[F5]W[D6]B[PA]"));
     }
 
     #[test]
@@ -6801,21 +4140,6 @@ in /os: - match .46 2612 morgoth 2619 kuroobi s8r14 R -64.00  .90661
     }
 
     #[test]
-    fn the_servers_who_lists_every_login_but_not_the_services() {
-        let buf: Vec<String> = [
-            ": who   17        idle      online         ip-addr hostname",
-            "/os      +    00:00:12312.04:55:04",
-            "HCyrano  +    00:02:29  1.20:22:29",
-            "kuroobi  +    00:00:00    00:06:42 153.242.133.003  <=",
-            "nyanyan3 -    00:00:12    06:02:18",
-        ]
-        .iter()
-        .map(|s| s.to_string())
-        .collect();
-        assert_eq!(online_names(&buf), ["HCyrano", "kuroobi", "nyanyan3"]);
-    }
-
-    #[test]
     fn a_match_line_pairs_each_name_with_its_rating_not_the_id() {
         let (names, ratings, gtype) =
             match_line_parts(".23 2571 Rhapsody 2415 piglet      s8r16  R 1");
@@ -6874,179 +4198,6 @@ in /os: - match .46 2612 morgoth 2619 kuroobi s8r14 R -64.00  .90661
     }
 
     #[test]
-    fn td_follows_a_tournament_from_announcement_to_end() {
-        let mut td = TdView::default();
-        let me = "kuroobi";
-        td_apply(
-            &mut td,
-            me,
-            "tournament 31 starting in 5 minutes\n(8x8 SynchroRand Reversi clock: 3:00//0:30, 10 rounds rrobin)\nto play: tell /td join 31\nfor tournament messages: chann + .tourney",
-            false,
-            1000,
-        );
-        let t = &td.tourneys[0];
-        assert_eq!(
-            (t.id, t.state.as_str(), t.next_at),
-            (31, "announced", Some(1300))
-        );
-        assert_eq!(
-            t.desc,
-            "8x8 SynchroRand Reversi clock: 3:00//0:30, 10 rounds rrobin"
-        );
-
-        td_apply(&mut td, me, "join: egrcd joins tournament 31", false, 1005);
-        td_apply(&mut td, me, "join: kuroobi joins tournament 31", true, 1010);
-        assert!(td.tourneys[0].joined);
-        assert_eq!(td.tourneys[0].n_players, 2);
-        assert_eq!(td.reply.as_ref().unwrap().cmd, "join");
-
-        td_apply(&mut td, me, "tournament 31 starts in  1:00", false, 1240);
-        assert_eq!(td.tourneys[0].next_at, Some(1300));
-        td_apply(
-            &mut td,
-            me,
-            "starting round 1 of tournament 31",
-            false,
-            1300,
-        );
-        assert_eq!(td.tourneys[0].state, "running");
-        td_apply(
-            &mut td,
-            me,
-            "ending round 1 of tournament 31\nround   1:\n  1.1  kuroobi   egrcd    +2.0",
-            false,
-            1500,
-        );
-        let t = &td.tourneys[0];
-        assert_eq!((t.state.as_str(), t.rounds_played), ("break", 1));
-        td_apply(
-            &mut td,
-            me,
-            "tournament 31 round 2 starts in  1:00",
-            false,
-            1500,
-        );
-        assert_eq!(td.tourneys[0].next_at, Some(1560));
-        td_apply(
-            &mut td,
-            me,
-            "Congratulations to kuroobi, winner of tournament 31",
-            false,
-            9000,
-        );
-        let t = &td.tourneys[0];
-        assert_eq!((t.state.as_str(), t.winner.as_str()), ("over", "kuroobi"));
-    }
-
-    #[test]
-    fn td_reads_list_finger_and_errors() {
-        let mut td = TdView::default();
-        td_apply(
-            &mut td,
-            "kuroobi",
-            "tourneys: 2\n   id director  game #pl   round start             clock       type\n   27  HCyrano    os   7  10/ 10  done        3:00//0:30      s8r14   Winner: ymatioun\n   31  HCyrano    os   3   0/ 10  4:10        3:00//0:30      s8r14\n   29  HCyrano   /os   2   2/  2  done        1:00//0:30      s8r14   Winner: iEdax\n   11  HCyrano   /os   6 100/100  done        1:00//2:00      s8r14   Winner: ymatioun",
-            true,
-            100,
-        );
-        assert_eq!(td.tourneys.len(), 4);
-        let t29 = td.tourneys.iter().find(|t| t.id == 29).unwrap();
-        assert_eq!(
-            (t29.rounds_played, t29.rounds, t29.state.as_str()),
-            (2, 2, "over")
-        );
-        let t11 = td.tourneys.iter().find(|t| t.id == 11).unwrap();
-        assert_eq!(
-            (
-                t11.state.as_str(),
-                t11.rounds,
-                t11.gtype.as_str(),
-                t11.winner.as_str()
-            ),
-            ("over", 100, "s8r14", "ymatioun")
-        );
-        let t27 = td.tourneys.iter().find(|t| t.id == 27).unwrap();
-        assert_eq!(
-            (t27.state.as_str(), t27.winner.as_str(), t27.rounds),
-            ("over", "ymatioun", 10)
-        );
-        let t31 = td.tourneys.iter().find(|t| t.id == 31).unwrap();
-        assert_eq!(
-            (t31.state.as_str(), t31.n_players, t31.clock.as_str()),
-            ("announced", 3, "3:00//0:30")
-        );
-
-        td_apply(
-            &mut td,
-            "kuroobi",
-            "finger: 31\nt kuroobi finger: \nid        : 31\njoining   : open\nrounds    : 0/10\nplayers   : 3 egrcd kuroobi (ymatioun) \nround 1 begins in  4:00",
-            true,
-            200,
-        );
-        let t31 = td.tourneys.iter().find(|t| t.id == 31).unwrap();
-        assert!(t31.joined);
-        assert_eq!(t31.players, ["egrcd", "kuroobi", "ymatioun"]);
-
-        td_apply(
-            &mut td,
-            "kuroobi",
-            "ERR 7: join: tournament id does not exist",
-            true,
-            300,
-        );
-        let r = td.reply.as_ref().unwrap();
-        assert!(r.err);
-        assert_eq!(
-            (r.cmd.as_str(), r.text.as_str()),
-            ("join", "tournament id does not exist")
-        );
-    }
-
-    #[test]
-    fn td_announcement_keeps_its_body() {
-        let mut block = None;
-        let lines = [
-            ".chat /td: ",
-            "|---------------- /td --------------",
-            "|tournament 30 starting in 2 minutes",
-            "|to play: tell /td join 30",
-            "|---------------- /td --------------",
-            "READY",
-        ];
-        let mut got = Vec::new();
-        for ln in lines {
-            got.extend(take_chat_line(&mut block, ln).0);
-        }
-        assert_eq!(got.len(), 1);
-        assert_eq!(got[0].from, "/td");
-        assert_eq!(
-            got[0].text,
-            "tournament 30 starting in 2 minutes\nto play: tell /td join 30"
-        );
-        assert!(block.is_none());
-    }
-
-    #[test]
-    fn busy_channel_does_not_evict_other_threads() {
-        let msg = |thread: &str, at: u64| ChatMsg {
-            chan: thread.into(),
-            from: "x".into(),
-            text: "t".into(),
-            at,
-            thread: thread.into(),
-        };
-        let mut v = vec![msg(".chat", 0)];
-        v.extend((1..=10).map(|i| msg(".Harmony", i)));
-        let kept = keep_latest_per_thread(v, 3);
-        assert_eq!(kept.iter().filter(|m| m.thread == ".chat").count(), 1);
-        let harmony: Vec<u64> = kept
-            .iter()
-            .filter(|m| m.thread == ".Harmony")
-            .map(|m| m.at)
-            .collect();
-        assert_eq!(harmony, [8, 9, 10]);
-    }
-
-    #[test]
     fn chat_survives_a_restart() {
         let dir = std::env::temp_dir().join(format!("kuroobi-chat-{}", std::process::id()));
         let _ = std::fs::create_dir_all(&dir);
@@ -7102,7 +4253,7 @@ in /os: - match .46 2612 morgoth 2619 kuroobi s8r14 R -64.00  .90661
         let mut m = MatchState::new();
         apply_block(&mut m, &join, "kuroobi");
         assert!(m.moves.is_empty(), "move 0 was recorded as a played move");
-        let ggf = m.ggf(".1", None);
+        let ggf = m.ggf(".1", None, false);
         let bo = ggf.split_once("BO[8 ").expect("BO tag present").1;
         let discs = bo.chars().take(64).filter(|c| *c != '-').count();
         assert_eq!(
@@ -7256,7 +4407,7 @@ in /os: - match .46 2612 morgoth 2619 kuroobi s8r14 R -64.00  .90661
         .collect();
         let mut m = MatchState::new();
         apply_block(&mut m, &dealt, "kuroobi");
-        let ggf = m.ggf(".1", None);
+        let ggf = m.ggf(".1", None, false);
         let bo = ggf.split_once("BO[8 ").expect("BO tag present").1;
         let discs = bo.chars().take(64).filter(|c| *c != '-').count();
         assert_eq!(
@@ -7291,7 +4442,7 @@ in /os: - match .46 2612 morgoth 2619 kuroobi s8r14 R -64.00  .90661
         .collect();
         let mut m = MatchState::new();
         apply_block(&mut m, &mid, "kuroobi");
-        let ggf = m.ggf(".1", None);
+        let ggf = m.ggf(".1", None, false);
         let bo = ggf.split_once("BO[8 ").expect("BO tag present").1;
         let discs = bo.chars().take(64).filter(|c| *c != '-').count();
         assert_eq!(discs, 4, "a mid-game board became the start position: {bo}");
@@ -7461,7 +4612,7 @@ in /os: - match .46 2612 morgoth 2619 kuroobi s8r14 R -64.00  .90661
         let mut m = MatchState::new();
         apply_block(&mut m, &block, "kuroobi");
 
-        let ggf = m.ggf(".45.0", Some("+4.00"));
+        let ggf = m.ggf(".45.0", Some("+4.00"), false);
         assert!(ggf.starts_with("(;GM[Othello]"));
         assert!(ggf.ends_with(";)"));
         assert!(ggf.contains("PB[nyanyan]"), "Black is nyanyan");
@@ -7587,19 +4738,6 @@ in /os: - match .46 2612 morgoth 2619 kuroobi s8r14 R -64.00  .90661
         assert_eq!(base_id(".82726.1"), ".82726");
         assert_eq!(base_id(".82726.2"), ".82726");
         assert_eq!(base_id(".13"), ".13");
-    }
-}
-
-#[cfg(test)]
-mod who_tests {
-    use super::*;
-
-    #[test]
-    fn rating_token() {
-        assert_eq!(parse_rating_token("1720.0@350.0"), Some(1720.0));
-        assert_eq!(parse_rating_token("1938.0@"), Some(1938.0));
-        assert_eq!(parse_rating_token("+33.6"), None); // a delta is out of range
-        assert_eq!(parse_rating_token("71.7="), None);
     }
 }
 

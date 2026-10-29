@@ -807,17 +807,12 @@ struct ThreadsView {
     auto: u32,
 }
 
-fn threads_view() -> ThreadsView {
-    let r = resources();
-    ThreadsView {
-        set: r.threads.map(|n| n as u32),
-        auto: auto_threads() as u32,
-    }
-}
-
 #[tauri::command]
 fn local_threads() -> ThreadsView {
-    threads_view()
+    ThreadsView {
+        set: resources().threads.map(|n| n as u32),
+        auto: auto_threads() as u32,
+    }
 }
 
 #[derive(Serialize)]
@@ -1740,11 +1735,6 @@ fn ggs_accounts() -> Vec<ggs::SavedAccount> {
 fn ggs_connect_saved(app: State<App>, server: String, login: String) -> Result<(), String> {
     let pw = ggs::account_password(&server, &login)
         .ok_or_else(|| "err.saved_password_missing".to_string())?;
-    let server = if server == ggs::DEFAULT_SERVER {
-        String::new()
-    } else {
-        server
-    };
     ggs_send(&app, ggs::Cmd::Connect { login, pw, server })
 }
 
@@ -1754,11 +1744,6 @@ fn ggs_switch_account(app: State<App>, server: String, login: String) -> Result<
     let pw = ggs::account_password(&server, &login)
         .ok_or_else(|| "err.saved_password_missing".to_string())?;
     ggs_send(&app, ggs::Cmd::Disconnect)?;
-    let server = if server == ggs::DEFAULT_SERVER {
-        String::new()
-    } else {
-        server
-    };
     ggs_send(&app, ggs::Cmd::Connect { login, pw, server })
 }
 
@@ -2021,11 +2006,6 @@ fn ggs_snapshot(app: State<App>) -> Result<ggs::Snapshot, String> {
 }
 
 #[tauri::command]
-fn ggs_no_rated() -> bool {
-    ggs::no_rated()
-}
-
-#[tauri::command]
 fn env_overrides() -> Vec<(String, String)> {
     const NAMES: &[&str] = &[
         "KUROOBI_NO_RATED",
@@ -2131,16 +2111,8 @@ fn main() {
             let demo = std::env::var("KUROOBI_AUTOPLAY").is_ok()
                 || std::env::var("KUROOBI_GGS_AUTOVIEW").is_ok();
             if (force || !demo) && !ggs::session_locked_by_other() {
-                if let Some((srv, l, p)) = ggs::auto_account() {
-                    let _ = handle.tx.send(ggs::Cmd::Connect {
-                        login: l,
-                        pw: p,
-                        server: if srv == ggs::DEFAULT_SERVER {
-                            String::new()
-                        } else {
-                            srv
-                        },
-                    });
+                if let Some((server, login, pw)) = ggs::auto_account() {
+                    let _ = handle.tx.send(ggs::Cmd::Connect { login, pw, server });
                 }
             }
             if force {
@@ -2250,7 +2222,6 @@ fn main() {
             ggs_snapshot,
             ggs_unfit,
             ggs_autoview,
-            ggs_no_rated,
             env_overrides,
             ggs_save_kifu,
             ggs_save_log
