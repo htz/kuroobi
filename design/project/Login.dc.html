@@ -1,0 +1,159 @@
+<!doctype html>
+<html lang="ja">
+<head>
+<meta charset="utf-8">
+<title>Log in · Saved accounts</title>
+<script src="./support.js"></script>
+<link rel="stylesheet" href="kuroobi-tokens.css">
+<link rel="stylesheet" href="ds/kuroobiui/components/bundle.css">
+<script src="ds/kuroobiui/components/bundle.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<style>
+x-import{display:contents}
+@media (max-width:1040px){.k-nav-ov .k-nav-label{display:none}.k-nav-ov .k-nav-row{justify-content:center;padding:0}}
+.k-scroll{overflow-y:scroll!important}
+.k-scroll::-webkit-scrollbar-track{background:var(--track);border-radius:9px}
+body{margin:0;background:var(--bg);color:var(--text);font:var(--fs-4)/1.6 var(--ff)}
+a{color:var(--accent)}a:hover{color:var(--text)}
+</style>
+</helmet>
+<div style="width: 100%; height: 100vh; min-height: 480px; background: var(--bg); color: var(--text); font: var(--fs-4)/1.6 var(--ff); overflow: hidden">
+<x-import style="display: contents" component-from-global-scope="KuroobiUI.AppFrame">
+<x-import component-from-global-scope="KuroobiUI.WindowBar" title="ログイン"></x-import>
+<x-import style="display: contents" component-from-global-scope="KuroobiUI.Body">
+<div style="position: relative; flex: none; display: flex">
+<x-import style="display: contents" component-from-global-scope="KuroobiUI.Nav" items="{{navLocal}}" ggs-items="{{ggsItems}}" conn="offline" active="ggs-login"></x-import>
+<div class="k-nav-ov" style="position: absolute; left: 0; right: 1px; bottom: 0; padding: var(--sp-2); border-top: 1px solid var(--border); background: var(--panel)">
+<button type="button" class="k-nav-row k-row" style="width: 100%; height: var(--h-field); display: flex; align-items: center; gap: var(--sp-3); border: 0; border-radius: var(--r-2); font: inherit; font-size: var(--fs-4); background: transparent; color: var(--text)"><span style="flex: none; display: grid; place-items: center"><x-import component-from-global-scope="KuroobiUI.Icon" name="prefs"></x-import></span><span class="k-nav-label">設定</span></button>
+</div>
+</div>
+<x-import style="display: contents" component-from-global-scope="KuroobiUI.Main">
+<x-import style="display: contents" component-from-global-scope="KuroobiUI.Toolbar">
+<span style="font-size: var(--fs-3); font-weight: 600; white-space: nowrap">GGS へログイン</span>
+</x-import>
+<div style="flex: 1; min-height: 0; display: flex">
+
+<!-- Saved accounts (hidden when there are none) -->
+<sc-if value="{{hasSaved}}" hint-placeholder-val="{{true}}">
+<div style="flex: none; width: var(--w-list); min-height: 0; display: flex; flex-direction: column; border-right: 1px solid var(--border)">
+<div style="flex: none; height: var(--h-field); display: flex; align-items: center; padding: 0 var(--sp-3); border-bottom: 1px solid var(--border-weak); font-size: var(--fs-7); font-weight: 600; letter-spacing: .08em; color: var(--sub)">保存したアカウント</div>
+<div class="k-scroll" style="flex: 1; min-height: 0; display: flex; flex-direction: column">
+<sc-for list="{{groups}}" as="g" hint-placeholder-count="2">
+<div style="flex: none; height: var(--h-head); display: flex; align-items: center; gap: var(--sp-2); margin-top: var(--sp-2); padding: 0 var(--sp-3); font-size: var(--fs-7); white-space: nowrap; color: var(--sub)"><b style="font-weight: 600; letter-spacing: .08em">{{g.name}}</b><span style="font-family: var(--ff-mono); overflow: hidden; text-overflow: ellipsis">{{g.addr}}</span></div>
+<sc-for list="{{g.accounts}}" as="a" hint-placeholder-count="2">
+<button type="button" class="k-row" style="flex: none; width: 100%; height: var(--h-field); padding: 0 var(--sp-3); border: 0; border-bottom: 1px solid var(--border-weak); display: flex; flex-direction: column; justify-content: center; line-height: 1.3; text-align: left; color: var(--text); font: inherit; background: {{a.ground}}; box-shadow: {{a.mark}}; white-space: nowrap">
+<span style="display: flex; align-items: center; gap: var(--sp-2); overflow: hidden"><b style="font-weight: 600; overflow: hidden; text-overflow: ellipsis">{{a.login}}</b><span style="margin-left: auto; font-size: var(--fs-7); color: var(--sub)">{{a.last}}</span></span>
+</button>
+</sc-for>
+</sc-for>
+</div>
+<button type="button" class="k-row" style="flex: none; height: var(--h-field); padding: 0 var(--sp-3); border: 0; border-top: 1px solid var(--border); display: flex; align-items: center; gap: var(--sp-2); text-align: left; color: var(--text); font: inherit; font-size: var(--fs-5); background: {{newGround}}; box-shadow: {{newMark}}">＋ 新しいアカウントでログイン</button>
+</div>
+</sc-if>
+
+<div class="k-scroll" style="flex: 1; min-width: 0; min-height: 0; display: grid; place-items: center; padding: var(--sp-5)">
+
+<!-- When a saved account is selected -->
+<sc-if value="{{showSaved}}" hint-placeholder-val="{{true}}">
+<div style="width: var(--w-modal); display: flex; flex-direction: column; gap: var(--sp-3)">
+<div style="display: flex; flex-direction: column; gap: var(--sp-1)">
+<span class="k-sel" style="font-size: var(--fs-1); font-weight: 700">kuroobi</span>
+<span style="display: flex; align-items: center; gap: var(--sp-2)"><span style="font-size: var(--fs-5)">GGS 本番</span><span class="k-sel" style="font-family: var(--ff-mono); font-size: var(--fs-6); color: var(--sub)">skatgame.net:5000</span><x-import component-from-global-scope="KuroobiUI.Tag" tone="accent">本番</x-import></span>
+<span style="font-size: var(--fs-6); color: var(--sub)">前回 10/25 21:40</span>
+</div>
+<x-import component-from-global-scope="KuroobiUI.Button" variant="primary" size="field" disabled="{{busy}}">{{goLabel}}</x-import>
+<span style="font-size: var(--fs-6); color: {{msgColor}}; min-height: 1.5em">{{msg}}</span>
+<div style="display: flex; justify-content: flex-end"><x-import component-from-global-scope="KuroobiUI.Button" variant="ghost">このアカウントを削除</x-import></div>
+</div>
+</sc-if>
+
+<!-- New account (also shown alone when nothing is saved) -->
+<sc-if value="{{showForm}}" hint-placeholder-val="{{false}}">
+<div style="width: var(--w-modal); display: flex; flex-direction: column; gap: var(--sp-3)">
+<span style="font-size: var(--fs-3); font-weight: 600">{{formTitle}}</span>
+<label style="display: flex; flex-direction: column; gap: var(--sp-1); font-size: var(--fs-6); color: var(--sub)">サーバー
+<x-import component-from-global-scope="KuroobiUI.Select" value="ggs" options="{{serverOpts}}"></x-import>
+</label>
+<label style="display: flex; flex-direction: column; gap: var(--sp-1); font-size: var(--fs-6); color: var(--sub)">ログイン名
+<x-import component-from-global-scope="KuroobiUI.TextField" value="{{login}}"></x-import>
+</label>
+<label style="display: flex; flex-direction: column; gap: var(--sp-1); font-size: var(--fs-6); color: var(--sub)">パスワード
+<x-import component-from-global-scope="KuroobiUI.TextField" value="secret" password="{{yes}}" invalid="{{bad}}"></x-import>
+</label>
+<x-import component-from-global-scope="KuroobiUI.Button" variant="primary" size="field" disabled="{{busy}}">{{goLabel}}</x-import>
+<span style="font-size: var(--fs-6); color: {{msgColor}}; min-height: 1.5em">{{msg}}</span>
+<span style="font-size: var(--fs-6); color: var(--sub)">ログインに成功するとこのアカウントを保存し、次の起動から自動でログインする</span>
+</div>
+</sc-if>
+
+</div>
+</div>
+</x-import>
+</x-import>
+<div style="height: var(--h-status); flex: none; background: var(--bg); border-top: 1px solid var(--border); display: flex; align-items: center; gap: var(--sp-4); padding: 0 var(--sp-4); font-size: var(--fs-6); color: var(--sub); white-space: nowrap">
+<span style="margin-left: auto; display: flex; align-items: center; gap: var(--sp-1)">CPU <span aria-hidden="true" style="display: inline-block; width: 32px; height: 4px; border-radius: var(--r-pill); background: var(--track); overflow: hidden"><span style="display: block; height: 100%; width: 3%; background: var(--ok)"></span></span><b style="color: var(--text); font-weight: 600">24</b>%</span>
+<span style="display: flex; align-items: center; gap: var(--sp-1)">メモリ <span aria-hidden="true" style="display: inline-block; width: 32px; height: 4px; border-radius: var(--r-pill); background: var(--track); overflow: hidden"><span style="display: block; height: 100%; width: 25%; background: var(--ok)"></span></span><b style="color: var(--text); font-weight: 600">4.0</b> GB</span>
+<span>GGS <b style="color: var(--text); font-weight: 600">{{connText}}</b></span>
+</div>
+</x-import>
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props='{"state":{"editor":"select","options":["saved","new","first","connecting","error","unreachable","timeout"],"default":"saved"},"$preview":{"width":1280,"height":800}}'>
+class Component extends DCLogic {
+  renderVals() {
+    const ui = window.KuroobiUI;
+    if (ui && ui.setLang) ui.setLang('ja');
+    // saved: a saved account selected / new: new account / first: nothing saved
+    // connecting: connecting (gives up after 20 s) / error: failed
+    const state = this.props.state ?? 'saved';
+    const first = state === 'first';
+    const form = state === 'new' || first || state === 'error' || state === 'unreachable' || state === 'timeout';
+    const sel = form ? '' : 'kuroobi@skatgame.net:5000';
+    const accounts = [
+      { login: 'kuroobi', server: 'skatgame.net:5000', last: '10/25', public: true },
+      { login: 'alice', server: '127.0.0.1:15000', last: '10/25', public: false },
+      { login: 'bob', server: '127.0.0.1:15000', last: '10/24', public: false },
+      { login: 'kbtest', server: 'skatgame.net:5000', last: '10/02', public: true },
+    ].map((a) => {
+      const on = a.login + '@' + a.server === sel;
+      return { ...a, ground: on ? 'var(--card)' : 'transparent', mark: on ? 'inset 2px 0 0 var(--accent)' : 'none' };
+    });
+    const busy = state === 'connecting';
+    const msgs = {
+      connecting: ['skatgame.net:5000 に接続しています…', 'var(--sub)'],
+      error: ['ログイン名かパスワードが違います', 'var(--bad)'],
+      unreachable: ['skatgame.net:5000 に接続できません', 'var(--bad)'],
+      timeout: ['20 秒待っても応答がないので中止しました', 'var(--bad)'],
+    };
+    const [msg, msgColor] = msgs[state] ?? ['', 'var(--sub)'];
+    return {
+      yes: true,
+      navLocal: ui ? ui.navLocal() : [],
+      ggsItems: ui ? ui.ggsNav('offline', {}) : [],
+      hasSaved: !first,
+      groups: [
+        { name: 'GGS 本番', addr: 'skatgame.net:5000', accounts: accounts.filter((a) => a.public) },
+        { name: 'ローカル', addr: '127.0.0.1:15000', accounts: accounts.filter((a) => !a.public) },
+      ],
+      serverOpts: [['ggs', 'GGS 本番 · skatgame.net:5000'], ['local', 'ローカル · 127.0.0.1:15000'], ['lab', '検証機 · 192.168.1.20:5000'], ['__add', 'サーバーを追加…']],
+      newGround: form && !first ? 'var(--card)' : 'transparent',
+      newMark: form && !first ? 'inset 2px 0 0 var(--accent)' : 'none',
+      showSaved: !form,
+      showForm: form,
+      formTitle: first ? 'GGS へログイン' : '新しいアカウントでログイン',
+      server: 'skatgame.net:5000',
+      login: state === 'error' ? 'kuroobi2' : '',
+      bad: state === 'error',
+      busy,
+      goLabel: busy ? '接続しています…' : 'ログイン',
+      msg, msgColor,
+      connText: busy ? '接続中…' : '未接続',
+    };
+  }
+}
+</script>
+</body>
+</html>

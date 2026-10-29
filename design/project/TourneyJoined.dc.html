@@ -1,0 +1,29 @@
+<!doctype html>
+<html lang="ja">
+<head>
+<meta charset="utf-8">
+<title>Tournaments · Not started (joined)</title>
+<script src="./support.js"></script>
+<link rel="stylesheet" href="kuroobi-tokens.css">
+<link rel="stylesheet" href="ds/kuroobiui/components/bundle.css">
+<script src="ds/kuroobiui/components/bundle.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<style>
+x-import{display:contents}
+.k-scroll{overflow-y:scroll!important}
+.k-scroll::-webkit-scrollbar-track{background:var(--track);border-radius:9px}
+body{margin:0;background:var(--bg);color:var(--text);font:var(--fs-4)/1.6 var(--ff)}
+</style>
+</helmet>
+<dc-import name="Tourney" stage="joined" hint-size="100%,800px"></dc-import>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props='{"$preview":{"width":1280,"height":800}}'>
+class Component extends DCLogic {
+  renderVals() { return { yes: true, no: false }; }
+}
+</script>
+</body>
+</html>

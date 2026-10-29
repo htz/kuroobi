@@ -1,0 +1,297 @@
+<!doctype html>
+<html lang="ja">
+<head>
+<meta charset="utf-8">
+<title>Results · Random</title>
+<script src="./support.js"></script>
+<link rel="stylesheet" href="kuroobi-tokens.css">
+<link rel="stylesheet" href="ds/kuroobiui/components/bundle.css">
+<script src="ds/kuroobiui/components/bundle.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<style>
+x-import{display:contents}
+@media (max-width:1040px){.k-nav-ov .k-nav-label{display:none}.k-nav-ov .k-nav-row{justify-content:center;padding:0}}
+.k-scroll{overflow-y:scroll!important}
+.k-scroll::-webkit-scrollbar-track{background:var(--track);border-radius:9px}
+body{margin:0;background:var(--bg);color:var(--text);font:var(--fs-4)/1.6 var(--ff)}
+a{color:var(--accent)}a:hover{color:var(--text)}
+</style>
+</helmet>
+<div style="position: relative; width: 100%; height: 100vh; min-height: 480px; background: var(--bg); color: var(--text); font: var(--fs-4)/1.6 var(--ff); overflow: hidden">
+<x-import style="display: contents" component-from-global-scope="KuroobiUI.AppFrame">
+<x-import component-from-global-scope="KuroobiUI.WindowBar" title="結果"></x-import>
+<x-import style="display: contents" component-from-global-scope="KuroobiUI.Body">
+<div style="position: relative; flex: none; display: flex">
+<x-import style="display: contents" component-from-global-scope="KuroobiUI.Nav" items="{{navLocal}}" ggs-items="{{ggsItems}}" conn="online" active="ggs-results"></x-import>
+<div class="k-nav-ov" style="position: absolute; left: 0; right: 1px; bottom: 0; padding: var(--sp-2); border-top: 1px solid var(--border); background: var(--panel)">
+<button type="button" class="k-nav-row k-row" aria-current="false" style="width: 100%; height: var(--h-field); display: flex; align-items: center; gap: var(--sp-3); border: 0; border-radius: var(--r-2); font: inherit; font-size: var(--fs-4); background: transparent; color: var(--text); font-weight: 400"><span style="flex: none; display: grid; place-items: center"><x-import component-from-global-scope="KuroobiUI.Icon" name="prefs"></x-import></span><span class="k-nav-label">設定</span></button>
+</div>
+</div>
+<x-import style="display: contents" component-from-global-scope="KuroobiUI.Main">
+<x-import style="display: contents" component-from-global-scope="KuroobiUI.Toolbar">
+<x-import component-from-global-scope="KuroobiUI.Segmented" value="{{poolVal}}" options="{{pools}}"></x-import>
+<x-import component-from-global-scope="KuroobiUI.Divider"></x-import>
+<x-import component-from-global-scope="KuroobiUI.Select" value="all" options="{{periods}}" width="{{periodW}}"></x-import>
+</x-import>
+<sc-if value="{{hasRows}}" hint-placeholder-val="{{true}}">
+<div style="flex: 1; min-height: 0; padding: var(--sp-4) var(--sp-1) 0; display: flex; flex-direction: column; gap: var(--sp-2)">
+<!-- All: ratings are separate per type, so per-type ratings instead of the trend -->
+<sc-if value="{{isAll}}" hint-placeholder-val="{{false}}">
+<x-import style="display: contents" component-from-global-scope="KuroobiUI.Section" title="レート">
+<div style="display: flex; flex-direction: column; gap: var(--sp-1); padding: 0 var(--sp-3)">
+<sc-for list="{{myRates}}" as="m" hint-placeholder-count="2">
+<x-import component-from-global-scope="KuroobiUI.RateRow" label="{{m.label}}" rate="{{m.rate}}"></x-import>
+</sc-for>
+</div>
+</x-import>
+</sc-if>
+<sc-if value="{{isPool}}" hint-placeholder-val="{{true}}">
+<x-import style="display: contents" component-from-global-scope="KuroobiUI.Section" title="レートの推移">
+<x-import component-from-global-scope="KuroobiUI.RateChart" points="{{rates}}" width="{{chartW}}" height="{{chartH}}" dates="{{rateDates}}" labels="{{rateLabels}}" hover="{{pickedRate}}"></x-import>
+<div style="display: flex; align-items: center; height: var(--h-field); margin-top: var(--sp-2); border-top: 1px solid var(--border-weak); border-bottom: 1px solid var(--border-weak)">
+<sc-for list="{{stats}}" as="s" hint-placeholder-count="6">
+<div style="flex: 1; min-width: 0; padding: 0 var(--sp-3); border-right: 1px solid var(--border-weak); white-space: nowrap">
+<x-import component-from-global-scope="KuroobiUI.KeyValue" label="{{s.label}}" value="{{s.value}}"></x-import>
+</div>
+</sc-for>
+</div>
+</x-import>
+</sc-if>
+<x-import style="display: contents" component-from-global-scope="KuroobiUI.Section" title="終わった対局" aside="{{rowCount}}" grow="{{yes}}">
+<div style="height: 100%; display: flex; flex-direction: column">
+<!-- Columns: result · opponent · format · disc difference (recorded value) · how it was decided (whole match: resign, adjourn; on GGS per match, both boards for synchro) · board 1 · board 2 (per board, the on-board disc difference and a time tag; each board has its own clocks; a single-game match has board 1 only; empty for resigned/adjourned matches) · (clocks only in the detail pane) · rating · date.
+     Boards that ended normally get no tag. Out of time (extension used up too, ±64) / over time (entered the extension first and ended there; the minimum loss even when ahead). Win tags use --gold, loss tags --bad. Adjourned shows just "Adjourned" -->
+<div style="flex: none; height: var(--h-head); display: flex; align-items: center; gap: var(--sp-2); padding: 0 var(--sp-2); border-bottom: 1px solid var(--border)">
+<span style="width: 28px; flex: none; font-size: var(--fs-7); font-weight: 600; letter-spacing: .08em; color: var(--sub); white-space: nowrap; overflow: hidden; text-overflow: ellipsis">勝敗</span>
+<span style="flex: 1; min-width: 0; font-size: var(--fs-7); font-weight: 600; letter-spacing: .08em; color: var(--sub); white-space: nowrap; overflow: hidden; text-overflow: ellipsis">相手</span>
+<span style="width: var(--w-gtype); flex: none; font-size: var(--fs-7); font-weight: 600; letter-spacing: .08em; color: var(--sub); white-space: nowrap; overflow: hidden; text-overflow: ellipsis">形式</span></sc-if>
+<span style="width: 44px; flex: none; font-size: var(--fs-7); font-weight: 600; letter-spacing: .08em; color: var(--sub); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; text-align: right">石差</span>
+<span style="width: 72px; flex: none; font-size: var(--fs-7); font-weight: 600; letter-spacing: .08em; color: var(--sub); white-space: nowrap; overflow: hidden; text-overflow: ellipsis">決着</span>
+<span style="width: 150px; flex: none; font-size: var(--fs-7); font-weight: 600; letter-spacing: .08em; color: var(--sub); white-space: nowrap; overflow: hidden; text-overflow: ellipsis">1 面目</span>
+<span style="width: 150px; flex: none; font-size: var(--fs-7); font-weight: 600; letter-spacing: .08em; color: var(--sub); white-space: nowrap; overflow: hidden; text-overflow: ellipsis">2 面目</span>
+<span style="width: 60px; flex: none; font-size: var(--fs-7); font-weight: 600; letter-spacing: .08em; color: var(--sub); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; text-align: right">レート</span>
+<span style="width: 64px; flex: none; font-size: var(--fs-7); font-weight: 600; letter-spacing: .08em; color: var(--sub); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; text-align: right">日時</span>
+</div>
+<div class="k-scroll" style="flex: 1; min-height: 0; display: flex; flex-direction: column">
+<sc-for list="{{rows}}" as="r" hint-placeholder-count="12">
+<div class="k-row" style="flex: none; display: flex; gap: var(--sp-2); height: var(--h-field); align-items: center; padding: 0 var(--sp-2); border-bottom: 1px solid var(--border-weak); font-size: var(--fs-5); background: {{r.bg}}; box-shadow: {{r.ring}}; opacity: {{r.opacity}}">
+<span style="width: 28px; flex: none; color: {{r.tone}}; white-space: nowrap">{{r.tag}}</span>
+<span class="k-sel" style="flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap">{{r.opp}}</span>
+<span style="width: var(--w-gtype); flex: none; color: var(--sub); font-size: var(--fs-6); overflow: hidden; text-overflow: ellipsis; white-space: nowrap">{{r.note}}</span>
+<span style="width: 44px; flex: none; text-align: right; font-variant-numeric: tabular-nums; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; color: var(--sub)">{{r.discs}}</span>
+<span style="width: 72px; flex: none; color: {{r.endColor}}; font-size: var(--fs-6); white-space: nowrap; overflow: hidden; text-overflow: ellipsis">{{r.end}}</span>
+<span style="width: 150px; flex: none; display: flex; gap: 6px; white-space: nowrap; overflow: hidden; font-variant-numeric: tabular-nums"><span style="width: 28px; flex: none; text-align: right; color: var(--text)">{{r.b1.d}}</span><span style="color: {{r.b1.tagColor}}; font-size: var(--fs-6)">{{r.b1.tag}}</span></span>
+<span style="width: 150px; flex: none; display: flex; gap: 6px; white-space: nowrap; overflow: hidden; font-variant-numeric: tabular-nums"><span style="width: 28px; flex: none; text-align: right; color: var(--text)">{{r.b2.d}}</span><span style="color: {{r.b2.tagColor}}; font-size: var(--fs-6)">{{r.b2.tag}}</span></span>
+<span style="width: 60px; flex: none; text-align: right; font-variant-numeric: tabular-nums; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; color: var(--sub); font-size: var(--fs-6)">{{r.rating}}</span>
+<span style="width: 64px; flex: none; text-align: right; font-variant-numeric: tabular-nums; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; color: var(--sub); font-size: var(--fs-6)">{{r.when}}</span>
+</div>
+</sc-for>
+</div>
+</div>
+</x-import>
+</div>
+</sc-if>
+<!-- No records -->
+<sc-if value="{{isEmpty}}" hint-placeholder-val="{{false}}">
+<div style="flex: 1; min-height: 0; display: grid; place-items: center; padding: var(--sp-5)">
+<div style="display: flex; flex-direction: column; align-items: center; gap: var(--sp-2); text-align: center">
+<span style="font-size: var(--fs-3); font-weight: 600">まだ記録がありません</span>
+<span style="font-size: var(--fs-5); color: var(--sub)">終わった対局がここに残ります</span>
+</div>
+</div>
+</sc-if>
+</x-import>
+</x-import>
+<!-- Details in a drawer (same as Players): slides in from the right only while a row is selected (480px wide). Click outside, ×, or Esc closes it -->
+<sc-if value="{{detailOpen}}" hint-placeholder-val="{{false}}">
+<div aria-hidden="true" title="閉じる" style="position: absolute; z-index: 25; left: 0; right: 0; top: var(--h-window); bottom: var(--h-status)"></div>
+<aside role="dialog" aria-label="対局の詳細" style="position: absolute; z-index: 26; right: 0; top: var(--h-window); bottom: var(--h-status); width: 480px; max-width: calc(100% - 120px); display: flex; flex-direction: column; background: var(--panel); border-left: 1px solid var(--border); box-shadow: var(--sh-2)">
+<div style="flex: none; height: var(--h-bar); display: flex; align-items: center; gap: var(--sp-2); padding: 0 var(--sp-2) 0 var(--sp-3); border-bottom: 1px solid var(--border); white-space: nowrap">
+<!-- The header is just the opponent's name. Result and disc difference are gathered in the result tag at the top of the body (a bare "0" beside the name says nothing about what it counts) -->
+<span class="k-sel" style="min-width: 0; font-size: var(--fs-3); font-weight: 600; overflow: hidden; text-overflow: ellipsis">morgoth</span>
+<span style="margin-left: auto"><x-import component-from-global-scope="KuroobiUI.IconButton" name="close" label="閉じる"></x-import></span>
+</div>
+<div class="k-scroll" style="flex: 1; min-height: 0">
+<div style="display: flex; flex-direction: column; gap: var(--sp-3); padding: var(--sp-4) var(--sp-4) var(--sp-5)">
+<!-- Result tag: top of the body. A left stripe in the result colour (win --ok / loss --bad / draw, adjourned --sub) on a 12% fill.
+     Line 1: the result ("Won", "Lost", "Draw", "Adjourned") and the match's disc difference in bold --fs-1, followed by "Disc diff" in --sub. For resign/adjourn, the how-it-was-decided tag on the right.
+     Line 2: per-board disc difference and time tags (same as board 1 / board 2 in the table). No line 2 for single-game matches or resigned/adjourned matches -->
+<div style="display: flex; flex-direction: column; gap: var(--sp-2); padding: var(--sp-3) var(--sp-4); border-radius: var(--r-3); border-left: 3px solid {{res.tone}}; background: color-mix(in srgb, {{res.tone}} 12%, var(--card))">
+<div style="display: flex; align-items: baseline; gap: var(--sp-3); white-space: nowrap">
+<span style="font-size: var(--fs-1); font-weight: 700; color: {{res.tone}}">{{res.word}}</span>
+<span style="font-size: var(--fs-1); font-weight: 700; font-variant-numeric: tabular-nums; color: var(--text)">{{res.diff}}</span>
+<span style="font-size: var(--fs-6); color: var(--sub)">石差</span>
+<span style="margin-left: auto; font-size: var(--fs-5); color: {{res.endColor}}">{{res.end}}</span>
+</div>
+<div style="display: flex; gap: var(--sp-5); font-size: var(--fs-5); white-space: nowrap">
+<sc-for list="{{res.boards}}" as="b" hint-placeholder-count="2">
+<span style="display: flex; align-items: baseline; gap: var(--sp-2)"><span style="color: var(--sub)">{{b.face}}</span><b style="font-weight: 600; font-variant-numeric: tabular-nums">{{b.d}}</b><span style="color: {{b.tagColor}}; font-size: var(--fs-6)">{{b.tag}}</span></span>
+</sc-for>
+</div>
+</div>
+<div style="display: flex; flex-direction: column; gap: var(--sp-1)">
+<sc-for list="{{detail}}" as="d" hint-placeholder-count="6">
+<x-import component-from-global-scope="KuroobiUI.KeyValue" label="{{d.label}}" value="{{d.value}}"></x-import>
+</sc-for>
+</div>
+<!-- Per-board clocks: one row per board and player (disc colour, name, time left). Disc difference and time tags live in the result tag above.
+     Time left is the clock at game end, both main time and extension remaining: "0:08 · Ext 2:00". Extension reduced means over time; both 0 means out of time (the tag appears only in the on-board column, not repeated here).
+     Two rows per board. A single-game match has one board. Resigned/adjourned matches show no on-board figures, only time left -->
+<div style="display: flex; flex-direction: column">
+<div style="height: var(--h-head); display: flex; align-items: center; gap: var(--sp-2); border-bottom: 1px solid var(--border)">
+<span style="width: 48px; flex: none; font-size: var(--fs-7); font-weight: 600; letter-spacing: .08em; color: var(--sub); white-space: nowrap; overflow: hidden; text-overflow: ellipsis">面</span>
+<span style="flex: 1; min-width: 0; font-size: var(--fs-7); font-weight: 600; letter-spacing: .08em; color: var(--sub); white-space: nowrap; overflow: hidden; text-overflow: ellipsis">対局者</span>
+<span style="width: 112px; flex: none; font-size: var(--fs-7); font-weight: 600; letter-spacing: .08em; color: var(--sub); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; text-align: right">残り時間</span>
+</div>
+<sc-for list="{{boardRows}}" as="b" hint-placeholder-count="2">
+<div style="height: var(--h-row); display: flex; align-items: center; gap: var(--sp-2); font-size: var(--fs-5)"><span style="width: 48px; flex: none; color: var(--sub)">{{b.face}}</span><span style="flex: 1; min-width: 0; display: flex; align-items: center; gap: var(--sp-1); white-space: nowrap; overflow: hidden"><x-import component-from-global-scope="KuroobiUI.StoneDot" color="{{b.p0.color}}" size="{{n12}}"></x-import><span style="overflow: hidden; text-overflow: ellipsis">{{b.p0.name}}</span></span><span style="width: 112px; flex: none; text-align: right; font-variant-numeric: tabular-nums; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; color: var(--text); font-size: var(--fs-6)">{{b.p0.left}}</span></div>
+<div style="height: var(--h-row); display: flex; align-items: center; gap: var(--sp-2); font-size: var(--fs-5); border-bottom: 1px solid var(--border-weak)"><span style="width: 48px; flex: none"></span><span style="flex: 1; min-width: 0; display: flex; align-items: center; gap: var(--sp-1); white-space: nowrap; overflow: hidden"><x-import component-from-global-scope="KuroobiUI.StoneDot" color="{{b.p1.color}}" size="{{n12}}"></x-import><span style="overflow: hidden; text-overflow: ellipsis">{{b.p1.name}}</span></span><span style="width: 112px; flex: none; text-align: right; font-variant-numeric: tabular-nums; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; color: var(--text); font-size: var(--fs-6)">{{b.p1.left}}</span></div>
+</sc-for>
+</div>
+<x-import component-from-global-scope="KuroobiUI.EvalTrend" points="{{trend}}" plies="{{plies}}" height="{{trendH}}" title="評価値 (alice から見た値)" names="{{trendNames}}"></x-import>
+<div style="display: flex; gap: var(--sp-2)">
+<x-import component-from-global-scope="KuroobiUI.Button" variant="primary">棋譜を開く</x-import>
+<x-import component-from-global-scope="KuroobiUI.Button">同じ条件で再戦</x-import>
+</div>
+</div>
+</div>
+</aside>
+</sc-if>
+<div style="height: var(--h-status); flex: none; background: var(--bg); border-top: 1px solid var(--border); display: flex; align-items: center; gap: var(--sp-4); padding: 0 var(--sp-4); font-size: var(--fs-6); color: var(--sub); white-space: nowrap">
+<span style="display: flex; align-items: center; gap: var(--sp-1)"><x-import component-from-global-scope="KuroobiUI.Dot" tone="ok"></x-import>自動対局中</span>
+<span style="display: flex; align-items: center; gap: var(--sp-1)"><x-import component-from-global-scope="KuroobiUI.Dot" tone="accent"></x-import>思考中 <b style="color: var(--text); font-weight: 600">3.2</b> 秒</span>
+<span>ノード <b style="color: var(--text); font-weight: 600">5,870 万</b></span>
+<span>速度 <b style="color: var(--text); font-weight: 600">18.3</b> Mnps</span>
+<span style="margin-left: auto; display: flex; align-items: center; gap: var(--sp-1)">CPU <span aria-hidden="true" style="display: inline-block; width: 32px; height: 4px; border-radius: var(--r-pill); background: var(--track); overflow: hidden"><span style="display: block; height: 100%; width: 12%; background: var(--ok)"></span></span><b style="color: var(--text); font-weight: 600">96</b>%</span>
+<span style="display: flex; align-items: center; gap: var(--sp-1)">メモリ <span aria-hidden="true" style="display: inline-block; width: 32px; height: 4px; border-radius: var(--r-pill); background: var(--track); overflow: hidden"><span style="display: block; height: 100%; width: 92%; background: var(--bad)"></span></span><b style="color: var(--bad); font-weight: 600">14.8</b> GB</span>
+<span>GGS <b style="color: var(--text); font-weight: 600">接続中</b> (alice)</span>
+</div>
+</x-import>
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props='{"view":{"editor":"select","options":["random","all","empty"],"default":"random"},"detail":{"editor":"select","options":["closed","open"],"default":"closed"},"$preview":{"width":1280,"height":800}}'>
+class Component extends DCLogic {
+  renderVals() {
+    const ui = window.KuroobiUI;
+    if (ui && ui.setLang) ui.setLang('ja');
+    // Newest first. d is the recorded disc difference (from my side; null means adjourned). bd is per board [on-board disc difference, how it was decided], where that is
+    // 'to+'/'to-' out-of-time win/loss (extension used up too), 'ov+'/'ov-' over-time win/loss (entered the extension first).
+    // end is how the whole match was decided (on GGS resign and adjourn are per match, both boards for synchro): 'rs+' opponent resigned, 'rs-' I resigned, 'adj' adjourned.
+    // t is time used [me, opponent], loss is time used in the extension [me, opponent], r is the rating after the game.
+    const games = [
+      { opp: 'morgoth', d: 64, bd: [[4, 'to+'], [-6, 'to+']], t: ['4:52', '7:00'], loss: ['', '2:00'], when: '22:41', r: 2619.2, kind: '同期・ランダム14手' },
+      { opp: 'saio', d: -4, bd: [[6, 'ov-'], [-2]], t: ['5:41', '4:40'], loss: ['0:41', ''], when: '21:58', r: 2602.3, kind: '同期・ランダム14手' },
+      { opp: 'ant', d: 6, bd: [[-2, 'ov+'], [4]], t: ['4:10', '5:12'], loss: ['', '0:12'], when: '21:15', r: 2611.6, kind: '同期・ランダム16手' },
+      { opp: 'Thor', d: -64, bd: [[-8, 'to-'], [4]], t: ['7:00', '3:12'], loss: ['2:00', ''], when: '20:32', r: 2605.9, kind: '同期・ランダム14手' },
+      { opp: 'edgar', d: 64, end: 'rs+', bd: [[-10], [4]], t: ['2:40', '3:05'], loss: ['', ''], when: '20:02', r: 2617.8, kind: '同期・ランダム16手' },
+      { opp: 'Rhapsody', d: -64, end: 'rs-', bd: [[-6], [2]], t: ['3:10', '3:40'], loss: ['', ''], when: '10/25', r: 2601.3, kind: '同期・ランダム14手' },
+      { opp: 'ymatioun', d: 4, bd: [[6], [-2]], t: ['4:12', '4:40'], loss: ['', ''], when: '10/25', r: 2611.6, kind: '同期・ランダム14手' },
+      { opp: 'scorpion', d: 64, bd: [[12, 'to+']], t: ['4:01', '7:00'], loss: ['', '2:00'], when: '10/25', r: 2608.0, kind: '1局・ランダム14手' },
+      { opp: 'viper', d: null, end: 'adj', bd: [], t: ['1:20', '1:31'], loss: ['', ''], when: '10/25', r: null, kind: '同期・ランダム14手' },
+    ];
+    const opps = ['ymatioun', 'saio', 'Rhapsody', 'scorpion', 'viper', 'ant', 'edgar', 'Thor'];
+    for (let i = 0; i < 40; i++) {
+      const a = [6, -4, 8, -2, 2, 10, -8, 4, 6, -10][i % 10], b = [2, -2, 6, 0, -2, 10, -4, 0, 4, -6][i % 10];
+      games.push({ opp: opps[i % opps.length], d: a + b, bd: [[a], [b]], t: ['4:' + String(10 + i % 40).padStart(2, '0'), '4:' + String(30 + i % 25).padStart(2, '0')], loss: ['', ''],
+        when: '10/' + String(24 - Math.floor(i / 3)).padStart(2, '0'), r: +(2600 - i * 0.6 + (i % 4) * 1.3).toFixed(1), kind: i % 6 === 4 ? '1局・ランダム14手' : i % 3 ? '同期・ランダム14手' : '同期・ランダム16手' });
+    }
+    for (const g of games) if (g.kind === '1局・ランダム14手' && g.bd.length === 2) { g.bd = [[g.d]]; }
+    const TAGS = {
+      'to+': ['時間切れ勝ち', 'var(--gold)'], 'to-': ['時間切れ負け', 'var(--bad)'],
+      'ov+': ['時間超過勝ち', 'var(--gold)'], 'ov-': ['時間超過負け', 'var(--bad)'],
+      'rs+': ['相手の投了', 'var(--gold)'], 'rs-': ['投了', 'var(--bad)'], adj: ['中断', 'var(--sub)'],
+    };
+    const view = this.props.view ?? 'random';
+    const open = this.props.detail === 'open' && view !== 'empty';
+    const PICK = open ? 0 : -1;
+    const cellOf = ([d, k]) => ({ d: sgn(d), tag: k ? TAGS[k][0] : '', tagColor: k ? TAGS[k][1] : 'var(--sub)' });
+    const sgn = (d) => (d > 0 ? '+' + d : d < 0 ? '−' + -d : '0');
+    const rows = games.map((g, i) => ({
+      opp: g.opp, note: g.kind,
+      tag: g.d == null ? '中' : g.d > 0 ? '勝' : g.d < 0 ? '負' : '分',
+      tone: g.d == null || g.d === 0 ? 'var(--sub)' : g.d > 0 ? 'var(--ok)' : 'var(--bad)',
+      end: g.end ? TAGS[g.end][0] : '', endColor: g.end ? TAGS[g.end][1] : 'var(--sub)',
+      // Resign and adjourn are decided per match, so the board columns are empty
+      b1: g.end ? { d: '', tag: '', tagColor: 'var(--sub)' } : cellOf(g.bd[0]),
+      b2: g.end || g.bd.length < 2 ? { d: '', tag: '', tagColor: 'var(--sub)' } : cellOf(g.bd[1]),
+      discs: g.d == null ? '—' : sgn(g.d),
+      rating: g.r == null ? '' : g.r.toFixed(1), when: g.when,
+      bg: i === PICK ? 'var(--hover)' : 'transparent', ring: i === PICK ? 'inset 2px 0 0 var(--accent)' : 'none',
+      opacity: g.dim ? 0.5 : 1,
+    }));
+    const rated = games.map((g, i) => ({ ...g, i })).filter((g) => g.r != null).reverse();
+    const sign = (d) => (d > 0 ? '+' + d : String(d));
+    // Eval trend: my eval on my moves, the opponent's eval on theirs (oriented from my side).
+    const plies = 60;
+    const trend = [];
+    for (let x = 1; x <= plies; x++) {
+      const base = Math.round(2 + 4 * Math.sin(x / 9) + (x > 38 ? (x - 38) * 0.25 : 0));
+      const mine = x % 2 === 1;
+      trend.push({
+        x, mine: mine ? base : null, opp: mine ? null : base - 2,
+        mySecs: mine ? 2 + (x % 7) * 1.5 : null, oppSecs: mine ? null : 1 + (x % 5),
+      });
+    }
+    return {
+      poolVal: view === 'all' ? 'all' : '8r',
+      isAll: view === 'all', isPool: view !== 'all', isEmpty: view === 'empty', hasRows: view !== 'empty',
+      trendNames: { mine: 'alice', opp: 'morgoth' },
+      myRates: [
+        { label: 'ランダム開局', rate: { value: 1704.3, dev: 49, rank: 37, w: 54, l: 49, d: 3 } },
+        { label: '通常', rate: { value: 1720.0, dev: 36, rank: 41, w: 128, l: 97, d: 6 } },
+      ],
+      yes: true,
+      navLocal: ui ? ui.navLocal() : [],
+      ggsItems: ui ? ui.ggsNav('online', { 'ggs-lobby': { count: 2, alert: true }, 'ggs-play': { count: 1 }, 'ggs-chat': { count: 3, alert: true } }).filter((it) => it.id !== 'ggs-standby') : [],
+      pools: [{ value: '8r', label: 'ランダム' }, { value: '8', label: '通常' }, { value: 'all', label: 'すべて' }],
+      periods: [['all', 'すべての期間'], ['7', '直近 7 日'], ['30', '直近 30 日'], ['90', '直近 90 日']],
+      periodW: 128,
+      chartW: 1030,
+      chartH: 168,
+      rates: rated.map((g) => g.r),
+      rateDates: rated.map((g) => g.when),
+      // Hover reads date and time, opponent, discs, the rating after the game (rateLabel in the app).
+      rateLabels: rated.map((g) => (g.when.includes(':') ? '10/26 ' + g.when : g.when + ' 20:00') + ' · ' + g.opp + ' · ' + sign(g.d) + ' · ' + g.r.toFixed(1)),
+      pickedRate: rated.findIndex((g) => g.i === PICK),
+      stats: [
+        { label: 'レート', value: '1704.3' },
+        { label: '期間の増減', value: '+4.2' },
+        { label: '勝 / 負 / 分', value: '7 / 5 / 1' },
+        { label: '勝率', value: '58%' },
+        { label: '平均石差', value: '+4.9' },
+        { label: '最高', value: '1711.6' },
+      ],
+      rows,
+      rowCount: rows.length + ' 局',
+      detailOpen: open,
+      detail: [
+        { label: '相手のレート', value: '2629.3' },
+        { label: '形式', value: '同期・ランダム14手 · レート戦' },
+        { label: '持ち時間', value: '5:00 · 延長 2:00' },
+        { label: '自分の色', value: '1 面目 白 · 2 面目 黒 (同期)' },
+        { label: '日時', value: '10/29 22:41' },
+        { label: 'レート', value: '2619.2 (+16.9)' },
+      ],
+      plies,
+      trend,
+      trendH: 180, n12: 12,
+      res: { word: '勝ち', tone: 'var(--ok)', diff: '+64', end: '', endColor: 'var(--sub)',
+             boards: [{ face: '1 面目', d: '+64', tag: '時間切れ勝ち', tagColor: 'var(--gold)' },
+                      { face: '2 面目', d: '+64', tag: '時間切れ勝ち', tagColor: 'var(--gold)' }] },
+      boardRows: [
+        { face: '1 面目', d: '+4', tag: '時間切れ勝ち', tagColor: 'var(--gold)',
+          p0: { color: 'w', name: 'alice', left: '0:08' },
+          p1: { color: 'b', name: 'morgoth', left: '延長 0:00' } },
+        { face: '2 面目', d: '−6', tag: '時間切れ勝ち', tagColor: 'var(--gold)',
+          p0: { color: 'b', name: 'alice', left: '0:11' },
+          p1: { color: 'w', name: 'morgoth', left: '延長 0:00' } },
+      ],
+    };
+  }
+}
+</script>
+</body>
+</html>

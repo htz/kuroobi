@@ -1,0 +1,177 @@
+<!doctype html>
+<html lang="ja">
+<head>
+<meta charset="utf-8">
+<title>Edit board · Editing (from Play)</title>
+<script src="./support.js"></script>
+<link rel="stylesheet" href="kuroobi-tokens.css">
+<link rel="stylesheet" href="ds/kuroobiui/components/bundle.css">
+<script src="ds/kuroobiui/components/bundle.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<style>
+x-import{display:contents}
+@media (max-width:1040px){.k-nav-ov .k-nav-label{display:none}.k-nav-ov .k-nav-row{justify-content:center;padding:0}}
+.k-scroll{overflow-y:scroll!important}
+.k-scroll::-webkit-scrollbar-track{background:var(--track);border-radius:9px}
+.k-fill button{width:100%;justify-content:center}
+.k-tile{position:relative;height:60px;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:5px;border:1px solid var(--border);border-radius:var(--r-2);background:var(--panel);color:var(--text);font:inherit;font-size:var(--fs-6);cursor:default}
+.k-tile:hover{border-color:var(--sub)}
+.k-tile[aria-pressed="true"]{border-color:var(--accent);box-shadow:inset 0 0 0 1px var(--accent);background:var(--accent-dim)}
+.k-tile kbd{position:absolute;top:4px;right:6px;font:inherit;font-size:10px;color:var(--sub)}
+.k-st{width:24px;height:24px;border-radius:50%;flex:none}
+.k-st-b{background:radial-gradient(circle at 35% 30%,#4a4a4a,#0d0d0d 70%)}
+.k-st-w{background:radial-gradient(circle at 35% 30%,#fff,#d8d8d8 75%);box-shadow:inset 0 0 0 1px rgba(0,0,0,.25)}
+.k-st-e{border:1.5px dashed var(--sub)}
+body{margin:0;background:var(--bg);color:var(--text);font:var(--fs-4)/1.6 var(--ff)}
+.k-edit-board{cursor:crosshair}
+</style>
+</helmet>
+<div style="position: relative; width: 100%; height: 100vh; min-height: 480px; background: var(--bg); color: var(--text); font: var(--fs-4)/1.6 var(--ff); overflow: hidden">
+<x-import component-from-global-scope="KuroobiUI.BoardDefs"></x-import>
+<x-import style="display: contents" component-from-global-scope="KuroobiUI.AppFrame">
+<x-import component-from-global-scope="KuroobiUI.WindowBar" title="{{winTitle}}" sub="盤面編集"></x-import>
+<x-import style="display: contents" component-from-global-scope="KuroobiUI.Body">
+<div style="position: relative; flex: none; display: flex">
+<x-import style="display: contents" component-from-global-scope="KuroobiUI.Nav" items="{{navLocal}}" ggs-items="{{ggsItems}}" conn="online" active="{{navActive}}"></x-import>
+<div class="k-nav-ov" style="position: absolute; left: 0; right: 1px; bottom: 0; padding: var(--sp-2); border-top: 1px solid var(--border); background: var(--panel)">
+<button type="button" class="k-nav-row k-row" aria-current="false" style="width: 100%; height: var(--h-field); display: flex; align-items: center; gap: var(--sp-3); border: 0; border-radius: var(--r-2); font: inherit; font-size: var(--fs-4); background: transparent; color: var(--text); font-weight: 400"><span style="flex: none; display: grid; place-items: center"><x-import component-from-global-scope="KuroobiUI.Icon" name="prefs"></x-import></span><span class="k-nav-label">設定</span></button>
+</div>
+</div>
+<x-import style="display: contents" component-from-global-scope="KuroobiUI.Main">
+
+<!-- Edit board: entered via "Edit board" in the game Dock or the study toolbar (⌘E). Starts from the current board (position and side to move).
+     While editing, the game/study toolbar and right pane are replaced by these two. Navigating to another screen via Nav ends editing (same as Cancel) -->
+<!-- While editing, the Toolbar becomes the edit one: title and undo only. Exits are at the bottom of the right pane.
+     Undo ⌘Z / Redo ⇧⌘Z treat one press (a whole drag) or one click of a button below as one step.
+     Cancel (Esc) returns to the board before editing. Open in study = go to study with this position as the record's start.
+     Play from here (⌘↩) = go to the game and start a new one from this position (asks to replace first if the current record has moves) -->
+<x-import style="display: contents" component-from-global-scope="KuroobiUI.Toolbar">
+<b style="font-size: var(--fs-3); font-weight: 600; white-space: nowrap">盤面編集</b>
+<x-import component-from-global-scope="KuroobiUI.Divider"></x-import>
+<x-import component-from-global-scope="KuroobiUI.Button" variant="ghost" title="⌘Z">元に戻す</x-import>
+<x-import component-from-global-scope="KuroobiUI.Button" variant="ghost" title="⇧⌘Z" disabled="{{yes}}">やり直す</x-import>
+</x-import>
+
+<!-- Board: crosshair pointer over squares. The tool's disc is overlaid faintly (opacity 0.35) to preview what a click places.
+     Legal moves for the side to move get the same markers as in a game (so you can check playable squares while building). No evals or last-move marker -->
+<div style="flex: 1; min-height: calc(200px + var(--h-bar)); display: flex; flex-direction: column">
+<div class="k-edit-board" style="flex: 1; min-height: 200px; display: flex">
+<x-import style="display: contents" component-from-global-scope="KuroobiUI.BoardFit" min-height="{{n200}}" padding="var(--sp-2) var(--sp-4)">
+<x-import component-from-global-scope="KuroobiUI.Board" cells="{{pos.cells}}" legal="{{legal}}" turn="{{turn}}" coords="{{yes}}"></x-import>
+</x-import>
+</div>
+<!-- Disc-count strip: side to move in bold, empty-square count on the right -->
+<x-import component-from-global-scope="KuroobiUI.ScoreRow" black="{{pos.black}}" white="{{pos.white}}" turn="{{turn}}" meta="{{emptyText}}"></x-import>
+</div>
+</x-import>
+
+<!-- Right pane, top to bottom: Place, To move, Board. No explanatory text (tools should be self-evident) -->
+<x-import style="display: contents" component-from-global-scope="KuroobiUI.Dock" tabs="{{oneTab}}" active="x" open="{{yes}}" scroll="{{no}}">
+<div class="k-scroll" style="flex: 1; min-height: 0; display: flex; flex-direction: column; padding-top: var(--sp-3)">
+<!-- Place: click or drag to place on squares. Keys 1–3.
+     If the first square pressed already holds the chosen colour, that press erases instead (clicking the same colour removes it). Crosshair pointer over the board, chosen disc overlaid faintly (0.35) -->
+<x-import style="display: contents" component-from-global-scope="KuroobiUI.Section" title="置く石">
+<div style="display: grid; grid-template-columns: repeat(3, 1fr); gap: var(--sp-2)">
+<button type="button" class="k-tile" aria-pressed="true"><kbd>1</kbd><span class="k-st k-st-b"></span>黒</button>
+<button type="button" class="k-tile" aria-pressed="false"><kbd>2</kbd><span class="k-st k-st-w"></span>白</button>
+<button type="button" class="k-tile" aria-pressed="false"><kbd>3</kbd><span class="k-st k-st-e"></span>消す</button>
+</div>
+</x-import>
+<!-- To move: below it, the number of legal moves for the side to move. gold when none (starts with a pass); bad when neither side has any, disabling the two exits -->
+<x-import style="display: contents" component-from-global-scope="KuroobiUI.Section" title="手番">
+<x-import component-from-global-scope="KuroobiUI.Segmented" value="{{turn}}" options="{{turns}}" fill="{{yes}}"></x-import>
+<div style="margin-top: var(--sp-2); font-size: var(--fs-6); line-height: 1.5; color: {{statusColor}}">{{statusText}}</div>
+</x-import>
+<!-- Board: Start position = 4 centre discs, Black to move. Clear = empty board. Swap colors = flip every disc and swap the side to move (the same position from the other side) -->
+<x-import style="display: contents" component-from-global-scope="KuroobiUI.Section" title="盤面">
+<div class="k-fill" style="display: grid; grid-template-columns: repeat(3, 1fr); gap: var(--sp-2)">
+<x-import component-from-global-scope="KuroobiUI.Button">初期配置</x-import>
+<x-import component-from-global-scope="KuroobiUI.Button">全部消す</x-import>
+<x-import component-from-global-scope="KuroobiUI.Button" title="手番も入れ替わります">白黒反転</x-import>
+</div>
+</x-import>
+</div>
+<!-- Exits: "Play from here" (⌘↩) full width on top; "Cancel" (Esc) and "Open in study" half width each below -->
+<div class="k-fill" style="flex: none; display: grid; grid-template-columns: 1fr 1fr; gap: var(--sp-2); padding: var(--sp-3); border-top: 1px solid var(--border-weak)">
+<div style="grid-column: 1 / -1; display: grid"><x-import component-from-global-scope="KuroobiUI.Button" variant="primary" title="⌘↩" disabled="{{dead}}">この局面で対局</x-import></div>
+<x-import component-from-global-scope="KuroobiUI.Button" variant="ghost" title="Esc">キャンセル</x-import>
+<x-import component-from-global-scope="KuroobiUI.Button" disabled="{{dead}}">検討で開く</x-import>
+</div>
+</x-import>
+</x-import>
+<div style="height: var(--h-status); flex: none; background: var(--bg); border-top: 1px solid var(--border); display: flex; align-items: center; gap: var(--sp-4); padding: 0 var(--sp-4); font-size: var(--fs-6); color: var(--sub); white-space: nowrap">
+<span style="margin-left: auto">GGS <b style="color: var(--text); font-weight: 600">接続中</b> (alice)</span>
+</div>
+</x-import>
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props='{"state":{"editor":"select","options":["edit","pass","dead"],"default":"edit"},"from":{"editor":"select","options":["play","study"],"default":"play"},"$preview":{"width":1280,"height":800}}'>
+class Component extends DCLogic {
+  renderVals() {
+    const ui = window.KuroobiUI;
+    if (ui && ui.setLang) ui.setLang('ja');
+    const h = window.React ? window.React.createElement : null;
+    const state = this.props.state ?? 'edit';
+    const from = this.props.from ?? 'play';
+    // Board (sq = col*8 + row, 1 = black, 2 = white). Serialized row by row from a1 to h8
+    const S = (rows) => {
+      const c = Array(64).fill(0);
+      rows.forEach((row, r) => [...row].forEach((ch, f) => { c[f * 8 + r] = ch === 'X' ? 1 : ch === 'O' ? 2 : 0; }));
+      return c;
+    };
+    // Endgame built like an Othello puzzle (12 empties)
+    const EDIT = S([
+      '--OOOO--', 'X-OOOOX-', 'XXOOXOOO', 'XXXOXXOO',
+      'XXOXXOXO', 'XOXXXXOO', '--XXXO-O', '---XXX--',
+    ]);
+    // White to move but White has no legal move
+    const PASS = S([
+      '----O---', '--------', '--X-X---', '--------',
+      '--------', '--------', '--O-----', '-X------',
+    ]);
+    const cells = state === 'dead' ? Array(64).fill(0) : state === 'pass' ? PASS : EDIT;
+    const turn = state === 'pass' ? 'w' : 'b';
+    const count = (v) => cells.filter((x) => x === v).length;
+    const legalOf = (me) => {
+      const op = 3 - me, out = [];
+      const at = (f, r) => (f < 0 || f > 7 || r < 0 || r > 7 ? -1 : cells[f * 8 + r]);
+      for (let f = 0; f < 8; f++) for (let r = 0; r < 8; r++) {
+        if (cells[f * 8 + r]) continue;
+        if ([[1,0],[-1,0],[0,1],[0,-1],[1,1],[1,-1],[-1,1],[-1,-1]].some(([df, dr]) => {
+          let x = f + df, y = r + dr, n = 0;
+          while (at(x, y) === op) { x += df; y += dr; n++; }
+          return n > 0 && at(x, y) === me;
+        })) out.push(f * 8 + r);
+      }
+      return out;
+    };
+    const mine = legalOf(turn === 'b' ? 1 : 2);
+    const side = turn === 'b' ? '黒' : '白';
+    const stone = (c) => (ui && h ? h(ui.StoneDot, { color: c, size: 12 }) : null);
+    const lab = (c, t) => (h ? h('span', { style: { display: 'inline-flex', alignItems: 'center', gap: 5 } }, stone(c), t) : t);
+    return {
+      yes: true, no: false, n200: 200,
+      oneTab: [{ id: 'x', label: '' }],
+      navLocal: ui ? ui.navLocal() : [],
+      ggsItems: ui ? ui.ggsNav('online', {}).filter((it) => it.id !== 'ggs-standby') : [],
+      navActive: from,
+      winTitle: from === 'study' ? '検討' : '対局',
+      turn,
+      turns: [{ value: 'b', label: lab('b', '黒番') }, { value: 'w', label: lab('w', '白番') }],
+      legal: mine,
+      pos: { cells, black: count(1), white: count(2) },
+      emptyText: '空き ' + count(0),
+      dead: state === 'dead',
+      statusText: state === 'dead' ? 'どちらにも打てる所がありません'
+        : mine.length === 0 ? side + 'に打てる所がないので、パスから始まります'
+        : side + 'の打てる所 ' + mine.length,
+      statusColor: state === 'dead' ? 'var(--bad)' : mine.length === 0 ? 'var(--gold)' : 'var(--sub)',
+    };
+  }
+}
+</script>
+</body>
+</html>

@@ -79,6 +79,11 @@ never reach the screen. `npm run check` fails on this.
 **Take window-scoped screenshots.** Full-screen or coordinate captures
 pick up unrelated windows in front; use the `window-screenshot` skill.
 
+**The design system lives in `design-system/`, the screen designs in
+`design/`** (how to build and publish each: its README). A change to a
+screen updates `design-system/project/screens.md` in the same commit as
+the code, so the spec never trails the implementation.
+
 ## Measure before deciding
 
 Eight rules distilled from repeated misreadings of numbers; each has a

@@ -1,0 +1,474 @@
+<!doctype html>
+<html lang="ja">
+<head>
+<meta charset="utf-8">
+<title>Play · Waiting for KUROOBI's turn</title>
+<script src="./support.js"></script>
+<link rel="stylesheet" href="kuroobi-tokens.css">
+<link rel="stylesheet" href="ds/kuroobiui/components/bundle.css">
+<script src="ds/kuroobiui/components/bundle.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<style>
+x-import{display:contents}
+@media (max-width:1040px){.k-nav-ov .k-nav-label{display:none}.k-nav-ov .k-nav-row{justify-content:center;padding:0}}
+.k-scroll{overflow-y:scroll!important}
+.k-scroll::-webkit-scrollbar-track{background:var(--track);border-radius:9px}
+body{margin:0;background:var(--bg);color:var(--text);font:var(--fs-4)/1.6 var(--ff)}
+.k-learn-side{width:var(--w-dock)}
+@media (max-width:1120px){.k-learn-side{width:var(--w-list-narrow)}}
+</style>
+</helmet>
+<div style="position: relative; width: 100%; height: 100vh; min-height: 480px; background: var(--bg); color: var(--text); font: var(--fs-4)/1.6 var(--ff); overflow: hidden">
+<x-import component-from-global-scope="KuroobiUI.BoardDefs"></x-import>
+<x-import style="display: contents" component-from-global-scope="KuroobiUI.AppFrame">
+<x-import component-from-global-scope="KuroobiUI.WindowBar" title="{{winTitle}}" sub="{{winSub}}"></x-import>
+<x-import style="display: contents" component-from-global-scope="KuroobiUI.Body">
+<div style="position: relative; flex: none; display: flex">
+<x-import style="display: contents" component-from-global-scope="KuroobiUI.Nav" items="{{navLocal}}" ggs-items="{{ggsItems}}" conn="online" active="{{navActive}}"></x-import>
+<div class="k-nav-ov" style="position: absolute; left: 0; right: 1px; bottom: 0; padding: var(--sp-2); border-top: 1px solid var(--border); background: var(--panel)">
+<button type="button" class="k-nav-row k-row" aria-current="false" style="width: 100%; height: var(--h-field); display: flex; align-items: center; gap: var(--sp-3); border: 0; border-radius: var(--r-2); font: inherit; font-size: var(--fs-4); background: transparent; color: var(--text); font-weight: 400"><span style="flex: none; display: grid; place-items: center"><x-import component-from-global-scope="KuroobiUI.Icon" name="prefs"></x-import></span><span class="k-nav-label">設定</span></button>
+</div>
+</div>
+<x-import style="display: contents" component-from-global-scope="KuroobiUI.Main">
+
+<!-- ===== Game ===== -->
+<sc-if value="{{isPlay}}" hint-placeholder-val="{{true}}">
+<x-import style="display: contents" component-from-global-scope="KuroobiUI.Toolbar">
+<!-- Start game = start a game from the current board ("Stop game", danger, during a game). New game = reset the board to the start position (disabled while thinking; asks for confirmation if moves were played). Take back = disabled with 0 moves or while thinking -->
+<x-import component-from-global-scope="KuroobiUI.Button" variant="{{startVariant}}">{{startLabel}}</x-import>
+<x-import component-from-global-scope="KuroobiUI.Button" title="⌘N" disabled="{{thinking}}">新規対局</x-import>
+<x-import component-from-global-scope="KuroobiUI.Button" title="⌘Z" disabled="{{undoOff}}">待った</x-import>
+<x-import component-from-global-scope="KuroobiUI.Divider"></x-import>
+<!-- Colour KUROOBI plays -->
+<span style="font-size: var(--fs-6); color: var(--sub); white-space: nowrap">KUROOBI</span>
+<x-import component-from-global-scope="KuroobiUI.Segmented" value="w" options="{{roles}}"></x-import>
+<x-import component-from-global-scope="KuroobiUI.Divider"></x-import>
+<x-import component-from-global-scope="KuroobiUI.Toggle" checked="{{no}}" label="評価値を表示"></x-import>
+</x-import>
+</sc-if>
+
+<!-- ===== Study ===== -->
+<sc-if value="{{isStudy}}" hint-placeholder-val="{{false}}">
+<x-import style="display: contents" component-from-global-scope="KuroobiUI.Toolbar">
+<x-import component-from-global-scope="KuroobiUI.Button" variant="primary" disabled="{{analyzeOff}}">分析</x-import>
+<!-- Analysis settings (strength, book) are at the top of the right pane. Board evals are toggled here; the on/off state is kept separately from the game, and study starts with it on -->
+<x-import component-from-global-scope="KuroobiUI.Toggle" checked="{{yes}}" label="評価値を表示"></x-import>
+<!-- No black/white perspective toggle: board evals are always from the side to move; the record's "Eval" column and the graph are from Black's side (→ DS screen spec, Game) -->
+<x-import component-from-global-scope="KuroobiUI.Divider"></x-import>
+<span style="font-size: var(--fs-6); color: var(--sub); white-space: nowrap">{{plyText}}</span>
+</x-import>
+</sc-if>
+
+<!-- Game/study main area: board and disc-count strip; study adds move navigation and the eval graph below -->
+<sc-if value="{{isBoardScreen}}" hint-placeholder-val="{{true}}">
+<div style="flex: 1; min-height: calc(200px + var(--h-bar)); display: flex; flex-direction: column">
+<x-import style="display: contents" component-from-global-scope="KuroobiUI.BoardFit" min-height="{{n200}}" padding="var(--sp-2) var(--sp-4)">
+<x-import component-from-global-scope="KuroobiUI.Board" cells="{{pos.cells}}" legal="{{pos.legal}}" evals="{{boardEvals}}" turn="{{pos.turn}}" last="{{pos.last}}" coords="{{yes}}"></x-import>
+</x-import>
+<x-import component-from-global-scope="KuroobiUI.ScoreRow" black="{{pos.black}}" white="{{pos.white}}" turn="{{pos.turn}}" meta="{{scoreMeta}}" black-clock="{{bClock}}" white-clock="{{wClock}}"></x-import>
+</div>
+<sc-if value="{{isStudy}}" hint-placeholder-val="{{false}}">
+<sc-if value="{{studyHasMoves}}" hint-placeholder-val="{{true}}">
+<x-import component-from-global-scope="KuroobiUI.MoveScrub" plies="{{plies}}" cursor="{{cursor}}" on-seek="{{noop}}"></x-import>
+</sc-if>
+<!-- During analysis, the right shows "Analyzing n/m" + a 72px-wide Progress + "Stop analysis" (danger) -->
+<x-import component-from-global-scope="KuroobiUI.EvalGraph" points="{{graph}}" plies="{{plies}}" cursor="{{cursor}}" pov="b" open="{{yes}}" busy="{{analyzing}}" extra="{{graphExtra}}" on-jump="{{noop}}"></x-import>
+</sc-if>
+</sc-if>
+
+<!-- ===== Book ===== -->
+<sc-if value="{{isBook}}" hint-placeholder-val="{{false}}">
+<x-import style="display: contents" component-from-global-scope="KuroobiUI.Toolbar">
+<x-import component-from-global-scope="KuroobiUI.Segmented" value="{{bookTab}}" options="{{bookTabs}}"></x-import>
+<sc-if value="{{isBookTab}}" hint-placeholder-val="{{true}}">
+<x-import component-from-global-scope="KuroobiUI.Divider"></x-import>
+<x-import component-from-global-scope="KuroobiUI.Button" disabled="{{bookAtStart}}">戻る</x-import>
+<x-import component-from-global-scope="KuroobiUI.Button" disabled="{{bookAtStart}}">最初へ</x-import>
+<span style="margin-left: var(--sp-3); font-size: var(--fs-6); color: var(--sub)">{{bookPly}}</span>
+</sc-if>
+</x-import>
+
+<!-- No book: tree and right pane hidden; the board area shows guidance and "Open settings" (→ Settings > Engine) -->
+<sc-if value="{{noBook}}" hint-placeholder-val="{{false}}">
+<x-import component-from-global-scope="KuroobiUI.EmptyState" title="定石がありません" body="定石ファイルを読み込めていません。設定から場所を指定できます。" actions="{{noBookActions}}"></x-import>
+</sc-if>
+
+<sc-if value="{{isBookTree}}" hint-placeholder-val="{{true}}">
+<div style="flex: 1; min-height: 0; display: flex">
+<!-- Move tree: lists moves from the current position (a clicked move becomes the new root, so there is no selection marker). Header columns = row columns (move and learned badge in the flexible left column; value and occurrences fixed-width on the right). Only learned moves get a gold "Learned" -->
+<div style="flex: none; width: var(--w-book-tree); min-height: 0; display: flex; flex-direction: column; border-right: 1px solid var(--border)">
+<x-import component-from-global-scope="KuroobiUI.TableHead" cols="{{treeCols}}"></x-import>
+<div class="k-scroll" style="flex: 1; min-height: 0; padding: 0 var(--sp-3)">
+<sc-for list="{{tree}}" as="r" hint-placeholder-count="8">
+<div style="display: flex; align-items: center; height: var(--h-row); padding-left: {{r.indent}}; border-bottom: 1px solid var(--border-weak); border-radius: var(--r-2)">
+<span style="width: 22px; flex: none; text-align: center; color: var(--sub); font-size: var(--fs-3)">{{r.arrow}}</span>
+<span style="flex: 1; min-width: 0; display: flex; align-items: center; gap: var(--sp-2); padding-left: var(--sp-1); font-size: var(--fs-6)">
+<span style="width: 30px; flex: none; font-weight: 600">{{r.name}}</span>
+<span style="flex: 1; min-width: 0; font-size: var(--fs-7); color: var(--gold); white-space: nowrap; overflow: hidden; text-overflow: ellipsis">{{r.learned}}</span>
+<span style="width: 44px; flex: none; text-align: right; font-variant-numeric: tabular-nums">{{r.value}}</span>
+<span style="width: 58px; flex: none; text-align: right; font-size: var(--fs-7); color: var(--sub); font-variant-numeric: tabular-nums">{{r.games}}</span>
+</span>
+</div>
+</sc-for>
+</div>
+<div style="flex: none; display: flex; align-items: center; height: var(--h-bar); padding: 0 var(--sp-3); border-top: 1px solid var(--border-weak)">
+<x-import component-from-global-scope="KuroobiUI.Button">検討で開く</x-import>
+</div>
+</div>
+<div style="flex: 1; min-width: 0; display: flex; flex-direction: column">
+<x-import style="display: contents" component-from-global-scope="KuroobiUI.BoardFit" min-height="{{n200}}" padding="var(--sp-2) var(--sp-4)">
+<x-import component-from-global-scope="KuroobiUI.Board" cells="{{pos.cells}}" legal="{{pos.legal}}" evals="{{bookEvals}}" turn="{{pos.turn}}" last="{{pos.last}}" coords="{{yes}}"></x-import>
+</x-import>
+<x-import component-from-global-scope="KuroobiUI.ScoreRow" black="{{pos.black}}" white="{{pos.white}}" turn="{{pos.turn}}"></x-import>
+</div>
+</div>
+</sc-if>
+
+<!-- Learning log: imported games on the left (same width as the book tree), the board at the costliest move (no coordinates) with an explanation in the centre, that game's details and actions on the right (not a Dock; narrows at 1120px and below) -->
+<sc-if value="{{isLog}}" hint-placeholder-val="{{false}}">
+<div style="flex: 1; min-height: 0; display: flex">
+<div style="flex: none; width: var(--w-book-tree); min-height: 0; display: flex; flex-direction: column; border-right: 1px solid var(--border)">
+<div style="flex: none; display: flex; align-items: center; height: var(--h-field); padding: 0 var(--sp-3); border-bottom: 1px solid var(--border-weak)">
+<x-import component-from-global-scope="KuroobiUI.Segmented" value="all" options="{{logFilter}}"></x-import>
+<span style="width: var(--sp-2)"></span>
+<x-import component-from-global-scope="KuroobiUI.Select" size="ctrl" value="0" options="{{logDays}}"></x-import>
+</div>
+<x-import component-from-global-scope="KuroobiUI.TableHead" cols="{{logCols}}"></x-import>
+<div class="k-scroll" style="flex: 1; min-height: 0; padding: 0 var(--sp-3)">
+<sc-for list="{{logRows}}" as="r" hint-placeholder-count="12">
+<x-import component-from-global-scope="KuroobiUI.TableRow" cols="{{logCols}}" on="{{r.on}}" pad="var(--sp-1)" fs="var(--fs-6)">
+<span style="color: var(--sub)">{{r.day}}</span>
+<span>{{r.opp}}</span>
+<span>{{r.discs}}</span>
+<span style="font-size: var(--fs-7); color: var(--sub)">{{r.n}}</span>
+</x-import>
+</sc-for>
+</div>
+<div style="flex: none; display: flex; align-items: center; gap: var(--sp-2); padding: var(--sp-2) var(--sp-3); border-top: 1px solid var(--border); font-size: var(--fs-6); color: var(--sub)"><span>60 局の合計</span><span style="margin-left: auto; color: var(--text); font-weight: 600; font-variant-numeric: tabular-nums">3,529</span><span>局面</span></div>
+</div>
+<div style="flex: 1; min-width: 0; min-height: 0; display: flex; flex-direction: column; padding: var(--sp-4); gap: var(--sp-3)">
+<x-import style="display: contents" component-from-global-scope="KuroobiUI.BoardFit">
+<x-import component-from-global-scope="KuroobiUI.Board" cells="{{pos.cells}}" last="{{pos.last}}" coords="{{no}}"></x-import>
+</x-import>
+<div style="display: flex; flex-direction: column; gap: var(--sp-2)">
+<div style="display: flex; align-items: baseline; gap: var(--sp-2)">
+<span style="font-size: var(--fs-3); font-weight: 600">48 手目 b1</span><span style="color: var(--bad); font-variant-numeric: tabular-nums">▼3.7</span>
+<span style="margin-left: auto"><x-import component-from-global-scope="KuroobiUI.Button">検討で開く</x-import></span>
+</div>
+<span style="max-width: var(--w-text); font-size: var(--fs-6); color: var(--sub); line-height: 1.8">この局面の評価を終局の石差で上書きし、根まで書き戻しました。定石は「もっと良い手があった」と言っています (-13.3 に対して -17.0)。</span>
+</div>
+</div>
+<div class="k-scroll k-learn-side" style="flex: none; min-height: 0; border-left: 1px solid var(--border); padding: var(--sp-3) 0">
+<x-import style="display: contents" component-from-global-scope="KuroobiUI.Section" title="この対局">
+<x-import component-from-global-scope="KuroobiUI.KeyValue" label="相手" value="Rhapsody"></x-import>
+<x-import component-from-global-scope="KuroobiUI.KeyValue" label="石数" value="26 – 38"></x-import>
+<x-import component-from-global-scope="KuroobiUI.KeyValue" label="取り込み" value="49 局面 · 9/26"></x-import>
+</x-import>
+<!-- Updated book entries: rows are not selectable; each is a button opening that move's position in study -->
+<x-import style="display: contents" component-from-global-scope="KuroobiUI.Section" title="更新した定石" aside="{{updCount}}">
+<div style="display: flex; flex-direction: column">
+<sc-for list="{{updates}}" as="u" hint-placeholder-count="10">
+<button type="button" class="k-row" title="その手の局面を検討で開く" style="display: flex; align-items: center; gap: var(--sp-2); height: var(--h-row); border: 0; background: transparent; border-bottom: 1px solid var(--border-weak); border-radius: var(--r-2); padding: 0 var(--sp-1); cursor: pointer; text-align: left; font: inherit; font-size: var(--fs-6); color: var(--sub)">
+<span style="width: 26px; text-align: right; font-variant-numeric: tabular-nums">{{u.n}}</span>
+<span style="width: 24px; color: var(--text); font-weight: 600">{{u.move}}</span>
+<span style="margin-left: auto; font-variant-numeric: tabular-nums">新規 → <b style="color: var(--text)">{{u.value}}</b></span>
+</button>
+</sc-for>
+</div>
+</x-import>
+<div style="display: flex; gap: var(--sp-2); padding: 0 var(--sp-3)">
+<x-import component-from-global-scope="KuroobiUI.Button">定石で見る</x-import>
+<x-import component-from-global-scope="KuroobiUI.Button" variant="danger">取り消す</x-import>
+</div>
+</div>
+</div>
+</sc-if>
+</sc-if>
+
+</x-import>
+
+<!-- Right detail pane: one tabless panel for both game and study. Strength on top (analysis settings in study), record below. Learning moved to Settings > Engine -->
+<sc-if value="{{hasPlayDock}}" hint-placeholder-val="{{true}}">
+<x-import style="display: contents" component-from-global-scope="KuroobiUI.Dock" tabs="{{oneTab}}" active="x" open="{{yes}}" scroll="{{no}}">
+<div style="flex: none; padding-top: var(--sp-3); border-bottom: 1px solid var(--border)">
+<x-import style="display: contents" component-from-global-scope="KuroobiUI.Section" title="{{strengthTitle}}">
+<!-- In a game, choose how KUROOBI thinks: level (fixed depth and solve) or main time (search set by remaining time; you get the same main time).
+     Once a move is on the board, the level/time-control switch and the main time are locked until "New game". With main time, both sides' remaining time replaces the selector -->
+<sc-if value="{{isPlay}}" hint-placeholder-val="{{true}}">
+<x-import component-from-global-scope="KuroobiUI.Segmented" value="{{byWhat}}" options="{{byOpts}}" fill="{{yes}}" disabled="{{locked}}"></x-import>
+</sc-if>
+<sc-if value="{{byLevel}}" hint-placeholder-val="{{true}}">
+<x-import component-from-global-scope="KuroobiUI.Strength" value="{{levels}}" on-change="{{noop}}"></x-import>
+</sc-if>
+<sc-if value="{{clockPick}}" hint-placeholder-val="{{false}}">
+<x-import component-from-global-scope="KuroobiUI.Select" value="{{clockValue}}" options="{{clockOpts}}"></x-import>
+<!-- Main time is normally picked from the choices. Only when the last one, "Custom…", is chosen does a single time field (ClockField, "00:00") appear below.
+     The field has two segments, minutes and seconds. Clicking selects it all; typed digits start in minutes. Both segments are right-aligned 2 digits, reformatted on every keystroke
+     (1 → 01:00, 15 → 15:00). Moves to seconds when minutes reach 2 digits or on ":" (3 : 3 0 → 03:30). Backspace deletes the last typed digit,
+     returning to minutes when seconds are empty. Digits making seconds 60 or more are rejected. Range 00:30–99:59. The active segment is underlined in --accent -->
+<sc-if value="{{clockCustom}}" hint-placeholder-val="{{false}}">
+<div style="display: flex; align-items: center; gap: var(--sp-2); font-size: var(--fs-5); color: var(--sub); white-space: nowrap">
+<span style="display: inline-flex; align-items: center; height: var(--h-field); padding: 0 var(--sp-3); border-radius: var(--r-3); border: 1px solid var(--accent); background: var(--bg); font-family: var(--ff-mono); font-size: var(--fs-4); color: var(--text); letter-spacing: .04em"><span style="box-shadow: inset 0 -2px 0 var(--accent)">04</span><span style="color: var(--sub)">:</span><span>30</span></span>
+<span>分:秒</span>
+</div>
+</sc-if>
+</sc-if>
+<sc-if value="{{clockLeft}}" hint-placeholder-val="{{false}}">
+<x-import component-from-global-scope="KuroobiUI.KeyValue" big="{{yes}}" label="黒 · 自分" value="7:48"></x-import>
+<x-import component-from-global-scope="KuroobiUI.KeyValue" big="{{yes}}" label="白 · KUROOBI" value="8:31"></x-import>
+</sc-if>
+<x-import component-from-global-scope="KuroobiUI.Toggle" checked="{{yes}}" label="定石"></x-import>
+</x-import>
+</div>
+<div style="flex: 1; min-height: 0; display: flex; flex-direction: column">
+<x-import component-from-global-scope="KuroobiUI.KifuTable" moves="{{kifu}}" current="{{cursor}}" decimals="{{one}}"></x-import>
+</div>
+<div style="flex: none; display: flex; gap: var(--sp-2); padding: var(--sp-2) var(--sp-3); border-top: 1px solid var(--border-weak)">
+<!-- Same layout for game and study. Edit board (⌘E): rebuild the position from the current board and start a game or study from it (→ the Edit board artboard). Disabled during a game, analysis or thinking -->
+<x-import component-from-global-scope="KuroobiUI.Button" title="⌘O">貼り付け</x-import>
+<x-import component-from-global-scope="KuroobiUI.Button">読込</x-import>
+<x-import component-from-global-scope="KuroobiUI.Button" title="⌘E" disabled="{{editOff}}">盤面編集</x-import>
+<x-import component-from-global-scope="KuroobiUI.Button" title="⌘S">保存</x-import>
+</div>
+</x-import>
+</sc-if>
+<sc-if value="{{isBookTree}}" hint-placeholder-val="{{false}}">
+<x-import style="display: contents" component-from-global-scope="KuroobiUI.Dock" tabs="{{oneTab}}" active="x" open="{{yes}}">
+<x-import style="display: contents" component-from-global-scope="KuroobiUI.Section" title="この局面" aside="2 手">
+<div style="font-size: var(--fs-6); color: var(--sub)">f5 d6</div>
+<div style="display: flex; align-items: baseline; gap: var(--sp-3)"><b style="font-size: var(--fs-1); font-weight: 700; font-variant-numeric: tabular-nums">-0.6</b><span style="font-size: var(--fs-6); color: var(--sub)">石差 · 26 手読み</span></div>
+<div style="display: flex; align-items: center; font-size: var(--fs-5)"><span style="color: var(--sub)">出所</span><span style="margin-left: auto; color: var(--gold)">実戦の学習</span></div>
+</x-import>
+<x-import style="display: contents" component-from-global-scope="KuroobiUI.Section" title="次の手" aside="3">
+<sc-for list="{{nextMoves}}" as="m" hint-placeholder-count="3">
+<div style="display: flex; align-items: center; gap: var(--sp-2); height: var(--h-row); padding: 0 var(--sp-1); border-bottom: 1px solid var(--border-weak); font-size: var(--fs-6)"><span style="flex: 1; font-weight: 600">{{m.name}}</span><span style="width: 44px; text-align: right; font-variant-numeric: tabular-nums">{{m.value}}</span><span style="width: 58px; text-align: right; font-size: var(--fs-7); color: var(--sub)">{{m.games}}</span></div>
+</sc-for>
+</x-import>
+</x-import>
+</sc-if>
+</x-import>
+<div style="height: var(--h-status); flex: none; background: var(--bg); border-top: 1px solid var(--border); display: flex; align-items: center; gap: var(--sp-4); padding: 0 var(--sp-4); font-size: var(--fs-6); color: var(--sub); white-space: nowrap">
+<sc-if value="{{analyzing}}" hint-placeholder-val="{{false}}">
+<span style="display: flex; align-items: center; gap: var(--sp-1)"><x-import component-from-global-scope="KuroobiUI.Dot" tone="accent"></x-import>分析中 <b style="color: var(--text); font-weight: 600">{{anaDone}}</b> / {{plies}}</span>
+</sc-if>
+<sc-if value="{{thinking}}" hint-placeholder-val="{{false}}">
+<span style="display: flex; align-items: center; gap: var(--sp-1)"><x-import component-from-global-scope="KuroobiUI.Dot" tone="accent"></x-import>思考中 <b style="color: var(--text); font-weight: 600">2.4</b> 秒</span>
+<span>ノード <b style="color: var(--text); font-weight: 600">3,120 万</b></span>
+</sc-if>
+<span style="margin-left: auto; display: flex; align-items: center; gap: var(--sp-1)">CPU <span aria-hidden="true" style="display: inline-block; width: 32px; height: 4px; border-radius: var(--r-pill); background: var(--track); overflow: hidden"><span style="display: block; height: 100%; width: {{cpuW}}; background: var(--ok)"></span></span><b style="color: var(--text); font-weight: 600">{{cpu}}</b>%</span>
+<span style="display: flex; align-items: center; gap: var(--sp-1)">メモリ <span aria-hidden="true" style="display: inline-block; width: 32px; height: 4px; border-radius: var(--r-pill); background: var(--track); overflow: hidden"><span style="display: block; height: 100%; width: 12%; background: var(--ok)"></span></span><b style="color: var(--text); font-weight: 600">2.1</b> GB</span>
+<span>GGS <b style="color: var(--text); font-weight: 600">接続中</b> (alice)</span>
+</div>
+</x-import>
+
+<!-- New game confirmation: shown only when the board has at least one move (the record is shared with study, so it is cleared from both) -->
+<sc-if value="{{confirmNew}}" hint-placeholder-val="{{false}}">
+<x-import component-from-global-scope="KuroobiUI.Confirm" title="新規対局にしますか？" body="今の棋譜は消えます (検討の棋譜も同じものです)。残すときは先に「保存」してください。" ok="新規対局" on-ok="{{noop}}" on-cancel="{{noop}}"></x-import>
+</sc-if>
+
+<!-- Open in study confirmation: shown only when the current board has a record (game and study share one record, so it is cleared from both). Same for "Open in study" from the book, learning log and record viewer -->
+<sc-if value="{{confirmOpen}}" hint-placeholder-val="{{false}}">
+<x-import component-from-global-scope="KuroobiUI.Confirm" title="棋譜を置き換えますか？" body="今の棋譜 (38 手) は消えます (対局の棋譜も同じものです)。残すときは先に「保存」してください。" ok="置き換える" on-ok="{{noop}}" on-cancel="{{noop}}"></x-import>
+</sc-if>
+
+<!-- Branch confirmation: shown only when playing a move that differs from the record mid-game. The record's own move just advances one move without asking -->
+<sc-if value="{{confirmBranch}}" hint-placeholder-val="{{false}}">
+<x-import component-from-global-scope="KuroobiUI.Confirm" title="別の手を打ちますか？" body="32 手目から先の棋譜 (8 手) と分析は消えます。残すときは先に「保存」してください。" ok="打つ" on-ok="{{noop}}" on-cancel="{{noop}}"></x-import>
+</sc-if>
+
+<!-- Learning log "Undo": restores the book values that game wrote back to their pre-import state (destructive, so OK is danger) -->
+<sc-if value="{{confirmUndo}}" hint-placeholder-val="{{false}}">
+<x-import component-from-global-scope="KuroobiUI.Confirm" title="この対局の取り込みを取り消します" body="この対局で書き戻した定石の値を、取り込む前に戻します。ほかの対局で書き戻したぶんは残ります。" ok="取り消す" danger="{{yes}}" on-ok="{{noop}}" on-cancel="{{noop}}"></x-import>
+</sc-if>
+
+<!-- Load a game record: preview below the paste field (mini board and disc counts). Before pasting, a dashed frame marks the mini board's place -->
+<sc-if value="{{pasteOpen}}" hint-placeholder-val="{{false}}">
+<x-import component-from-global-scope="KuroobiUI.Overlay" on-close="{{noop}}">
+<x-import component-from-global-scope="KuroobiUI.Modal" title="棋譜を読み込む" sub="棋譜 (f5d6…)・盤面・盤面＋棋譜・GGF・オセロクエストのどれでも、形式を見分けて読みます。" width="var(--w-modal-wide)" on-close="{{noop}}" actions="{{pasteActions}}">
+<div style="display: flex; flex-direction: column; gap: var(--sp-4)">
+<x-import component-from-global-scope="KuroobiUI.TextArea" mono="{{yes}}" rows="{{n5}}" value="{{pasteText}}"></x-import>
+<div style="display: flex; gap: var(--sp-4); align-items: center; min-height: 96px">
+<div style="width: 96px; height: 96px; flex: none; border-radius: var(--r-2); overflow: hidden; border: {{peekBorder}}">
+<sc-if value="{{pasted}}" hint-placeholder-val="{{false}}"><x-import component-from-global-scope="KuroobiUI.Board" cells="{{peek.cells}}" last="{{peek.last}}" coords="{{no}}" grain="{{no}}"></x-import></sc-if>
+</div>
+<div style="display: flex; flex-direction: column; gap: var(--sp-0); font-size: var(--fs-5)">
+<x-import component-from-global-scope="KuroobiUI.Caption">下読み</x-import>
+<sc-if value="{{pasted}}" hint-placeholder-val="{{false}}">
+<div style="display: flex; align-items: center; gap: var(--sp-2h)">
+<span style="display: flex; align-items: center; gap: var(--sp-0)"><x-import component-from-global-scope="KuroobiUI.StoneDot" color="b" size="{{n13}}"></x-import><b style="font-weight: 600">{{peek.black}}</b></span>
+<span style="color: var(--sub)">—</span>
+<span style="display: flex; align-items: center; gap: var(--sp-0)"><b style="font-weight: 600">{{peek.white}}</b><x-import component-from-global-scope="KuroobiUI.StoneDot" color="w" size="{{n13}}"></x-import></span>
+</div>
+<span style="color: var(--sub)">{{peek.summary}}</span>
+</sc-if>
+<sc-if value="{{notPasted}}" hint-placeholder-val="{{true}}"><span style="color: var(--sub)">貼り付けると、ここに読み取り結果が出ます。</span></sc-if>
+</div>
+</div>
+</div>
+</x-import>
+</x-import>
+</sc-if>
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props='{"screen":{"editor":"select","options":["play","study","book","log"],"default":"play"},"state":{"editor":"select","options":["normal","empty","playing","confirm-new","clock","clock-custom","clock-playing","confirm-open","confirm-branch","paste","paste-filled","settings-custom","analyzing","nobook","confirm-undo"],"default":"normal"},"$preview":{"width":1280,"height":800}}'>
+class Component extends DCLogic {
+  renderVals() {
+    const ui = window.KuroobiUI;
+    if (ui && ui.setLang) ui.setLang('ja');
+    // The board is built by actually playing out the record (sq = col*8 + row, 1 = black, 2 = white)
+    const D = [[1,0],[-1,0],[0,1],[0,-1],[1,1],[1,-1],[-1,1],[-1,-1]];
+    const flips = (c, sq, me) => {
+      if (c[sq]) return [];
+      const f0 = Math.floor(sq / 8), r0 = sq % 8, op = 3 - me, out = [];
+      for (const [df, dr] of D) {
+        const run = [];
+        let f = f0 + df, r = r0 + dr;
+        while (f >= 0 && f < 8 && r >= 0 && r < 8 && c[f * 8 + r] === op) { run.push(f * 8 + r); f += df; r += dr; }
+        if (run.length && f >= 0 && f < 8 && r >= 0 && r < 8 && c[f * 8 + r] === me) out.push(...run);
+      }
+      return out;
+    };
+    const legalOf = (c, me) => Array.from({ length: 64 }, (_, i) => i).filter((i) => flips(c, i, me).length);
+    const play = (line) => {
+      const c = Array(64).fill(0);
+      c[3 * 8 + 4] = c[4 * 8 + 3] = 1; c[3 * 8 + 3] = c[4 * 8 + 4] = 2;
+      let me = 1, last = null;
+      for (let i = 0; i + 1 < line.length; i += 2) {
+        const sq = 'abcdefgh'.indexOf(line[i]) * 8 + (+line[i + 1] - 1);
+        if (!legalOf(c, me).length) me = 3 - me;   // pass
+        const fl = flips(c, sq, me);
+        if (!fl.length) break;
+        c[sq] = me; fl.forEach((x) => { c[x] = me; }); last = sq; me = 3 - me;
+      }
+      if (!legalOf(c, me).length) me = 3 - me;
+      return { cells: c, last, legal: legalOf(c, me), black: c.filter((x) => x === 1).length,
+               white: c.filter((x) => x === 2).length, turn: me === 1 ? 'b' : 'w' };
+    };
+    const LINE = 'f5d6c3d3c4f4f6f3e6e7d7c6c5b5b6b4a5e3g4g3h3c7e8d8c8f8b3a4g5h5g6h6f7g8c2d2e2f2b8';
+    const screen = this.props.screen ?? 'play';
+    const state = this.props.state ?? 'normal';
+    const h = window.React ? window.React.createElement : null;
+    const empty = state === 'empty' || (screen === 'study' && (state === 'paste' || state === 'paste-filled'))
+      || (screen === 'play' && (state === 'clock' || state === 'clock-custom'));
+    const byClock = state === 'clock' || state === 'clock-custom' || state === 'clock-playing';
+    const plies = empty ? 0 : (screen === 'play' ? 24 : 39);
+    const cursor = empty ? 0 : (screen === 'play' ? 24 : 31);
+    const pos = play(LINE.slice(0, cursor * 2));
+    // During analysis, values fill in from the first move onward
+    const analyzing = screen === 'study' && state === 'analyzing';
+    const anaDone = 18;
+    const trend = Array.from({ length: 39 }, (_, i) => {
+      const x = i + 1, v = 1 + 3 * Math.sin(x / 8) + (x > 24 ? (x - 24) * 0.25 : 0);
+      return { value: Math.round(v * 2) / 2, book: x <= 14, exact: x >= 34 };
+    });
+    // Time column only for records played in a game (file or pasted records have no times)
+    const kifu = LINE.slice(0, plies * 2).match(/../g)?.map((move, i) => {
+      const n = i + 1, kuro = n % 2 === 0;
+      return { n, move, color: n % 2 ? 'b' : 'w',
+        score: screen === 'play' ? (kuro ? trend[i].value : undefined) : (analyzing && n > anaDone ? undefined : trend[i].value),
+        secs: screen === 'play' && kuro && n > 14 ? +(1 + (n % 6) * 0.9).toFixed(1) : undefined,
+        src: n <= 14 ? 'book' : kuro || screen === 'study' ? (n >= 34 ? 'solve' : 'search') : undefined };
+    }) ?? [];
+    const bookPos = play('f5d6');
+    // In a game = from "Start game" until "Stop game" or game end. Thinking = only while KUROOBI is searching
+    const gameOn = screen === 'play' && (state === 'normal' || state === 'playing' || state === 'clock-playing');
+    const thinking = screen === 'play' && state === 'playing';
+    const noBook = screen === 'book' && state === 'nobook';
+    // Disc-count strip clock: with a level, KUROOBI's cumulative thinking time (0:00 for the side not thinking). Hidden with main time (remaining time is in the right pane)
+    const band = screen !== 'play' || state === 'clock' || state === 'clock-custom' || state === 'clock-playing' ? null
+      : plies > 0 ? ['0:00', '0:41'] : null;
+    const treeRows = [
+      ['c3', '-0.6', '1,204', true, 0, true], ['c5', '+0.4', '86', false, 1], ['d3', '-0.6', '512', true, 1],
+      ['b4', '-1.2', '41', false, 1], ['c4', '-3.0', '12', false, 1],
+      ['c5', '-1.4', '233', false, 0], ['e3', '-2.0', '58', false, 0],
+    ];
+    const peekPlies = LINE.length / 2;
+    const peekPos = play(LINE);
+    return {
+      yes: true, no: false, one: 1, n5: 5, n13: 13, n200: 200,
+      noop: () => {},
+      oneTab: [{ id: 'x', label: '' }],
+      navLocal: ui ? ui.navLocal() : [],
+      ggsItems: ui ? ui.ggsNav('online', {}).filter((it) => it.id !== 'ggs-standby') : [],
+      navActive: screen === 'log' ? 'book' : screen,
+      winTitle: { play: '対局', study: '検討', book: '定石', log: '定石' }[screen],
+      winSub: { play: byClock ? (state === 'clock-custom' ? '4 分 30 秒 · 白' : '10 分 · 白') : 'Lv7 · 白', study: state === 'settings-custom' ? '解析 カスタム' : '解析 Lv7', book: '', log: '' }[screen],
+      isPlay: screen === 'play', isStudy: screen === 'study', isBoardScreen: screen === 'play' || screen === 'study',
+      isBook: screen === 'book' || screen === 'log', isBookTab: screen === 'book', isBookTree: screen === 'book' && !noBook, isLog: screen === 'log',
+      noBook,
+      noBookActions: h && ui ? h(ui.Button, { size: 'field', variant: 'primary' }, '設定を開く') : null,
+      bookAtStart: noBook, bookPly: noBook ? '初期局面' : '2 手目',
+      hasPlayDock: screen === 'play' || screen === 'study',
+      thinking, startVariant: gameOn ? 'danger' : 'primary', startLabel: gameOn ? '対局停止' : '対局開始',
+      undoOff: thinking || plies === 0,
+      roles: [{ value: 'b', label: '黒' }, { value: 'w', label: '白' }, { value: 'both', label: '両方' }, { value: 'none', label: 'なし' }],
+      analyzeOff: empty || analyzing, studyHasMoves: !empty,
+      plyText: empty ? '棋譜がありません' : cursor + ' / ' + plies + ' 手',
+      pos: screen === 'book' ? bookPos : pos, plies, cursor,
+      scoreMeta: screen === 'study' && !empty ? 'この手の評価 +2.0 · c2 · 白 · 探索' : '',
+      graph: empty ? [] : analyzing ? trend.map((p, i) => (i < anaDone ? p : undefined)) : trend,
+      analyzing, anaDone, gameOn, editOff: gameOn || analyzing,
+      graphExtra: analyzing && h && ui ? h(window.React.Fragment, null,
+        h('span', { style: { display: 'flex', alignItems: 'center', gap: 'var(--sp-2)' } },
+          '分析中 ', h('b', { style: { color: 'var(--text)' } }, String(anaDone)), '/' + plies,
+          h('span', { style: { width: 72 } }, h(ui.Progress, { value: anaDone / plies }))),
+        h(ui.Button, { variant: 'danger' }, '分析停止')) : null,
+      kifu,
+      strengthTitle: screen === 'study' ? '解析の設定' : '強さ',
+      levels: state === 'settings-custom' ? { depth: 30, solve: 30 } : { depth: 12, solve: 16 },
+      cpu: thinking || analyzing ? 712 : 2, cpuW: thinking || analyzing ? '89%' : '1%',
+      confirmNew: screen === 'play' && state === 'confirm-new',
+      byWhat: byClock ? 'clock' : 'level',
+      bClock: band ? band[0] : undefined,
+      wClock: band ? band[1] : undefined,
+      byOpts: [{ value: 'level', label: 'レベル' }, { value: 'clock', label: '持ち時間' }],
+      byLevel: !(screen === 'play' && byClock),
+      clockPick: screen === 'play' && (state === 'clock' || state === 'clock-custom'),
+      clockCustom: state === 'clock-custom', clockValue: state === 'clock-custom' ? 'custom' : '600', clockLeft: screen === 'play' && state === 'clock-playing',
+      // A move on the board means the game has started
+      locked: screen === 'play' && plies > 0,
+      // Same choices as the GGS request
+      clockOpts: [['60', '1 分'], ['180', '3 分'], ['300', '5 分'], ['600', '10 分'], ['900', '15 分'], ['1200', '20 分'], ['1800', '30 分'], ['custom', 'カスタム…']],
+      // Study starts with evals on: search values on legal moves, best in gold
+      boardEvals: screen === 'study' && !empty
+        ? Object.fromEntries(pos.legal.map((sq, i) => [sq, { score: +(2.0 - i * 1.5).toFixed(1), src: { depth: 16 }, best: i === 0 }]))
+        : undefined,
+      confirmOpen: state === 'confirm-open',
+      confirmBranch: screen === 'study' && state === 'confirm-branch',
+      confirmUndo: screen === 'log' && state === 'confirm-undo',
+      pasteOpen: state === 'paste' || state === 'paste-filled',
+      // DS Modal actions: "From a file…" on the left, "Cancel" and "Load" on the right (disabled until parseable)
+      pasteActions: ui && window.React ? window.React.createElement(window.React.Fragment, null,
+        window.React.createElement(ui.Button, { size: 'field' }, 'ファイルから…'),
+        window.React.createElement('span', { style: { marginLeft: 'auto' } }),
+        window.React.createElement(ui.Button, { size: 'field' }, 'キャンセル'),
+        window.React.createElement(ui.Button, { size: 'field', variant: 'primary', disabled: state !== 'paste-filled' }, '読み込む')) : null,
+      pasted: state === 'paste-filled', notPasted: state !== 'paste-filled',
+      pasteText: state === 'paste-filled' ? LINE : '',
+      peekBorder: state === 'paste-filled' ? 'none' : '1px dashed var(--border)',
+      peek: { ...peekPos, summary: peekPlies + ' 手 ・ ' + (peekPos.black + peekPos.white === 64 ? '終局図' : '最後の局面') },
+      bookTabs: [{ value: 'book', label: '定石' }, { value: 'log', label: '学習ログ' }],
+      bookTab: screen === 'log' ? 'log' : 'book',
+      treeCols: [{ head: '手順' }, { head: '評価', w: 44, right: true }, { head: '出現', w: 58, right: true }],
+      tree: treeRows.map(([name, value, games, learned, depth, open]) => ({
+        name, value, games, learned: learned ? '学習' : '',
+        indent: depth ? 'var(--sp-4)' : '0', arrow: open ? '▾' : '▸',
+      })),
+      bookEvals: { 18: { score: -0.6, src: { book: true }, best: true }, 34: { score: -1.4, src: { book: true } }, 20: { score: -2.0, src: { book: true } } },
+      nextMoves: [{ name: 'c3', value: '-0.6', games: '1,204' }, { name: 'c5', value: '-1.4', games: '233' }, { name: 'e3', value: '-2.0', games: '58' }],
+      logFilter: [{ value: 'all', label: 'すべて' }, { value: 'lost', label: '負けた対局' }],
+      logDays: [['0', '全期間'], ['7', '直近 7 日'], ['30', '直近 30 日'], ['90', '直近 90 日']],
+      logCols: [{ head: '日付', w: 40 }, { head: '相手', clip: true }, { head: '石数', w: 48, right: true, num: true }, { head: '局面', w: 36, right: true, num: true }],
+      logRows: [['9/26', 'Rhapsody', '26–38', 49], ['9/26', 'Rhapsody', '23–41', 48], ['9/14', 'KUROOBI', '33–31', 62], ['9/08', 'KUROOBI', '28–36', 60], ['9/08', 'KUROOBI', '31–33', 60], ['8/28', 'KUROOBI', '32–32', 60], ['8/23', 'KUROOBI', '32–32', 61], ['8/22', 'htz', '24–40', 48], ['8/22', 'htz', '29–35', 48], ['8/12', 'KUROOBI', '32–32', 60], ['8/10', 'KUROOBI', '29–35', 62], ['8/10', 'KUROOBI', '18–46', 62]]
+        .map(([day, opp, discs, n], i) => ({ day, opp, discs, n, on: i === 0 })),
+      updates: [48, 47, 46, 45, 44, 43, 42, 41, 40, 39, 38, 37].map((n, i) => ({ n, move: ['b1','g1','h1','g2','h7','g8','a1','a2','b3','a6','a7','h8'][i], value: (n % 2 ? '+' : '-') + '12.0' })),
+      updCount: '12',
+    };
+  }
+}
+</script>
+</body>
+</html>

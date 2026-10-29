@@ -1,0 +1,472 @@
+<!doctype html>
+<html lang="ja">
+<head>
+<meta charset="utf-8">
+<title>Settings · GGS servers and accounts</title>
+<script src="./support.js"></script>
+<link rel="stylesheet" href="kuroobi-tokens.css">
+<link rel="stylesheet" href="ds/kuroobiui/components/bundle.css">
+<script src="ds/kuroobiui/components/bundle.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<style>
+x-import{display:contents}
+@media (max-width:1040px){.k-nav-ov .k-nav-label{display:none}.k-nav-ov .k-nav-row{justify-content:center;padding:0}}
+.k-scroll{overflow-y:scroll!important}
+.k-scroll::-webkit-scrollbar-track{background:var(--track);border-radius:9px}
+body{margin:0;background:var(--bg);color:var(--text);font:var(--fs-4)/1.6 var(--ff)}
+a{color:var(--accent)}a:hover{color:var(--text)}
+</style>
+</helmet>
+<div style="position: relative; width: 100%; height: 100vh; min-height: 480px; background: var(--bg); color: var(--text); font: var(--fs-4)/1.6 var(--ff); overflow: hidden">
+<x-import style="display: contents" component-from-global-scope="KuroobiUI.AppFrame">
+<x-import component-from-global-scope="KuroobiUI.WindowBar" title="設定"></x-import>
+<x-import style="display: contents" component-from-global-scope="KuroobiUI.Body">
+<div style="position: relative; flex: none; display: flex">
+<x-import style="display: contents" component-from-global-scope="KuroobiUI.Nav" items="{{navLocal}}" ggs-items="{{ggsItems}}" conn="online" active="ggs-settings"></x-import>
+<div class="k-nav-ov" style="position: absolute; left: 0; right: 1px; bottom: 0; padding: var(--sp-2); border-top: 1px solid var(--border); background: var(--panel)">
+<button type="button" class="k-nav-row k-row k-on" aria-current="page" style="width: 100%; height: var(--h-field); display: flex; align-items: center; gap: var(--sp-3); border: 0; border-radius: var(--r-2); font: inherit; font-size: var(--fs-4); background: var(--accent-dim); color: var(--on-accent); font-weight: 600"><span style="flex: none; display: grid; place-items: center"><x-import component-from-global-scope="KuroobiUI.Icon" name="prefs"></x-import></span><span class="k-nav-label">設定</span></button>
+</div>
+</div>
+<x-import style="display: contents" component-from-global-scope="KuroobiUI.Main">
+<x-import style="display: contents" component-from-global-scope="KuroobiUI.Toolbar">
+<span style="font-size: var(--fs-3); font-weight: 600; white-space: nowrap">{{catTitle}}</span>
+<!-- "Applied" appears only right after a change -->
+<div style="margin-left: auto; display: flex; align-items: center; gap: var(--sp-1); font-size: var(--fs-6); color: var(--ok); white-space: nowrap">
+<sc-if value="{{showApplied}}" hint-placeholder-val="{{false}}">
+<x-import component-from-global-scope="KuroobiUI.Icon" name="check" size="{{14}}"></x-import>
+<span>反映しました</span>
+</sc-if>
+</div>
+</x-import>
+<div style="flex: 1; min-height: 0; display: flex">
+<!-- Categories -->
+<div style="width: var(--w-list); flex: none; min-height: 0; display: flex; flex-direction: column; border-right: 1px solid var(--border)">
+<div class="k-scroll" style="flex: 1; min-height: 0; display: flex; flex-direction: column; padding-bottom: var(--sp-2)">
+<sc-for list="{{catGroups}}" as="g" hint-placeholder-count="2">
+<div style="flex: none; height: var(--h-head); display: flex; align-items: center; padding: 0 var(--sp-3); margin-top: var(--sp-2); font-size: var(--fs-7); font-weight: 600; letter-spacing: .08em; color: var(--sub)">{{g.title}}</div>
+<sc-for list="{{g.items}}" as="c" hint-placeholder-count="3">
+<button type="button" class="k-row" style="flex: none; width: 100%; height: var(--h-field); border: 0; padding: 0 var(--sp-3); display: flex; align-items: center; text-align: left; color: var(--text); font: inherit; font-size: var(--fs-5); font-weight: {{c.weight}}; background: {{c.ground}}; box-shadow: {{c.mark}}; white-space: nowrap; overflow: hidden; text-overflow: ellipsis">{{c.name}}</button>
+</sc-for>
+</sc-for>
+</div>
+</div>
+<!-- Selected category -->
+<div class="k-scroll" style="flex: 1; min-width: 0; min-height: 0; padding: var(--sp-4) var(--sp-1) 0">
+
+<sc-if value="{{showEngine}}" hint-placeholder-val="{{false}}">
+<x-import style="display: contents" component-from-global-scope="KuroobiUI.Section" title="ファイル">
+<div style="display: flex; flex-direction: column">
+<div style="display: flex; gap: var(--sp-4); padding: var(--sp-3) 0; border-bottom: 1px solid var(--border-weak)">
+<span style="width: 200px; flex: none; line-height: var(--h-ctrl); white-space: nowrap">NNUE 重み</span>
+<div style="flex: 1; min-width: 0; display: flex; flex-direction: column; gap: var(--sp-1); align-items: flex-start">
+<span style="display: flex; gap: var(--sp-2); width: 100%; max-width: 520px"><span style="flex: 1; min-width: 0; display: flex"><x-import component-from-global-scope="KuroobiUI.TextField" value="~/kuroobi/weights/nnue.bin" mono="{{yes}}"></x-import></span><x-import component-from-global-scope="KuroobiUI.Button">選択…</x-import></span>
+<span style="font-size: var(--fs-6); color: var(--sub)">読み込み済み · 12.8 MB</span>
+</div>
+</div>
+<div style="display: flex; gap: var(--sp-4); padding: var(--sp-3) 0; border-bottom: 1px solid var(--border-weak)">
+<span style="width: 200px; flex: none; line-height: var(--h-ctrl); white-space: nowrap">線形評価</span>
+<div style="flex: 1; min-width: 0; display: flex; flex-direction: column; gap: var(--sp-1); align-items: flex-start">
+<span style="display: flex; gap: var(--sp-2); width: 100%; max-width: 520px"><span style="flex: 1; min-width: 0; display: flex"><x-import component-from-global-scope="KuroobiUI.TextField" value="~/kuroobi/weights/eval.bin" mono="{{yes}}"></x-import></span><x-import component-from-global-scope="KuroobiUI.Button">選択…</x-import></span>
+<span style="font-size: var(--fs-6); color: var(--sub)">読み込み済み · 41.2 MB</span>
+</div>
+</div>
+<div style="display: flex; gap: var(--sp-4); padding: var(--sp-3) 0; border-bottom: 1px solid var(--border-weak)">
+<span style="width: 200px; flex: none; line-height: var(--h-ctrl); white-space: nowrap">定石</span>
+<div style="flex: 1; min-width: 0; display: flex; flex-direction: column; gap: var(--sp-1); align-items: flex-start">
+<span style="display: flex; gap: var(--sp-2); width: 100%; max-width: 520px"><span style="flex: 1; min-width: 0; display: flex"><x-import component-from-global-scope="KuroobiUI.TextField" value="~/kuroobi/book/book.txt" mono="{{yes}}"></x-import></span><x-import component-from-global-scope="KuroobiUI.Button">選択…</x-import></span>
+<span style="font-size: var(--fs-6); color: var(--sub)">読み込み済み · 3.4 MB</span>
+</div>
+</div>
+<div style="display: flex; gap: var(--sp-4); padding: var(--sp-3) 0; border-bottom: 1px solid var(--border-weak)">
+<span style="width: 200px; flex: none; line-height: var(--h-ctrl); white-space: nowrap">ファイルの指定</span>
+<div style="flex: 1; min-width: 0; display: flex; flex-direction: column; gap: var(--sp-1); align-items: flex-start">
+<x-import component-from-global-scope="KuroobiUI.Button">既定に戻す</x-import>
+<span style="font-size: var(--fs-6); color: var(--sub)">選んだ重みと定石の場所を忘れ、既定の探し方に戻す。ファイルは消えない</span>
+</div>
+</div>
+</div>
+</x-import>
+<x-import style="display: contents" component-from-global-scope="KuroobiUI.Section" title="探索">
+<div style="display: flex; flex-direction: column">
+<div style="display: flex; gap: var(--sp-4); padding: var(--sp-3) 0; border-bottom: 1px solid var(--border-weak)">
+<span style="width: 200px; flex: none; line-height: var(--h-ctrl); white-space: nowrap">スレッド</span>
+<div style="flex: 1; min-width: 0; display: flex; flex-direction: column; gap: var(--sp-1); align-items: flex-start">
+<x-import component-from-global-scope="KuroobiUI.Select" value="12" options="{{threadOpts}}"></x-import>
+<span style="font-size: var(--fs-6); color: var(--sub)">ローカル対局・検討・学習・GGS 対局が使う並列数</span>
+</div>
+</div>
+<div style="display: flex; gap: var(--sp-4); padding: var(--sp-3) 0; border-bottom: 1px solid var(--border-weak)">
+<span style="width: 200px; flex: none; line-height: var(--h-ctrl); white-space: nowrap">置換表 (中盤)</span>
+<div style="flex: 1; min-width: 0; display: flex; flex-direction: column; gap: var(--sp-1); align-items: flex-start">
+<x-import component-from-global-scope="KuroobiUI.Select" value="1024" options="{{hashOpts}}"></x-import>
+</div>
+</div>
+<div style="display: flex; gap: var(--sp-4); padding: var(--sp-3) 0; border-bottom: 1px solid var(--border-weak)">
+<span style="width: 200px; flex: none; line-height: var(--h-ctrl); white-space: nowrap">置換表 (終盤)</span>
+<div style="flex: 1; min-width: 0; display: flex; flex-direction: column; gap: var(--sp-1); align-items: flex-start">
+<x-import component-from-global-scope="KuroobiUI.Select" value="512" options="{{hashOpts}}"></x-import>
+<span style="font-size: var(--fs-6); color: var(--sub)">次の起動から効く</span>
+</div>
+</div>
+</div>
+</x-import>
+<!-- Learning: moved here from the "Learning" tab in the match's right pane. Progress is shown in the status bar as "Learning a / b" -->
+<x-import style="display: contents" component-from-global-scope="KuroobiUI.Section" title="学習">
+<div style="display: flex; flex-direction: column">
+<div style="display: flex; gap: var(--sp-4); padding: var(--sp-3) 0; border-bottom: 1px solid var(--border-weak)">
+<span style="width: 200px; flex: none; line-height: var(--h-ctrl); white-space: nowrap">終局した対局を取り込む</span>
+<div style="flex: 1; min-width: 0; display: flex; flex-direction: column; gap: var(--sp-1); align-items: flex-start">
+<x-import component-from-global-scope="KuroobiUI.Toggle" checked="{{yes}}"></x-import>
+<span style="font-size: var(--fs-6); color: var(--sub)">ローカル対局と GGS の対局を、勝敗にかかわらず定石に取り込み、終局の石差を根まで書き戻す</span>
+</div>
+</div>
+<div style="display: flex; gap: var(--sp-4); padding: var(--sp-3) 0; border-bottom: 1px solid var(--border-weak)">
+<span style="width: 200px; flex: none; line-height: var(--h-ctrl); white-space: nowrap">学習した定石</span>
+<div style="flex: 1; min-width: 0; display: flex; align-items: center; gap: var(--sp-4); font-size: var(--fs-5)">
+<span style="color: var(--sub)">登録局面 <b style="color: var(--text); font-weight: 600; font-variant-numeric: tabular-nums">71,555</b></span>
+<span style="color: var(--sub)">うち学習 <b style="color: var(--text); font-weight: 600; font-variant-numeric: tabular-nums">2,559</b></span>
+<x-import component-from-global-scope="KuroobiUI.Button">学習ログを見る</x-import>
+</div>
+</div>
+</div>
+</x-import>
+</sc-if>
+
+<sc-if value="{{showView}}" hint-placeholder-val="{{false}}">
+<x-import style="display: contents" component-from-global-scope="KuroobiUI.Section" title="画面">
+<div style="display: flex; flex-direction: column">
+<div style="display: flex; gap: var(--sp-4); padding: var(--sp-3) 0; border-bottom: 1px solid var(--border-weak)">
+<span style="width: 200px; flex: none; line-height: var(--h-ctrl); white-space: nowrap">テーマ</span>
+<div style="flex: 1; min-width: 0; display: flex; flex-direction: column; gap: var(--sp-1); align-items: flex-start">
+<div style="display: flex; gap: var(--sp-2h); width: 100%; max-width: 420px">
+<sc-for list="{{themes}}" as="th" hint-placeholder-count="3">
+<button type="button" class="k-press" aria-pressed="{{th.on}}" style="flex: 1; min-width: 0; display: flex; flex-direction: column; gap: var(--sp-2); padding: var(--sp-2); border-radius: var(--r-3); background: {{th.ground}}; border: 1px solid {{th.edge}}; color: {{th.fg}}; font: inherit; font-size: var(--fs-6)">
+<span style="display: block; height: 38px; width: 100%; border-radius: var(--r-1); background: {{th.swatch}}; box-shadow: inset 0 0 0 1px var(--border)"></span>{{th.label}}
+</button>
+</sc-for>
+</div>
+</div>
+</div>
+<div style="display: flex; gap: var(--sp-4); padding: var(--sp-3) 0; border-bottom: 1px solid var(--border-weak)">
+<span style="width: 200px; flex: none; line-height: var(--h-ctrl); white-space: nowrap">言語</span>
+<div style="flex: 1; min-width: 0; display: flex; flex-direction: column; gap: var(--sp-1); align-items: flex-start">
+<x-import component-from-global-scope="KuroobiUI.Select" value="auto" options="{{langOpts}}"></x-import>
+</div>
+</div>
+<div style="display: flex; gap: var(--sp-4); padding: var(--sp-3) 0; border-bottom: 1px solid var(--border-weak)">
+<span style="width: 200px; flex: none; line-height: var(--h-ctrl); white-space: nowrap">評価値の小数</span>
+<div style="flex: 1; min-width: 0; display: flex; flex-direction: column; gap: var(--sp-1); align-items: flex-start">
+<x-import component-from-global-scope="KuroobiUI.Segmented" value="1" options="{{decimalOpts}}"></x-import>
+</div>
+</div>
+</div>
+</x-import>
+<x-import style="display: contents" component-from-global-scope="KuroobiUI.Section" title="盤">
+<div style="display: flex; flex-direction: column">
+<div style="display: flex; gap: var(--sp-4); padding: var(--sp-3) 0; border-bottom: 1px solid var(--border-weak)">
+<span style="width: 200px; flex: none; line-height: var(--h-ctrl); white-space: nowrap">座標</span>
+<div style="flex: 1; min-width: 0; display: flex; flex-direction: column; gap: var(--sp-1); align-items: flex-start">
+<span style="display: flex; align-items: center; height: var(--h-ctrl)"><x-import component-from-global-scope="KuroobiUI.Toggle" checked="{{yes}}"></x-import></span>
+</div>
+</div>
+<div style="display: flex; gap: var(--sp-4); padding: var(--sp-3) 0; border-bottom: 1px solid var(--border-weak)">
+<span style="width: 200px; flex: none; line-height: var(--h-ctrl); white-space: nowrap">織り目</span>
+<div style="flex: 1; min-width: 0; display: flex; flex-direction: column; gap: var(--sp-1); align-items: flex-start">
+<span style="display: flex; align-items: center; height: var(--h-ctrl)"><x-import component-from-global-scope="KuroobiUI.Toggle" checked="{{yes}}"></x-import></span>
+</div>
+</div>
+<div style="display: flex; gap: var(--sp-4); padding: var(--sp-3) 0; border-bottom: 1px solid var(--border-weak)">
+<span style="width: 200px; flex: none; line-height: var(--h-ctrl); white-space: nowrap">石返し</span>
+<div style="flex: 1; min-width: 0; display: flex; flex-direction: column; gap: var(--sp-1); align-items: flex-start">
+<x-import component-from-global-scope="KuroobiUI.Segmented" value="120" options="{{flipOpts}}"></x-import>
+</div>
+</div>
+<div style="display: flex; gap: var(--sp-4); padding: var(--sp-3) 0; border-bottom: 1px solid var(--border-weak)">
+<span style="width: 200px; flex: none; line-height: var(--h-ctrl); white-space: nowrap">盤の向き</span>
+<div style="flex: 1; min-width: 0; display: flex; flex-direction: column; gap: var(--sp-1); align-items: flex-start">
+<x-import component-from-global-scope="KuroobiUI.Segmented" value="auto" options="{{facingOpts}}"></x-import>
+<span style="font-size: var(--fs-6); color: var(--sub)">GGS の対局にも効く</span>
+</div>
+</div>
+<div style="display: flex; gap: var(--sp-4); padding: var(--sp-3) 0; border-bottom: 1px solid var(--border-weak)">
+<span style="width: 200px; flex: none; line-height: var(--h-ctrl); white-space: nowrap">畳の色</span>
+<div style="flex: 1; min-width: 0; display: flex; flex-direction: column; gap: var(--sp-1); align-items: flex-start">
+<div style="display: flex; gap: var(--sp-2)">
+<sc-for list="{{tatamis}}" as="tm" hint-placeholder-count="4">
+<button type="button" class="k-press" title="{{tm.label}}" aria-label="{{tm.label}}" aria-pressed="{{tm.on}}" style="width: var(--h-ctrl); height: var(--h-ctrl); padding: 0; border: 0; border-radius: var(--r-2); background: {{tm.color}}; box-shadow: {{tm.ring}}"></button>
+</sc-for>
+</div>
+</div>
+</div>
+</div>
+</x-import>
+</sc-if>
+
+<sc-if value="{{showAccount}}" hint-placeholder-val="{{false}}">
+<x-import style="display: contents" component-from-global-scope="KuroobiUI.Section" title="ログイン中">
+<div style="display: flex; flex-direction: column">
+<div style="display: flex; gap: var(--sp-4); padding: var(--sp-3) 0; border-bottom: 1px solid var(--border-weak)">
+<span style="width: 200px; flex: none; line-height: var(--h-ctrl); white-space: nowrap">アカウント</span>
+<div style="flex: 1; min-width: 0; display: flex; flex-direction: column; gap: var(--sp-1); align-items: flex-start">
+<span style="display: flex; align-items: center; gap: var(--sp-2); height: var(--h-ctrl)"><b class="k-sel" style="font-weight: 600">alice</b><span style="font-size: var(--fs-6); color: var(--sub)">ローカル</span><span class="k-sel" style="font-family: var(--ff-mono); font-size: var(--fs-6); color: var(--sub)">127.0.0.1:15000</span></span>
+<x-import component-from-global-scope="KuroobiUI.Button" variant="danger">ログアウト</x-import>
+<span style="font-size: var(--fs-6); color: var(--sub)">ログアウトすると、次の起動では自動ログインしない</span>
+</div>
+</div>
+<div style="display: flex; gap: var(--sp-4); padding: var(--sp-3) 0; border-bottom: 1px solid var(--border-weak)">
+<span style="width: 200px; flex: none; line-height: var(--h-ctrl); white-space: nowrap">起動時のログイン</span>
+<div style="flex: 1; min-width: 0; display: flex; flex-direction: column; gap: var(--sp-1); align-items: flex-start">
+<x-import component-from-global-scope="KuroobiUI.Select" value="alice|127.0.0.1:15000" options="{{autoOpts}}"></x-import>
+<span style="font-size: var(--fs-6); color: var(--sub)">最後にログインに成功したアカウントが入る</span>
+</div>
+</div>
+</div>
+</x-import>
+<x-import style="display: contents" component-from-global-scope="KuroobiUI.Section" title="サーバーとアカウント" aside="{{serverCount}}">
+<div style="display: flex; flex-direction: column; max-width: 760px">
+<sc-for list="{{servers}}" as="sv" hint-placeholder-count="3">
+<!-- Server: name, address, kind -->
+<div style="display: flex; align-items: center; gap: var(--sp-3); height: var(--h-row2); padding: 0 var(--sp-3); margin-top: var(--sp-2); border-radius: var(--r-1); background: var(--card); white-space: nowrap">
+<b style="font-weight: 600">{{sv.name}}</b>
+<span class="k-sel" style="font-family: var(--ff-mono); font-size: var(--fs-6); color: var(--sub); overflow: hidden; text-overflow: ellipsis">{{sv.addr}}</span>
+<x-import component-from-global-scope="KuroobiUI.Tag" tone="{{sv.tone}}">{{sv.kind}}</x-import>
+<span style="margin-left: auto; display: flex; gap: var(--sp-1)">
+<x-import component-from-global-scope="KuroobiUI.Button" size="row" variant="ghost">編集</x-import>
+<x-import component-from-global-scope="KuroobiUI.Button" size="row" variant="ghost">削除</x-import>
+</span>
+</div>
+<!-- That server's accounts -->
+<sc-for list="{{sv.accounts}}" as="a" hint-placeholder-count="2">
+<div class="k-row" style="display: flex; align-items: center; gap: var(--sp-3); height: var(--h-field); padding: 0 var(--sp-3) 0 var(--sp-6); border-bottom: 1px solid var(--border-weak); font-size: var(--fs-5); white-space: nowrap; box-shadow: {{a.mark}}">
+<span style="flex: 1; min-width: 0; display: flex; align-items: center; gap: var(--sp-2); overflow: hidden"><span class="k-sel" style="font-weight: 600; overflow: hidden; text-overflow: ellipsis">{{a.login}}</span>
+<sc-if value="{{a.current}}" hint-placeholder-val="{{false}}"><x-import component-from-global-scope="KuroobiUI.Tag" tone="ok">接続中</x-import></sc-if>
+<sc-if value="{{a.auto}}" hint-placeholder-val="{{false}}"><x-import component-from-global-scope="KuroobiUI.Tag" tone="sub">起動時</x-import></sc-if></span>
+<span style="width: 104px; font-size: var(--fs-6); color: var(--sub)">前回 {{a.last}}</span>
+<span style="width: 56px; display: flex; justify-content: flex-end"><x-import component-from-global-scope="KuroobiUI.Button" size="row" variant="ghost">削除</x-import></span>
+</div>
+</sc-for>
+<button type="button" class="k-row" style="height: var(--h-field); padding: 0 var(--sp-3) 0 var(--sp-6); border: 0; border-bottom: 1px solid var(--border-weak); background: transparent; color: var(--accent); font: inherit; font-size: var(--fs-5); text-align: left">＋ このサーバーにアカウントを追加</button>
+</sc-for>
+<div style="padding-top: var(--sp-3)"><x-import component-from-global-scope="KuroobiUI.Button">サーバーを追加</x-import></div>
+</div>
+<span style="font-size: var(--fs-6); color: var(--sub); padding: var(--sp-2) var(--sp-3) 0">アカウントはログインに成功すると保存する。パスワードはこの Mac の中にだけ保存する</span>
+</x-import>
+</sc-if>
+
+<sc-if value="{{showPlay}}" hint-placeholder-val="{{false}}">
+<x-import style="display: contents" component-from-global-scope="KuroobiUI.Section" title="対局と観戦">
+<div style="display: flex; flex-direction: column">
+<div style="display: flex; gap: var(--sp-4); padding: var(--sp-3) 0; border-bottom: 1px solid var(--border-weak)">
+<span style="width: 200px; flex: none; line-height: var(--h-ctrl); white-space: nowrap">定石</span>
+<div style="flex: 1; min-width: 0; display: flex; flex-direction: column; gap: var(--sp-1); align-items: flex-start">
+<sc-if value="{{bookLoaded}}" hint-placeholder-val="{{true}}">
+<span style="display: flex; align-items: center; height: var(--h-ctrl)"><x-import component-from-global-scope="KuroobiUI.Toggle" checked="{{yes}}"></x-import></span>
+<span style="font-size: var(--fs-6); color: var(--sub)">GGS の対局で定石の手を使う</span>
+</sc-if>
+<!-- Without a book, a file-picker button replaces the switch, with "No file" below -->
+<sc-if value="{{bookMissing}}" hint-placeholder-val="{{false}}">
+<x-import component-from-global-scope="KuroobiUI.Button">定石ファイルを指定</x-import>
+<span style="font-size: var(--fs-6); color: var(--sub)">ファイルがありません</span>
+</sc-if>
+</div>
+</div>
+<div style="display: flex; gap: var(--sp-4); padding: var(--sp-3) 0; border-bottom: 1px solid var(--border-weak)">
+<span style="width: 200px; flex: none; line-height: var(--h-ctrl); white-space: nowrap">自分の手番で自動的に指す</span>
+<div style="flex: 1; min-width: 0; display: flex; flex-direction: column; gap: var(--sp-1); align-items: flex-start">
+<span style="display: flex; align-items: center; height: var(--h-ctrl)"><x-import component-from-global-scope="KuroobiUI.Toggle" checked="{{yes}}"></x-import></span>
+</div>
+</div>
+<div style="display: flex; gap: var(--sp-4); padding: var(--sp-3) 0; border-bottom: 1px solid var(--border-weak)">
+<span style="width: 200px; flex: none; line-height: var(--h-ctrl); white-space: nowrap">観戦中の対局も解析する</span>
+<div style="flex: 1; min-width: 0; display: flex; flex-direction: column; gap: var(--sp-1); align-items: flex-start">
+<span style="display: flex; align-items: center; height: var(--h-ctrl)"><x-import component-from-global-scope="KuroobiUI.Toggle" checked="{{no}}"></x-import></span>
+</div>
+</div>
+<div style="display: flex; gap: var(--sp-4); padding: var(--sp-3) 0; border-bottom: 1px solid var(--border-weak)">
+<span style="width: 200px; flex: none; line-height: var(--h-ctrl); white-space: nowrap">思考ログのチャンネル</span>
+<div style="flex: 1; min-width: 0; display: flex; flex-direction: column; gap: var(--sp-1); align-items: flex-start">
+<x-import component-from-global-scope="KuroobiUI.TextField" value="{{logChannel}}" mono="{{yes}}" width="{{120}}" invalid="{{logBad}}"></x-import>
+<sc-if value="{{logOk}}" hint-placeholder-val="{{true}}">
+<span style="font-size: var(--fs-6); color: var(--sub)">1 手ごとの探索結果を流す。観戦者は同じチャンネルで読める。空欄なら流さない</span>
+</sc-if>
+<sc-if value="{{logBad}}" hint-placeholder-val="{{false}}">
+<span style="font-size: var(--fs-6); color: var(--bad)">「.」に続けて英数字・_・- を 1〜7 文字</span>
+</sc-if>
+</div>
+</div>
+</div>
+</x-import>
+</sc-if>
+
+<sc-if value="{{showForm}}" hint-placeholder-val="{{true}}">
+<x-import style="display: contents" component-from-global-scope="KuroobiUI.Section" title="申し込みの条件" aside="アプリを閉じてもサーバー側で有効">
+<div style="display: flex; flex-direction: column">
+<div style="display: flex; gap: var(--sp-4); padding: var(--sp-3) 0; border-bottom: 1px solid var(--border-weak)">
+<span style="width: 200px; flex: none; line-height: var(--h-ctrl); white-space: nowrap">自動で受ける条件</span>
+<div style="flex: 1; min-width: 0; display: flex; flex-direction: column; gap: var(--sp-1); align-items: flex-start">
+<div style="width: 100%; max-width: var(--w-control)"><x-import component-from-global-scope="KuroobiUI.FormulaEditor" value="{{acceptCond}}"></x-import></div>
+</div>
+</div>
+<div style="display: flex; gap: var(--sp-4); padding: var(--sp-3) 0; border-bottom: 1px solid var(--border-weak)">
+<span style="width: 200px; flex: none; line-height: var(--h-ctrl); white-space: nowrap">自動で断る条件</span>
+<div style="flex: 1; min-width: 0; display: flex; flex-direction: column; gap: var(--sp-1); align-items: flex-start">
+<div style="width: 100%; max-width: var(--w-control)"><x-import component-from-global-scope="KuroobiUI.FormulaEditor" value="{{declineCond}}"></x-import></div>
+<!-- Default conditions: the tournament director's guidance + matches KUROOBI cannot play or would play at a disadvantage. Pressing only fills the field; "Apply" sends it -->
+<div style="display: flex; align-items: center; gap: var(--sp-3); width: 100%; max-width: var(--w-control); margin-top: var(--sp-2)">
+<x-import component-from-global-scope="KuroobiUI.Button">既定の条件にする</x-import>
+<span style="font-size: var(--fs-6); color: var(--sub); line-height: 1.5">大会運営の案内 (14 石未満・持ち時間 1 分未満を断る) に、KUROOBI が指せない・不利になる対局を断る条件を足したものです。</span>
+</div>
+</div>
+</div>
+</div>
+</x-import>
+</sc-if>
+
+</div>
+</div>
+</x-import>
+</x-import>
+<div style="height: var(--h-status); flex: none; background: var(--bg); border-top: 1px solid var(--border); display: flex; align-items: center; gap: var(--sp-4); padding: 0 var(--sp-4); font-size: var(--fs-6); color: var(--sub); white-space: nowrap">
+<span style="display: flex; align-items: center; gap: var(--sp-1)"><x-import component-from-global-scope="KuroobiUI.Dot" tone="ok"></x-import>自動対局中</span>
+<span style="display: flex; align-items: center; gap: var(--sp-1)"><x-import component-from-global-scope="KuroobiUI.Dot" tone="accent"></x-import>思考中 <b style="color: var(--text); font-weight: 600">3.2</b> 秒</span>
+<span>ノード <b style="color: var(--text); font-weight: 600">5,870 万</b></span>
+<span>速度 <b style="color: var(--text); font-weight: 600">18.3</b> Mnps</span>
+<span style="margin-left: auto; display: flex; align-items: center; gap: var(--sp-1)">CPU <span aria-hidden="true" style="display: inline-block; width: 32px; height: 4px; border-radius: var(--r-pill); background: var(--track); overflow: hidden"><span style="display: block; height: 100%; width: 38%; background: var(--ok)"></span></span><b style="color: var(--text); font-weight: 600">305</b>%</span>
+<span style="display: flex; align-items: center; gap: var(--sp-1)">メモリ <span aria-hidden="true" style="display: inline-block; width: 32px; height: 4px; border-radius: var(--r-pill); background: var(--track); overflow: hidden"><span style="display: block; height: 100%; width: 39%; background: var(--ok)"></span></span><b style="color: var(--text); font-weight: 600">6.2</b> GB</span>
+<span>GGS <b style="color: var(--text); font-weight: 600">接続中</b> (alice)</span>
+</div>
+</x-import>
+<!-- Confirmations: delete account (danger) / reset file locations to defaults -->
+<sc-if value="{{dlgOpen}}" hint-placeholder-val="{{false}}">
+<x-import component-from-global-scope="KuroobiUI.Confirm" title="{{dlgTitle}}" body="{{dlgBody}}" ok="{{dlgOk}}" danger="{{dlgDanger}}" on-ok="{{noop}}" on-cancel="{{noop}}"></x-import>
+</sc-if>
+<!-- Add/edit server: name, address, kind. If saving fails, the reason appears at the bottom left -->
+<sc-if value="{{serverDlg}}" hint-placeholder-val="{{false}}">
+<x-import component-from-global-scope="KuroobiUI.Overlay" on-close="{{noop}}">
+<x-import component-from-global-scope="KuroobiUI.Modal" title="サーバーを編集" on-close="{{noop}}" actions="{{serverActions}}">
+<x-import component-from-global-scope="KuroobiUI.Field" label="名前"><x-import component-from-global-scope="KuroobiUI.TextField" value="ローカル"></x-import></x-import>
+<x-import component-from-global-scope="KuroobiUI.Field" label="アドレス"><x-import component-from-global-scope="KuroobiUI.TextField" value="127.0.0.1:15000" mono="{{yes}}" placeholder="ホスト名:ポート"></x-import></x-import>
+<x-import component-from-global-scope="KuroobiUI.Field" label="種類" help="テストのサーバーでの対局は定石に学習しない"><x-import component-from-global-scope="KuroobiUI.Segmented" value="test" options="{{kindOpts}}" fill="{{yes}}"></x-import></x-import>
+</x-import>
+</x-import>
+</sc-if>
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props='{"applied":{"editor":"select","options":["no","yes"],"default":"no"},"book":{"editor":"select","options":["loaded","missing"],"default":"loaded"},"dialog":{"editor":"select","options":["none","delete-account","reset-files","server"],"default":"none"},"cat":{"editor":"select","options":["engine","view","account","play","form"],"default":"account"},"$preview":{"width":1280,"height":800}}'>
+class Component extends DCLogic {
+  renderVals() {
+    const ui = window.KuroobiUI;
+    if (ui && ui.setLang) ui.setLang('ja');
+    // Category shown: 'account' | 'play' | 'form'
+    const cat = this.props.cat ?? 'account';
+    const server = '127.0.0.1:15000';
+    const isPublic = server === 'skatgame.net:5000';
+    const logChannel = '.kuro';
+    const logOk = logChannel === '' || /^\.[A-Za-z0-9_-]{1,7}$/.test(logChannel);
+    const atom = (name, op = '=', val = '', neg = false) => ({ kind: 'atom', name, op, val, neg });
+    const mark = (c) => ({
+      ...c,
+      ground: c.id === cat ? 'var(--card)' : 'transparent',
+      mark: c.id === cat ? 'inset 2px 0 0 var(--accent)' : 'none',
+      weight: c.id === cat ? 600 : 400,
+    });
+    const catGroups = [
+      { title: 'アプリ', items: [
+        { id: 'engine', name: 'エンジン' },
+        { id: 'view', name: '表示' },
+      ].map(mark) },
+      { title: 'GGS', items: [
+        { id: 'account', name: 'サーバーとアカウント' },
+      { id: 'play', name: '対局と観戦' },
+      { id: 'form', name: '申し込みの条件' },
+      ].map(mark) },
+    ];
+    return {
+      yes: true,
+      no: false,
+      navLocal: ui ? ui.navLocal() : [],
+      ggsItems: ui ? ui.ggsNav('online', { 'ggs-lobby': { count: 2, alert: true }, 'ggs-play': { count: 1 }, 'ggs-chat': { count: 3, alert: true } }).filter((it) => it.id !== 'ggs-standby') : [],
+      showApplied: this.props.applied === 'yes',
+      noop: () => {},
+      catGroups,
+      ...(() => {
+        const d = {
+          'delete-account': ['kuroobi を削除しますか?', 'GGS 本番 の kuroobi を保存したアカウントから消します。サーバーのアカウントや、このアプリに残った対局の記録は消えません。', '削除する', true],
+          'reset-files': ['ファイルの指定を既定に戻しますか？', '選んだ重みと定石の場所を忘れ、既定の探し方に戻します。ファイルそのものは消えません。', '戻す', false],
+        }[this.props.dialog ?? 'none'];
+        if ((this.props.dialog ?? 'none') === 'server') {
+          const h = window.React ? window.React.createElement : null;
+          return { dlgOpen: false, serverDlg: true, kindOpts: [{ value: 'public', label: '本番' }, { value: 'test', label: 'テスト' }],
+            serverActions: h && ui ? h(window.React.Fragment, null,
+              h('span', { style: { flex: 1, minWidth: 0, fontSize: 'var(--fs-6)', color: 'var(--bad)' } }),
+              h(ui.Button, { size: 'field', variant: 'ghost' }, 'キャンセル'),
+              h(ui.Button, { size: 'field', variant: 'primary' }, '保存')) : null };
+        }
+        return d ? { dlgOpen: true, dlgTitle: d[0], dlgBody: d[1], dlgOk: d[2], dlgDanger: d[3] } : { dlgOpen: false };
+      })(),
+      showEngine: cat === 'engine',
+      showView: cat === 'view',
+      showAccount: cat === 'account',
+      catTitle: { engine: 'エンジン', view: '表示', account: 'GGS · サーバーとアカウント', play: 'GGS · 対局と観戦', form: 'GGS · 申し込みの条件' }[cat],
+      threadOpts: [['', '12 (自動)'], ['4', '4'], ['8', '8'], ['16', '16']],
+      hashOpts: [['256', '256 MB'], ['512', '512 MB (既定)'], ['1024', '1 GB'], ['2048', '2 GB']],
+      clockOpts: [['0', 'なし'], ['300', '5 分'], ['600', '10 分'], ['1200', '20 分']],
+      themes: [['os', 'システムに合わせる', 'linear-gradient(135deg, #16191d 50%, #faf8f3 50%)'], ['dark', 'ダーク', '#16191d'], ['light', 'ライト', '#faf8f3']].map(([v, label, swatch]) => {
+        const on = v === 'dark';
+        return { label, swatch, on, ground: on ? 'var(--panel)' : 'transparent', edge: on ? 'var(--accent)' : 'var(--border)', fg: on ? 'var(--text)' : 'var(--sub)' };
+      }),
+      tatamis: [['標準', '#77914e'], ['枯草', '#8a8f5c'], ['苔', '#6f7f6a'], ['深緑', '#3f4f2c']].map(([label, color], i) => ({
+        label, color, on: i === 0, ring: i === 0 ? '0 0 0 2px var(--accent), inset 0 0 0 1px var(--border)' : 'inset 0 0 0 1px var(--border)',
+      })),
+      themeOpts: [{ value: 'dark', label: 'ダーク' }, { value: 'light', label: 'ライト' }, { value: 'os', label: 'システムに合わせる' }],
+      langOpts: [['auto', 'システムに合わせる'], ['ja', '日本語'], ['en', 'English']],
+      decimalOpts: [{ value: '0', label: '0' }, { value: '1', label: '1' }, { value: '2', label: '2' }],
+      flipOpts: [{ value: '0', label: '動かさない' }, { value: '120', label: '速い' }, { value: '240', label: 'ゆっくり' }],
+      facingOpts: [{ value: 'black', label: '黒が下' }, { value: 'white', label: '白が下' }, { value: 'auto', label: '自分が下' }],
+      tatamiOpts: [{ value: 'default', label: '標準' }, { value: 'forest', label: '深緑' }, { value: 'moss', label: '苔' }, { value: 'straw', label: '枯草' }],
+      autoOpts: [['', 'しない'], ['alice|127.0.0.1:15000', 'alice · ローカル'], ['bob|127.0.0.1:15000', 'bob · ローカル'], ['kuroobi|skatgame.net:5000', 'kuroobi · GGS 本番'], ['kbtest|skatgame.net:5000', 'kbtest · GGS 本番']],
+      accounts: [
+        { login: 'alice', server: '127.0.0.1:15000', last: '今', current: true, public: false },
+        { login: 'kuroobi', server: 'skatgame.net:5000', last: '10/25 21:40', current: false, public: true },
+        { login: 'bob', server: '127.0.0.1:15000', last: '10/24 18:02', current: false, public: false },
+        { login: 'kbtest', server: 'skatgame.net:5000', last: '10/02 09:15', current: false, public: true },
+      ].map((a) => ({ ...a, mark: a.current ? 'inset 2px 0 0 var(--accent)' : 'none' })),
+      accountCount: '4 件',
+      serverCount: '3 サーバー · 4 アカウント',
+      servers: [
+        { name: 'GGS 本番', addr: 'skatgame.net:5000', kind: '本番', tone: 'accent', accounts: [
+          { login: 'kuroobi', last: '10/25 21:40' }, { login: 'kbtest', last: '10/02 09:15' }] },
+        { name: 'ローカル', addr: '127.0.0.1:15000', kind: 'テスト', tone: 'sub', accounts: [
+          { login: 'alice', last: '今', current: true, auto: true }, { login: 'bob', last: '10/24 18:02' }] },
+        { name: '検証機', addr: '192.168.1.20:5000', kind: 'テスト', tone: 'sub', accounts: [] },
+      ].map((sv) => ({ ...sv, accounts: sv.accounts.map((a) => ({ current: false, auto: false, ...a, mark: a.current ? 'inset 2px 0 0 var(--accent)' : 'none' })) })),
+      showPlay: cat === 'play',
+      showForm: cat === 'form',
+      server,
+      isPublic,
+      serverNote: isPublic
+        ? 'ログインに成功したアカウントは保存され、次回から自動ログイン'
+        : '本番以外のサーバーでの対局は定石に学習しない',
+      bookLoaded: this.props.book !== 'missing',
+      bookMissing: this.props.book === 'missing',
+      logChannel,
+      logOk,
+      logBad: !logOk,
+      acceptCond: { kind: 'all', kids: [atom('rated'), atom('or', '≥', '1600'), { kind: 'any', kids: [atom('synchro'), atom('rand')] }] },
+      // Negated groups, comparisons between fields, functions (with argument fields), and expressions that cannot be rows can also be built
+      declineCond: { kind: 'any', kids: [
+        atom('or', '<', '1200'), atom('mt1', '<', 'ot1'),
+        { kind: 'any', neg: true, kids: [atom('rated'), atom('rand')] },
+        { ...atom('md', '≤', '0.0'), arg: '+1.0' },
+        { ...atom('playing', '>', '0'), arg: 'both' },
+        { kind: 'expr', src: 'mr>or+100.0' },
+      ] },
+    };
+  }
+}
+</script>
+</body>
+</html>

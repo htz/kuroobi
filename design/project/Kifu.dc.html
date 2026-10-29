@@ -1,0 +1,133 @@
+<!doctype html>
+<html lang="ja">
+<head>
+<meta charset="utf-8">
+<title>Game record · Synchro</title>
+<script src="./support.js"></script>
+<link rel="stylesheet" href="kuroobi-tokens.css">
+<link rel="stylesheet" href="ds/kuroobiui/components/bundle.css">
+<script src="ds/kuroobiui/components/bundle.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<style>
+x-import{display:contents}
+.k-scroll{overflow-y:scroll!important}
+.k-scroll::-webkit-scrollbar-track{background:var(--track);border-radius:9px}
+body{margin:0;background:var(--bg);color:var(--text);font:var(--fs-4)/1.6 var(--ff)}
+a{color:var(--accent)}a:hover{color:var(--text)}
+</style>
+</helmet>
+<!-- Opened from "Record" in results or a match. A window overlaid on the screen -->
+<div style="width: 100%; height: 100vh; min-height: 480px; background: color-mix(in srgb, var(--bg) 55%, black); color: var(--text); font: var(--fs-4)/1.6 var(--ff); overflow: hidden; display: grid; place-items: center; padding: var(--sp-5); box-sizing: border-box">
+<x-import component-from-global-scope="KuroobiUI.BoardDefs"></x-import>
+<div role="dialog" style="width: 720px; max-width: 100%; max-height: 100%; border-radius: var(--r-4); background: var(--bg); border: 1px solid var(--border); box-shadow: var(--sh-2); display: flex; flex-direction: column; overflow: hidden">
+
+<!-- Title -->
+<div style="height: var(--h-bar); flex: none; background: var(--panel); border-bottom: 1px solid var(--border); display: flex; align-items: center; padding: 0 var(--sp-2)">
+<span style="width: 32px; flex: none"></span>
+<div style="flex: 1; min-width: 0; text-align: center; line-height: 1.3; white-space: nowrap; overflow: hidden">
+<div style="font-weight: 600; overflow: hidden; text-overflow: ellipsis">saio との対局 · 10/26 21:15</div>
+<div style="font-size: var(--fs-7); color: var(--sub)">{{sub}}</div>
+</div>
+<span style="width: 32px; flex: none; display: grid; place-items: center"><x-import component-from-global-scope="KuroobiUI.IconButton" name="close" label="閉じる"></x-import></span>
+</div>
+<sc-if value="{{synchro}}" hint-placeholder-val="{{true}}">
+<div style="flex: none; display: flex; justify-content: center; padding: var(--sp-2); border-bottom: 1px solid var(--border-weak); background: var(--panel)">
+<x-import component-from-global-scope="KuroobiUI.Segmented" value="1" options="{{faces}}"></x-import>
+</div>
+</sc-if>
+
+<!-- While fetching the record from the server, and when that fails -->
+<sc-if value="{{notReady}}" hint-placeholder-val="{{false}}">
+<div style="flex: 1; min-height: 240px; display: grid; place-items: center; padding: var(--sp-5); font-size: var(--fs-5); color: {{fetchColor}}">{{fetchText}}</div>
+</sc-if>
+<!-- Body: board, plus both players, this move and the move list -->
+<sc-if value="{{ready}}" hint-placeholder-val="{{true}}">
+<div class="k-scroll" style="flex: 1; min-height: 0; padding: var(--sp-4); display: flex; flex-direction: column; gap: var(--sp-4)">
+<div style="display: flex; gap: var(--sp-4); align-items: flex-start">
+<div style="width: 300px; height: 300px; flex: none">
+<x-import component-from-global-scope="KuroobiUI.Board" cells="{{cells}}" last="{{last}}" coords="{{yes}}" disabled="{{yes}}"></x-import>
+</div>
+<div style="flex: 1; min-width: 0; display: flex; flex-direction: column; gap: var(--sp-3)">
+<div style="display: flex; flex-direction: column; gap: var(--sp-1)">
+<sc-for list="{{players}}" as="p" hint-placeholder-count="2">
+<div style="display: flex; align-items: center; gap: var(--sp-2); height: var(--h-field); white-space: nowrap">
+<x-import component-from-global-scope="KuroobiUI.StoneDot" color="{{p.color}}"></x-import>
+<span class="k-sel" style="font-weight: 600">{{p.name}}</span>
+<span style="font-size: var(--fs-6); color: var(--sub)">{{p.rate}}</span>
+<span style="margin-left: auto; font-size: var(--fs-2); font-weight: 700">{{p.count}}</span>
+</div>
+</sc-for>
+</div>
+<div style="display: flex; align-items: baseline; gap: var(--sp-3); padding-top: var(--sp-2); border-top: 1px solid var(--border-weak); white-space: nowrap">
+<span style="font-size: var(--fs-6); color: var(--sub)">この手</span>
+<b style="font-size: var(--fs-1); font-weight: 700">34. c2</b>
+<span style="margin-left: auto; font-size: var(--fs-6); color: var(--sub)">終局 <b style="color: var(--text); font-weight: 600">{{final}}</b></span>
+</div>
+<div style="display: flex; flex-direction: column; gap: var(--sp-1)">
+<span style="font-size: var(--fs-7); font-weight: 600; letter-spacing: .08em; color: var(--sub)">手順</span>
+<div class="k-scroll k-sel" style="max-height: 96px; padding: var(--sp-1) var(--sp-2h); border-radius: var(--r-2); background: var(--card); font-family: var(--ff-mono); font-size: var(--fs-6); line-height: 1.6; word-break: break-all">{{moves}}</div>
+</div>
+</div>
+</div>
+
+<!-- Move navigation -->
+<div style="display: flex; flex-direction: column; gap: var(--sp-2)">
+<div style="display: flex; align-items: center; gap: var(--sp-2); white-space: nowrap">
+<x-import component-from-global-scope="KuroobiUI.Button" size="field" square="{{yes}}" title="最初へ">|◀</x-import>
+<x-import component-from-global-scope="KuroobiUI.Button" size="field" square="{{yes}}" title="1 手戻る">◀</x-import>
+<x-import component-from-global-scope="KuroobiUI.Button" size="field" square="{{yes}}" title="1 手進む">▶</x-import>
+<x-import component-from-global-scope="KuroobiUI.Button" size="field" square="{{yes}}" title="最後へ">▶|</x-import>
+<x-import component-from-global-scope="KuroobiUI.Button" size="field" square="{{yes}}" title="自動で進める">▶▶</x-import>
+<span style="margin-left: auto; font-size: var(--fs-6); color: var(--sub)"><b style="font-size: var(--fs-1); font-weight: 600; color: var(--text)">34</b> / 60 手</span>
+</div>
+<x-import component-from-global-scope="KuroobiUI.MoveScrub" nav="{{no}}" plies="{{sixty}}" cursor="{{cur}}"></x-import>
+</div>
+</div>
+
+</sc-if>
+<!-- Actions -->
+<div style="flex: none; display: flex; align-items: center; gap: var(--sp-2); padding: var(--sp-3) var(--sp-4); border-top: 1px solid var(--border); background: var(--panel)">
+<x-import component-from-global-scope="KuroobiUI.Button" size="field" variant="ghost">閉じる</x-import>
+<span style="flex: 1"></span>
+<x-import component-from-global-scope="KuroobiUI.Button" size="field">コピー</x-import>
+<x-import component-from-global-scope="KuroobiUI.Button" size="field">保存</x-import>
+<x-import component-from-global-scope="KuroobiUI.Button" size="field" variant="primary">検討で開く</x-import>
+</div>
+</div>
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props='{"kind":{"editor":"select","options":["synchro","single"],"default":"synchro"},"fetch":{"editor":"select","options":["ok","loading","error"],"default":"ok"},"$preview":{"width":1280,"height":800}}'>
+class Component extends DCLogic {
+  renderVals() {
+    const ui = window.KuroobiUI;
+    if (ui && ui.setLang) ui.setLang('ja');
+    const synchro = (this.props.kind ?? 'synchro') === 'synchro';
+    const P44 = [0,0,0,0,2,2,2,0,1,0,0,0,2,2,0,1,1,1,1,1,2,1,1,1,1,1,1,1,2,1,1,1,0,1,1,1,1,1,1,1,0,1,1,1,1,1,1,1,0,0,2,2,2,2,0,1,0,0,2,2,2,2,2,1];
+    const sq = ['f5','d6','c3','d3','c4','f4','f6','f3','e6','e7','d7','c6','c5','b5','b6','b4','a5','e3','g4','g3','h3','c7','e8','d8','c8','f8','b3','a4','g5','h5','g6','h6','f7','g8','c2','d2','e2','f2','b8','a3','a6','b7','a8','g2','h2','h1','g1','f1','e1','d1','c1','b1','a1','b2','a2','h4','h7','g7','h8','a7'];
+    return {
+      yes: true, no: false, sixty: 60, cur: 34,
+      ...(() => {
+        const f = this.props.fetch ?? 'ok';
+        return { ready: f === 'ok', notReady: f !== 'ok',
+          fetchText: f === 'loading' ? '棋譜を取り出しています…' : '棋譜を取り出せません',
+          fetchColor: f === 'loading' ? 'var(--sub)' : 'var(--bad)' };
+      })(),
+      synchro,
+      sub: synchro ? '同期・ランダム14手 · 5 分 (延長 2 分) · alice の勝ち +6' : '通常 (1局) · 10 分 · alice の勝ち +8',
+      faces: [{ value: '1', label: '1 面目' }, { value: '2', label: '2 面目' }],
+      cells: P44, last: 34,
+      players: [
+        { color: 'b', name: 'alice', rate: '1704.3', count: 41 },
+        { color: 'w', name: 'saio', rate: '1987.0', count: 21 },
+      ],
+      final: '+8',
+      moves: sq.join(''),
+    };
+  }
+}
+</script>
+</body>
+</html>

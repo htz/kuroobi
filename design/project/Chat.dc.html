@@ -1,0 +1,186 @@
+<!doctype html>
+<html lang="ja">
+<head>
+<meta charset="utf-8">
+<title>Chat</title>
+<script src="./support.js"></script>
+<link rel="stylesheet" href="kuroobi-tokens.css">
+<link rel="stylesheet" href="ds/kuroobiui/components/bundle.css">
+<script src="ds/kuroobiui/components/bundle.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<style>
+x-import{display:contents}
+@media (max-width:1040px){.k-nav-ov .k-nav-label{display:none}.k-nav-ov .k-nav-row{justify-content:center;padding:0}}
+.k-scroll{overflow-y:scroll!important}
+.k-scroll::-webkit-scrollbar-track{background:var(--track);border-radius:9px}
+body{margin:0;background:var(--bg);color:var(--text);font:var(--fs-4)/1.6 var(--ff)}
+a{color:var(--accent)}a:hover{color:var(--text)}
+</style>
+</helmet>
+<div style="width: 100%; height: 100vh; min-height: 480px; background: var(--bg); color: var(--text); font: var(--fs-4)/1.6 var(--ff); overflow: hidden">
+<x-import style="display: contents" component-from-global-scope="KuroobiUI.AppFrame">
+<x-import component-from-global-scope="KuroobiUI.WindowBar" title="チャット"></x-import>
+<x-import style="display: contents" component-from-global-scope="KuroobiUI.Body">
+<div style="position: relative; flex: none; display: flex">
+<x-import style="display: contents" component-from-global-scope="KuroobiUI.Nav" items="{{navLocal}}" ggs-items="{{ggsItems}}" conn="online" active="ggs-chat"></x-import>
+<div class="k-nav-ov" style="position: absolute; left: 0; right: 1px; bottom: 0; padding: var(--sp-2); border-top: 1px solid var(--border); background: var(--panel)">
+<button type="button" class="k-nav-row k-row" aria-current="false" style="width: 100%; height: var(--h-field); display: flex; align-items: center; gap: var(--sp-3); border: 0; border-radius: var(--r-2); font: inherit; font-size: var(--fs-4); background: transparent; color: var(--text); font-weight: 400"><span style="flex: none; display: grid; place-items: center"><x-import component-from-global-scope="KuroobiUI.Icon" name="prefs"></x-import></span><span class="k-nav-label">設定</span></button>
+</div>
+</div>
+<x-import style="display: contents" component-from-global-scope="KuroobiUI.Main">
+<x-import style="display: contents" component-from-global-scope="KuroobiUI.Toolbar">
+<span style="font-size: var(--fs-3); font-weight: 600; white-space: nowrap">{{curName}}</span>
+<x-import component-from-global-scope="KuroobiUI.Tag" tone="sub">{{curReach}}</x-import>
+</x-import>
+<div style="flex: 1; min-height: 0; display: flex">
+<!-- Conversation list -->
+<div style="position: relative; width: var(--w-list); flex: none; min-height: 0; display: flex; flex-direction: column; border-right: 1px solid var(--border)">
+<div style="flex: none; height: var(--h-field); display: flex; align-items: center; gap: var(--sp-2); padding: 0 var(--sp-2) 0 var(--sp-3); border-bottom: 1px solid var(--border-weak); white-space: nowrap">
+<span style="font-size: var(--fs-7); font-weight: 600; letter-spacing: .08em; color: var(--sub)">会話</span>
+<span style="margin-left: auto"><x-import component-from-global-scope="KuroobiUI.Button" size="row">新しい会話</x-import></span>
+</div>
+<!-- Player picker opened by "New person". Clicking a name opens a conversation with that player -->
+<sc-if value="{{pickerOpen}}" hint-placeholder-val="{{true}}">
+<div role="dialog" aria-label="話す相手" style="position: absolute; z-index: 2; top: calc(var(--h-field) + var(--sp-1)); left: var(--sp-2); right: calc(-1 * var(--sp-6)); display: flex; flex-direction: column; border: 1px solid var(--border); border-radius: var(--r-4); background: var(--bg); box-shadow: var(--sh-2); overflow: hidden">
+<div style="padding: var(--sp-2); border-bottom: 1px solid var(--border-weak); display: flex"><x-import component-from-global-scope="KuroobiUI.TextField" value="" placeholder="接続中の人を名前で探す"></x-import></div>
+<div class="k-scroll" style="max-height: 320px; display: flex; flex-direction: column; padding: var(--sp-1) 0">
+<sc-for list="{{online}}" as="u" hint-placeholder-count="8">
+<button type="button" class="k-row" style="flex: none; width: 100%; height: var(--h-row); padding: 0 var(--sp-3); border: 0; background: transparent; color: var(--text); font: inherit; font-size: var(--fs-5); text-align: left; white-space: nowrap; overflow: hidden; text-overflow: ellipsis">{{u.name}}</button>
+</sc-for>
+</div>
+</div>
+</sc-if>
+<div class="k-scroll" style="flex: 1; min-height: 0; display: flex; flex-direction: column">
+<sc-for list="{{threads}}" as="th" hint-placeholder-count="6">
+<button type="button" class="k-row" style="flex: none; width: 100%; height: var(--h-row2); border: 0; border-bottom: 1px solid var(--border-weak); padding: 0 var(--sp-3); display: flex; align-items: center; gap: var(--sp-2); text-align: left; color: var(--text); font: inherit; background: {{th.ground}}; box-shadow: {{th.mark}}">
+<span style="flex: 1; min-width: 0; display: flex; flex-direction: column; line-height: 1.3">
+<span style="display: flex; align-items: baseline; gap: var(--sp-2); white-space: nowrap">
+<span style="font-size: var(--fs-5); font-weight: {{th.weight}}; overflow: hidden; text-overflow: ellipsis">{{th.name}}</span>
+<span style="margin-left: auto; flex: none; font-size: var(--fs-7); color: var(--sub)">{{th.at}}</span>
+</span>
+<span style="font-size: var(--fs-6); color: var(--sub); white-space: nowrap; overflow: hidden; text-overflow: ellipsis">{{th.last}}</span>
+</span>
+<sc-if value="{{th.unread}}" hint-placeholder-val="{{true}}">
+<x-import component-from-global-scope="KuroobiUI.Badge">{{th.n}}</x-import>
+</sc-if>
+</button>
+</sc-for>
+</div>
+</div>
+<!-- Selected conversation -->
+<div style="flex: 1; min-width: 0; display: flex; flex-direction: column">
+<sc-if value="{{noRows}}" hint-placeholder-val="{{false}}">
+<div style="flex: 1; min-height: 0; display: grid; place-items: center; padding: var(--sp-5); text-align: center">
+<div style="display: flex; flex-direction: column; gap: var(--sp-1); align-items: center">
+<span style="font-size: var(--fs-4); font-weight: 600">{{curName}} とのやりとりはまだありません</span>
+<span style="font-size: var(--fs-6); color: var(--sub)">下の欄から最初のメッセージを送れます</span>
+</div>
+</div>
+</sc-if>
+<sc-if value="{{hasRows}}" hint-placeholder-val="{{true}}">
+<div class="k-scroll" style="flex: 1; min-height: 0; padding: var(--sp-4); display: flex; flex-direction: column; gap: var(--sp-3)">
+<sc-for list="{{rows}}" as="r" hint-placeholder-count="10">
+<sc-if value="{{r.dayHead}}" hint-placeholder-val="{{false}}">
+<x-import component-from-global-scope="KuroobiUI.DayMark">{{r.day}}</x-import>
+</sc-if>
+<!-- "Translate" under each of the other player's messages. Only clicked ones are translated into the display language (never automatically) -->
+<x-import component-from-global-scope="KuroobiUI.Bubble" m="{{r.m}}" show-name="{{r.head}}" action="{{r.action}}"></x-import>
+</sc-for>
+</div>
+</sc-if>
+<div style="flex: none; display: flex; align-items: center; gap: var(--sp-2); padding: var(--sp-3) var(--sp-4); border-top: 1px solid var(--border)">
+<div style="flex: 1; min-width: 0; display: flex; flex-direction: column">
+<x-import component-from-global-scope="KuroobiUI.TextField" value="" placeholder="メッセージを入力 (Enter で送信)"></x-import>
+</div>
+<x-import component-from-global-scope="KuroobiUI.Button" variant="primary" size="field">送信</x-import>
+</div>
+</div>
+</div>
+</x-import>
+</x-import>
+<div style="height: var(--h-status); flex: none; background: var(--bg); border-top: 1px solid var(--border); display: flex; align-items: center; gap: var(--sp-4); padding: 0 var(--sp-4); font-size: var(--fs-6); color: var(--sub); white-space: nowrap">
+<span style="display: flex; align-items: center; gap: var(--sp-1)"><x-import component-from-global-scope="KuroobiUI.Dot" tone="ok"></x-import>自動対局中</span>
+<span style="display: flex; align-items: center; gap: var(--sp-1)"><x-import component-from-global-scope="KuroobiUI.Dot" tone="accent"></x-import>思考中 <b style="color: var(--text); font-weight: 600">3.2</b> 秒</span>
+<span>ノード <b style="color: var(--text); font-weight: 600">5,870 万</b></span>
+<span>速度 <b style="color: var(--text); font-weight: 600">18.3</b> Mnps</span>
+<span style="margin-left: auto; display: flex; align-items: center; gap: var(--sp-1)">CPU <span aria-hidden="true" style="display: inline-block; width: 32px; height: 4px; border-radius: var(--r-pill); background: var(--track); overflow: hidden"><span style="display: block; height: 100%; width: 38%; background: var(--ok)"></span></span><b style="color: var(--text); font-weight: 600">305</b>%</span>
+<span style="display: flex; align-items: center; gap: var(--sp-1)">メモリ <span aria-hidden="true" style="display: inline-block; width: 32px; height: 4px; border-radius: var(--r-pill); background: var(--track); overflow: hidden"><span style="display: block; height: 100%; width: 39%; background: var(--ok)"></span></span><b style="color: var(--text); font-weight: 600">6.2</b> GB</span>
+<span>GGS <b style="color: var(--text); font-weight: 600">接続中</b> (alice)</span>
+</div>
+</x-import>
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props='{"thread":{"editor":"select","options":["channel","new"],"default":"channel"},"picker":{"editor":"boolean","default":true},"$preview":{"width":1280,"height":800}}'>
+class Component extends DCLogic {
+  renderVals() {
+    const ui = window.KuroobiUI;
+    if (ui && ui.setLang) ui.setLang('ja');
+    const me = 'alice';
+    const threads = [
+      { key: '.chat', name: '全体チャット', at: '21:48', last: 'gg, nice endgame', n: 0 },
+      { key: 'ymatioun', name: 'ymatioun', at: '21:42', last: 'rematch with synchro 14?', n: 2 },
+      { key: 'saio', name: 'saio', at: '20:15', last: 'ありがとうございました', n: 1 },
+      { key: 'Rhapsody', name: 'Rhapsody', at: '昨日', last: 'see you in the tourney', n: 0 },
+      { key: 'viper', name: 'viper', at: '10月24日', last: 'which book do you use?', n: 0 },
+      { key: 'ant', name: 'ant', at: '10月22日', last: 'thanks', n: 0 },
+    ].map((t, i) => ({
+      ...t,
+      unread: t.n > 0,
+      weight: t.n > 0 ? 600 : 400,
+      ground: i === 0 ? 'var(--card)' : 'transparent',
+      mark: i === 0 ? 'inset 2px 0 0 var(--accent)' : 'none',
+    }));
+    const raw = [
+      ['10月25日 (土)', 'scorpion', '23:10', 'anyone up for a 10 min game?', '誰か 10 分の対局をしませんか?'],
+      ['10月25日 (土)', 'viper', '23:12', 'sure, sending an offer', 'いいよ、申し込みを送ります'],
+      ['10月25日 (土)', 'viper', '23:12', 'rated?', 'レート戦?'],
+      ['10月26日 (日)', 'ymatioun', '21:30', 'kuroobi is getting strong on the random openings', 'kuroobi はランダム開局で強くなってきた'],
+      ['10月26日 (日)', me, '21:31', 'thanks, still tuning the endgame', ''],
+      ['10月26日 (日)', 'saio', '21:40', 'the new tourney starts at 22:00', '新しい大会は 22:00 に始まります'],
+      ['10月26日 (日)', 'saio', '21:40', 'see you there', 'そこで会いましょう'],
+      ['10月26日 (日)', 'Rhapsody', '21:46', 'gg ant', ''],
+      ['10月26日 (日)', 'ant', '21:48', 'gg, nice endgame', 'お疲れさま、見事な終盤でした'],
+    ];
+    let lastDay = '', lastFrom = '';
+    const rows = raw.map(([day, from, at, body, ja]) => {
+      const dayHead = day !== lastDay;
+      if (dayHead) { lastDay = day; lastFrom = ''; }
+      const head = from !== lastFrom;
+      lastFrom = from;
+      // Translated examples: messages from ymatioun and ant. saio's second message is mid-translation
+      const shown = from === 'ymatioun' || from === 'ant';
+      const busy = from === 'saio' && body === 'see you there';
+      const mine = from === me;
+      return { day, dayHead, head,
+        m: { from, mine, at, body, tr: shown && ja ? ja : undefined },
+        action: mine ? undefined : busy ? { label: '翻訳中…' } : { label: shown ? '訳を隠す' : '翻訳', onClick: () => {} } };
+    });
+    const online = [
+      ['ymatioun', '2087.4'], ['saio', '2003.6'], ['Rhapsody', '1958.2'], ['scorpion', '1612.8'],
+      ['viper', '1580.1'], ['ant', '1355.0'], ['piglet', '1290.4'], ['fly', '1201.7'],
+      ['OO7', '1188.0'], ['patzer', '1102.3'], ['scorp+', '1655.9'], ['ant+', '1400.2'],
+      ['zebra', '1873.5'], ['edgar', '1499.0'],
+    ].map(([name, rate]) => ({ name, rate }));
+    return {
+      yes: true,
+      no: false,
+      navLocal: ui ? ui.navLocal() : [],
+      ggsItems: ui ? ui.ggsNav('online', { 'ggs-lobby': { count: 2, alert: true }, 'ggs-play': { count: 1 }, 'ggs-chat': { count: 3, alert: true } }).filter((it) => it.id !== 'ggs-standby') : [],
+      curName: this.props.thread === 'new' ? 'Zaxxon' : '全体チャット',
+      curReach: this.props.thread === 'new' ? '本人にだけ届く' : '全員に届く',
+      noRows: this.props.thread === 'new', hasRows: this.props.thread !== 'new',
+      threads,
+      threadCount: threads.length + ' 件',
+      rows,
+      pickerOpen: (this.props.picker ?? true) && this.props.thread !== 'new',
+      online,
+      onlineCount: online.length,
+    };
+  }
+}
+</script>
+</body>
+</html>

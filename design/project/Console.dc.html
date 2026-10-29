@@ -1,0 +1,160 @@
+<!doctype html>
+<html lang="ja">
+<head>
+<meta charset="utf-8">
+<title>Console</title>
+<script src="./support.js"></script>
+<link rel="stylesheet" href="kuroobi-tokens.css">
+<link rel="stylesheet" href="ds/kuroobiui/components/bundle.css">
+<script src="ds/kuroobiui/components/bundle.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<style>
+x-import{display:contents}
+@media (max-width:1040px){.k-nav-ov .k-nav-label{display:none}.k-nav-ov .k-nav-row{justify-content:center;padding:0}}
+.k-scroll{overflow-y:scroll!important}
+.k-scroll::-webkit-scrollbar-track{background:var(--track);border-radius:9px}
+body{margin:0;background:var(--bg);color:var(--text);font:var(--fs-4)/1.6 var(--ff)}
+a{color:var(--accent)}a:hover{color:var(--text)}
+</style>
+</helmet>
+<div style="width: 100%; height: 100vh; min-height: 480px; background: var(--bg); color: var(--text); font: var(--fs-4)/1.6 var(--ff); overflow: hidden">
+<x-import style="display: contents" component-from-global-scope="KuroobiUI.AppFrame">
+<x-import component-from-global-scope="KuroobiUI.WindowBar" title="コンソール"></x-import>
+<x-import style="display: contents" component-from-global-scope="KuroobiUI.Body">
+<div style="position: relative; flex: none; display: flex">
+<x-import style="display: contents" component-from-global-scope="KuroobiUI.Nav" items="{{navLocal}}" ggs-items="{{ggsItems}}" conn="online" active="ggs-console"></x-import>
+<div class="k-nav-ov" style="position: absolute; left: 0; right: 1px; bottom: 0; padding: var(--sp-2); border-top: 1px solid var(--border); background: var(--panel)">
+<button type="button" class="k-nav-row k-row" aria-current="false" style="width: 100%; height: var(--h-field); display: flex; align-items: center; gap: var(--sp-3); border: 0; border-radius: var(--r-2); font: inherit; font-size: var(--fs-4); background: transparent; color: var(--text); font-weight: 400"><span style="flex: none; display: grid; place-items: center"><x-import component-from-global-scope="KuroobiUI.Icon" name="prefs"></x-import></span><span class="k-nav-label">設定</span></button>
+</div>
+</div>
+<x-import style="display: contents" component-from-global-scope="KuroobiUI.Main">
+<x-import style="display: contents" component-from-global-scope="KuroobiUI.Toolbar">
+<x-import component-from-global-scope="KuroobiUI.Segmented" value="all" options="{{dirOptions}}"></x-import>
+<x-import component-from-global-scope="KuroobiUI.TextField" value="" placeholder="ログ内を検索" width="{{searchWidth}}"></x-import>
+<x-import component-from-global-scope="KuroobiUI.Divider"></x-import>
+<x-import component-from-global-scope="KuroobiUI.Toggle" checked="{{yes}}" label="末尾に追従"></x-import>
+<div style="margin-left: auto; display: flex; align-items: center; gap: var(--sp-2); white-space: nowrap">
+<sc-if value="{{saveError}}" hint-placeholder-val="{{false}}">
+<span style="font-size: var(--fs-6); color: var(--bad)">保存できませんでした (書き込み権限がありません)</span>
+</sc-if>
+<x-import component-from-global-scope="KuroobiUI.Button">コピー</x-import>
+<x-import component-from-global-scope="KuroobiUI.Button">保存</x-import>
+<x-import component-from-global-scope="KuroobiUI.Button" variant="ghost">クリア</x-import>
+</div>
+</x-import>
+<div style="flex: 1; min-height: 0; display: flex; flex-direction: column">
+<x-import component-from-global-scope="KuroobiUI.ConsoleLog" lines="{{lines}}"></x-import>
+</div>
+<div style="position: relative; flex: none; display: flex; align-items: center; gap: var(--sp-2); padding: var(--sp-2) var(--sp-4); border-top: 1px solid var(--border); background: var(--panel)">
+<!-- Frequent commands: opened by a button; clicking one puts it in the input field -->
+<sc-if value="{{cmdsOpen}}" hint-placeholder-val="{{false}}">
+<div role="dialog" aria-label="よく使うコマンド" style="position: absolute; z-index: 2; right: var(--sp-4); bottom: calc(100% + var(--sp-1)); width: 320px; display: flex; flex-direction: column; border: 1px solid var(--border); border-radius: var(--r-4); background: var(--bg); box-shadow: var(--sh-2); overflow: hidden">
+<div class="k-scroll" style="max-height: 280px; display: flex; flex-direction: column; padding: var(--sp-1) 0">
+<sc-for list="{{cmds}}" as="c" hint-placeholder-count="12">
+<button type="button" class="k-row" style="flex: none; display: flex; flex-direction: column; justify-content: center; width: 100%; height: var(--h-row2); padding: 0 var(--sp-3); border: 0; background: transparent; color: var(--text); font: inherit; text-align: left; line-height: 1.35; white-space: nowrap">
+<span style="font-family: var(--ff-mono); font-size: var(--fs-6); overflow: hidden; text-overflow: ellipsis">{{c.cmd}}</span>
+<span style="font-size: var(--fs-6); color: var(--sub); overflow: hidden; text-overflow: ellipsis">{{c.what}}</span>
+</button>
+</sc-for>
+</div>
+</div>
+</sc-if>
+<span style="flex: none; font-family: var(--ff-mono); font-size: var(--fs-5); color: var(--accent)">›</span>
+<div style="flex: 1; min-width: 0; display: flex">
+<x-import component-from-global-scope="KuroobiUI.TextField" mono="{{yes}}" value="tell /os finger ymatioun" placeholder="コマンド (例: tell /os who 8。Enter で送信)"></x-import>
+</div>
+<x-import component-from-global-scope="KuroobiUI.Button" size="field" variant="ghost">よく使うコマンド</x-import>
+<x-import component-from-global-scope="KuroobiUI.Button" size="field">送信</x-import>
+</div>
+</x-import>
+</x-import>
+<div style="height: var(--h-status); flex: none; background: var(--bg); border-top: 1px solid var(--border); display: flex; align-items: center; gap: var(--sp-4); padding: 0 var(--sp-4); font-size: var(--fs-6); color: var(--sub); white-space: nowrap">
+<span style="display: flex; align-items: center; gap: var(--sp-1)"><x-import component-from-global-scope="KuroobiUI.Dot" tone="ok"></x-import>自動対局中</span>
+<span style="display: flex; align-items: center; gap: var(--sp-1)"><x-import component-from-global-scope="KuroobiUI.Dot" tone="accent"></x-import>思考中 <b style="color: var(--text); font-weight: 600">3.2</b> 秒</span>
+<span>ノード <b style="color: var(--text); font-weight: 600">5,870 万</b></span>
+<span>速度 <b style="color: var(--text); font-weight: 600">18.3</b> Mnps</span>
+<span style="margin-left: auto; display: flex; align-items: center; gap: var(--sp-1)">CPU <span aria-hidden="true" style="display: inline-block; width: 32px; height: 4px; border-radius: var(--r-pill); background: var(--track); overflow: hidden"><span style="display: block; height: 100%; width: 38%; background: var(--ok)"></span></span><b style="color: var(--text); font-weight: 600">305</b>%</span>
+<span style="display: flex; align-items: center; gap: var(--sp-1)">メモリ <span aria-hidden="true" style="display: inline-block; width: 32px; height: 4px; border-radius: var(--r-pill); background: var(--track); overflow: hidden"><span style="display: block; height: 100%; width: 39%; background: var(--ok)"></span></span><b style="color: var(--text); font-weight: 600">6.2</b> GB</span>
+<span>GGS <b style="color: var(--text); font-weight: 600">接続中</b> (alice)</span>
+</div>
+</x-import>
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props='{"cmdsOpen":{"editor":"boolean","default":true},"$preview":{"width":1280,"height":800}}'>
+class Component extends DCLogic {
+  renderVals() {
+    const ui = window.KuroobiUI;
+    if (ui && ui.setLang) ui.setLang('ja');
+    const raw = [
+      ['app', '127.0.0.1:15000 に接続しました'],
+      ['in', ': Enter login (yours, or one you\'d like to use).'],
+      ['out', 'alice'],
+      ['in', ': Enter your password.'],
+      ['in', ': alice logged in.'],
+      ['out', 'verbose -news -faq -help -ack'],
+      ['out', 'tell /os client -'],
+      ['out', 'tell /os open 1'],
+      ['in', '/os: open 1'],
+      ['out', 'tell /os trust +'],
+      ['out', 'tell /os notify +'],
+      ['out', 'tell /os who 8'],
+      ['in', '/os: who 8 12'],
+      ['in', '|  ymatioun  2087.4  -   saio      2003.6  -   Rhapsody  1951.2'],
+      ['in', '|  scorpion  1612.8  -   viper     1588.1  -   ant       1355.0'],
+      ['in', '|  piglet    1290.4  -   fly       1204.9  -   OO7       1180.3'],
+      ['out', 'tell /os stored'],
+      ['in', '/os: stored 0'],
+      ['in', '/os: +  .412 2087.4 ymatioun s8r14 05:00//02:00 alice'],
+      ['in', '/os: +  .413 2003.6 saio 8 10:00//02:00 alice'],
+      ['in', '/os: +  .414 1355.0 ant 8 03:00//02:00 *'],
+      ['out', 'tell /os accept .412'],
+      ['in', '/os: + match .415 1720.0 alice 2087.4 ymatioun s8r14 R'],
+      ['app', '対局 .415 を開始しました (同期・ランダム14手、5:00)'],
+      ['in', '/os: update .415.0 s8r14 K?'],
+      ['in', '|14 move(s)'],
+      ['in', '|alice    (1720.0 *) 05:00,0//02:00'],
+      ['in', '|ymatioun (2087.4 O) 05:00,0//02:00'],
+      ['out', 'tell /os play .415.0 F5/+2.10/1.84'],
+      ['in', '/os: update .415.0 s8r14 K?'],
+      ['in', '|15: F5/2.10/1.84'],
+      ['out', 'tell /os play .415.1 D3/-1.40/2.07'],
+      ['in', '/os: update .415.1 s8r14 K?'],
+      ['in', '|15: D3/-1.40/2.07'],
+      ['out', 'tell /os rated +'],
+      ['in', '/os: ERR you are not registered'],
+      ['app', 'レート戦の設定を変えられませんでした'],
+      ['in', '/os: update .415.0 s8r14 K?'],
+    ];
+    const lines = raw.map(([dir, text], i) => ({ seq: 1166 + i, dir, text }));
+    return {
+      yes: true,
+      saveError: false,
+      searchWidth: 220,
+      navLocal: ui ? ui.navLocal() : [],
+      ggsItems: ui ? ui.ggsNav('online', { 'ggs-lobby': { count: 2, alert: true }, 'ggs-play': { count: 1 }, 'ggs-chat': { count: 3, alert: true } }).filter((it) => it.id !== 'ggs-standby') : [],
+      dirOptions: [{ value: 'all', label: 'すべて' }, { value: 'out', label: '送信' }, { value: 'in', label: '受信' }],
+      lines,
+      cmdsOpen: this.props.cmdsOpen ?? true,
+      cmds: [
+        { cmd: 'tell /os who 8', what: 'オンラインのプレイヤー' },
+        { cmd: 'tell /os match', what: '進行中の対局' },
+        { cmd: 'tell /os stored', what: '中断対局' },
+        { cmd: 'tell /os finger ymatioun', what: 'プレイヤーの情報' },
+        { cmd: 'tell /os history ymatioun', what: 'プレイヤーの対局履歴' },
+        { cmd: 'tell /os rank 8 alice', what: 'レートの順位' },
+        { cmd: 'tell /os top 8 20', what: 'レート上位 20 人' },
+        { cmd: 'tell /os look .415', what: '対局の盤面' },
+        { cmd: 'tell /os watch + .415', what: '観戦を始める' },
+        { cmd: 'tell /os watch - .415', what: '観戦をやめる' },
+        { cmd: 'tell /os ask 8 05:00 saio', what: '対局を申し込む (通常・5 分)' },
+        { cmd: 'tell /os rated +', what: 'レート戦を受け付ける' },
+      ],
+    };
+  }
+}
+</script>
+</body>
+</html>

@@ -1,0 +1,259 @@
+<!doctype html>
+<html lang="ja">
+<head>
+<meta charset="utf-8">
+<title>Request a game (sheet)</title>
+<script src="./support.js"></script>
+<link rel="stylesheet" href="kuroobi-tokens.css">
+<link rel="stylesheet" href="ds/kuroobiui/components/bundle.css">
+<script src="ds/kuroobiui/components/bundle.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<style>
+x-import{display:contents}
+.k-scroll{overflow-y:scroll!important}
+.k-scroll::-webkit-scrollbar-track{background:var(--track);border-radius:9px}
+body{margin:0;background:var(--bg);color:var(--text);font:var(--fs-4)/1.6 var(--ff)}
+a{color:var(--accent)}a:hover{color:var(--text)}
+</style>
+</helmet>
+<div style="width: 100%; height: 100vh; min-height: 480px; background: color-mix(in srgb, var(--bg) 55%, black); color: var(--text); font: var(--fs-4)/1.6 var(--ff); overflow: hidden; display: flex; align-items: center; justify-content: center; gap: var(--sp-6)">
+<sc-for list="{{sheets}}" as="s" hint-placeholder-count="2">
+<div role="dialog" style="width: var(--w-modal-wide); flex: none; border-radius: var(--r-4); background: var(--bg); border: 1px solid var(--border); box-shadow: var(--sh-2); display: flex; flex-direction: column; overflow: hidden; max-height: calc(100% - var(--sp-6))">
+<!-- Title -->
+<div style="height: var(--h-bar); flex: none; background: var(--panel); border-bottom: 1px solid var(--border); display: flex; align-items: center; padding: 0 var(--sp-2)">
+<span style="width: 32px; flex: none"></span>
+<div style="flex: 1; min-width: 0; text-align: center; line-height: 1.3">
+<div style="font-size: var(--fs-4); font-weight: 600">対局を申し込む</div>
+<div style="font-size: var(--fs-7); color: var(--sub)">{{s.from}}</div>
+</div>
+<span style="width: 32px; flex: none; display: grid; place-items: center"><x-import component-from-global-scope="KuroobiUI.IconButton" name="close" label="閉じる"></x-import></span>
+</div>
+<!-- Body -->
+<div class="k-scroll" style="flex: 1; min-height: 0; display: grid; grid-template-columns: 72px minmax(0, 1fr); column-gap: var(--sp-3); row-gap: var(--sp-3); padding: var(--sp-4); align-items: start">
+
+<span style="line-height: var(--h-field); font-size: var(--fs-5); color: var(--sub)">相手</span>
+<div style="display: flex; flex-direction: column; gap: var(--sp-2); min-width: 0">
+<!-- Opponent: closed, shows only the chosen player. Open, a search field and list overlay below (↑↓ to select, Enter to confirm, Esc to close) -->
+<div style="position: relative">
+<button type="button" class="k-press" aria-haspopup="listbox" aria-expanded="{{s.open}}" style="width: 100%; height: var(--h-field); padding: 0 var(--sp-3); border-radius: var(--r-3); background: var(--bg); border: 1px solid {{s.fieldBorder}}; display: flex; align-items: center; gap: var(--sp-2); font: inherit; font-size: var(--fs-5); color: var(--text); text-align: left; white-space: nowrap">
+<span style="flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; font-weight: 600">{{s.oppName}}</span>
+<span style="font-size: var(--fs-6); color: var(--sub)">{{s.oppRate}}</span>
+<span style="font-size: var(--fs-6); color: {{s.oppStateColor}}">{{s.oppState}}</span>
+<span aria-hidden="true" style="flex: none; color: var(--sub)">▾</span>
+</button>
+<sc-if value="{{s.open}}" hint-placeholder-val="{{false}}">
+<div role="listbox" style="position: absolute; z-index: 5; left: 0; right: 0; top: calc(100% + 4px); display: flex; flex-direction: column; border: 1px solid var(--border); border-radius: var(--r-3); background: var(--bg); box-shadow: var(--sh-2); overflow: hidden">
+<div style="padding: var(--sp-1); border-bottom: 1px solid var(--border-weak); display: flex"><x-import component-from-global-scope="KuroobiUI.TextField" value="{{s.query}}" placeholder="名前で探す"></x-import></div>
+<div class="k-scroll" style="max-height: calc(var(--h-field) * 6); display: flex; flex-direction: column">
+<sc-for list="{{s.opps}}" as="o" hint-placeholder-count="5">
+<div class="k-row" role="option" aria-selected="{{o.act}}" style="display: flex; align-items: center; gap: var(--sp-2); height: var(--h-field); padding: 0 var(--sp-3); font-size: var(--fs-5); white-space: nowrap; background: {{o.ground}}; box-shadow: {{o.mark}}">
+<span style="flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; font-weight: {{o.weight}}">{{o.name}}</span>
+<span style="width: 64px; text-align: right; font-size: var(--fs-6); color: var(--sub)">{{o.rate}}</span>
+<span style="width: 56px; text-align: right; font-size: var(--fs-6); color: {{o.stateColor}}">{{o.state}}</span>
+</div>
+</sc-for>
+</div>
+</div>
+</sc-if>
+</div>
+
+<sc-if value="{{s.stored}}" hint-placeholder-val="{{true}}">
+<div style="display: flex; align-items: center; gap: var(--sp-3); padding: var(--sp-2) var(--sp-3); border-radius: var(--r-1); background: var(--card); box-shadow: inset 2px 0 0 var(--gold); white-space: nowrap">
+<span style="flex: 1; min-width: 0; display: flex; flex-direction: column; line-height: 1.35; overflow: hidden">
+<span style="font-size: var(--fs-5); font-weight: 600; overflow: hidden; text-overflow: ellipsis">saio との中断対局があります</span>
+<span style="font-size: var(--fs-6); color: var(--sub); overflow: hidden; text-overflow: ellipsis">通常 (1局) · 10 分 · 34 手目で中断。再開はロビーから</span>
+</span>
+</div>
+</sc-if>
+<!-- A request matching the opponent's "Auto-decline condition" (finger's decline) is stopped here before it reaches the server. Re-evaluated whenever the format, main time or rated setting changes;
+     each matched condition is listed as one short sentence (the formula is not shown). Conditions joined by AND go on one line ("Declines requests matching all of: synchro, main time under 5 minutes"). Identical sentences are merged. Conditions too complex to put into words are grouped as "another condition".
+     While any condition matches, the request cannot be sent. Not stopped when the outcome depends on values unknown before sending, such as randomness or the opponent's game count -->
+<sc-if value="{{s.unfit}}" hint-placeholder-val="{{false}}">
+<div style="display: flex; flex-direction: column; gap: var(--sp-1); padding: var(--sp-2) var(--sp-3); border-radius: var(--r-1); background: var(--card); box-shadow: inset 2px 0 0 var(--bad); line-height: 1.35">
+<span style="font-size: var(--fs-5); font-weight: 600">{{s.unfitHead}}</span>
+<!-- The opponent's formula as an outline, keeping its shape: groups are only "Any of" (|) and "All of" (&); conditions are short descriptions of a state.
+     Matching rows get ✕ and --bad; non-matching rows get "·" and --sub. "Any of" passes once every red row is cleared, "All of" once any one red row is.
+     Non-matching rows are collapsed and expand on click. !( … ) is shown after pushing the negation inward.
+     Layout rules: indent is 16px per level up to 4 levels (64px); deeper levels sit at level 4 (group header rows still show the nesting).
+     Long text wraps, continuation lines aligned right of the marker. The row list is capped at 240px and scrolls inside its box beyond that -->
+<span style="font-size: var(--fs-6); color: var(--sub)">{{s.lead}}</span>
+<div class="k-scroll" style="max-height: 240px; display: flex; flex-direction: column; gap: var(--sp-1)">
+<sc-for list="{{s.rows}}" as="r" hint-placeholder-count="4">
+<span style="display: flex; align-items: baseline; gap: var(--sp-2); padding-left: {{r.pad}}; font-size: var(--fs-6); color: {{r.color}}; font-weight: {{r.weight}}"><span aria-hidden="true" style="width: 10px; flex: none; text-align: center; color: {{r.markColor}}">{{r.mark}}</span><span style="min-width: 0; overflow-wrap: anywhere">{{r.text}}</span></span>
+</sc-for>
+</div>
+<sc-if value="{{s.hasRest}}" hint-placeholder-val="{{true}}">
+<button type="button" class="k-press" style="align-self: flex-start; display: flex; align-items: center; gap: var(--sp-1); height: var(--h-chip); padding: 0; border: 0; background: transparent; font: inherit; font-size: var(--fs-6); color: var(--accent)">{{s.rest}}</button>
+</sc-if>
+</div>
+</sc-if>
+</div>
+
+<span style="line-height: var(--h-ctrl); font-size: var(--fs-5); color: var(--sub)">形式</span>
+<div style="display: flex; flex-direction: column; gap: var(--sp-1)">
+<x-import component-from-global-scope="KuroobiUI.Select" value="{{s.gtype}}" options="{{gtypes}}"></x-import>
+</div>
+
+<span style="line-height: var(--h-ctrl); font-size: var(--fs-5); color: var(--sub)">持ち時間</span>
+<div style="display: flex; flex-direction: column; gap: var(--sp-2)">
+<x-import component-from-global-scope="KuroobiUI.Select" value="{{s.clock}}" options="{{clocks}}"></x-import>
+<!-- Main time and extension (time after the main time is used up) are chosen as a pair. Choices: the two pairs from recent tournaments (1 min / 3 min + 30 s extension),
+     and the 5 / 10 / 15 min + 2 min extension common outside tournaments (15 min + 2 min is GGS's default). A 2 min extension is GGS's default, so it is omitted from the sent command.
+     Only when "Custom…" is chosen, "Time control" and "Extension" ClockFields appear side by side below (main time 00:30–99:59, extension 00:00–99:59).
+     The field has two segments, minutes and seconds. Clicking selects it all; typed digits start in minutes. Both segments are right-aligned 2 digits, reformatted on every keystroke
+     (1 → 01:00). Moves to seconds when minutes reach 2 digits or on ":". Backspace deletes the last typed digit, returning to minutes when seconds are empty.
+     Digits making seconds 60 or more are rejected. The active segment is underlined in --accent. Increment is not offered since KUROOBI's time allocation does not use it -->
+<sc-if value="{{s.customClock}}" hint-placeholder-val="{{false}}">
+<div style="display: flex; align-items: center; flex-wrap: wrap; gap: var(--sp-2) var(--sp-4); font-size: var(--fs-5); color: var(--sub); white-space: nowrap">
+<span style="display: inline-flex; align-items: center; gap: var(--sp-2)"><span>持ち時間</span><span style="display: inline-flex; align-items: center; height: var(--h-field); padding: 0 var(--sp-3); border-radius: var(--r-3); border: 1px solid var(--accent); background: var(--bg); font-family: var(--ff-mono); font-size: var(--fs-4); color: var(--text); letter-spacing: .04em"><span style="box-shadow: inset 0 -2px 0 var(--accent)">04</span><span style="color: var(--sub)">:</span><span>30</span></span></span>
+<span style="display: inline-flex; align-items: center; gap: var(--sp-2)"><span>延長</span><span style="display: inline-flex; align-items: center; height: var(--h-field); padding: 0 var(--sp-3); border-radius: var(--r-3); border: 1px solid var(--border); background: var(--bg); font-family: var(--ff-mono); font-size: var(--fs-4); color: var(--text); letter-spacing: .04em"><span>01</span><span style="color: var(--sub)">:</span><span>30</span></span></span>
+</div>
+</sc-if>
+</div>
+
+<span style="line-height: var(--h-ctrl); font-size: var(--fs-5); color: var(--sub)">レート戦</span>
+<div style="display: flex; flex-direction: column; gap: var(--sp-1)">
+<span style="display: flex; align-items: center; height: var(--h-ctrl); opacity: {{ratedDim}}"><x-import component-from-global-scope="KuroobiUI.Toggle" checked="{{s.rated}}"></x-import></span>
+<sc-if value="{{unregistered}}" hint-placeholder-val="{{false}}"><span style="font-size: var(--fs-6); color: var(--sub)">このアカウントはレート戦に登録されていない</span></sc-if>
+</div>
+
+<span style="line-height: var(--h-ctrl); font-size: var(--fs-5); color: var(--sub)">回数</span>
+<div style="display: flex; flex-direction: column; gap: var(--sp-2)">
+<div style="display: flex"><x-import component-from-global-scope="KuroobiUI.Segmented" value="{{s.times}}" options="{{timesOptions}}"></x-import></div>
+<sc-if value="{{s.repeat}}" hint-placeholder-val="{{true}}">
+<div style="display: flex; align-items: center; gap: var(--sp-2); font-size: var(--fs-5); color: var(--sub); white-space: nowrap">
+<x-import component-from-global-scope="KuroobiUI.TextField" value="20" numeric="{{yes}}" align="right" width="{{56}}"></x-import><span>局まで、終局から</span>
+<x-import component-from-global-scope="KuroobiUI.TextField" value="20" numeric="{{yes}}" align="right" width="{{48}}"></x-import><span>秒あけて次を申し込む</span>
+</div>
+<span style="font-size: var(--fs-6); color: var(--sub)">局数を 0 にすると止めるまで続ける</span>
+<span style="display: flex; align-items: center; height: var(--h-ctrl)"><x-import component-from-global-scope="KuroobiUI.Toggle" checked="{{yes}}" label="その間に届いた申し込みも受ける"></x-import></span>
+</sc-if>
+</div>
+</div>
+<!-- Confirm -->
+<div style="flex: none; display: flex; align-items: center; gap: var(--sp-2); padding: var(--sp-3) var(--sp-4); border-top: 1px solid var(--border); background: var(--panel); white-space: nowrap">
+<!-- Left side stays empty (no summary of the inputs); only an error shows text in --bad -->
+<span style="flex: 1"></span>
+<x-import component-from-global-scope="KuroobiUI.Button" variant="ghost" size="field">キャンセル</x-import>
+<x-import component-from-global-scope="KuroobiUI.Button" variant="primary" size="field" disabled="{{s.blocked}}">{{s.go}}</x-import>
+</div>
+</div>
+</sc-for>
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props='{"unregistered":{"editor":"boolean","default":false},"unfit":{"editor":"select","options":["none","or","open","and","deep"],"default":"none"},"clock":{"editor":"select","options":["preset","custom"],"default":"preset"},"$preview":{"width":1280,"height":800}}'>
+class Component extends DCLogic {
+  renderVals() {
+    const ui = window.KuroobiUI;
+    if (ui && ui.setLang) ui.setLang('ja');
+    const st = { open: ['受付中', 'var(--accent)'], play: ['対局中', 'var(--ok)'], closed: ['受けない', 'var(--sub)'], any: ['', 'var(--sub)'] };
+    // Continuing (auto-play) needs an opponent, so "Anyone" is hidden then
+    // sel = chosen player, act = row Enter would pick now (while searching, the first match)
+    const opps = (sel, any = true, act = sel, query = '') => [
+      ...(any ? [['', '誰でも (募集する)', '', 'any']] : []),
+      ['ymatioun', 'ymatioun', '2087.4', 'play'],
+      ['saio', 'saio', '2003.6', 'open'],
+      ['Rhapsody', 'Rhapsody', '1934.1', 'open'],
+      ['viper', 'viper', '1861.5', 'closed'],
+      ['scorpion', 'scorpion', '1790.5', 'play'],
+      ['Zaxxon', 'Zaxxon', '1777.9', 'open'],
+      ['edgar', 'edgar', '1612.0', 'open'],
+      ['OO7', 'OO7', '1655.9', 'closed'],
+      ['fly', 'fly', '1540.1', 'play'],
+      ['Thor', 'Thor', '1540.4', 'open'],
+      ['ant', 'ant', '1349.6', 'open'],
+      ['piglet', 'piglet', '1290.4', 'play'],
+      ['zebra', 'zebra', '1150.0', 'open'],
+    ].filter(([id, name]) => !query || name.toLowerCase().includes(query.toLowerCase()))
+      .sort(([, a], [, b]) => {
+        const rank = (n) => (!query ? 0 : n.toLowerCase() === query.toLowerCase() ? 0 : n.toLowerCase().startsWith(query.toLowerCase()) ? 1 : 2);
+        return rank(a) - rank(b);
+      })
+      .map(([id, name, rate, s]) => ({
+        id, name, rate, state: st[s][0], stateColor: st[s][1], act: id === act,
+        ground: id === act ? 'var(--card)' : 'transparent',
+        mark: id === sel ? 'inset 2px 0 0 var(--accent)' : 'none',
+        weight: id === sel ? 600 : 400,
+      }));
+    const field = (list, sel, open, query = '') => {
+      const o = list.find((x) => x.id === sel) ?? opps(sel).find((x) => x.id === sel);
+      return { open, query, opps: list, fieldBorder: open ? 'var(--accent)' : 'var(--border)',
+        oppName: o ? o.name : '相手を選ぶ', oppRate: o ? o.rate : '', oppState: o ? o.state : '', oppStateColor: o ? o.stateColor : 'var(--sub)' };
+    };
+    const unregistered = this.props.unregistered ?? false;
+    // unfit: requesting a single normal game at 3 min from piglet (piglet accepts only synchro, random 16–20 discs, 200 s or more)
+    // or: piglet's condition (any of 15 rows) vs a single normal game at 3 min / open: its non-matching rows expanded / and: synchro at 5 min vs a condition containing an AND group
+    const u0 = this.props.unfit;
+    const mode = u0 === true ? 'or' : (typeof u0 === 'string' ? u0 : 'none');
+    const unfit = mode !== 'none';
+    const ind = (d) => (Math.min(d, 4) * 16) + 'px';
+    const hit = (text, pad = 0) => ({ text, mark: '✕', markColor: 'var(--bad)', color: 'var(--text)', weight: 400, pad: ind(pad) });
+    const miss = (text, pad = 0) => ({ text, mark: '·', markColor: 'var(--sub)', color: 'var(--sub)', weight: 400, pad: ind(pad) });
+    const group = (text, on, pad = 0) => ({ text, mark: on ? '✕' : '·', markColor: on ? 'var(--bad)' : 'var(--sub)', color: on ? 'var(--text)' : 'var(--sub)', weight: 600, pad: ind(pad) });
+    const pigletHits = [hit('同期対局でない'), hit('ランダム開局でない'), hit('ランダム開局の石数が 16 未満'), hit('持ち時間が 3 分 20 秒未満')];
+    const pigletMiss = ['盤の大きさが 8 以外', 'アンチ', '手番を指定している', 'ランダム開局の石数が 20 より大きい', '持ち時間内に指す手数が 0 以外',
+      '持ち時間切れで負けにならない', '双方の持ち時間が違う', '双方の加算時間が違う', '双方の延長時間が違う', '中断している対局がある',
+      '勝ってもレートが上がらない相手'].map((t) => miss(t));
+    const outline = {
+      or: { opp: 'piglet', gtype: '8', clock: '3', lead: '次のどれかに当たると断ります', rows: pigletHits, hasRest: true, rest: '▸ 当たっていない条件 11 件' },
+      open: { opp: 'piglet', gtype: '8', clock: '3', lead: '次のどれかに当たると断ります', rows: pigletHits.concat(pigletMiss), hasRest: true, rest: '▾ 当たっていない条件を畳む' },
+      and: { opp: 'Rhapsody', gtype: 's8r16', clock: '5', lead: '次のどれかに当たると断ります',
+        rows: [group('次のすべてに当たる', true), hit('同期対局', 1), hit('持ち時間が 10 分未満', 1)],
+        hasRest: true, rest: '▸ 当たっていない条件 3 件' },
+      // 6-level nesting, long opponent name, long text, many rows: no extra indent past level 4, list scrolls at 240px
+      deep: { opp: 'Rhapsody', gtype: 's8r16', clock: '5', lead: '次のどれかに当たると断ります',
+        rows: [group('次のすべてに当たる', true), hit('同期対局', 1), group('次のどれかに当たる', true, 1), hit('持ち時間が 10 分未満', 2),
+          group('次のすべてに当たる', true, 2), hit('ランダム開局', 3), group('次のどれかに当たる', true, 3), hit('ランダム開局の石数が 18 未満', 4),
+          group('次のすべてに当たる', true, 4), hit('延長時間が 5 分未満', 5), group('次のどれかに当たる', true, 5), hit('盤の大きさが 8', 6),
+          hit('こちらのレートが 1700.0 より大きく、Rhapsody_the_very_long_login_name のレートとの差の条件', 6),
+          hit('手番を指定していない'), hit('レート戦'), hit('持ち時間切れで負けになる'), hit('双方の延長時間が違う'), hit('中断している対局がある')],
+        hasRest: true, rest: '▸ 当たっていない条件 9 件' },
+    }[mode];
+    return {
+      yes: true,
+      unregistered, ratedDim: unregistered ? 0.4 : 1,
+      gtypes: [
+        ['s8r14', '同期・ランダム14手'], ['s8r16', '同期・ランダム16手'], ['s8r18', '同期・ランダム18手'],
+        ['s8r20', '同期・ランダム20手'], ['s8', '同期・通常開局'], ['8', '通常 (1局)'], ['8r16', '通常・ランダム16手'],
+      ],
+      clocks: [['1', '1 分 · 延長 30 秒'], ['3', '3 分 · 延長 30 秒'], ['5', '5 分 · 延長 2 分'], ['10', '10 分 · 延長 2 分'], ['15', '15 分 · 延長 2 分'], ['custom', 'カスタム…']],
+      timesOptions: [{ value: '1', label: '1 局' }, { value: 'n', label: '続けて (自動対局)' }],
+      sheets: (unfit ? [
+        {
+          from: 'プレイヤー: ' + outline.opp + ' から',
+          ...field(opps(outline.opp), outline.opp, false),
+          stored: false, unfit: true,
+          unfitHead: outline.opp + ' はこの申し込みを受けません',
+          lead: outline.lead, rows: outline.rows, hasRest: outline.hasRest, rest: outline.rest,
+          gtype: outline.gtype, clock: outline.clock, rated: !unregistered,
+          times: '1', repeat: false,
+          go: '申し込む', blocked: true,
+        },
+      ] : []).concat(unfit ? [] : [
+        {
+          from: 'プレイヤー: saio から',
+          ...field(opps('saio'), 'saio', false),
+          stored: true,
+          gtype: 's8r14', clock: '5', rated: !unregistered,
+          times: '1', repeat: false,
+          go: '申し込む', blocked: false,
+          ...(this.props.clock === 'custom' ? { clock: 'custom', customClock: true } : {}),
+        },
+        {
+          from: 'ロビー: 対局を申し込む から',
+          ...field(opps('ymatioun', false, 'Rhapsody', 'r'), 'ymatioun', true, 'r'),
+          stored: false,
+          gtype: 's8r14', clock: '5', rated: !unregistered,
+          times: 'n', repeat: true,
+          go: '自動対局を始める', blocked: false,
+        },
+      ]),
+    };
+  }
+}
+</script>
+</body>
+</html>

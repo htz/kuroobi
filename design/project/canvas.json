@@ -1,0 +1,1212 @@
+{
+ "v": 3,
+ "attachments": {},
+ "boards": {
+  "Ask.dc.html": {
+   "expand": "fill",
+   "h": 800,
+   "title": "Request a game (sheet)",
+   "w": 1280,
+   "x": 0,
+   "y": 920,
+   "page": "lobby"
+  },
+  "Chat.dc.html": {
+   "expand": "fill",
+   "h": 800,
+   "title": "Chat",
+   "w": 1280,
+   "x": 0,
+   "y": 0,
+   "page": "chat"
+  },
+  "ChatNew.dc.html": {
+   "expand": "fill",
+   "h": 800,
+   "title": "Chat · New conversation",
+   "w": 1280,
+   "x": 1360,
+   "y": 0,
+   "page": "chat"
+  },
+  "Console.dc.html": {
+   "expand": "fill",
+   "h": 800,
+   "title": "Console",
+   "w": 1280,
+   "x": 0,
+   "y": 0,
+   "page": "console"
+  },
+  "ConsoleClosed.dc.html": {
+   "expand": "fill",
+   "h": 800,
+   "title": "Console · Command pane closed",
+   "w": 1280,
+   "x": 1360,
+   "y": 0,
+   "page": "console"
+  },
+  "Kifu.dc.html": {
+   "expand": "fill",
+   "h": 800,
+   "title": "Game record · Synchro",
+   "w": 1280,
+   "x": 0,
+   "y": 920,
+   "page": "results"
+  },
+  "KifuSingle.dc.html": {
+   "expand": "fill",
+   "h": 800,
+   "title": "Game record · Single board",
+   "w": 1280,
+   "x": 1360,
+   "y": 920,
+   "page": "results"
+  },
+  "Login.dc.html": {
+   "expand": "fill",
+   "h": 800,
+   "title": "Log in · Saved accounts",
+   "w": 1280,
+   "x": 0,
+   "y": 0,
+   "page": "login"
+  },
+  "LoginConnecting.dc.html": {
+   "expand": "fill",
+   "h": 800,
+   "title": "Log in · Connecting",
+   "w": 1280,
+   "x": 4080,
+   "y": 0,
+   "page": "login"
+  },
+  "LoginError.dc.html": {
+   "expand": "fill",
+   "h": 800,
+   "title": "Log in · Failed",
+   "w": 1280,
+   "x": 5440,
+   "y": 0,
+   "page": "login"
+  },
+  "LoginFirst.dc.html": {
+   "expand": "fill",
+   "h": 800,
+   "title": "Log in · First time",
+   "w": 1280,
+   "x": 2720,
+   "y": 0,
+   "page": "login"
+  },
+  "LoginNew.dc.html": {
+   "expand": "fill",
+   "h": 800,
+   "title": "Log in · New account",
+   "w": 1280,
+   "x": 1360,
+   "y": 0,
+   "page": "login"
+  },
+  "Main.dc.html": {
+   "expand": "fill",
+   "h": 800,
+   "title": "Lobby",
+   "w": 1280,
+   "x": 0,
+   "y": 0,
+   "page": "lobby"
+  },
+  "MainAccount.dc.html": {
+   "expand": "fill",
+   "h": 800,
+   "title": "Lobby · Switching accounts",
+   "w": 1280,
+   "x": 2720,
+   "y": 0,
+   "page": "lobby"
+  },
+  "MainClosed.dc.html": {
+   "expand": "fill",
+   "h": 800,
+   "title": "Lobby · Not accepting requests",
+   "w": 1280,
+   "x": 1360,
+   "y": 0,
+   "page": "lobby"
+  },
+  "Play.dc.html": {
+   "expand": "fill",
+   "h": 800,
+   "title": "Play / observe · Own match (synchro)",
+   "w": 1280,
+   "x": 0,
+   "y": 0,
+   "page": "watch"
+  },
+  "PlayAdjourn.dc.html": {
+   "expand": "fill",
+   "h": 800,
+   "title": "Play / observe · Adjourn confirmation",
+   "w": 1280,
+   "x": 8160,
+   "y": 0,
+   "page": "watch"
+  },
+  "PlayEmpty.dc.html": {
+   "expand": "fill",
+   "h": 800,
+   "title": "Play / observe · No game",
+   "w": 1280,
+   "x": 5440,
+   "y": 0,
+   "page": "watch"
+  },
+  "PlayFinished.dc.html": {
+   "expand": "fill",
+   "h": 800,
+   "title": "Play / observe · After the game",
+   "w": 1280,
+   "x": 4080,
+   "y": 0,
+   "page": "watch"
+  },
+  "PlayResign.dc.html": {
+   "expand": "fill",
+   "h": 800,
+   "title": "Play / observe · Resign confirmation",
+   "w": 1280,
+   "x": 6800,
+   "y": 0,
+   "page": "watch"
+  },
+  "PlaySingle.dc.html": {
+   "expand": "fill",
+   "h": 800,
+   "title": "Play / observe · Own match (single board)",
+   "w": 1280,
+   "x": 2720,
+   "y": 0,
+   "page": "watch"
+  },
+  "PlayWatch.dc.html": {
+   "expand": "fill",
+   "h": 800,
+   "title": "Play / observe · Watching (synchro)",
+   "w": 1280,
+   "x": 1360,
+   "y": 0,
+   "page": "watch"
+  },
+  "Players.dc.html": {
+   "expand": "fill",
+   "h": 800,
+   "title": "Players · List (nothing selected)",
+   "w": 1280,
+   "x": 0,
+   "y": 0,
+   "page": "players"
+  },
+  "PlayersHistory.dc.html": {
+   "expand": "fill",
+   "h": 800,
+   "title": "Players · Game history",
+   "w": 1280,
+   "x": 2720,
+   "y": 0,
+   "page": "players"
+  },
+  "PlayersNoHit.dc.html": {
+   "expand": "fill",
+   "h": 800,
+   "title": "Players · No match",
+   "w": 1280,
+   "x": 6800,
+   "y": 0,
+   "page": "players"
+  },
+  "PlayersProfile.dc.html": {
+   "expand": "fill",
+   "h": 800,
+   "title": "Players · Profile",
+   "w": 1280,
+   "x": 4080,
+   "y": 0,
+   "page": "players"
+  },
+  "PlayersTop.dc.html": {
+   "expand": "fill",
+   "h": 800,
+   "title": "Players · Top",
+   "w": 1280,
+   "x": 5440,
+   "y": 0,
+   "page": "players"
+  },
+  "Results.dc.html": {
+   "expand": "fill",
+   "h": 800,
+   "title": "Results · Random",
+   "w": 1280,
+   "x": 0,
+   "y": 0,
+   "page": "results"
+  },
+  "ResultsAll.dc.html": {
+   "expand": "fill",
+   "h": 800,
+   "title": "Results · All",
+   "w": 1280,
+   "x": 2720,
+   "y": 0,
+   "page": "results"
+  },
+  "ResultsEmpty.dc.html": {
+   "expand": "fill",
+   "h": 800,
+   "title": "Results · No records",
+   "w": 1280,
+   "x": 4080,
+   "y": 0,
+   "page": "results"
+  },
+  "Settings.dc.html": {
+   "expand": "fill",
+   "h": 800,
+   "title": "Settings · GGS servers and accounts",
+   "w": 1280,
+   "x": 0,
+   "y": 0,
+   "page": "settings"
+  },
+  "SettingsDelete.dc.html": {
+   "expand": "fill",
+   "h": 800,
+   "title": "Settings · Account removal confirmation",
+   "w": 1280,
+   "x": 6800,
+   "y": 0,
+   "page": "settings"
+  },
+  "SettingsEngine.dc.html": {
+   "expand": "fill",
+   "h": 800,
+   "title": "Settings · Engine",
+   "w": 1280,
+   "x": 1360,
+   "y": 0,
+   "page": "settings"
+  },
+  "SettingsForm.dc.html": {
+   "expand": "fill",
+   "h": 800,
+   "title": "Settings · GGS request rules",
+   "w": 1280,
+   "x": 5440,
+   "y": 0,
+   "page": "settings"
+  },
+  "SettingsPlay.dc.html": {
+   "expand": "fill",
+   "h": 800,
+   "title": "Settings · GGS playing and watching",
+   "w": 1280,
+   "x": 4080,
+   "y": 0,
+   "page": "settings"
+  },
+  "SettingsReset.dc.html": {
+   "expand": "fill",
+   "h": 800,
+   "title": "Settings · Reset to defaults confirmation",
+   "w": 1280,
+   "x": 8160,
+   "y": 0,
+   "page": "settings"
+  },
+  "SettingsServer.dc.html": {
+   "expand": "fill",
+   "h": 800,
+   "title": "Settings · Edit server",
+   "w": 1280,
+   "x": 9520,
+   "y": 0,
+   "page": "settings"
+  },
+  "SettingsView.dc.html": {
+   "expand": "fill",
+   "h": 800,
+   "title": "Settings · Display",
+   "w": 1280,
+   "x": 2720,
+   "y": 0,
+   "page": "settings"
+  },
+  "Tourney.dc.html": {
+   "expand": "fill",
+   "h": 800,
+   "title": "Tournaments · Crosstable",
+   "w": 1280,
+   "x": 0,
+   "y": 0,
+   "page": "tourney"
+  },
+  "TourneyBefore.dc.html": {
+   "expand": "fill",
+   "h": 800,
+   "title": "Tournaments · Not started",
+   "w": 1280,
+   "x": 2720,
+   "y": 0,
+   "page": "tourney"
+  },
+  "TourneyFiltered.dc.html": {
+   "expand": "fill",
+   "h": 800,
+   "title": "Tournaments · Game list · One player selected",
+   "w": 1280,
+   "x": 5440,
+   "y": 0,
+   "page": "tourney"
+  },
+  "TourneyFinished.dc.html": {
+   "expand": "fill",
+   "h": 800,
+   "title": "Tournaments · Finished",
+   "w": 1280,
+   "x": 4080,
+   "y": 0,
+   "page": "tourney"
+  },
+  "MainReconnecting.dc.html": {
+   "x": 4080,
+   "y": 0,
+   "w": 1280,
+   "h": 800,
+   "title": "Lobby · Reconnecting",
+   "expand": "fill",
+   "page": "lobby"
+  },
+  "AskUnregistered.dc.html": {
+   "x": 1360,
+   "y": 920,
+   "w": 1280,
+   "h": 800,
+   "title": "Request · Not registered for rated games",
+   "expand": "fill",
+   "page": "lobby"
+  },
+  "PlayTourney.dc.html": {
+   "x": 9520,
+   "y": 0,
+   "w": 1280,
+   "h": 800,
+   "title": "Play / observe · Tournament game",
+   "expand": "fill",
+   "page": "watch"
+  },
+  "PlayAdjourned.dc.html": {
+   "x": 10880,
+   "y": 0,
+   "w": 1280,
+   "h": 800,
+   "title": "Play / observe · Adjourned",
+   "expand": "fill",
+   "page": "watch"
+  },
+  "PlayAborted.dc.html": {
+   "x": 12240,
+   "y": 0,
+   "w": 1280,
+   "h": 800,
+   "title": "Play / observe · Aborted",
+   "expand": "fill",
+   "page": "watch"
+  },
+  "TourneyJoined.dc.html": {
+   "x": 6800,
+   "y": 0,
+   "w": 1280,
+   "h": 800,
+   "title": "Tournaments · Not started (joined)",
+   "expand": "fill",
+   "page": "tourney"
+  },
+  "TourneyError.dc.html": {
+   "x": 8160,
+   "y": 0,
+   "w": 1280,
+   "h": 800,
+   "title": "Tournaments · Action refused",
+   "expand": "fill",
+   "page": "tourney"
+  },
+  "LoginUnreachable.dc.html": {
+   "x": 6800,
+   "y": 0,
+   "w": 1280,
+   "h": 800,
+   "title": "Log in · Cannot connect",
+   "expand": "fill",
+   "page": "login"
+  },
+  "LoginTimeout.dc.html": {
+   "x": 8160,
+   "y": 0,
+   "w": 1280,
+   "h": 800,
+   "title": "Log in · No response",
+   "expand": "fill",
+   "page": "login"
+  },
+  "KifuLoading.dc.html": {
+   "x": 2720,
+   "y": 920,
+   "w": 1280,
+   "h": 800,
+   "title": "Game record · Fetching",
+   "expand": "fill",
+   "page": "results"
+  },
+  "KifuError.dc.html": {
+   "x": 4080,
+   "y": 920,
+   "w": 1280,
+   "h": 800,
+   "title": "Game record · Cannot fetch",
+   "expand": "fill",
+   "page": "results"
+  },
+  "PlayWaiting.dc.html": {
+   "x": 13600,
+   "y": 0,
+   "w": 1280,
+   "h": 800,
+   "title": "Play / observe · Waiting for a reply to a request",
+   "expand": "fill",
+   "page": "watch"
+  },
+  "PlayStored.dc.html": {
+   "x": 14960,
+   "y": 0,
+   "w": 1280,
+   "h": 800,
+   "title": "Play / observe · Has adjourned games",
+   "expand": "fill",
+   "page": "watch"
+  },
+  "PlayWatchers.dc.html": {
+   "expand": "fill",
+   "h": 800,
+   "title": "Play / observe · Who is watching",
+   "w": 1280,
+   "x": 16320,
+   "y": 0,
+   "page": "watch"
+  },
+  "PlayWatchWatchers.dc.html": {
+   "expand": "fill",
+   "h": 800,
+   "title": "Play / observe · Who is watching, while watching",
+   "w": 1280,
+   "x": 17680,
+   "y": 0,
+   "page": "watch"
+  },
+  "PlayWatchersNone.dc.html": {
+   "expand": "fill",
+   "h": 800,
+   "title": "Play / observe · Nobody watching",
+   "w": 1280,
+   "x": 19040,
+   "y": 0,
+   "page": "watch"
+  },
+  "Local.dc.html": {
+   "expand": "fill",
+   "h": 800,
+   "title": "Play · Waiting for KUROOBI's turn",
+   "w": 1280,
+   "x": 0,
+   "y": 0,
+   "page": "play"
+  },
+  "LocalPlaying.dc.html": {
+   "expand": "fill",
+   "h": 800,
+   "title": "Play · KUROOBI thinking",
+   "w": 1280,
+   "x": 1360,
+   "y": 0,
+   "page": "play"
+  },
+  "LocalNewGame.dc.html": {
+   "expand": "fill",
+   "h": 800,
+   "title": "Play · New game confirmation",
+   "w": 1280,
+   "x": 2720,
+   "y": 0,
+   "page": "play"
+  },
+  "LocalStudy.dc.html": {
+   "expand": "fill",
+   "h": 800,
+   "title": "Study · Analyzed",
+   "w": 1280,
+   "x": 0,
+   "y": 0,
+   "page": "study"
+  },
+  "LocalStudyEmpty.dc.html": {
+   "expand": "fill",
+   "h": 800,
+   "title": "Study · No game record",
+   "w": 1280,
+   "x": 2720,
+   "y": 0,
+   "page": "study"
+  },
+  "LocalPaste.dc.html": {
+   "expand": "fill",
+   "h": 800,
+   "title": "Study · Load a game record",
+   "w": 1280,
+   "x": 4080,
+   "y": 0,
+   "page": "study"
+  },
+  "LocalPasteFilled.dc.html": {
+   "expand": "fill",
+   "h": 800,
+   "title": "Study · Load a game record (after pasting)",
+   "w": 1280,
+   "x": 5440,
+   "y": 0,
+   "page": "study"
+  },
+  "LocalBook.dc.html": {
+   "expand": "fill",
+   "h": 800,
+   "title": "Book",
+   "w": 1280,
+   "x": 0,
+   "y": 0,
+   "page": "book"
+  },
+  "LocalLog.dc.html": {
+   "expand": "fill",
+   "h": 800,
+   "title": "Book · Learning log",
+   "w": 1280,
+   "x": 1360,
+   "y": 0,
+   "page": "book"
+  },
+  "LocalStudyCustom.dc.html": {
+   "expand": "fill",
+   "h": 800,
+   "title": "Study · Analysis settings (custom)",
+   "w": 1280,
+   "x": 1360,
+   "y": 0,
+   "page": "study"
+  },
+  "LocalOpenConfirm.dc.html": {
+   "expand": "fill",
+   "h": 800,
+   "title": "Book · \"Open in study\" confirmation",
+   "w": 1280,
+   "x": 2720,
+   "y": 0,
+   "page": "book"
+  },
+  "LocalBranch.dc.html": {
+   "expand": "fill",
+   "h": 800,
+   "title": "Study · Different move confirmation",
+   "w": 1280,
+   "x": 6800,
+   "y": 0,
+   "page": "study"
+  },
+  "LocalClock.dc.html": {
+   "expand": "fill",
+   "h": 800,
+   "title": "Play · Time control (before start)",
+   "w": 1280,
+   "x": 4080,
+   "y": 0,
+   "page": "play"
+  },
+  "LocalClockPlaying.dc.html": {
+   "expand": "fill",
+   "h": 800,
+   "title": "Play · Playing on a time control",
+   "w": 1280,
+   "x": 5440,
+   "y": 0,
+   "page": "play"
+  },
+  "PlayersDetail.dc.html": {
+   "expand": "fill",
+   "h": 800,
+   "title": "Players · Summary",
+   "w": 1280,
+   "x": 1360,
+   "y": 0,
+   "page": "players"
+  },
+  "ResultsDetail.dc.html": {
+   "expand": "fill",
+   "h": 800,
+   "title": "Results · Game details",
+   "w": 1280,
+   "x": 1360,
+   "y": 0,
+   "page": "results"
+  },
+  "LocalStudyAnalyzing.dc.html": {
+   "expand": "fill",
+   "h": 800,
+   "title": "Study · Analyzing",
+   "w": 1280,
+   "x": 8160,
+   "y": 0,
+   "page": "study"
+  },
+  "LocalBookEmpty.dc.html": {
+   "expand": "fill",
+   "h": 800,
+   "title": "Book · No book",
+   "w": 1280,
+   "x": 4080,
+   "y": 0,
+   "page": "book"
+  },
+  "LocalLogUndo.dc.html": {
+   "expand": "fill",
+   "h": 800,
+   "title": "Book · Undo import confirmation",
+   "w": 1280,
+   "x": 5440,
+   "y": 0,
+   "page": "book"
+  },
+  "TourneyPair.dc.html": {
+   "x": 10880,
+   "y": 0,
+   "w": 1280,
+   "h": 800,
+   "title": "Tournaments · Game list · Two players' games (from a crosstable cell)",
+   "expand": "fill",
+   "page": "tourney"
+  },
+  "TourneyLarge.dc.html": {
+   "x": 12240,
+   "y": 0,
+   "w": 1280,
+   "h": 800,
+   "title": "Tournaments · Crosstable · 100 players (header row and left 5 columns fixed, scrolls both ways)",
+   "expand": "fill",
+   "page": "tourney"
+  },
+  "TourneyGames.dc.html": {
+   "x": 9520,
+   "y": 0,
+   "w": 1280,
+   "h": 800,
+   "title": "Tournaments · Game list (round stepping)",
+   "expand": "fill",
+   "page": "tourney"
+  },
+  "AskUnfit.dc.html": {
+   "x": 2720,
+   "y": 920,
+   "w": 1280,
+   "h": 800,
+   "title": "Request · Does not fit the opponent's rules (any-of, collapsed)",
+   "expand": "fill",
+   "page": "lobby"
+  },
+  "AskUnfitOpen.dc.html": {
+   "x": 4080,
+   "y": 920,
+   "w": 1280,
+   "h": 800,
+   "title": "Request · Does not fit the opponent's rules (unmet rules expanded)",
+   "expand": "fill",
+   "page": "lobby"
+  },
+  "AskUnfitAnd.dc.html": {
+   "x": 5440,
+   "y": 920,
+   "w": 1280,
+   "h": 800,
+   "title": "Request · Does not fit the opponent's rules (\"and\" group)",
+   "expand": "fill",
+   "page": "lobby"
+  },
+  "AskUnfitDeep.dc.html": {
+   "x": 6800,
+   "y": 920,
+   "w": 1280,
+   "h": 800,
+   "title": "Request · Does not fit the opponent's rules (deep nesting, long text, many rows)",
+   "expand": "fill",
+   "page": "lobby"
+  },
+  "LocalClockCustom.dc.html": {
+   "x": 6800,
+   "y": 0,
+   "w": 1280,
+   "h": 800,
+   "title": "Play · Time control (custom)",
+   "expand": "fill",
+   "page": "play"
+  },
+  "AskClockCustom.dc.html": {
+   "x": 8160,
+   "y": 920,
+   "w": 1280,
+   "h": 800,
+   "title": "Request · Time control (custom)",
+   "expand": "fill",
+   "page": "lobby"
+  },
+  "LocalEdit.dc.html": {
+   "expand": "fill",
+   "h": 800,
+   "title": "Edit board · Editing (from Play)",
+   "w": 1280,
+   "x": 0,
+   "y": 920,
+   "page": "play"
+  },
+  "LocalEditPass.dc.html": {
+   "expand": "fill",
+   "h": 800,
+   "title": "Edit board · Side to move has no legal move",
+   "w": 1280,
+   "x": 1360,
+   "y": 920,
+   "page": "play"
+  },
+  "LocalEditDead.dc.html": {
+   "expand": "fill",
+   "h": 800,
+   "title": "Edit board · Neither side can move",
+   "w": 1280,
+   "x": 2720,
+   "y": 920,
+   "page": "play"
+  }
+ },
+ "createdOnFiles": {
+  "at": "2026-10-26T11:12:03Z",
+  "v": 1
+ },
+ "designSystems": [
+  {
+   "artifact": "https://claude.ai/artifact/FdrQv84GfBVmkyaQL7UEbX",
+   "copiedAt": "2026-10-27T09:17:09Z",
+   "namespace": "kuroobiui",
+   "title": "Kuroobi Design System",
+   "version": "1793111436-34f4"
+  }
+ ],
+ "launch": {
+  "view": "canvas",
+  "page": "play"
+ },
+ "notes": {
+  "uc-lobby-0": {
+   "x": -1200,
+   "y": 0,
+   "w": 520,
+   "size": "s",
+   "text": "Lobby use cases (source of truth: the DS Screen spec, screens.md. ※ marks one not yet met)\n\n• GGS-Lobby-1 Answer a request that arrived\n• GGS-Lobby-2 Resume an adjourned game\n• GGS-Lobby-3 Withdraw a request sent\n• GGS-Lobby-4 Start watching\n• GGS-Lobby-5 Accept an open request\n• GGS-Lobby-6 Ask for a game\n• GGS-Lobby-7 Switch accepting requests on and off",
+   "page": "lobby"
+  },
+  "uc-lobby-920": {
+   "x": -1200,
+   "y": 920,
+   "w": 520,
+   "size": "s",
+   "text": "Request sheet use cases (source of truth: the DS Screen spec, screens.md. ※ marks one not yet met)\n\n• GGS-Ask-1 Ask for one game\n• GGS-Ask-2 Start auto match\n• GGS-Ask-3 Change or stop the auto match conditions",
+   "page": "lobby"
+  },
+  "uc-watch-0": {
+   "x": -1200,
+   "y": 0,
+   "w": 520,
+   "size": "s",
+   "text": "GGS Play / observe use cases (source of truth: the DS Screen spec, screens.md. ※ marks one not yet met)\n\n• GGS-Board-1 Follow the progress of your own game\n• GGS-Board-2 Adjourn or resign\n• GGS-Board-3 Watch or stop watching\n• GGS-Board-4 See the game record of a finished game\n• GGS-Board-5 With no game, ask for one, resume one, or go to the lobby",
+   "page": "watch"
+  },
+  "uc-players-0": {
+   "x": -1200,
+   "y": 0,
+   "w": 520,
+   "size": "s",
+   "text": "Players use cases (source of truth: the DS Screen spec, screens.md. ※ marks one not yet met)\n\n• GGS-People-1 See your own rating\n• GGS-People-2 Find an opponent\n• GGS-People-3 Look up an opponent\n• GGS-People-4 Ask for a game or talk to them\n• GGS-People-5 See the game record of a game in the history",
+   "page": "players"
+  },
+  "uc-results-0": {
+   "x": -1200,
+   "y": 0,
+   "w": 520,
+   "size": "s",
+   "text": "Results use cases (source of truth: the DS Screen spec, screens.md. ※ marks one not yet met)\n\n• GGS-Results-1 See the record and rating history\n• GGS-Results-2 Open a game record\n• GGS-Results-3 Rematch on the same conditions",
+   "page": "results"
+  },
+  "uc-chat-0": {
+   "x": -1200,
+   "y": 0,
+   "w": 520,
+   "size": "s",
+   "text": "Chat use cases (source of truth: the DS Screen spec, screens.md. ※ marks one not yet met)\n\n• GGS-Talk-1 Talk to everyone\n• GGS-Talk-2 Talk to one person\n• GGS-Talk-3 Read translated, send translated",
+   "page": "chat"
+  },
+  "uc-tourney-0": {
+   "x": -1200,
+   "y": 0,
+   "w": 520,
+   "size": "s",
+   "text": "Tournaments use cases (source of truth: the DS Screen spec, screens.md. ※ marks one not yet met)\n\n• GGS-Tourney-1 Find a tournament\n• GGS-Tourney-2 Join or withdraw\n• GGS-Tourney-3 See the progress, standings and crosstable\n• GGS-Tourney-4 Open the board of your own game\n• GGS-Tourney-5 Check or change the auto match",
+   "page": "tourney"
+  },
+  "uc-console-0": {
+   "x": -1200,
+   "y": 0,
+   "w": 520,
+   "size": "s",
+   "text": "Console use cases (source of truth: the DS Screen spec, screens.md. ※ marks one not yet met)\n\n• GGS-Comm-1 See, search and keep the traffic\n• GGS-Comm-2 Send a command",
+   "page": "console"
+  },
+  "uc-settings-0": {
+   "x": -1200,
+   "y": 0,
+   "w": 520,
+   "size": "s",
+   "text": "Settings use cases (source of truth: the DS Screen spec, screens.md. ※ marks one not yet met)\n\n• Settings-1 Weights and book files\n• Settings-2 Search resources\n• Settings-3 Look\n• Settings-4 Servers and accounts\n• Settings-5 GGS playing and watching\n• Settings-6 Conditions for automatically accepting and declining\n• Settings-7 Learning from finished games (import, learned book, go to the learning log)",
+   "page": "settings"
+  },
+  "uc-login-0": {
+   "x": -1200,
+   "y": 0,
+   "w": 520,
+   "size": "s",
+   "text": "GGS login use cases (source of truth: the DS Screen spec, screens.md. ※ marks one not yet met)\n\n• GGS-Enter-1 Log in with a saved account\n• GGS-Enter-2 Log in with a new account\n• GGS-Enter-3 Remove an account",
+   "page": "login"
+  },
+  "uc-results-920": {
+   "x": -1200,
+   "y": 920,
+   "w": 520,
+   "size": "s",
+   "text": "Game record viewer use cases (source of truth: the DS Screen spec, screens.md. ※ marks one not yet met)\n\n• Viewer-1 Replay\n• Viewer-2 Copy or save\n• Viewer-3 Open in study (this button is the only way into Study. If the viewer is closed while fetching, the record that arrives is discarded)",
+   "page": "results"
+  },
+  "uc-play-0": {
+   "x": -1200,
+   "y": 0,
+   "w": 520,
+   "size": "s",
+   "text": "Play use cases (source of truth: the DS Screen spec, screens.md. ※ marks one not yet met)\n\n• Play-1 Play KUROOBI (choose a level or a time control. Starts with \"Start game\" or by pressing the board)\n• Play-2 Human vs human / KUROOBI vs KUROOBI\n• Play-3 See evals while playing\n• Play-4 Take back = return to just before your own previous move (passes excluded) (KUROOBI's moves and passes in between go back too)\n• Play-5 Start over\n• Play-6 Play from a mid-game position\n• Play-7 Keep the game record\n• Play-8 Check learning\n• Play-9 Review (→ Study)\n• Play-10 Leave and come back (leaving the screen pauses; \"Start game\" continues)\n• Play-11 Replay from an earlier move (go back in the game record table and play to continue. No confirm)\n• Play-12 Play from any position (Dock \"Edit board\" → \"Play from here\")",
+   "page": "play"
+  },
+  "uc-study-0": {
+   "x": -1200,
+   "y": 0,
+   "w": 520,
+   "size": "s",
+   "text": "Study use cases (source of truth: the DS Screen spec, screens.md. ※ marks one not yet met)\n\n• Study-1 Open a game record (\"Paste\" and \"Load\" in the right panel, and \"Open in study\" on other screens. Wherever it is opened from, a board with a game record gets a replace confirm)\n• Study-2 Step through move by move\n• Study-3 Analyze to find bad moves (analysis strength and book are kept separately from Play)\n• Study-4 See the best move (toolbar \"Evals\". Kept separately from Play; on from the start in Study)\n• Study-5 Try another move (a different move mid-record asks to confirm; the same move just advances)\n• Study-6 Keep the game record\n• Study-7 Examine any position (right panel \"Edit board\" → \"Open in study\")",
+   "page": "study"
+  },
+  "uc-book-0": {
+   "x": -1200,
+   "y": 0,
+   "w": 520,
+   "size": "s",
+   "text": "Book and learning log use cases (source of truth: the DS Screen spec, screens.md. ※ marks one not yet met)\n\n• Book-1 Walk the book\n• Book-2 See a position's eval and source\n• Book-3 Study a line (→ Study-1)\n• Book-4 Specify the book when there is none\n• Learn-1 See when and what was learned\n• Learn-2 Study a move that lost a lot (→ Study-1)\n• Learn-3 See a learned move in the book\n• Learn-4 Undo an import",
+   "page": "book"
+  },
+  "uc-play-920": {
+   "x": -1200,
+   "y": 920,
+   "w": 520,
+   "size": "s",
+   "text": "Board editing use cases (source of truth: the DS Screen spec, screens.md. ※ marks one not yet met)\n\n• Edit-1 Enter (\"Edit board\" in Play's or Study's right panel, ⌘E. Starts from the current board)\n• Edit-2 Place and remove discs (choose Black / White / Erase, then press or drag. A press that starts on a disc of the same color erases)\n• Edit-3 Revert (⌘Z / ⇧⌘Z. One drag or one button press is one step)\n• Edit-4 Change everything at once (start position, clear, swap colors)\n• Edit-5 Start (\"Play from here\" / \"Open in study\". If the side to move has no legal move, it starts with a pass)\n• Edit-6 Quit (Cancel, Esc, or move to another screen)",
+   "page": "play"
+  },
+  "local": {
+   "x": -640,
+   "y": 0,
+   "w": 520,
+   "size": "s",
+   "text": "Rules for Play, Study and Book (local screens)\n\n• Play and Study show the same game record. \"New game\" asks to confirm only on a board with at least one move (it clears both). It cannot be pressed while thinking\n• \"Start game\" ⇄ \"Stop game\" (danger). Leaving the Play screen pauses the game; \"Start game\" resumes it. During a game, moving to a past move in the game record table pauses; playing there continues (no confirm)\n• Take back goes to just before your own previous move (KUROOBI's moves and passes in between go back too). It cannot be pressed with no moves or while thinking\n• The main time runs only during a game. Taking back or going back in the game record table also restores the time left (loaded moves leave both clocks full). The disc-count band shows, on a time control, the time left from before the start; on a level, KUROOBI's total thinking time\n• Loading a game record (Open in study, Load, Paste) on a board with a record asks \"Replace the record?\". At a mid-record position in Study, playing a move different from the record asks \"Play a different move?\" (the same move just advances one move)\n• Right detail panel: one sheet without tabs in both Play and Study. Strength on top (in Study, \"Analysis settings\": strength and book), the game record below. Strength is touched every time, so it is not hidden. Learning goes to Settings > Engine \"Learning\" (progress on the status bar)\n• Play's strength is chosen as \"Level / Time control\". A level is a strength with fixed depth and solve; on a time control KUROOBI decides its search from the time left (you get the same main time). The main time is set here, not in Settings. Once a move is on the board, the Level/Time control switch and the main time cannot change until \"New game\" (the level's step can change during a game). On a time control, both players' time left is shown large in place of the picker (the small time left in the disc-count band stays for narrow windows that hide the right panel)\n• Study's analysis settings (strength, book) are separate values from Play's strength\n• \"Evals\" is on both Play's and Study's toolbars, and on/off is kept separately (Play starts off, Study starts on)\n• A switch is always one row (words on the left, switch on the right)\n• The time column of the game record table appears only for records with times (played in Play). For loaded records the whole column is omitted\n• Continuous eval analysis runs only on screens with a board (Play, Study). While analyzing, the graph's right shows \"Analyzing n/m\", a thin progress bar and \"Stop analysis\" (danger); the status bar also shows \"Analyzing a / b\"\n• The eval graph's empty-state text sits on a patch of background color over the 0 line, so the line does not run through the text\n• Board coordinates are never smaller than 11px on screen, even on a small board\n• Book tree: the header and rows share columns (move and marks in the flexible left column, eval and occurrences in fixed-width right columns). Source: only learned moves get a gold \"Learned\"\n• Learning log period is \"All time / Last n days\" (not the same words as the neighboring \"All / Lost games\")\n• Learning log: the left list is as wide as the book tree, the center board has no coordinates, the right column is not a Dock (it narrows at 1120px or less). \"Updated book entries\" rows are not for selecting; pressing one opens that move in Study. \"Show in book\", \"Undo\" (danger, with confirm)\n• With no book, neither the tree nor the right panel is shown, only guidance and \"Open settings\"\n• Learning ON/OFF is saved\n• The preview when loading a game record marks the board thumbnail's place with a dotted frame even before pasting\n\nDS components: confirm is Confirm. The analysis settings are Strength in the right panel (LevelPicker was removed from the DS). With a single tab, the Dock shows no tab strip. Book rows and the learning log totals are assembled inside the screens (BookScreen.tsx / LearnLog.tsx)\n• Pressing the board before starting a game starts it (on your turn that move is played; on KUROOBI's turn KUROOBI starts moving). With side \"None\" on a level, \"Start game\" cannot be pressed (KUROOBI does not move, so there is nothing to start)\n• In both Play and Study the bottom of the right panel is \"Paste\" (⌘O) \"Load\" \"Edit board\" (⌘E) \"Save\" (⌘S). The ways to load do not change by screen\n• While any confirm or dialog is open, keyboard shortcuts do not work\n• Evals on the board are always from the side to move (+ is good for the side to move). The game record's \"Eval\" column and the graph are from Black. There is no Black/White viewpoint switch\n• Legal-move dots and eval circles are in the color of the side to move's disc (translucent black on Black's turn; translucent white with a white rim on White's turn). Themes do not change them\n• Both Black and White in the disc-count band have the same frame; only the side to move gets the --accent rim and background (the counts do not move when the turn changes)",
+   "page": "play"
+  },
+  "sizing": {
+   "x": -1760,
+   "y": 0,
+   "w": 520,
+   "text": "What changes with window size (minimum 860×560)\n\n• Status bar: the right side (CPU, memory, GGS) is always shown. The left hides items that do not fit, from the end\n• Width 1040px or less: the left list narrows to 216px\n• Details in Players and Results are a drawer from the right (480px wide; in a narrow window 120px is left on the left). Shown only when a row is selected. Pressing outside the drawer closes it and the press still takes effect (on another row the details switch). × and Esc also close it\n• Play: the board and the graph share the height. In a short window the graph shrinks down to 64px, and spare height goes to the graph (max 260px). If the board is under 340px, the rating and notes on the player rows are hidden\n• Eval graph: if tick spacing is under 14px, labels are thinned out. A synchro total waits until both boards are in\n• Results: with a window height under 700, the rating history becomes 96px\n• Tournaments: if the details are under 640px, standings and crosstable switch by tabs\n• List rows: from the clicked row, ↑↓ select the previous and next rows\n• Descriptive text does not wrap mid-word or leave a single last character on a line",
+   "size": "s",
+   "page": "play"
+  },
+  "title": {
+   "kind": "title1",
+   "maxW": 8080,
+   "text": "Screen design: 1 row = 1 screen, state variations to the right",
+   "w": 240,
+   "x": 0,
+   "y": -260,
+   "page": "play"
+  },
+  "title-study": {
+   "kind": "title1",
+   "x": 0,
+   "y": -260,
+   "w": 240,
+   "page": "study",
+   "maxW": 9440,
+   "text": "Study"
+  },
+  "title-book": {
+   "kind": "title1",
+   "x": 0,
+   "y": -260,
+   "w": 240,
+   "page": "book",
+   "maxW": 6720,
+   "text": "Book"
+  },
+  "title-login": {
+   "kind": "title1",
+   "x": 0,
+   "y": -260,
+   "w": 240,
+   "page": "login",
+   "maxW": 9440,
+   "text": "Log in"
+  },
+  "title-watch": {
+   "kind": "title1",
+   "x": 0,
+   "y": -260,
+   "w": 240,
+   "page": "watch",
+   "maxW": 20320,
+   "text": "Play / observe"
+  },
+  "title-lobby": {
+   "kind": "title1",
+   "x": 0,
+   "y": -260,
+   "w": 240,
+   "page": "lobby",
+   "maxW": 9440,
+   "text": "Lobby"
+  },
+  "title-players": {
+   "kind": "title1",
+   "x": 0,
+   "y": -260,
+   "w": 240,
+   "page": "players",
+   "maxW": 8080,
+   "text": "Players"
+  },
+  "title-results": {
+   "kind": "title1",
+   "x": 0,
+   "y": -260,
+   "w": 240,
+   "page": "results",
+   "maxW": 5360,
+   "text": "Results"
+  },
+  "title-chat": {
+   "kind": "title1",
+   "x": 0,
+   "y": -260,
+   "w": 240,
+   "page": "chat",
+   "maxW": 2640,
+   "text": "Chat"
+  },
+  "title-tourney": {
+   "kind": "title1",
+   "x": 0,
+   "y": -260,
+   "w": 240,
+   "page": "tourney",
+   "maxW": 13520,
+   "text": "Tournaments"
+  },
+  "title-console": {
+   "kind": "title1",
+   "x": 0,
+   "y": -260,
+   "w": 240,
+   "page": "console",
+   "maxW": 2640,
+   "text": "Console"
+  },
+  "title-settings": {
+   "kind": "title1",
+   "x": 0,
+   "y": -260,
+   "w": 240,
+   "page": "settings",
+   "maxW": 10800,
+   "text": "Settings"
+  }
+ },
+ "order": [
+  "Local.dc.html",
+  "LocalPlaying.dc.html",
+  "LocalNewGame.dc.html",
+  "LocalClock.dc.html",
+  "LocalClockPlaying.dc.html",
+  "LocalClockCustom.dc.html",
+  "LocalEdit.dc.html",
+  "LocalEditPass.dc.html",
+  "LocalEditDead.dc.html",
+  "LocalStudy.dc.html",
+  "LocalStudyCustom.dc.html",
+  "LocalStudyEmpty.dc.html",
+  "LocalPaste.dc.html",
+  "LocalPasteFilled.dc.html",
+  "LocalBranch.dc.html",
+  "LocalStudyAnalyzing.dc.html",
+  "LocalBook.dc.html",
+  "LocalLog.dc.html",
+  "LocalOpenConfirm.dc.html",
+  "LocalBookEmpty.dc.html",
+  "LocalLogUndo.dc.html",
+  "Login.dc.html",
+  "LoginNew.dc.html",
+  "LoginFirst.dc.html",
+  "LoginConnecting.dc.html",
+  "LoginError.dc.html",
+  "LoginUnreachable.dc.html",
+  "LoginTimeout.dc.html",
+  "Play.dc.html",
+  "PlayWatch.dc.html",
+  "PlaySingle.dc.html",
+  "PlayFinished.dc.html",
+  "PlayEmpty.dc.html",
+  "PlayResign.dc.html",
+  "PlayAdjourn.dc.html",
+  "PlayTourney.dc.html",
+  "PlayAdjourned.dc.html",
+  "PlayAborted.dc.html",
+  "PlayWaiting.dc.html",
+  "PlayStored.dc.html",
+  "PlayWatchers.dc.html",
+  "PlayWatchWatchers.dc.html",
+  "PlayWatchersNone.dc.html",
+  "Main.dc.html",
+  "MainClosed.dc.html",
+  "MainAccount.dc.html",
+  "MainReconnecting.dc.html",
+  "Ask.dc.html",
+  "AskUnregistered.dc.html",
+  "AskUnfit.dc.html",
+  "AskUnfitOpen.dc.html",
+  "AskUnfitAnd.dc.html",
+  "AskUnfitDeep.dc.html",
+  "AskClockCustom.dc.html",
+  "Players.dc.html",
+  "PlayersDetail.dc.html",
+  "PlayersHistory.dc.html",
+  "PlayersProfile.dc.html",
+  "PlayersTop.dc.html",
+  "PlayersNoHit.dc.html",
+  "Results.dc.html",
+  "ResultsDetail.dc.html",
+  "ResultsAll.dc.html",
+  "ResultsEmpty.dc.html",
+  "Kifu.dc.html",
+  "KifuSingle.dc.html",
+  "KifuLoading.dc.html",
+  "KifuError.dc.html",
+  "Chat.dc.html",
+  "ChatNew.dc.html",
+  "Tourney.dc.html",
+  "TourneyBefore.dc.html",
+  "TourneyFinished.dc.html",
+  "TourneyFiltered.dc.html",
+  "TourneyJoined.dc.html",
+  "TourneyError.dc.html",
+  "TourneyGames.dc.html",
+  "TourneyPair.dc.html",
+  "TourneyLarge.dc.html",
+  "Console.dc.html",
+  "ConsoleClosed.dc.html",
+  "Settings.dc.html",
+  "SettingsEngine.dc.html",
+  "SettingsView.dc.html",
+  "SettingsPlay.dc.html",
+  "SettingsForm.dc.html",
+  "SettingsDelete.dc.html",
+  "SettingsReset.dc.html",
+  "SettingsServer.dc.html"
+ ],
+ "pages": [
+  {
+   "id": "play",
+   "name": "Play"
+  },
+  {
+   "id": "study",
+   "name": "Study"
+  },
+  {
+   "id": "book",
+   "name": "Book"
+  },
+  {
+   "id": "login",
+   "name": "Log in"
+  },
+  {
+   "id": "watch",
+   "name": "Play / observe"
+  },
+  {
+   "id": "lobby",
+   "name": "Lobby"
+  },
+  {
+   "id": "players",
+   "name": "Players"
+  },
+  {
+   "id": "results",
+   "name": "Results"
+  },
+  {
+   "id": "chat",
+   "name": "Chat"
+  },
+  {
+   "id": "tourney",
+   "name": "Tournaments"
+  },
+  {
+   "id": "console",
+   "name": "Console"
+  },
+  {
+   "id": "settings",
+   "name": "Settings"
+  }
+ ],
+ "title": "Kuroobi screen design"
+}

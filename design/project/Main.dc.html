@@ -1,0 +1,240 @@
+<!doctype html>
+<html lang="ja">
+<head>
+<meta charset="utf-8">
+<title>Lobby</title>
+<script src="./support.js"></script>
+<link rel="stylesheet" href="kuroobi-tokens.css">
+<link rel="stylesheet" href="ds/kuroobiui/components/bundle.css">
+<script src="ds/kuroobiui/components/bundle.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<style>
+x-import{display:contents}
+@media (max-width:1040px){.k-nav-ov .k-nav-label{display:none}.k-nav-ov .k-nav-row{justify-content:center;padding:0}}
+.k-scroll{overflow-y:scroll!important}
+.k-scroll::-webkit-scrollbar-track{background:var(--track);border-radius:9px}
+body{margin:0;background:var(--bg);color:var(--text);font:var(--fs-4)/1.6 var(--ff)}
+a{color:var(--accent)}a:hover{color:var(--text)}
+</style>
+</helmet>
+<div style="width: 100%; height: 100vh; min-height: 480px; background: var(--bg); color: var(--text); font: var(--fs-4)/1.6 var(--ff); overflow: hidden">
+<x-import style="display: contents" component-from-global-scope="KuroobiUI.AppFrame">
+<x-import component-from-global-scope="KuroobiUI.WindowBar" title="ロビー"></x-import>
+<x-import style="display: contents" component-from-global-scope="KuroobiUI.Body">
+<div style="position: relative; flex: none; display: flex">
+<x-import style="display: contents" component-from-global-scope="KuroobiUI.Nav" items="{{navLocal}}" ggs-items="{{ggsItems}}" conn="{{conn}}" active="ggs-lobby"></x-import>
+<div class="k-nav-ov" style="position: absolute; left: 0; right: 1px; bottom: 0; padding: var(--sp-2); border-top: 1px solid var(--border); background: var(--panel)">
+<button type="button" class="k-nav-row k-row" aria-current="false" style="width: 100%; height: var(--h-field); display: flex; align-items: center; gap: var(--sp-3); border: 0; border-radius: var(--r-2); font: inherit; font-size: var(--fs-4); background: transparent; color: var(--text); font-weight: 400"><span style="flex: none; display: grid; place-items: center"><x-import component-from-global-scope="KuroobiUI.Icon" name="prefs"></x-import></span><span class="k-nav-label">設定</span></button>
+</div>
+</div>
+<x-import style="display: contents" component-from-global-scope="KuroobiUI.Main">
+<x-import style="display: contents" component-from-global-scope="KuroobiUI.Toolbar">
+<x-import component-from-global-scope="KuroobiUI.Button" variant="primary">対局を申し込む</x-import>
+<x-import component-from-global-scope="KuroobiUI.Divider"></x-import>
+<x-import component-from-global-scope="KuroobiUI.Toggle" checked="{{accepting}}" label="申し込みを受け付ける"></x-import>
+<div style="margin-left: auto; display: flex; align-items: center; gap: var(--sp-2); white-space: nowrap">
+<x-import component-from-global-scope="KuroobiUI.Button" variant="ghost">更新</x-import>
+</div>
+</x-import>
+<div style="flex: 1; min-height: 0; overflow: hidden; padding: var(--sp-4) var(--sp-1) 0; display: flex; flex-direction: column; gap: var(--sp-2)">
+
+<!-- Things waiting on me: adjourned matches → requests received → requests sent -->
+<sc-if value="{{closed}}" hint-placeholder-val="{{false}}">
+<div style="flex: none; display: flex; align-items: center; gap: var(--sp-2); margin: 0 var(--sp-3) var(--sp-2); padding: var(--sp-2) var(--sp-3); border-radius: var(--r-1); background: var(--card); box-shadow: inset 2px 0 0 var(--gold); font-size: var(--fs-5); white-space: nowrap">
+<b style="font-weight: 600">申し込みを受け付けていません</b>
+</div>
+</sc-if>
+<x-import style="display: contents" component-from-global-scope="KuroobiUI.Section" title="対応待ち" aside="{{todoCount}}">
+<div class="k-scroll" style="display: flex; flex-direction: column; max-height: calc(var(--h-row2) * 4)">
+<sc-for list="{{todo}}" as="o" hint-placeholder-count="4">
+<div style="display: flex; align-items: center; gap: var(--sp-3); height: var(--h-row2); padding: 0 var(--sp-3); border-bottom: 1px solid var(--border-weak); white-space: nowrap; box-shadow: {{o.mark}}">
+<span style="flex: none; width: 56px; display: flex"><x-import component-from-global-scope="KuroobiUI.Tag" tone="{{o.tone}}">{{o.kindLabel}}</x-import></span>
+<div style="flex: none; width: 180px; min-width: 0; display: flex; flex-direction: column; line-height: 1.3">
+<span class="k-sel" style="font-weight: 600; overflow: hidden; text-overflow: ellipsis">{{o.name}}</span>
+<span style="font-size: var(--fs-6); color: var(--sub)">{{o.rate}}</span>
+</div>
+<div style="flex: 1; min-width: 0; display: flex; flex-direction: column; line-height: 1.3; overflow: hidden">
+<span style="font-size: var(--fs-5); overflow: hidden; text-overflow: ellipsis">{{o.cond}}</span>
+<span style="font-size: var(--fs-6); color: var(--sub); overflow: hidden; text-overflow: ellipsis">{{o.note}}</span>
+</div>
+<div style="flex: none; display: flex; gap: var(--sp-2)">
+<sc-if value="{{o.isStored}}" hint-placeholder-val="{{true}}">
+<x-import component-from-global-scope="KuroobiUI.Button" variant="primary">再開</x-import>
+</sc-if>
+<sc-if value="{{o.isIn}}" hint-placeholder-val="{{false}}">
+<x-import component-from-global-scope="KuroobiUI.Button" variant="ghost">断る</x-import>
+<x-import component-from-global-scope="KuroobiUI.Button" variant="primary">受ける</x-import>
+</sc-if>
+<sc-if value="{{o.isOut}}" hint-placeholder-val="{{false}}">
+<x-import component-from-global-scope="KuroobiUI.Button" variant="ghost">取り消す</x-import>
+</sc-if>
+</div>
+</div>
+</sc-for>
+</div>
+</x-import>
+
+<div style="flex: 1; min-height: 0; display: flex; gap: var(--sp-4)">
+<!-- Other players' matches -->
+<div style="flex: 3; min-width: 0; display: flex; flex-direction: column">
+<x-import style="display: contents" component-from-global-scope="KuroobiUI.Section" title="対局中" aside="{{gameCount}}" grow="{{yes}}">
+<div style="height: 100%; display: flex; flex-direction: column">
+<div style="flex: none; display: flex; align-items: center; gap: var(--sp-3); height: var(--h-head); padding: 0 var(--sp-3); border-bottom: 1px solid var(--border); font-size: var(--fs-7); font-weight: 600; letter-spacing: .08em; color: var(--sub); white-space: nowrap">
+<span style="flex: 1; min-width: 0">対局者</span><span style="width: 132px">形式</span><span style="width: 48px; text-align: right">手数</span><span style="width: 56px"></span>
+</div>
+<div class="k-scroll" style="flex: 1; min-height: 0; display: flex; flex-direction: column">
+<sc-for list="{{games}}" as="g" hint-placeholder-count="7">
+<div class="k-row" style="display: flex; align-items: center; gap: var(--sp-3); height: var(--h-field); padding: 0 var(--sp-3); border-bottom: 1px solid var(--border-weak); font-size: var(--fs-5); white-space: nowrap">
+<span style="flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis">{{g.black}} <span style="color: var(--sub)">{{g.br}}</span> <span style="color: var(--sub)">対</span> {{g.white}} <span style="color: var(--sub)">{{g.wr}}</span></span>
+<span style="width: 132px; color: var(--sub); overflow: hidden; text-overflow: ellipsis">{{g.kind}}</span>
+<span style="width: 48px; text-align: right; color: var(--sub)">{{g.ply}}</span>
+<span style="width: 56px; display: flex; justify-content: flex-end"><x-import component-from-global-scope="KuroobiUI.Button" size="row">{{g.act}}</x-import></span>
+</div>
+</sc-for>
+</div>
+</div>
+</x-import>
+</div>
+<!-- Open requests to anyone -->
+<div style="flex: 2; min-width: 0; display: flex; flex-direction: column">
+<x-import style="display: contents" component-from-global-scope="KuroobiUI.Section" title="募集中" aside="{{openCount}}" grow="{{yes}}">
+<div style="height: 100%; display: flex; flex-direction: column">
+<div class="k-scroll" style="flex: 1; min-height: 0; display: flex; flex-direction: column">
+<sc-for list="{{opens}}" as="p" hint-placeholder-count="3">
+<div class="k-row" style="display: flex; align-items: center; gap: var(--sp-3); height: var(--h-row2); padding: 0 var(--sp-3); border-bottom: 1px solid var(--border-weak); white-space: nowrap">
+<div style="flex: 1; min-width: 0; display: flex; flex-direction: column; line-height: 1.3">
+<span style="overflow: hidden; text-overflow: ellipsis"><b style="font-weight: 600">{{p.name}}</b> <span style="font-size: var(--fs-6); color: var(--sub)">{{p.rate}}</span></span>
+<span style="font-size: var(--fs-6); color: var(--sub); overflow: hidden; text-overflow: ellipsis">{{p.cond}}</span>
+</div>
+<x-import component-from-global-scope="KuroobiUI.Button" size="row">受ける</x-import>
+</div>
+</sc-for>
+</div>
+</div>
+</x-import>
+</div>
+</div>
+</div>
+</x-import>
+</x-import>
+<div style="height: var(--h-status); flex: none; background: var(--bg); border-top: 1px solid var(--border); display: flex; align-items: center; gap: var(--sp-4); padding: 0 var(--sp-4); font-size: var(--fs-6); color: var(--sub); white-space: nowrap">
+<span style="display: flex; align-items: center; gap: var(--sp-1)"><x-import component-from-global-scope="KuroobiUI.Dot" tone="ok"></x-import>自動対局中</span>
+<span style="display: flex; align-items: center; gap: var(--sp-1)"><x-import component-from-global-scope="KuroobiUI.Dot" tone="accent"></x-import>思考中 <b style="color: var(--text); font-weight: 600">3.2</b> 秒</span>
+<span>ノード <b style="color: var(--text); font-weight: 600">5,870 万</b></span>
+<span>速度 <b style="color: var(--text); font-weight: 600">18.3</b> Mnps</span>
+<span style="margin-left: auto; display: flex; align-items: center; gap: var(--sp-1)">CPU <span aria-hidden="true" style="display: inline-block; width: 32px; height: 4px; border-radius: var(--r-pill); background: var(--track); overflow: hidden"><span style="display: block; height: 100%; width: 38%; background: var(--ok)"></span></span><b style="color: var(--text); font-weight: 600">305</b>%</span>
+<span style="display: flex; align-items: center; gap: var(--sp-1)">メモリ <span aria-hidden="true" style="display: inline-block; width: 32px; height: 4px; border-radius: var(--r-pill); background: var(--track); overflow: hidden"><span style="display: block; height: 100%; width: 39%; background: var(--ok)"></span></span><b style="color: var(--text); font-weight: 600">6.2</b> GB</span>
+<span style="position: relative; display: flex">
+<button type="button" class="k-press" aria-expanded="{{accountMenu}}" style="height: var(--h-chip); padding: 0 var(--sp-2); border: 0; border-radius: var(--r-1); background: {{acctGround}}; color: var(--sub); font: inherit; font-size: var(--fs-6)">GGS <b style="color: {{connColor}}; font-weight: 600">{{connText}}</b> (alice · ローカル)</button>
+<!-- Account switcher: opens from GGS in the status bar -->
+<sc-if value="{{accountMenu}}" hint-placeholder-val="{{false}}">
+<div role="menu" style="position: absolute; z-index: 3; right: 0; bottom: calc(100% + var(--sp-1)); width: 300px; display: flex; flex-direction: column; border: 1px solid var(--border); border-radius: var(--r-4); background: var(--bg); box-shadow: var(--sh-2); overflow: hidden; white-space: nowrap">
+<div style="flex: none; height: var(--h-field); display: flex; align-items: center; padding: 0 var(--sp-3); font-size: var(--fs-7); font-weight: 600; letter-spacing: .08em; color: var(--sub)">アカウントを切り替え</div>
+<div class="k-scroll" style="max-height: 200px; display: flex; flex-direction: column">
+<sc-for list="{{menuGroups}}" as="g" hint-placeholder-count="2">
+<div style="flex: none; height: var(--h-head); display: flex; align-items: center; gap: var(--sp-2); padding: 0 var(--sp-3); font-size: var(--fs-7); color: var(--sub)"><b style="font-weight: 600">{{g.name}}</b><span style="font-family: var(--ff-mono)">{{g.addr}}</span></div>
+<sc-for list="{{g.accounts}}" as="a" hint-placeholder-count="2">
+<button type="button" role="menuitem" class="k-row" style="flex: none; height: var(--h-field); padding: 0 var(--sp-3); border: 0; display: flex; align-items: center; gap: var(--sp-2); text-align: left; color: var(--text); font: inherit; background: transparent">
+<span style="width: 14px; color: var(--accent)">{{a.check}}</span>
+<b style="flex: 1; min-width: 0; font-weight: 600; font-size: var(--fs-5); overflow: hidden; text-overflow: ellipsis">{{a.login}}</b>
+</button>
+</sc-for>
+</sc-for>
+</div>
+<button type="button" role="menuitem" class="k-row" style="flex: none; height: var(--h-field); padding: 0 var(--sp-3) 0 calc(var(--sp-3) + 14px + var(--sp-2)); border: 0; border-top: 1px solid var(--border); text-align: left; color: var(--text); font: inherit; font-size: var(--fs-5); background: transparent">新しいアカウントでログイン…</button>
+<button type="button" role="menuitem" class="k-row" style="flex: none; height: var(--h-field); padding: 0 var(--sp-3) 0 calc(var(--sp-3) + 14px + var(--sp-2)); border: 0; text-align: left; color: var(--bad); font: inherit; font-size: var(--fs-5); background: transparent">ログアウト</button>
+</div>
+</sc-if>
+</span>
+</div>
+</x-import>
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props='{"reconnecting":{"editor":"boolean","default":false},"accepting":{"editor":"boolean","default":true},"accountMenu":{"editor":"boolean","default":false},"$preview":{"width":1280,"height":800}}'>
+class Component extends DCLogic {
+  renderVals() {
+    const ui = window.KuroobiUI;
+    if (ui && ui.setLang) ui.setLang('ja');
+    const kinds = {
+      stored: ['中断', 'sub'],
+      in: ['届いた', 'accent'],
+      out: ['送った', 'sub'],
+    };
+    const todo = [
+      { k: 'stored', name: 'saio', rate: '通常 2003.6', cond: '通常 (1局) · 10 分 · レート戦', note: '34 手目で中断' },
+      { k: 'in', name: 'ymatioun', rate: 'ランダム 2051.2', cond: '同期・ランダム14手 · 5 分 · レート戦', note: '1 分前' },
+      { k: 'in', name: 'Rhapsody', rate: 'ランダム 1902.8', cond: '通常・ランダム16手 · 3 分 · 非レート', note: '3 分前' },
+      { k: 'out', name: 'scorpion', rate: '通常 1812.8', cond: '通常 (1局) · 5 分 · レート戦', note: '返事待ち 0:42' },
+      { k: 'in', name: 'edgar', rate: 'ランダム 1612.0', cond: '同期・ランダム16手 · 3 分 · レート戦', note: '4 分前' },
+      { k: 'in', name: 'Thor', rate: 'ランダム 1540.4', cond: '同期・ランダム14手 · 10 分 · 非レート', note: '6 分前' },
+      { k: 'out', name: 'Zaxxon', rate: 'ランダム 1777.9', cond: '同期・ランダム14手 · 5 分 · レート戦', note: '返事待ち 2:10' },
+    ].map((o) => ({
+      ...o,
+      kindLabel: kinds[o.k][0], tone: kinds[o.k][1],
+      isStored: o.k === 'stored', isIn: o.k === 'in', isOut: o.k === 'out',
+      mark: o.k === 'in' ? 'inset 2px 0 0 var(--accent)' : 'none',
+    }));
+    const games = [
+      ['kuroobi', '2590', 'rho', '2610', '同期・ランダム14手', 22],
+      ['ymatioun', '2087', 'Rhapsody', '1934', '同期・ランダム14手', 34],
+      ['viper', '1861', 'scorpion', '1812', '通常 (1局)', 21],
+      ['ant', '1355', 'piglet', '1604', '通常 (1局)', 47],
+      ['fly', '1577', 'OO7', '1688', '通常・ランダム16手', 12],
+      ['saio', '2003', 'scorp+', '1530', '同期・ランダム14手', 58],
+      ['patzer', '1466', 'ant+', '1350', '通常 (1局)', 30],
+      ['zebra', '1150', 'sunfish', '1210', '同期・通常開局', 8],
+    ].concat(Array.from({ length: 16 }, (_, i) => {
+      const n = ['edgar','Thor','Zaxxon','logistello','hannibal','keyano','brutus','cyrano','wzebra','herakles','quark','nova','orion','pegasus','sirius','vega','altair','rigel','deneb','mira'];
+      return [n[i % n.length], String(1900 - i * 23), n[(i * 7 + 3) % n.length] + '+', String(1700 - i * 11), i % 3 ? '同期・ランダム14手' : '同期・ランダム16手', 10 + (i * 7) % 50];
+    })).map(([black, br, white, wr, kind, ply]) => ({ black, br, white, wr, kind, ply,
+      // A game being played opens on the game screen; the others are observed.
+      act: black === 'kuroobi' || white === 'kuroobi' ? '開く' : '観戦' }));
+    const opens = [
+      { name: 'ant', rate: '1355.0', cond: '通常 (1局) · 3 分 · 非レート' },
+      { name: 'OO7', rate: '1688.2', cond: '同期・ランダム16手 · 5 分 · レート戦' },
+      { name: 'sunfish', rate: '1210.6', cond: '通常 (1局) · 10 分 · レート戦' },
+      { name: 'hannibal', rate: '1590.3', cond: '同期・ランダム14手 · 5 分 · レート戦' },
+      { name: 'keyano', rate: '1822.7', cond: '同期・ランダム16手 · 3 分 · レート戦' },
+      { name: 'brutus', rate: '1405.1', cond: '同期・ランダム14手 · 10 分 · 非レート' },
+      { name: 'cyrano', rate: '1677.4', cond: '同期・ランダム14手 · 5 分 · レート戦' },
+      { name: 'quark', rate: '1302.8', cond: '同期・通常開局 · 5 分 · レート戦' },
+      { name: 'nova', rate: '1499.9', cond: '同期・ランダム18手 · 5 分 · レート戦' },
+      { name: 'orion', rate: '1544.2', cond: '同期・ランダム14手 · 5 分 · レート戦' },
+      { name: 'pegasus', rate: '1388.0', cond: '同期・ランダム14手 · 3 分 · レート戦' },
+      { name: 'sirius', rate: '1720.6', cond: '同期・ランダム14手 · 10 分 · レート戦' },
+      { name: 'vega', rate: '1611.3', cond: '同期・ランダム14手 · 5 分 · レート戦' },
+      { name: 'altair', rate: '1456.7', cond: '同期・ランダム14手 · 3 分 · レート戦' },
+      { name: 'rigel', rate: '1803.9', cond: '同期・ランダム14手 · 5 分 · レート戦' },
+      { name: 'deneb', rate: '1290.1', cond: '同期・ランダム14手 · 10 分 · レート戦' },
+      { name: 'mira', rate: '1362.5', cond: '同期・ランダム14手 · 5 分 · レート戦' },
+    ];
+    const accountMenu = this.props.accountMenu ?? false;
+    const accepting = this.props.accepting ?? true;
+    const todoShown = accepting ? todo : todo.filter((o) => o.k !== 'in');
+    return {
+      conn: this.props.reconnecting ? 'connecting' : 'online',
+      connText: this.props.reconnecting ? '再接続中…' : '接続中', connColor: this.props.reconnecting ? 'var(--gold)' : 'var(--text)',
+      accountMenu, acctGround: accountMenu ? 'var(--hover)' : 'transparent',
+      menuGroups: [
+        { name: 'ローカル', addr: '127.0.0.1:15000', accounts: [{ login: 'alice', check: '✓' }, { login: 'bob', check: '' }] },
+        { name: 'GGS 本番', addr: 'skatgame.net:5000', accounts: [{ login: 'kuroobi', check: '' }, { login: 'kbtest', check: '' }] },
+      ],
+      yes: true,
+      navLocal: ui ? ui.navLocal() : [],
+      ggsItems: ui ? ui.ggsNav(this.props.reconnecting ? 'connecting' : 'online', { 'ggs-lobby': { count: 2, alert: true }, 'ggs-play': { count: 1 }, 'ggs-chat': { count: 3, alert: true } }).filter((it) => it.id !== 'ggs-standby') : [],
+      todo: todoShown,
+      accepting, closed: !accepting,
+      todoCount: todoShown.length + ' 件',
+      games,
+      gameCount: games.length + ' 局',
+      opens,
+      openCount: opens.length + ' 件',
+    };
+  }
+}
+</script>
+</body>
+</html>

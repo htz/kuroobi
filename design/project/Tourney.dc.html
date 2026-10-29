@@ -1,0 +1,392 @@
+<!doctype html>
+<html lang="ja">
+<head>
+<meta charset="utf-8">
+<title>Tournaments · Crosstable</title>
+<script src="./support.js"></script>
+<link rel="stylesheet" href="kuroobi-tokens.css">
+<link rel="stylesheet" href="ds/kuroobiui/components/bundle.css">
+<script src="ds/kuroobiui/components/bundle.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<style>
+x-import{display:contents}
+@media (max-width:1040px){.k-nav-ov .k-nav-label{display:none}.k-nav-ov .k-nav-row{justify-content:center;padding:0}}
+.k-scroll{overflow-y:scroll!important}
+.k-scroll::-webkit-scrollbar-track{background:var(--track);border-radius:9px}
+body{margin:0;background:var(--bg);color:var(--text);font:var(--fs-4)/1.6 var(--ff)}
+a{color:var(--accent)}a:hover{color:var(--text)}
+</style>
+</helmet>
+<div style="width: 100%; height: 100vh; min-height: 480px; background: var(--bg); color: var(--text); font: var(--fs-4)/1.6 var(--ff); overflow: hidden">
+<x-import style="display: contents" component-from-global-scope="KuroobiUI.AppFrame">
+<x-import component-from-global-scope="KuroobiUI.WindowBar" title="大会"></x-import>
+<x-import style="display: contents" component-from-global-scope="KuroobiUI.Body">
+<div style="position: relative; flex: none; display: flex">
+<x-import style="display: contents" component-from-global-scope="KuroobiUI.Nav" items="{{navLocal}}" ggs-items="{{ggsItems}}" conn="online" active="ggs-tourney"></x-import>
+<div class="k-nav-ov" style="position: absolute; left: 0; right: 1px; bottom: 0; padding: var(--sp-2); border-top: 1px solid var(--border); background: var(--panel)">
+<button type="button" class="k-nav-row k-row" aria-current="false" style="width: 100%; height: var(--h-field); display: flex; align-items: center; gap: var(--sp-3); border: 0; border-radius: var(--r-2); font: inherit; font-size: var(--fs-4); background: transparent; color: var(--text); font-weight: 400"><span style="flex: none; display: grid; place-items: center"><x-import component-from-global-scope="KuroobiUI.Icon" name="prefs"></x-import></span><span class="k-nav-label">設定</span></button>
+</div>
+</div>
+<x-import style="display: contents" component-from-global-scope="KuroobiUI.Main">
+<x-import style="display: contents" component-from-global-scope="KuroobiUI.Toolbar">
+<span class="k-sel" style="font-size: var(--fs-3); font-weight: 600; white-space: nowrap">{{sel.name}}</span>
+<x-import component-from-global-scope="KuroobiUI.Tag" tone="{{sel.tone}}">{{sel.state}}</x-import>
+<sc-if value="{{sel.joined}}" hint-placeholder-val="{{true}}"><x-import component-from-global-scope="KuroobiUI.Tag" tone="ok">参加中</x-import></sc-if>
+<div style="margin-left: auto; display: flex; align-items: center; gap: var(--sp-2); white-space: nowrap">
+<sc-if value="{{isRunning}}" hint-placeholder-val="{{true}}"><x-import component-from-global-scope="KuroobiUI.Button" variant="primary">盤を開く</x-import></sc-if>
+<sc-if value="{{canJoin}}" hint-placeholder-val="{{false}}"><x-import component-from-global-scope="KuroobiUI.Button" variant="primary">参加</x-import></sc-if>
+<sc-if value="{{canWithdraw}}" hint-placeholder-val="{{false}}"><x-import component-from-global-scope="KuroobiUI.Button">辞退</x-import></sc-if>
+<x-import component-from-global-scope="KuroobiUI.Button" variant="ghost">更新</x-import>
+</div>
+</x-import>
+<div style="flex: 1; min-height: 0; display: flex">
+
+<!-- Tournament list -->
+<div class="k-scroll" style="flex: none; width: var(--w-list); border-right: 1px solid var(--border); display: flex; flex-direction: column; padding: var(--sp-2) 0">
+<sc-for list="{{groups}}" as="grp" hint-placeholder-count="2">
+<div style="height: var(--h-head); display: flex; align-items: center; padding: 0 var(--sp-3); font-size: var(--fs-7); font-weight: 600; letter-spacing: .08em; color: var(--sub); white-space: nowrap">{{grp.title}}</div>
+<sc-for list="{{grp.items}}" as="x" hint-placeholder-count="3">
+<div class="k-row" style="flex: none; display: flex; align-items: center; gap: var(--sp-2); height: var(--h-row2); padding: 0 var(--sp-3); border-bottom: 1px solid var(--border-weak); background: {{x.ground}}; box-shadow: {{x.mark}}; cursor: pointer">
+<div style="flex: 1; min-width: 0; display: flex; flex-direction: column; line-height: 1.3">
+<span style="display: flex; align-items: center; gap: var(--sp-0); font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis">{{x.name}}
+<sc-if value="{{x.joined}}" hint-placeholder-val="{{true}}"><x-import component-from-global-scope="KuroobiUI.Dot" tone="gold"></x-import></sc-if>
+</span>
+<span style="font-size: var(--fs-6); color: var(--sub); white-space: nowrap; overflow: hidden; text-overflow: ellipsis">{{x.sub}}</span>
+</div>
+<sc-if value="{{x.canJoin}}" hint-placeholder-val="{{false}}"><x-import component-from-global-scope="KuroobiUI.Button" size="row" variant="primary">参加</x-import></sc-if>
+<x-import component-from-global-scope="KuroobiUI.Tag" tone="{{x.tone}}">{{x.state}}</x-import>
+</div>
+</sc-for>
+</sc-for>
+</div>
+
+<!-- Selected tournament -->
+<div style="flex: 1; min-width: 0; min-height: 0; display: flex; flex-direction: column">
+
+<sc-if value="{{tdError}}" hint-placeholder-val="{{false}}">
+<div style="flex: none; display: flex; align-items: center; gap: var(--sp-2); margin: var(--sp-2) var(--sp-4) 0; padding: var(--sp-2) var(--sp-3); border-radius: var(--r-1); background: var(--card); box-shadow: inset 2px 0 0 var(--bad); font-size: var(--fs-5)">登録済みのアカウントだけが参加できます</div>
+</sc-if>
+<!-- Rules and progress: two lines regardless of the number of rounds -->
+<div style="flex: none; display: flex; flex-direction: column; gap: var(--sp-2); padding: var(--sp-3) var(--sp-4); border-bottom: 1px solid var(--border)">
+<div style="display: flex; align-items: center; gap: var(--sp-4); font-size: var(--fs-5); white-space: nowrap; overflow: hidden">
+<sc-for list="{{rules}}" as="r" hint-placeholder-count="5">
+<span><span style="color: var(--sub); font-size: var(--fs-6)">{{r.k}}</span> {{r.v}}</span>
+</sc-for>
+</div>
+<sc-if value="{{isRunning}}" hint-placeholder-val="{{true}}">
+<div style="display: flex; align-items: center; gap: var(--sp-3); white-space: nowrap">
+<span style="font-size: var(--fs-5)">ラウンド <b style="font-size: var(--fs-3); font-weight: 700">{{cur}}</b> <span style="color: var(--sub)">/ {{all}}</span></span>
+<div style="flex: 1; min-width: 0"><x-import component-from-global-scope="KuroobiUI.Progress" value="{{ratio}}"></x-import></div>
+<span style="font-size: var(--fs-6); color: var(--sub)">このラウンドの終局 <b style="color: var(--text); font-weight: 600">0 / 4</b></span>
+<span style="font-size: var(--fs-6); color: var(--sub)">· alice の次の対局 <b style="color: var(--text); font-weight: 600">ラウンド 38</b></span>
+</sc-if>
+<sc-if value="{{notRunning}}" hint-placeholder-val="{{false}}">
+<div style="display: flex; align-items: center; gap: var(--sp-3); white-space: nowrap; font-size: var(--fs-5)"><b style="font-weight: 600">{{stageHead}}</b><span style="color: var(--sub)">{{stageSub}}</span></div>
+</sc-if>
+</div>
+</div>
+
+<!-- Before the start: participants instead of standings or pairings -->
+<sc-if value="{{isBefore}}" hint-placeholder-val="{{false}}">
+<div style="flex: 1; min-height: 0; display: flex; flex-direction: column">
+<div style="flex: none; display: flex; align-items: center; gap: var(--sp-2); height: var(--h-bar); padding: 0 var(--sp-3); white-space: nowrap">
+<span style="font-weight: 600">参加者</span><span style="font-size: var(--fs-6); color: var(--sub)">{{entrantCount}}</span>
+</div>
+<div style="flex: none; display: flex; align-items: center; gap: var(--sp-3); height: var(--h-head); padding: 0 var(--sp-3); border-bottom: 1px solid var(--border); font-size: var(--fs-7); font-weight: 600; letter-spacing: .08em; color: var(--sub); white-space: nowrap">
+<span style="width: 32px; text-align: right">#</span><span style="flex: 1; min-width: 0">プレイヤー</span><span style="width: 96px; text-align: right">ランダム</span><span style="width: 96px; text-align: right">登録</span>
+</div>
+<div class="k-scroll" style="flex: 1; min-height: 0; display: flex; flex-direction: column">
+<sc-for list="{{entrants}}" as="e" hint-placeholder-count="12">
+<div class="k-row" style="flex: none; display: flex; align-items: center; gap: var(--sp-3); height: var(--h-row); padding: 0 var(--sp-3); border-bottom: 1px solid var(--border-weak); font-size: var(--fs-5); white-space: nowrap; background: {{e.ground}}; box-shadow: {{e.mark}}">
+<span style="width: 32px; text-align: right; color: var(--sub)">{{e.n}}</span>
+<span class="k-sel" style="flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; font-weight: {{e.weight}}">{{e.name}}</span>
+<span style="width: 96px; text-align: right">{{e.rate}}</span>
+<span style="width: 96px; text-align: right; color: var(--sub)">{{e.at}}</span>
+</div>
+</sc-for>
+</div>
+</div>
+</sc-if>
+
+<sc-if value="{{notBefore}}" hint-placeholder-val="{{true}}">
+<div style="flex: 1; min-height: 0; display: flex; flex-direction: column">
+<!-- Crosstable / match list, one at a time in the same place. Opens on the crosstable -->
+<div style="flex: none; display: flex; align-items: center; gap: var(--sp-2); height: var(--h-bar); padding: 0 var(--sp-3); white-space: nowrap">
+<x-import component-from-global-scope="KuroobiUI.Segmented" value="{{view}}" options="{{viewOptions}}"></x-import>
+<sc-if value="{{isCross}}" hint-placeholder-val="{{true}}">
+<span style="margin-left: auto; font-size: var(--fs-6); color: var(--sub)">{{rankAside}}</span>
+</sc-if>
+<!-- Match list filter: with nothing selected, the current round with round stepping; with a selection, across all rounds (table gets an R column). The two player fields are symmetric: one selected gives that player's every round, both give only the matches between the two. A player chosen in one field is removed from the other's options. "Clear" only while either is selected -->
+<sc-if value="{{isGames}}" hint-placeholder-val="{{false}}">
+<div style="margin-left: auto; display: flex; align-items: center; gap: var(--sp-2)">
+<span style="font-size: var(--fs-6); color: var(--sub)">対局者</span>
+<x-import component-from-global-scope="KuroobiUI.Select" value="{{pickA}}" options="{{optsA}}" width="{{124}}" title="対局者"></x-import>
+<span style="color: var(--sub)">−</span>
+<x-import component-from-global-scope="KuroobiUI.Select" value="{{pickB}}" options="{{optsB}}" width="{{124}}" title="対局者"></x-import>
+<sc-if value="{{hasA}}" hint-placeholder-val="{{false}}"><x-import component-from-global-scope="KuroobiUI.Button" size="row" variant="ghost">解除</x-import></sc-if>
+</div>
+</sc-if>
+</div>
+
+<!-- Crosstable: rows and columns in rank order. Clicking a cell switches to the match list filtered to those two players' matches (row player and column player in the two player fields). A cell shows points and W-D-L against that opponent from the row player's side (the same opponent is met many times).
+     Winning records green, losing red, deeper the larger the margin. Pairs playing in the current round are outlined. With many players it scrolls both ways (header row and the left 5 columns fixed) -->
+<sc-if value="{{isCross}}" hint-placeholder-val="{{true}}">
+<!-- One frame scrolling both ways. The header row sticks to the top and the left 5 columns (rank through mean disc difference) to the left; only the opponent cells scroll horizontally -->
+<div class="k-scroll" style="flex: 1; min-height: 0; overflow: auto; border-top: 1px solid var(--border-weak)">
+<div style="width: max-content; min-width: 100%; display: flex; flex-direction: column">
+<div style="position: sticky; top: 0; z-index: 2; flex: none; display: flex; align-items: center; height: var(--h-head); padding-right: var(--sp-3); border-bottom: 1px solid var(--border); background: var(--bg); font-size: var(--fs-7); font-weight: 600; letter-spacing: .08em; color: var(--sub); white-space: nowrap">
+<span style="position: sticky; left: 0; z-index: 1; align-self: stretch; display: flex; align-items: center; gap: var(--sp-3); padding: 0 var(--sp-3); background: var(--bg); border-right: 1px solid var(--border)"><span style="width: 32px; text-align: right">順位</span><span style="width: 96px">プレイヤー</span><span style="width: 40px; text-align: right">勝点</span><span style="width: 60px; text-align: right">勝-分-敗</span><span style="width: 48px; text-align: right">平均石差</span></span>
+<span style="display: flex; gap: 2px; padding-left: var(--sp-3)">
+<sc-for list="{{cols}}" as="c" hint-placeholder-count="8"><span style="width: 50px; text-align: center; overflow: hidden; text-overflow: ellipsis; letter-spacing: 0; color: {{c.color}}">{{c.name}}</span></sc-for>
+</span>
+</div>
+<sc-for list="{{cross}}" as="p" hint-placeholder-count="8">
+<div style="flex: none; display: flex; align-items: center; height: var(--h-row2); padding-right: var(--sp-3); border-bottom: 1px solid var(--border-weak); font-size: var(--fs-5); white-space: nowrap">
+<span style="position: sticky; left: 0; z-index: 1; align-self: stretch; display: flex; align-items: center; gap: var(--sp-3); padding: 0 var(--sp-3); background: {{p.solid}}; box-shadow: {{p.mark}}; border-right: 1px solid var(--border)">
+<span style="width: 32px; text-align: right; font-weight: 700; color: {{p.rankColor}}">{{p.rank}}</span>
+<span class="k-sel" style="width: 96px; overflow: hidden; text-overflow: ellipsis; font-weight: {{p.nameWeight}}">{{p.name}}</span>
+<span style="width: 40px; text-align: right; font-weight: 700">{{p.pts}}</span>
+<span style="width: 60px; text-align: right"><span style="color: var(--ok)">{{p.w}}</span>-{{p.d}}-<span style="color: var(--bad)">{{p.l}}</span></span>
+<span style="width: 48px; text-align: right; color: {{p.discColor}}">{{p.disc}}</span>
+</span>
+<span style="align-self: stretch; display: flex; gap: 2px; padding: 3px 0 3px var(--sp-3)">
+<sc-for list="{{p.cells}}" as="c" hint-placeholder-count="8">
+<span class="k-press" title="{{c.tip}}" style="width: 50px; display: flex; flex-direction: column; align-items: center; justify-content: center; line-height: 1.15; border-radius: var(--r-1); background: {{c.bg}}; box-shadow: {{c.ring}}; cursor: {{c.cursor}}"><b style="font-weight: 600; color: {{c.fg}}">{{c.pts}}</b><span style="font-size: var(--fs-7); color: var(--sub)">{{c.wdl}}</span></span>
+</sc-for>
+</span>
+</div>
+</sc-for>
+</div>
+</div>
+</sc-if>
+
+<!-- Filtered: that player's (or the two players') matches across all rounds. Where the round-stepping strip was: what the filter is and the count. The first field's player is always on the left, and results are disc differences from that player's side (wins green, losses red). Matches of the logged-in name use the selection colour -->
+<sc-if value="{{isFiltered}}" hint-placeholder-val="{{false}}">
+<div style="flex: none; display: flex; align-items: center; gap: var(--sp-2); height: var(--h-field); padding: 0 var(--sp-3); border-top: 1px solid var(--border-weak); background: var(--panel); white-space: nowrap; font-size: var(--fs-5)">
+<b style="font-weight: 600">{{filterWho}}</b><span style="color: var(--sub)">の対局</span><b style="font-weight: 600">{{filterCount}}</b><span style="color: var(--sub)">局 · 終局 {{filterDone}}</span>
+</div>
+<div style="flex: none; display: flex; align-items: center; gap: var(--sp-3); height: var(--h-head); padding: 0 var(--sp-3); border-top: 1px solid var(--border-weak); border-bottom: 1px solid var(--border); font-size: var(--fs-7); font-weight: 600; letter-spacing: .08em; color: var(--sub); white-space: nowrap">
+<span style="width: 40px; text-align: right">R</span><span style="flex: 1; min-width: 0; text-align: right">対局者</span><span style="width: 16px"></span><span style="flex: 1; min-width: 0">対局者</span><span style="width: 72px; text-align: right">結果</span>
+</div>
+<div class="k-scroll" style="flex: 1; min-height: 0; display: flex; flex-direction: column">
+<sc-for list="{{filtered}}" as="m" hint-placeholder-count="16">
+<div class="k-row" style="flex: none; display: flex; align-items: center; gap: var(--sp-3); height: var(--h-row); padding: 0 var(--sp-3); border-bottom: 1px solid var(--border-weak); font-size: var(--fs-5); white-space: nowrap; color: {{m.fg}}; background: {{m.ground}}; box-shadow: {{m.mark}}">
+<span style="width: 40px; text-align: right; color: var(--sub)">{{m.r}}</span>
+<span class="k-sel" style="flex: 1; min-width: 0; text-align: right; overflow: hidden; text-overflow: ellipsis">{{m.black}}</span>
+<span style="width: 16px; text-align: center; color: var(--sub)">−</span>
+<span class="k-sel" style="flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis">{{m.white}}</span>
+<span style="width: 72px; text-align: right; font-weight: 600; overflow: hidden; text-overflow: ellipsis; color: {{m.resColor}}">{{m.resText}}</span>
+</div>
+</sc-for>
+</div>
+</sc-if>
+
+<!-- Match list (unfiltered): round stepping. Opens at the current round; ← → to neighbours, type a number and Enter to jump -->
+<sc-if value="{{isGamesRound}}" hint-placeholder-val="{{true}}">
+<div style="flex: none; display: flex; align-items: center; gap: var(--sp-2); height: var(--h-field); padding: 0 var(--sp-3); border-top: 1px solid var(--border-weak); background: var(--panel); white-space: nowrap; font-size: var(--fs-5)">
+<button type="button" class="k-press" aria-label="前のラウンド" style="width: var(--h-ctrl); height: var(--h-ctrl); border: 1px solid var(--border); border-radius: var(--r-2); background: transparent; color: var(--text); font: inherit">‹</button>
+<span style="color: var(--sub)">ラウンド</span>
+<x-import component-from-global-scope="KuroobiUI.TextField" value="{{shown}}" numeric="{{yes}}" align="right" width="{{52}}"></x-import>
+<span style="color: var(--sub)">/ {{all}}</span>
+<button type="button" class="k-press" aria-label="次のラウンド" style="width: var(--h-ctrl); height: var(--h-ctrl); border: 1px solid var(--border); border-radius: var(--r-2); background: transparent; color: var(--text); font: inherit">›</button>
+<span style="margin-left: auto"><x-import component-from-global-scope="KuroobiUI.Button" size="row" variant="ghost" disabled="{{atCur}}">今のラウンド</x-import></span>
+</div>
+<div style="flex: none; display: flex; align-items: center; gap: var(--sp-3); height: var(--h-head); padding: 0 var(--sp-3); border-bottom: 1px solid var(--border); font-size: var(--fs-7); font-weight: 600; letter-spacing: .08em; color: var(--sub); white-space: nowrap">
+<span style="flex: 1; min-width: 0; text-align: right">対局者</span><span style="width: 16px"></span><span style="flex: 1; min-width: 0">対局者</span><span style="width: 72px; text-align: right">結果</span>
+</div>
+<div class="k-scroll" style="flex: 1; min-height: 0; display: flex; flex-direction: column">
+<sc-for list="{{pairs}}" as="m" hint-placeholder-count="16">
+<div class="k-row" style="flex: none; display: flex; align-items: center; gap: var(--sp-3); height: var(--h-row); padding: 0 var(--sp-3); border-bottom: 1px solid var(--border-weak); font-size: var(--fs-5); white-space: nowrap; background: {{m.ground}}; box-shadow: {{m.mark}}">
+<span class="k-sel" style="flex: 1; min-width: 0; text-align: right; overflow: hidden; text-overflow: ellipsis">{{m.black}}</span>
+<span style="width: 16px; text-align: center; color: var(--sub)">−</span>
+<span class="k-sel" style="flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis">{{m.white}}</span>
+<span style="width: 72px; text-align: right; font-weight: 600; overflow: hidden; text-overflow: ellipsis; color: {{m.resColor}}">{{m.resText}}</span>
+</div>
+</sc-for>
+</div>
+</sc-if>
+
+</div>
+</sc-if>
+</div>
+</div>
+</x-import>
+</x-import>
+<div style="height: var(--h-status); flex: none; background: var(--bg); border-top: 1px solid var(--border); display: flex; align-items: center; gap: var(--sp-4); padding: 0 var(--sp-4); font-size: var(--fs-6); color: var(--sub); white-space: nowrap">
+<span style="display: flex; align-items: center; gap: var(--sp-1)"><x-import component-from-global-scope="KuroobiUI.Dot" tone="ok"></x-import>自動対局中</span>
+<span style="display: flex; align-items: center; gap: var(--sp-1)"><x-import component-from-global-scope="KuroobiUI.Dot" tone="accent"></x-import>思考中 <b style="color: var(--text); font-weight: 600">3.2</b> 秒</span>
+<span>ノード <b style="color: var(--text); font-weight: 600">5,870 万</b></span>
+<span>速度 <b style="color: var(--text); font-weight: 600">18.3</b> Mnps</span>
+<span style="margin-left: auto; display: flex; align-items: center; gap: var(--sp-1)">CPU <span aria-hidden="true" style="display: inline-block; width: 32px; height: 4px; border-radius: var(--r-pill); background: var(--track); overflow: hidden"><span style="display: block; height: 100%; width: 38%; background: var(--ok)"></span></span><b style="color: var(--text); font-weight: 600">305</b>%</span>
+<span style="display: flex; align-items: center; gap: var(--sp-1)">メモリ <span aria-hidden="true" style="display: inline-block; width: 32px; height: 4px; border-radius: var(--r-pill); background: var(--track); overflow: hidden"><span style="display: block; height: 100%; width: 39%; background: var(--ok)"></span></span><b style="color: var(--text); font-weight: 600">6.2</b> GB</span>
+<span>GGS <b style="color: var(--text); font-weight: 600">接続中</b> (alice)</span>
+</div>
+</x-import>
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props='{"stage":{"editor":"select","options":["running","before","joined","finished","filtered","pair","error"],"default":"running"},"view":{"editor":"select","options":["cross","games"],"default":"cross"},"players":{"editor":"select","options":["8","100"],"default":"8"},"$preview":{"width":1280,"height":800}}'>
+class Component extends DCLogic {
+  renderVals() {
+    const ui = window.KuroobiUI;
+    if (ui && ui.setLang) ui.setLang('ja');
+    const stage0 = this.props.stage ?? 'running';
+    // joined: after joining before the start / error: when a tournament action is refused
+    // pair: after clicking a crosstable cell (only those two players' matches)
+    const stage = stage0 === 'joined' || stage0 === 'error' ? 'before' : stage0 === 'pair' ? 'filtered' : stage0;
+    const view = stage === 'filtered' ? 'games' : (this.props.view ?? 'cross');
+    const me = 'alice';
+    const selId = { before: 15, finished: 12 }[stage] ?? 14;
+    const all = 70, cur = 37;
+    const row = (x) => ({
+      ...x,
+      ground: x.id === selId ? 'var(--card)' : 'transparent',
+      mark: x.id === selId ? 'inset 2px 0 0 var(--accent)' : 'none',
+    });
+    const groups = [
+      { title: '開催中・開催予定', items: [
+        { id: 14, name: '大会 14', state: '対局中', tone: 'accent', joined: true, sub: 'ラウンド 37/70 · 8 人' },
+        { id: 13, name: '大会 13', state: '休憩中', tone: 'ok', sub: '次のラウンドまで 1:40 · 8 人' },
+        { id: 15, name: '大会 15', state: '開始前', tone: 'ok', canJoin: true, sub: '開始まで 12:30 · 6 人' },
+      ].map(row) },
+      { title: '終わった大会', items: [
+        { id: 12, name: '大会 12', state: '終了', tone: 'sub', joined: true, sub: '優勝 ymatioun · 8 人' },
+        { id: 11, name: '大会 11', state: '終了', tone: 'sub', sub: '優勝 egrcd · 10 人' },
+      ].concat(Array.from({ length: 12 }, (_, i) => ({
+        id: 10 - i, name: '大会 ' + (10 - i), state: '終了', tone: 'sub',
+        sub: '優勝 ' + ['ymatioun', 'egrcd', 'Kalmia', 'natsu'][i % 4] + ' · ' + (6 + (i * 3) % 6) + ' 人',
+      }))).map(row) },
+    ];
+    // GGS's October tournament (8 players, 70 rounds, 10 games against each opponent) after round 36
+    const D = {"players": ["ymatioun", "egrcd", "Kalmia", "natsu", "morgoth", "Melody", "alice", "Forest"], "pts": {"alice": 13.5, "ymatioun": 26.0, "morgoth": 19.5, "Kalmia": 20.5, "egrcd": 20.5, "Melody": 19.0, "natsu": 20.0, "Forest": 5.0}, "disc": {"ymatioun": 0.5, "egrcd": 0.2, "Kalmia": 0.2, "natsu": 0.2, "morgoth": 0.1, "Melody": 0.1, "alice": -0.2, "Forest": -1.1}, "cells": {"ymatioun": {"egrcd": [2, 3, 0], "Kalmia": [1, 4, 0], "natsu": [1, 4, 0], "morgoth": [2, 3, 0], "Melody": [2, 3, 0], "alice": [5, 1, 0], "Forest": [3, 2, 0]}, "egrcd": {"ymatioun": [0, 3, 2], "Kalmia": [2, 2, 1], "natsu": [2, 2, 1], "morgoth": [1, 3, 1], "Melody": [1, 4, 1], "alice": [3, 1, 1], "Forest": [3, 2, 0]}, "Kalmia": {"ymatioun": [0, 4, 1], "egrcd": [1, 2, 2], "natsu": [0, 4, 1], "morgoth": [1, 5, 0], "Melody": [1, 4, 0], "alice": [3, 2, 0], "Forest": [3, 2, 0]}, "natsu": {"ymatioun": [0, 4, 1], "egrcd": [1, 2, 2], "Kalmia": [1, 4, 0], "morgoth": [1, 4, 0], "Melody": [1, 3, 1], "alice": [1, 1, 3], "Forest": [6, 0, 0]}, "morgoth": {"ymatioun": [0, 3, 2], "egrcd": [1, 3, 1], "Kalmia": [0, 5, 1], "natsu": [0, 4, 1], "Melody": [2, 1, 2], "alice": [3, 2, 0], "Forest": [4, 1, 0]}, "Melody": {"ymatioun": [0, 3, 2], "egrcd": [1, 4, 1], "Kalmia": [0, 4, 1], "natsu": [1, 3, 1], "morgoth": [2, 1, 2], "alice": [2, 2, 1], "Forest": [4, 1, 0]}, "alice": {"ymatioun": [0, 1, 5], "egrcd": [1, 1, 3], "Kalmia": [0, 2, 3], "natsu": [3, 1, 1], "morgoth": [0, 2, 3], "Melody": [1, 2, 2], "Forest": [3, 2, 0]}, "Forest": {"ymatioun": [0, 2, 3], "egrcd": [0, 2, 3], "Kalmia": [0, 2, 3], "natsu": [0, 0, 6], "morgoth": [0, 1, 4], "Melody": [0, 1, 4], "alice": [0, 2, 3]}}, "round": [["natsu", "alice"], ["egrcd", "Forest"], ["morgoth", "Melody"], ["ymatioun", "Kalmia"]], "mine": [[1, "alice", "ymatioun", -1.0], [2, "alice", "natsu", 0.0], [3, "Kalmia", "alice", 0.0], [4, "egrcd", "alice", -2.0], [5, "alice", "Melody", -1.0], [6, "alice", "morgoth", -1.0], [7, "Forest", "alice", -3.0], [8, "ymatioun", "alice", 1.0], [9, "natsu", "alice", -1.0], [10, "alice", "Kalmia", -1.0], [11, "alice", "egrcd", 0.0], [12, "Melody", "alice", 0.0], [13, "morgoth", "alice", 0.0], [14, "alice", "Forest", 1.0], [15, "alice", "ymatioun", 0.0], [16, "alice", "natsu", 2.0], [17, "Kalmia", "alice", 0.0], [18, "egrcd", "alice", 1.0], [19, "alice", "Melody", 0.0], [20, "alice", "morgoth", -1.0], [21, "Forest", "alice", -1.0], [22, "ymatioun", "alice", 1.0], [23, "natsu", "alice", 2.0], [24, "alice", "Kalmia", -1.0], [25, "alice", "egrcd", -2.0], [26, "Melody", "alice", 1.0], [27, "morgoth", "alice", 0.0], [28, "alice", "Forest", 0.0], [29, "alice", "ymatioun", -2.0], [30, "alice", "natsu", 2.0], [31, "Kalmia", "alice", 2.0], [32, "egrcd", "alice", 1.0], [33, "alice", "Melody", 2.0], [34, "alice", "morgoth", -1.0], [35, "Forest", "alice", 0.0], [36, "ymatioun", "alice", 1.0], [37, "natsu", "alice", 0.0], [38, "alice", "Kalmia", -1.0], [39, "alice", "egrcd", 0.0], [40, "Melody", "alice", 0.0], [41, "morgoth", "alice", 0.0], [42, "alice", "Forest", 1.0], [43, "alice", "ymatioun", 0.0], [44, "alice", "natsu", 0.0], [45, "Kalmia", "alice", 1.0], [46, "egrcd", "alice", 1.0], [47, "alice", "Melody", 0.0], [48, "alice", "morgoth", 0.0], [49, "Forest", "alice", 1.0], [50, "ymatioun", "alice", 0.0], [51, "natsu", "alice", 1.0], [52, "alice", "Kalmia", -1.0], [53, "alice", "egrcd", 1.0], [54, "Melody", "alice", 0.0], [55, "morgoth", "alice", 0.0], [56, "alice", "Forest", 2.0], [57, "alice", "ymatioun", 0.0], [58, "alice", "natsu", -1.0], [59, "Kalmia", "alice", 0.0], [60, "egrcd", "alice", 0.0], [61, "alice", "Melody", -1.0], [62, "alice", "morgoth", 0.0], [63, "Forest", "alice", -1.0], [64, "ymatioun", "alice", 1.0], [65, "natsu", "alice", 0.0], [66, "alice", "Kalmia", 0.0], [67, "alice", "egrcd", 0.0], [68, "Melody", "alice", -1.0], [69, "morgoth", "alice", 0.0], [70, "alice", "Forest", -1.0]]};
+    const big = this.props.players === '100';
+    // 100-player example: round robin of 99 rounds (1 game per pair) after round 36. Built so stronger players tend to win
+    const BIG = (() => {
+      const names = ['ymatioun', 'egrcd', me, 'Kalmia', 'natsu', 'morgoth', 'Melody', 'Forest', 'saio', 'Rhapsody', 'viper', 'scorpion', 'zebra', 'OO7', 'fly', 'ant']
+        .concat(Array.from({ length: 84 }, (_, i) => 'player' + (i + 17)));
+      const n = names.length, cells = {}, pts = {}, disc = {}, round = [];
+      names.forEach((a) => { cells[a] = {}; pts[a] = 0; disc[a] = 0; });
+      // Circle-method round robin: fix one player and rotate the rest. Pairs in round r are (r + k, r - k)
+      const play = (i, j, r) => {
+        const a = names[i], b = names[j];
+        if (r === 37) round.push([a, b]);
+        if (r >= 37) { cells[a][b] = [0, 0, 0]; cells[b][a] = [0, 0, 0]; return; }
+        const h = (i * 7919 + j * 104729 + r * 31) % 100, edge = 50 + (j - i) * 0.7;
+        const v = i > j ? -1 * (h < 100 - edge - 6 ? 1 : h < 100 - edge + 6 ? 0 : -1) : (h < edge - 6 ? 1 : h < edge + 6 ? 0 : -1);
+        cells[a][b] = v > 0 ? [1, 0, 0] : v < 0 ? [0, 0, 1] : [0, 1, 0];
+        cells[b][a] = v > 0 ? [0, 0, 1] : v < 0 ? [1, 0, 0] : [0, 1, 0];
+        pts[a] += v > 0 ? 1 : v < 0 ? 0 : 0.5; pts[b] += v < 0 ? 1 : v > 0 ? 0 : 0.5;
+        disc[a] += v * (2 + h % 9); disc[b] -= v * (2 + h % 9);
+      };
+      for (let r = 1; r <= n - 1; r++) {
+        const rot = (k) => k === 0 ? 0 : 1 + ((k - 1 + r - 1) % (n - 1));
+        for (let k = 0; k < n / 2; k++) play(rot(k), rot(n - 1 - k), r);
+      }
+      const players = names.slice().sort((x, y) => pts[y] - pts[x] || disc[y] - disc[x]);
+      players.forEach((p) => { disc[p] = Math.round(disc[p] / 36 * 10) / 10; });
+      return { players, cells, pts, disc, round };
+    })();
+    const sign = (v) => (v > 0 ? '+' : '') + (Number.isInteger(v) ? String(v) : v.toFixed(1));
+    const discColor = (v) => v > 0 ? 'var(--ok)' : v < 0 ? 'var(--bad)' : 'var(--sub)';
+    const X = big ? BIG : D;
+    const live = new Set(X.round.flatMap(([a, b]) => [a + '|' + b, b + '|' + a]));
+    const ps = X.players;
+    const cols = ps.map((name) => ({ name, color: name === me ? 'var(--accent)' : 'var(--sub)' }));
+    const cross = ps.map((name, i) => {
+      let w = 0, dr = 0, l = 0;
+      const cells = ps.map((o) => {
+        if (o === name) return { pts: '', wdl: '', tip: '', cursor: 'default', fg: 'var(--sub)', bg: 'repeating-linear-gradient(45deg, transparent 0 5px, var(--border-weak) 5px 6px)', ring: 'none' };
+        const [cw, cd, cl] = X.cells[name][o], g = cw + cd + cl;
+        w += cw; dr += cd; l += cl;
+        const ring = live.has(name + '|' + o) ? 'inset 0 0 0 1px var(--accent)' : 'none';
+        const tip = name + ' − ' + o + ' の対局を見る', cursor = 'pointer';
+        if (!g) return { pts: '–', wdl: '', tip, cursor, fg: 'var(--sub)', bg: 'transparent', ring };
+        const p = cw + cd / 2, r = p / g, dev = Math.min(Math.abs(r - 0.5) * 2, 1);
+        const pct = Math.round(dev * 32);
+        return {
+          pts: Number.isInteger(p) ? String(p) : p.toFixed(1), wdl: cw + '-' + cd + '-' + cl, tip, cursor, fg: 'var(--text)', ring,
+          bg: pct === 0 ? 'transparent' : 'color-mix(in srgb, var(' + (r > 0.5 ? '--ok' : '--bad') + ') ' + pct + '%, transparent)',
+        };
+      });
+      return {
+        rank: i + 1, name, pts: X.pts[name].toFixed(1), w, d: dr, l, disc: sign(X.disc[name]), cells,
+        rankColor: i === 0 ? 'var(--gold)' : 'var(--sub)', nameWeight: name === me ? 700 : 400,
+        discColor: discColor(X.disc[name]),
+        solid: name === me ? 'var(--card)' : 'var(--bg)',
+        mark: name === me ? 'inset 2px 0 0 var(--accent)' : 'none',
+      };
+    });
+    const pairs = D.round.map(([black, white]) => {
+      const mine = black === me || white === me;
+      return { black, white, resText: '対局中', resColor: 'var(--sub)',
+        ground: mine ? 'var(--card)' : 'transparent', mark: mine ? 'inset 2px 0 0 var(--accent)' : 'none' };
+    });
+    // All 10 games between alice and ymatioun (the rounds of the 70 where they meet)
+    const pairGames = D.mine.filter(([, a, b]) => a === 'ymatioun' || b === 'ymatioun');
+    const ymat = [[1, "alice", "ymatioun", -1.0], [2, "Kalmia", "ymatioun", -1.0], [3, "ymatioun", "Melody", 1.0], [4, "Forest", "ymatioun", -1.0], [5, "ymatioun", "natsu", 0.0], [6, "egrcd", "ymatioun", 0.0], [7, "ymatioun", "morgoth", 1.0], [8, "ymatioun", "alice", 1.0], [9, "ymatioun", "Kalmia", 0.0], [10, "Melody", "ymatioun", 0.0], [11, "ymatioun", "Forest", 1.0], [12, "natsu", "ymatioun", -1.0], [13, "ymatioun", "egrcd", 1.0], [14, "morgoth", "ymatioun", -1.0], [15, "alice", "ymatioun", 0.0], [16, "Kalmia", "ymatioun", 0.0], [17, "ymatioun", "Melody", 1.0], [18, "Forest", "ymatioun", 0.0], [19, "ymatioun", "natsu", 0.0], [20, "egrcd", "ymatioun", 0.0], [21, "ymatioun", "morgoth", 0.0], [22, "ymatioun", "alice", 1.0], [23, "ymatioun", "Kalmia", 0.0], [24, "Melody", "ymatioun", 0.0], [25, "ymatioun", "Forest", 0.0], [26, "natsu", "ymatioun", 0.0], [27, "ymatioun", "egrcd", 1.0], [28, "morgoth", "ymatioun", 0.0], [29, "alice", "ymatioun", -2.0], [30, "Kalmia", "ymatioun", 0.0], [31, "ymatioun", "Melody", 0.0], [32, "Forest", "ymatioun", -2.0], [33, "ymatioun", "natsu", 0.0], [34, "egrcd", "ymatioun", 0.0], [35, "ymatioun", "morgoth", 0.0], [36, "ymatioun", "alice", 1.0], [37, "ymatioun", "Kalmia", 0.0], [38, "Melody", "ymatioun", 0.0], [39, "ymatioun", "Forest", 1.0], [40, "natsu", "ymatioun", 0.0], [41, "ymatioun", "egrcd", 0.0], [42, "morgoth", "ymatioun", 0.0], [43, "alice", "ymatioun", 0.0], [44, "Kalmia", "ymatioun", 0.0], [45, "ymatioun", "Melody", 1.0], [46, "Forest", "ymatioun", -2.0], [47, "ymatioun", "natsu", 1.0], [48, "egrcd", "ymatioun", -1.0], [49, "ymatioun", "morgoth", 1.0], [50, "ymatioun", "alice", 0.0], [51, "ymatioun", "Kalmia", 1.0], [52, "Melody", "ymatioun", -1.0], [53, "ymatioun", "Forest", 2.0], [54, "natsu", "ymatioun", 1.0], [55, "ymatioun", "egrcd", 1.0], [56, "morgoth", "ymatioun", 0.0], [57, "alice", "ymatioun", 0.0], [58, "Kalmia", "ymatioun", -1.0], [59, "ymatioun", "Melody", 0.0], [60, "Forest", "ymatioun", -4.0], [61, "ymatioun", "natsu", 1.0], [62, "egrcd", "ymatioun", 0.0], [63, "ymatioun", "morgoth", 0.0], [64, "ymatioun", "alice", 1.0], [65, "ymatioun", "Kalmia", 0.0], [66, "Melody", "ymatioun", 0.0], [67, "ymatioun", "Forest", 1.0], [68, "natsu", "ymatioun", 0.0], [69, "ymatioun", "egrcd", 0.0], [70, "morgoth", "ymatioun", 0.0]];
+    // Of all rounds, the games the filtered player plays (ymatioun every round; 10 games for two players)
+    const filterAll = stage0 === 'pair' ? pairGames.length : all;
+    const filterDone = (stage0 === 'pair' ? pairGames : ymat).filter(([r]) => r < cur).length;
+    const pickA = stage === 'filtered' ? (stage0 === 'pair' ? 'alice' : 'ymatioun') : '';
+    const pickB = stage0 === 'pair' ? 'ymatioun' : '';
+    return {
+      yes: true,
+      navLocal: ui ? ui.navLocal() : [],
+      ggsItems: ui ? ui.ggsNav('online', { 'ggs-lobby': { count: 2, alert: true }, 'ggs-play': { count: 1 }, 'ggs-tourney': { dot: 'gold' } }).filter((it) => it.id !== 'ggs-standby') : [],
+      sel: {
+        running: { name: '大会 14', state: '対局中', tone: 'accent', joined: true },
+        filtered: { name: '大会 14', state: '対局中', tone: 'accent', joined: true },
+        before: { name: '大会 15', state: '開始前', tone: 'ok', joined: stage0 === 'joined' },
+        finished: { name: '大会 12', state: '終了', tone: 'sub', joined: true },
+      }[stage],
+      isRunning: stage === 'running' || stage === 'filtered', notRunning: stage === 'before' || stage === 'finished',
+      isBefore: stage === 'before', notBefore: stage !== 'before',
+      canJoin: stage === 'before' && stage0 !== 'joined', canWithdraw: stage0 === 'joined',
+      tdError: stage0 === 'error',
+      stageHead: stage === 'before' ? '開始まで 12:30' : '優勝 ymatioun',
+      stageSub: stage === 'before' ? '参加 6 人' : '全 70 ラウンド終了 · alice 7 位 / 8 人',
+      entrantCount: '6 人',
+      entrants: ['ymatioun', 'saio', 'Rhapsody', 'scorpion', 'edgar', 'Thor'].map((name, i) => ({
+        n: i + 1, name, rate: ['2051.2', '1987.0', '1902.8', '1790.5', '1612.0', '1540.4'][i], at: ['11:02', '11:05', '11:10', '11:14', '11:20', '11:31'][i],
+        weight: 400, ground: 'transparent', mark: 'none',
+      })),
+      pickA, pickB,
+      hasA: stage === 'filtered', filterCount: String(filterAll), filterDone: String(filterDone),
+      filterWho: stage0 === 'pair' ? 'alice − ymatioun' : 'ymatioun',
+      optsA: [['', 'すべて']].concat(D.players.filter((n) => n !== pickB).map((n) => [n, n])),
+      optsB: [['', 'すべて']].concat(D.players.filter((n) => n !== pickA).map((n) => [n, n])),
+      isFiltered: stage === 'filtered' && view === 'games',
+      isGamesRound: stage !== 'filtered' && view === 'games',
+      filtered: (stage0 === 'pair' ? pairGames : ymat).map(([r, a, b, s]) => {
+        // The first field's player on the left; results are from that player's side
+        const flip = b === pickA, v = flip ? -s : s, done = r < cur, mine = a === me || b === me;
+        return { r, black: flip ? b : a, white: flip ? a : b,
+          resText: done ? sign(v) : r === cur ? '対局中' : '', resColor: done ? discColor(v) : 'var(--sub)',
+          fg: r > cur ? 'var(--sub)' : 'var(--text)',
+          ground: mine ? 'var(--card)' : 'transparent', mark: mine ? 'inset 2px 0 0 var(--accent)' : 'none' };
+      }),
+      groups,
+      rules: [
+        { k: '形式', v: '同期・ランダム14手' },
+        { k: '持ち時間', v: '5 分 (延長 0:05)' },
+        { k: '組み方', v: '総当たり' },
+        { k: 'ラウンド間', v: '2:00' },
+        { k: '参加者', v: '8 人' },
+      ],
+      all, cur, ratio: (cur - 1) / all,
+      rankAside: big ? 'alice ' + (BIG.players.indexOf(me) + 1) + ' 位 / 100 人' : 'alice 7 位 / 8 人',
+      cols, cross,
+      view,
+      isCross: view === 'cross', isGames: view === 'games',
+      viewOptions: [{ value: 'cross', label: '成績表' }, { value: 'games', label: '対局一覧' }],
+      shown: String(cur),
+      atCur: true,
+      pairs,
+    };
+  }
+}
+</script>
+</body>
+</html>

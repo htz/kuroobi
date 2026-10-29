@@ -1,0 +1,309 @@
+<!doctype html>
+<html lang="ja">
+<head>
+<meta charset="utf-8">
+<title>Players · List (nothing selected)</title>
+<script src="./support.js"></script>
+<link rel="stylesheet" href="kuroobi-tokens.css">
+<link rel="stylesheet" href="ds/kuroobiui/components/bundle.css">
+<script src="ds/kuroobiui/components/bundle.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<style>
+x-import{display:contents}
+@media (max-width:1040px){.k-nav-ov .k-nav-label{display:none}.k-nav-ov .k-nav-row{justify-content:center;padding:0}}
+.k-scroll{overflow-y:scroll!important}
+.k-scroll::-webkit-scrollbar-track{background:var(--track);border-radius:9px}
+body{margin:0;background:var(--bg);color:var(--text);font:var(--fs-4)/1.6 var(--ff)}
+a{color:var(--accent)}a:hover{color:var(--text)}
+</style>
+</helmet>
+<div style="position: relative; width: 100%; height: 100vh; min-height: 480px; background: var(--bg); color: var(--text); font: var(--fs-4)/1.6 var(--ff); overflow: hidden">
+<x-import style="display: contents" component-from-global-scope="KuroobiUI.AppFrame">
+<x-import component-from-global-scope="KuroobiUI.WindowBar" title="プレイヤー"></x-import>
+<x-import style="display: contents" component-from-global-scope="KuroobiUI.Body">
+<div style="position: relative; flex: none; display: flex">
+<x-import style="display: contents" component-from-global-scope="KuroobiUI.Nav" items="{{navLocal}}" ggs-items="{{ggsItems}}" conn="online" active="ggs-players"></x-import>
+<div class="k-nav-ov" style="position: absolute; left: 0; right: 1px; bottom: 0; padding: var(--sp-2); border-top: 1px solid var(--border); background: var(--panel)">
+<button type="button" class="k-nav-row k-row" aria-current="false" style="width: 100%; height: var(--h-field); display: flex; align-items: center; gap: var(--sp-3); border: 0; border-radius: var(--r-2); font: inherit; font-size: var(--fs-4); background: transparent; color: var(--text); font-weight: 400"><span style="flex: none; display: grid; place-items: center"><x-import component-from-global-scope="KuroobiUI.Icon" name="prefs"></x-import></span><span class="k-nav-label">設定</span></button>
+</div>
+</div>
+<x-import style="display: contents" component-from-global-scope="KuroobiUI.Main">
+<x-import style="display: contents" component-from-global-scope="KuroobiUI.Toolbar">
+<x-import component-from-global-scope="KuroobiUI.TextField" value="{{query}}" placeholder="名前で検索" width="{{searchW}}"></x-import>
+<x-import component-from-global-scope="KuroobiUI.Segmented" value="{{modeVal}}" options="{{modeOptions}}"></x-import>
+<sc-if value="{{isTop}}" hint-placeholder-val="{{false}}"><x-import component-from-global-scope="KuroobiUI.Segmented" value="8r" options="{{poolOptions}}"></x-import></sc-if>
+<x-import component-from-global-scope="KuroobiUI.Button" variant="ghost">更新</x-import>
+<div style="margin-left: auto; display: flex; align-items: center; gap: var(--sp-2); font-size: var(--fs-6); color: var(--sub); white-space: nowrap">
+<x-import component-from-global-scope="KuroobiUI.Button" disabled="{{yes}}">前へ</x-import>
+<span style="color: var(--text)">{{pageText}}</span>
+<x-import component-from-global-scope="KuroobiUI.Button">次へ</x-import>
+<x-import component-from-global-scope="KuroobiUI.Select" size="ctrl" value="25" options="{{perPage}}" title="表示件数"></x-import>
+</div>
+</x-import>
+<div style="flex: 1; min-height: 0; overflow: hidden; padding: var(--sp-4) var(--sp-1) 0; display: flex; flex-direction: column; gap: var(--sp-2)">
+<x-import style="display: contents" component-from-global-scope="KuroobiUI.Section" title="alice のレート">
+<div style="display: flex; flex-direction: column; gap: var(--sp-1); padding: 0 var(--sp-3)">
+<sc-for list="{{myRates}}" as="r" hint-placeholder-count="2">
+<x-import component-from-global-scope="KuroobiUI.RateRow" label="{{r.label}}" rate="{{r.rate}}"></x-import>
+</sc-for>
+</div>
+</x-import>
+<x-import style="display: contents" component-from-global-scope="KuroobiUI.Section" title="{{listTitle}}" aside="{{userCount}}" grow="{{yes}}">
+<sc-if value="{{isOnline}}" hint-placeholder-val="{{true}}">
+<div style="height: 100%; display: flex; flex-direction: column">
+<div style="flex: none; display: flex; align-items: center; gap: var(--sp-3); height: var(--h-head); padding: 0 var(--sp-3); border-bottom: 1px solid var(--border); font-size: var(--fs-7); font-weight: 600; letter-spacing: .08em; color: var(--sub); white-space: nowrap">
+<span style="flex: 1; min-width: 0">名前</span><span style="width: 112px; text-align: right">ランダム</span><span style="width: 112px; text-align: right">通常</span><span style="width: 72px; text-align: right">受付</span><span style="width: 80px; text-align: right">状態</span>
+</div>
+<div class="k-scroll" style="flex: 1; min-height: 0; display: flex; flex-direction: column">
+<sc-for list="{{users}}" as="u" hint-placeholder-count="14">
+<div class="{{u.cls}}" style="display: flex; align-items: center; gap: var(--sp-3); height: var(--h-field); padding: 0 var(--sp-3); border-bottom: 1px solid var(--border-weak); font-size: var(--fs-5); white-space: nowrap; background: {{u.ground}}; box-shadow: {{u.mark}}">
+<span class="k-sel" style="flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; font-weight: {{u.weight}}">{{u.name}}</span>
+<span style="width: 112px; text-align: right; overflow: hidden; text-overflow: ellipsis">{{u.rr}} <span style="color: var(--sub); font-size: var(--fs-6)">{{u.dr}}</span></span>
+<span style="width: 112px; text-align: right; overflow: hidden; text-overflow: ellipsis; color: var(--sub)">{{u.r8}} <span style="font-size: var(--fs-6)">{{u.d8}}</span></span>
+<span style="width: 72px; text-align: right; font-size: var(--fs-6); color: {{u.openColor}}">{{u.open}}</span>
+<span style="width: 80px; text-align: right; font-size: var(--fs-6); color: {{u.stateColor}}">{{u.state}}</span>
+</div>
+</sc-for>
+</div>
+</div>
+</sc-if>
+<!-- Top players: rank column, one rating column for the selected type, and status -->
+<sc-if value="{{isTop}}" hint-placeholder-val="{{false}}">
+<div style="height: 100%; display: flex; flex-direction: column">
+<div style="flex: none; display: flex; align-items: center; gap: var(--sp-3); height: var(--h-head); padding: 0 var(--sp-3); border-bottom: 1px solid var(--border); font-size: var(--fs-7); font-weight: 600; letter-spacing: .08em; color: var(--sub); white-space: nowrap">
+<span style="width: 40px; text-align: right">順位</span><span style="flex: 1; min-width: 0">名前</span><span style="width: 112px; text-align: right">レート</span><span style="width: 80px; text-align: right">状態</span>
+</div>
+<div class="k-scroll" style="flex: 1; min-height: 0; display: flex; flex-direction: column">
+<sc-for list="{{tops}}" as="u" hint-placeholder-count="20">
+<div class="k-row" style="flex: none; display: flex; align-items: center; gap: var(--sp-3); height: var(--h-field); padding: 0 var(--sp-3); border-bottom: 1px solid var(--border-weak); font-size: var(--fs-5); white-space: nowrap; background: {{u.ground}}; box-shadow: {{u.mark}}">
+<span style="width: 40px; text-align: right; font-weight: 700; color: {{u.rankColor}}">{{u.rank}}</span>
+<span class="k-sel" style="flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; font-weight: {{u.weight}}">{{u.name}}</span>
+<span style="width: 112px; text-align: right">{{u.rate}} <span style="color: var(--sub); font-size: var(--fs-6)">{{u.dev}}</span></span>
+<span style="width: 80px; text-align: right; font-size: var(--fs-6); color: {{u.stateColor}}">{{u.state}}</span>
+</div>
+</sc-for>
+</div>
+</div>
+</sc-if>
+<!-- Search matches no one -->
+<sc-if value="{{isNoHit}}" hint-placeholder-val="{{false}}">
+<div style="height: 100%; display: grid; place-items: center; padding: var(--sp-5); text-align: center">
+<div style="display: flex; flex-direction: column; gap: var(--sp-2); align-items: center">
+<span style="font-size: var(--fs-4); font-weight: 600">「{{query}}」に当たるプレイヤーはいません</span>
+<span style="font-size: var(--fs-6); color: var(--sub)">接続していない人は「上位」から探せます</span>
+</div>
+</div>
+</sc-if>
+</x-import>
+</div>
+</x-import>
+</x-import>
+<!-- Details in a drawer: slides in from the right only while a row is selected (480px wide). Clicking outside closes it and the click still takes effect (another row switches the details). × and Esc also close it -->
+<sc-if value="{{detailOpen}}" hint-placeholder-val="{{false}}">
+<div aria-hidden="true" title="閉じる" style="position: absolute; z-index: 25; left: 0; right: 0; top: var(--h-window); bottom: var(--h-status)"></div>
+<aside role="dialog" aria-label="プレイヤーの詳細" style="position: absolute; z-index: 26; right: 0; top: var(--h-window); bottom: var(--h-status); width: 480px; max-width: calc(100% - 120px); display: flex; flex-direction: column; background: var(--panel); border-left: 1px solid var(--border); box-shadow: var(--sh-2)">
+<div style="flex: none; height: var(--h-bar); display: flex; align-items: center; gap: var(--sp-2); padding: 0 var(--sp-2) 0 var(--sp-3); border-bottom: 1px solid var(--border)">
+<span class="k-sel" style="flex: none; max-width: 160px; font-size: var(--fs-3); font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap">ymatioun</span>
+<!-- Current activity beside the name: a Tag when in a match; the request-acceptance state small (not floated as a line inside the overview) -->
+<x-import component-from-global-scope="KuroobiUI.Tag" tone="ok">対局中</x-import>
+<span style="flex: none; font-size: var(--fs-6); font-weight: 400; color: var(--accent)">受付中</span>
+<div style="flex: 1; min-width: 0; display: flex; justify-content: flex-end"><x-import component-from-global-scope="KuroobiUI.Segmented" value="{{tab}}" options="{{tabOpts}}"></x-import></div>
+<x-import component-from-global-scope="KuroobiUI.IconButton" name="close" label="閉じる"></x-import>
+</div>
+
+<!-- Overview -->
+<sc-if value="{{isSummary}}" hint-placeholder-val="{{true}}">
+<div class="k-scroll" style="flex: 1; min-height: 0">
+<div style="display: flex; flex-direction: column; gap: var(--sp-3); padding: var(--sp-4) var(--sp-4) var(--sp-5)">
+<div style="display: grid; grid-template-columns: 1fr 1fr; gap: var(--sp-3)">
+<sc-for list="{{selRates}}" as="r" hint-placeholder-count="2">
+<div style="display: flex; flex-direction: column; line-height: 1.3; white-space: nowrap">
+<span style="font-size: var(--fs-7); font-weight: 600; letter-spacing: .08em; color: var(--sub)">{{r.label}}</span>
+<span><b style="font-size: var(--fs-3); font-weight: 700">{{r.value}}</b> <span style="font-size: var(--fs-6); color: var(--sub)">{{r.dev}}</span></span>
+</div>
+</sc-for>
+</div>
+<div style="display: flex; gap: var(--sp-2)">
+<x-import component-from-global-scope="KuroobiUI.Button" variant="primary">対局を申し込む</x-import>
+<x-import component-from-global-scope="KuroobiUI.Button">チャット</x-import>
+</div>
+<div style="display: flex; flex-direction: column; gap: var(--sp-1); border-top: 1px solid var(--border-weak); padding-top: var(--sp-3)">
+<div style="display: flex; align-items: center; height: var(--h-ctrl); white-space: nowrap">
+<span style="font-size: var(--fs-7); font-weight: 600; letter-spacing: .08em; color: var(--sub)">レートの推移</span>
+<div style="margin-left: auto"><x-import component-from-global-scope="KuroobiUI.Segmented" value="8r" options="{{poolOptions}}"></x-import></div>
+</div>
+<x-import component-from-global-scope="KuroobiUI.RateChart" points="{{chart}}" width="{{chartW}}" height="{{chartH}}" dates="{{chartDates}}" labels="{{chartLabels}}" hover="{{chartHover}}"></x-import>
+</div>
+</div>
+</div>
+</sc-if>
+
+<!-- Match history: fixed down to the header; only the rows scroll -->
+<sc-if value="{{isHistory}}" hint-placeholder-val="{{false}}">
+<div style="flex: 1; min-height: 0; display: flex; flex-direction: column">
+<div style="flex: none; display: flex; align-items: center; gap: var(--sp-2); height: var(--h-field); padding: 0 var(--sp-3); white-space: nowrap">
+<x-import component-from-global-scope="KuroobiUI.Segmented" value="8r" options="{{poolOptions}}"></x-import>
+<span style="margin-left: auto; font-size: var(--fs-6); color: var(--sub)">{{historyCount}}</span>
+</div>
+<div style="flex: none; padding: 0 var(--sp-2)"><x-import component-from-global-scope="KuroobiUI.ResultHead" note="{{yes}}"></x-import></div>
+<div class="k-scroll" style="flex: 1; min-height: 0; display: flex; flex-direction: column; padding: 0 var(--sp-2) var(--sp-2)">
+<sc-for list="{{history}}" as="g" hint-placeholder-count="16">
+<x-import component-from-global-scope="KuroobiUI.ResultRow" win="{{g.win}}" draw="{{g.draw}}" opponent="{{g.opp}}" discs="{{g.discs}}" when="{{g.when}}" note="{{g.note}}"></x-import>
+</sc-for>
+</div>
+</div>
+</sc-if>
+
+<!-- Profile: the server's finger output split into three. Accept/decline conditions as formulas inside the "Requests" row -->
+<sc-if value="{{isProfile}}" hint-placeholder-val="{{false}}">
+<div class="k-scroll" style="flex: 1; min-height: 0; display: flex; flex-direction: column; padding: 0 0 var(--sp-4)">
+<sc-for list="{{profile}}" as="grp" hint-placeholder-count="3">
+<div style="flex: none; height: var(--h-head); display: flex; align-items: center; margin-top: var(--sp-3); padding: 0 var(--sp-3); font-size: var(--fs-7); font-weight: 600; letter-spacing: .08em; color: var(--sub)">{{grp.title}}</div>
+<sc-for list="{{grp.rows}}" as="r" hint-placeholder-count="4">
+<div style="flex: none; display: grid; grid-template-columns: var(--w-label-sm) minmax(0, 1fr); column-gap: var(--sp-2); align-items: baseline; padding: var(--sp-1) var(--sp-3); border-bottom: 1px solid var(--border-weak); font-size: var(--fs-6); line-height: 1.5">
+<span style="color: var(--sub); white-space: nowrap; overflow: hidden; text-overflow: ellipsis">{{r.k}}</span>
+<span class="k-sel" style="min-width: 0; overflow-wrap: anywhere"><sc-if value="{{r.cond}}" hint-placeholder-val="{{false}}"><x-import component-from-global-scope="KuroobiUI.FormulaView" node="{{r.cond}}" top="{{yes}}" who="{{who}}"></x-import></sc-if>{{r.v}}</span>
+</div>
+</sc-for>
+</sc-for>
+</div>
+</sc-if>
+</aside>
+</sc-if>
+<div style="height: var(--h-status); flex: none; background: var(--bg); border-top: 1px solid var(--border); display: flex; align-items: center; gap: var(--sp-4); padding: 0 var(--sp-4); font-size: var(--fs-6); color: var(--sub); white-space: nowrap">
+<span style="display: flex; align-items: center; gap: var(--sp-1)"><x-import component-from-global-scope="KuroobiUI.Dot" tone="ok"></x-import>自動対局中</span>
+<span style="display: flex; align-items: center; gap: var(--sp-1)"><x-import component-from-global-scope="KuroobiUI.Dot" tone="accent"></x-import>思考中 <b style="color: var(--text); font-weight: 600">3.2</b> 秒</span>
+<span>ノード <b style="color: var(--text); font-weight: 600">5,870 万</b></span>
+<span>速度 <b style="color: var(--text); font-weight: 600">18.3</b> Mnps</span>
+<span style="margin-left: auto; display: flex; align-items: center; gap: var(--sp-1)">CPU <span aria-hidden="true" style="display: inline-block; width: 32px; height: 4px; border-radius: var(--r-pill); background: var(--track); overflow: hidden"><span style="display: block; height: 100%; width: 38%; background: var(--ok)"></span></span><b style="color: var(--text); font-weight: 600">305</b>%</span>
+<span style="display: flex; align-items: center; gap: var(--sp-1)">メモリ <span aria-hidden="true" style="display: inline-block; width: 32px; height: 4px; border-radius: var(--r-pill); background: var(--track); overflow: hidden"><span style="display: block; height: 100%; width: 39%; background: var(--ok)"></span></span><b style="color: var(--text); font-weight: 600">6.2</b> GB</span>
+<span>GGS <b style="color: var(--text); font-weight: 600">接続中</b> (alice)</span>
+</div>
+</x-import>
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props='{"list":{"editor":"select","options":["online","top","nohit"],"default":"online"},"tab":{"editor":"select","options":["summary","history","profile"],"default":"summary"},"detail":{"editor":"select","options":["closed","open"],"default":"closed"},"$preview":{"width":1280,"height":800}}'>
+class Component extends DCLogic {
+  renderVals() {
+    const ui = window.KuroobiUI;
+    if (ui && ui.setLang) ui.setLang('ja');
+    const open = this.props.detail === 'open';
+    const sel = open ? 'ymatioun' : '';
+    const openText = { '+': ['受付中', 'var(--accent)'], '-': ['受けない', 'var(--sub)'], x: ['切断', 'var(--bad)'] };
+    const stateText = { playing: ['対局中', 'var(--ok)'], online: ['オンライン', 'var(--accent)'], offline: ['オフライン', 'var(--sub)'] };
+    const users = [
+      ['ymatioun', 2087.4, 42, 2051.2, 55, '+', 'playing'],
+      ['saio', 2003.6, 38, 1987.0, 61, '+', 'playing'],
+      ['Rhapsody', 1934.1, 47, 1902.8, 70, '+', 'online'],
+      ['viper', 1861.5, 51, null, null, '-', 'playing'],
+      ['scorpion', 1812.8, 44, 1790.5, 58, '+', 'playing'],
+      ['alice', 1720.0, 36, 1704.3, 49, '+', 'online'],
+      ['OO7', 1688.2, 63, 1655.9, 80, '-', 'online'],
+      ['piglet', 1604.7, 58, null, null, '+', 'playing'],
+      ['fly', 1577.3, 71, 1540.1, 92, '+', 'playing'],
+      ['scorp+', 1530.0, 40, 1528.4, 45, '+', 'playing'],
+      ['patzer', 1466.9, 88, null, null, '-', 'playing'],
+      ['ant', 1355.0, 33, 1349.6, 37, '+', 'online'],
+      ['ant+', 1350.2, 35, 1340.8, 41, '+', 'playing'],
+      ['mosquito', 1288.4, 120, null, null, 'x', 'offline'],
+      ['sunfish', 1210.6, 95, 1198.3, 110, '-', 'online'],
+      ['zebra', 1150.0, 150, null, null, '+', 'online'],
+    ].concat(Array.from({ length: 9 }, (_, i) => {
+      const n = ['edgar','Thor','Zaxxon','logistello','hannibal','keyano','brutus','cyrano','wzebra'];
+      return [n[i], 1500 - i * 37, 50 + i * 4, 1480 - i * 35, 60 + i * 5, i % 3 ? '+' : '-', i % 2 ? 'online' : 'playing'];
+    })).sort((a, b) => (b[3] ?? -1) - (a[3] ?? -1)).map(([name, r8, d8, rr, dr, open, state]) => ({
+      name,
+      r8: r8.toFixed(1), d8: '±' + d8,
+      rr: rr == null ? '—' : rr.toFixed(1), dr: dr == null ? '' : '±' + dr,
+      open: openText[open][0], openColor: openText[open][1],
+      state: stateText[state][0], stateColor: stateText[state][1],
+      cls: name === sel ? 'k-row k-on' : 'k-row',
+      ground: name === sel ? 'var(--card)' : 'transparent',
+      mark: name === sel ? 'inset 2px 0 0 var(--accent)' : 'none',
+      weight: name === 'alice' ? 600 : 400,
+    }));
+    const tab = this.props.tab ?? 'summary';
+    const list = this.props.list ?? 'online';
+    const opps = ['Rhapsody', 'patzer', 'scorp+', 'viper', 'alice', 'piglet', 'saio', 'edgar', 'Thor', 'Zaxxon'];
+    const history = Array.from({ length: 40 }, (_, i) => {
+      const d = [12, 30, -4, 8, 0, 22, -10, 6, 14, -2][i % 10];
+      return { win: d > 0, draw: d === 0, opp: opps[i % opps.length], discs: d, when: '10/' + String(26 - Math.floor(i / 3)).padStart(2, '0'), note: i % 4 ? '同期・ランダム14手' : '同期・ランダム16手' };
+    });
+    return {
+      yes: true,
+      navLocal: ui ? ui.navLocal() : [],
+      ggsItems: ui ? ui.ggsNav('online', { 'ggs-lobby': { count: 2, alert: true }, 'ggs-play': { count: 1 }, 'ggs-chat': { count: 3, alert: true } }).filter((it) => it.id !== 'ggs-standby') : [],
+      searchW: 180,
+      modeOptions: [{ value: 'who', label: '接続中' }, { value: 'top', label: '上位' }],
+      modeVal: list === 'top' ? 'top' : 'who',
+      isOnline: list === 'online', isTop: list === 'top', isNoHit: list === 'nohit',
+      query: list === 'nohit' ? 'zzz' : '',
+      listTitle: list === 'top' ? 'ランダムの上位' : '接続中',
+      pageText: list === 'top' ? '1 / 12' : list === 'nohit' ? '0 / 0' : '1 / 2',
+      tops: Array.from({ length: 25 }, (_, i) => {
+        const names = ['ymatioun', 'saio', 'Rhapsody', 'Zaxxon', 'scorpion', 'keyano', 'edgar', 'viper', 'cyrano', 'OO7', 'hannibal', 'Thor', 'fly', 'scorp+', 'nova', 'orion', 'brutus', 'alice', 'ant', 'ant+', 'piglet', 'quark', 'vega', 'mira', 'zebra'];
+        const n = names[i], me = n === 'alice', sel = open && n === 'ymatioun';
+        return { rank: i + 1, name: n, rate: (2051.2 - i * 15.7).toFixed(1), dev: '±' + (40 + (i * 7) % 40),
+          state: ['対局中', 'オンライン', 'オフライン'][i % 3], stateColor: ['var(--ok)', 'var(--accent)', 'var(--sub)'][i % 3],
+          rankColor: i === 0 ? 'var(--gold)' : 'var(--sub)', weight: me ? 700 : 400,
+          ground: sel ? 'var(--card)' : 'transparent', mark: sel ? 'inset 2px 0 0 var(--accent)' : 'none' };
+      }),
+      perPage: [['25', '25 件'], ['50', '50 件'], ['100', '100 件']],
+      myRates: [
+        { label: 'ランダム開局', rate: { value: 1704.3, dev: 49, rank: 37, w: 54, l: 49, d: 3, provisional: false } },
+        { label: '通常', rate: { value: 1720.0, dev: 36, rank: 41, w: 128, l: 97, d: 6 } },
+      ],
+      userCount: list === 'top' ? '298 人' : list === 'nohit' ? '0 人' : '38 人',
+      users,
+      tabOpts: [{ value: 'summary', label: '概要' }, { value: 'history', label: '対戦履歴' }, { value: 'profile', label: 'プロフィール' }],
+      detailOpen: open,
+      tab, isSummary: tab === 'summary', isHistory: tab === 'history', isProfile: tab === 'profile', no: false,
+      history, historyCount: history.length + ' 局',
+      profile: [
+        { title: '申し込み', rows: [
+          { k: '申し込み受付', v: '受け付ける' },
+          { k: '自動で受ける条件', v: '', cond: { kind: 'all', kids: [{ kind: 'atom', name: 'rated', op: '=', val: '', neg: false }, { kind: 'atom', name: 'or', op: '≥', val: '1800', neg: false }] } },
+          { k: '自動で断る条件', v: '指定なし' },
+          { k: '募集中の条件', v: '同期・ランダム14手 · 5 分 · レート戦' }, { k: '対局の状況', v: '.415 で対局中 (同期・ランダム14手)' },
+          { k: '二人の間の中断対局数', v: '0' },
+        ] },
+        { title: '素性', rows: [
+          { k: '登録名', v: 'ymatioun' }, { k: '備考', v: 'othello program, 32 threads' },
+          { k: '接続開始', v: '10/26 08:12' }, { k: '無操作の時間', v: '0:00 (接続してから 13:40)' },
+          { k: 'クライアント', v: '専用クライアント' }, { k: '定石どおりの手', v: '61% (318 / 521 手が一致)' },
+        ] },
+        { title: '設定', rows: [
+          { k: 'アクセス権限', v: '一般' }, { k: '信用', v: 'あり' }, { k: '所属グループ', v: 'クライアント (対局プログラム)' },
+          { k: '参加チャンネル', v: '.chat .kuro' }, { k: '通知を受け取る相手', v: 'なし' },
+        ] },
+      ],
+      who: { me: 'ymatioun', them: '相手' },
+      selRates: [
+        { label: 'ランダム', value: '2051.2', dev: '±55' },
+        { label: '通常', value: '2087.4', dev: '±42' },
+      ],
+      poolOptions: [{ value: '8r', label: 'ランダム' }, { value: '8', label: '通常' }],
+      chart: [1978, 1990, 1985, 2001, 2008, 2004, 2017, 2014, 2027, 2035, 2031, 2042, 2047, 2051.2],
+      chartDates: ['9/28', '9/30', '10/02', '10/05', '10/07', '10/09', '10/11', '10/14', '10/16', '10/18', '10/20', '10/22', '10/24', '10/26'],
+      chartLabels: ["9/28 20:00 · saio · +6 · 1978.0", "9/30 21:13 · viper · +12 · 1990.0", "10/02 22:26 · ant · -4 · 1985.0", "10/05 20:39 · Rhapsody · +18 · 2001.0", "10/07 21:52 · scorpion · +8 · 2008.0", "10/09 22:05 · OO7 · -6 · 2004.0", "10/11 20:18 · fly · +14 · 2017.0", "10/14 21:31 · saio · -2 · 2014.0", "10/16 22:44 · piglet · +16 · 2027.0", "10/18 20:57 · alice · +10 · 2035.0", "10/20 21:10 · viper · -8 · 2031.0", "10/22 22:23 · scorp+ · +12 · 2042.0", "10/24 20:36 · patzer · +6 · 2047.0", "10/26 21:49 · Rhapsody · +4 · 2051.2"],
+      // The design shows the chart with the pointer on one game, as the app shows it on hover.
+      chartHover: 9,
+      chartW: 448,
+      chartH: 160,
+      recent: [
+        { win: true, opp: 'Rhapsody', discs: 12, when: '10/26' },
+        { win: true, opp: 'patzer', discs: 30, when: '10/24' },
+        { win: false, opp: 'scorp+', discs: -4, when: '10/22' },
+        { win: true, opp: 'viper', discs: 8, when: '10/20' },
+        { win: false, draw: true, opp: 'alice', discs: 0, when: '10/18' },
+        { win: true, opp: 'piglet', discs: 22, when: '10/16' },
+      ],
+    };
+  }
+}
+</script>
+</body>
+</html>

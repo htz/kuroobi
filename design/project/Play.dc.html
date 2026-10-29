@@ -1,0 +1,325 @@
+<!doctype html>
+<html lang="ja">
+<head>
+<meta charset="utf-8">
+<title>Play / observe · Own match (synchro)</title>
+<script src="./support.js"></script>
+<link rel="stylesheet" href="kuroobi-tokens.css">
+<link rel="stylesheet" href="ds/kuroobiui/components/bundle.css">
+<script src="ds/kuroobiui/components/bundle.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<style>
+x-import{display:contents}
+@media (max-width:1040px){.k-nav-ov .k-nav-label{display:none}.k-nav-ov .k-nav-row{justify-content:center;padding:0}}
+.k-scroll{overflow-y:scroll!important}
+.k-scroll::-webkit-scrollbar-track{background:var(--track);border-radius:9px}
+body{margin:0;background:var(--bg);color:var(--text);font:var(--fs-4)/1.6 var(--ff)}
+a{color:var(--accent)}a:hover{color:var(--text)}
+</style>
+</helmet>
+<div style="position: relative; width: 100%; height: 100vh; min-height: 480px; background: var(--bg); color: var(--text); font: var(--fs-4)/1.6 var(--ff); overflow: hidden">
+<x-import component-from-global-scope="KuroobiUI.BoardDefs"></x-import>
+<x-import style="display: contents" component-from-global-scope="KuroobiUI.AppFrame">
+<x-import component-from-global-scope="KuroobiUI.WindowBar" title="対局・観戦"></x-import>
+<x-import style="display: contents" component-from-global-scope="KuroobiUI.Body">
+<div style="position: relative; flex: none; display: flex">
+<x-import style="display: contents" component-from-global-scope="KuroobiUI.Nav" items="{{navLocal}}" ggs-items="{{ggsItems}}" conn="online" active="ggs-play"></x-import>
+<div class="k-nav-ov" style="position: absolute; left: 0; right: 1px; bottom: 0; padding: var(--sp-2); border-top: 1px solid var(--border); background: var(--panel)">
+<button type="button" class="k-nav-row k-row" aria-current="false" style="width: 100%; height: var(--h-field); display: flex; align-items: center; gap: var(--sp-3); border: 0; border-radius: var(--r-2); font: inherit; font-size: var(--fs-4); background: transparent; color: var(--text); font-weight: 400"><span style="flex: none; display: grid; place-items: center"><x-import component-from-global-scope="KuroobiUI.Icon" name="prefs"></x-import></span><span class="k-nav-label">設定</span></button>
+</div>
+</div>
+<x-import style="display: contents" component-from-global-scope="KuroobiUI.Main">
+
+<!-- Matches are switched with the toolbar tabs; actions on the current match sit to the right -->
+<x-import style="display: contents" component-from-global-scope="KuroobiUI.Toolbar">
+<sc-if value="{{hasGames}}" hint-placeholder-val="{{true}}">
+<span style="display: flex; align-items: baseline; gap: var(--sp-2); min-width: 0; white-space: nowrap; overflow: hidden">
+<b style="font-size: var(--fs-3); font-weight: 600">{{curTitle}}</b>
+<span style="font-size: var(--fs-6); color: var(--sub); overflow: hidden; text-overflow: ellipsis">{{curSub}}</span>
+</span>
+<div style="margin-left: auto; display: flex; align-items: center; gap: var(--sp-2); white-space: nowrap">
+<!-- Watchers: a button with the count; pressing it opens the list of names below (same when playing or observing; disabled at 0; hidden after the game ends) -->
+<sc-if value="{{showWatchers}}" hint-placeholder-val="{{true}}">
+<span style="position: relative; display: flex">
+<x-import component-from-global-scope="KuroobiUI.Button" variant="ghost" title="観戦している人" disabled="{{watchNone}}"><span style="display: inline-flex; align-items: center; gap: var(--sp-1); color: {{watchColor}}"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M2.5 12s3.6-6.5 9.5-6.5S21.5 12 21.5 12s-3.6 6.5-9.5 6.5S2.5 12 2.5 12z"></path><circle cx="12" cy="12" r="2.8"></circle></svg>観戦 <b style="font-weight: 600; font-variant-numeric: tabular-nums">{{watchCount}}</b></span></x-import>
+</span>
+</sc-if>
+<sc-if value="{{canAdjourn}}" hint-placeholder-val="{{true}}">
+<x-import component-from-global-scope="KuroobiUI.Button">中断</x-import>
+</sc-if>
+<sc-if value="{{liveSelf}}" hint-placeholder-val="{{true}}">
+<x-import component-from-global-scope="KuroobiUI.Button" variant="danger">投了</x-import>
+</sc-if>
+<sc-if value="{{liveWatch}}" hint-placeholder-val="{{false}}">
+<x-import component-from-global-scope="KuroobiUI.Button" variant="ghost">観戦をやめる</x-import>
+</sc-if>
+<sc-if value="{{isFinished}}" hint-placeholder-val="{{false}}">
+<x-import component-from-global-scope="KuroobiUI.Button">棋譜</x-import>
+</sc-if>
+</div>
+</sc-if>
+</x-import>
+
+<sc-if value="{{hasGames}}" hint-placeholder-val="{{true}}">
+<div style="flex: 1; min-height: 0; display: flex">
+
+<!-- Match list: in progress on top, finished below; finished ones can be closed all at once -->
+<div style="flex: none; width: var(--w-list); min-height: 0; display: flex; flex-direction: column; border-right: 1px solid var(--border)">
+<div style="flex: none; display: flex; align-items: center; gap: var(--sp-2); height: var(--h-field); padding: 0 var(--sp-2); border-bottom: 1px solid var(--border-weak)">
+<x-import component-from-global-scope="KuroobiUI.Segmented" value="all" options="{{listFilter}}" fill="{{yes}}"></x-import>
+</div>
+<div class="k-scroll" style="flex: 1; min-height: 0; display: flex; flex-direction: column">
+<sc-for list="{{matchGroups}}" as="g" hint-placeholder-count="2">
+<div style="flex: none; height: var(--h-head); display: flex; align-items: center; gap: var(--sp-2); margin-top: var(--sp-2); padding: 0 var(--sp-3); font-size: var(--fs-7); font-weight: 600; letter-spacing: .08em; color: var(--sub); white-space: nowrap">{{g.title}}<span style="margin-left: auto; font-weight: 400; letter-spacing: 0">{{g.count}}</span></div>
+<sc-for list="{{g.items}}" as="m" hint-placeholder-count="6">
+<x-import component-from-global-scope="KuroobiUI.MatchRow" m="{{m.m}}" active="{{m.active}}"></x-import>
+</sc-for>
+</sc-for>
+</div>
+<div style="flex: none; padding: var(--sp-2); border-top: 1px solid var(--border)">
+<x-import component-from-global-scope="KuroobiUI.Button" variant="ghost" size="field" class-name="k-wide">{{closeAllLabel}}</x-import>
+</div>
+</div>
+
+<div style="flex: 1; min-width: 0; min-height: 0; display: flex; flex-direction: column">
+<!-- After the game: the result on one line -->
+<sc-if value="{{isFinished}}" hint-placeholder-val="{{false}}">
+<div style="flex: none; display: flex; align-items: center; gap: var(--sp-3); height: var(--h-field); padding: 0 var(--sp-4); border-bottom: 1px solid var(--border); background: var(--panel); font-size: var(--fs-5); white-space: nowrap">
+<x-import component-from-global-scope="KuroobiUI.Tag" tone="{{resultTone}}">{{resultTag}}</x-import>
+<b style="font-weight: 600">{{resultHead}}</b>
+<span style="color: var(--sub); overflow: hidden; text-overflow: ellipsis">{{resultSub}}</span>
+</div>
+</sc-if>
+<div style="flex: 1; min-height: 0; display: flex">
+
+<!-- The two boards of a synchro match -->
+<sc-for list="{{boards}}" as="b" hint-placeholder-count="2">
+<div style="flex: 1; min-width: 0; display: flex; justify-content: center; padding: var(--sp-2) var(--sp-3) 0; border-right: 1px solid var(--border-weak)">
+<div style="width: {{boardPx}}; display: flex; flex-direction: column">
+<div style="height: var(--h-head); display: flex; align-items: center; gap: var(--sp-3); font-size: var(--fs-7); color: var(--sub); white-space: nowrap">
+<span style="font-weight: 600; color: var(--text)">{{b.face}}</span>
+<span style="margin-left: auto">{{b.score}} · {{b.ply}}</span>
+</div>
+<x-import component-from-global-scope="KuroobiUI.PlayerRow" color="{{b.top.color}}" name="{{b.top.name}}" rate="{{b.top.rate}}" meta="{{b.top.meta}}" clock="{{b.top.clock}}" active="{{b.top.active}}"></x-import>
+<div style="width: {{boardPx}}; height: {{boardPx}}">
+<x-import component-from-global-scope="KuroobiUI.Board" cells="{{b.cells}}" last="{{b.last}}" legal="{{b.legal}}" evals="{{b.evals}}" turn="{{b.turn}}" coords="{{yes}}" disabled="{{yes}}"></x-import>
+</div>
+<x-import component-from-global-scope="KuroobiUI.PlayerRow" color="{{b.bottom.color}}" name="{{b.bottom.name}}" rate="{{b.bottom.rate}}" meta="{{b.bottom.meta}}" clock="{{b.bottom.clock}}" active="{{b.bottom.active}}"></x-import>
+<div style="height: var(--h-row); display: flex; align-items: center; font-size: var(--fs-6); color: {{b.stateColor}}; white-space: nowrap">{{b.state}}</div>
+</div>
+</div>
+</sc-for>
+</div>
+
+<!-- Eval: full width; for synchro, the sum of both boards -->
+<div style="flex: none; padding: var(--sp-2) var(--sp-4) var(--sp-2); border-top: 1px solid var(--border)">
+<x-import component-from-global-scope="KuroobiUI.EvalTrend" points="{{trend}}" plies="{{plies}}" height="{{trendH}}" title="{{trendTitle}}" split="{{split}}" names="{{trendNames}}"></x-import>
+</div>
+</div>
+</div>
+</sc-if>
+
+<!-- No match or observed game at all. If there are adjourned matches, received requests or requests awaiting a reply, show what happens next -->
+<sc-if value="{{isEmpty}}" hint-placeholder-val="{{false}}">
+<div style="flex: 1; min-height: 0; display: grid; place-items: center; padding: var(--sp-5)">
+<div style="display: flex; align-items: center; gap: var(--sp-5)">
+<div style="flex: none; width: 160px; height: 160px; opacity: .6"><x-import component-from-global-scope="KuroobiUI.EmptyBoard"></x-import></div>
+<div style="display: flex; flex-direction: column; gap: var(--sp-2); max-width: 300px">
+<span style="font-size: var(--fs-3); font-weight: 600">{{empty.title}}</span>
+<sc-for list="{{empty.lines}}" as="l" hint-placeholder-count="1">
+<span style="font-size: var(--fs-5); color: var(--text); line-height: 1.8">{{l}}</span>
+</sc-for>
+<span style="font-size: var(--fs-5); color: var(--sub); line-height: 1.8; text-wrap: balance">{{empty.body}}</span>
+<div style="display: flex; gap: var(--sp-2); margin-top: var(--sp-2)">
+<sc-if value="{{empty.isIdle}}" hint-placeholder-val="{{true}}">
+<x-import component-from-global-scope="KuroobiUI.Button" variant="primary">対局を申し込む</x-import>
+<x-import component-from-global-scope="KuroobiUI.Button">ロビーで探す</x-import>
+</sc-if>
+<sc-if value="{{empty.isStored}}" hint-placeholder-val="{{false}}">
+<x-import component-from-global-scope="KuroobiUI.Button" variant="primary">再開</x-import>
+<x-import component-from-global-scope="KuroobiUI.Button">ロビーで見る</x-import>
+</sc-if>
+<sc-if value="{{empty.isWaiting}}" hint-placeholder-val="{{false}}">
+<x-import component-from-global-scope="KuroobiUI.Button" variant="primary">ロビーで見る</x-import>
+<x-import component-from-global-scope="KuroobiUI.Button">取り消す</x-import>
+</sc-if>
+</div>
+</div>
+</div>
+</div>
+</sc-if>
+</x-import>
+</x-import>
+<div style="height: var(--h-status); flex: none; background: var(--bg); border-top: 1px solid var(--border); display: flex; align-items: center; gap: var(--sp-4); padding: 0 var(--sp-4); font-size: var(--fs-6); color: var(--sub); white-space: nowrap">
+<span style="display: flex; align-items: center; gap: var(--sp-1)"><x-import component-from-global-scope="KuroobiUI.Dot" tone="ok"></x-import>自動対局中</span>
+<span style="display: flex; align-items: center; gap: var(--sp-1)"><x-import component-from-global-scope="KuroobiUI.Dot" tone="accent"></x-import>思考中 <b style="color: var(--text); font-weight: 600">3.2</b> 秒</span>
+<span>ノード <b style="color: var(--text); font-weight: 600">5,870 万</b></span>
+<span>速度 <b style="color: var(--text); font-weight: 600">18.3</b> Mnps</span>
+<span style="margin-left: auto; display: flex; align-items: center; gap: var(--sp-1)">CPU <span aria-hidden="true" style="display: inline-block; width: 32px; height: 4px; border-radius: var(--r-pill); background: var(--track); overflow: hidden"><span style="display: block; height: 100%; width: 92%; background: var(--bad)"></span></span><b style="color: var(--bad); font-weight: 600">736</b>%</span>
+<span style="display: flex; align-items: center; gap: var(--sp-1)">メモリ <span aria-hidden="true" style="display: inline-block; width: 32px; height: 4px; border-radius: var(--r-pill); background: var(--track); overflow: hidden"><span style="display: block; height: 100%; width: 39%; background: var(--ok)"></span></span><b style="color: var(--text); font-weight: 600">6.2</b> GB</span>
+<span>GGS <b style="color: var(--text); font-weight: 600">接続中</b> (alice)</span>
+</div>
+</x-import>
+<!-- Watcher list: floats right below the toolbar's "Watching n" (placed outside the toolbar it would be clipped) -->
+<sc-if value="{{watchOpen}}" hint-placeholder-val="{{false}}">
+<div role="dialog" style="position: absolute; top: calc(var(--h-window) + var(--h-bar) - var(--sp-1)); left: 540px; z-index: 5; width: var(--w-popover); display: flex; flex-direction: column; border: 1px solid var(--border); border-radius: var(--r-4); background: var(--bg); box-shadow: var(--sh-2); overflow: hidden">
+<div style="flex: none; height: var(--h-head); display: flex; align-items: center; gap: var(--sp-2); padding: var(--sp-1) var(--sp-3) 0; font-size: var(--fs-7); font-weight: 600; letter-spacing: .08em; color: var(--sub); white-space: nowrap">観戦している人<span style="margin-left: auto; font-weight: 400; letter-spacing: 0">{{watchCount}} 人</span></div>
+<div class="k-scroll" style="max-height: 240px; display: flex; flex-direction: column; padding: var(--sp-1) 0">
+<sc-for list="{{watchers}}" as="w" hint-placeholder-count="3">
+<button type="button" class="k-row" title="プレイヤーの詳細を見る" style="flex: none; width: 100%; height: var(--h-field); display: flex; align-items: center; gap: var(--sp-2); padding: 0 var(--sp-3); border: 0; background: transparent; color: var(--text); font: inherit; font-size: var(--fs-5); text-align: left; white-space: nowrap"><span class="k-sel" style="flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis">{{w.name}}</span></button>
+</sc-for>
+</div>
+</div>
+</sc-if>
+<!-- Resign / adjourn confirmation -->
+<sc-if value="{{confirmOpen}}" hint-placeholder-val="{{false}}">
+<x-import component-from-global-scope="KuroobiUI.Confirm" title="{{confirmTitle}}" body="{{confirmBody}}" ok="{{confirmOk}}" danger="{{confirmDanger}}" on-ok="{{noop}}" on-cancel="{{noop}}"></x-import>
+</sc-if>
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props='{"tourney":{"editor":"boolean","default":false},"state":{"editor":"select","options":["live","finished","adjourned","aborted","empty","waiting","stored"],"default":"live"},"confirm":{"editor":"select","options":["none","resign","adjourn"],"default":"none"},"mode":{"editor":"select","options":["self","watch"],"default":"self"},"watchers":{"editor":"select","options":["closed","open","none"],"default":"closed"},"faces":{"editor":"select","options":["2","1"],"default":"2"},"$preview":{"width":1280,"height":800}}'>
+class Component extends DCLogic {
+  renderVals() {
+    const ui = window.KuroobiUI;
+    if (ui && ui.setLang) ui.setLang('ja');
+    const P24 = [0,0,0,0,0,0,0,0,0,0,0,0,1,2,0,0,0,0,1,1,0,2,0,2,0,1,1,1,2,2,2,0,0,0,0,1,2,2,2,0,0,0,2,1,2,1,1,1,0,0,0,2,2,2,0,1,0,0,0,0,2,0,0,1];
+    const P44 = [0,0,0,0,2,2,2,0,1,0,0,0,2,2,0,1,1,1,1,1,2,1,1,1,1,1,1,1,2,1,1,1,0,1,1,1,1,1,1,1,0,1,1,1,1,1,1,1,0,0,2,2,2,2,0,1,0,0,2,2,2,2,2,1];
+    // Playing and observing share one screen. The only differences: the buttons at the right of the toolbar, and the KUROOBI state word added below the board (Thinking / Analysing)
+    const mode = this.props.mode ?? 'self';
+    const faces = Number(this.props.faces ?? 2);
+    const self = mode === 'self';
+    const [pa, pb] = self ? ['alice', 'ymatioun'] : ['saio', 'Rhapsody'];
+    const [ra, rb] = self ? [1704.3, 2051.2] : [1987.0, 1902.8];
+    const work = self ? '思考中 · 深さ 22' : '解析中 · 深さ 18';
+    const mark = { 20: { score: 2.4, src: { depth: self ? 22 : 18 }, best: true } };
+    const all = [
+      {
+        face: faces === 2 ? '1 面目' : '', score: '24 – 19', ply: '39 手目',
+        cells: P24, last: 23, legal: [5, 14, 20, 22, 31, 39, 41, 49, 59, 61, 62], evals: mark,
+        top: { color: 'w', name: pb, rate: rb, meta: '評価値 -1.8 · 6 秒', clock: '3:05', active: false },
+        bottom: { color: 'b', name: pa, rate: ra, meta: '評価値 +2.4 · 5 秒', clock: '2:41', active: true },
+        state: pa + ' の手番 · ' + work, stateColor: 'var(--accent)',
+      },
+      {
+        face: '2 面目', score: '41 – 21', ply: '39 手目',
+        cells: P44, last: 6, legal: [], evals: {},
+        top: { color: 'b', name: pb, rate: rb, meta: '評価値 +3.0 · 4 秒', clock: '2:47', active: true },
+        bottom: { color: 'w', name: pa, rate: ra, meta: '評価値 -2.6 · 7 秒', clock: '2:58', active: false },
+        state: pb + ' の手番', stateColor: 'var(--sub)',
+      },
+    ];
+    const state = this.props.state ?? 'live';
+    const ended = state === 'finished' || state === 'adjourned' || state === 'aborted';
+    const done = ended;
+    const tourney = this.props.tourney ?? false;
+    if (done) {
+      // After the game: clocks stop; neither the side-to-move tag nor KUROOBI's state is shown
+      all[0] = { ...all[0], score: '36 – 28', ply: '60 手目', legal: [], evals: {}, top: { ...all[0].top, active: false, clock: '1:12' }, bottom: { ...all[0].bottom, active: false, clock: '0:48' }, state: state === 'finished' ? '終局 · ' + pa + ' +8' : '', stateColor: 'var(--text)' };
+      all[1] = { ...all[1], score: '31 – 33', ply: '60 手目', legal: [], evals: {}, top: { ...all[1].top, active: false, clock: '0:55' }, bottom: { ...all[1].bottom, active: false, clock: '1:30' }, state: state === 'finished' ? '終局 · ' + pa + ' -2' : '', stateColor: 'var(--text)' };
+    }
+    // Screen with no match: if something happens next (resuming an adjourned match, a reply to a request), show it
+    const emptyText = {
+      empty: { title: '進行中の対局はありません', lines: [], body: '申し込むか、ロビーで観戦する対局を選ぶとここに出ます' },
+      waiting: { title: '申し込みの返事を待っています', lines: ['ymatioun · 同期・ランダム14手 · 5 分 · レート戦'], body: '相手が受けると、ここで対局が始まります' },
+      stored: { title: '中断した対局が 1 局あります', lines: ['中断 · saio · 通常 (1局)'], body: '再開すると、ここで続きから指せます' },
+    };
+    const boards = all.slice(0, faces).map((b) => ({ ...b, turn: b.top.active ? b.top.color : b.bottom.active ? b.bottom.color : 'b' }));
+    const plies = 60;
+    // Synchro: every move, the sum of both boards (both lines have a point on every move). A single board alternates between two players, so every other move
+    const trend = [];
+    for (let x = 1; x <= (done ? 60 : 39); x++) {
+      const base = 1 + 3 * Math.sin(x / 8) + (x > 24 ? (x - 24) * 0.2 : 0);
+      const a = x % 2 === 1;
+      trend.push(faces === 2
+        ? { x, mine: Math.round(base * 2) / 2, opp: Math.round((base - 1.2 + Math.sin(x)) * 2) / 2, mySecs: 2 + (x % 7) * 1.5, oppSecs: 1 + (x % 5) }
+        : { x, mine: a ? Math.round(base) : null, opp: a ? null : Math.round(base - 1), mySecs: a ? 2 + (x % 7) * 1.5 : null, oppSecs: a ? null : 1 + (x % 5) });
+    }
+    const sq = ['f5','d6','c3','d3','c4','f4','f6','f3','e6','e7','d7','c6','c5','b5','b6','b4','a5','e3','g4','g3','h3','c7','e8','d8','c8','f8','b3','a4','g5','h5','g6','h6','f7','g8','c2','d2','e2','f2','b8'];
+    const kifu = sq.map((move, i) => {
+      const n = i + 1, b = n % 2 === 1;
+      return { n, move, color: b ? 'b' : 'w', score: n <= 14 ? undefined : (trend[i].mine ?? trend[i].opp),
+        secs: n <= 14 ? undefined : +(1 + (n % 6) * 0.9).toFixed(1), src: n <= 14 ? 'book' : n % 2 ? 'search' : undefined };
+    });
+    return {
+      yes: true, one: 1, noop: () => {},
+      navLocal: ui ? ui.navLocal() : [],
+      ggsItems: ui ? ui.ggsNav('online', { 'ggs-lobby': { count: 2, alert: true }, 'ggs-play': { count: 3 }, 'ggs-chat': { count: 3, alert: true } }).filter((it) => it.id !== 'ggs-standby') : [],
+      isSelf: self, isWatch: !self,
+      hasGames: !['empty', 'waiting', 'stored'].includes(state), isEmpty: ['empty', 'waiting', 'stored'].includes(state), isFinished: done,
+      empty: { ...(emptyText[state] ?? emptyText.empty), isIdle: state === 'empty', isWaiting: state === 'waiting', isStored: state === 'stored' },
+      liveSelf: !done && self, liveWatch: !done && !self, canAdjourn: !done && self && !tourney,
+      resultTone: state === 'adjourned' ? 'bad' : 'sub',
+      resultTag: { finished: '終局', adjourned: '中断', aborted: '打ち切り' }[state] ?? '終局',
+      resultHead: state === 'adjourned' ? pb + ' の退出で中断' : state === 'aborted' ? '打ち切り' : pa + ' の勝ち ' + (faces === 2 ? '+6' : '+8'),
+      resultSub: (state === 'adjourned' ? '再開はロビーの中断対局から · ' : '') + (state === 'finished' && faces === 2 ? pa + ' から見て 1 面目 +8 · 2 面目 -2 · ' : '') + (faces === 2 ? '同期・ランダム14手 · 5 分 · レート戦' : '通常 (1局) · 10 分 · レート戦'),
+      ...(() => {
+        const c = this.props.confirm ?? 'none';
+        const d = {
+          resign: ['投了しますか?', '負けになり、レートが動きます。相手の承諾は要りません。同期のときは 2 面とも投了します。', '投了する', 'danger'],
+          adjourn: ['中断しますか?', '棋譜と時計を残して中断します。あとでロビーの中断対局から再開できます。同期は 2 面とも中断します。', '中断する', 'primary'],
+        }[c];
+        return d ? { confirmOpen: true, confirmTitle: d[0], confirmBody: d[1], confirmOk: d[2], confirmDanger: d[3] === 'danger' } : { confirmOpen: false };
+      })(),
+      // Watchers come and go in place as they join and leave. When I am observing, I am listed too (no special treatment)
+      ...(() => {
+        const w = this.props.watchers ?? 'closed';
+        const list = w === 'none' ? [] : self
+          ? ['saio', 'Rhapsody', 'kbcli']
+          : ['alice', 'ymatioun', 'piglet', 'viper'];
+        return {
+          showWatchers: !done,
+          watchOpen: w === 'open',
+          watchCount: list.length,
+          watchColor: list.length ? 'var(--text)' : 'var(--sub)',
+          watchers: list.map((name) => ({ name })),
+          watchNone: list.length === 0,
+        };
+      })(),
+      curTitle: pa + ' 対 ' + pb,
+      curSub: (tourney ? '大会 14 · ラウンド 37 · ' : '') + (faces === 2 ? '同期・ランダム14手' : '通常 (1局)') + ' · 5 分 · レート戦',
+      listFilter: [{ value: 'all', label: 'すべて' }, { value: 'live', label: '進行中' }, { value: 'over', label: '終局' }],
+      ...(() => {
+        // After auto-play many finished games pile up: 8 in progress, 92 finished
+        const live = [
+          { mine: true, live: !done, opponent: 'ymatioun', black: 'alice', white: 'ymatioun', kind: '同期・ランダム14手', result: done ? 'alice の勝ち +6' : undefined, ended: done ? 'finished' : undefined },
+          { mine: false, live: true, black: 'saio', white: 'Rhapsody', kind: '同期・ランダム14手' },
+          ...['viper 対 scorpion', 'fly 対 OO7', 'zebra 対 sunfish', 'edgar 対 Thor', 'keyano 対 nova', 'orion 対 vega'].map((t) => {
+            const [b, w] = t.split(' 対 ');
+            return { mine: false, live: true, black: b, white: w, kind: '同期・ランダム14手' };
+          }),
+        ];
+        const over = Array.from({ length: 92 }, (_, i) => {
+          const d = [6, -4, 12, 2, -8, 10, 0, 14][i % 8];
+          const told = (a, b) => (d === 0 ? '引き分け' : (d > 0 ? a : b) + ' の勝ち +' + Math.abs(d));
+          return i % 5 === 3
+            ? { mine: false, live: false, black: 'ant', white: 'piglet', kind: '通常 (1局)', result: told('ant', 'piglet'), ended: 'finished' }
+            : { mine: true, live: false, opponent: 'ymatioun', black: 'alice', white: 'ymatioun', kind: '同期・ランダム14手', result: told('alice', 'ymatioun'), ended: i === 7 ? 'adjourned' : 'finished' };
+        });
+        const sel = self ? 0 : 1;
+        const items = (xs, base) => xs.map((m, i) => ({ m, active: base + i === sel }));
+        const liveItems = done ? live.slice(1) : live;
+        const overItems = done ? [live[0], ...over] : over;
+        return {
+          matchGroups: [
+            { title: '進行中', count: liveItems.length + ' 局', items: liveItems.map((m) => ({ m, active: !done && m === live[sel] })) },
+            { title: '終局', count: overItems.length + ' 局', items: overItems.map((m, i) => ({ m, active: done && i === 0 })) },
+          ],
+          closeAllLabel: '終局した ' + overItems.length + ' 局を閉じる',
+        };
+      })(),
+      boards,
+      boardPx: '360px',
+      faceOptions: [{ value: '1', label: '1 面目' }, { value: '2', label: '2 面目' }],
+      kifu, kifuCur: 39,
+      trend, plies, trendH: 132, split: faces === 2 ? 21 : undefined,
+      trendNames: { mine: pa, opp: pb },
+      trendTitle: '評価値 (' + pa + ' から見た値)',
+    };
+  }
+}
+</script>
+</body>
+</html>
