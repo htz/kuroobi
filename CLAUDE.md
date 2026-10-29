@@ -160,6 +160,20 @@ Japanese terms, used consistently in `ja.yaml`:
 Code identifiers (`book`, `solve`, ...) and English UI text stay in the
 engine's own vocabulary: book, solve, analysis.
 
+GGS clocks and game endings use one word per idea in Japanese, English
+and code alike (the server's own names in the last column):
+
+| 日本語 | Not | English | Code / GGS |
+|---|---|---|---|
+| 持ち時間 | | Main time | `main`, clock's first part |
+| 延長 (time spent past the main time) | ロス, 延長時間 | Extension | `ext`, `in_extension` |
+| 時間超過 (main time used up, game goes on in the extension; whoever went first cannot win) | 持ち時間切れ | Over time | `over_time`, `timeout` |
+| 時間切れ (extension used up too; the board ends at ±64) | | Out of time | `out_of_time`, `fatal-timeout` |
+| 投了 (whole match, both boards of a synchro) | | Resign | `resign` |
+| 中断 (whole match) | | Adjourn | `adjourn`, `stored` |
+| 面 (one board of a synchro match) | 局 | Board | `board`, `.N.0` / `.N.1` |
+| 決着 (how a match or board was decided) | 終わり方 | Decided by | `ending` |
+
 ## Comments
 
 **A comment says only what the code cannot**: a measured constant, a
