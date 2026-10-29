@@ -1,4 +1,4 @@
-import React, { useEffect, useLayoutEffect, useRef, useState, type RefObject } from 'react';
+import React, { useEffect, useLayoutEffect, useState } from 'react';
 import { DEFAULT_EXT, gtypeLabel, parseClockSpec, secsText } from './ggs';
 import { t } from './i18n';
 import type { GgsSnapshot } from './types';
@@ -194,17 +194,17 @@ export const reportGgsFailure = (e: unknown) => { failSubs.forEach((f) => f(e));
 /** Runs an action a person asked for; a failure shows as a toast instead of vanishing. */
 export function act(p: Promise<unknown>): void { p.catch(reportGgsFailure); }
 
-export function useWidth(): [RefObject<HTMLDivElement | null>, number] {
-  const ref = useRef<HTMLDivElement | null>(null);
+/** An element's width, measured again whenever the element is swapped (a section that comes and goes). */
+export function useWidth(): [(el: HTMLDivElement | null) => void, number] {
+  const [el, setEl] = useState<HTMLDivElement | null>(null);
   const [w, setW] = useState(600);
   useLayoutEffect(() => {
-    const el = ref.current;
     if (!el) return;
     const o = new ResizeObserver(() => setW(Math.max(200, Math.floor(el.getBoundingClientRect().width))));
     o.observe(el);
     return () => o.disconnect();
-  }, []);
-  return [ref, w];
+  }, [el]);
+  return [setEl, w];
 }
 
 /** The clock, ticking every `ms` while `on`. */
